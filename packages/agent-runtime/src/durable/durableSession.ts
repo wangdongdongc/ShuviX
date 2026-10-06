@@ -172,6 +172,18 @@ export interface AdmitResult extends SubmitResult {
   submissionId?: SubmissionId
 }
 
+/**
+ * `withdrawQueued` 的结果（P3-11 PIN-14）：pi `abortSubmission` 的四种 + 句柄已关。
+ *
+ *  - `aborted`：撤回了 —— 提交以 `unanswered{reason:'aborted'}` 落定、收件箱里那一项没了，从没被放下；
+ *  - `already_placed`：已经放进了转写（run 正带着它），撤不回；
+ *  - `settled`：早就落定了；
+ *  - `not_found`：不是当前对话里 `view.queue` 会显示的那种排队输入（PIN-09）—— 不认识的 id、别的对话
+ *    （子对话、回退之后的旧分支）的、写入（通知）、通知形状的插话；
+ *  - `closed`：句柄已关（从不重开）。
+ */
+export type WithdrawResult = 'aborted' | 'already_placed' | 'settled' | 'not_found' | 'closed'
+
 /** 被父会话驱动的发送（P2-09，子会话）：受理之后写下 driven-run 标记 */
 export interface DrivenSendOptions {
   /** 驱动它的父会话 id */
@@ -436,6 +448,14 @@ export interface DurableSession {
    * 回退在途时开始的发送等它做完（PIN-22）。
    */
   rollbackTo(targetEntryId: number, options?: RollbackOptions): Promise<RollbackResult>
+  /**
+   * 撤回一条排着的用户输入（P3-11，Mapping #7）→ pi `abortSubmission`。只撤 `view.queue` 会显示的那种
+   * （当前对话里、type input、mode steer / followUp、不是通知形状 —— 与投影同一判据，PIN-09）；别的一律
+   * `not_found`，什么都不写 —— IPC 的调用方撤不掉系统通知、子对话的输入。不在队列里的：已放下 →
+   * `already_placed`，已落定 → `settled`（只读，不提交）。撤回的那条从不放下（没有 `onPlaced`、没有条目）。
+   * 回退在途时等它做完（之后旧分支上的 id 是 `not_found`）。句柄已关 → `'closed'`，从不抛、从不重开。
+   */
+  withdrawQueued(submissionId: number): Promise<WithdrawResult>
   /**
    * 这个 Harness 实际在用的 settings（同步 getter；压缩余量按锁定模型与在跑的派生 agent 模型里最小的
    * 窗口算，K14 / Q-P2-08）
@@ -2261,6 +2281,44 @@ export class DurableSessionImpl implements DurableSession {
     }
   }
 
+  // ─── 撤回排队输入（P3-11） ───────────────────────
+
+  async withdrawQueued(submissionId: number): Promise<WithdrawResult> {
+    if (this.closedFlag) return 'closed'
+    try {
+      return await this.op(() =>
+        this.inSection(async (): Promise<WithdrawResult> => {
+          const conversation = await this.currentConversation()
+          const id = submissionId as SubmissionId
+          // 判据就是投影的 `queue`（PIN-09）：此刻视图里有它才撤。之后到提交之间被放下了 → pi 报 already_placed
+          const view = await this.snapshotOf(conversation)
+          if (view.queue.some((item) => item.submissionId === submissionId)) {
+            return await this.raw.abortSubmission(id, BG, conversation.id)
+          }
+          return await this.withdrawRefusal(conversation.id, id)
+        })
+      )
+    } catch (error) {
+      if (error instanceof SessionClosedError) return 'closed'
+      throw error
+    }
+  }
+
+  /** 不在队列里的那条（只读）：当前对话的用户输入 → 放下了 / 落定了；其余 → not_found */
+  private async withdrawRefusal(
+    conversationId: ConversationId,
+    id: SubmissionId
+  ): Promise<WithdrawResult> {
+    const handle = await this.raw.submission(id, BG)
+    if (handle === undefined) return 'not_found'
+    const record = await handle.status(BG)
+    if (record.conversationId !== conversationId || record.type !== 'input') return 'not_found'
+    if (record.status === 'placed') return 'already_placed'
+    // 排着却不在视图的队列里 = 系统写的（通知形状的插话）
+    if (record.status === 'queued') return 'not_found'
+    return 'settled'
+  }
+
   /**
    * 回退的停下（PIN-21）：有锁走销毁那一套（`agent_closing` 一对、删锁、卸扩展、镜像），停下这一步换成
    * 不送达的版本；没锁（或销毁已经在途、由它停下了）也照样停一遍 —— 销毁在没锁时什么都不做（F2）。
@@ -2467,16 +2525,18 @@ export class DurableSessionImpl implements DurableSession {
   }
 
   viewSnapshot(): Promise<SessionView> {
-    return this.op(async () => {
-      const conversation = await this.currentConversation()
-      // 视图挂载此刻的一帧（与投影的 watch 同一个挂载：值不可变，跟上了就是同一份引用）；读完即放
-      const state = await conversation.viewState(BG)
-      const frame = state.value
-      state.dispose()
-      const current = this.projectorEntry?.instance.snapshotIfCurrent(conversation.id, frame)
-      if (current !== undefined) return current
-      return SessionProjectorImpl.snapshot(this.projectorHost(), conversation.id, frame)
-    })
+    return this.op(async () => this.snapshotOf(await this.currentConversation()))
+  }
+
+  /** 某对话此刻的视图（`viewSnapshot` 的本体；不计 op、不进区段，会话内部用） */
+  private async snapshotOf(conversation: Conversation): Promise<SessionView> {
+    // 视图挂载此刻的一帧（与投影的 watch 同一个挂载：值不可变，跟上了就是同一份引用）；读完即放
+    const state = await conversation.viewState(BG)
+    const frame = state.value
+    state.dispose()
+    const current = this.projectorEntry?.instance.snapshotIfCurrent(conversation.id, frame)
+    if (current !== undefined) return current
+    return SessionProjectorImpl.snapshot(this.projectorHost(), conversation.id, frame)
   }
 
   /** 挂载一个投影；失败（含挂载途中关停）→ 拆掉它、关停统一成 SessionClosedError */

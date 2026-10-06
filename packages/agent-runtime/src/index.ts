@@ -588,7 +588,8 @@ export {
   type AdmitOptions,
   type AdmittedInfo,
   type AgentRef,
-  type PlacedInfo
+  type PlacedInfo,
+  type WithdrawResult
 } from './durable/durableSession'
 export { type RollbackOptions, type RollbackRefusal, type RollbackResult } from './durable/rollback'
 // 监控快照（P3-13）：`DurableSession.monitorSnapshot()` 的一行（宿主补标题 / 根显示名即 AgentMonitorEntry）
