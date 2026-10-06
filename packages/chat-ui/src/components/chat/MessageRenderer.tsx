@@ -47,10 +47,17 @@ function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element
   const handleDelete = async (): Promise<void> => {
     removeMessage(msg.id)
   }
+  const retried = msg.metadata?.retried
   return (
     <div className="group relative flex items-center gap-1.5 pl-4 pr-8 mr-4 my-1 text-[11px] text-error/90">
       <AlertCircle size={12} />
       <span className="whitespace-pre-wrap break-words">{msg.content}</span>
+      {/* 最终失败前折叠掉的重试（Q-P3-06 / PIN-21）：一行错误带上次数 */}
+      {retried && retried.count > 0 && (
+        <span data-error-retries="" className="shrink-0 text-error/60">
+          {t('run.errorAfterRetries', { count: retried.count })}
+        </span>
+      )}
       <button
         type="button"
         onClick={handleDelete}

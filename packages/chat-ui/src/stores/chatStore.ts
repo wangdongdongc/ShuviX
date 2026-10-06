@@ -120,6 +120,11 @@ export interface SessionSettings {
    * （同一条记忆在同一处出现两次，比少一处入口更糟）。
    */
   memorySlug?: string
+  /**
+   * 运行标记（主进程的界面口径，P3-12）：`interrupted` = 上个进程退出时这条会话正在跑，等用户「继续」。
+   * 侧栏圆点读它（`selectInterruptedSessions`）；本端收到 `agent_start` 即就地改掉
+   */
+  runState?: 'idle' | 'busy' | 'interrupted'
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */
@@ -621,6 +626,36 @@ export const selectStreamingSessions = (s: ChatState): Record<string, boolean> =
     Object.keys(next).length === Object.keys(prev).length && Object.keys(next).every((k) => prev[k])
   if (!same) _lastStreamingFlags = next
   return _lastStreamingFlags
+}
+
+/**
+ * 各会话是否被中断（侧栏圆点，P3-12 PIN-18）：订阅着视图的会话以视图的 `run.state` 为准，其余读列表里的
+ * `settings.runState`（主进程算好的界面口径；本端 `agent_start` 会就地改掉它）。值不变时引用稳定
+ */
+let _lastInterruptedInput: [ChatState['sessions'], ChatState['sessionViews']] | null = null
+let _lastInterruptedFlags: Record<string, boolean> = {}
+export const selectInterruptedSessions = (s: ChatState): Record<string, boolean> => {
+  if (
+    _lastInterruptedInput &&
+    _lastInterruptedInput[0] === s.sessions &&
+    _lastInterruptedInput[1] === s.sessionViews
+  ) {
+    return _lastInterruptedFlags
+  }
+  _lastInterruptedInput = [s.sessions, s.sessionViews]
+  const next: Record<string, boolean> = {}
+  for (const session of s.sessions) {
+    const view = s.sessionViews[session.id]
+    const interrupted = view
+      ? view.run.state === 'interrupted'
+      : session.settings?.runState === 'interrupted'
+    if (interrupted) next[session.id] = true
+  }
+  const prev = _lastInterruptedFlags
+  const same =
+    Object.keys(next).length === Object.keys(prev).length && Object.keys(next).every((k) => prev[k])
+  if (!same) _lastInterruptedFlags = next
+  return _lastInterruptedFlags
 }
 
 /** 取某个会话中某个请求的草稿 */

@@ -71,7 +71,8 @@
     "noSessionsOnDay": "No sessions on this day",
     "newBotChat": "New bot chat",
     "botOverridden": "Overridden",
-    "moreActions": "More actions"
+    "moreActions": "More actions",
+    "interrupted": "Interrupted when ShuviX closed — open it to continue"
   },
   "transcript": {
     "untitled": "Untitled Session",
@@ -281,6 +282,23 @@
     "interactiveRerun": "Run again",
     "interactiveFrameTitle": "Interactive figure",
     "interactiveDesktopOnly": "Interactive figures run in the ShuviX desktop app"
+  },
+  "run": {
+    "interruptedBanner": "This run was interrupted when ShuviX closed",
+    "interruptedContinue": "Continue",
+    "interruptedHint": "Or send a new message — the interrupted run will be stopped first.",
+    "retrying": "Retrying (attempt {{attempt}}) in {{seconds}}s",
+    "retryingNow": "Retrying now (attempt {{attempt}})",
+    "retriedHint": "retried ×{{count}}",
+    "errorAfterRetries": "after {{count}} retries",
+    "compactingBlocking": "Compacting context: {{reason}}",
+    "compactingBackground": "Compacting context in the background: {{reason}}",
+    "compactingReasonThreshold": "near the context limit",
+    "compactingReasonOverflow": "the context overflowed",
+    "compactingReasonManual": "requested",
+    "compactingReasonUnknown": "in progress",
+    "compactingAttempt": "attempt {{attempt}}",
+    "compactingRetry": "retrying in {{seconds}}s"
   },
   "pendingInputs": {
     "title": "Pending inputs {{count}}",

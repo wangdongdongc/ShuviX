@@ -1,7 +1,7 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, X, Zap, CornerDownLeft, CornerRightDown } from 'lucide-react'
+import { Send, Square, X, Zap, CornerDownLeft, CornerRightDown, CirclePause } from 'lucide-react'
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
 import {
@@ -17,6 +17,9 @@ import {
   selectIsStreaming,
   selectIsAgentClosing,
   selectActivePendingInput,
+  selectSessionCapabilities,
+  selectSessionRun,
+  selectSessionSource,
   pendingPromptMessage
 } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
@@ -99,6 +102,20 @@ export function InputArea({
     : activePendingInput.kind === 'ask'
       ? 'warning'
       : 'accent'
+  /**
+   * 上个进程退出时这条会话正在跑（P3-12，Q-P3-10）：输入卡片顶上一条横幅 +「继续」，下面一行提示「直接发新消息
+   * 也行，会先停掉被中断的那一轮」—— 发送照常走 `agent.prompt`，运行时先中止再发（abort-then-send）。
+   * 横幅只跟着视图的 `run.state` 走，从不乐观收起（PIN-17）
+   */
+  const run = useChatStore(selectSessionRun)
+  const source = useChatStore(selectSessionSource)
+  const isInterrupted = !!activeSessionId && source === 'durable' && run.state === 'interrupted'
+  /**
+   * 这条会话不能发消息（旧格式只读，Q-P3-21：phase 3 用 `capabilities.send` 禁用输入框，横幅是 phase 4 的事）。
+   * 还没收到视图时按新会话的口径（能发）
+   */
+  const canSendInSession = useChatStore((s) => selectSessionCapabilities(s).send)
+  const sendBlocked = !!activeSessionId && !canSendInSession
   // 渠道端（无 HostApi）只读：禁用一切会话配置编辑（模型/工具等）
   const hasHost = getHostApi() !== null
   const canEdit = hasHost
@@ -155,6 +172,36 @@ export function InputArea({
    * 失败时输入框文本与欢迎页草稿都还在，原样重试即可。
    */
   const [sendError, setSendError] = useState<string | null>(null)
+
+  /**
+   * 「继续」按下之后的那条会话（PIN-17）：按钮保持禁用，直到视图离开 interrupted 或调用失败 —— 调用本身要等
+   * 整轮落定才回，界面不靠它的时机改形态。ref 挡连点（同一刻只发一次）
+   */
+  const [continuingFor, setContinuingFor] = useState<string | null>(null)
+  const continuingRef = useRef(false)
+  useEffect(() => {
+    if (continuingFor !== null && (continuingFor !== activeSessionId || !isInterrupted)) {
+      continuingRef.current = false
+      setContinuingFor(null)
+    }
+  }, [continuingFor, activeSessionId, isInterrupted])
+
+  const handleContinue = async (): Promise<void> => {
+    const sid = activeSessionId
+    if (!sid || continuingRef.current || isAgentClosing) return
+    continuingRef.current = true
+    setContinuingFor(sid)
+    setSendError(null)
+    try {
+      const result = await getSessionChannelApi().agent.continue(sid)
+      if (!result.success) throw new Error(result.error ?? 'continue failed')
+    } catch (err) {
+      if (useChatStore.getState().activeSessionId !== sid) return
+      continuingRef.current = false
+      setContinuingFor(null)
+      setSendError(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   /** 输入变化处理：检测 "/commandId " 模式并自动转为芯片；同步 @ 引用触发态与登记表 */
   const handleInputChange = useCallback(
@@ -460,7 +507,13 @@ export function InputArea({
     const images = pendingImages
 
     // 有芯片时即使参数为空也允许发送（纯命令）
-    if ((!rawText && !slashChip && images.length === 0) || isStreaming || isAgentClosing) return
+    if (
+      (!rawText && !slashChip && images.length === 0) ||
+      isStreaming ||
+      isAgentClosing ||
+      sendBlocked
+    )
+      return
 
     // 无会话则自动创建临时会话（欢迎页直接发送时走这条路径）。
     let sid = activeSessionId
@@ -609,6 +662,7 @@ export function InputArea({
     (inputText.trim().length > 0 || pendingImages.length > 0 || !!slashChip) &&
     !isStreaming &&
     !isAgentClosing &&
+    !sendBlocked &&
     !!activeModel
 
   // ─── 上下文用量环形指示器（普通会话）──
@@ -753,6 +807,37 @@ export function InputArea({
           {/* 待投递队列（只读回执）。排在 accessory 之下 —— 待处理请求的优先级更高 */}
           <QueuePanel />
 
+          {/* 被中断的运行（P3-12）：横幅 +「继续」，提示行在横幅可见时恒显示（PIN-20） */}
+          {isInterrupted && (
+            <div
+              data-interrupted-banner=""
+              className="px-3 pt-2.5 pb-2 border-b border-border-secondary/40"
+            >
+              <div className="flex items-center gap-2">
+                <CirclePause size={14} className="flex-shrink-0 text-warning" />
+                <span data-interrupted-text="" className="flex-1 min-w-0 text-xs text-text-primary">
+                  {t('run.interruptedBanner')}
+                </span>
+                <button
+                  type="button"
+                  data-interrupted-continue=""
+                  onClick={handleContinue}
+                  disabled={continuingFor === activeSessionId || isAgentClosing}
+                  className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] transition-colors ${
+                    continuingFor === activeSessionId || isAgentClosing
+                      ? 'bg-bg-hover text-text-tertiary cursor-not-allowed'
+                      : 'bg-accent text-white hover:bg-accent-hover'
+                  }`}
+                >
+                  {t('run.interruptedContinue')}
+                </button>
+              </div>
+              <div data-interrupted-hint="" className="mt-1 pl-[22px] text-[11px] text-text-tertiary">
+                {t('run.interruptedHint')}
+              </div>
+            </div>
+          )}
+
           {/* 图片预览条 */}
           {pendingImages.length > 0 && (
             <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
@@ -840,8 +925,11 @@ export function InputArea({
               onScroll={(e) => {
                 if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop
               }}
+              disabled={sendBlocked}
               placeholder={
-                isAgentClosing
+                sendBlocked
+                  ? t('chat.legacySessionReadOnly')
+                  : isAgentClosing
                   ? t('input.placeholderClosing')
                   : activePendingInput
                     ? t('pendingInputs.otherPlaceholder')

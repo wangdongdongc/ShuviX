@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import {
   useChatStore,
   selectAllPendingCounts,
+  selectInterruptedSessions,
   selectStreamingSessions,
   type Session
 } from '@shuvix/chat-ui'
@@ -102,6 +103,7 @@ export function ProjectSessionGroups({
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
   const streamingSessions = useChatStore(selectStreamingSessions)
   const pendingCounts = useChatStore(selectAllPendingCounts)
+  const interruptedSessions = useChatStore(selectInterruptedSessions)
   const { dim } = useFocusDim()
   const handleSelect = onSelect ?? setActiveSessionId
 
@@ -291,6 +293,7 @@ export function ProjectSessionGroups({
               session={item}
               active={activeSessionId === item.id}
               isStreaming={streamingSessions[item.id]}
+              interrupted={interruptedSessions[item.id]}
               pendingCount={pendingCounts[item.id]}
               dim={dim && activeGroupKey === groupKey && activeSessionId !== item.id}
               isNotebook={!!item.settings.notebookPath}
