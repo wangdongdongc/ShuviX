@@ -222,18 +222,15 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   /**
-   * 回退到某条消息之前（durable 会话：phase 3，`resolveRollbackTarget` 抛 PhasePendingError；
-   * 旧格式会话只读，没有可回退的目标）。
-   *
-   * **顺序是关键**：先把 agent 彻底停下并解锁，再动会话。反过来等于在一个还在写的 run 脚下
-   * 改历史 —— 它接下来的消息会挂到回退后的分支上，和新 run 交叉。
+   * 回退到某条消息之前（P3-10b）：交给运行时的 `rollbackTo` —— 它先只读地校验目标，合格才停下在跑的 run、
+   * 销毁 agent（`agent_closing` 一对）、建 fork；不合格什么都不动。所以这里**不**预先 invalidate（PIN-03）：
+   * 那样一个无效目标也会把在跑的 run 停掉。真回退了再清桌面侧随 agent 的状态（fileTime 的「已读」记录），
+   * 运行时的销毁不管这一份。旧格式会话只读、id 不是条目 id、目标不在 → false，什么都不动。
    */
-  async rollbackMessage(sessionId: string, messageId: string): Promise<void> {
-    // 先只读地解析目标：目标不存在就什么都不做 —— 不值得为一次无效回退把正在跑的 Agent 停掉
-    const target = await messageService.resolveRollbackTarget(sessionId, messageId)
-    if (!target) return
-    await sessionService.invalidateAgent(sessionId)
-    await messageService.applyRollback(sessionId, target.targetId)
+  async rollbackMessage(sessionId: string, messageId: string): Promise<boolean> {
+    const rolledBack = await messageService.rollbackToMessage(sessionId, messageId)
+    if (rolledBack) sessionService.clearAgentScopedState(sessionId)
+    return rolledBack
   }
 
   // ─── 运行时资源 ──────────────────────────────────

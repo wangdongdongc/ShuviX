@@ -7,12 +7,14 @@
  *    回退 / 截断一律不做（返回「没有可回退的目标」）。
  *  - `durable-sqlite-1`（新会话）：列表就是界面投影的消息（P3-07）—— `peek`（存储不在就是空，从不打开 /
  *    创建会话）再 `DurableSession.viewSnapshot().messages`，与 SyncHub 推给界面的 `view.messages` 同一份；
- *    回退 / 截断抛 `PhasePendingError`（TODO(pi-durable p3)）。
+ *    回退 / 截断（P3-10b）= 运行时的 `DurableSession.rollbackTo(条目 id, {keep})`：消息 id 就是条目 id
+ *    （只认规范的正整数写法，PIN-01），`peek` 打开（从不建存储），运行时校验目标、销毁 agent、建 fork；
+ *    被拒（目标不在 / 不是用户消息）= 「没有可回退的目标」，句柄恰好被关掉就再窥视一次（PIN-04）。
  *
  * 清空（`clear`）两种都做：经 SessionHost 关掉并删掉存储；旧格式会话清空之后换成当前存储类型，
  * 从此是一条全新的新格式会话（PIN-22，什么都不带过去 —— 不是迁移）。
  */
-import { PhasePendingError, SessionClosedError } from '@shuvix/agent-runtime'
+import { SessionClosedError } from '@shuvix/agent-runtime'
 import {
   CURRENT_SESSION_STORAGE_KIND,
   HARNESS_V3_JSONL,
@@ -79,41 +81,77 @@ export class MessageService {
   // ─── 回退 / 截断 ────────────────────────────────────────
 
   /**
-   * 解析回退目标（**只读，不写**）。消息不在会话里返回 undefined；`{ targetId: null }` 表示回退到最开头。
-   *
-   * 和 `applyRollback` 分成两步，是为了让调用方能在**动会话之前**先把旧运行时关停
-   * （见 DefaultChatGateway.rollbackMessage），也免得为一个不存在的目标白白停掉正在跑的 Agent。
+   * 解析回退目标（**只读，不碰宿主**）：旧格式会话只读、id 不是规范的条目 id（PIN-01）→ undefined；
+   * 否则 `{ targetId: messageId }`。目标在不在当前对话里由运行时的 `rollbackTo` 校验（拒绝之前什么都不动），
+   * 这里只是旧格式守卫加解析（PIN-05）。`targetId: null`（「回退到最开头」）不再产生。
    */
   async resolveRollbackTarget(
     sessionId: string,
-    _messageId: string
+    messageId: string
   ): Promise<{ targetId: string | null } | undefined> {
-    // 旧格式会话只读：没有可回退的目标
     if (isLegacySession(sessionId)) return undefined
-    // TODO(pi-durable p3): durable 会话的回退（按条目定位 + rewind）
-    throw new PhasePendingError('message rollback', 3)
+    return parseEntryId(messageId) === undefined ? undefined : { targetId: messageId }
   }
 
-  /** 执行回退：把会话退到 `resolveRollbackTarget` 给出的位置 */
-  async applyRollback(sessionId: string, _targetId: string | null): Promise<boolean> {
-    if (isLegacySession(sessionId)) return false
-    // TODO(pi-durable p3): durable 会话的回退
-    throw new PhasePendingError('message rollback', 3)
+  /**
+   * 执行回退：`rollbackTo(条目 id)`。真的回退了才是 true；旧格式会话、`null`、不规范的 id、没有存储 /
+   * 宿主已封存、运行时拒绝（`not_found` / `invalid_target`）都是 false。
+   */
+  async applyRollback(sessionId: string, targetId: string | null): Promise<boolean> {
+    return await this.rollbackDurable(sessionId, targetId, false)
   }
 
-  /** 回退到指定消息之前（该消息本身也不再在上下文中）。调用方须自行保证此刻没有活跃 run。 */
+  /**
+   * 回退到指定消息之前（该消息本身也不再在上下文中）。运行时自己先停下在跑的 run、销毁 agent，
+   * 调用方不必（也不该）预先关停 —— 那样一个无效目标也会把在跑的 run 停掉。
+   */
   async rollbackToMessage(sessionId: string, messageId: string): Promise<boolean> {
     const target = await this.resolveRollbackTarget(sessionId, messageId)
     if (!target) return false
     return await this.applyRollback(sessionId, target.targetId)
   }
 
-  /** 回退到指定消息之后（保留该消息本身） */
-  async truncateAfterMessage(sessionId: string, _messageId: string): Promise<boolean> {
-    if (isLegacySession(sessionId)) return false
-    // TODO(pi-durable p3): durable 会话的截断
-    throw new PhasePendingError('message truncate', 3)
+  /** 回退到指定消息之后（保留该消息本身）：`rollbackTo(条目 id, { keep: true })` */
+  async truncateAfterMessage(sessionId: string, messageId: string): Promise<boolean> {
+    const target = await this.resolveRollbackTarget(sessionId, messageId)
+    if (!target) return false
+    return await this.rollbackDurable(sessionId, target.targetId, true)
   }
+
+  /**
+   * 回退 / 截断的共用一段：`peek`（没有存储 / 宿主已封存 → false，从不建存储）→ `rollbackTo`。
+   * 句柄恰好在两步之间被关掉（`closed`：LRU / 退出）就再窥视一次、只再试一次（PIN-04；拒绝发生在任何
+   * 写之前，重试是安全的）。
+   */
+  private async rollbackDurable(
+    sessionId: string,
+    targetId: string | null,
+    keep: boolean
+  ): Promise<boolean> {
+    if (targetId === null || isLegacySession(sessionId)) return false
+    const entryId = parseEntryId(targetId)
+    if (entryId === undefined) return false
+    for (let attempt = 0; ; attempt++) {
+      const session = await getSessionHost().peek(sessionId)
+      if (session === undefined) return false
+      const result = keep
+        ? await session.rollbackTo(entryId, { keep: true })
+        : await session.rollbackTo(entryId)
+      if (result.ok) return true
+      if (result.reason !== 'closed' || attempt > 0) return false
+    }
+  }
+}
+
+/**
+ * 消息 id → 条目 id（PIN-01）：只认规范的正整数写法（`/^[1-9]\d*$/`）且在安全整数范围内；其余（空串、
+ * `'0'`、负数、小数、前导零、科学计数、带空白、超出安全整数、UUID……）都不是条目 id。`Number(id)` 单独用
+ * 会把 `'1e3'` / `' 42'` / `'01'` 也认下来。
+ */
+export function parseEntryId(messageId: string): number | undefined {
+  if (!/^[1-9]\d*$/.test(messageId)) return undefined
+  const id = Number(messageId)
+  return Number.isSafeInteger(id) ? id : undefined
 }
 
 export const messageService = new MessageService()

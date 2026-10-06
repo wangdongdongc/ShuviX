@@ -15,6 +15,7 @@
  *   P3-05-23 清空 durable 会话（从不 deleteSession；replaced 成 none 视图、不是 unavailable；下一次发送 replaced
  *            成 durable 视图）
  *   P3-05-24 清空旧格式会话（PIN-06：none 视图 send:true、没有 unavailable；存储类型换掉；不 deleteSession）
+ *   P3-10b-10 回退之后订阅着的客户端在帧冲刷内拿到 = listBySession 的 messages；门面不变，没有 replaced / unavailable
  *
  * 夹具必须第一个 import（它登记 vi.mock）。
  */
@@ -439,6 +440,40 @@ describe('P3-05-23 清空 durable 会话（S）', () => {
       )
       expect(types(a.updates)).not.toContain('unavailable')
       expect(deleteSession).not.toHaveBeenCalled()
+    },
+    T
+  )
+})
+
+describe('P3-10b-10 回退之后视图不用重拉（S）', () => {
+  it(
+    'P3-10b-10 gateway.rollbackMessage：订阅着的客户端 view.messages 在帧冲刷内 = listBySession；门面不变，没有 replaced / unavailable',
+    async () => {
+      await bootProcess()
+      const { p, window } = await wire()
+      insert('s1')
+      p.router.on('t1', role('chat', 'U1'), answer('A1'))
+      expect(await withTimeout(p.chatGateway.prompt('s1', 'U1'), 15000)).toEqual({})
+      p.router.on('t2', role('chat', 'U1'), answer('A2'))
+      expect(await withTimeout(p.chatGateway.prompt('s1', 'U2'), 15000)).toEqual({})
+      const a = await bound(window(7), S('s1'))
+      const facade = a.facade()
+      await waitFor(() => (viewOf(a)?.messages ?? []).length === 4, 5000, 'four messages')
+      const u2 = viewOf(a)!.messages[2]!
+      expect(u2.content).toBe('U2')
+      const updatesBefore = a.updates.length
+
+      expect(await withTimeout(p.chatGateway.rollbackMessage('s1', u2.id), 15000)).toBe(true)
+      const listed = await p.chatGateway.listMessages('s1')
+      expect(listed.map((m) => m.content)).toEqual(['U1', 'A1'])
+      // 帧冲刷（hub 的 flush 排在 setTimeout 0 上）之内就到了 —— 不等、不重拉
+      await settle()
+      expect(viewOf(a)?.messages).toEqual(listed)
+      expect(a.facade()).toBe(facade)
+      const after = types(a.updates.slice(updatesBefore))
+      expect(after).not.toContain('replaced')
+      expect(after).not.toContain('unavailable')
+      expect(a.errors).toEqual([])
     },
     T
   )

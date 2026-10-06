@@ -3,11 +3,12 @@
  *
  *   E  D10-35 getAgentSession · D10-36 ensureAgentSession · D10-37 hasAgentRuntime · D10-38 invalidateAgent ·
  *      D10-39(U) 事件归运行时 · D10-40 删除次序（P3-05：含 hub.deleteSession）· D10-42 后台通知 · D10-43 询问参与方 · D10-44 钉档案 ·
- *      D10-45..53 网关 · P3-06-30 网关 getAgentInfo（不带 ensure 读门面 / peek；ensure 的次序与拒绝）
+ *      D10-45..51 网关 · P3-10b-08 网关回退不预先销毁（取代 D10-53）· P3-06-30 网关 getAgentInfo（不带 ensure 读门面 / peek；ensure 的次序与拒绝）
  *   F  D10-55 statusOf（P2-10-32：interrupted，开着 / 镜像）· D10-56 被拒的子会话发送 · D10-57 stop（含被中断的）·
  *      D10-58 答复（P2-10-28：lastAnswer）
- *   G  D10-59 列表（P3-07：新格式 = peek → viewSnapshot().messages）· D10-61 回退 / 截断 ·
- *      P3-10a-23 旧格式的回退拒绝（桌面守卫）
+ *   G  D10-59 列表（P3-07：新格式 = peek → viewSnapshot().messages）· D10-61 旧格式的回退 / 截断 ·
+ *      P3-10a-23 旧格式的回退拒绝（桌面守卫）· P3-10b-01..07 回退 / 截断映射到 rollbackTo（id 解析 PIN-01、
+ *      拒绝 = 没有目标、closed 再窥视一次 PIN-04）
  *   H  D10-64 closeAll 之后
  * （D10-54 Chrome 侧栏的 respondToInput：channel.test.ts 的 CH-5 钉路由，D10-35 钉 getAgentSession 只看宿主。）
  *
@@ -20,7 +21,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AgentCreationError, PhasePendingError } from '@shuvix/agent-runtime'
+import { AgentCreationError } from '@shuvix/agent-runtime'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import { emptySessionView } from '@shuvix/chat-protocol/types/sessionView'
 
@@ -39,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   fire: vi.fn(),
   getProfile: vi.fn<(name: string) => unknown>(),
   recordUserEntry: vi.fn(),
+  clearFileTime: vi.fn<(sessionId: string) => void>(),
   calls: [] as string[]
 }))
 
@@ -111,7 +113,9 @@ vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: async () => null,
   isDefaultTitle: () => false
 }))
-vi.mock('../../utils/toolUtils/fileTime', () => ({ clearSession: vi.fn() }))
+vi.mock('../../utils/toolUtils/fileTime', () => ({
+  clearSession: (sessionId: string) => mocks.clearFileTime(sessionId)
+}))
 vi.mock('../../tools/allTools', () => ({}))
 vi.mock('../toolRegistry', () => ({
   getBuiltinToolEntries: () => [],
@@ -695,13 +699,43 @@ describe('D10-51 destroyAgent / abort', () => {
   })
 })
 
-describe('D10-53 rollbackMessage', () => {
-  it('D10-53 新格式会话：PhasePendingError（phase 3）上抛，destroyAgent 从不被调', async () => {
+describe('P3-10b-08 gateway.rollbackMessage 不预先销毁（PIN-03；取代 D10-53）', () => {
+  it('P3-10b-08 锁着、在跑：桌面从不 invalidateAgent / destroyAgent，rollbackTo 恰一次；ok → 桌面侧清理恰一次（fileTime）', async () => {
     insert('s1')
-    const session = fakeHost.put('s1', { lock: lockRecord() })
-    await expect(chatGateway.rollbackMessage('s1', 'm1')).rejects.toBeInstanceOf(PhasePendingError)
+    const session = fakeHost.put('s1', { lock: lockRecord(), busy: true, runState: 'busy' })
+    const invalidate = vi.spyOn(sessionService, 'invalidateAgent')
+    expect(await chatGateway.rollbackMessage('s1', '42')).toBe(true)
+    expect(invalidate).not.toHaveBeenCalled()
     expect(session.callsOf('destroyAgent')).toEqual([])
+    expect(session.callsOf('rollbackTo')).toEqual([['rollbackTo', 42]])
+    expect(mocks.clearFileTime.mock.calls).toEqual([['s1']])
+    invalidate.mockRestore()
   })
+
+  it.each([['not_found' as const], ['invalid_target' as const]])(
+    'P3-10b-08 被拒（%s）→ false：不清理、不广播，假会话的忙碌与锁原样',
+    async (reason) => {
+      insert('s1')
+      const lock = lockRecord()
+      const session = fakeHost.put('s1', {
+        lock,
+        busy: true,
+        runState: 'busy',
+        rollbackResult: { ok: false, reason }
+      })
+      const invalidate = vi.spyOn(sessionService, 'invalidateAgent')
+      expect(await chatGateway.rollbackMessage('s1', '42')).toBe(false)
+      expect(invalidate).not.toHaveBeenCalled()
+      expect(session.callsOf('destroyAgent')).toEqual([])
+      expect(session.callsOf('rollbackTo')).toEqual([['rollbackTo', 42]])
+      expect(mocks.clearFileTime).not.toHaveBeenCalled()
+      expect(mocks.broadcast).not.toHaveBeenCalled()
+      expect(session.isBusy()).toBe(true)
+      expect(session.runState).toBe('busy')
+      expect(session.lock).toBe(lock)
+      invalidate.mockRestore()
+    }
+  )
 })
 
 describe('P3-06-30 gateway.getAgentInfo', () => {
@@ -944,16 +978,8 @@ describe('D10-59 列表', () => {
 })
 
 describe('D10-61 回退 / 截断', () => {
-  it('D10-61 新格式 → PhasePendingError(3)；旧格式 → undefined / false', async () => {
-    insert('s1')
+  it('D10-61 旧格式 → undefined / false（新格式的一半见 P3-10b-01..03）', async () => {
     insert('old', { storageKind: 'harness-v3-jsonl' })
-    await expect(messageService.resolveRollbackTarget('s1', 'm')).rejects.toBeInstanceOf(
-      PhasePendingError
-    )
-    await expect(messageService.applyRollback('s1', null)).rejects.toBeInstanceOf(PhasePendingError)
-    await expect(messageService.truncateAfterMessage('s1', 'm')).rejects.toBeInstanceOf(
-      PhasePendingError
-    )
     expect(await messageService.resolveRollbackTarget('old', 'm')).toBeUndefined()
     expect(await messageService.rollbackToMessage('old', 'm')).toBe(false)
     expect(await messageService.truncateAfterMessage('old', 'm')).toBe(false)
@@ -970,6 +996,160 @@ describe('D10-61 回退 / 截断', () => {
     expect(fakeHost.calls.slice(before)).toEqual([])
     expect(durable.callsOf('rollbackTo')).toEqual([])
     expect(durable.calls).toEqual([])
+  })
+})
+
+describe('P3-10b 回退 / 截断映射到 rollbackTo', () => {
+  it('P3-10b-01 回退：rollbackTo(42) 恰一次、不带选项 → true；resolveRollbackTarget 给 {targetId:"42"} 且不调 rollbackTo', async () => {
+    insert('s1')
+    const durable = fakeHost.put('s1', { rollbackResult: { ok: true, conversationId: 7 } })
+    expect(await messageService.resolveRollbackTarget('s1', '42')).toEqual({ targetId: '42' })
+    expect(durable.callsOf('rollbackTo')).toEqual([])
+    expect(await messageService.rollbackToMessage('s1', '42')).toBe(true)
+    expect(durable.callsOf('rollbackTo')).toEqual([['rollbackTo', 42]])
+  })
+
+  it('P3-10b-02 截断：rollbackTo(42, {keep:true}) 恰一次 → true', async () => {
+    insert('s1')
+    const durable = fakeHost.put('s1', { rollbackResult: { ok: true, conversationId: 7 } })
+    expect(await messageService.truncateAfterMessage('s1', '42')).toBe(true)
+    expect(durable.callsOf('rollbackTo')).toEqual([['rollbackTo', 42, { keep: true }]])
+  })
+
+  it.each([['not_found' as const], ['invalid_target' as const]])(
+    'P3-10b-03 运行时拒绝（%s）= 没有目标：回退 / 截断 / applyRollback 都是 false，不抛',
+    async (reason) => {
+      insert('s1')
+      const durable = fakeHost.put('s1', { rollbackResult: { ok: false, reason } })
+      expect(await messageService.rollbackToMessage('s1', '42')).toBe(false)
+      expect(await messageService.truncateAfterMessage('s1', '42')).toBe(false)
+      expect(await messageService.applyRollback('s1', '42')).toBe(false)
+      expect(durable.callsOf('rollbackTo')).toEqual([
+        ['rollbackTo', 42],
+        ['rollbackTo', 42, { keep: true }],
+        ['rollbackTo', 42]
+      ])
+    }
+  )
+
+  it('P3-10b-03 applyRollback(s, null)（「回退到最开头」不再产生）→ false，不碰宿主', async () => {
+    insert('s1')
+    const durable = fakeHost.put('s1')
+    expect(await messageService.applyRollback('s1', null)).toBe(false)
+    expect(fakeHost.calls).toEqual([])
+    expect(durable.calls).toEqual([])
+  })
+
+  it.each([
+    'no-such-message',
+    '',
+    '0',
+    '-3',
+    '1.5',
+    '01',
+    '1e3',
+    ' 42',
+    '9007199254740993',
+    '3f2504e0-4f89-11d3-9a0c-0305e82c3301'
+  ])(
+    'P3-10b-04 不规范的 id %j（PIN-01）→ undefined / false；宿主不 peek 不 open，rollbackTo 从不调用',
+    async (id) => {
+      insert('s1')
+      const durable = fakeHost.put('s1')
+      expect(await messageService.resolveRollbackTarget('s1', id)).toBeUndefined()
+      expect(await messageService.rollbackToMessage('s1', id)).toBe(false)
+      expect(await messageService.truncateAfterMessage('s1', id)).toBe(false)
+      expect(await messageService.applyRollback('s1', id)).toBe(false)
+      expect(fakeHost.calls).toEqual([])
+      expect(durable.callsOf('rollbackTo')).toEqual([])
+    }
+  )
+
+  it('P3-10b-04 安全整数的上沿（9007199254740991）仍是条目 id', async () => {
+    insert('s1')
+    const durable = fakeHost.put('s1', { rollbackResult: { ok: false, reason: 'not_found' } })
+    expect(await messageService.resolveRollbackTarget('s1', '9007199254740991')).toEqual({
+      targetId: '9007199254740991'
+    })
+    await messageService.rollbackToMessage('s1', '9007199254740991')
+    expect(durable.callsOf('rollbackTo')).toEqual([['rollbackTo', Number.MAX_SAFE_INTEGER]])
+  })
+
+  it('P3-10b-05 没有存储：false，只 peek（从不 open）、不建文件、不抛', async () => {
+    insert('s1')
+    expect(await messageService.rollbackToMessage('s1', '42')).toBe(false)
+    expect(await messageService.truncateAfterMessage('s1', '42')).toBe(false)
+    expect(fakeHost.calls).toEqual([
+      ['peek', 's1'],
+      ['peek', 's1']
+    ])
+    expect(readdirSync(holder.sessionsDir)).toEqual([])
+  })
+
+  it('P3-10b-05 宿主已封存（closeAll 之后）：false，不建文件、不抛', async () => {
+    insert('s1')
+    fakeHost.put('s1')
+    await fakeHost.closeAll()
+    expect(await messageService.rollbackToMessage('s1', '42')).toBe(false)
+    expect(await messageService.truncateAfterMessage('s1', '42')).toBe(false)
+    expect(await chatGateway.rollbackMessage('s1', '42')).toBe(false)
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(readdirSync(holder.sessionsDir)).toEqual([])
+  })
+
+  /** 第一个句柄答 `closed`，并且（像 LRU / 退出那样）已经被宿主关掉了 */
+  function closingFirstHandle(): FakeDurableSession {
+    const first = fakeHost.put('s1', { rollbackResult: { ok: false, reason: 'closed' } })
+    const rollbackTo = first.rollbackTo.bind(first)
+    first.rollbackTo = async (...args) => {
+      const result = await rollbackTo(...args)
+      await fakeHost.close('s1')
+      return result
+    }
+    return first
+  }
+
+  it('P3-10b-06 closed（PIN-04）：恰再窥视一次，在新句柄上再调一次 rollbackTo；结果是那一次的', async () => {
+    insert('s1')
+    const first = closingFirstHandle()
+    fakeHost.configure = (session) => (session.rollbackResult = { ok: true, conversationId: 3 })
+    expect(await messageService.rollbackToMessage('s1', '42')).toBe(true)
+    expect(fakeHost.callsOf('peek')).toEqual(['s1', 's1'])
+    const [, second] = fakeHost.instances.get('s1')!
+    expect(first.callsOf('rollbackTo')).toEqual([['rollbackTo', 42]])
+    expect(second.callsOf('rollbackTo')).toEqual([['rollbackTo', 42]])
+    expect(fakeHost.callsOf('open')).toEqual([])
+  })
+
+  it('P3-10b-06 closed 之后新句柄被拒 → 那一次的结果（false）', async () => {
+    insert('s1')
+    closingFirstHandle()
+    fakeHost.configure = (session) =>
+      (session.rollbackResult = { ok: false, reason: 'invalid_target' })
+    expect(await messageService.truncateAfterMessage('s1', '42')).toBe(false)
+    const [, second] = fakeHost.instances.get('s1')!
+    expect(second.callsOf('rollbackTo')).toEqual([['rollbackTo', 42, { keep: true }]])
+  })
+
+  it('P3-10b-06 两次都 closed → false，没有第三次', async () => {
+    insert('s1')
+    closingFirstHandle()
+    fakeHost.configure = (session) => (session.rollbackResult = { ok: false, reason: 'closed' })
+    expect(await messageService.rollbackToMessage('s1', '42')).toBe(false)
+    expect(fakeHost.callsOf('peek')).toEqual(['s1', 's1'])
+    const handles = fakeHost.instances.get('s1')!
+    expect(handles).toHaveLength(2)
+    expect(handles.flatMap((h) => h.callsOf('rollbackTo'))).toHaveLength(2)
+  })
+
+  it('P3-10b-07 旧格式不变（D10-61 的旧格式一半）：undefined / false，宿主不参与', async () => {
+    insert('old', { storageKind: 'harness-v3-jsonl' })
+    expect(await messageService.resolveRollbackTarget('old', '42')).toBeUndefined()
+    expect(await messageService.rollbackToMessage('old', '42')).toBe(false)
+    expect(await messageService.truncateAfterMessage('old', '42')).toBe(false)
+    expect(await chatGateway.rollbackMessage('old', '42')).toBe(false)
+    expect(fakeHost.calls).toEqual([])
+    expect(mocks.clearFileTime).not.toHaveBeenCalled()
   })
 })
 

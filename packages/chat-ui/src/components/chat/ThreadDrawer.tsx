@@ -64,8 +64,14 @@ export function ThreadDrawer({ sessionId }: { sessionId: string }): React.JSX.El
   const open = useChatStore((s) => s.sessionThreadOpen[sessionId] ?? false)
   const setThreadOpen = useChatStore((s) => s.setThreadOpen)
 
-  const { handleRollback, pendingRollbackId, confirmRollback, cancelRollback, handleRegenerate } =
-    useChatActions(sessionId)
+  const {
+    handleRollback,
+    pendingRollbackId,
+    confirmRollback,
+    cancelRollback,
+    handleRegenerate,
+    canRollback
+  } = useChatActions(sessionId)
 
   // 沿驱动开合：流式开始（且无待审批）→ 展开；待审批出现 / 一轮结束 → 折叠
   // （给询问卡让位；轮结束回到以笔记为主）；询问清空且仍在流式 → 展回。
@@ -150,8 +156,8 @@ export function ThreadDrawer({ sessionId }: { sessionId: string }): React.JSX.El
                 key={item.key}
                 item={item}
                 lastAssistantId={lastAssistantId}
-                onRollback={handleRollback}
-                onRegenerate={handleRegenerate}
+                onRollback={canRollback ? handleRollback : undefined}
+                onRegenerate={canRollback ? handleRegenerate : undefined}
               />
             ))}
             <StreamingFooter />
