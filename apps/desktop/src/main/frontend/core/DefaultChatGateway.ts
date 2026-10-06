@@ -63,8 +63,8 @@ export class DefaultChatGateway implements ChatGateway {
     inlineTokens?: Record<string, InlineToken>,
     drive?: DriveOptions
   ): Promise<{ error?: string; code?: SubmitErrorCode }> {
-    // lastActiveAt 在这条输入被会话受理时入账（门面的 onAdmitted），不在这里 bump：
-    // 打不开 / 被拒的发送不会落进会话，却会误记一天。
+    // lastActiveAt 与日历不在这里 bump：门面在用户条目落下时按条目 id 入账（当场落下的在 onAdmitted，
+    // 排队之后被放下的在 onPlaced，P3-07）。打不开 / 被拒 / 被撤回的发送不会落进会话，却会误记一天。
     // 这里只打开会话；agent 在第一次发送时由运行时创建（打开会话 / 笔记本不创建）
     const session = await sessionService.ensureAgentSession(sessionId)
     if (!session) {
@@ -84,7 +84,7 @@ export class DefaultChatGateway implements ChatGateway {
     // 调整配置」的语义保持不变。
 
     // 用户消息不由网关落库：会话运行时把它作为条目追加。发送失败由门面报给界面。
-    // TODO(pi-durable p3): 其它前端看到这条用户消息靠投影（durable 不发 user_message 事件）。
+    // 其它前端经会话视图（投影）看到这条用户消息，没有单独的用户消息事件。
     // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」。
     // `drive` 只有子会话的驱动方（subSessionRunner，主进程内）给：幂等键 + driven-run 标记（P2-10）
     return await session.prompt(promptText, images, display, drive)
