@@ -216,6 +216,13 @@ export interface PwnMarks {
   apiTerminal: string
 }
 
+/** 「被中断」横幅的快照 */
+export interface InterruptedBannerShot {
+  text: string
+  hint: string
+  continueDisabled: boolean
+}
+
 export interface ChatPane {
   /** 输入框就绪（会话已选中、ChatView 已挂载） */
   ready(): Promise<void>
@@ -274,6 +281,17 @@ export interface ChatPane {
   thinkingBlocks(): Promise<number>
   /** 错误行数量（error_event 条目） */
   errorRows(): Promise<number>
+  /**
+   * 输入卡片顶上的「被中断」横幅（P3-12，`data-interrupted-banner`）：文案、提示行、[继续] 是否禁用；
+   * 不在屏时为 null
+   */
+  interruptedBanner(): Promise<InterruptedBannerShot | null>
+  /** 点横幅上的 [继续]；横幅不在返回 false */
+  clickContinue(): Promise<boolean>
+  /** StreamingFooter 里的重试倒计时行（`data-run-retry`）的文本；不在屏时为 null */
+  retryRow(): Promise<string | null>
+  /** 对话区里各张卡的「重试 ×N」提示（`data-retried-hint`）文本，DOM 序 */
+  retriedHints(): Promise<string[]>
   toolRows(): Promise<ChatToolRow[]>
   /** 工具行的完整快照（DOM 序，含展开的合并行里逐条列出的那些） */
   toolRowShots(): Promise<ChatToolRowShot[]>
@@ -635,6 +653,32 @@ export function chatPane(main: CdpClient): ChatPane {
       main.eval<number>(`${SCROLLER}?.querySelectorAll('button.font-serif').length ?? 0`),
     errorRows: () =>
       main.eval<number>(`document.querySelectorAll('[data-msg-type="error_event"]').length`),
+
+    interruptedBanner: () =>
+      main.eval<InterruptedBannerShot | null>(`(() => {
+        const el = document.querySelector('[data-interrupted-banner]')
+        if (!el) return null
+        return {
+          text: (el.querySelector('[data-interrupted-text]')?.textContent ?? '').trim(),
+          hint: (el.querySelector('[data-interrupted-hint]')?.textContent ?? '').trim(),
+          continueDisabled: !!el.querySelector('[data-interrupted-continue]')?.disabled
+        }
+      })()`),
+    clickContinue: () =>
+      main.eval<boolean>(`(() => {
+        const btn = document.querySelector('[data-interrupted-continue]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`),
+    retryRow: () =>
+      main.eval<string | null>(
+        `document.querySelector('[data-run-retry]')?.textContent?.trim() ?? null`
+      ),
+    retriedHints: () =>
+      main.eval<string[]>(
+        `[...document.querySelectorAll('[data-retried-hint]')].map((e) => (e.textContent ?? '').trim())`
+      ),
 
     toolRows: () =>
       main.eval<ChatToolRow[]>(
@@ -1796,6 +1840,8 @@ export interface SidebarPane {
    * 只在行内找：`.lucide-bot` 在别处也有（组头菜单、设置窗口……），裸查 document 必然误命中。
    */
   rowIcon(title: string): Promise<SessionRowIcon | ''>
+  /** 这一行有没有「被中断」圆点（P3-12，`data-interrupted`）；行不存在返回 false */
+  interruptedOf(title: string): Promise<boolean>
   /**
    * 点侧栏某个会话（按标题）并**等它真的成为活动会话**；行都找不到返回 false。
    *
@@ -2080,6 +2126,8 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       return clicked
     },
     rowIcon: (title) => main.eval<SessionRowIcon | ''>(`${ROW_ICON_OF}(${ROW(title)})`),
+    interruptedOf: (title) =>
+      main.eval<boolean>(`!!${ROW(title)}?.querySelector('[data-interrupted]')`),
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {
