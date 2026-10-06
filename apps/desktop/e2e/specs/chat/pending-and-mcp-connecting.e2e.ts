@@ -1,12 +1,12 @@
 /**
  * 「按下回车到那句话真的落库」之间的那几秒 —— 乐观占位 + MCP 连接态。
  *
- * 用户消息由后端统一落库、经 `user_message` 事件回到列表；而创建运行时要先把这条会话勾上的
+ * 用户消息由后端统一落库、经会话视图回到列表（P3-08：没有 `user_message` 事件了）；而创建运行时要先把这条会话勾上的
  * MCP 逐台连起来（惰性启动，单台上限 5 秒）。这几秒里输入框已经清空、列表里却还没有那句话，
  * 看上去就是「消息发丢了」。改法是两条并行的：
  *
  *   - **乐观占位**：发送方立刻把那句话画上去（固定 id `pending-prompt`，压淡、不给回退），
- *     `user_message` 一到就原地换成真实 entry。撤占位的地方只有两处：那个事件，以及发送方
+ *     视图里一出现那条用户条目就原地换成真实 entry。撤占位的地方只有两处：那一帧视图，以及发送方
  *     自己的 finally —— **`error` 事件不许碰它**，否则 MCP 连不上的报错会把刚发出的消息
  *     先抹掉几秒再补回来，正是占位要解决的那个毛病。
  *   - **连接态**：`mcp_connecting` 事件让占位卡上写明在等哪几台，工具选择器的触发钮同时转圈；
@@ -52,6 +52,7 @@ import {
   type SidebarPane,
   type ToolPickerPane
 } from '../../harness/pages'
+import { syncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
 /** 永不应答的两台（窗口就是它们撑出来的） */
@@ -469,16 +470,17 @@ describe('收尾：错误与轮末都不该留下残影', () => {
     await until(() => chat.pendingItem(), 'optimistic placeholder on screen')
 
     await recorder.waitFor<RecordedEvent>('error', { sessionId: sid })
+    // 报错到达那一刻，视图里还没有这条用户消息（P3-08：用户条目经视图出现，没有 user_message 事件）
+    const atError = await syncProbe(app.main).viewOf(sid)
     await waitTurnEnd(sid, 0)
     await watch.stop()
 
-    // 报错到达时那条用户消息还没落库：事件序上 error 在 user_message 之前 —— 也就是说这条
-    // error 整个落在占位的生命周期里。它若去撤占位，下面那串帧里必然出现一帧 0
+    // 也就是说这条 error 整个落在占位的生命周期里。它若去撤占位，下面那串帧里必然出现一帧 0
     const errors = (await sessionEvents(sid)).filter((e) => e.type === 'error')
     expect(errors.some((e) => String(e.error).includes('tavily'))).toBe(true)
-    const types = (await sessionEvents(sid)).map((e) => e.type)
-    expect(types.indexOf('error')).toBeGreaterThanOrEqual(0)
-    expect(types.indexOf('error')).toBeLessThan(types.indexOf('user_message'))
+    expect(atError?.messages.some((m) => m.role === 'user' && m.content === TEXT) ?? false).toBe(
+      false
+    )
 
     expectSeamlessHandover(await watch.frames())
 

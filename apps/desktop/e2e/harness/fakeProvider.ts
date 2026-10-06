@@ -3,17 +3,17 @@
  *
  * 隔离实例没有 API Key，真实模型既跑不通也不可复现；这里在 vitest 进程里起一个
  * 本地 HTTP 服务，按 `openai-completions` 协议回放**脚本化**的一轮回复，
- * 让整条链路（pi-ai → harness → ChatEvent → chatStore → DOM）真实跑起来。
+ * 让整条链路（pi-ai → pi-durable → 会话视图 → chatStore → DOM）真实跑起来。
  *
  * 三条硬约束（踩过的坑，别改）：
  *
- *  1. **队列耗尽绝不 hang** —— `nextTurn()` 取不到脚本就回默认 `"OK"`。
+ *  1. **队列耗尽绝不 hang** —— 取不到脚本就回默认 `"OK"`。
  *     队列空时挂死比断言失败难查十倍。
- *  2. **标题请求不消费队列** —— `agentSession.prompt` 每轮都会触发自动标题
- *     （`completeSimple`，system 含 `Generate a concise title`），不单独拦就会
- *     打乱脚本顺序、让用例随机红。标题请求一律直接回 `{"title": ...}`。
- *  3. **usage 远小于 contextWindow** —— 否则 `maybeAutoCompact` 会在轮末触发，
- *     用例被压缩污染。脚本里写几百的数字即可（模型 contextWindow 由
+ *  2. **没有标题特例** —— 自动标题是 hook 派发的 titler agent，发的是普通的对话请求（带 `session`
+ *     工具），与根会话的请求一样从队列取脚本。要让它不打乱 FIFO，用例给 titler 写带 `when` 的脚本
+ *     按内容认领（见 hooks/autoTitle、chat/chat-stream）。
+ *  3. **usage 远小于 contextWindow** —— 否则 durable 的自动压缩（阈值按上下文窗口算）会在
+ *     轮末触发，用例被压缩污染。脚本里写几百的数字即可（模型 contextWindow 由
  *     `seedFakeProvider` 设成 200k）。
  *
  * SSE 形状对齐 pi-ai 的 openai-completions 适配器（`dist/api/openai-completions.js`）：
@@ -83,8 +83,6 @@ export interface FakeRequestBody {
 
 /** 一次记录下来的请求 */
 export interface FakeRequest {
-  /** 自动标题请求（不消费脚本队列） */
-  isTitle: boolean
   body: FakeRequestBody
   /** `JSON.stringify(body)` —— 「发给模型的 payload 里有没有某段文本」的便捷断言入口 */
   raw: string
@@ -104,11 +102,11 @@ export interface FakeProvider {
   script(...turns: FakeTurn[]): void
   /** 清空脚本队列与请求记录（每个 it 开头调一次） */
   reset(): void
-  /** 全部请求（含标题请求） */
+  /** 全部请求 */
   requests(): FakeRequest[]
-  /** 仅对话请求（剔除自动标题） */
+  /** 全部请求（与 `requests()` 相同：自动标题也是普通对话请求，没有可剔除的了；名字留给用例） */
   chatRequests(): FakeRequest[]
-  /** 已处理的对话请求数 */
+  /** 已处理的请求数（= `requests().length`） */
   chatRequestCount(): number
   /** 提前放行当前 hold（未在 hold 中则无副作用） */
   release(): void
@@ -119,8 +117,6 @@ export interface FakeProvider {
   holding(): boolean
   close(): Promise<void>
 }
-
-const TITLE_MARKER = 'Generate a concise title'
 
 const asChunks = (value: string | string[] | undefined): string[] => {
   if (value === undefined) return []
@@ -278,11 +274,9 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       } catch {
         /* 非 JSON 请求（不该发生）按空体处理 */
       }
-      const isTitle = rawBody.includes(TITLE_MARKER)
       const messages = body.messages ?? []
       const lastUser = [...messages].reverse().find((m) => m.role === 'user')
       const record: FakeRequest = {
-        isTitle,
         body,
         raw: rawBody,
         lastUserText: textOfContent(lastUser?.content),
@@ -296,11 +290,6 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       })
 
       const model = body.model ?? 'e2e-model'
-      // 标题请求：直接回 JSON 标题，绝不动脚本队列
-      if (isTitle) {
-        await streamTurn(res, model, { text: '{"title":"E2E 标题"}', finishReason: 'stop' })
-        return
-      }
 
       // 取队列里第一个「没写 when 或 when 命中」的 turn：无 when 的仍是纯 FIFO
       const at = queue.findIndex((t) => !t.when || t.when(record))
@@ -308,9 +297,10 @@ export async function startFakeProvider(): Promise<FakeProvider> {
         at >= 0 ? queue.splice(at, 1)[0] : ({ text: 'OK', finishReason: 'stop' } as FakeTurn)
       if (turn.httpStatus) {
         res.writeHead(turn.httpStatus, { 'Content-Type': 'application/json' })
-        res.end(
-          JSON.stringify({ error: { message: 'e2e injected failure', type: 'server_error' } })
-        )
+        // 4xx 报成请求错误：错误文本里带 `server_error` 会被 pi-ai 认成暂时性失败、durable 按退避重试
+        // （P3-08：durable 的重试是开着的）；5xx 才是 server_error
+        const type = turn.httpStatus >= 500 ? 'server_error' : 'invalid_request_error'
+        res.end(JSON.stringify({ error: { message: 'e2e injected failure', type } }))
         return
       }
       await streamTurn(res, model, turn)
@@ -328,8 +318,8 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       recorded.length = 0
     },
     requests: () => [...recorded],
-    chatRequests: () => recorded.filter((r) => !r.isTitle),
-    chatRequestCount: () => recorded.filter((r) => !r.isTitle).length,
+    chatRequests: () => [...recorded],
+    chatRequestCount: () => recorded.length,
     release: () => releaseHold?.(),
     holding: () => releaseHold !== null,
     close: () =>

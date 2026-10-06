@@ -11,7 +11,7 @@ import { Type } from 'typebox'
 import type { TObject, TString } from 'typebox'
 import { rgFiles } from '../utils/toolUtils/ripgrep'
 import { BaseTool } from '@shuvix/agent-runtime'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { SkillToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { skillService } from './skillService'
 import { t } from '../i18n'
@@ -33,6 +33,14 @@ const makeSkillParams = (hint: string): TObject<{ name: TString }> =>
 /** 类型锚点：各实例的 schema 同形，值各造各的 */
 type SkillParams = ReturnType<typeof makeSkillParams>
 
+/**
+ * 名单在哪一池里找：
+ *  - `'enabled'`（创建 agent 时）：只收没被停用的 —— 侧栏关掉的技能不上新 agent 的货架；
+ *  - `'known'`（重开会话、按锁重建时）：锁记着的照收，停用与否不论 —— 锁住的 agent 工具不变（与 MCP
+ *    同一条规则：要生效就销毁 agent）；只有磁盘上已经没了的才从索引里掉出去。
+ */
+export type SkillShelf = 'enabled' | 'known'
+
 /** skill 工具 */
 export class SkillTool extends BaseTool<SkillParams> {
   readonly name = 'skill'
@@ -47,7 +55,12 @@ export class SkillTool extends BaseTool<SkillParams> {
     return this.skills.length > 0
   }
 
-  constructor(skillNames: string[], projectPath?: string) {
+  /** 这一次上架的 skill（全局名，索引里的次序）—— 锁定 agent 时记进锁，重开时按它重建同一个货架 */
+  get skillNames(): string[] {
+    return this.skills.map((s) => s.name)
+  }
+
+  constructor(skillNames: string[], projectPath?: string, shelf?: SkillShelf) {
     super()
 
     // 上架的只有名单点了名的 skill：档案 `shuvix-tools` 声明的（内置的写作 `skill:builtin:<name>`）
@@ -61,8 +74,12 @@ export class SkillTool extends BaseTool<SkillParams> {
     // 直觉读这里：内置恒带 `dirName='builtin'`，globalName 因此恒为 `builtin:<name>`，而用户
     // 全局目录的就是 `<name>`，两者永远不同名，于是并存、各占索引一行。要让内置那份失效，
     // 路径是 .config.json 的 disabled（或整组 disabledDirs），不是放一个同名文件。
+    //
+    // 按锁重建（shelf 'known'）时停用不再算数：锁住的 agent 带着它上锁时的货架，见 SkillShelf。
     const wanted = new Set(skillNames)
-    this.skills = skillService.findEnabled(projectPath).filter((s) => wanted.has(s.name))
+    const pool =
+      shelf === 'known' ? skillService.findAll(projectPath) : skillService.findEnabled(projectPath)
+    this.skills = pool.filter((s) => wanted.has(s.name))
 
     // hint 无条件参与本实例的 schema 构造：空架子就得到空 hint，不会留着别处的示例名
     const examples = this.skills
@@ -129,7 +146,7 @@ export class SkillTool extends BaseTool<SkillParams> {
   protected async executeInternal(
     _toolCallId: string,
     params: { name: string }
-  ): Promise<AgentToolResult<SkillToolDetails>> {
+  ): Promise<ToolResult<SkillToolDetails>> {
     const skillName = params.name.trim()
 
     // 从**这一次装配的名单**里取，而不是 findByName（它走 findAll，不看 .config.json 的

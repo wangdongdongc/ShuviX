@@ -1,0 +1,6 @@
+{"type":"session","version":3,"id":"G04b-rollback-to-root-continue","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/fixture"}
+{"type":"message","id":"9f7b772b","parentId":null,"timestamp":"2026-10-04T18:07:16.718Z","message":{"role":"user","content":[{"type":"text","text":"u1 (rolled back)"}],"timestamp":1791137236718}}
+{"type":"message","id":"721cec43","parentId":"9f7b772b","timestamp":"2026-10-04T18:07:16.718Z","message":{"role":"assistant","content":[{"type":"text","text":"a1 (rolled back)"}],"api":"openai-completions","provider":"test","model":"test-model","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15},"stopReason":"stop","timestamp":1791137236718}}
+{"type":"leaf","id":"24428046","parentId":"721cec43","timestamp":"2026-10-04T18:07:16.718Z","targetId":null}
+{"type":"message","id":"4ec2633d","parentId":null,"timestamp":"2026-10-04T18:07:16.719Z","message":{"role":"user","content":[{"type":"text","text":"u2"}],"timestamp":1791137236719}}
+{"type":"message","id":"bc130cde","parentId":"4ec2633d","timestamp":"2026-10-04T18:07:16.719Z","message":{"role":"assistant","content":[{"type":"text","text":"a2"}],"api":"openai-completions","provider":"test","model":"test-model","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15},"stopReason":"stop","timestamp":1791137236719}}

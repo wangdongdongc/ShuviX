@@ -10,11 +10,15 @@ import type {
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
-  AgentNextTurnParams,
+  AgentWithdrawQueuedParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams
 } from '../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { createLogger } from '../logger'
+import { clientIdOf } from '../frontend/sync/clientIdentity'
+
+const log = createLogger('AgentIPC')
 
 /**
  * Agent 相关 IPC 处理器
@@ -36,7 +40,10 @@ export function registerAgentHandlers(): void {
     })
   )
 
-  /** 继续与已存在子代理对话：追加一轮用户消息（fire-and-forget，不 await 整轮） */
+  /**
+   * 继续与已存在的派生 agent 对话（按 agentId 路由到它的会话与子对话）：追加一轮用户消息
+   * （fire-and-forget，不 await 整轮；不认识 / 忙 / 会话没了的拒绝只记日志）
+   */
   ipcMain.handle('agent:subAgentPrompt', (_event, params: AgentSubAgentPromptParams) => {
     void agentManager
       .continueTask({
@@ -44,7 +51,9 @@ export function registerAgentHandlers(): void {
         text: params.text,
         inlineTokens: params.inlineTokens
       })
-      .catch(() => {})
+      .catch((err: unknown) => {
+        log.warn(`派生 agent 追问失败 agent=${params.subSessionId}: ${errorText(err)}`)
+      })
     return { success: true }
   })
 
@@ -64,17 +73,32 @@ export function registerAgentHandlers(): void {
     })
   )
 
-  /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
-  ipcMain.handle('agent:nextTurn', (_event, params: AgentNextTurnParams) =>
-    operationContext.run(createElectronContext(params.sessionId), () => {
-      chatGateway.nextTurn(params.sessionId, params.text)
-      return { success: true }
-    })
+  /** 撤回一条排着的用户输入（P3-11，视图队列的一行）：`{ result }` */
+  ipcMain.handle('agent:withdrawQueued', (_event, params: AgentWithdrawQueuedParams) =>
+    operationContext.run(createElectronContext(params.sessionId), async () => ({
+      result: await chatGateway.withdrawQueued(params.sessionId, params.submissionId)
+    }))
   )
 
   /** 中止指定 session 的生成（若已有部分内容，后端统一落库并返回） */
   ipcMain.handle('agent:abort', (_event, sessionId: string) =>
     operationContext.run(createElectronContext(sessionId), () => chatGateway.abort(sessionId))
+  )
+
+  /**
+   * 继续被中断的工作（P3-12，PIN-17）：等这一轮落定才回（与 prompt 同口径），渲染端不靠它的时机改界面 ——
+   * 横幅跟着视图的运行状态走。`{}` → `{ success: true }`；失败 → `{ success: false, error, code }`。
+   */
+  ipcMain.handle('agent:continue', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), async () => {
+      const result = await chatGateway.continue(sessionId)
+      if (result.error === undefined) return { success: true }
+      return {
+        success: false,
+        error: result.error,
+        ...(result.code === undefined ? {} : { code: result.code })
+      }
+    })
   )
 
   /**
@@ -117,15 +141,18 @@ export function registerAgentHandlers(): void {
    */
   ipcMain.handle(
     'agent:respondToInput',
-    (_event, params: { sessionId: string; requestId: string; response: InputResponse }) =>
+    (event, params: { sessionId: string; requestId: string; response: InputResponse }) =>
       operationContext.run(createElectronContext(params.sessionId), () => {
-        chatGateway.respondToInput(params.sessionId, params.requestId, params.response)
+        // 答题方 = 这个窗口（`ipc:<webContentsId>`），只进审计日志（P3-08 PIN-20）
+        chatGateway.respondToInput(params.sessionId, params.requestId, params.response, {
+          clientId: clientIdOf(event)
+        })
         return { success: true }
       })
   )
 
-  /** 读取运行时 Agent 对象的实时信息（systemPrompt/工具/模型）；Agent 未创建返回 null，
-   *  传 { ensure: true } 则先懒创建（不请求 LLM）再取快照 */
+  /** 读取根 agent 的运行时快照（systemPrompt / 工具 / 模型 / 思考档位）；`ensure` 先创建 agent（不请求
+   *  LLM），没有可用模型时答 null（见 DefaultChatGateway.getAgentInfo） */
   ipcMain.handle('agent:getInfo', (_event, sessionId: string, options?: { ensure?: boolean }) =>
     operationContext.run(createElectronContext(sessionId), () =>
       chatGateway.getAgentInfo(sessionId, options)
@@ -146,8 +173,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('tools:definitions', () => getBuiltinToolDefinitions())
 
   /**
-   * 智能体监控：全部活跃 agent 运行时的快照（只读 pi getter + 事件影子，不碰会话树）。
-   * 设置页可见时轮询，故刻意不做任何遍历。
+   * 智能体监控：打开着的会话里每个 agent 的廉价快照（P3-13：`DurableSession.monitorSnapshot()`，只读、
+   * 不刷新 LRU、从不打开会话）。面板 / 胶囊可见时每秒轮询。
    */
   ipcMain.handle('agentMonitor:list', () => listAgentRuntimes())
 
@@ -158,20 +185,28 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('agentMonitor:detail', (_event, agentId: string) => getAgentRuntimeDetail(agentId))
 
   /**
-   * 销毁指定的派生 agent（用户点关闭按钮触发）。
-   * 中止其生成并级联销毁子树，从登记簿移除。
+   * 销毁指定的派生 agent（用户点关闭按钮触发）：在跑就硬中止、卸掉它的扩展、从索引与任务面板移除
+   * （转写留着）。等路由做完再答；路由报错只记日志，照样答成功（PIN-17）。
    */
-  ipcMain.handle('subSession:destroy', (_event, subSessionId: string) => {
-    agentManager.destroy(subSessionId)
+  ipcMain.handle('subSession:destroy', async (_event, subSessionId: string) => {
+    await agentManager.destroy(subSessionId).catch((err: unknown) => {
+      log.warn(`销毁派生 agent 失败 agent=${subSessionId}: ${errorText(err)}`)
+    })
     return { success: true }
   })
 
   /**
-   * 中断运行中的子会话（用户点中断按钮触发）。
-   * 软停止当前生成、保留已产出内容，子会话以「已完成」收尾并保留在面板。
+   * 中断运行中的派生 agent（用户点中断按钮触发）：软停止当前生成、保留已产出内容，以「已完成」收尾并
+   * 保留在面板。等它停下再答；路由报错只记日志，照样答成功（PIN-17）。
    */
-  ipcMain.handle('subSession:interrupt', (_event, subSessionId: string) => {
-    agentManager.interrupt(subSessionId)
+  ipcMain.handle('subSession:interrupt', async (_event, subSessionId: string) => {
+    await agentManager.interrupt(subSessionId).catch((err: unknown) => {
+      log.warn(`中断派生 agent 失败 agent=${subSessionId}: ${errorText(err)}`)
+    })
     return { success: true }
   })
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }

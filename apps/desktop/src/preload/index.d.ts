@@ -5,6 +5,7 @@ import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { KnowledgeEntry, KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
+import type { AgentContinueResult } from '@shuvix/chat-protocol/chatApi'
 import type {
   AgentInitParams,
   AgentInitResult,
@@ -13,7 +14,8 @@ import type {
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
-  AgentNextTurnParams,
+  AgentWithdrawQueuedParams,
+  WithdrawQueuedResult,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLog,
@@ -57,8 +59,7 @@ import type {
   DbCredentialTestParams,
   TelegramBotAddParams,
   TelegramBotUpdateParams,
-  TelegramBotInfo,
-  ToolResultDetails
+  TelegramBotInfo
 } from '../main/types'
 import type {
   ConfigSharePayload,
@@ -78,155 +79,11 @@ interface KnowledgeCreateReply {
 }
 
 declare global {
-  /** ChatEvent 判别联合 — 后端 → 前端通信协议 */
-  interface ChatEventBase {
-    sessionId: string
-  }
-  interface ChatAgentStartEvent extends ChatEventBase {
-    type: 'agent_start'
-  }
-  interface ChatTextDeltaEvent extends ChatEventBase {
-    type: 'text_delta'
-    delta: string
-  }
-  interface ChatThinkingDeltaEvent extends ChatEventBase {
-    type: 'thinking_delta'
-    delta: string
-  }
-  interface ChatTextEndEvent extends ChatEventBase {
-    type: 'text_end'
-  }
-  interface ChatAssistantMessageEvent extends ChatEventBase {
-    type: 'assistant_message'
-    messageId: string
-    message: string
-  }
-  interface ChatAgentEndEvent extends ChatEventBase {
-    type: 'agent_end'
-    message?: string
-    usage?: {
-      input: number
-      output: number
-      cacheRead: number
-      cacheWrite: number
-      total: number
-      details: Array<{
-        input: number
-        output: number
-        cacheRead: number
-        cacheWrite: number
-        total: number
-        stopReason: string
-      }>
-    }
-  }
-  interface ChatTokenUsageEvent extends ChatEventBase {
-    type: 'token_usage'
-    promptTokens: number
-  }
-  interface ChatToolCallGeneratingEvent extends ChatEventBase {
-    type: 'toolcall_generating'
-    toolName: string
-    argsDelta?: string
-  }
-  interface ChatToolStartEvent extends ChatEventBase {
-    type: 'tool_start'
-    toolCallId: string
-    toolName: string
-    toolArgs?: Record<string, unknown>
-    messageId?: string
-  }
-  interface ChatToolEndEvent extends ChatEventBase {
-    type: 'tool_end'
-    toolCallId: string
-    toolName: string
-    result?: string
-    isError?: boolean
-    messageId?: string
-    /** 工具特定的结构化详情（edit diff 等），按 type 判别 */
-    details?: ToolResultDetails
-  }
-  interface ChatInputRequestEvent extends ChatEventBase {
-    type: 'input_request'
-    request: import('@shuvix/chat-protocol/types/inputRequest').InputRequest
-  }
-  interface ChatInputRequestResolvedEvent extends ChatEventBase {
-    type: 'input_request_resolved'
-    requestId: string
-  }
-  interface ChatImageDataEvent extends ChatEventBase {
-    type: 'image_data'
-    image: string
-  }
-  interface RuntimeStatus {
-    label: string
-    icon?: LucideIconName
-    color?: ThemeColor
-    description?: string
-  }
-  interface ChatRuntimeEvent extends ChatEventBase {
-    type: 'runtime_event'
-    runtimeId: string
-    status: RuntimeStatus | null
-  }
-  interface ChatBrowserEvent extends ChatEventBase {
-    type: 'browser_event'
-    action: 'open' | 'close'
-    url?: string
-    title?: string
-  }
-  interface ChatSubSessionRegisterEvent extends ChatEventBase {
-    type: 'sub_session_register'
-    parentSessionId: string
-    subAgentName: string
-    displayName: string
-    description: string
-    systemPrompt: string
-    prompt: string
-    /** 派生层级（直接派生=1，嵌套派生依次递增） */
-    depth?: number
-    /** 所属根会话 id（嵌套派生时 parentSessionId 是另一个派生 agent） */
-    rootSessionId?: string
-  }
-  interface ChatSubSessionEndEvent extends ChatEventBase {
-    type: 'sub_session_end'
-    parentSessionId: string
-    result: string
-    isError?: boolean
-  }
-  interface ChatMessagesReloadedEvent extends ChatEventBase {
-    type: 'messages_reloaded'
-  }
-  interface ChatErrorEvent extends ChatEventBase {
-    type: 'error'
-    error: string
-  }
-  interface ChatUserMessageEvent extends ChatEventBase {
-    type: 'user_message'
-    message: string
-  }
-
-  type ChatEvent =
-    | ChatAgentStartEvent
-    | ChatTextDeltaEvent
-    | ChatThinkingDeltaEvent
-    | ChatTextEndEvent
-    | ChatAssistantMessageEvent
-    | ChatAgentEndEvent
-    | ChatTokenUsageEvent
-    | ChatToolCallGeneratingEvent
-    | ChatToolStartEvent
-    | ChatToolEndEvent
-    | ChatInputRequestEvent
-    | ChatInputRequestResolvedEvent
-    | ChatImageDataEvent
-    | ChatRuntimeEvent
-    | ChatBrowserEvent
-    | ChatSubSessionRegisterEvent
-    | ChatSubSessionEndEvent
-    | ChatMessagesReloadedEvent
-    | ChatErrorEvent
-    | ChatUserMessageEvent
+  /**
+   * ChatEvent 判别联合 — 后端 → 前端通信协议。直接取 chat-protocol 的那份（P3-08：联合缩成余项之后不再
+   * 手抄一份 —— 两份一漂就是一个前端收得到、类型上却不存在的事件）
+   */
+  type ChatEvent = import('@shuvix/chat-protocol/events').ChatEvent
 
   /** 自动更新事件判别联合 */
   type UpdateEvent = import('../main/types').UpdateEvent
@@ -498,8 +355,12 @@ declare global {
       subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
       steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
       followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
-      nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
+      withdrawQueued: (
+        params: AgentWithdrawQueuedParams
+      ) => Promise<{ result: WithdrawQueuedResult }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
+      /** 继续被中断的工作（等这一轮落定才回；失败 → success:false + error/code） */
+      continue: (sessionId: string) => Promise<AgentContinueResult>
       /** 切换模型（会话已有 Agent 运行时则拒绝，success: false） */
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息重建） */
@@ -594,7 +455,7 @@ declare global {
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>
       clear: (sessionId: string) => Promise<{ success: boolean }>
-      /** 回退到指定消息之前（entry 树 leaf 移到其父节点，使 Agent 失效） */
+      /** 回退到指定消息之前（fork 到它之前、销毁 agent）；`success:false` = 没有可回退的目标，什么都没动 */
       rollback: (params: { sessionId: string; messageId: string }) => Promise<{ success: boolean }>
     }
     settings: {
@@ -1126,6 +987,8 @@ declare global {
         callback: (event: import('@shuvix/chat-protocol/appEvents').AppEvent) => void
       ) => () => void
     }
+    /** 视图同步（P3-05）：失败的调用以带 `code` 的 Error 拒绝 */
+    sync: import('@shuvix/chat-protocol/sync').SyncChannel
     pinChat: {
       /** 把指定 session 提到悬浮窗口（已悬浮则 focus） */
       pin: (sessionId: string) => Promise<{ success: boolean }>

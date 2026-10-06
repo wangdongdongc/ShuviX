@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import type { GitEnv, GitFsClient } from '../env'
 import { createGitTool } from '../tool'
 import { GIT_OPS, type GitAction, type GitAskReason, type GitOpParams } from '../ops'
+import { executeTool, failureText } from '../../tools/testing/invokeTool'
 
 const dirs: string[] = []
 
@@ -168,7 +169,7 @@ describe('git 工具 — 需询问的操作', () => {
       const ask = askSpy('stop here')
       const tool = createGitTool({ getEnv: () => envFor(repo), askOp: ask.fn })
 
-      await expect(tool.execute('tc-1', params)).rejects.toThrow('stop here')
+      expect(await failureText(executeTool(tool, 'tc-1', params))).toContain('stop here')
 
       expect(ask.calls).toHaveLength(1)
       expect(ask.calls[0]).toEqual({
@@ -177,7 +178,10 @@ describe('git 工具 — 需询问的操作', () => {
         force: 'force' in params ? params.force : false,
         delete: 'delete' in params ? params.delete : false,
         command,
-        toolCallId: 'tc-1'
+        toolCallId: 'tc-1',
+        // P1-06：这次调用的 durable 归属随 toolCallId 一起交给 askOp（executeTool 的缺省 task 1、根对话 1）
+        taskId: 1,
+        conversationId: 1
       })
     }
   )
@@ -193,21 +197,23 @@ describe('git 工具 — 非破坏性操作', () => {
 
     nodeFs.writeFileSync(join(repo, 'b.txt'), 'second\n')
 
-    expect(textOf(await tool.execute('g1', { action: 'help' }))).toContain('git')
-    expect(textOf(await tool.execute('g2', { action: 'status' }))).toContain('b.txt')
-    expect(textOf(await tool.execute('g3', { action: 'log' }))).toContain('init')
-    expect(textOf(await tool.execute('g4', { action: 'show', ref: 'HEAD' }))).toContain('a.txt')
-    expect(textOf(await tool.execute('g5', { action: 'diff' }))).not.toContain('Error')
+    expect(textOf(await executeTool(tool, 'g1', { action: 'help' }))).toContain('git')
+    expect(textOf(await executeTool(tool, 'g2', { action: 'status' }))).toContain('b.txt')
+    expect(textOf(await executeTool(tool, 'g3', { action: 'log' }))).toContain('init')
+    expect(textOf(await executeTool(tool, 'g4', { action: 'show', ref: 'HEAD' }))).toContain(
+      'a.txt'
+    )
+    expect(textOf(await executeTool(tool, 'g5', { action: 'diff' }))).not.toContain('Error')
 
     // add → 索引里出现 b.txt
-    await tool.execute('g6', { action: 'add', paths: ['b.txt'] })
+    await executeTool(tool, 'g6', { action: 'add', paths: ['b.txt'] })
     expect(git(repo, 'diff --cached --name-only')).toContain('b.txt')
     // unstage → 又从索引里消失
-    await tool.execute('g7', { action: 'unstage', paths: ['b.txt'] })
+    await executeTool(tool, 'g7', { action: 'unstage', paths: ['b.txt'] })
     expect(git(repo, 'diff --cached --name-only')).not.toContain('b.txt')
     // 重新 add 后 commit → 历史多一条
-    await tool.execute('g8', { action: 'add', paths: ['b.txt'] })
-    await tool.execute('g9', {
+    await executeTool(tool, 'g8', { action: 'add', paths: ['b.txt'] })
+    await executeTool(tool, 'g9', {
       action: 'commit',
       message: 'second commit',
       authorName: 'Alice',
@@ -216,10 +222,10 @@ describe('git 工具 — 非破坏性操作', () => {
     expect(git(repo, 'log --oneline')).toContain('second commit')
 
     // branch(name) 建并切换 → branch() 列表里 feat 带 *
-    await tool.execute('g10', { action: 'branch', name: 'feat' })
-    expect(textOf(await tool.execute('g11', { action: 'branch' }))).toContain('* feat')
+    await executeTool(tool, 'g10', { action: 'branch', name: 'feat' })
+    expect(textOf(await executeTool(tool, 'g11', { action: 'branch' }))).toContain('* feat')
     // checkout(ref) 无 force → 切回 main
-    await tool.execute('g12', { action: 'checkout', ref: 'main' })
+    await executeTool(tool, 'g12', { action: 'checkout', ref: 'main' })
     expect(git(repo, 'rev-parse --abbrev-ref HEAD').trim()).toBe('main')
 
     // 新契约：每个操作（help 除外）都上报评估，但 reason 恒 null、布尔属性恒在
@@ -236,12 +242,14 @@ describe('git 工具 — 非破坏性操作', () => {
 // ─── GIT-4 / GIT-7 / GIT-8：拒绝、未注入、参数校验 ───────────────────────────
 
 describe('git 工具 — 询问的边界', () => {
-  it('GIT-4: askOp 抛错 → 操作不执行、错误上抛（不被 usageError 吞成成功）', async () => {
+  it('GIT-4: askOp 抛错 → 操作不执行、以失败结果收场（不被 usageError 吞成成功；P1-04 起抛错收成 isError，裁定 Q12）', async () => {
     const bare = makeDir()
     const ask = askSpy('User denied git init')
     const tool = createGitTool({ getEnv: () => envFor(bare), askOp: ask.fn })
 
-    await expect(tool.execute('d1', { action: 'init' })).rejects.toThrow('User denied git init')
+    expect(await failureText(executeTool(tool, 'd1', { action: 'init' }))).toContain(
+      'User denied git init'
+    )
     expect(existsSync(join(bare, '.git'))).toBe(false)
   })
 
@@ -251,22 +259,22 @@ describe('git 工具 — 询问的边界', () => {
     const ask = askSpy('User denied git restore a.txt')
     const tool = createGitTool({ getEnv: () => envFor(repo), askOp: ask.fn })
 
-    await expect(tool.execute('d2', { action: 'restore', paths: ['a.txt'] })).rejects.toThrow(
-      'User denied git restore'
-    )
+    expect(
+      await failureText(executeTool(tool, 'd2', { action: 'restore', paths: ['a.txt'] }))
+    ).toContain('User denied git restore')
     expect(nodeFs.readFileSync(join(repo, 'a.txt'), 'utf8')).toBe('locally edited\n')
   })
 
-  it('GIT-N3: askOp 对非破坏性操作（add）抛错 → 操作不执行（索引无变化）、错误上抛', async () => {
+  it('GIT-N3: askOp 对非破坏性操作（add）抛错 → 操作不执行（索引无变化）、以失败结果收场', async () => {
     const repo = makeRepoWithCommit()
     nodeFs.writeFileSync(join(repo, 'b.txt'), 'second\n')
     const ask = askSpy('User policy denied git add')
     const tool = createGitTool({ getEnv: () => envFor(repo), askOp: ask.fn })
 
     // 新契约：deny-all-git 这类用户策略必须真能拦 add（reason=null 不等于免评估）
-    await expect(tool.execute('n1', { action: 'add', paths: ['b.txt'] })).rejects.toThrow(
-      'User policy denied git add'
-    )
+    expect(
+      await failureText(executeTool(tool, 'n1', { action: 'add', paths: ['b.txt'] }))
+    ).toContain('User policy denied git add')
     expect(ask.calls).toHaveLength(1)
     expect(ask.calls[0]).toMatchObject({
       action: 'add',
@@ -281,7 +289,7 @@ describe('git 工具 — 询问的边界', () => {
     const bare = makeDir()
     const tool = createGitTool({ getEnv: () => envFor(bare) })
 
-    const out = await tool.execute('d3', { action: 'init' })
+    const out = await executeTool(tool, 'd3', { action: 'init' })
     expect(textOf(out)).not.toContain('Error')
     expect(existsSync(join(bare, '.git'))).toBe(true)
   })
@@ -291,7 +299,7 @@ describe('git 工具 — 询问的边界', () => {
     const ask = askSpy()
     const tool = createGitTool({ getEnv: () => envFor(repo), askOp: ask.fn })
 
-    const out = await tool.execute('d4', { action: 'branch', delete: true })
+    const out = await executeTool(tool, 'd4', { action: 'branch', delete: true })
     expect(textOf(out)).toContain('"name" is required when delete:true')
     expect(ask.fn).not.toHaveBeenCalled()
   })
@@ -301,7 +309,7 @@ describe('git 工具 — 询问的边界', () => {
     const ask = askSpy()
     const tool = createGitTool({ getEnv: () => envFor(repo), askOp: ask.fn })
 
-    const out = await tool.execute('d5', { action: 'restore' })
+    const out = await executeTool(tool, 'd5', { action: 'restore' })
     expect(textOf(out)).toContain('Missing required parameter "paths"')
     expect(ask.fn).not.toHaveBeenCalled()
   })
@@ -327,9 +335,9 @@ describe('git 工具 — dir 与询问的顺序', () => {
       }
     })
 
-    await expect(tool.execute('o1', { action: 'init', dir: 'sub/repo' })).rejects.toThrow(
-      'stop here'
-    )
+    expect(
+      await failureText(executeTool(tool, 'o1', { action: 'init', dir: 'sub/repo' }))
+    ).toContain('stop here')
 
     expect(order).toEqual(['resolveDir:sub/repo', 'askOp'])
     expect(ask.calls[0].command).toBe('git init (dir: sub/repo)')
@@ -348,7 +356,7 @@ describe('git 工具 — dir 与询问的顺序', () => {
       askOp: ask.fn
     })
 
-    const out = await tool.execute('o2', { action: 'init', dir: '/secret' })
+    const out = await executeTool(tool, 'o2', { action: 'init', dir: '/secret' })
     expect(textOf(out)).toContain('Cannot access repository dir "/secret"')
     expect(ask.fn).not.toHaveBeenCalled()
   })

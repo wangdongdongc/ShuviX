@@ -24,12 +24,13 @@
  * 宿主无关：文件经 FileSystemPort，库的解析 / 列举 / 扫描 / 检索全部注入。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { ToolResult } from '../tools/toolResult'
 import { KNOWLEDGE_TYPES, OKF_STATUSES, type OkfStatus } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../fileTools/port'
 import { splitFrontmatter } from '../markdownFrontmatter'
 import type { SecurityContext } from '../security/types'
 import { BaseTool } from '../tools/baseTool'
+import { callOwnerOf, type CallOwner, type ToolCallScope } from '../tools/toolCall'
 import {
   buildConceptText,
   headingsOf,
@@ -47,6 +48,9 @@ import {
   validateKnowledgeText,
   type BundleFile
 } from './validate'
+
+/** 交给 PEP 的调用身份：provider 的 toolCallId + durable 的调用归属（taskId / conversationId） */
+type PepCall = CallOwner & { toolCallId: string }
 
 export const KNOWLEDGE_TOOL_NAME = 'knowledge'
 
@@ -229,19 +233,27 @@ export interface KnowledgeToolDeps {
     query: string,
     opts: { limit: number; bundleDir: string }
   ) => Promise<KnowledgeSearchHit[]>
-  /** 写入者 actor 字符串（OKF §5.2：`shuvix-<profile>/<model>`）—— create 盖 `generated` 用 */
-  actor: () => string
+  /**
+   * 写入者 actor 字符串（OKF §5.2：`shuvix-<profile>/<model>`）—— create 盖 `generated` 用。
+   * 收这次调用的 scope（`call.conversationId` 认得出发起调用的 agent；单测直接调钩子时为 undefined）：
+   * 会话级装配的工具被同一会话的每个 agent 共用，章要盖成**发起这次写入的** agent。
+   */
+  actor: (call: ToolCallScope | undefined) => string
   now: () => Date
   /**
    * 新建之后（提交 / 事件由宿主完成）；`path` 是 `bundleDir` 内的相对路径。
    * 只有 create 这一条路要它 —— `edit` 走文件工具，那边自有 onFileChange 接同一条管线。
    */
-  afterWrite?: (e: { bundleDir: string; path: string; title: string }) => void | Promise<void>
+  afterWrite?: (
+    e: { bundleDir: string; path: string; title: string },
+    /** 这次调用的 scope（同 `actor` 的入参） */
+    call: ToolCallScope | undefined
+  ) => void | Promise<void>
   abortError?: string
   label: string
 }
 
-type Result = AgentToolResult<{ action: KnowledgeAction; path?: string } | undefined>
+type Result = ToolResult<{ action: KnowledgeAction; path?: string } | undefined>
 
 const DEFAULT_LIMIT = 20
 
@@ -298,6 +310,9 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   readonly label: string
   readonly description = KNOWLEDGE_DESCRIPTION
   readonly parameters = KnowledgeParamsSchema
+  // 不能重跑（裁定 Q1）：一个工具兼管只读的 search / read 与会写文件的 create，而 durable 的重跑
+  // 策略是按工具、在调用意图落库时定死的 —— 只能取最保守的那个
+  readonly replay = 'unsafe' as const
 
   constructor(private readonly deps: KnowledgeToolDeps) {
     super()
@@ -315,9 +330,12 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
   protected async executeInternal(
     toolCallId: string,
     params: KnowledgeToolParams,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    call?: ToolCallScope
   ): Promise<Result> {
     if (signal?.aborted) throw new Error(this.deps.abortError ?? 'Aborted')
+    // 询问 / 审查按 tool task 认人：toolCallId 与调用归属一起交给各 action 的 PEP
+    const pep: PepCall = { toolCallId, ...callOwnerOf(call) }
     switch (params.action) {
       case 'bases':
         return this.bases()
@@ -326,11 +344,11 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       case 'list':
         return this.list(params)
       case 'read':
-        return this.read(toolCallId, params)
+        return this.read(pep, params)
       case 'create':
-        return this.create(toolCallId, params)
+        return this.create(pep, params, call)
       case 'validate':
-        return this.validate(toolCallId, params)
+        return this.validate(pep, params)
       default:
         throw new Error(`Unknown action "${String(params.action)}". Valid: ${ACTIONS.join(', ')}`)
     }
@@ -351,11 +369,11 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     mode: 'read' | 'write',
     bundleDir: string,
     rel: string,
-    toolCallId: string,
+    pep: PepCall,
     action: string
   ): Promise<void> {
     await this.deps.security.enforcePath(mode, joinRoot(bundleDir, rel), {
-      toolCallId,
+      ...pep,
       toolName: this.name,
       displayPath: `/${rel}`,
       abortError: this.deps.abortError ?? 'Aborted',
@@ -502,11 +520,11 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     )
   }
 
-  private async read(toolCallId: string, params: KnowledgeToolParams): Promise<Result> {
+  private async read(pep: PepCall, params: KnowledgeToolParams): Promise<Result> {
     if (!params.path) throw new Error('"read" needs `path`')
     const rel = this.bundlePath(params.path)
     const target = await this.bundle(params)
-    await this.enforce('read', target.dir, rel, toolCallId, params.action)
+    await this.enforce('read', target.dir, rel, pep, params.action)
     if (!(await this.exists(target.dir, rel))) throw new Error(`No entry at /${rel}`)
     const raw = await this.deps.port.readFile(joinRoot(target.dir, rel))
     return text([`${joinRoot(target.dir, rel)}:`, '', raw.trimEnd()], {
@@ -519,11 +537,11 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
    * 一条或整个 bundle 的诊断（不写盘）。整库校验多一项逐文件规则给不出的东西：
    * 正文里的条目链接是否解析得到。
    */
-  private async validate(toolCallId: string, params: KnowledgeToolParams): Promise<Result> {
+  private async validate(pep: PepCall, params: KnowledgeToolParams): Promise<Result> {
     const target = await this.bundle(params)
     if (params.path) {
       const rel = this.bundlePath(params.path)
-      await this.enforce('read', target.dir, rel, toolCallId, params.action)
+      await this.enforce('read', target.dir, rel, pep, params.action)
       if (!(await this.exists(target.dir, rel))) throw new Error(`No entry at /${rel}`)
       const raw = await this.deps.port.readFile(joinRoot(target.dir, rel))
       const diagnostics = validateKnowledgeText(raw, rel)
@@ -539,7 +557,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
     }
 
     await this.deps.security.enforcePath('read', target.dir, {
-      toolCallId,
+      ...pep,
       toolName: this.name,
       displayPath: '/',
       abortError: this.deps.abortError ?? 'Aborted',
@@ -578,7 +596,11 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
    *
    * 本期新条目一律落在 bundle 根 —— 没有 agent 可选的子目录层级。
    */
-  private async create(toolCallId: string, params: KnowledgeToolParams): Promise<Result> {
+  private async create(
+    pep: PepCall,
+    params: KnowledgeToolParams,
+    call: ToolCallScope | undefined
+  ): Promise<Result> {
     const type = params.type?.trim()
     const title = params.title?.trim()
     const description = params.description?.trim()
@@ -616,7 +638,7 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
       }
     }
 
-    await this.enforce('write', target.dir, rel, toolCallId, params.action)
+    await this.enforce('write', target.dir, rel, pep, params.action)
 
     const sources: KnowledgeSource[] = params.sources ? normalizeSources(params.sources) : []
     const content = buildConceptText(
@@ -630,12 +652,12 @@ export class KnowledgeTool extends BaseTool<typeof KnowledgeParamsSchema> {
         status: params.status ?? 'stable',
         staleAfter: params.stale_after,
         sources,
-        generated: { by: this.deps.actor(), at: this.deps.now().toISOString() }
+        generated: { by: this.deps.actor(call), at: this.deps.now().toISOString() }
       },
       body!
     )
     await this.deps.port.writeFile(joinRoot(target.dir, rel), content)
-    await this.deps.afterWrite?.({ bundleDir: target.dir, path: rel, title: title! })
+    await this.deps.afterWrite?.({ bundleDir: target.dir, path: rel, title: title! }, call)
 
     const warnings = validateConceptText(content, rel)
       .filter((d) => d.level === 'warning')

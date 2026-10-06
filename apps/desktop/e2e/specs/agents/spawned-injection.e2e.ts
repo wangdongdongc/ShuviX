@@ -9,6 +9,9 @@
  * 接缝是假提供商记下的 payload（`chatRequests().raw`）：派生 agent 不经 `agent.getInfo`，
  * 它的系统提示词只有真的发出去才看得见。两个 agent 各列**不同的**文件名
  * （根=AGENTS.md、派生=SUB.md），断言据此认人而不认请求顺序。
+ *
+ * P3-14-22（同一个实例）：会话面板任务页里那条派生 agent 展开之后经 agent 视图实时流式 —— 扣住时正文已在
+ * 面板里，放行之后终答恰一份。
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -22,6 +25,7 @@ import {
   waitRendererReady,
   writeAgentMd
 } from '../../harness/seed'
+import { sidebarPane, tasksPanelPane } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
 
@@ -113,5 +117,80 @@ describe('派生 agent 的指令文件', () => {
     expect(root.length).toBeGreaterThan(0)
     expect(root[0].raw).toContain(inPayload('<project_instructions file="AGENTS.md">'))
     expect(root[0].raw).toContain('ROOT RULES CONTENT.')
+  })
+
+  it('P3-14-22 面板里的派生 agent 实时流式：扣住时看得到 CHILD PART；放行之后终答在面板里恰一次；父会话拿到派发结果', async () => {
+    provider.reset()
+    provider.script(
+      {
+        toolCalls: [
+          {
+            id: 'call_live',
+            name: 'agent',
+            args: JSON.stringify({
+              description: 'live sub',
+              name: 'ins-sub',
+              prompt: 'live please'
+            })
+          }
+        ],
+        usage: { prompt: 90, completion: 8 }
+      },
+      // 派生自身的一轮：逐片下发、发完之后扣住（holdMs 内 release() 放行）
+      {
+        text: ['CHILD ', 'PART'],
+        chunkDelayMs: 40,
+        holdMs: 20_000,
+        usage: { prompt: 60, completion: 4 }
+      },
+      { text: 'root live finished', usage: { prompt: 120, completion: 4 } }
+    )
+
+    const title = 'spawn-live-panel'
+    const sid = await app.main.eval<string>(
+      `window.api.session.create(${JSON.stringify({ title })}).then((s) => s.id)`
+    )
+    const sidebar = sidebarPane(app.main)
+    await until(async () => (await sidebar.openSession(title)) || null, 'live session opened')
+    await app.main.eval(
+      `(() => {
+        window.api.agent
+          .prompt({ sessionId: ${JSON.stringify(sid)}, text: 'dispatch live' })
+          .catch(() => undefined)
+        return true
+      })()`
+    )
+
+    const tasks = tasksPanelPane(app.main)
+    await tasks.open()
+    await tasks.expand('ins-sub')
+    // 扣着：实时卡里的正文经 agent 视图到了面板
+    await until(
+      async () =>
+        (provider.holding() && (await tasks.transcriptText('ins-sub')).includes('CHILD PART')) ||
+        null,
+      'CHILD PART streamed into the panel while held'
+    )
+
+    provider.release()
+    await until(async () => {
+      const msgs = await app.main.eval<Array<{ content: string }>>(
+        `window.api.message.list(${JSON.stringify(sid)})`
+      )
+      return msgs.some((m) => m.content.includes('root live finished')) || null
+    }, 'root finished')
+    // 落定之后：终答在面板里恰一次（流式块没有残留成第二份）
+    await until(
+      async () => (!(await tasks.hasReply('ins-sub')) ? null : true),
+      'reply box back after the child settled'
+    )
+    const text = await tasks.transcriptText('ins-sub')
+    expect(text.split('CHILD PART').length - 1).toBe(1)
+    // 父会话的转写里那次派发带着子 agent 的回答
+    const blocks = await app.main.eval<Array<{ toolName?: string; result?: string }>>(
+      `window.api.message.list(${JSON.stringify(sid)}).then((ms) => ms.flatMap((m) => m.blocks ?? []))`
+    )
+    const dispatch = blocks.find((b) => b.toolName === 'agent' && b.result !== undefined)
+    expect(dispatch?.result).toContain('CHILD PART')
   })
 })

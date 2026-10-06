@@ -21,6 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
 import type { BashToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
+import { executeTool, invokeTool, resultText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({
   enforceCommand: vi.fn(),
@@ -92,7 +93,7 @@ function makeTool(shell: ShellName): BashTool | PowerShellTool {
  * 必须在工具构造（pin 会话）之后再问
  */
 function expectedSandbox(shell: ShellName): string {
-  return shell === 'bash' ? whyUnconfined(SID) : 'unsupported'
+  return shell === 'bash' ? whyUnconfined() : 'unsupported'
 }
 
 /** 一份 BgTaskInfo（只填回执 / 停止命令会读到的字段有意义） */
@@ -131,7 +132,7 @@ async function run(
   params: Record<string, unknown>,
   toolCallId = 'tc-1'
 ): Promise<Run> {
-  const result = await tool.execute(toolCallId, params as never)
+  const result = await executeTool(tool, toolCallId, params as never)
   const first = result.content[0] as { type: string; text: string }
   return { text: first.text, details: result.details as BashToolDetails }
 }
@@ -176,6 +177,9 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     })
     expect(opts).toMatchObject({
       toolCallId: 'tc-1',
+      // P1-06：durable 的调用归属（executeTool 的缺省 task 1、根对话 1）
+      taskId: 1,
+      conversationId: 1,
       toolName: shell,
       description: 'List things',
       background: false,
@@ -196,6 +200,23 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
       timeoutMs: 5000,
       extraEnv: { SHUVIX_SESSION_ID: SID }
     })
+  })
+
+  it(`D1b — ${shell} 询问带着这次调用的 durable taskId / conversationId（provider 的 toolCallId 重复也分得开，P1-06）`, async () => {
+    const tool = makeTool(shell)
+    await invokeTool(tool, params() as never, { callId: 'call_0', taskId: 41, conversationId: 6 })
+    await invokeTool(tool, params() as never, { callId: 'call_0', taskId: 42 })
+
+    expect(mocks.enforceCommand).toHaveBeenCalledTimes(2)
+    const owners = mocks.enforceCommand.mock.calls.map(([, opts]) => ({
+      toolCallId: opts.toolCallId,
+      taskId: opts.taskId,
+      conversationId: opts.conversationId
+    }))
+    expect(owners).toEqual([
+      { toolCallId: 'call_0', taskId: 41, conversationId: 6 },
+      { toolCallId: 'call_0', taskId: 42, conversationId: 1 }
+    ])
   })
 
   it(`D1 — ${shell} 前台：timeout 0 = 不限时（timeoutMs 0）`, async () => {
@@ -230,8 +251,12 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     expect(timedOut.details.exitCode).toBe(124)
     expect(timedOut.details.type).toBe(shell)
 
+    // runCommand 报 abort 而这次调用本身没被取消（测试没给 signal）：P1-04 起收成 isError 结果
+    // （裁定 Q12，文字即原先抛出的 TOOL_ABORTED）；调用被取消时才照旧抛出
     mocks.runCommand.mockResolvedValueOnce(settled(null, '', 'abort'))
-    await expect(run(tool, params())).rejects.toThrow('Aborted')
+    const aborted = await executeTool(tool, 'tc-1', params() as never)
+    expect(aborted.isError).toBe(true)
+    expect(resultText(aborted)).toBe('Aborted')
   })
 
   it(`D2 — ${shell} 后台：background 两头都带到；转后台 → 后台形态 details（isBackgroundCall 为真）`, async () => {
@@ -316,11 +341,11 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     const tool = makeTool(shell)
     const ac = new AbortController()
 
-    await tool.execute('tc-sig', params() as never, ac.signal)
+    await executeTool(tool, 'tc-sig', params() as never, ac.signal)
     // toBe 而不是「某个 AbortSignal」：换成一个新造的 signal，用户点停止时审查就不会跟着收尾
     expect(mocks.enforceCommand.mock.calls[0][1].signal).toBe(ac.signal)
 
-    await tool.execute('tc-nosig', params() as never)
+    await executeTool(tool, 'tc-nosig', params() as never)
     expect(mocks.enforceCommand.mock.calls[1][1].signal).toBeUndefined()
 
     // 后台形态：spawn 刻意不带 signal（停止生成不杀后台任务，见 D2），但询问发生在这次调用之内 ——
@@ -330,7 +355,7 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
       info: taskInfo({ pid: 9, status: 'running', exitCode: null }),
       logBytes: 0
     })
-    await tool.execute('tc-bg', params({ run_in_background: true }) as never, ac.signal)
+    await executeTool(tool, 'tc-bg', params({ run_in_background: true }) as never, ac.signal)
     expect(mocks.enforceCommand.mock.calls[2][1]).toMatchObject({ background: true })
     expect(mocks.enforceCommand.mock.calls[2][1].signal).toBe(ac.signal)
     expect(mocks.runCommand.mock.calls[2][0].signal).toBeUndefined()

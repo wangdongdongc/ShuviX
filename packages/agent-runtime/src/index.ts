@@ -1,53 +1,51 @@
 /**
  * @shuvix/agent-runtime —— 宿主无关的 Agent 编排核心。
  *
- * 消费 @earendil-works/pi-agent-core + pi-ai：AgentHarness 承载会话状态（entry 树），
- * harness/ 把 AgentHarnessEvent 转成 @shuvix/chat-protocol 的 ChatEvent，
- * 并通过注入接口（event sink / env）脱离 Node/Electron。
- * 桌面端与 Chrome 扩展共享同一套编排逻辑。
+ * 基于 @earendil-works/pi-durable + pi-ai（pi 1.0）：会话状态与运行时交给 pi-durable，
+ * 本包负责 agent 档案 / 工具 / 安全 / 提示词这些 ShuviX 自己的东西，并通过注入接口
+ * （event sink / env / 存储 / 网络）脱离 Node/Electron。桌面端与 Chrome 扩展共享同一套编排逻辑。
+ *
+ * 新会话跑在 pi-durable 上（`durable/`）；切换前的旧格式（harness-v3）会话只读，由 `legacy/` 里冻结的
+ * 投影显示。
  */
 export * from './types'
-export {
-  AgentRegistry,
-  agentIdOf,
-  type AgentRegistryEntry,
-  type AgentRegistryEntryInput
-} from './agentRegistry'
-// 活跃 pi agent 运行时登记簿（业务无关：只存 AgentHarness/Session + 身份标签）——
-// 登记点是 createAgent 单点，供监控等消费方按 pi 原生读取面取数
-export {
-  AgentRuntimeRegistry,
-  agentRuntimeRegistry,
-  type AgentRuntimeKind,
-  type AgentRuntimePhase,
-  type AgentRuntimeIdentity,
-  type AgentRuntimeCounters,
-  type AgentRuntimeCacheUsage,
-  type AgentRuntimeSnapshot
-} from './runtimeRegistry'
 // 会话运行时生命周期簿记（Map + 懒创建 + 失效/销毁）—— 桌面/扩展共享，构造与清理经注入
 export {
   SessionManager,
   type SessionManagerDeps,
   type SessionDisposeReason
 } from './sessionManager'
-// 进程内共享会话树缓存（单实例 + 在途去重 + LRU/钉住）—— 存储后端经 deps 注入
+// ── models：provider 行 → pi-ai Models（目录 / DB 凭据库 / 网络装饰器 / 注册表） ──
 export {
-  createSessionTreeRegistry,
-  type SessionTreeRegistry,
-  type SessionTreeRegistryDeps
-} from './sessionTreeRegistry'
+  buildProviders,
+  buildProviderEntries,
+  piProviderIdOf,
+  type BuildProvidersInput,
+  type BuiltProvider
+} from './models/catalog'
+export { createDbCredentialStore } from './models/credentialStore'
 export {
-  resolveModel,
-  BUILTIN_ENV_MAP,
-  type ResolveModelParams,
-  type ResolveModelProviderInfo
-} from './modelResolver'
-export { buildCustomProviderCompat } from './providerCompat'
-export { resolveInitialThinkingLevel } from './thinkingLevel'
+  withNetwork,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  type WithNetworkOptions
+} from './models/networkModels'
+export {
+  createModelRegistry,
+  type ModelRegistry,
+  type ModelRegistryOptions,
+  type ModelRef
+} from './models/modelRegistry'
+export type { ProviderCredentialPort, ProviderRow, ProviderModelRow } from './models/port'
+export {
+  resolveLockModel,
+  type LockModel,
+  type LockModelRefusalKind,
+  type LockModelResolution,
+  type ModelSelection
+} from './models/lockModel'
 export { isAssistantMessage, isUserMessage, isToolResultMessage } from './messageGuards'
 // 工具结果的界面文字化（实时广播与重开会话同一份）
-export { toolResultText, imagePlaceholder } from './toolResultText'
+export { toolResultText } from './toolResultText'
 export {
   McpManager,
   LAZY_CONNECT_TIMEOUT_MS,
@@ -56,12 +54,16 @@ export {
   type McpStderrSource,
   type McpCallMeta,
   type McpManagerOptions,
-  type McpAgentToolMeta,
+  type McpToolMeta,
+  type McpToolDeclaration,
+  type McpToolRegistration,
+  type McpRegistrationOptions,
   type McpDiscoveredTool,
   type McpConnectResult
 } from './mcpManager'
 export {
   BuiltinMcpRegistry,
+  builtinCallOwnerOf,
   type BuiltinMcpScope,
   type BuiltinMcpFactory
 } from './builtinMcpRegistry'
@@ -70,6 +72,7 @@ export {
   createAskTool,
   AskParamsSchema,
   ASK_DESCRIPTION,
+  type AskTool,
   type CreateAskToolOptions
 } from './askTool'
 // 工具定义枚举共享机制（各端自举内置工具 → 设置页只读展示）
@@ -168,6 +171,7 @@ export {
   buildGitParamsSchema,
   buildGitToolDescription,
   GIT_TOOL_NAME,
+  type GitTool,
   type CreateGitToolOptions
 } from './git/tool'
 export { buildGitHelp, GIT_HELP_TOPICS, type GitHelpTopic } from './git/help'
@@ -178,11 +182,20 @@ export { initOp, addOp, commitOp, statusOp, unstageOp } from './git/gitOps'
 // 工具输出后处理共享内核（截断 + 经注入 SpillSink 落盘）
 export {
   processToolOutput,
+  spillLocatorOf,
+  truncationDiagnostic,
   type SpillSink,
   type TruncateStrategy,
   type ProcessToolOutputOptions,
   type ProcessToolOutputResult
 } from './toolOutput/spill'
+// durable 工具输出包装器的内核（落盘口注入；宿主在上面叠自己的门）
+export {
+  wrapDurableOutput,
+  type SpillMode,
+  type WrapDurableOutputOptions,
+  type OutputStrategyAware
+} from './toolOutput/wrapDurableOutput'
 // 智能体安全模块 —— 统一评估函数（allow/ask/deny）+ 内置策略 md + PEP 门面。
 // 请求按 主体/操作/客体/环境 建模；宿主经 SecurityHostProvider 注入平台细节。
 export {
@@ -209,6 +222,8 @@ export {
   abortSessionReviews,
   reopenSessionReviews,
   takeReviewAllowed,
+  reviewCallKey,
+  type ReviewCall,
   type HumanFeedbackNote,
   type ReviewAllowedNote,
   REVIEW_CONSECUTIVE_DENIAL_LIMIT,
@@ -258,7 +273,27 @@ export {
   type ShellFacts
 } from './security'
 // 工具基类 + 共享文件工具套件（read/write/edit 整条流程，注入端适配 API）
-export { BaseTool } from './tools/baseTool'
+export { BaseTool, type ToolReplay } from './tools/baseTool'
+export { toolCallScope, callOwnerOf, type ToolCallScope, type CallOwner } from './tools/toolCall'
+export {
+  backstopOutputLimits,
+  OUTPUT_BACKSTOP_FACTOR,
+  type DurableOutputLimits,
+  type OutputDeclaration
+} from './tools/outputLimits'
+// 工具结果：durable 原生（BaseTool 子类交回 ToolResult，模板收成 durable 结果；抛错按 Q12 收口，
+// 函数式注册项经 catchToolErrors 走同一口径）
+export {
+  catchToolErrors,
+  errorMessageOf,
+  toolErrorResult,
+  strictJsonDetails,
+  toExecutionResult,
+  type AnyTool,
+  type ToolContent,
+  type ToolResult,
+  type ToolExecutionMode
+} from './tools/toolResult'
 export {
   createFileToolSuite,
   ReadParamsSchema,
@@ -305,25 +340,26 @@ export {
   DEFAULT_MAX_BYTES,
   MAX_LINE_LENGTH
 } from './fileTools/truncate'
-// 派生 agent：spawn 协调器 + 派发工具（注入注册表/工具解析/模型构建/事件广播，端无关）
+// 派生 agent 路由（P2-05）：会话 → 协调器、register/end 广播、'agent' 任务、agentId 索引、面板操作
 export {
   createSubAgentManager,
-  DEFAULT_MAX_AGENT_DEPTH,
   type SubAgentManager,
   type SubAgentManagerDeps,
-  type SubAgentToolHelpers,
-  type SpawnContext,
+  type SubAgentLocation,
+  type RunTaskOwner,
   type RunTaskParams,
-  type RunTaskOutcome,
-  type AnyAgentTool
+  type RunTaskOutcome
 } from './subagent/manager'
-// 派发结果契约：schema 收口的 next 工具（运行时原语；目前没有生产调用方）
+// 派发结果契约：schema 收口的 next 工具（结果在 details 里；派生 agent 的附加工具，按契约重建）
 export {
   NextTool,
   NEXT_TOOL_NAME,
   NEXT_NUDGE_TEXT,
   buildResultContractNote,
+  nextResultOf,
+  resultContractTools,
   validateContractSchema,
+  type NextToolDetails,
   type ResultContract
 } from './subagent/nextTool'
 // Hook：md 格式解析 / 类型化埋点注册表 / runner（设计见 docs/hook-design.md）
@@ -360,8 +396,16 @@ export {
   type HookRegistryEntry,
   type HookRunInfo,
   type HookRunEvent,
-  type HookSkipReason
+  type HookSkipReason,
+  type HookRunModel,
+  type HookModelRefusal,
+  type HookDecideOptions
 } from './hook/hookRunner'
+export {
+  resolveHookRunModel,
+  type HookModelSelection,
+  type HookRunModelInput
+} from './hook/runModel'
 export {
   buildBuiltinHooks,
   BUILTIN_HOOK_SPECS,
@@ -465,36 +509,258 @@ export { renderMemoryIndex } from './memory/memoryIndex'
 // 知识库 v2（OKF）：编解码 / 概念与笔记 / 校验 / knowledge 工具 / 引导
 export * from './knowledge'
 export { splitFrontmatter, type FrontmatterSplit } from './markdownFrontmatter'
+// agent 规格的纯派生（思考档位 / 工具名单的 root·spawned 决策表）
+export { normalizeToolNames, resolveThinkingLevel } from './durable/agentSpec'
 export {
-  createAgentFactory,
-  type AgentFactory,
-  type AgentHostAdapter,
-  type CreateAgentParams,
-  type CreatedAgent,
-  type ToolResolveRequest
-} from './agentProfile/createAgent'
-// harness 接入层：会话状态的存储与上下文构建交给 pi AgentHarness。
-// entry 树是唯一真理源，entriesToChatMessages 是它的「UI 视角」（唯一投影方向）。
+  fenceInstructionFile,
+  fenceProjectPrompt,
+  fenceProjectMemory,
+  fenceKnowledgeBases
+} from './durable/prompt/fences'
+// 系统提示词分段（P1-08）：人设创建时冻结、其余五段现解析；日期通知走追加条目（两通道规则）
 export {
-  HarnessSession,
-  forwardHarnessEvent,
-  createHarnessEventState,
+  computeFrozenAgentPrompt,
+  freezePersona,
+  frozenPersonaOf,
+  renderPersona,
+  type FrozenAgentPrompt,
+  type PersonaHost,
+  type PersonaInput
+} from './durable/prompt/persona'
+export {
+  botSectionText,
+  createPromptExtensions,
+  fencedSectionText,
+  instructionSectionText,
+  PersonaNotFrozenError,
+  PROMPT_EXTENSION,
+  PROMPT_EXTENSION_ORDER,
+  PROMPT_SECTION_KEY,
+  promptExtensionsFor,
+  type PromptExtensionId,
+  type PromptExtensionName,
+  type PromptExtensions,
+  type PromptSelectionSpec
+} from './durable/prompt/sections'
+export {
+  conversationActivity,
+  DATE_NOTICE_KIND,
+  dateNoticeRequestId,
+  localDate,
+  maybeAnnounceDate,
+  renderDateNotice,
+  weekdayOf,
+  type DateAnnouncement,
+  type DateAnnounceOptions
+} from './durable/prompt/dateNotice'
+// 挂起的用户询问（ask / 确认卡片）—— 会话运行时「等人回答」的那一半
+export {
+  PendingInputRequests,
+  type InputResponseMeta,
+  type PendingInputHooks
+} from './durable/inputRequests'
+// pi-durable 会话核心（P1-07）：每会话一个 Harness 的打开 / LRU / 删除，及其上的 ShuviX 运行语义
+export {
+  createSessionHost,
+  autoResumeAllowed,
+  SessionHostSealedError,
+  type SessionHost
+} from './durable/sessionHost'
+export {
+  SessionClosedError,
+  observeResumes,
+  settlementResult,
+  type AdmitResult,
+  type DrivenSendOptions,
+  type DrivenSettledEvent,
+  type DurableSession,
+  type LastAnswer,
+  type NoticeInput,
+  type NoticeResult,
+  type NotifyOptions,
+  type RequestState,
+  type SessionCloseReason,
+  type SubmitErrorCode,
+  type SubmitResult,
+  type TaskLiveness,
+  type UserSendOptions,
+  type AdmitOptions,
+  type AdmittedInfo,
+  type AgentRef,
+  type PlacedInfo,
+  type WithdrawResult
+} from './durable/durableSession'
+export { type RollbackOptions, type RollbackRefusal, type RollbackResult } from './durable/rollback'
+// 监控快照（P3-13）：`DurableSession.monitorSnapshot()` 的一行（宿主补标题 / 根显示名即 AgentMonitorEntry）
+export { type AgentMonitorRow } from './durable/monitorSnapshot'
+export {
+  DEFAULT_INTERRUPTED_SEND_POLICY,
+  DEFAULT_MAX_IDLE_OPEN,
+  DEFAULT_NOTICE_COALESCE_MS,
+  offersDispatchTool,
+  type AgentConfig,
+  type AgentToolSet,
+  type AgentToolsRebuildContext,
+  type AgentToolsRequest,
+  type BotContextBlocks,
+  type BuiltinToolsRequest,
+  type InterruptedSendPolicy,
+  type ModelCatalog,
+  type PromptHost,
+  type ResolvedAgentTools,
+  type RunState,
+  type SessionHostDeps,
+  type ToolHost
+} from './durable/seams'
+// 锁（P1-09）：「这条会话有 agent」—— 创建 / 销毁 / 重开时按锁重建工具
+export {
+  AGENT_EXTENSION_PREFIX,
+  AgentCreationError,
+  agentExtension,
+  agentExtensionName,
+  agentExtensionTools,
+  builtinExtension,
+  composeAgentTools,
+  lockRecordJson,
+  parseLockRecord,
+  SHUVIX_BUILTIN_EXTENSION,
+  type AgentCreationErrorCode,
+  type ComposedAgentTools,
+  type CreateAgentOptions,
+  type LockRecord
+} from './durable/lock'
+// 派生 agent 记录与身份（P2-01）：平铺在子对话 AgentStateDoc 里的锁形记录；`DurableSession.agentIdentity`
+export {
+  canSpawnAt,
+  MAX_AGENT_DEPTH,
+  parseSpawnedAgentRecord,
+  rootAgentIdentity,
+  spawnedAgentIdentity,
+  spawnedAgentRecordJson,
+  spawnedAgentRecordOf,
+  writeSpawnedAgentRecord,
+  type AgentDispatch,
+  type AgentIdentity,
+  type SpawnedAgentRecord
+} from './durable/agentRecord'
+// 派生 agent 协调器（P2-03）：`session.agents` —— 子对话的创建 / 等待 / 追问 / 软停止 / 销毁
+export {
+  agentDepthLimitText,
+  extractSpawnResult,
+  NO_CALLER_MODEL_TEXT,
+  HOSTED_INTERRUPTED_TEXT,
+  type SpawnCoordinator,
+  type SpawnCreatedInfo,
+  type SpawnOutcome,
+  type SpawnOwner,
+  type SpawnParams,
+  type SpawnToolOwner,
+  type SpawnTaskOwner,
+  type SpawnAnchorOwner,
+  type SpawnHostedOptions
+} from './durable/spawn'
+// 宿主派发的锚任务扩展（P2-08）：每条会话的注册表在打开时装上
+export {
+  SHUVIX_SPAWN_EXTENSION,
+  SPAWN_ANCHOR_TASK,
+  SpawnAnchor,
+  spawnExtension
+} from './durable/anchor'
+export {
+  createShuviXSettings,
+  compactionKeepRecentTokens,
+  compactionReserveTokens,
+  SHUVIX_KEEP_RECENT_TOKENS,
+  SHUVIX_MAX_RESERVE_TOKENS,
+  SHUVIX_RETRY_POLICY,
+  SHUVIX_STREAM_OPTIONS,
+  type ShuviXSettingsOptions,
+  type ShuviXSettingsOverrides
+} from './durable/settings'
+export {
+  AgentStateDoc,
+  DisplayDoc,
+  NoticeEntry,
+  SessionStateDoc,
+  noticeEntryDraft,
+  seedConversationDocs,
+  type AgentStateRecord,
+  type DeferredNotice,
+  type DisplayState,
+  type DrivenRun,
+  type NoticeData,
+  type SessionState
+} from './durable/docs'
+export { backgroundContext, isClosedError } from './durable/context'
+// 转写摘要（P2-14）：当前对话里人写的话 / agent 的正文 / ask 的回答 —— 自动审查与起标题的输入（只读）
+export {
+  digestEntries,
+  readTranscriptDigest,
+  type TranscriptAskItem,
+  type TranscriptAssistantItem,
+  type TranscriptDigest,
+  type TranscriptDigestItem,
+  type TranscriptDigestSession,
+  type TranscriptUserItem
+} from './durable/transcriptDigest'
+// 界面投影（phase 3，纯函数）：活上下文 + pi.live / pi.inbox + 显示侧车 + 询问 + 运行状态 → SessionView /
+// AgentView；与转写摘要共用的显示侧车解析与压缩外壳也在这里导出
+// 长期投影的结构共享（P4-09b）：`ProjectionMemo` 逐帧传给它们，没变的部分交回上一次的对象
+export {
+  ProjectionMemo,
+  projectAgentView,
+  projectSessionView,
+  renderHarnessDiagnostics,
+  type AgentProjectionMeta,
+  type DisplayByEntry,
+  type ProjectionMemoStats,
+  type QueueDisplay,
+  type SessionProjectionMeta
+} from './durable/projection/project'
+// 界面投影的有状态一半（P3-03）：`DurableSession.projector()` / `agentProjector()` 的类型与运行生命周期信号
+export { type AgentProjector } from './durable/projection/agentProjector'
+export {
+  type ProjectorHandle,
+  type RunEndReason,
+  type RunLifecycleListener,
+  type RunLifecycleSignal,
+  type SessionProjector
+} from './durable/projection/sessionProjector'
+export { reconcile } from './durable/projection/reconcile'
+export {
+  displayContentOf,
+  displayItemOf,
+  resolveDisplayItems,
+  type DisplayItem
+} from './durable/projection/display'
+export {
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+  unwrapCompactionSummary
+} from './durable/projection/entryText'
+// 历史 thinking 剥离（纯函数；pi-durable 切换后暂未接线，见文件头）
+export {
+  elideHistoricalThinking,
+  type ThinkingElisionState,
+  type ThinkingElisionOptions
+} from './context/thinkingElision'
+// 旧格式（harness-v3-jsonl）会话的只读读取 + 冻结投影：存储换代不迁移，旧会话靠它继续可看。
+// 侧车常量随投影一并冻结在这里（旧会话树里写着它们）。
+export {
+  HarnessV3FormatError,
+  harnessV3TextToChatMessages,
+  readHarnessV3Transcript,
   entriesToChatMessages,
-  createModelsAdapter,
   INSTRUCTION_CUSTOM_TYPE,
   INLINE_TOKENS_CUSTOM_TYPE,
+  SYSTEM_NOTICE_CUSTOM_TYPE,
   SIDECAR_CUSTOM_TYPES,
   type InlineTokensSidecar,
-  type HarnessSessionDeps,
-  type HarnessEventContext,
-  type HarnessEventDeps,
-  type HarnessEventState,
-  type ModelsAdapterDeps,
-  type ToolCallGate
-} from './harness'
-// transcript：AgentMessage → ChatMessage 投影 + 面向 Agent 的转写门面
-// （派生 agent 的内存上下文经这条路径渲染成可读转写 —— 面板/导出共用）
-export { agentMessagesToChatMessages, extractBase64, transcribeAgentMessages } from './transcript'
+  type HarnessV3Entry,
+  type HarnessV3Issue,
+  type HarnessV3Transcript,
+  type LegacyTranscriptView
+} from './legacy/harnessV3'
 // shuvix 契约 md 的解析器级校验（ChatApi shuvixMd.validate 的两端共用实现）
 export { validateShuvixMdText } from './shuvixMdValidate'
 // 契约 md 的写后处理（文件工具末尾：校验回执 + 缺省字段盖章）
@@ -527,3 +793,25 @@ export {
   type JoinOutcome,
   type SettlePatch
 } from './task/registry'
+// 视图同步（phase 3，P3-04）：每目标一个 chord provider、每（客户端，目标）一个端点；传输与会话由宿主接
+export {
+  createSyncHub,
+  type SyncAgentRef,
+  type SyncHub,
+  type SyncHubDeps,
+  type SyncHubHost,
+  type SyncServerTransport,
+  type SyncSession,
+  type SyncSessionClosedReason,
+  type SyncWireFrame,
+  type ViewLease,
+  type ViewProjector
+} from './sync/syncHub'
+export {
+  chatViewService,
+  legacySessionView,
+  staticViewState,
+  type ChatViewService,
+  type LegacyTranscript,
+  type SyncView
+} from './sync/services'

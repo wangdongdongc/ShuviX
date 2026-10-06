@@ -1,0 +1,116 @@
+{
+  "sessionId": "sid-G06a-compaction-multiple-later-cut",
+  "leafId": "5e76d103",
+  "branchIds": [
+    "27368f03",
+    "7d7e4c7a",
+    "992ff30d",
+    "034e5b70",
+    "cf7e873a",
+    "21c8950a",
+    "4adb0560",
+    "c8e0cd62",
+    "756a042f",
+    "5e76d103"
+  ],
+  "contextEntryIds": ["c8e0cd62", "21c8950a", "4adb0560", "756a042f", "5e76d103"],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "c8e0cd62",
+      "sessionId": "sid-G06a-compaction-multiple-later-cut",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "second summary"
+        }
+      ],
+      "content": "second summary",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236725,
+      "metadata": {
+        "isCompactionSummary": true
+      }
+    },
+    {
+      "id": "21c8950a",
+      "sessionId": "sid-G06a-compaction-multiple-later-cut",
+      "role": "user",
+      "type": "text",
+      "content": "u3",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236725,
+      "metadata": {}
+    },
+    {
+      "id": "4adb0560",
+      "sessionId": "sid-G06a-compaction-multiple-later-cut",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a3"
+        }
+      ],
+      "content": "a3",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236725,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "756a042f",
+      "sessionId": "sid-G06a-compaction-multiple-later-cut",
+      "role": "user",
+      "type": "text",
+      "content": "u4",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236725,
+      "metadata": {}
+    },
+    {
+      "id": "5e76d103",
+      "sessionId": "sid-G06a-compaction-multiple-later-cut",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a4"
+        }
+      ],
+      "content": "a4",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236726,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}

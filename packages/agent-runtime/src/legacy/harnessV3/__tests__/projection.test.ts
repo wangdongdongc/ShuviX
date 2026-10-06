@@ -1,0 +1,663 @@
+/**
+ * 旧格式 entry 树 → ChatMessage 投影（冻结副本 `../projection.ts`）的规则用例。
+ *
+ * 原先这份用例跑在 pi 0.80 的真 `JsonlSessionStorage` 上（append → buildContextEntries → 投影）；
+ * pi-durable 切换（P1-01）把 pi 0.80 删了，这里改用一棵手搭的线性 v3 树（`V3Tree`：每次 append
+ * 以当前位置为父、新条目即新位置，与 pi 的追加语义相同），上下文过滤走本目录读取器的
+ * `contextEntriesOf`，「重新打开」走 JSONL 文本 → `readHarnessV3Transcript`。用例本身逐条照旧。
+ */
+import { describe, it, expect, beforeEach } from 'vitest'
+import type { ImageContent, TextContent } from '@earendil-works/pi-ai'
+import type { AssistantMessage, UserTextMeta } from '@shuvix/chat-protocol/types/chatMessage'
+import { imagePlaceholder, toolResultText } from '../../../toolResultText'
+import {
+  entriesToChatMessages,
+  INLINE_TOKENS_CUSTOM_TYPE,
+  SYSTEM_NOTICE_CUSTOM_TYPE,
+  INSTRUCTION_CUSTOM_TYPE,
+  SIDECAR_CUSTOM_TYPES
+} from '../projection'
+import { contextEntriesOf, readHarnessV3Transcript } from '../reader'
+import type { HarnessV3Entry, HarnessV3Message } from '../types'
+
+const SESSION_ID = 'sess-1'
+
+/** 一棵线性的 v3 会话树：append 以当前位置为父，新条目成为新位置（与 pi 的追加语义相同） */
+class V3Tree {
+  readonly entries: HarnessV3Entry[] = []
+  private leafId: string | null = null
+  private seq = 0
+
+  private push(fields: Record<string, unknown>): string {
+    const id = `e${++this.seq}`
+    const entry = {
+      ...fields,
+      id,
+      parentId: this.leafId,
+      timestamp: new Date(Date.parse('2026-01-01T00:00:00.000Z') + this.seq * 1000).toISOString()
+    } as unknown as HarnessV3Entry
+    this.entries.push(entry)
+    this.leafId = id
+    return id
+  }
+
+  async appendMessage(message: HarnessV3Message): Promise<string> {
+    return this.push({ type: 'message', message })
+  }
+
+  async appendCustomEntry(customType: string, data?: unknown): Promise<string> {
+    return this.push({ type: 'custom', customType, data })
+  }
+
+  async appendCustomMessageEntry(
+    customType: string,
+    content: string | (TextContent | ImageContent)[],
+    display: boolean,
+    details?: unknown
+  ): Promise<string> {
+    return this.push({ type: 'custom_message', customType, content, display, details })
+  }
+
+  async appendCompaction(
+    summary: string,
+    firstKeptEntryId: string,
+    tokensBefore: number
+  ): Promise<string> {
+    return this.push({ type: 'compaction', summary, firstKeptEntryId, tokensBefore })
+  }
+
+  async getLeafId(): Promise<string | null> {
+    return this.leafId
+  }
+
+  /** 线性树：分支就是全部条目，按根 → 叶 */
+  async buildContextEntries(): Promise<HarnessV3Entry[]> {
+    return contextEntriesOf(this.entries)
+  }
+
+  /** 落成 `.jsonl` 文本（会话头 + 每条一行） */
+  toJsonl(): string {
+    const header = {
+      type: 'session',
+      version: 3,
+      id: SESSION_ID,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      cwd: '/ws'
+    }
+    return [header, ...this.entries].map((l) => JSON.stringify(l)).join('\n') + '\n'
+  }
+}
+
+let session: V3Tree
+
+/** 造一条 assistant 消息（usage/api 等字段填成最小可用值） */
+function assistant(
+  content: unknown[],
+  stopReason = 'stop',
+  usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }
+): HarnessV3Message {
+  return {
+    role: 'assistant',
+    content,
+    api: 'openai-completions',
+    provider: 'test',
+    model: 'test-model',
+    usage,
+    stopReason,
+    timestamp: Date.now()
+  } as unknown as HarnessV3Message
+}
+
+beforeEach(() => {
+  session = new V3Tree()
+})
+
+async function project(): Promise<ReturnType<typeof entriesToChatMessages>> {
+  return entriesToChatMessages(await session.buildContextEntries(), SESSION_ID, 'test-model')
+}
+
+describe('entriesToChatMessages', () => {
+  it('用户消息投影为 user/text', async () => {
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '你好' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toMatchObject({ role: 'user', type: 'text', content: '你好' })
+  })
+
+  it('assistant 消息投影成一张卡：thinking/text 按原序成为 blocks，usage 记本次调用', async () => {
+    await session.appendMessage(
+      assistant([
+        { type: 'thinking', thinking: '想一下' },
+        { type: 'text', text: '答案是 42' }
+      ])
+    )
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toMatchObject({ role: 'assistant', type: 'message', content: '答案是 42' })
+    expect((msgs[0] as AssistantMessage).blocks).toEqual([
+      { type: 'thinking', text: '想一下' },
+      { type: 'text', text: '答案是 42' }
+    ])
+    expect(msgs[0].metadata).toMatchObject({ usage: expect.objectContaining({ total: 15 }) })
+  })
+
+  it('用量各归各：每条 assistant 只带自己那次调用的账，不跨消息累加', async () => {
+    // 工具轮(20/10/30，缓存读 100) + 终答(10/5/15)
+    await session.appendMessage(
+      assistant([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse', {
+        input: 20,
+        output: 10,
+        cacheRead: 100,
+        cacheWrite: 0,
+        totalTokens: 30
+      })
+    )
+    await session.appendMessage({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'read',
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+      timestamp: Date.now()
+    } as HarnessV3Message)
+    await session.appendMessage(assistant([{ type: 'text', text: '查到了' }]))
+
+    const cards = (await project()).filter(
+      (m): m is AssistantMessage => m.role === 'assistant' && m.type === 'message'
+    )
+    expect(cards).toHaveLength(2)
+    expect(cards[0].metadata?.usage).toMatchObject({
+      input: 20,
+      output: 10,
+      cacheRead: 100,
+      total: 30
+    })
+    expect(cards[1].metadata?.usage).toMatchObject({ input: 10, output: 5, total: 15 })
+    // 整轮聚合只存在于 agent_end 事件里，不写进消息元数据
+    expect(cards[1].metadata?.usage?.details).toBeUndefined()
+  })
+
+  it('轮中 steer 就是一条普通 user 消息，前后各是一张独立的卡', async () => {
+    await session.appendMessage(
+      assistant([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse')
+    )
+    // steer：轮中插入的用户消息（树里与新 prompt 无从区分，UI 也不再区分）
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '换个方向' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+    await session.appendMessage(assistant([{ type: 'text', text: '收到' }]))
+
+    const msgs = await project()
+    expect(msgs.map((m) => [m.role, m.type])).toEqual([
+      ['assistant', 'message'],
+      ['user', 'text'],
+      ['assistant', 'message']
+    ])
+    expect(msgs[1].content).toBe('换个方向')
+  })
+
+  it('一条 entry = 一条消息：thinking/text/toolCall 同处一卡，id 就是 entry id', async () => {
+    await session.appendMessage(
+      assistant(
+        [
+          { type: 'thinking', thinking: '先查文件' },
+          { type: 'text', text: '我来看看' },
+          { type: 'toolCall', id: 'call-1', name: 'read', arguments: { path: 'a.ts' } }
+        ],
+        'toolUse'
+      )
+    )
+
+    const entryId = (await session.getLeafId()) as string
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].id).toBe(entryId)
+    const card = msgs[0] as AssistantMessage
+    expect(card.blocks.map((b) => b.type)).toEqual(['thinking', 'text', 'tool'])
+    expect(card.blocks[2]).toMatchObject({
+      toolCallId: 'call-1',
+      toolName: 'read',
+      args: { path: 'a.ts' }
+    })
+    // 结果未回填 = 仍在执行（UI 据此显示「执行中」）
+    expect((card.blocks[2] as { result?: string }).result).toBeUndefined()
+  })
+
+  it('只有空白的 thinking 不产出思考块', async () => {
+    // 实测模型会吐出整块只有一个换行的 thinking，渲染出来是一段空的可点区域
+    await session.appendMessage(
+      assistant([
+        { type: 'thinking', thinking: '\n' },
+        { type: 'text', text: '答案是 42' }
+      ])
+    )
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect((msgs[0] as AssistantMessage).blocks.map((b) => b.type)).toEqual(['text'])
+  })
+
+  it('空白 thinking 段被剔除，同消息里的有效思考照常保留', async () => {
+    await session.appendMessage(
+      assistant(
+        [
+          { type: 'thinking', thinking: '  \n ' },
+          { type: 'thinking', thinking: '先查文件' },
+          { type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }
+        ],
+        'toolUse'
+      )
+    )
+
+    const card = (await project())[0] as AssistantMessage
+    expect(card.blocks.map((b) => b.type)).toEqual(['thinking', 'tool'])
+    expect((card.blocks[0] as { text: string }).text).toBe('先查文件')
+  })
+
+  it('什么都没产出的 assistant（首 token 前被中止）不留空卡', async () => {
+    await session.appendMessage(assistant([], 'aborted'))
+    expect(await project()).toHaveLength(0)
+  })
+
+  it('toolResult 回填到同 toolCallId 的工具块上，不产生独立消息', async () => {
+    await session.appendMessage(
+      assistant([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse')
+    )
+    await session.appendMessage({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'read',
+      content: [{ type: 'text', text: '文件内容' }],
+      isError: false,
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect((msgs[0] as AssistantMessage).blocks).toEqual([
+      {
+        type: 'tool',
+        toolCallId: 'call-1',
+        toolName: 'read',
+        args: {},
+        result: '文件内容',
+        isError: undefined,
+        details: undefined
+      }
+    ])
+  })
+
+  it('TRT-5 带图的 toolResult：回填的 result 与 toolResultText 同一份文字（按行拼、图片换占位）', async () => {
+    // 以前投影把文本首尾相连、图片直接丢掉：同一张卡片跑着时显示「a / [图片占位] / b」三行，
+    // 重开之后变成「ab」。实时广播与重开都走 toolResultText，两边才一字不差
+    const base64 = 'iVBORw0KGgo' + 'QUJDRUZH'.repeat(64)
+    const content: Array<TextContent | ImageContent> = [
+      { type: 'text', text: 'a' },
+      { type: 'image', data: base64, mimeType: 'image/png' },
+      { type: 'text', text: 'b' }
+    ]
+    await session.appendMessage(
+      assistant(
+        [{ type: 'toolCall', id: 'call-1', name: 'mcp__browser__screenshot', arguments: {} }],
+        'toolUse'
+      )
+    )
+    await session.appendMessage({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'mcp__browser__screenshot',
+      content,
+      isError: false,
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    const [block] = (msgs[0] as AssistantMessage).blocks
+    const result = (block as { result?: string }).result
+    expect(result).toBe(toolResultText(content))
+    expect(result).toBe(`a\n${imagePlaceholder('image/png')}\nb`)
+    expect(result).not.toContain(base64.slice(0, 64))
+  })
+
+  it('stopReason=error 塌成 error_event', async () => {
+    const msg = assistant([], 'error') as unknown as Record<string, unknown>
+    msg.errorMessage = 'prompt is too long'
+    await session.appendMessage(msg as unknown as HarnessV3Message)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toMatchObject({
+      role: 'system_notify',
+      type: 'error_event',
+      content: 'prompt is too long'
+    })
+  })
+
+  it('指令注入的 custom_message 投影为带标记的 user 消息', async () => {
+    await session.appendCustomMessageEntry(
+      INSTRUCTION_CUSTOM_TYPE,
+      'Project instruction file (AGENTS.md):\n\nrules',
+      true,
+      { filename: 'AGENTS.md' }
+    )
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].metadata).toMatchObject({
+      isInstructionInjection: true,
+      instructionFilename: 'AGENTS.md'
+    })
+  })
+
+  it('display=false 的 custom_message（隐藏上下文）不进 UI', async () => {
+    await session.appendCustomMessageEntry('context', '<system-reminder>x</system-reminder>', false)
+    expect(await project()).toHaveLength(0)
+  })
+
+  it('内联 Token 侧车把紧随的 user 消息还原成标记文本 + inlineTokens', async () => {
+    const tokens = {
+      t0: { type: 'cmd', id: 'review', displayText: '/review', payload: '展开后的完整模板' }
+    }
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
+      content: '{{shuvixInlineToken:t0}} 参数',
+      tokens
+    })
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '展开后的完整模板\n\n参数' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    // 侧车自身不产出消息；user 气泡显示标记态原文，tokens 进 metadata
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toMatchObject({ role: 'user', content: '{{shuvixInlineToken:t0}} 参数' })
+    expect(msgs[0].metadata).toMatchObject({ inlineTokens: tokens })
+  })
+
+  it('系统通知侧车把紧随的 user 消息标成 isSystemNotice（自动续跑那一轮不是用户说的）', async () => {
+    await session.appendCustomEntry(SYSTEM_NOTICE_CUSTOM_TYPE, { kind: 'background' })
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '<sub-session id="x" status="finished">…</sub-session>' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    // 正文照常进上下文（模型必须看见它），只是渲染侧知道这不是用户说的
+    expect(msgs[0]).toMatchObject({ role: 'user' })
+    expect(msgs[0].content).toContain('sub-session')
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBe(true)
+  })
+
+  it('普通 user 消息不带 isSystemNotice（侧车不粘连到下一条）', async () => {
+    await session.appendCustomEntry(SYSTEM_NOTICE_CUSTOM_TYPE, { kind: 'background' })
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '通知那一轮' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '用户真正说的话' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBe(true)
+    expect((msgs[1].metadata as UserTextMeta | undefined)?.isSystemNotice).toBeUndefined()
+  })
+
+  it('无主侧车（prompt 被 deny）不产出消息，也不污染后续 user 消息', async () => {
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
+      content: '{{shuvixInlineToken:t0}}',
+      tokens: { t0: { type: 'cmd', id: 'x', displayText: '/x', payload: 'p' } }
+    })
+    // deny 后 user 消息没来，先来了一条 assistant（如 steer 场景的中间态）
+    await session.appendMessage(assistant([{ type: 'text', text: '回复' }]))
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '普通消息' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(2)
+    expect(msgs[1]).toMatchObject({ role: 'user', content: '普通消息' })
+    expect((msgs[1].metadata as UserTextMeta | undefined)?.inlineTokens).toBeUndefined()
+  })
+
+  it('id 在重新打开会话后保持稳定', async () => {
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: 'hi' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+    const before = (await project()).map((m) => m.id)
+
+    // 落成 JSONL 文本再经读取器读回（= 重新打开同一个会话文件）
+    const reopened = readHarnessV3Transcript(session.toJsonl())
+    const after = entriesToChatMessages(reopened.contextEntries, SESSION_ID, 'test-model').map(
+      (m) => m.id
+    )
+
+    expect(after).toEqual(before)
+  })
+
+  it('压缩后：摘要进上下文，被压缩的历史从投影中消失', async () => {
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '第一轮' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+    await session.appendMessage(assistant([{ type: 'text', text: '回复一' }]))
+    const keepFrom = (await session.getLeafId()) as string
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: '第二轮' }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    await session.appendCompaction('这是摘要', keepFrom, 1234)
+
+    const msgs = await project()
+    // 摘要 + 保留段（回复一、第二轮）；「第一轮」已被压缩掉
+    expect(msgs.map((m) => m.content)).toEqual(['这是摘要', '回复一', '第二轮'])
+    expect(msgs[0].metadata).toMatchObject({ isCompactionSummary: true })
+  })
+})
+
+// ─── bot 署名侧车 ──────────────────────────────────────────────
+
+/** 一条 bot 说的 assistant 消息：model/provider 留空，靠 model_change / fallback 兜底 */
+function botSaid(text: string, stopReason = 'stop'): HarnessV3Message {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+    api: 'openai-completions',
+    provider: '',
+    model: '',
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+    stopReason,
+    timestamp: Date.now()
+  } as unknown as HarnessV3Message
+}
+
+function user(text: string): HarnessV3Message {
+  return {
+    role: 'user',
+    content: [{ type: 'text', text }],
+    timestamp: Date.now()
+  } as HarnessV3Message
+}
+
+describe('未知 customType 对投影是完全透明的', () => {
+  /**
+   * 造一棵含全部 entry 形态的树（user / assistant / toolCall / toolResult /
+   * compaction / instruction / 两种侧车），在若干位置插入未知 custom entry。
+   *
+   * 插入位置刻意**避开**「侧车 → 它的消息」之间：那里插任何东西都会按设计降级署名，
+   * 那是语义而不是透明性。返回插入的未知 entry id 集合。
+   */
+  async function buildFullTree(): Promise<Set<string>> {
+    const unknown = new Set<string>()
+    await session.appendMessage(user('第一轮'))
+    unknown.add(await session.appendCustomEntry('shuvix:unknown-a', { i: 0 }))
+    const keepFrom = await session.appendMessage(assistant([{ type: 'text', text: '回复一' }]))
+    await session.appendMessage(user('第二轮'))
+    await session.appendCompaction('这是摘要', keepFrom, 1234)
+    await session.appendCustomMessageEntry(INSTRUCTION_CUSTOM_TYPE, 'rules', true, {
+      filename: 'AGENTS.md'
+    })
+    unknown.add(await session.appendCustomEntry('shuvix:unknown-b', { i: 1 }))
+    await session.appendMessage(
+      assistant([{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], 'toolUse')
+    )
+    await session.appendMessage({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'read',
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+      timestamp: Date.now()
+    } as HarnessV3Message)
+    unknown.add(await session.appendCustomEntry('shuvix:unknown-c', { i: 2 }))
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, {
+      content: '{{shuvixInlineToken:t0}}',
+      tokens: { t0: { type: 'cmd', id: 'x', displayText: '/x', payload: 'p' } }
+    })
+    await session.appendMessage(user('p'))
+    await session.appendMessage(botSaid('bot 回复'))
+    unknown.add(await session.appendCustomEntry('shuvix:unknown-d', { i: 3 }))
+    return unknown
+  }
+
+  it('插入未知 custom entry 前后，投影结果逐字段全等', async () => {
+    const unknown = await buildFullTree()
+    const entries = await session.buildContextEntries()
+    // 同一棵树上做对照：id / 时间戳完全一致，差别只有那几条未知 custom
+    const after = entriesToChatMessages(entries, SESSION_ID, 'test-model')
+    const baseline = entriesToChatMessages(
+      entries.filter((e) => !unknown.has(e.id)),
+      SESSION_ID,
+      'test-model'
+    )
+    expect(after).toEqual(baseline)
+    expect(after.length).toBeGreaterThan(3)
+  })
+
+  it('未知 custom entry 的 id 不出现在任何消息 id 上', async () => {
+    const unknown = await buildFullTree()
+    const ids = (await project()).map((m) => m.id)
+    expect(ids.filter((id) => unknown.has(id))).toEqual([])
+  })
+
+  it('SIDECAR_CUSTOM_TYPES 恰为这两种，且每种都不产出消息', async () => {
+    expect([...SIDECAR_CUSTOM_TYPES]).toEqual([
+      INLINE_TOKENS_CUSTOM_TYPE,
+      SYSTEM_NOTICE_CUSTOM_TYPE
+    ])
+    // 新增侧车类型却忘了在投影里 handle 时，这条会红
+    for (const type of SIDECAR_CUSTOM_TYPES) {
+      await session.appendCustomEntry(type, { botName: 'b', displayName: 'B' })
+      expect(await project()).toHaveLength(0)
+    }
+  })
+})
+
+describe('切片投影的 fallback（entriesToChatMessages 的第三/第四参）', () => {
+  it('切片里没有 model_change 时，user 消息取 fallbackModel / fallbackProvider', async () => {
+    await session.appendMessage(user('hi'))
+    const slice = await session.buildContextEntries()
+
+    expect(entriesToChatMessages(slice, SESSION_ID, 'm', 'p')[0]).toMatchObject({
+      model: 'm',
+      provider: 'p'
+    })
+    // 不传第四参时 provider 回落空串（旧签名的行为）
+    expect(entriesToChatMessages(slice, SESSION_ID, 'm')[0]).toMatchObject({
+      model: 'm',
+      provider: ''
+    })
+  })
+
+  it.each([
+    ['assistant 自带 model/provider 时优先于 fallback', 'own-model', 'own-provider'],
+    ['assistant 的 model/provider 为空时才回落 fallback', '', '']
+  ])('%s', async (_n, ownModel, ownProvider) => {
+    await session.appendMessage({
+      role: 'assistant',
+      content: [{ type: 'text', text: '回复' }],
+      api: 'openai-completions',
+      provider: ownProvider,
+      model: ownModel,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+      stopReason: 'stop',
+      timestamp: Date.now()
+    } as unknown as HarnessV3Message)
+
+    const [msg] = entriesToChatMessages(await session.buildContextEntries(), SESSION_ID, 'fm', 'fp')
+    expect(msg).toMatchObject({
+      model: ownModel || 'fm',
+      provider: ownProvider || 'fp'
+    })
+  })
+})
+
+describe('系统通知的形状兜底 —— 没有侧车也认得出 steer / nextTurn 路径的通知', () => {
+  const bgNotice = [
+    '<background-task pid="17162" status="killed by SIGTERM" duration="23s">',
+    'for i in $(seq 1 30); do echo "tick $i"; sleep 2; done',
+    'Last output:',
+    'tick 12 17:36:12',
+    '</background-task>'
+  ].join('\n')
+
+  it('N-1 正文完全由通知块组成的 user 消息、没有侧车 → isSystemNotice（pi 自己造的 steer / nextTurn 消息）', async () => {
+    // 回归：只认侧车时，运行中送达的后台通知会被画成用户气泡
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: bgNotice }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].content).toBe(bgNotice)
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBe(true)
+  })
+
+  it('N-2 通知块之外还有人写的话 → 不认（宁可漏认，不把用户的话记成系统通知）', async () => {
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: `${bgNotice}\n顺便看看这个` }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBeUndefined()
+  })
+
+  it('N-3 内联 Token 侧车之后的消息不走形状判据（那是用户的话，内容按标记态还原）', async () => {
+    await session.appendCustomEntry(INLINE_TOKENS_CUSTOM_TYPE, { content: bgNotice, tokens: {} })
+    await session.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: bgNotice }],
+      timestamp: Date.now()
+    } as HarnessV3Message)
+
+    const msgs = await project()
+    expect(msgs).toHaveLength(1)
+    expect((msgs[0].metadata as UserTextMeta | undefined)?.isSystemNotice).toBeUndefined()
+  })
+})

@@ -111,9 +111,11 @@ import {
   resolveProjectConfig,
   sessionDirExtras,
   setPermissionReviewer,
+  withCallAgent,
   type ProjectConfig,
   type ToolContext
 } from '../toolContext'
+import type { ToolAgentIdentity } from '../toolAgent'
 import { sessionDirsView } from '../sandbox'
 import {
   clearReviewState,
@@ -786,5 +788,299 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
     expect(ctx.evaluateReadOnly('write', { type: 'path', path: OUTSIDE })).toBe(false)
 
     expect(reviewer).not.toHaveBeenCalled()
+  })
+
+  /**
+   * H11-53（P1-11）—— 会话级装配的工具（ctx 带 agentOf、没有固定的 agent）：每次 enforce 按 opts 里这次
+   * 调用的 conversationId 现取主体（withCallAgent）。各工具族的 PEP 落在门面的哪个方法上：
+   * write / edit / knowledge create → enforcePath('write')；ls / grep / glob / read / knowledge read →
+   * enforcePath('read')；bash → enforceCommand；git → enforceGitOp；L1 门 → enforceInvocation。
+   * 一份「agent 主体一律 ask」的用户策略让每一族都走到审查接缝，观察点同 TC-SUBJ1。
+   */
+  describe('H11-53 会话级 ctx 的主体按调用现取', () => {
+    const ALWAYS_ASK = [
+      '---',
+      'shuvix: policy v1',
+      'name: h11-always-ask',
+      'description: Every agent operation asks (test).',
+      'shuvix-policy-scope:',
+      '  subject.kind: [agent]',
+      '  object.type: [path, command, gitTool, invocation]',
+      'shuvix-policy-rules:',
+      '  - effect: ask',
+      '    action: [read, write, execute]',
+      "    match: 'true'",
+      '---',
+      ''
+    ].join('\n')
+
+    const WORK = { profileName: 'work', kind: 'root' as const }
+    const owner = { taskId: 3, conversationId: 1 }
+
+    type Gate = ReturnType<typeof getDesktopSecurityContext>
+    /** 每一族的一次调用；拥有者缺省是对话 1（P2-06-17 换成别的对话） */
+    type Family = (ctx: Gate, id: string, at?: typeof owner) => Promise<unknown>
+    const FAMILIES: Array<[string, Family]> = [
+      [
+        'write（会话目录外）',
+        (ctx, id, at = owner) =>
+          ctx.enforcePath('write', OUTSIDE, { toolCallId: id, toolName: 'write', ...at })
+      ],
+      [
+        'ls / grep / glob 读（会话目录外）',
+        (ctx, id, at = owner) =>
+          ctx.enforcePath('read', OUTSIDE, { toolCallId: id, toolName: 'grep', ...at })
+      ],
+      [
+        '没圈住的 bash 命令',
+        (ctx, id, at = owner) =>
+          ctx.enforceCommand(
+            { channel: 'bash', command: 'make build', cwd: WS },
+            { toolCallId: id, toolName: 'bash', ...at }
+          )
+      ],
+      [
+        'git 操作',
+        (ctx, id, at = owner) =>
+          ctx.enforceGitOp(
+            { gitAction: 'commit', command: 'git commit', force: false, delete: false },
+            { toolCallId: id, toolName: 'git', ...at }
+          )
+      ],
+      [
+        'knowledge（create 落盘）',
+        (ctx, id, at = owner) =>
+          ctx.enforcePath('write', OUTSIDE, {
+            toolCallId: id,
+            toolName: 'knowledge',
+            operation: 'create',
+            ...at
+          })
+      ]
+    ]
+
+    it.each(FAMILIES)(
+      'H11-53 %s：对话 1 上锁着 work → subject 带 work / root；认不出（没有锁）→ 不带档案名键',
+      async (_label, call) => {
+        tc.userPolicies = [userPolicy('h11-always-ask.md', ALWAYS_ASK)]
+        const sessionId = sid('h11-53')
+        const seen: SecuritySubject[] = []
+        setPermissionReviewer(async (event) => {
+          seen.push(event.request.subject)
+          return answer('allow')
+        })
+        let locked = true
+        const agentOf = vi.fn((conversationId: number) =>
+          locked && conversationId === 1 ? WORK : undefined
+        )
+        const ctx = getDesktopSecurityContext({ sessionId, agentOf }, cfg)
+
+        await call(ctx, 'h11-53-a')
+        locked = false
+        await call(ctx, 'h11-53-b')
+
+        expect(agentOf.mock.calls).toEqual([[1], [1]])
+        expect(seen).toHaveLength(2)
+        expect(seen[0]).toStrictEqual({
+          kind: 'agent',
+          sessionId,
+          agentKind: 'root',
+          profileName: 'work'
+        })
+        expect(seen[1]).toStrictEqual({ kind: 'agent', sessionId, agentKind: 'root' })
+      }
+    )
+
+    it('H11-53 L1 门（enforceInvocation）同样按调用取主体', async () => {
+      tc.userPolicies = [userPolicy('h11-always-ask.md', ALWAYS_ASK)]
+      const sessionId = sid('h11-53-l1')
+      const seen: SecuritySubject[] = []
+      setPermissionReviewer(async (event) => {
+        seen.push(event.request.subject)
+        return answer('allow')
+      })
+      const ctx = getDesktopSecurityContext({ sessionId, agentOf: () => WORK }, cfg)
+      await ctx.enforceInvocation({ toolCallId: 'h11-53-l1', toolName: 'skill', ...owner })
+      expect(seen).toStrictEqual([
+        { kind: 'agent', sessionId, agentKind: 'root', profileName: 'work' }
+      ])
+    })
+
+    // ─── P2-06：派生 agent（含 hook agent）的对话上，主体是它自己 ───
+
+    const IDENTITIES: Record<number, ToolAgentIdentity> = {
+      1: WORK,
+      2: { profileName: 'explore', kind: 'spawned', callerId: 'sub-a1' },
+      3: { profileName: 'permission-reviewer', kind: 'spawned', callerId: 'sub-r1' }
+    }
+
+    it.each(FAMILIES)(
+      'P2-06-17 %s：对话 2 → spawned / explore，对话 1 → root / work（主体里从不带 callerId）',
+      async (_label, call) => {
+        tc.userPolicies = [userPolicy('h11-always-ask.md', ALWAYS_ASK)]
+        const sessionId = sid('p2-06-17')
+        const seen: SecuritySubject[] = []
+        setPermissionReviewer(async (event) => {
+          seen.push(event.request.subject)
+          return answer('allow')
+        })
+        const agentOf = vi.fn((conversationId: number) => IDENTITIES[conversationId])
+        const ctx = getDesktopSecurityContext({ sessionId, agentOf }, cfg)
+
+        await call(ctx, 'p2-06-17-a', { taskId: 3, conversationId: 2 })
+        await call(ctx, 'p2-06-17-b', { taskId: 3, conversationId: 1 })
+
+        expect(seen).toStrictEqual([
+          { kind: 'agent', sessionId, agentKind: 'spawned', profileName: 'explore' },
+          { kind: 'agent', sessionId, agentKind: 'root', profileName: 'work' }
+        ])
+        expect(agentOf.mock.calls).toEqual([[2], [1]])
+      }
+    )
+
+    it('P2-06-17 L1 门（enforceInvocation）在审查员的对话上：spawned / permission-reviewer', async () => {
+      tc.userPolicies = [userPolicy('h11-always-ask.md', ALWAYS_ASK)]
+      const sessionId = sid('p2-06-17-l1')
+      const seen: SecuritySubject[] = []
+      setPermissionReviewer(async (event) => {
+        seen.push(event.request.subject)
+        return answer('allow')
+      })
+      const ctx = getDesktopSecurityContext(
+        { sessionId, agentOf: (conversationId) => IDENTITIES[conversationId] },
+        cfg
+      )
+      await ctx.enforceInvocation({
+        toolCallId: 'p2-06-17-l1',
+        toolName: 'skill',
+        taskId: 3,
+        conversationId: 3
+      })
+      expect(seen).toStrictEqual([
+        { kind: 'agent', sessionId, agentKind: 'spawned', profileName: 'permission-reviewer' }
+      ])
+    })
+  })
+
+  it('P2-06-18 派生主体驱动用户策略：同一个会话级门，对话 2（派生 explore）被拒、不问人也不审；对话 1 照常审查；evaluate 不按调用取主体', async () => {
+    tc.userPolicies = [
+      userPolicy(
+        'no-spawned-explore-writes.md',
+        [
+          '---',
+          'shuvix: policy v1',
+          'name: no-spawned-explore-writes',
+          'description: Spawned explore agents may not write files.',
+          'shuvix-policy-scope:',
+          '  subject.kind: [agent]',
+          '  object.type: [path]',
+          'shuvix-policy-rules:',
+          '  - effect: deny',
+          '    action: [write]',
+          "    match: subject.profile == 'explore' && subject.agentKind == 'spawned'",
+          '---',
+          ''
+        ].join('\n')
+      )
+    ]
+    const sessionId = sid('p2-06-18')
+    const EXPLORE: ToolAgentIdentity = {
+      profileName: 'explore',
+      kind: 'spawned',
+      callerId: 'sub-a1'
+    }
+    const WORK: ToolAgentIdentity = { profileName: 'work', kind: 'root' }
+    const seen: SecuritySubject[] = []
+    const reviewer = vi.fn<Reviewer>(async (event) => {
+      seen.push(event.request.subject)
+      return answer('allow')
+    })
+    setPermissionReviewer(reviewer)
+    const requestUserInput = vi.fn(async () => ({ kind: 'ask' as const, allowed: true }))
+    const agentOf = vi.fn((conversationId: number) => (conversationId === 2 ? EXPLORE : WORK))
+    const ctx = getDesktopSecurityContext({ sessionId, agentOf, requestUserInput }, cfg)
+
+    await expect(
+      ctx.enforcePath('write', OUTSIDE, { toolCallId: 'd-2', toolName: 'write', conversationId: 2 })
+    ).rejects.toThrow()
+    expect(reviewer).not.toHaveBeenCalled()
+    expect(requestUserInput).not.toHaveBeenCalled()
+
+    await expect(
+      ctx.enforcePath('write', OUTSIDE, { toolCallId: 'd-1', toolName: 'write', conversationId: 1 })
+    ).resolves.toBeUndefined()
+    expect(reviewer).toHaveBeenCalledTimes(1)
+    expect(seen).toStrictEqual([
+      { kind: 'agent', sessionId, agentKind: 'root', profileName: 'work' }
+    ])
+    expect(requestUserInput).not.toHaveBeenCalled()
+
+    // 被动判定按 ctx.agent（这里没有）取主体 = 根的缺省：ask-on-external-path，不问 agentOf
+    const lookups = agentOf.mock.calls.length
+    expect(verdictOf(ctx.evaluate('write', { type: 'path', path: OUTSIDE }))).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-external-path#1'
+    })
+    expect(ctx.evaluateReadOnly('write', { type: 'path', path: OUTSIDE })).toBe(false)
+    expect(agentOf.mock.calls.length).toBe(lookups)
+  })
+})
+
+/**
+ * H11-49（P1-11）—— withCallAgent 是纯函数：换上这次调用的 agent，别的什么都不动。
+ */
+describe('withCallAgent', () => {
+  const identity = { profileName: 'work', kind: 'root' as const }
+  const base = (): ToolContext => ({
+    sessionId: 's1',
+    requestUserInput: vi.fn(),
+    emitChatEvent: vi.fn(),
+    agentOf: vi.fn(() => identity)
+  })
+
+  it('H11-49 (a) 调用没给 → 原样交回', () => {
+    const ctx = base()
+    expect(withCallAgent(ctx, undefined)).toBe(ctx)
+    expect(withCallAgent(ctx, {})).toBe(ctx)
+    expect(ctx.agentOf).not.toHaveBeenCalled()
+  })
+
+  it('H11-49 (b) ctx 没有 agentOf → agent 不变', () => {
+    const fixed = { profileName: 'coding', kind: 'spawned' as const }
+    const ctx: ToolContext = { sessionId: 's1', agent: fixed }
+    expect(withCallAgent(ctx, { conversationId: 1 }).agent).toBe(fixed)
+  })
+
+  it('H11-49 (c) 认出来了 → agent 是那份身份；sessionId / requestUserInput / emitChatEvent / agentOf 同一引用；入参不改', () => {
+    const ctx = base()
+    const snapshot = { ...ctx }
+    const out = withCallAgent(ctx, { conversationId: 1 })
+    expect(out.agent).toBe(identity)
+    expect(out.sessionId).toBe(ctx.sessionId)
+    expect(out.requestUserInput).toBe(ctx.requestUserInput)
+    expect(out.emitChatEvent).toBe(ctx.emitChatEvent)
+    expect(out.agentOf).toBe(ctx.agentOf)
+    expect(ctx).toStrictEqual(snapshot)
+    expect(ctx.agent).toBeUndefined()
+  })
+
+  it('H11-49 (d) agentOf 交回 undefined（或抛错）→ agent 是 ctx.agent', () => {
+    const fixed = { profileName: 'coding', kind: 'spawned' as const }
+    const none: ToolContext = { sessionId: 's1', agent: fixed, agentOf: () => undefined }
+    expect(withCallAgent(none, { conversationId: 1 }).agent).toBe(fixed)
+    const throwing: ToolContext = {
+      sessionId: 's1',
+      agentOf: () => {
+        throw new Error('closed')
+      }
+    }
+    expect(withCallAgent(throwing, { conversationId: 1 }).agent).toBeUndefined()
+  })
+
+  it('H11-49 (e) agentOf 收到的恰是 call.conversationId', () => {
+    const ctx = base()
+    withCallAgent(ctx, { conversationId: 7 })
+    expect(ctx.agentOf).toHaveBeenCalledTimes(1)
+    expect(ctx.agentOf).toHaveBeenCalledWith(7)
   })
 })

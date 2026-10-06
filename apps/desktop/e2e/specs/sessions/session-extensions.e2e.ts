@@ -2,7 +2,7 @@
  * 会话的扩展能力勾选（`settings.enabledTools`：mcp:/skill:）—— 新建会话时定下、只在创建根 Agent
  * 时读一次、运行时存在（含创建中 / 关停中）期间只读。
  *
- * 链路：sessionService.create（继承）→ agent.init（原值 + created）→ SessionManager.onCreated →
+ * 链路：sessionService.create（继承）→ agent.init（原值 + created）→ 运行时的锁建出 agent →
  * `agent_created` / `agent_closing` → chat-ui 的 sessionAgentCreated → 输入框工具选择器与会话设置
  * 扩展能力卡的只读态；写入口 `session.updateEnabledTools` 在运行时存在期间拒绝。
  *
@@ -27,6 +27,7 @@ import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   createProject,
+  ensureDefaultModel,
   eventRecorder,
   promptAndListMessages,
   seedSkill,
@@ -175,6 +176,7 @@ function projectDir(name: string): string {
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   await waitRendererReady(app.main)
   recorder = eventRecorder(app.main)
   await recorder.install()

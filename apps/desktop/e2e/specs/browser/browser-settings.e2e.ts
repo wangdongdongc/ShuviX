@@ -22,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until, type CdpClient } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
+  ensureDefaultModel,
   eventRecorder,
   waitRendererReady,
   type EventRecorder,
@@ -148,6 +149,7 @@ const loadedExtra = (): Promise<McpExtraShot> =>
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   await waitRendererReady(app.main)
   events = eventRecorder(app.main)
   await events.install()

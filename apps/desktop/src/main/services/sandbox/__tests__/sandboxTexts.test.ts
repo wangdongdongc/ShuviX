@@ -22,11 +22,6 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp/shuvix-sandbox-texts-test', isPackaged: false }
 }))
-// 工具构造时 pinSession 为真 = 本会话的命令套沙箱 → 描述带上受限范围那一段、schema 带上越界参数
-vi.mock('../index', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../index')>()
-  return { ...actual, pinSession: () => true, sandboxGloballyActive: () => true }
-})
 vi.mock('../../toolContext', () => ({
   getDesktopSecurityContext: () => ({ enforceCommand: vi.fn() }),
   getSessionPathGrants: () => ({ grantedWrite: [], grantedRead: [] }),
@@ -109,7 +104,8 @@ function denialNote(offerEscalation: boolean): string {
   return note!
 }
 
-const bash = new BashTool({ sessionId: 'sess-texts' } as ToolContext)
+// 构造时交进去的钉子为真 = 本会话的命令套沙箱 → 描述带上受限范围那一段、schema 带上越界参数
+const bash = new BashTool({ sessionId: 'sess-texts', sandboxed: true } as ToolContext)
 const BASH_DESCRIPTION = bash.description
 const DISABLE_PARAM = (
   bash.parameters as unknown as {

@@ -8,6 +8,7 @@ import {
   useChatStore,
   useModelCatalogSync,
   useSessionInit,
+  useSessionView,
   type ChatHostValue
 } from '@shuvix/chat-ui'
 import { ContextMenuProvider } from '@shuvix/app-shell/contextmenu/ContextMenuProvider'
@@ -31,8 +32,17 @@ function useLinkState(link: PanelLink): PanelLinkState {
   )
 }
 
+/** 这是第几次就绪（PanelLink.readyEpoch）—— 与连接状态同一个订阅源 */
+function useReadyEpoch(link: PanelLink): number {
+  return useSyncExternalStore(
+    useCallback((onChange: () => void) => link.onState(onChange), [link]),
+    () => link.readyEpoch
+  )
+}
+
 /** 会话级 hook 的宿主（须在 ChatHostProvider 之下）。渠道模式：模型目录留空但放行初始化时序 */
 function SessionRuntime({ sessionId }: { sessionId: string }): null {
+  useSessionView(sessionId)
   useSessionInit(sessionId)
   useAgentEvents()
   useModelCatalogSync()
@@ -87,8 +97,12 @@ function PanelWelcome(): React.JSX.Element {
 export function App({ link }: { link: PanelLink }): React.JSX.Element {
   const state = useLinkState(link)
   const ready = state === 'ready'
+  const epoch = useReadyEpoch(link)
   const appearance = useDesktopAppearance(link, ready)
-  const [sessionId, setSessionId] = useState<string | null>(null)
+  // 会话属于开出它的那一次就绪：重连之后先重新 `tabSession.open`（桌面据此把新连接绑成它的前端、SW 据此
+  // 知道帧该送给谁），再挂视图订阅 —— 否则重连之初的帧在 SW 那里找不到侧边栏
+  const [opened, setOpened] = useState<{ id: string; epoch: number } | null>(null)
+  const sessionId = opened !== null && opened.epoch === epoch ? opened.id : null
   const [openError, setOpenError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [activeProvider, setActiveProvider] = useState('')
@@ -109,7 +123,7 @@ export function App({ link }: { link: PanelLink }): React.JSX.Element {
         if (cancelled) return
         // 输入框往 chatStore 的「当前会话」里发 —— 侧边栏只有这一条，开出来就是它
         useChatStore.getState().setActiveSessionId(id)
-        setSessionId(id)
+        setOpened({ id, epoch })
       } catch (err) {
         if (!cancelled) setOpenError(err instanceof Error ? err.message : String(err))
       }
@@ -117,7 +131,7 @@ export function App({ link }: { link: PanelLink }): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [ready, link, attempt])
+  }, [ready, epoch, link, attempt])
 
   const host = useMemo<ChatHostValue>(
     () => ({

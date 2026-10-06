@@ -8,13 +8,14 @@
  * ReadDecoders(内容解码器,可选能力函数)。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { ToolResult } from './toolResult'
 import type {
   ReadToolDetails,
   EditToolDetails,
   WriteToolDetails
 } from '@shuvix/chat-protocol/types/chatMessage'
 import { BaseTool } from './baseTool'
+import { callOwnerOf, type ToolCallScope } from './toolCall'
 import type { FileSystemPort, FileGuards, WriteAskHook } from '../fileTools/port'
 import { readTextContent, readDirContent } from '../fileTools/read'
 import { DEFAULT_MAX_LINES } from '../fileTools/truncate'
@@ -23,7 +24,7 @@ import { applyEdit } from '../fileTools/edit'
 import { reviewShuvixMdWrite } from '../shuvixMdWrite'
 import type { AccessMode, SecurityContext } from '../security/types'
 
-type ReadResult = AgentToolResult<ReadToolDetails>
+type ReadResult = ToolResult<ReadToolDetails>
 
 // ─── 参数 schema（两端一致；导出供工具定义枚举复用，无需实例化） ──────────────
 export const ReadParamsSchema = Type.Object({
@@ -65,7 +66,7 @@ function fileNameOf(path: string): string {
 }
 
 /** 把写后处理的回执并进工具结果的文本块（模型面）；结果的 details 不受影响 */
-function withNote<T>(res: AgentToolResult<T>, note: string | null): AgentToolResult<T> {
+function withNote<T>(res: ToolResult<T>, note: string | null): ToolResult<T> {
   if (!note) return res
   const content = [...res.content]
   const i = content.findIndex((c) => c.type === 'text')
@@ -127,8 +128,13 @@ export interface FileToolDeps {
   /**
    * write/edit 成功后回调 —— 端用于发布文件变更事件（AppEvent 'files.changed'）。
    * portPath 为该端 port 路径；端闭包负责归一到 UI 路径空间并 publish。见 docs/internal-events.md。
+   * `call` 是这次调用的 scope（单测直接调钩子时为 undefined）—— 会话级装配的工具被同一会话的每个
+   * agent 共用，宿主要认出「谁写的」（知识库提交的 actor）只能靠它。
    */
-  onFileChange?(e: { portPath: string; kind: 'write' | 'edit' }): void
+  onFileChange?(
+    e: { portPath: string; kind: 'write' | 'edit' },
+    call: ToolCallScope | undefined
+  ): void
   /**
    * 写入方（根）会话 id —— 只用于契约 md 的溯源字段（`shuvix-memory-session`）。
    * 不注入则该字段不写，写后校验与其余盖章照常。
@@ -141,8 +147,14 @@ export interface FileToolDeps {
    * 给的是 **bundle 相对**而不是某个根相对：诊断规则按 bundle 判（`index.md` 是不是根 index），
    * 容器相对的路径会让每个 bundle 的根 index 都被误判成子目录 index。不注入（扩展端）则
    * 知识库目录下的 md 与普通 md 无异。
+   *
+   * `actor(call)` 收这次调用的 scope（`call.conversationId` 认得出发起调用的 agent）：会话级装配的
+   * 工具被同一会话的每个 agent 共用，章要盖成**发起这次写入的** agent。
    */
-  knowledge?: { locate: (portPath: string) => string | null; actor: () => string }
+  knowledge?: {
+    locate: (portPath: string) => string | null
+    actor: (call: ToolCallScope | undefined) => string
+  }
 }
 
 const UNSUPPORTED_SUFFIX = '. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.'
@@ -203,7 +215,8 @@ abstract class FileToolBase<
   protected async securityCheck(
     toolCallId: string,
     params: { path: string },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    call?: ToolCallScope
   ): Promise<void> {
     if (signal?.aborted) throw new Error(this.abortError)
     // read 的 URL 分支不走文件系统询问
@@ -213,6 +226,7 @@ abstract class FileToolBase<
     if (this.deferAskToApply) return
     await this.deps.security.enforcePath(this.mode, portPath, {
       toolCallId,
+      ...callOwnerOf(call),
       toolName: this.name,
       displayPath: params.path,
       abortError: this.abortError,
@@ -234,7 +248,7 @@ abstract class FileToolBase<
    * 否则宿主自己盖的这一章会让 agent 的下一次 edit 撞上「读后被改」。
    * 整段 try/catch：这一步出任何问题都不该把一次成功的写入变成失败。
    */
-  protected async reviewWrittenMd(portPath: string): Promise<string | null> {
+  protected async reviewWrittenMd(portPath: string, call?: ToolCallScope): Promise<string | null> {
     if (!/\.(md|markdown|mdx)$/i.test(portPath)) return null
     const { port, guards } = this.deps
     try {
@@ -248,7 +262,7 @@ abstract class FileToolBase<
           today: now.toISOString().slice(0, 10),
           knowledge:
             knowledge && rel !== null
-              ? { rel, actor: knowledge.actor(), now: now.toISOString() }
+              ? { rel, actor: knowledge.actor(call), now: now.toISOString() }
               : undefined
         })
         if (!outcome) return null
@@ -263,10 +277,16 @@ abstract class FileToolBase<
     }
   }
 
-  protected makeAsk(toolCallId: string, portPath: string, signal?: AbortSignal): WriteAskHook {
+  protected makeAsk(
+    toolCallId: string,
+    portPath: string,
+    signal?: AbortSignal,
+    call?: ToolCallScope
+  ): WriteAskHook {
     return async ({ path, diff, isNewFile }) => {
       await this.deps.security.enforcePath('write', portPath, {
         toolCallId,
+        ...callOwnerOf(call),
         toolName: this.name,
         displayPath: path,
         abortError: this.abortError,
@@ -283,6 +303,8 @@ class ReadFileTool extends FileToolBase<typeof ReadParamsSchema> {
   readonly label: string
   readonly description: string
   readonly parameters = ReadParamsSchema
+  // 只读：中断后恢复时重读一遍无害（读到的是那一刻的文件，正是模型要的）
+  readonly replay = 'safe' as const
   // 保留开头：超限的 read 结果里模型该拿到文件的**前**一段，接着用 offset 往下读
   readonly outputStrategy = 'keep-start' as const
   readonly outputMaxBytes = 80 * 1024
@@ -391,8 +413,9 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
   protected async executeInternal(
     toolCallId: string,
     params: { path: string; content: string },
-    signal?: AbortSignal
-  ): Promise<AgentToolResult<WriteToolDetails>> {
+    signal?: AbortSignal,
+    call?: ToolCallScope
+  ): Promise<ToolResult<WriteToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
     const res = await applyWrite(
@@ -400,11 +423,11 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeAsk(toolCallId, portPath, signal)
+      this.makeAsk(toolCallId, portPath, signal, call)
     )
     // 先审阅（可能回写盖章），再广播变更 —— 让面板刷新读到的是最终内容
-    const note = await this.reviewWrittenMd(portPath)
-    this.deps.onFileChange?.({ portPath, kind: 'write' })
+    const note = await this.reviewWrittenMd(portPath, call)
+    this.deps.onFileChange?.({ portPath, kind: 'write' }, call)
     return withNote(res, note)
   }
 }
@@ -428,8 +451,9 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
   protected async executeInternal(
     toolCallId: string,
     params: { path: string; oldText: string; newText: string },
-    signal?: AbortSignal
-  ): Promise<AgentToolResult<EditToolDetails>> {
+    signal?: AbortSignal,
+    call?: ToolCallScope
+  ): Promise<ToolResult<EditToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
     const portPath = this.deps.resolvePath(params.path, 'write')
     const res = await applyEdit(
@@ -437,10 +461,10 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeAsk(toolCallId, portPath, signal)
+      this.makeAsk(toolCallId, portPath, signal, call)
     )
-    const note = await this.reviewWrittenMd(portPath)
-    this.deps.onFileChange?.({ portPath, kind: 'edit' })
+    const note = await this.reviewWrittenMd(portPath, call)
+    this.deps.onFileChange?.({ portPath, kind: 'edit' }, call)
     return withNote(res, note)
   }
 }
@@ -451,7 +475,7 @@ export interface FileToolSuite {
   edit: EditFileTool
 }
 
-/** 构建一套 read/write/edit 工具（BaseTool 子类，可直接作为 AgentTool 使用） */
+/** 构建一套 read/write/edit 工具（BaseTool 子类，即 durable 的 ToolRegistration） */
 export function createFileToolSuite(deps: FileToolDeps): FileToolSuite {
   return {
     read: new ReadFileTool(deps),

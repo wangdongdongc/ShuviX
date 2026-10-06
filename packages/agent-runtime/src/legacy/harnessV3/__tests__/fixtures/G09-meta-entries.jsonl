@@ -1,0 +1,12 @@
+{"type":"session","version":3,"id":"G09-meta-entries","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/fixture"}
+{"type":"message","id":"da2c3de5","parentId":null,"timestamp":"2026-10-04T18:07:16.736Z","message":{"role":"user","content":[{"type":"text","text":"u1"}],"timestamp":1791137236736}}
+{"type":"message","id":"07311e9b","parentId":"da2c3de5","timestamp":"2026-10-04T18:07:16.736Z","message":{"role":"assistant","content":[{"type":"text","text":"a1"}],"api":"openai-completions","provider":"test","model":"test-model","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15},"stopReason":"stop","timestamp":1791137236736}}
+{"type":"label","id":"c6b27e19","parentId":"07311e9b","timestamp":"2026-10-04T18:07:16.736Z","targetId":"da2c3de5","label":"important"}
+{"type":"session_info","id":"00ba21d6","parentId":"c6b27e19","timestamp":"2026-10-04T18:07:16.736Z","name":"My session"}
+{"type":"active_tools_change","id":"36faf539","parentId":"00ba21d6","timestamp":"2026-10-04T18:07:16.736Z","activeToolNames":["read","bash"]}
+{"type":"message","id":"1d45a677","parentId":"36faf539","timestamp":"2026-10-04T18:07:16.737Z","message":{"role":"user","content":[{"type":"text","text":"u2 (abandoned)"}],"timestamp":1791137236737}}
+{"type":"message","id":"818fb912","parentId":"1d45a677","timestamp":"2026-10-04T18:07:16.737Z","message":{"role":"assistant","content":[{"type":"text","text":"a2 (abandoned)"}],"api":"openai-completions","provider":"test","model":"test-model","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15},"stopReason":"stop","timestamp":1791137236737}}
+{"type":"leaf","id":"79b48a73","parentId":"818fb912","timestamp":"2026-10-04T18:07:16.737Z","targetId":"36faf539"}
+{"type":"branch_summary","id":"a9d5feeb","parentId":"36faf539","timestamp":"2026-10-04T18:07:16.737Z","fromId":"36faf539","summary":"explored another approach","details":{"files":["x.ts"]}}
+{"type":"message","id":"c19329a7","parentId":"a9d5feeb","timestamp":"2026-10-04T18:07:16.738Z","message":{"role":"user","content":[{"type":"text","text":"u3"}],"timestamp":1791137236738}}
+{"type":"message","id":"5247837f","parentId":"c19329a7","timestamp":"2026-10-04T18:07:16.738Z","message":{"role":"assistant","content":[{"type":"text","text":"a3"}],"api":"openai-completions","provider":"test","model":"test-model","usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15},"stopReason":"stop","timestamp":1791137236738}}

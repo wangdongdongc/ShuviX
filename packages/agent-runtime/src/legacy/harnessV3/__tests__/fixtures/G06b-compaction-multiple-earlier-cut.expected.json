@@ -1,0 +1,180 @@
+{
+  "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+  "leafId": "e83c2aaa",
+  "branchIds": [
+    "702805d7",
+    "aac0bfb6",
+    "5e0754a8",
+    "bb3337bd",
+    "1f4cf845",
+    "42f4e814",
+    "a1dd925e",
+    "f36ab8df",
+    "6316d97d",
+    "e83c2aaa"
+  ],
+  "contextEntryIds": [
+    "f36ab8df",
+    "5e0754a8",
+    "bb3337bd",
+    "1f4cf845",
+    "42f4e814",
+    "a1dd925e",
+    "6316d97d",
+    "e83c2aaa"
+  ],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "f36ab8df",
+      "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "second summary"
+        }
+      ],
+      "content": "second summary",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236729,
+      "metadata": {
+        "isCompactionSummary": true
+      }
+    },
+    {
+      "id": "5e0754a8",
+      "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+      "role": "user",
+      "type": "text",
+      "content": "u2",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236727,
+      "metadata": {}
+    },
+    {
+      "id": "bb3337bd",
+      "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a2"
+        }
+      ],
+      "content": "a2",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236728,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "1f4cf845",
+      "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "first summary"
+        }
+      ],
+      "content": "first summary",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236728,
+      "metadata": {
+        "isCompactionSummary": true
+      }
+    },
+    {
+      "id": "42f4e814",
+      "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+      "role": "user",
+      "type": "text",
+      "content": "u3",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236728,
+      "metadata": {}
+    },
+    {
+      "id": "a1dd925e",
+      "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a3"
+        }
+      ],
+      "content": "a3",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236728,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "6316d97d",
+      "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+      "role": "user",
+      "type": "text",
+      "content": "u4",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236729,
+      "metadata": {}
+    },
+    {
+      "id": "e83c2aaa",
+      "sessionId": "sid-G06b-compaction-multiple-earlier-cut",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a4"
+        }
+      ],
+      "content": "a4",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236729,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}

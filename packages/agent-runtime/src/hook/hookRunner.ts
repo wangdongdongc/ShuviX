@@ -6,16 +6,24 @@
  *    **绝不抛出**，emit 侧对订阅情况零感知；
  *  - 一次 run = 一次 `manager.runTask`：hook 的正文 + 事件围栏是任务，agent 用自己的工具做事，
  *    **结果文本不读**（只看 `outcome.error` 判这次派发成没成）—— hook 是观察者，不拦截、不改 prompt、不等它；
- *  - 派发与 dispatch 工具走完全同一条创建与执行路径：同一个 runTask → createAgent → 宿主
- *    resolveTools → 同一个安全门。hook 不构成第二套安全机制，也不参与选模型
+ *  - 派发与 dispatch 工具走完全同一条创建与执行路径：同一个 runTask → 会话的派生 agent 协调器 →
+ *    宿主 resolveAgentTools → 同一个安全门。hook 不构成第二套安全机制，也不参与选模型
  *    （基准是归属会话的当前模型，被派发 agent 自己的 `shuvix-model` 优先，与任何派发一样）；
  *  - 会话域埋点：payload.sessionId 即 run 的归属会话（工具/询问/LLM 日志/面板都落到它）。
  *    v1 只在会话域埋点上运行 —— 没有归属会话的 run 授权为空、询问被拒，那是静默降级，宁可不跑。
  *
  * 宿主规则（不是文件里的键，用户改不了，所以也不是要维护的契约）：
  *  - 去重：同一 hook 在同一会话上的上一次还没跑完，本次跳过并记日志；
- *  - 超时：`timeoutMs`（缺省 5 分钟）到点中止本次派发；
- *  - 未知 agent / 无可用模型：跳过并记日志（配置错，重试永远不会好，不算一次失败的 run）。
+ *  - 超时：`timeoutMs`（缺省 5 分钟）到点中止本次派发（路由随之中止那条子对话）；
+ *  - 未知 agent / 无可用模型：跳过并记日志（配置错，重试永远不会好，不算一次失败的 run）；
+ *  - 模型被拒（会话没锁、选中的模型 / provider 不可用）：一次失败的 run（start → end ok:false，`failed:`），
+ *    不派发 —— 与发送被拒同一句话（PIN-06）；
+ *  - 会话被中断：跳过（`interrupted`）—— 派发的第一次提交就会开启整个调度器、把被中断的工作续上，而宿主
+ *    派发从不替用户「继续」（PIN-07）。
+ *
+ * 拥有者（P2-08）：观察型的 run 恒为 `{anchor}`（会话当前对话里的一个后台锚任务拥有子对话）；判定型带了
+ * `ownerTaskId`（提问的那个工具任务，Q16）就是 `{task}`，没带同样是 `{anchor}`。`ownerTaskId` 只进拥有者，
+ * 不进 prompt、不进 CEL 事件。
  *
  * 刻意没有的：触发链防风暴。hook 派发的是进程内派生 agent，它不经 AgentSession、不发会话埋点；
  * 它能碰到别的会话埋点只有一条路 —— 用 `session` 工具开子会话，而子会话只许一层，子会话名下
@@ -72,7 +80,30 @@ export interface HookRunInfo {
   startedAt: number
 }
 
-export type HookSkipReason = 'busy' | 'unknown-agent' | 'no-model'
+export type HookSkipReason = 'busy' | 'unknown-agent' | 'no-model' | 'interrupted'
+
+/** 模型被拒：一次失败的 run（不派发），error 即这句话（PIN-06） */
+export interface HookModelRefusal {
+  refusal: string
+}
+
+/**
+ * 一次 run 的模型：配置 = 照常派发；null = 没有模型（跳过 `no-model`）；`{refusal}` = 模型被拒（失败的 run）。
+ * 解析抛错同 null（跳过）。
+ */
+export type HookRunModel = SubAgentModelConfig | null | HookModelRefusal
+
+function isRefusal(model: HookRunModel): model is HookModelRefusal {
+  return model !== null && typeof (model as { refusal?: unknown }).refusal === 'string'
+}
+
+/** 判定型入口的选项 */
+export interface HookDecideOptions {
+  /** 落下即中止全部在跑的判定并返回 null */
+  signal?: AbortSignal
+  /** 提问的那个工具任务（durable taskId）：判定 agent 的子对话归它（Q16）；缺省 = 锚 */
+  ownerTaskId?: number
+}
 
 /** run 生命周期事件 —— 宿主据此记日志；测试据此观测 */
 export type HookRunEvent =
@@ -101,8 +132,16 @@ export interface HookRunnerDeps {
   listHooks: () => HookRegistryEntry[]
   /** 按名解析 agent 档案（运行投影）；未知返回 null */
   resolveAgentProfile: (name: string) => InProcessAgentType | null
-  /** 归属会话的当前模型；没有可用模型返回 null（本次派发跳过） */
-  resolveRunModel: (ctx: { sessionId: string }) => Promise<SubAgentModelConfig | null>
+  /**
+   * 归属会话这次 run 的模型（PIN-06：锁定时 = 锁的模型 + 现在的思考档位；没锁 = 会话选择经 resolveLockModel）：
+   * null → 跳过 `no-model`；`{refusal}` → 失败的 run；抛错 → 跳过
+   */
+  resolveRunModel: (ctx: { sessionId: string }) => Promise<HookRunModel>
+  /**
+   * 归属会话此刻是不是被中断了（PIN-07）：是 → 跳过 `interrupted`、不派发。缺省 = 从不中断。
+   * 路由那一侧另有一道同样的校验（竞态兜底）。
+   */
+  isInterrupted?: (ctx: { sessionId: string }) => boolean
   /** CEL `when` 的 env 上下文 */
   env: { host: string; platform: string }
   /** 一次派发的墙钟上限；缺省 DEFAULT_HOOK_TIMEOUT_MS */
@@ -132,7 +171,7 @@ export interface HookRunner {
   decide<K extends DecideTriggerId>(
     id: K,
     payload: TriggerPayloadMap[K],
-    opts?: { signal?: AbortSignal }
+    opts?: HookDecideOptions
   ): Promise<HookDecision<TriggerResultMap[K]> | null>
   /** 中止某会话名下的全部 run，返回中止数 */
   abortSession(sessionId: string): number
@@ -183,6 +222,16 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
     }
   }
 
+  /** 会话被中断（PIN-07）；探针抛错按被中断处理：宁可这次不跑，也不能替用户续上被中断的工作 */
+  function interrupted(sessionId: string): boolean {
+    try {
+      return deps.isInterrupted?.({ sessionId }) === true
+    } catch (err) {
+      logger?.warn(`hook interrupted-check failed for session ${sessionId}: ${errText(err)}`)
+      return true
+    }
+  }
+
   function whenHit(
     entry: HookRegistryEntry,
     when: string | undefined,
@@ -222,6 +271,10 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
       skip('unknown-agent', `no agent definition named "${file.agent}"`)
       return
     }
+    if (interrupted(sessionId)) {
+      skip('interrupted', 'the session is interrupted; hooks never resume it')
+      return
+    }
 
     // 同步段先占坑：去重判定与本次启动之间无 await 窗口
     const controller = new AbortController()
@@ -240,7 +293,7 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
     try {
       // 模型解析失败与「没有模型」同一处置：都是配置问题，重试永远不会好 —— 记成 skip，
       // 而不是一次没有 start 就 end 的失败 run
-      let modelConfig: SubAgentModelConfig | null
+      let modelConfig: HookRunModel
       try {
         modelConfig = await deps.resolveRunModel({ sessionId })
       } catch (err) {
@@ -255,17 +308,27 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
       logger?.info(
         `hook "${file.name}" run=${info.runId} start trigger=${trigger} session=${sessionId} agent=${profile.name}`
       )
+      if (isRefusal(modelConfig)) {
+        // 模型被拒：一次失败的 run，不派发（PIN-06）
+        const error = modelConfig.refusal
+        logger?.warn(`hook "${file.name}" run=${info.runId} failed: ${error}`)
+        emit({ type: 'end', run: info, ok: false, ms: Date.now() - info.startedAt, error })
+        return
+      }
       timer = setTimeout(() => {
         timedOut = true
         controller.abort()
       }, timeoutMs)
+      // 观察型 hook 的子对话由一个后台锚任务拥有（P2-08）
       const outcome = await deps.manager.runTask({
-        parentSessionId: sessionId,
+        sessionId,
+        owner: { anchor: true },
         agentType: profile,
         prompt: renderHookPrompt(file.prompt, trigger, payload),
         description: file.displayName,
         modelConfig,
-        parentAbortSignal: controller.signal
+        hook: { name: file.name, runId: info.runId },
+        signal: controller.signal
       })
       const ms = Date.now() - info.startedAt
       if (timedOut) {
@@ -309,7 +372,8 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
     payload: Record<string, unknown>,
     sessionId: string,
     spec: DecideSpec<R>,
-    outer: AbortSignal | undefined
+    outer: AbortSignal | undefined,
+    ownerTaskId: number | undefined
   ): Promise<{ result: R; hook: string } | null> {
     const { file } = entry
     const skip = (reason: HookSkipReason, detail?: string): void => {
@@ -322,6 +386,10 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
     const profile = deps.resolveAgentProfile(file.agent)
     if (!profile) {
       skip('unknown-agent', `no agent definition named "${file.agent}"`)
+      return null
+    }
+    if (interrupted(sessionId)) {
+      skip('interrupted', 'the session is interrupted; hooks never resume it')
       return null
     }
 
@@ -354,7 +422,7 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
     // 已经按「没有意见」结算、但派发还在后台收尾：坑位留到它落定
     let draining: Promise<unknown> | null = null
     try {
-      let modelConfig: SubAgentModelConfig | null
+      let modelConfig: HookRunModel
       try {
         // 解析与中止赛跑：解析挂住（或慢过超时）不拖住调用方。输掉赛跑的那一边由 race 自己兜住
         const resolved = await Promise.race([
@@ -386,13 +454,23 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
       logger?.info(
         `hook "${file.name}" run=${info.runId} start trigger=${trigger} session=${sessionId} agent=${profile.name}`
       )
+      if (isRefusal(modelConfig)) {
+        // 模型被拒：一次失败的 run，不派发（PIN-06）
+        const error = modelConfig.refusal
+        logger?.warn(`hook "${file.name}" run=${info.runId} failed: ${error}`)
+        emit({ type: 'end', run: info, ok: false, ms: Date.now() - info.startedAt, error })
+        return null
+      }
+      // 拥有者：提问的工具任务（`{task}`，Q16）；调用方没给 taskId（durable 调用之外的询问点）就是锚
       const run = deps.manager.runTask({
-        parentSessionId: sessionId,
+        sessionId,
+        owner: ownerTaskId === undefined ? { anchor: true } : { task: ownerTaskId },
         agentType: profile,
         prompt: renderHookPrompt(file.prompt, trigger, payload),
         description: file.displayName,
         modelConfig,
-        parentAbortSignal: controller.signal,
+        hook: { name: file.name, runId: info.runId },
+        signal: controller.signal,
         resultContract: { schema: spec.schema, sourceLabel: file.name }
       })
       const raced = await Promise.race([run.then((outcome) => ({ outcome })), abortedNow])
@@ -496,7 +574,15 @@ export function createHookRunner(deps: HookRunnerDeps): HookRunner {
         if (matched.length === 0) return null
         const verdicts = await Promise.all(
           matched.map((entry) =>
-            launchDecide(entry, id, { ...fields }, sessionId, spec, opts.signal).catch((err) => {
+            launchDecide(
+              entry,
+              id,
+              { ...fields },
+              sessionId,
+              spec,
+              opts.signal,
+              opts.ownerTaskId
+            ).catch((err) => {
               logger?.warn(
                 `hook "${entry.file.name}": decide run failed to start — ${errText(err)}`
               )

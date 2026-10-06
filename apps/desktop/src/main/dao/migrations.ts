@@ -740,6 +740,23 @@ export const migrations: Migration[] = [
          VALUES (?, ?, 'inproc', '', '[]', '{}', '', '{}', '{}', 1, 1, '[]', ?, ?)`
       ).run('builtin-mcp-chrome', 'chrome', now, now)
     }
+  },
+  {
+    version: 30,
+    description:
+      '会话存储类型：sessions 增加 storageKind 列（已有会话标为 harness-v3-jsonl；存储换代时新会话用新类型，旧会话不迁移）',
+    up: (db) => {
+      // 默认值即「pi 0.80 harness 的 v3 JSONL」：加列时已有的每一行都落成它，之后建的会话也是它，
+      // 直到新建会话改用新的存储（见 chat-protocol 的 sessionStorageKind.ts）。只追加、不回填别的值 ——
+      // 这一列说的是「这条会话的内容当初存成什么格式」，与之后换没换存储无关。
+      // 列已在就跳过：user_version 被拨回 30 以前的库（e2e 的迁移用例为了重跑 v27 / v28 就这么做）
+      // 会把本迁移再跑一遍，SQLite 的 ADD COLUMN 没有 IF NOT EXISTS，重复加列会让启动直接崩掉
+      const columns = db.prepare(`PRAGMA table_info(sessions)`).all() as Array<{ name: string }>
+      if (columns.some((c) => c.name === 'storageKind')) return
+      db.exec(
+        `ALTER TABLE sessions ADD COLUMN storageKind TEXT NOT NULL DEFAULT 'harness-v3-jsonl'`
+      )
+    }
   }
 ]
 

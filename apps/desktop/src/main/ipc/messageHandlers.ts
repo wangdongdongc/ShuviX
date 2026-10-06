@@ -24,12 +24,14 @@ export function registerMessageHandlers(): void {
     })
   )
 
-  /** 回退到指定消息之前（entry 树把 leaf 移到其父节点，使 Agent 失效） */
+  /**
+   * 回退到指定消息之前（P3-10b，PIN-02）：真的回退了 → `{success:true}`；没有可回退的目标（旧格式会话、
+   * id 不是条目 id、目标不在当前对话里）→ `{success:false}`，界面据此不回填草稿、不重发。运行时抛错原样拒绝。
+   */
   ipcMain.handle('message:rollback', (_event, params: { sessionId: string; messageId: string }) =>
-    operationContext.run(createElectronContext(params.sessionId), async () => {
-      await chatGateway.rollbackMessage(params.sessionId, params.messageId)
-      return { success: true }
-    })
+    operationContext.run(createElectronContext(params.sessionId), async () => ({
+      success: await chatGateway.rollbackMessage(params.sessionId, params.messageId)
+    }))
   )
 
   // 注：message:deleteFrom 已并入 message:rollback（append-only 树上二者语义重合）。

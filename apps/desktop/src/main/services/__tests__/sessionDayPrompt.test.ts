@@ -1,13 +1,20 @@
 /**
- * 日历入账：user_message 旁听、系统通知/指令注入不入账、eventSink 接线。
+ * 日历入账（P3-07：按 durable 的用户条目 id，`recordUserEntry`）、排除项与读侧过滤。
+ *
+ *   recordUserEntry 行 = `{sessionId, entryId: String(entryId), day: localDayKey(ts), timestamp}`；
+ *         重播（insert 回 false）不 touchActive；timestamp 缺省 = 此刻
+ *   DP-C  Chrome 标签页会话不入账（合法绑定才算）
+ *   P3-07-21 旁听删掉了（PIN-17）：electronEventSink 广播一条 user_message 不写任何一行；
+ *         `recordFromUserMessageEvent` 既不导出、也不被 agentRuntimeAdapters 引用
  *
  *   DP-T1 内存会话（sessionRecords.isEphemeral）不入账：不 insert、不 touchActive、不查 settings；
  *         时钟往前走之后它的 lastActiveAt 也没动
- *   DP-T2 已删的内存会话（wasEphemeral）同样不入账 —— 迟到的 user_message 不给它补一行日历
+ *   DP-T2 已删的内存会话（wasEphemeral）同样不入账 —— 迟到的落下不给它补一行日历
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
-import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 const mocks = vi.hoisted(() => ({
   insert: vi.fn<
@@ -52,40 +59,21 @@ vi.mock('../../frontend/core', () => ({
   chatFrontendRegistry: { broadcast: mocks.frontendBroadcast, hasCapability: vi.fn(() => false) }
 }))
 vi.mock('../notificationService', () => ({ notifyOnChatEvent: mocks.notify }))
-vi.mock('../stepPersistPipeline', () => ({ transformToolResultForPersist: vi.fn() }))
-vi.mock('../httpLogService', () => ({ httpLogService: { updateUsage: vi.fn() } }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
+import * as dayPromptService from '../sessionDayPromptService'
 import {
   daysInMonth,
   firstEntryOnDay,
-  recordFromUserMessageEvent,
-  recordUserPrompt,
+  recordUserEntry,
   sessionsOnDay
 } from '../sessionDayPromptService'
 import { electronEventSink } from '../agentRuntimeAdapters'
 import { sessionRecords } from '../sessionRecords'
 import { KNOWLEDGE_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
-
-function userMsg(over: Partial<ChatMessage> & { id: string }): ChatMessage {
-  return {
-    sessionId: 's1',
-    role: 'user',
-    type: 'text',
-    content: 'hello',
-    model: '',
-    createdAt: new Date(2026, 8, 18, 12).getTime(),
-    metadata: null,
-    ...over
-  } as ChatMessage
-}
-
-function userEvent(message: ChatMessage, sessionId = 's1'): ChatEvent {
-  return { type: 'user_message', sessionId, message: JSON.stringify(message) }
-}
 
 beforeEach(() => {
   mocks.insert.mockReset().mockReturnValue(true)
@@ -99,103 +87,59 @@ beforeEach(() => {
   sessionRecords.clearEphemeralForTests()
 })
 
-describe('recordUserPrompt', () => {
-  it('普通用户消息入账并 touchActive', () => {
-    const msg = userMsg({ id: 'e1' })
-    recordUserPrompt('s1', msg)
+const T_NOON = new Date(2026, 8, 18, 12).getTime()
+
+describe('recordUserEntry', () => {
+  it('用户条目入账（entryId 存成 String(entryId)）并 touchActive', () => {
+    recordUserEntry('s1', 7, T_NOON)
     expect(mocks.insert).toHaveBeenCalledWith({
       sessionId: 's1',
-      entryId: 'e1',
+      entryId: '7',
       day: '2026-09-18',
-      timestamp: msg.createdAt
+      timestamp: T_NOON
     })
     expect(mocks.touchActive).toHaveBeenCalledWith('s1')
   })
 
-  it('同一 entry 重播（insert 返回 false）不 touchActive', () => {
+  it('同一条目重播（insert 返回 false）不 touchActive', () => {
     mocks.insert.mockReturnValue(false)
-    recordUserPrompt('s1', userMsg({ id: 'e1' }))
+    recordUserEntry('s1', 7, T_NOON)
     expect(mocks.insert).toHaveBeenCalled()
     expect(mocks.touchActive).not.toHaveBeenCalled()
   })
 
-  it('isSystemNotice 不入账', () => {
-    recordUserPrompt(
-      's1',
-      userMsg({
-        id: 'n1',
-        metadata: { isSystemNotice: true },
-        content: '<background-task></background-task>'
+  it('timestamp 缺省 = 此刻（排队的发送按放下那一刻算哪一天）', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date(2026, 8, 19, 0, 0, 1))
+      recordUserEntry('s1', 3)
+      expect(mocks.insert.mock.calls[0]![0]).toMatchObject({
+        entryId: '3',
+        day: '2026-09-19',
+        timestamp: new Date(2026, 8, 19, 0, 0, 1).getTime()
       })
-    )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('P3-07-21 user_message 旁听删掉了（PIN-17）', () => {
+  it('P3-07-21 electronEventSink 广播根会话一轮的开始（user_message 已不存在，P3-08）：前端照发，不写任何一行、不 touchActive', () => {
+    const event: ChatEvent = { type: 'agent_start', sessionId: 's1' }
+    electronEventSink.broadcast(event)
+    expect(mocks.frontendBroadcast).toHaveBeenCalledWith(event)
+    expect(mocks.notify).toHaveBeenCalledWith(event)
     expect(mocks.insert).not.toHaveBeenCalled()
     expect(mocks.touchActive).not.toHaveBeenCalled()
   })
 
-  it('isInstructionInjection 不入账', () => {
-    recordUserPrompt(
-      's1',
-      userMsg({
-        id: 'i1',
-        metadata: { isInstructionInjection: true, instructionFilename: 'CLAUDE.md' }
-      })
-    )
-    expect(mocks.insert).not.toHaveBeenCalled()
-  })
-
-  it('助手消息不入账', () => {
-    recordUserPrompt('s1', {
-      id: 'a1',
-      sessionId: 's1',
-      role: 'assistant',
-      type: 'message',
-      content: 'ok',
-      blocks: [{ type: 'text', text: 'ok' }],
-      model: 'm',
-      createdAt: 1,
-      metadata: null
-    })
-    expect(mocks.insert).not.toHaveBeenCalled()
-  })
-})
-
-describe('recordFromUserMessageEvent', () => {
-  it('解析 user_message 后入账', () => {
-    recordFromUserMessageEvent(userEvent(userMsg({ id: 'e2' })))
-    expect(mocks.insert.mock.calls[0][0].entryId).toBe('e2')
-  })
-
-  it('非 user_message 忽略', () => {
-    recordFromUserMessageEvent({ type: 'agent_end', sessionId: 's1' } as ChatEvent)
-    expect(mocks.insert).not.toHaveBeenCalled()
-  })
-
-  it('载荷不是 JSON 时不抛', () => {
-    expect(() =>
-      recordFromUserMessageEvent({ type: 'user_message', sessionId: 's1', message: 'not-json' })
-    ).not.toThrow()
-    expect(mocks.insert).not.toHaveBeenCalled()
-  })
-})
-
-describe('electronEventSink 旁听 user_message', () => {
-  it('broadcast 同时到达前端、通知决策器和日历入账（合成事件，不经 prompt）', () => {
-    // CAL-08：入账钉的是旁听 eventSink，不是 chatGateway.prompt。steer/followUp/nextTurn
-    // 一旦落树成 user_message 也走这一条。
-    const event = userEvent(userMsg({ id: 'e3' }))
-    electronEventSink.broadcast(event)
-    expect(mocks.frontendBroadcast).toHaveBeenCalledWith(event)
-    expect(mocks.notify).toHaveBeenCalledWith(event)
-    expect(mocks.insert.mock.calls[0][0].entryId).toBe('e3')
-    expect(mocks.touchActive).toHaveBeenCalledWith('s1')
-  })
-
-  it('系统通知广播不入账', () => {
-    electronEventSink.broadcast(
-      userEvent(userMsg({ id: 'n2', metadata: { isSystemNotice: true } }))
-    )
-    expect(mocks.frontendBroadcast).toHaveBeenCalled()
-    expect(mocks.insert).not.toHaveBeenCalled()
+  it('P3-07-21 静态：recordFromUserMessageEvent 不再导出，agentRuntimeAdapters 不引用它', () => {
+    expect('recordFromUserMessageEvent' in dayPromptService).toBe(false)
+    expect('recordUserPrompt' in dayPromptService).toBe(false)
+    const source = readFileSync(join(__dirname, '..', 'agentRuntimeAdapters.ts'), 'utf8')
+    expect(source).not.toContain('recordFromUserMessageEvent')
+    expect(source).not.toMatch(/from '\.\/sessionDayPromptService'/)
   })
 })
 
@@ -207,22 +151,12 @@ describe('electronEventSink 旁听 user_message', () => {
 describe('DP-C Chrome 标签页会话不入账', () => {
   const TAB = { installId: 'i1', runId: 'r1', tabId: 5 }
 
-  it('DP-C1 合法绑定：recordUserPrompt 不入账、不 touchActive；按 (sid, [chromeTab]) 查', () => {
+  it('DP-C1 合法绑定：recordUserEntry 不入账、不 touchActive；按 (sid, [chromeTab]) 查', () => {
     mocks.pickSettings.mockReturnValue({ chromeTab: TAB })
-    recordUserPrompt('tab-1', userMsg({ id: 'e1', sessionId: 'tab-1' }))
+    recordUserEntry('tab-1', 1, T_NOON)
     expect(mocks.insert).not.toHaveBeenCalled()
     expect(mocks.touchActive).not.toHaveBeenCalled()
     expect(mocks.pickSettings.mock.calls).toEqual([['tab-1', ['chromeTab']]])
-  })
-
-  it('DP-C1 经 recordFromUserMessageEvent / electronEventSink 同样不入账（前端照发）', () => {
-    mocks.pickSettings.mockReturnValue({ chromeTab: TAB })
-    recordFromUserMessageEvent(userEvent(userMsg({ id: 'e2', sessionId: 'tab-1' }), 'tab-1'))
-    const event = userEvent(userMsg({ id: 'e3', sessionId: 'tab-1' }), 'tab-1')
-    electronEventSink.broadcast(event)
-    expect(mocks.insert).not.toHaveBeenCalled()
-    expect(mocks.touchActive).not.toHaveBeenCalled()
-    expect(mocks.frontendBroadcast).toHaveBeenCalledWith(event)
   })
 
   it.each([
@@ -231,21 +165,20 @@ describe('DP-C Chrome 标签页会话不入账', () => {
     ['缺 installId', { runId: 'r1', tabId: 5 }]
   ])('DP-C2 绑定不合法（%s）→ 普通会话，照常入账', (_label, chromeTab) => {
     mocks.pickSettings.mockReturnValue({ chromeTab })
-    const msg = userMsg({ id: 'e4', sessionId: 's9' })
-    recordUserPrompt('s9', msg)
+    recordUserEntry('s9', 4, T_NOON)
     expect(mocks.pickSettings).toHaveBeenCalledWith('s9', ['chromeTab'])
     expect(mocks.insert).toHaveBeenCalledWith({
       sessionId: 's9',
-      entryId: 'e4',
+      entryId: '4',
       day: '2026-09-18',
-      timestamp: msg.createdAt
+      timestamp: T_NOON
     })
     expect(mocks.touchActive).toHaveBeenCalledWith('s9')
   })
 
   it('DP-C2 会话行不存在（pickSettings 回 undefined）→ 照常入账', () => {
     mocks.pickSettings.mockReturnValue(undefined)
-    recordUserPrompt('ghost', userMsg({ id: 'e5', sessionId: 'ghost' }))
+    recordUserEntry('ghost', 5, T_NOON)
     expect(mocks.insert).toHaveBeenCalledTimes(1)
   })
 })
@@ -283,8 +216,7 @@ describe('DP-T 内存会话不入账', () => {
     insertEphemeral('mem-1')
     vi.setSystemTime(T0 + 60_000)
 
-    recordUserPrompt('mem-1', userMsg({ id: 'e1', sessionId: 'mem-1', createdAt: Date.now() }))
-    recordFromUserMessageEvent(userEvent(userMsg({ id: 'e2', sessionId: 'mem-1' }), 'mem-1'))
+    recordUserEntry('mem-1', 1)
 
     expect(mocks.insert).not.toHaveBeenCalled()
     expect(mocks.touchActive).not.toHaveBeenCalled()
@@ -297,7 +229,7 @@ describe('DP-T 内存会话不入账', () => {
     sessionRecords.deleteById('mem-2')
     expect(sessionRecords.wasEphemeral('mem-2')).toBe(true)
 
-    recordUserPrompt('mem-2', userMsg({ id: 'e3', sessionId: 'mem-2' }))
+    recordUserEntry('mem-2', 3, T_NOON)
 
     expect(mocks.insert).not.toHaveBeenCalled()
     expect(mocks.touchActive).not.toHaveBeenCalled()
@@ -306,7 +238,7 @@ describe('DP-T 内存会话不入账', () => {
 
   it('DP-T 对照：同一时刻的普通会话照常入账', () => {
     insertEphemeral('mem-3')
-    recordUserPrompt('s1', userMsg({ id: 'e4' }))
+    recordUserEntry('s1', 4, T_NOON)
     expect(mocks.insert).toHaveBeenCalledTimes(1)
     expect(mocks.touchActive).toHaveBeenCalledWith('s1')
   })

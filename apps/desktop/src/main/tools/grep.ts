@@ -6,14 +6,14 @@
 import { stat } from 'fs/promises'
 import { resolve, relative, dirname, basename } from 'path'
 import { Type } from 'typebox'
-import { BaseTool } from '@shuvix/agent-runtime'
+import { BaseTool, callOwnerOf, type ToolCallScope } from '@shuvix/agent-runtime'
 import {
   resolveProjectConfig,
   assertReadAllowed,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { GrepToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgSearch } from '../utils/toolUtils/ripgrep'
@@ -53,6 +53,8 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   readonly description = GREP_DESCRIPTION
   readonly parameters = GrepParamsSchema
   readonly outputStrategy = 'keep-start' as const
+  // 只读：中断后恢复时重跑一遍无害（durable replay）
+  readonly replay = 'safe' as const
 
   constructor(private ctx: ToolContext) {
     super()
@@ -65,7 +67,8 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
   protected async securityCheck(
     toolCallId: string,
     params: { pattern: string; path?: string; include?: string },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    call?: ToolCallScope
   ): Promise<void> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
@@ -80,14 +83,22 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
 
     // 询问守卫：走统一评估 —— 内置策略只对家目录里会话目录以外的读询问（ask-on-external-path，
     // 「允许并记住」过的路径不问）；命中则挂起等待用户回答
-    await assertReadAllowed(this.ctx, config, toolCallId, 'grep', searchPath, params.path)
+    await assertReadAllowed(
+      this.ctx,
+      config,
+      toolCallId,
+      'grep',
+      searchPath,
+      params.path,
+      callOwnerOf(call)
+    )
   }
 
   protected async executeInternal(
     _toolCallId: string,
     params: { pattern: string; path?: string; include?: string },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<GrepToolDetails>> {
+  ): Promise<ToolResult<GrepToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     const config = resolveProjectConfig(this.ctx.sessionId)

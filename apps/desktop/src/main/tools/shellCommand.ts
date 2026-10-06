@@ -18,8 +18,13 @@ import {
   type TProperties,
   type TString
 } from 'typebox'
-import { BaseTool, type UnconfinedReason } from '@shuvix/agent-runtime'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import {
+  BaseTool,
+  callOwnerOf,
+  type ToolCallScope,
+  type UnconfinedReason
+} from '@shuvix/agent-runtime'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { BashToolDetails, ShellSandboxState } from '@shuvix/chat-protocol/types/chatMessage'
 import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell'
 import {
@@ -106,12 +111,11 @@ export function shellCommandParamsSchema(text: {
 
 /**
  * 这条命令为什么没进沙箱 —— 上报到命令客体（`unconfinedReason`），审查员据此分得清「模型申请越界」
- * 与「这台机器本来就没有沙箱」。工具实例是否套沙箱在构造时按会话固定（pinSession），「没套」的
- * 原因也取固定那一刻的（whyUnconfined），信息性质，不参与是否询问的判定（那只看 sandboxed）。
+ * 与「这台机器本来就没有沙箱」。工具实例是否套沙箱在构造时固定（锁里的钉子，见 bash.ts），「没套」
+ * 的原因取 whyUnconfined 的答案，信息性质，不参与是否询问的判定（那只看 sandboxed）。
  */
 function unconfinedReasonOf(
   spec: ShellCommandToolSpec,
-  sessionId: string,
   escalate: boolean,
   plan: SandboxPlan | null
 ): UnconfinedReason {
@@ -121,7 +125,7 @@ function unconfinedReasonOf(
   if (spec.sandboxed === true) return 'unavailable'
   // PowerShell 没有沙箱后端
   if (spec.shell !== 'bash') return 'unsupported'
-  return whyUnconfined(sessionId)
+  return whyUnconfined()
 }
 
 /** 工具卡上的沙箱标记：圈住了 = confined，否则就是没圈住的原因（ssh 的 remote 走不到这里） */
@@ -142,7 +146,7 @@ export interface ShellCommandToolSpec {
    */
   reject?: (command: string) => string | null
   /**
-   * 本工具实例的命令套沙箱（bash 构造时按会话固定，见 sandbox.pinSession）。为 true 时 schema
+   * 本工具实例的命令套沙箱（bash 构造时固定，见 bash.ts 的 ctx.sandboxed）。为 true 时 schema
    * 带 `dangerouslyDisableSandbox`、描述写明受限范围；powershell 目前恒为 false（没有后端）。
    */
   sandboxed?: boolean
@@ -181,8 +185,9 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
   protected async executeInternal(
     toolCallId: string,
     params: ShellCommandParams,
-    signal?: AbortSignal
-  ): Promise<AgentToolResult<BashToolDetails>> {
+    signal?: AbortSignal,
+    call?: ToolCallScope
+  ): Promise<ToolResult<BashToolDetails>> {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT
     const config = resolveProjectConfig(this.ctx.sessionId)
 
@@ -210,7 +215,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
           })
         : null
 
-    const unconfinedReason = unconfinedReasonOf(this.spec, this.ctx.sessionId, escalate, plan)
+    const unconfinedReason = unconfinedReasonOf(this.spec, escalate, plan)
     const sandbox = sandboxStateOf(unconfinedReason)
 
     // 是否询问由安全模块决定：内置 ask-on-command 只问没被圈住的命令（sandboxed=false）
@@ -225,6 +230,8 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       },
       {
         toolCallId,
+        // 询问与审查按 durable tool task 认人（provider 的 toolCallId 会话内可能重复）
+        ...callOwnerOf(call),
         toolName: this.spec.shell,
         description: params.description,
         // 询问点的审查随工具调用一起中止（用户点停止时不必等审查超时）
@@ -316,7 +323,7 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
     extraEnv: Record<string, string>,
     plan: SandboxPlan | null,
     sandbox: ShellSandboxState
-  ): Promise<AgentToolResult<BashToolDetails>> {
+  ): Promise<ToolResult<BashToolDetails>> {
     const sessionId = this.ctx.sessionId
 
     if (runningCount(sessionId) >= MAX_RUNNING_PER_SESSION) {

@@ -4,6 +4,10 @@
  * 早先是 260 列表列 + 右详情：监视器把一级 tab 列之外的宽度压到 ~640 后，正文只剩 380，
  * 而 payload 恰恰是整段系统提示词 + 全历史 + 工具定义。故列表列整个退役，宽度全给正文；
  * 选中态换成手风琴（同时只展开一条），展开的行头 sticky 在工具栏下沿。
+ *
+ * pi-durable 迁移期间记录暂停（`HTTP_LOG_RECORDING_PAUSED`，P3-13 PIN-10）：工具栏下常显「已暂停」横幅
+ * （`data-monitor-paused`），开关照常可切（偏好留到 phase 5 生效）；开着时状态行不再说「记录中」—— 横幅
+ * 替它说，关着时照旧说「记录已关闭」。已有的日志照常可看、可清。
  */
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Trash2, RefreshCw, FileText, ChevronRight, ChevronDown, Loader2 } from 'lucide-react'
@@ -13,6 +17,7 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SessionPicker } from '../common/SessionPicker'
 import { ZenSelect } from '../common/ZenSelect'
 import { Toggle } from './SettingsPrimitives'
+import { HTTP_LOG_RECORDING_PAUSED } from '@shuvix/chat-protocol/httpLog'
 
 /** 列表查询上限（与界面提示一致） */
 const LOG_LIST_LIMIT = 100
@@ -220,8 +225,19 @@ export function HttpLogSettings(): React.JSX.Element {
         </div>
       </div>
 
-      {/* 记录状态：恒占一行 —— 关着要说明为什么没数据，开着要提醒库在涨 */}
-      {enabled !== null && (
+      {/* 记录暂停（迁移期）：常显，不随开关变 */}
+      {HTTP_LOG_RECORDING_PAUSED && (
+        <div
+          data-monitor-paused
+          className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 border-b border-border-secondary/50 text-[10px] leading-relaxed text-amber-500/80"
+        >
+          <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-amber-500" />
+          {t('settings.httpLogPausedHint')}
+        </div>
+      )}
+
+      {/* 记录状态：关着要说明为什么没数据，开着要提醒库在涨（暂停期间开着时由上面的横幅代言） */}
+      {enabled !== null && !(enabled && HTTP_LOG_RECORDING_PAUSED) && (
         <div
           data-monitor-status
           className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 border-b border-border-secondary/50 text-[10px] leading-relaxed ${

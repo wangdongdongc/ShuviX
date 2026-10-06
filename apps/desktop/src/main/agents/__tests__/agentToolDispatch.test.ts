@@ -7,7 +7,8 @@
  *  - AT-2 两种错误（Unknown / Missing name）列出的可用名里没有它，也没有六个基座
  *         （BASE_PROFILE_NAMES 全体）；coding / explore / 用户自己的档案照列；
  *  - AT-3 用户按名覆盖了同名文件（注册表给出 source user 的那份）：照样拒、照样不列；
- *  - AT-4 对照：coding 照常派发；前后带空白的名字去空白后与 AT-1 同一句；
+ *  - AT-4 对照：coding 照常派发（P2-05：sessionId + 调用 scope 作拥有者，不带模型配置）；前后带空白的
+ *         名字去空白后与 AT-1 同一句；
  *  - AT-5 路径形式的 ref 解析出的 name 恰是 permission-reviewer（随包那份 md 本身、或它的副本）同样
  *         拒绝 —— 按名拦下、按路径放行，等于没拦；换个 name 的副本拦不住，那是已接受的残余（设计稿 §9）。
  *
@@ -21,10 +22,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BASE_PROFILE_NAMES,
   PERMISSION_REVIEWER_PROFILE_NAME,
-  type AgentProfile,
-  type SubAgentModelConfig
+  type AgentProfile
 } from '@shuvix/agent-runtime'
 import type { ToolContext } from '../../services/toolContext'
+import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({
   /** agentService 眼里的档案表（listAll 的结果；getProfile 在其中按名找） */
@@ -53,9 +54,8 @@ vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: mocks.regis
 
 import { createAgentTool } from '../AgentTool'
 
-const SELF = 'sess-dispatch-self'
-const ROOT = 'sess-dispatch-root'
-const MODEL: SubAgentModelConfig = { provider: 'p', model: 'm', capabilities: {} }
+/** 会话 id：派发交给路由的 sessionId，也是路径 ref 的相对路径基准（PIN-16） */
+const SID = 'sess-dispatch'
 
 /** 一份档案（派发只读投影需要的那几项） */
 function profileOf(name: string, source: 'builtin' | 'user' = 'builtin'): AgentProfile {
@@ -101,11 +101,8 @@ beforeEach(() => {
 
 /** 造一个派发工具，派发一次，交回结果文本 */
 async function dispatch(params: { name?: string; prompt?: string }): Promise<string> {
-  const tool = createAgentTool({ sessionId: SELF } as ToolContext, {
-    modelConfig: MODEL,
-    rootSessionId: ROOT
-  })
-  const result = await tool.execute('tc-dispatch', {
+  const tool = createAgentTool({ sessionId: SID } as ToolContext)
+  const result = await executeTool(tool, 'tc-dispatch', {
     description: 'do a thing',
     prompt: params.prompt ?? 'the task',
     ...(params.name !== undefined ? { name: params.name } : {})
@@ -181,14 +178,18 @@ describe('派发工具：只由宿主派发的档案对 agent 不存在', () => 
     const ok = await dispatch({ name: 'coding', prompt: 'fix the bug' })
     expect(ok).toBe('done')
     expect(mocks.runTask).toHaveBeenCalledTimes(1)
-    expect(mocks.runTask.mock.calls[0][0]).toMatchObject({
-      parentSessionId: SELF,
+    const params = mocks.runTask.mock.calls[0][0]
+    expect(params).toMatchObject({
+      sessionId: SID,
       parentToolCallId: 'tc-dispatch',
       agentType: expect.objectContaining({ name: 'coding' }),
       prompt: 'fix the bug',
       description: 'do a thing',
-      modelConfig: MODEL
+      owner: { tool: expect.objectContaining({ callId: 'tc-dispatch' }) }
     })
+    // 调用方从 api 读（P2-05）：不再带模型配置与父 id
+    expect('modelConfig' in params).toBe(false)
+    expect('parentSessionId' in params).toBe(false)
 
     mocks.runTask.mockClear()
     const exact = await dispatch({ name: PERMISSION_REVIEWER_PROFILE_NAME })
@@ -204,7 +205,7 @@ describe('派发工具：只由宿主派发的档案对 agent 不存在', () => 
 
     // 路径 ref 走 resolveAgentFile（按根会话的工作目录解析），不经派发面注册表
     expect(mocks.loadAgentFromRef.mock.calls).toEqual([['./reviewer.md', '/w']])
-    expect(mocks.resolveProjectConfig).toHaveBeenCalledWith(ROOT)
+    expect(mocks.resolveProjectConfig).toHaveBeenCalledWith(SID)
     expect(mocks.getProfile).not.toHaveBeenCalled()
     expect(text).toContain('Cannot load agent definition from "./reviewer.md"')
     expect(text).toContain('"permission-reviewer" is run only by ShuviX and cannot be dispatched')

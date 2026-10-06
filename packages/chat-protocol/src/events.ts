@@ -3,9 +3,15 @@
  *
  * 判别联合类型，每个变体只包含该事件所需字段。
  * 零外部依赖，作为前后端通信的唯一契约。
+ *
+ * **phase 3 之后只剩「余项」**（plan §D）：会话内容（消息、正在流式的那张卡、工具进度、队列、询问、
+ * 上下文用量）全部经视图同步（`SessionView`，见 `sync.ts` / `types/sessionView.ts`）到达前端；这里只留
+ * 不属于内容的瞬时 / 全局信号 —— 运行生命周期（`agent_start` / `agent_end{reason}`，由主进程按投影的
+ * 运行信号发）、运行时出生与关停、MCP 惰性连接、没有条目的错误、自动审查、资源 / 浏览器面板、派生 agent
+ * 的登记与收尾、后台任务，以及只带数字的 `ask_count`（侧栏徽标与「卡在等人」标记读它，询问内容只在视图里）。
  */
 
-import type { ToolResultDetails, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 
@@ -19,110 +25,27 @@ interface ChatEventBase {
   subAgentType?: string
 }
 
-// ─── 流式生成 ──────────────────────────────────────────
+// ─── 运行生命周期 ──────────────────────────────────────
 
-/** Agent 开始生成 */
+/** 一轮运行开始（根会话：sessionId = 会话 id；派生 agent：sessionId = agentId） */
 export interface ChatAgentStartEvent extends ChatEventBase {
   type: 'agent_start'
 }
 
-/** 文本增量 */
-export interface ChatTextDeltaEvent extends ChatEventBase {
-  type: 'text_delta'
-  delta: string
-}
-
-/** 思考增量 */
-export interface ChatThinkingDeltaEvent extends ChatEventBase {
-  type: 'thinking_delta'
-  delta: string
-}
-
-/** 单条 LLM 回复结束（后续可能有工具调用） */
-export interface ChatTextEndEvent extends ChatEventBase {
-  type: 'text_end'
-}
-
 /**
- * 一条 assistant 消息已落盘 —— 携带它投影出的整张卡（JSON string）。
- *
- * 每次 LLM 调用结束都会发一条（含最后那次终答），前端按 id upsert：
- * 卡里的工具块此时还没有结果，随后的 tool_end 按 toolCallId 回填。
+ * 一轮运行结束 —— 只是一个生命周期信号，**不带内容**：终答与用量都在视图里（`SessionView.messages` /
+ * `context`）。由主进程按会话投影的运行信号发出，每个 `agent_start` 恰好配一个。
  */
-export interface ChatAssistantMessageEvent extends ChatEventBase {
-  type: 'assistant_message'
-  messageId: string
-  /** 投影出的 assistant 消息 (JSON string)，前端可直接解析避免异步查询 */
-  message: string
-}
-
-/** Agent 完成本轮生成 */
 export interface ChatAgentEndEvent extends ChatEventBase {
   type: 'agent_end'
   /**
-   * 本轮**怎么**结束的 —— 由最后一条 assistant 消息的 stopReason 归一而来。
-   *
-   * 事件流原本只说「结束了」：出错另发一条 `error`，用户中止则连事件都没有，
-   * 消费方只能去 `usage.details` 里翻最后一个 stopReason 反推。通知层要按结局
-   * 分文案（完成 / 失败），所以把这个判定收在产事件的地方做一次。
-   * 省略 = 老事件或无 assistant 消息，按 'ok' 处理。
+   * 本轮**怎么**结束的：任务带中止标记 → aborted；否则看它最后一条 assistant 的 stopReason
+   * （error → error，aborted → aborted，其余 → ok）。通知层按它分文案（完成 / 失败 / 不打扰）。
    */
-  reason?: 'ok' | 'aborted' | 'error'
-  /** 持久化的 assistant 消息 (JSON string) */
-  message?: string
-  /** Token 用量统计 */
-  usage?: ChatTokenUsage
+  reason: 'ok' | 'aborted' | 'error'
 }
 
-/** 单步 token 用量上报（每个 LLM step 完成后即时下发，用于实时刷新上下文用量指示器） */
-export interface ChatTokenUsageEvent extends ChatEventBase {
-  type: 'token_usage'
-  /** 当前 prompt 占用的 token 数（= total - output，含 cacheRead/cacheWrite） */
-  promptTokens: number
-}
-
-// ─── 工具调用生成 ──────────────────────────────────────
-
-/** 工具调用正在生成中（LLM 正在输出 tool_use 块，尚未开始执行） */
-export interface ChatToolCallGeneratingEvent extends ChatEventBase {
-  type: 'toolcall_generating'
-  toolName: string
-  /**
-   * 正在生成的这次工具调用的 id（与执行时的 toolCallId 相同）。一条消息里可能先后生成几次调用，
-   * 按它把增量归到各自名下 —— 协作编辑的虚影预览靠它把「正在写的参数」与「随后执行的那次调用」对上。
-   * provider 没给 id 时缺省。
-   */
-  toolCallId?: string
-  /** 参数 JSON 增量文本（与 text_delta 类似，前端累积拼接） */
-  argsDelta?: string
-}
-
-// ─── 工具执行 ──────────────────────────────────────────
-
-/** 工具开始执行 */
-export interface ChatToolStartEvent extends ChatEventBase {
-  type: 'tool_start'
-  toolCallId: string
-  toolName: string
-  toolArgs?: Record<string, unknown>
-  /** 该工具块所属的 assistant 消息 ID（= entry id） */
-  messageId?: string
-}
-
-/** 工具执行完成 */
-export interface ChatToolEndEvent extends ChatEventBase {
-  type: 'tool_end'
-  toolCallId: string
-  toolName: string
-  /** 工具输出内容 */
-  result?: string
-  /** 是否为错误结果 */
-  isError?: boolean
-  /** 该工具块所属的 assistant 消息 ID（与 tool_start 相同） */
-  messageId?: string
-  /** 工具特定的结构化详情（edit diff 等），按 type 判别 */
-  details?: ToolResultDetails
-}
+// ─── 自动审查 ──────────────────────────────────────────
 
 /**
  * 询问点的自动审查开始 / 落定（设计稿 docs/permission-review-design.md §11）：策略判出要问、
@@ -134,37 +57,25 @@ export interface ChatToolEndEvent extends ChatEventBase {
 export interface ChatToolReviewEvent extends ChatEventBase {
   type: 'tool_review'
   toolCallId: string
+  /**
+   * 发起询问的 durable 工具任务（P2-08 PIN-09）：provider 的 toolCallId 会话内可能重复（根与派生 agent
+   * 都可能是 `call_0`），taskId 不会。不经 durable 工具调用的询问点没有。前端仍按 toolCallId 找卡。
+   */
+  taskId?: number
   /** true = 审查中；false = 审查落定（不论结论） */
   reviewing: boolean
 }
 
-// ─── 交互请求(统一) ────────────────────────────────────
+// ─── 询问计数 ──────────────────────────────────────────
 
 /**
- * 一个新的"用户输入请求"挂起。前端按 request.kind 渲染对应表单。
- * 命令询问 / 选择题 / SSH 凭证全部走这一个事件,扩展新 kind 不再加新事件类型。
+ * 一条会话此刻挂着几条询问（P3-08 PIN-01）—— **只有数字**：询问的内容只在视图（`SessionView.asks`）里，
+ * 这条事件给的是没人订阅视图的会话的「卡在等人回答」标记（侧栏徽标、后台任务面板）。主进程在每次
+ * 询问挂起 / 落定后发（含落定到 0）。
  */
-export interface ChatInputRequestEvent extends ChatEventBase {
-  type: 'input_request'
-  request: import('@shuvix/chat-protocol/types/inputRequest').InputRequest
-}
-
-/**
- * 某个用户输入请求已被解决(用户响应 / 取消 / abort 都会发出),
- * 前端用于把对应 request 从 pending 列表移除并清理草稿。
- */
-export interface ChatInputRequestResolvedEvent extends ChatEventBase {
-  type: 'input_request_resolved'
-  requestId: string
-}
-
-// ─── 媒体 ──────────────────────────────────────────────
-
-/** 图片数据 */
-export interface ChatImageDataEvent extends ChatEventBase {
-  type: 'image_data'
-  /** JSON string: { data: string, mimeType: string } */
-  image: string
+export interface ChatAskCountEvent extends ChatEventBase {
+  type: 'ask_count'
+  count: number
 }
 
 // ─── 资源事件 ──────────────────────────────────────────
@@ -196,9 +107,8 @@ export interface ChatBrowserEvent extends ChatEventBase {
 
 /**
  * 子智能体会话注册（在主会话中启动一个临时子会话）。
- * 子智能体运行期间的 ChatEvent（agent_start / text_delta / tool_start / ...）
- * 统一以 subSessionId 作为 event.sessionId 下发；renderer 通过 register 事件
- * 知晓该 sessionId 属于哪个父会话 + 名称。
+ * 子智能体运行期间的生命周期事件（agent_start / agent_end）统一以 subSessionId 作为 event.sessionId
+ * 下发；renderer 通过 register 事件知晓该 sessionId 属于哪个父会话 + 名称。它的转写经 agent 视图同步。
  */
 export interface ChatSubSessionRegisterEvent extends ChatEventBase {
   type: 'sub_session_register'
@@ -258,16 +168,6 @@ export interface ChatBgTaskEvent extends ChatEventBase {
   task: TaskInfo
 }
 
-// ─── 消息列表重载 ────────────────────────────────────────
-
-/**
- * 会话消息列表被后端整体改写（如 session 工具压缩归档后），前端应重新拉取。
- * 通用原语：只通知「变了」，不携带内容 —— 消费方经 message.list 取最新列表。
- */
-export interface ChatMessagesReloadedEvent extends ChatEventBase {
-  type: 'messages_reloaded'
-}
-
 // ─── 运行时关停 ─────────────────────────────────────────
 
 /**
@@ -317,86 +217,19 @@ export interface ChatErrorEvent extends ChatEventBase {
   error: string
 }
 
-// ─── 用户消息 ──────────────────────────────────────────
-
-/** 用户消息已持久化事件（外部前端提交 prompt 时通知其他前端） */
-export interface ChatUserMessageEvent extends ChatEventBase {
-  type: 'user_message'
-  /** 持久化的 user 消息 (JSON string) */
-  message: string
-}
-
-// ─── 消息队列 ──────────────────────────────────────────
-
-/** 队列里的一条待投递用户消息（正文 + 图片计数，面板渲染够用） */
-export interface ChatQueuedMessage {
-  text: string
-  imageCount: number
-}
-
-/**
- * pi 三条用户消息队列的快照（harness `queue_update` 事件的直接转发）。
- *
- * 队列由 pi 独占持有：对外只有入队与 `abort()` 全量清空，**没有出队 / 改序 / 改档**。
- * 所以这是一份**只读投影** —— 任一队列变动 harness 都重发全量三条，前端整体替换即可。
- * 队列里的消息尚未进入会话树，投递（drain）时才由 harness 落盘并广播成 user_message，
- * 因此队列面板与会话流不会重复显示同一条。
- */
-export interface ChatQueueUpdateEvent extends ChatEventBase {
-  type: 'queue_update'
-  /** 轮次边界插入（引导） */
-  steer: ChatQueuedMessage[]
-  /** 本轮本应结束时续跑（追加） */
-  followUp: ChatQueuedMessage[]
-  /** 下一次 prompt 的前置消息（下轮）；不被 abort 清空 */
-  nextTurn: ChatQueuedMessage[]
-}
-
 // ─── 联合类型 ──────────────────────────────────────────
 
 export type ChatEvent =
   | ChatAgentStartEvent
-  | ChatTextDeltaEvent
-  | ChatThinkingDeltaEvent
-  | ChatTextEndEvent
-  | ChatAssistantMessageEvent
   | ChatAgentEndEvent
-  | ChatTokenUsageEvent
-  | ChatToolCallGeneratingEvent
-  | ChatToolStartEvent
-  | ChatToolEndEvent
   | ChatToolReviewEvent
-  | ChatInputRequestEvent
-  | ChatInputRequestResolvedEvent
-  | ChatImageDataEvent
   | ChatRuntimeEvent
   | ChatBrowserEvent
   | ChatSubSessionRegisterEvent
   | ChatSubSessionEndEvent
   | ChatBgTaskEvent
-  | ChatMessagesReloadedEvent
   | ChatAgentCreatedEvent
   | ChatAgentClosingEvent
   | ChatMcpConnectingEvent
   | ChatErrorEvent
-  | ChatUserMessageEvent
-  | ChatQueueUpdateEvent
-
-// ─── 辅助类型 ──────────────────────────────────────────
-
-/** Token 用量统计 */
-export interface ChatTokenUsage {
-  input: number
-  output: number
-  cacheRead: number
-  cacheWrite: number
-  total: number
-  details: Array<{
-    input: number
-    output: number
-    cacheRead: number
-    cacheWrite: number
-    total: number
-    stopReason: string
-  }>
-}
+  | ChatAskCountEvent

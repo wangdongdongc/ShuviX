@@ -18,6 +18,12 @@ import {
 import { deflateSync } from 'node:zlib'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import {
+  executeTool,
+  failureText,
+  resultText,
+  type InvokedToolResult
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const TEST_DIR = join(tmpdir(), 'shuvix-read-test-' + Date.now())
 /** 假 userData —— 派生图落盘走真实的 utils/paths.ts（getToolResultsDir），必须给它一个真目录 */
@@ -184,7 +190,7 @@ function getText(result: { content: Array<{ type: string; text?: string }> }): s
   return (item as { type: 'text'; text: string }).text
 }
 
-/** execute 的返回类型是 AgentToolResult<unknown>，details 按 read 详情读 */
+/** 调用结果的 details 是 unknown，按 read 详情读 */
 const detailsOf = (result: { details?: unknown }): ReadToolDetails =>
   result.details as ReadToolDetails
 
@@ -354,7 +360,7 @@ afterEach(() => {
 describe('read 工具 - 纯文本文件', () => {
   it('读取纯文本文件返回带行号的内容', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc1', { path: join(TEST_DIR, 'hello.txt') })
+    const result = await executeTool(tool, 'tc1', { path: join(TEST_DIR, 'hello.txt') })
     const text = getText(result)
     // 应包含行号
     expect(text).toContain('1│line1')
@@ -363,7 +369,7 @@ describe('read 工具 - 纯文本文件', () => {
 
   it('分页读取 offset/limit', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc2', {
+    const result = await executeTool(tool, 'tc2', {
       path: join(TEST_DIR, 'hello.txt'),
       offset: 2,
       limit: 2
@@ -377,7 +383,7 @@ describe('read 工具 - 纯文本文件', () => {
 
   it('空文件正常返回', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc3', { path: join(TEST_DIR, 'empty.txt') })
+    const result = await executeTool(tool, 'tc3', { path: join(TEST_DIR, 'empty.txt') })
     expect(getText(result)).toBeDefined()
     expect((result.details as { totalLines: number }).totalLines).toBeLessThanOrEqual(1)
   })
@@ -386,7 +392,7 @@ describe('read 工具 - 纯文本文件', () => {
 describe('read 工具 - 单行截断', () => {
   it('超长单行被截断到 2000 字符', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc4', { path: join(TEST_DIR, 'minified.js') })
+    const result = await executeTool(tool, 'tc4', { path: join(TEST_DIR, 'minified.js') })
     const text = getText(result)
     // 第一行应被截断
     expect(text).toContain('line truncated to')
@@ -398,7 +404,7 @@ describe('read 工具 - 单行截断', () => {
 describe('read 工具 - 目录读取', () => {
   it('读取目录返回排序的条目列表', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc5', { path: join(TEST_DIR, 'subdir') })
+    const result = await executeTool(tool, 'tc5', { path: join(TEST_DIR, 'subdir') })
     const text = getText(result)
     // 目录条目加 / 后缀
     expect(text).toContain('nested/')
@@ -408,7 +414,7 @@ describe('read 工具 - 目录读取', () => {
 
   it('目录分页 offset/limit', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc6', {
+    const result = await executeTool(tool, 'tc6', {
       path: join(TEST_DIR, 'bigdir'),
       offset: 1,
       limit: 3
@@ -425,53 +431,42 @@ describe('read 工具 - 目录读取', () => {
 describe('read 工具 - 文件不存在', () => {
   it('有近似文件时返回 Did you mean', async () => {
     const tool = makeReadTool(ctx)
-    try {
-      await tool.execute('tc7', { path: join(TEST_DIR, 'readme') })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      expect(err instanceof Error ? err.message : '').toContain('Did you mean')
-    }
+    const failure = await failureText(executeTool(tool, 'tc7', { path: join(TEST_DIR, 'readme') }))
+    expect(failure).toContain('Did you mean')
   })
 
   it('无近似文件时返回普通 fileNotFound', async () => {
     const tool = makeReadTool(ctx)
-    try {
-      await tool.execute('tc8', { path: join(TEST_DIR, 'zzzznonexistent') })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : ''
-      expect(msg).toContain('File not found')
-      expect(msg).not.toContain('Did you mean')
-    }
+    const msg = await failureText(
+      executeTool(tool, 'tc8', { path: join(TEST_DIR, 'zzzznonexistent') })
+    )
+    expect(msg).toContain('File not found')
+    expect(msg).not.toContain('Did you mean')
   })
 })
 
 describe('read 工具 - 二进制文件拒绝', () => {
   it('已知扩展名直接拒绝', async () => {
     const tool = makeReadTool(ctx)
-    try {
-      await tool.execute('tc9', { path: join(TEST_DIR, 'archive.exe') })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      expect(err instanceof Error ? err.message : '').toContain('Unsupported format')
-    }
+    const failure = await failureText(
+      executeTool(tool, 'tc9', { path: join(TEST_DIR, 'archive.exe') })
+    )
+    expect(failure).toContain('Unsupported format')
   })
 
   it('NULL 字节检测拒绝', async () => {
     const tool = makeReadTool(ctx)
-    try {
-      await tool.execute('tc10', { path: join(TEST_DIR, 'binary.log') })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      expect(err instanceof Error ? err.message : '').toContain('Unsupported format')
-    }
+    const failure = await failureText(
+      executeTool(tool, 'tc10', { path: join(TEST_DIR, 'binary.log') })
+    )
+    expect(failure).toContain('Unsupported format')
   })
 })
 
 describe('read 工具 - 大文件字节上限', () => {
   it('超 50KB 时截断并提示 offset', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc11', {
+    const result = await executeTool(tool, 'tc11', {
       path: join(TEST_DIR, 'largedir', 'large.txt')
     })
     const text = getText(result)
@@ -484,7 +479,7 @@ describe('read 工具 - 大文件字节上限', () => {
 describe('read 工具 - URL 抓取', () => {
   it('URL 正确路由到 readUrl 并返回 Markdown', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc-url1', {
+    const result = await executeTool(tool, 'tc-url1', {
       path: 'https://example.com/page'
     })
     const text = getText(result)
@@ -499,7 +494,7 @@ describe('read 工具 - URL 抓取', () => {
 
   it('URL 返回包含页面标题', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc-url2', {
+    const result = await executeTool(tool, 'tc-url2', {
       path: 'https://example.com/page'
     })
     const text = getText(result)
@@ -508,30 +503,24 @@ describe('read 工具 - URL 抓取', () => {
 
   it('URL 抓取失败返回合适的错误', async () => {
     const tool = makeReadTool(ctx)
-    try {
-      await tool.execute('tc-url3', { path: 'https://fail-convert.example.com' })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : ''
-      expect(msg).toContain('Failed to fetch URL')
-      expect(msg).toContain('Network error')
-    }
+    const msg = await failureText(
+      executeTool(tool, 'tc-url3', { path: 'https://fail-convert.example.com' })
+    )
+    expect(msg).toContain('Failed to fetch URL')
+    expect(msg).toContain('Network error')
   })
 
   it('URL 返回空内容时报错', async () => {
     const tool = makeReadTool(ctx)
-    try {
-      await tool.execute('tc-url4', { path: 'https://empty-page.example.com' })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : ''
-      expect(msg).toContain('Failed to fetch URL')
-    }
+    const msg = await failureText(
+      executeTool(tool, 'tc-url4', { path: 'https://empty-page.example.com' })
+    )
+    expect(msg).toContain('Failed to fetch URL')
   })
 
   it('http URL 也能正确识别', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc-url5', {
+    const result = await executeTool(tool, 'tc-url5', {
       path: 'http://example.com/page'
     })
     const text = getText(result)
@@ -550,7 +539,7 @@ describe('read 工具 - 图片（未超限直出）', () => {
   it('details.image 指原文件，bytes 为文件字节数，format 由扩展名推出', async () => {
     const tool = makeReadTool(ctx)
     const png = join(TEST_DIR, 'small.png')
-    const result = await tool.execute('tc-img1', { path: png })
+    const result = await executeTool(tool, 'tc-img1', { path: png })
     const details = detailsOf(result)
     expect(details.image?.path).toBe(png)
     expect(details.image?.bytes).toBe(statSync(png).size)
@@ -559,7 +548,7 @@ describe('read 工具 - 图片（未超限直出）', () => {
 
     // 同一份 PNG 字节换个扩展名：format / mimeType 跟 ext 走，不嗅探内容
     const jpeg = join(TEST_DIR, 'photo.jpeg')
-    const asJpeg = await tool.execute('tc-img2', { path: jpeg })
+    const asJpeg = await executeTool(tool, 'tc-img2', { path: jpeg })
     expect(detailsOf(asJpeg).format).toBe('JPEG')
     expect(detailsOf(asJpeg).image?.path).toBe(jpeg)
     expect(imageContent(asJpeg)?.mimeType).toBe('image/jpeg')
@@ -567,7 +556,7 @@ describe('read 工具 - 图片（未超限直出）', () => {
 
   it('交给模型的字节与 image.path 所指文件同源，宽高取自文件头', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc-img3', { path: join(TEST_DIR, 'small.png') })
+    const result = await executeTool(tool, 'tc-img3', { path: join(TEST_DIR, 'small.png') })
     const details = detailsOf(result)
     const img = imageContent(result)
     expect(img?.mimeType).toBe('image/png')
@@ -579,7 +568,7 @@ describe('read 工具 - 图片（未超限直出）', () => {
   it('文件头解析不出时仍给 path / bytes，只是没有宽高', async () => {
     const tool = makeReadTool(ctx)
     const broken = join(TEST_DIR, 'garbage.png')
-    const result = await tool.execute('tc-img4', { path: broken })
+    const result = await executeTool(tool, 'tc-img4', { path: broken })
     const details = detailsOf(result)
     expect(details.image?.path).toBe(broken)
     expect(details.image?.bytes).toBe(statSync(broken).size)
@@ -590,7 +579,7 @@ describe('read 工具 - 图片（未超限直出）', () => {
 
   it('相对路径入参也回绝对路径', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc-img5', { path: 'small.png' })
+    const result = await executeTool(tool, 'tc-img5', { path: 'small.png' })
     expect(detailsOf(result).image?.path).toBe(join(TEST_DIR, 'small.png'))
   })
 })
@@ -613,7 +602,7 @@ describe('read 工具 - 图片（宽度上限）', () => {
     expect(statSync(shot).size).toBeLessThan(1024 * 1024) // 字节闸门拦不住它
     nativeImageStub.size = { width: 1440, height: 900 }
 
-    const result = await makeReadTool(ctx).execute('tc-px1', { path: shot })
+    const result = await executeTool(makeReadTool(ctx), 'tc-px1', { path: shot })
     const details = detailsOf(result)
     expect(details.truncated).toBe(true)
     expect(details.format).toBe('JPEG')
@@ -624,7 +613,7 @@ describe('read 工具 - 图片（宽度上限）', () => {
     // 实测回归：2428×3484 曾被面积预算压成 646×927，正文糊掉，而 token 一个没省 ——
     // 透传与缩放都落在 895×1284 ≈ 1533 tokens，透传还少一次重采样。
     const tall = join(TEST_DIR, 'tallpage.png')
-    const result = await makeReadTool(ctx).execute('tc-px2', { path: tall })
+    const result = await executeTool(makeReadTool(ctx), 'tc-px2', { path: tall })
     const details = detailsOf(result)
     expect(details.truncated).toBe(false)
     expect(details.format).toBe('PNG')
@@ -634,7 +623,7 @@ describe('read 工具 - 图片（宽度上限）', () => {
   })
 
   it('透传的整页截图带一句可操作提示：换视口或单个元素', async () => {
-    const result = await makeReadTool(ctx).execute('tc-px3', {
+    const result = await executeTool(makeReadTool(ctx), 'tc-px3', {
       path: join(TEST_DIR, 'tallpage.png')
     })
     expect(textContent(result)).toContain('Capture the viewport or a single element')
@@ -642,13 +631,15 @@ describe('read 工具 - 图片（宽度上限）', () => {
 
   it('宽度上限生效：超宽图按宽度缩，不按面积', async () => {
     nativeImageStub.size = { width: 2000, height: 200 }
-    const result = await makeReadTool(ctx).execute('tc-px4', { path: join(TEST_DIR, 'wide.png') })
+    const result = await executeTool(makeReadTool(ctx), 'tc-px4', {
+      path: join(TEST_DIR, 'wide.png')
+    })
     expect(modelSize(result).w).toBe(1024)
   })
 
   it('已在宽度上限内：透传，不解码也不提示', async () => {
     const square = join(TEST_DIR, 'square.png') // 1000×900，1000 < 1024
-    const result = await makeReadTool(ctx).execute('tc-px5', { path: square })
+    const result = await executeTool(makeReadTool(ctx), 'tc-px5', { path: square })
     expect(detailsOf(result).truncated).toBe(false)
     expect(nativeImageStub.decodes).toBe(0)
     expect(textContent(result)).not.toContain('Capture the viewport')
@@ -660,7 +651,7 @@ describe('read 工具 - 图片（宽度上限）', () => {
     nativeImageStub.size = { width: 800, height: 600 } // 800 < 1024，宽度没问题
     nativeImageStub.jpegBytes = (quality) => (quality >= 85 ? 2 * 1024 * 1024 : 300 * 1024)
 
-    const result = await makeReadTool(ctx).execute('tc-px6', { path: heavy })
+    const result = await executeTool(makeReadTool(ctx), 'tc-px6', { path: heavy })
     expect(modelSize(result)).toEqual({ w: 800, h: 600 }) // 分辨率原封不动
     expect(detailsOf(result).image?.bytes).toBe(300 * 1024)
   })
@@ -668,7 +659,7 @@ describe('read 工具 - 图片（宽度上限）', () => {
   it('超预算但解不了码：退回直出原图，不让整个 read 失败', async () => {
     nativeImageStub.isEmpty = true
     const shot = join(TEST_DIR, 'screenshot.png')
-    const result = await makeReadTool(ctx).execute('tc-px7', { path: shot })
+    const result = await executeTool(makeReadTool(ctx), 'tc-px7', { path: shot })
     const details = detailsOf(result)
     expect(nativeImageStub.decodes).toBe(1) // 试过解码
     expect(details.truncated).toBe(false)
@@ -682,7 +673,7 @@ describe('read 工具 - 图片（宽度上限）', () => {
 describe('read 工具 - 图片（给模型的文本）', () => {
   it('压缩分支：只说尺寸与缩自多大，不带质量/字节/省量', async () => {
     nativeImageStub.size = { width: 1440, height: 900 }
-    const result = await makeReadTool(ctx).execute('tc-txt1', {
+    const result = await executeTool(makeReadTool(ctx), 'tc-txt1', {
       path: join(TEST_DIR, 'screenshot.png')
     })
     const text = textContent(result)
@@ -695,7 +686,9 @@ describe('read 工具 - 图片（给模型的文本）', () => {
   })
 
   it('直出分支：格式 + 尺寸，仅此而已', async () => {
-    const result = await makeReadTool(ctx).execute('tc-txt2', { path: join(TEST_DIR, 'small.png') })
+    const result = await executeTool(makeReadTool(ctx), 'tc-txt2', {
+      path: join(TEST_DIR, 'small.png')
+    })
     expect(textContent(result)).toBe(`Image: ${join(TEST_DIR, 'small.png')} (PNG 40×24)`)
   })
 })
@@ -705,7 +698,7 @@ describe('read 工具 - 图片（超限压缩落盘）', () => {
 
   it('details.image 指落进 tool_results 的派生 JPEG，与交给模型的字节同源', async () => {
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc-img6', { path: big })
+    const result = await executeTool(tool, 'tc-img6', { path: big })
     const details = detailsOf(result)
     const derived = details.image!.path
     expect(derived.startsWith(toolResultsDir(SESSION_ID) + sep)).toBe(true)
@@ -723,7 +716,7 @@ describe('read 工具 - 图片（超限压缩落盘）', () => {
     nativeImageStub.jpegBytes = (quality) => (quality >= 85 ? 2 * 1024 * 1024 : 300 * 1024)
 
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc-img7', { path: big })
+    const result = await executeTool(tool, 'tc-img7', { path: big })
     const details = detailsOf(result)
     expect(details.image?.width).toBe(1024)
     expect(details.image?.height).toBe(512)
@@ -737,7 +730,7 @@ describe('read 工具 - 图片（超限压缩落盘）', () => {
   it('落盘失败：read 照常返回，只是 image 字段缺席', async () => {
     persistFailure.on = true
     const tool = makeReadTool(ctx)
-    const result = await tool.execute('tc-img8', { path: big })
+    const result = await executeTool(tool, 'tc-img8', { path: big })
     const details = detailsOf(result)
     expect(details.image).toBeUndefined()
     // 该给模型的一样不少，压缩本身的结论也不变
@@ -755,8 +748,8 @@ describe('read 工具 - 图片（超限压缩落盘）', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
     try {
       const tool = makeReadTool(ctx)
-      const first = await tool.execute('tc-img9a', { path: big })
-      const second = await tool.execute('tc-img9b', { path: big })
+      const first = await executeTool(tool, 'tc-img9a', { path: big })
+      const second = await executeTool(tool, 'tc-img9b', { path: big })
       const pathA = detailsOf(first).image!.path
       const pathB = detailsOf(second).image!.path
       expect(pathA).not.toBe(pathB)
@@ -774,30 +767,26 @@ describe('read 工具 - 图片（超限压缩落盘）', () => {
   it('sessionId 为空：不落盘、无 image 字段，read 仍成功', async () => {
     const base = join(USER_DATA_DIR, 'tool_results')
     const before = existsSync(base) ? readdirSync(base) : []
-    const result = await makeReadTool({ sessionId: '' }).execute('tc-img10', { path: big })
+    const result = await executeTool(makeReadTool({ sessionId: '' }), 'tc-img10', { path: big })
     expect(detailsOf(result).image).toBeUndefined()
     expect(imageContent(result)).toBeDefined()
     expect(existsSync(base) ? readdirSync(base) : []).toEqual(before)
   })
 
-  it('nativeImage 解不开：抛错（与「落盘失败降级」是两回事）', async () => {
+  it('nativeImage 解不开：报错（isError 结果；与「落盘失败降级」是两回事）', async () => {
     nativeImageStub.isEmpty = true
     const tool = makeReadTool(ctx)
-    try {
-      await tool.execute('tc-img11', { path: big })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      expect(err instanceof Error ? err.message : '').toContain('cannot be decoded')
-    }
+    const failure = await failureText(executeTool(tool, 'tc-img11', { path: big }))
+    expect(failure).toContain('cannot be decoded')
   })
 })
 
 describe('read 工具 - 非图片结果不带 image', () => {
   it('纯文本 / 目录 / URL 三条都没有 details.image', async () => {
     const tool = makeReadTool(ctx)
-    const text = await tool.execute('tc-img12', { path: join(TEST_DIR, 'hello.txt') })
-    const dir = await tool.execute('tc-img13', { path: join(TEST_DIR, 'subdir') })
-    const url = await tool.execute('tc-img14', { path: 'https://example.com/page' })
+    const text = await executeTool(tool, 'tc-img12', { path: join(TEST_DIR, 'hello.txt') })
+    const dir = await executeTool(tool, 'tc-img13', { path: join(TEST_DIR, 'subdir') })
+    const url = await executeTool(tool, 'tc-img14', { path: 'https://example.com/page' })
     expect(detailsOf(text).image).toBeUndefined()
     expect(detailsOf(dir).image).toBeUndefined()
     expect(detailsOf(url).image).toBeUndefined()
@@ -811,12 +800,17 @@ describe.skipIf(process.platform === 'win32')('read 工具 - 符号链接不跟�
   const L = join(TEST_DIR, 'links')
 
   /** 抓住一次拒绝的原话（没拒就判红） */
-  const messageOf = async (work: Promise<unknown>): Promise<string> => {
+  /**
+   * P1-04 起拒绝收成 isError 结果（裁定 Q12，文字即原话）；调用本身被取消时才照旧抛出 —— 两种都认
+   */
+  const messageOf = async (work: Promise<InvokedToolResult>): Promise<string> => {
+    let res: InvokedToolResult
     try {
-      await work
+      res = await work
     } catch (err) {
       return err instanceof Error ? err.message : String(err)
     }
+    if (res.isError) return resultText(res)
     throw new Error('expected the read to be refused')
   }
 
@@ -840,13 +834,13 @@ describe.skipIf(process.platform === 'win32')('read 工具 - 符号链接不跟�
     const link = join(L, 'dirlink')
     const real = realpathSync.native(join(L, 'realdir'))
 
-    expect(await messageOf(makeReadTool(ctx).execute('rdl1a', { path: link }))).toContain(
+    expect(await messageOf(executeTool(makeReadTool(ctx), 'rdl1a', { path: link }))).toContain(
       `${link} is a symbolic link to ${real}. Symbolic links are not followed`
     )
     expect(enforcePath).not.toHaveBeenCalled()
 
     const through = join(link, 'f.txt')
-    const result = await makeReadTool(ctx).execute('rdl1b', { path: through })
+    const result = await executeTool(makeReadTool(ctx), 'rdl1b', { path: through })
     expect(getText(result)).toContain('through the link')
     expect(enforcePath).toHaveBeenCalledTimes(1)
     expect(enforcePath.mock.calls[0].slice(0, 2)).toEqual(['read', through])
@@ -855,7 +849,7 @@ describe.skipIf(process.platform === 'win32')('read 工具 - 符号链接不跟�
   it('RD-L2 悬空链接：拒的是链接这一条 —— 不是 File not found，也不给 Did you mean（对照：同目录里真不存在的名字才给）', async () => {
     const link = join(L, 'dangling')
 
-    const msg = await messageOf(makeReadTool(ctx).execute('rdl2a', { path: link }))
+    const msg = await messageOf(executeTool(makeReadTool(ctx), 'rdl2a', { path: link }))
     expect(msg).toContain(
       `${link} is a symbolic link to ${join(realpathSync.native(L), 'nowhere.txt')}.`
     )
@@ -865,7 +859,7 @@ describe.skipIf(process.platform === 'win32')('read 工具 - 符号链接不跟�
 
     // 对照：同一个目录里一个真不存在（不是链接）的名字 —— 相似路径建议照常出现
     const missing = await messageOf(
-      makeReadTool(ctx).execute('rdl2b', { path: join(L, 'danglin') })
+      executeTool(makeReadTool(ctx), 'rdl2b', { path: join(L, 'danglin') })
     )
     expect(missing).toContain('File not found')
     expect(missing).toContain('Did you mean')
@@ -876,7 +870,7 @@ describe.skipIf(process.platform === 'win32')('read 工具 - 符号链接不跟�
     const derivedDir = toolResultsDir(SESSION_ID)
     const derivedBefore = existsSync(derivedDir) ? readdirSync(derivedDir).length : 0
 
-    expect(await messageOf(makeReadTool(ctx).execute('rdl3', { path: link }))).toContain(
+    expect(await messageOf(executeTool(makeReadTool(ctx), 'rdl3', { path: link }))).toContain(
       `${link} is a symbolic link to ${realpathSync.native(join(TEST_DIR, 'screenshot.png'))}.`
     )
     expect(nativeImageStub.decodes).toBe(0)

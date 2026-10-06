@@ -252,4 +252,48 @@ describe('i18n 语言包', () => {
     // 正控制组：确实读到了那几句（取错路径时上面的「非空」断言会先失败，这里再钉一句原文）
     expect(leaf(en, 'externalOpen.open')).toBe('Open')
   })
+
+  /**
+   * P3-13-26：监控页换成 durable 的数之后 —— 花费、会话总花费、interrupted 相位、已暂停的请求日志横幅是新的；
+   * 孤儿徽章、累计计数器、分支摘要相位的文案三语都下线；队列只剩两个数，命中率不再插调用次数。
+   */
+  it('P3-13-26 monitor copy: the new keys in all three languages, the removed ones in none', () => {
+    const ADDED = [
+      'settings.httpLogPausedHint',
+      'settings.agentMonitorFieldCost',
+      'settings.agentMonitorFieldSessionCost',
+      'settings.agentMonitorPhase_interrupted',
+      'panel.agentCostTitle'
+    ]
+    const REMOVED = [
+      'settings.agentMonitorOrphan',
+      'settings.agentMonitorOrphanHint',
+      'settings.agentMonitorCounters',
+      'settings.agentMonitorFieldCounters',
+      'settings.agentMonitorPhase_branch_summary'
+    ]
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const present = new Set(flatten(bundle))
+      for (const key of ADDED) expect(leaf(bundle, key)?.trim(), `${lang} ${key}`).toBeTruthy()
+      for (const key of REMOVED) expect(present.has(key), `${lang} ${key}`).toBe(false)
+      expect(leaf(bundle, 'settings.agentMonitorFieldQueue'), lang).not.toContain('nextTurn')
+      expect(
+        placeholders(leaf(bundle, 'settings.agentMonitorCacheHit') ?? ''),
+        `${lang} agentMonitorCacheHit`
+      ).toEqual(['percent'])
+    }
+  })
+
+  it('P3-11-11 队列：「下一轮」那一档的键都去掉了；撤回的文案三语齐全（插值对得上）', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const present = new Set(flatten(bundle))
+      for (const key of ['queue.nextTurn', 'queue.nextTurnHint']) {
+        expect(present.has(key), `${lang} ${key}`).toBe(false)
+      }
+      for (const key of ['queue.withdraw', 'queue.withdrawHint', 'queue.alreadyPlaced']) {
+        expect(leaf(bundle, key)?.trim(), `${lang} ${key}`).toBeTruthy()
+      }
+      expect(placeholders(leaf(bundle, 'queue.withdrawFailed') ?? ''), lang).toEqual(['error'])
+    }
+  })
 })

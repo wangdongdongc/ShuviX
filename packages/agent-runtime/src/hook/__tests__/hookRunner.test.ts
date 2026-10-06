@@ -89,17 +89,22 @@ describe('匹配与派发', () => {
     expect(Object.keys(params).sort()).toEqual([
       'agentType',
       'description',
+      'hook',
       'modelConfig',
-      'parentAbortSignal',
-      'parentSessionId',
-      'prompt'
+      'owner',
+      'prompt',
+      'sessionId',
+      'signal'
     ])
-    expect(params.parentSessionId).toBe('s1')
+    expect(params.sessionId).toBe('s1')
+    // P2-08：观察型恒为锚；hook 名进派生 agent 记录、runId 定 requestId（`hook:<runId>`，PIN-04）
+    expect(params.owner).toEqual({ anchor: true })
+    expect(params.hook).toEqual({ name: 'hk', runId: start.run.runId })
     expect(params.agentType).toBe(PROFILE)
     expect(params.description).toBe('Hook K')
     expect(params.modelConfig).toBe(MODEL)
-    expect(params.parentAbortSignal).toBeInstanceOf(AbortSignal)
-    expect(params.parentAbortSignal?.aborted).toBe(false)
+    expect(params.signal).toBeInstanceOf(AbortSignal)
+    expect(params.signal?.aborted).toBe(false)
     expect(params.prompt).toBe(renderHookPrompt('Body.', TRIGGER, { ...payload }))
   })
 
@@ -349,7 +354,7 @@ describe('宿主规则：去重、跳过、模型', () => {
       expect(gate.gates).toHaveLength(2)
     })
     expect(h.skips()).toEqual([])
-    expect(gate.gates.map((g) => g.params.parentSessionId)).toEqual(['s1', 's2'])
+    expect(gate.gates.map((g) => g.params.sessionId)).toEqual(['s1', 's2'])
     for (const g of gate.gates) g.release()
     await h.waitEnd(2)
   })
@@ -452,7 +457,7 @@ describe('超时、中止与监控面', () => {
     expect(h.ends()).toEqual([
       expect.objectContaining({ type: 'end', ok: false, error: 'timed out after 20ms' })
     ])
-    expect(h.call().parentAbortSignal?.aborted).toBe(true)
+    expect(h.call().signal?.aborted).toBe(true)
     expect(h.warns()).toEqual([expect.stringContaining('timed out')])
     expect(h.runner.runningCount()).toBe(0)
 
@@ -484,7 +489,7 @@ describe('超时、中止与监控面', () => {
     // 让模型解析落定 → start → 计时器挂上 → runTask 被调
     await vi.advanceTimersByTimeAsync(0)
     expect(h.runTask).toHaveBeenCalledTimes(1)
-    const signal = h.call().parentAbortSignal!
+    const signal = h.call().signal!
 
     await vi.advanceTimersByTimeAsync(DEFAULT_HOOK_TIMEOUT_MS - 1)
     expect(signal.aborted).toBe(false)
@@ -520,7 +525,7 @@ describe('超时、中止与监控面', () => {
     h.runner.fire(TRIGGER, promptPayload())
     await h.waitEnd()
     await new Promise((resolve) => setTimeout(resolve, 60))
-    expect(h.call().parentAbortSignal?.aborted).toBe(false)
+    expect(h.call().signal?.aborted).toBe(false)
     expect(h.events.map((e) => e.type)).toEqual(['start', 'end'])
     expect(h.ends()[0].ok).toBe(true)
   })
@@ -534,7 +539,7 @@ describe('超时、中止与监控面', () => {
     h.runner.fire(TRIGGER, promptPayload())
     await h.waitEnd()
     expect(h.ends()).toEqual([expect.objectContaining({ ok: true })])
-    expect(h.call().parentAbortSignal?.aborted).toBe(false)
+    expect(h.call().signal?.aborted).toBe(false)
   })
 
   it('HR-19 abortSession 只中止该会话名下的 run 并返回中止数；被中止的 end 为 aborted', async () => {
@@ -559,8 +564,7 @@ describe('超时、中止与监控面', () => {
     const signalOf = (description: string, sessionId: string): AbortSignal | undefined =>
       h.runTask.mock.calls
         .map(([p]) => p)
-        .find((p) => p.description === description && p.parentSessionId === sessionId)
-        ?.parentAbortSignal
+        .find((p) => p.description === description && p.sessionId === sessionId)?.signal
 
     expect(h.runner.abortSession('s1')).toBe(2)
     expect(signalOf('A', 's1')?.aborted).toBe(true)

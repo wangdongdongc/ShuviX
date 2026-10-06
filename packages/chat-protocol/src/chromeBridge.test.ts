@@ -14,7 +14,9 @@
  *   CB-19      七种消息形状的分片往返（打乱顺序）
  *   CB-20      isBridgeMessage 只认 type
  *   CB-21      chromeBridgeSocketPath：POSIX 与 Windows named pipe
- *   CB-22      CHROME_PANEL_CHANNEL_PATHS 钉死 —— 多一条就是给侧边栏多开一个口子
+ *   CB-22      CHROME_PANEL_CHANNEL_PATHS 钉死 —— 多一条就是给侧边栏多开一个口子（P3-09-01：17 条，
+ *              加了 continue / withdrawQueued / sync.invoke，没有「下一轮」）
+ *   CB-36      DesktopEventMap 的 `sync.frame`：`{sessionId, frame}`（P3-09，SW 按 sessionId 路由）
  *   CB-23~32   组装器的三道上限（片数 / 组数 / 总字符数）与额度记账：边界、淘汰顺序、四条丢弃路径
  *              都要把额度退回来、重复片只算一次、几 MB 的正常消息照样过、坏 data 既不抛也不投毒
  *   CB-33/34   地址是**读**出来的：地址文件的位置；Windows 管道名里的随机后缀（POSIX 无视它）
@@ -27,7 +29,7 @@
  * 上限用例真的要占内存：**只造一个** 4 MiB 的字符串，各片存的都是同一个引用（`parts` 存引用、
  * 不复制），而且**永远不让超大的组收齐** —— `parts.join('')` 才是真正会分配的那一下。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import {
   BRIDGE_ERROR_ALREADY_CONNECTED,
   BRIDGE_ERROR_DESKTOP_OFFLINE,
@@ -48,7 +50,8 @@ import {
   isBridgeMessage,
   splitBridgeMessage,
   type BridgeChunk,
-  type BridgeMessage
+  type BridgeMessage,
+  type DesktopEventMap
 } from './chromeBridge'
 
 const MAX = CHROME_NATIVE_MESSAGE_MAX_BYTES
@@ -146,8 +149,8 @@ const sampleEvent = (text: string): BridgeMessage => ({
 })
 
 describe('Chrome 桥协议：常量', () => {
-  it('CB-1 协议版本 1；宿主名合 Chrome 的命名规则；上限 1 MB；标签组颜色恰是 Chrome 的九种、不重复；线上错误码', () => {
-    expect(CHROME_BRIDGE_PROTOCOL).toBe(1)
+  it('CB-1 协议版本 2（P3-09 PIN-13：侧边栏改走视图同步）；宿主名合 Chrome 的命名规则；上限 1 MB；标签组颜色恰是 Chrome 的九种、不重复；线上错误码', () => {
+    expect(CHROME_BRIDGE_PROTOCOL).toBe(2)
     expect(CHROME_BRIDGE_HOST_NAME).toBe('com.shuvix.chrome_bridge')
     // Chrome 对原生消息宿主名的要求：小写字母、数字、下划线，点分段，不以点开头 / 结尾、不连点
     expect(CHROME_BRIDGE_HOST_NAME).toMatch(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/)
@@ -936,14 +939,15 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
     }
   })
 
-  it('CB-22 CHROME_PANEL_CHANNEL_PATHS 恰是这 15 条（顺序也钉）；文件、斜杠命令、朗读、子会话、设置、改模型之类一概不在', () => {
+  it('CB-22 / P3-09-01 CHROME_PANEL_CHANNEL_PATHS 恰是这 17 条（顺序也钉，PIN-22）；文件、斜杠命令、朗读、子会话、设置、改模型、下一轮之类一概不在', () => {
     expect([...CHROME_PANEL_CHANNEL_PATHS]).toEqual([
       'agent.init',
       'agent.prompt',
       'agent.steer',
       'agent.followUp',
-      'agent.nextTurn',
       'agent.abort',
+      'agent.continue',
+      'agent.withdrawQueued',
       'agent.respondToInput',
       'session.getById',
       'message.list',
@@ -952,9 +956,13 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
       'tools.list',
       'tools.presentations',
       'tools.definitions',
-      'shuvixMd.validate'
+      'shuvixMd.validate',
+      'sync.invoke'
     ])
+    expect(CHROME_PANEL_CHANNEL_PATHS).toHaveLength(17)
     expect(new Set(CHROME_PANEL_CHANNEL_PATHS).size).toBe(CHROME_PANEL_CHANNEL_PATHS.length)
+    // 重开侧边栏仍要读整段历史
+    expect(CHROME_PANEL_CHANNEL_PATHS).toContain('message.list')
 
     const paths: readonly string[] = CHROME_PANEL_CHANNEL_PATHS
     for (const path of paths) expect(path).not.toMatch(/^(files|mentions|tts|settings)\./)
@@ -970,10 +978,32 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
       'agent.destroy',
       'session.list',
       'session.create',
-      'session.updateEnabledTools'
+      'session.updateEnabledTools',
+      // 「下一轮」这一档已从产品里去掉（Q-P3-09）
+      'agent.nextTurn'
     ]) {
       expect(paths).not.toContain(path)
     }
+  })
+
+  it('CB-36 DesktopEventMap 有 sync.frame：{sessionId, frame}（SW 按 sessionId 送给挂着那条会话的侧边栏）', () => {
+    expectTypeOf<DesktopEventMap['sync.frame']>().toEqualTypeOf<{
+      sessionId: string
+      frame: unknown
+    }>()
+    expectTypeOf<keyof DesktopEventMap>().toEqualTypeOf<'chat.event' | 'app.event' | 'sync.frame'>()
+    // 线上就是一条普通事件：分片照常、组装照常
+    const frame = {
+      target: { kind: 'session', sessionId: 's1' },
+      subscriptionId: 'x#1',
+      update: {}
+    }
+    const event: BridgeMessage = {
+      type: 'event',
+      name: 'sync.frame',
+      params: { sessionId: 's1', frame } satisfies DesktopEventMap['sync.frame']
+    }
+    expect(isBridgeMessage(JSON.parse(JSON.stringify(event)))).toBe(true)
   })
 })
 

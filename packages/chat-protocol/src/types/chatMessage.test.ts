@@ -1,8 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, expectTypeOf } from 'vitest'
 import {
   isBackgroundCall,
   isShellCommandDetails,
   toolResultImage,
+  type AssistantMessage,
+  type AssistantMeta,
+  type AssistantToolBlock,
+  type ChatMessage,
+  type ErrorEventMessage,
   type ToolResultDetails,
   type ToolResultImage
 } from './chatMessage'
@@ -75,5 +80,57 @@ describe('isShellCommandDetails / isBackgroundCall —— 两个命令工具同�
       isBackgroundCall({ type: 'ssh', background: true } as unknown as ToolResultDetails)
     ).toBe(false)
     expect(isBackgroundCall(undefined)).toBe(false)
+  })
+})
+
+/** P3-01 · phase 3 的消息模型增补：重试提示、落盘位置、错误行的重试槽位 */
+describe('P3-01 · ChatMessage additions', () => {
+  it('P3-01-04 AssistantMeta.retried and AssistantToolBlock.spill are optional; ids stay strings (Q-P3-01)', () => {
+    expectTypeOf<AssistantMeta['retried']>().toEqualTypeOf<
+      { count: number; lastError: string } | undefined
+    >()
+    expectTypeOf<AssistantToolBlock['spill']>().toEqualTypeOf<{ path: string } | undefined>()
+    expectTypeOf<ChatMessage['id']>().toEqualTypeOf<string>()
+    // 不带新字段的旧形状照样成立
+    const plain: AssistantMessage = {
+      id: '1',
+      sessionId: 's',
+      role: 'assistant',
+      type: 'message',
+      blocks: [{ type: 'tool', toolCallId: 'c1', toolName: 'read', args: {}, result: 'ok' }],
+      content: '',
+      model: 'm',
+      createdAt: 0,
+      metadata: { usage: { input: 1, output: 1, total: 2 } }
+    }
+    const hinted: AssistantMessage = {
+      ...plain,
+      blocks: [{ type: 'tool', toolCallId: 'c1', toolName: 'read', spill: { path: '/p' } }],
+      metadata: { retried: { count: 2, lastError: '503' } }
+    }
+    expect(plain.metadata?.retried).toBeUndefined()
+    expect(hinted.metadata?.retried?.count).toBe(2)
+  })
+
+  it('P3-01-05 ErrorEventMessage.metadata is {retried?} | null (PIN-01); null literals still compile', () => {
+    expectTypeOf<ErrorEventMessage['metadata']>().toEqualTypeOf<{
+      retried?: { count: number; lastError: string }
+    } | null>()
+    const legacy: ErrorEventMessage = {
+      id: 'e',
+      sessionId: 's',
+      role: 'system_notify',
+      type: 'error_event',
+      content: 'boom',
+      model: '',
+      createdAt: 0,
+      metadata: null
+    }
+    const folded: ErrorEventMessage = {
+      ...legacy,
+      metadata: { retried: { count: 10, lastError: '503' } }
+    }
+    expect(legacy.metadata).toBeNull()
+    expect(folded.metadata?.retried).toEqual({ count: 10, lastError: '503' })
   })
 })

@@ -4,7 +4,7 @@
  * 与 agent 运行时绑定而非与会话绑定：monitor 列表里出现 `agentId === sessionId` 的 root
  * entry（根 agent 在首轮消息时才创建）才渲染，新会话看不到它。名字是档案 md 的显示名
  * （`shuvix-displayName`，没写回落档案名），档案名放在悬停提示里。相位灯与 AgentMonitorPanel
- * 的 PHASE_DOT 同一套语义：非 idle 绿色脉冲，idle 灰色。
+ * 同一套「在跑」语义：turn / compaction 绿色脉冲；idle 与 interrupted（停着，等继续）灰色、不脉冲。
  *
  * 两个按钮并排（按钮不能套按钮）：
  *  - 主体：点开右栏 agents tab 并按本会话筛选（rootSessionId 匹配，root 与派生 entry 都入选），
@@ -73,7 +73,9 @@ export function AgentProfileChip({ sessionId }: { sessionId: string }): React.JS
         <span
           data-agent-chip-phase
           className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-            entry.phase === 'idle' ? 'bg-text-tertiary/40' : 'bg-emerald-500 animate-pulse'
+            entry.phase === 'turn' || entry.phase === 'compaction'
+              ? 'bg-emerald-500 animate-pulse'
+              : 'bg-text-tertiary/40'
           }`}
         />
         <span data-agent-chip-name className="truncate max-w-[120px]">

@@ -6,6 +6,10 @@
  *  - `tabSession.open`：取（没有就建）这个标签页的会话，并把本连接绑成它的前端；
  *  - `channel.call`：单会话对话接口（白名单 + 归属核对，见 channel.ts）；
  *  - `panel.appearance`：侧边栏跟着桌面的主题 / 字号 / 语言走。
+ *
+ * 会话内容（消息、流式卡、工具进度、询问）经视图同步到达侧边栏（P3-09）：`channel.call('sync.invoke')`
+ * 把 chord 调用交给 SyncHub（客户端 `chrome:<connId>`），帧经路由传输的 `chrome` 那条（chromeSyncTransport）
+ * 推成桥事件 `sync.frame`。
  */
 import i18next from 'i18next'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
@@ -14,8 +18,15 @@ import { chatFrontendRegistry } from '../core'
 import { appEventBus } from '../../utils/appEventBus'
 import { settingsDao } from '../../dao/settingsDao'
 import { chromeBridge, type BridgeConnection } from '../../services/chromeBridge'
+import { createLogger } from '../../logger'
+import { syncTransport } from '../sync/syncWiring'
 import { ChromeFrontend } from './ChromeFrontend'
 import { callPanelChannel } from './channel'
+import {
+  CHROME_CLIENT_PREFIX,
+  createChromeSyncTransport,
+  forgetAgentRoots
+} from './chromeSyncTransport'
 import {
   closeTabSession,
   connectionOwnsSession,
@@ -83,6 +94,8 @@ function forwardAppEvent(event: AppEvent): void {
   }
 }
 
+const syncLog = createLogger('SyncChrome')
+
 let registered = false
 
 /** 启动时装一次（在 IPC 注册之后、桥服务开始监听之前） */
@@ -99,4 +112,17 @@ export function registerChromeFrontend(): void {
     }
   })
   appEventBus.subscribe(forwardAppEvent)
+  // 视图同步的 Chrome 传输：帧按客户端 id `chrome:<connId>` 找回那条连接推出去（不建 hub —— 它仍在第一次
+  // 同步调用时才建）
+  syncTransport.addRoute(
+    CHROME_CLIENT_PREFIX,
+    createChromeSyncTransport({
+      connections: {
+        byId: (connId) => chromeBridge.connectionById(connId),
+        onClosed: (listener) => chromeBridge.onConnectionClosed(listener)
+      },
+      logger: syncLog
+    })
+  )
+  chromeBridge.onConnectionClosed((conn) => forgetAgentRoots(conn.id))
 }

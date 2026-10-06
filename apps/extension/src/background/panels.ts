@@ -3,8 +3,10 @@
  *
  *  - **开**：点工具栏图标 → 只为**这个**标签页启用并打开侧边栏（全局默认关着，没开过的标签页不显示）。
  *  - **连**：侧边栏页面连一条端口到 SW（名字 `panel:<tabId>`）；SW 把连接状态推给它。
- *  - **转发**：侧边栏的请求原样转给桌面，应答按请求 id 送回；桌面推来的会话事件按会话 id 找到挂着
- *    这条会话的标签页、送给它的侧边栏；应用事件送给所有侧边栏。
+ *  - **转发**：侧边栏的请求原样转给桌面，应答按请求 id 送回；桌面推来的会话事件与视图同步的帧
+ *    （`sync.frame`，P3-09）按会话 id 找到挂着这条会话的标签页、送给它的侧边栏；应用事件送给所有侧边栏。
+ *  - **记账**（P3-09 PIN-11）：每个端口开着的视图订阅记下来；端口断开（侧边栏关了 / 刷新了，标签页还在）
+ *    就替它补发退订，桌面上的订阅与会话钉住随之松开（见 syncTracking.ts）。
  */
 import {
   BRIDGE_ERROR_DESKTOP_OFFLINE,
@@ -13,11 +15,15 @@ import {
 } from '@shuvix/chat-protocol/chromeBridge'
 import { PANEL_PORT_PREFIX, type PanelToWorker, type WorkerToPanel } from '../shared/panelLink'
 import { linkState, onLinkState, sendToDesktop, ensureNativeLink } from './nativeLink'
+import { PortSubscriptions, syncUnsubscribeParams } from './syncTracking'
 
 interface PanelEntry {
   tabId: number
   port: chrome.runtime.Port
 }
+
+/** 端口 → 它开着的视图订阅 */
+const subscriptionsOf = new Map<chrome.runtime.Port, PortSubscriptions>()
 
 /** 标签页 → 它的侧边栏端口 */
 const panels = new Map<number, PanelEntry>()
@@ -57,6 +63,8 @@ export function acceptPanelPort(port: chrome.runtime.Port): void {
   }
   // 同一个标签页的旧端口（页面刷新过）让位
   panels.set(tabId, { tabId, port })
+  const subscriptions = new PortSubscriptions()
+  subscriptionsOf.set(port, subscriptions)
   ensureNativeLink()
   post(port, { kind: 'status', state: linkState() })
 
@@ -71,6 +79,7 @@ export function acceptPanelPort(port: chrome.runtime.Port): void {
       })
       return
     }
+    if (message.method === 'channel.call') subscriptions.observe(message.params)
     const bridgeId = `p${++seq}`
     pending.set(bridgeId, { tabId, port, id: message.id, method: message.method })
     const sent = sendToDesktop({
@@ -93,7 +102,26 @@ export function acceptPanelPort(port: chrome.runtime.Port): void {
   port.onDisconnect.addListener(() => {
     if (panels.get(tabId)?.port === port) panels.delete(tabId)
     for (const [key, entry] of pending) if (entry.port === port) pending.delete(key)
+    subscriptionsOf.delete(port)
+    releaseSubscriptions(subscriptions)
   })
+}
+
+/**
+ * 侧边栏走了、订阅还开着：替它向桌面补发退订（应答没人等 —— 退订本就幂等）。连接没就绪就不发：
+ * 桌面那头的客户端随连接一起没了，订阅早已撤掉
+ */
+function releaseSubscriptions(subscriptions: PortSubscriptions): void {
+  const open = subscriptions.drain()
+  if (linkState() !== 'ready') return
+  for (const { subscriptionId, target } of open) {
+    sendToDesktop({
+      type: 'request',
+      id: `p${++seq}`,
+      method: 'channel.call',
+      params: syncUnsubscribeParams(target, subscriptionId)
+    })
+  }
 }
 
 /** 桌面对某个侧边栏请求的应答 */
@@ -115,18 +143,34 @@ export function deliverResponse(response: BridgeResponse): boolean {
   return true
 }
 
-/** 桌面推来的事件：会话事件给挂着那条会话的侧边栏，应用事件给所有侧边栏 */
+/** 挂着这条会话的侧边栏端口 */
+function portsOfSession(sessionId: unknown): chrome.runtime.Port[] {
+  const out: chrome.runtime.Port[] = []
+  if (typeof sessionId !== 'string') return out
+  for (const [tabId, sid] of sessionOfTab) {
+    if (sid !== sessionId) continue
+    const panel = panels.get(tabId)
+    if (panel) out.push(panel.port)
+  }
+  return out
+}
+
+/**
+ * 桌面推来的事件：会话事件与视图同步的帧给挂着那条会话的侧边栏（没有侧边栏挂着就丢掉），
+ * 应用事件给所有侧边栏
+ */
 export function deliverDesktopEvent(event: BridgeEvent): void {
   if (event.name === 'chat.event') {
     const { sessionId, event: chatEvent } = (event.params ?? {}) as {
       sessionId?: string
       event?: unknown
     }
-    for (const [tabId, sid] of sessionOfTab) {
-      if (sid !== sessionId) continue
-      const panel = panels.get(tabId)
-      if (panel) post(panel.port, { kind: 'chat.event', event: chatEvent })
+    for (const port of portsOfSession(sessionId)) {
+      post(port, { kind: 'chat.event', event: chatEvent })
     }
+  } else if (event.name === 'sync.frame') {
+    const { sessionId, frame } = (event.params ?? {}) as { sessionId?: string; frame?: unknown }
+    for (const port of portsOfSession(sessionId)) post(port, { kind: 'sync.frame', frame })
   } else if (event.name === 'app.event') {
     const appEvent = (event.params as { event?: unknown } | undefined)?.event
     for (const panel of panels.values()) post(panel.port, { kind: 'app.event', event: appEvent })
@@ -139,10 +183,12 @@ export function forgetTab(tabId: number): void {
   sessionOfTab.delete(tabId)
 }
 
-// 连接状态变化推给所有侧边栏；连接断了，挂着的请求一律以「桌面不在」失败
+// 连接状态变化推给所有侧边栏；连接断了，挂着的请求一律以「桌面不在」失败，订阅记账作废（桌面那头的
+// 客户端随连接一起没了；侧边栏在重新就绪时自己重订，PIN-10）
 onLinkState((state) => {
   for (const panel of panels.values()) post(panel.port, { kind: 'status', state })
   if (state !== 'ready') {
+    for (const subscriptions of subscriptionsOf.values()) subscriptions.clear()
     for (const [key, entry] of pending) {
       pending.delete(key)
       post(entry.port, {

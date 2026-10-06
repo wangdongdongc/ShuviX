@@ -3,12 +3,11 @@ import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionRecords } from './sessionRecords'
 import { sessionDayPromptDao } from '../dao/sessionDayPromptDao'
-import { messageService } from './messageService'
 import {
   readSessionRunConfig,
-  addSessionTreePin,
-  appendModelChange,
-  appendThinkingLevelChange
+  recordSessionModel,
+  recordSessionThinkingLevel,
+  isDurableSession
 } from './sessionStorage'
 import { httpLogDao } from '../dao/httpLogDao'
 import { providerDao } from '../dao/providerDao'
@@ -39,22 +38,23 @@ import {
   CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
   BOT_PROFILE_NAME,
-  SessionManager,
   TAB_PROFILE_NAME,
   COEDIT_PROFILE_NAME,
-  WORK_PROFILE_NAME
+  WORK_PROFILE_NAME,
+  toInProcessAgentType,
+  type AgentConfig,
+  type DurableSession
 } from '@shuvix/agent-runtime'
-import {
-  HOST_ONLY_PROFILE_NAMES,
-  clearReviewState,
-  clearSessionDecisions,
-  type SubAgentModelConfig
-} from '@shuvix/agent-runtime'
+import { HOST_ONLY_PROFILE_NAMES, type SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
 import { chromeTabOf, isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
+import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStorageKind'
 import { agentService } from './agentService'
-// 仅在方法体内调用：两个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
-import { AgentSession } from './agentSession'
+// 仅在方法体内调用：几个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
+import { AgentSession, clearAgentScopedState, destroySessionRuntime } from './agentSession'
+import { getSessionHost, peekSessionHost } from './sessionHost'
+import { peekSyncHub } from '../frontend/sync/syncWiring'
+import { effectiveRunState, mirroredAgentLocked } from './sessionMirror'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
 import { resolveProfileModelSpec } from '../agents/agentHost'
 import {
@@ -62,7 +62,6 @@ import {
   broadcastSessionListChanged,
   broadcastSessionTitleChanged
 } from '../utils/sessionConfigBroadcast'
-import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import { registerUserInputParticipant } from './userInputBroker'
 import { createLogger } from '../logger'
 import { deleteSessionArtifacts } from './artifacts/store'
@@ -70,14 +69,25 @@ import { cleanupSession as cleanupSandboxSession } from './sandbox'
 
 const log = createLogger('SessionService')
 
-/** 广播「运行时正在关停 / 已关停」——前端据此显示「正在停止」并拦住发送 */
-function broadcastAgentClosing(sessionId: string, closing: boolean): void {
-  chatFrontendRegistry.broadcast({ type: 'agent_closing', sessionId, closing })
-}
+/** 思考档位的合法值（会话设置里写坏的值按缺省处理，PIN-03） */
+const THINKING_LEVELS: readonly string[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max'
+] satisfies readonly ThinkingLevel[]
 
-/** 广播「运行时已创建」——前端据此把扩展能力勾选切成只读（到 agent_closing{false} 为止） */
-function broadcastAgentCreated(sessionId: string): void {
-  chatFrontendRegistry.broadcast({ type: 'agent_created', sessionId })
+/**
+ * 会话设置里的思考档位 → 合法档位。没设过 / 写坏了 → 按模型能力给缺省：声明了 reasoning 的模型
+ * DEFAULT_THINKING_LEVEL，否则 'off'（与 pi-durable 之前的 resolveInitialThinkingLevel、以及界面
+ * useSessionInit 的口径一致；显式存下的值含 'off' 一律照用）。
+ */
+function sessionThinkingLevel(raw: unknown, reasoning: boolean | undefined): ThinkingLevel {
+  if (typeof raw === 'string' && THINKING_LEVELS.includes(raw)) return raw as ThinkingLevel
+  return reasoning ? DEFAULT_THINKING_LEVEL : 'off'
 }
 
 /**
@@ -104,59 +114,62 @@ function sessionScopedTools(names: readonly string[]): string[] {
 }
 
 /**
- * 会话服务 — 管理会话 CRUD 与 AgentSession 运行时生命周期
+ * 会话服务 — 管理会话 CRUD，以及会话运行时（SessionHost 上的 DurableSession，经 AgentSession 门面）的
+ * 取用 / 销毁。会话存储的打开 / 关闭 / LRU 归 SessionHost（services/sessionHost）；agent 的创建与
+ * agent_created / agent_closing 事件归运行时的锁（第一次发送时创建，K3）。
  */
 export class SessionService {
-  /**
-   * AgentSession 运行时生命周期（Map + 懒创建 + 失效/销毁）由共享 SessionManager 托管；
-   * 构造（resolveSessionAgentContext + AgentSession.create）与清理（invalidate/destroy）经此注入。
-   */
-  private readonly agents = new SessionManager<AgentSession>({
-    create: async (sessionId) => {
-      const ctx = await this.resolveSessionAgentContext(sessionId)
-      if (!ctx) {
-        log.error(`创建 Agent 失败，未找到 session=${sessionId}`)
-        return undefined
-      }
-      const profileName = this.resolveAgentProfileName(sessionId)
-      log.info(`创建 Agent model=${ctx.model} profile=${profileName} session=${sessionId}`)
-      return AgentSession.create({
-        sessionId,
-        provider: ctx.provider,
-        model: ctx.model,
-        capabilities: ctx.capabilities,
-        workingDirectory: ctx.workingDirectory,
-        enabledTools: ctx.enabledTools,
-        modelMetadata: ctx.modelMetadata,
-        profileName
-      })
-    },
-    dispose: async (sessionId, agent, reason) => {
-      // invalidate=回退重建（下次 ensure 重建），destroy/remove=删除会话。
-      // **await**：解绑必须发生在关停之后 —— 见 SessionManager 顶部注释
-      if (reason === 'invalidate') await agent.invalidate()
-      else await agent.destroy()
-      log.info(`移除 AgentSession session=${sessionId} reason=${reason}`)
-    },
-    // 关停可能很久（工具卡住不返回时会一直等），期间会话呈现「正在停止」并拦住发送
-    onClosingChange: (sessionId, closing) => broadcastAgentClosing(sessionId, closing),
-    onCreated: (sessionId) => broadcastAgentCreated(sessionId)
-  })
-
   constructor() {
-    // 会话树共享缓存的逐出保护：有 AgentSession（或创建中）的会话，
-    // 树实例与运行时共享 —— LRU 不得回收，否则读取端会另开分叉实例
-    addSessionTreePin((sessionId) => this.agents.tracked(sessionId))
+    // 后台任务 / 子会话跑完 → 告知该会话（见 deliverNotice）
+    setBgTaskNotifier((sessionId, text) => void this.deliverNotice(sessionId, text))
+  }
 
-    // 后台任务结束 → 告知该会话的 Agent。刻意**不懒建 Agent**：没建过 Agent 的会话
-    // 说明用户根本没在跟它对话，为一条后台通知把整个运行时拉起来不值当
-    setBgTaskNotifier((sessionId, text) => {
-      const agent = this.agents.get(sessionId)
-      if (!agent) return
-      void agent
-        .notify(text)
-        .catch((err) => log.warn(`后台任务通知失败 session=${sessionId}: ${err}`))
-    })
+  /** 主进程唯一的 SessionHost（懒建） */
+  private get host(): ReturnType<typeof getSessionHost> {
+    return getSessionHost()
+  }
+
+  /**
+   * 后台通知送达（PIN-05）：开着的会话直接用，没开就 peek（存储在才打开，**从不创建**）。
+   * 会话有 agent（锁着）→ 门面的 notify（运行时路由：steer / 自动续跑 / 写入 / 推迟）；
+   * 没有 agent → 只写一条通知条目 —— 一条通知不该替一条没人在用的会话创建 agent。
+   */
+  private async deliverNotice(sessionId: string, text: string): Promise<void> {
+    try {
+      await this.deliverNoticeOrThrow(sessionId, text)
+    } catch (err) {
+      log.warn(`后台任务通知失败 session=${sessionId}: ${err}`)
+    }
+  }
+
+  /**
+   * 子会话完成通知送达父会话（P2-10，PIN-13）：与后台通知同一条路（开着的直接用、没开就 peek，
+   * **从不创建**；锁着走门面的 notify，没锁只写一条通知条目），只是带上种类与 requestId
+   * （`subsession-done:<子会话>:<submission>`，重复送达按它去重）。父会话的行已经没了 → 什么都不做。
+   * 送达失败**抛出**：运行时据此留着子会话的 driven-run 标记，下次打开再报。
+   */
+  async deliverSubSessionNotice(parentId: string, text: string, requestId: string): Promise<void> {
+    if (!sessionRecords.pick(parentId, ['id'])) return
+    await this.deliverNoticeOrThrow(parentId, text, { kind: 'sub-session', requestId })
+  }
+
+  private async deliverNoticeOrThrow(
+    sessionId: string,
+    text: string,
+    options?: { kind: string; requestId: string }
+  ): Promise<void> {
+    const session = await this.peekDurableSession(sessionId)
+    if (!session) return
+    if (session.lock) await AgentSession.of(session).notify(text, options)
+    else await session.writeNotice({ text, kind: 'background', ...options })
+  }
+
+  /** 打开着的会话；没开就 peek（存储存在才打开，从不创建；旧格式 / 宿主已封存 → undefined） */
+  private async peekDurableSession(sessionId: string): Promise<DurableSession | undefined> {
+    const open = this.host.get(sessionId)
+    if (open) return open
+    if (!isDurableSession(sessionId)) return undefined
+    return this.host.peek(sessionId)
   }
 
   // ─── DB CRUD ──────────────────────────────────
@@ -166,7 +179,23 @@ export class SessionService {
    * 不是用户的一条会话记录（寿命跟着标签页，见 chromeTabSession.ts）。
    */
   list(): Session[] {
-    return sessionRecords.findAll().filter((s) => !isChromeTabSessionSettings(s.settings))
+    return sessionRecords
+      .findAll()
+      .filter((s) => !isChromeTabSessionSettings(s.settings))
+      .map((s) => this.withEffectiveRunState(s))
+  }
+
+  /**
+   * 运行标记换成界面口径（`effectiveRunState`，P3-12）：镜像 `busy` 而会话没在本进程打开 → `interrupted`。
+   * 只读：宿主还没建就不建（那时没有任何会话开着），不 open / peek，不写行。
+   */
+  private withEffectiveRunState<T extends Session>(session: T): T {
+    const runState = session.settings?.runState
+    if (runState !== 'busy') return session
+    const isOpen = peekSessionHost()?.get(session.id) !== undefined
+    const effective = effectiveRunState(runState, isOpen)
+    if (effective === runState) return session
+    return { ...session, settings: { ...session.settings, runState: effective } }
   }
 
   /**
@@ -182,7 +211,7 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
     return {
-      ...session,
+      ...this.withEffectiveRunState(session),
       workingDirectory: workingDirectoryOf(id, project?.path, session.settings)
     }
   }
@@ -239,9 +268,10 @@ export class SessionService {
   /**
    * 创建新会话。
    *
-   * **不预写模型类运行配置** —— provider / model / thinkingLevel 的唯一事实源是会话树，
-   * 而新会话还没有树。首次 resolveSessionAgentContext 时按「树上没有 → 回落默认」
-   * 解析；用户第一次显式切换才在树上留下 change entry。
+   * **不预写模型类运行配置** —— provider / model / thinkingLevel 存会话设置（`settings.model` /
+   * `settings.thinkingLevel`），新会话还没有设过。首次 resolveSessionAgentContext 时按「设置里没有 →
+   * 回落默认」解析；用户第一次显式切换（或子会话继承父会话）才写下（sessionStorage 的
+   * recordSessionModel / recordSessionThinkingLevel）。
    *
    * 扩展能力勾选（`settings.enabledTools`）则在这里定下来，**恒写键**（空数组也写 —— 缺键
    * 专指改制前的旧会话）：项目会话继承项目保存过的扩展能力（项目没保存过就是空，见
@@ -269,12 +299,26 @@ export class SessionService {
    *
    * `options.coEdit` 标记**协作编辑会话**（须同时给 notebookPath）：根档案由形态推出基座 `coedit`，
    * 文档经 doc_* 工具在编辑窗口的活缓冲上修改。只给根会话；子会话、Chrome 标签页会话忽略。
+   *
+   * `options.id` 由调用方定 id（P2-10 PIN-05，子会话 create 动作的重跑幂等）：同一父会话下已有这一行 →
+   * 原样交回、什么都不写；这个 id 落在别的父会话（或根上）→ 抛错。同样只有主进程能给。
    */
   create(
     params?: SessionCreateParams,
-    options?: { ephemeral?: boolean; workingDirectory?: string; coEdit?: boolean }
+    options?: { ephemeral?: boolean; workingDirectory?: string; coEdit?: boolean; id?: string }
   ): Session {
-    const id = uuidv7()
+    // 调用方给定 id（子会话的 create 动作把它记在工具的 memo 里，崩溃后重跑拿到同一个，P2-10 PIN-05）：
+    // 幂等 —— 同一父会话下已有这一行就原样交回（不再插入、不再广播、勾选不再抄一遍）；落在别处就拒绝
+    if (options?.id !== undefined) {
+      const existing = sessionRecords.findById(options.id)
+      if (existing) {
+        if (existing.parentId !== (params?.parentId ?? null)) {
+          throw new Error(`Session ${options.id} already exists under a different parent`)
+        }
+        return existing
+      }
+    }
+    const id = options?.id ?? uuidv7()
     // Chrome 标签页会话：无项目、无父会话、不是笔记本也不是 bot、不继承任何扩展能力勾选 ——
     // 它的工具全由基座档案 `tab` 声明（含 mcp:chrome），形态推导见 resolveAgentProfileName
     const chromeTab = chromeTabOf(params)
@@ -305,6 +349,8 @@ export class SessionService {
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
       projectId: pid,
       parentId,
+      // 新会话一律用当前版本的存储；建成后不再改（存储换代不迁移旧会话，见 sessionStorageKind.ts）
+      storageKind: CURRENT_SESSION_STORAGE_KIND,
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
@@ -347,7 +393,8 @@ export class SessionService {
    *
    *  - 笔记本会话（settings.notebookPath 非空）恒为 `notebook`
    *    （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）；
-   *  - bot 会话（settings.bot 非空）恒为 `bot`：人设与记忆经 systemContext 注入（见 agentSession）；
+   *  - bot 会话（settings.bot 非空）恒为 `bot`：人设与记忆是根 agent 系统提示词里活的 `bot_profile`
+   *    段落（`shuvix.prompt.bot`，每次请求经 agentHost 的 resolveBotContext 现解析）；
    *  - Chrome 标签页会话（settings.chromeTab）恒为 `tab`；
    *  - 子会话可以带一个父级点名、`pinAgentProfile` 钉下的 `settings.agentProfile`
    *    （如 `coding`）：档案还在就用它。档案是纯 md 驱动的，用户随时可能删掉某个
@@ -368,7 +415,7 @@ export class SessionService {
     // 协作编辑窗口里的笔记本：基座 `coedit`（只经 doc_* 改那份活文档，不握 write / edit）
     if (settings?.notebookPath && settings.coEdit) return COEDIT_PROFILE_NAME
     if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
-    // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆经 systemContext 注入（见 agentSession.create）。
+    // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆是活的 `bot_profile` 段落（agentHost 的 resolveBotContext）。
     // 与笔记本一样按形态推导，没有设置项
     if (isBotSessionSettings(settings)) return BOT_PROFILE_NAME
     const pinned = session?.parentId ? settings?.agentProfile : undefined
@@ -445,7 +492,7 @@ export class SessionService {
     if (profile.model) {
       const resolved = resolveProfileModelSpec(profile.model)
       if (resolved) {
-        await appendModelChange(sessionId, resolved.provider, resolved.model)
+        await recordSessionModel(sessionId, resolved.provider, resolved.model)
         model = resolved
         log.info(`pinAgentProfile 应用档案模型 ${resolved.provider}/${resolved.model}`)
       } else {
@@ -456,7 +503,7 @@ export class SessionService {
     // 思考档位同理作为种子写进树（之后用户可在子会话里改）；档位是枚举值，没有「不可用」一说
     const thinkingLevel = profile.thinkingLevel
     if (thinkingLevel) {
-      await appendThinkingLevelChange(sessionId, thinkingLevel)
+      await recordSessionThinkingLevel(sessionId, thinkingLevel)
       log.info(`pinAgentProfile 应用档案思考档位 ${thinkingLevel}`)
     }
 
@@ -489,14 +536,14 @@ export class SessionService {
    * 改扩展能力勾选（`settings.enabledTools`，整份替换）—— 输入框的工具选择器与会话设置里的
    * 扩展能力共用的唯一写入口。
    *
-   * **只在这条会话没有运行时的时候接受**：勾选只在创建 Agent 那一刻读一次，运行时已存在、
-   * 正在创建或正在关停时改了都不会作用到那个运行时，所以一律拒绝、什么也不写，让前端回拉
-   * 真实状态。判据用 `tracked` 而不是 `has`：`ensure` 同步登记创建在途，之后到来的写入都落在
-   * 这个窗口里被拒 —— 不会出现「勾选落库了、运行时却是按旧勾选建的」。
+   * **只在这条会话没有 agent 的时候接受**：勾选只在创建 agent 那一刻读一次，锁住期间（含销毁在途）
+   * 改了不会作用到那个 agent，所以一律拒绝、什么也不写，让前端回拉真实状态（判据 hasAgentRuntime：
+   * 打开着的会话看运行时的锁，没开着看 DB 里的锁镜像）。创建在途的那一小段窗口里的写入照样接受
+   * （PIN-12）—— 它不影响正在创建的 agent，下一次创建生效。
    */
   updateEnabledTools(id: string, enabledTools: readonly string[]): boolean {
     if (!sessionRecords.pick(id, ['id'])) return false
-    if (this.agents.tracked(id)) {
+    if (this.hasAgentRuntime(id)) {
       log.info(`拒绝修改扩展能力：会话已有运行时 session=${id}`)
       return false
     }
@@ -554,21 +601,29 @@ export class SessionService {
     // 后台任务是会话资源：必须在下面 rm tool_results 之前杀掉，否则进程还活着写一个已删目录。
     // 放在关停运行时**之前**：run 可能正等着某个后台任务，先杀掉才不会把关停一直吊着
     killBySession(id)
-    // 再清理运行时 AgentSession（dispose 触发 destroy）。等它彻底停下才继续删数据 ——
-    // 否则一个还在跑的 run 会往刚被删掉的会话文件/结果目录里继续写
-    await this.agents.remove(id, 'destroy')
-    // 内置能力服务器（inproc MCP）的寿命绑**会话**，不绑运行时实例 —— 回退重建（invalidate）
-    // 时故意留着，ssh 的 control socket / browser 的 tab 不该被一次重建白白掐断。所以释放写在
-    // 这里而不是 agent 的 dispose 钩子上：那个钩子在「运行时已先被 invalidate 掉」时根本不跑
-    // （SessionManager.remove 没有实例就提前返回），连接会变成谁也关不掉的孤儿。
-    // 放在 agents.remove 之后：还在跑的 run 可能正调着它的工具。
+    // 父会话驱动着、此刻正在跑的那一轮：先照常中止（落定为用户停掉的 aborted），再删 —— 关停中的会话不报
+    // driven 落定，直接删的话父会话永远等不到这一轮的结果（P2-12 PIN-06：删除 = 中止，通知照常走一条）。
+    // 前台驱动的那次调用自己会收到落定，通知照旧被抑制
+    const driven = this.getAgentSession(id)
+    if (driven?.drivenRun && driven.isStreaming) {
+      try {
+        await driven.abort()
+      } catch (err) {
+        log.warn(`删除前中止被驱动的那一轮失败 session=${id}: ${err}`)
+      }
+    }
+    // 再关停运行时并删掉会话存储（SessionHost 关它 —— 忙就中止、等它彻底停下 —— 再删文件；会话没开过
+    // 也照样删文件），连同桌面侧的会话状态（hook 派发的 run、fileTime、决策日志、审查计数、沙箱钉子）。
+    // 等它彻底停下才继续删数据 —— 否则一个还在跑的 run 会往刚被删掉的结果目录里继续写
+    await destroySessionRuntime(id)
+    // 视图同步：会话本身没了（不是清空）—— 撤下它的视图（前端收到 unavailable），之后再订阅它 →
+    // service_not_found（P3-05 PIN-07：存储已删、行还在；hub 没建过就没有订阅，不建）
+    peekSyncHub()?.deleteSession(id)
+    // 内置能力服务器（inproc MCP）的寿命绑**会话**，不绑 agent —— 销毁 agent（芯片上的 X）时故意留着，
+    // ssh 的 control socket / browser 的 tab 不该被一次重建白白掐断。所以释放写在这里。
+    // 放在关停运行时之后：还在跑的 run 可能正调着它的工具。
     await mcpService.closeSession(id)
-    // 安全模块的会话内存（决策日志、审查计数与卡片反馈）：同上，destroy 在运行时已先被
-    // invalidate 掉时不会跑，这里兜住（重复清理无害）
-    clearSessionDecisions(id)
-    clearReviewState(id)
-    // 再清理持久化数据
-    messageService.clear(id)
+    // 再清理持久化数据（会话存储已随上面的关停删掉）
     httpLogDao.deleteBySessionId(id)
     // 未开 PRAGMA foreign_keys，session_day_prompts 的 ON DELETE CASCADE 不会触发
     sessionDayPromptDao.deleteBySessionId(id)
@@ -600,19 +655,60 @@ export class SessionService {
     cleanupSandboxSession(id)
   }
 
-  // ─── AgentSession 运行时管理 ──────────────────
+  // ─── 会话运行时（SessionHost + AgentSession 门面） ──────────────────
 
-  /** 获取指定 session 的 AgentSession（不创建） */
+  /** 此刻打开着的会话的门面（不打开、不创建） */
   getAgentSession(sessionId: string): AgentSession | undefined {
-    return this.agents.get(sessionId)
+    const session = this.host.get(sessionId)
+    return session ? AgentSession.of(session) : undefined
   }
 
   /**
-   * 这条会话此刻有没有运行时（含正在创建 / 正在关停）。模型与扩展能力勾选都只在创建 Agent
-   * 那一刻读一次，两处写入口（agent.setModel / updateEnabledTools）据这一位拒绝运行期的改动。
+   * 打开着的会话的门面；没开就 peek（存储在才打开，从不创建）。给「会话没开着也要作用到它的 agent」
+   * 的调用方用（锁着的会话改思考档位）。
+   */
+  async peekAgentSession(sessionId: string): Promise<AgentSession | undefined> {
+    const session = await this.peekDurableSession(sessionId)
+    return session ? AgentSession.of(session) : undefined
+  }
+
+  /**
+   * 这条会话此刻有没有 agent（锁）。打开着的会话以运行时的锁为准；没开着就读 DB 里的锁镜像
+   * （`settings.agentLocked`，每次打开都对账）。模型与扩展能力勾选都只在创建 agent 那一刻读一次，
+   * 两处写入口（agent.setModel / updateEnabledTools）据这一位拒绝锁住期间的改动。
+   * 创建在途的那一小段窗口里改动照样接受（PIN-12）：它们不影响正在创建的那个 agent。
    */
   hasAgentRuntime(sessionId: string): boolean {
-    return this.agents.tracked(sessionId)
+    const session = this.host.get(sessionId)
+    if (session) return session.lock !== undefined
+    return mirroredAgentLocked(sessionId)
+  }
+
+  /**
+   * 创建 agent 那一刻读的会话配置（SessionHost 的 resolveAgentConfig seam）：形态推导的基座档案
+   * （resolveAgentProfileName）、扩展能力勾选（滤掉此刻不可用的；旧会话补键）、模型选择（没选过 →
+   * 默认 provider / 模型，与界面同一口径；都没有 → 不给，运行时拒绝创建）、思考档位（没设过 / 写坏 →
+   * 缺省，PIN-03）、工作目录。会话不存在 → 抛错。
+   */
+  async resolveAgentConfig(sessionId: string): Promise<AgentConfig> {
+    const ctx = await this.resolveSessionAgentContext(sessionId)
+    if (!ctx) throw new Error(`Session ${sessionId} does not exist`)
+    const profileName = this.resolveAgentProfileName(sessionId)
+    const profile = toInProcessAgentType(
+      agentService.getProfile(profileName) ?? agentService.getProfile(WORK_PROFILE_NAME)!
+    )
+    return {
+      profile,
+      toolOverlay: ctx.enabledTools,
+      ...(ctx.provider && ctx.model
+        ? { model: { provider: ctx.provider, modelId: ctx.model } }
+        : {}),
+      thinkingLevel: sessionThinkingLevel(
+        ctx.modelMetadata.thinkingLevel,
+        ctx.capabilities.reasoning
+      ),
+      cwd: ctx.workingDirectory
+    }
   }
 
   /** 解析会话的 Agent 上下文元信息（provider/model/能力/工作目录/启用工具/项目），不创建 AgentSession。
@@ -634,16 +730,15 @@ export class SessionService {
     // 扩展能力勾选在会话设置里（创建会话时定下，创建 Agent 时读这一次）
     const selectedTools = this.sessionEnabledTools(sessionId)
 
-    // 模型类运行配置的唯一事实源是会话树：model_change / thinking_level_change entry
+    // 模型类运行配置的唯一事实源是会话设置：settings.model / settings.thinkingLevel
     const tree = await readSessionRunConfig(sessionId)
     const provider = tree.provider ?? this.getDefaultProvider()
     const model = tree.model ?? this.getDefaultModel()
-    const thinkingLevel = tree.thinkingLevel ?? DEFAULT_THINKING_LEVEL
-
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const capabilities: ModelCapabilities = modelRow?.capabilities
       ? JSON.parse(modelRow.capabilities)
       : {}
+    const thinkingLevel = sessionThinkingLevel(tree.thinkingLevel, capabilities.reasoning)
     const project = session.projectId
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
@@ -689,10 +784,10 @@ export class SessionService {
     }
     return {
       success: true,
-      // created = 此刻有运行时（含正在创建 / 正在关停；init 本身不创建）—— 与扩展能力写入口
-      // updateEnabledTools 的拒绝条件（tracked）同一口径，前端的只读态据此打底：窗口刷新时
-      // 一个卡在关停里的运行时，相关事件早已错过，只能靠这一位
-      created: this.agents.tracked(sessionId),
+      // created = 此刻有 agent（锁；init 本身不打开会话、不创建）—— 与扩展能力写入口
+      // updateEnabledTools 的拒绝条件（hasAgentRuntime）同一口径，前端的只读态据此打底：
+      // 窗口刷新时相关事件早已错过，只能靠这一位
+      created: this.hasAgentRuntime(sessionId),
       provider: ctx.provider,
       model: ctx.model,
       capabilities: ctx.capabilities,
@@ -705,19 +800,18 @@ export class SessionService {
   }
 
   /**
-   * 懒创建并返回指定 session 的 AgentSession（已存在直接返回）。
-   * 首次发送消息 / 压缩 / 其它需要运行时 Agent 的操作调用；session 不存在返回 undefined。
-   * 构造逻辑见 SessionManager 的 create 注入（resolveSessionAgentContext + AgentSession.create）。
-   *
-   * 上一个运行时尚未关停完时**会等**（一个会话只允许一个运行时），期间前端显示「正在停止」。
+   * 打开（必要时创建存储）指定会话并返回门面。**只打开，不创建 agent** —— agent 在第一次发送时由
+   * 运行时创建（K3）。会话不存在、旧格式（只读）、宿主已封存（退出中）→ undefined，什么都不建。
+   * 关停中的同一会话会先等它关完（一条会话同一时刻只有一个 Harness）。
    */
-  ensureAgentSession(sessionId: string): Promise<AgentSession | undefined> {
-    return this.agents.ensure(sessionId)
-  }
-
-  /** 该会话的运行时是否正在关停（前端「正在停止」态的权威来源） */
-  isAgentClosing(sessionId: string): boolean {
-    return this.agents.isClosing(sessionId)
+  async ensureAgentSession(sessionId: string): Promise<AgentSession | undefined> {
+    if (!isDurableSession(sessionId) || this.host.sealed) return undefined
+    try {
+      return AgentSession.of(await this.host.open(sessionId))
+    } catch (err) {
+      log.warn(`打开会话失败 session=${sessionId}: ${err instanceof Error ? err.message : err}`)
+      return undefined
+    }
   }
 
   /**
@@ -728,6 +822,9 @@ export class SessionService {
    * 要复制的是父会话跑起来是什么样，而父会话大多数键根本没显式改过 —— 只抄显式值，
    * 一条从没切过模型的父会话就会把「继承」变成「什么也没继承」。
    * 扩展能力勾选不在这里：它是 settings 的键，子会话在 create 里直接抄父会话的。
+   *
+   * 也是 hook run 没锁时的模型选择（hookService 的 `hookRunModel`）：档位要带上 —— hook 派出的 agent 与任何
+   * 派发一样继承会话的档位，想不思考就在它的 agent md 里声明 `shuvix-thinking`。
    */
   async resolveRunConfig(sessionId: string): Promise<{
     model: SubAgentModelConfig | null
@@ -745,37 +842,42 @@ export class SessionService {
   }
 
   /**
-   * 会话当前的模型与思考档位（hook 派发的回落源）。
-   * 会话不存在或没有可用模型返回 null —— 调用方（run()）报「无可用模型」。
-   *
-   * 档位要带上：hook 派出的 agent 与任何派发一样继承会话的档位，想不思考就在它的 agent md 里
-   * 声明 `shuvix-thinking`。只给模型的话，manager 会补缺省 'off' —— 等于宿主替每个 hook agent
-   * 悄悄关掉了思考，而档案里的声明（titler 的 off）也就无从生效与否。
+   * 销毁这条会话的 agent（agent 芯片上的 X、钉档案、清空之前；下一次发送按那时的配置重建）。
+   * 会话没开着也作用到它（peek：存储在才打开，从不创建；旧格式不碰）。**返回的 Promise 落定时 agent
+   * 已经停下并解锁**（忙 / 被中断的先中止）—— 调用方 await 之后再动会话。桌面侧随 agent 的状态
+   * （fileTime、沙箱钉子）不论有没有 agent 都清。
    */
-  async resolveRunModelConfig(sessionId: string): Promise<SubAgentModelConfig | null> {
-    const config = await this.resolveRunConfig(sessionId)
-    if (!config?.model) return null
-    return { ...config.model, thinkingLevel: config.thinkingLevel as ThinkingLevel }
+  async invalidateAgent(sessionId: string): Promise<void> {
+    const session = await this.peekDurableSession(sessionId).catch((err: unknown) => {
+      log.warn(`打开会话失败 session=${sessionId}: ${err}`)
+      return undefined
+    })
+    if (session) await AgentSession.of(session).invalidate()
+    else clearAgentScopedState(sessionId)
   }
 
   /**
-   * 关停并解绑指定 session 的 Agent（回退/切档案时使用，下次 ensure 会重建）。
-   * **返回的 Promise 落定时旧运行时保证不会再写会话树** —— 调用方必须 await 之后
-   * 再动会话树（moveTo / append），否则就会退回「两个 run 抢同一个叶子」的老问题。
+   * 运行时**自己**销毁了 agent 之后（回退 fork：`rollbackTo` 校验过目标才停下、解锁，P3-10b PIN-03），
+   * 补上桌面侧随 agent 的那一份清理（fileTime 的「已读」记录）—— 运行时的销毁不管它。不碰会话、不碰锁。
    */
-  invalidateAgent(sessionId: string): Promise<void> {
-    return this.agents.remove(sessionId, 'invalidate')
+  clearAgentScopedState(sessionId: string): void {
+    clearAgentScopedState(sessionId)
   }
 
   // ─── 用户输入 ──────────────────────────────────
 
   /**
-   * 此刻活着的 AgentSession —— 供 broker 的参与方按 requestId 找归属。
+   * 此刻打开着的会话的门面 —— 供 broker 的参与方按 requestId 找归属（询问挂在打开着的会话上）。
    *
    * 响应入口本身在 `userInputBroker`：那里同时握着请求与答复两个方向。
    */
-  liveAgentSessions(): Iterable<AgentSession> {
-    return this.agents.values()
+  liveAgentSessions(): AgentSession[] {
+    const sessions: AgentSession[] = []
+    for (const sessionId of this.host.openSessionIds()) {
+      const session = this.getAgentSession(sessionId)
+      if (session) sessions.push(session)
+    }
+    return sessions
   }
 
   // ─── private ──────────────────────────────────
@@ -813,8 +915,8 @@ export const sessionService = new SessionService()
 /**
  * 有根 agent 的会话由这里认领。
  *
- * `claims` 问的是「此刻有没有活着的运行时」而不是「这条会话记录存不存在」—— 询问要送到
- * 的是内存里那个 AgentSession 的 pendingInputs，运行时不在就没有可送达的地方。
+ * `claims` 问的是「此刻这条会话开着没有」而不是「这条会话记录存不存在」—— 询问要送到的是
+ * 打开着的那个 DurableSession 的挂起询问，会话没开就没有可送达的地方。
  */
 registerUserInputParticipant({
   name: 'session',
@@ -825,11 +927,21 @@ registerUserInputParticipant({
     if (!agent) return Promise.reject(new Error(`Session ${sessionId} is not active`))
     return agent.requestUserInput(request)
   },
-  respond: (requestId, response) => {
+  respond: (requestId, response, meta) => {
     // 遍历而不是按 sessionId 索引：requestId 才是全局唯一的那个 —— 拿调用方以为的
     // sessionId 去选会话，等于把前端的判断当成真相
     for (const session of sessionService.liveAgentSessions()) {
-      if (session.respondToInput(requestId, response)) return true
+      const claimed =
+        meta === undefined
+          ? session.respondToInput(requestId, response)
+          : session.respondToInput(requestId, response, meta)
+      if (claimed) {
+        // 审计（PIN-20）：谁答了哪条、答的是哪一类 —— 从不记应答内容（文本 / 凭证）
+        log.info(
+          `ask answered session=${session.sessionId} requestId=${requestId} by=${meta?.clientId ?? 'unknown'} kind=${response.kind}`
+        )
+        return true
+      }
     }
     return false
   }

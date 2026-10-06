@@ -1,8 +1,19 @@
 import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
-import { useCallback, useState } from 'react'
-import { useChatStore, pendingPromptMessage } from '../stores/chatStore'
+import { useCallback, useRef, useState } from 'react'
+import { useChatStore, pendingPromptMessage, selectSessionViewOf } from '../stores/chatStore'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+
+type ChatStoreState = ReturnType<typeof useChatStore.getState>
+
+/**
+ * 这条会话能不能回退 / 重新生成（P3-10b PIN-07）：读它视图的 `capabilities.rollback`（P3-08 接缝）。
+ * 旧格式（只读）与「还没有存储」的 none 视图都是 false；还没收到视图 → 与 none 视图同口径，不给入口。
+ */
+export function selectRollbackCapable(state: ChatStoreState, sessionId: string | null): boolean {
+  if (!sessionId) return false
+  return selectSessionViewOf(sessionId)(state)?.capabilities.rollback === true
+}
 
 /** useChatActions 返回值类型 */
 export interface UseChatActionsReturn {
@@ -16,6 +27,11 @@ export interface UseChatActionsReturn {
   cancelRollback: () => void
   /** 重新生成最近一次助手回复 */
   handleRegenerate: (assistantMsgId: string) => Promise<void>
+  /**
+   * 这条会话能不能回退 / 重新生成（PIN-07：视图能力 `rollback` 为 false —— 旧格式 / 没有存储 —— 时不给
+   * 这两个入口）。调用方据此决定传不传 onRollback / onRegenerate。
+   */
+  canRollback: boolean
   /**
    * 统一的"用户输入响应"入口。
    * 命令询问 / 选择题 / SSH 凭证 / 其它反馈都通过该方法路由。
@@ -52,13 +68,14 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     if (!host) return // 渠道端只读：不可回退历史
     const rollbackContent = target.content
     const rollbackTokens = target.metadata?.inlineTokens
-    // 会话树回退到该用户消息之前（append-only：旧分支保留在树上）
-    await host.message.rollback({
+    // 当前对话换成该用户消息之前的 fork（旧分支留在存储里）。列表不重拉：回退后的消息经视图同步推过来
+    const { success } = await host.message.rollback({
       sessionId: activeSessionId,
       messageId: pendingRollbackId
     })
-    const msgs = await getSessionChannelApi().message.list(activeSessionId)
-    store.setMessages(msgs)
+    // 什么都没回退（目标已不在当前对话里 / 旧格式会话）：不回填草稿（PIN-02）
+    if (!success) return
+    // 回退销毁了 agent：init 只读地刷新 created，扩展能力选择器据此解锁（PIN-06）
     await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
     // 将用户消息重建为输入框草稿（含内联 Token 恢复），便于编辑后重新发送。
     // 直接回填裸 content 会让 {{shuvixInlineToken}} 标记失去 metadata → token 失效丢信息，
@@ -71,10 +88,13 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     setPendingRollbackId(null)
   }, [])
 
+  /** 重新生成在途（回退 + 重发整段）：连点两下只做一次（PIN-07） */
+  const regeneratingRef = useRef(false)
+
   /** 重新生成最近一次助手回复（回退到用户消息前 + 重发） */
   const handleRegenerate = useCallback(
     async (assistantMsgId: string) => {
-      if (!activeSessionId) return
+      if (!activeSessionId || regeneratingRef.current) return
       const store = useChatStore.getState()
       const idx = store.messages.findIndex((m) => m.id === assistantMsgId)
       // 向前查找最近的 user/text 消息
@@ -93,29 +113,37 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       if (!userMsgId) return
       const host = getHostApi()
       if (!host) return // 渠道端只读：不可重新生成（会删历史）
-      // 会话树回退到该用户消息之前
-      await host.message.rollback({ sessionId: activeSessionId, messageId: userMsgId })
-      // 重新拉取消息 + 重建 Agent
-      const msgs = await getSessionChannelApi().message.list(activeSessionId)
-      store.setMessages(msgs)
-      await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
-      // 重新发送（后端统一持久化用户消息）；透传原消息的内联 Token，
-      // 否则含 {{shuvixInlineToken}} 标记的消息会以裸标记发给 LLM 且新落库消息丢失 metadata
-      // 回退把那条用户消息从列表里拿掉了，重发又要等后端落库才回来 —— 先用乐观占位顶上
-      store.touchSessionActive(activeSessionId)
-      store.setPendingPrompt(
-        activeSessionId,
-        pendingPromptMessage(activeSessionId, lastUserText, { inlineTokens: lastUserTokens })
-      )
+      regeneratingRef.current = true
       try {
-        await getSessionChannelApi().agent.prompt({
+        // 当前对话换成该用户消息之前的 fork；列表不重拉，回退后的消息经视图同步推过来
+        const { success } = await host.message.rollback({
           sessionId: activeSessionId,
-          text: lastUserText,
-          inlineTokens: lastUserTokens
+          messageId: userMsgId
         })
+        // 什么都没回退：不重发（PIN-02）—— 否则一次过期的点击会把那句话再发一遍
+        if (!success) return
+        // 回退销毁了 agent：init 只读地刷新 created（PIN-06）
+        await getSessionChannelApi().agent.init({ sessionId: activeSessionId })
+        // 重新发送（后端统一持久化用户消息）；透传原消息的内联 Token，
+        // 否则含 {{shuvixInlineToken}} 标记的消息会以裸标记发给 LLM 且新落库消息丢失 metadata
+        // 回退把那条用户消息从列表里拿掉了，重发又要等后端落库才回来 —— 先用乐观占位顶上
+        store.touchSessionActive(activeSessionId)
+        store.setPendingPrompt(
+          activeSessionId,
+          pendingPromptMessage(activeSessionId, lastUserText, { inlineTokens: lastUserTokens })
+        )
+        try {
+          await getSessionChannelApi().agent.prompt({
+            sessionId: activeSessionId,
+            text: lastUserText,
+            inlineTokens: lastUserTokens
+          })
+        } finally {
+          // 与 InputArea 同一条纪律：占位只在这里收尾，不由 error 事件撤
+          useChatStore.getState().setPendingPrompt(activeSessionId, null)
+        }
       } finally {
-        // 与 InputArea 同一条纪律：占位只在这里收尾，不由 error 事件撤
-        useChatStore.getState().setPendingPrompt(activeSessionId, null)
+        regeneratingRef.current = false
       }
     },
     [activeSessionId]
@@ -134,7 +162,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
         requestId,
         response
       })
-      // 后端 resolve 后会广播 input_request_resolved → store 自动移除该 pending,无需本地手动清理
+      // 询问落定后视图里就没有它了 → store 自动移除该 pending,无需本地手动清理
     },
     [activeSessionId]
   )
@@ -149,12 +177,15 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
     useChatStore.getState().setActiveSessionId(session.id)
   }, [])
 
+  const canRollback = useChatStore((s) => selectRollbackCapable(s, activeSessionId))
+
   return {
     handleRollback,
     pendingRollbackId,
     confirmRollback,
     cancelRollback,
     handleRegenerate,
+    canRollback,
     handleInputResponse,
     handleNewChat
   } satisfies UseChatActionsReturn

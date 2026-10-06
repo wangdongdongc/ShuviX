@@ -1,7 +1,15 @@
-import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
+import type {
+  AgentInitResult,
+  AgentRuntimeInfo,
+  ThinkingLevel,
+  WithdrawQueuedResult
+} from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import type { SubmitErrorCode } from '@shuvix/agent-runtime'
+import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { DriveOptions } from '../../services/agentSession'
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -22,42 +30,63 @@ export interface ChatGateway {
   /**
    * 发一条用户消息并等整轮结束。返回 `{error}` = **没发出去**（最典型：会话正忙，
    * pi 拒 busy）——调用方必须能把它与「发出去了但没回话」区分开，子会话的驱动方
-   * 正是靠这个报错而不是假装排队。
+   * 正是靠这个报错而不是假装排队。`code` 是运行时给的分类（busy / no_model / model_error / closed …），
+   * 会话打不开时没有。
    */
   prompt(
     sessionId: string,
     text: string,
-    images?: Array<{ type: 'image'; data: string; mimeType: string }>
-  ): Promise<{ error?: string }>
+    images?: Array<{ type: 'image'; data: string; mimeType: string }>,
+    inlineTokens?: Record<string, InlineToken>,
+    /** 子会话的驱动方（主进程内）专用：幂等键 + driven-run 标记（P2-10）；IPC 从不带它 */
+    drive?: DriveOptions
+  ): Promise<{ error?: string; code?: SubmitErrorCode }>
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void
   /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
   followUp(sessionId: string, text: string): void
-  /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
-  nextTurn(sessionId: string, text: string): void
+  /**
+   * 撤回一条排着的用户输入（P3-11）：只对打开着的会话（不打开、不 peek）；`submissionId` 不是正的安全整数、
+   * 会话没打开、句柄已关 → `not_found`（PIN-14）
+   */
+  withdrawQueued(sessionId: string, submissionId: number): Promise<WithdrawQueuedResult>
 
   /** 中止当前生成（部分内容由 harness 自行落成 entry，无需回传消息） */
   abort(sessionId: string): Promise<{ success: boolean }>
+
+  /**
+   * 继续被中断的工作（上个进程退出时正在跑的那一轮，P3-12），等它落定。只取打开着的会话、没开就 peek
+   * （存储在才打开，**从不创建**，PIN-16）；没有可打开的会话（不存在 / 旧格式 / 退出中）→ `{}`。
+   * 空闲且没被中断 → 运行时的严格无操作，`{}`。失败原样上交（`{ error, code }`）。
+   */
+  continue(sessionId: string): Promise<{ error?: string; code?: SubmitErrorCode }>
 
   // ─── 交互响应 ─────────────────────────────────
 
   /**
    * 统一的"用户输入响应"入口。
    * 命令询问 / 选择题 / SSH 凭证 / 用户取消都通过该方法路由到对应的挂起 Promise。
+   * 返回是否有人认领（先到者胜）；没人认领什么也不广播 —— 询问的卡片跟着视图走（P3-08）。
+   * `meta.clientId` = 答题方（审计用，PIN-20）。
    */
-  respondToInput(sessionId: string, requestId: string, response: InputResponse): void
+  respondToInput(
+    sessionId: string,
+    requestId: string,
+    response: InputResponse,
+    meta?: { clientId?: string }
+  ): boolean
 
   // ─── 运行时调整 ────────────────────────────────
 
   /**
-   * 切换模型：往会话树追加 model_change entry。**只在会话没有 Agent 运行时的时候接受** ——
+   * 切换模型：写会话设置 `settings.model`（recordSessionModel）。**只在会话没有 Agent 运行时的时候接受** ——
    * 模型与扩展能力一样只在创建 Agent 那一刻读一次；运行时已存在 / 正在创建 / 正在关停时
    * 什么也不写、返回 false。想换模型先 `destroyAgent`。
    */
   setModel(sessionId: string, provider: string, model: string): Promise<boolean>
 
-  /** 设置思考深度（同上，落 thinking_level_change entry） */
+  /** 设置思考深度（写会话设置 `settings.thinkingLevel`，recordSessionThinkingLevel） */
   setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void>
 
   // 注：没有 setEnabledTools —— 扩展能力勾选是会话设置，只在 Agent 未创建时可改
@@ -82,12 +111,11 @@ export interface ChatGateway {
   clearMessages(sessionId: string): Promise<void>
 
   /**
-   * 回退到指定消息之前，使 Agent 失效。
-   *
-   * entry 树是 append-only：这里做的是把 leaf 移到目标 entry 的父节点，
-   * 被"删掉"的分支仍在树上。旧的 deleteFromMessage 与之语义重合，已合并掉。
+   * 回退到指定消息之前（P3-10b）：运行时把当前对话换成目标之前的 fork（旧分支留在存储里、不再可见），
+   * 合格时顺带销毁 agent。真的回退了 → true；没有可回退的目标（旧格式会话、id 不是条目 id、目标不在当前
+   * 对话里 / 不是用户消息）→ false，什么都不动（在跑的 run 照常跑）。
    */
-  rollbackMessage(sessionId: string, messageId: string): Promise<void>
+  rollbackMessage(sessionId: string, messageId: string): Promise<boolean>
 
   // ─── 资源操作 ──────────────────────────────────
 

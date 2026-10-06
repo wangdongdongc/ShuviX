@@ -22,6 +22,7 @@ import {
 } from '@shuvix/chat-protocol/registryNotes'
 import type { CdpClient } from './cdp'
 import { sleep, until } from './cdp'
+import { syncProbe } from './sync'
 import type { FakeRequest, FakeTurn } from './fakeProvider'
 import type { E2EApp } from './launch'
 
@@ -291,6 +292,27 @@ export async function seedFakeProvider(
   )
 }
 
+/** `ensureDefaultModel` 种的占位提供商指向这里：discard 端口，从不被连 —— ensure 不发任何请求 */
+export const PLACEHOLDER_PROVIDER_URL = 'http://127.0.0.1:9/v1'
+export const PLACEHOLDER_MODEL = 'e2e-placeholder-model'
+
+/**
+ * 隔离实例里要有一个默认模型（P3-06 PIN-01）：durable 的锁在**没有可用模型时拒绝创建 agent**（K4），所以
+ * `agent.getInfo(sid, { ensure: true })` 在一个什么提供商都没种的全新实例上答 null。幂等：已经有默认提供商
+ * （`seedFakeProvider` 种过、或之前调过它）就什么都不做；否则经 `seedFakeProvider` 种一个指向
+ * `PLACEHOLDER_PROVIDER_URL` 的占位提供商并设为默认。只给「建 agent、读快照、不发消息」的用例用：
+ * 真要发消息的用例照旧先 `seedFakeProvider` 接上 `startFakeProvider()`。
+ */
+export async function ensureDefaultModel(main: CdpClient): Promise<void> {
+  const current = await main.eval<unknown>(`window.api.settings.get('general.defaultProvider')`)
+  if (typeof current === 'string' && current.trim() !== '') return
+  await seedFakeProvider(main, {
+    baseUrl: PLACEHOLDER_PROVIDER_URL,
+    modelId: PLACEHOLDER_MODEL,
+    name: 'E2E Placeholder'
+  })
+}
+
 /**
  * 开关命令沙箱（`sandbox.enabled`，缺省开）。
  *
@@ -374,34 +396,74 @@ export function removeRetiredPolicy(app: Pick<E2EApp, 'home'>, name: RetiredPoli
  * 隔离实例带着全套出厂策略（`ask-on-command` 对每条不在沙箱里的命令问、`ask-on-external-path`
  * 对家目录里会话目录以外的读、会话目录以外的写问），而 e2e 里没人看着：不装它的话，任何触发
  * 询问的用例都会挂到超时。
- * 装在渲染端（`agent.onEvent` → `agent.respondToInput`），走的是用户点按钮的同一条 IPC。
+ *
+ * P3-08 起询问不再是 ChatEvent：它在会话视图的 `asks` 里（PIN-21）。放行器在 spec 进程里轮询视图
+ * （`harness/sync.ts` 的探针），答复走用户点按钮的同一条 IPC（`agent.respondToInput`）。盯哪些会话：
+ *  - `sessions` 里给的；
+ *  - 页面收到 `ask_count > 0` 的会话（任何会话 —— 子会话、没在界面上打开的会话都算，PIN-01 的计数余项）。
+ * 派生 agent 的询问挂在它的根会话上，跟着根会话一起盯到。
  *
  * 想**故意**测「没人回答」的那条路径就别装它（或用 `only` 只放行一部分）。
  */
 export async function installAutoAllow(
   main: CdpClient,
-  opts?: { only?: (command: string) => boolean }
+  opts?: { only?: (command: string) => boolean; sessions?: string[] }
 ): Promise<void> {
-  const filter = opts?.only ? `(${opts.only.toString()})` : '(() => true)'
-  await main.eval(
+  const fresh = await main.eval<boolean>(
     `(() => {
-      if (window.__e2eAutoAllow) return true
+      if (window.__e2eAutoAllow) return false
       window.__e2eAutoAllow = []
+      window.__e2eAskSessions = []
       window.api.agent.onEvent((ev) => {
-        if (ev.type !== 'input_request') return
-        const req = ev.request
-        const command = req.command ?? req.question ?? ''
-        if (!${filter}(command)) return
-        window.__e2eAutoAllow.push(command)
-        window.api.agent.respondToInput({
-          sessionId: ev.sessionId,
-          requestId: req.id,
-          response: { kind: req.kind, allowed: true, selections: [] }
-        })
+        if (ev.type === 'ask_count' && ev.count > 0) window.__e2eAskSessions.push(ev.sessionId)
       })
       return true
     })()`
   )
+  if (!fresh) return
+  const only = opts?.only ?? (() => true)
+  const probe = syncProbe(main)
+  await probe.install()
+  const watched = new Set(opts?.sessions ?? [])
+  const answered = new Set<string>()
+  let stopped = false
+  const tick = async (): Promise<void> => {
+    const pending = await main.eval<string[]>(`(window.__e2eAskSessions ?? []).splice(0)`)
+    for (const id of pending) watched.add(id)
+    for (const sessionId of watched) {
+      const view = await probe.viewOf(sessionId).catch(() => undefined)
+      for (const req of view?.asks ?? []) {
+        if (answered.has(req.id)) continue
+        const command =
+          (req as { command?: string }).command ?? (req as { question?: string }).question ?? ''
+        if (!only(command)) continue
+        answered.add(req.id)
+        await main.eval(
+          `(() => {
+            window.__e2eAutoAllow.push(${JSON.stringify(command)})
+            return window.api.agent.respondToInput(${JSON.stringify({
+              sessionId,
+              requestId: req.id,
+              response: { kind: req.kind, allowed: true, selections: [] }
+            })})
+          })()`
+        )
+      }
+    }
+  }
+  const loop = async (): Promise<void> => {
+    while (!stopped) {
+      try {
+        await tick()
+      } catch {
+        // 实例停了（CDP 断开）：放行器跟着停
+        stopped = true
+        return
+      }
+      await sleep(60)
+    }
+  }
+  void loop()
 }
 
 /**
@@ -633,6 +695,32 @@ export function eventRecorder(main: CdpClient): EventRecorder {
   }
 }
 
+/**
+ * 某会话录到的询问**挂起次数**（P3-08：询问不再是 ChatEvent —— 从 `ask_count` 余项的**上升**里数：
+ * 计数从 n 涨到 m 就是挂起了 m − n 条）。只数 recorder 缓冲里的（`clear()` 之后重新数）；给了 `since`
+ * （`mark()` 取得）就只数那之后的 —— 起点时这条会话的计数须为 0（上一轮的询问都已落定）。
+ */
+export async function asksRaisedIn(
+  events: EventRecorder,
+  sessionId: string,
+  since?: number
+): Promise<number> {
+  const recorded =
+    since === undefined
+      ? await events.all<RecordedEvent & { count?: number }>()
+      : await events.allSince<RecordedEvent & { count?: number }>(since)
+  const counts = recorded
+    .filter((e) => e.type === 'ask_count' && e.sessionId === sessionId)
+    .map((e) => e.count ?? 0)
+  let previous = 0
+  let raised = 0
+  for (const count of counts) {
+    if (count > previous) raised += count - previous
+    previous = count
+  }
+  return raised
+}
+
 export interface ProjectSeed {
   name: string
   path: string
@@ -720,12 +808,15 @@ export async function createAgentSession(
     /** 绑定一个 bot ⇒ 建出来的是 bot 会话：有根，根档案为基座 bot */
     bot?: string
     /**
-     * 这条会话用哪几个知识库，**在根 Agent 起来之前**写下 —— 缺省是一个都不启用，而
-     * `<knowledge_bases>` 围栏在创建 Agent 那一刻定型，所以要围栏的用例必须先把选择放好。
+     * 这条会话用哪几个知识库，**在根 Agent 起来之前**写下 —— 缺省是一个都不启用。
+     * `<knowledge_bases>` 是活段落（pi-durable 起改选择即生效，KBF-E-4），先放好只是让返回的
+     * systemPrompt 一上来就带着围栏。
      */
     knowledgeBases?: string[]
   } = {}
 ): Promise<{ sid: string; systemPrompt: string }> {
+  // 没有默认模型时 ensure 建不出 agent（PIN-01）
+  await ensureDefaultModel(main)
   return main.eval(
     `(async () => {
       const s = await window.api.session.create(${JSON.stringify({
@@ -826,6 +917,266 @@ export function sqlite(home: string, sql: string, opts: { json?: boolean } = {})
 export function sqliteJson<T = Record<string, unknown>>(home: string, sql: string): T[] {
   const out = sqlite(home, sql, { json: true }).trim()
   return out ? (JSON.parse(out) as T[]) : []
+}
+
+/** 旧格式转写里的一次已完成调用（`seedLegacyTranscript`） */
+export interface LegacyToolCall {
+  id: string
+  /** 写进转写的工具名（旧时代的名字：退役的 `browser` / `database` …） */
+  name: string
+  arguments: Record<string, unknown>
+  result: string
+  isError?: boolean
+}
+
+/**
+ * 把一条**建了但从没打开过**的会话改成切换前的旧格式（`harness-v3-jsonl`，只读）会话：写一份
+ * pi 0.80 harness 的 v3 会话树到 `sessions/<id>.jsonl`（头行 + 一条用户消息 + 一条带 `calls` 的
+ * assistant + 各自的 toolResult + 收尾文字），再把会话行的 `storageKind` 改回旧值。
+ *
+ * pi-durable 之后不再有东西写 `.jsonl`（P1-01），旧会话只剩「照旧可看」（storage-kind 适配器，
+ * 永不迁移）—— 这就是「旧时代的转写」今天唯一的来路。改库在实例运行时做：会话行每次现读（WAL），
+ * 而视图在第一次订阅时才按存储类型分流，所以必须赶在会话第一次被打开之前。
+ */
+export function seedLegacyTranscript(
+  app: Pick<E2EApp, 'home'>,
+  sessionId: string,
+  turn: { prompt: string; calls: LegacyToolCall[]; closing?: string }
+): void {
+  const t0 = Date.parse('2026-01-01T00:00:00.000Z')
+  let n = 0
+  let parentId: string | null = null
+  const lines: Record<string, unknown>[] = [
+    {
+      type: 'session',
+      version: 3,
+      id: sessionId,
+      timestamp: new Date(t0).toISOString(),
+      cwd: app.home
+    }
+  ]
+  const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }
+  const push = (message: Record<string, unknown>): void => {
+    n += 1
+    const id = `legacy${String(n).padStart(4, '0')}`
+    const ts = t0 + n * 1000
+    lines.push({
+      type: 'message',
+      id,
+      parentId,
+      timestamp: new Date(ts).toISOString(),
+      message: { ...message, timestamp: ts }
+    })
+    parentId = id
+  }
+  const assistant = { api: 'openai-completions', provider: 'e2e', model: 'e2e-legacy', usage }
+  push({ role: 'user', content: [{ type: 'text', text: turn.prompt }] })
+  push({
+    role: 'assistant',
+    content: turn.calls.map((c) => ({
+      type: 'toolCall',
+      id: c.id,
+      name: c.name,
+      arguments: c.arguments
+    })),
+    ...assistant,
+    stopReason: 'toolUse'
+  })
+  for (const c of turn.calls) {
+    push({
+      role: 'toolResult',
+      toolCallId: c.id,
+      toolName: c.name,
+      content: [{ type: 'text', text: c.result }],
+      isError: c.isError === true
+    })
+  }
+  push({
+    role: 'assistant',
+    content: [{ type: 'text', text: turn.closing ?? 'done' }],
+    ...assistant,
+    stopReason: 'stop'
+  })
+  const file = join(app.home, 'userdata', 'data', 'sessions', `${sessionId}.jsonl`)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  sqlite(
+    app.home,
+    `UPDATE sessions SET storageKind = 'harness-v3-jsonl' WHERE id = ${sqlLit(sessionId)}`
+  )
+  const kind = sqlite(app.home, `SELECT storageKind FROM sessions WHERE id = ${sqlLit(sessionId)}`)
+  expect(kind.trim(), `storageKind of ${sessionId}`).toBe('harness-v3-jsonl')
+}
+
+/** 隔离实例里一条会话的旧格式转写文件（`<home>/userdata/data/sessions/<id>.jsonl`） */
+export function legacyTranscriptPathOf(home: string, sessionId: string): string {
+  return join(home, 'userdata', 'data', 'sessions', `${sessionId}.jsonl`)
+}
+
+/** 隔离实例里一条新格式会话的存储文件（`<home>/userdata/data/sessions/<id>.sqlite`） */
+export function durableStoragePathOf(home: string, sessionId: string): string {
+  return join(home, 'userdata', 'data', 'sessions', `${sessionId}.sqlite`)
+}
+
+/**
+ * 旧格式转写里的一步（`seedLegacySteps`）：
+ *  - `user`        一条用户消息；
+ *  - `calls`       一条只带工具调用的 assistant（stopReason toolUse）+ 各自的 toolResult —— 投影成一个工具块；
+ *  - `text`        一条以文字收尾的 assistant（stopReason stop）；
+ *  - `error`       一条 stopReason 'error' 的 assistant（errorMessage）—— 投影成一行错误（`error_event`）；
+ *  - `compaction`  一条压缩 entry，`firstKeptEntryId` 指向第一条消息 —— 之前的消息全都留在上下文里，
+ *                  投影在最前面多出一张压缩摘要卡（`isCompactionSummary`）。
+ */
+export type LegacyStep =
+  | { kind: 'user'; text: string }
+  | { kind: 'calls'; calls: LegacyToolCall[] }
+  | { kind: 'text'; text: string }
+  | { kind: 'error'; message: string }
+  | { kind: 'compaction'; summary: string; tokensBefore?: number }
+
+/**
+ * 按 `steps` 写一份 pi 0.80 harness 的 v3 会话树到 `sessions/<id>.jsonl`，再把会话行的 `storageKind`
+ * 改回旧值（`harness-v3-jsonl`）；回文件路径。`seedLegacyTranscript` 的通用版本：同一个头行、同一套
+ * entry 形状，只是步骤可以任意组合（压缩、错误行这些旧会话真会有的东西）。
+ *
+ * 实例停着（`stop({ keepHome: true })` 之后）或运行着都能用：只写文件 + 系统 sqlite3 直改库。运行时改的话，
+ * 须赶在会话第一次被打开之前（视图在第一次订阅时才按存储类型分流）。
+ */
+export function seedLegacySteps(
+  app: Pick<E2EApp, 'home'>,
+  sessionId: string,
+  steps: LegacyStep[]
+): string {
+  const t0 = Date.parse('2026-01-01T00:00:00.000Z')
+  let n = 0
+  let parentId: string | null = null
+  let firstMessageId: string | null = null
+  const lines: Record<string, unknown>[] = [
+    {
+      type: 'session',
+      version: 3,
+      id: sessionId,
+      timestamp: new Date(t0).toISOString(),
+      cwd: app.home
+    }
+  ]
+  const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }
+  const assistant = { api: 'openai-completions', provider: 'e2e', model: 'e2e-legacy', usage }
+  const nextId = (): { id: string; ts: number } => {
+    n += 1
+    return { id: `legacy${String(n).padStart(4, '0')}`, ts: t0 + n * 1000 }
+  }
+  const pushMessage = (message: Record<string, unknown>): void => {
+    const { id, ts } = nextId()
+    lines.push({
+      type: 'message',
+      id,
+      parentId,
+      timestamp: new Date(ts).toISOString(),
+      message: { ...message, timestamp: ts }
+    })
+    firstMessageId ??= id
+    parentId = id
+  }
+  for (const step of steps) {
+    if (step.kind === 'user') {
+      pushMessage({ role: 'user', content: [{ type: 'text', text: step.text }] })
+    } else if (step.kind === 'calls') {
+      pushMessage({
+        role: 'assistant',
+        content: step.calls.map((c) => ({
+          type: 'toolCall',
+          id: c.id,
+          name: c.name,
+          arguments: c.arguments
+        })),
+        ...assistant,
+        stopReason: 'toolUse'
+      })
+      for (const c of step.calls) {
+        pushMessage({
+          role: 'toolResult',
+          toolCallId: c.id,
+          toolName: c.name,
+          content: [{ type: 'text', text: c.result }],
+          isError: c.isError === true
+        })
+      }
+    } else if (step.kind === 'text') {
+      pushMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: step.text }],
+        ...assistant,
+        stopReason: 'stop'
+      })
+    } else if (step.kind === 'error') {
+      pushMessage({
+        role: 'assistant',
+        content: [],
+        ...assistant,
+        stopReason: 'error',
+        errorMessage: step.message
+      })
+    } else {
+      const { id, ts } = nextId()
+      lines.push({
+        type: 'compaction',
+        id,
+        parentId,
+        timestamp: new Date(ts).toISOString(),
+        summary: step.summary,
+        firstKeptEntryId: firstMessageId ?? id,
+        tokensBefore: step.tokensBefore ?? 1234
+      })
+      parentId = id
+    }
+  }
+  const file = legacyTranscriptPathOf(app.home, sessionId)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  markSessionLegacy(app.home, sessionId)
+  return file
+}
+
+/** 只把会话行的 `storageKind` 改回旧值（不写转写）—— 旧版本建了、却从没发过消息的那种会话 */
+export function markSessionLegacy(home: string, sessionId: string): void {
+  sqlite(
+    home,
+    `UPDATE sessions SET storageKind = 'harness-v3-jsonl' WHERE id = ${sqlLit(sessionId)}`
+  )
+  const kind = sqlite(home, `SELECT storageKind FROM sessions WHERE id = ${sqlLit(sessionId)}`)
+  expect(kind.trim(), `storageKind of ${sessionId}`).toBe('harness-v3-jsonl')
+}
+
+/**
+ * 把停着的隔离实例的库拨回 v29：`sessions` 去掉 `storageKind` 列（SQLite 的 DROP COLUMN 就是按新形状重建
+ * 这张表），`user_version` 改成 29 —— 下次启动 v30 重跑，每一行都落成默认的旧格式。**只在
+ * `stop({ keepHome: true })` 之后对 e2e 的 HOME 用**。
+ */
+export function rewindSessionsToV29(home: string): void {
+  sqlite(home, 'ALTER TABLE sessions DROP COLUMN storageKind; PRAGMA user_version = 29;')
+  const columns = sqliteJson<{ name: string }>(home, 'PRAGMA table_info(sessions)').map(
+    (c) => c.name
+  )
+  expect(columns, 'sessions columns after the rewind').not.toContain('storageKind')
+  expect(sqlite(home, 'PRAGMA user_version').trim()).toBe('29')
+}
+
+/**
+ * 主进程日志里启动切换的汇总行（`LegacySwitchover` scope：`reset=N deleted=N failed=N`，每次启动恰一条），
+ * 按写入顺序 —— 同一个 HOME 跨几次启动共用一个日志文件，最后一条就是最近这次启动的。
+ */
+export function legacySwitchoverRuns(
+  app: Pick<E2EApp, 'mainLog'>
+): Array<{ reset: number; deleted: number; failed: number; line: string }> {
+  return app
+    .mainLog()
+    .split('\n')
+    .filter((line) => line.includes('LegacySwitchover'))
+    .flatMap((line) => {
+      const m = /reset=(\d+) deleted=(\d+) failed=(\d+)/.exec(line)
+      return m ? [{ reset: Number(m[1]), deleted: Number(m[2]), failed: Number(m[3]), line }] : []
+    })
 }
 
 /**
@@ -1009,17 +1360,49 @@ export async function createPinnedChildSession(
   return sid
 }
 
-/** 发送 prompt 并容忍 LLM 失败（无 API key），等事件落定后返回消息列表 */
+/**
+ * 发送 prompt 并容忍 LLM 失败（无 API key），等用户条目落盘后返回消息列表。
+ *
+ *  - 先 `ensureDefaultModel`：没有可用模型时 durable 的锁不建 agent（P3-06 PIN-01），prompt 当场被拒、
+ *    用户条目根本不落盘；有了占位模型，失败才落在 LLM 那一步（本 helper 一直假定的形状）。
+ *  - `agent.prompt` 在这一轮**落定**时才返回；占位提供商连不上（`bad port`），而连接错误可重试（durable 的
+ *    退避：从 2 s 起翻倍，封顶 60 s），这一轮会挂好几分钟。所以不 await 它：等用户条目出现在 `message.list` 里（或
+ *    prompt 先落定），再给这一轮 1.5 s 自己落定（接了 fake provider 的会话照常跑完），还没落定就
+ *    `agent.abort` 掉并等 prompt 返回 —— 运行时留着（`created` 不变），会话不再忙。
+ */
 export async function promptAndListMessages(
   main: CdpClient,
   sid: string,
   text = 'hi'
 ): Promise<Array<{ content?: unknown; metadata?: Record<string, unknown> }>> {
+  await ensureDefaultModel(main)
+  const key = JSON.stringify(sid)
   await main.eval(
-    `window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} }).catch(() => undefined)`
+    `((window.__e2ePrompts ??= {})[${key}] = window.api.agent
+      .prompt({ sessionId: ${key}, text: ${JSON.stringify(text)} })
+      .catch(() => undefined)
+      .finally(() => ((window.__e2ePromptSettled ??= {})[${key}] = true)), undefined)`
   )
-  await sleep(1500)
-  return main.eval(`window.api.message.list(${JSON.stringify(sid)})`)
+  const landed = async (): Promise<boolean> =>
+    (
+      await main.eval<Array<{ role?: string; content?: unknown }>>(
+        `window.api.message.list(${key})`
+      )
+    ).some((m) => m.role === 'user' && m.content === text)
+  const settled = (): Promise<boolean> =>
+    main.eval<boolean>(`!!window.__e2ePromptSettled?.[${key}]`)
+  await until(
+    async () => (await settled()) || (await landed()),
+    `user entry "${text}" landed (or the prompt settled)`
+  )
+  const done = await main.eval<boolean>(
+    `Promise.race([window.__e2ePrompts[${key}].then(() => true), new Promise((r) => setTimeout(() => r(false), 1500))])`
+  )
+  if (!done) {
+    await main.eval(`window.api.agent.abort(${key})`)
+    await main.eval(`window.__e2ePrompts[${key}]`)
+  }
+  return main.eval(`window.api.message.list(${key})`)
 }
 
 // ─────────────────────────────────────────────────────────────────────────

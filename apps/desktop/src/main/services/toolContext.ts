@@ -32,11 +32,12 @@ import { policyService } from './policyService'
 import {
   createSecurityContext,
   parseAllowEntry,
+  type CallOwner,
   type SecurityContext,
-  type SecurityHostProvider,
-  type SubAgentModelConfig
+  type SecurityHostProvider
 } from '@shuvix/agent-runtime'
 import type { ProjectEnvVar } from '../types'
+import { withCallAgent, type ToolAgentIdentity } from './toolAgent'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import i18next from 'i18next'
 import { createLogger } from '../logger'
@@ -86,37 +87,25 @@ export interface ToolContext {
   /** 工具运行时单向通知（容器、SSH 连接、预览面板等生命周期事件） */
   emitChatEvent?: (event: ChatEventPayload) => void
   /**
-   * 本工具实例所属 agent 的元数据（宿主在 resolveTools 时线程化）：档案名、root/spawned、
-   * 惰性模型配置（会话中途换模型也跟得上）。目前只有知识库的溯源章（`generated.by`）读它；
-   * 缺省 = 未知（主体维度的策略匹配是扩展位，见 getDesktopSecurityContext 的注）。
+   * 本工具实例固定属于的 agent（按 agent 装配的工具才有）。会话级装配的工具（`shuvix.builtin`）
+   * 不带它 —— 它们被同一会话的每个 agent 共用，身份按调用现取（`agentOf` + withCallAgent）。
    */
-  agent?: {
-    profileName: string
-    kind: 'root' | 'spawned'
-    getModelConfig?: () => SubAgentModelConfig
-  }
+  agent?: ToolAgentIdentity
+  /**
+   * 按 durable 对话认出发起调用的 agent（会话级装配时由宿主给；phase 1 = 锁住的根 agent）。
+   * 认不出交回 undefined —— 用的地方落回 `agent`，再落回各自的兜底。别直接读：经 withCallAgent。
+   */
+  agentOf?: (conversationId: number) => ToolAgentIdentity | undefined
+  /**
+   * 命令沙箱钉子（会话级装配时由宿主给：锁里的那一个）。bash 按它决定 schema / 描述 / 套不套沙箱；
+   * 缺省 = 按此刻的全局开关给一份占位（还没有 agent 时的那份内置工具）。
+   */
+  sandboxed?: boolean
 }
 
-function actorToken(value: string | undefined, fallback: string): string {
-  const cleaned = (value ?? '').trim().replace(/\s+/g, '-')
-  return cleaned || fallback
-}
-
-/**
- * 本工具实例所属 agent 的 actor 字符串（OKF §5.2 约定 `<producer>/<version>`）：
- * `shuvix-<profile>/<model>`。模型惰性取 —— 会话中途换模型也跟得上；元数据缺失时回落
- * `shuvix-agent/unknown`：章要盖，但不能编。知识库的 `generated.by` 与提交 trailer 用它。
- */
-export function agentActorOf(ctx: Pick<ToolContext, 'agent'>): string {
-  const profile = actorToken(ctx.agent?.profileName, 'agent')
-  let model: string | undefined
-  try {
-    model = ctx.agent?.getModelConfig?.().model
-  } catch {
-    model = undefined
-  }
-  return `shuvix-${profile}/${actorToken(model, 'unknown')}`
-}
+// 调用方身份的两个纯函数住在 toolAgent.ts（不带任何服务依赖 —— 工具模块与它们的单测直接引那里）
+export { agentActorOf, withCallAgent } from './toolAgent'
+export type { ToolAgentIdentity } from './toolAgent'
 
 /**
  * 检查路径是否在工作目录内（路径越界检查）—— 按**位置**比：两边都先解析成真正通向的地方
@@ -142,10 +131,13 @@ export async function assertReadAllowed(
   toolCallId: string,
   toolName: string,
   absolutePath: string,
-  displayPath?: string
+  displayPath?: string,
+  /** 这次调用的 durable 归属（taskId / conversationId，见 callOwnerOf）；询问与审查按它认人 */
+  owner?: CallOwner
 ): Promise<void> {
   await getDesktopSecurityContext(ctx, () => config).enforcePath('read', absolutePath, {
     toolCallId,
+    ...owner,
     toolName,
     displayPath,
     abortError: TOOL_ABORTED
@@ -194,10 +186,13 @@ export async function assertWriteAllowed(
   toolCallId: string,
   toolName: string,
   absolutePath: string,
-  displayPath?: string
+  displayPath?: string,
+  /** 这次调用的 durable 归属（taskId / conversationId，见 callOwnerOf）；询问与审查按它认人 */
+  owner?: CallOwner
 ): Promise<void> {
   await getDesktopSecurityContext(ctx, () => config).enforcePath('write', absolutePath, {
     toolCallId,
+    ...owner,
     toolName,
     displayPath,
     abortError: TOOL_ABORTED
@@ -379,32 +374,55 @@ export function setPermissionReviewer(reviewer: PermissionReviewer | null): void
 /**
  * 桌面 SecurityContext（PEP 门面，agent 主体）。getConfig 缺省为按 sessionId 动态解析
  * （每次评估现查 —— 会话配置可变）。
- * 主体信息：ctx.agent 在（resolveTools 线程化进来的工具）就报档案名与 root / spawned —— 询问点
- * 的审查靠它认出「审查员自己在要权限」（防递归），审查员的输入也要知道是哪个 agent 在做这件事；
- * 不在（MCP 能力服务器等自建 ctx 的调用点）按 root 上报。sessionId 恒为根会话（派生 agent 的
- * 工具 ctx 也是），会话授权因此对派生 agent 同样生效。
+ * 主体信息：报这个 agent 的档案名与 root / spawned —— 询问点的审查靠它认出「审查员自己在要权限」
+ * （防递归），审查员的输入也要知道是哪个 agent 在做这件事。认不出（调用没带对话、宿主没接 agentOf、
+ * 还没有锁）按 root 上报。内置 MCP 能力服务器同样交上 scope 的 agentOf，并把 `_meta` 里的
+ * taskId / conversationId 并进 opts（P2-07）。sessionId 恒为根会话（派生 agent 的工具 ctx 也是），会话授权
+ * 因此对派生 agent 同样生效。
+ *
+ * ctx 带 `agentOf`（会话级装配的工具，同一会话的每个 agent 共用一份）：每次 enforce 按 opts 里这次
+ * 调用的 `conversationId` 现取主体（withCallAgent）—— 各 PEP 调用点本就把 callOwnerOf(call) 并进了
+ * opts。evaluate / evaluateReadOnly（被动 UI，不带调用）用 ctx 自己的 `agent`。
  */
 export function getDesktopSecurityContext(
-  ctx: Pick<ToolContext, 'sessionId' | 'requestUserInput' | 'agent'>,
+  ctx: Pick<ToolContext, 'sessionId' | 'requestUserInput' | 'agent' | 'agentOf'>,
   getConfig?: () => ProjectConfig
 ): SecurityContext {
   const cfg = getConfig ?? ((): ProjectConfig => resolveProjectConfig(ctx.sessionId))
-  return createSecurityContext(
-    {
-      kind: 'agent',
-      sessionId: ctx.sessionId,
-      agentKind: ctx.agent?.kind ?? 'root',
-      ...(ctx.agent?.profileName ? { profileName: ctx.agent.profileName } : {})
-    },
-    {
-      host: 'desktop',
-      platform: process.platform,
-      get workspaceDir() {
-        return cfg().workingDirectory
-      }
-    },
-    makeDesktopSecurityProvider(ctx, cfg)
-  )
+  const provider = makeDesktopSecurityProvider(ctx, cfg)
+  const contextFor = (agent: ToolAgentIdentity | undefined): SecurityContext =>
+    createSecurityContext(
+      {
+        kind: 'agent',
+        sessionId: ctx.sessionId,
+        agentKind: agent?.kind ?? 'root',
+        ...(agent?.profileName ? { profileName: agent.profileName } : {})
+      },
+      {
+        host: 'desktop',
+        platform: process.platform,
+        get workspaceDir() {
+          return cfg().workingDirectory
+        }
+      },
+      provider
+    )
+  const base = contextFor(ctx.agent)
+  if (!ctx.agentOf) return base
+  const forCall = (opts: { conversationId?: number }): SecurityContext => {
+    const agent = withCallAgent(ctx, opts).agent
+    return agent === ctx.agent ? base : contextFor(agent)
+  }
+  return {
+    evaluate: (action, object, opts) => base.evaluate(action, object, opts),
+    evaluateReadOnly: (action, object, opts) => base.evaluateReadOnly(action, object, opts),
+    enforcePath: (mode, resolvedPath, opts) => forCall(opts).enforcePath(mode, resolvedPath, opts),
+    enforceCommand: (object, opts) => forCall(opts).enforceCommand(object, opts),
+    enforceGitOp: (object, opts) => forCall(opts).enforceGitOp(object, opts),
+    enforceDatabase: (object, opts) => forCall(opts).enforceDatabase(object, opts),
+    enforceUrl: (object, opts) => forCall(opts).enforceUrl(object, opts),
+    enforceInvocation: (opts) => forCall(opts).enforceInvocation(opts)
+  }
 }
 
 /**

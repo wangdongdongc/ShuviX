@@ -23,7 +23,7 @@ import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import { until, type CdpClient } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { waitRendererReady } from '../../harness/seed'
+import { ensureDefaultModel, waitRendererReady } from '../../harness/seed'
 import {
   dbConnectionsPane,
   mcpSettingsPane,
@@ -124,6 +124,7 @@ const reopenDatabaseRow = async (): Promise<void> => {
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   await waitRendererReady(app.main)
   bridge = await startPgBridge()
   settings = await app.openSettings('mcp')

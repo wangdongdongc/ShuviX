@@ -9,7 +9,7 @@
  *
  * 契约本身（接口与协议数据形状）定义在 `@shuvix/chat-protocol/chatApi`，与 ChatEvent /
  * ChatMessage 并列为前↔后端协议的单一来源。Electron 侧通过编译期断言保证 window.api
- * 结构满足该契约（见 apps/desktop/src/preload/chatApiContract.ts），零漂移。
+ * 结构满足该契约（见 apps/desktop/src/renderer/src/host/chatApiContract.ts），零漂移。
  */
 import type { ChatApi, SessionChannelApi, HostApi } from '@shuvix/chat-protocol/chatApi'
 

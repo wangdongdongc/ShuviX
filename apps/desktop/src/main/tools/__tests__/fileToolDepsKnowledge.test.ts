@@ -16,6 +16,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { executeTool, invokeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const state = vi.hoisted(() => ({
   dir: '',
@@ -57,10 +58,6 @@ vi.mock('../../services/toolContext', async () => {
   return {
     resolveProjectConfig: () => ({ workingDirectory: state.dir }),
     getDesktopSecurityContext: makeContext,
-    agentActorOf: (ctx: {
-      agent?: { profileName?: string; getModelConfig?: () => { model?: string } }
-    }): string =>
-      `shuvix-${ctx.agent?.profileName ?? 'agent'}/${ctx.agent?.getModelConfig?.().model ?? 'unknown'}`,
     TOOL_ABORTED: 'Aborted'
   }
 })
@@ -135,7 +132,7 @@ beforeEach(() => {
 describe('桌面文件工具 — 知识库根目录下的写入', () => {
   it('FD-1 write：落盘并盖 generated（actor 取自 ctx.agent）、回执 [OKF] Stamped、变更管线收到 write；edit 收到 edit；库上无策略故不弹卡', async () => {
     const p = join(state.kb, 'projects', 'acme', 'x.md')
-    const res = await makeWriteTool(ctx).execute('w1', { path: p, content: DRAFT })
+    const res = await executeTool(makeWriteTool(ctx), 'w1', { path: p, content: DRAFT })
 
     // 库上没有内置策略：写授权盖着整个临时目录，知识库写与普通写一样不问
     expect(state.requests).toEqual([])
@@ -146,7 +143,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
     expect(state.notify).toHaveBeenCalledWith(p, { kind: 'write', actor: 'shuvix-work/gpt-5' })
 
-    await makeEditTool(ctx).execute('e1', { path: p, oldText: 'body', newText: 'body two' })
+    await executeTool(makeEditTool(ctx), 'e1', { path: p, oldText: 'body', newText: 'body two' })
     await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(2))
     expect(state.notify).toHaveBeenLastCalledWith(p, { kind: 'edit', actor: 'shuvix-work/gpt-5' })
     expect(readFileSync(p, 'utf-8')).toContain('body two')
@@ -155,7 +152,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
 
   it('FD-2 根外的 md：不盖章、无回执、变更管线不收', async () => {
     const p = join(state.dir, 'plain.md')
-    const res = await makeWriteTool(ctx).execute('w2', { path: p, content: DRAFT })
+    const res = await executeTool(makeWriteTool(ctx), 'w2', { path: p, content: DRAFT })
     expect(state.requests).toEqual([])
     expect(readFileSync(p, 'utf-8')).toBe(DRAFT)
     expect(textOf(res)).not.toContain('[OKF]')
@@ -165,7 +162,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
 
   it('FD-3 用户库里的 write / edit 与项目库一样：盖 generated、回执 [OKF] Stamped、变更管线收到 write / edit；不弹卡', async () => {
     const p = join(`${state.kb}-user`, 'notes', 'x.md')
-    const res = await makeWriteTool(ctx).execute('w3', { path: p, content: DRAFT })
+    const res = await executeTool(makeWriteTool(ctx), 'w3', { path: p, content: DRAFT })
 
     expect(state.requests).toEqual([])
     expect(readFileSync(p, 'utf-8')).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
@@ -173,7 +170,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
     expect(state.notify).toHaveBeenCalledWith(p, { kind: 'write', actor: 'shuvix-work/gpt-5' })
 
-    await makeEditTool(ctx).execute('e3', { path: p, oldText: 'body', newText: 'body two' })
+    await executeTool(makeEditTool(ctx), 'e3', { path: p, oldText: 'body', newText: 'body two' })
     await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(2))
     expect(state.notify).toHaveBeenLastCalledWith(p, { kind: 'edit', actor: 'shuvix-work/gpt-5' })
     const after = readFileSync(p, 'utf-8')
@@ -189,7 +186,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
       join(userRoot, '.trash', 'x.md'),
       join(userRoot, 'notes', '.trash', 'x.md')
     ]) {
-      const res = await makeWriteTool(ctx).execute('w4', { path: p, content: DRAFT })
+      const res = await executeTool(makeWriteTool(ctx), 'w4', { path: p, content: DRAFT })
       expect(readFileSync(p, 'utf-8'), p).toBe(DRAFT)
       expect(textOf(res), p).not.toContain('[OKF]')
     }
@@ -205,7 +202,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
   it('FD-5 普通笔记经真实 write / edit：宿主一个字节不改、不回盖章回执，变更管线照常收到', async () => {
     // 没有 frontmatter 的普通笔记
     const plain = join(state.kb, 'projects', 'acme', 'plain.md')
-    const written = await makeWriteTool(ctx).execute('w5', {
+    const written = await executeTool(makeWriteTool(ctx), 'w5', {
       path: plain,
       content: '# Plain\n\nbody\n'
     })
@@ -217,7 +214,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
       actor: 'shuvix-work/gpt-5'
     })
 
-    const edited = await makeEditTool(ctx).execute('e5', {
+    const edited = await executeTool(makeEditTool(ctx), 'e5', {
       path: plain,
       oldText: 'body',
       newText: 'body two'
@@ -233,7 +230,7 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     // 用户库里手写的 index.md：保留名从不盖章，带 type 也一样
     const index = join(`${state.kb}-user`, 'notes', 'index.md')
     const home = '---\ntype: Memory\ntitle: Home\n---\n\n# Home\n'
-    const indexRes = await makeWriteTool(ctx).execute('w6', { path: index, content: home })
+    const indexRes = await executeTool(makeWriteTool(ctx), 'w6', { path: index, content: home })
     expect(readFileSync(index, 'utf-8')).toBe(home)
     expect(textOf(indexRes)).not.toContain('[OKF] Stamped')
     await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(3))
@@ -245,7 +242,10 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     // frontmatter 写坏的普通笔记：只回语法提醒，文件原样
     const broken = join(state.kb, 'projects', 'acme', 'broken.md')
     const brokenText = '---\ntitle: [x\n---\nbody\n'
-    const brokenRes = await makeWriteTool(ctx).execute('w7', { path: broken, content: brokenText })
+    const brokenRes = await executeTool(makeWriteTool(ctx), 'w7', {
+      path: broken,
+      content: brokenText
+    })
     expect(textOf(brokenRes)).toContain('[OKF] Written with warnings')
     expect(textOf(brokenRes)).not.toContain('[OKF] Stamped')
     expect(readFileSync(broken, 'utf-8')).toBe(brokenText)
@@ -262,14 +262,14 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     // 前提：这条路径落在内置 bundle 里（语言那一层就是 bundle 根），不是「不属于任何库」
     expect(locateBundle(p)).toEqual({ bundle: 'builtin/shuvix', rel: 'x.md' })
 
-    const res = await makeWriteTool(ctx).execute('w8', { path: p, content: DRAFT })
+    const res = await executeTool(makeWriteTool(ctx), 'w8', { path: p, content: DRAFT })
 
     // 写确实落盘了（内置库没有拒写策略：见文件头）—— 不是「没写成」所以没盖章
     expect(readFileSync(p, 'utf-8')).toBe(DRAFT)
     expect(textOf(res)).not.toContain('[OKF]')
     expect(state.requests).toEqual([])
 
-    const edited = await makeEditTool(ctx).execute('e8', {
+    const edited = await executeTool(makeEditTool(ctx), 'e8', {
       path: p,
       oldText: 'body',
       newText: 'body two'
@@ -280,8 +280,8 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
 
   it('FD-7 同一次写入不进变更管线：notifyKnowledgeFileChanged 零调用（应用包里的目录没有 git 提交，也没有 knowledge.changed）', async () => {
     const p = join(builtinDir, 'y.md')
-    await makeWriteTool(ctx).execute('w9', { path: p, content: DRAFT })
-    await makeEditTool(ctx).execute('e9', { path: p, oldText: 'body', newText: 'body two' })
+    await executeTool(makeWriteTool(ctx), 'w9', { path: p, content: DRAFT })
+    await executeTool(makeEditTool(ctx), 'e9', { path: p, oldText: 'body', newText: 'body two' })
 
     // 管线模块是动态 import 的：等一拍再判「一次都没来」（与 FD-2 / FD-4 同口径）
     await new Promise((resolve) => setTimeout(resolve, 30))
@@ -292,8 +292,8 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     const builtin = join(builtinDir, 'z.md')
     const user = join(`${state.kb}-user`, 'notes', 'z.md')
 
-    await makeWriteTool(ctx).execute('w10', { path: builtin, content: DRAFT })
-    const res = await makeWriteTool(ctx).execute('w11', { path: user, content: DRAFT })
+    await executeTool(makeWriteTool(ctx), 'w10', { path: builtin, content: DRAFT })
+    const res = await executeTool(makeWriteTool(ctx), 'w11', { path: user, content: DRAFT })
 
     expect(readFileSync(builtin, 'utf-8')).toBe(DRAFT)
     expect(readFileSync(user, 'utf-8')).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
@@ -305,5 +305,121 @@ describe('桌面文件工具 — 知识库根目录下的写入', () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(state.notify).toHaveBeenCalledTimes(1)
     expect(state.requests).toEqual([])
+  })
+})
+
+/**
+ * H11-52（P1-11）—— 会话级装配的文件工具（ctx 带 agentOf、没有固定的 agent）：write / edit 落在库里时，
+ * `generated.by` 与变更管线（notifyKnowledgeFileChanged）的 actor 都按**这次调用**的对话认人。
+ */
+describe('H11-52 文件工具的章按调用盖', () => {
+  it('H11-52 对话 1 是 work / claude-sonnet-4-5、之后换成 bot / m2：write 与 edit 的章和管线 actor 各按自己那次调用', async () => {
+    let current: ToolContext['agent'] = {
+      profileName: 'work',
+      kind: 'root',
+      getModelConfig: () => ({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+        capabilities: {}
+      })
+    }
+    const sessionCtx: ToolContext = { sessionId: 'kb-session', agentOf: () => current }
+    const p = join(state.kb, 'projects', 'acme', 'h11-52.md')
+
+    await invokeTool(
+      makeWriteTool(sessionCtx),
+      { path: p, content: DRAFT },
+      {
+        callId: 'h11-52-w',
+        conversationId: 1
+      }
+    )
+    expect(readFileSync(p, 'utf-8')).toContain('by: "shuvix-work/claude-sonnet-4-5"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
+    expect(state.notify).toHaveBeenLastCalledWith(p, {
+      kind: 'write',
+      actor: 'shuvix-work/claude-sonnet-4-5'
+    })
+
+    current = {
+      profileName: 'bot',
+      kind: 'root',
+      getModelConfig: () => ({ provider: 'anthropic', model: 'm2', capabilities: {} })
+    }
+    await invokeTool(
+      makeEditTool(sessionCtx),
+      { path: p, oldText: 'body', newText: 'body two' },
+      { callId: 'h11-52-e', conversationId: 1 }
+    )
+    expect(readFileSync(p, 'utf-8')).toContain('by: "shuvix-bot/m2"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(2))
+    expect(state.notify).toHaveBeenLastCalledWith(p, { kind: 'edit', actor: 'shuvix-bot/m2' })
+  })
+
+  it('P2-06-15 按对话盖章：对话 2（派生 explore / haiku）写、对话 1（根）改、对话 4（派生但没有模型配置）写 → 各盖各的', async () => {
+    const ROOT: ToolContext['agent'] = {
+      profileName: 'work',
+      kind: 'root',
+      getModelConfig: () => ({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+        capabilities: {}
+      })
+    }
+    const SPAWN_E: ToolContext['agent'] = {
+      profileName: 'explore',
+      kind: 'spawned',
+      callerId: 'sub-a1',
+      getModelConfig: () => ({ provider: 'anthropic', model: 'claude-haiku-4-5', capabilities: {} })
+    }
+    const BARE: ToolContext['agent'] = {
+      profileName: 'explore',
+      kind: 'spawned',
+      callerId: 'sub-x'
+    }
+    const identities: Record<number, ToolContext['agent']> = { 1: ROOT, 2: SPAWN_E, 4: BARE }
+    const sessionCtx: ToolContext = {
+      sessionId: 'kb-session',
+      agentOf: (conversationId) => identities[conversationId]
+    }
+    const p = join(state.kb, 'projects', 'acme', 'p2-06-15.md')
+    const second = join(state.kb, 'projects', 'acme', 'p2-06-15-b.md')
+    const before = state.notify.mock.calls.length
+
+    await invokeTool(
+      makeWriteTool(sessionCtx),
+      { path: p, content: DRAFT },
+      { callId: 'p2-06-15-w', conversationId: 2 }
+    )
+    expect(readFileSync(p, 'utf-8')).toContain('by: "shuvix-explore/claude-haiku-4-5"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(before + 1))
+    expect(state.notify).toHaveBeenLastCalledWith(p, {
+      kind: 'write',
+      actor: 'shuvix-explore/claude-haiku-4-5'
+    })
+
+    await invokeTool(
+      makeEditTool(sessionCtx),
+      { path: p, oldText: 'body', newText: 'body two' },
+      { callId: 'p2-06-15-e', conversationId: 1 }
+    )
+    expect(readFileSync(p, 'utf-8')).toContain('by: "shuvix-work/claude-sonnet-4-5"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(before + 2))
+    expect(state.notify).toHaveBeenLastCalledWith(p, {
+      kind: 'edit',
+      actor: 'shuvix-work/claude-sonnet-4-5'
+    })
+
+    await invokeTool(
+      makeWriteTool(sessionCtx),
+      { path: second, content: DRAFT },
+      { callId: 'p2-06-15-w4', conversationId: 4 }
+    )
+    expect(readFileSync(second, 'utf-8')).toContain('by: "shuvix-explore/unknown"')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(before + 3))
+    expect(state.notify).toHaveBeenLastCalledWith(second, {
+      kind: 'write',
+      actor: 'shuvix-explore/unknown'
+    })
   })
 })

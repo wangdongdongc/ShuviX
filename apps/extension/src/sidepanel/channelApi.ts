@@ -10,8 +10,47 @@
  */
 import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
 import type { ChromePanelChannelPath } from '@shuvix/chat-protocol/chromeBridge'
+import {
+  syncInvokeError,
+  type JsonValue,
+  type SyncChannel,
+  type SyncFrame,
+  type SyncInvokeResult
+} from '@shuvix/chat-protocol/sync'
 import type { PanelLink } from './panelLink'
 import { resolveSelectedTabs, withTabTokens } from './tabSelection'
+
+/** 侧边栏连接里视图同步要的那一点（PanelLink 满足它） */
+type SyncLink = Pick<PanelLink, 'request' | 'onSyncFrame'>
+
+/**
+ * 视图同步的渠道（P3-09）：`invoke` = `channel.call('sync.invoke', [target, call])`，桌面回一个信封
+ * （`SyncInvokeResult`）—— `ok:false` 抛带 `.code` 的 Error（chord 的错误码，如 `service_not_found`）；
+ * 桥这一层的失败（`desktop-offline`、归属核对没过 …）只是一段文本，按 PIN-13 原样当成 `.code`。
+ * `onFrame` 收 SW 转来的 `sync.frame`（只有挂着这条会话的侧边栏收得到）。
+ */
+export function createPanelSyncChannel(link: SyncLink): SyncChannel {
+  return {
+    invoke: async (target, call) => {
+      let envelope: SyncInvokeResult
+      try {
+        envelope = (await link.request('channel.call', {
+          path: 'sync.invoke',
+          args: [target, call]
+        })) as SyncInvokeResult
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        throw syncInvokeError({ code: message, message })
+      }
+      if (!envelope || typeof envelope !== 'object') {
+        throw syncInvokeError({ message: 'ShuviX sent a malformed sync reply.' })
+      }
+      if (envelope.ok) return envelope.value as JsonValue | undefined
+      throw syncInvokeError(envelope.error ?? { message: 'ShuviX reported an error.' })
+    },
+    onFrame: (callback) => link.onSyncFrame((frame) => callback(frame as SyncFrame))
+  }
+}
 
 export function createPanelChannelApi(link: PanelLink): SessionChannelApi {
   const call = <T>(path: ChromePanelChannelPath, ...args: unknown[]): Promise<T> =>
@@ -40,8 +79,9 @@ export function createPanelChannelApi(link: PanelLink): SessionChannelApi {
       subSessionInterrupt: async () => ({ success: false }),
       steer: (params) => call('agent.steer', params),
       followUp: (params) => call('agent.followUp', params),
-      nextTurn: (params) => call('agent.nextTurn', params),
+      withdrawQueued: (params) => call('agent.withdrawQueued', params),
       abort: (sessionId) => call('agent.abort', sessionId),
+      continue: (sessionId) => call('agent.continue', sessionId),
       respondToInput: (params) => call('agent.respondToInput', params),
       onEvent: (callback) =>
         link.onChatEvent((event) => callback(event as Parameters<typeof callback>[0]))
@@ -98,6 +138,7 @@ export function createPanelChannelApi(link: PanelLink): SessionChannelApi {
       speakOnce: async () => {},
       abortTts: async () => {},
       onChunk: () => () => {}
-    }
+    },
+    sync: createPanelSyncChannel(link)
   }
 }

@@ -26,10 +26,10 @@ import {
   installAutoAllow,
   seedFakeProvider,
   waitRendererReady,
-  type EventRecorder,
-  type RecordedEvent
+  type EventRecorder
 } from '../../harness/seed'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import { syncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
 /** E-3 的后台命令：sleep 要长过 bgTaskService 的预热窗口（2s），窗口内退出的按前台形态回话 */
@@ -225,13 +225,11 @@ describe('未落定的调用不进组', () => {
     await chat.ready()
     await chat.typeAndSend('read alpha then write x')
 
-    const request = await events.waitFor<RecordedEvent & { request: { id: string } }>(
-      'input_request',
-      { sessionId: sids.ask }
-    )
+    // 询问在视图里（P3-08）
+    const request = { request: await syncProbe(app.main).nextAsk(sids.ask) }
 
     // 等审批的 write 未落定 → 不进组、把段切开：read 与 write 都是独立可见的行，没有合并行。
-    // read 的 tool_end 与 input_request 谁先到不赌，等它收敛
+    // read 的落定与询问出现谁先到不赌，等它收敛
     const rows = await until(async () => {
       const r = await chat.toolRows()
       return r.length === 2 && r[0].status === 'done' ? r : null
@@ -250,7 +248,7 @@ describe('未落定的调用不进组', () => {
         response: { kind: 'ask', allowed: true }
       })})`
     )
-    await events.waitFor('input_request_resolved', { sessionId: sids.ask })
+    await syncProbe(app.main).waitAskGone(sids.ask, request.request.id)
     await events.waitFor('agent_end', { sessionId: sids.ask })
     await chat.waitIdle()
     expect(readFileSync(target, 'utf8')).toContain('X1')

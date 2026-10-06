@@ -53,7 +53,7 @@ export function Conversation({
   const { t } = useTranslation()
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore(selectIsStreaming)
-  // 正在发送、后端还没落库的那条用户消息（乐观占位；user_message 一到就撤）
+  // 正在发送、后端还没落库的那条用户消息（乐观占位；视图里出现这条用户消息就撤）
   const pendingPrompt = useChatStore(selectPendingPrompt)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   // 悬浮输入卡片高度 → 根容器 CSS 变量（列表 Footer / 空态 padding 引用），避免卡片遮住末尾内容。
@@ -74,8 +74,12 @@ export function Conversation({
     confirmRollback,
     cancelRollback,
     handleRegenerate,
+    canRollback,
     handleInputResponse
   } = useChatActions(sessionId)
+  // PIN-07：会话不能回退（旧格式只读 / 没有存储）就不给回退与重新生成的入口
+  const onRollback = canRollback ? handleRollback : undefined
+  const onRegenerate = canRollback ? handleRegenerate : undefined
 
   // 预构建可见消息列表，messages 不变时复用缓存。
   // 注：被压缩掉的历史不在其中 —— message.list 走 buildContextEntries，自带压缩过滤，
@@ -115,11 +119,11 @@ export function Conversation({
       <MessageRenderer
         item={item}
         lastAssistantId={lastAssistantId}
-        onRollback={handleRollback}
-        onRegenerate={handleRegenerate}
+        onRollback={onRollback}
+        onRegenerate={onRegenerate}
       />
     ),
-    [lastAssistantId, handleRollback, handleRegenerate]
+    [lastAssistantId, onRollback, onRegenerate]
   )
 
   return (

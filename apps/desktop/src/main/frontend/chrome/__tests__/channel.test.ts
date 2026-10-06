@@ -9,9 +9,13 @@
  *     而且在一个 chrome 来源的操作上下文里跑；
  *   - `agent.prompt` 在开跑**之前**把消息里带上的标签页（tab token）此刻所在的站点记为这条会话
  *     已同意的站点：地址向 Chrome 现问（`tabs.get`，5 秒超时），问不到就跳过，发送照常；
- *     steer / followUp / nextTurn 不记任何站点；
- *   - `agent.respondToInput` 只送进这条会话自己的运行时；没人认领就广播 input_request_resolved
- *     把卡片收走 —— 别的会话的 requestId 永远送不到那条会话。
+ *     steer / followUp 不记任何站点；
+ *   - `agent.respondToInput` 只送进这条会话自己的运行时（答题方记成 `chrome:<connId>`，审计用）；没人认领
+ *     什么也不发（卡片跟着视图走，P3-08）—— 别的会话的 requestId 永远送不到那条会话；
+ *   - `agent.continue` / `agent.withdrawQueued`（P3-09-15）：过了归属核对才调网关，回包与 IPC 同形；
+ *   - `sync.invoke`（P3-09-02..05）：目标必须归这条连接（派生 agent 目标按它的根会话核对，认不出的 agent
+ *     与不归它的同一句话）；过了关交给 hub（客户端 `chrome:<connId>`，在 chrome 上下文里），回信封 ——
+ *     hub 的错误码装在信封里，不是桥的一段错误文本。
  *
  * 归属判定用真的 `../tabSessions`（规则住在那里），sessionDao 是一张 pickSettings 的内存表。
  */
@@ -52,7 +56,10 @@ const mocks = vi.hoisted(() => {
     presentations: vi.fn(),
     definitions: vi.fn(),
     grantSite: vi.fn(),
-    pickSettings: vi.fn()
+    pickSettings: vi.fn(),
+    hubInvoke: vi.fn(),
+    resolveAgentOf: vi.fn(),
+    getSyncHub: vi.fn()
   }
 })
 
@@ -80,6 +87,10 @@ vi.mock('../../../services/chromeBridge', () => ({
   existingChromeBrowserState: vi.fn()
 }))
 vi.mock('../../../dao/sessionDao', () => ({ sessionDao: { pickSettings: mocks.pickSettings } }))
+vi.mock('../../sync/syncWiring', () => ({
+  getSyncHub: mocks.getSyncHub,
+  resolveAgentOf: mocks.resolveAgentOf
+}))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -92,8 +103,11 @@ vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
   }
 })
 
+import { createServiceSubscribeCall, createServiceUnsubscribeCall } from '@earendil-works/chord'
 import { validateShuvixMdText } from '@shuvix/agent-runtime'
-import { callPanelChannel, isPanelChannelPath, NOT_YOUR_SESSION } from '../channel'
+import { CHAT_VIEW_SERVICE_ID } from '@shuvix/chat-protocol/sync'
+import { BAD_SYNC_TARGET, callPanelChannel, isPanelChannelPath, NOT_YOUR_SESSION } from '../channel'
+import { agentRootOf, forgetAgentRoots } from '../chromeSyncTransport'
 
 const OWNED = 'tab-owned'
 const OTHER_RUN = 'tab-other-run'
@@ -104,6 +118,11 @@ const CHROME_CTX = (sessionId: string): Ctx => ({
   source: { type: 'chrome', installId: 'i1' },
   sessionId
 })
+
+/** 一次视图订阅 / 退订调用（chord 的服务控制调用） */
+const SUBSCRIBE = createServiceSubscribeCall('tab5.n#1', CHAT_VIEW_SERVICE_ID, 'singleton')
+const UNSUBSCRIBE = createServiceUnsubscribeCall('tab5.n#1')
+const sessionTarget = (sessionId: unknown): unknown => ({ kind: 'session', sessionId })
 
 interface FakeConn {
   id: string
@@ -137,6 +156,7 @@ const allDelegates = (): Array<ReturnType<typeof vi.fn>> => [
   mocks.taskList,
   mocks.presentations,
   mocks.definitions,
+  mocks.hubInvoke,
   vi.mocked(validateShuvixMdText) as unknown as ReturnType<typeof vi.fn>
 ]
 const totalDelegateCalls = (): number =>
@@ -186,11 +206,12 @@ beforeEach(() => {
     prompt: mocks.delegate('prompt', async () => ({})),
     steer: mocks.delegate('steer', () => undefined),
     followUp: mocks.delegate('followUp', () => undefined),
-    nextTurn: mocks.delegate('nextTurn', () => undefined),
     abort: mocks.delegate('abort', async () => ({ aborted: true })),
     listMessages: mocks.delegate('listMessages', async () => [{ id: 'm1' }]),
     getRuntimeStatuses: mocks.delegate('getRuntimeStatuses', () => [{ id: 'rt1' }]),
     listTools: mocks.delegate('listTools', () => [{ name: 'mcp:chrome' }]),
+    continue: mocks.delegate('continue', async () => ({})),
+    withdrawQueued: mocks.delegate('withdrawQueued', async () => 'aborted'),
     // 网关的按 requestId 在全部会话里找认领者的那条路 —— 侧边栏绝不能走它
     respondToInput: mocks.delegate('gateway.respondToInput', () => undefined)
   }
@@ -201,10 +222,20 @@ beforeEach(() => {
     mocks.taskList,
     mocks.presentations,
     mocks.definitions,
-    mocks.grantSite
+    mocks.grantSite,
+    mocks.hubInvoke,
+    mocks.resolveAgentOf,
+    mocks.getSyncHub
   ]) {
     spy.mockReset()
   }
+  mocks.hubInvoke.mockImplementation(async (...args: unknown[]) => {
+    mocks.calls.push({ name: 'hub.invoke', args, ctx: mocks.ctx.current })
+    return { snapshot: 'encoded' }
+  })
+  mocks.getSyncHub.mockImplementation(() => ({ invoke: mocks.hubInvoke }))
+  mocks.resolveAgentOf.mockResolvedValue(undefined)
+  forgetAgentRoots('conn-1')
   mocks.getById.mockImplementation((id: string) => {
     mocks.calls.push({ name: 'getById', args: [id], ctx: mocks.ctx.current })
     return { id, title: 'Chrome · Page' }
@@ -231,6 +262,8 @@ describe('CH-1 白名单之外的路径一律拒绝', () => {
     // 销毁运行时属宿主（会话横幅 agent 胶囊上的 X）；侧栏只有单会话的对话面
     'agent.destroy',
     'agent.subAgentPrompt',
+    // 「下一轮」这一档已从产品里去掉（Q-P3-09）
+    'agent.nextTurn',
     'files.scan',
     'bgTask.readLog',
     'command.list',
@@ -267,11 +300,12 @@ const FIXTURES: Record<string, { args: unknown[]; delegate: () => ReturnType<typ
     args: [{ sessionId: OWNED, text: 'f' }],
     delegate: () => mocks.gateway.followUp
   },
-  'agent.nextTurn': {
-    args: [{ sessionId: OWNED, text: 'n' }],
-    delegate: () => mocks.gateway.nextTurn
-  },
   'agent.abort': { args: [OWNED], delegate: () => mocks.gateway.abort },
+  'agent.continue': { args: [OWNED], delegate: () => mocks.gateway.continue },
+  'agent.withdrawQueued': {
+    args: [{ sessionId: OWNED, submissionId: 3 }],
+    delegate: () => mocks.gateway.withdrawQueued
+  },
   'agent.respondToInput': {
     args: [{ sessionId: OWNED, requestId: 'req-1', response: { kind: 'ask', allowed: true } }],
     delegate: () => mocks.getAgentSession
@@ -286,7 +320,8 @@ const FIXTURES: Record<string, { args: unknown[]; delegate: () => ReturnType<typ
   'shuvixMd.validate': {
     args: [{ type: 'agent', text: '---\nname: x\n---\n' }],
     delegate: () => vi.mocked(validateShuvixMdText) as unknown as ReturnType<typeof vi.fn>
-  }
+  },
+  'sync.invoke': { args: [sessionTarget(OWNED), SUBSCRIBE], delegate: () => mocks.hubInvoke }
 }
 
 describe('CH-2 白名单里的每条路径都落到恰好一个委托上', () => {
@@ -307,14 +342,15 @@ describe('CH-2 白名单里的每条路径都落到恰好一个委托上', () =>
 
 // ─── 归属核对 ───────────────────────────────────────────────────────────────
 
-/** 带会话的 12 条路径：会话怎么放进参数 */
+/** 带会话的 14 条路径：会话怎么放进参数 */
 const SESSION_PATHS: Array<[string, (sid: unknown) => unknown[]]> = [
   ['agent.init', (sid) => [{ sessionId: sid }]],
   ['agent.prompt', (sid) => [{ sessionId: sid, text: 'hi', inlineTokens: { t: tabToken(5) } }]],
   ['agent.steer', (sid) => [{ sessionId: sid, text: 's' }]],
   ['agent.followUp', (sid) => [{ sessionId: sid, text: 'f' }]],
-  ['agent.nextTurn', (sid) => [{ sessionId: sid, text: 'n' }]],
   ['agent.abort', (sid) => [sid]],
+  ['agent.continue', (sid) => [sid]],
+  ['agent.withdrawQueued', (sid) => [{ sessionId: sid, submissionId: 3 }]],
   [
     'agent.respondToInput',
     (sid) => [{ sessionId: sid, requestId: 'req-1', response: { kind: 'ask', allowed: true } }]
@@ -323,7 +359,8 @@ const SESSION_PATHS: Array<[string, (sid: unknown) => unknown[]]> = [
   ['message.list', (sid) => [sid]],
   ['runtime.statuses', (sid) => [sid]],
   ['bgTask.list', (sid) => [{ sessionId: sid }]],
-  ['tools.list', (sid) => [sid]]
+  ['tools.list', (sid) => [sid]],
+  ['sync.invoke', (sid) => [sessionTarget(sid), SUBSCRIBE]]
 ]
 
 describe('CH-3 带会话的调用：会话不归这条连接 → 拒绝，什么也不调', () => {
@@ -346,7 +383,12 @@ describe('CH-3 带会话的调用：会话不归这条连接 → 拒绝，什么
 
   for (const [path, argsOf] of SESSION_PATHS) {
     it.each(cases)(`CH-3 ${path}：%s`, async (_label, sid) => {
-      await expect(call(path, argsOf(sid))).rejects.toThrow(NOT_YOUR_SESSION)
+      // 视图同步的目标里会话 id 不是非空字符串 = 不是同步目标：另一句话（P3-09-03），同样什么也不调
+      const refusal =
+        path === 'sync.invoke' && (typeof sid !== 'string' || !sid)
+          ? BAD_SYNC_TARGET
+          : NOT_YOUR_SESSION
+      await expect(call(path, argsOf(sid))).rejects.toThrow(refusal)
       expect(totalDelegateCalls()).toBe(0)
       expect(mocks.runInContext).not.toHaveBeenCalled()
       // agent.prompt：不归它的会话连标签页都不去问、站点更不会记
@@ -420,8 +462,7 @@ describe('CH-5 init / abort / 三条队列 / respondToInput', () => {
 
   it.each([
     ['agent.steer', 'steer'],
-    ['agent.followUp', 'followUp'],
-    ['agent.nextTurn', 'nextTurn']
+    ['agent.followUp', 'followUp']
   ])('CH-5 %s 转 (sessionId, text)，回 {success:true}，在上下文里', async (path, method) => {
     const result = await call(path, [{ sessionId: OWNED, text: 'more', extra: 1 }])
     expect(result).toStrictEqual({ success: true })
@@ -433,31 +474,29 @@ describe('CH-5 init / abort / 三条队列 / respondToInput', () => {
   const respond = (requestId = 'req-1'): Promise<unknown> =>
     call('agent.respondToInput', [{ sessionId: OWNED, requestId, response: RESPONSE }])
 
-  it('CH-5 respondToInput：本会话的运行时认领 → 只送给它，不广播，回 {success:true}', async () => {
+  it('CH-5 / P3-09-16 respondToInput：本会话的运行时认领 → 只送给它（答题方 chrome:<connId>），不广播，回 {success:true}', async () => {
     const agent = agentWith(true)
     mocks.getAgentSession.mockReturnValue(agent)
     expect(await respond()).toStrictEqual({ success: true })
     expect(mocks.getAgentSession.mock.calls).toEqual([[OWNED]])
-    expect(agent.respondToInput.mock.calls).toEqual([['req-1', RESPONSE]])
+    expect(agent.respondToInput.mock.calls).toEqual([
+      ['req-1', RESPONSE, { clientId: 'chrome:conn-1' }]
+    ])
     expect(mocks.broadcast).not.toHaveBeenCalled()
     expect(mocks.gateway.respondToInput).not.toHaveBeenCalled()
     expect(mocks.runInContext.mock.calls[0][0]).toEqual(CHROME_CTX(OWNED))
   })
 
-  it('CH-5 respondToInput：运行时不认领（请求已取消）→ 广播 input_request_resolved 收走卡片', async () => {
+  it('CH-5 / P3-08-45 respondToInput：运行时不认领（请求已取消）→ 什么都不广播（卡片跟着视图走）', async () => {
     mocks.getAgentSession.mockReturnValue(agentWith(false))
     expect(await respond('req-gone')).toStrictEqual({ success: true })
-    expect(mocks.broadcast.mock.calls).toEqual([
-      [{ type: 'input_request_resolved', sessionId: OWNED, requestId: 'req-gone' }]
-    ])
+    expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 
-  it('CH-5 respondToInput：会话此刻没有运行时 → 同样广播 resolved', async () => {
+  it('CH-5 / P3-08-45 respondToInput：会话此刻没有运行时 → 同样不广播', async () => {
     mocks.getAgentSession.mockReturnValue(undefined)
     expect(await respond('req-x')).toStrictEqual({ success: true })
-    expect(mocks.broadcast.mock.calls).toEqual([
-      [{ type: 'input_request_resolved', sessionId: OWNED, requestId: 'req-x' }]
-    ])
+    expect(mocks.broadcast).not.toHaveBeenCalled()
     expect(mocks.gateway.respondToInput).not.toHaveBeenCalled()
   })
 })
@@ -480,10 +519,8 @@ describe('CH-9 respondToInput 拿着别的会话的 requestId 也送不到那条
     expect(mocks.getAgentSession.mock.calls.every(([sid]) => sid === OWNED)).toBe(true)
     expect(theirs.respondToInput).not.toHaveBeenCalled()
     expect(mocks.gateway.respondToInput).not.toHaveBeenCalled()
-    // 本会话没有这个请求 → 只在本会话里收走这张（并不存在的）卡
-    expect(mocks.broadcast.mock.calls).toEqual([
-      [{ type: 'input_request_resolved', sessionId: OWNED, requestId: 'desktop-tool-call-9' }]
-    ])
+    // 本会话没有这个请求 → 什么都不发（P3-08：没有 input_request_resolved 了）
+    expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 })
 
@@ -553,6 +590,170 @@ describe('CH-8 shuvixMd.validate', () => {
       'shuvixMd.validate needs { type, text }.'
     )
     expect(validateShuvixMdText).not.toHaveBeenCalled()
+  })
+})
+
+// ─── 继续与撤回（P3-09-15） ─────────────────────────────────────────────────
+
+describe('P3-09-15 agent.continue / agent.withdrawQueued', () => {
+  it('P3-09-15 continue：核对归属之后在 chrome 上下文里调网关；成功 → {success:true}', async () => {
+    expect(await call('agent.continue', [OWNED])).toStrictEqual({ success: true })
+    expect(mocks.gateway.continue.mock.calls).toEqual([[OWNED]])
+    expect(mocks.calls.find((c) => c.name === 'continue')!.ctx).toEqual(CHROME_CTX(OWNED))
+  })
+
+  it('P3-09-15 / P3-12-08 continue：网关回 {error, code} → {success:false, error, code}；没有 code 就不带', async () => {
+    mocks.gateway.continue.mockImplementation(async () => ({ error: 'no model', code: 'no_model' }))
+    expect(await call('agent.continue', [OWNED])).toStrictEqual({
+      success: false,
+      error: 'no model',
+      code: 'no_model'
+    })
+    mocks.gateway.continue.mockImplementation(async () => ({ error: 'closed' }))
+    expect(await call('agent.continue', [OWNED])).toStrictEqual({ success: false, error: 'closed' })
+  })
+
+  it('P3-09-15 withdrawQueued：(sessionId, submissionId) 原样交给网关，回 {result}，在上下文里', async () => {
+    expect(
+      await call('agent.withdrawQueued', [{ sessionId: OWNED, submissionId: 7, extra: 1 }])
+    ).toStrictEqual({ result: 'aborted' })
+    expect(mocks.gateway.withdrawQueued.mock.calls).toEqual([[OWNED, 7]])
+    expect(mocks.calls.find((c) => c.name === 'withdrawQueued')!.ctx).toEqual(CHROME_CTX(OWNED))
+    mocks.gateway.withdrawQueued.mockImplementation(async () => 'already_placed')
+    expect(
+      await call('agent.withdrawQueued', [{ sessionId: OWNED, submissionId: 7 }])
+    ).toStrictEqual({ result: 'already_placed' })
+  })
+
+  it.each([
+    ['agent.continue', [DESKTOP]],
+    ['agent.continue', [OTHER_INSTALL]],
+    ['agent.withdrawQueued', [{ sessionId: OTHER_RUN, submissionId: 1 }]],
+    ['agent.withdrawQueued', [{ sessionId: DESKTOP, submissionId: 1 }]]
+  ])('P3-09-15 %s 不归这条连接 → NOT_YOUR_SESSION，网关一次都没调', async (path, args) => {
+    await expect(call(path, args)).rejects.toThrow(NOT_YOUR_SESSION)
+    expect(mocks.gateway.continue).not.toHaveBeenCalled()
+    expect(mocks.gateway.withdrawQueued).not.toHaveBeenCalled()
+    expect(mocks.runInContext).not.toHaveBeenCalled()
+  })
+})
+
+// ─── 视图同步（P3-09-02..05） ───────────────────────────────────────────────
+
+describe('P3-09-02 sync.invoke：自己的会话', () => {
+  it('P3-09-02 交给 hub 恰一次：客户端 chrome:<connId>、目标与调用原样，在 chrome 上下文里；回 {ok:true, value}', async () => {
+    const result = await call('sync.invoke', [sessionTarget(OWNED), SUBSCRIBE])
+    expect(result).toStrictEqual({ ok: true, value: { snapshot: 'encoded' } })
+    expect(mocks.hubInvoke.mock.calls).toEqual([['chrome:conn-1', sessionTarget(OWNED), SUBSCRIBE]])
+    expect(mocks.calls.find((c) => c.name === 'hub.invoke')!.ctx).toEqual(CHROME_CTX(OWNED))
+    // 会话目标从不问派生 agent 路由
+    expect(mocks.resolveAgentOf).not.toHaveBeenCalled()
+  })
+
+  it('P3-09-02 退订同样过核对、同样交给 hub；hub 回 undefined → {ok:true, value:undefined}', async () => {
+    mocks.hubInvoke.mockResolvedValue(undefined)
+    expect(await call('sync.invoke', [sessionTarget(OWNED), UNSUBSCRIBE])).toStrictEqual({
+      ok: true,
+      value: undefined
+    })
+    expect(mocks.hubInvoke.mock.calls).toEqual([
+      ['chrome:conn-1', sessionTarget(OWNED), UNSUBSCRIBE]
+    ])
+  })
+})
+
+describe('P3-09-03 sync.invoke：归属不对 / 目标不对', () => {
+  it.each([
+    ['桌面自己的会话', DESKTOP],
+    ['别的浏览器的标签页会话', OTHER_INSTALL],
+    ['同一浏览器上一轮运行的会话', OTHER_RUN],
+    ['不存在的会话', 'no-such-session']
+  ])('P3-09-03 %s → NOT_YOUR_SESSION，hub 一次都没调', async (_label, sid) => {
+    await expect(call('sync.invoke', [sessionTarget(sid), SUBSCRIBE])).rejects.toThrow(
+      NOT_YOUR_SESSION
+    )
+    expect(mocks.hubInvoke).not.toHaveBeenCalled()
+    expect(mocks.getSyncHub).not.toHaveBeenCalled()
+    expect(mocks.runInContext).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['不是对象', 'tab-owned'],
+    ['没有 kind', { sessionId: OWNED }],
+    ['不认识的 kind', { kind: 'tab', sessionId: OWNED }],
+    ['会话 id 是空串', { kind: 'session', sessionId: '' }],
+    ['agent id 不是字符串', { kind: 'agent', agentId: 5 }],
+    ['null', null]
+  ])('P3-09-03 目标%s → 「bad target」，hub 一次都没调', async (_label, target) => {
+    await expect(call('sync.invoke', [target, SUBSCRIBE])).rejects.toThrow(BAD_SYNC_TARGET)
+    expect(mocks.hubInvoke).not.toHaveBeenCalled()
+    expect(mocks.resolveAgentOf).not.toHaveBeenCalled()
+  })
+
+  it('P3-09-03 参数不是数组 → NOT_YOUR_SESSION，hub 一次都没调', async () => {
+    await expect(call('sync.invoke', { 0: sessionTarget(OWNED), 1: SUBSCRIBE })).rejects.toThrow(
+      NOT_YOUR_SESSION
+    )
+    await expect(call('sync.invoke', undefined)).rejects.toThrow(NOT_YOUR_SESSION)
+    expect(mocks.hubInvoke).not.toHaveBeenCalled()
+  })
+})
+
+describe('P3-09-04 sync.invoke：派生 agent 目标按根会话核对', () => {
+  const AGENT = { kind: 'agent', agentId: 'a1' }
+
+  it('P3-09-04 根会话归这条连接 → 放行（上下文是根会话）；推帧要用的根会话记下了', async () => {
+    mocks.resolveAgentOf.mockResolvedValue({ sessionId: OWNED, conversationId: 4 })
+    expect(await call('sync.invoke', [AGENT, SUBSCRIBE])).toStrictEqual({
+      ok: true,
+      value: { snapshot: 'encoded' }
+    })
+    expect(mocks.resolveAgentOf.mock.calls).toEqual([['a1']])
+    expect(mocks.hubInvoke.mock.calls).toEqual([['chrome:conn-1', AGENT, SUBSCRIBE]])
+    expect(mocks.calls.find((c) => c.name === 'hub.invoke')!.ctx).toEqual(CHROME_CTX(OWNED))
+    expect(agentRootOf('conn-1', 'a1')).toBe(OWNED)
+  })
+
+  it.each([
+    ['根会话是桌面的', { sessionId: DESKTOP, conversationId: 4 }],
+    ['根会话是别的浏览器的', { sessionId: OTHER_INSTALL, conversationId: 4 }],
+    ['认不出的 agent（不透露它存不存在）', undefined]
+  ])('P3-09-04 %s → NOT_YOUR_SESSION，hub 一次都没调，什么也没记', async (_label, located) => {
+    mocks.resolveAgentOf.mockResolvedValue(located)
+    await expect(call('sync.invoke', [AGENT, SUBSCRIBE])).rejects.toThrow(NOT_YOUR_SESSION)
+    expect(mocks.hubInvoke).not.toHaveBeenCalled()
+    expect(agentRootOf('conn-1', 'a1')).toBeUndefined()
+  })
+
+  it('P3-09-04 路由自己抛错 → 同样 NOT_YOUR_SESSION（不把路由的错误透给侧边栏）', async () => {
+    mocks.resolveAgentOf.mockRejectedValue(new Error('router not built'))
+    await expect(call('sync.invoke', [AGENT, SUBSCRIBE])).rejects.toThrow(NOT_YOUR_SESSION)
+    expect(mocks.hubInvoke).not.toHaveBeenCalled()
+  })
+})
+
+describe('P3-09-05 sync.invoke：hub 的错误码装在信封里', () => {
+  it('P3-09-05 hub 以 code 拒绝 → resolve {ok:false, error:{code, message}}（不是桥的 ok:false 文本）', async () => {
+    mocks.hubInvoke.mockRejectedValue(
+      Object.assign(new Error('Session s was deleted'), { code: 'service_not_found' })
+    )
+    expect(await call('sync.invoke', [sessionTarget(OWNED), SUBSCRIBE])).toStrictEqual({
+      ok: false,
+      error: { code: 'service_not_found', message: 'Session s was deleted' }
+    })
+  })
+
+  it('P3-09-05 没有 code 的错误 → {ok:false, error:{message}}；抛的不是 Error 也一样', async () => {
+    mocks.hubInvoke.mockRejectedValueOnce(new TypeError('Invalid service call'))
+    expect(await call('sync.invoke', [sessionTarget(OWNED), { bogus: true }])).toStrictEqual({
+      ok: false,
+      error: { message: 'Invalid service call' }
+    })
+    mocks.hubInvoke.mockRejectedValueOnce('plain')
+    expect(await call('sync.invoke', [sessionTarget(OWNED), SUBSCRIBE])).toStrictEqual({
+      ok: false,
+      error: { message: 'plain' }
+    })
   })
 })
 
@@ -667,7 +868,7 @@ describe('CH-G agent.prompt 先把带上的标签页所在的站点记为已同�
     expect(mocks.grantSite.mock.calls).toEqual([[OWNED, 'a.example']])
   })
 
-  it.each(['agent.steer', 'agent.followUp', 'agent.nextTurn'])(
+  it.each(['agent.steer', 'agent.followUp'])(
     'CH-G8 %s 不记任何站点（只有 agent.prompt 授权），哪怕参数里夹着 tab token',
     async (path) => {
       conn = makeConn({ 5: { id: 5, url: 'https://a.example/' } })

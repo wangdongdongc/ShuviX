@@ -1,12 +1,13 @@
 /**
  * DefaultChatGateway.prompt 不入账：ensure 失败不会落树，网关本身也不 touchActive。
- * 日历入账只旁听 eventSink 的 user_message（见 sessionDayPrompt.test.ts）。
+ * 入账在门面里、用户条目落下那一刻（onAdmitted / onPlaced 的 entryId，P3-07，见 agentSessionFacade.test.ts
+ * 与 projectionReads.test.ts）；旧格式会话只读，不再入账。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   ensureAgentSession: vi.fn(),
-  recordUserPrompt: vi.fn(),
+  recordUserEntry: vi.fn(),
   touchActive: vi.fn(),
   frontendBroadcast: vi.fn()
 }))
@@ -25,8 +26,9 @@ vi.mock('../../../services/sessionService', () => ({
 }))
 vi.mock('../../../services/messageService', () => ({ messageService: {} }))
 vi.mock('../../../services/sessionStorage', () => ({
-  appendModelChange: vi.fn(),
-  appendThinkingLevelChange: vi.fn()
+  storageRefusalOf: () => undefined,
+  recordSessionModel: vi.fn(),
+  recordSessionThinkingLevel: vi.fn()
 }))
 vi.mock('../../../services/userInputBroker', () => ({ respondToUserInput: vi.fn() }))
 vi.mock('../../../services/builtinMcp/dbConnections', () => ({
@@ -43,8 +45,7 @@ vi.mock('../ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: mocks.frontendBroadcast }
 }))
 vi.mock('../../../services/sessionDayPromptService', () => ({
-  recordUserPrompt: mocks.recordUserPrompt,
-  recordFromUserMessageEvent: vi.fn()
+  recordUserEntry: mocks.recordUserEntry
 }))
 
 let chatGateway: (typeof import('../DefaultChatGateway'))['chatGateway']
@@ -67,7 +68,7 @@ describe('DefaultChatGateway.prompt 不入账', () => {
       sessionId: 's1',
       error: 'Agent 未初始化'
     })
-    expect(mocks.recordUserPrompt).not.toHaveBeenCalled()
+    expect(mocks.recordUserEntry).not.toHaveBeenCalled()
     expect(mocks.touchActive).not.toHaveBeenCalled()
   })
 
@@ -76,7 +77,7 @@ describe('DefaultChatGateway.prompt 不入账', () => {
     mocks.ensureAgentSession.mockResolvedValue({ prompt })
     await chatGateway.prompt('s1', 'hello')
     expect(prompt).toHaveBeenCalled()
-    expect(mocks.recordUserPrompt).not.toHaveBeenCalled()
+    expect(mocks.recordUserEntry).not.toHaveBeenCalled()
     expect(mocks.touchActive).not.toHaveBeenCalled()
   })
 })

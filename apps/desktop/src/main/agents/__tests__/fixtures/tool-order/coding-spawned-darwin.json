@@ -1,0 +1,152 @@
+{
+  "case": "coding-spawned-darwin",
+  "description": "coding spawned through the dispatch tool, still allowed to dispatch",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
+  "inputs": {
+    "platform": "darwin",
+    "kind": "spawned",
+    "rootSessionId": "sess-golden-root",
+    "selfSessionId": "sub-golden-1",
+    "canSpawn": true,
+    "profile": "coding",
+    "profileTools": [
+      "bash",
+      "powershell",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "agent",
+      "session",
+      "knowledge",
+      "artifact",
+      "skill:builtin:drawing"
+    ],
+    "toolOverlay": [],
+    "names": [
+      "bash",
+      "powershell",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "agent",
+      "session",
+      "knowledge",
+      "artifact",
+      "skill:builtin:drawing"
+    ],
+    "extraTools": [],
+    "projectPath": "/Users/golden/projects/acme",
+    "skillsAvailable": true,
+    "mcpServers": {},
+    "registeredBuiltins": [
+      {
+        "name": "bash",
+        "platforms": [
+          "darwin",
+          "linux"
+        ]
+      },
+      {
+        "name": "powershell",
+        "platforms": [
+          "win32"
+        ]
+      },
+      {
+        "name": "read",
+        "platforms": null
+      },
+      {
+        "name": "write",
+        "platforms": null
+      },
+      {
+        "name": "edit",
+        "platforms": null
+      },
+      {
+        "name": "ask",
+        "platforms": null
+      },
+      {
+        "name": "git",
+        "platforms": null
+      },
+      {
+        "name": "artifact",
+        "platforms": null
+      },
+      {
+        "name": "session",
+        "platforms": null
+      },
+      {
+        "name": "knowledge",
+        "platforms": null
+      },
+      {
+        "name": "doc_read",
+        "platforms": null
+      },
+      {
+        "name": "doc_edit",
+        "platforms": null
+      },
+      {
+        "name": "doc_insert",
+        "platforms": null
+      },
+      {
+        "name": "ls",
+        "platforms": null
+      },
+      {
+        "name": "grep",
+        "platforms": null
+      },
+      {
+        "name": "glob",
+        "platforms": null
+      }
+    ]
+  },
+  "observed": {
+    "skillToolConstructed": [
+      {
+        "names": [
+          "builtin:drawing"
+        ],
+        "projectPath": "/Users/golden/projects/acme"
+      }
+    ],
+    "mcpEnsureCalls": [],
+    "mcpGetToolsCalls": [],
+    "broadcasts": [],
+    "spill": true
+  },
+  "output": {
+    "toolNames": [
+      "bash",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "session",
+      "knowledge",
+      "artifact",
+      "agent",
+      "skill"
+    ]
+  }
+}

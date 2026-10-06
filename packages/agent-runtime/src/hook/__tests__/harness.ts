@@ -99,6 +99,8 @@ export interface RunnerOptions {
   runTask?: RunTaskFn
   resolveAgentProfile?: HookRunnerDeps['resolveAgentProfile']
   resolveRunModel?: HookRunnerDeps['resolveRunModel']
+  /** 会话是否被中断（P2-08 PIN-07）；缺省不给 */
+  isInterrupted?: HookRunnerDeps['isInterrupted']
   env?: HookRunnerDeps['env']
   timeoutMs?: number
   /** 判定型派发的墙钟上限（缺省走 runner 的 DEFAULT_DECIDE_TIMEOUT_MS） */
@@ -153,6 +155,7 @@ export function makeRunner(opts: RunnerOptions = {}): RunnerHarness {
       opts.onRun?.(event)
     }
   }
+  if (opts.isInterrupted !== undefined) deps.isInterrupted = opts.isInterrupted
   if (opts.timeoutMs !== undefined) deps.timeoutMs = opts.timeoutMs
   if (opts.decideTimeoutMs !== undefined) deps.decideTimeoutMs = opts.decideTimeoutMs
   if (opts.logger !== false) {
@@ -230,15 +233,15 @@ export function gatedRunTask(): { runTask: RunTaskFn; gates: Gate[] } {
 }
 
 /**
- * hang 型 runTask：挂到 parentAbortSignal 落下为止，然后 **resolve** 交回半截结果 ——
+ * hang 型 runTask：挂到 signal 落下为止，然后 **resolve** 交回半截结果 ——
  * 真 manager 的收法（abort 之后交回已产出的文本，不 reject）。
  */
 export function hangUntilAbort(): RunTaskFn {
   return (params) =>
     new Promise((resolve) => {
       const done = (): void => resolve({ result: 'partial' })
-      if (params.parentAbortSignal?.aborted) return done()
-      params.parentAbortSignal?.addEventListener('abort', done, { once: true })
+      if (params.signal?.aborted) return done()
+      params.signal?.addEventListener('abort', done, { once: true })
     })
 }
 
@@ -247,8 +250,8 @@ export function rejectOnAbort(message = 'dispatch aborted'): RunTaskFn {
   return (params) =>
     new Promise((_resolve, reject) => {
       const fail = (): void => reject(new Error(message))
-      if (params.parentAbortSignal?.aborted) return fail()
-      params.parentAbortSignal?.addEventListener('abort', fail, { once: true })
+      if (params.signal?.aborted) return fail()
+      params.signal?.addEventListener('abort', fail, { once: true })
     })
 }
 
@@ -299,7 +302,7 @@ export const verdictResult = (value: unknown): RunTaskResult => ({
  * 一次派发的脚本：
  *  - RunTaskResult 对象：立即交回它；
  *  - `{ reject }`：以这句话 reject（manager 抛错收尾）；
- *  - `'gate'`：挂到 `release(key)`；parentAbortSignal 落下时 resolve 半截结果（真 manager 的收法：
+ *  - `'gate'`：挂到 `release(key)`；signal 落下时 resolve 半截结果（真 manager 的收法：
  *    中止之后交回已产出的文本，不 reject）—— 永远不 release 就是「挂到中止为止」；
  *  - `'stuck'`：挂到 `release(key)`；中止也不理（不配合中止的派发，如模型请求还在路上）。
  */
@@ -350,7 +353,7 @@ export function scriptedRunTask(
       }
       waiting.push(entry)
       if (behavior === 'stuck') return
-      const signal = params.parentAbortSignal
+      const signal = params.signal
       const onAbort = (): void => entry.settle({ result: 'partial' })
       if (signal?.aborted) onAbort()
       else signal?.addEventListener('abort', onAbort, { once: true })

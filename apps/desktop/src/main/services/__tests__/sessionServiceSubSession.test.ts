@@ -15,6 +15,7 @@
  * mock 面沿用 sessionServiceListChanged.test.ts（import 图全换假件）。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
+import { fakeHost, resetFakeHost } from './support/fakeSessionHost'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -56,9 +57,9 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: mocks.messageClear } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: vi.fn(),
-  addSessionTreePin: vi.fn(),
-  appendModelChange: vi.fn()
+  recordSessionModel: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({
@@ -76,7 +77,13 @@ vi.mock('../toolAggregator', () => ({
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
-vi.mock('../agentSession', () => ({ AgentSession: class {} }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({
   killBySession: mocks.killBySession,
   setBgTaskNotifier: vi.fn()
@@ -125,6 +132,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetFakeHost()
   mocks.daoFindChildren.mockReturnValue([])
   mocks.daoPick.mockReturnValue(undefined)
 })
@@ -191,7 +199,8 @@ describe('delete —— 递归删子会话', () => {
     expect(deleted).toEqual(['c1', 'c2', 'P'])
     // 子会话不是「顺手删一行」：它们各自走了完整的清理链
     expect(mocks.killBySession.mock.calls.map((c) => c[0])).toEqual(['c1', 'c2', 'P'])
-    expect(mocks.messageClear.mock.calls.map((c) => c[0])).toEqual(['c1', 'c2', 'P'])
+    // 会话存储经宿主关掉并删除（会话没开过也照样删）
+    expect(fakeHost.callsOf('delete')).toEqual(['c1', 'c2', 'P'])
     // 日历索引：删父时子先清、各自 deleteBySessionId，且都在对应 deleteById 之前
     expect(mocks.daoDeleteDayPrompts.mock.calls.map((c) => c[0])).toEqual(['c1', 'c2', 'P'])
     const dayOrder = mocks.daoDeleteDayPrompts.mock.invocationCallOrder

@@ -1,0 +1,122 @@
+{
+  "sessionId": "sid-G03-rollback-continue",
+  "leafId": "2294280e",
+  "branchIds": ["895835bd", "0c7c064c", "e947f078", "e8d76271", "3599e78e", "2294280e"],
+  "contextEntryIds": ["895835bd", "0c7c064c", "e947f078", "e8d76271", "3599e78e", "2294280e"],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "895835bd",
+      "sessionId": "sid-G03-rollback-continue",
+      "role": "user",
+      "type": "text",
+      "content": "u1",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236709,
+      "metadata": {}
+    },
+    {
+      "id": "0c7c064c",
+      "sessionId": "sid-G03-rollback-continue",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a1"
+        }
+      ],
+      "content": "a1",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236710,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "e947f078",
+      "sessionId": "sid-G03-rollback-continue",
+      "role": "user",
+      "type": "text",
+      "content": "u3",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236711,
+      "metadata": {}
+    },
+    {
+      "id": "e8d76271",
+      "sessionId": "sid-G03-rollback-continue",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a3"
+        }
+      ],
+      "content": "a3",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236711,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    },
+    {
+      "id": "3599e78e",
+      "sessionId": "sid-G03-rollback-continue",
+      "role": "user",
+      "type": "text",
+      "content": "u5",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236712,
+      "metadata": {}
+    },
+    {
+      "id": "2294280e",
+      "sessionId": "sid-G03-rollback-continue",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a5"
+        }
+      ],
+      "content": "a5",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236712,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}

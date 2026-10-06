@@ -65,8 +65,8 @@ vi.mock('../../../services/sessionService', () => ({
 }))
 vi.mock('../../../services/messageService', () => ({ messageService: {} }))
 vi.mock('../../../services/sessionStorage', () => ({
-  appendModelChange: vi.fn(),
-  appendThinkingLevelChange: vi.fn()
+  recordSessionModel: vi.fn(),
+  recordSessionThinkingLevel: vi.fn()
 }))
 vi.mock('../../../services/userInputBroker', () => ({ respondToUserInput: vi.fn() }))
 vi.mock('../../../services/builtinMcp/dbConnections', () => ({
@@ -87,8 +87,7 @@ vi.mock('../../../services/agentService', () => ({
 }))
 vi.mock('../ChatFrontendRegistry', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../../services/sessionDayPromptService', () => ({
-  recordUserPrompt: vi.fn(),
-  recordFromUserMessageEvent: vi.fn()
+  recordUserEntry: vi.fn()
 }))
 
 import { buildBuiltinProfiles } from '@shuvix/agent-runtime'

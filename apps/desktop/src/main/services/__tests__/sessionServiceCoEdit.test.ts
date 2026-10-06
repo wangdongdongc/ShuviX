@@ -75,7 +75,6 @@ const mocks = vi.hoisted(() => {
     broadcastTitleChanged: vi.fn(),
     broadcastConfigChanged: vi.fn(),
     readSessionRunConfig: vi.fn(),
-    agentCreate: vi.fn<(params: { sessionId: string }) => Promise<unknown>>(),
     closeSession: vi.fn<(sessionId: string) => Promise<void>>(),
     messageClear: vi.fn(),
     killBySession: vi.fn(),
@@ -116,9 +115,9 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick }
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: vi.fn() } }))
 vi.mock('../messageService', () => ({ messageService: { clear: mocks.messageClear } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
-  addSessionTreePin: vi.fn(),
-  appendModelChange: vi.fn()
+  recordSessionModel: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({
@@ -134,9 +133,23 @@ vi.mock('../../utils/toolUtils/allowList', () => ({
   buildAllowEntry: (type: string, path: string) => `${type}(${path})`
 }))
 vi.mock('../agentService', () => ({
-  agentService: { getProfile: vi.fn(), isSessionProfile: vi.fn() }
+  agentService: {
+    getProfile: vi.fn((name: string) => ({
+      name,
+      tools: [],
+      instructionFiles: [],
+      projectAwareness: false
+    })),
+    isSessionProfile: vi.fn()
+  }
 }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: mocks.agentCreate } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({
   killBySession: mocks.killBySession,
   setBgTaskNotifier: vi.fn()
@@ -170,10 +183,6 @@ beforeEach(() => {
   mocks.readSessionRunConfig.mockResolvedValue({})
   mocks.projectPick.mockReturnValue(undefined)
   mocks.closeSession.mockResolvedValue(undefined)
-  mocks.agentCreate.mockImplementation(async () => ({
-    invalidate: vi.fn(async () => {}),
-    destroy: vi.fn(async () => {})
-  }))
 })
 
 afterEach(() => {
@@ -221,18 +230,14 @@ describe('S1 协作编辑会话', () => {
     expect(sessionService.resolveAgentProfileName(s.id)).toBe('coedit')
   })
 
-  it('推导结果送进了运行时：AgentSession.create 收到 profileName coedit', async () => {
+  it('推导结果送进了运行时：resolveAgentConfig 给出档案 coedit', async () => {
     const s = create(
       { title: 'a.md', notebookPath: 'a.md' },
       { ephemeral: true, workingDirectory: '/Users/me/docs', coEdit: true }
     )
-    await sessionService.ensureAgentSession(s.id)
-    expect(mocks.agentCreate).toHaveBeenCalledTimes(1)
-    expect(mocks.agentCreate.mock.calls[0][0]).toMatchObject({
-      sessionId: s.id,
-      profileName: 'coedit',
-      workingDirectory: '/Users/me/docs'
-    })
+    const config = await sessionService.resolveAgentConfig(s.id)
+    expect(config.profile.name).toBe('coedit')
+    expect(config.cwd).toBe('/Users/me/docs')
   })
 
   it('coEdit: false / 不给 → 普通笔记本（notebook）', () => {

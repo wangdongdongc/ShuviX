@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { execSync } from 'node:child_process'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
+import { executeTool, failureText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const TEST_DIR = join(tmpdir(), 'shuvix-ls-test-' + Date.now())
 const MANY_DIR = join(tmpdir(), 'shuvix-ls-many-' + Date.now())
@@ -102,7 +103,7 @@ afterAll(() => {
 describe('ls 工具 - 基本功能', () => {
   it('列出目录树结构', async () => {
     const tool = new ListTool(ctx)
-    const result = await tool.execute('tc1', { path: join(TEST_DIR, 'src') })
+    const result = await executeTool(tool, 'tc1', { path: join(TEST_DIR, 'src') })
     const text = getText(result)
     expect(text).toContain('utils/')
     expect(text).toContain('index.ts')
@@ -111,7 +112,7 @@ describe('ls 工具 - 基本功能', () => {
 
   it('默认使用工作目录', async () => {
     const tool = new ListTool(ctx)
-    const result = await tool.execute('tc2', {})
+    const result = await executeTool(tool, 'tc2', {})
     const text = getText(result)
     expect(text).toContain('README.md')
     expect(text).toContain('package.json')
@@ -120,7 +121,7 @@ describe('ls 工具 - 基本功能', () => {
 
   it('返回文件计数', async () => {
     const tool = new ListTool(ctx)
-    const result = await tool.execute('tc3', { path: join(TEST_DIR, 'src') })
+    const result = await executeTool(tool, 'tc3', { path: join(TEST_DIR, 'src') })
     const details = result.details as { count: number; truncated: boolean }
     expect(details.count).toBe(2) // index.ts + helper.ts
     expect(details.truncated).toBe(false)
@@ -130,7 +131,7 @@ describe('ls 工具 - 基本功能', () => {
 describe('ls 工具 - 忽略模式', () => {
   it('.git 目录始终排除', async () => {
     const tool = new ListTool(ctx)
-    const result = await tool.execute('tc4', {})
+    const result = await executeTool(tool, 'tc4', {})
     const text = getText(result)
     // .git/ 目录内容不应出现（.gitignore 文件本身是正常文件）
     expect(text).not.toContain('.git/')
@@ -141,7 +142,7 @@ describe('ls 工具 - 忽略模式', () => {
 
   it('.gitignore 中的 node_modules/dist 被忽略', async () => {
     const tool = new ListTool(ctx)
-    const result = await tool.execute('tc5', {})
+    const result = await executeTool(tool, 'tc5', {})
     const text = getText(result)
     expect(text).not.toContain('node_modules')
     expect(text).not.toContain('dist')
@@ -152,7 +153,7 @@ describe('ls 工具 - 忽略模式', () => {
 
   it('自定义 ignore glob 排除额外文件', async () => {
     const tool = new ListTool(ctx)
-    const result = await tool.execute('tc6', { ignore: ['src/**'] })
+    const result = await executeTool(tool, 'tc6', { ignore: ['src/**'] })
     const text = getText(result)
     // src 下文件应被排除
     expect(text).not.toContain('index.ts')
@@ -165,7 +166,7 @@ describe('ls 工具 - 忽略模式', () => {
 describe('ls 工具 - 截断', () => {
   it('超过 LIMIT 时截断并提示', async () => {
     const tool = new ListTool(ctx)
-    const result = await tool.execute('tc7', { path: MANY_DIR })
+    const result = await executeTool(tool, 'tc7', { path: MANY_DIR })
     const details = result.details as { count: number; truncated: boolean }
     expect(details.truncated).toBe(true)
     expect(details.count).toBe(100)
@@ -175,23 +176,19 @@ describe('ls 工具 - 截断', () => {
 })
 
 describe('ls 工具 - 错误处理', () => {
-  it('路径不存在时抛错', async () => {
+  it('路径不存在时报错（isError 结果；P1-04 起不再抛出，裁定 Q12）', async () => {
     const tool = new ListTool(ctx)
-    try {
-      await tool.execute('tc8', { path: join(TEST_DIR, 'nonexistent') })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      expect(err instanceof Error ? err.message : '').toContain('Path not found')
-    }
+    const failure = await failureText(
+      executeTool(tool, 'tc8', { path: join(TEST_DIR, 'nonexistent') })
+    )
+    expect(failure).toContain('Path not found')
   })
 
-  it('路径是文件时抛错', async () => {
+  it('路径是文件时报错（isError 结果）', async () => {
     const tool = new ListTool(ctx)
-    try {
-      await tool.execute('tc9', { path: join(TEST_DIR, 'README.md') })
-      expect.fail('应该抛错')
-    } catch (err: unknown) {
-      expect(err instanceof Error ? err.message : '').toContain('is not a directory')
-    }
+    const failure = await failureText(
+      executeTool(tool, 'tc9', { path: join(TEST_DIR, 'README.md') })
+    )
+    expect(failure).toContain('is not a directory')
   })
 })

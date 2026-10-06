@@ -35,7 +35,9 @@
     "test:e2e:database": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/database",
     "test:e2e:chrome": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/chrome",
     "test:e2e:markdown": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/markdown",
-    "probe": "electron-vite build && vitest run --config vitest.config.probe.ts"
+    "probe": "electron-vite build && vitest run --config vitest.config.probe.ts",
+    "probe:protocols": "vitest run --config vitest.config.protocols.ts e2e/live/protocols.probe.ts",
+    "probe:protocols:dry": "vitest run --config vitest.config.protocols.ts --mode probe-dry e2e/live/protocols.probe.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -62,12 +64,9 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@earendil-works/pi-agent-core": "^0.80.3",
-    "@earendil-works/pi-ai": "^0.80.3",
     "@electric-sql/pglite": "^0.3.15",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
-    "@google/genai": "^1.40.0",
     "@huggingface/hub": "^2.11.0",
     "@lezer/highlight": "^1.2.3",
     "@modelcontextprotocol/sdk": "^1.26.0",
@@ -110,7 +109,7 @@
     "remark-math": "^6.0.0",
     "socks": "^2.8.7",
     "ssh2": "^1.17.0",
-    "typebox": "^1.1.37",
+    "typebox": "1.3.27",
     "undici": "^6.28.0",
     "uuid": "^13.0.0",
     "web-tree-sitter": "^0.26.12",
@@ -121,6 +120,9 @@
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@earendil-works/chord": "1.0.2",
+    "@earendil-works/pi-ai": "1.0.2",
+    "@earendil-works/pi-durable": "1.0.2",
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
     "@electron-toolkit/tsconfig": "^2.0.0",

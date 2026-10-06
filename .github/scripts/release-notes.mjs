@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 生成 GitHub Release 的说明正文：tag 自带的说明（若有）+ 上一个版本 tag 以来的提交标题。
+ * 生成 GitHub Release 的说明正文：tag 自带的说明（若有）+ 上一个版本 tag 以来 main 第一父链上的提交标题。
  *
  * 为什么需要它：工作流里的 `generate_release_notes` 只按**合并的 Pull Request** 列条目，而本项目直接
  * 往 main 提交、不走 PR，自动生成的说明就只剩一条 Full Changelog 链接。这里改用两样现成的素材 ——
@@ -41,7 +41,9 @@ function tagSummary() {
 }
 
 const prev = previousTag()
-const commits = git('log', '--no-merges', '--format=- %s (%h)', prev ? `${prev}..${tag}` : tag)
+// 只沿 main 的第一父链：直接提交在 main 上的照列，长期分支合进来只算它那一条 merge 的标题 ——
+// 分支内部的几百个提交（「P3-16: format」之类）不进发布说明，需要细节时看 merge 提交本身
+const commits = git('log', '--first-parent', '--format=- %s (%h)', prev ? `${prev}..${tag}` : tag)
 const summary = tagSummary()
 
 const lines = []

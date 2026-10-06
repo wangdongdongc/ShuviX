@@ -1,31 +1,22 @@
 /**
- * SessionManager —— 宿主无关的会话运行时生命周期簿记。
+ * SessionManager —— 宿主无关的「`Map<sessionId, 运行时实例>` + 懒创建 + 查找 + 失效/销毁」簿记。
  *
- * 把「`Map<sessionId, 运行时实例>` + 懒创建 + 查找 + 失效/销毁」这套两端一致的策略收敛到一处，
- * 让「延迟到首次发消息才创建」「失效后下次重建」等生命周期改动只写一遍。
+ * **现状：唯一的使用方是 `durable/sessionHost.ts`** —— SessionHost 用它做每会话的打开 / 关停闸门
+ * （LRU、删除、关停都经这里，保证同一会话同一时刻只有一个打开的存储）。agent 的创建 / 销毁与
+ * `agent_created` / `agent_closing` 归运行时的锁（`durable/lock.ts`），不经本类；Chrome 扩展自
+ * 2026-09-22 起不再有运行时。
  *
- * 实例的**构造**（拼 system prompt / build tools / resolve model / 恢复历史）与**清理**因端而异，
- * 经 `create` / `dispose` 注入：
- *   - 桌面：实例为 `AgentSession`（含 ssh 清理），create 同步，dispose → invalidate/destroy。
- *   - 扩展：实例为 `RuntimeSession`，create 异步（FSA/OPFS），dispose → 子代理/工具注册表清理。
- *
- * T 是每会话的运行时对象类型（桌面 AgentSession / 扩展 RuntimeSession），对本类不透明。
+ * 实例的构造与清理经 `create` / `dispose` 注入；T 是每会话的运行时对象类型，对本类不透明。
  *
  * ─── 强一致性：一个会话同一时刻只有一个运行时 ───────────────────────────
  *
- * 会话树（pi 的 `Session`）只有一个 leaf 指针，谁 append 都挂在当前叶子上。所以
- * **两个运行时同时活着 = 两个 run 的消息交叉写进同一条分支**，`tool_use` 与
- * `tool_result` 的配对当场作废，之后每一发请求都会被 provider 打回
- * （`tool call id bash:35 is not found`），会话永久卡死。
+ * 两个运行时同时往同一条会话写，`tool_use` 与 `tool_result` 的配对就会交叉作废。本类堵的洞是：
+ * 同步删表项、`dispose` 不等待 —— 「解绑」发生在「关停」之前，下一次 `ensure()` 看到空位就造了第二个。
  *
- * 旧实现的洞在 `remove()`：同步删表项、`dispose` 不等待。而真正的关停要等当前 run
- * 跑完（pi 的 `abort()` 内部是 `waitForIdle()`），于是「解绑」发生在「关停」之前 ——
- * 下一次 `ensure()` 看到空位就造了第二个，旧的那个还握着同一棵树在写。
- *
- * 现在的契约：
+ * 契约：
  *   - `remove()` 异步，`dispose` 返回的 Promise **会被等待**；
  *   - 关停期间该会话记在 `closing` 里，`ensure()` 必须先等它结束才谈新建 ——
- *     **关不掉就一直等**（会话表现为「正在停止」），绝不放行第二个运行时；
+ *     **关不掉就一直等**，绝不放行第二个运行时；
  *   - 创建在途时 `remove()` 先等它出生再关，堵住「删了个空、新实例随后落进 map」的竞态。
  */
 
@@ -42,7 +33,7 @@ export interface SessionManagerDeps<T> {
    * 移除实例前的清理钩子（reason 区分 invalidate/destroy/remove）；可选。
    *
    * **返回 Promise 会被等待**：在它落定之前该会话不会解绑，`ensure()` 不会造新实例。
-   * 实现方要保证 resolve 时旧运行时已经不会再写会话树（桌面端 = `await runtime.abort()`）。
+   * 实现方要保证 resolve 时旧运行时已经不会再写会话存储。
    */
   dispose?: (sessionId: string, instance: T, reason: SessionDisposeReason) => void | Promise<void>
   /** 关停开始 / 结束回调（宿主用来广播「正在停止」）；可选 */

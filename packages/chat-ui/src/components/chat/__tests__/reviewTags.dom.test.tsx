@@ -2,13 +2,13 @@
 /**
  * 自动审查在对话里的露面（jsdom）—— 设计稿 docs/permission-review-design.md §11：
  *
- *   - UI-T* 工具卡「审查中」：执行记录上的 reviewing（`tool_review` 事件维护）在运行中顶替转圈；
- *     挂起的询问优先；结束了就不再显示；只读当前会话；
+ *   - UI-T* 工具卡「审查中」：执行记录上的 reviewing（`tool_review` 事件的本地叠加，叠到视图派生的执行
+ *     记录上，P3-08 PIN-04）在运行中顶替转圈；挂起的询问优先；结束了就不再显示；只读当前会话；
  *   - UI-M* 工具卡「已审查」：details 上的 `shuvixReview` 标记（toolReviewOf）在行尾挂一枚盾牌，
  *     颜色随风险、悬停是「hint + 审查员那句话」；实时与重开同一个样子；只有 done 才挂；
  *     步骤合并行折起来时挂段内风险最高的那一枚；
  *   - UI-A* 询问卡片上的审查意见：审查员交给你的那次，它的大白话放在命令原文上方；
- *   - UI-K* 一条完整的链：tool_start → 审查中 → 转圈 → tool_end 带标记 → finishStreaming 之后仍在。
+ *   - UI-K* 一条完整的链（视图驱动）：工具在跑 → 审查中 → 转圈 → 工具做完带标记 → 本轮结束之后仍在。
  *
  * 包入口 `@shuvix/chat-ui` 整个顶掉（AskForm 从入口取 getHostApi）；i18n 走真 zh 资源；期望文案一律用
  * 同一个 i18n 实例算，并先断言它不是键名本身。文件是 .tsx 但不写 JSX，一律 createElement。
@@ -32,7 +32,8 @@ import { withToolReview, type ToolReviewNote } from '@shuvix/chat-protocol/types
 
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 
-import { useChatStore, type ToolExecution } from '../../../stores/chatStore'
+import { applySessionView, useChatStore, type ToolExecution } from '../../../stores/chatStore'
+import { V, resetStore } from '../../../__tests__/support/views'
 import { ToolCallBlock } from '../ToolCallBlock'
 import { StepGroup } from '../StepGroup'
 import { AskForm } from '../inputs/AskForm'
@@ -99,14 +100,8 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  useChatStore.setState({
-    toolPresentations: { bash: TERMINAL },
-    activeSessionId: A,
-    sessionToolExecutions: {},
-    sessionPendingInputs: {},
-    sessionStreams: {},
-    messages: []
-  })
+  resetStore(A)
+  useChatStore.setState({ toolPresentations: { bash: TERMINAL } })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -177,8 +172,36 @@ describe('ToolCallBlock — 「审查中」', () => {
     expect(toolRow().getAttribute('data-tool-status')).toBe('running')
   })
 
-  it('UI-T2 依次 reviewing true → false → tool_end：审查中 → 转圈 → 都没有', () => {
-    setExecs(A, [liveExec()])
+  it('UI-T2 依次 reviewing true → false → 工具做完：审查中 → 转圈 → 都没有', () => {
+    const card = (result?: string): AssistantMessage => ({
+      id: 'a1',
+      sessionId: A,
+      role: 'assistant',
+      type: 'message',
+      content: '',
+      model: 'm',
+      createdAt: 0,
+      blocks: [
+        {
+          type: 'tool',
+          toolCallId: 'tc-1',
+          toolName: 'bash',
+          args: ARGS,
+          ...(result === undefined ? {} : { result })
+        }
+      ],
+      metadata: null
+    })
+    act(() =>
+      applySessionView(
+        A,
+        V(A, {
+          messages: [card()],
+          toolRuns: { 'tc-1': { status: 'running' } },
+          run: { state: 'busy' }
+        })
+      )
+    )
     render(block())
     expect(spinner()).not.toBeNull()
 
@@ -190,7 +213,16 @@ describe('ToolCallBlock — 「审查中」', () => {
     expect(reviewingEl()).toBeNull()
     expect(spinner()).not.toBeNull()
 
-    act(() => useChatStore.getState().handleToolEnd(A, 'tc-1', { status: 'done', result: 'ok' }))
+    act(() =>
+      applySessionView(
+        A,
+        V(A, {
+          messages: [card('ok')],
+          toolRuns: { 'tc-1': { status: 'done' } },
+          run: { state: 'busy' }
+        })
+      )
+    )
     expect(reviewingEl()).toBeNull()
     expect(spinner()).toBeNull()
     expect(toolRow().getAttribute('data-tool-status')).toBe('done')
@@ -577,7 +609,12 @@ describe('工具卡走完一次审查放行的调用（store 驱动）', () => {
     })
   }
 
-  function seedCard(): void {
+  /** 视图里的那张卡：工具块（可带结果）+ 工具进度 + 运行状态 */
+  function viewWith(
+    tool: { result?: string; isError?: boolean; details?: ToolResultDetails },
+    run: 'running' | 'done' | null,
+    state: 'busy' | 'idle' = 'busy'
+  ): ReturnType<typeof V> {
     const card: AssistantMessage = {
       id: MESSAGE_ID,
       sessionId: A,
@@ -586,18 +623,21 @@ describe('工具卡走完一次审查放行的调用（store 驱动）', () => {
       content: '',
       model: 'test-model',
       createdAt: 0,
-      blocks: [{ type: 'tool', toolCallId: 'tc-1', toolName: 'bash', args: ARGS }],
+      blocks: [{ type: 'tool', toolCallId: 'tc-1', toolName: 'bash', args: ARGS, ...tool }],
       metadata: null
     }
-    useChatStore.setState({ messages: [card] })
+    return V(A, {
+      messages: [card],
+      toolRuns: run === null ? {} : { 'tc-1': { status: run } },
+      run: { state }
+    })
   }
 
-  it('UI-K1 转圈 → 审查中 → 转圈 → 已审查（记下 title）→ finishStreaming 之后标记仍在、title 不变', () => {
-    seedCard()
+  it('UI-K1 转圈 → 审查中 → 转圈 → 已审查（记下 title）→ 本轮结束之后标记仍在、title 不变', () => {
+    act(() => applySessionView(A, viewWith({}, 'running')))
     render(createElement(Probe))
     const s = (): ReturnType<typeof useChatStore.getState> => useChatStore.getState()
 
-    act(() => s().handleToolStart(A, liveExec({ messageId: MESSAGE_ID })))
     expect(spinner()).not.toBeNull()
     expect(reviewingEl()).toBeNull()
 
@@ -609,49 +649,37 @@ describe('工具卡走完一次审查放行的调用（store 驱动）', () => {
     expect(reviewingEl()).toBeNull()
     expect(spinner()).not.toBeNull()
 
-    act(() =>
-      s().handleToolEnd(
-        A,
-        'tc-1',
-        { status: 'done', result: 'removed', details: reviewed() },
-        MESSAGE_ID
-      )
-    )
+    act(() => applySessionView(A, viewWith({ result: 'removed', details: reviewed() }, 'done')))
     const marks = reviewedMarks()
     expect(marks).toHaveLength(1)
     const title = marks[0].getAttribute('title')
     expect(title).toBe(`${reviewedHint('medium')}\n${NOTE.summary}`)
     expect(spinner()).toBeNull()
 
-    act(() => s().finishStreaming(A))
+    act(() =>
+      applySessionView(A, viewWith({ result: 'removed', details: reviewed() }, null, 'idle'))
+    )
     expect(s().sessionToolExecutions[A]).toBeUndefined()
     const after = reviewedMarks()
     expect(after).toHaveLength(1)
     expect(after[0].getAttribute('title')).toBe(title)
   })
 
-  it('UI-K2 同一条链但 tool_end 为 error（审查拒绝）：没有标记、没有审查中，显示错误 X', () => {
-    seedCard()
+  it('UI-K2 同一条链但工具以 error 收尾（审查拒绝）：没有标记、没有审查中，显示错误 X', () => {
+    const BLOCKED = 'Blocked by the reviewer: not what the user asked'
+    act(() => applySessionView(A, viewWith({}, 'running')))
     render(createElement(Probe))
     const s = (): ReturnType<typeof useChatStore.getState> => useChatStore.getState()
 
-    act(() => s().handleToolStart(A, liveExec({ messageId: MESSAGE_ID })))
     act(() => s().setToolReviewing(A, 'tc-1', true))
-    act(() =>
-      s().handleToolEnd(
-        A,
-        'tc-1',
-        { status: 'error', result: 'Blocked by the reviewer: not what the user asked' },
-        MESSAGE_ID
-      )
-    )
+    act(() => applySessionView(A, viewWith({ result: BLOCKED, isError: true }, 'done')))
 
     expect(reviewedMarks()).toHaveLength(0)
     expect(reviewingEl()).toBeNull()
     expect(toolRow().querySelector('svg.lucide-x')).not.toBeNull()
     expect(toolRow().getAttribute('data-tool-status')).toBe('error')
 
-    act(() => s().finishStreaming(A))
+    act(() => applySessionView(A, viewWith({ result: BLOCKED, isError: true }, null, 'idle')))
     expect(reviewedMarks()).toHaveLength(0)
     expect(toolRow().querySelector('svg.lucide-x')).not.toBeNull()
   })

@@ -49,7 +49,7 @@ import {
   type FileChooserNet,
   type FixtureServer,
   type ScriptedCall,
-  type ToolEndEvent
+  type ToolResultRecord
 } from '../../harness/browserFixtures'
 
 const MODEL = 'e2e-model'
@@ -113,29 +113,29 @@ const expectUndisturbed = async (when: string): Promise<void> => {
 /** 一次不该有询问的运行：跑完，断言确实没有卡 */
 const run = async (
   calls: Array<ScriptedCall | ScriptedCall[]>
-): Promise<Record<string, ToolEndEvent>> => {
+): Promise<Record<string, ToolResultRecord>> => {
   provider.reset()
   const { ends, since } = await driver.run(sid, calls)
-  expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+  expect(await driver.asksSince(since, sid)).toBe(0)
   return ends
 }
 
 /** 这次调用的结果（没有就判红，带上已有的调用 id） */
-const endOf = (ends: Record<string, ToolEndEvent>, id: string): ToolEndEvent => {
+const endOf = (ends: Record<string, ToolResultRecord>, id: string): ToolResultRecord => {
   const end = ends[id]
   expect(end, `${id} (have: ${Object.keys(ends).join(', ')})`).toBeDefined()
   return end
 }
 
 /** 成功的一次调用 */
-const ok = (ends: Record<string, ToolEndEvent>, id: string): ToolEndEvent => {
+const ok = (ends: Record<string, ToolResultRecord>, id: string): ToolResultRecord => {
   const end = endOf(ends, id)
   expect(end.isError, `${id}: ${end.result}`).toBe(false)
   return end
 }
 
 /** evaluate 的结果（JSON.stringify(value, null, 2)）还原成值 */
-const valueOf = (ends: Record<string, ToolEndEvent>, id: string): unknown =>
+const valueOf = (ends: Record<string, ToolResultRecord>, id: string): unknown =>
   JSON.parse(ok(ends, id).result)
 
 /** 快照里某个可访问名字的元素 uid（角色不限，`"<name>"` 精确匹配） */
@@ -412,7 +412,7 @@ describe('下拉菜单：焦点在单选 <select> 上时不按会弹出原生菜
       how: string,
       expected: string,
       then: ScriptedCall[]
-    ): Promise<Record<string, ToolEndEvent>> => {
+    ): Promise<Record<string, ToolResultRecord>> => {
       const f = await run([focus(`${label}_focus`, how)])
       expect(valueOf(f, `${label}_focus`), `${label}: focus`).toBe(expected)
       return run(then)

@@ -1,0 +1,69 @@
+{
+  "sessionId": "sid-G08-compaction-firstkept-missing",
+  "leafId": "15cf006b",
+  "branchIds": ["7e91def2", "a14da02d", "dd557dc9", "65a027c0", "15cf006b"],
+  "contextEntryIds": ["dd557dc9", "65a027c0", "15cf006b"],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": [
+    {
+      "id": "dd557dc9",
+      "sessionId": "sid-G08-compaction-firstkept-missing",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "summary with a dangling cut"
+        }
+      ],
+      "content": "summary with a dangling cut",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236734,
+      "metadata": {
+        "isCompactionSummary": true
+      }
+    },
+    {
+      "id": "65a027c0",
+      "sessionId": "sid-G08-compaction-firstkept-missing",
+      "role": "user",
+      "type": "text",
+      "content": "u2",
+      "model": "",
+      "provider": "",
+      "createdAt": 1791137236734,
+      "metadata": {}
+    },
+    {
+      "id": "15cf006b",
+      "sessionId": "sid-G08-compaction-firstkept-missing",
+      "role": "assistant",
+      "type": "message",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "a2"
+        }
+      ],
+      "content": "a2",
+      "model": "test-model",
+      "provider": "test",
+      "createdAt": 1791137236734,
+      "metadata": {
+        "usage": {
+          "input": 10,
+          "output": 5,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 15
+        }
+      }
+    }
+  ]
+}

@@ -32,7 +32,7 @@
 import { Type } from 'typebox'
 import type { TObject, TString } from 'typebox'
 import { BaseTool } from '@shuvix/agent-runtime'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import { listArtifacts, writeArtifact } from '../services/artifacts/store'
 import { adoptFigure, figureArtifactName, listAdoptableFigures } from '../services/artifacts/adopt'
 import { messageService } from '../services/messageService'
@@ -83,7 +83,7 @@ interface ArtifactDetails {
   name?: string
 }
 
-const text = (s: string): AgentToolResult<ArtifactDetails> => ({
+const text = (s: string): ToolResult<ArtifactDetails> => ({
   content: [{ type: 'text' as const, text: s }],
   details: { type: 'artifact', action: 'list' }
 })
@@ -110,7 +110,7 @@ export class ArtifactTool extends BaseTool<typeof ArtifactParamsSchema> {
   protected async executeInternal(
     _toolCallId: string,
     params: { action: string; ref?: string; title?: string; ext?: string; content?: string }
-  ): Promise<AgentToolResult<ArtifactDetails>> {
+  ): Promise<ToolResult<ArtifactDetails>> {
     const sessionId = this.ctx.sessionId
     const action = (params.action || '').trim().toLowerCase()
 

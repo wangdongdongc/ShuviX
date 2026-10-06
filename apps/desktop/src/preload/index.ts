@@ -8,7 +8,7 @@ import type {
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
-  AgentNextTurnParams,
+  AgentWithdrawQueuedParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLogListParams,
@@ -60,6 +60,7 @@ import type { ContextMenuRequest } from '@shuvix/chat-protocol/types/contextMenu
 import type { ProjectMemoryEntry } from '@shuvix/chat-protocol/types/memory'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 import type { LiveDocRequest, LiveDocResult } from '@shuvix/chat-protocol/liveDocument'
+import { createSyncBridge } from './syncBridge'
 
 /**
  * AppEvent 扇出：整页只在 'app:event' 通道挂 **一个** ipcRenderer 监听，再派发给本地订阅者集合。
@@ -160,11 +161,15 @@ const api = {
     steer: (params: AgentSteerParams) => ipcRenderer.invoke('agent:steer', params),
     /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
     followUp: (params: AgentFollowUpParams) => ipcRenderer.invoke('agent:followUp', params),
-    /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
-    nextTurn: (params: AgentNextTurnParams) => ipcRenderer.invoke('agent:nextTurn', params),
+    /** 撤回一条排着的用户输入（P3-11，视图队列的一行）→ `{ result }` */
+    withdrawQueued: (params: AgentWithdrawQueuedParams) =>
+      ipcRenderer.invoke('agent:withdrawQueued', params),
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
+
+    /** 继续被中断的工作（等这一轮落定才回；失败 → success:false + error/code） */
+    continue: (sessionId: string) => ipcRenderer.invoke('agent:continue', sessionId),
 
     /** 切换模型（会话已有 Agent 运行时则拒绝，success: false） */
     setModel: (params: AgentSetModelParams) => ipcRenderer.invoke('agent:setModel', params),
@@ -1011,7 +1016,9 @@ const api = {
   events: {
     // 单一 ipcRenderer 监听 + 本地扇出（见上方 subscribeAppEvent），避免 app:event 监听器泄漏告警
     subscribe: (callback: (event: AppEvent) => void) => subscribeAppEvent(callback)
-  }
+  },
+  /** 视图同步（P3-05）：chord 服务调用 `sync:invoke`（信封 → 带 code 的 Error）+ 服务端推帧 `sync:frame` */
+  sync: createSyncBridge(ipcRenderer)
 }
 
 if (process.contextIsolated) {

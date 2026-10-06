@@ -2,7 +2,7 @@
  * renderBotContext —— bot 正文 → 系统提示词围栏（契约见 botContext.ts 文件头）。
  *
  * bot md 的正文是这个 bot 的人设与记忆。它由宿主围栏后追加到**这条会话根 Agent**
- * 的系统提示词末尾（`CreateAgentParams.systemContext`）—— **只给根 Agent**：子会话按自己的
+ * 的系统提示词末尾（bot 段落，`PromptHost.resolveBotContext`）—— **只给根 Agent**：子会话按自己的
  * 档案生成提示词、派发出去的子代理同理拿不到这段，「人设影响怎么说话、不影响怎么干活」
  * 因此是结构保证而不是一句纪律。那条结构保证在宿主层测（agentSessionBot.test.ts 的
  * AG-5 / AG-6），本文件只管围栏这一段文本长什么样。

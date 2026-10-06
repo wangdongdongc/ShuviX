@@ -1,15 +1,15 @@
 /**
- * 沙箱管理器（sandbox/index.ts）—— 对外唯一入口：开关、后端选择与探测缓存、宿主路径、按会话固定、
+ * 沙箱管理器（sandbox/index.ts）—— 对外唯一入口：开关、后端选择与探测缓存、宿主路径、
  * 执行计划、给策略的会话目录清单、会话清理。
  *
  * 替身：electron 的 app（getPath / isPackaged）、os.homedir、平台后端（假后端，探测 / 包装 / 启动失败
  * 都可控）、fs 里 ensureTmpDir / cleanupSession 用到的几个函数（realpathSync 用真的 —— 符号链接的用例要
- * 真链接）、logger。模块级缓存（后端、探测结果、固定表、realpath 缓存）每个用例 resetModules 后重新导入。
+ * 真链接）、logger。模块级缓存（后端、探测结果、realpath 缓存）每个用例 resetModules 后重新导入。
  *
  *  - MG-1 开关的读取；MG-2 后端选择 + 探测缓存 + 交给探测的宿主路径（含 ShuviX 自己的程序目录）；
- *  - MG-3 按会话固定；MG-4 / MG-5 planFor 的正常路径与 null；MG-6 plan.explain；MG-7 cleanupSession；
- *  - MG-8 whyUnconfined（命令没进沙箱的原因：固定那一刻的，或此刻的；从不探测）；
- *  - MG-9 sessionDirsView（策略的 `vars.sessionDirs` / `vars.sessionReadDirs`）：与开关 / 固定 / 探测 /
+ *  - MG-3 planFor 不看开关；MG-4 / MG-5 planFor 的正常路径与 null；MG-6 plan.explain；MG-7 cleanupSession；
+ *  - MG-8 whyUnconfined（命令没进沙箱的原因：此刻的；从不探测）；
+ *  - MG-9 sessionDirsView（策略的 `vars.sessionDirs` / `vars.sessionReadDirs`）：与开关 / 探测 /
  *    平台都无关，与 planFor 的规格同一份；算不出来给空清单。
  */
 import { createHash } from 'crypto'
@@ -203,11 +203,10 @@ async function realSymlink(prefix: string): Promise<[string, string]> {
 }
 
 describe('MG-1 开关的读取', () => {
-  it('MG-1 从没注入读取口 → 关闭；后端可用也不固定为启用', async () => {
+  it('MG-1 从没注入读取口 → 关闭；后端可用也不启用', async () => {
     const m = await load()
     expect(m.sandboxStatus().enabled).toBe(false)
     expect(m.sandboxStatus().available).toBe(true)
-    expect(m.pinSession('s1')).toBe(false)
     expect(m.sandboxGloballyActive()).toBe(false)
   })
 
@@ -228,7 +227,7 @@ describe('MG-1 开关的读取', () => {
       throw new Error('db closed')
     })
     expect(m.sandboxStatus().enabled).toBe(false)
-    expect(m.pinSession('s1')).toBe(false)
+    expect(m.sandboxGloballyActive()).toBe(false)
   })
 
   it('MG-1 sandboxGloballyActive = 启用 && 探测可用', async () => {
@@ -238,9 +237,8 @@ describe('MG-1 开关的读取', () => {
     expect(m.sandboxGloballyActive()).toBe(false)
   })
 
-  it('MG-1 设置关着：固定会话不探测、不碰 app.getPath', async () => {
+  it('MG-1 设置关着：读全局开关不探测、不碰 app.getPath', async () => {
     const m = await load(() => 'false')
-    expect(m.pinSession('s1')).toBe(false)
     expect(m.sandboxGloballyActive()).toBe(false)
     expect(mocks.probe).not.toHaveBeenCalled()
     expect(mocks.getPath).not.toHaveBeenCalled()
@@ -249,7 +247,7 @@ describe('MG-1 开关的读取', () => {
 
 describe('MG-2 后端选择 + 探测缓存 + 宿主路径', () => {
   it.each(['linux', 'win32'] as const)(
-    'MG-2 %s：没有后端 → 不支持、不可用；pin 为假、没有计划、清理不删任何东西',
+    'MG-2 %s：没有后端 → 不支持、不可用；全局不启用、没有计划、清理不删任何东西',
     async (platform) => {
       setPlatform(platform)
       const m = await load(() => 'true')
@@ -259,7 +257,7 @@ describe('MG-2 后端选择 + 探测缓存 + 宿主路径', () => {
         enabled: true,
         reason: 'no sandbox backend for this platform'
       })
-      expect(m.pinSession('s1')).toBe(false)
+      expect(m.sandboxGloballyActive()).toBe(false)
       expect(m.planFor(request())).toBeNull()
       m.cleanupSession('s1')
       expect(mocks.rmSync).not.toHaveBeenCalled()
@@ -267,11 +265,11 @@ describe('MG-2 后端选择 + 探测缓存 + 宿主路径', () => {
     }
   )
 
-  it('MG-2 darwin + 探测成功：跨 3 次 status、2 次 pin、2 次 planFor 只探测一次；可用时没有 reason 键', async () => {
+  it('MG-2 darwin + 探测成功：跨 3 次 status、2 次全局开关、2 次 planFor 只探测一次；可用时没有 reason 键', async () => {
     const m = await load(() => 'true')
     const statuses = [m.sandboxStatus(), m.sandboxStatus(), m.sandboxStatus()]
-    m.pinSession('a')
-    m.pinSession('b')
+    m.sandboxGloballyActive()
+    m.sandboxGloballyActive()
     expect(m.planFor(request({ sessionId: 'a' }))).not.toBeNull()
     expect(m.planFor(request({ sessionId: 'b' }))).not.toBeNull()
     expect(mocks.probe).toHaveBeenCalledTimes(1)
@@ -337,8 +335,8 @@ describe('MG-2 后端选择 + 探测缓存 + 宿主路径', () => {
     })
     m.sandboxStatus()
     m.sandboxStatus()
-    expect(m.pinSession('a')).toBe(false)
-    expect(m.pinSession('b')).toBe(false)
+    expect(m.sandboxGloballyActive()).toBe(false)
+    expect(m.sandboxGloballyActive()).toBe(false)
     expect(m.planFor(request({ sessionId: 'a' }))).toBeNull()
     expect(m.planFor(request({ sessionId: 'b' }))).toBeNull()
     expect(mocks.probe).toHaveBeenCalledTimes(1)
@@ -361,30 +359,14 @@ describe('MG-2 后端选择 + 探测缓存 + 宿主路径', () => {
   })
 })
 
-describe('MG-3 按会话固定', () => {
-  it('MG-3 启用时固定；开关中途关掉：已固定的会话不变、新会话按新值；unpin 之后按当时的开关重新决定', async () => {
+describe('MG-3 planFor 不看开关', () => {
+  it('MG-3 planFor 不看开关：固定为沙箱模式的工具实例才会来要计划，开关中途关掉，还在用的旧实例照样受限', async () => {
     let setting: string | undefined = 'true'
     const m = await load(() => setting)
-    expect(m.pinSession('s1')).toBe(true)
-
+    expect(m.sandboxGloballyActive()).toBe(true)
     setting = 'false'
-    expect(m.pinSession('s1')).toBe(true)
-    expect(m.pinSession('s2')).toBe(false)
+    expect(m.sandboxGloballyActive()).toBe(false)
     expect(m.planFor(request({ sessionId: 's1' }))).not.toBeNull()
-
-    m.unpinSession('s1')
-    expect(m.pinSession('s1')).toBe(false)
-  })
-
-  it('MG-3 planFor 不看固定表：固定为沙箱模式的工具实例才会来要计划，运行时失效后仍在收尾的旧实例照样受限', async () => {
-    let setting: string | undefined = 'true'
-    const m = await load(() => setting)
-    expect(m.pinSession('s1')).toBe(true)
-    m.unpinSession('s1')
-    setting = 'false'
-    expect(m.planFor(request({ sessionId: 's1' }))).not.toBeNull()
-    // 从没固定过的会话也一样（只看后端与探测）
-    expect(m.planFor(request({ sessionId: 'never-pinned' }))).not.toBeNull()
   })
 
   it('MG-3 没有后端 / 探测失败时 planFor 直接 null，不碰 fs', async () => {
@@ -563,28 +545,19 @@ describe('MG-6 plan.explain', () => {
 })
 
 describe('MG-7 cleanupSession', () => {
-  it('MG-7 删掉 tmp 根下本会话的目录，并解除固定', async () => {
-    let setting: string | undefined = 'true'
-    const m = await load(() => setting)
-    expect(m.pinSession('s1')).toBe(true)
-    setting = 'false'
+  it('MG-7 删掉 tmp 根下本会话的目录', async () => {
+    const m = await load(() => 'true')
     m.cleanupSession('s1')
     expect(mocks.rmSync).toHaveBeenCalledWith(join(TMP_ROOT, sha8('s1')), {
       recursive: true,
       force: true
     })
-    // 已解除：下一次按此刻的开关（关）重新决定
-    expect(m.pinSession('s1')).toBe(false)
   })
 
-  it('MG-7 不安全的会话 id：不删，但照样解除固定', async () => {
-    let setting: string | undefined = 'true'
-    const m = await load(() => setting)
-    expect(m.pinSession('../x')).toBe(true)
-    setting = 'false'
+  it('MG-7 不安全的会话 id：不删', async () => {
+    const m = await load(() => 'true')
     m.cleanupSession('../x')
     expect(mocks.rmSync).not.toHaveBeenCalled()
-    expect(m.pinSession('../x')).toBe(false)
   })
 
   it('MG-7 rmSync 抛错被吞掉', async () => {
@@ -615,78 +588,33 @@ describe('MG-8 whyUnconfined：命令没进沙箱的原因（不触发探测）'
   ]
 
   it.each(['linux', 'win32'] as const)(
-    "MG-8a %s：恒 'unsupported' —— 开关开 / 关 / 读取口没注入，固定前、固定后、解除后都一样",
+    "MG-8a %s：恒 'unsupported' —— 开关开 / 关 / 读取口没注入都一样",
     async (platform) => {
       setPlatform(platform)
       for (const [label, reader] of [...DISABLED, ...UNAVAILABLE]) {
         const m = await load(reader)
-        expect({ label, before: m.whyUnconfined('s1') }).toEqual({
-          label,
-          before: 'unsupported'
-        })
-        expect(m.pinSession('s1')).toBe(false)
-        expect({ label, pinned: m.whyUnconfined('s1') }).toEqual({
-          label,
-          pinned: 'unsupported'
-        })
-        m.unpinSession('s1')
-        expect({ label, after: m.whyUnconfined('s1') }).toEqual({ label, after: 'unsupported' })
+        expect({ label, reason: m.whyUnconfined() }).toEqual({ label, reason: 'unsupported' })
       }
       expect(mocks.probe).not.toHaveBeenCalled()
     }
   )
 
-  it.each(DISABLED)("MG-8b darwin、没固定：%s → 'disabled'", async (_label, reader) => {
+  it.each(DISABLED)("MG-8b darwin：%s → 'disabled'", async (_label, reader) => {
     const m = await load(reader)
-    expect(m.whyUnconfined('s1')).toBe('disabled')
+    expect(m.whyUnconfined()).toBe('disabled')
   })
 
-  it.each(UNAVAILABLE)("MG-8b darwin、没固定：%s → 'unavailable'", async (_label, reader) => {
+  it.each(UNAVAILABLE)("MG-8b darwin：%s → 'unavailable'", async (_label, reader) => {
     const m = await load(reader)
-    expect(m.whyUnconfined('s1')).toBe('unavailable')
+    expect(m.whyUnconfined()).toBe('unavailable')
   })
 
-  it('MG-8c 以上各情形反复问、问多条会话，探测一次都不跑（这是每条命令都走的路径）', async () => {
+  it('MG-8c 以上各情形反复问，探测一次都不跑（这是每条命令都走的路径）', async () => {
     for (const [label, reader] of [...DISABLED, ...UNAVAILABLE]) {
       const m = await load(reader)
-      for (const sid of ['s1', 's2', 's1']) m.whyUnconfined(sid)
+      for (let i = 0; i < 3; i++) m.whyUnconfined()
       expect({ label, probes: mocks.probe.mock.calls.length }).toEqual({ label, probes: 0 })
     }
-  })
-
-  it("MG-8d 设置关着时固定：pin 为假；之后打开设置，这条会话仍是 'disabled'、另一条没固定的是 'unavailable'；unpin 之后回到此刻的状态", async () => {
-    let setting: string | undefined = 'false'
-    const m = await load(() => setting)
-    expect(m.pinSession('s1')).toBe(false)
-    expect(m.whyUnconfined('s1')).toBe('disabled')
-
-    setting = 'true'
-    expect(m.whyUnconfined('s1')).toBe('disabled')
-    expect(m.whyUnconfined('s2')).toBe('unavailable')
-    // 再固定一次拿到的仍是第一次的答案，原因也不改
-    expect(m.pinSession('s1')).toBe(false)
-    expect(m.whyUnconfined('s1')).toBe('disabled')
-
-    m.unpinSession('s1')
-    expect(m.whyUnconfined('s1')).toBe('unavailable')
-    expect(mocks.probe).not.toHaveBeenCalled()
-  })
-
-  it("MG-8d 反方向：探测没过时固定 → 'unavailable'；之后关掉设置仍是 'unavailable'、没固定的会话是 'disabled'；cleanupSession 同样解除", async () => {
-    mocks.probe.mockReturnValue({ available: false, reason: 'nested' })
-    let setting: string | undefined = 'true'
-    const m = await load(() => setting)
-    expect(m.pinSession('s1')).toBe(false)
-    expect(m.whyUnconfined('s1')).toBe('unavailable')
-
-    setting = 'false'
-    expect(m.whyUnconfined('s1')).toBe('unavailable')
-    expect(m.whyUnconfined('s2')).toBe('disabled')
-
-    m.cleanupSession('s1')
-    expect(m.whyUnconfined('s1')).toBe('disabled')
-    // 只有固定那一次探测过
-    expect(mocks.probe).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -704,24 +632,24 @@ describe('MG-9 sessionDirsView：给策略的会话目录清单（与沙箱开�
       views.push(['读取口没注入', m.sessionDirsView('s1', WS, EXTRAS)])
       expect(mocks.probe).not.toHaveBeenCalled()
     }
-    // ② 设置关着、固定为假
+    // ② 设置关着
     {
       const m = await load(() => 'false')
-      expect(m.pinSession('s1')).toBe(false)
+      expect(m.sandboxGloballyActive()).toBe(false)
       views.push(['设置关着', m.sessionDirsView('s1', WS, EXTRAS)])
     }
-    // ③ 探测失败：会话固定成不套
+    // ③ 探测失败：不套
     {
       mocks.probe.mockReturnValue({ available: false, reason: 'nested' })
       const m = await load(() => 'true')
-      expect(m.pinSession('s1')).toBe(false)
+      expect(m.sandboxGloballyActive()).toBe(false)
       views.push(['探测失败', m.sessionDirsView('s1', WS, EXTRAS)])
       mocks.probe.mockReturnValue({ available: true })
     }
     // ④ 沙箱真的套上：清单就是这条会话的规格里那一份
     {
       const m = await load(() => 'true')
-      expect(m.pinSession('s1')).toBe(true)
+      expect(m.sandboxGloballyActive()).toBe(true)
       const plan = m.planFor(request({ extras: EXTRAS }))!
       expect(plan.spec.sessionDirs).toEqual(EXPECTED.sessionDirs)
       expect(plan.spec.sessionReadDirs).toEqual(EXPECTED.sessionReadDirs)

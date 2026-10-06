@@ -2,17 +2,15 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 
 /** 前端能力声明 */
 export interface ChatFrontendCapabilities {
-  /** 支持实时流式 delta 事件 (text_delta / thinking_delta / image_data) */
-  streaming?: boolean
   /**
-   * 支持"用户输入请求"交互(input_request 事件)。
-   * 命令询问 / 选择题 / SSH 凭证全部归并为单一能力。
-   * 不支持的前端在收到 input_request 时被跳过,工具收到 cancel 响应。
+   * 能展示、回答「用户输入请求」（命令询问 / 选择题 / SSH 凭证）。询问本身经视图同步到达前端
+   * （`SessionView.asks`，P3-08）—— 这项能力只剩一个用途：`hasUserInputCapability` 闸门（一个能答的前端
+   * 都没有时，工具当场收到 cancel，而不是挂起一条永远没人答的询问）。
    */
   userInput?: boolean
 }
 
-/** 聊天前端适配器 — 接收 Agent 流式事件推送 */
+/** 聊天前端适配器 — 接收余项事件推送（运行生命周期、错误、运行时出生 / 关停……；内容走视图同步） */
 export interface ChatFrontend {
   /** 唯一标识 */
   readonly id: string

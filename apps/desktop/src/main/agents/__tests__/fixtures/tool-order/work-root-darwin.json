@@ -1,0 +1,214 @@
+{
+  "case": "work-root-darwin",
+  "description": "work root on macOS with two MCP servers and a user skill ticked (the drawing skill in the overlay dedupes against the profile)",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
+  "inputs": {
+    "platform": "darwin",
+    "kind": "root",
+    "rootSessionId": "sess-golden-root",
+    "selfSessionId": "sess-golden-root",
+    "canSpawn": null,
+    "profile": "work",
+    "profileTools": [
+      "bash",
+      "powershell",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "agent",
+      "session",
+      "knowledge",
+      "artifact",
+      "skill:builtin:drawing"
+    ],
+    "toolOverlay": [
+      "mcp:context7",
+      "mcp:ssh",
+      "skill:pdf",
+      "skill:builtin:drawing"
+    ],
+    "names": [
+      "bash",
+      "powershell",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "agent",
+      "session",
+      "knowledge",
+      "artifact",
+      "skill:builtin:drawing",
+      "mcp:context7",
+      "mcp:ssh",
+      "skill:pdf"
+    ],
+    "extraTools": [],
+    "projectPath": "/Users/golden/projects/acme",
+    "skillsAvailable": true,
+    "mcpServers": {
+      "context7": {
+        "tools": [
+          "resolve-library-id",
+          "get-library-docs"
+        ]
+      },
+      "ssh": {
+        "tools": [
+          "list-hosts",
+          "exec",
+          "upload",
+          "download",
+          "sync"
+        ]
+      }
+    },
+    "registeredBuiltins": [
+      {
+        "name": "bash",
+        "platforms": [
+          "darwin",
+          "linux"
+        ]
+      },
+      {
+        "name": "powershell",
+        "platforms": [
+          "win32"
+        ]
+      },
+      {
+        "name": "read",
+        "platforms": null
+      },
+      {
+        "name": "write",
+        "platforms": null
+      },
+      {
+        "name": "edit",
+        "platforms": null
+      },
+      {
+        "name": "ask",
+        "platforms": null
+      },
+      {
+        "name": "git",
+        "platforms": null
+      },
+      {
+        "name": "artifact",
+        "platforms": null
+      },
+      {
+        "name": "session",
+        "platforms": null
+      },
+      {
+        "name": "knowledge",
+        "platforms": null
+      },
+      {
+        "name": "doc_read",
+        "platforms": null
+      },
+      {
+        "name": "doc_edit",
+        "platforms": null
+      },
+      {
+        "name": "doc_insert",
+        "platforms": null
+      },
+      {
+        "name": "ls",
+        "platforms": null
+      },
+      {
+        "name": "grep",
+        "platforms": null
+      },
+      {
+        "name": "glob",
+        "platforms": null
+      }
+    ]
+  },
+  "observed": {
+    "skillToolConstructed": [
+      {
+        "names": [
+          "builtin:drawing",
+          "pdf"
+        ],
+        "projectPath": "/Users/golden/projects/acme"
+      }
+    ],
+    "mcpEnsureCalls": [
+      [
+        "context7",
+        {
+          "timeoutMs": 5000,
+          "sessionId": "sess-golden-root"
+        }
+      ],
+      [
+        "ssh",
+        {
+          "timeoutMs": 5000,
+          "sessionId": "sess-golden-root"
+        }
+      ]
+    ],
+    "mcpGetToolsCalls": [
+      [
+        "context7",
+        "sess-golden-root",
+        {
+          "callerId": "sess-golden-root"
+        }
+      ],
+      [
+        "ssh",
+        "sess-golden-root",
+        {
+          "callerId": "sess-golden-root"
+        }
+      ]
+    ],
+    "broadcasts": [],
+    "spill": true
+  },
+  "output": {
+    "toolNames": [
+      "bash",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "session",
+      "knowledge",
+      "artifact",
+      "agent",
+      "skill",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "mcp__ssh__list-hosts",
+      "mcp__ssh__exec",
+      "mcp__ssh__upload",
+      "mcp__ssh__download",
+      "mcp__ssh__sync"
+    ]
+  }
+}

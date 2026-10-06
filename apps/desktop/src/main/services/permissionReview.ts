@@ -30,12 +30,11 @@ import {
   type PermissionReviewAnswer,
   type SecurityDecisionRecord
 } from '@shuvix/agent-runtime'
-import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { chatFrontendRegistry } from '../frontend/core'
 import { hookService, hookTriggers } from './hookService'
-import { messageService } from './messageService'
 import { sessionRecords } from './sessionRecords'
 import { settingsService } from './settingsService'
+import { readSessionTranscript, type TranscriptItem } from './transcriptSource'
 import { createLogger } from '../logger'
 
 const log = createLogger('PermissionReview')
@@ -84,13 +83,6 @@ function firstAndTail(items: string[]): string[] {
   return [items[0], `(${omitted} earlier messages omitted)`, ...items.slice(-USER_MESSAGES_TAIL)]
 }
 
-/** 一条用户消息是不是系统写的（后台完成通知、指令注入）—— 转写不得把系统写的话记成人说的 */
-function isSystemWritten(message: ChatMessage): boolean {
-  if (message.role !== 'user') return false
-  const meta = message.metadata
-  return !!(meta?.isSystemNotice || meta?.isInstructionInjection)
-}
-
 /** 一条人写的输入与它的时间（几路来源合并时按时间排） */
 interface HumanInput {
   ts: number
@@ -98,29 +90,25 @@ interface HumanInput {
 }
 
 /**
- * 会话树里人写的东西（旧 → 新）：人发的消息（includeUserMessages 时），人对 ask 工具的回答（连同问题）。
- * 读的是投影后的消息列表 —— 压缩掉的早期消息不在其中（压缩摘要是模型写的，本来也不收）。
- * ask 的回答按所在那条 assistant 消息的时间排（回答本身晚一点，但早于下一条消息）。
+ * 会话转写里人写的东西（旧 → 新）：人发的消息（includeUserMessages 时；系统写的 —— 后台完成通知、指令注入 ——
+ * 不算），人对 ask 工具的回答（连同问题）。读的是当前上下文 —— 压缩掉的早期消息不在其中（压缩摘要是模型写的，
+ * 本来也不收）。ask 的回答按所在那条 assistant 消息的时间排（回答本身晚一点，但早于下一条消息）。
  */
-function transcriptInputsOf(messages: ChatMessage[], includeUserMessages: boolean): HumanInput[] {
+function transcriptInputsOf(
+  items: readonly TranscriptItem[],
+  includeUserMessages: boolean
+): HumanInput[] {
   const inputs: HumanInput[] = []
-  for (const message of messages) {
-    if (message.role === 'user') {
-      if (!includeUserMessages || isSystemWritten(message)) continue
-      const text = message.content.trim()
-      if (text) inputs.push({ ts: message.createdAt, text: clip(text, USER_MESSAGE_MAX_CHARS) })
-      continue
-    }
-    if (message.role !== 'assistant') continue
-    for (const block of message.blocks) {
-      // 只认内置 ask 工具（第三方工具名恒带 mcp__ 前缀，撞不上）；取消的（isError）不算回答
-      if (block.type !== 'tool' || block.toolName !== 'ask') continue
-      if (typeof block.result !== 'string' || block.isError) continue
-      const question = typeof block.args?.question === 'string' ? block.args.question : ''
+  for (const item of items) {
+    if (item.kind === 'user') {
+      if (!includeUserMessages || item.systemWritten) continue
+      const text = item.text.trim()
+      if (text) inputs.push({ ts: item.ts, text: clip(text, USER_MESSAGE_MAX_CHARS) })
+    } else if (item.kind === 'ask') {
       inputs.push({
-        ts: message.createdAt,
+        ts: item.ts,
         text: clip(
-          `(answering the agent's question "${question}") ${block.result}`,
+          `(answering the agent's question "${item.question}") ${item.answer}`,
           USER_MESSAGE_MAX_CHARS
         )
       })
@@ -147,12 +135,12 @@ function feedbackInputsOf(sessionId: string): HumanInput[] {
 function humanInputsOf(
   sessionId: string,
   top: string,
-  topMessages: ChatMessage[],
-  ownMessages: ChatMessage[]
+  topItems: readonly TranscriptItem[],
+  ownItems: readonly TranscriptItem[]
 ): string[] {
-  const inputs = [...transcriptInputsOf(topMessages, true), ...feedbackInputsOf(top)]
+  const inputs = [...transcriptInputsOf(topItems, true), ...feedbackInputsOf(top)]
   if (sessionId !== top) {
-    inputs.push(...transcriptInputsOf(ownMessages, false), ...feedbackInputsOf(sessionId))
+    inputs.push(...transcriptInputsOf(ownItems, false), ...feedbackInputsOf(sessionId))
   }
   // 稳定排序：同一时刻的先后保持来源内的次序
   inputs.sort((a, b) => a.ts - b.ts)
@@ -160,11 +148,11 @@ function humanInputsOf(
 }
 
 /** 子会话自己的「用户消息」—— 父 agent 写的任务（旧 → 新） */
-function delegatedTasksOf(messages: ChatMessage[]): string[] {
+function delegatedTasksOf(items: readonly TranscriptItem[]): string[] {
   const tasks: string[] = []
-  for (const message of messages) {
-    if (message.role !== 'user' || isSystemWritten(message)) continue
-    const text = message.content.trim()
+  for (const item of items) {
+    if (item.kind !== 'user' || item.systemWritten) continue
+    const text = item.text.trim()
     if (text) tasks.push(clip(text, USER_MESSAGE_MAX_CHARS))
   }
   return firstAndTail(tasks)
@@ -269,9 +257,9 @@ export async function buildPermissionRequestPayload(
   const { request, decision } = event
   const sessionId = request.subject.sessionId
   const top = topLevelSessionOf(sessionId)
-  const topMessages = await messageService.listBySession(top)
-  const ownMessages =
-    top === sessionId ? topMessages : await messageService.listBySession(sessionId)
+  // 两种存储各走各的读者（旧格式：冻结投影；durable：当前对话的转写摘要，只 peek 从不创建）
+  const topItems = await readSessionTranscript(top)
+  const ownItems = top === sessionId ? topItems : await readSessionTranscript(sessionId)
   const tool = request.tool
     ? request.tool.operation
       ? `${request.tool.name}: ${request.tool.operation}`
@@ -294,19 +282,37 @@ export async function buildPermissionRequestPayload(
       names: policyNamesOf(decision),
       prompt: decision.prompt?.text ?? ''
     },
-    userMessages: humanInputsOf(sessionId, top, topMessages, ownMessages),
-    delegatedTasks: top === sessionId ? [] : delegatedTasksOf(ownMessages),
+    userMessages: humanInputsOf(sessionId, top, topItems, ownItems),
+    delegatedTasks: top === sessionId ? [] : delegatedTasksOf(ownItems),
     recentOperations: recentOperationsOf(sessionId, event.toolCallId)
   }
 }
 
-/** 工具卡上的「审查中」：开始与落定（不论结论）各发一次，按 toolCallId 更新那张卡 */
-function notifyReviewing(sessionId: string, toolCallId: string, reviewing: boolean): void {
-  chatFrontendRegistry.broadcast({ type: 'tool_review', sessionId, toolCallId, reviewing })
+/**
+ * 工具卡上的「审查中」：开始与落定（不论结论）各发一次。前端按 toolCallId 找那张卡；带 durable taskId 时
+ * 一并带上（PIN-09）—— provider 的 toolCallId 会话内可能重复（根与派生 agent 都可能是 `call_0`），taskId 不会。
+ */
+function notifyReviewing(
+  sessionId: string,
+  toolCallId: string,
+  taskId: number | undefined,
+  reviewing: boolean
+): void {
+  chatFrontendRegistry.broadcast({
+    type: 'tool_review',
+    sessionId,
+    toolCallId,
+    ...(taskId === undefined ? {} : { taskId }),
+    reviewing
+  })
 }
 
 /**
  * 接缝实现：交给判定型 hook，交回最严的结论；答不出交回 null（照旧问人）。绝不抛出。
+ *
+ * 审查员那条对话归**发起询问的那个工具任务**所有（Q16）：`event.taskId` 经 `ownerTaskId` 一路穿到路由，
+ * 按 (sessionId, taskId) 认人 —— 它随那次工具调用的中止原生级联、拖住那次调用直到审查收场。durable 调用
+ * 之外的询问点没有 taskId，审查员归一个后台锚任务。
  */
 export async function reviewPermissionRequest(
   event: PermissionRequestEvent,
@@ -327,15 +333,19 @@ export async function reviewPermissionRequest(
   }
   // 没有 hook 绑在这个埋点上就不会有审查：也就不报「审查中」，免得卡片闪一下
   const announce = reviewers.size > 0 && !!event.toolCallId
-  if (announce) notifyReviewing(subject.sessionId, event.toolCallId, true)
+  if (announce) notifyReviewing(subject.sessionId, event.toolCallId, event.taskId, true)
   try {
     const payload = await buildPermissionRequestPayload(event)
-    const decision = await hookTriggers.decide('permission.request', payload, { signal })
+    const decision = await hookTriggers.decide(
+      'permission.request',
+      payload,
+      event.taskId === undefined ? { signal } : { signal, ownerTaskId: event.taskId }
+    )
     return decision ? { verdict: decision.result, source: decision.hook } : null
   } catch (err) {
     log.warn(`permission review failed: ${err instanceof Error ? err.message : String(err)}`)
     return null
   } finally {
-    if (announce) notifyReviewing(subject.sessionId, event.toolCallId, false)
+    if (announce) notifyReviewing(subject.sessionId, event.toolCallId, event.taskId, false)
   }
 }

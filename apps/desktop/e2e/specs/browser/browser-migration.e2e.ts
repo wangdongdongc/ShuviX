@@ -17,7 +17,13 @@
 import { rmSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { sqlite, sqliteJson, sqlLit, waitRendererReady } from '../../harness/seed'
+import {
+  ensureDefaultModel,
+  sqlite,
+  sqliteJson,
+  sqlLit,
+  waitRendererReady
+} from '../../harness/seed'
 import { BROWSER_TOOL_NAMES, browserTool } from '../../harness/browserFixtures'
 
 const BROWSER_ID = 'builtin-mcp-browser'
@@ -96,6 +102,7 @@ const mcpList = (): Promise<Array<{ id: string; name: string; isBuiltin: number;
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   home = app.home
   await waitRendererReady(app.main)
 }, 120_000)

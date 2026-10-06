@@ -3,6 +3,7 @@
   "include": [
     "electron.vite.config.*",
     "vitest.config.e2e.ts",
+    "vitest.config.protocols.ts",
     "e2e/**/*.ts",
     "src/main/**/*",
     "src/preload/**/*",
@@ -32,6 +33,10 @@
       ],
       "@shuvix/agent-runtime/security/builtinPolicies/inlineSources": [
         "../../packages/agent-runtime/src/security/builtinPolicies/inlineSources.ts"
+      ],
+      // 工具单测辅助（假 durable api 调一次工具）：只有单测用，产品代码不得 import
+      "@shuvix/agent-runtime/tools/testing/invokeTool": [
+        "../../packages/agent-runtime/src/tools/testing/invokeTool.ts"
       ],
       "@shuvix/agent-runtime": ["../../packages/agent-runtime/src/index.ts"]
     }

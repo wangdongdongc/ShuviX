@@ -13,7 +13,7 @@
  * 操作失败（原文对不上、匹配多处）以抛错结束：pi 只把抛出的调用记为失败，步骤行才会是红的。
  */
 import { Type, type Static } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import { BaseTool } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import {
@@ -176,7 +176,7 @@ export class DocReadTool extends DocTool<typeof DocReadParamsSchema> {
     _toolCallId: string,
     _params: Static<typeof DocReadParamsSchema>,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<ToolResult<undefined>> {
     const result = await this.run({ kind: 'read' }, signal)
     if (result.kind !== 'read') throw new Error('Unexpected answer from the document window.')
     return { content: [{ type: 'text', text: formatReadResult(result) }], details: undefined }
@@ -193,7 +193,7 @@ export class DocEditTool extends DocTool<typeof DocEditParamsSchema> {
     toolCallId: string,
     params: Static<typeof DocEditParamsSchema>,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<ToolResult<undefined>> {
     if (!params.find)
       throw new Error('`find` is empty. To add text without replacing any, use doc_insert.')
     const result = await this.run(
@@ -215,7 +215,7 @@ export class DocInsertTool extends DocTool<typeof DocInsertParamsSchema> {
     toolCallId: string,
     params: Static<typeof DocInsertParamsSchema>,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<undefined>> {
+  ): Promise<ToolResult<undefined>> {
     // 空串锚点当作没给（模型常把「不要锚点」写成 ""）
     const after = params.after || undefined
     const before = params.before || undefined

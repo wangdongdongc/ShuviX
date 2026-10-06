@@ -4,9 +4,10 @@ import './styles.css'
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { setSessionChannelApi } from '@shuvix/chat-ui'
+import { setSessionChannelApi, syncClientFor } from '@shuvix/chat-ui'
 import { PanelLink } from './panelLink'
 import { createPanelChannelApi } from './channelApi'
+import { resetSyncOnReconnect } from './syncReset'
 import { dropTab, initTabSelection } from './tabSelection'
 import { applyAppearance, DEFAULT_APPEARANCE } from './appearance'
 import { App } from './App'
@@ -27,7 +28,14 @@ if (!Number.isInteger(tabId) || tabId < 0) {
   chrome.tabs.onRemoved.addListener((closed) => dropTab(closed))
   const link = new PanelLink(tabId)
   // 单会话渠道：宿主管理类界面（模型 / 项目 / 会话配置 / 设置入口）随 getHostApi() 为空自动隐藏
-  setSessionChannelApi(createPanelChannelApi(link))
+  const api = createPanelChannelApi(link)
+  setSessionChannelApi(api)
+  // 视图同步的客户端先于任何视图 hook 建好：同一条桥连接上的几个侧边栏共用一个桌面客户端
+  // （`chrome:<connId>`），订阅 id 按标签页 + 本页随机数加前缀才不会撞（P3-09-12）
+  const nonce = Math.random().toString(36).slice(2, 8)
+  const syncClient = syncClientFor(api.sync, { idPrefix: `tab${tabId}.${nonce}` })
+  // 重连（非 ready → ready）之后旧连接上的订阅都不在了：丢掉绑定、重订一份新快照（PIN-10）
+  resetSyncOnReconnect(link, syncClient)
   if (rootEl) {
     createRoot(rootEl).render(
       <StrictMode>

@@ -9,9 +9,11 @@
  *     发不出去），而带着 md 启动时没有主窗口可以先去种 —— 所以先普通启动一次、种好假提供商、
  *     `stop({ keepHome: true })`，再用同一个 HOME 带着 md 参数起第二次。
  *
- * 协作编辑（`markdown-coedit`）另外用到两件：`captureEvents`（在 md 窗口里把本会话的 ChatEvent 记进
- * 页面全局 —— 流式参数的 toolCallId、工具的起止、run 的结束都从这里读）与 `readOnlyDir`（让自动保存
- * 失败：保存是「同目录临时文件 + rename」，所以要锁的是**目录**而不是文件 —— 只读文件照样被 rename 盖掉）。
+ * 协作编辑（`markdown-coedit`）另外用到两件：`captureEvents`（在 md 窗口里把本会话余下的 ChatEvent 记进
+ * 页面全局 —— run 的起止（`agent_start` / `agent_end`）从这里读；P3-08 起流式参数、工具的起止与询问都不再是
+ * 事件，`toolStarted` / `toolResult` / `liveArgs` / `view` 经 md 窗口自己的 `window.api.sync` 读会话视图）与
+ * `readOnlyDir`（让自动保存失败：保存是「同目录临时文件 + rename」，所以要锁的是**目录**而不是文件 ——
+ * 只读文件照样被 rename 盖掉）。
  */
 import {
   chmodSync,
@@ -28,6 +30,8 @@ import { launchApp, type E2EMarkdownApp, type MarkdownLaunchOptions } from './la
 import { seedFakeProvider } from './seed'
 import { startFakeProvider, type FakeProvider } from './fakeProvider'
 import { until, type CdpClient } from './cdp'
+import { syncProbe, toolResultsIn } from './sync'
+import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 
 /** 假提供商的模型 id（与 seedFakeProvider 一起写进默认模型） */
 export const MD_FAKE_MODEL = 'e2e-md-model'
@@ -152,6 +156,17 @@ export interface CapturedEvent {
   hasToolCallId: boolean
 }
 
+/** 探针在会话视图里看见一次工具调用的某个时刻（开始执行 / 结果落盘）—— 不是事件 */
+export interface ToolCallSighting {
+  /** 探针看见它的时刻（Date.now()） */
+  at: number
+  toolCallId: string
+  toolName?: string
+  /** 只在结果落盘时给出 */
+  isError?: boolean
+  result?: string
+}
+
 export interface EventLog {
   /** 到目前为止记下的全部事件（按到达顺序） */
   all(): Promise<CapturedEvent[]>
@@ -163,8 +178,20 @@ export interface EventLog {
     what: string,
     timeoutMs?: number
   ): Promise<CapturedEvent>
-  /** 某次工具调用的 tool_end（等它到） */
-  toolEnd(toolCallId: string, timeoutMs?: number): Promise<CapturedEvent>
+  /**
+   * 某次工具调用开始执行（视图的 `toolRuns[id]` 到了 running / done，或块上已有结果）；`at` = 探针
+   * 看见它的时刻（40ms 一拍，加上视图约 10Hz 的节流）
+   */
+  toolStarted(toolCallId: string, timeoutMs?: number): Promise<ToolCallSighting>
+  /**
+   * 某次工具调用的结果落盘（视图消息里那个工具块带上了 `result`，交出 `isError` / `result`）；
+   * `at` = 探针看见它的时刻
+   */
+  toolResult(toolCallId: string, timeoutMs?: number): Promise<ToolCallSighting>
+  /** 正在流式的那张卡上，这次调用还没解析完的参数原文（`live.argsText[id]`）；没有 → undefined */
+  liveArgs(toolCallId: string): Promise<string | undefined>
+  /** 会话此刻的视图 */
+  view(): Promise<SessionView | undefined>
   /** 第 n 次（1 起）agent_end —— 一轮 run 结束（等它到） */
   runEnd(n?: number, timeoutMs?: number): Promise<CapturedEvent>
 }
@@ -174,6 +201,14 @@ export interface EventLog {
  * 重复调用会先退订上一次的（一个窗口只挂一个记录器）。
  */
 export async function captureEvents(client: CdpClient, sid: string): Promise<EventLog> {
+  const probe = syncProbe(client)
+  const view = (): Promise<SessionView | undefined> => probe.viewOf(sid)
+  /** 视图上的一拍：40ms（until 缺省 400ms 一拍，起止的时间差要更细） */
+  const fastUntil = <T>(
+    fn: () => Promise<T>,
+    what: string,
+    timeoutMs?: number
+  ): Promise<NonNullable<T>> => until(fn, what, timeoutMs, { intervalMs: 40 })
   await client.eval(`(() => {
     window.__e2eCoEventsOff?.()
     window.__e2eCoEvents = []
@@ -208,12 +243,44 @@ export async function captureEvents(client: CdpClient, sid: string): Promise<Eve
       await client.eval(`(window.__e2eCoEvents = [], true)`)
     },
     waitFor,
-    toolEnd: (toolCallId, timeoutMs) =>
-      waitFor(
-        (e) => e.type === 'tool_end' && e.toolCallId === toolCallId,
-        `tool_end ${toolCallId}`,
+    toolStarted: (toolCallId, timeoutMs) =>
+      fastUntil(
+        async () => {
+          const v = await view()
+          if (!v) return null
+          const run = v.toolRuns[toolCallId]
+          const done = toolResultsIn(v.messages).find((r) => r.toolCallId === toolCallId)
+          if (!done && run?.status !== 'running' && run?.status !== 'done') return null
+          const sighting: ToolCallSighting = {
+            at: Date.now(),
+            toolCallId,
+            ...(done ? { toolName: done.toolName } : {})
+          }
+          return sighting
+        },
+        `tool ${toolCallId} started (view)`,
         timeoutMs
       ),
+    toolResult: (toolCallId, timeoutMs) =>
+      fastUntil(
+        async () => {
+          const v = await view()
+          const done = v && toolResultsIn(v.messages).find((r) => r.toolCallId === toolCallId)
+          if (!done) return null
+          const sighting: ToolCallSighting = {
+            at: Date.now(),
+            toolCallId,
+            toolName: done.toolName,
+            isError: done.isError,
+            result: done.result
+          }
+          return sighting
+        },
+        `tool ${toolCallId} result (view)`,
+        timeoutMs
+      ),
+    liveArgs: async (toolCallId) => (await view())?.live?.argsText?.[toolCallId],
+    view,
     runEnd: async (n = 1, timeoutMs) => {
       const ends = await until(
         async () => {

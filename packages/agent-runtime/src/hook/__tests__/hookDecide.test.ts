@@ -143,22 +143,27 @@ describe('入口、匹配与派发形状', () => {
     expect(Object.keys(params).sort()).toEqual([
       'agentType',
       'description',
+      'hook',
       'modelConfig',
-      'parentAbortSignal',
-      'parentSessionId',
+      'owner',
       'prompt',
-      'resultContract'
+      'resultContract',
+      'sessionId',
+      'signal'
     ])
+    // P2-08：没给 ownerTaskId → 锚；hook 名 + 这次 run 的 runId
+    expect(params.owner).toEqual({ anchor: true })
+    expect(params.hook).toEqual({ name: 'hk', runId: expect.stringMatching(/^hkr-/) })
     expect(params.resultContract).toStrictEqual({
       schema: PERMISSION_VERDICT_SCHEMA,
       sourceLabel: 'hk'
     })
     expect(params.resultContract?.schema).toBe(PERMISSION_VERDICT_SCHEMA)
-    expect(params.parentSessionId).toBe('s-root')
+    expect(params.sessionId).toBe('s-root')
     expect(params.agentType).toBe(PROFILE)
     expect(params.description).toBe('Shown To Users')
-    expect(params.parentAbortSignal).toBeInstanceOf(AbortSignal)
-    expect(params.parentAbortSignal?.aborted).toBe(false)
+    expect(params.signal).toBeInstanceOf(AbortSignal)
+    expect(params.signal?.aborted).toBe(false)
     expect(params.prompt).toBe(renderHookPrompt('Judge it.', TRIGGER, { ...payload }))
     expect(
       params.prompt.startsWith('Judge it.\n\n<hook_event trigger="permission.request">\n')
@@ -456,7 +461,7 @@ describe('合并：最严者胜', () => {
     await settle()
     expect(pending.done()).toBe(false)
     expect(script.pending('B')).toBe(1)
-    expect(script.paramsOf('B').parentAbortSignal?.aborted).toBe(false)
+    expect(script.paramsOf('B').signal?.aborted).toBe(false)
 
     script.release('B', verdictResult(verdict('allow')))
     expect(await pending.promise).toEqual({ result: denyA, hook: 'A' })
@@ -582,7 +587,7 @@ describe('合并：最严者胜', () => {
       expect(h.runTask).not.toHaveBeenCalled()
     })
 
-    it('HD-14 超时 → null：parentAbortSignal 落下，end「timed out after 20ms」', async () => {
+    it('HD-14 超时 → null：signal 落下，end「timed out after 20ms」', async () => {
       const script = scriptedRunTask({ decide: { hk: 'gate' } })
       const h = makeRunner({
         entries: [entryOf(reviewFile())],
@@ -590,7 +595,7 @@ describe('合并：最严者胜', () => {
         runTask: script.runTask
       })
       expect(await h.runner.decide(TRIGGER, permissionPayload())).toBeNull()
-      expect(script.paramsOf('hk').parentAbortSignal?.aborted).toBe(true)
+      expect(script.paramsOf('hk').signal?.aborted).toBe(true)
       expect(h.ends()).toEqual([
         expect.objectContaining({ ok: false, error: 'timed out after 20ms' })
       ])
@@ -755,7 +760,7 @@ describe('超时', () => {
     // 让模型解析落定 → start → 计时器挂上 → runTask 被调
     await vi.advanceTimersByTimeAsync(0)
     expect(h.runTask).toHaveBeenCalledTimes(1)
-    const signal = h.call().parentAbortSignal!
+    const signal = h.call().signal!
 
     await vi.advanceTimersByTimeAsync(DEFAULT_DECIDE_TIMEOUT_MS - 1)
     expect(signal.aborted).toBe(false)
@@ -782,7 +787,7 @@ describe('超时', () => {
       result: verdict('deny'),
       hook: 'hk'
     })
-    expect(h.call().parentAbortSignal?.aborted).toBe(false)
+    expect(h.call().signal?.aborted).toBe(false)
   })
 
   it('HD-20 decideTimeoutMs 不缩短观察型：decideTimeoutMs 20、fire 的派发 60ms 后收尾 → ok', async () => {
@@ -794,7 +799,7 @@ describe('超时', () => {
     h.runner.fire('session.prompt-accepted', promptPayload())
     await h.waitEnd()
     expect(h.ends()).toEqual([expect.objectContaining({ ok: true })])
-    expect(h.call().parentAbortSignal?.aborted).toBe(false)
+    expect(h.call().signal?.aborted).toBe(false)
   })
 
   it('HD-20 decideTimeoutMs 20 → 文案「timed out after 20ms」（不足一秒给毫秒）', async () => {
@@ -833,7 +838,7 @@ describe('超时', () => {
       result: verdict('allow'),
       hook: 'hk'
     })
-    expect(h.call().parentAbortSignal?.aborted).toBe(false)
+    expect(h.call().signal?.aborted).toBe(false)
   })
 
   it('HD-21 正常收尾会清掉计时器：decideTimeoutMs 过去之后 signal 仍未落下、没有多余事件', async () => {
@@ -844,7 +849,7 @@ describe('超时', () => {
     })
     await h.runner.decide(TRIGGER, permissionPayload())
     await new Promise((resolve) => setTimeout(resolve, 60))
-    expect(h.call().parentAbortSignal?.aborted).toBe(false)
+    expect(h.call().signal?.aborted).toBe(false)
     expect(h.events.map((e) => e.type)).toEqual(['start', 'end'])
     expect(h.warns()).toEqual([])
   })
@@ -858,7 +863,7 @@ describe('超时', () => {
     })
 
     expect(await within(1000, h.runner.decide(TRIGGER, permissionPayload()))).toBeNull()
-    expect(script.paramsOf('hk').parentAbortSignal?.aborted).toBe(true)
+    expect(script.paramsOf('hk').signal?.aborted).toBe(true)
     expect(h.ends()).toEqual([
       expect.objectContaining({ ok: false, error: 'timed out after 20ms' })
     ])
@@ -879,7 +884,7 @@ describe('超时', () => {
 })
 
 describe('中止', () => {
-  it('HD-23 两个派发都挂着时外部 signal 落下 → 两个 parentAbortSignal 都落下、返回 null；end 都是 aborted、记 info；落定后 runningCount 回 0', async () => {
+  it('HD-23 两个派发都挂着时外部 signal 落下 → 两个 signal 都落下、返回 null；end 都是 aborted、记 info；落定后 runningCount 回 0', async () => {
     const script = scriptedRunTask({ decide: { A: 'gate', B: 'gate' } })
     const h = makeRunner({ entries: [hookNamed('A'), hookNamed('B')], runTask: script.runTask })
     const controller = new AbortController()
@@ -891,8 +896,8 @@ describe('中止', () => {
     controller.abort()
 
     expect(await pending).toBeNull()
-    expect(script.paramsOf('A').parentAbortSignal?.aborted).toBe(true)
-    expect(script.paramsOf('B').parentAbortSignal?.aborted).toBe(true)
+    expect(script.paramsOf('A').signal?.aborted).toBe(true)
+    expect(script.paramsOf('B').signal?.aborted).toBe(true)
     expect(
       h
         .ends()
@@ -942,7 +947,7 @@ describe('中止', () => {
     expect(h.warns()).toEqual([])
   })
 
-  it('HD-26 decide 正常结束之后 signal 才落下 → 已结束 run 的 parentAbortSignal 不落下、不再有事件与日志', async () => {
+  it('HD-26 decide 正常结束之后 signal 才落下 → 已结束 run 的 signal 不落下、不再有事件与日志', async () => {
     const h = makeRunner({
       entries: [entryOf(reviewFile())],
       runTask: async () => verdictResult(verdict('allow'))
@@ -957,7 +962,7 @@ describe('中止', () => {
     controller.abort()
     await settle()
 
-    expect(h.call().parentAbortSignal?.aborted).toBe(false)
+    expect(h.call().signal?.aborted).toBe(false)
     expect(h.events).toHaveLength(events)
     expect(h.logs).toHaveLength(logs)
   })
@@ -1034,8 +1039,8 @@ describe('中止', () => {
     expect(
       h.runTask.mock.calls
         .map(([p]) => p)
-        .filter((p) => p.parentSessionId === 's2')
-        .every((p) => p.parentAbortSignal?.aborted === false)
+        .filter((p) => p.sessionId === 's2')
+        .every((p) => p.signal?.aborted === false)
     ).toBe(true)
 
     script.release('A', verdictResult(verdict('deny', { summary: 'from A' })))

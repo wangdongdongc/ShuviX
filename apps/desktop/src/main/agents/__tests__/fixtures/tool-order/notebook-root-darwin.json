@@ -1,0 +1,144 @@
+{
+  "case": "notebook-root-darwin",
+  "description": "notebook root with a user skill ticked",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
+  "inputs": {
+    "platform": "darwin",
+    "kind": "root",
+    "rootSessionId": "sess-golden-root",
+    "selfSessionId": "sess-golden-root",
+    "canSpawn": null,
+    "profile": "notebook",
+    "profileTools": [
+      "read",
+      "write",
+      "edit",
+      "ls",
+      "grep",
+      "glob",
+      "bash",
+      "powershell",
+      "ask",
+      "skill:builtin:drawing"
+    ],
+    "toolOverlay": [
+      "skill:pdf"
+    ],
+    "names": [
+      "read",
+      "write",
+      "edit",
+      "ls",
+      "grep",
+      "glob",
+      "bash",
+      "powershell",
+      "ask",
+      "skill:builtin:drawing",
+      "skill:pdf"
+    ],
+    "extraTools": [],
+    "projectPath": "/Users/golden/projects/acme",
+    "skillsAvailable": true,
+    "mcpServers": {},
+    "registeredBuiltins": [
+      {
+        "name": "bash",
+        "platforms": [
+          "darwin",
+          "linux"
+        ]
+      },
+      {
+        "name": "powershell",
+        "platforms": [
+          "win32"
+        ]
+      },
+      {
+        "name": "read",
+        "platforms": null
+      },
+      {
+        "name": "write",
+        "platforms": null
+      },
+      {
+        "name": "edit",
+        "platforms": null
+      },
+      {
+        "name": "ask",
+        "platforms": null
+      },
+      {
+        "name": "git",
+        "platforms": null
+      },
+      {
+        "name": "artifact",
+        "platforms": null
+      },
+      {
+        "name": "session",
+        "platforms": null
+      },
+      {
+        "name": "knowledge",
+        "platforms": null
+      },
+      {
+        "name": "doc_read",
+        "platforms": null
+      },
+      {
+        "name": "doc_edit",
+        "platforms": null
+      },
+      {
+        "name": "doc_insert",
+        "platforms": null
+      },
+      {
+        "name": "ls",
+        "platforms": null
+      },
+      {
+        "name": "grep",
+        "platforms": null
+      },
+      {
+        "name": "glob",
+        "platforms": null
+      }
+    ]
+  },
+  "observed": {
+    "skillToolConstructed": [
+      {
+        "names": [
+          "builtin:drawing",
+          "pdf"
+        ],
+        "projectPath": "/Users/golden/projects/acme"
+      }
+    ],
+    "mcpEnsureCalls": [],
+    "mcpGetToolsCalls": [],
+    "broadcasts": [],
+    "spill": true
+  },
+  "output": {
+    "toolNames": [
+      "read",
+      "write",
+      "edit",
+      "ls",
+      "grep",
+      "glob",
+      "bash",
+      "ask",
+      "skill"
+    ]
+  }
+}

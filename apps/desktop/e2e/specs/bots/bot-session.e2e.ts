@@ -12,7 +12,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { createAgentSession, writeBotMd } from '../../harness/seed'
+import { createAgentSession, ensureDefaultModel, writeBotMd } from '../../harness/seed'
 
 const BODY = 'I am Scout. I always answer in limericks. The user prefers pnpm in this repo.'
 
@@ -28,6 +28,7 @@ async function toolsOf(sid: string): Promise<string[]> {
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
 }, 120_000)
 
 afterAll(async () => {

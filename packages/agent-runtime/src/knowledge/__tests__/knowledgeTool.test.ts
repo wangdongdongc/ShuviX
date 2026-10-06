@@ -14,7 +14,7 @@
  * `create` 在动手之前就被拒，读侧一概照常。
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import { invokeTool, type InvokedToolResult } from '../../tools/testing/invokeTool'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
 import type { FileSystemPort } from '../../fileTools/port'
 import type { SecurityContext } from '../../security/types'
@@ -57,7 +57,7 @@ interface ToolOptions {
   abortError?: string
 }
 
-type Result = AgentToolResult<unknown>
+type Result = InvokedToolResult
 
 interface Harness {
   tool: ReturnType<typeof createKnowledgeTool>
@@ -74,14 +74,16 @@ interface Harness {
 
 const textOf = (res: Result): string => (res.content[0] as { text: string }).text
 
-/** 这次调用 reject 的消息（没 reject 即判失败）—— 要逐字比对时用：`toThrow(string)` 只比子串 */
-const rejectionOf = (p: Promise<unknown>): Promise<string> =>
-  p.then(
-    () => {
-      throw new Error('expected the call to reject')
-    },
-    (e: unknown) => (e instanceof Error ? e.message : String(e))
-  )
+/**
+ * 这次调用失败交回的文字（不是 isError 结果即判失败）。
+ * P1-04 起工具抛错由 BaseTool 模板收成 `{ isError: true, content: [{ type: 'text', text: message }] }`
+ * （裁定 Q12）—— 原先断言「reject 且消息为 X」的用例改为断言「isError 且文字为 X」，模型看到的字不变。
+ */
+const rejectionOf = (p: Promise<Result>): Promise<string> =>
+  p.then((res) => {
+    if (res.isError !== true) throw new Error('expected the call to fail (isError result)')
+    return textOf(res)
+  })
 
 function memoryPort(files: Map<string, string>, calls: string[]): FileSystemPort {
   return {
@@ -171,7 +173,8 @@ function makeTool(opts: ToolOptions = {}): Harness {
     scan,
     afterWrite,
     calls,
-    run: (id, params, signal) => tool.execute(id, params, signal)
+    run: async (id, params, signal) =>
+      (await invokeTool(tool, params, { callId: id, signal })).result
   }
 }
 
@@ -250,7 +253,7 @@ describe('KT-2 路径守卫表', () => {
     const h = makeTool({
       files: { '/kb/projects/acme/log.md': '## 2026-09-09\n', '/kb/projects/acme/index.md': '' }
     })
-    await expect(h.run('c1', params)).rejects.toThrow(message)
+    expect(await rejectionOf(h.run('c1', params))).toContain(message)
     expect(h.calls).toEqual([])
   })
 
@@ -295,9 +298,9 @@ describe('KT-3 search —— 注入的检索（宿主 okf-minisearch）', () => 
       textOf(await h.run('c1', { action: 'search', base: 'project', query: 'q', limit: 5 }))
     ).toBe('No entries match "q".')
     expect(search).toHaveBeenCalledWith('q', { limit: 5, bundleDir: ROOT })
-    await expect(h.run('c2', { action: 'search', base: 'project', query: '  ' })).rejects.toThrow(
-      '"search" needs `query`'
-    )
+    expect(
+      await rejectionOf(h.run('c2', { action: 'search', base: 'project', query: '  ' }))
+    ).toContain('"search" needs `query`')
     // 会话不属于任何项目：检索是软条件，回一句话而不是抛
     const noProject = makeTool({ search, bundle: { error: 'no project here' } })
     const res = await noProject.run('c3', { action: 'search', base: 'project', query: 'q' })
@@ -418,6 +421,9 @@ describe('KT-6 read', () => {
     expect(h.enforcePath).toHaveBeenCalledTimes(1)
     expect(h.enforcePath).toHaveBeenCalledWith('read', '/kb/projects/acme/a.md', {
       toolCallId: 'c1',
+      // P1-06：durable 的调用归属（invokeTool 缺省 task 1、根对话 1）并进 EnforceOpts
+      taskId: 1,
+      conversationId: 1,
       toolName: 'knowledge',
       displayPath: '/a.md',
       operation: 'read',
@@ -429,10 +435,10 @@ describe('KT-6 read', () => {
 
   it('KT-6 条目不存在 / 缺 path', async () => {
     const h = makeTool()
-    await expect(h.run('c1', { action: 'read', base: 'project', path: '/x.md' })).rejects.toThrow(
-      'No entry at /x.md'
-    )
-    await expect(h.run('c2', { action: 'read', base: 'project' })).rejects.toThrow(
+    expect(
+      await rejectionOf(h.run('c1', { action: 'read', base: 'project', path: '/x.md' }))
+    ).toContain('No entry at /x.md')
+    expect(await rejectionOf(h.run('c2', { action: 'read', base: 'project' }))).toContain(
       '"read" needs `path`'
     )
   })
@@ -446,6 +452,47 @@ describe('KT-6 read', () => {
  * `status` 按 OKF 办：三值全开、缺省 stable（规范 absent ⇒ stable），由写的人判断生命周期；
  * 「谁核实过」是 `verified` 那根轴，两者各自变动。
  */
+describe('KT-6b 调用归属', () => {
+  it('KT-6b read / create / validate（单条与整库）四个 PEP 都带着这次调用的 taskId / conversationId（P1-06）', async () => {
+    const raw = `${doc(['type: Memory', 'title: A', 'description: da', 'status: draft'])}\n`
+    const h = makeTool({ files: { '/kb/projects/acme/a.md': raw } })
+    const owner = (taskId: number): { callId: string; taskId: number; conversationId: number } => ({
+      callId: 'call_0',
+      taskId,
+      conversationId: 9
+    })
+
+    await invokeTool(h.tool, { action: 'read', base: 'project', path: '/a.md' }, owner(21))
+    await invokeTool(
+      h.tool,
+      {
+        action: 'create',
+        base: 'project',
+        type: 'Memory',
+        title: 'B',
+        description: 'db',
+        body: 'x'
+      },
+      owner(22)
+    )
+    await invokeTool(h.tool, { action: 'validate', base: 'project', path: '/a.md' }, owner(23))
+    await invokeTool(h.tool, { action: 'validate', base: 'project' }, owner(24))
+
+    const seen = h.enforcePath.mock.calls.map(([mode, , opts]) => ({
+      mode,
+      toolCallId: (opts as { toolCallId: string }).toolCallId,
+      taskId: (opts as { taskId?: number }).taskId,
+      conversationId: (opts as { conversationId?: number }).conversationId
+    }))
+    expect(seen).toEqual([
+      { mode: 'read', toolCallId: 'call_0', taskId: 21, conversationId: 9 },
+      { mode: 'write', toolCallId: 'call_0', taskId: 22, conversationId: 9 },
+      { mode: 'read', toolCallId: 'call_0', taskId: 23, conversationId: 9 },
+      { mode: 'read', toolCallId: 'call_0', taskId: 24, conversationId: 9 }
+    ])
+  })
+})
+
 describe('KT-7 create —— 元数据形状与去重', () => {
   it('KT-7 自述行在最前、缺省 status 为 stable（OKF 缺省）、宿主盖 generated；bundle 按名字解析；先过 write PEP 再落盘；afterWrite 带 bundle 相对路径与标题', async () => {
     const h = makeTool()
@@ -467,11 +514,15 @@ describe('KT-7 create —— 元数据形状与去重', () => {
     expect(written.startsWith('---\nshuvix: okf v0.2\ntype: Memory\n')).toBe(true)
     expect(written).toContain('\nstatus: stable\n')
     expect(written).toContain(`\ngenerated: { by: ${JSON.stringify(ACTOR)}, at:`)
-    expect(h.afterWrite).toHaveBeenCalledWith({
-      bundleDir: ROOT,
-      path: 'token-refresh.md',
-      title: 'Token refresh'
-    })
+    expect(h.afterWrite).toHaveBeenCalledWith(
+      {
+        bundleDir: ROOT,
+        path: 'token-refresh.md',
+        title: 'Token refresh'
+      },
+      // 第二个参数是这次调用的 scope：宿主按它认出发起写入的 agent（actor）
+      expect.objectContaining({ conversationId: 1, taskId: 1 })
+    )
     // 回执给绝对路径 —— 同一轮里紧接着要 edit 它
     expect(textOf(res)).toContain(abs)
     expect(res.details).toEqual({ action: 'create', path: 'token-refresh.md' })
@@ -479,9 +530,9 @@ describe('KT-7 create —— 元数据形状与去重', () => {
 
   it('KT-7 缺必填字段一次点全、不落盘；同 slug 撞车退 -2；slugify 撞上保留文件名也让开', async () => {
     const h = makeTool({ files: { '/kb/projects/acme/index.md': '' } })
-    await expect(h.run('c1', { action: 'create', base: 'project', title: 'T' })).rejects.toThrow(
-      'Creating an entry needs: type, description, body'
-    )
+    expect(
+      await rejectionOf(h.run('c1', { action: 'create', base: 'project', title: 'T' }))
+    ).toContain('Creating an entry needs: type, description, body')
     expect(h.calls).toEqual([])
 
     await h.run('c2', {
@@ -708,11 +759,15 @@ describe('KT-10 工具不关心 base 是哪种库', () => {
     expect(h.resolveBase.mock.calls).toEqual([['读书笔记']])
     expect(h.calls).toEqual([`enforce:write:${abs}`, `write:${abs}`])
     expect(textOf(res)).toContain(abs)
-    expect(h.afterWrite).toHaveBeenCalledWith({
-      bundleDir: DIR,
-      path: 'reading-list.md',
-      title: 'Reading list'
-    })
+    expect(h.afterWrite).toHaveBeenCalledWith(
+      {
+        bundleDir: DIR,
+        path: 'reading-list.md',
+        title: 'Reading list'
+      },
+      // 第二个参数是这次调用的 scope：宿主按它认出发起写入的 agent（actor）
+      expect.objectContaining({ conversationId: 1, taskId: 1 })
+    )
   })
 })
 

@@ -1,8 +1,50 @@
+/**
+ * 对话域 store（chat-ui）。
+ *
+ * **会话内容是派生的**（phase 3，P3-08）：一条会话「现在长什么样」由服务端的会话视图（`SessionView`，经
+ * 视图同步订阅，见 `sync/syncClient` 与 `useSessionView`）给出，store 里的会话切片 —— 当前会话的
+ * `messages`、各会话的 `sessionStreams` / `sessionToolExecutions` / `sessionPendingInputs`、
+ * `usedContextTokens` —— 全部只由 **`applySessionView`** 写（唯一的写入口）。选择器名字保持不变，组件不用改。
+ * 排着的输入不另派生：队列面板直接读视图的 `queue`（`selectSessionQueueItems`，P3-11）。
+ *
+ * 视图之外只剩几样**本端叠加**（不进服务端、不跨窗口）：
+ *  - 乐观占位的用户消息（`sessionPendingPrompt`，Q-P3-07）：发送那一刻顶上，视图里出现一条发送时还没有的
+ *    用户消息即在同一次更新里撤下（PIN-17），发送调用落定时兜底撤下；
+ *  - 本地错误行（`sessionLocalErrors`，PIN-02）：没有条目的 `error` 事件，挂在它到达时的最后一条消息后面，
+ *    熬过视图更新，切会话即清；
+ *  - 自动审查的「审查中」（`sessionToolReviewing`，PIN-04）：`tool_review` 可能先于视图里的工具进度到，
+ *    先记下，工具一出现就叠上去；
+ *  - 没人订阅视图的会话的运行标记（侧栏转圈，`agent_start` / `agent_end` 余项）与询问计数（`ask_count`，
+ *    PIN-01）。
+ *
+ * 草稿、输入框、各种 UI 信号与之前一样。
+ */
 import { create } from 'zustand'
 import type { InlineToken, ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
-import type { ChatQueuedMessage } from '@shuvix/chat-protocol/events'
+import {
+  emptySessionView,
+  type QueuedInputView,
+  type RunView,
+  type SessionView,
+  type SessionViewCapabilities,
+  type SessionViewSource
+} from '@shuvix/chat-protocol/types/sessionView'
+import {
+  EMPTY_COMPLETED_TOOL_CALLS,
+  EMPTY_TOOLS,
+  deriveStream,
+  deriveToolExecutions,
+  emptyStream,
+  firstNewUserMessage,
+  isFinalAssistant,
+  mergeLocalRows,
+  shareStructure,
+  type LocalErrorRow,
+  type SessionStreamState,
+  type ToolExecution
+} from './viewDerivation'
 export type {
   ToolPresentation,
   ToolFormItem,
@@ -25,26 +67,14 @@ export type {
   AssistantMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
 import type {
+  AssistantMessage,
   ChatMessage,
+  ErrorEventMessage,
   UserTextMessage,
   UserTextMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
-import { fillToolResult, upsertMessage } from './messageOps'
 export type { ToolResultDetails }
-
-/** 工具执行实时状态（流式期间的临时状态） */
-export interface ToolExecution {
-  toolCallId: string
-  toolName: string
-  args: Record<string, unknown>
-  status: 'running' | 'done' | 'error'
-  result?: string
-  /** 工具特定的结构化详情（edit diff 等） */
-  details?: ToolResultDetails
-  messageId?: string
-  /** 自动审查正在替用户看这次调用（`tool_review` 事件维护；tool_end 时一并收掉） */
-  reviewing?: boolean
-}
+export type { LocalErrorRow, SessionStreamState, ToolExecution } from './viewDerivation'
 
 /** 重新导出统一的用户输入请求类型,UI 直接消费 */
 export type {
@@ -80,6 +110,11 @@ export interface SessionSettings {
    * （同一条记忆在同一处出现两次，比少一处入口更糟）。
    */
   memorySlug?: string
+  /**
+   * 运行标记（主进程的界面口径，P3-12）：`interrupted` = 上个进程退出时这条会话正在跑，等用户「继续」。
+   * 侧栏圆点读它（`selectInterruptedSessions`）；本端收到 `agent_start` 即就地改掉
+   */
+  runState?: 'idle' | 'busy' | 'interrupted'
 }
 
 /** 会话类型（持久化字段，不含运行时计算属性） */
@@ -112,32 +147,6 @@ export interface Session {
   lastActiveAt: number
 }
 
-/** 每个 session 的流式状态 */
-interface SessionStreamState {
-  content: string
-  thinking: string
-  isStreaming: boolean
-  images: Array<{ data: string; mimeType: string }>
-  /** 当前正在生成的工具调用（LLM 流式输出 tool_use 块期间） */
-  streamingToolCall: {
-    toolName: string
-    /** 累积的原始参数 JSON 文本 */
-    argsText: string
-  } | null
-  /** 已完成生成但尚未开始执行的工具调用（多工具顺序生成时累积） */
-  completedStreamingToolCalls: Array<{
-    toolName: string
-    args?: Record<string, unknown>
-  }>
-}
-
-/** Buffered streaming deltas for rAF batching (used by useAgentEvents) */
-export interface StreamingDeltaBuffer {
-  content: string
-  thinking: string
-  toolCallArgsDelta: string
-}
-
 /** 运行时资源状态信息 */
 export interface RuntimeInfo {
   label: string
@@ -150,9 +159,6 @@ export interface RuntimeInfo {
 export interface SessionResourceInfo {
   runtimes: Record<string, RuntimeInfo>
 }
-
-/** 空数组常量，避免选择器每次返回新引用 */
-const EMPTY_TOOLS: ToolExecution[] = []
 
 /** 每个会话的输入框草稿状态 */
 type PendingImage = { data: string; mimeType: string; preview: string }
@@ -224,9 +230,20 @@ interface ChatState {
    * 含 nonce 以便重复点同一条也能触发。entry 不在当前上下文（被 moveTo 切掉）时滚动失败就停顶部。
    */
   scrollToMessageRequest: { sessionId: string; messageId: string; nonce: number } | null
-  /** 当前会话的消息列表 */
+  /**
+   * 当前会话的消息列表 —— 派生值：当前会话视图的 `messages` + 本地错误行（PIN-02）− 本端关掉的行。
+   * 只有 `applySessionView` / 切会话写它
+   */
   messages: ChatMessage[]
-  /** 各 session 的流式状态（按 sessionId 隔离） */
+  /**
+   * 各会话此刻订阅着的视图（结构共享过的原值，P3-08）—— 运行状态 / 队列 / 能力 / 来源从这里读
+   * （`selectSessionRun` 等，P3-11 / P3-12 的接缝）。只有 `applySessionView` 写；退订即删
+   */
+  sessionViews: Record<string, SessionView>
+  /**
+   * 各 session 的流式状态（按 sessionId 隔离）。订阅着视图的会话由视图派生；没人订阅的会话只有
+   * `isStreaming`，由 `agent_start` / `agent_end` 余项维护（侧栏转圈）
+   */
   sessionStreams: Record<string, SessionStreamState>
   /**
    * 各 session 的运行时关停状态（按 sessionId 隔离）。
@@ -248,17 +265,22 @@ interface ChatState {
    */
   welcomeEnabledTools: string[]
   /**
-   * 各 session 正在发送、后端还没落库的那条用户消息（乐观占位）。
+   * 各 session 正在发送、还没被会话受理的那条用户消息（乐观占位，Q-P3-07；**只在发送方本端**）。
    *
-   * 用户消息由后端持久化后经 `user_message` 事件回到列表；创建运行时（含 MCP 惰性连接）可能
-   * 要花几秒，这几秒里输入框已清空、列表里却没有那句话 —— 像是消息丢了。占位气泡先顶上，
-   * `user_message` 到达即撤（同一句话换成真实 entry），出错 / 轮结束也撤。
+   * 创建运行时（含 MCP 惰性连接）可能要花几秒，这几秒里输入框已清空、列表里却没有那句话 —— 像是消息
+   * 丢了。占位气泡先顶上：视图里出现一条发送那一刻还没有的用户消息，就在同一次更新里撤下（PIN-17）；
+   * 发送调用落定（含出错）时兜底撤下。
    */
   sessionPendingPrompt: Record<string, UserTextMessage>
   /** 各 session 创建运行时期间正在连接的 MCP server 名（`mcp_connecting` 事件维护，`agent_created` 清空） */
   sessionMcpConnecting: Record<string, string[]>
-  /** 各 session 的工具执行实时状态（按 sessionId 隔离） */
+  /** 各 session 的工具执行实时状态（视图的 `toolRuns` + 工具块 + 审查叠加，派生） */
   sessionToolExecutions: Record<string, ToolExecution[]>
+  /**
+   * 各 session 里「自动审查中」的工具调用（`tool_review` 事件的本地叠加，PIN-04）：事件可能先于视图里的
+   * 工具进度到达，先记在这里，工具一出现就叠到它的执行记录上。`reviewing:false`、工具做完、本轮结束即清
+   */
+  sessionToolReviewing: Record<string, Record<string, true>>
   /** 当前模型是否支持深度思考 */
   modelSupportsReasoning: boolean
   /** 当前思考深度 */
@@ -267,7 +289,7 @@ interface ChatState {
   modelSupportsVision: boolean
   /** 当前模型最大上下文 token 数 */
   maxContextTokens: number
-  /** 当前会话已占用上下文 token 数（来自最近一次 LLM 请求的 input usage） */
+  /** 当前会话已占用上下文 token 数（当前会话视图的 `context.usedTokens`；换模型时由 ModelPicker 清空） */
   usedContextTokens: number | null
   /** 待发送的图片列表（base64），按会话隔离 */
   pendingImages: PendingImage[]
@@ -290,23 +312,28 @@ interface ChatState {
   /** 各 session 的活跃运行时资源（SSH / DB 等） */
   sessionResources: Record<string, SessionResourceInfo>
   /**
-   * 各 session 的待处理用户输入请求列表(按 sessionId 隔离)。
+   * 各 session 挂着的用户输入请求（订阅着视图的会话 = 视图的 `asks`，派生）。
    * 命令询问 / 选择题 / SSH 凭证全部走这一张表。
    */
   sessionPendingInputs: Record<string, InputRequest[]>
   /**
+   * 各 session 挂着几条询问（`ask_count` 余项，PIN-01）—— 给没人订阅视图的会话用（侧栏徽标、后台任务面板
+   * 的「卡在等人」）。订阅着的会话以视图为准
+   */
+  sessionAskCounts: Record<string, number>
+  /**
    * 各 session 中各 request 的草稿状态(按 sessionId+requestId 隔离)。
-   * 切换会话或切换 tab 时不清除,仅在 request resolved/abort 后才清。
+   * 切换会话或切换 tab 时不清除,询问从视图里消失时才清。
    */
   sessionInputDrafts: Record<string, Record<string, unknown>>
   /**
    * 各 session 当前正在处理的那条 pending 请求 id(多条 pending 时的步进器位置)。
    * 待处理面板与输入框共用:面板据此渲染表单,输入框据此决定描边色与「其它」反馈的投递目标。
-   * 选中项被 resolve 后清除,选择器回落到列表首条。
+   * 选中项从视图里消失时清除,选择器回落到列表首条。
    */
   sessionActiveInputId: Record<string, string>
-  /** 各 session 的 pi 消息队列快照（queue_update 事件镜像；只读） */
-  sessionQueues: Record<string, SessionQueueSnapshot>
+  /** 各 session 的本地错误行（PIN-02；只给当前会话记，切走即清） */
+  sessionLocalErrors: Record<string, LocalErrorRow[]>
   /**
    * 各 session 的对话抽屉展开态（笔记本会话：输入框卡片顶部的限高对话面板）。
    * 缺键 = 折叠；活动（流式/审批）的上升沿由 ThreadDrawer 自动置 true，手动折叠置 false。
@@ -328,48 +355,35 @@ interface ChatState {
   requestScrollToMessage: (sessionId: string, messageId: string) => void
   /** 滚完或目标不在当前上下文后清掉，避免 visibleItems 再变时把用户弹回去 */
   clearScrollToMessage: () => void
-  setMessages: (messages: ChatMessage[]) => void
-  addMessage: (message: ChatMessage) => void
+  /** 本端关掉一行（错误行的关闭按钮）：本地错误行直接删掉；视图里的行在这个会话里不再显示，切走即恢复 */
   removeMessage: (id: string) => void
-  replaceMessage: (id: string, message: ChatMessage) => void
-  appendStreamingContent: (sessionId: string, delta: string) => void
-  appendStreamingThinking: (sessionId: string, delta: string) => void
-  appendStreamingImage: (sessionId: string, image: { data: string; mimeType: string }) => void
-  clearStreamingContent: (sessionId: string) => void
-  setIsStreaming: (sessionId: string, streaming: boolean) => void
   /** 标记某会话的运行时正在关停 / 关停完毕（后端 agent_closing 事件驱动） */
   setAgentClosing: (sessionId: string, closing: boolean) => void
   /** 标记某会话此刻有 / 没有 Agent 运行时（agent.init 与 agent_created / agent_closing 驱动） */
   setAgentCreated: (sessionId: string, created: boolean) => void
   /** 整份替换欢迎页的扩展能力勾选 */
   setWelcomeEnabledTools: (tools: string[]) => void
-  /** 设 / 撤某会话的乐观占位用户消息（null = 撤） */
+  /** 设 / 撤某会话的乐观占位用户消息（null = 撤）。设的那一刻记下视图里已有的消息 id（PIN-17） */
   setPendingPrompt: (sessionId: string, message: UserTextMessage | null) => void
   /** 某会话创建运行时期间：某台 MCP 开始连 / 落定（`mcp_connecting` 事件驱动） */
   setMcpConnecting: (sessionId: string, server: string, connecting: boolean) => void
   /** 清空某会话的 MCP 连接态（agent_created / agent_end / error） */
   clearMcpConnecting: (sessionId: string) => void
-  getSessionStreamContent: (sessionId: string) => string
-  getSessionStreamThinking: (sessionId: string) => string
-  setStreamingToolCall: (
-    sessionId: string,
-    toolCall: { toolName: string; argsText: string } | null
-  ) => void
-  appendStreamingToolCallDelta: (sessionId: string, delta: string) => void
-  /** 将当前 streamingToolCall 移入 completedStreamingToolCalls 并清除 */
-  finalizeStreamingToolCall: (sessionId: string) => void
-  addToolExecution: (sessionId: string, exec: ToolExecution) => void
-  updateToolExecution: (
-    sessionId: string,
-    toolCallId: string,
-    updates: Partial<ToolExecution>
-  ) => void
-  clearToolExecutions: (sessionId: string) => void
+  /**
+   * 没人订阅视图的会话：`agent_start` / `agent_end` 余项置 / 清它的运行标记（侧栏转圈）。订阅着视图的会话
+   * 不受影响 —— 余项从不抢在视图前面翻转 `isStreaming`（P3-08-30 / -40）
+   */
+  markSessionRunning: (sessionId: string, running: boolean) => void
+  /** `ask_count` 余项：某会话挂着几条询问（PIN-01） */
+  setAskCount: (sessionId: string, count: number) => void
+  /** 本地错误行（没有条目的 `error` 事件，PIN-02）：只给当前会话记，挂在此刻最后一条消息后面 */
+  addLocalError: (sessionId: string, content: string) => void
   setInputText: (text: string) => void
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
   setModelSupportsVision: (supports: boolean) => void
   setMaxContextTokens: (tokens: number) => void
+  /** 换模型时清空上下文占用显示（ModelPicker）；会话视图的 `context.usedTokens` 随后照常覆盖 */
   setUsedContextTokens: (tokens: number | null) => void
   addPendingImage: (image: PendingImage) => void
   removePendingImage: (index: number) => void
@@ -396,47 +410,17 @@ interface ChatState {
   setRuntime: (sessionId: string, runtimeId: string, info: RuntimeInfo | null) => void
   /** 批量设置运行时资源状态（session 初始化时使用） */
   setRuntimes: (sessionId: string, runtimes: Record<string, RuntimeInfo>) => void
-  /** 添加一个新的 pending 输入请求 */
-  addPendingInput: (sessionId: string, request: InputRequest) => void
-  /** 移除某个已解决的 pending 请求(同时清掉草稿) */
-  removePendingInput: (sessionId: string, requestId: string) => void
-  /** 清空指定 session 的全部 pending(用于会话切换/失效) */
-  clearPendingInputs: (sessionId: string) => void
   /** 设置/更新某个请求的草稿 */
   setInputDraft: (sessionId: string, requestId: string, draft: unknown) => void
   /** 选中某条 pending 请求(待处理面板的步进器) */
   setActiveInputId: (sessionId: string, requestId: string) => void
-  /** 整体替换某会话的队列快照（queue_update 事件唯一写入点） */
-  setSessionQueue: (sessionId: string, queue: SessionQueueSnapshot) => void
   /** 设置某会话对话抽屉的展开/折叠态 */
   setThreadOpen: (sessionId: string, open: boolean) => void
-  /** Batch-apply buffered streaming deltas in a single set() (rAF optimization) */
-  flushStreamingDeltas: (buffers: Map<string, StreamingDeltaBuffer>) => void
   /**
-   * 原子处理 assistant_message：清除流式内容 + 按 id upsert 这张卡（单次 set，避免闪空）。
-   * upsert 而非 append —— 同一条消息会被广播两次（message_end 一次，agent_end 兜底一次）。
-   */
-  handleAssistantMessage: (sessionId: string, message: ChatMessage | null) => void
-  /** 原子处理 tool_start：清除流式工具调用 + 记录执行状态（单次 set，避免闪烁） */
-  handleToolStart: (sessionId: string, exec: ToolExecution) => void
-  /**
-   * 原子处理 tool_end：更新执行状态 + 把结果回填进对应卡片的工具块（单次 set）。
-   * 工具结果不是独立消息，回填目标由 toolCallId 决定（messageId 只用来先缩小查找范围）。
-   */
-  handleToolEnd: (
-    sessionId: string,
-    toolCallId: string,
-    execUpdates: Partial<ToolExecution>,
-    messageId?: string
-  ) => void
-  /**
-   * 自动审查开始 / 落定（`tool_review` 事件）：只改执行记录上的 reviewing，不碰卡片 ——
-   * 审查是工具执行中的一段过程态，结论另有落点（details / 红行 / 询问卡片）。
-   * 找不到执行记录（事件先于 tool_start、或是派生 agent 的调用）时什么也不做。
+   * 自动审查开始 / 落定（`tool_review` 事件）：只改审查叠加（PIN-04），不碰卡片 —— 审查是工具执行中的
+   * 一段过程态，结论另有落点（details / 红行 / 询问卡片）。事件先于视图里的工具进度到也记下
    */
   setToolReviewing: (sessionId: string, toolCallId: string, reviewing: boolean) => void
-  /** 原子完成流式：清除流式状态 + 工具执行 + 添加最终消息（单次 set，避免页面闪动） */
-  finishStreaming: (sessionId: string, finalMessage?: ChatMessage) => void
 }
 
 // ========== 派生选择器（UI 组件通过这些选择器从底层 map 读取当前活跃会话的状态） ==========
@@ -454,7 +438,7 @@ export const selectIsStreaming = (s: ChatState): boolean =>
 export const selectIsAgentClosing = (s: ChatState): boolean =>
   s.activeSessionId ? s.sessionClosing[s.activeSessionId] || false : false
 
-/** 当前会话正在发送、还没落库的用户消息（乐观占位）；没有则 null */
+/** 当前会话正在发送、还没被受理的用户消息（乐观占位）；没有则 null */
 export const selectPendingPrompt = (s: ChatState): UserTextMessage | null =>
   (s.activeSessionId && s.sessionPendingPrompt[s.activeSessionId]) || null
 
@@ -465,7 +449,7 @@ const NO_SERVERS: string[] = []
 export const selectMcpConnecting = (s: ChatState): string[] =>
   (s.activeSessionId && s.sessionMcpConnecting[s.activeSessionId]) || NO_SERVERS
 
-/** 乐观占位的用户消息 id：尚未落库，`user_message` 一到就换成真实 entry —— 这个 id 不会进 messages */
+/** 乐观占位的用户消息 id：尚未被受理，视图里出现真实条目就撤 —— 这个 id 不会进 messages */
 export const PENDING_PROMPT_ID = 'pending-prompt'
 
 /** 构造乐观占位的用户消息：与真实 entry 同形，气泡组件不必区分 */
@@ -486,14 +470,8 @@ export function pendingPromptMessage(
   }
 }
 
-/** 空图片数组常量，避免选择器每次返回新引用 */
-const EMPTY_IMAGES: Array<{ data: string; mimeType: string }> = []
-
-export const selectStreamingImages = (s: ChatState): Array<{ data: string; mimeType: string }> =>
-  s.activeSessionId ? s.sessionStreams[s.activeSessionId]?.images || EMPTY_IMAGES : EMPTY_IMAGES
-
 /**
- * 当前流式是否已经产出了可见内容（正文 / 思考 / 工具调用 / 图片）。
+ * 当前流式是否已经产出了可见内容（正文 / 思考 / 工具调用）。
  *
  * 用来决定「渲染一张流式占位卡」还是「只显示等待动画」：刚发出请求、首 token
  * 未到时占位卡里什么都没有，画出来就是一张空卡。
@@ -505,8 +483,7 @@ export const selectHasLiveStreamContent = (s: ChatState): boolean => {
     st.content ||
     st.thinking ||
     st.streamingToolCall ||
-    st.completedStreamingToolCalls.length > 0 ||
-    st.images.length > 0
+    st.completedStreamingToolCalls.length > 0
   )
 }
 
@@ -514,11 +491,6 @@ export const selectStreamingToolCall = (
   s: ChatState
 ): { toolName: string; argsText: string } | null =>
   s.activeSessionId ? (s.sessionStreams[s.activeSessionId]?.streamingToolCall ?? null) : null
-
-const EMPTY_COMPLETED_TOOL_CALLS: Array<{
-  toolName: string
-  args?: Record<string, unknown>
-}> = []
 
 export const selectCompletedStreamingToolCalls = (
   s: ChatState
@@ -530,29 +502,7 @@ export const selectCompletedStreamingToolCalls = (
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
   s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
 
-/**
- * 某会话三条 pi 消息队列的只读快照。
- *
- * 队列由 pi 独占：只能入队，没有出队/改序/改档 —— 前端只镜像不操作。
- * harness 每次变动都重发全量，所以整体替换即可。
- */
-export interface SessionQueueSnapshot {
-  steer: ChatQueuedMessage[]
-  followUp: ChatQueuedMessage[]
-  nextTurn: ChatQueuedMessage[]
-}
-
-const EMPTY_QUEUE: SessionQueueSnapshot = { steer: [], followUp: [], nextTurn: [] }
-
-/** 当前会话的队列快照（无队列时返回稳定的空对象引用，可安全用作 selector） */
-export const selectSessionQueue = (s: ChatState): SessionQueueSnapshot =>
-  (s.activeSessionId ? s.sessionQueues[s.activeSessionId] : undefined) ?? EMPTY_QUEUE
-
-/** 队列总条数 */
-export const selectSessionQueueCount = (s: ChatState): number => {
-  const q = selectSessionQueue(s)
-  return q.steer.length + q.followUp.length + q.nextTurn.length
-}
+export { EMPTY_TOOLS }
 
 /** 当前会话的所有 pending 输入请求(按时间序) */
 const EMPTY_INPUT_REQUESTS: InputRequest[] = []
@@ -573,34 +523,198 @@ export const selectActivePendingInput = (s: ChatState): InputRequest | null => {
 }
 
 /**
- * 全局 pending 计数(供 Sidebar 一次读取所有会话的待处理数)。
+ * 全局 pending 计数(供 Sidebar 一次读取所有会话的待处理数)：订阅着视图的会话按视图的询问数，
+ * 其余按 `ask_count` 余项（PIN-01）。
  *
  * ⚠️ zustand + useSyncExternalStore 要求 selector 在数据未变时返回稳定引用,
  * 否则触发"getSnapshot should be cached"错误并陷入无限重渲染循环。
- * 用 module-scope cache 缓存上次的输入(sessionPendingInputs 引用)和输出对象,
- * 输入引用不变时直接返回上次的输出。
+ * 用 module-scope cache 缓存上次的两个输入引用和输出对象,输入引用不变时直接返回上次的输出。
  */
 const EMPTY_PENDING_COUNTS: Record<string, number> = {}
-let _lastPendingCountsInput: ChatState['sessionPendingInputs'] | null = null
+let _lastPendingInputs: ChatState['sessionPendingInputs'] | null = null
+let _lastAskCounts: ChatState['sessionAskCounts'] | null = null
+let _lastViews: ChatState['sessionViews'] | null = null
 let _lastPendingCountsOutput: Record<string, number> = EMPTY_PENDING_COUNTS
 export const selectAllPendingCounts = (s: ChatState): Record<string, number> => {
-  if (s.sessionPendingInputs === _lastPendingCountsInput) return _lastPendingCountsOutput
-  _lastPendingCountsInput = s.sessionPendingInputs
-  const result: Record<string, number> = {}
-  let nonEmpty = false
-  for (const [sid, list] of Object.entries(s.sessionPendingInputs)) {
-    if (list && list.length > 0) {
-      result[sid] = list.length
-      nonEmpty = true
-    }
+  if (
+    s.sessionPendingInputs === _lastPendingInputs &&
+    s.sessionAskCounts === _lastAskCounts &&
+    (s.sessionViews === _lastViews || sameKeys(s.sessionViews, _lastViews))
+  ) {
+    _lastViews = s.sessionViews
+    return _lastPendingCountsOutput
   }
-  _lastPendingCountsOutput = nonEmpty ? result : EMPTY_PENDING_COUNTS
+  _lastPendingInputs = s.sessionPendingInputs
+  _lastAskCounts = s.sessionAskCounts
+  _lastViews = s.sessionViews
+  const result: Record<string, number> = {}
+  for (const [sid, count] of Object.entries(s.sessionAskCounts)) {
+    if (count > 0 && !(sid in s.sessionViews)) result[sid] = count
+  }
+  for (const [sid, list] of Object.entries(s.sessionPendingInputs)) {
+    if (list && list.length > 0) result[sid] = list.length
+  }
+  const next = Object.keys(result).length > 0 ? result : EMPTY_PENDING_COUNTS
+  if (!sameCounts(next, _lastPendingCountsOutput)) _lastPendingCountsOutput = next
   return _lastPendingCountsOutput
+}
+
+function sameKeys(a: Record<string, unknown>, b: Record<string, unknown> | null): boolean {
+  if (b === null) return false
+  const ak = Object.keys(a)
+  return ak.length === Object.keys(b).length && ak.every((k) => k in b)
+}
+
+function sameCounts(a: Record<string, number>, b: Record<string, number>): boolean {
+  if (a === b) return true
+  const ak = Object.keys(a)
+  return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k])
+}
+
+/** 某会话此刻挂着几条询问（订阅着视图 → 视图；否则 `ask_count`）—— 后台任务面板的「卡在等人」 */
+export const selectSessionAskCount =
+  (sessionId: string) =>
+  (s: ChatState): number =>
+    sessionId in s.sessionViews
+      ? (s.sessionPendingInputs[sessionId]?.length ?? 0)
+      : (s.sessionAskCounts[sessionId] ?? 0)
+
+/**
+ * 各会话是否在跑（侧栏转圈）：`sessionStreams[id].isStreaming` 的只读快照，值不变时引用稳定 ——
+ * 流式追加只改正文，侧栏不该跟着每个 token 重渲染
+ */
+let _lastStreamsInput: ChatState['sessionStreams'] | null = null
+let _lastStreamingFlags: Record<string, boolean> = {}
+export const selectStreamingSessions = (s: ChatState): Record<string, boolean> => {
+  if (s.sessionStreams === _lastStreamsInput) return _lastStreamingFlags
+  _lastStreamsInput = s.sessionStreams
+  const next: Record<string, boolean> = {}
+  for (const [sid, st] of Object.entries(s.sessionStreams)) if (st.isStreaming) next[sid] = true
+  const prev = _lastStreamingFlags
+  const same =
+    Object.keys(next).length === Object.keys(prev).length && Object.keys(next).every((k) => prev[k])
+  if (!same) _lastStreamingFlags = next
+  return _lastStreamingFlags
+}
+
+/**
+ * 各会话是否被中断（侧栏圆点，P3-12 PIN-18）：订阅着视图的会话以视图的 `run.state` 为准，其余读列表里的
+ * `settings.runState`（主进程算好的界面口径；本端 `agent_start` 会就地改掉它）。值不变时引用稳定
+ */
+let _lastInterruptedInput: [ChatState['sessions'], ChatState['sessionViews']] | null = null
+let _lastInterruptedFlags: Record<string, boolean> = {}
+export const selectInterruptedSessions = (s: ChatState): Record<string, boolean> => {
+  if (
+    _lastInterruptedInput &&
+    _lastInterruptedInput[0] === s.sessions &&
+    _lastInterruptedInput[1] === s.sessionViews
+  ) {
+    return _lastInterruptedFlags
+  }
+  _lastInterruptedInput = [s.sessions, s.sessionViews]
+  const next: Record<string, boolean> = {}
+  for (const session of s.sessions) {
+    const view = s.sessionViews[session.id]
+    const interrupted = view
+      ? view.run.state === 'interrupted'
+      : session.settings?.runState === 'interrupted'
+    if (interrupted) next[session.id] = true
+  }
+  const prev = _lastInterruptedFlags
+  const same =
+    Object.keys(next).length === Object.keys(prev).length && Object.keys(next).every((k) => prev[k])
+  if (!same) _lastInterruptedFlags = next
+  return _lastInterruptedFlags
 }
 
 /** 取某个会话中某个请求的草稿 */
 export const selectInputDraft = (s: ChatState, sessionId: string, requestId: string): unknown =>
   s.sessionInputDrafts[sessionId]?.[requestId]
+
+// ─── 视图接缝（P3-08 → P3-10b / P3-11 / P3-12，PIN-23） ───
+
+const IDLE_RUN: RunView = { state: 'idle' }
+const EMPTY_QUEUE_ITEMS: QueuedInputView[] = []
+/** 还没收到视图时的能力（与「还没有存储」的新会话同口径：能发第一条，不能回退 / 继续） */
+const DEFAULT_CAPABILITIES: SessionViewCapabilities = emptySessionView('').capabilities
+
+/** 某会话此刻订阅着的视图（没订阅 / 还没到 → undefined） */
+export const selectSessionViewOf =
+  (sessionId: string) =>
+  (s: ChatState): SessionView | undefined =>
+    s.sessionViews[sessionId]
+
+/** 当前会话的视图（没有 → null） */
+export const selectActiveSessionView = (s: ChatState): SessionView | null =>
+  (s.activeSessionId ? s.sessionViews[s.activeSessionId] : undefined) ?? null
+
+/** 当前会话视图的运行状态（`state` / `retry` / `compacting`）；没有视图 → 空闲 */
+export const selectSessionRun = (s: ChatState): RunView =>
+  selectActiveSessionView(s)?.run ?? IDLE_RUN
+
+/**
+ * 当前会话视图里排着的输入（带 `submissionId` / `mode`，撤回要用；视图的次序）。值相等的视图之间引用不变
+ * （`applySessionView` 的结构共享），空队列 / 没有视图 → 稳定的空数组 —— 可直接当 selector 用。
+ */
+export const selectSessionQueueItems = (s: ChatState): QueuedInputView[] =>
+  selectActiveSessionView(s)?.queue ?? EMPTY_QUEUE_ITEMS
+
+/** 当前会话能做什么（按存储种类）；还没收到视图 → 新会话的口径（PIN-16：只给选择器，禁用输入框归 P3-12） */
+export const selectSessionCapabilities = (s: ChatState): SessionViewCapabilities =>
+  selectActiveSessionView(s)?.capabilities ?? DEFAULT_CAPABILITIES
+
+/** 当前会话视图的来源（durable / legacy / none）；还没收到视图 → null */
+export const selectSessionSource = (s: ChatState): SessionViewSource | null =>
+  selectActiveSessionView(s)?.source ?? null
+
+// ─── 本端叠加的模块状态（不进 store：只有写入口读它们） ───
+
+/** 乐观占位发出那一刻，视图里已有的消息 id（PIN-17） */
+const pendingBaselines = new Map<string, Set<string>>()
+/** 本端关掉的行（当前会话；切走即清） */
+const dismissedRows = new Map<string, Set<string>>()
+/** 没人订阅视图的会话的运行标记（余项维护） */
+const residueRunning = new Set<string>()
+/** 一轮开始那一刻视图里已有的消息 id（运行收尾检测：TTS 等，PIN-03） */
+const runBaselines = new Map<string, Set<string>>()
+
+function idsOf(messages: readonly ChatMessage[] | undefined): Set<string> {
+  return new Set((messages ?? []).map((m) => m.id))
+}
+
+/** 没有视图的会话的流式状态：只有运行标记（余项 / 乐观占位） */
+function residueStream(
+  sessionId: string,
+  pending: boolean,
+  prev: SessionStreamState | undefined
+): SessionStreamState {
+  const isStreaming = residueRunning.has(sessionId) || pending
+  if (prev && prev.isStreaming === isStreaming) return prev
+  return prev ? { ...prev, isStreaming } : emptyStream(isStreaming)
+}
+
+function withKey<T>(map: Record<string, T>, key: string, value: T | undefined): Record<string, T> {
+  if (value === undefined) {
+    if (!(key in map)) return map
+    const next = { ...map }
+    delete next[key]
+    return next
+  }
+  if (map[key] === value) return map
+  return { ...map, [key]: value }
+}
+
+/** 当前会话的界面消息：视图消息 + 本地错误行 − 本端关掉的行 */
+function displayMessages(
+  state: Pick<ChatState, 'sessionViews' | 'sessionLocalErrors'>,
+  sessionId: string | null,
+  viewMessages?: ChatMessage[]
+): ChatMessage[] {
+  if (!sessionId) return NO_MESSAGES
+  const messages = viewMessages ?? state.sessionViews[sessionId]?.messages ?? NO_MESSAGES
+  return mergeLocalRows(messages, state.sessionLocalErrors[sessionId], dismissedRows.get(sessionId))
+}
+const NO_MESSAGES: ChatMessage[] = []
 
 export const useChatStore = create<ChatState>((set, get) => ({
   sessions: [],
@@ -610,6 +724,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   draftRestoreRequest: null,
   scrollToMessageRequest: null,
   messages: [],
+  sessionViews: {},
   sessionStreams: {},
   sessionClosing: {},
   sessionAgentCreated: {},
@@ -617,10 +732,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionPendingPrompt: {},
   sessionMcpConnecting: {},
   sessionToolExecutions: {},
+  sessionToolReviewing: {},
   sessionPendingInputs: {},
+  sessionAskCounts: {},
   sessionInputDrafts: {},
   sessionActiveInputId: {},
-  sessionQueues: {},
+  sessionLocalErrors: {},
   sessionThreadOpen: {},
   modelSupportsReasoning: false,
   thinkingLevel: DEFAULT_THINKING_LEVEL,
@@ -646,11 +763,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     // 恢复目标会话的草稿（无则清空）
     const draft = id ? sessionDrafts.get(id) : undefined
-    // 选中/新建会话即把 active 切到 session（互斥由 deriveActive 保证）
+    // 本地错误行与本端关掉的行只活在当前会话的这一段里（PIN-02：与从前「切回来重新拉列表」同效）
+    const previous = state.activeSessionId
+    let sessionLocalErrors = state.sessionLocalErrors
+    if (previous && previous !== id) {
+      sessionLocalErrors = withKey(sessionLocalErrors, previous, undefined)
+      dismissedRows.delete(previous)
+    }
+    const view = id ? state.sessionViews[id] : undefined
+    // 选中/新建会话即把 active 切到 session（互斥由 deriveActive 保证）；消息列表同一次换成新会话的
+    // （还没收到视图 → 空），绝不出现「激活的是 B、列表里是 A」（P3-08-13）
     set({
       ...deriveActive(id ? { type: 'session', id } : null),
       inputText: draft?.inputText ?? '',
-      pendingImages: draft?.pendingImages ?? []
+      pendingImages: draft?.pendingImages ?? [],
+      sessionLocalErrors,
+      messages: displayMessages({ sessionViews: state.sessionViews, sessionLocalErrors }, id),
+      usedContextTokens: view?.context.usedTokens ?? null
     })
   },
   requestFilePreview: (absPath, openedBy = 'user') =>
@@ -679,82 +808,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })),
   clearScrollToMessage: () => set({ scrollToMessageRequest: null }),
   clearDraftRestore: () => set({ draftRestoreRequest: null }),
-  setMessages: (messages) => set({ messages }),
-  addMessage: (message) =>
-    set((state) =>
-      state.messages.some((m) => m.id === message.id)
-        ? state
-        : { messages: [...state.messages, message] }
-    ),
-  removeMessage: (id) => set((state) => ({ messages: state.messages.filter((m) => m.id !== id) })),
-  replaceMessage: (id, message) =>
-    set((state) => ({
-      messages: state.messages.map((m) => (m.id === id ? message : m))
-    })),
-
-  appendStreamingContent: (sessionId, delta) =>
+  removeMessage: (id) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || {
-        content: '',
-        thinking: '',
-        isStreaming: false,
-        images: [],
-        streamingToolCall: null,
-        completedStreamingToolCalls: []
+      const sid = state.activeSessionId
+      if (!sid) return {}
+      let dismissed = dismissedRows.get(sid)
+      if (!dismissed) {
+        dismissed = new Set()
+        dismissedRows.set(sid, dismissed)
       }
-      const updated = { ...prev, content: prev.content + delta }
-      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
-    }),
-
-  appendStreamingThinking: (sessionId, delta) =>
-    set((state) => {
-      const prev = state.sessionStreams[sessionId] || {
-        content: '',
-        thinking: '',
-        isStreaming: false,
-        images: [],
-        streamingToolCall: null,
-        completedStreamingToolCalls: []
+      dismissed.add(id)
+      const local = state.sessionLocalErrors[sid]
+      const kept = local?.filter((row) => row.message.id !== id)
+      const sessionLocalErrors =
+        local && kept && kept.length !== local.length
+          ? withKey(state.sessionLocalErrors, sid, kept.length > 0 ? kept : undefined)
+          : state.sessionLocalErrors
+      const view = state.sessionViews[sid]
+      return {
+        sessionLocalErrors,
+        messages: view
+          ? displayMessages({ sessionViews: state.sessionViews, sessionLocalErrors }, sid)
+          : state.messages.filter((m) => m.id !== id)
       }
-      const updated = { ...prev, thinking: prev.thinking + delta }
-      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
-    }),
-
-  appendStreamingImage: (sessionId, image) =>
-    set((state) => {
-      const prev = state.sessionStreams[sessionId] || {
-        content: '',
-        thinking: '',
-        isStreaming: false,
-        images: [],
-        streamingToolCall: null,
-        completedStreamingToolCalls: []
-      }
-      const updated = { ...prev, images: [...prev.images, image] }
-      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
-    }),
-
-  clearStreamingContent: (sessionId) =>
-    set((state) => {
-      const prev = state.sessionStreams[sessionId]
-      if (!prev) return {}
-      // 注意：不清除 streamingToolCall，等 tool_start 事件到达时再清除
-      const updated = { ...prev, content: '', thinking: '', images: [] }
-      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
-    }),
-
-  setIsStreaming: (sessionId, streaming) =>
-    set((state) => {
-      const prev = state.sessionStreams[sessionId] || {
-        content: '',
-        thinking: '',
-        isStreaming: false,
-        images: [],
-        streamingToolCall: null,
-        completedStreamingToolCalls: []
-      }
-      const updated = { ...prev, isStreaming: streaming }
-      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
     }),
 
   setAgentClosing: (sessionId, closing) =>
@@ -780,10 +856,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setPendingPrompt: (sessionId, message) =>
     set((state) => {
       if (!message && !state.sessionPendingPrompt[sessionId]) return {}
-      const next = { ...state.sessionPendingPrompt }
-      if (message) next[sessionId] = message
-      else delete next[sessionId]
-      return { sessionPendingPrompt: next }
+      if (message) pendingBaselines.set(sessionId, idsOf(state.sessionViews[sessionId]?.messages))
+      else pendingBaselines.delete(sessionId)
+      const sessionPendingPrompt = withKey(
+        state.sessionPendingPrompt,
+        sessionId,
+        message ?? undefined
+      )
+      const view = state.sessionViews[sessionId]
+      const prevStream = state.sessionStreams[sessionId]
+      const stream = view
+        ? deriveStream(view, !!message, prevStream)
+        : residueStream(sessionId, !!message, prevStream)
+      return {
+        sessionPendingPrompt,
+        sessionStreams: withKey(state.sessionStreams, sessionId, stream)
+      }
     }),
 
   setMcpConnecting: (sessionId, server, connecting) =>
@@ -805,88 +893,54 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return { sessionMcpConnecting: next }
     }),
 
-  getSessionStreamContent: (sessionId) => {
-    return get().sessionStreams[sessionId]?.content || ''
-  },
-
-  getSessionStreamThinking: (sessionId) => {
-    return get().sessionStreams[sessionId]?.thinking || ''
-  },
-
-  setStreamingToolCall: (sessionId, toolCall) =>
+  markSessionRunning: (sessionId, running) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId] || {
-        content: '',
-        thinking: '',
-        isStreaming: false,
-        images: [],
-        streamingToolCall: null,
-        completedStreamingToolCalls: []
-      }
-      // 设为 null 时同时清除已完成列表（生成阶段结束）
-      const updated = toolCall
-        ? { ...prev, streamingToolCall: toolCall }
-        : { ...prev, streamingToolCall: null, completedStreamingToolCalls: [] }
-      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
-    }),
-
-  appendStreamingToolCallDelta: (sessionId, delta) =>
-    set((state) => {
+      if (running) residueRunning.add(sessionId)
+      else residueRunning.delete(sessionId)
+      // 订阅着视图：运行状态以视图为准，余项只记下（退订之后接着用）
+      if (sessionId in state.sessionViews) return {}
       const prev = state.sessionStreams[sessionId]
-      if (!prev?.streamingToolCall) return {}
-      const updated = {
-        ...prev,
-        streamingToolCall: {
-          ...prev.streamingToolCall,
-          argsText: prev.streamingToolCall.argsText + delta
-        }
-      }
-      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
+      const stream = residueStream(sessionId, !!state.sessionPendingPrompt[sessionId], prev)
+      if (stream === prev) return {}
+      return { sessionStreams: { ...state.sessionStreams, [sessionId]: stream } }
     }),
 
-  finalizeStreamingToolCall: (sessionId) =>
+  setAskCount: (sessionId, count) =>
     set((state) => {
-      const prev = state.sessionStreams[sessionId]
-      if (!prev?.streamingToolCall) return {}
-      // 尝试解析完整的 argsText 为结构化参数
-      let parsedArgs: Record<string, unknown> | undefined
-      try {
-        parsedArgs = JSON.parse(prev.streamingToolCall.argsText)
-      } catch {
-        /* 解析失败则不带 args */
-      }
-      const completed = {
-        toolName: prev.streamingToolCall.toolName,
-        args: parsedArgs
-      }
-      const updated = {
-        ...prev,
-        streamingToolCall: null,
-        completedStreamingToolCalls: [...prev.completedStreamingToolCalls, completed]
-      }
-      return { sessionStreams: { ...state.sessionStreams, [sessionId]: updated } }
+      const value = count > 0 ? count : undefined
+      const next = withKey(state.sessionAskCounts, sessionId, value)
+      return next === state.sessionAskCounts ? {} : { sessionAskCounts: next }
     }),
 
-  addToolExecution: (sessionId, exec) =>
+  addLocalError: (sessionId, content) =>
     set((state) => {
-      const prev = state.sessionToolExecutions[sessionId] || []
+      if (sessionId !== state.activeSessionId) return {}
+      const message: ErrorEventMessage = {
+        id: `local-error-${Date.now()}-${Math.round(Math.random() * 1e9)}`,
+        sessionId,
+        content,
+        model: '',
+        createdAt: Date.now(),
+        role: 'system_notify',
+        type: 'error_event',
+        metadata: null
+      }
+      const viewMessages = state.sessionViews[sessionId]?.messages ?? NO_MESSAGES
+      const row: LocalErrorRow = {
+        afterId: viewMessages.length > 0 ? viewMessages[viewMessages.length - 1].id : null,
+        message
+      }
+      const sessionLocalErrors = {
+        ...state.sessionLocalErrors,
+        [sessionId]: [...(state.sessionLocalErrors[sessionId] ?? []), row]
+      }
       return {
-        sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: [...prev, exec] }
+        sessionLocalErrors,
+        messages: displayMessages(
+          { sessionViews: state.sessionViews, sessionLocalErrors },
+          sessionId
+        )
       }
-    }),
-
-  updateToolExecution: (sessionId, toolCallId, updates) =>
-    set((state) => {
-      const prev = state.sessionToolExecutions[sessionId] || []
-      const updated = prev.map((t) => (t.toolCallId === toolCallId ? { ...t, ...updates } : t))
-      return { sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: updated } }
-    }),
-
-  clearToolExecutions: (sessionId) =>
-    set((state) => {
-      const rest = { ...state.sessionToolExecutions }
-      delete rest[sessionId]
-      return { sessionToolExecutions: rest }
     }),
 
   setInputText: (text) => set({ inputText: text }),
@@ -924,7 +978,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
       // 删除的是当前激活会话才清空 active
-      ...(state.active?.type === 'session' && state.active.id === id ? deriveActive(null) : {})
+      ...(state.active?.type === 'session' && state.active.id === id
+        ? { ...deriveActive(null), messages: NO_MESSAGES }
+        : {})
     })),
   setToolPresentations: (presentations) => set({ toolPresentations: presentations }),
   setProjectPath: (path) => set({ projectPath: path }),
@@ -955,68 +1011,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     })),
 
-  addPendingInput: (sessionId, request) =>
-    set((state) => {
-      const prev = state.sessionPendingInputs[sessionId] || []
-      // 同一 id 已存在则更新而非追加(避免事件去重边界情况)
-      const exists = prev.findIndex((r) => r.id === request.id)
-      const next =
-        exists >= 0 ? prev.map((r, i) => (i === exists ? request : r)) : [...prev, request]
-      return {
-        sessionPendingInputs: { ...state.sessionPendingInputs, [sessionId]: next }
-      }
-    }),
-
-  removePendingInput: (sessionId, requestId) =>
-    set((state) => {
-      const prev = state.sessionPendingInputs[sessionId]
-      if (!prev) return {}
-      const nextList = prev.filter((r) => r.id !== requestId)
-      const nextMap = { ...state.sessionPendingInputs }
-      if (nextList.length > 0) {
-        nextMap[sessionId] = nextList
-      } else {
-        delete nextMap[sessionId]
-      }
-      // 同时清掉对应草稿
-      const sessionDrafts = state.sessionInputDrafts[sessionId]
-      let nextDrafts = state.sessionInputDrafts
-      if (sessionDrafts && requestId in sessionDrafts) {
-        const { [requestId]: _drop, ...rest } = sessionDrafts
-        nextDrafts = { ...state.sessionInputDrafts, [sessionId]: rest }
-        if (Object.keys(rest).length === 0) {
-          const { [sessionId]: _drop2, ...other } = nextDrafts
-          nextDrafts = other
-        }
-      }
-      // 选中的就是被解决的那条 → 清除选中,选择器回落到剩余列表首条
-      let nextActive = state.sessionActiveInputId
-      if (nextActive[sessionId] === requestId) {
-        const { [sessionId]: _dropA, ...restA } = nextActive
-        nextActive = restA
-      }
-      return {
-        sessionPendingInputs: nextMap,
-        sessionInputDrafts: nextDrafts,
-        sessionActiveInputId: nextActive
-      }
-    }),
-
-  clearPendingInputs: (sessionId) =>
-    set((state) => {
-      const nextMap = { ...state.sessionPendingInputs }
-      delete nextMap[sessionId]
-      const nextDrafts = { ...state.sessionInputDrafts }
-      delete nextDrafts[sessionId]
-      const nextActive = { ...state.sessionActiveInputId }
-      delete nextActive[sessionId]
-      return {
-        sessionPendingInputs: nextMap,
-        sessionInputDrafts: nextDrafts,
-        sessionActiveInputId: nextActive
-      }
-    }),
-
   setInputDraft: (sessionId, requestId, draft) =>
     set((state) => {
       const sessionDrafts = state.sessionInputDrafts[sessionId] || {}
@@ -1033,19 +1027,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessionActiveInputId: { ...state.sessionActiveInputId, [sessionId]: requestId }
     })),
 
-  setSessionQueue: (sessionId, queue) =>
-    set((state) => {
-      const empty = !queue.steer.length && !queue.followUp.length && !queue.nextTurn.length
-      // 三条都空时删键而不是存空对象 —— 选择器回落到稳定的 EMPTY_QUEUE 引用
-      if (empty) {
-        if (!state.sessionQueues[sessionId]) return {}
-        const rest = { ...state.sessionQueues }
-        delete rest[sessionId]
-        return { sessionQueues: rest }
-      }
-      return { sessionQueues: { ...state.sessionQueues, [sessionId]: queue } }
-    }),
-
   setThreadOpen: (sessionId, open) =>
     set((state) =>
       state.sessionThreadOpen[sessionId] === open
@@ -1053,156 +1034,208 @@ export const useChatStore = create<ChatState>((set, get) => ({
         : { sessionThreadOpen: { ...state.sessionThreadOpen, [sessionId]: open } }
     ),
 
-  flushStreamingDeltas: (buffers) =>
-    set((state) => {
-      const newStreams = { ...state.sessionStreams }
-
-      for (const [sessionId, buf] of buffers) {
-        if (buf.content || buf.thinking || buf.toolCallArgsDelta) {
-          const prev = newStreams[sessionId] || {
-            content: '',
-            thinking: '',
-            isStreaming: false,
-            images: [],
-            streamingToolCall: null,
-            completedStreamingToolCalls: []
-          }
-          const updated = { ...prev }
-          if (buf.content) updated.content = prev.content + buf.content
-          if (buf.thinking) updated.thinking = prev.thinking + buf.thinking
-          if (buf.toolCallArgsDelta && updated.streamingToolCall) {
-            updated.streamingToolCall = {
-              ...updated.streamingToolCall,
-              argsText: updated.streamingToolCall.argsText + buf.toolCallArgsDelta
-            }
-          }
-          newStreams[sessionId] = updated
-        }
-      }
-
-      return { sessionStreams: newStreams }
-    }),
-
-  handleAssistantMessage: (sessionId, message) =>
-    set((state) => {
-      const messages = message ? upsertMessage(state.messages, message) : state.messages
-      const prev = state.sessionStreams[sessionId]
-      if (!prev) return { messages }
-      // 单次 set：清除流式内容与工具占位（正文和工具块都已落进这张卡）+ upsert 卡片
-      const updatedStream = {
-        ...prev,
-        content: '',
-        thinking: '',
-        images: [],
-        streamingToolCall: null,
-        completedStreamingToolCalls: []
-      }
-      return {
-        sessionStreams: { ...state.sessionStreams, [sessionId]: updatedStream },
-        messages
-      }
-    }),
-
-  handleToolStart: (sessionId, exec) =>
-    set((state) => {
-      // 1. 清除流式工具调用状态（工具块已经在卡片里，不需要流式占位）
-      const prevStream = state.sessionStreams[sessionId]
-      const updatedStream = prevStream
-        ? { ...prevStream, streamingToolCall: null, completedStreamingToolCalls: [] }
-        : undefined
-      const newStreams = updatedStream
-        ? { ...state.sessionStreams, [sessionId]: updatedStream }
-        : state.sessionStreams
-
-      // 2. 记录工具执行状态（工具面板 / 中断处理消费）
-      const prevExecs = state.sessionToolExecutions[sessionId] || []
-      return {
-        sessionStreams: newStreams,
-        sessionToolExecutions: {
-          ...state.sessionToolExecutions,
-          [sessionId]: [...prevExecs, exec]
-        }
-      }
-    }),
-
-  handleToolEnd: (sessionId, toolCallId, execUpdates, messageId) =>
-    set((state) => {
-      // 1. 更新工具执行状态
-      const prevExecs = state.sessionToolExecutions[sessionId] || []
-      // 结束了就不再「审查中」：落定事件万一丢了，也不留一个永远转着的标记
-      const newExecs = prevExecs.map((t) =>
-        t.toolCallId === toolCallId ? { ...t, ...execUpdates, reviewing: false } : t
-      )
-
-      // 2. 结果回填进卡片的工具块
-      return {
-        sessionToolExecutions: { ...state.sessionToolExecutions, [sessionId]: newExecs },
-        messages: fillToolResult(state.messages, toolCallId, messageId, {
-          result: execUpdates.result ?? '',
-          isError: execUpdates.status === 'error' || undefined,
-          details: execUpdates.details
-        })
-      }
-    }),
-
   setToolReviewing: (sessionId, toolCallId, reviewing) =>
     set((state) => {
-      const prevExecs = state.sessionToolExecutions[sessionId]
-      if (!prevExecs?.some((t) => t.toolCallId === toolCallId && !!t.reviewing !== reviewing)) {
-        return {}
+      const current = state.sessionToolReviewing[sessionId]
+      if (!!current?.[toolCallId] === reviewing) return {}
+      let overlay: Record<string, true> | undefined
+      if (reviewing) overlay = { ...current, [toolCallId]: true }
+      else {
+        overlay = { ...current }
+        delete overlay[toolCallId]
+        if (Object.keys(overlay).length === 0) overlay = undefined
       }
+      const sessionToolReviewing = withKey(state.sessionToolReviewing, sessionId, overlay)
+      const view = state.sessionViews[sessionId]
+      if (!view) return { sessionToolReviewing }
+      const tools = deriveToolExecutions(view, overlay, state.sessionToolExecutions[sessionId])
       return {
-        sessionToolExecutions: {
-          ...state.sessionToolExecutions,
-          [sessionId]: prevExecs.map((t) => (t.toolCallId === toolCallId ? { ...t, reviewing } : t))
-        }
-      }
-    }),
-
-  finishStreaming: (sessionId, finalMessage) =>
-    set((state) => {
-      // 清除该 session 的流式内容
-      const prevStream = state.sessionStreams[sessionId]
-      const updatedStream = prevStream
-        ? {
-            ...prevStream,
-            content: '',
-            thinking: '',
-            isStreaming: false,
-            images: [],
-            streamingToolCall: null,
-            completedStreamingToolCalls: []
-          }
-        : undefined
-      const newStreams = updatedStream
-        ? { ...state.sessionStreams, [sessionId]: updatedStream }
-        : state.sessionStreams
-
-      // 清除该 session 的工具执行状态
-      const restToolExecs = { ...state.sessionToolExecutions }
-      delete restToolExecs[sessionId]
-
-      // 清除该 session 的待处理用户输入(以及对应草稿和步进器选中项)
-      const restPendingInputs = { ...state.sessionPendingInputs }
-      delete restPendingInputs[sessionId]
-      const restInputDrafts = { ...state.sessionInputDrafts }
-      delete restInputDrafts[sessionId]
-      const restActiveInputId = { ...state.sessionActiveInputId }
-      delete restActiveInputId[sessionId]
-
-      // 终答卡在 message_end 时已经 upsert 过，这里是兜底（同 id 覆盖，不会重复）
-      const newMessages =
-        finalMessage && sessionId === state.activeSessionId
-          ? upsertMessage(state.messages, finalMessage)
-          : state.messages
-
-      return {
-        sessionStreams: newStreams,
-        sessionToolExecutions: restToolExecs,
-        sessionPendingInputs: restPendingInputs,
-        sessionInputDrafts: restInputDrafts,
-        sessionActiveInputId: restActiveInputId,
-        messages: newMessages
+        sessionToolReviewing,
+        sessionToolExecutions: withKey(
+          state.sessionToolExecutions,
+          sessionId,
+          tools === EMPTY_TOOLS ? undefined : tools
+        )
       }
     })
 }))
+
+// ─────────────────────────── 唯一的写入口 ───────────────────────────
+
+/** 一轮运行以一张新的终答收尾（PIN-03：TTS 从这里起，不再读 `agent_end` 的载荷） */
+export type RunSettledListener = (sessionId: string, finalAnswer: AssistantMessage) => void
+const runSettledListeners = new Set<RunSettledListener>()
+
+/** 订阅「一轮以新终答收尾」（视图从在跑转为不在跑、且出现了一条这一轮之前没有的终答）；返回退订 */
+export function onSessionRunSettled(listener: RunSettledListener): () => void {
+  runSettledListeners.add(listener)
+  return () => {
+    runSettledListeners.delete(listener)
+  }
+}
+
+/** 一轮的收尾检测：在跑时记下开跑那一刻的消息；不在跑且出现新消息时判一次 */
+function detectRunSettled(
+  sessionId: string,
+  prev: SessionView | undefined,
+  next: SessionView
+): AssistantMessage | undefined {
+  if (next.run.state === 'busy') {
+    // 新一轮（上一帧不在跑）：重记基线
+    if (!runBaselines.has(sessionId) || prev?.run.state !== 'busy') {
+      runBaselines.set(sessionId, idsOf(prev?.messages ?? next.messages))
+    }
+    return undefined
+  }
+  const baseline = runBaselines.get(sessionId)
+  if (baseline === undefined) return undefined
+  const fresh = next.messages.filter((m) => !baseline.has(m.id))
+  // 运行已停、终答还没到（两路先后不定）：留着基线等它
+  if (fresh.length === 0) return undefined
+  runBaselines.delete(sessionId)
+  const last = next.messages[next.messages.length - 1]
+  return isFinalAssistant(last) && !baseline.has(last.id) ? last : undefined
+}
+
+/**
+ * 把一份视图镜像进 store —— 会话切片的**唯一写入口**（P3-08）。`view === null` = 视图不可用（会话被删，
+ * PIN-14）：派生切片回到空视图的值，本地叠加保留。
+ *
+ * 一次调用至多一次 `set`：视图先与上一份做结构共享（整份相等 → 什么都不写），再推导流式状态、工具执行、
+ * 询问、队列，当前会话的消息与上下文占用；乐观占位若遇到一条发送时还没有的用户消息，在同一次更新里撤下。
+ */
+export function applySessionView(sessionId: string, view: SessionView | null): void {
+  const incoming = view ?? emptySessionView(sessionId)
+  let settled: AssistantMessage | undefined
+  useChatStore.setState((state) => {
+    const prevView = state.sessionViews[sessionId]
+    const shared = shareStructure(prevView, incoming)
+    if (shared === prevView) return state
+    const patch: Partial<ChatState> = {
+      sessionViews: { ...state.sessionViews, [sessionId]: shared }
+    }
+
+    // 乐观占位：视图里出现发送那一刻还没有的用户消息 → 同一次更新撤下（PIN-17）
+    let pending = !!state.sessionPendingPrompt[sessionId]
+    if (pending) {
+      const baseline = pendingBaselines.get(sessionId) ?? new Set<string>()
+      if (firstNewUserMessage(shared.messages, baseline) !== undefined) {
+        pending = false
+        pendingBaselines.delete(sessionId)
+        patch.sessionPendingPrompt = withKey(state.sessionPendingPrompt, sessionId, undefined)
+      }
+    }
+
+    // 流式状态
+    const prevStream = state.sessionStreams[sessionId]
+    const stream = deriveStream(shared, pending, prevStream)
+    if (stream !== prevStream)
+      patch.sessionStreams = { ...state.sessionStreams, [sessionId]: stream }
+
+    // 审查叠加：工具做完 / 本轮结束即清（PIN-04）
+    let overlay: Record<string, true> | undefined = state.sessionToolReviewing[sessionId]
+    if (overlay) {
+      const runEnded = prevView?.run.state === 'busy' && shared.run.state !== 'busy'
+      const kept: Record<string, true> | undefined = runEnded
+        ? undefined
+        : Object.fromEntries(
+            Object.keys(overlay)
+              .filter((id) => shared.toolRuns[id]?.status !== 'done')
+              .map((id) => [id, true as const])
+          )
+      const next = kept && Object.keys(kept).length > 0 ? kept : undefined
+      if (next === undefined || Object.keys(next).length !== Object.keys(overlay).length) {
+        overlay = next
+        patch.sessionToolReviewing = withKey(state.sessionToolReviewing, sessionId, overlay)
+      }
+    }
+
+    // 工具执行
+    const tools = deriveToolExecutions(shared, overlay, state.sessionToolExecutions[sessionId])
+    const nextTools = withKey(
+      state.sessionToolExecutions,
+      sessionId,
+      tools === EMPTY_TOOLS ? undefined : tools
+    )
+    if (nextTools !== state.sessionToolExecutions) patch.sessionToolExecutions = nextTools
+
+    // 询问：视图里没了的那几条，草稿与步进器选中项一并清掉
+    const asks = shared.asks.length > 0 ? shared.asks : undefined
+    const nextInputs = withKey(state.sessionPendingInputs, sessionId, asks)
+    if (nextInputs !== state.sessionPendingInputs) {
+      patch.sessionPendingInputs = nextInputs
+      const live = new Set(shared.asks.map((r) => r.id))
+      const drafts = state.sessionInputDrafts[sessionId]
+      if (drafts && Object.keys(drafts).some((id) => !live.has(id))) {
+        const kept = Object.fromEntries(Object.entries(drafts).filter(([id]) => live.has(id)))
+        patch.sessionInputDrafts = withKey(
+          state.sessionInputDrafts,
+          sessionId,
+          Object.keys(kept).length > 0 ? kept : undefined
+        )
+      }
+      const selected = state.sessionActiveInputId[sessionId]
+      if (selected !== undefined && !live.has(selected)) {
+        patch.sessionActiveInputId = withKey(state.sessionActiveInputId, sessionId, undefined)
+      }
+    }
+
+    // 当前会话：消息列表与上下文占用
+    if (sessionId === state.activeSessionId) {
+      const messages = displayMessages(state, sessionId, shared.messages)
+      if (messages !== state.messages) patch.messages = messages
+      if (shared.context.usedTokens !== state.usedContextTokens) {
+        patch.usedContextTokens = shared.context.usedTokens
+      }
+    }
+
+    settled = detectRunSettled(sessionId, prevView, shared)
+    return patch
+  })
+  if (settled !== undefined) {
+    for (const listener of [...runSettledListeners]) {
+      try {
+        listener(sessionId, settled)
+      } catch {
+        /* 一个监听器出错不影响其它 */
+      }
+    }
+  }
+}
+
+/**
+ * 退订之后：丢掉这个会话的视图与由它派生的工具 / 询问 / 队列切片（之后由余项接手：运行标记、询问计数）。
+ * 流式状态只留运行标记（侧栏转圈接着对），草稿与乐观占位保留。
+ */
+export function releaseSessionView(sessionId: string): void {
+  const view = useChatStore.getState().sessionViews[sessionId]
+  if (view === undefined) return
+  if (view.run.state === 'busy') residueRunning.add(sessionId)
+  else residueRunning.delete(sessionId)
+  runBaselines.delete(sessionId)
+  useChatStore.setState((state) => {
+    const prevStream = state.sessionStreams[sessionId]
+    const stream = residueStream(sessionId, !!state.sessionPendingPrompt[sessionId], undefined)
+    return {
+      sessionViews: withKey(state.sessionViews, sessionId, undefined),
+      sessionToolExecutions: withKey(state.sessionToolExecutions, sessionId, undefined),
+      sessionPendingInputs: withKey(state.sessionPendingInputs, sessionId, undefined),
+      sessionStreams: withKey(
+        state.sessionStreams,
+        sessionId,
+        prevStream && prevStream.isStreaming === stream.isStreaming && !prevStream.content
+          ? prevStream
+          : stream
+      )
+    }
+  })
+}
+
+/** 仅供单测：清掉写入口的模块状态（store 本身由各测试自己 setState） */
+export function resetSessionViewStateForTests(): void {
+  pendingBaselines.clear()
+  dismissedRows.clear()
+  residueRunning.clear()
+  runBaselines.clear()
+  runSettledListeners.clear()
+}

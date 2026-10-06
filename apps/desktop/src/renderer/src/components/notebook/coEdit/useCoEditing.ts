@@ -1,8 +1,9 @@
 /**
  * 协作编辑的渲染端控制器（从系统打开的 md 窗口）。三件事：
  *
- *  1. **虚影**：订阅本会话的 `toolcall_generating`，doc_edit / doc_insert 的参数一边生成，一边从半截 JSON
- *     里取出定位原文与新内容，在目标处画虚影（coEditState）。
+ *  1. **虚影**：读本会话视图的实时卡（P3-08：`ghostSourcesOf`），doc_edit / doc_insert 的参数一边生成，一边
+ *     从半截 JSON 里取出定位原文与新内容，在目标处画虚影（coEditState）。落盘（实时卡没了）、本轮结束
+ *     （`agent_end`）、出错（`error`）即收掉。
  *  2. **执行**：接主进程转来的 doc_* 请求（liveDocumentBridge），在编辑器的当前缓冲上当场执行 ——
  *     读就连同「用户在哪、改了什么」一起答；改就按原文定位、一次落下（不进撤销栈）。用户正在那一段
  *     打字（或输入法组字中）就先等他停手，最多等 MAX_WAIT_MS。请求逐个排队执行，彼此不交错。
@@ -16,6 +17,8 @@ import { EditorView, ViewPlugin } from '@codemirror/view'
 import { ChangeSet, type Extension, type Text } from '@codemirror/state'
 import type { LivePreviewEditorHandle } from '@shuvix/app-shell'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
+import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
+import { useChatStore } from '@shuvix/chat-ui'
 import {
   DOC_EDIT_TOOL,
   DOC_INSERT_TOOL,
@@ -37,6 +40,7 @@ import {
   type Ghost,
   type GhostMode
 } from './coEditState'
+import { ghostSourcesOf } from './ghostSources'
 import {
   mergeExternalChange,
   partialJsonString,
@@ -446,7 +450,7 @@ export function useCoEditing(sessionId: string): CoEditing {
     [getView, runWrite, userContext, flashReading]
   )
 
-  // ─── 订阅：主进程的请求 / 撤回、本会话的流式参数 ─────────
+  // ─── 订阅：主进程的请求 / 撤回、本会话视图的实时卡（虚影）、轮结束 ─────────
   useEffect(() => {
     const offRequest = window.api.liveDoc.onRequest((request) => {
       if (request.sessionId !== sessionId) return
@@ -459,30 +463,38 @@ export function useCoEditing(sessionId: string): CoEditing {
     })
     let frame: number | null = null
     const dirty = new Set<string>()
+    /** 上一份视图里正在画的虚影（这一份里没了 = 落盘了 / 实时卡换了 → 收掉） */
+    let drawing = new Set<string>()
+    const syncGhosts = (view: SessionView | undefined): void => {
+      const sources = ghostSourcesOf(view)
+      const ids = new Set(sources.map((source) => source.toolCallId))
+      for (const id of drawing) if (!ids.has(id)) dropGhost(id)
+      drawing = ids
+      for (const source of sources) {
+        const stream = streams.current.get(source.toolCallId)
+        if (stream?.json === source.json) continue
+        streams.current.set(source.toolCallId, { toolName: source.toolName, json: source.json })
+        dirty.add(source.toolCallId)
+      }
+      // 视图约 10 Hz 一份，仍然一帧至多画一次
+      if (dirty.size > 0 && frame === null) {
+        frame = requestAnimationFrame(() => {
+          frame = null
+          for (const id of dirty) drawGhost(id)
+          dirty.clear()
+        })
+      }
+    }
+    syncGhosts(useChatStore.getState().sessionViews[sessionId])
+    const offView = useChatStore.subscribe((state, previous) => {
+      const view = state.sessionViews[sessionId]
+      if (view !== previous.sessionViews[sessionId]) syncGhosts(view)
+    })
     const offEvent = window.api.agent.onEvent((event: ChatEvent) => {
       if (event.sessionId !== sessionId) return
-      if (event.type === 'toolcall_generating') {
-        if (event.toolName !== DOC_EDIT_TOOL && event.toolName !== DOC_INSERT_TOOL) return
-        if (!event.toolCallId) return
-        const stream = streams.current.get(event.toolCallId) ?? {
-          toolName: event.toolName,
-          json: ''
-        }
-        stream.json += event.argsDelta ?? ''
-        streams.current.set(event.toolCallId, stream)
-        dirty.add(event.toolCallId)
-        // 增量逐 token 到：一帧画一次
-        if (frame === null) {
-          frame = requestAnimationFrame(() => {
-            frame = null
-            for (const id of dirty) drawGhost(id)
-            dirty.clear()
-          })
-        }
-      } else if (event.type === 'tool_end') {
-        dropGhost(event.toolCallId)
-      } else if (event.type === 'agent_end' || event.type === 'error') {
+      if (event.type === 'agent_end' || event.type === 'error') {
         for (const id of [...streams.current.keys()]) dropGhost(id)
+        drawing = new Set()
         const view = getView()
         if (view) {
           for (const g of currentGhosts(view)) view.dispatch({ effects: clearGhost.of(g.id) })
@@ -492,6 +504,7 @@ export function useCoEditing(sessionId: string): CoEditing {
     return () => {
       offRequest()
       offCancel()
+      offView()
       offEvent()
       if (frame !== null) cancelAnimationFrame(frame)
       if (readingTimer.current) clearTimeout(readingTimer.current)

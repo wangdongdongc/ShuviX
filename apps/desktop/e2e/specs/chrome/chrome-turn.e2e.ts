@@ -6,23 +6,26 @@
  * 回到侧边栏。每一段都是生产代码，只有模型与浏览器是假的。本文件证明：
  *   - **主流程**（CTN-1）：随消息带上的标签页 → 桌面现问 Chrome 它在哪（`tabs.get`）→ 它的站点记为已同意；
  *     list_tabs / read_page 真的走到浏览器（按假 Chrome 这一侧的记录断），一张询问卡片都没有；模型看到的
- *     是 tab 档案、chrome 的工具、带标签页那一行的用户消息；事件流一条不落地到了侧边栏；标签页会话不进
- *     日历；
+ *     是 tab 档案、chrome 的工具、带标签页那一行的用户消息；侧边栏订阅的会话视图（P3-09：经桥的
+ *     `sync.invoke` / `sync.frame`）里两个工具都在 agent_end 之前落定，chat.event 只剩生命周期；标签页会话
+ *     不进日历；
  *   - **调试租约**（CTN-2）：一轮里接管一次，浏览器推来的 CDP 事件回到工具结果里，轮结束才放掉（横幅只在
  *     agent 干活时挂着）；
  *   - **站点门**（CTN-3..5）：agent 自己要开的新站点、没随消息带上的标签页、挂着的那一页自己跳去的新站点，
- *     每条会话第一次都经 ask-on-new-site 问一次 —— 卡片经 chat.event 到侧边栏、在侧边栏里答；
+ *     每条会话第一次都经 ask-on-new-site 问一次 —— 卡片在侧边栏的会话视图里（`asks`）、在侧边栏里答；
  *     拒了操作到不了浏览器，允许了才到；带上一个标签页就是同意它的站点。出厂已不带这份策略
  *     （2026-10-01 删了）：本 spec 把退役的那份原样装成**用户策略**（`seedRetiredPolicy`），钉的是
  *     站点门的接线与侧边栏里的卡片；撤掉它就一句都不问（CTN-6b）；
  *   - **询问的归属**（CTN-6）：别的会话（别的浏览器的、同一个浏览器另一个标签页的）拿着卡片 id 也答不了它；
  *   - **中文不走样**（CTN-7 / CTN-8）：大于一次 socket 读的中文正文，两个方向都经过本地组件与桥服务的
  *     流式解码，到模型、回侧边栏都一字不差；超过宿主工具输出上限的页，tab agent（手里没有 read）拿到的是
- *     内存里截断的首尾整段 —— 不落盘，也不给它指向 Read 工具的那句话；
+ *     内存里截断的首尾整段 —— 不落盘，也不给它指向 Read 工具的那句话；超过 1 MB 的视图帧与快照（CTN-10）
+ *     由桌面分片送回；
  *   - **停止键**（CTN-9）：侧边栏的 `agent.abort` 停下正在跑的一轮。
  *
  * 纪律：侧边栏的 prompt 被拒时立刻失败（带上拒绝的原话），不干等 agent_end；「操作到没到浏览器」
- * 一律按假 Chrome 记下的请求断；询问一律在侧边栏里手工应答（主窗口不装 installAutoAllow）。
+ * 一律按假 Chrome 记下的请求断；询问一律在侧边栏里手工应答（主窗口不装 installAutoAllow）；会话内容
+ * （工具结果、询问卡）一律从假 Chrome 订阅的视图里读 —— 每一轮开始前先订上，一闪而过的卡也记得到。
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -47,6 +50,7 @@ import {
   chromeTool,
   scriptChromeRun,
   startFakeChrome,
+  toolDone,
   toolEndsOf,
   waitAsk,
   type ChromeAskRequest,
@@ -109,14 +113,16 @@ interface Turn {
   refused: Promise<never>
 }
 
-/** 排好脚本、从侧边栏发出消息（不等它跑完） */
-function start(
+/** 排好脚本、订上侧边栏的会话视图、从侧边栏发出消息（不等它跑完） */
+async function start(
   chrome: FakeChrome,
   sid: string,
   text: string,
   tabs: number[],
   calls: Array<ChromeScriptedCall | ChromeScriptedCall[]>
-): Turn {
+): Promise<Turn> {
+  // 侧边栏先挂上视图、再发消息：这一轮里出现过的询问卡（哪怕一闪而过）都记得到
+  await chrome.viewOf(sid)
   provider.reset()
   scriptChromeRun(provider, calls)
   const { since, response } = chrome.prompt(sid, text, { tabs })
@@ -131,23 +137,32 @@ function start(
 
 const within = <T>(turn: Turn, work: Promise<T>): Promise<T> => Promise.race([work, turn.refused])
 
-/** 等这一轮的 agent_end（经桥到达侧边栏的那一条），回按 toolCallId 的 tool_end */
+/**
+ * 等这一轮结束：经桥到达侧边栏的 agent_end，且侧边栏的视图不再在跑（视图帧与生命周期事件是两条路，
+ * 谁先到不一定）。回视图里按 toolCallId 落定的工具调用
+ */
 async function finish(
   chrome: FakeChrome,
   sid: string,
   turn: Turn
 ): Promise<Record<string, ChromeToolEnd>> {
   await within(turn, chrome.waitChatEvent('agent_end', { sessionId: sid, since: turn.since }))
-  return toolEndsOf(chrome, sid, turn.since)
+  await within(
+    turn,
+    chrome.waitView(sid, (v) => v.run.state !== 'busy' && v.live === null, {
+      what: `${sid} settled`
+    })
+  )
+  return toolEndsOf(chrome, sid)
 }
 
 /** 这一轮里下一张询问卡片（到达侧边栏的那张） */
 const nextAsk = (chrome: FakeChrome, sid: string, turn: Turn): Promise<ChromeAskRequest> =>
   within(turn, waitAsk(chrome, sid, turn.since, taken))
 
-/** 这一轮里侧边栏收到的询问卡片（断言「一张都没有」用） */
+/** 这一轮里侧边栏视图里出现过的询问卡片（断言「一张都没有」用） */
 const asksIn = (chrome: FakeChrome, sid: string, turn: Turn): unknown[] =>
-  chrome.chatEvents({ sessionId: sid, type: 'input_request', since: turn.since })
+  chrome.asksSeen(sid, { since: turn.since })
 
 const decisionsOf = (toolCallId: string): ReturnType<typeof securityDecisions> =>
   securityDecisions(app).filter((d) => d.toolCallId === toolCallId)
@@ -237,8 +252,12 @@ afterAll(async () => {
 })
 
 describe('一轮对话走到浏览器再回来', () => {
-  it('CTN-1 读挂着的那一页：随消息带上的站点不问，操作真的到了浏览器，事件流到了侧边栏，模型看到的是 tab 档案', async () => {
-    const turn = start(
+  it('CTN-1 读挂着的那一页：随消息带上的站点不问，操作真的到了浏览器，视图到了侧边栏，模型看到的是 tab 档案', async () => {
+    // 侧边栏的视图：两个工具各自第一次落定是哪一帧（与 chat.event 同一条到达序列）
+    await chromeA.viewOf(sidA5)
+    const listDone = chromeA.viewSeqWhere(sidA5, toolDone('ctn1_list'), { what: 'ctn1_list done' })
+    const readDone = chromeA.viewSeqWhere(sidA5, toolDone('ctn1_read'), { what: 'ctn1_read done' })
+    const turn = await start(
       chromeA,
       sidA5,
       '总结一下这个页面',
@@ -287,22 +306,35 @@ describe('一轮对话走到浏览器再回来', () => {
     expect(toolTextsOf(reqs[1]).join('\n')).toContain(`(this conversation's tab, active) E2E Inbox`)
     expect(toolTextsOf(reqs[2]).join('\n')).toContain('Three unread messages from the e2e fixture.')
 
-    // 侧边栏收到的事件流：这条会话的，一条不落、次序对
+    // 侧边栏收到的事件流：这条会话的生命周期，次序对；内容类事件一条都没有（内容走视图，P3-08/09）
     const events = chromeA.chatEvents({ sessionId: sidA5, since: turn.since })
     expect(events.every((e) => e.event.sessionId === sidA5)).toBe(true)
     const types = events.map((e) => e.event.type)
-    for (const t of [
+    expect(types).toContain('agent_start')
+    expect(types).toContain('agent_end')
+    expect(types.indexOf('agent_start')).toBeLessThan(types.indexOf('agent_end'))
+    for (const gone of [
       'user_message',
-      'agent_start',
       'tool_start',
       'tool_end',
-      'assistant_message'
+      'assistant_message',
+      'text_delta',
+      'input_request'
     ]) {
-      expect(types, t).toContain(t)
+      expect(types, gone).not.toContain(gone)
     }
-    expect(types.indexOf('agent_start')).toBeLessThan(types.indexOf('tool_start'))
-    expect(types.lastIndexOf('tool_end')).toBeLessThan(types.indexOf('agent_end'))
-    expect(types.filter((t) => t === 'tool_end')).toHaveLength(2)
+    // 侧边栏的视图：两个工具都在 agent_end 之前落定（经同一条桥、同一条到达序列）
+    const agentEndSeq = events.find((e) => e.event.type === 'agent_end')!.seq
+    expect(await listDone).toBeLessThan(agentEndSeq)
+    expect(await readDone).toBeLessThan(agentEndSeq)
+    // 视图帧按会话路由：信封上的会话 id 与帧的目标都是这条会话
+    const frames = chromeA.syncFrames({ sessionId: sidA5, since: turn.since })
+    expect(frames.length).toBeGreaterThan(0)
+    expect(
+      chromeA
+        .syncFrames({ since: turn.since })
+        .filter((f) => f.frame.target.kind === 'session' && f.frame.target.sessionId === sidA5)
+    ).toEqual(frames)
 
     // 侧边栏重开时读到的就是这一轮：用户消息带着标签页芯片，工具块带着结果
     const listed = await chromeA.channelCall<
@@ -360,7 +392,7 @@ describe('一轮对话走到浏览器再回来', () => {
     chromeA.onCdp('DOM.getDocument', () => ({
       result: { root: { nodeId: 1, nodeName: '#document', childNodeCount: 1 } }
     }))
-    const turn = start(
+    const turn = await start(
       chromeA,
       sidA5,
       'check what the page fetched',
@@ -416,7 +448,7 @@ describe('一轮对话走到浏览器再回来', () => {
         chromeA.dismissDebugger(5)
       }
     })
-    const turn = start(
+    const turn = await start(
       chromeA,
       sidA5,
       'inspect the page twice',
@@ -452,7 +484,7 @@ describe('一轮对话走到浏览器再回来', () => {
 describe('站点门：每条会话第一次用一个站点时问', () => {
   it('CTN-3 agent 自己要开的新站点：问；拒了浏览器里什么都没开，再要还问；允许了才开，之后在它上面不再问', async () => {
     // 第一次：拒
-    let turn = start(
+    let turn = await start(
       chromeA,
       sidA5,
       'open the other site',
@@ -494,7 +526,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
     expect(provider.chatRequests().at(-1)!.raw).toContain(`User denied opening ${NEW_SITE}`)
 
     // 第二次：拒绝不被记住，照样问；这次允许 —— 开在后台、并进这条会话的标签组、等它加载完
-    turn = start(
+    turn = await start(
       chromeA,
       sidA5,
       'open it now',
@@ -528,7 +560,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
     ])
 
     // 第三次：这条会话已经同意过这个站点 —— 在它上面读页不再问
-    turn = start(
+    turn = await start(
       chromeA,
       sidA5,
       'read the new tab',
@@ -544,7 +576,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
   }, 180_000)
 
   it('CTN-4 没随消息带上的标签页：在它上面读页要问，拒了读不到；带上它发一条就是同意，不再问', async () => {
-    let turn = start(
+    let turn = await start(
       chromeA,
       sidA5,
       'what about the other tab?',
@@ -569,7 +601,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
     expect(provider.chatRequests().some((r) => r.raw.includes('OTHER-SITE-MARK'))).toBe(false)
 
     // 用户这次把 6 号也选上了：发送前桌面现问两页各在哪，两个站点都记为同意
-    turn = start(
+    turn = await start(
       chromeA,
       sidA5,
       'read the other tab too',
@@ -601,7 +633,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
         chromeA.navigateTab(8, EVIL)
       }
     })
-    const turn = start(
+    const turn = await start(
       chromeA,
       sid8,
       'read this page, then read it again',
@@ -641,7 +673,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
   it('CTN-6 询问只归它自己的会话：别的浏览器、同一浏览器的另一条会话拿着卡片 id 都答不了', async () => {
     const sidB5 = await chromeB.openTabSession(5)
     const sidA6 = await chromeA.openTabSession(6)
-    const turn = start(
+    const turn = await start(
       chromeA,
       sidA5,
       'open yet another site',
@@ -662,7 +694,8 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
     })
     await sleep(1_500)
     // 卡片还挂着：这次调用没有落定，浏览器里什么都没开
-    expect(toolEndsOf(chromeA, sidA5, turn.since).ctn6_open).toBeUndefined()
+    expect((await toolEndsOf(chromeA, sidA5)).ctn6_open).toBeUndefined()
+    expect((await chromeA.viewOf(sidA5))?.asks.map((a) => a.id)).toContain(ask.id)
     expect(chromeA.ops({ method: 'tabs.create', since: turn.since })).toEqual([])
 
     // 这条会话自己的侧边栏答了才算
@@ -681,7 +714,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
   it('CTN-6b 出厂不问：撤掉那份用户策略，agent 自己要开的新站点直接开；决策是缺省放行', async () => {
     removeRetiredPolicy(app, 'ask-on-new-site')
     try {
-      const turn = start(
+      const turn = await start(
         chromeA,
         sidA5,
         'open site i',
@@ -716,7 +749,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
 describe('中文不走样', () => {
   it('CTN-7 约 42 KB 的中文页：到模型、回侧边栏、侧边栏重开时读到的，都一字不差', async () => {
     const sid9 = await chromeA.openTabSession(9)
-    const turn = start(
+    const turn = await start(
       chromeA,
       sid9,
       '把这一页的要点列出来',
@@ -757,7 +790,7 @@ describe('中文不走样', () => {
 
     it('CTN-8 tab agent 手里没有 read：超长结果只在内存里截断 —— 首尾整段、按序、不走样，不落盘', async () => {
       sid10 = await chromeA.openTabSession(10)
-      const turn = start(
+      const turn = await start(
         chromeA,
         sid10,
         '读一下这一页',
@@ -771,9 +804,13 @@ describe('中文不走样', () => {
       toolText = toolTextsOf(reqs[1]).join('\n')
       requestTools = toolNamesOf(reqs[1])
 
-      // 截断标记与省略标记：模型知道中间少了一段
-      expect(toolText).toMatch(/^\[Output truncated: \d+ lines \/ [\d.]+ ?[KM]B\]/)
+      // 截断说明与省略标记：模型知道中间少了一段。pi-durable 之后说明不再是正文开头的表头，而是结果末尾
+      // `<harness>` 段里的诊断（wrapDurableOutput 的 truncationDiagnostic）—— 正文以页头开始
+      expect(toolText).toMatch(
+        /<harness>[\s\S]*Output truncated: \d+ lines \/ [\d.]+ ?[KM]B; showing the beginning and end only\. The full output was not kept\.[\s\S]*<\/harness>\s*$/
+      )
       expect(toolText).toMatch(/\.\.\. \[\d+ lines omitted\] \.\.\./)
+      expect(toolText.startsWith(`Page: 超长页面\nURL: ${HUGE}\n\n`)).toBe(true)
       // 截断保留的首尾就是浏览器一路送过来的原文：开头是页头，首尾的段落整段、按序出现
       expect(toolText.includes(`Page: 超长页面\nURL: ${HUGE}\n\n`)).toBe(true)
       const kept = HUGE_PARAS.filter((para) => toolText.includes(para))
@@ -803,12 +840,14 @@ describe('中文不走样', () => {
     })
   })
 
-  it('CTN-10 超过 1 MB 的一条中文消息：桌面分片送回侧边栏，每一帧都在 Chrome 的上限以内，拼回来一字不差', async () => {
+  it('CTN-10 超过 1 MB 的一条中文消息：视图帧与快照由桌面分片送回侧边栏，每一帧都在 Chrome 的上限以内，拼回来一字不差', async () => {
     // 宿主发给 Chrome 的单条原生消息上限 1 MB，本地组件对超限的行只会丢掉 —— 桌面必须先分片
     const pasted = cjkText(360_000, 4242)
     expect(Buffer.byteLength(pasted, 'utf8')).toBeGreaterThan(CHROME_NATIVE_MESSAGE_MAX_BYTES)
     const target = chromeA.addTab({ url: 'https://site-i.example/paste', title: 'Paste Target' })
     const sid = await chromeA.openTabSession(target.id)
+    // 侧边栏先挂上视图：那条超长的用户消息随后经一帧 `sync.frame` 回来
+    await chromeA.viewOf(sid)
     provider.reset()
     provider.script({ text: 'got it', usage: { prompt: 90, completion: 3 } })
     const framesBefore = chromeA.frameSizes().length
@@ -827,11 +866,23 @@ describe('中文不走样', () => {
     expect(req.raw.includes(REPLACEMENT_CHAR)).toBe(false)
     expect(req.lastUserText === pasted).toBe(true)
 
-    // 回到侧边栏的 user_message 超过 1 MB：只可能是分片过来的
-    const echoed = chromeA.chatEvents({ sessionId: sid, type: 'user_message', since })
-    expect(echoed).toHaveLength(1)
-    const message = JSON.parse(String(echoed[0].event.message)) as { content?: string }
-    expect(message.content === pasted).toBe(true)
+    // 回到侧边栏视图的用户消息超过 1 MB：只可能是一帧分片过来的 `sync.frame`
+    const live = await chromeA.waitView(
+      sid,
+      (v) => v.messages.some((m) => m.role === 'user' && m.content === pasted),
+      { what: 'the pasted message in the side panel view' }
+    )
+    expect(live.messages.filter((m) => m.role === 'user')).toHaveLength(1)
+    expect(chromeA.syncFrames({ sessionId: sid, since }).length).toBeGreaterThan(0)
+    expect(chromeA.chunkFrames() - chunksBefore).toBeGreaterThanOrEqual(2)
+
+    // 侧边栏重开：新订阅的快照（订阅的回复）同样超过 1 MB，同样分片
+    const chunksAtReopen = chromeA.chunkFrames()
+    await chromeA.releaseView(sid)
+    const reopened = await chromeA.viewOf(sid)
+    expect(reopened?.messages.find((m) => m.role === 'user')?.content === pasted).toBe(true)
+    expect(JSON.stringify(reopened).includes(REPLACEMENT_CHAR)).toBe(false)
+    expect(chromeA.chunkFrames() - chunksAtReopen).toBeGreaterThanOrEqual(2)
 
     // 侧边栏重开时的整段历史同样超过 1 MB
     const listed = await chromeA.channelCall<Array<{ role: string; content?: string }>>(

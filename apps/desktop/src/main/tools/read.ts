@@ -23,14 +23,14 @@ import {
 } from '../utils/toolUtils/binaryDetect'
 import { TOOL_ABORTED, type ToolContext } from '../services/toolContext'
 import { makeDesktopFileToolDeps } from './fileToolDeps'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { ReadToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:read')
 
 /** 工具返回结果类型别名 */
-type ReadResult = AgentToolResult<ReadToolDetails>
+type ReadResult = ToolResult<ReadToolDetails>
 
 /** 检测是否为 HTTP/HTTPS URL */
 function isUrl(path: string): boolean {

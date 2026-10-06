@@ -32,6 +32,14 @@ export interface ChatItem {
  * id 固定是 `pending-prompt`（chat-ui 的 `PENDING_PROMPT_ID`）—— 它**不是** entry id，
  * 树上还没有这条消息，所以气泡上不给回退，且压淡一档（`data-msg-pending`）。
  */
+/** 队列面板的一行（QueuePanel 的 `data-queue-row`，P3-11） */
+export interface QueueRowShot {
+  submissionId: number
+  /** steer = 立即，followUp = 追加 */
+  mode: string
+  text: string
+}
+
 export interface PendingPromptShot extends ChatItem {
   /** 压淡标记（UserBubble 的 `data-msg-pending`）：还没落库的可见信号 */
   pendingLook: boolean
@@ -216,6 +224,31 @@ export interface PwnMarks {
   apiTerminal: string
 }
 
+/** 「被中断」横幅的快照 */
+export interface InterruptedBannerShot {
+  text: string
+  hint: string
+  continueDisabled: boolean
+}
+
+/** 旧格式会话横幅（P4-01，`data-legacy-banner`）的快照 */
+export interface LegacyBannerShot {
+  /** 横幅文案（`data-legacy-text`） */
+  text: string
+  /** [新建对话]（`data-legacy-new-chat`）的文字；渠道端没有这颗按钮 → null */
+  newChatLabel: string | null
+  /** [新建对话] 是否禁用（建会话途中）；没有按钮时为 false */
+  newChatDisabled: boolean
+}
+
+/** 输入框本身的状态（textarea 的 disabled / placeholder） */
+export interface ComposerShot {
+  /** 有没有 textarea（会话没选中时没有） */
+  present: boolean
+  disabled: boolean
+  placeholder: string
+}
+
 export interface ChatPane {
   /** 输入框就绪（会话已选中、ChatView 已挂载） */
   ready(): Promise<void>
@@ -234,6 +267,12 @@ export interface ChatPane {
   typeAndSend(text: string): Promise<void>
   /** 点发送按钮（禁用态下浏览器本就不派发 onClick，用于验证「点不动」） */
   clickSend(): Promise<void>
+  /** 运行中点某个档位按钮（`data-queue-tier`：steer = 立即，followUp = 追加） */
+  clickQueueTier(tier: 'steer' | 'followUp'): Promise<void>
+  /** 队列面板的行（折叠着就先展开；面板不在 = 空数组） */
+  queueRows(): Promise<QueueRowShot[]>
+  /** 点某一行的撤回按钮（面板须已展开，见 queueRows） */
+  withdrawQueued(submissionId: number): Promise<void>
   inputValue(): Promise<string>
   /** 发送按钮（lucide-send）是否禁用 */
   sendDisabled(): Promise<boolean>
@@ -274,6 +313,28 @@ export interface ChatPane {
   thinkingBlocks(): Promise<number>
   /** 错误行数量（error_event 条目） */
   errorRows(): Promise<number>
+  /**
+   * 输入卡片顶上的「被中断」横幅（P3-12，`data-interrupted-banner`）：文案、提示行、[继续] 是否禁用；
+   * 不在屏时为 null
+   */
+  interruptedBanner(): Promise<InterruptedBannerShot | null>
+  /** 点横幅上的 [继续]；横幅不在返回 false */
+  clickContinue(): Promise<boolean>
+  /** 输入卡片顶上的旧格式横幅（P4-01，`data-legacy-banner`）；不在屏时为 null */
+  legacyBanner(): Promise<LegacyBannerShot | null>
+  /** 点旧格式横幅上的 [新建对话]；横幅或按钮不在返回 false */
+  clickLegacyNewChat(): Promise<boolean>
+  /** 输入框（textarea）的 disabled / placeholder */
+  composer(): Promise<ComposerShot>
+  /**
+   * 对话区里还剩的「改写历史」控件：回退（lucide-rotate-ccw）、重新生成（lucide-refresh-cw）、
+   * 编辑（lucide-pencil / lucide-square-pen）各几颗。只在对话滚动区里数 —— 侧栏、顶栏另有同名图标
+   */
+  historyControls(): Promise<{ rollback: number; regenerate: number; edit: number }>
+  /** StreamingFooter 里的重试倒计时行（`data-run-retry`）的文本；不在屏时为 null */
+  retryRow(): Promise<string | null>
+  /** 对话区里各张卡的「重试 ×N」提示（`data-retried-hint`）文本，DOM 序 */
+  retriedHints(): Promise<string[]>
   toolRows(): Promise<ChatToolRow[]>
   /** 工具行的完整快照（DOM 序，含展开的合并行里逐条列出的那些） */
   toolRowShots(): Promise<ChatToolRowShot[]>
@@ -562,6 +623,41 @@ export function chatPane(main: CdpClient): ChatPane {
       await main.eval(`${SEND_BTN}?.click()`)
       await new Promise((r) => setTimeout(r, 200))
     },
+    clickQueueTier: async (tier) => {
+      const clicked = await main.eval<boolean>(`(() => {
+        const button = document.querySelector('[data-queue-tier=${JSON.stringify(tier)}]')
+        if (!button || button.disabled) return false
+        button.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error(`queue tier ${tier} is not clickable`)
+      await sleep(200)
+    },
+    queueRows: async () => {
+      const expanded = await main.eval<boolean>(`(() => {
+        const panel = document.querySelector('[data-queue-panel]')
+        if (!panel || panel.querySelector('[data-queue-row]')) return false
+        panel.querySelector('[data-queue-toggle]')?.click()
+        return true
+      })()`)
+      if (expanded) await sleep(100)
+      return main.eval<
+        QueueRowShot[]
+      >(`[...document.querySelectorAll('[data-queue-row]')].map((row) => ({
+        submissionId: Number(row.getAttribute('data-queue-row')),
+        mode: row.getAttribute('data-queue-mode') || '',
+        text: (row.querySelector('.truncate')?.textContent || '').trim()
+      }))`)
+    },
+    withdrawQueued: async (submissionId) => {
+      const clicked = await main.eval<boolean>(`(() => {
+        const button = document.querySelector('[data-queue-withdraw="${submissionId}"]')
+        if (!button) return false
+        button.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error(`no withdraw button for queued submission ${submissionId}`)
+    },
     inputValue: () => main.eval<string>(`${TEXTAREA}?.value ?? ''`),
     sendDisabled: () => main.eval<boolean>(`${SEND_BTN}?.disabled ?? true`),
     isBusy,
@@ -635,6 +731,69 @@ export function chatPane(main: CdpClient): ChatPane {
       main.eval<number>(`${SCROLLER}?.querySelectorAll('button.font-serif').length ?? 0`),
     errorRows: () =>
       main.eval<number>(`document.querySelectorAll('[data-msg-type="error_event"]').length`),
+
+    interruptedBanner: () =>
+      main.eval<InterruptedBannerShot | null>(`(() => {
+        const el = document.querySelector('[data-interrupted-banner]')
+        if (!el) return null
+        return {
+          text: (el.querySelector('[data-interrupted-text]')?.textContent ?? '').trim(),
+          hint: (el.querySelector('[data-interrupted-hint]')?.textContent ?? '').trim(),
+          continueDisabled: !!el.querySelector('[data-interrupted-continue]')?.disabled
+        }
+      })()`),
+    clickContinue: () =>
+      main.eval<boolean>(`(() => {
+        const btn = document.querySelector('[data-interrupted-continue]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`),
+    legacyBanner: () =>
+      main.eval<LegacyBannerShot | null>(`(() => {
+        const el = document.querySelector('[data-legacy-banner]')
+        if (!el) return null
+        const btn = el.querySelector('[data-legacy-new-chat]')
+        return {
+          text: (el.querySelector('[data-legacy-text]')?.textContent ?? '').trim(),
+          newChatLabel: btn ? (btn.textContent ?? '').trim() : null,
+          newChatDisabled: !!btn?.disabled
+        }
+      })()`),
+    clickLegacyNewChat: () =>
+      main.eval<boolean>(`(() => {
+        const btn = document.querySelector('[data-legacy-banner] [data-legacy-new-chat]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`),
+    composer: () =>
+      main.eval<ComposerShot>(`(() => {
+        const ta = ${TEXTAREA}
+        return {
+          present: !!ta,
+          disabled: !!ta?.disabled,
+          placeholder: ta?.getAttribute('placeholder') ?? ''
+        }
+      })()`),
+    historyControls: () =>
+      main.eval<{ rollback: number; regenerate: number; edit: number }>(`(() => {
+        const root = ${SCROLLER}
+        const count = (sel) => root ? root.querySelectorAll(sel).length : 0
+        return {
+          rollback: count('.lucide-rotate-ccw'),
+          regenerate: count('.lucide-refresh-cw'),
+          edit: count('.lucide-pencil, .lucide-square-pen, .lucide-pen')
+        }
+      })()`),
+    retryRow: () =>
+      main.eval<string | null>(
+        `document.querySelector('[data-run-retry]')?.textContent?.trim() ?? null`
+      ),
+    retriedHints: () =>
+      main.eval<string[]>(
+        `[...document.querySelectorAll('[data-retried-hint]')].map((e) => (e.textContent ?? '').trim())`
+      ),
 
     toolRows: () =>
       main.eval<ChatToolRow[]>(
@@ -1796,6 +1955,8 @@ export interface SidebarPane {
    * 只在行内找：`.lucide-bot` 在别处也有（组头菜单、设置窗口……），裸查 document 必然误命中。
    */
   rowIcon(title: string): Promise<SessionRowIcon | ''>
+  /** 这一行有没有「被中断」圆点（P3-12，`data-interrupted`）；行不存在返回 false */
+  interruptedOf(title: string): Promise<boolean>
   /**
    * 点侧栏某个会话（按标题）并**等它真的成为活动会话**；行都找不到返回 false。
    *
@@ -2080,6 +2241,8 @@ export function sidebarPane(main: CdpClient): SidebarPane {
       return clicked
     },
     rowIcon: (title) => main.eval<SessionRowIcon | ''>(`${ROW_ICON_OF}(${ROW(title)})`),
+    interruptedOf: (title) =>
+      main.eval<boolean>(`!!${ROW(title)}?.querySelector('[data-interrupted]')`),
     openSession: async (title) => {
       const clicked = await main.eval<boolean>(
         `(() => {
@@ -2805,6 +2968,11 @@ export interface HttpLogPane {
   toggleRecord(): Promise<void>
   /** 记录状态行文案（关闭态说明为什么没数据，开启态提醒库在涨） */
   statusText(): Promise<string>
+  /**
+   * 「已暂停」横幅文案（`[data-monitor-paused]`，pi-durable 迁移期常显，P3-13 PIN-10）；不在屏回空串。
+   * 不等就绪 —— 横幅不依赖任何异步读取，挂载即在
+   */
+  pausedText(): Promise<string>
 }
 
 /** 设置窗口「监视器 / LLM 请求」子页（openSettings('monitor/httpLogs') 后调用） */
@@ -2827,6 +2995,10 @@ export async function httpLogPane(settings: CdpClient): Promise<HttpLogPane> {
             `(document.querySelector('[data-monitor-status]')?.textContent ?? '').trim()`
           ),
         'http log status settled'
+      ),
+    pausedText: () =>
+      settings.eval<string>(
+        `(document.querySelector('[data-monitor-paused]')?.textContent ?? '').trim()`
       )
   }
 }
@@ -6041,8 +6213,8 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
 //     **最后一个**子节点（RightPanel 按 preview/widget/calendar/agents 固定序铺开，
 //     全部常驻挂载、visibility 切换）—— 行 / 空态 / 详情都 scope 在它之内；
 //   - 行 = 列表区 `.divide-y > div > button.w-full`（详情里的工具行也有 w-full，但不在
-//     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；孤儿徽章 =
-//     `span[class*="bg-error/10"]`；血缘箭头 = `.lucide-corner-down-right`；
+//     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；血缘箭头 = `.lucide-corner-down-right`；
+//     花费格 = `[data-agent-cost]`（P3-13，文本 `—` / `<$0.01` / `$x.xx`，title 是悬停说明）；
 //     详情容器 = 行按钮父 div 的第二子节点（childElementCount > 1 即展开）；
 //   - 行内缓存命中率格 = `svg.lucide-database-zap` 的父 span（空占位不画图标）；详情里的
 //     两格命中率数值 = `[data-cache-hit="total" | "last"]`（产品侧的纯标记，不靠字段位置）；
@@ -6059,10 +6231,6 @@ export interface AgentMonitorRowShot {
   phaseClass: string
   /** 相位灯在闪（animate-pulse）= 非 idle 相位 */
   pulsing: boolean
-  /** 孤儿徽章在屏（根会话已删） */
-  orphan: boolean
-  /** 孤儿徽章文案（非空即可，不钉具体词） */
-  orphanText: string
   /** 血缘箭头在屏（spawned 行） */
   arrow: boolean
   /**
@@ -6070,6 +6238,8 @@ export interface AgentMonitorRowShot {
    * 相等）；还没有计入的调用时格子是空占位（不画图标），此时为 null
    */
   cache: { text: string; title: string } | null
+  /** 花费格（P3-13 PIN-09）：`text` 是 `—`（未定价 / 0）或金额，`title` 是悬停说明；不在屏为 null */
+  cost: { text: string; title: string } | null
 }
 
 export interface RightPanelPane {
@@ -6179,20 +6349,24 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
     rows: () =>
       main.eval<AgentMonitorRowShot[]>(`${ROWS}.map((row) => {
         const dot = row.querySelector('span.rounded-full')
-        const badge = row.querySelector('span[class*="bg-error/10"]')
+        const costCell = row.querySelector('[data-agent-cost]')
         return {
           text: (row.textContent ?? '').trim(),
           phaseClass: dot?.className ?? '',
           pulsing: (dot?.className ?? '').includes('animate-pulse'),
-          orphan: !!badge,
-          orphanText: (badge?.textContent ?? '').trim(),
           arrow: !!row.querySelector('.lucide-corner-down-right'),
           cache: (() => {
             const cell = row.querySelector('svg.lucide-database-zap')?.parentElement
             return cell
               ? { text: (cell.textContent ?? '').trim(), title: cell.getAttribute('title') ?? '' }
               : null
-          })()
+          })(),
+          cost: costCell
+            ? {
+                text: (costCell.textContent ?? '').trim(),
+                title: costCell.getAttribute('title') ?? ''
+              }
+            : null
         }
       })`),
     emptyText: () =>
@@ -7453,6 +7627,122 @@ export function notebookOutlinePane(main: CdpClient): NotebookOutlinePane {
         const head = view.state.selection.main.head
         const line = view.state.doc.lineAt(head)
         return { head, line: line.number, lineFrom: line.from }
+      })()`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 会话面板 · 任务页（BgTaskPanel，P3-14）
+//
+// 锚点：工具栏按钮 `[data-session-tool="tasks"]`；每一行 `[data-task-row=<kind>]` + `[data-task-status=<status>]`
+// （枢纽的状态，不随语言变）；派生 agent 的行另有 `[data-subagent-run=<档案名>]` /
+// `[data-subagent-expanded]`；子会话行的「打开」是 `[data-task-open]`。详情（派生 agent 的转写）是行根节点下
+// 标题行之后的那一块；「不在了」的文案是 `[data-subagent-gone]`。
+
+/** 任务页的一行（子会话等非派生 agent 的行按标题认） */
+export interface TaskRowShot {
+  kind: string
+  status: string
+  title: string
+}
+
+export interface TasksPanelPane {
+  /** 打开当前会话面板的任务页（工具栏出现 tasks 按钮之后点它；已在任务页就不动） */
+  open(timeoutMs?: number): Promise<void>
+  /** 任务页里的行（按显示次序） */
+  rows(): Promise<TaskRowShot[]>
+  /** 派生 agent 的行在不在 */
+  hasAgentRow(profile: string): Promise<boolean>
+  /** 展开某个派生 agent 的行（已展开就不动），等它的详情出来 */
+  expand(profile: string): Promise<void>
+  /** 某个派生 agent 行的详情文本（没展开 → ''） */
+  transcriptText(profile: string): Promise<string>
+  /** 在某个派生 agent 的追问框里发一条（输入框不在 → 抛错） */
+  reply(profile: string, text: string): Promise<void>
+  /** 某个派生 agent 的详情里有没有追问框 */
+  hasReply(profile: string): Promise<boolean>
+  /** 点某个子会话行的「打开」（按标题认）；没有这一行 → false */
+  openSubSession(title: string): Promise<boolean>
+}
+
+export function tasksPanelPane(main: CdpClient): TasksPanelPane {
+  const TOOL = `document.querySelector('[data-session-tool="tasks"]')`
+  const AGENT_ROW = (profile: string): string =>
+    `document.querySelector('[data-subagent-run=${JSON.stringify(profile)}]')`
+  /** 行根节点下：第一个子节点是标题行，其余是详情 */
+  const DETAIL_TEXT = (profile: string): string => `(() => {
+    const row = ${AGENT_ROW(profile)}
+    if (!row) return ''
+    return [...row.children].slice(1).map((c) => c.textContent ?? '').join('\\n')
+  })()`
+
+  return {
+    open: async (timeoutMs = 15_000) => {
+      await until(() => main.eval<boolean>(`!!${TOOL}`), 'tasks toolbar button', timeoutMs)
+      await main.eval(`(() => {
+        const btn = ${TOOL}
+        // 已经在任务页（按钮是激活态）就别再点：收起态点它是展开，展开态点它是切页，都不会收起
+        if (btn && !btn.className.includes('text-accent')) btn.click()
+        return true
+      })()`)
+      await until(
+        () => main.eval<boolean>(`!!document.querySelector('[data-task-row]')`),
+        'tasks panel rows',
+        timeoutMs
+      )
+    },
+    rows: () =>
+      main.eval<TaskRowShot[]>(
+        `[...document.querySelectorAll('[data-task-row]')].map((r) => ({
+          kind: r.getAttribute('data-task-row') ?? '',
+          status: r.getAttribute('data-task-status') ?? '',
+          title: r.querySelector('.truncate')?.textContent ?? ''
+        }))`
+      ),
+    hasAgentRow: (profile) => main.eval<boolean>(`!!${AGENT_ROW(profile)}`),
+    expand: async (profile) => {
+      await until(() => main.eval<boolean>(`!!${AGENT_ROW(profile)}`), `agent row ${profile}`)
+      await main.eval(`(() => {
+        const row = ${AGENT_ROW(profile)}
+        if (row.getAttribute('data-subagent-expanded') !== 'true') row.firstElementChild.click()
+        return true
+      })()`)
+      await until(
+        () =>
+          main.eval<boolean>(
+            `${AGENT_ROW(profile)}?.getAttribute('data-subagent-expanded') === 'true'`
+          ),
+        `agent row ${profile} expanded`
+      )
+    },
+    transcriptText: (profile) => main.eval<string>(DETAIL_TEXT(profile)),
+    hasReply: (profile) => main.eval<boolean>(`!!${AGENT_ROW(profile)}?.querySelector('textarea')`),
+    reply: async (profile, text) => {
+      const ok = await main.eval<boolean>(`(() => {
+        const box = ${AGENT_ROW(profile)}?.querySelector('textarea')
+        if (!box) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
+        setter.call(box, ${JSON.stringify(text)})
+        box.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error(`no reply box in agent row ${profile}`)
+      await sleep(30)
+      await main.eval(`(() => {
+        const box = ${AGENT_ROW(profile)}?.querySelector('textarea')
+        box?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        return true
+      })()`)
+    },
+    openSubSession: (title) =>
+      main.eval<boolean>(`(() => {
+        const row = [...document.querySelectorAll('[data-task-row="sub-session"]')].find(
+          (r) => r.querySelector('.truncate')?.textContent === ${JSON.stringify(title)}
+        )
+        const btn = row?.querySelector('[data-task-open]')
+        if (!btn) return false
+        btn.click()
+        return true
       })()`)
   }
 }

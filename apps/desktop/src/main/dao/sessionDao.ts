@@ -1,5 +1,6 @@
 import { BaseDao } from './database'
 import { buildJsonPatch } from './utils'
+import { storageKindOf, type SessionStorageKind } from '@shuvix/chat-protocol/sessionStorageKind'
 import type { Session, SessionSettings } from './types'
 
 /** DB 原始行类型（JSON 字段在 DB 中为字符串） */
@@ -79,12 +80,13 @@ export class SessionDao extends BaseDao {
   /** 插入会话 */
   insert(session: Session): void {
     this.stmt(
-      'INSERT INTO sessions (id, title, projectId, parentId, settings, createdAt, updatedAt, lastActiveAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO sessions (id, title, projectId, parentId, storageKind, settings, createdAt, updatedAt, lastActiveAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       session.id,
       session.title,
       session.projectId,
       session.parentId,
+      storageKindOf(session),
       JSON.stringify(session.settings),
       session.createdAt,
       session.updatedAt,
@@ -120,6 +122,21 @@ export class SessionDao extends BaseDao {
     )
   }
 
+  /**
+   * 换这条会话的存储类型。调用方两处，语义同一：会话从此是一条全新的新格式会话，什么都不带过去 ——
+   * 不是迁移。
+   *  - 「清空一条旧格式会话」（裁决 PIN-22）：旧转写已删；
+   *  - 启动切换（services/legacySwitchover）：绑着文件的旧格式会话原地重置，`.jsonl` 留在盘上
+   *    （不再读它，删 / 清空这条会话时随 deleteSessionStorage 一起删）。
+   */
+  updateStorageKind(id: string, storageKind: SessionStorageKind): void {
+    this.stmt('UPDATE sessions SET storageKind = ?, updatedAt = ? WHERE id = ?').run(
+      storageKind,
+      Date.now(),
+      id
+    )
+  }
+
   /** 查找指定项目下的所有会话 */
   findByProjectId(projectId: string): Session[] {
     const rows = this.stmt(
@@ -148,6 +165,36 @@ export class SessionDao extends BaseDao {
       "SELECT * FROM sessions WHERE projectId = ? AND json_extract(settings, '$.notebookPath') = ? LIMIT 1"
     ).get(projectId, notebookPath) as SessionRow | undefined
     return row ? parseRow(row) : undefined
+  }
+
+  /**
+   * 某存储类型下、`settings.notebookPath` 非空的会话（创建序）—— 启动切换找「绑着文件的旧格式会话」。
+   *
+   * `<> ''` 同时排除缺键（NULL）与空串（「非空即为笔记本会话」）。`json_valid` 包在 CASE 里先判：
+   * 一行坏 JSON 会让 `json_extract` 把整条 SELECT 抛掉，而 WHERE 里的 AND 不保证求值次序，CASE 保证。
+   */
+  findByStorageKindWithNotebookPath(storageKind: string): Session[] {
+    const rows = this.stmt(
+      `SELECT * FROM sessions
+        WHERE storageKind = ?
+          AND (CASE WHEN json_valid(settings) THEN json_extract(settings, '$.notebookPath') END) <> ''
+        ORDER BY createdAt ASC`
+    ).all(storageKind) as SessionRow[]
+    return rows.map(parseRow)
+  }
+
+  /**
+   * 某存储类型下、`settings.chromeTab` 是个对象的会话（创建序）—— 启动切换找旧格式的 Chrome 标签页会话。
+   * 只是候选：字段全不全由调用方经 `chromeTabOf` 判（与侧栏、清扫、归属核对同一判定）。坏 JSON 同上跳过。
+   */
+  findByStorageKindWithChromeTab(storageKind: string): Session[] {
+    const rows = this.stmt(
+      `SELECT * FROM sessions
+        WHERE storageKind = ?
+          AND (CASE WHEN json_valid(settings) THEN json_type(settings, '$.chromeTab') END) = 'object'
+        ORDER BY createdAt ASC`
+    ).all(storageKind) as SessionRow[]
+    return rows.map(parseRow)
   }
 
   /**

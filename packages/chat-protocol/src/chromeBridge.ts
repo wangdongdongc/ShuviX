@@ -19,8 +19,14 @@
  * 组装器两端都能用。
  */
 
-/** 协议版本。握手时两边比对，对不上就不接受命令（侧边栏与设置页提示「请更新扩展」） */
-export const CHROME_BRIDGE_PROTOCOL = 1
+/**
+ * 协议版本。握手时两边比对，对不上就不接受命令（侧边栏与设置页提示「请更新扩展」）。
+ *
+ * 2（P3-09）：侧边栏的会话内容改走视图同步 —— 白名单多了 `sync.invoke` / `agent.continue` /
+ * `agent.withdrawQueued`、少了「下一轮」那一档，桌面多推一种事件 `sync.frame`。版本 1 的扩展收不到帧，
+ * 侧边栏会一片空白，所以宁可让它提示更新。
+ */
+export const CHROME_BRIDGE_PROTOCOL = 2
 
 /** 原生消息宿主名（宿主清单文件名 `<name>.json`，扩展 `connectNative(name)`） */
 export const CHROME_BRIDGE_HOST_NAME = 'com.shuvix.chrome_bridge'
@@ -282,8 +288,9 @@ export const CHROME_PANEL_CHANNEL_PATHS = [
   'agent.prompt',
   'agent.steer',
   'agent.followUp',
-  'agent.nextTurn',
   'agent.abort',
+  'agent.continue',
+  'agent.withdrawQueued',
   'agent.respondToInput',
   'session.getById',
   'message.list',
@@ -292,7 +299,13 @@ export const CHROME_PANEL_CHANNEL_PATHS = [
   'tools.list',
   'tools.presentations',
   'tools.definitions',
-  'shuvixMd.validate'
+  'shuvixMd.validate',
+  /**
+   * 视图同步（P3-09）：`args = [target, call]`，一次 chord 服务调用。目标必须是这条连接自己的标签页会话
+   * （派生 agent 目标按它的根会话核对）；回一个 `SyncInvokeResult` 信封 —— 桥的应答错误只是一段文本，
+   * chord 的错误码（`service_not_found` …）要装在信封里才带得过去
+   */
+  'sync.invoke'
 ] as const
 
 export type ChromePanelChannelPath = (typeof CHROME_PANEL_CHANNEL_PATHS)[number]
@@ -385,6 +398,11 @@ export interface DesktopEventMap {
   'chat.event': { sessionId: string; event: unknown }
   /** 一条应用事件（AppEvent），已按会话归属过滤 */
   'app.event': { event: unknown }
+  /**
+   * 视图同步的一帧（`SyncFrame`，P3-09）。`sessionId` 是帧所属的会话 —— 会话目标就是它本身，派生 agent
+   * 目标是 agent 的根会话 —— SW 按它把帧送给挂着这条会话的侧边栏（帧自己的目标里没有会话 id 可认）
+   */
+  'sync.frame': { sessionId: string; frame: unknown }
 }
 
 // ─────────────────────────── 设置页看到的状态 ───────────────────────────

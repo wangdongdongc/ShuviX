@@ -80,7 +80,13 @@ vi.mock('@shuvix/chat-ui', async () => {
   }
 })
 
-import { useChatStore, type Session } from '../../../stores/chatStore'
+import {
+  applySessionView,
+  resetSessionViewStateForTests,
+  useChatStore,
+  type Session
+} from '../../../stores/chatStore'
+import { emptySessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { ModelPicker } from '../ModelPicker'
 import { ModelSelect } from '../ModelSelect'
@@ -168,8 +174,14 @@ function seed(opts: {
     modelSupportsReasoning: false,
     modelSupportsVision: false,
     maxContextTokens: 100_000,
-    usedContextTokens: 1234
+    usedContextTokens: 1234,
+    sessionViews: {}
   })
+  // 上下文占用来自会话视图（P3-08）：两条会话的视图都报 1234
+  resetSessionViewStateForTests()
+  for (const id of [SID, S2]) {
+    applySessionView(id, { ...emptySessionView(id), context: { usedTokens: 1234 } })
+  }
   useChatStore.getState().setActiveSessionId(opts.active)
   mocks.models.activeProvider = opts.hostProvider ?? P
   mocks.models.activeModel = opts.hostModel ?? A

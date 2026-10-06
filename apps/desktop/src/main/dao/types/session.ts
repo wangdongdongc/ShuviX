@@ -1,10 +1,11 @@
 import type { ChromeTabBinding } from '@shuvix/chat-protocol/chromeTabSession'
+import type { SessionStorageKind } from '@shuvix/chat-protocol/sessionStorageKind'
 
 /**
  * 模型相关元数据。
  *
- * 已不再落库（v15 删掉了 sessions.modelMetadata）——唯一事实源是会话树上的
- * thinking_level_change entry。这个类型保留是因为它仍是 `agent.init` 返回给前端的形状。
+ * 已不再落库（v15 删掉了 sessions.modelMetadata）——思考档位的事实源是会话设置
+ * `settings.thinkingLevel`。这个类型保留是因为它仍是 `agent.init` 返回给前端的形状。
  */
 export interface SessionModelMetadata {
   /** 思考深度 */
@@ -35,8 +36,8 @@ export interface SessionSettings {
   knowledgeBases?: string[]
   /**
    * 这条会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。有值即为 bot 会话 —— 一条**普通有根会话**：
-   * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）经 systemContext 追加到它的系统提示词
-   * 末尾。创建那一刻定死，不可换绑（换个 bot 就是另开一条会话 —— 这条会话的历史全是那个 bot 说的话）。
+   * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）是它系统提示词里活的 `bot_profile` 段落
+   * （`shuvix.prompt.bot`，每次请求现解析）。创建那一刻定死，不可换绑（换个 bot 就是另开一条会话 —— 这条会话的历史全是那个 bot 说的话）。
    * 判定一律经 chat-protocol `botSession.ts` 的 `isBotSessionSettings` / `boundBotOf`。
    */
   bot?: string
@@ -79,6 +80,33 @@ export interface SessionSettings {
    * 判定一律经 chat-protocol `chromeTabSession.ts` 的 `chromeTabOf` / `isChromeTabSessionSettings`。
    */
   chromeTab?: ChromeTabBinding
+  /**
+   * 这条会话选定的模型 —— pi-durable 起运行配置的事实源（旧 v3 会话树上的 model_change 只读不写）。
+   * 写入口：sessionStorage.recordSessionModel（选择器 / 子会话继承父会话）。模型选择器直接读它，
+   * 不必为一个下拉框打开会话存储。
+   */
+  model?: SessionModelSelection
+  /** 这条会话选定的思考档位（同上；写入口 sessionStorage.recordSessionThinkingLevel） */
+  thinkingLevel?: string
+  /**
+   * 锁镜像：这条会话此刻有没有 agent（pi-durable 的锁记录在会话存储里，这里只是给界面便宜地读的一份
+   * 副本，裁决 Q7）。由 SessionHost 的 onLockChange 写（创建 / 销毁 / 每次打开都对账），清空会话时归 false。
+   */
+  agentLocked?: boolean
+  /**
+   * 运行标记：会话存储此刻的运行状态（idle / busy / interrupted）。由 SessionHost 的 onRunStateChange 写，
+   * 每次打开都对账；退出时正忙的会话**不改**（留着 busy，下次打开报 interrupted）。
+   */
+  runState?: SessionRunState
+}
+
+/** 会话存储的运行状态（与 agent-runtime 的 RunState 同值） */
+export type SessionRunState = 'idle' | 'busy' | 'interrupted'
+
+/** 会话设置里的模型选择：提供商行 id + 模型 id */
+export interface SessionModelSelection {
+  provider: string
+  modelId: string
 }
 
 /** 会话数据结构（对应 DB 表 sessions） */
@@ -93,6 +121,12 @@ export interface Session {
    * 唯一差别是侧栏把它渲染在父会话下面。嵌套只允许一层（子会话不能再开子会话）。
    */
   parentId: string | null
+  /**
+   * 对话内容的存储类型（见 chat-protocol 的 sessionStorageKind.ts）。表上恒有值（列带默认值）；
+   * 缺省只出现在尚未落库的手工对象上，按 `harness-v3-jsonl` 理解。会话一旦建成就不再改 ——
+   * 存储换代不迁移旧会话，而是按这一列分流到对应的适配器。
+   */
+  storageKind?: SessionStorageKind
   /** 会话级配置（路径授权、扩展能力勾选等） */
   settings: SessionSettings
   createdAt: number

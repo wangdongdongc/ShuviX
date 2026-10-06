@@ -7,14 +7,26 @@
  *   - 审查放行 → details 带标记（工具自己的 details 原样保留），且标记已被取走（不留给下一次）；
  *   - 审查拒绝 / 转给人 / 根本没有审查 / 人写反馈 → 没有标记；
  *   - 主体会话与包装器会话不一致 → 不串；
- *   - 放行之后工具自己抛错 → 原错误照抛，标记当场丢掉。
+ *   - 放行之后工具自己抛错 → 以失败结果收场（文字即原错误），标记当场丢掉。
  *
- * mock 惯例同 wrapToolOutput.test.ts（toolContext 只给 TOOL_ABORTED、logger 置空、processToolOutput
- * 原样直通）；安全门面用真 createSecurityContext + 一条让 L1 invocation 走 ask 档的用户策略（用户策略的
+ * pi-durable：包装器收的、交出的都是 durable 注册项，经 invokeTool 调；假工具也是 durable 形状。
+ * 抛错与门的拒绝从「reject」变成 isError 结果（裁定 Q12，模型看到的文字不变）。
+ *
+ * P1-06：L1 门把这次调用的 durable taskId / conversationId 交给安全模块，审查接缝收到的事件带着它们
+ * （W-R11，审查按 (sessionId, taskId) 归属 —— 裁定 Q16）；其余用例的期望不变。
+ *
+ * mock 惯例同 wrapToolOutput.test.ts（toolContext 只给 TOOL_ABORTED、logger 置空；后处理不桩 ——
+ * 'ran' 这样的短文本本来就原样通过，P1-06b 起后处理在 agent-runtime 的内核里调）；安全门面用真 createSecurityContext + 一条让 L1 invocation 走 ask 档的用户策略（用户策略的
  * ask 就是 tier 'ask'，会先交给审查），provider 上挂 onPermissionRequest。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentTool } from '@earendil-works/pi-agent-core'
+import type { AnyTool } from '@shuvix/agent-runtime'
+import {
+  executeTool,
+  failureText,
+  invokeTool,
+  type InvokedToolResult
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import {
   clearReviewState,
   clearSessionDecisions,
@@ -39,15 +51,7 @@ vi.mock('../toolContext', () => ({ TOOL_ABORTED: 'Aborted' }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
-vi.mock('../../utils/toolUtils/processToolOutput', () => ({
-  processToolOutput: vi.fn(async (opts: { fullText: string }) => ({
-    text: opts.fullText,
-    truncated: false,
-    persisted: false
-  }))
-}))
-
-import { wrapToolOutput } from '../wrapToolOutput'
+import { wrapDurableTool } from '../wrapToolOutput'
 
 const SID = 'wrap-tool-output-review-session'
 const SID2 = 'wrap-tool-output-review-session-2'
@@ -124,29 +128,36 @@ function makeSecurity(opts: { review?: Reviewer; response?: InputResponse; sessi
 
 /** 一个 execute 可编程的工具（缺省返回单文本块 'ran'，details 由用例给） */
 function makeTool(details?: unknown): {
-  tool: AgentTool
+  tool: AnyTool
   execute: ReturnType<typeof vi.fn>
 } {
   const execute = vi.fn(async () => ({
     content: [{ type: 'text' as const, text: 'ran' }],
     details
   }))
-  const tool = { name: 'ssh', label: 'ssh', description: 'test tool', parameters: {}, execute }
-  return { tool: tool as unknown as AgentTool, execute }
+  const tool = {
+    name: 'ssh',
+    label: 'ssh',
+    description: 'test tool',
+    parameters: {},
+    replay: 'unsafe' as const,
+    execute
+  }
+  return { tool: tool as unknown as AnyTool, execute }
 }
 
 const exec = (
-  wrapped: AgentTool,
+  wrapped: AnyTool,
   toolCallId: string,
   params: unknown = { action: 'connect' }
-): ReturnType<AgentTool['execute']> => wrapped.execute(toolCallId, params as never)
+): Promise<InvokedToolResult> => executeTool(wrapped, toolCallId, params as never)
 
 describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」标记', () => {
   it('W-R1 审查 allow/medium、工具 details undefined → details 恰为 {shuvixReview: {risk, summary}}；不弹卡；原 execute 恰一次', async () => {
     const review = reviewerOf(answer(verdict('allow', 'medium', 'Connects to the build host')))
     const { security, requestUserInput } = makeSecurity({ review })
     const { tool, execute } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R')
 
@@ -162,7 +173,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     const own = { type: 'bash', exitCode: 0, truncated: false, cwd: '/w' }
     const { security } = makeSecurity({ review: reviewerOf(answer(verdict('allow', 'high', 's'))) })
     const { tool } = makeTool(own)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R2')
 
@@ -170,31 +181,36 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     expect(toolReviewOf(result.details)).toStrictEqual({ risk: 'high', summary: 's' })
   })
 
-  it('W-R3 标记已被取走：跑完之后 take 为 undefined；同一 toolCallId 再跑一次（审查没意见、人批准）→ 没有标记', async () => {
+  it('W-R3 标记已被取走：跑完之后 take 为 undefined；同一 toolCallId 的另一次调用（另一个 task，审查没意见、人批准）→ 没有标记', async () => {
     const review = reviewerOf(answer(verdict('allow', 'low', 'first')), null)
     const { security, requestUserInput } = makeSecurity({ review })
     const { tool, execute } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
+    const run = async (taskId: number): Promise<InvokedToolResult> =>
+      (await invokeTool(wrapped, { action: 'connect' } as never, { callId: 'tc-R', taskId })).result
 
-    const first = await exec(wrapped, 'tc-R')
+    const first = await run(71)
     expect(toolReviewOf(first.details)).toStrictEqual({ risk: 'low', summary: 'first' })
+    expect(takeReviewAllowed(SID, { toolCallId: 'tc-R', taskId: 71 })).toBeUndefined()
     expect(takeReviewAllowed(SID, 'tc-R')).toBeUndefined()
 
-    const second = await exec(wrapped, 'tc-R')
+    const second = await run(72)
     expect(requestUserInput).toHaveBeenCalledTimes(1)
     expect(execute).toHaveBeenCalledTimes(2)
     expect(toolReviewOf(second.details)).toBeUndefined()
     expect(second.details).toBeUndefined()
   })
 
-  it('W-R4 审查 deny → reject「Blocked by the reviewer」；原 execute 未调；没有标记', async () => {
+  it('W-R4 审查 deny → isError「Blocked by the reviewer」（原为 reject，裁定 Q12）；原 execute 未调；没有标记', async () => {
     const { security } = makeSecurity({
       review: reviewerOf(answer(verdict('deny', 'critical')))
     })
     const { tool, execute } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
-    await expect(exec(wrapped, 'tc-R4')).rejects.toThrow(/Blocked by the reviewer/)
+    const result = await exec(wrapped, 'tc-R4')
+    expect(await failureText(Promise.resolve(result))).toMatch(/Blocked by the reviewer/)
+    expect(toolReviewOf(result.details)).toBeUndefined()
     expect(execute).not.toHaveBeenCalled()
     expect(takeReviewAllowed(SID, 'tc-R4')).toBeUndefined()
   })
@@ -205,7 +221,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     })
     const own = { type: 'bash', exitCode: 0, truncated: false, cwd: '/w' }
     const { tool, execute } = makeTool(own)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R5')
 
@@ -223,7 +239,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
   it('W-R6 没有审查接缝、人批准 → 没有标记，details undefined 仍 undefined', async () => {
     const { security, requestUserInput } = makeSecurity({})
     const { tool } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R6')
     expect(requestUserInput).toHaveBeenCalledTimes(1)
@@ -233,12 +249,12 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
   it('W-R6 不传 security（不设门）→ 没有标记，details 原样', async () => {
     const own = { type: 'bash', exitCode: 0, truncated: false, cwd: '/w' }
     const { tool } = makeTool(own)
-    const wrapped = wrapToolOutput(tool, SID, 'middle')
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true })
 
     const result = await exec(wrapped, 'tc-R6b')
     expect(result.details).toStrictEqual(own)
 
-    const bare = wrapToolOutput(makeTool(undefined).tool, SID, 'middle')
+    const bare = wrapDurableTool(makeTool(undefined).tool, { sessionId: SID, spill: true })
     expect((await exec(bare, 'tc-R6c')).details).toBeUndefined()
   })
 
@@ -248,35 +264,105 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
       sessionId: SID
     })
     const { tool } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID2, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID2, spill: true, security })
 
     const result = await exec(wrapped, 'tc')
     expect(result.details).toBeUndefined()
-    expect(takeReviewAllowed(SID, 'tc')).toStrictEqual({ risk: 'low', summary: 'other session' })
+    // P2-08 PIN-10：标记按这次调用的 taskId 记（executeTool 缺省 task 1）
+    expect(takeReviewAllowed(SID, { toolCallId: 'tc', taskId: 1 })).toStrictEqual({
+      risk: 'low',
+      summary: 'other session'
+    })
   })
 
-  it('W-R8 工具 execute 抛错（没有审查）→ reject 原错误', async () => {
+  it('P2-08-32 同一个 provider id（call_0）的两次调用：根的 task 61 被放行后还在跑，子的 task 62（人批准）先跑完 → 子的结果没有标记，61 的有；人的回答只清自己那个 task 的标记', async () => {
+    const review = reviewerOf(answer(verdict('allow', 'high', 'root call')), null)
+    const { security, requestUserInput } = makeSecurity({ review })
+    let release!: () => void
+    const gate = { promise: new Promise<void>((resolve) => (release = resolve)) }
+    const { tool, execute } = makeTool(undefined)
+    // 第一次执行（task 61）扣住，第二次（task 62）立刻跑完
+    execute.mockImplementationOnce(async () => {
+      await gate.promise
+      return { content: [{ type: 'text' as const, text: 'ran' }], details: undefined }
+    })
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
+
+    const root = invokeTool(wrapped, { action: 'connect' } as never, {
+      callId: 'call_0',
+      taskId: 61
+    })
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
+    const child = await invokeTool(wrapped, { action: 'connect' } as never, {
+      callId: 'call_0',
+      taskId: 62,
+      conversationId: 2
+    })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(child.result.details).toBeUndefined()
+    release()
+    expect((await root).result.details).toStrictEqual({
+      shuvixReview: { risk: 'high', summary: 'root call' }
+    })
+  })
+
+  it('W-R8 工具 execute 抛错（没有审查）→ isError 结果、文字即原错误（原为 reject 原错误，裁定 Q12）', async () => {
     const { security } = makeSecurity({})
     const { tool, execute } = makeTool(undefined)
     const err = new Error('connection refused')
     execute.mockRejectedValueOnce(err)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
-    await expect(exec(wrapped, 'tc-R8')).rejects.toBe(err)
+    expect(await exec(wrapped, 'tc-R8')).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: err.message }]
+    })
   })
 
-  it('W-R10 审查放行之后工具 execute 抛错 → reject 原错误，且标记被当场丢掉', async () => {
+  it('W-R10 审查放行之后工具 execute 抛错 → isError 结果（文字即原错误、不带标记），且标记被当场丢掉', async () => {
     const { security } = makeSecurity({
       review: reviewerOf(answer(verdict('allow', 'high', 'will fail')))
     })
     const { tool, execute } = makeTool(undefined)
     const err = new Error('connection refused')
     execute.mockRejectedValueOnce(err)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
-    await expect(exec(wrapped, 'tc-R10')).rejects.toBe(err)
+    expect(await exec(wrapped, 'tc-R10')).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: err.message }]
+    })
     expect(execute).toHaveBeenCalledTimes(1)
     expect(takeReviewAllowed(SID, 'tc-R10')).toBeUndefined()
+  })
+
+  it('W-R11 L1 门交给审查接缝的事件带着这次调用的 taskId / conversationId（toolCallId 相同的两次调用分得开）', async () => {
+    const review = reviewerOf(
+      answer(verdict('allow', 'low', 'first')),
+      answer(verdict('allow', 'low', 'second'))
+    )
+    const { security } = makeSecurity({ review })
+    const { tool } = makeTool(undefined)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
+
+    await invokeTool(wrapped, { action: 'connect' } as never, {
+      callId: 'call_0',
+      taskId: 61,
+      conversationId: 5
+    })
+    await invokeTool(wrapped, { action: 'connect' } as never, { callId: 'call_0', taskId: 62 })
+
+    expect(review).toHaveBeenCalledTimes(2)
+    const owners = review.mock.calls.map(([event]) => ({
+      toolCallId: event.toolCallId,
+      taskId: event.taskId,
+      conversationId: event.conversationId
+    }))
+    expect(owners).toEqual([
+      { toolCallId: 'call_0', taskId: 61, conversationId: 5 },
+      // invokeTool 缺省根对话（1）
+      { toolCallId: 'call_0', taskId: 62, conversationId: 1 }
+    ])
   })
 
   it('W-R9 人在 L1 卡上写反馈（other）→ 返回的 feedback 结果不带标记', async () => {
@@ -285,7 +371,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
       response: { kind: 'other', text: 'use the staging host' }
     })
     const { tool, execute } = makeTool(undefined)
-    const wrapped = wrapToolOutput(tool, SID, 'middle', undefined, security)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 
     const result = await exec(wrapped, 'tc-R9')
 

@@ -17,7 +17,7 @@ import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
-import { mcpService } from './services/mcpService'
+import { mcpService, setBuiltinMcpAgentResolver } from './services/mcpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 // 触发所有内置工具的 registerBuiltinTool() 副作用
 // services / frontend 层消费注册表前必须由 main-entry 先注册
@@ -26,7 +26,13 @@ import { updateService } from './services/updateService'
 import { destroyTerminalsByWindow } from './services/terminalService'
 import { killAllBgTasks } from './services/bgTaskService'
 import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
-import { initNotificationService } from './services/notificationService'
+import {
+  initNotificationService,
+  notifyAskRaised,
+  notifyAskResolved,
+  setRunErrorTextSource
+} from './services/notificationService'
+import { sessionRunErrorText, setSessionAskObserver } from './services/sessionSignals'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
 import { markdownFilesFromArgv } from './utils/markdownFiles'
 import {
@@ -58,9 +64,11 @@ import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
+import { runLegacySwitchover } from './services/legacySwitchover'
 import { reviewPermissionRequest } from './services/permissionReview'
 import { setPermissionReviewer } from './services/toolContext'
-import { installLlmNetwork } from './services/llmNetwork'
+import { installLlmNetwork } from './services/models'
+import { installSessionHostQuitHook, sessionAgentResolver } from './services/sessionHost'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes
@@ -443,6 +451,9 @@ function initSharedWindowServices(): void {
       if (!mainWindow || mainWindow.isDestroyed()) createWindow()
     }
   })
+  // 询问不再是 ChatEvent（P3-08）：会话信号接线把询问的挂起 / 落定交给通知；失败通知的正文从投影读
+  setSessionAskObserver({ askRaised: notifyAskRaised, askResolved: notifyAskResolved })
+  setRunErrorTextSource(sessionRunErrorText)
 
   // 初始化 widget 独立窗口服务（owns widget app 窗口）
   initWidgetWindowService({ getThemeBgColor })
@@ -740,6 +751,8 @@ app.whenReady().then(async () => {
   measure('hookService.init', () => hookService.init())
   // 询问点的自动审查：安全模块的 onPermissionRequest 经判定型 hook 回答（注入而非 import —— 见 toolContext）
   setPermissionReviewer(reviewPermissionRequest)
+  // 内置 MCP 服务器按 `_meta` 里的对话认调用方（安全主体）：同样注入而非 import（见 mcpService）
+  setBuiltinMcpAgentResolver(sessionAgentResolver())
 
   // 内部事件总线 → 所有窗口的 'app:event' 桥接（AppEvent 通用订阅）
   registerAppEventBridge()
@@ -764,6 +777,11 @@ app.whenReady().then(async () => {
   // 命令沙箱读开关的口子：模块本身不碰设置表（它在很多导入链上），由这里注入。
   // 没注入就是关闭 —— 只有真正起来的应用才套沙箱
   setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
+
+  // 旧格式会话的启动切换（services/legacySwitchover）：绑着文件的原地重置、Chrome 标签页会话删掉。
+  // 必须 await 完、排在 CLI 服务 / Chrome 桥 / 任何窗口之前 —— 否则 shuvix-cli、侧边栏或界面可能在
+  // 切换途中碰到这些会话（订阅一条马上就不再是旧格式的会话）。它从不 reject，启动不会因此中止
+  await runLegacySwitchover()
 
   // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
   cliServer.start().catch((err) => {
@@ -812,8 +830,15 @@ app.whenReady().then(async () => {
   })
 })
 
+// 应用退出前：先关停所有打开着的会话（每会话一个 durable Harness；第一次 before-quit 被拦下，
+// closeAll 最多等 5 秒，再重新 quit）。正忙的会话被关停时不改运行标记，下次打开报 interrupted。
+// 必须注册在下面的清理之前：清理要等会话都关完（第二次 before-quit）再做 —— 关停中的 run 还可能
+// 在用 MCP / 后台任务 / 浏览器
+const sessionHostQuit = installSessionHostQuitHook(app)
+
 // 应用退出前清理
 app.on('before-quit', () => {
+  if (!sessionHostQuit.ready) return
   destroyBrowserWindow()
   destroyAllTabs()
   killAllBgTasks()

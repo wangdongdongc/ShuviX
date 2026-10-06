@@ -1,31 +1,52 @@
 /**
- * 消息服务 —— 会话 entry 树的「UI 视角」读取端。
+ * 消息服务 —— 会话对话内容的「UI 视角」读取端（只读投影）。
  *
- * 迁移到 AgentHarness 之后，这个服务从「消息的写入方 + 读取方」缩成了**只读投影**：
- * 消息的产生与落盘全部由 harness 在 `message_end` / `turn_end` 完成（写进会话的
- * JSONL 转写文件），这里只负责把 entry 树投影成 chat-ui 认识的 ChatMessage。
+ * pi-durable 切换（P1-01）之后按会话的存储类型分流：
+ *  - `harness-v3-jsonl`（切换前的会话）：照旧可看 —— 经 agent-runtime 的 legacy 读取器把 `.jsonl`
+ *    渲染成 ChatMessage（冻结的投影，「旧会话现在怎么显示，以后就怎么显示」）；这种会话只读，
+ *    回退 / 截断一律不做（返回「没有可回退的目标」）。
+ *  - `durable-sqlite-1`（新会话）：列表就是界面投影的消息（P3-07）—— `peek`（存储不在就是空，从不打开 /
+ *    创建会话）再 `DurableSession.viewSnapshot().messages`，与 SyncHub 推给界面的 `view.messages` 同一份；
+ *    回退 / 截断（P3-10b）= 运行时的 `DurableSession.rollbackTo(条目 id, {keep})`：消息 id 就是条目 id
+ *    （只认规范的正整数写法，PIN-01），`peek` 打开（从不建存储），运行时校验目标、销毁 agent、建 fork；
+ *    被拒（目标不在 / 不是用户消息）= 「没有可回退的目标」，句柄恰好被关掉就再窥视一次（PIN-04）。
  *
- * 随之消失的方法（旧调用方需改造）：
- *   add / addUserText / addAssistantText / addToolUse / completeToolUse /
- *   addStepThinking / addStepText / addErrorEvent —— 写入不再经这里。
- *   rollbackToMessage / deleteFromMessage —— 改为树导航（moveTo），见下方新方法。
+ * 清空（`clear`）两种都做：经 SessionHost 关掉并删掉存储；旧格式会话清空之后换成当前存储类型，
+ * 从此是一条全新的新格式会话（PIN-22，什么都不带过去 —— 不是迁移）。
+ *
+ * 走到这里的旧格式会话只剩不绑文件的那些（普通对话、bot 对话、子会话）：绑着文件的（`notebookPath`）
+ * 启动时已被原地重置成新格式、旧格式的 Chrome 标签页会话已被删掉（services/legacySwitchover）。重置留下的
+ * `.jsonl` 不再读 —— 行已是新格式，这里按新格式走；删除 / 清空时随 deleteSessionStorage 一起删。
  */
-import { SIDECAR_CUSTOM_TYPES, entriesToChatMessages } from '@shuvix/agent-runtime'
-import { deleteSessionFile, getSessionTree, readSessionRunConfig } from './sessionStorage'
+import { SessionClosedError } from '@shuvix/agent-runtime'
+import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStorageKind'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
+import { readLegacyTranscript } from './sessionStorage'
+import { getSessionHost } from './sessionHost'
+import { isLegacySession } from './legacySession'
+import { mirroredAgentLocked, writeSessionMirror } from './sessionMirror'
+import { sessionRecords } from './sessionRecords'
 
 export class MessageService {
-  /** 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中） */
+  /**
+   * 会话当前上下文对应的消息列表（已应用压缩过滤：被压缩的历史不在其中）。
+   *
+   * 新格式会话 = 界面投影的 `messages`（P3-07）：只 `peek`（没有存储 → `[]`，从不打开 / 创建会话；宿主已封存
+   * → `[]`），再取 `viewSnapshot()`（投影跟上了就用它的值，否则现投影一次，从不挂载）。句柄恰好在两步之间
+   * 被关掉（LRU / 退出）就再窥视一次。不认识的存储类型 `peek` 不打开（存储路由答「不在」）。
+   */
   async listBySession(sessionId: string): Promise<ChatMessage[]> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return [] // 还没发过消息 → 没有转写文件
-    const entries = await session.buildContextEntries()
-    // fallback 与流式广播同源（都取 readSessionRunConfig）：**「流式所见 = 重开所见」是
-    // 两侧一起兑现的**。这里的 entries 过了压缩过滤，一旦某条 model_change 早于压缩切点，
-    // 不给 fallback 会让重开后所有 user 消息的 model/provider 塌成空串 —— 而流式当时
-    // 显示的是真实模型
-    const cfg = await readSessionRunConfig(sessionId)
-    return entriesToChatMessages(entries, sessionId, cfg.model ?? '', cfg.provider ?? '')
+    if (isLegacySession(sessionId)) return readLegacyTranscript(sessionId)?.messages ?? []
+    for (let attempt = 0; ; attempt++) {
+      const session = await getSessionHost().peek(sessionId)
+      if (session === undefined) return []
+      try {
+        return (await session.viewSnapshot()).messages
+      } catch (error) {
+        if (!(error instanceof SessionClosedError) || attempt > 0) throw error
+      }
+    }
   }
 
   /** 会话最后一条消息 */
@@ -34,67 +55,99 @@ export class MessageService {
     return msgs.length > 0 ? msgs[msgs.length - 1] : undefined
   }
 
-  /** 清空会话（删转写文件，下次发消息会重建） */
-  clear(sessionId: string): void {
-    deleteSessionFile(sessionId)
+  /**
+   * 清空会话（裁决 PIN-08）：SessionHost 关掉存储（还在跑的 run 被中止、等它停下）并删掉文件，下一次
+   * 发消息从一个只有根对话的新存储开始。之后镜像归位 —— `agentLocked:false`、`runState:'idle'` —— 镜像
+   * 原先说有 agent 的，再给界面补一个 `agent_closing{false}`（存储连同锁一起没了，运行时不会再报）。
+   * 销毁 agent 不在这里：调用方（网关的 clearMessages）先 `invalidateAgent`，那一步会广播 agent_closing 一对。
+   *
+   * 旧格式（只读）会话：删掉 `.jsonl`，并把存储类型换成当前类型 —— 清空之后它是一条可以接着用的
+   * 新格式会话（PIN-22）。
+   */
+  async clear(sessionId: string): Promise<void> {
+    const legacy = isLegacySession(sessionId, { rowRequired: true })
+    const wasLocked = mirroredAgentLocked(sessionId)
+    await getSessionHost().delete(sessionId)
+    if (legacy) sessionRecords.updateStorageKind(sessionId, CURRENT_SESSION_STORAGE_KIND)
+    writeSessionMirror(sessionId, { agentLocked: false, runState: 'idle' })
+    if (wasLocked)
+      chatFrontendRegistry.broadcast({ type: 'agent_closing', sessionId, closing: false })
   }
 
-  // ─── 树导航（取代旧的「删除消息之后的所有消息」） ────────────────
-  //
-  // 旧模型靠 DELETE ... WHERE createdAt > ? 物理删除；entry 树是 append-only，
-  // 对应操作是把 leaf 移到目标 entry 的父节点 —— 历史仍在文件里，可以再切回去。
+  // ─── 回退 / 截断 ────────────────────────────────────────
 
   /**
-   * 解析回退目标：把 leaf 应该移到哪个 entry（**只读，不写树**）。
-   * 消息不在树上返回 undefined；`{ targetId: null }` 表示回退到树根之前。
-   *
-   * 和 `applyRollback` 分成两步，是为了让调用方能在**动叶子之前**先把旧运行时关停 ——
-   * 顺序反过来就是在一个还在写的 run 脚下抽走叶子（见 DefaultChatGateway.rollbackMessage）；
-   * 同时也免得为一个根本不存在的目标白白把正在跑的 Agent 停掉。
+   * 解析回退目标（**只读，不碰宿主**）：旧格式会话只读、id 不是规范的条目 id（PIN-01）→ undefined；
+   * 否则 `{ targetId: messageId }`。目标在不在当前对话里由运行时的 `rollbackTo` 校验（拒绝之前什么都不动），
+   * 这里只是旧格式守卫加解析（PIN-05）。`targetId: null`（「回退到最开头」）不再产生。
    */
   async resolveRollbackTarget(
     sessionId: string,
     messageId: string
   ): Promise<{ targetId: string | null } | undefined> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return undefined
-    const entry = await session.getEntry(messageId)
-    if (!entry) return undefined
-    // 消息前若有侧车（内联 Token 的显示态），**逐条**越过 —— 叶子停在一条无主侧车上，
-    // 它就会被下一条到达的消息当成自己的侧车消费掉
-    let targetId = entry.parentId
-    while (targetId) {
-      const parent = await session.getEntry(targetId)
-      if (parent?.type !== 'custom' || !SIDECAR_CUSTOM_TYPES.includes(parent.customType)) break
-      targetId = parent.parentId
-    }
-    return { targetId }
+    if (isLegacySession(sessionId)) return undefined
+    return parseEntryId(messageId) === undefined ? undefined : { targetId: messageId }
   }
 
-  /** 执行回退：把 leaf 移到 `resolveRollbackTarget` 给出的 entry 上 */
+  /**
+   * 执行回退：`rollbackTo(条目 id)`。真的回退了才是 true；旧格式会话、`null`、不规范的 id、没有存储 /
+   * 宿主已封存、运行时拒绝（`not_found` / `invalid_target`）都是 false。
+   */
   async applyRollback(sessionId: string, targetId: string | null): Promise<boolean> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return false
-    await session.moveTo(targetId)
-    return true
+    return await this.rollbackDurable(sessionId, targetId, false)
   }
 
-  /** 回退到指定消息之前（该消息本身也不再在上下文中）。调用方须自行保证此刻没有活跃 run。 */
+  /**
+   * 回退到指定消息之前（该消息本身也不再在上下文中）。运行时自己先停下在跑的 run、销毁 agent，
+   * 调用方不必（也不该）预先关停 —— 那样一个无效目标也会把在跑的 run 停掉。
+   */
   async rollbackToMessage(sessionId: string, messageId: string): Promise<boolean> {
     const target = await this.resolveRollbackTarget(sessionId, messageId)
     if (!target) return false
     return await this.applyRollback(sessionId, target.targetId)
   }
 
-  /** 回退到指定消息之后（保留该消息本身） */
+  /** 回退到指定消息之后（保留该消息本身）：`rollbackTo(条目 id, { keep: true })` */
   async truncateAfterMessage(sessionId: string, messageId: string): Promise<boolean> {
-    const session = await getSessionTree(sessionId)
-    if (!session) return false
-    const entry = await session.getEntry(messageId)
-    if (!entry) return false
-    await session.moveTo(entry.id)
-    return true
+    const target = await this.resolveRollbackTarget(sessionId, messageId)
+    if (!target) return false
+    return await this.rollbackDurable(sessionId, target.targetId, true)
   }
+
+  /**
+   * 回退 / 截断的共用一段：`peek`（没有存储 / 宿主已封存 → false，从不建存储）→ `rollbackTo`。
+   * 句柄恰好在两步之间被关掉（`closed`：LRU / 退出）就再窥视一次、只再试一次（PIN-04；拒绝发生在任何
+   * 写之前，重试是安全的）。
+   */
+  private async rollbackDurable(
+    sessionId: string,
+    targetId: string | null,
+    keep: boolean
+  ): Promise<boolean> {
+    if (targetId === null || isLegacySession(sessionId)) return false
+    const entryId = parseEntryId(targetId)
+    if (entryId === undefined) return false
+    for (let attempt = 0; ; attempt++) {
+      const session = await getSessionHost().peek(sessionId)
+      if (session === undefined) return false
+      const result = keep
+        ? await session.rollbackTo(entryId, { keep: true })
+        : await session.rollbackTo(entryId)
+      if (result.ok) return true
+      if (result.reason !== 'closed' || attempt > 0) return false
+    }
+  }
+}
+
+/**
+ * 消息 id → 条目 id（PIN-01）：只认规范的正整数写法（`/^[1-9]\d*$/`）且在安全整数范围内；其余（空串、
+ * `'0'`、负数、小数、前导零、科学计数、带空白、超出安全整数、UUID……）都不是条目 id。`Number(id)` 单独用
+ * 会把 `'1e3'` / `' 42'` / `'01'` 也认下来。
+ */
+export function parseEntryId(messageId: string): number | undefined {
+  if (!/^[1-9]\d*$/.test(messageId)) return undefined
+  const id = Number(messageId)
+  return Number.isSafeInteger(id) ? id : undefined
 }
 
 export const messageService = new MessageService()

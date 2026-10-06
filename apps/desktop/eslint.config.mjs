@@ -6,6 +6,39 @@ import eslintPluginReactHooks from 'eslint-plugin-react-hooks'
 import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 import eslintPluginBoundaries from 'eslint-plugin-boundaries'
 
+// pi 1.0 迁移的禁区 —— 与工作区根 eslint.config.mjs 里的同名常量一致（两份配置各自独立，各写一遍）。
+const NO_PI_AGENT_CORE = {
+  group: ['@earendil-works/pi-agent-core', '@earendil-works/pi-agent-core/*'],
+  message:
+    'pi-agent-core was removed in the pi 1.0 migration; use @earendil-works/pi-durable / pi-ai or the local types in @shuvix/agent-runtime.'
+}
+// pi-ai 的 compat 入口保留的是 0.80 时代的全局 API；模型层走 services/models 的活注册表
+const NO_PI_AI_COMPAT = {
+  group: ['@earendil-works/pi-ai/compat', '@earendil-works/pi-ai/compat/*'],
+  message:
+    "pi-ai's compat entry is the old global API (getModel / stream / complete, env-injected keys); use the model registry in services/models."
+}
+// 迁移（P1-01）删掉的旧运行时与旧模型解析：按模块名拦，相对路径从哪一层引进来都一样拦得住
+const NO_DELETED_RUNTIME = {
+  group: [
+    '@shuvix/agent-runtime/harness',
+    '@shuvix/agent-runtime/harness/*',
+    '**/harness/index',
+    '**/harness/eventHandler',
+    '**/harnessSession',
+    '**/modelsAdapter',
+    '**/stubEnv',
+    '**/zeroContent',
+    '**/runtimeRegistry',
+    '**/sessionTreeRegistry',
+    '**/modelResolver',
+    '**/agentModelResolver',
+    '**/providerCompat'
+  ],
+  message:
+    'This module was deleted in the pi-durable migration. Sessions run on the durable SessionHost (services/sessionHost, agent-runtime src/durable); models on services/models.'
+}
+
 export default defineConfig(
   {
     ignores: [
@@ -77,6 +110,18 @@ export default defineConfig(
       ]
     }
   },
+  // pi-agent-core 已在 pi 1.0 迁移中移除（会话层改用 pi-durable）。worktree 位于主仓库目录内时，
+  // 模块解析会向上找到主仓库 node_modules 里残留的旧版本 —— 误留的 import 照样能编译运行，只能靠这条规则拦住。
+  // 同一组还拦 pi-ai 的 compat 入口与迁移删掉的旧运行时模块（P1-13），免得它们被原样请回来。
+  {
+    files: ['src/**/*.{ts,tsx}', 'e2e/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        { patterns: [NO_PI_AGENT_CORE, NO_PI_AI_COMPAT, NO_DELETED_RUNTIME] }
+      ]
+    }
+  },
   // 架构分层依赖约束（eslint-plugin-boundaries）
   //
   // 元素类型顺序敏感：先写的 pattern 先匹配，确保特化在前、回退在后。
@@ -120,6 +165,10 @@ export default defineConfig(
         },
         // main-frontend-core：frontend/core 的运行时编排（Gateway / Registry / OperationContext）
         { type: 'main-frontend-core', pattern: 'src/main/frontend/core' },
+        // frontend/sync：视图同步的分发核（SyncHub 单例、钩子扇出、按前缀路由的传输），与 Registry 同层 ——
+        // sessionHost 的钉住 / 开关钩子与 sessionService 的删除要引它。它不碰 Electron：IPC 传输的
+        // webContents 由 ipc/syncHandlers 注册时注入
+        { type: 'main-frontend-core', pattern: 'src/main/frontend/sync' },
         // frontend 里非 core 的都是具体后端（electron / telegram / web）
         { type: 'main-frontend-impl', pattern: 'src/main/frontend' },
         { type: 'main-subagent', pattern: 'src/main/subagent' },
@@ -128,12 +177,17 @@ export default defineConfig(
         // services/__tests__ 不算独立模块，归回 main-service（先于 module 规则匹配）
         { type: 'main-service', pattern: 'src/main/services/__tests__' },
         // main-service-contract：services/ 根目录的少量"工具子系统原语"
-        // toolContext（ToolContext/sandbox/TOOL_ABORTED）/ toolRegistry（注册表）
+        // toolContext（ToolContext/sandbox/TOOL_ABORTED）/ toolRegistry（注册表）/ toolAgent（调用方身份
+        // 与 withCallAgent：零服务依赖，toolContext 再导出它；内置 MCP 模块的 scope 类型与其单测引它）
         // 独立模块与 tool 实现层都需要它们，视为服务层内部的"合约原语"
         // 注：BaseTool 已下沉 @shuvix/agent-runtime（包外，按 external 处理），消费方直接引包
         {
           type: 'main-service-contract',
-          pattern: ['src/main/services/toolContext.ts', 'src/main/services/toolRegistry.ts'],
+          pattern: [
+            'src/main/services/toolContext.ts',
+            'src/main/services/toolRegistry.ts',
+            'src/main/services/toolAgent.ts'
+          ],
           mode: 'file'
         },
         // main-service-module：services/ 下的独立子目录模块（bundler / browser / widget / tts / pglite）

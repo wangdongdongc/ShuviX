@@ -4,7 +4,7 @@
  * 通知（后台任务退出 / 子会话跑完）在 pi 的上下文里只能是一条 user 消息（模型必须看见它），
  * 但用户并没有说过这句话。渲染侧靠两个判据认出它：
  *  1. **侧车**（`SYSTEM_NOTICE_CUSTOM_TYPE`，仅 `resume` 路径能写）—— 主判据；
- *  2. **正文形状**：整段正文只由下列标签块组成 —— 兜底。steer / nextTurn 路径的 user 消息由 pi
+ *  2. **正文形状**：整段正文只由下列标签块组成 —— 兜底。steer 路径的 user 消息由 pi
  *     自己构造并落盘，宿主插不进侧车，投影若只认侧车，这些通知就会被画成用户气泡。
  *
  * 生产者：桌面 `bgTaskService.formatExitNotice`（`<background-task …>`）与

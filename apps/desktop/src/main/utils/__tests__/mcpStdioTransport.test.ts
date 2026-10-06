@@ -21,6 +21,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { McpServer } from '@shuvix/chat-protocol/types/mcp'
 import { McpManager, type McpStore } from '@shuvix/agent-runtime'
 import { McpStdioTransport, type McpStdioTransportOptions } from '../mcpStdioTransport'
+import { executeTool, failureText } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 /** 进程组 / 信号语义只在 POSIX 上成立（Windows 走 taskkill /T） */
 const ON_WINDOWS = process.platform === 'win32'
@@ -616,27 +617,22 @@ describe('McpStdioTransport × McpManager（真子进程）', () => {
     const calls = path.join(dir, 'calls-10b.txt')
     const { mgr, createTransport } = managerWith({ CALLS_FILE: calls })
     expect(await mgr.ensureServerByName('fx')).toEqual({ ok: true })
-    const tools = new Map(mgr.getAgentToolsByServerName('fx').map((t) => [t.name, t]))
+    const tools = new Map(mgr.getRegistrationsByServerName('fx').map((t) => [t.name, t]))
     const firstPid = createTransport.mock.results[0].value.pid
     expect(typeof firstPid).toBe('number')
     const signal = new AbortController().signal
 
-    const crashed = await tools
-      .get('mcp__fx__crash')!
-      .execute('c1', {}, signal)
-      .then(
-        () => undefined,
-        (e: Error) => e.message
-      )
-    expect(crashed?.startsWith('[MCP Error] ')).toBe(true)
-    expect(crashed?.endsWith('\npanic: boom')).toBe(true)
+    // 失败收成 isError 结果（裁定 Q12），文字即原先抛出的消息
+    const crashed = await failureText(executeTool(tools.get('mcp__fx__crash')!, 'c1', {}, signal))
+    expect(crashed.startsWith('[MCP Error] ')).toBe(true)
+    expect(crashed.endsWith('\npanic: boom')).toBe(true)
     // 请求到过 server 一次，没有被重发
     expect(fs.readFileSync(calls, 'utf8')).toBe('crash\n')
     expect(createTransport).toHaveBeenCalledTimes(1)
     expect(mgr.getStatus('fx-id')).toBe('disconnected')
 
     // 同一个工具闭包（Agent 没重建）：原地重连，起的是一个新进程
-    const result = await tools.get('mcp__fx__echo')!.execute('c2', {}, signal)
+    const result = await executeTool(tools.get('mcp__fx__echo')!, 'c2', {}, signal)
     const [block] = result.content
     const echoed = block.type === 'text' ? block.text : ''
     expect(echoed).toMatch(/^echo:\d+$/)

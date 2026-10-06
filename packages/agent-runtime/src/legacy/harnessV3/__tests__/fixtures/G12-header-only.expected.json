@@ -1,0 +1,13 @@
+{
+  "sessionId": "sid-G12-header-only",
+  "leafId": null,
+  "branchIds": [],
+  "contextEntryIds": [],
+  "runConfig": {
+    "provider": null,
+    "model": null,
+    "thinkingLevel": null
+  },
+  "issues": [],
+  "messages": []
+}

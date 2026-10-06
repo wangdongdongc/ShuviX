@@ -26,6 +26,10 @@
  *   P10 写入后调用方再改自己手里的对象（insert 的 session、updateSettings 传的数组）漏不进来
  *   P11 deleteById → findById undefined；再删一次无操作
  *   P12 重复 id insert 抛错（落库：SQLite UNIQUE；内存：自己的错误）
+ *   P13 storageKind 往返：不给 → 读回 harness-v3-jsonl（findById / pick 同口径）；给 durable-sqlite-1 → 原样；
+ *       落库那一侧直接查列，看到的就是存下的值
+ *   P14 storageKind 建成后不变：改标题 / settings（含一个叫 storageKind 的 settings 键）/ 项目 / touch /
+ *       touchActive 都碰不到这一列；settings 里同名的键只留在 settings 里
  *
  *   L1  findAll 只有持久会话
  *   L2  findByProjectId 不含同项目的内存会话
@@ -37,6 +41,9 @@
  *   L8  deleteById(内存) 从不碰 SQLite：同 id 的库行、并排的持久行都还在
  *   L9  insert 撞上活着的内存 id / 已删的内存 id / （内存 insert 时）库里已有的 id → 抛错，原行不动
  *   L10 clearEphemeralForTests 清空内存行与已删记忆，不碰库
+ *   L11 持久会话的列表查询（findAll / 按项目 / 按笔记本路径 / findChildren）读回各自存下的 storageKind
+ *   L12 findChildren(内存父) 回的子会话带各自的 storageKind（不给的读成 v3）
+ *   L13 [白盒] 库里一个本版本不认识的值（durable-sqlite-9）原样读回，不改写、不兜底
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -77,6 +84,8 @@ function session(id: string, patch: Partial<Session> = {}): Session {
     title: `title ${id}`,
     projectId: null,
     parentId: null,
+    // 表上这一列带默认值，读回恒有；内存行同口径
+    storageKind: 'harness-v3-jsonl',
     settings: {},
     createdAt: T0,
     updatedAt: T0,
@@ -87,6 +96,18 @@ function session(id: string, patch: Partial<Session> = {}): Session {
 
 /** 测试里要塞进 settings 的「类型之外」的键（数字、显式 null） */
 const loose = (settings: Record<string, unknown>): SessionSettings => settings as SessionSettings
+/** 不带 storageKind 键的会话对象（手工构造、未落库的样子） */
+function withoutKind(s: Session): Session {
+  const { storageKind: _omit, ...rest } = s
+  return rest
+}
+/** 绕过 sessionRecords / DAO，直接查表上的 storageKind 列 */
+const rawKind = (id: string): unknown =>
+  (
+    (holder.db as DatabaseSync).prepare('SELECT storageKind FROM sessions WHERE id = ?').get(id) as
+      | { storageKind: unknown }
+      | undefined
+  )?.storageKind
 /** 同上，给 pickSettings 点名这些键 */
 const looseKeys = (...keys: string[]): Array<keyof SessionSettings> =>
   keys as unknown as Array<keyof SessionSettings>
@@ -110,7 +131,7 @@ afterEach(() => {
 describe.each([
   ['persisted', undefined],
   ['ephemeral', { ephemeral: true }]
-] as const)('A-P 点查点改（%s）', (_kind, opt) => {
+] as const)('A-P 点查点改（%s）', (side, opt) => {
   const insert = (s: Session): void => sessionRecords.insert(s, opt)
 
   it('P1 projectId / parentId 为 null 读回 null（不是 undefined），其余字段相等', () => {
@@ -333,6 +354,55 @@ describe.each([
     expect(() => insert(session('s1', { title: 'second' }))).toThrow()
     expect(sessionRecords.findById('s1')!.title).toBe('first')
   })
+
+  it('P13 storageKind 往返：不给 → v3；给 durable-sqlite-1 → 原样', () => {
+    const bare = withoutKind(session('bare'))
+    expect('storageKind' in bare).toBe(false)
+    insert(bare)
+    insert(session('durable', { storageKind: 'durable-sqlite-1' }))
+
+    expect(sessionRecords.findById('bare')!.storageKind).toBe('harness-v3-jsonl')
+    expect(sessionRecords.pick('bare', ['storageKind'])).toEqual({
+      storageKind: 'harness-v3-jsonl'
+    })
+    expect(sessionRecords.findById('durable')!.storageKind).toBe('durable-sqlite-1')
+    expect(sessionRecords.pick('durable', ['storageKind'])).toEqual({
+      storageKind: 'durable-sqlite-1'
+    })
+
+    if (side === 'persisted') {
+      // 列里真的存着这个值（不是读的时候补出来的）
+      expect(rawKind('bare')).toBe('harness-v3-jsonl')
+      expect(rawKind('durable')).toBe('durable-sqlite-1')
+    } else {
+      // 内存会话从不落库
+      expect(rawKind('bare')).toBeUndefined()
+      expect(rawKind('durable')).toBeUndefined()
+    }
+  })
+
+  it('P14 storageKind 建成后不变：任何写入口都碰不到这一列', () => {
+    insert(session('s1', { storageKind: 'durable-sqlite-1', projectId: 'p1' }))
+    vi.setSystemTime(LATER)
+
+    sessionRecords.updateTitle('s1', '新标题')
+    // settings 里一个恰好叫 storageKind 的键：它只是 settings 的一个键，绝不落到列上
+    sessionRecords.updateSettings(
+      's1',
+      loose({ storageKind: 'harness-v3-jsonl', enabledTools: ['mcp:ssh'] })
+    )
+    sessionRecords.updateProjectId('s1', 'p2')
+    sessionRecords.touch('s1')
+    sessionRecords.touchActive('s1')
+
+    const row = sessionRecords.findById('s1')!
+    expect(row.storageKind).toBe('durable-sqlite-1')
+    expect(sessionRecords.pick('s1', ['storageKind'])).toEqual({ storageKind: 'durable-sqlite-1' })
+    expect(row.settings).toEqual({ storageKind: 'harness-v3-jsonl', enabledTools: ['mcp:ssh'] })
+    // 写入确实发生了（不是因为全部没生效才「没变」）
+    expect(row).toMatchObject({ title: '新标题', projectId: 'p2', updatedAt: LATER })
+    if (side === 'persisted') expect(rawKind('s1')).toBe('durable-sqlite-1')
+  })
 })
 
 // ─── A-L 列表查询与内存会话独有的规矩 ────────────────────────────────────
@@ -396,6 +466,85 @@ describe('A-L 列表查询只见持久会话', () => {
 
     expect(sessionRecords.findChildren('memP')).toEqual([])
     expect(sessionRecords.findChildren('dbP')).toEqual([])
+  })
+
+  it('L11 持久会话的列表查询读回各自存下的 storageKind', () => {
+    sessionRecords.insert(
+      session('v3', {
+        projectId: 'p1',
+        settings: { notebookPath: 'notes/v3.md' },
+        lastActiveAt: T0 + 2
+      })
+    )
+    sessionRecords.insert(
+      session('durable', {
+        projectId: 'p1',
+        storageKind: 'durable-sqlite-1',
+        settings: { notebookPath: 'notes/d.md' },
+        lastActiveAt: T0 + 1
+      })
+    )
+    sessionRecords.insert(withoutKind(session('bare', { projectId: 'p1', lastActiveAt: T0 })))
+    sessionRecords.insert(session('P'))
+    sessionRecords.insert(
+      session('childD', { parentId: 'P', storageKind: 'durable-sqlite-1', createdAt: T0 + 1 })
+    )
+    sessionRecords.insert(withoutKind(session('childV', { parentId: 'P', createdAt: T0 + 2 })))
+
+    const kindsOf = (rows: Session[]): Record<string, unknown> =>
+      Object.fromEntries(rows.map((r) => [r.id, r.storageKind]))
+
+    expect(kindsOf(sessionRecords.findAll())).toEqual({
+      v3: 'harness-v3-jsonl',
+      durable: 'durable-sqlite-1',
+      bare: 'harness-v3-jsonl',
+      P: 'harness-v3-jsonl',
+      childD: 'durable-sqlite-1',
+      childV: 'harness-v3-jsonl'
+    })
+    expect(kindsOf(sessionRecords.findByProjectId('p1'))).toEqual({
+      v3: 'harness-v3-jsonl',
+      durable: 'durable-sqlite-1',
+      bare: 'harness-v3-jsonl'
+    })
+    expect(sessionRecords.findByProjectAndNotebookPath('p1', 'notes/d.md')?.storageKind).toBe(
+      'durable-sqlite-1'
+    )
+    expect(sessionRecords.findByProjectAndNotebookPath('p1', 'notes/v3.md')?.storageKind).toBe(
+      'harness-v3-jsonl'
+    )
+    expect(kindsOf(sessionRecords.findChildren('P'))).toEqual({
+      childD: 'durable-sqlite-1',
+      childV: 'harness-v3-jsonl'
+    })
+  })
+
+  it('L12 findChildren(内存父) 回的子会话带各自的 storageKind', () => {
+    sessionRecords.insert(session('P'), EPH)
+    sessionRecords.insert(withoutKind(session('c1', { parentId: 'P', createdAt: T0 + 1 })), EPH)
+    sessionRecords.insert(
+      session('c2', { parentId: 'P', createdAt: T0 + 2, storageKind: 'durable-sqlite-1' }),
+      EPH
+    )
+
+    expect(sessionRecords.findChildren('P').map((s) => [s.id, s.storageKind])).toEqual([
+      ['c1', 'harness-v3-jsonl'],
+      ['c2', 'durable-sqlite-1']
+    ])
+  })
+
+  it('L13 [白盒] 库里本版本不认识的值原样读回', () => {
+    // 更新版本写下的值：读者不改写、不兜底成 v3 —— 拒不拒绝是会话树注册表的事
+    ;(holder.db as DatabaseSync)
+      .prepare(
+        'INSERT INTO sessions (id, title, projectId, parentId, storageKind, settings, createdAt, updatedAt, lastActiveAt) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?)'
+      )
+      .run('future', 'from the future', 'durable-sqlite-9', '{}', T0, T0, T0)
+
+    expect(sessionRecords.findById('future')!.storageKind).toBe('durable-sqlite-9')
+    expect(sessionRecords.pick('future', ['storageKind'])).toEqual({
+      storageKind: 'durable-sqlite-9'
+    })
   })
 })
 

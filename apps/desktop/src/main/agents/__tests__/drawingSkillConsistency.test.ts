@@ -5,25 +5,27 @@
  *  - 变量表（`desktopPromptVars`）：名单点了 `skill:builtin:drawing` 且 findEnabled 里有它 →
  *    visualGuide / visualCraft 带一句「先加载 `builtin:drawing`」的指路；否则两个值都是空串
  *    （2026-09-24 起契约、预算与范例只在技能里，整份作图说明都挂在「技能在架」上）；
- *  - 工具解析（`resolveTools` → 真的 `SkillTool`）：名单点了名的 ∩ findEnabled → 技能进货架索引。
- * 两边读的是同一份名单（createAgent 先算好名单，再分别交给两处）。这一组把两边放在同一组输入下
+ *  - 工具解析（ToolHost 的 `resolveAgentTools` → 真的 `SkillTool`）：名单点了名的 ∩ findEnabled →
+ *    技能进货架索引。
+ * 两边读的是同一份名单（锁先算好名单，冻结人设与解析工具各拿一份）。这一组把两边放在同一组输入下
  * 逐格比对：指路出现的地方技能一定加载得到，加载得到的地方提示一定指了路 —— 任何一边自己改了
  * 判断（例如又给 root 恒挂一个 SkillTool、或变量表按宿主而不是按名单判），矩阵里就会有一格对不上。
  *
- * 取 host 适配面的办法同 skillToolInjection：顶掉 `createAgentFactory`，接住 agentHost 交出来的
- * 那个对象。与那边不同的是这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩
- * skillService（可控的 findEnabled）、`../../i18n`（顶层 import electron）与 ripgrep（真二进制），
- * 注册表桩要带 `registerBuiltinTool`（skillTool.ts 加载即自注册）。
+ * P1-11 起两边是 agentHost 直接导出的 `desktopPromptVars` 与 `createDesktopToolHost(...).resolveAgentTools`。
+ * 这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩 skillService（可控的 findEnabled）、
+ * `../../i18n`（顶层 import electron）与 ripgrep（真二进制），注册表桩要带 `registerBuiltinTool`
+ * （skillTool.ts 加载即自注册）。派生 agent 的四格（P2-04-35）：工具一侧解析一个派生请求（根会话 SID、
+ * agent AGENT_ID、不能再派生、coding），变量表一侧照旧按派生身份查（`varsOf('spawned')`）—— 两边仍是
+ * 同一个判断；派生 agent 的回复不是一条对话，所以它的提示里没有交互段。
  *
  * 2026-09-24 DSC-1 同号改写：从前「不指路时手艺范例常驻」，如今不指路时两个值都是空串，
  * 指路时恰好一次、不带范例。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { AgentHostAdapter, PromptVars, ToolResolveRequest } from '@shuvix/agent-runtime'
+import type { AgentToolsRequest, PromptVars } from '@shuvix/agent-runtime'
 import type { Skill } from '../../types/skill'
 
 const mocks = vi.hoisted(() => ({
-  host: { value: undefined as AgentHostAdapter | undefined },
   findEnabled: vi.fn(),
   findByName: vi.fn(),
   pick: vi.fn(),
@@ -31,19 +33,12 @@ const mocks = vi.hoisted(() => ({
   projectPick: vi.fn()
 }))
 
-vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@shuvix/agent-runtime')>()
-  return {
-    ...actual,
-    createAgentFactory: (host: AgentHostAdapter) => {
-      mocks.host.value = host
-      return { createAgent: vi.fn() }
-    }
-  }
-})
-
 vi.mock('../../services/skillService', () => ({
-  skillService: { findEnabled: mocks.findEnabled, findByName: mocks.findByName }
+  skillService: {
+    findEnabled: mocks.findEnabled,
+    findAll: mocks.findEnabled,
+    findByName: mocks.findByName
+  }
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/toolUtils/ripgrep', () => ({
@@ -71,10 +66,11 @@ vi.mock('../../services/toolRegistry', () => {
 })
 
 /** 包装器走恒等：拿到的就是真 SkillTool 实例本身，description 即货架索引 */
-vi.mock('../../services/wrapToolOutput', () => ({
-  wrapToolOutput: (tool: object) => tool,
-  getOutputStrategy: () => 'middle'
-}))
+vi.mock('../../services/wrapToolOutput', () => ({ wrapDurableTool: (tool: object) => tool }))
+vi.mock('../../services/userInputBroker', () => ({ requestUserInputFor: vi.fn() }))
+vi.mock('../../services/sandbox', () => ({ sandboxGloballyActive: () => false }))
+vi.mock('../../services/botService', () => ({ botService: { forSession: () => null } }))
+vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))
 vi.mock('../AgentTool', () => ({ createAgentTool: () => ({ name: 'agent' }) }))
 
 vi.mock('electron', () => ({ app: { getVersion: () => '9.9.9', getPath: () => '/tmp/x' } }))
@@ -84,17 +80,11 @@ vi.mock('../../dao/sessionDao', () => ({
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: { findAllEnabledModels: () => [] } }))
 vi.mock('../../services/mcpService', () => ({ mcpService: {} }))
-vi.mock('../../services/agentModelResolver', () => ({ resolveModel: vi.fn() }))
-vi.mock('../../services/providerOAuthService', () => ({ providerOAuthService: {} }))
-vi.mock('../../services/sessionStorage', () => ({ ensureSessionTree: vi.fn() }))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
 vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
-vi.mock('../../services/httpLogService', () => ({ httpLogService: {} }))
-vi.mock('../../services/llmNetwork', () => ({ llmNetwork: {} }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
   electronEventSink: {},
-  electronToolResultTransform: vi.fn(),
   runtimeLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }))
 vi.mock('../../services/toolContext', () => ({
@@ -102,9 +92,9 @@ vi.mock('../../services/toolContext', () => ({
   resolveProjectConfig: vi.fn()
 }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
-vi.mock('@earendil-works/pi-agent-core/node', () => ({ NodeExecutionEnv: class {} }))
 
-import '../agentHost'
+import { createDesktopToolHost, desktopPromptVars } from '../agentHost'
+import { inProcess, profileOf } from './support/toolHostFixtures'
 
 const SID = 'sess-drawing-consistency'
 const AGENT_ID = 'agent-dsc-1'
@@ -126,31 +116,52 @@ const BUILTIN: Skill = {
 
 type Kind = 'root' | 'spawned'
 
-/** 同一组输入下的两边：变量表（按 agent 自己的身份）与工具解析（名单同一份） */
-async function bothSides(
-  kind: Kind,
-  names: string[]
-): Promise<{ vars: PromptVars; tools: Array<{ name?: string; description?: string }> }> {
-  const host = mocks.host.value
-  expect(host, 'agentHost 应把适配面交给 createAgentFactory').toBeDefined()
-  const selfId = kind === 'root' ? SID : AGENT_ID
-  const vars = await host!.promptVars({
-    sessionId: selfId,
+/** 变量表一侧（按 agent 自己的身份） */
+async function varsOf(kind: Kind, names: string[]): Promise<PromptVars> {
+  return await desktopPromptVars({
+    sessionId: kind === 'root' ? SID : AGENT_ID,
     kind,
     cwd: kind === 'root' ? '/w/proj' : '',
     toolNames: names
   })
-  const tools = await host!.resolveTools({
-    kind,
-    rootSessionId: SID,
-    selfSessionId: selfId,
-    profile: { name: kind === 'root' ? 'work' : 'coding' } as ToolResolveRequest['profile'],
-    names,
-    getModelConfig: () =>
-      ({ provider: 'p', model: 'm', capabilities: {} }) as ReturnType<
-        ToolResolveRequest['getModelConfig']
-      >
-  })
+}
+
+/** 同一组输入下的两边：变量表与这个 agent 的工具解析（名单同一份；root 或派生） */
+async function bothSides(
+  kind: Kind,
+  names: string[]
+): Promise<{ vars: PromptVars; tools: Array<{ name?: string; description?: string }> }> {
+  const vars = await varsOf(kind, names)
+  const request: AgentToolsRequest =
+    kind === 'root'
+      ? {
+          sessionId: SID,
+          conversationId: 1 as never,
+          kind: 'root',
+          rootSessionId: SID,
+          selfSessionId: SID,
+          profile: inProcess(profileOf('work')),
+          names,
+          model: { provider: 'p', modelId: 'm' },
+          cwd: '/w/proj'
+        }
+      : {
+          sessionId: SID,
+          kind: 'spawned',
+          rootSessionId: SID,
+          selfSessionId: AGENT_ID,
+          agentId: AGENT_ID,
+          canSpawn: false,
+          profile: inProcess(profileOf('coding')),
+          names,
+          model: { provider: 'p', modelId: 'm' },
+          cwd: ''
+        }
+  const resolved = await createDesktopToolHost({ sessionOf: () => undefined }).resolveAgentTools(
+    request,
+    { signal: new AbortController().signal }
+  )
+  const tools = [resolved.agent, resolved.skill].filter((t) => t !== undefined)
   return { vars, tools: tools as Array<{ name?: string; description?: string }> }
 }
 
@@ -204,19 +215,19 @@ describe('DSC 指路与货架同一个判断', () => {
       // 根会话（不是 Chrome 标签页）连交互段一起给：交互段也指向技能 —— 上面的「恰好一次」
       // 因此覆盖了它不重复点名这一点
       if (expected && kind === 'root') expect(vars.visualGuide).toContain('```interactive')
+      // 派生 agent 的回复交回父 agent（不是一条对话）：没有交互段（P2-04-35）
+      if (kind === 'spawned') expect(vars.visualGuide).not.toContain('```interactive')
     }
   )
 
   it('DSC-2 点了名但被停用、名单里又没有别的 skill → 连 skill 工具都不挂（空手的工具是噪音）', async () => {
     mocks.findEnabled.mockReturnValue([])
-    for (const kind of ['root', 'spawned'] as const) {
-      const { vars, tools } = await bothSides(kind, ['read', DRAWING])
-      expect(
-        tools.map((tool) => tool.name),
-        kind
-      ).not.toContain('skill')
-      // 对照：同一次提示里也没有指路
-      expect(vars.visualGuide, kind).not.toContain(POINTER)
-    }
+    const { vars, tools } = await bothSides('root', ['read', DRAWING])
+    expect(tools.map((tool) => tool.name)).not.toContain('skill')
+    // 对照：同一次提示里也没有指路；派生 agent 两边同样（P2-04-35：工具一侧也不挂 skill）
+    expect(vars.visualGuide).not.toContain(POINTER)
+    const spawned = await bothSides('spawned', ['read', DRAWING])
+    expect(spawned.tools.map((tool) => tool.name)).not.toContain('skill')
+    expect(spawned.vars.visualGuide).not.toContain(POINTER)
   })
 })

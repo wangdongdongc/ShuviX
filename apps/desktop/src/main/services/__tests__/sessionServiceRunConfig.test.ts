@@ -1,19 +1,18 @@
 /**
- * sessionService —— 会话此刻实际在用的模型类运行配置（`resolveRunConfig`）与 hook 派发用的那份
- * （`resolveRunModelConfig`）。
+ * sessionService —— 会话此刻实际在用的模型类运行配置（`resolveRunConfig`）。
  *
- * `resolveRunModelConfig` 是 hook run 的回落源（hookService → runner 的 `resolveRunModel`），
- * 返回会话的模型**连同思考档位**：hook 派出的 agent 与任何派发一样继承会话的档位，想不思考就在
- * 它的 agent md 里声明 `shuvix-thinking`。只给模型的话，manager 会补缺省 'off' —— 等于宿主替每个
- * hook agent 悄悄关掉了思考，档案里的声明（titler 的 off）也就无从说「生效与否」。
+ * 它有两个读者：子会话种子（subSessionRunner.create）与 hook run 没锁时的模型选择（hookService 的
+ * `hookRunModel` → `resolveHookRunModel` 的 selection）。返回会话的模型**连同思考档位**：hook 派出的 agent
+ * 与任何派发一样继承会话的档位，想不思考就在它的 agent md 里声明 `shuvix-thinking`。
+ *（P2-13：原先 hook 读的是包在它外面的 `resolveRunModelConfig`，P2-08 换成锁优先的解析后它没有调用方了，
+ * 随之删掉；RC-1..5 原样搬到 `resolveRunConfig` 上。）
  *
  * 钉的是：
- *   - RC-1 有模型 → 模型三件（provider / model / capabilities）+ 会话档位；与子会话种子的来源
- *     （`resolveRunConfig`）同一口径；
+ *   - RC-1 有模型 → 模型三件（provider / model / capabilities）+ 会话档位；
  *   - RC-2 五档原样带出 —— off 也是一档（会话选了「不思考」），不是「没有」；
  *   - RC-3 解析后的值而非「树上显式写过的」：树上没写档位 → 回落默认档，与 `initAgent` 给前端的
  *     那一格相同（hook agent 继承的，就是用户在选择器里看到的）；树上没写模型 → 回落默认模型；
- *   - RC-4 没有可用模型 → null（调用方据此报「无可用模型」），哪怕树上写着档位；
+ *   - RC-4 没有可用模型 → model 为 null（hook 据此跳过 `no-model`），哪怕树上写着档位；
  *   - RC-5 会话不存在 → null，且不去读会话树。
  *
  * mock 面沿用 sessionServiceProfileResolution.test.ts（import 图全换假件）。会话树只经
@@ -64,10 +63,10 @@ vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick }
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
+  isDurableSession: () => true,
   readSessionRunConfig: mocks.readSessionRunConfig,
-  addSessionTreePin: vi.fn(),
-  appendModelChange: vi.fn(),
-  appendThinkingLevelChange: vi.fn()
+  recordSessionModel: vi.fn(),
+  recordSessionThinkingLevel: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({
@@ -80,7 +79,13 @@ vi.mock('../toolAggregator', () => ({
 }))
 vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: vi.fn() } }))
-vi.mock('../agentSession', () => ({ AgentSession: { create: vi.fn() } }))
+// 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
+vi.mock('../sessionHost', async () =>
+  (await import('./support/fakeSessionHost')).sessionHostModuleMock()
+)
+vi.mock('../agentSession', async () =>
+  (await import('./support/fakeSessionHost')).agentSessionModuleMock()
+)
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
 vi.mock('../../utils/sessionConfigBroadcast', () => ({
@@ -136,36 +141,31 @@ function catalog(providerId: string, modelId: string, capabilities: object): voi
   )
 }
 
-describe('resolveRunModelConfig —— hook 派发的回落源：会话的模型连同思考档位', () => {
-  it('RC-1 有模型：返回模型三件 + 会话的思考档位；与子会话种子的来源（resolveRunConfig）同一口径', async () => {
+describe('resolveRunConfig —— 会话的模型连同思考档位（子会话种子 / hook 没锁时的选择）', () => {
+  it('RC-1 有模型：返回模型三件 + 会话的思考档位', async () => {
     tree({ provider: 'p1', model: 'm1', thinkingLevel: 'high' })
     catalog('p1', 'm1', { reasoning: true })
 
-    const cfg = await sessionService.resolveRunModelConfig(SID)
-    expect(cfg).toEqual({
-      provider: 'p1',
-      model: 'm1',
-      capabilities: { reasoning: true },
+    expect(await sessionService.resolveRunConfig(SID)).toEqual({
+      model: { provider: 'p1', model: 'm1', capabilities: { reasoning: true } },
       thinkingLevel: 'high'
     })
-
-    // hook 派发与子会话种子读的是同一个答案：模型那三件 + 同一个档位
-    const run = await sessionService.resolveRunConfig(SID)
-    expect(cfg).toEqual({ ...run!.model, thinkingLevel: run!.thinkingLevel })
   })
 
   it.each([...SELECTABLE_THINKING_LEVELS])(
     'RC-2 树上的档位原样带出：%s（off 也是会话的一种选择，不能当「没有」丢掉）',
     async (level) => {
       tree({ provider: 'p1', model: 'm1', thinkingLevel: level })
-      expect((await sessionService.resolveRunModelConfig(SID))?.thinkingLevel).toBe(level)
+      expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe(level)
     }
   )
 
-  it('RC-3a 树上没写档位：带的是回落后的默认档，与 initAgent 给前端的那一格相同', async () => {
+  it('RC-3a 树上没写档位：带的是回落后的默认档（推理模型 → 缺省档，否则 off），与 initAgent 给前端的那一格相同', async () => {
     tree({ provider: 'p1', model: 'm1' })
+    expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe('off')
 
-    const cfg = await sessionService.resolveRunModelConfig(SID)
+    catalog('p1', 'm1', { reasoning: true })
+    const cfg = await sessionService.resolveRunConfig(SID)
     expect(cfg?.thinkingLevel).toBe(DEFAULT_THINKING_LEVEL)
     // 用户在选择器里看到的档位 = hook agent 继承的档位
     const init = await sessionService.initAgent(SID)
@@ -184,10 +184,8 @@ describe('resolveRunModelConfig —— hook 派发的回落源：会话的模型
       p === 'p-default' ? [{ modelId: 'm-default' }] : []
     )
 
-    expect(await sessionService.resolveRunModelConfig(SID)).toEqual({
-      provider: 'p-default',
-      model: 'm-default',
-      capabilities: {},
+    expect(await sessionService.resolveRunConfig(SID)).toEqual({
+      model: { provider: 'p-default', model: 'm-default', capabilities: {} },
       thinkingLevel: 'low'
     })
   })
@@ -195,17 +193,20 @@ describe('resolveRunModelConfig —— hook 派发的回落源：会话的模型
   it.each([
     ['树上只有档位、没有默认模型', { thinkingLevel: 'high' }],
     ['树上只写了提供商、没有模型', { provider: 'p1', thinkingLevel: 'off' }]
-  ])('RC-4 没有可用模型（%s）→ null：档位写着也不单独给出去', async (_label, written) => {
-    tree(written)
-    expect(await sessionService.resolveRunModelConfig(SID)).toBeNull()
-  })
+  ])(
+    'RC-4 没有可用模型（%s）→ model 为 null：档位写着也不凭空造出模型',
+    async (_label, written) => {
+      tree(written)
+      expect((await sessionService.resolveRunConfig(SID))?.model).toBeNull()
+    }
+  )
 
   it('RC-5 会话不存在 → null，且不去读会话树', async () => {
     mocks.daoPick.mockReturnValue(undefined)
     mocks.daoPickSettings.mockReturnValue(undefined)
     tree({ provider: 'p1', model: 'm1', thinkingLevel: 'high' })
 
-    expect(await sessionService.resolveRunModelConfig('ghost')).toBeNull()
+    expect(await sessionService.resolveRunConfig('ghost')).toBeNull()
     expect(mocks.readSessionRunConfig).not.toHaveBeenCalled()
   })
 })

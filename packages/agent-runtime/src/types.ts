@@ -3,11 +3,11 @@
  *
  * 注入面：
  *  - RuntimeEventSink  事件广播（替代 chatFrontendRegistry.broadcast）
- *  - RuntimeEnv        环境变量注入（替代 process.env；浏览器宿主 no-op）
- *  - RuntimeHttpLog    LLM 请求日志（可选）
+ *  - RuntimeNetwork    LLM 请求的网络侧钩子（可选）
+ *  - RuntimeLogger     日志（可选）
  *
- * 注：消息持久化接口（RuntimePersistence）已随 AgentHarness 迁移删除 ——
- * 落盘由 harness 经 SessionStorage 完成，宿主不再提供消息写入口。
+ * 会话存储由宿主经 SessionHostDeps 打开（durable 自己落盘），宿主不提供消息写入口。旧运行时的
+ * 工具结果变换（ToolResultTransform）与请求日志（RuntimeHttpLog）两个 seam 随旧运行时（pi 0.80 harness）退场。
  */
 import type { ChatEvent, RuntimeStatus } from '@shuvix/chat-protocol/events'
 import type {
@@ -15,8 +15,6 @@ import type {
   MessageMetadata,
   ToolResultDetails
 } from '@shuvix/chat-protocol/types/chatMessage'
-
-import { toolResultText } from './toolResultText'
 
 export type { ChatEvent, RuntimeStatus, ChatMessage, MessageMetadata, ToolResultDetails }
 
@@ -36,13 +34,6 @@ export interface RuntimeEventSink {
   hasUserInputCapability: (sessionId: string) => boolean
 }
 
-// ─────────────────────────── RuntimeEnv ───────────────────────────
-
-export interface RuntimeEnv {
-  /** 把内置 provider 的 apiKey 注入环境变量（桌面端写 process.env；浏览器端 no-op，凭证走 getApiKey） */
-  setApiKey: (envKey: string, value: string) => void
-}
-
 // ─────────────────────────── RuntimeNetwork ───────────────────────────
 
 /**
@@ -53,7 +44,7 @@ export interface RuntimeEnv {
  * （"Request timed out."），真正的 `cause`（`ECONNRESET` / `UND_ERR_HEADERS_TIMEOUT` /
  * TLS / DNS…）挂在 `error.cause` 上；而 pi-ai 的 stream 在自己的 catch 里只留
  * `error.message`（anthropic-messages.js 的 `errorMessage = error.message`），
- * 到 `modelsAdapter` 时链子已经没了。所以只能在 fetch 那一层记下来，再在这一层贴回去。
+ * 到 Models 包装层（`models/networkModels.ts`）时链子已经没了。所以只能在 fetch 那一层记下来，再在这一层贴回去。
  *
  * 同一个作用域还兼作「这次请求用哪套传输参数」的落点：Node 内置 fetch 的 undici
  * 默认 `headersTimeout` / `bodyTimeout` 都是 300s，对冷缓存的长上下文首字节等待
@@ -64,45 +55,4 @@ export interface RuntimeNetwork {
   runInRequestScope: <T>(fn: () => T) => T
   /** 当前作用域里最近一次 fetch 失败的成因链；没失败过返回 undefined */
   describeLastFailure: () => string | undefined
-}
-
-// ─────────────────────────── 工具结果转换 ───────────────────────────
-
-export interface ToolResultTransformInput {
-  toolName: string
-  toolCallId: string
-  sessionId: string
-  isError: boolean
-  content: Array<{ type: string; text?: string; [k: string]: unknown }>
-  details?: ToolResultDetails
-}
-
-export interface ToolResultTransformOutput {
-  content: string
-  details?: ToolResultDetails
-}
-
-/** 工具结果**广播前**的瘦身转换（如图片 → 占位文本）；不影响落盘与发给模型的内容。浏览器宿主可用 defaultToolResultTransform。 */
-export type ToolResultTransform = (input: ToolResultTransformInput) => ToolResultTransformOutput
-
-/**
- * 缺省转换：与重开会话的投影**同一份**文字化（toolResultText：文本按行拼、图片换占位）——
- * 以前这里把图片块 JSON 序列化，扩展的截图会把整段 base64 铺进工具卡片。
- */
-export const defaultToolResultTransform: ToolResultTransform = (input) => ({
-  content: toolResultText(input.content as Parameters<typeof toolResultText>[0]),
-  details: input.details
-})
-
-// ─────────────────────────── 事件处理依赖 ───────────────────────────
-
-/** 可选 HTTP 请求日志（桌面端记录 LLM 请求/用量；浏览器宿主不实现） */
-export interface RuntimeHttpLog {
-  updateUsage: (
-    logId: string,
-    input: number,
-    output: number,
-    total: number,
-    responseJson?: string
-  ) => void
 }

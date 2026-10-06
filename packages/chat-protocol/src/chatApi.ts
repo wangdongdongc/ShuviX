@@ -43,6 +43,7 @@ import type {
   ImportResult,
   ImportSelection
 } from './types/configShare'
+import type { SyncChannel } from './sync'
 
 // ─────────────────────────── 前端 IPC 视图数据形状 ───────────────────────────
 
@@ -99,14 +100,31 @@ export interface SessionSettings {
    * 判定经 `chromeTabSession.ts` 的 `chromeTabOf` / `isChromeTabSessionSettings`。
    */
   chromeTab?: ChromeTabBinding
+  /**
+   * 这条会话选定的模型（pi-durable 起的运行配置事实源；旧 v3 会话在树上的 model_change 只读）。
+   * 选择器直接读写它，无需打开会话存储。
+   */
+  model?: SessionModelSelection
+  /** 这条会话选定的思考档位（同上） */
+  thinkingLevel?: ThinkingLevel
+  /** 锁镜像：这条会话此刻有没有 agent（权威在会话存储里，这是给界面便宜地读的副本） */
+  agentLocked?: boolean
+  /** 运行标记：会话存储此刻的运行状态（退出时正忙的会话留着 busy，下次打开报 interrupted） */
+  runState?: 'idle' | 'busy' | 'interrupted'
+}
+
+/** 会话设置里的模型选择：提供商行 id + 模型 id */
+export interface SessionModelSelection {
+  provider: string
+  modelId: string
 }
 
 /**
  * 会话业务记录。
  *
  * 刻意**不含** provider / model / thinkingLevel / systemPrompt ——
- * 这些是「运行配置」，唯一事实源是会话树（JSONL 的 model_change /
- * thinking_level_change entry）。想读当前值走 `agent.init`，
+ * 这些是「运行配置」，事实源是会话设置（`settings.model` / `settings.thinkingLevel`，
+ * 见 SessionSettings）。想读当前值走 `agent.init`，
  * 想改走 `agent.setModel` / `setThinkingLevel`。
  * 扩展能力勾选不属此列：它在 `settings.enabledTools`（见 SessionSettings）。
  */
@@ -119,6 +137,11 @@ export interface Session {
    * 与顶层会话完全一致（见 docs/sub-session-design.md）。
    */
   parentId: string | null
+  /**
+   * 对话内容的存储类型（见 sessionStorageKind.ts）。缺省按 `harness-v3-jsonl` 理解。
+   * 存储换代不迁移旧会话：界面按这一列判断一条会话能做什么（例如旧格式只能查看）。
+   */
+  storageKind?: string
   settings: SessionSettings
   createdAt: number
   /** 账本时间：改 title / projectId / settings 就 bump。日历和侧栏不读它。 */
@@ -283,11 +306,22 @@ export interface AgentSteerParams {
 }
 
 /**
- * 追加 / 下轮入队参数 —— 与 steer 同形（一条纯文本用户消息）。
- * 三者的差别只在 pi 把它插进 agent loop 的时机，消息本身完全一致。
+ * 追加入队参数 —— 与 steer 同形（一条纯文本用户消息）。
+ * 两者的差别只在 pi 把它插进 agent loop 的时机，消息本身完全一致。
  */
 export type AgentFollowUpParams = AgentSteerParams
-export type AgentNextTurnParams = AgentSteerParams
+
+/** 撤回一条排着的用户输入（P3-11）：`submissionId` = 视图 `queue[i].submissionId` */
+export interface AgentWithdrawQueuedParams {
+  sessionId: string
+  submissionId: number
+}
+
+/**
+ * 撤回的结果（PIN-14）：`aborted` 撤回了；`already_placed` 已经进了转写（撤不回）；`settled` 早就落定；
+ * `not_found` 不是这条会话视图队列里的输入（含会话没打开）。
+ */
+export type WithdrawQueuedResult = 'aborted' | 'already_placed' | 'settled' | 'not_found'
 
 export interface AgentSetModelParams {
   sessionId: string
@@ -528,6 +562,13 @@ export interface BuiltinToolDefinition {
 //
 // 渠道端只需实现 SessionChannelApi；chat-ui 对话核心仅依赖它，宿主功能经 getHostApi() 降级。
 
+/** `agent.continue` 的回包：`code` 是运行时的失败分类（no_model / model_error / closed …） */
+export interface AgentContinueResult {
+  success: boolean
+  error?: string
+  code?: string
+}
+
 /**
  * 单会话渠道契约 —— 渲染并驱动**一个**会话所需的最小后端能力（只读 + 发消息）。
  * 注意：这里**没有**任何 setModel / 改配置 / 新建删除会话 / 应用设置 —— 渠道端无权这些。
@@ -550,9 +591,17 @@ export interface SessionChannelApi {
     steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
     /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
     followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
-    /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
-    nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
+    /**
+     * 撤回一条排着的用户输入（P3-11，视图 `queue` 的一行）。从不乐观移除 —— 那一行跟着下一帧视图走。
+     */
+    withdrawQueued: (params: AgentWithdrawQueuedParams) => Promise<{ result: WithdrawQueuedResult }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
+    /**
+     * 继续被中断的工作（上个进程退出时正在跑的那一轮，P3-12）：等它落定才回。空闲且没被中断 = 无操作
+     * （`{ success: true }`）；失败 → `{ success: false, error, code }`。界面不靠它的时机改形态 ——
+     * 横幅跟着视图的 `run.state` 走（PIN-17）
+     */
+    continue: (sessionId: string) => Promise<AgentContinueResult>
     respondToInput: (params: {
       sessionId: string
       requestId: string
@@ -646,6 +695,12 @@ export interface SessionChannelApi {
     abortTts: () => Promise<void>
     onChunk: (callback: (data: { filePath: string; index: number }) => void) => () => void
   }
+  /**
+   * 视图同步（phase 3，P3-05）：会话 / 派生 agent 的视图经 chord 的复制状态推过来（见 `./sync`）。
+   * 失败的调用以带 `code` 的 Error 拒绝（如 `service_not_found`）；还没接上的端（Chrome 侧边栏，P3-09
+   * 之前）一律以 `unsupported` 拒绝。
+   */
+  sync: SyncChannel
 }
 
 /**
@@ -765,7 +820,9 @@ export interface HostApi {
    * 消息写入口已全部移除（AgentHarness 迁移）：消息只能由 harness 在运行中产生并
    * 落成 entry，外部不再能凭空 add / 删单条。剩下的两个都是**结构性**操作：
    *  - clear    清空整棵 entry 树
-   *  - rollback 把会话树的 leaf 移到目标消息的父节点（原 deleteFrom 与之语义重合，已并入）
+   *  - rollback 把当前对话换成目标那条用户消息之前的 fork（旧分支留在存储里、不再可见；原 deleteFrom
+   *    与之语义重合，已并入）。`success` = 真的回退了：没有可回退的目标（旧格式会话、id 不是条目 id、
+   *    目标不在当前对话里）是 `false`，什么都没动 —— 调用方据此不回填草稿、不重发（P3-10b PIN-02）
    */
   message: {
     clear: (sessionId: string) => Promise<{ success: boolean }>

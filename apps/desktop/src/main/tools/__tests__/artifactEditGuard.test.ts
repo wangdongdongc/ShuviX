@@ -33,9 +33,13 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
 import type { AssistantMessage, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import {
+  executeTool,
+  failureText,
+  type InvokedToolResult
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const state = vi.hoisted(() => ({
   root: '',
@@ -125,7 +129,7 @@ let homeBefore: string[] | null = null
 let seq = 0
 let sid = ''
 const ctx = (): ToolContext => ({ sessionId: sid }) as ToolContext
-const textOf = (res: AgentToolResult<unknown>): string => (res.content[0] as { text: string }).text
+const textOf = (res: InvokedToolResult): string => (res.content[0] as { text: string }).text
 
 const said = (text: string): AssistantMessage => ({
   id: 'a',
@@ -149,7 +153,7 @@ const chart = (label: string, second = '30'): string =>
 
 /** 认领当前转写里最后一张图，返回落盘路径 */
 const adopt = async (): Promise<string> => {
-  const res = await new ArtifactTool(ctx()).execute('c1', { action: 'adopt' } as never)
+  const res = await executeTool(new ArtifactTool(ctx()), 'c1', { action: 'adopt' } as never)
   const name = (res.details as { name?: string }).name
   expect(name, textOf(res)).toBeDefined()
   return join(state.root, sid, name!)
@@ -202,9 +206,11 @@ describe('认领 → edit', () => {
     touchLater(path)
 
     const edit = makeEditTool(ctx())
-    await expect(
-      edit.execute('c2', { path, oldText: 'height="30"', newText: 'height="12"' } as never)
-    ).rejects.toThrow(/has been modified since it was last read/)
+    expect(
+      await failureText(
+        executeTool(edit, 'c2', { path, oldText: 'height="30"', newText: 'height="12"' } as never)
+      )
+    ).toMatch(/has been modified since it was last read/)
     // 用户那一笔一个字都没丢
     expect(readFileSync(path, 'utf-8')).toBe(userEdited)
   })
@@ -212,7 +218,7 @@ describe('认领 → edit', () => {
   it('AG-3 认领 → 直接 edit（没人动过盘）⇒ 外科手术式改动落盘，不必重画', async () => {
     state.messages = [said(['```svg', chart('Bar chart'), '```'].join('\n'))]
     const path = await adopt()
-    const res = await makeEditTool(ctx()).execute('c2', {
+    const res = await executeTool(makeEditTool(ctx()), 'c2', {
       path,
       oldText: 'height="30"',
       newText: 'height="12"'
@@ -240,7 +246,7 @@ describe('认领 → edit', () => {
     writeFileSync(path, chart('Bar chart').replace('<rect x="0"', '<rect id="mine" x="0"'), 'utf-8')
     expect(getReadTime(sid, path)).toBeUndefined()
 
-    const res = await makeEditTool(ctx()).execute('c2', {
+    const res = await executeTool(makeEditTool(ctx()), 'c2', {
       path,
       oldText: 'height="30"',
       newText: 'height="12"'
@@ -256,13 +262,15 @@ describe('认领 → edit', () => {
     writeFileSync(path, chart('Never read'), 'utf-8')
     touchLater(path)
     expect(getReadTime(sid, path)).toBeUndefined()
-    await expect(
-      makeEditTool(ctx()).execute('c1', {
-        path,
-        oldText: 'height="30"',
-        newText: 'height="12"'
-      } as never)
-    ).rejects.toThrow(/has been modified since it was last read/)
+    expect(
+      await failureText(
+        executeTool(makeEditTool(ctx()), 'c1', {
+          path,
+          oldText: 'height="30"',
+          newText: 'height="12"'
+        } as never)
+      )
+    ).toMatch(/has been modified since it was last read/)
     expect(readFileSync(path, 'utf-8')).toBe(chart('Never read'))
   })
 
@@ -273,7 +281,7 @@ describe('认领 → edit', () => {
     const path = await adopt()
     expect(path).toBe(join(state.root, sid, '各档请求量.svg'))
     expect(getReadTime(sid, path)).toBeInstanceOf(Date)
-    const res = await makeEditTool(ctx()).execute('c2', {
+    const res = await executeTool(makeEditTool(ctx()), 'c2', {
       path,
       oldText: 'height="30"',
       newText: 'height="12"'
@@ -285,13 +293,13 @@ describe('认领 → edit', () => {
   it('AG-6 认领 → edit → 再认领 ⇒ 拿回被编辑过的那件（幂等与陈旧检测合起来的主线）', async () => {
     state.messages = [said(['```svg', chart('Bar chart'), '```'].join('\n'))]
     const path = await adopt()
-    await makeEditTool(ctx()).execute('c2', {
+    await executeTool(makeEditTool(ctx()), 'c2', {
       path,
       oldText: 'height="30"',
       newText: 'height="12"'
     } as never)
 
-    const again = await new ArtifactTool(ctx()).execute('c3', { action: 'adopt' } as never)
+    const again = await executeTool(new ArtifactTool(ctx()), 'c3', { action: 'adopt' } as never)
     expect(textOf(again)).toContain('was already adopted')
     // 新建的话这里会是转写里的原始源码（height="30"），用户看到的是「我的修改被撤销了」
     expect(readFileSync(path, 'utf-8')).toBe(chart('Bar chart', '12'))
@@ -302,7 +310,7 @@ describe('认领 → edit', () => {
     state.messages = [said(['```svg', chart('Sales'), '```'].join('\n'))]
     const path = await adopt()
 
-    const res = await makeEditTool(ctx()).execute('c2', {
+    const res = await executeTool(makeEditTool(ctx()), 'c2', {
       path,
       oldText: 'height="30"',
       newText: 'height="35"'
@@ -316,7 +324,7 @@ describe('认领 → edit', () => {
     mkdirSync(otherDir, { recursive: true })
     const other = join(otherDir, 'x.svg')
     writeFileSync(other, chart('X'), 'utf-8')
-    const otherRes = await makeEditTool(ctx()).execute('c3', {
+    const otherRes = await executeTool(makeEditTool(ctx()), 'c3', {
       path: other,
       oldText: 'height="30"',
       newText: 'height="35"'

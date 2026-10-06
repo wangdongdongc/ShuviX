@@ -139,8 +139,8 @@ describe('会话 ↔ 运行时绑定', () => {
     await promptDetached(sid, 'keep going')
     await until(async () => provider.chatRequestCount() >= 1, 'run in flight')
 
-    // 目标 id 不在树上：什么都不做（连 Agent 都不该动）
-    expect(await rollback(sid, 'no-such-message')).toEqual({ success: true })
+    // 目标 id 不在树上：什么都不做（连 Agent 都不该动），并如实答「没有回退」（P3-10b PIN-02）
+    expect(await rollback(sid, 'no-such-message')).toEqual({ success: false })
 
     provider.release()
     await until(async () => {

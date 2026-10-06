@@ -4,9 +4,13 @@
  * name == id == pi-ai 的 provider slug。内置 provider 的 URL+协议+能力一律由 pi-ai 注册表
  * 按 model 决定，用户不可改 baseUrl（要自定义 URL/协议请另建自定义提供商）。
  *
- * `baseUrl` / `defaultApi` 仅作为「注册表查不到的新模型」的兜底：当 getModel 落空时，
- * 用这里声明的 baseUrl + 协议构造模型，避免回退到错误的默认协议（曾导致 kimi 404）。
- * `defaultApi` 取该 provider 在 pi-ai 注册表中模型的主流协议（pi-ai 的 Api slug）。
+ * `baseUrl` / `defaultApi` 仅服务「注册表查不到的新模型」（agent-runtime models/catalog.ts 的
+ * overlay 模型）：模板取该 provider 目录里第一个 `api === defaultApi` 的模型（端点、headers、
+ * compat 照抄）；目录里没有这种协议时才用这里声明的 baseUrl + defaultApi 构造；baseUrl 留空的
+ * （cloudflare-*）退回目录第一个模型。避免回退到错误的默认协议（曾导致 kimi 404）。
+ * `defaultApi` 必须是该 provider 在 pi-ai 注册表中模型实际使用的协议（pi-ai 的 Api slug），
+ * 否则 overlay 模型的 `api` 与 provider 真正的实现对不上（xai 曾写成 openai-completions，
+ * 而 pi 1.0 的 xai 只有 openai-responses）。
  */
 export interface BuiltinProvider {
   /** pi-ai provider slug（同时用作 id / name） */
@@ -41,7 +45,7 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     name: 'xai',
     displayName: 'xAI (Grok)',
     baseUrl: 'https://api.x.ai/v1',
-    defaultApi: 'openai-completions'
+    defaultApi: 'openai-responses'
   },
   {
     name: 'groq',

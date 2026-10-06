@@ -1,0 +1,186 @@
+{
+  "case": "coding-root-darwin",
+  "description": "coding as a sub-session root, inheriting the parent’s ssh tick",
+  "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
+  "inputs": {
+    "platform": "darwin",
+    "kind": "root",
+    "rootSessionId": "sess-golden-root",
+    "selfSessionId": "sess-golden-root",
+    "canSpawn": null,
+    "profile": "coding",
+    "profileTools": [
+      "bash",
+      "powershell",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "agent",
+      "session",
+      "knowledge",
+      "artifact",
+      "skill:builtin:drawing"
+    ],
+    "toolOverlay": [
+      "mcp:ssh"
+    ],
+    "names": [
+      "bash",
+      "powershell",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "agent",
+      "session",
+      "knowledge",
+      "artifact",
+      "skill:builtin:drawing",
+      "mcp:ssh"
+    ],
+    "extraTools": [],
+    "projectPath": "/Users/golden/projects/acme",
+    "skillsAvailable": true,
+    "mcpServers": {
+      "ssh": {
+        "tools": [
+          "list-hosts",
+          "exec",
+          "upload",
+          "download",
+          "sync"
+        ]
+      }
+    },
+    "registeredBuiltins": [
+      {
+        "name": "bash",
+        "platforms": [
+          "darwin",
+          "linux"
+        ]
+      },
+      {
+        "name": "powershell",
+        "platforms": [
+          "win32"
+        ]
+      },
+      {
+        "name": "read",
+        "platforms": null
+      },
+      {
+        "name": "write",
+        "platforms": null
+      },
+      {
+        "name": "edit",
+        "platforms": null
+      },
+      {
+        "name": "ask",
+        "platforms": null
+      },
+      {
+        "name": "git",
+        "platforms": null
+      },
+      {
+        "name": "artifact",
+        "platforms": null
+      },
+      {
+        "name": "session",
+        "platforms": null
+      },
+      {
+        "name": "knowledge",
+        "platforms": null
+      },
+      {
+        "name": "doc_read",
+        "platforms": null
+      },
+      {
+        "name": "doc_edit",
+        "platforms": null
+      },
+      {
+        "name": "doc_insert",
+        "platforms": null
+      },
+      {
+        "name": "ls",
+        "platforms": null
+      },
+      {
+        "name": "grep",
+        "platforms": null
+      },
+      {
+        "name": "glob",
+        "platforms": null
+      }
+    ]
+  },
+  "observed": {
+    "skillToolConstructed": [
+      {
+        "names": [
+          "builtin:drawing"
+        ],
+        "projectPath": "/Users/golden/projects/acme"
+      }
+    ],
+    "mcpEnsureCalls": [
+      [
+        "ssh",
+        {
+          "timeoutMs": 5000,
+          "sessionId": "sess-golden-root"
+        }
+      ]
+    ],
+    "mcpGetToolsCalls": [
+      [
+        "ssh",
+        "sess-golden-root",
+        {
+          "callerId": "sess-golden-root"
+        }
+      ]
+    ],
+    "broadcasts": [],
+    "spill": true
+  },
+  "output": {
+    "toolNames": [
+      "bash",
+      "read",
+      "write",
+      "edit",
+      "ask",
+      "ls",
+      "grep",
+      "glob",
+      "session",
+      "knowledge",
+      "artifact",
+      "agent",
+      "skill",
+      "mcp__ssh__list-hosts",
+      "mcp__ssh__exec",
+      "mcp__ssh__upload",
+      "mcp__ssh__download",
+      "mcp__ssh__sync"
+    ]
+  }
+}

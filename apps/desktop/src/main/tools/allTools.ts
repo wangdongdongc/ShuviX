@@ -21,7 +21,7 @@ import './git'
 import './artifact'
 // session：agent 读改自己所属会话的会话级能力（当前仅 set-title，内置 titler 的落笔工具）。
 // 注：与已删除的同名旧工具无关 —— 压缩不再经「compact 子代理 + 工具调用」，
-// 而是 harness 内建的自动压缩（见 HarnessSession.maybeAutoCompact）。
+// 而是会话运行时内建的自动压缩（pi-durable 的 compaction）。
 import './session'
 // knowledge：OKF 知识库的结构化读写面（一期基础设施；不在内置基座档案清单，按名解析使用）
 import './knowledge'

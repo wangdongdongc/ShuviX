@@ -21,10 +21,15 @@ import type { UserPolicyFile } from '@shuvix/agent-runtime'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
+import {
+  executeTool,
+  failureText,
+  invokeTool,
+  type InvokableTool
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
-interface CapturedTool {
-  execute: (id: string, params: unknown) => Promise<{ content: { type: string }[] }>
-}
+/** 注册项工厂造出来的工具（durable 注册项） */
+type CapturedTool = InvokableTool
 
 interface Registration {
   name: string
@@ -39,7 +44,14 @@ const state = vi.hoisted(() => ({
   readGuard: [] as { path: string; displayPath?: string }[],
   writeGuard: [] as { path: string; displayPath?: string }[],
   /** 桌面 wiring 透传给 enforceGitOp 的客体属性（GIT-12 断言用） */
-  gitOps: [] as { gitAction: string; command: string; force: boolean; delete: boolean }[]
+  gitOps: [] as { gitAction: string; command: string; force: boolean; delete: boolean }[],
+  /** 交给 enforceGitOp / 路径守卫的调用身份（GIT-14：durable 的 taskId / conversationId 穿到了没有） */
+  owners: [] as {
+    pep: 'gitOp' | 'read' | 'write'
+    toolCallId: string
+    taskId?: number
+    conversationId?: number
+  }[]
 }))
 
 vi.mock('../../services/toolContext', async () => {
@@ -87,6 +99,12 @@ vi.mock('../../services/toolContext', async () => {
           opts: Parameters<typeof real.enforceGitOp>[1]
         ) => {
           state.gitOps.push({ ...object })
+          state.owners.push({
+            pep: 'gitOp',
+            toolCallId: opts.toolCallId,
+            taskId: opts.taskId,
+            conversationId: opts.conversationId
+          })
           return real.enforceGitOp(object, opts)
         }
       }
@@ -94,19 +112,27 @@ vi.mock('../../services/toolContext', async () => {
     assertReadAllowed: (
       _ctx: unknown,
       _config: unknown,
-      _id: string,
+      id: string,
       _tool: string,
       path: string,
-      displayPath?: string
-    ) => void state.readGuard.push({ path, displayPath }),
+      displayPath?: string,
+      owner?: { taskId?: number; conversationId?: number }
+    ) => {
+      state.readGuard.push({ path, displayPath })
+      state.owners.push({ pep: 'read', toolCallId: id, ...owner })
+    },
     assertWriteAllowed: (
       _ctx: unknown,
       _config: unknown,
-      _id: string,
+      id: string,
       _tool: string,
       path: string,
-      displayPath?: string
-    ) => void state.writeGuard.push({ path, displayPath })
+      displayPath?: string,
+      owner?: { taskId?: number; conversationId?: number }
+    ) => {
+      state.writeGuard.push({ path, displayPath })
+      state.owners.push({ pep: 'write', toolCallId: id, ...owner })
+    }
   }
 })
 vi.mock('../../services/toolRegistry', () => ({
@@ -154,6 +180,7 @@ beforeEach(() => {
   state.readGuard = []
   state.writeGuard = []
   state.gitOps = []
+  state.owners = []
 })
 
 afterEach(() => {
@@ -186,7 +213,7 @@ describe('桌面 makeDesktopAskOp', () => {
     )
     const tool = makeTool(requestUserInput)
 
-    await tool.execute('a0', { action: 'init' })
+    await executeTool(tool, 'a0', { action: 'init' })
 
     expect(requestUserInput).not.toHaveBeenCalled()
     expect(existsSync(join(state.workingDirectory, '.git'))).toBe(true)
@@ -200,7 +227,7 @@ describe('桌面 makeDesktopAskOp', () => {
       return { kind: 'ask', allowed: true }
     })
 
-    await tool.execute('a1', { action: 'init' })
+    await executeTool(tool, 'a1', { action: 'init' })
 
     expect(requests).toHaveLength(1)
     const req = requests[0]
@@ -216,32 +243,34 @@ describe('桌面 makeDesktopAskOp', () => {
     withGitSafety()
     const tool = makeTool(undefined)
 
-    await expect(tool.execute('a3', { action: 'init' })).rejects.toThrow(/no way to ask/)
+    expect(await failureText(executeTool(tool, 'a3', { action: 'init' }))).toMatch(/no way to ask/)
     expect(existsSync(join(state.workingDirectory, '.git'))).toBe(false)
   })
 
-  it('GIT-9: cancel → 抛 Aborted，操作不执行', async () => {
+  it('GIT-9: cancel → 失败结果 Aborted（调用本身没被取消，故不抛 —— P1-04 / 裁定 Q12），操作不执行', async () => {
     withGitSafety()
     const tool = makeTool(async () => ({ kind: 'cancel', reason: 'aborted' }))
 
-    await expect(tool.execute('a4', { action: 'init' })).rejects.toThrow('Aborted')
+    expect(await failureText(executeTool(tool, 'a4', { action: 'init' }))).toContain('Aborted')
     expect(existsSync(join(state.workingDirectory, '.git'))).toBe(false)
   })
 
-  it('GIT-9: other → 抛含 provided feedback instead 的错误，操作不执行', async () => {
+  it('GIT-9: other → 失败结果含 provided feedback instead，操作不执行', async () => {
     withGitSafety()
     const tool = makeTool(async () => ({ kind: 'other', text: '先别建仓库' }))
 
-    await expect(tool.execute('a5', { action: 'init' })).rejects.toThrow(
+    expect(await failureText(executeTool(tool, 'a5', { action: 'init' }))).toMatch(
       /User declined git init and provided feedback instead: 先别建仓库/
     )
     expect(existsSync(join(state.workingDirectory, '.git'))).toBe(false)
   })
 
-  it('GIT-9: allowed:false → 抛 User denied git ...（带 reason 时抛 reason）', async () => {
+  it('GIT-9: allowed:false → 失败结果 User denied git ...（带 reason 时就是 reason）', async () => {
     withGitSafety()
     const denied = makeTool(async () => ({ kind: 'ask', allowed: false }))
-    await expect(denied.execute('a6', { action: 'init' })).rejects.toThrow('User denied git init')
+    expect(await failureText(executeTool(denied, 'a6', { action: 'init' }))).toContain(
+      'User denied git init'
+    )
     expect(existsSync(join(state.workingDirectory, '.git'))).toBe(false)
 
     const withReason = makeTool(async () => ({
@@ -249,7 +278,9 @@ describe('桌面 makeDesktopAskOp', () => {
       allowed: false,
       reason: '这个目录不要建仓库'
     }))
-    await expect(withReason.execute('a7', { action: 'init' })).rejects.toThrow('这个目录不要建仓库')
+    expect(await failureText(executeTool(withReason, 'a7', { action: 'init' }))).toContain(
+      '这个目录不要建仓库'
+    )
   })
 })
 
@@ -264,11 +295,11 @@ describe('桌面 enforceGitOp 透传', () => {
       return { kind: 'ask', allowed: true }
     })
 
-    await tool.execute('p1', { action: 'checkout', ref: 'main' })
-    await tool.execute('p2', { action: 'checkout', ref: 'main', force: true })
-    await tool.execute('p3', { action: 'branch', name: 'feat' }) // 建并切换
-    await tool.execute('p4', { action: 'checkout', ref: 'main' })
-    await tool.execute('p5', { action: 'branch', name: 'feat', delete: true })
+    await executeTool(tool, 'p1', { action: 'checkout', ref: 'main' })
+    await executeTool(tool, 'p2', { action: 'checkout', ref: 'main', force: true })
+    await executeTool(tool, 'p3', { action: 'branch', name: 'feat' }) // 建并切换
+    await executeTool(tool, 'p4', { action: 'checkout', ref: 'main' })
+    await executeTool(tool, 'p5', { action: 'branch', name: 'feat', delete: true })
 
     // 客体属性逐字段透传（gitAction / command / force / delete）
     expect(state.gitOps).toEqual([
@@ -295,11 +326,11 @@ describe('桌面 enforceGitOp 透传', () => {
     )
     const tool = makeTool(requestUserInput)
 
-    await tool.execute('q1', { action: 'restore', paths: ['a.txt'] })
+    await executeTool(tool, 'q1', { action: 'restore', paths: ['a.txt'] })
     expect(nodeFs.readFileSync(join(wd, 'a.txt'), 'utf8')).toBe('first\n')
-    await tool.execute('q2', { action: 'branch', name: 'feat' })
-    await tool.execute('q3', { action: 'checkout', ref: 'main', force: true })
-    await tool.execute('q4', { action: 'branch', name: 'feat', delete: true })
+    await executeTool(tool, 'q2', { action: 'branch', name: 'feat' })
+    await executeTool(tool, 'q3', { action: 'checkout', ref: 'main', force: true })
+    await executeTool(tool, 'q4', { action: 'branch', name: 'feat', delete: true })
 
     expect(state.gitOps.map((op) => op.gitAction)).toEqual([
       'restore',
@@ -320,7 +351,7 @@ describe('桌面 makeDesktopResolveDir', () => {
     nodeFs.writeFileSync(join(repo, 'a.txt'), 'hi\n')
 
     const tool = makeTool(async () => ({ kind: 'ask', allowed: true }))
-    const out = await tool.execute('r1', { action: 'add', dir: 'sub', paths: ['a.txt'] })
+    const out = await executeTool(tool, 'r1', { action: 'add', dir: 'sub', paths: ['a.txt'] })
 
     expect(textOf(out)).not.toContain('Error')
     // 相对 dir 归一到工作目录内的仓库，且暂存真的发生了
@@ -336,7 +367,7 @@ describe('桌面 makeDesktopResolveDir', () => {
     nodeFs.writeFileSync(join(outside, 'a.txt'), 'hi\n')
 
     const tool = makeTool(async () => ({ kind: 'ask', allowed: true }))
-    const out = await tool.execute('r2', { action: 'add', dir: outside, paths: ['a.txt'] })
+    const out = await executeTool(tool, 'r2', { action: 'add', dir: outside, paths: ['a.txt'] })
 
     expect(textOf(out)).not.toContain('Error')
     expect(state.writeGuard).toEqual([{ path: outside, displayPath: outside }])
@@ -347,10 +378,33 @@ describe('桌面 makeDesktopResolveDir', () => {
     const outside = makeRepo()
 
     const tool = makeTool(async () => ({ kind: 'ask', allowed: true }))
-    await tool.execute('r3', { action: 'status', dir: outside })
+    await executeTool(tool, 'r3', { action: 'status', dir: outside })
 
     expect(state.readGuard).toEqual([{ path: outside, displayPath: outside }])
     expect(state.writeGuard).toEqual([])
+  })
+})
+
+describe('桌面 git 的调用归属', () => {
+  it('GIT-14: durable 的 taskId / conversationId 随 toolCallId 一起交给工作目录外的路径守卫与 enforceGitOp（P1-06）', async () => {
+    const outside = makeRepo()
+    nodeFs.writeFileSync(join(outside, 'a.txt'), 'hi\n')
+    const tool = makeTool(async () => ({ kind: 'ask', allowed: true }))
+
+    await invokeTool(
+      tool,
+      { action: 'add', dir: outside, paths: ['a.txt'] },
+      { callId: 'call_0', taskId: 31, conversationId: 2 }
+    )
+    await invokeTool(tool, { action: 'status', dir: outside }, { callId: 'call_0', taskId: 32 })
+
+    expect(state.owners).toEqual([
+      { pep: 'write', toolCallId: 'call_0', taskId: 31, conversationId: 2 },
+      { pep: 'gitOp', toolCallId: 'call_0', taskId: 31, conversationId: 2 },
+      // invokeTool 缺省根对话（1）
+      { pep: 'read', toolCallId: 'call_0', taskId: 32, conversationId: 1 },
+      { pep: 'gitOp', toolCallId: 'call_0', taskId: 32, conversationId: 1 }
+    ])
   })
 })
 

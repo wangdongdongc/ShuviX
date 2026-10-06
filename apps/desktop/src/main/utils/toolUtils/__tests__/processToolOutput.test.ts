@@ -1,6 +1,7 @@
 /**
  * DPO —— 桌面这一层给共享内核注入的那个落盘口（fs 写 `<userData>/tool_results/<会话>/<调用>.txt`），
- * 以及**要不要注入**这个开关（`spill`）。
+ * 以及**要不要注入**这个开关（`spill`）。内核是 agent-runtime 的 `processToolOutput`；下面的
+ * `processToolOutput` 辅助按 `spill` 决定给不给它这个落盘口（P1-13 之前它是本模块导出的桌面包装）。
  *
  * 分界只有一条，但它决定模型看到的是指路还是死路：落盘之后正文里写的是「全文在这个路径，用 read
  * 取」—— 手里没有 read 的 agent 取不回来，于是宿主可以按 agent 关掉落盘，让它至少拿到截断上限
@@ -27,10 +28,33 @@ import {
   truncateKeepStart,
   truncateKeepEnd,
   formatSize,
+  processToolOutput as sharedProcessToolOutput,
   DEFAULT_MAX_LINES,
-  DEFAULT_MAX_BYTES
+  DEFAULT_MAX_BYTES,
+  type ProcessToolOutputResult,
+  type TruncateStrategy
 } from '@shuvix/agent-runtime'
-import { processToolOutput, spillFileName } from '../processToolOutput'
+import { desktopSpillSink, spillFileName } from '../processToolOutput'
+
+/** 内核 + 本层的落盘口；`spill: false` 不给落盘口（只在内存里截断），缺省给 */
+function processToolOutput(opts: {
+  sessionId: string
+  toolCallId: string
+  fullText: string
+  strategy: TruncateStrategy
+  maxLines?: number
+  maxBytes?: number
+  spill?: boolean
+}): Promise<ProcessToolOutputResult> {
+  return sharedProcessToolOutput({
+    toolCallId: opts.toolCallId,
+    fullText: opts.fullText,
+    strategy: opts.strategy,
+    maxLines: opts.maxLines,
+    maxBytes: opts.maxBytes,
+    sink: opts.spill === false ? undefined : desktopSpillSink(opts.sessionId)
+  })
+}
 
 const byteLen = (s: string): number => new TextEncoder().encode(s).length
 const resultsDir = (sessionId: string): string => join(USER_DATA_DIR, 'tool_results', sessionId)
@@ -260,5 +284,26 @@ describe('SFN spillFileName —— toolCallId 来自模型提供商，不能原�
 
   it('SFN-5 空 id 有兜底名', () => {
     expect(spillFileName('')).toBe('tool-call.txt')
+  })
+})
+
+// DPO-S —— 桌面落盘口本身（durable 工具包装器经它落盘；「要不要落」的惰性判断在 agent-runtime 的
+// wrapDurableOutput 里，由那边的 WD-7 / WD-8 / WD-10 / WD-11 钉 —— 原先这里的 DPO-L1..L3 随判断一起搬走）。
+describe('DPO-S desktopSpillSink', () => {
+  it('DPO-S1 write → 交回 tool_results/<会话>/<id>.txt 的绝对路径，文件里逐字是全文（原 DPO-L4 的落盘一半）', async () => {
+    const sid = 'dpo-s1'
+    const res = await desktopSpillSink(sid).write('tc', BIG)
+    expect(res).toEqual({ locator: join(resultsDir(sid), 'tc.txt') })
+    expect(readFileSync(res!.locator, 'utf-8')).toBe(BIG)
+  })
+
+  it('DPO-S2 只造不写不建目录；provider 给的 id 照 spillFileName 收拾，落点仍在会话目录里', async () => {
+    const sid = 'dpo-s2'
+    const sink = desktopSpillSink(sid)
+    expect(existsSync(resultsDir(sid))).toBe(false)
+
+    const res = await sink.write('../../escape', 'x')
+    expect(resolve(res!.locator).startsWith(resolve(resultsDir(sid)) + sep)).toBe(true)
+    expect(res!.locator.endsWith(spillFileName('../../escape'))).toBe(true)
   })
 })

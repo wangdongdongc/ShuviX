@@ -8,7 +8,8 @@
  *     审查员自己要权限）时一次都不发 —— 否则卡片会闪一下「审查中」；
  *   - 子会话的广播落在子会话自己的 id 上（卡片在那里），不是顶层会话。
  *
- * 替身：hookService / messageService / sessionRecords / settingsService / logger / frontend/core；
+ * 替身：hookService / messageService / sessionRecords / settingsService / logger / frontend/core / sessionHost
+ * （会话行不带 storageKind = 旧格式路径，转写经 messageService；碰到 SessionHost 即路由错了）；
  * @shuvix/agent-runtime 用真的（决策日志与卡片反馈是进程级 Map —— 每条用例用自己的会话 id，afterEach 清掉）。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -46,6 +47,13 @@ vi.mock('../hookService', () => ({
 }))
 vi.mock('../messageService', () => ({
   messageService: { listBySession: mocks.listBySession }
+}))
+// 这里的会话行都不带 storageKind（= 旧格式）：转写走 messageService。durable 路径另有用例
+// （permissionReviewDurable / sessionTriggerFactsDurable），这里碰到 SessionHost 就是路由错了
+vi.mock('../sessionHost', () => ({
+  getSessionHost: () => {
+    throw new Error('legacy-path tests must not reach the session host')
+  }
 }))
 vi.mock('../sessionRecords', () => ({ sessionRecords: { pick: mocks.pick } }))
 vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))
@@ -118,10 +126,11 @@ function makeEvent(
   }
 }
 
-const reviewEvent = (sessionId: string, reviewing: boolean): unknown => ({
+const reviewEvent = (sessionId: string, reviewing: boolean, taskId?: number): unknown => ({
   type: 'tool_review',
   sessionId,
   toolCallId: 'tc-1',
+  ...(taskId === undefined ? {} : { taskId }),
   reviewing
 })
 
@@ -241,6 +250,47 @@ describe('reviewPermissionRequest — 「审查中」的一对广播', () => {
       reviewEvent('SUB', true),
       reviewEvent('SUB', false)
     ])
+  })
+
+  it('P2-08-31 事件带 taskId 61 → 两条广播都带 taskId（toolCallId 照旧）', async () => {
+    mocks.decide.mockResolvedValue(null)
+    await reviewPermissionRequest({ ...makeEvent(), toolCallId: 'call_0', taskId: 61 })
+    expect(mocks.broadcast.mock.calls.map(([e]) => e)).toStrictEqual([
+      { type: 'tool_review', sessionId: 'S', toolCallId: 'call_0', taskId: 61, reviewing: true },
+      { type: 'tool_review', sessionId: 'S', toolCallId: 'call_0', taskId: 61, reviewing: false }
+    ])
+  })
+
+  it('P2-08-31 两个并发的审查、都是 call_0、taskId 61 与 62 → 两对广播，各带各的 taskId', async () => {
+    const pending: Array<(value: DecideResult) => void> = []
+    mocks.decide.mockImplementation(
+      () => new Promise<DecideResult>((resolve) => pending.push(resolve))
+    )
+    const first = reviewPermissionRequest({ ...makeEvent(), toolCallId: 'call_0', taskId: 61 })
+    const second = reviewPermissionRequest({ ...makeEvent(), toolCallId: 'call_0', taskId: 62 })
+    await flush()
+    expect(pending).toHaveLength(2)
+    pending[1]!(null)
+    await second
+    pending[0]!(null)
+    await first
+    const events = mocks.broadcast.mock.calls.map(
+      ([e]) => e as { taskId?: number; reviewing: boolean }
+    )
+    expect(events.map((e) => [e.taskId, e.reviewing])).toEqual([
+      [61, true],
+      [62, true],
+      [62, false],
+      [61, false]
+    ])
+  })
+
+  it('P2-08-31 没有 taskId → 事件里没有 taskId 这个键（RV-1 的形状不变）', async () => {
+    mocks.decide.mockResolvedValue(null)
+    await reviewPermissionRequest(makeEvent())
+    for (const [event] of mocks.broadcast.mock.calls) {
+      expect('taskId' in (event as object)).toBe(false)
+    }
   })
 
   it('RV-9 传入的 signal 原样交给 decide；abort 之后 decide reject，false 照发', async () => {

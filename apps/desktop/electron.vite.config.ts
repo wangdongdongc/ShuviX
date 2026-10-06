@@ -25,13 +25,17 @@ export default defineConfig({
       }
     },
     build: {
-      // pi-ai/pi-agent-core 0.58+ 是纯 ESM（exports 无 require 条件），
+      // pi-ai / pi-durable / chord 1.0 是纯 ESM（exports 无 require 条件），
       // 必须内联打包，否则 Electron CJS require 会报 ERR_PACKAGE_PATH_NOT_EXPORTED。
+      // 三者因此都记为 devDependencies（裁决 Q19；pi-ai 于 P4-08b 跟进）：生产依赖会被 electron-builder
+      // 连同依赖树抄进 asar —— chord 依赖的 esbuild（带原生二进制，只给 chord/bundler 用）、pi-ai 依赖的
+      // openai / @anthropic-ai/sdk / @google/genai / @aws-sdk 等 SDK（已内联进 out/main）运行时都用不到。
       // @shuvix/agent-runtime 经别名解析为源码内联，无需在此列出。
       externalizeDeps: {
         exclude: [
           '@earendil-works/pi-ai',
-          '@earendil-works/pi-agent-core',
+          '@earendil-works/pi-durable',
+          '@earendil-works/chord',
           '@marcbachmann/cel-js',
           // 知识库（OKF）依赖：okf-minisearch 纯 ESM 必须内联；core-okf 是 agent-runtime 的依赖
           // （工作区 devDependency 的依赖不会被 electron-builder 收进 asar），同样内联

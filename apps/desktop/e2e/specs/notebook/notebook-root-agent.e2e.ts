@@ -19,6 +19,7 @@ import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   createAgentSession,
   createProject,
+  ensureDefaultModel,
   promptAndListMessages,
   stampAgentProfile,
   writeAgentMd
@@ -37,6 +38,7 @@ const runtimeInfo = (sid: string): Promise<{ systemPrompt: string; tools: { name
 
 beforeAll(async () => {
   app = await launchApp()
+  await ensureDefaultModel(app.main)
   const projDir = join(app.home, 'proj-notebook-agent')
   mkdirSync(join(projDir, 'notes'), { recursive: true })
   writeFileSync(join(projDir, 'notes', 'e2e-note.md'), '# E2E note\n\nSeed body.\n')

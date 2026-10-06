@@ -1,683 +1,594 @@
 /**
- * 派生 Agent 协调器（跨端共享核心）。
+ * 派生 agent 路由（P2-05）—— 宿主无关，跨端共享。
  *
- * 所有 agent 地位对等：派生 agent 与会话根 agent 共用同一条统一创建管线
- * （agentProfile/createAgent 的 factory，kind='spawned' → 内存会话树，销毁即消失）。
- * 本文件只负责 spawn 协调：深度校验（MAX_AGENT_DEPTH）、登记（AgentRegistry，
- * 父子关系唯一事实来源 —— pi 的 SessionMetadata 刻意不含血缘字段，这层簿记是对 pi
- * 的补充而非重复）、结果抽取、abort/interrupt 传播（含级联子树）、追问（continueTask）。
+ * 派生 agent 本身住在它的 durable 会话里（`session.agents`，durable/spawn.ts 的 SpawnCoordinator：子对话、
+ * 拥有者边、等待、崩溃恢复、结果抽取、结果契约都在那里）。本文件只做**进程内的呈现与路由**：
  *
- * 平台相关项全部经注入：agent 创建(createAgent，宿主 factory)、事件广播(broadcast)、
- * 询问/询问通道(requestUserInput，路由到根会话前端)。
+ *  - **会话 → 协调器**：`runTask` 按 `sessionId` 找到打开着的会话（`sessions.get`；派发工具总在打开的会话里
+ *    跑），把这一次派发交给 `session.agents.spawn`。
+ *  - **广播**：子 agent 建好（或重跑时重新挂上）的那一刻（`onCreated`）发 `sub_session_register`，每一轮
+ *    收尾发 `sub_session_end`（`result` 与交回调用方的文本逐字相同）。追问不另发事件（P3-08：面板的转写走
+ *    agent 视图）；结果契约的追问（nudge）不广播（PIN-06）。
+ *  - **任务登记**：每个子 agent 在 taskRegistry 里一条 `'agent'` 任务，taskId = agentId，归属可见会话
+ *    （嵌套派生也一样）；停 = 软停止（interrupt）。每条路径都要落定 —— 没落定的任务会把会话钉在 LRU 里。
+ *  - **agentId 索引**：agentId → (sessionId, conversationId)，进程内。面板的追问 / 中断 / 销毁、agent 视图
+ *    （SyncHub 的 `resolveAgent`）按 agentId 找到会话与子对话。两条来源：派发时的 `onCreated`（权威，覆盖），
+ *    以及**会话打开时的重建**（P3-14，`indexSession`：宿主的 `onSessionOpened` 交进来）—— 从这条会话
+ *    AgentDirectory 缓存里的派生记录（`spawnedRecords()`）补上还没有的条目。重建是惰性的：只读缓存，不提交、
+ *    不装扩展、不广播、不登记任务（重启之后面板没有新行，C2；重建只服务路由与视图）。
+ *  - **墓碑**（PIN-11）：本进程里 `destroy` 过的 agentId 再也不被重建收回（会话 LRU 关了再开也一样）；跨进程
+ *    不记 —— 重启之后它又可路由（转写还在，只是扩展被卸了）。
+ *  - **关闭原因**：`onSessionClosed(id, 'remove')`（LRU / 显式 / 全部关闭）留着索引；`'destroy'`（删除 /
+ *    清空：存储没了或换了）丢掉这条会话的全部条目（只这一条会话的）。
+ *  - **忙**：路由自己记哪个 agentId 正在跑（PIN-08），忙时追问在任何广播之前就拒绝。
+ *
+ * 成败只判一处（`settleOf`）：结果契约捕获 > 中止 > 软停止（PIN-05）。中止 = 派发工具的 signal 落下或协调器
+ * 交回 `error: 'aborted'` → 任务 `killed`、`isError: true`、文本换成 `getAbortedNote()`（软停止标记在时保留
+ * 部分结果）；模型报错 → `error`；其余 → `done`。
+ *
+ * 拥有者（P2-08 接上宿主派发）：
+ *  - `{tool}` = 模型调派发工具（派发工具把自己这次调用的 scope 交进来），会话按 `get` 找（派发工具总在打开的
+ *    会话里跑）；
+ *  - `{task}` = 判定型 hook（权限审查，Q16）：子对话归提问的那个工具任务；`{anchor}` = 观察型 hook（起标题）
+ *    与没有 taskId 的判定：子对话归一个后台锚任务。宿主派发按 `get`、退而 `peek` 找会话，**从不 open**
+ *    （存储没了 = 一个带原因的失败，PIN-08）；模型取 `modelConfig`（hook 的运行模型），取消在 `signal` 上 ——
+ *    落下时协调器中止子对话（PIN-05）。登记 / 广播 / 任务条目与工具派发同一套，只是没有 `parentToolCallId`。
  */
-import type { Agent, AgentMessage, AgentToolResult, Session } from '@earendil-works/pi-agent-core'
-import { v4 as uuid } from 'uuid'
+import type { Context } from '@earendil-works/chord'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
-import { isAssistantMessage } from '../messageGuards'
-import { AgentRegistry, agentIdOf } from '../agentRegistry'
-import type { HarnessSession } from '../harness/harnessSession'
-import type { AgentFactory } from '../agentProfile/createAgent'
-import type { InProcessAgentType, SubAgentModelConfig } from './types'
-import type { RuntimeLogger } from '../types'
+import type { DurableSession } from '../durable/durableSession'
+import type { SessionHost } from '../durable/sessionHost'
+import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
+import type { SpawnCreatedInfo, SpawnOutcome, SpawnOwner, SpawnParams } from '../durable/spawn'
 import type { TaskRegistry } from '../task/registry'
-import {
-  NextTool,
-  NEXT_NUDGE_TEXT,
-  buildResultContractNote,
-  validateContractSchema,
-  type ResultContract
-} from './nextTool'
+import type { ToolCallScope } from '../tools/toolCall'
+import type { RuntimeLogger } from '../types'
+import type { ResultContract } from './nextTool'
+import type { InProcessAgentType, SubAgentModelConfig } from './types'
 
-type AnyAgentTool = Agent['state']['tools'][number]
-
-/**
- * 默认派生层级上限：根会话 depth=0，其派生 agent depth=1，再派生 depth=2。
- * 超过上限的 spawn 被拒绝（错误文本返回给调用方 LLM）。宿主可经 deps.maxAgentDepth 覆盖。
- */
-export const DEFAULT_MAX_AGENT_DEPTH = 2
-
-/** 提取一组 Agent 消息的纯文本（用于把注入的 context 消息原样回显到面板卡片） */
-function agentMessagesToText(messages: AgentMessage[]): string {
-  return messages
-    .map((m) => {
-      const c = 'content' in m ? (m as { content: unknown }).content : undefined
-      if (typeof c === 'string') return c
-      if (Array.isArray(c)) {
-        return c
-          .filter((p): p is { type: 'text'; text: string } => {
-            const part = p as { type?: string; text?: unknown }
-            return part.type === 'text' && typeof part.text === 'string'
-          })
-          .map((p) => p.text)
-          .join('\n')
-      }
-      return ''
-    })
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-/**
- * spawn 上下文 —— 传给 resolveTools 的本次派生身份信息。
- * 宿主据此把派发工具（Agent）也注入派生 agent 的工具集：parentSessionId 用 agentId
- * （嵌套派生的子代挂在本 agent 名下），深度校验由 manager 在下一次 spawn 时统一执行。
- */
-export interface SpawnContext {
-  /** 本次派生 agent 的事件频道 id */
-  agentId: string
-  /** 本次派生 agent 的层级（根会话的直接派生 = 1） */
-  depth: number
-  /** 派生来源 agent 的 id（可能本身也是派生 agent）—— 运行时注册中心据此还原血缘 */
-  parentAgentId: string
-  /** 所属根会话 id（工具路径询问/LLM 日志归属） */
-  rootSessionId: string
-  /** 本次派生使用的模型配置（宿主为其派发工具沿用） */
-  modelConfig: SubAgentModelConfig
-  /** 本 agent 是否还允许继续派发（depth < maxAgentDepth）；false 时宿主应省略派发工具 */
-  canSpawn: boolean
-}
-
-/**
- * 传给 resolveTools 的运行期辅助能力（manager 按派发上下文绑定后注入）。
- *
- * requestUserInput：派生 agent 工具可达**根会话**的用户输入通道——询问/询问表单出现在
- * 根会话对话流中，由用户作答后回流，与主 Agent 亲自调用 ask/路径询问完全等效。
- * 仅当宿主向 SubAgentManagerDeps 注入了 requestUserInput 时存在。
- */
-export interface SubAgentToolHelpers {
-  requestUserInput?: (req: InputRequest) => Promise<InputResponse>
-}
+// ─────────────────────────── 公共类型 ───────────────────────────
 
 export interface SubAgentManagerDeps {
-  /**
-   * 统一创建管线（宿主 agentFactory.createAgent）。manager 以 kind='spawned' 调用：
-   * 工具解析/模型构建/apiKey/LLM 日志/内存会话树全部收敛在 factory 与宿主 HostAdapter 内。
-   */
-  createAgent: AgentFactory['createAgent']
-  /**
-   * 根会话用户输入通道（可选）。注入后 manager 把它绑定 rootSessionId 经
-   * SubAgentToolHelpers 传给 createAgent（→ 宿主 resolveTools），使派生 agent 工具
-   * （ask/路径询问等）可挂起等待用户作答。不注入时 helpers.requestUserInput 为 undefined。
-   */
-  requestUserInput?: (rootSessionId: string, req: InputRequest) => Promise<InputResponse>
+  /** 会话宿主的两样（PIN-19）：`runTask` 只用 `get`；面板追问在会话关着时用 `peek`（从不 open） */
+  sessions: Pick<SessionHost, 'get' | 'peek'>
   /** 向前端广播 ChatEvent */
   broadcast: (event: ChatEvent) => void
-  /** 日志（可选） */
-  logger?: RuntimeLogger
-  /** abort 时工具调用展示的文案（懒解析以反映当前 i18n 语言；缺省英文） */
-  getAbortedNote?: () => string
-  /** 派生层级上限（缺省 DEFAULT_MAX_AGENT_DEPTH） */
-  maxAgentDepth?: number
   /**
-   * 后台任务枢纽（可选）。注入后每次派生都在那里登记一条任务 —— 面板因此能与 bash、
-   * 子会话同列一张表。**taskId 就是 agentId**（它已经是事件频道），不另发明一套。
-   * 不注入时本协调器行为不变（扩展端暂未接入）。
+   * 后台任务枢纽（可选）。注入后每个子 agent 在那里登记一条任务 —— 面板因此能与 bash、子会话同列一张表。
+   * **taskId 就是 agentId**（它已经是事件频道）。不注入时其余行为不变。
    */
   tasks?: TaskRegistry
+  /** 日志（可选） */
+  logger?: RuntimeLogger
+  /** 中止时交回的文案（懒解析以反映当前 i18n 语言；缺省英文） */
+  getAbortedNote?: () => string
+  /**
+   * 宿主的「这条会话的信号接好了没有」（可选；从不拒绝）。面板追问与宿主派发在驱动会话之前等它 —— 会话可能
+   * 刚被 peek 打开（重启之后的追问正是如此），宿主的生命周期投影还没挂上，这一轮的 `agent_start` 就没人发
+   * （桌面：`sessionSignalsReady`，P3-08 PIN-09 的同一张表）。缺省不等
+   */
+  sessionReady?: (sessionId: string) => Promise<void>
 }
 
+/** 模型调派发工具：子对话由这次工具调用的任务拥有 */
+export interface RunTaskToolOwner {
+  readonly tool: ToolCallScope
+}
+
+/** 宿主派发（reviewer）：子对话由提问的工具任务拥有（durable taskId，Q16） */
+export interface RunTaskTaskOwner {
+  readonly task: number
+}
+
+/** 宿主派发（观察型 hook，或没有 taskId 的判定）：子对话由一个后台锚任务拥有 */
+export interface RunTaskAnchorOwner {
+  readonly anchor: true
+}
+
+/** 宿主派发的 hook 身份：名字进派生 agent 记录（`hook`），runId 定任务提交的 requestId（`hook:<runId>`） */
+export interface RunTaskHook {
+  readonly name: string
+  readonly runId: string
+}
+
+export type RunTaskOwner = RunTaskToolOwner | RunTaskTaskOwner | RunTaskAnchorOwner
+
 export interface RunTaskParams {
-  parentSessionId: string
-  parentToolCallId?: string
+  /** 派发发生在哪条会话里（嵌套派发也是根会话的 id，从不是 agentId） */
+  sessionId: string
+  /** 子对话的拥有者 */
+  owner: RunTaskOwner
   agentType: InProcessAgentType
   prompt: string
   description: string
-  modelConfig: SubAgentModelConfig
   /**
-   * prompt 中的内联 Token（slash 命令 / skill）字典。提供时：发给 Agent 的文本经 resolveTokensForAgent
-   * 解析为真实指令（展开模板），而 prompt 原文（含 marker）随 sub_session_register 广播供面板渲染标签。
+   * 宿主派发的基准模型（hook 的运行模型：`provider` 是 pi provider id，PIN-06）与思考档位；缺省会话锁的。
+   * 工具派发从不给 —— 调用方模型现取自 `api.agent()`
    */
-  promptInlineTokens?: Record<string, InlineToken>
-  parentAbortSignal?: AbortSignal
+  modelConfig?: SubAgentModelConfig
+  /** 宿主派发的 hook（工具派发没有） */
+  hook?: RunTaskHook
   /**
-   * 在 prompt 之前预置进派生 agent 上下文的消息（调用方注入额外背景材料的通用口）。
-   * 这些消息进 LLM 上下文。其文本会随 sub_session_register 的 contextNote 广播给面板，
-   * 故面板的上下文卡片即这些消息的真实内容（与实际发给 LLM 的 UserMessage 一致，不再另传 raw）。
-   */
-  contextMessages?: AgentMessage[]
-  /**
-   * 结果契约（可选）：声明后派生 agent 获得一个按 schema 现造的 `next` 工具（extraTools
-   * 注入，经宿主与内置工具同样包装），任务 prompt 末尾追加契约段，要求以恰好一次 `next`
-   * 调用收尾 —— 合规调用即捕获：软停止本 agent（interrupt 语义），返回值的 `structured`
-   * 为捕获对象。run 自然结束却没调 next 时补救追问 `nudges` 次（缺省 1），仍无捕获则
-   * `structured` 为 undefined，由调用方决定成败。见 subagent/nextTool.ts。
+   * 结果契约（可选）：子 agent 多一个按 schema 现造的 `next` 工具，任务 prompt 末尾追加契约段；捕获即成功，
+   * `structured` 为捕获对象。schema 不合法 → `runTask` 以 `invalid result contract: …` 拒绝。见 subagent/nextTool.ts。
    */
   resultContract?: ResultContract
-  /**
-   * 追加到派生 agent 系统提示词末尾的上下文块（已围栏；透传 `CreateAgentParams.systemContext`）。
-   * bot 管线用它把 bot 的人设与记忆带给这次 run 里的每一个 agent；manager 不解释内容。
-   */
-  systemContext?: readonly string[]
+  /** 派发它的那次工具调用的 provider id（面板把子 agent 内联到那张工具卡片里） */
+  parentToolCallId?: string
+  /** 宿主派发的取消信号：落下即中止子对话（PIN-05）。工具派发的取消在 `owner.tool.signal` 上 */
+  signal?: AbortSignal
 }
 
 /** 一次派发（runTask）的结果 */
 export interface RunTaskOutcome {
-  /** 恒为文本：无契约 = 转写抽取（带 stopReason / error 注记）；有契约且捕获 = 捕获对象的 JSON 文本 */
+  /** 恒为文本：转写抽取（带注记）；结果契约捕获 = 捕获对象的 JSON 文本；中止 = 中止文案；被拒 = 拒绝原因 */
   result: string
   /** 仅在结果契约捕获成功时存在 */
   structured?: unknown
   /**
-   * 这一轮以失败收尾时的机器可读原因：被中止（`'aborted'`）、执行抛错（execError 原话）、或模型调用
-   * 报错（最后一条 assistant 的 stopReason 为 error，取其 errorMessage）。软停止（interrupt）不算失败，
-   * 但同一轮又被中止时按中止算；结果契约捕获恒为成功。
-   * `result` 文本里照样有这些信息 —— 这个字段给不读散文的调用方（hook runner）判成败；
-   * 与 `sub_session_end.isError`、任务落定态 `error` 是同一个判定（turnError）。
+   * 失败的机器可读原因：`'aborted'`、模型报错原文、拒绝原因（深度 / 建不起来）。软停止与捕获不算失败。
+   * 与 `sub_session_end.isError`、任务落定态是同一个结论。
    */
   error?: string
+  /** 子对话建成之后才有（没有 = 子 agent 根本没建起来） */
+  conversationId?: number
+  agentId?: string
+}
+
+export interface SubAgentLocation {
+  sessionId: string
+  conversationId: number
 }
 
 export interface SubAgentManager {
-  /**
-   * 跑一个一次性派发任务。`result` 恒为文本（无契约 = 转写抽取；有契约且捕获 =
-   * 捕获对象的 JSON 文本）；`structured` 仅在结果契约捕获成功时存在。
-   */
+  /** 跑一次派发并等它的回答（被拒 / 失败都在结果里；只有 schema 不合法以拒绝报告） */
   runTask: (params: RunTaskParams) => Promise<RunTaskOutcome>
   /**
-   * 继续与一个已存在派生 agent 对话：复用其 Agent（保留历史）追加一轮 user prompt（fire-and-forget）。
-   * 面板先收到 user_message（后续用户消息内联到转写），随后流式事件如常，末了再发 sub_session_end。
-   * 派生 agent 不存在或已中止时抛错。
+   * 面板追问一个已有的子 agent（agent:subAgentPrompt）：不认识 → `Sub-session not found`；正在跑 →
+   * `Sub-session is busy`（在任何广播之前）；会话关着 → `peek` 重开；存储没了 → not found 并丢掉索引。
+   * 这一轮收尾广播 `sub_session_end`（追问本身不广播，P3-08）；这一轮自己失败不拒绝。
    */
   continueTask: (params: {
     subSessionId: string
     text: string
     inlineTokens?: Record<string, InlineToken>
   }) => Promise<void>
+  /** 软停止一个在跑的子 agent（保留部分结果、按「已完成」收尾）。不认识 / 空闲 / 会话关着 → 无操作（从不打开会话） */
+  interrupt: (agentId: string) => Promise<void>
+  /** 销毁：在跑就硬中止、卸掉它的扩展、丢掉索引与任务条目（转写留着）。会话关着只丢索引；不认识 → 无操作 */
+  destroy: (agentId: string) => Promise<void>
+  /** 索引里有没有这个 agentId（同步） */
+  has: (agentId: string) => boolean
+  /** agentId 在哪条会话的哪个子对话（同步；不打开会话） */
+  locate: (agentId: string) => SubAgentLocation | undefined
+  /** 派生 agent 的运行时快照（会话的 `agentInfo`）。不认识 / 已销毁 / 会话关着 → null（从不打开会话） */
+  getRuntimeInfo: (agentId: string) => Promise<AgentRuntimeInfo | null>
   /**
-   * 用户中断一个运行中的派生 agent：停止当前生成但保留已产出的部分结果，按「已完成」收尾
-   * （区别于 abort/destroy 的失败/销毁语义——条目保留在面板，用户可继续追问或显式删除）。
+   * 会话打开时重建索引（P3-14；宿主的 `onSessionOpened` 每次真正打开调一次）：这条会话的派生记录里**还没有
+   * 条目**的 agentId 补进来（已有的 —— 派发的 `onCreated` 记下的 —— 原样留着，连同它的运行标记）；本进程
+   * 销毁过的跳过（PIN-11）。同步、只读缓存：不提交、不装扩展、不广播、不登记任务。写坏了的记录不在
+   * `spawnedRecords()` 里（目录打开时已经警告过一次），这里不再记。
    */
-  interrupt: (subSessionId: string) => void
-  /** 中止某 agent 的全部后代（级联子树） */
-  abortAll: (parentSessionId: string) => void
-  /** 销毁某 agent 的全部后代（级联子树） */
-  destroyAll: (parentSessionId: string) => void
-  destroy: (subSessionId: string) => void
-  has: (subSessionId: string) => boolean
+  indexSession: (session: DurableSession) => void
   /**
-   * 派生 agent 的运行时快照（systemPrompt / 模型 / 已装载工具）—— 智能体监控页展开某条
-   * 派生 agent 时按需拉取。root agent 的同名信息由各宿主的会话服务给出；这里补上派生这一半，
-   * 因为派生运行时只活在本协调器的 map 里（没有会话行，宿主够不到）。不存在时返回 null。
+   * 会话关掉了（宿主的 `onSessionClosed`）：`'remove'` 什么都不做（索引熬过 LRU）；`'destroy'`（删除 / 清空）
+   * 丢掉这条会话的全部条目、运行标记与墓碑。
    */
-  getRuntimeInfo: (subSessionId: string) => Promise<AgentRuntimeInfo | null>
-  /** 父子关系登记簿（层级/归属查询，只读使用） */
-  readonly registry: AgentRegistry
+  onSessionClosed: (sessionId: string, reason: 'remove' | 'destroy') => void
 }
 
-interface SpawnedAgent {
-  agentId: string
-  profile: InProcessAgentType
-  /** 内存态会话树（上下文真理源；随 destroy 消失） */
-  piSession: Session
-  runtime: HarnessSession
-  /** 从运行时注册中心注销（destroy 时调用） */
-  dispose: () => void
-  aborted: boolean
-  /** 用户主动中断（软停止）：保留部分结果、按「已完成」收尾，区别于 aborted 的失败态 */
-  interrupted: boolean
+// ─────────────────────────── 实现 ───────────────────────────
+
+interface IndexEntry extends SubAgentLocation {
+  /** register 里的那个父：派生调用方 = 它的 agentId，根 = 会话 id（PIN-15） */
+  parentSessionId: string
+  /** 任务条目被清掉之后追问重建它用 */
+  displayName: string
+  profileName: string
+  depth: number
 }
 
-/**
- * 一轮收尾的成败判定，全模块只此一处：`sub_session_end.isError`、任务落定态与 `RunTaskOutcome.error`
- * 都读它的返回值（失败原因；undefined = 成功）。软停止（interrupt）不算失败；中止、执行抛错、
- * 模型调用报错都算 —— 最后一种 pi 落成一条 stopReason 为 error 的 assistant 消息，`prompt()` 并不返回
- * error，所以只能从会话树尾部认。契约补救（nudge）也读它：出错的一轮不追问。结果契约捕获在
- * finishTurn 里先行返回、恒为成功，不经这里。
- */
-function turnError(
-  session: Pick<SpawnedAgent, 'aborted' | 'interrupted'>,
-  messages: AgentMessage[],
-  execError: string | undefined
-): string | undefined {
-  // 中止优先于软停止：同一轮里既被软停止又被中止（面板先停、父级再中止），按中止算 ——
-  // 否则任务落定为 killed 而 isError 为 false，三处结论对不上。结果文本仍按软停止抽取
-  if (session.aborted) return 'aborted'
-  if (session.interrupted) return undefined
-  if (execError) return execError
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
-    if (!isAssistantMessage(msg)) continue
-    if (msg.stopReason !== 'error') return undefined
-    return msg.errorMessage || 'model call failed (stopReason=error)'
-  }
-  return undefined
+type SettleStatus = 'done' | 'error' | 'killed'
+
+interface Verdict {
+  status: SettleStatus
+  outcome: RunTaskOutcome
 }
 
-/** 创建一个派生 agent 协调器（注入端适配依赖） */
+const DEFAULT_ABORTED_NOTE = 'Aborted by user.'
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/** 创建派生 agent 路由（注入端适配依赖） */
 export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManager {
-  const abortedNote = (): string => deps.getAbortedNote?.() || 'Aborted by user.'
-  const maxDepth = deps.maxAgentDepth ?? DEFAULT_MAX_AGENT_DEPTH
-  const registry = new AgentRegistry()
-  const sessions = new Map<string, SpawnedAgent>()
+  const abortedNote = (): string => deps.getAbortedNote?.() || DEFAULT_ABORTED_NOTE
+  const index = new Map<string, IndexEntry>()
+  /** 正在跑一轮的 agentId（派发等待 / 面板追问；PIN-08） */
+  const running = new Set<string>()
+  /** 这一轮被软停止的 agentId（PIN-05 的文本：中止时保留部分结果） */
+  const soft = new Set<string>()
+  /** 本进程里销毁过的 agentId → 它的会话（PIN-11：重建不收回；会话被删 / 清空时一起丢） */
+  const tombstones = new Map<string, string>()
 
-  function extractResult(messages: AgentMessage[], execError?: string): string {
-    let lastText = ''
-    let lastStopReason = ''
-    let lastErrorMessage = ''
-    let assistantCount = 0
-    let toolUseCount = 0
-    for (const msg of messages) {
-      if (!isAssistantMessage(msg)) continue
-      assistantCount++
-      if (msg.stopReason) lastStopReason = msg.stopReason
-      if (msg.errorMessage) lastErrorMessage = msg.errorMessage
-      if (typeof msg.content === 'string') {
-        if (msg.content) lastText = msg.content
-      } else if (Array.isArray(msg.content)) {
-        for (const part of msg.content) {
-          if (part.type === 'text' && part.text) lastText = part.text
-          else if (part.type === 'toolCall') toolUseCount++
-        }
-      }
+  /**
+   * 一轮收尾的成败（全模块只此一处）：捕获 > 中止 > 软停止 / 成功（PIN-05）。`aborted` = 派发工具的
+   * signal 落下（面板追问没有）或协调器交回 `'aborted'`。
+   */
+  function settleOf(raw: SpawnOutcome, aborted: boolean, wasSoft: boolean): Verdict {
+    const ids = {
+      ...(raw.conversationId === undefined ? {} : { conversationId: raw.conversationId }),
+      ...(raw.agentId === undefined ? {} : { agentId: raw.agentId })
     }
-
-    if (lastText) {
-      const notes: string[] = []
-      if (lastStopReason && lastStopReason !== 'stop') notes.push(`stopReason=${lastStopReason}`)
-      if (lastErrorMessage) notes.push(`error=${lastErrorMessage}`)
-      if (execError) notes.push(`execError=${execError}`)
-      return notes.length > 0 ? `${lastText}\n\n[Note] ${notes.join('; ')}` : lastText
+    if (raw.structured !== undefined) {
+      return { status: 'done', outcome: { result: raw.result, structured: raw.structured, ...ids } }
     }
-
-    const parts: string[] = []
-    parts.push(
-      `Agent did not produce a final text response (${assistantCount} assistant message(s), ${toolUseCount} tool call(s)).`
-    )
-    if (lastStopReason) parts.push(`stopReason=${lastStopReason}.`)
-    if (lastErrorMessage) parts.push(`Model errorMessage: ${lastErrorMessage}.`)
-    if (execError) parts.push(`Execution threw: ${execError}.`)
-    return parts.join(' ')
+    if (aborted || raw.error === 'aborted') {
+      const result = wasSoft ? raw.result : abortedNote()
+      return { status: 'killed', outcome: { result, error: 'aborted', ...ids } }
+    }
+    if (raw.error !== undefined) {
+      return { status: 'error', outcome: { result: raw.result, error: raw.error, ...ids } }
+    }
+    return { status: 'done', outcome: { result: raw.result, ...ids } }
   }
 
-  async function createSession(params: {
-    parentSessionId: string
-    parentToolCallId?: string
-    agentType: InProcessAgentType
-    description: string
-    modelConfig: SubAgentModelConfig
-    contextMessages?: AgentMessage[]
-    extraTools?: readonly AnyAgentTool[]
-    systemContext?: readonly string[]
-  }): Promise<SpawnedAgent> {
-    const {
-      parentSessionId,
-      parentToolCallId,
-      agentType,
-      description,
-      modelConfig,
-      contextMessages,
-      extraTools,
-      systemContext
-    } = params
-
-    // ── 深度校验：唯一的层级控制点（派发工具全员可用，越界在此拒绝） ──
-    const depth = registry.depthOf(parentSessionId) + 1
-    if (depth > maxDepth) {
-      throw new Error(
-        `Agent depth limit reached (max ${maxDepth}): this agent is already at depth ${depth - 1} and cannot spawn further agents. Complete the task directly instead.`
-      )
-    }
-    const rootSessionId = registry.rootSessionOf(parentSessionId)
-    const agentId = agentIdOf(uuid())
-
-    const helpers: SubAgentToolHelpers = {
-      requestUserInput: deps.requestUserInput
-        ? (req) => deps.requestUserInput!(rootSessionId, req)
-        : undefined
-    }
-    const spawn: SpawnContext = {
-      agentId,
-      depth,
-      parentAgentId: parentSessionId,
-      rootSessionId,
-      modelConfig,
-      canSpawn: depth < maxDepth
-    }
-
-    // 统一创建管线：kind='spawned' → 内存会话树 / stub env / 事件汇包装 /
-    // LLM 日志归根会话等差异全部由 factory 决策表落定（见 agentProfile/createAgent）
-    const created = await deps.createAgent({
-      kind: 'spawned',
-      sessionId: agentId,
-      profile: agentType,
-      model: modelConfig,
-      // 派发方的档位（缺省 'off'）；档案声明了 `shuvix-thinking` 时由 createAgent 以档案为准
-      thinkingLevel: modelConfig.thinkingLevel ?? 'off',
-      cwd: '',
-      spawn,
-      spawnHelpers: helpers,
-      extraTools,
-      systemContext
-    })
-    const runtime = created.runtime
-    const piSession = runtime.session
-
-    // 预置上下文（如笔记本正文）直接落 entry —— 进 LLM 上下文，且不触发任何事件广播。
-    // （构造后追加与旧「构造前追加」时序等价：harness 每轮 prompt 时才 buildContext 读树）
-    if (contextMessages) {
-      for (const msg of contextMessages) await piSession.appendMessage(msg)
-    }
-
-    const session: SpawnedAgent = {
-      agentId,
-      profile: agentType,
-      piSession,
-      runtime,
-      dispose: () => created.dispose(),
-      aborted: false,
-      interrupted: false
-    }
-    sessions.set(agentId, session)
-    registry.register({
-      agentId,
-      parentAgentId: parentSessionId,
-      depth,
-      profileName: agentType.name,
-      displayName: agentType.displayName,
-      description
-    })
-
-    deps.tasks?.create({
-      taskId: agentId,
-      kind: 'agent',
-      // 归属**可见**会话：嵌套派生不落在中间那层身上
-      sessionId: rootSessionId,
-      title: agentType.displayName,
-      subject: { kind: 'agent', profileName: agentType.name, depth, parentToolCallId },
-      // 停 = 软停止（保留已产出的部分结果、按「已完成」收尾），与面板上那枚中断按钮同义
-      stop: () => interrupt(agentId)
-      // 刻意不给 formatNotice：派生 agent 目前恒为同步等待，结果由那次调用交回。
-      // 异步挂起形态（S3）连同通知文案一起加。
-    })
-
-    deps.logger?.info(
-      `Spawned agent=${agentId} profile=${agentType.name} parent=${parentSessionId} depth=${depth} root=${rootSessionId}`
-    )
-    return session
-  }
-
-  /** 跑一轮（prompt → 完成），返回本轮 execError（错误已消化并广播，不抛出） */
-  async function runTurn(session: SpawnedAgent, promptText: string): Promise<string | undefined> {
-    const { error } = await session.runtime.prompt(promptText)
-    if (error) deps.logger?.error(`Agent ${session.agentId} error: ${error}`)
-    return error
-  }
-
-  /** 一轮结束后的收尾：抽取结果 + 广播 sub_session_end。契约捕获成功时结果即捕获值的 JSON */
-  async function finishTurn(
-    session: SpawnedAgent,
+  function broadcastEnd(
+    agentId: string,
     parentSessionId: string,
-    execError: string | undefined,
-    captured?: { hit: boolean; value?: unknown }
-  ): Promise<RunTaskOutcome> {
-    // 契约捕获：结果以捕获值为准 —— 捕获后紧跟软停止，树尾部（部分消息/中止痕迹）不代表结果
-    if (captured?.hit) {
-      const result = JSON.stringify(captured.value, null, 2)
-      deps.tasks?.settle(session.agentId, { status: 'done' })
-      deps.broadcast({
-        type: 'sub_session_end',
-        sessionId: session.agentId,
-        parentSessionId,
-        result,
-        isError: false
-      })
-      return { result, structured: captured.value }
-    }
-
-    // 上下文真理源是内存会话树（含 harness 落进去的失败消息）
-    const messages = (await session.piSession.buildContext()).messages
-    const result = session.interrupted
-      ? extractResult(messages)
-      : session.aborted
-        ? abortedNote()
-        : extractResult(messages, execError)
-    // 成败只判一处（turnError）：面板的 isError、任务落定态、runTask 的 error 读同一个结论。
-    // 模型调用报错（provider 500 之类）也算失败 —— 它不经 prompt() 返回，只落在会话树尾部
-    const error = turnError(session, messages, execError)
-    const isError = error !== undefined
-
-    deps.tasks?.settle(session.agentId, {
-      // 中止是失败态，软停止不是（保留部分结果、按「已完成」收尾）
-      status: session.aborted ? 'killed' : isError ? 'error' : 'done'
-    })
+    result: string,
+    isError: boolean
+  ): void {
     deps.broadcast({
       type: 'sub_session_end',
-      sessionId: session.agentId,
+      sessionId: agentId,
       parentSessionId,
       result,
       isError
     })
-    return error ? { result, error } : { result }
   }
 
-  function interrupt(subSessionId: string): void {
-    const s = sessions.get(subSessionId)
-    if (!s) return
-    // 软停止：标记为「用户中断」，harness.abort 终结在飞工具调用并停止当前生成。
-    // 登记保留 —— runTask/continueTask 的 prompt 解除后照常广播 sub_session_end
-    // （isError=false），条目保留在面板供继续追问或显式删除。
-    s.interrupted = true
-    void s.runtime.abort()
+  /** 任务条目：没有就建、落定了就重开、在跑就复用（PIN-14） */
+  function ensureTask(
+    agentId: string,
+    sessionId: string,
+    title: string,
+    subject: { profileName: string; depth: number; parentToolCallId?: string }
+  ): void {
+    const tasks = deps.tasks
+    if (tasks === undefined) return
+    const existing = tasks.get(agentId)
+    if (existing === undefined) {
+      tasks.create({
+        taskId: agentId,
+        kind: 'agent',
+        sessionId,
+        title,
+        subject: { kind: 'agent', ...subject },
+        // 停 = 软停止（保留已产出的部分结果、按「已完成」收尾），与面板上那枚中断按钮同义
+        stop: () =>
+          interrupt(agentId).catch((error: unknown) => {
+            deps.logger?.warn(`interrupting agent ${agentId} failed: ${errorText(error)}`)
+          })
+        // 刻意不给 formatNotice：派发恒为同步等待，结果由那次调用交回；面板追问的结果在面板里
+      })
+    } else if (existing.endedAt !== null) {
+      tasks.reopen(agentId)
+    }
   }
 
-  function abortOne(s: SpawnedAgent): void {
-    s.aborted = true
-    void s.runtime.abort()
+  function parentOf(session: DurableSession, conversationId: number, sessionId: string): string {
+    const identity = session.agentIdentity(conversationId)
+    return identity?.kind === 'spawned' && identity.callerId ? identity.callerId : sessionId
   }
 
-  function destroy(subSessionId: string): void {
-    const s = sessions.get(subSessionId)
-    if (!s) return
-    // 先级联销毁子树（后代挂在本 agent 名下）
-    for (const child of registry.childrenOf(subSessionId)) destroy(child.agentId)
-    void s.runtime.abort()
-    s.dispose()
-    sessions.delete(subSessionId)
-    registry.unregister(subSessionId)
-    // 任务条目随之消失（用户从面板关掉了这条）。先落定再销：还在跑的那次
-    // runTask 正挂在这条任务上等着，条目一删它就再也等不到了
-    deps.tasks?.settle(subSessionId, { status: 'killed' })
-    deps.tasks?.dismiss(subSessionId)
+  /** 一次派发怎么落进会话：协调器的拥有者、它的 Context、宿主派发的参数、「被中止了吗」 */
+  interface Dispatch {
+    session: DurableSession
+    owner: SpawnOwner
+    context: Context
+    hosted?: SpawnParams['hosted']
+    aborted: () => boolean
+  }
+
+  async function toolDispatch(
+    params: RunTaskParams,
+    scope: ToolCallScope
+  ): Promise<Dispatch | RunTaskOutcome> {
+    const session = deps.sessions.get(params.sessionId)
+    if (session === undefined) {
+      const text = `Session is not open: ${params.sessionId}`
+      return { result: text, error: text }
+    }
+    return {
+      session,
+      owner: { tool: scope.api },
+      context: scope.context,
+      aborted: () => scope.signal?.aborted === true || params.signal?.aborted === true
+    }
+  }
+
+  async function hostDispatch(
+    params: RunTaskParams,
+    owner: RunTaskTaskOwner | RunTaskAnchorOwner
+  ): Promise<Dispatch | RunTaskOutcome> {
+    const { sessionId, modelConfig, hook, signal } = params
+    // 打开着的优先；关着就 peek（存储在才打开，从不创建，PIN-08）
+    const session = deps.sessions.get(sessionId) ?? (await deps.sessions.peek(sessionId))
+    if (session === undefined) {
+      const text = `Session not found: ${sessionId}`
+      return { result: text, error: text }
+    }
+    await deps.sessionReady?.(sessionId)
+    const hosted: NonNullable<SpawnParams['hosted']> = {
+      ...(modelConfig === undefined
+        ? {}
+        : { model: { provider: modelConfig.provider, modelId: modelConfig.model } }),
+      ...(modelConfig?.thinkingLevel === undefined
+        ? {}
+        : { thinkingLevel: modelConfig.thinkingLevel }),
+      ...(hook === undefined ? {} : { hook: hook.name, requestId: `hook:${hook.runId}` })
+    }
+    return {
+      session,
+      owner: 'task' in owner ? { task: owner.task } : { anchor: true },
+      // 宿主的取消信号绑进 Context：落下时协调器的等待被打断、随即中止子对话（PIN-05）
+      context:
+        signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT),
+      hosted,
+      aborted: () => signal?.aborted === true
+    }
+  }
+
+  async function run(params: RunTaskParams, dispatch: Dispatch): Promise<RunTaskOutcome> {
+    const { sessionId, agentType, prompt, description, parentToolCallId, resultContract } = params
+    const { session } = dispatch
+    /** register 里的父：派生调用方 = 它的 agentId，根 = 会话 id（建好时按子对话的父对话认） */
+    let parentSessionId = sessionId
+
+    /** 这一次 runTask 里已登记的 agentId（onCreated 可能来两次：重新挂上，PIN-14） */
+    let created: string | undefined
+    let joined: Promise<unknown> | undefined
+
+    const onCreated = (info: SpawnCreatedInfo): void => {
+      const { agentId } = info
+      parentSessionId = parentOf(session, info.parentConversationId, sessionId)
+      // 重新挂上 = 它又活了（墓碑只拦重建，不拦派发）
+      tombstones.delete(agentId)
+      index.set(agentId, {
+        sessionId,
+        conversationId: info.conversationId,
+        parentSessionId,
+        displayName: info.displayName,
+        profileName: agentType.name,
+        depth: info.depth
+      })
+      running.add(agentId)
+      deps.broadcast({
+        type: 'sub_session_register',
+        sessionId: agentId,
+        parentSessionId,
+        ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
+        subAgentName: agentType.name,
+        displayName: info.displayName,
+        description: info.description,
+        systemPrompt: agentType.systemPrompt,
+        prompt,
+        depth: info.depth,
+        rootSessionId: sessionId
+      })
+      ensureTask(agentId, sessionId, info.displayName, {
+        profileName: agentType.name,
+        depth: info.depth,
+        ...(parentToolCallId === undefined ? {} : { parentToolCallId })
+      })
+      if (created !== agentId) {
+        created = agentId
+        // 同步等待：把等待者挂在任务上 —— 落定时「还有人在等」，枢纽因此不发完成通知
+        joined = deps.tasks?.join(agentId)
+      }
+      deps.logger?.info(
+        `${info.reattached ? 'Re-attached' : 'Spawned'} agent=${agentId} profile=${agentType.name} session=${sessionId} conversation=${info.conversationId} depth=${info.depth}${params.hook === undefined ? '' : ` hook=${params.hook.name}`}`
+      )
+    }
+
+    const finish = async (
+      agentId: string,
+      status: SettleStatus,
+      result: string,
+      isError: boolean
+    ): Promise<void> => {
+      running.delete(agentId)
+      soft.delete(agentId)
+      deps.tasks?.settle(agentId, { status })
+      broadcastEnd(agentId, parentSessionId, result, isError)
+      await joined
+    }
+
+    let raw: SpawnOutcome
+    try {
+      raw = await session.agents.spawn(
+        {
+          owner: dispatch.owner,
+          profile: agentType,
+          prompt,
+          description,
+          ...(resultContract === undefined ? {} : { resultContract }),
+          ...(dispatch.hosted === undefined ? {} : { hosted: dispatch.hosted }),
+          onCreated
+        },
+        dispatch.context
+      )
+    } catch (error) {
+      // 子 agent 已建好之后协调器抛了（不该发生；兜底）：照样落定、照样收尾，再原样抛出
+      if (created !== undefined) await finish(created, 'error', errorText(error), true)
+      throw error
+    }
+
+    // 子 agent 根本没建起来（深度 / 模型 / 解析失败；或重新挂上时记录坏了）：没有登记过任何东西，原样交回
+    // （不带子对话 id —— 派发工具据此把原因前缀 `Error:`，PIN-04）
+    const agentId = created
+    if (agentId === undefined) {
+      const { result, error } = raw
+      return error === undefined ? { result } : { result, error }
+    }
+    const verdict = settleOf(raw, dispatch.aborted(), soft.has(agentId))
+    await finish(agentId, verdict.status, verdict.outcome.result, verdict.status !== 'done')
+    return verdict.outcome
+  }
+
+  async function interrupt(agentId: string): Promise<void> {
+    const entry = index.get(agentId)
+    if (entry === undefined) return
+    // 会话关着 = 什么都没在跑（从不为中断打开会话，PIN-11）
+    const session = deps.sessions.get(entry.sessionId)
+    if (session === undefined) return
+    // 同步记下软停止（紧跟着的中止也要看得到它，ME-25）
+    if (running.has(agentId)) soft.add(agentId)
+    await session.agents.interrupt(entry.conversationId)
+  }
+
+  async function destroy(agentId: string): Promise<void> {
+    const entry = index.get(agentId)
+    if (entry === undefined) return
+    index.delete(agentId)
+    soft.delete(agentId)
+    // 墓碑（PIN-11）：会话关了再开，重建也不把它收回来
+    tombstones.set(agentId, entry.sessionId)
+    try {
+      const session = deps.sessions.get(entry.sessionId)
+      if (session !== undefined) await session.agents.destroy(entry.conversationId)
+    } finally {
+      // 任务条目随之消失（用户从面板关掉了这条）。先落定再销：还在跑的那次 runTask 正挂在这条任务上等着
+      deps.tasks?.settle(agentId, { status: 'killed' })
+      deps.tasks?.dismiss(agentId)
+    }
+  }
+
+  function indexSession(session: DurableSession): void {
+    const { sessionId } = session
+    for (const record of session.spawnedRecords()) {
+      const { agentId } = record
+      // 派发记下的条目是权威（P3-14-04）；本进程销毁过的不收回（PIN-11）
+      if (index.has(agentId) || tombstones.has(agentId)) continue
+      index.set(agentId, {
+        sessionId,
+        conversationId: record.conversationId,
+        parentSessionId: parentOf(session, record.parentConversationId, sessionId),
+        displayName: record.displayName,
+        profileName: record.profileName,
+        depth: record.depth
+      })
+    }
+  }
+
+  function onSessionClosed(sessionId: string, reason: 'remove' | 'destroy'): void {
+    // LRU / 显式 / 全部关闭：索引留着（P2-05-05），之后的追问 peek 重开
+    if (reason !== 'destroy') return
+    for (const [agentId, entry] of index) {
+      if (entry.sessionId !== sessionId) continue
+      index.delete(agentId)
+      running.delete(agentId)
+      soft.delete(agentId)
+    }
+    for (const [agentId, owner] of tombstones) {
+      if (owner === sessionId) tombstones.delete(agentId)
+    }
   }
 
   return {
-    registry,
-
     async runTask(params: RunTaskParams): Promise<RunTaskOutcome> {
-      const {
-        parentSessionId,
-        parentToolCallId,
-        agentType,
-        prompt,
-        description,
-        modelConfig,
-        parentAbortSignal,
-        contextMessages,
-        promptInlineTokens,
-        resultContract,
-        systemContext
-      } = params
-      // 面板「笔记本内容」卡片 = 实际注入的 context 消息文本（与发给 LLM 的 UserMessage 一致）
-      const contextNote = contextMessages?.length ? agentMessagesToText(contextMessages) : undefined
-
-      // 内联 Token（slash 命令 / skill）：prompt 原文（含 marker）用于面板展示标签；
-      // 发给 Agent 的文本经解析展开为真实指令（如 skill 模板正文）。
-      const hasTokens = promptInlineTokens && Object.keys(promptInlineTokens).length > 0
-      let llmPrompt = hasTokens ? resolveTokensForAgent(prompt, promptInlineTokens) : prompt
-
-      // ── 结果契约：next 工具（extraTools 注入）+ prompt 契约段 + 捕获通道 ──
-      // 收尾两层：next 的结果带 `terminate`，只调了 next 的那一批由 pi 直接结束循环、不再发请求
-      // （见 nextTool.ts）；next 与别的工具同批时 terminate 不成立，这里的软停止（interrupt 语义）
-      // 兜底 —— 结果以捕获值为准，树尾部的中止痕迹无关紧要。queueMicrotask 让 next 的成功
-      // tool result 先返回，再触发停止；对已经靠 terminate 结束的那一批，它只中止还没开始的东西。
-      const captured: { hit: boolean; value?: unknown } = { hit: false }
-      let extraTools: AnyAgentTool[] | undefined
-      // 前向引用：捕获回调在 agent 执行期才触发，届时 id 已就位
-      let capturedAgentId = ''
-      if (resultContract) {
-        const schemaError = validateContractSchema(resultContract.schema)
-        if (schemaError) throw new Error(`invalid result contract: ${schemaError}`)
-        const nextTool = new NextTool(resultContract.schema, (value) => {
-          captured.hit = true
-          captured.value = value
-          queueMicrotask(() => {
-            if (capturedAgentId) interrupt(capturedAgentId)
-          })
-        })
-        extraTools = [nextTool as unknown as AnyAgentTool]
-        llmPrompt = `${llmPrompt}\n\n${buildResultContractNote(resultContract)}`
-      }
-
-      // 不限制并发数量：可同时堆叠任意多个（面板纵向手风琴展示）；层级由深度校验约束
-      const session = await createSession({
-        parentSessionId,
-        parentToolCallId,
-        agentType,
-        description,
-        modelConfig,
-        contextMessages,
-        extraTools,
-        systemContext
-      })
-
-      deps.broadcast({
-        type: 'sub_session_register',
-        sessionId: session.agentId,
-        parentSessionId,
-        parentToolCallId,
-        subAgentName: agentType.name,
-        displayName: agentType.displayName,
-        description,
-        systemPrompt: agentType.systemPrompt,
-        prompt,
-        inlineTokens: hasTokens ? promptInlineTokens : undefined,
-        contextNote,
-        // 血缘由 AgentRegistry 唯一维护（HarnessSession 不再承载 depth/parent）
-        depth: registry.depthOf(session.agentId),
-        rootSessionId: registry.rootSessionOf(session.agentId)
-      })
-
-      capturedAgentId = session.agentId
-
-      // 同步等待形态：把等待者挂在任务上 —— 落定时「还有人在等」，枢纽因此不发完成通知
-      // （结果由本次调用交回）。outcome 本身用不上：派生 agent 的结果是转写抽取出来的，
-      // 不在任务快照里。异步挂起形态（S3）改的就是这里的等待策略。
-      const joined = deps.tasks?.join(session.agentId)
-
-      if (parentAbortSignal) {
-        if (parentAbortSignal.aborted) {
-          abortOne(session)
-        } else {
-          parentAbortSignal.addEventListener('abort', () => abortOne(session), { once: true })
-        }
-      }
-
-      let execError = await runTurn(session, llmPrompt)
-
-      // 契约补救：run 自然结束却没调 next → 追问 nudges 次（缺省 1）。
-      // 中止/出错不追问；捕获会置 interrupted（软停止），故以 captured.hit 先行判定。
-      if (resultContract && !captured.hit) {
-        const nudges = resultContract.nudges ?? 1
-        for (
-          let i = 0;
-          i < nudges && !captured.hit && !session.aborted && !session.interrupted && !execError;
-          i++
-        ) {
-          // 模型调用报错也是「出错」：它不经 prompt() 返回，只落在会话树尾部（与 finishTurn 同一个判定）
-          const tail = (await session.piSession.buildContext()).messages
-          if (turnError(session, tail, execError)) break
-          // 面板转写连贯：与 continueTask 同形广播这条追问（用户可见自动化的补救动作）
-          deps.broadcast({
-            type: 'user_message',
-            sessionId: session.agentId,
-            message: JSON.stringify({
-              id: `${session.agentId}-user-${Date.now()}`,
-              sessionId: session.agentId,
-              role: 'user' as const,
-              type: 'text' as const,
-              content: NEXT_NUDGE_TEXT,
-              metadata: null,
-              model: '',
-              createdAt: Date.now()
-            })
-          })
-          execError = await runTurn(session, NEXT_NUDGE_TEXT)
-        }
-      }
-
-      const outcome = await finishTurn(session, parentSessionId, execError, captured)
-      await joined
-      return outcome
+      const { owner } = params
+      const dispatch =
+        'tool' in owner ? await toolDispatch(params, owner.tool) : await hostDispatch(params, owner)
+      if (!('session' in dispatch)) return dispatch
+      return run(params, dispatch)
     },
 
-    async continueTask(params: {
-      subSessionId: string
-      text: string
-      inlineTokens?: Record<string, InlineToken>
-    }): Promise<void> {
-      const { subSessionId, text, inlineTokens } = params
-      const session = sessions.get(subSessionId)
-      if (!session) throw new Error(`Sub-session not found: ${subSessionId}`)
-      if (session.aborted) throw new Error(`Sub-session already aborted: ${subSessionId}`)
-      // 新一轮追问：清除上一轮的「用户中断」标记
-      session.interrupted = false
-      // 面板里那条任务行代表的是**这个 agent**（不是它的某一轮），追问让它回到运行态
-      deps.tasks?.reopen(subSessionId)
-      const parentSessionId = registry.get(subSessionId)?.parentAgentId ?? ''
+    async continueTask(params): Promise<void> {
+      const { subSessionId: agentId, text, inlineTokens } = params
+      const entry = index.get(agentId)
+      if (entry === undefined) throw new Error(`Sub-session not found: ${agentId}`)
+      if (running.has(agentId)) throw new Error(`Sub-session is busy: ${agentId}`)
+      running.add(agentId)
+      let session: DurableSession | undefined
+      try {
+        session = deps.sessions.get(entry.sessionId) ?? (await deps.sessions.peek(entry.sessionId))
+        // 刚被 peek 打开（重启之后的追问）：等宿主的信号接好，这一轮的生命周期才有人发（P3-14-12）
+        if (session !== undefined) await deps.sessionReady?.(entry.sessionId)
+      } catch (error) {
+        running.delete(agentId)
+        throw error
+      }
+      if (session === undefined) {
+        // 存储没了（会话被删）：这个 agentId 再也到不了
+        running.delete(agentId)
+        index.delete(agentId)
+        throw new Error(`Sub-session not found: ${agentId}`)
+      }
 
-      // 内联 Token（slash 命令等）：前端已展开，后端解析为发给 Agent 的真实文本；
-      // 原始标记文本 + tokens 落入消息 metadata，供面板渲染 slash 命令标签（与主会话同形）。
-      const hasTokens = inlineTokens && Object.keys(inlineTokens).length > 0
+      // 面板那条任务行代表的是**这个 agent**（不是它的某一轮），追问让它回到运行态
+      ensureTask(agentId, entry.sessionId, entry.displayName, {
+        profileName: entry.profileName,
+        depth: entry.depth
+      })
+
+      // 内联 Token（slash 命令等）：发给 agent 的是解析后的文本。追问不再广播 `user_message`（P3-08：
+      // ChatEvent 只剩余项）—— 面板经 agent 视图看到它（P3-14 接面板，PIN-07）
+      const hasTokens = inlineTokens !== undefined && Object.keys(inlineTokens).length > 0
       const promptText = hasTokens ? resolveTokensForAgent(text, inlineTokens) : text
 
-      // 后续用户消息广播到面板（与主会话 user_message 同形 → 内联进子会话转写）
-      const userMsg = {
-        id: `${subSessionId}-user-${Date.now()}`,
-        sessionId: subSessionId,
-        role: 'user' as const,
-        type: 'text' as const,
-        content: text,
-        metadata: hasTokens ? { inlineTokens } : null,
-        model: '',
-        createdAt: Date.now()
+      let verdict: Verdict
+      try {
+        const raw = await session.agents.continue(entry.conversationId, promptText)
+        verdict = settleOf(raw, false, soft.has(agentId))
+      } catch (error) {
+        verdict = {
+          status: 'error',
+          outcome: { result: errorText(error), error: errorText(error) }
+        }
       }
-      deps.broadcast({
-        type: 'user_message',
-        sessionId: subSessionId,
-        message: JSON.stringify(userMsg)
-      })
-
-      const execError = await runTurn(session, promptText)
-      await finishTurn(session, parentSessionId, execError)
-    },
-
-    abortAll(parentSessionId: string): void {
-      for (const entry of registry.descendantsOf(parentSessionId)) {
-        const s = sessions.get(entry.agentId)
-        if (s) abortOne(s)
-      }
-    },
-
-    destroyAll(parentSessionId: string): void {
-      for (const child of registry.childrenOf(parentSessionId)) destroy(child.agentId)
+      running.delete(agentId)
+      soft.delete(agentId)
+      deps.tasks?.settle(agentId, { status: verdict.status })
+      broadcastEnd(
+        agentId,
+        entry.parentSessionId,
+        verdict.outcome.result,
+        verdict.status !== 'done'
+      )
     },
 
     interrupt,
 
     destroy,
 
-    has(subSessionId: string): boolean {
-      return sessions.has(subSessionId)
+    indexSession,
+
+    onSessionClosed,
+
+    has(agentId: string): boolean {
+      return index.has(agentId)
     },
 
-    async getRuntimeInfo(subSessionId: string): Promise<AgentRuntimeInfo | null> {
-      const session = sessions.get(subSessionId)
-      return session ? await session.runtime.getRuntimeInfo() : null
+    locate(agentId: string): SubAgentLocation | undefined {
+      const entry = index.get(agentId)
+      return entry === undefined
+        ? undefined
+        : { sessionId: entry.sessionId, conversationId: entry.conversationId }
+    },
+
+    async getRuntimeInfo(agentId: string): Promise<AgentRuntimeInfo | null> {
+      const entry = index.get(agentId)
+      if (entry === undefined) return null
+      // 会话关着 = 没有在内存里的 agent（从不为查询打开会话，PIN-11；也不 peek）
+      const session = deps.sessions.get(entry.sessionId)
+      if (session === undefined || session.closed) return null
+      return (await session.agentInfo(entry.conversationId)) ?? null
     }
   }
 }
-
-export type { AnyAgentTool, AgentToolResult }

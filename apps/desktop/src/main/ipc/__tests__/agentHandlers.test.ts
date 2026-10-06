@@ -7,7 +7,17 @@
  *   ML-U-8b 网关 reject → handler reject（不吞成 success，否则前端永远以为写进去了）；
  *   ML-U-8c `agent:destroy` 调 `destroyAgent(sid)`，等它落定才回 `{ success: true }`；
  *   ML-U-8d `tools:list` 原样转发 `(sessionId, options)` —— 欢迎页的 `(undefined, {profile:'chat'})`
- *           与会话里的 `(sid)` 都一样。
+ *           与会话里的 `(sid)` 都一样；
+ *   P2-05-39 派生 agent 的三个面板 IPC 按 agentId 交给路由：追问 fire-and-forget、中断 / 销毁等路由做完，
+ *           路由的拒绝都只记日志（PIN-17）。
+ *   P3-13-19 `agentMonitor:list` 把服务的结果原样交回（每行都是纯 JSON）。
+ *   P3-06-31 `agent:getInfo` 在 `createElectronContext(sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
+ *           网关；网关的 null 原样交回。
+ *   P3-12-07 `agent:continue` 在 `createElectronContext(sessionId)` 里把 sessionId 交给网关，等它落定才回（PIN-17）；
+ *           `{}` → `{success:true}`，`{error, code}` → `{success:false, error, code}`。
+ *   P3-08-60 `agent:respondToInput` 带上答题方 `ipc:<webContentsId>`（PIN-20），只交给网关，回 {success:true}。
+ *   P3-11-07 `agent:withdrawQueued` 在 `createElectronContext(sessionId)` 的上下文里把 `(sessionId, submissionId)`
+ *           交给网关，回 `{ result }`；「下一轮」的通道不再注册。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -21,9 +31,21 @@ const state = vi.hoisted(() => ({
   gateway: {
     setModel: vi.fn<(sessionId: string, ...rest: unknown[]) => Promise<boolean>>(),
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
-    listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>()
+    listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
+    getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>(),
+    respondToInput: vi.fn(),
+    withdrawQueued: vi.fn<(sessionId: string, submissionId: number) => Promise<string>>(),
+    continue: vi.fn<(sessionId: string) => Promise<{ error?: string; code?: string }>>()
   },
-  contexts: [] as unknown[]
+  contexts: [] as unknown[],
+  /** operationContext.run 的嵌套深度（>0 = 在请求上下文里） */
+  runDepth: 0,
+  router: {
+    continueTask: vi.fn<(params: unknown) => Promise<void>>(),
+    interrupt: vi.fn<(agentId: string) => Promise<void>>(),
+    destroy: vi.fn<(agentId: string) => Promise<void>>()
+  },
+  warn: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -35,7 +57,16 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../frontend', () => ({
   chatGateway: state.gateway,
-  operationContext: { run: (_ctx: unknown, fn: () => unknown) => fn() },
+  operationContext: {
+    run: (_ctx: unknown, fn: () => unknown) => {
+      state.runDepth++
+      try {
+        return fn()
+      } finally {
+        state.runDepth--
+      }
+    }
+  },
   createElectronContext: (sessionId?: string) => {
     state.contexts.push(sessionId)
     return { sessionId }
@@ -43,14 +74,17 @@ vi.mock('../../frontend', () => ({
 }))
 vi.mock('../../services/toolRegistry', () => ({ getBuiltinToolPresentations: vi.fn(() => ({})) }))
 vi.mock('../../services/agentToolBuilder', () => ({ getBuiltinToolDefinitions: vi.fn(() => []) }))
-vi.mock('../../agents/AgentManager', () => ({
-  agentManager: { continueTask: vi.fn(), destroy: vi.fn(), interrupt: vi.fn() }
+vi.mock('../../agents/AgentManager', () => ({ agentManager: state.router }))
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ info: () => {}, warn: state.warn, error: () => {} })
 }))
 vi.mock('../../services/agentMonitorService', () => ({
   getAgentRuntimeDetail: vi.fn(),
-  listAgentRuntimes: vi.fn(() => [])
+  listAgentRuntimes: vi.fn(async () => [])
 }))
 
+import type { AgentMonitorEntry } from '@shuvix/chat-protocol/types/agentMonitor'
+import { listAgentRuntimes } from '../../services/agentMonitorService'
 import { registerAgentHandlers } from '../agentHandlers'
 
 registerAgentHandlers()
@@ -134,5 +168,250 @@ describe('ML-U-8d tools:list', () => {
     await invoke('tools:list', SID)
     expect(state.gateway.listTools.mock.calls[0]).toEqual([SID, undefined])
     expect(state.contexts).toEqual([SID])
+  })
+})
+
+describe('P3-06-31 agent:getInfo', () => {
+  const INFO = { systemPrompt: 'p', tools: [], messageCount: 0, isStreaming: false }
+
+  beforeEach(() => {
+    state.gateway.getAgentInfo.mockReset()
+  })
+
+  it('P3-06-31 (sessionId, options) 原样交给网关，且在 createElectronContext(sessionId) 的上下文里', async () => {
+    const depths: number[] = []
+    state.gateway.getAgentInfo.mockImplementation(async () => {
+      depths.push(state.runDepth)
+      return INFO
+    })
+    await expect(invoke('agent:getInfo', SID, { ensure: true })).resolves.toEqual(INFO)
+    await expect(invoke('agent:getInfo', SID)).resolves.toEqual(INFO)
+    expect(state.gateway.getAgentInfo.mock.calls).toEqual([
+      [SID, { ensure: true }],
+      [SID, undefined]
+    ])
+    expect(depths).toEqual([1, 1])
+    expect(state.contexts).toEqual([SID, SID])
+  })
+
+  it('P3-06-31 网关答 null → null；网关 reject → handler reject', async () => {
+    state.gateway.getAgentInfo.mockResolvedValue(null)
+    await expect(invoke('agent:getInfo', SID, { ensure: true })).resolves.toBeNull()
+    state.gateway.getAgentInfo.mockRejectedValue(new Error('tool host exploded'))
+    await expect(invoke('agent:getInfo', SID, { ensure: true })).rejects.toThrow(
+      'tool host exploded'
+    )
+  })
+})
+
+describe('P3-11-07 agent:withdrawQueued', () => {
+  it('P3-11-07 (sessionId, submissionId) 交给网关、在请求上下文里；回 { result }', async () => {
+    const depths: number[] = []
+    state.gateway.withdrawQueued.mockReset().mockImplementation(async () => {
+      depths.push(state.runDepth)
+      return 'already_placed'
+    })
+    await expect(
+      invoke('agent:withdrawQueued', { sessionId: SID, submissionId: 4 })
+    ).resolves.toEqual({ result: 'already_placed' })
+    expect(state.gateway.withdrawQueued.mock.calls).toEqual([[SID, 4]])
+    expect(depths).toEqual([1])
+    expect(state.contexts).toEqual([SID])
+  })
+
+  it('P3-11-07 「下一轮」的通道不再注册（Q-P3-09）', () => {
+    expect([...state.handlers.keys()].filter((channel) => /turn/i.test(channel))).toEqual([])
+    expect(state.handlers.has('agent:withdrawQueued')).toBe(true)
+  })
+})
+
+describe('P2-05-39 派生 agent 面板 IPC 按 agentId 交给路由', () => {
+  const TOKENS = { t1: { kind: 'skill', name: 'pdf' } }
+
+  beforeEach(() => {
+    state.router.continueTask.mockReset().mockResolvedValue(undefined)
+    state.router.interrupt.mockReset().mockResolvedValue(undefined)
+    state.router.destroy.mockReset().mockResolvedValue(undefined)
+    state.warn.mockReset()
+  })
+
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('agent:subAgentPrompt 同步答 {success:true}，continueTask 恰一次、参数原样', async () => {
+    let settle!: () => void
+    state.router.continueTask.mockReturnValue(new Promise<void>((resolve) => (settle = resolve)))
+    const answer = invoke('agent:subAgentPrompt', {
+      subSessionId: 'sub-1',
+      text: 't',
+      inlineTokens: TOKENS
+    })
+    // 不 await 整轮：处理函数直接交回结果对象，不是 Promise
+    expect(answer).toEqual({ success: true })
+    expect(state.router.continueTask).toHaveBeenCalledTimes(1)
+    expect(state.router.continueTask).toHaveBeenCalledWith({
+      subSessionId: 'sub-1',
+      text: 't',
+      inlineTokens: TOKENS
+    })
+    settle()
+  })
+
+  it('agent:subAgentPrompt 的 continueTask 拒绝：不成为未处理的拒绝，只记一条日志', async () => {
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      state.router.continueTask.mockRejectedValue(new Error('Sub-session is busy: sub-1'))
+      expect(invoke('agent:subAgentPrompt', { subSessionId: 'sub-1', text: 't' })).toEqual({
+        success: true
+      })
+      await flush()
+      await flush()
+      expect(unhandled).not.toHaveBeenCalled()
+      expect(state.warn).toHaveBeenCalledTimes(1)
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+  })
+
+  it.each([
+    ['subSession:interrupt', 'interrupt'],
+    ['subSession:destroy', 'destroy']
+  ] as const)(
+    '%s 把 agentId 交给路由一次、等它做完再答 {success:true}',
+    async (channel, method) => {
+      let settle!: () => void
+      state.router[method].mockReturnValue(new Promise<void>((resolve) => (settle = resolve)))
+      let answered = false
+      const pending = Promise.resolve(invoke(channel, 'sub-1')).then((value) => {
+        answered = true
+        return value
+      })
+      await flush()
+      expect(state.router[method]).toHaveBeenCalledTimes(1)
+      expect(state.router[method]).toHaveBeenCalledWith('sub-1')
+      expect(answered).toBe(false)
+      settle()
+      expect(await pending).toEqual({ success: true })
+    }
+  )
+
+  it.each([
+    ['subSession:interrupt', 'interrupt'],
+    ['subSession:destroy', 'destroy']
+  ] as const)(
+    '%s 路由拒绝 → 照样答 {success:true}（PIN-17），记一条日志',
+    async (channel, method) => {
+      state.router[method].mockRejectedValue(new Error('boom'))
+      expect(await invoke(channel, 'sub-1')).toEqual({ success: true })
+      expect(state.warn).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('三个处理函数都不打开会话、不碰网关', async () => {
+    invoke('agent:subAgentPrompt', { subSessionId: 'sub-1', text: 't' })
+    await invoke('subSession:interrupt', 'sub-1')
+    await invoke('subSession:destroy', 'sub-1')
+    expect(state.gateway.setModel).not.toHaveBeenCalled()
+    expect(state.gateway.destroyAgent).not.toHaveBeenCalled()
+    expect(state.gateway.listTools).not.toHaveBeenCalled()
+    expect(state.contexts).toEqual([])
+  })
+})
+
+describe('P3-08-60 agent:respondToInput 带上答题方', () => {
+  it('webContents 7 的应答 → 网关收到 clientId ipc:7；在请求上下文里；回 {success:true}', async () => {
+    const handler = state.handlers.get('agent:respondToInput')!
+    const response = { kind: 'ask', allowed: true }
+    await expect(
+      Promise.resolve(handler({ sender: { id: 7 } }, { sessionId: SID, requestId: 'r', response }))
+    ).resolves.toEqual({ success: true })
+    expect(state.gateway.respondToInput.mock.calls).toEqual([
+      [SID, 'r', response, { clientId: 'ipc:7' }]
+    ])
+    expect(state.contexts.at(-1)).toBe(SID)
+  })
+})
+
+describe('P3-13-19 agentMonitor:list', () => {
+  it('P3-13-19 returns the service result unchanged; every row survives structuredClone and a JSON round trip', async () => {
+    const entry: AgentMonitorEntry = {
+      agentId: SID,
+      kind: 'root',
+      rootSessionId: SID,
+      depth: 0,
+      profileName: 'work',
+      displayName: 'Work',
+      phase: 'interrupted',
+      startedAt: 1,
+      lastActivityAt: 2,
+      queue: { steer: 1, followUp: 2 },
+      model: { provider: 'faux', id: 'faux-1', contextWindow: 1000 },
+      thinkingLevel: 'low',
+      toolCount: 3,
+      contextTokens: 40,
+      cache: {
+        input: 10,
+        cacheRead: 5,
+        cacheWrite: 0,
+        reported: true,
+        last: { input: 1, cacheRead: 0, cacheWrite: 0 }
+      },
+      cost: { total: 0.25 },
+      sessionCost: 0.5,
+      rootSessionTitle: 'T'
+    }
+    const spawned: AgentMonitorEntry = {
+      ...entry,
+      agentId: 'sub-1',
+      kind: 'spawned',
+      parentAgentId: SID,
+      depth: 1,
+      dispatch: 'hook',
+      phase: 'turn',
+      activeToolName: 'read'
+    }
+    const result = [entry, spawned]
+    vi.mocked(listAgentRuntimes).mockResolvedValueOnce(result)
+    const listed = (await invoke('agentMonitor:list')) as AgentMonitorEntry[]
+    expect(listed).toBe(result)
+    for (const row of listed) {
+      expect(structuredClone(row)).toEqual(row)
+      expect(JSON.parse(JSON.stringify(row))).toEqual(row)
+    }
+  })
+})
+
+describe('P3-12-07 agent:continue', () => {
+  it('P3-12-07 forwards sessionId inside the request context and resolves only after the run settles', async () => {
+    let finish!: (value: { error?: string }) => void
+    state.gateway.continue.mockReset().mockImplementation(() => {
+      expect(state.runDepth).toBe(1)
+      return new Promise((resolve) => (finish = resolve))
+    })
+    let result: unknown = 'pending'
+    const pending = Promise.resolve(invoke('agent:continue', SID)).then((r) => {
+      result = r
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(state.gateway.continue.mock.calls).toEqual([[SID]])
+    expect(state.contexts).toEqual([SID])
+    expect(result).toBe('pending')
+    finish({})
+    await pending
+    expect(result).toEqual({ success: true })
+  })
+
+  it('P3-12-07 an error result → { success: false, error, code }', async () => {
+    state.gateway.continue
+      .mockReset()
+      .mockResolvedValue({ error: 'Provider "Faux" model nope', code: 'no_model' })
+    await expect(invoke('agent:continue', SID)).resolves.toEqual({
+      success: false,
+      error: 'Provider "Faux" model nope',
+      code: 'no_model'
+    })
+    state.gateway.continue.mockReset().mockResolvedValue({ error: 'boom' })
+    await expect(invoke('agent:continue', SID)).resolves.toEqual({ success: false, error: 'boom' })
   })
 })

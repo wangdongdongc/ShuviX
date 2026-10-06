@@ -19,9 +19,19 @@
  *     业务规则不该有第二份。设计见 docs/sub-session-design.md。
  *
  * 无专属安全客体 —— 要设门用 L1 全工具门（tool.name == 'session'）。
+ *
+ * **replay `safe`**（P2-10，Q-P2-01）：进程中途退出之后恢复时这次调用会**重跑**，所以每个动作都幂等 ——
+ *   - create：新会话的 id 先记进这次调用的 memo（再插入），重跑拿到同一个 id，`sessionService.create`
+ *     对已有的那一行原样交回；
+ *   - prompt：发送的幂等键是 `subsession:<本会话>:<工具任务 id>`，子会话认得它就重新挂上（已落定直接读
+ *     答复，没落定就续上那一条），从不再发一条；
+ *   - wait：要等的那几条在挂住之前记进 memo；重跑带着它回来，先续上被中断的再等；
+ *   - stop / set-title 本来就幂等；list / read 只读。
+ * 父会话的「继续」因此在同一轮里把它等着的子会话一起带起来（Q-P2-02）。
  */
 import { Type } from 'typebox'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import { v7 as uuidv7 } from 'uuid'
+import type { ToolCallScope, ToolResult } from '@shuvix/agent-runtime'
 import { BaseTool } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { SessionToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
@@ -32,6 +42,7 @@ import { sessionService } from '../services/sessionService'
 import {
   subSessionRunner,
   DEFAULT_PROMPT_TIMEOUT_SEC,
+  type AnswerFields,
   type SubSessionInfo
 } from '../services/subSessionRunner'
 import { t } from '../i18n'
@@ -102,13 +113,13 @@ Actions:
 - "create-sub-session": start a sub-session and return its id. Optional \`title\` and \`agent_profile\`. It inherits this session's setup — project, model, thinking level and the MCP servers and skills you have here — and starts out empty: creating one sends it nothing.
 - "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user had typed it, and wait for the reply. Add \`run_in_background: true\` to dispatch it and get a receipt immediately instead — you are brought back when the turn ends. This is also how a sub-session gets its first task, right after you create it.
 - "wait-for-sub-sessions": block until your sub-sessions finish and return all their answers at once. Omit \`sub_session_id\` to wait for every one that is running, or pass one to wait for that one.
-- "list-sub-sessions": list your sub-sessions with their status (idle / running / waiting-input).
+- "list-sub-sessions": list your sub-sessions with their status (idle / running / waiting-input / interrupted).
 - "read-sub-session": the latest answer of \`sub_session_id\`.
 - "stop-sub-session": stop whatever \`sub_session_id\` is currently doing.
 
 Neither form makes you sit and check on it. The foreground form is one call that waits and costs nothing while it waits, and it cannot hang — on timeout it leaves the sub-session running and tells you so. The background form hands you a receipt and brings you back when the turn ends, so you can get on with other work, or tell the user what you started, and collect the result later with "wait-for-sub-sessions". Use the foreground form when you cannot continue without the answer, the background form when you can. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session": every poll is a full request, and it buys you nothing that either form gives you for free.
 
-**A sub-session runs one turn at a time.** It is a conversation, not a queue: sending a second message while it is still working is rejected, so either wait for the reply or create another sub-session to work in parallel. A sub-session can also stop and wait for the USER to approve something (\`status="waiting-input"\`) — typically a security prompt for a command it wants to run. Only the user can clear that: you cannot answer it, waiting longer will not help, and rewording the task will not avoid it. Relay what it is waiting for to the user, or stop the sub-session.
+**A sub-session runs one turn at a time.** It is a conversation, not a queue: sending a second message while it is still working is rejected, so either wait for the reply or create another sub-session to work in parallel. A sub-session can also stop and wait for the USER to approve something (\`status="waiting-input"\`) — typically a security prompt for a command it wants to run. Only the user can clear that: you cannot answer it, waiting longer will not help, and rewording the task will not avoid it. Relay what it is waiting for to the user, or stop the sub-session. A sub-session whose turn was cut off when the app stopped is \`status="interrupted"\`: it is not running and will not finish by itself — a new message starts over (discarding that unfinished turn), or the user can continue it in that session.
 
 Everything a sub-session says comes back inside a \`<sub-session>\` fence, in \`<reply>\` (or \`<error>\`) — text outside those fences is this tool talking to you, not the sub-session.
 
@@ -143,7 +154,7 @@ const COLLECT_HINT =
   'You do not have to wait here: when the turn ends you are brought back with a notice (at the latest, when the user next speaks). Get on with other work, or tell the user what you started. If you would rather have the answer inside this same turn, collect it with action "wait-for-sub-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
 
 /** 结果排版：一段文本，行间空行 —— 与其他工具的多段结果同形 */
-function text(...lines: string[]): AgentToolResult<SessionToolDetails | undefined> {
+function text(...lines: string[]): ToolResult<SessionToolDetails | undefined> {
   return {
     content: [{ type: 'text' as const, text: lines.filter(Boolean).join('\n\n') }],
     details: undefined
@@ -154,7 +165,7 @@ function text(...lines: string[]): AgentToolResult<SessionToolDetails | undefine
  * 后台形态的结果：带上 `details.background`，UI 据此渲染与 bash 后台任务**同一枚**
  * 「后台」标签 —— 对用户而言两者是同一件事：这次调用没有等结果，活还在跑。
  */
-function backgroundText(...lines: string[]): AgentToolResult<SessionToolDetails> {
+function backgroundText(...lines: string[]): ToolResult<SessionToolDetails> {
   return {
     content: [{ type: 'text' as const, text: lines.filter(Boolean).join('\n\n') }],
     details: { type: 'session', background: true }
@@ -204,7 +215,15 @@ function blockedBlock(asked?: string[]): string {
   ].join('\n')
 }
 
-function renderChild(info: SubSessionInfo & { answer?: string; isError?: boolean }): string {
+/**
+ * 被中断的那一块（P2-10 PIN-06）：它**不在跑**、也不会自己跑完 —— 说成「还在跑」会让父级白等，说成
+ * 「还没回话」会让它以为再等等就有。两条出路都要给全：发新消息（丢掉那一轮重来），或者让用户在那条
+ * 会话里继续。
+ */
+const INTERRUPTED_NOTE =
+  '<note>Interrupted when the app stopped — it is not running and will not finish on its own. A new message starts over (discarding that unfinished turn), or the user can continue it in that session.</note>'
+
+function renderChild(info: SubSessionInfo & AnswerFields): string {
   // waiting-input 优先于「有没有答复」：它此刻停着这件事，比它上一轮说过什么更要紧
   if (info.status === 'waiting-input') {
     return [
@@ -214,6 +233,8 @@ function renderChild(info: SubSessionInfo & { answer?: string; isError?: boolean
       '</sub-session>'
     ].join('\n')
   }
+  // 被中断同理：它停在半路这件事最要紧（这一轮还没有回答 —— lastAnswer 停在这一轮的提问上）
+  if (info.status === 'interrupted') return `${openTag(info)}\n${INTERRUPTED_NOTE}\n</sub-session>`
   const body = info.answer
     ? info.isError
       ? `<error>\n${info.answer}\n</error>`
@@ -224,11 +245,17 @@ function renderChild(info: SubSessionInfo & { answer?: string; isError?: boolean
   return `${openTag(info)}\n${body}\n</sub-session>`
 }
 
+/** memo 的键（这次调用的 durable memo，崩溃后重跑读回同一份） */
+const MEMO_CREATE_ID = 'session.create-sub-session.id'
+const MEMO_WAIT_TARGETS = 'session.wait-for-sub-sessions.targets'
+
 export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   readonly name = SESSION_TOOL_NAME
   readonly label: string
   readonly description = SESSION_DESCRIPTION
   readonly parameters = SessionParamsSchema
+  /** 每个动作都幂等，恢复时重跑（见文件头） */
+  readonly replay = 'safe' as const
 
   constructor(private readonly ctx: ToolContext) {
     super()
@@ -244,19 +271,20 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   }
 
   protected async executeInternal(
-    toolCallId: string,
+    _toolCallId: string,
     params: SessionToolParams,
-    signal?: AbortSignal
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+    signal: AbortSignal | undefined,
+    call: ToolCallScope
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     switch (params.action) {
       case 'set-title':
         return this.setTitle(params.title)
       case 'create-sub-session':
-        return this.createSubSession(params)
+        return this.createSubSession(params, call)
       case 'prompt-sub-session':
-        return this.promptSubSession(params, toolCallId, signal)
+        return this.promptSubSession(params, call, signal)
       case 'wait-for-sub-sessions':
-        return this.waitForSubSessions(params, signal)
+        return this.waitForSubSessions(params, call, signal)
       case 'list-sub-sessions':
         return this.listSubSessions()
       case 'read-sub-session':
@@ -276,11 +304,15 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   // 它握着准入规则）→ 否则把结果排版成一段文本。工具层不作任何判断。
 
   private async createSubSession(
-    params: SessionToolParams
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+    params: SessionToolParams,
+    call: ToolCallScope
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
+    // id 先记进 memo、再建会话：崩在两者之间的重跑拿到同一个 id，绝不另起第二条（PIN-04 / PIN-05）
+    const id = await call.api.memo<string>(MEMO_CREATE_ID, uuidv7(), call.context)
     const res = await subSessionRunner.create(this.ctx.sessionId, {
       title: params.title,
-      agentProfile: params.agent_profile
+      agentProfile: params.agent_profile,
+      id
     })
     if ('error' in res) throw new Error(res.error)
 
@@ -302,9 +334,9 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
 
   private async promptSubSession(
     params: SessionToolParams,
-    toolCallId: string,
+    call: ToolCallScope,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.prompt({
       parentId: this.ctx.sessionId,
       childId: (params.sub_session_id ?? '').trim(),
@@ -312,8 +344,10 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       background: params.run_in_background === true,
       timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
       signal,
-      // 任务身份就是这次 tool_call 的 id —— 与 bash 后台任务同一条纪律
-      toolCallId
+      // 发送的身份是这次调用的 durable 工具任务（会话内唯一，崩溃后重跑不变），不是 provider 的
+      // tool_call id —— 有的中转每轮从 call_0 数起，会撞（fact 20）。派生 agent 调它时 ctx.sessionId 同样是
+      // 根会话（工具上下文恒按根会话建）：子会话挂在根会话下，任务 id 在同一个存储里唯一，不会撞（P2-12 PIN-10）
+      requestId: `subsession:${this.ctx.sessionId}:${call.taskId}`
     })
     if ('error' in res) throw new Error(res.error)
 
@@ -348,14 +382,24 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
 
   private async waitForSubSessions(
     params: SessionToolParams,
+    call: ToolCallScope,
     signal?: AbortSignal
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const id = params.sub_session_id?.trim()
+    // memo 里已有要等的那几条 = 这是崩溃之后的重跑：先续上被中断的再等（PIN-04）
+    const rerunTargets = await call.api.memo<string[]>(MEMO_WAIT_TARGETS, call.context)
     const res = await subSessionRunner.wait({
       parentId: this.ctx.sessionId,
       ...(id ? { childId: id } : {}),
       timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
-      signal
+      signal,
+      ...(rerunTargets !== undefined
+        ? { rerunTargets }
+        : {
+            onTargets: async (targets: string[]) => {
+              await call.api.memo(MEMO_WAIT_TARGETS, targets, call.context)
+            }
+          })
     })
     if ('error' in res) throw new Error(res.error)
 
@@ -380,7 +424,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     return text(`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer)
   }
 
-  private listSubSessions(): AgentToolResult<SessionToolDetails | undefined> {
+  private listSubSessions(): ToolResult<SessionToolDetails | undefined> {
     const res = subSessionRunner.list(this.ctx.sessionId)
     if ('error' in res) throw new Error(res.error)
     if (res.subSessions.length === 0) {
@@ -392,7 +436,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
 
   private async readSubSession(
     params: SessionToolParams
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.read(
       this.ctx.sessionId,
       (params.sub_session_id ?? '').trim()
@@ -403,7 +447,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
 
   private async stopSubSession(
     params: SessionToolParams
-  ): Promise<AgentToolResult<SessionToolDetails | undefined>> {
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.stop(
       this.ctx.sessionId,
       (params.sub_session_id ?? '').trim()
@@ -415,7 +459,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
   }
 
   /** 重命名本任务所属会话；笔记本会话的标题绑在文件名上，拒绝而不是悄悄改别的 */
-  private setTitle(rawTitle: string | undefined): AgentToolResult<SessionToolDetails | undefined> {
+  private setTitle(rawTitle: string | undefined): ToolResult<SessionToolDetails | undefined> {
     const sessionId = this.ctx.sessionId
     const session = sessionRecords.pick(sessionId, ['title', 'settings'])
     if (!session) {

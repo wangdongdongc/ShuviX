@@ -10,9 +10,14 @@ import {
   TerminalView,
   useBgTaskStatus,
   useChatStore,
-  useSubSessionStore
+  selectSessionAskCount,
+  useSubSessionStore,
+  useAgentView,
+  deriveAgentViewFields,
+  type SubSessionState
 } from '@shuvix/chat-ui'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
+import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import { SubSessionStream } from '../subagent/SubAgentStream'
 import { usePanelCloseInset } from './panelCloseInset'
 
@@ -25,7 +30,7 @@ import { usePanelCloseInset } from './panelCloseInset'
  * 差别只落在展开后的详情渲染器上，因为三者的"内容"本就住在三个地方：
  *
  *  - **bash**：输出由 OS 直接写日志文件，这里按字节范围轮询自取（面板收起即停）；
- *  - **派生 agent**：转写是内存态事件流，住在 subSessionStore 里 —— 那份转写在界面上
+ *  - **派生 agent**：转写在它的 agent 视图里（展开时订阅，镜像进 subSessionStore）—— 那份转写在界面上
  *    只此一处（对话流里的工具卡已退化为普通形态）；
  *  - **子会话**：它是一条真正的会话，转写在它自己的会话界面里，这里只给状态与入口，
  *    不再画第二份。
@@ -43,13 +48,14 @@ const TAIL_WINDOW_BYTES = 200 * 1024
 /**
  * 这条子会话此刻是不是卡在等用户批准。
  *
- * 问渲染端自己：待答询问按会话 id 记在 chatStore 里（会话列表上那个标记同一个源）。
+ * 问渲染端自己：待答询问的条数按会话 id 记在 chatStore 里（会话列表上那个标记同一个源：订阅着视图的
+ * 会话看视图，其余看 `ask_count` 余项，P3-08 PIN-01）。
  * 这是**面板存在的一个主要理由** —— 一个卡在询问上的后台活不会自己好起来，
  * 而在此之前它只在那条子会话自己的界面里才看得见。
  */
 function useBlockedOnUser(task: TaskInfo): boolean {
   const childId = task.subject.kind === 'sub-session' ? task.subject.childSessionId : ''
-  return useChatStore((s) => (childId ? (s.sessionPendingInputs[childId]?.length ?? 0) > 0 : false))
+  return useChatStore((s) => (childId ? selectSessionAskCount(childId)(s) > 0 : false))
 }
 
 /** 类别文案 —— 行尾那句「Bash · 运行中 · 4m02s」的第一段 */
@@ -169,20 +175,68 @@ function BashDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
 }
 
 /**
+ * 没有登记条目时，从视图拼出详情要的那份状态（PIN-13：重建过的渲染端 —— 主进程活着、窗口关了又开 / Cmd+R ——
+ * 任务行还在、subSessionStore 是空的）。元信息只有任务行给得出的那些（标题、档案）：没有起始指令气泡，视图
+ * 的第一条用户条目照常显示。视图不在 live（不可用 / 订阅失败）→ 留着最后画出来的消息、不再流式（P3-14-20）。
+ */
+function detachedSubOf(task: TaskInfo, view: AgentView, live: boolean): SubSessionState {
+  const shown: AgentView = live
+    ? view
+    : {
+        ...view,
+        live: null,
+        run: { ...view.run, state: view.run.state === 'busy' ? 'idle' : view.run.state }
+      }
+  const fields = deriveAgentViewFields(undefined, shown)
+  const profileName = task.subject.kind === 'agent' ? task.subject.profileName : ''
+  return {
+    subSessionId: task.taskId,
+    parentSessionId: task.sessionId,
+    subAgentName: profileName,
+    displayName: task.title,
+    description: '',
+    systemPrompt: '',
+    prompt: '',
+    status: shown.run.state === 'busy' ? 'running' : task.status === 'error' ? 'error' : 'done',
+    startedAt: task.startedAt,
+    ...fields
+  }
+}
+
+/**
  * 派生 agent 详情：它的转写。
  *
- * 转写是内存态（事件流累积在 subSessionStore 里），重启应用或用户关掉这条就没了 ——
- * 与面板整体「只记录本次运行期间」的口径一致。取不到时说清楚，不装作还在。
+ * 展开即订阅它的 agent 视图（`useAgentView`，收起 = 卸载 = 放手；展开互斥，所以同时只有一条订阅，P3-14）：
+ * 登记过的（本次运行里见过它的 register）镜像进 subSessionStore，详情读那份条目（带起始指令、内联 Token
+ * 标签）；没登记过的（重建过的渲染端）直接从视图渲染（PIN-13）。订阅失败 `service_not_found`（agent 被销毁 /
+ * 主进程认不出它）→ 说清楚「不在了」，不装作还在。
  */
 function AgentDetail({ task }: { task: TaskInfo }): React.JSX.Element {
   const { t } = useTranslation()
   const sub = useSubSessionStore((s) => s.subSessions[task.taskId])
-  if (!sub) {
-    return (
-      <div className="px-3 pb-2 text-[10px] text-text-tertiary">{t('panel.tasksAgentGone')}</div>
-    )
+  const binding = useAgentView(task.taskId)
+  const live = binding.status === 'live'
+  const detached = useMemo(
+    () => (sub || !binding.view ? undefined : detachedSubOf(task, binding.view, live)),
+    [sub, binding.view, live, task]
+  )
+  const gone = binding.status === 'error' && binding.code === 'service_not_found'
+  const goneNote = (
+    <div className="px-3 pb-2 text-[10px] text-text-tertiary" data-subagent-gone="">
+      {t('panel.tasksAgentGone')}
+    </div>
+  )
+  const shown = sub ?? detached
+  if (!shown) {
+    // 还在订：什么都不画（订到就有）；订不到 / 不可用：说清楚
+    return binding.status === 'loading' ? <></> : goneNote
   }
-  return <SubSessionStream sub={sub} focusLast={false} />
+  return (
+    <>
+      <SubSessionStream sub={shown} focusLast={false} />
+      {gone && goneNote}
+    </>
+  )
 }
 
 /**
@@ -303,7 +357,8 @@ function TaskRow({
     [task.taskId]
   )
 
-  // 派生 agent 的行保留原子代理面板的 DOM 锚点（e2e 按它认行，换名字只会让断言失明）
+  // 派生 agent 的行保留原子代理面板的 DOM 锚点（e2e 按它认行，换名字只会让断言失明）；每一行另有
+  // `data-task-row`（类别）/ `data-task-status`（枢纽的状态，不随语言变）—— e2e 认子会话行与它的落定靠它们
   const agentAnchor =
     task.subject.kind === 'agent'
       ? {
@@ -313,7 +368,12 @@ function TaskRow({
       : {}
 
   return (
-    <div className={divided ? 'border-t border-border-secondary/30' : ''} {...agentAnchor}>
+    <div
+      className={divided ? 'border-t border-border-secondary/30' : ''}
+      data-task-row={task.kind}
+      data-task-status={task.status}
+      {...agentAnchor}
+    >
       <div
         onClick={openTarget ? undefined : onToggle}
         className={`flex items-start gap-1.5 px-2 py-1.5 transition-colors ${
@@ -330,6 +390,7 @@ function TaskRow({
         </div>
         {openTarget && (
           <button
+            data-task-open=""
             onClick={(e) => {
               e.stopPropagation()
               useChatStore.getState().setActiveSessionId(openTarget)

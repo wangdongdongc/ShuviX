@@ -32,6 +32,7 @@ import {
   eventRecorder,
   securityDecisions,
   seedFakeProvider,
+  seedLegacyTranscript,
   waitRendererReady,
   writeAgentMd,
   writeBotMd,
@@ -403,7 +404,7 @@ describe('主流程（BRF：一条勾了浏览器的项目会话，开在界面�
       effect: 'allow',
       objectSummary: url
     })
-    expect(await driver.eventsSince(since, 'input_request')).toEqual([])
+    expect(await driver.asksSince(since)).toBe(0)
 
     // 工具行：浏览器的标签与图标，摘要 = 动作 + 地址
     const row = await until(async () => {
@@ -448,7 +449,7 @@ describe('主流程（BRF：一条勾了浏览器的项目会话，开在界面�
     // 点击真的发生了：按服务器那一侧的记录断，不信工具自己的回报
     await until(() => fixture.hits('/submit?name=alice') === 1, 'form submitted to the server')
     expect(ends.brf3_eval.result).toContain('"hello alice"')
-    expect(await driver.eventsSince(since, 'input_request')).toEqual([])
+    expect(await driver.asksSince(since)).toBe(0)
 
     // 三个不同的浏览器工具连成一段：混合段不出图标，标签是「浏览器 ×3」
     const expectGroup = async (): Promise<void> => {
@@ -536,7 +537,7 @@ describe('兜底呈现：退役的旧 browser 工具与内置 ssh（BRR）', () 
       { id: 'brr2_legacy', tool: 'browser', args: { action: 'open_tab', url } }
     ])
     expect(ends.brr2_legacy.isError).toBe(true)
-    expect(ends.brr2_legacy.result).toContain('Tool browser not found')
+    expect(ends.brr2_legacy.result).toContain('Tool browser is not available')
 
     const block = (await listMessages(sid))
       .flatMap((m) => m.blocks ?? [])
@@ -553,8 +554,8 @@ describe('兜底呈现：退役的旧 browser 工具与内置 ssh（BRR）', () 
     expect(row.icon).toBe('lucide-x')
   }, 120_000)
 
-  it('BRR-3 旧 browser 的已完成调用（改写自真实转写）：同一工具的合并行，浏览器图标，计数 2', async () => {
-    // 先在一条勾了浏览器的会话里真跑两次 list_tabs，拿到一份真实的转写
+  it('BRR-3 旧 browser 的已完成调用（旧格式会话，结果取自真实运行）：同一工具的合并行，浏览器图标，计数 2', async () => {
+    // 先在一条勾了浏览器的会话里真跑两次 list_tabs，拿到两份真实的结果
     const src = await tickedSession('BRR-3 source')
     provider.reset()
     const { ends } = await driver.run(src, [
@@ -566,16 +567,19 @@ describe('兜底呈现：退役的旧 browser 工具与内置 ssh（BRR）', () 
     expect(ends.brr3_a?.isError).toBe(false)
     expect(ends.brr3_b?.isError).toBe(false)
 
-    // 目标会话**建了但从没打开过**：会话树缓存不记「文件不存在」，文件放好之后第一次打开就读它
+    // 目标会话**建了但从没打开过**：改成切换前的旧格式会话，转写里是退役的 `browser` 工具
+    // （pi-durable 不再写 `.jsonl`，旧会话只剩只读查看 —— 旧时代的调用今天只会从这里出现）
     const title = 'BRR-3 legacy transcript'
     const dst = await createSession({ title })
-    const sessionsDir = join(app.home, 'userdata', 'data', 'sessions')
-    const srcFile = join(sessionsDir, `${src}.jsonl`)
-    const raw = await until(() => {
-      const text = existsSync(srcFile) ? readFileSync(srcFile, 'utf8') : ''
-      return text.includes('brr3_b') && text.includes('"done"') ? text : null
-    }, 'source transcript flushed')
-    writeFileSync(join(sessionsDir, `${dst}.jsonl`), asLegacyTranscript(raw, src, dst))
+    seedLegacyTranscript(app, dst, {
+      prompt: 'list the tabs twice',
+      calls: [ends.brr3_a, ends.brr3_b].map((end) => ({
+        id: end.toolCallId,
+        name: 'browser',
+        arguments: { action: 'list_tabs' },
+        result: end.result
+      }))
+    })
 
     await openInUi(title)
     const group = await until(async () => {
@@ -654,40 +658,6 @@ describe('兜底呈现：退役的旧 browser 工具与内置 ssh（BRR）', () 
     expect(terminal).toContain('echo hi')
   }, 120_000)
 })
-
-/**
- * 把一份真实转写改写成「旧 multiplex browser 工具」时代的样子：`mcp__browser__<tool>` 的调用
- * 改名 `browser`、参数换成 `{action: <tool>}`，结果的 toolName 跟着改；头行的会话 id 换成目标会话。
- */
-function asLegacyTranscript(raw: string, srcId: string, dstId: string): string {
-  const PREFIX = 'mcp__browser__'
-  const walk = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      value.forEach(walk)
-      return
-    }
-    if (!value || typeof value !== 'object') return
-    const o = value as Record<string, unknown>
-    if (o.type === 'toolCall' && typeof o.name === 'string' && o.name.startsWith(PREFIX)) {
-      o.arguments = { action: o.name.slice(PREFIX.length) }
-      o.name = 'browser'
-    }
-    if (typeof o.toolName === 'string' && o.toolName.startsWith(PREFIX)) o.toolName = 'browser'
-    for (const child of Object.values(o)) walk(child)
-  }
-  const lines = raw
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      const entry = JSON.parse(line) as Record<string, unknown>
-      if (entry.type === 'session') {
-        for (const [k, v] of Object.entries(entry)) if (v === srcId) entry[k] = dstId
-      }
-      walk(entry)
-      return JSON.stringify(entry)
-    })
-  return lines.join('\n') + '\n'
-}
 
 // ═══════════════════════════════════════════════════════════════════════
 // 实例归谁
@@ -782,7 +752,7 @@ describe('实例归谁（BRL：A 在项目里，B 不在任何项目里，两条
       ])
       // 出厂的 ask-on-external-path 对各自的会话目录免询问（项目、临时工作区都是）—— 所以没有卡片；
       // 写入门照样过了，门看到的就是按这条会话的工作目录解析出来的绝对路径
-      expect(await driver.eventsSince(since, 'input_request', c.sid), c.id).toEqual([])
+      expect(await driver.asksSince(since, c.sid), c.id).toBe(0)
       const decision = securityDecisions(app).find((d) => d.toolCallId === c.id)
       expect(decision, c.id).toMatchObject({
         sessionId: c.sid,

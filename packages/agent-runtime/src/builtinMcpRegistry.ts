@@ -18,11 +18,34 @@
  */
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import type { CallOwner } from './tools/toolCall'
 
 /** 内置服务器拿到的会话上下文 —— 宿主可在自己的工厂里扩展更多字段 */
 export interface BuiltinMcpScope {
   /** 归属会话；root 与派生 agent 共用根会话 id（与 ToolContext.sessionId 同源） */
   sessionId: string
+}
+
+/**
+ * 从一次 tools/call 的 `_meta` 里取出调用归属（`shuvix.dev/taskId` / `shuvix.dev/conversationId`，
+ * McpManager 只带给可信 server）—— 内置服务器把它并进 EnforceOpts / BrowserGateContext：
+ * conversationId 经宿主的 `agentOf` 认出调用方 agent（安全主体），两者都进询问事件的归属。
+ *
+ * 只认安全整数，别的（字符串、小数、NaN、null、布尔、对象）一律当没带 —— 与 agentId「字符串或没有」
+ * 同一条规矩；不做范围检查，durable id 是不透明的。没带的键**不出现**（不是 undefined 值），
+ * 展开进 opts 时不多出键。
+ */
+export function builtinCallOwnerOf(meta: unknown): CallOwner {
+  const owner: CallOwner = {}
+  if (typeof meta !== 'object' || meta === null) return owner
+  const m = meta as Record<string, unknown>
+  const taskId = m['shuvix.dev/taskId']
+  const conversationId = m['shuvix.dev/conversationId']
+  if (typeof taskId === 'number' && Number.isSafeInteger(taskId)) owner.taskId = taskId
+  if (typeof conversationId === 'number' && Number.isSafeInteger(conversationId)) {
+    owner.conversationId = conversationId
+  }
+  return owner
 }
 
 /**

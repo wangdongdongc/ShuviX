@@ -21,13 +21,14 @@
  * 纪律：每条会话都给显式标题（缺省标题会让自动起标题的 hook 抢走脚本里的轮次）；询问一律手工应答。
  * 一台 bridge 只给一个连接用（PGlite 只有一个会话，只读标志会串）。
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import {
+  asksRaisedIn,
   createAgentSession,
   createPinnedChildSession,
   createProject,
@@ -35,6 +36,7 @@ import {
   removeRetiredPolicy,
   securityDecisions,
   seedFakeProvider,
+  seedLegacyTranscript,
   seedRetiredPolicy,
   waitRendererReady,
   writeAgentMd,
@@ -509,7 +511,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
     const end = ends.dbf1_list
     expect(end.isError).toBe(false)
     expect(end.result).toBe(LISTED.join('\n'))
-    expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+    expect(await asksRaisedIn(events, sid, since)).toBe(0)
     expect(decisionsOf('dbf1_list')).toEqual([])
     // 列连接不连任何库
     expect(ro.connections()).toBe(0)
@@ -557,7 +559,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
         '(3 rows)'
       ].join('\n')
     )
-    expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+    expect(await asksRaisedIn(events, sid, since)).toBe(0)
 
     // 服务器那一侧：这条会话的第一条连接，建连先下只读标志，语句走扩展协议、包在只读事务里
     expect(ro.connections()).toBe(1)
@@ -672,7 +674,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
         .slice(statementsBefore)
         .every((s) => s.conn === roConn)
     ).toBe(true)
-    expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+    expect(await asksRaisedIn(events, sid, since)).toBe(0)
     expect(await ro.count('users')).toBe(3)
   }, 120_000)
 
@@ -708,7 +710,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
     const { ends } = await driver.finish(sid, since)
     expect(ends.dbf4_insert.isError).toBe(false)
     expect(ends.dbf4_insert.result).toBe('OK: INSERT, 2 rows affected')
-    expect(await driver.eventsSince(since, 'input_request', sid)).toHaveLength(1)
+    expect(await asksRaisedIn(events, sid, since)).toBe(1)
 
     // 可写连接：不下只读标志、不包只读事务，语句原样一条
     expect(rw.connections()).toBe(1)
@@ -800,7 +802,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
     try {
       provider.reset()
       const { ends, since } = await driver.run(sid, [q('dbf8_insert', 'e2e-rw', SQL, 'Add delta')])
-      expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+      expect(await asksRaisedIn(events, sid, since)).toBe(0)
       expect(ends.dbf8_insert.isError).toBe(false)
       expect(ends.dbf8_insert.result).toBe('OK: INSERT, 1 row affected')
       expect(rw.saw("'delta'")).toBe(true)
@@ -942,7 +944,7 @@ describe('呈现：说明留空的摘要与退役的旧 database 工具（DBE-R�
       }
     ])
     expect(ends.dbr2_legacy.isError).toBe(true)
-    expect(ends.dbr2_legacy.result).toContain('Tool database not found')
+    expect(ends.dbr2_legacy.result).toContain('Tool database is not available')
     const block = (await listMessages(sid))
       .flatMap((m) => m.blocks ?? [])
       .find((b) => b.toolCallId === 'dbr2_legacy')
@@ -955,8 +957,8 @@ describe('呈现：说明留空的摘要与退役的旧 database 工具（DBE-R�
     expect(row.icon).toBe('lucide-x')
   }, 120_000)
 
-  it('DBE-R3 旧 database 的已完成调用（改写自真实转写）：同一工具的合并行，数据库图标，计数 2', async () => {
-    // 先在一条勾了数据库的会话里真跑两次查询，拿到一份真实的转写
+  it('DBE-R3 旧 database 的已完成调用（旧格式会话，结果取自真实运行）：同一工具的合并行，数据库图标，计数 2', async () => {
+    // 先在一条勾了数据库的会话里真跑两次查询，拿到两份真实的结果
     const src = await tickedSession('DBE-R3 source')
     provider.reset()
     const { ends } = await driver.run(src, [
@@ -966,16 +968,23 @@ describe('呈现：说明留空的摘要与退役的旧 database 工具（DBE-R�
     expect(ends.dbr3_a?.isError).toBe(false)
     expect(ends.dbr3_b?.isError).toBe(false)
 
-    // 目标会话**建了但从没打开过**：会话树缓存不记「文件不存在」，文件放好之后第一次打开就读它
+    // 目标会话**建了但从没打开过**：改成切换前的旧格式会话，转写里是退役的 `database` 工具与它的旧参数
+    // `{credentialName, sql, description}`（pi-durable 不再写 `.jsonl`，旧会话只剩只读查看）
     const title = 'DBE-R3 legacy transcript'
     const dst = await createSession({ title })
-    const sessionsDir = join(app.home, 'userdata', 'data', 'sessions')
-    const srcFile = join(sessionsDir, `${src}.jsonl`)
-    const raw = await until(() => {
-      const text = existsSync(srcFile) ? readFileSync(srcFile, 'utf8') : ''
-      return text.includes('dbr3_b') && text.includes('"done"') ? text : null
-    }, 'source transcript flushed')
-    writeFileSync(join(sessionsDir, `${dst}.jsonl`), asLegacyTranscript(raw, src, dst))
+    seedLegacyTranscript(app, dst, {
+      prompt: 'count the users twice',
+      calls: [ends.dbr3_a, ends.dbr3_b].map((end) => ({
+        id: end.toolCallId,
+        name: 'database',
+        arguments: {
+          credentialName: 'e2e-ro',
+          sql: 'SELECT count(*)::int AS n FROM users',
+          description: 'Count users'
+        },
+        result: end.result
+      }))
+    })
 
     await openInUi(title)
     const group = await until(async () => {
@@ -998,42 +1007,3 @@ describe('呈现：说明留空的摘要与退役的旧 database 工具（DBE-R�
     ])
   }, 120_000)
 })
-
-/**
- * 把一份真实转写改写成「旧内置 database 工具」时代的样子：`mcp__database__query` 的调用改名
- * `database`、参数换成旧的 `{credentialName, sql, description}`，结果的 toolName 跟着改；
- * 头行的会话 id 换成目标会话。
- */
-function asLegacyTranscript(raw: string, srcId: string, dstId: string): string {
-  const walk = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      value.forEach(walk)
-      return
-    }
-    if (!value || typeof value !== 'object') return
-    const o = value as Record<string, unknown>
-    if (o.type === 'toolCall' && o.name === QUERY) {
-      const args = (o.arguments ?? {}) as Record<string, unknown>
-      o.arguments = {
-        credentialName: args.connection,
-        sql: args.sql,
-        description: args.description
-      }
-      o.name = 'database'
-    }
-    if (o.toolName === QUERY) o.toolName = 'database'
-    for (const child of Object.values(o)) walk(child)
-  }
-  const lines = raw
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      const entry = JSON.parse(line) as Record<string, unknown>
-      if (entry.type === 'session') {
-        for (const [k, v] of Object.entries(entry)) if (v === srcId) entry[k] = dstId
-      }
-      walk(entry)
-      return JSON.stringify(entry)
-    })
-  return lines.join('\n') + '\n'
-}

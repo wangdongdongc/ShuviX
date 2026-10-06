@@ -1832,6 +1832,24 @@ describe('executeDecision — 询问点的审查', () => {
     expect(await commandOf(requestIn(sid))).toBe('/ws/file.txt')
   })
 
+  it('EN-RV18 opts 带着 durable 的 taskId / conversationId → 事件原样带上这两个键（审查按 (sessionId, taskId) 归属，裁定 Q16）；opts 只给其中一个就只多一个键', async () => {
+    const sid = newSid()
+    const review = reviewer(null)
+    const { provider } = reviewProvider(review)
+
+    await run(provider, sid, RV_PATH_ASK, { toolCallId: 'call_0', taskId: 42, conversationId: 7 })
+    await run(provider, sid, RV_PATH_ASK, { toolCallId: 'call_0', taskId: 43 })
+
+    expect(review).toHaveBeenCalledTimes(2)
+    const [first, second] = review.mock.calls.map(([event]) => event)
+    expect(first.toolCallId).toBe('call_0')
+    expect(first.taskId).toBe(42)
+    expect(first.conversationId).toBe(7)
+    expect(second.taskId).toBe(43)
+    // 没给的不以 undefined 键出现（EN-RV18 的「恰为」那一组键在不带归属时不变）
+    expect('conversationId' in second).toBe(false)
+  })
+
   it('EN-RV19 无询问通道：审查 allow 放行、deny 抛审查文案（missingChannel:allow 也一样）；ask / null 之后才按 missingChannel', async () => {
     const noChannel = (answer: PermissionReviewAnswer | null): SecurityHostProvider =>
       makeProvider({ onPermissionRequest: reviewer(answer) })

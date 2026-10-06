@@ -1,73 +1,116 @@
 /**
- * 智能体监控服务（桌面宿主）—— 把 `agentRuntimeRegistry` 的快照补上会话身份后交给设置页。
+ * 智能体监控服务（桌面宿主）—— 设置页「监视器 → 智能体」与会话横幅 agent 胶囊的数据源（P3-13）。
  *
- * 本服务**不持有任何状态**：数值全部现取自 pi 原生运行时对象（注册中心已把 pi 的私有
- * 相位/队列/用量从事件流归约出来），这里只做一件 pi 不可能知道的事 —— 把 agent 挂到
- * 具体的会话上，并回答"那个会话还在吗"。
+ * 列的是**打开着的会话**（`openSessionIds()` + `host.get`）：每条问一次 `DurableSession.monitorSnapshot()`
+ * —— 根 agent（锁着时）与加载在它 Harness 里的派生 / hook agent（PIN-02）。**从不 open / peek**：那会打开
+ * 关着的会话、并刷新 LRU 新近度（轮询每秒一次，会让修剪永远挑不出最久没用的那条）；宿主还没建过就答 `[]`，
+ * 也不替它建。宿主只补 pi 不可能知道的两样：会话标题、根档案的显示名（`shuvix-displayName`，空则档案名），
+ * 以及把自定义 provider 的行 id 换成行名。一条会话读失败只跳过它（记一条警告），不拖垮整张表。
  *
- * 两个入口，冷热分明：
- *  - `listAgentRuntimes`（轮询路径）刻意保持"廉价"：注册中心的快照全是字段读与事件影子
- *    （上下文占用也是从 message_end 的 provider 用量归约来的），这里再补几次会话主键点查
- *    即可 —— 轮询路径上不存在任何遍历会话树的动作。
- *  - `getAgentRuntimeDetail`（用户展开某条时才调用一次）才去读运行时的"贵"的那一半：
- *    系统提示词全文、工具定义、上下文消息数。刻意不并进列表，否则每秒轮询都要重建一次上下文。
+ * 血缘排序（orderByLineage）是纯函数 —— 数据源换了，分组与注意力排序的规则不变；interrupted 与 idle
+ * 一样算「没在跑」（PIN-05）。
  */
-import { agentRuntimeRegistry } from '@shuvix/agent-runtime'
+import type { AgentMonitorRow, DurableSession, SessionHost } from '@shuvix/agent-runtime'
+import { SessionClosedError } from '@shuvix/agent-runtime'
 import type { AgentMonitorEntry } from '@shuvix/chat-protocol/types/agentMonitor'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
-import { sessionRecords } from './sessionRecords'
-import { providerDao } from '../dao/providerDao'
 import { agentManager } from '../agents/AgentManager'
+import { providerDao } from '../dao/providerDao'
+import { createLogger } from '../logger'
+import { agentService } from './agentService'
+import { peekSessionHost } from './sessionHost'
+import { sessionRecords } from './sessionRecords'
 import { sessionService } from './sessionService'
 
-/**
- * 全部活跃 agent 运行时，按血缘分组、组间按"最该被注意"排序。
- *
- * 注意力排序刻意不按启动时间 —— 诊断时想先看到的是"刚跑完还赖着"和"跑了很久没动静"，
- * 这两类都由 lastActivityAt 表达。但它只能排**组**，不能排条目：行首的缩进箭头
- * 声称"我是上面那位派出去的"，所以相邻关系必须由血缘决定（见 orderByLineage）。
- */
-export function listAgentRuntimes(): AgentMonitorEntry[] {
-  // 会话身份按主键点查并按 rootSessionId 缓存：活跃 agent 通常只归属少数几个会话，
-  // 而本列表要被每秒轮询 —— 拉全表求存在性会让轮询代价随历史会话数线性增长。
-  // 存在性直接由点查是否命中给出，不需要第二次查询。
-  const lookup = new Map<string, { title?: string; exists: boolean }>()
-  const resolve = (rootSessionId: string): { title?: string; exists: boolean } => {
-    const cached = lookup.get(rootSessionId)
-    if (cached) return cached
-    const row = sessionRecords.pick(rootSessionId, ['title'])
-    const resolved = { title: row?.title, exists: !!row }
-    lookup.set(rootSessionId, resolved)
-    return resolved
-  }
+const log = createLogger('AgentMonitor')
 
-  // 提供商名：内置提供商的 model.provider 本就是 'anthropic' 这样的可读串，自定义提供商
-  // 存的却是行 id（UUID）—— 直接显示等于没显示。同样按点查 + 缓存，提供商数量本就是个位数。
+/** 根档案显示名的缓存（档案表要扫用户目录；轮询每秒一次，显示名几乎不变） */
+const DISPLAY_NAME_TTL_MS = 5_000
+let displayNames: { readonly at: number; readonly names: Map<string, string> } | undefined
+
+function profileDisplayName(profileName: string): string {
+  const now = Date.now()
+  if (displayNames === undefined || now - displayNames.at > DISPLAY_NAME_TTL_MS) {
+    displayNames = { at: now, names: new Map() }
+  }
+  const cached = displayNames.names.get(profileName)
+  if (cached !== undefined) return cached
+  let name = profileName
+  try {
+    name = agentService.getProfile(profileName)?.displayName?.trim() || profileName
+  } catch (err) {
+    log.warn(`resolving the display name of profile ${profileName} failed: ${err}`)
+  }
+  displayNames.names.set(profileName, name)
+  return name
+}
+
+/** 仅供单测：丢掉显示名缓存 */
+export function resetAgentMonitorCachesForTests(): void {
+  displayNames = undefined
+}
+
+/**
+ * 打开着的会话里的全部 agent，按血缘分组、组间按「最该被注意」排序。
+ *
+ * 会话标题与 provider 名按主键点查并在本次调用内缓存（agent 通常只归属少数几个会话、provider 个位数）。
+ */
+export async function listAgentRuntimes(): Promise<AgentMonitorEntry[]> {
+  const host = peekSessionHost()
+  if (host === undefined) return []
+  const titles = new Map<string, string | undefined>()
+  const titleOf = (sessionId: string): string | undefined => {
+    if (!titles.has(sessionId))
+      titles.set(sessionId, sessionRecords.pick(sessionId, ['title'])?.title)
+    return titles.get(sessionId)
+  }
+  // 内置 provider 的 pi id 本就是可读的 slug；自定义 provider 的是行 id（UUID）—— 换成行名
   const providerNames = new Map<string, string>()
   const providerName = (id: string): string => {
-    const cached = providerNames.get(id)
-    if (cached !== undefined) return cached
-    const resolved = providerDao.pick(id, ['name'])?.name ?? id
-    providerNames.set(id, resolved)
-    return resolved
+    let name = providerNames.get(id)
+    if (name === undefined) {
+      name = (id ? providerDao.pick(id, ['name'])?.name : undefined) ?? id
+      providerNames.set(id, name)
+    }
+    return name
   }
 
-  const entries = agentRuntimeRegistry.list().map<AgentMonitorEntry>((snap) => {
-    const { title, exists } = resolve(snap.rootSessionId)
-    return {
-      ...snap,
-      model: { ...snap.model, provider: providerName(snap.model.provider) },
-      rootSessionTitle: title,
-      rootSessionExists: exists
+  const entries: AgentMonitorEntry[] = []
+  for (const sessionId of host.openSessionIds()) {
+    const rows = await snapshotOf(host, sessionId)
+    for (const row of rows) {
+      const { conversationId: _conversationId, displayName, ...rest } = row
+      const title = titleOf(row.rootSessionId)
+      entries.push({
+        ...rest,
+        displayName:
+          row.kind === 'root' ? profileDisplayName(row.profileName) : (displayName ?? ''),
+        model: { ...row.model, provider: providerName(row.model.provider) },
+        ...(title === undefined ? {} : { rootSessionTitle: title })
+      })
     }
-  })
-
+  }
   return orderByLineage(entries)
+}
+
+/** 一条打开着的会话的行；关掉了（轮询与关停的竞态）→ 无声跳过；读失败 → 跳过并记警告 */
+async function snapshotOf(host: SessionHost, sessionId: string): Promise<AgentMonitorRow[]> {
+  const session: DurableSession | undefined = host.get(sessionId)
+  if (session === undefined || session.closed) return []
+  try {
+    return await session.monitorSnapshot()
+  } catch (err) {
+    if (!(err instanceof SessionClosedError) && !session.closed) {
+      log.warn(`reading the monitor snapshot of session ${sessionId} failed: ${err}`)
+    }
+    return []
+  }
 }
 
 /** 「最该被注意」：先跑着的，再按最近活动倒序 */
 function compareAttention(a: AgentMonitorEntry, b: AgentMonitorEntry): number {
-  const running = (e: AgentMonitorEntry): number => (e.phase === 'idle' ? 1 : 0)
+  const running = (e: AgentMonitorEntry): number =>
+    e.phase === 'turn' || e.phase === 'compaction' ? 0 : 1
   return running(a) - running(b) || b.lastActivityAt - a.lastActivityAt
 }
 
@@ -136,20 +179,29 @@ function orderGroup(members: AgentMonitorEntry[]): AgentMonitorEntry[] {
 }
 
 /**
- * 单个 agent 运行时的**完整**快照（展开某条时按需拉一次）：系统提示词与工具定义都取自
- * 内存中的运行时对象，与实际下发给 LLM 的内容零漂移 —— 这正是这页相对"读档案文件"的价值。
+ * 单个 agent 的**完整**快照（展开某条时按需拉一次；P3-06 / P3-13 PIN-06）：系统提示词与下一次请求逐字节相同。
  *
- * 两类 agent 的运行时住在不同地方，故按 kind 分派：root 在会话服务里（agentId 即会话 id），
- * 派生的只活在派发协调器的 map 里（没有会话行，会话服务够不到）。
- * 已被销毁 / 不在登记簿里的 agentId 返回 null（轮询与点击之间存在时间差，属正常竞态）。
+ * 按 agentId 分派：根 agent 的 agentId 即会话 id（打开着的会话，读它锁所在的对话）；派生 agent（含 hook
+ * agent）先在**打开着的会话**的 agent 目录里找（`spawnedRecords()`，不依赖路由的索引 —— 重开过的会话里闲着
+ * 的子 agent 路由还不认得），找不到再问路由。**只读已有的**：从不打开会话、从不创建 agent、从不装扩展 ——
+ * 没开着、没锁、不认识 / 已销毁的 agentId 都答 null（轮询与点击之间的正常竞态）。
  */
 export async function getAgentRuntimeDetail(agentId: string): Promise<AgentRuntimeInfo | null> {
-  const snap = agentRuntimeRegistry.get(agentId)
-  if (!snap) return null
-  if (snap.kind === 'root') {
-    // 只读已存在的运行时：监控页不该把 agent 建出来（列表本就只列活着的）
-    const agent = sessionService.getAgentSession(agentId)
-    return (await agent?.getRuntimeInfo()) ?? null
+  const session = sessionService.getAgentSession(agentId)
+  if (session) return await session.getRuntimeInfo()
+  const host = peekSessionHost()
+  for (const sessionId of host?.openSessionIds() ?? []) {
+    const durable = host?.get(sessionId)
+    if (durable === undefined || durable.closed) continue
+    const record = durable.spawnedRecords().find((candidate) => candidate.agentId === agentId)
+    if (record === undefined) continue
+    try {
+      return (await durable.agentInfo(record.conversationId)) ?? null
+    } catch (err) {
+      if (err instanceof SessionClosedError || durable.closed) return null
+      throw err
+    }
   }
-  return await agentManager.getRuntimeInfo(agentId)
+  if (agentManager.has(agentId)) return await agentManager.getRuntimeInfo(agentId)
+  return null
 }

@@ -2,17 +2,31 @@ import { v7 as uuidv7 } from 'uuid'
 import { BaseDao } from './database'
 import { buildJsonPatch } from './utils'
 import { encrypt, decrypt } from '../utils/crypto'
-import type { Provider, ProviderModel, ProviderOAuthCredential } from './types'
+import type { Provider, ProviderModel } from './types'
 import type { AvailableModel, ModelCapabilities } from '../types'
 
 /** DB 行：比对外视图多一列密文 oauth，少一个派生的 oauthConnected */
 type ProviderRow = Omit<Provider, 'oauthConnected'> & { oauth?: string }
 
+/** 模型层要的那几列（apiKey 已解密；没有 oauth、排序与时间戳） */
+export type ProviderModelSourceRow = Pick<
+  Provider,
+  | 'id'
+  | 'name'
+  | 'displayName'
+  | 'apiKey'
+  | 'baseUrl'
+  | 'apiProtocol'
+  | 'metadata'
+  | 'isBuiltin'
+  | 'isEnabled'
+>
+
 /**
  * DB 行 → 对外视图：解密 apiKey，并把 `oauth` 列**换成**一个布尔位。
  *
  * 换而不是加：这个对象会原样经 IPC 送到渲染进程，refresh token 到了那边就等于泄漏。
- * 要凭据本身请走 `readOAuth()`。
+ * 要凭据本身请走 `readOAuthJson()`（只给模型层的凭据端口用）。
  */
 function toProviderView<T extends ProviderRow | undefined>(row: T): Provider | undefined {
   if (!row) return undefined
@@ -75,32 +89,62 @@ export class ProviderDao extends BaseDao {
     )
   }
 
+  // ============ 模型层凭据端口（services/models 的 ProviderCredentialPort 读这里） ============
+
+  /**
+   * 模型层要的提供商行：apiKey 已解密，**不含** oauth 列。
+   *
+   * 与 findAll 同序（自定义在前，再按 sortOrder），但单行解密失败只把那一行的 key 读成空串 ——
+   * 模型层每次请求都现读全部行，一行坏掉的密文不能连带让所有 provider 的请求一起失败。
+   */
+  findAllForModels(): ProviderModelSourceRow[] {
+    const rows = this.stmt(
+      'SELECT id, name, displayName, apiKey, baseUrl, apiProtocol, metadata, isBuiltin, isEnabled FROM providers ORDER BY isBuiltin ASC, sortOrder ASC'
+    ).all() as ProviderModelSourceRow[]
+    return rows.map((row) => {
+      let apiKey = ''
+      try {
+        apiKey = decrypt(row.apiKey ?? '') ?? ''
+      } catch {
+        // 密钥文件换过 / 手工改坏：当作没填 key
+      }
+      return { ...row, apiKey }
+    })
+  }
+
+  /** 全部模型行（含禁用的、所有提供商的），按 sortOrder */
+  findAllModels(): ProviderModel[] {
+    return this.stmt(
+      'SELECT * FROM provider_models ORDER BY sortOrder ASC'
+    ).all() as ProviderModel[]
+  }
+
   // ============ OAuth 凭据（仅主进程；密文进出，明文不落 IPC） ============
 
-  /** 读取并解密 OAuth 凭据；未登录或密文损坏返回 undefined */
-  readOAuth(id: string): ProviderOAuthCredential | undefined {
+  /**
+   * 读取并解密 OAuth 凭据的**原文** JSON；未登录或密文损坏返回 undefined。
+   *
+   * 不在这里解析、也不裁字段：pi-ai 的 `OAuthCredential` 允许 provider 自带额外字段
+   * （账号 id、企业域名…），裁成 {access, refresh, expires} 会让下一次刷新丢掉它们。
+   * 解析与校验归模型层的凭据库（createDbCredentialStore），坏记录在那边读作「未登录」。
+   */
+  readOAuthJson(id: string): string | undefined {
     const row = this.stmt('SELECT oauth FROM providers WHERE id = ?').get(id) as
       | { oauth?: string }
       | undefined
     if (!row?.oauth) return undefined
     try {
-      const parsed = JSON.parse(decrypt(row.oauth)) as Partial<ProviderOAuthCredential>
-      if (!parsed?.access || !parsed?.refresh) return undefined
-      return {
-        access: parsed.access,
-        refresh: parsed.refresh,
-        expires: typeof parsed.expires === 'number' ? parsed.expires : 0
-      }
+      return decrypt(row.oauth) || undefined
     } catch {
       // 密钥文件换过 / 手工改坏：当作未登录，用户重新登录即可修复
       return undefined
     }
   }
 
-  /** 写入 OAuth 凭据（登录成功与每次刷新后调用） */
-  saveOAuth(id: string, credential: ProviderOAuthCredential): void {
+  /** 加密写入 OAuth 凭据原文 JSON（登录成功与每次刷新后，由模型层的凭据库调用） */
+  saveOAuthJson(id: string, json: string): void {
     this.stmt('UPDATE providers SET oauth = ?, updatedAt = ? WHERE id = ?').run(
-      encrypt(JSON.stringify(credential)),
+      encrypt(json),
       Date.now(),
       id
     )

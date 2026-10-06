@@ -22,7 +22,12 @@ import type {
   PermissionRisk,
   PermissionVerdict
 } from '@shuvix/chat-protocol/types/permissionReview'
-import { clearReviewState, noteReviewAllowed, takeReviewAllowed } from '../reviewState'
+import {
+  clearReviewState,
+  noteReviewAllowed,
+  reviewCallKey,
+  takeReviewAllowed
+} from '../reviewState'
 import { executeDecision } from '../enforce'
 import { clearSessionDecisions } from '../decisionLog'
 import type {
@@ -176,6 +181,30 @@ describe('reviewState — 审查放行过的调用', () => {
     expect(takeReviewAllowed(s, 'tc-1')).toBeUndefined()
     expect(takeReviewAllowed(s, 'tc-2')).toBeUndefined()
     expect(takeReviewAllowed(s2, 'tc-1')).toStrictEqual({ risk: 'medium', summary: 'c' })
+  })
+})
+
+describe('reviewState — 按 durable taskId 记的放行标记（P2-08 PIN-10）', () => {
+  it('P2-08-32 reviewCallKey：有 taskId → task:<id>；没有 → toolCallId', () => {
+    expect(reviewCallKey({ toolCallId: 'call_0', taskId: 61 })).toBe('task:61')
+    expect(reviewCallKey({ toolCallId: 'call_0' })).toBe('call_0')
+    expect(reviewCallKey({ toolCallId: '' })).toBe('')
+  })
+
+  it('P2-08-32 同一个 call_0、两个 task：各记各的，取一个不碰另一个；按 toolCallId 取不到按 task 记的', () => {
+    const s = newSid()
+    noteReviewAllowed(s, { toolCallId: 'call_0', taskId: 61 }, note('high', 'root'))
+    expect(takeReviewAllowed(s, { toolCallId: 'call_0', taskId: 62 })).toBeUndefined()
+    expect(takeReviewAllowed(s, 'call_0')).toBeUndefined()
+    expect(takeReviewAllowed(s, { toolCallId: 'call_0', taskId: 61 })).toStrictEqual(
+      note('high', 'root')
+    )
+  })
+
+  it('P2-08-32 没有 taskId 的调用仍按 toolCallId（字符串与对象两种写法同一个键）', () => {
+    const s = newSid()
+    noteReviewAllowed(s, { toolCallId: 'tc-9' }, note('low', 'plain'))
+    expect(takeReviewAllowed(s, 'tc-9')).toStrictEqual(note('low', 'plain'))
   })
 })
 
@@ -343,6 +372,34 @@ describe('executeDecision — 「已审查」标记只在审查放行时留下',
     await run(p, sid)
     await run(p, sid)
     expect(takeReviewAllowed(sid, 'tc-1')).toStrictEqual({ risk: 'high', summary: 'high' })
+  })
+
+  it('RE-1b / P2-08-32 调用带 taskId：标记按 task 记 —— 同一 toolCallId 的另一个 task 取不到它', async () => {
+    const sid = newSid('re')
+    const { provider: p } = provider(
+      reviewer(answerOf(verdict('allow', { risk: 'high', summary: 'Deletes build' })))
+    )
+    await expect(run(p, sid, ASK, { taskId: 61 })).resolves.toEqual({ status: 'allowed' })
+    expect(takeReviewAllowed(sid, 'tc-1')).toBeUndefined()
+    expect(takeReviewAllowed(sid, { toolCallId: 'tc-1', taskId: 62 })).toBeUndefined()
+    expect(takeReviewAllowed(sid, { toolCallId: 'tc-1', taskId: 61 })).toStrictEqual({
+      risk: 'high',
+      summary: 'Deletes build'
+    })
+  })
+
+  it('P2-08-32 人回答了 task 62 的询问：只作废 task 62 的标记，task 61 的照旧', async () => {
+    const sid = newSid('re')
+    const { provider: p } = provider(
+      scripted([answerOf(verdict('allow', { risk: 'high', summary: 'root' })), null])
+    )
+    await run(p, sid, ASK, { taskId: 61 })
+    // 第二次（另一个 task、同一 toolCallId）审查没意见 → 人批准
+    await run(p, sid, ASK, { taskId: 62 })
+    expect(takeReviewAllowed(sid, { toolCallId: 'tc-1', taskId: 61 })).toStrictEqual({
+      risk: 'high',
+      summary: 'root'
+    })
   })
 
   it("RE-7 toolCallId '' → 照常放行，不留标记", async () => {

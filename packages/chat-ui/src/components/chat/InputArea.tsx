@@ -1,7 +1,7 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, X, Zap, CornerDownLeft, CornerRightDown } from 'lucide-react'
+import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock } from 'lucide-react'
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
 import {
@@ -17,6 +17,9 @@ import {
   selectIsStreaming,
   selectIsAgentClosing,
   selectActivePendingInput,
+  selectSessionCapabilities,
+  selectSessionRun,
+  selectSessionSource,
   pendingPromptMessage
 } from '../../stores/chatStore'
 import { useImageUpload } from '../../hooks/useImageUpload'
@@ -32,17 +35,15 @@ import { usePasteChips } from '../../hooks/usePasteChips'
 import { isImeComposing } from '../../utils/ime'
 
 /**
- * streaming 时的三个发送出口，顺序即急迫度从高到低：
- * 立即（pi steer，下个轮次边界插入）/ 追加（followUp，本轮本应结束时续跑）/
- * 下轮（nextTurn，等下一次 prompt 前置，不被中止清空）。
+ * 运行中的两个发送出口（P3-11 两档），顺序即急迫度从高到低：
+ * 立即（pi steer，下个轮次边界插入）/ 追加（followUp，本轮本应结束时续跑）。
  *
- * Enter 仍绑第一个，与改造前的行为一致。三者落地的消息数据完全相同，
- * 差别只在 pi 把它插进 agent loop 的时机。
+ * Enter 绑第一个（运行中回车 = 立即）；追加没有快捷键（PIN-12）。两者落地的消息数据完全相同，
+ * 差别只在 pi 把它插进 agent loop 的时机。排着的那些可以在队列面板里撤回。
  */
 const QUEUE_TIERS = [
   { tier: 'steer' as const, Icon: Zap, primary: true },
-  { tier: 'followUp' as const, Icon: CornerDownLeft, primary: false },
-  { tier: 'nextTurn' as const, Icon: CornerRightDown, primary: false }
+  { tier: 'followUp' as const, Icon: CornerDownLeft, primary: false }
 ]
 
 // 输入框高度：统一紧凑单行（44px，与原笔记本模式一致），内容超出自动增高至上限；不提供拖拽调高
@@ -99,6 +100,25 @@ export function InputArea({
     : activePendingInput.kind === 'ask'
       ? 'warning'
       : 'accent'
+  /**
+   * 上个进程退出时这条会话正在跑（P3-12，Q-P3-10）：输入卡片顶上一条横幅 +「继续」，下面一行提示「直接发新消息
+   * 也行，会先停掉被中断的那一轮」—— 发送照常走 `agent.prompt`，运行时先中止再发（abort-then-send）。
+   * 横幅只跟着视图的 `run.state` 走，从不乐观收起（PIN-17）
+   */
+  const run = useChatStore(selectSessionRun)
+  const source = useChatStore(selectSessionSource)
+  const isInterrupted = !!activeSessionId && source === 'durable' && run.state === 'interrupted'
+  /**
+   * 旧格式会话（P4-01，§2A）：输入卡片顶上一条只读横幅 + [新建对话]（只在有宿主时出现）。只看视图的
+   * `source`，不看能力位 —— 与上面的中断横幅互斥（那条只认 durable），两条永远不会同时出现
+   */
+  const isLegacy = !!activeSessionId && source === 'legacy'
+  /**
+   * 这条会话不能发消息（`capabilities.send:false`，Q-P3-21：旧格式会话即如此）。
+   * 还没收到视图时按新会话的口径（能发）
+   */
+  const canSendInSession = useChatStore((s) => selectSessionCapabilities(s).send)
+  const sendBlocked = !!activeSessionId && !canSendInSession
   // 渠道端（无 HostApi）只读：禁用一切会话配置编辑（模型/工具等）
   const hasHost = getHostApi() !== null
   const canEdit = hasHost
@@ -155,6 +175,66 @@ export function InputArea({
    * 失败时输入框文本与欢迎页草稿都还在，原样重试即可。
    */
   const [sendError, setSendError] = useState<string | null>(null)
+
+  /**
+   * 「继续」按下之后的那条会话（PIN-17）：按钮保持禁用，直到视图离开 interrupted 或调用失败 —— 调用本身要等
+   * 整轮落定才回，界面不靠它的时机改形态。ref 挡连点（同一刻只发一次）
+   */
+  const [continuingFor, setContinuingFor] = useState<string | null>(null)
+  const continuingRef = useRef(false)
+  useEffect(() => {
+    if (continuingFor !== null && (continuingFor !== activeSessionId || !isInterrupted)) {
+      continuingRef.current = false
+      setContinuingFor(null)
+    }
+  }, [continuingFor, activeSessionId, isInterrupted])
+
+  const handleContinue = async (): Promise<void> => {
+    const sid = activeSessionId
+    if (!sid || continuingRef.current || isAgentClosing) return
+    continuingRef.current = true
+    setContinuingFor(sid)
+    setSendError(null)
+    try {
+      const result = await getSessionChannelApi().agent.continue(sid)
+      if (!result.success) throw new Error(result.error ?? 'continue failed')
+    } catch (err) {
+      if (useChatStore.getState().activeSessionId !== sid) return
+      continuingRef.current = false
+      setContinuingFor(null)
+      setSendError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  /**
+   * 旧格式横幅的 [新建对话]（PIN-03）：在当前这条会话所属的项目里建一条普通会话 → 刷新列表 → 选中它。
+   * 不带欢迎页的模型 / 工具、不预建 Agent（与侧栏「新建对话」同口径）。ref 挡连点，失败走发送错误行（PIN-04）
+   */
+  const [creatingNewChat, setCreatingNewChat] = useState(false)
+  const creatingNewChatRef = useRef(false)
+  const handleLegacyNewChat = async (): Promise<void> => {
+    const host = getHostApi()
+    if (!host || creatingNewChatRef.current) return
+    const { sessions, activeSessionId: sid } = useChatStore.getState()
+    const projectId = sessions.find((s) => s.id === sid)?.projectId ?? null
+    creatingNewChatRef.current = true
+    setCreatingNewChat(true)
+    setSendError(null)
+    try {
+      const session = await host.session.create({ projectId })
+      const list = await host.session.list()
+      const store = useChatStore.getState()
+      store.setSessions(list)
+      store.setActiveSessionId(session.id)
+    } catch (err) {
+      if (useChatStore.getState().activeSessionId === sid) {
+        setSendError(err instanceof Error ? err.message : String(err))
+      }
+    } finally {
+      creatingNewChatRef.current = false
+      setCreatingNewChat(false)
+    }
+  }
 
   /** 输入变化处理：检测 "/commandId " 模式并自动转为芯片；同步 @ 引用触发态与登记表 */
   const handleInputChange = useCallback(
@@ -369,7 +449,7 @@ export function InputArea({
     paste.reset()
   }
 
-  /** 把一条用户消息发给主会话 Agent：清空输入态 → 置流式态 → agent.prompt */
+  /** 把一条用户消息发给主会话 Agent：清空输入态 → 乐观占位（同时即流式态）→ agent.prompt */
   const sendToMainAgent = async (
     sid: string,
     outgoing: { contentText: string; inlineTokens?: Record<string, InlineToken> },
@@ -377,10 +457,9 @@ export function InputArea({
   ): Promise<void> => {
     resetComposer()
     const store = useChatStore.getState()
-    store.setIsStreaming(sid, true)
-    store.clearStreamingContent(sid)
-    // 乐观占位：用户消息要等后端落库才经 user_message 回来，而创建运行时（含 MCP 惰性连接）
-    // 可能要几秒 —— 输入框已清空、列表里却没这句话，像是消息丢了。先顶上，落库即换成真的
+    // 乐观占位（Q-P3-07）：用户消息要等会话受理才出现在视图里，而创建运行时（含 MCP 惰性连接）
+    // 可能要几秒 —— 输入框已清空、列表里却没这句话，像是消息丢了。先顶上（它在的时候界面就是
+    // 「在跑」的形态），视图里出现这条用户消息即在同一次更新里换成真的
     store.touchSessionActive(sid)
     store.setPendingPrompt(
       sid,
@@ -405,9 +484,9 @@ export function InputArea({
         inlineTokens: outgoing.inlineTokens
       })
     } finally {
-      // 占位的唯一收尾处。正常路径上 user_message 早就把它换成真的了，这里兜两种它到不了的
-      // 情况：整轮跑完仍没落库，以及 prompt 本身抛出（IPC 把主进程的异常原样拒绝回来，
-      // 没有 finally 的话占位会一直挂着）。**不能改由 error 事件撤** —— 见 useAgentEvents
+      // 占位的兜底收尾。正常路径上视图早就把它换成真的了，这里兜两种它到不了的情况：整轮跑完仍没
+      // 受理（发送被拒、prompt 以 {error} 落定），以及 prompt 本身抛出（IPC 把主进程的异常原样拒绝
+      // 回来，没有 finally 的话占位会一直挂着）。**不能改由 error 事件撤** —— 见 useAgentEvents
       useChatStore.getState().setPendingPrompt(sid, null)
     }
   }
@@ -429,7 +508,7 @@ export function InputArea({
       requestId: activePendingInput.id,
       response: { kind: 'other', text }
     })
-    // 后端 resolve 后广播 input_request_resolved → store 自动移除该 pending
+    // 询问落定后视图里就没有它了 → store 自动移除该 pending
   }
 
   /**
@@ -461,7 +540,13 @@ export function InputArea({
     const images = pendingImages
 
     // 有芯片时即使参数为空也允许发送（纯命令）
-    if ((!rawText && !slashChip && images.length === 0) || isStreaming || isAgentClosing) return
+    if (
+      (!rawText && !slashChip && images.length === 0) ||
+      isStreaming ||
+      isAgentClosing ||
+      sendBlocked
+    )
+      return
 
     // 无会话则自动创建临时会话（欢迎页直接发送时走这条路径）。
     let sid = activeSessionId
@@ -488,34 +573,28 @@ export function InputArea({
   /** 中止生成（后端统一处理落库 + Agent 上下文同步） */
   const handleAbort = async (): Promise<void> => {
     if (!activeSessionId) return
-    const sid = activeSessionId
-    const store = useChatStore.getState()
-    // 已生成的部分内容由 harness 自己落成 entry（stopReason='aborted'），
-    // 经 assistant_message / agent_end 广播回来 —— 这里只收流式态
-    await getSessionChannelApi().agent.abort(sid)
-    store.finishStreaming(sid)
+    // 已生成的部分内容由运行时自己落成条目（stopReason='aborted'），流式态随视图的运行状态收起
+    await getSessionChannelApi().agent.abort(activeSessionId)
   }
 
   /**
-   * 把当前输入投进 pi 的某条用户消息队列（立即 / 追加 / 下轮）。
+   * 把当前输入投进 pi 的某条用户消息队列（立即 / 追加）。
    *
    * 队列通道不携带 inlineTokens（harness 在 drain 那一刻才写 user 消息，
    * 显示侧车没法紧邻它落盘）→ 粘贴芯片就地展开为完整原文。
    */
-  const handleQueueSend = async (tier: 'steer' | 'followUp' | 'nextTurn'): Promise<void> => {
+  const handleQueueSend = async (tier: 'steer' | 'followUp'): Promise<void> => {
     const text = paste.resolveInline(inputText.trim())
     if (!text || !activeSessionId) return
     const store = useChatStore.getState()
     store.setInputText('')
     paste.reset()
     const api = getSessionChannelApi().agent
-    // 竞态保护：agent 可能刚好结束。steer/followUp 在 idle 相位会被 pi 拒（invalid_state），
-    // 退回普通 prompt；nextTurn 任何相位都能入队，保持它「等下次发送」的原语义。
+    // 竞态保护：点下去的那一刻 run 可能刚好结束（视图已是 idle / interrupted）—— 两档都退回普通 prompt
+    // （中断态的发送由运行时先中止再发）；关停中哪儿也不发
     if (useChatStore.getState().sessionClosing[activeSessionId]) return
     const stillStreaming = store.sessionStreams[activeSessionId]?.isStreaming
-    if (!stillStreaming && tier !== 'nextTurn') {
-      store.setIsStreaming(activeSessionId, true)
-      store.clearStreamingContent(activeSessionId)
+    if (!stillStreaming) {
       await api.prompt({ sessionId: activeSessionId, text })
       return
     }
@@ -616,6 +695,7 @@ export function InputArea({
     (inputText.trim().length > 0 || pendingImages.length > 0 || !!slashChip) &&
     !isStreaming &&
     !isAgentClosing &&
+    !sendBlocked &&
     !!activeModel
 
   // ─── 上下文用量环形指示器（普通会话）──
@@ -673,12 +753,13 @@ export function InputArea({
           <Send size={14} />
         </button>
       ) : (
-        // 三个发送出口 = pi 的三条队列。分段成一组：读作「一个发送控件的三个出口」，
-        // 而不是三个各自独立的按钮
+        // 两个发送出口 = pi 的两条队列。分段成一组：读作「一个发送控件的两个出口」，
+        // 而不是两个各自独立的按钮
         <div className="flex items-center rounded-lg border border-border-secondary/60 overflow-hidden">
           {QUEUE_TIERS.map(({ tier, Icon, primary }, i) => (
             <button
               key={tier}
+              data-queue-tier={tier}
               onClick={() => handleQueueSend(tier)}
               disabled={queueDisabled}
               title={t(`queue.${tier}Hint`)}
@@ -757,8 +838,72 @@ export function InputArea({
           {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
           {accessory}
 
-          {/* 待投递队列（只读回执）。排在 accessory 之下 —— 待处理请求的优先级更高 */}
+          {/* 待投递队列（可逐条撤回）。排在 accessory 之下 —— 待处理请求的优先级更高 */}
           <QueuePanel />
+
+          {/* 被中断的运行（P3-12）：横幅 +「继续」，提示行在横幅可见时恒显示（PIN-20） */}
+          {isInterrupted && (
+            <div
+              data-interrupted-banner=""
+              className="px-3 pt-2.5 pb-2 border-b border-border-secondary/40"
+            >
+              <div className="flex items-center gap-2">
+                <CirclePause size={14} className="flex-shrink-0 text-warning" />
+                <span data-interrupted-text="" className="flex-1 min-w-0 text-xs text-text-primary">
+                  {t('run.interruptedBanner')}
+                </span>
+                <button
+                  type="button"
+                  data-interrupted-continue=""
+                  onClick={handleContinue}
+                  disabled={continuingFor === activeSessionId || isAgentClosing}
+                  className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] transition-colors ${
+                    continuingFor === activeSessionId || isAgentClosing
+                      ? 'bg-bg-hover text-text-tertiary cursor-not-allowed'
+                      : 'bg-accent text-white hover:bg-accent-hover'
+                  }`}
+                >
+                  {t('run.interruptedContinue')}
+                </button>
+              </div>
+              <div
+                data-interrupted-hint=""
+                className="mt-1 pl-[22px] text-[11px] text-text-tertiary"
+              >
+                {t('run.interruptedHint')}
+              </div>
+            </div>
+          )}
+
+          {/* 旧格式会话（P4-01）：只读横幅；有宿主时附 [新建对话]（渠道端没有建会话的能力） */}
+          {isLegacy && (
+            <div
+              data-legacy-banner=""
+              className="px-3 pt-2.5 pb-2 border-b border-border-secondary/40"
+            >
+              <div className="flex items-center gap-2">
+                <Lock size={14} className="flex-shrink-0 text-text-tertiary" />
+                <span data-legacy-text="" className="flex-1 min-w-0 text-xs text-text-primary">
+                  {t('chat.legacySessionReadOnly')}
+                </span>
+                {hasHost && (
+                  <button
+                    type="button"
+                    data-legacy-new-chat=""
+                    onClick={handleLegacyNewChat}
+                    disabled={creatingNewChat}
+                    className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] transition-colors ${
+                      creatingNewChat
+                        ? 'bg-bg-hover text-text-tertiary cursor-not-allowed'
+                        : 'bg-accent text-white hover:bg-accent-hover'
+                    }`}
+                  >
+                    {t('sidebar.newChat')}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* 图片预览条 */}
           {pendingImages.length > 0 && (
@@ -847,18 +992,24 @@ export function InputArea({
               onScroll={(e) => {
                 if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop
               }}
+              disabled={sendBlocked}
               placeholder={
-                isAgentClosing
-                  ? t('input.placeholderClosing')
-                  : activePendingInput
-                    ? t('pendingInputs.otherPlaceholder')
-                    : isStreaming
-                      ? t('input.placeholderSteer')
-                      : slashChip
-                        ? t('input.placeholder')
-                        : modelSupportsVision
-                          ? t('input.placeholderVision')
-                          : t('input.placeholder')
+                // 旧格式会话的说明在横幅里，占位留空免得同一句话出现两遍（PIN-02）
+                isLegacy
+                  ? ''
+                  : sendBlocked
+                    ? t('chat.legacySessionReadOnly')
+                    : isAgentClosing
+                      ? t('input.placeholderClosing')
+                      : activePendingInput
+                        ? t('pendingInputs.otherPlaceholder')
+                        : isStreaming
+                          ? t('input.placeholderSteer')
+                          : slashChip
+                            ? t('input.placeholder')
+                            : modelSupportsVision
+                              ? t('input.placeholderVision')
+                              : t('input.placeholder')
               }
               rows={1}
               style={{

@@ -12,9 +12,9 @@ import {
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
-import type { AgentToolResult } from '@earendil-works/pi-agent-core'
+import type { ToolResult } from '@shuvix/agent-runtime'
 import type { LsToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
-import { BaseTool, buildTree } from '@shuvix/agent-runtime'
+import { BaseTool, buildTree, callOwnerOf, type ToolCallScope } from '@shuvix/agent-runtime'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { rgFilesList } from '../utils/toolUtils/ripgrep'
 import { t } from '../i18n'
@@ -47,6 +47,8 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   readonly description = LS_DESCRIPTION
   readonly parameters = LsParamsSchema
   readonly outputStrategy = 'keep-start' as const
+  // 只读：中断后恢复时重跑一遍无害（durable replay）
+  readonly replay = 'safe' as const
 
   constructor(private ctx: ToolContext) {
     super()
@@ -59,7 +61,8 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
   protected async securityCheck(
     toolCallId: string,
     params: { path?: string; ignore?: string[] },
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    call?: ToolCallScope
   ): Promise<void> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
@@ -70,14 +73,22 @@ export class ListTool extends BaseTool<typeof LsParamsSchema> {
 
     // 询问守卫：走统一评估 —— 内置策略只对家目录里会话目录以外的读询问（ask-on-external-path，
     // 「允许并记住」过的路径不问）；命中则挂起等待用户回答
-    await assertReadAllowed(this.ctx, config, toolCallId, 'ls', searchPath, params.path)
+    await assertReadAllowed(
+      this.ctx,
+      config,
+      toolCallId,
+      'ls',
+      searchPath,
+      params.path,
+      callOwnerOf(call)
+    )
   }
 
   protected async executeInternal(
     _toolCallId: string,
     params: { path?: string; ignore?: string[] },
     signal?: AbortSignal
-  ): Promise<AgentToolResult<LsToolDetails>> {
+  ): Promise<ToolResult<LsToolDetails>> {
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
 
     const config = resolveProjectConfig(this.ctx.sessionId)

@@ -1,14 +1,17 @@
 /**
  * 通知决策器 —— 宿主无关。
  *
- * 订阅一端的 ChatEvent 流，判定「这条事件该不该打扰用户」，把结论交给宿主端口去弹
- * （桌面 Electron `Notification`，扩展 `chrome.notifications`）。两端共用这一份逻辑，
- * 宿主只剩四件它才知道的事：怎么弹、用户此刻在看哪、会话叫什么、开关开没开。
+ * 订阅一端的 ChatEvent 流（余项：运行生命周期、错误、派生 agent 的登记 / 收尾），外加询问的钩子
+ * （`askRaised` / `askResolved`，宿主接到会话的 `subscribeInputs` 上 —— 前端线路上已经没有询问事件，
+ * P3-08），判定「该不该打扰用户」，把结论交给宿主端口去弹（桌面 Electron `Notification`，扩展
+ * `chrome.notifications`）。宿主只剩几件它才知道的事：怎么弹、用户此刻在看哪、会话叫什么、开关开没开，
+ * 以及一轮以失败收尾时那条错误行写的是什么（`runErrorText`，PIN-08）。
  *
  * 三个触发点：
- *  - **询问**：`input_request` 一挂起就弹，用户在界面里答了（`input_request_resolved`）就撤回。
- *  - **完成**：根会话 `agent_end` 且 `reason === 'ok'`。
- *  - **异常**：根会话 `agent_end` 且 `reason === 'error'`，或运行中/运行外的 `error` 事件。
+ *  - **询问**：`askRaised` 一挂起就弹，落定（`askResolved`：答了 / 取消 / 会话关了）就撤回。
+ *  - **完成**：根会话 `agent_end` 且 `reason === 'ok'`（`runEnded`）。
+ *  - **异常**：根会话 `agent_end` 且 `reason === 'error'`，或运行中/运行外的 `error` 事件。模型侧的失败
+ *    如今是会话里的一条错误条目、不再另发 `error` 事件，所以失败通知的正文从 `runErrorText` 现取。
  *
  * 三条刻意的取舍：
  *
@@ -16,7 +19,7 @@
  *    「已中止」纯属噪音。
  *
  * 2. **派生 agent 的 `agent_end` 不弹。** 事件流里子 agent 与根 agent 完全同构（同一套
- *    HarnessSession，只是 sessionId 是子会话 id），不区分的话一次 explore 就多一条通知。
+ *    会话运行时，只是 sessionId 是子会话 id），不区分的话一次 explore 就多一条通知。
  *    但**子 agent 的询问要弹** —— 卡住的是整轮，用户不答就没人往下走；只是通知点击要
  *    落到根会话上，所以这里维护 sub→root 映射（`ChatEventBase.subAgentId` 是个从没有人
  *    写过的字段，指望不上，只能像 ChatFrontendRegistry 那样自己按 register/end 记）。
@@ -32,6 +35,7 @@
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentNotification } from '@shuvix/chat-protocol/notification'
 import type { ChatEvent } from '../types'
+import type { RunEndReason } from '../durable/projection/sessionProjector'
 
 /** 宿主通知端口：把一条 AgentNotification 落到具体平台上 */
 export interface NotifierPort {
@@ -57,12 +61,29 @@ export interface NotificationCenterDeps {
   sessionTitle?(sessionId: string): string | undefined
   /** 总开关，每次判定时实时读（用户改设置立即生效，不必重建） */
   enabled?(): boolean
+  /**
+   * 一轮以失败收尾时，这条会话最后那条错误行的文本（PIN-08：宿主从投影里读最后一条 `error_event`）。
+   * 只在 `reason === 'error'`、调用方没给文本、本轮也没攒下 `error` 事件时才问。取不到 → undefined。
+   */
+  runErrorText?(sessionId: string): string | undefined
   logger?: { warn(message: string): void }
 }
 
 export interface NotificationCenter {
   /** 喂事件。宿主把整条 ChatEvent 流接进来即可，过滤在内部做 */
   handleEvent(event: ChatEvent): void
+  /**
+   * 一条询问挂起（会话 `subscribeInputs` 的 onRequest）。`sessionId` 是询问所在的会话（派生 agent 的询问
+   * 就挂在它的根会话上；登记过的子会话 id 照样归一到根）
+   */
+  askRaised(sessionId: string, request: InputRequest): void
+  /** 一条询问落定（onResolved：答了 / 取消 / 被顶替 / 会话关了）—— 撤回它的通知 */
+  askResolved(sessionId: string, requestId: string): void
+  /**
+   * 一轮运行结束（PIN-08）。`agent_end` 经 `handleEvent` 来时也走这里（不带文本）；失败而又没有文本时
+   * 问宿主的 `runErrorText`。派生 agent / 中止不弹
+   */
+  runEnded(sessionId: string, reason: RunEndReason, errorText?: string): void
   /**
    * 用户打开/切到了某个会话 —— 撤回它名下所有还挂着的通知。
    *
@@ -167,6 +188,32 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
     })
   }
 
+  function runEnded(sessionId: string, reason: RunEndReason, errorText?: string): void {
+    runningSessions.delete(sessionId)
+    const pending = pendingErrors.get(sessionId)
+    pendingErrors.delete(sessionId)
+    // 派生 agent 跑完不是「一轮结束」（见文件头注 2、3）：它的失败会以 tool error
+    // 的形式回到父 agent，父 agent 那轮的 agent_end 才是真正的结局
+    if (rootOf(sessionId) !== sessionId) return
+    if (reason === 'aborted') return
+    if (reason === 'error' || pending !== undefined) {
+      const text = pending ?? errorText ?? safeRunErrorText(sessionId)
+      notifyRunEnd(sessionId, true, text)
+    } else {
+      notifyRunEnd(sessionId, false)
+    }
+  }
+
+  /** 宿主的错误文本 seam 抛错只当取不到 */
+  function safeRunErrorText(sessionId: string): string | undefined {
+    try {
+      return deps.runErrorText?.(sessionId)
+    } catch (err) {
+      deps.logger?.warn(`读取失败文本出错: ${err instanceof Error ? err.message : String(err)}`)
+      return undefined
+    }
+  }
+
   return {
     handleEvent(event: ChatEvent): void {
       switch (event.type) {
@@ -188,8 +235,8 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
         }
 
         case 'error': {
-          // 运行中出的错等 agent_end 一起弹（同一次失败可能先后广播 message_end 的
-          // error 和 prompt() catch 的 error，攒着才不会弹两条）；
+          // 运行中出的错等 agent_end 一起弹（同一轮可能广播不止一条 error，攒着只弹最后一条，
+          // 不会弹两条）；
           // 不在运行中说明这轮压根没起来（模型解析失败等），没有 agent_end 兜底，立刻弹。
           if (runningSessions.has(event.sessionId)) pendingErrors.set(event.sessionId, event.error)
           // 派生 agent 的错同样不弹（与 agent_end 分支同因）：它以 tool error 回到父 agent，
@@ -200,35 +247,7 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
         }
 
         case 'agent_end': {
-          runningSessions.delete(event.sessionId)
-          const error = pendingErrors.get(event.sessionId)
-          pendingErrors.delete(event.sessionId)
-          // 派生 agent 跑完不是「一轮结束」（见文件头注 2、3）：它的失败会以 tool error
-          // 的形式回到父 agent，父 agent 那轮的 agent_end 才是真正的结局
-          if (rootOf(event.sessionId) !== event.sessionId) break
-          if (event.reason === 'aborted') break
-          if (event.reason === 'error' || error) notifyRunEnd(event.sessionId, true, error)
-          else notifyRunEnd(event.sessionId, false)
-          break
-        }
-
-        case 'input_request': {
-          const root = rootOf(event.sessionId)
-          show({
-            key: `ask:${event.request.id}`,
-            kind: 'ask',
-            sessionId: root,
-            title: titleOf(root),
-            body: deps.t('notification.askBody', {
-              detail: describeRequest(event.request)
-            }),
-            requestId: event.request.id
-          })
-          break
-        }
-
-        case 'input_request_resolved': {
-          dismiss(`ask:${event.requestId}`, rootOf(event.sessionId))
+          runEnded(event.sessionId, event.reason)
           break
         }
 
@@ -236,6 +255,24 @@ export function createNotificationCenter(deps: NotificationCenterDeps): Notifica
           break
       }
     },
+
+    askRaised(sessionId: string, request: InputRequest): void {
+      const root = rootOf(sessionId)
+      show({
+        key: `ask:${request.id}`,
+        kind: 'ask',
+        sessionId: root,
+        title: titleOf(root),
+        body: deps.t('notification.askBody', { detail: describeRequest(request) }),
+        requestId: request.id
+      })
+    },
+
+    askResolved(sessionId: string, requestId: string): void {
+      dismiss(`ask:${requestId}`, rootOf(sessionId))
+    },
+
+    runEnded,
 
     sessionOpened(sessionId: string): void {
       const keys = keysBySession.get(sessionId)
