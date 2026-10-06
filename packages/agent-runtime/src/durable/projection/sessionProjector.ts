@@ -5,7 +5,8 @@
  * **内容来源是 `conversation.watch(ctx)`**（P3-03 设计稿的修订）：durable 的视图挂载按提交发布前进，
  * 每一帧（精确、有序、异步，在微任务里）给出 `{entries, docs}`（含 `pi.live` / `pi.inbox`）。帧处理器
  * 把它喂给纯投影（`project.ts`）再逐字段对齐进状态（`reconcile.ts`）—— 流式文字是 `a` 操作，新消息是一条
- * `p`。帧处理器不在 Session 的提交监听里，下游（SyncHub 的发送）抛错也只记日志，碰不到会话（PIN-03）。
+ * `p`。逐帧的代价与会话长度基本无关（P4-09b）：投影带着一份 `ProjectionMemo`，没变的消息交回上一帧的对象；
+ * 对齐拿上一次写进状态的那份视图当 `prev`，同一引用的子树整个跳过（见 `revise`）。帧处理器不在 Session 的提交监听里，下游（SyncHub 的发送）抛错也只记日志，碰不到会话（PIN-03）。
  *
  * 帧里没有、但投影要的东西由一条**同步的旁路**（`subscribeCommits`）先记下：
  *  - `submission` 变化：requestId → 落下的条目（显示侧车按它落到 user 条目上）、submission id → requestId
@@ -32,7 +33,12 @@
  * 共享与回收：`DurableSession.projector()` 惰性建一个、同一时刻只有一个；`acquire()` / `release()` 计数，
  * 最后一个 release 之后拆掉（状态保留最后的值）；会话关停时一并拆掉。不依赖 Node / Electron。
  */
-import { replicatedState, type MutableReplicatedState } from '@earendil-works/chord'
+import {
+  copyJson,
+  replicatedState,
+  type JsonValue,
+  type MutableReplicatedState
+} from '@earendil-works/chord'
 import {
   AssistantEntry,
   LiveDoc,
@@ -57,7 +63,7 @@ import { backgroundContext as BG, errorText } from '../context'
 import { DisplayDoc, SessionStateDoc, type SessionState } from '../docs'
 import type { PendingInputHooks } from '../inputRequests'
 import { displayItemOf, type DisplayItem } from './display'
-import { projectSessionView } from './project'
+import { ProjectionMemo, projectSessionView } from './project'
 import { reconcile } from './reconcile'
 
 // ─────────────────────────── 公共类型 ───────────────────────────
@@ -140,6 +146,11 @@ export interface ProjectorHost {
 
 // ─────────────────────────── 共用的投影核心 ───────────────────────────
 
+/** 一份与投影的对象不共享任何容器的拷贝（交给 chord 接管的初值 / 换挂载的整份值） */
+function detached<V extends object>(view: V): V {
+  return copyJson(view as unknown as JsonValue) as unknown as V
+}
+
 const ROOT_REVISION_FAILED = 'projector revision failed'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -217,6 +228,13 @@ export abstract class ProjectorCore<V extends object> {
   private rootRun: TrackedRun | undefined
   /** 别的对话上正在跟踪的运行（派生 agent；换挂载之后还没结束的旧根运行） */
   private readonly otherRuns = new Map<ConversationId, TrackedRun>()
+  /** 投影的结构共享（P4-09b）：子类把它传给纯投影 */
+  protected readonly memo = new ProjectionMemo()
+  /**
+   * 上一次写进状态的那份视图（投影交出的对象本身）与写完那一刻状态的根值（P4-09b）。`revise` 拿它当
+   * `reconcile` 的 `prev` —— 前提「状态 ≡ 它」由 `prevForState` 逐帧核对。
+   */
+  private applied: { readonly view: V; readonly root: V } | undefined
 
   protected constructor(host: ProjectorHost, options: ProjectorCoreOptions) {
     this.host = host
@@ -426,7 +444,11 @@ export abstract class ProjectorCore<V extends object> {
   protected startMount(mount: ProjectorMount): void {
     this.mount = mount
     this.rootRun = this.initialRun(mount)
-    this.stateRef = replicatedState(this.project(mount, this.runStateOf(mount.conversationId)))
+    const next = this.project(mount, this.runStateOf(mount.conversationId))
+    // chord 接管初值不拷贝：交一份拷贝，投影留着的对象（memo 之后还会复用）就永远不归状态所有
+    const state = replicatedState(detached(next))
+    this.stateRef = state
+    this.applied = { view: next, root: state.value }
     this.listen(mount)
   }
 
@@ -448,7 +470,7 @@ export abstract class ProjectorCore<V extends object> {
     this.rootRun = this.initialRun(mount)
     const state = this.requireState()
     const next = this.project(mount, this.runStateOf(mount.conversationId))
-    this.guard(() => state.replace(BG, next))
+    this.write(state, next, () => state.replace(BG, detached(next)))
     this.listen(mount)
   }
 
@@ -509,7 +531,33 @@ export abstract class ProjectorCore<V extends object> {
   private revise(mount: ProjectorMount, runState: RunViewState): void {
     const state = this.requireState()
     const next = this.project(mount, runState)
-    this.guard(() => state.change(BG, (draft) => reconcile(draft, next)))
+    const prev = this.prevForState(state)
+    this.write(state, next, () => state.change(BG, (draft) => reconcile(draft, next, prev)))
+  }
+
+  /**
+   * 对齐可以拿来按引用跳过的上一份视图（P4-09b）：只有状态的根值还是上次写完时那一个才给 —— chord 每次
+   * 生效的修订（change / replace）都换一个新的根值，所以任何别的写者动过状态，这里都会退回整棵比较。
+   * 「上一份视图与状态深相等」于是不靠约定：根值没换 = 状态从那以后没被改过，而那一刻它与 `view` 深相等；
+   * `view` 里的对象投影从不改动（memo 只沿用、不修改；状态里存的是拷贝，见 `detached`）。
+   */
+  private prevForState(state: MutableReplicatedState<V>): V | undefined {
+    const applied = this.applied
+    return applied !== undefined && state.value === applied.root ? applied.view : undefined
+  }
+
+  /**
+   * 一次写入（`guard` 语义）并记下写进去的视图：写入成功、或已经生效只是下游监听器抛错（根值换了）→ 状态
+   * 与 `next` 深相等；对齐本身抛错时 chord 整个放弃（根值没换），上一次的记录仍然成立。
+   */
+  private write(state: MutableReplicatedState<V>, next: V, apply: () => void): void {
+    const before = state.value
+    let completed = false
+    this.guard(() => {
+      apply()
+      completed = true
+    })
+    if (completed || state.value !== before) this.applied = { view: next, root: state.value }
   }
 
   /** 状态写入：下游监听器抛错（chord 收集后重抛）只记日志，状态本身已经更新（PIN-03 / PIN-12） */
@@ -863,7 +911,8 @@ export class SessionProjectorImpl extends ProjectorCore<SessionView> implements 
       this.displayByEntry(mount),
       this.host.pendingInputs(),
       runState,
-      this.queueDisplay(mount, inbox)
+      this.queueDisplay(mount, inbox),
+      this.memo
     )
   }
 

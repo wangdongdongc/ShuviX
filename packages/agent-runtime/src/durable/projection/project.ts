@@ -2,7 +2,8 @@
  * 界面投影（phase 3，P3-02）—— durable 会话的活上下文 + 实时文档 → `SessionView` / `AgentView`。
  *
  * **纯函数**：同样的输入永远给出同样的输出；不读时钟、不读随机数、不改输入、输出里没有一处与输入
- * 共享的对象，输出是严格 JSON（没有 `undefined` 的键）。实时路径（P3-03 的 SessionProjector，每次
+ * 共享的对象，输出是严格 JSON（没有 `undefined` 的键）。长期投影可以传一份 `ProjectionMemo`（P4-09b）：
+ * 输出与不传时深相等，只是没变的部分沿用上一次交出的对象（从不改动它们）。实时路径（P3-03 的 SessionProjector，每次
  * 发布）与重开路径（一次性快照）调用的是同一个函数、喂的是同一种输入（durable 的 ConversationView），
  * 所以「跑着所见」与「重开所见」逐字段相同。
  *
@@ -257,6 +258,284 @@ function renderInlineMarkers(display: DisplayItem): string | undefined {
   return missing ? undefined : text
 }
 
+// ─────────────────────────── 结构共享（P4-09b） ───────────────────────────
+
+/** 一条 assistant 条目与帧无关的事实（按条目对象缓存：提交了的条目不再变） */
+interface AssistantFacts {
+  readonly message: PiAssistantMessage
+  /** `stopReason === 'error'`（折叠的判据；不计上下文占用） */
+  readonly isError: boolean
+  /** 失败轮塌成一行错误（error 且带 errorMessage）：不出卡、不登记调用 */
+  readonly errorRow: boolean
+  /** 什么都没产出：不出卡、不登记调用（提示留给这个任务的下一张） */
+  readonly empty: boolean
+  /** 卡里工具块的 toolCallId，按块序（= 登记次序） */
+  readonly toolCallIds: readonly string[]
+}
+
+/** 一条要渲染的消息与它依赖的全部输入（同一条目、依赖都没变 → 沿用上一次的对象） */
+type Slot =
+  | { readonly kind: 'user'; readonly entry: EntryRecord; readonly display: DisplayItem | undefined }
+  | { readonly kind: 'notice' | 'compaction'; readonly entry: EntryRecord }
+  | {
+      readonly kind: 'error'
+      readonly entry: EntryRecord
+      readonly facts: AssistantFacts
+      readonly hint: RetriedInfo | undefined
+    }
+  | {
+      readonly kind: 'card'
+      readonly entry: EntryRecord
+      readonly facts: AssistantFacts
+      readonly hint: RetriedInfo | undefined
+      /** 第 i 个工具块由哪条 `pi.tool-result` 回填（没有 → undefined） */
+      readonly fills: (EntryRecord | undefined)[]
+    }
+
+interface BuiltMessage {
+  readonly slot: Slot
+  readonly message: ChatMessage
+}
+
+/** 历史部分（消息列表 + 实时卡要的折叠提示 + 上下文占用）与它的输入 */
+interface HistoryResult {
+  readonly messages: ChatMessage[]
+  readonly liveHint: RetriedInfo | undefined
+  readonly usedTokens: number | null
+}
+
+interface HistoryInputs {
+  readonly entries: readonly EntryRecord[]
+  readonly runTask: number | undefined
+  readonly display: DisplayByEntry
+}
+
+/** 最近一次投影的复用情况（测试 / 性能护栏用） */
+export interface ProjectionMemoStats {
+  /** 整段历史沿用了上一次（条目、运行任务、显示侧车都没变） */
+  readonly historyReused: boolean
+  /** 这次新建的消息数 */
+  readonly built: number
+  /** 这次沿用上一次对象的消息数 */
+  readonly reused: number
+}
+
+/**
+ * 投影的结构共享（P4-09b）：一个长期投影（SessionProjector / AgentProjector）持有一份，逐帧传给
+ * `projectSessionView` / `projectAgentView`。输入没变的部分交回**上一次投影交出的同一个对象**：
+ *
+ *  - 每条消息按「条目对象 + 它依赖的输入」缓存 —— user 看显示侧车（值相等即可），assistant 看折叠提示与
+ *    每个工具块由哪条结果回填，通知 / 压缩只看条目。提交了的条目不可变（durable 的视图挂载按引用沿用它们），
+ *    所以条目对象是安全的键；换挂载、重开之后条目是新对象，自然全部重建；
+ *  - 条目数组、运行任务、显示侧车都没变（流式的一帧只改 `pi.live`）→ 整段历史原样沿用，与历史长度无关；
+ *  - 实时卡按 `live.generation.message` 的引用 + 折叠提示，工具运行按 `live.tools` 的引用；
+ *  - 消息逐个都没变 → 连数组也沿用。
+ *
+ * 交出去过的对象从此不再改动（新建的卡在交出之前回填完工具结果）；同一份视图里不会有一个对象出现两次。
+ * 有了它，`reconcile` 拿上一次的视图当 `prev` 就能按引用跳过没变的子树。结果与不带 memo 的投影深相等。
+ */
+export class ProjectionMemo {
+  private sessionId: string | undefined
+  private facts = new WeakMap<EntryRecord, AssistantFacts>()
+  private built = new WeakMap<EntryRecord, BuiltMessage>()
+  private messages: ChatMessage[] | undefined
+  private history: { readonly inputs: HistoryInputs; readonly result: HistoryResult } | undefined
+  private live:
+    | {
+        readonly partial: unknown
+        readonly runTask: number
+        readonly hint: RetriedInfo | undefined
+        readonly card: LiveCard | null
+      }
+    | undefined
+  private toolRuns: { readonly tools: unknown; readonly value: Record<string, ToolRunView> } | undefined
+  private lastStats: ProjectionMemoStats = { historyReused: false, built: 0, reused: 0 }
+
+  /** 最近一次投影的复用情况 */
+  get stats(): ProjectionMemoStats {
+    return this.lastStats
+  }
+
+  /** @internal 换了会话 id（不会发生在同一个投影上，保险起见）→ 全部作废 */
+  bind(sessionId: string): void {
+    if (this.sessionId === sessionId) return
+    this.sessionId = sessionId
+    this.facts = new WeakMap()
+    this.built = new WeakMap()
+    this.messages = undefined
+    this.history = undefined
+    this.live = undefined
+    this.toolRuns = undefined
+  }
+
+  /** @internal */
+  factsOf(entry: EntryRecord, message: PiAssistantMessage): AssistantFacts {
+    const cached = this.facts.get(entry)
+    if (cached !== undefined && cached.message === message) return cached
+    const toolCallIds: string[] = []
+    const { blocks } = convertBlocks(message.content, (tool) => toolCallIds.push(tool.toolCallId))
+    const isError = message.stopReason === 'error'
+    const errorRow = isError && Boolean(message.errorMessage)
+    const facts: AssistantFacts = {
+      message,
+      isError,
+      errorRow,
+      empty: !errorRow && blocks.length === 0 && imagesOfAssistant(message) === undefined,
+      toolCallIds: errorRow ? [] : toolCallIds
+    }
+    this.facts.set(entry, facts)
+    return facts
+  }
+
+  /** @internal 一条消息：依赖没变 → 上一次的对象；否则新建并记下 */
+  messageOf(sessionId: string, slot: Slot, counts: { built: number; reused: number }): ChatMessage {
+    const cached = this.built.get(slot.entry)
+    if (cached !== undefined && sameSlot(cached.slot, slot)) {
+      counts.reused++
+      return cached.message
+    }
+    const message = buildMessage(sessionId, slot)
+    this.built.set(slot.entry, { slot, message })
+    counts.built++
+    return message
+  }
+
+  /** @internal 消息逐个都没变 → 沿用上一次的数组 */
+  messagesOf(messages: ChatMessage[]): ChatMessage[] {
+    const last = this.messages
+    if (
+      last !== undefined &&
+      last.length === messages.length &&
+      messages.every((message, index) => message === last[index])
+    ) {
+      return last
+    }
+    this.messages = messages
+    return messages
+  }
+
+  /** @internal */
+  cachedHistory(inputs: HistoryInputs): HistoryResult | undefined {
+    const last = this.history
+    if (
+      last === undefined ||
+      last.inputs.entries !== inputs.entries ||
+      last.inputs.runTask !== inputs.runTask ||
+      !sameDisplayMap(last.inputs.display, inputs.display)
+    ) {
+      return undefined
+    }
+    this.lastStats = { historyReused: true, built: 0, reused: last.result.messages.length }
+    return last.result
+  }
+
+  /** @internal */
+  rememberHistory(
+    inputs: HistoryInputs,
+    result: HistoryResult,
+    counts: { built: number; reused: number }
+  ): void {
+    // 显示侧车拷一份：调用方之后改它的 Map 不影响下次比较
+    this.history = { inputs: { ...inputs, display: new Map(inputs.display) }, result }
+    this.lastStats = { historyReused: false, built: counts.built, reused: counts.reused }
+  }
+
+  /** @internal */
+  liveCard(
+    sessionId: string,
+    live: LiveInput,
+    runTask: number | undefined,
+    hint: RetriedInfo | undefined
+  ): LiveCard | null {
+    const partial = isRecord(live) && isRecord(live.generation) ? live.generation.message : undefined
+    const last = this.live
+    if (
+      runTask !== undefined &&
+      last !== undefined &&
+      last.partial === partial &&
+      last.runTask === runTask &&
+      sameHint(last.hint, hint)
+    ) {
+      return last.card
+    }
+    const card = liveCardOf(sessionId, live, runTask, hint)
+    this.live = runTask === undefined ? undefined : { partial, runTask, hint, card }
+    return card
+  }
+
+  /** @internal */
+  toolRunsOf(live: LiveInput): Record<string, ToolRunView> {
+    const tools = isRecord(live) && Array.isArray(live.tools) ? live.tools : undefined
+    const last = this.toolRuns
+    if (last !== undefined && last.tools === tools) return last.value
+    const value = toolRunsOf(live)
+    this.toolRuns = { tools, value }
+    return value
+  }
+}
+
+function sameHint(a: RetriedInfo | undefined, b: RetriedInfo | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  return a.count === b.count && a.lastError === b.lastError
+}
+
+/** 严格 JSON 的深相等（显示侧车的 tokens 用；很小） */
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) !== Array.isArray(b)) return false
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  for (const key of keysA) {
+    if (!Object.hasOwn(b, key)) return false
+    if (!jsonEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) {
+      return false
+    }
+  }
+  return true
+}
+
+/** 两份显示侧车值相等（旁路每次 DisplayDoc 变化都会重新解析出新对象，所以比值） */
+function sameDisplay(a: DisplayItem | undefined, b: DisplayItem | undefined): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  return a.content === b.content && jsonEqual(a.tokens, b.tokens)
+}
+
+function sameDisplayMap(a: DisplayByEntry, b: DisplayByEntry): boolean {
+  if (a === b) return true
+  if (a.size !== b.size) return false
+  for (const [entry, item] of a) {
+    if (!sameDisplay(item, b.get(entry))) return false
+  }
+  return true
+}
+
+function sameSlot(a: Slot, b: Slot): boolean {
+  if (a.entry !== b.entry || a.kind !== b.kind) return false
+  switch (b.kind) {
+    case 'user':
+      return sameDisplay((a as typeof b).display, b.display)
+    case 'notice':
+    case 'compaction':
+      return true
+    case 'error':
+      return sameHint((a as typeof b).hint, b.hint)
+    case 'card': {
+      const before = a as typeof b
+      if (!sameHint(before.hint, b.hint) || before.fills.length !== b.fills.length) return false
+      return b.fills.every((fill, index) => fill === before.fills[index])
+    }
+  }
+}
+
+/** assistant 消息里宿主挂的图片（`_images`）的拷贝；没有 / 不是 JSON → undefined */
+function imagesOfAssistant(message: PiAssistantMessage): ImageMeta[] | undefined {
+  const rawImages = (message as PiAssistantMessage & { _images?: unknown })._images
+  return Array.isArray(rawImages) ? jsonCopy<ImageMeta[]>(rawImages) : undefined
+}
+
 // ─────────────────────────── 核心 ───────────────────────────
 
 interface ProjectedCore {
@@ -277,9 +556,35 @@ function projectCore(
   entries: readonly EntryRecord[],
   live: LiveInput,
   display: DisplayByEntry,
-  runState: RunViewState
+  runState: RunViewState,
+  memo: ProjectionMemo
 ): ProjectedCore {
+  memo.bind(sessionId)
   const runTask = liveTaskOf(live)
+  const history = projectHistory(sessionId, entries, display, runTask, memo)
+  return {
+    messages: history.messages,
+    live: memo.liveCard(sessionId, live, runTask, history.liveHint),
+    toolRuns: memo.toolRunsOf(live),
+    run: runOf(live, runState),
+    context: { usedTokens: history.usedTokens }
+  }
+}
+
+/**
+ * 活上下文 → 消息列表。两遍：第一遍按原规则走一遍条目，只决定**结构**（哪些条目出消息、折叠提示交给谁、
+ * 每个工具块由哪条结果回填）；第二遍逐条交出消息 —— 依赖没变的沿用上一次的对象，其余新建。
+ */
+function projectHistory(
+  sessionId: string,
+  entries: readonly EntryRecord[],
+  display: DisplayByEntry,
+  runTask: number | undefined,
+  memo: ProjectionMemo
+): HistoryResult {
+  const inputs: HistoryInputs = { entries, runTask, display }
+  const cached = memo.cachedHistory(inputs)
+  if (cached !== undefined) return cached
 
   // 每个任务最后一条 assistant 条目的位置：更早的错误条目据此折叠
   const lastOfTask = new Map<number, number>()
@@ -289,66 +594,35 @@ function projectCore(
     }
   })
 
-  const messages: ChatMessage[] = []
-  /** toolCallId → 等待回填的工具块（同一 id 重用时后来的覆盖先来的） */
-  const pendingTools = new Map<string, AssistantToolBlock>()
+  const slots: Slot[] = []
+  /** toolCallId → 等待回填的工具块（卡 + 第几个工具块；同一 id 重用时后来的覆盖先来的） */
+  const pendingTools = new Map<string, { readonly card: Slot & { kind: 'card' }; readonly index: number }>()
   /** 任务 → 还没交给任何一张卡的折叠计数 */
   const pendingRetries = new Map<number, RetriedInfo>()
   /** 上下文占用的来源：最后一条不是错误的 assistant 消息 */
   let lastCounted: PiAssistantMessage | undefined
 
   entries.forEach((entry, index) => {
-    const id = String(entry.id)
     switch (entry.kind) {
       case UserEntry.kind: {
-        const message = firstMessage(entry, 'user')
-        if (message === undefined) return
-        const resolved = display.get(entry.id)
-        const images = imagesOf(message.content)
-        const content = resolved !== undefined ? resolved.content : userText(message.content)
-        const tokens =
-          resolved !== undefined ? jsonCopy<Record<string, never>>(resolved.tokens) : undefined
-        const notice = resolved === undefined && isSystemNoticeText(content)
-        messages.push({
-          id,
-          sessionId,
-          role: 'user',
-          type: 'text',
-          content,
-          model: '',
-          createdAt: tsOf(message),
-          metadata: {
-            ...(images === undefined ? {} : { images }),
-            ...(tokens === undefined ? {} : { inlineTokens: tokens }),
-            ...(notice ? { isSystemNotice: true } : {})
-          }
-        })
+        if (firstMessage(entry, 'user') === undefined) return
+        slots.push({ kind: 'user', entry, display: display.get(entry.id) })
         return
       }
       case NoticeEntry.kind: {
-        const message = firstMessage(entry, 'user')
-        if (message === undefined) return
-        messages.push({
-          id,
-          sessionId,
-          role: 'user',
-          type: 'text',
-          content: userText(message.content),
-          model: '',
-          createdAt: tsOf(message),
-          metadata: { isSystemNotice: true }
-        })
+        if (firstMessage(entry, 'user') === undefined) return
+        slots.push({ kind: 'notice', entry })
         return
       }
       case AssistantEntry.kind: {
         const message = firstMessage(entry, 'assistant')
         if (message === undefined) return
+        const facts = memo.factsOf(entry, message)
         const task = entry.byTaskId
-        const isError = message.stopReason === 'error'
-        if (!isError) lastCounted = message
+        if (!facts.isError) lastCounted = message
         // 折叠：同一任务后面还有 assistant 条目，或这次运行还停在这个任务上
         if (
-          isError &&
+          facts.isError &&
           task !== undefined &&
           ((lastOfTask.get(task) ?? -1) > index || task === runTask)
         ) {
@@ -359,33 +633,38 @@ function projectCore(
           })
           return
         }
+        if (facts.empty) return // 空卡：提示留给这个任务的下一张（PIN-18）
         const hint = task === undefined ? undefined : pendingRetries.get(task)
-        const projected = projectAssistant(id, sessionId, message, pendingTools, hint)
-        if (projected === undefined) return // 空卡：提示留给这个任务的下一张（PIN-18）
+        if (facts.errorRow) {
+          // 失败轮：整条塌成一行错误（它里面的工具调用不登记，结果成了孤儿）
+          slots.push({ kind: 'error', entry, facts, hint })
+        } else {
+          const slot: Slot & { kind: 'card' } = {
+            kind: 'card',
+            entry,
+            facts,
+            hint,
+            fills: new Array<EntryRecord | undefined>(facts.toolCallIds.length).fill(undefined)
+          }
+          facts.toolCallIds.forEach((callId, block) => {
+            pendingTools.set(callId, { card: slot, index: block })
+          })
+          slots.push(slot)
+        }
         if (hint !== undefined && task !== undefined) pendingRetries.delete(task)
-        messages.push(projected)
         return
       }
       case ToolResultEntry.kind: {
         const message = firstMessage(entry, 'toolResult')
         if (message === undefined) return
-        fillToolResult(message, entry.data, pendingTools)
+        const target = pendingTools.get(message.toolCallId)
+        if (target === undefined) return // 孤儿结果（调用在压缩切点之前 / 在失败轮里）
+        pendingTools.delete(message.toolCallId)
+        target.card.fills[target.index] = entry
         return
       }
       case CompactionEntry.kind: {
-        const message = firstMessage(entry, 'user')
-        const text = unwrapCompactionSummary(userText(message?.content))
-        messages.push({
-          id,
-          sessionId,
-          role: 'assistant',
-          type: 'message',
-          blocks: [{ type: 'text', text }],
-          content: text,
-          model: '',
-          createdAt: tsOf(message),
-          metadata: { isCompactionSummary: true }
-        })
+        slots.push({ kind: 'compaction', entry })
         return
       }
       default:
@@ -394,49 +673,109 @@ function projectCore(
     }
   })
 
-  const liveHint = runTask === undefined ? undefined : pendingRetries.get(runTask)
-  return {
+  const counts = { built: 0, reused: 0 }
+  const messages = memo.messagesOf(slots.map((slot) => memo.messageOf(sessionId, slot, counts)))
+  const result: HistoryResult = {
     messages,
-    live: liveCardOf(sessionId, live, runTask, liveHint),
-    toolRuns: toolRunsOf(live),
-    run: runOf(live, runState),
-    context: { usedTokens: usedTokensOf(lastCounted) }
+    liveHint: runTask === undefined ? undefined : pendingRetries.get(runTask),
+    usedTokens: usedTokensOf(lastCounted)
+  }
+  memo.rememberHistory(inputs, result, counts)
+  return result
+}
+
+/** 按一个槽新建它的消息（工具结果在交出之前回填完） */
+function buildMessage(sessionId: string, slot: Slot): ChatMessage {
+  const { entry } = slot
+  const id = String(entry.id)
+  switch (slot.kind) {
+    case 'user': {
+      const message = firstMessage(entry, 'user')!
+      const resolved = slot.display
+      const images = imagesOf(message.content)
+      const content = resolved !== undefined ? resolved.content : userText(message.content)
+      const tokens =
+        resolved !== undefined ? jsonCopy<Record<string, never>>(resolved.tokens) : undefined
+      const notice = resolved === undefined && isSystemNoticeText(content)
+      return {
+        id,
+        sessionId,
+        role: 'user',
+        type: 'text',
+        content,
+        model: '',
+        createdAt: tsOf(message),
+        metadata: {
+          ...(images === undefined ? {} : { images }),
+          ...(tokens === undefined ? {} : { inlineTokens: tokens }),
+          ...(notice ? { isSystemNotice: true } : {})
+        }
+      }
+    }
+    case 'notice': {
+      const message = firstMessage(entry, 'user')!
+      return {
+        id,
+        sessionId,
+        role: 'user',
+        type: 'text',
+        content: userText(message.content),
+        model: '',
+        createdAt: tsOf(message),
+        metadata: { isSystemNotice: true }
+      }
+    }
+    case 'compaction': {
+      const message = firstMessage(entry, 'user')
+      const text = unwrapCompactionSummary(userText(message?.content))
+      return {
+        id,
+        sessionId,
+        role: 'assistant',
+        type: 'message',
+        blocks: [{ type: 'text', text }],
+        content: text,
+        model: '',
+        createdAt: tsOf(message),
+        metadata: { isCompactionSummary: true }
+      }
+    }
+    case 'error': {
+      const message = slot.facts.message
+      return {
+        id,
+        sessionId,
+        role: 'system_notify',
+        type: 'error_event',
+        content: message.errorMessage ?? '',
+        model: modelOf(message),
+        ...providerOf(message),
+        createdAt: tsOf(message),
+        metadata: slot.hint === undefined ? null : { retried: retriedCopy(slot.hint) }
+      }
+    }
+    case 'card': {
+      const { card, tools } = assistantCard(id, sessionId, slot.facts.message, slot.hint)
+      slot.fills.forEach((fill, index) => {
+        const result = fill === undefined ? undefined : firstMessage(fill, 'toolResult')
+        const target = tools[index]
+        if (result !== undefined && target !== undefined) fillToolResult(result, fill!.data, target)
+      })
+      return card
+    }
   }
 }
 
-function projectAssistant(
+/** 一张 assistant 卡（调用方已确认它不是错误行、也不是空卡）与它的工具块（按块序） */
+function assistantCard(
   id: string,
   sessionId: string,
   message: PiAssistantMessage,
-  pendingTools: Map<string, AssistantToolBlock>,
   hint: RetriedInfo | undefined
-): ChatMessage | undefined {
-  const model = modelOf(message)
-  const createdAt = tsOf(message)
-
-  // 失败轮：整条塌成一行错误（它里面的工具调用不登记，结果成了孤儿）
-  if (message.stopReason === 'error' && message.errorMessage) {
-    return {
-      id,
-      sessionId,
-      role: 'system_notify',
-      type: 'error_event',
-      content: message.errorMessage,
-      model,
-      ...providerOf(message),
-      createdAt,
-      metadata: hint === undefined ? null : { retried: retriedCopy(hint) }
-    }
-  }
-
-  const registered: AssistantToolBlock[] = []
-  const { blocks, text } = convertBlocks(message.content, (tool) => registered.push(tool))
-  const rawImages = (message as PiAssistantMessage & { _images?: unknown })._images
-  const images = Array.isArray(rawImages) ? jsonCopy<ImageMeta[]>(rawImages) : undefined
-  // 什么都没产出（如首 token 前被中止）：不留空卡，调用也不登记
-  if (blocks.length === 0 && images === undefined) return undefined
-  for (const tool of registered) pendingTools.set(tool.toolCallId, tool)
-
+): { card: AssistantMessage; tools: AssistantToolBlock[] } {
+  const tools: AssistantToolBlock[] = []
+  const { blocks, text } = convertBlocks(message.content, (tool) => tools.push(tool))
+  const images = imagesOfAssistant(message)
   const usage = usageOf(message)
   const card: AssistantMessage = {
     id,
@@ -445,27 +784,23 @@ function projectAssistant(
     type: 'message',
     blocks,
     content: text,
-    model,
+    model: modelOf(message),
     ...providerOf(message),
-    createdAt,
+    createdAt: tsOf(message),
     metadata: {
       ...(usage === undefined ? {} : { usage }),
       ...(images === undefined ? {} : { images }),
       ...(hint === undefined ? {} : { retried: retriedCopy(hint) })
     }
   }
-  return card
+  return { card, tools }
 }
 
 function fillToolResult(
   message: ToolResultMessage,
   data: unknown,
-  pendingTools: Map<string, AssistantToolBlock>
+  target: AssistantToolBlock
 ): void {
-  const target = pendingTools.get(message.toolCallId)
-  if (target === undefined) return // 孤儿结果（调用在压缩切点之前 / 在失败轮里）
-  pendingTools.delete(message.toolCallId)
-
   const diagnostics = diagnosticsOf(data)
   let content: unknown = message.content
   if (diagnostics !== undefined && diagnostics.length > 0 && Array.isArray(content)) {
@@ -635,6 +970,7 @@ function asksOf(asks: readonly InputRequest[]): InputRequest[] {
  * @param asks      挂着的询问（按出现次序）
  * @param runState  会话的运行状态（`DurableSession.runState`）
  * @param queueDisplay submission id → 排队输入的显示侧车（可选，PIN-17）
+ * @param memo      结构共享（可选，P4-09b）：长期投影逐帧传同一份，没变的部分交回上一次的对象
  */
 export function projectSessionView(
   meta: SessionProjectionMeta,
@@ -644,9 +980,17 @@ export function projectSessionView(
   display: DisplayByEntry,
   asks: readonly InputRequest[],
   runState: RunViewState,
-  queueDisplay?: QueueDisplay
+  queueDisplay?: QueueDisplay,
+  memo?: ProjectionMemo
 ): SessionView {
-  const core = projectCore(meta.sessionId, entries, live, display, runState)
+  const core = projectCore(
+    meta.sessionId,
+    entries,
+    live,
+    display,
+    runState,
+    memo ?? new ProjectionMemo()
+  )
   return {
     v: 1,
     sessionId: meta.sessionId,
@@ -672,9 +1016,17 @@ export function projectAgentView(
   entries: readonly EntryRecord[],
   live: LiveInput,
   display: DisplayByEntry,
-  runState: RunViewState
+  runState: RunViewState,
+  memo?: ProjectionMemo
 ): AgentView {
-  const core = projectCore(meta.sessionId, entries, live, display, runState)
+  const core = projectCore(
+    meta.sessionId,
+    entries,
+    live,
+    display,
+    runState,
+    memo ?? new ProjectionMemo()
+  )
   return {
     v: 1,
     agentId: meta.agentId,
