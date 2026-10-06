@@ -17,12 +17,7 @@ import { create } from 'zustand'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ChatMessage, ToolExecution } from './chatStore'
-import {
-  EMPTY_TOOLS,
-  deriveStream,
-  deriveToolExecutions,
-  shareStructure
-} from './viewDerivation'
+import { EMPTY_TOOLS, deriveStream, deriveToolExecutions, shareStructure } from './viewDerivation'
 
 /** 子智能体运行时状态 */
 export type SubSessionStatus = 'running' | 'done' | 'error'

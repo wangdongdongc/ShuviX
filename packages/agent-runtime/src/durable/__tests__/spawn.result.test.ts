@@ -195,7 +195,11 @@ describe('P3-16 extractSpawnResult · a retry that recovered drops its error not
     ],
     [
       'J5-02 unchanged: an error before a compaction entry carries no note',
-      [assistantEntry(1, modelError('prompt is too long')), compactionEntry(2), assistantEntry(3, answer('ok'))],
+      [
+        assistantEntry(1, modelError('prompt is too long')),
+        compactionEntry(2),
+        assistantEntry(3, answer('ok'))
+      ],
       'ok'
     ]
   ]
@@ -227,12 +231,19 @@ describe('P3-16 spawn · a child retry, end to end', () => {
 
   it('P3-16-02 the child retries a transient error and recovers: the answer has no note, no error; the failed attempt is in the transcript', async () => {
     const d = await hostD(retrying(3))
-    d.t.kit.queue(callAgent('explore', 'find X'), modelError(RETRYABLE), answer('found'), answer('done'))
+    d.t.kit.queue(
+      callAgent('explore', 'find X'),
+      modelError(RETRYABLE),
+      answer('found'),
+      answer('done')
+    )
     expect(await d.session.submitUser('go')).toEqual({})
     const outcome = d.outcomes[0]!
     expect(outcome.result).toBe('found')
     expect('error' in outcome).toBe(false)
-    const lines = await transcript((await d.session.harness.conversation(outcome.conversationId!, BG))!)
+    const lines = await transcript(
+      (await d.session.harness.conversation(outcome.conversationId!, BG))!
+    )
     expect(lines.filter((line) => line.startsWith('pi.assistant:'))).toHaveLength(2)
   })
 
