@@ -158,8 +158,8 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('tools:definitions', () => getBuiltinToolDefinitions())
 
   /**
-   * 智能体监控：全部活跃 agent 运行时的快照（只读 pi getter + 事件影子，不碰会话树）。
-   * 设置页可见时轮询，故刻意不做任何遍历。
+   * 智能体监控：打开着的会话里每个 agent 的廉价快照（P3-13：`DurableSession.monitorSnapshot()`，只读、
+   * 不刷新 LRU、从不打开会话）。面板 / 胶囊可见时每秒轮询。
    */
   ipcMain.handle('agentMonitor:list', () => listAgentRuntimes())
 

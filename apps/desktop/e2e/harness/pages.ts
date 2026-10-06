@@ -2805,6 +2805,11 @@ export interface HttpLogPane {
   toggleRecord(): Promise<void>
   /** 记录状态行文案（关闭态说明为什么没数据，开启态提醒库在涨） */
   statusText(): Promise<string>
+  /**
+   * 「已暂停」横幅文案（`[data-monitor-paused]`，pi-durable 迁移期常显，P3-13 PIN-10）；不在屏回空串。
+   * 不等就绪 —— 横幅不依赖任何异步读取，挂载即在
+   */
+  pausedText(): Promise<string>
 }
 
 /** 设置窗口「监视器 / LLM 请求」子页（openSettings('monitor/httpLogs') 后调用） */
@@ -2827,6 +2832,10 @@ export async function httpLogPane(settings: CdpClient): Promise<HttpLogPane> {
             `(document.querySelector('[data-monitor-status]')?.textContent ?? '').trim()`
           ),
         'http log status settled'
+      ),
+    pausedText: () =>
+      settings.eval<string>(
+        `(document.querySelector('[data-monitor-paused]')?.textContent ?? '').trim()`
       )
   }
 }
@@ -6041,8 +6050,8 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
 //     **最后一个**子节点（RightPanel 按 preview/widget/calendar/agents 固定序铺开，
 //     全部常驻挂载、visibility 切换）—— 行 / 空态 / 详情都 scope 在它之内；
 //   - 行 = 列表区 `.divide-y > div > button.w-full`（详情里的工具行也有 w-full，但不在
-//     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；孤儿徽章 =
-//     `span[class*="bg-error/10"]`；血缘箭头 = `.lucide-corner-down-right`；
+//     这一层父子关系上）；相位灯 = 行内 `span.rounded-full`；血缘箭头 = `.lucide-corner-down-right`；
+//     花费格 = `[data-agent-cost]`（P3-13，文本 `—` / `<$0.01` / `$x.xx`，title 是悬停说明）；
 //     详情容器 = 行按钮父 div 的第二子节点（childElementCount > 1 即展开）；
 //   - 行内缓存命中率格 = `svg.lucide-database-zap` 的父 span（空占位不画图标）；详情里的
 //     两格命中率数值 = `[data-cache-hit="total" | "last"]`（产品侧的纯标记，不靠字段位置）；
@@ -6059,10 +6068,6 @@ export interface AgentMonitorRowShot {
   phaseClass: string
   /** 相位灯在闪（animate-pulse）= 非 idle 相位 */
   pulsing: boolean
-  /** 孤儿徽章在屏（根会话已删） */
-  orphan: boolean
-  /** 孤儿徽章文案（非空即可，不钉具体词） */
-  orphanText: string
   /** 血缘箭头在屏（spawned 行） */
   arrow: boolean
   /**
@@ -6070,6 +6075,8 @@ export interface AgentMonitorRowShot {
    * 相等）；还没有计入的调用时格子是空占位（不画图标），此时为 null
    */
   cache: { text: string; title: string } | null
+  /** 花费格（P3-13 PIN-09）：`text` 是 `—`（未定价 / 0）或金额，`title` 是悬停说明；不在屏为 null */
+  cost: { text: string; title: string } | null
 }
 
 export interface RightPanelPane {
@@ -6179,20 +6186,24 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
     rows: () =>
       main.eval<AgentMonitorRowShot[]>(`${ROWS}.map((row) => {
         const dot = row.querySelector('span.rounded-full')
-        const badge = row.querySelector('span[class*="bg-error/10"]')
+        const costCell = row.querySelector('[data-agent-cost]')
         return {
           text: (row.textContent ?? '').trim(),
           phaseClass: dot?.className ?? '',
           pulsing: (dot?.className ?? '').includes('animate-pulse'),
-          orphan: !!badge,
-          orphanText: (badge?.textContent ?? '').trim(),
           arrow: !!row.querySelector('.lucide-corner-down-right'),
           cache: (() => {
             const cell = row.querySelector('svg.lucide-database-zap')?.parentElement
             return cell
               ? { text: (cell.textContent ?? '').trim(), title: cell.getAttribute('title') ?? '' }
               : null
-          })()
+          })(),
+          cost: costCell
+            ? {
+                text: (costCell.textContent ?? '').trim(),
+                title: costCell.getAttribute('title') ?? ''
+              }
+            : null
         }
       })`),
     emptyText: () =>

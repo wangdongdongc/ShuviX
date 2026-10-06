@@ -11,7 +11,8 @@
  *    `lockOnFirstUse` 模拟 K3：第一次 submitUser / steer / followUp / continue / createAgent 时上锁。
  *    P3-07：受理回调带 `{entryId}`（`nextEntryId` 起逐次 +1）；`queueAdmissions` = 排进队列（受理不带
  *    entryId，`placeQueued()` 时才 `onPlaced`）；steer / followUp 同样调受理回调；`viewSnapshot()` 交 `view`
- *    （缺省空的 durable 视图）。
+ *    （缺省空的 durable 视图）。P3-13：`monitorSnapshot()` 交 `monitorRows`（`monitorError` 时拒绝），
+ *    `spawnedRecords()` 交 `spawned`。
  *  - FakeSessionHost：open / peek / get / close / closeAll / delete；`storages` 是「存储在」的会话集合
  *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
  *
@@ -23,6 +24,7 @@ import type {
   AdmitOptions,
   AdmitResult,
   AgentIdentity,
+  AgentMonitorRow,
   AgentProjector,
   CreateAgentOptions,
   DrivenRun,
@@ -40,6 +42,7 @@ import type {
   SessionHost,
   SessionProjector,
   SpawnCoordinator,
+  SpawnedAgentRecord,
   SpawnOutcome,
   SubmitResult,
   TaskLiveness,
@@ -343,6 +346,25 @@ export class FakeDurableSession implements DurableSession {
     this.calls.push(['agentInfo', conversationId])
     if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
     return this.infos.get(conversationId)
+  }
+
+  /** monitorSnapshot 的脚本（P3-13；缺省 `[]`）；给了 `monitorError` 就以它拒绝 */
+  monitorRows: AgentMonitorRow[] = []
+  monitorError: unknown
+
+  async monitorSnapshot(): Promise<AgentMonitorRow[]> {
+    this.calls.push(['monitorSnapshot'])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    if (this.monitorError !== undefined) throw this.monitorError
+    return this.monitorRows
+  }
+
+  /** spawnedRecords 的脚本（P3-13 详情按 agentId 找对话；缺省 `[]`） */
+  spawned: SpawnedAgentRecord[] = []
+
+  spawnedRecords(): SpawnedAgentRecord[] {
+    this.calls.push(['spawnedRecords'])
+    return this.closed ? [] : this.spawned
   }
 
   async destroyAgent(): Promise<void> {

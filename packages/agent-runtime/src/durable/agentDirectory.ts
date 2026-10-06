@@ -164,6 +164,18 @@ export class AgentDirectory {
     return this.spawned.get(conversationId)?.record
   }
 
+  /**
+   * 全部解析得了的派生 agent 记录（含 hook agent；写坏了的不在里面 —— 打开时已经警告过一次），按对话 id
+   * 升序。返回的是缓存里的对象：只读，不要改。P3-13 的监控快照与 P3-14 的路由索引重建共用。
+   */
+  spawnedRecords(): SpawnedAgentRecord[] {
+    const records: SpawnedAgentRecord[] = []
+    for (const { record } of this.spawned.values()) {
+      if (record !== undefined) records.push(record)
+    }
+    return records.sort((a, b) => a.conversationId - b.conversationId)
+  }
+
   /** 是不是辅助工作：自己是 hook agent，或拥有者链上有一个是（PIN-08） */
   isAuxiliary(conversationId: ConversationId): boolean {
     if (this.hooks.size === 0) return false

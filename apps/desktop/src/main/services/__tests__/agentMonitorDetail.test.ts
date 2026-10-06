@@ -3,6 +3,9 @@
  * → 根的快照（真门面读锁所在对话的 `agentInfo`）；路由认得的 agentId → 路由的快照。不认识的、打开着但没锁的
  * （从不 createAgent）、关着的（从不打开 / peek）→ null。
  *
+ * P3-13-18（PIN-06）：派生 agent 先按打开着的会话的 agent 目录（`spawnedRecords()`）找 —— 路由的索引里没有它
+ * （重开过的会话、新的路由）也能读到它的 `agentInfo`，且从不装扩展；找不到再问路由。
+ *
  * sessionService 与路由是替身；门面是真的 `AgentSession`，底下是假会话（support/fakeSessionHost）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,6 +35,8 @@ vi.mock('../hookService', () => ({
 }))
 vi.mock('../sessionDayPromptService', () => ({ recordPromptAdmitted: vi.fn() }))
 vi.mock('../sessionRecords', () => ({ sessionRecords: { pick: () => undefined } }))
+vi.mock('../../dao/providerDao', () => ({ providerDao: { pick: () => undefined } }))
+vi.mock('../agentService', () => ({ agentService: { getProfile: () => undefined } }))
 vi.mock('../sessionTriggerFacts', () => ({
   buildTurnCompletedFacts: async () => null,
   isDefaultTitle: () => false
@@ -47,7 +52,8 @@ vi.mock('../../logger', () => ({
 
 import { AgentSession } from '../agentSession'
 import { getAgentRuntimeDetail } from '../agentMonitorService'
-import { FakeDurableSession, lockRecord } from './support/fakeSessionHost'
+import type { SpawnedAgentRecord } from '@shuvix/agent-runtime'
+import { FakeDurableSession, lockRecord, resetFakeHost } from './support/fakeSessionHost'
 
 function info(systemPrompt: string): AgentRuntimeInfo {
   return {
@@ -116,5 +122,50 @@ describe('P3-06-33 getAgentRuntimeDetail', () => {
     expect(await getAgentRuntimeDetail('s3')).toBeNull()
     expect(state.service.ensureAgentSession).not.toHaveBeenCalled()
     expect(state.service.peekAgentSession).not.toHaveBeenCalled()
+  })
+})
+
+describe('P3-13-18 getAgentRuntimeDetail resolves spawned agents without the router (PIN-06)', () => {
+  function spawnedRecord(patch: Partial<SpawnedAgentRecord>): SpawnedAgentRecord {
+    return {
+      ...lockRecord({ conversationId: 3 as never, kind: 'spawned' }),
+      kind: 'spawned',
+      agentId: 'sub-a',
+      depth: 1,
+      canSpawn: false,
+      dispatch: 'tool',
+      parentConversationId: 1 as never,
+      ownerTaskId: 7 as never,
+      displayName: 'Explorer',
+      description: '',
+      ...patch
+    } as SpawnedAgentRecord
+  }
+
+  it("P3-13-18 an idle spawned child the router does not know → the open session's agentInfo of its conversation; no ensureInstalled", async () => {
+    const host = resetFakeHost()
+    const durable = host.put('s1', {
+      lock: lockRecord(),
+      spawned: [spawnedRecord({ agentId: 'sub-a', conversationId: 3 as never })]
+    })
+    durable.infos.set(3, info('child'))
+    expect(await getAgentRuntimeDetail('sub-a')).toEqual(info('child'))
+    expect(durable.callsOf('agentInfo')).toEqual([['agentInfo', 3]])
+    expect(durable.callsOf('agents.ensureInstalled')).toEqual([])
+    expect(state.router.has).not.toHaveBeenCalled()
+    expect(host.callsOf('peek')).toEqual([])
+    expect(host.callsOf('open')).toEqual([])
+  })
+
+  it('P3-13-18 not in any open directory → falls back to the router; a closed session is never opened', async () => {
+    const host = resetFakeHost()
+    host.put('s1', { lock: lockRecord(), spawned: [spawnedRecord({ agentId: 'sub-other' })] })
+    host.storages.add('s9')
+    state.router.has.mockImplementation((id) => id === 'sub-z')
+    state.router.getRuntimeInfo.mockResolvedValue(info('router'))
+    expect(await getAgentRuntimeDetail('sub-z')).toEqual(info('router'))
+    expect(await getAgentRuntimeDetail('sub-unknown')).toBeNull()
+    expect(host.callsOf('peek')).toEqual([])
+    expect(host.callsOf('open')).toEqual([])
   })
 })
