@@ -20,7 +20,7 @@
  *     without a key are skipped. The redacted markdown report goes to `PROBE_OUT` (default
  *     `$TMPDIR/shuvix-protocol-probe.md`); it is checked to contain no key before it is written.
  *
- *  3. `npm run probe:protocols:dry` runs the durable-session cases against a scripted faux provider:
+ *  3. `npm run probe:protocols:dry` (config `vitest.config.protocols.ts`, which includes only this file) runs the durable-session cases against a scripted faux provider:
  *     no keys, no network (any fetch fails the run). It verifies the probe code itself.
  *
  * Env vars per family (`_MODEL` is optional everywhere except the custom endpoint; the default is
@@ -564,7 +564,10 @@ function stampCost(message: AssistantMessage, model: Model<Api>): AssistantMessa
 }
 
 function pricedFaux(base: Provider): Provider {
-  const wrap = (model: Model<Api>, inner: AssistantMessageEventStream) => {
+  const wrap = (
+    model: Model<Api>,
+    inner: AssistantMessageEventStream
+  ): AssistantMessageEventStream => {
     const outer = createAssistantMessageEventStream()
     void (async () => {
       for await (const event of inner) {
@@ -652,7 +655,11 @@ function probeTool(nonce: Rig['nonce']): ToolRegistration {
   })
 }
 
-async function buildRig(family: FamilyConfig, key: string, brain?: FauxResponseFactory): Promise<Rig> {
+async function buildRig(
+  family: FamilyConfig,
+  key: string,
+  brain?: FauxResponseFactory
+): Promise<Rig> {
   const modelRows: ProviderModelRow[] = []
   const port = portFor(family, key, modelRows)
   const registry = createModelRegistry({ port, network: llmNetwork, authContext: SEALED_AUTH })
@@ -666,7 +673,8 @@ async function buildRig(family: FamilyConfig, key: string, brain?: FauxResponseF
     const capabilities = family.target.kind === 'custom' ? { vision: family.target.vision } : {}
     const modelId =
       family.model ?? pickDefaultModel(registry.models.getModels(providerId), family.api)?.id
-    if (!modelId) throw new Error(`${family.id}: no ${family.api} model in the catalog; set ${family.modelVar}`)
+    if (!modelId)
+      throw new Error(`${family.id}: no ${family.api} model in the catalog; set ${family.modelVar}`)
     modelRows.push({
       providerId: rowIdOf(family),
       modelId,
@@ -742,8 +750,13 @@ async function lastAssistant(session: DurableSession): Promise<AssistantMessage 
 }
 
 /** Polls `pi.live` in the background: was a retry ever scheduled, was a partial committed. */
-function sampleLive(session: DurableSession, conversationId: ConversationId) {
-  const seen = { retry: undefined as string | undefined, partial: false }
+interface LiveSampler {
+  readonly seen: { retry: string | undefined; partial: boolean }
+  stop(): Promise<void>
+}
+
+function sampleLive(session: DurableSession, conversationId: ConversationId): LiveSampler {
+  const seen: LiveSampler['seen'] = { retry: undefined, partial: false }
   let running = true
   const loop = (async () => {
     while (running) {
@@ -944,7 +957,8 @@ for (const family of FAMILIES) {
           id: '1',
           name: 'streaming (P)',
           status: ok ? 'PASS' : 'FAIL',
-          detail: isKimi(family) && looksLikeKimiRejection(error) ? `${detail}. ${KIMI_HINT}` : detail
+          detail:
+            isKimi(family) && looksLikeKimiRejection(error) ? `${detail}. ${KIMI_HINT}` : detail
         })
       },
       P_TIMEOUT
@@ -1200,45 +1214,42 @@ for (const family of FAMILIES) {
       D_TIMEOUT
     )
 
-    it(
-      '6 invalid key: error without retry within 15 s (D)',
-      async (ctx) => {
-        begin(ctx, '6', 'invalid key, no retry (D)')
-        const bad = await buildRig(family, INVALID_KEY, fauxAuthFailure)
-        try {
-          const session = await bad.host.open('probe-auth')
-          const conversation = await session.currentConversation()
-          const sampler = sampleLive(session, conversation.id)
-          const started = Date.now()
-          let settled = false
-          const run = session.submitUser('Reply with OK.').finally(() => (settled = true))
-          await waitUntil(() => settled || sampler.seen.retry !== undefined, AUTH_DEADLINE_MS)
-          const elapsed = Date.now() - started
-          const retry = sampler.seen.retry
-          if (!settled) await session.abort()
-          await run
-          await sampler.stop()
-          const final = await lastAssistant(session)
-          for (const request of bad.tap.requests) r6requests.push(request)
-          const problems: string[] = []
-          if (retry) problems.push(`retry scheduled (classified retryable): ${clip(retry)}`)
-          if (!settled) problems.push(`no outcome within ${AUTH_DEADLINE_MS / 1000} s`)
-          if (final?.stopReason !== 'error') problems.push(`last entry stopReason ${final?.stopReason}`)
-          settle(family, {
-            id: '6',
-            name: 'invalid key, no retry (D)',
-            status: problems.length === 0 ? 'PASS' : 'FAIL',
-            detail:
-              problems.length === 0
-                ? `error entry after ${elapsed} ms, no retry; error: ${clip(final?.errorMessage ?? '', 200)}`
-                : `${problems.join('; ')}; error: ${clip(final?.errorMessage ?? '', 200)}`
-          })
-        } finally {
-          await bad.host.closeAll()
-        }
-      },
-      60_000
-    )
+    it('6 invalid key: error without retry within 15 s (D)', async (ctx) => {
+      begin(ctx, '6', 'invalid key, no retry (D)')
+      const bad = await buildRig(family, INVALID_KEY, fauxAuthFailure)
+      try {
+        const session = await bad.host.open('probe-auth')
+        const conversation = await session.currentConversation()
+        const sampler = sampleLive(session, conversation.id)
+        const started = Date.now()
+        let settled = false
+        const run = session.submitUser('Reply with OK.').finally(() => (settled = true))
+        await waitUntil(() => settled || sampler.seen.retry !== undefined, AUTH_DEADLINE_MS)
+        const elapsed = Date.now() - started
+        const retry = sampler.seen.retry
+        if (!settled) await session.abort()
+        await run
+        await sampler.stop()
+        const final = await lastAssistant(session)
+        for (const request of bad.tap.requests) r6requests.push(request)
+        const problems: string[] = []
+        if (retry) problems.push(`retry scheduled (classified retryable): ${clip(retry)}`)
+        if (!settled) problems.push(`no outcome within ${AUTH_DEADLINE_MS / 1000} s`)
+        if (final?.stopReason !== 'error')
+          problems.push(`last entry stopReason ${final?.stopReason}`)
+        settle(family, {
+          id: '6',
+          name: 'invalid key, no retry (D)',
+          status: problems.length === 0 ? 'PASS' : 'FAIL',
+          detail:
+            problems.length === 0
+              ? `error entry after ${elapsed} ms, no retry; error: ${clip(final?.errorMessage ?? '', 200)}`
+              : `${problems.join('; ')}; error: ${clip(final?.errorMessage ?? '', 200)}`
+        })
+      } finally {
+        await bad.host.closeAll()
+      }
+    }, 60_000)
 
     it(
       '7 settings wiring on every request (D)',

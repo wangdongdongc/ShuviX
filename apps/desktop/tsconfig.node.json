@@ -3,6 +3,7 @@
   "include": [
     "electron.vite.config.*",
     "vitest.config.e2e.ts",
+    "vitest.config.protocols.ts",
     "e2e/**/*.ts",
     "src/main/**/*",
     "src/preload/**/*",

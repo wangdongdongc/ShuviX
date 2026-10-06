@@ -291,9 +291,7 @@ export function pickDefaultModel(
   const priced = candidates.filter((model) => priceOf(model) > 0)
   const cheapest = (list: readonly Model<Api>[]): Model<Api> | undefined =>
     [...list].sort((a, b) => priceOf(a) - priceOf(b))[0]
-  return (
-    cheapest(priced.filter((model) => model.reasoning)) ?? cheapest(priced) ?? candidates[0]
-  )
+  return cheapest(priced.filter((model) => model.reasoning)) ?? cheapest(priced) ?? candidates[0]
 }
 
 export const modelIsPriced = (model: Model<Api>): boolean => priceOf(model) > 0
