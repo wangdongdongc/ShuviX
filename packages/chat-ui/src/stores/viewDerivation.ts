@@ -1,7 +1,7 @@
 /**
  * 视图 → store 切片的纯推导（P3-08）。`applySessionView`（chatStore）与 `applyAgentView`（subSessionStore）
  * 都只经这里把一份 `SessionView` / `AgentView` 变成界面读的那些形状：流式正文 / 思考 / 正在生成的工具调用、
- * 工具执行进度、队列快照。
+ * 工具执行进度（排着的输入不推导：队列面板直接读视图的 `queue`）。
  *
  * **结构共享**是这里的另一半职责：chord 的复制状态在增量更新时已经共享没变的子树（一条流式追加只换
  * `live` 那一枝），但整份 `reset` / `replaced` 交来的是一棵全新的树。`shareStructure` 把新树里与旧树
@@ -18,7 +18,6 @@ import type {
 import type {
   AgentView,
   LiveCard,
-  QueuedInputView,
   SessionView,
   ToolRunView
 } from '@shuvix/chat-protocol/types/sessionView'
@@ -293,50 +292,6 @@ export function deriveToolExecutions(
 }
 
 const EMPTY_ARGS: Record<string, unknown> = {}
-
-// ─────────────────────────── 队列 ───────────────────────────
-
-/** 队列里的一条待投递用户消息（正文 + 图片计数，面板渲染够用） */
-export interface QueuedMessage {
-  text: string
-  imageCount: number
-}
-
-/**
- * 某会话排着的用户输入（只读快照）。`nextTurn` 恒空 —— 这一档已决定去掉（Q-P3-09），P3-11 连同
- * 输入框一起删；在那之前形状不变。
- */
-export interface SessionQueueSnapshot {
-  steer: QueuedMessage[]
-  followUp: QueuedMessage[]
-  nextTurn: QueuedMessage[]
-}
-
-export const EMPTY_QUEUE: SessionQueueSnapshot = { steer: [], followUp: [], nextTurn: [] }
-
-function sameQueued(a: QueuedMessage[], b: QueuedMessage[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every((item, i) => item.text === b[i].text && item.imageCount === b[i].imageCount)
-  )
-}
-
-/** `view.queue` → 两档快照；空 → `EMPTY_QUEUE`；与 `prev` 相等 → `prev` */
-export function deriveQueue(
-  queue: readonly QueuedInputView[],
-  prev?: SessionQueueSnapshot
-): SessionQueueSnapshot {
-  if (queue.length === 0) return EMPTY_QUEUE
-  const steer: QueuedMessage[] = []
-  const followUp: QueuedMessage[] = []
-  for (const item of queue) {
-    const row = { text: item.text, imageCount: item.imageCount }
-    if (item.mode === 'steer') steer.push(row)
-    else followUp.push(row)
-  }
-  if (prev && sameQueued(prev.steer, steer) && sameQueued(prev.followUp, followUp)) return prev
-  return { steer, followUp, nextTurn: [] }
-}
 
 // ─────────────────────────── 本地错误行（PIN-02） ───────────────────────────
 

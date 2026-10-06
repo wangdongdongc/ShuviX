@@ -3,9 +3,9 @@
  *
  * **会话内容是派生的**（phase 3，P3-08）：一条会话「现在长什么样」由服务端的会话视图（`SessionView`，经
  * 视图同步订阅，见 `sync/syncClient` 与 `useSessionView`）给出，store 里的会话切片 —— 当前会话的
- * `messages`、各会话的 `sessionStreams` / `sessionToolExecutions` / `sessionPendingInputs` /
- * `sessionQueues`、`usedContextTokens` —— 全部只由 **`applySessionView`** 写（唯一的写入口）。选择器名字
- * 保持不变，组件不用改。
+ * `messages`、各会话的 `sessionStreams` / `sessionToolExecutions` / `sessionPendingInputs`、
+ * `usedContextTokens` —— 全部只由 **`applySessionView`** 写（唯一的写入口）。选择器名字保持不变，组件不用改。
+ * 排着的输入不另派生：队列面板直接读视图的 `queue`（`selectSessionQueueItems`，P3-11）。
  *
  * 视图之外只剩几样**本端叠加**（不进服务端、不跨窗口）：
  *  - 乐观占位的用户消息（`sessionPendingPrompt`，Q-P3-07）：发送那一刻顶上，视图里出现一条发送时还没有的
@@ -34,9 +34,7 @@ import {
 import {
   EMPTY_IMAGES,
   EMPTY_COMPLETED_TOOL_CALLS,
-  EMPTY_QUEUE,
   EMPTY_TOOLS,
-  deriveQueue,
   deriveStream,
   deriveToolExecutions,
   emptyStream,
@@ -45,7 +43,6 @@ import {
   mergeLocalRows,
   shareStructure,
   type LocalErrorRow,
-  type SessionQueueSnapshot,
   type SessionStreamState,
   type ToolExecution
 } from './viewDerivation'
@@ -78,13 +75,7 @@ import type {
   UserTextMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
 export type { ToolResultDetails }
-export type {
-  LocalErrorRow,
-  QueuedMessage,
-  SessionQueueSnapshot,
-  SessionStreamState,
-  ToolExecution
-} from './viewDerivation'
+export type { LocalErrorRow, SessionStreamState, ToolExecution } from './viewDerivation'
 
 /** 重新导出统一的用户输入请求类型,UI 直接消费 */
 export type {
@@ -337,8 +328,6 @@ interface ChatState {
    * 选中项从视图里消失时清除,选择器回落到列表首条。
    */
   sessionActiveInputId: Record<string, string>
-  /** 各 session 排着的用户输入（视图的 `queue`，派生；只读） */
-  sessionQueues: Record<string, SessionQueueSnapshot>
   /** 各 session 的本地错误行（PIN-02；只给当前会话记，切走即清） */
   sessionLocalErrors: Record<string, LocalErrorRow[]>
   /**
@@ -513,17 +502,7 @@ export const selectCompletedStreamingToolCalls = (
 export const selectToolExecutions = (s: ChatState): ToolExecution[] =>
   s.activeSessionId ? s.sessionToolExecutions[s.activeSessionId] || EMPTY_TOOLS : EMPTY_TOOLS
 
-export { EMPTY_TOOLS, EMPTY_QUEUE }
-
-/** 当前会话的队列快照（无队列时返回稳定的空对象引用，可安全用作 selector） */
-export const selectSessionQueue = (s: ChatState): SessionQueueSnapshot =>
-  (s.activeSessionId ? s.sessionQueues[s.activeSessionId] : undefined) ?? EMPTY_QUEUE
-
-/** 队列总条数 */
-export const selectSessionQueueCount = (s: ChatState): number => {
-  const q = selectSessionQueue(s)
-  return q.steer.length + q.followUp.length + q.nextTurn.length
-}
+export { EMPTY_TOOLS }
 
 /** 当前会话的所有 pending 输入请求(按时间序) */
 const EMPTY_INPUT_REQUESTS: InputRequest[] = []
@@ -643,7 +622,10 @@ export const selectActiveSessionView = (s: ChatState): SessionView | null =>
 export const selectSessionRun = (s: ChatState): RunView =>
   selectActiveSessionView(s)?.run ?? IDLE_RUN
 
-/** 当前会话视图里排着的输入（带 `submissionId` / `mode`，撤回要用）；没有 → 稳定的空数组 */
+/**
+ * 当前会话视图里排着的输入（带 `submissionId` / `mode`，撤回要用；视图的次序）。值相等的视图之间引用不变
+ * （`applySessionView` 的结构共享），空队列 / 没有视图 → 稳定的空数组 —— 可直接当 selector 用。
+ */
 export const selectSessionQueueItems = (s: ChatState): QueuedInputView[] =>
   selectActiveSessionView(s)?.queue ?? EMPTY_QUEUE_ITEMS
 
@@ -725,7 +707,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionAskCounts: {},
   sessionInputDrafts: {},
   sessionActiveInputId: {},
-  sessionQueues: {},
   sessionLocalErrors: {},
   sessionThreadOpen: {},
   modelSupportsReasoning: false,
@@ -1169,16 +1150,6 @@ export function applySessionView(sessionId: string, view: SessionView | null): v
       }
     }
 
-    // 队列
-    const prevQueue = state.sessionQueues[sessionId]
-    const queue = deriveQueue(shared.queue, prevQueue)
-    const nextQueues = withKey(
-      state.sessionQueues,
-      sessionId,
-      queue === EMPTY_QUEUE ? undefined : queue
-    )
-    if (nextQueues !== state.sessionQueues) patch.sessionQueues = nextQueues
-
     // 当前会话：消息列表与上下文占用
     if (sessionId === state.activeSessionId) {
       const messages = displayMessages(state, sessionId, shared.messages)
@@ -1219,7 +1190,6 @@ export function releaseSessionView(sessionId: string): void {
       sessionViews: withKey(state.sessionViews, sessionId, undefined),
       sessionToolExecutions: withKey(state.sessionToolExecutions, sessionId, undefined),
       sessionPendingInputs: withKey(state.sessionPendingInputs, sessionId, undefined),
-      sessionQueues: withKey(state.sessionQueues, sessionId, undefined),
       sessionStreams: withKey(
         state.sessionStreams,
         sessionId,

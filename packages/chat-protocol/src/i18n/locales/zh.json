@@ -298,12 +298,14 @@
     "collapse": "收起队列",
     "steer": "立即",
     "followUp": "追加",
-    "nextTurn": "下轮",
     "steerHint": "立即插入：下个轮次边界送达，打断当前思路",
     "followUpHint": "追加：本轮跑完后接着处理，续同一次运行",
-    "nextTurnHint": "留到下轮：下次发送消息时一并带出；中止也不会清空",
     "images": "{{count}} 张图",
-    "emptyText": "(仅图片)"
+    "emptyText": "(仅图片)",
+    "withdraw": "撤回",
+    "withdrawHint": "撤回这条排队的消息",
+    "alreadyPlaced": "已经送达，无法撤回",
+    "withdrawFailed": "撤回失败：{{error}}"
   },
   "threadDrawer": {
     "running": "运行中…",

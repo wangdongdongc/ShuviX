@@ -298,12 +298,14 @@
     "collapse": "キューを閉じる",
     "steer": "即時",
     "followUp": "追加",
-    "nextTurn": "次回",
     "steerHint": "即時挿入：次のターン境界で届き、現在の流れに割り込みます",
     "followUpHint": "追加：本ラウンド終了後に同じ実行のまま続けて処理します",
-    "nextTurnHint": "次回に持ち越し：次のメッセージ送信時に一緒に送られます（中止しても消えません）",
     "images": "画像 {{count}} 枚",
-    "emptyText": "(画像のみ)"
+    "emptyText": "(画像のみ)",
+    "withdraw": "取り消す",
+    "withdrawHint": "このキューのメッセージを取り消す",
+    "alreadyPlaced": "すでに送信済みのため取り消せません",
+    "withdrawFailed": "取り消しに失敗しました：{{error}}"
   },
   "threadDrawer": {
     "running": "実行中…",

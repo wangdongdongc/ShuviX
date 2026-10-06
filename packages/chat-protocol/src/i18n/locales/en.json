@@ -298,12 +298,14 @@
     "collapse": "Collapse queue",
     "steer": "Now",
     "followUp": "Append",
-    "nextTurn": "Next",
     "steerHint": "Steer now: delivered at the next turn boundary, interrupting the current course",
     "followUpHint": "Append: picked up when this run would finish, continuing the same run",
-    "nextTurnHint": "Hold for next turn: sent with your next message; survives abort",
     "images": "{{count}} image(s)",
-    "emptyText": "(images only)"
+    "emptyText": "(images only)",
+    "withdraw": "Withdraw",
+    "withdrawHint": "Withdraw this queued message",
+    "alreadyPlaced": "Already delivered — it can no longer be withdrawn",
+    "withdrawFailed": "Couldn't withdraw: {{error}}"
   },
   "threadDrawer": {
     "running": "Running…",

@@ -3,7 +3,7 @@
  *
  *   E  D10-35 getAgentSession · D10-36 ensureAgentSession · D10-37 hasAgentRuntime · D10-38 invalidateAgent ·
  *      D10-39(U) 事件归运行时 · D10-40 删除次序（P3-05：含 hub.deleteSession）· D10-42 后台通知 · D10-43 询问参与方 · D10-44 钉档案 ·
- *      D10-45..51 网关 · P3-10b-08 网关回退不预先销毁（取代 D10-53）· P3-06-30 网关 getAgentInfo（不带 ensure 读门面 / peek；ensure 的次序与拒绝）
+ *      D10-45..51 网关 · P3-11-05/06 网关 withdrawQueued（不规范 id、没开、closed → not_found）与没有 nextTurn · P3-10b-08 网关回退不预先销毁（取代 D10-53）· P3-06-30 网关 getAgentInfo（不带 ensure 读门面 / peek；ensure 的次序与拒绝）
  *   F  D10-55 statusOf（P2-10-32：interrupted，开着 / 镜像）· D10-56 被拒的子会话发送 · D10-57 stop（含被中断的）·
  *      D10-58 答复（P2-10-28：lastAnswer）
  *   G  D10-59 列表（P3-07：新格式 = peek → viewSnapshot().messages）· D10-61 旧格式的回退 / 截断 ·
@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AgentCreationError } from '@shuvix/agent-runtime'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
+import type { ChatGateway } from '../../frontend/core/ChatGateway'
 import { emptySessionView } from '@shuvix/chat-protocol/types/sessionView'
 
 const holder = vi.hoisted(() => ({
@@ -608,7 +609,7 @@ describe('D10-47 gateway.prompt 打不开的会话', () => {
   })
 })
 
-describe('D10-48 steer / followUp / nextTurn', () => {
+describe('D10-48 steer / followUp', () => {
   it('D10-48 会话没开 → error 事件，不打开', async () => {
     insert('s1')
     chatGateway.steer('s1', 'x')
@@ -616,15 +617,54 @@ describe('D10-48 steer / followUp / nextTurn', () => {
     expect(fakeHost.callsOf('open')).toEqual([])
   })
 
-  it('D10-48 受理被拒（模型被拒）→ error 事件；nextTurn 走 followUp', async () => {
+  it('D10-48 受理被拒（模型被拒）→ error 事件', async () => {
     insert('s1')
     const session = fakeHost.put('s1')
     session.followUpResult = { error: 'Provider "Faux" is disabled', code: 'no_model' }
-    chatGateway.nextTurn('s1', 'later')
+    chatGateway.followUp('s1', 'later')
     await vi.waitFor(() => expect(eventsOf('error')).toHaveLength(1))
     expect(String(eventsOf('error')[0]!.error)).toContain('chat.agentNoModel:')
     expect(session.callsOf('followUp')).toEqual([['followUp', 'later']])
     expect(session.callsOf('steer')).toEqual([])
+  })
+
+  it('P3-11-06 网关上没有「下一轮」（Q-P3-09）', () => {
+    // @ts-expect-error nextTurn is gone end to end (Q-P3-09)
+    const gone: ChatGateway['nextTurn'] = undefined
+    expect(gone).toBeUndefined()
+    expect('nextTurn' in chatGateway).toBe(false)
+  })
+})
+
+describe('P3-11-05 网关 withdrawQueued', () => {
+  it('P3-11-05 会话没开 → not_found，不 open / peek', async () => {
+    insert('s1')
+    expect(await chatGateway.withdrawQueued('s1', 3)).toBe('not_found')
+    expect(fakeHost.calls).toEqual([])
+  })
+
+  it.each<[unknown]>([[0], [-1], [1.5], ['3'], [Number.NaN], [Number.MAX_SAFE_INTEGER + 1]])(
+    'P3-11-05 submissionId %s 不是正的安全整数 → not_found，不碰运行时',
+    async (id) => {
+      insert('s1')
+      const session = fakeHost.put('s1')
+      expect(await chatGateway.withdrawQueued('s1', id as number)).toBe('not_found')
+      expect(session.callsOf('withdrawQueued')).toEqual([])
+    }
+  )
+
+  it.each([
+    ['aborted', 'aborted'],
+    ['already_placed', 'already_placed'],
+    ['settled', 'settled'],
+    ['not_found', 'not_found'],
+    ['closed', 'not_found']
+  ] as const)('P3-11-05 运行时答 %s → %s', async (runtime, expected) => {
+    insert('s1')
+    const session = fakeHost.put('s1')
+    session.withdrawResult = runtime
+    expect(await chatGateway.withdrawQueued('s1', 3)).toBe(expected)
+    expect(session.callsOf('withdrawQueued')).toEqual([['withdrawQueued', 3]])
   })
 })
 

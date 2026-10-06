@@ -282,7 +282,6 @@ export const CHROME_PANEL_CHANNEL_PATHS = [
   'agent.prompt',
   'agent.steer',
   'agent.followUp',
-  'agent.nextTurn',
   'agent.abort',
   'agent.respondToInput',
   'session.getById',

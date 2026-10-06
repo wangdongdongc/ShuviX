@@ -13,7 +13,8 @@ import {
   type NotifyOptions,
   type RequestState,
   type SubmitResult,
-  type TaskLiveness
+  type TaskLiveness,
+  type WithdrawResult
 } from '@shuvix/agent-runtime'
 import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
@@ -168,12 +169,9 @@ export class AgentSession {
     if (result.error) throw new Error(admissionErrorText(result))
   }
 
-  /**
-   * 「下一轮再说」—— 用户可见的 nextTurn 队列已决定去掉（Mapping #7），在 phase 3 的界面改完之前
-   * 先垫成 followUp。TODO(pi-durable p3): 界面去掉 nextTurn 之后删掉这个垫片。
-   */
-  async nextTurn(text: string): Promise<void> {
-    await this.followUp(text)
+  /** 撤回一条排着的用户输入（P3-11）：结果原样上交（含 `closed`，由网关收成 `not_found`） */
+  withdrawQueued(submissionId: number): Promise<WithdrawResult> {
+    return this.durable.withdrawQueued(submissionId)
   }
 
   /** 继续被中断的工作（上个进程中途退出留下的 run）；空闲且没被中断时立刻返回 `{}` */

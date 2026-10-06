@@ -122,7 +122,6 @@ export function resetStore(activeSessionId: string | null = null): void {
     sessionAskCounts: {},
     sessionInputDrafts: {},
     sessionActiveInputId: {},
-    sessionQueues: {},
     sessionLocalErrors: {},
     usedContextTokens: null,
     inputText: '',
