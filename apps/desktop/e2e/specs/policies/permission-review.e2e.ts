@@ -11,7 +11,7 @@
  * 不信工具自己的报告。
  *
  * 观测面：审查员的全部输入是它任务文本里 `<hook_event trigger="permission.request">` 围栏的 YAML
- * （`reviewEventOf`）；执行结果看询问事件（`input_request.request.review`）、工具块（`message.list`
+ * （`reviewEventOf`）；执行结果看会话视图里的询问（`view.asks[].review`）、工具块（`message.list`
  * 投影出的 details 保留键 `shuvixReview`）、决策日志（主日志的 `security_decision` 行，`review`
  * 字段）与 ChatEvent `tool_review`；DOM 只在 R1（「已审查」盾牌）/ R3（卡片上的审查意见）/
  * R8（「审查中」）读一眼，且经 pages.ts。
@@ -29,9 +29,11 @@ import { sleep, until } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import { syncProbe } from '../../harness/sync'
 import {
   REVIEW_EVENT_OPEN,
   createProject,
+  asksRaisedIn,
   eventRecorder,
   isReviewerRequest,
   removeRetiredPolicy,
@@ -161,10 +163,16 @@ const toolBlock = async (sid: string, toolCallId: string): Promise<ToolBlock> =>
   return found!
 }
 
-const inputRequests = async (sid: string): Promise<AskEvent[]> =>
-  (await events.all()).filter(
-    (e): e is AskEvent => e.type === 'input_request' && e.sessionId === sid
-  )
+/** 这条会话（recorder 缓冲里）挂起过几条询问 —— `input_request` 不再上前端的线（Q-P3-04），数 `ask_count` */
+const asksRaised = (sid: string): Promise<number> => asksRaisedIn(events, sid)
+
+/** 下一张询问卡（从视图读；形状沿用旧事件，好让下面的断言不动） */
+const waitAsk = async (sid: string): Promise<AskEvent> =>
+  ({
+    type: 'input_request',
+    sessionId: sid,
+    request: await syncProbe(app.main).nextAsk(sid)
+  }) as unknown as AskEvent
 
 /** 这次调用的 tool_review 事件序列（true = 审查中，false = 落定） */
 const reviewingTrace = async (toolCallId: string): Promise<boolean[]> =>
@@ -275,7 +283,7 @@ describe('审查员的三种判决', () => {
 
     // 命令真的跑了，没有卡片
     expect(existsSync(marker)).toBe(true)
-    expect(await inputRequests(sid)).toHaveLength(0)
+    expect(await asksRaised(sid)).toBe(0)
 
     // 审查请求恰一次（主 agent 收尾之后数），工具恰为 next
     const reviews = reviewRequests()
@@ -368,7 +376,7 @@ describe('审查员的三种判决', () => {
     expect(block.details?.shuvixReview).toBeUndefined()
 
     expect(existsSync(marker)).toBe(false)
-    expect(await inputRequests(sid)).toHaveLength(0)
+    expect(await asksRaised(sid)).toBe(0)
     expect(reviewRequests()).toHaveLength(1)
 
     // 主 agent 的下一次请求带着这段理由（工具结果）
@@ -398,7 +406,7 @@ describe('审查员的三种判决', () => {
     )
 
     await chat.typeAndSend('Create the R3 marker. USER-INTENT-R3')
-    const ask = await events.waitFor<AskEvent>('input_request', { sessionId: sid })
+    const ask = await waitAsk(sid)
     // 审查意见逐字送到渲染端（只带写给人看的三项，不带 decision）
     expect(ask.request.review).toStrictEqual({
       risk: 'high',
@@ -451,7 +459,7 @@ describe('开关与只问人的门', () => {
       )
       await sendPrompt(sid, 'Create the R4 marker. USER-INTENT-R4')
 
-      const ask = await events.waitFor<AskEvent>('input_request', { sessionId: sid })
+      const ask = await waitAsk(sid)
       expect(ask.request.review).toBeUndefined()
       await respond(sid, ask.request.id, true)
       await events.waitFor('agent_end', { sessionId: sid })
@@ -483,7 +491,7 @@ describe('开关与只问人的门', () => {
 
     expect(reviewRequests()).toHaveLength(1)
     expect(existsSync(marker)).toBe(true)
-    expect(await inputRequests(sid)).toHaveLength(0)
+    expect(await asksRaised(sid)).toBe(0)
   })
 
   it('E2E-R5 [P0] 用户写的 force-ask 只问人、不经审查（照抄退役的 protect-shuvix-config）；[P1] 撤掉它，写 ~/.shuvix/agents 就是普通的 ask-on-external-path，先经审查', async () => {
@@ -502,7 +510,7 @@ describe('开关与只问人的门', () => {
       )
       await sendPrompt(sid, 'Add an agent file for me. USER-INTENT-R5')
 
-      const ask = await events.waitFor<AskEvent>('input_request', { sessionId: sid })
+      const ask = await waitAsk(sid)
       // force-ask 只问人：卡片上没有审查意见，也没有审查请求、没有「审查中」
       expect(ask.request.review).toBeUndefined()
       await respond(sid, ask.request.id, false)
@@ -537,7 +545,7 @@ describe('开关与只问人的门', () => {
     await events.waitFor('agent_end', { sessionId: sid })
 
     expect(existsSync(target)).toBe(false)
-    expect(await inputRequests(sid)).toHaveLength(0)
+    expect(await asksRaised(sid)).toBe(0)
     expect(reviewRequests()).toHaveLength(1)
     expect(reviewEventOf(reviewRequests()[0]).operation.facts.path).toBe(target)
     const [decision] = await settledDecisions(sid, 1)
@@ -571,7 +579,7 @@ describe('开关与只问人的门', () => {
     expect(readFileSync(plain, 'utf8')).toBe('R7-PLAIN-CONTENT\n')
     expect(readFileSync(hook, 'utf8')).toBe('# R7-HOOK\n')
     expect(readFileSync(outside, 'utf8')).toBe(outsideContent)
-    expect(await inputRequests(sid)).toHaveLength(0)
+    expect(await asksRaised(sid)).toBe(0)
 
     // 工作区里（.git/hooks 不再受保护）：没人问、没审查；会话目录以外：审查一次
     const reviews = reviewRequests()
@@ -638,7 +646,7 @@ describe('审查的生命周期', () => {
     )
 
     expect(existsSync(marker)).toBe(false)
-    expect(await inputRequests(sid)).toHaveLength(0)
+    expect(await asksRaised(sid)).toBe(0)
     const [decision] = await settledDecisions(sid, 1)
     expect(decision.userResponse).toBe('cancel')
     expect(decision.review).toBeUndefined()
@@ -670,7 +678,7 @@ describe('审查的生命周期', () => {
     )
     await sendPrompt(sid, 'Create the four R9 markers. USER-INTENT-R9')
 
-    const ask = await events.waitFor<AskEvent>('input_request', { sessionId: sid })
+    const ask = await waitAsk(sid)
     expect(ask.request.command).toContain('r9-4')
     expect(ask.request.review).toBeUndefined()
     await respond(sid, ask.request.id, true)
@@ -736,7 +744,7 @@ describe('子会话', () => {
     expect(createPayload.operation.tool).toBe('session: create-sub-session')
     expect(createPayload.operation.objectType).toBe('invocation')
     expect(createPayload.sessionId).toBe(parentSid)
-    expect(await inputRequests(parentSid)).toHaveLength(0)
+    expect(await asksRaised(parentSid)).toBe(0)
 
     const child = (await app.main.eval<SessionRow[]>(`window.api.session.list()`)).find(
       (s) => s.parentId === parentSid && s.title === childTitle
@@ -788,6 +796,6 @@ describe('子会话', () => {
     expect(payload.userMessages.some((m) => m.includes('DELEGATED-TASK-R10'))).toBe(false)
     // 子会话自己的「用户消息」是父 agent 写的任务，单列
     expect(payload.delegatedTasks).toEqual([delegated])
-    expect(await inputRequests(childSid)).toHaveLength(0)
+    expect(await asksRaised(childSid)).toBe(0)
   })
 })

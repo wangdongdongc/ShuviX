@@ -5,6 +5,9 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   CHAT_VIEW_SERVICE_ID,
   isSyncTarget,
+  reviveSyncInvokeError,
+  syncInvokeError,
+  syncInvokeFailure,
   syncTargetKey,
   type SyncFrame,
   type SyncTarget
@@ -61,5 +64,37 @@ describe('P3-01-10 · sync.ts', () => {
     expect(syncTargetKey({ kind: 'session', sessionId: 'x' })).not.toBe(
       syncTargetKey({ kind: 'agent', agentId: 'x' })
     )
+  })
+})
+
+describe('sync invoke failures across contextBridge (P3-15)', () => {
+  it('syncInvokeFailure is a plain object that survives a structured clone with its code', () => {
+    const failure = syncInvokeFailure({ code: 'service_not_found', message: 'gone' })
+    expect(failure).not.toBeInstanceOf(Error)
+    expect(Object.getPrototypeOf(failure)).toBe(Object.prototype)
+    expect(structuredClone(failure)).toEqual({ code: 'service_not_found', message: 'gone' })
+    expect(syncInvokeFailure({ message: 'bare' })).toEqual({ message: 'bare' })
+    // the reason for the plain object: a cloned Error keeps its message but drops `.code`
+    const cloned = structuredClone(syncInvokeError({ code: 'service_not_found', message: 'gone' }))
+    expect((cloned as { code?: string }).code).toBeUndefined()
+  })
+
+  it('reviveSyncInvokeError rebuilds the coded Error; Errors pass through; anything else wraps', () => {
+    const revived = reviveSyncInvokeError({ code: 'service_not_found', message: 'gone' })
+    expect(revived).toBeInstanceOf(Error)
+    expect(revived.message).toBe('gone')
+    expect(revived.code).toBe('service_not_found')
+
+    const bare = reviveSyncInvokeError({ message: 'no code' })
+    expect(bare).toBeInstanceOf(Error)
+    expect(bare.code).toBeUndefined()
+
+    const original = syncInvokeError({ code: 'unsupported', message: 'stub' })
+    expect(reviveSyncInvokeError(original)).toBe(original)
+
+    const odd = reviveSyncInvokeError('boom')
+    expect(odd).toBeInstanceOf(Error)
+    expect(odd.message).toBe('boom')
+    expect(reviveSyncInvokeError({ code: 7 }).message).toBe('[object Object]')
   })
 })

@@ -1,11 +1,14 @@
 /**
- * Hook 注册表的 IPC 面 + runner 的跳过路径（隔离实例，不接提供商）。
+ * Hook 注册表的 IPC 面 + runner 的派发 / 跳过路径（隔离实例 + 假提供商）。
  *
- * 裸实例没有任何模型：hook 能匹配埋点、能解析出 agent，派发在 resolveRunModel 处止步 —— 一条
- * `no-model` 跳过行就是「埋点 → 注册表 → runner」一路走通到派发门口的证据；查无此 agent 则在模型
- * 之前就跳过（`unknown-agent`）。跳过原因只进主进程日志（`app.mainLog()`），行形如
- * `hook "<name>" skipped for session <sid>: <reason> (<detail>)`。跳过行不带埋点 id，所以拿只绑
- * turn-completed 的 echo 当每一轮的同步栅栏。
+ * pi-durable 起，没有模型的会话**连发送都被拒**（锁在没有可用模型时不建 agent，K4）：输入没被受理，
+ * 埋点一个都不触发，`no-model` 跳过对会话埋点再也走不到（受理过的会话一定上了锁、有模型）。所以这里
+ * 接一个假提供商（没写脚本的请求一律回 `OK`，见 fakeProvider）：一条 `run=<id> start trigger=<埋点>
+ * session=<sid>` 行就是「埋点 → 注册表 → runner → 派发」一路走通的证据；查无此 agent 仍在模型之前就跳过
+ * （`unknown-agent`）。派发与跳过都只进主进程日志（`app.mainLog()`）：跳过行形如
+ * `hook "<name>" skipped for session <sid>: <reason> (<detail>)`。拿只绑 turn-completed 的 echo（派
+ * explore，回 OK）的 start 行当每一轮的同步栅栏；下一条 prompt 之前先等这条会话名下的 run 都收尾，
+ * 免得上一轮还在跑的 run 让下一轮 busy 跳过。
  *
  * 用例有顺序依赖：HR-4 接着 HR-3 的会话；HR-5 ~ HR-7 在前面留下的文件上继续。
  */
@@ -13,8 +16,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { basename, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
+import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { REGISTRY_NOTE_PROJECT_IDS, openRegistryNote } from '../../harness/seed'
+import { REGISTRY_NOTE_PROJECT_IDS, openRegistryNote, seedFakeProvider } from '../../harness/seed'
 
 const HOOKS_PROJECT = REGISTRY_NOTE_PROJECT_IDS.hook
 const PROMPT_ACCEPTED = 'session.prompt-accepted'
@@ -69,6 +73,7 @@ const INVALID_REASONS: Record<string, string> = {
 }
 
 let app: E2EApp
+let provider: FakeProvider
 /** HR-3 / HR-4 共用的会话 */
 let sid = ''
 
@@ -87,7 +92,7 @@ const deleteHookFile = (fileName: string): Promise<WriteResult> =>
   app.main.eval(`window.api.hook.deleteByFile(${JSON.stringify({ fileName })})`)
 const createSession = (): Promise<string> =>
   app.main.eval<string>(`window.api.session.create({}).then((s) => s.id)`)
-/** 发 prompt 不等它：隔离实例没有模型，失败照吞；埋点在派发前后照常触发 */
+/** 发 prompt 不等它（假提供商回 OK；失败照吞）；埋点在受理与轮末照常触发 */
 const promptTolerant = (target: string, text: string): Promise<unknown> =>
   app.main.eval(
     `(window.api.agent.prompt(${JSON.stringify({ sessionId: target, text })}).catch(() => undefined), true)`
@@ -103,12 +108,47 @@ const untilLines = (needle: string, n: number, what: string): Promise<string[]> 
     const hits = linesWith(needle)
     return hits.length >= n ? hits : null
   }, what)
+/** 某个 hook 在某条会话上真的派发出去的 run（`run=<id> start trigger=<埋点> session=<sid> agent=…`） */
+const startLines = (hook: string, target: string, trigger?: string): string[] =>
+  logLines().filter(
+    (l) =>
+      l.includes(`hook "${hook}" run=`) &&
+      l.includes(` start trigger=${trigger ?? ''}`) &&
+      l.includes(` session=${target} `)
+  )
+const untilStarts = (
+  hook: string,
+  target: string,
+  n: number,
+  what: string,
+  trigger?: string
+): Promise<string[]> =>
+  until(() => {
+    const hits = startLines(hook, target, trigger)
+    return hits.length >= n ? hits : null
+  }, what)
+const runIdIn = (line: string): string => /run=(\S+)/.exec(line)?.[1] ?? ''
+/** 这条会话名下派发过的 run 全都收尾了（`ok (` / `failed:` / 中止…… 任何带同一 run id 的后续行） */
+const untilRunsSettled = (target: string, what: string): Promise<true> =>
+  until(() => {
+    const lines = logLines()
+    const started = lines.filter(
+      (l) => l.includes(' start trigger=') && l.includes(` session=${target} `)
+    )
+    const settled = started.every((s) => {
+      const id = runIdIn(s)
+      return lines.some((l) => l !== s && l.includes(`run=${id} `) && !l.includes(' start trigger='))
+    })
+    return settled ? true : null
+  }, what)
 
 beforeAll(async () => {
   app = await launchApp()
+  provider = await startFakeProvider()
+  await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: 'e2e-hook-registry' })
   mkdirSync(app.hooksDir, { recursive: true })
   const seeds: Record<string, string> = {
-    // 合法：echo 每轮都起（派 explore → 无模型跳过，当栅栏）；ghost 点名一个不存在的 agent；
+    // 合法：echo 每轮都起（派 explore → 假提供商回 OK，当栅栏）；ghost 点名一个不存在的 agent；
     // inert 绑了这个版本不认识的埋点 —— 绑定惰性化而不是判非法
     'echo.md': hookMd('echo', { agent: 'explore', on: [{ trigger: TURN_COMPLETED }] }),
     'ghost.md': hookMd('ghost', { agent: 'ghost', on: [{ trigger: PROMPT_ACCEPTED }] }),
@@ -155,6 +195,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.stop()
+  await provider?.close()
 })
 
 describe('hook IPC 面与注册表', () => {
@@ -234,23 +275,21 @@ describe('hook IPC 面与注册表', () => {
 })
 
 describe('runner 的跳过路径（只进主进程日志）', () => {
-  it('HR-3 首条 prompt 到达 runner：auto-title 与 echo 因无模型跳过，ghost 因查无 agent 跳过；惰性与非法的从不出现，本会话没有任何 run', async () => {
+  it('HR-3 首条 prompt 到达 runner：auto-title 与 echo 真的派发出去，ghost 因查无 agent 跳过；惰性与非法的从不出现，本会话只有那两个 hook 的 run', async () => {
     sid = await createSession()
     await promptTolerant(sid, 'hello')
 
-    const [quick] = await untilLines(
-      skipLine('auto-title', sid, 'no-model'),
-      1,
-      'auto-title skipped for no model'
-    )
-    expect(quick).toContain('(no model available for this session)')
-    await untilLines(skipLine('echo', sid, 'no-model'), 1, 'turn-1 echo barrier')
+    const [quick] = await untilStarts('auto-title', sid, 1, 'auto-title dispatched', PROMPT_ACCEPTED)
+    expect(quick).toContain('agent=titler')
+    const [echo] = await untilStarts('echo', sid, 1, 'turn-1 echo barrier', TURN_COMPLETED)
+    expect(echo).toContain('agent=explore')
     await untilLines(
       `${skipLine('ghost', sid, 'unknown-agent')} (no agent definition named "ghost")`,
       1,
       'ghost skipped for an unknown agent'
     )
-    expect(linesWith(`hook "auto-title" skipped for session ${sid}:`)).toHaveLength(1)
+    expect(startLines('auto-title', sid)).toHaveLength(1)
+    expect(linesWith(`hook "auto-title" skipped for session ${sid}:`)).toEqual([])
 
     for (const name of ['inert', ...Object.keys(INVALID_REASONS).map((f) => f.slice(0, -3))]) {
       expect(
@@ -259,27 +298,34 @@ describe('runner 的跳过路径（只进主进程日志）', () => {
         )
       ).toEqual([])
     }
-    expect(logLines().filter((l) => l.includes('run=') && l.includes(sid))).toEqual([])
+    // 本会话名下派发出去的只有 auto-title 与 echo 各一次（ghost 在派发之前就被挡下）
+    const ran = logLines()
+      .filter((l) => l.includes(' start trigger=') && l.includes(` session=${sid} `))
+      .map((l) => /hook "([^"]+)"/.exec(l)?.[1])
+      .sort()
+    expect(ran).toEqual(['auto-title', 'echo'])
     expect(app.mainLog()).toContain('hook runner ready')
+    await untilRunsSettled(sid, 'turn-1 hook runs settled')
   })
 
   it('HR-4 标题仍是默认值时 quick 每条 prompt 都起；用户改名后不再起', async () => {
     await promptTolerant(sid, 'second')
-    await untilLines(skipLine('echo', sid, 'no-model'), 2, 'turn-2 echo barrier')
-    await untilLines(
-      `hook "auto-title" skipped for session ${sid}:`,
-      2,
-      'quick reached the runner again'
-    )
-    expect(linesWith(`hook "auto-title" skipped for session ${sid}:`)).toHaveLength(2)
+    await untilStarts('echo', sid, 2, 'turn-2 echo barrier', TURN_COMPLETED)
+    await untilStarts('auto-title', sid, 2, 'quick reached the runner again', PROMPT_ACCEPTED)
+    expect(startLines('auto-title', sid)).toHaveLength(2)
+    // titler 拿到的是默认的 OK（没调 set-title）：标题还是默认值，这正是第二轮还会起的前提
+    expect(linesWith(`hook "auto-title" skipped for session ${sid}:`)).toEqual([])
+    await untilRunsSettled(sid, 'turn-2 hook runs settled')
 
     await app.main.eval(
       `window.api.session.updateTitle(${JSON.stringify({ id: sid, title: 'Renamed by user' })})`
     )
     await promptTolerant(sid, 'third')
-    await untilLines(skipLine('echo', sid, 'no-model'), 3, 'turn-3 echo barrier')
+    await untilStarts('echo', sid, 3, 'turn-3 echo barrier', TURN_COMPLETED)
     await sleep(500)
-    expect(linesWith(`hook "auto-title" skipped for session ${sid}:`)).toHaveLength(2)
+    expect(startLines('auto-title', sid)).toHaveLength(2)
+    expect(linesWith(`hook "auto-title" skipped for session ${sid}:`)).toEqual([])
+    await untilRunsSettled(sid, 'turn-3 hook runs settled')
   })
 })
 
@@ -359,8 +405,10 @@ describe('写路径', () => {
       1,
       'still the canonical user copy after zz.md appears'
     )
-    await untilLines(skipLine('echo', second, 'no-model'), 1, 'turn barrier')
+    await untilStarts('echo', second, 1, 'turn barrier', TURN_COMPLETED)
     expect(linesWith(`hook "auto-title" skipped for session ${second}:`)).toHaveLength(1)
+    expect(startLines('auto-title', second)).toEqual([])
+    await untilRunsSettled(second, 'second session hook runs settled')
 
     expect(await deleteHookFile('zz.md')).toEqual({ success: true })
     expect(await deleteHook('auto-title')).toEqual({ success: true })
@@ -372,11 +420,16 @@ describe('写路径', () => {
 
     const third = await createSession()
     await promptTolerant(third, 'builtin again')
-    await untilLines(
-      skipLine('auto-title', third, 'no-model'),
+    const [builtinAgain] = await untilStarts(
+      'auto-title',
+      third,
       1,
-      'builtin auto-title in effect again'
+      'builtin auto-title in effect again',
+      PROMPT_ACCEPTED
     )
+    expect(builtinAgain).toContain('agent=titler')
+    expect(linesWith(`hook "auto-title" skipped for session ${third}:`)).toEqual([])
+    await untilRunsSettled(third, 'third session hook runs settled')
   })
 
   it('HR-7 openNote / deleteByFile 只认 hooks 目录下已存在的单个 .md：非法文件照样能打开去修、重复打开同一条会话；穿越 / 子目录 / 隐藏 / 不存在一律拒绝且不动文件', async () => {

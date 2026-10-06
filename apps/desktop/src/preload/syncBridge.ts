@@ -2,15 +2,17 @@
  * `window.api.sync` —— 视图同步的渲染进程一侧（phase 3，P3-05；`SessionChannelApi.sync`）。
  *
  *  - `invoke(target, call)` → `ipcRenderer.invoke('sync:invoke', target, call)`；主进程总是 resolve 一个
- *    信封（PIN-01），`ok:false` 在这里再抛成带 `.code` 的 Error（`service_not_found` 等 chord 错误码由此
- *    原样到达 chord 的绑定）。
+ *    信封（PIN-01），`ok:false` 在这里以**纯对象** `{code?, message}` 拒绝 —— 不是 Error：contextBridge
+ *    拷一个 Error 只留 `message`，`.code` 会丢（P3-14 的发现），纯对象则按值拷过去。渲染端的 syncClient
+ *    经 `reviveSyncInvokeError` 把它还原成带 `.code` 的 Error（`service_not_found` 等 chord 错误码由此
+ *    原样到达 `useSessionView` / `useAgentView`）。
  *  - `onFrame(cb)` → 每次订阅挂一个 `sync:frame` 监听，只把帧交给回调（不带 IPC 事件）；注销只摘自己那个，
  *    重复注销无事。
  *
  * 抽成工厂（PIN-08）是为了能拿假的 ipcRenderer 测：本模块不 import electron。
  */
 import {
-  syncInvokeError,
+  syncInvokeFailure,
   type JsonValue,
   type SyncChannel,
   type SyncFrame,
@@ -35,10 +37,10 @@ export function createSyncBridge(ipcRenderer: SyncIpcRenderer): SyncChannel {
         | SyncInvokeResult
         | undefined
       if (result === undefined || result === null || typeof result !== 'object') {
-        throw syncInvokeError({ message: 'Malformed sync reply' })
+        throw syncInvokeFailure({ message: 'Malformed sync reply' })
       }
       if (result.ok) return result.value
-      throw syncInvokeError(result.error)
+      throw syncInvokeFailure(result.error)
     },
 
     onFrame(callback: (frame: SyncFrame) => void): () => void {

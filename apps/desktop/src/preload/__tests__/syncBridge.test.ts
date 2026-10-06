@@ -11,7 +11,12 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
 import { CHROME_PANEL_CHANNEL_PATHS } from '@shuvix/chat-protocol/chromeBridge'
-import type { JsonValue, SyncFrame, SyncTarget } from '@shuvix/chat-protocol/sync'
+import {
+  reviveSyncInvokeError,
+  type JsonValue,
+  type SyncFrame,
+  type SyncTarget
+} from '@shuvix/chat-protocol/sync'
 import { createSyncBridge, type SyncIpcRenderer } from '../syncBridge'
 
 type Handler = (event: unknown, ...args: unknown[]) => void
@@ -58,7 +63,7 @@ describe('P3-05-10 preload sync.invoke', () => {
     expect(passedCall).toBe(call)
   })
 
-  it('P3-05-10 {ok:true} 没有 value（退订的回复）→ undefined；{ok:false} → 带 code 的 Error', async () => {
+  it('P3-05-10 {ok:true} 没有 value（退订的回复）→ undefined；{ok:false} → 以纯对象 {code, message} 拒绝（P3-15：过 contextBridge 不丢 code）', async () => {
     await expect(
       createSyncBridge(mockIpcRenderer({ ok: true, value: undefined })).invoke(target, null)
     ).resolves.toBeUndefined()
@@ -66,10 +71,21 @@ describe('P3-05-10 preload sync.invoke', () => {
       mockIpcRenderer({ ok: false, error: { code: 'service_not_found', message: 'gone' } })
     )
       .invoke(target, null)
-      .catch((e: unknown) => e)) as Error & { code?: string }
-    expect(rejected).toBeInstanceOf(Error)
-    expect(rejected.code).toBe('service_not_found')
-    expect(rejected.message).toBe('gone')
+      .catch((e: unknown) => e)) as { code?: string; message?: string }
+    // 不是 Error：contextBridge 拷 Error 只留 message；纯对象按值拷 —— structuredClone 近似那次拷贝
+    expect(rejected).not.toBeInstanceOf(Error)
+    expect(Object.getPrototypeOf(rejected)).toBe(Object.prototype)
+    expect(structuredClone(rejected)).toEqual({ code: 'service_not_found', message: 'gone' })
+    // 渲染端还原：带 code 的 Error
+    const revived = reviveSyncInvokeError(structuredClone(rejected))
+    expect(revived).toBeInstanceOf(Error)
+    expect(revived.code).toBe('service_not_found')
+    expect(revived.message).toBe('gone')
+
+    const malformed = await createSyncBridge(mockIpcRenderer(null))
+      .invoke(target, null)
+      .catch((e: unknown) => e)
+    expect(malformed).toEqual({ message: 'Malformed sync reply' })
   })
 })
 
