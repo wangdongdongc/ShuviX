@@ -221,7 +221,12 @@ function busy(extra: Parameters<typeof V>[1] = {}): void {
   act(() => applySessionView('s1', V('s1', { run: { state: 'busy' }, ...extra })))
 }
 
-const q = (submissionId: number, mode: QueuedInputView['mode'], text: string, imageCount = 0) => ({
+const q = (
+  submissionId: number,
+  mode: QueuedInputView['mode'],
+  text: string,
+  imageCount = 0
+): QueuedInputView => ({
   submissionId,
   mode,
   text,
@@ -314,7 +319,13 @@ describe('P3-11-12..15 两档输入框', () => {
 
   it('P3-11-13 有待答的询问：回车投「其它」，从不 steer；只有空白：什么都不发', async () => {
     await mountInput()
-    const ask: InputRequest = { id: 'r1', kind: 'ask', toolName: 'bash', command: 'ls', createdAt: 0 }
+    const ask: InputRequest = {
+      id: 'r1',
+      kind: 'ask',
+      toolName: 'bash',
+      command: 'ls',
+      createdAt: 0
+    }
     busy({ asks: [ask] })
     await flush()
     await type('do it differently')
@@ -410,7 +421,10 @@ describe('P3-11-16..19 队列面板', () => {
     act(() =>
       applySessionView(
         's1',
-        V('s1', { source: 'legacy', capabilities: { send: false, rollback: false, continue: false } })
+        V('s1', {
+          source: 'legacy',
+          capabilities: { send: false, rollback: false, continue: false }
+        })
       )
     )
     expect(container.innerHTML).toBe('')

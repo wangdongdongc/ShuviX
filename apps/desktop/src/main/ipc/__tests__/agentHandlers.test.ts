@@ -15,7 +15,7 @@
  *           网关；网关的 null 原样交回。
  *   P3-08-60 `agent:respondToInput` 带上答题方 `ipc:<webContentsId>`（PIN-20），只交给网关，回 {success:true}。
  *   P3-11-07 `agent:withdrawQueued` 在 `createElectronContext(sessionId)` 的上下文里把 `(sessionId, submissionId)`
- *           交给网关，回 `{ result }`；`agent:nextTurn` 不再注册。
+ *           交给网关，回 `{ result }`；「下一轮」的通道不再注册。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -208,9 +208,9 @@ describe('P3-11-07 agent:withdrawQueued', () => {
       depths.push(state.runDepth)
       return 'already_placed'
     })
-    await expect(invoke('agent:withdrawQueued', { sessionId: SID, submissionId: 4 })).resolves.toEqual(
-      { result: 'already_placed' }
-    )
+    await expect(
+      invoke('agent:withdrawQueued', { sessionId: SID, submissionId: 4 })
+    ).resolves.toEqual({ result: 'already_placed' })
     expect(state.gateway.withdrawQueued.mock.calls).toEqual([[SID, 4]])
     expect(depths).toEqual([1])
     expect(state.contexts).toEqual([SID])

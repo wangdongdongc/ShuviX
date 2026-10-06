@@ -32,6 +32,14 @@ export interface ChatItem {
  * id 固定是 `pending-prompt`（chat-ui 的 `PENDING_PROMPT_ID`）—— 它**不是** entry id，
  * 树上还没有这条消息，所以气泡上不给回退，且压淡一档（`data-msg-pending`）。
  */
+/** 队列面板的一行（QueuePanel 的 `data-queue-row`，P3-11） */
+export interface QueueRowShot {
+  submissionId: number
+  /** steer = 立即，followUp = 追加 */
+  mode: string
+  text: string
+}
+
 export interface PendingPromptShot extends ChatItem {
   /** 压淡标记（UserBubble 的 `data-msg-pending`）：还没落库的可见信号 */
   pendingLook: boolean
@@ -234,6 +242,12 @@ export interface ChatPane {
   typeAndSend(text: string): Promise<void>
   /** 点发送按钮（禁用态下浏览器本就不派发 onClick，用于验证「点不动」） */
   clickSend(): Promise<void>
+  /** 运行中点某个档位按钮（`data-queue-tier`：steer = 立即，followUp = 追加） */
+  clickQueueTier(tier: 'steer' | 'followUp'): Promise<void>
+  /** 队列面板的行（折叠着就先展开；面板不在 = 空数组） */
+  queueRows(): Promise<QueueRowShot[]>
+  /** 点某一行的撤回按钮（面板须已展开，见 queueRows） */
+  withdrawQueued(submissionId: number): Promise<void>
   inputValue(): Promise<string>
   /** 发送按钮（lucide-send）是否禁用 */
   sendDisabled(): Promise<boolean>
@@ -561,6 +575,41 @@ export function chatPane(main: CdpClient): ChatPane {
     clickSend: async () => {
       await main.eval(`${SEND_BTN}?.click()`)
       await new Promise((r) => setTimeout(r, 200))
+    },
+    clickQueueTier: async (tier) => {
+      const clicked = await main.eval<boolean>(`(() => {
+        const button = document.querySelector('[data-queue-tier=${JSON.stringify(tier)}]')
+        if (!button || button.disabled) return false
+        button.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error(`queue tier ${tier} is not clickable`)
+      await sleep(200)
+    },
+    queueRows: async () => {
+      const expanded = await main.eval<boolean>(`(() => {
+        const panel = document.querySelector('[data-queue-panel]')
+        if (!panel || panel.querySelector('[data-queue-row]')) return false
+        panel.querySelector('[data-queue-toggle]')?.click()
+        return true
+      })()`)
+      if (expanded) await sleep(100)
+      return main.eval<
+        QueueRowShot[]
+      >(`[...document.querySelectorAll('[data-queue-row]')].map((row) => ({
+        submissionId: Number(row.getAttribute('data-queue-row')),
+        mode: row.getAttribute('data-queue-mode') || '',
+        text: (row.querySelector('.truncate')?.textContent || '').trim()
+      }))`)
+    },
+    withdrawQueued: async (submissionId) => {
+      const clicked = await main.eval<boolean>(`(() => {
+        const button = document.querySelector('[data-queue-withdraw="${submissionId}"]')
+        if (!button) return false
+        button.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error(`no withdraw button for queued submission ${submissionId}`)
     },
     inputValue: () => main.eval<string>(`${TEXTAREA}?.value ?? ''`),
     sendDisabled: () => main.eval<boolean>(`${SEND_BTN}?.disabled ?? true`),

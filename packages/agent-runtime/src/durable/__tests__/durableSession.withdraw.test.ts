@@ -8,7 +8,12 @@
  *      插话、回退之后旧分支上的那条 → `not_found`。都没有提交，队列不变
  *   04 句柄已关（PIN-14）：`closed`，从不重开
  */
-import { InboxDoc, ROOT_CONVERSATION_ID, type ConversationId } from '@earendil-works/pi-durable'
+import {
+  InboxDoc,
+  ROOT_CONVERSATION_ID,
+  type ConversationId,
+  type SubmissionRecord
+} from '@earendil-works/pi-durable'
 import { describe, expect, it, vi } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import type { DurableSession } from '../durableSession'
@@ -31,7 +36,7 @@ async function inboxIds(
   return (inbox?.items ?? []).map((item) => item.id as number)
 }
 
-async function record(session: DurableSession, id: number) {
+async function record(session: DurableSession, id: number): Promise<SubmissionRecord> {
   const submission = await session.harness.submission(id as never, BG)
   return submission!.status(BG)
 }

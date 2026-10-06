@@ -43,7 +43,9 @@ export function createPanelChannelApi(link: PanelLink): SessionChannelApi {
       followUp: (params) => call('agent.followUp', params),
       // 撤回要等桥的白名单放行 agent.withdrawQueued（P3-09）：在那之前拒绝（队列面板就地提示）
       withdrawQueued: async () => {
-        throw new Error('Withdrawing a queued message is not available in the Chrome side panel yet')
+        throw new Error(
+          'Withdrawing a queued message is not available in the Chrome side panel yet'
+        )
       },
       abort: (sessionId) => call('agent.abort', sessionId),
       respondToInput: (params) => call('agent.respondToInput', params),

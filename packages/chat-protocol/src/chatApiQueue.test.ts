@@ -7,11 +7,7 @@
  * 断言都在编译期；运行时只跑一条恒真的样本，让 vitest 收得到它。
  */
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import type {
-  AgentWithdrawQueuedParams,
-  SessionChannelApi,
-  WithdrawQueuedResult
-} from './chatApi'
+import type { AgentWithdrawQueuedParams, SessionChannelApi, WithdrawQueuedResult } from './chatApi'
 // @ts-expect-error AgentNextTurnParams is gone end to end (Q-P3-09)
 import type { AgentNextTurnParams } from './chatApi'
 
