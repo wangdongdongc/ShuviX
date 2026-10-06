@@ -28,6 +28,7 @@ import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import {
+  asksRaisedIn,
   createAgentSession,
   createPinnedChildSession,
   createProject,
@@ -509,7 +510,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
     const end = ends.dbf1_list
     expect(end.isError).toBe(false)
     expect(end.result).toBe(LISTED.join('\n'))
-    expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+    expect(await asksRaisedIn(events, sid, since)).toBe(0)
     expect(decisionsOf('dbf1_list')).toEqual([])
     // 列连接不连任何库
     expect(ro.connections()).toBe(0)
@@ -557,7 +558,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
         '(3 rows)'
       ].join('\n')
     )
-    expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+    expect(await asksRaisedIn(events, sid, since)).toBe(0)
 
     // 服务器那一侧：这条会话的第一条连接，建连先下只读标志，语句走扩展协议、包在只读事务里
     expect(ro.connections()).toBe(1)
@@ -672,7 +673,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
         .slice(statementsBefore)
         .every((s) => s.conn === roConn)
     ).toBe(true)
-    expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+    expect(await asksRaisedIn(events, sid, since)).toBe(0)
     expect(await ro.count('users')).toBe(3)
   }, 120_000)
 
@@ -708,7 +709,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
     const { ends } = await driver.finish(sid, since)
     expect(ends.dbf4_insert.isError).toBe(false)
     expect(ends.dbf4_insert.result).toBe('OK: INSERT, 2 rows affected')
-    expect(await driver.eventsSince(since, 'input_request', sid)).toHaveLength(1)
+    expect(await asksRaisedIn(events, sid, since)).toBe(1)
 
     // 可写连接：不下只读标志、不包只读事务，语句原样一条
     expect(rw.connections()).toBe(1)
@@ -800,7 +801,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
     try {
       provider.reset()
       const { ends, since } = await driver.run(sid, [q('dbf8_insert', 'e2e-rw', SQL, 'Add delta')])
-      expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+      expect(await asksRaisedIn(events, sid, since)).toBe(0)
       expect(ends.dbf8_insert.isError).toBe(false)
       expect(ends.dbf8_insert.result).toBe('OK: INSERT, 1 row affected')
       expect(rw.saw("'delta'")).toBe(true)

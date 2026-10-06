@@ -697,10 +697,19 @@ export function eventRecorder(main: CdpClient): EventRecorder {
 
 /**
  * 某会话录到的询问**挂起次数**（P3-08：询问不再是 ChatEvent —— 从 `ask_count` 余项的**上升**里数：
- * 计数从 n 涨到 m 就是挂起了 m − n 条）。只数 recorder 缓冲里的（`clear()` 之后重新数）。
+ * 计数从 n 涨到 m 就是挂起了 m − n 条）。只数 recorder 缓冲里的（`clear()` 之后重新数）；给了 `since`
+ * （`mark()` 取得）就只数那之后的 —— 起点时这条会话的计数须为 0（上一轮的询问都已落定）。
  */
-export async function asksRaisedIn(events: EventRecorder, sessionId: string): Promise<number> {
-  const counts = (await events.all<RecordedEvent & { count?: number }>())
+export async function asksRaisedIn(
+  events: EventRecorder,
+  sessionId: string,
+  since?: number
+): Promise<number> {
+  const recorded =
+    since === undefined
+      ? await events.all<RecordedEvent & { count?: number }>()
+      : await events.allSince<RecordedEvent & { count?: number }>(since)
+  const counts = recorded
     .filter((e) => e.type === 'ask_count' && e.sessionId === sessionId)
     .map((e) => e.count ?? 0)
   let previous = 0
@@ -1090,17 +1099,49 @@ export async function createPinnedChildSession(
   return sid
 }
 
-/** 发送 prompt 并容忍 LLM 失败（无 API key），等事件落定后返回消息列表 */
+/**
+ * 发送 prompt 并容忍 LLM 失败（无 API key），等用户条目落盘后返回消息列表。
+ *
+ *  - 先 `ensureDefaultModel`：没有可用模型时 durable 的锁不建 agent（P3-06 PIN-01），prompt 当场被拒、
+ *    用户条目根本不落盘；有了占位模型，失败才落在 LLM 那一步（本 helper 一直假定的形状）。
+ *  - `agent.prompt` 在这一轮**落定**时才返回；占位提供商连不上（`bad port`），而连接错误可重试（P3-06 的
+ *    退避：1 s、2 s、4 s …），这一轮会挂好几分钟。所以不 await 它：等用户条目出现在 `message.list` 里（或
+ *    prompt 先落定），再给这一轮 1.5 s 自己落定（接了 fake provider 的会话照常跑完），还没落定就
+ *    `agent.abort` 掉并等 prompt 返回 —— 运行时留着（`created` 不变），会话不再忙。
+ */
 export async function promptAndListMessages(
   main: CdpClient,
   sid: string,
   text = 'hi'
 ): Promise<Array<{ content?: unknown; metadata?: Record<string, unknown> }>> {
+  await ensureDefaultModel(main)
+  const key = JSON.stringify(sid)
   await main.eval(
-    `window.api.agent.prompt({ sessionId: ${JSON.stringify(sid)}, text: ${JSON.stringify(text)} }).catch(() => undefined)`
+    `((window.__e2ePrompts ??= {})[${key}] = window.api.agent
+      .prompt({ sessionId: ${key}, text: ${JSON.stringify(text)} })
+      .catch(() => undefined)
+      .finally(() => ((window.__e2ePromptSettled ??= {})[${key}] = true)), undefined)`
   )
-  await sleep(1500)
-  return main.eval(`window.api.message.list(${JSON.stringify(sid)})`)
+  const landed = async (): Promise<boolean> =>
+    (
+      await main.eval<Array<{ role?: string; content?: unknown }>>(
+        `window.api.message.list(${key})`
+      )
+    ).some((m) => m.role === 'user' && m.content === text)
+  const settled = (): Promise<boolean> =>
+    main.eval<boolean>(`!!window.__e2ePromptSettled?.[${key}]`)
+  await until(
+    async () => (await settled()) || (await landed()),
+    `user entry "${text}" landed (or the prompt settled)`
+  )
+  const done = await main.eval<boolean>(
+    `Promise.race([window.__e2ePrompts[${key}].then(() => true), new Promise((r) => setTimeout(() => r(false), 1500))])`
+  )
+  if (!done) {
+    await main.eval(`window.api.agent.abort(${key})`)
+    await main.eval(`window.__e2ePrompts[${key}]`)
+  }
+  return main.eval(`window.api.message.list(${key})`)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
