@@ -53,7 +53,7 @@ export function Conversation({
   const { t } = useTranslation()
   const messages = useChatStore((s) => s.messages)
   const isStreaming = useChatStore(selectIsStreaming)
-  // 正在发送、后端还没落库的那条用户消息（乐观占位；user_message 一到就撤）
+  // 正在发送、后端还没落库的那条用户消息（乐观占位；视图里出现这条用户消息就撤）
   const pendingPrompt = useChatStore(selectPendingPrompt)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   // 悬浮输入卡片高度 → 根容器 CSS 变量（列表 Footer / 空态 padding 引用），避免卡片遮住末尾内容。

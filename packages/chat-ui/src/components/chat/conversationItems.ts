@@ -54,7 +54,7 @@ export function streamingPlaceholder(sessionId: string): AssistantMessage {
  * 也照旧不会被折回去。用户消息、压缩摘要、错误行仍按自己的 id —— 它们从出现起 id 就不变。
  *
  * `pending` 是正在发送、后端还没落库的那条用户消息（乐观占位）：排在列表末尾、流式占位卡
- * 之前；它落库后 `user_message` 把真实 entry 送来，占位随即撤下，同一句话换成真的那条。
+ * 之前；它落库后会话视图带来真实 entry，占位随即撤下，同一句话换成真的那条。
  */
 export function buildVisibleItems(
   messages: ChatMessage[],
