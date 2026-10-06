@@ -9,6 +9,9 @@
  *
  * 侧栏那一面只有一条产品差异：子会话缩进渲染在父行下面（`data-sub` / `data-sub-count`
  * 两个锚点，见 pages.ts）。
+ *
+ * P3-14-24：后台那一轮在父会话的任务页里是一条子会话行（落到 done）；它的「打开」把活动会话换成子会话，
+ * 对话区从子会话自己的视图画出答复。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -23,7 +26,7 @@ import {
   seedFakeProvider,
   waitRendererReady
 } from '../../harness/seed'
-import { sidebarPane, type SidebarPane } from '../../harness/pages'
+import { sidebarPane, tasksPanelPane, type SidebarPane } from '../../harness/pages'
 
 const MODEL = 'e2e-model'
 const PARENT_TITLE = 'S-parent'
@@ -212,6 +215,11 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
       },
       { text: 'collected.', when: byUserText('后台跑') }
     )
+    // P3-14-24：父会话在渲染端是活动会话 —— 任务页只给活动会话画
+    await until(
+      async () => (await sidebar.openSession(PARENT_TITLE)) || null,
+      'parent session opened'
+    )
     await promptParent('后台跑')
 
     const results = toolResults(await listMessages(parentSid))
@@ -234,6 +242,35 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
       async () => (await listMessages(subSid)).some((m) => m.content.includes('BG DONE.')),
       'background turn finished in the sub-session'
     )
+
+    // P3-14-24：父会话的任务页里有一条子会话行，状态落到 done
+    const tasks = tasksPanelPane(app.main)
+    await tasks.open()
+    await until(
+      async () =>
+        (await tasks.rows()).some(
+          (r) => r.kind === 'sub-session' && r.title === SUB_TITLE && r.status === 'done'
+        ) || null,
+      'sub-session task row done'
+    )
+  })
+
+  it('P3-14-24 任务页那条子会话行的「打开」：活动会话换成子会话，对话区从它自己的会话视图画出 BG DONE.', async () => {
+    const tasks = tasksPanelPane(app.main)
+    expect(await tasks.openSubSession(SUB_TITLE)).toBe(true)
+    await until(
+      async () => (await sidebar.activeTitle()) === SUB_TITLE || null,
+      'sub-session became active'
+    )
+    await until(
+      () =>
+        app.main.eval<boolean>(
+          `(document.querySelector('.conversation-scroller')?.textContent ?? '').includes('BG DONE.')`
+        ),
+      'BG DONE. rendered from the sub-session view'
+    )
+    // 回到父会话（后面的用例按父会话的侧栏状态断言）
+    expect(await sidebar.openSession(PARENT_TITLE)).toBe(true)
   })
 
   it('越权 id 被拒，错误里给出合法的子会话（模型才有下一步）', async () => {
