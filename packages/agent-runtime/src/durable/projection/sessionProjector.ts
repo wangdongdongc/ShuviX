@@ -5,8 +5,9 @@
  * **内容来源是 `conversation.watch(ctx)`**（P3-03 设计稿的修订）：durable 的视图挂载按提交发布前进，
  * 每一帧（精确、有序、异步，在微任务里）给出 `{entries, docs}`（含 `pi.live` / `pi.inbox`）。帧处理器
  * 把它喂给纯投影（`project.ts`）再逐字段对齐进状态（`reconcile.ts`）—— 流式文字是 `a` 操作，新消息是一条
- * `p`。逐帧的代价与会话长度基本无关（P4-09b）：投影带着一份 `ProjectionMemo`，没变的消息交回上一帧的对象；
- * 对齐拿上一次写进状态的那份视图当 `prev`，同一引用的子树整个跳过（见 `revise`）。帧处理器不在 Session 的提交监听里，下游（SyncHub 的发送）抛错也只记日志，碰不到会话（PIN-03）。
+ * `p`。帧处理器不在 Session 的提交监听里，下游（SyncHub 的发送）抛错也只记日志，碰不到会话（PIN-03）。
+ * 逐帧的代价与会话长度基本无关（P4-09b）：投影带着一份 `ProjectionMemo`，没变的消息交回上一帧的对象；
+ * 对齐拿上一次写进状态的那份视图当 `prev`，同一引用的子树整个跳过（见 `revise`）。
  *
  * 帧里没有、但投影要的东西由一条**同步的旁路**（`subscribeCommits`）先记下：
  *  - `submission` 变化：requestId → 落下的条目（显示侧车按它落到 user 条目上）、submission id → requestId
