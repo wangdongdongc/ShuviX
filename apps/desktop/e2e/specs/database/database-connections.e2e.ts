@@ -140,7 +140,7 @@ const runQuery = async (
   const { ends, since } = await driver.run(sid, [
     { id, tool: QUERY, args: { connection, sql, description } }
   ])
-  expect(await driver.eventsSince(since, 'input_request', sid), id).toEqual([])
+  expect(await driver.asksSince(since, sid), id).toBe(0)
   return ends[id]
 }
 
@@ -562,7 +562,7 @@ describe('用户自己的策略（DBE-P）', () => {
       provider.reset()
       const listed = await driver.run(s, [{ id: 'dbp3_list', tool: LIST, args: {} }])
       expect(listed.ends.dbp3_list.isError).toBe(false)
-      expect(await driver.eventsSince(listed.since, 'input_request', s)).toEqual([])
+      expect(await driver.asksSince(listed.since, s)).toBe(0)
 
       const SQL = 'SELECT 3 AS p3_probe'
       provider.reset()

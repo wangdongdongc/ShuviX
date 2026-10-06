@@ -113,7 +113,7 @@ const decisionsOf = (toolCallId: string): ReturnType<typeof securityDecisions> =
 
 /** 这条会话里某次运行之后的全部工具结果与发给模型的请求 —— 「内容有没有漏出去」的取证面 */
 const everythingSince = async (since: number): Promise<string> => {
-  const ends = await driver.eventsSince<ToolEndEvent>(since, 'tool_end', sid)
+  const ends = await driver.resultsSince(sid, since)
   return ends.map((e) => e.result).join('\n')
 }
 
@@ -141,7 +141,7 @@ const noAsk = async (
 ): Promise<Record<string, ToolEndEvent>> => {
   provider.reset()
   const { ends, since } = await driver.run(sid, calls)
-  expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+  expect(await driver.asksSince(since, sid)).toBe(0)
   return ends
 }
 
@@ -371,7 +371,7 @@ describe('file:// 导航按读文件过门', () => {
     ])
     expect(ends.brp2_open.result).toContain('view-source')
     expect(ends.brp2_open.result).not.toContain(KEY_MARK)
-    expect(await driver.eventsSince(since, 'input_request')).toEqual([])
+    expect(await driver.asksSince(since)).toBe(0)
     expect(await driver.eventsSince(since, 'browser_event')).toEqual([])
     expect((await listTabs()).length).toBe(tabsBefore)
     expect(decisionsOf('brp2_open')).toEqual([])
@@ -697,7 +697,7 @@ describe('工具 annotations 进得了策略（L1 全工具门）', () => {
       provider.reset()
       const trusted = await driver.run(other, [{ id: 'brg16b_list', tool: 'list_tabs', args: {} }])
       expect(trusted.ends.brg16b_list.isError).toBe(false)
-      expect(await driver.eventsSince(trusted.since, 'input_request', other)).toEqual([])
+      expect(await driver.asksSince(trusted.since, other)).toBe(0)
 
       // 第三方的 peek 自称只读：那句话不进客体 → 问；拒了连它的 server 都没被调到
       provider.reset()
@@ -882,15 +882,25 @@ describe('名字与开关', () => {
     expect(names).not.toContain('browser__spoof')
   }, 120_000)
 
-  it('BRP-5 停用再启用：新会话拿回全部工具；跨过开关的旧运行时报「没连上」，不露内部连接键', async () => {
+  it('BRP-5 停用再启用：停用期间旧运行时报「没连上」、不露内部连接键；再启用后新会话拿回全部工具，旧运行时下一次调用原地重连', async () => {
     // 这条会话的运行时是在开关之前建的
     const before = await noAsk([{ id: 'brp5_warm', tool: 'list_tabs', args: {} }])
     expect(before.brp5_warm.isError).toBe(false)
 
-    for (const isEnabled of [false, true]) {
-      await app.main.eval(`window.api.mcp.update(${JSON.stringify({ id: BROWSER_ID, isEnabled })})`)
-    }
+    await app.main.eval(
+      `window.api.mcp.update(${JSON.stringify({ id: BROWSER_ID, isEnabled: false })})`
+    )
+    // 停用期间：跨过开关的旧运行时报「没连上」，报 server 名、不露 `builtin-mcp-browser#<sid>` 这种连接键
+    const stale = await noAsk([{ id: 'brp5_stale', tool: 'list_tabs', args: {} }])
+    const text = stale.brp5_stale.result
+    expect(text).toContain('MCP server "browser" is not connected')
+    expect(text).not.toContain(`${BROWSER_ID}#`)
+    // MCP 的失败交回的是出错的结果 —— 行是出错的，而不是「完成」
+    expect(stale.brp5_stale.isError).toBe(true)
 
+    await app.main.eval(
+      `window.api.mcp.update(${JSON.stringify({ id: BROWSER_ID, isEnabled: true })})`
+    )
     const fresh = await app.main.eval<string>(
       `window.api.session.create(${JSON.stringify({ title: 'BRP-5 fresh' })}).then((s) => s.id)`
     )
@@ -907,11 +917,10 @@ describe('名字与开关', () => {
         .sort()
     ).toEqual(ALL_BROWSER_TOOLS)
 
-    const stale = await noAsk([{ id: 'brp5_stale', tool: 'list_tabs', args: {} }])
-    const text = stale.brp5_stale.result
-    expect(text).toContain('MCP server "browser" is not connected')
-    expect(text).not.toContain(`${BROWSER_ID}#`)
-    // MCP 的失败是抛出的（pi 记成失败）—— 行是出错的，而不是「完成」
-    expect(stale.brp5_stale.isError).toBe(true)
+    // 再启用之后：旧运行时的工具不是死的 —— 掉了的连接在下一次调用时原地重连一次（配置行还在、
+    // 又启用了；见 mcpManager 的 usableConnection），调用照常完成
+    const back = await noAsk([{ id: 'brp5_back', tool: 'list_tabs', args: {} }])
+    expect(back.brp5_back.isError, back.brp5_back.result).toBe(false)
+    expect(back.brp5_back.result).not.toContain('is not connected')
   }, 120_000)
 })

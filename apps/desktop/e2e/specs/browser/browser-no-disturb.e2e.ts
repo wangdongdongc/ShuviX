@@ -116,7 +116,7 @@ const run = async (
 ): Promise<Record<string, ToolEndEvent>> => {
   provider.reset()
   const { ends, since } = await driver.run(sid, calls)
-  expect(await driver.eventsSince(since, 'input_request', sid)).toEqual([])
+  expect(await driver.asksSince(since, sid)).toBe(0)
   return ends
 }
 
