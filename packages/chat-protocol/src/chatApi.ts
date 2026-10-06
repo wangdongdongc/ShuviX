@@ -306,11 +306,22 @@ export interface AgentSteerParams {
 }
 
 /**
- * 追加 / 下轮入队参数 —— 与 steer 同形（一条纯文本用户消息）。
- * 三者的差别只在 pi 把它插进 agent loop 的时机，消息本身完全一致。
+ * 追加入队参数 —— 与 steer 同形（一条纯文本用户消息）。
+ * 两者的差别只在 pi 把它插进 agent loop 的时机，消息本身完全一致。
  */
 export type AgentFollowUpParams = AgentSteerParams
-export type AgentNextTurnParams = AgentSteerParams
+
+/** 撤回一条排着的用户输入（P3-11）：`submissionId` = 视图 `queue[i].submissionId` */
+export interface AgentWithdrawQueuedParams {
+  sessionId: string
+  submissionId: number
+}
+
+/**
+ * 撤回的结果（PIN-14）：`aborted` 撤回了；`already_placed` 已经进了转写（撤不回）；`settled` 早就落定；
+ * `not_found` 不是这条会话视图队列里的输入（含会话没打开）。
+ */
+export type WithdrawQueuedResult = 'aborted' | 'already_placed' | 'settled' | 'not_found'
 
 export interface AgentSetModelParams {
   sessionId: string
@@ -573,8 +584,10 @@ export interface SessionChannelApi {
     steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
     /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
     followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
-    /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
-    nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
+    /**
+     * 撤回一条排着的用户输入（P3-11，视图 `queue` 的一行）。从不乐观移除 —— 那一行跟着下一帧视图走。
+     */
+    withdrawQueued: (params: AgentWithdrawQueuedParams) => Promise<{ result: WithdrawQueuedResult }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
     respondToInput: (params: {
       sessionId: string

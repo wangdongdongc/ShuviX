@@ -283,4 +283,17 @@ describe('i18n 语言包', () => {
       ).toEqual(['percent'])
     }
   })
+
+  it('P3-11-11 队列：「下一轮」那一档的键都去掉了；撤回的文案三语齐全（插值对得上）', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const present = new Set(flatten(bundle))
+      for (const key of ['queue.nextTurn', 'queue.nextTurnHint']) {
+        expect(present.has(key), `${lang} ${key}`).toBe(false)
+      }
+      for (const key of ['queue.withdraw', 'queue.withdrawHint', 'queue.alreadyPlaced']) {
+        expect(leaf(bundle, key)?.trim(), `${lang} ${key}`).toBeTruthy()
+      }
+      expect(placeholders(leaf(bundle, 'queue.withdrawFailed') ?? ''), lang).toEqual(['error'])
+    }
+  })
 })

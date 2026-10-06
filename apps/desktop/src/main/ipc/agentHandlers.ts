@@ -10,7 +10,7 @@ import type {
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
-  AgentNextTurnParams,
+  AgentWithdrawQueuedParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams
 } from '../types'
@@ -73,12 +73,11 @@ export function registerAgentHandlers(): void {
     })
   )
 
-  /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
-  ipcMain.handle('agent:nextTurn', (_event, params: AgentNextTurnParams) =>
-    operationContext.run(createElectronContext(params.sessionId), () => {
-      chatGateway.nextTurn(params.sessionId, params.text)
-      return { success: true }
-    })
+  /** 撤回一条排着的用户输入（P3-11，视图队列的一行）：`{ result }` */
+  ipcMain.handle('agent:withdrawQueued', (_event, params: AgentWithdrawQueuedParams) =>
+    operationContext.run(createElectronContext(params.sessionId), async () => ({
+      result: await chatGateway.withdrawQueued(params.sessionId, params.submissionId)
+    }))
   )
 
   /** 中止指定 session 的生成（若已有部分内容，后端统一落库并返回） */

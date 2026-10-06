@@ -8,7 +8,7 @@ import type {
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
-  AgentNextTurnParams,
+  AgentWithdrawQueuedParams,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLogListParams,
@@ -161,8 +161,9 @@ const api = {
     steer: (params: AgentSteerParams) => ipcRenderer.invoke('agent:steer', params),
     /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
     followUp: (params: AgentFollowUpParams) => ipcRenderer.invoke('agent:followUp', params),
-    /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
-    nextTurn: (params: AgentNextTurnParams) => ipcRenderer.invoke('agent:nextTurn', params),
+    /** 撤回一条排着的用户输入（P3-11，视图队列的一行）→ `{ result }` */
+    withdrawQueued: (params: AgentWithdrawQueuedParams) =>
+      ipcRenderer.invoke('agent:withdrawQueued', params),
 
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),

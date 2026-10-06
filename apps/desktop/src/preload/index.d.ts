@@ -13,7 +13,8 @@ import type {
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
-  AgentNextTurnParams,
+  AgentWithdrawQueuedParams,
+  WithdrawQueuedResult,
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLog,
@@ -353,7 +354,9 @@ declare global {
       subSessionInterrupt: (subSessionId: string) => Promise<{ success: boolean }>
       steer: (params: AgentSteerParams) => Promise<{ success: boolean }>
       followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
-      nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
+      withdrawQueued: (
+        params: AgentWithdrawQueuedParams
+      ) => Promise<{ result: WithdrawQueuedResult }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
       /** 切换模型（会话已有 Agent 运行时则拒绝，success: false） */
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>

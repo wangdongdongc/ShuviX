@@ -6,7 +6,7 @@
  *   14 流式正文 / 思考来自实时卡
  *   15 正在生成的工具调用；进了 toolRuns 就转成执行记录；之前的工具块是「已生成」
  *   16 工具执行：done / error；toolRuns 为空 → EMPTY_TOOLS
- *   17 队列两档（nextTurn 恒空）；空 → EMPTY_QUEUE
+ *   17 队列（P3-11-20）：选择器交视图的数组（次序、submissionId 原样）；空视图之间同一个空数组引用
  *   18 询问与草稿：视图里没了的那条，草稿与选中项一并清掉
  *   19 上下文占用来自视图
  *   20 run.state 驱动 isStreaming（busy + live null → 等待点的流式占位卡）
@@ -22,7 +22,6 @@ import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/session
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { buildVisibleItems } from '../../components/chat/conversationItems'
 import {
-  EMPTY_QUEUE,
   EMPTY_TOOLS,
   applySessionView,
   selectAllPendingCounts,
@@ -33,8 +32,7 @@ import {
   selectPendingInputs,
   selectPendingPrompt,
   selectSessionCapabilities,
-  selectSessionQueue,
-  selectSessionQueueCount,
+  selectSessionQueueItems,
   selectSessionRun,
   selectSessionSource,
   selectStreamingContent,
@@ -199,24 +197,25 @@ describe('P3-08-14…17 流式状态、工具、队列', () => {
     expect(selectToolExecutions(store())).toBe(EMPTY_TOOLS)
   })
 
-  it('P3-08-17 队列两档（nextTurn 恒空）、计数；空队列 → EMPTY_QUEUE', () => {
-    applySessionView(
-      's1',
-      V('s1', {
-        queue: [
-          { submissionId: 1, mode: 'steer', text: 'a', imageCount: 0 },
-          { submissionId: 2, mode: 'followUp', text: 'b', imageCount: 2 }
-        ]
-      })
-    )
-    expect(selectSessionQueue(store())).toEqual({
-      steer: [{ text: 'a', imageCount: 0 }],
-      followUp: [{ text: 'b', imageCount: 2 }],
-      nextTurn: []
-    })
-    expect(selectSessionQueueCount(store())).toBe(2)
+  it('P3-08-17 / P3-11-20 队列选择器交视图的数组；空视图之间同一个空数组引用（不会重渲染循环）', () => {
+    const queue = [
+      { submissionId: 2, mode: 'followUp' as const, text: 'b', imageCount: 2 },
+      { submissionId: 1, mode: 'steer' as const, text: 'a', imageCount: 0 }
+    ]
+    applySessionView('s1', V('s1', { queue }))
+    expect(selectSessionQueueItems(store())).toEqual(queue)
+    expect(selectSessionQueueItems(store())).toBe(store().sessionViews.s1!.queue)
     applySessionView('s1', V('s1'))
-    expect(selectSessionQueue(store())).toBe(EMPTY_QUEUE)
+    const empty = selectSessionQueueItems(store())
+    expect(empty).toEqual([])
+    applySessionView('s1', V('s1', { run: { state: 'busy' } }))
+    expect(selectSessionQueueItems(store())).toBe(empty)
+    // 没有视图（别的会话）→ 稳定的空数组
+    useChatStore.setState({ activeSessionId: 's2' })
+    expect(selectSessionQueueItems(store())).toBe(selectSessionQueueItems(store()))
+    expect(selectSessionQueueItems(store())).toEqual([])
+    // 旧的派生切片不在了（P3-11-20）
+    expect('sessionQueues' in store()).toBe(false)
   })
 })
 
@@ -272,7 +271,7 @@ describe('P3-08-21 结构共享', () => {
       messages: store().messages,
       items: [...store().messages],
       asks: selectPendingInputs(store()),
-      queue: selectSessionQueue(store()),
+      queue: selectSessionQueueItems(store()),
       tools: selectToolExecutions(store()),
       counts: selectAllPendingCounts(store())
     }
@@ -286,7 +285,7 @@ describe('P3-08-21 结构共享', () => {
     expect(store().messages).toBe(before.messages)
     store().messages.forEach((m, i) => expect(m).toBe(before.items[i]))
     expect(selectPendingInputs(store())).toBe(before.asks)
-    expect(selectSessionQueue(store())).toBe(before.queue)
+    expect(selectSessionQueueItems(store())).toBe(before.queue)
     expect(selectToolExecutions(store())).toBe(before.tools)
   })
 
@@ -311,8 +310,7 @@ describe('P3-08-21 结构共享', () => {
       'sessionViews',
       'sessionStreams',
       'sessionToolExecutions',
-      'sessionPendingInputs',
-      'sessionQueues'
+      'sessionPendingInputs'
     ] as const) {
       expect(store()[key], key).toBe(snapshot[key])
     }

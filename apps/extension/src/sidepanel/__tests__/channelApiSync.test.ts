@@ -24,3 +24,17 @@ describe('P3-05-12 扩展侧边栏的 sync 桩子', () => {
     expect(request).not.toHaveBeenCalled()
   })
 })
+
+describe('P3-11-10 扩展侧边栏的撤回桩子（P3-09 接上白名单之前）', () => {
+  it('P3-11-10 withdrawQueued 拒绝、不经桥发请求；agent 上没有「下一轮」', async () => {
+    const request = vi.fn()
+    const link = { request } as unknown as PanelLink
+    const api = createPanelChannelApi(link)
+
+    await expect(api.agent.withdrawQueued({ sessionId: 's1', submissionId: 3 })).rejects.toThrow(
+      'not available in the Chrome side panel'
+    )
+    expect(request).not.toHaveBeenCalled()
+    expect(Object.keys(api.agent).filter((key) => /turn/i.test(key))).toEqual([])
+  })
+})

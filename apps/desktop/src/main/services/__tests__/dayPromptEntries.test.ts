@@ -6,7 +6,7 @@
  *      不入账；steer / followUp 被拒同样不入账
  *   18 排队的发送（PIN-15）：受理时不入账；放下时一行，条目 = 放下的那个，日子按放下那一刻（23:59:59 受理、
  *      00:00:01 放下 → 第二天）；撤回的从不入账；空闲发送就算两个回调都带条目也只一行、一次 touchActive
- *   19 steer / followUp（PIN-16）：忙时 steer 在放下时入账；空闲 followUp 在受理时入账；nextTurn 垫片同 followUp
+ *   19 steer / followUp（PIN-16）：忙时 steer 在放下时入账；空闲 followUp 在受理时入账
  *   20 排除项照旧：内存会话（活着 / 已删）与 Chrome 标签页会话经新路径也不入账、不 touchActive
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -199,13 +199,6 @@ describe('P3-07-19 steer and followUp (PIN-16)', () => {
     const { durable, session } = facade({ nextEntryId: 3 })
     await session.followUp('next')
     expect(rows()).toMatchObject([{ sessionId: durable.sessionId, entryId: '3' }])
-  })
-
-  it('P3-07-19 the nextTurn shim behaves like followUp', async () => {
-    const { durable, session } = facade({ nextEntryId: 9 })
-    await session.nextTurn('shim')
-    expect(durable.callsOf('followUp')).toEqual([['followUp', 'shim']])
-    expect(rows()).toMatchObject([{ sessionId: durable.sessionId, entryId: '9' }])
   })
 })
 

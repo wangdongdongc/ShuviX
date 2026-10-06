@@ -14,6 +14,8 @@
  *   P3-06-31 `agent:getInfo` 在 `createElectronContext(sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
  *           网关；网关的 null 原样交回。
  *   P3-08-60 `agent:respondToInput` 带上答题方 `ipc:<webContentsId>`（PIN-20），只交给网关，回 {success:true}。
+ *   P3-11-07 `agent:withdrawQueued` 在 `createElectronContext(sessionId)` 的上下文里把 `(sessionId, submissionId)`
+ *           交给网关，回 `{ result }`；`agent:nextTurn` 不再注册。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
  * import 的其余重模块（工具注册表、工具定义、AgentManager、监控）整个换成空壳。
@@ -29,7 +31,8 @@ const state = vi.hoisted(() => ({
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
     listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
     getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>(),
-    respondToInput: vi.fn()
+    respondToInput: vi.fn(),
+    withdrawQueued: vi.fn<(sessionId: string, submissionId: number) => Promise<string>>()
   },
   contexts: [] as unknown[],
   /** operationContext.run 的嵌套深度（>0 = 在请求上下文里） */
@@ -195,6 +198,27 @@ describe('P3-06-31 agent:getInfo', () => {
     await expect(invoke('agent:getInfo', SID, { ensure: true })).rejects.toThrow(
       'tool host exploded'
     )
+  })
+})
+
+describe('P3-11-07 agent:withdrawQueued', () => {
+  it('P3-11-07 (sessionId, submissionId) 交给网关、在请求上下文里；回 { result }', async () => {
+    const depths: number[] = []
+    state.gateway.withdrawQueued.mockReset().mockImplementation(async () => {
+      depths.push(state.runDepth)
+      return 'already_placed'
+    })
+    await expect(invoke('agent:withdrawQueued', { sessionId: SID, submissionId: 4 })).resolves.toEqual(
+      { result: 'already_placed' }
+    )
+    expect(state.gateway.withdrawQueued.mock.calls).toEqual([[SID, 4]])
+    expect(depths).toEqual([1])
+    expect(state.contexts).toEqual([SID])
+  })
+
+  it('P3-11-07 「下一轮」的通道不再注册（Q-P3-09）', () => {
+    expect([...state.handlers.keys()].filter((channel) => /turn/i.test(channel))).toEqual([])
+    expect(state.handlers.has('agent:withdrawQueued')).toBe(true)
   })
 })
 

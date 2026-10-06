@@ -14,7 +14,8 @@ export type {
   AgentSubAgentPromptParams,
   AgentSteerParams,
   AgentFollowUpParams,
-  AgentNextTurnParams,
+  AgentWithdrawQueuedParams,
+  WithdrawQueuedResult,
   AgentSetModelParams,
   AgentSetThinkingLevelParams
 } from '@shuvix/chat-protocol/chatApi'

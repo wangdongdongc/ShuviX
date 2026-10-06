@@ -5,7 +5,8 @@
  *   D10-26 session.prompt-accepted：受理那一刻（onAdmitted）恰发一次；被拒从不发；日历按 onAdmitted 的
  *          entryId 入账（P3-07，不再是随机键）
  *   D10-27 session.turn-completed：受理过的发送落定之后发；被拒不发；facts 为空不发、抛错不影响结果
- *   D10-28 steer / followUp 委托；nextTurn 垫成 followUp；被拒 → 带原文的 reject
+ *   D10-28 steer / followUp 委托；被拒 → 带原文的 reject；门面上没有 nextTurn（P3-11-06）
+ *   P3-11-05 withdrawQueued 委托，结果（含 closed）原样上交
  *   D10-29 notify 只委托一次（门面没有自己的合并定时器）
  *   D10-30 其余委托：abort / setThinkingLevel / continue / 询问；isStreaming / 挂起询问现读
  *   D10-31 invalidate：destroyAgent 之后清 fileTime（恰一次）；销毁失败照样清；不碰审查 / 决策 / 存储
@@ -234,17 +235,13 @@ describe('D10-27 session.turn-completed', () => {
   })
 })
 
-describe('D10-28 steer / followUp / nextTurn', () => {
-  it('D10-28 steer 与 followUp 委托；nextTurn 走 followUp（从不 steer / submitUser）', async () => {
+describe('D10-28 steer / followUp', () => {
+  it('D10-28 steer 与 followUp 委托（从不 submitUser）', async () => {
     const { durable, session } = facade()
     await session.steer('s')
     await session.followUp('f')
-    await session.nextTurn('n')
     expect(durable.callsOf('steer')).toEqual([['steer', 's']])
-    expect(durable.callsOf('followUp')).toEqual([
-      ['followUp', 'f'],
-      ['followUp', 'n']
-    ])
+    expect(durable.callsOf('followUp')).toEqual([['followUp', 'f']])
     expect(durable.callsOf('submitUser')).toEqual([])
   })
 
@@ -253,10 +250,27 @@ describe('D10-28 steer / followUp / nextTurn', () => {
     durable.steerResult = { error: 'The conversation is closed', code: 'closed' }
     await expect(session.steer('s')).rejects.toThrow('The conversation is closed')
     durable.followUpResult = { error: 'Provider "Faux" model nope', code: 'no_model' }
-    await expect(session.nextTurn('n')).rejects.toThrow(
+    await expect(session.followUp('f')).rejects.toThrow(
       'chat.agentNoModel:Provider "Faux" model nope'
     )
   })
+
+  it('P3-11-06 门面上没有「下一轮」（Q-P3-09）', () => {
+    // @ts-expect-error nextTurn is gone end to end (Q-P3-09)
+    expect(AgentSession.prototype.nextTurn).toBeUndefined()
+  })
+})
+
+describe('P3-11-05 withdrawQueued', () => {
+  it.each(['aborted', 'already_placed', 'settled', 'not_found', 'closed'] as const)(
+    'P3-11-05 委托一次，结果 %s 原样上交',
+    async (result) => {
+      const { durable, session } = facade()
+      durable.withdrawResult = result
+      expect(await session.withdrawQueued(7)).toBe(result)
+      expect(durable.callsOf('withdrawQueued')).toEqual([['withdrawQueued', 7]])
+    }
+  )
 })
 
 describe('D10-29 notify', () => {

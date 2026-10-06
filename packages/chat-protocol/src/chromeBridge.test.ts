@@ -936,13 +936,12 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
     }
   })
 
-  it('CB-22 CHROME_PANEL_CHANNEL_PATHS 恰是这 15 条（顺序也钉）；文件、斜杠命令、朗读、子会话、设置、改模型之类一概不在', () => {
+  it('CB-22 CHROME_PANEL_CHANNEL_PATHS 恰是这 14 条（顺序也钉）；文件、斜杠命令、朗读、子会话、设置、改模型之类一概不在', () => {
     expect([...CHROME_PANEL_CHANNEL_PATHS]).toEqual([
       'agent.init',
       'agent.prompt',
       'agent.steer',
       'agent.followUp',
-      'agent.nextTurn',
       'agent.abort',
       'agent.respondToInput',
       'session.getById',

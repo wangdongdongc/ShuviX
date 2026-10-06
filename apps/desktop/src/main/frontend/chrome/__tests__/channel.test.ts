@@ -9,7 +9,7 @@
  *     而且在一个 chrome 来源的操作上下文里跑；
  *   - `agent.prompt` 在开跑**之前**把消息里带上的标签页（tab token）此刻所在的站点记为这条会话
  *     已同意的站点：地址向 Chrome 现问（`tabs.get`，5 秒超时），问不到就跳过，发送照常；
- *     steer / followUp / nextTurn 不记任何站点；
+ *     steer / followUp 不记任何站点；
  *   - `agent.respondToInput` 只送进这条会话自己的运行时；没人认领就广播 input_request_resolved
  *     把卡片收走 —— 别的会话的 requestId 永远送不到那条会话。
  *
@@ -186,7 +186,6 @@ beforeEach(() => {
     prompt: mocks.delegate('prompt', async () => ({})),
     steer: mocks.delegate('steer', () => undefined),
     followUp: mocks.delegate('followUp', () => undefined),
-    nextTurn: mocks.delegate('nextTurn', () => undefined),
     abort: mocks.delegate('abort', async () => ({ aborted: true })),
     listMessages: mocks.delegate('listMessages', async () => [{ id: 'm1' }]),
     getRuntimeStatuses: mocks.delegate('getRuntimeStatuses', () => [{ id: 'rt1' }]),
@@ -231,6 +230,8 @@ describe('CH-1 白名单之外的路径一律拒绝', () => {
     // 销毁运行时属宿主（会话横幅 agent 胶囊上的 X）；侧栏只有单会话的对话面
     'agent.destroy',
     'agent.subAgentPrompt',
+    // 「下一轮」这一档已从产品里去掉（Q-P3-09）
+    'agent.nextTurn',
     'files.scan',
     'bgTask.readLog',
     'command.list',
@@ -266,10 +267,6 @@ const FIXTURES: Record<string, { args: unknown[]; delegate: () => ReturnType<typ
   'agent.followUp': {
     args: [{ sessionId: OWNED, text: 'f' }],
     delegate: () => mocks.gateway.followUp
-  },
-  'agent.nextTurn': {
-    args: [{ sessionId: OWNED, text: 'n' }],
-    delegate: () => mocks.gateway.nextTurn
   },
   'agent.abort': { args: [OWNED], delegate: () => mocks.gateway.abort },
   'agent.respondToInput': {
@@ -307,13 +304,12 @@ describe('CH-2 白名单里的每条路径都落到恰好一个委托上', () =>
 
 // ─── 归属核对 ───────────────────────────────────────────────────────────────
 
-/** 带会话的 12 条路径：会话怎么放进参数 */
+/** 带会话的 11 条路径：会话怎么放进参数 */
 const SESSION_PATHS: Array<[string, (sid: unknown) => unknown[]]> = [
   ['agent.init', (sid) => [{ sessionId: sid }]],
   ['agent.prompt', (sid) => [{ sessionId: sid, text: 'hi', inlineTokens: { t: tabToken(5) } }]],
   ['agent.steer', (sid) => [{ sessionId: sid, text: 's' }]],
   ['agent.followUp', (sid) => [{ sessionId: sid, text: 'f' }]],
-  ['agent.nextTurn', (sid) => [{ sessionId: sid, text: 'n' }]],
   ['agent.abort', (sid) => [sid]],
   [
     'agent.respondToInput',
@@ -420,8 +416,7 @@ describe('CH-5 init / abort / 三条队列 / respondToInput', () => {
 
   it.each([
     ['agent.steer', 'steer'],
-    ['agent.followUp', 'followUp'],
-    ['agent.nextTurn', 'nextTurn']
+    ['agent.followUp', 'followUp']
   ])('CH-5 %s 转 (sessionId, text)，回 {success:true}，在上下文里', async (path, method) => {
     const result = await call(path, [{ sessionId: OWNED, text: 'more', extra: 1 }])
     expect(result).toStrictEqual({ success: true })
@@ -661,7 +656,7 @@ describe('CH-G agent.prompt 先把带上的标签页所在的站点记为已同�
     expect(mocks.grantSite.mock.calls).toEqual([[OWNED, 'a.example']])
   })
 
-  it.each(['agent.steer', 'agent.followUp', 'agent.nextTurn'])(
+  it.each(['agent.steer', 'agent.followUp'])(
     'CH-G8 %s 不记任何站点（只有 agent.prompt 授权），哪怕参数里夹着 tab token',
     async (path) => {
       conn = makeConn({ 5: { id: 5, url: 'https://a.example/' } })

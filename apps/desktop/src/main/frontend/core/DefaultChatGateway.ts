@@ -1,6 +1,11 @@
 import type { ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
-import type { AgentInitResult, AgentRuntimeInfo, ThinkingLevel } from '../../types'
+import type {
+  AgentInitResult,
+  AgentRuntimeInfo,
+  ThinkingLevel,
+  WithdrawQueuedResult
+} from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
@@ -93,12 +98,18 @@ export class DefaultChatGateway implements ChatGateway {
     this.enqueue(sessionId, (session) => session.followUp(text))
   }
 
-  nextTurn(sessionId: string, text: string): void {
-    this.enqueue(sessionId, (session) => session.nextTurn(text))
+  async withdrawQueued(sessionId: string, submissionId: number): Promise<WithdrawQueuedResult> {
+    // 不规范的 id 不碰运行时（IPC 载荷不可信：'3'、1.5、NaN、0、负数）
+    if (!Number.isSafeInteger(submissionId) || submissionId <= 0) return 'not_found'
+    // 只对打开着的会话：撤回只对一条正在用的会话有意义，网关不为它打开 / peek 会话
+    const session = sessionService.getAgentSession(sessionId)
+    if (!session) return 'not_found'
+    const result = await session.withdrawQueued(submissionId)
+    return result === 'closed' ? 'not_found' : result
   }
 
   /**
-   * 三条队列共用的入队骨架（nextTurn 在门面里垫成 followUp，直到 phase 3）。
+   * 两条队列（steer / followUp）共用的入队骨架。
    *
    * 只交给打开着的会话：插话 / 追加只对一条正在用的会话有意义，网关不为它打开会话。
    * 被拒（模型被拒、会话已关……）的文案报给界面。

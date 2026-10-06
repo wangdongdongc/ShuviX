@@ -10,7 +10,6 @@ import { browserSiteOf, validateShuvixMdText } from '@shuvix/agent-runtime'
 import type {
   AgentFollowUpParams,
   AgentInitParams,
-  AgentNextTurnParams,
   AgentPromptParams,
   AgentSteerParams
 } from '@shuvix/chat-protocol/chatApi'
@@ -115,11 +114,6 @@ export async function callPanelChannel(
     case 'agent.followUp': {
       const p = params<AgentFollowUpParams>()
       inContext(p.sessionId, () => chatGateway.followUp(p.sessionId, p.text))
-      return { success: true }
-    }
-    case 'agent.nextTurn': {
-      const p = params<AgentNextTurnParams>()
-      inContext(p.sessionId, () => chatGateway.nextTurn(p.sessionId, p.text))
       return { success: true }
     }
     case 'agent.abort': {
