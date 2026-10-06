@@ -22,7 +22,13 @@ registerHostCleanup()
 const TIMEOUT = 25000
 
 const ask = (id: string): InputRequest =>
-  ({ id, kind: 'ask', toolName: 'ask', question: `${id}?`, createdAt: 0 }) as unknown as InputRequest
+  ({
+    id,
+    kind: 'ask',
+    toolName: 'ask',
+    question: `${id}?`,
+    createdAt: 0
+  }) as unknown as InputRequest
 
 /** 投影的 memo 上「整段历史沿用」的次数 */
 function historyHits(projector: object): () => number {

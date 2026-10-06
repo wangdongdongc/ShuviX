@@ -275,7 +275,11 @@ interface AssistantFacts {
 
 /** 一条要渲染的消息与它依赖的全部输入（同一条目、依赖都没变 → 沿用上一次的对象） */
 type Slot =
-  | { readonly kind: 'user'; readonly entry: EntryRecord; readonly display: DisplayItem | undefined }
+  | {
+      readonly kind: 'user'
+      readonly entry: EntryRecord
+      readonly display: DisplayItem | undefined
+    }
   | { readonly kind: 'notice' | 'compaction'; readonly entry: EntryRecord }
   | {
       readonly kind: 'error'
@@ -348,7 +352,9 @@ export class ProjectionMemo {
         readonly card: LiveCard | null
       }
     | undefined
-  private toolRuns: { readonly tools: unknown; readonly value: Record<string, ToolRunView> } | undefined
+  private toolRuns:
+    | { readonly tools: unknown; readonly value: Record<string, ToolRunView> }
+    | undefined
   private lastStats: ProjectionMemoStats = { historyReused: false, built: 0, reused: 0 }
 
   /** 最近一次投影的复用情况 */
@@ -447,7 +453,8 @@ export class ProjectionMemo {
     runTask: number | undefined,
     hint: RetriedInfo | undefined
   ): LiveCard | null {
-    const partial = isRecord(live) && isRecord(live.generation) ? live.generation.message : undefined
+    const partial =
+      isRecord(live) && isRecord(live.generation) ? live.generation.message : undefined
     const last = this.live
     if (
       runTask !== undefined &&
@@ -596,7 +603,10 @@ function projectHistory(
 
   const slots: Slot[] = []
   /** toolCallId → 等待回填的工具块（卡 + 第几个工具块；同一 id 重用时后来的覆盖先来的） */
-  const pendingTools = new Map<string, { readonly card: Slot & { kind: 'card' }; readonly index: number }>()
+  const pendingTools = new Map<
+    string,
+    { readonly card: Slot & { kind: 'card' }; readonly index: number }
+  >()
   /** 任务 → 还没交给任何一张卡的折叠计数 */
   const pendingRetries = new Map<number, RetriedInfo>()
   /** 上下文占用的来源：最后一条不是错误的 assistant 消息 */

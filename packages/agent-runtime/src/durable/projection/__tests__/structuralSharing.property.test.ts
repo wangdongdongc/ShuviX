@@ -16,7 +16,12 @@
  *   SP-02 同一份录像走 AgentView
  *   SP-03 随机步骤（120 个种子 × 40 步），SessionView 与 AgentView 一起
  */
-import { copyJson, replicatedState, type JsonValue, type MutableReplicatedState } from '@earendil-works/chord'
+import {
+  copyJson,
+  replicatedState,
+  type JsonValue,
+  type MutableReplicatedState
+} from '@earendil-works/chord'
 import type { EntryRecord, InboxState, LiveState } from '@earendil-works/pi-durable'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentView, RunViewState, SessionView } from '@shuvix/chat-protocol/types/sessionView'
@@ -237,9 +242,19 @@ class World {
 }
 
 const ask = (id: string): InputRequest =>
-  ({ id, kind: 'ask', toolName: 'ask', question: `${id}?`, createdAt: 0 }) as unknown as InputRequest
+  ({
+    id,
+    kind: 'ask',
+    toolName: 'ask',
+    question: `${id}?`,
+    createdAt: 0
+  }) as unknown as InputRequest
 
-const partialCall = (id: string, partialJson: string, args: Record<string, unknown> = {}) => ({
+const partialCall = (
+  id: string,
+  partialJson: string,
+  args: Record<string, unknown> = {}
+): Record<string, unknown> => ({
   type: 'toolCall',
   id,
   name: 'read',
@@ -265,7 +280,11 @@ function scriptedSession(frame: (label: string) => void, world: World): void {
   frame('stream 3')
   world.generation([thinking('think'), text('Hello'), partialCall('c1', '{"pa')])
   frame('tool call streams')
-  world.generation([thinking('think'), text('Hello'), partialCall('c1', '{"path":"a"}', { path: 'a' })])
+  world.generation([
+    thinking('think'),
+    text('Hello'),
+    partialCall('c1', '{"path":"a"}', { path: 'a' })
+  ])
   frame('tool call args complete')
 
   // 实时 → 落盘
@@ -400,9 +419,7 @@ function scriptedSession(frame: (label: string) => void, world: World): void {
     })
   )
   frame('diagnostics stripped, spill, error result')
-  world.append(
-    A(16, [call('read', { path: 'c' }, 'c2')], 0, { task: 5, stopReason: 'toolUse' })
-  )
+  world.append(A(16, [call('read', { path: 'c' }, 'c2')], 0, { task: 5, stopReason: 'toolUse' }))
   frame('toolCallId reused (pending)')
   world.append(R(17, 'c2', [text('second')]))
   frame('reused id fills the newest block')
@@ -498,7 +515,9 @@ class RandomWorld extends World {
     this.append(
       A(this.id(), blocks, this.nextId, {
         stopReason,
-        ...(stopReason === 'error' && this.chance(0.7) ? { errorMessage: `boom ${this.nextId}` } : {}),
+        ...(stopReason === 'error' && this.chance(0.7)
+          ? { errorMessage: `boom ${this.nextId}` }
+          : {}),
         ...(this.someTask() === undefined ? {} : { task: this.someTask() }),
         ...(this.chance(0.2) ? { usage: null } : {}),
         ...(this.chance(0.1) ? { images: [IMAGE_META] } : {})
@@ -512,7 +531,10 @@ class RandomWorld extends World {
     const content =
       diagnostics.length > 0 && this.chance(0.5)
         ? [text(renderHarnessDiagnostics(diagnostics))]
-        : [text(`result ${this.nextId}`), ...(diagnostics.length > 0 ? [text(renderHarnessDiagnostics(diagnostics))] : [])]
+        : [
+            text(`result ${this.nextId}`),
+            ...(diagnostics.length > 0 ? [text(renderHarnessDiagnostics(diagnostics))] : [])
+          ]
     this.append(
       R(this.id(), callId, content, {
         diagnostics,
@@ -644,14 +666,15 @@ class RandomWorld extends World {
       },
       () => this.displayStep(),
       () => {
-        this.asks = this.chance(0.5)
-          ? [...this.asks, ask(`r${this.nextId++}`)]
-          : this.asks.slice(1)
+        this.asks = this.chance(0.5) ? [...this.asks, ask(`r${this.nextId++}`)] : this.asks.slice(1)
       },
       () => this.queueStep(),
       () => {
-        const heads = this.entries.filter((entry) => (entry as { head?: number }).head === undefined)
-        if (heads.length > 2) this.compact(C(this.id(), this.pick(heads).id, wrap(`sum ${this.nextId}`)))
+        const heads = this.entries.filter(
+          (entry) => (entry as { head?: number }).head === undefined
+        )
+        if (heads.length > 2)
+          this.compact(C(this.id(), this.pick(heads).id, wrap(`sum ${this.nextId}`)))
       },
       () => {
         if (this.chance(0.3)) this.remount()

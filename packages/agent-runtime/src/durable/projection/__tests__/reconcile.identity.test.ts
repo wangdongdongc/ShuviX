@@ -157,7 +157,7 @@ describe('P4-09b · reconcile with prev: identity skip', () => {
   })
 
   it('RI-03 deleted keys are still removed (top level and inside a replaced child)', () => {
-    const prev = {
+    const prev: View = {
       ...baseView(3),
       extra: { stale: true },
       run: { state: 'busy', retry: { attempt: 1, at: 5, error: 'e' } }
@@ -340,7 +340,11 @@ function guardRun(turns: number): GuardRun {
   // 新的一轮：user 落下，实时卡流式
   const withUser = [...entries, U(10_000, 'next turn')]
   driver.step({ entries: withUser, live: liveFrame(task, 'He'), runState: 'busy' })
-  const streaming = driver.step({ entries: withUser, live: liveFrame(task, 'Hello'), runState: 'busy' })
+  const streaming = driver.step({
+    entries: withUser,
+    live: liveFrame(task, 'Hello'),
+    runState: 'busy'
+  })
   const streamingStats = driver.memo.stats
   // assistant 带一次工具调用落盘（实时卡清掉）
   const withCall = [

@@ -101,7 +101,11 @@ function reconcileRecord(draft: JsonRecord, next: JsonRecord, prev?: JsonRecord)
   }
 }
 
-function reconcileArray(draft: unknown[], next: readonly unknown[], prev?: readonly unknown[]): void {
+function reconcileArray(
+  draft: unknown[],
+  next: readonly unknown[],
+  prev?: readonly unknown[]
+): void {
   // 判断都在「草稿此刻的值」上做：有 prev 就用它（普通数组，不过代理），否则读草稿
   const base: readonly unknown[] = prev ?? draft
   const shared = Math.min(base.length, next.length)
