@@ -196,8 +196,7 @@ const kindOf = (id: string): unknown =>
 const rowOf = (id: string): Row =>
   db().prepare('SELECT * FROM sessions WHERE id = ?').get(id) as Row
 
-const dumpSessions = (): Row[] =>
-  db().prepare('SELECT * FROM sessions ORDER BY id').all() as Row[]
+const dumpSessions = (): Row[] => db().prepare('SELECT * FROM sessions ORDER BY id').all() as Row[]
 
 const listDir = (): string[] => readdirSync(holder.sessionsDir).sort()
 
@@ -358,7 +357,8 @@ describe('P4-02 启动切换：重置的语义', () => {
     const { host } = realHost()
     await host.open('A')
     await host.close('A')
-    for (const suffix of ['-wal', '-shm']) writeFileSync(join(holder.sessionsDir, `A.sqlite${suffix}`), 'x')
+    for (const suffix of ['-wal', '-shm'])
+      writeFileSync(join(holder.sessionsDir, `A.sqlite${suffix}`), 'x')
 
     await deleteSessionStorage('A')
 

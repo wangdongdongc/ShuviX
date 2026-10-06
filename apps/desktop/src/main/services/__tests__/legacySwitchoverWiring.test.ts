@@ -156,8 +156,14 @@ describe('P4-02-24 main/index.ts 的接线', () => {
   it('P4-02-24 扫描器自检：合规的写法回 []；各种违规都报出来', () => {
     expect(wiringProblems(ok.join('\n'))).toStrictEqual([])
     const variants: Array<[string, string[]]> = [
-      ['注释不算', ok.map((l) => l.replace('await runLegacySwitchover()', '// runLegacySwitchover()'))],
-      ['不 await', ok.map((l) => l.replace('await runLegacySwitchover()', 'runLegacySwitchover()'))],
+      [
+        '注释不算',
+        ok.map((l) => l.replace('await runLegacySwitchover()', '// runLegacySwitchover()'))
+      ],
+      [
+        '不 await',
+        ok.map((l) => l.replace('await runLegacySwitchover()', 'runLegacySwitchover()'))
+      ],
       [
         'void',
         ok.map((l) => l.replace('await runLegacySwitchover()', 'void runLegacySwitchover()'))
@@ -168,18 +174,9 @@ describe('P4-02-24 main/index.ts 的接线', () => {
           l.replace('await runLegacySwitchover()', 'await runLegacySwitchover().then(() => {})')
         )
       ],
-      [
-        '排在 IPC 之前',
-        [ok[0], ok[3], ok[1], ok[2], ...ok.slice(4)]
-      ],
-      [
-        '排在 CLI 之后',
-        [...ok.slice(0, 3), ok[4], ok[3], ...ok.slice(5)]
-      ],
-      [
-        '排在 createWindow 之后',
-        [...ok.slice(0, 3), ...ok.slice(4, 12), ok[3], ...ok.slice(12)]
-      ],
+      ['排在 IPC 之前', [ok[0], ok[3], ok[1], ok[2], ...ok.slice(4)]],
+      ['排在 CLI 之后', [...ok.slice(0, 3), ok[4], ok[3], ...ok.slice(5)]],
+      ['排在 createWindow 之后', [...ok.slice(0, 3), ...ok.slice(4, 12), ok[3], ...ok.slice(12)]],
       [
         '两处（activate 里也有）',
         ok.map((l) =>
