@@ -517,6 +517,15 @@ export class ChromeBridgeServer {
     return conn?.ready ? conn : undefined
   }
 
+  /**
+   * 按连接 id 找一条还活着的连接（含还没握手的；已断开的不在）—— 视图同步按客户端 id
+   * `chrome:<connId>` 找回推帧的那条连接（P3-09）
+   */
+  connectionById(id: string): BridgeConnection | undefined {
+    for (const conn of this.connections) if (conn.id === id) return conn
+    return undefined
+  }
+
   /** 全部已就绪的连接 */
   readyConnections(): BridgeConnection[] {
     return [...this.byInstall.values()].filter((c) => c.ready)

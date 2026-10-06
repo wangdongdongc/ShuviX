@@ -438,11 +438,23 @@ export function createSyncClient(options: SyncClientOptions): SyncClient {
 
 const clients = new WeakMap<SyncChannel, SyncClient>()
 
-/** 某条渠道的客户端（每条渠道一个；渠道换了 —— 测试换了注入 —— 就是另一个客户端） */
-export function syncClientFor(channel: SyncChannel, logger?: SyncClientLogger): SyncClient {
+/**
+ * 某条渠道的客户端（每条渠道一个；渠道换了 —— 测试换了注入 —— 就是另一个客户端）。
+ *
+ * `options` 只在**第一次**为这条渠道建客户端时生效（之后原样交回已建的那个）：宿主要给订阅 id 定前缀
+ * （Chrome 侧边栏按标签页，P3-09-12），就在任何视图 hook 挂载之前先调一次。
+ */
+export function syncClientFor(
+  channel: SyncChannel,
+  options: { logger?: SyncClientLogger; idPrefix?: string } = {}
+): SyncClient {
   let client = clients.get(channel)
   if (client === undefined) {
-    client = createSyncClient({ channel, ...(logger === undefined ? {} : { logger }) })
+    client = createSyncClient({
+      channel,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      ...(options.idPrefix === undefined ? {} : { idPrefix: options.idPrefix })
+    })
     clients.set(channel, client)
   }
   return client

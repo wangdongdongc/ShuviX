@@ -29,6 +29,12 @@ export class PanelLink {
   private readonly stateListeners = new Set<Listener<PanelLinkState>>()
   private readonly chatListeners = new Set<Listener<unknown>>()
   private readonly appListeners = new Set<Listener<unknown>>()
+  private readonly frameListeners = new Set<Listener<unknown>>()
+  /**
+   * 进入 `ready` 的次数（每次断开又连上 +1）。桌面那头的会话绑定、视图订阅都属于某一次就绪：
+   * 换了一次就绪，旧的一律作废（PIN-10）
+   */
+  readyEpoch = 0
 
   constructor(readonly tabId: number) {
     this.connect()
@@ -68,12 +74,16 @@ export class PanelLink {
       case 'app.event':
         for (const fn of this.appListeners) fn(message.event)
         return
+      case 'sync.frame':
+        for (const fn of [...this.frameListeners]) fn(message.frame)
+        return
     }
   }
 
   private setState(next: PanelLinkState): void {
     if (this.state === next) return
     this.state = next
+    if (next === 'ready') this.readyEpoch++
     for (const fn of this.stateListeners) fn(next)
   }
 
@@ -114,5 +124,14 @@ export class PanelLink {
   onAppEvent(fn: Listener<unknown>): () => void {
     this.appListeners.add(fn)
     return () => this.appListeners.delete(fn)
+  }
+
+  /** 视图同步的帧（每个登记一份；注销只摘自己那份，重复注销无事） */
+  onSyncFrame(fn: Listener<unknown>): () => void {
+    const entry: Listener<unknown> = (frame) => fn(frame)
+    this.frameListeners.add(entry)
+    return () => {
+      this.frameListeners.delete(entry)
+    }
   }
 }
