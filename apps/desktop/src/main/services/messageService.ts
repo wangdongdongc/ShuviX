@@ -19,22 +19,14 @@
  * `.jsonl` 不再读 —— 行已是新格式，这里按新格式走；删除 / 清空时随 deleteSessionStorage 一起删。
  */
 import { SessionClosedError } from '@shuvix/agent-runtime'
-import {
-  CURRENT_SESSION_STORAGE_KIND,
-  HARNESS_V3_JSONL,
-  storageKindOf
-} from '@shuvix/chat-protocol/sessionStorageKind'
+import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStorageKind'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import { readLegacyTranscript } from './sessionStorage'
 import { getSessionHost } from './sessionHost'
+import { isLegacySession } from './legacySession'
 import { mirroredAgentLocked, writeSessionMirror } from './sessionMirror'
 import { sessionRecords } from './sessionRecords'
-
-/** 这条会话是不是切换前的旧格式（只读）会话；查不到行按旧格式处理（与 storageKindOf 同口径） */
-function isLegacySession(sessionId: string): boolean {
-  return storageKindOf(sessionRecords.pick(sessionId, ['storageKind']) ?? {}) === HARNESS_V3_JSONL
-}
 
 export class MessageService {
   /**
@@ -73,7 +65,7 @@ export class MessageService {
    * 新格式会话（PIN-22）。
    */
   async clear(sessionId: string): Promise<void> {
-    const legacy = isLegacySession(sessionId) && !!sessionRecords.pick(sessionId, ['id'])
+    const legacy = isLegacySession(sessionId, { rowRequired: true })
     const wasLocked = mirroredAgentLocked(sessionId)
     await getSessionHost().delete(sessionId)
     if (legacy) sessionRecords.updateStorageKind(sessionId, CURRENT_SESSION_STORAGE_KIND)

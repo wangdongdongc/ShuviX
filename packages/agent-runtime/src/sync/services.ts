@@ -16,6 +16,10 @@ import {
   type MutableReplicatedState,
   type ReplicatedState
 } from '@earendil-works/chord'
+import {
+  capabilitiesOfStorageKind,
+  HARNESS_V3_JSONL
+} from '@shuvix/chat-protocol/sessionStorageKind'
 import { CHAT_VIEW_SERVICE_ID } from '@shuvix/chat-protocol/sync'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
@@ -47,7 +51,7 @@ export function staticViewState<V extends SyncView>(value: V): MutableReplicated
 }
 
 /**
- * 旧格式（harness-v3-jsonl）会话的视图：只读（三项能力都关），没有对话 id、没有实时卡、不会再变。
+ * 旧格式（harness-v3-jsonl）会话的视图：只读（三项能力都关，取自存储类型能力表），没有对话 id、没有实时卡、不会再变。
  * 消息原样来自冻结投影，`undefined` 键由 `staticViewState` 去掉。
  */
 export function legacySessionView(sessionId: string, transcript: LegacyTranscript): SessionView {
@@ -55,7 +59,7 @@ export function legacySessionView(sessionId: string, transcript: LegacyTranscrip
     v: 1,
     sessionId,
     source: 'legacy',
-    capabilities: { send: false, rollback: false, continue: false },
+    capabilities: capabilitiesOfStorageKind(HARNESS_V3_JSONL),
     conversationId: null,
     messages: copyJson(transcript.messages as unknown as JsonValue, {
       omitUndefinedProperties: true

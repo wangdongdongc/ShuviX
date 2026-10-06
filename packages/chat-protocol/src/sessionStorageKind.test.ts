@@ -9,6 +9,8 @@
  *   SK-2  HARNESS_V3_JSONL / DURABLE_SQLITE_1 的拼写；CURRENT 是表里的成员；切换（P1-01）之后 CURRENT 是 durable
  *   SK-3  isKnownStorageKind：成员为真；相近拼写 / 大小写 / 空串 / 非字符串一律为假
  *   SK-4  storageKindOf：缺省（无键 / undefined / null）读成 v3；已知值原样；不认识的值原样交回
+ *   SK-5  capabilitiesOfStorageKind：durable 全开、v3 全关、null（还没有存储）只能发、不认识的值全关；
+ *         表覆盖每一个已知类型；每次交回新对象
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -16,6 +18,7 @@ import {
   DURABLE_SQLITE_1,
   HARNESS_V3_JSONL,
   SESSION_STORAGE_KINDS,
+  capabilitiesOfStorageKind,
   isKnownStorageKind,
   storageKindOf
 } from './sessionStorageKind'
@@ -63,5 +66,40 @@ describe('sessionStorageKind 契约', () => {
     expect(storageKindOf({ storageKind: 'future-x' })).toBe('future-x')
     // 空串不是「缺省」：它是一个（坏的）值，同样原样交回
     expect(storageKindOf({ storageKind: '' })).toBe('')
+  })
+
+  it('SK-5 capabilitiesOfStorageKind：每种类型的能力位；null = 还没有存储；不认识的值全关', () => {
+    expect(capabilitiesOfStorageKind(DURABLE_SQLITE_1)).toEqual({
+      send: true,
+      rollback: true,
+      continue: true
+    })
+    // 旧格式只读：永不再写
+    expect(capabilitiesOfStorageKind(HARNESS_V3_JSONL)).toEqual({
+      send: false,
+      rollback: false,
+      continue: false
+    })
+    // 还没有存储的新会话（source 'none'）：能发第一条，没有可回退 / 可继续的
+    expect(capabilitiesOfStorageKind(null)).toEqual({ send: true, rollback: false, continue: false })
+    // 更新版本写下的值：旧版本不碰它
+    for (const kind of ['durable-sqlite-2', '', 'HARNESS-V3-JSONL']) {
+      expect(capabilitiesOfStorageKind(kind), kind).toEqual({
+        send: false,
+        rollback: false,
+        continue: false
+      })
+    }
+    // 表覆盖每一个已知类型（三个键都在、都是布尔）
+    for (const kind of SESSION_STORAGE_KINDS) {
+      const caps = capabilitiesOfStorageKind(kind)
+      expect(Object.keys(caps).sort(), kind).toEqual(['continue', 'rollback', 'send'])
+      for (const value of Object.values(caps)) expect(typeof value, kind).toBe('boolean')
+    }
+    // 每次一份新对象：改了一份不影响下一次
+    const first = capabilitiesOfStorageKind(DURABLE_SQLITE_1)
+    first.send = false
+    expect(capabilitiesOfStorageKind(DURABLE_SQLITE_1).send).toBe(true)
+    expect(capabilitiesOfStorageKind(null)).not.toBe(capabilitiesOfStorageKind(null))
   })
 })
