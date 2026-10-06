@@ -4,7 +4,7 @@
  * 路由的依赖恰好那六样（P3-14 加了 sessionReady）、会话宿主惰性取（P2-05-51）。
  *
  * 断言看着琐碎，坏起来却完全无声 —— 决策器只能靠 register 记 sub→root 血缘（事件流里
- * 子 agent 与根会话完全同构，同一套 HarnessSession，只是 sessionId 是子会话 id）。
+ * 子 agent 与根会话完全同构，同一套会话运行时，只是 sessionId 是子会话 id）。
  * 少了这一路，每个子 agent 跑完的 agent_end 都会被当成「一轮结束」弹一条「已完成」，
  * 标题还因为查不到会话行而落到「未命名会话」。
  *

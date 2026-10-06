@@ -25,7 +25,7 @@
  * 在假件里用**真判据**复算（`!BASE_PROFILE_NAMES.has(name) && !HOST_ONLY_PROFILE_NAMES.has(name)`，
  * 名单常量取真件）—— 真 agentService 要 electron + 用户目录，本文件够不到；假件退化成「恒 true」
  * 会让基座那一拒失去意义。invalidateAgent 用实例级 spy（经 this. 动态派发可拦截，保留穿透：底层
- * SessionManager.remove 对无运行时的会话直接 resolve）。
+ * 对无运行时的会话直接 resolve）。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi, type MockInstance } from 'vitest'
 import {

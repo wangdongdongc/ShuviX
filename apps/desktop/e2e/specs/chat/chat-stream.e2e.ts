@@ -1,9 +1,9 @@
 /**
  * 对话区基础全链路 —— 输入框发送 → 流式事件 → 卡片渲染 → 重开投影一致。
  *
- * 被测契约（`eventHandler.ts` 头注释写成明文的那条）：**流式与重开必须产出同一份
- * 消息列表、尤其是同一批 id** —— 一条 entry 一条消息，id 就是 entry id（工具调用是
- * 卡内的块，按 toolCallId 认）。本文件围绕它展开。
+ * 被测契约（durable 界面投影 `durable/projection/project.ts` 头注释写成明文的那条）：
+ * **流式与重开必须产出同一份消息列表、尤其是同一批 id** —— 一条 entry 一条消息，id 就是
+ * entry id（工具调用是卡内的块，按 toolCallId 认）。本文件围绕它展开。
  *
  * 模型侧由 `harness/fakeProvider` 脚本化（隔离实例没有 API Key）。
  */
@@ -145,9 +145,9 @@ describe('流式发送与重开一致性', () => {
 
     const all = await sessionEvents(sids.stream)
     const types = all.map((e) => e.type)
-    // 运行时是懒建的：本会话的首次发送才把它建出来。agent_created（SessionManager 的 onCreated，
-    // 见 sessionService 的 broadcastAgentCreated）标的是「这条会话有运行时」区间的起点 ——
-    // ensure() 交出实例之前就发了，所以必然排在本轮 agent_start 之前，不属于本轮流式事件。
+    // 运行时是懒建的：本会话的首次发送才把它建出来。agent_created（运行时的锁建出 agent 时发，
+    // 见 agent-runtime 的 durable/lock.ts）标的是「这条会话有运行时」区间的起点 ——
+    // 锁交出 agent 之前就发了，所以必然排在本轮 agent_start 之前，不属于本轮流式事件。
     // P3-08：内容（流式正文、落盘的消息）都走视图，事件只剩生命周期余项
     expect(types.filter((t) => ['agent_created', 'agent_start', 'agent_end'].includes(t))).toEqual([
       'agent_created',

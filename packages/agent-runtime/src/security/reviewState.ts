@@ -17,7 +17,7 @@
  *  - **审查放行过的调用**：宿主在工具执行完之后取走，写进工具结果（工具卡上的「已审查」标记）；按
  *    durable taskId 记（有的话，P2-08 PIN-10），否则按 toolCallId；
  *  - **进行中的审查**：会话被停止时一并中止，并在下一次 prompt 之前不再开始新的 —— 与询问卡片同一
- *    待遇（HarnessSession 的 inputsClosed）。否则一次放行会在用户点了停止之后才落地。
+ *    待遇（DurableSession 持有的 inputRequests 的 `closeInputs`）。否则一次放行会在用户点了停止之后才落地。
  */
 
 import { PERMISSION_RISKS, type PermissionRisk } from '@shuvix/chat-protocol/types/permissionReview'

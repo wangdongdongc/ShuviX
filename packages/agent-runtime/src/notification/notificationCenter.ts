@@ -19,7 +19,7 @@
  *    「已中止」纯属噪音。
  *
  * 2. **派生 agent 的 `agent_end` 不弹。** 事件流里子 agent 与根 agent 完全同构（同一套
- *    HarnessSession，只是 sessionId 是子会话 id），不区分的话一次 explore 就多一条通知。
+ *    会话运行时，只是 sessionId 是子会话 id），不区分的话一次 explore 就多一条通知。
  *    但**子 agent 的询问要弹** —— 卡住的是整轮，用户不答就没人往下走；只是通知点击要
  *    落到根会话上，所以这里维护 sub→root 映射（`ChatEventBase.subAgentId` 是个从没有人
  *    写过的字段，指望不上，只能像 ChatFrontendRegistry 那样自己按 register/end 记）。

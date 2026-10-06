@@ -1,6 +1,6 @@
 /**
  * withNetwork — the Models decorator carrying ShuviX's RuntimeNetwork seam (ported from the
- * phase-0 modelsAdapter tests, then extended to the full Models surface).
+ * phase-0 models-adapter tests, then extended to the full Models surface).
  *
  * What is pinned:
  *  1. **No network = no interference.** Streams, events and results pass by reference; only
