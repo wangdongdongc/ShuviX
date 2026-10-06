@@ -40,7 +40,13 @@ import en from '../../../../../packages/chat-protocol/src/i18n/locales/en.json'
 import { sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
-import { chatPane, confirmPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import {
+  chatPane,
+  confirmPane,
+  sidebarPane,
+  type ChatPane,
+  type SidebarPane
+} from '../../harness/pages'
 import {
   createProject,
   durableStoragePathOf,
@@ -163,9 +169,7 @@ const byUserText =
     r.lastUserText === text
 
 /** session 工具在父会话转写里的那几块（按出现次序） */
-const sessionToolBlocks = (
-  msgs: ListedMessage[]
-): Array<{ result: string; isError: boolean }> =>
+const sessionToolBlocks = (msgs: ListedMessage[]): Array<{ result: string; isError: boolean }> =>
   msgs.flatMap((m) =>
     (m.blocks ?? [])
       .filter((b) => b.toolName === 'session')
@@ -368,7 +372,10 @@ describe('legacy sessions after the boot switchover', () => {
     probe = syncProbe(app.main)
     events = eventRecorder(app.main)
     await events.install()
-    await until(async () => (await sidebar.titles()).includes(T.chat), 'sidebar rows after relaunch')
+    await until(
+      async () => (await sidebar.titles()).includes(T.chat),
+      'sidebar rows after relaunch'
+    )
   }, 240_000)
 
   afterAll(async () => {
@@ -436,9 +443,12 @@ describe('legacy sessions after the boot switchover', () => {
     const requestsBefore = provider.requests().length
     expect(await forcedPrompt(app.main, events, ids.chat, 'L2 forced prompt')).toBe(READ_ONLY)
     expect(await listMessages(app.main, ids.chat)).toEqual(before)
-    expect(provider.requests().slice(requestsBefore).map((r) => r.lastUserText)).not.toContain(
-      'L2 forced prompt'
-    )
+    expect(
+      provider
+        .requests()
+        .slice(requestsBefore)
+        .map((r) => r.lastUserText)
+    ).not.toContain('L2 forced prompt')
     expect(bytesOf(legacyTranscriptPathOf(home, ids.chat))).toBe(jsonlBytes.chat)
     expect(existsSync(durableStoragePathOf(home, ids.chat))).toBe(false)
     expect(rowOf(home, ids.chat)?.storageKind).toBe(LEGACY)
@@ -485,7 +495,9 @@ describe('legacy sessions after the boot switchover', () => {
     await confirm.waitOpen()
     await confirm.confirm()
     await until(async () => !rowOf(home, ids.del), 'legacy row deleted')
-    expect(await app.main.eval(`window.api.session.getById(${JSON.stringify(ids.del)})`)).toBeFalsy()
+    expect(
+      await app.main.eval(`window.api.session.getById(${JSON.stringify(ids.del)})`)
+    ).toBeFalsy()
     expect(existsSync(legacyTranscriptPathOf(home, ids.del))).toBe(false)
     expect(existsSync(durableStoragePathOf(home, ids.del))).toBe(false)
     await until(async () => !(await sidebar.titles()).includes(T.del), 'row gone from the sidebar')
@@ -522,7 +534,7 @@ describe('legacy sessions after the boot switchover', () => {
     }, 'rollback / regenerate controls on the cleared session')
   })
 
-  it("L-6 a durable parent reads its legacy child through the session tool, and a prompt to it is refused cleanly", async () => {
+  it('L-6 a durable parent reads its legacy child through the session tool, and a prompt to it is refused cleanly', async () => {
     const P6 = 'L6 check the legacy child'
     const childBefore = await listMessages(app.main, ids.child)
     provider.script(
@@ -723,10 +735,7 @@ describe('legacy sessions after the boot switchover', () => {
     ])
     // 新格式的笔记本对话照旧在
     await waitRendererReady(app.main)
-    expect((await listMessages(app.main, ids.nb)).map((m) => m.role)).toEqual([
-      'user',
-      'assistant'
-    ])
+    expect((await listMessages(app.main, ids.nb)).map((m) => m.role)).toEqual(['user', 'assistant'])
   })
 })
 
@@ -758,7 +767,11 @@ describe('L-9 a DB rewound to v29', () => {
     const projectId = (await createProject(first.main, { name: 'RewindProj', path: projDir })).id
 
     const m = first.main
-    ids.nb = await createSession(m, { title: 'L9 durable notebook', projectId, notebookPath: 'notes/r.md' })
+    ids.nb = await createSession(m, {
+      title: 'L9 durable notebook',
+      projectId,
+      notebookPath: 'notes/r.md'
+    })
     ids.legacyNb = await createSession(m, {
       title: 'L9 legacy notebook',
       projectId,

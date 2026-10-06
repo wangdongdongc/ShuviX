@@ -1140,7 +1140,10 @@ export function seedLegacySteps(
 
 /** 只把会话行的 `storageKind` 改回旧值（不写转写）—— 旧版本建了、却从没发过消息的那种会话 */
 export function markSessionLegacy(home: string, sessionId: string): void {
-  sqlite(home, `UPDATE sessions SET storageKind = 'harness-v3-jsonl' WHERE id = ${sqlLit(sessionId)}`)
+  sqlite(
+    home,
+    `UPDATE sessions SET storageKind = 'harness-v3-jsonl' WHERE id = ${sqlLit(sessionId)}`
+  )
   const kind = sqlite(home, `SELECT storageKind FROM sessions WHERE id = ${sqlLit(sessionId)}`)
   expect(kind.trim(), `storageKind of ${sessionId}`).toBe('harness-v3-jsonl')
 }
