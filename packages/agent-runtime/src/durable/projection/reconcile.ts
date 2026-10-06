@@ -75,9 +75,19 @@ function reconcileRecord(draft: JsonRecord, next: JsonRecord, prev?: JsonRecord)
     }
     return
   }
-  // 草稿 ≡ prev：键与值都在 prev 上判断，只碰变了的槽
+  // 草稿 ≡ prev：键与值都在 prev 上判断，只碰变了的槽。真有键要删时才枚举草稿 —— 按草稿的键序删，
+  // 与不带 prev 时操作的次序也一样（状态里的键序可能与 prev 不同：chord 按插入次序保留键）
+  let deletes = false
   for (const key of Object.keys(prev)) {
-    if (!Object.hasOwn(next, key)) draft[key] = undefined
+    if (!Object.hasOwn(next, key)) {
+      deletes = true
+      break
+    }
+  }
+  if (deletes) {
+    for (const key of Object.keys(draft)) {
+      if (!Object.hasOwn(next, key)) draft[key] = undefined
+    }
   }
   for (const key of Object.keys(next)) {
     const value = next[key]
