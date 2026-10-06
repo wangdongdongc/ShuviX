@@ -162,8 +162,13 @@ describe('syncClient', () => {
       message: 'Unknown agent a1'
     }
     const channel = {
-      invoke: (target: Parameters<typeof server.channel.invoke>[0], call: Parameters<typeof server.channel.invoke>[1]) =>
-        plain === undefined ? server.channel.invoke(target, call) : Promise.reject(structuredClone(plain)),
+      invoke: (
+        target: Parameters<typeof server.channel.invoke>[0],
+        call: Parameters<typeof server.channel.invoke>[1]
+      ) =>
+        plain === undefined
+          ? server.channel.invoke(target, call)
+          : Promise.reject(structuredClone(plain)),
       onFrame: server.channel.onFrame
     }
     const client = createSyncClient({ channel, logger: quietLogger() })

@@ -193,8 +193,11 @@ export async function captureEvents(client: CdpClient, sid: string): Promise<Eve
   const probe = syncProbe(client)
   const view = (): Promise<SessionView | undefined> => probe.viewOf(sid)
   /** 视图上的一拍：40ms（until 缺省 400ms 一拍，起止的时间差要更细） */
-  const fastUntil = <T>(fn: () => Promise<T>, what: string, timeoutMs?: number) =>
-    until(fn, what, timeoutMs, { intervalMs: 40 })
+  const fastUntil = <T>(
+    fn: () => Promise<T>,
+    what: string,
+    timeoutMs?: number
+  ): Promise<NonNullable<T>> => until(fn, what, timeoutMs, { intervalMs: 40 })
   await client.eval(`(() => {
     window.__e2eCoEventsOff?.()
     window.__e2eCoEvents = []

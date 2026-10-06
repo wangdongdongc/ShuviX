@@ -137,7 +137,9 @@ const untilRunsSettled = (target: string, what: string): Promise<true> =>
     )
     const settled = started.every((s) => {
       const id = runIdIn(s)
-      return lines.some((l) => l !== s && l.includes(`run=${id} `) && !l.includes(' start trigger='))
+      return lines.some(
+        (l) => l !== s && l.includes(`run=${id} `) && !l.includes(' start trigger=')
+      )
     })
     return settled ? true : null
   }, what)
@@ -279,7 +281,13 @@ describe('runner 的跳过路径（只进主进程日志）', () => {
     sid = await createSession()
     await promptTolerant(sid, 'hello')
 
-    const [quick] = await untilStarts('auto-title', sid, 1, 'auto-title dispatched', PROMPT_ACCEPTED)
+    const [quick] = await untilStarts(
+      'auto-title',
+      sid,
+      1,
+      'auto-title dispatched',
+      PROMPT_ACCEPTED
+    )
     expect(quick).toContain('agent=titler')
     const [echo] = await untilStarts('echo', sid, 1, 'turn-1 echo barrier', TURN_COMPLETED)
     expect(echo).toContain('agent=explore')

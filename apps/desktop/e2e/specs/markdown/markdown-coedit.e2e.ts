@@ -318,7 +318,6 @@ async function resetDoc(w: Win, text: string): Promise<void> {
 const askDecisions = (toolCallId: string): ReturnType<typeof securityDecisions> =>
   securityDecisions(app).filter((d) => d.toolCallId === toolCallId && d.effect === 'ask')
 
-
 // ─── doc_read ─────────────────────────────────────────────
 
 describe('doc_read 读的是活缓冲', () => {
