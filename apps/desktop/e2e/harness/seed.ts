@@ -919,6 +919,95 @@ export function sqliteJson<T = Record<string, unknown>>(home: string, sql: strin
   return out ? (JSON.parse(out) as T[]) : []
 }
 
+/** 旧格式转写里的一次已完成调用（`seedLegacyTranscript`） */
+export interface LegacyToolCall {
+  id: string
+  /** 写进转写的工具名（旧时代的名字：退役的 `browser` / `database` …） */
+  name: string
+  arguments: Record<string, unknown>
+  result: string
+  isError?: boolean
+}
+
+/**
+ * 把一条**建了但从没打开过**的会话改成切换前的旧格式（`harness-v3-jsonl`，只读）会话：写一份
+ * pi 0.80 harness 的 v3 会话树到 `sessions/<id>.jsonl`（头行 + 一条用户消息 + 一条带 `calls` 的
+ * assistant + 各自的 toolResult + 收尾文字），再把会话行的 `storageKind` 改回旧值。
+ *
+ * pi-durable 之后不再有东西写 `.jsonl`（P1-01），旧会话只剩「照旧可看」（storage-kind 适配器，
+ * 永不迁移）—— 这就是「旧时代的转写」今天唯一的来路。改库在实例运行时做：会话行每次现读（WAL），
+ * 而视图在第一次订阅时才按存储类型分流，所以必须赶在会话第一次被打开之前。
+ */
+export function seedLegacyTranscript(
+  app: Pick<E2EApp, 'home'>,
+  sessionId: string,
+  turn: { prompt: string; calls: LegacyToolCall[]; closing?: string }
+): void {
+  const t0 = Date.parse('2026-01-01T00:00:00.000Z')
+  let n = 0
+  let parentId: string | null = null
+  const lines: Record<string, unknown>[] = [
+    {
+      type: 'session',
+      version: 3,
+      id: sessionId,
+      timestamp: new Date(t0).toISOString(),
+      cwd: app.home
+    }
+  ]
+  const usage = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 }
+  const push = (message: Record<string, unknown>): void => {
+    n += 1
+    const id = `legacy${String(n).padStart(4, '0')}`
+    const ts = t0 + n * 1000
+    lines.push({
+      type: 'message',
+      id,
+      parentId,
+      timestamp: new Date(ts).toISOString(),
+      message: { ...message, timestamp: ts }
+    })
+    parentId = id
+  }
+  const assistant = { api: 'openai-completions', provider: 'e2e', model: 'e2e-legacy', usage }
+  push({ role: 'user', content: [{ type: 'text', text: turn.prompt }] })
+  push({
+    role: 'assistant',
+    content: turn.calls.map((c) => ({
+      type: 'toolCall',
+      id: c.id,
+      name: c.name,
+      arguments: c.arguments
+    })),
+    ...assistant,
+    stopReason: 'toolUse'
+  })
+  for (const c of turn.calls) {
+    push({
+      role: 'toolResult',
+      toolCallId: c.id,
+      toolName: c.name,
+      content: [{ type: 'text', text: c.result }],
+      isError: c.isError === true
+    })
+  }
+  push({
+    role: 'assistant',
+    content: [{ type: 'text', text: turn.closing ?? 'done' }],
+    ...assistant,
+    stopReason: 'stop'
+  })
+  const file = join(app.home, 'userdata', 'data', 'sessions', `${sessionId}.jsonl`)
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  sqlite(
+    app.home,
+    `UPDATE sessions SET storageKind = 'harness-v3-jsonl' WHERE id = ${sqlLit(sessionId)}`
+  )
+  const kind = sqlite(app.home, `SELECT storageKind FROM sessions WHERE id = ${sqlLit(sessionId)}`)
+  expect(kind.trim(), `storageKind of ${sessionId}`).toBe('harness-v3-jsonl')
+}
+
 /**
  * 主进程日志里的一条安全决策（`security_decision {json}`，见 agent-runtime security/decisionLog.ts）。
  *

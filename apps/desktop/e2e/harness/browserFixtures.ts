@@ -22,6 +22,7 @@ import type { AddressInfo } from 'node:net'
 import { connect, listTargets, until, type CdpClient } from './cdp'
 import type { FakeProvider, FakeTurn } from './fakeProvider'
 import type { EventRecorder, RecordedEvent } from './seed'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { syncProbe, toolResultsIn } from './sync'
 
 /** 内置浏览器 server 的全部工具（桌面端能力全开，一个不少） */
@@ -479,13 +480,40 @@ export interface BrowserDriver {
   waitAsk(sid: string, since: number): Promise<AskRequest>
   /** 应答一条询问（`remember` = 「允许并记住」，只对路径询问有意义） */
   answer(sid: string, requestId: string, allowed: boolean, remember?: boolean): Promise<void>
-  /** 起点之后这条会话的某类事件 */
+  /**
+   * 起点之后这条会话的某类事件（只剩余项与生命周期：`browser_event` / `runtime_event` / `agent_end`…）。
+   * 内容类事件 P3-08 起不再广播 —— 传 `tool_end` / `input_request` 之类直接抛，免得「没有事件」的断言
+   * 空跑成绿的：结果用 `resultsSince`，询问用 `asksSince`
+   */
   eventsSince<T extends RecordedEvent = RecordedEvent>(
     since: number,
     type: string,
     sid?: string
   ): Promise<T[]>
+  /**
+   * 起点之后挂起过几张询问卡（`ask_count` 余项的上升，见 seed.ts `asksRaisedIn`；不给 `sid` = 所有会话
+   * 合计）—— 「这一路没问」断成 `toBe(0)`
+   */
+  asksSince(since: number, sid?: string): Promise<number>
+  /** 这次运行（`start` 交回的起点）之后这条会话里落盘的工具结果（视图里起点之后的消息） */
+  resultsSince(sid: string, since: number): Promise<ToolEndEvent[]>
 }
+
+/** P3-08 起删掉的内容类事件 —— 等它 / 断它「没有」都是空跑 */
+const DELETED_EVENT_TYPES = new Set([
+  'tool_start',
+  'tool_end',
+  'input_request',
+  'input_request_resolved',
+  'user_message',
+  'toolcall_generating',
+  'message_start',
+  'message_update',
+  'message_end',
+  'text_delta',
+  'thinking_delta',
+  'assistant_message'
+])
 
 export function browserDriver(opts: {
   main: CdpClient
@@ -495,14 +523,34 @@ export function browserDriver(opts: {
   const { main, provider, events } = opts
   /** waitAsk 已经交出去的询问 id */
   const taken = new Set<string>()
+  /** 每次运行（起点序号）里 waitAsk 交出过几张卡 */
+  const asksTaken = new Map<number, number>()
   const eventsSince = async <T extends RecordedEvent = RecordedEvent>(
     since: number,
     type: string,
     sid?: string
-  ): Promise<T[]> =>
-    (await events.allSince<T>(since)).filter(
+  ): Promise<T[]> => {
+    if (DELETED_EVENT_TYPES.has(type)) {
+      throw new Error(`'${type}' is no longer a chat event (P3-08): read the session view instead`)
+    }
+    return (await events.allSince<T>(since)).filter(
       (e) => e.type === type && (sid === undefined || e.sessionId === sid)
     )
+  }
+  const asksSince = async (since: number, sid?: string): Promise<number> => {
+    const counts = (await events.allSince<RecordedEvent & { count?: number }>(since)).filter(
+      (e) => e.type === 'ask_count' && (sid === undefined || e.sessionId === sid)
+    )
+    const previous = new Map<string, number>()
+    let raised = 0
+    for (const e of counts) {
+      const count = e.count ?? 0
+      const before = previous.get(e.sessionId) ?? 0
+      if (count > before) raised += count - before
+      previous.set(e.sessionId, count)
+    }
+    return raised
+  }
   const probe = syncProbe(main)
   /** 每次运行开始时视图里已有的消息 id（这次运行的工具结果只取之后落盘的） */
   const before = new Map<number, Set<string>>()
@@ -518,31 +566,33 @@ export function browserDriver(opts: {
     await sendPrompt(main, sid, prompt)
     return since
   }
+  /** 视图里起点之后落盘的工具结果（形状沿用旧 `tool_end`） */
+  const resultsIn = (sid: string, since: number, messages: ChatMessage[]): ToolEndEvent[] => {
+    const known = before.get(since) ?? new Set<string>()
+    return toolResultsIn(messages.filter((m) => !known.has(m.id))).map((r) => ({
+      type: 'tool_end',
+      sessionId: sid,
+      toolCallId: r.toolCallId,
+      toolName: r.toolName,
+      result: r.result,
+      isError: r.isError,
+      ...(r.details === undefined
+        ? {}
+        : { details: r.details as unknown as Record<string, unknown> })
+    }))
+  }
   const finish = async (sid: string, since: number): Promise<RunOutcome> => {
     await events.waitFor('agent_end', { sessionId: sid, since, timeoutMs: 60_000 })
     const view = await probe.waitView(sid, (v) => v.run.state !== 'busy', 30_000)
-    const known = before.get(since) ?? new Set<string>()
     const ends: Record<string, ToolEndEvent> = {}
-    for (const r of toolResultsIn(view.messages.filter((m) => !known.has(m.id)))) {
-      ends[r.toolCallId] = {
-        type: 'tool_end',
-        sessionId: sid,
-        toolCallId: r.toolCallId,
-        toolName: r.toolName,
-        result: r.result,
-        isError: r.isError,
-        ...(r.details === undefined
-          ? {}
-          : { details: r.details as unknown as Record<string, unknown> })
-      }
-    }
+    for (const end of resultsIn(sid, since, view.messages)) ends[end.toolCallId] = end
     return { ends, since }
   }
   return {
     start,
     finish,
     run: async (sid, turns, prompt) => finish(sid, await start(sid, turns, prompt)),
-    waitAsk: async (sid) => {
+    waitAsk: async (sid, since) => {
       // 询问在会话视图里（P3-08）
       const view = await probe.waitView(
         sid,
@@ -552,6 +602,15 @@ export function browserDriver(opts: {
       )
       const request = view.asks.find((a) => !taken.has(a.id))! as unknown as AskRequest
       taken.add(request.id)
+      // 视图里冒出的每张卡也得在 `ask_count` 余项里数得到 —— `asksSince(...) === 0` 的「没问」断言
+      // 靠的就是这个计数，这里顺手证明它不是恒为 0
+      const n = (asksTaken.get(since) ?? 0) + 1
+      asksTaken.set(since, n)
+      await until(
+        async () => ((await asksSince(since, sid)) >= n ? true : null),
+        `ask_count rise for ask #${n} of run ${since} in ${sid}`,
+        10_000
+      )
       return request
     },
     answer: async (sid, requestId, allowed, remember = false) => {
@@ -567,7 +626,10 @@ export function browserDriver(opts: {
         })})`
       )
     },
-    eventsSince
+    eventsSince,
+    asksSince,
+    resultsSince: async (sid, since) =>
+      resultsIn(sid, since, (await probe.viewOf(sid))?.messages ?? [])
   }
 }
 
