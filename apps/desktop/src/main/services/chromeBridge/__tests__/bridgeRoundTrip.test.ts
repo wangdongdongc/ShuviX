@@ -130,7 +130,7 @@ async function handshake(
   })
   expect(await ext.waitFor((m) => m.type === 'welcome', from)).toEqual({
     type: 'welcome',
-    protocol: 1,
+    protocol: CHROME_BRIDGE_PROTOCOL,
     ok: true
   })
   const conn = server.connectionFor(installId)
@@ -299,7 +299,7 @@ describe.skipIf(process.platform === 'win32')('Chrome 桥往返：真本地组�
     const conn = await handshake(ext, second)
     expect(second.readyConnections()).toEqual([conn])
     expect(second.statuses()).toEqual([
-      expect.objectContaining({ installId: 'i1', state: 'ready', protocol: 1 })
+      expect.objectContaining({ installId: 'i1', state: 'ready', protocol: CHROME_BRIDGE_PROTOCOL })
     ])
   })
 

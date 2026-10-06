@@ -8,7 +8,8 @@
  *     `mcp:chrome` 也拿不到用户的 Chrome（CTS-1b）；
  *   - **侧边栏的边界**（CTS-4..6）：桥不是 `window.api` 的远程版 —— 只接白名单里的路径，每个带会话的
  *     调用都核对「这条会话是不是这条连接的标签页会话」：别的浏览器的、桌面自己的、不存在的一律拒绝，
- *     被拒的 prompt 一个字都到不了模型；自己的那条照常可用；
+ *     被拒的 prompt 一个字都到不了模型；自己的那条照常可用 —— 视图同步（`sync.invoke`，P3-09）、继续与
+ *     撤回（`agent.continue` / `agent.withdrawQueued`）也一样过这道核对；「下一轮」这一档已经没有了；
  *   - **关与清**（CTS-7 / CTS-8）：扩展报 `tabs.removed` 只删那个浏览器那一轮的那一条；握手时清掉上一轮
  *     运行留下的、以及标签页已经不在的会话（「浏览器重启」= 同一个 installId 换一个 runId）；
  *   - **应用事件**（CTS-9 / CTS-10）：设置变化转给每个侧边栏；会话级的变化只转给这条会话的主人。
@@ -17,6 +18,8 @@
  */
 import { existsSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createServiceSubscribeCall } from '@earendil-works/chord'
+import { CHAT_VIEW_SERVICE_ID } from '@shuvix/chat-protocol/sync'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
@@ -197,6 +200,10 @@ describe('开一条标签页会话', () => {
   }, 120_000)
 })
 
+/** 一次视图订阅调用（订阅 id 只要在这条连接上不撞） */
+const subscribeCall = (tag: string): unknown =>
+  createServiceSubscribeCall(`e2e-cts#${tag}`, CHAT_VIEW_SERVICE_ID, 'singleton')
+
 describe('侧边栏能碰什么', () => {
   it('CTS-4 白名单之外的路径一律拒绝，什么也没发生；白名单里不带会话的照常可用', async () => {
     const fontSizeBefore = await app.main.eval<string | null>(
@@ -211,6 +218,8 @@ describe('侧边栏能碰什么', () => {
       ['files.scan', [{ sessionId: sidA5 }]],
       ['bgTask.readLog', [{ sessionId: sidA5, toolCallId: 'x' }]],
       ['command.list', [sidA5]],
+      // 「下一轮」这一档已从产品里去掉（Q-P3-09）
+      ['agent.nextTurn', [{ sessionId: sidA5, text: 'later' }]],
       ['__proto__', []],
       ['constructor', []]
     ]
@@ -258,12 +267,24 @@ describe('侧边栏能碰什么', () => {
         'agent.respondToInput',
         [{ sessionId: sidA5, requestId: 'x', response: { kind: 'ask', allowed: true } }]
       ],
-      [chromeA, 'bgTask.list', [{ sessionId: desktopSid }]]
+      [chromeA, 'bgTask.list', [{ sessionId: desktopSid }]],
+      [chromeA, 'agent.continue', [desktopSid]],
+      [chromeB, 'agent.continue', [sidA5]],
+      [chromeB, 'agent.withdrawQueued', [{ sessionId: sidA5, submissionId: 1 }]],
+      // 视图同步：订阅别人的会话 / 认不出的派生 agent（不透露它存不存在）
+      [chromeA, 'sync.invoke', [{ kind: 'session', sessionId: desktopSid }, subscribeCall('a')]],
+      [chromeB, 'sync.invoke', [{ kind: 'session', sessionId: sidA5 }, subscribeCall('b')]],
+      [chromeA, 'sync.invoke', [{ kind: 'session', sessionId: 'no-such' }, subscribeCall('c')]],
+      [chromeA, 'sync.invoke', [{ kind: 'agent', agentId: 'no-such-agent' }, subscribeCall('d')]]
     ]
     for (const [chrome, path, args] of cases) {
       const r = await chrome.channel(path, ...args)
       expect(r, `${chrome.installId} ${path}`).toMatchObject({ ok: false, error: NOT_YOURS })
     }
+    // 不是同步目标的目标：另一句话，同样什么也没订
+    expect(
+      await chromeA.channel('sync.invoke', { kind: 'tab', tabId: 5 }, subscribeCall('e'))
+    ).toMatchObject({ ok: false, error: expect.stringContaining('sync.invoke needs') })
     // 被拒的两条 prompt 一个字都没到模型，也没落进任何一条会话
     await sleep(500)
     expect(provider.chatRequestCount()).toBe(0)
@@ -292,6 +313,22 @@ describe('侧边栏能碰什么', () => {
     expect(TAB_PROFILE_LABELS).toContain(chrome!.declaredBy)
     // 另一个浏览器用自己的会话同样可以
     expect(await chromeB.channelCall('message.list', sidB5)).toEqual([])
+
+    // 视图同步（P3-09）：订阅自己的会话，拿到这条会话的视图快照
+    const view = await chromeA.viewOf(sidA5)
+    expect(view).toMatchObject({ sessionId: sidA5, messages: [], asks: [] })
+    // 继续：没有被打断的工作就什么都不做；撤回：没有那条排队的消息
+    expect(await chromeA.channelCall('agent.continue', sidA5)).toEqual({ success: true })
+    expect(
+      await chromeA.channelCall('agent.withdrawQueued', { sessionId: sidA5, submissionId: 999 })
+    ).toEqual({ result: 'not_found' })
+    // 服务端的错误码装在信封里带回来（桥的应答错误只是一段文本）
+    await expect(
+      chromeA.syncInvoke(
+        { kind: 'session', sessionId: sidA5 },
+        createServiceSubscribeCall('e2e-cts6#x', 'not.a.service', 'singleton')
+      )
+    ).rejects.toMatchObject({ code: 'service_not_allowed' })
   }, 120_000)
 })
 

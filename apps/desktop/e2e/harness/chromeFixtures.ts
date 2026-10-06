@@ -19,6 +19,12 @@
  * 行为对齐扩展本身（`apps/extension/src/background/`）：`tabs.remove` 之后像 SW 那样补发 `tabs.removed`；
  * `debugger.attach` 幂等；桌面的分片用与扩展同一个组装器还原。握手不自动做 —— 扩展是收到
  * `host: connected` 才说 hello，用例显式调 `hello()`，时序看得见。
+ *
+ * **会话内容走视图同步**（P3-09）：消息、工具进度、询问不再是 chat.event，而是侧边栏订阅的会话视图。
+ * 假 Chrome 像侧边栏那样订阅（`channel.call('sync.invoke')`，帧经桥事件 `sync.frame` 回来），用一个**真的**
+ * chord 客户端（agent-runtime 的 `TestClient`，node 里照样跑）解码：`viewOf` / `waitView` 读当前值，
+ * `viewSeqWhere` 给出「视图第一次满足某条件」是哪一帧（与 chat.event 同一条到达序列，可断先后），
+ * `asksSeen` 记下视图里出现过的每一张询问卡（一闪而过的也算）。chat.event 只剩生命周期与余项事件。
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
@@ -37,9 +43,18 @@ import {
   type ChromeTabInfo
 } from '@shuvix/chat-protocol/chromeBridge'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
+import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
+import type { SyncFrame, SyncInvokeResult } from '@shuvix/chat-protocol/sync'
 import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
+import type { WireServiceProviderUpdate } from '@earendil-works/chord'
+import {
+  TestClient,
+  type TestBinding
+} from '../../../../packages/agent-runtime/src/sync/__tests__/support/client'
 import { sleep, until } from './cdp'
 import type { FakeProvider, FakeTurn } from './fakeProvider'
+import { toolResultsIn } from './sync'
 
 /** Chrome 拉起本地组件时追加的参数：调用方扩展的 origin */
 export const CHROME_EXTENSION_ORIGIN = `chrome-extension://${CHROME_EXTENSION_ID}/`
@@ -123,6 +138,21 @@ export interface ChromeChatEvent {
 export interface ChromeAppEvent {
   seq: number
   event: { type: string; [key: string]: unknown }
+}
+
+/** 一条收到的视图同步帧（`sync.frame` 的载荷） */
+export interface ChromeSyncFrame {
+  seq: number
+  /** 信封上的会话 id —— SW 按它把帧送给挂着这条会话的侧边栏（agent 目标是它的根会话） */
+  sessionId: string
+  frame: SyncFrame<WireServiceProviderUpdate>
+}
+
+/** 视图里出现过的一张询问卡（第一次出现在哪一帧之后） */
+export interface ChromeSeenAsk {
+  seq: number
+  sessionId: string
+  ask: InputRequest
 }
 
 /** 本地组件报给扩展的桌面状态 */
@@ -244,6 +274,37 @@ export interface FakeChrome {
     }
   ): Promise<ChromeChatEvent>
   appEvents(opts?: { since?: number }): ChromeAppEvent[]
+
+  // ── 视图同步（侧边栏的会话内容，P3-09） ──
+  /**
+   * `channel.call('sync.invoke', target, call)` 的结果：信封 ok → value；信封 ok:false 或桥拒绝 → 抛错，
+   * `.code` = chord 的错误码 / 桥的错误文本
+   */
+  syncInvoke(target: unknown, call: unknown): Promise<unknown>
+  /** 一条会话此刻的视图（第一次读时订阅；订阅被拒抛错，带 `.code`） */
+  viewOf(sessionId: string): Promise<SessionView | undefined>
+  /** 等视图满足 `pred`；超时抛错（带最后一份视图的摘要） */
+  waitView(
+    sessionId: string,
+    pred: (view: SessionView) => boolean,
+    opts?: { timeoutMs?: number; what?: string }
+  ): Promise<SessionView>
+  /**
+   * 视图**第一次**满足 `pred` 是哪一帧之后（回那一帧的到达序号；此刻已满足 → 回 `mark()`）。须在条件成立
+   * 之前订上（先 `viewOf`）—— 之后的每一帧都会核对
+   */
+  viewSeqWhere(
+    sessionId: string,
+    pred: (view: SessionView) => boolean,
+    opts?: { timeoutMs?: number; what?: string }
+  ): Promise<number>
+  /** 视图里出现过的询问卡（按第一次出现的次序；`since` 之后的） */
+  asksSeen(sessionId: string, opts?: { since?: number }): ChromeSeenAsk[]
+  /** 收到的 `sync.frame`（可按会话、起点过滤） */
+  syncFrames(opts?: { sessionId?: string; since?: number }): ChromeSyncFrame[]
+  /** 放掉一条会话的视图订阅（发退订） */
+  releaseView(sessionId: string): Promise<void>
+
   /** 收到的每一帧的正文字节数（按到达顺序）—— 「没有一帧超过原生消息上限」按它断 */
   frameSizes(): number[]
   /** 收到的分片帧数 */
@@ -392,6 +453,17 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
   const responses = new Map<string, (r: BridgeResponse) => void>()
   const assembler = new BridgeChunkAssembler()
   let reqSeq = 0
+  const syncLog: ChromeSyncFrame[] = []
+  const seenAsks: ChromeSeenAsk[] = []
+  const seenAskIds = new Set<string>()
+  /** 视图同步：TestClient 的帧接收口、按会话的绑定、等某个条件第一次成立的观察者 */
+  let syncReceiver: ((frame: SyncFrame<WireServiceProviderUpdate>) => void) | undefined
+  const viewBindings = new Map<string, TestBinding>()
+  const viewWatchers = new Set<{
+    sessionId: string
+    pred: (view: SessionView) => boolean
+    resolve: (seq: number) => void
+  }>()
 
   const diag = (): string =>
     `\n--- fake chrome ${installId} (exit=${exitCode}${spawnError ? `, spawn error: ${spawnError}` : ''}) stderr ---\n${stderrText.slice(-1500)}`
@@ -561,6 +633,17 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
         } else if (message.name === 'app.event') {
           const p = (message.params ?? {}) as { event?: ChromeAppEvent['event'] }
           appLog.push({ seq: at, event: p.event ?? { type: '?' } })
+        } else if (message.name === 'sync.frame') {
+          const p = (message.params ?? {}) as {
+            sessionId?: string
+            frame?: SyncFrame<WireServiceProviderUpdate>
+          }
+          const sessionId = String(p.sessionId ?? '')
+          if (p.frame) {
+            syncLog.push({ seq: at, sessionId, frame: p.frame })
+            syncReceiver?.(p.frame)
+            afterViewChange(sessionId, at)
+          }
         }
         return
       }
@@ -633,6 +716,138 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
       `native host reports desktop ${desktop} (${installId})${diag()}`,
       wopts.timeoutMs ?? DEFAULT_TIMEOUT_MS
     )
+  }
+
+  // ── 视图同步 ──
+
+  /** `channel.call('sync.invoke')`：信封拆开；失败抛带 `.code` 的错误（与侧边栏 channelApi 同一个口径） */
+  const syncInvoke = async (target: unknown, syncCall: unknown): Promise<unknown> => {
+    const r = await channel('sync.invoke', target, syncCall)
+    const fail = (code: string | undefined, message: string): never => {
+      const error = new Error(message) as Error & { code?: string }
+      if (code !== undefined) error.code = code
+      throw error
+    }
+    if (!r.ok) return fail(r.error, r.error ?? 'error')
+    const envelope = r.result as SyncInvokeResult
+    if (!envelope.ok) return fail(envelope.error.code, envelope.error.message)
+    // TestClient 把回复 JSON 往返一遍：undefined（退订的回复）交 null
+    return envelope.value === undefined ? null : envelope.value
+  }
+
+  const syncClient = new TestClient(
+    `e2e-${installId}`,
+    { invoke: (_clientId, target, syncCall) => syncInvoke(target, syncCall) as Promise<never> },
+    {
+      attach: (_clientId, deliver) => {
+        syncReceiver = deliver
+      }
+    }
+  )
+
+  const currentView = (sessionId: string): SessionView | undefined =>
+    viewBindings.get(sessionId)?.value() as SessionView | undefined
+
+  /** 一帧交给解码器之后：记下新出现的询问卡、叫醒条件已成立的观察者 */
+  function afterViewChange(sessionId: string, at: number): void {
+    const view = currentView(sessionId)
+    if (view === undefined) return
+    for (const ask of view.asks ?? []) {
+      if (seenAskIds.has(ask.id)) continue
+      seenAskIds.add(ask.id)
+      seenAsks.push({ seq: at, sessionId, ask })
+    }
+    for (const watcher of [...viewWatchers]) {
+      if (watcher.sessionId !== sessionId || !watcher.pred(view)) continue
+      viewWatchers.delete(watcher)
+      watcher.resolve(at)
+    }
+  }
+
+  const bindView = async (sessionId: string): Promise<TestBinding> => {
+    let binding = viewBindings.get(sessionId)
+    if (binding) return binding
+    binding = syncClient.bind({ kind: 'session', sessionId })
+    try {
+      await binding.ready()
+    } catch (error) {
+      await binding.dispose().catch(() => undefined)
+      throw error
+    }
+    viewBindings.set(sessionId, binding)
+    // 快照（订阅的回复，不是帧）里已有的询问卡也算「出现过」
+    afterViewChange(sessionId, seq)
+    return binding
+  }
+
+  const viewOf = async (sessionId: string): Promise<SessionView | undefined> => {
+    await bindView(sessionId)
+    return currentView(sessionId)
+  }
+
+  const summarize = (view: SessionView | undefined): string =>
+    view
+      ? JSON.stringify({
+          run: view.run,
+          messages: view.messages.map((m) => `${m.role}:${m.content.slice(0, 40)}`),
+          live: view.live?.message.content.slice(0, 40) ?? null,
+          toolRuns: Object.fromEntries(
+            Object.entries(view.toolRuns ?? {}).map(([id, r]) => [id, r.status])
+          ),
+          asks: view.asks.map((a) => a.id)
+        })
+      : 'no view'
+
+  const waitView = async (
+    sessionId: string,
+    pred: (view: SessionView) => boolean,
+    wopts: { timeoutMs?: number; what?: string } = {}
+  ): Promise<SessionView> => {
+    await bindView(sessionId)
+    try {
+      return await until(
+        () => {
+          const view = currentView(sessionId)
+          return view !== undefined && pred(view) ? view : null
+        },
+        `${wopts.what ?? `view of ${sessionId}`} (fake chrome ${installId})`,
+        wopts.timeoutMs ?? 60_000
+      )
+    } catch (error) {
+      throw new Error(
+        `${(error as Error).message}\nlast view: ${summarize(currentView(sessionId))}${diag()}`
+      )
+    }
+  }
+
+  const viewSeqWhere = async (
+    sessionId: string,
+    pred: (view: SessionView) => boolean,
+    wopts: { timeoutMs?: number; what?: string } = {}
+  ): Promise<number> => {
+    await bindView(sessionId)
+    const now = currentView(sessionId)
+    if (now !== undefined && pred(now)) return seq
+    const timeoutMs = wopts.timeoutMs ?? 60_000
+    return new Promise<number>((resolve, reject) => {
+      const watcher = {
+        sessionId,
+        pred,
+        resolve: (at: number) => {
+          clearTimeout(timer)
+          resolve(at)
+        }
+      }
+      const timer = setTimeout(() => {
+        viewWatchers.delete(watcher)
+        reject(
+          new Error(
+            `timeout waiting: ${wopts.what ?? `a view condition in ${sessionId}`} (fake chrome ${installId})\nlast view: ${summarize(currentView(sessionId))}${diag()}`
+          )
+        )
+      }, timeoutMs)
+      viewWatchers.add(watcher)
+    })
   }
 
   const chatEvents = (
@@ -761,6 +976,24 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
         wopts.timeoutMs ?? 60_000
       ),
     appEvents: (aopts = {}) => appLog.filter((e) => e.seq > (aopts.since ?? 0)),
+    syncInvoke,
+    viewOf,
+    waitView,
+    viewSeqWhere,
+    asksSeen: (sessionId, aopts = {}) =>
+      seenAsks.filter((a) => a.sessionId === sessionId && a.seq > (aopts.since ?? 0)),
+    syncFrames: (fopts = {}) =>
+      syncLog.filter(
+        (f) =>
+          f.seq > (fopts.since ?? 0) &&
+          (fopts.sessionId === undefined || f.sessionId === fopts.sessionId)
+      ),
+    releaseView: async (sessionId) => {
+      const binding = viewBindings.get(sessionId)
+      if (!binding) return
+      viewBindings.delete(sessionId)
+      await binding.dispose().catch(() => undefined)
+    },
     frameSizes: () => [...frameSizes],
     chunkFrames: () => chunkFrames,
     stderr: () => stderrText,
@@ -811,17 +1044,15 @@ export function scriptChromeRun(
   provider.script(...scripted)
 }
 
-/** 一次调用落定时的 `tool_end`（只声明断言会读的字段） */
+/** 一次落定的工具调用 —— 视图里带结果的工具块（只声明断言会读的字段） */
 export interface ChromeToolEnd {
-  type: 'tool_end'
-  sessionId: string
   toolCallId: string
   toolName?: string
   result?: string
   isError?: boolean
 }
 
-/** 询问卡片（`input_request` 里的请求） */
+/** 询问卡片（视图 `asks` 里的请求；只声明断言会读的字段） */
 export interface ChromeAskRequest {
   id: string
   kind: string
@@ -831,33 +1062,45 @@ export interface ChromeAskRequest {
   policyPrompt?: { text: string; policies: string[] } | null
 }
 
-/** 这次运行里（`since` 之后）按 toolCallId 的 `tool_end` —— 从假 Chrome 收到的 chat.event 里取 */
-export function toolEndsOf(
+/**
+ * 侧边栏视图里落定的工具调用，按 toolCallId（视图 `messages` 里带结果的工具块 —— 替代 `tool_end` 事件）。
+ * 视图是整条会话的：脚本里的 toolCallId 各轮不重，按 id 取就是那一轮的
+ */
+export async function toolEndsOf(
   chrome: FakeChrome,
-  sessionId: string,
-  since: number
-): Record<string, ChromeToolEnd> {
+  sessionId: string
+): Promise<Record<string, ChromeToolEnd>> {
   const out: Record<string, ChromeToolEnd> = {}
-  for (const e of chrome.chatEvents({ sessionId, type: 'tool_end', since })) {
-    const end = e.event as unknown as ChromeToolEnd
-    out[end.toolCallId] = end
+  for (const r of toolResultsIn((await chrome.viewOf(sessionId))?.messages ?? [])) {
+    out[r.toolCallId] = {
+      toolCallId: r.toolCallId,
+      toolName: r.toolName,
+      result: r.result,
+      isError: r.isError
+    }
   }
   return out
 }
 
-/** 等这次运行（`since` 之后）的下一张还没取过的询问卡片 —— 经 chat.event 到达侧边栏的那张 */
+/** 视图里某个工具调用已经落定（工具块带上了结果） */
+export const toolDone =
+  (toolCallId: string) =>
+  (view: SessionView): boolean =>
+    toolResultsIn(view.messages).some((r) => r.toolCallId === toolCallId)
+
+/** 等下一张还没取过的询问卡片 —— 侧边栏视图 `asks` 里 `since` 之后第一次出现的那张 */
 export async function waitAsk(
   chrome: FakeChrome,
   sessionId: string,
   since: number,
   taken: Set<string> = new Set()
 ): Promise<ChromeAskRequest> {
-  const hit = await chrome.waitChatEvent('input_request', {
-    sessionId,
-    since,
-    match: (e) => !taken.has((e.request as ChromeAskRequest).id)
-  })
-  const request = hit.event.request as ChromeAskRequest
-  taken.add(request.id)
-  return request
+  await chrome.viewOf(sessionId)
+  const hit = await until(
+    () => chrome.asksSeen(sessionId, { since }).find((a) => !taken.has(a.ask.id)),
+    `an ask card reaches the side panel view of ${sessionId} (fake chrome ${chrome.installId})`,
+    60_000
+  )
+  taken.add(hit.ask.id)
+  return hit.ask as unknown as ChromeAskRequest
 }

@@ -138,7 +138,11 @@ class Client {
   /** 鉴权 + 握手成功 */
   async ready(over: Message = {}): Promise<void> {
     await this.auth()
-    expect(await this.hello(over)).toEqual({ type: 'welcome', protocol: 1, ok: true })
+    expect(await this.hello(over)).toEqual({
+      type: 'welcome',
+      protocol: CHROME_BRIDGE_PROTOCOL,
+      ok: true
+    })
   }
 
   /** 等一条满足条件的消息 */
@@ -319,7 +323,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     expect(c.closed).toBe(false)
   })
 
-  it('CBS-4 hello（协议 1）：welcome ok；连接就绪、info 齐全；onReady 恰一次且 openTabIds 只留整数；statuses 一条 ready；onChange 触发', async () => {
+  it('CBS-4 hello（当前协议）：welcome ok；连接就绪、info 齐全；onReady 恰一次且 openTabIds 只留整数；statuses 一条 ready；onChange 触发', async () => {
     const onReady = vi.fn()
     const server = await startServer({ onReady })
     const onChange = vi.fn()
@@ -328,7 +332,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     await c.auth()
 
     const welcome = await c.hello({ openTabIds: [1, '2', 3.5, null, 4] })
-    expect(welcome).toEqual({ type: 'welcome', protocol: 1, ok: true })
+    expect(welcome).toEqual({ type: 'welcome', protocol: CHROME_BRIDGE_PROTOCOL, ok: true })
 
     const conn = server.connectionFor('i1')!
     expect(conn.ready).toBe(true)
@@ -344,12 +348,14 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
       conn,
       expect.objectContaining({ installId: 'i1', runId: 'r1', openTabIds: [1, 4] })
     )
-    expect(server.statuses()).toEqual([{ ...conn.info, state: 'ready', protocol: 1 }])
+    expect(server.statuses()).toEqual([
+      { ...conn.info, state: 'ready', protocol: CHROME_BRIDGE_PROTOCOL }
+    ])
     expect(server.readyConnections()).toEqual([conn])
     expect(onChange).toHaveBeenCalled()
   })
 
-  it('CBS-5 hello 协议不符（2）：welcome ok=false / protocol-mismatch；statuses 记为 mismatch；不算就绪、不调 onReady；请求回 protocol-mismatch；断开不调 onClose', async () => {
+  it('CBS-5 hello 协议不符（99）：welcome ok=false / protocol-mismatch；statuses 记为 mismatch；不算就绪、不调 onReady；请求回 protocol-mismatch；断开不调 onClose', async () => {
     const onReady = vi.fn()
     const onClose = vi.fn()
     const onRequest = vi.fn(async () => 'never')
@@ -358,14 +364,14 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     const c = client()
     await c.auth()
 
-    expect(await c.hello({ protocol: 2 })).toEqual({
+    expect(await c.hello({ protocol: 99 })).toEqual({
       type: 'welcome',
-      protocol: 1,
+      protocol: CHROME_BRIDGE_PROTOCOL,
       ok: false,
       error: 'protocol-mismatch'
     })
     expect(server.statuses()).toEqual([
-      expect.objectContaining({ installId: 'i1', state: 'mismatch', protocol: 2 })
+      expect.objectContaining({ installId: 'i1', state: 'mismatch', protocol: 99 })
     ])
     expect(server.connectionFor('i1')).toBeUndefined()
     expect(server.readyConnections()).toEqual([])
@@ -415,7 +421,11 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
       expect(server.statuses()).toEqual([])
       expect(onReady).not.toHaveBeenCalled()
 
-      expect(await c.hello()).toEqual({ type: 'welcome', protocol: 1, ok: true })
+      expect(await c.hello()).toEqual({
+        type: 'welcome',
+        protocol: CHROME_BRIDGE_PROTOCOL,
+        ok: true
+      })
       expect(server.connectionFor('i1')?.ready).toBe(true)
     }
   )
@@ -679,7 +689,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     await b.auth()
     expect(await b.hello({ runId: 'r2' })).toEqual({
       type: 'welcome',
-      protocol: 1,
+      protocol: CHROME_BRIDGE_PROTOCOL,
       ok: false,
       error: 'already-connected'
     })
@@ -713,7 +723,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
 
     expect(welcome).toEqual({
       type: 'welcome',
-      protocol: 1,
+      protocol: CHROME_BRIDGE_PROTOCOL,
       ok: false,
       error: 'already-connected'
     })
@@ -787,9 +797,9 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
 
     const b = client()
     await b.auth()
-    expect(await b.hello({ protocol: 2, runId: 'r2' })).toEqual({
+    expect(await b.hello({ protocol: 99, runId: 'r2' })).toEqual({
       type: 'welcome',
-      protocol: 1,
+      protocol: CHROME_BRIDGE_PROTOCOL,
       ok: false,
       error: 'protocol-mismatch'
     })
@@ -807,7 +817,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     // 换个没人占的 installId：版本不符的照样登记（设置页要显示「请更新扩展」）
     const c = client()
     await c.auth()
-    await c.hello({ installId: 'i9', protocol: 2 })
+    await c.hello({ installId: 'i9', protocol: 99 })
     expect(server.statuses().map((s) => [s.installId, s.state])).toContainEqual(['i9', 'mismatch'])
   })
 
@@ -820,7 +830,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
 
     const b = client()
     await b.auth()
-    await b.hello({ protocol: 2, runId: 'r2' })
+    await b.hello({ protocol: 99, runId: 'r2' })
     b.close()
     await settle()
 
@@ -910,7 +920,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
 
     const mismatch = client()
     await mismatch.auth()
-    await mismatch.hello({ installId: 'i3', protocol: 2 })
+    await mismatch.hello({ installId: 'i3', protocol: 99 })
     mismatch.close()
     await vi.waitFor(() => expect(closed).toHaveLength(3), WAIT)
     expect(closed[2].info?.installId).toBe('i3')
@@ -943,7 +953,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
 
     const y = client()
     await y.auth()
-    await y.hello({ installId: 'iy', protocol: 2 })
+    await y.hello({ installId: 'iy', protocol: 99 })
     expect([a, b]).toEqual([2, 2])
 
     x.close()
@@ -1029,7 +1039,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
     now.mockReturnValue(2000)
     const c = client()
     await c.auth()
-    await c.hello({ installId: 'iC', protocol: 2 })
+    await c.hello({ installId: 'iC', protocol: 99 })
 
     expect(server.statuses().map((s) => [s.installId, s.connectedAt, s.state])).toEqual([
       ['iB', 3000, 'ready'],
@@ -1114,7 +1124,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
 
     const m = client()
     await m.auth()
-    await m.hello({ installId: 'i3', protocol: 2 })
+    await m.hello({ installId: 'i3', protocol: 99 })
     m.send(helloOf({ installId: 'i3', protocol: CHROME_BRIDGE_PROTOCOL }))
     m.send({ type: 'request', id: 'still-mismatch', method: 'm' })
     expect(await m.waitFor((msg) => msg.id === 'still-mismatch')).toEqual({
@@ -1249,7 +1259,7 @@ describe.skipIf(process.platform === 'win32')('ChromeBridgeServer —— 真 uni
 
     const m = client()
     await m.auth()
-    await m.hello({ installId: 'i3', protocol: 2 })
+    await m.hello({ installId: 'i3', protocol: 99 })
     await settle()
     expect(order).toHaveLength(5)
   })
@@ -1325,7 +1335,11 @@ describe('BridgeConnection —— 假 socket 控制字节边界与时钟', () =>
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledWith(a.conn)
     expect(b.conn.ready).toBe(true)
-    expect(written(b.sock)).toContainEqual({ type: 'welcome', protocol: 1, ok: true })
+    expect(written(b.sock)).toContainEqual({
+      type: 'welcome',
+      protocol: CHROME_BRIDGE_PROTOCOL,
+      ok: true
+    })
     expect(onReady).toHaveBeenCalledTimes(1)
     expect(server.connectionFor('i1')).toBe(b.conn)
   })
@@ -1351,7 +1365,7 @@ describe('BridgeConnection —— 假 socket 控制字节边界与时钟', () =>
     expect(c.conn.ready).toBe(false)
     expect(written(c.sock)).toContainEqual({
       type: 'welcome',
-      protocol: 1,
+      protocol: CHROME_BRIDGE_PROTOCOL,
       ok: false,
       error: 'already-connected'
     })

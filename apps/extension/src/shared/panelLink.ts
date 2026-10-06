@@ -40,3 +40,5 @@ export type WorkerToPanel =
   | { kind: 'response'; id: number; ok: boolean; result?: unknown; error?: string }
   | { kind: 'chat.event'; event: unknown }
   | { kind: 'app.event'; event: unknown }
+  /** 视图同步的一帧（`SyncFrame`，P3-09）—— 只发给挂着帧所属会话的侧边栏 */
+  | { kind: 'sync.frame'; frame: unknown }
