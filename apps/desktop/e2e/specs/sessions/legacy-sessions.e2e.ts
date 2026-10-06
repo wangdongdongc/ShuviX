@@ -10,7 +10,8 @@
  *
  * 第一组（一对实例 + 末尾再重启一次）：
  *   L-1  旧格式行画出冻结投影：工具块、压缩摘要卡、错误行
- *   L-2  横幅在、输入框禁用（placeholder 为空串）；硬发 `agent.prompt` 拿到 legacySessionReadOnly；
+ *   L-2  横幅在、输入框禁用（placeholder 为空串）；硬发 `agent.prompt` 拿到 legacySessionReadOnly（IPC 本身恒回
+ *        success，拒绝走该会话的 ChatEvent `error`）；
  *        横幅的 [新建对话] 在这一行的项目里建一条会话并选中它
  *   L-3  没有回退 / 重新生成 / 编辑控件；硬调 `message.rollback` 也回 false
  *   L-4  删除（侧栏 ⋮ → 删除 → 确认）带走行和 `.jsonl`
@@ -23,7 +24,8 @@
  *        （自己没有 notebookPath）照旧只读，自己有 notebookPath 的照样重置
  *   L-8  合法绑定的旧格式标签页会话在启动时经真的 `sessionService.delete` 删掉 —— 它的子会话、临时工作区、
  *        `.jsonl` 一起；绑定不合法（`tabId: -1`）的不删，照旧是一条只读旧格式行
- *   L-10 监视器的列表与自动标题都碰不到旧格式行
+ *   L-10 监视器的列表与自动标题都碰不到旧格式行（自动标题只给默认标题的会话派 titler，所以种了一条默认标题的
+ *        旧格式行；同时让一条默认标题的新格式会话发首条，证明 titler 真的在跑）
  *   L-7（重启两次）再重启一次是空操作：行（含 updatedAt）与会话目录逐字节不变，
  *        `LegacySwitchover` 那一行写 `reset=0 deleted=0 failed=0`
  *
