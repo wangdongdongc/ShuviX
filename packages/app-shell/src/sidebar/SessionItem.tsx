@@ -24,6 +24,11 @@ export interface SessionItemProps {
   session: { id: string; title: string }
   active: boolean
   isStreaming?: boolean
+  /**
+   * 上个进程退出时这条会话正在跑（P3-12，Q-P3-10 的侧栏圆点）：标题后一枚小圆点 + 悬浮提示。
+   * 在跑的会话不显示（转圈已经说明了一切）
+   */
+  interrupted?: boolean
   pendingCount?: number
   /** 专注模式下淡化（由宿主计算后传入） */
   dim?: boolean
@@ -49,6 +54,7 @@ export function SessionItem({
   session,
   active,
   isStreaming = false,
+  interrupted = false,
   pendingCount = 0,
   dim = false,
   isNotebook = false,
@@ -133,8 +139,18 @@ export function SessionItem({
             {subCount}
           </span>
         )}
+        {interrupted && !isStreaming && (
+          <span
+            data-interrupted=""
+            title={t('sidebar.interrupted')}
+            aria-label={t('sidebar.interrupted')}
+            className="shrink-0 ml-auto h-1.5 w-1.5 rounded-full bg-warning"
+          />
+        )}
         {pendingCount > 0 && (
-          <span className="flex items-center gap-1 ml-auto shrink-0">
+          <span
+            className={`flex items-center gap-1 shrink-0 ${interrupted && !isStreaming ? '' : 'ml-auto'}`}
+          >
             <span className="relative flex h-1.5 w-1.5">
               <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />

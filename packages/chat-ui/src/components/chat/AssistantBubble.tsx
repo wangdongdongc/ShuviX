@@ -23,6 +23,7 @@ import {
   selectStreamingToolCall,
   selectCompletedStreamingToolCalls,
   selectMcpConnecting,
+  selectActiveSessionView,
   type AssistantBlock,
   type AssistantMessage
 } from '../../stores/chatStore'
@@ -118,6 +119,45 @@ export const AssistantBubble = memo(function AssistantBubble({
   const liveThinking =
     isStreaming && hasThinkingContent(storeStreamingThinking) ? storeStreamingThinking : null
   const liveImages = isStreaming ? storeStreamingImages : []
+
+  // 「重试 ×N」（Q-P3-06 / PIN-21）：失败的尝试折叠掉，由随后的卡带上次数。一张卡覆盖几条消息就把
+  // 它们的次数加起来；流式中的卡读实时卡的 `metadata.retried`。实时卡落盘那一刻 store 先换、msgs 晚
+  // 一次渲染（同上面的 held）—— msgs 还是记下时那一组就接着用记下的次数，提示不闪
+  const liveRetriedCount = useChatStore((s) =>
+    isStreaming ? (selectActiveSessionView(s)?.live?.message.metadata?.retried?.count ?? 0) : 0
+  )
+  const liveRetriedError = useChatStore((s) =>
+    isStreaming
+      ? (selectActiveSessionView(s)?.live?.message.metadata?.retried?.lastError ?? '')
+      : ''
+  )
+  const [heldRetried, setHeldRetried] = useState<{
+    msgs: AssistantMessage[]
+    count: number
+    lastError: string
+  } | null>(null)
+  if (
+    liveRetriedCount > 0 &&
+    (heldRetried?.msgs !== msgs ||
+      heldRetried.count !== liveRetriedCount ||
+      heldRetried.lastError !== liveRetriedError)
+  ) {
+    setHeldRetried({ msgs, count: liveRetriedCount, lastError: liveRetriedError })
+  }
+  const live =
+    liveRetriedCount > 0
+      ? { count: liveRetriedCount, lastError: liveRetriedError }
+      : heldRetried && heldRetried.msgs === msgs
+        ? heldRetried
+        : null
+  let retriedCount = live?.count ?? 0
+  let retriedError = live?.lastError ?? ''
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const hint = msgs[i].metadata?.retried
+    if (!hint) continue
+    retriedCount += hint.count
+    if (!retriedError) retriedError = hint.lastError
+  }
   // 流式期间仍在缓冲的思考 —— 与落盘后同款折叠行，位置也一致（过程区末尾）
   const liveThinkingRow = liveThinking ? (
     <ThinkingBlock content={liveThinking} isGenerating={!displayContent && !streamingToolCall} />
@@ -224,6 +264,14 @@ export const AssistantBubble = memo(function AssistantBubble({
             </div>
           )
         })()}
+
+        {retriedCount > 0 && (
+          <div className="mt-1 text-[10px] text-text-tertiary">
+            <span data-retried-hint="" title={retriedError || undefined}>
+              {t('run.retriedHint', { count: retriedCount })}
+            </span>
+          </div>
+        )}
 
         {/* 操作行 —— 收在正文左下角，与用户消息气泡下方那行同形。
             仅在这条消息真有可操作项时渲染：流式期间全部按钮都不满足条件，

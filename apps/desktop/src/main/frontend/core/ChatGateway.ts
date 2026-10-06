@@ -55,6 +55,13 @@ export interface ChatGateway {
   /** 中止当前生成（部分内容由 harness 自行落成 entry，无需回传消息） */
   abort(sessionId: string): Promise<{ success: boolean }>
 
+  /**
+   * 继续被中断的工作（上个进程退出时正在跑的那一轮，P3-12），等它落定。只取打开着的会话、没开就 peek
+   * （存储在才打开，**从不创建**，PIN-16）；没有可打开的会话（不存在 / 旧格式 / 退出中）→ `{}`。
+   * 空闲且没被中断 → 运行时的严格无操作，`{}`。失败原样上交（`{ error, code }`）。
+   */
+  continue(sessionId: string): Promise<{ error?: string; code?: SubmitErrorCode }>
+
   // ─── 交互响应 ─────────────────────────────────
 
   /**

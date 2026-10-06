@@ -86,6 +86,22 @@ export function registerAgentHandlers(): void {
   )
 
   /**
+   * 继续被中断的工作（P3-12，PIN-17）：等这一轮落定才回（与 prompt 同口径），渲染端不靠它的时机改界面 ——
+   * 横幅跟着视图的运行状态走。`{}` → `{ success: true }`；失败 → `{ success: false, error, code }`。
+   */
+  ipcMain.handle('agent:continue', (_event, sessionId: string) =>
+    operationContext.run(createElectronContext(sessionId), async () => {
+      const result = await chatGateway.continue(sessionId)
+      if (result.error === undefined) return { success: true }
+      return {
+        success: false,
+        error: result.error,
+        ...(result.code === undefined ? {} : { code: result.code })
+      }
+    })
+  )
+
+  /**
    * 切换指定 session 的模型。会话已有运行时（含创建中 / 关停中）时拒绝：`success: false`、
    * 什么也不写，前端据此回拉真实状态。
    *

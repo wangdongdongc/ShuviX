@@ -39,3 +39,15 @@ export function writeSessionMirror(
 export function mirroredAgentLocked(sessionId: string): boolean {
   return sessionRecords.pickSettings(sessionId, ['agentLocked'])?.agentLocked === true
 }
+
+/**
+ * 界面读到的运行标记（`session.list` / `getById`，Q-P3-20 / PIN-19）：镜像说 `busy`、会话却**没在这个进程里
+ * 打开** —— 那一轮是上个进程留下的，在界面上就是「被中断」。打开着的会话镜像由 onRunStateChange 实时对账，
+ * 原样交出；`interrupted` / `idle` / 缺键也原样。纯函数：不改行、不碰宿主。
+ */
+export function effectiveRunState(
+  runState: SessionRunState | undefined,
+  isOpen: boolean
+): SessionRunState | undefined {
+  return runState === 'busy' && !isOpen ? 'interrupted' : runState
+}

@@ -71,7 +71,8 @@
     "noSessionsOnDay": "この日のセッションはありません",
     "newBotChat": "新しい Bot 会話",
     "botOverridden": "上書き済み",
-    "moreActions": "その他の操作"
+    "moreActions": "その他の操作",
+    "interrupted": "ShuviX の終了時に中断されました。開くと続行できます"
   },
   "transcript": {
     "untitled": "無題のセッション",
@@ -281,6 +282,23 @@
     "interactiveRerun": "再実行",
     "interactiveFrameTitle": "インタラクティブ図",
     "interactiveDesktopOnly": "インタラクティブ図は ShuviX デスクトップアプリでのみ動作します"
+  },
+  "run": {
+    "interruptedBanner": "この実行は ShuviX の終了時に中断されました",
+    "interruptedContinue": "続行",
+    "interruptedHint": "または新しいメッセージを送信してください。中断された実行は先に停止されます。",
+    "retrying": "{{seconds}} 秒後に再試行（{{attempt}} 回目の試行）",
+    "retryingNow": "再試行中（{{attempt}} 回目の試行）",
+    "retriedHint": "再試行 ×{{count}}",
+    "errorAfterRetries": "{{count}} 回の再試行後に失敗",
+    "compactingBlocking": "コンテキストを圧縮中：{{reason}}",
+    "compactingBackground": "バックグラウンドでコンテキストを圧縮中：{{reason}}",
+    "compactingReasonThreshold": "コンテキストの上限に近づいています",
+    "compactingReasonOverflow": "コンテキストがあふれました",
+    "compactingReasonManual": "手動で開始",
+    "compactingReasonUnknown": "処理中",
+    "compactingAttempt": "{{attempt}} 回目の試行",
+    "compactingRetry": "{{seconds}} 秒後に再試行"
   },
   "pendingInputs": {
     "title": "確認待ち {{count}}",

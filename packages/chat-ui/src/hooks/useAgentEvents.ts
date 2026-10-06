@@ -137,6 +137,10 @@ export function useAgentEvents(): void {
           settleSlots.current.delete(sid)
           // 只给没人订阅视图的会话置运行标记（订阅着的以视图为准，P3-08-30 / -40）
           store.markSessionRunning(sid, true)
+          // 列表里的「被中断」就地改掉（PIN-18）：镜像变化主进程不广播，侧栏圆点不能等下一次拉列表
+          if (store.sessions.some((s) => s.id === sid && s.settings?.runState === 'interrupted')) {
+            store.updateSessionSettings(sid, { runState: 'busy' })
+          }
           break
 
         case 'agent_end': {

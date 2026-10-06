@@ -168,6 +168,9 @@ const api = {
     /** 中止指定 session 的生成 */
     abort: (sessionId: string) => ipcRenderer.invoke('agent:abort', sessionId),
 
+    /** 继续被中断的工作（等这一轮落定才回；失败 → success:false + error/code） */
+    continue: (sessionId: string) => ipcRenderer.invoke('agent:continue', sessionId),
+
     /** 切换模型（会话已有 Agent 运行时则拒绝，success: false） */
     setModel: (params: AgentSetModelParams) => ipcRenderer.invoke('agent:setModel', params),
 

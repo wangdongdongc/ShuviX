@@ -52,9 +52,9 @@ import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStora
 import { agentService } from './agentService'
 // 仅在方法体内调用：几个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession, clearAgentScopedState, destroySessionRuntime } from './agentSession'
-import { getSessionHost } from './sessionHost'
+import { getSessionHost, peekSessionHost } from './sessionHost'
 import { peekSyncHub } from '../frontend/sync/syncWiring'
-import { mirroredAgentLocked } from './sessionMirror'
+import { effectiveRunState, mirroredAgentLocked } from './sessionMirror'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
 import { resolveProfileModelSpec } from '../agents/agentHost'
 import {
@@ -179,7 +179,23 @@ export class SessionService {
    * 不是用户的一条会话记录（寿命跟着标签页，见 chromeTabSession.ts）。
    */
   list(): Session[] {
-    return sessionRecords.findAll().filter((s) => !isChromeTabSessionSettings(s.settings))
+    return sessionRecords
+      .findAll()
+      .filter((s) => !isChromeTabSessionSettings(s.settings))
+      .map((s) => this.withEffectiveRunState(s))
+  }
+
+  /**
+   * 运行标记换成界面口径（`effectiveRunState`，P3-12）：镜像 `busy` 而会话没在本进程打开 → `interrupted`。
+   * 只读：宿主还没建就不建（那时没有任何会话开着），不 open / peek，不写行。
+   */
+  private withEffectiveRunState<T extends Session>(session: T): T {
+    const runState = session.settings?.runState
+    if (runState !== 'busy') return session
+    const isOpen = peekSessionHost()?.get(session.id) !== undefined
+    const effective = effectiveRunState(runState, isOpen)
+    if (effective === runState) return session
+    return { ...session, settings: { ...session.settings, runState: effective } }
   }
 
   /**
@@ -195,7 +211,7 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
     return {
-      ...session,
+      ...this.withEffectiveRunState(session),
       workingDirectory: workingDirectoryOf(id, project?.path, session.settings)
     }
   }

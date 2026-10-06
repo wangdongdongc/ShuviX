@@ -136,6 +136,15 @@ export class DefaultChatGateway implements ChatGateway {
     return { success: true }
   }
 
+  async continue(sessionId: string): Promise<{ error?: string; code?: SubmitErrorCode }> {
+    // 只 get / peek（PIN-16）：「继续」作用在一条已经存在的存储上，绝不为它建存储
+    const session =
+      sessionService.getAgentSession(sessionId) ??
+      (await sessionService.peekAgentSession(sessionId))
+    if (!session) return {}
+    return await session.continue()
+  }
+
   // ─── 交互响应 ─────────────────────────────────
 
   respondToInput(
