@@ -43,6 +43,11 @@ export function createPanelChannelApi(link: PanelLink): SessionChannelApi {
       followUp: (params) => call('agent.followUp', params),
       nextTurn: (params) => call('agent.nextTurn', params),
       abort: (sessionId) => call('agent.abort', sessionId),
+      // TODO(pi-durable P3-09)：白名单加上 `agent.continue` 之后换成 `call('agent.continue', sessionId)`
+      continue: async () => ({
+        success: false,
+        error: 'Continue is not available from the Chrome side panel yet.'
+      }),
       respondToInput: (params) => call('agent.respondToInput', params),
       onEvent: (callback) =>
         link.onChatEvent((event) => callback(event as Parameters<typeof callback>[0]))

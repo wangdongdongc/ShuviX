@@ -5,6 +5,7 @@ import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { KnowledgeEntry, KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
+import type { AgentContinueResult } from '@shuvix/chat-protocol/chatApi'
 import type {
   AgentInitParams,
   AgentInitResult,
@@ -355,6 +356,8 @@ declare global {
       followUp: (params: AgentFollowUpParams) => Promise<{ success: boolean }>
       nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
       abort: (sessionId: string) => Promise<{ success: boolean }>
+      /** 继续被中断的工作（等这一轮落定才回；失败 → success:false + error/code） */
+      continue: (sessionId: string) => Promise<AgentContinueResult>
       /** 切换模型（会话已有 Agent 运行时则拒绝，success: false） */
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
       /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息重建） */

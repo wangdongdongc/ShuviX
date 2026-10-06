@@ -551,6 +551,13 @@ export interface BuiltinToolDefinition {
 //
 // 渠道端只需实现 SessionChannelApi；chat-ui 对话核心仅依赖它，宿主功能经 getHostApi() 降级。
 
+/** `agent.continue` 的回包：`code` 是运行时的失败分类（no_model / model_error / closed …） */
+export interface AgentContinueResult {
+  success: boolean
+  error?: string
+  code?: string
+}
+
 /**
  * 单会话渠道契约 —— 渲染并驱动**一个**会话所需的最小后端能力（只读 + 发消息）。
  * 注意：这里**没有**任何 setModel / 改配置 / 新建删除会话 / 应用设置 —— 渠道端无权这些。
@@ -576,6 +583,12 @@ export interface SessionChannelApi {
     /** 排队到下一次 prompt 之前（pi nextTurn 队列；不被 abort 清空） */
     nextTurn: (params: AgentNextTurnParams) => Promise<{ success: boolean }>
     abort: (sessionId: string) => Promise<{ success: boolean }>
+    /**
+     * 继续被中断的工作（上个进程退出时正在跑的那一轮，P3-12）：等它落定才回。空闲且没被中断 = 无操作
+     * （`{ success: true }`）；失败 → `{ success: false, error, code }`。界面不靠它的时机改形态 ——
+     * 横幅跟着视图的 `run.state` 走（PIN-17）
+     */
+    continue: (sessionId: string) => Promise<AgentContinueResult>
     respondToInput: (params: {
       sessionId: string
       requestId: string

@@ -5,6 +5,7 @@
  *   D10-26 session.prompt-accepted：受理那一刻（onAdmitted）恰发一次；被拒从不发；日历按 onAdmitted 的
  *          entryId 入账（P3-07，不再是随机键）
  *   D10-27 session.turn-completed：受理过的发送落定之后发；被拒不发；facts 为空不发、抛错不影响结果
+ *   P3-12-05 continue 的埋点只在调用前被中断时发（PIN-15）；空闲无操作 / no_model 不发，no_model 报给界面
  *   D10-28 steer / followUp 委托；nextTurn 垫成 followUp；被拒 → 带原文的 reject
  *   D10-29 notify 只委托一次（门面没有自己的合并定时器）
  *   D10-30 其余委托：abort / setThinkingLevel / continue / 询问；isStreaming / 挂起询问现读
@@ -224,13 +225,40 @@ describe('D10-27 session.turn-completed', () => {
     )
   })
 
-  it('D10-27 continue() 落定之后同样发（PIN-19），结果原样上交', async () => {
-    const { durable, session } = facade()
+  it('D10-27 / P3-12-05 被中断时 continue() 落定之后同样发（PIN-19 / PIN-15），结果原样上交', async () => {
+    const { durable, session } = facade({ interrupted: true })
     durable.continueResult = {}
     expect(await session.continue()).toEqual({})
     await flush()
     expect(fired('session.turn-completed')).toHaveLength(1)
     expect(durable.callsOf('continue')).toHaveLength(1)
+  })
+
+  it('P3-12-05 没被中断：continue() 是无操作，结果 {}，不发埋点（PIN-15）', async () => {
+    const { durable, session } = facade()
+    durable.continueResult = {}
+    expect(await session.continue()).toEqual({})
+    await flush()
+    expect(fired('session.turn-completed')).toEqual([])
+    expect(durable.callsOf('continue')).toHaveLength(1)
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+
+  it('P3-12-05 被中断但模型被拒（no_model）：报给界面，不发埋点', async () => {
+    const { durable, session } = facade({ interrupted: true })
+    durable.continueResult = { error: 'Provider "Faux" model nope', code: 'no_model' }
+    expect(await session.continue()).toEqual({
+      error: 'Provider "Faux" model nope',
+      code: 'no_model'
+    })
+    await flush()
+    expect(fired('session.turn-completed')).toEqual([])
+    expect(mocks.broadcast).toHaveBeenCalledTimes(1)
+    expect(mocks.broadcast.mock.calls[0]![0]).toEqual({
+      type: 'error',
+      sessionId: SID,
+      error: 'chat.agentNoModel:Provider "Faux" model nope'
+    })
   })
 })
 

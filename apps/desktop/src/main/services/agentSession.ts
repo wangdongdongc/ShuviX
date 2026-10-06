@@ -84,7 +84,8 @@ const facades = new WeakMap<DurableSession, AgentSession>()
  *
  * 门面只留桌面自己的事：
  *  - hook 埋点：`session.prompt-accepted`（输入被受理那一刻，`onAdmitted`）与 `session.turn-completed`
- *    （受理过的发送 / `continue()` 落定之后；被拒的不发，自动续跑不发 —— PIN-19），payload 是会话事实；
+ *    （受理过的发送 / 续上被中断工作的 `continue()` 落定之后；被拒的不发，自动续跑不发，空闲上的
+ *    `continue()` 无操作不发 —— PIN-19 / P3-12 PIN-15），payload 是会话事实；
  *  - 用户条目落下即入账活跃时间与日历（P3-07 PIN-15/16）：按 `pi.user` 条目 id（= 界面消息 id）记 ——
  *    当场落下的在 `onAdmitted{entryId}`，排进队列的在 `onPlaced`（被撤回的从不记）；prompt / steer /
  *    followUp 都记；
@@ -176,11 +177,16 @@ export class AgentSession {
     await this.followUp(text)
   }
 
-  /** 继续被中断的工作（上个进程中途退出留下的 run）；空闲且没被中断时立刻返回 `{}` */
+  /**
+   * 继续被中断的工作（上个进程中途退出留下的 run）；空闲且没被中断时立刻返回 `{}`。
+   * 轮结束埋点只在**调用前确实被中断**时发（P3-12 PIN-15）：空闲上的无操作不是一轮，不该替它发
+   * `session.turn-completed`。
+   */
   async continue(): Promise<SubmitResult> {
     await sessionSignalsReady(this.sessionId)
+    const wasInterrupted = this.durable.isInterrupted()
     const result = await this.durable.continue()
-    if (!result.error) {
+    if (wasInterrupted && !result.error) {
       void this.fireTurnCompleted().catch((err) => log.warn(`turn-completed 埋点失败: ${err}`))
     }
     this.reportFailure(result)

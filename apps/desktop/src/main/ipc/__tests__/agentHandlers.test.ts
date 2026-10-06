@@ -13,6 +13,8 @@
  *   P3-13-19 `agentMonitor:list` 把服务的结果原样交回（每行都是纯 JSON）。
  *   P3-06-31 `agent:getInfo` 在 `createElectronContext(sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
  *           网关；网关的 null 原样交回。
+ *   P3-12-07 `agent:continue` 在 `createElectronContext(sessionId)` 里把 sessionId 交给网关，等它落定才回（PIN-17）；
+ *           `{}` → `{success:true}`，`{error, code}` → `{success:false, error, code}`。
  *   P3-08-60 `agent:respondToInput` 带上答题方 `ipc:<webContentsId>`（PIN-20），只交给网关，回 {success:true}。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
@@ -29,7 +31,8 @@ const state = vi.hoisted(() => ({
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
     listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
     getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>(),
-    respondToInput: vi.fn()
+    respondToInput: vi.fn(),
+    continue: vi.fn<(sessionId: string) => Promise<{ error?: string; code?: string }>>()
   },
   contexts: [] as unknown[],
   /** operationContext.run 的嵌套深度（>0 = 在请求上下文里） */
@@ -351,5 +354,40 @@ describe('P3-13-19 agentMonitor:list', () => {
       expect(structuredClone(row)).toEqual(row)
       expect(JSON.parse(JSON.stringify(row))).toEqual(row)
     }
+  })
+})
+
+describe('P3-12-07 agent:continue', () => {
+  it('P3-12-07 forwards sessionId inside the request context and resolves only after the run settles', async () => {
+    let finish!: (value: { error?: string }) => void
+    state.gateway.continue.mockReset().mockImplementation(() => {
+      expect(state.runDepth).toBe(1)
+      return new Promise((resolve) => (finish = resolve))
+    })
+    let result: unknown = 'pending'
+    const pending = Promise.resolve(invoke('agent:continue', SID)).then((r) => {
+      result = r
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(state.gateway.continue.mock.calls).toEqual([[SID]])
+    expect(state.contexts).toEqual([SID])
+    expect(result).toBe('pending')
+    finish({})
+    await pending
+    expect(result).toEqual({ success: true })
+  })
+
+  it('P3-12-07 an error result → { success: false, error, code }', async () => {
+    state.gateway.continue
+      .mockReset()
+      .mockResolvedValue({ error: 'Provider "Faux" model nope', code: 'no_model' })
+    await expect(invoke('agent:continue', SID)).resolves.toEqual({
+      success: false,
+      error: 'Provider "Faux" model nope',
+      code: 'no_model'
+    })
+    state.gateway.continue.mockReset().mockResolvedValue({ error: 'boom' })
+    await expect(invoke('agent:continue', SID)).resolves.toEqual({ success: false, error: 'boom' })
   })
 })
