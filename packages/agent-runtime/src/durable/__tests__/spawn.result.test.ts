@@ -5,10 +5,12 @@
  */
 import { fauxText, fauxThinking, fauxToolCall } from '@earendil-works/pi-ai'
 import { type AssistantMessage } from '@earendil-works/pi-ai'
+import { AssistantEntry, CompactionEntry, type EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
+import { extractSpawnResult } from '../spawn'
 import { answer, assistantWith, callTool, modelError } from './support/faux'
-import { registerHostCleanup } from './support/host'
+import { registerHostCleanup, TEST_SETTINGS_OVERRIDES } from './support/host'
 import {
   callAgent,
   dispatchTask,
@@ -126,5 +128,125 @@ describe('SpawnCoordinator · submit and wait', () => {
     const lines = await transcript((await d.session.harness.conversation(C, BG))!)
     expect(lines.at(-1)).toContain('Tool hold was aborted')
     expect(d.t.kit.callCount).toBe(3)
+  })
+})
+
+// ─── P3-16 裁定：重试收复之后不再带 `error=` 注记（与 J5-02 的压缩收复同一处理） ───
+
+const RETRYABLE = 'overloaded_error: Overloaded'
+
+/** 转写里的一条 assistant 条目（只填抽取会读的字段） */
+function assistantEntry(id: number, message: AssistantMessage, byTaskId?: number): EntryRecord {
+  return {
+    id,
+    kind: AssistantEntry.kind,
+    model: [message],
+    ...(byTaskId === undefined ? {} : { byTaskId })
+  } as unknown as EntryRecord
+}
+
+function compactionEntry(id: number): EntryRecord {
+  return { id, kind: CompactionEntry.kind } as unknown as EntryRecord
+}
+
+const failedWith = (text: string, error = RETRYABLE): AssistantMessage =>
+  assistantWith(text ? [fauxText(text)] : [], { stopReason: 'error', errorMessage: error })
+
+describe('P3-16 extractSpawnResult · a retry that recovered drops its error note', () => {
+  const rows: [string, EntryRecord[], string][] = [
+    [
+      'a failed attempt, then success in the same task: no note',
+      [assistantEntry(1, modelError(RETRYABLE), 7), assistantEntry(2, answer('found'), 7)],
+      'found'
+    ],
+    [
+      'two failed attempts with partial text, then success: the partial text never wins, no note',
+      [
+        assistantEntry(1, failedWith('half'), 7),
+        assistantEntry(2, failedWith('half again'), 7),
+        assistantEntry(3, answer('found'), 7)
+      ],
+      'found'
+    ],
+    [
+      'a recovered attempt is not counted and its partial text is not the answer',
+      [assistantEntry(1, failedWith('half'), 7), assistantEntry(2, answer(''), 7)],
+      'Agent did not produce a final text response (1 assistant message(s), 0 tool call(s)). stopReason=stop.'
+    ],
+    [
+      'the final attempt failed after a retry: the note stays',
+      [assistantEntry(1, modelError(RETRYABLE), 7), assistantEntry(2, failedWith('half'), 7)],
+      `half\n\n[Note] stopReason=error; error=${RETRYABLE}`
+    ],
+    [
+      'the final attempt failed with no text: the error sentence stays, the retried attempt is not counted',
+      [assistantEntry(1, modelError(RETRYABLE), 7), assistantEntry(2, modelError(RETRYABLE), 7)],
+      `Agent did not produce a final text response (1 assistant message(s), 0 tool call(s)). stopReason=error. Model errorMessage: ${RETRYABLE}.`
+    ],
+    [
+      'an error in an earlier task is that task’s final attempt: the note stays (only the same task folds)',
+      [assistantEntry(1, failedWith('half'), 7), assistantEntry(2, answer('next'), 8)],
+      `next\n\n[Note] error=${RETRYABLE}`
+    ],
+    [
+      'entries without byTaskId never fold',
+      [assistantEntry(1, failedWith('half')), assistantEntry(2, answer('found'))],
+      `found\n\n[Note] error=${RETRYABLE}`
+    ],
+    [
+      'J5-02 unchanged: an error before a compaction entry carries no note',
+      [assistantEntry(1, modelError('prompt is too long')), compactionEntry(2), assistantEntry(3, answer('ok'))],
+      'ok'
+    ]
+  ]
+
+  it.each(rows)('P3-16-01 %s', (_row, entries, expected) => {
+    expect(extractSpawnResult(entries)).toBe(expected)
+  })
+
+  it('P3-16-01 execError is still noted after a recovered retry', () => {
+    const entries = [
+      assistantEntry(1, modelError(RETRYABLE), 7),
+      assistantEntry(2, answer('found'), 7)
+    ]
+    expect(extractSpawnResult(entries, 'boom')).toBe('found\n\n[Note] execError=boom')
+  })
+})
+
+describe('P3-16 spawn · a child retry, end to end', () => {
+  // 重试退避按 Harness 的 `now` 睡：宿主 D 的定格时钟会让退避永远到不了，这里换成走着的
+  const retrying = (maxRetries: number): Parameters<typeof hostD>[0] => ({
+    host: {
+      now: () => Date.now(),
+      settingsOverrides: {
+        ...TEST_SETTINGS_OVERRIDES,
+        retry: { enabled: true, baseDelayMs: 1, maxRetries }
+      }
+    }
+  })
+
+  it('P3-16-02 the child retries a transient error and recovers: the answer has no note, no error; the failed attempt is in the transcript', async () => {
+    const d = await hostD(retrying(3))
+    d.t.kit.queue(callAgent('explore', 'find X'), modelError(RETRYABLE), answer('found'), answer('done'))
+    expect(await d.session.submitUser('go')).toEqual({})
+    const outcome = d.outcomes[0]!
+    expect(outcome.result).toBe('found')
+    expect('error' in outcome).toBe(false)
+    const lines = await transcript((await d.session.harness.conversation(outcome.conversationId!, BG))!)
+    expect(lines.filter((line) => line.startsWith('pi.assistant:'))).toHaveLength(2)
+  })
+
+  it('P3-16-03 the child’s final attempt fails after retrying: error set, the note stays', async () => {
+    const d = await hostD(retrying(1))
+    d.t.kit.queue(
+      callAgent('explore', 'find X'),
+      modelError(RETRYABLE),
+      failedWith('half'),
+      answer('done')
+    )
+    expect(await d.session.submitUser('go')).toEqual({})
+    const outcome = d.outcomes[0]!
+    expect(outcome.error).toBe(RETRYABLE)
+    expect(outcome.result).toBe(`half\n\n[Note] stopReason=error; error=${RETRYABLE}`)
   })
 })
