@@ -705,12 +705,15 @@ export {
 } from './durable/transcriptDigest'
 // 界面投影（phase 3，纯函数）：活上下文 + pi.live / pi.inbox + 显示侧车 + 询问 + 运行状态 → SessionView /
 // AgentView；与转写摘要共用的显示侧车解析与压缩外壳也在这里导出
+// 长期投影的结构共享（P4-09b）：`ProjectionMemo` 逐帧传给它们，没变的部分交回上一次的对象
 export {
+  ProjectionMemo,
   projectAgentView,
   projectSessionView,
   renderHarnessDiagnostics,
   type AgentProjectionMeta,
   type DisplayByEntry,
+  type ProjectionMemoStats,
   type QueueDisplay,
   type SessionProjectionMeta
 } from './durable/projection/project'
