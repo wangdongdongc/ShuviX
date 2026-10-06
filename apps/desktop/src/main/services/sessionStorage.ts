@@ -228,7 +228,7 @@ export async function readSessionRunConfig(sessionId: string): Promise<SessionRu
 }
 
 /** 记下会话选定的模型（选择器 / 子会话继承父会话） */
-export async function appendModelChange(
+export async function recordSessionModel(
   sessionId: string,
   provider: string,
   modelId: string
@@ -237,7 +237,7 @@ export async function appendModelChange(
 }
 
 /** 记下会话选定的思考档位 */
-export async function appendThinkingLevelChange(
+export async function recordSessionThinkingLevel(
   sessionId: string,
   thinkingLevel: string
 ): Promise<void> {

@@ -2,8 +2,8 @@
  * sessionStorage —— 桌面会话存储的路由（SessionHost 的 openStorage / storageExists / deleteStorage）。
  *
  * 契约：
- *   SS-1  运行配置存会话设置：没设过 → 三项都是 null；appendModelChange 写 `settings.model`
- *         （`{provider, modelId}`）、appendThinkingLevelChange 写 `settings.thinkingLevel`，
+ *   SS-1  运行配置存会话设置：没设过 → 三项都是 null；recordSessionModel 写 `settings.model`
+ *         （`{provider, modelId}`）、recordSessionThinkingLevel 写 `settings.thinkingLevel`，
  *         readSessionRunConfig 读回；后写的覆盖先写的；设置里别的键原样留着。
  *         持久会话与内存会话同一口径（都经 sessionRecords）。
  *   SS-3  readLegacyTranscript：没有 `.jsonl` → null；有一份合法的 v3 文本 → 渲染出界面消息。
@@ -51,8 +51,8 @@ import type { Session } from '../../dao/types'
 import { sessionRecords } from '../sessionRecords'
 import {
   SessionStorageUnavailableError,
-  appendModelChange,
-  appendThinkingLevelChange,
+  recordSessionModel,
+  recordSessionThinkingLevel,
   clearMemoryStoragesForTests,
   deleteSessionStorage,
   durableStoragePath,
@@ -153,7 +153,7 @@ describe.each([
   it('写进 settings.model / settings.thinkingLevel 并读回；后写的覆盖；别的键不动', async () => {
     sessionRecords.insert(session('s1', { settings: { enabledTools: ['mcp:ssh'] } }), opt)
 
-    await appendModelChange('s1', 'prov-a', 'm-a')
+    await recordSessionModel('s1', 'prov-a', 'm-a')
     expect(sessionRecords.pickSettings('s1', ['model'])?.model).toEqual({
       provider: 'prov-a',
       modelId: 'm-a'
@@ -164,8 +164,8 @@ describe.each([
       thinkingLevel: null
     })
 
-    await appendThinkingLevelChange('s1', 'high')
-    await appendModelChange('s1', 'prov-b', 'm-b')
+    await recordSessionThinkingLevel('s1', 'high')
+    await recordSessionModel('s1', 'prov-b', 'm-b')
     await expect(readSessionRunConfig('s1')).resolves.toEqual({
       provider: 'prov-b',
       model: 'm-b',

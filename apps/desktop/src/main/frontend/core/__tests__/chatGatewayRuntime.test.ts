@@ -12,7 +12,7 @@
  *         它是会话里勾的能力，不是谁的默认（档案取真的内置 md，四种形态外加 coding）。
  *
  * 外加会话模型与运行时的写入口（ML-U-2..6）：
- *   ML-U-2/3/4  setModel：没有运行时 → 往会话树追加 model_change（恰一次、只三个参数）、答 true；
+ *   ML-U-2/3/4  setModel：没有运行时 → recordSessionModel 写会话设置（恰一次、只三个参数）、答 true；
  *               有运行时（含创建中 / 关停中，即 hasAgentRuntime）→ 什么也不写、不碰运行时、不广播、
  *               答 false；追加失败 → reject；
  *   ML-U-5      setThinkingLevel：会话设置恒写；会话开着再现场交给它（锁着但没开着 → peek 再给，D10-50）；
@@ -33,8 +33,8 @@ const mocks = vi.hoisted(() => ({
   hasAgentRuntime: vi.fn<(sessionId: string) => boolean>(),
   invalidateAgent: vi.fn<(sessionId: string) => Promise<void>>(),
   getAgentSession: vi.fn(),
-  appendModelChange: vi.fn<(sessionId: string, provider: string, model: string) => Promise<void>>(),
-  appendThinkingLevelChange: vi.fn<(sessionId: string, level: string) => Promise<void>>(),
+  recordSessionModel: vi.fn<(sessionId: string, provider: string, model: string) => Promise<void>>(),
+  recordSessionThinkingLevel: vi.fn<(sessionId: string, level: string) => Promise<void>>(),
   messageClear: vi.fn(),
   sshRuntimeStatuses: vi.fn<(sessionId: string) => Record<string, RuntimeStatus>>(),
   sshDisconnectRuntime:
@@ -71,8 +71,8 @@ vi.mock('../../../services/messageService', () => ({
   messageService: { clear: mocks.messageClear }
 }))
 vi.mock('../../../services/sessionStorage', () => ({
-  appendModelChange: mocks.appendModelChange,
-  appendThinkingLevelChange: mocks.appendThinkingLevelChange
+  recordSessionModel: mocks.recordSessionModel,
+  recordSessionThinkingLevel: mocks.recordSessionThinkingLevel
 }))
 vi.mock('../../../services/userInputBroker', () => ({
   respondToUserInput: mocks.respondToUserInput
@@ -136,8 +136,8 @@ beforeEach(() => {
     mocks.hasAgentRuntime,
     mocks.invalidateAgent,
     mocks.getAgentSession,
-    mocks.appendModelChange,
-    mocks.appendThinkingLevelChange,
+    mocks.recordSessionModel,
+    mocks.recordSessionThinkingLevel,
     mocks.messageClear,
     mocks.sshRuntimeStatuses,
     mocks.sshDisconnectRuntime
@@ -151,8 +151,8 @@ beforeEach(() => {
   mocks.hasAgentRuntime.mockReturnValue(false)
   mocks.invalidateAgent.mockResolvedValue(undefined)
   mocks.getAgentSession.mockReturnValue(undefined)
-  mocks.appendModelChange.mockResolvedValue(undefined)
-  mocks.appendThinkingLevelChange.mockResolvedValue(undefined)
+  mocks.recordSessionModel.mockResolvedValue(undefined)
+  mocks.recordSessionThinkingLevel.mockResolvedValue(undefined)
   mocks.mcpInfos = []
   mocks.builtinNames = ['read', 'bash']
 })
@@ -292,19 +292,19 @@ describe('DefaultChatGateway.listTools —— 内置 database server 那一行',
 // ─── 会话模型与运行时（ML-U-2..6） ──────────────────────────────────────────
 
 describe('DefaultChatGateway.setModel —— 只在没有运行时的时候写', () => {
-  it('ML-U-2 没有运行时 → 往会话树追加 model_change 恰一次（只这三个参数），答 true', async () => {
+  it('ML-U-2 没有运行时 → recordSessionModel 恰一次（只这三个参数），答 true', async () => {
     mocks.hasAgentRuntime.mockReturnValue(false)
 
     await expect(chatGateway.setModel(SID, 'prov', 'model-b')).resolves.toBe(true)
     expect(mocks.hasAgentRuntime).toHaveBeenCalledWith(SID)
-    expect(mocks.appendModelChange).toHaveBeenCalledTimes(1)
-    expect(mocks.appendModelChange.mock.calls[0]).toEqual([SID, 'prov', 'model-b'])
+    expect(mocks.recordSessionModel).toHaveBeenCalledTimes(1)
+    expect(mocks.recordSessionModel.mock.calls[0]).toEqual([SID, 'prov', 'model-b'])
     expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 
   it('ML-U-2 写入落定之前不答：追加挂着时 setModel 也挂着', async () => {
     let finish!: () => void
-    mocks.appendModelChange.mockReturnValue(new Promise<void>((r) => (finish = r)))
+    mocks.recordSessionModel.mockReturnValue(new Promise<void>((r) => (finish = r)))
     let settled = false
     const pending = chatGateway.setModel(SID, 'prov', 'model-b').then((v) => {
       settled = true
@@ -321,16 +321,16 @@ describe('DefaultChatGateway.setModel —— 只在没有运行时的时候写',
     mocks.hasAgentRuntime.mockReturnValue(true)
 
     await expect(chatGateway.setModel(SID, 'prov', 'model-b')).resolves.toBe(false)
-    expect(mocks.appendModelChange).not.toHaveBeenCalled()
+    expect(mocks.recordSessionModel).not.toHaveBeenCalled()
     expect(mocks.getAgentSession).not.toHaveBeenCalled()
     expect(mocks.invalidateAgent).not.toHaveBeenCalled()
     expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 
-  it('ML-U-4 追加 model_change 失败 → setModel reject（错误原样上交，不吞成 false）', async () => {
-    mocks.appendModelChange.mockRejectedValue(new Error('tree write failed'))
+  it('ML-U-4 recordSessionModel 失败 → setModel reject（错误原样上交，不吞成 false）', async () => {
+    mocks.recordSessionModel.mockRejectedValue(new Error('settings write failed'))
 
-    await expect(chatGateway.setModel(SID, 'prov', 'model-b')).rejects.toThrow('tree write failed')
+    await expect(chatGateway.setModel(SID, 'prov', 'model-b')).rejects.toThrow('settings write failed')
   })
 })
 
@@ -345,15 +345,15 @@ describe('DefaultChatGateway.setThinkingLevel —— 运行期照样可改', () 
     expect(agent.setThinkingLevel).toHaveBeenCalledTimes(1)
     expect(agent.setThinkingLevel).toHaveBeenCalledWith('high')
     // 会话设置是事实源：下一次创建 agent、选择器都读它
-    expect(mocks.appendThinkingLevelChange.mock.calls).toEqual([[SID, 'high']])
+    expect(mocks.recordSessionThinkingLevel.mock.calls).toEqual([[SID, 'high']])
   })
 
   it('ML-U-5 没有运行时 → 只写会话设置', async () => {
     mocks.getAgentSession.mockReturnValue(undefined)
 
     await chatGateway.setThinkingLevel(SID, 'low')
-    expect(mocks.appendThinkingLevelChange).toHaveBeenCalledTimes(1)
-    expect(mocks.appendThinkingLevelChange.mock.calls[0]).toEqual([SID, 'low'])
+    expect(mocks.recordSessionThinkingLevel).toHaveBeenCalledTimes(1)
+    expect(mocks.recordSessionThinkingLevel.mock.calls[0]).toEqual([SID, 'low'])
   })
 })
 

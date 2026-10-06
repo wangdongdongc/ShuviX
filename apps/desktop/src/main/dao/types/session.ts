@@ -4,8 +4,8 @@ import type { SessionStorageKind } from '@shuvix/chat-protocol/sessionStorageKin
 /**
  * 模型相关元数据。
  *
- * 已不再落库（v15 删掉了 sessions.modelMetadata）——唯一事实源是会话树上的
- * thinking_level_change entry。这个类型保留是因为它仍是 `agent.init` 返回给前端的形状。
+ * 已不再落库（v15 删掉了 sessions.modelMetadata）——思考档位的事实源是会话设置
+ * `settings.thinkingLevel`。这个类型保留是因为它仍是 `agent.init` 返回给前端的形状。
  */
 export interface SessionModelMetadata {
   /** 思考深度 */
@@ -36,8 +36,8 @@ export interface SessionSettings {
   knowledgeBases?: string[]
   /**
    * 这条会话绑定的 bot（`~/.shuvix/bots/<name>.md`）。有值即为 bot 会话 —— 一条**普通有根会话**：
-   * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）经 systemContext 追加到它的系统提示词
-   * 末尾。创建那一刻定死，不可换绑（换个 bot 就是另开一条会话 —— 这条会话的历史全是那个 bot 说的话）。
+   * 根 Agent 的档案是基座 `bot`，那份 md 的正文（人设与记忆）是它系统提示词里活的 `bot_profile` 段落
+   * （`shuvix.prompt.bot`，每次请求现解析）。创建那一刻定死，不可换绑（换个 bot 就是另开一条会话 —— 这条会话的历史全是那个 bot 说的话）。
    * 判定一律经 chat-protocol `botSession.ts` 的 `isBotSessionSettings` / `boundBotOf`。
    */
   bot?: string
@@ -82,11 +82,11 @@ export interface SessionSettings {
   chromeTab?: ChromeTabBinding
   /**
    * 这条会话选定的模型 —— pi-durable 起运行配置的事实源（旧 v3 会话树上的 model_change 只读不写）。
-   * 写入口：sessionStorage.appendModelChange（选择器 / 子会话继承父会话）。模型选择器直接读它，
+   * 写入口：sessionStorage.recordSessionModel（选择器 / 子会话继承父会话）。模型选择器直接读它，
    * 不必为一个下拉框打开会话存储。
    */
   model?: SessionModelSelection
-  /** 这条会话选定的思考档位（同上；写入口 sessionStorage.appendThinkingLevelChange） */
+  /** 这条会话选定的思考档位（同上；写入口 sessionStorage.recordSessionThinkingLevel） */
   thinkingLevel?: string
   /**
    * 锁镜像：这条会话此刻有没有 agent（pi-durable 的锁记录在会话存储里，这里只是给界面便宜地读的一份

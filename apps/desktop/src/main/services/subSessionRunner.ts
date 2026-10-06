@@ -34,7 +34,7 @@ import { chatGateway } from '../frontend/core'
 import { sessionService } from './sessionService'
 import { taskRegistry } from './taskRegistry'
 import { messageService } from './messageService'
-import { appendModelChange, appendThinkingLevelChange, isDurableSession } from './sessionStorage'
+import { recordSessionModel, recordSessionThinkingLevel, isDurableSession } from './sessionStorage'
 import { sessionRecords } from './sessionRecords'
 import type { AgentSession } from './agentSession'
 import type { DrivenSettledEvent, SubAgentModelConfig, SubmitResult } from '@shuvix/agent-runtime'
@@ -386,10 +386,10 @@ class SubSessionRunner {
     const parent = await sessionService.resolveRunConfig(parentId)
     if (!parent) return
     if (!declared?.model && parent.model) {
-      await appendModelChange(childId, parent.model.provider, parent.model.model)
+      await recordSessionModel(childId, parent.model.provider, parent.model.model)
     }
     if (!declared?.thinkingLevel) {
-      await appendThinkingLevelChange(childId, parent.thinkingLevel)
+      await recordSessionThinkingLevel(childId, parent.thinkingLevel)
     }
   }
 

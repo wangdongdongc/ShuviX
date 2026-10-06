@@ -123,8 +123,8 @@ export interface SessionModelSelection {
  * 会话业务记录。
  *
  * 刻意**不含** provider / model / thinkingLevel / systemPrompt ——
- * 这些是「运行配置」，唯一事实源是会话树（JSONL 的 model_change /
- * thinking_level_change entry）。想读当前值走 `agent.init`，
+ * 这些是「运行配置」，事实源是会话设置（`settings.model` / `settings.thinkingLevel`，
+ * 见 SessionSettings）。想读当前值走 `agent.init`，
  * 想改走 `agent.setModel` / `setThinkingLevel`。
  * 扩展能力勾选不属此列：它在 `settings.enabledTools`（见 SessionSettings）。
  */

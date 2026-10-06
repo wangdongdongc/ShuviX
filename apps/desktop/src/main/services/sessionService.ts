@@ -5,8 +5,8 @@ import { sessionRecords } from './sessionRecords'
 import { sessionDayPromptDao } from '../dao/sessionDayPromptDao'
 import {
   readSessionRunConfig,
-  appendModelChange,
-  appendThinkingLevelChange,
+  recordSessionModel,
+  recordSessionThinkingLevel,
   isDurableSession
 } from './sessionStorage'
 import { httpLogDao } from '../dao/httpLogDao'
@@ -268,9 +268,10 @@ export class SessionService {
   /**
    * 创建新会话。
    *
-   * **不预写模型类运行配置** —— provider / model / thinkingLevel 的唯一事实源是会话树，
-   * 而新会话还没有树。首次 resolveSessionAgentContext 时按「树上没有 → 回落默认」
-   * 解析；用户第一次显式切换才在树上留下 change entry。
+   * **不预写模型类运行配置** —— provider / model / thinkingLevel 存会话设置（`settings.model` /
+   * `settings.thinkingLevel`），新会话还没有设过。首次 resolveSessionAgentContext 时按「设置里没有 →
+   * 回落默认」解析；用户第一次显式切换（或子会话继承父会话）才写下（sessionStorage 的
+   * recordSessionModel / recordSessionThinkingLevel）。
    *
    * 扩展能力勾选（`settings.enabledTools`）则在这里定下来，**恒写键**（空数组也写 —— 缺键
    * 专指改制前的旧会话）：项目会话继承项目保存过的扩展能力（项目没保存过就是空，见
@@ -392,7 +393,8 @@ export class SessionService {
    *
    *  - 笔记本会话（settings.notebookPath 非空）恒为 `notebook`
    *    （用户覆盖 `~/.shuvix/agents/notebook.md` 经 getProfile 按名合并自动生效）；
-   *  - bot 会话（settings.bot 非空）恒为 `bot`：人设与记忆经 systemContext 注入（见 agentSession）；
+   *  - bot 会话（settings.bot 非空）恒为 `bot`：人设与记忆是根 agent 系统提示词里活的 `bot_profile`
+   *    段落（`shuvix.prompt.bot`，每次请求经 agentHost 的 resolveBotContext 现解析）；
    *  - Chrome 标签页会话（settings.chromeTab）恒为 `tab`；
    *  - 子会话可以带一个父级点名、`pinAgentProfile` 钉下的 `settings.agentProfile`
    *    （如 `coding`）：档案还在就用它。档案是纯 md 驱动的，用户随时可能删掉某个
@@ -413,7 +415,7 @@ export class SessionService {
     // 协作编辑窗口里的笔记本：基座 `coedit`（只经 doc_* 改那份活文档，不握 write / edit）
     if (settings?.notebookPath && settings.coEdit) return COEDIT_PROFILE_NAME
     if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
-    // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆经 systemContext 注入（见 agentSession.create）。
+    // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆是活的 `bot_profile` 段落（agentHost 的 resolveBotContext）。
     // 与笔记本一样按形态推导，没有设置项
     if (isBotSessionSettings(settings)) return BOT_PROFILE_NAME
     const pinned = session?.parentId ? settings?.agentProfile : undefined
@@ -490,7 +492,7 @@ export class SessionService {
     if (profile.model) {
       const resolved = resolveProfileModelSpec(profile.model)
       if (resolved) {
-        await appendModelChange(sessionId, resolved.provider, resolved.model)
+        await recordSessionModel(sessionId, resolved.provider, resolved.model)
         model = resolved
         log.info(`pinAgentProfile 应用档案模型 ${resolved.provider}/${resolved.model}`)
       } else {
@@ -501,7 +503,7 @@ export class SessionService {
     // 思考档位同理作为种子写进树（之后用户可在子会话里改）；档位是枚举值，没有「不可用」一说
     const thinkingLevel = profile.thinkingLevel
     if (thinkingLevel) {
-      await appendThinkingLevelChange(sessionId, thinkingLevel)
+      await recordSessionThinkingLevel(sessionId, thinkingLevel)
       log.info(`pinAgentProfile 应用档案思考档位 ${thinkingLevel}`)
     }
 

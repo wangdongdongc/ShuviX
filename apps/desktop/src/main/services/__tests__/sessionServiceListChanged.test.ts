@@ -49,7 +49,7 @@ vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
   isDurableSession: () => true,
   readSessionRunConfig: vi.fn(),
-  appendModelChange: vi.fn()
+  recordSessionModel: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/paths', () => ({

@@ -824,7 +824,7 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  * bot 档案钉板（bot 会话的基座）——「看得见、动不了」的那半个保证住在这里。
  *
  * 一条 bot 会话是普通有根会话，根 Agent 跑的就是这份档案；**它是谁**由会话绑定的那份
- * bot md 经 systemContext 追加（渲染见 bot/botContext.ts）。三条钉板对应
+ * bot md 作为活的 `bot_profile` 段落给出（渲染见 bot/botContext.ts，段落见 durable/prompt/sections.ts）。三条钉板对应
  * 这份设计的三个支点：窄工具清单（REG-4，原 RPer-1）、交接流程活在散文里（RPer-2）、围栏标签名
  * 两处一致（RPer-3）。
  */

@@ -13,8 +13,8 @@ import '../../tools/allTools'
 import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
 import {
-  appendModelChange,
-  appendThinkingLevelChange,
+  recordSessionModel,
+  recordSessionThinkingLevel,
   storageRefusalOf
 } from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
@@ -176,7 +176,7 @@ export class DefaultChatGateway implements ChatGateway {
    */
   async setModel(sessionId: string, provider: string, model: string): Promise<boolean> {
     if (sessionService.hasAgentRuntime(sessionId)) return false
-    await appendModelChange(sessionId, provider, model)
+    await recordSessionModel(sessionId, provider, model)
     return true
   }
 
@@ -187,7 +187,7 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   async setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void> {
-    await appendThinkingLevelChange(sessionId, level)
+    await recordSessionThinkingLevel(sessionId, level)
     const agent =
       sessionService.getAgentSession(sessionId) ??
       (sessionService.hasAgentRuntime(sessionId)

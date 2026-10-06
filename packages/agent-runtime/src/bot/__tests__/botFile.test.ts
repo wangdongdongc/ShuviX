@@ -167,7 +167,7 @@ describe('PP —— 解析：合法形状与缺省', () => {
   })
 
   it('PP-7 正文里的 {{shuvix:*}} 原样保留 —— 本层不展开（钉住今天的行为）', () => {
-    // 内置档案的占位符在 createAgent 时替换，而 bot 正文走的是 systemContext 那条路，
+    // 内置档案的占位符在 createAgent 时替换，而 bot 正文走的是 bot_profile 段落那条路，
     // 不经过那张变量表。写了占位符的用户会看到它原样出现在提示词里 —— 这是现状，不是设计
     const body = 'Dir: {{shuvix:workingDirectory}} / {{unknown}}'
     expect(parseBotDefinitionFile(md('---', 'name: scout', '---', body), 'fn')!.body).toBe(body)
