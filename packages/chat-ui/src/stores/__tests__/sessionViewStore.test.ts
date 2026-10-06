@@ -331,6 +331,7 @@ describe('P3-08-22 单一写入口', () => {
     expectTypeOf<'handleToolEnd'>().not.toMatchTypeOf<Keys>()
     expectTypeOf<'addPendingInput'>().not.toMatchTypeOf<Keys>()
     expectTypeOf<'removePendingInput'>().not.toMatchTypeOf<Keys>()
+    expectTypeOf<'setMessages'>().not.toMatchTypeOf<Keys>()
     const state = store() as unknown as Record<string, unknown>
     for (const key of [
       'appendStreamingContent',
@@ -341,7 +342,8 @@ describe('P3-08-22 单一写入口', () => {
       'addPendingInput',
       'removePendingInput',
       'finishStreaming',
-      'addMessage'
+      'addMessage',
+      'setMessages'
     ]) {
       expect(key in state, key).toBe(false)
     }
@@ -356,13 +358,6 @@ describe('P3-08-22 单一写入口', () => {
     expect(source).not.toMatch(/messageOps/)
     expect(source).not.toMatch(/StreamingDeltaBuffer/)
     expect(existsSync(join(dir, 'messageOps.ts'))).toBe(false)
-  })
-
-  it('外部 setMessages 写进去的行熬不过下一次视图', () => {
-    applySessionView('s1', V('s1', { messages: [user('1', 'hi')] }))
-    store().setMessages([...store().messages, user('rogue', 'not in the view')])
-    applySessionView('s1', V('s1', { messages: [user('1', 'hi'), user('2', 'next')] }))
-    expect(store().messages.map((m) => m.id)).toEqual(['1', '2'])
   })
 })
 

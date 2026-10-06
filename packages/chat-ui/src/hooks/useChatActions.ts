@@ -1,27 +1,18 @@
 import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
 import { useCallback, useRef, useState } from 'react'
-import { useChatStore, pendingPromptMessage } from '../stores/chatStore'
+import { useChatStore, pendingPromptMessage, selectSessionViewOf } from '../stores/chatStore'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import { DURABLE_SQLITE_1, storageKindOf } from '@shuvix/chat-protocol/sessionStorageKind'
-import type { Session as ProtocolSession } from '@shuvix/chat-protocol/chatApi'
 
 type ChatStoreState = ReturnType<typeof useChatStore.getState>
 
 /**
- * 这条会话能不能回退（P3-10b PIN-07）—— 视图 `capabilities.rollback` 的过渡读法。
- *
- * TODO(P3-08 merge)：改读 P3-08 接缝上的视图能力（`capabilities.rollback`）。在那之前按会话行的存储类型
- * 判断：行在列表里且不是 durable 存储（旧格式只读 / 不认识的类型）→ 不能回退；行不在列表里（列表还没
- * 拉到）→ 不藏，交给后端答 `{success:false}`。「还没有存储」的 none 视图没有消息，也就没有回退按钮。
+ * 这条会话能不能回退 / 重新生成（P3-10b PIN-07）：读它视图的 `capabilities.rollback`（P3-08 接缝）。
+ * 旧格式（只读）与「还没有存储」的 none 视图都是 false；还没收到视图 → 与 none 视图同口径，不给入口。
  */
 export function selectRollbackCapable(state: ChatStoreState, sessionId: string | null): boolean {
   if (!sessionId) return false
-  // 主进程给的会话行带着 storageKind（chat-protocol 的 Session）；store 的 Session 类型没声明它
-  const row = state.sessions.find((s) => s.id === sessionId) as
-    | Pick<ProtocolSession, 'storageKind'>
-    | undefined
-  return row === undefined || storageKindOf(row) === DURABLE_SQLITE_1
+  return selectSessionViewOf(sessionId)(state)?.capabilities.rollback === true
 }
 
 /** useChatActions 返回值类型 */
