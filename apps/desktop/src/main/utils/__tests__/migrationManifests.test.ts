@@ -11,10 +11,11 @@
  *     pi-durable 还是 experimental，任何浮动范围都可能让下一次 install 悄悄换掉会话层；两个清单
  *     各钉一个版本则会并排装出两份，类型与运行时各认一份。
  *
- * 刻意**不管**包落在哪个依赖字段：apps/desktop 现在 pi-ai 在 `dependencies`，pi-durable / chord
- * 在 `devDependencies`（裁定 Q19 —— 它们由 electron-vite 打进 bundle，不能是 electron-builder
- * 会再拷进 asar 的生产依赖），agent-runtime 则三个都在 `dependencies`。字段归属是打包问题，这里
- * 只问「声明了什么、钉成什么」，四个依赖字段一视同仁。
+ * 刻意**不管**包落在哪个依赖字段：apps/desktop 现在三个都在 `devDependencies`（裁定 Q19，P4-08b
+ * 把 pi-ai 也挪了过去 —— 它们由 electron-vite 打进 bundle，不能是 electron-builder 会连同
+ * openai / @anthropic-ai/sdk / @google/genai / @aws-sdk 整棵依赖树再拷进 asar 的生产依赖），
+ * agent-runtime 则三个都在 `dependencies`。字段归属是打包问题，这里只问「声明了什么、钉成
+ * 什么」，四个依赖字段一视同仁。
  *
  * 清单从根 `workspaces` 的 glob 现场枚举，不抄路径表：新加的 workspace 自动纳入。枚举器只认
  * 「纯前缀 + 一个结尾斜杠星号」这一种形态，遇到别的 glob 直接抛错而不是静默少扫；MM-1 再保证
