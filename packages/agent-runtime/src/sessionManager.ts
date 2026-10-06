@@ -1,10 +1,10 @@
 /**
  * SessionManager —— 宿主无关的「`Map<sessionId, 运行时实例>` + 懒创建 + 查找 + 失效/销毁」簿记。
  *
- * **现状：产品代码里已没有使用方**（只从包入口导出，回归测试 `__tests__/sessionManager.test.ts` 照跑）。
- * pi-durable 切换（P1-01）之后，会话存储的打开 / 关闭 / LRU 归 `durable/sessionHost.ts` 的 SessionHost，
- * agent 的创建 / 销毁与 `agent_created` / `agent_closing` 归运行时的锁（`durable/lock.ts`）；Chrome 扩展
- * 自 2026-09-22 起不再有运行时。删不删留待后续决定。
+ * **现状：唯一的使用方是 `durable/sessionHost.ts`** —— SessionHost 用它做每会话的打开 / 关停闸门
+ * （LRU、删除、关停都经这里，保证同一会话同一时刻只有一个打开的存储）。agent 的创建 / 销毁与
+ * `agent_created` / `agent_closing` 归运行时的锁（`durable/lock.ts`），不经本类；Chrome 扩展自
+ * 2026-09-22 起不再有运行时。
  *
  * 实例的构造与清理经 `create` / `dispose` 注入；T 是每会话的运行时对象类型，对本类不透明。
  *
