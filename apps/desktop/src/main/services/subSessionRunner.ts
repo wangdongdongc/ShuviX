@@ -35,6 +35,7 @@ import { sessionService } from './sessionService'
 import { taskRegistry } from './taskRegistry'
 import { messageService } from './messageService'
 import { recordSessionModel, recordSessionThinkingLevel, isDurableSession } from './sessionStorage'
+import { isLegacySession } from './legacySession'
 import { sessionRecords } from './sessionRecords'
 import type { AgentSession } from './agentSession'
 import type { DrivenSettledEvent, SubAgentModelConfig, SubmitResult } from '@shuvix/agent-runtime'
@@ -533,7 +534,7 @@ class SubSessionRunner {
     const sent = await run.done
     if (sent.error && (sent.code === undefined || NOT_DELIVERED.has(sent.code))) {
       this.dropRecord(requestId, record)
-      return { error: this.sendFailedError(child.title, sent) }
+      return { error: this.sendFailedError(childId, child.title, sent) }
     }
     if (background) {
       log.info(`prompt sub-session ${childId} (background)`)
@@ -951,12 +952,20 @@ class SubSessionRunner {
   }
 
   /** 没发出去（≠ 发出去了没回话）——说清是哪一种，别让调用方以为排上了队 */
-  private sendFailedError(title: string, sent: SubmitResult): string {
+  private sendFailedError(childId: string, title: string, sent: SubmitResult): string {
     if (sent.code === 'queued') {
       // 重新挂上的那一条还排在子会话的收件箱里：它没丢，跟着下一条消息出去 —— 再发一遍就重复了
       return (
         `The message was NOT delivered to sub-session "${title}" yet: ${sent.error}. ` +
         `It stays queued there and goes out with the next message it receives — do not send it again.`
+      )
+    }
+    if (!isDurableSession(childId) && isLegacySession(childId, { rowRequired: true })) {
+      // 旧格式会话只读：再发多少遍都一样，别让模型去等它空闲
+      return (
+        `The message was NOT delivered to sub-session "${title}": ${sent.error}. ` +
+        `It was created by an earlier version of ShuviX and is read-only — it can still be read with ` +
+        `"read-sub-session", but it cannot take new messages. Create a new sub-session to continue.`
       )
     }
     return (

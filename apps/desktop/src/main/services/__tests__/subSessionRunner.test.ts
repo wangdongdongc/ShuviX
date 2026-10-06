@@ -664,6 +664,34 @@ describe('并发与失败 —— 实测里那条错误链的两个断点', () =>
     expect(err(res)).toContain('Nothing is queued')
   })
 
+  it('旧格式（只读）子会话的发送失败：说清只读、可以 read，不叫父级「空闲了再发」', async () => {
+    mocks.durable.value = false
+    mocks.pick.mockImplementation((id: string) => {
+      if (id === PARENT) return { settings: {}, parentId: null, title: 'Parent', updatedAt: 1 }
+      if (id === CHILD)
+        return {
+          settings: {},
+          parentId: PARENT,
+          title: 'Child',
+          updatedAt: 2,
+          storageKind: 'harness-v3-jsonl'
+        }
+      return undefined
+    })
+    mocks.gatewayPrompt.mockResolvedValue({ error: 'read-only' })
+    const res = await runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'x',
+      background: false,
+      timeoutSeconds: 5
+    })
+    expect(err(res)).toContain('NOT delivered')
+    expect(err(res)).toContain('read-only')
+    expect(err(res)).toContain('read-sub-session')
+    expect(err(res)).not.toContain('send again when it is idle')
+  })
+
   it('后台形态的发送失败也报错 —— 假回执会让父级去等一个没开始的活', async () => {
     mocks.gatewayPrompt.mockResolvedValue({ error: 'agent is busy' })
     const res = await runner.prompt({
