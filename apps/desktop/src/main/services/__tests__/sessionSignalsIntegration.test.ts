@@ -9,6 +9,7 @@
  *   P3-08-52 打开与发送在一次网关调用里、投影挂载慢 50ms（PIN-09）：照样恰一对
  *   P3-08-53 第一条消息触发起标题（hook agent）：只有用户那一轮的一对带 sessionId s1；titler 的一对（它是路由
  *            登记过的）带它自己的 agentId
+ *   P3-14-12 重启之后重建的派生 agent（根会话 peek 打开时进索引）被追问：它自己的一对各一次，然后 sub_session_end
  *
  * 夹具必须第一个 import（它登记 vi.mock）。
  */
@@ -193,6 +194,42 @@ describe('P3-08 会话信号 · 桌面整合', () => {
             e.sessionId === titler.sessionId && (e.type === 'agent_start' || e.type === 'agent_end')
         )
       ).toEqual([`agent_start:${titler.sessionId}`, `agent_end:${titler.sessionId}:ok`])
+    },
+    T
+  )
+
+  it(
+    'P3-14-12 lifecycle for a rebuilt agent (PIN-19 of P3-08): a follow-up after a restart → agent_start(a1), agent_end(a1, ok) once each, then sub_session_end',
+    async () => {
+      const p1 = await bootProcess()
+      insert('s1')
+      p1.router.on('explore', role('explore'), answer('found'))
+      p1.router.on('root', role('chat'), dispatch('explore', 'find'), answer('done'))
+      expect(await withTimeout(p1.chatGateway.prompt('s1', 'go'), 15000, 'prompt')).toEqual({})
+      const a1 = rig.broadcasts.find((e) => e.type === 'sub_session_register')!.sessionId as string
+
+      const p2 = await crash()
+      rig.broadcasts.length = 0
+      // 「登记过」= 路由认得它：根会话打开（peek）时重建
+      expect(p2.agentManager.has(a1)).toBe(false)
+      await p2.host.peek('s1')
+      expect(p2.agentManager.has(a1)).toBe(true)
+
+      p2.router.on('explore', role('explore'), answer('again'))
+      await withTimeout(
+        p2.agentManager.continueTask({ subSessionId: a1, text: 'more' }),
+        15000,
+        'continue'
+      )
+      await waitFor(() => lifeOf().includes(`sub_session_end:${a1}`), 5000, 'sub_session_end')
+      await sleep(50)
+      expect(lifeOf((e) => e.sessionId === a1)).toEqual([
+        `agent_start:${a1}`,
+        `agent_end:${a1}:ok`,
+        `sub_session_end:${a1}`
+      ])
+      // 根会话没跑：没有它的一对
+      expect(lifeOf((e) => e.sessionId === 's1' && e.type !== 'agent_created')).toEqual([])
     },
     T
   )

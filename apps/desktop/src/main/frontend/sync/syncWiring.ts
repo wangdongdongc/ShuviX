@@ -8,7 +8,7 @@
  *    `peek` 交给 `getSessionHost().peek`（DurableSession 直接满足 hub 的 `SyncSession`）。
  *  - **接缝**：`legacyView` = 旧格式（`harness-v3-jsonl`）行的冻结投影（`readLegacyTranscript`；读不出来 →
  *    空消息，仍是只读的旧格式视图，PIN-05）；`resolveAgent` = 派生 agent 路由的 `locate`（重启之后路由
- *    索引是空的 → 认不出，PIN-10，P3-14 重建）。
+ *    索引在根会话打开时重建，P3-14；根会话还没在这个进程里打开过 → 认不出，`service_not_found`，P3-14 PIN-12）。
  *  - **传输**（`syncTransport`）：按客户端 id 前缀路由；IPC 那条由 `registerSyncHandlers` 注册时挂上
  *    （它手里有 Electron 的 `webContents`），Chrome 那条 P3-09 挂。
  *  - **钉住 / 删除**：`peekSyncHub()` 只读已建的 hub —— 宿主的 `isPinned` 再数 `hasSubscribers`，
@@ -33,6 +33,7 @@ import { createLogger } from '../../logger'
 import { getSessionHost, peekSessionHost } from '../../services/sessionHost'
 import { sessionRecords } from '../../services/sessionRecords'
 import { readLegacyTranscript } from '../../services/sessionStorage'
+import { forgetClosedSession, indexOpenedSession } from '../../services/sessionSignalSeams'
 import { createRoutingSyncTransport, type RoutingSyncTransport } from './ipcSyncTransport'
 
 const log = createLogger('SyncHub')
@@ -109,6 +110,10 @@ export function createSessionHookFanout<S>(
  * （`services/sessionSignals`，P3-08：投影句柄 + 生命周期 + 询问钩子）也登记在这里
  */
 export const sessionHostHooks: SessionHookFanout<DurableSession> = createSessionHookFanout()
+
+// 派生 agent 路由的索引重建（P3-14）：路由建出来时把自己登记进 sessionSignalSeams；没建过就什么都不做（PIN-16）
+sessionHostHooks.onSessionOpened(indexOpenedSession)
+sessionHostHooks.onSessionClosed(forgetClosedSession)
 
 // ─── 宿主适配 ───────────────────────────────────────────
 
