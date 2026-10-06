@@ -37,13 +37,14 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import en from '../../../../../packages/chat-protocol/src/i18n/locales/en.json'
-import { until, type CdpClient } from '../../harness/cdp'
+import { sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { chatPane, confirmPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
 import {
   createProject,
   durableStoragePathOf,
+  eventRecorder,
   legacySwitchoverRuns,
   legacyTranscriptPathOf,
   newSessionsAfter,
@@ -57,7 +58,9 @@ import {
   sqlLit,
   waitRendererReady,
   writeAgentMd,
-  type LegacyStep
+  type EventRecorder,
+  type LegacyStep,
+  type RecordedEvent
 } from '../../harness/seed'
 import { syncProbe, type SyncProbe } from '../../harness/sync'
 
@@ -124,11 +127,32 @@ const listMessages = (main: CdpClient, sid: string): Promise<ListedMessage[]> =>
 const listSessions = (main: CdpClient): Promise<ListedSession[]> =>
   main.eval<ListedSession[]>(`window.api.session.list()`)
 
-/** 发一轮并等它落定（durable 的 submitUser 等这一轮落定才答）；回网关的结果原样 */
-const prompt = (main: CdpClient, sid: string, text: string): Promise<{ error?: string }> =>
-  main.eval<{ error?: string }>(
-    `window.api.agent.prompt(${JSON.stringify({ sessionId: sid, text })}).then((r) => r ?? {})`
-  )
+/**
+ * 发一轮并等它落定（durable 的 submitUser 等这一轮落定才答）。IPC `agent:prompt` 恒回
+ * `{ success: true }` —— 发不出去的原因走 ChatEvent `error`（见 `forcedPrompt`）。
+ */
+const prompt = (main: CdpClient, sid: string, text: string): Promise<unknown> =>
+  main.eval(`window.api.agent.prompt(${JSON.stringify({ sessionId: sid, text })})`)
+
+/**
+ * 硬发一条（绕过禁用的输入框，与用户在别的前端敲同一条 IPC），回界面收到的拒绝文案：网关打不开会话时
+ * 广播一条该会话的 ChatEvent `error`（DefaultChatGateway.unavailableSessionError），IPC 本身照样回 success
+ */
+async function forcedPrompt(
+  main: CdpClient,
+  events: EventRecorder,
+  sid: string,
+  text: string
+): Promise<string> {
+  const since = await events.mark()
+  await prompt(main, sid, text)
+  const ev = await events.waitFor<RecordedEvent & { error?: string }>('error', {
+    sessionId: sid,
+    since,
+    timeoutMs: 10_000
+  })
+  return ev.error ?? ''
+}
 
 const createSession = (main: CdpClient, params: Record<string, unknown>): Promise<string> =>
   main.eval<string>(`window.api.session.create(${JSON.stringify(params)}).then((s) => s.id)`)
@@ -170,7 +194,10 @@ describe('legacy sessions after the boot switchover', () => {
   let chat: ChatPane
   let sidebar: SidebarPane
   let probe: SyncProbe
+  let events: EventRecorder
   let projectId = ''
+  /** L-2 的 [新建对话] 建出来的那条（L-10 往里发一条，证明自动标题真的在跑） */
+  let newChatSid = ''
 
   const T = {
     chat: 'L1 legacy chat',
@@ -183,7 +210,9 @@ describe('legacy sessions after the boot switchover', () => {
     nbChildNb: 'L7 legacy child with its own notebook',
     tab: 'L8 legacy tab',
     tabChild: 'L8 legacy tab child',
-    tabBad: 'L8 legacy malformed tab'
+    tabBad: 'L8 legacy malformed tab',
+    // 标题仍是默认值：自动标题若碰得到它，首条 prompt 就会派 titler（L-10）
+    l10: en.agent.defaultTitle
   } as const
   type Key = keyof typeof T | 'registry' | 'knowledge'
   const ids = {} as Record<Key, string>
@@ -241,7 +270,8 @@ describe('legacy sessions after the boot switchover', () => {
     'knowledge',
     'tab',
     'tabChild',
-    'tabBad'
+    'tabBad',
+    'l10'
   ]
   const fileBoundKeys: Key[] = ['nb', 'registry', 'knowledge', 'nbChildNb']
 
@@ -279,6 +309,7 @@ describe('legacy sessions after the boot switchover', () => {
     ids.tab = await createSession(m, { title: T.tab })
     ids.tabChild = await createSession(m, { title: T.tabChild, parentId: ids.tab })
     ids.tabBad = await createSession(m, { title: T.tabBad })
+    ids.l10 = await createSession(m, { title: T.l10, projectId })
 
     await first.stop({ keepHome: true })
     first = undefined
@@ -335,6 +366,8 @@ describe('legacy sessions after the boot switchover', () => {
     chat = chatPane(app.main)
     sidebar = sidebarPane(app.main)
     probe = syncProbe(app.main)
+    events = eventRecorder(app.main)
+    await events.install()
     await until(async () => (await sidebar.titles()).includes(T.chat), 'sidebar rows after relaunch')
   }, 240_000)
 
@@ -401,7 +434,7 @@ describe('legacy sessions after the boot switchover', () => {
 
     const before = await listMessages(app.main, ids.chat)
     const requestsBefore = provider.requests().length
-    expect(await prompt(app.main, ids.chat, 'L2 forced prompt')).toEqual({ error: READ_ONLY })
+    expect(await forcedPrompt(app.main, events, ids.chat, 'L2 forced prompt')).toBe(READ_ONLY)
     expect(await listMessages(app.main, ids.chat)).toEqual(before)
     expect(provider.requests().slice(requestsBefore).map((r) => r.lastUserText)).not.toContain(
       'L2 forced prompt'
@@ -417,6 +450,7 @@ describe('legacy sessions after the boot switchover', () => {
       `window.api.session.getById(${JSON.stringify(created)})`
     )
     expect(fresh.projectId).toBe(projectId)
+    newChatSid = created
     await until(async () => (await sidebar.activeTitle()) === fresh.title, 'new chat selected')
     await until(async () => (await chat.legacyBanner()) === null, 'banner gone on the new chat')
     expect((await chat.composer()).disabled).toBe(false)
@@ -481,6 +515,11 @@ describe('legacy sessions after the boot switchover', () => {
     ])
     expect(existsSync(durableStoragePathOf(home, ids.clear))).toBe(true)
     expect(existsSync(legacyTranscriptPathOf(home, ids.clear))).toBe(false)
+    // 新格式之后回退 / 重新生成就回来了 —— 也证明 L-3 数的那两种图标认法是对的（不是恒为 0）
+    await until(async () => {
+      const c = await chat.historyControls()
+      return c.rollback >= 1 && c.regenerate >= 1
+    }, 'rollback / regenerate controls on the cleared session')
   })
 
   it("L-6 a durable parent reads its legacy child through the session tool, and a prompt to it is refused cleanly", async () => {
@@ -513,7 +552,7 @@ describe('legacy sessions after the boot switchover', () => {
       },
       { text: 'L6 DONE', when: byUserText(P6) }
     )
-    expect(await prompt(app.main, ids.parent, P6)).toEqual({})
+    await prompt(app.main, ids.parent, P6)
 
     const blocks = sessionToolBlocks(await listMessages(app.main, ids.parent))
     expect(blocks).toHaveLength(2)
@@ -570,9 +609,9 @@ describe('legacy sessions after the boot switchover', () => {
     expect(kb).toBe(ids.knowledge)
 
     expect(rowOf(home, ids.nbChild)?.storageKind).toBe(LEGACY)
-    expect(await prompt(app.main, ids.nbChild, 'L7 forced child prompt')).toEqual({
-      error: READ_ONLY
-    })
+    expect(await forcedPrompt(app.main, events, ids.nbChild, 'L7 forced child prompt')).toBe(
+      READ_ONLY
+    )
     expect((await probe.viewOf(ids.nbChild))?.source).toBe('legacy')
     expect((await listMessages(app.main, ids.nbChild)).map((m) => m.content)).toEqual([
       'nbChild old question',
@@ -584,19 +623,22 @@ describe('legacy sessions after the boot switchover', () => {
   it('L-7 the notebook chats of the flipped rows open empty and can send', async () => {
     for (const key of ['nb', 'registry', 'knowledge'] as const) {
       const sid = ids[key]
+      // 没打开过的新格式会话：还没有存储（'none'），能发、是空的 —— 不再是旧格式视图
       const view = await probe.viewOf(sid)
-      expect(view?.source, key).toBe('durable')
+      expect(view?.source, key).toBe('none')
+      expect(view?.capabilities.send, key).toBe(true)
       expect(view?.messages, key).toEqual([])
       expect(await listMessages(app.main, sid), key).toEqual([])
 
       const text = `L7 ${key} first message`
       provider.script({ text: `L7 ${key.toUpperCase()} REPLY`, when: byUserText(text) })
-      expect(await prompt(app.main, sid, text), key).toEqual({})
+      await prompt(app.main, sid, text)
       expect(
         (await listMessages(app.main, sid)).map((m) => `${m.role}:${m.content}`),
         key
       ).toEqual([`user:${text}`, `assistant:L7 ${key.toUpperCase()} REPLY`])
       expect(existsSync(durableStoragePathOf(home, sid)), key).toBe(true)
+      await probe.waitView(sid, (v) => v.source === 'durable' && v.messages.length === 2)
       // 打开、发消息都不读也不删旧转写
       expect(bytesOf(legacyTranscriptPathOf(home, sid)), key).toBe(jsonlBytes[key])
     }
@@ -618,7 +660,7 @@ describe('legacy sessions after the boot switchover', () => {
       'tabBad old question',
       'tabBad OLD ANSWER'
     ])
-    expect(await prompt(app.main, ids.tabBad, 'L8 forced prompt')).toEqual({ error: READ_ONLY })
+    expect(await forcedPrompt(app.main, events, ids.tabBad, 'L8 forced prompt')).toBe(READ_ONLY)
 
     // 这次启动的汇总：四条绑着文件的行重置、一条标签页会话删掉（子会话随级联走，不单独计）
     const runs = legacySwitchoverRuns(app)
@@ -626,25 +668,24 @@ describe('legacy sessions after the boot switchover', () => {
   })
 
   it('L-10 the monitor list and auto-title never touch legacy rows', async () => {
-    const legacyIds = [ids.chat, ids.child, ids.nbChild, ids.tabBad]
-    const monitor = await app.main.eval<Array<{ rootSessionId: string }>>(
-      'window.api.agent.monitorList()'
-    )
-    const roots = new Set(monitor.map((e) => e.rootSessionId))
-    // 列表不是空的（打开过的新格式会话都在），只是没有任何旧格式行
-    expect(roots.has(ids.parent)).toBe(true)
-    for (const id of legacyIds) expect(roots.has(id), id).toBe(false)
-
-    // 自动标题是真的在跑（新格式会话的首轮都派了 titler），但它的围栏里从没出现过旧格式行
-    const titled = new Set(
-      provider
-        .requests()
-        .filter((r) => r.lastUserText.startsWith(TITLER_BODY))
-        .flatMap((r) => [...r.lastUserText.matchAll(/sessionId: (\S+)/g)].map((m) => m[1]))
-    )
-    expect(titled.size).toBeGreaterThan(0)
+    const legacyIds = [ids.chat, ids.child, ids.nbChild, ids.tabBad, ids.l10]
+    // 一条默认标题的新格式会话（L-2 的 [新建对话]）发首条：自动标题真的在跑，派了 titler
+    provider.script({ text: 'L10 REPLY', when: byUserText('L10 hello') })
+    await prompt(app.main, newChatSid, 'L10 hello')
+    const titlerTargets = (): Set<string> =>
+      new Set(
+        provider
+          .requests()
+          .filter((r) => r.lastUserText.startsWith(TITLER_BODY))
+          .flatMap((r) => [...r.lastUserText.matchAll(/sessionId: (\S+)/g)].map((x) => x[1]))
+      )
+    await until(() => titlerTargets().has(newChatSid), 'titler dispatched for the new chat')
+    // 同样是默认标题的旧格式行：硬发一条被拒，titler 从没为它派过
+    expect(await forcedPrompt(app.main, events, ids.l10, 'L10 forced prompt')).toBe(READ_ONLY)
+    await sleep(1500)
+    const titled = titlerTargets()
     for (const id of legacyIds) expect(titled.has(id), id).toBe(false)
-    // 旧格式行的标题与标题来源原样（硬发过 prompt、打开过、清过别人都没让它们变）
+    // 旧格式行的标题与标题来源原样（打开过、硬发过 prompt 都没让它们变）
     const now = rowsOf(home, legacyIds)
     for (const id of legacyIds) {
       expect(now.get(id)?.title, id).toBe(beforeBoot.get(id)?.title)
@@ -652,6 +693,15 @@ describe('legacy sessions after the boot switchover', () => {
         JSON.parse(beforeBoot.get(id)!.settings).titleOrigin
       )
     }
+
+    // 监视器只列打开着的新格式会话：父会话、发过消息的笔记本都在，旧格式行（打开过、读过、硬发过）一条都没有
+    const monitor = await app.main.eval<Array<{ rootSessionId: string }>>(
+      'window.api.agent.monitorList()'
+    )
+    const roots = new Set(monitor.map((e) => e.rootSessionId))
+    expect(roots.has(ids.parent)).toBe(true)
+    expect(roots.has(newChatSid)).toBe(true)
+    for (const id of legacyIds) expect(roots.has(id), id).toBe(false)
   })
 
   it('L-7 restarting again is a no-op: rows (incl. updatedAt) and the sessions dir are unchanged, and the log reads reset=0 deleted=0 failed=0', async () => {
@@ -720,8 +770,8 @@ describe('L-9 a DB rewound to v29', () => {
       { text: 'L9 EARLIER ANSWER', when: byUserText('L9 earlier turn') },
       { text: 'L9 CHAT ANSWER', when: byUserText('L9 chat turn') }
     )
-    expect(await prompt(m, ids.nb, 'L9 earlier turn')).toEqual({})
-    expect(await prompt(m, ids.chat, 'L9 chat turn')).toEqual({})
+    await prompt(m, ids.nb, 'L9 earlier turn')
+    await prompt(m, ids.chat, 'L9 chat turn')
     nbMessagesBefore = (await listMessages(m, ids.nb)).map((x) => `${x.role}:${x.content}`)
     expect(nbMessagesBefore).toEqual(['user:L9 earlier turn', 'assistant:L9 EARLIER ANSWER'])
 
@@ -796,7 +846,9 @@ describe('L-9 a DB rewound to v29', () => {
     // 没有 .jsonl：旧格式视图是空的；它自己的 .sqlite 还在盘上，只是不再被打开
     expect(await listMessages(app.main, ids.chat)).toEqual([])
     expect(existsSync(durableStoragePathOf(home, ids.chat))).toBe(true)
-    expect(await prompt(app.main, ids.chat, 'L9 forced prompt')).toEqual({ error: READ_ONLY })
+    const events = eventRecorder(app.main)
+    await events.install()
+    expect(await forcedPrompt(app.main, events, ids.chat, 'L9 forced prompt')).toBe(READ_ONLY)
     const probe = syncProbe(app.main)
     expect((await probe.viewOf(ids.chat))?.source).toBe('legacy')
   })
