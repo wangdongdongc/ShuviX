@@ -1057,7 +1057,7 @@
     "tasksKindAgent": "子代理",
     "tasksKindSubSession": "子会话",
     "tasksOpen": "打开",
-    "tasksAgentGone": "转写只在应用本次运行期间保留",
+    "tasksAgentGone": "这个子代理已不可用",
     "tasksBlockedOn": "等你回答",
     "calendar": "日历"
   },

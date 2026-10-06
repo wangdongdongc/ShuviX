@@ -1057,7 +1057,7 @@
     "tasksKindAgent": "Sub-agent",
     "tasksKindSubSession": "Sub-session",
     "tasksOpen": "Open",
-    "tasksAgentGone": "The transcript is only kept while the app is running",
+    "tasksAgentGone": "This agent is no longer available",
     "tasksBlockedOn": "Waiting for you",
     "calendar": "Calendar"
   },

@@ -227,7 +227,9 @@ describe('useAgentView', () => {
     server.serve(AGENT, agentView())
     render(createElement(AgentProbe, { id: 'a1' }))
     await settle()
-    expect(states.agent).toEqual({ status: 'live' })
+    // P3-14：结果里还带着最近一份视图（没有登记条目的面板从它渲染，PIN-13）
+    expect(states.agent).toMatchObject({ status: 'live' })
+    expect((states.agent as { view?: AgentView }).view).toEqual(agentView())
     const entry = useSubSessionStore.getState().subSessions.a1
     expect(entry.messages.map((m) => m.id)).toEqual(['7'])
     expect(entry.streamingContent).toBe('wor')

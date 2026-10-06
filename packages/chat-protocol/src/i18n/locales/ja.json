@@ -1057,7 +1057,7 @@
     "tasksKindAgent": "サブエージェント",
     "tasksKindSubSession": "サブセッション",
     "tasksOpen": "開く",
-    "tasksAgentGone": "トランスクリプトはアプリの実行中のみ保持されます",
+    "tasksAgentGone": "このエージェントは利用できなくなりました",
     "tasksBlockedOn": "回答待ち",
     "calendar": "カレンダー"
   },

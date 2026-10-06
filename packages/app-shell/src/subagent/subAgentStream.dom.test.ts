@@ -23,7 +23,8 @@ import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 
 import { ChatHostProvider, type ChatHostValue, type SubSessionState } from '@shuvix/chat-ui'
-import { SubSessionStream } from './SubAgentStream'
+import { SubSessionStream, withoutSpawnPrompt } from './SubAgentStream'
+import type { ChatMessage } from '@shuvix/chat-ui'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -121,5 +122,46 @@ describe('子代理面板的流式正文（SUB-1）', () => {
 
     show(closed, false)
     expect(iframes()).toHaveLength(1)
+  })
+})
+
+describe('withoutSpawnPrompt（P3-14 PIN-15）', () => {
+  const u = (id: string, content: string): ChatMessage => ({
+    id,
+    sessionId: 'sub-1',
+    role: 'user',
+    type: 'text',
+    content,
+    model: '',
+    createdAt: 0,
+    metadata: null
+  })
+  const a = (id: string): ChatMessage => ({
+    id,
+    sessionId: 'sub-1',
+    role: 'assistant',
+    type: 'message',
+    blocks: [{ type: 'text', text: 'ok' }],
+    content: 'ok',
+    model: 'm',
+    createdAt: 0,
+    metadata: null
+  })
+
+  it('跳过第一条用户条目，当它就是 prompt（或 prompt + 空行 + 契约段）；之后同样文字的追问照常', () => {
+    const list = [u('1', 'do X'), a('2'), u('3', 'do X'), a('4')]
+    expect(withoutSpawnPrompt(list, 'do X').map((m) => m.id)).toEqual(['2', '3', '4'])
+    expect(
+      withoutSpawnPrompt([u('1', 'do X\n\nCONTRACT'), a('2')], 'do X').map((m) => m.id)
+    ).toEqual(['2'])
+  })
+
+  it('没有 prompt、第一条用户条目不是它、或根本没有用户条目：原样交回（同一个数组）', () => {
+    const list = [u('1', 'other'), a('2')]
+    expect(withoutSpawnPrompt(list, '')).toBe(list)
+    expect(withoutSpawnPrompt(list, 'do X')).toBe(list)
+    expect(withoutSpawnPrompt([u('1', 'do Xtra')], 'do X')).toHaveLength(1)
+    const none = [a('2')]
+    expect(withoutSpawnPrompt(none, 'do X')).toBe(none)
   })
 })
