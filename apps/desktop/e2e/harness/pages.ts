@@ -7667,7 +7667,10 @@ export interface TaskRowShot {
 export interface TasksPanelPane {
   /** 打开当前会话面板的任务页（工具栏出现 tasks 按钮之后点它；已在任务页就不动） */
   open(timeoutMs?: number): Promise<void>
-  /** 任务页里的行（按显示次序） */
+  /**
+   * 任务页里**画出来**的行（按显示次序：运行中在前，每组最新的在上）。已完成超过 5 条时更早的折起来、
+   * 不在 DOM 里 —— 要找它们先点组尾的 `[data-task-older]`
+   */
   rows(): Promise<TaskRowShot[]>
   /** 派生 agent 的行在不在 */
   hasAgentRow(profile: string): Promise<boolean>

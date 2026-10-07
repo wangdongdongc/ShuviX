@@ -274,7 +274,8 @@ export function SessionPanel({
               className="absolute inset-0"
               style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
             >
-              <BgTaskPanel sessionId={sessionId} />
+              {/* 按会话重挂：展开哪条、折叠与否都是那个会话的事，不该带到下一个会话里 */}
+              <BgTaskPanel key={sessionId} sessionId={sessionId} />
             </div>
           </div>
         </PanelCloseInsetContext.Provider>

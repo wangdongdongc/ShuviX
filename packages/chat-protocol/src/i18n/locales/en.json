@@ -1079,6 +1079,12 @@
     "tasksOpen": "Open",
     "tasksAgentGone": "This agent is no longer available",
     "tasksBlockedOn": "Waiting for you",
+    "tasksEndedJustNow": "Just ended",
+    "tasksEndedMinutesAgo": "Ended {{count}}m ago",
+    "tasksEndedHoursAgo": "Ended {{count}}h ago",
+    "tasksEndedDaysAgo": "Ended {{count}}d ago",
+    "tasksShowOlder": "Show {{count}} older",
+    "tasksShowRecent": "Show only the latest {{count}}",
     "calendar": "Calendar"
   },
   "externalOpen": {

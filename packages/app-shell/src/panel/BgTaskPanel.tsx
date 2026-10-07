@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight, Square, X } from 'lucide-react'
 import {
@@ -20,6 +20,7 @@ import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import { SubSessionStream } from '../subagent/SubAgentStream'
 import { usePanelCloseInset } from './panelCloseInset'
+import { FINISHED_PREVIEW, endedAgo, orderTasks } from './bgTaskOrder'
 
 /**
  * 后台任务面板 —— SessionPanel 的 tasks 页，三类运行共用一张表：
@@ -38,6 +39,10 @@ import { usePanelCloseInset } from './panelCloseInset'
  * 形态沿用原 tasks 页：手风琴列表、单条动作按钮状态唯一、展开互斥（多条同时展开会让
  * 定高输出块彼此挤压；这也是敢用轮询取日志的前提 —— 同时只有一条在拉）。
  * 见 docs/background-task-hub-design.md §6。
+ *
+ * **重点先看得见**：每组最新的在最上面（等你回答的再往前，见 `bgTaskOrder.ts`）；已完成组只露最近
+ * {@link FINISHED_PREVIEW} 条，更早的折起来；行首一枚状态点、已完成行压暗并写「多久前结束」——
+ * 任务一多，运行中的和刚落定的不该被一长串旧条目淹掉。
  */
 
 /** 日志轮询间隔；同时只有一条任务展开，所以峰值就是 1 次/秒 */
@@ -45,17 +50,37 @@ const POLL_MS = 1000
 /** 首帧取日志尾部窗口 */
 const TAIL_WINDOW_BYTES = 200 * 1024
 
+type ChatState = ReturnType<typeof useChatStore.getState>
+
 /**
- * 这条子会话此刻是不是卡在等用户批准。
+ * 这条任务此刻是不是卡在等用户批准。
  *
- * 问渲染端自己：待答询问的条数按会话 id 记在 chatStore 里（会话列表上那个标记同一个源：订阅着视图的
- * 会话看视图，其余看 `ask_count` 余项，P3-08 PIN-01）。
+ * 子会话问渲染端自己：待答询问的条数按会话 id 记在 chatStore 里（会话列表上那个标记同一个源：订阅着视图的
+ * 会话看视图，其余看 `ask_count` 余项，P3-08 PIN-01）；其余类别看枢纽的 `waiting-input`（契约里它是
+ * 所有 kind 的一等状态）。
  * 这是**面板存在的一个主要理由** —— 一个卡在询问上的后台活不会自己好起来，
  * 而在此之前它只在那条子会话自己的界面里才看得见。
  */
-function useBlockedOnUser(task: TaskInfo): boolean {
-  const childId = task.subject.kind === 'sub-session' ? task.subject.childSessionId : ''
-  return useChatStore((s) => (childId ? selectSessionAskCount(childId)(s) > 0 : false))
+function isBlockedIn(s: ChatState, task: TaskInfo): boolean {
+  if (task.status === 'waiting-input') return true
+  return task.subject.kind === 'sub-session'
+    ? selectSessionAskCount(task.subject.childSessionId)(s) > 0
+    : false
+}
+
+/**
+ * 会话里卡在等用户的那些**运行中**任务（排序与行的色调同用这一份；已结束的不会再等谁）。
+ * selector 交回拼好的字符串而不是数组 —— 原始值才比得出「没变」，数组每次都是新引用，
+ * 等于每次 chatStore 变动都重渲染整张面板。
+ */
+function useBlockedTaskIds(tasks: TaskInfo[]): Set<string> {
+  const key = useChatStore((s) =>
+    tasks
+      .filter((task) => !isTaskFinished(task) && isBlockedIn(s, task))
+      .map((task) => task.taskId)
+      .join('\n')
+  )
+  return useMemo(() => new Set(key ? key.split('\n') : []), [key])
 }
 
 /** 类别文案 —— 行尾那句「Bash · 运行中 · 4m02s」的第一段 */
@@ -257,35 +282,48 @@ function TaskDetail({ task }: { task: TaskInfo }): React.JSX.Element | null {
 function TaskGroup({
   label,
   tasks,
+  total,
   now,
   expandedId,
+  blockedIds,
   onToggleExpand,
+  collapsed,
+  onToggleCollapsed,
   onClear,
+  footer,
   reserveTopRight = false
 }: {
   label: string
+  /** 本组此刻画出来的行（已完成组可能只是最近几条） */
   tasks: TaskInfo[]
+  /** 组头的计数 —— 本组的全部条数，不因折起更早的而变少 */
+  total: number
   now: number
   expandedId: string | null
+  blockedIds: Set<string>
   onToggleExpand: (taskId: string) => void
+  /** 组头折叠由面板持有 —— 揭示一条折起来的组里的任务时得能把它打开 */
+  collapsed: boolean
+  onToggleCollapsed: () => void
   onClear?: () => void
+  /** 卡片底部（已完成组的「显示更早的 N 条」） */
+  footer?: ReactNode
   /** 本组是面板首个可见分组：组头右侧给会话面板悬在卡片右上角的收起按钮让位 */
   reserveTopRight?: boolean
 }): React.JSX.Element | null {
-  const [collapsed, setCollapsed] = useState(false)
   const { t } = useTranslation()
-  if (tasks.length === 0) return null
+  if (total === 0) return null
 
   return (
     <div className="mb-1.5 last:mb-0">
       <div className={`flex items-center gap-1 px-1 py-1${reserveTopRight ? ' pr-6' : ''}`}>
         <button
-          onClick={() => setCollapsed((v) => !v)}
+          onClick={onToggleCollapsed}
           className="flex items-center gap-1 min-w-0 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
         >
           {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
           <span>{label}</span>
-          <span className="tabular-nums">{tasks.length}</span>
+          <span className="tabular-nums">{total}</span>
         </button>
         <div className="flex-1" />
         {onClear && (
@@ -305,13 +343,41 @@ function TaskGroup({
               task={task}
               now={now}
               expanded={expandedId === task.taskId}
+              blocked={blockedIds.has(task.taskId)}
               divided={idx > 0}
               onToggle={() => onToggleExpand(task.taskId)}
             />
           ))}
+          {footer}
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * 行首的状态点：运行中（脉动）/ 等你回答 / 已结束。
+ * 分组已经说了「运行中 / 已完成」，点是给扫一眼用的 —— 尤其让等你回答的那条在一列运行中里跳出来。
+ */
+function StatusDot({
+  finished,
+  blocked
+}: {
+  finished: boolean
+  blocked: boolean
+}): React.JSX.Element {
+  const state = finished ? 'ended' : blocked ? 'blocked' : 'running'
+  const tone = {
+    ended: 'bg-text-tertiary/40',
+    blocked: 'bg-warning',
+    running: 'bg-accent animate-pulse'
+  }[state]
+  return (
+    <span
+      aria-hidden
+      data-task-dot={state}
+      className={`mt-[5px] h-1.5 w-1.5 flex-shrink-0 rounded-full ${tone}`}
+    />
   )
 }
 
@@ -319,22 +385,30 @@ function TaskRow({
   task,
   now,
   expanded,
+  blocked,
   divided,
   onToggle
 }: {
   task: TaskInfo
   now: number
   expanded: boolean
+  /** 卡在等人回答 —— 它不会自己好起来，是这张表里唯一需要用户动手的状态，要一眼看得出来 */
+  blocked: boolean
   divided: boolean
   onToggle: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
   const { state, duration } = useBgTaskStatus(task, now)
   const kindLabel = useKindLabel(task.kind)
-  // 卡在等人回答的那条要一眼看得出来 —— 它不会自己好起来，是这张表里唯一需要用户动手的状态
-  const blocked = useBlockedOnUser(task)
+  const finished = isTaskFinished(task)
   // 子会话没有可展开的详情（转写在它自己的会话里），标题行上给一个「打开」直接过去
   const openTarget = task.subject.kind === 'sub-session' ? task.subject.childSessionId : null
+  // 已结束的行把「已结束」换成「多久前结束」：分组头已经说了它结束了，要紧的是哪条是刚刚那条
+  const stateText = blocked
+    ? t('panel.tasksBlockedOn')
+    : finished
+      ? endedAgo(task.endedAt ?? task.startedAt, now, t)
+      : state
 
   const handleStop = useCallback(
     (e: React.MouseEvent) => {
@@ -358,7 +432,8 @@ function TaskRow({
   )
 
   // 派生 agent 的行保留原子代理面板的 DOM 锚点（e2e 按它认行，换名字只会让断言失明）；每一行另有
-  // `data-task-row`（类别）/ `data-task-status`（枢纽的状态，不随语言变）—— e2e 认子会话行与它的落定靠它们
+  // `data-task-row`（类别）/ `data-task-status`（枢纽的状态，不随语言变）—— e2e 认子会话行与它的落定靠它们；
+  // `data-task-id` 是揭示时滚到这一行用的
   const agentAnchor =
     task.subject.kind === 'agent'
       ? {
@@ -369,9 +444,10 @@ function TaskRow({
 
   return (
     <div
-      className={divided ? 'border-t border-border-secondary/30' : ''}
+      className={`${divided ? 'border-t border-border-secondary/30' : ''}${blocked ? ' bg-warning/5' : ''}`}
       data-task-row={task.kind}
       data-task-status={task.status}
+      data-task-id={task.taskId}
       {...agentAnchor}
     >
       <div
@@ -380,12 +456,16 @@ function TaskRow({
           openTarget ? '' : 'cursor-pointer hover:bg-bg-hover/30'
         }`}
       >
+        <StatusDot finished={finished} blocked={blocked} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-xs text-text-primary" title={task.title}>
+          <div
+            className={`truncate text-xs ${finished ? 'text-text-secondary' : 'text-text-primary'}`}
+            title={task.title}
+          >
             {task.title}
           </div>
           <div className={`mt-0.5 text-[10px] ${blocked ? 'text-warning' : 'text-text-tertiary'}`}>
-            {kindLabel} · {blocked ? t('panel.tasksBlockedOn') : state} · {duration}
+            {kindLabel} · {stateText} · {duration}
           </div>
         </div>
         {openTarget && (
@@ -407,28 +487,81 @@ function TaskRow({
   )
 }
 
+type RevealRequest = NonNullable<ChatState['taskRevealRequest']>
+
+/**
+ * 已经有面板处理过的那条揭示请求（按对象认，nonce 只在同一个 store 里单调）。
+ *
+ * 面板收起时会话面板整块不渲染，点对话卡上的状态是「先发请求、再把面板打开」—— 本组件挂载时
+ * 请求已经在那儿了，订阅只看得到之后的变化。所以挂载时补处理一次还没人处理过的请求；
+ * 处理过的不再处理，否则收起再打开会把很久以前点过的那条又展开一遍。
+ */
+let handledReveal: RevealRequest | null = null
+
+function pendingReveal(): RevealRequest | null {
+  const req = useChatStore.getState().taskRevealRequest
+  return req && req !== handledReveal ? req : null
+}
+
+/** 运行中每秒走一次字（时长）；只剩已完成的时半分钟一次就够（「多久前结束」精度到分钟） */
+const TICK_RUNNING_MS = 1000
+const TICK_FINISHED_MS = 30_000
+
+/**
+ * 揭示时把那一行滚进视野 —— 只动面板自己的滚动容器。`scrollIntoView` 会连带滚动所有祖先
+ * （包括 overflow-hidden 的布局容器），在这里会把整个窗口的布局推歪。
+ * 行比容器高（展开着长转写）时让行首对齐容器顶，不把它推到看不见行首的位置。
+ */
+function scrollRowIntoView(box: HTMLElement, taskId: string): void {
+  const row = [...box.querySelectorAll<HTMLElement>('[data-task-id]')].find(
+    (el) => el.getAttribute('data-task-id') === taskId
+  )
+  if (!row) return
+  const r = row.getBoundingClientRect()
+  const b = box.getBoundingClientRect()
+  if (r.top < b.top) box.scrollTop -= b.top - r.top
+  else if (r.bottom > b.bottom) box.scrollTop += Math.min(r.bottom - b.bottom, r.top - b.top)
+}
+
 export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.JSX.Element {
   const { t } = useTranslation()
   const closeInset = usePanelCloseInset()
   const tasks = useBgTasks(sessionId)
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  // 最近一次揭示请求：既驱动「滚到那一行」，也让被揭示的那条在已完成组里哪怕排在折叠线以下也画出来。
+  // 初值是挂载前就发出、还没人处理的那条（见 handledReveal）
+  const [reveal, setReveal] = useState<RevealRequest | null>(pendingReveal)
+  const [expandedId, setExpandedId] = useState<string | null>(() => reveal?.taskId ?? null)
+  const [showAllFinished, setShowAllFinished] = useState(false)
+  const [collapsed, setCollapsed] = useState({ running: false, finished: false })
+  const scrollRef = useRef<HTMLDivElement>(null)
 
-  // 运行中任务的时长要走字 —— 每秒一拍重渲染（面板收起时组件卸载，不空转）
-  const [now, setNow] = useState(() => Date.now())
-  const hasRunning = tasks.some((task) => !isTaskFinished(task))
-  useEffect(() => {
-    if (!hasRunning) return
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [hasRunning])
-
+  const blockedIds = useBlockedTaskIds(tasks)
   const { running, finished } = useMemo(
-    () => ({
-      running: tasks.filter((task) => !isTaskFinished(task)),
-      finished: tasks.filter(isTaskFinished)
-    }),
-    [tasks]
+    () => orderTasks(tasks, (task) => blockedIds.has(task.taskId)),
+    [tasks, blockedIds]
   )
+
+  // 运行中任务的时长要走字、已完成的「多久前结束」也要跟着变（面板收起时组件卸载，不空转）
+  const [now, setNow] = useState(() => Date.now())
+  const tickMs =
+    running.length > 0 ? TICK_RUNNING_MS : finished.length > 0 ? TICK_FINISHED_MS : null
+  useEffect(() => {
+    if (tickMs === null) return
+    const tick = (): void => setNow(Date.now())
+    // 先补一拍：停表期间（没有任务 / 只剩已完成的那半分钟）到来的任务不该拿旧时钟算「多久前」
+    const first = setTimeout(tick, 0)
+    const id = setInterval(tick, tickMs)
+    return () => {
+      clearTimeout(first)
+      clearInterval(id)
+    }
+  }, [tickMs])
+
+  // 已完成组：默认只露最近几条。被揭示的那条在折叠线以下时整组展开 —— 点了对话卡上的状态却看不见那一行，等于没揭示
+  const revealedIdx = reveal ? finished.findIndex((task) => task.taskId === reveal.taskId) : -1
+  const showAll = showAllFinished || revealedIdx >= FINISHED_PREVIEW
+  const shownFinished = showAll ? finished : finished.slice(0, FINISHED_PREVIEW)
+  const olderCount = finished.length - FINISHED_PREVIEW
 
   // 展开互斥：点已展开的收起，否则独占展开
   const toggleExpand = useCallback(
@@ -443,38 +576,83 @@ export function BgTaskPanel({ sessionId }: { sessionId: string | null }): React.
     () =>
       useChatStore.subscribe((next, prev) => {
         const req = next.taskRevealRequest
-        if (req && req !== prev.taskRevealRequest) setExpandedId(req.taskId)
+        if (req && req !== prev.taskRevealRequest) {
+          setExpandedId(req.taskId)
+          setReveal(req)
+          // 它所在的组被组头折起来了也得打开 —— 点了却看不见那一行，等于没揭示
+          const task = useBgTaskStore.getState().tasks[req.taskId]
+          if (task) {
+            const group = isTaskFinished(task) ? 'finished' : 'running'
+            setCollapsed((c) => (c[group] ? { ...c, [group]: false } : c))
+          }
+        }
       }),
     []
   )
 
+  // 揭示请求画出来之后：记为已处理，再滚（那一行此刻才在 DOM 里，可能刚因整组展开而出现）
+  useEffect(() => {
+    if (!reveal) return
+    handledReveal = reveal
+    if (scrollRef.current) scrollRowIntoView(scrollRef.current, reveal.taskId)
+  }, [reveal])
+
   const clearFinished = useCallback(() => {
     if (!sessionId) return
     if (expandedId && finished.some((task) => task.taskId === expandedId)) setExpandedId(null)
+    setShowAllFinished(false)
+    setReveal(null)
     useBgTaskStore.getState().removeFinished(sessionId)
     void getHostApi()
       ?.bgTask.clearDone({ sessionId })
       .catch(() => {})
   }, [sessionId, expandedId, finished])
 
+  const finishedFooter =
+    olderCount > 0 ? (
+      <button
+        data-task-older=""
+        onClick={() => {
+          if (showAll) {
+            setShowAllFinished(false)
+            setReveal(null)
+          } else setShowAllFinished(true)
+        }}
+        className="w-full border-t border-border-secondary/30 px-2 py-1 text-left text-[10px] text-text-tertiary hover:bg-bg-hover/30 hover:text-text-secondary transition-colors"
+      >
+        {showAll
+          ? t('panel.tasksShowRecent', { count: FINISHED_PREVIEW })
+          : t('panel.tasksShowOlder', { count: olderCount })}
+      </button>
+    ) : undefined
+
   return (
-    <div className="h-full overflow-y-auto no-scrollbar p-1.5 bg-bg-secondary">
+    <div ref={scrollRef} className="h-full overflow-y-auto no-scrollbar p-1.5 bg-bg-secondary">
       {/* 让位只给**首个可见**分组：空组渲染成 null，运行中为空时首行就是「已完成」那条 */}
       <TaskGroup
         label={t('panel.tasksRunning')}
         tasks={running}
+        total={running.length}
         now={now}
         expandedId={expandedId}
+        blockedIds={blockedIds}
         onToggleExpand={toggleExpand}
+        collapsed={collapsed.running}
+        onToggleCollapsed={() => setCollapsed((c) => ({ ...c, running: !c.running }))}
         reserveTopRight={closeInset && running.length > 0}
       />
       <TaskGroup
         label={t('panel.tasksFinished')}
-        tasks={finished}
+        tasks={shownFinished}
+        total={finished.length}
         now={now}
         expandedId={expandedId}
+        blockedIds={blockedIds}
         onToggleExpand={toggleExpand}
+        collapsed={collapsed.finished}
+        onToggleCollapsed={() => setCollapsed((c) => ({ ...c, finished: !c.finished }))}
         onClear={clearFinished}
+        footer={finishedFooter}
         reserveTopRight={closeInset && running.length === 0}
       />
     </div>

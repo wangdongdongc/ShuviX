@@ -568,6 +568,54 @@ describe('P3-14-20 subscription failure / unavailable', () => {
   })
 })
 
+describe('agent-row anchors under the newest-first ordering', () => {
+  it('data-subagent-run rows: running newest first, then finished by end time; data-subagent-expanded follows the toggle', async () => {
+    const tasks = [
+      agentTask('a1', { startedAt: 10 }),
+      agentTask('a2', { startedAt: 20 }),
+      agentTask('a3', { startedAt: 30, status: 'done', endedAt: 40 }),
+      agentTask('a4', { startedAt: 5, status: 'error', endedAt: 50 })
+    ]
+    for (const task of tasks) {
+      useBgTaskStore.getState().upsert(task)
+      register(task.taskId)
+      server.serve(target(task.taskId), agentView(task.taskId))
+    }
+    render()
+    await settle()
+    const anchors = (): HTMLElement[] => [
+      ...container.querySelectorAll<HTMLElement>('[data-subagent-run]')
+    ]
+    const expandedOf = (): Record<string, string | null> =>
+      Object.fromEntries(
+        anchors().map((el) => [
+          el.getAttribute('data-task-id'),
+          el.getAttribute('data-subagent-expanded')
+        ])
+      )
+    expect(anchors().map((el) => el.getAttribute('data-subagent-run'))).toEqual([
+      'prof-a2',
+      'prof-a1',
+      'prof-a4',
+      'prof-a3'
+    ])
+    for (const el of anchors()) {
+      expect(el.getAttribute('data-task-row')).toBe('agent')
+      expect(el.getAttribute('data-subagent-run')).toBe(`prof-${el.getAttribute('data-task-id')}`)
+    }
+    expect(expandedOf()).toEqual({ a1: 'false', a2: 'false', a3: 'false', a4: 'false' })
+
+    await toggle('a1')
+    expect(expandedOf()).toEqual({ a1: 'true', a2: 'false', a3: 'false', a4: 'false' })
+    expect(server.subscriptions(target('a1'))).toHaveLength(1)
+
+    await toggle('a4')
+    expect(expandedOf()).toEqual({ a1: 'false', a2: 'false', a3: 'false', a4: 'true' })
+    expect(server.subscriptions(target('a1'))).toHaveLength(0)
+    expect(server.subscriptions(target('a4'))).toHaveLength(1)
+  })
+})
+
 describe('P3-14-21 hook-agent rows (no parentToolCallId)', () => {
   it('stream through the same path; the same view applied twice keeps every message object and DOM node', async () => {
     useBgTaskStore.getState().upsert(

@@ -1079,6 +1079,12 @@
     "tasksOpen": "打开",
     "tasksAgentGone": "这个子代理已不可用",
     "tasksBlockedOn": "等你回答",
+    "tasksEndedJustNow": "刚刚结束",
+    "tasksEndedMinutesAgo": "{{count}} 分钟前结束",
+    "tasksEndedHoursAgo": "{{count}} 小时前结束",
+    "tasksEndedDaysAgo": "{{count}} 天前结束",
+    "tasksShowOlder": "显示更早的 {{count}} 条",
+    "tasksShowRecent": "只看最近 {{count}} 条",
     "calendar": "日历"
   },
   "externalOpen": {

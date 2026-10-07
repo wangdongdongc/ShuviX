@@ -1079,6 +1079,12 @@
     "tasksOpen": "開く",
     "tasksAgentGone": "このエージェントは利用できなくなりました",
     "tasksBlockedOn": "回答待ち",
+    "tasksEndedJustNow": "たった今終了",
+    "tasksEndedMinutesAgo": "{{count}} 分前に終了",
+    "tasksEndedHoursAgo": "{{count}} 時間前に終了",
+    "tasksEndedDaysAgo": "{{count}} 日前に終了",
+    "tasksShowOlder": "以前の {{count}} 件を表示",
+    "tasksShowRecent": "最新の {{count}} 件のみ表示",
     "calendar": "カレンダー"
   },
   "externalOpen": {
