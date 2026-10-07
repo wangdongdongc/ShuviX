@@ -23,10 +23,12 @@
  *  - **日期通知**（Q14，P1-08）：注入了 `today` 时，每次用户输入（submitUser / steer / followUp）之前
  *    先 `maybeAnnounceDate` —— 新的一天里第一次输入之前追加一条 `shuvix.notice`（kind `date`），
  *    排在这次输入之前。没注入 = 不发。失败只记日志，不挡用户的发送。
- *  - **锁**（P1-09，`lock.ts`）：「这条会话有 agent」。打开时、在任何续跑 / 发送之前按锁记录重建工具；
- *    没锁时，发送 / steer / followUp / 自动续跑 / 继续都先创建 agent（K3，每会话一把互斥）；模型被拒
- *    → `{ error, code: 'no_model' }`，什么都不写（K4）。中止与销毁都会取消在途的创建（K13）；销毁算一次
- *    显式喊停（K10）。
+ *  - **锁**（P1-09，`lock.ts`）：「这条会话有 agent」= 「agent 在本进程里初始化过」（option A，进程内记录
+ *    `SessionProcessRecord` 由宿主持有）。打开时、在任何续跑 / 发送之前：本进程初始化过的按锁记录重建工具；
+ *    不是本进程初始化的，有可续的工作（`hasResumableWork`）就保留锁并完整初始化（连 MCP），没有就清锁、
+ *    什么都不建，残留的压缩打中止标记（`abortStaleWork`）。没锁时，发送 / steer / followUp / 自动续跑 /
+ *    继续都先创建 agent（K3，每会话一把互斥）；模型被拒 → `{ error, code: 'no_model' }`，什么都不写（K4）。
+ *    中止与销毁都会取消在途的创建（K13）；销毁算一次显式喊停（K10，记在进程内记录上，LRU 关了再开也记得）。
  *  - **身份**（P2-01，`agentDirectory.ts`）：`agentIdentity(对话)` 同步认人 —— 派生 agent 的对话按它
  *    `AgentStateDoc` 里的记录，其余对话都认成根（随锁现取，未锁 = undefined）。缓存由提交发布与打开时
  *    对每个任务拥有的对话的扫描喂养。
@@ -70,6 +72,7 @@
 import { copyJson } from '@earendil-works/chord'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
 import {
+  AgentDoc,
   AssistantEntry,
   ConversationBusy,
   InboxDoc,
@@ -129,6 +132,7 @@ import {
   type LockRecord
 } from './lock'
 import { collectMonitorRows, totalCost, type AgentMonitorRow } from './monitorSnapshot'
+import { newSessionProcessRecord, type SessionProcessRecord } from './processRecord'
 import { maybeAnnounceDate } from './prompt/dateNotice'
 import { renderSystemPrompt, replaySections, type PromptExtensions } from './prompt/sections'
 import {
@@ -143,6 +147,8 @@ import { SpawnCoordinatorImpl, type SpawnCoordinator } from './spawn'
 import type { LockModel, ModelSelection } from '../models/lockModel'
 
 const GENERATION_TASK_KIND = 'pi.generation'
+/** durable 内置的压缩任务（后台 / 阻塞 / 手动） */
+const COMPACTION_TASK_KIND = 'pi.compaction'
 const LIVE_TASK_STATUSES = ['pending', 'running', 'waiting', 'completing'] as const
 const SCAN_PAGE_SIZE = 256
 /** 受理记录的上限（PIN-08：`submitUser` 受理之后马上取走，留着的只是没人要的） */
@@ -397,6 +403,11 @@ export interface DurableSession {
   readonly pendingInputSummaries: string[]
   /** 此刻的锁记录（同步；undefined = 这条会话现在没有 agent） */
   readonly lock: LockRecord | undefined
+  /**
+   * 锁着时根 agent 此刻的思考档位（活的，K9：`setThinkingLevel` 之后立刻可见；纯读 —— 不写、不开启调度器、
+   * 不渲染提示词）。没锁 → undefined。句柄已关 → 以 `SessionClosedError` 拒绝。
+   */
+  lockedThinkingLevel(): Promise<ThinkingLevel | undefined>
   /**
    * 一个对话上 agent 的运行时快照（P3-06；纯读：不写、不开启调度器、不调任何创建 seam、不连 MCP）：
    *  - `systemPrompt`：现渲染的段落（PIN-07）—— 与**下一次请求**逐字节相同；一段抛错保留它已显示的文本、
@@ -732,6 +743,11 @@ export interface DurableSessionDeps {
    * 也不重报）。缺省 = 只在这个实例里记。
    */
   claimDrivenEmission?: (submissionId: SubmissionId) => boolean
+  /**
+   * 这条会话在本进程里的记录（option A）：宿主按会话持有，同一进程里每次打开交同一个对象。缺省 = 一份
+   * 新的（这个实例之前什么都没发生过 —— 存着的锁按「不是本进程初始化的」处理）。
+   */
+  processRecord?: SessionProcessRecord
 }
 
 interface LiveTask {
@@ -762,8 +778,8 @@ export class DurableSessionImpl implements DurableSession {
   private closedFlag = false
   private closing: Promise<void> | undefined
   private activeOps = 0
-  /** 有人显式喊停过：到下一次 submitUser 之前不自动续跑 */
-  private stoppedByUser = false
+  /** 这条会话在本进程里的记录（宿主持有：LRU 关了再开还是同一份；锁的含义、显式喊停都记在这里） */
+  private readonly processRecord: SessionProcessRecord
   private pendingNotices: PendingNotice[] = []
   private noticeTimer: ReturnType<typeof setTimeout> | undefined
   private unsubscribe: () => void = () => {}
@@ -814,6 +830,7 @@ export class DurableSessionImpl implements DurableSession {
   private constructor(private readonly deps: DurableSessionDeps) {
     this.sessionId = deps.sessionId
     this.raw = deps.harness
+    this.processRecord = deps.processRecord ?? newSessionProcessRecord()
     this.harness = observeResumes(deps.harness, () => this.markResumed())
     this.inputs = new PendingInputRequests(deps.sessionId, deps.eventSink, {}, deps.logger)
     this.directory = new AgentDirectory({ sessionId: deps.sessionId, logger: deps.logger })
@@ -831,7 +848,8 @@ export class DurableSessionImpl implements DurableSession {
       logger: deps.logger,
       now: deps.now,
       currentConversation: () => this.currentConversation(),
-      stopForDestroy: () => this.stopForDestroy()
+      stopForDestroy: () => this.stopForDestroy(),
+      processRecord: this.processRecord
     })
     this.spawner = new SpawnCoordinatorImpl({
       sessionId: deps.sessionId,
@@ -857,8 +875,18 @@ export class DurableSessionImpl implements DurableSession {
       currentConversation: () => this.currentConversation(),
       stopConversation: (conversationId) => this.stopConversation(conversationId),
       reopenInputs: () => this.reopenInputs(),
+      ensureBuiltin: () => this.agentLock.ensureBuiltin(),
       op: (work) => this.op(work)
     })
+  }
+
+  /** 有人显式喊停过：到下一次 submitUser 之前不自动续跑（记在进程内记录上，LRU 关了再开也记得） */
+  private get stoppedByUser(): boolean {
+    return this.processRecord.stoppedByUser
+  }
+
+  private set stoppedByUser(value: boolean) {
+    this.processRecord.stoppedByUser = value
   }
 
   get agents(): SpawnCoordinator {
@@ -915,12 +943,19 @@ export class DurableSessionImpl implements DurableSession {
     const pointer = await this.raw.snapshot(SessionStateDoc, BG)
     this.drivenMarker = pointer?.driven
     await this.currentConversation()
-    // 在任何续跑 / 发送之前按锁重建工具（打开从不续跑，所以在这里重建是安全的），再对一次镜像（K11）
-    await this.agentLock.restore()
+    // 锁 = 「agent 在本进程里初始化过」（option A）：可续的工作在任何中止标记之前判定
+    const inProcess = this.processRecord.agentInitialized
+    const resumable = this.hasResumableWork()
+    // 在任何续跑 / 发送之前按锁重建 / 完整初始化 / 清掉（打开从不续跑，所以在这里做是安全的），再对一次
+    // 镜像（K11）
+    await this.agentLock.restore({ inProcess, resumable })
     // 派生 agent：有活任务的非辅助子对话按记录重建（失败 → 打中止标记，PIN-05）；同样在任何续跑之前
     await this.spawner.restoreAtOpen()
     // 辅助工作从不续跑：活着的任务打上中止标记（只提交标记，不开启调度器）
     await this.markAuxiliaryWork()
+    // 不是本进程初始化的、也没有可续工作的会话：残留的非生成工作（退出时排着 / 退避中的后台压缩）同样
+    // 不许自己跑起来 —— 否则之后任何开启调度器的调用（一条写入的通知）都会让一条空闲会话去调模型
+    if (!inProcess && !resumable) await this.abortStaleWork()
     // 初始状态静默设定：宿主在打开完成时统一报一次（PIN-R），这里再排一次通知就会报两遍
     this.state = this.computeState()
     this.wasRunning = this.running
@@ -954,13 +989,51 @@ export class DurableSessionImpl implements DurableSession {
     for (const [id, task] of this.live) {
       if (!task.abortRequested && this.directory.isAuxiliary(task.conversationId)) targets.push(id)
     }
+    await this.markAborted(targets, 'auxiliary task')
+  }
+
+  /**
+   * 打开时：存储里有没有**可续的工作**（option A：存着的锁不是本进程初始化的，有它就保留锁并完整初始化，
+   * 没有就清锁）。保守地判：任何活着的非辅助任务都算 —— 生成（根、fork、派生子 agent 的，即被中断）、工具
+   * 任务、不认识的任务 —— 只有压缩不算：它不需要锁住的工具（压缩只读 `pi.agent` 的模型），空闲会话上
+   * 残留的压缩由 `abortStaleWork` 收掉。辅助工作（hook agent 及其名下、只拥有辅助工作的锚）从不续跑，不算。
+   */
+  private hasResumableWork(): boolean {
+    for (const [id, task] of this.live) {
+      if (this.isAuxiliaryTask(id, task)) continue
+      if (task.kind === COMPACTION_TASK_KIND) continue
+      return true
+    }
+    return false
+  }
+
+  /**
+   * 打开时（不是本进程初始化的、没有可续工作的会话）：残留的非辅助工作 —— 此时只可能是压缩（退出时排着、
+   * 在跑或在退避里的后台压缩，或手动压缩）—— 逐个 `abortTask`，与辅助工作同一套：只提交中止标记、不开启
+   * 调度器，下一次任何开启调度器的调用让它们以 aborted 收场（中止分支不调模型）。安静：不发事件、不算
+   * 中断；失败只记警告。
+   */
+  private async abortStaleWork(): Promise<void> {
+    const targets: TaskId[] = []
+    for (const [id, task] of this.live) {
+      if (!task.abortRequested && !this.isAuxiliaryTask(id, task)) targets.push(id)
+    }
+    if (targets.length === 0) return
+    this.deps.logger.info(
+      `session ${this.sessionId}: leftover work from an earlier process (${targets.length} task(s)) is aborted at open`
+    )
+    await this.markAborted(targets, 'leftover task')
+  }
+
+  /** 逐个打中止标记（只提交标记，不开启调度器）；关停照常抛出，其余失败只记警告（PIN-14） */
+  private async markAborted(targets: readonly TaskId[], what: string): Promise<void> {
     for (const id of targets) {
       try {
         await this.raw.abortTask(id, BG)
       } catch (error) {
         if (this.closedFlag || isClosedError(error)) throw error
         this.deps.logger.warn(
-          `session ${this.sessionId}: marking auxiliary task ${id} aborted failed: ${errorText(error)}`
+          `session ${this.sessionId}: marking ${what} ${id} aborted failed: ${errorText(error)}`
         )
       }
     }
@@ -2166,6 +2239,17 @@ export class DurableSessionImpl implements DurableSession {
 
   get lock(): LockRecord | undefined {
     return this.agentLock.current
+  }
+
+  async lockedThinkingLevel(): Promise<ThinkingLevel | undefined> {
+    return this.op(async () => {
+      const lock = this.agentLock.current
+      if (lock === undefined) return undefined
+      // 原始 Harness 上的快照：不开启调度器；durable 解析 agent 时缺省 = off
+      const agent = await this.raw.snapshot(AgentDoc, lock.conversationId, BG)
+      return ((agent as { thinkingLevel?: string } | undefined)?.thinkingLevel ??
+        'off') as ThinkingLevel
+    })
   }
 
   get effectiveSettings(): HarnessSettings {

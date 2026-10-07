@@ -86,6 +86,7 @@ export function lockW(overrides: Partial<LockRecord> = {}): LockRecord {
     sandboxed: true,
     mcp: { ctx: [DECL_RESOLVE, DECL_DOCS] },
     skills: ['builtin:drawing', 'pdf'],
+    selection: ['mcp:ctx', 'skill:pdf'],
     createdAt: W_NOW,
     ...overrides
   }

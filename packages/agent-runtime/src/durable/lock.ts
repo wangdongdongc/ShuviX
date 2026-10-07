@@ -16,9 +16,21 @@
  *  - **销毁**（agent 芯片的 X、回退、清空）：忙 / 被中断就先中止（K10），再一个提交删锁、卸掉按 agent
  *    的扩展。`pi.agent` 不清（下一次创建整份覆盖），`shuvix.builtin` 不动（下一次创建重装，K8）。
  *    销毁算一次显式喊停（到下一次用户发送之前不自动续跑）。
- *  - **重开**（K11/K12）：打开会话时、在任何续跑 / 发送之前，按锁记录重建同一组工具（不读会话配置、
- *    不连服务器、不写 `pi.agent`）。重建失败或锁记录写坏了：会话照样能打开、能看，锁经一个提交清掉
- *    （不续跑）并记警告，镜像对成 false，下一次发送重新创建。
+ *  - **锁 = 「agent 在本进程里初始化过」**（option A，用户 2026-10-07）：宿主按会话记一份进程内记录
+ *    （`SessionProcessRecord.agentInitialized`，LRU 关了再开也还在、换进程即空）；创建、打开时的完整初始化
+ *    记下它，销毁 / 清锁撤掉它。
+ *  - **重开**（K11/K12 + option A）：打开会话时、在任何续跑 / 发送之前，按存着的锁和进程内记录三选一：
+ *    - 本进程里初始化过（LRU 关了再开）：按锁记录重建同一组工具（不读会话配置、不连服务器、不写
+ *      `pi.agent`），与从前一样；
+ *    - 不是（重启 / 崩溃之后），但有可续的工作（被中断、或有活着的派生子 agent / 工具任务 —— 由会话判定）：
+ *      保留锁并**完整初始化**，等同创建那一刻 —— 重建工具、当场连锁记着的 MCP（连不上照样起来），记进
+ *      进程内记录；
+ *    - 不是，也没有可续的工作（空闲）：一个提交清掉锁（不续跑），什么都不建（连 `shuvix.builtin` 都不建），
+ *      镜像对成 false，下一次发送按那时的配置重新创建。
+ *    重建失败或锁记录写坏了：会话照样能打开、能看，锁经一个提交清掉（不续跑）并记警告，镜像对成
+ *    false，下一次发送重新创建。
+ *  - **内置工具是惰性的**：创建时按解析出的钉子装、保留锁时按锁的钉子装、派生 agent（创建 / 重建 / 面板
+ *    追问 / 宿主派发）要用而还没装时按根锁的钉子（没锁 = 占位）装（`ensureBuiltin`）。
  *  - **创建与销毁串行**（每会话一把互斥）：并发的创建合流成一次；销毁先取消在途的创建（AbortSignal
  *    一路透传给 ToolHost / MCP 连接，K13）—— 被取消的创建什么都不写，发送当作被中止（`{}`）。
  *
@@ -48,11 +60,12 @@ import { backgroundContext as BG, errorText } from './context'
 import { SessionStateDoc } from './docs'
 import { computeFrozenAgentPrompt, freezePersona } from './prompt/persona'
 import type { PromptExtensions } from './prompt/sections'
+import type { SessionProcessRecord } from './processRecord'
 import type { AgentConfig, AgentToolSet, ModelCatalog, ToolHost } from './seams'
 
 // ─────────────────────────── 名字 ───────────────────────────
 
-/** 内置工具扩展（打开会话时装，创建 agent 时按沙箱钉子重装） */
+/** 内置工具扩展（惰性：创建 agent / 保留锁 / 派生 agent 要用时装，创建 agent 时按沙箱钉子重装） */
 export const SHUVIX_BUILTIN_EXTENSION = 'shuvix.builtin'
 
 /** 按 agent 的工具扩展名前缀：`shuvix.agent.<conversationId>` */
@@ -213,6 +226,18 @@ export interface AgentLockDeps {
    * 同时记一次显式喊停（自动续跑到下一次用户发送之前关闭）。
    */
   stopForDestroy: () => Promise<void>
+  /** 这条会话在本进程里的记录（`agentInitialized` 在这里记 / 撤） */
+  processRecord: SessionProcessRecord
+}
+
+/**
+ * 打开时的重建该怎么做（`restore()` 的输入，由会话判定）：
+ *  - `inProcess`：根 agent 在本进程里初始化过（进程内记录）；
+ *  - `resumable`：存储里有可续的工作（被中断、活着的派生子 agent / 工具任务……）。
+ */
+export interface LockRestoreOptions {
+  inProcess: boolean
+  resumable: boolean
 }
 
 /**
@@ -225,6 +250,10 @@ export class AgentLock {
   private creating: Promise<LockRecord> | undefined
   private creationAbort: AbortController | undefined
   private destroying: Promise<void> | undefined
+  /** 在途的 `ensureBuiltin`（并发的合流成一次） */
+  private installingBuiltin: Promise<void> | undefined
+  /** 打开时完整初始化（连 MCP）的中止：会话关停时触发 */
+  private readonly restoreAbort = new AbortController()
   private disposed = false
 
   constructor(private readonly deps: AgentLockDeps) {}
@@ -234,52 +263,79 @@ export class AgentLock {
     return this.record
   }
 
-  /** 提交发布里看到的 `SessionStateDoc.lock`（同步，在 Session 串行线上） */
+  /**
+   * 提交发布里看到的 `SessionStateDoc.lock`（同步，在 Session 串行线上）。在本进程里写下的锁就是本进程
+   * 初始化的（创建之外只有测试会直接写它）
+   */
   observe(raw: JsonValue | undefined): void {
     this.record = raw === undefined ? undefined : parseLockRecord(raw)
+    if (this.record !== undefined) this.deps.processRecord.agentInitialized = true
   }
 
-  // ─── 重开（K11/K12） ───────────────────────────
+  // ─── 重开（K11/K12 + option A） ───────────────────
 
   /**
-   * 打开会话时、在任何续跑 / 发送之前：装内置工具（有锁按锁的沙箱钉子），按锁重建按 agent 的扩展。
-   * 锁写坏了（含 kind 不是 root，PIN-08）/ 重建失败：清锁（一个提交，不续跑）并记警告；会话照样可用。
-   * 从不写 `pi.agent`。root 的重建上下文从不带附加工具。
+   * 打开会话时、在任何续跑 / 发送之前，按存着的锁与 `options` 三选一（option A）：
+   *  - 没有锁 → 什么都不建（内置工具也不建，惰性）；
+   *  - 本进程里初始化过 → 装内置工具（按锁的沙箱钉子）、按锁重建按 agent 的扩展（不连服务器）；
+   *  - 不是，但有可续的工作 → 同上，外加当场连锁记着的 MCP（`connect`，连不上照样起来）—— 完整初始化，
+   *    记进进程内记录；
+   *  - 不是，也没有可续的工作 → 一个提交清掉锁（不续跑）、什么都不建。
+   * 锁写坏了（含 kind 不是 root，PIN-08）/ 内置工具或重建失败：清锁（一个提交，不续跑）并记警告；会话
+   * 照样可用。从不写 `pi.agent`。root 的重建上下文从不带附加工具。
    */
-  async restore(): Promise<void> {
+  async restore(options: LockRestoreOptions): Promise<void> {
     const { sessionId, logger } = this.deps
     const raw = (await this.deps.harness.snapshot(SessionStateDoc, BG))?.lock
-    let lock = raw === undefined ? undefined : parseSessionLock(raw)
+    const lock = raw === undefined ? undefined : parseSessionLock(raw)
+    this.record = undefined
     if (raw !== undefined && lock === undefined) {
       logger.warn(`session ${sessionId}: the agent lock is malformed; clearing it`)
       await this.clearStoredLock()
+      return
     }
+    if (lock === undefined) return
+    if (!options.inProcess && !options.resumable) {
+      logger.info(
+        `session ${sessionId}: the stored agent lock was not initialized in this process and there is no work to resume; clearing it (the next send creates the agent)`
+      )
+      await this.clearStoredLock()
+      return
+    }
+    const initialize = !options.inProcess
     try {
       const builtin = await this.deps.toolHost.buildBuiltinTools({
         sessionId,
-        sandboxed: lock?.sandboxed
+        sandboxed: lock.sandboxed
       })
       this.deps.registry.install(builtinExtension(builtin))
     } catch (error) {
       logger.warn(`session ${sessionId}: building the builtin tools failed: ${errorText(error)}`)
-      if (lock !== undefined) {
-        await this.clearStoredLock()
-        lock = undefined
-      }
+      await this.clearStoredLock()
+      return
     }
-    if (lock !== undefined) {
-      try {
-        const set = await this.deps.toolHost.rebuildAgentTools(lock, { sessionId })
-        this.deps.registry.install(agentExtension(lock.conversationId, agentExtensionTools(set)))
-      } catch (error) {
-        logger.warn(
-          `session ${sessionId}: rebuilding the locked agent's tools failed; the lock is cleared and the next send creates the agent again: ${errorText(error)}`
-        )
-        await this.clearStoredLock()
-        lock = undefined
-      }
+    try {
+      const set = await this.deps.toolHost.rebuildAgentTools(lock, {
+        sessionId,
+        ...(initialize ? { connect: { signal: this.restoreAbort.signal } } : {})
+      })
+      this.deps.registry.install(agentExtension(lock.conversationId, agentExtensionTools(set)))
+    } catch (error) {
+      // 会话在关停：存着的锁原样留着（不是重建失败），下一次打开再判
+      if (this.restoreAbort.signal.aborted) return
+      logger.warn(
+        `session ${sessionId}: rebuilding the locked agent's tools failed; the lock is cleared and the next send creates the agent again: ${errorText(error)}`
+      )
+      await this.clearStoredLock()
+      return
     }
     this.record = lock
+    if (initialize) {
+      this.deps.processRecord.agentInitialized = true
+      logger.info(
+        `session ${sessionId}: the stored agent lock has work to resume; the agent was initialized at open`
+      )
+    }
   }
 
   /** 镜像对账（K11：每次打开都调；从不发 agent_created） */
@@ -287,7 +343,33 @@ export class AgentLock {
     this.mirror(this.record !== undefined)
   }
 
+  /**
+   * 内置工具没装就装上（惰性，option A）：按根锁的沙箱钉子（没锁 = 宿主给一份占位）。派生 agent 的创建 /
+   * 重建 / 面板追问、宿主派发都先调它 —— 子 agent 的内置工具按名从 `shuvix.builtin` 解析。并发的合流成
+   * 一次；构造期间别人（创建 agent）先装上了，就不覆盖它。失败原样抛出。
+   */
+  async ensureBuiltin(): Promise<void> {
+    const { registry, toolHost, sessionId } = this.deps
+    if (registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION) !== undefined) return
+    if (this.installingBuiltin === undefined) {
+      const tracked: Promise<void> = (async () => {
+        const builtin = await toolHost.buildBuiltinTools({
+          sessionId,
+          sandboxed: this.record?.sandboxed
+        })
+        if (registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION) === undefined) {
+          registry.install(builtinExtension(builtin))
+        }
+      })().finally(() => {
+        if (this.installingBuiltin === tracked) this.installingBuiltin = undefined
+      })
+      this.installingBuiltin = tracked
+    }
+    return this.installingBuiltin
+  }
+
   private async clearStoredLock(): Promise<void> {
+    this.deps.processRecord.agentInitialized = false
     await this.deps.harness.commit(async (tx) => {
       const state = await tx.doc(SessionStateDoc)
       delete state.lock
@@ -337,10 +419,11 @@ export class AgentLock {
     await creating.catch(() => undefined)
   }
 
-  /** 会话关停：取消在途的创建，之后不再创建 */
+  /** 会话关停：取消在途的创建与打开时的连接，之后不再创建 */
   dispose(): void {
     this.disposed = true
     this.creationAbort?.abort(new AgentCreationError('cancelled', 'The session is closing'))
+    this.restoreAbort.abort(new AgentCreationError('cancelled', 'The session is closing'))
   }
 
   private async create(signal: AbortSignal): Promise<LockRecord> {
@@ -428,6 +511,8 @@ export class AgentLock {
       sandboxed: resolved.sandboxed,
       mcp,
       skills: [...(resolved.skills ?? [])],
+      // 按哪份勾选建的（`agent.init` 锁着时报它，option A）；配置没给勾选就不记
+      ...(config.toolOverlay === undefined ? {} : { selection: [...new Set(config.toolOverlay)] }),
       createdAt: this.deps.now()
     }
 
@@ -462,6 +547,8 @@ export class AgentLock {
     }
     // 发布已经同步更新了缓存；以防万一（发布被跳过）再按本地记录兜一次
     this.record ??= parseLockRecord(lockRecordJson(record))
+    // 锁 = 「agent 在本进程里初始化过」（option A）
+    this.deps.processRecord.agentInitialized = true
     this.mirror(true)
     this.broadcast({ type: 'agent_created', sessionId })
     return this.record!

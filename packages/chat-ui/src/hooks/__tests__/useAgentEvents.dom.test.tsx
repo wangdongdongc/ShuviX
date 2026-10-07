@@ -11,6 +11,8 @@
  *   P3-08-41 tool_review 先于工具进度：工具一出现就是审查中；messages 引用不变；别的会话不受影响
  *   P3-08-42 本地错误行（PIN-02）：熬过三次视图更新（含一次落盘）、挂在到达时的最后一条之后；切走即清；
  *            非当前会话的 error 什么都不加
+ *   LA-R1 agent_closing{false} 重拉 agent.init：锁着时 init 报的是锁的工具选择（option A），关停完毕之后 store
+ *         里的勾选回到会话设置那一份；closing{true} 不拉
  *   P3-08-59 TTS（PIN-03）：一轮以 ok 收尾才读、每个条目只读一次（agent_end 先到也一样）；reset / 重挂不重读；
  *            关着 / 非当前 / aborted / error / 空内容 / 派生 agent 都不读；agent_start 停掉正在播的
  */
@@ -22,6 +24,11 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 const mocks = vi.hoisted(() => ({
   listeners: new Set<(event: ChatEvent) => void>(),
   messageList: vi.fn(async () => []),
+  agentInit: vi.fn(async (_req: { sessionId: string }) => ({
+    success: true,
+    created: false,
+    enabledTools: ['mcp:from-settings']
+  })),
   ttsEnabled: true as boolean,
   tts: {
     isPlaying: false,
@@ -37,7 +44,8 @@ vi.mock('@shuvix/chat-ui', () => {
       onEvent: (callback: (event: ChatEvent) => void) => {
         mocks.listeners.add(callback)
         return () => mocks.listeners.delete(callback)
-      }
+      },
+      init: mocks.agentInit
     },
     message: { list: mocks.messageList },
     session: { list: async () => [] },
@@ -108,6 +116,7 @@ beforeEach(() => {
   useSubSessionStore.setState({ subSessions: {} })
   mocks.listeners.clear()
   mocks.messageList.mockClear()
+  mocks.agentInit.mockClear()
   mocks.ttsEnabled = true
   mocks.tts.isPlaying = false
   mocks.tts.isLoading = false
@@ -431,5 +440,36 @@ describe('流式正文仍从视图读', () => {
     apply('s1', V('s1', { live: liveCard(1, [text('a')]), run: { state: 'busy' } }))
     expect(selectStreamingContent(store())).toBe('a')
     expect(items().at(-1)!.isStreamingPlaceholder).toBe(true)
+  })
+})
+
+describe('LA-R1 agent_closing re-pulls the session tool state', () => {
+  it("closing{false} re-pulls agent.init: the selection goes back to the session settings (while locked init reported the lock's); closing{true} does not", async () => {
+    act(() => {
+      useChatStore.setState({
+        sessions: [
+          {
+            id: 's1',
+            title: 's1',
+            projectId: null,
+            settings: { enabledTools: ['skill:pdf', 'mcp:ssh'] }
+          } as unknown as ReturnType<typeof store>['sessions'][number]
+        ],
+        sessionAgentCreated: { s1: true }
+      })
+    })
+    emit({ type: 'agent_closing', sessionId: 's1', closing: true })
+    expect(mocks.agentInit).not.toHaveBeenCalled()
+    emit({ type: 'agent_closing', sessionId: 's1', closing: false })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await vi.waitFor(() => expect(mocks.agentInit).toHaveBeenCalledWith({ sessionId: 's1' }))
+    await vi.waitFor(() =>
+      expect(store().sessions.find((s) => s.id === 's1')?.settings.enabledTools).toEqual([
+        'mcp:from-settings'
+      ])
+    )
+    expect(store().sessionAgentCreated.s1).toBeUndefined()
   })
 })

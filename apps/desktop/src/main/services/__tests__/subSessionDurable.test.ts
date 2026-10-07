@@ -10,7 +10,8 @@
  *   P2-10-26 (S+T) wait 版本：后台 prompt + wait、崩溃 → 父会话「继续」→ 子会话续上一次、wait 交回答复
  *   P2-10-29 (S)   真答复 / 模型错误是答复（带 isError），不是 NOT delivered
  *   P2-10-34 (S)   重启之后：list 报 interrupted，从不为此打开子会话；用户继续之后 idle
- *   P2-10-41 (S)   后台完成跨重启补报：父会话恰一条通知、带 subsession-done 的 requestId、标记清掉
+ *   P2-10-41 (S)   后台完成跨重启补报：父会话恰一条通知（只写入、不起一轮 —— 驱动不是本进程发起的，
+ *                  option A）、带 subsession-done 的 requestId、标记清掉
  *   P2-10-42 (S)   送达之后、清标记之前崩溃：下次打开再报一次，父会话仍只有一条
  *   P2-10-46 (S+T) 中断的父会话被中止（及 abort-then-send）：前台驱动、被中断的子会话跟着中止（peek）
  *   P2-10-49 (S)   新消息发进被中断的子会话：abort-then-send
@@ -157,6 +158,7 @@ import {
   answer,
   callTool,
   fauxKit,
+  held,
   modelError,
   stalled,
   testDepsOverrides,
@@ -462,7 +464,7 @@ describe('S answers and status', () => {
 // ─── S：完成通知跨重启 ──────────────────────────────────────────────────────
 
 describe('S completion notices across restarts', () => {
-  it('P2-10-41 后台跑一半崩溃：打开 P 不续上 C、P 什么都没收到；用户继续 C → P 恰一条通知（subsession-done 的 requestId），标记清掉；再开一次什么都不多', async () => {
+  it('P2-10-41 后台跑一半崩溃：打开 P 不续上 C、P 什么都没收到；用户继续 C → P 恰一条通知（只写入、不起一轮，option A；subsession-done 的 requestId），标记清掉；再开一次什么都不多', async () => {
     insert('P')
     insert('C', { parentId: 'P' })
     kit.queue(answer('a0'))
@@ -488,13 +490,16 @@ describe('S completion notices across restarts', () => {
     expect(noticesIn(await transcriptOf('P'))).toEqual([])
 
     const deliver = vi.spyOn(sessionService, 'deliverSubSessionNotice')
-    kit2.queue(answer('done'), answer('ack'))
+    kit2.queue(answer('done'))
     const child = await sessionService.ensureAgentSession('C')
     expect(await withTimeout(child!.continue(), 15000, 'C.continue')).toEqual({})
     await waitFor(async () => noticesIn(await transcriptOf('P')).length === 1, 10000, 'notice in P')
     const notice = noticesIn(await transcriptOf('P'))[0]!
-    expect(notice.startsWith('pi.user:')).toBe(true)
+    // 这次驱动是上个进程发起的：通知写进 P 的转写（P 的下一轮看得见），不起一轮
+    expect(notice.startsWith('shuvix.notice:')).toBe(true)
     expect(notice).toContain('id="C"')
+    expect(userTexts(await transcriptOf('P'))).toEqual(['pi.user:hi'])
+    expect(deliver.mock.calls[0]![3]).toEqual({ wake: false })
     const noticeRequestId = deliver.mock.calls[0]![2]
     expect(noticeRequestId).toMatch(/^subsession-done:C:\d+$/)
     expect(await getSessionHost().get('P')!.requestState(noticeRequestId)).not.toBe('none')
@@ -505,6 +510,7 @@ describe('S completion notices across restarts', () => {
     )
     await waitFor(() => settingsOf('P').runState === 'idle', 10000, 'P idle')
     deliver.mockRestore()
+    expect(kit2.callCount).toBe(1)
 
     const p = await transcriptOf('P')
     const c = await transcriptOf('C')
@@ -722,3 +728,109 @@ function held2(kit2: FauxKit): Parameters<FauxKit['queue']>[0] {
     return answer('r2 answer')
   }
 }
+
+// ─── SW：完成通知能不能叫醒父会话（option A） ──────────────────────────────────
+
+describe('SW sub-session completion wakes the parent only for drives this process tracks', () => {
+  /** P 在本进程里锁着、空闲；C 的后台驱动扣在 held 上，交回放行函数 */
+  async function lockedParentWithHeldChild(): Promise<{ release: () => void }> {
+    insert('P')
+    insert('C', { parentId: 'P' })
+    kit.queue(answer('a0'))
+    expect(await chatGateway.prompt('P', 'hi')).toEqual({})
+    expect(getSessionHost().get('P')!.lock).toBeDefined()
+    const child = held(answer('child done'))
+    kit.queue(child.step)
+    expect(
+      await runner.prompt({
+        parentId: 'P',
+        childId: 'C',
+        message: 'bg',
+        background: true,
+        timeoutSeconds: 10,
+        requestId: 'subsession:P:5'
+      })
+    ).toEqual({ kind: 'started', id: 'C' })
+    await withTimeout(child.reached, 10000, 'C request')
+    return { release: child.release }
+  }
+
+  it('SW-01 the runner no longer knows the drive (its in-memory tables emptied, as after a restart): the idle locked parent gets a written notice — no input submitted, no turn — that its next turn sees', async () => {
+    const { release } = await lockedParentWithHeldChild()
+    runner.resetForTests()
+    const deliver = vi.spyOn(sessionService, 'deliverSubSessionNotice')
+    const submit = vi.spyOn(getSessionHost().get('P')!, 'submitUser')
+    release()
+    await waitFor(async () => noticesIn(await transcriptOf('P')).length === 1, 10000, 'notice in P')
+    await new Promise((resolve) => setTimeout(resolve, 700))
+
+    expect(deliver.mock.calls[0]![3]).toEqual({ wake: false })
+    expect(submit).not.toHaveBeenCalled()
+    const parent = getSessionHost().get('P')!
+    expect(parent.lock).toBeDefined()
+    expect(parent.runState).toBe('idle')
+    const p = await transcriptOf('P')
+    expect(p.slice(0, 2)).toEqual(['pi.user:hi', 'pi.assistant:a0'])
+    expect(p.slice(2)).toEqual([expect.stringMatching(/^shuvix\.notice:<sub-session id="C"/)])
+    // P 一次都没被叫醒：只有 P 的 hi 与 C 的那一轮请求过模型
+    expect(kit.callCount).toBe(2)
+
+    // 父会话的下一轮看得见它
+    kit.queue(answer('seen'))
+    expect(await chatGateway.prompt('P', 'next')).toEqual({})
+    const lastRequest = JSON.stringify(kit.requests.at(-1)!.messages)
+    expect(lastRequest).toContain('sub-session id=\\"C\\"')
+    deliver.mockRestore()
+    submit.mockRestore()
+  }, 30000)
+
+  it('SW-02 an in-process background drive still wakes the idle locked parent: the notice starts one auto-resumed turn, as before', async () => {
+    const { release } = await lockedParentWithHeldChild()
+    const deliver = vi.spyOn(sessionService, 'deliverSubSessionNotice')
+    kit.queue(answer('ack'))
+    release()
+    await waitFor(
+      async () => (await transcriptOf('P')).at(-1) === 'pi.assistant:ack',
+      10000,
+      'P auto-resumed'
+    )
+    expect(deliver.mock.calls[0]![3]).toEqual({ wake: true })
+    const notices = noticesIn(await transcriptOf('P'))
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toMatch(/^pi\.user:<sub-session id="C"/)
+    expect(kit.callCount).toBe(3)
+    deliver.mockRestore()
+  }, 30000)
+
+  it('SW-03 a foreground prompt that timed out into the background (released) is a drive this process tracks: its completion wakes the parent', async () => {
+    insert('P')
+    insert('C', { parentId: 'P' })
+    kit.queue(answer('a0'))
+    expect(await chatGateway.prompt('P', 'hi')).toEqual({})
+    const child = held(answer('child done'))
+    kit.queue(child.step)
+    const outcome = await withTimeout(
+      runner.prompt({
+        parentId: 'P',
+        childId: 'C',
+        message: 'fg',
+        background: false,
+        timeoutSeconds: 1,
+        requestId: 'subsession:P:6'
+      }),
+      10000,
+      'foreground prompt'
+    )
+    expect(outcome).toEqual({ kind: 'timeout', id: 'C' })
+    kit.queue(answer('ack'))
+    child.release()
+    await waitFor(
+      async () => (await transcriptOf('P')).at(-1) === 'pi.assistant:ack',
+      10000,
+      'P auto-resumed'
+    )
+    expect(noticesIn(await transcriptOf('P'))).toEqual([
+      expect.stringMatching(/^pi\.user:<sub-session id="C"/)
+    ])
+  }, 30000)
+})

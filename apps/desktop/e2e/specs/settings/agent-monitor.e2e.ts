@@ -12,8 +12,9 @@
  *     删会话连同派生行一起消失、详情手风琴，横幅标记的出现/相位/点击三联动/筛选 chip，缓存命中率的
  *     三态（尚无用量 / 未上报 / 百分数）、按 token 加权的累计、中止不计入而零内容空回复计入（它也是花费，
  *     PIN-03）、未定价模型的花费格、窄面板不横向溢出；
- *   - 组三（AM-24）：`stop({keepHome})` + 重开 —— 重开之后没看过的会话不列，打开它根行才出现，它从前的
- *     echo 子 agent 不列（PIN-02）。
+ *   - 组三（AM-24）：`stop({keepHome})` + 重开 —— 重开之后没看过的会话不列；打开那条空闲的会话也不列
+ *     （option A：锁 = 「agent 在本进程里初始化过」，上个进程留下的锁在打开时清掉），发一条之后根行才出现；
+ *     它从前的 echo 子 agent 不列（PIN-02）。
  *     注意 **turn-completed 的 echo hook 到 AM-5 才种进 hooksDir**：AM-3 断的是「恰一条」，
  *      hook 若 beforeAll 就装好，首轮收尾就会多出一个派生 entry（hooksDir 是指纹缓存的现扫，
  *     中途落盘下一轮即生效，见 hookService.scanCache）；AM-17 摘掉它，缓存段的会话因此不派生。
@@ -906,7 +907,8 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────
-// 组三：重启 —— 只列打开着的会话（Q-P3-08），重开的会话里闲着的历史 agent 不列（PIN-02）
+// 组三：重启 —— 只列打开着的会话（Q-P3-08），重开的会话里闲着的历史 agent 不列（PIN-02）；空闲会话的锁
+// 不是本进程初始化的，打开时清掉（option A），下一条消息才重新建出根 agent
 
 describe('重启：只列打开着的会话', () => {
   let app: E2EApp | undefined
@@ -923,7 +925,7 @@ describe('重启：只列打开着的会话', () => {
     await app?.stop()
   })
 
-  it('AM-24 重开之后：没看过的会话不列（尽管它锁着）；侧栏打开它根行才出现；它从前的 echo 子 agent 不列', async () => {
+  it('AM-24 重开之后：没看过的会话不列；侧栏打开那条空闲的会话它也不列（option A：上个进程的锁在打开时清掉）；发一条之后根行才出现；它从前的 echo 子 agent 不列', async () => {
     const first = app!
     writeAgentMd(first, 'echo-agent', { tools: 'read', body: 'ECHO AGENT BODY.' })
     mkdirSync(first.hooksDir, { recursive: true })
@@ -968,14 +970,31 @@ describe('重启：只列打开着的会话', () => {
       async () => (await sidebar.openSession('AM-24 restart lane')) || null,
       'restart lane opened after the restart'
     )
+    // 打开了，但它空闲、锁不是这个进程初始化的：锁清掉，什么都不列
+    await until(
+      async () =>
+        (
+          await main.eval<{ created: boolean }>(
+            `window.api.agent.init(${JSON.stringify({ sessionId: sid })})`
+          )
+        ).created === false || null,
+      'the lock from the earlier process is cleared at open'
+    )
+    await sleep(1200)
+    expect((await monitorList(main)).filter((e) => e.rootSessionId === sid)).toEqual([])
+
+    // 下一条消息按此刻的设置重新建出根 agent（turn-completed 的 echo hook 照旧派一个新的 echo）
+    provider.script(
+      { text: 'r2', when: rootRequest('restart-2') },
+      { text: 'echo-r2', when: echoRequest(sid) }
+    )
+    await promptAndSettle(main, sid, 'restart-2')
     const root = await until(
       async () => (await monitorList(main)).find((e) => e.agentId === sid) ?? null,
-      'root row after opening the session'
+      'root row after the send'
     )
     expect(root.kind).toBe('root')
-    expect(root.phase).toBe('idle')
     const list = await monitorList(main)
     expect(list.some((e) => e.agentId === child.agentId)).toBe(false)
-    expect(list.filter((e) => e.rootSessionId === sid).map((e) => e.kind)).toEqual(['root'])
   })
 })

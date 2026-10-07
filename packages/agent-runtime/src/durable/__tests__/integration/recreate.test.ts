@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../../context'
 import { AgentStateDoc } from '../../docs'
 import type { DurableSession } from '../../durableSession'
-import { answer, callTool } from '../support/faux'
+import { answer, callTool, stalled } from '../support/faux'
 import { registerHostCleanup } from '../support/host'
 import { systemDeltas, transcript } from '../support/transcript'
 import { withTimeout } from '../support/wait'
@@ -114,7 +114,7 @@ describe('P1-12 · destroy and recreate', () => {
   )
 
   it(
-    'I7-02 a restart after the recreate rebuilds from the new lock: notes offered and connected on first call, docs gone (tool not available)',
+    'I7-02 a restart (with interrupted work) after the recreate fully initializes the new lock: notes offered and connected at open (option A), docs gone (tool not available)',
     async () => {
       const world = await makeWorld()
       const session = await destroyWhileAsking(world)
@@ -122,17 +122,21 @@ describe('P1-12 · destroy and recreate', () => {
       world.chat(answer('recreated'))
       expect(await session.submitUser('again')).toEqual({})
       const lock = structuredClone(session.lock)
+      const stall = stalled()
+      world.chat(stall.step)
+      void session.submitUser('use them')
+      await withTimeout(stall.reached, 3000, 'request reached')
       await withTimeout(world.restart(), 10000, 'restart')
 
       const reopened = await world.open()
       expect(reopened.lock).toEqual(lock)
-      expect(world.mcp.connectsOf('notes')).toBe(0)
+      expect(world.mcp.connectsOf('notes')).toBe(1)
       world.chat(
         callTool('mcp__notes__search', { q: 'n' }, 'c-n'),
         callTool('mcp__docs__lookup', { q: 'd' }, 'c-d'),
         answer('done')
       )
-      expect(await withTimeout(reopened.submitUser('use them'), 5000, 'send')).toEqual({})
+      expect(await withTimeout(reopened.continue(), 5000, 'continue')).toEqual({})
       const offered = world.model.chats[0]!.tools
       expect(offered).toContain('mcp__notes__search')
       expect(offered.filter((name) => name.startsWith('mcp__docs__'))).toEqual([])

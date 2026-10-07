@@ -113,7 +113,7 @@ describe('P2-11 · J10 phase-1 invariants with spawned agents present', () => {
   )
 
   it(
-    'J10-02 (I5-01 / I5-03) a crash with an idle child: open rebuilds only the root lock; continue and a later send never rebuild the child',
+    'J10-02 (I5-01 / I5-03) a crash with an idle child: open rebuilds only the root lock; continue and a later send never rebuild the child; an idle restart clears the root lock (option A) and the next send creates it again, still without the child',
     async () => {
       const sw = await spawnWorld()
       const { world } = sw
@@ -139,19 +139,26 @@ describe('P2-11 · J10 phase-1 invariants with spawned agents present', () => {
       expect(hasExtension(sw, `shuvix.agent.${C}`)).toBe(false)
       expect(reopened.agentIdentity(C)).toMatchObject({ kind: 'spawned', profileName: 'explore' })
       expect(reopened.isInterrupted()).toBe(true)
-      expect([...world.mcp.connects.values()].reduce((sum, n) => sum + n, 0)).toBe(0)
+      // 完整初始化：根锁记着的服务器当场连上（子 agent 的不连）
+      expect([...world.mcp.connects.values()].reduce((sum, n) => sum + n, 0)).toBe(
+        Object.keys(rootLock!.mcp).length
+      )
 
       world.chat(answer('resumed'))
       expect(await withTimeout(reopened.continue(), 5000, 'continue')).toEqual({})
       expect(world.model.laneRequests('root').at(-1)!.tools).toEqual(preCrashTools)
       expect(world.toolHost.rebuildCalls).toEqual([rootLock])
 
-      // 空闲时再换一次进程，然后发送：照样不重建 C
+      // 空闲时再换一次进程（option A：锁清掉、什么都不建），然后发送：按配置重新创建根 agent，照样不重建 C
       await withTimeout(sw.restart(), 10000, 'idle restart')
-      const third = await sw.open()
+      // world.open：不经 sw.open 的「没锁就先建」，好看见打开本身清掉了锁
+      const third = await world.open()
+      expect(third.lock).toBeUndefined()
       world.chat(answer('more'))
       expect(await withTimeout(third.submitUser('more'), 5000, 'send')).toEqual({})
-      expect(world.toolHost.rebuildCalls).toEqual([rootLock])
+      expect(world.toolHost.rebuildCalls).toEqual([])
+      expect(world.toolHost.resolveCalls).toHaveLength(1)
+      expect(third.lock).toBeDefined()
       expect(hasExtension(sw, `shuvix.agent.${C}`)).toBe(false)
     },
     RECOVERY_TIMEOUT

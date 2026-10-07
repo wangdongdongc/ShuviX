@@ -19,8 +19,11 @@
  *  - **删除**：先关（等在途的打开），再删存储；删除期间对同一会话的打开 / 窥视排在它后面。
  *  - **每会话一个注册表**（K1）：打开时 `createRegistry(sessionId)` 造一个、装上系统提示词的段落扩展
  *    （K21）与宿主派发的锚任务扩展 `shuvix.spawn`（P2-08），会话自己再装 `shuvix.builtin` 与按锁重建的
- *    `shuvix.agent.<对话>`；关闭 / 删除时随会话丢弃。
+ *    `shuvix.agent.<对话>`（都是惰性的：空闲会话打开时什么都不装）；关闭 / 删除时随会话丢弃。
  *    根对话 id 在每个存储里都是 1，共享注册表会让两条会话的 `shuvix.agent.1` 互相覆盖。
+ *  - **每会话一份进程内记录**（option A，`SessionProcessRecord`）：「根 agent 在本进程里初始化过」与「显式
+ *    喊停过」。LRU 关了再开交回同一个对象（锁照旧重建、喊停照旧记得）；新的宿主（新进程）是空的 —— 存着的
+ *    锁在打开时要么完整初始化（有可续的工作），要么清掉。删除时丢掉。
  *  - **driven 落定**（P2-09，`onDrivenSettled`）：每个进程每条 submission 至多报一次，记账在宿主（会话被
  *    LRU 关了再开也不重报；删除时清掉）。
  *  - **打开 / 关闭的宿主钩子**（P3-03 PIN-09）：`onSessionOpened` 在每次真正的打开（open 或 peek）接管完成、
@@ -42,6 +45,7 @@ import { spawnExtension } from './anchor'
 import { backgroundContext as BG, errorText } from './context'
 import { seedConversationDocs } from './docs'
 import { DurableSessionImpl, type DurableSession, type SessionCloseReason } from './durableSession'
+import { newSessionProcessRecord, type SessionProcessRecord } from './processRecord'
 import { createPromptExtensions, type PromptExtensions } from './prompt/sections'
 import {
   DEFAULT_INTERRUPTED_SEND_POLICY,
@@ -108,6 +112,11 @@ class SessionHostImpl implements SessionHost {
   private readonly promptExtensions: PromptExtensions
   /** 本进程报过的 driven 落定（P2-09：每个进程至多一次；LRU 关了再开也不重报），按会话 */
   private readonly drivenEmitted = new Map<string, Set<number>>()
+  /**
+   * 每条会话在本进程里的记录（option A：锁 = 「agent 在本进程里初始化过」；显式喊停）：LRU 关了再开交回
+   * 同一个对象，宿主换了（新进程）就是空的；删除时丢掉
+   */
+  private readonly processRecords = new Map<string, SessionProcessRecord>()
 
   constructor(private readonly deps: SessionHostDeps) {
     this.logger = deps.logger ?? noopLogger
@@ -212,6 +221,7 @@ class SessionHostImpl implements SessionHost {
         this.recency.delete(sessionId)
         // 同一 id 重建的会话 submission id 从头数起
         this.drivenEmitted.delete(sessionId)
+        this.processRecords.delete(sessionId)
       } finally {
         // 每次删除都报（开着的先关掉；没开过的同样报，P3-05 PIN-06）—— 在关闭与删存储之后
         this.notifyClosed(sessionId, 'destroy')
@@ -322,6 +332,7 @@ class SessionHostImpl implements SessionHost {
           ...(this.deps.maxAgentDepth === undefined
             ? {}
             : { maxAgentDepth: this.deps.maxAgentDepth }),
+          processRecord: this.processRecordOf(sessionId),
           settings
         })
         lockedSession = session
@@ -417,6 +428,16 @@ class SessionHostImpl implements SessionHost {
       pinned = true
     }
     return !pinned && session.evictable
+  }
+
+  /** 一条会话在本进程里的记录（第一次用到时建） */
+  private processRecordOf(sessionId: string): SessionProcessRecord {
+    let record = this.processRecords.get(sessionId)
+    if (record === undefined) {
+      record = newSessionProcessRecord()
+      this.processRecords.set(sessionId, record)
+    }
+    return record
   }
 
   /** driven 落定的进程内记账：第一次返回 true */

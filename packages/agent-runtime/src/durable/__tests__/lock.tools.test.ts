@@ -221,16 +221,14 @@ describe('lock · tools', () => {
     expect(composed.tools[5]).toBe(extraEdit)
   })
 
-  it('LT-11 the sandbox pin: open installs the builtins unpinned, creation reinstalls them pinned; turn 1 carries exactly one tool delta', async () => {
+  it('LT-11 the sandbox pin: open builds no builtins (lazy, option A), creation installs them pinned; turn 1 carries exactly one tool delta', async () => {
     const { t } = await scenarioW()
     const session = await t.open()
-    expect(t.toolHost.builtinCalls).toEqual([{ sessionId: 's1', sandboxed: undefined }])
+    expect(t.toolHost.builtinCalls).toEqual([])
+    expect(t.registryOf('s1')!.snapshot().extension('shuvix.builtin')).toBeUndefined()
     t.kit.queue(answer('ok'))
     expect(await session.submitUser('hi')).toEqual({})
-    expect(t.toolHost.builtinCalls).toEqual([
-      { sessionId: 's1', sandboxed: undefined },
-      { sessionId: 's1', sandboxed: true }
-    ])
+    expect(t.toolHost.builtinCalls).toEqual([{ sessionId: 's1', sandboxed: true }])
     expect(session.lock!.sandboxed).toBe(true)
     const bash = requestTools(t.kit, 0).find((tool) => tool.name === 'bash')!
     expect(bash.description).toContain('sandboxed=true')

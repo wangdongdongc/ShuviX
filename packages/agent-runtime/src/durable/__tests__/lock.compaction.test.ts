@@ -7,7 +7,7 @@ import { fauxAssistantMessage, type FauxResponseStep } from '@earendil-works/pi-
 import { CompactionEntry } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { scenarioConfig, testProfile } from './support/agentConfig'
-import { fauxKit } from './support/faux'
+import { fauxKit, stalled } from './support/faux'
 import { registerHostCleanup } from './support/host'
 import { scenarioW } from './support/scenario'
 import { allEntries } from './support/transcript'
@@ -63,14 +63,25 @@ describe('lock · compaction window', () => {
     expect(window(session)).toEqual({ reserve: 2000, background: 2000, keep: 2000 })
   })
 
-  it('LW-05 after a restart the window comes from the cached lock before any send (synchronous getter)', async () => {
+  it('LW-05 after a restart with interrupted work the window comes from the kept lock before any send (synchronous getter); an idle restart clears the lock and the window is unknown again (option A)', async () => {
     const { t } = await scenarioW()
     const session = await t.open()
-    await session.createAgent()
+    const stall = stalled()
+    t.kit.queue(stall.step)
+    void session.submitUser('hello')
+    await stall.reached
     const t2 = await t.restart()
     const reopened = await t2.open()
+    expect(reopened.isInterrupted()).toBe(true)
     expect(window(reopened)).toEqual({ reserve: 10000, background: 10000, keep: 10000 })
     expect(t2.kit.callCount).toBe(0)
+
+    const idle = await t2.open('s2')
+    await idle.createAgent()
+    const t3 = await t2.restart()
+    const reopenedIdle = await t3.open('s2')
+    expect(reopenedIdle.lock).toBeUndefined()
+    expect(window(reopenedIdle)).toEqual({ reserve: 32768, background: 32768, keep: 20000 })
   })
 
   it('LW-06 a locked model that vanished from the registry counts as unknown (no throw)', async () => {

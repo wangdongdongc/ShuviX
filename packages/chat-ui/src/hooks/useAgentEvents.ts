@@ -7,6 +7,7 @@ import { useSubSessionStore, isSubSession } from '../stores/subSessionStore'
 import { useBgTaskStore } from '../stores/bgTaskStore'
 import { ttsPlayer } from '../services/tts/ttsPlayer'
 import { useAppEvent } from './useAppEvents'
+import { refreshSessionTools } from './useSessionTools'
 
 /** 根据 URL hash 判断当前是否是独立设置窗口 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -190,8 +191,13 @@ export function useAgentEvents(): void {
         // ─── 运行时关停（回退/切档案/清空：旧运行时停稳前不许有新的） ───
         case 'agent_closing':
           store.setAgentClosing(sid, event.closing)
-          // 关停完毕 = 这条会话又没有运行时了：扩展能力勾选重新可改（下一个运行时创建时读）
-          if (!event.closing) store.setAgentCreated(sid, false)
+          // 关停完毕 = 这条会话又没有运行时了：扩展能力勾选重新可改（下一个运行时创建时读）。
+          // 锁着时 `agent.init` 报的是锁的工具选择（option A），store 里那份此刻不是会话设置：重拉一次，
+          // 免得接下来的整份替换写入把锁的那份写进设置
+          if (!event.closing) {
+            store.setAgentCreated(sid, false)
+            void refreshSessionTools(sid).catch(() => undefined)
+          }
           break
 
         case 'error':

@@ -10,8 +10,9 @@
  *      派发工具、技能工具、MCP（这一刻惰性连接，连不上的广播一条错误、照常创建）、附加工具（`next`）。
  *      root 与派生 agent（P2-04）同一条路：资源（询问、项目、MCP 实例、广播、落盘）一律按根会话找；
  *      技能只看派生名单里点了名的；派发工具按 `offersDispatchTool`（派生 agent 看 canSpawn）。
- *    - `rebuildAgentTools`：重开会话时按锁记录 / 派生 agent 记录重建同一组 —— 不读会话配置、不连服务器；
- *      `next` 只来自运行时给的重建上下文（宿主从不自己造）。
+ *    - `rebuildAgentTools`：重开会话时按锁记录 / 派生 agent 记录重建同一组 —— 不读会话配置；MCP 按声明
+ *      快照建，缺省不连服务器，只有完整初始化（`connect`，option A：新进程里打开一条有可续工作的锁着的
+ *      会话）才与创建同一条路当场连上；`next` 只来自运行时给的重建上下文（宿主从不自己造）。
  *  - `desktopPromptHost` —— `PromptHost`：系统提示词五个活段落（指令文件 / 项目提示词 / 知识库 /
  *    项目记忆 / bot 人设）的数据源，每次请求准备时现调。
  *  - `desktopPromptVars` —— 人设冻结时的变量表（`{{shuvix:*}}` 占位符的取值）。
@@ -225,21 +226,16 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 type ResolvedMcp = NonNullable<ResolvedAgentTools['mcp']>[number]
 
 /**
- * MCP 惰性启动：勾选的服务器到创建 agent 这一刻才连（上次失败的在这里自动再试一次）。
- * 连接期间把状态推给会话（占位卡上写明「正在连接 MCP」；已连上的不报 —— 它瞬间落定，报了只会
- * 闪一下）。连不上就少这台的工具、agent 照常创建 —— 但失败要让人看见：往会话里落一条错误提示。
- * 创建被中止（signal）时当场放弃等待，不报错。
- *
- * 连上了交回声明快照与按它建的注册项：工具与记进锁的声明是同一份，重开时按快照重建出来的也就
- * 一模一样（不会多出一次工具增量）。实例按根会话取（派生 agent 与根 agent 共用一份）。
+ * 把一台 MCP 服务器连上（创建与打开时的完整初始化共用这一条路，option A）：连接期间把状态推给会话（占位
+ * 卡上写明「正在连接 MCP」；已连上的不报 —— 它瞬间落定，报了只会闪一下），等待按
+ * `LAZY_CONNECT_TIMEOUT_MS` 封顶。连不上就往会话里落一条错误提示（失败要让人看见），交回 false —— 调用方
+ * 照常往下走。`signal` 落下时当场放弃等待、原样上抛（不是连接失败，不报错）。
  */
-async function connectMcpServer(
+async function ensureMcpConnected(
   server: string,
-  ctx: ToolContext,
-  wrap: (tool: object) => ToolRegistration,
+  sessionId: string,
   signal: AbortSignal
-): Promise<ResolvedMcp | undefined> {
-  const sessionId = ctx.sessionId
+): Promise<boolean> {
   const notify = (connecting: boolean): void =>
     chatFrontendRegistry.broadcast({ type: 'mcp_connecting', sessionId, server, connecting })
   const announce = mcpService.statusByName(server, sessionId) !== 'connected'
@@ -251,23 +247,39 @@ async function connectMcpServer(
       signal
     )
   } catch (error) {
-    // 创建被中止：原样上抛（不是连接失败，不报错）；连接本身抛了按连不上处理
+    // 被中止：原样上抛（不是连接失败，不报错）；连接本身抛了按连不上处理
     if (signal.aborted) throw error
     result = { ok: false, error: error instanceof Error ? error.message : String(error) }
   } finally {
     if (announce) notify(false)
   }
-  if (!result.ok) {
-    // 没 error = 这台已不在启用列表里（勾选早被 filterAvailableTools 滤掉，属边角情况），静默跳过
-    if (result.error) {
-      chatFrontendRegistry.broadcast({
-        type: 'error',
-        sessionId,
-        error: i18next.t('chat.mcpConnectFailed', { name: server, error: result.error })
-      })
-    }
-    return undefined
+  if (result.ok) return true
+  // 没 error = 这台已不在启用列表里（勾选早被 filterAvailableTools 滤掉，属边角情况），静默跳过
+  if (result.error) {
+    chatFrontendRegistry.broadcast({
+      type: 'error',
+      sessionId,
+      error: i18next.t('chat.mcpConnectFailed', { name: server, error: result.error })
+    })
   }
+  return false
+}
+
+/**
+ * MCP 惰性启动：勾选的服务器到创建 agent 这一刻才连（上次失败的在这里自动再试一次）。连不上就少这台的
+ * 工具、agent 照常创建（错误提示由 `ensureMcpConnected` 落）。创建被中止（signal）时当场放弃等待，不报错。
+ *
+ * 连上了交回声明快照与按它建的注册项：工具与记进锁的声明是同一份，重开时按快照重建出来的也就
+ * 一模一样（不会多出一次工具增量）。实例按根会话取（派生 agent 与根 agent 共用一份）。
+ */
+async function connectMcpServer(
+  server: string,
+  ctx: ToolContext,
+  wrap: (tool: object) => ToolRegistration,
+  signal: AbortSignal
+): Promise<ResolvedMcp | undefined> {
+  const sessionId = ctx.sessionId
+  if (!(await ensureMcpConnected(server, sessionId, signal))) return undefined
   const declarations: McpToolDeclaration[] = mcpService.declarationsOf(server, sessionId)
   const tools = mcpService
     .registrationsFromDeclarations(server, sessionId, declarations, mcpOptions(ctx))
@@ -346,8 +358,17 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
 
     async rebuildAgentTools(
       lock: LockRecord | SpawnedAgentRecord,
-      { sessionId, extraTools }: AgentToolsRebuildContext
+      { sessionId, extraTools, connect }: AgentToolsRebuildContext
     ): Promise<AgentToolSet> {
+      // 完整初始化（option A：新进程里打开一条有可续工作的锁着的会话）：锁记着的服务器当场并发连上，与创建
+      // 同一个超时、同一条错误提示；连不上照样往下走 —— 工具一律按声明快照建（锁住期间工具不变）
+      if (connect !== undefined) {
+        await Promise.all(
+          Object.keys(lock.mcp).map((server) =>
+            ensureMcpConnected(server, sessionId, connect.signal)
+          )
+        )
+      }
       const ctx = sessionToolContext(deps, sessionId)
       const wrap = sessionWrapper(sessionId, ctx)
       const options = mcpOptions(ctx)

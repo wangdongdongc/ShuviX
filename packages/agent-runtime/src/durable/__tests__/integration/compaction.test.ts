@@ -449,7 +449,7 @@ describe('P1-12 · compaction', () => {
   )
 
   it(
-    'I3-07 a crash during background compaction: reopen reports idle once (PIN-R), the compaction stays listed and paused (PIN-C2), the next send finishes it',
+    'I3-07 a crash during background compaction: reopen reports idle once (PIN-R); the leftover compaction is abort-marked at open (option A: no work to resume, so the lock goes too) and stays paused; a later write starts the scheduler and it ends aborted without any model call; the next send runs on a freshly created agent',
     async () => {
       const { world, session } = await tinyWorld({ retry: { enabled: false } })
       const summary = held(answer('## Goal\nnever arrives'))
@@ -457,41 +457,46 @@ describe('P1-12 · compaction', () => {
       await sendUntil(world, session, compactionListed(world))
       await withTimeout(summary.reached, 3000, 'summary request')
       expect(session.runState).toBe('busy')
+      const leftover = statuses(world)[0]!.taskId
 
       await withTimeout(world.restart(), 10000, 'restart')
       const reopened = await world.open()
       expect(reopened.isInterrupted()).toBe(false)
       expect(reopened.runState).toBe('idle')
       expect(world.t.statesOf('s1')).toEqual(['idle'])
+      expect(reopened.lock).toBeUndefined()
+      expect(await reopened.taskLiveness(leftover)).toEqual({ live: true, abortRequested: true })
       expect(await liveCompactions(reopened)).toHaveLength(1)
       await sleep(150)
       expect(world.model.requests).toEqual([])
       expect(world.t.kit.callCount).toBe(0)
-      expect(await liveCompactions(reopened)).toHaveLength(1)
 
-      // 第二个进程的摘要扣到这一轮的请求发出之后：恢复的那次压缩在这一轮准备时仍在列，所以不会再起一次
-      // 后台压缩（不扣的话是一场竞态 —— 见 I3-07b）
-      const resumed = held(answer('## Goal\nresumed summary'))
-      world.model.summary(resumed.step)
-      const reply = held(answer('resumed'))
-      world.chat(reply.step)
-      const sending = reopened.submitUser('next')
-      await withTimeout(reply.reached, 3000, 'answer requested')
-      await withTimeout(resumed.reached, 3000, 'summary requested again')
-      // 只有恢复的那一次压缩在列过（同一个 task）
-      expect(new Set(statuses(world).map((status) => status.taskId)).size).toBe(1)
-      resumed.release()
-      reply.release()
-      expect(await withTimeout(sending, 5000, 'next')).toEqual({})
-      await waitFor(async () => (await compactions(reopened)).length === 1, 3000, 'summary placed')
-      expect((await compactions(reopened)).map(reasonOf)).toEqual(['threshold'])
+      // 一条写入的通知开启调度器：打了标记的压缩走中止分支收场，从不调模型
+      expect(
+        await reopened.writeNotice({ text: 'build finished', kind: 'background' })
+      ).toMatchObject({ status: 'submitted' })
+      await waitFor(
+        async () => (await reopened.taskLiveness(leftover))?.live === false,
+        3000,
+        'leftover compaction ended'
+      )
       await waitFor(
         async () => (await liveCompactions(reopened)) === undefined,
         3000,
         'status removed'
       )
-      expect(world.model.summaries).toHaveLength(1)
-      await waitFor(() => reopened.runState === 'idle', 2000, 'idle')
+      await sleep(100)
+      expect(world.model.requests).toEqual([])
+      expect(world.t.kit.callCount).toBe(0)
+      expect(reopened.lock).toBeUndefined()
+
+      // 下一次发送按此刻的配置重新创建 agent
+      world.chat(answer('resumed'))
+      expect(await withTimeout(reopened.submitUser('next'), 5000, 'next')).toEqual({})
+      expect(reopened.lock).toBeDefined()
+      expect(world.toolHost.resolveCalls).toHaveLength(1)
+      expect(world.model.chats).toHaveLength(1)
+      await waitFor(() => reopened.runState === 'idle', 5000, 'idle')
     },
     TIMEOUT
   )

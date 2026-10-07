@@ -271,7 +271,10 @@ export function realToolHost(options: RealToolHostOptions): RealToolHost {
           : {})
       }
     },
-    rebuildAgentTools: (lock, { sessionId, extraTools }): AgentToolSet => {
+    rebuildAgentTools: (
+      lock,
+      { sessionId, extraTools, connect }
+    ): AgentToolSet | Promise<AgentToolSet> => {
       host.rebuildCalls.push(lock)
       const mcpOptions = options.mcpOptions?.(sessionId)
       const offersAgent =
@@ -281,7 +284,7 @@ export function realToolHost(options: RealToolHostOptions): RealToolHost {
           names: lock.toolNames,
           ...('canSpawn' in lock ? { canSpawn: lock.canSpawn } : {})
         })
-      return {
+      const build = (): AgentToolSet => ({
         ...(offersAgent ? { agent: wrap(sessionId, options.dispatch!(sessionId)) } : {}),
         mcp: Object.entries(lock.mcp).map(([server, declarations]) => ({
           server,
@@ -292,7 +295,15 @@ export function realToolHost(options: RealToolHostOptions): RealToolHost {
         ...(extraTools?.length
           ? { extraTools: extraTools.map((tool) => wrap(sessionId, tool)) }
           : {})
-      }
+      })
+      if (connect === undefined) return build()
+      // 完整初始化（option A）：锁记着的服务器当场连（与解析同一条路；连不上照样按快照建工具）
+      return (async () => {
+        for (const server of Object.keys(lock.mcp)) {
+          await mcp.manager.ensureServerByName(server, { sessionId })
+        }
+        return build()
+      })()
     }
   }
   return host

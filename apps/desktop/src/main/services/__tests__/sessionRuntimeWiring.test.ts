@@ -284,9 +284,10 @@ describe('D10-37 hasAgentRuntime 矩阵', () => {
     expect(sessionService.hasAgentRuntime('s1')).toBe(expected)
     expect((await sessionService.initAgent('s1')).created).toBe(expected)
     expect(sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(!expected)
-    // initAgent 从不打开会话
+    // initAgent 从不 open；没开而镜像说锁着时 peek 一次读真正的锁（option A；这里存储不在，peek 落空，
+    // 退回镜像）
     expect(fakeHost.callsOf('open')).toEqual([])
-    expect(fakeHost.callsOf('peek')).toEqual([])
+    expect(fakeHost.callsOf('peek')).toEqual(!open && mirror === true ? ['s1'] : [])
   })
 
   it('D10-37 没有这一行 → false', () => {

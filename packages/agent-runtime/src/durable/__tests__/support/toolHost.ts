@@ -9,8 +9,9 @@
  *    外加 `agentTools`（总在）与附加工具：请求的 `extraTools` 在前、选项的 `extraTools` 在后（PIN-12），
  *    原样（同一对象）交回。
  *  - `rebuildAgentTools`：只按记录（`skills` / `mcp` / `toolNames`，派生的再看 `canSpawn`）重建，
- *    不连服务器；重建上下文的 `extraTools` 原样放进 `extraTools`（PIN-03 R）。资源按上下文的
- *    `sessionId` 找（PIN-10）。
+ *    缺省不连服务器；上下文带 `connect`（option A 的完整初始化）时把记录里的服务器逐台连上（连不上 →
+ *    与解析时同一条 error 广播，工具照旧按快照建）。重建上下文的 `extraTools` 原样放进 `extraTools`
+ *    （PIN-03 R）。资源按上下文的 `sessionId` 找（PIN-10）。
  *
  * 旋钮：`sandbox`（解析时报的钉子）、`failResolve` / `failRebuild` / `failRebuildFor`（按 agentId / 'root'）、`omitOnRebuild`（重建时故意漏掉的
  * 工具名，附加工具也算）、`platform`。`rebuildContexts` 记每次重建的上下文。
@@ -279,7 +280,7 @@ export function makeTestToolHost(
         tools: [...agentToolsOf(sessionId, record.toolNames)]
       }
       const extras = (context.extraTools ?? []).filter(keep)
-      return {
+      const rebuilt: AgentToolSet = {
         ...(set.agent !== undefined && keep(set.agent) ? { agent: set.agent } : {}),
         ...(set.skill !== undefined && keep(set.skill) ? { skill: set.skill } : {}),
         mcp: (set.mcp ?? []).map((entry) => ({
@@ -289,6 +290,26 @@ export function makeTestToolHost(
         tools: (set.tools ?? []).filter(keep),
         ...(extras.length > 0 ? { extraTools: extras } : {})
       }
+      const connect = context.connect
+      if (connect === undefined) return rebuilt
+      // 完整初始化（option A）：记录里的服务器当场连（连不上与解析时同一条广播，工具照旧按快照建）
+      return (async () => {
+        for (const name of Object.keys(record.mcp)) {
+          const server = servers.get(name)
+          if (server === undefined) continue
+          try {
+            await server.connect(connect.signal)
+          } catch (error) {
+            if (connect.signal.aborted) throw error
+            broadcast({
+              type: 'error',
+              sessionId,
+              error: `MCP server ${server.name} failed to connect: ${error instanceof Error ? error.message : String(error)}`
+            })
+          }
+        }
+        return rebuilt
+      })()
     }
   }
   return host

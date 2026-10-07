@@ -444,6 +444,9 @@ describe('P3-13 runtime · read-only, cheap, closed', () => {
     expect(await d.session.submitUser('go')).toEqual({})
     const next = await d.reopen()
     const session = next.session
+    // option A：空闲重启清掉了根的锁 —— 在这个进程里重新创建，快照里才有根那一行
+    expect(session.lock).toBeUndefined()
+    await session.createAgent()
     const [record] = session.spawnedRecords()
     await session.agents.ensureInstalled(record!.conversationId)
     const rows = await session.monitorSnapshot()

@@ -388,6 +388,11 @@ export interface SpawnHost {
   stopConversation(conversationId: ConversationId): Promise<void>
   /** 起跑路径的重开询问（含 `onInputsReopened`） */
   reopenInputs(): void
+  /**
+   * 会话的 `shuvix.builtin` 没装就装上（惰性，option A：打开一条空闲会话不建它）。子 agent 的内置工具按名从
+   * 它解析，所以派生（工具 / 宿主）与重建（打开时 / 面板追问 / 重跑重新挂上）都先调它。失败原样抛出。
+   */
+  ensureBuiltin(): Promise<void>
   /** 一次会话调用（关停后拒绝、计入进行中） */
   op<T>(work: () => Promise<T>): Promise<T>
 }
@@ -611,6 +616,8 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     let frozen: Awaited<ReturnType<typeof computeFrozenAgentPrompt>>
     const extraTools = resultContractTools(contract)
     try {
+      // 子 agent 的内置工具取会话的那一份（下面按名单拼次序时读它）：还没装就先装
+      await host.ensureBuiltin()
       resolved = await host.toolHost.resolveAgentTools(
         {
           sessionId,
@@ -1120,8 +1127,12 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     await this.rebuild(record)
   }
 
-  /** 按记录重建并装上按 agent 的扩展（附加工具显式拼进去） */
+  /**
+   * 按记录重建并装上按 agent 的扩展（附加工具显式拼进去）。子 agent 的内置工具按名从会话的
+   * `shuvix.builtin` 解析：还没装（空闲会话打开时不建它）就先装上
+   */
   private async rebuild(record: SpawnedAgentRecord): Promise<void> {
+    await this.host.ensureBuiltin()
     const extraTools = resultContractTools(record.resultContract)
     const set = await this.host.toolHost.rebuildAgentTools(record, {
       sessionId: this.host.sessionId,

@@ -17,6 +17,9 @@
  *     不通知的情形：本进程有人在前台等着它 / 已经把这次落定交回去了、`wait` 握着它 / 已经交回了它、
  *     是智能体自己停的（stop / 前台级联 / 中断父会话的级联 / 同一父会话的新消息顶掉了它），以及
  *     前台驱动它的那个父会话工具任务还活着（重跑时会就地收下答复，PIN-14 的裁定）。
+ *     **能叫醒父会话的只有本进程发起、还记着的驱动**（`records` 里的 released：后台形态、前台超时降级）：
+ *     本进程不认得的（上个进程发起的、子会话打开时扫描重报的）只写一条通知进父会话的转写，不起一轮 ——
+ *     父会话的下一轮看得见它（option A：重启之后被搁着的父会话不该被叫醒）。
  *  5. **崩溃之后的重跑**（P2-10，Q-P2-01/02）：`session` 工具是 replay `safe`，每个动作都幂等 ——
  *     `prompt` 先问子会话认不认得这个幂等键：已落定 → 直接读答复；没落定 → 重新挂上（被中断就续上），
  *     从不再发一条；`wait` 重跑时续上被中断的目标再等。父会话的「继续」因此在同一轮里把子会话带起来。
@@ -765,14 +768,23 @@ class SubSessionRunner {
    * 与发送那一侧谁先谁后无关：抑制条件两边都记。
    */
   async onDrivenSettled(event: DrivenSettledEvent): Promise<void> {
+    // 能叫醒父会话（自动续跑一轮）的只有本进程发起、还记着的驱动（含前台超时降级成的 released）——
+    // 在 suppressNotice 销账之前看
+    const tracked = this.records.get(event.requestId)?.state === 'released'
     if (await this.suppressNotice(event)) {
       log.info(`子会话 ${event.sessionId} 的完成通知不发 request=${event.requestId}`)
       return
     }
+    if (!tracked) {
+      log.info(
+        `子会话 ${event.sessionId} 的完成通知只写入、不叫醒父会话（不是本进程发起的驱动）request=${event.requestId}`
+      )
+    }
     await sessionService.deliverSubSessionNotice(
       event.parentId,
       this.completionNotice(event),
-      event.noticeRequestId
+      event.noticeRequestId,
+      { wake: tracked }
     )
   }
 

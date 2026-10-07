@@ -12,7 +12,7 @@
  *       K2-01 子会话自己的一轮被中断   K2-02 P 自己的后台一轮被顶掉（P2-10 PIN-19）
  *       K2-03 被中断的子会话里有活着的派生 agent
  *       （K2-04 只在 P2-10 把 -46 挪过来时才跑 —— 没挪：P2-10 的 subSessionDurable 仍有 -46，这里不重复）
- *   K3  后台完成跨重启补报（driven 标记 → 恰一条通知）
+ *   K3  后台完成跨重启补报（driven 标记 → 恰一条通知；驱动是上个进程发起的 → 只写入、不叫醒 P，option A）
  *       K3-01 C 落定时 P 关着   K3-02 自动续跑关掉   K3-03 用户停掉被中断的子会话
  *       K3-04 两个补报的子会话一起落定   K3-05 C 落定之前 P 被删
  *   K6  删除的级联
@@ -491,7 +491,7 @@ describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => 
 
 describe('K3 background completion re-arm across a restart', () => {
   it(
-    'K3-01 C 落定时 P 关着：P 经 peek 够到（从不 open）；P 恰多出 [通知, ack]；恰一个 subsession-done:C:<n> 提交；自动续跑的最后一条用户消息就是通知；C 的标记清掉；进程 3 什么都不多',
+    'K3-01 C 落定时 P 关着：P 经 peek 够到（从不 open）；P 恰多出一条写入的通知、不起一轮（驱动是上个进程发起的，option A）；恰一个 subsession-done:C:<n> 提交；C 的标记清掉；进程 3 什么都不多',
     async () => {
       await crashInBackgroundPrompt()
       const p2 = proc()
@@ -504,27 +504,28 @@ describe('K3 background completion re-arm across a restart', () => {
       const open = vi.spyOn(p2.host, 'open')
       const deliver = spyNotices(p2)
       p2.router.on('C', role('chat', 'bg'), answer('done'))
-      p2.router.on('P', role('chat', 'start'), answer('ack'))
       const child = await p2.sessionService.ensureAgentSession('C')
       expect(await withTimeout(child!.continue(), 15000, 'C.continue')).toEqual({})
-      await waitFor(() => p2.router.left('P') === 0, 10000, 'P auto-resumed')
+      await waitFor(async () => (await markerOf('C')) === undefined, 5000, 'C marker cleared')
+      await sleep(300)
       await waitFor(() => settingsOf('P').runState === 'idle', 10000, 'P idle')
 
       expect(open.mock.calls.filter(([id]) => id === 'P')).toEqual([])
       const after = await transcriptOf('P')
       const added = after.slice(before.length)
-      expect(added).toHaveLength(2)
-      expect(added[0]).toMatch(/^pi\.user:/)
+      expect(added).toHaveLength(1)
+      expect(added[0]).toMatch(/^shuvix\.notice:/)
       expect(added[0]).toContain('id="C"')
       expect(added[0]).toContain('wait-for-sub-sessions')
       expect(added[0]).not.toContain('done')
-      expect(added[1]).toBe('pi.assistant:ack')
+      expect(p2.router.requests('P')).toHaveLength(0)
+      expect(
+        deliver.mock.calls.every((call) => (call[3] as { wake: boolean }).wake === false)
+      ).toBe(true)
       const noticeIds = [...new Set(deliver.mock.calls.map((call) => call[2] as string))]
       expect(noticeIds).toHaveLength(1)
       expect(noticeIds[0]).toMatch(/^subsession-done:C:\d+$/)
       expect(await submissionOf('P', noticeIds[0]!)).toBeDefined()
-      expect(lastUserText(p2.router.requests('P')[0]!)).toBe(added[0]!.slice('pi.user:'.length))
-      await waitFor(async () => (await markerOf('C')) === undefined, 5000, 'C marker cleared')
       await reopenAddsNothing(['C', 'P'])
     },
     T
@@ -565,11 +566,10 @@ describe('K3 background completion re-arm across a restart', () => {
   )
 
   it(
-    'K3-03 用户停掉被中断的子会话：R aborted、C 镜像 idle；P 恰一条带「被用户停掉」的通知、自动续跑一次；C 没有请求',
+    'K3-03 用户停掉被中断的子会话：R aborted、C 镜像 idle；P 恰一条带「被用户停掉」的通知、只写入不起一轮（option A）；C 没有请求',
     async () => {
       const { requestId } = await crashInBackgroundPrompt()
       const p2 = proc()
-      p2.router.on('P', role('chat', 'start'), answer('ack'))
       // 用户在 C 里点停止：那时 C 开着（网关的 abort 只作用于打开着的会话 —— 没开着的什么都不做）
       await p2.sessionService.ensureAgentSession('C')
       await withTimeout(p2.chatGateway.abort('C'), 10000, 'abort C')
@@ -581,9 +581,9 @@ describe('K3 background completion re-arm across a restart', () => {
       expect(await submissionOf('C', requestId)).toMatchObject({ status: 'unanswered' })
       await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle')
       expect(noticesIn(await transcriptOf('P'))[0]).toContain('stopped by the user')
-      await waitFor(() => p2.router.left('P') === 0, 10000, 'P auto-resumed')
-      await sleep(200)
-      expect(p2.router.requests('P')).toHaveLength(1)
+      expect(noticesIn(await transcriptOf('P'))[0]).toMatch(/^shuvix\.notice:/)
+      await sleep(300)
+      expect(p2.router.requests('P')).toHaveLength(0)
       expect(p2.router.requests('C')).toHaveLength(0)
       expect(noticesIn(await transcriptOf('P'))).toHaveLength(1)
     },
@@ -591,7 +591,7 @@ describe('K3 background completion re-arm across a restart', () => {
   )
 
   it(
-    'K3-04 两个补报的子会话一起落定：P 恰一次自动续跑、最后一条用户消息里 C1 与 C2 两块都在；没有哪条通知送两次；合并的 requestId（PIN-10）；两个标记都清掉；进程 3 什么都不多',
+    'K3-04 两个补报的子会话一起落定：P 恰多出两条写入的通知、不起一轮（option A）；没有哪条通知送两次；两个标记都清掉；进程 3 什么都不多',
     async () => {
       const p1 = proc()
       insert('P')
@@ -615,7 +615,6 @@ describe('K3 background completion re-arm across a restart', () => {
       const deliver = spyNotices(p2)
       p2.router.on('C1', role('chat', 'one-task'), answer('one'))
       p2.router.on('C2', role('chat', 'two-task'), answer('two'))
-      p2.router.on('P', role('chat', 'start'), answer('ack'), answer('ack2'))
       const [c1, c2] = await Promise.all([
         p2.sessionService.ensureAgentSession('C1'),
         p2.sessionService.ensureAgentSession('C2')
@@ -626,28 +625,24 @@ describe('K3 background completion re-arm across a restart', () => {
         'continues'
       )
       expect(results).toEqual([{}, {}])
-      await waitFor(() => p2.router.requests('P').length >= 1, 10000, 'P auto-resumed')
+      await waitFor(
+        async () => noticesIn(await transcriptOf('P')).length === 2,
+        10000,
+        'both notices in P'
+      )
       await sleep(800)
       await waitFor(() => settingsOf('P').runState === 'idle', 10000, 'P idle')
 
       const noticeIds = deliver.mock.calls.map((call) => call[2] as string)
       expect(new Set(noticeIds).size).toBe(2)
-      const pUsers = (await transcriptOf('P')).filter((e) => e.startsWith('pi.user:'))
+      const pNotices = (await transcriptOf('P')).filter((e) => e.startsWith('shuvix.notice:'))
       for (const id of noticeIds) {
         const child = id.split(':')[1]
-        expect(pUsers.filter((e) => e.includes(`<sub-session id="${child}"`))).toHaveLength(1)
+        expect(pNotices.filter((e) => e.includes(`<sub-session id="${child}"`))).toHaveLength(1)
+        expect(await submissionOf('P', id)).toBeDefined()
       }
-      const autoResumes = p2.router.requests('P')
-      if (autoResumes.length === 1) {
-        const last = lastUserText(autoResumes[0]!)
-        expect(last).toContain('id="C1"')
-        expect(last).toContain('id="C2"')
-        const combined = `notices:${[...noticeIds].sort().join(',')}`
-        expect(await submissionOf('P', combined)).toBeDefined()
-      } else {
-        // PIN-09：运行时把两次落定拆进了两个窗口 —— 照记：两轮自动续跑，每条通知仍只出现一次
-        expect(autoResumes).toHaveLength(2)
-      }
+      // 两次驱动都是上个进程发起的：P 一轮都不起
+      expect(p2.router.requests('P')).toHaveLength(0)
       await waitFor(async () => (await markerOf('C1')) === undefined, 5000, 'C1 marker cleared')
       await waitFor(async () => (await markerOf('C2')) === undefined, 5000, 'C2 marker cleared')
       await reopenAddsNothing(['C1', 'C2', 'P'])

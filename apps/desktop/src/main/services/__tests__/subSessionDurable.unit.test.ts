@@ -278,6 +278,24 @@ const noticesTo = (session: FakeDurableSession): unknown[][] => [
   ...session.callsOf('writeNotice')
 ]
 
+/**
+ * 本进程发起的后台驱动（option A：只有它们落定时能叫醒父会话）：子会话的发送扣在闸门上，`prompt` 交回
+ * 启动回执、记账成 released。交回子会话（用完放闸门）。
+ */
+async function startBackground(childId: string, taskId: number): Promise<FakeDurableSession> {
+  const child = fakeHost.put(childId, { submitGate: gate() })
+  const started = await runner.prompt({
+    parentId: 'P',
+    childId,
+    message: 'go',
+    background: true,
+    timeoutSeconds: 5,
+    requestId: R(taskId)
+  })
+  expect(started).toMatchObject({ kind: 'started' })
+  return child
+}
+
 beforeEach(() => {
   const db = new DatabaseSync(':memory:')
   for (const m of migrations) m.up(db as unknown as Db)
@@ -1063,10 +1081,27 @@ describe('G. completion notices', () => {
     expect(parent.callsOf('notify')).toHaveLength(2)
   })
 
-  it('P2-10-40 送达父会话：开着锁着 → notify；没开着 → peek（不 open），没锁 → writeNotice、不建 agent；行没了 → 什么都不调；peek / notify 抛 → 拒绝；被抑制 → 正常落定', async () => {
-    const parent = family('c1')
+  it('P2-10-40 送达父会话：本进程的驱动 + 开着锁着 → notify；本进程不认得的驱动 → 锁着也只 writeNotice（option A）；没开着 → peek（不 open），没锁 → writeNotice、不建 agent；行没了 → 什么都不调；peek / notify 抛 → 拒绝；被抑制 → 正常落定', async () => {
+    const parent = family('c1', 'c3')
+    const c1 = await startBackground('c1', 1)
     await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
     expect(parent.callsOf('notify')).toHaveLength(1)
+    expect(parent.callsOf('writeNotice')).toEqual([])
+    c1.submitGate!.release()
+
+    // 本进程不认得的驱动（上个进程发起的）：父会话锁着也只写入
+    await runner.onDrivenSettled(settledEvent({ requestId: R(7) }))
+    expect(parent.callsOf('notify')).toHaveLength(1)
+    expect(parent.callsOf('writeNotice')).toEqual([
+      [
+        'writeNotice',
+        {
+          text: expect.stringContaining('id="c1"'),
+          kind: 'sub-session',
+          requestId: 'subsession-done:c1:42'
+        }
+      ]
+    ])
 
     // 没开着、存储在、没锁
     await fakeHost.close('P')
@@ -1092,9 +1127,11 @@ describe('G. completion notices', () => {
     reopened.notify = async () => {
       throw new Error('parent write failed')
     }
-    await expect(runner.onDrivenSettled(settledEvent({ requestId: R(3) }))).rejects.toThrow(
-      'parent write failed'
-    )
+    const c3 = await startBackground('c3', 3)
+    await expect(
+      runner.onDrivenSettled(settledEvent({ childId: 'c3', requestId: R(3) }))
+    ).rejects.toThrow('parent write failed')
+    c3.submitGate!.release()
 
     // peek 抛 → 拒绝
     await fakeHost.close('P')
@@ -1134,14 +1171,17 @@ describe('G. completion notices', () => {
 
     fakeHost.put('c2', { pendingInputCount: 1, pendingInputSummaries: ['bash: rm -rf build'] })
     await runner.onDrivenSettled(settledEvent({ childId: 'c2', requestId: R(10) }))
-    const text = String(parent.callsOf('notify')[0]![1])
+    // 本进程不认得的后台驱动：只写入（option A），文案照旧
+    expect(parent.callsOf('notify')).toEqual([])
+    const text = String((parent.callsOf('writeNotice')[0]![1] as { text: string }).text)
     expect(text).toContain('ask the user for approval')
     expect(text).toContain('rm -rf build')
     expect(text).not.toContain('has finished')
   })
 
-  it('P2-10-44 两条后台子会话同时跑完 → 两次 notify，各带自己的 requestId（不在桌面这边拼起来）', async () => {
+  it('P2-10-44 两条（本进程发起的）后台子会话同时跑完 → 两次 notify，各带自己的 requestId（不在桌面这边拼起来）', async () => {
     const parent = family('c1', 'c2')
+    const children = [await startBackground('c1', 1), await startBackground('c2', 2)]
     await Promise.all([
       runner.onDrivenSettled(settledEvent({ childId: 'c1', requestId: R(1) })),
       runner.onDrivenSettled(settledEvent({ childId: 'c2', requestId: R(2) }))
@@ -1155,16 +1195,18 @@ describe('G. completion notices', () => {
     expect(
       notices.every((n) => !String(n[1]).includes('id="c1"') || !String(n[1]).includes('id="c2"'))
     ).toBe(true)
+    for (const child of children) child.submitGate!.release()
   })
 
-  it('PIN-14 的裁定：本进程不认得的前台落定 —— 驱动它的父会话工具任务还活着 → 不通知；已终结 → 通知', async () => {
+  it('PIN-14 的裁定：本进程不认得的前台落定 —— 驱动它的父会话工具任务还活着 → 不通知；已终结 → 通知（只写入，不叫醒父会话，option A）', async () => {
     const parent = family('c1')
     parent.taskStates.set(9, { live: true, abortRequested: false })
     await runner.onDrivenSettled(settledEvent({ requestId: R(9), background: false }))
     expect(noticesTo(parent)).toEqual([])
     parent.taskStates.set(10, { live: false, abortRequested: false })
     await runner.onDrivenSettled(settledEvent({ requestId: R(10), background: false }))
-    expect(parent.callsOf('notify')).toHaveLength(1)
+    expect(parent.callsOf('notify')).toEqual([])
+    expect(parent.callsOf('writeNotice')).toHaveLength(1)
   })
 })
 
@@ -1244,9 +1286,12 @@ describe('H. abort semantics', () => {
     expect(c4.callsOf('abort')).toEqual([])
     expect(c4.busy).toBe(true)
     c4.busy = false
-    const before = parent.callsOf('notify').length
+    const before = noticesTo(parent).length
+    const notifiesBefore = parent.callsOf('notify').length
     await runner.onDrivenSettled(settledEvent({ childId: 'c4', requestId: R(40) }))
-    expect(parent.callsOf('notify').length - before).toBe(1)
+    expect(noticesTo(parent).length - before).toBe(1)
+    // 那次驱动是上个进程发起的：只写入、不叫醒（option A）
+    expect(parent.callsOf('notify').length).toBe(notifiesBefore)
   })
 
   it('P2-10-47 中断的父会话被中止：只级联前台驱动、工具任务还活着的那条；后台 / wait 目标 / 早先超时降级的前台一概不碰；不通知', async () => {

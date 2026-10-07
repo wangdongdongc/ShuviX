@@ -115,7 +115,8 @@ describe('lock · create', () => {
     for (const text of ['u1', 'u2', 'u3']) expect(await session.submitUser(text)).toEqual({})
     expect(t.configCalls).toHaveLength(1)
     expect(t.toolHost.resolveCalls).toHaveLength(1)
-    expect(t.toolHost.builtinCalls).toHaveLength(2)
+    // 打开一条空闲会话什么都不建（option A：内置工具是惰性的），创建时建一次
+    expect(t.toolHost.builtinCalls).toHaveLength(1)
     expect(t.mirror).toEqual([
       ['s1', false],
       ['s1', true]
@@ -273,14 +274,8 @@ describe('lock · create', () => {
     expect(recorder.touching('pi.agent#1')).toEqual([])
     expect(await storedLock(session)).toBeUndefined()
     expect(extensionTools(t, 'shuvix.agent.1')).toBeUndefined()
-    // shuvix.builtin 回到打开时那一份（沙箱钉子 undefined）
-    expect(
-      t
-        .registryOf('s1')!
-        .snapshot()
-        .extension('shuvix.builtin')!
-        .tools!.find((tool) => tool.name === 'bash')!.description
-    ).toContain('sandboxed=undefined')
+    // shuvix.builtin 回到打开时的样子：没装（option A：空闲会话打开时不建内置工具）
+    expect(t.registryOf('s1')!.snapshot().extension('shuvix.builtin')).toBeUndefined()
     expect(t.kit.callCount).toBe(0)
   })
 

@@ -58,6 +58,12 @@ export interface LockRecord {
   mcp: { [server: string]: McpToolDeclaration[] }
   /** 技能工具列出的技能 */
   skills: string[]
+  /**
+   * 创建时会话的扩展能力勾选（`AgentConfig.toolOverlay`，`mcp:` / `skill:`；只有根的锁有）—— 「这个 agent 是按
+   * 哪份勾选建的」：连不上的 MCP 也在其中（K7：它们下次创建再试），档案自己声明的不在。`agent.init` 锁着时
+   * 报它（option A）。这个字段之前建的锁没有它 → 缺省
+   */
+  selection?: string[]
   createdAt: number
 }
 
@@ -81,7 +87,7 @@ function cloneJson<T>(value: T): T {
 /** 锁字段那一段的校验与拷贝（两种记录共用）；kind 只认 root / spawned */
 function parseLockFields(raw: Record<string, unknown>): LockRecord | undefined {
   const { conversationId, profileName, kind, model, thinkingLevel, toolNames } = raw
-  const { extensions, sandboxed, mcp, skills, createdAt } = raw
+  const { extensions, sandboxed, mcp, skills, selection, createdAt } = raw
   if (!isPositiveInteger(conversationId)) return undefined
   if (typeof profileName !== 'string') return undefined
   if (kind !== 'root' && kind !== 'spawned') return undefined
@@ -112,6 +118,8 @@ function parseLockFields(raw: Record<string, unknown>): LockRecord | undefined {
     sandboxed,
     mcp: cloneJson(mcp) as LockRecord['mcp'],
     skills: [...skills],
+    // 可选字段宽松读：写坏了只丢掉它，不让整条锁按「写坏了」清掉
+    ...(isStringArray(selection) ? { selection: [...selection] } : {}),
     createdAt
   }
 }

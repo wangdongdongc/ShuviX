@@ -364,7 +364,7 @@ describe('auxiliary work · abort-marked at open, never resumed', () => {
   )
 
   it(
-    'P2-01-37 opening writes nothing but the marks: session state, root pi.agent and transcripts are unchanged; idle reported once',
+    'P2-01-37 opening writes nothing but the marks and the stale-lock clear (option A: idle root, so the lock from the earlier process goes): the rest of the session state, root pi.agent and transcripts are unchanged; idle reported once',
     async () => {
       type Snapshot = { state: unknown; agent: unknown; root: unknown; child: unknown }
       const capture = async (
@@ -383,10 +383,15 @@ describe('auxiliary work · abort-marked at open, never resumed', () => {
         }
       })
       const session = await t.open()
-      expect(await capture(session, child)).toEqual(before)
+      const { lock: staleLock, ...stateWithoutLock } = (before!.state ?? {}) as Record<
+        string,
+        unknown
+      >
+      expect(staleLock).toBeDefined()
+      expect(await capture(session, child)).toEqual({ ...before, state: stateWithoutLock })
       await sleep(20)
       expect(t.statesOf('s1')).toEqual(['idle'])
-      expect(t.mirror).toEqual([['s1', true]])
+      expect(t.mirror).toEqual([['s1', false]])
     },
     RESTART_TIMEOUT
   )
@@ -655,10 +660,10 @@ describe('auxiliary work · isInterrupted and runState exclude it', () => {
 
 describe('auxiliary work · P1-07 / P1-09 rulings still hold', () => {
   it(
-    'P2-01-51 K11/K12: reopening with titler work rebuilds only the lock, reconciles the mirror, installs no spawned extension',
+    'P2-01-51 K11/K12: reopening with titler work (and an interrupted root, so the lock survives — option A) rebuilds only the lock, reconciles the mirror, installs no spawned extension',
     async () => {
       const { t: first } = await scenarioW({ extensions: [TEST_SPAWN_EXTENSION] })
-      const { t, child } = await crashWithTitler({ first })
+      const { t, child } = await crashWithTitler({ first, rootStalled: true })
       const session = await t.open()
       expect(session.lock).toEqual(lockW())
       expect(t.toolHost.rebuildCalls).toEqual([lockW()])

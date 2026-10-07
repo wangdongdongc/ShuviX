@@ -16,7 +16,7 @@ import {
   type PersonaInput
 } from '../prompt/persona'
 import { createPromptExtensions, PROMPT_EXTENSION } from '../prompt/sections'
-import { answer } from './support/faux'
+import { answer, stalled } from './support/faux'
 import { makeHost, registerHostCleanup } from './support/host'
 import { frozenPrompt, lockPrompt } from './support/prompt'
 import { allEntries } from './support/transcript'
@@ -118,7 +118,7 @@ describe('persona rendering and freezing', () => {
     expect(await frozenPersonaOf(session.harness, ROOT_CONVERSATION_ID, BG)).toBe('P1')
   })
 
-  it('P-05 survives a restart on SQLite: same prompt, no re-render, no new pi.system', async () => {
+  it('P-05 survives a restart with interrupted work on SQLite (option A keeps the lock): same prompt, no re-render, no new pi.system', async () => {
     let promptVarsCalls = 0
     const host = {
       promptVars: () => {
@@ -133,16 +133,19 @@ describe('persona rendering and freezing', () => {
     await lockPrompt(await session.currentConversation(), t.kit, frozen, [
       prompt.get(PROMPT_EXTENSION.persona)
     ])
-    t.kit.queue(answer('a1'))
-    await session.submitUser('u1')
+    const stall = stalled()
+    t.kit.queue(stall.step)
+    void session.submitUser('u1')
+    await stall.reached
 
     const t2 = await t.restart()
     const reopened = await t2.open()
+    expect(reopened.isInterrupted()).toBe(true)
     await reopened
       .currentConversation()
       .then((conversation) => conversation.configure({ model: t2.kit.model }, BG))
     t2.kit.queue(answer('a2'))
-    expect(await reopened.submitUser('u2')).toEqual({})
+    expect(await reopened.continue()).toEqual({})
     expect(promptVarsCalls).toBe(1)
     expect(getCurrentSystemPrompt(t2.kit.requests[0]!.messages)).toBe('Hello X\n\nBye')
     const systems = (await allEntries(await reopened.currentConversation())).filter((entry) =>

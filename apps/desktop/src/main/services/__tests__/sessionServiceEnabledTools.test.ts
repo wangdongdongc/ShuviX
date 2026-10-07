@@ -29,7 +29,8 @@ const mocks = vi.hoisted(() => ({
   daoFindById: vi.fn<(id: string) => unknown>(),
   projectPick: vi.fn<(id: string, cols: string[]) => unknown>(),
   readSessionRunConfig: vi.fn(),
-  findModelsByProvider: vi.fn(() => []),
+  findModelsByProvider: vi.fn<(provider: string) => unknown[]>(() => []),
+  listProviders: vi.fn<() => unknown[]>(() => []),
   findByKey: vi.fn<(key: string) => string | undefined>(),
   filterAvailableTools: vi.fn<(tools: string[], projectPath?: string) => string[]>(),
   broadcast: vi.fn<(event: Record<string, unknown>) => void>(),
@@ -63,6 +64,10 @@ vi.mock('../../dao/providerDao', () => ({
   }
 }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick } }))
+// provider 行（锁里的 pi provider id 译回行 id 用，LA-D）
+vi.mock('../models', () => ({
+  providerCredentialPort: { listProviders: mocks.listProviders }
+}))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: mocks.findByKey } }))
 vi.mock('../messageService', () => ({ messageService: { clear: vi.fn() } }))
 vi.mock('../sessionStorage', () => ({
@@ -200,6 +205,7 @@ beforeEach(() => {
   mocks.projectPick.mockImplementation((id, cols) => pickCols(projects.get(id), cols))
   mocks.readSessionRunConfig.mockResolvedValue({})
   mocks.findModelsByProvider.mockReturnValue([])
+  mocks.listProviders.mockReturnValue([])
   mocks.findByKey.mockReturnValue(undefined)
   mocks.filterAvailableTools.mockImplementation((tools) => tools)
   resetFakeHost()
@@ -526,7 +532,7 @@ describe('ML-U-1 hasAgentRuntime 与 initAgent().created / updateEnabledTools �
   const LOCKED = { runtime: true, created: true, writable: false }
   const FREE = { runtime: false, created: false, writable: true }
 
-  it('ML-U-1 没开 / 开着没锁 / 锁着 / 销毁中 / 销毁完 / 没开但镜像为真：每个时刻三面一致', async () => {
+  it('ML-U-1 没开 / 开着没锁 / 锁着 / 销毁中 / 销毁完 / 没开但镜像为真（initAgent peek 打开它读真正的锁，option A）：每个时刻三面一致', async () => {
     seedSession({ id: SID, settings: { enabledTools: ['skill:a'] } })
 
     // ① 没开、没有镜像：三面都说可改
@@ -553,12 +559,27 @@ describe('ML-U-1 hasAgentRuntime 与 initAgent().created / updateEnabledTools �
     await r
     expect(await snapshot()).toEqual(FREE)
 
-    // ⑥ 会话没开着、镜像为真（重启之后）：只读；镜像为假：可改
+    // ⑥ 会话没开着、镜像为真：initAgent 先 peek 打开它、按真正的锁回答（option A）——
+    //   打开时锁保留了（同一进程里 LRU 关掉的 / 上个进程留下、有可续的工作）→ 只读
     await fakeHost.close(SID)
     sessions.get(SID)!.settings.agentLocked = true
+    fakeHost.configure = (reopened) => {
+      reopened.lock = lockRecord()
+    }
     expect(await snapshot()).toEqual(LOCKED)
+    expect(fakeHost.callsOf('peek')).toEqual([SID])
+    //   上个进程留下、空闲：打开时锁清掉了 → initAgent 之后三面都说可改（镜像过时，运行时为准）
+    await fakeHost.close(SID)
+    fakeHost.configure = undefined
+    expect(sessionService.hasAgentRuntime(SID)).toBe(true)
+    expect((await sessionService.initAgent(SID)).created).toBe(false)
+    expect(fakeHost.callsOf('peek')).toEqual([SID, SID])
+    expect(await snapshot()).toEqual(FREE)
+    //   镜像为假：不 peek，可改
+    await fakeHost.close(SID)
     sessions.get(SID)!.settings.agentLocked = false
     expect(await snapshot()).toEqual(FREE)
+    expect(fakeHost.callsOf('peek')).toEqual([SID, SID])
   })
 
   it('ML-U-1 开着但没锁、镜像过时说有 → 以运行时为准：可改', async () => {
@@ -569,5 +590,131 @@ describe('ML-U-1 hasAgentRuntime 与 initAgent().created / updateEnabledTools �
 
   it('ML-U-1 会话不存在 → hasAgentRuntime false（不抛）', () => {
     expect(sessionService.hasAgentRuntime('no-such-session')).toBe(false)
+  })
+})
+
+describe('LA-D initAgent reports the locked agent, not the session settings (option A)', () => {
+  const ROWS = [
+    { id: 'row-anthropic', name: 'Anthropic', isBuiltin: true, isEnabled: true },
+    { id: 'custom-row', name: 'My proxy', isBuiltin: false, isEnabled: true }
+  ]
+  const SETTINGS_RUN = { provider: 'custom-row', model: 'settings-model', thinkingLevel: 'low' }
+
+  beforeEach(() => {
+    mocks.readSessionRunConfig.mockResolvedValue(SETTINGS_RUN)
+    mocks.listProviders.mockReturnValue(ROWS)
+    mocks.findModelsByProvider.mockImplementation((provider) =>
+      provider === 'row-anthropic'
+        ? [{ modelId: 'claude-x', capabilities: JSON.stringify({ reasoning: true, vision: true }) }]
+        : [
+            { modelId: 'settings-model', capabilities: JSON.stringify({ reasoning: false }) },
+            { modelId: 'proxy-model', capabilities: JSON.stringify({ vision: true }) }
+          ]
+    )
+  })
+
+  it('LA-D1 open and locked: the locked model (pi id → provider row id) with its capabilities, the live thinking level and the selection the lock was created from — none of it from the settings', async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:settings-only', 'skill:a'] } })
+    fakeHost.put(SID, {
+      lock: lockRecord({
+        model: { provider: 'anthropic', modelId: 'claude-x' },
+        thinkingLevel: 'medium',
+        mcp: { ssh: [] },
+        skills: ['pdf', 'builtin:drawing'],
+        // 连不上的 tavily 也在创建时的勾选里（界面照旧画成「已勾 + 离线」）
+        selection: ['skill:pdf', 'mcp:ssh', 'mcp:tavily']
+      }),
+      thinkingLevel: 'high'
+    })
+    const result = await sessionService.initAgent(SID)
+    expect(result).toEqual({
+      success: true,
+      created: true,
+      provider: 'row-anthropic',
+      model: 'claude-x',
+      capabilities: { reasoning: true, vision: true },
+      modelMetadata: { thinkingLevel: 'high' },
+      workingDirectory: expect.any(String),
+      enabledTools: ['skill:pdf', 'mcp:ssh', 'mcp:tavily']
+    })
+    // 会话开着：不 peek
+    expect(fakeHost.callsOf('peek')).toEqual([])
+    // 会话设置一个字都没动
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:settings-only', 'skill:a'])
+  })
+
+  it('LA-D2 a custom provider keeps its row id; a provider row that is gone leaves the pi id as it is (no capabilities)', async () => {
+    seedSession({ id: SID, settings: { enabledTools: [] } })
+    const session = fakeHost.put(SID, {
+      lock: lockRecord({ model: { provider: 'custom-row', modelId: 'proxy-model' } })
+    })
+    expect(await sessionService.initAgent(SID)).toMatchObject({
+      created: true,
+      provider: 'custom-row',
+      model: 'proxy-model',
+      capabilities: { vision: true },
+      modelMetadata: { thinkingLevel: 'off' },
+      enabledTools: []
+    })
+    session.lock = lockRecord({ model: { provider: 'gone', modelId: 'old-model' } })
+    expect(await sessionService.initAgent(SID)).toMatchObject({
+      created: true,
+      provider: 'gone',
+      model: 'old-model',
+      capabilities: {}
+    })
+  })
+
+  it('LA-D5 a lock from before the selection was recorded: the tool selection falls back to the settings (frozen while locked); the model still comes from the lock', async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:settings-only'] } })
+    fakeHost.put(SID, {
+      lock: lockRecord({ model: { provider: 'anthropic', modelId: 'claude-x' } })
+    })
+    expect(await sessionService.initAgent(SID)).toMatchObject({
+      created: true,
+      provider: 'row-anthropic',
+      model: 'claude-x',
+      enabledTools: ['mcp:settings-only']
+    })
+  })
+
+  it('LA-D3 not locked: the session settings, as before', async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:settings-only'] } })
+    fakeHost.put(SID)
+    expect(await sessionService.initAgent(SID)).toEqual({
+      success: true,
+      created: false,
+      provider: 'custom-row',
+      model: 'settings-model',
+      capabilities: { reasoning: false },
+      modelMetadata: { thinkingLevel: 'low' },
+      workingDirectory: expect.any(String),
+      enabledTools: ['mcp:settings-only']
+    })
+  })
+
+  it('LA-D4 closed while the mirror says locked: initAgent peeks it open — a kept lock reports the lock; a lock cleared at that open (idle, earlier process) reports the settings with created false', async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:settings-only'], agentLocked: true } })
+    fakeHost.storages.add(SID)
+    fakeHost.configure = (reopened) => {
+      reopened.lock = lockRecord({ model: { provider: 'anthropic', modelId: 'claude-x' } })
+    }
+    expect(await sessionService.initAgent(SID)).toMatchObject({
+      created: true,
+      provider: 'row-anthropic',
+      model: 'claude-x'
+    })
+    expect(fakeHost.callsOf('peek')).toEqual([SID])
+    expect(fakeHost.callsOf('open')).toEqual([])
+
+    await fakeHost.close(SID)
+    fakeHost.configure = undefined
+    expect(await sessionService.initAgent(SID)).toMatchObject({
+      created: false,
+      provider: 'custom-row',
+      model: 'settings-model',
+      enabledTools: ['mcp:settings-only']
+    })
+    expect(fakeHost.callsOf('peek')).toEqual([SID, SID])
   })
 })

@@ -21,6 +21,7 @@ import type {
   ResolvedAgentTools
 } from '../seams'
 import { DECL_DOCS, DECL_RESOLVE, scenarioToolHost, testProfile } from './support/agentConfig'
+import { stalled } from './support/faux'
 import { registerHostCleanup } from './support/host'
 import { mcpDecl } from './support/mcpFake'
 import { extensionTools, lockW, scenarioW, storedLock } from './support/scenario'
@@ -516,18 +517,24 @@ describe('spawned tools · root-lock regressions', () => {
   })
 
   it(
-    'P2-02-31 a root rebuild never carries extras',
+    'P2-02-31 a root rebuild never carries extras (a restart with interrupted work, so the lock is kept and fully initialized — option A)',
     async () => {
       const first = await scenarioW()
       const session = await first.t.open()
       await session.createAgent()
       const lock = session.lock!
+      const stall = stalled()
+      first.t.kit.queue(stall.step)
+      void session.submitUser('stalled')
+      await stall.reached
       const t2 = await first.t.restart({
         toolHost: scenarioToolHost({ extraTools: [nextOf()] })
       })
       await t2.open()
       expect(t2.toolHost.rebuildCalls).toEqual([lock])
-      expect(t2.toolHost.rebuildContexts).toEqual([{ sessionId: 's1' }])
+      expect(t2.toolHost.rebuildContexts).toEqual([
+        { sessionId: 's1', connect: { signal: expect.any(AbortSignal) } }
+      ])
       expect('extraTools' in t2.toolHost.rebuildContexts[0]!).toBe(false)
       expect(extensionTools(t2, 'shuvix.agent.1')).toEqual([
         'agent',
@@ -535,7 +542,8 @@ describe('spawned tools · root-lock regressions', () => {
         'mcp__ctx__resolve',
         'mcp__ctx__docs'
       ])
-      expect(t2.toolHost.mcp('ctx').connects).toBe(0)
+      // 完整初始化当场连锁记着的服务器（与创建同口径）
+      expect(t2.toolHost.mcp('ctx').connects).toBe(1)
     },
     RESTART_TIMEOUT
   )

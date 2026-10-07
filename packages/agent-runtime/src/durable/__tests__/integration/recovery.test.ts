@@ -1,7 +1,8 @@
 /**
  * P1-12 · 场景 5：崩溃、重开、继续（SQLite，模拟换进程）。
  *
- * 打开从不续跑；锁与 MCP 声明熬过重启、按声明重建工具而不连服务器（第一次调用时原地连）；
+ * 打开从不续跑；带着被中断的工作重启，锁与 MCP 声明熬过去（option A）：打开时按声明重建工具并当场连锁
+ * 记着的服务器（完整初始化，与创建同口径）；空闲重启清锁，下一次发送重新创建；
  * 不安全的工具中断后记为「中断，可能已部分执行」、不重跑；推迟的通知在继续时送达；
  * 继续不发日期通知（PIN-7），下一次用户输入才发；打开时总报一次真实的运行状态（PIN-R）。
  */
@@ -47,7 +48,7 @@ async function crashMidRequest(world: World, session: DurableSession, text = 'u'
 
 describe('P1-12 · recovery', () => {
   it(
-    'I5-01 a crash mid-generation: the lock and the MCP declarations survive, nothing connects or runs at open; a deferred notice lands after the resumed answer',
+    'I5-01 a crash mid-generation: the lock and the MCP declarations survive and the agent is fully initialized at open (its MCP server connects, option A), nothing runs; a deferred notice lands after the resumed answer',
     async () => {
       const world = await makeWorld()
       const session = await locked(world)
@@ -70,7 +71,7 @@ describe('P1-12 · recovery', () => {
       ])
       expect(world.toolHost.rebuildCalls).toEqual([lock])
       expect(world.toolHost.resolveCalls).toEqual([])
-      expect(world.mcp.connectsOf('docs')).toBe(0)
+      expect(world.mcp.connectsOf('docs')).toBe(1)
       expect(world.t.mirror).toEqual([['s1', true]])
       expect(world.t.broadcastsOf('agent_created')).toEqual([])
       expect(reopened.runState).toBe('interrupted')
@@ -92,13 +93,13 @@ describe('P1-12 · recovery', () => {
       expect((await reopened.harness.snapshot(SessionStateDoc, BG))?.deferredNotices).toEqual([])
       await waitFor(() => world.t.statesOf('s1').length >= 3, 1000, 'run states')
       expect(world.t.statesOf('s1')).toEqual(['interrupted', 'busy', 'idle'])
-      expect(world.mcp.connectsOf('docs')).toBe(0)
+      expect(world.mcp.connectsOf('docs')).toBe(1)
     },
     TIMEOUT
   )
 
   it(
-    'I5-02 a crash mid MCP call: continue records the call as interrupted without re-running it; the next MCP call reconnects on the spot',
+    'I5-02 a crash mid MCP call: continue records the call as interrupted without re-running it; the server was connected at open (option A), so the next MCP call reuses that connection',
     async () => {
       const world = await makeWorld()
       const session = await locked(world)
@@ -108,7 +109,7 @@ describe('P1-12 · recovery', () => {
       await withTimeout(world.restart(), 10000, 'restart')
 
       const reopened = await world.open()
-      expect(world.mcp.connectsOf('docs')).toBe(0)
+      expect(world.mcp.connectsOf('docs')).toBe(1)
       world.chat(
         when((messages) =>
           lastToolResult(messages, 'mcp__docs__slow')?.includes('was interrupted')
@@ -135,16 +136,20 @@ describe('P1-12 · recovery', () => {
   )
 
   it(
-    'I5-02b the server dropped a tool between processes: the locked tool list does not change, and calling the dropped tool answers isError',
+    'I5-02b the server dropped a tool between processes (interrupted work, so the lock survives): the locked tool list does not change, and calling the dropped tool answers isError',
     async () => {
       const world = await makeWorld()
-      await locked(world)
+      const session = await locked(world)
       const before = world.model.chats.at(-1)!.tools
+      const stall = stalled()
+      world.chat(stall.step)
+      void session.submitUser('try slow')
+      await withTimeout(stall.reached, 3000, 'request reached')
       await withTimeout(world.restart({ mcp: { docs: ['lookup'] } }), 10000, 'restart')
 
       const reopened = await world.open()
       world.chat(callTool('mcp__docs__slow', {}, 'c-slow'), answer('ok'))
-      expect(await reopened.submitUser('try slow')).toEqual({})
+      expect(await withTimeout(reopened.continue(), 5000, 'continue')).toEqual({})
       expect(world.model.chats[0]!.tools).toEqual(before)
       expect(world.model.chats[0]!.tools).toContain('mcp__docs__slow')
       expect(await toolDeltaCount(await reopened.currentConversation(), 1)).toBe(0)
@@ -156,7 +161,7 @@ describe('P1-12 · recovery', () => {
   )
 
   it(
-    'I5-03 an idle restart, then a send: the same tools, no tool delta, no seam call, no re-creation',
+    'I5-03 an idle restart, then a send (option A): open clears the lock from the earlier process and builds nothing; the send creates the agent again from the current config — the same tools, no extra tool delta',
     async () => {
       const world = await makeWorld()
       await locked(world)
@@ -164,6 +169,11 @@ describe('P1-12 · recovery', () => {
       await withTimeout(world.restart(), 10000, 'restart')
 
       const reopened = await world.open()
+      expect(reopened.lock).toBeUndefined()
+      expect(world.t.mirror).toEqual([['s1', false]])
+      expect(world.toolHost.builtinCalls).toEqual([])
+      expect(world.toolHost.rebuildCalls).toEqual([])
+      expect(world.mcp.connectsOf('docs')).toBe(0)
       world.chat(answer('two'))
       expect(await reopened.submitUser('again')).toEqual({})
       expect(world.model.chats[0]!.tools).toEqual(before)
@@ -171,10 +181,10 @@ describe('P1-12 · recovery', () => {
       expect(
         deltas.filter((delta) => delta.toolsAdded.length + delta.toolsRemoved.length > 0)
       ).toHaveLength(1)
-      expect(world.t.configCalls).toEqual([])
-      expect(world.toolHost.resolveCalls).toEqual([])
-      expect(world.t.broadcastsOf('agent_created')).toEqual([])
-      expect(world.mcp.connectsOf('docs')).toBe(0)
+      expect(world.t.configCalls).toEqual(['s1'])
+      expect(world.toolHost.resolveCalls).toHaveLength(1)
+      expect(world.t.broadcastsOf('agent_created')).toHaveLength(1)
+      expect(world.mcp.connectsOf('docs')).toBe(1)
     },
     TIMEOUT
   )

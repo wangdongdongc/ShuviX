@@ -36,6 +36,7 @@ export {
   type ModelRef
 } from './models/modelRegistry'
 export type { ProviderCredentialPort, ProviderRow, ProviderModelRow } from './models/port'
+export { rowForProviderId } from './models/port'
 export {
   resolveLockModel,
   type LockModel,
@@ -591,6 +592,8 @@ export {
   type WithdrawResult
 } from './durable/durableSession'
 export { type RollbackOptions, type RollbackRefusal, type RollbackResult } from './durable/rollback'
+// 会话在本进程里的记录（option A：锁 = 「agent 在本进程里初始化过」；显式喊停）
+export { type SessionProcessRecord } from './durable/processRecord'
 // 监控快照（P3-13）：`DurableSession.monitorSnapshot()` 的一行（宿主补标题 / 根显示名即 AgentMonitorEntry）
 export { type AgentMonitorRow } from './durable/monitorSnapshot'
 export {

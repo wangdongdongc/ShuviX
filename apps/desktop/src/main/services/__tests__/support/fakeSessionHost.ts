@@ -148,6 +148,16 @@ export class FakeDurableSession implements DurableSession {
     return this.interrupted
   }
 
+  /** 锁着时根 agent 活的思考档位（脚本；没设 = 锁里记的那个，再没有 = off） */
+  thinkingLevel: ThinkingLevel | undefined
+
+  async lockedThinkingLevel(): Promise<ThinkingLevel | undefined> {
+    this.calls.push(['lockedThinkingLevel'])
+    if (this.closed) throw new Error(`Session ${this.sessionId} is closed`)
+    if (this.lock === undefined) return undefined
+    return this.thinkingLevel ?? this.lock.thinkingLevel ?? 'off'
+  }
+
   /** 按对话可设的身份（派生 agent 等）；没设的对话 = 锁的根身份，没锁 = undefined（与真实现同口径） */
   readonly identities = new Map<number, AgentIdentity>()
 

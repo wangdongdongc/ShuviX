@@ -223,7 +223,10 @@ export interface AgentConfig {
   cwd?: string
 }
 
-/** 内置工具（`shuvix.builtin`）的构造请求：打开时 sandboxed 来自锁（没锁 = undefined），创建时来自解析结果 */
+/**
+ * 内置工具（`shuvix.builtin`）的构造请求：重建锁时 sandboxed 来自锁，创建时来自解析结果，派生 agent 要用
+ * 而会话还没装时来自根锁（没锁 = undefined）。打开一条空闲会话不构造它（惰性，option A）。
+ */
 export interface BuiltinToolsRequest {
   sessionId: string
   /** 命令沙箱的钉子（K8）；undefined = 还没有 agent，宿主按当前设置给一份占位 */
@@ -312,6 +315,13 @@ export interface AgentToolSet {
 export interface AgentToolsRebuildContext {
   readonly sessionId: string
   readonly extraTools?: readonly ToolRegistration[]
+  /**
+   * 完整初始化（option A：新进程里打开一条有可续工作的锁着的会话，等同创建那一刻）：重建之外把记录里
+   * 的 MCP 服务器当场连上 —— 与创建同一个惰性连接超时、连不上广播同一条错误、照样按声明快照建出工具
+   * （锁住期间工具不变）。`signal` 在会话关停时触发，要一路透传给连接。缺省 = 不连（同一进程里的重开：
+   * MCP 实例还活在宿主里，第一次调用时原地连）。
+   */
+  readonly connect?: { readonly signal: AbortSignal }
 }
 
 /** 创建时的解析结果：工具 + 要记进锁里的东西 */
@@ -331,14 +341,16 @@ export interface ResolvedAgentTools extends AgentToolSet {
 /**
  * 工具的宿主 seam（桌面 P1-11：agentHost 改写）。
  *
- *  - `buildBuiltinTools`：平台内置工具（会话级 ToolContext，外面包好输出包装）。打开时装一次
- *    （有锁按锁的沙箱钉子），创建 agent 时按解析出的钉子重装。
+ *  - `buildBuiltinTools`：平台内置工具（会话级 ToolContext，外面包好输出包装）。惰性：创建 agent 时按
+ *    解析出的钉子装，重建保留的锁时按锁的钉子装，派生 agent 要用而还没装时按根锁的钉子（没锁 = 占位）装；
+ *    打开一条空闲会话不装。
  *  - `resolveAgentTools`：创建 agent 时按名单解析按 agent 的工具 —— 派发工具、技能工具、MCP（这一刻
  *    惰性连接；`mcp_connecting` / 连不上的 `error` 由宿主自己广播，K7）。`signal` 在创建被中止 / 销毁
  *    时触发（K13），要一路透传给 MCP 连接。
  *  - `rebuildAgentTools`：重开会话时**按记录**重建同一组工具 —— root 按锁记录，派生 agent 按它的
  *    `SpawnedAgentRecord`（`canSpawn` 决定派发工具；`context.extraTools` 是运行时按结果契约造好的
- *    `next`）。不连服务器（MCP 按声明快照建，第一次调用时原地连），不读会话配置。
+ *    `next`）。不读会话配置；MCP 按声明快照建，缺省不连服务器（第一次调用时原地连）—— 只有完整初始化
+ *    （`context.connect`）才当场连。
  */
 export interface ToolHost {
   buildBuiltinTools(

@@ -41,9 +41,11 @@ import {
   TAB_PROFILE_NAME,
   COEDIT_PROFILE_NAME,
   WORK_PROFILE_NAME,
+  rowForProviderId,
   toInProcessAgentType,
   type AgentConfig,
-  type DurableSession
+  type DurableSession,
+  type LockRecord
 } from '@shuvix/agent-runtime'
 import { HOST_ONLY_PROFILE_NAMES, type SubAgentModelConfig } from '@shuvix/agent-runtime'
 import { isBotSessionSettings } from '@shuvix/chat-protocol/botSession'
@@ -53,6 +55,7 @@ import { agentService } from './agentService'
 // 仅在方法体内调用：几个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession, clearAgentScopedState, destroySessionRuntime } from './agentSession'
 import { getSessionHost, peekSessionHost } from './sessionHost'
+import { providerCredentialPort } from './models'
 import { peekSyncHub } from '../frontend/sync/syncWiring'
 import { effectiveRunState, mirroredAgentLocked } from './sessionMirror'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
@@ -146,21 +149,37 @@ export class SessionService {
    * 子会话完成通知送达父会话（P2-10，PIN-13）：与后台通知同一条路（开着的直接用、没开就 peek，
    * **从不创建**；锁着走门面的 notify，没锁只写一条通知条目），只是带上种类与 requestId
    * （`subsession-done:<子会话>:<submission>`，重复送达按它去重）。父会话的行已经没了 → 什么都不做。
+   * `wake: false`（运行器说这次驱动不是本进程发起、还记着的，option A）→ 锁着也只写入、不起一轮。
    * 送达失败**抛出**：运行时据此留着子会话的 driven-run 标记，下次打开再报。
    */
-  async deliverSubSessionNotice(parentId: string, text: string, requestId: string): Promise<void> {
+  async deliverSubSessionNotice(
+    parentId: string,
+    text: string,
+    requestId: string,
+    options: { wake: boolean } = { wake: true }
+  ): Promise<void> {
     if (!sessionRecords.pick(parentId, ['id'])) return
-    await this.deliverNoticeOrThrow(parentId, text, { kind: 'sub-session', requestId })
+    await this.deliverNoticeOrThrow(
+      parentId,
+      text,
+      { kind: 'sub-session', requestId },
+      options.wake
+    )
   }
 
+  /**
+   * `wake = false`（本进程不认得的子会话驱动，option A）：父会话锁着也只写一条通知（不起一轮、不插话 ——
+   * 忙着时排进收件箱，在它的下一个边界落下；被中断时推迟到继续 / 下一次发送），父会话的下一轮看得见它。
+   */
   private async deliverNoticeOrThrow(
     sessionId: string,
     text: string,
-    options?: { kind: string; requestId: string }
+    options?: { kind: string; requestId: string },
+    wake = true
   ): Promise<void> {
     const session = await this.peekDurableSession(sessionId)
     if (!session) return
-    if (session.lock) await AgentSession.of(session).notify(text, options)
+    if (wake && session.lock) await AgentSession.of(session).notify(text, options)
     else await session.writeNotice({ text, kind: 'background', ...options })
   }
 
@@ -674,7 +693,8 @@ export class SessionService {
 
   /**
    * 这条会话此刻有没有 agent（锁）。打开着的会话以运行时的锁为准；没开着就读 DB 里的锁镜像
-   * （`settings.agentLocked`，每次打开都对账）。模型与扩展能力勾选都只在创建 agent 那一刻读一次，
+   * （`settings.agentLocked`，每次打开都对账 —— 上个进程留下的镜像在重启之后可能过时：空闲会话的锁在下一次
+   * 打开时清掉，option A；要准就先打开，initAgent 就是这么做的）。模型与扩展能力勾选都只在创建 agent 那一刻读一次，
    * 两处写入口（agent.setModel / updateEnabledTools）据这一位拒绝锁住期间的改动。
    * 创建在途的那一小段窗口里改动照样接受（PIN-12）：它们不影响正在创建的那个 agent。
    */
@@ -764,8 +784,13 @@ export class SessionService {
 
   /**
    * 返回会话元信息供前端同步（projectPath / 启用工具 / 模型能力 等）。
-   * **不创建 AgentSession** —— Agent 延迟到用户首次发送消息时（ensureAgentSession）才创建，
-   * 故仅打开会话（含笔记本会话）不会启动 Agent。
+   * **不创建 agent** —— agent 延迟到用户首次发送消息时由运行时创建，故仅打开会话（含笔记本会话）不会启动
+   * agent。
+   *
+   * **锁着就报锁的配置**（option A）：模型（provider 行 id + 模型 id、能力点）、活的思考档位、工具选择都按
+   * 那个 agent 实际在用的报，不按会话设置 —— 锁住期间设置怎么改都不作用到它。会话开着读运行时的锁；没开着
+   * 但锁镜像说锁着 → peek 打开它再读（同一进程里 LRU 关掉的照旧重建；上个进程留下的按规则完整初始化或
+   * 清锁，于是 `created` 与芯片、运行状态对得上）。没锁照旧报会话设置。
    */
   async initAgent(sessionId: string): Promise<AgentInitResult> {
     const ctx = await this.resolveSessionAgentContext(sessionId)
@@ -782,6 +807,29 @@ export class SessionService {
         enabledTools: []
       }
     }
+    const durable =
+      this.host.get(sessionId) ??
+      (mirroredAgentLocked(sessionId) ? await this.peekDurableSession(sessionId) : undefined)
+    const lock = durable?.lock
+    if (durable && lock) {
+      const locked = await this.lockedRunConfig(durable, lock, ctx.selectedTools).catch(
+        (err: unknown) => {
+          // 读的途中会话关了（LRU / 删除）：退回会话设置那一份
+          log.warn(
+            `读锁的配置失败 session=${sessionId}: ${err instanceof Error ? err.message : err}`
+          )
+          return undefined
+        }
+      )
+      if (locked) {
+        return {
+          success: true,
+          created: true,
+          ...locked,
+          workingDirectory: ctx.workingDirectory
+        }
+      }
+    }
     return {
       success: true,
       // created = 此刻有 agent（锁；init 本身不打开会话、不创建）—— 与扩展能力写入口
@@ -796,6 +844,40 @@ export class SessionService {
       // 前端要的是勾选原值（离线的 MCP 也显示为已勾，整份替换写入时不会被抹掉）；
       // 过滤后的那份只给创建 Agent 用
       enabledTools: ctx.selectedTools
+    }
+  }
+
+  /**
+   * 锁住的 agent 实际在用的模型类配置（initAgent 用）：锁里的模型（pi provider id 译回 provider 行 id，行没了
+   * 就原样）、那一行上这个模型的能力点、根 agent 活的思考档位（K9）、锁记着的工具选择（创建那一刻的勾选，
+   * 连不上的 MCP 也在其中 —— 界面照旧画成「已勾 + 离线」；这个字段之前建的锁没有它 → 退回会话设置的原值，
+   * 锁住期间那一份本来就改不了）。
+   */
+  private async lockedRunConfig(
+    durable: DurableSession,
+    lock: LockRecord,
+    settingsSelection: string[]
+  ): Promise<
+    Pick<AgentInitResult, 'provider' | 'model' | 'capabilities' | 'modelMetadata' | 'enabledTools'>
+  > {
+    const provider =
+      rowForProviderId(providerCredentialPort.listProviders(), lock.model.provider)?.id ??
+      lock.model.provider
+    const model = lock.model.modelId
+    const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
+    let capabilities: ModelCapabilities = {}
+    try {
+      capabilities = modelRow?.capabilities ? JSON.parse(modelRow.capabilities) : {}
+    } catch {
+      /* 能力点写坏了按空能力处理，与 resolveSessionAgentContext 同口径 */
+    }
+    const thinkingLevel = (await durable.lockedThinkingLevel()) ?? lock.thinkingLevel
+    return {
+      provider,
+      model,
+      capabilities,
+      modelMetadata: thinkingLevel === undefined ? {} : { thinkingLevel },
+      enabledTools: lock.selection ? [...lock.selection] : settingsSelection
     }
   }
 

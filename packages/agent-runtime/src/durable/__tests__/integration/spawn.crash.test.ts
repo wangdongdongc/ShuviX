@@ -55,7 +55,7 @@ function connectsTotal(sw: SpawnWorld): number {
 
 describe('P2-11 · J4 crash, reopen, continue', () => {
   it(
-    'J4-01 re-attach across real MCP: open rebuilds the child without connecting or running; continue re-attaches the same submission',
+    'J4-01 re-attach across real MCP: open fully initializes the root lock (its MCP servers connect, option A) and rebuilds the child without connecting it or running anything; continue re-attaches the same submission',
     async () => {
       const sw = await spawnWorld()
       const { world } = sw
@@ -81,7 +81,8 @@ describe('P2-11 · J4 crash, reopen, continue', () => {
       expect(extensionTools(sw, `shuvix.agent.${C}`)).toEqual(
         expect.arrayContaining(['mcp__docs__lookup', 'mcp__docs__slow', 'mcp__ctx__whoami'])
       )
-      expect(connectsTotal(sw)).toBe(0)
+      // 只有根锁记着的服务器在打开时连上（完整初始化）；子 agent 的重建不连
+      expect(connectsTotal(sw)).toBe(Object.keys(rootLock!.mcp).length)
       expect(reopened.isInterrupted()).toBe(true)
       expect(world.t.statesOf('s1')).toEqual(['interrupted'])
       await sleep(150)

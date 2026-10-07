@@ -829,6 +829,79 @@ describe('MCP 惰性连接', () => {
 // ─── rebuildAgentTools ────────────────────────────────────────────────────
 
 describe('rebuildAgentTools', () => {
+  it("LA-T1 full initialization (connect, option A): every server the lock names connects through the creation path — status, ensure with the lazy-connect timeout and the root session, the connecting pair — while the tools still come from the lock's declaration snapshot", async () => {
+    const lock = lockD({ mcp: { context7: [...D_C7], ssh: [...D_SSH] } })
+    mocks.statusByName.mockReturnValue('disconnected')
+    const set = await host.rebuildAgentTools(lock, {
+      sessionId: 's1',
+      connect: { signal: signal() }
+    })
+    expect(mocks.statusByName.mock.calls).toEqual([
+      ['context7', 's1'],
+      ['ssh', 's1']
+    ])
+    expect(mocks.ensureServerByName.mock.calls).toEqual([
+      ['context7', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }],
+      ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }]
+    ])
+    const connecting = mocks.broadcast.mock.calls
+      .filter(([event]) => event.type === 'mcp_connecting')
+      .map(([event]) => [event.server, event.connecting])
+    expect(connecting).toEqual(
+      expect.arrayContaining([
+        ['context7', true],
+        ['context7', false],
+        ['ssh', true],
+        ['ssh', false]
+      ])
+    )
+    // 锁赢：不取活声明，按快照建
+    expect(mocks.declarationsOf).not.toHaveBeenCalled()
+    expect(mocks.registrationsFromDeclarations.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+      ['context7', 's1', lock.mcp.context7],
+      ['ssh', 's1', lock.mcp.ssh]
+    ])
+    expect(set.mcp?.map((entry) => entry.server)).toEqual(['context7', 'ssh'])
+  })
+
+  it('LA-T2 a server that fails to connect during the full initialization broadcasts the same error as creation; the rebuild still returns its tools', async () => {
+    const lock = lockD({ mcp: { context7: [...D_C7], ssh: [...D_SSH] } })
+    mocks.ensureServerByName.mockImplementation(async (server: string) =>
+      server === 'ssh' ? { ok: false, error: 'spawn npx ENOENT' } : { ok: true }
+    )
+    const set = await host.rebuildAgentTools(lock, {
+      sessionId: 's1',
+      connect: { signal: signal() }
+    })
+    expect(mocks.broadcast.mock.calls.filter(([event]) => event.type === 'error')).toEqual([
+      [
+        {
+          type: 'error',
+          sessionId: 's1',
+          error: i18next.t('chat.mcpConnectFailed', { name: 'ssh', error: 'spawn npx ENOENT' })
+        }
+      ]
+    ])
+    expect(set.mcp?.map((entry) => entry.server)).toEqual(['context7', 'ssh'])
+    expect(set.mcp?.find((entry) => entry.server === 'ssh')?.tools).toHaveLength(D_SSH.length)
+  })
+
+  it('LA-T3 the session closing during the full initialization (signal) rejects without an error broadcast', async () => {
+    const controller = new AbortController()
+    const pending = deferred<{ ok: boolean }>()
+    mocks.ensureServerByName.mockReturnValue(pending.promise)
+    mocks.statusByName.mockReturnValue('disconnected')
+    const rebuilding = host.rebuildAgentTools(lockD(), {
+      sessionId: 's1',
+      connect: { signal: controller.signal }
+    })
+    await flush()
+    controller.abort(new Error('closing'))
+    await expect(rebuilding).rejects.toThrow('closing')
+    expect(mocks.broadcast.mock.calls.filter(([event]) => event.type === 'error')).toEqual([])
+    pending.resolve({ ok: true })
+  })
+
   it('H11-32 / P2-06-28 不碰网络：不问状态、不连、不取声明 / 活注册项、不问会话宿主、不广播；不读会话配置', async () => {
     setLock('s1', lockD())
     const get = vi.spyOn(fake, 'get')
