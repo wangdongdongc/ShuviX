@@ -44,9 +44,20 @@ export default defineConfig({
         ]
       },
       rollupOptions: {
+        output: {
+          // 主入口第一行 JS 的时刻：rollup 会把所有外部依赖的 require 提升到 bundle 最前，
+          // intro 排在它们之前 —— 启动诊断据此把「require 外部依赖」那段也计进时间线
+          // （读取方：src/main/utils/stallWatchdog/launchTiming.ts）
+          intro: (chunk) =>
+            chunk.isEntry && chunk.name === 'index'
+              ? 'globalThis.__SHUVIX_MAIN_T0__ = performance.now();'
+              : ''
+        },
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           sqlWorker: resolve(__dirname, 'src/main/services/pglite/sqlWorker.ts'),
+          // 主线程卡顿看门狗的 worker（由 utils/stallWatchdog/watchdog.ts 启动）
+          stallWatchdogWorker: resolve(__dirname, 'src/main/utils/stallWatchdog/worker.ts'),
           // CLI 入口：通过 ELECTRON_RUN_AS_NODE=1 在 Electron 内以 node 模式运行；
           // 产物 out/main/cli.js，由 resources/cli/shuvix-cli{,.cmd} shim 触发
           cli: resolve(__dirname, 'src/cli/index.ts')

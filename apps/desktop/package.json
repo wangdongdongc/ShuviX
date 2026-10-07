@@ -36,6 +36,7 @@
     "test:e2e:chrome": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/chrome",
     "test:e2e:markdown": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/markdown",
     "test:e2e:app": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/app",
+    "test:e2e:startup": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/startup/",
     "probe": "electron-vite build && vitest run --config vitest.config.probe.ts",
     "probe:protocols": "vitest run --config vitest.config.protocols.ts e2e/live/protocols.probe.ts",
     "probe:protocols:dry": "vitest run --config vitest.config.protocols.ts --mode probe-dry e2e/live/protocols.probe.ts"

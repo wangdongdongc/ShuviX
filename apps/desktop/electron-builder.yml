@@ -62,6 +62,8 @@ extraResources:
 asarUnpack:
   - resources/**
   - out/main/sqlWorker.js
+  # 主线程卡顿看门狗的 worker（与 sqlWorker 同策：worker 从解包目录加载）
+  - out/main/stallWatchdogWorker.js
   - out/main/cli.js
   - out/main/chunks/**
   - node_modules/@vscode/ripgrep/**

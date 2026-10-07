@@ -1,3 +1,5 @@
+// 启动诊断（Perf 时间线 + 主线程卡顿看门狗）必须是第一条 import：它在一切应用模块之前求值
+import './utils/stallWatchdog/boot'
 import {
   app,
   session,
@@ -75,8 +77,12 @@ import {
 } from './services/customProtocols'
 import { applyNativeThemeSource } from './ipc/settingsHandlers'
 import { createLogger } from './logger'
-import { mark, measure, measureAsync } from './perf'
+import { mark, measure, measureAsync, step } from './perf'
+import { logLaunchTiming } from './utils/stallWatchdog/launchTiming'
+import { simulateStartupStall } from './utils/stallWatchdog/simulate'
+import { liveSingletonLockHolder } from './utils/stallWatchdog/singletonLock'
 const log = createLogger('App')
+mark('main: imports evaluated')
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
@@ -127,7 +133,8 @@ function getThemeBgColor(): string {
     const mode = settingsDao.findByKey('general.theme') || 'dark'
     let themeId: string
     if (mode === 'system') {
-      const resolved = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+      const dark = step('nativeTheme.shouldUseDarkColors', () => nativeTheme.shouldUseDarkColors)
+      const resolved = dark ? 'dark' : 'light'
       themeId =
         resolved === 'light'
           ? settingsDao.findByKey('general.lightTheme') || 'github-light'
@@ -159,7 +166,7 @@ function getSavedSettingsWindowBounds(): {
     if (!w || !h || w < 600 || h < 400) return defaults
 
     if (saved.x != null && saved.y != null) {
-      const displays = screen.getAllDisplays()
+      const displays = step('screen.getAllDisplays', () => screen.getAllDisplays())
       const visible = displays.some((d) => {
         const b = d.bounds
         return (
@@ -417,7 +424,7 @@ function getSavedWindowBounds(): { width: number; height: number; x?: number; y?
 
     // 校验位置是否在可见屏幕范围内
     if (saved.x != null && saved.y != null) {
-      const displays = screen.getAllDisplays()
+      const displays = step('screen.getAllDisplays', () => screen.getAllDisplays())
       const visible = displays.some((d) => {
         const b = d.bounds
         return (
@@ -445,39 +452,87 @@ function initSharedWindowServices(): void {
   sharedWindowServicesReady = true
 
   // 初始化通知服务（决策在 agent-runtime，这里只提供窗口句柄：聚焦 / 关窗后重建）
-  initNotificationService({
-    getMainWindow: () => mainWindow,
-    ensureMainWindow: () => {
-      if (!mainWindow || mainWindow.isDestroyed()) createWindow()
-    }
-  })
+  step('windowServices › notifications', () =>
+    initNotificationService({
+      getMainWindow: () => mainWindow,
+      ensureMainWindow: () => {
+        if (!mainWindow || mainWindow.isDestroyed()) createWindow()
+      }
+    })
+  )
   // 询问不再是 ChatEvent（P3-08）：会话信号接线把询问的挂起 / 落定交给通知；失败通知的正文从投影读
   setSessionAskObserver({ askRaised: notifyAskRaised, askResolved: notifyAskResolved })
   setRunErrorTextSource(sessionRunErrorText)
 
   // 初始化 widget 独立窗口服务（owns widget app 窗口）
-  initWidgetWindowService({ getThemeBgColor })
+  step('windowServices › widget', () => initWidgetWindowService({ getThemeBgColor }))
 
   // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
-  initBrowserSession()
+  step('windowServices › browserSession', () => initBrowserSession())
   // 浏览器是独立窗口（懒创建）：只在用户点开时才建，关窗只隐藏；agent 的 tab 住在停放窗口里
-  initBrowserWindowService({ getThemeBgColor })
+  step('windowServices › browserWindow', () => initBrowserWindowService({ getThemeBgColor }))
 
   // 从系统打开的 md 窗口：每个窗口一条内存会话，前端按窗口单独绑定（id 各不相同）
-  initMarkdownWindowService({
-    getThemeBgColor,
-    getZoomFactor: getStartupZoomFactor,
-    createFrontend: (window, id) => new ElectronFrontend(window, id)
-  })
+  step('windowServices › markdown', () =>
+    initMarkdownWindowService({
+      getThemeBgColor,
+      getZoomFactor: getStartupZoomFactor,
+      createFrontend: (window, id) => new ElectronFrontend(window, id)
+    })
+  )
 }
 
 function createWindow(): void {
   // 退出半途没了、应用照常跑下去（Dock 重开 / 第二个实例 / 点通知）：会话宿主若已被退出封存，撤销 ——
   // 否则这个新主窗口里每条会话都只剩配置、一条消息都没有。正常启动与普通的关窗再开都是无操作
   sessionHostQuit.resume()
-  const bounds = getSavedWindowBounds()
+  const bounds = step('createWindow › bounds', () => getSavedWindowBounds())
+  const backgroundColor = step('createWindow › theme color', () => getThemeBgColor())
+  simulateStartupStall('createWindow')
 
-  mainWindow = new BrowserWindow({
+  mainWindow = step('createWindow › new BrowserWindow', () =>
+    newMainWindow(bounds, backgroundColor)
+  )
+  const win = mainWindow
+
+  // 注册 Electron 主窗口为默认前端
+  step('createWindow › default frontend', () =>
+    chatFrontendRegistry.registerDefault(new ElectronFrontend(win))
+  )
+
+  // 初始化悬浮聊天服务（owns 悬浮窗 + pin 状态）
+  // 由 main-entry 注入 ElectronFrontend 工厂，避免 service 层反向依赖 frontend-impl
+  step('createWindow › pinned chat', () =>
+    initPinnedChatService({
+      mainWindow: win,
+      getThemeBgColor,
+      createFrontend: (window) => new ElectronFrontend(window, 'electron-pinned')
+    })
+  )
+
+  step('createWindow › shared window services', () => initSharedWindowServices())
+
+  // 弹窗与页面内导航（点 <a href>、PDF 里的链接、预览 iframe 里的脚本）都不自己走：
+  // 阻止应用变成浏览器，去向交给 externalOpen 那道闸（http(s) → 系统浏览器）
+  step('createWindow › guard', () => guardAppWindow(win))
+
+  step('createWindow › listeners', () => attachMainWindowListeners(win))
+
+  // 开发环境加载 HMR URL，生产环境加载本地文件
+  step('createWindow › load page', () => {
+    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
+      void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    } else {
+      void win.loadFile(join(__dirname, '../renderer/index.html'))
+    }
+  })
+}
+
+function newMainWindow(
+  bounds: ReturnType<typeof getSavedWindowBounds>,
+  backgroundColor: string
+): BrowserWindow {
+  return new BrowserWindow({
     width: bounds.width,
     height: bounds.height,
     ...(bounds.x != null && bounds.y != null ? { x: bounds.x, y: bounds.y } : {}),
@@ -496,42 +551,28 @@ function createWindow(): void {
           trafficLightPosition: { x: 16, y: 14 }
         }
       : {}),
-    backgroundColor: getThemeBgColor(),
+    backgroundColor,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true
     }
   })
+}
 
-  // 注册 Electron 主窗口为默认前端
-  chatFrontendRegistry.registerDefault(new ElectronFrontend(mainWindow))
-
-  // 初始化悬浮聊天服务（owns 悬浮窗 + pin 状态）
-  // 由 main-entry 注入 ElectronFrontend 工厂，避免 service 层反向依赖 frontend-impl
-  initPinnedChatService({
-    mainWindow,
-    getThemeBgColor,
-    createFrontend: (window) => new ElectronFrontend(window, 'electron-pinned')
-  })
-
-  initSharedWindowServices()
-
-  // 弹窗与页面内导航（点 <a href>、PDF 里的链接、预览 iframe 里的脚本）都不自己走：
-  // 阻止应用变成浏览器，去向交给 externalOpen 那道闸（http(s) → 系统浏览器）
-  guardAppWindow(mainWindow)
-
+/** 主窗口的关闭清理与尺寸保存 */
+function attachMainWindowListeners(win: BrowserWindow): void {
   // 关闭前清理该窗口关联的终端实例 + 释放 browserOffset 跟踪
-  const mainWebContentsId = mainWindow.webContents.id
-  const thisWindow = mainWindow
-  mainWindow.on('close', () => {
+  const mainWebContentsId = win.webContents.id
+  const thisWindow = win
+  win.on('close', () => {
     destroyTerminalsByWindow(mainWebContentsId)
     void unpinAllPinnedChat('window-closed')
     closeAllWidgetWindows()
     // 销毁而非隐藏：隐藏的窗口会让 window-all-closed / Dock 重建主窗口都失灵（tab 留着）
     closeBrowserWindowWithMain()
   })
-  mainWindow.on('closed', () => {
+  win.on('closed', () => {
     clearBrowserOffset(mainWebContentsId)
     // macOS 关掉主窗口应用仍在跑：别让变量留着一个已销毁的窗口 —— 之后别的窗口（md 窗口、widget）
     // 发来的 window-ready、菜单的「新建会话」一碰它的 webContents 就是 "Object has been destroyed"
@@ -539,7 +580,7 @@ function createWindow(): void {
   })
 
   // 关闭前保存窗口位置和尺寸
-  mainWindow.on('close', () => {
+  win.on('close', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       const bounds = mainWindow.getBounds()
       // 仅保存位置和高度（宽度由 panelLayout 计算）
@@ -565,13 +606,6 @@ function createWindow(): void {
       )
     }
   })
-
-  // 开发环境加载 HMR URL，生产环境加载本地文件
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
 }
 
 // 获取应用版本号
@@ -657,8 +691,16 @@ ipcMain.handle('app:set-browser-offset', (event, offset: number) => {
   setBrowserOffset(win.webContents.id, offset)
 })
 
-// 单实例锁：阻止第二个进程启动，避免并发访问数据库
-const gotTheLock = app.requestSingleInstanceLock()
+// 单实例锁：阻止第二个进程启动，避免并发访问数据库。
+// 锁若被一个还活着的进程拿着（多半是上一次的 ShuviX 还在退出），加锁会在这里同步等它 —— 先记一笔
+const lockHolder = liveSingletonLockHolder(app.getPath('userData'))
+if (lockHolder) {
+  log.warn(
+    `single-instance lock is held by live pid ${lockHolder.pid} (${lockHolder.host}): ` +
+      'a previous ShuviX is still running or quitting; requestSingleInstanceLock waits on it'
+  )
+}
+const gotTheLock = step('requestSingleInstanceLock', () => app.requestSingleInstanceLock())
 if (!gotTheLock) {
   log.info('另一个 ShuviX 实例已在运行（单实例锁未获取），本进程退出')
   app.quit()
@@ -686,7 +728,7 @@ if (!gotTheLock) {
 }
 
 // 自定义协议 scheme 注册必须早于 app.whenReady
-registerCustomProtocolSchemes()
+step('registerCustomProtocolSchemes', () => registerCustomProtocolSchemes())
 
 // 被遮挡的窗口照常合成。内置浏览器的 tab 常常出生在不可见的地方 —— 停放窗口从不显示，
 // 浏览器窗口可能被主窗口盖住、被关掉（隐藏）、最小化、在别的桌面，屏幕也可能锁着。
@@ -697,37 +739,42 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 
 // 全局 fetch 包装：只作用于 LLM 请求（作用域外原样透传），放宽 undici 默认的
 // 300s 传输超时并记录 fetch 失败的成因链。必须早于任何 agent 跑起来。
-installLlmNetwork()
+step('installLlmNetwork', () => installLlmNetwork())
 
 app.whenReady().then(async () => {
   mark('app.whenReady')
+  logLaunchTiming()
   // 必须与 electron-builder.yml 的 appId 一致，否则 Windows 任务栏中
   // 运行中的窗口无法与固定（pinned）的快捷方式归为一组，会显示成两个图标
   electronApp.setAppUserModelId('com.shuvix.app')
 
   // shuvix-media:// + shuvix-preview://
-  registerCustomProtocolHandlers()
+  step('registerCustomProtocolHandlers', () => registerCustomProtocolHandlers())
 
   // 主窗口（自有页面）的权限请求一律放行。
   // 例外是 `openExternal` —— 它不是「页面要用某个能力」，而是页面导航到非网页协议、Electron 在问
   // 要不要把这个地址交给操作系统（准了由它自己交，不经 shell.openExternal）。那一档走同一道闸。
   // 注意：内置浏览器跑在独立 partition（BROWSER_PARTITION），权限策略由 initBrowserSession() 单独管理。
-  session.defaultSession.setPermissionRequestHandler(
-    (webContents, permission, callback, details) => {
-      if (permission === 'openExternal' && 'externalURL' in details) {
-        void approveOpenExternalPermission(webContents, details).then(callback)
-        return
+  step('defaultSession permission handler', () =>
+    session.defaultSession.setPermissionRequestHandler(
+      (webContents, permission, callback, details) => {
+        if (permission === 'openExternal' && 'externalURL' in details) {
+          void approveOpenExternalPermission(webContents, details).then(callback)
+          return
+        }
+        callback(true)
       }
-      callback(true)
-    }
+    )
   )
 
   // 设置应用图标（开发模式下 Dock/任务栏也显示自定义图标）
-  const iconPath = join(app.getAppPath(), 'resources/icon.png')
-  const appIcon = nativeImage.createFromPath(iconPath)
-  if (process.platform === 'darwin' && app.dock && !appIcon.isEmpty()) {
-    app.dock.setIcon(appIcon)
-  }
+  step('dock icon', () => {
+    const iconPath = join(app.getAppPath(), 'resources/icon.png')
+    const appIcon = nativeImage.createFromPath(iconPath)
+    if (process.platform === 'darwin' && app.dock && !appIcon.isEmpty()) {
+      app.dock.setIcon(appIcon)
+    }
+  })
 
   // 初始化 i18n（从 DB 读取用户语言偏好，无则跟随系统）
   measure('initI18n', () => {
@@ -755,13 +802,13 @@ app.whenReady().then(async () => {
   // 询问点的自动审查：安全模块的 onPermissionRequest 经判定型 hook 回答（注入而非 import —— 见 toolContext）
   setPermissionReviewer(reviewPermissionRequest)
   // 内置 MCP 服务器按 `_meta` 里的对话认调用方（安全主体）：同样注入而非 import（见 mcpService）
-  setBuiltinMcpAgentResolver(sessionAgentResolver())
+  step('builtin MCP agent resolver', () => setBuiltinMcpAgentResolver(sessionAgentResolver()))
 
   // 内部事件总线 → 所有窗口的 'app:event' 桥接（AppEvent 通用订阅）
-  registerAppEventBridge()
+  step('appEventBridge', () => registerAppEventBridge())
 
   // 初始化自动更新服务（绑定 electron-updater 事件）
-  updateService.init()
+  step('updateService.init', () => updateService.init())
 
   // 从 pi-ai 注册表同步内置提供商的模型列表 + 能力信息（同步操作，无需网络）
   measure('syncBuiltinModels', () => providerService.syncAllBuiltinModels())
@@ -787,35 +834,39 @@ app.whenReady().then(async () => {
   await runLegacySwitchover()
 
   // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
-  cliServer.start().catch((err) => {
-    log.error(`cliServer.start failed: ${err}`)
-  })
+  step('cliServer.start', () =>
+    cliServer.start().catch((err) => {
+      log.error(`cliServer.start failed: ${err}`)
+    })
+  )
 
   // Chrome 扩展：桥服务（本地组件连进来）+ 每次启动重写原生消息宿主的启动脚本与各浏览器的清单。
   // token 与 CLI 共用 —— cliServer.start 同步生成，此刻已经在了
-  registerChromeFrontend()
-  chromeBridge
-    .start({
-      socketPath: chromeBridgeSocketPath({
-        home: homedir(),
-        platform: process.platform,
-        user: userInfo().username,
-        // Windows 的命名管道没有 0600 那种门，名字又是可猜的：每次启动换一个随机后缀，
-        // 真实地址只写进用户目录下的地址文件（本地组件现读），敲门的前提于是与 token 同一道
-        nonce: process.platform === 'win32' ? randomBytes(6).toString('hex') : undefined
-      }),
-      addressFile: chromeBridgeAddressFile(homedir()),
-      getToken: () => cliServer.getToken()
-    })
-    .catch((err) => log.error(`chromeBridge.start failed: ${err}`))
-  void installChromeNativeHost()
+  step('registerChromeFrontend', () => registerChromeFrontend())
+  step('chromeBridge.start', () =>
+    chromeBridge
+      .start({
+        socketPath: chromeBridgeSocketPath({
+          home: homedir(),
+          platform: process.platform,
+          user: userInfo().username,
+          // Windows 的命名管道没有 0600 那种门，名字又是可猜的：每次启动换一个随机后缀，
+          // 真实地址只写进用户目录下的地址文件（本地组件现读），敲门的前提于是与 token 同一道
+          nonce: process.platform === 'win32' ? randomBytes(6).toString('hex') : undefined
+        }),
+        addressFile: chromeBridgeAddressFile(homedir()),
+        getToken: () => cliServer.getToken()
+      })
+      .catch((err) => log.error(`chromeBridge.start failed: ${err}`))
+  )
+  step('installChromeNativeHost', () => void installChromeNativeHost())
 
   // 带着 md 文件启动：只开 md 窗口，主窗口等用户要（点 Dock / 再点一次应用图标）才开
-  initSharedWindowServices()
+  step('initSharedWindowServices', () => initSharedWindowServices())
   windowIntakeReady = true
   let openedAtLaunch = 0
   for (const file of launchMarkdownFiles.splice(0)) {
-    if (openMarkdownFile(file)) openedAtLaunch++
+    if (step('open launch md file', () => openMarkdownFile(file))) openedAtLaunch++
   }
   if (openedAtLaunch > 0) {
     log.info(`从系统打开 ${openedAtLaunch} 个 md 文件，不开主窗口`)
@@ -825,6 +876,7 @@ app.whenReady().then(async () => {
   // ready 之前第二个实例交来的请求：照做，但不影响上面这次启动开不开主窗口
   for (const file of earlySecondInstance.files.splice(0)) openMarkdownFile(file)
   if (earlySecondInstance.wantsMainWindow) showMainWindow()
+  mark('startup: ready handler done')
 
   app.on('activate', () => {
     // macOS dock 点击时重新创建主窗口。按主窗口本身判断，不按「一个窗口都没有」：
@@ -857,3 +909,8 @@ app.on('window-all-closed', () => {
     app.quit()
   }
 })
+
+// 主入口求值完毕：此后到 app.whenReady 之间是 Chromium / macOS 自己的启动（不在 JS 里），
+// 卡在那段时看门狗报的位置就是「after "main: entry evaluated…"」
+simulateStartupStall('preReady')
+mark('main: entry evaluated, waiting for ready')
