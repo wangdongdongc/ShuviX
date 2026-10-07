@@ -14,7 +14,7 @@
  *    entryId，`placeQueued()` 时才 `onPlaced`）；steer / followUp 同样调受理回调；`viewSnapshot()` 交 `view`
  *    （缺省空的 durable 视图）。P3-13：`monitorSnapshot()` 交 `monitorRows`（`monitorError` 时拒绝），
  *    `spawnedRecords()` 交 `spawned`。
- *  - FakeSessionHost：open / peek / get / close / closeAll / delete；`storages` 是「存储在」的会话集合
+ *  - FakeSessionHost：open / peek / get / close / closeAll / reopen / delete；`storages` 是「存储在」的会话集合
  *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
  *
  * 模块级的 `fakeHost` 给 `vi.mock('../sessionHost')` 用（`sessionHostModuleMock()`）；`resetFakeHost()`
@@ -491,6 +491,11 @@ export class FakeSessionHost implements SessionHost {
     this.sessions.clear()
   }
 
+  reopen(): void {
+    this.calls.push(['reopen', ''])
+    this.sealed = false
+  }
+
   async delete(sessionId: string): Promise<void> {
     this.calls.push(['delete', sessionId])
     if (this.deleteGate) await this.deleteGate.promise
@@ -531,7 +536,7 @@ export function sessionHostModuleMock(): Record<string, unknown> {
     getSessionHost: () => fakeHost,
     peekSessionHost: () => fakeHost,
     resetSessionHostForTests: vi.fn(),
-    installSessionHostQuitHook: vi.fn(() => ({ ready: true }))
+    installSessionHostQuitHook: vi.fn(() => ({ resume: vi.fn() }))
   }
 }
 

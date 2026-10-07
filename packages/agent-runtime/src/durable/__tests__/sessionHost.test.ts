@@ -198,6 +198,52 @@ describe('SessionHost open / peek / close', () => {
     expect(await t.host.peek('a')).toBeUndefined()
     expect(t.host.openSessionIds()).toEqual([])
   })
+
+  it('H-14 reopen undoes the seal: peek sees the same entries again, a later closeAll closes and seals again; reopen of an unsealed host is a no-op', async () => {
+    const t = await makeHost()
+    t.host.reopen()
+    expect(t.host.sealed).toBe(false)
+    const session = await t.open('a')
+    await primeRoot(session, t.kit)
+    t.kit.queue(answer('a1'))
+    await session.submitUser('u1')
+    const before = await transcript(await session.currentConversation())
+    await withTimeout(t.host.closeAll(), 5000, 'closeAll')
+    expect(await t.host.peek('a')).toBeUndefined()
+
+    t.host.reopen()
+    expect(t.host.sealed).toBe(false)
+    const peeked = await t.host.peek('a')
+    expect(peeked).toBeDefined()
+    expect(peeked).not.toBe(session)
+    expect(await transcript(await peeked!.currentConversation())).toEqual(before)
+    expect((await t.open('b')).closed).toBe(false)
+
+    await withTimeout(t.host.closeAll(), 5000, 'second closeAll')
+    expect(t.host.sealed).toBe(true)
+    expect(t.events.filter((event) => event === 'close:a')).toHaveLength(2)
+    expect(t.events.filter((event) => event === 'close:b')).toHaveLength(1)
+    expect(t.host.openSessionIds()).toEqual([])
+    await expect(t.open('c')).rejects.toBeInstanceOf(SessionHostSealedError)
+  })
+
+  it('H-15 reopen while closeAll is still in flight: an open of a session being closed waits for that close, then a fresh instance', async () => {
+    const t = await makeHost()
+    const session = await t.open('a')
+    const closing = t.host.closeAll()
+    t.host.reopen()
+    const reopened = await t.open('a')
+    await withTimeout(closing, 5000, 'closeAll')
+    expect(session.closed).toBe(true)
+    expect(reopened).not.toBe(session)
+    expect(reopened.closed).toBe(false)
+    expect(t.host.get('a')).toBe(reopened)
+    expect(t.events.filter((event) => event.endsWith(':a'))).toEqual([
+      'open:a',
+      'close:a',
+      'open:a'
+    ])
+  })
 })
 
 describe('SessionHost LRU', () => {

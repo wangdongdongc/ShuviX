@@ -14,7 +14,8 @@
  *    时同样不可回收。修剪发生在打开之后、忙→闲之后，以及一个会话的进行中调用全部结束、或它最后
  *    一件在跑的工作结束时（发送要等它的 submission 落定才算结束，忙→闲那一刻它还算「进行中」；
  *    辅助工作跑完不改运行状态，PIN-07）；关之前在同一个同步段里再判一次（不会和刚起跑的一轮赛跑）。
- *  - **全部关闭之后封存**：退出路径上不再接受打开（拒绝并报清楚的错）。
+ *  - **全部关闭之后封存**：退出路径上不再接受打开（拒绝并报清楚的错）。退出没走完、应用照常运行时
+ *    `reopen()` 撤销封存（不撤销的话之后打开的会话都是空的）。
  *  - **删除**：先关（等在途的打开），再删存储；删除期间对同一会话的打开 / 窥视排在它后面。
  *  - **每会话一个注册表**（K1）：打开时 `createRegistry(sessionId)` 造一个、装上系统提示词的段落扩展
  *    （K21）与宿主派发的锚任务扩展 `shuvix.spawn`（P2-08），会话自己再装 `shuvix.builtin` 与按锁重建的
@@ -73,6 +74,11 @@ export interface SessionHost {
   close(sessionId: string): Promise<void>
   /** 关闭全部并封存（之后的 open 被拒绝）；并发调用共享同一次 */
   closeAll(): Promise<void>
+  /**
+   * 撤销 `closeAll` 的封存：退出没有走完、应用照常运行时用 —— 之后的打开 / 窥视照常，再一次 `closeAll`
+   * 重新关一遍。不等在途的 `closeAll`：还在关停的会话由打开闸门挡着，关完才以新实例重开。未封存时无操作。
+   */
+  reopen(): void
   /** 关闭并删除存储 */
   delete(sessionId: string): Promise<void>
   /** 此刻打开着的会话 id */
@@ -187,6 +193,13 @@ class SessionHostImpl implements SessionHost {
       await Promise.all([...this.deleting.values()].map((p) => p.catch(() => undefined)))
     })()
     return this.closingAll
+  }
+
+  reopen(): void {
+    if (!this.sealedFlag) return
+    this.sealedFlag = false
+    // 下一次 closeAll 是新的一轮（在途的这一轮照常跑完：它关的是封存那一刻开着 / 在开的会话）
+    this.closingAll = undefined
   }
 
   delete(sessionId: string): Promise<void> {

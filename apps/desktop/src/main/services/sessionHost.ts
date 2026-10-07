@@ -14,8 +14,9 @@
  *    SyncHub 经它登记监听器。
  *  - **镜像**（PIN-06）：值没变就不写（每次写都会 bump `updatedAt`），也不发会话配置变更广播。
  *  - **退出**（PIN-11）：`installSessionHostQuitHook` —— 第一次 `before-quit` 先拦下，`closeAll()`
- *    （最多等 5 秒），再 `app.quit()`。正忙的会话被关停时不报运行状态，DB 里的 busy 标记熬过退出，
- *    下次打开报 interrupted。
+ *    （最多等 5 秒），再在下一个任务里重新 quit（不能在 closeAll 的回调里直接调，见那里）；其余退出清理
+ *    在被放行的那次 `before-quit` 里跑一次。正忙的会话被关停时不报运行状态，DB 里的 busy 标记熬过退出，
+ *    下次打开报 interrupted。退出半途没了、主窗口又被建出来时 `resume()` 撤销封存。
  *
  * 工具 / 提示词 seam 来自 `agents/agentHost`：ToolHost（内置工具 / 按 agent 解析 / 按锁重建；调用方身份
  * 经 `sessionOf` 按对话现问这条会话的 `agentIdentity` —— 同步 `get`，从不打开会话）、PromptHost（五个活
@@ -220,22 +221,67 @@ export interface QuitHookApp {
   quit(): void
 }
 
+export interface SessionHostQuitHookOptions {
+  /** 等会话关停的上限（缺省 `QUIT_CLOSE_CAP_MS`） */
+  capMs?: number
+  /** 取宿主（缺省 `peekSessionHost`：从不建） */
+  host?: () => SessionHost | undefined
+  /**
+   * 其余退出清理（拆浏览器、杀后台任务、断 MCP……）：**每次退出恰好一次**，在被放行的那次 `before-quit`
+   * 里跑 —— 也就是会话都关完（或不必关）之后：关停中的 run 还可能在用它们。抛错只记日志。
+   */
+  teardown?: () => void
+  /** 把重新发起的 quit 排进它自己的任务（缺省 `setImmediate`；单测换掉） */
+  defer?: (task: () => void) => void
+}
+
+export interface SessionHostQuitHook {
+  /**
+   * 退出之后应用又照常跑下去了（主窗口被重新建出来）：撤销宿主的封存，下一次退出重新关会话、重新清理。
+   * 退出走完了进程就没了，走不到这里 —— 只有退出半途没了（任何原因）才会；不撤销的话，之后打开的会话
+   * 只剩配置、一条消息都没有。会话还在关停（退出正在进行）时调用无效，那次退出照常走完。
+   */
+  resume(): void
+}
+
 /**
- * 第一次 `before-quit`：拦下这次退出，`closeAll()`（最多等 `capMs`，关不完也照样退），再 `app.quit()`。
- * 之后的 `before-quit` 直接放行。从没建过宿主就什么都不拦。
+ * 第一次 `before-quit`：拦下这次退出，`closeAll()`（最多等 `capMs`，关不完也照样退），再重新 quit。
+ * 之后的 `before-quit` 放行，并在其中跑 `teardown`（每次退出一次）。从没建过宿主就不拦，直接放行 + 清理。
  *
- * 返回的 `ready` 在会话都关完（或不必关）之后为 true —— 其余退出清理（断 MCP、杀后台任务……）据此
- * 等到第二次 `before-quit` 再做：关停中的 run 还可能在用它们。
+ * **重新 quit 必须在它自己的任务里（`defer`），绝不能在 closeAll 落定的那个 promise 回调里直接调**：
+ * Cmd+Q / Dock 的「退出」/ SIGTERM 从原生事件循环进 Electron 的 `Browser::Quit()`，那里
+ * `is_quitting_ = HandleBeforeQuit()` —— 发 `before-quit` 时这是最外层的 JS 回调，Node 在把控制交回
+ * 原生之前**清空 microtask / nextTick 队列**。会话全是同步 SQLite，closeAll 往往就在这段清空里落定；
+ * 此时调 `app.quit()` 是**重入**：内层那次放行、开始关窗（`is_quitting_ = true`），外层随后把自己被拦下的
+ * 结果写回 `is_quitting_ = false`。最后一个窗口关掉时 Electron 以为没在退出，只发 `window-all-closed`
+ * （macOS 上不退）—— 窗口没了、进程还在，宿主已封存；点 Dock 重开的主窗口里会话全是空的，第二次 Cmd+Q
+ * 才真退（v0.2.0 的实测 bug）。放进下一个任务，外层 `Browser::Quit()` 早已返回，重新发起的 quit 是一次
+ * 完整的新退出。
  */
 export function installSessionHostQuitHook(
   app: QuitHookApp,
-  options: { capMs?: number; host?: () => SessionHost | undefined } = {}
-): { readonly ready: boolean } {
+  options: SessionHostQuitHookOptions = {}
+): SessionHostQuitHook {
   const capMs = options.capMs ?? QUIT_CLOSE_CAP_MS
   const hostOf = options.host ?? peekSessionHost
+  const defer = options.defer ?? ((task: () => void) => void setImmediate(task))
   let state: 'idle' | 'closing' | 'done' = 'idle'
+  let tornDown = false
+  /** 这次退出的其余清理（一次） */
+  const teardown = (): void => {
+    if (tornDown) return
+    tornDown = true
+    try {
+      options.teardown?.()
+    } catch (err) {
+      log.warn(`退出清理失败: ${errorText(err)}`)
+    }
+  }
   app.on('before-quit', (event) => {
-    if (state === 'done') return
+    if (state === 'done') {
+      teardown()
+      return
+    }
     if (state === 'closing') {
       event.preventDefault()
       return
@@ -243,6 +289,7 @@ export function installSessionHostQuitHook(
     const host = hostOf()
     if (!host) {
       state = 'done'
+      teardown()
       return
     }
     event.preventDefault()
@@ -260,12 +307,16 @@ export function installSessionHostQuitHook(
     void Promise.race([closing, capped]).finally(() => {
       clearTimeout(timer)
       state = 'done'
-      app.quit()
+      defer(() => app.quit())
     })
   })
   return {
-    get ready() {
-      return state === 'done'
+    resume() {
+      if (state !== 'done') return
+      log.warn('退出没有走完，应用继续运行：撤销会话宿主的封存')
+      state = 'idle'
+      tornDown = false
+      hostOf()?.reopen()
     }
   }
 }

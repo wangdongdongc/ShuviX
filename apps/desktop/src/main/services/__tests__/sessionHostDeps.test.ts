@@ -21,6 +21,9 @@
  *   P2-10-06 onDrivenSettled 接到子会话运行器的处理器（overrides 可整项替换）；beforeAbort 同时把中断父会话的
  *            级联交给运行器；import sessionHost 不加载运行器（按需动态加载，加载期无环）
  *   D10-62 退出钩子：第一次 before-quit 拦下、closeAll（封顶）、再 quit；之后放行
+ *   D10-63 重新 quit 在它自己的任务里（不在 before-quit 那次派发的 microtask 清空里 —— 重入 Browser::Quit）
+ *   D10-64 其余清理（teardown）每次退出恰好一次，在被放行的那次 before-quit 里；没建过宿主就在第一次里
+ *   D10-65 resume：退出半途没了、主窗口重建 → 撤销封存、下一次退出重新拦 / 关 / 清理；没退出过或关停中无效
  *
  * sessions 表是真的（node:sqlite 内存库 + 迁移，sessionRecords 真件）；sessionService / sessionHost /
  * sessionStorage / taskRegistry 是真的；其余 DAO 与重的上游换成假件。
@@ -820,29 +823,43 @@ describe('D10-62 退出钩子（PIN-11）', () => {
     return app
   }
 
+  /** 假宿主：closeAll 由用例给，reopen 记次数 */
+  function fakeHost(closeAll: () => Promise<void>): SessionHost & { reopens: number } {
+    const host = {
+      reopens: 0,
+      closeAll: vi.fn(closeAll),
+      reopen: () => {
+        host.reopens++
+      }
+    }
+    return host as unknown as SessionHost & { reopens: number }
+  }
+
+  /** 清空 microtask 队列（足够深的 promise 链），不让任何宏任务跑 */
+  async function drainMicrotasks(): Promise<void> {
+    for (let i = 0; i < 100; i++) await Promise.resolve()
+  }
+
+  const nextTask = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
+
   it('D10-62 第一次 before-quit：拦下、closeAll 恰一次、关完再 quit；之后的 before-quit 放行、不再 closeAll', async () => {
     const app = fakeApp()
-    const closeAll = vi.fn(async () => {})
-    const hook = installSessionHostQuitHook(app, {
-      host: () => ({ closeAll }) as unknown as SessionHost
-    })
+    const host = fakeHost(async () => {})
+    installSessionHostQuitHook(app, { host: () => host })
 
     expect(app.emit()).toBe(true)
-    expect(closeAll).toHaveBeenCalledTimes(1)
-    expect(hook.ready).toBe(false)
+    expect(host.closeAll).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => expect(app.quits).toBe(1))
-    expect(hook.ready).toBe(true)
 
     expect(app.emit()).toBe(false)
-    expect(closeAll).toHaveBeenCalledTimes(1)
+    expect(host.closeAll).toHaveBeenCalledTimes(1)
   })
 
   it('D10-62 closeAll 卡住超过上限：照样 quit', async () => {
     const app = fakeApp()
-    const closeAll = vi.fn(() => new Promise<void>(() => {}))
     installSessionHostQuitHook(app, {
       capMs: 20,
-      host: () => ({ closeAll }) as unknown as SessionHost
+      host: () => fakeHost(() => new Promise<void>(() => {}))
     })
     expect(app.emit()).toBe(true)
     await vi.waitFor(() => expect(app.quits).toBe(1))
@@ -852,20 +869,116 @@ describe('D10-62 退出钩子（PIN-11）', () => {
   it('D10-62 关停期间又来一次 before-quit：照样拦着，不重复 closeAll', async () => {
     const app = fakeApp()
     let release!: () => void
-    const closeAll = vi.fn(() => new Promise<void>((resolve) => (release = resolve)))
-    installSessionHostQuitHook(app, { host: () => ({ closeAll }) as unknown as SessionHost })
+    const host = fakeHost(() => new Promise<void>((resolve) => (release = resolve)))
+    installSessionHostQuitHook(app, { host: () => host })
     expect(app.emit()).toBe(true)
     expect(app.emit()).toBe(true)
-    expect(closeAll).toHaveBeenCalledTimes(1)
+    expect(host.closeAll).toHaveBeenCalledTimes(1)
     release()
     await vi.waitFor(() => expect(app.quits).toBe(1))
   })
 
   it('D10-62 从没建过宿主：不拦', () => {
     const app = fakeApp()
-    const hook = installSessionHostQuitHook(app, { host: () => undefined })
+    installSessionHostQuitHook(app, { host: () => undefined })
     expect(app.emit()).toBe(false)
-    expect(hook.ready).toBe(true)
     expect(app.quits).toBe(0)
+  })
+
+  it('D10-63 重新 quit 在它自己的任务里：closeAll 在 microtask 里就落定（同步 SQLite 的常态）时，清空 microtask 队列也不 quit，下一个任务才 quit', async () => {
+    // Cmd+Q / SIGTERM 进 Browser::Quit() 时 before-quit 是最外层的 JS 回调，Node 在交回原生之前清空
+    // microtask 队列 —— 在那里 quit 是重入，外层随后把 is_quitting_ 写回 false，退出半途而废
+    const app = fakeApp()
+    installSessionHostQuitHook(app, { host: () => fakeHost(async () => {}) })
+    expect(app.emit()).toBe(true)
+    await drainMicrotasks()
+    expect(app.quits).toBe(0)
+    await nextTask()
+    expect(app.quits).toBe(1)
+  })
+
+  it('D10-63 重新 quit 交给 defer：closeAll 落定后恰好排一个任务，任务跑了才 quit', async () => {
+    const app = fakeApp()
+    const tasks: Array<() => void> = []
+    installSessionHostQuitHook(app, {
+      host: () => fakeHost(async () => {}),
+      defer: (task) => tasks.push(task)
+    })
+    expect(app.emit()).toBe(true)
+    await vi.waitFor(() => expect(tasks).toHaveLength(1))
+    expect(app.quits).toBe(0)
+    tasks[0]!()
+    expect(app.quits).toBe(1)
+  })
+
+  it('D10-64 其余清理：被拦下的那次不跑；会话关完、被放行的那次跑恰好一次；之后的 before-quit 不再跑', async () => {
+    const app = fakeApp()
+    const teardown = vi.fn()
+    let release!: () => void
+    const host = fakeHost(() => new Promise<void>((resolve) => (release = resolve)))
+    installSessionHostQuitHook(app, { host: () => host, teardown })
+
+    expect(app.emit()).toBe(true)
+    expect(teardown).not.toHaveBeenCalled()
+    release()
+    await vi.waitFor(() => expect(app.quits).toBe(1))
+    expect(teardown).not.toHaveBeenCalled()
+
+    expect(app.emit()).toBe(false)
+    expect(teardown).toHaveBeenCalledTimes(1)
+    expect(app.emit()).toBe(false)
+    expect(teardown).toHaveBeenCalledTimes(1)
+  })
+
+  it('D10-64 没建过宿主：第一次 before-quit 就清理（一次），不拦；清理抛错只记日志、照样放行', () => {
+    const app = fakeApp()
+    const teardown = vi.fn(() => {
+      throw new Error('boom')
+    })
+    installSessionHostQuitHook(app, { host: () => undefined, teardown })
+    expect(app.emit()).toBe(false)
+    expect(teardown).toHaveBeenCalledTimes(1)
+    expect(app.emit()).toBe(false)
+    expect(teardown).toHaveBeenCalledTimes(1)
+  })
+
+  it('D10-65 退出半途没了、主窗口又建出来（resume）：撤销封存；下一次退出重新拦下、重新 closeAll、重新清理一次', async () => {
+    const app = fakeApp()
+    const teardown = vi.fn()
+    const host = fakeHost(async () => {})
+    const hook = installSessionHostQuitHook(app, { host: () => host, teardown })
+
+    expect(app.emit()).toBe(true)
+    await vi.waitFor(() => expect(app.quits).toBe(1))
+    expect(app.emit()).toBe(false)
+    expect(teardown).toHaveBeenCalledTimes(1)
+    expect(host.reopens).toBe(0)
+
+    hook.resume()
+    expect(host.reopens).toBe(1)
+    hook.resume()
+    expect(host.reopens).toBe(1)
+
+    expect(app.emit()).toBe(true)
+    expect(host.closeAll).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(app.quits).toBe(2))
+    expect(app.emit()).toBe(false)
+    expect(teardown).toHaveBeenCalledTimes(2)
+  })
+
+  it('D10-65 resume 在没退出过 / 会话还在关停时无效：不撤销封存，那次退出照常走完', async () => {
+    const app = fakeApp()
+    let release!: () => void
+    const host = fakeHost(() => new Promise<void>((resolve) => (release = resolve)))
+    const hook = installSessionHostQuitHook(app, { host: () => host })
+    hook.resume()
+    expect(host.reopens).toBe(0)
+
+    expect(app.emit()).toBe(true)
+    hook.resume()
+    expect(host.reopens).toBe(0)
+    release()
+    await vi.waitFor(() => expect(app.quits).toBe(1))
+    expect(app.emit()).toBe(false)
   })
 })

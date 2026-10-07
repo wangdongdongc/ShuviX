@@ -472,6 +472,9 @@ function initSharedWindowServices(): void {
 }
 
 function createWindow(): void {
+  // 退出半途没了、应用照常跑下去（Dock 重开 / 第二个实例 / 点通知）：会话宿主若已被退出封存，撤销 ——
+  // 否则这个新主窗口里每条会话都只剩配置、一条消息都没有。正常启动与普通的关窗再开都是无操作
+  sessionHostQuit.resume()
   const bounds = getSavedWindowBounds()
 
   mainWindow = new BrowserWindow({
@@ -830,24 +833,22 @@ app.whenReady().then(async () => {
   })
 })
 
-// 应用退出前：先关停所有打开着的会话（每会话一个 durable Harness；第一次 before-quit 被拦下，
-// closeAll 最多等 5 秒，再重新 quit）。正忙的会话被关停时不改运行标记，下次打开报 interrupted。
-// 必须注册在下面的清理之前：清理要等会话都关完（第二次 before-quit）再做 —— 关停中的 run 还可能
-// 在用 MCP / 后台任务 / 浏览器
-const sessionHostQuit = installSessionHostQuitHook(app)
-
-// 应用退出前清理
-app.on('before-quit', () => {
-  if (!sessionHostQuit.ready) return
-  destroyBrowserWindow()
-  destroyAllTabs()
-  killAllBgTasks()
-  mcpService.disconnectAll().catch(() => {})
-  widgetServer.dispose()
-  chromeBridge.stop()
-  cliServer.stop()
-  disposePglite()
-  closeAllWatchers()
+// 应用退出：先关停所有打开着的会话（每会话一个 durable Harness；第一次 before-quit 被拦下，
+// closeAll 最多等 5 秒，再在下一个任务里重新 quit）。正忙的会话被关停时不改运行标记，下次打开报
+// interrupted。其余清理由钩子在被放行的那次 before-quit 里跑一次（会话都关完之后 —— 关停中的 run
+// 还可能在用 MCP / 后台任务 / 浏览器）
+const sessionHostQuit = installSessionHostQuitHook(app, {
+  teardown: () => {
+    destroyBrowserWindow()
+    destroyAllTabs()
+    killAllBgTasks()
+    mcpService.disconnectAll().catch(() => {})
+    widgetServer.dispose()
+    chromeBridge.stop()
+    cliServer.stop()
+    disposePglite()
+    closeAllWatchers()
+  }
 })
 
 // macOS 下关闭窗口不退出应用

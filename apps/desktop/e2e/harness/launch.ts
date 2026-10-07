@@ -109,6 +109,29 @@ export interface E2EAppBase {
    * 调用方最后用一次不带参数的 `stop()` 收走。
    */
   stop(opts?: { keepHome?: boolean }): Promise<void>
+  /**
+   * 像用户按 Cmd+Q 那样退出，**等进程自己退出**（不补刀）；回这次退出的结局。之后照常 `stop()`
+   * （进程已退就只清理 HOME；要接着用同一个 HOME 再起就 `stop({ keepHome: true })`）。
+   *
+   * 手段是 SIGTERM：Electron 主进程把它变成一个**原生任务**里的 `Browser::Quit()` —— 与菜单「退出」
+   * （Cmd+Q 的 `terminate:`）、Dock 的「退出」同一个入口，调用栈上没有一行 JS。要害就在这里：从 JS 里调
+   * `app.quit()` 或 `Menu.sendActionToFirstResponder('terminate:')` 都嵌在一个外层 JS 回调里，
+   * `before-quit` 排下的 microtask 要等外层回调结束才清空 —— 「在 before-quit 的 microtask 清空里重入
+   * `Browser::Quit()`」这类问题（v0.2.0 的退出 bug：第一次 Cmd+Q 只关了窗口）就测不出来了。
+   *
+   * Electron 的 SIGTERM 处理只有一次（再来一次走系统缺省，直接杀掉），所以每个实例只调一次。
+   */
+  quit(opts?: { timeoutMs?: number }): Promise<QuitOutcome>
+}
+
+/** `quit()` 的结局 */
+export interface QuitOutcome {
+  /** 进程在上限内自己退出了 */
+  exited: boolean
+  /** 主进程的 JS 退出流程走完了（Node 'exit'：before-quit / 关窗 / will-quit 都跑完之后，见 bootstrap.cjs） */
+  jsExited: boolean
+  /** 从投递 SIGTERM 到进程退出（没退出 = 等到上限）的毫秒数 */
+  ms: number
 }
 
 /** 默认启动：主窗口开着（绝大多数 spec） */
@@ -479,6 +502,19 @@ export async function launchApp(
       }
     }
 
+    const quit = async (quitOpts: { timeoutMs?: number } = {}): Promise<QuitOutcome> => {
+      const markerFrom = output.length
+      const t0 = Date.now()
+      if (!exited) child.kill('SIGTERM')
+      // 上限要盖过 Chromium 的原生收尾（窗口上屏后 ~15 秒内要等 GPU，见 stop()）
+      const done = await waitExit(quitOpts.timeoutMs ?? 20_000)
+      return {
+        exited: done,
+        jsExited: output.includes(JS_EXITED_MARKER, markerFrom),
+        ms: Date.now() - t0
+      }
+    }
+
     const base: E2EAppBase = {
       port,
       home,
@@ -503,7 +539,8 @@ export async function launchApp(
         )
         return mt ? connectReady(mt.webSocketDebuggerUrl) : null
       },
-      stop
+      stop,
+      quit
     }
 
     if (!main) return { ...base, main: null }
