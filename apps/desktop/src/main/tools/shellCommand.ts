@@ -38,8 +38,7 @@ import {
 import { planFor, whyUnconfined, type SandboxPlan } from '../services/sandbox'
 import {
   runCommand,
-  listBgTasks,
-  runningCount,
+  runningBackgroundTasks,
   stopCommandFor,
   formatStartReceipt,
   MAX_RUNNING_PER_SESSION
@@ -326,8 +325,8 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
   ): Promise<ToolResult<BashToolDetails>> {
     const sessionId = this.ctx.sessionId
 
-    if (runningCount(sessionId) >= MAX_RUNNING_PER_SESSION) {
-      const running = listBgTasks(sessionId).filter((task) => task.status === 'running')
+    const running = runningBackgroundTasks(sessionId)
+    if (running.length >= MAX_RUNNING_PER_SESSION) {
       const text = [
         `Too many background tasks in this session (${running.length}/${MAX_RUNNING_PER_SESSION}).`,
         'Stop one before starting another:',

@@ -38,8 +38,7 @@ import { executeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 const mocks = vi.hoisted(() => ({
   enforceCommand: vi.fn(),
   runCommand: vi.fn(),
-  runningCount: vi.fn(),
-  listBgTasks: vi.fn(),
+  runningBackgroundTasks: vi.fn(),
   getSessionPathGrants: vi.fn(),
   sessionDirExtras: vi.fn(),
   planFor: vi.fn(),
@@ -67,8 +66,7 @@ vi.mock('../../services/bgTaskService', async (importOriginal) => {
   return {
     ...actual,
     runCommand: mocks.runCommand,
-    runningCount: mocks.runningCount,
-    listBgTasks: mocks.listBgTasks
+    runningBackgroundTasks: mocks.runningBackgroundTasks
   }
 })
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
@@ -197,10 +195,8 @@ beforeEach(() => {
   mocks.enforceCommand.mockResolvedValue({ status: 'allowed' })
   mocks.runCommand.mockReset()
   mocks.runCommand.mockResolvedValue(settled(0, 'out'))
-  mocks.runningCount.mockReset()
-  mocks.runningCount.mockReturnValue(0)
-  mocks.listBgTasks.mockReset()
-  mocks.listBgTasks.mockReturnValue([])
+  mocks.runningBackgroundTasks.mockReset()
+  mocks.runningBackgroundTasks.mockReturnValue([])
   mocks.getSessionPathGrants.mockReset()
   mocks.getSessionPathGrants.mockReturnValue(GRANTS)
   mocks.sessionDirExtras.mockReset()

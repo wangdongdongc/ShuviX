@@ -55,7 +55,7 @@ vi.mock('../../services/sandbox', () => ({
 }))
 vi.mock('../../services/bgTaskService', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/bgTaskService')>()
-  return { ...actual, runCommand: mocks.runCommand, runningCount: () => 0, listBgTasks: () => [] }
+  return { ...actual, runCommand: mocks.runCommand, runningBackgroundTasks: () => [] }
 })
 vi.mock('../../services/botService', () => ({ botService: { forSession: () => null } }))
 vi.mock('../../utils/toolUtils/fileTime', () => ({ recordRead: vi.fn() }))

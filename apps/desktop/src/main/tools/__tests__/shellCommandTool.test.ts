@@ -26,8 +26,7 @@ import { executeTool, invokeTool, resultText } from '@shuvix/agent-runtime/tools
 const mocks = vi.hoisted(() => ({
   enforceCommand: vi.fn(),
   runCommand: vi.fn(),
-  runningCount: vi.fn(),
-  listBgTasks: vi.fn(),
+  runningBackgroundTasks: vi.fn(),
   /** 非 null 时顶替 getPowerShellConfig（D5）；null = 用真的 */
   psConfig: null as null | { exe: string; edition: 'pwsh' | 'windows-powershell' }
 }))
@@ -45,8 +44,7 @@ vi.mock('../../services/bgTaskService', async (importOriginal) => {
   return {
     ...actual,
     runCommand: mocks.runCommand,
-    runningCount: mocks.runningCount,
-    listBgTasks: mocks.listBgTasks
+    runningBackgroundTasks: mocks.runningBackgroundTasks
   }
 })
 vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
@@ -148,10 +146,8 @@ beforeEach(() => {
   mocks.enforceCommand.mockResolvedValue({ status: 'allowed' })
   mocks.runCommand.mockReset()
   mocks.runCommand.mockResolvedValue(settled(0, 'out'))
-  mocks.runningCount.mockReset()
-  mocks.runningCount.mockReturnValue(0)
-  mocks.listBgTasks.mockReset()
-  mocks.listBgTasks.mockReturnValue([])
+  mocks.runningBackgroundTasks.mockReset()
+  mocks.runningBackgroundTasks.mockReturnValue([])
   mocks.psConfig = null
 })
 
@@ -301,16 +297,18 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
     // 各自所在的平台：bash 在 macOS / Linux，powershell 在 Windows（停止命令按当前平台给）
     setPlatform(shell === 'bash' ? 'darwin' : 'win32')
     if (shell === 'powershell') mocks.psConfig = { exe: 'pwsh.exe', edition: 'pwsh' }
-    mocks.runningCount.mockReturnValue(MAX_RUNNING_PER_SESSION)
-    mocks.listBgTasks.mockReturnValue([
+    // 计数与列表出自同一份（runningBackgroundTasks）：条数就是上限，每条都列出停止命令
+    mocks.runningBackgroundTasks.mockReturnValue([
       taskInfo({ pid: 11, status: 'running', description: 'dev server' }),
-      taskInfo({ pid: 12, status: 'exited', description: 'done one' })
+      ...Array.from({ length: MAX_RUNNING_PER_SESSION - 1 }, (_, i) =>
+        taskInfo({ pid: 20 + i, status: 'running', description: `job ${i}` })
+      )
     ])
     const r = await run(makeTool(shell), params({ run_in_background: true }))
 
     expect(r.text).toContain('Too many background tasks')
+    expect(r.text).toContain(`(${MAX_RUNNING_PER_SESSION}/${MAX_RUNNING_PER_SESSION})`)
     expect(r.text).toContain('dev server')
-    expect(r.text).not.toContain('done one')
     expect(r.details).toMatchObject({ type: shell, exitCode: -1 })
     expect(mocks.runCommand).not.toHaveBeenCalled()
     // 没起进程：没有沙箱标记（宿主也就没留「实际执行的命令」）

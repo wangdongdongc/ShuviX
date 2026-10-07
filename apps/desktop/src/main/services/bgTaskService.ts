@@ -173,18 +173,25 @@ export function setBgTaskNotifier(fn: BgTaskNotifier): void {
 // ─── 查询 ────────────────────────────────────────────
 
 /**
- * 当前会话**脱离了调用方**的运行中任务数（后台形态的并发上限按它卡）。
+ * 当前会话**脱离了调用方**的运行中任务（按启动时间正序）—— 后台形态的并发上限按它的条数卡，
+ * 撞上限时回给模型的停止命令也照它列。
  *
  * 同步形态的命令不算：它占着一次工具调用，并发度早被模型自己的调用数卡死了，
  * 而把它算进来会让「同时跑两条 npm test」莫名其妙地撞上后台任务的上限。
+ *
+ * **计数与列表必须出自这一份**：读的是本服务的进程簿记，不是枢纽的 `list()` —— 后者只列
+ * 已宣告的任务，而一批并行起的后台命令在预热窗口里都还没宣告。早先两边各数各的，模型一次
+ * 并行起十条时第九条拿到的是「(0/8) 先停掉下面这些：」，后面一条也没有。
  */
-export function runningCount(sessionId: string): number {
-  let n = 0
+export function runningBackgroundTasks(sessionId: string): BgTaskInfo[] {
+  const running: BgTaskInfo[] = []
   for (const [toolCallId, proc] of procs) {
     if (!proc.background || proc.sessionId !== sessionId) continue
-    if (taskRegistry.get(toolCallId)?.endedAt === null) n++
+    const task = taskRegistry.get(toolCallId)
+    const info = task && task.endedAt === null ? toBgTaskInfo(task) : null
+    if (info) running.push(info)
   }
-  return n
+  return running.sort((a, b) => a.startedAt - b.startedAt)
 }
 
 /** 会话的全部任务（含已结束的，按启动时间正序） */
