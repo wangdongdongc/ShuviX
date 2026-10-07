@@ -802,6 +802,41 @@ export function InputArea({
     </button>
   )
 
+  /**
+   * 旧格式会话（P4-01）的整张卡片内容：一行安静的说明（锁 + 次级文字色），行尾一个幽灵样式的 [新建对话]
+   * （次级色，hover 才浮出底色 —— 不是主色实心按钮，免得抢过正文）。[新建对话] 失败的原因就挂在这一行下面
+   */
+  const legacyNotice = (
+    <div data-legacy-banner="" className="px-3.5 py-2.5">
+      <div className="flex items-center gap-2">
+        <Lock size={13} className="flex-shrink-0 text-text-tertiary" />
+        <span
+          data-legacy-text=""
+          className="flex-1 min-w-0 text-xs leading-relaxed text-text-secondary"
+        >
+          {t('chat.legacySessionReadOnly')}
+        </span>
+        {hasHost && (
+          <button
+            type="button"
+            data-legacy-new-chat=""
+            data-variant="subtle"
+            onClick={handleLegacyNewChat}
+            disabled={creatingNewChat}
+            className="flex-shrink-0 px-2 py-0.5 rounded-md text-[11px] text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-text-tertiary"
+          >
+            {t('sidebar.newChat')}
+          </button>
+        )}
+      </div>
+      {sendError && (
+        <div data-send-error className="mt-1 pl-[21px] text-[11px] text-error break-words">
+          {t('input.sendFailed', { error: sendError })}
+        </div>
+      )}
+    </div>
+  )
+
   return (
     <div
       className={
@@ -813,9 +848,10 @@ export function InputArea({
               isDragging ? 'bg-accent/5' : ''
             }`
       }
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      // 只读会话没有附图入口，拖进来的图片无处可去
+      onDragOver={isLegacy ? undefined : handleDragOver}
+      onDragLeave={isLegacy ? undefined : handleDragLeave}
+      onDrop={isLegacy ? undefined : handleDrop}
     >
       <div
         ref={wrapRef}
@@ -825,254 +861,236 @@ export function InputArea({
             有待处理请求时整张卡片换语义描边 + 一圈极淡外环 —— 「你要打字的这个框在问你话」 */}
         <div
           className={`border rounded-2xl bg-bg-primary/80 backdrop-blur-md shadow-md transition-colors ${
-            pendingTone === 'warning'
-              ? 'border-warning/45 ring-[3px] ring-warning/10'
-              : pendingTone === 'accent'
-                ? 'border-accent/45 ring-[3px] ring-accent/10'
-                : 'border-border-secondary/40'
+            isLegacy
+              ? 'border-border-secondary/40'
+              : pendingTone === 'warning'
+                ? 'border-warning/45 ring-[3px] ring-warning/10'
+                : pendingTone === 'accent'
+                  ? 'border-accent/45 ring-[3px] ring-accent/10'
+                  : 'border-border-secondary/40'
           }`}
         >
           {/* 卡片最顶：对话抽屉（笔记本会话）—— 排在待处理输入之上，让审批紧邻输入区 */}
           {thread}
 
-          {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
-          {accessory}
+          {/* 旧格式会话（P4-01）：卡片里只剩这一行只读提示 —— 没有输入框、选择器与发送，看着就不是
+              「一个坏掉的输入框」。有宿主时行尾附一个不起眼的 [新建对话]（渠道端没有建会话的能力） */}
+          {isLegacy ? (
+            legacyNotice
+          ) : (
+            <>
+              {/* 卡片顶格：待处理输入面板（自身无边框/阴影，只用 border-b 与输入区分隔） */}
+              {accessory}
 
-          {/* 待投递队列（可逐条撤回）。排在 accessory 之下 —— 待处理请求的优先级更高 */}
-          <QueuePanel />
+              {/* 待投递队列（可逐条撤回）。排在 accessory 之下 —— 待处理请求的优先级更高 */}
+              <QueuePanel />
 
-          {/* 被中断的运行（P3-12）：横幅 +「继续」，提示行在横幅可见时恒显示（PIN-20） */}
-          {isInterrupted && (
-            <div
-              data-interrupted-banner=""
-              className="px-3 pt-2.5 pb-2 border-b border-border-secondary/40"
-            >
-              <div className="flex items-center gap-2">
-                <CirclePause size={14} className="flex-shrink-0 text-warning" />
-                <span data-interrupted-text="" className="flex-1 min-w-0 text-xs text-text-primary">
-                  {t('run.interruptedBanner')}
-                </span>
-                <button
-                  type="button"
-                  data-interrupted-continue=""
-                  onClick={handleContinue}
-                  disabled={continuingFor === activeSessionId || isAgentClosing}
-                  className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] transition-colors ${
-                    continuingFor === activeSessionId || isAgentClosing
-                      ? 'bg-bg-hover text-text-tertiary cursor-not-allowed'
-                      : 'bg-accent text-white hover:bg-accent-hover'
-                  }`}
+              {/* 被中断的运行（P3-12）：横幅 +「继续」，提示行在横幅可见时恒显示（PIN-20） */}
+              {isInterrupted && (
+                <div
+                  data-interrupted-banner=""
+                  className="px-3 pt-2.5 pb-2 border-b border-border-secondary/40"
                 >
-                  {t('run.interruptedContinue')}
-                </button>
-              </div>
-              <div
-                data-interrupted-hint=""
-                className="mt-1 pl-[22px] text-[11px] text-text-tertiary"
-              >
-                {t('run.interruptedHint')}
-              </div>
-            </div>
-          )}
-
-          {/* 旧格式会话（P4-01）：只读横幅；有宿主时附 [新建对话]（渠道端没有建会话的能力） */}
-          {isLegacy && (
-            <div
-              data-legacy-banner=""
-              className="px-3 pt-2.5 pb-2 border-b border-border-secondary/40"
-            >
-              <div className="flex items-center gap-2">
-                <Lock size={14} className="flex-shrink-0 text-text-tertiary" />
-                <span data-legacy-text="" className="flex-1 min-w-0 text-xs text-text-primary">
-                  {t('chat.legacySessionReadOnly')}
-                </span>
-                {hasHost && (
-                  <button
-                    type="button"
-                    data-legacy-new-chat=""
-                    onClick={handleLegacyNewChat}
-                    disabled={creatingNewChat}
-                    className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] transition-colors ${
-                      creatingNewChat
-                        ? 'bg-bg-hover text-text-tertiary cursor-not-allowed'
-                        : 'bg-accent text-white hover:bg-accent-hover'
-                    }`}
+                  <div className="flex items-center gap-2">
+                    <CirclePause size={14} className="flex-shrink-0 text-warning" />
+                    <span
+                      data-interrupted-text=""
+                      className="flex-1 min-w-0 text-xs text-text-primary"
+                    >
+                      {t('run.interruptedBanner')}
+                    </span>
+                    <button
+                      type="button"
+                      data-interrupted-continue=""
+                      onClick={handleContinue}
+                      disabled={continuingFor === activeSessionId || isAgentClosing}
+                      className={`flex-shrink-0 px-2.5 py-1 rounded-lg text-[11px] transition-colors ${
+                        continuingFor === activeSessionId || isAgentClosing
+                          ? 'bg-bg-hover text-text-tertiary cursor-not-allowed'
+                          : 'bg-accent text-white hover:bg-accent-hover'
+                      }`}
+                    >
+                      {t('run.interruptedContinue')}
+                    </button>
+                  </div>
+                  <div
+                    data-interrupted-hint=""
+                    className="mt-1 pl-[22px] text-[11px] text-text-tertiary"
                   >
-                    {t('sidebar.newChat')}
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* 图片预览条 */}
-          {pendingImages.length > 0 && (
-            <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
-              {pendingImages.map((img, idx) => (
-                <div key={idx} className="relative flex-shrink-0 group/img">
-                  <img
-                    src={img.preview}
-                    alt={`附图 ${idx + 1}`}
-                    className="w-16 h-16 object-cover rounded-lg border border-border-primary"
-                  />
-                  <button
-                    onClick={() => removePendingImage(idx)}
-                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-error text-white flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity"
-                  >
-                    <X size={10} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {sendError && (
-            <div data-send-error className="px-4 pt-2 text-xs text-error break-words">
-              {t('input.sendFailed', { error: sendError })}
-            </div>
-          )}
-
-          <div className="relative">
-            {/* 斜杠命令自动补全浮层 */}
-            {slash.showPopover && (
-              <SlashCommandPopover
-                filter={slash.filter}
-                commands={slashCommands}
-                onSelect={handleSlashSelect}
-                selectedIndex={slash.selectedIndex}
-              />
-            )}
-
-            {/* @ 工作区文件引用自动补全浮层 */}
-            {at.showPopover && (
-              <AtMentionPopover
-                suggestions={at.suggestions}
-                onSelect={applyAtSelect}
-                selectedIndex={at.selectedIndex}
-              />
-            )}
-
-            {/* 斜杠命令芯片：绝对定位在 textarea 首行，text-indent 让出空间 */}
-            {slashChip && (
-              <span
-                ref={chipRef}
-                className="absolute left-4 top-2 z-10 pointer-events-auto text-sm"
-              >
-                <TokenChip
-                  token={{
-                    type: 'cmd',
-                    id: slashChip.commandId,
-                    displayText: `/${slashChip.commandId}`,
-                    payload: expandCommandTemplate(slashChip.template, inputText.trim()),
-                    name: slashChip.name
-                  }}
-                />
-              </span>
-            )}
-
-            {/* @ 引用 / 粘贴芯片镜像层：覆于 textarea 之上，仅把命中画成胶囊（其余文字透明露出下层，逐字对齐） */}
-            <MentionHighlighter
-              ref={backdropRef}
-              text={inputText}
-              mentions={at.mentions}
-              pasteChips={paste.chips}
-              className="absolute inset-0 z-[2] pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-sm text-transparent px-4 pt-2 pb-2"
-              style={{
-                minHeight: `${MIN_H}px`,
-                textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
-              }}
-            />
-
-            <textarea
-              ref={textareaRef}
-              value={inputText}
-              onChange={(e) => handleInputChange(e.target.value, e.target.selectionStart)}
-              onKeyDown={handleKeyDown}
-              onPaste={handleTextareaPaste}
-              onScroll={(e) => {
-                if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop
-              }}
-              disabled={sendBlocked}
-              placeholder={
-                // 旧格式会话的说明在横幅里，占位留空免得同一句话出现两遍（PIN-02）
-                isLegacy
-                  ? ''
-                  : sendBlocked
-                    ? t('chat.legacySessionReadOnly')
-                    : isAgentClosing
-                      ? t('input.placeholderClosing')
-                      : activePendingInput
-                        ? t('pendingInputs.otherPlaceholder')
-                        : isStreaming
-                          ? t('input.placeholderSteer')
-                          : slashChip
-                            ? t('input.placeholder')
-                            : modelSupportsVision
-                              ? t('input.placeholderVision')
-                              : t('input.placeholder')
-              }
-              rows={1}
-              style={{
-                minHeight: `${MIN_H}px`,
-                textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
-              }}
-              className="relative z-[1] w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-2 resize-none outline-none overflow-y-auto"
-            />
-          </div>
-
-          {/* 底部工具行（统一布局）：选择器居左；右侧为上下文用量环，最右为发送/停止 */}
-          <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-0.5 text-text-tertiary whitespace-nowrap">
-            {pickers}
-
-            {/* 弹性空白 → 把右侧按钮簇推到最右 */}
-            <span className="flex-1" />
-
-            {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字。
-                纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口。 */}
-            {(maxContextTokens > 0 || usedContextTokens !== null) && (
-              <span
-                aria-label={ctxTooltip}
-                className="relative group/token p-1 rounded flex items-center"
-              >
-                <svg width="15" height="15" viewBox="0 0 16 16" className="flex-shrink-0">
-                  {/* 轨道 */}
-                  <circle
-                    cx="8"
-                    cy="8"
-                    r="6"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    className="text-border-secondary group-hover/token:text-text-tertiary transition-colors"
-                  />
-                  {/* 填充弧（自顶部起顺时针；上限未知或零用量时不画） */}
-                  {ctxFraction !== null && ctxFraction > 0 && (
-                    <circle
-                      cx="8"
-                      cy="8"
-                      r="6"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeDasharray={`${ctxFraction * CTX_RING_C} ${CTX_RING_C}`}
-                      transform="rotate(-90 8 8)"
-                      className={`${ctxRingColor} transition-colors`}
-                    />
-                  )}
-                </svg>
-                {/* 悬浮 tooltip：精确用量 + 占比 */}
-                <div className="pointer-events-none absolute right-0 bottom-7 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap text-left">
-                  <div className="text-[11px] text-text-primary">
-                    {ctxTooltip}
-                    {ctxFraction !== null ? ` · ${Math.round(ctxFraction * 100)}%` : ''}
+                    {t('run.interruptedHint')}
                   </div>
                 </div>
-              </span>
-            )}
+              )}
 
-            {sendStopButtons}
-          </div>
+              {/* 图片预览条 */}
+              {pendingImages.length > 0 && (
+                <div className="flex gap-2 px-3 pt-3 pb-1 overflow-x-auto">
+                  {pendingImages.map((img, idx) => (
+                    <div key={idx} className="relative flex-shrink-0 group/img">
+                      <img
+                        src={img.preview}
+                        alt={`附图 ${idx + 1}`}
+                        className="w-16 h-16 object-cover rounded-lg border border-border-primary"
+                      />
+                      <button
+                        onClick={() => removePendingImage(idx)}
+                        className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-error text-white flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {sendError && (
+                <div data-send-error className="px-4 pt-2 text-xs text-error break-words">
+                  {t('input.sendFailed', { error: sendError })}
+                </div>
+              )}
+
+              <div className="relative">
+                {/* 斜杠命令自动补全浮层 */}
+                {slash.showPopover && (
+                  <SlashCommandPopover
+                    filter={slash.filter}
+                    commands={slashCommands}
+                    onSelect={handleSlashSelect}
+                    selectedIndex={slash.selectedIndex}
+                  />
+                )}
+
+                {/* @ 工作区文件引用自动补全浮层 */}
+                {at.showPopover && (
+                  <AtMentionPopover
+                    suggestions={at.suggestions}
+                    onSelect={applyAtSelect}
+                    selectedIndex={at.selectedIndex}
+                  />
+                )}
+
+                {/* 斜杠命令芯片：绝对定位在 textarea 首行，text-indent 让出空间 */}
+                {slashChip && (
+                  <span
+                    ref={chipRef}
+                    className="absolute left-4 top-2 z-10 pointer-events-auto text-sm"
+                  >
+                    <TokenChip
+                      token={{
+                        type: 'cmd',
+                        id: slashChip.commandId,
+                        displayText: `/${slashChip.commandId}`,
+                        payload: expandCommandTemplate(slashChip.template, inputText.trim()),
+                        name: slashChip.name
+                      }}
+                    />
+                  </span>
+                )}
+
+                {/* @ 引用 / 粘贴芯片镜像层：覆于 textarea 之上，仅把命中画成胶囊（其余文字透明露出下层，逐字对齐） */}
+                <MentionHighlighter
+                  ref={backdropRef}
+                  text={inputText}
+                  mentions={at.mentions}
+                  pasteChips={paste.chips}
+                  className="absolute inset-0 z-[2] pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-sm text-transparent px-4 pt-2 pb-2"
+                  style={{
+                    minHeight: `${MIN_H}px`,
+                    textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
+                  }}
+                />
+
+                <textarea
+                  ref={textareaRef}
+                  value={inputText}
+                  onChange={(e) => handleInputChange(e.target.value, e.target.selectionStart)}
+                  onKeyDown={handleKeyDown}
+                  onPaste={handleTextareaPaste}
+                  onScroll={(e) => {
+                    if (backdropRef.current)
+                      backdropRef.current.scrollTop = e.currentTarget.scrollTop
+                  }}
+                  disabled={sendBlocked}
+                  placeholder={
+                    // 旧格式会话根本不渲染输入框（P4-01），这里的只读提示只给 durable + `send:false`
+                    sendBlocked
+                      ? t('chat.legacySessionReadOnly')
+                      : isAgentClosing
+                        ? t('input.placeholderClosing')
+                        : activePendingInput
+                          ? t('pendingInputs.otherPlaceholder')
+                          : isStreaming
+                            ? t('input.placeholderSteer')
+                            : slashChip
+                              ? t('input.placeholder')
+                              : modelSupportsVision
+                                ? t('input.placeholderVision')
+                                : t('input.placeholder')
+                  }
+                  rows={1}
+                  style={{
+                    minHeight: `${MIN_H}px`,
+                    textIndent: chipWidth > 0 ? `${chipWidth + 4}px` : undefined
+                  }}
+                  className="relative z-[1] w-full bg-transparent text-sm text-text-primary placeholder:text-text-tertiary px-4 pt-2 pb-2 resize-none outline-none overflow-y-auto"
+                />
+              </div>
+
+              {/* 底部工具行（统一布局）：选择器居左；右侧为上下文用量环，最右为发送/停止 */}
+              <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-0.5 text-text-tertiary whitespace-nowrap">
+                {pickers}
+
+                {/* 弹性空白 → 把右侧按钮簇推到最右 */}
+                <span className="flex-1" />
+
+                {/* 上下文用量环：填充 = 已用占比（≥75% 警示、≥90% 告警）；hover 出精确数字。
+                  纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口。 */}
+                {(maxContextTokens > 0 || usedContextTokens !== null) && (
+                  <span
+                    aria-label={ctxTooltip}
+                    className="relative group/token p-1 rounded flex items-center"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 16 16" className="flex-shrink-0">
+                      {/* 轨道 */}
+                      <circle
+                        cx="8"
+                        cy="8"
+                        r="6"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        className="text-border-secondary group-hover/token:text-text-tertiary transition-colors"
+                      />
+                      {/* 填充弧（自顶部起顺时针；上限未知或零用量时不画） */}
+                      {ctxFraction !== null && ctxFraction > 0 && (
+                        <circle
+                          cx="8"
+                          cy="8"
+                          r="6"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeDasharray={`${ctxFraction * CTX_RING_C} ${CTX_RING_C}`}
+                          transform="rotate(-90 8 8)"
+                          className={`${ctxRingColor} transition-colors`}
+                        />
+                      )}
+                    </svg>
+                    {/* 悬浮 tooltip：精确用量 + 占比 */}
+                    <div className="pointer-events-none absolute right-0 bottom-7 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap text-left">
+                      <div className="text-[11px] text-text-primary">
+                        {ctxTooltip}
+                        {ctxFraction !== null ? ` · ${Math.round(ctxFraction * 100)}%` : ''}
+                      </div>
+                    </div>
+                  </span>
+                )}
+
+                {sendStopButtons}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

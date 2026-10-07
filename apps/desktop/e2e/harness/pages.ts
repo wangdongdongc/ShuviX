@@ -239,18 +239,28 @@ export interface LegacyBannerShot {
   newChatLabel: string | null
   /** [新建对话] 是否禁用（建会话途中）；没有按钮时为 false */
   newChatDisabled: boolean
+  /** [新建对话] 的 `data-variant`（不起眼的幽灵样式是 `subtle`）；没有按钮时为 null */
+  newChatVariant: string | null
+  /**
+   * 输入卡片里横幅之外还有几个直接子元素（对话抽屉插槽不计 —— 主聊天区没有它）。旧格式会话的卡片里
+   * 只剩横幅：没有输入框、选择器、发送，所以是 0
+   */
+  cardSiblings: number
 }
 
 /** 输入框本身的状态（textarea 的 disabled / placeholder） */
 export interface ComposerShot {
-  /** 有没有 textarea（会话没选中时没有） */
+  /** 有没有 textarea（会话没选中时没有；旧格式会话的卡片里只有只读横幅，也没有） */
   present: boolean
   disabled: boolean
   placeholder: string
 }
 
 export interface ChatPane {
-  /** 输入框就绪（会话已选中、ChatView 已挂载） */
+  /**
+   * 输入卡片就绪（会话已选中、ChatView 已挂载）：输入框在，或者是旧格式会话 —— 它的卡片里只有只读横幅
+   * （P4-01），没有输入框可等
+   */
   ready(): Promise<void>
 
   /** 往输入框填字（native value setter + input 事件，走 React 的 onChange） */
@@ -324,7 +334,7 @@ export interface ChatPane {
   legacyBanner(): Promise<LegacyBannerShot | null>
   /** 点旧格式横幅上的 [新建对话]；横幅或按钮不在返回 false */
   clickLegacyNewChat(): Promise<boolean>
-  /** 输入框（textarea）的 disabled / placeholder */
+  /** 输入框（textarea）的 disabled / placeholder；旧格式会话根本没有输入框（`present: false`） */
   composer(): Promise<ComposerShot>
   /**
    * 对话区里还剩的「改写历史」控件：回退（lucide-rotate-ccw）、重新生成（lucide-refresh-cw）、
@@ -589,7 +599,13 @@ export function chatPane(main: CdpClient): ChatPane {
 
   return {
     ready: async () => {
-      await until(() => main.eval<boolean>(`${TEXTAREA} !== null`), 'chat input mounted')
+      await until(
+        () =>
+          main.eval<boolean>(
+            `${TEXTAREA} !== null || document.querySelector('[data-legacy-banner]') !== null`
+          ),
+        'chat input (or the legacy read-only banner) mounted'
+      )
     },
 
     type: type,
@@ -757,7 +773,9 @@ export function chatPane(main: CdpClient): ChatPane {
         return {
           text: (el.querySelector('[data-legacy-text]')?.textContent ?? '').trim(),
           newChatLabel: btn ? (btn.textContent ?? '').trim() : null,
-          newChatDisabled: !!btn?.disabled
+          newChatDisabled: !!btn?.disabled,
+          newChatVariant: btn?.getAttribute('data-variant') ?? null,
+          cardSiblings: el.parentElement ? el.parentElement.children.length - 1 : 0
         }
       })()`),
     clickLegacyNewChat: () =>

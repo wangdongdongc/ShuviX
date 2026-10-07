@@ -10,7 +10,8 @@
  *
  * 第一组（一对实例 + 末尾再重启一次）：
  *   L-1  旧格式行画出冻结投影：工具块、压缩摘要卡、错误行
- *   L-2  横幅在、输入框禁用（placeholder 为空串）；硬发 `agent.prompt` 拿到 legacySessionReadOnly（IPC 本身恒回
+ *   L-2  卡片里只有横幅（没有输入框、发送、选择器；[新建对话] 是 subtle 幽灵按钮）；硬发 `agent.prompt` 拿到
+ *        legacySessionReadOnly（IPC 本身恒回
  *        success，拒绝走该会话的 ChatEvent `error`）；
  *        横幅的 [新建对话] 在这一行的项目里建一条会话并选中它
  *   L-3  没有回退 / 重新生成 / 编辑控件；硬调 `message.rollback` 也回 false
@@ -430,15 +431,18 @@ describe('legacy sessions after the boot switchover', () => {
     )
   })
 
-  it('L-2 the banner is shown, the composer is disabled with an empty placeholder, a forced agent.prompt gets legacySessionReadOnly, and [New chat] opens a session in the same project', async () => {
+  it('L-2 only the banner is shown (no composer textarea, send or pickers), a forced agent.prompt gets legacySessionReadOnly, and [New chat] opens a session in the same project', async () => {
     const banner = await until(() => chat.legacyBanner(), 'legacy banner')
     expect(banner).toEqual({
       text: READ_ONLY,
       newChatLabel: en.sidebar.newChat,
-      newChatDisabled: false
+      newChatDisabled: false,
+      newChatVariant: 'subtle',
+      cardSiblings: 0
     })
     expect(await chat.interruptedBanner()).toBeNull()
-    expect(await chat.composer()).toEqual({ present: true, disabled: true, placeholder: '' })
+    expect(await chat.composer()).toEqual({ present: false, disabled: false, placeholder: '' })
+    // 发送按钮整个不在（sendDisabled 对缺席的按钮也回 true）
     expect(await chat.sendDisabled()).toBe(true)
 
     const before = await listMessages(app.main, ids.chat)
@@ -465,7 +469,7 @@ describe('legacy sessions after the boot switchover', () => {
     newChatSid = created
     await until(async () => (await sidebar.activeTitle()) === fresh.title, 'new chat selected')
     await until(async () => (await chat.legacyBanner()) === null, 'banner gone on the new chat')
-    expect((await chat.composer()).disabled).toBe(false)
+    expect(await chat.composer()).toMatchObject({ present: true, disabled: false })
     expect(rowOf(home, created)?.storageKind).toBe(DURABLE)
   })
 
@@ -508,12 +512,16 @@ describe('legacy sessions after the boot switchover', () => {
   it('L-5 clearing a legacy row makes it durable while it is open: the banner goes, the .jsonl is gone, and a send succeeds', async () => {
     expect(await sidebar.openSession(T.clear)).toBe(true)
     await until(() => chat.legacyBanner(), 'legacy banner before the clear')
+    expect((await chat.composer()).present).toBe(false)
 
     await app.main.eval(`window.api.message.clear(${JSON.stringify(ids.clear)})`)
     expect(rowOf(home, ids.clear)?.storageKind).toBe(DURABLE)
     expect(existsSync(legacyTranscriptPathOf(home, ids.clear))).toBe(false)
     await until(async () => (await chat.legacyBanner()) === null, 'banner gone after the clear')
-    await until(async () => !(await chat.composer()).disabled, 'composer enabled after the clear')
+    await until(async () => {
+      const c = await chat.composer()
+      return c.present && !c.disabled
+    }, 'composer back and enabled after the clear')
     expect(await listMessages(app.main, ids.clear)).toEqual([])
 
     provider.script({ text: 'L5 REPLY', when: byUserText('L5 after the clear') })
