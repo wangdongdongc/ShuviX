@@ -8,9 +8,10 @@ log.transports.file.maxSize = 5 * 1024 * 1024
 log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}]{scope} {text}'
 log.transports.console.format = '[{h}:{i}:{s}] [{level}]{scope} {text}'
 
-// 单测（vitest）不写日志文件：electron-log 在普通 node 里会落到真实用户的
-// ~/Library/Logs/ShuviX/main.log，把测试输出混进用户排查问题用的日志
-if (process.env.VITEST) {
+// 单测（vitest 下的普通 node 进程）不写日志文件：electron-log 在普通 node 里会落到真实用户的
+// ~/Library/Logs/ShuviX/main.log，把测试输出混进用户排查问题用的日志。
+// 只看 VITEST 不够：e2e 也跑在 vitest 里，它拉起的 Electron 应用继承这个变量，而 e2e 正要读应用的日志
+if (process.env.VITEST && !process.versions.electron) {
   log.transports.file.level = false
 }
 
