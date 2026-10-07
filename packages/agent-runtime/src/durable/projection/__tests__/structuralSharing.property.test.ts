@@ -704,5 +704,6 @@ describe('P4-09b · structural sharing under random steps', () => {
       agent.stop()
     }
     expect(frames).toBe(120 * 40 * 2)
-  })
+    // 9600 帧的重型属性测试：空闲机器上约 3 秒，满载时会超过默认的 5 秒上限
+  }, 60_000)
 })
