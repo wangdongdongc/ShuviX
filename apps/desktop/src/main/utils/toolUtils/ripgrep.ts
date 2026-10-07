@@ -7,6 +7,7 @@
 import { spawn } from 'child_process'
 import { existsSync } from 'node:original-fs'
 import { rgPath } from '@vscode/ripgrep'
+import { appContainerExcludeGlobs } from '../appContainers'
 
 /**
  * 获取 rg 二进制路径
@@ -19,7 +20,8 @@ export function getRgPath(): string {
 
 /**
  * 异步生成器：使用 rg --files 列举目录下的文件
- * 自动遵循 .gitignore，排除 .git 目录
+ * 自动遵循 .gitignore，排除 .git 目录，以及落在 cwd 之内的其他应用沙盒容器
+ * （`~/Library/Containers`、`~/Library/Group Containers`，见 utils/appContainers）
  */
 export async function* rgFiles(input: {
   cwd: string
@@ -41,6 +43,8 @@ export async function* rgFiles(input: {
   // .git 排除必须排在调用方 glob 之后：rg 的 glob 是后者优先（gitignore 语义），
   // 放在前面时 `*.md` 之类的白名单会把 .git/ 下的匹配文件重新捞回来
   args.push('--glob=!.git/*')
+  // 容器排除同理排在最后：从家目录往下列一遍不该替用户撞上「访问其他应用的数据」授权框
+  for (const g of await appContainerExcludeGlobs(input.cwd)) args.push(`--glob=${g}`)
 
   yield* spawnRgLines(args, input.cwd, input.signal)
 }
@@ -102,6 +106,8 @@ export async function rgSearch(input: {
   if (input.include) {
     args.push('--glob', input.include)
   }
+  // 其他应用的沙盒容器不搜（排在 include 之后，见 rgFiles 的同名注释）
+  for (const g of await appContainerExcludeGlobs(input.cwd)) args.push(`--glob=${g}`)
   // 搜索目标：默认整个 cwd（'.'），或指定的单个文件/子路径。
   // 前面补 `--`：单文件时 target 是文件名原样，名为 `--pre=sh` 的文件否则会被 rg 读成选项
   // （--pre 对每个被搜的文件执行一条命令）

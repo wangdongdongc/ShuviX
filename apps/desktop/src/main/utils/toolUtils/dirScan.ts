@@ -11,15 +11,19 @@
  * 浏览场景所见即磁盘所有 —— 不做任何 .gitignore 过滤（gitignore 语义只留在搜索场景的
  * files.scan 全量接口里，对标 VSCode 的 search.exclude / useIgnoreFiles）。
  *
- * 保留的唯二过滤/保护：
+ * 保留的三处过滤/保护：
  *  - `.git` 目录永不列出（worktree/子模块里的 `.git` 指针文件照常按文件列出）；
- *  - 符号链接指向目录时 stat 一次目标判定类型（对标 VSCode）；stat 失败按文件处理。
+ *  - 符号链接指向目录时 stat 一次目标判定类型（对标 VSCode）；stat 失败按文件处理；
+ *  - 其他应用的沙盒容器（`~/Library/Containers`、`~/Library/Group Containers`）不列出、也不展开：
+ *    列 `~/Library` 时这两项不出现，dir 落在（或经符号链接解析到）容器里时回空、不 readdir ——
+ *    读它们会弹 macOS 的「访问其他应用的数据」授权框（见 utils/appContainers）。
  *
  * 纯磁盘操作、不碰会话/DB，便于单测；会话解析在上层 filesWatcherService。
  */
 
-import { readdir, stat } from 'fs/promises'
+import { readdir, realpath, stat } from 'fs/promises'
 import { join } from 'path'
+import { isInAppContainer, resolvedAppContainerRoots } from '../appContainers'
 
 export interface DirScanResult {
   /** 相对 root 的完整相对路径（forward-slash），已排序 */
@@ -42,9 +46,16 @@ export async function scanDirShallow(root: string, dir: string): Promise<DirScan
   const rel = normalizeScanDir(dir)
   if (rel === null) return { files: [], dirs: [] }
 
+  const abs = join(root, rel)
+  const containers = await resolvedAppContainerRoots()
+  // 先按字面判，再按真实路径判（只碰元数据）：两者都在容器外才 readdir
+  if (isInAppContainer(abs, containers)) return { files: [], dirs: [] }
+  const real = await realpath(abs).catch(() => abs)
+  if (isInAppContainer(real, containers)) return { files: [], dirs: [] }
+
   let dirents
   try {
-    dirents = await readdir(join(root, rel), { withFileTypes: true })
+    dirents = await readdir(abs, { withFileTypes: true })
   } catch {
     return { files: [], dirs: [] }
   }
@@ -53,6 +64,13 @@ export async function scanDirShallow(root: string, dir: string): Promise<DirScan
   const dirs: string[] = []
   for (const d of dirents) {
     const childRel = rel ? `${rel}/${d.name}` : d.name
+    // 列 ~/Library 时两个容器根本身不出现（展开它们本来也会回空，不如不给那个入口）
+    if (
+      isInAppContainer(join(abs, d.name), containers) ||
+      isInAppContainer(join(real, d.name), containers)
+    ) {
+      continue
+    }
     let isDir = d.isDirectory()
     if (!isDir && d.isSymbolicLink()) {
       // 符号链接：stat 跟随到目标判定类型；失败（悬空链接）按文件处理

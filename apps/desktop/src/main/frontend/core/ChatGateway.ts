@@ -119,8 +119,8 @@ export interface ChatGateway {
 
   // ─── 资源操作 ──────────────────────────────────
 
-  /** 获取所有运行时资源状态 */
-  getRuntimeStatuses(sessionId: string): Record<string, RuntimeStatus>
+  /** 获取所有运行时资源状态（异步：ssh 一项可能要读用户的 ssh 配置，不能同步挂住主进程） */
+  getRuntimeStatuses(sessionId: string): Promise<Record<string, RuntimeStatus>>
 
   /** 销毁指定运行时资源 */
   destroyRuntime(sessionId: string, runtimeId: string): Promise<{ success: boolean }>

@@ -8,6 +8,8 @@
  *         再广播 `status: null`，答 true；
  *   GW-1c / GW-2d  ssh：每台连着的主机一条 `ssh:<alias>`，与 db 并列；`ssh:<alias>` 的断开按钮断的是
  *         那一台，等断开落定再广播 null —— 本来就没连着（master 空闲到点已退出）也照样收掉胶囊；
+ *   GW-1d getRuntimeStatuses 是异步的：ssh 那一份可能要读用户的 ssh 配置（不能同步挂住主进程），
+ *         网关**等它落定**再交出结果 —— 把一个 Promise 当对象并进去，ssh 胶囊就静默地没了；
  *   GW-3  listTools：`mcp:database` 行是内置的（isBuiltin），且没有任何一个基座档案声明它 ——
  *         它是会话里勾的能力，不是谁的默认（档案取真的内置 md，四种形态外加 coding）。
  *
@@ -37,7 +39,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<(sessionId: string, provider: string, model: string) => Promise<void>>(),
   recordSessionThinkingLevel: vi.fn<(sessionId: string, level: string) => Promise<void>>(),
   messageClear: vi.fn(),
-  sshRuntimeStatuses: vi.fn<(sessionId: string) => Record<string, RuntimeStatus>>(),
+  sshRuntimeStatuses: vi.fn<(sessionId: string) => Promise<Record<string, RuntimeStatus>>>(),
   sshDisconnectRuntime:
     vi.fn<(sessionId: string, runtimeId: string) => Promise<boolean> | undefined>(),
   respondToUserInput: vi.fn<(requestId: string, response: unknown, meta?: unknown) => boolean>(),
@@ -145,7 +147,7 @@ beforeEach(() => {
   ]) {
     fn.mockReset()
   }
-  mocks.sshRuntimeStatuses.mockReturnValue({})
+  mocks.sshRuntimeStatuses.mockResolvedValue({})
   // 与真件同一口径：不是 `ssh:` 开头的运行时一律答 undefined（不归它管）
   mocks.sshDisconnectRuntime.mockReturnValue(undefined)
   mocks.disconnect.mockResolvedValue(undefined)
@@ -159,32 +161,50 @@ beforeEach(() => {
 })
 
 describe('DefaultChatGateway.getRuntimeStatuses —— 状态条上的 db 一条', () => {
-  it('GW-1a 连接池有 runtimeStatus → 原样作为 db 一条', () => {
+  it('GW-1a 连接池有 runtimeStatus → 原样作为 db 一条', async () => {
     mocks.runtimeStatus.mockReturnValue(STATUS)
 
-    expect(chatGateway.getRuntimeStatuses(SID)).toEqual({ db: STATUS })
+    await expect(chatGateway.getRuntimeStatuses(SID)).resolves.toEqual({ db: STATUS })
     expect(mocks.runtimeStatus).toHaveBeenCalledWith(SID)
   })
 
-  it('GW-1b 连接池说没有 → 空对象（即便 getConnectionInfo 还答得出东西，也不自己拼一条）', () => {
+  it('GW-1b 连接池说没有 → 空对象（即便 getConnectionInfo 还答得出东西，也不自己拼一条）', async () => {
     mocks.runtimeStatus.mockReturnValue(undefined)
     mocks.getConnectionInfo.mockReturnValue(INFO)
 
-    expect(chatGateway.getRuntimeStatuses(SID)).toEqual({})
+    await expect(chatGateway.getRuntimeStatuses(SID)).resolves.toEqual({})
   })
 
-  it('GW-1c 连着的每台 ssh 主机各一条 ssh:<alias>，与 db 并列', () => {
+  it('GW-1c 连着的每台 ssh 主机各一条 ssh:<alias>，与 db 并列', async () => {
     const web: RuntimeStatus = { label: 'web', icon: 'Terminal', color: '#38bdf8' }
     const api: RuntimeStatus = { label: 'api', icon: 'Terminal', color: '#38bdf8' }
     mocks.runtimeStatus.mockReturnValue(STATUS)
-    mocks.sshRuntimeStatuses.mockReturnValue({ 'ssh:web': web, 'ssh:api': api })
+    mocks.sshRuntimeStatuses.mockResolvedValue({ 'ssh:web': web, 'ssh:api': api })
 
-    expect(chatGateway.getRuntimeStatuses(SID)).toEqual({
+    await expect(chatGateway.getRuntimeStatuses(SID)).resolves.toEqual({
       db: STATUS,
       'ssh:web': web,
       'ssh:api': api
     })
     expect(mocks.sshRuntimeStatuses).toHaveBeenCalledWith(SID)
+  })
+
+  it('GW-1d 异步：返回 Promise，等 ssh 那一份落定才交出结果（形状同上）', async () => {
+    const web: RuntimeStatus = { label: 'web', icon: 'Terminal', color: '#38bdf8' }
+    let release!: (v: Record<string, RuntimeStatus>) => void
+    mocks.runtimeStatus.mockReturnValue(STATUS)
+    mocks.sshRuntimeStatuses.mockReturnValue(new Promise((r) => (release = r)))
+
+    const pending = chatGateway.getRuntimeStatuses(SID)
+    expect(pending).toBeInstanceOf(Promise)
+    let settled = false
+    void pending.then(() => (settled = true))
+    await new Promise((r) => setImmediate(r))
+    // ssh 还没答：网关不先交一份缺了 ssh 的结果
+    expect(settled).toBe(false)
+
+    release({ 'ssh:web': web })
+    await expect(pending).resolves.toEqual({ db: STATUS, 'ssh:web': web })
   })
 })
 

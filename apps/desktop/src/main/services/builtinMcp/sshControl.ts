@@ -15,7 +15,8 @@
  */
 import { spawn } from 'child_process'
 import { createHash } from 'crypto'
-import { mkdirSync, rmSync, existsSync, readdirSync, statSync, chmodSync } from 'fs'
+import { mkdirSync, rmSync, rmdirSync, existsSync, readdirSync, statSync, chmodSync } from 'fs'
+import { readdir } from 'fs/promises'
 import { join } from 'path'
 import { userInfo } from 'os'
 import { buildSpawnEnv } from '../../utils/paths'
@@ -58,12 +59,25 @@ function controlRoot(): string {
   return `/tmp/shuvix-ssh-${uid}`
 }
 
+/**
+ * 某条会话的 socket 子目录：`<root>/<sessionId 的 16 位哈希>/`。
+ *
+ * 一条会话一个目录，于是「这条会话现在有没有连接」是一次 readdir 就答得出的事（sshSessionHasSockets），
+ * 不必先知道别名 —— 而别名要读 `~/.ssh/config` 才知道。会话打开时的运行时快照只为这一问而来，
+ * 一条从没连过 ssh 的会话因此根本不碰用户的配置。路径长度：根 + 2×17 字节，仍远在 104 字节以内。
+ * 更早版本的 socket 直接放在根下，升级后认不出来，空闲 ControlPersist 到点后自己退出。
+ */
+function sessionControlDir(sessionId: string): string {
+  const hash = createHash('sha256').update(sessionId).digest('hex')
+  return join(controlRoot(), hash.slice(0, 16))
+}
+
 /** 某条会话某台主机的 control socket 路径（Windows 无此概念） */
 function controlPath(sessionId: string, alias: string): string | undefined {
   if (isWindows) return undefined
   // sessionId 是 uuidv7，不含冒号，所以这个分隔符不会让两组不同输入撞成同一串
   const hash = createHash('sha256').update(sessionId).update(':').update(alias).digest('hex')
-  return join(controlRoot(), hash.slice(0, 16))
+  return join(sessionControlDir(sessionId), hash.slice(0, 16))
 }
 
 /**
@@ -87,6 +101,13 @@ function ensureControlRoot(): void {
     )
   }
   if ((st.mode & 0o077) !== 0) chmodSync(root, 0o700)
+}
+
+/** 建连前：根目录过一遍复核，再建这条会话的子目录（根是 0700 且属于自己，子目录随之受保护） */
+function ensureSessionControlDir(sessionId: string): void {
+  if (isWindows) return
+  ensureControlRoot()
+  mkdirSync(sessionControlDir(sessionId), { recursive: true, mode: 0o700 })
 }
 
 /**
@@ -224,7 +245,7 @@ export async function sshExec(opts: {
   /** 配置文件覆写；必须与枚举用的是同一份 */
   configPath?: string
 }): Promise<SshExecResult> {
-  ensureControlRoot()
+  ensureSessionControlDir(opts.sessionId)
   const sock = controlPath(opts.sessionId, opts.alias)
   const args = [
     ...configArgs(opts.configPath),
@@ -264,7 +285,7 @@ export async function sshCopy(opts: {
   signal?: AbortSignal
   configPath?: string
 }): Promise<SshExecResult> {
-  ensureControlRoot()
+  ensureSessionControlDir(opts.sessionId)
   const sock = controlPath(opts.sessionId, opts.alias)
   const remote = `${opts.alias}:${opts.remotePath}`
   const args = [
@@ -326,7 +347,7 @@ export function unsafeRemotePathReason(remotePath: string): string | undefined {
  * 目录同步（rsync over ssh），同样复用 control socket。
  *
  * 已知限制：rsync 自己按空白切分 `-e` 的值，所以那串里的路径不能带空格。
- * 生产路径（`/tmp/shuvix-ssh-<uid>/<hash>`）不会带，覆写了 `SHUVIX_SSH_CONTROL_ROOT`
+ * 生产路径（`/tmp/shuvix-ssh-<uid>/<hash>/<hash>`）不会带，覆写了 `SHUVIX_SSH_CONTROL_ROOT`
  * 到带空格的目录才会踩到。
  */
 export async function sshSync(opts: {
@@ -339,7 +360,7 @@ export async function sshSync(opts: {
   signal?: AbortSignal
   configPath?: string
 }): Promise<SshExecResult> {
-  ensureControlRoot()
+  ensureSessionControlDir(opts.sessionId)
   const sock = controlPath(opts.sessionId, opts.alias)
   const sshCmd = [
     'ssh',
@@ -384,6 +405,19 @@ export async function sshDisconnect(
   return true
 }
 
+/**
+ * 这条会话名下有没有 control socket —— 只看它自己的子目录（ShuviX 自己的目录，一次 readdir）。
+ * 没有就不必去问「连着哪些主机」，于是也不必读 `~/.ssh/config` 去凑候选别名。
+ */
+export async function sshSessionHasSockets(sessionId: string): Promise<boolean> {
+  if (isWindows) return false
+  try {
+    return (await readdir(sessionControlDir(sessionId))).length > 0
+  } catch {
+    return false
+  }
+}
+
 /** 这条会话当前连着哪些主机（按 socket 是否存在判断） */
 export function sshConnectedAliases(sessionId: string, aliases: string[]): string[] {
   if (isWindows) return []
@@ -396,21 +430,28 @@ export function sshConnectedAliases(sessionId: string, aliases: string[]): strin
 /**
  * 关掉这条会话名下所有 master（会话销毁时）。
  *
- * 不知道会话连过哪些别名，所以按 socket 目录反查：路径是由 sessionId 与别名一起哈希出来的，
- * 拿候选别名重算一遍就能认出自己的那些。认不出的一律不碰 —— 那是别的会话的连接。
+ * 不知道会话连过哪些别名，所以按这条会话的 socket 子目录反查：路径是由 sessionId 与别名一起哈希出来的，
+ * 拿候选别名重算一遍就能认出自己的那些。认不出的一律不碰（`ssh -O exit` 要一个别名才发得出去）。
+ * 收完把空了的子目录也删掉；还剩东西就留着。
  */
 export async function sshCloseSession(
   sessionId: string,
   aliases: string[],
   configPath?: string
 ): Promise<number> {
-  if (isWindows || !existsSync(controlRoot())) return 0
+  const dir = sessionControlDir(sessionId)
+  if (isWindows || !existsSync(dir)) return 0
   const mine = new Map(aliases.map((a) => [controlPath(sessionId, a) ?? '', a]))
   let closed = 0
-  for (const name of readdirSync(controlRoot())) {
-    const alias = mine.get(join(controlRoot(), name))
+  for (const name of readdirSync(dir)) {
+    const alias = mine.get(join(dir, name))
     if (!alias) continue
     if (await sshDisconnect(sessionId, alias, configPath)) closed++
+  }
+  try {
+    rmdirSync(dir)
+  } catch {
+    /* 非空（认不出的 socket）或已不在：留着 */
   }
   return closed
 }

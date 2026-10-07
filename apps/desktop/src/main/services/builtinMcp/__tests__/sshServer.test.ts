@@ -27,6 +27,10 @@
  *            rsync 远端路径白名单、合成出来的那条 `rsync --server …` 过命令门
  *            （而 upload/download 刻意不过 —— 它们走 SFTP）；
  *   171…177  **传输结果的翻译**：四句 done、255 该不该翻、超时、其余非零、状态条；
+ *   180…184  **没有 socket 就不读配置**：会话打开时的运行时快照（sshRuntimeStatuses）是异步的，会话名下
+ *            没有 control socket 时直接回 `{}`、一次都不读 ~/.ssh/config；有才读，形状照旧；会话释放、
+ *            状态条复核同理 —— 一条纯聊天会话的打开 / 关闭不该去碰用户的 ssh 配置（它可能 Include 了
+ *            别的应用容器里的文件，读它会弹系统授权框、挂住主进程）；
  *   SG1      **交给命令门的中止信号**（exec / sync）：是这次请求自己的 —— 客户端取消它就落下
  *            （询问点的审查随之收尾），同会话里并发的另一次不受牵连。
  *   P2-07-10…19, 52  **调用身份**：`_meta` 的 taskId / conversationId 原样并进每道门的 opts（没带 / 不合法
@@ -204,6 +208,9 @@ const control = vi.hoisted(() => ({
   wasConnected: true,
   /** sshConnectedAliases 眼里连着的别名 */
   connected: [] as string[],
+  /** sshSessionHasSockets 的应答：缺省 = 「connected 非空」；用例可按会话覆写 */
+  hasSockets: undefined as ((sessionId: string) => boolean) | undefined,
+  hasSocketsCalls: [] as string[],
   closeSession: [] as Array<{ sessionId: string; aliases: string[] }>
 }))
 
@@ -234,6 +241,10 @@ vi.mock('../sshControl', async (importOriginal) => {
     },
     sshConnectedAliases: (_sessionId: string, aliases: string[]) =>
       aliases.filter((a) => control.connected.includes(a)),
+    sshSessionHasSockets: async (sessionId: string) => {
+      control.hasSocketsCalls.push(sessionId)
+      return control.hasSockets ? control.hasSockets(sessionId) : control.connected.length > 0
+    },
     sshCloseSession: async (sessionId: string, aliases: string[]) => {
       control.closeSession.push({ sessionId, aliases })
       return 0
@@ -242,11 +253,18 @@ vi.mock('../sshControl', async (importOriginal) => {
 })
 vi.mock('../../../logger', () => ({
   createLogger: () => ({
+    debug: () => {},
     info: (m: string) => void logged.lines.push(m),
     warn: () => {},
     error: () => {}
   })
 }))
+
+/** 枚举走原件，只在外面套一层可数的壳：「这一下读没读配置」看它被调了几次 */
+vi.mock('../sshConfig', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../sshConfig')>()
+  return { ...actual, listSshHosts: vi.fn(actual.listSshHosts) }
+})
 
 /** 枚举阶段起进程 = 当场记一笔（今天根本不 import child_process，这是回归闸门） */
 const cp = vi.hoisted(() => {
@@ -273,7 +291,8 @@ vi.mock('node:child_process', cp.factory)
 
 import { migrations } from '../../../dao/migrations'
 import { BUILTIN_MCP_FACTORIES } from '../index'
-import { createSshMcpServerFactory } from '../sshServer'
+import { createSshMcpServerFactory, sshRuntimeStatuses } from '../sshServer'
+import { listSshHosts } from '../sshConfig'
 import type { DesktopBuiltinMcpScope } from '../types'
 import {
   M1,
@@ -336,6 +355,9 @@ beforeEach(() => {
   control.disconnect.length = 0
   control.closeSession.length = 0
   control.connected.length = 0
+  control.hasSockets = undefined
+  control.hasSocketsCalls.length = 0
+  vi.mocked(listSshHosts).mockClear()
   control.result = { stdout: '', stderr: '', exitCode: 0, timedOut: false }
   control.transfer = { stdout: '', stderr: '', exitCode: 0, timedOut: false }
   control.rsync = true
@@ -408,6 +430,29 @@ interface ListHostsResult {
 
 const call = async (client: Client, name = 'list-hosts'): Promise<ListHostsResult> =>
   (await client.callTool({ name, arguments: {} })) as unknown as ListHostsResult
+
+/**
+ * 等异步的收尾落定（释放钩子、到点复核都是 fire-and-forget 的 promise 链，中间有真 fs 读）。
+ * 用 setImmediate 让出事件循环：SSHS-U-124b 只假了 setTimeout，这条路不受假时钟影响
+ */
+async function settle(cond: () => boolean, rounds = 500): Promise<void> {
+  for (let i = 0; i < rounds && !cond(); i++) await new Promise((r) => setImmediate(r))
+}
+
+/**
+ * 等到没有在路上的配置读为止。到点复核时几只定时器同时到期、各起一条异步链，只等「有事件了」会在
+ * 第一条落定时就返回，另一条还在路上、落进下一段断言里。配置读是这些链里唯一的真 I/O：
+ * 把它们全等完、再让出几轮跑完后续微任务，直到不再冒出新的读。
+ */
+async function quiesce(): Promise<void> {
+  const results = (): Array<{ value: unknown }> => vi.mocked(listSshHosts).mock.results
+  let seen = -1
+  while (seen !== results().length) {
+    seen = results().length
+    await Promise.allSettled(results().map((r) => r.value))
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+  }
+}
 
 const textOf = (r: ListHostsResult): string =>
   r.content
@@ -665,10 +710,13 @@ Match exec "touch ${sentinel}"
     expect(logged.lines.some((l) => l.includes('ssh server ready session=s-close'))).toBe(true)
 
     await clientTransport.close()
+    const closedLine = (): boolean =>
+      logged.lines.some((l) => l.includes('ssh server closed session=s-close'))
+    await settle(closedLine)
 
     // 「会话结束 → McpManager 关连接 → 这里释放」只有这一条路径：本轮没有要释放的东西，
     // 但钩子必须真的被调到，否则 exec 的 control socket 将来会静默泄漏
-    expect(logged.lines.some((l) => l.includes('ssh server closed session=s-close'))).toBe(true)
+    expect(closedLine()).toBe(true)
   })
 })
 
@@ -1244,17 +1292,21 @@ describe('ssh 内置服务器的 disconnect 与状态条', () => {
       await callTool(client, 'exec', execArgs())
       await callTool(client, 'exec', execArgs({ host: 'api' }))
 
-      // web 的 master 空闲退出了；api 还连着
+      // web 的 master 空闲退出了；api 还连着（复核是异步的：到点之后等它落定）
       events.length = 0
       control.connected.splice(0, control.connected.length, 'api')
       await vi.advanceTimersByTimeAsync(CONTROL_PERSIST_MS + 5_000)
+      await quiesce()
       expect(events).toEqual([{ type: 'runtime_event', runtimeId: 'ssh:web', status: null }])
 
-      // 下一轮复核时 api 也退了
+      // 下一轮复核时 api 也退了 —— 会话名下一个 socket 都没了，这一轮不必再读配置
       events.length = 0
       control.connected.length = 0
+      vi.mocked(listSshHosts).mockClear()
       await vi.advanceTimersByTimeAsync(CONTROL_PERSIST_MS + 5_000)
+      await quiesce()
       expect(events).toEqual([{ type: 'runtime_event', runtimeId: 'ssh:api', status: null }])
+      expect(listSshHosts).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
@@ -1285,16 +1337,96 @@ describe('ssh 内置服务器的 disconnect 与状态条', () => {
     writeConfig('Host web\nHost api\n')
     const { clientTransport } = await open({ sessionId: 's-leak' })
 
+    // 会话名下有 socket（否则释放根本不读配置，见 SSHS-U-183）
+    control.connected.push('web')
     // 用户在会话期间把 web 从 ~/.ssh/config 里删了（改名、注释掉，都算）
     writeConfig('Host api\n')
     await clientTransport.close()
-    await new Promise((r) => setTimeout(r, 5))
+    await settle(() => control.closeSession.length > 0)
 
     expect(control.closeSession).toHaveLength(1)
     // 候选别名是**现读**配置得来的，而 socket 路径是 sessionId+别名哈希出来的：
     // 名字没了就再也算不回那条路径，那个 socket 于是留在 /tmp 里直到 ControlPersist 到期。
     // 这里钉的是今天的行为，不是它应该如此 —— 修法是把释放建立在会话自己的连接记账上。
     expect(control.closeSession[0]).toEqual({ sessionId: 's-leak', aliases: ['api'] })
+  })
+})
+
+// ─── 没有 socket 就不读配置 ──────────────────────────────────────────────
+//
+// 会话打开 / 切回时渲染层要一份运行时快照（runtime.statuses → sshRuntimeStatuses）。曾经它每次都同步
+// 读 ~/.ssh/config 并跟进 Include —— 一条只说过 hello 的会话也一样；而用户的配置 Include 了密钥管理器
+// 容器里的文件时，那次读弹出 macOS 的授权框，同步读把整个主进程挂在框上。判据：会话名下没有 control
+// socket（sshSessionHasSockets，一次 readdir 自己的目录），就没有可报的东西，配置一次都不读。
+
+describe('ssh 没有 socket 就不读配置', () => {
+  const STATUS = (alias: string): Record<string, unknown> => ({
+    label: alias,
+    icon: 'Terminal',
+    color: '#38bdf8'
+  })
+
+  it('SSHS-U-180: 会话名下没有 socket → `{}`，配置一次都不读', async () => {
+    // 用户真实的样子：配置里 Include 着别的应用容器里的文件。读都不该读到它
+    writeConfig(
+      'Include "~/Library/Group Containers/2BUA8C4S2C.com.keymgr/t/ssh_config"\nHost web\n'
+    )
+    control.hasSockets = () => false
+
+    expect(await sshRuntimeStatuses('s-plain', configPath)).toEqual({})
+    expect(control.hasSocketsCalls).toEqual(['s-plain'])
+    expect(listSshHosts).not.toHaveBeenCalled()
+  })
+
+  it('SSHS-U-181: 有 socket → 只报「在配置里且 socket 还在」的那几台，形状是 ssh:<alias> → 胶囊', async () => {
+    writeConfig('Host web\nHost api\nHost db\n')
+    control.connected.push('web', 'db', 'gone') // gone 不在配置里：算不出路径，不算连着
+
+    expect(await sshRuntimeStatuses('s-ssh', configPath)).toEqual({
+      'ssh:web': STATUS('web'),
+      'ssh:db': STATUS('db')
+    })
+    expect(listSshHosts).toHaveBeenCalledTimes(1)
+    expect(listSshHosts).toHaveBeenCalledWith(configPath)
+  })
+
+  it('SSHS-U-182: 快照是异步的 —— 返回 Promise（主进程不在这上面同步挂住）', async () => {
+    writeConfig('Host web\n')
+    control.connected.push('web')
+    const pending = sshRuntimeStatuses('s-ssh', configPath)
+    expect(pending).toBeInstanceOf(Promise)
+    expect(await pending).toEqual({ 'ssh:web': STATUS('web') })
+  })
+
+  it('SSHS-U-183: 会话释放时名下没有 socket → 不读配置、不调 sshCloseSession，照常记一行 closed', async () => {
+    writeConfig('Host web\n')
+    const { clientTransport } = await open({ sessionId: 's-plain-close' })
+    vi.mocked(listSshHosts).mockClear()
+
+    await clientTransport.close()
+    const closedLine = (): string | undefined =>
+      logged.lines.find((l) => l.includes('ssh server closed session=s-plain-close'))
+    await settle(() => closedLine() !== undefined)
+
+    expect(closedLine()).toContain('(0 connection(s))')
+    expect(control.hasSocketsCalls).toContain('s-plain-close')
+    expect(control.closeSession).toEqual([])
+    expect(listSshHosts).not.toHaveBeenCalled()
+  })
+
+  it('SSHS-U-184: 一次没连上的 exec（没有 socket）—— 配置只为别名核对读一次，状态条对齐不再读', async () => {
+    writeConfig('Host web\n')
+    const { client, events } = await open()
+    vi.mocked(listSshHosts).mockClear()
+    control.result = { stdout: '', stderr: 'Connection refused', exitCode: 255, timedOut: false }
+
+    await callTool(client, 'exec', execArgs())
+
+    // 别名核对是安全的那一道（别名进 argv 之前必须在用户配置里），它照读；
+    // 之后的「对齐胶囊」发现会话名下没有 socket，就不再为凑候选别名去读第二次
+    expect(listSshHosts).toHaveBeenCalledTimes(1)
+    expect(control.exec).toHaveLength(1)
+    expect(events).toEqual([])
   })
 })
 

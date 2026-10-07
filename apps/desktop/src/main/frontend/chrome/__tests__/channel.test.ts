@@ -208,7 +208,8 @@ beforeEach(() => {
     followUp: mocks.delegate('followUp', () => undefined),
     abort: mocks.delegate('abort', async () => ({ aborted: true })),
     listMessages: mocks.delegate('listMessages', async () => [{ id: 'm1' }]),
-    getRuntimeStatuses: mocks.delegate('getRuntimeStatuses', () => [{ id: 'rt1' }]),
+    // 网关这一条是异步的（ssh 那一份可能要读用户配置）：替身照真件的形状回 Promise
+    getRuntimeStatuses: mocks.delegate('getRuntimeStatuses', async () => [{ id: 'rt1' }]),
     listTools: mocks.delegate('listTools', () => [{ name: 'mcp:chrome' }]),
     continue: mocks.delegate('continue', async () => ({})),
     withdrawQueued: mocks.delegate('withdrawQueued', async () => 'aborted'),

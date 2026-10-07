@@ -12,6 +12,9 @@
  * 分组（SSHCTL-U-*）：
  *   1…2    control socket 那个目录 —— 权限收紧与属主复核（路径完全可预测，里面是活的凭据）；
  *   3…6    会话隔离 —— 两条会话两份连接、释放只收自己的、从没连过的不起进程、残留清理；
+ *   36…37  **一条会话一个 socket 子目录** —— `sshSessionHasSockets` 只看自己的目录就答得出「有没有连接」
+ *          （不必先知道别名，于是不必读 ~/.ssh/config）：别的会话的 socket 不算、单独一次传输不留、
+ *          断开后归零；会话释放把空了的子目录一并收掉；
  *   7…8    中止与超时 —— 子进程真被杀掉（不只是 promise reject），124 是本地编的；
  *   9…11   exec 的 argv —— `-F` / `--` / `-O exit`，以及 Windows 上按掉多路复用后的三处退化；
  *   12…17  ssh 自身失败的翻译表，含「远端有输出就不是 ssh 的错」这两道守卫；
@@ -119,6 +122,7 @@ const {
   sshSync,
   sshDisconnect,
   sshConnectedAliases,
+  sshSessionHasSockets,
   sshCloseSession,
   classifySshFailure,
   rsyncAvailable
@@ -371,8 +375,15 @@ const run = (opts: {
     configPath: CONFIG
   })
 
-/** control socket 根目录里现在有哪些文件 */
+/** control socket 根目录里现在有哪些条目（一条会话一个子目录） */
 const lsRoot = (): string[] => (existsSync(CONTROL_ROOT) ? readdirSync(CONTROL_ROOT).sort() : [])
+
+/** 各会话子目录里的 socket，按 `<子目录>/<socket>` 列出 */
+const lsSockets = (): string[] =>
+  lsRoot().flatMap((d) => {
+    const sub = join(CONTROL_ROOT, d)
+    return statSync(sub).isDirectory() ? readdirSync(sub).map((n) => `${d}/${n}`) : []
+  })
 
 /** 轮询等一个条件成立（真进程的收尾不是同步的） */
 async function until(cond: () => boolean, ms = 8000): Promise<void> {
@@ -563,10 +574,10 @@ describe('sshControl 的会话隔离', () => {
 
   it('SSHCTL-U-6: 哈希路径上残留的**普通文件**会被清掉', async () => {
     const sid = 'stale-session'
-    const before = new Set(lsRoot())
+    const before = new Set(lsSockets())
     await run({ sessionId: sid, alias: 'testbox' })
-    // 路径不导出，所以从目录里认出这一次新增的那个
-    const name = lsRoot().find((n) => !before.has(n))
+    // 路径不导出，所以从目录里认出这一次新增的那个（在这条会话自己的子目录里）
+    const name = lsSockets().find((n) => !before.has(n))
     expect(name).toBeDefined()
     const sock = join(CONTROL_ROOT, name!)
 
@@ -581,6 +592,57 @@ describe('sshControl 的会话隔离', () => {
     // 否则下一次 ControlMaster=auto 会一头撞上它
     expect(spawns.calls).toHaveLength(1)
     expect(existsSync(sock)).toBe(false)
+  }, 60000)
+})
+
+// ─── 一条会话一个 socket 子目录 ──────────────────────────────────────────
+//
+// 会话打开时要一份运行时快照。「连着谁」得拿候选别名去算 socket 路径，候选别名得读 ~/.ssh/config ——
+// 而那份配置可能 Include 着别的应用容器里的文件，读它会弹 macOS 的授权框。所以先问一句不需要别名的：
+// 这条会话名下**有没有** socket。一条会话一个子目录，这一问就是一次 readdir 自己的目录。
+
+describe('sshControl 的会话 socket 子目录', () => {
+  it('SSHCTL-U-36: sshSessionHasSockets —— 没连过 false、连上 true、别的会话的不算、断开后归零', async () => {
+    expect(await sshSessionHasSockets('has-a')).toBe(false)
+
+    await run({ sessionId: 'has-b', alias: 'testbox' })
+    // 共用同一个根目录，但别的会话的 socket 不算这条会话的
+    expect(await sshSessionHasSockets('has-a')).toBe(false)
+    expect(await sshSessionHasSockets('has-b')).toBe(true)
+
+    await run({ sessionId: 'has-a', alias: 'alt-name' })
+    expect(await sshSessionHasSockets('has-a')).toBe(true)
+
+    await sshDisconnect('has-a', 'alt-name', CONFIG)
+    expect(await sshSessionHasSockets('has-a')).toBe(false)
+    expect(await sshSessionHasSockets('has-b')).toBe(true)
+
+    await sshDisconnect('has-b', 'testbox', CONFIG)
+    expect(await sshSessionHasSockets('has-b')).toBe(false)
+  }, 60000)
+
+  it('SSHCTL-U-37: socket 落在会话自己的子目录里；会话释放后空了的子目录一并删掉，别的会话的不碰', async () => {
+    const rootBefore = new Set(lsRoot())
+    await run({ sessionId: 'dir-a', alias: 'testbox' })
+    await run({ sessionId: 'dir-a', alias: 'alt-name' })
+    await run({ sessionId: 'dir-b', alias: 'testbox' })
+
+    // 三个 socket、两个新子目录：同一条会话的两台主机在同一个子目录里
+    const added = lsRoot().filter((n) => !rootBefore.has(n))
+    expect(added).toHaveLength(2)
+    const perDir = added.map((d) => readdirSync(join(CONTROL_ROOT, d)).length).sort()
+    expect(perDir).toEqual([1, 2])
+    // 子目录与根一样只有自己进得去
+    for (const d of added) expect(statSync(join(CONTROL_ROOT, d)).mode & 0o777).toBe(0o700)
+
+    expect(await sshCloseSession('dir-a', ['testbox', 'alt-name'], CONFIG)).toBe(2)
+    const left = lsRoot().filter((n) => !rootBefore.has(n))
+    expect(left).toHaveLength(1)
+    expect(readdirSync(join(CONTROL_ROOT, left[0]))).toHaveLength(1)
+    expect(await sshSessionHasSockets('dir-b')).toBe(true)
+
+    await sshCloseSession('dir-b', ['testbox'], CONFIG)
+    expect(lsRoot().filter((n) => !rootBefore.has(n))).toEqual([])
   }, 60000)
 })
 
@@ -681,6 +743,7 @@ describe('sshControl 交给 ssh 的 argv', () => {
 
       // 没有 socket 这回事：连接状态、断开、会话释放三处一起退化成「什么都没有」
       expect(win.sshConnectedAliases('win-session', ['testbox'])).toEqual([])
+      expect(await win.sshSessionHasSockets('win-session')).toBe(false)
       expect(await win.sshDisconnect('win-session', 'testbox', CONFIG)).toBe(false)
       expect(await win.sshCloseSession('win-session', ['testbox'], CONFIG)).toBe(0)
     } finally {
@@ -779,6 +842,8 @@ describe('真 scp ←→ 进程内 SFTP 服务端', () => {
     // master，却从不**新建** —— sshServer 的状态条正是因此要先查一次 socket 才点亮
     expect(sshConnectedAliases(sid, ['testbox'])).toEqual([])
     expect(await sshDisconnect(sid, 'testbox', CONFIG)).toBe(false)
+    // 子目录建了但是空的 —— 「这条会话有没有连接」照样答「没有」
+    expect(await sshSessionHasSockets(sid)).toBe(false)
   }, 60000)
 
   it('SSHCTL-U-22: 远端路径原样抵达 SFTP 的 OPEN —— 空格、前导横线、冒号、引号、$(…)', async () => {

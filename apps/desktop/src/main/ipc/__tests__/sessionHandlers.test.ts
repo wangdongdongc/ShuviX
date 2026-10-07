@@ -11,6 +11,8 @@
  *        载荷里带 `ephemeral: true`，create 收到的也只有一个参数
  *   SH-3 自带工作目录同样是主进程内部的选项：载荷里带 `workingDirectory`，create 也只收到一个参数
  *        （它留在 params 里 —— sessionService.create 不从 params 读它，见 sessionServiceWorkingDirectory 的 WD-6）
+ *   SH-4 `runtime:statuses` 是异步的：处理函数交回网关的 Promise（ssh 那一份可能要读用户的 ssh 配置，
+ *        不能同步挂住主进程），落定后形状原样（`{ db?, 'ssh:<alias>'… }`），且在这条会话的操作上下文里跑
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,7 +20,9 @@ type Handler = (event: unknown, ...args: unknown[]) => unknown
 
 const state = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
-  create: vi.fn()
+  create: vi.fn(),
+  getRuntimeStatuses: vi.fn(),
+  contexts: [] as unknown[]
 }))
 
 vi.mock('electron', () => ({
@@ -33,9 +37,14 @@ vi.mock('electron', () => ({
 vi.mock('../../services/sessionService', () => ({ sessionService: { create: state.create } }))
 vi.mock('../../services/filesWatcherService', () => ({ closeWatcherIfWorkingDirectory: vi.fn() }))
 vi.mock('../../frontend', () => ({
-  chatGateway: {},
-  operationContext: { run: (_ctx: unknown, fn: () => unknown) => fn() },
-  createElectronContext: vi.fn()
+  chatGateway: { getRuntimeStatuses: state.getRuntimeStatuses },
+  operationContext: {
+    run: (ctx: unknown, fn: () => unknown) => {
+      state.contexts.push(ctx)
+      return fn()
+    }
+  },
+  createElectronContext: (sessionId: string) => ({ electron: sessionId })
 }))
 vi.mock('../../services/pinnedChatService', () => ({ isPinned: vi.fn(), unpin: vi.fn() }))
 
@@ -111,5 +120,22 @@ describe('SH-3 session:create 给不了自带工作目录', () => {
   it('SH-3 与 ephemeral 一起带 → 仍只有一个参数', () => {
     invoke('session:create', { workingDirectory: '/tmp/x', ephemeral: true })
     expect(state.create.mock.calls[0]).toHaveLength(1)
+  })
+})
+
+describe('SH-4 runtime:statuses 是异步的', () => {
+  it('SH-4 交回网关的 Promise，落定后形状原样，在这条会话的上下文里跑', async () => {
+    const statuses = {
+      db: { label: 'pg', icon: 'Database', color: '#22c55e' },
+      'ssh:web': { label: 'web', icon: 'Terminal', color: '#38bdf8' }
+    }
+    state.getRuntimeStatuses.mockResolvedValue(statuses)
+    state.contexts.length = 0
+
+    const result = invoke('runtime:statuses', 's1')
+    expect(result).toBeInstanceOf(Promise)
+    await expect(result).resolves.toEqual(statuses)
+    expect(state.getRuntimeStatuses.mock.calls).toEqual([['s1']])
+    expect(state.contexts).toEqual([{ electron: 's1' }])
   })
 })

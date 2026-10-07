@@ -10,11 +10,22 @@
  *
  * **不跑 `ssh -G`**：`-G` 会求值 `Match exec` 块，也就是真的执行用户配置里的 shell 命令。
  * 「列一下有哪些主机」不该有副作用，也不该为此拉起几十个进程。
+ *
+ * **全程异步**（`fs/promises`）：调用方在主进程里（会话打开时的运行时快照、工具调用、会话释放），
+ * 一次读若被系统挂住（见下一条），同步读挂住的是整个主进程。
+ *
+ * **不跟进其他应用沙盒容器里的 `Include`**（`~/Library/Containers/`、`~/Library/Group Containers/`，
+ * 按字面路径和真实路径各判一次，见 utils/appContainers）：密钥管理器常让用户 `Include` 一份放在它自己
+ * 容器里的 `ssh_config`，而 macOS 读别的应用的容器会弹「访问其他应用的数据」授权框 —— 用户只是打开了
+ * 一条会话，枚举就替他撞上那个框，期间那次读一直挂着。跳过是安全的：枚举只列别名，那类文件装的是
+ * `IdentityAgent` / `IdentityFile` 一类设置，不是主机；真正建连时 `ssh` 自己照样读完整的配置。
+ * 代价是写在那种文件里的 Host 不进清单（于是也连不上 —— 别名核对以清单为准）。
  */
-import { readFileSync, existsSync, readdirSync } from 'fs'
+import { readFile, readdir, realpath, stat } from 'fs/promises'
 import { homedir } from 'os'
 import { join, dirname, isAbsolute, basename } from 'path'
 import { createLogger } from '../../logger'
+import { isInAppContainer, resolvedAppContainerRoots } from '../../utils/appContainers'
 
 const log = createLogger('ssh:config')
 
@@ -90,22 +101,54 @@ function splitArgs(rest: string): string[] {
   return out
 }
 
+/** 一次枚举共用的上下文 */
+interface ScanContext {
+  sshDir: string
+  visited: Set<string>
+  out: Map<string, SshHostEntry>
+  /** 其他应用沙盒容器的根（不跟进那里的 Include） */
+  containers: string[]
+}
+
+/**
+ * 一个 Include 目标能不能读：存在、且字面路径与真实路径都不在其他应用的容器里。
+ * 先判字面（不碰磁盘），再 realpath（只碰元数据）；容器里的内容一个字节都不读。
+ */
+async function includable(path: string, ctx: ScanContext): Promise<boolean> {
+  if (isInAppContainer(path, ctx.containers)) {
+    log.debug(`跳过 Include（在其他应用的容器里）: ${path}`)
+    return false
+  }
+  let real: string
+  try {
+    real = await realpath(path)
+  } catch {
+    return false // 不存在 / 悬空链接：同 existsSync 的口径，静默跳过
+  }
+  if (isInAppContainer(real, ctx.containers)) {
+    log.debug(`跳过 Include（经链接指向其他应用的容器）: ${path} -> ${real}`)
+    return false
+  }
+  return true
+}
+
 /**
  * 展开 `Include` 的实参为具体文件路径列表。
  *
  * 相对路径按 OpenSSH 的规则落在 `~/.ssh/` 下（不是当前文件所在目录 —— 用户配置里
  * `Include conf.d/*` 指的就是 `~/.ssh/conf.d/*`）。只支持最后一段带 `*` / `?` 的通配，
  * 这覆盖了现实中的写法，也免得引入一个 glob 依赖或用 Node 的实验 API。
+ * 落在其他应用容器里的目标（含通配所在的目录）整个跳过，见文件头。
  */
-function expandInclude(arg: string, sshDir: string): string[] {
+async function expandInclude(arg: string, ctx: ScanContext): Promise<string[]> {
   const raw = arg.startsWith('~/') ? join(homedir(), arg.slice(2)) : arg
-  const full = isAbsolute(raw) ? raw : join(sshDir, raw)
+  const full = isAbsolute(raw) ? raw : join(ctx.sshDir, raw)
   const name = basename(full)
   if (!name.includes('*') && !name.includes('?')) {
-    return existsSync(full) ? [full] : []
+    return (await includable(full, ctx)) ? [full] : []
   }
   const dir = dirname(full)
-  if (!existsSync(dir)) return []
+  if (!(await includable(dir, ctx))) return []
   const re = new RegExp(
     '^' +
       name
@@ -114,18 +157,21 @@ function expandInclude(arg: string, sshDir: string): string[] {
         .replace(/\?/g, '.') +
       '$'
   )
+  let entries
   try {
-    return (
-      readdirSync(dir, { withFileTypes: true })
-        // isFile() 对符号链接是 false（lstat 语义）；不带通配的分支走 existsSync 会跟随链接，
-        // 两边必须一致，否则 stow / chezmoi 管理的配置会静默消失
-        .filter((e) => (e.isFile() || e.isSymbolicLink()) && re.test(e.name))
-        .map((e) => join(dir, e.name))
-        .sort()
-    )
+    entries = await readdir(dir, { withFileTypes: true })
   } catch {
     return []
   }
+  const files: string[] = []
+  // isFile() 对符号链接是 false（lstat 语义）；不带通配的分支跟随链接，两边必须一致，
+  // 否则 stow / chezmoi 管理的配置会静默消失。链接要再判一次指向哪里（可能指进容器）
+  for (const e of entries) {
+    if (!re.test(e.name)) continue
+    const file = join(dir, e.name)
+    if (e.isFile() || (e.isSymbolicLink() && (await includable(file, ctx)))) files.push(file)
+  }
+  return files.sort()
 }
 
 /**
@@ -134,19 +180,14 @@ function expandInclude(arg: string, sshDir: string): string[] {
  * 先到先得是**按键**算的（与 OpenSSH 一致）：后出现的同名 Host 块不会覆盖已记下的值，
  * 但可以补上前一个块没写的那些键。
  */
-function scanFile(
-  path: string,
-  sshDir: string,
-  depth: number,
-  visited: Set<string>,
-  out: Map<string, SshHostEntry>
-): void {
-  if (depth > MAX_INCLUDE_DEPTH || visited.has(path)) return
-  visited.add(path)
+async function scanFile(path: string, depth: number, ctx: ScanContext): Promise<void> {
+  if (depth > MAX_INCLUDE_DEPTH || ctx.visited.has(path)) return
+  ctx.visited.add(path)
+  const out = ctx.out
 
   let text: string
   try {
-    text = readFileSync(path, 'utf-8')
+    text = await readFile(path, 'utf-8')
   } catch (err: unknown) {
     log.warn(`读取失败 ${path}: ${err instanceof Error ? err.message : String(err)}`)
     return
@@ -169,8 +210,8 @@ function scanFile(
 
     if (d.keyword === 'include') {
       for (const arg of splitArgs(d.rest)) {
-        for (const file of expandInclude(arg, sshDir)) {
-          scanFile(file, sshDir, depth + 1, visited, out)
+        for (const file of await expandInclude(arg, ctx)) {
+          await scanFile(file, depth + 1, ctx)
         }
       }
       // `current` 是本帧的局部量，所以 Include 返回后仍然指向**本文件**上一个 Host 块。
@@ -208,9 +249,20 @@ function scanFile(
  * 列出配置里所有可连的 host 别名。配置不存在就是空列表 —— 这不是错误，
  * 只是这台机器还没有配过 ssh。
  */
-export function listSshHosts(configPath: string = defaultSshConfigPath()): SshHostEntry[] {
-  const out = new Map<string, SshHostEntry>()
-  if (!existsSync(configPath)) return []
-  scanFile(configPath, dirname(configPath), 0, new Set<string>(), out)
-  return [...out.values()]
+export async function listSshHosts(
+  configPath: string = defaultSshConfigPath()
+): Promise<SshHostEntry[]> {
+  try {
+    await stat(configPath)
+  } catch {
+    return []
+  }
+  const ctx: ScanContext = {
+    sshDir: dirname(configPath),
+    visited: new Set<string>(),
+    out: new Map<string, SshHostEntry>(),
+    containers: await resolvedAppContainerRoots()
+  }
+  await scanFile(configPath, 0, ctx)
+  return [...ctx.out.values()]
 }

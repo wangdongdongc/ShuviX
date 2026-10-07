@@ -26,6 +26,7 @@ import {
   sshSync,
   sshDisconnect,
   sshConnectedAliases,
+  sshSessionHasSockets,
   sshCloseSession,
   classifySshFailure,
   rsyncAvailable,
@@ -261,6 +262,11 @@ function formatHost(h: { alias: string; hostname?: string; user?: string; port?:
  * 会话横幅上的连接胶囊：**每台连着的主机一枚**，runtimeId = `ssh:<alias>`，胶囊上的 X 只断那一台。
  * 「连着」的判据处处是同一个 —— 这条会话为这台主机开的 control socket 还在（`sshConnectedAliases`），
  * 与 list-hosts、会话快照、实时事件一致。Windows 没有 ControlMaster，也就没有常驻连接，不出胶囊。
+ *
+ * 判「连着谁」要拿候选别名去算 socket 路径，候选别名要读 `~/.ssh/config`。所以先问一句便宜的：
+ * 这条会话名下**有没有** socket（它自己的 socket 子目录，一次 readdir）。没有就到此为止 ——
+ * 一条纯聊天会话的打开、切回、释放都不该去读用户的 ssh 配置（那份配置可能 Include 了别的应用容器里的
+ * 文件，读它会弹系统授权框）。别名只在建连时经 resolveAlias 核对过配置才会进 ssh 的 argv，这里不改那一道。
  */
 export const SSH_RUNTIME_PREFIX = 'ssh:'
 
@@ -269,19 +275,27 @@ function sshRuntimeStatus(alias: string): RuntimeStatus {
 }
 
 /**
- * 这条会话此刻连着的主机 → 胶囊（会话打开 / 切回时的快照，`runtime.statuses` 用）。
- * 候选别名现读配置；不在配置里的别名算不出 socket 路径，也就不算连着。
+ * 这条会话此刻连着的别名。会话名下没有 socket → 空，**不读配置**；有才现读配置凑候选别名
+ * （外加 `extra`：已经点亮过、可能刚从配置里删掉的那些）。不在候选里的别名算不出 socket 路径，也就不算连着。
  */
-export function sshRuntimeStatuses(
+async function connectedAliasesOf(
+  sessionId: string,
+  configPath: string | undefined,
+  extra: Iterable<string> = []
+): Promise<string[]> {
+  if (!(await sshSessionHasSockets(sessionId))) return []
+  const hosts = await listSshHosts(configPath ?? defaultSshConfigPath())
+  return sshConnectedAliases(sessionId, [...new Set([...hosts.map((h) => h.alias), ...extra])])
+}
+
+/** 这条会话此刻连着的主机 → 胶囊（会话打开 / 切回时的快照，`runtime.statuses` 用） */
+export async function sshRuntimeStatuses(
   sessionId: string,
   configPath?: string
-): Record<string, RuntimeStatus> {
-  const aliases = listSshHosts(configPath ?? defaultSshConfigPath()).map((h) => h.alias)
+): Promise<Record<string, RuntimeStatus>> {
+  const aliases = await connectedAliasesOf(sessionId, configPath)
   return Object.fromEntries(
-    sshConnectedAliases(sessionId, aliases).map((alias) => [
-      SSH_RUNTIME_PREFIX + alias,
-      sshRuntimeStatus(alias)
-    ])
+    aliases.map((alias) => [SSH_RUNTIME_PREFIX + alias, sshRuntimeStatus(alias)])
   )
 }
 
@@ -339,9 +353,9 @@ export async function createSshMcpServer(
     })
 
   /** 每次调用现读配置：用户可能刚改过 ~/.ssh/config，缓存在实例上只会让人困惑 */
-  const readConfig = (): { configPath: string; hosts: SshHostEntry[] } => {
+  const readConfig = async (): Promise<{ configPath: string; hosts: SshHostEntry[] }> => {
     const configPath = configPathOverride ?? defaultSshConfigPath()
-    return { configPath, hosts: listSshHosts(configPath) }
+    return { configPath, hosts: await listSshHosts(configPath) }
   }
 
   const err = (text: string): CallToolResult => ({
@@ -356,8 +370,8 @@ export async function createSshMcpServer(
    * 一个 `-oProxyCommand=…` 就成了本地任意命令执行。「只接受 host 别名」必须是
    * 这里的一次核对，而不只是文档里的一句话。
    */
-  const resolveAlias = (host: unknown): SshHostEntry | string => {
-    const { configPath, hosts } = readConfig()
+  const resolveAlias = async (host: unknown): Promise<SshHostEntry | string> => {
+    const { configPath, hosts } = await readConfig()
     if (typeof host !== 'string' || host.trim() === '') return 'A `host` alias is required.'
     // 复核而非依赖枚举：枚举与校验是两件事，写在两处才叫两道。以 `-` 开头的记号
     // 进了 argv 就是 ssh 的选项（`-oProxyCommand=…` = 本地执行），务必在这里也拦一次。
@@ -370,8 +384,8 @@ export async function createSshMcpServer(
       : `"${host}" is not a host alias in ${configPath}. Only these aliases can be used: ${known.join(', ')}.`
   }
 
-  const handleListHosts = (): CallToolResult => {
-    const { configPath, hosts: all } = readConfig()
+  const handleListHosts = async (): Promise<CallToolResult> => {
+    const { configPath, hosts: all } = await readConfig()
     const hosts = all.slice(0, MAX_LISTED_HOSTS)
     const connected = new Set(
       sshConnectedAliases(
@@ -409,7 +423,7 @@ export async function createSshMcpServer(
     owner: CallOwner,
     signal?: AbortSignal
   ): Promise<CallToolResult> => {
-    const alias = resolveAlias(args.host)
+    const alias = await resolveAlias(args.host)
     if (typeof alias === 'string') return err(alias)
     const command = typeof args.command === 'string' ? args.command : ''
     if (!command.trim()) return err('A `command` is required.')
@@ -458,7 +472,7 @@ export async function createSshMcpServer(
     })
 
     // 胶囊按 socket 的真实状态走，与这条命令的退出码无关：远端命令非零退出时连接照样在
-    publishConnections(alias.alias)
+    await publishConnections(alias.alias)
 
     // ssh 自身失败（连不上、主机密钥不认）用 255 报出来，翻译成可操作的说明；
     // 远端命令自己的非零退出码不属于这一类，原样带回去让 agent 自己判断
@@ -490,7 +504,7 @@ export async function createSshMcpServer(
   ): Promise<
     { error: string } | { alias: string; localAbs: string; remotePath: string; timeoutSec: number }
   > => {
-    const alias = resolveAlias(args.host)
+    const alias = await resolveAlias(args.host)
     if (typeof alias === 'string') return { error: alias }
     const localPath = typeof args.localPath === 'string' ? args.localPath.trim() : ''
     const remotePath = typeof args.remotePath === 'string' ? args.remotePath.trim() : ''
@@ -525,16 +539,16 @@ export async function createSshMcpServer(
   }
 
   /** 传输结果的统一收尾：ssh 自身的失败翻译，其余原样 */
-  const transferResult = (
+  const transferResult = async (
     alias: string,
     result: { stdout: string; stderr: string; exitCode: number; timedOut: boolean },
     what: string,
     timeoutSec: number
-  ): CallToolResult => {
+  ): Promise<CallToolResult> => {
     // 只看 socket 在不在：scp 会在 argv 更靠前的位置塞 `-oControlMaster=no`，而 OpenSSH 是
     // **先到先得** —— 所以一次独立的传输会复用已有 master，却从不新建。按「传成了」点亮的话，
     // 同一个会话里 list-hosts 会给出相反的答案
-    publishConnections(alias)
+    await publishConnections(alias)
     if (result.exitCode === 255) {
       const explained = classifySshFailure(alias, result.stderr, result.stdout)
       if (explained) return err(explained)
@@ -629,10 +643,10 @@ export async function createSshMcpServer(
   }
 
   const handleDisconnect = async (args: Record<string, unknown>): Promise<CallToolResult> => {
-    const alias = resolveAlias(args.host)
+    const alias = await resolveAlias(args.host)
     if (typeof alias === 'string') return err(alias)
     const wasConnected = await sshDisconnect(scope.sessionId, alias.alias, configPathOverride)
-    publishConnections()
+    await publishConnections()
     return {
       content: [
         {
@@ -649,6 +663,8 @@ export async function createSshMcpServer(
   const shown = new Set<string>()
   /** 每台亮着的主机一只复核定时器：master 空闲到点会自己退出，那一刻没有任何事件 */
   const rechecks = new Map<string, ReturnType<typeof setTimeout>>()
+  /** 传输已关：复核是异步的，关掉之后还在路上的那一轮不再发事件、不再排下一轮 */
+  let closed = false
 
   const emitStatus = (alias: string, status: RuntimeStatus | null): void => {
     scope.emitChatEvent?.({ type: 'runtime_event', runtimeId: SSH_RUNTIME_PREFIX + alias, status })
@@ -662,11 +678,17 @@ export async function createSshMcpServer(
 
   /** 到 master 的空闲寿命（再留一点余量）复核一次；还连着就再排一轮 */
   const scheduleRecheck = (alias: string): void => {
+    if (closed) return
     clearRecheck(alias)
     const timer = setTimeout(() => {
       rechecks.delete(alias)
-      publishConnections()
-      if (shown.has(alias)) scheduleRecheck(alias)
+      void publishConnections()
+        .then(() => {
+          if (shown.has(alias)) scheduleRecheck(alias)
+        })
+        .catch((e: unknown) =>
+          log.warn(`ssh recheck failed: ${e instanceof Error ? e.message : String(e)}`)
+        )
     }, CONTROL_PERSIST_MS + 5_000)
     timer.unref?.()
     rechecks.set(alias, timer)
@@ -678,9 +700,9 @@ export async function createSshMcpServer(
    * （sshDisconnectRuntime），不经过这个实例，`shown` 可能还以为它亮着；靠「已亮就不发」省一条
    * 事件的话，断开后再连上的那台就再也亮不起来了。
    */
-  const publishConnections = (touched?: string): void => {
-    const candidates = new Set([...readConfig().hosts.map((h) => h.alias), ...shown])
-    const connected = new Set(sshConnectedAliases(scope.sessionId, [...candidates]))
+  const publishConnections = async (touched?: string): Promise<void> => {
+    const connected = new Set(await connectedAliasesOf(scope.sessionId, configPathOverride, shown))
+    if (closed) return
     for (const alias of [...shown]) {
       if (connected.has(alias)) continue
       shown.delete(alias)
@@ -727,13 +749,20 @@ export async function createSshMcpServer(
     }
   })
 
+  /** 释放这条会话名下的 master。一个 socket 都没有就到此为止 —— 不为一条纯聊天会话去读配置 */
+  const closeSessionConnections = async (): Promise<number> => {
+    if (!(await sshSessionHasSockets(scope.sessionId))) return 0
+    const aliases = (await readConfig()).hosts.map((h) => h.alias)
+    return sshCloseSession(scope.sessionId, aliases, configPathOverride)
+  }
+
   // 会话没了 → McpManager 关掉这条连接 → 传播到这一侧 → 释放该会话名下的 control socket。
   // 这是「寿命绑会话」在资源上的兑现：一次运行时重建（invalidate）不会走到这里，
   // 所以 ssh 连接挺得过重建，而会话删除挺不过。
   transport.onclose = (): void => {
+    closed = true
     for (const alias of [...rechecks.keys()]) clearRecheck(alias)
-    const aliases = listSshHosts(configPathOverride ?? defaultSshConfigPath()).map((h) => h.alias)
-    void sshCloseSession(scope.sessionId, aliases, configPathOverride)
+    void closeSessionConnections()
       .then((n) => log.info(`ssh server closed session=${scope.sessionId} (${n} connection(s))`))
       .catch((e: unknown) => log.warn(`ssh close failed: ${e instanceof Error ? e.message : e}`))
   }

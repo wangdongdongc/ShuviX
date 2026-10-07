@@ -258,14 +258,15 @@ export class DefaultChatGateway implements ChatGateway {
 
   // ─── 运行时资源 ──────────────────────────────────
 
-  getRuntimeStatuses(sessionId: string): Record<string, RuntimeStatus> {
+  async getRuntimeStatuses(sessionId: string): Promise<Record<string, RuntimeStatus>> {
     const result: Record<string, RuntimeStatus> = {}
 
     const db = dbManager.runtimeStatus(sessionId)
     if (db) result['db'] = db
 
-    // 每台连着的 ssh 主机一枚（`ssh:<alias>`）—— 没有这一份，切走再切回 / 刷新窗口后胶囊就没了
-    Object.assign(result, sshRuntimeStatuses(sessionId))
+    // 每台连着的 ssh 主机一枚（`ssh:<alias>`）—— 没有这一份，切走再切回 / 刷新窗口后胶囊就没了。
+    // 异步：会话名下有 socket 时要读 ~/.ssh/config，那次读不能挂住主进程（会话没有 socket 则根本不读）
+    Object.assign(result, await sshRuntimeStatuses(sessionId))
 
     return result
   }
