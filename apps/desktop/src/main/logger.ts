@@ -8,6 +8,12 @@ log.transports.file.maxSize = 5 * 1024 * 1024
 log.transports.file.format = '[{y}-{m}-{d} {h}:{i}:{s}.{ms}] [{level}]{scope} {text}'
 log.transports.console.format = '[{h}:{i}:{s}] [{level}]{scope} {text}'
 
+// 单测（vitest）不写日志文件：electron-log 在普通 node 里会落到真实用户的
+// ~/Library/Logs/ShuviX/main.log，把测试输出混进用户排查问题用的日志
+if (process.env.VITEST) {
+  log.transports.file.level = false
+}
+
 // 生产环境控制台只输出 warn 及以上
 if (process.env.NODE_ENV === 'production') {
   log.transports.console.level = 'warn'
