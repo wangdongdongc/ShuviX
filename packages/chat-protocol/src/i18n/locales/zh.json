@@ -289,7 +289,6 @@
     "interruptedHint": "或直接发送新消息——将先停止被中断的运行。",
     "retrying": "{{seconds}} 秒后重试（第 {{attempt}} 次尝试）",
     "retryingNow": "正在重试（第 {{attempt}} 次尝试）",
-    "retriedHint": "已重试 ×{{count}}",
     "errorAfterRetries": "重试 {{count}} 次后失败",
     "compactingBlocking": "正在压缩上下文：{{reason}}",
     "compactingBackground": "正在后台压缩上下文：{{reason}}",

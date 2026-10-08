@@ -2,9 +2,8 @@
 /**
  * 折叠掉的重试在卡片上的样子（jsdom，P3-12，Q-P3-06 / PIN-21）：
  *
- *   P3-12-18 「重试 ×N」：落定的卡按消息的 `metadata.retried` 显示次数，`lastError` 在 tooltip；一张卡覆盖两条
- *            消息（1 次 + 2 次）→ ×3；流式卡读实时卡的 `metadata.retried`；实时卡换成同样带 retried 的落盘消息时
- *            提示文字一帧都不变（store 先换、msgs 晚一次渲染的那一帧也不闪）
+ *   P3-12-18 重试成功恢复后卡上不留重试记录（用户 2026-10-07 改判，原先是「重试 ×N」提示）：落定的卡、
+ *            覆盖多条消息的卡、流式卡及其落盘前后都没有提示
  *   P3-12-19 最终失败：带 `metadata.retried {count:10}` 的 error_event 是一行错误 + 「after 10 retries」；
  *            `metadata:null` 与原来一模一样
  */
@@ -66,30 +65,26 @@ afterEach(() => {
   container.remove()
 })
 
-describe('P3-12-18 retried hint', () => {
-  it('P3-12-18 a settled card with retried {count:2, lastError:503} shows "retried ×2" with the lastError tooltip', () => {
+describe('P3-12-18 recovered retries leave no trace on the card', () => {
+  // 用户 2026-10-07：重试成功恢复之后不再保留中间的重试记录 —— 卡上没有「重试 ×N」；
+  // 重试进行中的倒计时（RunStatusRows）与最终失败那一行的次数（P3-12-19）不受影响
+  it('P3-12-18 a settled card with retried {count:2} shows no retry hint', () => {
     renderBubble([assistant('a1', [text('ok')], SID, retried(2, '503'))])
-    expect(hint()!.textContent).toBe('retried ×2')
-    expect(hint()!.title).toBe('503')
-  })
-
-  it('P3-12-18 no hint when no message carries retried', () => {
-    renderBubble([assistant('a1', [text('ok')])])
     expect(hint()).toBeNull()
+    expect(container.textContent).not.toContain('retried')
   })
 
-  it('P3-12-18 a turn card whose two messages carry counts 1 and 2 shows ×3', () => {
+  it('P3-12-18 a turn card whose messages carry counts 1 and 2 shows no retry hint', () => {
     renderBubble([
       assistant('a1', [{ type: 'tool', toolCallId: 't1', toolName: 'read', args: {} }], SID, {
         retried: { count: 1, lastError: '500' }
       }),
       assistant('a2', [text('done')], SID, retried(2, '503'))
     ])
-    expect(hint()!.textContent).toBe('retried ×3')
-    expect(hint()!.title).toBe('503')
+    expect(hint()).toBeNull()
   })
 
-  it('P3-12-18 a live card with retried {count:2} shows the same hint; swapping it for the committed message keeps the text unchanged (no flicker)', () => {
+  it('P3-12-18 a live card with retried {count:2} shows no retry hint, before and after it is committed', () => {
     const base = assistant('live:7', [text('after retry')], SID, retried(2, '503'))
     const live: LiveCard = { id: 'live:7', message: base }
     act(() =>
@@ -97,8 +92,7 @@ describe('P3-12-18 retried hint', () => {
     )
     const placeholder = [streamingPlaceholder(SID)]
     renderBubble(placeholder, true)
-    const seen: Array<string | null> = [hint()?.textContent ?? null]
-    // 落盘：store 里实时卡没了、消息到了；卡的 msgs 晚一次渲染（还是占位那一组）
+    expect(hint()).toBeNull()
     const committed = assistant('9', [text('after retry')], SID, retried(2, '503'))
     act(() =>
       applySessionView(
@@ -106,11 +100,8 @@ describe('P3-12-18 retried hint', () => {
         V(SID, { messages: [user('u1', 'hi'), committed], live: null, run: { state: 'idle' } })
       )
     )
-    renderBubble(placeholder, true)
-    seen.push(hint()?.textContent ?? null)
     renderBubble([committed], false)
-    seen.push(hint()?.textContent ?? null)
-    expect(seen).toEqual(['retried ×2', 'retried ×2', 'retried ×2'])
+    expect(hint()).toBeNull()
   })
 })
 

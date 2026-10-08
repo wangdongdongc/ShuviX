@@ -289,7 +289,6 @@
     "interruptedHint": "または新しいメッセージを送信してください。中断された実行は先に停止されます。",
     "retrying": "{{seconds}} 秒後に再試行（{{attempt}} 回目の試行）",
     "retryingNow": "再試行中（{{attempt}} 回目の試行）",
-    "retriedHint": "再試行 ×{{count}}",
     "errorAfterRetries": "{{count}} 回の再試行後に失敗",
     "compactingBlocking": "コンテキストを圧縮中：{{reason}}",
     "compactingBackground": "バックグラウンドでコンテキストを圧縮中：{{reason}}",

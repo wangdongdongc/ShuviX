@@ -289,7 +289,6 @@
     "interruptedHint": "Or send a new message — the interrupted run will be stopped first.",
     "retrying": "Retrying (attempt {{attempt}}) in {{seconds}}s",
     "retryingNow": "Retrying now (attempt {{attempt}})",
-    "retriedHint": "retried ×{{count}}",
     "errorAfterRetries": "after {{count}} retries",
     "compactingBlocking": "Compacting context: {{reason}}",
     "compactingBackground": "Compacting context in the background: {{reason}}",

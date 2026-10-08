@@ -232,10 +232,8 @@ describe('INT-5 retry', () => {
     )
     const seen = await app.main.eval<string[]>(`window.__e2eRetrySeen`)
     expect(seen.some((text) => text.includes('attempt 2'))).toBe(true)
-    await until(
-      async () => (await chat.retriedHints()).includes('retried ×1'),
-      'retried hint on the card'
-    )
+    // 重试成功恢复后卡上不留重试记录（倒计时只在重试进行中出现，上面已断言）
+    expect(await chat.retriedHints()).toEqual([])
     const listed = await listMessages(sid)
     const answer = listed.find((m) => m.content === 'after retry')!
     expect((answer.metadata as { retried?: { count: number } }).retried?.count).toBe(1)
