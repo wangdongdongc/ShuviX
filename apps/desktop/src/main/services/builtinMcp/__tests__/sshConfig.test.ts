@@ -16,16 +16,15 @@
  *   85…89  `-` 开头的记号一律不是别名 —— 别名原样进 `ssh` 的 argv，而 `Host -oProxyCommand=…`
  *          是一份配置可以合法写出的东西，放它出去等于本地任意命令执行；
  *   90…99  **其他应用的沙盒容器**（`~/Library/Containers/`、`~/Library/Group Containers/`）里的
- *          Include 不跟进：字面路径、通配所在目录、经符号链接（直接包含 / 通配命中）三条路都拦，
- *          那个文件一个字节都不读，跳过只记 debug；长得像但不是容器的路径照常跟进；
- *          大小写不敏感的文件系统上换个大小写也拦。
+ *          Include **照常跟进**：密钥管理器的 `ssh_config` 里可能就定义着 Host，跳过它们那些主机就
+ *          既列不出来也连不上（v0.2.1 跳过过一次，已撤回）；直接包含、通配、经符号链接三条路都跟进。
  *
  * API 是异步的（`fs/promises`）：调用方在主进程里，读一次若被系统授权框挂住，同步读挂住的是整个进程。
  *
  * fs 是真的 —— 通配、符号链接、EISDIR 这些换成假 fs 一条也测不到；`fs/promises` 的 `readFile`
  * 只套了一层可数的透传壳（同 instruction/__tests__/instructionInjector.test.ts 的手法），因为「环里每个
- * 文件只读一次」「容器里的文件没被读」这种断言在返回值上看不出来；`readdir` 同样可数（「容器里的目录
- * 没被列」）。同步的 `readFileSync` / `readdirSync` 一被调用就记一笔 —— 枚举不该再碰同步读。
+ * 文件只读一次」这种断言在返回值上看不出来；`readdir` 同样可数。同步的 `readFileSync` / `readdirSync`
+ * 一被调用就记一笔 —— 枚举不该再碰同步读。
  * `homedir` 换成本用例的临时家目录，这样 `~/` 开头的 Include 与「家目录下的容器」都能真跑一遍。
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -35,7 +34,7 @@ import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 // mock 路径按**测试文件**解析：被测模块在 services/builtinMcp/，测试在其 __tests__/ 下，
-// 故比被测模块的 '../../logger' 多一层。按级别记下来：容器跳过该是 debug，不是 warn
+// 故比被测模块的 '../../logger' 多一层。按级别记下来（读取失败该是 warn）
 const logs = vi.hoisted(() => ({ lines: [] as Array<{ level: string; msg: string }> }))
 vi.mock('../../../logger', () => {
   const at =
@@ -160,12 +159,6 @@ const aliases = async (text: string): Promise<string[]> => (await hosts(text)).m
 /** 某个绝对路径被读了几次（环 / 重复 Include 用） */
 const readsOf = (path: string): number =>
   vi.mocked(readFile).mock.calls.filter((c) => c[0] === path).length
-
-/** 读过 / 列过的路径里，有没有落在某个目录之下的（容器用例：一个字节都不该碰） */
-const touchedUnder = (dir: string): string[] =>
-  [...vi.mocked(readFile).mock.calls, ...vi.mocked(readdir).mock.calls]
-    .map((c) => String(c[0]))
-    .filter((p) => p === dir || p.startsWith(dir + '/'))
 
 // ─── 一个块里写着什么就是什么 ────────────────────────────────────────────
 
@@ -607,121 +600,59 @@ describe('listSshHosts 的 argv 防线', () => {
 // ─── 其他应用的沙盒容器 ──────────────────────────────────────────────────
 //
 // 密钥管理器常让用户 `Include` 一份放在它自己容器里的 `ssh_config`（`~/Library/Group Containers/
-// <team>.<app>/…`）。macOS 读别的应用的容器会弹「访问其他应用的数据」授权框，期间那次读一直挂着 ——
-// 用户只是打开了一条会话，枚举就替他撞上那个框。枚举只列别名，那类文件装的是 IdentityAgent 一类设置；
-// 真建连时 ssh 自己照样读完整配置，所以这里跳过它们，而且**一个字节都不读**（不是读了再丢）。
+// <team>.<app>/…`），那份文件里可能就定义着 Host。枚举照常跟进 —— 跳过它们，那些主机列不出来、也过不了
+// 别名核对。打开会话时不碰授权框，靠的是 sshServer 那边「没有连接就不枚举」与这里全程异步，不靠跳过。
 
-describe('listSshHosts 不进其他应用的沙盒容器', () => {
+describe('listSshHosts 跟进其他应用沙盒容器里的 Include', () => {
   /** 在假家目录下的某个容器里放一份 ssh_config，返回它的绝对路径 */
-  function inContainer(rel: string, text = 'Host hidden\n  HostName 10.0.0.9\n'): string {
+  function inContainer(rel: string, text = 'Host keymgr-box\n  HostName 10.0.0.9\n'): string {
     const p = join(home.dir, 'Library', rel)
     mkdirSync(dirname(p), { recursive: true })
     writeFileSync(p, text)
     return p
   }
-  const groupDir = (): string => join(home.dir, 'Library', 'Group Containers')
-  const containersDir = (): string => join(home.dir, 'Library', 'Containers')
-  const warns = (): string[] => logs.lines.filter((l) => l.level === 'warn').map((l) => l.msg)
-  const debugs = (): string[] => logs.lines.filter((l) => l.level === 'debug').map((l) => l.msg)
 
-  it('SSHC-U-90: `~/Library/Group Containers/…` 里的 Include 跳过，前后的 Host 照常，那个文件没被读', async () => {
-    const target = inContainer('Group Containers/2BUA8C4S2C.com.keymgr/t/ssh_config')
-    expect(
-      await aliases(`Host before
+  it('SSHC-U-90: `~/Library/Group Containers/…` 里 Include 进来的 Host 进清单，带它自己块里的 HostName，顺序按出现', async () => {
+    inContainer('Group Containers/2BUA8C4S2C.com.keymgr/t/ssh_config')
+    const listed = await hosts(`Host before
 Include "~/Library/Group Containers/2BUA8C4S2C.com.keymgr/t/ssh_config"
 Host after
 `)
-    ).toEqual(['before', 'after'])
-    expect(touchedUnder(groupDir())).toEqual([])
-    // 跳过是预期内的事，不是故障：记 debug，不记 warn（「读取失败」那条 warn 也不该出现）
-    expect(warns()).toEqual([])
-    expect(debugs().some((m) => m.includes(target))).toBe(true)
+    expect(listed.map((h) => h.alias)).toEqual(['before', 'keymgr-box', 'after'])
+    expect(listed.find((h) => h.alias === 'keymgr-box')?.hostname).toBe('10.0.0.9')
   })
 
-  it('SSHC-U-91: `~/Library/Containers/…` 里的 Include 同样跳过', async () => {
-    inContainer('Containers/com.keymgr.app/Data/.ssh/config')
+  it('SSHC-U-91: `~/Library/Containers/…` 与写成绝对路径的 Include 同样跟进', async () => {
+    const target = inContainer('Containers/com.keymgr.app/Data/.ssh/config', 'Host app-box\n')
+    inContainer('Group Containers/team.app/ssh_config', 'Host team-box\n')
     expect(
-      await aliases('Host web\nInclude ~/Library/Containers/com.keymgr.app/Data/.ssh/config\n')
-    ).toEqual(['web'])
-    expect(touchedUnder(containersDir())).toEqual([])
-    expect(warns()).toEqual([])
+      await aliases(`Host web
+Include ~/Library/Containers/com.keymgr.app/Data/.ssh/config
+Include "${join(home.dir, 'Library', 'Group Containers', 'team.app', 'ssh_config')}"
+`)
+    ).toEqual(['web', 'app-box', 'team-box'])
+    expect(readsOf(target)).toBe(1)
   })
 
-  it('SSHC-U-92: 写成绝对路径也拦（判的是落点，不是 `~/` 这个写法）', async () => {
-    const target = inContainer('Group Containers/team.app/ssh_config')
-    expect(await aliases(`Include "${target}"\nHost web\n`)).toEqual(['web'])
-    expect(readsOf(target)).toBe(0)
-  })
-
-  it('SSHC-U-93: 通配所在的目录在容器里 → 整个跳过，连目录都不列', async () => {
+  it('SSHC-U-93: 通配所在的目录在容器里也照常展开', async () => {
     inContainer('Group Containers/team.app/a.conf', 'Host ga\n')
     inContainer('Group Containers/team.app/b.conf', 'Host gb\n')
     expect(
       await aliases('Include "~/Library/Group Containers/team.app/*.conf"\nHost web\n')
-    ).toEqual(['web'])
-    expect(touchedUnder(groupDir())).toEqual([])
+    ).toEqual(['ga', 'gb', 'web'])
   })
 
-  it('SSHC-U-94: ~/.ssh 里的符号链接指进容器 → 跳过（判的是真实路径），目标没被读', async () => {
+  it('SSHC-U-94: ~/.ssh 里指进容器的符号链接（直接包含 / 通配命中）照常跟进', async () => {
     const target = inContainer('Group Containers/team.app/ssh_config')
     symlinkSync(target, join(sshDir, 'keymgr.conf'))
-    expect(await aliases('Include keymgr.conf\nHost web\n')).toEqual(['web'])
-    expect(touchedUnder(groupDir())).toEqual([])
-    expect(readsOf(join(sshDir, 'keymgr.conf'))).toBe(0)
-    expect(warns()).toEqual([])
-  })
-
-  it('SSHC-U-95: 通配命中的符号链接指进容器 → 只跳过那一个，兄弟照读', async () => {
-    const target = inContainer('Group Containers/team.app/ssh_config')
     put('conf.d/a.conf', 'Host a\n')
     symlinkSync(target, join(sshDir, 'conf.d', 'b.conf'))
-    expect(await aliases('Include conf.d/*.conf\n')).toEqual(['a'])
-    expect(touchedUnder(groupDir())).toEqual([])
-    expect(readsOf(join(sshDir, 'conf.d', 'b.conf'))).toBe(0)
+    expect(await aliases('Include keymgr.conf\nInclude conf.d/*.conf\nHost web\n')).toEqual([
+      'keymgr-box',
+      'a',
+      'web'
+    ])
   })
-
-  it('SSHC-U-96: 经符号链接的**目录**进容器（km → 容器，`Include km/ssh_config` / `km/*`）也拦', async () => {
-    inContainer('Group Containers/team.app/ssh_config')
-    symlinkSync(join(groupDir(), 'team.app'), join(sshDir, 'km'))
-    expect(await aliases('Include km/ssh_config\nInclude km/*\nHost web\n')).toEqual(['web'])
-    expect(touchedUnder(groupDir())).toEqual([])
-    expect(touchedUnder(join(sshDir, 'km'))).toEqual([])
-  })
-
-  it('SSHC-U-97: 长得像但不是容器的路径照常跟进（按路径段比，且只认家目录下的那两个）', async () => {
-    const lib = join(home.dir, 'Library')
-    mkdirSync(join(lib, 'ContainersBackup'), { recursive: true })
-    writeFileSync(join(lib, 'ContainersBackup', 'x.conf'), 'Host backup\n')
-    mkdirSync(join(lib, 'Application Support', 'km'), { recursive: true })
-    writeFileSync(join(lib, 'Application Support', 'km', 'ssh_config'), 'Host appsupport\n')
-    mkdirSync(join(home.dir, 'Containers'), { recursive: true })
-    writeFileSync(join(home.dir, 'Containers', 'y.conf'), 'Host bare\n')
-    // 相对路径落在 ~/.ssh 下：~/.ssh/Library/Containers 不是家目录的 Library
-    put('Library/Containers/z.conf', 'Host nested\n')
-
-    expect(
-      await aliases(`Include ~/Library/ContainersBackup/x.conf
-Include "~/Library/Application Support/km/ssh_config"
-Include ~/Containers/y.conf
-Include Library/Containers/z.conf
-`)
-    ).toEqual(['backup', 'appsupport', 'bare', 'nested'])
-    expect(debugs()).toEqual([])
-  })
-
-  it.skipIf(process.platform !== 'darwin' && process.platform !== 'win32')(
-    'SSHC-U-98: 大小写不敏感的文件系统上，换个大小写写也拦',
-    async () => {
-      inContainer('Group Containers/team.app/ssh_config')
-      expect(
-        await aliases('Include "~/library/group containers/team.app/ssh_config"\nHost web\n')
-      ).toEqual(['web'])
-      const touched = [...vi.mocked(readFile).mock.calls, ...vi.mocked(readdir).mock.calls].map(
-        (c) => String(c[0]).toLowerCase()
-      )
-      expect(touched.filter((p) => p.includes('group containers'))).toEqual([])
-    }
-  )
 
   it('SSHC-U-99: 枚举是异步的 —— 返回 Promise，全程不碰同步读', async () => {
     put('conf.d/a.conf', 'Host a\n')
