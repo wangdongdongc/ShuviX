@@ -846,10 +846,7 @@
     "chromeExtRepair": "Repair",
     "chromeExtHostPending": "Registering…",
     "chromeExtHostInstalled": "Registered with",
-    "chromeExtHostNoBrowser": "No Chromium browser found on this computer",
-    "securitySection": "Security",
-    "autoReview": "Automatic review of approvals",
-    "autoReviewHint": "Before an approval card is shown, a reviewing agent answers it for you, using the conversation's current model: ordinary work goes through, clearly harmful operations are refused, and the rest comes to you with its opinion on the card. Gates marked as always asking you and \"allow and remember\" are unaffected. Its rules are the agent \"Permission Reviewer\" and the hook \"Automatic Review of Approval Requests\" in the sidebar. Turning this off sends every approval to you."
+    "chromeExtHostNoBrowser": "No Chromium browser found on this computer"
   },
   "about": {
     "description": "Your AI Assistant",

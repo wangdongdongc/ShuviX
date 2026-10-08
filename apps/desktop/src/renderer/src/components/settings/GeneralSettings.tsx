@@ -1,7 +1,7 @@
 /**
  * 通用设置（桌面绑定层）—— 外观/语言复用共享 AppearanceTab，默认模型（连同默认思考等级）复用共享
  * ModelDefaultsSettings。本层只负责把 settingsStore 的值/持久化绑进共享组件
- * （存储差异落在此处）。末尾是安全一节：自动审查的开关（AutoReviewSettings）。
+ * （存储差异落在此处）。
  */
 import { useTranslation } from 'react-i18next'
 import {
@@ -12,7 +12,6 @@ import {
 } from '../../stores/settingsStore'
 import { AppearanceTab, ModelDefaultsSettings, type ThemeMode } from '@shuvix/app-shell'
 import type { SelectableThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
-import { AutoReviewSettings } from './AutoReviewSettings'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -115,8 +114,6 @@ export function GeneralSettings(): React.JSX.Element {
         defaultThinkingLevel={defaultThinkingLevel}
         setDefaultThinkingLevel={persistDefaultThinkingLevel}
       />
-
-      <AutoReviewSettings />
     </div>
   )
 }

@@ -4,7 +4,6 @@
  * 策略判出 ask（不含 force-ask）、弹询问卡片之前，安全模块把那次请求交到这里。这里投影出判定型埋点
  * `permission.request` 的 payload —— 它就是审查 agent 的**全部输入** —— 交给命中的 hook（内置的
  * `auto-review` 派发 `permission-reviewer`），把最严的结论交回。以下情形交回 null，照旧问人：
- *   - 设置里关了自动审查（`security.autoReview`，缺省开，只有字面 'false' 才关）；
  *   - 要权限的正是判定型 hook 派出的 agent（防递归：审查员自己要的东西只问人）；
  *   - 没有 hook 命中，或都没给出结论（超时 / 中止 / 失败 / 结论不合格）。
  *
@@ -33,14 +32,10 @@ import {
 import { chatFrontendRegistry } from '../frontend/core'
 import { hookService, hookTriggers } from './hookService'
 import { sessionRecords } from './sessionRecords'
-import { settingsService } from './settingsService'
 import { readSessionTranscript, type TranscriptItem } from './transcriptSource'
 import { createLogger } from '../logger'
 
 const log = createLogger('PermissionReview')
-
-/** 设置键：现读、缺省开，只有字面 'false' 才关（与 sandbox.enabled 同一约定） */
-export const AUTO_REVIEW_KEY = 'security.autoReview'
 
 /** 每条人写输入的上限、保留最近几条（第一条恒保留：它通常就是这次任务本身） */
 const USER_MESSAGE_MAX_CHARS = 1500
@@ -52,14 +47,6 @@ const TARGET_MAX_CHARS = 6000
 const DIFF_MAX_CHARS = 3000
 /** 近期操作条数 */
 const RECENT_OPERATIONS = 10
-
-export function autoReviewEnabled(): boolean {
-  try {
-    return settingsService.get(AUTO_REVIEW_KEY)?.trim() !== 'false'
-  } catch {
-    return true
-  }
-}
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}… [${text.length - max} more chars]`
@@ -318,7 +305,6 @@ export async function reviewPermissionRequest(
   event: PermissionRequestEvent,
   signal?: AbortSignal
 ): Promise<PermissionReviewAnswer | null> {
-  if (!autoReviewEnabled()) return null
   const subject = event.request.subject
   if (subject.kind !== 'agent') return null
   const reviewers = hookService.agentsBoundTo('permission.request')

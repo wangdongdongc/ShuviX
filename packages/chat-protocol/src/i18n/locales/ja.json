@@ -846,10 +846,7 @@
     "chromeExtRepair": "修復",
     "chromeExtHostPending": "登録しています…",
     "chromeExtHostInstalled": "登録先",
-    "chromeExtHostNoBrowser": "このコンピューターに Chromium 系ブラウザーが見つからない",
-    "securitySection": "セキュリティ",
-    "autoReview": "承認リクエストの自動レビュー",
-    "autoReviewHint": "承認カードを表示する前に、レビュー担当のエージェントが会話の現在のモデルであなたの代わりに答えます：普段の作業は通し、明らかに有害な操作は拒否し、残りは意見を添えてあなたに回します。「必ずあなたに確認する」ゲートと「許可して記憶」には影響しません。規則はサイドバーのエージェント「権限レビュアー」と hook「承認リクエストの自動審査」です。オフにすると、すべての承認があなたに届きます。"
+    "chromeExtHostNoBrowser": "このコンピューターに Chromium 系ブラウザーが見つからない"
   },
   "about": {
     "description": "あなたのAIアシスタント",

@@ -4,11 +4,11 @@
  *
  * 钉的是这一对广播的纪律：
  *   - 开始（true）早于 decide 被调用，落定（false）不论结论如何、出错与否都发，且恰成一对；
- *   - 没有 hook 绑在 `permission.request` 上、没有 toolCallId、或根本不去问审查（关了 / 非 agent 主体 /
+ *   - 没有 hook 绑在 `permission.request` 上、没有 toolCallId、或根本不去问审查（非 agent 主体 /
  *     审查员自己要权限）时一次都不发 —— 否则卡片会闪一下「审查中」；
  *   - 子会话的广播落在子会话自己的 id 上（卡片在那里），不是顶层会话。
  *
- * 替身：hookService / messageService / sessionRecords / settingsService / logger / frontend/core / sessionHost
+ * 替身：hookService / messageService / sessionRecords / logger / frontend/core / sessionHost
  * （会话行不带 storageKind = 旧格式路径，转写经 messageService；碰到 SessionHost 即路由错了）；
  * @shuvix/agent-runtime 用真的（决策日志与卡片反馈是进程级 Map —— 每条用例用自己的会话 id，afterEach 清掉）。
  */
@@ -37,7 +37,6 @@ const mocks = vi.hoisted(() => ({
     >(),
   listBySession: vi.fn<(sessionId: string) => Promise<ChatMessage[]>>(),
   pick: vi.fn<(id: string, fields: string[]) => { parentId: string | null } | undefined>(),
-  settingsGet: vi.fn<(key: string) => string | undefined>(),
   broadcast: vi.fn<(event: unknown) => void>()
 }))
 
@@ -56,7 +55,6 @@ vi.mock('../sessionHost', () => ({
   }
 }))
 vi.mock('../sessionRecords', () => ({ sessionRecords: { pick: mocks.pick } }))
-vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
@@ -78,7 +76,6 @@ beforeEach(() => {
     if (!parents.has(id)) return undefined
     return { parentId: parents.get(id) ?? null }
   })
-  mocks.settingsGet.mockReset().mockReturnValue(undefined)
   mocks.broadcast.mockReset()
 })
 
@@ -222,13 +219,6 @@ describe('reviewPermissionRequest — 「审查中」的一对广播', () => {
   })
 
   it.each<[string, () => PermissionRequestEvent]>([
-    [
-      "设置 security.autoReview = 'false'",
-      () => {
-        mocks.settingsGet.mockReturnValue('false')
-        return makeEvent()
-      }
-    ],
     ["subject.kind 'user'", () => makeEvent({ subject: { kind: 'user' } })],
     [
       '派生的 permission-reviewer 自己要权限（防递归）',

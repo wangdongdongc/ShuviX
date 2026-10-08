@@ -327,16 +327,6 @@ export async function setSandboxEnabled(main: CdpClient, enabled: boolean): Prom
   )
 }
 
-/**
- * 开关询问点的自动审查（`security.autoReview`；产品缺省开，隔离实例缺省关 —— 见 launch.ts 的
- * `LaunchOptions.autoReview`）。**现读**：下一次询问就按新值走，不用重建运行时，也不用新会话。
- */
-export async function setAutoReview(main: CdpClient, on: boolean): Promise<void> {
-  await main.eval(
-    `window.api.settings.set({ key: 'security.autoReview', value: ${JSON.stringify(String(on))} })`
-  )
-}
-
 /** 命令沙箱在这个实例里能不能用（新 e2e 据此 skip：例如整组测试本身跑在别的沙箱里） */
 export async function sandboxAvailable(main: CdpClient): Promise<boolean> {
   const status = await main.eval<{ available: boolean; supported: boolean }>(

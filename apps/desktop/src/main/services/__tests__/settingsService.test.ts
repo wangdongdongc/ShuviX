@@ -3,10 +3,11 @@
  *
  * `getSettingKeyDescriptions()` 的文本会进 settings 工具的参数 description：注册表里留着
  * 一个已经没人读的键，等于教模型去写一个无效设置（写进去了、什么也不发生、模型还以为生效）。
- * 「默认项目智能体 / 默认聊天智能体」随「档案由会话形态推导」一并下线，这里钉住它们不复活。
+ * 「默认项目智能体 / 默认聊天智能体」随「档案由会话形态推导」一并下线，自动审查开关也已下线，
+ * 这里钉住它们不复活。
  *
  * - KS-1 已下线的默认智能体键不复活
- * - KS-2 自动审查开关 `security.autoReview` 在册（标签三语、说明写明取值与缺省）
+ * - KS-2 已下线的自动审查开关 `security.autoReview` 不复活
  * - KS-3 默认思考等级 `general.defaultThinkingLevel` 在册（标签三语、说明列出可选档并写明缺省）
  */
 import { describe, it, expect, vi } from 'vitest'
@@ -42,28 +43,13 @@ describe('KNOWN_SETTINGS —— 会话根 Agent 的档案没有设置项', () =>
 })
 
 /**
- * 自动审查开关（`security.autoReview`）—— 主进程现读、缺省开，只有字面 'false' 才关。
- * 注册表那一行同时是设置页的标签（labelKey）与 settings 工具的参数说明（desc）：标签键三语都得解析得出，
- * 说明得把取值与缺省写明 —— 模型据此改设置，没写缺省它就猜不到「不写 = 开」。
+ * 自动审查开关（`security.autoReview`）已下线：主进程不再读这个键，注册表里留着它就是教模型写一个
+ * 什么也不做的设置。
  */
-describe('KNOWN_SETTINGS —— 自动审查开关', () => {
-  const leaf = (bundle: unknown, path: string): unknown =>
-    path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown>)?.[key], bundle)
-
-  it("KS-2 security.autoReview 在册：labelKey 为 settings.autoReview 且三语都有非空文案；desc 以 'true | false' 开头并写明 default true", () => {
-    const entry = KNOWN_SETTINGS['security.autoReview']
-    expect(entry).toBeDefined()
-    expect(entry.labelKey).toBe('settings.autoReview')
-    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
-      const label = leaf(bundle, entry.labelKey)
-      expect(typeof label === 'string' && label.trim() !== '', `${lang} ${entry.labelKey}`).toBe(
-        true
-      )
-    }
-    expect(entry.desc.startsWith('true | false')).toBe(true)
-    expect(entry.desc).toContain('default true')
-    // 描述文本（settings 工具的参数说明）里确实带上了这一行
-    expect(getSettingKeyDescriptions()).toContain('security.autoReview')
+describe('KNOWN_SETTINGS —— 自动审查没有设置项', () => {
+  it('KS-2 注册表不含 security.autoReview；描述文本里也没有它', () => {
+    expect(KNOWN_SETTINGS).not.toHaveProperty('security.autoReview')
+    expect(getSettingKeyDescriptions()).not.toContain('autoReview')
   })
 })
 

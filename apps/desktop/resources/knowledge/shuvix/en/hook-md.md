@@ -155,8 +155,6 @@ The answer is the `next` tool's argument, checked against a fixed schema:
   user is asked. A broken answer can never become an allow.
 - After three denials in a row, or twenty in one session, asks in that session go straight to the
   user; the user answering an ask clears the run of three.
-- The **Automatic review of approvals** switch (Settings → General → Security) turns the whole
-  step off.
 
 ## The `when` filter
 
@@ -202,8 +200,8 @@ event.textMessageCount >= 3`; the titler applies the title with the `session` to
 no tools and declares `shuvix-thinking: low` (with thinking off, some models answer in prose instead of calling `next`); its file is the review rules. Only ShuviX
 dispatches it: the `agent` tool cannot, and a sub-session cannot be opened with it.
 
-A user file with the same name replaces a builtin hook entirely: to silence one, an override with
-a `when: false` binding is enough; to review only some operations, give `auto-review` a `when`
+A user file with the same name replaces a builtin hook entirely: to review only some operations,
+give `auto-review` a `when`
 (e.g. `event.operation.objectType != 'command'`). To change how operations are judged, override
 the agent instead: `~/.shuvix/agents/permission-reviewer.md`. An agent's write under
 `~/.shuvix/hooks`, `agents`, `policies` and `skills` is an ordinary write that asks

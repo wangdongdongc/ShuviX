@@ -15,7 +15,7 @@
  * 前置条件：`electron-vite build` 产物已存在（test:e2e 脚本会先构建）。
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -162,15 +162,16 @@ export interface LaunchOptions {
   /** 实例进程的工作目录（缺省 apps/desktop）；相对的 md 参数按它解析 */
   cwd?: string
   /**
-   * 询问点的自动审查（设置 `security.autoReview`）。**缺省 false**：窗口就绪后写入字面 `'false'`。
+   * 询问点的自动审查。**缺省 false**：启动前往 fake HOME 写一份覆盖内置 `auto-review` 的 hook md
+   * （`AUTO_REVIEW_OFF_MD`）。产品没有关审查的开关（设置项已移除，正式机制另行设计），这份覆盖只是
+   * e2e 的临时做法，那个机制落地后改用它。
    *
    * 产品缺省是开：策略判出 ask、弹卡片之前，先派一个审查 agent（`permission-reviewer`）在会话当前
    * 模型上跑一次 —— 在 e2e 里那就是**又一个发往假提供商的请求**，会吃掉脚本队列里下一个 turn，
    * 把既有 spec 的 FIFO 脚本整个错位。所以隔离实例缺省关掉它，既有用例的询问照旧直接到卡片。
    *
-   * 测审查本身的 spec 传 `true`：全新的 HOME 上什么也不写（键缺省 = 开，测的正是产品缺省）；
-   * 复用的 HOME（`home`）上写 `'true'`，免得上一个实例留下的 `'false'` 还在。开关是现读的，
-   * 中途切换用 seed.ts 的 `setAutoReview`。
+   * 传 `true` = 不写那份覆盖（复用的 HOME 上有上一个实例留下的，就删掉）：测审查本身的 spec，以及要
+   * `~/.shuvix/hooks` 保持为空、又不会碰到询问的 hooks spec。
    */
   autoReview?: boolean
 }
@@ -308,23 +309,34 @@ function installTargetForensics(port: number): void {
   })
 }
 
-/** 设置键：询问点的自动审查（产品侧 permissionReview.ts 的 AUTO_REVIEW_KEY；现读，只有字面 'false' 才关） */
-export const AUTO_REVIEW_SETTING = 'security.autoReview'
+/** 关掉询问点自动审查的那份覆盖：文件名同内置 hook，于是按名遮蔽它 */
+export const AUTO_REVIEW_OFF_FILE = 'auto-review.md'
 
 /**
- * 按 `LaunchOptions.autoReview` 落设置（见那里的说明）：缺省关；开且 HOME 是新建的就不写，
- * 让产品缺省（键不存在 = 开）自己生效。
+ * 覆盖内置 `auto-review`，只绑一个不存在的埋点（不认识的埋点按惰性绑定处理，不判非法）：没有 hook 绑在
+ * `permission.request` 上，于是不派审查员、也不报「审查中」，询问直接到卡片。
  */
-async function applyAutoReview(
-  client: CdpClient,
-  opts: LaunchOptions,
-  freshHome: boolean
-): Promise<void> {
-  const on = opts.autoReview === true
-  if (on && freshHome) return
-  await client.eval(
-    `window.api.settings.set(${JSON.stringify({ key: AUTO_REVIEW_SETTING, value: String(on) })})`
-  )
+export const AUTO_REVIEW_OFF_MD = `---
+shuvix: hook v1
+name: auto-review
+description: e2e harness — the automatic permission review is off in this isolated instance.
+shuvix-hook-agent: permission-reviewer
+shuvix-hook-on:
+  - trigger: e2e.never
+---
+
+Never runs: it is bound to no trigger the app fires.
+`
+
+/** 按开关写入 / 撤掉那份覆盖。只删 harness 自己写的那份：同名却是 spec 自己种的文件不碰。 */
+function writeAutoReviewOverride(hooksDir: string, on: boolean): void {
+  const file = join(hooksDir, AUTO_REVIEW_OFF_FILE)
+  if (!on) {
+    mkdirSync(hooksDir, { recursive: true })
+    writeFileSync(file, AUTO_REVIEW_OFF_MD)
+  } else if (existsSync(file) && readFileSync(file, 'utf8') === AUTO_REVIEW_OFF_MD) {
+    rmSync(file)
+  }
 }
 
 export function launchApp(opts?: LaunchOptions): Promise<E2EApp>
@@ -360,6 +372,7 @@ export async function launchApp(
   const agentsDir = join(home, '.shuvix', 'agents')
   const botsDir = join(home, '.shuvix', 'bots')
   const hooksDir = join(home, '.shuvix', 'hooks')
+  writeAutoReviewOverride(hooksDir, opts.autoReview === true)
   // 主进程日志文件的候选位置（见 E2EApp.mainLog）：macOS 走 ~/Library/Logs/<app.name>，其余平台 userData/logs
   const logFiles = [
     join(home, 'Library', 'Logs', 'Electron', 'main.log'),
@@ -459,18 +472,13 @@ export async function launchApp(
       main = await connect(target.webSocketDebuggerUrl)
       await until(() => main!.eval<boolean>('!!window.api'), 'window.api ready')
       await installForensics(main)
-      await applyAutoReview(main, opts, ownsHome)
     } else {
       installTargetForensics(port)
-      // 没有主窗口（带着 md 启动）：设置经任意一个 md 窗口的 window.api 写 —— 同一个 preload、同一条 IPC
+      // 没有主窗口（带着 md 启动）：等到任意一个 md 窗口的 window.api 就绪再交出实例
       const md = (await listTargets(port)).find((t) => isMarkdownWindowPage(t, APP_URL))
       const client = md ? await connectReady(md.webSocketDebuggerUrl) : null
-      if (!client) throw fail('no #markdown-window with window.api to apply security.autoReview')
-      try {
-        await applyAutoReview(client, opts, ownsHome)
-      } finally {
-        client.close()
-      }
+      if (!client) throw fail('no #markdown-window with window.api')
+      client.close()
     }
 
     const stop = async (stopOpts: { keepHome?: boolean } = {}): Promise<void> => {

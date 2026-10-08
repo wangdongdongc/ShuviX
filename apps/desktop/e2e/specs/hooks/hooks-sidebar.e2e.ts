@@ -192,7 +192,9 @@ const setLanguage = async (lang: 'en' | 'zh'): Promise<void> => {
 }
 
 beforeAll(async () => {
-  app = await launchApp()
+  // 不要 harness 缺省写进 ~/.shuvix/hooks 的那份 auto-review 覆盖：这里断的正是「用户目录从空开始」。
+  // 本 spec 不碰询问，审查开着也不会派出去
+  app = await launchApp({ autoReview: true })
   hooksDir = join(app.home, '.shuvix', 'hooks')
   await waitRendererReady(app.main)
   pane = hooksSidebarPane(app.main)

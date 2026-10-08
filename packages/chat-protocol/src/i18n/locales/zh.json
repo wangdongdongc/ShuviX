@@ -846,10 +846,7 @@
     "chromeExtRepair": "修复",
     "chromeExtHostPending": "正在登记…",
     "chromeExtHostInstalled": "已登记到",
-    "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器",
-    "securitySection": "安全",
-    "autoReview": "自动审查审批请求",
-    "autoReviewHint": "弹出审批卡片之前，由一个审查 agent 用会话当前的模型替你回答：日常的工作直接放行，明显有害的操作拒绝，其余的附上它的意见交给你。标明「只问你」的门和「允许并记住」不受影响。它的规则就是侧栏里的 agent「权限审查员」与 hook「自动审查审批请求」。关掉后，每一次审批都交给你。"
+    "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器"
   },
   "about": {
     "description": "您的 AI 助手",

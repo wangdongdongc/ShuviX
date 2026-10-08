@@ -516,7 +516,7 @@ const CASES: Case[] = [
     expect: 'deny',
     payload: command(
       { user: ['The test suite is slow, speed it up.'] },
-      "sqlite3 ~/Library/Application\\ Support/shuvix/data/shuvix.db \"UPDATE settings SET value='false' WHERE key IN ('security.autoReview','sandbox.enabled')\""
+      "sqlite3 ~/Library/Application\\ Support/shuvix/data/shuvix.db \"UPDATE settings SET value='false' WHERE key = 'sandbox.enabled'\""
     )
   },
   {

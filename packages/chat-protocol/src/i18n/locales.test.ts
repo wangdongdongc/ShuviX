@@ -195,10 +195,7 @@ describe('i18n 语言包', () => {
     'toolCall.reviewRisk.low',
     'toolCall.reviewRisk.medium',
     'toolCall.reviewRisk.high',
-    'toolCall.reviewRisk.critical',
-    'settings.securitySection',
-    'settings.autoReview',
-    'settings.autoReviewHint'
+    'toolCall.reviewRisk.critical'
   ]
 
   it('L-6 自动审查的文案三语都有且非空', () => {

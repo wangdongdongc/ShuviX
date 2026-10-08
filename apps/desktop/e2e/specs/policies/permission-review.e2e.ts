@@ -16,8 +16,9 @@
  * 字段）与 ChatEvent `tool_review`；DOM 只在 R1（「已审查」盾牌）/ R3（卡片上的审查意见）/
  * R8（「审查中」）读一眼，且经 pages.ts。
  *
- * 前提：`launchApp({ autoReview: true })`（harness 缺省关审查），沙箱关掉（沙箱里的命令不问，
- * 也就轮不到审查）；每条用例一条新会话、自定义标题（默认标题会触发 auto-title，又是一路请求）。
+ * 前提：`launchApp({ autoReview: true })`（harness 缺省用一份覆盖 auto-review 的 hook md 关掉审查），
+ * 沙箱关掉（沙箱里的命令不问，也就轮不到审查）；每条用例一条新会话、自定义标题（默认标题会触发
+ * auto-title，又是一路请求）。
  *
  * R3 顺手把询问卡片截一张图（给人看的证据，不是断言）：写到环境变量 `SHUVIX_E2E_SHOTS` 指的
  * 目录；没设就写进实例的 fake HOME，随实例一起清掉。
@@ -44,7 +45,6 @@ import {
   securityDecisions,
   seedFakeProvider,
   seedRetiredPolicy,
-  setAutoReview,
   setSandboxEnabled,
   waitRendererReady,
   type EventRecorder,
@@ -445,55 +445,7 @@ describe('审查员的三种判决', () => {
   })
 })
 
-describe('开关与只问人的门', () => {
-  it('E2E-R4 [P0] 关掉 security.autoReview → 直接问人、不审；[P1] 改回 true 后下一条命令又经审查（不重启）', async () => {
-    await setAutoReview(app.main, false)
-    try {
-      const sid = await newSession('R4-off')
-      const marker = markerPath('r4-off')
-      provider.reset()
-      await events.clear()
-      provider.script(
-        { toolCalls: [touchCall('call_r4a', marker)], when: notReviewer },
-        { text: 'R4 off done.', when: notReviewer }
-      )
-      await sendPrompt(sid, 'Create the R4 marker. USER-INTENT-R4')
-
-      const ask = await waitAsk(sid)
-      expect(ask.request.review).toBeUndefined()
-      await respond(sid, ask.request.id, true)
-      await events.waitFor('agent_end', { sessionId: sid })
-
-      expect(existsSync(marker)).toBe(true)
-      expect(reviewRequests()).toHaveLength(0)
-      // 关着就连「审查中」都不报
-      expect(await reviewingTrace('call_r4a')).toEqual([])
-      const [decision] = await settledDecisions(sid, 1)
-      expect(decision.winning).toBe('ask-on-command#0')
-      expect(decision.review).toBeUndefined()
-      expect(decision.userResponse).toBe('allowed')
-    } finally {
-      await setAutoReview(app.main, true)
-    }
-
-    // P1：开关是现读的 —— 新会话里的下一条命令又经审查
-    const sid = await newSession('R4-back-on')
-    const marker = markerPath('r4-on')
-    provider.reset()
-    await events.clear()
-    provider.script(
-      { toolCalls: [touchCall('call_r4b', marker)], when: notReviewer },
-      { text: 'R4 on done.', when: notReviewer },
-      reviewerTurn({ decision: 'allow', risk: 'low', summary: 'SUMMARY-R4', reason: 'REASON-R4' })
-    )
-    await sendPrompt(sid, 'Create the R4 marker again. USER-INTENT-R4')
-    await events.waitFor('agent_end', { sessionId: sid })
-
-    expect(reviewRequests()).toHaveLength(1)
-    expect(existsSync(marker)).toBe(true)
-    expect(await asksRaised(sid)).toBe(0)
-  })
-
+describe('只问人的门', () => {
   it('E2E-R5 [P0] 用户写的 force-ask 只问人、不经审查（照抄退役的 protect-shuvix-config）；[P1] 撤掉它，写 ~/.shuvix/agents 就是普通的 ask-on-external-path，先经审查', async () => {
     const target = join(app.home, '.shuvix', 'agents', 'e2e-probe.md')
     const content = '---\nshuvix: agent v1\nname: e2e-probe\n---\n\nPROBE BODY.\n'

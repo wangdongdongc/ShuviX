@@ -2,9 +2,9 @@
  * 询问点的自动审查 —— 桌面接线 `services/permissionReview.ts`（安全模块 `onPermissionRequest` 接缝的桌面
  * 实现）。
  *
- * 策略判出 ask 档、弹卡片之前，安全模块把那次请求交到这里：现读开关、挡掉非 agent 主体与判定型 hook
- * 派出的 agent（防递归）、投影出 `permission.request` 的 payload 交给 `hookTriggers.decide`，把最严的结论
- * 交回；答不出（关了、没有 hook、出错）一律交回 null —— 照旧问人，且绝不抛出。
+ * 策略判出 ask 档、弹卡片之前，安全模块把那次请求交到这里：挡掉非 agent 主体与判定型 hook 派出的 agent
+ * （防递归）、投影出 `permission.request` 的 payload 交给 `hookTriggers.decide`，把最严的结论交回；答不出
+ * （没有 hook 命中、出错）一律交回 null —— 照旧问人，且绝不抛出。审查没有设置开关，开不开只看 hook md。
  *
  * 这份用例钉的是：
  *   - PR-1..6   接缝本身：哪些情形根本不去问审查员，问了之后结论怎么交回，出错怎么兜住；
@@ -17,7 +17,7 @@
  *   - PR-18     recentOperations 取自真的决策日志；
  *   - PR-W1     main/index.ts 把审查者注入 toolContext（读源码）。
  *
- * 替身：hookService / messageService / sessionRecords / settingsService / logger / frontend/core / sessionHost。
+ * 替身：hookService / messageService / sessionRecords / logger / frontend/core / sessionHost。
  * **钉的是旧格式（harness-v3-jsonl）路径**：会话行不带 storageKind，转写经 messageService 读冻结投影；
  * durable 会话（P2-14 的转写摘要）见 permissionReviewDurable / transcriptParity。
  * 决策日志与卡片反馈用 agent-runtime 真的实现 —— 都是进程级 Map，所以每条用例用自己的会话 id，
@@ -69,7 +69,6 @@ const mocks = vi.hoisted(() => ({
     >(),
   listBySession: vi.fn<(sessionId: string) => Promise<ChatMessage[]>>(),
   pick: vi.fn<(id: string, fields: string[]) => { parentId: string | null } | undefined>(),
-  settingsGet: vi.fn<(key: string) => string | undefined>(),
   warn: vi.fn<(message: string) => void>(),
   broadcast: vi.fn()
 }))
@@ -89,17 +88,12 @@ vi.mock('../sessionHost', () => ({
   }
 }))
 vi.mock('../sessionRecords', () => ({ sessionRecords: { pick: mocks.pick } }))
-vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet } }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: mocks.warn, error: () => {}, debug: () => {} })
 }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: mocks.broadcast } }))
 
-import {
-  AUTO_REVIEW_KEY,
-  buildPermissionRequestPayload,
-  reviewPermissionRequest
-} from '../permissionReview'
+import { buildPermissionRequestPayload, reviewPermissionRequest } from '../permissionReview'
 
 // ─── 夹具 ───────────────────────────────────────────────
 
@@ -306,7 +300,6 @@ function decisionRecord(
 
 beforeEach(() => {
   vi.resetAllMocks()
-  mocks.settingsGet.mockReturnValue(undefined)
   mocks.agentsBoundTo.mockReturnValue(new Set(['permission-reviewer']))
   mocks.decide.mockResolvedValue(null)
   mocks.listBySession.mockImplementation(async (id) => transcripts.get(id) ?? [])
@@ -328,62 +321,21 @@ afterEach(() => {
 
 // ─── 接缝 ───────────────────────────────────────────────
 
-describe('PR —— 接缝：开关、主体、防递归、结论交回', () => {
-  it('PR-1a 开关缺省开：未设置 / 空串 / true / FALSE / 0 都照常交给 hook', async () => {
+describe('PR —— 接缝：主体、防递归、结论交回', () => {
+  it('PR-1 没有设置开关：不读设置，照常交给 hook', async () => {
     const sid = newSession()
     mocks.decide.mockResolvedValue({ result: verdict('allow'), hook: 'auto-review' })
-    for (const value of [undefined, '', 'true', 'FALSE', '0']) {
-      mocks.decide.mockClear()
-      mocks.settingsGet.mockReturnValue(value)
-      expect(await reviewPermissionRequest(makeEvent(sid)), JSON.stringify(value)).toEqual({
-        verdict: verdict('allow'),
-        source: 'auto-review'
-      })
-      expect(mocks.decide, JSON.stringify(value)).toHaveBeenCalledTimes(1)
-    }
-    expect(AUTO_REVIEW_KEY).toBe('security.autoReview')
-    expect(mocks.settingsGet).toHaveBeenCalledWith('security.autoReview')
-  })
-
-  it('PR-1b 只有 trim 之后是字面 false 才关 → null，不问 hook、连会话都不读', async () => {
-    const sid = newSession()
-    mocks.decide.mockResolvedValue({ result: verdict('allow'), hook: 'auto-review' })
-    for (const value of ['false', ' false ', 'false\n']) {
-      mocks.settingsGet.mockReturnValue(value)
-      expect(await reviewPermissionRequest(makeEvent(sid)), JSON.stringify(value)).toBeNull()
-    }
-    expect(mocks.decide).not.toHaveBeenCalled()
-    expect(mocks.listBySession).not.toHaveBeenCalled()
-  })
-
-  it('PR-1c 读设置抛错当作开（开关坏了不等于关掉保护之外的审查）', async () => {
-    const sid = newSession()
-    mocks.settingsGet.mockImplementation(() => {
-      throw new Error('settings table locked')
-    })
-    mocks.decide.mockResolvedValue({ result: verdict('ask'), hook: 'auto-review' })
     expect(await reviewPermissionRequest(makeEvent(sid))).toEqual({
-      verdict: verdict('ask'),
+      verdict: verdict('allow'),
       source: 'auto-review'
     })
     expect(mocks.decide).toHaveBeenCalledTimes(1)
-  })
-
-  it('PR-1d 开关每次现读：两次调用之间改了设置，下一次立即按新值', async () => {
-    const sid = newSession()
-    mocks.decide.mockResolvedValue({ result: verdict('allow'), hook: 'auto-review' })
-
-    mocks.settingsGet.mockReturnValue('false')
-    expect(await reviewPermissionRequest(makeEvent(sid))).toBeNull()
-    expect(mocks.decide).toHaveBeenCalledTimes(0)
-
-    mocks.settingsGet.mockReturnValue('true')
-    expect(await reviewPermissionRequest(makeEvent(sid))).not.toBeNull()
-    expect(mocks.decide).toHaveBeenCalledTimes(1)
-
-    mocks.settingsGet.mockReturnValue('false')
-    expect(await reviewPermissionRequest(makeEvent(sid))).toBeNull()
-    expect(mocks.decide).toHaveBeenCalledTimes(1)
+    // permissionReview 不再 import settingsService：源码里连这个键都不该出现
+    const source = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../permissionReview.ts'),
+      'utf8'
+    )
+    expect(source).not.toMatch(/settingsService|security\.autoReview/)
   })
 
   it('PR-2 主体不是 agent（用户亲手的 UI 操作）→ null，不问 hook', async () => {

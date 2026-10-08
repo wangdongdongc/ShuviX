@@ -139,7 +139,6 @@ recentText: |
   变成放行。
 - 同一会话连续被拒三次、或累计被拒二十次之后，这个会话的询问直接交给用户；用户回答一次询问，连续计数
   清零。
-- 设置 → 通用 → 安全里的**自动审查审批请求**开关可以整个关掉这一步。
 
 ## `when` 过滤
 
@@ -177,7 +176,7 @@ agent；titler 用 `session` 工具的 `set-title` 应用标题。
 `shuvix-thinking: low`（关掉思考时，有的模型不调 `next`、把判决写成正文），它的文件就是审查规则。只有 ShuviX 会派发它：`agent` 工具派不动它，也不能用它开
 子会话。
 
-同名的用户文件整个取代内置 hook：想关掉一个，一条带 `when: false` 绑定的覆盖就够了；只想审查一部分操作，
+同名的用户文件整个取代内置 hook：只想审查一部分操作，
 给 `auto-review` 加一个 `when`（如 `event.operation.objectType != 'command'`）。想改变判断的方式，覆盖的是
 agent：`~/.shuvix/agents/permission-reviewer.md`。agent 写 `~/.shuvix/hooks`、`agents`、`policies`、`skills`
 是一次要询问的普通写入（ask-on-external-path —— 它们都不是可写的会话目录）：审查员被要求拒绝改写 ShuviX
