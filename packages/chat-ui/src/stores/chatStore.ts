@@ -285,6 +285,12 @@ interface ChatState {
   modelSupportsReasoning: boolean
   /** 当前思考深度 */
   thinkingLevel: string
+  /**
+   * 选择器上的思考深度是宿主启动时种的默认档（`seedDefaultThinkingLevel`），还不是谁的选择。
+   * 欢迎页发送据此决定写不写档位：没动过就不写，交给后端按同一条规则回落（模型声明了推理 → 设置里的
+   * 默认档，否则 off）。任何 `setThinkingLevel`（用户选、切会话同步）都把它清掉。
+   */
+  thinkingLevelIsDefault: boolean
   /** 当前模型是否支持图片输入 */
   modelSupportsVision: boolean
   /** 当前模型最大上下文 token 数 */
@@ -381,6 +387,8 @@ interface ChatState {
   setInputText: (text: string) => void
   setModelSupportsReasoning: (supports: boolean) => void
   setThinkingLevel: (level: string) => void
+  /** 宿主启动时把设置里的默认思考档种进选择器（标记为「默认档，不是选择」） */
+  seedDefaultThinkingLevel: (level: string) => void
   setModelSupportsVision: (supports: boolean) => void
   setMaxContextTokens: (tokens: number) => void
   /** 换模型时清空上下文占用显示（ModelPicker）；会话视图的 `context.usedTokens` 随后照常覆盖 */
@@ -741,6 +749,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionThreadOpen: {},
   modelSupportsReasoning: false,
   thinkingLevel: DEFAULT_THINKING_LEVEL,
+  // 只有宿主的启动种子算「默认档」；没有宿主种子（扩展侧栏、单测）时照旧当作已选
+  thinkingLevelIsDefault: false,
   modelSupportsVision: false,
   maxContextTokens: 0,
   usedContextTokens: null,
@@ -945,7 +955,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setInputText: (text) => set({ inputText: text }),
   setModelSupportsReasoning: (supports) => set({ modelSupportsReasoning: supports }),
-  setThinkingLevel: (level) => set({ thinkingLevel: level }),
+  setThinkingLevel: (level) => set({ thinkingLevel: level, thinkingLevelIsDefault: false }),
+  seedDefaultThinkingLevel: (level) => set({ thinkingLevel: level, thinkingLevelIsDefault: true }),
   setModelSupportsVision: (supports) => set({ modelSupportsVision: supports }),
   setMaxContextTokens: (tokens) => set({ maxContextTokens: tokens }),
   setUsedContextTokens: (tokens) => set({ usedContextTokens: tokens }),

@@ -31,6 +31,7 @@ import type { Project, SessionSettings } from '../dao/types'
 
 import {
   DEFAULT_THINKING_LEVEL,
+  defaultThinkingLevelOf,
   type SelectableThinkingLevel,
   type ThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
@@ -85,12 +86,17 @@ const THINKING_LEVELS: readonly string[] = [
 
 /**
  * 会话设置里的思考档位 → 合法档位。没设过 / 写坏了 → 按模型能力给缺省：声明了 reasoning 的模型
- * DEFAULT_THINKING_LEVEL，否则 'off'（与 pi-durable 之前的 resolveInitialThinkingLevel、以及界面
- * useSessionInit 的口径一致；显式存下的值含 'off' 一律照用）。
+ * 用 `fallback`（设置里的默认思考等级，没配过就是 DEFAULT_THINKING_LEVEL），否则 'off'（与 pi-durable
+ * 之前的 resolveInitialThinkingLevel、以及界面 useSessionInit 的口径一致；显式存下的值含 'off' 一律照用）。
+ * 没声明 reasoning 的模型不吃默认档：自定义提供商的模型 pi 一律当作能思考，档位会原样发给上游。
  */
-function sessionThinkingLevel(raw: unknown, reasoning: boolean | undefined): ThinkingLevel {
+function sessionThinkingLevel(
+  raw: unknown,
+  reasoning: boolean | undefined,
+  fallback: ThinkingLevel
+): ThinkingLevel {
   if (typeof raw === 'string' && THINKING_LEVELS.includes(raw)) return raw as ThinkingLevel
-  return reasoning ? DEFAULT_THINKING_LEVEL : 'off'
+  return reasoning ? fallback : 'off'
 }
 
 /**
@@ -725,7 +731,8 @@ export class SessionService {
         : {}),
       thinkingLevel: sessionThinkingLevel(
         ctx.modelMetadata.thinkingLevel,
-        ctx.capabilities.reasoning
+        ctx.capabilities.reasoning,
+        this.getDefaultThinkingLevel()
       ),
       cwd: ctx.workingDirectory
     }
@@ -758,7 +765,11 @@ export class SessionService {
     const capabilities: ModelCapabilities = modelRow?.capabilities
       ? JSON.parse(modelRow.capabilities)
       : {}
-    const thinkingLevel = sessionThinkingLevel(tree.thinkingLevel, capabilities.reasoning)
+    const thinkingLevel = sessionThinkingLevel(
+      tree.thinkingLevel,
+      capabilities.reasoning,
+      this.getDefaultThinkingLevel()
+    )
     const project = session.projectId
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
@@ -987,6 +998,14 @@ export class SessionService {
     if (!configured) return ''
     const models = providerDao.findEnabledModels(providerId)
     return models.some((m) => m.modelId === configured) ? configured : ''
+  }
+
+  /**
+   * 获取默认思考等级（设置 → 通用 → 默认模型）。没配过 / 写坏了 → DEFAULT_THINKING_LEVEL。
+   * 只在会话没设过档位、且模型声明了 reasoning 时生效（sessionThinkingLevel）。
+   */
+  private getDefaultThinkingLevel(): ThinkingLevel {
+    return defaultThinkingLevelOf(settingsDao.findByKey('general.defaultThinkingLevel'))
   }
 }
 

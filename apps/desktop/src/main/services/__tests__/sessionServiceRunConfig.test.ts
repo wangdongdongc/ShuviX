@@ -9,14 +9,17 @@
  *
  * 钉的是：
  *   - RC-1 有模型 → 模型三件（provider / model / capabilities）+ 会话档位；
- *   - RC-2 五档原样带出 —— off 也是一档（会话选了「不思考」），不是「没有」；
+ *   - RC-2 五档原样带出 —— off 也是一档（会话选了「不思考」），不是「没有」；RC-2b 推理模型 + 配了
+ *     与之不同的默认思考等级时也原样带出（默认档只管没设过的会话）；
  *   - RC-3 解析后的值而非「树上显式写过的」：树上没写档位 → 回落默认档，与 `initAgent` 给前端的
  *     那一格相同（hook agent 继承的，就是用户在选择器里看到的）；树上没写模型 → 回落默认模型；
+ *     RC-3c..f 默认档来自设置 `general.defaultThinkingLevel`：推理模型用它（与 initAgent 同值）、
+ *     非推理模型照旧 off、配置值不是可选档 → DEFAULT_THINKING_LEVEL、连模型都回落到默认模型时同样适用；
  *   - RC-4 没有可用模型 → model 为 null（hook 据此跳过 `no-model`），哪怕树上写着档位；
  *   - RC-5 会话不存在 → null，且不去读会话树。
  *
  * mock 面沿用 sessionServiceProfileResolution.test.ts（import 图全换假件）。会话树只经
- * `readSessionRunConfig` 读；设置项与提供商目录是回落默认模型的来源。
+ * `readSessionRunConfig` 读；设置项与提供商目录是回落默认模型（与默认思考等级）的来源。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import {
@@ -141,6 +144,11 @@ function catalog(providerId: string, modelId: string, capabilities: object): voi
   )
 }
 
+/** 设置表里的值（findByKey 只按字面键答，没列出的键 → undefined） */
+function settingsTable(values: Record<string, string>): void {
+  mocks.findByKey.mockImplementation((key) => values[key])
+}
+
 describe('resolveRunConfig —— 会话的模型连同思考档位（子会话种子 / hook 没锁时的选择）', () => {
   it('RC-1 有模型：返回模型三件 + 会话的思考档位', async () => {
     tree({ provider: 'p1', model: 'm1', thinkingLevel: 'high' })
@@ -156,6 +164,17 @@ describe('resolveRunConfig —— 会话的模型连同思考档位（子会话�
     'RC-2 树上的档位原样带出：%s（off 也是会话的一种选择，不能当「没有」丢掉）',
     async (level) => {
       tree({ provider: 'p1', model: 'm1', thinkingLevel: level })
+      expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe(level)
+    }
+  )
+
+  it.each([...SELECTABLE_THINKING_LEVELS])(
+    'RC-2b 推理模型、配了不同的默认思考等级，树上的档位仍原样带出：%s',
+    async (level) => {
+      tree({ provider: 'p1', model: 'm1', thinkingLevel: level })
+      catalog('p1', 'm1', { reasoning: true })
+      // 挑一个与显式档不同的默认档：off → xhigh，其余 → off
+      settingsTable({ 'general.defaultThinkingLevel': level === 'off' ? 'xhigh' : 'off' })
       expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe(level)
     }
   )
@@ -186,6 +205,56 @@ describe('resolveRunConfig —— 会话的模型连同思考档位（子会话�
 
     expect(await sessionService.resolveRunConfig(SID)).toEqual({
       model: { provider: 'p-default', model: 'm-default', capabilities: {} },
+      thinkingLevel: 'low'
+    })
+  })
+
+  it('RC-3c 树上没写档位、推理模型、默认思考等级配成 xhigh → xhigh，与 initAgent 给前端的那一格相同', async () => {
+    tree({ provider: 'p1', model: 'm1' })
+    catalog('p1', 'm1', { reasoning: true })
+    settingsTable({ 'general.defaultThinkingLevel': 'xhigh' })
+
+    const cfg = await sessionService.resolveRunConfig(SID)
+    expect(cfg?.thinkingLevel).toBe('xhigh')
+    const init = await sessionService.initAgent(SID)
+    expect(init.modelMetadata.thinkingLevel).toBe('xhigh')
+  })
+
+  it('RC-3d 树上没写档位、非推理模型、默认思考等级配成 high → 仍是 off（initAgent 同）', async () => {
+    tree({ provider: 'p1', model: 'm1' })
+    catalog('p1', 'm1', { reasoning: false })
+    settingsTable({ 'general.defaultThinkingLevel': 'high' })
+
+    expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe('off')
+    expect((await sessionService.initAgent(SID)).modelMetadata.thinkingLevel).toBe('off')
+  })
+
+  it('RC-3e 默认思考等级配成 max（设置页画不出的值）→ 按没配过：DEFAULT_THINKING_LEVEL（initAgent 同）', async () => {
+    tree({ provider: 'p1', model: 'm1' })
+    catalog('p1', 'm1', { reasoning: true })
+    settingsTable({ 'general.defaultThinkingLevel': 'max' })
+
+    expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe(DEFAULT_THINKING_LEVEL)
+    expect((await sessionService.initAgent(SID)).modelMetadata.thinkingLevel).toBe(
+      DEFAULT_THINKING_LEVEL
+    )
+  })
+
+  it('RC-3f 树上模型、档位都没写：回落默认模型（推理模型），档位取默认思考等级 low', async () => {
+    tree({})
+    settingsTable({
+      'general.defaultProvider': 'p-default',
+      'general.defaultModel': 'm-default',
+      'general.defaultThinkingLevel': 'low'
+    })
+    mocks.findEnabled.mockReturnValue([{ id: 'p-default' }])
+    mocks.findEnabledModels.mockImplementation((p) =>
+      p === 'p-default' ? [{ modelId: 'm-default' }] : []
+    )
+    catalog('p-default', 'm-default', { reasoning: true })
+
+    expect(await sessionService.resolveRunConfig(SID)).toEqual({
+      model: { provider: 'p-default', model: 'm-default', capabilities: { reasoning: true } },
       thinkingLevel: 'low'
     })
   })

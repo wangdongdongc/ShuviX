@@ -9,6 +9,9 @@
  *   D10-15 toolOverlay（滤掉不可用与 mcp:chrome；原值不动；旧行补键一次）
  *   D10-16 model（会话设置 → 原样；没有 → 启用中的默认 provider / 模型；都没有 → 不给）
  *   D10-17 thinkingLevel（合法值原样，含 off；没有 / 写坏 → 按模型能力：reasoning → 缺省档，否则 off）
+ *   D10-17b 缺省档 = 设置里的默认思考等级（`general.defaultThinkingLevel`）：只给没设过 / 写坏、且模型声明了
+ *           reasoning 的会话；会话显式存下的档位（含 off）照用；配置值不是可选档 → DEFAULT_THINKING_LEVEL
+ *   D10-17c 默认思考等级现读：改了配置，没设过档位的会话下一次就拿到新值；从不写回会话设置
  *   D10-18 cwd（项目根 → 自带目录 → 临时工作区；与 getById 同一口径）
  *   D10-19 现读；会话不存在 → 拒绝、什么都不写
  *   D10-20 onLockChange → settings.agentLocked；内存会话写内存；删掉的会话不复活
@@ -578,6 +581,76 @@ describe('D10-17 thinkingLevel（PIN-03）', () => {
       })
     )
     expect((await deps.resolveAgentConfig('s')).thinkingLevel).toBe(expected)
+  })
+})
+
+/**
+ * 「设置 → 通用 → 默认模型」里的默认思考等级只回答「没设过档位的会话用哪一档」—— 显式存下的档位
+ * （含 off）不受它影响，没声明 reasoning 的模型（含模型行找不到 → 能力 `{}`）一律 off。
+ * findByKey 只认字面键 `general.defaultThinkingLevel`：键名拼错时这里拿到的是 undefined，
+ * 回落到 DEFAULT_THINKING_LEVEL，配置了 high / xhigh / off 的那几行就会红。
+ */
+describe('D10-17b / D10-17c 设置里的默认思考等级', () => {
+  /** 让 settingsDao 只对字面键 general.defaultThinkingLevel 答出 `configured` */
+  function configureDefault(configured: string | undefined): void {
+    mocks.findByKey.mockImplementation((key) =>
+      key === 'general.defaultThinkingLevel' ? configured : undefined
+    )
+  }
+
+  afterEach(() => {
+    holder.models = []
+  })
+
+  // [编号, 会话存值, 模型 reasoning（'missing' = 模型行不在 → 能力 {}）, 配置的默认档, 期望]
+  const cases: Array<[string, string | undefined, boolean | 'missing', string, string]> = [
+    ['#1', undefined, true, 'high', 'high'],
+    ['#2', undefined, true, 'off', 'off'],
+    ['#3', undefined, true, 'xhigh', 'xhigh'],
+    ['#4 非 reasoning 不吃默认档', undefined, false, 'xhigh', 'off'],
+    ['#5 模型行不在', undefined, 'missing', 'high', 'off'],
+    ['#6 显式 off 照用', 'off', true, 'high', 'off'],
+    ['#7 显式档照用', 'low', true, 'xhigh', 'low'],
+    ['#8 显式档照用（非 reasoning）', 'high', false, 'low', 'high'],
+    ['#9 存坏了 → 按没设过', 'ultra', true, 'high', 'high'],
+    ['#10 配置不是可选档', undefined, true, 'max', DEFAULT_THINKING_LEVEL],
+    ['#11 配置不是可选档', undefined, true, 'minimal', DEFAULT_THINKING_LEVEL],
+    ['#12 配置写坏', undefined, true, 'garbage', DEFAULT_THINKING_LEVEL]
+  ]
+
+  it.each(cases)(
+    'D10-17b %s（会话存值 %s、reasoning=%s、配置 %s）→ %s',
+    async (_label, stored, reasoning, configured, expected) => {
+      holder.models =
+        reasoning === 'missing'
+          ? []
+          : [{ modelId: 'm1', capabilities: JSON.stringify({ reasoning }) }]
+      configureDefault(configured)
+      sessionRecords.insert(
+        row('s', {
+          settings: {
+            enabledTools: [],
+            model: { provider: 'row-1', modelId: 'm1' },
+            ...(stored ? { thinkingLevel: stored } : {})
+          }
+        })
+      )
+      expect((await deps.resolveAgentConfig('s')).thinkingLevel).toBe(expected)
+    }
+  )
+
+  it('D10-17c 没设过档位的会话：配置 high → high；改成 low → 下一次 low；会话设置始终不长出 thinkingLevel', async () => {
+    holder.models = [{ modelId: 'm1', capabilities: JSON.stringify({ reasoning: true }) }]
+    sessionRecords.insert(
+      row('s', { settings: { enabledTools: [], model: { provider: 'row-1', modelId: 'm1' } } })
+    )
+    configureDefault('high')
+    expect((await deps.resolveAgentConfig('s')).thinkingLevel).toBe('high')
+    expect(tableRow('s')?.settings).not.toHaveProperty('thinkingLevel')
+
+    configureDefault('low')
+    expect((await deps.resolveAgentConfig('s')).thinkingLevel).toBe('low')
+    expect(tableRow('s')?.settings).not.toHaveProperty('thinkingLevel')
   })
 })
 

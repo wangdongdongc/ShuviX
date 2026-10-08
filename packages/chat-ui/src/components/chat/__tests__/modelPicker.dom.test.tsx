@@ -10,7 +10,11 @@
  *     按新模型能力更新 store；
  *   - 后端拒绝（运行时抢先建起来了）→ 回拉 `agent.init`：显示真实模型、能力点与只读态；init 也失败 →
  *     回到选之前显示的那一个；await 期间当前会话换了 → 既不回拉也不写能力点；
- *   - 欢迎页（没有会话）：不锁，选模型 / 改档位都只改界面，由输入框在新建会话时写进去。
+ *   - 欢迎页（没有会话）：不锁，选模型 / 改档位都只改界面，由输入框在新建会话时写进去；宿主启动时种的
+ *     默认档（`seedDefaultThinkingLevel`）被点一档就不再算默认档（MP-13，点的就是种下的那一档也算），
+ *     换模型不碰它（MP-14）—— 欢迎页发送据此决定写不写档位；
+ *   - MP-12 思考档位一行的顺序与文案就是共享的那一份（`SELECTABLE_THINKING_LEVELS` +
+ *     `THINKING_LEVEL_LABEL_KEYS`）—— 设置页的默认思考等级读的也是它，两处不各写一份。
  *
  * 包入口 `@shuvix/chat-ui` 整个顶掉（同 toolPicker.dom.test.tsx）：`getHostApi` 给 agent.setModel /
  * setThinkingLevel / app.openSettings，`getSessionChannelApi` 给 agent.init，`useChatHost().models` 是
@@ -25,6 +29,10 @@ import { initReactI18next } from 'react-i18next'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import type { AvailableModel, ProviderInfo } from '@shuvix/chat-protocol/types/provider'
 import type { AgentInitResult } from '@shuvix/chat-protocol/chatApi'
+import {
+  SELECTABLE_THINKING_LEVELS,
+  THINKING_LEVEL_LABEL_KEYS
+} from '@shuvix/chat-protocol/types/thinking'
 
 const mocks = vi.hoisted(() => {
   const listeners = new Set<() => void>()
@@ -170,7 +178,9 @@ function seed(opts: {
     sessions: [sessionRow(SID, ['skill:old']), sessionRow(S2)],
     sessionAgentCreated: opts.created ?? {},
     sessionClosing: opts.closing ?? {},
+    // 不是宿主种子（store 是模块级单例，前一个用例的种子会串过来）；要默认档的用例自己再种
     thinkingLevel: 'medium',
+    thinkingLevelIsDefault: false,
     modelSupportsReasoning: false,
     modelSupportsVision: false,
     maxContextTokens: 100_000,
@@ -453,6 +463,37 @@ describe('欢迎页（没有会话）：不锁，只改界面', () => {
   })
 })
 
+describe('欢迎页：宿主种的默认档', () => {
+  it.each(['low', 'medium'])(
+    'MP-13 种了默认档 medium，点 %s（同一档也算）→ 不调 IPC；store 跟过去、不再是默认档',
+    async (level) => {
+      seed({ active: null })
+      store().seedDefaultThinkingLevel('medium')
+      expect(store().thinkingLevelIsDefault).toBe(true)
+      await renderPicker()
+      await openPanel()
+      await clickEl(thinkingButton(level))
+
+      expect(mocks.setThinkingLevel).not.toHaveBeenCalled()
+      expect(store().thinkingLevel).toBe(level)
+      expect(store().thinkingLevelIsDefault).toBe(false)
+    }
+  )
+
+  it('MP-14 种了默认档 medium，选模型 B → host 显示 B；档位仍是 medium、仍是默认档', async () => {
+    seed({ active: null })
+    store().seedDefaultThinkingLevel('medium')
+    await renderPicker()
+    await openPanel()
+    await clickEl(item(B))
+
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(host()).toEqual({ provider: P, model: B })
+    expect(store().thinkingLevel).toBe('medium')
+    expect(store().thinkingLevelIsDefault).toBe(true)
+  })
+})
+
 describe('后端拒绝：回拉真实状态', () => {
   it('MP-7 setModel → success:false → 回拉 init：host 回 A、能力点取 init、只读态出现、勾选按 init 写入、用量不重置', async () => {
     seed({ active: SID })
@@ -619,5 +660,23 @@ describe('MP-11 回归：ModelSelect 不传 modelLocked 时一切照旧', () => 
     expect(container.querySelector('button')).toBeNull()
     expect(container.querySelector('[data-model-lock]')).toBeNull()
     expect(container.textContent).toContain(A)
+  })
+})
+
+describe('MP-12 思考档位一行：共享的档位清单与文案', () => {
+  it('MP-12 面板里 [data-thinking-level] 依次为 SELECTABLE_THINKING_LEVELS，文案为 THINKING_LEVEL_LABEL_KEYS 的译文', async () => {
+    seed({ active: SID })
+    await renderPicker()
+    await openPanel()
+    const buttons = [...panel()!.querySelectorAll<HTMLButtonElement>('[data-thinking-level]')]
+    expect(buttons.map((b) => b.dataset.thinkingLevel)).toEqual([...SELECTABLE_THINKING_LEVELS])
+    const expected = SELECTABLE_THINKING_LEVELS.map((level) =>
+      i18n.t(THINKING_LEVEL_LABEL_KEYS[level])
+    )
+    expect(buttons.map((b) => (b.textContent ?? '').trim())).toEqual(expected)
+    // 译文真的取到了（不是 i18next 兜底露出的原始键名）
+    for (const level of SELECTABLE_THINKING_LEVELS) {
+      expect(i18n.t(THINKING_LEVEL_LABEL_KEYS[level])).not.toBe(THINKING_LEVEL_LABEL_KEYS[level])
+    }
   })
 })

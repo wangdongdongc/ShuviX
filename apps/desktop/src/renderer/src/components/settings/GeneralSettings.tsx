@@ -1,5 +1,5 @@
 /**
- * 通用设置（桌面绑定层）—— 外观/语言复用共享 AppearanceTab，默认模型复用共享
+ * 通用设置（桌面绑定层）—— 外观/语言复用共享 AppearanceTab，默认模型（连同默认思考等级）复用共享
  * ModelDefaultsSettings。本层只负责把 settingsStore 的值/持久化绑进共享组件
  * （存储差异落在此处）。末尾是安全一节：自动审查的开关（AutoReviewSettings）。
  */
@@ -11,6 +11,7 @@ import {
   type NotebookThemeId
 } from '../../stores/settingsStore'
 import { AppearanceTab, ModelDefaultsSettings, type ThemeMode } from '@shuvix/app-shell'
+import type { SelectableThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { AutoReviewSettings } from './AutoReviewSettings'
 
 type Lang = 'zh' | 'en' | 'ja'
@@ -36,8 +37,10 @@ export function GeneralSettings(): React.JSX.Element {
     availableModels,
     activeProvider,
     activeModel,
+    defaultThinkingLevel,
     setActiveProvider,
-    setActiveModel
+    setActiveModel,
+    setDefaultThinkingLevel
   } = useSettingsStore()
 
   /** 仅持久化（store + DB）的单值 setter —— 编排逻辑在共享 ModelDefaultsSettings 内 */
@@ -48,6 +51,10 @@ export function GeneralSettings(): React.JSX.Element {
   const persistDefaultModel = (id: string): void => {
     setActiveModel(id)
     window.api.settings.set({ key: 'general.defaultModel', value: id })
+  }
+  const persistDefaultThinkingLevel = (level: SelectableThinkingLevel): void => {
+    setDefaultThinkingLevel(level)
+    window.api.settings.set({ key: 'general.defaultThinkingLevel', value: level })
   }
   return (
     <div className="flex-1">
@@ -105,6 +112,8 @@ export function GeneralSettings(): React.JSX.Element {
         defaultModel={activeModel}
         setDefaultProvider={persistDefaultProvider}
         setDefaultModel={persistDefaultModel}
+        defaultThinkingLevel={defaultThinkingLevel}
+        setDefaultThinkingLevel={persistDefaultThinkingLevel}
       />
 
       <AutoReviewSettings />

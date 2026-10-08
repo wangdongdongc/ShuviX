@@ -37,6 +37,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   },
   'general.defaultProvider': { labelKey: 'settings.defaultProvider', desc: 'provider id' },
   'general.defaultModel': { labelKey: 'settings.defaultModel', desc: 'model id' },
+  'general.defaultThinkingLevel': {
+    labelKey: 'settings.defaultThinkingLevel',
+    desc: 'off | low | medium | high | xhigh — initial thinking level of new sessions; default medium'
+  },
   'tool.browser.ignoreCertificateErrors': {
     labelKey: 'settings.toolBrowserIgnoreCertificateErrors',
     desc: 'true | false — bypass HTTPS certificate validation for the embedded browser'

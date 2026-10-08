@@ -4,6 +4,10 @@
  * `getSettingKeyDescriptions()` 的文本会进 settings 工具的参数 description：注册表里留着
  * 一个已经没人读的键，等于教模型去写一个无效设置（写进去了、什么也不发生、模型还以为生效）。
  * 「默认项目智能体 / 默认聊天智能体」随「档案由会话形态推导」一并下线，这里钉住它们不复活。
+ *
+ * - KS-1 已下线的默认智能体键不复活
+ * - KS-2 自动审查开关 `security.autoReview` 在册（标签三语、说明写明取值与缺省）
+ * - KS-3 默认思考等级 `general.defaultThinkingLevel` 在册（标签三语、说明列出可选档并写明缺省）
  */
 import { describe, it, expect, vi } from 'vitest'
 
@@ -16,6 +20,10 @@ import { KNOWN_SETTINGS, getSettingKeyDescriptions } from '../settingsService'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
+import {
+  DEFAULT_THINKING_LEVEL,
+  SELECTABLE_THINKING_LEVELS
+} from '@shuvix/chat-protocol/types/thinking'
 
 describe('KNOWN_SETTINGS —— 会话根 Agent 的档案没有设置项', () => {
   it('KS-1 注册表不含 general.defaultProjectAgent / general.defaultChatAgent；描述文本里也没有它们的影子', () => {
@@ -56,5 +64,30 @@ describe('KNOWN_SETTINGS —— 自动审查开关', () => {
     expect(entry.desc).toContain('default true')
     // 描述文本（settings 工具的参数说明）里确实带上了这一行
     expect(getSettingKeyDescriptions()).toContain('security.autoReview')
+  })
+})
+
+/**
+ * 默认思考等级（`general.defaultThinkingLevel`）—— 设置 → 通用 → 默认模型里的那一行，也是 settings
+ * 工具能改的键。说明里列出的取值必须就是设置页画得出的那几档（顺序同选择器）、缺省必须是
+ * `DEFAULT_THINKING_LEVEL`：模型照着说明写值，列错一档就是教它写一个会被当作「没设过」的值。
+ */
+describe('KNOWN_SETTINGS —— 默认思考等级', () => {
+  const leaf = (bundle: unknown, path: string): unknown =>
+    path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown>)?.[key], bundle)
+
+  it('KS-3 general.defaultThinkingLevel 在册：labelKey 为 settings.defaultThinkingLevel 且三语都有非空文案；desc 以可选档清单开头并写明缺省档', () => {
+    const entry = KNOWN_SETTINGS['general.defaultThinkingLevel']
+    expect(entry).toBeDefined()
+    expect(entry.labelKey).toBe('settings.defaultThinkingLevel')
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const label = leaf(bundle, entry.labelKey)
+      expect(typeof label === 'string' && label.trim() !== '', `${lang} ${entry.labelKey}`).toBe(
+        true
+      )
+    }
+    expect(entry.desc.startsWith(SELECTABLE_THINKING_LEVELS.join(' | '))).toBe(true)
+    expect(entry.desc).toContain(`default ${DEFAULT_THINKING_LEVEL}`)
+    expect(getSettingKeyDescriptions()).toContain('general.defaultThinkingLevel')
   })
 })

@@ -7,18 +7,9 @@ import { applySessionToolState } from '../../hooks/useSessionTools'
 import { ModelSelect } from './ModelSelect'
 import {
   SELECTABLE_THINKING_LEVELS,
-  type SelectableThinkingLevel,
+  THINKING_LEVEL_LABEL_KEYS,
   type ThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
-
-/** 每个可选档位的文案 —— 档位清单本身是共享常量（agent md 的 `shuvix-thinking` 收的就是这几档） */
-const THINKING_LABEL_KEYS: Record<SelectableThinkingLevel, string> = {
-  off: 'input.thinkOff',
-  low: 'input.thinkLow',
-  medium: 'input.thinkMedium',
-  high: 'input.thinkHigh',
-  xhigh: 'input.thinkXHigh'
-}
 
 interface ModelPickerProps {
   /** 只读模式：仅显示当前模型名，不可点击选择 */
@@ -51,7 +42,7 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
 
   const thinkingLevels = SELECTABLE_THINKING_LEVELS.map((value) => ({
     value,
-    label: t(THINKING_LABEL_KEYS[value])
+    label: t(THINKING_LEVEL_LABEL_KEYS[value])
   }))
 
   /** 切换思考深度并持久化到会话 */

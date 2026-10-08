@@ -3,11 +3,18 @@
  * InputArea 欢迎页直接发送（`createSessionForSend`）DOM 测试（jsdom）。
  *
  * 模型、思考档位与扩展能力都只在创建 Agent 那一刻读一次，所以欢迎页上的选择必须在 `agent.init`
- * 之前落进新会话：写的是选择器**此刻显示的**模型与档位（没动过也是它），扩展能力写欢迎页的草稿，
- * 写完清空草稿。顺序钉成一条时间线：
+ * 之前落进新会话：模型写选择器**此刻显示的**那个（没动过也是它），扩展能力写欢迎页的草稿，写完清空
+ * 草稿。顺序钉成一条时间线：
  *
- *   session.create → agent.setModel → agent.setThinkingLevel → session.updateEnabledTools
+ *   session.create → agent.setModel → [agent.setThinkingLevel] → session.updateEnabledTools
  *   → agent.init → session.list → agent.prompt
+ *
+ * 档位那一步只在显示的档位**不是宿主启动时种的默认档**时才有（`thinkingLevelIsDefault`）：
+ *
+ *   - WS-D-1…7 没有宿主种子（store 初始态，同扩展侧栏）→ 照旧写显示的那一档；
+ *   - WS-D-8 种了默认档、没人动过 → 不写，交给后端按模型能力回落；模型与草稿照写；
+ *   - WS-D-9 种了之后在真的选择器面板里点一档（点的就是种下的那一档也算）→ 写点的那一档；
+ *   - WS-D-10 种了之后打开过一条会话、真的 useSessionInit 按它同步了档位，再回欢迎页 → 写同步来的那一档。
  *
  * 外加斜杠命令的依赖项落到它被发往的那条会话（新会话），以及已有会话 / 没选模型 / 新建失败三条边界。
  *
@@ -16,7 +23,7 @@
  * 包入口 `@shuvix/chat-ui` 顶掉（同 toolPicker.dom.test.tsx），`useChatHost().models` 是固定的替身。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { act, createElement } from 'react'
+import { act, createElement, Fragment } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
@@ -53,6 +60,7 @@ vi.mock('@shuvix/chat-ui', () => {
 
 import { useChatStore, type Session } from '../../../stores/chatStore'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
+import { useSessionInit } from '../../../hooks/useSessionInit'
 import { InputArea, type InputAreaProps } from '../InputArea'
 
 declare global {
@@ -73,6 +81,11 @@ let rows: Map<string, Session>
 let createImpl: () => Promise<Session>
 /** agent.setModel 的行为（可换成 reject：新会话配到一半失败） */
 let setModelImpl: () => Promise<{ success: boolean }>
+/** agent.init 按会话回的能力点与模型元信息（没有的会话回空对象） */
+let initMeta: Map<
+  string,
+  { capabilities: Record<string, unknown>; modelMetadata: Record<string, unknown> }
+>
 
 const row = (id: string, enabledTools: string[] = []): Session => ({
   id,
@@ -121,8 +134,8 @@ function buildApi(): Record<string, unknown> {
         created: false,
         provider: P,
         model: M,
-        capabilities: {},
-        modelMetadata: {},
+        capabilities: initMeta.get(params.sessionId)?.capabilities ?? {},
+        modelMetadata: initMeta.get(params.sessionId)?.modelMetadata ?? {},
         workingDirectory: '/w',
         enabledTools: rows.get(params.sessionId)?.settings.enabledTools ?? []
       })),
@@ -140,7 +153,11 @@ function buildApi(): Record<string, unknown> {
     files: { scan: record('files.scan', async () => ({ root: null, paths: [] })) },
     mentions: { listKnowledgeEntries: record('mentions.listKnowledgeEntries', async () => []) },
     events: { subscribe: record('events.subscribe', () => () => {}) },
-    app: { openSettings: record('app.openSettings', () => {}) }
+    app: { openSettings: record('app.openSettings', () => {}) },
+    // useSessionInit（WS-D-10 才挂）切会话时要的几样：运行时资源、后台任务快照、斜杠命令
+    runtime: { statuses: record('runtime.statuses', async () => []) },
+    bgTask: { list: record('bgTask.list', async () => []) },
+    command: { list: record('command.list', async () => []) }
   }
 }
 
@@ -161,11 +178,23 @@ async function flush(): Promise<void> {
   })
 }
 
-async function mount(): Promise<void> {
+/** 宿主里与输入框并排挂着的会话初始化（切会话 → agent.init → 同步模型 / 档位 / 勾选到 store） */
+function SessionInitProbe(): null {
+  useSessionInit(useChatStore((s) => s.activeSessionId))
+  return null
+}
+
+/** `withSessionInit`：旁边再挂上真的 useSessionInit（WS-D-10） */
+async function mount(opts: { withSessionInit?: boolean } = {}): Promise<void> {
   await act(async () => {
     // InputArea 的 props 形参带缺省值（可省），createElement 的重载认不出它收 inline —— 显式标一下
     const Area = InputArea as (props: InputAreaProps) => React.JSX.Element
-    root.render(createElement(Area, { inline: true }))
+    const area = createElement(Area, { inline: true })
+    root.render(
+      opts.withSessionInit
+        ? createElement(Fragment, null, createElement(SessionInitProbe), area)
+        : area
+    )
   })
   await flush()
 }
@@ -198,6 +227,33 @@ async function pressEnter(): Promise<void> {
 
 const store = (): ReturnType<typeof useChatStore.getState> => useChatStore.getState()
 
+/** 输入卡工具行里真的模型选择器的触发钮（显示着模型名、带 chevron 的那个按钮） */
+const modelTrigger = (): HTMLButtonElement => {
+  const el = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+    (b) => !!b.querySelector('.lucide-chevron-down') && (b.textContent ?? '').includes(M)
+  )
+  if (!el) throw new Error('model picker trigger not rendered')
+  return el
+}
+/** 模型面板（portal 到 body） */
+const modelPanel = (): HTMLElement | null =>
+  document.querySelector<HTMLElement>('[data-model-panel]')
+const thinkingButton = (level: string): HTMLButtonElement => {
+  const el = document.querySelector<HTMLButtonElement>(`[data-thinking-level="${level}"]`)
+  if (!el) throw new Error(`thinking level ${level} not rendered`)
+  return el
+}
+
+/** 展开模型面板（幂等） */
+async function openModelPanel(): Promise<void> {
+  if (modelPanel()) return
+  await act(async () => {
+    modelTrigger().click()
+  })
+  await flush()
+  if (!modelPanel()) throw new Error('model panel did not open')
+}
+
 /** 卡片里的发送失败提示（不在屏为 null） */
 const sendErrorText = (): string | null =>
   container.querySelector('[data-send-error]')?.textContent ?? null
@@ -220,7 +276,10 @@ async function collectUnhandled(run: () => Promise<void>): Promise<unknown[]> {
   return unhandled
 }
 
-/** 欢迎页：没有当前会话；显示 P/M、档位、草稿与命令都按给的种 */
+/**
+ * 欢迎页：没有当前会话；显示 P/M、档位、草稿与命令都按给的种。档位按「不是默认档」种（store 是模块级
+ * 单例，前一个用例的宿主种子会串过来）—— 要默认档的用例之后自己调 `seedDefaultThinkingLevel`
+ */
 function seedWelcome(opts: {
   draft?: string[]
   thinkingLevel?: string
@@ -236,6 +295,7 @@ function seedWelcome(opts: {
     sessionStreams: {},
     sessionPendingPrompt: {},
     thinkingLevel: opts.thinkingLevel ?? 'low',
+    thinkingLevelIsDefault: false,
     welcomeEnabledTools: opts.draft ?? [],
     slashCommands: opts.slashCommands ?? [],
     inputText: '',
@@ -296,6 +356,7 @@ beforeEach(() => {
     return structuredClone(r)
   }
   setModelImpl = async () => ({ success: true })
+  initMeta = new Map()
   ;(window as unknown as { api: unknown }).api = buildApi()
   useModelCatalogStore.setState({ loaded: true, providers: [PROVIDER], availableModels: [MODEL] })
   container = document.createElement('div')
@@ -312,6 +373,8 @@ afterEach(() => {
 describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', () => {
   it('WS-D-1 显示 P/M、档位 low、草稿 [skill:a] → create → setModel → setThinkingLevel → updateEnabledTools → init → list → prompt；草稿清空、切到新会话', async () => {
     seedWelcome({ draft: ['skill:a'], thinkingLevel: 'low' })
+    // 前提：没有宿主种子 —— 显示的档位不算默认档
+    expect(store().thinkingLevelIsDefault).toBe(false)
     await mount()
     await type('hello')
     await pressEnter()
@@ -427,6 +490,98 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
     expect(store().activeSessionId).toBeNull()
     expect(store().inputText).toBe('hello')
     expect(sendErrorText()).toBe(i18n.t('input.sendFailed', { error: 'set model failed' }))
+  })
+})
+
+describe('欢迎页的档位：宿主种的默认档不写，有人定过才写', () => {
+  /** WS-D-1 那条时间线；`thinking` = 中间有没有 agent.setThinkingLevel 那一步 */
+  const welcomeTimeline = (thinking: boolean): string[] => [
+    'session.create',
+    'agent.setModel',
+    ...(thinking ? ['agent.setThinkingLevel'] : []),
+    'session.updateEnabledTools',
+    'agent.init',
+    'session.list',
+    'agent.prompt'
+  ]
+
+  it('WS-D-8 种了默认档 xhigh、没人动过 → 不调 setThinkingLevel；模型与草稿照写、草稿清空、切到新会话', async () => {
+    seedWelcome({ draft: ['skill:a'] })
+    store().seedDefaultThinkingLevel('xhigh')
+    await mount()
+    await type('hello')
+    await pressEnter()
+
+    expect(steps()).toEqual(welcomeTimeline(false))
+    expect(callsOf('agent.setThinkingLevel')).toEqual([])
+    expect(callsOf('agent.setModel')).toEqual([[{ sessionId: NEW, provider: P, model: M }]])
+    expect(callsOf('session.updateEnabledTools')).toEqual([
+      [{ id: NEW, enabledTools: ['skill:a'] }]
+    ])
+    const [prompt] = callsOf('agent.prompt')[0] as [{ sessionId: string; text: string }]
+    expect(prompt.sessionId).toBe(NEW)
+    expect(prompt.text).toBe('hello')
+    expect(store().welcomeEnabledTools).toEqual([])
+    expect(store().activeSessionId).toBe(NEW)
+  })
+
+  it.each(['high', 'xhigh'])(
+    'WS-D-9 种了 xhigh、在真的面板里点 %s（点的时候零 IPC）→ 发送时写点的那一档，排在 setModel 与 updateEnabledTools 之间',
+    async (level) => {
+      seedWelcome({ draft: ['skill:a'] })
+      store().seedDefaultThinkingLevel('xhigh')
+      await mount()
+
+      await openModelPanel()
+      await act(async () => {
+        thinkingButton(level).click()
+      })
+      await flush()
+      // 欢迎页上点档位只改界面：还没有会话可写
+      expect(timeline.map((c) => c.name)).not.toContain('agent.setThinkingLevel')
+      expect(store().thinkingLevel).toBe(level)
+      expect(store().thinkingLevelIsDefault).toBe(false)
+
+      await type('hello')
+      await pressEnter()
+
+      expect(steps()).toEqual(welcomeTimeline(true))
+      expect(callsOf('agent.setThinkingLevel')).toEqual([[{ sessionId: NEW, level }]])
+      expect(callsOf('agent.setModel')).toEqual([[{ sessionId: NEW, provider: P, model: M }]])
+      expect(callsOf('session.updateEnabledTools')).toEqual([
+        [{ id: NEW, enabledTools: ['skill:a'] }]
+      ])
+    }
+  )
+
+  it('WS-D-10 种了 xhigh → 打开一条会话、真的 useSessionInit 同步成 high → 回欢迎页发送 → 写 high 恰一次', async () => {
+    seedWelcome({ draft: [] })
+    store().seedDefaultThinkingLevel('xhigh')
+    rows.set('existing', row('existing'))
+    useChatStore.setState({ sessions: [row('existing')] })
+    initMeta.set('existing', {
+      capabilities: { reasoning: true },
+      modelMetadata: { thinkingLevel: 'high' }
+    })
+    await mount({ withSessionInit: true })
+
+    await act(async () => {
+      store().setActiveSessionId('existing')
+    })
+    await flush()
+    await flush()
+    expect(callsOf('agent.init')).toEqual([[{ sessionId: 'existing' }]])
+    expect(store().thinkingLevel).toBe('high')
+    expect(store().thinkingLevelIsDefault).toBe(false)
+
+    await act(async () => {
+      store().setActiveSessionId(null)
+    })
+    await flush()
+    await type('hello')
+    await pressEnter()
+
+    expect(callsOf('agent.setThinkingLevel')).toEqual([[{ sessionId: NEW, level: 'high' }]])
   })
 })
 

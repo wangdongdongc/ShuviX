@@ -2,8 +2,8 @@
  * ModelDefaultsSettings —— 通用设置里的「默认模型」配置（桌面/扩展单一来源）。
  *
  * 复用 @shuvix/chat-ui 的通用 ModelSelect（与会话输入框同一组件，boxed 变体）——单个下拉
- * 同时选提供商 + 模型；宿主只提供「持久化某个值」的 set 函数（桌面写 settingsStore + DB，
- * 扩展写 chrome.storage）。
+ * 同时选提供商 + 模型；下面一行是默认思考等级（与输入框思考选择器同一份档位清单与文案）。
+ * 宿主只提供「持久化某个值」的 set 函数（桌面写 settingsStore + DB，扩展写 chrome.storage）。
  *
  * 注：原「标题生成模型」一行已废弃 —— 自动标题走内置 auto-title hook 的 titler agent，
  * 模型按 agent md `shuvix-model` 通用链路解析（内置不声明 = 跟随会话当前模型；
@@ -11,25 +11,35 @@
  */
 import { useTranslation } from 'react-i18next'
 import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
+import {
+  SELECTABLE_THINKING_LEVELS,
+  THINKING_LEVEL_LABEL_KEYS,
+  type SelectableThinkingLevel
+} from '@shuvix/chat-protocol/types/thinking'
 import { ModelSelect } from '@shuvix/chat-ui'
-import { SettingsSection, SettingsRow } from './SettingsPrimitives'
+import { SettingsSection, SettingsRow, SegmentedControl } from './SettingsPrimitives'
 
 export interface ModelDefaultsSettingsProps {
   availableModels: AvailableModel[]
   /** 默认模型（新会话使用） */
   defaultProvider: string
   defaultModel: string
+  /** 默认思考等级（新会话没设过档位、且模型声明了推理能力时使用） */
+  defaultThinkingLevel: SelectableThinkingLevel
   /** 仅持久化（不含编排）——切提供商选首模型等逻辑在组件内 */
   setDefaultProvider: (id: string) => void
   setDefaultModel: (id: string) => void
+  setDefaultThinkingLevel: (level: SelectableThinkingLevel) => void
 }
 
 export function ModelDefaultsSettings({
   availableModels,
   defaultProvider,
   defaultModel,
+  defaultThinkingLevel,
   setDefaultProvider,
-  setDefaultModel
+  setDefaultModel,
+  setDefaultThinkingLevel
 }: ModelDefaultsSettingsProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -52,6 +62,22 @@ export function ModelDefaultsSettings({
               allowClear
               clearLabel={t('settings.defaultModelNone')}
             />
+          }
+        />
+        <SettingsRow
+          title={t('settings.defaultThinkingRow')}
+          description={t('settings.defaultThinkingRowDesc')}
+          control={
+            <div data-default-thinking>
+              <SegmentedControl<SelectableThinkingLevel>
+                value={defaultThinkingLevel}
+                onChange={setDefaultThinkingLevel}
+                options={SELECTABLE_THINKING_LEVELS.map((level) => ({
+                  value: level,
+                  label: t(THINKING_LEVEL_LABEL_KEYS[level])
+                }))}
+              />
+            </div>
           }
         />
       </SettingsSection>

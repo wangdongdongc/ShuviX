@@ -1,4 +1,8 @@
 import { create } from 'zustand'
+import {
+  defaultThinkingLevelOf,
+  type SelectableThinkingLevel
+} from '@shuvix/chat-protocol/types/thinking'
 
 // ProviderInfo / ProviderModelInfo / AvailableModel / ConfigMeta 类型定义在 src/preload/index.d.ts（全局可用）
 
@@ -26,6 +30,8 @@ interface SettingsState {
   activeProvider: string
   /** 当前选择的模型 ID */
   activeModel: string
+  /** 新会话的默认思考等级（`general.defaultThinkingLevel`） */
+  defaultThinkingLevel: SelectableThinkingLevel
   /** 主题模式 */
   theme: 'dark' | 'light' | 'system'
   /** 深色模式使用的具体主题 */
@@ -84,6 +90,7 @@ interface SettingsState {
   setAvailableModels: (models: AvailableModel[]) => void
   setActiveProvider: (provider: string) => void
   setActiveModel: (model: string) => void
+  setDefaultThinkingLevel: (level: SelectableThinkingLevel) => void
   setTheme: (theme: 'dark' | 'light' | 'system') => void
   setDarkTheme: (theme: DarkThemeId) => void
   setLightTheme: (theme: LightThemeId) => void
@@ -106,6 +113,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   availableModels: [],
   activeProvider: '',
   activeModel: '',
+  defaultThinkingLevel: defaultThinkingLevelOf(undefined),
   theme: 'dark',
   darkTheme: 'github-dark',
   lightTheme: 'github-light',
@@ -132,6 +140,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setAvailableModels: (models) => set({ availableModels: models }),
   setActiveProvider: (provider) => set({ activeProvider: provider }),
   setActiveModel: (model) => set({ activeModel: model }),
+  setDefaultThinkingLevel: (level) => set({ defaultThinkingLevel: level }),
   setTheme: (theme) => set({ theme }),
   setDarkTheme: (darkTheme) => set({ darkTheme }),
   setLightTheme: (lightTheme) => set({ lightTheme }),
@@ -158,6 +167,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       fontSize: Number(settings['general.fontSize']) || 14,
       uiZoom: Number(settings['general.uiZoom']) || 100,
       focusMode: settings['appearance.focusMode'] !== 'false',
+      defaultThinkingLevel: defaultThinkingLevelOf(settings['general.defaultThinkingLevel']),
       voiceTtsEnabled: settings['voice.tts.enabled'] === 'true',
       voiceTtsVoice: settings['voice.tts.openai.voice'] || 'alloy',
       voiceTtsSpeed: Number(settings['voice.tts.openai.speed']) || 1.0,

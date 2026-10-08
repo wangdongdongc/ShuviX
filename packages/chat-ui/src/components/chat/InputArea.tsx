@@ -399,8 +399,11 @@ export function InputArea({
    * 无会话时自动创建临时会话（欢迎页直接发送时使用）。创建属宿主能力；渠道端总有当前会话，不会触发。
    *
    * 欢迎页上的选择要在 Agent 创建之前落进新会话 —— 模型、思考档位与扩展能力都只在创建那一刻读
-   * 一次。写的是选择器**此刻显示的**模型与档位（所见即所得：没动过也是它，而不是让后端回落到
-   * 默认模型、再把界面拨回去），扩展能力写欢迎页的草稿，写完清空草稿。
+   * 一次。模型写选择器**此刻显示的**那个（所见即所得：没动过也是它，而不是让后端回落到默认模型、
+   * 再把界面拨回去）。档位同样写显示的那一档，唯一的例外是它还是宿主启动时种的默认档
+   * （`thinkingLevelIsDefault`）：那不是用户的选择，不写，由后端按与侧栏新建会话同一条规则回落
+   * （模型声明了推理 → 设置里的默认档，否则 off）—— 否则没标推理能力的模型也会被显式写上默认档、
+   * 原样发给上游。扩展能力写欢迎页的草稿，写完清空草稿。
    */
   const createSessionForSend = async (): Promise<string | null> => {
     const host = getHostApi()
@@ -413,7 +416,7 @@ export function InputArea({
       if (activeProvider && pickedModel) {
         await host.agent.setModel({ sessionId: sid, provider: activeProvider, model: pickedModel })
       }
-      if (welcome.thinkingLevel) {
+      if (welcome.thinkingLevel && !welcome.thinkingLevelIsDefault) {
         await host.agent.setThinkingLevel({
           sessionId: sid,
           level: welcome.thinkingLevel as ThinkingLevel

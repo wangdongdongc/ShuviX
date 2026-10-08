@@ -2847,7 +2847,8 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
 //     只能这样锚；锁定时根上有 `data-model-locked`，触发钮里有 `[data-model-lock]`；
 //   - 触发钮 = 根下的直接子 button（没有提供商时这里是「去配置」按钮，没有 chevron —— 不算在屏）；
 //   - 面板 = `[data-model-panel]`（portal 到 body，同一时刻只有一个）；模型行 =
-//     `[data-model-item="<providerId>/<modelId>"]`；档位按钮 = `[data-thinking-level="<level>"]`；
+//     `[data-model-item="<providerId>/<modelId>"]`；档位按钮 = `[data-thinking-level="<level>"]`
+//     （选中那一档的类里有 `font-medium`，其余没有 —— 组件不另挂选中态的 data 锚点）；
 //     搜索框 = 面板里的 `input[type="text"]`（打字会把所有命中的提供商组展开）。
 
 /** 模型面板里的一行 */
@@ -2861,6 +2862,16 @@ export interface ModelPickerItem {
   lockedLook: boolean
   /** 悬停提示（只读时是「为什么改不了」） */
   title: string
+}
+
+/** 模型面板里思考档位一行的一个按钮 */
+export interface ModelPickerThinkingLevel {
+  /** `data-thinking-level` 的值 */
+  level: string
+  /** 按钮文案（界面语言的译文） */
+  label: string
+  /** 是当前档位（类里有 `font-medium`） */
+  selected: boolean
 }
 
 export interface ModelPickerPane {
@@ -2889,6 +2900,8 @@ export interface ModelPickerPane {
   pick(modelId: string, opts?: { force?: boolean }): Promise<boolean>
   /** 点一个思考档位（先展开面板；面板不会因此收起） */
   pickThinking(level: string): Promise<void>
+  /** 面板里思考档位一行的按钮（DOM 序）；面板没展开时为空 */
+  thinkingLevels(): Promise<ModelPickerThinkingLevel[]>
 }
 
 export function modelPickerPane(main: CdpClient): ModelPickerPane {
@@ -2975,7 +2988,15 @@ export function modelPickerPane(main: CdpClient): ModelPickerPane {
         return true
       })()`)
       if (!ok) throw new Error(`thinking level ${level} not in the model panel`)
-    }
+    },
+    thinkingLevels: () =>
+      main.eval<ModelPickerThinkingLevel[]>(
+        `[...(${PANEL}?.querySelectorAll('[data-thinking-level]') ?? [])].map((b) => ({
+          level: b.getAttribute('data-thinking-level') ?? '',
+          label: (b.textContent ?? '').trim(),
+          selected: b.className.split(/\\s+/).includes('font-medium')
+        }))`
+      )
   }
 }
 
@@ -3046,6 +3067,63 @@ export async function settingsTabsPane(settings: CdpClient): Promise<SettingsTab
         `(${TABS}.find((b) => b.className.includes('bg-accent/10'))?.textContent ?? '').trim()`
       ),
     hash: () => settings.eval<string>('location.hash')
+  }
+}
+
+/** 默认思考等级一行里的一段 */
+export interface DefaultThinkingOption {
+  /** 按钮文案（界面语言的译文） */
+  label: string
+  /** 选中态（SegmentedControl 的选中分支带 `shadow-sm`） */
+  selected: boolean
+}
+
+export interface DefaultThinkingPane {
+  /** 等这一行上屏（至少一段按钮） */
+  ready(): Promise<void>
+  /** 各段（DOM 序 = SELECTABLE_THINKING_LEVELS 的序） */
+  options(): Promise<DefaultThinkingOption[]>
+  /** 点第 index 段（越界抛） */
+  pick(index: number): Promise<void>
+  /** 选中段的下标；没有选中段 → -1 */
+  selectedIndex(): Promise<number>
+}
+
+/**
+ * 设置窗口「通用 → 默认模型」里的默认思考等级一行（ModelDefaultsSettings）：包在
+ * `[data-default-thinking]` 里的 SegmentedControl，一个档位一个 button。选中态只有类可认
+ * （`shadow-sm`，组件不另挂 aria / data 锚点）。档位与下标的对应用 SELECTABLE_THINKING_LEVELS.indexOf，
+ * 文案按界面语言，断言别认字面。
+ */
+export function defaultThinkingPane(settings: CdpClient): DefaultThinkingPane {
+  const BUTTONS = `[...(document.querySelector('[data-default-thinking]')?.querySelectorAll('button') ?? [])]`
+  return {
+    ready: async () => {
+      await until(
+        () => settings.eval<boolean>(`${BUTTONS}.length > 0`),
+        'default thinking level row ready'
+      )
+    },
+    options: () =>
+      settings.eval<DefaultThinkingOption[]>(
+        `${BUTTONS}.map((b) => ({
+          label: (b.textContent ?? '').trim(),
+          selected: b.className.split(/\\s+/).includes('shadow-sm')
+        }))`
+      ),
+    pick: async (index) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const btn = ${BUTTONS}[${index}]
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`default thinking level segment #${index} not rendered`)
+    },
+    selectedIndex: () =>
+      settings.eval<number>(
+        `${BUTTONS}.findIndex((b) => b.className.split(/\\s+/).includes('shadow-sm'))`
+      )
   }
 }
 

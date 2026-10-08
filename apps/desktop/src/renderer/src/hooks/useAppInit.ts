@@ -34,9 +34,14 @@ export function useAppInit(): void {
       useSettingsStore.getState().loadSettings(settings)
       useSettingsStore.getState().loadConfigMeta(settingMeta, projectFieldMeta)
       useChatStore.getState().setToolPresentations(toolPresentations)
-      // 初始化时将全局默认值作为 fallback，useSessionInit 切换会话后会覆盖
+      // 初始化时将全局默认值作为 fallback，useSessionInit 切换会话后会覆盖。思考档位同理：
+      // 欢迎页的选择器一打开就显示默认档；种下的是「默认档」而不是选择 —— 用户没动过时，从欢迎页
+      // 发出的第一条消息不写档位，由后端按模型能力回落（见 InputArea.createSessionForSend）
       useSettingsStore.getState().setActiveProvider(settings['general.defaultProvider'] || '')
       useSettingsStore.getState().setActiveModel(settings['general.defaultModel'] || '')
+      useChatStore
+        .getState()
+        .seedDefaultThinkingLevel(useSettingsStore.getState().defaultThinkingLevel)
 
       // 同步前端 i18n 语言（优先用户设置，否则保持检测值）
       const savedLang = settings['general.language']
