@@ -103,7 +103,16 @@ const page = (title: string, body: string): string =>
  * - `/select.html`：单选 `#s`（Fruit）、多选 `#m`（Colors）、输入框 `#after`、open shadow root 里的单选
  *   `#ss`、srcdoc iframe 里的单选 `#is`；捕获阶段的 keydown 记录器 `__keys`（iframe 里的键记作
  *   `frame:<key>`）。
- * - `/report`：像 `/submit` 一样回 200，只为留下请求记录。
+ * - `/report`：像 `/submit` 一样回 200，只为留下请求记录（任何方法：sendBeacon 发的是 POST）。
+ *
+ * 「页面自己关掉自己」（browser-self-close）的两页：
+ * - `/closer.html`（标题 E2E Closer）：`?tag=` 只为让地址各不相同（DevTools 的 target 列表按它认页面）；
+ *   加载后先报一声 `/report?loaded=<tag>`（证明文档已提交、脚本跑过了）；`window.__closeIn(ms)`
+ *   过 ms 毫秒由页面自己调 `window.close()`；带 `?after=<ms>` 时加载完就自己 `__closeIn(after)`；
+ *   按钮 Close now **同步** `sendBeacon('/report?now=<tag>')` 再 `window.close()`（OAuth「授权」按钮
+ *   的形状：点完当场关掉）。
+ * - `/oauth.html`：一个 target=_blank 的 Sign in 链接，指向加载后 800ms 自己关掉的 `/closer.html`
+ *   （登录弹出页）。
  */
 const PAGES: Record<string, () => { headers?: Record<string, string>; html: string }> = {
   '/form.html': () => ({
@@ -242,6 +251,41 @@ const PAGES: Record<string, () => { headers?: Record<string, string>; html: stri
         '</script>'
       ].join('\n')
     )
+  }),
+  '/closer.html': () => ({
+    html: page(
+      'E2E Closer',
+      [
+        '<h1>Closer</h1>',
+        '<p>A page that closes itself.</p>',
+        '<button id="now" type="button">Close now</button>',
+        '<script>',
+        '  (function () {',
+        '    var q = new URLSearchParams(location.search);',
+        "    var tag = q.get('tag') || '';",
+        '    window.__closeIn = function (ms) {',
+        '      setTimeout(function () { window.close(); }, ms);',
+        '      return true;',
+        '    };',
+        "    document.getElementById('now').addEventListener('click', function () {",
+        "      navigator.sendBeacon('/report?now=' + encodeURIComponent(tag));",
+        '      window.close();',
+        '    });',
+        "    addEventListener('load', function () {",
+        "      fetch('/report?loaded=' + encodeURIComponent(tag));",
+        "      var after = q.get('after');",
+        '      if (after !== null) window.__closeIn(Number(after));',
+        '    });',
+        '  })();',
+        '</script>'
+      ].join('\n')
+    )
+  }),
+  '/oauth.html': () => ({
+    html: page(
+      'E2E OAuth',
+      '<h1>OAuth</h1>\n<a id="signin" href="/closer.html?after=800&amp;tag=popup" target="_blank">Sign in</a>'
+    )
   })
 }
 
@@ -307,6 +351,47 @@ export async function connectTabPage(
 ): Promise<CdpClient | null> {
   const target = (await listTargets(port)).find((t) => t.type === 'page' && match(t.url))
   return target ? connect(target.webSocketDebuggerUrl) : null
+}
+
+/**
+ * 让某个 tab 里的 `/closer.html` **自己**关掉自己：经 DevTools 调页面自己的 `window.__closeIn(delayMs)`，
+ * 关的动作是页面自己的代码（`window.close()`），不是 DevTools 的 `Target.closeTarget`、也不是产品的
+ * closeTab。延时让 eval 的回包先回来，再关掉这条 DevTools 连接。页面脚本还没跑到（刚导航过去）时
+ * 一直重试到它就绪。
+ */
+export async function pageClosesItself(
+  port: number,
+  match: (url: string) => boolean,
+  delayMs = 50
+): Promise<void> {
+  await until(async () => {
+    const page = await connectTabPage(port, match)
+    if (!page) return null
+    try {
+      return await page.eval<boolean>(
+        `typeof window.__closeIn === 'function' && window.__closeIn(${delayMs})`
+      )
+    } finally {
+      page.close()
+    }
+  }, 'tab page armed to close itself (window.__closeIn)')
+}
+
+/**
+ * 等 DevTools 的 target 列表里不再有匹配的页面 —— 「页面真的关了」的前提条件。每个用例先等它、再断
+ * 产品，把「Electron 没关它」与「产品没注意到」分开。调用方要先确认那个页面确实出现过（已经连上过它，
+ * 或服务器收到过它加载后的报告），否则「没有」可能只是「还没有」。
+ */
+export async function waitTabPageGone(
+  port: number,
+  match: (url: string) => boolean,
+  timeoutMs = 15_000
+): Promise<void> {
+  await until(
+    async () => !(await listTargets(port)).some((t) => t.type === 'page' && match(t.url)),
+    'tab page target gone (the page closed itself)',
+    timeoutMs
+  )
 }
 
 /** 一个此刻没有任何进程在听的本机端口（开了马上关）—— 连接被拒的导航用 */

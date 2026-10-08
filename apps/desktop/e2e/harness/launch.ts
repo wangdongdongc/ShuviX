@@ -568,6 +568,15 @@ export async function launchApp(
   }
 }
 
+/**
+ * 主进程未捕获的异常：bootstrap.cjs 把它们记进 `<userData>/e2e-uncaught.log`（每条一段 stack），
+ * 而不是弹原生框。一条都没有时回空串 —— spec 断 `toBe('')`。
+ */
+export function uncaughtExceptions(app: Pick<E2EAppBase, 'userData'>): string {
+  const file = join(app.userData, 'e2e-uncaught.log')
+  return existsSync(file) ? readFileSync(file, 'utf8') : ''
+}
+
 /** 第二个实例的结局 */
 export interface SecondInstanceResult {
   /** 退出码（被信号杀掉时为 null） */

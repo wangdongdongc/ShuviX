@@ -416,6 +416,18 @@ export function createTab(url?: string, opts?: { activate?: boolean }): string {
     sendToRenderer('browser-view:tab-favicon-updated', { tabId, favicon: favicons[0] })
   })
 
+  // 页面自己 window.close()（登录弹窗授权完成、会话过期页……）：Electron 不问任何人就销毁这个
+  // webContents，view 被摘离窗口，之后 `view.webContents` 是 undefined、对旧引用调方法抛
+  // "Object has been destroyed"（2026-10-08 实测，Electron 39；历史不止一条也照关）。
+  // 当作这个 tab 关掉了 —— 不收的话 tab 表里留着一个空壳：卡片空白，点关闭在
+  // `webContents.close()` 上抛错、renderer 收不到 tab-closed，再点已经查无此 tab，永远关不掉；
+  // applyLayout / listTabs 碰到它也会抛。我们自己 close() 的那条路先摘了表项，这里就不再动。
+  wc.on('destroyed', () => {
+    if (tabs.get(tabId) !== view) return
+    log.info(`Tab closed by its page: ${tabId}`)
+    forgetTab(tabId, view)
+  })
+
   tabs.set(tabId, view)
   sendToRenderer('browser-view:tab-created', {
     tabId,
@@ -452,7 +464,16 @@ export function activateTab(tabId: string): void {
 export function closeTab(tabId: string): void {
   const view = tabs.get(tabId)
   if (!view) return
+  const wc = view.webContents
+  forgetTab(tabId, view)
+  wc.close()
+}
 
+/**
+ * 把 tab 从表里摘掉并告诉 renderer —— 关闭 tab 除「销毁 webContents」以外的全部收尾。
+ * closeTab 摘完再 close()；页面自己关掉的（createTab 里的 destroyed）只摘。
+ */
+function forgetTab(tabId: string, view: WebContentsView): void {
   // tab 即将销毁：清理其 CDP 会话（本地状态即可，webContents.close 会带走 debugger）与防护
   uninstallAgentGuards(tabId)
   browserCdpManager.handleExternalDetach(tabId)
@@ -463,7 +484,6 @@ export function closeTab(tabId: string): void {
   const parent = parentOf.get(tabId)
   parentOf.delete(tabId)
   if (parent && !parent.isDestroyed()) parent.contentView.removeChildView(view)
-  view.webContents.close()
 
   if (activeTabId === tabId) {
     const idx = ids.indexOf(tabId)

@@ -21,11 +21,15 @@
  *   SI-5 主窗口关掉之后再打开一个 md → 窗口照常开出来，主进程没有未捕获的异常
  *        （回归：md 窗口的 window-ready 碰了已销毁主窗口的 webContents → "Object has been destroyed"）
  */
-import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { isMainPage, listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
-import { launchApp, spawnSecondInstance, type E2EMarkdownApp } from '../../harness/launch'
+import {
+  launchApp,
+  spawnSecondInstance,
+  uncaughtExceptions,
+  type E2EMarkdownApp
+} from '../../harness/launch'
 import { logLines, userDir, type UserDir } from '../../harness/markdownFixtures'
 import { sidebarPane } from '../../harness/pages'
 import { waitRendererReady } from '../../harness/seed'
@@ -52,12 +56,6 @@ afterAll(async () => {
 
 async function mainTargets(): Promise<Array<{ webSocketDebuggerUrl: string }>> {
   return (await listTargets(app.port)).filter((t) => isMainPage(t))
-}
-
-/** 主进程未捕获的异常（bootstrap.cjs 把它们记进这个文件，而不是弹原生框） */
-function uncaughtExceptions(): string {
-  const file = join(app.home, 'userdata', 'e2e-uncaught.log')
-  return existsSync(file) ? readFileSync(file, 'utf8') : ''
 }
 
 /** 主进程日志与实例输出里「重复注册 IPC 处理函数」一类的错误 */
@@ -172,7 +170,7 @@ describe('第二个实例什么都不带 = 要主窗口', () => {
     )
     // 渲染端挂载完才发 window-ready：等它过去再下「没有异常」的结论
     await sleep(SETTLE_MS)
-    expect(uncaughtExceptions()).toBe('')
+    expect(uncaughtExceptions(app)).toBe('')
     expect(await mainTargets()).toEqual([])
   })
 })

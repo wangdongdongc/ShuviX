@@ -68,8 +68,9 @@ const factory: CdpTabTransportFactory = {
         listeners.add(fn)
         return () => {
           listeners.delete(fn)
-          // 外部断开路径只走 disposeLocal（不调 detach），这里兜底摘除 debugger 监听
-          if (listeners.size === 0) wc.debugger.off('message', onMessage)
+          // 外部断开路径只走 disposeLocal（不调 detach），这里兜底摘除 debugger 监听；
+          // 页面自己关掉的 tab 已销毁，碰 wc.debugger 会抛（监听随它一起没了）
+          if (listeners.size === 0 && !wc.isDestroyed()) wc.debugger.off('message', onMessage)
         }
       },
       detach: async () => {
