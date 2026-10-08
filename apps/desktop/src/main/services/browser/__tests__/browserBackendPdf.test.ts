@@ -6,6 +6,8 @@
  * 只剩两件事：把路径落成绝对路径并建好上级目录，以及**不再**另设一道「工作区外一律拒绝」——
  * 那会把用户刚在询问卡片上点过允许的写再拒一次（BB-1）。
  *
+ * 页面的渲染进程崩了（CR-U15b）：当场以那句话失败，不导出、不落盘 —— 崩溃页印出来只是一张白纸。
+ *
  * Electron 的面板服务整个换掉：tab 就是一个假的 WebContentsView，printToPDF 回固定字节、
  * 记下收到的选项；写盘是真的，落在临时目录里。
  */
@@ -21,7 +23,9 @@ const state = vi.hoisted(() => ({
   printed: [] as Array<Record<string, unknown>>,
   /** 被激活的 tab（面板跟随 agent 正在操作的页面） */
   activated: [] as string[],
-  bytes: Buffer.from('%PDF-1.7 fake')
+  bytes: Buffer.from('%PDF-1.7 fake'),
+  /** 页面的渲染进程崩了（isCrashed 读它；用例直接拨） */
+  crashed: false
 }))
 
 // mock 路径按**测试文件**解析：被测模块在 services/browser/，测试在其 __tests__/ 下
@@ -29,6 +33,7 @@ vi.mock('../browserViewService', () => {
   const view = {
     webContents: {
       isDestroyed: () => false,
+      isCrashed: () => state.crashed,
       getURL: () => 'https://a.example/',
       printToPDF: async (opts: Record<string, unknown>) => {
         state.printed.push(opts)
@@ -54,6 +59,7 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
+import { PAGE_CRASHED_MESSAGE } from '@shuvix/agent-runtime'
 import { createDesktopBrowserBackend } from '../browserBackend'
 
 let outside = ''
@@ -70,6 +76,7 @@ afterAll(() => {
 beforeEach(() => {
   state.printed.length = 0
   state.activated.length = 0
+  state.crashed = false
 })
 
 describe('DesktopBrowserBackend.pdf', () => {
@@ -115,5 +122,16 @@ describe('DesktopBrowserBackend.pdf', () => {
     await backend.pdf!({ tabId: 'tab-uuid', outputPath: join(outside, 'plain.pdf') })
     expect(state.printed[0]).toMatchObject({ pageSize: 'A4', landscape: false })
     expect('scale' in state.printed[0]).toBe(false)
+  })
+
+  it('CR-U15b 页面崩了 → 以那句话失败；printToPDF 没调，文件没写', async () => {
+    state.crashed = true
+    const backend = createDesktopBrowserBackend('s1')
+    const target = join(outside, 'crashed.pdf')
+    await expect(backend.pdf!({ tabId: 'tab-uuid', outputPath: target })).rejects.toThrow(
+      PAGE_CRASHED_MESSAGE
+    )
+    expect(state.printed).toEqual([])
+    expect(existsSync(target)).toBe(false)
   })
 })

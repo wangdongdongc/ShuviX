@@ -635,6 +635,7 @@ const api = {
           active: boolean
           cdpAttached: boolean
           cdpIntercepting: boolean
+          crashed: boolean
         }>
       >,
     // ---- 导航（按 tab） ----
@@ -688,6 +689,8 @@ const api = {
         errorCode: number
         errorDescription: string
         url: string
+        /** 渲染进程没了（崩溃 / 被杀）：errorDescription 是原因，errorCode 无意义 */
+        crashed?: boolean
       }) => void
     ) => onBrowserViewEvent('browser-view:did-fail-load', callback)
   },

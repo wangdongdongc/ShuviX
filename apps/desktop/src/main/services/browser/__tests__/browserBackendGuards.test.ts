@@ -11,7 +11,8 @@
  *           net::ERR_ABORTED（下载 / 被取消）= 开了但没有新页面（成功，不等加载）；其余 errorText =
  *           加载失败（带原因，不等加载）；等到 failed = 加载失败（不带原因）；stopped / timeout /
  *           interactive / complete = 成功并带各自的说明；load.url 为 null 时回显请求的地址；
- *           about:blank 本身不导航、不打标记，按 allowBlank 等。
+ *           about:blank 本身不导航、不打标记，按 allowBlank 等；等到 crashed（新页面加载时渲染进程崩了）=
+ *           失败，带上 tab 号与那句「怎么把它救回来」。
  *
  * 后端、tab 服务、停放窗口、**防护**都是真的（electron 是 ./fakeElectron.ts：view 的 webContents 带假
  * debugger）；CDP 会话是个空壳（browserCdpService 换掉，所以防护由用例自己装到 tab 的 UUID 上 ——
@@ -22,7 +23,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { BrowserOpOutput } from '@shuvix/agent-runtime'
+import { PAGE_CRASHED_MESSAGE, type BrowserOpOutput } from '@shuvix/agent-runtime'
 import { fakeElectron, type FakeDebugger } from './fakeElectron'
 
 vi.mock('electron', async () => (await import('./fakeElectron')).fakeElectron().module)
@@ -405,5 +406,14 @@ describe('openTab：先空白、接上 CDP，再导航过去（NG-U11）', () =>
       `Opened ${URL} in new tab t1${browserCdpOps.loadNote('timeout')}. Use snapshot/read_page with this tab id.`
     )
     expect(out.details).toEqual({ url: URL })
+  })
+
+  it('NG-U11 等到 crashed（加载时页面崩了）：失败，带 tab 号与那句话', async () => {
+    const backend = await fresh()
+    state.waitForLoad.mockResolvedValueOnce({ state: 'crashed', url: null })
+    const out = await backend.openTab({ url: URL })
+    const error = `${URL} crashed while loading in new tab t1. ${PAGE_CRASHED_MESSAGE}`
+    expect(out.text).toBe(`Error: ${error}`)
+    expect(out.details).toEqual({ url: URL, error })
   })
 })

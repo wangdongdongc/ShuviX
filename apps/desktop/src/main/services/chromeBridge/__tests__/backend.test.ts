@@ -632,6 +632,8 @@ describe('交互 / 调试经 CDP 转发', () => {
     const out = await r.backend.cdp({ tabId: '6', method: 'DOM.getDocument' })
     expect(requests(r.conn)).toEqual([
       ['debugger.attach', { tabId: 6 }],
+      // attach 之后会话先问一句页面是不是已经崩了（TabCdpSession.watchCrashes）
+      ['debugger.send', { tabId: 6, method: 'Inspector.enable', params: undefined }],
       ['debugger.send', { tabId: 6, method: 'Page.enable', params: undefined }],
       ['debugger.send', { tabId: 6, method: 'DOM.getDocument', params: undefined }]
     ])

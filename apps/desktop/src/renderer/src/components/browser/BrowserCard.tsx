@@ -213,13 +213,15 @@ export function BrowserCard({
           <div className="absolute inset-0 flex flex-col items-center justify-center px-3 bg-bg-primary">
             <TriangleAlert size={20} className="text-amber-500/80 mb-1" />
             <h2 className="text-[11px] font-medium text-text-primary mb-1">
-              {t('browser.error.title')}
+              {t(loadError.crashed ? 'browser.error.crashedTitle' : 'browser.error.title')}
             </h2>
             <p className="text-[11px] text-text-secondary mb-1 text-center">
-              {t('browser.error.code', {
-                code: loadError.errorCode,
-                description: loadError.errorDescription
-              })}
+              {loadError.crashed
+                ? t('browser.error.crashedDetail', { reason: loadError.errorDescription })
+                : t('browser.error.code', {
+                    code: loadError.errorCode,
+                    description: loadError.errorDescription
+                  })}
             </p>
             {isCertError(loadError.errorCode) && (
               <p className="text-[11px] text-amber-500/90 mb-1 text-center max-w-md">

@@ -36,6 +36,7 @@ interface FakeTab {
     debugger: FakeDebugger
     setBackgroundThrottling: ReturnType<typeof vi.fn<(allowed: boolean) => void>>
     isDestroyed(): boolean
+    isCrashed(): boolean
   }
 }
 
@@ -76,7 +77,8 @@ function newTab(): FakeTab {
     webContents: {
       debugger: createFakeDebugger(),
       setBackgroundThrottling: vi.fn<(allowed: boolean) => void>(),
-      isDestroyed: () => false
+      isDestroyed: () => false,
+      isCrashed: () => false
     }
   }
 }
@@ -174,12 +176,14 @@ describe('browserCdpService：每次 attach 都装好防护，每条断开的路
 
     releaseEnable!({})
     await pending
-    expect(sentWhenResolved).toEqual(GUARD_INSTALL)
+    // 防护装完之后会话再问一句页面是不是已经崩了（Inspector.enable，见 TabCdpSession.watchCrashes）
+    expect(sentWhenResolved).toEqual([...GUARD_INSTALL, 'Inspector.enable'])
     expect(dbg.sendCommand.mock.calls.map(([m, p]) => [m, p])).toEqual([
       ['Page.enable', undefined],
       ['Runtime.enable', undefined],
       ['Runtime.addBinding', { name: '__shuvixPrintRequest' }],
-      ['Page.addScriptToEvaluateOnNewDocument', { source: PRINT_OVERRIDE_SOURCE }]
+      ['Page.addScriptToEvaluateOnNewDocument', { source: PRINT_OVERRIDE_SOURCE }],
+      ['Inspector.enable', undefined]
     ])
     expect(methods()).not.toContain(INTERCEPT)
     expect(hasAgentGuards('t')).toBe(true)

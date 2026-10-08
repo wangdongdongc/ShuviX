@@ -122,6 +122,11 @@ vi.mock('electron', () => ({
       on() {},
       getTitle: () => '',
       isDestroyed: () => false,
+      /** 渲染进程崩了（isCrashed 读它） */
+      crashed: false,
+      isCrashed() {
+        return this.crashed
+      },
       getZoomFactor: () => 1,
       setZoomFactor() {},
       close() {}

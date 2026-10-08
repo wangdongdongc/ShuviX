@@ -769,6 +769,7 @@ declare global {
           active: boolean
           cdpAttached: boolean
           cdpIntercepting: boolean
+          crashed: boolean
         }>
       >
       navigate: (tabId: string, url: string) => Promise<void>
@@ -815,6 +816,7 @@ declare global {
           errorCode: number
           errorDescription: string
           url: string
+          crashed?: boolean
         }) => void
       ) => () => void
     }

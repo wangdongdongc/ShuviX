@@ -12,7 +12,7 @@
  * （还在页面上、露出来、没被盖住、可编辑），做完读回结果，做不到就明说原因；
  * 触发了导航的动作等新页面加载完再回。
  */
-import type { TabCdpSession } from './attachManager'
+import { PAGE_CRASHED_MESSAGE, type TabCdpSession } from './attachManager'
 import { staleUidError } from '../cdp/controller'
 import type { BrowserOpOutput, NavKind, ScrollDirection } from './backend'
 import { dispatchKey } from './keyboard'
@@ -380,7 +380,26 @@ async function waitForDomQuiet(session: TabCdpSession, quietMs = 150, maxMs = 10
   }
 }
 
-export type LoadState = 'complete' | 'interactive' | 'stopped' | 'failed' | 'timeout' | 'gone'
+export type LoadState =
+  | 'complete'
+  | 'interactive'
+  | 'stopped'
+  | 'failed'
+  | 'timeout'
+  | 'gone'
+  | 'crashed'
+
+/**
+ * 页面在 seq 之后崩了、此刻仍是崩的。只认「之后」：对一个已经崩了的页面发 reload 把它救回来时，
+ * 等加载开始的那一刻页面可能还算崩的 —— 那是在等它回来，不是又崩了一次。
+ */
+function crashedSince(session: TabCdpSession, seq: number): boolean {
+  return (
+    session.crashed &&
+    session.getEvents({ event: 'Inspector.targetCrashed', sinceSeq: seq, limit: 1 }).entries
+      .length > 0
+  )
+}
 
 /**
  * 会话已结束（tab 没了 / 调试连接没了）时给 agent 的一句话；会话还在时回 null。
@@ -406,6 +425,7 @@ export function tabGoneNote(session: TabCdpSession): string | null {
  *   - 同文档导航（hash / pushState 的历史记录）：文档不换，直接算完成
  *   - Chromium 错误页（DNS 失败等）：failed
  *   - 会话结束了（页面自己关掉了 tab 等，见 tabGoneNote）：gone
+ *   - 等的时候页面的渲染进程崩了：crashed
  */
 export async function waitForLoad(
   session: TabCdpSession,
@@ -415,8 +435,10 @@ export async function waitForLoad(
   const deadline = Date.now() + (opts.timeoutMs ?? NAV_TIMEOUT_MS)
   let interactiveSince = 0
   let url: string | null = null
+  const since = mark?.seq ?? session.eventCursor()
   for (;;) {
     if (session.ended) return { state: 'gone', url }
+    if (crashedSince(session, since)) return { state: 'crashed', url }
     // 先看事件再读状态：事件已到、文档却还是旧的，才能断定导航结束了而没换页面
     const started = mark ? frameEventSeqs(session, 'Page.frameStartedLoading', mark) : []
     const stopped =
@@ -468,6 +490,8 @@ export function loadNote(state: LoadState): string {
       return ' (no new page was loaded — the request may have been a download or was cancelled)'
     case 'gone':
       return ' (the tab went away before it finished loading)'
+    case 'crashed':
+      return ' (the page crashed while loading)'
     default:
       return ''
   }
@@ -516,6 +540,7 @@ async function settleAfterAction(
 
   const load = await waitForLoad(session, { mark: before })
   if (load.state === 'gone') return `${tabGoneNote(session)}${newTabNote}`
+  if (load.state === 'crashed') return `${PAGE_CRASHED_MESSAGE}${newTabNote}`
   if (load.state === 'stopped') return `${loadNote('stopped').trim()}${newTabNote}`
   // 新文档：旧快照的 uid 全部作废（否则按内容键「找回」的会是新页面上碰巧同名的元素）
   session.controller.reset()
@@ -1094,7 +1119,7 @@ export async function waitForOp(
     if (signal?.aborted) {
       return { text: 'Aborted while waiting.', details: { error: 'aborted' } }
     }
-    const gone = tabGoneNote(session)
+    const gone = tabGoneNote(session) ?? (session.crashed ? PAGE_CRASHED_MESSAGE : null)
     if (gone) {
       return errorOut(`stopped waiting for text "${truncate(text, 50)}": ${gone}`)
     }
@@ -1135,6 +1160,13 @@ async function navigated(
       text: `${verb} ${target ?? 'the page'}. ${tabGoneNote(session)}`,
       details: target ? { url: target } : {}
     }
+  }
+  if (load.state === 'crashed') {
+    const target = fallbackUrl ?? before.url
+    return errorOut(
+      `${verb} ${target ?? 'the page'}, and it crashed while loading. ${PAGE_CRASHED_MESSAGE}`,
+      target ? { url: target } : {}
+    )
   }
   if (load.state === 'failed' || load.state === 'stopped') {
     // 错误页自己的地址是 chrome-error://chromewebdata/，对 agent 没用 —— 报想去的那个页面

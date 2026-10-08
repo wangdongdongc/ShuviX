@@ -15,13 +15,15 @@
  *   CBST-13    没连着时的 detach 安静地结束（包括 detach 请求本身失败）；
  *   JG-1…4     joinGroup：同一会话串行、ensure 拿到当前组 id、失败只拒那一次、不同会话互不等待；
  *   OR-1…4     observeChromeTabRun：只看 agent_start / agent_end，只认有效的标签页会话绑定。
+ *   CR-U19     扩展转来的 Inspector.targetCrashed 让那个 tab 的会话算崩着：发给页面的命令当场以那句话
+ *              失败，不再经桥发出去（在用户的 Chrome 里同样会一直挂着）。
  *
  * 桥用**真的**单例（模块的钩子挂在它上面），只把 `connectionFor` 换成查本文件的连接表；
  * 连接是假的（`request` 一个 vi.fn，按方法名回答）。状态表与授权表是进程级的 ——
  * 每个用例用自己的 installId / 会话 id。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import type { SessionEndReason } from '@shuvix/agent-runtime'
+import { PAGE_CRASHED_MESSAGE, type SessionEndReason } from '@shuvix/agent-runtime'
 import type { BridgeHello } from '@shuvix/chat-protocol/chromeBridge'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 
@@ -218,7 +220,9 @@ describe('CDP 传输（经桥的 debugger 转发）', () => {
     expect(await session.send('DOM.getDocument', { depth: 1 })).toEqual({
       echo: 'DOM.getDocument'
     })
+    // attach 之后会话先问一句页面是不是已经崩了（TabCdpSession.watchCrashes）
     expect(paramsOf(first, 'debugger.send')).toEqual([
+      { tabId: 7, method: 'Inspector.enable', params: undefined },
       { tabId: 7, method: 'DOM.getDocument', params: { depth: 1 } }
     ])
 
@@ -228,7 +232,7 @@ describe('CDP 传输（经桥的 debugger 转发）', () => {
       { tabId: 7, method: 'Runtime.evaluate', params: { expression: '1' } }
     ])
     expect(paramsOf(second, 'debugger.attach')).toEqual([])
-    expect(paramsOf(first, 'debugger.send')).toHaveLength(1)
+    expect(paramsOf(first, 'debugger.send')).toHaveLength(2)
   })
 
   it('CBST-5 没连着时 attach → 以 CHROME_NOT_CONNECTED 失败、不记接管；连上之后下一次操作重试', async () => {
@@ -760,5 +764,22 @@ describe('observeChromeTabRun：旁听 ChatEvent 记一轮的起止', () => {
     observeChromeTabRun(ev('agent_end', b))
     await settle()
     expect(paramsOf(conn, 'debugger.detach')).toEqual([{ tabId: 7 }])
+  })
+})
+
+// ─── 页面崩了 ────────────────────────────────────────────────────────────
+
+describe('扩展报来页面崩了（CR-U19）', () => {
+  it('CR-U19 deliver Inspector.targetCrashed 之后：DOM.getDocument 以那句话失败，没有新的 debugger.send', async () => {
+    const id = iid()
+    const conn = connect(id)
+    const state = chromeBrowserState(id)
+    const session = await state.cdp.session('7')
+    const sendsBefore = paramsOf(conn, 'debugger.send').length
+
+    state.deliver({ tabId: 7, method: 'Inspector.targetCrashed', params: {} })
+    expect(session.crashed).toBe(true)
+    await expect(session.send('DOM.getDocument')).rejects.toThrow(PAGE_CRASHED_MESSAGE)
+    expect(paramsOf(conn, 'debugger.send')).toHaveLength(sendsBefore)
   })
 })

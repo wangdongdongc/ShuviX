@@ -58,6 +58,8 @@ interface TabGuard {
   disarmTimer: ReturnType<typeof setTimeout> | null
   /** 进行中的动作各自收集被拦下的文件框 */
   collectors: Set<SuppressedChooser[]>
+  /** 装防护的那几条命令发完（成败都算）；动作先等它 —— 崩溃的 tab 是在页面回来时才装的，可能还没装完 */
+  ready: Promise<void>
   onMessage: (event: unknown, method: string, params: Record<string, unknown>) => void
 }
 
@@ -126,8 +128,11 @@ export async function installAgentGuards(tabId: string, wc: WebContents): Promis
     armed: false,
     disarmTimer: null,
     collectors: new Set(),
+    ready: Promise.resolve(),
     onMessage: (_event, method, params) => {
-      if (method === 'Page.fileChooserOpened') onFileChooser(g, params)
+      // 页面崩了：文件框拦截是不是跟着新渲染进程留下来不好说 —— 当作没开，下一个动作重新开（开是幂等的）
+      if (method === 'Inspector.targetCrashed') g.armed = false
+      else if (method === 'Page.fileChooserOpened') onFileChooser(g, params)
       else if (method === 'Runtime.bindingCalled' && params.name === PRINT_BINDING)
         onPrintRequest(g)
       else if (method === 'Runtime.executionContextCreated') overrideInContext(g, params)
@@ -135,14 +140,17 @@ export async function installAgentGuards(tabId: string, wc: WebContents): Promis
   }
   guards.set(tabId, g)
   wc.debugger.on('message', g.onMessage)
-  try {
-    await send(g, 'Page.enable')
-    await send(g, 'Runtime.enable')
-    await send(g, 'Runtime.addBinding', { name: PRINT_BINDING })
-    await send(g, 'Page.addScriptToEvaluateOnNewDocument', { source: PRINT_OVERRIDE_SOURCE })
-  } catch (err) {
-    log.warn(`installing agent guards on tab ${tabId} failed`, err)
-  }
+  g.ready = (async () => {
+    try {
+      await send(g, 'Page.enable')
+      await send(g, 'Runtime.enable')
+      await send(g, 'Runtime.addBinding', { name: PRINT_BINDING })
+      await send(g, 'Page.addScriptToEvaluateOnNewDocument', { source: PRINT_OVERRIDE_SOURCE })
+    } catch (err) {
+      log.warn(`installing agent guards on tab ${tabId} failed`, err)
+    }
+  })()
+  await g.ready
 }
 
 /** 这个 tab 是否装着防护（= agent 接管着它） */
@@ -165,6 +173,9 @@ async function arm(g: TabGuard): Promise<void> {
     g.disarmTimer = null
   }
   if (g.armed) return
+  // 渲染进程崩了：这条命令会一直挂到页面被救回来（实测）—— 崩了的页面也弹不出文件框，
+  // 而把它救回来的导航正是要在这里过的动作
+  if (g.wc.isCrashed()) return
   await send(g, 'Page.setInterceptFileChooserDialog', { enabled: true })
   g.armed = true
 }
@@ -190,6 +201,7 @@ export async function withAgentGuards<T>(
 ): Promise<{ result: T; suppressed: SuppressedChooser[] }> {
   const g = guards.get(tabId)
   if (!g) return { result: await op(), suppressed: [] }
+  await g.ready
   await arm(g).catch((err) => log.warn(`arming the file chooser guard on tab ${tabId} failed`, err))
   const suppressed: SuppressedChooser[] = []
   g.collectors.add(suppressed)

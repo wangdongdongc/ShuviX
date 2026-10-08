@@ -374,10 +374,18 @@ export function createTab(url?: string, opts?: { activate?: boolean }): string {
     sendToRenderer('browser-view:did-stop-loading', { tabId })
   })
 
-  // 渲染进程崩溃 / 被杀时不会有 did-stop-loading，兜底熄灭 spinner
+  // 渲染进程崩溃 / 被杀时不会有 did-stop-loading，兜底熄灭 spinner；卡片换成「页面崩溃了」+ 重试
+  // （崩溃的 view 什么也不画，不换的话就是一张空白卡片）。重新加载开始时 did-start-loading 清掉它
   wc.on('render-process-gone', (_event, details) => {
     log.warn(`Tab renderer gone: ${tabId} (${details.reason})`)
     sendToRenderer('browser-view:did-stop-loading', { tabId })
+    sendToRenderer('browser-view:did-fail-load', {
+      tabId,
+      errorCode: 0,
+      errorDescription: details.reason,
+      url: wc.getURL(),
+      crashed: true
+    })
   })
 
   // 地址栏即时反馈：导航一开始就把目标 URL 交给 renderer（主框架、非 same-document）
@@ -515,6 +523,8 @@ export function listTabs(): Array<{
   active: boolean
   cdpAttached: boolean
   cdpIntercepting: boolean
+  /** 渲染进程崩了（浏览器窗口晚于崩溃才打开时，靠它把卡片画成「页面崩溃了」） */
+  crashed: boolean
 }> {
   return [...tabs.entries()].map(([id, view]) => {
     const cdp = browserCdpManager.cdpState(id)
@@ -524,7 +534,8 @@ export function listTabs(): Array<{
       title: view.webContents.getTitle(),
       active: id === activeTabId,
       cdpAttached: cdp.attached,
-      cdpIntercepting: cdp.intercepting
+      cdpIntercepting: cdp.intercepting,
+      crashed: view.webContents.isCrashed()
     }
   })
 }

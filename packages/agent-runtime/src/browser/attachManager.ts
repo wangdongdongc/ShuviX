@@ -76,6 +76,25 @@ export interface RawEventEntry {
  */
 export type SessionEndReason = 'tab-closed' | 'detached'
 
+/** 页面的渲染进程崩溃时，发给它的命令得到的错误（也是 agent 看到的那句话） */
+export const PAGE_CRASHED_MESSAGE =
+  'The page in this tab crashed — bring it back with navigate (nav "reload"), or close the tab with close_tab.'
+
+/**
+ * 渲染进程崩溃之后照样能用的命令：浏览器进程自己处理的导航（把页面救回来）与 Inspector 域。
+ * 其余命令发给已经没了的渲染进程，会一直挂着，直到有人重新加载页面才以 "Target crashed" 失败
+ * （2026-10-08 实测，Electron 39：Runtime.evaluate / DOM / Accessibility / Page.enable /
+ * Page.getFrameTree 都挂住；Input / 截图回 Internal error）。
+ */
+const CRASH_SAFE_METHODS = new Set([
+  'Page.reload',
+  'Page.navigate',
+  'Page.navigateToHistoryEntry',
+  'Page.getNavigationHistory',
+  'Inspector.enable',
+  'Inspector.disable'
+])
+
 /** 一个 tab 的 CDP 状态快照（宿主 UI 标识用）：attached=agent 已接入；intercepting=请求拦截生效中 */
 export interface TabCdpState {
   attached: boolean
@@ -103,18 +122,38 @@ export class TabCdpSession {
   private autoDismissDialogs = true
   private dialogEnabled = false
   private endReason: SessionEndReason | null = null
+  /** 页面的渲染进程此刻是崩溃的（Inspector.targetCrashed 到 targetReloadedAfterCrash 之间） */
+  private pageCrashed = false
+  /** 还没回音的命令：崩溃时把发给页面的那些当场判失败，别让它们挂到有人重新加载 */
+  private inflight = new Set<{ method: string; fail: (err: Error) => void }>()
 
   constructor(
     private transport: CdpTabTransport,
     /** 拦截状态翻转时回调（宿主借 CdpAttachManager 的 onStateChange 推给 UI） */
     private notifyStateChange?: () => void
   ) {
-    this.controller = new CdpController(transport)
+    // controller 的命令也走崩溃判断 —— 快照、uid 解析同样会挂在崩溃的页面上
+    this.controller = new CdpController({ sendCommand: (m, p) => this.sendRaw(m, p) })
     this.unsubscribe = transport.onEvent((method, params) => this.onCdpMessage(method, params))
   }
 
+  /** 发命令的唯一出口：页面崩溃时发给页面的命令当场失败（PAGE_CRASHED_MESSAGE），不发出去干等 */
+  private sendRaw<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+    if (this.pageCrashed && !CRASH_SAFE_METHODS.has(method)) {
+      return Promise.reject(new Error(PAGE_CRASHED_MESSAGE))
+    }
+    return new Promise<T>((resolve, reject) => {
+      const entry = { method, fail: reject }
+      this.inflight.add(entry)
+      this.transport
+        .sendCommand<T>(method, params)
+        .then(resolve, reject)
+        .finally(() => this.inflight.delete(entry))
+    })
+  }
+
   async send<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
-    const result = await this.transport.sendCommand<T>(method, params)
+    const result = await this.sendRaw<T>(method, params)
     // 只在命令成功后记账：失败的 Fetch.enable 不应点亮拦截标识
     this.trackInterception(method, params)
     return result
@@ -126,6 +165,19 @@ export class TabCdpSession {
    */
   get ended(): SessionEndReason | null {
     return this.endReason
+  }
+
+  /** 页面的渲染进程此刻是崩溃的 —— 只有导航能把它救回来（见 CRASH_SAFE_METHODS） */
+  get crashed(): boolean {
+    return this.pageCrashed
+  }
+
+  /**
+   * attach 之后问一次页面是不是已经崩了：对着一个已经崩溃的目标 Inspector.enable，会立刻补发
+   * Inspector.targetCrashed（实测）—— 在 attach 之前就崩了的 tab 由此得知，命令不至于挂住。
+   */
+  async watchCrashes(): Promise<void> {
+    await this.sendRaw('Inspector.enable').catch(() => {})
   }
 
   /** 请求拦截是否生效（该 tab 加载的内容可能被 agent 修改/替换） */
@@ -251,8 +303,22 @@ export class TabCdpSession {
   // ====== CDP 事件分发 ======
 
   private onCdpMessage(method: string, params: Record<string, unknown>): void {
-    // 所有事件进通用缓冲（供 events action 增量拉取）
+    // 所有事件进通用缓冲（供 events action 增量拉取；等加载的循环也从这里认「之后崩了」）
     this.pushEvent(method, params)
+
+    if (method === 'Inspector.targetCrashed') {
+      this.pageCrashed = true
+      // 旧页面的节点全没了；正在等页面回音的命令当场失败
+      this.controller.reset()
+      for (const entry of this.inflight) {
+        if (!CRASH_SAFE_METHODS.has(entry.method)) entry.fail(new Error(PAGE_CRASHED_MESSAGE))
+      }
+      return
+    }
+    if (method === 'Inspector.targetReloadedAfterCrash') {
+      this.pageCrashed = false
+      return
+    }
 
     // 对话框自动处理：alert/confirm/beforeunload 弹出即 dismiss，避免卡死后续 CDP 命令。
     // 关掉自动处理时（agent 显式接管）不动，等 agent 用 cdp Page.handleJavaScriptDialog 响应。
@@ -368,6 +434,7 @@ export class CdpAttachManager {
     const attaching = (async () => {
       const transport = await this.factory.attach(tabId)
       const session = new TabCdpSession(transport, () => this.onStateChange?.(tabId))
+      await session.watchCrashes()
       this.sessions.set(tabId, session)
       this.onStateChange?.(tabId)
       return session

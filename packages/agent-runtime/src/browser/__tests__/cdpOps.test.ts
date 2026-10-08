@@ -14,7 +14,7 @@ import {
   uploadFileOp,
   snapshotOp
 } from '../cdpOps'
-import type { SessionEndReason, TabCdpSession } from '../attachManager'
+import { PAGE_CRASHED_MESSAGE, type SessionEndReason, type TabCdpSession } from '../attachManager'
 import type { NavKind } from '../backend'
 import { CdpController, type AXNode } from '../../cdp/controller'
 
@@ -213,6 +213,9 @@ function fakeSession(overrides: Params = {}): FakeSession {
       // 会话结束之后的命令照样记下、然后失败。先看标志再跑反应：结束会话的那条命令（鼠标抬起、
       // 按键抬起）自己是回了包的 —— 页面是在它之后才关掉的
       if (session.ended) throw new Error('Debugger is not attached to the tab')
+      // 页面崩着：发给页面的命令同样记下、然后以那句话失败（真会话的崩溃闸）；导航与 Inspector 照常。
+      // 同样先看标志再跑反应 —— 让页面崩掉的那条命令自己是回了包的
+      if (session.crashed && !CRASH_SAFE.has(method)) throw new Error(PAGE_CRASHED_MESSAGE)
       reaction?.(method, params)
       if (method === 'Page.getNavigationHistory') return history
       if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'F' } } }
@@ -232,6 +235,8 @@ function fakeSession(overrides: Params = {}): FakeSession {
     controller: ctl,
     /** 会话结束的原因（endSession 设）；null = 还连着 */
     ended: null as SessionEndReason | null,
+    /** 页面的渲染进程崩着（crashPage 设、recoverPage 清） */
+    crashed: false,
     ...overrides
   }
   return {
@@ -331,6 +336,35 @@ function endSession(fake: FakeSession, reason: SessionEndReason): void {
   Object.assign(fake.session, { ended: reason })
   fake.events.length = 0
 }
+
+/** 崩溃页上照样能用的命令（与真会话的 CRASH_SAFE_METHODS 相同） */
+const CRASH_SAFE = new Set([
+  'Page.reload',
+  'Page.navigate',
+  'Page.navigateToHistoryEntry',
+  'Page.getNavigationHistory',
+  'Inspector.enable',
+  'Inspector.disable'
+])
+
+/** 页面的渲染进程崩了（同真会话收到 Inspector.targetCrashed）：标志置上、事件进缓冲 */
+function crashPage(fake: FakeSession): void {
+  Object.assign(fake.session, { crashed: true })
+  fake.push('Inspector.targetCrashed')
+}
+
+/** 页面被救回来（Inspector.targetReloadedAfterCrash）：url 上一个加载完的新文档（没有记号） */
+function recoverPage(
+  fake: FakeSession,
+  url: string,
+  readyState: 'complete' | 'loading' = 'complete'
+): void {
+  Object.assign(fake.session, { crashed: false })
+  fake.push('Inspector.targetReloadedAfterCrash')
+  Object.assign(fake.page, { url, readyState, marked: false })
+}
+
+const S = PAGE_CRASHED_MESSAGE
 
 const TAB_CLOSED_NOTE = 'This tab closed and is gone — use list_tabs to see the open tabs.'
 const DETACHED_NOTE =
@@ -1930,5 +1964,233 @@ describe('uploadFileOp', () => {
     expect(release).toBeLessThan(fake.timeline.indexOf('ctl.release'))
     expect(fake.timeline.at(-1)).toBe('ctl.release')
     expect(locateCmd(fake)?.params?.objectId).toBe('obj-7')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// 页面的渲染进程崩了（CR-U5…U9）：等页面的循环不把「崩了」当「正在导航」等到超时；
+// 而把页面救回来的那次导航（页面还算崩着的时候开始等）不被当成又崩了一次
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('waitForLoad：等的时候页面崩了（CR-U5）', () => {
+  type Mark = NonNullable<NonNullable<Parameters<typeof waitForLoad>[1]>['mark']>
+  const MARK: Mark = { token: 'tok', url: 'https://a.com/', seq: 0, frameId: 'F' }
+
+  it.each<[string, Mark | undefined]>([
+    ['有记号（seq 0）', MARK],
+    ['没有记号', undefined]
+  ])(
+    'CR-U5 %s：页面一直停在 loading，1s 时崩了 → 回 crashed（带最后读到的地址），崩了之后至多再读一次页面',
+    async (_label, mark) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      Object.assign(fake.page, { url: 'https://a.com/slow', readyState: 'loading', marked: false })
+      const work = waitForLoad(fake.session, mark ? { mark } : {})
+      await stillWaitingAfter(work, 1000)
+      crashPage(fake)
+      const readsAtCrash = sent(fake, pageStateRead).length
+      expect(await within(work, 200)).toEqual({ state: 'crashed', url: 'https://a.com/slow' })
+      expect(sent(fake, pageStateRead).length - readsAtCrash).toBeLessThanOrEqual(1)
+    }
+  )
+
+  it('CR-U5 两次读页面之间崩了又被救回来（新文档已加载完）→ 不算崩：回 complete', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    Object.assign(fake.page, { url: 'https://a.com/slow', readyState: 'loading', marked: false })
+    const work = waitForLoad(fake.session, { mark: MARK })
+    await stillWaitingAfter(work, 1000)
+    crashPage(fake)
+    recoverPage(fake, 'https://a.com/slow')
+    expect(await within(work, 300)).toEqual({ state: 'complete', url: 'https://a.com/slow' })
+  })
+})
+
+describe('waitForLoad：开始等的时候页面已经崩着（把它救回来的那次导航，CR-U6）', () => {
+  type Mark = NonNullable<NonNullable<Parameters<typeof waitForLoad>[1]>['mark']>
+
+  /** 崩溃之后才打的记号（与 markDocument 在崩溃页上拿到的一样：没有框架 id、读不到地址） */
+  const markAfterCrash = (fake: FakeSession): Mark => ({
+    token: 'tok',
+    url: null,
+    seq: fake.session.eventCursor(),
+    frameId: null
+  })
+
+  it.each<[string, boolean]>([
+    ['有记号', true],
+    ['没有记号', false]
+  ])(
+    'CR-U6 %s：崩着的时候一直等（3s 不收手），页面回来、新文档加载完 → complete',
+    async (_label, withMark) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      Object.assign(fake.page, { url: 'https://a.com/before', marked: false })
+      crashPage(fake)
+      const work = waitForLoad(fake.session, withMark ? { mark: markAfterCrash(fake) } : {})
+      await stillWaitingAfter(work, 3000)
+      recoverPage(fake, 'https://a.com/back')
+      expect(await within(work, 300)).toEqual({ state: 'complete', url: 'https://a.com/back' })
+    }
+  )
+
+  it('CR-U6 回来的页面还在加载时又崩了 → 那一次算：200ms 内回 crashed', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    Object.assign(fake.page, { url: 'https://a.com/before', marked: false })
+    crashPage(fake)
+    const work = waitForLoad(fake.session, { mark: markAfterCrash(fake) })
+    await stillWaitingAfter(work, 3000)
+    recoverPage(fake, 'https://a.com/back', 'loading')
+    await stillWaitingAfter(work, 500)
+    crashPage(fake)
+    expect(await within(work, 200)).toEqual({ state: 'crashed', url: 'https://a.com/back' })
+  })
+})
+
+describe('点击 / 按键之后页面崩了（CR-U7）：做了 + 那句话，不算失败', () => {
+  const ACTIONS: Array<[string, Match, (s: TabCdpSession) => ReturnType<typeof clickOp>, string]> =
+    [
+      ['click', mouseUp, (s) => clickOp(s, 'e7'), 'Clicked button "Submit" (uid=e7).'],
+      ['press_key', keyUp, (s) => pressKeyOp(s, 'Enter'), 'Pressed Enter.'],
+      [
+        'type + submitKey',
+        keyUp,
+        (s) => typeOp(s, 'hi', undefined, 'Enter'),
+        'Typed "hi". Pressed Enter.'
+      ]
+    ]
+
+  it.each(ACTIONS)(
+    'CR-U7 A %s 当场让页面崩了 → 「做了」+ 那句话，没有 error，崩了之后至多再读一次页面',
+    async (_label, trigger, act, did) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      when(fake, trigger, () => crashPage(fake))
+      const out = await within(act(fake.session), 300)
+      expect(out.text).toBe(`${did} ${S}`)
+      expect(out.details?.error).toBeUndefined()
+      expect(countAfter(fake, trigger, pageStateRead)).toBeLessThanOrEqual(1)
+    }
+  )
+
+  it.each(ACTIONS)(
+    'CR-U7 B %s 引起的导航还在加载，1s 时页面崩了 → 不等到超时：「做了」+ 那句话',
+    async (_label, trigger, act, did) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      when(fake, trigger, () => {
+        navigateTo(fake, 'https://a.com/next')
+        fake.page.readyState = 'loading'
+      })
+      const work = act(fake.session)
+      await stillWaitingAfter(work, 1000)
+      crashPage(fake)
+      const out = await within(work, 300)
+      expect(out.text).toBe(`${did} ${S}`)
+      expect(out.details?.error).toBeUndefined()
+    }
+  )
+
+  it.each(ACTIONS)(
+    'CR-U7 C %s 开了新 tab、页面当场崩了 → 新开的 tab 照样提一句',
+    async (_label, trigger, act, did) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      when(fake, trigger, () => {
+        fake.push('Page.windowOpen', { url: 'https://b.com/' })
+        crashPage(fake)
+      })
+      const out = await within(act(fake.session), 300)
+      expect(out.text).toBe(`${did} ${S} It opened a new tab — use list_tabs to find it.`)
+      expect(out.details?.error).toBeUndefined()
+    }
+  )
+})
+
+describe('navigateOp：新页面加载时崩了（CR-U8）', () => {
+  it.each<[string, NavKind, string | undefined, string, string, string]>([
+    [
+      'goto',
+      'goto',
+      'https://a.com/cb',
+      'Page.navigate',
+      'https://a.com/cb',
+      'Navigated to https://a.com/cb'
+    ],
+    [
+      'back',
+      'back',
+      undefined,
+      'Page.navigateToHistoryEntry',
+      'https://a.com/0',
+      'Navigated back to https://a.com/0'
+    ],
+    [
+      'reload',
+      'reload',
+      undefined,
+      'Page.reload',
+      'https://a.com/before',
+      'Reloaded https://a.com/before'
+    ]
+  ])(
+    'CR-U8 %s，加载到 1s 时页面崩了 → 业务错误「…, and it crashed while loading.」+ 那句话，报想去的那个页面',
+    async (_label, nav, url, trigger, target, lead) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      fake.page.url = 'https://a.com/before'
+      when(fake, cmd(trigger), () =>
+        Object.assign(fake.page, { url: target, readyState: 'loading', marked: false })
+      )
+      const work = navigateOp(fake.session, nav, url)
+      await stillWaitingAfter(work, 1000)
+      crashPage(fake)
+      const out = await within(work, 300)
+      const error = `${lead}, and it crashed while loading. ${S}`
+      expect(out.text).toBe(`Error: ${error}`)
+      expect(out.details).toEqual({ url: target, error })
+    }
+  )
+
+  it('CR-U8 页面本就崩着，nav reload 开始把它救回来，500ms 时又崩了 → 「Reloaded the page, and it crashed while loading.」，details 只有 error', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    fake.page.url = 'https://a.com/before'
+    crashPage(fake)
+    when(fake, cmd('Page.reload'), () => recoverPage(fake, 'https://a.com/before', 'loading'))
+    const work = navigateOp(fake.session, 'reload')
+    await stillWaitingAfter(work, 500)
+    expect(sent(fake, cmd('Page.reload'))).toHaveLength(1)
+    crashPage(fake)
+    const out = await within(work, 300)
+    const error = `Reloaded the page, and it crashed while loading. ${S}`
+    expect(out.text).toBe(`Error: ${error}`)
+    expect(out.details).toEqual({ error })
+  })
+})
+
+describe('waitForOp：页面崩了就不再等（CR-U9）', () => {
+  it.each<[string, number | null, number]>([
+    ['第一次查之前就崩着', null, 50],
+    ['查了三轮都没找到时崩了', 1200, 600]
+  ])('CR-U9 %s → 回业务错误，说清为什么不等了', async (_label, crashAfterMs, settleMs) => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    const evaluates = (): number => sent(fake, cmd('Runtime.evaluate')).length
+    if (crashAfterMs === null) crashPage(fake)
+    const work = waitForOp(fake.session, 'Welcome', 10_000)
+    if (crashAfterMs !== null) {
+      await stillWaitingAfter(work, crashAfterMs)
+      expect(evaluates()).toBe(3)
+      crashPage(fake)
+    }
+    const evaluatesAtCrash = evaluates()
+    const out = await within(work, settleMs)
+    const message = `stopped waiting for text "Welcome": ${S}`
+    expect(out.text).toBe(`Error: ${message}`)
+    expect(out.details).toEqual({ error: message })
+    if (crashAfterMs === null) expect(evaluates()).toBe(0)
+    else expect(evaluates() - evaluatesAtCrash).toBeLessThanOrEqual(1)
   })
 })

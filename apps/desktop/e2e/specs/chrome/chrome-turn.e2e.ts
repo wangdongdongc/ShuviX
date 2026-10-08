@@ -414,13 +414,14 @@ describe('一轮对话走到浏览器再回来', () => {
       since: turn.since
     })[0]
 
-    // 一轮里只接管一次；命令按序：对话框监听、网络域、agent 的原生 cdp
+    // 一轮里只接管一次；命令按序：问一句页面是不是已经崩了（Inspector.enable，TabCdpSession.watchCrashes）、
+    // 对话框监听、网络域、agent 的原生 cdp
     expect(
       chromeA.ops({ method: 'debugger.attach', since: turn.since }).map((o) => o.params)
     ).toEqual([{ tabId: 5 }])
     expect(
       chromeA.ops({ method: 'debugger.send', since: turn.since }).map((o) => o.params.method)
-    ).toEqual(['Page.enable', 'Network.enable', 'DOM.getDocument'])
+    ).toEqual(['Inspector.enable', 'Page.enable', 'Network.enable', 'DOM.getDocument'])
     expect(
       chromeA
         .ops({ method: 'debugger.send', since: turn.since })

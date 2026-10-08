@@ -65,8 +65,11 @@ export function useBrowserTabsBridge(): void {
       api.onDidStopLoading(({ tabId }) => {
         updateTab(tabId, { isLoading: false })
       }),
-      api.onDidFailLoad(({ tabId, errorCode, errorDescription, url }) => {
-        updateTab(tabId, { isLoading: false, loadError: { errorCode, errorDescription, url } })
+      api.onDidFailLoad(({ tabId, errorCode, errorDescription, url, crashed }) => {
+        updateTab(tabId, {
+          isLoading: false,
+          loadError: { errorCode, errorDescription, url, ...(crashed ? { crashed } : {}) }
+        })
       })
     ]
 
@@ -81,7 +84,10 @@ export function useBrowserTabsBridge(): void {
               url: t.url,
               title: t.title,
               isLoading: false,
-              loadError: null,
+              // 窗口晚于崩溃才打开：崩溃事件当时没人收，从快照里补上（原因已经不知道了）
+              loadError: t.crashed
+                ? { errorCode: 0, errorDescription: 'crashed', url: t.url, crashed: true }
+                : null,
               cdpAttached: t.cdpAttached,
               cdpIntercepting: t.cdpIntercepting
             }

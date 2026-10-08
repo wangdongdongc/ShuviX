@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, resolve } from 'path'
 import type { WebContentsView } from 'electron'
 import {
   browserCdpOps,
+  PAGE_CRASHED_MESSAGE,
   type BrowserBackend,
   type BrowserCaps,
   type BrowserOpOutput,
@@ -129,7 +130,7 @@ class DesktopBrowserBackend implements BrowserBackend {
 
   async listTabs(): Promise<BrowserOpOutput> {
     const lines = listTabsService().map((t) => {
-      const tag = t.active ? ' (active)' : ''
+      const tag = `${t.active ? ' (active)' : ''}${t.crashed ? ' (crashed)' : ''}`
       return `[${shortIdFor(t.id)}]${tag} ${t.title || '(untitled)'} — ${t.url}`
     })
     return { text: lines.join('\n') || '(no open tabs — use open_tab to open one)' }
@@ -178,6 +179,10 @@ class DesktopBrowserBackend implements BrowserBackend {
       }
     }
     if (load.state === 'failed') return failed()
+    if (load.state === 'crashed') {
+      const error = `${p.url} crashed while loading in new tab ${short}. ${PAGE_CRASHED_MESSAGE}`
+      return { text: `Error: ${error}`, details: { url: p.url, error } }
+    }
     if (load.state === 'gone') {
       // 页面一加载就把自己的 tab 关了（登录回调页之类）
       return {
@@ -231,6 +236,8 @@ class DesktopBrowserBackend implements BrowserBackend {
   }): Promise<BrowserOpOutput> {
     const { view, uuid } = resolveAndActivate(p.tabId)
     const wc = view.webContents
+    // 崩了的页面什么也不画：capturePage 只会回一张空图
+    if (wc.isCrashed()) throw new Error(PAGE_CRASHED_MESSAGE)
     const shotLabel = p.uid ? `element uid=${p.uid}` : p.fullPage ? 'full page' : 'viewport'
     log.info(`screenshot start: ${shotLabel}`)
 
@@ -325,6 +332,7 @@ class DesktopBrowserBackend implements BrowserBackend {
     scale?: number
   }): Promise<BrowserOpOutput> {
     const { view } = resolveAndActivate(p.tabId)
+    if (view.webContents.isCrashed()) throw new Error(PAGE_CRASHED_MESSAGE)
 
     const absolutePath = isAbsolute(p.outputPath)
       ? p.outputPath

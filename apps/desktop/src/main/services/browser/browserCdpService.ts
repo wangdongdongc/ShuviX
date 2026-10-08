@@ -49,10 +49,14 @@ const factory: CdpTabTransportFactory = {
     }
     wc.debugger.on('message', onMessage)
 
+    // 页面崩着时 attach 的 tab 等页面回来再装防护的那个监听（见下）；断开时一并摘掉
+    let onRecovered: ((event: unknown, method: string) => void) | null = null
+
     // 外部断开 → 清理本地状态。Electron 只在调试目标没了时发 detach，原因恒为 "target closed"
     // （页面自己 window.close()、tab 被关掉；渲染进程崩溃并不 detach —— 2026-10-08 实测，Electron 39）
     const onDetach = (_event: unknown, reason: string): void => {
       log.info(`CDP debugger detached externally (tab ${tabId}): ${reason}`)
+      if (onRecovered && !wc.isDestroyed()) wc.debugger.off('message', onRecovered)
       uninstallAgentGuards(tabId)
       browserCdpManager.handleExternalDetach(
         tabId,
@@ -61,8 +65,26 @@ const factory: CdpTabTransportFactory = {
     }
     wc.debugger.once('detach', onDetach)
 
-    // 别打扰用户的两道防护（文件选择框 / 打印），赶在 agent 的第一个动作之前装好（见 agentGuards.ts）
-    await installAgentGuards(tabId, wc)
+    // 别打扰用户的两道防护（文件选择框 / 打印），赶在 agent 的第一个动作之前装好（见 agentGuards.ts）。
+    // 渲染进程已经崩了的 tab：装防护要发的 Page.enable 之类会一直挂到页面被救回来才失败（实测）——
+    // 等页面回来（Inspector.targetReloadedAfterCrash，谁救的都会发）再装。崩着的时候 agent 的动作反正
+    // 做不成（TabCdpSession 当场判失败）；回来之后的第一个动作会等防护装完（withAgentGuards）。
+    // 已知缺口（刻意留着）：救回来的**第一个**文档自己的脚本跑在防护装好之前（e2e 实测），这一次
+    // 加载里页面若自己调 window.print() 还是原生的 —— 要「先崩、agent 从没接过、agent 把它救回来、
+    // 页面一加载就打印」凑齐才碰得到；堵上它得先导航到 about:blank 装好防护再回去，会多出历史记录
+    if (wc.isCrashed()) {
+      log.info(`Tab ${tabId} is crashed: agent guards wait until the page is reloaded`)
+      const installOnRecovery = (_event: unknown, method: string): void => {
+        if (method !== 'Inspector.targetReloadedAfterCrash') return
+        wc.debugger.off('message', installOnRecovery)
+        onRecovered = null
+        void installAgentGuards(tabId, wc)
+      }
+      onRecovered = installOnRecovery
+      wc.debugger.on('message', installOnRecovery)
+    } else {
+      await installAgentGuards(tabId, wc)
+    }
 
     log.info(`CDP debugger attached (tab ${tabId})`)
     return {
@@ -80,6 +102,7 @@ const factory: CdpTabTransportFactory = {
       detach: async () => {
         wc.debugger.off('message', onMessage)
         wc.debugger.off('detach', onDetach)
+        if (onRecovered) wc.debugger.off('message', onRecovered)
         try {
           wc.debugger.detach()
         } catch {

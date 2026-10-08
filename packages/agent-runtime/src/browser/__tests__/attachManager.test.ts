@@ -1,23 +1,82 @@
 import { describe, it, expect, vi } from 'vitest'
-import { CdpAttachManager, type CdpTabTransport, type SessionEndReason } from '../attachManager'
+import {
+  CdpAttachManager,
+  PAGE_CRASHED_MESSAGE,
+  type CdpTabTransport,
+  type SessionEndReason
+} from '../attachManager'
+import { PAGE_CRASHED_MESSAGE as PACKAGE_PAGE_CRASHED_MESSAGE } from '../../index'
 
 type EventListener = (method: string, params: Record<string, unknown>) => void
+
+/** 一条被扣住的命令：用例决定它什么时候回、回什么 */
+interface Held {
+  resolve: (value: unknown) => void
+  reject: (err: Error) => void
+}
 
 interface FakeTransport {
   transport: CdpTabTransport
   commands: Array<{ method: string; params?: Record<string, unknown> }>
   emit: (method: string, params: Record<string, unknown>) => void
   hasListener: () => boolean
+  /**
+   * 测试侧的「页面崩着」：开着时发给页面的命令（不在 PAGE_SAFE 里）永远不回 —— 与真的崩溃页一样挂住。
+   * 产品的崩溃闸要是漏了，用例就会因为「没有在一拍之内落定」变红，而不是挂到超时
+   */
+  crashed: boolean
+  /** 按方法名的回包（缺省 `{}`） */
+  replies: Record<string, unknown>
+  /** 命令记下之后、回包之前调用（推事件；抛错即命令失败） */
+  react: ((method: string, params?: Record<string, unknown>) => void) | null
+  /** 扣住下一条该方法的命令，交出放行 / 失败的把手 */
+  hold: (method: string) => Held
 }
 
-/** 假 transport：记录命令、可注入 CDP 事件 */
+/** 真的崩溃页上照样能回的命令（浏览器进程自己处理的导航 + Inspector 域）—— 与产品那张表逐项相同 */
+const PAGE_SAFE = new Set([
+  'Page.reload',
+  'Page.navigate',
+  'Page.navigateToHistoryEntry',
+  'Page.getNavigationHistory',
+  'Inspector.enable',
+  'Inspector.disable'
+])
+
+/** 假 transport：记录命令、可注入 CDP 事件；可扣住命令、可装作页面崩着 */
 function fakeTransport(): FakeTransport {
   const commands: Array<{ method: string; params?: Record<string, unknown> }> = []
   let listener: EventListener | null = null
+  const holds = new Map<string, Array<{ held: Held; promise: Promise<unknown> }>>()
+  const ft = {
+    commands,
+    crashed: false,
+    replies: {} as Record<string, unknown>,
+    react: null as FakeTransport['react'],
+    emit: (method: string, params: Record<string, unknown>) => listener?.(method, params),
+    hasListener: () => listener != null,
+    hold: (method: string): Held => {
+      let held!: Held
+      const promise = new Promise<unknown>((resolve, reject) => {
+        held = { resolve, reject }
+      })
+      holds.set(method, [...(holds.get(method) ?? []), { held, promise }])
+      return held
+    }
+  } as Omit<FakeTransport, 'transport'>
   const transport: CdpTabTransport = {
-    sendCommand: vi.fn(async (method, params) => {
+    sendCommand: vi.fn((method: string, params?: Record<string, unknown>) => {
       commands.push({ method, params })
-      return {} as never
+      try {
+        ft.react?.(method, params)
+      } catch (err) {
+        return Promise.reject(err)
+      }
+      const queue = holds.get(method)
+      const next = queue?.shift()
+      if (next) return next.promise as Promise<never>
+      if (ft.crashed && !PAGE_SAFE.has(method)) return new Promise<never>(() => {})
+      return Promise.resolve((method in ft.replies ? ft.replies[method] : {}) as never)
     }),
     onEvent: (fn) => {
       listener = fn
@@ -27,12 +86,42 @@ function fakeTransport(): FakeTransport {
     },
     detach: vi.fn(async () => {})
   }
-  return {
-    transport,
-    commands,
-    emit: (method: string, params: Record<string, unknown>) => listener?.(method, params),
-    hasListener: () => listener != null
+  return Object.assign(ft, { transport }) as FakeTransport
+}
+
+/** 让出事件循环一拍（排上的微任务都跑完） */
+const flush = (): Promise<void> => new Promise<void>((r) => setImmediate(r))
+
+/** 一个 promise 的落定情况（不 await 它：随时读） */
+function track<T>(p: Promise<T>): {
+  settled: () => boolean
+  error: () => unknown
+  value: () => T | undefined
+} {
+  let settled = false
+  let error: unknown
+  let value: T | undefined
+  p.then(
+    (v) => {
+      settled = true
+      value = v
+    },
+    (e) => {
+      settled = true
+      error = e
+    }
+  )
+  return { settled: () => settled, error: () => error, value: () => value }
+}
+
+/** 用例期间进程级的未处理 rejection */
+function watchUnhandledRejections(): { seen: unknown[]; stop: () => void } {
+  const seen: unknown[] = []
+  const onRejection = (reason: unknown): void => {
+    seen.push(reason)
   }
+  process.on('unhandledRejection', onRejection)
+  return { seen, stop: () => void process.off('unhandledRejection', onRejection) }
 }
 
 describe('CdpAttachManager', () => {
@@ -302,5 +391,238 @@ describe('对话框自动处理', () => {
     ft.emit('Page.javascriptDialogOpening', { type: 'confirm' })
     await Promise.resolve()
     expect(ft.commands.some((c) => c.method === 'Page.handleJavaScriptDialog')).toBe(false)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// 页面的渲染进程崩了（CR-U1…U4）：发给页面的命令当场失败，不挂到有人重新加载
+// ═══════════════════════════════════════════════════════════════════════
+
+/** agent 看到的那句话 —— 全文钉在这一处，别处一律 import PAGE_CRASHED_MESSAGE */
+const S =
+  'The page in this tab crashed — bring it back with navigate (nav "reload"), or close the tab with close_tab.'
+
+describe('页面崩溃时的命令闸（CR-U1）', () => {
+  it('CR-U1 那句话的全文；包的入口导出的是同一句', () => {
+    expect(PAGE_CRASHED_MESSAGE).toBe(S)
+    expect(PACKAGE_PAGE_CRASHED_MESSAGE).toBe(S)
+  })
+
+  /** 接上 t1、页面崩掉（测试侧的 transport 也装作崩着：漏网的命令会一直挂着） */
+  async function crashedSession(): Promise<{
+    ft: FakeTransport
+    session: Awaited<ReturnType<CdpAttachManager['session']>>
+  }> {
+    const ft = fakeTransport()
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    expect(ft.commands.map((c) => c.method)).toEqual(['Inspector.enable'])
+    ft.crashed = true
+    ft.emit('Inspector.targetCrashed', {})
+    expect(session.crashed).toBe(true)
+    return { ft, session }
+  }
+
+  type Session = Awaited<ReturnType<CdpAttachManager['session']>>
+
+  it.each<[string, (s: Session) => Promise<unknown>, string | null]>([
+    [
+      'Runtime.evaluate',
+      (s) => s.send('Runtime.evaluate', { expression: '1' }),
+      'Runtime.evaluate'
+    ],
+    [
+      'DOM.describeNode',
+      (s) => s.send('DOM.describeNode', { backendNodeId: 1 }),
+      'DOM.describeNode'
+    ],
+    [
+      'Accessibility.getFullAXTree',
+      (s) => s.send('Accessibility.getFullAXTree'),
+      'Accessibility.getFullAXTree'
+    ],
+    ['Page.enable', (s) => s.send('Page.enable'), 'Page.enable'],
+    ['Page.getFrameTree', (s) => s.send('Page.getFrameTree'), 'Page.getFrameTree'],
+    [
+      'Page.setInterceptFileChooserDialog',
+      (s) => s.send('Page.setInterceptFileChooserDialog', { enabled: true }),
+      'Page.setInterceptFileChooserDialog'
+    ],
+    [
+      'Input.dispatchMouseEvent',
+      (s) => s.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 }),
+      'Input.dispatchMouseEvent'
+    ],
+    [
+      'controller.buildSnapshot',
+      (s) => s.controller.buildSnapshot('u'),
+      'Accessibility.getFullAXTree'
+    ]
+  ])(
+    'CR-U1 崩着时发给页面的 %s → 一拍之内以那句话失败，命令根本没发出去',
+    async (_label, call, method) => {
+      const { ft, session } = await crashedSession()
+      const work = track(call(session))
+      await flush()
+      expect(work.settled(), 'should settle within one flush').toBe(true)
+      expect((work.error() as Error | undefined)?.message).toBe(S)
+      expect(ft.commands.map((c) => c.method)).not.toContain(method)
+      expect(ft.commands.map((c) => c.method)).toEqual(['Inspector.enable'])
+    }
+  )
+
+  it.each([
+    ['Page.reload', { ignoreCache: false }],
+    ['Page.navigate', { url: 'https://a.test/' }],
+    ['Page.navigateToHistoryEntry', { entryId: 3 }],
+    ['Page.getNavigationHistory', undefined],
+    ['Inspector.enable', undefined],
+    ['Inspector.disable', undefined]
+  ])('CR-U1 崩着时 %s 照常发出（参数原样），回 transport 的回包', async (method, params) => {
+    const { ft, session } = await crashedSession()
+    ft.replies[method] = { reply: method }
+    const work = track(session.send(method, params))
+    await flush()
+    expect(work.settled(), 'should settle within one flush').toBe(true)
+    expect(work.error()).toBeUndefined()
+    expect(work.value()).toEqual({ reply: method })
+    expect(ft.commands.at(-1)).toEqual({ method, params })
+  })
+})
+
+describe('崩溃那一刻还在路上的命令（CR-U2）', () => {
+  it('CR-U2 在途的 evaluate 当场以那句话失败、reload 照等它自己的回包；transport 之后再以 Target crashed 拒绝 evaluate 也只看到那句话，没有未处理的 rejection', async () => {
+    const ft = fakeTransport()
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    const heldEval = ft.hold('Runtime.evaluate')
+    const heldReload = ft.hold('Page.reload')
+    const evaluate = track(session.send('Runtime.evaluate', { expression: '1' }))
+    const reload = track(session.send('Page.reload'))
+    await flush()
+    expect(evaluate.settled()).toBe(false)
+    expect(reload.settled()).toBe(false)
+
+    const watch = watchUnhandledRejections()
+    try {
+      ft.emit('Inspector.targetCrashed', {})
+      await flush()
+      expect(evaluate.settled()).toBe(true)
+      expect((evaluate.error() as Error).message).toBe(S)
+      expect(reload.settled()).toBe(false)
+
+      heldReload.resolve({})
+      await flush()
+      expect(reload.settled()).toBe(true)
+      expect(reload.error()).toBeUndefined()
+      expect(reload.value()).toEqual({})
+
+      // 页面被救回来时，挂住的那条才以 Target crashed 失败 —— 调用方早已拿到那句话，不再变
+      heldEval.reject(new Error('Target crashed'))
+      await flush()
+      await flush()
+      expect((evaluate.error() as Error).message).toBe(S)
+      expect(watch.seen).toEqual([])
+    } finally {
+      watch.stop()
+    }
+  })
+})
+
+describe('崩溃 → 救回 → 又崩（CR-U3）', () => {
+  it('CR-U3 崩了：crashed、uid 作废一次；救回来（targetReloadedAfterCrash）：命令照常发出；又崩：又拒；两次崩溃都按顺序进了事件缓冲，救回那条也在', async () => {
+    const ft = fakeTransport()
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    const reset = vi.spyOn(session.controller, 'reset')
+    const cursor = session.eventCursor()
+
+    ft.emit('Inspector.targetCrashed', {})
+    expect(session.crashed).toBe(true)
+    expect(reset).toHaveBeenCalledTimes(1)
+    await expect(session.send('Runtime.evaluate', { expression: '1' })).rejects.toThrow(S)
+
+    ft.emit('Inspector.targetReloadedAfterCrash', {})
+    expect(session.crashed).toBe(false)
+    await session.send('Runtime.evaluate', { expression: '2' })
+    expect(ft.commands.at(-1)).toEqual({
+      method: 'Runtime.evaluate',
+      params: { expression: '2' }
+    })
+
+    ft.emit('Inspector.targetCrashed', {})
+    expect(session.crashed).toBe(true)
+    await expect(session.send('Runtime.evaluate', { expression: '3' })).rejects.toThrow(S)
+    expect(ft.commands.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(1)
+
+    const crashes = session.getEvents({ event: 'Inspector.targetCrashed', sinceSeq: cursor })
+    expect(crashes.entries).toHaveLength(2)
+    expect(crashes.entries[0].seq).toBeLessThan(crashes.entries[1].seq)
+    const reloaded = session.getEvents({
+      event: 'Inspector.targetReloadedAfterCrash',
+      sinceSeq: cursor
+    }).entries
+    expect(reloaded).toHaveLength(1)
+    expect(reloaded[0].seq).toBeGreaterThan(crashes.entries[0].seq)
+    expect(reloaded[0].seq).toBeLessThan(crashes.entries[1].seq)
+  })
+})
+
+describe('attach 之后先问一句页面是不是已经崩了（CR-U4）', () => {
+  it('CR-U4 (a) Inspector.enable 的回包之前就补发 targetCrashed：session() 拿到时已是 crashed，第一条 evaluate 以那句话失败、没发出去', async () => {
+    const ft = fakeTransport()
+    ft.crashed = true
+    ft.react = (method) => {
+      if (method === 'Inspector.enable') ft.emit('Inspector.targetCrashed', {})
+    }
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    expect(ft.commands[0]).toEqual({ method: 'Inspector.enable', params: undefined })
+    expect(session.crashed).toBe(true)
+
+    const work = track(session.send('Runtime.evaluate', { expression: '1' }))
+    await flush()
+    expect((work.error() as Error | undefined)?.message).toBe(S)
+    expect(ft.commands.map((c) => c.method)).toEqual(['Inspector.enable'])
+  })
+
+  it('CR-U4 (b) 回包先到、targetCrashed 下一拍才到，第一条 evaluate 正在路上：它以那句话失败', async () => {
+    const ft = fakeTransport()
+    ft.react = (method) => {
+      if (method === 'Inspector.enable') {
+        setImmediate(() => {
+          ft.crashed = true
+          ft.emit('Inspector.targetCrashed', {})
+        })
+      }
+    }
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    expect(ft.commands[0].method).toBe('Inspector.enable')
+    expect(session.crashed).toBe(false)
+    ft.hold('Runtime.evaluate')
+    const work = track(session.send('Runtime.evaluate', { expression: '1' }))
+    expect(ft.commands.map((c) => c.method)).toEqual(['Inspector.enable', 'Runtime.evaluate'])
+
+    await flush()
+    expect(session.crashed).toBe(true)
+    expect(work.settled()).toBe(true)
+    expect((work.error() as Error).message).toBe(S)
+  })
+
+  it('CR-U4 (c) Inspector.enable 失败：session() 照样拿到、算接管，不算崩，命令照常', async () => {
+    const ft = fakeTransport()
+    ft.react = (method) => {
+      if (method === 'Inspector.enable') throw new Error("'Inspector.enable' wasn't found")
+    }
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    expect(manager.isAttached('t1')).toBe(true)
+    expect(session.crashed).toBe(false)
+    ft.replies['Runtime.evaluate'] = { result: { value: 2 } }
+    await expect(session.send('Runtime.evaluate', { expression: '1 + 1' })).resolves.toEqual({
+      result: { value: 2 }
+    })
+    expect(ft.commands.map((c) => c.method)).toEqual(['Inspector.enable', 'Runtime.evaluate'])
   })
 })

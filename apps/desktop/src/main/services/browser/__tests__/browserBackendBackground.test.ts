@@ -11,15 +11,18 @@
  *           文件框（dialog.showOpenDialog）也没有原生打印（webContents.print）。
  *   DT-3    openTab 等加载时会话结束了（页面一加载就关掉自己的 tab / 调试连接断了，waitForLoad 回 gone）：
  *           回「开了」+ 那个会话结束原因的那句（真的 tabGoneNote），不是失败，也不叫 agent 去 snapshot。
+ *   CR-U15a 页面的渲染进程崩了的 tab：screenshot（视口 / 整页 / 元素）当场以那句话失败 —— 不 capturePage
+ *           （崩溃页只会拍出一张空图）、不为截图接 CDP、不落盘；list_tabs 在 (active) 之后标 (crashed)。
  *
  * 后端、tab 服务、窗口服务、停放窗口都是真的，跑在 ./fakeElectron.ts 的假件上；CDP 会话是个空壳，
  * `browserCdpOps` 里用到的配方换成立即回答的桩 —— 这里只关心「窗口动没动」，不关心配方本身。
  * 截图真的落盘，落在临时目录里（capturePage 回假 PNG 字节）。
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PAGE_CRASHED_MESSAGE } from '@shuvix/agent-runtime'
 import { FAKE_PNG, fakeElectron, type FakeWindow } from './fakeElectron'
 
 vi.mock('electron', async () => (await import('./fakeElectron')).fakeElectron().module)
@@ -239,4 +242,62 @@ describe('openTab：等加载时 tab 没了（DT-3）', () => {
       expect(state.waitForLoad).toHaveBeenCalledTimes(1)
     }
   )
+})
+
+describe('页面崩了的 tab（CR-U15a）', () => {
+  /** 截图落盘目录此刻的文件（没有目录 = 空） */
+  const resultsFiles = (): string[] => {
+    const dir = join(state.ws, '.results')
+    return existsSync(dir) ? readdirSync(dir).sort() : []
+  }
+
+  it.each([
+    ['视口', {}],
+    ['整页', { fullPage: true }],
+    ['元素', { uid: 'e1' }]
+  ])(
+    'CR-U15a screenshot（%s）→ 以那句话失败；不 capturePage、不为截图接 CDP、不落盘',
+    async (_label, shot) => {
+      const views = await import('../browserViewService')
+      const { browserCdpManager } = await import('../browserCdpService')
+      const { createDesktopBrowserBackend } = await import('../browserBackend')
+      views.createTab('https://a.example/', { activate: true })
+      const wc = fx.views[0].webContents
+      wc.crashed = true
+      const backend = createDesktopBrowserBackend('s1')
+      expect((await backend.listTabs()).text).toContain('[t1]')
+      const filesBefore = resultsFiles()
+      vi.mocked(browserCdpManager.session).mockClear()
+
+      await expect(backend.screenshot({ tabId: 't1', ...shot })).rejects.toThrow(
+        PAGE_CRASHED_MESSAGE
+      )
+      expect(wc.capturePage).not.toHaveBeenCalled()
+      expect(browserCdpManager.session).not.toHaveBeenCalled()
+      expect(resultsFiles()).toEqual(filesBefore)
+    }
+  )
+
+  it('CR-U15a list_tabs：崩了的 tab 在 (active) 之后标 (crashed)，没崩的不标', async () => {
+    const views = await import('../browserViewService')
+    const { createDesktopBrowserBackend } = await import('../browserBackend')
+    views.createTab('https://a.test/')
+    views.createTab('https://b.test/')
+    views.createTab('https://c.test/', { activate: true })
+    fx.views[1].webContents.crashed = true
+    fx.views[2].webContents.crashed = true
+
+    const lines = (await createDesktopBrowserBackend('s1').listTabs()).text?.split('\n')
+    expect(lines).toEqual([
+      '[t1] (untitled) — https://a.test/',
+      '[t2] (crashed) (untitled) — https://b.test/',
+      '[t3] (active) (crashed) (untitled) — https://c.test/'
+    ])
+
+    // 页面被救回来：标记跟着没了
+    fx.views[2].webContents.crashed = false
+    expect((await createDesktopBrowserBackend('s1').listTabs()).text?.split('\n')[2]).toBe(
+      '[t3] (active) (untitled) — https://c.test/'
+    )
+  })
 })

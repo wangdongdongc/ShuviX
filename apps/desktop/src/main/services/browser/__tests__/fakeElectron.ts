@@ -126,6 +126,8 @@ export interface FakeViewWebContents {
   loaded: string[]
   zoom: number
   destroyed: boolean
+  /** 渲染进程崩了（isCrashed 读它；用例直接拨） */
+  crashed: boolean
   openHandler: ((details: { url: string }) => unknown) | undefined
   handlers: Map<string, Handler[]>
   setWindowOpenHandler(fn: (details: { url: string }) => unknown): void
@@ -133,6 +135,7 @@ export interface FakeViewWebContents {
   getURL(): string
   getTitle(): string
   isDestroyed(): boolean
+  isCrashed(): boolean
   getZoomFactor: Mock<() => number>
   setZoomFactor: Mock<(zoom: number) => void>
   close: Mock<() => void>
@@ -384,6 +387,7 @@ function create(): FakeElectron {
         loaded: [],
         zoom: 1,
         destroyed: false,
+        crashed: false,
         openHandler: undefined,
         handlers,
         setWindowOpenHandler(fn) {
@@ -396,6 +400,7 @@ function create(): FakeElectron {
         getURL: () => wc.url,
         getTitle: () => '',
         isDestroyed: () => wc.destroyed,
+        isCrashed: () => wc.crashed,
         getZoomFactor: vi.fn(() => wc.zoom),
         setZoomFactor: vi.fn((z: number) => {
           wc.zoom = z

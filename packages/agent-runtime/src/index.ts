@@ -130,6 +130,7 @@ export {
 export {
   CdpAttachManager,
   TabCdpSession,
+  PAGE_CRASHED_MESSAGE,
   type CdpTabTransport,
   type CdpTabTransportFactory,
   type TabCdpState,

@@ -19,6 +19,11 @@
  *   NG-U6  摘除与重装：off 的就是 on 的那个处理函数；待关的定时器清掉；摘了之后的事件不起作用；
  *          没装防护的 tab 动作照跑、不发拦截命令；tab 已销毁时不碰 off；装两次只留一份；跨越摘除 / 重装
  *          的进行中动作结束时不会把新装的那份关掉；hasAgentGuards 跟着装 / 摘变。
+ *   CR-U12 页面崩着（wc.isCrashed()）：动作当场开始、不发「打开拦截」（那条命令在崩溃页上一直挂着）；
+ *          页面回来之后宽限期里的下一个动作照常先打开；收到 Inspector.targetCrashed 之后，宽限期里的
+ *          下一个动作重新打开（救回来的渲染进程未必还拦着）。
+ *   CR-U13 安装还没装完（Page.enable 迟迟不回）时来的动作先等它：装完按序打开拦截、再开始；
+ *          Page.enable 失败也照样落定，动作照跑。
  *
  * electron 换成 ./fakeElectron.ts（只用到 dialog）；browserViewService 只剩 browserWindowInFront 一个
  * 可拨的间谍；logger 的四个方法是间谍。模块级的防护表每条用例都要新的：beforeEach 里 resetModules，
@@ -63,6 +68,9 @@ interface FakeWc {
   >
   destroyed: boolean
   isDestroyed(): boolean
+  /** 渲染进程崩了（isCrashed 读它；用例直接拨） */
+  crashed: boolean
+  isCrashed(): boolean
 }
 
 function fakeWc(): FakeWc {
@@ -70,7 +78,9 @@ function fakeWc(): FakeWc {
     debugger: createFakeDebugger(),
     print: vi.fn<(opts: unknown, cb?: (ok: boolean, reason: string) => void) => void>(),
     destroyed: false,
-    isDestroyed: () => wc.destroyed
+    isDestroyed: () => wc.destroyed,
+    crashed: false,
+    isCrashed: () => wc.crashed
   }
   return wc
 }
@@ -775,5 +785,160 @@ describe('摘除与重装（NG-U6）', () => {
     await p
     await vi.advanceTimersByTimeAsync(GRACE * 2)
     expect(intercepts(wc)).toEqual([true])
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// 页面崩了（CR-U12 / CR-U13）
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('崩着的页面上不打开文件框拦截（CR-U12）', () => {
+  /** 拦截命令像在真的崩溃页上那样：崩着的时候一直挂着不回 */
+  function hangInterceptWhileCrashed(wc: FakeWc): void {
+    wc.debugger.sendCommand.mockImplementation((method: string) =>
+      method === INTERCEPT && wc.crashed ? new Promise(() => {}) : Promise.resolve({})
+    )
+  }
+
+  it('CR-U12 崩着时的动作：一拍之内就开始、照常结束，一次「打开」都没发；页面回来之后宽限期里的下一个动作先打开拦截再开始', async () => {
+    vi.useFakeTimers()
+    const g = await load()
+    const wc = fakeWc()
+    await install(g, 't1', wc)
+    hangInterceptWhileCrashed(wc)
+
+    wc.crashed = true
+    const op = deferredOp('during-crash')
+    const p = g.withAgentGuards('t1', op.op)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(op.started).toBe(true)
+    op.finish()
+    await expect(p).resolves.toEqual({ result: 'during-crash', suppressed: [] })
+    expect(intercepts(wc)).not.toContain(true)
+
+    // 页面被救回来，宽限期还没过：下一个动作先把拦截打开
+    wc.crashed = false
+    await vi.advanceTimersByTimeAsync(1000)
+    const timeline: string[] = []
+    wc.debugger.sendCommand.mockImplementation(async (method: string) => {
+      timeline.push(method)
+      return {}
+    })
+    await g.withAgentGuards('t1', async () => {
+      timeline.push('op')
+      return 'after'
+    })
+    expect(timeline).toEqual([INTERCEPT, 'op'])
+    expect(commands(wc).filter(([m]) => m === INTERCEPT)).toEqual([[INTERCEPT, { enabled: true }]])
+    expect(intercepts(wc)).toEqual([true])
+  })
+
+  it('CR-U12 打开过拦截之后页面崩了（Inspector.targetCrashed）：宽限期里的下一个动作重新打开 —— 救回来的渲染进程未必还拦着', async () => {
+    vi.useFakeTimers()
+    const g = await load()
+    const wc = fakeWc()
+    await install(g, 't1', wc)
+    await g.withAgentGuards('t1', async () => 'before')
+    expect(intercepts(wc)).toEqual([true])
+
+    // 对照：没崩时宽限期里的动作不重复打开
+    await vi.advanceTimersByTimeAsync(1000)
+    await g.withAgentGuards('t1', async () => 'still armed')
+    expect(intercepts(wc)).toEqual([true])
+
+    wc.debugger.message('Inspector.targetCrashed')
+    await vi.advanceTimersByTimeAsync(1000)
+    let seenAtStart: boolean[] = []
+    await g.withAgentGuards('t1', async () => {
+      seenAtStart = intercepts(wc)
+      return 'after crash'
+    })
+    expect(seenAtStart).toEqual([true, true])
+    expect(commands(wc).filter(([m]) => m === INTERCEPT)).toEqual([
+      [INTERCEPT, { enabled: true }],
+      [INTERCEPT, { enabled: true }]
+    ])
+  })
+})
+
+describe('动作先等防护装完（CR-U13）', () => {
+  /** Page.enable 扣住不回，交出放行 / 失败的把手；其余命令进时间线、立即回 */
+  function holdPageEnable(
+    wc: FakeWc,
+    timeline: string[]
+  ): {
+    release: () => void
+    fail: (e: Error) => void
+  } {
+    let release!: () => void
+    let fail!: (e: Error) => void
+    const held = new Promise((resolve, reject) => {
+      release = () => resolve({})
+      fail = reject
+    })
+    wc.debugger.sendCommand.mockImplementation(async (method: string) => {
+      timeline.push(method)
+      if (method === 'Page.enable') return held
+      return {}
+    })
+    return { release, fail }
+  }
+
+  it('CR-U13 安装还在等 Page.enable 时来了一个动作：动作不开始、不打开拦截；放行之后按序 Page.enable → Runtime.enable → addBinding → 新文档脚本 → 打开拦截 → 动作', async () => {
+    const g = await load()
+    const wc = fakeWc()
+    const timeline: string[] = []
+    const { release } = holdPageEnable(wc, timeline)
+
+    const installing = g.installAgentGuards('t1', wc as never)
+    const op = deferredOp('x')
+    const wrapped = g.withAgentGuards('t1', async () => {
+      timeline.push('op')
+      return op.op()
+    })
+    await flush()
+    await flush()
+    expect(op.started).toBe(false)
+    expect(intercepts(wc)).toEqual([])
+    expect(timeline).toEqual(['Page.enable'])
+
+    release()
+    await installing
+    await flush()
+    expect(op.started).toBe(true)
+    expect(timeline).toEqual([
+      'Page.enable',
+      'Runtime.enable',
+      'Runtime.addBinding',
+      'Page.addScriptToEvaluateOnNewDocument',
+      INTERCEPT,
+      'op'
+    ])
+    expect(commands(wc).filter(([m]) => m === INTERCEPT)).toEqual([[INTERCEPT, { enabled: true }]])
+    op.finish()
+    await expect(wrapped).resolves.toEqual({ result: 'x', suppressed: [] })
+  })
+
+  it('CR-U13 Page.enable 失败：安装照样落定（记 warn），等着的动作照样跑', async () => {
+    const g = await load()
+    const wc = fakeWc()
+    const timeline: string[] = []
+    const { fail } = holdPageEnable(wc, timeline)
+
+    const installing = g.installAgentGuards('t1', wc as never)
+    const ran = vi.fn(async () => {
+      timeline.push('op')
+      return 'ran'
+    })
+    const wrapped = g.withAgentGuards('t1', ran)
+    await flush()
+    expect(ran).not.toHaveBeenCalled()
+
+    fail(new Error('Target crashed'))
+    await expect(installing).resolves.toBeUndefined()
+    await expect(wrapped).resolves.toEqual({ result: 'ran', suppressed: [] })
+    expect(ran).toHaveBeenCalledTimes(1)
+    expect(logged('warn', 'installing agent guards on tab t1 failed')).toBe(1)
+    expect(timeline).toEqual(['Page.enable', INTERCEPT, 'op'])
   })
 })
