@@ -36,6 +36,9 @@
  *    记录都留着，按需重建，PIN-03）；`continue` = 追问（`whenBusy: 'reject'`，没有 requestId，PIN-12）。
  *    中止次序沿用会话的那一套（关询问窗口 → 中止前 seam → 取消挂起的询问 → 中止对话，PIN-04），从不
  *    记「显式喊停」；子对话停下之后重开询问窗口（根的 run 可能还在跑，它的询问不该被一直挡着）。
+ *  - **hook agent 用完即卸**：宿主派发的子 agent（`dispatch: 'hook'`）在那次派发 / 面板追问落定之后就卸掉
+ *    按 agent 扩展（`unloadHosted`）。它是一次性的 —— 宿主派发从不重新挂上，没人再往它的工具表里调；而监控
+ *    面板列的是「此刻装着的」，不卸就是每起一次标题、每审查一次多一行闲着的。转写与记录照留（任务行、追问照常）。
  *  - **重建**：`ensureInstalled(子对话)` 按记录重建按 agent 的工具（`rebuildAgentTools(record, {sessionId,
  *    extraTools: resultContractTools(record.resultContract)})`），附加工具显式拼进去
  *    （`agentExtensionTools(set)` 不读 `set.extraTools`）。打开时的重建由 DurableSession 调
@@ -795,11 +798,15 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     logger.info(
       `session ${sessionId}: host-dispatched agent=${agentId} profile=${profile.name} hook=${hosted.hook ?? ''} conversation=${child} owner=${'task' in owner ? 'task' : 'anchor'}:${record.ownerTaskId}`
     )
-    return this.drive(params, record, false, context, {
-      requestId: hosted.requestId ?? `hook:${agentId}`,
-      conversation: (id) => host.harness.conversation(id, BG),
-      hosted: true
-    })
+    try {
+      return await this.drive(params, record, false, context, {
+        requestId: hosted.requestId ?? `hook:${agentId}`,
+        conversation: (id) => host.harness.conversation(id, BG),
+        hosted: true
+      })
+    } finally {
+      this.unloadHosted(child)
+    }
   }
 
   private async reattach(
@@ -1098,6 +1105,24 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     } catch (error) {
       const message = errorText(error)
       return { result: message, error: message, ...ids }
+    } finally {
+      // 追问前 ensureInstalled 把 hook agent 装回来了：这一轮落定就再卸掉
+      if (record.dispatch === 'hook') this.unloadHosted(child)
+    }
+  }
+
+  /**
+   * hook agent 收尾：卸掉它的按 agent 扩展（见文件头「hook agent 用完即卸」）。子对话上还有活任务（忙着拒了
+   * 追问的那一轮）就不动 —— 它还在跑；会话已关同样不动（扩展表随句柄一起没了）。从不抛：收尾失败不改派发结果。
+   */
+  private unloadHosted(child: ConversationId): void {
+    try {
+      if (this.host.isClosed() || this.host.liveTasksOf(child).length > 0) return
+      this.host.registry.uninstall({ name: agentExtensionName(child) })
+    } catch (error) {
+      this.host.logger.warn(
+        `session ${this.host.sessionId}: unloading hook agent conversation ${child} failed: ${errorText(error)}`
+      )
     }
   }
 

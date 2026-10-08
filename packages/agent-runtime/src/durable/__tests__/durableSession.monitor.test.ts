@@ -4,8 +4,9 @@
  *
  *  01 没锁也没派生 → [] · 02 根的一行（身份、模型、活的思考档位、工具数、闲着、空队列；模型从注册表里没了
  *  → 窗口 0）· 03 相位与在跑的工具（turn / 工具槽 / 询问 / compaction / 回到 idle；从不 branch_summary）·
- *  04 被中断（PIN-05）· 05 列哪些派生（PIN-02：装着扩展或有活任务，hook 也算；销毁的不列；重开之后闲着的
- *  不列，ensureInstalled 之后回来；崩在半路的子 agent 重开后列为 interrupted）· 06 缓存、上下文、自己的花费 ·
+ *  04 被中断（PIN-05）· 05 列哪些派生（PIN-02：装着扩展或有活任务；销毁的、跑完的 hook agent 不列，干着活的
+ *  hook agent 列着；重开之后闲着的不列，ensureInstalled 之后回来；崩在半路的子 agent 重开后列为 interrupted）·
+ *  06 缓存、上下文、自己的花费 ·
  *  07 重试 / 压缩 / 中止都算花费（Q-P3-08）· 08 会话花费含起标题与审查 · 09 回退 fork 之后 · 10 队列计数 ·
  *  11 只读且廉价（不提交、不挂投影、不调重建 seam、不开启调度器、不改 evictable、不刷新 LRU）· 12 已关的句柄 ·
  *  17 lastActivityAt（PIN-07：在跑 = 此刻；否则最新一条条目的消息时间，没有就是 startedAt）
@@ -190,7 +191,7 @@ describe('P3-13 runtime · root row', () => {
 })
 
 describe('P3-13 runtime · spawned rows (PIN-02)', () => {
-  it('P3-13-05 loaded spawned agents are listed (tool A, grandchild B, hook H), a destroyed one is not; after a reopen only ensureInstalled brings A back', async () => {
+  it('P3-13-05 loaded spawned agents are listed (tool A, grandchild B); a destroyed one and a finished hook agent H are not; after a reopen only ensureInstalled brings A back', async () => {
     const rig = await hookRig({
       dispatchProfiles: { nester: PROFILES.nester, explore: PROFILES.explore }
     })
@@ -222,14 +223,13 @@ describe('P3-13 runtime · spawned rows (PIN-02)', () => {
 
     const rows = await session.monitorSnapshot()
     const spawned = rows.filter((row) => row.kind === 'spawned')
-    expect(spawned.map((row) => row.agentId).sort()).toEqual(
-      [A.agentId, B.agentId, H.agentId].sort()
-    )
+    expect(spawned.map((row) => row.agentId).sort()).toEqual([A.agentId, B.agentId].sort())
     expect(rows.map((row) => row.agentId)).not.toContain(D.agentId)
+    // hook agent 用完即卸（spawn.ts）：跑完的起标题不再是一行闲着的
+    expect(rows.map((row) => row.agentId)).not.toContain(H.agentId)
     for (const [record, parent, dispatch] of [
       [A, 's1', 'tool'],
-      [B, A.agentId, 'tool'],
-      [H, 's1', 'hook']
+      [B, A.agentId, 'tool']
     ] as const) {
       const row = spawned.find((candidate) => candidate.agentId === record.agentId)!
       expect(row).toMatchObject({
@@ -259,6 +259,57 @@ describe('P3-13 runtime · spawned rows (PIN-02)', () => {
     const back = (await reopened.monitorSnapshot()).filter((row) => row.kind === 'spawned')
     expect(back.map((row) => row.agentId)).toEqual([A.agentId])
     expect(back[0]!.phase).toBe('idle')
+  })
+
+  it('P3-13-05 a hook agent is listed while it works (a held titler; a held reviewer beside the root asking) and gone once it settles', async () => {
+    const rig = await hookRig()
+    const session = rig.session
+    const titler = held(answer('A Title'))
+    queueRoles(rig.kit, { titler: [titler.step] })
+    rig.runner.fire('session.prompt-accepted', promptPayload())
+    await titler.reached
+    const H = session.spawnedRecords().find((record) => record.dispatch === 'hook')!
+    const working = (await session.monitorSnapshot()).filter((row) => row.kind === 'spawned')
+    expect(working.map((row) => row.agentId)).toEqual([H.agentId])
+    expect(working[0]).toMatchObject({
+      kind: 'spawned',
+      dispatch: 'hook',
+      parentAgentId: 's1',
+      depth: 1,
+      profileName: 'titler',
+      displayName: 'Titler',
+      conversationId: H.conversationId,
+      startedAt: H.createdAt,
+      phase: 'turn'
+    })
+    titler.release()
+    await waitFor(() => rig.ends().length === 1, 5000, 'titler ended')
+    // runner 等过 runTask：此刻已经卸掉，不用再等
+    expect((await session.monitorSnapshot()).map((row) => row.agentId)).not.toContain(H.agentId)
+
+    // 审查员：根的 askOp 任务拥有它，跑着时与根那一行（工具槽 askOp）并列
+    const reviewer = held(
+      callTool('next', { decision: 'allow', risk: 'low', summary: 's', reason: 'r' }, 'call-next')
+    )
+    queueRoles(rig.kit, {
+      root: [callTool('askOp'), answer('root done')],
+      reviewer: [reviewer.step]
+    })
+    const sent = session.submitUser('clean the build directory')
+    await reviewer.reached
+    const rows = await session.monitorSnapshot()
+    expect(rows.filter((row) => row.kind === 'spawned')).toEqual([
+      expect.objectContaining({
+        dispatch: 'hook',
+        profileName: 'permission-reviewer',
+        parentAgentId: 's1',
+        phase: 'turn'
+      })
+    ])
+    expect(rootRow(rows)).toMatchObject({ activeToolName: 'askOp' })
+    reviewer.release()
+    expect(await sent).toEqual({})
+    expect((await session.monitorSnapshot()).map((row) => row.kind)).toEqual(['root'])
   })
 
   it('P3-13-05 a child that crashed mid-run is listed after the reopen, interrupted', async () => {
@@ -378,6 +429,8 @@ describe('P3-13 runtime · usage, cost and context', () => {
     }
     expect(rootRow(rows).sessionCost).toBeCloseTo(summed, 12)
     expect(rootRow(rows).cost.total).toBeCloseTo(2 * prices.root, 12)
+    // titler 与审查员都已卸掉、不再列着 —— 它们的花费照样算在会话里
+    expect(rows.map((row) => row.kind)).toEqual(['root'])
   })
 
   it('P3-13-09 after a rollback: the root row is the fork with its own cost 0; sessionCost keeps the abandoned branch; context follows the fork', async () => {

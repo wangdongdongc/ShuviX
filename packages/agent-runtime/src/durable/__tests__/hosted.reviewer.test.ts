@@ -31,6 +31,7 @@ import { spawnedAgentRecordOf } from '../agentRecord'
 import { backgroundContext as BG } from '../context'
 import { AgentStateDoc, SessionStateDoc } from '../docs'
 import type { DurableSession } from '../durableSession'
+import { agentExtensionName } from '../lock'
 import { answer, callTool, held, stalled } from './support/faux'
 import { registerHostCleanup } from './support/host'
 import {
@@ -45,6 +46,7 @@ import {
   rigConfig,
   type HookRig
 } from './support/hookRig'
+import { extensionTools } from './support/scenario'
 import {
   callAgent,
   dispatchTask,
@@ -408,6 +410,10 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
         { status: 'terminal', outcome: { status: 'aborted' } }
       ])
       expect(await reviewerOf(session, task)).toEqual([R])
+      // 进程 2 里不再列它，也没装它的扩展
+      const agentId = (await spawnedAgentRecordOf(session.harness, R!, BG))!.agentId
+      expect((await session.monitorSnapshot()).map((row) => row.agentId)).not.toContain(agentId)
+      expect(extensionTools(next2.t, agentExtensionName(R!))).toBeUndefined()
     },
     RESTART_TIMEOUT
   )

@@ -3,8 +3,9 @@
  *
  * 列哪些（PIN-02）：锁着时的根 agent（锁所在的对话），以及**加载在这个 Harness 里**的派生 agent —— 它的
  * `shuvix.agent.<conv>` 扩展装着（派发 / 追问 / 打开时重建 / `ensureInstalled` 都会装，销毁会卸），或者它的
- * 对话上有活任务。hook agent 也算。durable 永远留着每一次起标题、每一次审查的对话，按记录全列会让重开过的
- * 会话越列越长；闲着、没装的历史 agent 不列（详情照样能按 agentId 读，见宿主）。
+ * 对话上有活任务。hook agent 也算，但它用完即卸（spawn.ts），所以只在干活时出现。durable 永远留着每一次起
+ * 标题、每一次审查的对话，按记录全列会让会话越列越长；闲着、没装的历史 agent 不列（详情照样能按 agentId 读，
+ * 见宿主）。
  *
  * 数从哪来（每行一个对话）：
  *  - 相位：会话自己维护的活任务表（`pi.generation` → turn、`pi.compaction` → compaction；调度器停着时留下的

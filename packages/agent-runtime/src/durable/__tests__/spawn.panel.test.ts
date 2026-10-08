@@ -1,6 +1,7 @@
 /**
  * SpawnCoordinator · 面板：软停止 / 销毁 / 追问（P2-03，H 段 42–49）。软停止 = 中止子对话、保留部分结果；
- * 销毁 = 硬中止 + 卸掉扩展（转写、记录、身份都留着，PIN-03）；追问 = 没有 requestId、忙就拒绝（PIN-12）。
+ * 销毁 = 硬中止 + 卸掉扩展（转写、记录、身份都留着，PIN-03）；追问 = 没有 requestId、忙就拒绝（PIN-12），
+ * 落定之后照样装着（用完即卸只管 hook agent，见 hosted.unload.test.ts）。
  */
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { ConversationId, SubmissionRecord } from '@earendil-works/pi-durable'
@@ -41,6 +42,13 @@ function taskChanges(
 
 async function childLines(d: HostD, C: ConversationId): Promise<string[]> {
   return transcript((await d.session.harness.conversation(C, BG))!)
+}
+
+/** 工具派发的子 agent 追问落定之后：扩展还装着、监控面板还列着它（闲着）—— 用完即卸只管 hook agent */
+async function expectStillLoaded(d: HostD, C: ConversationId): Promise<void> {
+  expect(extensionTools(d.t, `shuvix.agent.${C}`)).toEqual(['probe'])
+  const row = (await d.session.monitorSnapshot()).find((r) => r.conversationId === C)
+  expect(row).toMatchObject({ kind: 'spawned', dispatch: 'tool', phase: 'idle' })
 }
 
 describe('SpawnCoordinator · interrupt', () => {
@@ -151,6 +159,7 @@ describe('SpawnCoordinator · destroy', () => {
     )
     expect(d.t.toolHost.rebuildContexts.at(-1)).toEqual({ sessionId: 's1', extraTools: [] })
     expect(d.t.kit.requests.at(-1)!.tools.map((tool) => tool.name)).toEqual(['probe'])
+    await expectStillLoaded(d, C)
   })
 })
 
@@ -184,6 +193,7 @@ describe('SpawnCoordinator · continue', () => {
     expect(await transcript(await d.session.currentConversation())).toEqual(rootBefore)
     await waitFor(() => d.t.statesOf('s1').length >= states + 2, 3000, 'states')
     expect(d.t.statesOf('s1').slice(states)).toEqual(['busy', 'idle'])
+    await expectStillLoaded(d, C)
   })
 
   it('P2-03-47 continue while busy: error with the busy detail; no second pi.user', async () => {
