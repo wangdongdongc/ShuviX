@@ -68,6 +68,14 @@ export interface RawEventEntry {
   truncatedFrom?: number
 }
 
+/**
+ * 会话为什么结束了：`tab-closed` = 那个 tab 没了（页面自己 window.close()、被关掉）；`detached` = tab 也许
+ * 还在，只是调试连接没了（用户点掉横幅、连接换了、主动释放）—— 下一次动作会重新 attach。
+ * 宿主在报外部断开时按它知道的事实给（桌面：webContents.debugger 的 detach 原因；扩展：
+ * chrome.debugger.onDetach 的原因 / tabs.onRemoved）。
+ */
+export type SessionEndReason = 'tab-closed' | 'detached'
+
 /** 一个 tab 的 CDP 状态快照（宿主 UI 标识用）：attached=agent 已接入；intercepting=请求拦截生效中 */
 export interface TabCdpState {
   attached: boolean
@@ -94,6 +102,7 @@ export class TabCdpSession {
   /** 对话框自动处理开关（默认自动 dismiss，避免 alert/confirm 卡死自动化链） */
   private autoDismissDialogs = true
   private dialogEnabled = false
+  private endReason: SessionEndReason | null = null
 
   constructor(
     private transport: CdpTabTransport,
@@ -109,6 +118,14 @@ export class TabCdpSession {
     // 只在命令成功后记账：失败的 Fetch.enable 不应点亮拦截标识
     this.trackInterception(method, params)
     return result
+  }
+
+  /**
+   * 会话已结束时的原因（否则 null）。结束之后这条通道再不会有回音 —— 等页面的循环（等加载、等文字）
+   * 看到它就该收手，而不是把「读不到页面」当成「正在导航」一直等到超时。
+   */
+  get ended(): SessionEndReason | null {
+    return this.endReason
   }
 
   /** 请求拦截是否生效（该 tab 加载的内容可能被 agent 修改/替换） */
@@ -204,7 +221,8 @@ export class TabCdpSession {
   // ====== 生命周期 ======
 
   /** 清理本地状态（不调 transport.detach）—— 外部断开时用 */
-  disposeLocal(): void {
+  disposeLocal(reason: SessionEndReason = 'detached'): void {
+    this.endReason ??= reason
     this.unsubscribe()
     this.controller.reset()
     this.networkEntries = []
@@ -381,12 +399,12 @@ export class CdpAttachManager {
     await Promise.all([...this.sessions.keys()].map((tabId) => this.detach(tabId)))
   }
 
-  /** 外部断开（用户点掉横幅 / 开 DevTools / tab 关闭）→ 只清本地状态 */
-  handleExternalDetach(tabId: string): void {
+  /** 外部断开（用户点掉横幅 / 开 DevTools / tab 关闭）→ 只清本地状态；reason 见 SessionEndReason */
+  handleExternalDetach(tabId: string, reason: SessionEndReason = 'detached'): void {
     const session = this.sessions.get(tabId)
     if (!session) return
     this.sessions.delete(tabId)
-    session.disposeLocal()
+    session.disposeLocal(reason)
     this.onStateChange?.(tabId)
   }
 

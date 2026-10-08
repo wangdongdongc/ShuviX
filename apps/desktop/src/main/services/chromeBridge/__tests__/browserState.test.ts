@@ -6,9 +6,11 @@
  *   CBST-3…5   CDP 传输：并发 attach 只一次、命令每次现取连接（重连后换对象不重新接管）、
  *              没连着时 attach 失败且下一次重试；
  *   CBST-6…8   事件：只进被接管的那个 tab；模块的扩展事件钩子只到那个浏览器、不建状态；
- *              外部断开 / 标签页关了只清本地记账，不发 detach，下一次操作重新接管；
+ *              外部断开 / 标签页关了只清本地记账，不发 detach，下一次操作重新接管；手里那个会话记下
+ *              结束的原因（target_closed / 标签页关了 = tab-closed，别的 detach 原因 = detached）；
  *   CBST-9…10  租约：整个浏览器没有在跑的轮次才释放全部调试；resetDebuggers 只忘接管、不动轮次；
- *   CBST-11    钩子：当前连接断开 / 新连接就绪才归零；被顶替的旧连接迟到的断开不动新连接的记账；
+ *   CBST-11    钩子：当前连接断开 / 新连接就绪才归零（手里的会话以 detached 结束）；被顶替的旧连接
+ *              迟到的断开不动新连接的记账（手里的会话没结束）；
  *   CBST-12    forgetSession：标签组、轮次、站点授权、还在路上的并组一并作废；
  *   CBST-13    没连着时的 detach 安静地结束（包括 detach 请求本身失败）；
  *   JG-1…4     joinGroup：同一会话串行、ensure 拿到当前组 id、失败只拒那一次、不同会话互不等待；
@@ -19,6 +21,7 @@
  * 每个用例用自己的 installId / 会话 id。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
+import type { SessionEndReason } from '@shuvix/agent-runtime'
 import type { BridgeHello } from '@shuvix/chat-protocol/chromeBridge'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 
@@ -321,26 +324,31 @@ describe('CDP 事件与外部断开', () => {
     expect(existingChromeBrowserState(z)).toBeUndefined()
   })
 
-  it.each<[string, Record<string, unknown>]>([
-    ['debugger.detached', { tabId: 7, reason: 'canceled_by_user' }],
-    ['tabs.removed', { tabId: 7 }]
+  it.each<[string, Record<string, unknown>, SessionEndReason]>([
+    ['debugger.detached', { tabId: 7, reason: 'target_closed' }, 'tab-closed'],
+    ['debugger.detached', { tabId: 7, reason: 'canceled_by_user' }, 'detached'],
+    ['tabs.removed', { tabId: 7 }, 'tab-closed']
   ])(
-    'CBST-8 %s → 只清本地记账（不发 detach），别的 tab 不动；下一次操作重新 attach',
-    async (name, params) => {
+    'CBST-8 %s %j → 只清本地记账（不发 detach），手里的会话以 %s 结束；别的 tab 不动；下一次操作重新 attach',
+    async (name, params, reason) => {
       const id = iid()
       const conn = connect(id)
       const state = chromeBrowserState(id)
-      await state.cdp.session('7')
-      await state.cdp.session('8')
+      const seven = await state.cdp.session('7')
+      const eight = await state.cdp.session('8')
 
       chromeBridge.dispatchEvent(asConn(conn), name, params)
       expect(state.cdp.isAttached('7')).toBe(false)
       expect(state.cdp.isAttached('8')).toBe(true)
+      expect(seven.ended).toBe(reason)
+      expect(eight.ended).toBeNull()
       await settle()
       expect(paramsOf(conn, 'debugger.detach')).toEqual([])
 
-      await state.cdp.session('7')
+      const again = await state.cdp.session('7')
       expect(paramsOf(conn, 'debugger.attach')).toEqual([{ tabId: 7 }, { tabId: 8 }, { tabId: 7 }])
+      expect(again).not.toBe(seven)
+      expect(again.ended).toBeNull()
     }
   )
 })
@@ -435,8 +443,8 @@ describe('连接钩子：什么时候把接管记账归零', () => {
     const connY = connect(y)
     const sx = chromeBrowserState(x)
     const sy = chromeBrowserState(y)
-    await sx.cdp.session('7')
-    await sy.cdp.session('7')
+    const heldX = await sx.cdp.session('7')
+    const heldY = await sy.cdp.session('7')
 
     // 桥先把它从登记表里摘掉，再回调钩子（release 的顺序）
     conns.delete(x)
@@ -444,6 +452,9 @@ describe('连接钩子：什么时候把接管记账归零', () => {
 
     expect(sx.cdp.isAttached('7')).toBe(false)
     expect(sy.cdp.isAttached('7')).toBe(true)
+    // 正在等那个页面的动作得知：调试连接没了（tab 也许还在）
+    expect(heldX.ended).toBe('detached')
+    expect(heldY.ended).toBeNull()
     await settle()
     expect(paramsOf(connX, 'debugger.detach')).toEqual([])
     expect(paramsOf(connY, 'debugger.detach')).toEqual([])
@@ -454,10 +465,11 @@ describe('连接钩子：什么时候把接管记账归零', () => {
     const old = connect(x)
     const state = chromeBrowserState(x)
     const fresh = connect(x)
-    await state.cdp.session('7')
+    const held = await state.cdp.session('7')
 
     chromeBridge.release(asConn(old), true)
     expect(state.cdp.isAttached('7')).toBe(true)
+    expect(held.ended).toBeNull()
 
     // 新连接上的命令照常：没有重新接管
     await state.cdp.session('7')
@@ -480,14 +492,16 @@ describe('连接钩子：什么时候把接管记账归零', () => {
     connect(y)
     const sx = chromeBrowserState(x)
     const sy = chromeBrowserState(y)
-    await sx.cdp.session('7')
-    await sy.cdp.session('7')
+    const heldX = await sx.cdp.session('7')
+    const heldY = await sy.cdp.session('7')
 
     const freshX = connect(x)
     chromeBridge.announceReady(asConn(freshX), helloOf(freshX))
 
     expect(sx.cdp.isAttached('7')).toBe(false)
     expect(sy.cdp.isAttached('7')).toBe(true)
+    expect(heldX.ended).toBe('detached')
+    expect(heldY.ended).toBeNull()
     await settle()
     expect(paramsOf(oldX, 'debugger.detach')).toEqual([])
     expect(paramsOf(freshX, 'debugger.detach')).toEqual([])

@@ -133,6 +133,7 @@ export {
   type CdpTabTransport,
   type CdpTabTransportFactory,
   type TabCdpState,
+  type SessionEndReason,
   type NetworkEntry,
   type ConsoleEntry,
   type RawEventEntry

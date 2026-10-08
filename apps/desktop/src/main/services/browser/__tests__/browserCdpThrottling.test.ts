@@ -13,6 +13,9 @@
  *          (d) 主动 detach / 外部断开 / detachAll 都 off 掉防护的那个处理函数；断开之后的
  *              Page.fileChooserOpened 不引出任何 setInterceptFileChooserDialog，之后的动作也不再拦；
  *          全程仍然没有 setBackgroundThrottling。
+ *   DT-1   debugger 的 detach 事件带的原因 → 手里那个会话结束的原因：`target closed`（调试目标没了 ——
+ *          页面自己 window.close()、tab 被关掉）= tab-closed，别的 = detached；只清本地状态，下一次
+ *          session() 是个没结束的新会话。
  *
  * 为什么钉节流：浏览器窗口懒创建、以隐藏态起步，agent 完全可能在它第一次露面之前就 attach。
  * 那时候运行期调 setBackgroundThrottling 会永久弄坏该 webContents 的 capturePage（截图工具与
@@ -252,6 +255,28 @@ describe('browserCdpService：每次 attach 都装好防护，每条断开的路
       expect(out).toEqual({ result: 'ran', suppressed: [] })
       expect(methods()).not.toContain(INTERCEPT)
       expect(methods()).not.toContain('DOM.setFileInputFiles')
+    }
+  )
+})
+
+describe('browserCdpService：debugger 的 detach 原因 → 会话结束的原因（DT-1）', () => {
+  it.each([
+    ['target closed', 'tab-closed'],
+    ['canceled_by_user', 'detached']
+  ])(
+    'DT-1 detach 原因 %j → 手里那个会话 ended = %s；不调 detach；下一次 session() 是个没结束的新会话',
+    async (reason, expected) => {
+      const s = await browserCdpManager.session('t')
+      expect(s.ended).toBeNull()
+
+      dbg.emit('detach', {}, reason)
+      expect(s.ended).toBe(expected)
+      expect(browserCdpManager.isAttached('t')).toBe(false)
+      expect(dbg.detach).not.toHaveBeenCalled()
+
+      const next = await browserCdpManager.session('t')
+      expect(next).not.toBe(s)
+      expect(next.ended).toBeNull()
     }
   )
 })

@@ -22,7 +22,7 @@
  *   NG-U10  (a) browserBackend.ts 里每一处 `browserCdpOps.X(` 调用都在传给 `this.guarded(` 的函数字面量里
  *               —— 只读 / 不会打开文件框的那几个除外（snapshotOp / readPageOp / waitForOp / networkOp /
  *               consoleOp / eventsOp / uploadFileOp，以及 openTab 里的 waitForLoad / markDocument /
- *               loadNote）。新加一个会点、会按键、会跑页面脚本的动作却忘了包，文件框就会从后台弹出来；
+ *               loadNote / tabGoneNote）。新加一个会点、会按键、会跑页面脚本的动作却忘了包，文件框就会从后台弹出来；
  *           (b) services/browser/*.ts 里调用 `showOpenDialog(` 与 `.print(` 的只有 agentGuards.ts ——
  *               原生文件框与原生打印框只能从那道「用户正看着浏览器窗口」的判断后面出来。
  *
@@ -190,7 +190,8 @@ const UNGUARDED_OPS = new Set([
   'uploadFileOp',
   'waitForLoad',
   'markDocument',
-  'loadNote'
+  'loadNote',
+  'tabGoneNote'
 ])
 
 /** node 是否在一个直接作为参数传给 `this.guarded(…)` 的函数字面量里 */

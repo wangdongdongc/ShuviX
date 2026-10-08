@@ -178,6 +178,13 @@ class DesktopBrowserBackend implements BrowserBackend {
       }
     }
     if (load.state === 'failed') return failed()
+    if (load.state === 'gone') {
+      // 页面一加载就把自己的 tab 关了（登录回调页之类）
+      return {
+        text: `Opened ${p.url} in new tab ${short}. ${browserCdpOps.tabGoneNote(session)}`,
+        details: { url: p.url }
+      }
+    }
     const url = load.url ?? p.url
     return {
       text: `Opened ${url} in new tab ${short}${browserCdpOps.loadNote(load.state)}. Use snapshot/read_page with this tab id.`,

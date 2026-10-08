@@ -476,7 +476,7 @@ export function closeTab(tabId: string): void {
 function forgetTab(tabId: string, view: WebContentsView): void {
   // tab 即将销毁：清理其 CDP 会话（本地状态即可，webContents.close 会带走 debugger）与防护
   uninstallAgentGuards(tabId)
-  browserCdpManager.handleExternalDetach(tabId)
+  browserCdpManager.handleExternalDetach(tabId, 'tab-closed')
 
   const ids = [...tabs.keys()]
   tabs.delete(tabId)

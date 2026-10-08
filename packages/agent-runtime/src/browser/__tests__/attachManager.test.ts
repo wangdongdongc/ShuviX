@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { CdpAttachManager, type CdpTabTransport } from '../attachManager'
+import { CdpAttachManager, type CdpTabTransport, type SessionEndReason } from '../attachManager'
 
 type EventListener = (method: string, params: Record<string, unknown>) => void
 
@@ -92,6 +92,58 @@ describe('CdpAttachManager', () => {
     expect(ft2.transport.detach).toHaveBeenCalled()
     expect(manager.isAttached('t1')).toBe(false)
     expect(manager.isAttached('t2')).toBe(false)
+  })
+})
+
+describe('会话结束的原因（ended）：等页面的循环靠它收手', () => {
+  /** 每次 attach 一个新的假 transport */
+  const newManager = (): CdpAttachManager =>
+    new CdpAttachManager({ attach: async () => fakeTransport().transport })
+
+  it.each<[string, (m: CdpAttachManager) => unknown, SessionEndReason, SessionEndReason | null]>([
+    ['外部断开：tab 没了', (m) => m.handleExternalDetach('t1', 'tab-closed'), 'tab-closed', null],
+    ['外部断开：调试连接没了', (m) => m.handleExternalDetach('t1', 'detached'), 'detached', null],
+    ['外部断开：没给原因', (m) => m.handleExternalDetach('t1'), 'detached', null],
+    ['主动 detach', (m) => m.detach('t1'), 'detached', null],
+    ['detachAll', (m) => m.detachAll(), 'detached', 'detached']
+  ])(
+    'AM-1 %s → 手里那个会话记下原因、不再算接管；别的 tab 不动；重新 attach 拿到一个干净的新会话',
+    async (_label, end, expected, t2Ended) => {
+      const manager = newManager()
+      const s = await manager.session('t1')
+      const t2 = await manager.session('t2')
+      expect(s.ended).toBeNull()
+
+      await end(manager)
+      expect(s.ended).toBe(expected)
+      expect(manager.isAttached('t1')).toBe(false)
+      expect(t2.ended).toBe(t2Ended)
+
+      const s2 = await manager.session('t1')
+      expect(s2).not.toBe(s)
+      expect(s2.ended).toBeNull()
+      // 旧会话的原因不会被新会话改写
+      expect(s.ended).toBe(expected)
+    }
+  )
+
+  it('AM-2 先到的原因为准：外部断开之后再 disposeLocal / dispose 不改写；重新 attach 的会话各记各的', async () => {
+    const manager = newManager()
+    const s = await manager.session('t1')
+    manager.handleExternalDetach('t1', 'tab-closed')
+    s.disposeLocal('detached')
+    await s.dispose()
+    expect(s.ended).toBe('tab-closed')
+
+    const s2 = await manager.session('t1')
+    manager.handleExternalDetach('t1', 'detached')
+    expect(s2.ended).toBe('detached')
+    expect(s.ended).toBe('tab-closed')
+
+    const s3 = await manager.session('t1')
+    s3.disposeLocal('detached')
+    s3.disposeLocal('tab-closed')
+    expect(s3.ended).toBe('detached')
   })
 })
 

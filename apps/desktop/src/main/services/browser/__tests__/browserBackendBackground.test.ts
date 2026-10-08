@@ -9,6 +9,8 @@
  *   NG-U14  同一串动作里 openTab 先建一个**真的加载了** about:blank 的 tab、接上 CDP，再经 CDP 的
  *           Page.navigate 导航过去（地址从不交给 loadURL），按导航前的文档标记等加载；全程没有原生
  *           文件框（dialog.showOpenDialog）也没有原生打印（webContents.print）。
+ *   DT-3    openTab 等加载时会话结束了（页面一加载就关掉自己的 tab / 调试连接断了，waitForLoad 回 gone）：
+ *           回「开了」+ 那个会话结束原因的那句（真的 tabGoneNote），不是失败，也不叫 agent 去 snapshot。
  *
  * 后端、tab 服务、窗口服务、停放窗口都是真的，跑在 ./fakeElectron.ts 的假件上；CDP 会话是个空壳，
  * `browserCdpOps` 里用到的配方换成立即回答的桩 —— 这里只关心「窗口动没动」，不关心配方本身。
@@ -30,10 +32,17 @@ const state = vi.hoisted(() => ({
   send: vi.fn(async (_method: string, _params?: Record<string, unknown>) => ({})),
   /** markDocument 桩回的文档标记 */
   mark: { token: 'mark-1', url: 'about:blank', seq: 0, frameId: 'F' },
-  waitForLoad: vi.fn(async (_session: unknown, _opts?: Record<string, unknown>) => ({
-    state: 'complete',
-    url: 'https://a.example/'
-  }))
+  waitForLoad: vi.fn(
+    async (
+      _session: unknown,
+      _opts?: Record<string, unknown>
+    ): Promise<{ state: string; url: string | null }> => ({
+      state: 'complete',
+      url: 'https://a.example/'
+    })
+  ),
+  /** 假 CDP 会话的 ended（会话结束的原因；真的 tabGoneNote 读它） */
+  ended: null as 'tab-closed' | 'detached' | null
 }))
 
 // mock 路径按**测试文件**解析：被测模块在 services/browser/，测试在其 __tests__/ 下
@@ -53,7 +62,10 @@ vi.mock('../browserCdpService', () => ({
   browserCdpManager: {
     session: vi.fn(async () => ({
       enableDialogHandling: async () => {},
-      send: (method: string, params?: Record<string, unknown>) => state.send(method, params)
+      send: (method: string, params?: Record<string, unknown>) => state.send(method, params),
+      get ended() {
+        return state.ended
+      }
     })),
     handleExternalDetach: vi.fn(),
     cdpState: () => ({ attached: false, intercepting: false }),
@@ -106,6 +118,7 @@ beforeEach(() => {
   state.broadcast.mockClear()
   state.send.mockClear()
   state.waitForLoad.mockClear()
+  state.ended = null
 })
 
 afterEach(() => {
@@ -196,5 +209,34 @@ describe('DesktopBrowserBackend：agent 的动作从不把浏览器窗口弄出�
       ])
     },
     30_000
+  )
+})
+
+describe('openTab：等加载时 tab 没了（DT-3）', () => {
+  it.each([
+    ['tab-closed', 'This tab closed and is gone — use list_tabs to see the open tabs.'],
+    [
+      'detached',
+      'The browser detached from this tab, so what happened on the page could not be seen — take a new snapshot before further interaction.'
+    ]
+  ] as const)(
+    'DT-3 会话以 %s 结束（登录回调页一加载就关掉自己）→ 回「开了」+ 那句，不算失败，也不叫 agent 去 snapshot',
+    async (reason, note) => {
+      const wins = await import('../browserWindowService')
+      const { createDesktopBrowserBackend } = await import('../browserBackend')
+      wins.initBrowserWindowService({ getThemeBgColor: () => '#000000' })
+      state.ended = reason
+      state.waitForLoad.mockResolvedValueOnce({ state: 'gone', url: null })
+
+      const url = 'https://a.example/cb'
+      const out = await createDesktopBrowserBackend('s1').openTab({ url })
+      const m = /^Opened https:\/\/a\.example\/cb in new tab t\d+\. (.*)$/.exec(out.text ?? '')
+      expect(m, out.text).not.toBeNull()
+      expect(m?.[1]).toBe(note)
+      expect(out.text).not.toContain('Use snapshot/read_page')
+      expect(out.details).toEqual({ url })
+      expect(out.details).not.toHaveProperty('error')
+      expect(state.waitForLoad).toHaveBeenCalledTimes(1)
+    }
   )
 })

@@ -18,7 +18,8 @@ import {
   CdpAttachManager,
   createBrowserTabQueue,
   type BrowserTabQueue,
-  type CdpTabTransportFactory
+  type CdpTabTransportFactory,
+  type SessionEndReason
 } from '@shuvix/agent-runtime'
 import type { ExtensionEventMap } from '@shuvix/chat-protocol/chromeBridge'
 import { chromeTabOf } from '@shuvix/chat-protocol/chromeTabSession'
@@ -94,10 +95,13 @@ export class ChromeBrowserState {
     for (const fn of this.listeners.get(event.tabId) ?? []) fn(event.method, event.params ?? {})
   }
 
-  /** 调试被外部断开（用户点掉横幅 / 开了 DevTools / 页关了）：只清本地记账 */
-  externalDetach(tabId: number): void {
+  /**
+   * 调试被外部断开（用户点掉横幅 / 开了 DevTools / 页关了）：只清本地记账。reason 告诉正在等这个页面的
+   * 动作发生了什么（tab 没了，还是只是调试连接没了）。
+   */
+  externalDetach(tabId: number, reason: SessionEndReason = 'detached'): void {
     this.forget(tabId)
-    this.cdp.handleExternalDetach(String(tabId))
+    this.cdp.handleExternalDetach(String(tabId), reason)
   }
 
   /**
@@ -182,9 +186,11 @@ chromeBridge.onExtensionEvent((conn, name, params) => {
   if (name === 'debugger.event') {
     state.deliver(params as ExtensionEventMap['debugger.event'])
   } else if (name === 'debugger.detached') {
-    state.externalDetach((params as ExtensionEventMap['debugger.detached']).tabId)
+    // chrome.debugger.onDetach 的原因只有两种：target_closed（页没了）/ canceled_by_user（点掉了横幅）
+    const { tabId, reason } = params as ExtensionEventMap['debugger.detached']
+    state.externalDetach(tabId, reason === 'target_closed' ? 'tab-closed' : 'detached')
   } else if (name === 'tabs.removed') {
-    state.externalDetach((params as ExtensionEventMap['tabs.removed']).tabId)
+    state.externalDetach((params as ExtensionEventMap['tabs.removed']).tabId, 'tab-closed')
   }
 })
 

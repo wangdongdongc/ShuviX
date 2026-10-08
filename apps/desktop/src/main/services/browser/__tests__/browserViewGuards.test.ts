@@ -11,6 +11,8 @@
  *              about:blank、接上 CDP（browserCdpManager.session(新 id)，防护随 attach 装上）、开对话框自动
  *              处理，**然后**才加载弹出页；开它的 tab 不在 agent 手里 → 新 tab 直接加载那个地址，不接 CDP。
  *              用户不在看浏览器窗口（agent 在后台点的）与正看着（routeExternalUrl 的 onWeb）两条路都一样。
+ *   DT-2   tab 没了（closeTab、页面自己 window.close() 引出的 destroyed）：它的 CDP 会话以「tab 关掉了」
+ *          结束（handleExternalDetach(id, 'tab-closed')），正在等这个页面的动作据此回「tab 没了」。
  *
  * electron 换成 ./fakeElectron.ts；agentGuards 与 browserCdpService 换成间谍（CDP 会话是个只有
  * enableDialogHandling 的空壳）；browserViewService / browserWindowService / stagingWindow /
@@ -30,7 +32,7 @@ const state = vi.hoisted(() => {
     hasAgentGuards: vi.fn((_tabId: string) => false),
     enableDialogHandling,
     session: vi.fn(async (_tabId: string) => ({ enableDialogHandling })),
-    handleExternalDetach: vi.fn((_tabId: string) => {}),
+    handleExternalDetach: vi.fn((_tabId: string, _reason?: string) => {}),
     detachAll: vi.fn(async () => {})
   }
 })
@@ -56,7 +58,7 @@ vi.mock('../agentGuards', () => ({
 vi.mock('../browserCdpService', () => ({
   browserCdpManager: {
     session: (tabId: string) => state.session(tabId),
-    handleExternalDetach: (tabId: string) => state.handleExternalDetach(tabId),
+    handleExternalDetach: (...args: [string, string?]) => state.handleExternalDetach(...args),
     cdpState: () => ({ attached: false, intercepting: false }),
     detachAll: () => state.detachAll()
   }
@@ -154,6 +156,21 @@ describe('tab 关掉时摘防护（NG-U8a）', () => {
         order(fx.views[i].webContents.close)
       )
     }
+  })
+})
+
+describe('tab 没了，它的 CDP 会话以「tab 关掉了」结束（DT-2）', () => {
+  it('DT-2 closeTab 与页面自己关掉（destroyed）都报 handleExternalDetach(id, tab-closed)', async () => {
+    const { views } = await load()
+    const a = views.createTab('https://a.example/')
+    const b = views.createTab('https://b.example/')
+
+    views.closeTab(a)
+    expect(state.handleExternalDetach.mock.calls).toEqual([[a, 'tab-closed']])
+
+    state.handleExternalDetach.mockClear()
+    fx.views[1].webContents.fire('destroyed')
+    expect(state.handleExternalDetach.mock.calls).toEqual([[b, 'tab-closed']])
   })
 })
 

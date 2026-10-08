@@ -10,8 +10,9 @@
  *         收到一次提交）；主进程没有未捕获的异常；
  *   SC-2b 用户第一次点开浏览器窗口：墙上只有 B 一张、是激活的那张 —— 没有空白的幽灵卡片；
  *   SC-3  agent 的 click 当场让页面关掉自己（OAuth「授权」按钮的形状：同步发个 beacon 就 window.close()）：
- *         运行照常走到 agent_end，服务器收到 beacon，tab 从 IPC / list_tabs / 墙上消失，左邻激活，徽标
- *         对得上，没有未捕获的异常（click 自己的回报措辞不钉）；
+ *         click 不是错误，原话是「Clicked … This tab closed and is gone — use list_tabs to see the open
+ *         tabs.」，只有 click 的那一轮不到 5s（不等满 10s 的加载超时）；服务器收到 beacon，tab 从 IPC /
+ *         list_tabs / 墙上消失，左邻激活，徽标对得上，没有未捕获的异常；
  *   SC-1  墙开着、激活卡片的页面自己关掉（纯用户路径，没有 agent 的 CDP 会话）：右邻激活、墙上不留洞、
  *         徽标 −1、别的页面没重载；再对它点关闭（卡片上的 ✕ = IPC closeTab）静默无事；再关左边一张、
  *         最后一张：墙空、徽标消失，之后新开的 tab 照常上墙、是唯一激活的那张；
@@ -330,7 +331,7 @@ describe('agent 驱动过的 tab 自己关掉，浏览器窗口从没开过（SC
 })
 
 describe('agent 的 click 当场让页面关掉自己（SC-3）', () => {
-  it('SC-3 点 Close now（同步 beacon + window.close()）：运行走到 agent_end，服务器收到 beacon，tab 从 IPC / list_tabs / 墙上消失，左邻激活，徽标对得上，没有未捕获的异常', async () => {
+  it('SC-3 点 Close now（同步 beacon + window.close()）：click 回「This tab closed and is gone」不是错误、那一轮不到 5s，服务器收到 beacon，tab 从 IPC / list_tabs / 墙上消失，左邻激活，徽标对得上，没有未捕获的异常', async () => {
     expect(await isWindowOpen()).toBe(true)
     const [b] = await listTabs()
 
@@ -353,17 +354,27 @@ describe('agent 的 click 当场让页面关掉自己（SC-3）', () => {
     )
     await waitBadge(2)
 
-    // ── 点下去页面当场关掉；下一轮 list_tabs ──
+    // ── 点下去页面当场关掉（这一次运行只有 click，计它的时）；再一次运行 list_tabs ──
     provider.reset()
-    const run = await driver.run(sid, [
-      { id: 'sc3_click', tool: 'click', args: { tabId: tC, uid: nowUid } },
-      { id: 'sc3_list', tool: 'list_tabs', args: {} }
+    const t0 = Date.now()
+    const clicked = await driver.run(sid, [
+      { id: 'sc3_click', tool: 'click', args: { tabId: tC, uid: nowUid } }
     ])
+    const tookMs = Date.now() - t0
     await until(() => fixture.hits('/report?now=sc3') >= 1, 'the beacon sent by the click handler')
     await waitTabPageGone(app.port, (u) => u.includes('tag=sc3'))
 
-    // click 自己落定了（措辞不钉：页面在它收尾时消失，回报成功或失败都行）
-    expect(run.ends.sc3_click, 'sc3_click settled').toBeDefined()
+    // click 在收尾时看到 tab 没了：不是错误，原话叫 agent 去 list_tabs；也没有把「读不到页面」当成
+    // 正在导航、等满 10s 的加载超时
+    expect(ok(clicked.ends, 'sc3_click').result).toBe(
+      `Clicked button "Close now" (uid=${nowUid}). This tab closed and is gone — use list_tabs to see the open tabs.`
+    )
+    expect(tookMs, `click run took ${tookMs}ms — waited out the 10s load timeout?`).toBeLessThan(
+      5_000
+    )
+
+    provider.reset()
+    const run = await driver.run(sid, [{ id: 'sc3_list', tool: 'list_tabs', args: {} }])
     const listed = ok(run.ends, 'sc3_list').result
     expect(listed).not.toContain(`[${tC}]`)
     expect(listed).not.toContain('tag=sc3')

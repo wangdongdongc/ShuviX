@@ -380,7 +380,23 @@ async function waitForDomQuiet(session: TabCdpSession, quietMs = 150, maxMs = 10
   }
 }
 
-export type LoadState = 'complete' | 'interactive' | 'stopped' | 'failed' | 'timeout'
+export type LoadState = 'complete' | 'interactive' | 'stopped' | 'failed' | 'timeout' | 'gone'
+
+/**
+ * 会话已结束（tab 没了 / 调试连接没了）时给 agent 的一句话；会话还在时回 null。
+ * 等页面的循环先问它：结束了的会话读不到页面，这和「正在导航」看起来一模一样 —— 不问的话就一直
+ * 等到超时，再把「页面重新加载了」之类的错话报给 agent。
+ */
+export function tabGoneNote(session: TabCdpSession): string | null {
+  switch (session.ended) {
+    case 'tab-closed':
+      return 'This tab closed and is gone — use list_tabs to see the open tabs.'
+    case 'detached':
+      return 'The browser detached from this tab, so what happened on the page could not be seen — take a new snapshot before further interaction.'
+    default:
+      return null
+  }
+}
 
 /**
  * 等页面加载到能交互：是新文档（给了 mark 时必须不是动作前那个）、不是 about:blank、
@@ -389,6 +405,7 @@ export type LoadState = 'complete' | 'interactive' | 'stopped' | 'failed' | 'tim
  *   - 导航开始又结束了、文档却没换（下载、204、被取消）：stopped
  *   - 同文档导航（hash / pushState 的历史记录）：文档不换，直接算完成
  *   - Chromium 错误页（DNS 失败等）：failed
+ *   - 会话结束了（页面自己关掉了 tab 等，见 tabGoneNote）：gone
  */
 export async function waitForLoad(
   session: TabCdpSession,
@@ -399,6 +416,7 @@ export async function waitForLoad(
   let interactiveSince = 0
   let url: string | null = null
   for (;;) {
+    if (session.ended) return { state: 'gone', url }
     // 先看事件再读状态：事件已到、文档却还是旧的，才能断定导航结束了而没换页面
     const started = mark ? frameEventSeqs(session, 'Page.frameStartedLoading', mark) : []
     const stopped =
@@ -448,6 +466,8 @@ export function loadNote(state: LoadState): string {
       return ' (the page failed to load)'
     case 'stopped':
       return ' (no new page was loaded — the request may have been a download or was cancelled)'
+    case 'gone':
+      return ' (the tab went away before it finished loading)'
     default:
       return ''
   }
@@ -476,6 +496,11 @@ async function settleAfterAction(
     frameEventSeqs(session, 'Page.frameRequestedNavigation', before).length > 0 ||
     frameEventSeqs(session, 'Page.frameStartedLoading', before).length > 0
   const now = await pageState(session, before.token)
+  // 动作让页面关掉了自己的 tab（OAuth「授权」按钮点完就 window.close()）：没有页面可等了。
+  // 会话结束时事件缓冲随之清空，上面那 100ms 里就结束的话 newTabNote 读不到、是空的 —— 无妨，
+  // 「tab 没了」那句已经让 agent 去 list_tabs，新开的 tab 在那里
+  const gone = tabGoneNote(session)
+  if (gone) return `${gone}${newTabNote}`
   const replaced = now === null || !now.marked
 
   // 文档没换：什么都没跳，或同文档路由（pushState / hash）。Chromium 对 pushState 也会发
@@ -490,6 +515,7 @@ async function settleAfterAction(
   }
 
   const load = await waitForLoad(session, { mark: before })
+  if (load.state === 'gone') return `${tabGoneNote(session)}${newTabNote}`
   if (load.state === 'stopped') return `${loadNote('stopped').trim()}${newTabNote}`
   // 新文档：旧快照的 uid 全部作废（否则按内容键「找回」的会是新页面上碰巧同名的元素）
   session.controller.reset()
@@ -1068,6 +1094,10 @@ export async function waitForOp(
     if (signal?.aborted) {
       return { text: 'Aborted while waiting.', details: { error: 'aborted' } }
     }
+    const gone = tabGoneNote(session)
+    if (gone) {
+      return errorOut(`stopped waiting for text "${truncate(text, 50)}": ${gone}`)
+    }
     try {
       const { result } = await session.send<{ result: { value: boolean } }>('Runtime.evaluate', {
         expression: `document.body && document.body.innerText.includes(${literal})`,
@@ -1098,6 +1128,14 @@ async function navigated(
   fallbackUrl?: string
 ): Promise<BrowserOpOutput> {
   const load = await waitForLoad(session, { mark: before })
+  if (load.state === 'gone') {
+    // 导航本身发出去了，之后 tab 没了（比如登录回调页一加载就 window.close()）—— 不算失败
+    const target = fallbackUrl ?? before.url
+    return {
+      text: `${verb} ${target ?? 'the page'}. ${tabGoneNote(session)}`,
+      details: target ? { url: target } : {}
+    }
+  }
   if (load.state === 'failed' || load.state === 'stopped') {
     // 错误页自己的地址是 chrome-error://chromewebdata/，对 agent 没用 —— 报想去的那个页面
     const target = fallbackUrl ?? before.url

@@ -14,7 +14,7 @@ import {
   uploadFileOp,
   snapshotOp
 } from '../cdpOps'
-import type { TabCdpSession } from '../attachManager'
+import type { SessionEndReason, TabCdpSession } from '../attachManager'
 import type { NavKind } from '../backend'
 import { CdpController, type AXNode } from '../../cdp/controller'
 
@@ -210,6 +210,9 @@ function fakeSession(overrides: Params = {}): FakeSession {
     send: vi.fn(async (method: string, params?: Params) => {
       commands.push({ method, params })
       timeline.push(method)
+      // 会话结束之后的命令照样记下、然后失败。先看标志再跑反应：结束会话的那条命令（鼠标抬起、
+      // 按键抬起）自己是回了包的 —— 页面是在它之后才关掉的
+      if (session.ended) throw new Error('Debugger is not attached to the tab')
       reaction?.(method, params)
       if (method === 'Page.getNavigationHistory') return history
       if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'F' } } }
@@ -227,6 +230,8 @@ function fakeSession(overrides: Params = {}): FakeSession {
       return { entries: matched.slice(-(opts.limit ?? 100)), nextSeq: seq }
     }),
     controller: ctl,
+    /** 会话结束的原因（endSession 设）；null = 还连着 */
+    ended: null as SessionEndReason | null,
     ...overrides
   }
   return {
@@ -318,6 +323,19 @@ function landOnErrorPage(fake: FakeSession): void {
   fake.page.marked = false
 }
 
+/**
+ * 会话结束了（同 disposeLocal：页面关掉了自己的 tab / 调试连接断了）：记下原因、事件缓冲随之清空；
+ * 之后的每条命令照样记下，然后以「Debugger is not attached」失败
+ */
+function endSession(fake: FakeSession, reason: SessionEndReason): void {
+  Object.assign(fake.session, { ended: reason })
+  fake.events.length = 0
+}
+
+const TAB_CLOSED_NOTE = 'This tab closed and is gone — use list_tabs to see the open tabs.'
+const DETACHED_NOTE =
+  'The browser detached from this tab, so what happened on the page could not be seen — take a new snapshot before further interaction.'
+
 afterEach(() => {
   vi.useRealTimers()
 })
@@ -336,6 +354,21 @@ async function within<T>(work: Promise<T>, ms: number): Promise<T> {
   await vi.advanceTimersByTimeAsync(ms)
   expect(settled, `the operation should settle within ${ms}ms`).toBe(true)
   return work
+}
+
+/** 假计时器下把时间推进 ms：操作此时必须还在等（把「中途结束」放进等待正当中） */
+async function stillWaitingAfter(work: Promise<unknown>, ms: number): Promise<void> {
+  let settled = false
+  work.then(
+    () => {
+      settled = true
+    },
+    () => {
+      settled = true
+    }
+  )
+  await vi.advanceTimersByTimeAsync(ms)
+  expect(settled, `the operation should still be waiting after ${ms}ms`).toBe(false)
 }
 
 describe('clickOp', () => {
@@ -855,6 +888,48 @@ describe('pressKeyOp', () => {
   })
 })
 
+describe('动作之后会话结束了（页面关掉了自己的 tab / 调试连接断了）', () => {
+  it.each<[string, Match, (s: TabCdpSession) => ReturnType<typeof clickOp>, string]>([
+    ['click', mouseUp, (s) => clickOp(s, 'e7'), 'Clicked button "Submit" (uid=e7).'],
+    ['press_key', keyUp, (s) => pressKeyOp(s, 'Enter'), 'Pressed Enter.'],
+    [
+      'type + submitKey',
+      keyUp,
+      (s) => typeOp(s, 'hi', undefined, 'Enter'),
+      'Typed "hi". Pressed Enter.'
+    ]
+  ])(
+    'CO-3 %s 当场让页面关掉了自己的 tab（OAuth「授权」按钮）→ 回「做了」+ tab 没了那句，不算失败，也不等页面',
+    async (_label, trigger, act, did) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      when(fake, trigger, () => endSession(fake, 'tab-closed'))
+      const out = await within(act(fake.session), 300)
+      expect(out.text).toBe(`${did} ${TAB_CLOSED_NOTE}`)
+      expect(out.details?.error).toBeUndefined()
+      expect(countAfter(fake, trigger, pageStateRead)).toBeLessThanOrEqual(1)
+    }
+  )
+
+  it('CO-4 点击引起的导航还在加载时调试连接断了 → 不等到超时：回连接断了那句，新开的 tab 照样提一句', async () => {
+    vi.useFakeTimers()
+    const fake = fakeSession()
+    when(fake, mouseUp, () => {
+      navigateTo(fake, 'https://a.com/next')
+      fake.page.readyState = 'loading'
+      fake.push('Page.windowOpen', { url: 'https://b.com/' })
+    })
+    const work = clickOp(fake.session, 'e7')
+    await stillWaitingAfter(work, 1000)
+    endSession(fake, 'detached')
+    const out = await within(work, 300)
+    expect(out.text).toBe(
+      `Clicked button "Submit" (uid=e7). ${DETACHED_NOTE} It opened a new tab — use list_tabs to find it.`
+    )
+    expect(out.details?.error).toBeUndefined()
+  })
+})
+
 const selectRefusal = (combo: string): string =>
   `Focus is on a <select>, and pressing ${combo} there would open its native dropdown. Choose an option with fill(uid, "<option label or value>") instead (Tab / Escape are still fine).`
 
@@ -1110,6 +1185,70 @@ describe('navigateOp', () => {
     expect(out.text).toContain(note)
     expect(out.details?.error).toBeUndefined()
   })
+
+  it.each<
+    [
+      string,
+      NavKind,
+      string | undefined,
+      string,
+      'command' | 'wait',
+      SessionEndReason,
+      string,
+      string
+    ]
+  >([
+    [
+      'goto，等加载到 1s 时 tab 没了',
+      'goto',
+      'https://a.com/cb',
+      'Page.navigate',
+      'wait',
+      'tab-closed',
+      `Navigated to https://a.com/cb. ${TAB_CLOSED_NOTE}`,
+      'https://a.com/cb'
+    ],
+    [
+      'back，导航命令一发调试连接就断了',
+      'back',
+      undefined,
+      'Page.navigateToHistoryEntry',
+      'command',
+      'detached',
+      `Navigated back to https://a.com/0. ${DETACHED_NOTE}`,
+      'https://a.com/0'
+    ],
+    [
+      'reload，导航命令一发 tab 就没了',
+      'reload',
+      undefined,
+      'Page.reload',
+      'command',
+      'tab-closed',
+      `Reloaded https://a.com/before. ${TAB_CLOSED_NOTE}`,
+      'https://a.com/before'
+    ]
+  ])(
+    'CO-5 %s → 导航本身发出去了，不算失败：回「导航了」+ 会话结束那句，报想去的那个页面',
+    async (_label, nav, url, trigger, endsAt, reason, text, target) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      fake.page.url = 'https://a.com/before'
+      when(fake, cmd(trigger), () => {
+        if (endsAt === 'command') endSession(fake, reason)
+        else Object.assign(fake.page, { url: target, readyState: 'loading', marked: false })
+      })
+      const work = navigateOp(fake.session, nav, url)
+      if (endsAt === 'wait') {
+        await stillWaitingAfter(work, 1000)
+        endSession(fake, reason)
+      }
+      const out = await within(work, endsAt === 'command' ? 100 : 300)
+      expect(out.text).toBe(text)
+      expect(out.details).toEqual({ url: target })
+      expect(out.details).not.toHaveProperty('error')
+    }
+  )
 })
 
 describe('waitForLoad', () => {
@@ -1205,6 +1344,37 @@ describe('waitForLoad', () => {
     expect(load.state).toBe('complete')
     expect(sent(fake, pageStateRead)).toHaveLength(3)
   })
+
+  it.each<
+    [string, SessionEndReason, number | null, number, Awaited<ReturnType<typeof waitForLoad>>]
+  >([
+    ['调用之前就结束了', 'tab-closed', null, 50, { state: 'gone', url: null }],
+    [
+      '等到一半结束了（页面一直停在 loading）',
+      'detached',
+      1000,
+      200,
+      { state: 'gone', url: 'https://a.com/slow' }
+    ]
+  ])(
+    'CO-2 会话%s → 回 gone（带上最后读到的地址），不把读不到页面当成正在导航、等到超时',
+    async (_label, reason, endAfterMs, settleMs, expected) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      Object.assign(fake.page, { url: 'https://a.com/slow', readyState: 'loading', marked: false })
+      if (endAfterMs === null) endSession(fake, reason)
+      const work = waitForLoad(fake.session, { mark: MARK })
+      if (endAfterMs !== null) {
+        await stillWaitingAfter(work, endAfterMs)
+        endSession(fake, reason)
+      }
+      const readsAtEnd = sent(fake, pageStateRead).length
+      expect(await within(work, settleMs)).toEqual(expected)
+      const readsAfter = sent(fake, pageStateRead).length - readsAtEnd
+      if (endAfterMs === null) expect(sent(fake, pageStateRead)).toHaveLength(0)
+      else expect(readsAfter).toBeLessThanOrEqual(1)
+    }
+  )
 })
 
 describe('waitForOp', () => {
@@ -1232,6 +1402,32 @@ describe('waitForOp', () => {
     const out = await waitForOp(session, 'x', 600, controller.signal)
     expect(out.details?.error).toBe('aborted')
   })
+
+  it.each<[string, SessionEndReason, number | null, number, string]>([
+    ['第一次查之前就结束了（tab 没了）', 'tab-closed', null, 50, TAB_CLOSED_NOTE],
+    ['查了三轮都没找到时调试连接断了', 'detached', 1200, 600, DETACHED_NOTE]
+  ])(
+    'CO-6 会话%s → 不再等到超时：回业务错误，说清为什么不等了',
+    async (_label, reason, endAfterMs, settleMs, note) => {
+      vi.useFakeTimers()
+      const fake = fakeSession()
+      const evaluates = (): number => sent(fake, cmd('Runtime.evaluate')).length
+      if (endAfterMs === null) endSession(fake, reason)
+      const work = waitForOp(fake.session, 'Welcome', 10_000)
+      if (endAfterMs !== null) {
+        await stillWaitingAfter(work, endAfterMs)
+        expect(evaluates()).toBe(3)
+        endSession(fake, reason)
+      }
+      const evaluatesAtEnd = evaluates()
+      const out = await within(work, settleMs)
+      const message = `stopped waiting for text "Welcome": ${note}`
+      expect(out.text).toBe(`Error: ${message}`)
+      expect(out.details).toEqual({ error: message })
+      if (endAfterMs === null) expect(evaluates()).toBe(0)
+      else expect(evaluates() - evaluatesAtEnd).toBeLessThanOrEqual(1)
+    }
+  )
 })
 
 describe('cdpOp', () => {

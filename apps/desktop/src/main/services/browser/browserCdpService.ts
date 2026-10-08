@@ -49,11 +49,15 @@ const factory: CdpTabTransportFactory = {
     }
     wc.debugger.on('message', onMessage)
 
-    // 页面崩溃 / 手动 detach 等外部断开 → 清理本地状态
-    const onDetach = (): void => {
-      log.info(`CDP debugger detached externally (tab ${tabId})`)
+    // 外部断开 → 清理本地状态。Electron 只在调试目标没了时发 detach，原因恒为 "target closed"
+    // （页面自己 window.close()、tab 被关掉；渲染进程崩溃并不 detach —— 2026-10-08 实测，Electron 39）
+    const onDetach = (_event: unknown, reason: string): void => {
+      log.info(`CDP debugger detached externally (tab ${tabId}): ${reason}`)
       uninstallAgentGuards(tabId)
-      browserCdpManager.handleExternalDetach(tabId)
+      browserCdpManager.handleExternalDetach(
+        tabId,
+        reason === 'target closed' ? 'tab-closed' : 'detached'
+      )
     }
     wc.debugger.once('detach', onDetach)
 
