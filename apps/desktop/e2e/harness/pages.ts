@@ -235,12 +235,8 @@ export interface InterruptedBannerShot {
 export interface LegacyBannerShot {
   /** 横幅文案（`data-legacy-text`） */
   text: string
-  /** [新建对话]（`data-legacy-new-chat`）的文字；渠道端没有这颗按钮 → null */
-  newChatLabel: string | null
-  /** [新建对话] 是否禁用（建会话途中）；没有按钮时为 false */
-  newChatDisabled: boolean
-  /** [新建对话] 的 `data-variant`（不起眼的幽灵样式是 `subtle`）；没有按钮时为 null */
-  newChatVariant: string | null
+  /** 横幅里的按钮个数（横幅只是一行说明，没有任何操作 → 0） */
+  buttons: number
   /**
    * 输入卡片里横幅之外还有几个直接子元素（对话抽屉插槽不计 —— 主聊天区没有它）。旧格式会话的卡片里
    * 只剩横幅：没有输入框、选择器、发送，所以是 0
@@ -332,8 +328,6 @@ export interface ChatPane {
   clickContinue(): Promise<boolean>
   /** 输入卡片顶上的旧格式横幅（P4-01，`data-legacy-banner`）；不在屏时为 null */
   legacyBanner(): Promise<LegacyBannerShot | null>
-  /** 点旧格式横幅上的 [新建对话]；横幅或按钮不在返回 false */
-  clickLegacyNewChat(): Promise<boolean>
   /** 输入框（textarea）的 disabled / placeholder；旧格式会话根本没有输入框（`present: false`） */
   composer(): Promise<ComposerShot>
   /**
@@ -769,21 +763,11 @@ export function chatPane(main: CdpClient): ChatPane {
       main.eval<LegacyBannerShot | null>(`(() => {
         const el = document.querySelector('[data-legacy-banner]')
         if (!el) return null
-        const btn = el.querySelector('[data-legacy-new-chat]')
         return {
           text: (el.querySelector('[data-legacy-text]')?.textContent ?? '').trim(),
-          newChatLabel: btn ? (btn.textContent ?? '').trim() : null,
-          newChatDisabled: !!btn?.disabled,
-          newChatVariant: btn?.getAttribute('data-variant') ?? null,
+          buttons: el.querySelectorAll('button').length,
           cardSiblings: el.parentElement ? el.parentElement.children.length - 1 : 0
         }
-      })()`),
-    clickLegacyNewChat: () =>
-      main.eval<boolean>(`(() => {
-        const btn = document.querySelector('[data-legacy-banner] [data-legacy-new-chat]')
-        if (!btn) return false
-        btn.click()
-        return true
       })()`),
     composer: () =>
       main.eval<ComposerShot>(`(() => {

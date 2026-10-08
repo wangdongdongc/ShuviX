@@ -10,10 +10,8 @@
  *
  * 第一组（一对实例 + 末尾再重启一次）：
  *   L-1  旧格式行画出冻结投影：工具块、压缩摘要卡、错误行
- *   L-2  卡片里只有横幅（没有输入框、发送、选择器；[新建对话] 是 subtle 幽灵按钮）；硬发 `agent.prompt` 拿到
- *        legacySessionReadOnly（IPC 本身恒回
- *        success，拒绝走该会话的 ChatEvent `error`）；
- *        横幅的 [新建对话] 在这一行的项目里建一条会话并选中它
+ *   L-2  卡片里只有横幅（没有输入框、发送、选择器，横幅上也没有按钮）；硬发 `agent.prompt` 拿到
+ *        legacySessionReadOnly（IPC 本身恒回 success，拒绝走该会话的 ChatEvent `error`）
  *   L-3  没有回退 / 重新生成 / 编辑控件；硬调 `message.rollback` 也回 false
  *   L-4  删除（侧栏 ⋮ → 删除 → 确认）带走行和 `.jsonl`
  *   L-5  清空（`message.clear`）：开着的横幅当场消失，行换成新格式，`.jsonl` 没了，发一条成功
@@ -56,7 +54,6 @@ import {
   eventRecorder,
   legacySwitchoverRuns,
   legacyTranscriptPathOf,
-  newSessionsAfter,
   openRegistryNote,
   rewindSessionsToV29,
   seedFakeProvider,
@@ -203,8 +200,6 @@ describe('legacy sessions after the boot switchover', () => {
   let probe: SyncProbe
   let events: EventRecorder
   let projectId = ''
-  /** L-2 的 [新建对话] 建出来的那条（L-10 往里发一条，证明自动标题真的在跑） */
-  let newChatSid = ''
 
   const T = {
     chat: 'L1 legacy chat',
@@ -431,15 +426,9 @@ describe('legacy sessions after the boot switchover', () => {
     )
   })
 
-  it('L-2 only the banner is shown (no composer textarea, send or pickers), a forced agent.prompt gets legacySessionReadOnly, and [New chat] opens a session in the same project', async () => {
+  it('L-2 only the banner is shown (no composer textarea, send, pickers or banner buttons), and a forced agent.prompt gets legacySessionReadOnly', async () => {
     const banner = await until(() => chat.legacyBanner(), 'legacy banner')
-    expect(banner).toEqual({
-      text: READ_ONLY,
-      newChatLabel: en.sidebar.newChat,
-      newChatDisabled: false,
-      newChatVariant: 'subtle',
-      cardSiblings: 0
-    })
+    expect(banner).toEqual({ text: READ_ONLY, buttons: 0, cardSiblings: 0 })
     expect(await chat.interruptedBanner()).toBeNull()
     expect(await chat.composer()).toEqual({ present: false, disabled: false, placeholder: '' })
     // 发送按钮整个不在（sendDisabled 对缺席的按钮也回 true）
@@ -458,19 +447,6 @@ describe('legacy sessions after the boot switchover', () => {
     expect(bytesOf(legacyTranscriptPathOf(home, ids.chat))).toBe(jsonlBytes.chat)
     expect(existsSync(durableStoragePathOf(home, ids.chat))).toBe(false)
     expect(rowOf(home, ids.chat)?.storageKind).toBe(LEGACY)
-
-    const [created] = await newSessionsAfter(app.main, async () => {
-      expect(await chat.clickLegacyNewChat()).toBe(true)
-    })
-    const fresh = await app.main.eval<ListedSession & { title: string }>(
-      `window.api.session.getById(${JSON.stringify(created)})`
-    )
-    expect(fresh.projectId).toBe(projectId)
-    newChatSid = created
-    await until(async () => (await sidebar.activeTitle()) === fresh.title, 'new chat selected')
-    await until(async () => (await chat.legacyBanner()) === null, 'banner gone on the new chat')
-    expect(await chat.composer()).toMatchObject({ present: true, disabled: false })
-    expect(rowOf(home, created)?.storageKind).toBe(DURABLE)
   })
 
   it('L-3 a legacy view offers no rollback, regenerate or edit controls, and a forced rollback is refused', async () => {
@@ -691,7 +667,9 @@ describe('legacy sessions after the boot switchover', () => {
 
   it('L-10 the monitor list and auto-title never touch legacy rows', async () => {
     const legacyIds = [ids.chat, ids.child, ids.nbChild, ids.tabBad, ids.l10]
-    // 一条默认标题的新格式会话（L-2 的 [新建对话]）发首条：自动标题真的在跑，派了 titler
+    // 一条默认标题的新格式会话发首条：自动标题真的在跑，派了 titler
+    const newChatSid = await createSession(app.main, { projectId })
+    expect(rowOf(home, newChatSid)?.storageKind).toBe(DURABLE)
     provider.script({ text: 'L10 REPLY', when: byUserText('L10 hello') })
     await prompt(app.main, newChatSid, 'L10 hello')
     const titlerTargets = (): Set<string> =>

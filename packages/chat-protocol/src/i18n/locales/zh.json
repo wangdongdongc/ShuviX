@@ -194,7 +194,7 @@
     "mcpConnecting": "正在连接 MCP：{{names}}",
     "mcpConnectFailed": "[MCP] {{name}} 连接失败：{{error}}",
     "agentNoModel": "无法创建智能体：{{reason}}",
-    "legacySessionReadOnly": "这条会话由旧版本 ShuviX 创建，只能查看。清空它或新建一条会话即可继续。",
+    "legacySessionReadOnly": "这条会话由旧版本 ShuviX 创建，只能查看。",
     "requestStillQueued": "之前发到这里的一条消息还在排队，会随下一条消息一起发出。",
     "welcomePrompt": "我们今天聊点什么？",
     "welcomeCreateProject": "创建项目",
@@ -1118,6 +1118,8 @@
       "title": "无法访问此网站",
       "code": "错误代码：{{code}} ({{description}})",
       "certHint": "该网站使用了自签名或不受信任的证书。",
+      "crashedTitle": "页面崩溃了",
+      "crashedDetail": "页面的进程停止了（{{reason}}）。",
       "retry": "重试"
     }
   },

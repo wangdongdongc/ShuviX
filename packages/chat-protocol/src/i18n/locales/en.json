@@ -194,7 +194,7 @@
     "mcpConnecting": "Connecting to MCP: {{names}}",
     "mcpConnectFailed": "[MCP] {{name}} failed to connect: {{error}}",
     "agentNoModel": "Couldn't create the agent: {{reason}}",
-    "legacySessionReadOnly": "This conversation was created by an earlier version of ShuviX and is read-only. Clear it or start a new session to continue.",
+    "legacySessionReadOnly": "This conversation was created by an earlier version of ShuviX and is read-only.",
     "requestStillQueued": "A message sent here earlier is still queued. It goes out with the next message.",
     "welcomePrompt": "What should we work on today?",
     "welcomeCreateProject": "Create Project",
@@ -1118,6 +1118,8 @@
       "title": "This site can't be reached",
       "code": "Error code: {{code}} ({{description}})",
       "certHint": "The site uses a self-signed or untrusted certificate.",
+      "crashedTitle": "This page crashed",
+      "crashedDetail": "The page's process stopped ({{reason}}).",
       "retry": "Retry"
     }
   },

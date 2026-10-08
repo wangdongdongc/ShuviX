@@ -109,7 +109,7 @@ export function InputArea({
   const source = useChatStore(selectSessionSource)
   const isInterrupted = !!activeSessionId && source === 'durable' && run.state === 'interrupted'
   /**
-   * 旧格式会话（P4-01，§2A）：输入卡片顶上一条只读横幅 + [新建对话]（只在有宿主时出现）。只看视图的
+   * 旧格式会话（P4-01，§2A）：输入卡片里只有一条只读横幅。只看视图的
    * `source`，不看能力位 —— 与上面的中断横幅互斥（那条只认 durable），两条永远不会同时出现
    */
   const isLegacy = !!activeSessionId && source === 'legacy'
@@ -203,36 +203,6 @@ export function InputArea({
       continuingRef.current = false
       setContinuingFor(null)
       setSendError(err instanceof Error ? err.message : String(err))
-    }
-  }
-
-  /**
-   * 旧格式横幅的 [新建对话]（PIN-03）：在当前这条会话所属的项目里建一条普通会话 → 刷新列表 → 选中它。
-   * 不带欢迎页的模型 / 工具、不预建 Agent（与侧栏「新建对话」同口径）。ref 挡连点，失败走发送错误行（PIN-04）
-   */
-  const [creatingNewChat, setCreatingNewChat] = useState(false)
-  const creatingNewChatRef = useRef(false)
-  const handleLegacyNewChat = async (): Promise<void> => {
-    const host = getHostApi()
-    if (!host || creatingNewChatRef.current) return
-    const { sessions, activeSessionId: sid } = useChatStore.getState()
-    const projectId = sessions.find((s) => s.id === sid)?.projectId ?? null
-    creatingNewChatRef.current = true
-    setCreatingNewChat(true)
-    setSendError(null)
-    try {
-      const session = await host.session.create({ projectId })
-      const list = await host.session.list()
-      const store = useChatStore.getState()
-      store.setSessions(list)
-      store.setActiveSessionId(session.id)
-    } catch (err) {
-      if (useChatStore.getState().activeSessionId === sid) {
-        setSendError(err instanceof Error ? err.message : String(err))
-      }
-    } finally {
-      creatingNewChatRef.current = false
-      setCreatingNewChat(false)
     }
   }
 
@@ -805,10 +775,7 @@ export function InputArea({
     </button>
   )
 
-  /**
-   * 旧格式会话（P4-01）的整张卡片内容：一行安静的说明（锁 + 次级文字色），行尾一个幽灵样式的 [新建对话]
-   * （次级色，hover 才浮出底色 —— 不是主色实心按钮，免得抢过正文）。[新建对话] 失败的原因就挂在这一行下面
-   */
+  /** 旧格式会话（P4-01）的整张卡片内容：一行安静的说明（锁 + 次级文字色），没有任何操作 */
   const legacyNotice = (
     <div data-legacy-banner="" className="px-3.5 py-2.5">
       <div className="flex items-center gap-2">
@@ -819,24 +786,7 @@ export function InputArea({
         >
           {t('chat.legacySessionReadOnly')}
         </span>
-        {hasHost && (
-          <button
-            type="button"
-            data-legacy-new-chat=""
-            data-variant="subtle"
-            onClick={handleLegacyNewChat}
-            disabled={creatingNewChat}
-            className="flex-shrink-0 px-2 py-0.5 rounded-md text-[11px] text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-text-tertiary"
-          >
-            {t('sidebar.newChat')}
-          </button>
-        )}
       </div>
-      {sendError && (
-        <div data-send-error className="mt-1 pl-[21px] text-[11px] text-error break-words">
-          {t('input.sendFailed', { error: sendError })}
-        </div>
-      )}
     </div>
   )
 

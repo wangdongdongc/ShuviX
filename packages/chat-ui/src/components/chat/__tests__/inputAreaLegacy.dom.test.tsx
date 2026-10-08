@@ -5,21 +5,16 @@
  *   P4-01-01 legacy 视图：`[data-legacy-banner]` 出现，文案逐字是 `chat.legacySessionReadOnly`；没有中断横幅
  *   P4-01-02 卡片里只有横幅：没有输入框、发送按钮、模型 / 工具选择器、分档按钮、队列面板、待处理输入；
  *            什么也发不出去（prompt / steer / followUp / continue），不建占位
- *   P4-01-03 [新建对话]（`sidebar.newChat`）：`session.create({projectId})` 用当前行的项目 → list → 选中新会话；
- *            不删、不清空、不发消息
- *   P4-01-04 当前行没有项目 / 不在 `store.sessions` 里：`create({projectId:null})`（PIN-03）
- *   P4-01-05 连点只建一条；等待期间按钮禁用；落定后切到新会话
- *   P4-01-06 建会话失败：`[data-send-error]` 显示原因，按钮恢复，仍停在 s1，横幅还在（PIN-04）
- *   P4-01-07 渠道端（没有 HostApi）：横幅与文案在，没有 [新建对话]，也没有输入框
+ *   P4-01-03 横幅上没有任何按钮（[新建对话] 已移除）：什么也不建、不删、不清空
+ *   P4-01-07 渠道端（没有 HostApi）：同一条横幅与文案，也没有输入框
  *   P4-01-08 durable idle / busy、none、没有视图、欢迎页：都没有旧格式横幅
  *   P4-01-09 两条横幅永不同时出现
  *   P4-01-10 横幅只看 `source`，不看能力位：durable + `send:false` 只禁用输入框，没有横幅
  *   P4-01-11 legacy → durable（清空之后）或切到别的会话：横幅消失，输入框恢复
  *   P4-01-12 抽屉里的 InputArea（thread 插槽）同样有横幅（PIN-18）；卡片里只剩抽屉 + 横幅
- *   P4-01-13 文案来自既有键（三种语言逐字），切到 zh 渲染 zh 文案
+ *   P4-01-13 文案（三种语言逐字），切到 zh 渲染 zh 文案
  *   P4-01-14 InputArea 源码里不再有「phase 4」注释
  *   P4-01-15 legacy 视图根本没有输入框（文案在横幅里）；durable + `send:false` 仍是禁用输入框 + 只读提示
- *   P4-01-16 [新建对话] 是不起眼的幽灵按钮：`data-variant="subtle"`，不带主色实心按钮的类
  *
  * 后端是假的 `window.api`（同 inputAreaInterrupted.dom.test.tsx）；视图只经 `applySessionView` 写。
  */
@@ -70,22 +65,6 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const P = 'prov-1'
 const M = 'model-m'
 const SID = 's1'
-const NEW_ID = 'new-1'
-
-interface Deferred<T> {
-  promise: Promise<T>
-  resolve: (value: T) => void
-  reject: (error: unknown) => void
-}
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void
-  let reject!: (error: unknown) => void
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-  return { promise, resolve, reject }
-}
 
 function row(id: string, projectId: string | null): Session {
   return {
@@ -111,14 +90,14 @@ let api: {
     clearMessages: Fn
   }
 }
-/** `session.list` 的返回（P4-01-03 断言 store.sessions 等于它） */
-let listResult: Session[]
 
 function buildApi(): Record<string, unknown> {
   return {
     session: {
-      create: vi.fn(async (p?: { projectId?: string | null }) => row(NEW_ID, p?.projectId ?? null)),
-      list: vi.fn(async () => listResult),
+      create: vi.fn(async (p?: { projectId?: string | null }) =>
+        row('new-1', p?.projectId ?? null)
+      ),
+      list: vi.fn(async () => [row(SID, 'p1')]),
       delete: vi.fn(async () => undefined),
       clear: vi.fn(async () => ({ success: true }))
     },
@@ -195,8 +174,6 @@ async function apply(v: SessionView, sid = SID): Promise<void> {
 const legacyBanner = (): HTMLElement | null => container.querySelector('[data-legacy-banner]')
 const interruptedBanner = (): HTMLElement | null =>
   container.querySelector('[data-interrupted-banner]')
-const newChatButton = (): HTMLButtonElement | null =>
-  container.querySelector<HTMLButtonElement>('[data-legacy-new-chat]')
 const textarea = (): HTMLTextAreaElement => container.querySelector('textarea')!
 const maybeTextarea = (): HTMLTextAreaElement | null => container.querySelector('textarea')
 const maybeSendButton = (): HTMLButtonElement | null =>
@@ -221,12 +198,6 @@ const tierButtons = (): Element[] => [
     `[title="${en.queue.steerHint}"], [title="${en.queue.followUpHint}"]`
   )
 ]
-
-async function click(el: Element): Promise<void> {
-  await act(async () => {
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-  })
-}
 
 async function pressEnter(target: Element = textarea()): Promise<void> {
   await act(async () => {
@@ -270,7 +241,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   mocks.hasHost = true
-  listResult = [row(SID, 'p1'), row(NEW_ID, 'p1')]
   const built = buildApi()
   api = built as unknown as typeof api
   ;(window as unknown as { api: unknown }).api = built
@@ -321,8 +291,8 @@ describe('P4-01-01 / 02 legacy view', () => {
     expect([...card().children]).toEqual([legacyBanner()])
     expect(container.querySelector('[data-accessory]')).toBeNull()
     expect(interruptedBanner()).toBeNull()
-    // 卡片上唯一的按钮就是 [新建对话]
-    expect([...container.querySelectorAll('button')]).toEqual([newChatButton()])
+    // 卡片上一个按钮也没有
+    expect(container.querySelectorAll('button')).toHaveLength(0)
   })
 
   it('P4-01-02 even a busy legacy view (run.state busy) shows no stop button or tier buttons', async () => {
@@ -333,71 +303,22 @@ describe('P4-01-01 / 02 legacy view', () => {
   })
 })
 
-describe('P4-01-03 .. 07 [New chat]', () => {
-  it("P4-01-03 [New chat] creates in the row's project, lists, selects the new session; nothing destructive", async () => {
+describe('P4-01-03 / 07 no actions on the banner', () => {
+  it('P4-01-03 the banner carries no button; nothing is created, deleted, cleared or sent', async () => {
     await apply(legacyView())
     await mount()
-    expect(newChatButton()!.textContent).toBe(en.sidebar.newChat)
-    await click(newChatButton()!)
-    await flush()
-    expect(api.session.create.mock.calls).toEqual([[{ projectId: 'p1' }]])
-    expect(api.session.list).toHaveBeenCalledTimes(1)
-    expect(api.session.create.mock.invocationCallOrder[0]).toBeLessThan(
-      api.session.list.mock.invocationCallOrder[0]!
-    )
-    expect(store().activeSessionId).toBe(NEW_ID)
-    expect(store().sessions).toEqual(listResult)
+    expect(legacyBanner()!.querySelectorAll('button')).toHaveLength(0)
+    expect(container.querySelector('[data-legacy-new-chat]')).toBeNull()
+    expect(api.session.create).not.toHaveBeenCalled()
+    expect(api.session.list).not.toHaveBeenCalled()
     expect(api.session.delete).not.toHaveBeenCalled()
     expect(api.session.clear).not.toHaveBeenCalled()
     expect(api.agent.clearMessages).not.toHaveBeenCalled()
     expect(api.agent.prompt).not.toHaveBeenCalled()
-  })
-
-  it.each<[string, Session[]]>([
-    ['s1 has no project', [row(SID, null)]],
-    ['s1 is not in store.sessions', []]
-  ])('P4-01-04 %s: create({projectId: null})', async (_label, sessions) => {
-    act(() => useChatStore.setState({ sessions }))
-    await apply(legacyView())
-    await mount()
-    await click(newChatButton()!)
-    await flush()
-    expect(api.session.create.mock.calls).toEqual([[{ projectId: null }]])
-  })
-
-  it('P4-01-05 a double click creates once; the button is disabled while pending; the session switches after it resolves', async () => {
-    const pending = deferred<Session>()
-    api.session.create.mockImplementation(() => pending.promise)
-    await apply(legacyView())
-    await mount()
-    await click(newChatButton()!)
-    await click(newChatButton()!)
-    expect(api.session.create).toHaveBeenCalledTimes(1)
-    expect(newChatButton()!.disabled).toBe(true)
     expect(store().activeSessionId).toBe(SID)
-    await act(async () => pending.resolve(row(NEW_ID, 'p1')))
-    await flush()
-    expect(api.session.create).toHaveBeenCalledTimes(1)
-    expect(store().activeSessionId).toBe(NEW_ID)
   })
 
-  it('P4-01-06 a failed create: the send-error line shows x, the button is re-enabled, s1 stays active, the banner stays', async () => {
-    api.session.create.mockImplementation(async () => {
-      throw new Error('x')
-    })
-    await apply(legacyView())
-    await mount()
-    await click(newChatButton()!)
-    await flush()
-    expect(container.querySelector('[data-send-error]')?.textContent).toBe(
-      en.input.sendFailed.replace('{{error}}', 'x')
-    )
-    expect(newChatButton()!.disabled).toBe(false)
-    expect(store().activeSessionId).toBe(SID)
-    expect(legacyBanner()).not.toBeNull()
-  })
-
-  it('P4-01-07 channel mode (no HostApi): the banner and copy show, no [New chat], no composer', async () => {
+  it('P4-01-07 channel mode (no HostApi): the same banner and copy, no button, no composer', async () => {
     mocks.hasHost = false
     await apply(legacyView())
     await mount()
@@ -405,10 +326,9 @@ describe('P4-01-03 .. 07 [New chat]', () => {
     expect(legacyBanner()!.querySelector('[data-legacy-text]')!.textContent).toBe(
       en.chat.legacySessionReadOnly
     )
-    expect(newChatButton()).toBeNull()
+    expect(container.querySelectorAll('button')).toHaveLength(0)
     expectNoComposer()
     expect([...card().children]).toEqual([legacyBanner()])
-    expect(api.session.create).not.toHaveBeenCalled()
   })
 })
 
@@ -487,29 +407,22 @@ describe('P4-01-12 .. 15 hosts, copy, source, placeholder', () => {
     await mount({ thread: createElement('div', { 'data-thread': '' }) })
     expect(container.querySelector('[data-thread]')).not.toBeNull()
     expect(legacyBanner()).not.toBeNull()
-    expect(newChatButton()).not.toBeNull()
+    expect(legacyBanner()!.querySelectorAll('button')).toHaveLength(0)
     expect([...card().children]).toEqual([container.querySelector('[data-thread]'), legacyBanner()])
     expectNoComposer()
   })
 
-  it('P4-01-13 the copy comes from the existing keys, unchanged in zh, en and ja', () => {
+  it('P4-01-13 the copy states only that the session is read-only, in zh, en and ja', () => {
     expect(en.chat.legacySessionReadOnly).toBe(
-      'This conversation was created by an earlier version of ShuviX and is read-only. Clear it or start a new session to continue.'
+      'This conversation was created by an earlier version of ShuviX and is read-only.'
     )
-    expect(zh.chat.legacySessionReadOnly).toBe(
-      '这条会话由旧版本 ShuviX 创建，只能查看。清空它或新建一条会话即可继续。'
-    )
+    expect(zh.chat.legacySessionReadOnly).toBe('这条会话由旧版本 ShuviX 创建，只能查看。')
     expect(ja.chat.legacySessionReadOnly).toBe(
-      'この会話は以前のバージョンの ShuviX で作成されたため、閲覧のみ可能です。続けるには会話をクリアするか、新しいセッションを開始してください。'
+      'この会話は以前のバージョンの ShuviX で作成されたため、閲覧のみ可能です。'
     )
-    expect([en.sidebar.newChat, zh.sidebar.newChat, ja.sidebar.newChat]).toEqual([
-      'New Chat',
-      '新建对话',
-      '新規チャット'
-    ])
   })
 
-  it('P4-01-13 with i18n switched to zh the banner renders the zh copy and label', async () => {
+  it('P4-01-13 with i18n switched to zh the banner renders the zh copy', async () => {
     i18n.addResourceBundle('zh', 'translation', zh, true, true)
     await act(async () => {
       await i18n.changeLanguage('zh')
@@ -519,7 +432,6 @@ describe('P4-01-12 .. 15 hosts, copy, source, placeholder', () => {
     expect(legacyBanner()!.querySelector('[data-legacy-text]')!.textContent).toBe(
       zh.chat.legacySessionReadOnly
     )
-    expect(newChatButton()!.textContent).toBe(zh.sidebar.newChat)
   })
 
   it('P4-01-14 the "phase 4" comment is gone from InputArea.tsx', async () => {
@@ -545,31 +457,5 @@ describe('P4-01-12 .. 15 hosts, copy, source, placeholder', () => {
     await apply(durableView({ capabilities: { send: false, rollback: true, continue: true } }))
     await mount()
     expect(textarea().placeholder).toBe(en.chat.legacySessionReadOnly)
-  })
-})
-
-describe('P4-01-16 [New chat] is inconspicuous', () => {
-  it('P4-01-16 the button is the subtle (ghost) variant, never the primary filled button', async () => {
-    await apply(legacyView())
-    await mount()
-    const btn = newChatButton()!
-    expect(btn.dataset.variant).toBe('subtle')
-    for (const primary of ['bg-accent', 'text-white', 'hover:bg-accent-hover']) {
-      expect(btn.classList.contains(primary)).toBe(false)
-    }
-  })
-
-  it('P4-01-16 it stays subtle while a create is pending (disabled, not swapped for a filled style)', async () => {
-    const pending = deferred<Session>()
-    api.session.create.mockImplementation(() => pending.promise)
-    await apply(legacyView())
-    await mount()
-    await click(newChatButton()!)
-    const btn = newChatButton()!
-    expect(btn.disabled).toBe(true)
-    expect(btn.dataset.variant).toBe('subtle')
-    expect(btn.classList.contains('bg-accent')).toBe(false)
-    await act(async () => pending.resolve(row(NEW_ID, 'p1')))
-    await flush()
   })
 })
