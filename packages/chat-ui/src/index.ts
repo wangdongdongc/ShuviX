@@ -31,6 +31,9 @@ export { AssistantBubble } from './components/chat/AssistantBubble'
 export { UserBubble } from './components/chat/UserBubble'
 export { ThinkingBlock } from './components/chat/ThinkingBlock'
 export { ToolCallBlock } from './components/chat/ToolCallBlock'
+export { StepGroupView } from './components/chat/StepGroupView'
+export { groupConsecutiveSteps } from './components/chat/stepGrouping'
+export { buildVisibleItems } from './components/chat/conversationItems'
 export { CodeBlock } from './components/chat/CodeBlock'
 export {
   markdownComponents,

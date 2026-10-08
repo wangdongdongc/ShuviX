@@ -16,6 +16,10 @@
  *   P3-14-20 订阅失败 / 不可用：service_not_found → 「不在了」的文案、不抛；中途 unavailable → 画过的消息留着、
  *            不再流式、登记条目不删
  *   P3-14-21 hook agent 的行（没有 parentToolCallId）走同一条路；同一份视图来两次 → 每条消息对象不变、DOM 不重挂
+ *   GRP-5    视图一条条长出新的 assistant 消息：合并行是同一个 DOM 节点、展开态与里面展开着的工具卡都在，计数跟着长；
+ *            终答落盘之后合并行不动、终答只画一次
+ *   GRP-6    实时卡的思考 / 在跑的工具在合并行之外；那次调用落盘时还在跑 → 一张 running 卡、不进合并行；结果
+ *            回填之后并进同一个合并行（同一个节点、仍展开），一张 running 卡都不剩
  *
  * 渠道是 chat-ui 的 `fakeServer`（真 chord 服务端）经 `setSessionChannelApi` 注入；余项事件经真的 `useAgentEvents`
  * （渠道的 `agent.onEvent` 交出监听器，用例直接喂事件）。文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），
@@ -32,7 +36,11 @@ import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
 import type { SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
-import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type {
+  AssistantMessage,
+  AssistantToolBlock,
+  InlineToken
+} from '@shuvix/chat-protocol/types/chatMessage'
 
 vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 
@@ -279,7 +287,11 @@ describe('P3-14-14 committed and live text', () => {
     expect(occurrences('part')).toBe(1)
     expect(cursor()).not.toBeNull()
 
-    // 展开落盘卡里的工具卡与思考块，记下节点
+    // 思考 + 已完成的 read 与主对话一样并成一行合并步骤：先展开它，再展开里面的工具卡与思考块，记下节点
+    const groupNode = container.querySelector<HTMLElement>('[data-step-group]')!
+    expect(groupNode.getAttribute('data-group-size')).toBe('2')
+    act(() => groupNode.querySelector<HTMLElement>('button, [role="button"]')!.click())
+    expect(groupNode.getAttribute('data-group-state')).toBe('expanded')
     act(() => {
       container
         .querySelector<HTMLElement>('[data-tool-name="read"] [role], [data-tool-name="read"] > *')!
@@ -305,6 +317,9 @@ describe('P3-14-14 committed and live text', () => {
     expect(cursor()).toBeNull()
     expect(occurrences('part done')).toBe(1)
     expect(occurrences('part')).toBe(1)
+    // 新落盘的那条接在同一段里：合并行没被重挂，仍是展开的
+    expect(container.querySelector('[data-step-group]')).toBe(groupNode)
+    expect(groupNode.getAttribute('data-group-state')).toBe('expanded')
     expect(container.querySelector('[data-tool-name="read"]')).toBe(toolNode)
     expect(toolNode.textContent).toContain('R0')
     expect(
@@ -651,5 +666,169 @@ describe('P3-14-21 hook-agent rows (no parentToolCallId)', () => {
         n.textContent?.includes('A Title')
       )
     ).toBe(node)
+  })
+})
+
+describe('GRP-5/6 step groups across view updates', () => {
+  // 宿主下发的呈现表：折叠的工具卡带上参数摘要（`tN.txt`），才认得出是哪一次调用
+  beforeEach(() => {
+    useChatStore.setState({
+      toolPresentations: { read: { label: 'Read', icon: 'FileText' } }
+    })
+  })
+  afterEach(() => {
+    // 这时树还挂着（外层的 afterEach 才卸）：还原也要在 act 里
+    act(() => useChatStore.setState({ toolPresentations: {} }))
+  })
+
+  /** 一次 read（参数 `tN.txt`）；不给结果 = 还在跑 */
+  const read = (id: string, result?: string): AssistantToolBlock =>
+    toolBlock(id, 'read', { path: `${id}.txt` }, result === undefined ? {} : { result })
+  const group = (): HTMLElement => container.querySelector<HTMLElement>('[data-step-group]')!
+  const readCards = (): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('[data-tool-name="read"]')
+  ]
+  const cardOf = (id: string): HTMLElement[] =>
+    readCards().filter((el) => el.textContent?.includes(`${id}.txt`))
+  const click = (node: HTMLElement): void =>
+    act(() => node.querySelector<HTMLElement>('button, [role="button"]')!.click())
+  const push = (message: AssistantMessage): void =>
+    act(() =>
+      server.change(target('a1'), (draft) => {
+        ;(draft as AgentView).messages.push(message)
+      })
+    )
+
+  it('GRP-5 new committed steps join the same expanded group node; the expanded tool card inside survives; the final answer once', async () => {
+    useBgTaskStore.getState().upsert(agentTask('a1'))
+    register('a1')
+    server.serve(
+      target('a1'),
+      agentView('a1', {
+        messages: [
+          user('u1', 'do X', 'a1'),
+          assistant('m1', [read('t1', 'R1')], 'a1'),
+          assistant('m2', [read('t2', 'R2')], 'a1')
+        ],
+        run: { state: 'busy' }
+      })
+    )
+    render()
+    await toggle('a1')
+
+    // 一次一个工具的两条消息并成一行；展开它，再展开里面 t1 那张卡，记下节点
+    const groupNode = group()
+    expect(groupNode.getAttribute('data-group-size')).toBe('2')
+    expect(groupNode.getAttribute('data-group-state')).toBe('collapsed')
+    click(groupNode)
+    expect(groupNode.getAttribute('data-group-state')).toBe('expanded')
+    const [toolNode] = cardOf('t1')
+    click(toolNode!)
+    expect(toolNode!.textContent).toContain('R1')
+
+    // 新落盘一条 read：并进同一行（同一个节点、仍展开），t1 那张卡还是原来那个、还展开着
+    push(assistant('m3', [read('t3', 'R3')], 'a1'))
+    await settle()
+    expect(container.querySelectorAll('[data-step-group]')).toHaveLength(1)
+    expect(group()).toBe(groupNode)
+    expect(groupNode.getAttribute('data-group-size')).toBe('3')
+    expect(groupNode.querySelector('[data-group-count]')?.textContent).toBe('3')
+    expect(groupNode.getAttribute('data-group-state')).toBe('expanded')
+    expect(cardOf('t1')).toEqual([toolNode])
+    expect(toolNode!.textContent).toContain('R1')
+    expect(cardOf('t3')).toHaveLength(1)
+    expect(groupNode.contains(cardOf('t3')[0]!)).toBe(true)
+
+    // 终答落盘：这一段收口，合并行不动；终答只画一次，在合并行之后
+    push(assistant('m4', [text('final')], 'a1'))
+    await settle()
+    expect(group()).toBe(groupNode)
+    expect(groupNode.getAttribute('data-group-size')).toBe('3')
+    expect(groupNode.getAttribute('data-group-state')).toBe('expanded')
+    expect(occurrences('final')).toBe(1)
+    const finalNode = [...container.querySelectorAll('.markdown-body')].find(
+      (n) => n.textContent?.trim() === 'final'
+    )!
+    expect(groupNode.compareDocumentPosition(finalNode) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    )
+  })
+
+  it('GRP-6 live thinking and a running call stay outside the group; committed still running → one running card; back-filled → joins the same group', async () => {
+    useBgTaskStore.getState().upsert(agentTask('a1'))
+    register('a1')
+    server.serve(
+      target('a1'),
+      agentView('a1', {
+        messages: [
+          user('u1', 'do X', 'a1'),
+          assistant('m1', [read('t1', 'R1')], 'a1'),
+          assistant('m2', [read('t2', 'R2')], 'a1')
+        ],
+        live: liveCard(9, [thinking('live thought'), read('t3')], undefined, 'a1'),
+        toolRuns: { t3: { toolCallId: 't3', toolName: 'read', status: 'running' } },
+        run: { state: 'busy' }
+      } as Partial<AgentView>)
+    )
+    render()
+    await toggle('a1')
+    const groupNode = group()
+    expect(groupNode.getAttribute('data-group-size')).toBe('2')
+    click(groupNode)
+    expect(groupNode.getAttribute('data-group-state')).toBe('expanded')
+
+    // ① 实时：一行思考、一张在跑的 read，都在合并行之外；合并行仍是 2
+    const thoughts = [...container.querySelectorAll('button')].filter((b) =>
+      b.textContent?.includes('live thought')
+    )
+    expect(thoughts).toHaveLength(1)
+    expect(groupNode.contains(thoughts[0]!)).toBe(false)
+    const running = container.querySelectorAll<HTMLElement>('[data-tool-status="running"]')
+    expect(running).toHaveLength(1)
+    expect(running[0]!.getAttribute('data-tool-name')).toBe('read')
+    expect(running[0]!.textContent).toContain('t3.txt')
+    expect(groupNode.contains(running[0]!)).toBe(false)
+    expect(groupNode.getAttribute('data-group-size')).toBe('2')
+
+    // ② 实时卡落盘成一条消息，那次调用还在跑（结果没回填）：一张 running 卡，不进合并行，思考不重复
+    act(() =>
+      server.change(target('a1'), (draft) => {
+        const view = draft as AgentView
+        view.live = null
+        view.messages.push(assistant('m3', [read('t3')], 'a1'))
+      })
+    )
+    await settle()
+    expect(group()).toBe(groupNode)
+    expect(groupNode.getAttribute('data-group-size')).toBe('2')
+    expect(cardOf('t3')).toHaveLength(1)
+    expect(cardOf('t3')[0]!.getAttribute('data-tool-status')).toBe('running')
+    expect(groupNode.contains(cardOf('t3')[0]!)).toBe(false)
+    // 落盘的那条只带调用：实时那行思考随实时卡一起走了，没有画成两份
+    expect(occurrences('live thought')).toBe(0)
+
+    // ③ 结果回填：t3 并进同一个合并行（同一个节点、仍展开），一张 running 卡都不剩
+    act(() =>
+      server.change(target('a1'), (draft) => {
+        const view = draft as AgentView
+        const m3 = view.messages[3] as AssistantMessage
+        ;(m3.blocks[0] as AssistantToolBlock).result = 'R3'
+        view.toolRuns = {
+          t3: { toolCallId: 't3', toolName: 'read', status: 'done' }
+        } as unknown as AgentView['toolRuns']
+      })
+    )
+    await settle()
+    expect(group()).toBe(groupNode)
+    expect(groupNode.getAttribute('data-group-size')).toBe('3')
+    expect(groupNode.getAttribute('data-group-state')).toBe('expanded')
+    expect(container.querySelectorAll('[data-tool-status="running"]')).toHaveLength(0)
+    expect(readCards()).toHaveLength(3)
+    for (const card of readCards()) expect(groupNode.contains(card)).toBe(true)
+    expect(readCards().map((card) => /(t\d+)\.txt/.exec(card.textContent ?? '')?.[1])).toEqual([
+      't1',
+      't2',
+      't3'
+    ])
   })
 })

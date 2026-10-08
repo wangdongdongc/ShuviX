@@ -5,6 +5,11 @@
  * 子代理面板一份。现在只剩这一份，装在后台任务面板的派生 agent 详情里 —— 对话流里的
  * 工具卡退化成普通形态（参数 + 结果文本），实时状态挂在摘要行尾。
  * 见 docs/background-task-hub-design.md §6。
+ *
+ * 已落盘的转写与主对话卡走同一套分组：`buildVisibleItems` 把连续的 assistant 消息并成一段（一次 LLM 调用
+ * 一条 entry，模型多半一次只调一个工具 —— 按条渲染的话「read → read → grep」是三张各自只有一步的卡，步骤合并
+ * 永远凑不成一段），段内块按原序摊平交给 `groupConsecutiveSteps` → `StepGroupView`。两步都是主对话的原件，
+ * 不另抄一份规则：合并两份实现时留下的是面板那份逐块各画一行的老样子，主对话一改呈现，这里就悄悄落后过一次。
  */
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -16,12 +21,13 @@ import {
   InvalidTokenBadge,
   type SubSessionState
 } from '@shuvix/chat-ui'
-import { useChatStore, type ChatMessage } from '@shuvix/chat-ui'
+import { useChatStore, type ChatMessage, type AssistantMessage } from '@shuvix/chat-ui'
 import { isImeComposing } from '@shuvix/chat-ui'
 import { markdownComponents, markdownRemarkPlugins, markdownRehypePlugins } from '@shuvix/chat-ui'
 import { MarkdownSourceContext, MarkdownStreamingContext } from '@shuvix/chat-ui'
 import { ToolCallBlock } from '@shuvix/chat-ui'
 import { ThinkingBlock } from '@shuvix/chat-ui'
+import { StepGroupView, groupConsecutiveSteps, buildVisibleItems } from '@shuvix/chat-ui'
 import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -137,7 +143,7 @@ export function withoutSpawnPrompt(messages: ChatMessage[], prompt: string): Cha
   return [...messages.slice(0, index), ...messages.slice(index + 1)]
 }
 
-/** 单条子会话消息渲染 —— 一条 entry 一项；assistant 卡内按 blocks 顺序展开（视图逐项共享，没变的不重渲染） */
+/** 用户追问 / 错误行（视图逐项共享，没变的不重渲染） */
 const SubMessageBubble = memo(function SubMessageBubble({
   msg
 }: {
@@ -152,42 +158,28 @@ const SubMessageBubble = memo(function SubMessageBubble({
   if (msg.type === 'error_event') {
     return <div className="text-[11px] text-error/90 break-words">{msg.content}</div>
   }
-  if (msg.role !== 'assistant') return null
-
-  return (
-    <div className="space-y-1">
-      {msg.blocks.map((block, idx) => {
-        if (block.type === 'thinking') {
-          return <ThinkingBlock key={idx} content={block.text} />
-        }
-        if (block.type === 'text') {
-          return (
-            <div key={idx} className="markdown-body text-xs">
-              <ReactMarkdown
-                remarkPlugins={markdownRemarkPlugins}
-                rehypePlugins={markdownRehypePlugins}
-                components={markdownComponents}
-              >
-                {block.text}
-              </ReactMarkdown>
-            </div>
-          )
-        }
-        return (
-          <ToolCallBlock
-            key={block.toolCallId || idx}
-            toolName={block.toolName}
-            toolCallId={block.toolCallId}
-            args={block.args}
-            result={block.result}
-            details={block.details}
-            status={block.result === undefined ? 'running' : block.isError ? 'error' : 'done'}
-          />
-        )
-      })}
-    </div>
-  )
+  return null
 })
+
+/**
+ * 一段连续的 assistant 消息 —— 块摊平后按主对话卡的规则分组（相邻的思考 / 已完成工具调用合并成一行 + 计数）。
+ * 交回 Fragment：每个分组都是转写区的直接子节点，`focusLast` 的「只亮最后一块」按分组算，不按整段。
+ * 视图逐项共享消息对象，所以逐条比引用就知道这一段变没变。
+ */
+const SubAssistantRun = memo(
+  function SubAssistantRun({ msgs }: { msgs: AssistantMessage[] }): React.JSX.Element {
+    const groups = useMemo(() => groupConsecutiveSteps(msgs.flatMap((m) => m.blocks)), [msgs])
+    return (
+      <>
+        {groups.map((group) => (
+          <StepGroupView key={group.key} group={group} markdownClassName="markdown-body text-xs" />
+        ))}
+      </>
+    )
+  },
+  (prev, next) =>
+    prev.msgs.length === next.msgs.length && prev.msgs.every((m, i) => m === next.msgs[i])
+)
 
 /** 子会话流式内容视图（消息列表 + 当前流式 text/thinking/tool 调用） */
 export const SubSessionStream = memo(function SubSessionStream({
@@ -205,6 +197,8 @@ export const SubSessionStream = memo(function SubSessionStream({
     () => withoutSpawnPrompt(sub.messages, sub.prompt),
     [sub.messages, sub.prompt]
   )
+  // 段的 key 按轮次记（见 buildVisibleItems）：段只在尾部长，展开着的合并行不被重挂
+  const items = useMemo(() => buildVisibleItems(messages, false), [messages])
   // 实时卡里已经开始执行的工具（视图的 toolRuns 里有它、还没落盘成一条消息）：正在跑 / 刚跑完的工具卡
   const liveRuns = useMemo(() => {
     if (sub.toolExecutions.length === 0) return sub.toolExecutions
@@ -257,10 +251,16 @@ export const SubSessionStream = memo(function SubSessionStream({
         {sub.contextNote && <UserBubble content={sub.contextNote} />}
         <UserBubble content={sub.prompt} inlineTokens={sub.promptInlineTokens} />
 
-        {/* 已落盘的消息（每条卡内自行按块展开） */}
-        {messages.map((m) => (
-          <SubMessageBubble key={m.id} msg={m} />
-        ))}
+        {/* 已落盘的消息：连续的 assistant 消息并成一段，按主对话卡的规则合并步骤 */}
+        {items.map((item) => {
+          // 压缩摘要自成一项、不带 msgs（派生 agent 不压缩，这里只是不把它丢掉）
+          const run = item.msgs ?? (item.msg.role === 'assistant' ? [item.msg] : null)
+          return run ? (
+            <SubAssistantRun key={item.key} msgs={run} />
+          ) : (
+            <SubMessageBubble key={item.key} msg={item.msg} />
+          )
+        })}
 
         {/* 流式 thinking */}
         {hasThinkingContent(sub.streamingThinking) && (

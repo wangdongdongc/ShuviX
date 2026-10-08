@@ -3,6 +3,8 @@
  * 判定型带了 ownerTaskId 交 `{task}`、没带交锚；路由把它们原样交给协调器（`{anchor}` / `{task}` 拥有者），带上
  * 宿主派发的参数（基准模型 = modelConfig 译成 LockModel、hook 名、requestId `hook:<runId>`），登记 / 广播与
  * 工具派发同一套，只是 register 里没有 `parentToolCallId`。
+ *
+ * TITLE-2：hook 派发拿 hook 的显示名当描述，面板行读作 `<agent 显示名> · <hook 显示名>`；两者相同只写一次。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -14,7 +16,12 @@ import {
   promptPayload,
   verdict
 } from '../../hook/__tests__/harness'
-import { createdInfo, fakeSession, routerKit } from '../../durable/__tests__/support/router'
+import { createdInfo, fakeSession, hostR, routerKit } from '../../durable/__tests__/support/router'
+import { answer } from '../../durable/__tests__/support/faux'
+import { registerHostCleanup } from '../../durable/__tests__/support/host'
+import { PROFILES } from '../../durable/__tests__/support/spawn'
+
+registerHostCleanup()
 
 function realRouter(script: Parameters<typeof fakeSession>[0] = {}): ReturnType<
   typeof routerKit
@@ -90,4 +97,33 @@ describe('router · hook callers (P2-08)', () => {
     expect(kit.fc.spawnCalls[0]!.owner).toEqual({ anchor: true })
     expect(h.ends()).toEqual([expect.objectContaining({ ok: false, error: 'no valid result' })])
   })
+})
+
+describe('router · hook-dispatched row titles', () => {
+  it.each([
+    ['Explorer', 'Explorer'],
+    ['Automatic Session Titles', 'Explorer · Automatic Session Titles']
+  ])(
+    'TITLE-2 a hook run described as %j → row title %j; the subject has no parentToolCallId',
+    async (description, title) => {
+      const r = await hostR()
+      r.t.kit.queue(answer('titled'))
+      const outcome = await r.router.runTask({
+        sessionId: 's1',
+        owner: { anchor: true },
+        agentType: PROFILES.explore,
+        prompt: 'title it',
+        description,
+        hook: { name: 'auto-title', runId: 'r1' }
+      })
+      expect(outcome.result).toBe('titled')
+      const H = r.registers()[0]!.sessionId
+      const task = r.task(H)!
+      // 哪个 agent、由哪个 hook 派的；hook 显示名与 agent 显示名相同就不重复
+      expect(task.title).toBe(title)
+      expect(task.subject).toMatchObject({ kind: 'agent', profileName: 'explore', depth: 1 })
+      // 宿主派发：没有那张派发卡可挂
+      expect('parentToolCallId' in task.subject).toBe(false)
+    }
+  )
 })

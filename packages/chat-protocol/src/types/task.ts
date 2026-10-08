@@ -76,7 +76,7 @@ export interface TaskInfo {
   kind: TaskKind
   /** 归属的**可见**会话（派生 agent 取 rootSessionId，嵌套派生不落在中间那层身上） */
   sessionId: string
-  /** 面板行标题：bash 取 description、agent 取 displayName、子会话取会话标题 */
+  /** 面板行标题：bash 取 description、agent 取「displayName · 派发描述」、子会话取会话标题 */
   title: string
   status: TaskStatus
   /** 发起它的那次调用已不在等（超时降级 / 本就异步挂起） */

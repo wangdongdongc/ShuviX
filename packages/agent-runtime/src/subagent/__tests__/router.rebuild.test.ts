@@ -6,6 +6,7 @@
  *   P3-14-02 重建是惰性的：不提交、不装扩展、不调模型、不广播、不登记任务；不算忙
  *   P3-14-03 写坏的记录：其余照样认得、它不在；打开不抛；路由不记警告（目录已经警告过一次）
  *   P3-14-04 不覆盖活条目：onCreated 在前 → 重建不动它（连同运行标记）；重建在前 → onCreated 赢（FC）
+ *            TITLE-4：onCreated 赢的也包括行标题的显示名 + 描述 —— 任务条目被清掉之后追问重建，用的是它那一份
  *   P3-14-05 重启之后追问：continue 一次、扩展懒装一次、任务条目按记录建、sub_session_end 带回答、没有 user_message
  *   P3-14-06 重建之后的读与动作：getRuntimeInfo = agentInfo（不装扩展）；空闲中断无事；销毁丢条目、卸扩展
  *   P3-14-07 销毁墓碑（PIN-11）：同进程关了再开不收回；新进程又可路由
@@ -124,17 +125,17 @@ describe('router · rebuild at open', () => {
         [H.agentId, 's1']
       ])
       expect(r2.task(A.agentId)).toMatchObject({
-        title: 'Nester',
+        title: 'Nester · look',
         sessionId: 's1',
         subject: { kind: 'agent', profileName: 'nester', depth: 1 }
       })
       expect(r2.task(B.agentId)).toMatchObject({
-        title: 'Explorer',
+        title: 'Explorer · look',
         sessionId: 's1',
         subject: { kind: 'agent', profileName: 'explore', depth: 2 }
       })
       expect(r2.task(H.agentId)).toMatchObject({
-        title: 'Explorer',
+        title: 'Explorer · title',
         sessionId: 's1',
         subject: { kind: 'agent', profileName: 'explore', depth: 1 }
       })
@@ -244,6 +245,35 @@ describe('router · rebuild at open', () => {
     expect(fc.continueCalls).toEqual([[2, 'more']])
   })
 
+  it('TITLE-4 the rebuild first, then onCreated: a row recreated after dismiss is titled from onCreated, not the stale record (FC)', async () => {
+    const fc = fakeSession({
+      spawn: async (params) => {
+        params.onCreated?.(createdInfo())
+        return { result: 'found', conversationId: 2 as ConversationId, agentId: 'sub-a1' }
+      },
+      records: () => [
+        rec({
+          agentId: 'sub-a1',
+          conversationId: 9 as ConversationId,
+          displayName: 'Stale',
+          description: 'stale desc'
+        })
+      ]
+    })
+    const kit = routerKit({ get: () => fc.session, peek: async () => fc.session })
+    kit.router.indexSession(fc.session)
+    await kit.router.runTask(toolParams())
+    expect(kit.task('sub-a1')?.title).toBe('Explorer · look')
+
+    // 面板清掉这条，再追问：重建出来的行标题取 onCreated 记下的显示名 + 描述（Explorer / look）
+    expect(kit.tasks!.dismiss('sub-a1')).toBe(true)
+    expect(kit.task('sub-a1')).toBeUndefined()
+    await kit.router.continueTask({ subSessionId: 'sub-a1', text: 'more' })
+    expect(fc.continueCalls).toEqual([[2, 'more']])
+    expect(kit.task('sub-a1')).toMatchObject({ title: 'Explorer · look', status: 'done' })
+    expect(kit.task('sub-a1')?.title).not.toBe('Stale · stale desc')
+  })
+
   it(
     'P3-14-05 a follow-up after a restart: one continue on A, the extension installed once lazily, the task from the record, end carries the reply, no user_message',
     async () => {
@@ -263,7 +293,7 @@ describe('router · rebuild at open', () => {
       expect(spy.mock.calls).toEqual([[A.conversationId, 'more']])
       expect(spawnedRebuilds(r2, A.agentId)).toBe(1)
       expect(r2.task(A.agentId)).toMatchObject({
-        title: 'Explorer',
+        title: 'Explorer · look',
         sessionId: 's1',
         status: 'done',
         subject: { kind: 'agent', profileName: 'explore', depth: 1 }

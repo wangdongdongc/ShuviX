@@ -6,6 +6,9 @@
  *  - 停 = 软停止（interrupt）：部分结果、done、isError false；
  *  - 追问让同一条任务回到运行态；
  *  - 每条路径都落定（没落定的任务会把会话钉在 LRU 里）；重新挂上是幂等的（PIN-14）。
+ *
+ * 行标题（TITLE-1 / TITLE-3）：`档案显示名 · 派发描述`，描述先 trim；描述为空白或与显示名相同只写显示名；
+ * 条目被清掉之后追问重建的那条，标题与派发时同一个（描述随索引条目留着）。
  */
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
@@ -79,7 +82,7 @@ describe('router · agent task entries', () => {
       taskId: A,
       kind: 'agent',
       sessionId: 's1',
-      title: 'Explorer',
+      title: 'Explorer · look',
       status: 'running',
       detached: false,
       subject: { kind: 'agent', profileName: 'explore', depth: 1, parentToolCallId: CALL }
@@ -276,4 +279,50 @@ describe('router · agent task entries', () => {
       })
     }
   })
+})
+
+describe('router · agent task titles', () => {
+  it.each([
+    ['', 'Explorer'],
+    ['   ', 'Explorer'],
+    ['Explorer', 'Explorer'],
+    [' Explorer ', 'Explorer'],
+    ['  find X  ', 'Explorer · find X']
+  ])('TITLE-1 dispatch description %j → row title %j', async (description, title) => {
+    const r = await hostR()
+    r.t.kit.queue(callAgent('explore', 'find X', { description }), answer('found'), answer('done'))
+    expect(await r.session.submitUser('go')).toEqual({})
+    const A = r.registers()[0]!.sessionId
+    // 空白 / 与显示名相同（trim 之后）只写显示名；描述两端的空白不进标题
+    expect(r.task(A)?.title).toBe(title)
+  })
+
+  it.each(['dismiss', 'clearFinished'] as const)(
+    'TITLE-3 the entry cleared by %s, then a follow-up: the recreated row keeps "display name · description"',
+    async (clear) => {
+      const r = await hostR()
+      r.t.kit.queue(
+        callAgent('explore', 'find X', { description: 'find the callers of X' }),
+        answer('found'),
+        answer('done')
+      )
+      expect(await r.session.submitUser('go')).toEqual({})
+      const A = r.registers()[0]!.sessionId
+      expect(r.task(A)?.title).toBe('Explorer · find the callers of X')
+
+      // 面板上把这条已结束的行清掉：条目没了，路由的索引条目还在
+      if (clear === 'dismiss') expect(r.tasks!.dismiss(A)).toBe(true)
+      else expect(r.tasks!.clearFinished('s1')).toBe(1)
+      expect(r.task(A)).toBeUndefined()
+
+      // 追问重建任务条目：标题从索引条目里的显示名 + 描述来，与派发时一字不差
+      r.t.kit.queue(answer('more ok'))
+      await withTimeout(r.router.continueTask({ subSessionId: A, text: 'more' }), 3000, 'continue')
+      expect(r.task(A)).toMatchObject({
+        title: 'Explorer · find the callers of X',
+        status: 'done',
+        subject: { kind: 'agent', profileName: 'explore', depth: 1 }
+      })
+    }
+  )
 })

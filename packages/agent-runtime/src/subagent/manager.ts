@@ -182,11 +182,23 @@ export interface SubAgentManager {
 
 // ─────────────────────────── 实现 ───────────────────────────
 
+/**
+ * 面板行标题：`档案显示名 · 派发描述`（`探索 · 找出 X 的调用方`）—— 与对话流里那张派发卡的摘要同一种读法。
+ * 只写显示名的话，同一会话里派了三个 explore 就是三行一模一样的「探索」，分不出哪条在干什么。
+ * 描述为空或与显示名相同时只写显示名。hook 派发拿 hook 的显示名当描述，所以那类行读作
+ * `<agent 显示名> · <hook 显示名>` —— 哪个 agent、由哪个 hook 派的。
+ */
+export function agentTaskTitle(displayName: string, description: string): string {
+  const desc = description.trim()
+  return desc && desc !== displayName ? `${displayName} · ${desc}` : displayName
+}
+
 interface IndexEntry extends SubAgentLocation {
   /** register 里的那个父：派生调用方 = 它的 agentId，根 = 会话 id（PIN-15） */
   parentSessionId: string
-  /** 任务条目被清掉之后追问重建它用 */
+  /** 任务条目被清掉之后追问重建它用（行标题 = 档案显示名 · 派发描述，见 {@link agentTaskTitle}） */
   displayName: string
+  description: string
   profileName: string
   depth: number
 }
@@ -256,7 +268,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
   function ensureTask(
     agentId: string,
     sessionId: string,
-    title: string,
+    names: { displayName: string; description: string },
     subject: { profileName: string; depth: number; parentToolCallId?: string }
   ): void {
     const tasks = deps.tasks
@@ -267,7 +279,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         taskId: agentId,
         kind: 'agent',
         sessionId,
-        title,
+        title: agentTaskTitle(names.displayName, names.description),
         subject: { kind: 'agent', ...subject },
         // 停 = 软停止（保留已产出的部分结果、按「已完成」收尾），与面板上那枚中断按钮同义
         stop: () =>
@@ -364,6 +376,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         conversationId: info.conversationId,
         parentSessionId,
         displayName: info.displayName,
+        description: info.description,
         profileName: agentType.name,
         depth: info.depth
       })
@@ -381,7 +394,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         depth: info.depth,
         rootSessionId: sessionId
       })
-      ensureTask(agentId, sessionId, info.displayName, {
+      ensureTask(agentId, sessionId, info, {
         profileName: agentType.name,
         depth: info.depth,
         ...(parentToolCallId === undefined ? {} : { parentToolCallId })
@@ -480,6 +493,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         conversationId: record.conversationId,
         parentSessionId: parentOf(session, record.parentConversationId, sessionId),
         displayName: record.displayName,
+        description: record.description,
         profileName: record.profileName,
         depth: record.depth
       })
@@ -532,7 +546,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       }
 
       // 面板那条任务行代表的是**这个 agent**（不是它的某一轮），追问让它回到运行态
-      ensureTask(agentId, entry.sessionId, entry.displayName, {
+      ensureTask(agentId, entry.sessionId, entry, {
         profileName: entry.profileName,
         depth: entry.depth
       })
