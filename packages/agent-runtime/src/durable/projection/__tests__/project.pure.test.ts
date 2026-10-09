@@ -876,8 +876,7 @@ describe('P3-02 · pure projector: queue and asks', () => {
         toolName: 'ask',
         createdAt: 2,
         question: 'Q?',
-        options: [{ label: 'A', description: 'first' }],
-        allowMultiple: true
+        options: [{ label: 'A', description: 'first' }]
       }
     ]
     const view = P([], { asks })

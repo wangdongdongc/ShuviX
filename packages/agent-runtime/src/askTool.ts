@@ -29,14 +29,13 @@ export const AskParamsSchema = Type.Object({
       description: Type.String({ description: 'Longer description explaining the option' })
     }),
     { description: 'Options for the user to choose from', minItems: 2, maxItems: 9 }
-  ),
-  allowMultiple: Type.Optional(
-    Type.Boolean({ description: 'Whether the user can select multiple options. Default false.' })
   )
 })
 
 export const ASK_DESCRIPTION =
-  'Present a question with clickable options to the user. When the user needs to choose between approaches, styles, configurations, or any decision point, use this tool so the options are clickable rather than written out as plain text.'
+  'Present a question with clickable options to the user. When the user needs to choose between approaches, styles, configurations, or any decision point, use this tool so the options are clickable rather than written out as plain text. ' +
+  'The user may tick one option or several, or answer in their own words instead — how many to pick is their call, so do not tell them in the question, and write each option so it stands on its own. ' +
+  'Be ready for a result that names more than one option.'
 
 export interface CreateAskToolOptions {
   /** 挂起并等待用户响应（桌面经 IPC，扩展经 RuntimeSession；均落到共享 chat-ui 面板） */
@@ -76,7 +75,6 @@ export function createAskTool({
             toolName: 'ask',
             question: params.question,
             options: params.options,
-            allowMultiple: params.allowMultiple ?? false,
             createdAt: Date.now()
           }),
           context

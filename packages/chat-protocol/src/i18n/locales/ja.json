@@ -351,7 +351,6 @@
     "params": "パラメータ",
     "result": "結果",
     "confirmSelection": "確認",
-    "multiSelectHint": "複数選択可",
     "backgroundTag": "バックグラウンド",
     "fullAccessTag": "フルアクセス",
     "fullAccessHint": "このコマンドは通常の制限なしで実行することを求めている：このコンピュータ上のどのファイルも読み書きできる。",

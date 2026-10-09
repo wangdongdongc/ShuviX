@@ -351,7 +351,6 @@
     "params": "Parameters",
     "result": "Result",
     "confirmSelection": "Confirm",
-    "multiSelectHint": "Multiple selection allowed",
     "backgroundTag": "Background",
     "fullAccessTag": "Full access",
     "fullAccessHint": "This command asks to run without the usual restrictions: it can read and change any file on this computer.",

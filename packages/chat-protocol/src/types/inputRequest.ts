@@ -112,7 +112,6 @@ export interface ChoiceInputRequest extends InputRequestBase {
   question: string
   detail?: string
   options: Array<{ label: string; description: string }>
-  allowMultiple: boolean
 }
 
 export type InputRequest = AskInputRequest | ChoiceInputRequest

@@ -4,7 +4,8 @@
  * 契约（文件头 + 裁定 Q12）：
  *   ASK-1 注册项形状：name 'ask'、`replay: 'safe'`（问一句不改任何东西，中断后重跑 = 再问一遍）、
  *         schema / 描述、label 缺省 'Ask' 可由宿主换、durable 兜底截断取 2× 缺省
- *   ASK-2 询问 id = `api.callId`；请求的其余字段（choice / ask / question / options / allowMultiple 缺省 false）
+ *   ASK-2 询问 id = `api.callId`；请求的其余字段（choice / ask / question / options）；单选多选不由模型定，
+ *         它多传的 `allowMultiple` 不进请求
  *   ASK-3 应答 → 结果文字与 details（选了 / 没选 / 写了反馈 / 意外的应答种类）
  *   ASK-4 用户取消卡片（调用没被取消）→ isError 结果，文字是 abortError（缺省 'Aborted'），不抛
  *   ASK-5 询问通道出错（requestUserInput 抛 / reject）→ isError 结果，文字即那条错误
@@ -53,12 +54,14 @@ describe('ASK 注册项形状', () => {
 })
 
 describe('ASK 询问与应答', () => {
-  it('ASK-2 询问 id 就是 api.callId；其余字段照参数填，allowMultiple 缺省 false', async () => {
+  it('ASK-2 询问 id 就是 api.callId；其余字段照参数填，模型多传的 allowMultiple 不进请求', async () => {
     const { requestUserInput } = channel(() => ({ kind: 'choice', selections: ['Terse'] }))
     const tool = createAskTool({ requestUserInput })
 
     await invokeTool(tool, ARGS, { callId: 'call-ask-1', taskId: 7 })
-    await invokeTool(tool, { ...ARGS, allowMultiple: true }, { callId: 'call-ask-2' })
+    // 旧参数已不在 schema 里，但多出的键过得了校验 —— 模型照旧传也不会被拒
+    const withStrayFlag = { ...ARGS, allowMultiple: true }
+    await invokeTool(tool, withStrayFlag, { callId: 'call-ask-2' })
 
     expect(requestUserInput).toHaveBeenCalledTimes(2)
     expect(requestUserInput.mock.calls[0][0]).toStrictEqual({
@@ -67,13 +70,10 @@ describe('ASK 询问与应答', () => {
       toolName: 'ask',
       question: 'Which style?',
       options: ARGS.options,
-      allowMultiple: false,
       createdAt: expect.any(Number)
     })
-    expect(requestUserInput.mock.calls[1][0]).toMatchObject({
-      id: 'call-ask-2',
-      allowMultiple: true
-    })
+    expect(requestUserInput.mock.calls[1][0]).toMatchObject({ id: 'call-ask-2' })
+    expect(requestUserInput.mock.calls[1][0]).not.toHaveProperty('allowMultiple')
   })
 
   it.each([

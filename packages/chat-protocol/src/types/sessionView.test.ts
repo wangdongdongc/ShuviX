@@ -182,8 +182,7 @@ function fullView(): SessionView {
         toolName: 'ask',
         createdAt: 2,
         question: 'Which?',
-        options: [{ label: 'A', description: 'first' }],
-        allowMultiple: false
+        options: [{ label: 'A', description: 'first' }]
       }
     ],
     context: { usedTokens: 1250 }

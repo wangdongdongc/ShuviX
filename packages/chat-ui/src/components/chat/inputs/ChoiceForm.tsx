@@ -1,14 +1,16 @@
-import { Check, Circle, MessageCircleQuestion } from 'lucide-react'
+import { Check, MessageCircleQuestion } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ChoiceInputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { InputFormProps } from './types'
 import type { ChoiceDraft } from './drafts'
 
 /**
- * 选项题 —— 单选点中即作答，多选才有第二步。
+ * 选项题 —— 一律勾选 + 确认，选几项由用户定。
  *
- * 单选的「确认选择」是一步空转：点完选项唯一能做的就是再点一次确认，
- * 而未选中时它还要以禁用态占着一行。多选没这个性质（要先凑齐几项），确认键保留并靠右。
+ * 曾经由 agent 用 `allowMultiple` 决定单选还是多选，结果常常是问题里写着「可多选」、
+ * 参数却没传，表单成了点一下就交的单选。现在 agent 只给选项和说明，表单不分单选多选：
+ * 勾一项就是单选，勾几项就是多选。代价是单选也要多按一次确认 —— 换来的是
+ * 表单永远和问题说的对得上。确认键始终在，未勾选时禁用。
  * 折叠开关也撤了：面板自身封顶滚动（PendingInputsPanel 的 max-h），长列表不会顶走输入区。
  */
 export function ChoiceForm({
@@ -19,15 +21,11 @@ export function ChoiceForm({
   titleAccessory
 }: InputFormProps<ChoiceInputRequest, ChoiceDraft>): React.JSX.Element {
   const { t } = useTranslation()
-  const { question, detail, options, allowMultiple } = request
+  const { question, detail, options } = request
   const selected = draft.selected ?? []
 
-  /** 单选：点中即提交；多选：勾掉/勾上，等确认键 */
+  /** 勾上 / 勾掉，等确认键 */
   const handlePick = (label: string): void => {
-    if (!allowMultiple) {
-      onSubmit({ kind: 'choice', selections: [label] })
-      return
-    }
     onDraftChange({
       selected: selected.includes(label)
         ? selected.filter((s) => s !== label)
@@ -48,11 +46,6 @@ export function ChoiceForm({
         <p className="text-xs text-text-primary font-medium leading-snug flex-1 min-w-0 break-words">
           {question}
         </p>
-        {allowMultiple && (
-          <span className="flex-shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-accent/10 text-accent">
-            {t('toolCall.multiSelectHint')}
-          </span>
-        )}
         {titleAccessory}
       </div>
 
@@ -64,7 +57,7 @@ export function ChoiceForm({
 
       <div className="flex flex-col gap-0.5">
         {options.map((opt) => {
-          const isSelected = allowMultiple && selected.includes(opt.label)
+          const isSelected = selected.includes(opt.label)
           return (
             <button
               key={opt.label}
@@ -75,17 +68,13 @@ export function ChoiceForm({
                   : 'text-text-secondary hover:bg-bg-hover/40'
               }`}
             >
-              {allowMultiple ? (
-                <div
-                  className={`mt-0.5 w-3.5 h-3.5 rounded-[4px] flex-shrink-0 flex items-center justify-center border transition-colors ${
-                    isSelected ? 'border-accent bg-accent' : 'border-border-primary/60'
-                  }`}
-                >
-                  {isSelected && <Check size={9} className="text-white" />}
-                </div>
-              ) : (
-                <Circle size={14} className="mt-0.5 flex-shrink-0 text-text-tertiary/60" />
-              )}
+              <div
+                className={`mt-0.5 w-3.5 h-3.5 rounded-[4px] flex-shrink-0 flex items-center justify-center border transition-colors ${
+                  isSelected ? 'border-accent bg-accent' : 'border-border-primary/60'
+                }`}
+              >
+                {isSelected && <Check size={9} className="text-white" />}
+              </div>
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium leading-snug">{opt.label}</div>
                 {opt.description && (
@@ -99,18 +88,17 @@ export function ChoiceForm({
         })}
       </div>
 
-      {allowMultiple && (
-        <div className="flex items-center">
-          <span className="flex-1" />
-          <button
-            onClick={handleConfirm}
-            disabled={selected.length === 0}
-            className="px-3 py-1 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            {t('toolCall.confirmSelection')}
-          </button>
-        </div>
-      )}
+      <div className="flex items-center">
+        <span className="flex-1" />
+        <button
+          onClick={handleConfirm}
+          disabled={selected.length === 0}
+          className="px-3 py-1 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          {t('toolCall.confirmSelection')}
+          {selected.length > 0 && <span className="tabular-nums"> ({selected.length})</span>}
+        </button>
+      </div>
     </div>
   )
 }

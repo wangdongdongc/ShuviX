@@ -93,7 +93,6 @@ describe('PendingInputRequests', () => {
       toolName: 'ask',
       question: 'Which one?',
       options: [],
-      allowMultiple: false,
       createdAt: 0
     })
     void inputs.request({ id: 'r3', kind: 'ask', toolName: 'write', createdAt: 0 } as InputRequest)

@@ -351,7 +351,6 @@
     "params": "参数",
     "result": "结果",
     "confirmSelection": "确认选择",
-    "multiSelectHint": "可多选",
     "backgroundTag": "后台",
     "fullAccessTag": "完全访问",
     "fullAccessHint": "这条命令申请不受平时的限制运行：它可以读取和修改这台电脑上的任何文件。",
