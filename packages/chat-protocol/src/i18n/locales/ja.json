@@ -556,15 +556,32 @@
     "noEnabledModels": "モデル未有効",
     "apiKeyPlaceholder": "{{name}} APIキーを入力",
     "oauthTitle": "サブスクリプションでログイン",
-    "oauthDesc": "APIキーの代わりに SuperGrok / X Premium のサブスクリプションでログインします。リクエストは API クレジットではなくサブスクリプションの共有枠を使います。",
+    "oauthDesc": "API キーの代わりにサブスクリプションでログインします。リクエストは API クレジットではなくサブスクリプションの枠を使います。",
     "oauthConnectedDesc": "現在はサブスクリプション枠でリクエストします。下の API キーは保持されますが使用されません。",
-    "oauthSignIn": "SuperGrok / X Premium でログイン",
+    "oauthSignIn": "サブスクリプションでログイン",
     "oauthSignOut": "ログアウト",
     "oauthConnected": "接続済み",
-    "oauthDeviceHint": "開いたページでこのコードを入力して承認してください：",
+    "oauthDeviceHint": "開いたページでログインを承認してください。コードを求められたら次を入力します：",
     "oauthOpenPage": "認証ページを再度開く",
     "oauthWaiting": "ブラウザでの承認を待っています…",
     "oauthFailed": "サブスクリプションのログインに失敗しました",
+    "oauthBrowserHint": "開いたブラウザウィンドウでログインを完了してください。完了すると自動的に続行します。",
+    "oauthManualLabel": "ブラウザが ShuviX に戻れない場合（別のコンピューターでログインしたときなど）、最後に表示されたアドレスをここに貼り付けてください：",
+    "oauthManualSubmit": "続行",
+    "oauthProviders": {
+      "xai": {
+        "desc": "API キーの代わりに SuperGrok / X Premium のサブスクリプションでログインします。リクエストは API クレジットではなくサブスクリプションの共有枠を使います。",
+        "signIn": "SuperGrok / X Premium でログイン"
+      },
+      "kimi-coding": {
+        "desc": "API キーの代わりに Kimi Code メンバーシップでログインします。リクエストはメンバーシップの枠を使い、ログイン方法は Kimi Code CLI と同じです。",
+        "signIn": "Kimi Code でログイン"
+      },
+      "openai": {
+        "desc": "ChatGPT でログインし、API クレジットではなく ChatGPT のサブスクリプションを使います。ログインはブラウザで行います。",
+        "signIn": "ChatGPT でログイン"
+      }
+    },
     "baseUrlPlaceholder": "デフォルトURLを使用する場合は空欄",
     "httpLogTitle": "LLM リクエストログ",
     "httpLogDesc": "AIリクエストごとにリクエストボディが記録され、監査やデバッグに利用できます。",

@@ -245,11 +245,14 @@ const api = {
 
     // ---- 订阅登录（OAuth）----
     oauthStatus: (id: string) => ipcRenderer.invoke('provider:oauthStatus', id),
-    /** 发起设备码登录：Promise 一直挂到用户批准/超时/取消 */
+    /** 发起订阅登录：Promise 一直挂到用户批准/超时/取消 */
     oauthLogin: (id: string) => ipcRenderer.invoke('provider:oauthLogin', id),
     oauthCancel: (id: string) => ipcRenderer.invoke('provider:oauthCancel', id),
     oauthLogout: (id: string) => ipcRenderer.invoke('provider:oauthLogout', id),
-    /** 监听登录过程事件（设备码、进度） */
+    /** 回答登录中的提问（浏览器回不到本机时粘贴的地址） */
+    oauthAnswer: (params: { id: string; promptId: string; value: string }) =>
+      ipcRenderer.invoke('provider:oauthAnswer', params),
+    /** 监听登录过程事件（设备码、授权页、提问、进度） */
     onOAuthEvent: (callback: (event: ProviderOAuthUiEvent) => void) => {
       const handler = (_: Electron.IpcRendererEvent, event: ProviderOAuthUiEvent): void =>
         callback(event)

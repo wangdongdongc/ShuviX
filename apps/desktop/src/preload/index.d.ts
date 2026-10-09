@@ -411,9 +411,14 @@ declare global {
         params: ProviderUpdateModelCapabilitiesParams
       ) => Promise<{ success: boolean }>
       oauthStatus: (id: string) => Promise<ProviderOAuthStatusInfo>
-      oauthLogin: (id: string) => Promise<{ success: boolean; error?: string }>
+      oauthLogin: (id: string) => Promise<{ success: boolean; error?: string; cancelled?: boolean }>
       oauthCancel: (id: string) => Promise<{ success: boolean }>
       oauthLogout: (id: string) => Promise<{ success: boolean }>
+      oauthAnswer: (params: {
+        id: string
+        promptId: string
+        value: string
+      }) => Promise<{ success: boolean }>
       onOAuthEvent: (callback: (event: ProviderOAuthUiEvent) => void) => () => void
     }
     project: {

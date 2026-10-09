@@ -174,6 +174,11 @@ export interface LaunchOptions {
    * `~/.shuvix/hooks` 保持为空、又不会碰到询问的 hooks spec。
    */
   autoReview?: boolean
+  /**
+   * 追加给实例进程的环境变量（只这一个实例，不动 vitest 进程自己的 `process.env`）—— 例如把 pi 的
+   * Kimi 授权地址 `KIMI_CODE_OAUTH_HOST` 指到 spec 起的假服务器。盖不掉 HOME / userData 的隔离。
+   */
+  env?: Record<string, string>
 }
 
 export interface MarkdownLaunchOptions extends LaunchOptions {
@@ -285,10 +290,14 @@ function electronBinary(): string {
   return createRequire(import.meta.url)('electron') as string
 }
 
-/** 隔离实例的环境：fake HOME + 重定向的 userData；剔除会让 electron 退化成纯 node 的变量 */
-function instanceEnv(home: string): NodeJS.ProcessEnv {
+/**
+ * 隔离实例的环境：fake HOME + 重定向的 userData；剔除会让 electron 退化成纯 node 的变量。
+ * `extra` 是 spec 追加的变量（`LaunchOptions.env`）—— 排在 HOME / userData 之前，盖不掉隔离。
+ */
+function instanceEnv(home: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...extra,
     HOME: home,
     SHUVIX_VERIFY_USERDATA: join(home, 'userdata')
   }
@@ -397,7 +406,11 @@ export async function launchApp(
       '--disable-renderer-backgrounding',
       ...(opts.args ?? [])
     ],
-    { cwd: opts.cwd ?? DESKTOP_ROOT, env: instanceEnv(home), stdio: ['ignore', 'pipe', 'pipe'] }
+    {
+      cwd: opts.cwd ?? DESKTOP_ROOT,
+      env: instanceEnv(home, opts.env),
+      stdio: ['ignore', 'pipe', 'pipe']
+    }
   )
   track(child)
   let output = ''

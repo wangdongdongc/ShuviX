@@ -556,15 +556,32 @@
     "noEnabledModels": "No models enabled",
     "apiKeyPlaceholder": "Enter {{name}} API Key",
     "oauthTitle": "Subscription sign-in",
-    "oauthDesc": "Sign in with your SuperGrok or X Premium subscription instead of an API key. Requests then draw on your subscription's shared usage pool rather than API credits.",
+    "oauthDesc": "Sign in with your subscription instead of an API key. Requests then draw on the subscription's quota rather than API credits.",
     "oauthConnectedDesc": "Requests use your subscription quota. The API key below is kept but not used.",
-    "oauthSignIn": "Sign in with SuperGrok or X Premium",
+    "oauthSignIn": "Sign in with your subscription",
     "oauthSignOut": "Sign out",
     "oauthConnected": "Connected",
-    "oauthDeviceHint": "Enter this code on the page that opened to authorize:",
+    "oauthDeviceHint": "Approve the sign-in on the page that opened. If it asks for a code, enter this one:",
     "oauthOpenPage": "Reopen authorization page",
     "oauthWaiting": "Waiting for authorization in your browser…",
     "oauthFailed": "Subscription sign-in failed",
+    "oauthBrowserHint": "Finish signing in in the browser window that opened. ShuviX carries on by itself once you're done.",
+    "oauthManualLabel": "If the browser can't get back to ShuviX (for example, you signed in on another computer), paste the address it ended on:",
+    "oauthManualSubmit": "Continue",
+    "oauthProviders": {
+      "xai": {
+        "desc": "Sign in with your SuperGrok or X Premium subscription instead of an API key. Requests then draw on your subscription's shared usage pool rather than API credits.",
+        "signIn": "Sign in with SuperGrok or X Premium"
+      },
+      "kimi-coding": {
+        "desc": "Sign in with your Kimi Code membership instead of an API key. Requests then use your membership's quota, through the same sign-in the Kimi Code CLI uses.",
+        "signIn": "Sign in with Kimi Code"
+      },
+      "openai": {
+        "desc": "Sign in with ChatGPT to use your ChatGPT subscription instead of API credits. You sign in in your browser.",
+        "signIn": "Sign in with ChatGPT"
+      }
+    },
     "baseUrlPlaceholder": "Leave empty to use default URL",
     "httpLogTitle": "LLM Request Logs",
     "httpLogDesc": "Each AI request is logged for auditing and debugging.",

@@ -293,4 +293,23 @@ describe('i18n 语言包', () => {
       expect(placeholders(leaf(bundle, 'queue.withdrawFailed') ?? ''), lang).toEqual(['error'])
     }
   })
+
+  /**
+   * LOC-1 订阅登录：三家各自的按钮与说明、浏览器登录的提示与粘贴地址那一栏，三语都有、都不是空串 ——
+   * 界面按 `settings.oauthProviders.<slug>` 取文案、缺了退回通用那句，所以漏译不报错，只是悄悄变成通用文案。
+   */
+  it('LOC-1 subscription sign-in copy: per-provider label and description, browser hint, paste field', () => {
+    const KEYS = [
+      ...['xai', 'kimi-coding', 'openai'].flatMap((slug) => [
+        `settings.oauthProviders.${slug}.signIn`,
+        `settings.oauthProviders.${slug}.desc`
+      ]),
+      'settings.oauthBrowserHint',
+      'settings.oauthManualLabel',
+      'settings.oauthManualSubmit'
+    ]
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const key of KEYS) expect(leaf(bundle, key)?.trim(), `${lang} ${key}`).toBeTruthy()
+    }
+  })
 })

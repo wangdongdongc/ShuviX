@@ -556,15 +556,32 @@
     "noEnabledModels": "未启用模型",
     "apiKeyPlaceholder": "输入 {{name}} API Key",
     "oauthTitle": "订阅登录",
-    "oauthDesc": "用 SuperGrok 或 X Premium 订阅登录，不必填 API Key。登录后请求走订阅的共享额度，而不是 API 计费。",
+    "oauthDesc": "用订阅登录，不必填 API Key。登录后请求走订阅额度，而不是 API 计费。",
     "oauthConnectedDesc": "当前请求走订阅额度；下方 API Key 保留但不使用。",
-    "oauthSignIn": "用 SuperGrok / X Premium 登录",
+    "oauthSignIn": "用订阅登录",
     "oauthSignOut": "退出登录",
     "oauthConnected": "已连接",
-    "oauthDeviceHint": "在打开的页面里输入此代码完成授权：",
+    "oauthDeviceHint": "在打开的页面里批准登录；如果页面要求输入代码，填这一串：",
     "oauthOpenPage": "重新打开授权页",
     "oauthWaiting": "等待在浏览器中授权…",
     "oauthFailed": "订阅登录失败",
+    "oauthBrowserHint": "在打开的浏览器窗口里完成登录，完成后这里会自动继续。",
+    "oauthManualLabel": "浏览器回不到 ShuviX 时（例如在另一台电脑上登录），把它最后停下的地址粘贴到这里：",
+    "oauthManualSubmit": "继续",
+    "oauthProviders": {
+      "xai": {
+        "desc": "用 SuperGrok 或 X Premium 订阅登录，不必填 API Key。登录后请求走订阅的共享额度，而不是 API 计费。",
+        "signIn": "用 SuperGrok / X Premium 登录"
+      },
+      "kimi-coding": {
+        "desc": "用 Kimi Code 会员登录，不必填 API Key。登录后请求走会员额度，登录方式与 Kimi Code CLI 相同。",
+        "signIn": "用 Kimi Code 登录"
+      },
+      "openai": {
+        "desc": "用 ChatGPT 账号登录，请求走 ChatGPT 订阅，而不是 API 计费。登录在浏览器里完成。",
+        "signIn": "用 ChatGPT 登录"
+      }
+    },
     "baseUrlPlaceholder": "留空使用默认地址",
     "httpLogTitle": "LLM 请求日志",
     "httpLogDesc": "每次请求 AI 时会记录请求体，便于审计和排查。",

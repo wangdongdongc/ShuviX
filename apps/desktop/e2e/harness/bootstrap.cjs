@@ -13,8 +13,12 @@
  * 原生「打开文件」框（它同样起 OS 级模态，CDP 关不掉），spec 可以断这个文件是空的。
  * 这只挡得住**主进程 JS** 发起的框；页面里 `<input type=file>` 自己弹的框走 Chromium 的 C++ 路径，
  * 由产品的 agentGuards 与 spec 自己的 `interceptFileChoosers`（browserFixtures.ts）挡。
+ *
+ * 同理 `shell.openExternal` 换成记录器（见 EXTERNAL_OPEN_LOG）：e2e 永远不该在开发者的机器上打开
+ * 系统浏览器（订阅登录会自动打开验证页 / 授权页），spec 读这个文件断言「打开了哪个地址」。
  */
-const { app, dialog, ipcMain } = require('electron')
+const electron = require('electron')
+const { app, dialog, ipcMain } = electron
 const { appendFileSync } = require('fs')
 const { join } = require('path')
 const userData = process.env.SHUVIX_VERIFY_USERDATA
@@ -58,6 +62,31 @@ process.on('uncaughtException', (err) => {
     // 记不下来也只能这样了：stderr 那一行还在实例输出里
   }
 })
+
+/**
+ * 交给系统打开的地址的记录文件名（在 userData 下；每行一个地址）。
+ *
+ * 主进程里通往系统浏览器的只有 `shell.openExternal`（externalOpen/gate.ts 的 openExternally，调用时才
+ * 取 `electron.shell.openExternal`，所以在加载产物之前换掉就够了）。换成记录器：地址照样过产品自己的
+ * 闸（routeExternalUrl 的裁决都还在），只是最后那一步不真的交给系统 —— 订阅登录会自动打开验证页 /
+ * 授权页，跑一次 e2e 不该在开发者屏幕上弹出浏览器，更不该打开真的 auth.openai.com。
+ */
+const EXTERNAL_OPEN_LOG = 'e2e-external-open.log'
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+async function recordExternalOpen(url) {
+  if (!userData) return
+  try {
+    appendFileSync(join(userData, EXTERNAL_OPEN_LOG), `${String(url)}\n`)
+  } catch {
+    // 记不下来也不能让调用方失败
+  }
+}
+electron.shell.openExternal = recordExternalOpen
+// 换不上（某个 Electron 版本把 shell 冻住了）就别往下跑：宁可实例起不来，也不能真的打开浏览器
+if (electron.shell.openExternal !== recordExternalOpen) {
+  process.stderr.write('[e2e] could not stub shell.openExternal; refusing to start\n')
+  process.exit(1)
+}
 
 dialog.showOpenDialog = async (...args) => {
   recordNativeDialog('showOpenDialog', args)

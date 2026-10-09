@@ -119,40 +119,77 @@ export function registerProviderHandlers(): void {
   })
 
   /**
-   * 发起设备码登录。这个调用会一直挂到用户在浏览器里批准（或超时/取消）为止 ——
-   * 期间的设备码经 `provider:oauth-event` 推给发起方窗口（设置面板是独立窗口，
-   * 所以发给 event.sender 而不是主窗口）。
+   * 发起订阅登录。这个调用会一直挂到用户在浏览器里批准（或超时/取消/失败）为止 ——
+   * 期间的事件经 `provider:oauth-event` 推给发起方窗口（设置面板是独立窗口，所以发给
+   * event.sender 而不是主窗口）：设备码、授权页地址、要用户粘贴地址的提问（答案走
+   * `provider:oauthAnswer`）。结束时推一条 `finished`：同一窗口里重新挂载的设置页（发起它的那个
+   * 组件已经卸载、Promise 没人等）靠它知道该重查状态。
+   *
+   * 登录跟着发起它的窗口走：窗口关了就取消。浏览器流程（OpenAI）本身没有期限，不取消的话它会一直
+   * 占着本机回调端口和这家的登录名额，直到重启。
    */
   ipcMain.handle('provider:oauthLogin', async (event, id: string) => {
+    const sender = event.sender
     const send = (payload: ProviderOAuthUiEvent): void => {
-      if (event.sender.isDestroyed()) return
-      event.sender.send('provider:oauth-event', payload)
+      if (sender.isDestroyed()) return
+      sender.send('provider:oauth-event', payload)
     }
-    return providerOAuthService.login(id, (e) => {
-      if (e.type === 'device_code') {
-        send({
-          providerId: id,
-          kind: 'device_code',
-          userCode: e.userCode,
-          verificationUri: e.verificationUri,
-          expiresInSeconds: e.expiresInSeconds
-        })
-        // 顺手把验证页打开；打不开也不算失败，界面上有链接和用户码可以手动走。
-        // 这个地址来自提供商服务器的响应，不是写死的，所以同样过 externalOpen 那道闸
-        void routeExternalUrl(e.verificationUri, {
-          parent: BrowserWindow.fromWebContents(event.sender)
-        })
-        return
-      }
-      if (e.type === 'auth_url') {
-        send({ providerId: id, kind: 'message', message: e.instructions || e.url })
-        return
-      }
-      if (e.type === 'info' || e.type === 'progress') {
-        send({ providerId: id, kind: 'message', message: e.message })
+    // 顺手把验证页 / 授权页打开；打不开也不算失败，界面上有链接可以手动走。
+    // 这个地址来自提供商服务器的响应（或 pi 拼的授权地址），不是写死的，所以同样过 externalOpen 那道闸
+    const openInBrowser = (url: string): void => {
+      if (sender.isDestroyed()) return
+      void routeExternalUrl(url, { parent: BrowserWindow.fromWebContents(sender) })
+    }
+    const cancelOnClose = (): void => providerOAuthService.cancelLogin(id)
+    sender.once('destroyed', cancelOnClose)
+    const result = await providerOAuthService.login(id, (e) => {
+      switch (e.type) {
+        case 'device_code':
+          send({
+            providerId: id,
+            kind: 'device_code',
+            userCode: e.userCode,
+            verificationUri: e.verificationUri,
+            expiresInSeconds: e.expiresInSeconds
+          })
+          openInBrowser(e.verificationUri)
+          return
+        case 'auth_url':
+          send({ providerId: id, kind: 'auth_url', url: e.url })
+          openInBrowser(e.url)
+          return
+        case 'prompt':
+          send({
+            providerId: id,
+            kind: 'prompt',
+            promptId: e.promptId,
+            input: e.input,
+            message: e.message,
+            placeholder: e.placeholder
+          })
+          return
+        case 'prompt_closed':
+          send({ providerId: id, kind: 'prompt_closed', promptId: e.promptId })
+          return
+        case 'info':
+        case 'progress':
+          send({ providerId: id, kind: 'message', message: e.message })
       }
     })
+    if (!sender.isDestroyed()) sender.removeListener('destroyed', cancelOnClose)
+    send({ providerId: id, kind: 'finished' })
+    return result
   })
+
+  /** 回答登录中的提问（浏览器回不到本机时粘贴的地址）；提问已经不在 → success: false */
+  ipcMain.handle(
+    'provider:oauthAnswer',
+    (_event, params: { id: string; promptId: string; value: string }) => {
+      return {
+        success: providerOAuthService.answerPrompt(params.id, params.promptId, params.value)
+      }
+    }
+  )
 
   /** 取消进行中的登录 */
   ipcMain.handle('provider:oauthCancel', (_event, id: string) => {

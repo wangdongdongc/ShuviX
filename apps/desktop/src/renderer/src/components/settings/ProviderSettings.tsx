@@ -27,6 +27,7 @@ const providerApi: ProviderTabApi = {
     login: (id) => window.api.provider.oauthLogin(id),
     cancel: (id) => window.api.provider.oauthCancel(id),
     logout: (id) => window.api.provider.oauthLogout(id),
+    answer: (id, promptId, value) => window.api.provider.oauthAnswer({ id, promptId, value }),
     onEvent: (cb) => window.api.provider.onOAuthEvent(cb),
     openExternal: (url) => window.api.app.openExternal(url)
   }
