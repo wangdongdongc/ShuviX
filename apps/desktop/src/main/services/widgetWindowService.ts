@@ -1,11 +1,11 @@
 import { BrowserWindow } from 'electron'
 import { join } from 'path'
-import { is } from '@electron-toolkit/utils'
 import { settingsDao } from '../dao/settingsDao'
 import { guardAppWindow } from './externalOpen'
 import { widgetService } from './widget'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
+import { loadRendererPage } from '../utils/rendererPage'
 
 const log = createLogger('WidgetWindow')
 
@@ -138,11 +138,7 @@ export function open(widgetId: string): void {
   guardAppWindow(win, { labelKey: 'externalOpen.fromWidget', value: widget.name })
 
   const hash = `widget-window?widgetId=${encodeURIComponent(widgetId)}`
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#${hash}`)
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'), { hash })
-  }
+  loadRendererPage(win, hash)
 
   win.once('ready-to-show', () => {
     win.show()

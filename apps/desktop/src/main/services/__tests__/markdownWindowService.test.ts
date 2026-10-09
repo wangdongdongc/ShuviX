@@ -96,7 +96,9 @@ const fx = vi.hoisted(() => {
     /** 协作编辑的去程经它发（liveDocumentBridge.attachLiveDocument 挂的就是它） */
     readonly webContents = {
       send: vi.fn(),
-      isDestroyed: (): boolean => this.destroyed
+      isDestroyed: (): boolean => this.destroyed,
+      /** loadRendererPage 挂 did-navigate / did-fail-load（重试由 rendererPage 自己的测试管） */
+      on: vi.fn()
     }
 
     constructor(options: Record<string, unknown>) {
@@ -366,6 +368,10 @@ describe('MW-3 ~ MW-7 开窗', () => {
     const params = hashParams(url.slice(url.indexOf('#') + 1))
     expect(params.path).toBe(join(realRoot, 'dir', 'a.md'))
     expect(params.sessionId).toBe(fx.create.mock.results[0].value.id)
+    // 关窗收掉 loadRendererPage 开发态的挂住计时器：留着它，5 秒后会在别的用例里再 loadURL 一次、
+    // 往共用的 fx.log 里记一条 warn
+    win.destroyed = true
+    win.emit('closed')
   })
 
   it('MW-5 对照：ELECTRON_RENDERER_URL 有值但不是开发态 → 仍 loadFile', () => {

@@ -36,7 +36,10 @@ import {
 } from './cdp'
 
 const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-/** 本 checkout 渲染端产物的 URL 前缀 —— target 的身份判据（percent-encoding 与 CDP 一致） */
+/**
+ * 本 checkout 渲染端产物的 URL 前缀 —— target 的身份判据（percent-encoding 与 CDP 一致）。
+ * spec 用 `env.ELECTRON_RENDERER_URL` 让实例走开发态的 http 加载时，判据换成那个地址（见 launchApp）。
+ */
 const APP_URL = pathToFileURL(join(DESKTOP_ROOT, 'out', 'renderer')).href
 /** bootstrap.cjs 在主进程 Node 'exit' 时写到 stderr 的一行：应用自己的退出流程已走完（见 stop()） */
 const JS_EXITED_MARKER = '[e2e] main-process js exited'
@@ -177,6 +180,10 @@ export interface LaunchOptions {
   /**
    * 追加给实例进程的环境变量（只这一个实例，不动 vitest 进程自己的 `process.env`）—— 例如把 pi 的
    * Kimi 授权地址 `KIMI_CODE_OAUTH_HOST` 指到 spec 起的假服务器。盖不掉 HOME / userData 的隔离。
+   *
+   * `ELECTRON_RENDERER_URL` 让实例像 `electron-vite dev` 那样从这个 http 地址加载渲染端（e2e 实例不是
+   * 打包产物，is.dev 为真）；target 的身份判据随之换成这个地址，所以它的路径里要带 `out/renderer`
+   * （`isMainPage` 认的是它）—— 见 rendererServer.ts。不给就读本 checkout 的产物文件。
    */
   env?: Record<string, string>
 }
@@ -303,6 +310,10 @@ function instanceEnv(home: string, extra: Record<string, string> = {}): NodeJS.P
   }
   // 该变量会让 electron 二进制退化为纯 node（不起窗口）—— 必须剔除
   delete env.ELECTRON_RUN_AS_NODE
+  // 开发者 shell 里导出的 dev server 地址不许继承：实例会去那台 dev server（也许是另一个 checkout 的）
+  // 加载渲染端，target 也对不上本 checkout 的产物。要它就由 spec 经 `extra` 明说
+  // （electron-vite 的类型把它声明成只读，delete 过不了类型检查）
+  if (!('ELECTRON_RENDERER_URL' in extra)) Reflect.deleteProperty(env, 'ELECTRON_RENDERER_URL')
   return env
 }
 
@@ -355,6 +366,8 @@ export async function launchApp(
 ): Promise<E2EApp | E2EMarkdownApp> {
   const expectMain = !('expectMainWindow' in opts && opts.expectMainWindow === false)
   const expectMarkdown = expectMain ? 0 : ((opts as MarkdownLaunchOptions).markdownWindows ?? 1)
+  /** 本实例渲染端的地址前缀：缺省是产物目录；spec 给了 dev server 地址就是它（见 LaunchOptions.env） */
+  const appUrl = opts.env?.ELECTRON_RENDERER_URL ?? APP_URL
   const pinned = process.env.SHUVIX_E2E_PORT
   const port = pinned ? Number(pinned) : await freePort()
 
@@ -431,7 +444,7 @@ export async function launchApp(
 
   const markdownWindows = async (): Promise<MarkdownWindowTarget[]> =>
     (await listTargets(port).catch(() => [] as CdpTarget[]))
-      .filter((t) => isMarkdownWindowPage(t, APP_URL))
+      .filter((t) => isMarkdownWindowPage(t, appUrl))
       .flatMap((t) => {
         const md = markdownWindowOf(t)
         return md ? [{ ...md, url: t.url, webSocketDebuggerUrl: t.webSocketDebuggerUrl }] : []
@@ -460,9 +473,9 @@ export async function launchApp(
       if (exited) throw fail('instance exited during startup')
       seen = await listTargets(port).catch(() => [])
       if (expectMain) {
-        target = seen.find((t) => isMainPage(t, APP_URL))
+        target = seen.find((t) => isMainPage(t, appUrl))
         if (target) break
-      } else if (seen.filter((t) => isMarkdownWindowPage(t, APP_URL)).length >= expectMarkdown) {
+      } else if (seen.filter((t) => isMarkdownWindowPage(t, appUrl)).length >= expectMarkdown) {
         break
       }
       if (Date.now() > deadline) {
@@ -473,7 +486,7 @@ export async function launchApp(
         throw fail(
           `timeout waiting: ${what} on port ${port}` +
             (foreign.length
-              ? `\n--- page targets on that port (ours start with ${APP_URL}) ---\n${foreign.join('\n')}`
+              ? `\n--- page targets on that port (ours start with ${appUrl}) ---\n${foreign.join('\n')}`
               : '')
         )
       }
@@ -488,7 +501,7 @@ export async function launchApp(
     } else {
       installTargetForensics(port)
       // 没有主窗口（带着 md 启动）：等到任意一个 md 窗口的 window.api 就绪再交出实例
-      const md = (await listTargets(port)).find((t) => isMarkdownWindowPage(t, APP_URL))
+      const md = (await listTargets(port)).find((t) => isMarkdownWindowPage(t, appUrl))
       const client = md ? await connectReady(md.webSocketDebuggerUrl) : null
       if (!client) throw fail('no #markdown-window with window.api')
       client.close()
@@ -546,7 +559,7 @@ export async function launchApp(
       mainLog,
       output: () => output,
       async browserWindow() {
-        const bt = (await listTargets(port)).find((t) => isBrowserWindowPage(t, APP_URL))
+        const bt = (await listTargets(port)).find((t) => isBrowserWindowPage(t, appUrl))
         return bt ? connect(bt.webSocketDebuggerUrl) : null
       },
       markdownWindows,
@@ -556,7 +569,7 @@ export async function launchApp(
       },
       async mainWindow() {
         const mt = (await listTargets(port).catch(() => [] as CdpTarget[])).find((t) =>
-          isMainPage(t, APP_URL)
+          isMainPage(t, appUrl)
         )
         return mt ? connectReady(mt.webSocketDebuggerUrl) : null
       },
@@ -574,7 +587,7 @@ export async function launchApp(
         const st = await until(
           async () =>
             (await listTargets(port)).find(
-              (t) => t.url.startsWith(APP_URL) && t.url.includes('#settings')
+              (t) => t.url.startsWith(appUrl) && t.url.includes('#settings')
             ),
           'settings window target'
         )

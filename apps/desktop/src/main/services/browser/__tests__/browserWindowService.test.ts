@@ -197,6 +197,9 @@ describe('停放窗口（ST-U1）', () => {
     const bw = theBrowserWindow()
     expect(bw.loadFile).not.toHaveBeenCalled()
     expect(bw.loadURL).toHaveBeenCalledWith('http://localhost:5173#browser-window')
+    // 销毁（随后发 closed）收掉 loadRendererPage 开发态的挂住计时器：留着它，5 秒后会在别的用例里
+    // 对这扇早已不用的窗口再 loadURL 一次
+    bw.destroy()
   })
 })
 

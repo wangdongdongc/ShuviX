@@ -18,13 +18,13 @@
 import { BrowserWindow } from 'electron'
 import { basename, dirname, join, resolve } from 'path'
 import { realpathSync } from 'fs'
-import { is } from '@electron-toolkit/utils'
 import { chatFrontendRegistry, type ChatFrontend } from '../frontend/core'
 import { sessionService } from './sessionService'
 import { attachLiveDocument, detachLiveDocument } from './liveDocumentBridge'
 import { guardAppWindow } from './externalOpen'
 import { isExistingFile, isMarkdownPath } from '../utils/markdownFiles'
 import { createLogger } from '../logger'
+import { loadRendererPage } from '../utils/rendererPage'
 
 const log = createLogger('MarkdownWindow')
 
@@ -151,10 +151,6 @@ export function openMarkdownFile(filePath: string): boolean {
   // （LivePreviewEditor 的 resolveMarkdownImageSrc）。会话里的 notebookPath 仍是文件名 ——
   // notebook 档案的提示词说的是「相对工作目录」，给它文件名这句话才准
   const hash = `markdown-window?sessionId=${encodeURIComponent(session.id)}&path=${encodeURIComponent(path)}`
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#${hash}`)
-  } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'), { hash })
-  }
+  loadRendererPage(win, hash)
   return true
 }

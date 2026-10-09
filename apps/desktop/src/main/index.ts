@@ -37,6 +37,7 @@ import {
 import { sessionRunErrorText, setSessionAskObserver } from './services/sessionSignals'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
 import { markdownFilesFromArgv } from './utils/markdownFiles'
+import { loadRendererPage } from './utils/rendererPage'
 import {
   initWidgetWindowService,
   closeAll as closeAllWidgetWindows
@@ -226,11 +227,7 @@ function openSettingsWindow(tab?: string): void {
 
   // 加载同一渲染入口，用 #settings hash 区分（可附加 tab 路径如 #settings/providers）
   const hash = tab ? `settings/${tab}` : 'settings'
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    settingsWindow.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#${hash}`)
-  } else {
-    settingsWindow.loadFile(join(__dirname, '../renderer/index.html'), { hash })
-  }
+  loadRendererPage(settingsWindow, hash)
 
   // 页面 <title> 是产品名 "ShuviX"，加载完成会覆盖窗口标题 → 拦住，
   // 否则任务栏/Alt+Tab 里主窗口与设置窗口同名无法区分
@@ -518,14 +515,8 @@ function createWindow(): void {
 
   step('createWindow › listeners', () => attachMainWindowListeners(win))
 
-  // 开发环境加载 HMR URL，生产环境加载本地文件
-  step('createWindow › load page', () => {
-    if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-      void win.loadURL(process.env['ELECTRON_RENDERER_URL'])
-    } else {
-      void win.loadFile(join(__dirname, '../renderer/index.html'))
-    }
-  })
+  // 开发环境加载 HMR URL（失败会重试），生产环境加载本地文件
+  step('createWindow › load page', () => loadRendererPage(win))
 }
 
 function newMainWindow(

@@ -1,6 +1,5 @@
 import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
-import { is } from '@electron-toolkit/utils'
 import { chatFrontendRegistry, type ChatFrontend } from '../frontend/core'
 import { settingsDao } from '../dao/settingsDao'
 import { destroyTerminalsByWindow } from './terminalService'
@@ -8,6 +7,7 @@ import { guardAppWindow } from './externalOpen'
 import { getBrowserOffset, clearBrowserOffset } from './panelLayoutState'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
+import { loadRendererPage } from '../utils/rendererPage'
 
 const log = createLogger('PinnedChat')
 
@@ -205,11 +205,7 @@ function createFloatingWindow(sessionId: string): BrowserWindow {
   applyAlwaysOnTop(win, panel.alwaysOnTop)
 
   const hash = `pinned-chat?sessionId=${encodeURIComponent(sessionId)}`
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#${hash}`)
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'), { hash })
-  }
+  loadRendererPage(win, hash)
 
   win.once('ready-to-show', () => {
     win.show()

@@ -14,9 +14,9 @@
 
 import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
-import { is } from '@electron-toolkit/utils'
 import { settingsDao } from '../../dao/settingsDao'
 import { createLogger } from '../../logger'
+import { loadRendererPage } from '../../utils/rendererPage'
 import { t } from '../../i18n'
 import { guardAppWindow } from '../externalOpen'
 import { destroyAllTabs, setHostWindow } from './browserViewService'
@@ -119,11 +119,7 @@ function create(): BrowserWindow {
   guardAppWindow(created)
 
   const hash = 'browser-window'
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void created.loadURL(`${process.env['ELECTRON_RENDERER_URL']}#${hash}`)
-  } else {
-    void created.loadFile(join(__dirname, '../renderer/index.html'), { hash })
-  }
+  loadRendererPage(created, hash)
 
   created.on('page-title-updated', (e) => e.preventDefault())
 
