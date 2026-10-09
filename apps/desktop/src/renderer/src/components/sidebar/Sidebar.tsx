@@ -609,24 +609,30 @@ export function Sidebar(): React.JSX.Element {
       projects={projects}
       pinnedSessionIds={pinnedSessionIds}
       onOpenFolder={handleOpenFolder}
+      onOpenSettings={() => void getChatApi().app.openSettings()}
       onSelectSession={handleSelectSession}
       onDeleteSession={handleDelete}
       onConfigureSession={setConfiguringSessionId}
       onEditProject={setEditingProjectId}
       footerActions={
-        // 底栏只在有更新时出现：设置入口在菜单（⌘, / Ctrl+,），浏览器按钮在顶栏
+        // 设置行右侧：有更新时的提示（点开设置的「关于」页）
         hasUpdate ? (
           <button
             onClick={() => void getChatApi().app.openSettings('about')}
-            className="flex items-center gap-2 flex-1 pl-3 pr-2 py-1.5 rounded-md text-[13px] text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
+            className="flex-shrink-0 p-1.5 rounded-md text-accent/80 hover:bg-accent/10 hover:text-accent transition-colors"
+            title={
+              updateEvent?.type === 'ready'
+                ? t('sidebar.updateReady')
+                : t('sidebar.updateAvailable')
+            }
+            aria-label={
+              updateEvent?.type === 'ready'
+                ? t('sidebar.updateReady')
+                : t('sidebar.updateAvailable')
+            }
             data-sidebar-update
           >
             <ArrowUpCircle size={14} />
-            <span>
-              {updateEvent?.type === 'ready'
-                ? t('sidebar.updateReady')
-                : t('sidebar.updateAvailable')}
-            </span>
           </button>
         ) : undefined
       }

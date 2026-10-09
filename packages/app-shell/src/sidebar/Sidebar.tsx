@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Settings } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { useFocusDim } from './useFocusDim'
 import { ProjectSessionGroups, TEMP_GROUP_KEY } from './ProjectSessionGroups'
@@ -22,6 +23,9 @@ export interface SidebarProps {
    *  events 'project.changed' 自动刷新项目列表。入口：「项目」分节头的 ⋮ / 右键、空态提示、
    *  宿主菜单栏的「新建项目」—— 顶栏不再有那颗 + 按钮 */
   onOpenFolder: () => void | Promise<void>
+  /** 打开设置（桌面开独立窗口）—— 底栏左侧常驻的那一行。Windows/Linux 的菜单栏默认隐藏，
+   *  菜单里的「设置…」与 Ctrl+, 都很难被发现，这一行是那里唯一看得见的入口 */
+  onOpenSettings: () => void
   /** 选中会话覆盖（桌面：若已悬浮则聚焦悬浮窗）；缺省 chatStore.setActiveSessionId */
   onSelectSession?: (id: string) => void
   onDeleteSession?: (id: string) => void
@@ -31,7 +35,7 @@ export interface SidebarProps {
   onEditProject?: (projectId: string) => void
   /** 已悬浮会话集合（caps.pin 时用于徽标 / 选中行为） */
   pinnedSessionIds?: Set<string>
-  /** 底栏内容（桌面：更新提示）；缺省则整条底栏不渲染 —— 设置入口在宿主菜单，侧栏不再放 */
+  /** 底栏设置行右侧的额外按钮（桌面：更新提示） */
   footerActions?: React.ReactNode
   /** 分组列表前置插槽（桌面：Bots 与知识库分组，排在「项目」分节之上）；仅默认正文渲染，空态时也保留（功能入口） */
   groupsPrepend?: React.ReactNode
@@ -45,15 +49,16 @@ export interface SidebarProps {
 
 /**
  * 侧边栏 —— macOS 拖拽带（按需）+ 知识库插槽 + 按项目分组的会话列表
- * （ProjectSessionGroups：「项目」与「临时对话」两个并列分节）+ 可选底栏。
+ * （ProjectSessionGroups：「项目」与「临时对话」两个并列分节）+ 底部设置。
  * 项目/会话/事件经 getChatApi() 统一访问；宿主差异走 caps + 注入回调/插槽：
- *   - 打开文件夹、选中（悬浮聚焦）、右键菜单、删除项目均注入；
+ *   - 打开文件夹、打开设置、选中（悬浮聚焦）、右键菜单、删除项目均注入；
  *   - 更新提示 / 弹窗经 footerActions / overlays 插槽。
  */
 export function Sidebar({
   caps = {},
   projects,
   onOpenFolder,
+  onOpenSettings,
   onSelectSession,
   onDeleteSession,
   onConfigureSession,
@@ -181,14 +186,20 @@ export function Sidebar({
         )}
       </div>
 
-      {/* 底栏：只承载宿主内容（桌面更新提示），没有就整条不渲染 */}
-      {footerActions && (
-        <div
-          className={`flex items-center gap-1 px-2 py-1 border-t border-border-secondary/30 transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
+      {/* 底部设置栏 + 宿主额外按钮（桌面更新提示） */}
+      <div
+        className={`flex items-center gap-1 px-2 py-1 border-t border-border-secondary/30 transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
+      >
+        <button
+          onClick={() => onOpenSettings()}
+          className="flex items-center gap-2 flex-1 pl-3 pr-2 py-1.5 rounded-md text-[13px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
+          data-sidebar-settings
         >
-          {footerActions}
-        </div>
-      )}
+          <Settings size={14} className="text-text-tertiary/70" />
+          <span>{t('sidebar.settings')}</span>
+        </button>
+        {footerActions}
+      </div>
 
       {overlays}
 

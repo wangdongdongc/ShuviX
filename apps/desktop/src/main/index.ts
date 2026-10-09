@@ -293,7 +293,7 @@ function setupApplicationMenu(): void {
           accelerator: 'CommandOrControl+Shift+N',
           click: () => mainWindow?.webContents.send('app:new-project')
         },
-        // Windows / Linux 没有应用菜单：设置放在文件菜单里（侧栏已不再有设置按钮，这里是常驻入口）
+        // Windows / Linux 没有应用菜单：设置放在文件菜单里（菜单栏默认隐藏，看得见的入口是侧栏底部那一行）
         ...(!isMac
           ? [
               { type: 'separator' as const },
