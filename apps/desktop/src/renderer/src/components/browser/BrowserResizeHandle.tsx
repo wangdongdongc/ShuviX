@@ -44,8 +44,9 @@ export function BrowserResizeHandle(): React.JSX.Element {
       className="flex-shrink-0 w-px bg-border-secondary/50 cursor-col-resize relative group z-10"
       onMouseDown={onMouseDown}
     >
-      {/* 透明宽击中区域（左右各扩展 5px） */}
-      <div className="absolute inset-y-0 -left-[5px] -right-[5px]" />
+      {/* 透明宽击中区域：只往面板一侧扩 6px。左侧紧贴着对话列的滚动条（4px），往左扩就把它整条盖住、
+          鼠标永远落在拖拽上（会话面板的拖拽条同理只放在卡片内侧，见 app-shell SessionPanel 的 ResizeHandle） */}
+      <div className="absolute inset-y-0 left-0 -right-[6px]" />
       {/* 可见高亮仅 1px 宽 */}
       <div className="absolute inset-y-0 left-0 w-px group-hover:bg-accent/40 group-active:bg-accent/60 transition-colors" />
     </div>

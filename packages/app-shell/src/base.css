@@ -80,6 +80,33 @@ body {
   background: color-mix(in srgb, var(--color-border-primary) 40%, transparent);
   border-radius: 3px;
 }
+/* 对话列滚动条：看上去仍是上面那条 4px 细条，能点能拖的范围却是 10px —— 滑块左侧 6px 是透明边框
+   （background-clip 只把底色画在内框里，命中却按整个边框盒算）。4px 的条紧挨着会话面板 / 右侧面板的
+   分割线，原本几乎点不中。可见的 4px 仍贴轨道右缘，会话面板卡片 -ml-px 压在它最右 1px 上的接缝不变。
+   只放宽对话列：笔记本正文右缘贴着大纲小地图（NotebookMinimap 只为 4px 的条让了 mr-1），工具块、diff
+   等内嵌滚动区不挨分割线。左侧两角的水平半径加上 6px 边框宽度，内框才仍是 3px 圆角 */
+.conversation-scroller::-webkit-scrollbar:vertical {
+  width: 10px;
+}
+.conversation-scroller::-webkit-scrollbar-thumb:vertical,
+.conversation-scroller::-webkit-scrollbar-thumb:vertical:hover {
+  border-left: 6px solid transparent;
+  background-clip: padding-box;
+  border-radius: 9px 3px 3px 9px / 3px;
+}
+/* 「回到底部」按钮的运行指示：三点依次放大变亮，一道波从左扫到右（chat-ui ScrollToBottomButton） */
+@keyframes scroll-dot-wave {
+  0%,
+  70%,
+  100% {
+    transform: scale(0.75);
+    opacity: 0.45;
+  }
+  35% {
+    transform: scale(1.35);
+    opacity: 1;
+  }
+}
 /* 浏览器面板平铺墙的滚动条：**故意比别处宽**（10px）。
    墙上大部分面积被原生 WebContentsView 盖住，滚轮事件被页面吃掉，
    换页主要靠拖这根条 —— 它是主要交互控件，不是背景信息。 */

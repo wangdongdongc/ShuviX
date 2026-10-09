@@ -203,6 +203,7 @@
     "welcomeShortcutNewChat": "新規チャット",
     "startNewChat": "新しいチャットを開始",
     "emptyHint": "メッセージを送信して会話を開始",
+    "scrollToBottom": "一番下へ",
     "rollbackConfirm": "ここまでロールバック",
     "rollbackWarning": "この操作により、以降のすべてのメッセージが削除されます。元に戻すことはできません。"
   },

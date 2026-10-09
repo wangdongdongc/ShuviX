@@ -6371,6 +6371,16 @@ export interface RightPanelPane {
    * 不走拖拽：只要面板宽度 state 不变，React 就不会重写这条 inline style。
    */
   setPanelWidth(px: number): Promise<void>
+  /**
+   * 切到日历 tab（标签栏里含 `.lucide-calendar-days` 的那颗）并等日历内容区可见。日历内容区 = 内容区固定序
+   * 里倒数第二个子节点（preview / widget / calendar / agents 常驻挂载）
+   */
+  activateCalendarTab(): Promise<void>
+  /**
+   * 点日历当天列表里的某个会话行（按标题；行骨架与侧栏的 SessionItem 同一个，只在日历内容区里找）。
+   * 行没出现就等它出现（当天列表随 IPC 异步上屏）；等不到抛错
+   */
+  clickCalendarSession(title: string): Promise<void>
 }
 
 /** 主窗右侧面板（侧栏开关在顶栏；agents tab 与监视列表都在这里） */
@@ -6382,6 +6392,8 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
   // agents 面板 = 内容区固定序的最后一个（见本节开头的锚点说明）
   const AGENTS = `${PANEL}?.querySelector(':scope > div.relative')?.lastElementChild`
   const ROWS = `[...(${AGENTS}?.querySelectorAll('.divide-y > div > button.w-full') ?? [])]`
+  // 日历面板 = 内容区固定序的倒数第二个（见 activateCalendarTab）
+  const CALENDAR = `(() => { const c = ${PANEL}?.querySelector(':scope > div.relative')?.children; return c ? c[c.length - 2] : null })()`
 
   const tabPresent = (): Promise<boolean> => main.eval<boolean>(`${AGENTS_TAB} !== undefined`)
   const agentsActive = (): Promise<boolean> =>
@@ -6514,6 +6526,28 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
           ),
         `right panel laid out at ${px}px`
       )
+    },
+    activateCalendarTab: async () => {
+      const TAB = `[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
+        .find((b) => b.querySelector('.lucide-calendar-days'))`
+      await until(() => main.eval<boolean>(`!!${TAB}`), 'calendar tab mounted')
+      await main.eval(`${TAB}.click()`)
+      await until(
+        () =>
+          main.eval<boolean>(
+            `(() => { const c = ${CALENDAR}; return !!c && getComputedStyle(c).visibility === 'visible' })()`
+          ),
+        'calendar tab visible'
+      )
+    },
+    clickCalendarSession: async (title) => {
+      const ROW = `[...(${CALENDAR}?.querySelectorAll('div[class*="cursor-pointer"]') ?? [])].find(
+        (d) =>
+          (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim() ===
+          ${JSON.stringify(title)}
+      )`
+      await until(() => main.eval<boolean>(`!!${ROW}`), `calendar row "${title}"`)
+      await main.eval(`${ROW}.click()`)
     }
   }
 }
@@ -7827,5 +7861,323 @@ export function tasksPanelPane(main: CdpClient): TasksPanelPane {
         btn.click()
         return true
       })()`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 对话列的滚动位置与「回到底部」按钮（chat-ui Conversation 的 MessageList + ScrollToBottomButton）
+//
+// 锚点：滚动区 = `.conversation-scroller`（Virtuoso 的 scroller，类名由 Conversation 挂上）；按钮 =
+// `[data-scroll-to-bottom]`（运行中且显示时另有 `[data-running]`，三个圆点是它 `span[aria-hidden]` 里的
+// 子 span）；悬浮输入卡片 = `textarea.closest('.rounded-2xl')`（量**实物**，不读 `--chat-input-h`）；
+// 条目 = `[data-msg-id]`（MessageRenderer 根节点）；右侧面板分割线 = `[data-chat-container]` 的下一个兄弟
+// （BrowserResizeHandle 的 `.cursor-col-resize`）。空会话的空态（EmptySessionHint）按它的图标认 ——
+// 它是对话列里唯一的 `.lucide-sliders-vertical`。
+//
+// 点击 / 拖拽走 CDP `Input.dispatchMouseEvent`（可信输入，视口 CSS px）：滚动条拖动与命中区只有真指针碰得到。
+
+/** 视口坐标下的矩形（CSS px） */
+export interface ScrollRect {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+  height: number
+}
+
+/** 对话列滚动区的一次测量 */
+export interface ConversationScrollShot {
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+  /** `scrollHeight - scrollTop - clientHeight` —— 0 即真底（含 Footer 的留白） */
+  distToBottom: number
+  /** `offsetWidth - clientWidth`：竖向滚动条实占的宽度 */
+  scrollbarWidth: number
+  rect: ScrollRect
+  /** DOM 里最后一个条目（`[data-msg-id]`）的 id 与视口矩形；一个都没有为 null */
+  lastItem: { id: string; rect: ScrollRect } | null
+  /** 悬浮输入卡片的视口矩形；没有输入框时为 null */
+  inputCard: ScrollRect | null
+}
+
+/** 「回到底部」按钮的快照 */
+export interface ScrollButtonShot {
+  /** 按钮在 DOM 里（不显示时它也在 —— 淡出动画要它） */
+  present: boolean
+  /** 显示态：`aria-hidden` 不是 "true" */
+  shown: boolean
+  ariaHidden: string | null
+  ariaLabel: string
+  tabIndex: number
+  /** 计算样式的 opacity（淡入淡出 150ms，过渡期间是中间值 —— 调用方 until） */
+  opacity: number
+  /** 计算样式的 pointer-events */
+  pointerEvents: string
+  /** `[data-running]`：本会话在跑、按钮兼作运行指示 */
+  running: boolean
+  /** 运行指示的圆点个数 */
+  dots: number
+  rect: ScrollRect | null
+  /** 按钮正中 `elementFromPoint` 落在按钮（或其子节点）上 */
+  hittable: boolean
+}
+
+/** 某一点 `elementFromPoint` 命中的是什么 */
+export interface ScrollHitShot {
+  /** 命中的**就是**滚动区元素本身（滚动条的命中归滚动区） */
+  scroller: boolean
+  /** 命中右侧面板分割线（或它的透明命中层） */
+  divider: boolean
+  /** 命中元素的简述（tag + class 前缀），排错用 */
+  desc: string
+}
+
+/** 「按钮有没有闪一下」的逐帧记录 */
+export interface ScrollButtonWatch {
+  /** 停止记录，回采样帧数与其中按钮处于显示态（aria-hidden=false 或 opacity>0.01）的帧数 */
+  stop(): Promise<{ frames: number; shownFrames: number }>
+}
+
+export interface ConversationScrollPane {
+  /** 量一次滚动区；对话列没有列表（空态 / 视图未到）时为 null */
+  shot(): Promise<ConversationScrollShot | null>
+  /** 按钮快照（不在 DOM 里时 `present: false`） */
+  button(): Promise<ScrollButtonShot>
+  /** 把滚动区直接设到 `scrollTop = px`（浏览器照常派发 scroll 事件，Virtuoso 照常跟） */
+  scrollTo(px: number): Promise<void>
+  /** 滚到离真底 `px` 的位置 */
+  scrollToDistFromBottom(px: number): Promise<void>
+  /**
+   * 等列表停在真底：条目已上屏、`distToBottom ≤ tol`，且隔 250ms 再读一次位置、总高、末项都没变（虚拟列表的
+   * 初始定位要几帧才落地，中途量到的「在底」—— 包括刚挂上、还没有条目的那一帧 —— 不算数）。回最后一次测量
+   */
+  waitAtBottom(tol?: number, timeoutMs?: number): Promise<ConversationScrollShot>
+  /** 等按钮到指定显示态且淡入淡出走完（opacity 落到 1 / 0） */
+  waitButton(shown: boolean, timeoutMs?: number): Promise<ScrollButtonShot>
+  /** 以可信鼠标输入点按钮正中（移入 → 按下 → 抬起） */
+  clickButton(): Promise<void>
+  /** 视口坐标 (x, y) 处 `elementFromPoint` 的归类 */
+  hitAt(x: number, y: number): Promise<ScrollHitShot>
+  /** 右侧面板分割线的视口矩形；面板没开时为 null */
+  dividerRect(): Promise<ScrollRect | null>
+  /** 右侧面板根（分割线的下一个兄弟）的宽度；面板没开时为 0 */
+  rightPanelWidth(): Promise<number>
+  /** 可信鼠标拖拽：在 from 按下，分 `steps` 步移到 to，抬起 */
+  drag(from: { x: number; y: number }, to: { x: number; y: number }, steps?: number): Promise<void>
+  /** 某条消息条目的视口矩形；不在 DOM 里为 null */
+  msgRect(id: string): Promise<ScrollRect | null>
+  /** 空会话的空态在屏（且没有列表） */
+  emptyState(): Promise<boolean>
+  /** 开始逐帧（rAF）记录按钮的显示态，直到 stop() */
+  watchButton(): Promise<ScrollButtonWatch>
+}
+
+export function conversationScrollPane(main: CdpClient): ConversationScrollPane {
+  const SCROLLER = `document.querySelector('.conversation-scroller')`
+  const BUTTON = `document.querySelector('[data-scroll-to-bottom]')`
+  const CARD = `(document.querySelector('textarea')?.closest('.rounded-2xl') ?? null)`
+  const DIVIDER = `(() => {
+    const next = document.querySelector('[data-chat-container]')?.nextElementSibling
+    return next && next.classList.contains('cursor-col-resize') ? next : null
+  })()`
+  const RECT = `((el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height } })`
+  const WATCH_KEY = '__e2eScrollButtonWatch'
+
+  const mouse = async (
+    type: 'mouseMoved' | 'mousePressed' | 'mouseReleased',
+    x: number,
+    y: number,
+    pressed = false
+  ): Promise<void> => {
+    await main.send('Input.dispatchMouseEvent', {
+      type,
+      x,
+      y,
+      ...(type === 'mouseMoved'
+        ? pressed
+          ? { button: 'left', buttons: 1 }
+          : {}
+        : { button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1 })
+    })
+  }
+
+  const shot = (): Promise<ConversationScrollShot | null> =>
+    main.eval<ConversationScrollShot | null>(`(() => {
+      const el = ${SCROLLER}
+      if (!el) return null
+      const rect = ${RECT}
+      const items = [...el.querySelectorAll('[data-msg-id]')]
+      const last = items[items.length - 1]
+      const card = ${CARD}
+      return {
+        scrollTop: el.scrollTop,
+        scrollHeight: el.scrollHeight,
+        clientHeight: el.clientHeight,
+        distToBottom: el.scrollHeight - el.scrollTop - el.clientHeight,
+        scrollbarWidth: el.offsetWidth - el.clientWidth,
+        rect: rect(el),
+        lastItem: last ? { id: last.getAttribute('data-msg-id') ?? '', rect: rect(last) } : null,
+        inputCard: card ? rect(card) : null
+      }
+    })()`)
+
+  const button = (): Promise<ScrollButtonShot> =>
+    main.eval<ScrollButtonShot>(`(() => {
+      const btn = ${BUTTON}
+      if (!btn) {
+        return { present: false, shown: false, ariaHidden: null, ariaLabel: '', tabIndex: 0, opacity: 0,
+          pointerEvents: '', running: false, dots: 0, rect: null, hittable: false }
+      }
+      const r = btn.getBoundingClientRect()
+      const style = getComputedStyle(btn)
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      const dotWrap = [...btn.children].find((c) => c.tagName === 'SPAN' && c.getAttribute('aria-hidden') === 'true')
+      return {
+        present: true,
+        shown: btn.getAttribute('aria-hidden') !== 'true',
+        ariaHidden: btn.getAttribute('aria-hidden'),
+        ariaLabel: btn.getAttribute('aria-label') ?? '',
+        tabIndex: btn.tabIndex,
+        opacity: Number(style.opacity),
+        pointerEvents: style.pointerEvents,
+        running: btn.hasAttribute('data-running'),
+        dots: dotWrap ? dotWrap.children.length : 0,
+        rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height },
+        hittable: !!hit && (hit === btn || btn.contains(hit))
+      }
+    })()`)
+
+  return {
+    shot,
+    button,
+    scrollTo: async (px) => {
+      await main.eval(
+        `(() => { const el = ${SCROLLER}; if (el) el.scrollTop = ${px}; return true })()`
+      )
+      await sleep(60)
+    },
+    scrollToDistFromBottom: async (px) => {
+      await main.eval(`(() => {
+        const el = ${SCROLLER}
+        if (el) el.scrollTop = el.scrollHeight - el.clientHeight - ${px}
+        return true
+      })()`)
+      await sleep(60)
+    },
+    waitAtBottom: (tol = 4, timeoutMs = 10_000) =>
+      until(
+        async () => {
+          // 列表刚挂上的第一帧还没有条目（滚动区就一屏高，也算「在底」）—— 那不是落点
+          const a = await shot()
+          if (!a?.lastItem || a.distToBottom > tol) return null
+          await sleep(250)
+          const b = await shot()
+          const still =
+            !!b?.lastItem &&
+            b.distToBottom <= tol &&
+            b.scrollTop === a.scrollTop &&
+            b.scrollHeight === a.scrollHeight &&
+            b.lastItem.id === a.lastItem.id
+          return still ? b : null
+        },
+        `conversation list resting at its true bottom (≤${tol}px)`,
+        timeoutMs
+      ),
+    waitButton: async (shown, timeoutMs = 5_000) =>
+      until(
+        async () => {
+          const b = await button()
+          if (!b.present || b.shown !== shown) return null
+          return (shown ? b.opacity >= 0.99 : b.opacity <= 0.01) ? b : null
+        },
+        `scroll-to-bottom button ${shown ? 'shown' : 'hidden'}`,
+        timeoutMs
+      ),
+    clickButton: async () => {
+      const b = await button()
+      if (!b.rect) throw new Error('scroll-to-bottom button not in the DOM')
+      const x = b.rect.left + b.rect.width / 2
+      const y = b.rect.top + b.rect.height / 2
+      await mouse('mouseMoved', x, y)
+      await mouse('mousePressed', x, y)
+      await mouse('mouseReleased', x, y)
+    },
+    hitAt: (x, y) =>
+      main.eval<ScrollHitShot>(`(() => {
+        const hit = document.elementFromPoint(${x}, ${y})
+        const scroller = ${SCROLLER}
+        const divider = ${DIVIDER}
+        const cls = hit && typeof hit.className === 'string' ? hit.className.slice(0, 60) : ''
+        return {
+          scroller: !!hit && hit === scroller,
+          divider: !!hit && !!divider && (hit === divider || divider.contains(hit)),
+          desc: hit ? hit.tagName.toLowerCase() + (cls ? '.' + cls : '') : '(none)'
+        }
+      })()`),
+    dividerRect: () =>
+      main.eval<ScrollRect | null>(
+        `(() => { const d = ${DIVIDER}; return d ? ${RECT}(d) : null })()`
+      ),
+    rightPanelWidth: () =>
+      main.eval<number>(
+        `(() => { const p = ${DIVIDER}?.nextElementSibling; return p ? p.getBoundingClientRect().width : 0 })()`
+      ),
+    drag: async (from, to, steps = 8) => {
+      await mouse('mouseMoved', from.x, from.y)
+      await mouse('mousePressed', from.x, from.y)
+      for (let i = 1; i <= steps; i++) {
+        const x = from.x + ((to.x - from.x) * i) / steps
+        const y = from.y + ((to.y - from.y) * i) / steps
+        await mouse('mouseMoved', x, y, true)
+        await sleep(16)
+      }
+      await mouse('mouseReleased', to.x, to.y)
+      await sleep(60)
+    },
+    msgRect: (id) =>
+      main.eval<ScrollRect | null>(`(() => {
+        const el = document.querySelector('[data-msg-id=' + ${JSON.stringify(JSON.stringify(id))} + ']')
+        return el ? ${RECT}(el) : null
+      })()`),
+    emptyState: () =>
+      main.eval<boolean>(
+        `${SCROLLER} === null && !!document.querySelector('[data-chat-container] .lucide-sliders-vertical')`
+      ),
+    watchButton: async () => {
+      await main.eval(`(() => {
+        const state = { frames: 0, shownFrames: 0, running: true }
+        window.${WATCH_KEY} = state
+        const sample = () => {
+          const btn = ${BUTTON}
+          state.frames++
+          if (btn && (btn.getAttribute('aria-hidden') !== 'true' || Number(getComputedStyle(btn).opacity) > 0.01)) {
+            state.shownFrames++
+          }
+        }
+        const observer = new MutationObserver(sample)
+        observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['aria-hidden', 'class'] })
+        const tick = () => {
+          if (!state.running) return
+          sample()
+          requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+        state.stop = () => {
+          state.running = false
+          observer.disconnect()
+        }
+        return true
+      })()`)
+      return {
+        stop: () =>
+          main.eval<{ frames: number; shownFrames: number }>(`(() => {
+            const state = window.${WATCH_KEY}
+            state.stop()
+            return { frames: state.frames, shownFrames: state.shownFrames }
+          })()`)
+      }
+    }
   }
 }

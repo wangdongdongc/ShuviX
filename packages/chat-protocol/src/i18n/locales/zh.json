@@ -203,6 +203,7 @@
     "welcomeShortcutNewChat": "新建对话",
     "startNewChat": "开始新对话",
     "emptyHint": "发送一条消息开始对话",
+    "scrollToBottom": "回到底部",
     "rollbackConfirm": "回退到此处",
     "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。"
   },
