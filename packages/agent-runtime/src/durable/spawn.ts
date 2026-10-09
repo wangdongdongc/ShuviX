@@ -565,6 +565,8 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
           dispatch: 'tool',
           parentConversationId: api.conversationId,
           ownerTaskId: api.taskId,
+          // 空串不写：解析按「给了就得是非空串」认，写进去整条记录会被当成写坏了
+          ...(api.callId ? { ownerCallId: api.callId } : {}),
           displayName: profile.displayName,
           description,
           ...(contract === undefined ? {} : { resultContract: contract })

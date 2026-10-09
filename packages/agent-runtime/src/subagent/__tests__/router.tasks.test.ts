@@ -9,6 +9,9 @@
  *
  * 行标题（TITLE-1 / TITLE-3）：`档案显示名 · 派发描述`，描述先 trim；描述为空白或与显示名相同只写显示名；
  * 条目被清掉之后追问重建的那条，标题与派发时同一个（描述随索引条目留着）。
+ *
+ * RT-1（并在 TITLE-3 里）：清掉之后追问重建的那条，subject 与派发时一模一样 —— 连同派发它的那次 tool_call id
+ * （`parentToolCallId`），对话流里那张派发卡才找得回它。
  */
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
@@ -309,6 +312,14 @@ describe('router · agent task titles', () => {
       expect(await r.session.submitUser('go')).toEqual({})
       const A = r.registers()[0]!.sessionId
       expect(r.task(A)?.title).toBe('Explorer · find the callers of X')
+      // RT-1：派发时的 subject 带着派发卡那次调用的 id
+      const spawned = r.task(A)!.subject
+      expect(spawned).toEqual({
+        kind: 'agent',
+        profileName: 'explore',
+        depth: 1,
+        parentToolCallId: CALL
+      })
 
       // 面板上把这条已结束的行清掉：条目没了，路由的索引条目还在
       if (clear === 'dismiss') expect(r.tasks!.dismiss(A)).toBe(true)
@@ -323,6 +334,8 @@ describe('router · agent task titles', () => {
         status: 'done',
         subject: { kind: 'agent', profileName: 'explore', depth: 1 }
       })
+      // RT-1：重建的 subject 与派发时一模一样（parentToolCallId 没丢）
+      expect(r.task(A)!.subject).toEqual(spawned)
     }
   )
 })

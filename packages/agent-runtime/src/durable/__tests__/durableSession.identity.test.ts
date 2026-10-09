@@ -6,6 +6,8 @@
  *  - 其余对话（锁所在的、fork、旁支、任务拥有但没有记录的、不认识的 id）都认成根，根的身份随锁现取
  *    （PIN-05：销毁 / 重建之后立刻是新的；派生条目跨销毁保留）。
  *  - 句柄已关 → undefined（PIN-10）。
+ *
+ *   DIR-1 只多了一个 `ownerCallId`（派发它的 tool_call id）的派生对话也算有记录字段：写坏了、最小派生身份、警告一次
  */
 import { ROOT_CONVERSATION_ID, type ConversationId } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
@@ -282,6 +284,29 @@ describe('agent identity · spawned', () => {
     const malformed = t.warnings.filter((warning) => warning.includes('malformed'))
     expect(malformed).toHaveLength(1)
     expect(malformed[0]).toContain('s1')
+    expect(malformed[0]).toContain(`conversation ${child}`)
+  })
+})
+
+describe('agent identity · record-only keys', () => {
+  it('DIR-1 ownerCallId alone counts as a record field: a minimal spawned identity and one malformed warning', async () => {
+    const { t } = await scenarioW({ extensions: [TEST_SPAWN_EXTENSION] })
+    const session = await t.open()
+    await session.createAgent()
+    const child = await plainTaskOwned(session)
+    // kind / profileName 与冻结的人设共用；只冻结了人设的对话不算写坏 —— 多出来的 ownerCallId 才让它算
+    await session.harness.commit(async (tx) => {
+      const state = await tx.doc(AgentStateDoc, child)
+      state.kind = 'spawned'
+      state.profileName = 'explore'
+      state.ownerCallId = 'x'
+    }, BG)
+    const identity = session.agentIdentity(child)
+    expect(identity).toEqual({ kind: 'spawned', profileName: 'explore' })
+    expect(identity).not.toHaveProperty('getModelConfig')
+    expect(session.spawnedRecords()).toEqual([])
+    const malformed = t.warnings.filter((warning) => warning.includes('malformed'))
+    expect(malformed).toHaveLength(1)
     expect(malformed[0]).toContain(`conversation ${child}`)
   })
 })

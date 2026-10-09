@@ -201,6 +201,8 @@ interface IndexEntry extends SubAgentLocation {
   description: string
   profileName: string
   depth: number
+  /** 派发它的那次 tool_call id（hook 派发没有）：重建任务行时带上，对话流里那张派发卡才找得回它 */
+  parentToolCallId?: string
 }
 
 type SettleStatus = 'done' | 'error' | 'killed'
@@ -378,7 +380,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         displayName: info.displayName,
         description: info.description,
         profileName: agentType.name,
-        depth: info.depth
+        depth: info.depth,
+        ...(parentToolCallId === undefined ? {} : { parentToolCallId })
       })
       running.add(agentId)
       deps.broadcast({
@@ -495,7 +498,8 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
         displayName: record.displayName,
         description: record.description,
         profileName: record.profileName,
-        depth: record.depth
+        depth: record.depth,
+        ...(record.ownerCallId === undefined ? {} : { parentToolCallId: record.ownerCallId })
       })
     }
   }
@@ -548,7 +552,10 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
       // 面板那条任务行代表的是**这个 agent**（不是它的某一轮），追问让它回到运行态
       ensureTask(agentId, entry.sessionId, entry, {
         profileName: entry.profileName,
-        depth: entry.depth
+        depth: entry.depth,
+        ...(entry.parentToolCallId === undefined
+          ? {}
+          : { parentToolCallId: entry.parentToolCallId })
       })
 
       // 内联 Token（slash 命令等）：发给 agent 的是解析后的文本。追问不再广播 `user_message`（P3-08：

@@ -190,6 +190,8 @@ describe('P2-08 B · titler dispatch (observe)', () => {
       agentId: expect.stringMatching(/^sub-/)
     })
     expect(record && 'resultContract' in record).toBe(false)
+    // hook 派发没有派发卡：记录里没有派发它的 tool_call id
+    expect('ownerCallId' in record!).toBe(false)
     const [request] = requestsOfRole(rig.kit, 'titler')
     expect(request!.modelId).toBe('faux-1')
     expect(request!.tools.map((tool) => tool.name)).toEqual(['titleProbe'])

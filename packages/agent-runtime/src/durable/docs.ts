@@ -119,6 +119,8 @@ export type AgentStateRecord = {
   dispatch?: 'tool' | 'hook'
   parentConversationId?: ConversationId
   ownerTaskId?: TaskId
+  /** 派发它的那次 tool_call id（只有 `dispatch: 'tool'` 的记录有） */
+  ownerCallId?: string
   displayName?: string
   description?: string
   hook?: string

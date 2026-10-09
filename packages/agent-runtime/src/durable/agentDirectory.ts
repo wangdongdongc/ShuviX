@@ -52,6 +52,7 @@ const RECORD_ONLY_KEYS = [
   'dispatch',
   'parentConversationId',
   'ownerTaskId',
+  'ownerCallId',
   'displayName',
   'description',
   'hook',

@@ -6,7 +6,7 @@
  *    销毁 / 重开）。
  *  - **派生 agent 记录**（`SpawnedAgentRecord`）：一个派生 agent（`agent` 派发，或宿主派发的 hook agent）
  *    自己的那份锁形记录 —— 锁的全部字段（kind 恒为 `spawned`）加上派生字段（agentId、深度、能否再派生、
- *    派发方式、父对话、拥有它的任务、显示名、说明、hook 名、结果契约）。它**平铺**在子对话自己的
+ *    派发方式、父对话、拥有它的任务、派发它的那次 tool_call id、显示名、说明、hook 名、结果契约）。它**平铺**在子对话自己的
  *    `AgentStateDoc` 里（与冻结的人设并列，`kind` / `profileName` 两者共用），随人设一起冻结；不碰
  *    `SessionStateDoc.lock`。
  *
@@ -160,6 +160,12 @@ export interface SpawnedAgentRecord extends LockRecord {
   parentConversationId: ConversationId
   /** 拥有它这个对话的任务（派发工具任务 / 锚任务 / 发起审查的工具任务） */
   ownerTaskId: TaskId
+  /**
+   * 派发它的那次 tool_call id（`dispatch: 'tool'` 才有；hook 派发没有派发卡）。对话流里那张派发卡据它找到
+   * 自己的任务行 —— 任务行被清掉之后由面板追问重建、或重启之后从记录重建索引时，只有记录还记得它。
+   * 早于这个字段的记录没有它：那类 agent 重建出的任务行不连回派发卡，别的照常。
+   */
+  ownerCallId?: string
   displayName: string
   description: string
   /** 宿主派发的 hook 名（`dispatch: 'hook'` 时） */
@@ -202,15 +208,15 @@ function parseResultContract(raw: unknown): ResultContract | undefined {
  * 或形状不对 → undefined。锁字段与锁记录同一个校验器；人设等其余键丢掉。
  *
  * 严格口径（PIN-09）：agentId 非空串（不查前缀）；depth 是 ≥ 1 的整数；ids 是正整数；hook 给了就得是
- * 字符串；结果契约是 `{schema: 对象, nudges?: ≥ 0 的整数, sourceLabel?: 字符串}`。不做跨字段校验
- * （hook 与 dispatch、记录里的 conversationId 与所在对话）。
+ * 字符串；ownerCallId 给了就得是非空串；结果契约是 `{schema: 对象, nudges?: ≥ 0 的整数, sourceLabel?:
+ * 字符串}`。不做跨字段校验（hook / ownerCallId 与 dispatch、记录里的 conversationId 与所在对话）。
  */
 export function parseSpawnedAgentRecord(raw: unknown): SpawnedAgentRecord | undefined {
   if (!isObject(raw) || raw.kind !== 'spawned') return undefined
   const lock = parseLockFields(raw)
   if (lock === undefined) return undefined
   const { agentId, depth, canSpawn, dispatch, parentConversationId, ownerTaskId } = raw
-  const { displayName, description, hook, resultContract } = raw
+  const { ownerCallId, displayName, description, hook, resultContract } = raw
   if (typeof agentId !== 'string' || agentId.length === 0) return undefined
   if (!isPositiveInteger(depth)) return undefined
   if (typeof canSpawn !== 'boolean') return undefined
@@ -218,6 +224,9 @@ export function parseSpawnedAgentRecord(raw: unknown): SpawnedAgentRecord | unde
   if (!isPositiveInteger(parentConversationId) || !isPositiveInteger(ownerTaskId)) return undefined
   if (typeof displayName !== 'string' || typeof description !== 'string') return undefined
   if (hook !== undefined && typeof hook !== 'string') return undefined
+  if (ownerCallId !== undefined && (typeof ownerCallId !== 'string' || ownerCallId.length === 0)) {
+    return undefined
+  }
   let contract: ResultContract | undefined
   if (resultContract !== undefined) {
     contract = parseResultContract(resultContract)
@@ -232,6 +241,7 @@ export function parseSpawnedAgentRecord(raw: unknown): SpawnedAgentRecord | unde
     dispatch,
     parentConversationId: parentConversationId as ConversationId,
     ownerTaskId: ownerTaskId as TaskId,
+    ...(ownerCallId === undefined ? {} : { ownerCallId }),
     displayName,
     description,
     ...(hook === undefined ? {} : { hook }),
@@ -263,6 +273,7 @@ const SPAWNED_RECORD_KEYS = [
   'dispatch',
   'parentConversationId',
   'ownerTaskId',
+  'ownerCallId',
   'displayName',
   'description',
   'hook',
@@ -271,7 +282,7 @@ const SPAWNED_RECORD_KEYS = [
 
 /**
  * 在调用方的提交里把派生 agent 记录平铺写进该对话的 `AgentStateDoc`（PIN-01）：记录的每个键整份覆盖，
- * 记录里缺省的可选键（思考档位 / hook / 结果契约）从文档删掉；其余键（人设、指令文件、根会话 id、
+ * 记录里缺省的可选键（思考档位 / 派发它的 tool_call id / hook / 结果契约）从文档删掉；其余键（人设、指令文件、根会话 id、
  * 上次告知的日期）原样保留。先严格序列化 —— 非 JSON 的值在碰文档之前就抛错。
  */
 export async function writeSpawnedAgentRecord(

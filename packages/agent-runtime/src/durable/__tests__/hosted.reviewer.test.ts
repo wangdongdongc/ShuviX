@@ -131,7 +131,8 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
     const record = await rig.session.harness.commit((tx) => tx.conversation(R), BG)
     expect(record?.owner).toEqual({ conversationId: ROOT, taskId: task })
     expect(await anchors(rig.session)).toEqual([])
-    expect(await spawnedAgentRecordOf(rig.session.harness, R, BG)).toMatchObject({
+    const spawned = await spawnedAgentRecordOf(rig.session.harness, R, BG)
+    expect(spawned).toMatchObject({
       dispatch: 'hook',
       hook: 'auto-review',
       ownerTaskId: task,
@@ -143,6 +144,8 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
       canSpawn: false,
       resultContract: { schema: PERMISSION_VERDICT_SCHEMA, sourceLabel: 'auto-review' }
     })
+    // 拥有者是提问的那个工具任务（它有 provider 的 call id），但审查员是 hook 派发：那个 id 不进记录
+    expect('ownerCallId' in spawned!).toBe(false)
     expect(rig.askCalls).toEqual([{ sessionId: 's1', taskId: task, result: 'verdict:allow' }])
     expect(await lastToolResult(rig.session)).toContain('verdict:allow')
     expect((await taskRecord(rig.session, task))?.state).toMatchObject({

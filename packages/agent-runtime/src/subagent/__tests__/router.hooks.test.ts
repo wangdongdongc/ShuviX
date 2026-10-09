@@ -5,6 +5,7 @@
  * 工具派发同一套，只是 register 里没有 `parentToolCallId`。
  *
  * TITLE-2：hook 派发拿 hook 的显示名当描述，面板行读作 `<agent 显示名> · <hook 显示名>`；两者相同只写一次。
+ * RT-2：hook agent 的行被清掉之后追问重建，subject 照样没有 `parentToolCallId`（没有派发卡，也不凭空长出一个）。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -126,4 +127,29 @@ describe('router · hook-dispatched row titles', () => {
       expect('parentToolCallId' in task.subject).toBe(false)
     }
   )
+
+  it('RT-2 a hook row dismissed, then a follow-up: the recreated subject still has no parentToolCallId', async () => {
+    const r = await hostR()
+    r.t.kit.queue(answer('titled'))
+    const outcome = await r.router.runTask({
+      sessionId: 's1',
+      owner: { anchor: true },
+      agentType: PROFILES.explore,
+      prompt: 'title it',
+      description: 'title',
+      hook: { name: 'auto-title', runId: 'r1' }
+    })
+    expect(outcome.result).toBe('titled')
+    const H = r.registers()[0]!.sessionId
+
+    // 面板上清掉这条，再追问：任务条目从索引条目重建
+    expect(r.tasks!.dismiss(H)).toBe(true)
+    expect(r.task(H)).toBeUndefined()
+    r.t.kit.queue(answer('more'))
+    await r.router.continueTask({ subSessionId: H, text: 'more' })
+    const task = r.task(H)!
+    expect(task.subject).toEqual({ kind: 'agent', profileName: 'explore', depth: 1 })
+    expect('parentToolCallId' in task.subject).toBe(false)
+    expect(task.status).toBe('done')
+  })
 })

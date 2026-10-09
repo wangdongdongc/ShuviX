@@ -14,6 +14,17 @@
  *   P3-14-09 两条会话：各自重建、删一条不碰另一条、agentId 从不映错会话
  *   P3-14-12（运行时一半）追问 / 宿主派发在驱动会话之前等宿主的 `sessionReady`（桌面整合那一半在
  *            sessionSignalsIntegration：没有它，peek 刚开的会话上这一轮的 agent_start 会丢）
+ *
+ * 派发卡的 call id（`parentToolCallId`，记录里是 `ownerCallId`）熬过重建：
+ *   RB-1 （并在 P3-14-01 / 05 里）重启之后追问重建的任务行带回派发它的那次 tool_call id：A = 根里那次、B = A 对话
+ *        里那次（不是根的）；hook agent H 没有这个键
+ *   RB-2 按记录重建（FC）：带 ownerCallId 的记录 → subject 有它；早于这个字段的记录、hook 记录 → 没有这个键；
+ *        清掉再追问一次还在
+ *   RB-3 真存储里的旧记录（没有 ownerCallId）：照样认得、不算写坏、追问照常，subject 没有这个键
+ *   RB-4 （即 P3-14-03 的各行）ownerCallId 写坏（42 / null / 空串）与删掉 depth 一样：那条不进索引，其余照样，
+ *        路由不记警告、目录警告一次
+ *   RB-5 （并在 TITLE-4 / P3-14-04 (a) 里）派发的值是权威：先重建后派发、先派发后重建，清掉再追问用的都是派发
+ *        的那个 call id，不是记录里过期的
  */
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { describe, expect, it, vi } from 'vitest'
@@ -24,9 +35,10 @@ import { answer, held } from '../../durable/__tests__/support/faux'
 import { registerHostCleanup } from '../../durable/__tests__/support/host'
 import { recordPublications } from '../../durable/__tests__/support/commits'
 import { extensionTools } from '../../durable/__tests__/support/scenario'
-import { callAgent, PROFILES, rec } from '../../durable/__tests__/support/spawn'
+import { callAgent, hookRec, PROFILES, rec } from '../../durable/__tests__/support/spawn'
 import { deferred, withTimeout } from '../../durable/__tests__/support/wait'
 import {
+  CALL,
   createdInfo,
   fakeSession,
   hostR,
@@ -139,6 +151,20 @@ describe('router · rebuild at open', () => {
         sessionId: 's1',
         subject: { kind: 'agent', profileName: 'explore', depth: 1 }
       })
+      // RB-1：派发卡的 call id 随记录回来 —— A 是根里那次调用，B 是 A 对话里那次（不是根的）；hook 派发没有
+      expect(r2.task(A.agentId)!.subject).toEqual({
+        kind: 'agent',
+        profileName: 'nester',
+        depth: 1,
+        parentToolCallId: CALL
+      })
+      expect(r2.task(B.agentId)!.subject).toEqual({
+        kind: 'agent',
+        profileName: 'explore',
+        depth: 2,
+        parentToolCallId: 'call-g'
+      })
+      expect('parentToolCallId' in r2.task(H.agentId)!.subject).toBe(false)
     },
     RESTART_TIMEOUT
   )
@@ -178,14 +204,21 @@ describe('router · rebuild at open', () => {
     RESTART_TIMEOUT
   )
 
-  it(
-    'P3-14-03 a malformed record: the others are indexed, it is absent; open does not throw; the router logs nothing',
-    async () => {
+  // RB-4：ownerCallId 给了就得是非空串 —— 写坏它与删掉 depth 同一个下场
+  const corruptions: [string, (state: Record<string, unknown>) => void][] = [
+    ['depth deleted', (state) => void delete state.depth],
+    ['ownerCallId = 42', (state) => void (state.ownerCallId = 42)],
+    ['ownerCallId = null', (state) => void (state.ownerCallId = null)],
+    ['ownerCallId = ""', (state) => void (state.ownerCallId = '')]
+  ]
+
+  it.each(corruptions)(
+    'P3-14-03 a malformed record (%s): the others are indexed, it is absent; open does not throw; the router logs nothing',
+    async (_row, corrupt) => {
       const first = await hostR()
       const { A, B, H } = await threeAgents(first)
       await first.session.harness.commit(async (tx) => {
-        const state = await tx.doc(AgentStateDoc, B.conversationId)
-        delete state.depth
+        corrupt((await tx.doc(AgentStateDoc, B.conversationId)) as Record<string, unknown>)
       }, BG)
       const warn = vi.fn()
       const r2 = await first.reopen({ logger: { info: () => {}, warn, error: warn } })
@@ -207,7 +240,9 @@ describe('router · rebuild at open', () => {
         params.onCreated?.(createdInfo({ agentId: 'sub-a1', conversationId: 2 as ConversationId }))
         return release.promise
       },
-      records: () => [rec({ agentId: 'sub-a1', conversationId: 9 as ConversationId })]
+      records: () => [
+        rec({ agentId: 'sub-a1', conversationId: 9 as ConversationId, ownerCallId: 'stale' })
+      ]
     })
     const kit = routerKit({ get: () => fc.session, peek: async () => fc.session })
     const running = kit.router.runTask(toolParams())
@@ -221,6 +256,16 @@ describe('router · rebuild at open', () => {
     release.resolve({ result: 'found', conversationId: 2 as ConversationId, agentId: 'sub-a1' })
     await running
     expect(kit.router.locate('sub-a1')).toEqual({ sessionId: 's1', conversationId: 2 })
+
+    // RB-5：清掉再追问，重建的行带的是派发的 call id（tc-1），不是记录里过期的那个
+    expect(kit.tasks!.dismiss('sub-a1')).toBe(true)
+    await kit.router.continueTask({ subSessionId: 'sub-a1', text: 'more' })
+    expect(kit.task('sub-a1')!.subject).toEqual({
+      kind: 'agent',
+      profileName: 'explore',
+      depth: 1,
+      parentToolCallId: 'tc-1'
+    })
   })
 
   it('P3-14-04 (b) the rebuild first, then onCreated: the onCreated values win (FC)', async () => {
@@ -256,7 +301,8 @@ describe('router · rebuild at open', () => {
           agentId: 'sub-a1',
           conversationId: 9 as ConversationId,
           displayName: 'Stale',
-          description: 'stale desc'
+          description: 'stale desc',
+          ownerCallId: 'stale-call'
         })
       ]
     })
@@ -272,6 +318,56 @@ describe('router · rebuild at open', () => {
     expect(fc.continueCalls).toEqual([[2, 'more']])
     expect(kit.task('sub-a1')).toMatchObject({ title: 'Explorer · look', status: 'done' })
     expect(kit.task('sub-a1')?.title).not.toBe('Stale · stale desc')
+    // RB-5：call id 也取派发的（toolParams 的 tc-1），不是过期记录里的 stale-call
+    expect(kit.task('sub-a1')!.subject).toEqual({
+      kind: 'agent',
+      profileName: 'explore',
+      depth: 1,
+      parentToolCallId: 'tc-1'
+    })
+  })
+
+  it('RB-2 indexed from records (FC): a record with ownerCallId → the recreated subject carries it; a legacy record and a hook record → no key; still there after another dismiss', async () => {
+    const fc = fakeSession({
+      records: () => [
+        rec({ ownerCallId: 'call-x' }),
+        rec({ agentId: 'sub-a2', conversationId: 3 as ConversationId }),
+        hookRec({ conversationId: 4 as ConversationId })
+      ]
+    })
+    const kit = routerKit({ get: () => fc.session, peek: async () => fc.session })
+    kit.router.indexSession(fc.session)
+    for (const agentId of ['sub-a1', 'sub-a2', 'sub-h1']) {
+      await kit.router.continueTask({ subSessionId: agentId, text: 'more' })
+    }
+    expect(fc.continueCalls).toEqual([
+      [2, 'more'],
+      [3, 'more'],
+      [4, 'more']
+    ])
+    expect(kit.task('sub-a1')!.subject).toEqual({
+      kind: 'agent',
+      profileName: 'explore',
+      depth: 1,
+      parentToolCallId: 'call-x'
+    })
+    // 早于这个字段的记录：不连回派发卡，别的照常（标题照旧）
+    expect(kit.task('sub-a2')).toMatchObject({ title: 'Explorer · look around', status: 'done' })
+    expect(kit.task('sub-a2')!.subject).toEqual({ kind: 'agent', profileName: 'explore', depth: 1 })
+    expect('parentToolCallId' in kit.task('sub-a2')!.subject).toBe(false)
+    // hook 派发：没有派发卡
+    expect(kit.task('sub-h1')!.subject).toEqual({ kind: 'agent', profileName: 'titler', depth: 1 })
+    expect('parentToolCallId' in kit.task('sub-h1')!.subject).toBe(false)
+
+    // 再清掉一次、再追问：索引条目还记得它
+    expect(kit.tasks!.dismiss('sub-a1')).toBe(true)
+    await kit.router.continueTask({ subSessionId: 'sub-a1', text: 'again' })
+    expect(kit.task('sub-a1')!.subject).toEqual({
+      kind: 'agent',
+      profileName: 'explore',
+      depth: 1,
+      parentToolCallId: 'call-x'
+    })
   })
 
   it(
@@ -296,7 +392,8 @@ describe('router · rebuild at open', () => {
         title: 'Explorer · look',
         sessionId: 's1',
         status: 'done',
-        subject: { kind: 'agent', profileName: 'explore', depth: 1 }
+        // RB-1：宿主接线的重建（indexOnOpen）也把派发卡的 call id 带回来
+        subject: { kind: 'agent', profileName: 'explore', depth: 1, parentToolCallId: CALL }
       })
       expect(r2.ends()).toEqual([
         {
@@ -309,6 +406,45 @@ describe('router · rebuild at open', () => {
       ])
       expect(r2.userMessages()).toEqual([])
       expect(r2.registers()).toEqual([])
+    },
+    RESTART_TIMEOUT
+  )
+
+  it(
+    'RB-3 a legacy record without ownerCallId (real storage): routable, not malformed, the follow-up works; the subject has no parentToolCallId',
+    async () => {
+      const first = await hostR()
+      const A = await headline(first)
+      // 这一版写下的记录有它；删掉 = 早于这个字段的那类记录
+      const written = await first.session.harness.snapshot(AgentStateDoc, A.conversationId, BG)
+      expect(written?.ownerCallId).toBe(CALL)
+      await first.session.harness.commit(async (tx) => {
+        delete (await tx.doc(AgentStateDoc, A.conversationId)).ownerCallId
+      }, BG)
+      const warn = vi.fn()
+      const r2 = await first.reopen({ logger: { info: () => {}, warn, error: warn } })
+      r2.router.indexSession(r2.session)
+      expect(r2.router.locate(A.agentId)).toEqual({
+        sessionId: 's1',
+        conversationId: A.conversationId
+      })
+      expect(warn).not.toHaveBeenCalled()
+      expect(r2.t.warnings.filter((line) => line.includes('malformed'))).toEqual([])
+
+      const spy = vi.spyOn(r2.session.agents, 'continue')
+      r2.t.kit.queue(answer('more ok'))
+      await withTimeout(
+        r2.router.continueTask({ subSessionId: A.agentId, text: 'more' }),
+        5000,
+        'continue'
+      )
+      expect(spy.mock.calls).toEqual([[A.conversationId, 'more']])
+      const task = r2.task(A.agentId)!
+      expect(task).toMatchObject({ title: 'Explorer · look', sessionId: 's1', status: 'done' })
+      expect(task.subject).toEqual({ kind: 'agent', profileName: 'explore', depth: 1 })
+      expect(r2.ends().map((end) => [end.sessionId, end.parentSessionId])).toEqual([
+        [A.agentId, 's1']
+      ])
     },
     RESTART_TIMEOUT
   )

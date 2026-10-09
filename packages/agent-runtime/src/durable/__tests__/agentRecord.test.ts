@@ -3,6 +3,10 @@
  * `AgentStateDoc` 里的字段（PIN-01：平铺、写入器只合并不删人设、不升版本）。
  *
  * A 段是纯函数；B 段跑在真 Harness 上（持久化用 SQLite 重启）。
+ *
+ *   REC-1 派发它的 tool_call id（`ownerCallId`）随记录往返：JSON 里有这个键、解析回来与原值相同；旧记录没有它照样解析
+ *   REC-2 ownerCallId 给了就得是非空串：数字 / null / 布尔 / 对象 / 数组 / 空串都让整条记录作废
+ *   REC-3 ownerCallId 是记录自己的键：随种子写进文档、重写换成新值、重写时缺省就从文档删掉；人设那几项不动
  */
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
@@ -82,7 +86,8 @@ describe('agent records · parse / serialise', () => {
     const minimal = rec()
     const json = spawnedAgentRecordJson(minimal)
     expect(parseSpawnedAgentRecord(json)).toEqual(minimal)
-    for (const key of ['thinkingLevel', 'hook', 'resultContract'])
+    // rec() 是早于 ownerCallId 的 tool 记录：没有这个键照样解析（REC-1），也不凭空长出来
+    for (const key of ['thinkingLevel', 'ownerCallId', 'hook', 'resultContract'])
       expect(json).not.toHaveProperty(key)
 
     const schemaOnly = rec({ resultContract: { schema: structuredClone(TITLE_SCHEMA) } })
@@ -93,6 +98,14 @@ describe('agent records · parse / serialise', () => {
     expect(contractJson.resultContract).not.toHaveProperty('sourceLabel')
     expect(parsed!.resultContract).not.toHaveProperty('nudges')
     expect(parsed!.resultContract).not.toHaveProperty('sourceLabel')
+  })
+
+  it('REC-1 a tool record carrying its dispatch call id round-trips; the key is in the JSON', () => {
+    const withCall = rec({ ownerCallId: 'call-x' })
+    const json = spawnedAgentRecordJson(withCall)
+    expect(json.ownerCallId).toBe('call-x')
+    expect(parseSpawnedAgentRecord(json)).toEqual(withCall)
+    expect(parseSpawnedAgentRecord(JSON.parse(JSON.stringify(json)))).toEqual(withCall)
   })
 
   it('P2-01-03 parsing copies: neither the raw value nor the result sees the other change', () => {
@@ -157,6 +170,13 @@ describe('agent records · parse / serialise', () => {
     ['description', null],
     ['hook', 5],
     ['hook', null],
+    // REC-2：派发它的 tool_call id 给了就得是非空串
+    ['ownerCallId', 42],
+    ['ownerCallId', null],
+    ['ownerCallId', true],
+    ['ownerCallId', {}],
+    ['ownerCallId', ['call-x']],
+    ['ownerCallId', ''],
     ['resultContract', 'x'],
     ['resultContract', []],
     ['resultContract', null],
@@ -344,6 +364,39 @@ describe('agent records · AgentStateDoc fields', () => {
       rootSessionId: 's1',
       lastAnnouncedDate: '2026-10-04'
     })
+  })
+
+  it('REC-3 ownerCallId is one of the record keys: seeded into the doc, replaced by a rewrite, deleted by a rewrite without it; persona keys untouched', async () => {
+    const t = await makeHost({ makeKit: wKit, extensions: [TEST_SPAWN_EXTENSION] })
+    const session = await t.open()
+    const seeded = await seedAgent(session, { record: rec({ ownerCallId: 'call-x' }) })
+    const child = seeded.conversationId
+    const persona = {
+      persona: 'You are Explorer',
+      instructionFiles: [],
+      rootSessionId: 's1'
+    }
+    let state = (await agentState(session, child)) as Record<string, unknown>
+    expect(state.ownerCallId).toBe('call-x')
+    expect(state).toMatchObject(persona)
+    expect(await spawnedAgentRecordOf(session.harness, child, BG)).toEqual(seeded.record)
+
+    // 重写换一个 call id：文档里是新值
+    const moved: SpawnedAgentRecord = { ...seeded.record, ownerCallId: 'call-y' }
+    await session.harness.commit((tx) => writeSpawnedAgentRecord(tx, child, moved), BG)
+    state = (await agentState(session, child)) as Record<string, unknown>
+    expect(state.ownerCallId).toBe('call-y')
+    expect(await spawnedAgentRecordOf(session.harness, child, BG)).toEqual(moved)
+
+    // 重写时缺省 = 从文档删掉（不留一个过期的 call id）；人设那几项原样
+    const without: SpawnedAgentRecord = { ...seeded.record }
+    delete without.ownerCallId
+    await session.harness.commit((tx) => writeSpawnedAgentRecord(tx, child, without), BG)
+    state = (await agentState(session, child)) as Record<string, unknown>
+    expect(state).not.toHaveProperty('ownerCallId')
+    expect(parseSpawnedAgentRecord(state)).toEqual(without)
+    expect(await spawnedAgentRecordOf(session.harness, child, BG)).toEqual(without)
+    expect(state).toMatchObject(persona)
   })
 
   it('P2-01-15 nothing leaks into the root: the root agent state is exactly LC-08 and no fresh conversation parses as spawned', async () => {

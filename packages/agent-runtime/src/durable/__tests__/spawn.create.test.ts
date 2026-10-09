@@ -172,6 +172,7 @@ describe('SpawnCoordinator · creation', () => {
       dispatch: 'tool',
       parentConversationId: ROOT_CONVERSATION_ID,
       ownerTaskId: task,
+      ownerCallId: 'call-agent',
       displayName: 'Explorer',
       description: 'look'
     })
