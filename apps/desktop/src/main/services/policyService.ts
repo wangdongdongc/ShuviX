@@ -30,6 +30,7 @@ import {
 import i18next from 'i18next'
 import { getBuiltinPoliciesDir, getDefaultPoliciesDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
+import { ensureObjectId } from '../utils/mdObjectId'
 import { createLogger } from '../logger'
 
 const log = createLogger('PolicyService')
@@ -266,11 +267,13 @@ class PolicyService {
   /**
    * 新建用户策略文件（设置页「新建」与「创建覆盖副本」共用）。文件名由 frontmatter
    * `name` 净化派生（冲突追加数字后缀）；与既有用户策略重名拒绝，覆盖内置放行。
+   * 新文件一出生就带 `shuvix-id`：覆盖副本逐字复制内置原文，内置 id 跟着来；「新建」的模板补一个新的。
    */
   createPolicy(text: string): { success: boolean; name?: string; error?: string } {
     const parsed = this.parseForWrite(text, 'policy')
     if ('error' in parsed) return { success: false, error: parsed.error }
     const name = parsed.policy.name
+    const content = ensureObjectId(text, (t) => parsePolicyDefinitionFile(t, 'policy'))
 
     if (this.scanDir().valid.some((u) => u.policy.name === name)) {
       return { success: false, error: `Policy "${name}" already exists` }
@@ -286,7 +289,7 @@ class PolicyService {
     }
 
     try {
-      writeFileSync(filePath, text, 'utf-8')
+      writeFileSync(filePath, content, 'utf-8')
     } catch (e) {
       log.warn(`新建策略 "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }

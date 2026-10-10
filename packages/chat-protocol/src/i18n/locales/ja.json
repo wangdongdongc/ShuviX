@@ -106,7 +106,17 @@
       "okfResource": "紐づけ先",
       "okfSources": "ソース",
       "okfGenerated": "記録者",
-      "okfVerified": "確認者"
+      "okfVerified": "確認者",
+      "objectId": "オブジェクト ID",
+      "metaTitle": "ShuviX 設定",
+      "metaHint": "このファイルではなく ShuviX に保存されます。ファイルに書かれていないキーだけを補い、ファイルに書かれた値が常に優先されます。最初に設定を変えたとき、ファイルに shuvix-id の行が書き込まれます。設定はこの ID でファイルを識別します。",
+      "metaSaving": "保存中…",
+      "metaNotSaved": "オブジェクト ID がファイルに間に合いませんでした。もう一度お試しください。",
+      "metaCannotAssign": "このファイルの frontmatter にオブジェクト ID を書き込めませんでした。`shuvix-id: <uuid>` の行を手で追加してから再試行してください。",
+      "metaDeclared": "ファイルにこのキーがあるため、ファイルの値が使われます。",
+      "metaRegenerate": "新しい ID",
+      "metaRegenerateHint": "このファイルに新しいオブジェクト ID を付けます。コピーとは設定を共有しなくなり、元の設定は古い ID に残ります。元に戻すと古い ID に戻ります。",
+      "metaWriteFailed": "設定を保存できませんでした（{{reason}}）"
     },
     "saving": "保存中…",
     "saved": "保存済み",

@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:coding
 shuvix-builtin: true
 name: coding
 description: 编码智能体——完整的本地工具链（shell、文件、搜索）加上多文件代码工作的做事纪律；由 `work` 会话以 `coding` 子会话的形式启用。

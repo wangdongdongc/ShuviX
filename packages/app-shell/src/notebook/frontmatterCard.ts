@@ -48,6 +48,7 @@ import {
   type ShuvixMdFieldKind,
   type ShuvixMdFieldSpec
 } from '@shuvix/chat-protocol/shuvixMdDescriptors'
+import { setShuvixIdLine } from '@shuvix/chat-protocol/mdMeta'
 
 export interface FrontmatterCardConfig {
   /** i18n 解析（注入 i18n.t —— extensions 在 mount 时一次性捕获，实例稳定、按当前语言取值） */
@@ -79,6 +80,27 @@ export interface FrontmatterCardConfig {
    * 不提供本接缝时，两类字段退回只读 + 跳源码。
    */
   mountField?: (slot: HTMLElement, ctx: FrontmatterFieldMount) => (() => void) | void
+  /**
+   * 「ShuviX 设置」条（md 扩展元数据，见 chat-protocol mdMeta.ts）的挂载接缝：卡片在字段区之后开一个槽、
+   * 交出上下文，内容由宿主渲染（读写数据库里的补缺值、给文件分配对象 id）。哪些文件有这一条由宿主定 ——
+   * 宿主不往槽里放东西，槽就是一个零高度的空 div。不提供本接缝 = 没有这一条。
+   */
+  mountMetaStrip?: (slot: HTMLElement, ctx: FrontmatterMetaMount) => (() => void) | void
+}
+
+/** 「ShuviX 设置」条的挂载上下文 */
+export interface FrontmatterMetaMount {
+  /** 本文件的 `shuvix: <type>` 类型段 */
+  markerType: string
+  /** 当前 frontmatter 原文（编辑器缓冲区里的，未必已落盘） */
+  yaml: string
+  /** 编辑器只读（随包发布的内置文件等）—— 改不了文件，但数据库里的设置照样能改 */
+  readOnly: boolean
+  /**
+   * 把 frontmatter 的 `shuvix-id` 设为 `id`：只改这一行（setShuvixIdLine），作为一次普通编辑进撤销栈、
+   * 随自动保存落盘。frontmatter 不是能安全改一行的写法时返回 false，什么都不改。
+   */
+  setObjectId: (id: string) => boolean
 }
 
 /** 字段槽位的挂载上下文 —— 宿主据此渲染选择器并写回 */
@@ -266,6 +288,32 @@ function setScalarKey(view: EditorView, key: string, value: string | null): void
   if (value === null) return
   const closer = state.doc.line(fm.endLine)
   view.dispatch({ changes: { from: closer.from, insert: `${key}: ${yamlScalar(value)}\n` } })
+}
+
+/**
+ * 把缓冲区里 frontmatter 的 `shuvix-id` 设为 `id`（「ShuviX 设置」条分配 / 换新 id 用）。文本操作交给
+ * chat-protocol 的 setShuvixIdLine（主进程新建文件时用的是同一个函数，两边写出的是同一种行），这里只把
+ * 新旧两段的差异派发成一次最小的变更 —— 光标、撤销栈都留得住，⌘Z 能把 id 换回去。
+ */
+function setObjectIdLine(view: EditorView, id: string): boolean {
+  const fm = findFrontmatter(view.state)
+  if (!fm) return false
+  const region = view.state.doc.sliceString(fm.from, fm.to)
+  const next = setShuvixIdLine(region, id)
+  if (next === null) return false
+  if (next === region) return true
+  let start = 0
+  while (start < region.length && start < next.length && region[start] === next[start]) start++
+  let endOld = region.length
+  let endNew = next.length
+  while (endOld > start && endNew > start && region[endOld - 1] === next[endNew - 1]) {
+    endOld--
+    endNew--
+  }
+  view.dispatch({
+    changes: { from: fm.from + start, to: fm.from + endOld, insert: next.slice(start, endNew) }
+  })
+  return true
 }
 
 /** 布尔开关：光标不动 → 卡片保持渲染态，开关原地翻转 */
@@ -797,7 +845,13 @@ class FrontmatterCardWidget extends WidgetType {
     // 卡片本身 user-select:none，故这里不会牺牲文本选中能力。
     wrap.addEventListener('mousedown', (e) => {
       const target = e.target as HTMLElement | null
-      if (target?.closest('input, textarea, button, select, .cm-shuvix-fmcard-slot')) return
+      if (
+        target?.closest(
+          'input, textarea, button, select, .cm-shuvix-fmcard-slot, .cm-shuvix-fmcard-meta'
+        )
+      ) {
+        return
+      }
       e.preventDefault()
     })
 
@@ -957,6 +1011,21 @@ class FrontmatterCardWidget extends WidgetType {
         box.appendChild(buildGenericRow(key, value))
       }
       wrap.appendChild(box)
+    }
+
+    // 「ShuviX 设置」条：数据库里的补缺值与对象 id（见 FrontmatterCardConfig.mountMetaStrip）。
+    // YAML 写坏时也挂 —— 它读的是磁盘上的文件，不靠这里的解析结果
+    const { mountMetaStrip } = this.config
+    if (mountMetaStrip) {
+      const slot = el('div', 'cm-shuvix-fmcard-meta')
+      wrap.appendChild(slot)
+      const cleanup = mountMetaStrip(slot, {
+        markerType: this.marker.type,
+        yaml: this.yaml,
+        readOnly,
+        setObjectId: (id) => setObjectIdLine(view, id)
+      })
+      if (cleanup) this.cleanups.push(cleanup)
     }
     return wrap
   }

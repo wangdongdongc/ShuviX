@@ -9,6 +9,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { builtinObjectId } from '@shuvix/chat-protocol/mdMeta'
 import {
   AUTO_REVIEW_HOOK_SPEC,
   AUTO_TITLE_HOOK_SPEC,
@@ -325,4 +326,34 @@ describe('auto-review（判定型）结构钉板', () => {
     ).toContain(review.agent)
     expect(BASE_PROFILE_NAMES.has(review.agent)).toBe(false)
   })
+})
+
+/**
+ * 内置 hook 的对象 id（`shuvix-id`，md 扩展元数据只认它）：每份内置 × 每门语言的 md 都写着
+ * `hook:builtin:<name>`，构建出来的 hook 在任何语言下都带着同一个 id（覆盖副本逐字复制原文，id 跟着走）。
+ */
+describe('内置 hook 的对象 id（shuvix-id）', () => {
+  const fileOf = (name: string, lang: string): string =>
+    lang === 'en' ? `${name}.md` : `${name}.${lang}.md`
+
+  it.each(BUILTIN_HOOK_SPECS.map((spec) => spec.name))(
+    'HB-ID1 %s：三语 md 原文各恰一行 shuvix-id = hook:builtin:<name>，紧跟标记；构建结果在每种语言下都带它',
+    (name) => {
+      const expected = builtinObjectId('hook', name)
+      for (const lang of LANGS) {
+        const raw = onDisk(fileOf(name, lang))
+        const ids = [...raw.matchAll(/^shuvix-id: (.+)$/gm)].map((m) => m[1])
+        expect(ids, `${name}.${lang}`).toEqual([expected])
+        const lines = raw.split(/\r?\n/)
+        expect(lines[lines.indexOf('shuvix: hook v1') + 1], `${name}.${lang}`).toBe(
+          `shuvix-id: ${expected}`
+        )
+        expect(parseHookDefinitionFile(raw, name)?.objectId, `${name}.${lang}`).toBe(expected)
+      }
+      for (const language of [undefined, 'en', 'zh', 'zh-CN', 'ja', 'fr']) {
+        const hook = build(language).find((h) => h.name === name)
+        expect(hook?.objectId, `${name} @ ${language}`).toBe(expected)
+      }
+    }
+  )
 })

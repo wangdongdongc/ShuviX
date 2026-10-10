@@ -58,6 +58,7 @@ in the `project` knowledge base. Otherwise finish without writing.
 | `name`                | 字符串     | 否     | 身份；缺省取文件基础名。                                                                                                                                    |
 | `shuvix-displayName`  | 字符串     | 否     | 侧栏「Hooks」分组里的标签。缺省 = `name`。                                                                                                                       |
 | `description`         | 字符串     | 否     | 设置列表里的一句话。                                                                                                                                        |
+| `shuvix-id`           | 字符串     | 否     | 对象 id —— 文件移到哪里，ShuviX 都凭它认出这份文件。ShuviX 新建的文件里是 UUID，自带文件里是 `<类型>:builtin:<名字>`；副本与原件共用同一个 id。由 ShuviX 写入，不要动。写错只发一条提示，不会让整份文件非法。                 |
 | `shuvix-hook-agent`   | 字符串     | **是** | 要派发的 agent，按 `name`：任何内置 agent 或 `~/.shuvix/agents/<name>.md`。**绝不能是基座人格**（`work` / `chat` / `notebook` / `bot`）—— 解析时拒绝。       |
 | `shuvix-hook-on`      | 绑定列表   | **是** | 至少一条 `{ trigger, when? }`。`trigger` 是触发点 id；`when` 是可选的 CEL 表达式。绑定里出现别的键即拒绝。                                                    |
 

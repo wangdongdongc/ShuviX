@@ -55,6 +55,7 @@ talking about, and you never pad feedback with praise.
 | `name`                | 字符串   | 否   | bot 的稳定身份 —— bot 会话存在 `settings.bot` 里的就是它。缺省取文件基础名。                      |
 | `shuvix-displayName`  | 字符串   | 否   | 侧栏与会话头部的标签。缺省 = `name`。给了必须是字符串。                                            |
 | `description`         | 字符串   | 否   | 列表与「新建 bot 会话」选择框里的一句话。纯展示。给了必须是字符串。                                |
+| `shuvix-id`           | 字符串   | 否   | 对象 id —— 文件移到哪里，ShuviX 都凭它认出这份文件。ShuviX 新建的文件里是 UUID，自带文件里是 `<类型>:builtin:<名字>`；副本与原件共用同一个 id。由 ShuviX 写入，不要动。写错只发一条提示，不会让整份文件非法。 |
 
 其余键一律忽略，只有一个例外：已退役的 v1 键 `shuvix-bot-pipeline`（管线时代 bot 点名一条 workflow
 的那一块）照常解析，但会得到一条**请你删掉它**的警告 —— 它看起来像配置，其实什么都不控制。所以

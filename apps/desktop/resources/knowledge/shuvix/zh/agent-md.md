@@ -57,6 +57,7 @@ style, each with file and line. Never modify files.
 | `shuvix-instruction-files`  | 逗号分隔的字符串 | 否   | 这个 agent 读哪些项目指令文件：**相对工作目录**的路径，按优先级排列 —— 第一个存在且非空的被注入，至多一个。绝对路径、`..` 段或布尔值都让文件非法。省略 = 不注入。                                                                            |
 | `shuvix-project-awareness`  | 布尔             | 否   | `true` = 让 agent 知道自己在哪个项目里：项目提示词与项目记忆索引追加到它的系统提示词（按根会话的项目解析；会话不属于项目时什么也不注入）。必须是真正的 YAML 布尔值。缺省 `false`。                                                       |
 | `shuvix-builtin`            | 布尔             | 否   | ShuviX 自带文件的自述标记。解析器不读；不要加进用户文件。                                                                                                                                                                                  |
+| `shuvix-id`                 | 字符串            | 否   | 对象 id —— 文件移到哪里，ShuviX 都凭它认出这份文件。ShuviX 新建的文件里是 UUID，自带文件里是 `<类型>:builtin:<名字>`；副本与原件共用同一个 id。由 ShuviX 写入，不要动。写错只发一条提示，不会让整份文件非法。                                                                                 |
 
 **被忽略**的键（按未知键读，不报错、无效果）：通用的 `tools` 键（别的应用对工具名的含义会被误读 ——
 用 `shuvix-tools`），以及已退役的 `whenToUse`、`displayName`、`shuvix-dispatch-only`、
@@ -143,6 +144,12 @@ agent `coding`、`explore`、`widget`、`titler`、`knowledge-writer`，以及 `
 - 基座**从不被派发、从不被点名**：`agent` 工具、hook 的 `shuvix-hook-agent`、子会话的 `agent_profile`
   都拒绝 `work` / `chat` / `notebook` / `bot` / `tab` / `coedit`。`permission-reviewer` 同样被 `agent` 工具与
   `agent_profile` 拒绝 —— 能随手调用自己审查员的 agent，可以一遍遍换说法直到某一种能过 —— 但 hook 可以点名它。
+
+- **不复制覆盖也能定模型与思考档位：ShuviX 设置。** 从侧栏「智能体」分组打开一份 agent md（内置的或你自己的），属性下方有一条
+  「ShuviX 设置」，可以选 `shuvix-model` 与 `shuvix-thinking`。它们存在 ShuviX 里、按文件的 `shuvix-id` 挂，
+  并且只**补**文件没写的键 —— 文件里写了的永远以文件为准。所以像 `explore` 这样的内置 agent 不用复制覆盖文件
+  就能换一个便宜的模型，每次更新照样拿到随包发布的新正文。没有 id 的文件会自动得到一个 —— 第一次改设置时往文件里写一行 `shuvix-id`；
+  复制出来的文件与原件共用设置。agent 改不了这些设置 —— 只有你在那一条上能改。
 
 ## 一个 agent 怎样被用起来
 

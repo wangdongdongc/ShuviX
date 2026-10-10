@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:tab
 shuvix-builtin: true
 name: tab
 description: タブエージェント —— Chrome タブセッション（ユーザー自身の Chrome の ShuviX サイドパネル）のベースプロファイル。ログイン済みのブラウザーでユーザーが開いているページを手伝う。

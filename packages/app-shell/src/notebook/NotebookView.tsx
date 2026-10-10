@@ -264,6 +264,8 @@ export function NotebookView({
         layout={layout}
         frontmatterFallbackType={frontmatterFallbackType}
         extraExtensions={extraExtensions}
+        // 本组件显示的就是这条笔记本会话绑定的文件 —— 属性卡的「ShuviX 设置」条只在这种编辑器里出现
+        ownsSessionFile
       />
     </div>
   )

@@ -63,6 +63,7 @@ in the `project` knowledge base. Otherwise finish without writing.
 | `name`                | string          | no       | Identity; defaults to the file's base name.                                                                                                                                 |
 | `shuvix-displayName`  | string          | no       | Label in the sidebar's Hooks group. Defaults to `name`.                                                                                                                              |
 | `description`         | string          | no       | One line for the settings list.                                                                                                                                             |
+| `shuvix-id`           | string          | no       | Object id — how ShuviX recognises this file wherever it moves. A UUID in files ShuviX creates, `<type>:builtin:<name>` in shipped ones; a copy shares its original's id. Written by ShuviX — leave it alone. A malformed value is ignored with a warning, never rejects the file. |
 | `shuvix-hook-agent`   | string          | **yes**  | The agent to dispatch, by `name`: any builtin agent or `~/.shuvix/agents/<name>.md`. **Never a base persona** (`work` / `chat` / `notebook` / `bot`) — rejected at parse.   |
 | `shuvix-hook-on`      | list of bindings| **yes**  | At least one `{ trigger, when? }`. `trigger` is a trigger-point id; `when` is an optional CEL expression. A binding with any other key is rejected.                          |
 

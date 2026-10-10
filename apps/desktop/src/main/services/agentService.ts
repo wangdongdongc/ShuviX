@@ -30,6 +30,7 @@ import {
   type ShadowResolved
 } from '@shuvix/agent-runtime'
 import { appEventBus } from '../utils/appEventBus'
+import { ensureObjectId } from '../utils/mdObjectId'
 import { createLogger } from '../logger'
 
 const log = createLogger('AgentService')
@@ -58,9 +59,25 @@ function compareRows(a: AgentListItem, b: AgentListItem): number {
 
 class AgentService implements AgentProfileRegistry {
   private readonly userDir: string
+  /**
+   * md 扩展元数据的补缺值读口（按对象 id 取 agent 白名单内的键，见 chat-protocol mdMeta.ts）。由主进程
+   * 入口注入（setMetaFill，读 services/mdMeta 的内存快照）—— 本服务不直接依赖数据库：单测里没有库，
+   * 没注入 = 没有补缺，档案就是文件本身。
+   */
+  private metaFill: ((objectId: string) => Record<string, unknown> | undefined) | null = null
 
   constructor() {
     this.userDir = getDefaultAgentsDir()
+  }
+
+  /** 注入补缺值读口（主进程启动时调一次；null = 撤掉） */
+  setMetaFill(fill: ((objectId: string) => Record<string, unknown> | undefined) | null): void {
+    this.metaFill = fill
+  }
+
+  /** 交给解析器的补缺选项（ParseAgentFileOptions）—— 没注入时为空，按文件本身解析 */
+  private fillOptions(): { fill?: (objectId: string) => Record<string, unknown> | undefined } {
+    return this.metaFill ? { fill: this.metaFill } : {}
   }
 
   /** 懒创建用户目录 */
@@ -89,10 +106,15 @@ class AgentService implements AgentProfileRegistry {
       return null
     }
 
-    const parsed = parseAgentDefinitionFile(raw, defaultName, (msg) => {
-      log.warn(msg)
-      onReject?.(msg)
-    })
+    const parsed = parseAgentDefinitionFile(
+      raw,
+      defaultName,
+      (msg) => {
+        log.warn(msg)
+        onReject?.(msg)
+      },
+      this.fillOptions()
+    )
     if (!parsed) {
       log.warn(`agent "${defaultName}": 无法解析 frontmatter`)
       return null
@@ -161,10 +183,14 @@ class AgentService implements AgentProfileRegistry {
    * 就是内置档案的事实源，用户在侧栏点开的只读笔记本读的也是它，两边由同一次语言回退挑中
    * 同一个文件（`basePath` 回带的就是那条路径）。不缓存 —— 十来个几 KB 的文件，读盘的代价
    * 远小于「改了 md 还得重启才生效」的代价。
+   *
+   * `withFill: false` 给「创建覆盖副本」用：副本是这份文件本身的规范化写出，不该把数据库里的补缺值
+   * 烤进 md —— 副本沿用内置 id，补缺值本来就照样作用在它身上；烤进去反而把「补缺」变成了「声明」。
    */
-  private builtinAgents(): AgentProfile[] {
+  private builtinAgents({ withFill = true }: { withFill?: boolean } = {}): AgentProfile[] {
     const dir = getBuiltinAgentsDir()
     return buildBuiltinProfiles({
+      ...(withFill ? this.fillOptions() : {}),
       language: i18next.language,
       widgetsRoot: getWidgetsDir(),
       readMd: (fileName) => {
@@ -316,7 +342,7 @@ class AgentService implements AgentProfileRegistry {
         return { error: e instanceof Error ? e.message : String(e) }
       }
     }
-    const builtin = this.builtinAgents().find((a) => a.name === name)
+    const builtin = this.builtinAgents({ withFill: false }).find((a) => a.name === name)
     if (!builtin) return { error: `Builtin agent "${name}" not found` }
     // AgentProfile 的 tools / instructionFiles 是 readonly，ParsedAgentFile 要可变数组 —— 拷一份即可
     return {
@@ -346,11 +372,14 @@ class AgentService implements AgentProfileRegistry {
   /**
    * 按原文新建用户 agent 文件（「新建」与「创建覆盖副本」共用）。文件名由 frontmatter
    * `name` 净化派生（冲突追加数字后缀）；与既有用户 agent 重名拒绝，覆盖内置放行。
+   * 新文件一出生就带 `shuvix-id`：覆盖副本的原文里已有内置 id（getSource 写出的），沿用；
+   * 「新建」的模板没有，补一个新的。
    */
   createAgentSource(text: string): { success: boolean; name?: string; error?: string } {
     const result = this.parseSourceForWrite(text, 'agent')
     if ('error' in result) return { success: false, error: result.error }
     const name = result.parsed.name
+    const content = ensureObjectId(text, (t) => parseAgentDefinitionFile(t, 'agent'))
 
     if (this.scanDir(this.userDir, 'user').some((a) => a.name === name)) {
       return { success: false, error: `Agent "${name}" already exists` }
@@ -364,7 +393,7 @@ class AgentService implements AgentProfileRegistry {
     }
 
     try {
-      writeFileSync(filePath, text, 'utf-8')
+      writeFileSync(filePath, content, 'utf-8')
     } catch (e) {
       log.warn(`新建 agent 原文 "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
@@ -390,7 +419,10 @@ class AgentService implements AgentProfileRegistry {
       return { success: false, error: `Agent "${name}" already exists` }
     }
 
-    const content = serializeAgentDefinitionFile({ ...input, name })
+    // 整份重写这个文件：对象 id 是它的身份，只沿用文件里原有的那个 —— 入参里的一概不认（id 只随新建诞生、
+    // 由用户手改或显式「重新生成」改变；一次保存不该悄悄换掉或丢掉它，否则元数据会随之脱钩）。
+    // 文件原本没有合法 id 就仍然没有：保存不是新建
+    const content = serializeAgentDefinitionFile({ ...input, name, objectId: target.objectId })
     // 序列化→解析往返自检，防御 serializer/parser 漂移导致写出不可读文件
     if (!parseAgentDefinitionFile(content, name)) {
       return { success: false, error: 'Internal error: serialized agent file failed to parse' }
@@ -422,7 +454,9 @@ class AgentService implements AgentProfileRegistry {
       return { success: false, error: `Agent "${name}" already exists` }
     }
 
-    const content = serializeAgentDefinitionFile({ ...input, name })
+    const content = ensureObjectId(serializeAgentDefinitionFile({ ...input, name }), (t) =>
+      parseAgentDefinitionFile(t, name)
+    )
     if (!parseAgentDefinitionFile(content, name)) {
       return { success: false, error: 'Internal error: serialized agent file failed to parse' }
     }

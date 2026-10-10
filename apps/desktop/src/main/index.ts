@@ -60,6 +60,8 @@ import {
 import { widgetServer } from './services/widget'
 import { cliServer } from './services/cliServer'
 import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
+import { mdMetaStore } from './services/mdMeta'
+import { agentService } from './services/agentService'
 import { chromeBridge } from './services/chromeBridge'
 import { installChromeNativeHost } from './services/chromeExtensionService'
 import { registerChromeFrontend } from './frontend/chrome'
@@ -818,6 +820,9 @@ app.whenReady().then(async () => {
   // 命令沙箱读开关的口子：模块本身不碰设置表（它在很多导入链上），由这里注入。
   // 没注入就是关闭 —— 只有真正起来的应用才套沙箱
   setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
+  // md 扩展元数据：agent 档案的补缺值（模型 / 思考档位）读自 md_attrs 的内存快照。agentService 不直接依赖
+  // 数据库（单测里没有库），由这里注入读口 —— 没注入就没有补缺，档案就是文件本身
+  agentService.setMetaFill((objectId) => mdMetaStore.fillFor(objectId, 'agent'))
 
   // 旧格式会话的启动切换（services/legacySwitchover）：绑着文件的原地重置、Chrome 标签页会话删掉。
   // 必须 await 完、排在 CLI 服务 / Chrome 桥 / 任何窗口之前 —— 否则 shuvix-cli、侧边栏或界面可能在

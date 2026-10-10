@@ -17,7 +17,7 @@
  * （policyService 每次现取 getDefaultPoliciesDir），所以目录路径必须在 import 单例之前备好
  * —— 这里用动态 import 保证顺序。
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest'
 import {
   existsSync,
   mkdirSync,
@@ -86,6 +86,16 @@ const agentMd = (name: string, extra: string[] = []): string =>
     `Body of ${name}.`,
     ''
   ].join('\n')
+
+/**
+ * 新建的文件一出生就带 `shuvix-id`（标记行之后补一行 UUIDv7，见 utils/mdObjectId.ts）：断言这一行在，
+ * 去掉它再比较 —— 其余字节与传入原文逐字节相同（只插一行，不重序列化）
+ */
+function withoutMintedId(text: string): string {
+  const line = /^shuvix-id: [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n/m
+  expect(text).toMatch(line)
+  return text.replace(line, '')
+}
 
 /** 注入开关写成非布尔 → 解析器判整份非法（人读原因带键名与 rejected） */
 const INVALID_MD = [
@@ -288,14 +298,15 @@ describe('agentService.builtinSourceFile —— 内置只读笔记本开哪一�
 })
 
 describe('agentService.createAgentSource —— 按原文新建', () => {
-  it('AS-5 合法新建：落盘逐字节等于传入 text（不重序列化），返回 frontmatter name', () => {
+  it('AS-5 合法新建：落盘逐字节等于传入 text（不重序列化，只补一行 shuvix-id），返回 frontmatter name', () => {
     const text = agentMd('created-by-source', ['shuvix-tools: read, grep'])
     expect(agentService.createAgentSource(text)).toEqual({
       success: true,
       name: 'created-by-source'
     })
-    expect(readAgentFile('created-by-source.md')).toBe(text)
-    expect(agentService.getSource('created-by-source', 'user')).toEqual({ text })
+    const written = readAgentFile('created-by-source.md')
+    expect(withoutMintedId(written)).toBe(text)
+    expect(agentService.getSource('created-by-source', 'user')).toEqual({ text: written })
   })
 
   it('AS-6 非法拒绝：原因即解析器原文、目录零新增，且**不懒创建目录**', () => {
@@ -362,7 +373,7 @@ describe('agentService.createAgentSource —— 按原文新建', () => {
     expect(result.success).toBe(false)
     expect(result.error).toBe('Agent "dup-me" already exists')
     expect(files()).toEqual(before)
-    expect(readAgentFile('dup-me.md')).toBe(agentMd('dup-me'))
+    expect(withoutMintedId(readAgentFile('dup-me.md'))).toBe(agentMd('dup-me'))
   })
 
   it('AS-11 覆盖内置放行：同名用户档案生效，listForSettings 里内置转 overridden', () => {
@@ -388,8 +399,9 @@ describe('agentService —— 读时投影与文件名边界', () => {
     expect(agentService.createAgentSource(text)).toEqual({ success: true, name: 'normalize-me' })
 
     // 原文编辑器不该背着用户重排文件：磁盘上保留他写的大小写与空格
-    expect(readAgentFile('normalize-me.md')).toBe(text)
-    expect(agentService.getSource('normalize-me', 'user')).toEqual({ text })
+    const written = readAgentFile('normalize-me.md')
+    expect(withoutMintedId(written)).toBe(text)
+    expect(agentService.getSource('normalize-me', 'user')).toEqual({ text: written })
 
     // 读时才归一：内置名小写、mcp: 前缀小写而 server 名保留大小写、去重保序
     expect(agentService.listAll().find((a) => a.name === 'normalize-me')!.tools).toEqual([
@@ -410,7 +422,8 @@ describe('agentService —— 读时投影与文件名边界', () => {
   it('AS-19 非 ASCII name（中文 / emoji）不被净化改写：落盘文件名与 name 一致且可回读', () => {
     for (const name of ['代码审查', '🔎-explorer']) {
       expect(agentService.createAgentSource(agentMd(name))).toEqual({ success: true, name })
-      expect(agentService.getSource(name, 'user')).toEqual({ text: agentMd(name) })
+      const source = agentService.getSource(name, 'user')
+      expect('text' in source && withoutMintedId(source.text)).toBe(agentMd(name))
     }
     expect(files()).toEqual(['代码审查.md', '🔎-explorer.md'].sort())
   })
@@ -824,5 +837,420 @@ describe('agentService —— 同名的几份：注册表与设置页是同一�
     ).toEqual([['builtin', false]])
     expect(agentService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
     expectRegistryMatchesSettings()
+  })
+})
+
+/**
+ * 对象 id（`shuvix-id`，设计 docs/md-metadata-design.md）—— 新建的文件一出生就带 id：
+ *   - 按原文新建（createAgentSource）：原文已有合法 id（「创建覆盖副本」沿用内置的 `agent:builtin:<name>`）
+ *     就原样落盘；没有或写坏 → 补 / 换一个新的 UUIDv7，**只动那一行**；插不进去的罕见写法照原文落盘；
+ *   - 结构化新建（createAgent）同一条规则；
+ *   - 保存（saveAgent）整份重写，但 id 只认文件里原有的那个 —— 入参里的一概不认，原来没有就仍然没有；
+ *   - 写坏的 id 只让这份文件「没有 id」，不让它变成非法文件，也不妨碍它遮蔽同名内置。
+ */
+describe('agentService —— 对象 id（shuvix-id）', () => {
+  const V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  /** 文件里全部 `shuvix-id:` 行的值 */
+  const idValues = (text: string): string[] =>
+    [...text.matchAll(/^shuvix-id: (.*?)\r?$/gm)].map((m) => m[1])
+  /** ParsedAgentFile 的最小合法形状 */
+  const parsedFile = (name: string, extra: Partial<ParsedAgentFile> = {}): ParsedAgentFile => ({
+    name,
+    displayName: name,
+    description: 'object id fixture',
+    systemPrompt: `Body of ${name}.`,
+    tools: ['read'],
+    instructionFiles: [],
+    projectAwareness: false,
+    ...extra
+  })
+
+  const ORIGINAL_LANGUAGE = i18next.language
+  afterAll(() => {
+    i18next.language = ORIGINAL_LANGUAGE
+  })
+  beforeEach(() => {
+    i18next.language = ORIGINAL_LANGUAGE
+  })
+
+  it('AS-ID1 按模板新建：第 2 行是标记、第 3 行是新 UUIDv7、恰一行 id；注册表里这份档案的 objectId 就是它', () => {
+    expect(agentService.createAgentSource(agentMd('id-born')).success).toBe(true)
+    const lines = readAgentFile('id-born.md').split('\n')
+    expect(lines[1]).toBe('shuvix: agent v1')
+    const ids = idValues(lines.join('\n'))
+    expect(ids).toHaveLength(1)
+    expect(ids[0]).toMatch(V7)
+    expect(lines[2]).toBe(`shuvix-id: ${ids[0]}`)
+    expect(agentService.listAll().find((a) => a.name === 'id-born')?.objectId).toBe(ids[0])
+  })
+
+  it('AS-ID2 两次新建 → 两个不同的 id', () => {
+    expect(agentService.createAgentSource(agentMd('id-one')).success).toBe(true)
+    expect(agentService.createAgentSource(agentMd('id-two')).success).toBe(true)
+    const one = idValues(readAgentFile('id-one.md'))[0]
+    const two = idValues(readAgentFile('id-two.md'))[0]
+    expect(one).toMatch(V7)
+    expect(two).toMatch(V7)
+    expect(one).not.toBe(two)
+  })
+
+  it('AS-ID3 原文已带大写 UUID → 逐字节原样落盘（不归一）；档案的 objectId 是小写', () => {
+    const text = agentMd('id-upper').replace(
+      'shuvix: agent v1\n',
+      `shuvix: agent v1\nshuvix-id: ${U.toUpperCase()}\n`
+    )
+    expect(agentService.createAgentSource(text).success).toBe(true)
+    expect(readAgentFile('id-upper.md')).toBe(text)
+    expect(agentService.getProfile('id-upper')?.objectId).toBe(U)
+  })
+
+  it('AS-ID4 写坏的 id（在 name 之后）→ 原位换成新 UUIDv7（同一行号），重新解析零告警', () => {
+    const text = agentMd('id-bad').replace("name: 'id-bad'\n", "name: 'id-bad'\nshuvix-id: nope\n")
+    const badLine = text.split('\n').indexOf('shuvix-id: nope')
+    expect(badLine).toBe(3)
+    expect(agentService.createAgentSource(text).success).toBe(true)
+    const written = readAgentFile('id-bad.md')
+    const ids = idValues(written)
+    expect(ids).toHaveLength(1)
+    expect(ids[0]).toMatch(V7)
+    expect(written.split('\n')[badLine]).toBe(`shuvix-id: ${ids[0]}`)
+    expect(written.replace(`shuvix-id: ${ids[0]}`, 'shuvix-id: nope')).toBe(text)
+    const warns: string[] = []
+    expect(parseAgentDefinitionFile(written, 'x', (m) => warns.push(m))).not.toBeNull()
+    expect(warns).toEqual([])
+  })
+
+  it('AS-ID5 没有标记的原文 → id 落在 frontmatter 第一行', () => {
+    const text = agentMd('id-nomarker').replace('shuvix: agent v1\n', '')
+    expect(agentService.createAgentSource(text).success).toBe(true)
+    const lines = readAgentFile('id-nomarker.md').split('\n')
+    expect(lines[0]).toBe('---')
+    expect(lines[1]).toMatch(/^shuvix-id: /)
+    expect(lines[1].slice('shuvix-id: '.length)).toMatch(V7)
+  })
+
+  it('AS-ID6 CRLF 原文 → 新行也是 CRLF，没有落单的 LF', () => {
+    const text = agentMd('id-crlf').replace(/\n/g, '\r\n')
+    expect(agentService.createAgentSource(text).success).toBe(true)
+    const written = readAgentFile('id-crlf.md')
+    expect(/(?<!\r)\n/.test(written)).toBe(false)
+    expect(written.split('\r\n')[2]).toMatch(/^shuvix-id: [0-9a-f-]{36}$/)
+  })
+
+  it('AS-ID7 整块 flow 风格的 frontmatter：照常新建、逐字节原文落盘、没有 id（之后在属性卡上分配）', () => {
+    const text =
+      "---\n{shuvix: agent v1, name: id-flowy, description: 'flow style'}\n---\n\nBody.\n"
+    expect(agentService.createAgentSource(text)).toEqual({ success: true, name: 'id-flowy' })
+    expect(readAgentFile('id-flowy.md')).toBe(text)
+    expect(agentService.getProfile('id-flowy')?.objectId).toBeUndefined()
+  })
+
+  it.each(['en', 'zh'])(
+    'AS-ID8 「创建覆盖副本」的初值（界面语言 %s）：每一份内置的第 3 行都是 shuvix-id: agent:builtin:<name>',
+    (language) => {
+      i18next.language = language
+      const names = builtinNames()
+      expect(names.length).toBeGreaterThan(0)
+      for (const name of names) {
+        const copy = agentService.getSource(name, 'builtin')
+        expect('text' in copy, name).toBe(true)
+        expect((copy as { text: string }).text.split('\n')[2], name).toBe(
+          `shuvix-id: agent:builtin:${name}`
+        )
+      }
+    }
+  )
+
+  it('AS-ID9 用内置 explore 的初值新建覆盖：沿用内置 id、不造新 UUID；生效的是用户那份，内置行标被覆盖', () => {
+    const copy = agentService.getSource('explore', 'builtin') as { text: string }
+    expect(agentService.createAgentSource(copy.text)).toEqual({ success: true, name: 'explore' })
+    const written = readAgentFile('explore.md')
+    expect(idValues(written)).toEqual(['agent:builtin:explore'])
+    expect(written).not.toMatch(/^shuvix-id: [0-9a-f]{8}-/m)
+    const active = agentService.getProfile('explore')
+    expect(active?.source).toBe('user')
+    expect(active?.objectId).toBe('agent:builtin:explore')
+    const builtinRow = agentService
+      .listForSettings()
+      .find((a) => a.name === 'explore' && a.source === 'builtin')
+    expect(builtinRow?.overridden).toBe(true)
+  })
+
+  it('AS-ID10 结构化新建（createAgent）：没给 id → 第 3 行新 UUIDv7；给了合法 UUID → 沿用；给了写坏的 → 恰一行新 id', () => {
+    expect(agentService.createAgent(parsedFile('gui-noid')).success).toBe(true)
+    const noid = readAgentFile('gui-noid.md').split('\n')
+    expect(noid[1]).toBe('shuvix: agent v1')
+    expect(noid[2].slice('shuvix-id: '.length)).toMatch(V7)
+
+    expect(agentService.createAgent(parsedFile('gui-keep', { objectId: U })).success).toBe(true)
+    expect(idValues(readAgentFile('gui-keep.md'))).toEqual([U])
+    expect(readAgentFile('gui-keep.md').split('\n')[2]).toBe(`shuvix-id: ${U}`)
+
+    expect(agentService.createAgent(parsedFile('gui-bad', { objectId: 'nope' })).success).toBe(true)
+    const bad = idValues(readAgentFile('gui-bad.md'))
+    expect(bad).toHaveLength(1)
+    expect(bad[0]).toMatch(V7)
+  })
+
+  it('AS-ID11 保存（入参不带 objectId）→ 文件原有的 id 保留，仍在第 3 行', () => {
+    expect(agentService.createAgentSource(agentMd('save-keep')).success).toBe(true)
+    const original = idValues(readAgentFile('save-keep.md'))[0]
+    expect(original).toMatch(V7)
+    expect(
+      agentService.saveAgent('save-keep', parsedFile('save-keep', { systemPrompt: 'SAVED' }))
+        .success
+    ).toBe(true)
+    const saved = readAgentFile('save-keep.md')
+    expect(saved).toContain('SAVED')
+    expect(idValues(saved)).toEqual([original])
+    expect(saved.split('\n')[2]).toBe(`shuvix-id: ${original}`)
+  })
+
+  it('AS-ID12 保存时入参里的 objectId 一概不认：另一个合法 UUID / 空串 → 文件原 id 不变；原来没有 id → 仍然没有；原来写坏 → 不写 id 行', () => {
+    // 原有合法 id
+    expect(agentService.createAgentSource(agentMd('save-ignore')).success).toBe(true)
+    const original = idValues(readAgentFile('save-ignore.md'))[0]
+    expect(
+      agentService.saveAgent('save-ignore', parsedFile('save-ignore', { objectId: U })).success
+    ).toBe(true)
+    expect(idValues(readAgentFile('save-ignore.md'))).toEqual([original])
+    expect(
+      agentService.saveAgent('save-ignore', parsedFile('save-ignore', { objectId: '' })).success
+    ).toBe(true)
+    expect(idValues(readAgentFile('save-ignore.md'))).toEqual([original])
+
+    // 原来没有 id（手写的文件）：保存不是新建，不补
+    writeAgentFile('save-none.md', agentMd('save-none'))
+    expect(
+      agentService.saveAgent('save-none', parsedFile('save-none', { objectId: U })).success
+    ).toBe(true)
+    expect(idValues(readAgentFile('save-none.md'))).toEqual([])
+
+    // 原来写坏：读作没有 id，序列化器的固定键集里也就没有这一行
+    writeAgentFile(
+      'save-bad.md',
+      agentMd('save-bad').replace('shuvix: agent v1\n', 'shuvix: agent v1\nshuvix-id: nope\n')
+    )
+    expect(agentService.saveAgent('save-bad', parsedFile('save-bad')).success).toBe(true)
+    expect(idValues(readAgentFile('save-bad.md'))).toEqual([])
+  })
+
+  it('AS-ID13 用户文件写坏了 id：照常进注册表（objectId 为 undefined）、不进无法解析；叫 explore 时照样遮蔽内置', () => {
+    writeAgentFile(
+      'id-broken.md',
+      agentMd('id-broken').replace('shuvix: agent v1\n', 'shuvix: agent v1\nshuvix-id: nope\n')
+    )
+    writeAgentFile(
+      'explore.md',
+      agentMd('explore').replace('shuvix: agent v1\n', 'shuvix: agent v1\nshuvix-id: nope\n')
+    )
+    const listed = agentService.listAll().find((a) => a.name === 'id-broken')
+    expect(listed).toBeDefined()
+    expect(listed!.objectId).toBeUndefined()
+    expect(agentService.listInvalid()).toEqual([])
+    const explore = agentService.getProfile('explore')
+    expect(explore?.source).toBe('user')
+    expect(explore?.objectId).toBeUndefined()
+  })
+})
+
+/**
+ * AS-FILL —— md 扩展元数据的补缺值（`setMetaFill` 注入的读口，契约见 chat-protocol mdMeta.ts）。
+ *
+ * 注册表的每一条读路径（listAll / getProfile / listForSettings / loadAgentFromRef）都按文件的 `shuvix-id`
+ * 问读口，用户文件与内置一视同仁；md 写了的键以 md 为准；读口给的值不合法时档案照常可用（不补，也不进
+ * 「无法解析」）。唯一的例外是「创建覆盖副本」的初值（getSource('builtin')）：它序列化的是**没补过**的内置，
+ * 补缺值永远不会被烤进 md —— 副本沿用内置 id，补缺照样作用在它身上。
+ * 单例服务：每个用例结束都撤掉读口（setMetaFill(null)），不让它漏进别的用例。
+ */
+describe('agentService —— 扩展元数据补缺（setMetaFill）', () => {
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  const U_UP = U.toUpperCase()
+  const V = '0199d3a2-0000-7000-8000-000000000000'
+  type FillFn = (objectId: string) => Record<string, unknown> | undefined
+  /** 记录调用的读口：只对 answers 里的 id 回值 */
+  const spyFill = (
+    answers: Record<string, Record<string, unknown>>
+  ): {
+    fn: FillFn
+    calls: string[]
+  } => {
+    const calls: string[] = []
+    return {
+      calls,
+      fn: (id) => {
+        calls.push(id)
+        return answers[id]
+      }
+    }
+  }
+  const FILLED = { 'shuvix-model': 'p/m', 'shuvix-thinking': 'high' }
+  /** 带 id 行的用户档案原文 */
+  const idMd = (name: string, id: string, extra: string[] = []): string =>
+    agentMd(name, extra).replace('shuvix: agent v1\n', `shuvix: agent v1\nshuvix-id: ${id}\n`)
+  const settingsRow = (
+    name: string,
+    source: 'builtin' | 'user'
+  ): ReturnType<AgentService['listForSettings']>[number] | undefined =>
+    agentService.listForSettings().find((a) => a.name === name && a.source === source)
+
+  const ORIGINAL_LANGUAGE = i18next.language
+  beforeEach(() => {
+    i18next.language = ORIGINAL_LANGUAGE
+  })
+  afterEach(() => {
+    agentService.setMetaFill(null)
+    i18next.language = ORIGINAL_LANGUAGE
+  })
+
+  it('AS-FILL-1 用户文件（大写 UUID、没写模型与档位）：listAll / getProfile / listForSettings 都带上补缺值；读口收到小写 id；另一份 V 的文件不补', () => {
+    writeAgentFile('fill-u.md', idMd('fill-u', U_UP))
+    writeAgentFile('fill-v.md', idMd('fill-v', V))
+    const fill = spyFill({ [U]: FILLED })
+    agentService.setMetaFill(fill.fn)
+
+    const fromList = agentService.listAll().find((a) => a.name === 'fill-u')
+    const fromGet = agentService.getProfile('fill-u')
+    const fromSettings = settingsRow('fill-u', 'user')
+    for (const profile of [fromList, fromGet, fromSettings]) {
+      expect(profile?.model).toBe('p/m')
+      expect(profile?.thinkingLevel).toBe('high')
+      expect(profile?.objectId).toBe(U)
+    }
+    expect(fill.calls).toContain(U)
+    expect(fill.calls).not.toContain(U_UP)
+
+    const other = agentService.getProfile('fill-v')
+    expect(other?.objectId).toBe(V)
+    expect(other?.model).toBeUndefined()
+    expect(other?.thinkingLevel).toBeUndefined()
+  })
+
+  it('AS-FILL-2 内置 explore 按 agent:builtin:explore 补上、source 仍是 builtin；没被答到的 coding 不变', () => {
+    const codingBefore = agentService.getProfile('coding')
+    agentService.setMetaFill(spyFill({ 'agent:builtin:explore': FILLED }).fn)
+    const explore = agentService.getProfile('explore')
+    expect(explore?.source).toBe('builtin')
+    expect(explore?.model).toBe('p/m')
+    expect(explore?.thinkingLevel).toBe('high')
+    expect(agentService.getProfile('coding')).toEqual(codingBefore)
+  })
+
+  it('AS-FILL-3 md 写了的键以 md 为准：用户文件写 low、补 high → low；内置 titler 写 off、补 high → off', () => {
+    writeAgentFile('fill-low.md', idMd('fill-low', U, ['shuvix-thinking: low']))
+    agentService.setMetaFill(
+      spyFill({
+        [U]: { 'shuvix-thinking': 'high' },
+        'agent:builtin:titler': { 'shuvix-thinking': 'high' }
+      }).fn
+    )
+    expect(agentService.getProfile('fill-low')?.thinkingLevel).toBe('low')
+    expect(agentService.getProfile('titler')?.thinkingLevel).toBe('off')
+  })
+
+  it('AS-FILL-4 「创建覆盖副本」的初值不烤进补缺值：带内置 id、没有 shuvix-model / shuvix-thinking 行，与不注入时逐字节相同', () => {
+    const plain = agentService.getSource('explore', 'builtin') as { text: string }
+    agentService.setMetaFill(spyFill({ 'agent:builtin:explore': FILLED }).fn)
+    const withFill = agentService.getSource('explore', 'builtin') as { text: string }
+    expect(withFill.text).toBe(plain.text)
+    expect(withFill.text.split('\n')[2]).toBe('shuvix-id: agent:builtin:explore')
+    expect(withFill.text).not.toMatch(/^shuvix-model:/m)
+    expect(withFill.text).not.toMatch(/^shuvix-thinking:/m)
+  })
+
+  it('AS-FILL-5 用那份初值建覆盖：第 3 行是内置 id、文件里没有补缺行；生效的用户档案照样补上；内置行标被覆盖', () => {
+    agentService.setMetaFill(spyFill({ 'agent:builtin:explore': FILLED }).fn)
+    const copy = agentService.getSource('explore', 'builtin') as { text: string }
+    expect(agentService.createAgentSource(copy.text)).toEqual({ success: true, name: 'explore' })
+    const written = readAgentFile('explore.md')
+    expect(written.split('\n')[2]).toBe('shuvix-id: agent:builtin:explore')
+    expect(written).not.toMatch(/^shuvix-model:/m)
+    expect(written).not.toMatch(/^shuvix-thinking:/m)
+    const active = agentService.getProfile('explore')
+    expect(active?.source).toBe('user')
+    expect(active?.model).toBe('p/m')
+    expect(active?.thinkingLevel).toBe('high')
+    expect(settingsRow('explore', 'builtin')?.overridden).toBe(true)
+  })
+
+  it('AS-FILL-6 没注入 / 注入后撤掉（null）→ 哪里都不补', () => {
+    writeAgentFile('fill-none.md', idMd('fill-none', U))
+    const check = (): void => {
+      expect(agentService.getProfile('fill-none')?.model).toBeUndefined()
+      expect(agentService.getProfile('explore')?.model).toBeUndefined()
+      expect(settingsRow('fill-none', 'user')?.thinkingLevel).toBeUndefined()
+    }
+    check()
+    agentService.setMetaFill(spyFill({ [U]: FILLED, 'agent:builtin:explore': FILLED }).fn)
+    expect(agentService.getProfile('fill-none')?.model).toBe('p/m')
+    agentService.setMetaFill(null)
+    check()
+  })
+
+  it('AS-FILL-7 补缺值不合法（档位 max）：档案照常列出、不补、不进无法解析；自己就坏的文件有没有补缺都在无法解析里', () => {
+    writeAgentFile('fill-bad.md', idMd('fill-bad', U))
+    writeAgentFile(
+      'broken.md',
+      INVALID_MD.replace('shuvix: agent v1\n', `shuvix: agent v1\nshuvix-id: ${V}\n`)
+    )
+    const invalidBefore = agentService.listInvalid().map((f) => f.fileName)
+    expect(invalidBefore).toEqual(['broken.md'])
+
+    agentService.setMetaFill(
+      spyFill({ [U]: { 'shuvix-thinking': 'max' }, [V]: { 'shuvix-model': 'p/m' } }).fn
+    )
+    const listed = agentService.listAll().find((a) => a.name === 'fill-bad')
+    expect(listed).toBeDefined()
+    expect(listed?.thinkingLevel).toBeUndefined()
+    expect(listed?.model).toBeUndefined()
+    expect(agentService.listInvalid().map((f) => f.fileName)).toEqual(['broken.md'])
+  })
+
+  it('AS-FILL-8 没有 id 的文件：读口从不为它被问（被问到的只有内置 id）', () => {
+    writeAgentFile('fill-noid.md', agentMd('fill-noid'))
+    const fill = spyFill({})
+    agentService.setMetaFill(fill.fn)
+    agentService.listAll()
+    agentService.getProfile('fill-noid')
+    expect(fill.calls.length).toBeGreaterThan(0)
+    expect(fill.calls.every((id) => id.startsWith('agent:builtin:'))).toBe(true)
+  })
+
+  it('AS-FILL-9 两份文件共用 U：不同名的两份都补上；同名的两份都补上、同名裁决不变（文件名即名字的那份生效）', () => {
+    writeAgentFile('pair-a.md', idMd('pair-a', U))
+    writeAgentFile('pair-b.md', idMd('pair-b', U))
+    writeAgentFile('twin.md', idMd('twin', U))
+    writeAgentFile('aa.md', idMd('twin', U))
+    const rowsBefore = agentService
+      .listForSettings()
+      .filter((a) => a.name === 'twin')
+      .map((a) => ({ file: basename(a.basePath), overridden: !!a.overridden }))
+
+    agentService.setMetaFill(spyFill({ [U]: FILLED }).fn)
+    expect(agentService.getProfile('pair-a')?.model).toBe('p/m')
+    expect(agentService.getProfile('pair-b')?.model).toBe('p/m')
+    const twins = agentService.listForSettings().filter((a) => a.name === 'twin')
+    expect(twins.map((a) => ({ file: basename(a.basePath), overridden: !!a.overridden }))).toEqual(
+      rowsBefore
+    )
+    expect(twins.every((a) => a.model === 'p/m' && a.thinkingLevel === 'high')).toBe(true)
+    expect(basename(agentService.getProfile('twin')!.basePath)).toBe('twin.md')
+  })
+
+  it('AS-FILL-10 按路径 ref 加载带 id 的文件 → 同样补上', () => {
+    const path = join(state.dir, 'by-ref.md')
+    writeAgentFile('by-ref.md', idMd('by-ref', U))
+    agentService.setMetaFill(spyFill({ [U]: FILLED }).fn)
+    const loaded = agentService.loadAgentFromRef(path)
+    expect(loaded.model).toBe('p/m')
+    expect(loaded.thinkingLevel).toBe('high')
+  })
+
+  it('AS-FILL-11 builtinSourceFile 不受补缺影响', () => {
+    const plain = agentService.builtinSourceFile('explore')
+    expect(plain).toBeTruthy()
+    agentService.setMetaFill(spyFill({ 'agent:builtin:explore': FILLED }).fn)
+    expect(agentService.builtinSourceFile('explore')).toBe(plain)
   })
 })

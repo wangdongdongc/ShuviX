@@ -13,6 +13,11 @@ import type { SelectableThinkingLevel, ThinkingLevel } from '@shuvix/chat-protoc
 export interface AgentProfile {
   /** 唯一标识 */
   name: string
+  /**
+   * `shuvix-id`：对象 id —— ShuviX 扩展元数据只认它（chat-protocol mdMeta.ts）。内置档案是
+   * `agent:builtin:<name>`（写在随包发布的 md 里），用户档案是 UUID；没写或写错 = 省略
+   */
+  objectId?: string
   /** UI 显示名（缺失回退 name） */
   displayName: string
   /** 给主 Agent LLM 看的"何时使用"说明（一句话进派发工具描述） */

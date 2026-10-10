@@ -757,6 +757,30 @@ export const migrations: Migration[] = [
         `ALTER TABLE sessions ADD COLUMN storageKind TEXT NOT NULL DEFAULT 'harness-v3-jsonl'`
       )
     }
+  },
+  {
+    version: 31,
+    description:
+      'md 扩展元数据：md_attrs 表（挂在 agent / bot / hook / policy 文件 frontmatter 的 shuvix-id 上，一个顶层键一行，只补 md 没写的键）',
+    up: (db) => {
+      // 设计见 docs/md-metadata-design.md。身份只认文件里的 shuvix-id（UUID，或内置的
+      // `<kind>:builtin:<name>`）：没有 id 的文件一条元数据都不挂，所以这里没有对象登记表、也不存类型
+      // —— 类型由持有这个 id 的文件决定，复制出来的副本与原件共用同一套行。
+      // scope 与 ns 进主键是因为 SQLite 改不了主键：scope 预留给项目级（'' = 全局），
+      // ns 把补进 frontmatter 的键（'fm'）与宿主自己的键（'meta'，启用开关等）分开，永不撞名。
+      // value 是 JSON（YAML 1.2 core 解析出来的那棵树）。只建表，不搬任何数据，也不改任何文件
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS md_attrs (
+          objectId   TEXT    NOT NULL,
+          scope      TEXT    NOT NULL DEFAULT '',
+          ns         TEXT    NOT NULL,
+          key        TEXT    NOT NULL,
+          value      TEXT    NOT NULL,
+          updatedAt  INTEGER NOT NULL,
+          PRIMARY KEY (objectId, scope, ns, key)
+        )
+      `)
+    }
   }
 ]
 

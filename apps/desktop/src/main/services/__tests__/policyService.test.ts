@@ -73,6 +73,16 @@ const INVALID_MD = [
 
 const files = (): string[] => (existsSync(state.dir) ? readdirSync(state.dir).sort() : [])
 
+/**
+ * 新建的文件一出生就带 `shuvix-id`（标记行之后补一行 UUIDv7，见 utils/mdObjectId.ts）：断言这一行在，
+ * 去掉它再比较 —— 其余字节与传入原文逐字节相同（只插一行，不重序列化）
+ */
+function withoutMintedId(text: string): string {
+  const line = /^shuvix-id: [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n/m
+  expect(text).toMatch(line)
+  return text.replace(line, '')
+}
+
 beforeEach(() => {
   state.dir = mkdtempSync(join(tmpdir(), 'shuvix-policysvc-'))
 })
@@ -129,7 +139,8 @@ describe('policyService.createPolicy — 文件名净化', () => {
   it('PU-6 非 ASCII name（中文 / emoji）不被净化改写：落盘文件名与 name 一致且可回读', () => {
     for (const name of ['安全策略', '🔒-lock']) {
       expect(policyService.createPolicy(policyMd(name))).toEqual({ success: true, name })
-      expect(policyService.getSource(name, 'user')).toEqual({ text: policyMd(name) })
+      const source = policyService.getSource(name, 'user')
+      expect('text' in source && withoutMintedId(source.text)).toBe(policyMd(name))
     }
     expect(files()).toEqual(['🔒-lock.md', '安全策略.md'].sort())
   })
@@ -418,5 +429,131 @@ describe('policyService —— 退役的内置策略照抄进策略目录即生�
       ['git-safety', 'git-safety.md']
     ])
     expect(policyService.listInvalid()).toEqual([])
+  })
+})
+
+/**
+ * 对象 id（`shuvix-id`，设计 docs/md-metadata-design.md）—— 新建的策略一出生就带 id：
+ * 原文已有合法 id（「创建覆盖副本」逐字复制内置原文，`policy:builtin:<name>` 跟着来）就原样落盘，
+ * 没有或写坏 → 标记之后补 / 原位换一个新的 UUIDv7。id 是身份不是安全语义：写坏了策略照样生效、
+ * 照样参与装配、照样遮蔽同名内置。
+ */
+describe('policyService —— 对象 id（shuvix-id）', () => {
+  const V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  const idValues = (text: string): string[] =>
+    [...text.matchAll(/^shuvix-id: (.*?)\r?$/gm)].map((m) => m[1])
+  const fileText = (fileName: string): string => readFileSync(join(state.dir, fileName), 'utf-8')
+  /** 标记之后插一行 id */
+  const withIdLine = (text: string, line: string): string =>
+    text.replace('shuvix: policy v1\n', `shuvix: policy v1\n${line}\n`)
+
+  const ORIGINAL_LANGUAGE = i18next.language
+  afterEach(() => {
+    i18next.language = ORIGINAL_LANGUAGE
+  })
+
+  it('PU-ID1 新建：shuvix-id 是一个新 UUIDv7，紧跟在 shuvix: policy v1 之后', () => {
+    expect(policyService.createPolicy(policyMd('fresh-id'))).toEqual({
+      success: true,
+      name: 'fresh-id'
+    })
+    const lines = fileText('fresh-id.md').split('\n')
+    expect(lines[1]).toBe('shuvix: policy v1')
+    expect(lines[2].slice('shuvix-id: '.length)).toMatch(V7)
+    expect(idValues(lines.join('\n'))).toHaveLength(1)
+  })
+
+  it.each([
+    ['ask-on-command', 'en'],
+    ['ask-on-command', 'zh'],
+    ['ask-on-external-path', 'en'],
+    ['ask-on-external-path', 'zh']
+  ])(
+    'PU-ID2 「创建覆盖副本」%s（%s）：用内置原文新建 → 用户文件逐字节是那份原文，id 是 policy:builtin:<name>',
+    (name, language) => {
+      i18next.language = language
+      const source = policyService.getSource(name, 'builtin')
+      expect('text' in source).toBe(true)
+      const text = (source as { text: string }).text
+      expect(policyService.createPolicy(text)).toEqual({ success: true, name })
+      const written = fileText(`${name}.md`)
+      expect(written).toBe(text)
+      expect(idValues(written)).toEqual([`policy:builtin:${name}`])
+    }
+  )
+
+  it('PU-ID3 写坏的 id → 原位换成新 UUIDv7；合法 id → 原样保留', () => {
+    expect(
+      policyService.createPolicy(withIdLine(policyMd('bad-id'), 'shuvix-id: nope')).success
+    ).toBe(true)
+    const bad = fileText('bad-id.md')
+    const minted = idValues(bad)
+    expect(minted).toHaveLength(1)
+    expect(minted[0]).toMatch(V7)
+    expect(bad.split('\n')[2]).toBe(`shuvix-id: ${minted[0]}`)
+
+    const kept = withIdLine(policyMd('kept-id'), `shuvix-id: ${U}`)
+    expect(policyService.createPolicy(kept).success).toBe(true)
+    expect(fileText('kept-id.md')).toBe(kept)
+  })
+
+  it('PU-ID4 用户策略写坏了 id：照常解析（不进无法解析）、规则进装配、遮蔽同名内置', () => {
+    const text = withIdLine(
+      [
+        '---',
+        'shuvix: policy v1',
+        'name: ask-on-command',
+        'shuvix-policy-scope:',
+        '  subject.kind: [agent]',
+        '  object.type: [path]',
+        'shuvix-policy-rules:',
+        '  - effect: deny',
+        '    action: [write]',
+        `    match: "inDir(object.path, '/id-marker')"`,
+        '---',
+        '',
+        'Override with a broken id.',
+        ''
+      ].join('\n'),
+      'shuvix-id: nope'
+    )
+    writeFileSync(join(state.dir, 'ask-on-command.md'), text, 'utf-8')
+
+    expect(policyService.listInvalid()).toEqual([])
+    const users = policyService.getUserPolicies()
+    expect(users.map((p) => [p.name, p.objectId])).toEqual([['ask-on-command', undefined]])
+
+    const rows = policyService.listForSettings().filter((row) => row.name === 'ask-on-command')
+    expect(rows.map((row) => [row.source, !!row.overridden])).toEqual([
+      ['user', false],
+      ['builtin', true]
+    ])
+
+    const provider: SecurityHostProvider = {
+      host: 'desktop',
+      pathSep: '/',
+      getVars: () => ({
+        workspace: '/ws',
+        toolResultsBase: '/tool-results',
+        skillsDirs: [],
+        memoryDirs: [],
+        knowledgeRoot: '/kb',
+        knowledgeSessionDirs: [],
+        home: '/home/u',
+        botsDir: '/home/u/.shuvix/bots',
+        systemDirs: []
+      }),
+      getSessionGrants: () => ({ allowList: [] }),
+      getLanguage: () => i18next.language,
+      readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
+      getUserPolicies: () => policyService.getUserPolicies()
+    }
+    const assembled = assembleRules(provider).filter(
+      (rule) => rule.source.policy === 'ask-on-command'
+    )
+    expect(assembled.map((rule) => [rule.source.kind, rule.effect, rule.matchExpr])).toEqual([
+      ['user', 'deny', "inDir(object.path, '/id-marker')"]
+    ])
   })
 })

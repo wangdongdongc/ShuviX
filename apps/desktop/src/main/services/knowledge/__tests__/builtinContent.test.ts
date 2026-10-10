@@ -30,6 +30,8 @@ import {
   POLICY_LETS_KEY,
   POLICY_SCOPE_KEY,
   BUILTIN_POLICY_SPECS,
+  BUILTIN_PROFILE_SPECS,
+  BUILTIN_HOOK_SPECS,
   type BundleFile,
   type KnowledgeConcept
 } from '@shuvix/agent-runtime'
@@ -42,6 +44,7 @@ import {
   type OkfStatus
 } from '@shuvix/chat-protocol/knowledge'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
+import { parseObjectId } from '@shuvix/chat-protocol/mdMeta'
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** `…/apps/desktop/src/main/services/knowledge/__tests__` 往上七层 */
 const REPO_ROOT = resolve(HERE, '../../../../../../..')
@@ -441,5 +444,48 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
       []
     )
     expect(body).not.toMatch(RETIRED_VARS)
+  })
+  /**
+   * 对象 id（`shuvix-id`，md 扩展元数据只认它）：四类文件的说明书各在字段表里有它的一行，总览页提到它；
+   * 正文里举的每一个具体内置 id（如 `agent:builtin:explore`）都是合法 id、且点名的内置真实存在 ——
+   * 说明书举一个不存在的内置当例子，用户照着找会扑空。占位写法（`<type>:builtin:<name>`）与
+   * 非对象类型的 `skill:builtin:<name>` 不在此列。
+   */
+  it.each(['agent-md.md', 'bot-md.md', 'hook-md.md', 'policy-md.md'])(
+    'BK-20 %s 的字段表有 `shuvix-id` 那一行',
+    (path) => {
+      const rows = conceptOf(path)
+        .body.split('\n')
+        .filter((line) => /^\|\s*`shuvix-id`\s*\|/.test(line))
+      expect(rows, `${lang}/${path}`).toHaveLength(1)
+    }
+  )
+
+  it('BK-21 shuvix-files.md 讲到 shuvix-id；全库正文里举的具体内置 id 都合法、点名的内置都存在', () => {
+    expect(conceptOf('shuvix-files.md').body).toContain('`shuvix-id`')
+
+    const known: Record<string, Set<string>> = {
+      agent: new Set(BUILTIN_PROFILE_SPECS.map((s) => s.name)),
+      hook: new Set(BUILTIN_HOOK_SPECS.map((s) => s.name)),
+      policy: new Set(BUILTIN_POLICY_SPECS.map((s) => s.name)),
+      bot: new Set<string>()
+    }
+    const examples = files.flatMap((f) =>
+      [...f.text.matchAll(/`((?:agent|bot|hook|policy):builtin:[^`<][^`]*)`/g)].map((m) => [
+        f.path,
+        m[1]
+      ])
+    )
+    expect(examples.length, `${lang}: 语料自检 —— 说明书里应当至少举了一个内置 id`).toBeGreaterThan(
+      0
+    )
+    for (const [path, example] of examples) {
+      const parsed = parseObjectId(example)
+      expect(parsed, `${lang}/${path}: ${example}`).not.toBeNull()
+      expect(parsed!.form, `${lang}/${path}: ${example}`).toBe('builtin')
+      if (parsed!.form === 'builtin') {
+        expect(known[parsed!.kind].has(parsed!.name), `${lang}/${path}: ${example}`).toBe(true)
+      }
+    }
   })
 })

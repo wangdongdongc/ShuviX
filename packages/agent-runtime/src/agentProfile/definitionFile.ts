@@ -29,6 +29,8 @@
  *     （builtin/user 的判定在加载方——buildBuiltinProfile 恒标 builtin，目录扫描恒标 user），
  *     它只在 md 里声明「这份文案出自 ShuviX 内置集」。GUI 写出的用户档案不会带上它
  *     （serialize 的键集是固定白名单），所以复制一份内置档案去改也不会自称内置；
+ *   - `shuvix-id` 是对象 id（UUID，或内置的 `agent:builtin:<name>`）：ShuviX 的扩展元数据只认它
+ *     （chat-protocol mdMeta.ts）。写错不判非法，按「没有 id」读并发一条软提示；序列化恒写在标记之后；
  *   - `shuvix-model` 指定该 agent 用哪个模型：GUI 写出恒为 `<providerId>/<modelId>`
  *     （与 `agent.setModel` 的入参一一对应），手写的裸 `<modelId>` 也能读；省略 = 不声明
  *     （跟随会话 / 继承派发方）。本层只做「原样存取」，取值解释（拆前缀 / 对模型目录解析 /
@@ -63,7 +65,14 @@ import {
   isSelectableThinkingLevel,
   type SelectableThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
+import {
+  MD_FM_FILL_KEYS,
+  MD_IDENTITY_KEYS,
+  SHUVIX_ID_KEY,
+  isDeclared
+} from '@shuvix/chat-protocol/mdMeta'
 import { splitFrontmatter } from '../markdownFrontmatter'
+import { readObjectIdField } from '../mdObjectId'
 
 /**
  * 文件类型标记的 frontmatter key 与值 —— `shuvix: agent v1`。
@@ -75,6 +84,8 @@ export const AGENT_FILE_MARKER = 'agent v1'
 /** 解析产物：AgentProfile 中来自文件本身的字段（source/basePath 由调用方补齐） */
 export interface ParsedAgentFile {
   name: string
+  /** `shuvix-id`：对象 id（已归一）；没写或写错 = 省略（不挂任何扩展元数据） */
+  objectId?: string
   displayName: string
   description: string
   systemPrompt: string
@@ -229,15 +240,36 @@ export function parseAgentSharedFields(
 }
 
 /**
+ * 一组补缺值能不能被 agent 解析器接受（属性卡写入前的校验）：放进一份最小文件里走同一套字段校验。
+ * 返回拒绝原因；null = 接受。补缺键只有模型与思考档位两项，彼此没有交叉约束，单独校验即合并后的结论。
+ */
+export function validateAgentFill(fill: Record<string, unknown>): string | null {
+  const result = parseAgentSharedFields(fill, 'agent')
+  return 'error' in result ? result.error : null
+}
+
+/**
  * 解析 agent 定义 markdown。格式非法（无 frontmatter / YAML 语法错误 / 字段类型不符）
  * 返回 null，由调用方记日志跳过。`defaultName` 为文件 basename（frontmatter `name` 可覆盖）。
  * `warn`（可选）：诊断出口 —— 判非法时输出人读原因。原文编辑（设置页 / 笔记本属性卡）
  * 下用户会写出非法结构，只返回 null 说不清「哪里错了」；与 policyFile 的 warn 同形同策。
  */
+export interface ParseAgentFileOptions {
+  /**
+   * ShuviX 扩展元数据的补缺值（chat-protocol mdMeta.ts）：按这份文件的对象 id 取。只认 agent 白名单
+   * （MD_FM_FILL_KEYS.agent）里的键 —— 宿主本该只交这些，解析器再筛一遍，补缺通道放宽不了别的键。
+   * **md 优先，只补缺** —— 文件里写了的键不动（isDeclared），身份键永不补；补完交给同一套字段校验，
+   * 合并结果不合法就整体弃用补缺、按文件本身解析，并经 warn 说一句（补缺值不能把一份好文件弄坏）。
+   * 没有 id 的文件不调它。
+   */
+  fill?: (objectId: string) => Record<string, unknown> | undefined
+}
+
 export function parseAgentDefinitionFile(
   raw: string,
   defaultName: string,
-  warn?: (msg: string) => void
+  warn?: (msg: string) => void,
+  options?: ParseAgentFileOptions
 ): ParsedAgentFile | null {
   // 早期失败时 frontmatter 还没解析出 name，用文件 basename 报（原因照样要可见）
   const rejectAs = (who: string, why: string): null => {
@@ -266,11 +298,33 @@ export function parseAgentDefinitionFile(
   const reject = (why: string): null => rejectAs(name, why)
 
   // agent 形状字段（与 bot md 共用同一份纪律）
-  const shared = parseAgentSharedFields(fields, name)
+  let shared = parseAgentSharedFields(fields, name)
   if ('error' in shared) return reject(shared.error)
 
+  const objectId = readObjectIdField(fields, `agent '${name}'`, warn)
+  const fill = objectId ? options?.fill?.(objectId) : undefined
+  if (fill) {
+    // 白名单在这里再筛一遍（宿主本该只交白名单内的键）：补缺通道不能被用来放宽工具白名单之类
+    const missing = Object.entries(fill).filter(
+      ([key]) =>
+        MD_FM_FILL_KEYS.agent.includes(key) &&
+        !MD_IDENTITY_KEYS.includes(key) &&
+        !isDeclared(fields, key)
+    )
+    if (missing.length > 0) {
+      const merged = parseAgentSharedFields({ ...fields, ...Object.fromEntries(missing) }, name)
+      if ('error' in merged) {
+        warn?.(
+          `agent '${name}': ShuviX settings not applied (${merged.error}) — the file's own values are used`
+        )
+      } else {
+        shared = merged
+      }
+    }
+  }
   return {
     name,
+    ...(objectId ? { objectId } : {}),
     ...shared.fields,
     systemPrompt: split.body.trim()
   }
@@ -279,14 +333,16 @@ export function parseAgentDefinitionFile(
 /**
  * 序列化为标准格式文件内容（编辑 GUI 的保存路径）。与 parseAgentDefinitionFile 互逆：
  * 空值字段省略（displayName 等于 name 时不写；tools 空 / model 未声明 = 省略），
- * key 顺序固定（文件类型标记 `shuvix` 居首），标量经 YAML 引号规则安全转义
+ * key 顺序固定（文件类型标记 `shuvix` 居首，`shuvix-id` 紧随其后），标量经 YAML 引号规则安全转义
  * （lineWidth: 0 禁止折行）。
  */
 export function serializeAgentDefinitionFile(data: ParsedAgentFile): string {
   const fields: Record<string, string | boolean> = {
-    [AGENT_FILE_MARKER_KEY]: AGENT_FILE_MARKER,
-    name: data.name
+    [AGENT_FILE_MARKER_KEY]: AGENT_FILE_MARKER
   }
+  // 对象 id 紧跟标记（与内置 md、setShuvixIdLine 的落点一致）—— 覆盖副本由此沿用内置 id
+  if (data.objectId) fields[SHUVIX_ID_KEY] = data.objectId
+  fields.name = data.name
   if (data.description.trim()) fields.description = data.description.trim()
   if (data.tools.length > 0) fields['shuvix-tools'] = data.tools.join(', ')
   if (data.model?.trim()) fields['shuvix-model'] = data.model.trim()

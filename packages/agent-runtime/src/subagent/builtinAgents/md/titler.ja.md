@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:titler
 shuvix-builtin: true
 name: titler
 description: 現在のセッションに名前を付ける —— 会話内容から簡潔なタイトルを導き、session ツールで適用する。

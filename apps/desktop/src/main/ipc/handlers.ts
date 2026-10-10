@@ -19,6 +19,7 @@ import { registerPolicyHandlers } from './policyHandlers'
 import { registerHookHandlers } from './hookHandlers'
 import { registerBotHandlers } from './botHandlers'
 import { registerShuvixMdHandlers } from './shuvixMdHandlers'
+import { registerMdMetaHandlers } from './mdMetaHandlers'
 import { registerTerminalHandlers } from './terminalHandlers'
 import { registerBgTaskHandlers } from './bgTaskHandlers'
 import { registerBrowserViewHandlers } from './browserViewHandlers'
@@ -61,6 +62,7 @@ export function registerIpcHandlers(): void {
   registerHookHandlers()
   registerBotHandlers()
   registerShuvixMdHandlers()
+  registerMdMetaHandlers()
   registerTerminalHandlers()
   registerBgTaskHandlers()
   registerBrowserViewHandlers()

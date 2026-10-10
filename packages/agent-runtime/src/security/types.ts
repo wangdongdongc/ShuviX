@@ -297,6 +297,11 @@ export interface PolicyRuleSpec {
 
 export interface ParsedPolicyFile {
   name: string
+  /**
+   * `shuvix-id`：对象 id（已归一）—— ShuviX 扩展元数据只认它；内置策略是 `policy:builtin:<name>`
+   * （各语言文件一致，装配取 en 那份）。没写或写错 = 省略
+   */
+  objectId?: string
   /** 显示名（`shuvix-displayName`，对齐 agent md）；缺省 = name。内置策略按界面语言本地化 */
   displayName: string
   description: string

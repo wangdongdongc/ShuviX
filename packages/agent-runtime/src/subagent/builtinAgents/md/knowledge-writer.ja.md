@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:knowledge-writer
 shuvix-builtin: true
 name: knowledge-writer
 description: OKF ナレッジベースのエントリを執筆・改訂する —— 完全な変更依頼とともにディスパッチされて動き、会話には使わない。

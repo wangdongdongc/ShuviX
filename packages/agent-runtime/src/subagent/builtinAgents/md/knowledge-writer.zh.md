@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:knowledge-writer
 shuvix-builtin: true
 name: knowledge-writer
 description: 撰写与修订 OKF 知识库里的条目 —— 带着完整的变更请求被派发执行，不用于对话。

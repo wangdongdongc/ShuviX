@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:coedit
 shuvix-builtin: true
 name: coedit
 description: 协作编辑会话的基座档案 —— 从系统打开的 md 窗口，你和用户同时编辑同一份活文档。用同名自定义 agent「coedit」覆盖它即可定制。

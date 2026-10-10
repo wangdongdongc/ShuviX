@@ -1,5 +1,6 @@
 ---
 shuvix: hook v1
+shuvix-id: hook:builtin:auto-title
 shuvix-builtin: true
 name: auto-title
 shuvix-displayName: Automatic Session Titles

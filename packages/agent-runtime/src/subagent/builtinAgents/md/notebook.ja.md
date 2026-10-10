@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:notebook
 shuvix-builtin: true
 name: notebook
 description: ノートブックセッションのベースプロファイル —— 開いているノートに寄り添って対話し続ける常駐ルートエージェントです。"notebook" という名前のカスタムエージェントで上書きして挙動をカスタマイズできます。

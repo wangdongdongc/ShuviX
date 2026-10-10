@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:notebook
 shuvix-builtin: true
 name: notebook
 description: 笔记本会话的基座档案 —— 与打开的笔记并行对话的持久根 Agent。用同名自定义 agent「notebook」覆盖它即可定制笔记本行为。

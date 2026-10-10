@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:coedit
 shuvix-builtin: true
 name: coedit
 description: 共同編集セッションのベースプロファイル —— OS から開いた md ウィンドウで、あなたとユーザーが同じライブドキュメントを同時に編集します。"coedit" という名前のカスタムエージェントで上書きしてカスタマイズできます。

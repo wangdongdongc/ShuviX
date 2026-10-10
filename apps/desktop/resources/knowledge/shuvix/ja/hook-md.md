@@ -62,6 +62,7 @@ in the `project` knowledge base. Otherwise finish without writing.
 | `name`                | 文字列             | いいえ | 身元。既定値はファイルのベース名。                                                                                                                                                |
 | `shuvix-displayName`  | 文字列             | いいえ | サイドバーの「フック」グループのラベル。既定値は `name`。                                                                                                                                           |
 | `description`         | 文字列             | いいえ | 設定一覧の一行。                                                                                                                                                                  |
+| `shuvix-id`           | 文字列             | いいえ | オブジェクト ID —— ファイルをどこへ移しても、ShuviX はこれで識別します。ShuviX が作成するファイルでは UUID、同梱ファイルでは `<種類>:builtin:<名前>`。コピーは元と同じ ID を共有します。ShuviX が書き込むので触れないでください。不正な値は警告が出るだけで、ファイル全体は拒否されません。  |
 | `shuvix-hook-agent`   | 文字列             | **はい** | 派遣するエージェントを `name` で：任意の組み込みエージェント、または `~/.shuvix/agents/<name>.md`。**ベース人格は不可**（`work` / `chat` / `notebook` / `bot`）—— 解析時に拒否。   |
 | `shuvix-hook-on`      | バインディングのリスト | **はい** | 少なくとも一つの `{ trigger, when? }`。`trigger` はトリガーポイント id、`when` は省略可能な CEL 式。他のキーを持つバインディングは拒否。                                          |
 

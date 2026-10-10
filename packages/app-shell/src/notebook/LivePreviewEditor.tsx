@@ -27,10 +27,16 @@ import {
 } from '@shuvix/chat-ui'
 import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protocol/types/contextMenu'
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
+import { MD_FM_FILL_KEYS, mdObjectKindOf } from '@shuvix/chat-protocol/mdMeta'
 import { useResolveMediaUrl, type MediaSource, type ResolveMediaUrl } from '@shuvix/chat-ui'
 import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
-import { frontmatterCard, type FrontmatterFieldMount } from './frontmatterCard'
+import {
+  frontmatterCard,
+  type FrontmatterFieldMount,
+  type FrontmatterMetaMount
+} from './frontmatterCard'
 import { FrontmatterFieldPicker } from './FrontmatterFieldPicker'
+import { FrontmatterMetaStrip } from './FrontmatterMetaStrip'
 import { NotebookMinimap } from './NotebookMinimap'
 import { notebookFigureSource } from './notebookFigureSource'
 import { activeHeadingIndex, parseHeadings, type NotebookHeading } from './notebookHeadings'
@@ -213,6 +219,12 @@ export interface LivePreviewEditorProps {
    * 协作编辑窗口用它挂 agent 的虚影预览与修改高亮。
    */
   extraExtensions?: readonly Extension[]
+  /**
+   * 这个编辑器显示的就是 `fileContext.sessionId` 这条笔记本会话**自己绑定的那份文件** —— 只有这时属性卡才挂
+   * 「ShuviX 设置」条（主进程按会话认文件）。NotebookView 传；Files 面板预览等借用宿主会话的地方不传，
+   * 否则预览一份别的 md 会显示（甚至改到）宿主那份文件的设置。
+   */
+  ownsSessionFile?: boolean
 }
 
 /**
@@ -234,7 +246,8 @@ export function LivePreviewEditor({
   caps,
   readOnly = false,
   layout = 'notebook',
-  extraExtensions
+  extraExtensions,
+  ownsSessionFile = false
 }: LivePreviewEditorProps): React.JSX.Element {
   const { t, i18n } = useTranslation()
   // 笔记本主题预设（如 Things）—— 映射到 .atomic-panel 的 data-notebook-theme，由 CSS 上色
@@ -691,6 +704,33 @@ export function LivePreviewEditor({
     return () => queueMicrotask(() => root.unmount())
   }, [])
 
+  // 属性卡的「ShuviX 设置」条（md 扩展元数据）：只给有可补键的文件类型、且宿主实现了 ChatApi.mdMeta
+  // （桌面）的笔记本挂 —— 其余情况不往槽里放东西。分配 / 换新 id 写进缓冲区后立刻落盘：主进程只认
+  // 磁盘上的 id，等 200ms 的自动保存防抖只会让「正在写进文件」多停一会儿
+  const mountMetaStrip = useCallback(
+    (slot: HTMLElement, ctx: FrontmatterMetaMount): (() => void) | void => {
+      const kind = mdObjectKindOf(ctx.markerType)
+      if (!ownsSessionFile || !sessionId || !kind || MD_FM_FILL_KEYS[kind].length === 0) return
+      if (!getChatApi().mdMeta) return
+      const root = createRoot(slot)
+      root.render(
+        <FrontmatterMetaStrip
+          sessionId={sessionId}
+          markerType={ctx.markerType}
+          yaml={ctx.yaml}
+          readOnly={ctx.readOnly}
+          setObjectId={(id) => {
+            const written = ctx.setObjectId(id)
+            if (written) flushSave()
+            return written
+          }}
+        />
+      )
+      return () => queueMicrotask(() => root.unmount())
+    },
+    [ownsSessionFile, sessionId, flushSave]
+  )
+
   // 双链扩展（仅在有项目上下文时启用）：[[file]] 链接 + ![[image]] 内嵌。
   // atomic 在 mount 时一次性捕获 extensions（按 documentId），父组件按文件 key 重挂载，故稳定即可。
   const editorExtensions = useMemo<readonly Extension[]>(() => {
@@ -705,6 +745,7 @@ export function LivePreviewEditor({
       // 诊断文案的 who + 校验缓存 key 的一部分（卡片内拼接）
       name: documentId.split(/[\\/]/).pop(),
       mountField,
+      mountMetaStrip,
       fallbackMarkerType: frontmatterFallbackType
     })
     const extra = extraExtensions ?? []
@@ -744,6 +785,7 @@ export function LivePreviewEditor({
     i18n,
     documentId,
     mountField,
+    mountMetaStrip,
     extraExtensions
   ])
 

@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:permission-reviewer
 shuvix-builtin: true
 name: permission-reviewer
 description: 替用户回答审批请求 —— 审查一条被安全策略标出的操作，决定放行、交给用户还是拒绝。

@@ -1,5 +1,6 @@
 ---
 shuvix: hook v1
+shuvix-id: hook:builtin:auto-review
 shuvix-builtin: true
 name: auto-review
 shuvix-displayName: 自动审查审批请求

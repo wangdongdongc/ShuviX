@@ -283,6 +283,16 @@ const userHook = (name: string | null, opts: UserHookOptions = {}): string =>
     ''
   ].join('\n')
 
+/**
+ * 新建的文件一出生就带 `shuvix-id`（标记行之后补一行 UUIDv7，见 utils/mdObjectId.ts）：断言这一行在，
+ * 去掉它再比较 —— 其余字节与传入原文逐字节相同（只插一行，不重序列化）
+ */
+function withoutMintedId(text: string): string {
+  const line = /^shuvix-id: [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n/m
+  expect(text).toMatch(line)
+  return text.replace(line, '')
+}
+
 /** 裸 on 键：整份拒绝 */
 const bareOn = (name: string): string =>
   [
@@ -839,13 +849,13 @@ describe('hookService — 新建', () => {
     expect(existsSync(state.dir)).toBe(false)
   })
 
-  it('HS-13 合法文本：{success, name}；字节一致落盘；目录懒创建', () => {
+  it('HS-13 合法文本：{success, name}；字节一致落盘（只补一行 shuvix-id）；目录懒创建', () => {
     expect(existsSync(state.dir)).toBe(false)
     const text = userHook('fresh', { displayName: 'Fresh 🚀', body: 'Line 1\n\n  indented\n' })
     expect(hookService.create(text)).toEqual({ success: true, name: 'fresh' })
     expect(existsSync(state.dir)).toBe(true)
     expect(readdirSync(state.dir)).toEqual(['fresh.md'])
-    expect(readFileSync(join(state.dir, 'fresh.md'), 'utf-8')).toBe(text)
+    expect(withoutMintedId(readFileSync(join(state.dir, 'fresh.md'), 'utf-8'))).toBe(text)
   })
 
   it.each<[string | null, string]>([
@@ -858,7 +868,7 @@ describe('hookService — 新建', () => {
   ])('HS-14 文件名净化：name %j → %s（落在 hooks 目录内）', (name, fileName) => {
     expect(hookService.create(userHook(name))).toEqual({ success: true, name: name ?? 'hook' })
     expect(readdirSync(state.dir)).toEqual([fileName])
-    expect(readFileSync(join(state.dir, fileName), 'utf-8')).toBe(userHook(name))
+    expect(withoutMintedId(readFileSync(join(state.dir, fileName), 'utf-8'))).toBe(userHook(name))
     // 没有东西逃出 hooks 目录（'../../evil' 是这组里唯一想往外逃的名字）
     expect(existsSync(join(root, 'evil.md'))).toBe(false)
     expect(existsSync(join(root, '..', 'evil.md'))).toBe(false)
@@ -869,9 +879,13 @@ describe('hookService — 新建', () => {
       expect(hookService.create(userHook(name))).toEqual({ success: true, name })
     }
     expect(readdirSync(state.dir).sort()).toEqual(['a-b-1.md', 'a-b-2.md', 'a-b.md'])
-    expect(readFileSync(join(state.dir, 'a-b.md'), 'utf-8')).toBe(userHook('a/b'))
-    expect(readFileSync(join(state.dir, 'a-b-1.md'), 'utf-8')).toBe(userHook('a:b'))
-    expect(readFileSync(join(state.dir, 'a-b-2.md'), 'utf-8')).toBe(userHook('a|b'))
+    expect(withoutMintedId(readFileSync(join(state.dir, 'a-b.md'), 'utf-8'))).toBe(userHook('a/b'))
+    expect(withoutMintedId(readFileSync(join(state.dir, 'a-b-1.md'), 'utf-8'))).toBe(
+      userHook('a:b')
+    )
+    expect(withoutMintedId(readFileSync(join(state.dir, 'a-b-2.md'), 'utf-8'))).toBe(
+      userHook('a|b')
+    )
   })
 
   it('HS-14 同名的非法文件占着 foo.md → 新建落到 foo-1.md，坏文件原封不动', () => {
@@ -880,7 +894,9 @@ describe('hookService — 新建', () => {
     expect(hookService.create(userHook('foo'))).toEqual({ success: true, name: 'foo' })
     expect(readdirSync(state.dir).sort()).toEqual(['foo-1.md', 'foo.md'])
     expect(readFileSync(join(state.dir, 'foo.md'), 'utf-8')).toBe(badText)
-    expect(readFileSync(join(state.dir, 'foo-1.md'), 'utf-8')).toBe(userHook('foo'))
+    expect(withoutMintedId(readFileSync(join(state.dir, 'foo-1.md'), 'utf-8'))).toBe(
+      userHook('foo')
+    )
   })
 
   it('HS-14 已有同名合法用户 hook → already exists 且不落文件；与内置同名的 auto-title 可以新建', () => {
@@ -1353,5 +1369,83 @@ describe('hookService — 判定型埋点（hookTriggers.decide）', () => {
     const typed = hookTriggers.decide('permission.request', permissionRequest())
     expectTypeOf(typed).resolves.toEqualTypeOf<HookDecision<PermissionVerdict> | null>()
     await typed
+  })
+})
+
+/**
+ * 对象 id（`shuvix-id`，设计 docs/md-metadata-design.md）—— 新建的 hook 一出生就带 id：
+ * 原文已有合法 id（「创建覆盖副本」逐字复制内置原文，`hook:builtin:<name>` 跟着来）就原样落盘，
+ * 没有或写坏 → 标记之后补 / 原位换一个新的 UUIDv7。写坏的 id 不让文件非法，它照常生效。
+ */
+describe('hookService — 对象 id（shuvix-id）', () => {
+  const V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  const idValues = (text: string): string[] =>
+    [...text.matchAll(/^shuvix-id: (.*?)\r?$/gm)].map((m) => m[1])
+  const fileText = (fileName: string): string => readFileSync(join(state.dir, fileName), 'utf-8')
+  /** 标记之后插一行 id */
+  const withIdLine = (text: string, line: string): string =>
+    text.replace('shuvix: hook v1\n', `shuvix: hook v1\n${line}\n`)
+
+  beforeEach(() => {
+    hookService.init()
+  })
+
+  it('HS-ID1 新建：shuvix-id 是一个新 UUIDv7，紧跟在 shuvix: hook v1 之后', () => {
+    expect(hookService.create(userHook('fresh-id'))).toEqual({ success: true, name: 'fresh-id' })
+    const lines = fileText('fresh-id.md').split('\n')
+    expect(lines[1]).toBe('shuvix: hook v1')
+    expect(lines[2]).toMatch(/^shuvix-id: /)
+    expect(lines[2].slice('shuvix-id: '.length)).toMatch(V7)
+    expect(idValues(lines.join('\n'))).toHaveLength(1)
+  })
+
+  it.each([
+    ['auto-title', 'en'],
+    ['auto-title', 'zh'],
+    ['auto-title', 'ja'],
+    ['auto-review', 'en'],
+    ['auto-review', 'zh'],
+    ['auto-review', 'ja']
+  ])(
+    'HS-ID2 「创建覆盖副本」%s（%s）：用内置原文新建 → 用户文件的 id 就是 hook:builtin:<name>，不造新 UUID',
+    async (name, language) => {
+      await i18next.changeLanguage(language)
+      const source = hookService.getSource(name, 'builtin')
+      expect('text' in source).toBe(true)
+      const text = (source as { text: string }).text
+      expect(hookService.create(text)).toEqual({ success: true, name })
+      const written = fileText(`${name}.md`)
+      expect(written).toBe(text)
+      expect(idValues(written)).toEqual([`hook:builtin:${name}`])
+    }
+  )
+
+  it('HS-ID3 写坏的 id → 原位换成新 UUIDv7；合法 id → 原样保留', () => {
+    expect(hookService.create(withIdLine(userHook('bad-id'), 'shuvix-id: nope')).success).toBe(true)
+    const bad = fileText('bad-id.md')
+    const minted = idValues(bad)
+    expect(minted).toHaveLength(1)
+    expect(minted[0]).toMatch(V7)
+    expect(bad.split('\n')[2]).toBe(`shuvix-id: ${minted[0]}`)
+
+    const kept = withIdLine(userHook('kept-id'), `shuvix-id: ${U}`)
+    expect(hookService.create(kept).success).toBe(true)
+    expect(fileText('kept-id.md')).toBe(kept)
+  })
+
+  it('HS-ID4 用户 hook 写坏了 id：在设置页的有效列表里（不进无法解析），也照常被触发', async () => {
+    put(
+      'broken-id.md',
+      withIdLine(userHook('broken-id', { displayName: 'Broken Id' }), 'shuvix-id: nope')
+    )
+    expect(hookService.listInvalid()).toEqual([])
+    expect(hookService.listForSettings().find((item) => item.name === 'broken-id')).toMatchObject({
+      source: 'user'
+    })
+
+    firePrompt()
+    await waitRuns(1)
+    expect(descriptions()).toEqual(['Broken Id'])
   })
 })

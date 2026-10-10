@@ -860,3 +860,69 @@ describe('PSv-27…40 —— 改名观察：会话绑定跟着文件里的名字
     expect(events).toEqual([])
   })
 })
+
+// ────────────────────── PSv-ID：对象 id ──────────────────────
+
+/**
+ * 对象 id（`shuvix-id`，设计 docs/md-metadata-design.md）—— 新建的 bot 一出生就带 id：
+ * 没有或写坏 → 标记之后补 / 原位换一个新的 UUIDv7（只动那一行，仍是一次原子写）；合法的原样保留。
+ * 写坏的 id 不让文件非法：照常列出、照常按名取到，只是没有 objectId。
+ */
+describe('PSv-ID —— 对象 id（shuvix-id）', () => {
+  const V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  const idValues = (text: string): string[] =>
+    [...text.matchAll(/^shuvix-id: (.*?)\r?$/gm)].map((m) => m[1])
+  /** 标记之后插一行 id */
+  const withIdLine = (text: string, line: string): string =>
+    text.replace('shuvix: bot v2\n', `shuvix: bot v2\n${line}\n`)
+
+  it('PSv-ID1 按模板新建（create(newBotTemplate) 与 createNew）：shuvix-id 是新 UUIDv7、紧跟标记；get 读回的 objectId 就是它', () => {
+    const res = botService.create(botService.newBotTemplate({ name: 'scout' }))
+    expect(res.success).toBe(true)
+    const lines = readFileSync(join(dirs.bots, res.fileName!), 'utf-8').split('\n')
+    expect(lines[1]).toBe('shuvix: bot v2')
+    const id = lines[2].slice('shuvix-id: '.length)
+    expect(lines[2].startsWith('shuvix-id: ')).toBe(true)
+    expect(id).toMatch(V7)
+    expect(botService.get('scout')!.file.objectId).toBe(id)
+
+    const fresh = botService.createNew()
+    expect(fresh.success).toBe(true)
+    const freshText = readFileSync(join(dirs.bots, fresh.fileName!), 'utf-8')
+    const freshIds = idValues(freshText)
+    expect(freshIds).toHaveLength(1)
+    expect(freshIds[0]).toMatch(V7)
+    expect(freshIds[0]).not.toBe(id)
+    expect(freshText.split('\n')[2]).toBe(`shuvix-id: ${freshIds[0]}`)
+    expect(botService.get(fresh.name!)!.file.objectId).toBe(freshIds[0])
+  })
+
+  it('PSv-ID2 合法 id 原样保留；写坏的原位换新；每次新建都恰一次原子写', () => {
+    const kept = withIdLine(md('ranger'), `shuvix-id: ${U}`)
+    expect(botService.create(kept).success).toBe(true)
+    expect(mocks.atomicWrite).toHaveBeenCalledTimes(1)
+    expect(readFileSync(join(dirs.bots, 'ranger.md'), 'utf-8')).toBe(kept)
+
+    expect(botService.create(withIdLine(md('hunter'), 'shuvix-id: nope')).success).toBe(true)
+    expect(mocks.atomicWrite).toHaveBeenCalledTimes(2)
+    const bad = readFileSync(join(dirs.bots, 'hunter.md'), 'utf-8')
+    const minted = idValues(bad)
+    expect(minted).toHaveLength(1)
+    expect(minted[0]).toMatch(V7)
+    expect(bad.split('\n')[2]).toBe(`shuvix-id: ${minted[0]}`)
+    expect(bad.replace(`shuvix-id: ${minted[0]}`, 'shuvix-id: nope')).toBe(
+      withIdLine(md('hunter'), 'shuvix-id: nope')
+    )
+  })
+
+  it('PSv-ID3 目录里一份写坏 id 的 bot：照常列出（不进 invalid）、按名取得到，objectId 为 undefined', () => {
+    put('scout', withIdLine(md('scout'), 'shuvix-id: nope'))
+    const { valid, invalid } = botService.listWithInvalid()
+    expect(invalid).toEqual([])
+    expect(valid.map((p) => p.file.name)).toEqual(['scout'])
+    const entry = botService.get('scout')
+    expect(entry).not.toBeNull()
+    expect(entry!.file.objectId).toBeUndefined()
+  })
+})

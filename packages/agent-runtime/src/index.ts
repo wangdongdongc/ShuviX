@@ -496,8 +496,10 @@ export {
 export {
   parseAgentDefinitionFile,
   serializeAgentDefinitionFile,
+  validateAgentFill,
   AGENT_FILE_MARKER,
   AGENT_FILE_MARKER_KEY,
+  type ParseAgentFileOptions,
   type ParsedAgentFile
 } from './agentProfile/definitionFile'
 // 项目记忆文件（<slug>.md）的格式解析/序列化 + 注入索引渲染

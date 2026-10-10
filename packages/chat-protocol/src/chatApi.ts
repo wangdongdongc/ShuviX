@@ -12,6 +12,7 @@
 import type { LucideIconName, ThemeColor } from './theme'
 import type { AppEvent } from './appEvents'
 import type { ShuvixMdValidation } from './shuvixMdContract'
+import type { MdMetaNoteView, MdMetaWriteResult } from './mdMeta'
 import type { FileReadResult } from './types/filePreview'
 import type { ChatMessage } from './types/chatMessage'
 import type { BgTaskLogChunk } from './types/bgTask'
@@ -779,6 +780,27 @@ export interface HostApi {
    */
   knowledge?: {
     baseOptions: (params: { sessionId?: string }) => Promise<KnowledgeBaseOptionsResult>
+  }
+  /**
+   * md 扩展元数据（**桌面独有**，见 `./mdMeta`）：属性卡的「ShuviX 设置」条读写一份注册表笔记的
+   * 补缺值。按笔记本会话认文件，不收路径；写入只有这一个入口，且只由人在界面上触发（不给 agent）。
+   * 扩展端不实现 —— 那一条自动不显示。
+   */
+  mdMeta?: {
+    /** 这条会话不是 agent / bot / hook / policy 文件的笔记本 → null */
+    get: (params: { sessionId: string }) => Promise<MdMetaNoteView | null>
+    /** `objectId` 是渲染进程以为的 id（缓冲区里的）：磁盘上不是它就拒绝，免得写到别的对象上 */
+    setFill: (params: {
+      sessionId: string
+      objectId: string
+      key: string
+      value: unknown
+    }) => Promise<MdMetaWriteResult>
+    unsetFill: (params: {
+      sessionId: string
+      objectId: string
+      key: string
+    }) => Promise<MdMetaWriteResult>
   }
   /**
    * 桌面日历（按 session_day_prompts：同一会话可出现在多个开口日）。

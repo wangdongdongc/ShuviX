@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:titler
 shuvix-builtin: true
 name: titler
 description: Names the current session — derives a concise title from the conversation and applies it via the session tool.

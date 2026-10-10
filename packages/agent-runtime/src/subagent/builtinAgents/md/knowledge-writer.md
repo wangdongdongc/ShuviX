@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:knowledge-writer
 shuvix-builtin: true
 name: knowledge-writer
 description: Writes and revises entries in the OKF knowledge base — dispatched with a complete change request, never used to chat.

@@ -46,6 +46,8 @@ export interface BuiltinProfileDeps {
    * 与「UI 打开的那一份」由同一次语言回退决定，不会各挑各的。没有文件系统的宿主省略即 ''。
    */
   mdPath?: (fileName: string) => string
+  /** ShuviX 扩展元数据的补缺值（按内置 id `agent:builtin:<name>` 取）；见 ParseAgentFileOptions.fill */
+  fill?: (objectId: string) => Record<string, unknown> | undefined
 }
 
 /**
@@ -105,8 +107,11 @@ export function buildBuiltinProfile(
     if (source === null) continue
     const raw = interpolateHostParams(source, params)
     // 内置 md 解析失败属开发期错误（随包发布）——诊断通道现成，别静默
-    const parsed = parseAgentDefinitionFile(raw, spec.name, (msg) =>
-      console.warn(`[builtinAgents] ${fileName}: ${msg}`)
+    const parsed = parseAgentDefinitionFile(
+      raw,
+      spec.name,
+      (msg) => console.warn(`[builtinAgents] ${fileName}: ${msg}`),
+      { fill: deps.fill }
     )
     if (!parsed) return null
     return { ...parsed, source: 'builtin', basePath: deps.mdPath?.(fileName) ?? '' }

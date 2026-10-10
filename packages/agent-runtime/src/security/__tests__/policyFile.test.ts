@@ -1185,3 +1185,163 @@ describe('shuvixMdDescriptors — policy 描述符与解析器键名同源', () 
     expect(pick(POLICY_RULES_KEY)).toEqual({ key: POLICY_RULES_KEY, kind: 'policyRules' })
   })
 })
+
+/**
+ * OID —— `shuvix-id` 对象 id（ShuviX 扩展元数据只认它，契约见 chat-protocol mdMeta.ts）。
+ * 它是身份、不是安全语义：写错**不连累策略**（按「没有 id」读，恰一条软提示，规则一条不少），
+ * 写对了归一后进 objectId；有没有 id 都不改变 rules / scope / lets。序列化恒把 id 写在标记之后。
+ */
+describe('parsePolicyDefinitionFile — OID shuvix-id 对象 id', () => {
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  /** 最小合法策略（name: p1）；idLine 插在标记之后（省略 = 不写 id）；ruleExtra 追加在规则里 */
+  const withId = (idLine?: string, ruleExtra: string[] = []): string =>
+    md(
+      '---',
+      'shuvix: policy v1',
+      ...(idLine === undefined ? [] : [idLine]),
+      'name: p1',
+      'shuvix-policy-rules:',
+      '  - effect: ask',
+      '    subject.kind: [agent]',
+      ...ruleExtra.map((l) => `    ${l}`),
+      '---',
+      '',
+      'Rationale.'
+    )
+  const parse = (raw: string): { parsed: ParsedPolicyFile | null; warns: string[] } => {
+    const warns: string[] = []
+    const parsed = parsePolicyDefinitionFile(raw, 'fallback', (m) => warns.push(m))
+    return { parsed, warns }
+  }
+  const BASE = parse(withId()).parsed!
+
+  it('OID-1 合法 UUID（大写写法）→ objectId 归一为小写，零告警，其余字段不变', () => {
+    const { parsed, warns } = parse(withId(`shuvix-id: ${U.toUpperCase()}`))
+    expect(warns).toEqual([])
+    expect(parsed).toEqual({ ...BASE, objectId: U })
+  })
+
+  it('OID-2 本类内置 id → 原样', () => {
+    const { parsed, warns } = parse(withId('shuvix-id: policy:builtin:ask-on-command'))
+    expect(warns).toEqual([])
+    expect(parsed?.objectId).toBe('policy:builtin:ask-on-command')
+  })
+
+  it('OID-3 别类的内置 id 也收、零告警（解析器不核对 kind）', () => {
+    const { parsed, warns } = parse(withId('shuvix-id: agent:builtin:explore'))
+    expect(warns).toEqual([])
+    expect(parsed?.objectId).toBe('agent:builtin:explore')
+  })
+
+  it.each([
+    'shuvix-id: nope',
+    "shuvix-id: ''",
+    'shuvix-id:',
+    'shuvix-id: 123',
+    'shuvix-id: [a]',
+    'shuvix-id: {a: 1}',
+    "shuvix-id: 'agent:builtin:'",
+    'shuvix-id: skill:builtin:x',
+    'shuvix-id: true'
+  ])(
+    'OID-4 写坏的 `%s` → 策略照常合法、没有 objectId 键、恰一条点名 shuvix-id 与主语的软提示',
+    (line) => {
+      const { parsed, warns } = parse(withId(line))
+      expect(parsed).not.toBeNull()
+      expect('objectId' in parsed!).toBe(false)
+      expect(parsed).toEqual(BASE)
+      expect(warns).toHaveLength(1)
+      expect(warns[0]).toContain("security policy 'p1'")
+      expect(warns[0]).toContain("'shuvix-id'")
+      expect(warns[0]).not.toContain('the whole file is rejected')
+    }
+  )
+
+  it('OID-5 没写 → 没有 objectId 键、零告警', () => {
+    const { parsed, warns } = parse(withId())
+    expect(warns).toEqual([])
+    expect('objectId' in parsed!).toBe(false)
+  })
+
+  it('OID-6 整份非法（规则带未知键）的策略带着坏 id → null；诊断只有拒绝原因', () => {
+    const { parsed, warns } = parse(withId('shuvix-id: nope', ['bogus: 1']))
+    expect(parsed).toBeNull()
+    expect(warns.length).toBeGreaterThan(0)
+    expect(warns[warns.length - 1]).toContain('the whole file is rejected')
+    expect(warns.some((w) => w.includes("'shuvix-id'"))).toBe(false)
+  })
+
+  it('OID-7 坏 id + object.type 软告警：照常合法，两条软提示，id 那条在最后', () => {
+    const { parsed, warns } = parse(
+      withId('shuvix-id: nope', [`match: "inDir(object.path, '/x')"`])
+    )
+    expect(parsed).not.toBeNull()
+    expect(warns).toHaveLength(2)
+    expect(warns[0]).toContain('object.type')
+    expect(warns[1]).toContain("'shuvix-id'")
+  })
+
+  it('OID-9 有没有 id（合法或写坏）都不改变 rules / scope / lets', () => {
+    const full = (idLine?: string): string =>
+      md(
+        '---',
+        'shuvix: policy v1',
+        ...(idLine === undefined ? [] : [idLine]),
+        'name: p1',
+        'shuvix-policy-scope:',
+        '  subject.kind: [agent]',
+        '  object.type: [path]',
+        'shuvix-policy-lets:',
+        "  dirs: \"['/secret', vars.home + '/.keys']\"",
+        'shuvix-policy-rules:',
+        '  - effect: deny',
+        '    action: [write]',
+        '    match: "inDir(object.path, dirs)"',
+        '  - effect: ask',
+        '    action: [read]',
+        '---'
+      )
+    const pick = (p: ParsedPolicyFile | null): unknown => ({
+      rules: p?.rules,
+      scope: p?.scope,
+      lets: p?.lets
+    })
+    const base = parse(full()).parsed
+    expect(base).not.toBeNull()
+    expect(base!.scope).toBeDefined()
+    expect(base!.lets).toBeDefined()
+    expect(pick(parse(full(`shuvix-id: ${U}`)).parsed)).toEqual(pick(base))
+    expect(pick(parse(full('shuvix-id: nope')).parsed)).toEqual(pick(base))
+  })
+
+  it('OID-10 序列化：id 紧跟标记、其余键序不变；未声明 / 空串不写；往返保真（UUID 与内置 id）', () => {
+    const data: ParsedPolicyFile = {
+      name: 'p1',
+      displayName: 'Policy One',
+      description: 'd',
+      scope: { 'subject.kind': ['agent'] },
+      rules: [{ effect: 'ask', conditions: { 'object.type': ['command'] } }],
+      body: 'Rationale.'
+    }
+    const without = serializePolicyDefinitionFile(data)
+    expect(without).not.toMatch(/^shuvix-id:/m)
+    expect(serializePolicyDefinitionFile({ ...data, objectId: '' })).toBe(without)
+
+    for (const id of [U, 'policy:builtin:p1']) {
+      const text = serializePolicyDefinitionFile({ ...data, objectId: id })
+      expect(text.split('\n').slice(1, 4)).toEqual([
+        `${POLICY_FILE_MARKER_KEY}: ${POLICY_FILE_MARKER}`,
+        `shuvix-id: ${id}`,
+        'name: p1'
+      ])
+      expect(text.replace(`shuvix-id: ${id}\n`, '')).toBe(without)
+      expect(parsePolicyDefinitionFile(text, 'x')).toEqual({ ...data, objectId: id })
+    }
+  })
+
+  it('OID-12 属性卡描述符列着 shuvix-id，kind 为 hidden（解析器读、卡上不显示）', () => {
+    const fields = descriptorForType('policy')!.fields.filter((f) => f.key === 'shuvix-id')
+    expect(fields).toHaveLength(1)
+    expect(fields[0].kind).toBe('hidden')
+  })
+})

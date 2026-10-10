@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:notebook
 shuvix-builtin: true
 name: notebook
 description: Base profile for notebook sessions — the persistent root agent conversing alongside the open note. Override it with a custom agent named "notebook" to customize notebook behavior.

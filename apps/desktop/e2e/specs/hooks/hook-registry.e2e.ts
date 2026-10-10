@@ -98,6 +98,13 @@ const promptTolerant = (target: string, text: string): Promise<unknown> =>
     `(window.api.agent.prompt(${JSON.stringify({ sessionId: target, text })}).catch(() => undefined), true)`
   )
 
+/** 新建一出生就带 `shuvix-id`（标记行之后补一行 UUIDv7）：断言这一行在，去掉它后其余字节应与原文相同 */
+const withoutMintedId = (text: string): string => {
+  const line = /^shuvix-id: [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n/m
+  expect(text).toMatch(line)
+  return text.replace(line, '')
+}
+
 const logLines = (): string[] => app.mainLog().split('\n')
 const linesWith = (needle: string): string[] => logLines().filter((l) => l.includes(needle))
 const skipLine = (hook: string, target: string, reason: string): string =>
@@ -355,7 +362,7 @@ describe('写路径', () => {
 
     const text = hookMd('my/hook', { agent: 'explore', on: [{ trigger: TURN_COMPLETED }] })
     expect(await createHook(text)).toEqual({ success: true, name: 'my/hook' })
-    expect(readFileSync(hookPath('my-hook.md'), 'utf8')).toBe(text)
+    expect(withoutMintedId(readFileSync(hookPath('my-hook.md'), 'utf8'))).toBe(text)
     expect((await listHooks()).find((h) => h.name === 'my/hook')).toMatchObject({
       source: 'user',
       basePath: hookPath('my-hook.md')

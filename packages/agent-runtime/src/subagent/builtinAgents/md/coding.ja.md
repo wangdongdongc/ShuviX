@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:coding
 shuvix-builtin: true
 name: coding
 description: コーディングエージェント——ローカルのフルツールチェーン（shell、ファイル、検索）と複数ファイルにまたがるコード作業の作法。`work` セッションが `coding` サブセッションとして起動します。

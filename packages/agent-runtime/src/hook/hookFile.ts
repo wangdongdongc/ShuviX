@@ -5,7 +5,8 @@
  *
  *  - 首键 `shuvix: hook v1` 是文件类型标记，**读取时必需**（本格式没有历史存量，缺标记只可能
  *    是误投 —— 比如普通笔记被丢进 hooks 目录）；读取对版本宽容（`hook` / `hook v2` 也认）；
- *  - `name` / `description` / `shuvix-displayName` / `shuvix-builtin` 同 agent md 语义；
+ *  - `name` / `description` / `shuvix-displayName` / `shuvix-builtin` / `shuvix-id` 同 agent md 语义
+ *    （`shuvix-id` 是扩展元数据只认的对象 id：写错不判非法，按「没有 id」读并发软提示）；
  *  - `shuvix-hook-agent`：要派发的 agent md 名（内置或 `~/.shuvix/agents/` 下的），必填；
  *    四个基座档案（work / chat / notebook / bot）不可点名 —— 它们是会话人格，不是任务 agent，
  *    与派发工具、子会话 `agent_profile` 同一条纪律；
@@ -22,6 +23,7 @@
  */
 import { parse as parseYaml } from 'yaml'
 import { splitFrontmatter } from '../markdownFrontmatter'
+import { readObjectIdField } from '../mdObjectId'
 import { BASE_PROFILE_NAMES } from '../subagent/builtinAgents'
 import { getTriggerPoint } from './triggerPoints'
 import { compileWhen } from './when'
@@ -47,6 +49,8 @@ export interface HookBinding {
 
 export interface ParsedHookFile {
   name: string
+  /** `shuvix-id`：对象 id（已归一）；没写或写错 = 省略（不挂任何扩展元数据） */
+  objectId?: string
   displayName: string
   description: string
   /** 要派发的 agent 名（存在与否在派发时由宿主解析） */
@@ -165,8 +169,10 @@ export function parseHookDefinitionFile(
     bindings.push(when === undefined ? { trigger } : { trigger, when })
   }
 
+  const objectId = readObjectIdField(fields, `hook '${name}'`, warn)
   return {
     name,
+    ...(objectId ? { objectId } : {}),
     displayName: stringField(fields, 'shuvix-displayName') ?? name,
     description: stringField(fields, 'description') ?? '',
     agent,

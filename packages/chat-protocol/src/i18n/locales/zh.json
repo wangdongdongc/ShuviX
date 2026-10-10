@@ -106,7 +106,17 @@
       "okfResource": "绑定对象",
       "okfSources": "来源",
       "okfGenerated": "写入者",
-      "okfVerified": "核实者"
+      "okfVerified": "核实者",
+      "objectId": "对象 ID",
+      "metaTitle": "ShuviX 设置",
+      "metaHint": "存在 ShuviX 里，不在这份文件中。只补文件没写的键 —— 文件里写了的以文件为准。第一次改设置时会往文件里写一行 shuvix-id：设置靠它认出这份文件。",
+      "metaSaving": "保存中…",
+      "metaNotSaved": "对象 id 没能及时写进文件，请再试一次。",
+      "metaCannotAssign": "没法往这份文件的 frontmatter 里写对象 id。可以手动加一行 `shuvix-id: <uuid>` 再试。",
+      "metaDeclared": "文件里写了这个键，以文件为准。",
+      "metaRegenerate": "换新 id",
+      "metaRegenerateHint": "给这份文件换一个新的对象 id：从此不再与它的副本共用设置，原来的设置留在旧 id 上。撤销可以换回旧 id。",
+      "metaWriteFailed": "设置没能保存（{{reason}}）"
     },
     "saving": "保存中…",
     "saved": "已保存",

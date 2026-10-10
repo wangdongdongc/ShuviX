@@ -18,6 +18,7 @@
  * 唯一例外是 `prompt`（人读提示语，不参与匹配）：它按语言 overlay，比较时剥掉。
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
+import { builtinObjectId } from '@shuvix/chat-protocol/mdMeta'
 import { buildBuiltinPolicies, BUILTIN_POLICY_SPECS } from '../builtinPolicies'
 import { parsePolicyDefinitionFile, serializePolicyDefinitionFile } from '../policyFile'
 import { assembleRules } from '../assemble'
@@ -398,6 +399,8 @@ describe('buildBuiltinPolicies — 多语言', () => {
         // 逐字段整体比较（scope/lets 缺省时两侧都无该键）
         expect(roundTripped, `${label} 往返漂移`).toEqual({
           name: policy.name,
+          // 对象 id 也要原样回来：覆盖副本沿用内置 id，否则它挂不上内置的元数据
+          objectId: policy.objectId,
           displayName: policy.displayName,
           description: policy.description,
           rules: policy.rules,
@@ -1593,4 +1596,36 @@ describe('内置策略 × 退役的变量与名字', () => {
     }
     expect(hits).toEqual([])
   })
+})
+
+/**
+ * 内置策略的对象 id（`shuvix-id`，md 扩展元数据只认它）：每份 × 每门语言的 md 都写着
+ * `policy:builtin:<name>`；装配取 en 那份的 id，所以本地化文件的 id 必须与 en 相同，且在任何界面语言下
+ * buildBuiltinPolicies 交出的都是同一个 id。
+ */
+describe('内置策略的对象 id（shuvix-id）', () => {
+  it('BP-ID1 每份 × 每门语言：原文解析出的 objectId = policy:builtin:<name>，与 en 相同', () => {
+    for (const { name } of BUILTIN_POLICY_SPECS) {
+      const expected = builtinObjectId('policy', name)
+      const sources = sourcesOf(name)
+      expect(Object.keys(sources).sort(), name).toEqual(['en', 'ja', 'zh'])
+      const en = parsePolicyDefinitionFile(sources.en, name)
+      expect(en?.objectId, `${name}.en`).toBe(expected)
+      for (const [lang, raw] of Object.entries(sources)) {
+        const ids = [...raw.matchAll(/^shuvix-id: (.+)$/gm)].map((m) => m[1])
+        expect(ids, `${name}.${lang}`).toEqual([expected])
+        expect(parsePolicyDefinitionFile(raw, name)?.objectId, `${name}.${lang}`).toBe(en?.objectId)
+      }
+    }
+  })
+
+  it.each(['en', 'zh', 'zh-CN', 'ja', 'fr'])(
+    'BP-ID2 buildBuiltinPolicies({language: %s})：每份的 objectId 都是 policy:builtin:<name>',
+    (language) => {
+      const built = buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD })
+      expect(built.map((p) => [p.name, p.objectId])).toEqual(
+        BUILTIN_POLICY_SPECS.map(({ name }) => [name, builtinObjectId('policy', name)])
+      )
+    }
+  )
 })

@@ -3454,6 +3454,184 @@ export function fmCardPane(main: CdpClient): FmCardPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// 属性卡里的「ShuviX 设置」条（app-shell FrontmatterMetaStrip，md 扩展元数据）。
+//
+// 只挂在**笔记本自己那份文件**的卡片上（NotebookView 传 ownsSessionFile；Files 面板 / [[双链]] 预览
+// 不挂），只给有可补键的文件类型（今天只有 agent）。**没有「分配 id」按钮**（用户裁决 2026-10-10）：
+// 没有 id 的文件控件照样出来，第一次改设置时自动分配（metaWriteQueue：往缓冲区写一行 id → 等它落盘
+// → 写库；写 id 会让卡片重建、条重挂）。锚点全是产品侧的钩子类名：
+//   - 整条 = `.cm-shuvix-fmcard-meta-strip`（卡片给的槽 `.cm-shuvix-fmcard-meta` 里）；
+//   - id = `.cm-shuvix-fmcard-meta-id`（缓冲区里有合法 id 才显示），标题行唯一的操作按钮 =
+//     `.cm-shuvix-fmcard-meta-regenerate`（换新 id；有在途写入时禁用）；问号是 `[data-info-hint]`，不算按钮；
+//   - 每个可补键一行 `.cm-shuvix-fmcard-meta-row[data-key]`，控件在 `.cm-shuvix-fmcard-meta-slot` 里
+//     （**不是** `.cm-shuvix-fmcard-slot` —— 那是卡片字段槽位的计数钩子，fmCardPane.waitReady 数的就是它）；
+//   - 文件已写的键 = 行里的 `.cm-shuvix-fmcard-meta-declared`，告警 = `.cm-shuvix-fmcard-meta-warning`；
+//   - 在途写入（等 id 落盘 / 正在写库）= `.cm-shuvix-fmcard-meta-saving`（「Saving…」）。
+// 作用域是 document 里**第一条**（主区笔记本那一张；预览里的卡片不该有这一条）。
+// 档位改选走原生 setter + 冒泡的 change（React 对 select 只听 change）；CDP 不能打字，也不能 ⌘Z。
+
+export interface MdMetaStripRow {
+  key: string
+  /** 档位行：下拉的值（'' = 未设置）；模型行：ModelSelect 触发器的文案 */
+  value: string
+  /** 行下注了「文件里写了这个键」 */
+  declared: boolean
+  /** 控件禁用 */
+  disabled: boolean
+}
+
+export interface MdMetaStripState {
+  /** 显示的对象 id（缓冲区里有合法 id 才有）；没有为 null */
+  objectId: string | null
+  /** 「换新 id」按钮在 */
+  regenerate: boolean
+  /** 「换新 id」按钮禁用（有在途写入）；按钮不在为 false */
+  regenerateDisabled: boolean
+  /** 标题行里的按钮（设置行之外、问号之外）：换新 id 记作 `'regenerate'`，其余取文字 */
+  headerButtons: string[]
+  /** 「Saving…」在（有在途写入） */
+  saving: boolean
+  rows: MdMetaStripRow[]
+  warnings: string[]
+}
+
+/** 页面上一张属性卡的概况（区分主区笔记与预览里的卡） */
+export interface MdMetaCardShot {
+  /** 卡片 name 字段的值（文本框）；没有为 null */
+  name: string | null
+  /** 卡里有「ShuviX 设置」条 */
+  strip: boolean
+  /** 卡里 `.cm-shuvix-fmcard-slot`（卡片字段槽位）的个数 */
+  fieldSlots: number
+  /** 卡里 `.cm-shuvix-fmcard-meta-slot`（设置条控件槽）的个数 */
+  metaSlots: number
+  /** 卡片的文本（找「Saving…」这类字样用） */
+  text: string
+}
+
+export interface MdMetaStripPane {
+  /** 页面上有没有这一条 */
+  present(): Promise<boolean>
+  /** 等这一条上屏（get 回来之前它不渲染） */
+  waitStrip(): Promise<void>
+  /** 等没有 id 的那一态：条在、设置行已渲染、不显示 id */
+  waitRows(): Promise<void>
+  /** 等就绪：显示了 id（给了 objectId 就等它）、设置行已渲染、没有在途写入 */
+  waitReady(objectId?: string): Promise<void>
+  /** 快照；不在屏为 null */
+  state(): Promise<MdMetaStripState | null>
+  /** 改选档位（'' = 未设置） */
+  chooseThinking(level: string): Promise<void>
+  /** 在同一个下拉上接连改选几档（一次 eval 里依次派发 change，中间不让出） */
+  chooseThinkingBurst(levels: string[]): Promise<void>
+  /** 点「换新 id」 */
+  regenerate(): Promise<void>
+  /** 页面上全部属性卡的概况（DOM 序） */
+  cards(): Promise<MdMetaCardShot[]>
+}
+
+export function mdMetaStripPane(main: CdpClient): MdMetaStripPane {
+  const STRIP = `document.querySelector('.cm-shuvix-fmcard-meta-strip')`
+  const THINKING_SELECT = `${STRIP}?.querySelector('.cm-shuvix-fmcard-meta-row[data-key="shuvix-thinking"] select')`
+  const state = (): Promise<MdMetaStripState | null> =>
+    main.eval<MdMetaStripState | null>(`(() => {
+      const strip = ${STRIP}
+      if (!strip) return null
+      const rows = [...strip.querySelectorAll('.cm-shuvix-fmcard-meta-row')].map((row) => {
+        const slot = row.querySelector('.cm-shuvix-fmcard-meta-slot')
+        const select = slot?.querySelector('select')
+        const button = slot?.querySelector('button')
+        return {
+          key: row.getAttribute('data-key') ?? '',
+          value: select ? select.value : (button?.textContent ?? '').trim(),
+          declared: !!row.querySelector('.cm-shuvix-fmcard-meta-declared'),
+          disabled: !!(select ?? button)?.disabled
+        }
+      })
+      const regenerate = strip.querySelector('.cm-shuvix-fmcard-meta-regenerate')
+      const headerButtons = [...strip.querySelectorAll('button')]
+        .filter((b) => !b.closest('.cm-shuvix-fmcard-meta-row') && !b.hasAttribute('data-info-hint'))
+        .map((b) =>
+          b.classList.contains('cm-shuvix-fmcard-meta-regenerate')
+            ? 'regenerate'
+            : (b.textContent ?? '').trim()
+        )
+      return {
+        objectId: strip.querySelector('.cm-shuvix-fmcard-meta-id')?.textContent?.trim() || null,
+        regenerate: !!regenerate,
+        regenerateDisabled: !!regenerate?.disabled,
+        headerButtons,
+        saving: !!strip.querySelector('.cm-shuvix-fmcard-meta-saving'),
+        rows,
+        warnings: [...strip.querySelectorAll('.cm-shuvix-fmcard-meta-warning')].map((w) =>
+          (w.textContent ?? '').trim()
+        )
+      }
+    })()`)
+  const clickButton = async (cls: string, what: string): Promise<void> => {
+    await until(
+      () => main.eval<boolean>(`!!${STRIP}?.querySelector('.${cls}:not(:disabled)')`),
+      `meta strip ${what} button`
+    )
+    await main.eval(`${STRIP}.querySelector('.${cls}').click()`)
+  }
+  /**
+   * 依次改选（一次 eval 里，中间不让出事件循环）。始终派发在**一开始拿到的那个** select 上：第一次改选
+   * 若触发自动分配 id，卡片随即重建、新的条要等 React 渲染才上屏，而旧的条要到下一个微任务才卸载 ——
+   * 接着的改选正是「等待期间在旧实例上又改了一下」
+   */
+  const choose = async (levels: string[]): Promise<void> => {
+    const outcome = await main.eval<string>(`(() => {
+      const select = ${THINKING_SELECT}
+      if (!select) return 'missing'
+      if (select.disabled) return 'disabled'
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+      for (const level of ${JSON.stringify(levels)}) {
+        setter.call(select, level)
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      return 'ok'
+    })()`)
+    if (outcome !== 'ok') throw new Error(`meta strip thinking select is ${outcome}`)
+  }
+
+  return {
+    present: () => main.eval<boolean>(`${STRIP} !== null`),
+    waitStrip: async () => {
+      await until(() => main.eval<boolean>(`${STRIP} !== null`), 'meta strip mounted')
+    },
+    waitRows: async () => {
+      await until(async () => {
+        const s = await state()
+        return !!s && s.rows.length > 0 && s.objectId === null
+      }, 'meta strip rows without an id')
+    },
+    waitReady: async (objectId) => {
+      await until(
+        async () => {
+          const s = await state()
+          if (!s || !s.objectId || s.rows.length === 0 || s.saving) return false
+          return objectId === undefined || s.objectId === objectId
+        },
+        `meta strip ready${objectId ? ` (${objectId})` : ''}`
+      )
+    },
+    state,
+    chooseThinking: (level) => choose([level]),
+    chooseThinkingBurst: (levels) => choose(levels),
+    regenerate: () => clickButton('cm-shuvix-fmcard-meta-regenerate', 'regenerate'),
+    cards: () =>
+      main.eval<MdMetaCardShot[]>(`[...document.querySelectorAll('.cm-shuvix-fmcard')].map((c) => ({
+        name: c.querySelector('.cm-shuvix-fmcard-input[data-key="name"]')?.value ?? null,
+        strip: !!c.querySelector('.cm-shuvix-fmcard-meta-strip'),
+        fieldSlots: c.querySelectorAll('.cm-shuvix-fmcard-slot').length,
+        metaSlots: c.querySelectorAll('.cm-shuvix-fmcard-meta-slot').length,
+        text: c.textContent ?? ''
+      }))`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // 主窗侧栏「Bots」分组（BotGroup）—— 刻意只做最小面。
 //
 // 锚点：分组头按 `data-group="bots"`（SessionGroup 的 group/header 层）认，合法行按
@@ -6791,6 +6969,16 @@ export interface NotebookEditorPane {
   editorTag(): Promise<string | null>
   /** 协作编辑的改动痕迹数（`.cm-coedit-change`）—— 普通笔记本上恒为 0 */
   coEditMarks(): Promise<number>
+  /**
+   * 正文里 `[[target]]` 双链的解析态（atomic-editor wiki-links：`cm-atomic-wiki-link-resolved` /
+   * `-missing`）；这条链接不在屏为 null。文件表是异步扫的 —— 点之前先等它 resolved。
+   */
+  wikiLinkStatus(target: string): Promise<'resolved' | 'missing' | null>
+  /**
+   * 点正文里的 `[[target]]`（左键 click，经编辑器的 domEventHandlers → 右侧 Files 面板预览那份文件）。
+   * 链接不在屏则抛错。
+   */
+  clickWikiLink(target: string): Promise<void>
 }
 
 export function notebookEditorPane(main: CdpClient): NotebookEditorPane {
@@ -6814,7 +7002,28 @@ export function notebookEditorPane(main: CdpClient): NotebookEditorPane {
       return tag
     },
     editorTag: () => main.eval<string | null>(`${EDITOR}?.getAttribute('data-e2e-mount') ?? null`),
-    coEditMarks: () => main.eval<number>(`document.querySelectorAll('.cm-coedit-change').length`)
+    coEditMarks: () => main.eval<number>(`document.querySelectorAll('.cm-coedit-change').length`),
+    wikiLinkStatus: (target) =>
+      main.eval<'resolved' | 'missing' | null>(`(() => {
+        const link = ${EDITOR}?.querySelector(
+          '.cm-content [data-wiki-link-target=' + JSON.stringify(${JSON.stringify(target)}) + ']'
+        )
+        if (!link) return null
+        if (link.classList.contains('cm-atomic-wiki-link-resolved')) return 'resolved'
+        if (link.classList.contains('cm-atomic-wiki-link-missing')) return 'missing'
+        return null
+      })()`),
+    clickWikiLink: async (target) => {
+      const ok = await main.eval<boolean>(`(() => {
+        const link = ${EDITOR}?.querySelector(
+          '.cm-content [data-wiki-link-target=' + JSON.stringify(${JSON.stringify(target)}) + ']'
+        )
+        if (!link) return false
+        link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }))
+        return true
+      })()`)
+      if (!ok) throw new Error(`notebook: no [[${target}]] link on screen`)
+    }
   }
 }
 

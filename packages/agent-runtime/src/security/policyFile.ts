@@ -8,6 +8,8 @@
  *   - `shuvix-displayName`：显示名（对齐 agent md；缺省 = name；人读面，宽容解析）；
  *   - `shuvix-builtin: true`：随包发布的内置策略的**自述标记**，本解析器不读它
  *     （builtin/user 的判定在加载方：buildBuiltinPolicies vs policyService 的目录扫描）；
+ *   - `shuvix-id`：对象 id（ShuviX 扩展元数据只认它，见 chat-protocol mdMeta.ts）—— 写错不判非法，
+ *     按「没有 id」读并发软提示：它是身份，不是安全语义，不该让一份策略整份失效；
  *   - `shuvix-policy-lets`：策略级 let 绑定（可选）—— 名字 → CEL 值表达式（上下文
  *     {vars}），装配时求值一次、以顶层名字注入本策略所有规则的 match 上下文。
  *     多条规则共享一份路径清单等去重场景用它（取代 YAML 锚点与旧 {{var}} 展开）。
@@ -58,7 +60,9 @@
  * 各语言 rules/lets 与 en 一致（翻译漂移在 CI 就红，不静默改变安全语义）。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
+import { SHUVIX_ID_KEY } from '@shuvix/chat-protocol/mdMeta'
 import { splitFrontmatter } from '../markdownFrontmatter'
+import { readObjectIdField } from '../mdObjectId'
 import { compileMatch } from './celMatch'
 import { CONDITION_KEYS, mergeConditions } from './conditions'
 import type { ParsedPolicyFile, PolicyConditions, PolicyEffect, PolicyRuleSpec } from './types'
@@ -293,8 +297,10 @@ export function parsePolicyDefinitionFile(
     })
   }
 
+  const objectId = readObjectIdField(fields, `security policy '${name}'`, warn)
   const parsed: ParsedPolicyFile = {
     name,
+    ...(objectId ? { objectId } : {}),
     displayName,
     description,
     rules,
@@ -312,9 +318,10 @@ export function parsePolicyDefinitionFile(
  */
 export function serializePolicyDefinitionFile(data: ParsedPolicyFile): string {
   const fields: Record<string, unknown> = {
-    [POLICY_FILE_MARKER_KEY]: POLICY_FILE_MARKER,
-    name: data.name
+    [POLICY_FILE_MARKER_KEY]: POLICY_FILE_MARKER
   }
+  if (data.objectId) fields[SHUVIX_ID_KEY] = data.objectId
+  fields.name = data.name
   if (data.displayName.trim() && data.displayName.trim() !== data.name) {
     fields['shuvix-displayName'] = data.displayName.trim()
   }

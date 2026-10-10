@@ -1,5 +1,6 @@
 ---
 shuvix: policy v1
+shuvix-id: policy:builtin:ask-on-external-path
 shuvix-builtin: true
 name: ask-on-external-path
 shuvix-displayName: セッション外のファイルに触れる前に確認

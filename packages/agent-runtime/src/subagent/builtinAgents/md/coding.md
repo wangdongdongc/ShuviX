@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:coding
 shuvix-builtin: true
 name: coding
 description: The software engineering agent — the full local toolchain (shell, files, search) plus the working discipline for multi-file code work. A `work` session runs it as a `coding` sub-session.

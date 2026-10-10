@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:chat
 shuvix-builtin: true
 name: chat
 description: 聊天智能体——不归属任何项目的会话的基座档案。握着完整的内置工具链，倾向于自己把活干完。

@@ -31,6 +31,7 @@ import { boundBotOf } from '@shuvix/chat-protocol/botSession'
 import { getDefaultBotsDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
 import { writeFileAtomic } from '../utils/atomicWrite'
+import { ensureObjectId } from '../utils/mdObjectId'
 import { createLogger } from '../logger'
 import { sessionRecords } from './sessionRecords'
 import { broadcastSessionConfigChanged } from '../utils/sessionConfigBroadcast'
@@ -282,11 +283,15 @@ class BotService {
     return { file: parsed }
   }
 
-  /** 新建；文件名由 name 净化派生。回名字与落盘的文件名（打开它的笔记本要用） */
+  /**
+   * 新建；文件名由 name 净化派生。回名字与落盘的文件名（打开它的笔记本要用）。
+   * 新文件一出生就带 `shuvix-id`（原文里已有合法 id 就沿用）。
+   */
   create(text: string): { success: boolean; name?: string; fileName?: string; error?: string } {
     const parsed = this.parseForWrite(text, 'bot')
     if ('error' in parsed) return { success: false, error: parsed.error }
     const name = parsed.file.name
+    const content = ensureObjectId(text, (t) => parseBotDefinitionFile(t, 'bot'))
     if (this.listAll().some((p) => p.file.name === name)) {
       return { success: false, error: `Bot "${name}" already exists` }
     }
@@ -298,7 +303,7 @@ class BotService {
       filePath = join(this.userDir, `${safeBase}-${i}.md`)
     }
     try {
-      writeFileAtomic(filePath, text)
+      writeFileAtomic(filePath, content)
     } catch (e) {
       log.warn(`新建 bot "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }

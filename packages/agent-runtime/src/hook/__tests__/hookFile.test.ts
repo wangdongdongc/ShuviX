@@ -6,6 +6,7 @@
  * 唯一的刻意放宽（未知埋点 id 惰性化 + warn）也在此钉住，防止未来有人"顺手"把它改成拒绝。
  */
 import { describe, expect, it } from 'vitest'
+import { descriptorForType } from '@shuvix/chat-protocol/shuvixMdDescriptors'
 import { parseHookDefinitionFile, type ParsedHookFile } from '../hookFile'
 import { BASE_PROFILE_NAMES } from '../../subagent/builtinAgents'
 
@@ -577,5 +578,105 @@ describe('正文 → prompt', () => {
     const body = ['Use `{{event.promptText}}` verbatim.', '', '```js', 'return 1', '```']
     const { parsed } = parse(md(VALID, body))
     expect(parsed?.prompt).toBe(body.join('\n'))
+  })
+})
+
+/**
+ * OID —— `shuvix-id` 对象 id（ShuviX 扩展元数据只认它，契约见 chat-protocol mdMeta.ts）。
+ * 写错的 id **不连累文件**：按「没有 id」读（结果里没有 objectId 键），发恰一条软提示；
+ * 写对了归一后进 objectId。它不是 `shuvix-hook-*` 前缀键，键集纪律管不到它。
+ */
+describe('OID —— shuvix-id 对象 id', () => {
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  /** 最小合法 hook（name: h1）；idLine 插在标记之后（省略 = 不写 id），trigger 可换 */
+  const withId = (idLine?: string, trigger = 'session.turn-completed'): string =>
+    md([
+      'shuvix: hook v1',
+      ...(idLine === undefined ? [] : [idLine]),
+      'name: h1',
+      'shuvix-hook-agent: titler',
+      'shuvix-hook-on:',
+      `  - trigger: ${trigger}`
+    ])
+  const BASE = parse(withId()).parsed!
+
+  it('OID-1 合法 UUID（大写写法）→ objectId 归一为小写，零告警，其余字段不变', () => {
+    const { parsed, warns } = parse(withId(`shuvix-id: ${U.toUpperCase()}`))
+    expect(warns).toEqual([])
+    expect(parsed).toStrictEqual({ ...BASE, objectId: U })
+  })
+
+  it('OID-2 本类内置 id → 原样', () => {
+    const { parsed, warns } = parse(withId('shuvix-id: hook:builtin:auto-title'))
+    expect(warns).toEqual([])
+    expect(parsed?.objectId).toBe('hook:builtin:auto-title')
+  })
+
+  it('OID-3 别类的内置 id 也收、零告警（解析器不核对 kind）', () => {
+    const { parsed, warns } = parse(withId('shuvix-id: policy:builtin:ask-on-command'))
+    expect(warns).toEqual([])
+    expect(parsed?.objectId).toBe('policy:builtin:ask-on-command')
+  })
+
+  it.each([
+    'shuvix-id: nope',
+    "shuvix-id: ''",
+    'shuvix-id:',
+    'shuvix-id: 123',
+    'shuvix-id: [a]',
+    'shuvix-id: {a: 1}',
+    "shuvix-id: 'agent:builtin:'",
+    'shuvix-id: skill:builtin:x',
+    'shuvix-id: true'
+  ])(
+    'OID-4 写坏的 `%s` → 文件照常合法、没有 objectId 键、恰一条点名 shuvix-id 与主语的软提示',
+    (line) => {
+      const { parsed, warns } = parse(withId(line))
+      expect(parsed).not.toBeNull()
+      expect('objectId' in parsed!).toBe(false)
+      expect(parsed).toStrictEqual(BASE)
+      expect(warns).toHaveLength(1)
+      expect(warns[0]).toContain("hook 'h1'")
+      expect(warns[0]).toContain("'shuvix-id'")
+      expect(warns[0]).not.toContain('the whole file is rejected')
+    }
+  )
+
+  it('OID-5 没写 → 没有 objectId 键、零告警', () => {
+    const { parsed, warns } = parse(withId())
+    expect(warns).toEqual([])
+    expect('objectId' in parsed!).toBe(false)
+  })
+
+  it('OID-6 整份非法（裸 on）的文件带着坏 id → null；诊断只有拒绝原因', () => {
+    const { parsed, warns } = parse(
+      md(['shuvix: hook v1', 'shuvix-id: nope', 'name: h1', 'shuvix-hook-agent: titler', 'on: []'])
+    )
+    expect(parsed).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain("bare 'on' key is not read")
+    expect(warns[0]).not.toContain("'shuvix-id'")
+  })
+
+  it('OID-7 坏 id + 未知埋点：照常合法，两条软提示，id 那条在最后', () => {
+    const { parsed, warns } = parse(withId('shuvix-id: nope', 'file.changed'))
+    expect(parsed).not.toBeNull()
+    expect(warns).toHaveLength(2)
+    expect(warns[0]).toContain("trigger 'file.changed' is not known")
+    expect(warns[1]).toContain("'shuvix-id'")
+  })
+
+  it('OID-8 shuvix-id 不触发 shuvix-hook-* 的未知键拒绝；shuvix-hook-id 仍是未知前缀键', () => {
+    expect(parse(withId(`shuvix-id: ${U}`)).parsed).not.toBeNull()
+    const prefixed = parse(withId(`shuvix-hook-id: ${U}`))
+    expect(prefixed.parsed).toBeNull()
+    expect(prefixed.warns).toHaveLength(1)
+    expect(prefixed.warns[0]).toContain("unknown key 'shuvix-hook-id'")
+  })
+
+  it('OID-12 属性卡描述符列着 shuvix-id，kind 为 hidden（解析器读、卡上不显示）', () => {
+    const fields = descriptorForType('hook')!.fields.filter((f) => f.key === 'shuvix-id')
+    expect(fields).toHaveLength(1)
+    expect(fields[0].kind).toBe('hidden')
   })
 })

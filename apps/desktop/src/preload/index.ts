@@ -429,6 +429,15 @@ const api = {
       ipcRenderer.invoke('shuvixMd:validate', params)
   },
 
+  // ============ md 扩展元数据（属性卡「ShuviX 设置」条） ============
+  mdMeta: {
+    get: (params: { sessionId: string }) => ipcRenderer.invoke('mdMeta:get', params),
+    setFill: (params: { sessionId: string; objectId: string; key: string; value: unknown }) =>
+      ipcRenderer.invoke('mdMeta:setFill', params),
+    unsetFill: (params: { sessionId: string; objectId: string; key: string }) =>
+      ipcRenderer.invoke('mdMeta:unsetFill', params)
+  },
+
   // ============ 工具 ============
   tools: {
     list: (sessionId?: string, options?: { profile?: string }) =>

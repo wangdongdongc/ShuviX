@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:permission-reviewer
 shuvix-builtin: true
 name: permission-reviewer
 description: ユーザーの代わりに承認リクエストに答える —— セキュリティポリシーが示した操作を一つ審査し、許可・ユーザーに委ねる・拒否を決める。

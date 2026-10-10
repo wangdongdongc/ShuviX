@@ -102,6 +102,13 @@ const writeAgentFile = (fileName: string, text: string): void => {
   writeFileSync(join(app.agentsDir, fileName), text, 'utf-8')
 }
 
+/** 新建一出生就带 `shuvix-id`（标记行之后补一行 UUIDv7）：断言这一行在，去掉它后其余字节应与原文相同 */
+const withoutMintedId = (text: string): string => {
+  const line = /^shuvix-id: [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n/m
+  expect(text).toMatch(line)
+  return text.replace(line, '')
+}
+
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
 const listInvalid = (): Promise<Array<{ fileName: string; error: string }>> =>
   app.main.eval('window.api.subAgent.listInvalid()')
@@ -182,8 +189,8 @@ describe('agent md 原文 IPC —— 取原文 / 新建 / 经笔记本编辑', (
       body: 'AE4 body.'
     })
     expect(await createSource(text)).toEqual({ success: true, name: 'ae4-normalized' })
-    // 不重序列化：写进去什么样，磁盘上就什么样
-    expect(readAgentFile('ae4-normalized.md')).toBe(text)
+    // 不重序列化：写进去什么样，磁盘上就什么样（只多一行新建时补的 shuvix-id）
+    expect(withoutMintedId(readAgentFile('ae4-normalized.md'))).toBe(text)
 
     const row = (await listAgents()).find((a) => a.name === 'ae4-normalized')!
     expect(row.source).toBe('user')

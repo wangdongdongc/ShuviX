@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:titler
 shuvix-builtin: true
 name: titler
 description: 为当前会话命名 —— 从对话内容提炼简短标题，经 session 工具应用。

@@ -279,3 +279,77 @@ describe('validateShuvixMdText — 类型路由与边界', () => {
     })
   })
 })
+
+/**
+ * VID —— `shuvix-id` 对属性卡校验态的影响：写坏的 id 是软提示（valid + 一条消息 → 卡片亮琥珀），
+ * 写对了不出声；它不会把一份本来非法的文件救活。
+ */
+describe('validateShuvixMdText — shuvix-id 对象 id', () => {
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  /** 四类最小合法 frontmatter（不含 id） */
+  const FRONTMATTER: Record<'agent' | 'policy' | 'hook' | 'bot', string[]> = {
+    agent: ['shuvix: agent v1', 'name: a1'],
+    policy: [
+      'shuvix: policy v1',
+      'name: p1',
+      'shuvix-policy-rules:',
+      '  - effect: ask',
+      '    subject.kind: [agent]'
+    ],
+    hook: [
+      'shuvix: hook v1',
+      'name: h1',
+      'shuvix-hook-agent: titler',
+      'shuvix-hook-on:',
+      '  - trigger: session.turn-completed'
+    ],
+    bot: ['shuvix: bot v2', 'name: b1']
+  }
+  /** id 行插在标记之后 */
+  const withId = (type: keyof typeof FRONTMATTER, idLine: string): string[] => {
+    const [marker, ...rest] = FRONTMATTER[type]
+    return [marker, idLine, ...rest]
+  }
+  const TYPES = Object.keys(FRONTMATTER) as Array<keyof typeof FRONTMATTER>
+
+  it.each(TYPES)('VID-1 %s：写坏的 id → valid + 恰一条点名 shuvix-id 的消息', (type) => {
+    const result = validateShuvixMdText(
+      type,
+      md('---', ...withId(type, 'shuvix-id: nope'), '---', 'Body')
+    )
+    expect(result.status).toBe('valid')
+    expect(result.messages).toHaveLength(1)
+    expect(result.messages[0]).toContain('shuvix-id')
+  })
+
+  it.each(TYPES)('VID-2 %s：合法 id → valid 且零消息（整份与属性卡重组形状都是）', (type) => {
+    for (const id of [U, `${type}:builtin:x`]) {
+      const lines = withId(type, `shuvix-id: ${id}`)
+      expect(validateShuvixMdText(type, md('---', ...lines, '---', 'Body')), id).toEqual({
+        status: 'valid',
+        messages: []
+      })
+      expect(validateShuvixMdText(type, recompose(md(...lines))), id).toEqual({
+        status: 'valid',
+        messages: []
+      })
+    }
+  })
+
+  it('VID-3 本来非法的文件带着坏 id → 仍是 invalid', () => {
+    const broken: Array<[keyof typeof FRONTMATTER, string[]]> = [
+      ['agent', ['shuvix: agent v1', 'shuvix-id: nope', 'name: a1', 'shuvix-tools: [read]']],
+      ['policy', ['shuvix: policy v1', 'shuvix-id: nope', 'name: p1']],
+      [
+        'hook',
+        ['shuvix: hook v1', 'shuvix-id: nope', 'name: h1', 'shuvix-hook-agent: titler', 'on: []']
+      ],
+      ['bot', ['shuvix: agent v1', 'shuvix-id: nope', 'name: b1']]
+    ]
+    for (const [type, lines] of broken) {
+      expect(validateShuvixMdText(type, md('---', ...lines, '---', 'Body')).status, type).toBe(
+        'invalid'
+      )
+    }
+  })
+})

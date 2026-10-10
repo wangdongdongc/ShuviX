@@ -2,6 +2,7 @@ import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
+import type { MdMetaNoteView, MdMetaWriteResult } from '@shuvix/chat-protocol/mdMeta'
 import type { KnowledgeEntry, KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
@@ -595,6 +596,21 @@ declare global {
         text: string
         name?: string
       }) => Promise<ShuvixMdValidation>
+    }
+    /** md 扩展元数据（属性卡「ShuviX 设置」条；契约见 chat-protocol mdMeta.ts / ChatApi.mdMeta） */
+    mdMeta: {
+      get: (params: { sessionId: string }) => Promise<MdMetaNoteView | null>
+      setFill: (params: {
+        sessionId: string
+        objectId: string
+        key: string
+        value: unknown
+      }) => Promise<MdMetaWriteResult>
+      unsetFill: (params: {
+        sessionId: string
+        objectId: string
+        key: string
+      }) => Promise<MdMetaWriteResult>
     }
     tools: {
       list: (

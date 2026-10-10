@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:bot
 shuvix-builtin: true
 name: bot
 description: Bot エージェント —— bot セッションのベースプロファイル。自分の声でユーザーと話し、実作業はすべてサブセッションに渡す。同名のカスタムエージェント "bot" で上書きできる。

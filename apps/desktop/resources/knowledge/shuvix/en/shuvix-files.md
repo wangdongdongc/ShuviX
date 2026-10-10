@@ -83,6 +83,13 @@ Related rules shared by all types:
   what happens to unknown `shuvix-` keys is type-specific (hooks reject them).
 - `shuvix-builtin: true` appears in files ShuviX ships. Parsers do not read it; it only states
   "this text came from the builtin set". Do not add it to user files — it does nothing.
+- `shuvix-id` is the **object id** of an agent, bot, policy or hook file: the identity ShuviX
+  keeps for the file however it is moved or renamed. ShuviX writes it — a fresh UUID into every
+  file it creates, `<type>:builtin:<name>` into the files it ships (for example
+  `agent:builtin:explore`). Copying a file copies its id, so the copy and the original are the
+  same object. Leave the line alone; a malformed value only earns a warning (the file is then read
+  as having no id) and never makes the file invalid.
+  ShuviX settings (shown under a file's properties; see the `agent-md` entry) attach to this id.
 
 ## Invalid files are rejected whole
 

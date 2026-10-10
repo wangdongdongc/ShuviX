@@ -59,6 +59,7 @@ style, each with file and line. Never modify files.
 | `shuvix-instruction-files`  | comma-separated string| no       | Project instruction files the agent reads, as paths **relative to the working directory**, in priority order: the first one that exists and is non-empty is injected, at most one. An absolute path, a `..` segment, or a boolean value makes the file invalid. Omitted = nothing injected.                              |
 | `shuvix-project-awareness`  | boolean               | no       | `true` = the agent is told which project it is in: the project's prompt and the project's memory index are appended to its system prompt (resolved against the root session's project; nothing when the session has no project). Must be a real YAML boolean. Default `false`.                                        |
 | `shuvix-builtin`            | boolean               | no       | Self-marker of files ShuviX ships. Not read by the parser; do not add it to user files.                                                                                                                                                                                                                                    |
+| `shuvix-id`                 | string                | no       | Object id — how ShuviX recognises this file wherever it moves. A UUID in files ShuviX creates, `<type>:builtin:<name>` in shipped ones; a copy shares its original's id. Written by ShuviX — leave it alone. A malformed value is ignored with a warning, never rejects the file.                                          |
 
 Keys that are **ignored** (read as unknown, no error, no effect): the generic `tools` key (other
 applications' meaning of tool names would be misread — use `shuvix-tools`), and the retired keys
@@ -164,6 +165,15 @@ the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`, 
   `notebook` / `bot` / `tab` / `coedit`. `permission-reviewer` is refused by the `agent` tool and
   by `agent_profile` as well — an agent that could call its own reviewer at will could keep trying
   phrasings until one passed — but a hook may name it.
+
+- **Model and thinking without an override: ShuviX settings.** Opening an agent's md from the
+  sidebar's Agents group (a builtin or your own) shows a *ShuviX settings* strip under its properties, where `shuvix-model` and
+  `shuvix-thinking` can be picked. They are stored in ShuviX, keyed by the file's `shuvix-id`,
+  and they only **fill in** what the file does not write — a key the file writes always wins. So a
+  builtin such as `explore` can run on a cheaper model without an override copy, and keeps getting
+  the shipped text on every update. A file without an id gets one automatically — the first setting
+  you make writes a `shuvix-id` line into it; a copy of a file shares its settings. Agents cannot change them — only you, in the
+  strip.
 
 ## How an agent is put to use
 

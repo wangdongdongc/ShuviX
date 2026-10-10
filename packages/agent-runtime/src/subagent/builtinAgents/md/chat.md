@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:chat
 shuvix-builtin: true
 name: chat
 description: The chat agent — the base profile for sessions that belong to no project. It holds the full builtin toolchain and does the work itself.

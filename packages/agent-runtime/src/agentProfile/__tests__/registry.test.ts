@@ -5,7 +5,7 @@
  * （而非 TS 字面量）—— 这条链路同时覆盖了 md 格式合法性：任何一份 md 的 frontmatter
  * 写坏，buildBuiltinProfile 返回 null，下面的用例立刻失败。
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import * as builtinAgentsModule from '../../subagent/builtinAgents'
 import {
   BASE_PROFILE_NAMES,
@@ -29,6 +29,8 @@ import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources
 import { NEXT_TOOL_NAME } from '../../subagent/nextTool'
 import { renderVisualCraft } from '../fragments'
 import { KNOWLEDGE_TYPES } from '@shuvix/chat-protocol/knowledge'
+import { builtinObjectId } from '@shuvix/chat-protocol/mdMeta'
+import { parseAgentDefinitionFile, serializeAgentDefinitionFile } from '../definitionFile'
 import {
   PERMISSION_VERDICT_SCHEMA,
   type PermissionVerdict
@@ -1184,5 +1186,72 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
       }
     }
     expect([...referencing].sort()).toEqual(['chat', 'coding', 'notebook', 'widget', 'work'])
+  })
+})
+
+/**
+ * 内置档案的对象 id（`shuvix-id`，md 扩展元数据只认它）—— 写在随包发布的每一份内置 md 里（三语都写），
+ * 值恒为 `agent:builtin:<name>`。漏写 = 这份内置挂不上任何元数据；写错 kind / 名字 = 挂到别人身上；
+ * 不在标记之后 = 与新建文件的落点不一致（setShuvixIdLine / 序列化器都写在那里）。
+ */
+describe('内置档案的对象 id（shuvix-id）', () => {
+  it('OID-G1 每份内置 × 每门语言：恰一行 shuvix-id，值 = agent:builtin:<name>，紧跟在 shuvix: agent v1 之后', () => {
+    for (const spec of BUILTIN_PROFILE_SPECS) {
+      const sources = sourcesOf(spec.name)
+      expect(Object.keys(sources).sort(), spec.name).toEqual(['en', 'ja', 'zh'])
+      for (const [language, source] of Object.entries(sources)) {
+        const what = `${spec.name}.${language}`
+        const ids = [...source.matchAll(/^shuvix-id: (.+)$/gm)].map((m) => m[1])
+        expect(ids, what).toEqual([builtinObjectId('agent', spec.name)])
+        const lines = source.split(/\r?\n/)
+        const marker = lines.indexOf('shuvix: agent v1')
+        expect(marker, what).toBeGreaterThan(0)
+        expect(lines[marker + 1], what).toBe(`shuvix-id: ${builtinObjectId('agent', spec.name)}`)
+      }
+    }
+  })
+
+  it('OID-G2 buildBuiltinProfile 在任何语言下 objectId 都是 agent:builtin:<name>，且零 console.warn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      for (const spec of BUILTIN_PROFILE_SPECS) {
+        for (const language of [undefined, 'en', 'zh', 'zh-CN', 'ja', 'fr']) {
+          const built = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })
+          expect(built, `${spec.name} @ ${language}`).not.toBeNull()
+          expect(built!.objectId, `${spec.name} @ ${language}`).toBe(
+            builtinObjectId('agent', spec.name)
+          )
+        }
+      }
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('OID-G3 内置 id 两两不同；名单里有 permission-reviewer / coedit / tab', () => {
+    const ids = buildBuiltinProfiles(ALL_PARAMS).map((p) => p.objectId)
+    expect(ids.every((id) => typeof id === 'string')).toBe(true)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids.length).toBe(BUILTIN_PROFILE_SPECS.length)
+    for (const name of ['permission-reviewer', 'coedit', 'tab']) {
+      expect(ids, name).toContain(builtinObjectId('agent', name))
+    }
+  })
+
+  it('OID-C11 serialize → parse 往返保住每份内置（三语）的 objectId —— 「创建覆盖副本」挂得上内置的元数据', () => {
+    for (const spec of BUILTIN_PROFILE_SPECS) {
+      for (const language of LANGS) {
+        const built = buildBuiltinProfile(spec, { ...ALL_PARAMS, language })!
+        const text = serializeAgentDefinitionFile({
+          ...built,
+          tools: [...built.tools],
+          instructionFiles: [...built.instructionFiles]
+        })
+        expect(parseAgentDefinitionFile(text, 'x')?.objectId, `${spec.name}.${language}`).toBe(
+          built.objectId
+        )
+      }
+    }
   })
 })

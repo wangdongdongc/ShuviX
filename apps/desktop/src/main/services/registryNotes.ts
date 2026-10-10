@@ -111,6 +111,50 @@ export function openRegistryNote(
   return { ...session, workingDirectory: project.path }
 }
 
+/** 注册表笔记指向的那份文件 —— md 扩展元数据（mdMetaService）按会话认文件时用 */
+export interface RegistryNoteFile {
+  /** 文件类型（内置的几种归回本类：agentBuiltin → agent） */
+  kind: 'agent' | 'bot' | 'hook' | 'policy'
+  /** 文件的绝对路径 */
+  absPath: string
+  /** 随包发布的内置文件（只读） */
+  builtin: boolean
+  /** 文件名 —— 解析器诊断里的 defaultName */
+  fileName: string
+}
+
+const KIND_OF_NOTE: Record<RegistryNoteKind, RegistryNoteFile['kind']> = {
+  bot: 'bot',
+  agent: 'agent',
+  agentBuiltin: 'agent',
+  policy: 'policy',
+  policyBuiltin: 'policy',
+  hook: 'hook',
+  hookBuiltin: 'hook'
+}
+
+/**
+ * 这条会话是哪份注册表文件的笔记本 —— 不是注册表笔记（别的项目、没有 notebookPath、notebookPath
+ * 不是单个 `.md` 文件名）返回 null。会话行是主进程自己建的（openRegistryNote 校验过文件名），
+ * 这里照样按不可信数据再验一遍：路径只由「载体目录 + 文件名」拼出，渲染进程给不了路径。
+ */
+export function registryNoteFileOf(sessionId: string): RegistryNoteFile | null {
+  const session = sessionRecords.findById(sessionId)
+  if (!session?.projectId) return null
+  const noteKind = (Object.keys(REGISTRY_NOTE_PROJECT_IDS) as RegistryNoteKind[]).find(
+    (k) => REGISTRY_NOTE_PROJECT_IDS[k] === session.projectId
+  )
+  const fileName = session.settings.notebookPath
+  if (!noteKind || typeof fileName !== 'string') return null
+  if (!/^[^/\\]+\.md$/i.test(fileName) || fileName.startsWith('.')) return null
+  return {
+    kind: KIND_OF_NOTE[noteKind],
+    absPath: join(REGISTRIES[noteKind].dir(), fileName),
+    builtin: noteKind.endsWith('Builtin'),
+    fileName
+  }
+}
+
 /** `*.changed` 的合并窗口：笔记本每 200ms 防抖落一次盘，连续打字不该让侧栏分组一直重扫 */
 const CHANGED_DEBOUNCE_MS = 300
 const changedTimers = new Map<string, ReturnType<typeof setTimeout>>()

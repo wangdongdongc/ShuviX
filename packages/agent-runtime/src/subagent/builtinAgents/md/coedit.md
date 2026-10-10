@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:coedit
 shuvix-builtin: true
 name: coedit
 description: Base profile for co-editing sessions — the markdown window opened from the OS, where you and the user edit the same live document at the same time. Override it with a custom agent named "coedit" to customize it.

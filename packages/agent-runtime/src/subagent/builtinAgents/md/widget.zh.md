@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:widget
 shuvix-builtin: true
 name: widget
 description: 创建、维护并导出 ShuviX Widget —— 常驻 Widget 面板的迷你 React 应用。

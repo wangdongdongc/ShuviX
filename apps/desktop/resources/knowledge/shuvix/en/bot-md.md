@@ -57,6 +57,7 @@ talking about, and you never pad feedback with praise.
 | `name`                | string    | no       | The bot's stable identity — what a bot session stores in `settings.bot`. Defaults to the file's base name.               |
 | `shuvix-displayName`  | string    | no       | Label in the sidebar and the session header. Defaults to `name`. Must be a string if present.                            |
 | `description`         | string    | no       | One line for the list and the new-bot-chat picker. Purely display. Must be a string if present.                          |
+| `shuvix-id`           | string    | no       | Object id — how ShuviX recognises this file wherever it moves. A UUID in files ShuviX creates, `<type>:builtin:<name>` in shipped ones; a copy shares its original's id. Written by ShuviX — leave it alone. A malformed value is ignored with a warning, never rejects the file. |
 
 Everything else is ignored, with one exception: the retired v1 key `shuvix-bot-pipeline` (from
 the pipeline era, when a bot named a workflow) still parses but earns a **warning asking you to

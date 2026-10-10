@@ -1,5 +1,6 @@
 ---
 shuvix: policy v1
+shuvix-id: policy:builtin:ask-on-external-path
 shuvix-builtin: true
 name: ask-on-external-path
 shuvix-displayName: Ask Before Touching Files Outside This Session

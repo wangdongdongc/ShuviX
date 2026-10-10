@@ -276,3 +276,66 @@ describe('reviewShuvixMdWrite — OKF 知识库分支', () => {
     expect(review('---\ntitle: T\nbody\n', 'global/x.md')).toBeNull()
   })
 })
+
+/**
+ * WID —— 写后审阅与 `shuvix-id`：写钩子**不分配 id**（新建文件的 id 由宿主的 create 路径写进去，
+ * agent 用 write / edit 写出的文件原样落盘）。写坏的 id 只是解析器软提示，随回执带回、不改文件；
+ * 知识库条目不认这个键（OKF 允许未知键），不为它出任何声。
+ */
+describe('reviewShuvixMdWrite — shuvix-id', () => {
+  const agent = (...extra: string[]): string =>
+    [
+      '---',
+      'shuvix: agent v1',
+      ...extra,
+      'name: a1',
+      'description: d',
+      '---',
+      '',
+      'Body.',
+      ''
+    ].join('\n')
+
+  it('WID-1 agent md 带写坏的 id → 回执「Written with parser warnings」并带上 id 那条；不改写文件', () => {
+    const out = reviewShuvixMdWrite(agent('shuvix-id: nope'), 'a1.md', CTX)
+    expect(out).not.toBeNull()
+    expect(out!.note).toContain('Written with parser warnings')
+    expect(out!.note).toContain("agent 'a1': 'shuvix-id' is not a valid object id")
+    expect(out!.content).toBeNull()
+  })
+
+  it('WID-2 agent md 没写 id → null：写钩子不替它补 id', () => {
+    expect(reviewShuvixMdWrite(agent(), 'a1.md', CTX)).toBeNull()
+    expect(
+      reviewShuvixMdWrite(agent('shuvix-id: 0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'), 'a1.md', CTX)
+    ).toBeNull()
+  })
+
+  it('WID-3 知识库条目带 shuvix-id: garbage → 回执里没有任何关于它的话（照常盖章）；普通笔记仍是 null', () => {
+    const ctx = {
+      today: '2026-09-09',
+      knowledge: { rel: 'global/x.md', actor: 'shuvix-work/gpt-5', now: '2026-09-09T08:12:03.000Z' }
+    }
+    const entry = [
+      '---',
+      'shuvix: okf v0.2',
+      'type: Memory',
+      'title: T',
+      'description: d',
+      'status: draft',
+      'shuvix-id: garbage',
+      '---',
+      '',
+      'body',
+      ''
+    ].join('\n')
+    const out = reviewShuvixMdWrite(entry, 'x', ctx)
+    expect(out).not.toBeNull()
+    expect(out!.note).not.toContain('shuvix-id')
+    expect(out!.content).toContain('generated:')
+    expect(out!.content).toContain('shuvix-id: garbage')
+
+    const note = ['---', 'title: T', 'shuvix-id: garbage', '---', '', 'body', ''].join('\n')
+    expect(reviewShuvixMdWrite(note, 'x', ctx)).toBeNull()
+  })
+})

@@ -56,7 +56,8 @@ vi.mock('../../dao/projectDao', () => ({
   projectDao: { findById: vi.fn(), insert: vi.fn(), update: vi.fn() }
 }))
 vi.mock('../../dao/sessionDao', () => ({
-  sessionDao: { findByProjectAndNotebookPath: vi.fn() }
+  // findById：registryNoteFileOf 经 sessionRecords.findById 落到这里（非内存会话）
+  sessionDao: { findByProjectAndNotebookPath: vi.fn(), findById: vi.fn() }
 }))
 vi.mock('../sessionService', () => ({
   sessionService: {
@@ -72,7 +73,12 @@ import { sessionDao } from '../../dao/sessionDao'
 import { appEventBus } from '../../utils/appEventBus'
 import { sessionService } from '../sessionService'
 import { botService } from '../botService'
-import { ensureRegistryNoteProject, observeRegistryWrite, openRegistryNote } from '../registryNotes'
+import {
+  ensureRegistryNoteProject,
+  observeRegistryWrite,
+  openRegistryNote,
+  registryNoteFileOf
+} from '../registryNotes'
 
 const publish = vi.spyOn(appEventBus, 'publish')
 
@@ -133,6 +139,7 @@ beforeEach(() => {
   )
   vi.mocked(projectDao.findById).mockReturnValue(undefined)
   vi.mocked(sessionDao.findByProjectAndNotebookPath).mockReturnValue(undefined)
+  vi.mocked(sessionDao.findById).mockReturnValue(undefined)
 })
 
 afterEach(() => {
@@ -558,5 +565,88 @@ describe('observeRegistryWrite', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+/**
+ * registryNoteFileOf —— md 扩展元数据（mdMetaService）按**笔记本会话**认文件：会话挂在七个注册表载体项目之一、
+ * notebookPath 是单个 `.md` 文件名 → 回这份文件（类型归回本类、绝对路径 = 载体目录 + 文件名、内置标记）；
+ * 其余一律 null。路径只由「载体目录 + 文件名」拼出 —— notebookPath 按不可信数据再验一遍。
+ */
+describe('registryNoteFileOf', () => {
+  /** 一条会话行（只填被读到的字段） */
+  const sessionRow = (projectId: string | null, notebookPath: unknown): Session =>
+    ({
+      id: 's-note',
+      projectId,
+      settings: notebookPath === undefined ? {} : { notebookPath }
+    }) as unknown as Session
+  const BASE_KIND: Record<RegistryNoteKind, 'agent' | 'bot' | 'hook' | 'policy'> = {
+    bot: 'bot',
+    agent: 'agent',
+    agentBuiltin: 'agent',
+    policy: 'policy',
+    policyBuiltin: 'policy',
+    hook: 'hook',
+    hookBuiltin: 'hook'
+  }
+
+  it.each(KINDS)(
+    'RN-F1 载体 %s：类型归回本类、绝对路径 = 该目录 + 文件名、只有 *Builtin 是内置',
+    (kind) => {
+      vi.mocked(sessionDao.findById).mockReturnValue(
+        sessionRow(REGISTRY_NOTE_PROJECT_IDS[kind], 'x.md')
+      )
+      expect(registryNoteFileOf('s-note')).toEqual({
+        kind: BASE_KIND[kind],
+        absPath: join(dirOf(kind), 'x.md'),
+        builtin: kind.endsWith('Builtin'),
+        fileName: 'x.md'
+      })
+      expect(sessionDao.findById).toHaveBeenCalledWith('s-note')
+    }
+  )
+
+  it('RN-F2 不是注册表笔记 → null：查无此会话 / 没有项目 / 普通项目 p1 / 知识库载体', () => {
+    expect(registryNoteFileOf('missing')).toBeNull()
+    for (const projectId of [null, 'p1', '__knowledge__']) {
+      vi.mocked(sessionDao.findById).mockReturnValue(sessionRow(projectId, 'x.md'))
+      expect(registryNoteFileOf('s-note'), String(projectId)).toBeNull()
+    }
+  })
+
+  it.each([
+    ['缺 notebookPath', undefined],
+    ['数字', 42],
+    ['空串', ''],
+    ['子路径 /', 'sub/x.md'],
+    ['子路径 \\', 'sub\\x.md'],
+    ['点文件', '.hidden.md'],
+    ['非 .md', 'x.txt'],
+    ['越界 ..', '../x.md']
+  ])('RN-F3 notebookPath 不是单个 .md 文件名（%s）→ null', (_label, notebookPath) => {
+    vi.mocked(sessionDao.findById).mockReturnValue(
+      sessionRow(REGISTRY_NOTE_PROJECT_IDS.agent, notebookPath)
+    )
+    expect(registryNoteFileOf('s-note')).toBeNull()
+  })
+
+  it('RN-F3b 大写后缀 LOUD.MD 照收，文件名逐字不改', () => {
+    vi.mocked(sessionDao.findById).mockReturnValue(
+      sessionRow(REGISTRY_NOTE_PROJECT_IDS.agent, 'LOUD.MD')
+    )
+    expect(registryNoteFileOf('s-note')).toMatchObject({
+      fileName: 'LOUD.MD',
+      absPath: join(dirOf('agent'), 'LOUD.MD')
+    })
+  })
+
+  it('RN-F4 文件不存在也照样解析（存在与否归读文件的一方）', () => {
+    vi.mocked(sessionDao.findById).mockReturnValue(
+      sessionRow(REGISTRY_NOTE_PROJECT_IDS.hook, 'gone.md')
+    )
+    const note = registryNoteFileOf('s-note')
+    expect(note?.absPath).toBe(join(dirOf('hook'), 'gone.md'))
+    expect(existsSync(note!.absPath)).toBe(false)
   })
 })

@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:chat
 shuvix-builtin: true
 name: chat
 description: チャットエージェント——どのプロジェクトにも属さないセッションの基盤プロファイル。内蔵ツールを一通り持ち、自分で作業を完了させる。

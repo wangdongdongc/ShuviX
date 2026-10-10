@@ -1,5 +1,6 @@
 ---
 shuvix: policy v1
+shuvix-id: policy:builtin:ask-on-command
 shuvix-builtin: true
 name: ask-on-command
 shuvix-displayName: 未受限的命令执行前询问

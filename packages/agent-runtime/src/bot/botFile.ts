@@ -16,12 +16,17 @@
  * **标记类型不符 = 整份文件非法** —— 一份 agent md 掉进 bots 目录会被明确拒绝，而不是被当成
  * 人设读进系统提示词；判别只看类型段，版本号升级不让旧文件消失。其余未知键忽略。
  *
+ * `shuvix-id` 是对象 id（ShuviX 扩展元数据只认它，见 chat-protocol mdMeta.ts）：写错不判非法，
+ * 按「没有 id」读并发一条软提示。
+ *
  * `warn` 承载两类话：返回 null 时它们是拒绝理由；返回对象时它们是软提示（管线残留）。调用方
  * 据返回值区分 —— 与 agent / hook 解析器的通道同形。
  */
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { readShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
+import { SHUVIX_ID_KEY } from '@shuvix/chat-protocol/mdMeta'
 import { splitFrontmatter } from '../markdownFrontmatter'
+import { readObjectIdField } from '../mdObjectId'
 
 /** 文件类型标记 —— 写入 `shuvix: bot v2`；读取时不作要求（类型不符则拒绝） */
 export const BOT_FILE_MARKER_KEY = 'shuvix'
@@ -35,6 +40,8 @@ export const BOT_RETIRED_PIPELINE_KEY = 'shuvix-bot-pipeline'
 export interface ParsedBotFile {
   /** 稳定标识 —— 会话的 `settings.bot` 存的就是它 */
   name: string
+  /** `shuvix-id`：对象 id（已归一）；没写或写错 = 省略（不挂任何扩展元数据） */
+  objectId?: string
   /** UI 显示名（缺省回退 name） */
   displayName: string
   /** 一句话介绍；可为空（纯展示，不参与任何判定） */
@@ -108,8 +115,10 @@ export function parseBotDefinitionFile(
     )
   }
 
+  const objectId = readObjectIdField(fields, `bot '${name}'`, warn)
   return {
     name,
+    ...(objectId ? { objectId } : {}),
     displayName: stringField(fields, 'shuvix-displayName') ?? name,
     description: stringField(fields, 'description') ?? '',
     body: split.body.trim()
@@ -123,14 +132,17 @@ export function parseBotDefinitionFile(
  */
 export function serializeBotDefinitionFile(data: {
   name: string
+  /** 对象 id；写在标记之后 */
+  objectId?: string
   displayName?: string
   description?: string
   body?: string
 }): string {
   const fields: Record<string, unknown> = {
-    [BOT_FILE_MARKER_KEY]: BOT_FILE_MARKER,
-    name: data.name
+    [BOT_FILE_MARKER_KEY]: BOT_FILE_MARKER
   }
+  if (data.objectId) fields[SHUVIX_ID_KEY] = data.objectId
+  fields.name = data.name
   if (data.description?.trim()) fields.description = data.description.trim()
   if (data.displayName?.trim() && data.displayName.trim() !== data.name) {
     fields['shuvix-displayName'] = data.displayName.trim()

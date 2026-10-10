@@ -14,6 +14,7 @@
  */
 
 import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
+import { SHUVIX_ID_KEY } from './mdMeta'
 
 /**
  * 字段渲染方式。前五种是可编辑/可点选的标量面：
@@ -28,7 +29,8 @@ import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
  *   stamp OKF 的宿主章（`generated` / `verified`：`{by, at}` 单值或列表）—— 只读**不是**排版
  *     偏好而是契约：`generated` 由写钩子盖、`verified` 只由 UI 动作盖，谁都不该在卡上手改
  * 另有 hidden：已知但不渲染（机器面的所有权声明之类对人只是噪音 —— 列进描述符防它落通用行，
- * 渲染时整行跳过；源码视图仍可见）。
+ * 渲染时整行跳过；源码视图仍可见）。`shuvix-id`（扩展元数据的对象 id，见 mdMeta.ts）就是这一类：
+ * 一串 UUID 摆在卡上只是噪音，而且不该被当成普通字段随手改。
  * 值的实际形状与 kind 不符时一律退回通用标量渲染 —— 合法性判定归解析器，卡片只展示。
  */
 export type ShuvixMdFieldKind =
@@ -73,6 +75,13 @@ export interface ShuvixMdTypeDescriptor {
   fields: ShuvixMdFieldSpec[]
 }
 
+/** 对象 id 行：agent / policy / hook / bot 四类都有，卡上不显示（见 ShuvixMdFieldKind 的 hidden） */
+const OBJECT_ID_FIELD: ShuvixMdFieldSpec = {
+  key: SHUVIX_ID_KEY,
+  labelKey: 'notebook.frontmatter.objectId',
+  kind: 'hidden'
+}
+
 /** agent 档案的模型键 —— 属性卡据它把槽位分派给 ModelSelect（唯一走模型选择器的键） */
 export const AGENT_MODEL_KEY = 'shuvix-model'
 
@@ -91,7 +100,8 @@ const AGENT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: AGENT_THINKING_KEY, labelKey: 'tool.subAgentThinking', kind: 'select' },
     { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
     { key: 'shuvix-instruction-files', labelKey: 'tool.subAgentInstructionFiles', kind: 'csv' },
-    { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' }
+    { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' },
+    OBJECT_ID_FIELD
   ]
 }
 
@@ -109,7 +119,8 @@ const POLICY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
     { key: 'shuvix-policy-scope', labelKey: 'settings.policyScope', kind: 'conditions' },
     { key: 'shuvix-policy-lets', labelKey: 'settings.policyLets', kind: 'exprMap' },
-    { key: 'shuvix-policy-rules', labelKey: 'settings.policyRules', kind: 'policyRules' }
+    { key: 'shuvix-policy-rules', labelKey: 'settings.policyRules', kind: 'policyRules' },
+    OBJECT_ID_FIELD
   ]
 }
 
@@ -148,7 +159,8 @@ const HOOK_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
     { key: 'shuvix-hook-agent', labelKey: 'settings.hookAgent', kind: 'mono' },
-    { key: 'shuvix-hook-on', labelKey: 'settings.hookOn', kind: 'hookBindings' }
+    { key: 'shuvix-hook-on', labelKey: 'settings.hookOn', kind: 'hookBindings' },
+    OBJECT_ID_FIELD
   ]
 }
 
@@ -166,7 +178,8 @@ const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   fields: [
     { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
-    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' }
+    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
+    OBJECT_ID_FIELD
   ]
 }
 

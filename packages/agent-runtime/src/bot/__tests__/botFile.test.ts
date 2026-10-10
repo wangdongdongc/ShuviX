@@ -500,8 +500,10 @@ describe('PS —— 序列化（与解析互逆）', () => {
     // 唯一调用点在「新建 bot」的模板生成里
     expect(service).toMatch(/newBotTemplate\([\s\S]*?serializeBotDefinitionFile\(/)
     // 而本服务从不改写已有文件：唯一一处写盘是 create 落在新派生路径上的那份原文
+    // （原文只多补一行 shuvix-id —— 单行文本插入，不经序列化器）
     expect(service.match(/writeFileAtomic\(/g)).toHaveLength(1)
-    expect(service).toContain('writeFileAtomic(filePath, text)')
+    expect(service).toContain('ensureObjectId(text,')
+    expect(service).toContain('writeFileAtomic(filePath, content)')
   })
 })
 
@@ -514,8 +516,10 @@ describe('PD —— 属性卡描述符与解析器的对齐', () => {
     const descriptor = SHUVIX_MD_DESCRIPTORS.find((d) => d.type === BOT_FILE_MARKER_TYPE)!
     const cardKeys = descriptor.fields.map((f) => f.key)
     // 刻意写成字面量而不是引常量：两边都引常量就什么都钉不住
-    expect([...cardKeys].sort()).toEqual(['description', 'name', 'shuvix-displayName'])
+    expect([...cardKeys].sort()).toEqual(['description', 'name', 'shuvix-displayName', 'shuvix-id'])
     expect(cardKeys).not.toContain(SHUVIX_MARKER_KEY)
+    // 对象 id 解析器读、卡上不显示（hidden）—— 列进描述符只为不落通用行
+    expect(descriptor.fields.find((f) => f.key === 'shuvix-id')?.kind).toBe('hidden')
     expect(BOT_FILE_MARKER_KEY).toBe(SHUVIX_MARKER_KEY)
 
     // 正文（人设与记忆）不是 frontmatter 字段，所以卡上没有它 —— 那是文档本身
@@ -523,6 +527,114 @@ describe('PD —— 属性卡描述符与解析器的对齐', () => {
     // 没有管线/工具/模型字段：v2 相对 v1 的全部差别就在这里
     for (const gone of ['shuvix-bot-pipeline', 'shuvix-tools', 'shuvix-model']) {
       expect(cardKeys, gone).not.toContain(gone)
+    }
+  })
+})
+
+// ─────────────── OID：shuvix-id 对象 id ───────────────
+
+/**
+ * OID —— `shuvix-id` 对象 id（ShuviX 扩展元数据只认它，契约见 chat-protocol mdMeta.ts）。
+ * 写错的 id **不连累文件**：按「没有 id」读（结果里没有 objectId 键），发恰一条软提示；
+ * 写对了归一后进 objectId。解析器不核对 id 的 kind。序列化恒把 id 写在标记之后。
+ */
+describe('OID —— shuvix-id 对象 id', () => {
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  /** 最小 bot 文件；idLine 插在标记之后（省略 = 不写 id） */
+  const withId = (idLine?: string, ...extra: string[]): string =>
+    md(
+      '---',
+      'shuvix: bot v2',
+      ...(idLine === undefined ? [] : [idLine]),
+      'name: b1',
+      'description: d',
+      ...extra,
+      '---',
+      'Persona.'
+    )
+  const BASE = parseWithWarn(withId()).result!
+
+  it('OID-1 合法 UUID（大写写法）→ objectId 归一为小写，零告警，其余字段不变', () => {
+    const { result, messages } = parseWithWarn(withId(`shuvix-id: ${U.toUpperCase()}`))
+    expect(messages).toEqual([])
+    expect(result).toEqual({ ...BASE, objectId: U })
+  })
+
+  it('OID-2 本类内置 id → 原样', () => {
+    const { result, messages } = parseWithWarn(withId('shuvix-id: bot:builtin:scout'))
+    expect(messages).toEqual([])
+    expect(result?.objectId).toBe('bot:builtin:scout')
+  })
+
+  it('OID-3 别类的内置 id 也收、零告警（解析器不核对 kind）', () => {
+    const { result, messages } = parseWithWarn(withId('shuvix-id: agent:builtin:explore'))
+    expect(messages).toEqual([])
+    expect(result?.objectId).toBe('agent:builtin:explore')
+  })
+
+  it.each([
+    'shuvix-id: nope',
+    "shuvix-id: ''",
+    'shuvix-id:',
+    'shuvix-id: 123',
+    'shuvix-id: [a]',
+    'shuvix-id: {a: 1}',
+    "shuvix-id: 'agent:builtin:'",
+    'shuvix-id: skill:builtin:x',
+    'shuvix-id: true'
+  ])(
+    'OID-4 写坏的 `%s` → 文件照常合法、没有 objectId 键、恰一条点名 shuvix-id 与主语的软提示',
+    (line) => {
+      const { result, messages } = parseWithWarn(withId(line))
+      expect(result).not.toBeNull()
+      expect('objectId' in result!).toBe(false)
+      expect(result).toEqual(BASE)
+      expect(messages).toHaveLength(1)
+      expect(messages[0]).toContain("bot 'b1'")
+      expect(messages[0]).toContain("'shuvix-id'")
+      expect(messages[0]).not.toContain('the whole file is rejected')
+    }
+  )
+
+  it('OID-5 没写 → 没有 objectId 键、零告警', () => {
+    const { result, messages } = parseWithWarn(withId())
+    expect(messages).toEqual([])
+    expect('objectId' in result!).toBe(false)
+  })
+
+  it('OID-6 标记类型不符（agent v1）的文件带着坏 id → null；诊断只有拒绝原因', () => {
+    const reason = rejectReason(
+      withId('shuvix-id: nope').replace('shuvix: bot v2', 'shuvix: agent v1')
+    )
+    expect(reason).toContain('is not a bot file')
+    expect(reason).not.toContain("'shuvix-id'")
+  })
+
+  it('OID-7 坏 id + v1 管线残留：照常合法，两条软提示，id 那条在最后', () => {
+    const { result, messages } = parseWithWarn(
+      withId('shuvix-id: nope', 'shuvix-bot-pipeline:', '  workflow: bot-chat')
+    )
+    expect(result).not.toBeNull()
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toContain("'shuvix-bot-pipeline' is no longer used")
+    expect(messages[1]).toContain("'shuvix-id'")
+  })
+
+  it('OID-10 序列化：id 紧跟标记、其余键序不变；未声明 / 空串不写；往返保真（UUID 与内置 id）', () => {
+    const data = { name: 'b1', displayName: 'Bot One', description: 'd', body: 'Persona.' }
+    const without = serializeBotDefinitionFile(data)
+    expect(without).not.toMatch(/^shuvix-id:/m)
+    expect(serializeBotDefinitionFile({ ...data, objectId: '' })).toBe(without)
+
+    for (const id of [U, 'bot:builtin:b1']) {
+      const text = serializeBotDefinitionFile({ ...data, objectId: id })
+      expect(text.split('\n').slice(1, 4)).toEqual([
+        `${BOT_FILE_MARKER_KEY}: ${BOT_FILE_MARKER}`,
+        `shuvix-id: ${id}`,
+        'name: b1'
+      ])
+      expect(text.replace(`shuvix-id: ${id}\n`, '')).toBe(without)
+      expect(parseBotDefinitionFile(text, 'x')).toEqual({ ...data, objectId: id })
     }
   })
 })

@@ -106,7 +106,17 @@
       "okfResource": "Bound to",
       "okfSources": "Sources",
       "okfGenerated": "Written by",
-      "okfVerified": "Verified by"
+      "okfVerified": "Verified by",
+      "objectId": "Object ID",
+      "metaTitle": "ShuviX settings",
+      "metaHint": "Stored in ShuviX, not in this file. They only fill in keys this file doesn't write — whatever the file writes wins. The first setting you make writes a shuvix-id line into the file: settings find the file by it.",
+      "metaSaving": "Saving…",
+      "metaNotSaved": "The object id didn’t reach the file in time. Try again.",
+      "metaCannotAssign": "Couldn’t write an object id into this file’s frontmatter. Add a line `shuvix-id: <uuid>` by hand and try again.",
+      "metaDeclared": "The file writes this key, so the file’s value is used.",
+      "metaRegenerate": "New id",
+      "metaRegenerateHint": "Give this file a new object id. It stops sharing settings with its copies; the settings stay with the old id. Undo puts the old id back.",
+      "metaWriteFailed": "Couldn’t save the setting ({{reason}})"
     },
     "saving": "Saving…",
     "saved": "Saved",

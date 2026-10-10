@@ -4,6 +4,7 @@ import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking
 import {
   parseAgentDefinitionFile,
   serializeAgentDefinitionFile,
+  validateAgentFill,
   AGENT_FILE_MARKER,
   AGENT_FILE_MARKER_KEY,
   type ParsedAgentFile
@@ -917,8 +918,11 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       'shuvix-thinking',
       'shuvix-tools',
       'shuvix-instruction-files',
-      'shuvix-project-awareness'
+      'shuvix-project-awareness',
+      'shuvix-id'
     ])
+    // 对象 id 解析器读、卡上不显示（hidden）—— 列进描述符只为不落通用行
+    expect(agentDescriptor.fields.find((f) => f.key === 'shuvix-id')?.kind).toBe('hidden')
 
     // boolean kind 的键 = 解析器强制布尔的唯一一个（非布尔即整份非法）
     const booleanKeys = agentDescriptor.fields
@@ -950,5 +954,365 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
     const parsed = parseAgentDefinitionFile('---\nname: x\nshuvix-builtin: true\n---\nbody', 'x')!
     expect(agentDescriptor.fields.some((f) => f.key === 'shuvix-builtin')).toBe(false)
     expect(Object.values(parsed)).not.toContain('shuvix-builtin')
+  })
+})
+
+/**
+ * OID —— `shuvix-id` 对象 id（ShuviX 扩展元数据只认它，契约见 chat-protocol mdMeta.ts）。
+ * 写错的 id **不连累文件**：按「没有 id」读（结果里没有 objectId 键），发恰一条软提示（属性卡亮琥珀）；
+ * 写对了归一后进 objectId。解析器不核对 id 的 kind 与文件类型是否一致。序列化恒把 id 写在标记之后。
+ */
+describe('OID —— shuvix-id 对象 id', () => {
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  /** 最小 agent 文件；idLine 插在标记之后（省略 = 不写 id） */
+  const withId = (idLine?: string): string =>
+    [
+      '---',
+      'shuvix: agent v1',
+      ...(idLine === undefined ? [] : [idLine]),
+      'name: a1',
+      'description: d',
+      'shuvix-tools: read, grep',
+      '---',
+      '',
+      'Body.'
+    ].join('\n')
+  const parse = (raw: string): { parsed: ParsedAgentFile | null; warns: string[] } => {
+    const warns: string[] = []
+    const parsed = parseAgentDefinitionFile(raw, 'fallback', (m) => warns.push(m))
+    return { parsed, warns }
+  }
+  const BASE = parse(withId()).parsed!
+
+  it('OID-1 合法 UUID（大写写法）→ objectId 归一为小写，零告警，其余字段不变', () => {
+    const { parsed, warns } = parse(withId(`shuvix-id: ${U.toUpperCase()}`))
+    expect(warns).toEqual([])
+    expect(parsed).toEqual({ ...BASE, objectId: U })
+  })
+
+  it('OID-2 本类内置 id → 原样', () => {
+    const { parsed, warns } = parse(withId('shuvix-id: agent:builtin:explore'))
+    expect(warns).toEqual([])
+    expect(parsed?.objectId).toBe('agent:builtin:explore')
+  })
+
+  it('OID-3 别类的内置 id 也收、零告警（解析器不核对 kind）', () => {
+    const { parsed, warns } = parse(withId('shuvix-id: hook:builtin:auto-title'))
+    expect(warns).toEqual([])
+    expect(parsed?.objectId).toBe('hook:builtin:auto-title')
+  })
+
+  it.each([
+    'shuvix-id: nope',
+    "shuvix-id: ''",
+    'shuvix-id:',
+    'shuvix-id: 123',
+    'shuvix-id: [a]',
+    'shuvix-id: {a: 1}',
+    "shuvix-id: 'agent:builtin:'",
+    'shuvix-id: skill:builtin:x',
+    'shuvix-id: true'
+  ])(
+    'OID-4 写坏的 `%s` → 文件照常合法、没有 objectId 键、恰一条点名 shuvix-id 与主语的软提示',
+    (line) => {
+      const { parsed, warns } = parse(withId(line))
+      expect(parsed).not.toBeNull()
+      expect('objectId' in parsed!).toBe(false)
+      expect(parsed).toEqual(BASE)
+      expect(warns).toHaveLength(1)
+      expect(warns[0]).toContain("agent 'a1'")
+      expect(warns[0]).toContain("'shuvix-id'")
+      expect(warns[0]).not.toContain('the whole file is rejected')
+    }
+  )
+
+  it('OID-5 没写 → 没有 objectId 键、零告警', () => {
+    const { parsed, warns } = parse(withId())
+    expect(warns).toEqual([])
+    expect('objectId' in parsed!).toBe(false)
+  })
+
+  it('OID-6 整份非法的文件带着坏 id → null；诊断只有拒绝原因，不提 shuvix-id', () => {
+    const raw = withId('shuvix-id: nope').replace('shuvix-tools: read, grep', 'shuvix-tools: [a]')
+    const { parsed, warns } = parse(raw)
+    expect(parsed).toBeNull()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain("'shuvix-tools'")
+    expect(warns[0]).toContain('the whole file is rejected')
+    expect(warns[0]).not.toContain("'shuvix-id'")
+  })
+
+  it('OID-10 序列化：id 紧跟标记、其余键序不变；未声明 / 空串不写；往返保真（UUID 与内置 id）', () => {
+    const data: ParsedAgentFile = {
+      name: 'a1',
+      displayName: 'Agent One',
+      description: 'd',
+      systemPrompt: 'Body.',
+      tools: ['read'],
+      model: 'openai/gpt-5',
+      instructionFiles: ['AGENTS.md'],
+      projectAwareness: true
+    }
+    const without = serializeAgentDefinitionFile(data)
+    expect(without).not.toMatch(/^shuvix-id:/m)
+    expect(serializeAgentDefinitionFile({ ...data, objectId: '' })).toBe(without)
+
+    for (const id of [U, 'agent:builtin:explore']) {
+      const md = serializeAgentDefinitionFile({ ...data, objectId: id })
+      const lines = md.split('\n')
+      expect(lines.slice(1, 4)).toEqual([
+        `${AGENT_FILE_MARKER_KEY}: ${AGENT_FILE_MARKER}`,
+        `shuvix-id: ${id}`,
+        'name: a1'
+      ])
+      expect(md.replace(`shuvix-id: ${id}\n`, '')).toBe(without)
+      expect(parseAgentDefinitionFile(md, 'x')).toEqual({ ...data, objectId: id })
+    }
+  })
+})
+
+/**
+ * FILL —— ShuviX 扩展元数据的补缺值（`options.fill`，契约见 chat-protocol mdMeta.ts）。
+ * **md 优先，只补缺**：文件没写（含 null / 空白串）的白名单键（只有 shuvix-model / shuvix-thinking）才补；
+ * 身份键与白名单外的键一律不补（解析器自己再筛一遍，宿主交什么都放宽不了别的键）；补完走同一套字段校验，
+ * 合并结果不合法 → 整体弃用补缺、按文件本身解析，并恰发一条 warn —— 补缺值不能把一份好文件弄坏。
+ * 没有（合法）id 的文件不问 fill；整份非法的文件在问 fill 之前就被拒。
+ */
+describe('FILL —— 扩展元数据补缺', () => {
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  const U_UP = U.toUpperCase()
+  /** 最小 agent 文件：标记 + 可选 id 行 + 可选额外行 */
+  const file = (idLine: string | null, extra: string[] = [], withName = true): string =>
+    [
+      '---',
+      'shuvix: agent v1',
+      ...(idLine === null ? [] : [idLine]),
+      ...(withName ? ['name: f1'] : []),
+      'description: fill fixture',
+      'shuvix-tools: read',
+      ...extra,
+      '---',
+      '',
+      'Fill body.'
+    ].join('\n')
+  type FillFn = (objectId: string) => Record<string, unknown> | undefined
+  const parse = (
+    raw: string,
+    fill?: FillFn
+  ): { parsed: ParsedAgentFile | null; warns: string[] } => {
+    const warns: string[] = []
+    const parsed = parseAgentDefinitionFile(
+      raw,
+      'fallback',
+      (m) => warns.push(m),
+      fill ? { fill } : undefined
+    )
+    return { parsed, warns }
+  }
+  /** 记录调用的补缺读口 */
+  const spyFill = (
+    answer: Record<string, unknown> | undefined
+  ): { fn: FillFn; calls: string[] } => {
+    const calls: string[] = []
+    return {
+      calls,
+      fn: (id) => {
+        calls.push(id)
+        return answer
+      }
+    }
+  }
+
+  it('FILL-1 文件没写模型与档位、带大写 UUID → 两者补上；其余字段与不补时逐项相同；读口恰调一次、收到小写 id；零告警', () => {
+    const raw = file(`shuvix-id: ${U_UP}`)
+    const base = parse(raw).parsed!
+    const fill = spyFill({ 'shuvix-model': 'p/m', 'shuvix-thinking': 'high' })
+    const { parsed, warns } = parse(raw, fill.fn)
+    expect(warns).toEqual([])
+    expect(fill.calls).toEqual([U])
+    expect(parsed).toEqual({ ...base, model: 'p/m', thinkingLevel: 'high' })
+  })
+
+  it('FILL-2 文件写了 shuvix-thinking: low → 档位以文件为准，没写的模型照补', () => {
+    const fill = spyFill({ 'shuvix-thinking': 'high', 'shuvix-model': 'p/m' })
+    const { parsed, warns } = parse(file(`shuvix-id: ${U}`, ['shuvix-thinking: low']), fill.fn)
+    expect(warns).toEqual([])
+    expect(parsed?.thinkingLevel).toBe('low')
+    expect(parsed?.model).toBe('p/m')
+  })
+
+  it.each([
+    ['shuvix-model:', 'shuvix-model', 'p/m'],
+    ["shuvix-model: ''", 'shuvix-model', 'p/m'],
+    ["shuvix-model: '   '", 'shuvix-model', 'p/m'],
+    ["shuvix-thinking: ''", 'shuvix-thinking', 'high'],
+    ['shuvix-thinking:', 'shuvix-thinking', 'high']
+  ])('FILL-3 文件写成空值 `%s` 与没写同义 → 补缺值生效', (line, key, value) => {
+    const fill = spyFill({ [key]: value })
+    const { parsed, warns } = parse(file(`shuvix-id: ${U}`, [line]), fill.fn)
+    expect(warns).toEqual([])
+    if (key === 'shuvix-model') expect(parsed?.model).toBe(value)
+    else expect(parsed?.thinkingLevel).toBe(value)
+  })
+
+  it('FILL-4 身份键永不补：没写 name 的文件收到 name / shuvix / shuvix-id 的补缺 → 名字仍是 defaultName、id 仍是文件自己的，整体与不补相同，零告警', () => {
+    const raw = file(`shuvix-id: ${U}`, [], false)
+    const base = parse(raw).parsed!
+    expect(base.name).toBe('fallback')
+    const fill = spyFill({
+      name: 'hijack',
+      shuvix: 'bot v2',
+      'shuvix-id': 'agent:builtin:other'
+    })
+    const { parsed, warns } = parse(raw, fill.fn)
+    expect(warns).toEqual([])
+    expect(parsed).toEqual(base)
+    expect(parsed?.name).toBe('fallback')
+    expect(parsed?.objectId).toBe(U)
+  })
+
+  it('FILL-5 合并结果不合法（档位 max）→ 一项都不补（连合法的模型也不补）、恰一条告警点明原因，文件照常可用', () => {
+    const raw = file(`shuvix-id: ${U}`)
+    const base = parse(raw).parsed!
+    const fill = spyFill({ 'shuvix-model': 'p/m', 'shuvix-thinking': 'max' })
+    const { parsed, warns } = parse(raw, fill.fn)
+    expect(parsed).not.toBeNull()
+    expect(parsed).toEqual(base)
+    expect(parsed?.model).toBeUndefined()
+    expect(parsed?.thinkingLevel).toBeUndefined()
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('ShuviX settings not applied')
+    expect(warns[0]).toContain("'shuvix-thinking' must be one of")
+    expect(warns[0]).not.toContain('the whole file is rejected')
+  })
+
+  it.each([
+    [{ 'shuvix-model': 42 }, "'shuvix-model'"],
+    [{ 'shuvix-model': ['a'] }, "'shuvix-model'"],
+    [{ 'shuvix-thinking': true }, "'shuvix-thinking'"]
+  ])('FILL-6 类型不符的补缺 %j → 丢弃、恰一条告警', (answer, keyName) => {
+    const raw = file(`shuvix-id: ${U}`)
+    const base = parse(raw).parsed!
+    const { parsed, warns } = parse(raw, spyFill(answer).fn)
+    expect(parsed).toEqual(base)
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain('ShuviX settings not applied')
+    expect(warns[0]).toContain(keyName)
+  })
+
+  it('FILL-7 没有 id → 不问读口；写坏的 id → 也不问，只有那条 id 告警、没有「settings not applied」', () => {
+    const none = spyFill({ 'shuvix-model': 'p/m' })
+    const r1 = parse(file(null), none.fn)
+    expect(none.calls).toEqual([])
+    expect(r1.warns).toEqual([])
+    expect(r1.parsed?.model).toBeUndefined()
+
+    const bad = spyFill({ 'shuvix-model': 'p/m' })
+    const r2 = parse(file('shuvix-id: nope'), bad.fn)
+    expect(bad.calls).toEqual([])
+    expect(r2.parsed?.model).toBeUndefined()
+    expect(r2.warns).toHaveLength(1)
+    expect(r2.warns[0]).toContain("'shuvix-id'")
+    expect(r2.warns[0]).not.toContain('ShuviX settings not applied')
+  })
+
+  it.each([
+    ['undefined', undefined],
+    ['{}', {}],
+    ["{'shuvix-model': undefined}", { 'shuvix-model': undefined }]
+  ])('FILL-8 读口回 %s → 与不补完全相同、零告警', (_label, answer) => {
+    const raw = file(`shuvix-id: ${U}`)
+    const base = parse(raw).parsed!
+    const { parsed, warns } = parse(raw, spyFill(answer).fn)
+    expect(warns).toEqual([])
+    expect(parsed).toEqual(base)
+  })
+
+  it('FILL-9 整份非法的文件（带合法 id）→ null，读口从未被问，诊断只有拒绝原因', () => {
+    const fill = spyFill({ 'shuvix-model': 'p/m' })
+    const { parsed, warns } = parse(
+      file(`shuvix-id: ${U}`, ['shuvix-project-awareness: yes please']),
+      fill.fn
+    )
+    expect(parsed).toBeNull()
+    expect(fill.calls).toEqual([])
+    expect(warns).toHaveLength(1)
+    expect(warns[0]).toContain("'shuvix-project-awareness'")
+    expect(warns[0]).toContain('the whole file is rejected')
+  })
+
+  it('FILL-10 内置形态的 id → 读口收到的就是这串原文', () => {
+    const fill = spyFill(undefined)
+    parse(file('shuvix-id: agent:builtin:explore'), fill.fn)
+    expect(fill.calls).toEqual(['agent:builtin:explore'])
+  })
+
+  it('FILL-11 补缺的档位大写 HIGH → 归一为 high', () => {
+    const { parsed, warns } = parse(
+      file(`shuvix-id: ${U}`),
+      spyFill({ 'shuvix-thinking': 'HIGH' }).fn
+    )
+    expect(warns).toEqual([])
+    expect(parsed?.thinkingLevel).toBe('high')
+  })
+
+  it('FILL-12 白名单外的键补不进来：没写工具的文件收到 shuvix-tools → 仍是空白名单；description / project-awareness 同样无视；零告警', () => {
+    const noTools = [
+      '---',
+      'shuvix: agent v1',
+      `shuvix-id: ${U}`,
+      'name: f12',
+      '---',
+      '',
+      'Body.'
+    ].join('\n')
+    const base = parse(noTools).parsed!
+    expect(base.tools).toEqual([])
+
+    const r1 = parse(noTools, spyFill({ 'shuvix-tools': 'bash' }).fn)
+    expect(r1.warns).toEqual([])
+    expect(r1.parsed?.tools).toEqual([])
+    expect(r1.parsed).toEqual(base)
+
+    const r2 = parse(noTools, spyFill({ description: 'x', 'shuvix-project-awareness': true }).fn)
+    expect(r2.warns).toEqual([])
+    expect(r2.parsed).toEqual(base)
+    expect(r2.parsed?.description).toBe('')
+    expect(r2.parsed?.projectAwareness).toBe(false)
+  })
+})
+
+/**
+ * validateAgentFill —— 属性卡写补缺值之前的校验：与解析器同一套字段校验，返回拒绝原因，null = 接受。
+ */
+describe('validateAgentFill', () => {
+  it.each([
+    ['{}', {}],
+    ['模型 p/m', { 'shuvix-model': 'p/m' }],
+    ['裸模型 id', { 'shuvix-model': 'bare-id' }],
+    ...SELECTABLE_THINKING_LEVELS.map(
+      (level) =>
+        [`档位 ${level}`, { 'shuvix-thinking': level }] as [string, Record<string, unknown>]
+    ),
+    ['档位大写 HIGH', { 'shuvix-thinking': 'HIGH' }],
+    ['档位空串', { 'shuvix-thinking': '' }],
+    ['模型空串', { 'shuvix-model': '' }]
+  ])('VF-1 接受：%s → null', (_label, fill) => {
+    expect(validateAgentFill(fill)).toBeNull()
+  })
+
+  it('VF-2 拒绝：档位 max（列出全部档位）/ 布尔档位 / 数字模型 / 数组模型（点名 shuvix-model）', () => {
+    const max = validateAgentFill({ 'shuvix-thinking': 'max' })
+    expect(max).toContain("'shuvix-thinking'")
+    for (const level of SELECTABLE_THINKING_LEVELS) expect(max).toContain(level)
+    expect(validateAgentFill({ 'shuvix-thinking': true })).toContain("'shuvix-thinking'")
+    expect(validateAgentFill({ 'shuvix-model': 42 })).toContain("'shuvix-model'")
+    expect(validateAgentFill({ 'shuvix-model': ['x'] })).toContain("'shuvix-model'")
+  })
+
+  it('VF-3 白名单外的键也走同一套校验：project-awareness 写成字符串 → 报错', () => {
+    expect(validateAgentFill({ 'shuvix-project-awareness': 'yes' })).toContain(
+      "'shuvix-project-awareness'"
+    )
   })
 })

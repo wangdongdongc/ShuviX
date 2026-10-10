@@ -1,5 +1,6 @@
 ---
 shuvix: agent v1
+shuvix-id: agent:builtin:tab
 shuvix-builtin: true
 name: tab
 description: 标签页智能体 —— Chrome 标签页会话（用户自己的 Chrome 里的 ShuviX 侧边栏）的基座档案，帮用户处理他在已登录的浏览器里开着的页面。

@@ -8,7 +8,10 @@
 import { describe, it, expect } from 'vitest'
 import { AGENT_THINKING_KEY, SHUVIX_MD_DESCRIPTORS, descriptorForType } from './shuvixMdDescriptors'
 import { OKF_STATUS_KEY, OKF_TYPE_KEY } from './knowledge'
+import { SHUVIX_ID_KEY } from './mdMeta'
 import en from './i18n/locales/en.json'
+import ja from './i18n/locales/ja.json'
+import zh from './i18n/locales/zh.json'
 
 describe('okf 描述符 ↔ 知识库契约', () => {
   const byKey = (): Record<string, string> => {
@@ -98,5 +101,42 @@ describe('全部描述符的 labelKey 均存在于 en 文案', () => {
         expect(typeof node, `${d.type} ${f.key} → ${f.labelKey}`).toBe('string')
       }
     }
+  })
+})
+
+/**
+ * 对象 id 行（`shuvix-id`，md 扩展元数据只认它，见 mdMeta.ts）：能挂元数据的四类文件都列着它、
+ * 且恒为 hidden —— 列进描述符只为不落通用行（一串 UUID 摆在卡上只是噪音，也不该被当普通字段随手改）。
+ * 不挂元数据的那几类（知识库条目、SKILL.md、记忆）不列它：列了就是在卡上凭空认领一个它们没有的键。
+ */
+describe('对象 id 行（shuvix-id）', () => {
+  const lookup = (tree: unknown, key: string): unknown =>
+    key
+      .split('.')
+      .reduce<unknown>((node, seg) => (node as Record<string, unknown> | undefined)?.[seg], tree)
+
+  it.each(['agent', 'bot', 'hook', 'policy'])(
+    'SMD-ID1 %s：恰一个 shuvix-id 字段，kind hidden，标签 notebook.frontmatter.objectId 三语都有',
+    (type) => {
+      const fields = descriptorForType(type)!.fields.filter((f) => f.key === SHUVIX_ID_KEY)
+      expect(fields).toHaveLength(1)
+      expect(fields[0].kind).toBe('hidden')
+      expect(fields[0].labelKey).toBe('notebook.frontmatter.objectId')
+      for (const [lang, tree] of [
+        ['en', en],
+        ['zh', zh],
+        ['ja', ja]
+      ] as const) {
+        const label = lookup(tree, fields[0].labelKey)
+        expect(typeof label, lang).toBe('string')
+        expect((label as string).trim(), lang).not.toBe('')
+      }
+    }
+  )
+
+  it.each(['okf', 'skill', 'memory'])('SMD-ID2 %s 不列 shuvix-id', (type) => {
+    const d = descriptorForType(type)
+    expect(d, type).toBeTruthy()
+    expect(d!.fields.map((f) => f.key)).not.toContain('shuvix-id')
   })
 })
