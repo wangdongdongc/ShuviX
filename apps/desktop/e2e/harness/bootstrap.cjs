@@ -16,13 +16,109 @@
  *
  * 同理 `shell.openExternal` 换成记录器（见 EXTERNAL_OPEN_LOG）：e2e 永远不该在开发者的机器上打开
  * 系统浏览器（订阅登录会自动打开验证页 / 授权页），spec 读这个文件断言「打开了哪个地址」。
+ *
+ * 最后，实例**不能活过 harness**（instanceGuards.cjs 记着那次把磁盘写满的事故）：stdout / stderr 管道
+ * 断了、或 launcher 进程没了，就不再写控制台、直接退出；本文件追加的每个文件都有上限。
  */
 const electron = require('electron')
 const { app, dialog, ipcMain } = electron
-const { appendFileSync } = require('fs')
 const { join } = require('path')
+const {
+  createBoundedAppender,
+  isBrokenPipe,
+  launcherPidFromEnv,
+  watchLauncher
+} = require('./instanceGuards.cjs')
 const userData = process.env.SHUVIX_VERIFY_USERDATA
 if (userData) app.setPath('userData', userData)
+
+/** 本文件往 userData 里追加的所有记录都走它：每个文件到 5 MB 封顶（见 instanceGuards.cjs） */
+const appendBounded = createBoundedAppender()
+
+/** harness 已经不在的判定落地后写的记录（在 userData 下；一行：时间 + 原因）—— 取证与 spec 用 */
+const HARNESS_GONE_LOG = 'e2e-harness-gone.log'
+
+/** 已判定 harness 不在、正在退出：此后不再写控制台，也不再记录任何东西 */
+let harnessGone = false
+
+/** 把 stdout / stderr 的 write 换成空操作（照样回调，免得有人等回调）：管道那头已经没人了 */
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+function silenceStdio() {
+  // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 同上
+  const swallow = (_chunk, encoding, cb) => {
+    const done = typeof encoding === 'function' ? encoding : cb
+    if (typeof done === 'function') process.nextTick(done)
+    return true
+  }
+  for (const stream of [process.stdout, process.stderr]) {
+    try {
+      stream.write = swallow
+    } catch {
+      /* 换不上也照样退出 */
+    }
+  }
+}
+
+/**
+ * harness 不在了（管道断了 / launcher 没了）：静音控制台、记一行原因、立刻退出。
+ *
+ * `app.exit` 不走 before-quit —— 没人等这个实例的数据。Chromium 的原生收尾在窗口上屏后 ~15 秒内
+ * 可能要等 GPU（见下面 JS_EXITED_MARKER），所以 5 秒后还没走完就 SIGKILL 自己：GPU / 渲染子进程
+ * 会随主进程的 IPC 通道断开而退出。
+ */
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+function leaveBecauseHarnessGone(reason) {
+  if (harnessGone) return
+  harnessGone = true
+  silenceStdio()
+  if (userData)
+    appendBounded(join(userData, HARNESS_GONE_LOG), `${new Date().toISOString()} ${reason}\n`)
+  setTimeout(() => {
+    try {
+      process.kill(process.pid, 'SIGKILL')
+    } catch {
+      /* 已经在退 */
+    }
+  }, 5000).unref()
+  try {
+    app.exit(0)
+  } catch {
+    process.exit(0)
+  }
+}
+
+/** stdout / stderr 是否已经坏了（对端关闭后流被销毁） */
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+function stdioBroken() {
+  return [process.stdout, process.stderr].some((s) => s.destroyed || s.writable === false)
+}
+
+/**
+ * 常驻的 stdio 'error' 监听 —— 事故的第一环就断在这里。Node 的 console 只在写调用期间挂一个临时
+ * 'error' 监听，异步到达的 EPIPE 没人接就成了 uncaughtException；有了这个监听它就到不了那一步。
+ * 管道断了 = harness 不在；别的 stdio 错误记一条（有上限）就算了，不能让它变成未捕获异常。
+ */
+for (const [name, stream] of [
+  ['stdout', process.stdout],
+  ['stderr', process.stderr]
+]) {
+  stream.on('error', (err) => {
+    if (isBrokenPipe(err)) {
+      leaveBecauseHarnessGone(`${name} pipe closed (${err.code})`)
+    } else if (userData && !harnessGone) {
+      appendBounded(
+        join(userData, 'e2e-uncaught.log'),
+        `[e2e] ${name} error: ${(err && err.stack) || err}\n\n`
+      )
+    }
+  })
+}
+
+// 什么都不打日志时也要发现 launcher 没了：父进程 pid 变了，或 harness 传进来的 launcher pid 不在了
+watchLauncher({
+  launcherPid: launcherPidFromEnv(process.env),
+  onGone: (reason) => leaveBecauseHarnessGone(reason)
+})
 
 /** 原生「打开文件」框请求的记录文件名（在 userData 下；每行一个请求：方法名 + 选项 JSON） */
 const NATIVE_DIALOG_LOG = 'e2e-native-dialogs.log'
@@ -38,11 +134,8 @@ function recordNativeDialog(method, args) {
   } catch {
     detail = '(unserializable options)'
   }
-  try {
-    appendFileSync(join(userData, NATIVE_DIALOG_LOG), `${method} ${detail}\n`)
-  } catch {
-    // 记不下来也不能让调用方失败
-  }
+  // 记不下来（或到了上限）也不能让调用方失败：appendBounded 从不抛
+  appendBounded(join(userData, NATIVE_DIALOG_LOG), `${method} ${detail}\n`)
 }
 
 /**
@@ -50,16 +143,28 @@ function recordNativeDialog(method, args) {
  * 又一个 OS 级模态（spec 挂在那，框留在开发者屏幕上，而失败原因只在框里）。隔离实例改为把它记进
  * `<userData>/e2e-uncaught.log`（每条一段 stack）并打到 stderr，spec 可以断这个文件不存在 / 为空。
  * 挂上这个监听器 Electron 就不再弹框：它的缺省处理只在没有别的监听器时才弹。
+ *
+ * 记录器自己绝不能成环：harness 已不在就什么都不做；一个写坏掉的 stdio 得到的 EPIPE（上面的常驻监听
+ * 本该先接住，这里兜底）不算异常而是 harness 不在了；正在记录时又来一条（记录途中的写触发的）直接丢掉；
+ * 文件本身有上限。
  */
 const UNCAUGHT_LOG = 'e2e-uncaught.log'
+let recordingUncaught = false
 process.on('uncaughtException', (err) => {
-  const stack = (err && err.stack) || String(err)
-  process.stderr.write(`[e2e] uncaught exception in main: ${stack}\n`)
-  if (!userData) return
+  if (harnessGone) return
+  if (isBrokenPipe(err) && stdioBroken()) {
+    leaveBecauseHarnessGone(`stdio pipe closed (${err.code}, surfaced as an uncaught exception)`)
+    return
+  }
+  if (recordingUncaught) return
+  recordingUncaught = true
   try {
-    appendFileSync(join(userData, UNCAUGHT_LOG), `${stack}\n\n`)
-  } catch {
+    const stack = (err && err.stack) || String(err)
+    if (!stdioBroken()) process.stderr.write(`[e2e] uncaught exception in main: ${stack}\n`)
     // 记不下来也只能这样了：stderr 那一行还在实例输出里
+    if (userData) appendBounded(join(userData, UNCAUGHT_LOG), `${stack}\n\n`)
+  } finally {
+    recordingUncaught = false
   }
 })
 
@@ -75,11 +180,8 @@ const EXTERNAL_OPEN_LOG = 'e2e-external-open.log'
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
 async function recordExternalOpen(url) {
   if (!userData) return
-  try {
-    appendFileSync(join(userData, EXTERNAL_OPEN_LOG), `${String(url)}\n`)
-  } catch {
-    // 记不下来也不能让调用方失败
-  }
+  // 记不下来（或到了上限）也不能让调用方失败：appendBounded 从不抛
+  appendBounded(join(userData, EXTERNAL_OPEN_LOG), `${String(url)}\n`)
 }
 electron.shell.openExternal = recordExternalOpen
 // 换不上（某个 Electron 版本把 shell 冻住了）就别往下跑：宁可实例起不来，也不能真的打开浏览器

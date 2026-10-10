@@ -62,6 +62,8 @@ export interface MarkdownWindowTarget {
  */
 export interface E2EAppBase {
   port: number
+  /** 实例主进程（Electron 二进制本体）的 pid */
+  pid: number
   /** fake HOME（种子文件基于它，如 `${home}/.shuvix/agents`） */
   home: string
   /** ~/.shuvix/agents（惰性创建） */
@@ -297,14 +299,20 @@ function electronBinary(): string {
   return createRequire(import.meta.url)('electron') as string
 }
 
+/** launcher（本进程）的 pid 交给实例的环境变量名 —— 与 instanceGuards.cjs 的 LAUNCHER_PID_ENV 一致 */
+export const LAUNCHER_PID_ENV = 'SHUVIX_E2E_LAUNCHER_PID'
+
 /**
  * 隔离实例的环境：fake HOME + 重定向的 userData；剔除会让 electron 退化成纯 node 的变量。
- * `extra` 是 spec 追加的变量（`LaunchOptions.env`）—— 排在 HOME / userData 之前，盖不掉隔离。
+ * `extra` 是 spec 追加的变量（`LaunchOptions.env`）—— 排在 HOME / userData / launcher pid 之前，盖不掉。
  */
-function instanceEnv(home: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+export function instanceEnv(home: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...extra,
+    // 实例据此发现 launcher 没了就自己退出（bootstrap.cjs / instanceGuards.cjs 的 watchLauncher）——
+    // vitest 被掐断时 track() 的 'exit' 兜底根本来不及跑，孤儿实例曾把磁盘写满
+    [LAUNCHER_PID_ENV]: String(process.pid),
     HOME: home,
     SHUVIX_VERIFY_USERDATA: join(home, 'userdata')
   }
@@ -551,6 +559,7 @@ export async function launchApp(
 
     const base: E2EAppBase = {
       port,
+      pid: child.pid!,
       home,
       agentsDir,
       botsDir,
