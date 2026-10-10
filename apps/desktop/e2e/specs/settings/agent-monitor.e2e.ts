@@ -18,6 +18,9 @@
  *     注意 **turn-completed 的 echo hook 到 AM-5 才种进 hooksDir**：AM-3 断的是「恰一条」，
  *      hook 若 beforeAll 就装好，首轮收尾就会多出一个派生 entry（hooksDir 是指纹缓存的现扫，
  *     中途落盘下一轮即生效，见 hookService.scanCache）；AM-17 摘掉它，缓存段的会话因此不派生。
+ *     **hook 派生的 agent 跑完即卸**（cfb221cf，spawn.ts「hook agent 用完即卸」）：它只在干活时列着，
+ *     跑完不留一行闲着的。要看派生行（AM-5 / AM-6 / AM-16 / AM-24），就用 holdMs 扣住 echo 那一轮，
+ *     看完 `provider.release()` 并等它离开列表。
  *
  * 观测面：列表 / 详情数据一律走 IPC（`agent.monitorList` / `agent.monitorDetail`），DOM 只断
  * 呈现（相位灯配色与脉冲、血缘箭头、花费格、空态在屏、手风琴展开态、横幅标记）；空态文案是 i18n
@@ -288,6 +291,25 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
       return e?.phase === 'idle' ? e : null
     }, what)
 
+  /** 等这条会话的 echo-agent（hook 派生）在 IPC 列表里出现且正在干活（它的那一轮被 hold 扣着） */
+  const heldEcho = (sid: string, what: string): Promise<MonitorEntry> =>
+    until(async () => {
+      const e = (await monitorList(app.main)).find(
+        (x) => x.kind === 'spawned' && x.rootSessionId === sid && x.profileName === 'echo-agent'
+      )
+      return e?.phase === 'turn' ? e : null
+    }, what)
+
+  /** 等这条会话的派生行全部离开 IPC 列表（hook agent 跑完即卸，cfb221cf） */
+  const echoGone = (sid: string, what: string): Promise<true> =>
+    until(
+      async () =>
+        !(await monitorList(app.main)).some(
+          (x) => x.kind === 'spawned' && x.rootSessionId === sid
+        ) || null,
+      what
+    )
+
   it('AM-3 根 agent 上屏：恰一条 root entry（id = rootSessionId = sid、idle、模型 id、会话标题），行内无血缘箭头', async () => {
     const sid = await createSession('AM-3 monitor lane')
     sids.root = sid
@@ -339,7 +361,7 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     await idleEntry(sid, 'root entry back to idle')
   })
 
-  it('AM-5 血缘：turn-completed hook 派生的 agent 缩进跟随根行（同 rootSessionId、紧随其后、只有它有血缘箭头）', async () => {
+  it('AM-5 血缘：turn-completed hook 派生的 agent 干活时缩进跟随根行（同 rootSessionId、紧随其后、只有它有血缘箭头），跑完就离开列表', async () => {
     // hook 此刻才落盘：AM-3/AM-4 的轮次不能派生任何 agent（AM-3 的「恰一条」靠这个成立）
     writeAgentMd(app, 'echo-agent', { tools: 'read', body: 'ECHO AGENT BODY.' })
     mkdirSync(app.hooksDir, { recursive: true })
@@ -347,19 +369,13 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
 
     const sid = await createSession('AM-5 lineage lane')
     sids.lineage = sid
+    // hook agent 用完即卸（cfb221cf）：只在干活时列着 —— 扣住它那一轮才看得到这一行
     provider.script(
       { text: 'r1', when: rootRequest('lin-1') },
-      { text: 'echo-r', when: echoRequest(sid) }
+      { text: 'echo-r', holdMs: 20_000, when: echoRequest(sid) }
     )
     await promptTurn(sid, 'lin-1')
-
-    // AM-6 删会话的前提：派生 run 完全落回 idle（滞留而不是在跑）
-    await until(async () => {
-      const e = (await monitorList(app.main)).find(
-        (x) => x.kind === 'spawned' && x.rootSessionId === sid && x.profileName === 'echo-agent'
-      )
-      return e?.phase === 'idle' ? e : null
-    }, 'spawned echo agent back to idle')
+    await heldEcho(sid, 'spawned echo agent working')
 
     const list = await monitorList(app.main)
     const rootIdx = list.findIndex((e) => e.agentId === sid)
@@ -379,10 +395,27 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     expect(rows[rootIdx].arrow).toBe(false)
     expect(rows[spawnIdx].arrow).toBe(true)
     expect(await pane.rowsAdjacent(rootIdx, spawnIdx)).toBe(true)
+
+    // 放行：它跑完就卸掉，列表与 DOM 里只剩根那一行（任务页上的记录不归这里测）
+    provider.release()
+    await echoGone(sid, 'finished echo agent left the list')
+    const after = await monitorList(app.main)
+    expect(after.filter((e) => e.rootSessionId === sid).map((e) => e.kind)).toEqual(['root'])
+    await until(
+      async () => (await pane.rows()).length === after.length || null,
+      'monitor rows match the list after the echo left'
+    )
   })
 
-  it('AM-6 删会话：根行与它的派生行一起消失（没有孤儿）；没有 rootSessionExists 键；DOM 行与列表一致；不得有未捕获异常', async () => {
+  it('AM-6 删会话：根行与它（正在干活）的派生行一起消失（没有孤儿）；没有 rootSessionExists 键；DOM 行与列表一致；不得有未捕获异常', async () => {
     const sid = sids.lineage
+    // 派生行只在 hook agent 干活时存在（AM-5）：再扣住一轮 echo，趁它在跑删会话
+    provider.script(
+      { text: 'r2', when: rootRequest('lin-del') },
+      { text: 'echo-r2', holdMs: 20_000, when: echoRequest(sid) }
+    )
+    await promptTurn(sid, 'lin-del')
+    await heldEcho(sid, 'second echo agent working')
     const before = await monitorList(app.main)
     expect(before.filter((e) => e.rootSessionId === sid).length).toBe(2)
     const errorsBefore = await app.main.eval<string[]>('window.__e2e ?? []')
@@ -392,6 +425,8 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
       async () => !(await monitorList(app.main)).some((e) => e.rootSessionId === sid) || null,
       'every row of the deleted session gone'
     )
+    // 删会话会中止它的请求（hold 随客户端断开结束）；若还挂着也放掉，别留给后面的用例
+    provider.release()
     const after = await monitorList(app.main)
     for (const e of after) expect('rootSessionExists' in e).toBe(false)
     const rows = await until(async () => {
@@ -403,8 +438,8 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
   })
 
   // ── AM-11 ~ AM-17：对话区状态横幅的 profile 标记（AgentProfileChip）与监视面板联动 ──
-  // 此刻 echo hook 已装（AM-5），每条新会话的首轮都会自动派生一个 echo-agent（无脚本匹配
-  // 时 fakeProvider 回默认 "OK" 收尾）；列表里还有 AM-3 的根 —— 故所有
+  // 此刻 echo hook 已装（AM-5），每一轮收尾都会自动派生一个 echo-agent（无脚本匹配时 fakeProvider
+  // 回默认 "OK" 收尾）；它跑完即卸、只在干活的那一下列着（cfb221cf）。列表里还有 AM-3 的根 —— 故所有
   // 「恰 N 条」都按 sid 过滤做相对比较，不做全量计数。AM-7（详情手风琴）排在 AM-11 之后：它要两行。
 
   /**
@@ -425,6 +460,12 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
   it('AM-11 首轮后标记出现：内容 = 档案显示名（chat 的 displayName），idle 灰点不脉冲，横幅在屏', async () => {
     const sid = await openAndPrompt('AM-11 banner lane', 'banner-1')
     sids.banner = sid
+    // 这一轮派生的 echo 先跑完离开列表：AM-7 按下标点行，转瞬即逝的派生行会让下标中途移位
+    await until(
+      () => provider.requests().some(echoRequest(sid)) || null,
+      'echo agent of the first turn dispatched'
+    )
+    await echoGone(sid, 'echo agent of the first turn left the list')
 
     // 标记的相位来自监视 store 的 1s 轮询（agentMonitorStore POLL_MS）：首轮刚收尾时，store 里的
     // 那一拍可能还是 turn 中取的，标记已在屏却仍是绿脉冲 —— 不能断言第一次读到的相位。
@@ -463,7 +504,7 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     expect(detail!.tools.length).toBeGreaterThan(0)
     expect(detail!.messageCount).toBeGreaterThanOrEqual(2)
 
-    // 此刻列表 = AM-3 的根 + AM-11 的根（与它的 echo 子 agent）—— 至少两行，够断互斥
+    // 此刻列表 = AM-3 的根 + AM-11 的根（它的 echo 已跑完卸掉，见 AM-11）—— 至少两行，够断互斥
     const list = await monitorList(app.main)
     const rootIdx = list.findIndex((e) => e.agentId === sid)
     const otherIdx = list.findIndex((e) => e.agentId !== sid)
@@ -574,15 +615,17 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
     }, 'chip dot back to gray')
   })
 
-  it('AM-16 筛选含派生 entry（root + spawned，spawned 带血缘箭头）；点 X 清除后恢复全量', async () => {
-    const sid = await openAndPrompt('AM-16 lineage lane', 'lin-2')
-    // echo hook 已装：这轮自动派生 echo-agent —— 等它跑完回 idle，筛选时才是稳定的 2 条
-    await until(async () => {
-      const e = (await monitorList(app.main)).find(
-        (x) => x.kind === 'spawned' && x.rootSessionId === sid
-      )
-      return e?.phase === 'idle' ? e : null
-    }, 'spawned echo agent back to idle')
+  it('AM-16 筛选含派生 entry（root + 干活中的 spawned，spawned 带血缘箭头）；点 X 清除后恢复全量', async () => {
+    const title = 'AM-16 lineage lane'
+    const sid = await createSession(title)
+    await until(async () => (await sidebar.openSession(title)) || null, `session "${title}" opened`)
+    // echo hook 已装：这轮自动派生 echo-agent。它跑完即卸（cfb221cf）—— 扣住它那一轮，筛选时才是稳定的 2 条
+    provider.script(
+      { text: 'r1', when: rootRequest('lin-2') },
+      { text: 'echo-r', holdMs: 20_000, when: echoRequest(sid) }
+    )
+    await promptTurn(sid, 'lin-2')
+    await heldEcho(sid, 'spawned echo agent working')
 
     await until(async () => (await banner.chip()) ?? null, 'chip on screen')
     await banner.clickChip()
@@ -598,12 +641,14 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
 
     await pane.clearFilter()
     expect(await pane.filterChip()).toBeNull()
-    // 只比数量不钉名单：全量里有 AM-3 根与各条会话的根和它们的 echo entry
+    // 只比数量不钉名单：全量里有 AM-3 根、各条会话的根与此刻扣着的这条 echo entry
     const total = (await monitorList(app.main)).length
     await until(
       async () => (await pane.rows()).length === total || null,
       'rows restored to full list'
     )
+    provider.release()
+    await echoGone(sid, 'finished echo agent left the list')
   })
 
   it('AM-17 筛选空态（会话已删）+ chip 标签回落 id 截断；收尾清除筛选', async () => {
@@ -882,7 +927,7 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
 
   it('AM-22 窄面板（320px）：全量列表收起与展开时都不横向溢出（行里多了命中率格与花费格）', async () => {
     await pane.setPanelWidth(320)
-    // 全量列表：AM-3 的根、各条会话的根与它们的 echo 派生行、带命中率格的缓存会话行
+    // 全量列表：AM-3 的根、各条会话的根、带命中率格的缓存会话行（echo 派生行跑完即卸，不在其中）
     const total = (await monitorList(app.main)).length
     const rows = await until(async () => {
       const rs = await pane.rows()
@@ -933,17 +978,23 @@ describe('重启：只列打开着的会话', () => {
     const sid = await first.main.eval<string>(
       `window.api.session.create(${JSON.stringify({ title: 'AM-24 restart lane' })}).then((s) => s.id)`
     )
+    // hook agent 跑完即卸（cfb221cf）：扣住 echo 那一轮，趁它干活时记下它的 agentId
     provider.script(
       { text: 'r1', when: rootRequest('restart-1') },
-      { text: 'echo-r', when: echoRequest(sid) }
+      { text: 'echo-r', holdMs: 20_000, when: echoRequest(sid) }
     )
     await promptAndSettle(first.main, sid, 'restart-1')
     const child = await until(async () => {
       const e = (await monitorList(first.main)).find(
         (x) => x.kind === 'spawned' && x.rootSessionId === sid
       )
-      return e?.phase === 'idle' ? e : null
-    }, 'echo child idle before the restart')
+      return e?.phase === 'turn' ? e : null
+    }, 'echo child working before the restart')
+    provider.release()
+    await until(
+      async () => !(await monitorList(first.main)).some((x) => x.agentId === child.agentId) || null,
+      'echo child finished and left the list before the restart'
+    )
     // 活动会话换成一条没锁的新会话：重开时渲染端恢复的若是它，打开它也不会列出任何 agent
     await first.main.eval(
       `window.api.session.create(${JSON.stringify({ title: 'AM-24 other lane' })}).then((s) => s.id)`
