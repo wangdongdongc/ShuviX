@@ -254,6 +254,28 @@
   "steps": {
     "thinking": "思考"
   },
+  "figureExport": {
+    "button": "导出",
+    "format": "格式",
+    "scheme": "配色",
+    "schemeCurrent": "当前主题",
+    "schemeLight": "浅色",
+    "schemeDark": "深色",
+    "background": "背景",
+    "bgNone": "透明",
+    "bgFill": "填充",
+    "scale": "倍率",
+    "vector": "矢量",
+    "noteJpg": "JPG 不支持透明，背景固定填充。",
+    "noteSvg": "颜色已换成实际色值，离开 ShuviX 也能正确显示。",
+    "copy": "复制图片",
+    "copied": "已复制",
+    "copyFailed": "复制失败，可以改用下载。",
+    "download": "下载",
+    "building": "正在生成…",
+    "failed": "导出失败：{{error}}",
+    "defaultName": "图"
+  },
   "message": {
     "user": "用户",
     "copy": "复制",

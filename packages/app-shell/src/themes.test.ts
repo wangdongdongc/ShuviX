@@ -141,7 +141,7 @@ describe('themes.css —— 每套主题都声明 color-scheme', () => {
     expect(declared, `${theme} 缺 color-scheme —— 这套主题会静默拿到浅色档的图`).not.toBeNull()
   })
 
-  it('调色板只定义一份（挂在 :root 上），不随主题重复 —— 重复一份就是漂移的起点', () => {
+  it('调色板只定义一份（`:root, [data-theme]` 那一块），不随主题块重复 —— 重复一份就是漂移的起点', () => {
     for (const block of blocks) {
       expect(block.body, `${block.theme} 不该重新定义 --viz-*`).not.toMatch(/--viz-/)
     }
@@ -151,7 +151,7 @@ describe('themes.css —— 每套主题都声明 color-scheme', () => {
 
 // ─── 分类框的浅底与同色深字（TH-1…6） ─────────────────────────────────────
 
-/** `:root` 上某个自定义属性的声明值（第一处；调色板只挂在 :root 上，见上一组最后一条） */
+/** 某个自定义属性的声明值（第一处；调色板只在 `:root, [data-theme]` 那一块里声明一次，见上一组最后一条） */
 const declOf = (name: string): string | undefined =>
   new RegExp(`${name}\\s*:\\s*([^;]+);`).exec(CSS)?.[1]?.trim()
 
@@ -374,5 +374,59 @@ describe('themes.css —— 分类框的 tint / ink 与中性 wash（TH-1…6）
     const pairs = inkPairs(cardPercents[0].percents[0] / 100)
     const raw = pairs.filter((pair) => pair.rawRatio < 4.5)
     expect(raw.length).toBeGreaterThan(0)
+  })
+})
+
+// ─── 调色板挂在哪些元素上（TH-7）与导出用的卡片底（TH-8） ─────────────────
+
+/**
+ * 声明某个自定义属性的那一块的选择器列表（注释剥掉、按逗号切、去空白）。
+ * 只认「声明直接写在这一块里」：离它最近的 `{` 与它之间若已出现 `}`，声明就不在这一块里，算没找到。
+ */
+const selectorsDeclaring = (name: string): string[] | null => {
+  const at = CSS.search(new RegExp(`${name}\\s*:`))
+  if (at < 0) return null
+  const open = CSS.lastIndexOf('{', at)
+  if (open < 0 || CSS.slice(open + 1, at).includes('}')) return null
+  const prevBlockEnd = CSS.lastIndexOf('}', open)
+  const prevCommentEnd = CSS.lastIndexOf('*/', open)
+  const from = Math.max(prevBlockEnd + 1, prevCommentEnd >= 0 ? prevCommentEnd + 2 : 0)
+  return CSS.slice(from, open)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split(',')
+    .map((sel) => sel.trim())
+    .filter(Boolean)
+}
+
+describe('themes.css —— 调色板挂在每个带主题的元素上（TH-7）', () => {
+  it('TH-7 --viz-* 那一块的选择器是 `:root` 与 `[data-theme]` —— 子树换了主题，派生 token 跟着重算', () => {
+    // 自定义属性里的 var() 在**声明它的那个元素**上就代入：只声明在 :root 上，--viz-wash 里的
+    // --theme-text-primary 永远是根上那套主题的文字色，导出时离屏容器挂「浅色 / 深色」也跟不过去
+    for (const name of ['--viz-1', '--viz-wash', '--viz-1-tint', '--viz-1-ink']) {
+      const selectors = selectorsDeclaring(name)
+      expect(selectors, `${name} 不在一个普通块里`).not.toBeNull()
+      expect([...selectors!].sort(), name).toEqual([':root', '[data-theme]'])
+    }
+  })
+})
+
+describe('导出的卡片底（TH-8）', () => {
+  /** figureExport.ts 里卡片底色的配方（bg-tertiary 按比例叠在 bg-primary 上） */
+  const EXPORT_SRC = readFileSync(
+    resolve(HERE, '../../chat-ui/src/components/figure/figureExport.ts'),
+    'utf8'
+  )
+  const EXPORT_CARD_RE =
+    /card:\s*'color-mix\(in srgb, var\(--theme-bg-tertiary\) (\d+(?:\.\d+)?)%, var\(--theme-bg-primary\)\)'/
+
+  it('TH-8 导出「填充」的卡片底与对话里 ```svg / mermaid 图卡是同一个比例', () => {
+    const exportPct = Number(EXPORT_CARD_RE.exec(EXPORT_SRC)?.[1])
+    expect(Number.isFinite(exportPct), 'figureExport.ts 的 SURFACE_CSS.card 写法变了').toBe(true)
+    for (const file of ['CodeBlock.tsx', 'MermaidBlock.tsx']) {
+      const text = readFileSync(resolve(HERE, '../../chat-ui/src/components/chat', file), 'utf8')
+      const pcts = [...new Set([...text.matchAll(CARD_RE)].map((m) => Number(m[1])))]
+      expect(pcts, `${file} 里找不到卡片底的 color-mix`).toHaveLength(1)
+      expect(pcts[0], file).toBe(exportPct)
+    }
   })
 })

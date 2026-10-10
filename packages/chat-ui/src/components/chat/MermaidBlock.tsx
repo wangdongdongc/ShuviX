@@ -8,6 +8,9 @@ import { sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { useMarkdownStreaming } from './markdownStreaming'
 import { useThemeId } from './useThemeId'
+import { FigureExportButton } from '../figure/FigureExportPanel'
+import { standaloneSvg, withOffscreen, type FigureExportSource } from '../figure/figureExport'
+import { mermaidTitleOf } from '../figure/figureExportPure'
 import {
   MERMAID_MAX_HEIGHT,
   mermaidLayout,
@@ -54,21 +57,41 @@ const inflight = new Map<string, Promise<string>>()
 let mermaidIdCounter = 0
 let renderQueue: Promise<unknown> = Promise.resolve()
 
-/** 此刻主题 token 的解析值 —— 拿一个探针元素读 computed color（light-dark() 也在这一步解析） */
-function currentThemeVariables(): Record<string, string | boolean> {
+/**
+ * 某一层的主题 token 解析值 —— 拿一个探针元素读 computed color（light-dark() 也在这一步解析）。
+ * `scope` 平时是 body（此刻界面上的主题）；导出按另一套主题重渲时是挂着那套主题的离屏容器。
+ */
+function themeVariablesIn(scope: HTMLElement): Record<string, string | boolean> {
   const probe = document.createElement('span')
   probe.style.display = 'none'
-  document.body.appendChild(probe)
+  scope.appendChild(probe)
   try {
     const resolve = (token: string): string => {
       probe.style.color = `var(${token})`
       return getComputedStyle(probe).color
     }
-    const dark = getComputedStyle(document.documentElement).colorScheme.includes('dark')
-    return mermaidThemeVariables(resolve, dark, getComputedStyle(document.body).fontFamily)
+    // color-scheme 是继承属性：读这一层的就是这一层实际生效的明暗
+    const dark = getComputedStyle(scope).colorScheme.includes('dark')
+    return mermaidThemeVariables(resolve, dark, getComputedStyle(scope).fontFamily)
   } finally {
     probe.remove()
   }
+}
+
+/** 此刻界面主题下的 token 解析值 */
+const currentThemeVariables = (): Record<string, string | boolean> =>
+  themeVariablesIn(document.body)
+
+/**
+ * 按某一套主题渲染（导出面板的「浅色 / 深色」用）。与屏幕上那张共用缓存与串行队列：
+ * 键同样是「主题 id + 源码」，所以「当前主题」直接命中屏幕上那一份，不会再渲一遍。
+ */
+export function renderMermaidForTheme(code: string, themeId: string): Promise<string> {
+  const key = `${themeId}\u0000${code}`
+  const cached = mermaidSvgCache.get(key)
+  if (cached) return Promise.resolve(cached)
+  const vars = withOffscreen(themeId, null, (box) => themeVariablesIn(box))
+  return renderMermaid(key, code, vars)
 }
 
 // ─── 渲染：串行、去重、净化后才入缓存 ─────────────────────────
@@ -209,6 +232,9 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
         style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
       >
         <span className="text-[10px] text-text-tertiary font-medium mr-auto">Mermaid</span>
+        {/* 只导出**这一版源码**渲出来的、且消息已写完的图：流式中途屏幕上留着的可能是半截源码
+            渲出的旧图，而导出会按此刻的（可能还没写完的）源码重渲 —— 与 ```svg「写完才导出」同一条 */}
+        {cached && !streaming && <FigureExportButton getSource={() => mermaidExportSource(code)} />}
         {svg && layout?.expandable && !showSource && (
           <button
             onClick={() => setExpanded(true)}
@@ -257,6 +283,21 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
       )}
     </div>
   )
+}
+
+/**
+ * 导出用的图源：按所选主题渲（「当前主题」命中屏幕上那份缓存），底色取图卡那一层。
+ * mermaid 的产物已是具体颜色，不烘焙（见 figureExport 头注释）。
+ */
+function mermaidExportSource(code: string): FigureExportSource {
+  return {
+    name: mermaidTitleOf(code) ?? 'mermaid',
+    build: async ({ themeId, background }) =>
+      standaloneSvg(await renderMermaidForTheme(code, themeId), {
+        themeId,
+        background: background ? 'card' : null
+      })
+  }
 }
 
 /** 原尺寸查看：图按 viewBox 的原宽摆，大于窗口就在弹窗里滚动 */

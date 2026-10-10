@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import {
   AtomicCodeMirrorEditor,
   type AtomicCodeMirrorEditorHandle,
+  type FigureExportHandler,
+  type FigureExportRequest,
   refreshImageBlocks,
   tableContextMenu,
   tableWikiLinks,
@@ -16,7 +18,13 @@ import './atomic-panel.css'
 import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
 import { createRoot } from 'react-dom/client'
-import { useChatStore, getChatApi, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import {
+  useChatStore,
+  getChatApi,
+  getSessionChannelApi,
+  useAppEvent,
+  FigureExportPanel
+} from '@shuvix/chat-ui'
 import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protocol/types/contextMenu'
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
 import { useResolveMediaUrl, type MediaSource, type ResolveMediaUrl } from '@shuvix/chat-ui'
@@ -24,6 +32,7 @@ import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
 import { frontmatterCard, type FrontmatterFieldMount } from './frontmatterCard'
 import { FrontmatterFieldPicker } from './FrontmatterFieldPicker'
 import { NotebookMinimap } from './NotebookMinimap'
+import { notebookFigureSource } from './notebookFigureSource'
 import { activeHeadingIndex, parseHeadings, type NotebookHeading } from './notebookHeadings'
 import {
   type FileMap,
@@ -241,6 +250,30 @@ export function LivePreviewEditor({
 
   const panelRef = useRef<HTMLDivElement>(null)
   const atomicRef = useRef<AtomicCodeMirrorEditorHandle | null>(null)
+
+  // ```svg / ```mermaid 图上的导出按钮 → chat-ui 的导出面板（与对话图卡同一个）。
+  // 再点同一颗按钮是收起，与对话图卡上的按钮一致。
+  // 每次打开带一个序号当面板的 key：开着面板去点另一张图的按钮时（按钮吞掉了 mousedown，面板的
+  // 「点外面收起」不会先跑），面板整个重挂，而不是带着上一张图的状态换个图源
+  const [figureExportReq, setFigureExportReq] = useState<
+    (FigureExportRequest & { seq: number }) | null
+  >(null)
+  const figureExportSeq = useRef(0)
+  const figureExport = useMemo<FigureExportHandler>(
+    () => ({
+      label: t('figureExport.button'),
+      onExport: (req) => {
+        const seq = ++figureExportSeq.current
+        setFigureExportReq((prev) => (prev?.anchor === req.anchor ? null : { ...req, seq }))
+      }
+    }),
+    [t]
+  )
+  const figureExportSource = useMemo(
+    () => (figureExportReq ? notebookFigureSource(figureExportReq) : null),
+    [figureExportReq]
+  )
+  const closeFigureExport = useCallback(() => setFigureExportReq(null), [])
   // 待保存内容；onSave 闭包已绑定写入目标，这里只存内容
   const pendingRef = useRef<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -737,8 +770,17 @@ export function LivePreviewEditor({
           imageSrcResolver={resolveMarkdownImageSrc}
           onLinkClick={(url) => caps?.openExternal?.(url)}
           readOnly={readOnly}
+          figureExport={figureExport}
         />
       </div>
+      {figureExportReq && figureExportSource && (
+        <FigureExportPanel
+          key={figureExportReq.seq}
+          source={figureExportSource}
+          anchor={figureExportReq.anchor}
+          onClose={closeFigureExport}
+        />
+      )}
       {layout === 'notebook' && headings.length >= 2 && (
         <NotebookMinimap
           headings={headings}

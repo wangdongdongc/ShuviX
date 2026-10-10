@@ -254,6 +254,28 @@
   "steps": {
     "thinking": "思考"
   },
+  "figureExport": {
+    "button": "エクスポート",
+    "format": "形式",
+    "scheme": "配色",
+    "schemeCurrent": "現在のテーマ",
+    "schemeLight": "ライト",
+    "schemeDark": "ダーク",
+    "background": "背景",
+    "bgNone": "透明",
+    "bgFill": "塗りつぶし",
+    "scale": "倍率",
+    "vector": "ベクター",
+    "noteJpg": "JPG は透明に対応していないため、背景は常に塗りつぶされます。",
+    "noteSvg": "色は実際の値に置き換えてあるので、ShuviX の外でも正しく表示されます。",
+    "copy": "画像をコピー",
+    "copied": "コピーしました",
+    "copyFailed": "コピーできませんでした。ダウンロードをお試しください。",
+    "download": "ダウンロード",
+    "building": "準備中…",
+    "failed": "エクスポートできませんでした：{{error}}",
+    "defaultName": "図"
+  },
   "message": {
     "user": "ユーザー",
     "copy": "コピー",

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, Code, FileText } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -18,6 +18,8 @@ import { ChatHostContext } from '../../host/chatHostContext'
 import { MermaidBlock } from './MermaidBlock'
 import { InteractiveBlock, InteractiveUnsupportedBlock } from './InteractiveBlock'
 import { useMarkdownSource, useMarkdownStreaming } from './markdownStreaming'
+import { FigureExportButton } from '../figure/FigureExportPanel'
+import { authoredFigureSource } from '../figure/figureExport'
 
 /** 手写 SVG 的净化结果缓存（净化是纯函数，同一段源码恒得同一结果）；'' = 判死 */
 const authoredSvgCache = new Map<string, string>()
@@ -195,6 +197,7 @@ function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
     return clean
   })()
   const [showSource, _setShowSource] = useState(authoredViewState.get(code) ?? false)
+  const figureRef = useRef<HTMLDivElement>(null)
 
   const setShowSource = (v: boolean): void => {
     authoredViewState.set(code, v)
@@ -220,10 +223,21 @@ function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
       style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
     >
       <div
-        className="flex items-center justify-between px-4 py-1.5"
+        className="flex items-center gap-3 px-4 py-1.5"
         style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
       >
-        <span className="text-[10px] text-text-tertiary font-medium">SVG</span>
+        <span className="text-[10px] text-text-tertiary font-medium mr-auto">SVG</span>
+        {/* 只导出写完的图：流式中途的一帧是半张图 */}
+        {settled && svgHtml && (
+          <FigureExportButton
+            getSource={() =>
+              authoredFigureSource(svgHtml, {
+                surface: 'card',
+                inheritFrom: () => figureRef.current
+              })
+            }
+          />
+        )}
         <button
           onClick={() => setShowSource(!showSource)}
           className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
@@ -242,6 +256,7 @@ function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
            不写死 width/height），超出的部分是画错了而不是该滚动的内容；同时它也是
            「图里的东西跑不出这张卡」的兜底围栏。 */
         <div
+          ref={figureRef}
           className="flex justify-center overflow-hidden p-3 [&_svg]:max-w-full [&_svg]:h-auto"
           dangerouslySetInnerHTML={{ __html: svgHtml }}
         />
@@ -271,6 +286,7 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
   const reader = (getHostApi() as { artifact?: { read: (p: unknown) => Promise<unknown> } } | null)
     ?.artifact?.read
   const canLoad = !!sessionId && !!reader
+  const figureRef = useRef<HTMLDivElement>(null)
   const [loaded, setState] = useState<
     | { kind: 'loading' }
     | { kind: 'missing' }
@@ -325,17 +341,30 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
       style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
     >
       <div
-        className="flex items-center justify-between px-4 py-1.5"
+        className="flex items-center gap-3 px-4 py-1.5"
         style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
       >
-        <span className="text-[10px] text-text-tertiary font-medium truncate">
+        <span className="text-[10px] text-text-tertiary font-medium truncate mr-auto">
           {state.kind === 'ok' ? state.title : name}
         </span>
+        {state.kind === 'ok' && svgHtml && (
+          <FigureExportButton
+            getSource={() =>
+              authoredFigureSource(svgHtml, {
+                // 产物有标题：比图里的 aria-label 更像用户认得的名字
+                name: state.title || null,
+                surface: 'card',
+                inheritFrom: () => figureRef.current
+              })
+            }
+          />
+        )}
       </div>
       {state.kind === 'loading' ? (
         <div className="p-3 text-[11px] text-text-tertiary">{t('message.rendering')}</div>
       ) : svgHtml ? (
         <div
+          ref={figureRef}
           className="flex justify-center overflow-hidden p-3 [&_svg]:max-w-full [&_svg]:h-auto"
           dangerouslySetInnerHTML={{ __html: svgHtml }}
         />

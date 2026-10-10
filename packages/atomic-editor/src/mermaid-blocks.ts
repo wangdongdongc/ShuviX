@@ -2,6 +2,7 @@ import { EditorView, WidgetType } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
 import { sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize';
 import { fencedPreviewField, revealOnClick } from './fenced-preview';
+import { attachFigureExport, type FigureExportConfig } from './figure-export';
 
 // Mermaid blocks.
 //
@@ -26,8 +27,6 @@ const mermaidCache = new Map<string, MermaidResult>();
 const mermaidPending = new Map<string, Promise<MermaidResult>>();
 let mermaidModule: Promise<typeof import('mermaid')> | null = null;
 let mermaidIdCounter = 0;
-/** 当前全局 initialize 过的主题（mermaid 配置是全局的，切主题须重新 initialize） */
-let initializedTheme: MermaidTheme | null = null;
 /** 渲染串行链 —— initialize 是全局副作用，不同主题的并发渲染必须排队防串味 */
 let renderChain: Promise<unknown> = Promise.resolve();
 
@@ -61,15 +60,15 @@ export function renderMermaid(
       const id = `atomic-mermaid-${mermaidIdCounter++}`;
       try {
         const m = await loadMermaid();
-        if (initializedTheme !== theme) {
-          m.default.initialize({
-            startOnLoad: false,
-            theme,
-            securityLevel: 'loose',
-            fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-          });
-          initializedTheme = theme;
-        }
+        // 每次都 initialize，不记「上次初始化的是哪个主题」：mermaid 的配置是**整个页面共用**的，
+        // 对话里的 mermaid 块（chat-ui MermaidBlock）每渲一张也会按 `base` 主题重设一遍 —— 记下来的
+        // 主题因此会过期，笔记本的图就按对话的配色渲了出来。initialize 只是写一份配置，几乎不花钱。
+        m.default.initialize({
+          startOnLoad: false,
+          theme,
+          securityLevel: 'loose',
+          fontFamily: 'ui-sans-serif, system-ui, sans-serif',
+        });
         const { svg } = await m.default.render(id, code);
         // 净化后再出厂：调用方（笔记本 widget / 对话 mermaid 块）都是 innerHTML 直接注入特权渲染进程，
         // 而 mermaid 的 `click X href "javascript:..."` 指令会把 javascript: 锚点原样带进 SVG。
@@ -100,7 +99,10 @@ export function renderMermaid(
 }
 
 class MermaidWidget extends WidgetType {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    readonly exportConfig?: FigureExportConfig,
+  ) {
     super();
   }
 
@@ -123,6 +125,7 @@ class MermaidWidget extends WidgetType {
     const cached = mermaidCache.get(cacheKey('default', this.code));
     if (cached?.svg) {
       diagram.innerHTML = cached.svg;
+      attachFigureExport(this.exportConfig, 'mermaid', this.code, wrap, diagram);
     } else if (cached?.error) {
       paintError(diagram, this.code, cached.error);
     } else {
@@ -132,6 +135,8 @@ class MermaidWidget extends WidgetType {
         diagram.classList.remove('cm-atomic-mermaid-loading');
         if (res.svg) {
           diagram.innerHTML = res.svg;
+          // 按钮等图出来再挂：渲染中 / 失败的卡片没有可导出的东西
+          attachFigureExport(this.exportConfig, 'mermaid', this.code, wrap, diagram);
         } else {
           paintError(diagram, this.code, res.error ?? 'Unknown error');
         }
@@ -166,10 +171,10 @@ function paintError(el: HTMLElement, code: string, message: string): void {
  * rendered diagram replaces the source when the cursor is outside the
  * fence, and the raw code returns when the cursor moves inside.
  */
-export function mermaidBlocks(): Extension {
+export function mermaidBlocks(exportConfig?: FigureExportConfig): Extension {
   return fencedPreviewField({
     lang: 'mermaid',
     // 渲染失败不在这里判：mermaid 是异步的，此刻还不知道结果，widget 自己会画错误卡
-    widget: (code) => new MermaidWidget(code),
+    widget: (code) => new MermaidWidget(code, exportConfig),
   });
 }

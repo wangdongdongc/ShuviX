@@ -6,6 +6,7 @@ import {
 } from '@shuvix/chat-protocol/utils/svgFence';
 import { sanitizeAuthoredSvg } from '@shuvix/chat-protocol/utils/svgSanitize';
 import { fencedPreviewField, revealOnClick } from './fenced-preview';
+import { attachFigureExport, type FigureExportConfig } from './figure-export';
 
 // ```svg blocks — hand-written SVG rendered in place, the same carrier the
 // chat renderer draws figures from (chat-ui's CodeBlock). Sharing the
@@ -53,7 +54,10 @@ function figureHtml(code: string): string {
 }
 
 class AuthoredSvgWidget extends WidgetType {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    readonly exportConfig?: FigureExportConfig,
+  ) {
     super();
   }
 
@@ -78,6 +82,11 @@ class AuthoredSvgWidget extends WidgetType {
     if (clean) {
       // 失败关闭：净化返回空串（找不到 <svg> 根，或整段被剥空）绝不注入未经检查的标记。
       figure.innerHTML = clean;
+      // 只导出画出来、且写完了的图：错误卡没有可导出的东西；截断的源码（磁盘上写到一半的文件）
+      // 也能画出前半张，但那是半张图 —— 与聊天里「写完才导出」同一条
+      if (isSvgComplete(this.code)) {
+        attachFigureExport(this.exportConfig, 'svg', this.code, wrap, figure);
+      }
     } else {
       paintError(figure, this.code);
     }
@@ -108,7 +117,7 @@ function paintError(el: HTMLElement, code: string): void {
  * replaces the source when the cursor is outside the fence, and the raw
  * markup returns when the cursor moves inside.
  */
-export function svgBlocks(): Extension {
+export function svgBlocks(exportConfig?: FigureExportConfig): Extension {
   return fencedPreviewField({
     lang: 'svg',
     widget: (code) => {
@@ -123,7 +132,7 @@ export function svgBlocks(): Extension {
       if (!figureHtml(code) && !isSvgComplete(code)) return null;
       // 剩下的两种都进 widget：画得出来就画（含截断源码里能画的那部分），
       // 写完了却被判死就出错误卡。
-      return new AuthoredSvgWidget(code);
+      return new AuthoredSvgWidget(code, exportConfig);
     },
   });
 }

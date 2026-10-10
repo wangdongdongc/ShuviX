@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MutableRefObject } from 'react';
+import { useEffect, useMemo, useRef, type MutableRefObject } from 'react';
 import {
   Decoration,
   EditorView,
@@ -45,6 +45,7 @@ import { autoCloseCodeFence, extendEmphasisPair } from './edit-helpers';
 import { imageBlocks } from './image-blocks';
 import { mermaidBlocks } from './mermaid-blocks';
 import { svgBlocks } from './svg-blocks';
+import type { FigureExportConfig, FigureExportHandler } from './figure-export';
 import { mathBlocks, mathMarkdownSyntax } from './math-blocks';
 import { commentBlocks } from './comment-blocks';
 import { inlinePreview } from './inline-preview';
@@ -229,6 +230,17 @@ export interface AtomicCodeMirrorEditorProps {
    * like the other built-ins.
    */
   readOnly?: boolean;
+
+  /**
+   * Adds an export button to rendered ```svg and ```mermaid figures. The
+   * editor ships no export UI of its own: the click hands the host the
+   * fence, its source, the button and the figure cell, and the host opens
+   * whatever panel it has. Omit it and no button is painted.
+   *
+   * Read through a ref, so swapping the handler does NOT remount the editor
+   * (a figure painted before the swap picks up the new handler on click).
+   */
+  figureExport?: FigureExportHandler;
 }
 
 /**
@@ -254,6 +266,7 @@ export function AtomicCodeMirrorEditor({
   extensions = EMPTY_EXTENSIONS,
   imageSrcResolver,
   readOnly = false,
+  figureExport,
 }: AtomicCodeMirrorEditorProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -261,6 +274,13 @@ export function AtomicCodeMirrorEditor({
   const onMarkdownChangeRef = useRef(onMarkdownChange);
   const onLinkClickRef = useRef(onLinkClick);
   const imageSrcResolverRef = useRef(imageSrcResolver);
+  const figureExportRef = useRef(figureExport);
+  // One object per editor: the widgets compare by source only, so a stable
+  // config keeps them from repainting when the host re-renders.
+  const figureExportConfig = useMemo<FigureExportConfig>(
+    () => ({ handler: () => figureExportRef.current ?? null }),
+    [],
+  );
 
   useEffect(() => {
     onMarkdownChangeRef.current = onMarkdownChange;
@@ -273,6 +293,10 @@ export function AtomicCodeMirrorEditor({
   useEffect(() => {
     imageSrcResolverRef.current = imageSrcResolver;
   }, [imageSrcResolver]);
+
+  useEffect(() => {
+    figureExportRef.current = figureExport;
+  }, [figureExport]);
 
   // Mount once per document identity; swapping documents tears down the
   // view so cursor/undo state from the previous doc doesn't leak.
@@ -349,8 +373,8 @@ export function AtomicCodeMirrorEditor({
           imageBlocks({
             resolveSrc: (src) => imageSrcResolverRef.current?.(src) ?? null,
           }),
-          mermaidBlocks(),
-          svgBlocks(),
+          mermaidBlocks(figureExportConfig),
+          svgBlocks(figureExportConfig),
           mathBlocks(),
           commentBlocks(),
           inlinePreview({

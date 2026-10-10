@@ -59,6 +59,17 @@ Keep this list current — it's what makes future merges predictable.
   figure, unlike mermaid: colors come from `--viz-*` / `--theme-*` tokens, so it must sit on the
   editor's own surface to follow the theme.
 
+- `src/figure-export.ts` — **ShuviX-added file** (not upstream): the export hook on the two
+  fenced figure previews. It paints a hover button on a rendered ```svg / ```mermaid figure and
+  hands the host `{ kind, code, anchor, figure }`; the export panel itself is a React component
+  in the host (chat-ui's `FigureExportPanel`, shared with the chat's figure cards), so the editor
+  gains no UI and no `@shuvix/*` import here. No handler → no button, so the upstream widgets
+  are unchanged for a consumer that never wires it. Wiring, in files that are already ours or
+  upstream: `svgBlocks(config)` / `mermaidBlocks(config)` take the config,
+  `AtomicCodeMirrorEditor` gained the `figureExport` prop (read through a ref, like
+  `onLinkClick`), `src/index.ts` exports the types, `styles/inline-preview.css` adds the
+  `.cm-atomic-figure-export` rules (and `position: relative` on the two widget roots).
+
 - `src/comment-blocks.ts` — **ShuviX-added file** (not upstream): HTML comment (`<!-- … -->`)
   handling for the live preview. In the read-only viewer comments are removed entirely (block
   comments line-and-all, leaving no blank gap; inline ones hidden per line segment); editable

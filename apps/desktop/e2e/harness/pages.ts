@@ -8181,3 +8181,502 @@ export function conversationScrollPane(main: CdpClient): ConversationScrollPane 
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 图导出（chat-ui 的 FigureExportButton / FigureExportPanel；笔记本里是 atomic-editor 画的悬浮按钮）
+//
+// 锚点：面板自己打的 data 属性 —— `[data-figure-export-panel]`（portal 到 body，全局只有一个）、
+// `[data-figure-preview]`（值 building / ready / error）、`[data-figure-filename]` / `[data-figure-dims]`、
+// 每个选项 `[data-figure-option="<组>:<值>"]`（带 aria-checked / disabled）、`[data-figure-copy]` /
+// `[data-figure-download]` / `[data-figure-action-error]`；入口按钮一律 `[data-figure-export]`（对话图卡
+// 工具栏上的那颗，或笔记本 widget 上 `.cm-atomic-figure-export` 那颗 —— 后者的值是 svg / mermaid）。
+//
+// 对话里的图卡没有自己的 data 属性：三种卡片（```svg、```artifact 引用的 svg、```mermaid）共用同一个
+// 外壳 `div.my-2.rounded-lg.overflow-hidden`（第一个孩子是工具栏，第一个 span 是卡片标签）—— 按标签与
+// mermaid 自己的锚点分种类，卡片都在**正文里含本轮标记的那条**助手消息里找（assistantBodyWith）。
+// 笔记本里的图认 widget 的类名：`.cm-atomic-svg` / `.cm-atomic-mermaid`（外壳），
+// `.cm-atomic-svg-figure` / `.cm-atomic-mermaid-diagram`（放 <svg> 的那一格）。
+
+export type FigureCardKind = 'svg' | 'artifact' | 'mermaid'
+
+/** 正文里含 marker 的那条助手消息里一共有几颗导出按钮（不分卡片种类 —— 「这里一颗都不该有」用） */
+export function figureExportButtonsIn(main: CdpClient, marker: string): Promise<number> {
+  return main.eval<number>(
+    `(${assistantBodyWith(marker)})?.querySelectorAll('[data-figure-export]').length ?? -1`
+  )
+}
+
+/** 屏幕上一个 data-k 元素的计算样式（原样的计算值串） */
+export interface OnScreenPaint {
+  fill: string
+  fillOpacity: string
+  stroke: string
+  strokeOpacity: string
+  stopColor: string
+  stopOpacity: string
+  opacity: string
+}
+
+/** 一张对话图卡的此刻 */
+export interface FigureCardShot {
+  /** 工具栏标签（SVG / Mermaid / 产物标题） */
+  label: string
+  /** 图画出来了 */
+  figure: boolean
+  /** 导出按钮在不在 */
+  hasExport: boolean
+  /** 导出按钮的文字 */
+  exportText: string
+}
+
+export interface FigureCardPane {
+  /** 卡片此刻；还没上屏 = null */
+  shot(): Promise<FigureCardShot | null>
+  /** 等图画出来 */
+  waitFigure(timeoutMs?: number): Promise<void>
+  /** 点工具栏上的导出按钮（开 / 合面板） */
+  clickExport(): Promise<void>
+  /** 点开并等面板第一张图建好 */
+  openExport(): Promise<void>
+  /** 焦点此刻在这张卡的导出按钮上 */
+  exportFocused(): Promise<boolean>
+  /** 屏幕上那张图里每个 data-k 元素的计算样式 */
+  svgFacts(): Promise<Record<string, OnScreenPaint>>
+  /** 屏幕上那张图根 <svg> 的 id */
+  figureId(): Promise<string>
+  /** 放图那一格往外每一层的 computed background-color（从里到外） */
+  surfaceStack(): Promise<string[]>
+}
+
+export function figureCardPane(
+  main: CdpClient,
+  marker: string,
+  kind: FigureCardKind,
+  index = 0
+): FigureCardPane {
+  const BODY = assistantBodyWith(marker)
+  const CARD = `((() => {
+    const body = ${BODY}
+    if (!body) return null
+    const kindOf = (c) => {
+      if (c.querySelector('[data-mermaid-figure],[data-mermaid-pending],[data-mermaid-expand]')) return 'mermaid'
+      const label = (c.firstElementChild?.querySelector('span')?.textContent ?? '').trim()
+      if (label === 'Mermaid') return 'mermaid'
+      if (label === 'SVG') return 'svg'
+      return 'artifact'
+    }
+    const cards = [...body.querySelectorAll('div.my-2.rounded-lg.overflow-hidden')]
+      .filter((c) => !c.closest('[data-interactive-figure]') && kindOf(c) === ${JSON.stringify(kind)})
+    return cards[${index}] ?? null
+  })())`
+  const SVG =
+    kind === 'mermaid'
+      ? `(${CARD})?.querySelector('[data-mermaid-figure] > svg')`
+      : `(${CARD})?.querySelector(':scope > div > svg')`
+  const BTN = `(${CARD})?.querySelector('[data-figure-export]')`
+  const panel = figureExportPanel(main)
+
+  const clickExport = async (): Promise<void> => {
+    await main.eval(`(() => {
+      const btn = ${BTN}
+      if (!btn) throw new Error('no export button on the ${kind} card')
+      btn.click()
+      return true
+    })()`)
+  }
+
+  return {
+    shot: () =>
+      main.eval<FigureCardShot | null>(`(() => {
+        const card = ${CARD}
+        if (!card) return null
+        const btn = ${BTN}
+        return {
+          label: (card.firstElementChild?.querySelector('span')?.textContent ?? '').trim(),
+          figure: !!(${SVG}),
+          hasExport: !!btn,
+          exportText: (btn?.textContent ?? '').trim()
+        }
+      })()`),
+    waitFigure: async (timeoutMs = 25_000) => {
+      await until(
+        () => main.eval<boolean>(`!!(${SVG})`),
+        `${kind} figure #${index} painted in the bubble with ${JSON.stringify(marker)}`,
+        timeoutMs
+      )
+    },
+    clickExport,
+    openExport: async () => {
+      await clickExport()
+      await panel.waitReady()
+    },
+    exportFocused: () => main.eval<boolean>(`document.activeElement === (${BTN})`),
+    svgFacts: () =>
+      main.eval<Record<string, OnScreenPaint>>(`(() => {
+        const svg = ${SVG}
+        if (!svg) throw new Error('no ${kind} figure on screen')
+        const out = {}
+        for (const el of svg.querySelectorAll('[data-k]')) {
+          const cs = getComputedStyle(el)
+          out[el.getAttribute('data-k')] = {
+            fill: cs.fill,
+            fillOpacity: cs.fillOpacity,
+            stroke: cs.stroke,
+            strokeOpacity: cs.strokeOpacity,
+            stopColor: cs.stopColor,
+            stopOpacity: cs.stopOpacity,
+            opacity: cs.opacity
+          }
+        }
+        return out
+      })()`),
+    figureId: () => main.eval<string>(`(${SVG})?.getAttribute('id') ?? ''`),
+    surfaceStack: () =>
+      main.eval<string[]>(`(() => {
+        const svg = ${SVG}
+        if (!svg) throw new Error('no ${kind} figure on screen')
+        const out = []
+        for (let el = svg.parentElement; el; el = el.parentElement) out.push(getComputedStyle(el).backgroundColor)
+        return out
+      })()`)
+  }
+}
+
+/** 导出面板此刻 */
+export interface FigurePanelShot {
+  /** building / ready / error */
+  preview: string
+  fileName: string
+  dims: string
+  /** 每组选中的值 */
+  checked: { format: string; scheme: string; background: string; scale: string }
+  /** 不能点的选项（`组:值`） */
+  disabled: string[]
+  /** 面板全文（说明、错误） */
+  text: string
+  actionError: string | null
+  copyLabel: string
+  downloadLabel: string
+  copyDisabled: boolean
+  downloadDisabled: boolean
+  /** 预览是不是棋盘格（透明底） */
+  checkerboard: boolean
+}
+
+export type FigureOptionGroup = 'format' | 'scheme' | 'background' | 'scale'
+
+export interface FigureExportPanelPane {
+  isOpen(): Promise<boolean>
+  shot(): Promise<FigurePanelShot | null>
+  /** 等预览不再是 building（ready 或 error），回此刻 */
+  waitSettled(timeoutMs?: number): Promise<FigurePanelShot>
+  /** 等预览 ready */
+  waitReady(timeoutMs?: number): Promise<FigurePanelShot>
+  /** 点一个选项并等预览落定 */
+  choose(group: FigureOptionGroup, value: string | number): Promise<FigurePanelShot>
+  /** 预览 <img> 的 data: URL 解回来的 SVG */
+  previewSvg(): Promise<string>
+  download(): Promise<void>
+  copy(): Promise<void>
+  /** CDP 可信按键 Esc（落在此刻的焦点上） */
+  pressEscape(): Promise<void>
+  /** 在面板与按钮之外按下（对话滚动区 / body） */
+  mousedownOutside(): Promise<void>
+  waitClosed(timeoutMs?: number): Promise<void>
+  /** 焦点此刻在哪：download / copy / option:<组:值> / export-button / 其它元素的标签名 */
+  focus(): Promise<string>
+  /** 面板记住的选择（localStorage 原样解析；没有 = null） */
+  storedPrefs(): Promise<unknown>
+  /** 清掉记住的选择（用例之间复位） */
+  resetPrefs(): Promise<void>
+}
+
+/** 面板偏好在 localStorage 里的键（FigureExportPanel 的 PREFS_KEY；跨进程的呈现契约，按值钉在这里） */
+const FIGURE_PREFS_KEY = 'shuvix.figureExport.prefs'
+
+export function figureExportPanel(main: CdpClient): FigureExportPanelPane {
+  const PANEL = `document.querySelector('[data-figure-export-panel]')`
+  let focusEmulated = false
+
+  const shot = (): Promise<FigurePanelShot | null> =>
+    main.eval<FigurePanelShot | null>(`(() => {
+      const p = ${PANEL}
+      if (!p) return null
+      const opts = [...p.querySelectorAll('[data-figure-option]')]
+      const checked = {}
+      for (const o of opts) {
+        const [group, value] = o.getAttribute('data-figure-option').split(':')
+        if (o.getAttribute('aria-checked') === 'true') checked[group] = value
+      }
+      const preview = p.querySelector('[data-figure-preview]')
+      const copy = p.querySelector('[data-figure-copy]')
+      const download = p.querySelector('[data-figure-download]')
+      return {
+        preview: preview?.getAttribute('data-figure-preview') ?? '',
+        fileName: p.querySelector('[data-figure-filename]')?.textContent ?? '',
+        dims: p.querySelector('[data-figure-dims]')?.textContent ?? '',
+        checked,
+        disabled: opts.filter((o) => o.disabled).map((o) => o.getAttribute('data-figure-option')),
+        text: p.textContent ?? '',
+        actionError: p.querySelector('[data-figure-action-error]')?.textContent ?? null,
+        copyLabel: (copy?.textContent ?? '').trim(),
+        downloadLabel: (download?.textContent ?? '').trim(),
+        copyDisabled: !!copy?.disabled,
+        downloadDisabled: !!download?.disabled,
+        checkerboard: (preview?.getAttribute('style') ?? '').includes('conic-gradient')
+      }
+    })()`)
+
+  const waitFor = (
+    pred: (s: FigurePanelShot) => boolean,
+    what: string,
+    timeoutMs = 25_000
+  ): Promise<FigurePanelShot> =>
+    until(
+      async () => {
+        const s = await shot()
+        return s && pred(s) ? s : null
+      },
+      what,
+      timeoutMs
+    )
+
+  const clickIn = async (selector: string, what: string): Promise<void> => {
+    await main.eval(`(() => {
+      const el = (${PANEL})?.querySelector(${JSON.stringify(selector)})
+      if (!el) throw new Error(${JSON.stringify(`no ${what} in the export panel`)})
+      el.click()
+      return true
+    })()`)
+  }
+
+  return {
+    isOpen: () => main.eval<boolean>(`${PANEL} !== null`),
+    shot,
+    waitSettled: (timeoutMs) =>
+      waitFor((s) => s.preview !== 'building', 'export preview settled', timeoutMs),
+    waitReady: (timeoutMs) =>
+      waitFor((s) => s.preview === 'ready', 'export preview ready', timeoutMs),
+    choose: async (group, value) => {
+      await clickIn(`[data-figure-option="${group}:${value}"]`, `option ${group}:${value}`)
+      return waitFor(
+        (s) => s.checked[group] === String(value) && s.preview !== 'building',
+        `export option ${group}:${value} applied`
+      )
+    },
+    previewSvg: () =>
+      main.eval<string>(`(() => {
+        const src = (${PANEL})?.querySelector('img')?.getAttribute('src') ?? ''
+        return decodeURIComponent(src.replace(/^data:image\\/svg\\+xml;charset=utf-8,/, ''))
+      })()`),
+    download: () => clickIn('[data-figure-download]', 'download button'),
+    copy: () => clickIn('[data-figure-copy]', 'copy button'),
+    pressEscape: async () => {
+      if (!focusEmulated) {
+        await main.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+        focusEmulated = true
+      }
+      const key = {
+        key: 'Escape',
+        code: 'Escape',
+        windowsVirtualKeyCode: 27,
+        nativeVirtualKeyCode: 27
+      }
+      await main.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key })
+      await main.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key })
+    },
+    mousedownOutside: async () => {
+      await main.eval(`(() => {
+        const target = document.querySelector('.conversation-scroller') ?? document.body
+        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        return true
+      })()`)
+    },
+    waitClosed: async (timeoutMs = 10_000) => {
+      await until(() => main.eval<boolean>(`${PANEL} === null`), 'export panel closed', timeoutMs)
+    },
+    focus: () =>
+      main.eval<string>(`(() => {
+        const el = document.activeElement
+        if (!el) return ''
+        if (el.hasAttribute('data-figure-download')) return 'download'
+        if (el.hasAttribute('data-figure-copy')) return 'copy'
+        if (el.hasAttribute('data-figure-option')) return 'option:' + el.getAttribute('data-figure-option')
+        if (el.hasAttribute('data-figure-export')) return 'export-button'
+        return el.tagName.toLowerCase()
+      })()`),
+    storedPrefs: () =>
+      main.eval<unknown>(`(() => {
+        const raw = localStorage.getItem(${JSON.stringify(FIGURE_PREFS_KEY)})
+        return raw ? JSON.parse(raw) : null
+      })()`),
+    resetPrefs: async () => {
+      await main.eval(
+        `(() => { localStorage.removeItem(${JSON.stringify(FIGURE_PREFS_KEY)}); return true })()`
+      )
+    }
+  }
+}
+
+/** 笔记本里的一张图（atomic-editor 的 widget） */
+export interface NotebookFigurePane {
+  /** 等图画出来（放图那一格里有 <svg>） */
+  waitFigure(timeoutMs?: number): Promise<void>
+  /** 导出按钮在不在（画在外壳上，悬停才显形） */
+  hasExport(): Promise<boolean>
+  /** 导出按钮此刻的 computed opacity */
+  exportOpacity(): Promise<number>
+  /** 把这张图滚进视口，真鼠标（CDP）移到图的中间 */
+  hover(): Promise<void>
+  /** 真鼠标移开（到窗口左上角） */
+  mouseAway(): Promise<void>
+  /** 真鼠标点导出按钮（moved → pressed → released） */
+  clickExport(): Promise<void>
+  /** 图还画着（没被换成源码） */
+  stillRendered(): Promise<boolean>
+  /** CM6 主选区的 head */
+  selectionHead(): Promise<number>
+  /** 放图那一格里根 <svg> 的 id */
+  onScreenId(): Promise<string>
+  /** 放图那一格往外每一层的 computed background-color（从里到外，含这一格自己） */
+  surfaceStack(): Promise<string[]>
+  /** 屏幕上那张图里每个 data-k 元素的计算样式 */
+  svgFacts(): Promise<Record<string, OnScreenPaint>>
+  /** 焦点进编辑器、光标放到这个围栏的起点（围栏于是揭示成源码） */
+  placeCaretInFence(): Promise<void>
+}
+
+/**
+ * `which`：第几张（按文档顺序数**此刻画着的**那几张 —— 一张被揭示成源码之后，后面的序号会前移），
+ * 或图根 `<svg>` 的 aria-label（```svg 用这个认最稳：揭示与否都不串）。
+ */
+export function notebookFigurePane(
+  main: CdpClient,
+  kind: 'svg' | 'mermaid',
+  which: number | string = 0
+): NotebookFigurePane {
+  const CELL_SEL = kind === 'svg' ? '.cm-atomic-svg-figure' : '.cm-atomic-mermaid-diagram'
+  const WRAPS = `[...document.querySelectorAll(${JSON.stringify(
+    kind === 'svg' ? '.cm-atomic-svg' : '.cm-atomic-mermaid'
+  )})]`
+  const WRAP =
+    typeof which === 'number'
+      ? `(${WRAPS}[${which}] ?? null)`
+      : `(${WRAPS}.find((w) => w.querySelector(${JSON.stringify(`${CELL_SEL} > svg`)})?.getAttribute('aria-label') === ${JSON.stringify(which)}) ?? null)`
+  const index = JSON.stringify(which)
+  const CELL = `(${WRAP})?.querySelector(${JSON.stringify(CELL_SEL)})`
+  const SVG = `(${CELL})?.querySelector(':scope > svg')`
+  const BTN = `(${WRAP})?.querySelector('.cm-atomic-figure-export')`
+  // CM6 视图：内部字段（与 markdownWindowPane 的 CM_VIEW 同一条）
+  const CM_VIEW = `(document.querySelector('.cm-content')?.cmTile?.root?.view ?? null)`
+  const TWO_FRAMES = `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`
+  let focusEmulated = false
+
+  const mouse = async (
+    type: 'mouseMoved' | 'mousePressed' | 'mouseReleased',
+    x: number,
+    y: number
+  ): Promise<void> => {
+    await main.send('Input.dispatchMouseEvent', {
+      type,
+      x,
+      y,
+      ...(type === 'mouseMoved' ? {} : { button: 'left', clickCount: 1 })
+    })
+  }
+
+  /** 元素滚进视口后的中心点 */
+  const centerOf = (expr: string, what: string): Promise<{ x: number; y: number }> =>
+    main.eval<{ x: number; y: number }>(`(async () => {
+      const el = ${expr}
+      if (!el) throw new Error(${JSON.stringify(`no ${what}`)})
+      el.scrollIntoView({ block: 'center' })
+      await ${TWO_FRAMES}
+      const r = el.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    })()`)
+
+  return {
+    waitFigure: async (timeoutMs = 25_000) => {
+      await until(
+        () => main.eval<boolean>(`!!(${SVG})`),
+        `notebook ${kind} figure #${index} rendered`,
+        timeoutMs
+      )
+    },
+    hasExport: () => main.eval<boolean>(`!!(${BTN})`),
+    exportOpacity: () =>
+      main.eval<number>(`(() => {
+        const btn = ${BTN}
+        return btn ? Number(getComputedStyle(btn).opacity) : -1
+      })()`),
+    hover: async () => {
+      const c = await centerOf(CELL, `notebook ${kind} figure #${index}`)
+      await mouse('mouseMoved', c.x, c.y)
+    },
+    mouseAway: async () => {
+      await mouse('mouseMoved', 2, 2)
+    },
+    clickExport: async () => {
+      if (!focusEmulated) {
+        await main.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+        focusEmulated = true
+      }
+      const c = await centerOf(BTN, `export button on notebook ${kind} figure #${index}`)
+      await mouse('mouseMoved', c.x, c.y)
+      await mouse('mousePressed', c.x, c.y)
+      await mouse('mouseReleased', c.x, c.y)
+    },
+    stillRendered: () => main.eval<boolean>(`!!(${SVG})`),
+    selectionHead: () =>
+      main.eval<number>(`(() => {
+        const view = ${CM_VIEW}
+        if (!view) throw new Error('no editor view')
+        return view.state.selection.main.head
+      })()`),
+    onScreenId: () => main.eval<string>(`(${SVG})?.getAttribute('id') ?? ''`),
+    surfaceStack: () =>
+      main.eval<string[]>(`(() => {
+        const cell = ${CELL}
+        if (!cell) throw new Error('no notebook ${kind} figure')
+        const out = []
+        for (let el = cell; el; el = el.parentElement) out.push(getComputedStyle(el).backgroundColor)
+        return out
+      })()`),
+    svgFacts: () =>
+      main.eval<Record<string, OnScreenPaint>>(`(() => {
+        const svg = ${SVG}
+        if (!svg) throw new Error('no notebook ${kind} figure on screen')
+        const out = {}
+        for (const el of svg.querySelectorAll('[data-k]')) {
+          const cs = getComputedStyle(el)
+          out[el.getAttribute('data-k')] = {
+            fill: cs.fill,
+            fillOpacity: cs.fillOpacity,
+            stroke: cs.stroke,
+            strokeOpacity: cs.strokeOpacity,
+            stopColor: cs.stopColor,
+            stopOpacity: cs.stopOpacity,
+            opacity: cs.opacity
+          }
+        }
+        return out
+      })()`),
+    placeCaretInFence: async () => {
+      if (!focusEmulated) {
+        await main.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+        focusEmulated = true
+      }
+      await main.eval(`(async () => {
+        const view = ${CM_VIEW}
+        const wrap = ${WRAP}
+        if (!view || !wrap) throw new Error('no editor view / figure widget')
+        const pos = view.posAtDOM(wrap)
+        view.focus()
+        view.dispatch({ selection: { anchor: pos } })
+        await ${TWO_FRAMES}
+        return true
+      })()`)
+    }
+  }
+}

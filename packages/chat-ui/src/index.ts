@@ -56,6 +56,20 @@ export { PendingInputsDrawer } from './components/chat/PendingInputsDrawer'
 export { ThreadDrawer } from './components/chat/ThreadDrawer'
 export { SlashCommandPopover } from './components/chat/SlashCommandPopover'
 
+// ── 图导出（对话图卡与笔记本 widget 共用一个面板） ──
+export { FigureExportPanel, FigureExportButton } from './components/figure/FigureExportPanel'
+export {
+  authoredFigureSource,
+  standaloneSvg,
+  figureLabelOf
+} from './components/figure/figureExport'
+export type {
+  FigureExportSource,
+  FigureBuildOptions,
+  StandaloneSvg
+} from './components/figure/figureExport'
+export { mermaidTitleOf } from './components/figure/figureExportPure'
+
 // ── 对话域 stores ──
 export * from './stores/chatStore'
 export * from './stores/subSessionStore'

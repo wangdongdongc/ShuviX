@@ -8,15 +8,16 @@
  *   - **配色跟主题**（TH）：根上的 data-theme 一变就按新主题重渲，旧图留到新图出来；
  *   - **限高 + 放大查看**（LY / EX）：布局规则本身在 mermaidFit.test.ts，这里只钉组件把它
  *     落成了什么（`data-mermaid-figure` / `--mermaid-w` / max-height / 渐隐遮罩 / 放大按钮与弹窗）。
- * 外加两条横切的：渲染**串行**且**去重**（SQ）、单张卡住的渲染 15s 后让出队列。
+ * 外加两条横切的：渲染**串行**且**去重**（SQ）、单张卡住的渲染 15s 后让出队列；以及图卡上的
+ * **导出**入口（EXP）：什么时候有按钮、「当前主题」命中缓存、「浅 / 深」在挂着那套主题的离屏容器里重渲。
  *
  * 桩的形状（为什么这么搭）：
  *   - `mermaid` 整个顶掉：initialize / render 都记进同一条日志（看得出「init → render」的先后与
  *     串行）；render 返回测试手里的 deferred，何时成、何时败由用例决定。桩出的 SVG 带
  *     `data-tag`（认是哪一张）与 `data-primary` —— 后者取**紧挨着这次 render 的那次 initialize**
  *     传进来的 primaryColor，于是「这张图是按哪个主题渲的」在 DOM 上直接可读；
- *   - `getComputedStyle` 换成桩：jsdom 不做级联，`var(--x)` 永远解析不出颜色。桩把「当前 data-theme
- *     + 探针上写的 color」原样拼回去（`T1:var(--theme-bg-tertiary)`），主题与 token 两样都看得见；
+ *   - `getComputedStyle` 换成桩：jsdom 不做级联，`var(--x)` 永远解析不出颜色。桩把「探针所在那一层的
+ *     data-theme + 探针上写的 color」原样拼回去（`T1:var(--theme-bg-tertiary)`），主题与 token 两样都看得见；
  *   - jsdom 没有 ResizeObserver：栏宽恒为 0，走「还没量到」那一支（按限高整张缩）。只有 LY-4 装一个
  *     假的，报一个固定栏宽。
  *
@@ -103,12 +104,14 @@ import { MermaidBlock } from '../MermaidBlock'
 import { MarkdownStreamingContext } from '../markdownStreaming'
 import { CodeBlock } from '../CodeBlock'
 import { mermaidThemeVariables } from '../mermaidFit'
+import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
 
 let container: HTMLDivElement
 let root: Root
 /** 桩 getComputedStyle 此刻报给根元素的 color-scheme */
 const ui = { colorScheme: 'light' }
 const realGetComputedStyle = window.getComputedStyle
+const realGetContext = HTMLCanvasElement.prototype.getContext
 
 // ─── 挂载与推进 ─────────────────────────────────────────────
 
@@ -227,9 +230,10 @@ const errorOf = (scope: Element = container): HTMLElement | null =>
     : scope.querySelector<HTMLElement>('[data-mermaid-error]')
 const expandOf = (scope: Element = container): HTMLButtonElement | null =>
   scope.querySelector<HTMLButtonElement>('[data-mermaid-expand]')
-/** 图 / 源码切换按钮：工具栏里唯一带 title 的按钮 */
+/** 图 / 源码切换按钮：工具栏里除「导出」外唯一带 title 的按钮 */
 const toggleOf = (scope: Element = container): HTMLButtonElement => {
-  const btn = scope.querySelector<HTMLButtonElement>('button[title]')
+  // 工具栏上的「导出」按钮也带 title、且排在前面 —— 按它的标记排除掉
+  const btn = scope.querySelector<HTMLButtonElement>('button[title]:not([data-figure-export])')
   if (!btn) throw new Error('没有切换按钮')
   return btn
 }
@@ -259,12 +263,17 @@ beforeEach(() => {
   mm.render.mockClear()
   ui.colorScheme = 'light'
   document.documentElement.setAttribute('data-theme', 'T1')
-  // jsdom 不做级联：把「主题 id + 探针上写的 var(...)」原样拼回去当解析结果
+  localStorage.clear()
+  // jsdom 不做级联：把「主题 id + 探针上写的 var(...)」原样拼回去当解析结果。主题取探针**所在那一层**
+  // （closest 的 data-theme）：导出按另一套主题重渲时，探针挂在带那套主题的离屏容器里（EXP-3）
   window.getComputedStyle = ((el: Element) => ({
-    color: `${document.documentElement.getAttribute('data-theme')}:${(el as HTMLElement).style?.color ?? ''}`,
+    color: `${(el.closest('[data-theme]') ?? document.documentElement).getAttribute('data-theme')}:${(el as HTMLElement).style?.color ?? ''}`,
     colorScheme: ui.colorScheme,
     fontFamily: 'Test Sans'
   })) as unknown as typeof window.getComputedStyle
+  // jsdom 没有画布（导出补底色时认不出桩拼出来的颜色会走画布兜底）：回 null，不往控制台喊
+  HTMLCanvasElement.prototype.getContext = (() =>
+    null) as unknown as typeof HTMLCanvasElement.prototype.getContext
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -284,6 +293,7 @@ afterEach(async () => {
   container.remove()
   document.body.innerHTML = ''
   window.getComputedStyle = realGetComputedStyle
+  HTMLCanvasElement.prototype.getContext = realGetContext
   delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver
   vi.useRealTimers()
   expect(leftover, '用例结束时还有没收掉的 mermaid.render').toEqual([])
@@ -880,5 +890,178 @@ describe('CodeBlock 的 mermaid 分发（CB）', () => {
     expect(pendingOf()).toBeNull()
     expect(figureOf()).toBeNull()
     expect(mm.render).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('导出（EXP）—— 面板本身见 figure/__tests__/figureExportPanel.dom.test.tsx', () => {
+  /** 宿主外观：浅 / 深两套主题 id 是可辨认的桩值 */
+  const host: ChatHostValue = {
+    appearance: {
+      theme: 'light',
+      lightTheme: 'L1',
+      darkTheme: 'D1',
+      fontSize: 14,
+      focusMode: false
+    },
+    models: {
+      activeProvider: '',
+      activeModel: '',
+      setActiveProvider: () => {},
+      setActiveModel: () => {}
+    }
+  }
+  const HostProvider = ChatHostContext.Provider as unknown as (props: {
+    value: ChatHostValue
+    children?: ReactNode
+  }) => React.JSX.Element
+  const showWithHost = (code: string, streaming?: boolean): void => {
+    act(() => {
+      root.render(createElement(HostProvider, { value: host }, tree([code], streaming)))
+    })
+  }
+
+  const exportBtn = (scope: Element = container): HTMLButtonElement | null =>
+    scope.querySelector<HTMLButtonElement>('[data-figure-export]')
+  const exportPanel = (): HTMLElement | null =>
+    document.body.querySelector<HTMLElement>('[data-figure-export-panel]')
+  const panelPreview = (): string | null =>
+    exportPanel()?.querySelector('[data-figure-preview]')?.getAttribute('data-figure-preview') ??
+    null
+  const panelFileName = (): string =>
+    exportPanel()?.querySelector('[data-figure-filename]')?.textContent ?? ''
+  const panelSvg = (): string => {
+    const src = exportPanel()?.querySelector('img')?.getAttribute('src') ?? ''
+    return decodeURIComponent(src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  }
+  /** 点开导出面板并让「当前主题」那一次建图落定 */
+  const openExport = async (): Promise<void> => {
+    const btn = exportBtn()
+    if (!btn) throw new Error('没有导出按钮')
+    click(btn)
+    await advance(0)
+    expect(exportPanel()).not.toBeNull()
+  }
+  const chooseOption = async (key: string): Promise<void> => {
+    const opt = exportPanel()?.querySelector(`[data-figure-option="${key}"]`)
+    if (!opt) throw new Error(`没有选项 ${key}`)
+    click(opt)
+    await advance(0)
+  }
+
+  it('EXP-1 出图了才有导出按钮：渲染中没有；写完还解析不了（错误卡）也没有', async () => {
+    const ok = 'graph TD\n  exp1a --> exp1b'
+    show(ok)
+    await advance(0)
+    expect(pendingOf()).not.toBeNull()
+    expect(exportBtn()).toBeNull()
+    await resolveRender(ok, 400, 300, 'exp1')
+    expect(exportBtn()).not.toBeNull()
+    expect(exportBtn()!.textContent).toBe('Export')
+
+    clear()
+    const bad = 'graph TD\n  exp1c -->'
+    show(bad)
+    await advance(0)
+    await rejectRenders(bad)
+    expect(errorOf()).not.toBeNull()
+    expect(exportBtn()).toBeNull()
+  })
+
+  it('EXP-2 「当前主题」：命中屏幕上那份缓存，不再渲；预览就绪；文件名缺省 mermaid.png', async () => {
+    const code = 'graph TD\n  exp2a --> exp2b'
+    show(code)
+    await advance(0)
+    await resolveRender(code, 400, 300, 'exp2')
+    await openExport()
+    expect(mm.render).toHaveBeenCalledTimes(1)
+    expect(panelPreview()).toBe('ready')
+    expect(panelSvg()).toContain('data-tag="exp2"')
+    expect(panelFileName()).toBe('mermaid.png')
+  })
+
+  it('EXP-2 变体：源码里写了 title → 文件名取标题', async () => {
+    const code = '---\ntitle: Release flow\n---\ngraph TD\n  exp2c --> exp2d'
+    show(code)
+    await advance(0)
+    await resolveRender(code, 400, 300, 'exp2t')
+    await openExport()
+    expect(panelFileName()).toBe('Release flow.png')
+  })
+
+  it('EXP-3 「浅色」：按宿主设的浅色主题重渲一次 —— token 在挂着那套主题的离屏容器里解析；根上的主题不动；再开命中缓存', async () => {
+    const code = 'graph TD\n  exp3a --> exp3b'
+    showWithHost(code)
+    await advance(0)
+    await resolveRender(code, 400, 300, 'exp3-T1')
+    await openExport()
+    expect(mm.render).toHaveBeenCalledTimes(1)
+
+    await chooseOption('scheme:light')
+    expect(mm.render).toHaveBeenCalledTimes(2)
+    // 紧挨着这次 render 的那次 initialize：token 全是在 L1 那一层解析的
+    const vars = mm.state.inits.at(-1)?.themeVariables ?? {}
+    const tokenValues = Object.values(vars).filter(
+      (v): v is string => typeof v === 'string' && v.includes(':var(')
+    )
+    expect(tokenValues.length).toBeGreaterThan(5)
+    expect(
+      tokenValues.every((v) => v.startsWith('L1:')),
+      JSON.stringify(vars)
+    ).toBe(true)
+    expect(document.documentElement.getAttribute('data-theme')).toBe('T1')
+    // 离屏容器用完即摘
+    expect(document.querySelector('div[aria-hidden="true"][data-theme="L1"]')).toBeNull()
+
+    expect(panelPreview()).toBe('building')
+    await resolveRender(code, 400, 300, 'exp3-L1')
+    expect(panelPreview()).toBe('ready')
+    expect(panelSvg()).toContain('data-tag="exp3-L1"')
+    // 卡片上的图没被换掉
+    expect(tagOf()).toBe('exp3-T1')
+
+    // 收起、再开（记住了「浅色」）：命中缓存，不再渲
+    click(exportBtn()!)
+    await advance(0)
+    expect(exportPanel()).toBeNull()
+    await openExport()
+    expect(panelPreview()).toBe('ready')
+    expect(mm.render).toHaveBeenCalledTimes(2)
+  })
+
+  it('EXP-4 按所选主题渲失败：面板预览出错，卡片上的图不受影响', async () => {
+    const code = 'graph TD\n  exp4a --> exp4b'
+    showWithHost(code)
+    await advance(0)
+    await resolveRender(code, 400, 300, 'exp4')
+    await openExport()
+    await chooseOption('scheme:dark')
+    await rejectRenders(code)
+    expect(panelPreview()).toBe('error')
+    expect(exportPanel()?.textContent).toContain("Couldn't export:")
+    expect(tagOf()).toBe('exp4')
+    expect(errorOf()).toBeNull()
+  })
+
+  it('EXP-5 流式中：留着的旧图不给导出；写完、这一版源码渲出来之后才有按钮', async () => {
+    const v1 = 'graph LR\n  exp5a --> exp5b'
+    const v2 = `${v1}\n  exp5b --> exp5c`
+    show(v1, true)
+    await advance(800)
+    await resolveRender(v1, 400, 300, 'A')
+    expect(tagOf()).toBe('A')
+    // 这一版已经渲出来了，但消息还在流式：不给
+    expect(exportBtn()).toBeNull()
+
+    show(v2, true)
+    expect(tagOf()).toBe('A')
+    expect(exportBtn()).toBeNull()
+
+    show(v2, false)
+    expect(exportBtn()).toBeNull()
+    await advance(0)
+    expect(exportBtn()).toBeNull() // v2 还在渲，屏幕上是 v1 的旧图
+    await resolveRender(v2, 400, 300, 'B')
+    expect(tagOf()).toBe('B')
+    expect(exportBtn()).not.toBeNull()
   })
 })

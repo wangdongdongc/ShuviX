@@ -879,3 +879,43 @@
   --atomic-editor-hl-operator: #cf222e;
   --atomic-editor-hl-invalid: #82071e;
 }
+
+/* ---------- Figure export button (```svg / ```mermaid) ----------
+ * Painted only when the host passes `figureExport` (see figure-export.ts).
+ * Hidden until the figure is hovered so a page of figures stays a page of
+ * figures; keyboard focus shows it too. It sits inside the figure's own
+ * border, top-right — the same corner the chat's figure cards keep their
+ * export button in. */
+.cm-atomic-svg,
+.cm-atomic-mermaid {
+  position: relative;
+}
+
+.cm-atomic-figure-export {
+  position: absolute;
+  top: calc(0.35em + 6px);
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--atomic-editor-border, #3d3d3d);
+  border-radius: 6px;
+  background: var(--atomic-editor-bg-panel, #1e1e1e);
+  color: var(--atomic-editor-fg-muted, #888);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.cm-atomic-svg:hover .cm-atomic-figure-export,
+.cm-atomic-mermaid:hover .cm-atomic-figure-export,
+.cm-atomic-figure-export:focus-visible {
+  opacity: 1;
+}
+
+.cm-atomic-figure-export:hover {
+  color: var(--atomic-editor-fg, #ddd);
+}

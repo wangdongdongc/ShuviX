@@ -254,6 +254,28 @@
   "steps": {
     "thinking": "Thinking"
   },
+  "figureExport": {
+    "button": "Export",
+    "format": "Format",
+    "scheme": "Colors",
+    "schemeCurrent": "Current theme",
+    "schemeLight": "Light",
+    "schemeDark": "Dark",
+    "background": "Background",
+    "bgNone": "Transparent",
+    "bgFill": "Filled",
+    "scale": "Scale",
+    "vector": "Vector",
+    "noteJpg": "JPG has no transparency, so the background is always filled.",
+    "noteSvg": "Colors are written as real values, so the file looks right outside ShuviX too.",
+    "copy": "Copy image",
+    "copied": "Copied",
+    "copyFailed": "Couldn't copy the image. Try downloading it instead.",
+    "download": "Download",
+    "building": "Preparing…",
+    "failed": "Couldn't export: {{error}}",
+    "defaultName": "figure"
+  },
   "message": {
     "user": "User",
     "copy": "Copy",
