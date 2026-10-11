@@ -333,7 +333,7 @@ declare global {
     overriddenBy?: string
     /** 项目指令文件清单（shuvix-instruction-files），顺序即优先级；空 = 不注入 */
     instructionFiles: string[]
-    /** 项目感知：是否注入项目提示词与项目记忆索引（shuvix-project-awareness） */
+    /** 项目感知：是否注入项目提示词（shuvix-project-awareness） */
     projectAwareness: boolean
     source: 'builtin' | 'user'
     basePath: string
@@ -1009,14 +1009,6 @@ declare global {
     mentions: {
       /** 该会话启用库内的知识条目视图（含 knowledge 工具指针 baseName/bundlePath）；未启用任何库返回空 */
       listKnowledgeEntries: (params: { sessionId: string }) => Promise<KnowledgeMentionEntry[]>
-    }
-    memory: {
-      /** 列出某项目的记忆条目（视图形状，不含正文）；无记忆返回空数组 */
-      list: (params: {
-        projectId: string
-      }) => Promise<import('@shuvix/chat-protocol/types/memory').ProjectMemoryEntry[]>
-      /** 打开一条记忆：一条至多一个笔记本会话，已存在则复用；文件已不在返回 null */
-      openNote: (params: { projectId: string; slug: string }) => Promise<Session | null>
     }
     events: {
       subscribe: (

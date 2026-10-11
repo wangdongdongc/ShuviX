@@ -43,7 +43,6 @@ const PART_KEY: Record<string, string> = {
   instructionFile: PROMPT_SECTION_KEY.instructions,
   projectPrompt: PROMPT_SECTION_KEY.projectPrompt,
   knowledgeBases: PROMPT_SECTION_KEY.knowledge,
-  projectMemory: PROMPT_SECTION_KEY.memory,
   systemContext: PROMPT_SECTION_KEY.bot
 }
 

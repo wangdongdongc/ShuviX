@@ -102,14 +102,8 @@ export interface SessionSettings {
   bot?: string
   /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
   agentProfile?: string
-  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目外的文件为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
   notebookPath?: string
-  /**
-   * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
-   * 侧栏据此把它归入项目组下的「项目记忆」子文件夹，而不是并排混进会话列表
-   * （同一条记忆在同一处出现两次，比少一处入口更糟）。
-   */
-  memorySlug?: string
   /**
    * 运行标记（主进程的界面口径，P3-12）：`interrupted` = 上个进程退出时这条会话正在跑，等用户「继续」。
    * 侧栏圆点读它（`selectInterruptedSessions`）；本端收到 `agent_start` 即就地改掉

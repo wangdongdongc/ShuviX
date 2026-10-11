@@ -60,9 +60,6 @@
       },
       "resolveKnowledgeBases": {
         "implemented": false
-      },
-      "resolveProjectMemory": {
-        "implemented": false
       }
     },
     "systemContext": []

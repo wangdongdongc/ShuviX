@@ -23,8 +23,8 @@ operation that matches no rule runs freely; every protection ShuviX ships is a v
 The policies themselves are not OS-level isolation. That is the separate **command sandbox**: on
 macOS, with Settings → LLM tools → bash → Sandbox on, each `bash` command runs confined by the
 operating system. It confines file access to this session's own directories (the working
-directory, its temporary folder, its artifacts and tool results, the knowledge bases ticked for
-it, plus the paths you allowed and remembered): a confined command can read and write there, read
+directory, its temporary folder, its artifacts and tool results, its knowledge bases (its
+project's own base and the ones ticked for it), plus the paths you allowed and remembered): a confined command can read and write there, read
 the skill folders and the ShuviX manual, and read outside your home folder — nothing else. It
 also cannot open apps, signal other processes or connect to local services such as Docker. Git, installing dependencies, builds and other tools that read their configuration or
 caches in your home folder are meant to run outside it. The host reports whether a run was
@@ -166,12 +166,11 @@ matched (with a warning), an allow rule as not matched. Always guard with the ty
 | Name                    | Type     | Meaning                                                                                       |
 | ----------------------- | -------- | --------------------------------------------------------------------------------------------- |
 | `workspace`             | string   | the session's working directory                                                               |
-| `sessionDirs`           | string[] | this session's own read-write directories: the working directory (unless it is `/`, covers your home folder, or is ShuviX's own configuration or app data), its temporary folder, its artifacts, its tool results and the knowledge bases ticked for it (every change to a base is committed to the base's own git). Computed by the host from the session's settings — the same list the command sandbox confines a command to |
+| `sessionDirs`           | string[] | this session's own read-write directories: the working directory (unless it is `/`, covers your home folder, or is ShuviX's own configuration or app data), its temporary folder, its artifacts, its tool results and its knowledge bases — its project's own base and the ones ticked for it (every change to a base is committed to the base's own git). Computed by the host from the session's settings — the same list the command sandbox confines a command to |
 | `sessionReadDirs`       | string[] | this session's read-only directories: the skill folders (builtin, `~/.shuvix/skills` and every enabled external skill directory) and the ShuviX manual when it is ticked. Reading them is free, writing asks — a skill is instructions the agent itself follows. Computed by the host; a confined command may read them too |
 | `home`                  | string   | the user's home directory                                                                     |
 | `toolResultsBase`       | string   | where large tool results are spooled                                                          |
 | `skillsDirs`            | string[] | the skill directories (global, builtin, registered external)                                  |
-| `memoryDirs`            | string[] | the legacy project-memory root                                                                |
 | `botsDir`               | string   | `~/.shuvix/bots`                                                                              |
 | `builtinKnowledgeDir`   | string   | the read-only knowledge base ShuviX ships (this one)                                          |
 | `sessionArtifactsDir`   | string   | this conversation's own artifacts, `~/.shuvix/artifacts/<session>`                            |

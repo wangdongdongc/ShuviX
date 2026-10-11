@@ -66,9 +66,9 @@
     "deletePolicy": "Delete policy",
     "deleteHook": "Delete hook",
     "disabledBadge": "Disabled",
-    "projectMemory": "Project Memory",
-    "projectMemoryHint": "What the agent learned about this project — injected into every session",
-    "memoryPinned": "Always applies (full text injected every session)",
+    "projectKnowledge": "Project Knowledge Base",
+    "projectKnowledgeHint": "This project's own knowledge base: every session in the project has it, and what the agent learns about the project is recorded here",
+    "projectKnowledgeEmpty": "No entries yet",
     "today": "Today",
     "noSessionsOnDay": "No sessions on this day",
     "newBotChat": "New bot chat",
@@ -170,14 +170,7 @@
       "workingBelow": "ShuviX is working below"
     }
   },
-  "memory": {
-    "recall": "When to open it",
-    "pinned": "Always applies (full text injected)",
-    "updated": "Last updated",
-    "session": "Recorded in session"
-  },
   "knowledge": {
-    "scopeProjects": "Projects",
     "badgeDraft": "Draft — not reviewed yet",
     "badgeVerified": "Verified",
     "badgeVerifiedOutdated": "Edited after verification",
@@ -426,9 +419,8 @@
     "extensionsLocked": "Read-only: the agent has already been created. Remove it from the agent chip above to change extensions",
     "extensionDeclared": "Declared by the {{profile}} agent: every session of that agent has it. To remove it, override that agent's md.",
     "knowledgeGroup": "Knowledge bases",
-    "knowledgeDesc": "Which bases this session can search and write to. Changes take effect right away.",
-    "knowledgeDefault": "Not picked yet — new sessions start with none. Tick the bases this session should use; changes take effect right away.",
-    "knowledgeProjectBase": "This project"
+    "knowledgeDesc": "Which other bases this session can search and write to (a session in a project always has that project's own base). Changes take effect right away.",
+    "knowledgeDefault": "Not picked yet — new sessions start with none (a session in a project always has that project's own base). Tick the bases this session should use; changes take effect right away."
   },
   "projectForm": {
     "createTitle": "New Project",
@@ -465,7 +457,7 @@
     "systemPrompt": "Project prompt",
     "systemPromptPlaceholder": "Plain-text prompt injected into every session of this project (leave empty for none)",
     "knowledgeBases": "Knowledge bases",
-    "knowledgeBasesDesc": "Which bases new sessions of this project start with; each session can change its own afterwards."
+    "knowledgeBasesDesc": "This project's own base is always on in its sessions; pick which other bases new sessions start with. Each session can change its own afterwards."
   },
   "settings": {
     "title": "Settings",

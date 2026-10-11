@@ -66,9 +66,9 @@
     "deletePolicy": "ポリシーを削除",
     "deleteHook": "フックを削除",
     "disabledBadge": "無効",
-    "projectMemory": "プロジェクトメモリ",
-    "projectMemoryHint": "エージェントが記録したプロジェクトの知見。各セッションに注入されます",
-    "memoryPinned": "常駐メモリ（本文を毎回注入）",
+    "projectKnowledge": "プロジェクト知識ベース",
+    "projectKnowledgeHint": "このプロジェクト自身の知識ベース：プロジェクト内のセッションには常に付き、エージェントが学んだことはここに記録されます",
+    "projectKnowledgeEmpty": "まだエントリはありません",
     "today": "今日",
     "noSessionsOnDay": "この日のセッションはありません",
     "newBotChat": "新しい Bot 会話",
@@ -170,14 +170,7 @@
       "workingBelow": "ShuviX が下で編集中です"
     }
   },
-  "memory": {
-    "recall": "参照する条件",
-    "pinned": "常駐（本文を毎回注入）",
-    "updated": "最終更新",
-    "session": "記録したセッション"
-  },
   "knowledge": {
-    "scopeProjects": "プロジェクト",
     "badgeDraft": "下書き — 未確認",
     "badgeVerified": "確認済み",
     "badgeVerifiedOutdated": "確認後に編集あり",
@@ -426,9 +419,8 @@
     "extensionsLocked": "エージェント作成済みのため読み取り専用です。変更するには上のエージェントチップから削除してください",
     "extensionDeclared": "エージェント「{{profile}}」が宣言しています：そのエージェントのすべてのセッションで有効です。外すには、そのエージェントの md を上書きしてください。",
     "knowledgeGroup": "ナレッジベース",
-    "knowledgeDesc": "このセッションが検索・追記できるベース。変更はすぐに効きます。",
-    "knowledgeDefault": "まだ選択されていません — 新しいセッションは既定でどれも有効になりません。このセッションで使う知識ベースにチェックを入れてください。変更はすぐ反映されます。",
-    "knowledgeProjectBase": "このプロジェクト"
+    "knowledgeDesc": "このセッションが追加で検索・追記できるベース（プロジェクト内のセッションには、そのプロジェクトの知識ベースが常に付きます）。変更はすぐに効きます。",
+    "knowledgeDefault": "まだ選択されていません — 新しいセッションは既定でどれも有効になりません（プロジェクト内のセッションには、そのプロジェクトの知識ベースが常に付きます）。このセッションで使う知識ベースにチェックを入れてください。変更はすぐ反映されます。"
   },
   "projectForm": {
     "createTitle": "新規プロジェクト",
@@ -465,7 +457,7 @@
     "systemPrompt": "プロジェクトプロンプト",
     "systemPromptPlaceholder": "このプロジェクトの各セッションに注入されるプレーンテキスト(空欄で無効)",
     "knowledgeBases": "ナレッジベース",
-    "knowledgeBasesDesc": "このプロジェクトの新しいセッションが既定で使うベース。各セッションで後から変更できます。"
+    "knowledgeBasesDesc": "このプロジェクトの知識ベースはそのセッションで常に有効です。ここでは新しいセッションが既定で追加で使うベースを選びます。各セッションで後から変更できます。"
   },
   "settings": {
     "title": "設定",

@@ -43,8 +43,6 @@ export { SessionGroup } from './sidebar/SessionGroup'
 export type { SessionGroupProps } from './sidebar/SessionGroup'
 export { ProjectSessionGroups, TEMP_GROUP_KEY } from './sidebar/ProjectSessionGroups'
 export type { ProjectSessionGroupsProps } from './sidebar/ProjectSessionGroups'
-export { ProjectMemoryFolder } from './sidebar/ProjectMemoryFolder'
-export type { ProjectMemoryFolderProps, ProjectMemoryAdapter } from './sidebar/ProjectMemoryFolder'
 export { Sidebar } from './sidebar/Sidebar'
 export type { SidebarProps, SidebarCaps } from './sidebar/Sidebar'
 export { BotSessionDialog } from './sidebar/BotSessionDialog'
@@ -61,6 +59,8 @@ export type {
   KnowledgeBasesSectionProps
 } from './settings/KnowledgeBasesSection'
 export { KnowledgeGroup } from './sidebar/KnowledgeGroup'
+export { ProjectKnowledgeFolder } from './sidebar/ProjectKnowledgeFolder'
+export type { ProjectKnowledgeFolderProps } from './sidebar/ProjectKnowledgeFolder'
 export type {
   KnowledgeGroupProps,
   KnowledgeGroupAdapter,

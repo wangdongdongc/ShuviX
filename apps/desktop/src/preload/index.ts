@@ -57,7 +57,6 @@ import type {
   ImportSelection
 } from '@shuvix/chat-protocol/types/configShare'
 import type { ContextMenuRequest } from '@shuvix/chat-protocol/types/contextMenu'
-import type { ProjectMemoryEntry } from '@shuvix/chat-protocol/types/memory'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 import type { LiveDocRequest, LiveDocResult } from '@shuvix/chat-protocol/liveDocument'
 import { createSyncBridge } from './syncBridge'
@@ -1020,15 +1019,6 @@ const api = {
       ipcRenderer.invoke('knowledge:mentionEntries', params) as Promise<KnowledgeMentionEntry[]>
   },
 
-  // ============ 项目记忆（侧栏项目组下的「项目记忆」子文件夹） ============
-  memory: {
-    /** 列出某项目的记忆条目（视图形状，不含正文）；无记忆返回空数组 */
-    list: (params: { projectId: string }) =>
-      ipcRenderer.invoke('memory:list', params) as Promise<ProjectMemoryEntry[]>,
-    /** 打开一条记忆：一条至多一个笔记本会话，已存在则复用；文件已不在返回 null */
-    openNote: (params: { projectId: string; slug: string }) =>
-      ipcRenderer.invoke('memory:openNote', params)
-  },
   /** 通用内部事件订阅（main 经 'app:event' 广播 AppEvent，与 agent:event 并列） */
   events: {
     // 单一 ipcRenderer 监听 + 本地扇出（见上方 subscribeAppEvent），避免 app:event 监听器泄漏告警

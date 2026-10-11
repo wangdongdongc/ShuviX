@@ -101,7 +101,6 @@ function makeSecurity(opts: { review?: Reviewer; response?: InputResponse; sessi
         workspace: '/ws',
         toolResultsBase: '/tool-results',
         skillsDirs: ['/skills'],
-        memoryDirs: [],
         knowledgeRoot: '/kb',
         knowledgeSessionDirs: [],
         home: '/home/u',

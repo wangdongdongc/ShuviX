@@ -73,7 +73,6 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => '/tmp/shuvix-rv-tool-results',
   getDefaultSkillsDir: () => '/tmp/shuvix-rv-skills',
   getBuiltinSkillsDir: () => '/tmp/shuvix-rv-builtin-skills',
-  getMemoryRootDir: () => '/tmp/shuvix-rv-memory',
   getDefaultBotsDir: () => '/tmp/shuvix-rv-bots',
   getDefaultPoliciesDir: () => '/tmp/shuvix-rv-policies',
   getDefaultAgentsDir: () => '/tmp/shuvix-rv-agents',

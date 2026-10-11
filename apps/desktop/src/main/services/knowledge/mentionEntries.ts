@@ -17,7 +17,7 @@ import { builtinBaseDisplayName } from './knowledgePaths'
 import { scanBundle } from './scan'
 import { enabledTargets } from './sessionBundle'
 
-/** 该会话启用库内的全部条目（用户库在前、保留名按启用选择里的顺序；每库内按路径字典序） */
+/** 该会话启用库内的全部条目（库序同 enabledTargets：有项目时项目库打头，其余按选择的顺序；每库内按路径字典序） */
 export async function listKnowledgeMentionEntries(
   sessionId: string
 ): Promise<KnowledgeMentionEntry[]> {

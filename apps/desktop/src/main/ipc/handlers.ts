@@ -29,7 +29,6 @@ import { registerWidgetHandlers } from './widgetHandlers'
 import { registerConfigShareHandlers } from './configShareHandlers'
 import { registerFilesHandlers } from './filesHandlers'
 import { registerKnowledgeHandlers } from './knowledgeHandlers'
-import { registerMemoryHandlers } from './memoryHandlers'
 import { registerPinChatHandlers } from './pinChatHandlers'
 import { registerNotificationHandlers } from './notificationHandlers'
 import { registerLiveDocumentHandlers } from './liveDocumentHandlers'
@@ -72,7 +71,6 @@ export function registerIpcHandlers(): void {
   registerConfigShareHandlers()
   registerFilesHandlers()
   registerKnowledgeHandlers()
-  registerMemoryHandlers()
   registerPinChatHandlers()
   registerNotificationHandlers()
   registerLiveDocumentHandlers()

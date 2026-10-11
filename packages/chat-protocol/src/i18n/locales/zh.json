@@ -66,9 +66,9 @@
     "deletePolicy": "删除策略",
     "deleteHook": "删除 Hook",
     "disabledBadge": "已禁用",
-    "projectMemory": "项目记忆",
-    "projectMemoryHint": "该项目的记忆：agent 记下的项目经验，随会话注入模型上下文",
-    "memoryPinned": "常驻记忆（正文每次注入）",
+    "projectKnowledge": "项目知识库",
+    "projectKnowledgeHint": "这个项目自己的知识库：属于这个项目的会话恒带它，agent 学到的东西记在这里",
+    "projectKnowledgeEmpty": "还没有条目",
     "today": "今天",
     "noSessionsOnDay": "当日无会话",
     "newBotChat": "新建 Bot 会话",
@@ -170,14 +170,7 @@
       "workingBelow": "ShuviX 正在下方编辑"
     }
   },
-  "memory": {
-    "recall": "召回条件",
-    "pinned": "常驻（正文每次注入）",
-    "updated": "更新日期",
-    "session": "来源会话"
-  },
   "knowledge": {
-    "scopeProjects": "项目",
     "badgeDraft": "草稿 —— 尚未核实",
     "badgeVerified": "已核实",
     "badgeVerifiedOutdated": "核实后又被修改",
@@ -426,9 +419,8 @@
     "extensionsLocked": "智能体已创建，扩展能力只读。要改，先在上方的智能体胶囊上移除它",
     "extensionDeclared": "由智能体「{{profile}}」声明：它的每条会话都带着这一项。要去掉，请覆盖这个智能体的 md。",
     "knowledgeGroup": "知识库",
-    "knowledgeDesc": "这条会话能搜、能写哪几个库。改完立刻生效，不用新开会话。",
-    "knowledgeDefault": "还没选过 —— 新会话缺省一个都不启用。勾上这条会话要用的库，改完立即生效。",
-    "knowledgeProjectBase": "本项目"
+    "knowledgeDesc": "这条会话还能搜、能写哪几个库（属于项目的会话恒带本项目的库，不用勾）。改完立刻生效，不用新开会话。",
+    "knowledgeDefault": "还没选过 —— 新会话缺省一个都不启用（属于项目的会话恒带本项目的库）。勾上这条会话要用的库，改完立即生效。"
   },
   "projectForm": {
     "createTitle": "新建项目",
@@ -465,7 +457,7 @@
     "systemPrompt": "项目提示词",
     "systemPromptPlaceholder": "注入到本项目每个会话的纯文本提示词(留空则不注入)",
     "knowledgeBases": "知识库",
-    "knowledgeBasesDesc": "这个项目的新会话缺省用哪几个库；每条会话之后都能自己改。"
+    "knowledgeBasesDesc": "本项目的知识库在它的会话里恒启用；这里选的是新会话缺省还用哪几个库，每条会话之后都能自己改。"
   },
   "settings": {
     "title": "设置",

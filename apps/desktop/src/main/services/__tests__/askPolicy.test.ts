@@ -40,7 +40,6 @@ const WORKSPACE = join(tmpdir(), 'shuvix-policy-ws')
 const TOOL_RESULTS = join(tmpdir(), 'shuvix-policy-tool-results')
 const DEFAULT_SKILLS = join(tmpdir(), 'shuvix-policy-skills')
 const BUILTIN_SKILLS = join(tmpdir(), 'shuvix-policy-builtin-skills')
-const MEMORY_ROOT = join(tmpdir(), 'shuvix-policy-memory')
 const EXTERNAL_SKILLS = join(tmpdir(), 'shuvix-policy-external-skills')
 const OUTSIDE = join(tmpdir(), 'shuvix-policy-elsewhere')
 /** app.getPath('userData') 的替身（会话目录的规格要它；盘上不存在也行） */
@@ -110,7 +109,6 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => TOOL_RESULTS,
   getDefaultSkillsDir: () => DEFAULT_SKILLS,
   getBuiltinSkillsDir: () => BUILTIN_SKILLS,
-  getMemoryRootDir: () => MEMORY_ROOT,
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
   // vars.shuvixConfigDirs 的四个目录（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => POLICIES_DIR,

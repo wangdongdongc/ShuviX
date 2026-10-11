@@ -75,7 +75,6 @@ export function securityFor(
       workspace: WORKSPACE,
       toolResultsBase: '/tool_results',
       skillsDirs: [],
-      memoryDirs: [],
       knowledgeRoot: '/kb',
       knowledgeSessionDirs: [],
       home: FAKE_HOME,

@@ -19,8 +19,5 @@ export const fenceInstructionFile = (filename: string, content: string): string 
 export const fenceProjectPrompt = (text: string): string =>
   `<project_prompt>\n${text}\n</project_prompt>`
 
-export const fenceProjectMemory = (text: string): string =>
-  `<project_memory>\n${text}\n</project_memory>`
-
 export const fenceKnowledgeBases = (text: string): string =>
   `<knowledge_bases>\n${text}\n</knowledge_bases>`

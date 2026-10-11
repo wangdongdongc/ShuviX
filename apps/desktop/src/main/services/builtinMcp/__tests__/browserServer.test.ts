@@ -102,7 +102,6 @@ vi.mock('../../toolContext', async () => {
               workspace: gate.ws,
               toolResultsBase: '/tool-results',
               skillsDirs: ['/skills'],
-              memoryDirs: [],
               knowledgeRoot: '/kb',
               knowledgeSessionDirs: [],
               home: gate.home,

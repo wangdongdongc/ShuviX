@@ -42,7 +42,6 @@ const PART_KEY: Record<string, string> = {
   instructionFile: PROMPT_SECTION_KEY.instructions,
   projectPrompt: PROMPT_SECTION_KEY.projectPrompt,
   knowledgeBases: PROMPT_SECTION_KEY.knowledge,
-  projectMemory: PROMPT_SECTION_KEY.memory,
   systemContext: PROMPT_SECTION_KEY.bot
 }
 
@@ -64,7 +63,7 @@ const fixtures = loadGoldenFixtures()
 
 describe('system prompt sections reproduce the P1-00 golden fixtures', () => {
   it('G-00 every fixture is covered (the directory is not empty)', () => {
-    expect(fixtures.length).toBeGreaterThanOrEqual(21)
+    expect(fixtures.length).toBeGreaterThanOrEqual(20)
   })
 
   it.each(fixtures.map((fixture) => [fixture.case, fixture] as const))(

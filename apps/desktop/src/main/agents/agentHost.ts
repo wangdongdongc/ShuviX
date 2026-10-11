@@ -13,8 +13,8 @@
  *    - `rebuildAgentTools`：重开会话时按锁记录 / 派生 agent 记录重建同一组 —— 不读会话配置；MCP 按声明
  *      快照建，缺省不连服务器，只有完整初始化（`connect`，option A：新进程里打开一条有可续工作的锁着的
  *      会话）才与创建同一条路当场连上；`next` 只来自运行时给的重建上下文（宿主从不自己造）。
- *  - `desktopPromptHost` —— `PromptHost`：系统提示词五个活段落（指令文件 / 项目提示词 / 知识库 /
- *    项目记忆 / bot 人设）的数据源，每次请求准备时现调。
+ *  - `desktopPromptHost` —— `PromptHost`：系统提示词四个活段落（指令文件 / 项目提示词 / 知识库 /
+ *    bot 人设）的数据源，每次请求准备时现调。
  *  - `desktopPromptVars` —— 人设冻结时的变量表（`{{shuvix:*}}` 占位符的取值）。
  *
  * 工具的**次序**不在这里拼：运行时的锁（`composeAgentTools`，K6）按「名单序内置 → agent → skill →
@@ -72,7 +72,6 @@ import { providerDao } from '../dao/providerDao'
 import { sessionRecords } from '../services/sessionRecords'
 import { projectDao } from '../dao/projectDao'
 import { resolveInstructionContent } from '../services/instruction'
-import { resolveProjectMemoryIndex } from '../services/memory'
 import { chatFrontendRegistry } from '../frontend/core'
 import { wrapDurableTool } from '../services/wrapToolOutput'
 import { sandboxGloballyActive } from '../services/sandbox'
@@ -503,10 +502,9 @@ export const desktopPromptHost: PromptHost = {
     resolveInstructionContent(cwd || resolveProjectConfig(sessionId).workingDirectory, candidates),
   resolveProjectPrompt: (sessionId) => sessionProject(sessionId)?.systemPrompt?.trim() || null,
   // 知识库引导：只列这条会话启用了哪几个库（不扫库、不数条目、不给路径 —— 路径只由 knowledge
-  // 工具发放），一个都没启用就回 null、整段不注入。档案带不带 knowledge 工具那道门在段落选择里
+  // 工具发放）；项目会话恒含项目库，一个都没启用就回 null、整段不注入。档案带不带 knowledge
+  // 工具那道门在段落选择里
   resolveKnowledgeBases: (sessionId) => renderKnowledgeGuide(enabledBaseChoices(sessionId)),
-  // 无项目会话返回 null（不注入）—— 与项目提示词同一种降级
-  resolveProjectMemory: (sessionId) => resolveProjectMemoryIndex(sessionId),
   /**
    * bot 会话根 agent 的 `<bot_profile>`：绑定的那份 bot md 的正文（只选给 bot 基座上的根 agent ——
    * 子会话、派生 agent 按自己的档案说话）。绑定的 md 不在了 → null，会话照常跑在基座 `bot` 上。

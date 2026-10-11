@@ -1,5 +1,5 @@
 /**
- * 系统提示词的六个段落扩展：选择矩阵、文本规则（修剪 / 跳过 / 围栏），以及经真实 durable 请求看到的
+ * 系统提示词的五个段落扩展：选择矩阵、文本规则（修剪 / 跳过 / 围栏），以及经真实 durable 请求看到的
  * 行为 —— 人设冻结、活段落变了才发 `pi.system` 增量、未选中的段落不调 seam、seam 抛错保留上次的文本。
  */
 import { getCurrentSystemPrompt, Type } from '@earendil-works/pi-ai'
@@ -13,12 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { AgentStateDoc } from '../docs'
 import type { DurableSession } from '../durableSession'
-import {
-  fenceInstructionFile,
-  fenceKnowledgeBases,
-  fenceProjectMemory,
-  fenceProjectPrompt
-} from '../prompt/fences'
+import { fenceInstructionFile, fenceKnowledgeBases, fenceProjectPrompt } from '../prompt/fences'
 import { computeFrozenAgentPrompt, freezePersona } from '../prompt/persona'
 import {
   botSectionText,
@@ -81,11 +76,10 @@ describe('selection matrix (promptExtensionsFor)', () => {
     expect(promptExtensionsFor(undeclared)).toEqual([P.persona])
   })
 
-  it('PS-03 project prompt and memory travel together on project awareness', () => {
+  it('PS-03 project awareness selects the project prompt', () => {
     expect(promptExtensionsFor(spec({ projectAwareness: true }))).toEqual([
       P.persona,
-      P.projectPrompt,
-      P.memory
+      P.projectPrompt
     ])
   })
 
@@ -123,12 +117,11 @@ describe('selection matrix (promptExtensionsFor)', () => {
       'shuvix.prompt.instructions',
       'shuvix.prompt.project-prompt',
       'shuvix.prompt.knowledge',
-      'shuvix.prompt.memory',
       'shuvix.prompt.bot'
     ])
   })
 
-  it('PS-07 the extension set: six extensions with one untagged section each, select() = names', () => {
+  it('PS-07 the extension set: five extensions with one untagged section each, select() = names', () => {
     const prompt = createPromptExtensions({})
     expect(prompt.all.map((extension) => extension.name)).toEqual([...PROMPT_EXTENSION_ORDER])
     for (const extension of prompt.all) {
@@ -141,12 +134,11 @@ describe('selection matrix (promptExtensionsFor)', () => {
       'project_instructions',
       'project_prompt',
       'knowledge_bases',
-      'project_memory',
       'bot_profile'
     ])
     const s = spec({ projectAwareness: true, toolNames: ['knowledge'] })
     expect(prompt.select(s).map((extension) => extension.name)).toEqual(promptExtensionsFor(s))
-    expect(prompt.get(P.memory)).toBe(prompt.all[4])
+    expect(prompt.get(P.knowledge)).toBe(prompt.all[3])
   })
 })
 
@@ -166,8 +158,8 @@ describe('text rules', () => {
       '<project_prompt>\nhello\n</project_prompt>'
     )
     expect(fencedSectionText('\n\t\n', fenceKnowledgeBases)).toBeUndefined()
-    expect(fencedSectionText(null, fenceProjectMemory)).toBeUndefined()
-    expect(fencedSectionText(undefined, fenceProjectMemory)).toBeUndefined()
+    expect(fencedSectionText(null, fenceProjectPrompt)).toBeUndefined()
+    expect(fencedSectionText(undefined, fenceProjectPrompt)).toBeUndefined()
   })
 
   it('PS-10 bot blocks: each trimmed, blank ones skipped, joined by a blank line', () => {
@@ -188,7 +180,6 @@ interface LiveHost {
     instruction: { filename: string; content: string } | null
     projectPrompt: string | null
     knowledge: string | null
-    memory: string | null
     bot: string | null
   }
   calls: string[]
@@ -201,7 +192,6 @@ function liveHost(): LiveHost {
     instruction: { filename: 'AGENTS.md', content: 'Use pnpm.' },
     projectPrompt: 'Acme billing.',
     knowledge: 'Bases: notes.',
-    memory: 'Never deploy on Fridays.',
     bot: 'You are Aria.\n\n<bot_profile name="aria" file="/b/aria.md">\nlikes tea\n</bot_profile>'
   }
   const calls: string[] = []
@@ -221,7 +211,6 @@ function liveHost(): LiveHost {
     },
     resolveProjectPrompt: seam('projectPrompt', () => values.projectPrompt),
     resolveKnowledgeBases: seam('knowledge', () => values.knowledge),
-    resolveProjectMemory: seam('memory', () => values.memory),
     resolveBotContext: seam('bot', () => values.bot)
   }
   return { host, values, calls, fail }
@@ -288,7 +277,6 @@ describe('sections through a real durable request', () => {
       K.instructions,
       K.projectPrompt,
       K.knowledge,
-      K.memory,
       K.bot
     ])
     expect(getCurrentSystemPrompt(t.kit.requests[0]!.messages)).toBe(
@@ -297,7 +285,6 @@ describe('sections through a real durable request', () => {
         fenceInstructionFile('AGENTS.md', 'Use pnpm.'),
         fenceProjectPrompt('Acme billing.'),
         fenceKnowledgeBases('Bases: notes.'),
-        fenceProjectMemory('Never deploy on Fridays.'),
         live.values.bot
       ].join('\n\n')
     )
@@ -305,7 +292,6 @@ describe('sections through a real durable request', () => {
       'instruction:s1:/work/acme:AGENTS.md,CLAUDE.md',
       'projectPrompt:s1',
       'knowledge:s1',
-      'memory:s1',
       'bot:s1'
     ])
   })
@@ -316,7 +302,7 @@ describe('sections through a real durable request', () => {
     live.calls.length = 0
     await turn(t, session, 'u2')
     expect(await systemEntries(conversation)).toHaveLength(1)
-    expect(live.calls).toHaveLength(5)
+    expect(live.calls).toHaveLength(4)
     expect(getCurrentSystemPrompt(t.kit.requests[1]!.messages)).toBe(
       getCurrentSystemPrompt(t.kit.requests[0]!.messages)
     )
@@ -350,7 +336,7 @@ describe('sections through a real durable request', () => {
     entries = await systemEntries(conversation)
     const prompt = getCurrentSystemPrompt(t.kit.requests[2]!.messages)
     expect(prompt.indexOf('<knowledge_bases>')).toBeGreaterThan(prompt.indexOf('<project_prompt>'))
-    expect(prompt.indexOf('<knowledge_bases>')).toBeLessThan(prompt.indexOf('<project_memory>'))
+    expect(prompt.indexOf('<knowledge_bases>')).toBeLessThan(prompt.indexOf('<bot_profile'))
     expect(prompt).toContain('Bases: notes, recipes.')
   })
 
@@ -395,7 +381,7 @@ describe('sections through a real durable request', () => {
     await lockPrompt(conversation, t.kit, frozen, prompt.select(spec({ projectAwareness: true })))
     await turn(t, session, 'u1')
     date = '2026-10-05'
-    live.values.memory = 'Fridays are fine now.'
+    live.values.projectPrompt = 'Acme billing, v2.'
     await turn(t, session, 'u2')
     expect(promptVarsCalls).toBe(1)
     const second = getCurrentSystemPrompt(t.kit.requests[1]!.messages)
@@ -403,7 +389,7 @@ describe('sections through a real durable request', () => {
     const entries = await systemEntries(conversation)
     expect(entries).toHaveLength(2)
     expect(sectionsOf(entries[1]!)).toEqual({
-      [K.memory]: fenceProjectMemory('Fridays are fine now.')
+      [K.projectPrompt]: fenceProjectPrompt('Acme billing, v2.')
     })
   })
 
@@ -440,14 +426,14 @@ describe('sections through a real durable request', () => {
   it('PS-19 a seam that throws keeps the section it showed before and is reported; the request still goes out', async () => {
     const { t, live, session, conversation } = await setup()
     await turn(t, session, 'u1')
-    live.fail.add('memory')
-    live.values.memory = 'changed but unreachable'
+    live.fail.add('projectPrompt')
+    live.values.projectPrompt = 'changed but unreachable'
     await turn(t, session, 'u2')
     expect(await systemEntries(conversation)).toHaveLength(1)
     expect(getCurrentSystemPrompt(t.kit.requests[1]!.messages)).toContain(
-      fenceProjectMemory('Never deploy on Fridays.')
+      fenceProjectPrompt('Acme billing.')
     )
-    expect(t.warnings.some((warning) => warning.includes('memory exploded'))).toBe(true)
+    expect(t.warnings.some((warning) => warning.includes('projectPrompt exploded'))).toBe(true)
   })
 
   it('PS-20 a seam that throws on the very first request leaves the section out', async () => {
@@ -487,9 +473,7 @@ describe('sections through a real durable request', () => {
     const empty = await setup(spec({ projectAwareness: true }), { persona: '' })
     await turn(empty.t, empty.session, 'u1')
     expect(getCurrentSystemPrompt(empty.t.kit.requests[0]!.messages)).toBe(
-      [fenceProjectPrompt('Acme billing.'), fenceProjectMemory('Never deploy on Fridays.')].join(
-        '\n\n'
-      )
+      fenceProjectPrompt('Acme billing.')
     )
     expect(empty.t.warnings).toEqual([])
 

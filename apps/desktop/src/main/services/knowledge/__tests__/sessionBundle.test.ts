@@ -1,8 +1,12 @@
 /**
  * sessionBundle —— 「这条会话有哪几个知识库」以及工具参数里的 `base` 解析到哪个 bundle。
  *
- * 选择是一条**活的回落链**（不落库、不快照）：会话设过 → 父会话设过 → 项目设过 → **缺省一个都不启用**。
- * 与扩展能力勾选的快照语义刻意不同 —— 知识库是每次调用现查的。
+ * **项目库是隐式的**（2026-10-10，接替退役的项目记忆）：会话属于（真实的）项目，`project` 就恒启用、
+ * 排在最前，不管各级选择写了什么（`[]` 也一样）；它不是配置卡的候选项，存量选择里残留的 `project` 读时
+ * 剔掉。隐藏载体项目（`__agents__` …）不算项目（SB-P1..P10）。
+ *
+ * 其余的库由用户圈定，是一条**活的回落链**（不落库、不快照）：会话设过 → 父会话设过 → 项目设过 →
+ * **缺省一个都不启用**。与扩展能力勾选的快照语义刻意不同 —— 知识库是每次调用现查的。
  *
  * 选择是**硬边界**：`bases` 只列启用且此刻真在的库，点名没启用的名字报错并列出启用了哪些。
  * 库名按目录清单精确匹配（NFC 归一、大小写敏感）；保留名有两个 —— `project` 是项目库、`shuvix` 是只读的
@@ -14,6 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { basename, isAbsolute, join } from 'node:path'
+import { renderKnowledgeGuide } from '@shuvix/agent-runtime'
 import type { Project } from '../../../dao/types/project'
 
 const state = vi.hoisted(() => ({ root: '' }))
@@ -162,8 +167,8 @@ describe('sessionBundle', () => {
     expect(readdirSync(bundleAt(root, 'projects/p1'))).toEqual(before)
   })
 
-  it('SB-3 resolveBase 的 `project`（去首尾空白）与 sessionBundle 是同一个结果', async () => {
-    inProject(['project'])
+  it('SB-3 resolveBase 的 `project`（去首尾空白）与 sessionBundle 是同一个结果；不必勾选（隐式启用）', async () => {
+    inProject()
     expect(await resolveBase('s1', ' project ')).toEqual(sessionBundle('s1'))
   })
 
@@ -198,7 +203,7 @@ describe('sessionBundle', () => {
 })
 
 describe('resolveBase / listBases —— 选择', () => {
-  it('SB-5 谁都没设过 → 一个库都不启用（在不在项目里都一样）；勾上之后按磁盘拼写解析、去首尾空白；只读', async () => {
+  it('SB-5 谁都没设过 → 用户库一个都不启用（项目会话只有隐式的项目库）；勾上之后按磁盘拼写解析、去首尾空白；只读', async () => {
     const userRoot = userRootOf(root)
     seedConcept(userRoot, 'notes/a.md', ['type: Memory', 'title: A'])
     mkdirSync(join(userRoot, '读书笔记'))
@@ -208,14 +213,17 @@ describe('resolveBase / listBases —— 选择', () => {
       label: 'knowledge base "notes"'
     }
 
-    // 缺省是空的：磁盘上有两个库、会话还在项目里，照样一个都不启用 —— 范围得用户自己圈
+    // 缺省是空的：磁盘上有两个库，照样一个用户库都不启用 —— 范围得用户自己圈；项目会话只有隐式的项目库
     inProject()
-    expect(await listBases('s1')).toEqual([])
-    expect(await resolveBase('s1', 'notes')).toEqual({ error: NO_BASES })
+    expect((await listBases('s1')).map((b) => b.base)).toEqual(['project'])
+    expect(await resolveBase('s1', 'notes')).toEqual({
+      error: `"notes" is not one of this session's knowledge bases. Enabled: "project".`
+    })
     mockPick({ projectId: null })
     expect(await listBases('s1')).toEqual([])
+    expect(await resolveBase('s1', 'notes')).toEqual({ error: NO_BASES })
 
-    // 勾上之后：顺序就是选择写的那一份，项目库与用户库之间没有内建先后
+    // 勾上之后：项目库恒在最前，用户库按选择写的那一份；选择里残留的 project 不改变它的位置
     inProject(['notes', '读书笔记', 'project'])
     expect(await resolveBase('s1', 'notes')).toEqual(notes)
     expect(await resolveBase('s1', '  读书笔记 ')).toEqual({
@@ -223,7 +231,7 @@ describe('resolveBase / listBases —— 选择', () => {
       dir: join(userRoot, '读书笔记'),
       label: 'knowledge base "读书笔记"'
     })
-    expect((await listBases('s1')).map((b) => b.base)).toEqual(['notes', '读书笔记', 'project'])
+    expect((await listBases('s1')).map((b) => b.base)).toEqual(['project', 'notes', '读书笔记'])
 
     // 不在项目里：勾了也解析不出 project，用户库照旧
     mockPick({ projectId: null, settings: { knowledgeBases: ['notes', '读书笔记', 'project'] } })
@@ -299,12 +307,12 @@ describe('resolveBase / listBases —— 选择', () => {
     const userRoot = userRootOf(root)
     seedConcept(userRoot, 'project/a.md', ['type: Memory', 'title: A'])
 
-    // 不在项目里：勾了 project 也解析不出来（这条会话没有项目库），同名的用户目录更够不着
+    // 不在项目里：勾了 project 也解析不出来（这条会话没有项目库），直说原因；同名的用户目录更够不着
     mockPick({ projectId: null, settings: { knowledgeBases: ['project'] } })
-    expect(await resolveBase('s1', ' project ')).toEqual({ error: NO_BASES })
+    expect(await resolveBase('s1', ' project ')).toEqual({ error: NO_PROJECT })
     expect(await listBases('s1')).toEqual([])
 
-    inProject(['project'])
+    inProject()
     expect(await resolveBase('s1', ' project ')).toEqual({
       bundle: 'projects/p1',
       dir: bundleAt(root, 'projects/p1'),
@@ -314,7 +322,7 @@ describe('resolveBase / listBases —— 选择', () => {
     expect(readdirSync(join(userRoot, 'project'))).toEqual(['a.md'])
   })
 
-  it('SB-8 listBases：启用且此刻真的在的库，按选择的顺序；选了但已经不在的悄悄跳过；列举本身不建任何东西', async () => {
+  it('SB-8 listBases：项目库打头，其余是启用且此刻真的在的库、按选择的顺序；选了但已经不在的悄悄跳过；列举本身不建任何东西', async () => {
     const userRoot = userRootOf(root)
     mkdirSync(join(userRoot, 'notes'), { recursive: true })
     mkdirSync(join(userRoot, 'alpha'))
@@ -326,8 +334,8 @@ describe('resolveBase / listBases —— 选择', () => {
     })
 
     expect(await listBases('s1')).toStrictEqual([
-      { base: 'notes', label: 'knowledge base "notes"', dir: join(userRoot, 'notes') },
       { base: 'project', label: 'project "Acme Corp"', dir: bundleAt(root, 'projects/p1') },
+      { base: 'notes', label: 'knowledge base "notes"', dir: join(userRoot, 'notes') },
       { base: 'alpha', label: 'knowledge base "alpha"', dir: join(userRoot, 'alpha') }
     ])
     expect(existsSync(join(root, PROJECTS))).toBe(false)
@@ -341,45 +349,44 @@ describe('resolveBase / listBases —— 选择', () => {
     // 项目设过：会话自己没设就用项目那份
     mockPick({ projectId: 'p1' })
     mockProjectBases('p1', ['alpha'])
-    expect((await listBases('s1')).map((b) => b.base)).toEqual(['alpha'])
+    expect((await listBases('s1')).map((b) => b.base)).toEqual(['project', 'alpha'])
 
     // 父会话设过：压过项目那份（子会话抄上一级）
     mockPick({ projectId: 'p1', parentId: 'parent' })
     mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: ['notes'] } })
-    expect((await listBases('s1')).map((b) => b.base)).toEqual(['notes'])
+    expect((await listBases('s1')).map((b) => b.base)).toEqual(['project', 'notes'])
 
     // 会话自己设过：压过父会话与项目
     mockPick({
       projectId: 'p1',
       parentId: 'parent',
-      settings: { knowledgeBases: ['project', 'alpha'] }
+      settings: { knowledgeBases: ['alpha', 'project'] }
     })
     mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: ['notes'] } })
     expect((await listBases('s1')).map((b) => b.base)).toEqual(['project', 'alpha'])
   })
 
-  it('SB-10 knowledgeBaseOptions：候选 = 用户库 +（有项目时）项目库；explicit 说明是不是有人明确设过', async () => {
+  it('SB-10 knowledgeBaseOptions：候选只有用户库（项目库隐式启用，从不是候选项）；explicit 说明是不是有人明确设过', async () => {
     const userRoot = userRootOf(root)
     for (const name of ['alpha', 'notes']) mkdirSync(join(userRoot, name), { recursive: true })
 
-    // 没给会话（项目配置对话框）：候选含项目库、不给选择
+    // 没给会话（项目配置对话框）：候选只有用户库、不给选择
     expect(knowledgeBaseOptions()).toEqual({
       options: [
         { name: 'alpha', label: 'alpha' },
-        { name: 'notes', label: 'notes' },
-        { name: 'project', label: '' }
+        { name: 'notes', label: 'notes' }
       ],
       selected: [],
       explicit: false
     })
 
-    // 会话没设过、项目也没设过 → 候选照列，但一个都没勾（缺省是空的），explicit 为假
+    // 会话没设过、项目也没设过 → 候选照列，但一个都没勾（缺省是空的），explicit 为假；
+    // 会话在项目里也不多出 project 这一项
     inProject()
     expect(knowledgeBaseOptions('s1')).toEqual({
       options: [
         { name: 'alpha', label: 'alpha' },
-        { name: 'notes', label: 'notes' },
-        { name: 'project', label: 'Acme Corp' }
+        { name: 'notes', label: 'notes' }
       ],
       selected: [],
       explicit: false
@@ -407,15 +414,17 @@ describe('SB-11..18 回落链与围栏清单', () => {
   }
   const baseNames = async (): Promise<string[]> => (await listBases('s1')).map((b) => b.base)
 
-  it('SB-11 「设过」只看是不是数组：项目设成 [] → 这个项目的会话一个库都不启用，不往缺省落', async () => {
+  it('SB-11 「设过」只看是不是数组：项目设成 [] → 这个项目的会话一个用户库都不启用（只剩隐式的项目库），不往缺省落', async () => {
     seedBases('alpha', 'notes')
     inProject()
-    // 空数组是一个明确的选择（「这个项目的会话不用知识库」），不是「没意见」
+    // 空数组是一个明确的选择（「这个项目的会话不用我的知识库」），不是「没意见」；项目库不归选择管
     mockProjectBases('p1', [])
 
-    expect(await listBases('s1')).toEqual([])
-    expect(await resolveBase('s1', 'notes')).toEqual({ error: NO_BASES })
-    expect(await resolveBase('s1', 'project')).toEqual({ error: NO_BASES })
+    expect(await baseNames()).toEqual(['project'])
+    expect(await resolveBase('s1', 'notes')).toEqual({
+      error: `"notes" is not one of this session's knowledge bases. Enabled: "project".`
+    })
+    expect(await resolveBase('s1', 'project')).toEqual(sessionBundle('s1'))
   })
 
   it('SB-12 非数组不算设过，逐级下落', async () => {
@@ -428,11 +437,11 @@ describe('SB-11..18 回落链与围栏清单', () => {
     // 落到项目那一份 —— 拿一个非空清单收尾才看得出「上面两级确实被跳过了」，
     // 缺省是空的之后，直接断 [] 分不清「跳过了」与「没跳过但都是空」
     mockProjectBases('p1', ['alpha'])
-    expect(await baseNames()).toEqual(['alpha'])
+    expect(await baseNames()).toEqual(['project', 'alpha'])
 
-    // 三级都是坏值 → 落到缺省，也就是一个都不启用
+    // 三级都是坏值 → 落到缺省，也就是一个用户库都不启用（项目库照旧在）
     projects.set('p1', { settings: { knowledgeBases: {} } })
-    expect(await baseNames()).toEqual([])
+    expect(await baseNames()).toEqual(['project'])
   })
 
   it('SB-13 sanitize 每一级都生效：去首尾空白、去空、去重保序', async () => {
@@ -465,7 +474,7 @@ describe('SB-11..18 回落链与围栏清单', () => {
     seedBases('alpha', 'notes')
     mockPick({ projectId: null })
 
-    // 候选里的 project 只跟着**会话自己**的 projectId：放一个解析不出来的名字就是给用户挖坑
+    // project 从来不是候选项（有项目时它隐式启用，没项目时它解析不出来）—— 这里也一样没有
     expect(knowledgeBaseOptions('s1')).toEqual({
       options: [
         { name: 'alpha', label: 'alpha' },
@@ -514,10 +523,10 @@ describe('SB-11..18 回落链与围栏清单', () => {
     // 选择里存的是 NFC 写法（用户在界面上输入 / 别的机器上写下的）
     mockPick({ projectId: 'p1', settings: { knowledgeBases: [nfc, 'project'] } })
 
-    // 围栏列的名字是**磁盘上的拼写**：归一只在 enabledTargets 里做一次，两侧不各过滤一遍
+    // 围栏列的名字是**磁盘上的拼写**：归一只在 enabledTargets 里做一次，两侧不各过滤一遍；项目库打头
     expect(enabledBaseChoices('s1')).toEqual([
-      { name: nfd, label: '' },
-      { name: 'project', label: 'Acme Corp' }
+      { name: 'project', label: 'Acme Corp' },
+      { name: nfd, label: '' }
     ])
     // 同一份结果：围栏列得出来的，工具就解析得到
     expect(await resolveBase('s1', nfc)).toEqual({
@@ -525,7 +534,7 @@ describe('SB-11..18 回落链与围栏清单', () => {
       dir: join(userRoot, nfd),
       label: `knowledge base "${nfd}"`
     })
-    expect((await listBases('s1')).map((b) => b.base)).toEqual([nfd, 'project'])
+    expect((await listBases('s1')).map((b) => b.base)).toEqual(['project', nfd])
   })
 })
 
@@ -575,13 +584,13 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     // 说明书随应用发布、就在那儿，但「在」不等于「启用」—— 缺省一个都不启用，它不例外
     inProject()
     expect(knowledgeBaseOptions('s1').selected).toEqual([])
-    expect(await baseNames()).toEqual([])
+    expect(await baseNames()).toEqual(['project'])
     mockPick({ projectId: null })
     expect(await baseNames()).toEqual([])
 
-    // 勾上就有：顺序按选择写的那一份，不再有「垫底」这条内建规则
+    // 勾上就有：项目库之后按选择写的那一份，不再有「垫底」这条内建规则
     inProject(['shuvix', 'alpha'])
-    expect(await baseNames()).toEqual(['shuvix', 'alpha'])
+    expect(await baseNames()).toEqual(['project', 'shuvix', 'alpha'])
   })
 
   it('SB-20 `shuvix` 是第二个保留名：目录恰好叫 shuvix 的用户库进不了候选，点名 shuvix 解析到内置库', async () => {
@@ -616,20 +625,18 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
 
   it('SB-22 内置库不在（开发期没拷 / 打包漏了）：候选里没有它、点名报错、别的库照常工作，全程不建任何目录', async () => {
     const userRoot = seedBases('notes')
+    // 存量选择里残留的 project：读时剔掉，但「有人明确设过」照样成立
     inProject(['notes', 'project'])
 
     // (a) 内置根整个不存在
     expect(knowledgeBaseOptions('s1')).toEqual({
-      options: [
-        { name: 'notes', label: 'notes' },
-        { name: 'project', label: 'Acme Corp' }
-      ],
-      selected: ['notes', 'project'],
+      options: [{ name: 'notes', label: 'notes' }],
+      selected: ['notes'],
       explicit: true
     })
-    expect(await baseNames()).toEqual(['notes', 'project'])
+    expect(await baseNames()).toEqual(['project', 'notes'])
     expect(await resolveBase('s1', 'shuvix')).toEqual({
-      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "notes", "project".`
+      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "project", "notes".`
     })
     // 缺席是增益的缺席：别的库该怎么用还怎么用
     expect(await resolveBase('s1', 'notes')).toEqual({
@@ -642,10 +649,10 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
 
     // (b) 库目录在、但没有生效语言那一版（只发了别的语言、又没 en 兜底）：同样当没有这个库
     mkdirSync(join(builtinRootOf(root), 'shuvix'), { recursive: true })
-    expect(knowledgeBaseOptions('s1').options.map((o) => o.name)).toEqual(['notes', 'project'])
-    expect(await baseNames()).toEqual(['notes', 'project'])
+    expect(knowledgeBaseOptions('s1').options.map((o) => o.name)).toEqual(['notes'])
+    expect(await baseNames()).toEqual(['project', 'notes'])
     expect(await resolveBase('s1', 'shuvix')).toEqual({
-      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "notes", "project".`
+      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "project", "notes".`
     })
     expect(treeOf(builtinRootOf(root))).toEqual(['shuvix/'])
   })
@@ -666,16 +673,16 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
   })
 
-  it('SB-24 listBases 只给内置那一行 note（只读提示）与绝对目录，用户库 / 项目库那两行不带 note', async () => {
+  it('SB-24 listBases 只给内置那一行 note（只读提示）与绝对目录，项目库 / 用户库那两行不带 note', async () => {
     const userRoot = seedBases('notes')
     seedBuiltinConcept(root, 'shuvix/en/agent-md.md', ['type: Guide', 'title: Agent md'])
-    inProject(['notes', 'project', 'shuvix'])
+    inProject(['notes', 'shuvix'])
 
     // toStrictEqual：多一个键少一个键都算错 —— 「只有内置那一行有 note」正是这条要钉的
     const bases = await listBases('s1')
     expect(bases).toStrictEqual([
-      { base: 'notes', label: 'knowledge base "notes"', dir: join(userRoot, 'notes') },
       { base: 'project', label: 'project "Acme Corp"', dir: bundleAt(root, 'projects/p1') },
+      { base: 'notes', label: 'knowledge base "notes"', dir: join(userRoot, 'notes') },
       {
         base: 'shuvix',
         label: BUILTIN_LABEL,
@@ -688,14 +695,14 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     expect(bases.every((b) => !!b.dir && isAbsolute(b.dir))).toBe(true)
   })
 
-  it('SB-25 配置卡里的内置项：name 恒为 shuvix、label 走 i18n 的 knowledge.builtinBaseName；不传会话的项目对话框口径同样有它、同样垫底', () => {
+  it('SB-25 配置卡里的内置项：name 恒为 shuvix、label 走 i18n 的 knowledge.builtinBaseName；不传会话的项目对话框口径同样有它、同样垫底（两边都没有 project）', () => {
     seedBases('notes')
     seedBuiltinBase()
     const builtinOption = { name: 'shuvix', label: BUILTIN_DISPLAY_NAME }
 
     // 项目配置对话框（不传 sessionId）配的是「这个项目的新会话用哪些」—— 内置库也该能勾
     expect(knowledgeBaseOptions()).toEqual({
-      options: [{ name: 'notes', label: 'notes' }, { name: 'project', label: '' }, builtinOption],
+      options: [{ name: 'notes', label: 'notes' }, builtinOption],
       selected: [],
       explicit: false
     })
@@ -704,7 +711,6 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     inProject()
     expect(knowledgeBaseOptions('s1').options).toEqual([
       { name: 'notes', label: 'notes' },
-      { name: 'project', label: 'Acme Corp' },
       builtinOption
     ])
   })
@@ -737,5 +743,197 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     const label = enabledBaseChoices('s1').find((c) => c.name === 'shuvix')?.label ?? ''
     expect(label).not.toBe('')
     expect(label).not.toMatch(/[/\d]/)
+  })
+})
+
+/**
+ * 隐式的项目库（SB-P1..P10，2026-10-10 接替退役的项目记忆）。四条主线：
+ *   - 会话属于真实项目 → `project` **恒启用、排在最前**，与各级选择无关（`[]` 也一样）。
+ *   - 它**不是候选项**：配置卡里没有它，存量选择里残留的 `project` 读时剔掉（`explicit` 照算 ——
+ *     毕竟有人设过）。
+ *   - 没有项目（或 projectId 悬空、或是隐藏载体项目）→ 没有这个库，点名回 NO_PROJECT 那句。
+ *   - 解析只读：不建项目目录，不写库。
+ */
+describe('SB-P1..P10 隐式的项目库', () => {
+  /** 建若干用户库目录，返回用户根 */
+  const seedBases = (...names: string[]): string => {
+    const userRoot = userRootOf(root)
+    for (const name of names) mkdirSync(join(userRoot, name), { recursive: true })
+    return userRoot
+  }
+  const baseNames = async (): Promise<string[]> => (await listBases('s1')).map((b) => b.base)
+  const notInBases = (name: string, enabled: string): { error: string } => ({
+    error: `"${name}" is not one of this session's knowledge bases. Enabled: ${enabled}.`
+  })
+
+  it('SB-P1 项目会话、谁都没勾：listBases / 围栏清单 / 围栏正文都只有项目库；配置卡里没勾也没有它；不建任何目录', async () => {
+    seedBases('alpha', 'notes')
+    inProject()
+
+    expect(await listBases('s1')).toStrictEqual([
+      { base: 'project', label: 'project "Acme Corp"', dir: bundleAt(root, 'projects/p1') }
+    ])
+    expect(enabledBaseChoices('s1')).toEqual([{ name: 'project', label: 'Acme Corp' }])
+    // `<knowledge_bases>` 围栏的正文就是拿这份清单渲染的：项目会话开箱就有那一行
+    expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toContain('- project — Acme Corp')
+    expect(knowledgeBaseOptions('s1')).toEqual({
+      options: [
+        { name: 'alpha', label: 'alpha' },
+        { name: 'notes', label: 'notes' }
+      ],
+      selected: [],
+      explicit: false
+    })
+    expect(existsSync(join(root, PROJECTS))).toBe(false)
+    expect(sessionDao.updateSettings).not.toHaveBeenCalled()
+  })
+
+  it('SB-P2 明确设成 [] —— 会话自己 / 父会话 / 项目 哪一级都一样：用户库一个不要，项目库照旧在', async () => {
+    seedBases('alpha', 'notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+
+    // 会话自己
+    mockPick({ projectId: 'p1', settings: { knowledgeBases: [] } })
+    expect(await baseNames()).toEqual(['project'])
+
+    // 父会话
+    mockPick({ projectId: 'p1', parentId: 'parent' })
+    mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: [] } })
+    expect(await baseNames()).toEqual(['project'])
+
+    // 项目
+    mockPick({ projectId: 'p1' })
+    mockProjectBases('p1', [])
+    expect(await baseNames()).toEqual(['project'])
+  })
+
+  it('SB-P3 存量选择里的 `project` 每一级都在读时剔掉（含首尾空白的写法）；explicit 仍为真', () => {
+    seedBases('alpha', 'notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+
+    // 会话自己
+    mockPick({ projectId: 'p1', settings: { knowledgeBases: [' project ', 'notes', 'project'] } })
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['notes'], explicit: true })
+
+    // 只剩 project 一项：selected 空了，但「有人设过」不变（裁决：有意如此）
+    mockPick({ projectId: 'p1', settings: { knowledgeBases: ['project'] } })
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: [], explicit: true })
+
+    // 父会话
+    mockPick({ projectId: 'p1', parentId: 'parent' })
+    mockSessionRow('parent', {
+      projectId: 'p1',
+      settings: { knowledgeBases: ['project', 'notes'] }
+    })
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['notes'], explicit: true })
+
+    // 项目
+    mockPick({ projectId: 'p1' })
+    mockProjectBases('p1', ['project', 'alpha'])
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['alpha'], explicit: true })
+
+    // 不在项目里的会话同样剔掉（那里它本来就解析不出来）
+    mockPick({ projectId: null, settings: { knowledgeBases: ['project', 'notes'] } })
+    expect(knowledgeBaseOptions('s1')).toMatchObject({ selected: ['notes'], explicit: true })
+  })
+
+  it('SB-P4 项目库只出现一次：选择里写多少遍 project 都不重复', async () => {
+    seedBases('notes')
+    inProject(['project', 'notes', ' project ', 'project'])
+
+    expect(await baseNames()).toEqual(['project', 'notes'])
+    expect(enabledBaseChoices('s1').map((c) => c.name)).toEqual(['project', 'notes'])
+  })
+
+  it('SB-P5 目录恰好叫 project 的用户库：被保留名遮住，永远不是候选项；点名 project 解析到项目库', async () => {
+    const userRoot = seedBases('notes')
+    seedConcept(userRoot, 'project/a.md', ['type: Memory', 'title: A'])
+
+    expect(knowledgeBaseOptions().options.map((o) => o.name)).toEqual(['notes'])
+    inProject(['notes'])
+    expect(knowledgeBaseOptions('s1').options.map((o) => o.name)).toEqual(['notes'])
+    expect(await resolveBase('s1', 'project')).toEqual({
+      bundle: 'projects/p1',
+      dir: bundleAt(root, 'projects/p1'),
+      label: 'project "Acme Corp"'
+    })
+
+    // 没项目时也够不着那个目录
+    mockPick({ projectId: null, settings: { knowledgeBases: ['project', 'notes'] } })
+    expect(await baseNames()).toEqual(['notes'])
+    expect(readdirSync(join(userRoot, 'project'))).toEqual(['a.md'])
+  })
+
+  it('SB-P6 子会话（同项目）：项目库打头，用户库抄父会话那一份；父会话设成 [] 时只剩项目库', async () => {
+    seedBases('alpha', 'notes')
+    vi.mocked(projectDao.findById).mockReturnValue(PROJECT)
+
+    mockPick({ projectId: 'p1', parentId: 'parent' })
+    mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: ['notes'] } })
+    expect(await baseNames()).toEqual(['project', 'notes'])
+
+    mockSessionRow('parent', { projectId: 'p1', settings: { knowledgeBases: [] } })
+    expect(await baseNames()).toEqual(['project'])
+  })
+
+  it('SB-P7 没有项目就点不中 project：不属于项目 / projectId 悬空 都回 NO_PROJECT；保留名大小写敏感，`Project` 走通用报错', async () => {
+    seedBases('notes')
+
+    // 不属于项目：就算勾了用户库，点名 project 也直说「没有项目」而不是「没启用」
+    mockPick({ projectId: null, settings: { knowledgeBases: ['notes'] } })
+    expect(await resolveBase('s1', 'project')).toEqual({ error: NO_PROJECT })
+    // 一个库都没启用时同样如此
+    mockPick({ projectId: null })
+    expect(await resolveBase('s1', ' project ')).toEqual({ error: NO_PROJECT })
+
+    // projectId 指向已删除的项目
+    mockPick({ projectId: 'gone', settings: { knowledgeBases: ['notes'] } })
+    vi.mocked(projectDao.findById).mockReturnValue(undefined)
+    expect(await baseNames()).toEqual(['notes'])
+    expect(await resolveBase('s1', 'project')).toEqual({ error: NO_PROJECT })
+
+    // 大小写敏感：`Project` 不是保留名
+    inProject()
+    expect(await resolveBase('s1', 'Project')).toEqual(notInBases('Project', '"project"'))
+    expect(existsSync(join(root, PROJECTS))).toBe(false)
+  })
+
+  it('SB-P8 项目改名即时生效：listBases 的标签与围栏里的项目名都跟着项目当前的名字', async () => {
+    inProject()
+    expect(enabledBaseChoices('s1')).toEqual([{ name: 'project', label: 'Acme Corp' }])
+
+    vi.mocked(projectDao.findById).mockReturnValue({ ...PROJECT, name: 'Acme Labs' })
+    expect(enabledBaseChoices('s1')).toEqual([{ name: 'project', label: 'Acme Labs' }])
+    expect((await listBases('s1'))[0]).toMatchObject({
+      base: 'project',
+      label: 'project "Acme Labs"'
+    })
+  })
+
+  it('SB-P9 项目会话点名不认识的库：报错里列出的启用清单是项目库（不是「一个都没启用」）', async () => {
+    seedBases('notes')
+    inProject()
+
+    expect(await resolveBase('s1', 'nope')).toEqual(notInBases('nope', '"project"'))
+    expect(await resolveBase('s1', 'notes')).toEqual(notInBases('notes', '"project"'))
+  })
+
+  it('SB-P10 隐藏载体项目不算项目：没有隐式的项目库，点名 project 回 NO_PROJECT', async () => {
+    seedBases('notes')
+    for (const hidden of ['__agents__', '__knowledge__', '__bots__']) {
+      // 载体项目行在库里是真有的 —— 判据是「隐藏」，不是「找不到」
+      vi.mocked(projectDao.findById).mockReturnValue({ ...PROJECT, id: hidden, name: hidden })
+
+      mockPick({ projectId: hidden })
+      expect(await listBases('s1'), hidden).toEqual([])
+      expect(enabledBaseChoices('s1'), hidden).toEqual([])
+      expect(await resolveBase('s1', 'project'), hidden).toEqual({ error: NO_PROJECT })
+      expect(sessionBundle('s1'), hidden).toEqual({ error: NO_PROJECT })
+
+      // 用户勾的库照常
+      mockPick({ projectId: hidden, settings: { knowledgeBases: ['notes'] } })
+      expect(await baseNames(), hidden).toEqual(['notes'])
+    }
+    expect(existsSync(join(root, PROJECTS))).toBe(false)
   })
 })

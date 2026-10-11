@@ -1,7 +1,11 @@
 /**
  * 会话 → 知识库：这条会话**启用了哪几个库**，以及工具参数里的 `base` 解析到哪个 bundle。
  *
- * 启用哪些是一条**活的回落链**（不落库、不快照）：
+ * **项目库是隐式的**（2026-10-10 裁决，接替退役的项目记忆）：会话（根会话）属于项目，`project` 就恒
+ * 启用、排在最前，不进选择、不是界面上的候选项 —— 它是「这个项目学到了什么」的唯一去处，不该还要
+ * 用户先勾一下。存量选择里残留的 `project` 读时剔掉（有项目时它本来就在，没项目时它解析不出来）。
+ *
+ * 其余的库由用户圈定，是一条**活的回落链**（不落库、不快照）：
  *   会话设过 → 父会话设过（子会话抄上一级）→ 项目设过 → 缺省**一个都不启用**。
  * 与扩展能力勾选（`enabledTools`）的快照语义刻意不同：那一份在创建 Agent 时读死、之后只读，因为
  * 工具表烤进了 pi；知识库是这里每次调用现查的，所以新建一个库、改一次选择，下一次工具调用就作数。
@@ -16,6 +20,7 @@
  */
 import { existsSync } from 'fs'
 import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
+import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import type { KnowledgeBaseInfo } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
 import { sessionRecords } from '../sessionRecords'
@@ -42,9 +47,9 @@ export interface SessionBundleTarget {
 
 /** 配置界面用的一个候选库 */
 export interface KnowledgeBaseOption {
-  /** 选择里存的名字：用户库的目录名，或保留名 `project` / `shuvix` */
+  /** 库名：用户库的目录名，或保留名 `project` / `shuvix`（界面候选项里没有 `project`） */
   name: string
-  /** 人读名：项目库是项目当前的名字（没有项目时为空），用户库就是目录名，内置库是产品名 */
+  /** 人读名：项目库是项目当前的名字，用户库就是目录名，内置库是产品名 */
   label: string
 }
 
@@ -62,9 +67,13 @@ const RESERVED_BASE_NAMES: readonly string[] = [KNOWLEDGE_PROJECT_BASE, KNOWLEDG
 const BUILTIN_GUIDE_LABEL =
   "ShuviX's own reference (read-only): how its agent, bot, policy and hook files, knowledge entries and skills are written, and where they live"
 
+/**
+ * 会话所属的项目。隐藏载体项目（`__agents__` / `__knowledge__` …，侧栏打开 md 时挂的壳）不算：
+ * 它们没有「这个项目学到了什么」可言，否则每个笔记本会话都会凭空多出一个隐式项目库
+ */
 function rootProject(rootSessionId: string): Project | undefined {
-  const picked = sessionRecords.pick(rootSessionId, ['projectId'])
-  return picked?.projectId ? projectDao.findById(picked.projectId) : undefined
+  const projectId = sessionRecords.pick(rootSessionId, ['projectId'])?.projectId
+  return projectId && !isHiddenProjectId(projectId) ? projectDao.findById(projectId) : undefined
 }
 
 /** 工具可点名的用户库名（与保留名同名的目录除外） */
@@ -72,9 +81,12 @@ function userBaseNames(): string[] {
   return listUserLibraries().filter((name) => !RESERVED_BASE_NAMES.includes(name))
 }
 
-/** 去空白、去空、去重；不过滤「此刻存不存在」—— 库改了名也留在选择里，用的时候才发现 */
+/**
+ * 去空白、去空、去重、剔掉 `project`（项目库是隐式的，不归选择管）；不过滤「此刻存不存在」——
+ * 库改了名也留在选择里，用的时候才发现
+ */
 function sanitize(names: readonly string[]): string[] {
-  return [...new Set(names.map((n) => n.trim()).filter(Boolean))]
+  return [...new Set(names.map((n) => n.trim()).filter((n) => n && n !== KNOWLEDGE_PROJECT_BASE))]
 }
 
 const nfc = (s: string): string => s.normalize('NFC')
@@ -98,10 +110,10 @@ function builtinTarget(): SessionBundleTarget | null {
 }
 
 /**
- * 这条会话启用了哪几个库（回落链，见文件头）。
+ * 用户为这条会话圈定的库（回落链，见文件头；不含隐式的项目库）。
  *
- * **缺省是空的**（2026-09-17 裁决）：谁都没设过 = 一个库都不启用，围栏整个不注入，工具答「本会话没有
- * 启用任何知识库」。此前缺省是「全部用户库 + 项目库 + 内置库」，理由是「建了库就用得上，不必先去勾
+ * **缺省是空的**（2026-09-17 裁决）：谁都没设过 = 用户库与内置库一个都不启用（项目会话仍有隐式的
+ * 项目库；无项目会话则围栏整个不注入，工具答「本会话没有启用任何知识库」）。此前缺省是「全部用户库 + 项目库 + 内置库」，理由是「建了库就用得上，不必先去勾
  * 一遍」；实际用下来相反 —— 新会话开箱就把用户所有库（常常跨领域）摊给 agent，搜出来的多是无关条目。
  * 范围由用户圈定才有意义，所以改成显式勾选，内置的说明书也不例外。
  */
@@ -130,19 +142,19 @@ export function sessionBundle(rootSessionId: string): SessionBundleTarget | { er
   return { bundle, dir: bundleDir(bundle), label: `project "${project.name}"` }
 }
 
-/** 启用了哪些库、这台机器上又真的有哪些 —— 两者的交集才是这条会话能点名的 */
+/**
+ * 这条会话能点名的库：有项目时项目库打头（隐式，见文件头），再接用户圈定且这台机器上真有的那些
+ */
 export function enabledTargets(
   rootSessionId: string
 ): { name: string; target: SessionBundleTarget }[] {
+  const out: { name: string; target: SessionBundleTarget }[] = []
+  const project = sessionBundle(rootSessionId)
+  if (!('error' in project)) out.push({ name: KNOWLEDGE_PROJECT_BASE, target: project })
+
   const selected = selectedBaseNames(rootSessionId)
   const names = userBaseNames()
-  const out: { name: string; target: SessionBundleTarget }[] = []
   for (const wanted of selected) {
-    if (wanted === KNOWLEDGE_PROJECT_BASE) {
-      const target = sessionBundle(rootSessionId)
-      if (!('error' in target)) out.push({ name: wanted, target })
-      continue
-    }
     if (wanted === KNOWLEDGE_BUILTIN_BASE) {
       const target = builtinTarget()
       if (target) out.push({ name: wanted, target })
@@ -168,6 +180,8 @@ export async function resolveBase(
   const enabled = enabledTargets(rootSessionId)
   const hit = enabled.find((e) => nfc(e.name) === nfc(name))
   if (hit) return hit.target
+  // 项目库恒启用，点不中只可能是会话不属于项目 —— 直说原因，别让它以为是用户没勾
+  if (name === KNOWLEDGE_PROJECT_BASE) return { error: NO_PROJECT }
 
   if (enabled.length === 0) {
     return {
@@ -210,26 +224,18 @@ export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInf
 
 /**
  * 配置界面的候选项与此刻生效的选择。`explicit` 为假表示这条会话（及其项目）从没设过 —— 缺省是空的，
- * 所以界面上一个也没勾；用户一勾就落成这条会话自己的。
+ * 所以界面上一个也没勾；用户一勾就落成这条会话自己的。项目库不是候选项：有项目就恒启用（见文件头）。
  */
 export function knowledgeBaseOptions(rootSessionId?: string): {
   options: KnowledgeBaseOption[]
   selected: string[]
   explicit: boolean
 } {
-  const project = rootSessionId ? rootProject(rootSessionId) : undefined
-  // 没给会话（项目配置对话框）时也给项目库这一项：那里配的正是「这个项目的新会话缺省用哪些」
-  const projectOption: KnowledgeBaseOption[] =
-    !rootSessionId || project ? [{ name: KNOWLEDGE_PROJECT_BASE, label: project?.name ?? '' }] : []
   // 内置库垫底：它是说明书，不是用户的内容；目录不在（资源没发到位）就不给这一项
   const builtinOption: KnowledgeBaseOption[] = builtinTarget()
     ? [{ name: KNOWLEDGE_BUILTIN_BASE, label: builtinBaseDisplayName() }]
     : []
-  const options = [
-    ...userBaseNames().map((name) => ({ name, label: name })),
-    ...projectOption,
-    ...builtinOption
-  ]
+  const options = [...userBaseNames().map((name) => ({ name, label: name })), ...builtinOption]
   if (!rootSessionId) return { options, selected: [], explicit: false }
 
   // 「有人明确设过」要走完整条回落链 —— 漏掉父会话那一级，子会话就会显示成「还没选过」

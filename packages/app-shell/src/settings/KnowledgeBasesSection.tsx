@@ -7,16 +7,18 @@
  *
  * 两处共用：项目编辑页（这个项目的新会话缺省用哪几个）与会话设置（这条会话自己的）。本组件只管展示
  * 与回调，数据与持久化都在调用方。一个候选库都没有时整节不显示（扩展端落在这里：它没有知识库）。
+ *
+ * 项目自己的库不在候选项里：会话属于项目它就恒启用（宿主隐式加上），用不着勾。
  */
 import { useTranslation } from 'react-i18next'
 import { Library } from 'lucide-react'
-import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
+import { KNOWLEDGE_BUILTIN_BASE } from '@shuvix/chat-protocol/knowledge'
 import { SettingsSection } from './SettingsPrimitives'
 
 export interface KnowledgeBaseChoice {
-  /** 选择里存的名字：用户库的目录名，或保留名 `project` / `shuvix` */
+  /** 选择里存的名字：用户库的目录名，或保留名 `shuvix` */
   name: string
-  /** 补充说明（项目库给项目当前的名字）；没有就只显示名字 */
+  /** 补充说明（悬停时显示）；没有就只显示名字 */
   label?: string
 }
 
@@ -52,13 +54,8 @@ export function KnowledgeBasesSection({
         <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
           {options.map((option) => {
             const checked = selected.includes(option.name)
-            const isProject = option.name === KNOWLEDGE_PROJECT_BASE
-            const isBuiltin = option.name === KNOWLEDGE_BUILTIN_BASE
-            const display = isProject
-              ? t('sessionConfig.knowledgeProjectBase')
-              : isBuiltin
-                ? t('knowledge.builtinBaseName')
-                : option.name
+            const display =
+              option.name === KNOWLEDGE_BUILTIN_BASE ? t('knowledge.builtinBaseName') : option.name
             // 只读时没有悬停底色，未勾选的再压暗一档 —— 一眼看出哪些是真在用的
             const stateCls = checked
               ? 'border-sky-400/40 bg-sky-400/10'
@@ -87,7 +84,6 @@ export function KnowledgeBasesSection({
                   }`}
                 >
                   {display}
-                  {isProject && option.label ? ` · ${option.label}` : ''}
                 </span>
               </label>
             )

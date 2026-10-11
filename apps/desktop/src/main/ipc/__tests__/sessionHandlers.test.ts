@@ -80,14 +80,13 @@ describe('SH-1 session:create 滤掉 chromeTab', () => {
     expect(state.create.mock.calls[0]).toHaveLength(1)
   })
 
-  it('SH-1 其余字段原样透传（项目、父会话、笔记本、bot、记忆 slug、标题）', () => {
+  it('SH-1 其余字段原样透传（项目、父会话、笔记本、bot、标题）', () => {
     const params = {
       title: 't',
       projectId: 'p1',
       parentId: 'P',
       notebookPath: 'notes/a.md',
-      bot: 'scout',
-      memorySlug: 'm'
+      bot: 'scout'
     }
     invoke('session:create', params)
     expect(state.create.mock.calls[0][0]).toEqual({ ...params, chromeTab: undefined })

@@ -115,7 +115,6 @@ vi.mock('../../toolContext', async () => {
               workspace: '/ws',
               toolResultsBase: '/tool-results',
               skillsDirs: ['/skills'],
-              memoryDirs: [],
               knowledgeRoot: '/kb',
               knowledgeSessionDirs: [],
               home: '/home/u',

@@ -86,7 +86,6 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => '/tmp/shuvix-actor-tool-results',
   getDefaultSkillsDir: () => '/tmp/shuvix-actor-skills',
   getBuiltinSkillsDir: () => '/tmp/shuvix-actor-builtin-skills',
-  getMemoryRootDir: () => '/tmp/shuvix-actor-memory',
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
   // getVars 的 shuvixConfigDirs 的四个目录（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => '/tmp/shuvix-policies',

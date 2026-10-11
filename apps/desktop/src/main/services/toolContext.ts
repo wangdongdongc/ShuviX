@@ -19,7 +19,6 @@ import {
   getDefaultPoliciesDir,
   getDefaultAgentsDir,
   getDefaultHooksDir,
-  getMemoryRootDir,
   getBuiltinSkillsDir,
   getBuiltinKnowledgeDir,
   getSessionArtifactsDir,
@@ -277,7 +276,6 @@ function hostPolicyVars(
       getBuiltinSkillsDir(),
       ...skillService.listExternalDirs().map((d) => d.path)
     ],
-    memoryDirs: [getMemoryRootDir()],
     // 以下三个是事实变量：引用它们的出厂策略（protect-bot-files / protect-shuvix-config /
     // protect-system）已于 2026-10-01 删除，留给用户自写的策略引用 —— 想把「bot 改自己的文件」
     // 或「改 ShuviX 自己的规矩」（策略、agent、hook、技能；权限审查员与 auto-review 就是其中的

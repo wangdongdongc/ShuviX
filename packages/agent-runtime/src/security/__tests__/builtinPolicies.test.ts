@@ -461,7 +461,6 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     workspace: WS,
     toolResultsBase: `${USER_DATA}/tool_results`,
     skillsDirs: [`${SHUVIX_HOME}/skills`, `${APP_RESOURCES}/skills`],
-    memoryDirs: [`${SHUVIX_HOME}/memory`],
     home: HOME,
     botsDir: `${SHUVIX_HOME}/bots`,
     builtinKnowledgeDir: `${APP_RESOURCES}/knowledge`,

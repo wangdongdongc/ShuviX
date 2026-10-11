@@ -185,10 +185,8 @@ export interface PromptHost {
     | Promise<{ filename: string; content: string } | null>
   /** 项目提示词（项目设置里的纯文本；无项目 → null） */
   resolveProjectPrompt?: (rootSessionId: string) => string | null | Promise<string | null>
-  /** 知识库引导（这条会话勾选的库；一个都没有 → null） */
+  /** 知识库引导（这条会话启用的库：有项目时恒含项目库，再加用户勾选的；一个都没有 → null） */
   resolveKnowledgeBases?: (rootSessionId: string) => string | null | Promise<string | null>
-  /** 只读的旧项目记忆索引（渲染好的正文；无项目 / 无记忆 → null） */
-  resolveProjectMemory?: (rootSessionId: string) => string | null | Promise<string | null>
   /**
    * bot 会话根 agent 的 `<bot_profile>` 块（`renderBotContext` 的输出；绑定的 md 不在了 → null）。
    * 可以给多块：每块修剪、空白块跳过、块间空一行（旧 `systemContext` 的口径）。

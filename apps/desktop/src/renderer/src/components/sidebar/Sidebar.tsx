@@ -496,23 +496,6 @@ export function Sidebar(): React.JSX.Element {
   }
 
   /**
-   * 项目记忆能力注入 —— 清单读盘，打开一条即打开/复用绑定它的笔记本会话（进 live-preview 直接编辑）。
-   * 引用必须稳定（useMemo）：子文件夹以 adapter 为扫描依赖，每渲染新建对象会导致反复扫盘。
-   */
-  const memoryAdapter = useMemo(
-    () => ({
-      list: (projectId: string) => window.api.memory.list({ projectId }),
-      open: async (projectId: string, slug: string): Promise<void> => {
-        const session = await window.api.memory.openNote({ projectId, slug })
-        if (!session) return // 文件已不在（清单过期）——下次聚焦/展开会重扫
-        useChatStore.getState().setSessions(await getChatApi().session.list())
-        setActiveSessionId(session.id)
-      }
-    }),
-    [setActiveSessionId]
-  )
-
-  /**
    * 技能分组能力注入 —— 清单按**展示顺序**重排：内置置顶 → 用户添加的外部目录 → 默认目录
    * （分组组件按 `isDefault` 决定「画不画那行文件夹」，默认目录的技能平铺在最后）。项目级技能
    * 刻意不列：它随当前会话的项目变，而这一组是全局的，混在一起就看不出「当前生不生效」。
@@ -620,8 +603,8 @@ export function Sidebar(): React.JSX.Element {
   return (
     <SharedSidebar
       caps={{ windowDrag: true, pin: true }}
-      memory={memoryAdapter}
       bots={botsAdapter}
+      projectKnowledge={knowledgeAdapter}
       projects={projects}
       pinnedSessionIds={pinnedSessionIds}
       onOpenFolder={handleOpenFolder}

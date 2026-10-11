@@ -3,8 +3,8 @@
  *
  * 契约：
  *   - `create({chromeTab})` 建的是一条**无项目、无父会话、不是笔记本也不是 bot** 的普通会话：
- *     projectId / parentId 恒 null，调用方传的 projectId / parentId / notebookPath / bot /
- *     memorySlug 一概不认，什么也不继承（扩展能力勾选恒 []），也不去读父会话 /
+ *     projectId / parentId 恒 null，调用方传的 projectId / parentId / notebookPath / bot
+ *     一概不认，什么也不继承（扩展能力勾选恒 []），也不去读父会话 /
  *     项目；settings 里只落 `{chromeTab: <三个键>, enabledTools: []}`；
  *   - chromeTab 不合法（字段不全、tabId 不是非负整数）= 没给：照普通会话建、照常继承，
  *     settings 里没有 chromeTab 键；
@@ -246,13 +246,12 @@ describe('SCT-3 list() 不列标签页会话', () => {
   })
 })
 
-describe('SCT-4 标签页会话不能同时是 bot 会话 / 项目记忆笔记本', () => {
-  it('SCT-4 create({chromeTab, bot, memorySlug}) → 只有 chromeTab，没有 bot 与 memorySlug', () => {
-    sessionService.create({ title: 'Chrome', chromeTab: BINDING, bot: 'scout', memorySlug: 'm' })
+describe('SCT-4 标签页会话不能同时是 bot 会话', () => {
+  it('SCT-4 create({chromeTab, bot}) → 只有 chromeTab，没有 bot', () => {
+    sessionService.create({ title: 'Chrome', chromeTab: BINDING, bot: 'scout' })
     const settings = insertedRow().settings
     expect(settings.chromeTab).toStrictEqual(BINDING)
     expect('bot' in settings).toBe(false)
-    expect('memorySlug' in settings).toBe(false)
     expect(settings).toStrictEqual({ chromeTab: BINDING, enabledTools: [] })
   })
 

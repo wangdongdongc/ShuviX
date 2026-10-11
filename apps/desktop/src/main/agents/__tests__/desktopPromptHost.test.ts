@@ -1,8 +1,8 @@
 /**
- * P1-11 —— 桌面 PromptHost（`desktopPromptHost`）：系统提示词五个活段落的数据源（H11-55…60）。
+ * P1-11 —— 桌面 PromptHost（`desktopPromptHost`）：系统提示词四个活段落的数据源（H11-55…60）。
  * 都按根会话解析、交回**原文**（围栏由运行时的段落统一加），每次请求准备时现调 —— 不缓存。
  *
- * 指令文件走**真的** resolveInstructionContent（临时目录）；项目 / 会话 / 知识库 / 记忆 / bot 是替身。
+ * 指令文件走**真的** resolveInstructionContent（临时目录）；项目 / 会话 / 知识库 / bot 是替身。
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => ({
   projectPick: vi.fn(),
   resolveProjectConfig: vi.fn(),
   enabledBaseChoices: vi.fn(),
-  resolveProjectMemoryIndex: vi.fn(),
   forSession: vi.fn(),
   recordRead: vi.fn()
 }))
@@ -28,9 +27,6 @@ vi.mock('../../services/sessionRecords', () => ({
 }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick } }))
 vi.mock('../../dao/providerDao', () => ({ providerDao: { findAllEnabledModels: () => [] } }))
-vi.mock('../../services/memory', () => ({
-  resolveProjectMemoryIndex: mocks.resolveProjectMemoryIndex
-}))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: mocks.enabledBaseChoices }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: vi.fn() } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({
@@ -142,16 +138,6 @@ describe('resolveKnowledgeBases', () => {
     expect(await host.resolveKnowledgeBases!('s1')).toBe(renderKnowledgeGuide(bases))
     expect(mocks.enabledBaseChoices).toHaveBeenCalledTimes(2)
     expect(mocks.enabledBaseChoices).toHaveBeenLastCalledWith('s1')
-  })
-})
-
-describe('resolveProjectMemory', () => {
-  it('H11-59 原样交回 resolveProjectMemoryIndex(s1) 的结果；没有项目 → null', async () => {
-    mocks.resolveProjectMemoryIndex.mockReturnValue('## memory index')
-    expect(await host.resolveProjectMemory!('s1')).toBe('## memory index')
-    expect(mocks.resolveProjectMemoryIndex).toHaveBeenCalledWith('s1')
-    mocks.resolveProjectMemoryIndex.mockReturnValue(null)
-    expect(await host.resolveProjectMemory!('s1')).toBeNull()
   })
 })
 

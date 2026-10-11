@@ -106,7 +106,6 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => join(state.root, 'tool-results'),
   getDefaultSkillsDir: () => join(state.root, 'skills'),
   getBuiltinSkillsDir: () => join(state.root, 'builtin-skills'),
-  getMemoryRootDir: () => join(state.root, 'memory'),
   getDefaultBotsDir: () => join(state.root, 'bots'),
   // getVars 的 shuvixConfigDirs（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => join(state.root, 'policies'),

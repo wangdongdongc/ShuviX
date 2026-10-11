@@ -20,7 +20,13 @@ import {
   normalizeBundlePath,
   slugify
 } from '@shuvix/agent-runtime'
-import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
+import {
+  KNOWLEDGE_BUILTIN_BASE,
+  KNOWLEDGE_PROJECT_BASE,
+  KNOWLEDGE_PROJECTS_DIR
+} from '@shuvix/chat-protocol/knowledge'
+import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
+import { projectDao } from '../../dao/projectDao'
 import { appEventBus } from '../../utils/appEventBus'
 import { t } from '../../i18n'
 import { recordKnowledgeChange } from './changes'
@@ -112,14 +118,24 @@ function announce(): void {
  * `knowledge/Notes` 会 stat 到 `notes/`，东西落在一处、回给界面的 id 却是另一个写法（`resolveBase`
  * 当初正是为此从 stat 改成清单匹配）。每一段都必须是**目录**：条目文件的路径不是落点。
  *
- * 渲染端只会传清单里的目录，这一道守的是「别凭空造出一个库」。
+ * 渲染端只会传清单里的目录，这一道守的是「别凭空造出一个库」。唯一的例外是**项目库的根**：
+ * 项目库就是那个以项目 id 命名的目录，第一次往里写东西之前它不存在（侧栏每个项目组里的「项目知识库」
+ * 却总在）—— 项目真在（且不是隐藏的承载项目）时放行，由调用方在写之前把目录建出来。
  */
 function resolveDir(dirId: string): { bundle: string; rel: string; abs: string } | null {
   const id = normalizeBundlePath(dirId)
   const segs = id ? id.split('/') : []
   if (segs.length < 2 || segs.some((s) => !s || s.startsWith('.'))) return null
   const bundle = `${segs[0]}/${segs[1]}`
-  if (!listBundles().includes(bundle)) return null
+  if (!listBundles().includes(bundle)) {
+    const isProjectRoot =
+      segs.length === 2 &&
+      segs[0] === KNOWLEDGE_PROJECTS_DIR &&
+      !isHiddenProjectId(segs[1]) &&
+      !!projectDao.findById(segs[1])
+    if (!isProjectRoot) return null
+    return { bundle, rel: '', abs: bundleDir(bundle) }
+  }
   // 只读的内置库在这里就解析不出落点 —— 两个调用方各自先回一句可读的原因（见下），这一道是结构上的
   // 兜底：将来再加一个「新建」忘了那句判断，也拿不到应用包里的路径
   if (isBuiltinBundle(bundle)) return null
@@ -171,7 +187,7 @@ export function createKnowledgeFolder(dirId: string, rawName: string): Knowledge
     return { success: false, error: t('knowledge.errNameTaken', { name }) }
   }
   try {
-    mkdirSync(join(target.abs, name))
+    mkdirSync(join(target.abs, name), { recursive: true })
   } catch (e) {
     return {
       success: false,
@@ -201,6 +217,7 @@ export function createKnowledgeEntry(dirId: string, rawTitle: string): Knowledge
   const file = dedupeFileName(`${slugify(title)}.md`, isTaken)
   const content = buildConceptText({ type: 'Memory', title, status: 'draft' }, '')
   try {
+    mkdirSync(target.abs, { recursive: true })
     writeFileSync(join(target.abs, file), content)
   } catch (e) {
     return {

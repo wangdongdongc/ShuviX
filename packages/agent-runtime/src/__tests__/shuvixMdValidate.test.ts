@@ -191,8 +191,8 @@ describe('validateShuvixMdText — bot', () => {
   })
 
   it('BV-2 属性卡重组形状（无正文）→ valid：bot 的正文没有形状要求，不需要占位补丁', () => {
-    // 空正文是新建出来的常态（由 bot 自己往里写），所以不像 memory 那样要替属性卡
-    // 补一行占位正文 —— 原样解析就是对的
+    // 空正文是新建出来的常态（由 bot 自己往里写），不必替属性卡补一行占位正文 ——
+    // 原样解析就是对的
     expect(validateShuvixMdText('bot', recompose('shuvix: bot v2\nname: scout'))).toEqual({
       status: 'valid',
       messages: []

@@ -502,15 +502,6 @@ export {
   type ParseAgentFileOptions,
   type ParsedAgentFile
 } from './agentProfile/definitionFile'
-// 项目记忆文件（<slug>.md）的格式解析/序列化 + 注入索引渲染
-export {
-  parseMemoryFile,
-  serializeMemoryFile,
-  MEMORY_FILE_MARKER,
-  MEMORY_FILE_MARKER_KEY,
-  type ParsedMemoryFile
-} from './memory/memoryFile'
-export { renderMemoryIndex } from './memory/memoryIndex'
 // 知识库 v2（OKF）：编解码 / 概念与笔记 / 校验 / knowledge 工具 / 引导
 export * from './knowledge'
 export { splitFrontmatter, type FrontmatterSplit } from './markdownFrontmatter'
@@ -519,10 +510,9 @@ export { normalizeToolNames, resolveThinkingLevel } from './durable/agentSpec'
 export {
   fenceInstructionFile,
   fenceProjectPrompt,
-  fenceProjectMemory,
   fenceKnowledgeBases
 } from './durable/prompt/fences'
-// 系统提示词分段（P1-08）：人设创建时冻结、其余五段现解析；日期通知走追加条目（两通道规则）
+// 系统提示词分段（P1-08）：人设创建时冻结、其余四段现解析；日期通知走追加条目（两通道规则）
 export {
   computeFrozenAgentPrompt,
   freezePersona,

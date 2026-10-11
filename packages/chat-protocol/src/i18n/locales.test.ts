@@ -157,16 +157,18 @@ describe('i18n 语言包', () => {
   })
 
   /**
-   * L-4：KnowledgeGroup 组件读的每个键在 en 里都是非空字符串（zh / ja 由齐平断言跟随）。
+   * L-4：KnowledgeGroup / ProjectKnowledgeFolder 组件读的每个键在 en 里都是非空字符串（zh / ja 由齐平断言跟随）。
    * 缺键的表现是侧栏直接露出 `knowledge.badgeStale` 这样的原始键名 —— 组件不报错，只有肉眼
    * 能发现。清单与组件里的 t() 调用逐一对应，改组件时同步这里。
    */
-  it('L-4 KnowledgeGroup 用到的键在 en 里齐全且非空', () => {
+  it('L-4 KnowledgeGroup / ProjectKnowledgeFolder 用到的键在 en 里齐全且非空', () => {
     const KNOWLEDGE_GROUP_KEYS = [
       'sidebar.knowledgeGroup',
       'sidebar.knowledgeEmpty',
+      'sidebar.projectKnowledge',
+      'sidebar.projectKnowledgeHint',
+      'sidebar.projectKnowledgeEmpty',
       'panel.filesRefresh',
-      'knowledge.scopeProjects',
       'knowledge.badgeDraft',
       'knowledge.badgeVerified',
       'knowledge.badgeVerifiedOutdated',

@@ -5,8 +5,8 @@ import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { useFocusDim } from './useFocusDim'
 import { ProjectSessionGroups, TEMP_GROUP_KEY } from './ProjectSessionGroups'
 import { BotSessionDialog, type SidebarBotsAdapter } from './BotSessionDialog'
-import type { ProjectMemoryAdapter } from './ProjectMemoryFolder'
 import type { ProjectRef } from './useProjects'
+import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
 
 export interface SidebarCaps {
   /** Electron 标题栏拖拽区 + macOS 顶部交通灯留白 */
@@ -41,10 +41,10 @@ export interface SidebarProps {
   groupsPrepend?: React.ReactNode
   /** 宿主弹窗插槽（项目编辑 / 会话配置 / 删除确认等） */
   overlays?: React.ReactNode
-  /** 项目记忆能力（桌面注入；见 ProjectSessionGroupsProps.memory） */
-  memory?: ProjectMemoryAdapter
   /** bots 能力（桌面注入 window.api.bot 的窄投影 —— 缺省时 Bot 会话入口整体不渲染） */
   bots?: SidebarBotsAdapter
+  /** 知识库能力（桌面注入）：每个项目组里的「项目知识库」子文件夹；缺省时不显示 */
+  projectKnowledge?: KnowledgeGroupAdapter
 }
 
 /**
@@ -67,8 +67,8 @@ export function Sidebar({
   footerActions,
   groupsPrepend,
   overlays,
-  memory,
-  bots
+  bots,
+  projectKnowledge
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
@@ -181,7 +181,7 @@ export function Sidebar({
             }}
             caps={{ pin: caps.pin }}
             pinnedSessionIds={pinnedSessionIds}
-            memory={memory}
+            projectKnowledge={projectKnowledge}
           />
         )}
       </div>

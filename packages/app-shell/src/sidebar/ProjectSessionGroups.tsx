@@ -11,12 +11,13 @@ import {
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
-import { ProjectMemoryFolder, type ProjectMemoryAdapter } from './ProjectMemoryFolder'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import { parentsToAutoExpand } from './autoExpandSubs'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
 import { useSessionExport } from './useSessionExport'
+import { ProjectKnowledgeFolder } from './ProjectKnowledgeFolder'
+import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
 
 export const TEMP_GROUP_KEY = '__no_project__'
 
@@ -60,11 +61,10 @@ export interface ProjectSessionGroupsProps {
    */
   projectsSection?: { dividerAbove?: boolean; onNewProject?: () => void }
   /**
-   * 项目记忆能力（宿主注入；桌面 window.api.memory，扩展无）。注入后每个项目组内多一层
-   * 「项目记忆」子文件夹，绑定记忆的笔记本会话也随之从会话列表里移出去（避免同一条记忆
-   * 在同一个组里出现两次）。未注入则两者都不发生 —— 那些会话仍按普通笔记本会话列出。
+   * 知识库能力（宿主注入；桌面 window.api.knowledge，扩展无）。注入后每个项目组内多一层
+   * 「项目知识库」子文件夹（ProjectKnowledgeFolder）—— 那个项目自己的库。
    */
-  memory?: ProjectMemoryAdapter
+  projectKnowledge?: KnowledgeGroupAdapter
 }
 
 /**
@@ -93,7 +93,7 @@ export function ProjectSessionGroups({
   sessionsOverride,
   hideEmptyGroups,
   projectsSection,
-  memory
+  projectKnowledge
 }: ProjectSessionGroupsProps): React.JSX.Element {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
@@ -124,16 +124,9 @@ export function ProjectSessionGroups({
     return s?.projectId || TEMP_GROUP_KEY
   }, [activeSessionId, storeSessions])
 
-  // 当前活动会话若绑定的是一条项目记忆 —— 记忆子文件夹据此高亮那一行
-  const activeMemory = useMemo(() => {
-    const s = storeSessions.find((x) => x.id === activeSessionId)
-    const slug = s?.settings.memorySlug
-    return slug ? { projectId: s.projectId, slug } : null
-  }, [activeSessionId, storeSessions])
-
-  // 子会话（agent 经 session 工具自建）按父会话归拢，从平铺列表里摘出去 —— 与「绑定项目
-  // 记忆的笔记本会话不进列表」同一手法。父级不在列表里（已删/被过滤）的子会话**退回平铺**：
-  // 宁可让它以顶层会话出现，也不能让一条真实会话在侧栏里凭空消失
+  // 子会话（agent 经 session 工具自建）按父会话归拢，从平铺列表里摘出去。父级不在列表里
+  // （已删/被过滤）的子会话**退回平铺**：宁可让它以顶层会话出现，也不能让一条真实会话在
+  // 侧栏里凭空消失
   const childrenByParent = useMemo(() => {
     const ids = new Set(sessions.map((s) => s.id))
     const map = new Map<string, Session[]>()
@@ -176,13 +169,11 @@ export function ProjectSessionGroups({
   }, [childrenByParent, sessions])
 
   // 按项目分组：先为每个项目建空组，再分配会话，末尾追加临时对话组；项目按名称排序
-  // 绑定项目记忆的笔记本会话不进列表 —— 它们由组内的「项目记忆」子文件夹按磁盘条目呈现
   const groups = useMemo(() => {
     const map = new Map<string, Session[]>()
     for (const p of projects) map.set(p.id, [])
     const temp: Session[] = []
     for (const s of sessions) {
-      if (memory && s.settings.memorySlug) continue
       // 子会话跟着父行渲染（父级不在列表里时 childrenByParent 也没收它，照常平铺）
       if (s.parentId && childrenByParent.has(s.parentId)) continue
       if (s.projectId && map.has(s.projectId)) map.get(s.projectId)!.push(s)
@@ -196,7 +187,7 @@ export function ProjectSessionGroups({
     const out: Array<[string, Session[]]> = sorted
     if (temp.length > 0) out.push([TEMP_GROUP_KEY, temp])
     return out
-  }, [projects, sessions, projectNames, memory, childrenByParent])
+  }, [projects, sessions, projectNames, childrenByParent])
 
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
 
@@ -274,13 +265,12 @@ export function ProjectSessionGroups({
         showDividerAbove={dividerAbove}
         onMenu={(e) => openGroupMenu(groupKey, isTemp, e)}
       >
-        {memory && !isTemp && (
-          <ProjectMemoryFolder
+        {projectKnowledge && !isTemp && (
+          <ProjectKnowledgeFolder
             projectId={groupKey}
-            adapter={memory}
+            adapter={projectKnowledge}
             // 折叠的项目组不扫盘（侧栏可能有几十个项目）
             enabled={!collapsed.has(groupKey)}
-            activeSlug={activeMemory?.projectId === groupKey ? activeMemory.slug : null}
             dim={dim && activeGroupKey === groupKey}
           />
         )}

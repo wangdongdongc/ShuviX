@@ -2023,6 +2023,11 @@ export interface SidebarPane {
    * 按标题全局定位会串到别的组，故「新会话落在哪组、是不是活动行」按组取。组头不存在返回 []。
    */
   groupRows(target: GroupTarget): Promise<GroupRowShot[]>
+  /**
+   * 某组正文里「项目知识库」文件夹行挂的项目 id（`data-project-knowledge`，DOM 序）。项目组恰有
+   * 自己那一行，临时组一行都没有；组头不存在返回 []。文件夹本身的读写走 projectKnowledgePane。
+   */
+  projectKnowledgeFolders(target: GroupTarget): Promise<string[]>
   /** 当前活动会话行（bg-bg-active）的标题；没有活动行返回空串 */
   activeTitle(): Promise<string>
 }
@@ -2118,8 +2123,10 @@ async function pickFromMenu(
  * 这里只需「钉好要选哪一项 → 点 ⋮ → 顺带核对该项在不在菜单里」（见上方 pickFromMenu）。
  */
 export function sidebarPane(main: CdpClient): SidebarPane {
+  // 「项目知识库」文件夹行（`data-project-knowledge`）同样是「div > div > span.truncate」的形状，
+  // 但它不是会话 —— 每个项目组都有一行，不滤掉就会混进 titles() / openSession 里
   const ROWS = `[...document.querySelectorAll('div[class*="cursor-pointer"]')]
-    .filter((d) => d.querySelector(':scope > div > span.truncate'))`
+    .filter((d) => d.querySelector(':scope > div > span.truncate') && !d.hasAttribute('data-project-knowledge'))`
   /** 按标题定位会话行（标题在行内那层 span.truncate，与顶栏标题区分） */
   const ROW = (title: string): string =>
     `${ROWS}.find(
@@ -2319,13 +2326,23 @@ export function sidebarPane(main: CdpClient): SidebarPane {
         if (!body) return []
         const iconOf = ${ROW_ICON_OF}
         return [...body.querySelectorAll('div[class*="cursor-pointer"]')]
-          .filter((d) => d.querySelector(':scope > div > span.truncate'))
+          .filter(
+            (d) =>
+              d.querySelector(':scope > div > span.truncate') &&
+              !d.hasAttribute('data-project-knowledge')
+          )
           .map((d) => ({
             title: (d.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim(),
             active: d.className.includes('bg-bg-active'),
             icon: iconOf(d)
           }))
       })()`),
+    projectKnowledgeFolders: (target) =>
+      main.eval<string[]>(
+        `[...(${GROUP_BODY(target)}?.querySelectorAll('[data-project-knowledge]') ?? [])].map(
+          (el) => el.getAttribute('data-project-knowledge') ?? ''
+        )`
+      ),
     activeTitle: () =>
       main.eval<string>(
         `(${ACTIVE_ROW}?.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim()`
@@ -2457,11 +2474,14 @@ async function toggleExtIn(
  * 这回事 —— `disabled` 照样读出来，正是为了断「有运行时时它仍然可点」。
  */
 export interface KnowledgeItemShot {
-  /** 选择里存的名字（用户库的目录名 / 保留名 `project` / `shuvix`），即 `data-knowledge-base` */
+  /**
+   * 选择里存的名字（用户库的目录名 / 保留名 `shuvix`），即 `data-knowledge-base`。项目库 `project`
+   * 在项目会话里隐式启用，不是候选项，所以卡上没有它的 chip
+   */
   name: string
   /**
-   * chip 上那行字。用户库就是目录名；两个保留名另取文案（`project` 是「项目」+ 项目当前名字，
-   * `shuvix` 是 `knowledge.builtinBaseName` —— 与侧栏那一行读同一个 i18n 键）。
+   * chip 上那行字。用户库就是目录名；内置库 `shuvix` 是 `knowledge.builtinBaseName` —— 与侧栏
+   * 那一行读同一个 i18n 键。
    */
   label: string
   checked: boolean
@@ -5096,10 +5116,11 @@ export function botIntro(main: CdpClient): BotIntroPane {
 //
 // 锚点：组头 `data-group="knowledge"`（SessionGroup 的 group/header 层）；目录行
 // `data-knowledge-dir=<目录 id>`、条目行 `data-knowledge-row=<条目 id>`。id 与清单同一个名字空间
-// （`projects/<projectId>/…` 相对 knowledge-shuvix 根，`knowledge/<库名>/…` 相对用户根）；行名是行内
-// 唯一的 span.truncate。
+// （`knowledge/<库名>/…` 相对用户根，`builtin/<库名>/…` 是内置库）；行名是行内唯一的 span.truncate。
+// **项目库不在这一组里**（2026-10-10）：它挂在各项目组的「项目知识库」文件夹里（projectKnowledgePane），
+// 锚点同名 —— 所以这里的行与目录一律只在本组正文里找。
 //
-// 层级只能从行的内联 `padding-left` 读（最外层 0px —— Projects 容器与每个用户库平级 —— 每深一层 +12px）。
+// 层级只能从行的内联 `padding-left` 读（最外层 0px —— 内置库与每个用户库平级 —— 每深一层 +12px）。
 // 目录行与它的正文（AnimatedCollapse 根）是兄弟节点，折叠只收高度、行都还在 DOM 里：展开态读正文的内联
 // `gridTemplateRows`，不数行。路径可能含中文：定位一律 getAttribute 逐个比对，不拼属性选择器。
 //
@@ -5116,9 +5137,9 @@ export function botIntro(main: CdpClient): BotIntroPane {
 
 /** 知识库分组里的一行目录 */
 export interface KnowledgeDirShot {
-  /** `data-knowledge-dir`：`projects` / `projects/<projectId>` / `knowledge/<库名>` / 更深的子目录 */
+  /** `data-knowledge-dir`：`knowledge/<库名>` / `builtin/<库名>` / 项目库里的子目录 / 更深的子目录 */
   path: string
-  /** 行上的名字（Projects 容器是本地化文案，项目库是项目当前名字，其余是目录名） */
+  /** 行上的名字（内置库是本地化的人读名，其余是目录名） */
   label: string
   /** 行的内联 padding-left（'0px' = 顶层，每深一层 +12px） */
   indent: string
@@ -5172,7 +5193,7 @@ export interface KnowledgePane extends NotebookReadOnlyProbes {
   expand(): Promise<void>
   /** 全部目录行（任意层级），DOM 序 */
   dirs(): Promise<KnowledgeDirShot[]>
-  /** 顶层目录行（缩进 0px：Projects 容器与每个用户库），DOM 序 */
+  /** 顶层目录行（缩进 0px：内置库与每个用户库），DOM 序 */
   topDirs(): Promise<KnowledgeDirShot[]>
   /** 目录是否展开；目录行不存在返回 false */
   dirOpen(path: string): Promise<boolean>
@@ -5228,21 +5249,33 @@ export interface KnowledgePane extends NotebookReadOnlyProbes {
 /** 这两个动作开的是 OS 文件管理器（隔离实例没有替换 shell）—— e2e 只读不选 */
 const KNOWLEDGE_NEVER_PICK: readonly string[] = ['open-folder', 'reveal']
 
-export function knowledgePane(main: CdpClient): KnowledgePane {
-  const sidebar = sidebarPane(main)
-  const HEADER = `document.querySelector('div[class*="group/header"][data-group="knowledge"]')`
-  // 分组正文 = 组头的下一个兄弟（AnimatedCollapse 的 grid 层）→ overflow 层 → SessionGroup 的内缩层
-  const BODY = `${HEADER}?.nextElementSibling?.firstElementChild?.firstElementChild`
-  const DIRS = `[...document.querySelectorAll('[data-knowledge-dir]')]`
-  const ROWS = `[...document.querySelectorAll('[data-knowledge-row]')]`
+/**
+ * 知识库树的读写探针 —— 「知识库」分组与项目组里的「项目知识库」文件夹画的是同一棵树
+ * （app-shell KnowledgeTreeView，同一套 data-knowledge-* 锚点），区别只在挂在哪一块 DOM 下。
+ * `scope` 是那一块容器的页内表达式（可能为 null/undefined —— 那就什么都读不到）。
+ */
+type KnowledgeTreeProbes = Pick<
+  KnowledgePane,
+  | 'dirs'
+  | 'dirOpen'
+  | 'setDirOpen'
+  | 'rows'
+  | 'openRow'
+  | 'activeRow'
+  | 'rowMenuShots'
+  | 'pickRowMenu'
+  | 'dirMenuShots'
+  | 'pickDirMenu'
+>
+
+function knowledgeTreeProbes(main: CdpClient, scope: string, what: string): KnowledgeTreeProbes {
+  const DIRS = `[...((${scope})?.querySelectorAll('[data-knowledge-dir]') ?? [])]`
+  const ROWS = `[...((${scope})?.querySelectorAll('[data-knowledge-row]') ?? [])]`
   const DIR = (path: string): string =>
     `${DIRS}.find((el) => el.getAttribute('data-knowledge-dir') === ${JSON.stringify(path)})`
   const ROW = (path: string): string =>
     `${ROWS}.find((el) => el.getAttribute('data-knowledge-row') === ${JSON.stringify(path)})`
   const LABEL_OF = `((el) => (el.querySelector('span.truncate')?.textContent ?? '').trim())`
-  /** 同一时刻至多一行内联新建行 */
-  const DRAFT = `document.querySelector('[data-knowledge-draft]')`
-  const DRAFT_INPUT = `${DRAFT}?.querySelector('input')`
 
   const dirs = (): Promise<KnowledgeDirShot[]> =>
     main.eval<KnowledgeDirShot[]>(`${DIRS}.map((el) => ({
@@ -5262,43 +5295,16 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
       return !!row && row.nextElementSibling?.style.gridTemplateRows === '1fr'
     })()`)
 
-  const bodyText = (): Promise<string> =>
-    main.eval<string>(`document.querySelector('.cm-content')?.textContent ?? ''`)
-
   const waitRow = async (path: string): Promise<void> => {
-    await until(() => main.eval<boolean>(`!!${ROW(path)}`), `knowledge row "${path}"`)
+    await until(() => main.eval<boolean>(`!!${ROW(path)}`), `${what}: knowledge row "${path}"`)
   }
 
   const waitDir = async (path: string): Promise<void> => {
-    await until(() => main.eval<boolean>(`!!${DIR(path)}`), `knowledge dir "${path}"`)
+    await until(() => main.eval<boolean>(`!!${DIR(path)}`), `${what}: knowledge dir "${path}"`)
   }
 
-  /** 往草稿输入框上做点什么（草稿行不在就抛 —— 失焦即取消，失败点离真因近一点） */
-  const onDraftInput = (body: string): Promise<unknown> =>
-    main.eval(`(() => {
-      const el = ${DRAFT_INPUT}
-      if (!el) throw new Error('no knowledge draft row')
-      ${body}
-      return true
-    })()`)
-
-  const pressDraft = (key: string): Promise<unknown> =>
-    onDraftInput(
-      `el.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`
-    )
-
   return {
-    expand: async () => {
-      await sidebar.setGroupExpanded('knowledge', true)
-      // 清单是展开才拉的：正文有内容（行或空态文案）才算落定
-      await until(
-        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
-        'knowledge group listed'
-      )
-    },
-
     dirs,
-    topDirs: async () => (await dirs()).filter((d) => d.indent === '0px'),
     dirOpen,
 
     setDirOpen: async (path, open) => {
@@ -5307,7 +5313,7 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
       await main.eval(`${DIR(path)}.click()`)
       await until(
         async () => (await dirOpen(path)) === open,
-        `knowledge dir "${path}" ${open ? 'expanded' : 'collapsed'}`
+        `${what}: knowledge dir "${path}" ${open ? 'expanded' : 'collapsed'}`
       )
       // 内联样式已落定，高度过渡（150ms）还在走 —— 等它走完再往下
       await sleep(200)
@@ -5324,7 +5330,7 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
       await main.eval(`${ROW(path)}.click()`)
       await until(
         () => main.eval<boolean>(`(${ROW(path)}?.className ?? '').includes('bg-bg-active')`),
-        `knowledge row "${path}" active`
+        `${what}: knowledge row "${path}" active`
       )
     },
 
@@ -5332,10 +5338,6 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
       main.eval<string>(
         `${ROWS}.find((el) => el.className.includes('bg-bg-active'))?.getAttribute('data-knowledge-row') ?? ''`
       ),
-
-    groupMenuIds: () => sidebar.groupMenuItems('knowledge'),
-    refresh: () => sidebar.pickGroupMenu('knowledge', 'refresh'),
-    newBase: () => sidebar.pickGroupMenu('knowledge', 'new-base'),
 
     rowMenuShots: async (path) => {
       await waitRow(path)
@@ -5349,7 +5351,7 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
         )
       }
       await waitRow(path)
-      await pickFromMenu(main, ROW(path), actionId, `knowledge row "${path}"`)
+      await pickFromMenu(main, ROW(path), actionId, `${what}: knowledge row "${path}"`)
     },
 
     dirMenuShots: async (path) => {
@@ -5359,9 +5361,42 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
 
     pickDirMenu: async (path, actionId) => {
       await waitDir(path)
-      await pickFromMenu(main, DIR(path), actionId, `knowledge dir "${path}"`)
-    },
+      await pickFromMenu(main, DIR(path), actionId, `${what}: knowledge dir "${path}"`)
+    }
+  }
+}
 
+/** 内联新建行（同一时刻整个侧栏至多一行 —— 分组与项目文件夹共用这一组探针） */
+type KnowledgeDraftProbes = Pick<
+  KnowledgePane,
+  | 'draftKind'
+  | 'draftValue'
+  | 'typeDraft'
+  | 'submitDraft'
+  | 'cancelDraft'
+  | 'blurDraft'
+  | 'draftError'
+>
+
+function knowledgeDraftProbes(main: CdpClient): KnowledgeDraftProbes {
+  const DRAFT = `document.querySelector('[data-knowledge-draft]')`
+  const DRAFT_INPUT = `${DRAFT}?.querySelector('input')`
+
+  /** 往草稿输入框上做点什么（草稿行不在就抛 —— 失焦即取消，失败点离真因近一点） */
+  const onDraftInput = (body: string): Promise<unknown> =>
+    main.eval(`(() => {
+      const el = ${DRAFT_INPUT}
+      if (!el) throw new Error('no knowledge draft row')
+      ${body}
+      return true
+    })()`)
+
+  const pressDraft = (key: string): Promise<unknown> =>
+    onDraftInput(
+      `el.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`
+    )
+
+  return {
     draftKind: () =>
       main.eval<KnowledgeDraftKind | null>(
         `${DRAFT}?.getAttribute('data-knowledge-draft') ?? null`
@@ -5400,7 +5435,40 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
         // 草稿行 = 输入那层 +（失败时）下面那条红字；红字那层里没有 input
         const err = [...draft.children].find((c) => !c.querySelector('input'))
         return err ? (err.textContent ?? '').trim() : null
-      })()`),
+      })()`)
+  }
+}
+
+export function knowledgePane(main: CdpClient): KnowledgePane {
+  const sidebar = sidebarPane(main)
+  const HEADER = `document.querySelector('div[class*="group/header"][data-group="knowledge"]')`
+  // 分组正文 = 组头的下一个兄弟（AnimatedCollapse 的 grid 层）→ overflow 层 → SessionGroup 的内缩层
+  const BODY = `${HEADER}?.nextElementSibling?.firstElementChild?.firstElementChild`
+  // 行与目录只认**这一组**里的：项目库的行长在各项目组的文件夹里（projectKnowledgePane），锚点同名
+  const GROUP = `${HEADER}?.nextElementSibling`
+  const tree = knowledgeTreeProbes(main, GROUP, 'knowledge group')
+
+  const bodyText = (): Promise<string> =>
+    main.eval<string>(`document.querySelector('.cm-content')?.textContent ?? ''`)
+
+  return {
+    expand: async () => {
+      await sidebar.setGroupExpanded('knowledge', true)
+      // 清单是展开才拉的：正文有内容（行或空态文案）才算落定
+      await until(
+        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+        'knowledge group listed'
+      )
+    },
+
+    ...tree,
+    topDirs: async () => (await tree.dirs()).filter((d) => d.indent === '0px'),
+
+    groupMenuIds: () => sidebar.groupMenuItems('knowledge'),
+    refresh: () => sidebar.pickGroupMenu('knowledge', 'refresh'),
+    newBase: () => sidebar.pickGroupMenu('knowledge', 'new-base'),
+
+    ...knowledgeDraftProbes(main),
 
     bodyText,
     waitBody: async (marker) => {
@@ -5444,6 +5512,121 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
 
     // 只读笔记本的两个读数与注册表笔记共用一份实现（见 notebookReadOnlyProbes）
     ...notebookReadOnlyProbes(main)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 项目组里的「项目知识库」文件夹（app-shell ProjectKnowledgeFolder）
+//
+// 锚点：文件夹行 `[data-project-knowledge=<projectId>]`（标签是本地化文案 `sidebar.projectKnowledge`，
+// 条目数 > 0 时标签旁一个数字，悬停提示 `sidebar.projectKnowledgeHint`）。它长在项目组的正文里、
+// 会话行之前；临时组没有它。文件夹行的下一个兄弟是它的正文（AnimatedCollapse 根），里面是与「知识库」
+// 分组同一棵树（同名的 data-knowledge-* 锚点），所以树的读写探针与 knowledgePane 共用一份，只换作用域。
+//
+// 扫描：项目组展开时扫一次；之后窗口聚焦 / `knowledge.changed` / 文件夹每次展开重扫 —— 磁盘外写入
+// 不广播，事后写的要 `reopen()`（收起再展开）才看得到。
+
+/** 文件夹行的读数 */
+export interface ProjectKnowledgeFolderShot {
+  /** 行上的标签（本地化的 `sidebar.projectKnowledge`） */
+  label: string
+  /** 标签旁的条目数；为 0 时那个数字不画 → null */
+  count: number | null
+  /** 悬停提示（行的 title） */
+  title: string
+  /** 文件夹是否展开 */
+  open: boolean
+}
+
+export interface ProjectKnowledgePane extends KnowledgeTreeProbes, KnowledgeDraftProbes {
+  /** 展开那个项目组（文件夹的清单只在组展开时才扫） */
+  expandGroup(): Promise<void>
+  /** 这个项目的文件夹行在不在 DOM 里 */
+  present(): Promise<boolean>
+  /** 文件夹行读数；不在为 null */
+  folder(): Promise<ProjectKnowledgeFolderShot | null>
+  /** 把文件夹设成指定展开态并等它落定（幂等；展开即重扫） */
+  setOpen(open: boolean): Promise<void>
+  /** 收起再展开一次 —— 磁盘外写入之后让它重扫 */
+  reopen(): Promise<void>
+  /** 文件夹正文的文字（空库时是 `sidebar.projectKnowledgeEmpty`）；正文不在为空串 */
+  bodyText(): Promise<string>
+  /** 文件夹行菜单的原始 items（开一次 ⋮、不选任何项）；⋮ 不在返回 null */
+  menuShots(via?: MenuVia): Promise<MenuItemShot[] | null>
+  /** 开文件夹行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
+  pickMenu(actionId: string): Promise<void>
+}
+
+/** 侧栏里全部「项目知识库」文件夹行挂的项目 id（DOM 序） */
+export function projectKnowledgeFolderIds(main: CdpClient): Promise<string[]> {
+  return main.eval<string[]>(
+    `[...document.querySelectorAll('[data-project-knowledge]')].map((el) => el.getAttribute('data-project-knowledge') ?? '')`
+  )
+}
+
+export function projectKnowledgePane(
+  main: CdpClient,
+  project: { id: string; name: string }
+): ProjectKnowledgePane {
+  const sidebar = sidebarPane(main)
+  const FOLDER = `[...document.querySelectorAll('[data-project-knowledge]')].find(
+    (el) => el.getAttribute('data-project-knowledge') === ${JSON.stringify(project.id)}
+  )`
+  /** 文件夹正文 = 文件夹行的下一个兄弟（AnimatedCollapse 根） */
+  const BODY = `${FOLDER}?.nextElementSibling`
+  const what = `project knowledge "${project.name}"`
+  const tree = knowledgeTreeProbes(main, BODY, what)
+
+  const folder = (): Promise<ProjectKnowledgeFolderShot | null> =>
+    main.eval<ProjectKnowledgeFolderShot | null>(`(() => {
+      const el = ${FOLDER}
+      if (!el) return null
+      const label = (el.querySelector('span.truncate')?.textContent ?? '').trim()
+      const num = el.querySelector('span.tabular-nums')
+      return {
+        label,
+        count: num ? Number((num.textContent ?? '').trim()) : null,
+        title: el.getAttribute('title') ?? '',
+        open: el.nextElementSibling?.style.gridTemplateRows === '1fr'
+      }
+    })()`)
+
+  const waitFolder = async (): Promise<void> => {
+    await until(() => main.eval<boolean>(`!!${FOLDER}`), `${what} folder row`)
+  }
+
+  const setOpen = async (open: boolean): Promise<void> => {
+    await waitFolder()
+    if ((await folder())?.open === open) return
+    await main.eval(`${FOLDER}.click()`)
+    await until(
+      async () => (await folder())?.open === open,
+      `${what} folder ${open ? 'expanded' : 'collapsed'}`
+    )
+    await sleep(200)
+  }
+
+  return {
+    ...tree,
+    ...knowledgeDraftProbes(main),
+
+    expandGroup: () => sidebar.setGroupExpanded({ project: project.name }, true),
+    present: () => main.eval<boolean>(`!!${FOLDER}`),
+    folder,
+    setOpen,
+    reopen: async () => {
+      await setOpen(false)
+      await setOpen(true)
+    },
+    bodyText: () => main.eval<string>(`(${BODY}?.textContent ?? '').trim()`),
+    menuShots: async (via = 'menu-button') => {
+      await waitFolder()
+      return openMenu(main, FOLDER, via)
+    },
+    pickMenu: async (actionId) => {
+      await waitFolder()
+      await pickFromMenu(main, FOLDER, actionId, `${what} folder`)
+    }
   }
 }
 

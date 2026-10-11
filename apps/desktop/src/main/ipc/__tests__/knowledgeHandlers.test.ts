@@ -72,6 +72,10 @@ vi.mock('../../services/knowledge', async () => {
   }
 })
 vi.mock('../../services/knowledgeNotes', () => ({ openKnowledgeNote: vi.fn() }))
+// 「新建」认项目库的根（目录还没有也算落点）要先问项目在不在 —— 真 dao 会去开数据库；替身只认 p1
+vi.mock('../../dao/projectDao', () => ({
+  projectDao: { findById: (id: string) => (id === 'p1' ? { id, name: 'P1' } : undefined) }
+}))
 
 import { listKnowledgeEntries } from '../../services/knowledge'
 import { registerKnowledgeHandlers } from '../knowledgeHandlers'
@@ -244,6 +248,22 @@ describe('knowledge:createFolder / knowledge:createEntry', () => {
       id: 'knowledge/notes/archive'
     })
     expect(existsSync(join(userRoot, 'notes', 'archive'))).toBe(true)
+  })
+
+  it('KH-6 项目库的根：目录还没有也是落点（侧栏项目文件夹的「新建文件夹」走的就是这条通道）；未知项目照旧拒', () => {
+    expect(existsSync(join(state.root, 'projects'))).toBe(false)
+
+    expect(invoke('knowledge:createFolder', { dir: 'projects/p1', name: 'api' })).toEqual({
+      success: true,
+      id: 'projects/p1/api'
+    })
+    expect(existsSync(join(state.root, 'projects', 'p1', 'api'))).toBe(true)
+
+    expect(invoke('knowledge:createFolder', { dir: 'projects/ghost', name: 'api' })).toEqual({
+      success: false,
+      error: 'knowledge.errNoSuchDir'
+    })
+    expect(existsSync(join(state.root, 'projects', 'ghost'))).toBe(false)
   })
 })
 

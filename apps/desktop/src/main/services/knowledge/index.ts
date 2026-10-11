@@ -15,7 +15,8 @@
  * 写那一半全部绕开它：工具 `create` 拒、侧栏没有新建、写钩子不盖章、变更管线不提交。文件工具的
  * 写入刻意不设拒写策略（随包资源的统一裁决，见 builtinPolicies/index.ts），真写了下个版本会还原。
  *
- * 旧项目记忆（services/memory/）整体搁置，本模块不碰它（旧 wiki 已于 2026-09-16 整体拆除）。
+ * 旧项目记忆已于 2026-10-10 整体拆除，项目库接替它（有项目的会话恒启用，见 sessionBundle.ts）；
+ * `~/.shuvix/memory/` 留在磁盘上不读不迁（旧 wiki 已于 2026-09-16 同样拆除）。
  */
 export {
   getShuvixKnowledgeRoot,

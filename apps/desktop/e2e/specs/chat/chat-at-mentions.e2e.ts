@@ -6,6 +6,10 @@
  * 镜像层胶囊走 pages.ts（DOM 只认 data-at-* 锚点）；发给模型的文本看
  * `fakeProvider.chatRequests()[i].lastUserText`；落库看 `window.api.message.list`。
  *
+ * 项目库是隐式的（2026-10-10）：项目会话不用勾就带着 `project`。AtProj 种了一条项目库条目
+ *（AT-20 用它），所以凡是要断「没有知识行 / 候选恰为某几条」的用例都放在 AtProjB —— 那个项目的
+ * 项目库是空的（目录都没建），隐式启用也不产生任何候选。
+ *
  * 种子约定（seedKnowledgeBase 的说明同样适用）：知识库条目必须**在会话于 UI 里激活之前**
  * 铺好 —— 渲染端 provider 按 sessionId 缓存候选表。AT-14 / AT-15 是「会话激活后改启用库
  * 选择要即时反映到候选」的期望用例：它们依赖 knowledge provider 同时订阅
@@ -170,8 +174,15 @@ beforeAll(async () => {
     'docs/alpha-notes.md',
     ...Array.from({ length: 7 }, (_, i) => `pool/common-0${i + 1}.md`)
   ])
+  // 两个项目的工作区一模一样：挪到 AtProjB 的 A/D 组用例（AT-5 数的是「5 文件 + 2 知识」）
+  // 看到的文件行与在 AtProj 时相同
   const projDir2 = join(app.home, 'proj-at-b')
-  writeFiles(projDir2, ['README.md', 'docs/alpha-guide.md', 'docs/alpha-notes.md'])
+  writeFiles(projDir2, [
+    'README.md',
+    'docs/alpha-guide.md',
+    'docs/alpha-notes.md',
+    ...Array.from({ length: 7 }, (_, i) => `pool/common-0${i + 1}.md`)
+  ])
   const project = await createProject(app.main, { name: 'AtProj', path: projDir })
   projectId = project.id
   const project2 = await createProject(app.main, { name: 'AtProjB', path: projDir2 })
@@ -196,27 +207,30 @@ beforeAll(async () => {
   )
   seedProjectKnowledgeBase(app, projectId, [entries('notes/current-proj.md', '项目手册')])
 
-  // A/B/C/D 组 + 项目库用例在 AtProj（含切走对照共 17 条）；E/F 组在 AtProjB（8 条）
+  // AtProj 的项目库有一条条目（AT-20），它的会话候选里恒多出那一行（项目库隐式启用）；
+  // 断「没有知识行 / 候选恰为某几条」的用例（AT-2/3/5/6/14/15）因此放 AtProjB —— 那里项目库是空的。
+  // AtProj 11 条（含切走对照）、AtProjB 14 条，都远低于分组上限
   const inP1 = (title: string, kb?: string[]): Promise<string> =>
     createSession(title, kb, project.id)
   const inP2 = (title: string, kb?: string[]): Promise<string> =>
     createSession(title, kb, project2.id)
   sids['AT-1'] = await inP1('AT-1', ['kb-a'])
-  sids['AT-2'] = await inP1('AT-2', undefined)
-  sids['AT-3'] = await inP1('AT-3', ['kb-empty'])
+  sids['AT-2'] = await inP2('AT-2', undefined)
+  sids['AT-3'] = await inP2('AT-3', ['kb-empty'])
   sids['AT-4'] = await inP1('AT-4', ['kb-7'])
-  sids['AT-5'] = await inP1('AT-5', ['kb-a'])
-  sids['AT-6'] = await inP1('AT-6', ['kb-a'])
+  sids['AT-5'] = await inP2('AT-5', ['kb-a'])
+  sids['AT-6'] = await inP2('AT-6', ['kb-a'])
   sids['AT-7'] = await inP1('AT-7', ['kb-a'])
   sids['AT-8'] = await inP1('AT-8', ['kb-a'])
   sids['AT-9'] = await inP1('AT-9', undefined)
   sids['AT-10'] = await inP1('AT-10', ['kb-a'])
   sids['AT-11'] = await inP1('AT-11', ['kb-a', 'kb-b'])
   sids['AT-13'] = await inP1('AT-13', ['kb-a'])
-  sids['AT-14'] = await inP1('AT-14', undefined)
-  sids['AT-15'] = await inP1('AT-15', ['kb-a'])
+  sids['AT-14'] = await inP2('AT-14', undefined)
+  sids['AT-15'] = await inP2('AT-15', ['kb-a'])
   sids['AT-16'] = await inP1('AT-16', ['kb-a'])
-  sids['AT-20'] = await inP1('AT-20', ['project'])
+  // 不勾任何库：项目库是隐式启用的，它的条目照样进候选
+  sids['AT-20'] = await inP1('AT-20', undefined)
   sids.scratch = await inP1('AT-scratch', undefined)
   sids['AT-17'] = await inP2('AT-17', ['kb-a'])
   sids['AT-21'] = await inP2('AT-21', undefined)
@@ -256,7 +270,7 @@ describe('A · 合并弹层（裸 @）', () => {
     expect(await popover.sections()).toEqual(['file', 'knowledge'])
   })
 
-  it('AT-2 未启用任何库 → 只出文件段、无段头；IPC 候选为空', async () => {
+  it('AT-2 未启用任何库（项目库隐式在、但是空的）→ 只出文件段、无段头；IPC 候选为空', async () => {
     await openAndType('AT-2', '@')
     await waitRow('README.md')
     const rows = await popover.rows()
@@ -568,7 +582,7 @@ describe('E · 发送展开与持久化', () => {
     expect(await chat.tokenBadges(user.id)).toEqual(['knowledge:Token 刷新'])
   })
 
-  it('AT-20 项目库：行 detail = 项目当前名；payload base project；IPC baseName project', async () => {
+  it('AT-20 项目库（隐式启用，没勾任何库）：行 detail = 项目当前名；payload base project；IPC baseName project', async () => {
     const ipcEntries = await listKnowledgeEntries(sids['AT-20'])
     expect(ipcEntries).toHaveLength(1)
     expect(ipcEntries[0].baseName).toBe('project')

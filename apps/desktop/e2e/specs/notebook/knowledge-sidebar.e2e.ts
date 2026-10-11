@@ -1,19 +1,24 @@
 /**
- * 侧栏「知识库」分组（KnowledgeGroup）× 用户知识库 —— 契约见 CLAUDE.md「Knowledge base v2 (OKF)」与
+ * 侧栏「知识库」分组（KnowledgeGroup）× 用户知识库，以及各项目组里的「项目知识库」文件夹
+ * （ProjectKnowledgeFolder）—— 契约见 CLAUDE.md「Knowledge base v2 (OKF)」与
  * docs/okf-knowledge-design.md 附录 U（含「补充」）、附录 L（读宽写严）。
  *
- *   KE-1 树形态：Projects 容器置顶，`~/.shuvix/knowledge/` 下每个子目录一个库、与容器平级平铺（没有
- *        「knowledge」那一层）；隐藏路径、用户根下的散文件、ShuviX 早先生成形状的 index/log 都不占行，
- *        **空目录照常占行**（手动新建的库 / 文件夹第一时间就是空的，它们是新建条目的落点）；不合规的
- *        md 与手写的 index/log 照常列出（名字依次取 title、第一个 # 标题、文件名）；项目库显示项目
- *        **当前**名字。默认折叠：容器展开，项目库与用户库折叠。
- *   KE-2 点行打开：用户库挂 `__knowledge_user__`（notebookPath = 条目 id 去掉首段 `knowledge/`），项目库挂
- *        `__knowledge__`（notebookPath = 条目 id）；再点复用同一会话；两个承载项目不进项目列表。
+ * **项目库不在「知识库」分组里**（2026-10-10）：每个项目自己的库挂在侧栏那个项目组里，读写走
+ * pages.ts 的 projectKnowledgePane；「知识库」分组只剩用户库与置顶的内置库。
+ *
+ *   KE-1 树形态：内置库置顶，`~/.shuvix/knowledge/` 下每个子目录一个库、与它平级平铺（没有
+ *        「knowledge」那一层）；**没有任何 `projects` / `projects/…` 目录或条目**；隐藏路径、用户根下的
+ *        散文件、ShuviX 早先生成形状的 index/log 都不占行，**空目录照常占行**（手动新建的库 / 文件夹第一
+ *        时间就是空的，它们是新建条目的落点）；不合规的 md 与手写的 index/log 照常列出（名字依次取 title、
+ *        第一个 # 标题、文件名）。默认折叠：用户库折叠。
+ *   KE-2 点行打开：用户库挂 `__knowledge_user__`（notebookPath = 条目 id 去掉首段 `knowledge/`），项目库
+ *        （从项目组的文件夹里点）挂 `__knowledge__`（notebookPath = 条目 id）；再点复用同一会话；两个承载
+ *        项目不进项目列表。
  *   KE-3 属性卡兜底只在知识库笔记本里：完全没有 `shuvix:` 行的文件出 OKF 卡（无版本段、无校验态），带别家
  *        标记的以标记为准；普通项目里的同一份文件照旧不出卡。
  *   KE-4 菜单：组头「新建知识库 / 打开目录 / 刷新」，行「在文件夹中显示 / 复制路径」；复制路径按条目 id 的首段分派到两个根。
  *   KE-5 空库一开始就有目录行；里面出现第一个 md 之后，刷新即长出条目行。
- *   KE-6 目录行菜单 = 新建条目 / 新建文件夹；固定文案的 `项目` 容器不是落点，它连 ⋮ 都没有。
+ *   KE-6 目录行菜单 = 新建条目 / 新建文件夹；项目文件夹那一行的菜单也是这两项。
  *   KE-7 新建知识库：组头菜单 → 树里就地输名字，Esc 与失焦都取消；Enter 建完宿主自己重扫，不用刷新。
  *   KE-8 失败原因回到那一行里：名字还在框里、草稿还开着，改一下再回车即可。
  *   KE-9 新建条目：元数据由宿主担保（自述行 / type / status），正文留空，建完立刻打开它的笔记本。
@@ -23,12 +28,20 @@
  *  KE-13 条目行的读动作照旧；「复制路径」走清单下发的 `bundleDirs`（内置根 + 语言层），不是两个根拼的。
  *  KE-14 组头「新建知识库」输入保留名 `shuvix` → 失败原因回到草稿行里，草稿仍开着。
  *
+ * 项目组里的「项目知识库」文件夹（PK-E-*）：
+ *  PK-E-1 每个项目组恰有自己那一行（库目录都还没有的项目也有），临时组没有；文案是 `sidebar.projectKnowledge`。
+ *  PK-E-2 数字 = 本项目的条目数（0 不画）；展开 → 本项目的行；空库展开是空态文案。
+ *  PK-E-3 库目录还不存在：文件夹菜单「新建条目」→ 宿主建出目录与文件、提交进它自己的 git，并打开笔记本。
+ *  PK-E-4 文件夹菜单「新建文件夹」→ 库根下一个目录，树里长出那一行。
+ *  PK-E-5 宿主观察到的写入（与 agent 写入同一条变更管线，广播 `knowledge.changed`）→ 不重开、不聚焦，行自己长出来。
+ *
  * 会话归属先走 IPC（`session.list` / `project.list`）；树形与卡片是纯渲染产物，经 pages.ts 的 knowledgePane 读。
  * ⚠️ 组头 `open-folder` 与行 `reveal` 只读不选：隔离实例没有替换 shell，选中会在真实桌面上弹出文件管理器。
  * ⚠️ 用例共用一个实例、按顺序依赖前面的状态（KE-5 往库里写文件；KE-7～KE-9 真的建库 / 建条目，排在最后）。
  * ⚠️ 内联新建行**失焦即取消**：草稿开着的时候一律不点任何东西，读断言全走 knowledgePane 的 draft* 系列。
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { KNOWLEDGE_PROJECT_ID, KNOWLEDGE_USER_PROJECT_ID } from '@shuvix/chat-protocol/knowledge'
@@ -41,11 +54,14 @@ import { createProject, registryNoteSessions } from '../../harness/seed'
 import {
   fmCardPane,
   knowledgePane,
+  projectKnowledgeFolderIds,
+  projectKnowledgePane,
   sidebarPane,
   type FmCardPane,
   type KnowledgeDirShot,
   type KnowledgeDraftKind,
   type KnowledgePane,
+  type ProjectKnowledgePane,
   type SidebarPane
 } from '../../harness/pages'
 
@@ -58,13 +74,23 @@ const BUILTIN_BASE = 'builtin/shuvix'
 
 /** 内置库的人读名（三语全收）—— 隔离实例跟系统语言走，断的是「是哪一句」而不是哪门语言 */
 const BUILTIN_NAMES = [en, zh, ja].map((l) => l.knowledge.builtinBaseName)
+/** 项目文件夹的标签 / 空态文案（同上，三语全收） */
+const FOLDER_LABELS = [en, zh, ja].map((l) => l.sidebar.projectKnowledge)
+const FOLDER_EMPTY = [en, zh, ja].map((l) => l.sidebar.projectKnowledgeEmpty)
+
+/** 第二个项目：它的库目录从头到尾由文件夹菜单建出来（PK-E-*） */
+const EMPTY_PROJECT = 'KbEmptyProj'
 
 let app: E2EApp
 let kb: KnowledgePane
 let card: FmCardPane
 let sidebar: SidebarPane
+/** KbProj 的项目文件夹（项目库的行长在这里，不在「知识库」分组里） */
+let pk: ProjectKnowledgePane
 /** KbProj 的项目 id —— 项目库的目录名就是它 */
 let projectId: string
+/** KbEmptyProj 的项目 id —— 它的库目录在 PK-E-3 之前不存在 */
+let emptyProjectId: string
 /** 用户根 `~/.shuvix/knowledge` */
 let userRoot: string
 
@@ -166,6 +192,10 @@ beforeAll(async () => {
   // 对照组：内容与用户库里的 no-marker.md 相同，但住在普通项目里
   put(join(projDir, 'no-marker-copy.md'), NO_MARKER_MD)
   projectId = (await createProject(app.main, { name: 'KbProj', path: projDir })).id
+  pk = projectKnowledgePane(app.main, { id: projectId, name: 'KbProj' })
+  const emptyDir = join(app.home, 'kbproj-empty')
+  mkdirSync(emptyDir, { recursive: true })
+  emptyProjectId = (await createProject(app.main, { name: EMPTY_PROJECT, path: emptyDir })).id
 
   // 清单只在分组首次展开时拉 —— 以下种子必须全部写在第一次 expand 之前
   const bundle = join(app.home, '.shuvix', 'knowledge-shuvix', 'projects', projectId)
@@ -205,16 +235,16 @@ afterAll(async () => {
 })
 
 describe('知识库分组 × 用户知识库', () => {
-  it('KE-1 树形态：Projects 容器置顶、用户库与之平级；不该有的目录与文件不占行；默认折叠态', async () => {
+  it('KE-1 树形态：内置库置顶、用户库与之平级；没有项目库；不该有的目录与文件不占行；默认折叠态', async () => {
     await kb.expand()
 
-    // 顶层 = 内置库（置顶）→ Projects 容器 → 每个有 md 的用户库，全部零缩进 ——
-    // 没有包一层「knowledge」，也没有包一层「builtin」
+    // 顶层 = 内置库（置顶）→ 每个用户库，全部零缩进 —— 没有包一层「knowledge」，也没有包一层
+    // 「builtin」，也不再有 Projects 容器（项目库挂在各项目组里）
     const top = await kb.topDirs()
-    expect(top.slice(0, 2).map((d) => d.path)).toEqual(['builtin/shuvix', 'projects'])
+    expect(top[0].path).toBe('builtin/shuvix')
     expect(
       top
-        .slice(2)
+        .slice(1)
         .map((d) => d.path)
         .sort()
     ).toEqual(['knowledge/empty', 'knowledge/notes', 'knowledge/读书笔记'].sort())
@@ -225,16 +255,12 @@ describe('知识库分组 × 用户知识库', () => {
     expect(dirPaths).not.toContain('builtin')
     expect(dirPaths).not.toContain('knowledge/.trash')
     expect(dirPaths).toContain('knowledge/empty')
+    // 项目库不在这一组：KbProj 的库在磁盘上有条目，这里也一个 projects 目录都没有
+    expect(dirPaths.filter((p) => p === 'projects' || p.startsWith('projects/'))).toEqual([])
 
-    // 默认态：容器展开，项目库与用户库折叠
-    expect(await kb.dirOpen('projects')).toBe(true)
-    expect(await kb.dirOpen(`projects/${projectId}`)).toBe(false)
+    // 默认态：用户库折叠
     expect(await kb.dirOpen('knowledge/notes')).toBe(false)
     expect(await kb.dirOpen('knowledge/读书笔记')).toBe(false)
-
-    // 项目库的目录名是项目 id；行上显示项目当前的名字（宿主按 id 查），不是 id
-    const projectDir = (await kb.dirs()).find((d) => d.path === `projects/${projectId}`)
-    expect(projectDir?.label).toBe('KbProj')
 
     // 读宽：有 type 的是合规条目（名字取 title）；没有 frontmatter、带别家标记的照常一行 —— 标题依次取
     // frontmatter title、正文第一个 # 标题、文件名；用户手写的 index.md / log.md 是普通笔记，同样一行
@@ -250,6 +276,7 @@ describe('知识库分组 × 用户知识库', () => {
       ])
     )
     const rowPaths = rows.map((r) => r.path)
+    expect(rowPaths.filter((p) => p.startsWith('projects/'))).toEqual([])
     for (const hidden of [
       // ShuviX 早先生成的形状的 index 不是笔记
       'knowledge/读书笔记/index.md',
@@ -280,9 +307,10 @@ describe('知识库分组 × 用户知识库', () => {
     await kb.waitBody('PLAIN BODY')
     expect(await notesAt(KNOWLEDGE_USER_PROJECT_ID, 'notes/plain.md')).toHaveLength(1)
 
-    // 项目库的承载项目根是 knowledge-shuvix：notebookPath 就是条目 id
-    await kb.setDirOpen(`projects/${projectId}`, true)
-    await kb.openRow(`projects/${projectId}/a.md`)
+    // 项目库从项目组的文件夹里点；承载项目根是 knowledge-shuvix：notebookPath 就是条目 id
+    await pk.expandGroup()
+    await pk.setOpen(true)
+    await pk.openRow(`projects/${projectId}/a.md`)
     await until(
       async () => (await notesAt(KNOWLEDGE_PROJECT_ID, `projects/${projectId}/a.md`)).length > 0,
       'a.md note session under __knowledge__'
@@ -356,8 +384,15 @@ describe('知识库分组 × 用户知识库', () => {
     // 用户库条目 `knowledge/<库名>/…` 相对用户根
     await kb.pickRowMenu('knowledge/notes/plain.md', 'copy-path')
     expect(await takeCopied()).toBe(join(app.home, '.shuvix', 'knowledge', 'notes', 'plain.md'))
-    // 项目库条目 `projects/<id>/…` 相对 knowledge-shuvix 根
-    await kb.pickRowMenu(`projects/${projectId}/a.md`, 'copy-path')
+    // 项目库条目 `projects/<id>/…` 相对 knowledge-shuvix 根（行在项目组的文件夹里，菜单同一份）
+    await pk.expandGroup()
+    await pk.setOpen(true)
+    const projRowIds = ((await pk.rowMenuShots(`projects/${projectId}/a.md`)) ?? [])
+      .filter((it) => it.id)
+      .map((it) => it.id)
+    expect(projRowIds).toContain('reveal')
+    expect(projRowIds).toContain('copy-path')
+    await pk.pickRowMenu(`projects/${projectId}/a.md`, 'copy-path')
     expect(await takeCopied()).toBe(
       join(app.home, '.shuvix', 'knowledge-shuvix', 'projects', projectId, 'a.md')
     )
@@ -379,14 +414,21 @@ describe('知识库分组 × 用户知识库', () => {
     expect(await kb.dirOpen('knowledge/empty')).toBe(false)
   })
 
-  it('KE-6 目录行菜单：库本身与库里的目录都能往里新建；固定文案的容器不是落点，连 ⋮ 都没有', async () => {
+  it('KE-6 目录行菜单：库本身与库里的目录都能往里新建；项目文件夹那一行同样是这两项', async () => {
     await kb.expand()
+    await kb.setDirOpen('knowledge/notes', true)
 
-    // 用户库与项目库一视同仁：两处都是「新建条目 / 新建文件夹」
+    // 库本身与库里的一层：都是「新建条目 / 新建文件夹」
     expect(await dirMenuIds('knowledge/notes')).toEqual(['new-entry', 'new-folder'])
-    expect(await dirMenuIds(`projects/${projectId}`)).toEqual(['new-entry', 'new-folder'])
-    // `项目` 是固定文案的容器而不是一个库：它没有 ⋮，openMenu 找不到按钮 → null
-    expect(await kb.dirMenuShots('projects')).toBeNull()
+    expect(await dirMenuIds('knowledge/notes/sub')).toEqual(['new-entry', 'new-folder'])
+    // 项目库：文件夹那一行就是库本身，⋮ 与右键同一份
+    await pk.expandGroup()
+    const viaButton = await pk.menuShots()
+    expect((viaButton ?? []).filter((it) => it.id).map((it) => it.id)).toEqual([
+      'new-entry',
+      'new-folder'
+    ])
+    expect(await pk.menuShots('contextmenu')).toEqual(viaButton)
   })
 
   it('KE-7 新建知识库：组头菜单 → 就地输名字；Esc 与失焦都取消；Enter 建完宿主自己重扫，不用刷新', async () => {
@@ -506,7 +548,7 @@ describe('知识库分组 × 用户知识库', () => {
     expect(await kb.draftKind()).toBeNull()
   })
 
-  it('KE-10 内置库那一行：锁 + 自己的图标 + data-knowledge-readonly；项目容器是另一个图标；普通目录仍随展开切开/合文件夹', async () => {
+  it('KE-10 内置库那一行：锁 + 自己的图标 + data-knowledge-readonly；普通目录仍随展开切开/合文件夹', async () => {
     await kb.expand()
 
     const byPath = async (path: string): Promise<KnowledgeDirShot> => {
@@ -520,25 +562,21 @@ describe('知识库分组 × 用户知识库', () => {
     await kb.setDirOpen('knowledge/notes', false)
 
     const builtin = await byPath(BUILTIN_BASE)
-    const projects = await byPath('projects')
     const plain = await byPath('knowledge/notes')
 
     // 只读标记只挂在内置库这一支上；锁只挂库那一行（里面的层级不重复挂，这里内置库是顶层行）
     expect(builtin.readonly).toBe(true)
     expect(builtin.lock).toBe(true)
-    expect([projects.readonly, plain.readonly]).toEqual([false, false])
-    expect([projects.lock, plain.lock]).toEqual([false, false])
+    expect(plain.readonly).toBe(false)
+    expect(plain.lock).toBe(false)
 
-    // 三种**身份**各一个图标：内置库 / 项目容器 / 普通目录两两不同（比的是「不一样」，不是具体名字）
-    expect(builtin.icon).not.toBe(projects.icon)
+    // 内置库有自己的身份图标，与普通目录不同（比的是「不一样」，不是具体名字）
     expect(builtin.icon).not.toBe(plain.icon)
-    expect(projects.icon).not.toBe(plain.icon)
     expect(builtin.icon).not.toBe('')
 
     // 身份行的图标不随展开变；普通目录照旧一只开合的文件夹
     await kb.setDirOpen(BUILTIN_BASE, true)
     expect((await byPath(BUILTIN_BASE)).icon).toBe(builtin.icon)
-    expect((await byPath('projects')).icon).toBe(projects.icon)
     await kb.setDirOpen('knowledge/notes', true)
     const openPlain = (await byPath('knowledge/notes')).icon
     expect(openPlain).not.toBe(plain.icon)
@@ -617,5 +655,155 @@ describe('知识库分组 × 用户知识库', () => {
     // 收场：草稿行不留给后来的用例（本文件里它是最后一条，仍按惯例收干净）
     await kb.cancelDraft()
     await until(async () => (await kb.draftKind()) === null, 'draft row closed by Escape')
+  })
+})
+
+/**
+ * 项目组里的「项目知识库」文件夹。KbProj 的库在 beforeAll 里种了一条（a.md）；KbEmptyProj 的库目录
+ * 在 PK-E-3 之前不存在 —— 文件夹照样在，第一次往里建东西时由宿主建出来。
+ */
+describe('项目组里的项目知识库', () => {
+  const emptyPk = (): ProjectKnowledgePane =>
+    projectKnowledgePane(app.main, { id: emptyProjectId, name: EMPTY_PROJECT })
+  const emptyBundle = (): string =>
+    join(app.home, '.shuvix', 'knowledge-shuvix', 'projects', emptyProjectId)
+  const git = (cwd: string, args: string[]): string =>
+    execFileSync('git', args, { cwd, encoding: 'utf8' })
+
+  it('PK-E-1 每个项目组恰有自己那一行（库目录都还没有的项目也有），临时组没有；文案是 sidebar.projectKnowledge', async () => {
+    // 临时组只在有无项目会话时才出现：建一条，好断「临时组里没有这一行」
+    await app.main.eval(`window.api.session.create(${JSON.stringify({ title: 'pk-temp-chat' })})`)
+    await until(async () => (await sidebar.groupHeaderPresent('temp')) || null, 'temp group shown')
+    expect(existsSync(emptyBundle())).toBe(false)
+
+    await until(async () => {
+      const ids = await projectKnowledgeFolderIds(app.main)
+      return ids.includes(projectId) && ids.includes(emptyProjectId) ? ids : null
+    }, 'a project knowledge folder in each project group')
+    // 每个项目恰一行；载体项目（__knowledge__ 等）不是项目组，自然没有
+    const ids = await projectKnowledgeFolderIds(app.main)
+    expect(ids.filter((id) => id === projectId)).toHaveLength(1)
+    expect(ids.filter((id) => id === emptyProjectId)).toHaveLength(1)
+    expect(ids.filter((id) => id.startsWith('__'))).toEqual([])
+    expect(await sidebar.projectKnowledgeFolders({ project: 'KbProj' })).toEqual([projectId])
+    expect(await sidebar.projectKnowledgeFolders({ project: EMPTY_PROJECT })).toEqual([
+      emptyProjectId
+    ])
+    expect(await sidebar.projectKnowledgeFolders('temp')).toEqual([])
+
+    const shot = await emptyPk().folder()
+    expect(FOLDER_LABELS).toContain(shot?.label)
+    // 它不是一条会话：会话行的清单里没有这个标签
+    expect((await sidebar.titles()).filter((t) => FOLDER_LABELS.includes(t))).toEqual([])
+  })
+
+  it('PK-E-2 数字 = 本项目的条目数（0 不画）；展开 → 本项目的行；空库展开是空态文案', async () => {
+    await pk.expandGroup()
+    await until(async () => ((await pk.folder())?.count === 1 ? true : null), 'KbProj count 1')
+    await pk.setOpen(true)
+    expect((await pk.rows()).map((r) => r.path)).toEqual([`projects/${projectId}/a.md`])
+    expect(await pk.rows()).toEqual([{ path: `projects/${projectId}/a.md`, label: 'Proj Entry' }])
+
+    const empty = emptyPk()
+    await empty.expandGroup()
+    await empty.setOpen(true)
+    expect((await empty.folder())?.count).toBeNull()
+    expect(await empty.rows()).toEqual([])
+    const body = await until(async () => {
+      const text = await empty.bodyText()
+      return FOLDER_EMPTY.some((t) => text.includes(t)) ? text : null
+    }, 'empty-state text in the folder')
+    expect(body).not.toBe('')
+  })
+
+  it('PK-E-3 库目录还不存在：文件夹菜单「新建条目」→ 目录与文件建出来、提交进它自己的 git、打开它的笔记本', async () => {
+    const empty = emptyPk()
+    await empty.expandGroup()
+    expect(existsSync(emptyBundle())).toBe(false)
+
+    await empty.pickMenu('new-entry')
+    await until(async () => (await empty.draftKind()) === 'entry', 'entry draft row in the folder')
+    expect((await empty.folder())?.open).toBe(true)
+    await empty.typeDraft('First Note')
+    await empty.submitDraft()
+
+    const id = `projects/${emptyProjectId}/first-note.md`
+    // 不用重开：建完宿主自己重扫，行与数字都长出来
+    await until(
+      async () => (await empty.rows()).some((r) => r.path === id),
+      'first-note.md listed in the folder'
+    )
+    await until(async () => ((await empty.folder())?.count === 1 ? true : null), 'count 1')
+    expect(await empty.draftKind()).toBeNull()
+
+    // 元数据与「知识库」分组里的新建同一套
+    expect(readFileSync(join(emptyBundle(), 'first-note.md'), 'utf-8')).toBe(
+      '---\nshuvix: okf v0.2\ntype: Memory\ntitle: First Note\nstatus: draft\n---\n\n'
+    )
+    // 建完立刻打开：承载项目 __knowledge__，notebookPath = 条目 id
+    await until(
+      async () => (await notesAt(KNOWLEDGE_PROJECT_ID, id)).length > 0,
+      'first-note.md note session under __knowledge__'
+    )
+    await until(async () => (await empty.activeRow()) === id, 'first-note.md row active')
+
+    // 进了这个库自己的 git（变更管线去抖 300ms 后提交，署名 human）
+    const lastCommit = await until(() => {
+      try {
+        const msg = git(emptyBundle(), ['log', '-1', '--format=%B'])
+        return msg.startsWith('kb(creation): /first-note.md') ? msg : null
+      } catch {
+        return null
+      }
+    }, 'creation commit in the project base repo')
+    expect(lastCommit).toContain('Knowledge-Actor: human')
+    expect(git(emptyBundle(), ['status', '--porcelain']).trim()).toBe('')
+  })
+
+  it('PK-E-4 文件夹菜单「新建文件夹」→ 库根下一个目录，树里长出那一行（默认折叠）', async () => {
+    const empty = emptyPk()
+    await empty.expandGroup()
+    await empty.pickMenu('new-folder')
+    await until(async () => (await empty.draftKind()) === 'folder', 'folder draft row')
+    await empty.typeDraft('api')
+    await empty.submitDraft()
+
+    const dirId = `projects/${emptyProjectId}/api`
+    await until(
+      async () => (await empty.dirs()).some((d) => d.path === dirId),
+      'api dir row in the folder'
+    )
+    expect(existsSync(join(emptyBundle(), 'api'))).toBe(true)
+    expect(await empty.dirOpen(dirId)).toBe(false)
+    // 子目录的菜单同样是往里新建
+    expect(
+      ((await empty.dirMenuShots(dirId)) ?? []).filter((it) => it.id).map((it) => it.id)
+    ).toEqual(['new-entry', 'new-folder'])
+  })
+
+  it('PK-E-5 宿主观察到的写入（与 agent 写入同一条变更管线，广播 knowledge.changed）→ 不重开、不聚焦，行自己长出来', async () => {
+    const empty = emptyPk()
+    await empty.expandGroup()
+    await empty.setOpen(true)
+    const before = (await empty.folder())?.count ?? 0
+
+    const created = await app.main.eval<{ success: boolean; id?: string }>(
+      `window.api.knowledge.createEntry(${JSON.stringify({
+        dir: `projects/${emptyProjectId}`,
+        title: 'From Elsewhere'
+      })})`
+    )
+    expect(created).toEqual({
+      success: true,
+      id: `projects/${emptyProjectId}/from-elsewhere.md`
+    })
+    await until(
+      async () => (await empty.rows()).some((r) => r.path === created.id),
+      'entry written elsewhere shows up in the folder'
+    )
+    expect((await empty.folder())?.count).toBe(before + 1)
+    // 「知识库」分组里照样没有它
+    await kb.expand()
+    expect((await kb.rows()).filter((r) => r.path.startsWith('projects/'))).toEqual([])
   })
 })

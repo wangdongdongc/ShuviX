@@ -17,7 +17,7 @@
  *     `shuvix-instruction-files: AGENTS.md, CLAUDE.md`：该 agent 认哪些项目指令文件，
  *     按列出顺序取**第一个存在且非空**的注入，至多一个；省略 = 不注入），
  *     与布尔开关 `shuvix-project-awareness`（**项目感知**：该 agent 是否了解它所在的项目 ——
- *     项目提示词与项目记忆索引一并注入）；
+ *     注入项目提示词；旧项目记忆索引曾与它同开关，已于 2026-10-10 随项目记忆一并退役）；
  *     项目感知曾是 `shuvix-project-prompt` / `shuvix-project-memory` 两个开关，合成一个是因为
  *     它们同源同废：都由「这个 agent 要不要知道自己在哪个项目里」这一个意图决定，都按**根会话
  *     的项目**解析、无项目时同样降级为不注入。拆成两问只是把同一个决定问了两遍，而两个答案
@@ -101,8 +101,8 @@ export interface ParsedAgentFile {
    */
   instructionFiles: string[]
   /**
-   * `shuvix-project-awareness`：项目感知 —— 是否向该 agent 注入项目提示词与项目记忆索引
-   * （两者同一开关，都按根会话的项目解析）；缺省 false。
+   * `shuvix-project-awareness`：项目感知 —— 是否向该 agent 注入项目提示词
+   * （按根会话的项目解析）；缺省 false。
    */
   projectAwareness: boolean
 }

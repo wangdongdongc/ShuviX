@@ -216,7 +216,6 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
       workspace: ROOT,
       toolResultsBase: '/nonexistent/tool_results',
       skillsDirs: [],
-      memoryDirs: [],
       knowledgeRoot: '/kb',
       knowledgeSessionDirs: opts.knowledgeSessionDirs ?? [],
       home: '/fake-home',

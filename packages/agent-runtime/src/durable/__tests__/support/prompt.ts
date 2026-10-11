@@ -38,7 +38,6 @@ export interface GoldenFixture {
       resolveInstruction: Resolver<{ filename: string; content: string } | null>
       resolveProjectPrompt: Resolver<string | null>
       resolveKnowledgeBases: Resolver<string | null>
-      resolveProjectMemory: Resolver<string | null>
     }
     systemContext: string[]
   }
@@ -91,13 +90,6 @@ export function fixturePromptHost(
     const value = resolvers.resolveKnowledgeBases.returns
     host.resolveKnowledgeBases = (sessionId) => {
       note('resolveKnowledgeBases', [sessionId])
-      return value
-    }
-  }
-  if (resolvers.resolveProjectMemory.implemented) {
-    const value = resolvers.resolveProjectMemory.returns
-    host.resolveProjectMemory = (sessionId) => {
-      note('resolveProjectMemory', [sessionId])
       return value
     }
   }

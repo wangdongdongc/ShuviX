@@ -86,14 +86,8 @@ export interface SessionSettings {
    * 笔记本会话 `notebook`、bot 会话 `bot` —— 没有设置项，也没有会话内切换；旧切换时代写下的戳只是遗留数据。
    */
   agentProfile?: string
-  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目记忆为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
+  /** 笔记本会话绑定的 md 文件（相对项目根，forward-slash；项目外的文件为绝对路径）；非空即为笔记本会话（根 Agent 钉死 notebook 基座档案，对话经输入卡片的抽屉呈现） */
   notebookPath?: string
-  /**
-   * 项目记忆笔记本：该会话绑定的是 `~/.shuvix/memory/<projectId>/<slug>.md`。
-   * 侧栏据此把它归入项目组下的「项目记忆」子文件夹，而不是并排混进会话列表
-   * （同一条记忆在同一处出现两次，比少一处入口更糟）。
-   */
-  memorySlug?: string
   /** 标题最近一次由谁写入：'user' = UI 重命名，'auto' = 自动化（session 工具）。缺省视同 'user' */
   titleOrigin?: 'user' | 'auto'
   /**

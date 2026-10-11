@@ -66,10 +66,6 @@
       "resolveKnowledgeBases": {
         "implemented": true,
         "returns": "Knowledge bases this session works with — markdown entries that later sessions read. Name one with `base`:\n- project — this project's own knowledge base\n- recipes\n\nUse the `knowledge` tool: `search` (leave `base` out to cover all of them) before working on\nsomething you do not already know the answer for, and `create` to record what will be looked up\nagain — a decision and why, a pitfall that cost time, a convention the code does not state — in\nwhichever base the subject belongs to. Say in one line what you recorded."
-      },
-      "resolveProjectMemory": {
-        "implemented": true,
-        "returns": null
       }
     },
     "systemContext": []
@@ -109,9 +105,6 @@
         "sess-golden-root"
       ],
       "resolveKnowledgeBases": [
-        "sess-golden-root"
-      ],
-      "resolveProjectMemory": [
         "sess-golden-root"
       ]
     },

@@ -63,10 +63,6 @@
       "resolveKnowledgeBases": {
         "implemented": true,
         "returns": null
-      },
-      "resolveProjectMemory": {
-        "implemented": true,
-        "returns": null
       }
     },
     "systemContext": []
@@ -106,9 +102,6 @@
         "sess-golden-root"
       ],
       "resolveKnowledgeBases": [
-        "sess-golden-root"
-      ],
-      "resolveProjectMemory": [
         "sess-golden-root"
       ]
     },

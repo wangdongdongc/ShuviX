@@ -368,7 +368,6 @@ export class SessionService {
 
     // bot 会话：绑定一个 bot，**有根**（根档案 bot，形态推导见 resolveAgentProfileName）。空串 / 空白视同没给
     const bot = chromeTab ? undefined : params?.bot?.trim() || undefined
-    const memorySlug = chromeTab ? undefined : params?.memorySlug
     const session: Session = {
       id,
       title: params?.title ?? (notebookPath ? basename(notebookPath) : t('agent.defaultTitle')),
@@ -384,7 +383,6 @@ export class SessionService {
         // 自带工作目录只给无项目会话：有项目时工作目录恒为项目根。子会话随父会话（与 projectId
         // 同一条理由 —— 工作目录是会话的地基），调用方给的不算
         ...(!pid && workingDirectory ? { workingDirectory } : {}),
-        ...(memorySlug ? { memorySlug } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
         // 子会话刻意**不**继承父会话的路径授权（allowList）：那是一条会长大的记账，快照过去只会漂移。

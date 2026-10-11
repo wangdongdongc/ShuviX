@@ -68,7 +68,6 @@ export function wExtensions(conversationId: ConversationId = ROOT_CONVERSATION_I
     PROMPT_EXTENSION.instructions,
     PROMPT_EXTENSION.projectPrompt,
     PROMPT_EXTENSION.knowledge,
-    PROMPT_EXTENSION.memory,
     `shuvix.agent.${conversationId}`
   ]
 }

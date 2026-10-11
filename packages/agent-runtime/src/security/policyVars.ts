@@ -1,7 +1,7 @@
 /**
  * 策略变量表 —— 策略 md 里 `vars.*` 看到的东西，**唯一定义处**。
  *
- * = 宿主静态变量（workspace / home / skillsDirs / memoryDirs…）⊕ 会话授权派生变量：
+ * = 宿主静态变量（workspace / home / skillsDirs…）⊕ 会话授权派生变量：
  *   vars.grantedRead   string[]  allowList 里的 Read(...) 路径
  *   vars.grantedWrite  string[]  allowList 里的 Write(...) 路径
  *

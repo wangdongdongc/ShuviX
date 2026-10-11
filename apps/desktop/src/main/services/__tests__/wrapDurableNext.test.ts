@@ -83,7 +83,6 @@ function makeSecurity(opts: {
         workspace: '/ws',
         toolResultsBase: '/tool-results',
         skillsDirs: ['/skills'],
-        memoryDirs: [],
         knowledgeRoot: '/kb',
         knowledgeSessionDirs: [],
         home: '/home/u',

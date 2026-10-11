@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest'
 const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures/system-prompts')
 
 /** 捕获时的用例数；少于它说明有 fixture 丢了 */
-const MIN_FIXTURES = 21
+const MIN_FIXTURES = 20
 
 /** createAgent 的拼接次序（systemContext 可重复，恒在最后） */
 const PART_ORDER = [
@@ -27,7 +27,6 @@ const PART_ORDER = [
   'instructionFile',
   'projectPrompt',
   'knowledgeBases',
-  'projectMemory',
   'systemContext'
 ] as const
 

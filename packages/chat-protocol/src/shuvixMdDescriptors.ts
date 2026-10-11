@@ -7,7 +7,7 @@
  * 「怎么展示/编辑」，不做合法性判定 —— 校验语义永远归各自解析器
  * （definitionFile.ts / policyFile.ts），后续经宿主校验接缝回传 UI。
  *
- * 覆盖策略：okf / agent / policy / hook / bot / memory 已各有描述符。没有描述符的类型（chart）
+ * 覆盖策略：okf / agent / policy / hook / bot 已各有描述符。没有描述符的类型（chart）
  * 与未列出的键落属性卡的通用 key/value 行 —— 新类型零描述符也有降级展示，补一份
  * 描述符即得完整卡片；嵌套结构（policy 的 rules/lets）按设计只做摘要不做表单，
  * 等专属 summarize 能力时再扩展本类型。
@@ -125,24 +125,6 @@ const POLICY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
 }
 
 /**
- * 项目记忆文件（agent-runtime memory/memoryFile.ts 的键集）。侧栏「项目记忆」点开的就是它，
- * 所以卡片是用户改记忆元数据的主要入口：`name` 是人话标题（**不参与路径**，路径只认文件名，
- * 故用 text 而非 agent 那种标识符 mono），`shuvix-memory-recall` 是唯一进注入索引的描述字段。
- */
-const MEMORY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
-  type: 'memory',
-  badge: 'ShuviX memory',
-  fields: [
-    { key: 'name', labelKey: 'tool.subAgentName', kind: 'text' },
-    { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
-    { key: 'shuvix-memory-recall', labelKey: 'memory.recall', kind: 'text' },
-    { key: 'shuvix-memory-pinned', labelKey: 'memory.pinned', kind: 'boolean' },
-    { key: 'shuvix-memory-updated', labelKey: 'memory.updated', kind: 'text' },
-    { key: 'shuvix-memory-session', labelKey: 'memory.session', kind: 'mono' }
-  ]
-}
-
-/**
  * hook 文件（agent-runtime hook/hookFile.ts 的键集）：「在哪些埋点、满足什么条件时，把哪个 agent
  * 叫起来」—— 这就是全部键。`shuvix-hook-on` 是最要紧的一行（什么时候会跑），给它专属摘要
  * （埋点 id + when 表达式），同 policy 的 rules；`shuvix-hook-agent` 是派发的 agent 名。
@@ -240,7 +222,6 @@ export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   POLICY_DESCRIPTOR,
   HOOK_DESCRIPTOR,
   BOT_DESCRIPTOR,
-  MEMORY_DESCRIPTOR,
   SKILL_DESCRIPTOR
 ]
 

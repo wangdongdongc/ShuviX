@@ -59,7 +59,6 @@ vi.mock('../../services/skillService', () => ({
 }))
 vi.mock('../../services/mcpService', () => ({ mcpService: {} }))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
-vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: {} }))
 vi.mock('../../services/wrapToolOutput', () => ({ wrapDurableTool: vi.fn() }))
 vi.mock('../../services/userInputBroker', () => ({ requestUserInputFor: vi.fn() }))

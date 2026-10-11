@@ -37,6 +37,14 @@ vi.mock('../../../i18n', () => ({
     vars?.name === undefined ? key : `${key}:${String(vars.name)}`
 }))
 vi.mock('../changes', () => ({ recordKnowledgeChange: recordChange }))
+// 项目库根在目录还不存在时也能当落点 —— 前提是项目真在；替身认这张表里的 id（缺省只有 p1，
+// CR-19 往里加隐藏承载项目，证明拦它们的是「隐藏」而不是「查不到」）
+const knownProjects = vi.hoisted(() => new Set<string>())
+vi.mock('../../../dao/projectDao', () => ({
+  projectDao: {
+    findById: (id: string) => (knownProjects.has(id) ? { id, name: id.toUpperCase() } : undefined)
+  }
+}))
 
 import { appEventBus } from '../../../utils/appEventBus'
 import { createKnowledgeBase, createKnowledgeEntry, createKnowledgeFolder } from '../create'
@@ -104,6 +112,8 @@ beforeEach(() => {
   state.root = root
   invalidateKnowledgeScan()
   recordChange.mockClear()
+  knownProjects.clear()
+  knownProjects.add('p1')
   events = []
   unsubscribe = appEventBus.subscribe((e) => {
     if (e.type === 'knowledge.changed') events.push(e)
@@ -549,5 +559,123 @@ describe('createKnowledgeFolder / createKnowledgeEntry —— 内置库只读', 
         'notes/my-note.md'
       ]
     })
+  })
+})
+
+/**
+ * 项目库的根（CR-17..20，2026-10-10）：侧栏每个项目组里的「项目知识库」文件夹总在，它的菜单往
+ * `projects/<projectId>` 里建东西 —— 而那个目录要到第一次写入才有。所以落点规则多了一个例外：
+ * **恰好两段**的 `projects/<id>`，项目真在、且不是隐藏的承载项目，目录不在也收，写的时候建出来。
+ * 别的一切照旧：未知项目、隐藏承载项目、库根之下还不存在的路径都是 errNoSuchDir，且不留半个目录。
+ */
+describe('项目库的根：目录还不存在也是落点', () => {
+  it('CR-17 真实项目、库目录还没有：新建条目建出目录与文件（元数据同 CR-1），记一条 Creation 变更；同标题再建落 -2', () => {
+    expect(existsSync(join(root, 'projects'))).toBe(false)
+
+    expect(createKnowledgeEntry('projects/p1', 'First Note')).toEqual({
+      success: true,
+      id: 'projects/p1/first-note.md'
+    })
+    expect(readFileSync(join(root, 'projects', 'p1', 'first-note.md'), 'utf-8')).toBe(
+      '---\nshuvix: okf v0.2\ntype: Memory\ntitle: First Note\nstatus: draft\n---\n\n'
+    )
+    // 进变更管线（git 提交在那边）：bundle 是项目库，路径是库内相对的
+    expect(recordChange).toHaveBeenCalledTimes(1)
+    expect(recordChange).toHaveBeenCalledWith({
+      bundle: 'projects/p1',
+      path: 'first-note.md',
+      op: 'Creation',
+      actor: 'human'
+    })
+
+    // 目录有了之后同一个落点照常去重
+    expect(createKnowledgeEntry('projects/p1', 'First Note')).toEqual({
+      success: true,
+      id: 'projects/p1/first-note-2.md'
+    })
+    expect(disk()).toEqual({
+      shuvix: [
+        'projects/',
+        'projects/p1/',
+        'projects/p1/first-note-2.md',
+        'projects/p1/first-note.md'
+      ],
+      user: []
+    })
+  })
+
+  it('CR-18 真实项目、库目录还没有：新建文件夹建出库目录与那一层，广播一次 knowledge.changed，不进变更管线；归一写法同样收', () => {
+    expect(createKnowledgeFolder('projects/p1', 'api')).toEqual({
+      success: true,
+      id: 'projects/p1/api'
+    })
+    expect(events).toEqual([{ type: 'knowledge.changed' }])
+    expect(recordChange).not.toHaveBeenCalled()
+    expect(disk()).toEqual({ shuvix: ['projects/', 'projects/p1/', 'projects/p1/api/'], user: [] })
+
+    // 另一个项目、换一种写法（前导 ./ 与反斜杠）：归一之后是同一个两段 id
+    knownProjects.add('p2')
+    expect(createKnowledgeFolder('.\\projects\\p2', 'docs')).toEqual({
+      success: true,
+      id: 'projects/p2/docs'
+    })
+    expect(existsSync(join(root, 'projects', 'p2', 'docs'))).toBe(true)
+  })
+
+  it('CR-19 未知项目与隐藏承载项目（哪怕项目行查得到）都不是落点：errNoSuchDir，不建任何目录', () => {
+    // 承载项目的行在库里是真有的 —— 判据是「隐藏」，不是「查不到」
+    for (const hidden of ['__knowledge__', '__agents__', '__bots__']) knownProjects.add(hidden)
+    const before = disk()
+
+    for (const id of [
+      'projects/ghost',
+      'projects/__knowledge__',
+      'projects/__agents__',
+      'projects/__bots__'
+    ]) {
+      expect(createKnowledgeFolder(id, 'x'), `folder @ ${id}`).toEqual({
+        success: false,
+        error: NO_SUCH_DIR
+      })
+      expect(createKnowledgeEntry(id, 'X'), `entry @ ${id}`).toEqual({
+        success: false,
+        error: NO_SUCH_DIR
+      })
+    }
+    expect(recordChange).not.toHaveBeenCalled()
+    expect(events).toEqual([])
+    expect(disk()).toEqual(before)
+    expect(existsSync(join(root, 'projects'))).toBe(false)
+  })
+
+  it('CR-20 例外只给库根：库根之下还不存在的路径照旧 errNoSuchDir —— 库目录不在时如此，库目录在、那一层不在时也如此', () => {
+    // (a) 库目录还没有：projects/p1/sub 不是「项目库的根」
+    for (const id of ['projects/p1/sub', 'projects/p1/sub/deeper']) {
+      expect(createKnowledgeFolder(id, 'x'), `folder @ ${id}`).toEqual({
+        success: false,
+        error: NO_SUCH_DIR
+      })
+      expect(createKnowledgeEntry(id, 'X'), `entry @ ${id}`).toEqual({
+        success: false,
+        error: NO_SUCH_DIR
+      })
+    }
+    expect(existsSync(join(root, 'projects'))).toBe(false)
+
+    // (b) 库目录在、那一层不在
+    mkdirSync(join(root, 'projects', 'p1'), { recursive: true })
+    invalidateKnowledgeScan()
+    const before = disk()
+    expect(createKnowledgeFolder('projects/p1/sub', 'x')).toEqual({
+      success: false,
+      error: NO_SUCH_DIR
+    })
+    expect(createKnowledgeEntry('projects/p1/sub', 'X')).toEqual({
+      success: false,
+      error: NO_SUCH_DIR
+    })
+    expect(recordChange).not.toHaveBeenCalled()
+    expect(events).toEqual([])
+    expect(disk()).toEqual(before)
   })
 })

@@ -354,7 +354,7 @@ export interface SecurityHostProvider {
    */
   realPath?(path: string): string
   /**
-   * 策略变量表（match/lets 里的 `vars.*`）：workspace / toolResultsBase / skillsDirs / memoryDirs /
+   * 策略变量表（match/lets 里的 `vars.*`）：workspace / toolResultsBase / skillsDirs /
    * home / systemDirs…。每次装配现取。宿主应为内置策略引用的变量恒供给取值
    * （无该概念时给空串/空数组 —— inDir 对空串恒不命中）。缺失的键：deny / ask 规则里只作为 inDir
    * 目录参数出现的，按「没有这个目录」处理，并按 logger × 策略 × 变量告警一次（见 assemble.ts）；

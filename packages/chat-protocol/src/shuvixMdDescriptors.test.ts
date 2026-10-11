@@ -134,7 +134,7 @@ describe('对象 id 行（shuvix-id）', () => {
     }
   )
 
-  it.each(['okf', 'skill', 'memory'])('SMD-ID2 %s 不列 shuvix-id', (type) => {
+  it.each(['okf', 'skill'])('SMD-ID2 %s 不列 shuvix-id', (type) => {
     const d = descriptorForType(type)
     expect(d, type).toBeTruthy()
     expect(d!.fields.map((f) => f.key)).not.toContain('shuvix-id')

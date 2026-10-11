@@ -92,7 +92,7 @@ export type AgentStateRecord = {
   /** 档案的指令文件清单（顺序即优先级），与人设一起冻结；指令文件段落按它解析 */
   instructionFiles?: string[]
   /**
-   * 活段落（指令文件 / 项目提示词 / 知识库 / 项目记忆 / bot）解析所对着的根会话 id，与人设一起冻结
+   * 活段落（指令文件 / 项目提示词 / 知识库 / bot）解析所对着的根会话 id，与人设一起冻结
    * （派生 agent 按根会话的项目上下文解析）。
    */
   rootSessionId?: string

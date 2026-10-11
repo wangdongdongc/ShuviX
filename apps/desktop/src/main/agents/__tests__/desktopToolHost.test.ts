@@ -72,7 +72,6 @@ vi.mock('../../dao/providerDao', () => ({
   providerDao: { findAllEnabledModels: mocks.findAllEnabledModels }
 }))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
-vi.mock('../../services/memory', () => ({ resolveProjectMemoryIndex: vi.fn() }))
 vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: mocks.broadcast } }))
 vi.mock('../../services/agentRuntimeAdapters', () => ({

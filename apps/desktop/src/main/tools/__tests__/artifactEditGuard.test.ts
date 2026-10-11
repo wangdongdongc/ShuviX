@@ -80,7 +80,6 @@ vi.mock('../../services/toolContext', async () => {
           workspace: state.workspace,
           toolResultsBase: joinPath(state.workspace, '.nonexistent-tool-results'),
           skillsDirs: [],
-          memoryDirs: [],
           home: joinPath(state.workspace, '.nonexistent-home'),
           sessionArtifactsDir: joinPath(state.root, ctx.sessionId),
           // 会话目录照生产的形状给：工作目录 + 本会话 artifacts（与 getSessionArtifactsDir 的 mock

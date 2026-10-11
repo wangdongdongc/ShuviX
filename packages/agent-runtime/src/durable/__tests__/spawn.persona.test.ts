@@ -87,10 +87,6 @@ describe('SpawnCoordinator · persona', () => {
       resolveKnowledgeBases: (sessionId) => {
         note('resolveKnowledgeBases', [sessionId])
         return 'KNOWLEDGE BODY'
-      },
-      resolveProjectMemory: (sessionId) => {
-        note('resolveProjectMemory', [sessionId])
-        return 'MEMORY BODY'
       }
     }
     const d = await hostD({ host: { promptHost } })
@@ -99,15 +95,10 @@ describe('SpawnCoordinator · persona', () => {
     expect(calls.resolveInstruction).toContainEqual(['s1', '', ['AGENTS.md']])
     expect(calls.resolveProjectPrompt).toContainEqual(['s1'])
     expect(calls.resolveKnowledgeBases).toContainEqual(['s1'])
-    expect(calls.resolveProjectMemory).toContainEqual(['s1'])
     const child = d.t.kit.requests[1]!.systemPrompt
-    const order = [
-      'You are M1 aware',
-      'INSTRUCTION BODY',
-      'PROJECT BODY',
-      'KNOWLEDGE BODY',
-      'MEMORY BODY'
-    ].map((text) => child.indexOf(text))
+    const order = ['You are M1 aware', 'INSTRUCTION BODY', 'PROJECT BODY', 'KNOWLEDGE BODY'].map(
+      (text) => child.indexOf(text)
+    )
     expect(order.every((index) => index >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
     // 根的档案不声明这些：根的请求里一段都没有

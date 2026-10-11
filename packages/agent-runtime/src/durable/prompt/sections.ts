@@ -1,5 +1,5 @@
 /**
- * 系统提示词的六个段落 —— 每段一个 ShuviX 扩展，沿旧 createAgent 的围栏切开（裁决：Mapping #5 prompt）。
+ * 系统提示词的五个段落 —— 每段一个 ShuviX 扩展，沿旧 createAgent 的围栏切开（裁决：Mapping #5 prompt）。
  *
  * | 扩展                            | 段落 key               | 内容                         | 何时选中                        |
  * |---------------------------------|------------------------|------------------------------|---------------------------------|
@@ -7,17 +7,16 @@
  * | `shuvix.prompt.instructions`    | `project_instructions` | 指令文件（现解析）            | 档案声明了指令文件清单           |
  * | `shuvix.prompt.project-prompt`  | `project_prompt`       | 项目提示词（现解析）          | 项目感知                        |
  * | `shuvix.prompt.knowledge`       | `knowledge_bases`      | 知识库引导（现解析）          | agent 的工具名单里有 `knowledge` |
- * | `shuvix.prompt.memory`          | `project_memory`       | 旧项目记忆索引（现解析）      | 项目感知                        |
  * | `shuvix.prompt.bot`             | `bot_profile`          | bot 人设与记忆（现解析）      | bot 档案上的根 agent            |
  *
  * 几条规矩：
  *  - **逐字节等于旧系统提示词**：全部 `tag: false`（文本原样，durable 不再包标签），段落之间由 pi-ai
  *    以 "\n\n" 拼接 —— 正是旧 createAgent 的 `+= '\n\n' + 围栏`。P1-00 的黄金 fixture 对照。
- *  - **固定次序**：durable 按对话选中的扩展顺序排段落。六个扩展必须按 `PROMPT_EXTENSION_ORDER` 选，
+ *  - **固定次序**：durable 按对话选中的扩展顺序排段落。五个扩展必须按 `PROMPT_EXTENSION_ORDER` 选，
  *    且别的扩展不该再带段落（工具扩展没有段落，排在哪里都不影响）。
- *  - **人设冻结、其余五段是活的**：段落只在有意的状态变化时变（用户改了项目提示词、勾了别的库、
+ *  - **人设冻结、其余四段是活的**：段落只在有意的状态变化时变（用户改了项目提示词、勾了别的库、
  *    bot 改了自己的记忆……），从不因环境波动而变；变了的那一段在下一次请求里作为 `pi.system` 增量重发。
- *  - **修剪与跳过**：五个活段落的内容一律 trim，纯空白 / null / seam 未实现 → 段落缺席（返回 undefined）。
+ *  - **修剪与跳过**：四个活段落的内容一律 trim，纯空白 / null / seam 未实现 → 段落缺席（返回 undefined）。
  *    指令文件也修剪 —— 旧 createAgent 只判真假不修剪，但桌面的解析器本就修剪过，生产输出不变（P1-08 决定）。
  *  - **选中即门**：门在 `promptExtensionsFor`（创建 agent 时按档案定，随锁固定）；段落本身不再判门。
  *    注意 durable 的缺省选择是「全部已安装的扩展」—— 对话必须显式选择（P1-09 上锁时 configure）。
@@ -41,22 +40,16 @@ import { BOT_PROFILE_NAME } from '../../subagent/builtinAgents'
 import type { InProcessAgentType } from '../../subagent/types'
 import { AgentStateDoc, type AgentStateRecord } from '../docs'
 import type { BotContextBlocks, PromptHost } from '../seams'
-import {
-  fenceInstructionFile,
-  fenceKnowledgeBases,
-  fenceProjectMemory,
-  fenceProjectPrompt
-} from './fences'
+import { fenceInstructionFile, fenceKnowledgeBases, fenceProjectPrompt } from './fences'
 
 // ─────────────────────────── 名字 ───────────────────────────
 
-/** 六个扩展的名字 */
+/** 五个扩展的名字 */
 export const PROMPT_EXTENSION = {
   persona: 'shuvix.prompt.persona',
   instructions: 'shuvix.prompt.instructions',
   projectPrompt: 'shuvix.prompt.project-prompt',
   knowledge: 'shuvix.prompt.knowledge',
-  memory: 'shuvix.prompt.memory',
   bot: 'shuvix.prompt.bot'
 } as const
 
@@ -69,7 +62,6 @@ export const PROMPT_SECTION_KEY: Record<PromptExtensionId, string> = {
   instructions: 'project_instructions',
   projectPrompt: 'project_prompt',
   knowledge: 'knowledge_bases',
-  memory: 'project_memory',
   bot: 'bot_profile'
 }
 
@@ -79,7 +71,6 @@ export const PROMPT_EXTENSION_ORDER: readonly PromptExtensionName[] = [
   PROMPT_EXTENSION.instructions,
   PROMPT_EXTENSION.projectPrompt,
   PROMPT_EXTENSION.knowledge,
-  PROMPT_EXTENSION.memory,
   PROMPT_EXTENSION.bot
 ]
 
@@ -94,18 +85,15 @@ export interface PromptSelectionSpec {
 }
 
 /**
- * 一个对话选中哪几个段落扩展（固定次序）：人设恒选；指令文件 iff 档案清单非空；项目提示词与项目记忆
- * iff 项目感知；知识库 iff 工具名单里有 `knowledge`（库是按会话选的，与项目感知无关）；bot iff bot 档案
+ * 一个对话选中哪几个段落扩展（固定次序）：人设恒选；指令文件 iff 档案清单非空；项目提示词
+ * iff 项目感知；知识库 iff 工具名单里有 `knowledge`（库由宿主按会话解析 —— 有项目时恒含项目库 —— 与项目感知无关）；bot iff bot 档案
  * 上的根 agent（人设影响怎么说话、不影响怎么干活 —— 派生 agent 拿不到）。
  */
 export function promptExtensionsFor(spec: PromptSelectionSpec): PromptExtensionName[] {
   const { profile } = spec
   const selected = new Set<PromptExtensionName>([PROMPT_EXTENSION.persona])
   if ((profile.instructionFiles?.length ?? 0) > 0) selected.add(PROMPT_EXTENSION.instructions)
-  if (profile.projectAwareness) {
-    selected.add(PROMPT_EXTENSION.projectPrompt)
-    selected.add(PROMPT_EXTENSION.memory)
-  }
+  if (profile.projectAwareness) selected.add(PROMPT_EXTENSION.projectPrompt)
   if (spec.toolNames.includes(KNOWLEDGE_TOOL_NAME)) selected.add(PROMPT_EXTENSION.knowledge)
   if (spec.kind === 'root' && profile.name === BOT_PROFILE_NAME) selected.add(PROMPT_EXTENSION.bot)
   return PROMPT_EXTENSION_ORDER.filter((name) => selected.has(name))
@@ -254,21 +242,6 @@ export function createPromptExtensions(host: PromptHost): PromptExtensions {
     ]
   })
 
-  const memory = defineExtension({
-    name: PROMPT_EXTENSION.memory,
-    sections: [
-      section(
-        PROMPT_SECTION_KEY.memory,
-        liveSection(async (rootSessionId) =>
-          host.resolveProjectMemory
-            ? fencedSectionText(await host.resolveProjectMemory(rootSessionId), fenceProjectMemory)
-            : undefined
-        ),
-        { tag: false }
-      )
-    ]
-  })
-
   const bot = defineExtension({
     name: PROMPT_EXTENSION.bot,
     sections: [
@@ -289,7 +262,6 @@ export function createPromptExtensions(host: PromptHost): PromptExtensions {
     [PROMPT_EXTENSION.instructions, instructions],
     [PROMPT_EXTENSION.projectPrompt, projectPrompt],
     [PROMPT_EXTENSION.knowledge, knowledge],
-    [PROMPT_EXTENSION.memory, memory],
     [PROMPT_EXTENSION.bot, bot]
   ])
   const get = (name: PromptExtensionName): Extension => byName.get(name)!

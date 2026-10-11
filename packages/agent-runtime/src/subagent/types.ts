@@ -45,7 +45,7 @@ export interface AgentProfile {
   instructionFiles: readonly string[]
   /**
    * `shuvix-project-awareness`：项目感知 —— 是否让该 agent 了解它所在的项目：
-   * 项目提示词（项目设置的纯文本）与项目记忆索引一并注入（派生按根会话的项目解析）。
+   * 注入项目提示词（项目设置的纯文本；派生按根会话的项目解析）。
    */
   projectAwareness: boolean
   /** 来源（决定 UI 能否编辑/删除） */
@@ -75,7 +75,7 @@ export interface InProcessAgentType {
   thinkingLevel?: ThinkingLevel
   /** 项目指令文件清单，顺序即优先级（缺省/空 = 不注入；派生按根会话的项目上下文解析） */
   instructionFiles?: readonly string[]
-  /** 项目感知：是否注入项目提示词与项目记忆索引（缺省 false；派生按根会话的项目上下文解析） */
+  /** 项目感知：是否注入项目提示词（缺省 false；派生按根会话的项目上下文解析） */
   projectAwareness?: boolean
   /** 知识库感知：是否注入 `<knowledge>` 围栏（缺省 false；派生按根会话的作用域解析） */
   knowledge?: boolean

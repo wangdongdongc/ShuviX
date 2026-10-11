@@ -130,7 +130,6 @@ vi.mock('../../../utils/paths', () => ({
   getDefaultHooksDir: () => rig.hooksDir,
   getDefaultSkillsDir: () => '/nonexistent/shuvix-p212/skills',
   getBuiltinSkillsDir: () => '/nonexistent/shuvix-p212/builtin-skills',
-  getMemoryRootDir: () => '/nonexistent/shuvix-p212/memory',
   getDefaultBotsDir: () => '/nonexistent/shuvix-p212/bots',
   getDefaultPoliciesDir: () => '/nonexistent/shuvix-p212/policies',
   getDefaultAgentsDir: () => '/nonexistent/shuvix-p212/agents',
@@ -242,7 +241,6 @@ vi.mock('../../skillService', () => ({
 }))
 vi.mock('../../botService', () => ({ botService: { forSession: () => null } }))
 vi.mock('../../instruction', () => ({ resolveInstructionContent: () => null }))
-vi.mock('../../memory', () => ({ resolveProjectMemoryIndex: () => null }))
 vi.mock('../../knowledge', () => ({ enabledBaseChoices: () => [] }))
 vi.mock('../../knowledge/sessionBundle', () => ({ enabledTargets: () => [] }))
 vi.mock('../../shellParserService', () => ({ shellParser: {} }))

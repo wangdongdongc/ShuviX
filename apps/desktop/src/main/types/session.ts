@@ -17,8 +17,6 @@ export interface SessionCreateParams {
    */
   parentId?: string
   notebookPath?: string
-  /** 项目记忆笔记本的 slug（由 services/memory 传入；见 SessionSettings.memorySlug） */
-  memorySlug?: string
   title?: string
   /** 绑定的 bot 名；提供则创建 bot 会话（普通有根会话，见 SessionSettings.bot） */
   bot?: string
