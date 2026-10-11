@@ -6,7 +6,6 @@
  *     setFill / unsetFill；缓冲区已有合法 id → 不分配，直接等它落盘；
  *   - Q-5/6/23 等待期间的后续编辑排进同一个任务（一个 id、同键后写覆盖先写，写的过程中新来的接着写）；
  *   - Q-7..13 三种失败（分配不了 / 迟迟没落盘 / 主进程拒绝）落成 error，下一次写入开始时清掉；
- *   - Q-14..18「换新 id」走同一条路，有在途任务时不做；
  *   - Q-19..22 会话互不相干、订阅可退、未知会话给初始态、reset 之后旧任务既不发通知也不删新任务；
  *   - Q-24 宿主没实现 mdMeta → 不抛，落成 not-saved。
  *
@@ -23,7 +22,6 @@ vi.mock('@shuvix/chat-ui', () => ({ getChatApi: () => host.api }))
 import {
   metaWriteState,
   requestMetaWrite,
-  requestNewObjectId,
   resetMetaWritesForTests,
   subscribeMetaWrites,
   type MetaWriteState
@@ -528,77 +526,8 @@ describe('metaWriteQueue —— 失败', () => {
   })
 })
 
-describe('metaWriteQueue —— 换新 id', () => {
-  it('Q-14 没有在途任务 → 分配一个不同于 U 的 UUIDv7；在途是空 Map（不是 null）；落盘后清空，不写任何设置', async () => {
-    const s = nextSession()
-    disk[s] = U
-    requestNewObjectId(s, setObjectId)
-    expect(setObjectId).toHaveBeenCalledTimes(1)
-    expect(assigned[0]).toMatch(V7)
-    expect(assigned[0]).not.toBe(U)
-    const st = metaWriteState(s)
-    expect(st.pending).not.toBeNull()
-    expect(st.pending?.size).toBe(0)
-
-    await drain()
-    expect(metaWriteState(s).pending).not.toBeNull()
-    disk[s] = assigned[0]
-    await advance(POLL)
-    expect(metaWriteState(s)).toMatchObject({ pending: null, error: null })
-    expect(setFill).not.toHaveBeenCalled()
-    expect(unsetFill).not.toHaveBeenCalled()
-  })
-
-  it('Q-15 有在途任务时 → 不分配、状态引用不变；原任务照常完成', async () => {
-    const s = nextSession()
-    writeNoId(s, THINKING, 'low')
-    const before = metaWriteState(s)
-    const spy = vi.fn<(id: string) => boolean>(() => true)
-    requestNewObjectId(s, spy)
-    expect(spy).not.toHaveBeenCalled()
-    expect(metaWriteState(s)).toBe(before)
-
-    await catchUp(s, assigned[0])
-    expect(fillCalls()).toEqual([{ objectId: assigned[0], key: THINKING, value: 'low' }])
-    expect(metaWriteState(s).pending).toBeNull()
-  })
-
-  it('Q-16 换新 id 的任务进行中改设置 → 并进去：不再分配，setFill 用新 id 而不是 U', async () => {
-    const s = nextSession()
-    disk[s] = U
-    requestNewObjectId(s, setObjectId)
-    const fresh = assigned[0]
-    requestMetaWrite({ sessionId: s, bufferId: U, key: THINKING, value: 'high', setObjectId })
-    expect(setObjectId).toHaveBeenCalledTimes(1)
-    expect(metaWriteState(s).pending).toEqual(new Map([[THINKING, 'high']]))
-
-    disk[s] = fresh
-    await advance(POLL)
-    expect(fillCalls()).toEqual([{ objectId: fresh, key: THINKING, value: 'high' }])
-  })
-
-  it('Q-17 换新 id 时 setObjectId 回 false → cannot-assign，不轮询', async () => {
-    const s = nextSession()
-    disk[s] = U
-    setObjectId.mockReturnValueOnce(false)
-    requestNewObjectId(s, setObjectId)
-    expect(metaWriteState(s)).toMatchObject({ pending: null, error: { kind: 'cannot-assign' } })
-    await advance(3000)
-    expect(get).not.toHaveBeenCalled()
-  })
-
-  it('Q-18 换新的 id 一直没落盘 → not-saved', async () => {
-    const s = nextSession()
-    disk[s] = U
-    requestNewObjectId(s, setObjectId)
-    await advance(POLL * 20)
-    expect(metaWriteState(s)).toMatchObject({ pending: null, error: { kind: 'not-saved' } })
-    expect(get).toHaveBeenCalledTimes(20)
-  })
-})
-
 describe('metaWriteQueue —— 会话、订阅、初始态、reset', () => {
-  it('Q-19 会话互不相干：s1 在途不挡 s2（各分配各的 id）；s2 的变化不通知 s1、不换 s1 的引用；s2 换新 id 也不被 s1 挡', async () => {
+  it('Q-19 会话互不相干：s1 在途不挡 s2（各分配各的 id）；s2 的变化不通知 s1、不换 s1 的引用', async () => {
     const s1 = nextSession()
     const s2 = nextSession()
     const seen1 = record(s1)
@@ -617,9 +546,6 @@ describe('metaWriteQueue —— 会话、订阅、初始态、reset', () => {
     expect(fillCalls()).toEqual([{ objectId: assigned[1], key: THINKING, value: 'high' }])
     expect(metaWriteState(s1)).toBe(s1State)
 
-    requestNewObjectId(s2, setObjectId)
-    expect(setObjectId).toHaveBeenCalledTimes(3)
-    disk[s2] = assigned[2]
     disk[s1] = assigned[0]
     await advance(POLL)
     expect(metaWriteState(s1).pending).toBeNull()

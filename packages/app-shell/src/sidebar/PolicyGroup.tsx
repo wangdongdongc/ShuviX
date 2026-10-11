@@ -48,6 +48,14 @@ export interface PolicyGroupItem {
   overridden?: boolean
   /** 压过它的那份用户文件的文件名 */
   overriddenBy?: string
+  /**
+   * 对象 id（`shuvix-id`）：内置为 `policy:builtin:<name>`，沿用了内置 id 的覆盖副本也是它 —— 这样的行有停用开关
+   */
+  objectId?: string
+  /** 这一行有禁用开关（宿主判定：持有确有其物的内置 id —— 内置本身，或沿用了它的覆盖副本） */
+  disableable?: boolean
+  /** 被用户停用（存在 ShuviX 里，不写文件）—— 运行时当它不存在 */
+  disabled?: boolean
 }
 
 /** 目录里无法解析的文件（身份是文件名 —— 它解析不出 name；不生效也不遮蔽内置同名策略） */
@@ -75,6 +83,11 @@ export interface PolicyGroupAdapter {
   delete: (policy: PolicyGroupItem) => void
   /** 按文件名删除：解析不过的、以及同名里被遮蔽的那几份（按名删会删到生效的那份） */
   deleteFile: (fileName: string) => void
+  /**
+   * 停用 / 启用（内置安全策略的停用开关，ShuviX 扩展元数据）—— 只对 objectId 是内置 id 的行出现；
+   * 宿主没提供就没有这一项
+   */
+  setEnabled?: (item: PolicyGroupItem, enabled: boolean) => void | Promise<unknown>
 }
 
 export interface PolicyGroupProps {
@@ -172,6 +185,18 @@ export function PolicyGroup({ adapter }: PolicyGroupProps): React.JSX.Element {
     })
   }
 
+  /**
+   * 禁用开关的菜单项（存在 ShuviX 里）：只给宿主标了 disableable 的行 —— 内置行本身，以及沿用了内置 id 的
+   * 覆盖副本（它们共用这一项设置）。宿主没提供 setEnabled 就没有
+   */
+  const enabledMenuItems = (item: PolicyGroupItem): ContextMenuItem[] =>
+    adapter.setEnabled && item.disableable
+      ? [{ id: 'toggle-enabled', label: item.disabled ? t('common.enable') : t('common.disable') }]
+      : []
+  const onEnabledMenuAction = (item: PolicyGroupItem, action: string): void => {
+    if (action === 'toggle-enabled') void adapter.setEnabled?.(item, !!item.disabled)
+  }
+
   /** 内置行：设置页头部那颗按钮的新家。已被同名用户策略覆盖时置灰 —— 再落一份会被主进程拒绝 */
   const openBuiltinMenu = (policy: PolicyGroupItem, e: React.MouseEvent): void => {
     const items: ContextMenuItem[] = [
@@ -179,22 +204,25 @@ export function PolicyGroup({ adapter }: PolicyGroupProps): React.JSX.Element {
         id: 'create-override',
         label: t('tool.subAgentCreateOverride'),
         enabled: !policy.overridden
-      }
+      },
+      ...enabledMenuItems(policy)
     ]
     void showContextMenu(e, items, (action) => {
       if (action === 'create-override') void adapter.createOverride(policy)
+      onEnabledMenuAction(policy, action)
     })
   }
 
   /** 生效的那份用户策略：按名删（删掉后同名内置自动恢复生效） */
   const openUserMenu = (policy: PolicyGroupItem, e: React.MouseEvent): void => {
-    void showContextMenu(
-      e,
-      [{ id: 'delete-policy', label: t('sidebar.deletePolicy') }],
-      (action) => {
-        if (action === 'delete-policy') adapter.delete(policy)
-      }
-    )
+    const items: ContextMenuItem[] = [
+      ...enabledMenuItems(policy),
+      { id: 'delete-policy', label: t('sidebar.deletePolicy') }
+    ]
+    void showContextMenu(e, items, (action) => {
+      if (action === 'delete-policy') adapter.delete(policy)
+      onEnabledMenuAction(policy, action)
+    })
   }
 
   /** 非法行与同名里被遮蔽的行共用：它们都只能按文件名删 */
@@ -242,6 +270,7 @@ export function PolicyGroup({ adapter }: PolicyGroupProps): React.JSX.Element {
                   ? { 'data-policy-builtin-row': p.name }
                   : { 'data-policy-row': p.fileName })}
                 {...(p.overridden ? { 'data-policy-overridden': '' } : {})}
+                {...(p.disabled ? { 'data-policy-disabled': '' } : {})}
                 onClick={() =>
                   builtin
                     ? isActiveNote(true, p.fileName) || void adapter.openBuiltin(p)
@@ -269,7 +298,7 @@ export function PolicyGroup({ adapter }: PolicyGroupProps): React.JSX.Element {
                 </span>
                 <span
                   className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${
-                    p.overridden ? 'line-through opacity-60' : ''
+                    p.overridden ? 'line-through opacity-60' : p.disabled ? 'opacity-50' : ''
                   }`}
                 >
                   {p.displayName}
@@ -277,6 +306,12 @@ export function PolicyGroup({ adapter }: PolicyGroupProps): React.JSX.Element {
                 {p.overridden && (
                   <span className="flex-shrink-0 px-1 rounded text-[9px] bg-bg-secondary text-text-tertiary group-hover:invisible">
                     {t('settings.policyOverridden')}
+                  </span>
+                )}
+                {/* 停用（内置的停用开关）：被同名覆盖的那份已经划线、不生效，不再叠一枚 */}
+                {p.disabled && !p.overridden && (
+                  <span className="flex-shrink-0 px-1 rounded text-[9px] bg-bg-secondary text-text-tertiary group-hover:invisible">
+                    {t('sidebar.disabledBadge')}
                   </span>
                 )}
                 <RowMenuButton

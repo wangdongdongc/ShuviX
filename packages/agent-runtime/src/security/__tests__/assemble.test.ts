@@ -1679,3 +1679,156 @@ describe('assembleRules — 用户覆盖删掉外部目录门的读规则', () =
     })
   })
 })
+
+/**
+ * 停用开关（SecurityHostProvider.isPolicyDisabled，2026-10-10）：宿主说停用的策略不装配 —— 等于这道门不存在，
+ * 「没有策略 = 放行」接手。同名裁决在停用判断**之前**：停用的胜者照样遮蔽同名的几份（不会让输掉的那份
+ * 或内置漏进来）。谓词只对胜出的那份问；抛错原样往外抛（不 fail-open）。
+ */
+describe('assembleRules — 停用的策略不装配', () => {
+  const CMD_ID = 'policy:builtin:ask-on-command'
+  const EXT_ID = 'policy:builtin:ask-on-external-path'
+  const KEY = '/home/u/.ssh/id_rsa'
+
+  const withFile = (
+    policy: ParsedPolicyFile,
+    fileName: string,
+    objectId?: string
+  ): UserPolicyFile => ({
+    ...policy,
+    ...(objectId ? { objectId } : {}),
+    fileName
+  })
+  const disabling =
+    (...ids: string[]) =>
+    (policy: ParsedPolicyFile): boolean =>
+      !!policy.objectId && ids.includes(policy.objectId)
+
+  /** 端到端判定（生产同款：vars 一次现取，装配与求值共用） */
+  function decide(
+    provider: SecurityHostProvider,
+    action: string,
+    object: SecurityObject
+  ): ReturnType<typeof evaluate> {
+    const vars = buildPolicyVars(provider)
+    return evaluate(
+      assembleRules(provider, vars),
+      {
+        subject: { kind: 'agent', sessionId: 's1', agentKind: 'root' },
+        action,
+        object,
+        environment: { host: 'desktop', platform: 'darwin' }
+      },
+      { vars }
+    )
+  }
+  const unconfined: SecurityObject = { type: 'command', command: 'rm -rf build', sandboxed: false }
+  const pathObject = (path: string): SecurityObject => ({ type: 'path', path, displayPath: path })
+
+  it('AS-DIS1 ask-on-command 停用 → 没有归它的规则，外部目录门 #0 / #1 照在；沙箱外命令放行', () => {
+    const provider = makeProvider({ isPolicyDisabled: disabling(CMD_ID) })
+    const rules = assembleRules(provider, buildPolicyVars(provider))
+    expect(rules.filter((r) => r.source.policy === 'ask-on-command')).toEqual([])
+    expect(rules.map((r) => r.id)).toEqual(['ask-on-external-path#0', 'ask-on-external-path#1'])
+    expect(decide(provider, 'execute', unconfined)).toMatchObject({ effect: 'allow', matched: [] })
+    // 对照：不停用时同一条命令要问
+    expect(decide(makeProvider(), 'execute', unconfined)).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-command#0'
+    })
+  })
+
+  it('AS-DIS2 ask-on-external-path 停用 → 家目录里的读、外面的写都放行；ask-on-command 照问', () => {
+    const provider = makeProvider({ isPolicyDisabled: disabling(EXT_ID) })
+    expect(decide(provider, 'read', pathObject(KEY))).toMatchObject({
+      effect: 'allow',
+      matched: []
+    })
+    expect(decide(provider, 'write', pathObject('/etc/hosts'))).toMatchObject({
+      effect: 'allow',
+      matched: []
+    })
+    expect(decide(provider, 'execute', unconfined)).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-command#0'
+    })
+    // 对照：不停用时读和写都问
+    expect(decide(makeProvider(), 'read', pathObject(KEY)).effect).toBe('ask')
+    expect(decide(makeProvider(), 'write', pathObject('/etc/hosts')).effect).toBe('ask')
+  })
+
+  it('AS-DIS3 谓词对每份胜出的策略恰问一次、拿到的就是那份对象；被遮蔽的（同名内置）从不问', () => {
+    const copy = withFile(userPolicy('ask-on-command', [{ effect: 'ask' }]), 'ask-on-command.md')
+    const extra = withFile(userPolicy('extra', []), 'extra.md')
+    const asked: ParsedPolicyFile[] = []
+    assembleRules(
+      makeProvider({
+        getUserPolicies: () => [copy, extra],
+        isPolicyDisabled: (policy) => {
+          asked.push(policy)
+          return false
+        }
+      })
+    )
+    expect(asked.map((p) => p.name)).toEqual(['ask-on-external-path', 'ask-on-command', 'extra'])
+    expect(asked[1]).toBe(copy)
+    expect(asked[2]).toBe(extra)
+    expect(asked[0].objectId).toBe(EXT_ID)
+    // 内置 ask-on-command（被 copy 遮蔽）不在其中
+    expect(asked.filter((p) => p.objectId === CMD_ID)).toEqual([])
+  })
+
+  it('AS-DIS4 沿用内置名字与 id 的用户副本被停用 → 副本和内置一条都不装配', () => {
+    const copy = withFile(
+      userPolicy('ask-on-command', [{ effect: 'deny' }]),
+      'ask-on-command.md',
+      CMD_ID
+    )
+    const rules = assembleRules(
+      makeProvider({ getUserPolicies: () => [copy], isPolicyDisabled: disabling(CMD_ID) })
+    )
+    expect(rules.filter((r) => r.source.policy === 'ask-on-command')).toEqual([])
+    expect(rules.map((r) => r.id)).toEqual(['ask-on-external-path#0', 'ask-on-external-path#1'])
+  })
+
+  it('AS-DIS5 同名两份用户文件：胜者被停用 → 输掉那份的规则也进不来（停用不让位给输家）', () => {
+    const X = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+    const winner = withFile(userPolicy('p', [{ effect: 'deny' }]), 'p.md', X)
+    const loser = withFile(userPolicy('p', [{ effect: 'ask' }, { effect: 'ask' }]), 'a.md')
+    for (const users of [
+      [winner, loser],
+      [loser, winner]
+    ]) {
+      const rules = assembleRules(
+        makeProvider({ getUserPolicies: () => users, isPolicyDisabled: disabling(X) })
+      )
+      expect(
+        rules.filter((r) => r.source.policy === 'p'),
+        users.map((p) => p.fileName).join(',')
+      ).toEqual([])
+    }
+    // 对照：不停用时胜者的那条在
+    const control = assembleRules(makeProvider({ getUserPolicies: () => [winner, loser] }))
+    expect(control.filter((r) => r.source.policy === 'p').map((r) => r.effect)).toEqual(['deny'])
+  })
+
+  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂两份三条全在', () => {
+    expect(assembleRules(makeProvider()).map((r) => r.id)).toEqual([
+      'ask-on-external-path#0',
+      'ask-on-external-path#1',
+      'ask-on-command#0'
+    ])
+  })
+
+  it('AS-DIS7 谓词抛错 → 原样往外抛（不当作「没停用」也不当作「停用」悄悄继续）', () => {
+    expect(() =>
+      assembleRules(
+        makeProvider({
+          isPolicyDisabled: () => {
+            throw new Error('meta store down')
+          }
+        })
+      )
+    ).toThrow('meta store down')
+  })
+})

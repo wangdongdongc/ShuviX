@@ -45,6 +45,9 @@ import {
 } from '@shuvix/chat-protocol/knowledge'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 import { parseObjectId } from '@shuvix/chat-protocol/mdMeta'
+import enLocale from '@shuvix/chat-protocol/i18n/locales/en.json'
+import jaLocale from '@shuvix/chat-protocol/i18n/locales/ja.json'
+import zhLocale from '@shuvix/chat-protocol/i18n/locales/zh.json'
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** `…/apps/desktop/src/main/services/knowledge/__tests__` 往上七层 */
 const REPO_ROOT = resolve(HERE, '../../../../../../..')
@@ -487,5 +490,22 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
         expect(known[parsed!.kind].has(parsed!.name), `${lang}/${path}: ${example}`).toBe(true)
       }
     }
+  })
+  /**
+   * BK-22 停用开关（2026-10-10）：hook-md / policy-md 讲到它，用的是界面上那两个词（侧栏菜单的「禁用」=
+   * common.disable、属性卡开关那一行 = notebook.frontmatter.metaEnabled）—— 说明书照着界面写，界面改了词这里先红；
+   * agent-md 讲补缺值时说的是属性里那两行（挂着 metaTitle 小标），不再有「设置条」或「换新 id」
+   */
+  it('BK-22 hook-md / policy-md 用界面上的词讲停用开关；agent-md 不再讲设置条与换新 id', () => {
+    const locale = { en: enLocale, ja: jaLocale, zh: zhLocale }[lang as 'en' | 'ja' | 'zh']
+    expect(locale, lang).toBeDefined()
+    for (const path of ['hook-md.md', 'policy-md.md']) {
+      const body = conceptOf(path).body
+      expect(body, `${lang}/${path}`).toContain(locale.common.disable)
+      expect(body, `${lang}/${path}`).toContain(locale.notebook.frontmatter.metaEnabled)
+    }
+    const agent = conceptOf('agent-md.md').body
+    expect(agent, `${lang}/agent-md.md`).toContain(locale.notebook.frontmatter.metaTitle)
+    expect(agent, `${lang}/agent-md.md`).not.toMatch(/\bstrip\b|new id/i)
   })
 })

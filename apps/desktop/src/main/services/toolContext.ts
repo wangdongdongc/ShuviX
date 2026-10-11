@@ -342,6 +342,7 @@ export function makeDesktopSecurityProvider(
     // 内置策略 md：随包发布的目录现读（Resources/builtin-policies；缺席即装配期 throw，见 assemble）
     readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
     getUserPolicies: () => policyService.getUserPolicies(),
+    isPolicyDisabled: (policy) => policyService.isDisabled(policy),
     shellParser,
     isDirectory: (p) => {
       try {

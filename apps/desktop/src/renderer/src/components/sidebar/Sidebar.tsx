@@ -325,7 +325,10 @@ export function Sidebar(): React.JSX.Element {
             // （运行时按语言挑中的那一份）—— 行按文件名认，点行开的就是这份 md 的笔记本
             fileName: fileNameOf(p.basePath),
             ...(p.overridden ? { overridden: true } : {}),
-            ...(p.overriddenBy ? { overriddenBy: p.overriddenBy } : {})
+            ...(p.overriddenBy ? { overriddenBy: p.overriddenBy } : {}),
+            ...(p.objectId ? { objectId: p.objectId } : {}),
+            ...(p.disableable ? { disableable: true } : {}),
+            ...(p.disabled ? { disabled: true } : {})
           })),
           invalid
         }
@@ -351,7 +354,12 @@ export function Sidebar(): React.JSX.Element {
           displayName: policy.displayName,
           fileName: policy.fileName
         }),
-      deleteFile: (fileName) => setConfirmingPolicyDelete({ fileName })
+      deleteFile: (fileName) => setConfirmingPolicyDelete({ fileName }),
+      // 内置安全策略的停用开关（ShuviX 扩展元数据，按内置 id 认）；写完主进程广播 policy.changed，分组重扫
+      setEnabled: (policy, enabled) =>
+        policy.objectId
+          ? window.api.mdMeta.setEnabled({ objectId: policy.objectId, enabled })
+          : undefined
     }
   }, [setActiveSessionId, t])
 
@@ -425,7 +433,10 @@ export function Sidebar(): React.JSX.Element {
             // （运行时按语言挑中的那一份）—— 行按文件名认，点行开的就是这份 md 的笔记本
             fileName: fileNameOf(h.basePath),
             ...(h.overridden ? { overridden: true } : {}),
-            ...(h.overriddenBy ? { overriddenBy: h.overriddenBy } : {})
+            ...(h.overriddenBy ? { overriddenBy: h.overriddenBy } : {}),
+            ...(h.objectId ? { objectId: h.objectId } : {}),
+            ...(h.disableable ? { disableable: true } : {}),
+            ...(h.disabled ? { disabled: true } : {})
           })),
           invalid
         }
@@ -451,7 +462,12 @@ export function Sidebar(): React.JSX.Element {
           displayName: hook.displayName,
           fileName: hook.fileName
         }),
-      deleteFile: (fileName) => setConfirmingHookDelete({ fileName })
+      deleteFile: (fileName) => setConfirmingHookDelete({ fileName }),
+      // 内置 hook 的停用开关（同上；停掉 auto-review，审批请求就不经审查员、直接落到人手上）
+      setEnabled: (hook, enabled) =>
+        hook.objectId
+          ? window.api.mdMeta.setEnabled({ objectId: hook.objectId, enabled })
+          : undefined
     }
   }, [setActiveSessionId, t])
 

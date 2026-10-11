@@ -1,28 +1,30 @@
 /**
- * md 扩展元数据第二期：agent 的 `shuvix-model` / `shuvix-thinking` 由数据库补缺，写入只经属性卡的
- * 「ShuviX 设置」条（app-shell FrontmatterMetaStrip → IPC `mdMeta:*` → mdMetaService → md_attrs）。
+ * md 扩展元数据：agent 的 `shuvix-model` / `shuvix-thinking` 由数据库补缺，**就在属性卡自己的那一行上改**
+ * （用户裁决 2026-10-10：app-shell FrontmatterFillField → metaWriteQueue → IPC `mdMeta:*` → mdMetaService →
+ * md_attrs）；卡片下面的「ShuviX 设置」条只剩内置 hook / 安全策略的停用开关。
  * 设计见 docs/md-metadata-design.md；契约在 chat-protocol mdMeta.ts。
  *
- *   E-1  内置 explore 的只读笔记：条显示 `agent:builtin:explore`、两行、标题行没有任何按钮（只读不给换新）；编辑器不可编辑
- *        而下拉可用；选 high → 注册表里 explore 的档位 = high、库里存着、随包 md 一个字节都没动；选回未设置 → 档位没了
- *   E-2  没有 id 的用户档案（用户裁决 2026-10-10：没有「分配 id」按钮）：控件照样出来、不显示 id、标题行没有按钮；
- *        打开不写文件；第一次选 low → 自动分配：文件恰多一行 `shuvix-id: <uuidv7>`（紧跟标记，其余逐字节不变），
- *        注册表 objectId 一致且档位 = low、库里存着；条就绪、出现「换新 id」。卡片字段槽位数不把条算进去
- *   E-2b 没有 id 时一口气连改两档 → 只分配一个 id；注册表与库都是后一档
- *   E-2c 写坏的 id（`shuvix-id: nope`）：同样直接出控件；第一次改设置把那一行**原地**换成 UUIDv7
- *   E-3  文件写了 low、补 high → 只有档位行注「以文件为准」、注册表仍 low；文件去掉那行 → 注册表 high、注没了
- *   E-4  内置 titler 写了 off → 注在；补 high 不改 off
- *   E-5  给 explore 补档位与模型 → 建覆盖副本：副本带内置 id、不带补缺行；生效的用户档案带两个补缺值、内置行被覆盖；
- *        副本的条照样显示这两个值、标题行恰有「换新 id」；换新 → 磁盘 id 变 UUID、explore 失去补缺、Saving… 收住
- *   E-6  内置 hook 与 bot 的笔记：有卡片、没有条；mdMeta.get 回 fillKeys []
- *   E-7  项目里的 agent md（项目笔记本）：没有条；mdMeta.get 回 null
- *   E-8  IPC 拒绝：旧 id → no-object-id；shuvix-tools → key-not-allowed；max → invalid-value；注册表不变
- *   E-9  A 的笔记里点 `[[meta-b]]` 在右侧预览 meta-b：预览里的卡片**没有**条（不借 A 的会话显示 A 的设置）
- *   E-11 两份文件共用一个 id → 两份都补上、两份的条都显示
- *   E-10 补缺值跨重启还在（stop({keepHome}) + launchApp({home})）—— 放最后，它换了实例
+ *   E-1  内置 explore 的只读笔记：编辑器不可编辑、工具行禁用，档位与模型两行可改、挂「ShuviX 设置」小标；选 high →
+ *        注册表 high、库里存着、随包 md 一个字节都没动；选回未设置 → 没了；agent 卡上没有条
+ *   E-2  没有 id 的用户档案：选 low → 写进文件（`shuvix-thinking: low`，自动保存），不插 shuvix-id、库里没有、
+ *        注册表 low、没有条
+ *   E-3  文件写了 low、库里补了 high（经 IPC，文件带 id）→ 行是 low 不挂小标、注册表 low；外部改掉那一行 →
+ *        行显示 high 挂小标、注册表 high；在这一行选「未设置」→ 清掉补缺值（不写文件）→ 注册表没有档位、小标没了
+ *   E-4  内置 titler 写了 off：档位行 off、禁用、不挂小标；模型行可改、挂小标；库里补 high 不改 off
+ *   E-5  给 explore 补档位与模型 → 建覆盖副本：副本带内置 id、不带补缺行；生效的副本带两个补缺值；副本卡片两行都挂
+ *        小标；在副本上选 low → 写进文件、小标没了、注册表 low、模型照旧补着
+ *   E-6  内置 auto-title 的笔记：有条、开关是开着的、没有补缺行；mdMeta.get {kind:'hook', fillKeys:[], enabled:true}；
+ *        bot 的笔记没有条，它的 mdMeta.get 没有 enabled
+ *   E-7  项目里的 agent md（项目笔记本）：mdMeta.get 回 null、没有条；它的 id 下存着补缺值，档位行也不挂小标
+ *   E-8  IPC 拒绝：旧 id → no-object-id；shuvix-tools → key-not-allowed；max → invalid-value；setEnabled 收到 agent id /
+ *        UUID / 不存在的内置 → key-not-allowed、非布尔 → invalid-value；注册表不变
+ *   E-9  A 的卡片有补缺行、显示 A 存的值并挂小标；A 的笔记里点 `[[meta-b]]` 在右侧预览 meta-b（它自己也存着补缺值）：
+ *        预览里的卡片没有补缺行、没有小标、没有条（不借 A 的会话显示任何东西）
+ *   E-11 两份文件共用一个 id：经 IPC 补 medium → twin-b 的档位行显示 medium、挂小标
+ *   E-10 补缺值跨重启还在（stop({keepHome}) + launchApp({home}))—— 放最后，它换了实例
  *
- * ⚠️ 内置 md 是本仓的真目录（隔离实例只换 HOME）：这里只读它，绝不往里写 —— 条写的是数据库，不是文件。
- * 界面语言钉成 en（文案按 en.json 比）。用例间有顺序依赖：同一个主窗口一路点下去（E-10 依赖 E-2 的 meta-noid = low）。
+ * ⚠️ 内置 md 是本仓的真目录（隔离实例只换 HOME）：这里只读它，绝不往里写 —— 只读笔记写的是数据库，不是文件。
+ * 界面语言钉成 en（文案按 en.json 比）。用例间有顺序依赖：同一个主窗口一路点下去（E-10 依赖 E-5 与 E-11 存的值）。
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,14 +36,15 @@ import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   agentsSidebarPane,
   botsPane,
-  fmCardPane,
+  fmFillPane,
   hooksSidebarPane,
-  mdMetaStripPane,
+  metaStripPane,
   notebookEditorPane,
   registryNotePane,
   sidebarPane,
   type AgentsSidebarPane,
-  type MdMetaStripPane,
+  type FmFillPane,
+  type MetaStripPane,
   type RegistryNotePane
 } from '../../harness/pages'
 import {
@@ -58,7 +61,10 @@ const V = '0199d3a2-0000-7000-8000-000000000000'
 const W = '0199d3a2-1111-7111-8111-111111111111'
 /** E-9 里 A 的 id */
 const A_ID = '0199d3a2-2222-7222-8222-222222222222'
-const V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+/** E-7 项目文件（以及借来存补缺值的那份用户档案）共用的 id */
+const P_ID = '0199d3a2-3333-7333-8333-333333333333'
+/** E-8 那份档案的 id */
+const R_ID = '0199d3a2-4444-7444-8444-444444444444'
 const MODEL = 'shuvix-model'
 const THINKING = 'shuvix-thinking'
 const EXPLORE_ID = 'agent:builtin:explore'
@@ -78,7 +84,8 @@ interface AgentRow {
 let app: E2EApp
 let agents: AgentsSidebarPane
 let note: RegistryNotePane
-let strip: MdMetaStripPane
+let fill: FmFillPane
+let strip: MetaStripPane
 
 const agentPath = (fileName: string): string => join(app.agentsDir, fileName)
 const listAgents = (): Promise<AgentRow[]> => app.main.eval('window.api.subAgent.list()')
@@ -97,6 +104,14 @@ const metaSet = (params: {
   value: unknown
 }): Promise<MdMetaWriteResult> =>
   app.main.eval(`window.api.mdMeta.setFill(${JSON.stringify(params)})`)
+const metaUnset = (params: {
+  sessionId: string
+  objectId: string
+  key: string
+}): Promise<MdMetaWriteResult> =>
+  app.main.eval(`window.api.mdMeta.unsetFill(${JSON.stringify(params)})`)
+const metaSetEnabled = (params: unknown): Promise<MdMetaWriteResult> =>
+  app.main.eval(`window.api.mdMeta.setEnabled(${JSON.stringify(params)})`)
 
 const userNoteId = (fileName: string): Promise<string> =>
   app.main.eval(`window.api.subAgent.openNote(${JSON.stringify({ fileName })}).then((s) => s.id)`)
@@ -127,15 +142,13 @@ function writeIdAgent(name: string, id: string, extra: string[] = [], body = 'BO
   return path
 }
 
-const thinkingRow = async (): Promise<{ value: string; declared: boolean } | undefined> =>
-  (await strip.state())?.rows.find((r) => r.key === THINKING)
-
 beforeAll(async () => {
   app = await launchApp()
   await waitRendererReady(app.main)
   agents = agentsSidebarPane(app.main)
   note = registryNotePane(app.main)
-  strip = mdMetaStripPane(app.main)
+  fill = fmFillPane(app.main)
+  strip = metaStripPane(app.main)
   await agents.expand()
   await app.main.eval(`window.api.settings.set({ key: 'general.language', value: 'en' })`)
   await until(
@@ -148,171 +161,85 @@ afterAll(async () => {
   await app.stop()
 })
 
-describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
-  it('E-1 内置 explore：条显示内置 id、两行、标题行没有按钮；只读编辑器里下拉照样能改；选 high → 注册表 high、库里存着、随包 md 不动；选回未设置 → 没了', async () => {
+describe('属性卡上的补缺值 —— agent 的模型与思考档位', () => {
+  it('E-1 内置 explore：编辑器只读、工具行禁用，档位与模型两行可改并挂小标；选 high → 注册表 high、库里存着、随包 md 不动；选回未设置 → 没了；没有条', async () => {
     const explore = (await agentRow('explore', 'builtin'))!
     const shipped = readFileSync(explore.basePath)
 
     await agents.openBuiltin('explore')
     await note.waitCard()
-    await strip.waitReady(EXPLORE_ID)
-    const s = (await strip.state())!
-    expect(s.rows.map((r) => r.key)).toEqual([MODEL, THINKING])
-    expect(s.headerButtons).toEqual([])
-    expect(s.regenerate).toBe(false)
-    expect(s.saving).toBe(false)
+    const thinking = await fill.waitRow(
+      THINKING,
+      (r) => r.wrapped && !r.disabled,
+      'explore thinking row editable'
+    )
+    expect(thinking).toMatchObject({ value: '', tagged: true, error: false, warning: false })
+    const model = await fill.waitRow(MODEL, (r) => r.wrapped && !r.disabled, 'model row editable')
+    expect(model.tagged).toBe(true)
+    expect((await fill.row('shuvix-tools'))?.disabled).toBe(true)
     expect(await note.editorEditable()).toBe(false)
-    expect(s.rows.find((r) => r.key === THINKING)?.disabled).toBe(false)
 
-    await strip.chooseThinking('high')
+    await fill.chooseThinking('high')
     await until(
       async () => (await agentRow('explore', 'builtin'))?.thinkingLevel === 'high',
       'registry explore thinking = high'
     )
     const sid = await builtinNoteId('explore')
     expect((await metaGet(sid))?.fill).toEqual({ [THINKING]: 'high' })
-    await until(async () => (await thinkingRow())?.value === 'high', 'strip shows high')
+    await fill.waitRow(THINKING, (r) => r.value === 'high' && r.tagged, 'row shows high')
     expect(readFileSync(explore.basePath).equals(shipped)).toBe(true)
 
-    await strip.chooseThinking('')
+    await fill.chooseThinking('')
     await until(
       async () => (await agentRow('explore', 'builtin'))?.thinkingLevel === undefined,
       'registry explore thinking cleared'
     )
     expect((await metaGet(sid))?.fill).toEqual({})
+    await fill.waitRow(THINKING, (r) => r.value === '' && !r.error, 'row cleared')
     expect(readFileSync(explore.basePath).equals(shipped)).toBe(true)
-    await until(async () => (await strip.state())?.saving === false, 'no Saving… left')
+    expect(await strip.present()).toBe(false)
+    expect((await fill.cards())[0].strip).toBe(false)
   })
 
-  it('E-2 没有 id 的用户档案：控件直接出来、没有按钮、打开不写文件；第一次选 low → 自动分配一行 UUIDv7（紧跟标记、其余逐字节不变）→ 注册表 objectId 一致、档位 low、库里存着；条就绪、出现换新；卡片字段槽位不把条算进去', async () => {
+  it('E-2 没有 id 的用户档案：选 low → 写进文件（不插 shuvix-id）、库里没有、注册表 low、没有条', async () => {
     const path = writeAgentMd(app, 'meta-noid', { description: 'E-2 fixture' })
     const original = readFileSync(path, 'utf8')
     await agents.refresh()
     await agents.selectUserRow('meta-noid.md')
     await note.waitCard()
-    await strip.waitRows()
+    const before = await fill.waitRow(THINKING, (r) => r.wrapped, 'thinking fill row mounted')
+    expect(before).toMatchObject({ value: '', disabled: false, tagged: false })
 
-    const before = (await strip.state())!
-    expect(before.objectId).toBeNull()
-    expect(before.headerButtons).toEqual([])
-    expect(before.regenerate).toBe(false)
-    expect(before.saving).toBe(false)
-    expect(before.rows.map((r) => r.key)).toEqual([MODEL, THINKING])
-    expect(before.rows.find((r) => r.key === THINKING)?.value).toBe('')
-    expect(before.warnings).toEqual([])
-    // 卡片自己的四个字段槽位（模型 / 档位 / 工具 / 指令文件）—— 条的控件槽另起类名，不进这个数
-    const [noIdCard] = await strip.cards()
-    expect(noIdCard.strip).toBe(true)
-    expect(noIdCard.fieldSlots).toBe(4)
-    expect(noIdCard.metaSlots).toBe(2)
-    await fmCardPane(app.main).waitReady({ slots: 4 })
+    await fill.chooseThinking('low')
+    const written = await waitFileWritten(path, original, 'thinking written into the file')
+    expect(written).toMatch(/^shuvix-thinking: low$/m)
+    expect(written).not.toMatch(/^shuvix-id:/m)
 
-    // 打开本身不写文件（id 只在第一次改设置时才分配）
-    await sleep(500)
-    expect(readFileSync(path, 'utf8')).toBe(original)
-
-    await strip.chooseThinking('low')
-    const written = await waitFileWritten(path, original, 'id line saved')
-    const lines = written.split('\n')
-    expect(lines[1]).toBe('shuvix: agent v1')
-    expect(lines[2]).toMatch(/^shuvix-id: /)
-    const id = lines[2].slice('shuvix-id: '.length)
-    expect(id).toMatch(V7)
-    expect(written.match(/^shuvix-id:/gm)).toHaveLength(1)
-    expect(lines.filter((_, i) => i !== 2).join('\n')).toBe(original)
-
-    await until(async () => {
-      const row = await agentRow('meta-noid', 'user')
-      return row?.objectId === id && row.thinkingLevel === 'low'
-    }, 'registry meta-noid: objectId = assigned id, thinking = low')
+    await until(
+      async () => (await agentRow('meta-noid', 'user'))?.thinkingLevel === 'low',
+      'registry meta-noid thinking = low'
+    )
+    expect((await agentRow('meta-noid', 'user'))?.objectId).toBeUndefined()
     const sid = await userNoteId('meta-noid.md')
-    expect((await metaGet(sid))?.fill).toEqual({ [THINKING]: 'low' })
-
-    await strip.waitReady(id)
-    const ready = (await strip.state())!
-    expect(ready.rows.find((r) => r.key === THINKING)?.value).toBe('low')
-    expect(ready.regenerate).toBe(true)
-    expect(ready.headerButtons).toEqual(['regenerate'])
-    expect(ready.saving).toBe(false)
-    expect(ready.warnings).toEqual([])
-    const [card] = await strip.cards()
-    expect(card.strip).toBe(true)
-    expect(card.fieldSlots).toBe(4)
-    expect(card.metaSlots).toBe(2)
-    await fmCardPane(app.main).waitReady({ slots: 4 })
-    // meta-noid 留在 low：E-10 跨重启看的就是它
+    expect((await metaGet(sid))?.fill).toEqual({})
+    await fill.waitRow(THINKING, (r) => r.value === 'low' && !r.tagged, 'row shows the file value')
+    expect(await strip.present()).toBe(false)
   })
 
-  it('E-2b 没有 id 时一口气连改两档 → 只分配一个 id；注册表与库都是后一档，没有 Saving… 残留', async () => {
-    const path = writeAgentMd(app, 'meta-burst', { description: 'E-2b fixture' })
-    const original = readFileSync(path, 'utf8')
-    await agents.refresh()
-    await agents.selectUserRow('meta-burst.md')
-    await note.waitCard()
-    await strip.waitRows()
-
-    await strip.chooseThinkingBurst(['low', 'medium'])
-    const written = await waitFileWritten(path, original, 'burst id line saved')
-    expect(written.match(/^shuvix-id:/gm)).toHaveLength(1)
-    const id = /^shuvix-id: (.*)$/m.exec(written)?.[1] ?? ''
-    expect(id).toMatch(V7)
-
-    await until(async () => {
-      const row = await agentRow('meta-burst', 'user')
-      return row?.objectId === id && row.thinkingLevel === 'medium'
-    }, 'registry meta-burst thinking = medium')
-    const sid = await userNoteId('meta-burst.md')
-    expect((await metaGet(sid))?.fill).toEqual({ [THINKING]: 'medium' })
-    await strip.waitReady(id)
-    expect((await thinkingRow())?.value).toBe('medium')
-    // 稍等再读一次：文件里仍只有一行 id（没有第二次分配追着写进来）
-    await sleep(500)
-    expect(readFileSync(path, 'utf8').match(/^shuvix-id:/gm)).toHaveLength(1)
-  })
-
-  it('E-2c 写坏的 id（shuvix-id: nope）：控件直接出来、不显示 id、没有按钮；选 high → 那一行原地换成 UUIDv7，其余逐字节不变；注册表 objectId 一致、档位 high', async () => {
-    const path = writeAgentMd(app, 'meta-malformed', {
-      description: 'E-2c fixture',
-      rawLines: ['shuvix-id: nope']
-    })
-    const original = readFileSync(path, 'utf8')
-    await agents.refresh()
-    await agents.selectUserRow('meta-malformed.md')
-    await note.waitCard()
-    await strip.waitRows()
-    const before = (await strip.state())!
-    expect(before.objectId).toBeNull()
-    expect(before.headerButtons).toEqual([])
-    expect(before.rows.map((r) => r.key)).toEqual([MODEL, THINKING])
-
-    await strip.chooseThinking('high')
-    const written = await waitFileWritten(path, original, 'malformed id replaced')
-    expect(written.match(/^shuvix-id:/gm)).toHaveLength(1)
-    const id = /^shuvix-id: (.*)$/m.exec(written)?.[1] ?? ''
-    expect(id).toMatch(V7)
-    // 原地替换：把新 id 换回 nope 就是原文件
-    expect(written.replace(`shuvix-id: ${id}`, 'shuvix-id: nope')).toBe(original)
-
-    await until(async () => {
-      const row = await agentRow('meta-malformed', 'user')
-      return row?.objectId === id && row.thinkingLevel === 'high'
-    }, 'registry meta-malformed: objectId = new id, thinking = high')
-    await strip.waitReady(id)
-    expect((await thinkingRow())?.value).toBe('high')
-  })
-
-  it('E-3 文件写了 low、补 high：只有档位行注「以文件为准」、注册表仍 low；文件去掉那行 → 注册表 high、注没了', async () => {
+  it('E-3 文件写了 low、库里补 high → 行 low 不挂小标、注册表 low；外部去掉那一行 → 行 high 挂小标、注册表 high；在这一行选未设置 → 清掉补缺值', async () => {
     const path = writeIdAgent('meta-declared', U, ['shuvix-thinking: low'])
     await agents.refresh()
+    const sid = await userNoteId('meta-declared.md')
+    expect(await metaSet({ sessionId: sid, objectId: U, key: THINKING, value: 'high' })).toEqual({
+      success: true
+    })
     await agents.selectUserRow('meta-declared.md')
     await note.waitCard()
-    await strip.waitReady(U)
-
-    await strip.chooseThinking('high')
-    await until(async () => (await thinkingRow())?.value === 'high', 'strip shows high')
-    const rows = (await strip.state())!.rows
-    expect(rows.find((r) => r.key === THINKING)?.declared).toBe(true)
-    expect(rows.find((r) => r.key === MODEL)?.declared).toBe(false)
+    await fill.waitRow(
+      THINKING,
+      (r) => r.wrapped && r.value === 'low' && !r.tagged,
+      'declared low wins, no tag'
+    )
     expect((await agentRow('meta-declared', 'user'))?.thinkingLevel).toBe('low')
 
     writeFileSync(path, readFileSync(path, 'utf8').replace('shuvix-thinking: low\n', ''))
@@ -321,37 +248,56 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
       async () => (await agentRow('meta-declared', 'user'))?.thinkingLevel === 'high',
       'registry falls back to the fill once the file stops declaring'
     )
-    await until(
-      async () => (await thinkingRow())?.declared === false,
-      'declared note gone after the file changed'
+    await fill.waitRow(
+      THINKING,
+      (r) => r.value === 'high' && r.tagged,
+      'row shows the stored fill, tagged'
     )
+    const onDisk = readFileSync(path, 'utf8')
+
+    await fill.chooseThinking('')
+    await until(
+      async () => (await agentRow('meta-declared', 'user'))?.thinkingLevel === undefined,
+      'fill cleared from the row'
+    )
+    expect((await metaGet(sid))?.fill).toEqual({})
+    await fill.waitRow(THINKING, (r) => r.value === '' && !r.tagged, 'row plain again')
+    // 清的是补缺值：文件一个字节都没动
+    await sleep(500)
+    expect(readFileSync(path, 'utf8')).toBe(onDisk)
   })
 
-  it('E-4 内置 titler 写了 off：档位行注着；补 high 不改 off', async () => {
+  it('E-4 内置 titler 写了 off：档位行 off、禁用、不挂小标；模型行可改并挂小标；库里补 high 不改 off', async () => {
     await agents.openBuiltin('titler')
     await note.waitCard()
-    await strip.waitReady('agent:builtin:titler')
-    const rows = (await strip.state())!.rows
-    expect(rows.find((r) => r.key === THINKING)?.declared).toBe(true)
-    expect(rows.find((r) => r.key === MODEL)?.declared).toBe(false)
+    const thinking = await fill.waitRow(THINKING, (r) => r.wrapped, 'titler thinking row mounted')
+    expect(thinking).toMatchObject({ value: 'off', disabled: true, tagged: false })
+    await fill.waitRow(MODEL, (r) => r.wrapped && !r.disabled && r.tagged, 'titler model row')
 
-    await strip.chooseThinking('high')
     const sid = await builtinNoteId('titler')
-    await until(async () => (await metaGet(sid))?.fill[THINKING] === 'high', 'titler fill stored')
+    expect(
+      await metaSet({
+        sessionId: sid,
+        objectId: 'agent:builtin:titler',
+        key: THINKING,
+        value: 'high'
+      })
+    ).toEqual({ success: true })
+    expect((await metaGet(sid))?.fill[THINKING]).toBe('high')
+    await sleep(300)
+    expect(await fill.row(THINKING)).toMatchObject({ value: 'off', disabled: true, tagged: false })
     expect((await agentRow('titler', 'builtin'))?.thinkingLevel).toBe('off')
     // 收尾：别让这条补缺漏进后面的用例
-    await strip.chooseThinking('')
-    await until(
-      async () => (await metaGet(sid))?.fill[THINKING] === undefined,
-      'titler fill cleared'
-    )
+    expect(
+      await metaUnset({ sessionId: sid, objectId: 'agent:builtin:titler', key: THINKING })
+    ).toEqual({ success: true })
   })
 
-  it('E-5 explore 补上档位与模型 → 覆盖副本带内置 id、不带补缺行；生效的副本带两个值、内置被覆盖；副本的条照显并给换新；换新 → 磁盘 id 变 UUID、explore 失去补缺', async () => {
+  it('E-5 explore 补上档位与模型 → 覆盖副本带内置 id、不带补缺行；生效的副本带两个值；副本卡片两行挂小标；在副本上选 low → 写进文件、小标没了、注册表 low、模型照旧', async () => {
     await agents.openBuiltin('explore')
     await note.waitCard()
-    await strip.waitReady(EXPLORE_ID)
-    await strip.chooseThinking('high')
+    await fill.waitRow(THINKING, (r) => r.wrapped && !r.disabled, 'explore thinking row editable')
+    await fill.chooseThinking('high')
     await until(
       async () => (await agentRow('explore', 'builtin'))?.thinkingLevel === 'high',
       'explore thinking = high'
@@ -385,33 +331,28 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
       async () => (await agents.activeRow())?.row === 'explore.md',
       'override note active'
     )
-    await strip.waitReady(EXPLORE_ID)
-    await until(async () => (await thinkingRow())?.value === 'high', 'copy strip shows high')
-    const copyStrip = (await strip.state())!
-    expect(copyStrip.regenerate).toBe(true)
-    expect(copyStrip.headerButtons).toEqual(['regenerate'])
+    await fill.waitRow(
+      THINKING,
+      (r) => r.value === 'high' && r.tagged && !r.disabled,
+      'copy thinking row shows the fill'
+    )
+    await fill.waitRow(MODEL, (r) => r.tagged && !r.disabled, 'copy model row shows the fill')
 
-    await strip.regenerate()
-    const rewritten = await waitFileWritten(copyPath, copy, 'regenerated id saved')
-    const newId = /^shuvix-id: (.*)$/m.exec(rewritten)?.[1] ?? ''
-    expect(newId).toMatch(V7)
-    expect(rewritten.replace(`shuvix-id: ${newId}`, `shuvix-id: ${EXPLORE_ID}`)).toBe(copy)
+    await fill.chooseThinking('low')
+    const rewritten = await waitFileWritten(copyPath, copy, 'thinking written into the copy')
+    expect(rewritten).toMatch(/^shuvix-thinking: low$/m)
+    expect(rewritten.split('\n')[2]).toBe(`shuvix-id: ${EXPLORE_ID}`)
     await until(async () => {
       const active = await activeRow('explore')
       return (
-        active?.source === 'user' &&
-        active.objectId === newId &&
-        active.thinkingLevel === undefined &&
-        active.model === undefined
+        active?.source === 'user' && active.thinkingLevel === 'low' && active.model === MODEL_REF
       )
-    }, 'explore copy lost the fill with its new id')
-    // waitReady 也等 Saving… 收住（换新 id 走同一个写入队列）
-    await strip.waitReady(newId)
-    expect((await strip.state())?.saving).toBe(false)
-    expect((await thinkingRow())?.value).toBe('')
+    }, 'copy: thinking from the file, model still filled')
+    await fill.waitRow(THINKING, (r) => r.value === 'low' && !r.tagged, 'tag gone once declared')
+    expect((await fill.row(MODEL))?.tagged).toBe(true)
   })
 
-  it('E-6 内置 hook 与 bot 的笔记：有卡片、没有条；mdMeta.get 回 fillKeys []', async () => {
+  it('E-6 内置 auto-title 的笔记：有条、开关开着、没有补缺行；mdMeta.get 带 enabled:true；bot 的笔记没有条、视图没有 enabled', async () => {
     const hooks = hooksSidebarPane(app.main)
     await hooks.expand()
     await hooks.openBuiltin('auto-title')
@@ -419,10 +360,21 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
     const hookSid = await app.main.eval<string>(
       `window.api.hook.openBuiltinNote({ name: 'auto-title' }).then((s) => s.id)`
     )
-    const hookView = await metaGet(hookSid)
-    expect(hookView).toMatchObject({ kind: 'hook', fillKeys: [], fill: {} })
-    await sleep(500)
-    expect(await strip.present()).toBe(false)
+    expect(await metaGet(hookSid)).toMatchObject({
+      kind: 'hook',
+      fillKeys: [],
+      fill: {},
+      enabled: true
+    })
+    await strip.waitStrip()
+    expect(await strip.state()).toMatchObject({
+      state: 'on',
+      disabledNote: null,
+      rows: ['enabled']
+    })
+    const [hookCard] = await fill.cards()
+    expect(hookCard.strip).toBe(true)
+    expect(hookCard.fillWrappers).toBe(0)
 
     writeBotMd(app, 'meta-bot')
     const bots = botsPane(app.main)
@@ -433,12 +385,22 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
     const botSid = await app.main.eval<string>(
       `window.api.bot.openNote({ fileName: 'meta-bot.md' }).then((s) => s.id)`
     )
-    expect(await metaGet(botSid)).toMatchObject({ kind: 'bot', fillKeys: [], fill: {} })
+    const botView = await metaGet(botSid)
+    expect(botView).toMatchObject({ kind: 'bot', fillKeys: [], fill: {} })
+    expect(botView).not.toHaveProperty('enabled')
     await sleep(500)
     expect(await strip.present()).toBe(false)
   })
 
-  it('E-7 项目里的 agent md（项目笔记本）：有卡片、没有条；mdMeta.get 回 null', async () => {
+  it('E-7 项目里的 agent md（项目笔记本）：mdMeta.get 回 null、没有条；同一个 id 下存着补缺值，档位行也不挂小标', async () => {
+    // 借一份用户档案（同一个 id）把补缺值存进去：项目文件本身不是注册表笔记，写不进
+    writeIdAgent('meta-proj-twin', P_ID)
+    await agents.refresh()
+    const twinSid = await userNoteId('meta-proj-twin.md')
+    expect(
+      await metaSet({ sessionId: twinSid, objectId: P_ID, key: THINKING, value: 'high' })
+    ).toEqual({ success: true })
+
     const projDir = join(app.home, 'proj-md-meta')
     mkdirSync(projDir, { recursive: true })
     const notePath = join(projDir, 'project-agent.md')
@@ -447,7 +409,7 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
       [
         '---',
         'shuvix: agent v1',
-        `shuvix-id: ${V}`,
+        `shuvix-id: ${P_ID}`,
         'name: project-agent',
         '---',
         '',
@@ -465,37 +427,71 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
       'project notebook opened'
     )
     await note.waitCard()
+    await until(
+      async () => (await fill.cards())[0]?.name === 'project-agent',
+      'project agent card in front'
+    )
     await sleep(500)
     expect(await strip.present()).toBe(false)
+    const row = await fill.row(THINKING)
+    expect(row).not.toBeNull()
+    expect(row!.value).toBe('')
+    expect(row!.tagged).toBe(false)
   })
 
-  it('E-8 IPC 拒绝：旧 id → no-object-id；shuvix-tools → key-not-allowed；max → invalid-value；注册表不变', async () => {
-    writeIdAgent('meta-refuse', U)
+  it('E-8 IPC 拒绝：旧 id / 白名单外的键 / 不合法的值 / setEnabled 的 agent id、UUID、不存在的内置、非布尔；注册表不变', async () => {
+    writeIdAgent('meta-refuse', R_ID)
     await agents.refresh()
+    const id = R_ID
     const sid = await userNoteId('meta-refuse.md')
     const before = await agentRow('meta-refuse', 'user')
-    expect(before?.objectId).toBe(U)
+    expect(before?.objectId).toBe(id)
 
     expect(await metaSet({ sessionId: sid, objectId: V, key: THINKING, value: 'high' })).toEqual({
       success: false,
       reason: 'no-object-id'
     })
     expect(
-      await metaSet({ sessionId: sid, objectId: U, key: 'shuvix-tools', value: 'bash' })
+      await metaSet({ sessionId: sid, objectId: id, key: 'shuvix-tools', value: 'bash' })
     ).toEqual({ success: false, reason: 'key-not-allowed' })
     expect(
-      await metaSet({ sessionId: sid, objectId: U, key: THINKING, value: 'max' })
+      await metaSet({ sessionId: sid, objectId: id, key: THINKING, value: 'max' })
+    ).toMatchObject({ success: false, reason: 'invalid-value' })
+
+    for (const objectId of [EXPLORE_ID, id, 'hook:builtin:nonexistent']) {
+      expect(await metaSetEnabled({ objectId, enabled: false }), objectId).toMatchObject({
+        success: false,
+        reason: 'key-not-allowed'
+      })
+    }
+    expect(
+      await metaSetEnabled({ objectId: 'hook:builtin:auto-title', enabled: 'false' })
     ).toMatchObject({ success: false, reason: 'invalid-value' })
     expect(await agentRow('meta-refuse', 'user')).toEqual(before)
+    const titleHook = (
+      await app.main.eval<Array<{ name: string; source: string; disabled?: boolean }>>(
+        'window.api.hook.list()'
+      )
+    ).find((h) => h.name === 'auto-title' && h.source === 'builtin')
+    expect(titleHook?.disabled).toBeUndefined()
   })
 
-  it('E-9 A 的笔记里点 [[meta-b]] → 右侧预览 meta-b 的卡片没有条（不借 A 的会话显示 A 的设置）', async () => {
+  it('E-9 A 的卡片有补缺行、显示 A 存的值并挂小标；预览里 meta-b 的卡片（它自己也存着值）没有补缺行、没有小标、没有条', async () => {
     writeIdAgent('meta-b', V, [], 'B BODY.')
     writeIdAgent('meta-a', A_ID, [], 'See [[meta-b]] for details.')
     await agents.refresh()
+    const aSid = await userNoteId('meta-a.md')
+    const bSid = await userNoteId('meta-b.md')
+    expect(
+      await metaSet({ sessionId: aSid, objectId: A_ID, key: THINKING, value: 'high' })
+    ).toEqual({ success: true })
+    expect(await metaSet({ sessionId: bSid, objectId: V, key: THINKING, value: 'medium' })).toEqual(
+      { success: true }
+    )
+
     await agents.selectUserRow('meta-a.md')
     await note.waitCard()
-    await strip.waitReady(A_ID)
+    await fill.waitRow(THINKING, (r) => r.value === 'high' && r.tagged, "A's own fill shown")
 
     const editor = notebookEditorPane(app.main)
     await until(
@@ -503,21 +499,23 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
       '[[meta-b]] resolved'
     )
     await editor.clickWikiLink('meta-b')
-    await until(async () => (await strip.cards()).length === 2, 'preview card mounted')
-    // 预览里的卡片挂完之后再多等一会儿：条是异步挂的（get 回来才渲染）
+    await until(async () => (await fill.cards()).length === 2, 'preview card mounted')
+    // 预览里的卡片挂完之后再多等一会儿：补缺行与条都是异步挂的（get 回来才渲染）
     await sleep(800)
-    const cards = await strip.cards()
+    const cards = await fill.cards()
     const own = cards.find((c) => c.name === 'meta-a')
     const preview = cards.find((c) => c.name === 'meta-b')
-    expect(own?.strip).toBe(true)
+    expect(own?.fillWrappers).toBe(2)
+    expect(own?.fillTags).toBe(1)
+    expect(own?.strip).toBe(false)
     expect(preview).toBeDefined()
+    expect(preview!.fillWrappers).toBe(0)
+    expect(preview!.fillTags).toBe(0)
     expect(preview!.strip).toBe(false)
-    expect(preview!.metaSlots).toBe(0)
-    expect(preview!.text).not.toContain(en.notebook.frontmatter.metaSaving)
     expect(preview!.text).not.toContain(en.notebook.frontmatter.metaTitle)
   })
 
-  it('E-11 两份文件共用一个 id：两份都补上，两份的条都显示同一个值', async () => {
+  it('E-11 两份文件共用一个 id：经 IPC 补 medium → twin-b 的档位行显示 medium、挂小标', async () => {
     writeIdAgent('meta-twin-a', W)
     writeIdAgent('meta-twin-b', W)
     await agents.refresh()
@@ -535,8 +533,11 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
 
     await agents.selectUserRow('meta-twin-b.md')
     await note.waitCard()
-    await strip.waitReady(W)
-    await until(async () => (await thinkingRow())?.value === 'medium', 'twin-b strip shows medium')
+    await fill.waitRow(
+      THINKING,
+      (r) => r.value === 'medium' && r.tagged,
+      'twin-b row shows medium, tagged'
+    )
   })
 
   it('E-10 补缺值跨重启还在', async () => {
@@ -545,10 +546,10 @@ describe('属性卡「ShuviX 设置」条 —— agent 的补缺值', () => {
     app = (await launchApp({ home })) as E2EApp
     await waitRendererReady(app.main)
     await until(
-      async () => (await agentRow('meta-noid', 'user'))?.thinkingLevel === 'low',
-      'meta-noid fill survived the restart'
+      async () => (await agentRow('meta-twin-a', 'user'))?.thinkingLevel === 'medium',
+      'twin fill survived the restart'
     )
-    expect((await agentRow('meta-twin-a', 'user'))?.thinkingLevel).toBe('medium')
+    expect((await agentRow('meta-twin-b', 'user'))?.thinkingLevel).toBe('medium')
     expect((await agentRow('explore', 'builtin'))?.model).toBe(MODEL_REF)
   })
 })

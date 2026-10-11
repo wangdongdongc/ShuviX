@@ -225,6 +225,13 @@ covered as files in your home folder), `ask-on-write` (writes outside the workin
 variables the path rule leaves out). They were removed on purpose, but every enforcement point is
 still there (the object types above), so any of them can come back as a policy of your own.
 
+A builtin policy can be **disabled**: "Disable" in its row's menu in the sidebar, or the
+*Enabled* switch under its properties. A disabled policy is not applied at all — as if it did not
+exist, so "no policy = allow" takes over (disabling `ask-on-command` lets unconfined commands run
+without asking). The switch is stored in ShuviX, not in the file; the row stays listed, dimmed,
+with a *Disabled* badge. An override copy keeps the builtin's id and follows the same switch.
+Agents cannot flip it — only you.
+
 ## Loosening and tightening
 
 - **Remove a gate**: override it by name with `shuvix-policy-rules: []`.

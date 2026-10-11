@@ -8,13 +8,15 @@
  *   - **只补白名单**（MD_FM_FILL_KEYS：agent 的模型与档位；bot / hook / policy 一个都没有）→ key-not-allowed；
  *   - **值交解析器校验**，存归一后的值（去首尾空白、档位小写）；空 / 非 JSON / 解析器不收 → invalid-value，什么都不写；
  *   - 写成功广播这类文件的 `*.changed` 恰一次；删一个本来就没有的键算成功但不广播；
- *   - 校验顺序：先认会话、再认键、最后认 id。
+ *   - 校验顺序：先认会话、再认键、最后认 id；
+ *   - **停用开关**（setEnabled / noteView.enabled）：只收确有其物的内置 hook / 安全策略 id（不经会话、不读文件），
+ *     状态真的变了才广播这类文件的 `*.changed`；视图只给 id 能停用、且 id 的类型就是这份文件类型的笔记。
  *
  * 文件是真的（临时目录）；数据库换成内存表（mdAttrDao 替身，store 用真的）；appEventBus.publish 被 spy。
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { MD_FM_FILL_KEYS } from '@shuvix/chat-protocol/mdMeta'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
@@ -80,7 +82,7 @@ vi.mock('../registryNotes', () => ({
 
 import { appEventBus } from '../../utils/appEventBus'
 import { mdMetaStore } from '../mdMeta'
-import { noteView, setNoteFill, unsetNoteFill } from '../mdMetaService'
+import { noteView, setEnabled, setNoteFill, unsetNoteFill } from '../mdMetaService'
 
 const publish = vi.spyOn(appEventBus, 'publish')
 
@@ -94,6 +96,15 @@ const THINKING = 'shuvix-thinking'
 const BUILTIN_EXPLORE = resolve(
   __dirname,
   '../../../../../../packages/agent-runtime/src/subagent/builtinAgents/md/explore.md'
+)
+/** 随包发布的内置 auto-title hook 与 ask-on-external-path 策略（同样只读） */
+const BUILTIN_AUTO_TITLE = resolve(
+  __dirname,
+  '../../../../../../packages/agent-runtime/src/hook/builtinHooks/md/auto-title.md'
+)
+const BUILTIN_EXTERNAL_PATH = resolve(
+  __dirname,
+  '../../../../../../packages/agent-runtime/src/security/builtinPolicies/md/ask-on-external-path.md'
 )
 
 const base = mkdtempSync(join(tmpdir(), 'shuvix-mdmeta-'))
@@ -467,5 +478,204 @@ describe('setNoteFill / unsetNoteFill —— 写入', () => {
       success: true
     })
     expect(storedFor(U)).toEqual({ [THINKING]: 'high', [MODEL]: 'p/m' })
+  })
+})
+
+describe('setEnabled —— 内置 hook / 安全策略的停用开关', () => {
+  const HOOK = 'hook:builtin:auto-title'
+  const POLICY = 'policy:builtin:ask-on-external-path'
+  const metaRows = (): MdAttr[] => db.rows.filter((r) => r.ns === 'meta')
+
+  it('MS-E1 停用内置 auto-title → success、存一行 meta.enabled=false、恰广播一次 hook.changed、不广播 policy.changed', () => {
+    expect(setEnabled({ objectId: HOOK, enabled: false })).toEqual({ success: true })
+    expect(metaRows()).toEqual([
+      { objectId: HOOK, scope: '', ns: 'meta', key: 'enabled', value: false, updatedAt: 1 }
+    ])
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ type: 'hook.changed' })
+    expect(publish).not.toHaveBeenCalledWith({ type: 'policy.changed' })
+  })
+
+  it('MS-E2 停用内置 ask-on-external-path → 恰广播一次 policy.changed', () => {
+    expect(setEnabled({ objectId: POLICY, enabled: false })).toEqual({ success: true })
+    expect(metaRows()).toHaveLength(1)
+    expect(metaRows()[0]).toMatchObject({ objectId: POLICY, key: 'enabled', value: false })
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ type: 'policy.changed' })
+  })
+
+  it('MS-E3 重复同一状态 → success、不广播、不多写；启用 → 删掉那一行、恰广播一次', async () => {
+    const { mdAttrDao } = await import('../../dao/mdAttrDao')
+    const upsert = vi.mocked(mdAttrDao.upsert)
+    const del = vi.mocked(mdAttrDao.delete)
+    upsert.mockClear()
+    del.mockClear()
+
+    expect(setEnabled({ objectId: HOOK, enabled: false })).toEqual({ success: true })
+    publish.mockClear()
+    expect(setEnabled({ objectId: HOOK, enabled: false })).toEqual({ success: true })
+    expect(publish).not.toHaveBeenCalled()
+    expect(upsert).toHaveBeenCalledTimes(1)
+
+    expect(setEnabled({ objectId: HOOK, enabled: true })).toEqual({ success: true })
+    expect(metaRows()).toEqual([])
+    expect(del).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledWith({ type: 'hook.changed' })
+
+    publish.mockClear()
+    expect(setEnabled({ objectId: HOOK, enabled: true })).toEqual({ success: true })
+    expect(publish).not.toHaveBeenCalled()
+    expect(del).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['内置 agent', 'agent:builtin:explore'],
+    ['内置 bot', 'bot:builtin:x'],
+    ['UUID', U],
+    ['不存在的内置 hook', 'hook:builtin:nonexistent'],
+    ['下线的内置策略', 'policy:builtin:ask-on-write'],
+    ['大写类型段', 'HOOK:builtin:auto-title'],
+    ['名字大小写不同', 'hook:builtin:Auto-Title'],
+    ['空串', ''],
+    ['undefined', undefined]
+  ])('MS-E4 不能停用的 id（%s）→ key-not-allowed，什么都不写、不广播', (_label, objectId) => {
+    // UUID 那一条：哪怕某份文件真的持有它
+    note('hook', otherText('hook v1', `shuvix-id: ${U}`))
+    expect(setEnabled({ objectId, enabled: false } as never)).toEqual({
+      success: false,
+      reason: 'key-not-allowed',
+      message: 'not a builtin policy or hook'
+    })
+    expect(db.rows).toEqual([])
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('MS-E4b params 整个是 undefined → key-not-allowed，不抛', () => {
+    expect(() => setEnabled(undefined as never)).not.toThrow()
+    expect(setEnabled(undefined as never)).toMatchObject({
+      success: false,
+      reason: 'key-not-allowed'
+    })
+    expect(db.rows).toEqual([])
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it("MS-E5 enabled 不是布尔（'false' / 0 / null / 缺省）→ invalid-value；id 也不对 → key-not-allowed（先认 id）", () => {
+    for (const enabled of ['false', 0, null, undefined]) {
+      expect(setEnabled({ objectId: HOOK, enabled } as never), String(enabled)).toMatchObject({
+        success: false,
+        reason: 'invalid-value'
+      })
+    }
+    expect(setEnabled({ objectId: HOOK } as never)).toMatchObject({
+      success: false,
+      reason: 'invalid-value'
+    })
+    expect(
+      setEnabled({ objectId: 'agent:builtin:explore', enabled: 'false' } as never)
+    ).toMatchObject({ success: false, reason: 'key-not-allowed' })
+    expect(db.rows).toEqual([])
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('MS-E6 首尾空白的 id 照收，存的是剥掉空白之后的', () => {
+    expect(setEnabled({ objectId: `  ${HOOK}  `, enabled: false })).toEqual({ success: true })
+    expect(metaRows().map((r) => r.objectId)).toEqual([HOOK])
+    expect(mdMetaStore.isDisabled(HOOK)).toBe(true)
+  })
+})
+
+describe('noteView.enabled —— 只有能停用的笔记才有这个字段', () => {
+  it('MS-E7 内置 hook 笔记：缺省 true，停用后 false；内置策略笔记同样', () => {
+    const hook = note('hook', null, { absPath: BUILTIN_AUTO_TITLE, builtin: true })
+    expect(noteView(hook)).toMatchObject({
+      kind: 'hook',
+      objectId: 'hook:builtin:auto-title',
+      readOnly: true,
+      enabled: true
+    })
+    setEnabled({ objectId: 'hook:builtin:auto-title', enabled: false })
+    expect(noteView(hook)?.enabled).toBe(false)
+
+    const policy = note('policy', null, { absPath: BUILTIN_EXTERNAL_PATH, builtin: true })
+    expect(noteView(policy)).toMatchObject({
+      kind: 'policy',
+      objectId: 'policy:builtin:ask-on-external-path',
+      enabled: true
+    })
+    setEnabled({ objectId: 'policy:builtin:ask-on-external-path', enabled: false })
+    expect(noteView(policy)?.enabled).toBe(false)
+  })
+
+  it('MS-E8 沿用内置 id 的用户覆盖副本：有 enabled、readOnly false，跟着内置的开关走', () => {
+    const copy = note('hook', otherText('hook v1', 'shuvix-id: hook:builtin:auto-title'))
+    expect(noteView(copy)).toMatchObject({ readOnly: false, enabled: true })
+    setEnabled({ objectId: 'hook:builtin:auto-title', enabled: false })
+    expect(noteView(copy)).toMatchObject({ readOnly: false, enabled: false })
+  })
+
+  it('MS-E9 其余笔记没有 enabled 这个键', () => {
+    const sids = [
+      note('agent', null, { absPath: BUILTIN_EXPLORE, builtin: true }),
+      note('bot', otherText('bot v2', `shuvix-id: ${U}`)),
+      note('hook', otherText('hook v1', `shuvix-id: ${U}`)),
+      note('policy', otherText('policy v1', `shuvix-id: ${V}`)),
+      note('hook', otherText('hook v1', 'shuvix-id: hook:builtin:nonexistent')),
+      note('hook', otherText('hook v1', 'shuvix-id: nope')),
+      note('policy', ['---', 'shuvix: policy v1', 'name: no-id', '---', '', 'B', ''].join('\n')),
+      // 类型对不上：hook 文件里写着一个安全策略的内置 id —— 开关不能出现在这里
+      note('hook', otherText('hook v1', 'shuvix-id: policy:builtin:ask-on-command'))
+    ]
+    for (const sid of sids) {
+      const view = noteView(sid)
+      expect(view, sid).not.toBeNull()
+      expect('enabled' in view!, sid).toBe(false)
+    }
+  })
+})
+
+/**
+ * MS-G 静态守护：停用开关改变安全面（停掉 ask-on-command 就不再问命令，停掉 auto-review 审批就全回到人手上），
+ * 补缺值改变 agent 怎么跑 —— 写入口只有界面上那一个（IPC → mdMetaService）。扫 apps/desktop/src 的源码（不含测试）：
+ * 只有 mdMetaService 调 mdMetaStore 的写方法；工具与 CLI 一个都不引 mdMetaService / services/mdMeta。
+ */
+describe('MS-G 写入口只有 mdMetaService', () => {
+  const SRC = resolve(__dirname, '../../..')
+  const sources = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) return entry.name === '__tests__' ? [] : sources(full)
+      return /\.tsx?$/.test(entry.name) && !entry.name.endsWith('.d.ts') ? [full] : []
+    })
+  const rel = (file: string): string => relative(SRC, file).split(sep).join('/')
+  const all = sources(SRC)
+
+  it('MS-G1 mdMetaStore.setEnabled / setFill / unsetFill 只在 services/mdMetaService.ts 里被调用', () => {
+    expect(all.length).toBeGreaterThan(100)
+    for (const method of ['setEnabled', 'setFill', 'unsetFill']) {
+      const callers = all
+        .filter((file) => readFileSync(file, 'utf8').includes(`mdMetaStore.${method}(`))
+        .map(rel)
+      expect(callers, method).toEqual(['main/services/mdMetaService.ts'])
+    }
+  })
+
+  it('MS-G2 工具（main/tools）与 CLI（cli/、services/cliServer.ts）不引 mdMetaService，也不引 services/mdMeta', () => {
+    const scoped = all.filter((file) => {
+      const r = rel(file)
+      return (
+        r.startsWith('main/tools/') || r.startsWith('cli/') || r === 'main/services/cliServer.ts'
+      )
+    })
+    expect(scoped.length).toBeGreaterThan(5)
+    const offenders = scoped
+      .filter((file) =>
+        /from\s+'[^']*(?:mdMetaService|services\/mdMeta|\.\/mdMeta|\.\.\/mdMeta)'/.test(
+          readFileSync(file, 'utf8')
+        )
+      )
+      .map(rel)
+    expect(offenders).toEqual([])
   })
 })

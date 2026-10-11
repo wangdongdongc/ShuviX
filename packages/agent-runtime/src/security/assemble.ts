@@ -184,6 +184,8 @@ export function assembleRules(
     buildBuiltinPolicies({ language: provider.getLanguage?.(), readMd: readBuiltinPolicyMd }),
     provider.getUserPolicies?.() ?? []
   )) {
+    // 被用户停用的（内置策略的停用开关）：同名裁决照常（它仍然遮蔽同名的那几份），只是不装配
+    if (provider.isPolicyDisabled?.(policy)) continue
     // 策略级 lets：惰性求值 + 按本次装配 memoize（条件不命中的请求永不触发）
     let letValues: Record<string, unknown> | undefined
     const getLets = (): Record<string, unknown> => {

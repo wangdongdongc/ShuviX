@@ -31,6 +31,7 @@ import i18next from 'i18next'
 import { getBuiltinPoliciesDir, getDefaultPoliciesDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
 import { ensureObjectId } from '../utils/mdObjectId'
+import { isKnownDisableableBuiltin } from '../utils/builtinDisable'
 import { createLogger } from '../logger'
 
 const log = createLogger('PolicyService')
@@ -46,6 +47,10 @@ export interface PolicyListItem extends ParsedPolicyFile {
   overridden?: boolean
   /** 压过它的那份用户文件的文件名 */
   overriddenBy?: string
+  /** 这一行有禁用开关（持有一个确有其物的内置安全策略 id：内置本身，或沿用了它的覆盖副本） */
+  disableable?: boolean
+  /** 被用户停用（内置安全策略的停用开关；沿用内置 id 的覆盖副本一并算）—— 不参与装配 */
+  disabled?: boolean
 }
 
 /**
@@ -69,6 +74,22 @@ function compareRows(a: PolicyListItem, b: PolicyListItem): number {
 }
 
 class PolicyService {
+  /**
+   * 停用开关的读口（ShuviX 扩展元数据，按对象 id 认）。由主进程入口注入（setDisabledReader，读 services/mdMeta
+   * 的内存快照）—— 本服务不直接依赖数据库：单测里没有库，没注入 = 都不停用。
+   */
+  private disabledReader: ((objectId: string) => boolean) | null = null
+
+  /** 注入停用开关的读口（主进程启动时调一次；null = 撤掉） */
+  setDisabledReader(reader: ((objectId: string) => boolean) | null): void {
+    this.disabledReader = reader
+  }
+
+  /** 这份策略被停用了吗（装配时 SecurityHostProvider.isPolicyDisabled 与列表的停用徽标共用） */
+  isDisabled(policy: ParsedPolicyFile): boolean {
+    return !!policy.objectId && !!this.disabledReader?.(policy.objectId)
+  }
+
   /**
    * 评估侧的用户策略来源（SecurityHostProvider.getUserPolicies）：**全部**可解析的用户文件，带文件名、
    * 含同名的几份 —— 谁生效由装配时的 resolvePolicyFiles 裁决，与设置页列表同一个函数。
@@ -212,6 +233,10 @@ class PolicyService {
           ...fields,
           source: sourceKind,
           basePath,
+          ...(policy.objectId && isKnownDisableableBuiltin(policy.objectId, 'policy')
+            ? { disableable: true }
+            : {}),
+          ...(this.isDisabled(policy) ? { disabled: true } : {}),
           ...(shadowedBy
             ? {
                 overridden: true,

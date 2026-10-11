@@ -233,6 +233,12 @@ declare global {
     overridden?: boolean
     /** 压过它的那份用户文件的文件名 */
     overriddenBy?: string
+    /** 对象 id（shuvix-id；内置为 policy:builtin:<name>） */
+    objectId?: string
+    /** 这一行有禁用开关（持有确有其物的内置安全策略 id） */
+    disableable?: boolean
+    /** 被用户停用（内置安全策略的停用开关，存在 ShuviX 里）—— 不参与装配 */
+    disabled?: boolean
   }
 
   /**
@@ -263,6 +269,12 @@ declare global {
     overridden?: boolean
     /** 压过它的那份用户文件的文件名 */
     overriddenBy?: string
+    /** 对象 id（shuvix-id；内置为 hook:builtin:<name>） */
+    objectId?: string
+    /** 这一行有禁用开关（持有确有其物的内置 hook id） */
+    disableable?: boolean
+    /** 被用户停用（内置 hook 的停用开关，存在 ShuviX 里）—— 不触发 */
+    disabled?: boolean
   }
 
   /** 无法解析的用户 hook 文件（结构非法），删除走 hook.deleteByFile */
@@ -611,6 +623,7 @@ declare global {
         objectId: string
         key: string
       }) => Promise<MdMetaWriteResult>
+      setEnabled: (params: { objectId: string; enabled: boolean }) => Promise<MdMetaWriteResult>
     }
     tools: {
       list: (

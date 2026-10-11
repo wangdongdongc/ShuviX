@@ -69,6 +69,8 @@ vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: tc.enabledTargets
 vi.mock('../policyService', () => ({
   policyService: {
     getUserPolicies: () => tc.userPolicies,
+    // 内置安全策略的禁用开关（ShuviX 扩展元数据）：这里一律不禁用
+    isDisabled: () => false,
     // 与 policyService.readBuiltinPolicyMd 同形，只是基准目录直接钉在仓库那份上
     readBuiltinPolicyMd: (fileName: string) => {
       try {

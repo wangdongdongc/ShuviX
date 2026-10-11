@@ -39,6 +39,22 @@ export const MD_FM_FILL_KEYS: Readonly<Record<MdObjectKind, readonly string[]>> 
   policy: []
 }
 
+/**
+ * 能被「停用」的对象：**随包发布的内置**安全策略与 hook（用户裁决 2026-10-10）—— 用户自己的文件不想要可以删掉、
+ * 挪走，内置的删不掉，所以给它们一个开关。存成 `ns='meta', key='enabled'` 的 false（启用 = 删掉这一行，
+ * 缺省就是启用）。挂在内置 id 上：沿用内置 id 的覆盖副本同样跟着停用 / 启用（复制文件共用元数据）。
+ */
+export const MD_DISABLEABLE_KINDS: readonly MdObjectKind[] = ['hook', 'policy']
+
+/** `ns='meta'` 里停用开关的键 */
+export const MD_ENABLED_KEY = 'enabled'
+
+/** 这个 id 能不能被停用：内置形态，且类型是 hook / policy（名字是否真有其物由宿主核对） */
+export function isDisableableObjectId(objectId: string): boolean {
+  const parsed = parseObjectId(objectId)
+  return parsed?.form === 'builtin' && MD_DISABLEABLE_KINDS.includes(parsed.kind)
+}
+
 /** 这些键永远不可补：身份只来自文件本身 */
 export const MD_IDENTITY_KEYS: readonly string[] = ['shuvix', 'name', SHUVIX_ID_KEY]
 
@@ -78,6 +94,8 @@ export interface MdMetaNoteView {
   warnings: string[]
   /** 文件只读（随包发布的内置）：写不进 id（不能自动分配、不能换新），补缺值照样能改（它存在数据库里） */
   readOnly: boolean
+  /** 停用开关的当前值 —— 只有能被停用的对象（内置 hook / 安全策略，见 MD_DISABLEABLE_KINDS）才有这个字段 */
+  enabled?: boolean
 }
 
 /** 写元数据的结果；失败不写任何东西 */

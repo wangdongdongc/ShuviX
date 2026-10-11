@@ -27,7 +27,7 @@ import {
 } from '@shuvix/chat-ui'
 import type { ContextMenuRequest, ContextMenuResult } from '@shuvix/chat-protocol/types/contextMenu'
 import { isContentOnlyFileChange } from '@shuvix/chat-protocol/utils/fileMap'
-import { MD_FM_FILL_KEYS, mdObjectKindOf } from '@shuvix/chat-protocol/mdMeta'
+import { MD_DISABLEABLE_KINDS, MD_FM_FILL_KEYS, mdObjectKindOf } from '@shuvix/chat-protocol/mdMeta'
 import { useResolveMediaUrl, type MediaSource, type ResolveMediaUrl } from '@shuvix/chat-ui'
 import { runMarkdownCommand, markdownKeymap } from './markdownCommands'
 import {
@@ -37,6 +37,7 @@ import {
 } from './frontmatterCard'
 import { FrontmatterFieldPicker } from './FrontmatterFieldPicker'
 import { FrontmatterMetaStrip } from './FrontmatterMetaStrip'
+import { FrontmatterFillField } from './FrontmatterFillField'
 import { NotebookMinimap } from './NotebookMinimap'
 import { notebookFigureSource } from './notebookFigureSource'
 import { activeHeadingIndex, parseHeadings, type NotebookHeading } from './notebookHeadings'
@@ -689,46 +690,57 @@ export function LivePreviewEditor({
   // 属性卡的字段槽位：把仓库既有的成熟选择器（ToolSelectList / ModelSelect）挂进去。
   // 卡片是纯 DOM 的 CM6 widget，故用独立 React root 挂载，widget.destroy 时卸载
   // （unmount 推到微任务：React 不允许在渲染/提交过程中同步卸载另一棵树）。
-  const mountField = useCallback((slot: HTMLElement, ctx: FrontmatterFieldMount): (() => void) => {
-    const root = createRoot(slot)
-    root.render(
-      <FrontmatterFieldPicker
-        fieldKey={ctx.key}
-        markerType={ctx.markerType}
-        kind={ctx.kind === 'csv' ? 'csv' : 'select'}
-        value={ctx.value}
-        onChange={ctx.onChange}
-        readOnly={ctx.readOnly}
-      />
-    )
-    return () => queueMicrotask(() => root.unmount())
-  }, [])
-
-  // 属性卡的「ShuviX 设置」条（md 扩展元数据）：只给有可补键的文件类型、且宿主实现了 ChatApi.mdMeta
-  // （桌面）的笔记本挂 —— 其余情况不往槽里放东西。分配 / 换新 id 写进缓冲区后立刻落盘：主进程只认
-  // 磁盘上的 id，等 200ms 的自动保存防抖只会让「正在写进文件」多停一会儿
-  const mountMetaStrip = useCallback(
-    (slot: HTMLElement, ctx: FrontmatterMetaMount): (() => void) | void => {
-      const kind = mdObjectKindOf(ctx.markerType)
-      if (!ownsSessionFile || !sessionId || !kind || MD_FM_FILL_KEYS[kind].length === 0) return
-      if (!getChatApi().mdMeta) return
+  const mountField = useCallback(
+    (slot: HTMLElement, ctx: FrontmatterFieldMount): (() => void) => {
       const root = createRoot(slot)
+      // 能由 ShuviX 补缺的键（agent 的模型 / 思考档位）：只读的内置档案在这一行改 ShuviX 里的补缺值，
+      // 用户文件照旧改文件 —— 只在编辑器显示的就是这条笔记本会话自己的文件、且宿主有 ChatApi.mdMeta 时
+      const kind = mdObjectKindOf(ctx.markerType)
+      const fillable =
+        ownsSessionFile &&
+        !!sessionId &&
+        !!kind &&
+        MD_FM_FILL_KEYS[kind].includes(ctx.key) &&
+        !!getChatApi().mdMeta
       root.render(
-        <FrontmatterMetaStrip
-          sessionId={sessionId}
-          markerType={ctx.markerType}
-          yaml={ctx.yaml}
-          readOnly={ctx.readOnly}
-          setObjectId={(id) => {
-            const written = ctx.setObjectId(id)
-            if (written) flushSave()
-            return written
-          }}
-        />
+        fillable && sessionId ? (
+          <FrontmatterFillField
+            sessionId={sessionId}
+            fieldKey={ctx.key}
+            markerType={ctx.markerType}
+            fileValue={ctx.value}
+            readOnly={ctx.readOnly}
+            onFileChange={ctx.onChange}
+          />
+        ) : (
+          <FrontmatterFieldPicker
+            fieldKey={ctx.key}
+            markerType={ctx.markerType}
+            kind={ctx.kind === 'csv' ? 'csv' : 'select'}
+            value={ctx.value}
+            onChange={ctx.onChange}
+            readOnly={ctx.readOnly}
+          />
+        )
       )
       return () => queueMicrotask(() => root.unmount())
     },
-    [ownsSessionFile, sessionId, flushSave]
+    [ownsSessionFile, sessionId]
+  )
+
+  // 属性卡的「ShuviX 设置」条（md 扩展元数据）：内置安全策略 / hook 的停用开关。只给能停用的文件类型、
+  // 编辑器显示的就是这条笔记本会话自己的文件、且宿主实现了 ChatApi.mdMeta（桌面）时挂 —— 有没有开关
+  // 最终由主进程的视图说了算（只有内置 id 才有），其余情况槽位里什么也不放
+  const mountMetaStrip = useCallback(
+    (slot: HTMLElement, ctx: FrontmatterMetaMount): (() => void) | void => {
+      const kind = mdObjectKindOf(ctx.markerType)
+      if (!ownsSessionFile || !sessionId || !kind || !MD_DISABLEABLE_KINDS.includes(kind)) return
+      if (!getChatApi().mdMeta) return
+      const root = createRoot(slot)
+      root.render(<FrontmatterMetaStrip sessionId={sessionId} />)
+      return () => queueMicrotask(() => root.unmount())
+    },
+    [ownsSessionFile, sessionId]
   )
 
   // 双链扩展（仅在有项目上下文时启用）：[[file]] 链接 + ![[image]] 内嵌。

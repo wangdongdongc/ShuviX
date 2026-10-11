@@ -22,6 +22,10 @@
  * （PERM-C4 真实走一遍 enforcePath，审查者替身经 setPermissionReviewer 注入）；只有内置时
  * 那里的写只是普通的 ask-on-external-path#1（PERM-C0）。
  *
+ * PERM-D：内置安全策略的停用开关接到 SecurityHostProvider.isPolicyDisabled（policyService.isDisabled 的替身按
+ * state.disabled 答）—— 停用 ask-on-external-path，读家目录、往外写都不再问；停用 ask-on-command，沙箱外命令
+ * 不再问而路径门照问。
+ *
  * DP-A1：本会话自己的 artifacts 目录（~/.shuvix/artifacts/<id>，getSessionArtifactsDir 的 mock 与生产同形）
  * 是会话目录 —— 会话之间互不豁免：父会话在子会话的目录里写照问，读也问（它在家目录里）。
  */
@@ -58,6 +62,8 @@ const state = vi.hoisted(() => ({
   knowledgeBroken: false,
   /** ~/.shuvix/policies 的替身（policyService.getUserPolicies 现扫的结果） */
   userPolicies: [] as UserPolicyFile[],
+  /** 被停用的对象 id（policyService.isDisabled 的替身按它答：内置安全策略的停用开关） */
+  disabled: new Set<string>(),
   // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
   // src/main/services/__tests__ 往上六级是仓库根
   builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
@@ -86,6 +92,9 @@ vi.mock('../knowledge/sessionBundle', () => ({
 vi.mock('../policyService', () => ({
   policyService: {
     getUserPolicies: () => state.userPolicies,
+    // 内置安全策略的停用开关（ShuviX 扩展元数据）：按 state.disabled 答（缺省都不停用，见 PERM-D）
+    isDisabled: (policy: { objectId?: string }) =>
+      !!policy.objectId && state.disabled.has(policy.objectId),
     // 与 policyService.readBuiltinPolicyMd 同形，只是基准目录直接钉在仓库那份上
     readBuiltinPolicyMd: (fileName: string) => {
       try {
@@ -187,6 +196,7 @@ beforeEach(() => {
   state.knowledgeTargets = []
   state.knowledgeBroken = false
   state.userPolicies = []
+  state.disabled = new Set()
 })
 
 afterEach(() => {
@@ -700,5 +710,82 @@ describe('桌面安全 provider — ShuviX 自己的配置（vars.shuvixConfigDi
     })
     expect(asks).toHaveLength(2)
     expect(asks[1]).toMatchObject({ kind: 'ask', id: 'c4-outside' })
+  })
+})
+
+describe('桌面安全 provider — 内置安全策略的停用开关（isPolicyDisabled → policyService.isDisabled）', () => {
+  const sessions: string[] = []
+  afterEach(() => {
+    for (const id of sessions) {
+      clearSessionDecisions(id)
+      clearReviewState(id)
+    }
+    sessions.length = 0
+  })
+
+  /** 一个记录询问的 context（询问一律答允许） */
+  const askingContext = (sessionId: string): { ctx: SecurityContext; asks: InputRequest[] } => {
+    sessions.push(sessionId)
+    const asks: InputRequest[] = []
+    const ctx = getDesktopSecurityContext(
+      {
+        sessionId,
+        requestUserInput: async (req) => {
+          asks.push(req)
+          return { kind: 'ask', allowed: true }
+        }
+      },
+      () => config
+    )
+    return { ctx, asks }
+  }
+
+  it('PERM-D1 停用 ask-on-external-path → 家目录里的读、会话目录外的写都放行、零命中，enforcePath 不问；重新启用 → #0 / #1 回来', async () => {
+    const homeFile = join(HOME_PLACE, 'notes.txt')
+    const outside = join(OUTSIDE, 'a.txt')
+    state.disabled.add('policy:builtin:ask-on-external-path')
+
+    const read = context().evaluate('read', { type: 'path', path: homeFile })
+    expect(verdict(read)).toEqual(ALLOW)
+    expect(read.matched).toEqual([])
+    const write = context().evaluate('write', { type: 'path', path: outside })
+    expect(verdict(write)).toEqual(ALLOW)
+    expect(write.matched).toEqual([])
+
+    const { ctx, asks } = askingContext('perm-d1')
+    await ctx.enforcePath('read', homeFile, { toolCallId: 'd1-read', toolName: 'read' })
+    await ctx.enforcePath('write', outside, { toolCallId: 'd1-write', toolName: 'write' })
+    expect(asks).toEqual([])
+
+    state.disabled.clear()
+    expect(verdict(context().evaluate('read', { type: 'path', path: homeFile }))).toEqual(ASK_READ)
+    expect(verdict(context().evaluate('write', { type: 'path', path: outside }))).toEqual(ASK_WRITE)
+  })
+
+  it('PERM-D2 停用 ask-on-command → 沙箱外命令不问；路径门照问（只停掉了那一份）', async () => {
+    state.disabled.add('policy:builtin:ask-on-command')
+    const { ctx, asks } = askingContext('perm-d2')
+    const outcome = await ctx.enforceCommand(
+      { channel: 'bash', command: 'echo hi', cwd: WORKSPACE },
+      { toolCallId: 'd2-cmd', toolName: 'bash' }
+    )
+    expect(outcome).toMatchObject({ status: 'allowed' })
+    expect(asks).toEqual([])
+
+    await ctx.enforcePath('write', join(OUTSIDE, 'b.txt'), {
+      toolCallId: 'd2-write',
+      toolName: 'write'
+    })
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({ kind: 'ask', id: 'd2-write' })
+
+    // 对照：重新启用后同一条命令要问
+    state.disabled.clear()
+    await ctx.enforceCommand(
+      { channel: 'bash', command: 'echo hi', cwd: WORKSPACE },
+      { toolCallId: 'd2-cmd-again', toolName: 'bash' }
+    )
+    expect(asks).toHaveLength(2)
+    expect(asks[1]).toMatchObject({ kind: 'ask', id: 'd2-cmd-again' })
   })
 })

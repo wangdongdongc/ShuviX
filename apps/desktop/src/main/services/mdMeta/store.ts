@@ -1,4 +1,4 @@
-import { MD_FM_FILL_KEYS, type MdObjectKind } from '@shuvix/chat-protocol/mdMeta'
+import { MD_ENABLED_KEY, MD_FM_FILL_KEYS, type MdObjectKind } from '@shuvix/chat-protocol/mdMeta'
 import { mdAttrDao } from '../../dao/mdAttrDao'
 import type { MdAttr } from '../../dao/types'
 
@@ -45,6 +45,26 @@ class MdMetaStore {
   setFill(objectId: string, key: string, value: unknown): void {
     mdAttrDao.upsert({ objectId, ns: 'fm', key, value })
     this.snapshot = null
+  }
+
+  /** 这个对象被停用了吗（全局 scope 的 `meta.enabled === false`；没有这一行 = 启用） */
+  isDisabled(objectId: string): boolean {
+    return this.rows(objectId).some(
+      (attr) =>
+        attr.scope === '' &&
+        attr.ns === 'meta' &&
+        attr.key === MD_ENABLED_KEY &&
+        attr.value === false
+    )
+  }
+
+  /** 停用存一行 `false`，启用删掉这一行（缺省即启用）；返回状态是否真的变了。能不能停用归调用方判 */
+  setEnabled(objectId: string, enabled: boolean): boolean {
+    if (enabled === !this.isDisabled(objectId)) return false
+    if (enabled) mdAttrDao.delete({ objectId, ns: 'meta', key: MD_ENABLED_KEY })
+    else mdAttrDao.upsert({ objectId, ns: 'meta', key: MD_ENABLED_KEY, value: false })
+    this.snapshot = null
+    return true
   }
 
   /** 删一个补缺键；返回是否真有一行被删 */

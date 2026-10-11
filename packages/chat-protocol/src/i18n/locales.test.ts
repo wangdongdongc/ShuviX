@@ -312,4 +312,54 @@ describe('i18n 语言包', () => {
       for (const key of KEYS) expect(leaf(bundle, key)?.trim(), `${lang} ${key}`).toBeTruthy()
     }
   })
+  /**
+   * MDM：md 扩展元数据的界面文案（2026-10-10）—— 补缺值改在卡片自己的行上（小标 / 没保存上 / 未生效），
+   * 「ShuviX 设置」条只剩内置 hook / 安全策略的停用开关，侧栏行菜单有同一个开关。分配 / 换新 id 与
+   * 「正在保存」那一套 UI 已经没有，它们的文案三语都应下线。
+   */
+  it('MDM-1 停用开关与补缺小标的文案三语都有且非空；metaWriteFailed 恰插 {{reason}}，其余不含插值', () => {
+    const KEYS = [
+      'sidebar.disabledBadge',
+      'common.enable',
+      'common.disable',
+      ...[
+        'metaTitle',
+        'metaHint',
+        'metaEnabled',
+        'metaHookDisabled',
+        'metaPolicyDisabled',
+        'metaWriteFailed',
+        'fillTagHint',
+        'fillSaveFailed',
+        'fillNotApplied'
+      ].map((k) => `notebook.frontmatter.${k}`)
+    ]
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      for (const key of KEYS) {
+        const text = leaf(bundle, key)
+        expect(text?.trim(), `${lang} ${key}`).toBeTruthy()
+        expect(placeholders(text ?? ''), `${lang} ${key}`).toEqual(
+          key === 'notebook.frontmatter.metaWriteFailed' ? ['reason'] : []
+        )
+      }
+    }
+  })
+
+  it('MDM-2 已下线的 id 分配 / 换新 / 保存中文案三语都没有', () => {
+    const REMOVED = [
+      'metaSaving',
+      'metaNotSaved',
+      'metaCannotAssign',
+      'metaDeclared',
+      'metaRegenerate',
+      'metaRegenerateHint',
+      'metaNoId',
+      'metaMalformed',
+      'metaAssign'
+    ].map((k) => `notebook.frontmatter.${k}`)
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const present = new Set(flatten(bundle))
+      for (const key of REMOVED) expect(present.has(key), `${lang} ${key}`).toBe(false)
+    }
+  })
 })

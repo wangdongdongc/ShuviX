@@ -166,14 +166,14 @@ the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`, 
   by `agent_profile` as well — an agent that could call its own reviewer at will could keep trying
   phrasings until one passed — but a hook may name it.
 
-- **Model and thinking without an override: ShuviX settings.** Opening an agent's md from the
-  sidebar's Agents group (a builtin or your own) shows a *ShuviX settings* strip under its properties, where `shuvix-model` and
-  `shuvix-thinking` can be picked. They are stored in ShuviX, keyed by the file's `shuvix-id`,
-  and they only **fill in** what the file does not write — a key the file writes always wins. So a
-  builtin such as `explore` can run on a cheaper model without an override copy, and keeps getting
-  the shipped text on every update. A file without an id gets one automatically — the first setting
-  you make writes a `shuvix-id` line into it; a copy of a file shares its settings. Agents cannot change them — only you, in the
-  strip.
+- **Model and thinking without an override: ShuviX settings.** In a builtin agent's md (opened from
+  the sidebar's Agents group) the **Model** and **Thinking** rows of its properties can be changed
+  although the file itself is read-only: the choice is stored in ShuviX (the row is tagged
+  *ShuviX settings*), keyed by the file's `shuvix-id`, and only **fills in** what the file does not
+  write — a key the file writes always wins, and its row stays read-only. So a builtin such as
+  `explore` can run on a cheaper model without an override copy, and keeps getting the shipped text
+  on every update. An override copy keeps the builtin's id, so it gets the same settings. In your
+  own agent files these rows edit the file as usual. Agents cannot change ShuviX settings — only you.
 
 ## How an agent is put to use
 

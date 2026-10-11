@@ -3454,180 +3454,181 @@ export function fmCardPane(main: CdpClient): FmCardPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 属性卡里的「ShuviX 设置」条（app-shell FrontmatterMetaStrip，md 扩展元数据）。
+// 属性卡上的 md 扩展元数据（md extension metadata，设计 docs/md-metadata-design.md）—— 两处界面：
 //
-// 只挂在**笔记本自己那份文件**的卡片上（NotebookView 传 ownsSessionFile；Files 面板 / [[双链]] 预览
-// 不挂），只给有可补键的文件类型（今天只有 agent）。**没有「分配 id」按钮**（用户裁决 2026-10-10）：
-// 没有 id 的文件控件照样出来，第一次改设置时自动分配（metaWriteQueue：往缓冲区写一行 id → 等它落盘
-// → 写库；写 id 会让卡片重建、条重挂）。锚点全是产品侧的钩子类名：
-//   - 整条 = `.cm-shuvix-fmcard-meta-strip`（卡片给的槽 `.cm-shuvix-fmcard-meta` 里）；
-//   - id = `.cm-shuvix-fmcard-meta-id`（缓冲区里有合法 id 才显示），标题行唯一的操作按钮 =
-//     `.cm-shuvix-fmcard-meta-regenerate`（换新 id；有在途写入时禁用）；问号是 `[data-info-hint]`，不算按钮；
-//   - 每个可补键一行 `.cm-shuvix-fmcard-meta-row[data-key]`，控件在 `.cm-shuvix-fmcard-meta-slot` 里
-//     （**不是** `.cm-shuvix-fmcard-slot` —— 那是卡片字段槽位的计数钩子，fmCardPane.waitReady 数的就是它）；
-//   - 文件已写的键 = 行里的 `.cm-shuvix-fmcard-meta-declared`，告警 = `.cm-shuvix-fmcard-meta-warning`；
-//   - 在途写入（等 id 落盘 / 正在写库）= `.cm-shuvix-fmcard-meta-saving`（「Saving…」）。
-// 作用域是 document 里**第一条**（主区笔记本那一张；预览里的卡片不该有这一条）。
-// 档位改选走原生 setter + 冒泡的 change（React 对 select 只听 change）；CDP 不能打字，也不能 ⌘Z。
+//   1. **补缺字段行**（app-shell FrontmatterFillField）：agent 的 `shuvix-model` / `shuvix-thinking` 就在卡片
+//      自己那一行上改（用户裁决 2026-10-10，没有单独的条）。只挂在**笔记本自己那份文件**的卡片上（NotebookView
+//      传 ownsSessionFile；Files 面板 / [[双链]] 预览不挂）且宿主有 ChatApi.mdMeta。只读的内置档案里这一行可改、
+//      写的是 ShuviX 里的补缺值；用户文件里照旧写文件。锚点：
+//        - 行 = `.cm-shuvix-fmcard-row[data-key]`，控件在卡片的 `.cm-shuvix-fmcard-slot` 里；
+//        - 补缺行的包裹 = 槽位里的 `.cm-shuvix-fmcard-fill`（没挂就是普通的 FrontmatterFieldPicker）；
+//        - 「ShuviX 设置」小标 = `.cm-shuvix-fmcard-fill-tag`（值来自 ShuviX）、「没保存上」=
+//          `.cm-shuvix-fmcard-fill-error`、「未生效」= `.cm-shuvix-fmcard-fill-warning`。
+//   2. **「ShuviX 设置」条**（app-shell FrontmatterMetaStrip）：现在只放内置 hook / 安全策略的停用开关。
+//        - 整条 = `.cm-shuvix-fmcard-meta-strip`；开关 = `.cm-shuvix-fmcard-meta-toggle`（role=switch、
+//          data-state on|off）；停用说明 = `.cm-shuvix-fmcard-meta-disabled`；告警 = `.cm-shuvix-fmcard-meta-warning`。
+//
+// 作用域是 document 里**第一张**卡（主区笔记本那一张；预览里的卡片排在它后面）。档位改选走原生 setter +
+// 冒泡的 change（React 对 select 只听 change）；CDP 不能打字，也不能 ⌘Z。
 
-export interface MdMetaStripRow {
+/** 卡片上一行字段的快照（任何字段都能读；补缺相关的几项只有补缺行才可能为真） */
+export interface FmFillRow {
   key: string
-  /** 档位行：下拉的值（'' = 未设置）；模型行：ModelSelect 触发器的文案 */
+  /** 下拉的值（'' = 未设置）；没有下拉时取槽位里第一个按钮的文案（模型行：ModelSelect 触发器） */
   value: string
-  /** 行下注了「文件里写了这个键」 */
-  declared: boolean
   /** 控件禁用 */
   disabled: boolean
-}
-
-export interface MdMetaStripState {
-  /** 显示的对象 id（缓冲区里有合法 id 才有）；没有为 null */
-  objectId: string | null
-  /** 「换新 id」按钮在 */
-  regenerate: boolean
-  /** 「换新 id」按钮禁用（有在途写入）；按钮不在为 false */
-  regenerateDisabled: boolean
-  /** 标题行里的按钮（设置行之外、问号之外）：换新 id 记作 `'regenerate'`，其余取文字 */
-  headerButtons: string[]
-  /** 「Saving…」在（有在途写入） */
-  saving: boolean
-  rows: MdMetaStripRow[]
-  warnings: string[]
+  /** 槽位里挂的是补缺行（`.cm-shuvix-fmcard-fill`） */
+  wrapped: boolean
+  /** 「ShuviX 设置」小标在 */
+  tagged: boolean
+  /** 「没保存上」在 */
+  error: boolean
+  /** 「未生效」在 */
+  warning: boolean
 }
 
 /** 页面上一张属性卡的概况（区分主区笔记与预览里的卡） */
-export interface MdMetaCardShot {
+export interface FmCardMetaShot {
   /** 卡片 name 字段的值（文本框）；没有为 null */
   name: string | null
   /** 卡里有「ShuviX 设置」条 */
   strip: boolean
+  /** 卡里补缺行包裹（`.cm-shuvix-fmcard-fill`）的个数 */
+  fillWrappers: number
+  /** 卡里「ShuviX 设置」小标的个数 */
+  fillTags: number
   /** 卡里 `.cm-shuvix-fmcard-slot`（卡片字段槽位）的个数 */
   fieldSlots: number
-  /** 卡里 `.cm-shuvix-fmcard-meta-slot`（设置条控件槽）的个数 */
-  metaSlots: number
-  /** 卡片的文本（找「Saving…」这类字样用） */
+  /** 卡片的文本 */
   text: string
 }
 
-export interface MdMetaStripPane {
-  /** 页面上有没有这一条 */
+export interface FmFillPane {
+  /** 主区那张卡上这一行的快照；卡或行不在为 null */
+  row(key: string): Promise<FmFillRow | null>
+  /** 等这一行满足条件，回满足时的快照 */
+  waitRow(key: string, pred: (row: FmFillRow) => boolean, what: string): Promise<FmFillRow>
+  /** 改选主区那张卡的档位（'' = 未设置）；下拉不在或禁用则抛 */
+  chooseThinking(level: string): Promise<void>
+  /** 页面上全部属性卡的概况（DOM 序） */
+  cards(): Promise<FmCardMetaShot[]>
+}
+
+export function fmFillPane(main: CdpClient): FmFillPane {
+  const CARD = `document.querySelector('.cm-shuvix-fmcard')`
+  const ROW = (key: string): string =>
+    `${CARD}?.querySelector('.cm-shuvix-fmcard-row[data-key=${JSON.stringify(key)}]')`
+  const row = (key: string): Promise<FmFillRow | null> =>
+    main.eval<FmFillRow | null>(`(() => {
+      const row = ${ROW(key)}
+      const slot = row?.querySelector('.cm-shuvix-fmcard-slot')
+      if (!slot) return null
+      const select = slot.querySelector('select')
+      const button = slot.querySelector('button')
+      const control = select ?? button ?? slot.querySelector('input')
+      return {
+        key: ${JSON.stringify(key)},
+        value: select ? select.value : (button?.textContent ?? '').trim(),
+        disabled: !!control?.disabled,
+        wrapped: !!slot.querySelector('.cm-shuvix-fmcard-fill'),
+        tagged: !!slot.querySelector('.cm-shuvix-fmcard-fill-tag'),
+        error: !!slot.querySelector('.cm-shuvix-fmcard-fill-error'),
+        warning: !!slot.querySelector('.cm-shuvix-fmcard-fill-warning')
+      }
+    })()`)
+  return {
+    row,
+    waitRow: async (key, pred, what) => {
+      let last: FmFillRow | null = null
+      await until(async () => {
+        last = await row(key)
+        return !!last && pred(last)
+      }, `card row ${key}: ${what}`)
+      return last!
+    },
+    chooseThinking: async (level) => {
+      await until(
+        () => main.eval<boolean>(`!!${ROW('shuvix-thinking')}?.querySelector('select')`),
+        'thinking select mounted'
+      )
+      const outcome = await main.eval<string>(`(() => {
+        const select = ${ROW('shuvix-thinking')}?.querySelector('select')
+        if (!select) return 'missing'
+        if (select.disabled) return 'disabled'
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+        setter.call(select, ${JSON.stringify(level)})
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+        return 'ok'
+      })()`)
+      if (outcome !== 'ok') throw new Error(`card thinking select is ${outcome}`)
+    },
+    cards: () =>
+      main.eval<FmCardMetaShot[]>(`[...document.querySelectorAll('.cm-shuvix-fmcard')].map((c) => ({
+        name: c.querySelector('.cm-shuvix-fmcard-input[data-key="name"]')?.value ?? null,
+        strip: !!c.querySelector('.cm-shuvix-fmcard-meta-strip'),
+        fillWrappers: c.querySelectorAll('.cm-shuvix-fmcard-fill').length,
+        fillTags: c.querySelectorAll('.cm-shuvix-fmcard-fill-tag').length,
+        fieldSlots: c.querySelectorAll('.cm-shuvix-fmcard-slot').length,
+        text: c.textContent ?? ''
+      }))`)
+  }
+}
+
+export interface MetaStripState {
+  /** 开关的 data-state */
+  state: 'on' | 'off'
+  /** 停用说明（只在停用时有）；没有为 null */
+  disabledNote: string | null
+  warnings: string[]
+  /** 条里的设置行（data-key，DOM 序）—— 今天恒是 ['enabled'] */
+  rows: string[]
+}
+
+export interface MetaStripPane {
+  /** 主区那张卡上有没有这一条 */
   present(): Promise<boolean>
   /** 等这一条上屏（get 回来之前它不渲染） */
   waitStrip(): Promise<void>
-  /** 等没有 id 的那一态：条在、设置行已渲染、不显示 id */
-  waitRows(): Promise<void>
-  /** 等就绪：显示了 id（给了 objectId 就等它）、设置行已渲染、没有在途写入 */
-  waitReady(objectId?: string): Promise<void>
   /** 快照；不在屏为 null */
-  state(): Promise<MdMetaStripState | null>
-  /** 改选档位（'' = 未设置） */
-  chooseThinking(level: string): Promise<void>
-  /** 在同一个下拉上接连改选几档（一次 eval 里依次派发 change，中间不让出） */
-  chooseThinkingBurst(levels: string[]): Promise<void>
-  /** 点「换新 id」 */
-  regenerate(): Promise<void>
-  /** 页面上全部属性卡的概况（DOM 序） */
-  cards(): Promise<MdMetaCardShot[]>
+  state(): Promise<MetaStripState | null>
+  /** 等开关落到某一态 */
+  waitState(state: 'on' | 'off'): Promise<void>
+  /** 点开关 */
+  toggle(): Promise<void>
 }
 
-export function mdMetaStripPane(main: CdpClient): MdMetaStripPane {
-  const STRIP = `document.querySelector('.cm-shuvix-fmcard-meta-strip')`
-  const THINKING_SELECT = `${STRIP}?.querySelector('.cm-shuvix-fmcard-meta-row[data-key="shuvix-thinking"] select')`
-  const state = (): Promise<MdMetaStripState | null> =>
-    main.eval<MdMetaStripState | null>(`(() => {
+export function metaStripPane(main: CdpClient): MetaStripPane {
+  const STRIP = `document.querySelector('.cm-shuvix-fmcard')?.querySelector('.cm-shuvix-fmcard-meta-strip')`
+  const state = (): Promise<MetaStripState | null> =>
+    main.eval<MetaStripState | null>(`(() => {
       const strip = ${STRIP}
       if (!strip) return null
-      const rows = [...strip.querySelectorAll('.cm-shuvix-fmcard-meta-row')].map((row) => {
-        const slot = row.querySelector('.cm-shuvix-fmcard-meta-slot')
-        const select = slot?.querySelector('select')
-        const button = slot?.querySelector('button')
-        return {
-          key: row.getAttribute('data-key') ?? '',
-          value: select ? select.value : (button?.textContent ?? '').trim(),
-          declared: !!row.querySelector('.cm-shuvix-fmcard-meta-declared'),
-          disabled: !!(select ?? button)?.disabled
-        }
-      })
-      const regenerate = strip.querySelector('.cm-shuvix-fmcard-meta-regenerate')
-      const headerButtons = [...strip.querySelectorAll('button')]
-        .filter((b) => !b.closest('.cm-shuvix-fmcard-meta-row') && !b.hasAttribute('data-info-hint'))
-        .map((b) =>
-          b.classList.contains('cm-shuvix-fmcard-meta-regenerate')
-            ? 'regenerate'
-            : (b.textContent ?? '').trim()
-        )
       return {
-        objectId: strip.querySelector('.cm-shuvix-fmcard-meta-id')?.textContent?.trim() || null,
-        regenerate: !!regenerate,
-        regenerateDisabled: !!regenerate?.disabled,
-        headerButtons,
-        saving: !!strip.querySelector('.cm-shuvix-fmcard-meta-saving'),
-        rows,
+        state: strip.querySelector('.cm-shuvix-fmcard-meta-toggle')?.getAttribute('data-state') ?? '',
+        disabledNote: strip.querySelector('.cm-shuvix-fmcard-meta-disabled')?.textContent?.trim() ?? null,
         warnings: [...strip.querySelectorAll('.cm-shuvix-fmcard-meta-warning')].map((w) =>
           (w.textContent ?? '').trim()
-        )
+        ),
+        rows: [...strip.querySelectorAll('.cm-shuvix-fmcard-meta-row')].map((r) => r.getAttribute('data-key'))
       }
     })()`)
-  const clickButton = async (cls: string, what: string): Promise<void> => {
-    await until(
-      () => main.eval<boolean>(`!!${STRIP}?.querySelector('.${cls}:not(:disabled)')`),
-      `meta strip ${what} button`
-    )
-    await main.eval(`${STRIP}.querySelector('.${cls}').click()`)
-  }
-  /**
-   * 依次改选（一次 eval 里，中间不让出事件循环）。始终派发在**一开始拿到的那个** select 上：第一次改选
-   * 若触发自动分配 id，卡片随即重建、新的条要等 React 渲染才上屏，而旧的条要到下一个微任务才卸载 ——
-   * 接着的改选正是「等待期间在旧实例上又改了一下」
-   */
-  const choose = async (levels: string[]): Promise<void> => {
-    const outcome = await main.eval<string>(`(() => {
-      const select = ${THINKING_SELECT}
-      if (!select) return 'missing'
-      if (select.disabled) return 'disabled'
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
-      for (const level of ${JSON.stringify(levels)}) {
-        setter.call(select, level)
-        select.dispatchEvent(new Event('change', { bubbles: true }))
-      }
-      return 'ok'
-    })()`)
-    if (outcome !== 'ok') throw new Error(`meta strip thinking select is ${outcome}`)
-  }
-
   return {
-    present: () => main.eval<boolean>(`${STRIP} !== null`),
+    present: () => main.eval<boolean>(`!!${STRIP}`),
     waitStrip: async () => {
-      await until(() => main.eval<boolean>(`${STRIP} !== null`), 'meta strip mounted')
-    },
-    waitRows: async () => {
-      await until(async () => {
-        const s = await state()
-        return !!s && s.rows.length > 0 && s.objectId === null
-      }, 'meta strip rows without an id')
-    },
-    waitReady: async (objectId) => {
-      await until(
-        async () => {
-          const s = await state()
-          if (!s || !s.objectId || s.rows.length === 0 || s.saving) return false
-          return objectId === undefined || s.objectId === objectId
-        },
-        `meta strip ready${objectId ? ` (${objectId})` : ''}`
-      )
+      await until(() => main.eval<boolean>(`!!${STRIP}`), 'meta strip mounted')
     },
     state,
-    chooseThinking: (level) => choose([level]),
-    chooseThinkingBurst: (levels) => choose(levels),
-    regenerate: () => clickButton('cm-shuvix-fmcard-meta-regenerate', 'regenerate'),
-    cards: () =>
-      main.eval<MdMetaCardShot[]>(`[...document.querySelectorAll('.cm-shuvix-fmcard')].map((c) => ({
-        name: c.querySelector('.cm-shuvix-fmcard-input[data-key="name"]')?.value ?? null,
-        strip: !!c.querySelector('.cm-shuvix-fmcard-meta-strip'),
-        fieldSlots: c.querySelectorAll('.cm-shuvix-fmcard-slot').length,
-        metaSlots: c.querySelectorAll('.cm-shuvix-fmcard-meta-slot').length,
-        text: c.textContent ?? ''
-      }))`)
+    waitState: async (want) => {
+      await until(async () => (await state())?.state === want, `meta strip switch ${want}`)
+    },
+    toggle: async () => {
+      await until(
+        () => main.eval<boolean>(`!!${STRIP}?.querySelector('.cm-shuvix-fmcard-meta-toggle')`),
+        'meta strip switch'
+      )
+      await main.eval(`${STRIP}.querySelector('.cm-shuvix-fmcard-meta-toggle').click()`)
+    }
   }
 }
 
@@ -4095,6 +4096,10 @@ export interface PoliciesBuiltinRow {
   struck: boolean
   /** 「已覆盖」徽标（按三语认，同 Bots / 智能体组的口径） */
   badge: boolean
+  /** 停用了（内置的停用开关；沿用内置 id 的覆盖副本一并算）：行上的 data 属性 */
+  disabled: boolean
+  /** 「已停用」徽标（停用且没被覆盖才挂 —— 被覆盖的那份已经划线、挂着「已覆盖」） */
+  disabledBadge: boolean
   /** 行首的锁 —— 内置恒有（生效与否都只能看）；用户策略行首留空 */
   locked: boolean
   /** 行的 title 提示（未被覆盖时是策略描述，被覆盖时说清「有个同名的自定义策略」） */
@@ -4108,6 +4113,10 @@ export interface PoliciesUserRow {
   /** 同名里输掉了：划线 */
   struck: boolean
   badge: boolean
+  /** 停用了（内置的停用开关；沿用内置 id 的覆盖副本一并算）：行上的 data 属性 */
+  disabled: boolean
+  /** 「已停用」徽标（停用且没被覆盖才挂 —— 被覆盖的那份已经划线、挂着「已覆盖」） */
+  disabledBadge: boolean
   /** 行首的锁（用户策略**不该**有：它可编辑，锁是内置的标记） */
   locked: boolean
   /** 行的 title 提示（输掉的那份说清被谁压过） */
@@ -4167,10 +4176,13 @@ export interface PoliciesSidebarPane {
   /** 内置行的菜单项（开一次 ⋮、不选任何项）—— 要断 enabled，故回完整 items */
   builtinRowMenu(name: string): Promise<MenuItemShot[] | null>
   /** 开内置行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
-  pickBuiltinRowMenu(name: string, actionId: 'create-override'): Promise<void>
+  pickBuiltinRowMenu(name: string, actionId: 'create-override' | 'toggle-enabled'): Promise<void>
   /** 用户策略行菜单里的动作 id（生效的那份按名删、输掉的那份按文件名删） */
   userRowMenuIds(fileName: string): Promise<string[] | null>
-  pickUserRowMenu(fileName: string, actionId: 'delete-policy' | 'delete-policy-file'): Promise<void>
+  pickUserRowMenu(
+    fileName: string,
+    actionId: 'delete-policy' | 'delete-policy-file' | 'toggle-enabled'
+  ): Promise<void>
   pickInvalidRowMenu(fileName: string, actionId: 'delete-policy-file'): Promise<void>
   /** 组头菜单的**原始 items**（开一次 ⋮、不选任何项；含分隔符 —— PS-C1 断的是形状） */
   groupMenuItems(): Promise<MenuItemShot[] | null>
@@ -4197,11 +4209,16 @@ export function policiesSidebarPane(main: CdpClient): PoliciesSidebarPane {
     `document.querySelector('[data-policy-invalid-row=${JSON.stringify(fileName)}]')`
   const ACTIVE = (list: string): string =>
     `${list}.find((r) => r.className.includes('bg-bg-active'))`
-  /** 行的标签与徽标读法（三种行同构：span.truncate 是标签，划线在它身上） */
+  /**
+   * 行的标签与徽标读法（三种行同构：span.truncate 是标签，划线在它身上）。停用（内置的停用开关）=
+   * 行上的 `data-policy-disabled` + 一枚「已停用」徽标（按三语的 sidebar.disabledBadge 全等认）
+   */
   const rowShot = (extra: string): string => `({
     label: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
     struck: !!r.querySelector('.line-through'),
     badge: [...r.querySelectorAll('span')].some((s) => /覆盖|Overridden|上書き/.test(s.textContent ?? '')),
+    disabled: r.hasAttribute('data-policy-disabled'),
+    disabledBadge: [...r.querySelectorAll('span')].some((s) => ['已禁用', 'Disabled', '無効'].includes((s.textContent ?? '').trim())),
     ${extra}
   })`
 
@@ -4377,6 +4394,10 @@ export interface HooksBuiltinRow {
   struck: boolean
   /** 「已覆盖」徽标（按三语认，同策略组的口径） */
   badge: boolean
+  /** 停用了（内置的停用开关；沿用内置 id 的覆盖副本一并算）：行上的 data 属性 */
+  disabled: boolean
+  /** 「已停用」徽标（停用且没被覆盖才挂 —— 被覆盖的那份已经划线、挂着「已覆盖」） */
+  disabledBadge: boolean
   /** 行首的锁 —— 内置恒有（生效与否都只能看）；用户 hook 行首留空 */
   locked: boolean
   /** 行的 title 提示（未被覆盖时是 hook 描述，被覆盖时说清「有个同名的自定义 hook」） */
@@ -4390,6 +4411,10 @@ export interface HooksUserRow {
   /** 同名里输掉了：划线 */
   struck: boolean
   badge: boolean
+  /** 停用了（内置的停用开关；沿用内置 id 的覆盖副本一并算）：行上的 data 属性 */
+  disabled: boolean
+  /** 「已停用」徽标（停用且没被覆盖才挂 —— 被覆盖的那份已经划线、挂着「已覆盖」） */
+  disabledBadge: boolean
   /** 行首的锁（用户 hook **不该**有：它可编辑，锁是内置的标记） */
   locked: boolean
   /** 行的 title 提示（输掉的那份说清被谁压过） */
@@ -4449,10 +4474,13 @@ export interface HooksSidebarPane {
   /** 内置行的菜单项（开一次 ⋮、不选任何项）—— 要断 enabled，故回完整 items */
   builtinRowMenu(name: string): Promise<MenuItemShot[] | null>
   /** 开内置行的 ⋮ 并选中一项（自带「该项真的在菜单里」的核对） */
-  pickBuiltinRowMenu(name: string, actionId: 'create-override'): Promise<void>
+  pickBuiltinRowMenu(name: string, actionId: 'create-override' | 'toggle-enabled'): Promise<void>
   /** 用户 hook 行菜单里的动作 id（生效的那份按名删、输掉的那份按文件名删） */
   userRowMenuIds(fileName: string): Promise<string[] | null>
-  pickUserRowMenu(fileName: string, actionId: 'delete-hook' | 'delete-hook-file'): Promise<void>
+  pickUserRowMenu(
+    fileName: string,
+    actionId: 'delete-hook' | 'delete-hook-file' | 'toggle-enabled'
+  ): Promise<void>
   pickInvalidRowMenu(fileName: string, actionId: 'delete-hook-file'): Promise<void>
   /** 组头菜单的**原始 items**（开一次 ⋮、不选任何项；含分隔符 —— HS-C1 断的是形状） */
   groupMenuItems(): Promise<MenuItemShot[] | null>
@@ -4479,11 +4507,16 @@ export function hooksSidebarPane(main: CdpClient): HooksSidebarPane {
     `document.querySelector('[data-hook-invalid-row=${JSON.stringify(fileName)}]')`
   const ACTIVE = (list: string): string =>
     `${list}.find((r) => r.className.includes('bg-bg-active'))`
-  /** 行的标签与徽标读法（三种行同构：span.truncate 是标签，划线在它身上） */
+  /**
+   * 行的标签与徽标读法（三种行同构：span.truncate 是标签，划线在它身上）。停用（内置的停用开关）=
+   * 行上的 `data-hook-disabled` + 一枚「已停用」徽标（按三语的 sidebar.disabledBadge 全等认）
+   */
   const rowShot = (extra: string): string => `({
     label: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
     struck: !!r.querySelector('.line-through'),
     badge: [...r.querySelectorAll('span')].some((s) => /覆盖|Overridden|上書き/.test(s.textContent ?? '')),
+    disabled: r.hasAttribute('data-hook-disabled'),
+    disabledBadge: [...r.querySelectorAll('span')].some((s) => ['已禁用', 'Disabled', '無効'].includes((s.textContent ?? '').trim())),
     ${extra}
   })`
 

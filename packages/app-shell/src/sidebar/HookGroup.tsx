@@ -49,6 +49,14 @@ export interface HookGroupItem {
   overridden?: boolean
   /** 压过它的那份用户文件的文件名 */
   overriddenBy?: string
+  /**
+   * 对象 id（`shuvix-id`）：内置为 `hook:builtin:<name>`，沿用了内置 id 的覆盖副本也是它 —— 这样的行有停用开关
+   */
+  objectId?: string
+  /** 这一行有禁用开关（宿主判定：持有确有其物的内置 id —— 内置本身，或沿用了它的覆盖副本） */
+  disableable?: boolean
+  /** 被用户停用（存在 ShuviX 里，不写文件）—— 运行时当它不存在 */
+  disabled?: boolean
 }
 
 /** 目录里无法解析的文件（身份是文件名 —— 它解析不出 name；不触发也不遮蔽内置同名 hook） */
@@ -76,6 +84,11 @@ export interface HookGroupAdapter {
   delete: (hook: HookGroupItem) => void
   /** 按文件名删除：解析不过的、以及同名里被遮蔽的那几份（按名删会删到生效的那份） */
   deleteFile: (fileName: string) => void
+  /**
+   * 停用 / 启用（内置 hook的停用开关，ShuviX 扩展元数据）—— 只对 objectId 是内置 id 的行出现；
+   * 宿主没提供就没有这一项
+   */
+  setEnabled?: (item: HookGroupItem, enabled: boolean) => void | Promise<unknown>
 }
 
 export interface HookGroupProps {
@@ -170,6 +183,18 @@ export function HookGroup({ adapter }: HookGroupProps): React.JSX.Element {
     })
   }
 
+  /**
+   * 禁用开关的菜单项（存在 ShuviX 里）：只给宿主标了 disableable 的行 —— 内置行本身，以及沿用了内置 id 的
+   * 覆盖副本（它们共用这一项设置）。宿主没提供 setEnabled 就没有
+   */
+  const enabledMenuItems = (item: HookGroupItem): ContextMenuItem[] =>
+    adapter.setEnabled && item.disableable
+      ? [{ id: 'toggle-enabled', label: item.disabled ? t('common.enable') : t('common.disable') }]
+      : []
+  const onEnabledMenuAction = (item: HookGroupItem, action: string): void => {
+    if (action === 'toggle-enabled') void adapter.setEnabled?.(item, !!item.disabled)
+  }
+
   /** 内置行：设置页头部那颗按钮的新家。已被同名用户 hook 覆盖时置灰 —— 再落一份会被主进程拒绝 */
   const openBuiltinMenu = (hook: HookGroupItem, e: React.MouseEvent): void => {
     const items: ContextMenuItem[] = [
@@ -177,17 +202,24 @@ export function HookGroup({ adapter }: HookGroupProps): React.JSX.Element {
         id: 'create-override',
         label: t('tool.subAgentCreateOverride'),
         enabled: !hook.overridden
-      }
+      },
+      ...enabledMenuItems(hook)
     ]
     void showContextMenu(e, items, (action) => {
       if (action === 'create-override') void adapter.createOverride(hook)
+      onEnabledMenuAction(hook, action)
     })
   }
 
   /** 生效的那份用户 hook：按名删（删掉后同名内置自动恢复生效） */
   const openUserMenu = (hook: HookGroupItem, e: React.MouseEvent): void => {
-    void showContextMenu(e, [{ id: 'delete-hook', label: t('sidebar.deleteHook') }], (action) => {
+    const items: ContextMenuItem[] = [
+      ...enabledMenuItems(hook),
+      { id: 'delete-hook', label: t('sidebar.deleteHook') }
+    ]
+    void showContextMenu(e, items, (action) => {
       if (action === 'delete-hook') adapter.delete(hook)
+      onEnabledMenuAction(hook, action)
     })
   }
 
@@ -236,6 +268,7 @@ export function HookGroup({ adapter }: HookGroupProps): React.JSX.Element {
                   ? { 'data-hook-builtin-row': h.name }
                   : { 'data-hook-row': h.fileName })}
                 {...(h.overridden ? { 'data-hook-overridden': '' } : {})}
+                {...(h.disabled ? { 'data-hook-disabled': '' } : {})}
                 onClick={() =>
                   builtin
                     ? isActiveNote(true, h.fileName) || void adapter.openBuiltin(h)
@@ -263,7 +296,7 @@ export function HookGroup({ adapter }: HookGroupProps): React.JSX.Element {
                 </span>
                 <span
                   className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${
-                    h.overridden ? 'line-through opacity-60' : ''
+                    h.overridden ? 'line-through opacity-60' : h.disabled ? 'opacity-50' : ''
                   }`}
                 >
                   {h.displayName}
@@ -271,6 +304,12 @@ export function HookGroup({ adapter }: HookGroupProps): React.JSX.Element {
                 {h.overridden && (
                   <span className="flex-shrink-0 px-1 rounded text-[9px] bg-bg-secondary text-text-tertiary group-hover:invisible">
                     {t('settings.hookOverridden')}
+                  </span>
+                )}
+                {/* 停用（内置的停用开关）：被同名覆盖的那份已经划线、不生效，不再叠一枚 */}
+                {h.disabled && !h.overridden && (
+                  <span className="flex-shrink-0 px-1 rounded text-[9px] bg-bg-secondary text-text-tertiary group-hover:invisible">
+                    {t('sidebar.disabledBadge')}
                   </span>
                 )}
                 <RowMenuButton

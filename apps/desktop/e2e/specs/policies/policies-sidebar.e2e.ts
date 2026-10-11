@@ -220,8 +220,9 @@ describe('侧栏安全策略分组', () => {
     expect(builtin.map((r) => r.name).sort()).toEqual(
       BUILTIN_POLICY_SPECS.map((s) => s.name).sort()
     )
-    // 行首那把锁是「内置」的标记（生效与否都只能看）；此时没有任何同名覆盖
+    // 行首那把锁是「内置」的标记（生效与否都只能看）；此时没有任何同名覆盖，也没有哪份被停用
     expect(builtin.every((r) => r.locked && !r.struck && !r.badge)).toBe(true)
+    expect(builtin.every((r) => !r.disabled && !r.disabledBadge)).toBe(true)
     expect(await pane.userRows()).toEqual([])
     expect(await pane.invalidRows()).toEqual([])
   })
@@ -393,13 +394,15 @@ describe('侧栏安全策略分组', () => {
     )
   })
 
-  it('PS-C3 内置行菜单只有「创建覆盖副本」一项，未被覆盖时可用', async () => {
+  it('PS-C3 内置行菜单 = 「创建覆盖副本」+ 停用开关（文案是当前语言的 Disable），未被覆盖时覆盖入口可用', async () => {
     const items = await pane.builtinRowMenu(OVERRIDE_SAMPLE)
-    expect(items?.map((i) => i.id)).toEqual(['create-override'])
+    expect(items?.map((i) => i.id)).toEqual(['create-override', 'toggle-enabled'])
     expect(items?.find((i) => i.id === 'create-override')?.enabled).not.toBe(false)
+    // 这时界面语言钉在 en（beforeAll）
+    expect(items?.find((i) => i.id === 'toggle-enabled')?.label).toBe(en.common.disable)
   })
 
-  it('PS-C4 内置行菜单「创建覆盖副本」：同名用户文件逐字节等于盘上当前语言那份 md 并可解析；内置行划线带徽标（锁仍在）、覆盖入口置灰而非消失、副本笔记成活动行', async () => {
+  it('PS-C4 内置行菜单「创建覆盖副本」：同名用户文件逐字节等于盘上当前语言那份 md 并可解析；内置行划线带徽标（锁仍在）、覆盖入口置灰而非消失（停用开关照在）、副本笔记成活动行', async () => {
     // getSource(builtin) 的契约 = 随包目录里当前语言那份 md 的逐字原文（YAML 注释与键序
     // 原样；dev 实例即本仓 packages/agent-runtime/src/security/builtinPolicies/md/）——
     // 副本必须与它逐字节相等。basePath 是列表裁决时按同一候选序挑中的那份文件的路径
@@ -435,8 +438,10 @@ describe('侧栏安全策略分组', () => {
 
     // 被遮蔽的内置不再给覆盖入口 —— 菜单项置灰而不是消失
     const items = await pane.builtinRowMenu(OVERRIDE_SAMPLE)
-    expect(items?.map((i) => i.id)).toEqual(['create-override'])
+    expect(items?.map((i) => i.id)).toEqual(['create-override', 'toggle-enabled'])
     expect(items?.find((i) => i.id === 'create-override')?.enabled).toBe(false)
+    // 停用开关挂在内置 id 上（覆盖副本也沿用它）：被覆盖的内置行照样给开关
+    expect(items?.find((i) => i.id === 'toggle-enabled')?.enabled).not.toBe(false)
 
     await until(
       async () => (await pane.activeRow())?.row === `${OVERRIDE_SAMPLE}.md`,

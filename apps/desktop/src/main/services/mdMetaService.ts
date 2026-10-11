@@ -20,11 +20,13 @@ import {
   isDeclared,
   isJsonValue,
   normalizeObjectId,
+  parseObjectId,
   type MdMetaNoteView,
   type MdMetaWriteResult,
   type MdObjectKind
 } from '@shuvix/chat-protocol/mdMeta'
 import { validateAgentFill } from '@shuvix/agent-runtime'
+import { isKnownDisableableBuiltin } from '../utils/builtinDisable'
 import { appEventBus } from '../utils/appEventBus'
 import { mdMetaStore } from './mdMeta'
 import { registryNoteFileOf, type RegistryNoteFile } from './registryNotes'
@@ -92,8 +94,35 @@ export function noteView(sessionId: string): MdMetaNoteView | null {
     fill,
     declared,
     warnings: rejected ? [rejected] : [],
-    readOnly: note.builtin
+    readOnly: note.builtin,
+    // 禁用开关：只给能禁用的对象（内置 hook / 安全策略，或沿用了内置 id 的覆盖副本），且 id 的类型就是这类文件
+    ...(objectId && isKnownDisableableBuiltin(objectId, note.kind)
+      ? { enabled: !mdMetaStore.isDisabled(objectId) }
+      : {})
   }
+}
+
+/**
+ * 停用 / 启用一个内置安全策略或 hook（侧栏行菜单与属性卡共用；按内置 id 认，不收路径）。停用是改变
+ * 安全面的操作（停掉 ask-on-command 就不再问命令，停掉 auto-review 审批就全回到你手上）—— 写入口只有
+ * 界面上的这一个，agent 碰不到。状态真的变了才广播这类文件的 `*.changed`。
+ */
+export function setEnabled(params: { objectId: string; enabled: boolean }): MdMetaWriteResult {
+  const objectId = normalizeObjectId(params?.objectId)
+  if (!objectId || !isKnownDisableableBuiltin(objectId)) {
+    return { success: false, reason: 'key-not-allowed', message: 'not a builtin policy or hook' }
+  }
+  if (typeof params.enabled !== 'boolean') {
+    return { success: false, reason: 'invalid-value', message: 'enabled must be a boolean' }
+  }
+  if (mdMetaStore.setEnabled(objectId, params.enabled)) publishChanged(kindOf(objectId))
+  return { success: true }
+}
+
+/** 内置 id 里的类型段 */
+function kindOf(objectId: string): MdObjectKind {
+  const parsed = parseObjectId(objectId)
+  return parsed?.form === 'builtin' ? parsed.kind : 'agent'
 }
 
 type Checked =

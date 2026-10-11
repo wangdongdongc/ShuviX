@@ -53,6 +53,7 @@ import {
 import { getBuiltinHooksDir, getDefaultHooksDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
 import { ensureObjectId } from '../utils/mdObjectId'
+import { isKnownDisableableBuiltin } from '../utils/builtinDisable'
 import { agentManager } from '../agents/AgentManager'
 import { agentService } from './agentService'
 import { getModelRegistry, providerCredentialPort } from './models'
@@ -84,6 +85,12 @@ export interface HookListItem {
   overridden?: boolean
   /** 压过它的那份用户文件的文件名 */
   overriddenBy?: string
+  /** 对象 id（`shuvix-id`；内置为 `hook:builtin:<name>`） */
+  objectId?: string
+  /** 这一行有禁用开关（持有一个确有其物的内置 hook id：内置本身，或沿用了它的覆盖副本） */
+  disableable?: boolean
+  /** 被用户停用（内置 hook 的停用开关；沿用内置 id 的覆盖副本一并算）—— 不触发 */
+  disabled?: boolean
 }
 
 /**
@@ -104,6 +111,21 @@ interface ScanResult {
 class HookService {
   private readonly userDir = getDefaultHooksDir()
   private runner: HookRunner | null = null
+  /**
+   * 停用开关的读口（ShuviX 扩展元数据，按对象 id 认）。由主进程入口注入（setDisabledReader，读 services/mdMeta
+   * 的内存快照）—— 本服务不直接依赖数据库：单测里没有库，没注入 = 都不停用。
+   */
+  private disabledReader: ((objectId: string) => boolean) | null = null
+
+  /** 注入停用开关的读口（主进程启动时调一次；null = 撤掉） */
+  setDisabledReader(reader: ((objectId: string) => boolean) | null): void {
+    this.disabledReader = reader
+  }
+
+  /** 这份 hook 被停用了吗（内置 hook 的停用开关；沿用内置 id 的覆盖副本一并算） */
+  private isDisabled(file: ParsedHookFile): boolean {
+    return !!file.objectId && !!this.disabledReader?.(file.objectId)
+  }
 
   /**
    * 目录扫描缓存 —— 键是「每份文件的 inode+mtime+size」的指纹。
@@ -313,10 +335,14 @@ class HookService {
     )?.value
   }
 
-  /** 生效集（同名裁决之后，内置在前、用户在后）；runner 每次 fire 现算，文件改动即时生效 */
+  /**
+   * 生效集（同名裁决之后，内置在前、用户在后）；runner 每次 fire 现算，文件改动即时生效。
+   * 被停用的不在其中 —— 同名裁决照常（它仍然遮蔽同名的那几份），只是不触发；判定型的 auto-review
+   * 停用后审批请求不经审查员、直接落到人手上
+   */
   private listForEngine(): HookRegistryEntry[] {
     return this.resolveHooks()
-      .filter((entry) => !entry.shadowedBy)
+      .filter((entry) => !entry.shadowedBy && !this.isDisabled(entry.value.file))
       .map((entry) => ({ file: entry.value.file, source: entry.source }))
   }
 
@@ -360,7 +386,12 @@ class HookService {
       agent: file.agent,
       triggers: file.bindings.map((b) => b.trigger),
       source,
-      basePath
+      basePath,
+      ...(file.objectId ? { objectId: file.objectId } : {}),
+      ...(file.objectId && isKnownDisableableBuiltin(file.objectId, 'hook')
+        ? { disableable: true }
+        : {}),
+      ...(this.isDisabled(file) ? { disabled: true } : {})
     }
   }
 

@@ -372,6 +372,11 @@ export interface SecurityHostProvider {
   /** 用户策略 md，全部可解析的份数（含同名的几份，谁生效见 resolvePolicyFiles）；无文件系统的宿主省略 */
   getUserPolicies?(): UserPolicyFile[]
   /**
+   * 这份策略被用户停用了吗（ShuviX 扩展元数据：内置安全策略的停用开关，按对象 id 认 —— 沿用内置 id 的覆盖副本
+   * 一并算）。停用的策略不参与装配，等于这道门不存在（「没有策略 = 放行」）。宿主不实现 = 都不停用。
+   */
+  isPolicyDisabled?(policy: ParsedPolicyFile): boolean
+  /**
    * 内置策略 md 的读取口（入参是目录内文件名如 `ask-on-command.zh.md`，没有那一版回 null）——
    * 内置策略随包发布成文件后运行时现读：桌面注入「`Resources/builtin-policies/` 目录现读」，
    * 扩展注入构建期内联的同一批文件（security/builtinPolicies/inlineSources.ts）。

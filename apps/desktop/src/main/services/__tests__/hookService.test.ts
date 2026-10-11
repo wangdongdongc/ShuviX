@@ -14,6 +14,9 @@
  * 判定型埋点（hookTriggers.decide，HS-22…28）：出厂即有内置 auto-review 绑着 permission.request，
  * 所以任何一次 decide 都至少派发它一次 —— 用户 hook 的用例按 resultContract.sourceLabel 区分两者。
  *
+ * 停用开关（HS-D*）：读口由主进程入口注入（setDisabledReader），这里直接注入一个函数 —— 停用的 hook 照常参与
+ * 同名裁决（仍遮蔽同名的几份），只是不触发；列表行带 objectId / disableable / disabled。
+ *
  * 单例的 runner 跨用例存活，去重键是「hook × 会话」：挂起的 run 必须在用例内收掉（afterEach 兜底中止）。
  * 扫描缓存按「名字:inode:mtime:size」指纹失效，钉 mtime 的用例各用独有文件名，免得跨用例撞指纹。
  */
@@ -216,6 +219,8 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  // 停用开关的读口是单例上的状态：每条用例收回（没注入 = 都不停用）
+  hookService.setDisabledReader(null)
   // 兜底：挂起的 run 不许串进下一条用例（去重键是 hook × 会话）
   hookService.abortSessionRuns('s1')
   hookService.abortSessionRuns('s2')
@@ -452,7 +457,7 @@ describe('hookService — 内置 hook 与运行时装配', () => {
     expect(mocks.runTask).toHaveBeenCalledTimes(1)
   })
 
-  it('HS-2 目录不存在：设置页恰内置两行（按名字排，无 overridden 键），非法列表为空', () => {
+  it('HS-2 目录不存在：设置页恰内置两行（按名字排，无 overridden 键；带内置 id 与 disableable，没注入读口就没有 disabled），非法列表为空', () => {
     expect(existsSync(state.dir)).toBe(false)
     expect(hookService.listForSettings()).toStrictEqual([
       {
@@ -462,7 +467,9 @@ describe('hookService — 内置 hook 与运行时装配', () => {
         agent: 'permission-reviewer',
         triggers: ['permission.request'],
         source: 'builtin',
-        basePath: join(state.builtinDir, 'auto-review.md')
+        basePath: join(state.builtinDir, 'auto-review.md'),
+        objectId: 'hook:builtin:auto-review',
+        disableable: true
       },
       {
         name: 'auto-title',
@@ -472,7 +479,9 @@ describe('hookService — 内置 hook 与运行时装配', () => {
         triggers: BUILTIN_TRIGGERS,
         source: 'builtin',
         // 内置的 basePath 是随包那份当前语言版（这里 = 仓库里的 en 文件），不再为空串
-        basePath: join(state.builtinDir, 'auto-title.md')
+        basePath: join(state.builtinDir, 'auto-title.md'),
+        objectId: 'hook:builtin:auto-title',
+        disableable: true
       }
     ])
     expect(hookService.listInvalid()).toEqual([])
@@ -703,8 +712,11 @@ describe('hookService — 同名覆盖与同名的几份', () => {
         agent: 'permission-reviewer',
         triggers: ['permission.request'],
         source: 'builtin',
-        basePath: join(state.builtinDir, 'auto-review.md')
+        basePath: join(state.builtinDir, 'auto-review.md'),
+        objectId: 'hook:builtin:auto-review',
+        disableable: true
       },
+      // 用户文件没写 shuvix-id：没有 objectId，也没有停用开关
       {
         name: 'auto-title',
         displayName: 'Mine',
@@ -723,6 +735,8 @@ describe('hookService — 同名覆盖与同名的几份', () => {
         source: 'builtin',
         // 内置的 basePath 是随包那份当前语言版（这里 = 仓库里的 en 文件），不再为空串
         basePath: join(state.builtinDir, 'auto-title.md'),
+        objectId: 'hook:builtin:auto-title',
+        disableable: true,
         overridden: true,
         overriddenBy: 'auto-title.md'
       }
@@ -1129,7 +1143,7 @@ describe('hookService — 设置页列表与目录入口', () => {
     hookService.init()
   })
 
-  it('HS-20 列表项只有七个键（被遮蔽的多两个）、不外传正文与绑定；按名字排、同名生效在前', () => {
+  it('HS-20 列表项只有七个键（内置多 objectId / disableable，被遮蔽的多两个；没注入读口永远没有 disabled）、不外传正文与绑定；按名字排、同名生效在前', () => {
     put('b.md', userHook('b'))
     put('A.md', userHook('A'))
     put('c.md', userHook('c', { body: 'SECRET BODY TEXT' }))
@@ -1154,9 +1168,13 @@ describe('hookService — 设置页列表与目录入口', () => {
       'triggers'
     ]
     for (const row of rows) {
-      expect(Object.keys(row).sort()).toEqual(
-        row.overridden ? [...baseKeys, 'overridden', 'overriddenBy'].sort() : baseKeys
-      )
+      const expected = [
+        ...baseKeys,
+        ...(row.source === 'builtin' ? ['objectId', 'disableable'] : []),
+        ...(row.overridden ? ['overridden', 'overriddenBy'] : [])
+      ].sort()
+      expect(Object.keys(row).sort(), `${row.name} ${row.source}`).toEqual(expected)
+      expect(row).not.toHaveProperty('disabled')
     }
     expect(JSON.stringify(rows)).not.toContain('SECRET BODY TEXT')
   })
@@ -1447,5 +1465,197 @@ describe('hookService — 对象 id（shuvix-id）', () => {
     firePrompt()
     await waitRuns(1)
     expect(descriptions()).toEqual(['Broken Id'])
+  })
+})
+
+describe('hookService — 停用开关（内置 hook，按对象 id 认）', () => {
+  const TITLE_ID = 'hook:builtin:auto-title'
+  const REVIEW_ID = 'hook:builtin:auto-review'
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  /** 停用这几个 id 的读口 */
+  const disabling = (...ids: string[]): ((objectId: string) => boolean) => {
+    const set = new Set(ids)
+    return (objectId) => set.has(objectId)
+  }
+  const withIdLine = (text: string, id: string): string =>
+    text.replace('shuvix: hook v1\n', `shuvix: hook v1\nshuvix-id: ${id}\n`)
+  const row = (
+    name: string,
+    source: 'builtin' | 'user',
+    fileName?: string
+  ): ReturnType<typeof hookService.listForSettings>[number] | undefined =>
+    hookService
+      .listForSettings()
+      .find(
+        (item) =>
+          item.name === name &&
+          item.source === source &&
+          (fileName === undefined || basename(item.basePath) === fileName)
+      )
+  const reviewerRuns = (): number =>
+    runs().filter((params) => params.agentType.name === 'permission-reviewer').length
+  const titlerRuns = (): number =>
+    runs().filter((params) => params.agentType.name === 'titler').length
+
+  beforeEach(() => {
+    hookService.init()
+  })
+
+  it('HS-D1 没注入读口：内置 auto-title 照常派发 titler', async () => {
+    firePrompt({ isDefaultTitle: true })
+    await waitRuns(1)
+    expect(titlerRuns()).toBe(1)
+  })
+
+  it('HS-D2 读口停用 auto-title → 列表那一行 disabled:true；默认标题的 prompt 不派发 titler；auto-review 不受影响', async () => {
+    hookService.setDisabledReader(disabling(TITLE_ID))
+    expect(row('auto-title', 'builtin')).toMatchObject({
+      objectId: TITLE_ID,
+      disableable: true,
+      disabled: true
+    })
+    expect(row('auto-review', 'builtin')).not.toHaveProperty('disabled')
+
+    firePrompt({ isDefaultTitle: true })
+    await settle()
+    expect(titlerRuns()).toBe(0)
+
+    await hookTriggers.decide('permission.request', permissionRequest())
+    expect(reviewerRuns()).toBe(1)
+  })
+
+  it('HS-D3 读口停用 auto-review → decide 直接 null、不派发；agentsBoundTo(permission.request) 为空', async () => {
+    hookService.setDisabledReader(disabling(REVIEW_ID))
+    expect(await hookTriggers.decide('permission.request', permissionRequest())).toBeNull()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+    expect([...hookService.agentsBoundTo('permission.request')]).toEqual([])
+  })
+
+  it('HS-D4 读口只问带 id 的文件：() => true 停掉两份内置，没写 shuvix-id 的用户 hook 照跑、没有 disabled；读口拿到的是归一后的 id', async () => {
+    const seen: string[] = []
+    hookService.setDisabledReader((objectId) => {
+      seen.push(objectId)
+      return objectId !== U
+    })
+    put('plain.md', userHook('plain', { displayName: 'Plain' }))
+    put('upper.md', withIdLine(userHook('upper', { displayName: 'Upper' }), U.toUpperCase()))
+
+    firePrompt({ isDefaultTitle: true })
+    await waitRuns(2)
+    expect(descriptions().sort()).toEqual(['Plain', 'Upper'])
+    expect(titlerRuns()).toBe(2) // 两份用户 hook 的 agent 都是 titler；内置 auto-title 没跑
+    expect(descriptions()).not.toContain(BUILTIN_TITLE)
+
+    expect(await hookTriggers.decide('permission.request', permissionRequest())).toBeNull()
+    expect(reviewerRuns()).toBe(0)
+
+    expect(row('plain', 'user')).not.toHaveProperty('disabled')
+    expect(row('plain', 'user')).not.toHaveProperty('objectId')
+    expect(row('upper', 'user')).toMatchObject({ objectId: U })
+    expect(row('upper', 'user')).not.toHaveProperty('disabled')
+    expect(row('upper', 'user')).not.toHaveProperty('disableable')
+    expect(seen).toContain(U)
+    expect(seen).not.toContain(U.toUpperCase())
+    expect(new Set(seen)).toEqual(new Set([TITLE_ID, REVIEW_ID, U]))
+  })
+
+  it('HS-D5 读口每次现读：两次 fire 之间切换（文件不动、扫描缓存是热的）', async () => {
+    let off = true
+    hookService.setDisabledReader((objectId) => off && objectId === TITLE_ID)
+    hookService.listForSettings() // 预热扫描缓存
+    firePrompt({ isDefaultTitle: true })
+    await settle()
+    expect(titlerRuns()).toBe(0)
+
+    off = false
+    firePrompt({ isDefaultTitle: true })
+    await waitRuns(1)
+    expect(titlerRuns()).toBe(1)
+    expect(row('auto-title', 'builtin')).not.toHaveProperty('disabled')
+  })
+
+  it('HS-D6 沿用内置 id 的覆盖副本 auto-title.md：用户行 disabled + disableable、不是 overridden；内置行 overridden + disabled；一次 fire 两份都不跑', async () => {
+    hookService.setDisabledReader(disabling(TITLE_ID))
+    put(
+      'auto-title.md',
+      withIdLine(
+        userHook('auto-title', { displayName: 'Copy', when: 'event.isDefaultTitle' }),
+        TITLE_ID
+      )
+    )
+    const user = row('auto-title', 'user')
+    expect(user).toMatchObject({ objectId: TITLE_ID, disableable: true, disabled: true })
+    expect(user).not.toHaveProperty('overridden')
+    expect(row('auto-title', 'builtin')).toMatchObject({
+      overridden: true,
+      overriddenBy: 'auto-title.md',
+      disabled: true
+    })
+
+    firePrompt({ isDefaultTitle: true })
+    await settle()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+  })
+
+  it('HS-D7 内置停用、用户副本换了自己的 UUID → 副本照跑；内置行 overridden + disabled；副本没有 disableable', async () => {
+    hookService.setDisabledReader(disabling(TITLE_ID))
+    put(
+      'auto-title.md',
+      withIdLine(userHook('auto-title', { displayName: 'Own', when: 'event.isDefaultTitle' }), U)
+    )
+    firePrompt({ isDefaultTitle: true })
+    await waitRuns(1)
+    expect(descriptions()).toEqual(['Own'])
+    expect(row('auto-title', 'builtin')).toMatchObject({ overridden: true, disabled: true })
+    const user = row('auto-title', 'user')
+    expect(user).toMatchObject({ objectId: U })
+    expect(user).not.toHaveProperty('disableable')
+    expect(user).not.toHaveProperty('disabled')
+  })
+
+  it('HS-D8 同名两份用户文件：生效的那份带内置 id 且被停用、输掉的那份是 UUID → 一个都不跑（停用的赢家照样遮蔽），输掉的标 overridden', async () => {
+    hookService.setDisabledReader(disabling(TITLE_ID))
+    put(
+      'auto-title.md',
+      withIdLine(
+        userHook('auto-title', { displayName: 'Winner', when: 'event.isDefaultTitle' }),
+        TITLE_ID
+      )
+    )
+    put(
+      'at.md',
+      withIdLine(userHook('auto-title', { displayName: 'Loser', when: 'event.isDefaultTitle' }), U)
+    )
+
+    firePrompt({ isDefaultTitle: true })
+    await settle()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+    expect(row('auto-title', 'user', 'auto-title.md')).toMatchObject({ disabled: true })
+    expect(row('auto-title', 'user', 'at.md')).toMatchObject({
+      overridden: true,
+      overriddenBy: 'auto-title.md'
+    })
+  })
+
+  it('HS-D9 名字不同、却带着 hook:builtin:auto-title 的用户 hook 跟着一起停用', async () => {
+    hookService.setDisabledReader(disabling(TITLE_ID))
+    put('other.md', withIdLine(userHook('other', { displayName: 'Other' }), TITLE_ID))
+    firePrompt({ isDefaultTitle: true })
+    await settle()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+    expect(row('other', 'user')).toMatchObject({
+      objectId: TITLE_ID,
+      disableable: true,
+      disabled: true
+    })
+  })
+
+  it('HS-D10 setDisabledReader(null) 收回读口 → 一切照常', async () => {
+    hookService.setDisabledReader(() => true)
+    hookService.setDisabledReader(null)
+    expect(row('auto-title', 'builtin')).not.toHaveProperty('disabled')
+    firePrompt({ isDefaultTitle: true })
+    await waitRuns(1)
+    expect(titlerRuns()).toBe(1)
   })
 })

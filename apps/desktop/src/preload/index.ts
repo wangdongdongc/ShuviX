@@ -435,7 +435,9 @@ const api = {
     setFill: (params: { sessionId: string; objectId: string; key: string; value: unknown }) =>
       ipcRenderer.invoke('mdMeta:setFill', params),
     unsetFill: (params: { sessionId: string; objectId: string; key: string }) =>
-      ipcRenderer.invoke('mdMeta:unsetFill', params)
+      ipcRenderer.invoke('mdMeta:unsetFill', params),
+    setEnabled: (params: { objectId: string; enabled: boolean }) =>
+      ipcRenderer.invoke('mdMeta:setEnabled', params)
   },
 
   // ============ 工具 ============

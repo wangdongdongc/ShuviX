@@ -212,6 +212,11 @@ every such write reach the user, add a `force-ask` policy on `vars.shuvixConfigD
 `policy-md`). Same-name copies follow the rule in the `shuvix-files`
 entry.
 
+A builtin hook can be **disabled** the same way as a builtin policy: "Disable" in its row's menu,
+or the *Enabled* switch under its properties. A disabled hook never runs; disabling `auto-review`
+sends every approval request straight to you. The switch is stored in ShuviX, not in the file, and
+an override copy keeps the builtin's id and follows the same switch.
+
 ## Deliberately absent
 
 No script block, no orchestration primitives, no result schema in the file (a decide trigger

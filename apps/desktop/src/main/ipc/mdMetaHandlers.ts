@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { noteView, setNoteFill, unsetNoteFill } from '../services/mdMetaService'
+import { noteView, setEnabled, setNoteFill, unsetNoteFill } from '../services/mdMetaService'
 
 /**
  * md 扩展元数据 IPC —— 属性卡「ShuviX 设置」条读写一份注册表笔记的补缺值（ChatApi `mdMeta`）。
@@ -13,6 +13,9 @@ export function registerMdMetaHandlers(): void {
     'mdMeta:setFill',
     (_event, params: { sessionId: string; objectId: string; key: string; value: unknown }) =>
       setNoteFill(params)
+  )
+  ipcMain.handle('mdMeta:setEnabled', (_event, params: { objectId: string; enabled: boolean }) =>
+    setEnabled(params)
   )
   ipcMain.handle(
     'mdMeta:unsetFill',

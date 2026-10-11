@@ -16,7 +16,7 @@
  * 字段）与 ChatEvent `tool_review`；DOM 只在 R1（「已审查」盾牌）/ R3（卡片上的审查意见）/
  * R8（「审查中」）读一眼，且经 pages.ts。
  *
- * 前提：`launchApp({ autoReview: true })`（harness 缺省用一份覆盖 auto-review 的 hook md 关掉审查），
+ * 前提：`launchApp({ autoReview: true })`（harness 缺省用内置 hook 的停用开关关掉审查），
  * 沙箱关掉（沙箱里的命令不问，也就轮不到审查）；每条用例一条新会话、自定义标题（默认标题会触发
  * auto-title，又是一路请求）。
  *
@@ -749,5 +749,73 @@ describe('子会话', () => {
     // 子会话自己的「用户消息」是父 agent 写的任务，单列
     expect(payload.delegatedTasks).toEqual([delegated])
     expect(await asksRaised(childSid)).toBe(0)
+  })
+})
+
+describe('停用开关', () => {
+  it('E2E-R11 [P2] 停用内置 auto-review（md 扩展元数据的停用开关）→ 询问直接到卡片：没有审查请求、卡片不带审查意见；重新启用 → 审查请求回来', async () => {
+    const setReview = (enabled: boolean): Promise<{ success: boolean }> =>
+      app.main.eval(
+        `window.api.mdMeta.setEnabled(${JSON.stringify({ objectId: 'hook:builtin:auto-review', enabled })})`
+      )
+    const reviewHook = async (): Promise<{ disabled?: boolean } | undefined> =>
+      (
+        await app.main.eval<Array<{ name: string; source: string; disabled?: boolean }>>(
+          'window.api.hook.list()'
+        )
+      ).find((h) => h.name === REVIEW_SOURCE && h.source === 'builtin')
+    onTestFinished(async () => {
+      await setReview(true)
+    })
+
+    expect(await setReview(false)).toEqual({ success: true })
+    expect((await reviewHook())?.disabled).toBe(true)
+
+    // ① 停用：命令照旧问，但问的是人 —— 审查员一次都没被派出去
+    const offSid = await newSession('R11-review-off')
+    const offMarker = markerPath('r11-off')
+    provider.reset()
+    await events.clear()
+    provider.script(
+      { toolCalls: [touchCall('call_r11_off', offMarker)], when: notReviewer },
+      { text: 'R11 off done.', when: notReviewer }
+    )
+    await sendPrompt(offSid, 'Create the R11 marker while the review is off.')
+    const ask = await waitAsk(offSid)
+    expect(ask.request.review).toBeUndefined()
+    expect(provider.requests().filter(isReviewerRequest)).toEqual([])
+    expect(reviewRequests()).toEqual([])
+    await respond(offSid, ask.request.id, true)
+    await events.waitFor('agent_end', { sessionId: offSid })
+    expect(existsSync(offMarker)).toBe(true)
+    expect(provider.requests().filter(isReviewerRequest)).toEqual([])
+    const [offDecision] = await settledDecisions(offSid, 1)
+    expect(offDecision.review).toBeUndefined()
+    expect(offDecision.userResponse).toBe('allowed')
+
+    // ② 重新启用：同样的命令先交给审查员，放行后不弹卡
+    expect(await setReview(true)).toEqual({ success: true })
+    expect((await reviewHook())?.disabled).toBeUndefined()
+    const onSid = await newSession('R11-review-on')
+    const onMarker = markerPath('r11-on')
+    provider.reset()
+    await events.clear()
+    provider.script(
+      { toolCalls: [touchCall('call_r11_on', onMarker)], when: notReviewer },
+      { text: 'R11 on done.', when: notReviewer },
+      reviewerTurn({
+        decision: 'allow',
+        risk: 'low',
+        summary: 'SUMMARY-R11',
+        reason: 'REASON-R11'
+      })
+    )
+    await sendPrompt(onSid, 'Create the R11 marker with the review back on.')
+    await events.waitFor('agent_end', { sessionId: onSid })
+    expect(existsSync(onMarker)).toBe(true)
+    expect(await asksRaised(onSid)).toBe(0)
+    const reviews = provider.requests().filter(isReviewerRequest)
+    expect(reviews).toHaveLength(1)
+    expect(requestToolNames(reviews[0])).toEqual(['next'])
   })
 })

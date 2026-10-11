@@ -64,7 +64,11 @@ vi.mock('../../policyService', async () => {
     await import('@shuvix/agent-runtime/security/builtinPolicies/inlineSources')
   const readMd = createInlinePolicyMdReader()
   return {
-    policyService: { getUserPolicies: () => [], readBuiltinPolicyMd: (f: string) => readMd(f) }
+    policyService: {
+      getUserPolicies: () => [],
+      readBuiltinPolicyMd: (f: string) => readMd(f),
+      isDisabled: () => false
+    }
   }
 })
 vi.mock('../../../logger', () => ({

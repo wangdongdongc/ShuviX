@@ -801,6 +801,11 @@ export interface HostApi {
       objectId: string
       key: string
     }) => Promise<MdMetaWriteResult>
+    /**
+     * 停用 / 启用一个内置安全策略或 hook（按内置 id 认，`<kind>:builtin:<name>`）—— 侧栏行菜单与属性卡共用。
+     * 不是能停用的对象（别的类型、用户文件的 UUID、不存在的内置名）→ key-not-allowed
+     */
+    setEnabled: (params: { objectId: string; enabled: boolean }) => Promise<MdMetaWriteResult>
   }
   /**
    * 桌面日历（按 session_day_prompts：同一会话可出现在多个开口日）。

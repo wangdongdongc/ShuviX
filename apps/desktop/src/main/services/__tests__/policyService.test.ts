@@ -557,3 +557,92 @@ describe('policyService —— 对象 id（shuvix-id）', () => {
     ])
   })
 })
+
+/**
+ * 停用开关（内置安全策略，2026-10-10）：读口由主进程入口注入（setDisabledReader，读 md_attrs 的快照），
+ * 这里直接注入一个函数。isDisabled 是装配时 SecurityHostProvider.isPolicyDisabled 的桌面实现，
+ * 列表行带 disableable（持有确有其物的内置 id）与 disabled（读口说停用）。
+ */
+describe('policyService —— 停用开关', () => {
+  const CMD_ID = 'policy:builtin:ask-on-command'
+  const EXT_ID = 'policy:builtin:ask-on-external-path'
+  const U = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  const withIdLine = (text: string, id: string): string =>
+    text.replace('shuvix: policy v1\n', `shuvix: policy v1\nshuvix-id: ${id}\n`)
+  const disabling = (...ids: string[]): ((objectId: string) => boolean) => {
+    const set = new Set(ids)
+    return (objectId) => set.has(objectId)
+  }
+  const rowOf = (name: string, source: 'builtin' | 'user'): PolicyListItem | undefined =>
+    policyService.listForSettings().find((row) => row.name === name && row.source === source)
+
+  afterEach(() => {
+    policyService.setDisabledReader(null)
+  })
+
+  it('PU-D1 isDisabled：没读口 → false；没有 objectId 的策略读口说 true 也是 false；有 id 时读口说了算，拿到的恰是 policy.objectId', () => {
+    const builtin = rowOf('ask-on-command', 'builtin')!
+    expect(builtin.objectId).toBe(CMD_ID)
+    expect(policyService.isDisabled(builtin)).toBe(false)
+
+    const seen: string[] = []
+    policyService.setDisabledReader((objectId) => {
+      seen.push(objectId)
+      return true
+    })
+    const noId = { ...builtin, objectId: undefined }
+    expect(policyService.isDisabled(noId)).toBe(false)
+    expect(seen).toEqual([])
+
+    expect(policyService.isDisabled(builtin)).toBe(true)
+    expect(seen).toEqual([CMD_ID])
+
+    policyService.setDisabledReader(() => false)
+    expect(policyService.isDisabled(builtin)).toBe(false)
+  })
+
+  it('PU-D2 列表：内置行带 objectId 与 disableable；disabled 只在读口停用的那行；沿用内置 id 的覆盖副本 disabled + disableable；其余行没有这些键', () => {
+    writeFileSync(join(state.dir, 'mine.md'), withIdLine(policyMd('mine'), U), 'utf-8')
+    writeFileSync(join(state.dir, 'plain.md'), policyMd('plain'), 'utf-8')
+
+    let rows = policyService.listForSettings()
+    for (const name of ['ask-on-command', 'ask-on-external-path']) {
+      const row = rows.find((r) => r.name === name && r.source === 'builtin')!
+      expect(row).toMatchObject({ objectId: `policy:builtin:${name}`, disableable: true })
+      expect(row).not.toHaveProperty('disabled')
+    }
+    for (const name of ['mine', 'plain']) {
+      const row = rows.find((r) => r.name === name)!
+      expect(row, name).not.toHaveProperty('disableable')
+      expect(row, name).not.toHaveProperty('disabled')
+    }
+
+    policyService.setDisabledReader(disabling(CMD_ID))
+    rows = policyService.listForSettings()
+    expect(rows.find((r) => r.name === 'ask-on-command')).toMatchObject({ disabled: true })
+    expect(rows.find((r) => r.name === 'ask-on-external-path')).not.toHaveProperty('disabled')
+    expect(rows.find((r) => r.name === 'mine')).not.toHaveProperty('disabled')
+
+    // 「创建覆盖副本」逐字节照抄内置原文，id 跟着走
+    const source = policyService.getSource('ask-on-command', 'builtin') as { text: string }
+    expect(policyService.createPolicy(source.text).success).toBe(true)
+    expect(rowOf('ask-on-command', 'user')).toMatchObject({
+      objectId: CMD_ID,
+      disableable: true,
+      disabled: true
+    })
+    expect(rowOf('ask-on-command', 'user')).not.toHaveProperty('overridden')
+    expect(rowOf('ask-on-command', 'builtin')).toMatchObject({ overridden: true, disabled: true })
+  })
+
+  it('PU-D3 名字不同、却带着 policy:builtin:ask-on-command 的用户策略跟着一起停用', () => {
+    writeFileSync(join(state.dir, 'other.md'), withIdLine(policyMd('other'), CMD_ID), 'utf-8')
+    policyService.setDisabledReader(disabling(CMD_ID))
+    const row = rowOf('other', 'user')!
+    expect(row).toMatchObject({ objectId: CMD_ID, disableable: true, disabled: true })
+    expect(policyService.isDisabled(row)).toBe(true)
+    const external = rowOf('ask-on-external-path', 'builtin')!
+    expect(external.objectId).toBe(EXT_ID)
+    expect(policyService.isDisabled(external)).toBe(false)
+  })
+})

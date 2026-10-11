@@ -57,6 +57,8 @@ vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: () => [] }))
 vi.mock('../policyService', () => ({
   policyService: {
     getUserPolicies: () => rv.userPolicies,
+    // 内置安全策略的禁用开关（ShuviX 扩展元数据）：这里一律不禁用
+    isDisabled: () => false,
     readBuiltinPolicyMd: (fileName: string) => {
       try {
         return readFileSync(join(rv.builtinDir, fileName), 'utf-8')

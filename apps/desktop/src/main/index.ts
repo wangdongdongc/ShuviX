@@ -69,6 +69,7 @@ import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
+import { policyService } from './services/policyService'
 import { runLegacySwitchover } from './services/legacySwitchover'
 import { reviewPermissionRequest } from './services/permissionReview'
 import { setPermissionReviewer } from './services/toolContext'
@@ -823,6 +824,9 @@ app.whenReady().then(async () => {
   // md 扩展元数据：agent 档案的补缺值（模型 / 思考档位）读自 md_attrs 的内存快照。agentService 不直接依赖
   // 数据库（单测里没有库），由这里注入读口 —— 没注入就没有补缺，档案就是文件本身
   agentService.setMetaFill((objectId) => mdMetaStore.fillFor(objectId, 'agent'))
+  // 内置安全策略 / hook 的停用开关：同一份快照，同样注入（两个服务都不直接依赖数据库）
+  policyService.setDisabledReader((objectId) => mdMetaStore.isDisabled(objectId))
+  hookService.setDisabledReader((objectId) => mdMetaStore.isDisabled(objectId))
 
   // 旧格式会话的启动切换（services/legacySwitchover）：绑着文件的原地重置、Chrome 标签页会话删掉。
   // 必须 await 完、排在 CLI 服务 / Chrome 桥 / 任何窗口之前 —— 否则 shuvix-cli、侧边栏或界面可能在

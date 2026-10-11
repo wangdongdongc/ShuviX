@@ -8,7 +8,7 @@
  * 为什么放在组件外面：写 id 会改 frontmatter，卡片 widget 随之重建，挂在里面的设置条整个卸载重挂 ——
  * 「等 id 落盘、再写设置」不能跟着某一个组件实例走。这里按会话记一份在途写入，设置条（不论哪个实例）
  * 订阅它：控件先显示在途的值、标出「正在保存」，写完再重查。同一会话的写入排成一队：id 落盘之前
- * 又改了别的键，排在同一个 id 后面，不会再分配第二个。「换新 id」走同一条路（只是没有要写的设置）。
+ * 又改了别的键，排在同一个 id 后面，不会再分配第二个。
  */
 import { v7 as uuidv7 } from 'uuid'
 import { getChatApi } from '@shuvix/chat-ui'
@@ -139,18 +139,14 @@ async function run(sessionId: string, job: Job): Promise<void> {
   emit(sessionId, { pending: null, error })
 }
 
-/**
- * 开一个任务：缓冲区里已有合法 id 就沿用它（等它落盘即可），否则分配一个新的写进缓冲区。
- * `forceNewId`：「换新 id」—— 不论缓冲区里有没有都换一个新的。
- */
+/** 开一个任务：缓冲区里已有合法 id 就沿用它（等它落盘即可），否则分配一个新的写进缓冲区 */
 function start(
   sessionId: string,
   bufferId: string | null,
   setObjectId: (id: string) => boolean,
-  writes: Map<string, string | null>,
-  forceNewId: boolean
+  writes: Map<string, string | null>
 ): void {
-  let objectId = forceNewId ? null : bufferId
+  let objectId = bufferId
   if (!objectId) {
     objectId = uuidv7()
     if (!setObjectId(objectId)) {
@@ -183,16 +179,7 @@ export function requestMetaWrite(req: MetaWriteRequest): void {
     emit(req.sessionId, { pending: new Map(job.writes), error: null })
     return
   }
-  start(req.sessionId, req.bufferId, req.setObjectId, new Map([[req.key, req.value]]), false)
-}
-
-/**
- * 换新 id：给文件写一个新的对象 id —— 从此不再与副本共用设置，旧 id 下的设置原样留着（撤销能换回旧 id）。
- * 有在途任务时不做（那个任务还在等它的 id 落盘）。
- */
-export function requestNewObjectId(sessionId: string, setObjectId: (id: string) => boolean): void {
-  if (jobs.has(sessionId)) return
-  start(sessionId, null, setObjectId, new Map(), true)
+  start(req.sessionId, req.bufferId, req.setObjectId, new Map([[req.key, req.value]]))
 }
 
 /** 仅供测试：清空全部会话的状态 */

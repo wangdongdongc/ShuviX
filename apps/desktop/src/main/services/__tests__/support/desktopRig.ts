@@ -249,6 +249,8 @@ vi.mock('../../shellParserService', () => ({ shellParser: {} }))
 vi.mock('../../policyService', () => ({
   policyService: {
     getUserPolicies: () => rig.userPolicies,
+    // 内置安全策略的禁用开关（ShuviX 扩展元数据）：这里一律不禁用
+    isDisabled: () => false,
     readBuiltinPolicyMd: (fileName: string) => {
       try {
         return readFileSync(join(rig.builtinPoliciesDir, fileName), 'utf-8')

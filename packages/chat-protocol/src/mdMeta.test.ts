@@ -19,14 +19,19 @@
  *   MM-34…44  已有条目的替换、续行、标记块标量
  *   MM-45…47  值的引号规则
  *   MM-48…49  幂等与保真
+ *   MD-1…4    停用开关：能停用的类型、键名、isDisableableObjectId 的接受 / 拒绝表
  */
 import { describe, it, expect } from 'vitest'
 import { parse as parseYaml } from 'yaml'
 import {
   MD_ATTR_NAMESPACES,
+  MD_DISABLEABLE_KINDS,
+  MD_ENABLED_KEY,
+  MD_FM_FILL_KEYS,
   MD_OBJECT_KINDS,
   SHUVIX_ID_KEY,
   builtinObjectId,
+  isDisableableObjectId,
   isJsonValue,
   normalizeObjectId,
   parseObjectId,
@@ -616,5 +621,49 @@ describe('MM-48…49 setShuvixIdLine —— 幂等与保真', () => {
     const out = stamp(input)
     expect(out.split('\n')[4]).toBe(`shuvix-id: ${U}`)
     expect(out.replace(`shuvix-id: ${U}\n`, '')).toBe(input)
+  })
+})
+
+/**
+ * MD：停用开关（用户裁决 2026-10-10）—— 只有随包发布的内置 hook / 安全策略能停用，存成
+ * `ns='meta', key='enabled'` 的 false。这里只判 id 的形态与类型段；名字是否真有其物由宿主核对
+ * （apps/desktop utils/builtinDisable.ts），所以 `policy:builtin:no-such-name` 在这一层是 true。
+ */
+describe('MD-1…4 停用开关的契约', () => {
+  it('MD-1 常量钉成字面量：能停用的恰是 hook 与 policy；键名 enabled', () => {
+    expect(MD_DISABLEABLE_KINDS).toEqual(['hook', 'policy'])
+    expect(MD_ENABLED_KEY).toBe('enabled')
+  })
+
+  it.each([
+    'hook:builtin:auto-title',
+    'policy:builtin:ask-on-command',
+    'policy:builtin:no-such-name',
+    '  hook:builtin:auto-title\n'
+  ])('MD-2 内置形态的 hook / policy id → true：%j', (id) => {
+    expect(isDisableableObjectId(id)).toBe(true)
+  })
+
+  it.each([
+    'agent:builtin:explore',
+    'bot:builtin:x',
+    U,
+    '',
+    'HOOK:builtin:auto-title',
+    'hook:builtin:',
+    'hook:builtin: x'
+  ])('MD-3 别的类型 / UUID / 空串 / 形似而非 → false：%j', (id) => {
+    expect(isDisableableObjectId(id)).toBe(false)
+  })
+
+  it('MD-3b 不是字符串（强转进来）→ false，不抛', () => {
+    for (const value of [undefined, null, 42, true, {}, ['hook:builtin:auto-title']]) {
+      expect(isDisableableObjectId(value as unknown as string), JSON.stringify(value)).toBe(false)
+    }
+  })
+
+  it('MD-4 hook / policy 仍然没有可补的 frontmatter 键（停用开关不走补缺通道）', () => {
+    expect(MD_FM_FILL_KEYS.hook).toEqual([])
+    expect(MD_FM_FILL_KEYS.policy).toEqual([])
   })
 })

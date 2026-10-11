@@ -145,11 +145,11 @@ agent `coding`、`explore`、`widget`、`titler`、`knowledge-writer`，以及 `
   都拒绝 `work` / `chat` / `notebook` / `bot` / `tab` / `coedit`。`permission-reviewer` 同样被 `agent` 工具与
   `agent_profile` 拒绝 —— 能随手调用自己审查员的 agent，可以一遍遍换说法直到某一种能过 —— 但 hook 可以点名它。
 
-- **不复制覆盖也能定模型与思考档位：ShuviX 设置。** 从侧栏「智能体」分组打开一份 agent md（内置的或你自己的），属性下方有一条
-  「ShuviX 设置」，可以选 `shuvix-model` 与 `shuvix-thinking`。它们存在 ShuviX 里、按文件的 `shuvix-id` 挂，
-  并且只**补**文件没写的键 —— 文件里写了的永远以文件为准。所以像 `explore` 这样的内置 agent 不用复制覆盖文件
-  就能换一个便宜的模型，每次更新照样拿到随包发布的新正文。没有 id 的文件会自动得到一个 —— 第一次改设置时往文件里写一行 `shuvix-id`；
-  复制出来的文件与原件共用设置。agent 改不了这些设置 —— 只有你在那一条上能改。
+- **不复制覆盖也能定模型与思考档位：ShuviX 设置。** 从侧栏「智能体」分组打开一份内置 agent 的 md，虽然文件本身只读，
+  属性里的**模型**与**思考档位**两行照样能改：选的值存在 ShuviX 里（那一行标着「ShuviX 设置」），按文件的 `shuvix-id` 挂，
+  并且只**补**文件没写的键 —— 文件里写了的永远以文件为准，那一行也照旧只读。所以像 `explore` 这样的内置 agent
+  不用复制覆盖文件就能换一个便宜的模型，每次更新照样拿到随包发布的新正文。覆盖副本沿用内置 id，因此共用同一套设置。
+  在你自己的 agent 文件里，这两行照常改文件。agent 改不了 ShuviX 设置 —— 只有你能改。
 
 ## 一个 agent 怎样被用起来
 

@@ -185,6 +185,9 @@ agent：`~/.shuvix/agents/permission-reviewer.md`。agent 写 `~/.shuvix/hooks`�
 想让每次这样的写入都摆到用户面前，就写一份针对 `vars.shuvixConfigDirs` 的 `force-ask` 策略（见
 `policy-md`）。同名副本按 `shuvix-files` 条目里的规则处理。
 
+内置 hook 也能像内置策略那样**禁用**：它那一行的菜单选「禁用」，或者用属性下方的「启用」开关。禁用的 hook 不会运行；
+禁用 `auto-review` 之后，每一个审批请求都直接交给你。开关存在 ShuviX 里，不写文件；覆盖副本沿用内置 id，跟着同一个开关。
+
 ## 刻意没有的
 
 没有脚本块、没有编排原语、文件里没有结果 schema（判定型触发点自带一份）、没有提示词模板、没有并发或
