@@ -3482,7 +3482,8 @@ export function fmCardPane(main: CdpClient): FmCardPane {
 //      写的是 ShuviX 里的补缺值；用户文件里照旧写文件。锚点：
 //        - 行 = `.cm-shuvix-fmcard-row[data-key]`，控件在卡片的 `.cm-shuvix-fmcard-slot` 里；
 //        - 补缺行的包裹 = 槽位里的 `.cm-shuvix-fmcard-fill`（没挂就是普通的 FrontmatterFieldPicker）；
-//        - 「ShuviX 设置」小标 = `.cm-shuvix-fmcard-fill-tag`（值来自 ShuviX）、「没保存上」=
+//        - 「改的是 ShuviX 里的值」= 包裹带 title（来源说明的悬停提示；不再挂文字小标），值真来自 ShuviX
+//          时包裹再带 `data-source="shuvix"`、值的文字换成 `.cm-shuvix-fmcard-sourced` 样式；「没保存上」=
 //          `.cm-shuvix-fmcard-fill-error`、「未生效」= `.cm-shuvix-fmcard-fill-warning`。
 //   2. **「ShuviX 设置」条**（app-shell FrontmatterMetaStrip）：现在只放内置 hook / 安全策略的停用开关。
 //        - 整条 = `.cm-shuvix-fmcard-meta-strip`；开关 = `.cm-shuvix-fmcard-meta-toggle`（role=switch、
@@ -3500,7 +3501,7 @@ export interface FmFillRow {
   disabled: boolean
   /** 槽位里挂的是补缺行（`.cm-shuvix-fmcard-fill`） */
   wrapped: boolean
-  /** 「ShuviX 设置」小标在 */
+  /** 这一行改的 / 显示的是 ShuviX 里的值（补缺行包裹带来源说明的 title —— 原先那枚文字小标的口径） */
   tagged: boolean
   /** 「没保存上」在 */
   error: boolean
@@ -3516,7 +3517,7 @@ export interface FmCardMetaShot {
   strip: boolean
   /** 卡里补缺行包裹（`.cm-shuvix-fmcard-fill`）的个数 */
   fillWrappers: number
-  /** 卡里「ShuviX 设置」小标的个数 */
+  /** 卡里带来源说明（title）的补缺行个数 —— 原先「ShuviX 设置」小标的口径 */
   fillTags: number
   /** 卡里 `.cm-shuvix-fmcard-slot`（卡片字段槽位）的个数 */
   fieldSlots: number
@@ -3552,7 +3553,7 @@ export function fmFillPane(main: CdpClient): FmFillPane {
         value: select ? select.value : (button?.textContent ?? '').trim(),
         disabled: !!control?.disabled,
         wrapped: !!slot.querySelector('.cm-shuvix-fmcard-fill'),
-        tagged: !!slot.querySelector('.cm-shuvix-fmcard-fill-tag'),
+        tagged: !!slot.querySelector('.cm-shuvix-fmcard-fill[title]'),
         error: !!slot.querySelector('.cm-shuvix-fmcard-fill-error'),
         warning: !!slot.querySelector('.cm-shuvix-fmcard-fill-warning')
       }
@@ -3588,7 +3589,7 @@ export function fmFillPane(main: CdpClient): FmFillPane {
         name: c.querySelector('.cm-shuvix-fmcard-input[data-key="name"]')?.value ?? null,
         strip: !!c.querySelector('.cm-shuvix-fmcard-meta-strip'),
         fillWrappers: c.querySelectorAll('.cm-shuvix-fmcard-fill').length,
-        fillTags: c.querySelectorAll('.cm-shuvix-fmcard-fill-tag').length,
+        fillTags: c.querySelectorAll('.cm-shuvix-fmcard-fill[title]').length,
         fieldSlots: c.querySelectorAll('.cm-shuvix-fmcard-slot').length,
         text: c.textContent ?? ''
       }))`)

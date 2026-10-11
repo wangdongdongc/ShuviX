@@ -7,7 +7,8 @@
  *   - **用户自己的文件**：照旧改文件。文件里没写、ShuviX 里却存着补缺值时，把它显示出来并标明来源 ——
  *     它在生效，不能藏着；一改就写进文件，文件里的值从此优先。
  *
- * 值来自 ShuviX 时，选择器后面挂一枚「ShuviX 设置」小标。卡片是纯 DOM 的 CM6 widget，本组件由
+ * 值来自 ShuviX 时，值的文字换成强调色 + 点状下划线（`sourced`，只做样式上的区别、不挂文字标签），
+ * 来源说明放在这一行的悬停提示里。卡片是纯 DOM 的 CM6 widget，本组件由
  * LivePreviewEditor 挂进字段槽位（独立 React root），YAML 一变整个重挂。
  */
 import { useTranslation } from 'react-i18next'
@@ -83,7 +84,12 @@ export function FrontmatterFillField({
   const notApplied = shownFromMeta && (view?.warnings.length ?? 0) > 0
 
   return (
-    <span className="cm-shuvix-fmcard-fill flex items-center gap-1.5 min-w-0" data-key={fieldKey}>
+    <span
+      className="cm-shuvix-fmcard-fill flex items-center gap-1.5 min-w-0"
+      data-key={fieldKey}
+      data-source={shownFromMeta ? 'shuvix' : undefined}
+      title={metaBacked || shownFromMeta ? t('notebook.frontmatter.fillTagHint') : undefined}
+    >
       <FrontmatterFieldPicker
         fieldKey={fieldKey}
         markerType={markerType}
@@ -91,15 +97,8 @@ export function FrontmatterFillField({
         value={value}
         onChange={onChange}
         readOnly={readOnly && !metaBacked}
+        sourced={shownFromMeta}
       />
-      {(metaBacked || shownFromMeta) && (
-        <span
-          className="cm-shuvix-fmcard-fill-tag shrink-0 px-1 rounded text-[9px] leading-4 bg-bg-secondary text-text-tertiary"
-          title={t('notebook.frontmatter.fillTagHint')}
-        >
-          {t('notebook.frontmatter.metaTitle')}
-        </span>
-      )}
       {notApplied && (
         <span
           className="cm-shuvix-fmcard-fill-warning shrink-0 text-[11px] text-amber-600 dark:text-amber-400"

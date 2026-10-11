@@ -494,7 +494,7 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
   /**
    * BK-22 停用开关（2026-10-10）：hook-md / policy-md 讲到它，用的是界面上那两个词（侧栏菜单的「禁用」=
    * common.disable、属性卡开关那一行 = notebook.frontmatter.metaEnabled）—— 说明书照着界面写，界面改了词这里先红；
-   * agent-md 讲补缺值时说的是属性里那两行（挂着 metaTitle 小标），不再有「设置条」或「换新 id」
+   * agent-md 讲补缺值时用的名字是 metaTitle（那两行本身已不挂文字小标，只换样式），不再有「设置条」或「换新 id」
    */
   it('BK-22 hook-md / policy-md 用界面上的词讲停用开关；agent-md 不再讲设置条与换新 id', () => {
     const locale = { en: enLocale, ja: jaLocale, zh: zhLocale }[lang as 'en' | 'ja' | 'zh']

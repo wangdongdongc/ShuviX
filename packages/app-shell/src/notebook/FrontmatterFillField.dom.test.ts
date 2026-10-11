@@ -179,8 +179,21 @@ const select = (): HTMLSelectElement => {
   if (!el) throw new Error('thinking select not rendered')
   return el
 }
-const tag = (key = THINKING): HTMLElement | null =>
-  row(key).querySelector('.cm-shuvix-fmcard-fill-tag')
+/**
+ * 这一行是不是「ShuviX 补缺」行：不再挂文字小标，来源说明在补缺行包裹的悬停提示里（title）——
+ * 有 title 的那一层就是它，没有返回 null（与原先「有没有小标」同一口径）
+ */
+const tag = (key = THINKING): HTMLElement | null => {
+  const el = row(key) as HTMLElement
+  return el.title ? el : null
+}
+/** 值的文字是否按「来自 ShuviX」的样式画（强调色 + 点状下划线），只在值真来自 ShuviX 时 */
+const sourced = (key = THINKING): HTMLElement | null => {
+  const el = row(key) as HTMLElement
+  return el.dataset.source === 'shuvix'
+    ? el.querySelector<HTMLElement>('.cm-shuvix-fmcard-sourced')
+    : null
+}
 const errorOf = (key = THINKING): HTMLElement | null =>
   row(key).querySelector('.cm-shuvix-fmcard-fill-error')
 const warningOf = (key = THINKING): HTMLElement | null =>
@@ -241,20 +254,24 @@ afterEach(() => {
 })
 
 describe('FrontmatterFillField —— 只读的内置档案', () => {
-  it('FF-1 文件没写档位、库里什么都没存 → 下拉可用、值为空、挂着「ShuviX 设置」小标', async () => {
+  it('FF-1 文件没写档位、库里什么都没存 → 下拉可用、值为空、悬停说明来源；没有值可染、也不挂文字小标', async () => {
     await render()
     expect(select().disabled).toBe(false)
     expect(select().value).toBe('')
     expect(tag()).not.toBeNull()
-    expect(tag()!.textContent).toBe(t('notebook.frontmatter.metaTitle'))
     expect(tag()!.title).toBe(t('notebook.frontmatter.fillTagHint'))
+    expect(sourced()).toBeNull()
+    expect(row().textContent).not.toContain(t('notebook.frontmatter.metaTitle'))
   })
 
-  it('FF-2 库里存着 high → 显示 high，挂小标', async () => {
+  it('FF-2 库里存着 high → 显示 high，值按「来自 ShuviX」的样式画（下拉自己的字透明）', async () => {
     backend.fill = { [THINKING]: 'high' }
     await render()
     expect(select().value).toBe('high')
     expect(tag()).not.toBeNull()
+    expect(sourced()?.textContent).toBe('high')
+    expect(select().className).toContain('text-transparent')
+    expect(row().textContent).not.toContain(t('notebook.frontmatter.metaTitle'))
   })
 
   it('FF-3 选 low → setFill 恰一次（内置 id、不分配 UUID），不写文件；下拉立刻是 low', async () => {

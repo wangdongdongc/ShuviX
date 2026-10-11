@@ -47,10 +47,19 @@ export interface FrontmatterFieldPickerProps {
   onChange: (next: string | null) => void
   /** 只读（内置档案 / 只读预览）：控件照常渲染但不可交互 */
   readOnly?: boolean
+  /**
+   * 显示的值不来自这份文件，而是 ShuviX 补上的（md 扩展元数据，见 FrontmatterFillField）：值的文字换成
+   * 强调色 + 点状下划线 —— 只做样式上的区别，不挂文字标签；说明在补缺行包裹的悬停提示里。
+   * 目前只有 select 的两个补缺键（模型 / 思考档位）用得到，其余控件忽略它
+   */
+  sourced?: boolean
 }
 
 /** 单个控件的入参（分派由外层做完，控件本身不看文件类型 / key / kind） */
 type FieldControlProps = Omit<FrontmatterFieldPickerProps, 'kind' | 'fieldKey' | 'markerType'>
+
+/** 「值来自 ShuviX」的文字样式（atomic-panel.css）：强调色 + 点状下划线 */
+const SOURCED_VALUE = 'cm-shuvix-fmcard-sourced'
 
 /**
  * 卡上控件的共同外观（与 frontmatterCard.ts 的 CONTROL 同一套话）：静止时不描边不填底，
@@ -207,7 +216,12 @@ function ToolsField({ value, onChange, readOnly = false }: FieldControlProps): R
 }
 
 /** 模型选择：ModelSelect 自带 portal 下拉与清除，直接受控接进来 */
-function ModelField({ value, onChange, readOnly = false }: FieldControlProps): React.JSX.Element {
+function ModelField({
+  value,
+  onChange,
+  readOnly = false,
+  sourced = false
+}: FieldControlProps): React.JSX.Element {
   const availableModels = useModelCatalogStore((s) => s.availableModels)
   const allProviders = useModelCatalogStore((s) => s.providers)
   // 只列**已启用**的提供商 —— 传全量会把没开启的也渲染成分组（同 ModelPicker 的过滤）
@@ -229,6 +243,7 @@ function ModelField({ value, onChange, readOnly = false }: FieldControlProps): R
       readonly={readOnly}
       width={230}
       flat
+      valueClassName={sourced ? SOURCED_VALUE : undefined}
       allowClear
       onChange={(provider, model) =>
         onChange(provider && model ? formatModelRef(provider, model) : null)
@@ -293,13 +308,17 @@ const OKF_STATUS_DOT: Record<string, string> = {
  * 契约封闭枚举的下拉（原生 select + 自绘箭头，样式对齐卡片输入框）。
  * 空值 = 删除该键（同其它控件的 onChange(null) 约定，读者对缺失自有缺省）；
  * 枚举外的手改值如实并入候选（不静默吞掉 —— 保存前它仍是文件里的事实）。
+ *
+ * `sourced`：值的文字由盖在下拉上的一层 span 画（下拉自己的字透明）—— 原生 select 的 text-decoration
+ * 各平台不一定画，下划线的长度也只该到字为止，不该铺满按最长候选撑开的宽度。
  */
 function EnumField({
   options,
   dotByValue,
   value,
   onChange,
-  readOnly = false
+  readOnly = false,
+  sourced = false
 }: FieldControlProps & {
   options: readonly string[]
   dotByValue?: Record<string, string>
@@ -318,17 +337,29 @@ function EnumField({
         <select
           value={current}
           disabled={readOnly}
-          className={`cm-shuvix-fmcard-input ${FLAT_CONTROL} border-transparent pl-2 pr-6 py-px text-[12px] font-mono leading-5 text-text-primary disabled:opacity-60 cursor-pointer disabled:cursor-default`}
+          className={`cm-shuvix-fmcard-input ${FLAT_CONTROL} border-transparent pl-2 pr-6 py-px text-[12px] font-mono leading-5 ${
+            sourced && current !== '' ? 'text-transparent' : 'text-text-primary'
+          } disabled:opacity-60 cursor-pointer disabled:cursor-default`}
           onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
           onKeyDown={(e) => e.stopPropagation()}
         >
-          <option value="">{t('notebook.frontmatter.unset')}</option>
+          <option value="" className="text-text-primary">
+            {t('notebook.frontmatter.unset')}
+          </option>
           {opts.map((o) => (
-            <option key={o} value={o}>
+            <option key={o} value={o} className="text-text-primary">
               {o}
             </option>
           ))}
         </select>
+        {sourced && current !== '' && (
+          <span
+            aria-hidden
+            className={`${SOURCED_VALUE} absolute left-0 top-1/2 -translate-y-1/2 pl-[9px] pointer-events-none text-[12px] font-mono leading-5`}
+          >
+            {current}
+          </span>
+        )}
         <ChevronDown
           size={11}
           className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none text-text-tertiary"
@@ -344,14 +375,15 @@ export function FrontmatterFieldPicker({
   kind,
   value,
   onChange,
-  readOnly
+  readOnly,
+  sourced
 }: FrontmatterFieldPickerProps): React.JSX.Element {
   if (kind === 'select') {
     // **按键显式分派**：模型选择器只认模型键。曾经它是 select 的兜底，于是任何新加的
     // select 字段（如已退役的工作流重入策略）都会静默变成一个写着「选择模型」的模型下拉 ——
     // 属性卡不认识某个键时，退回自由文本下拉才是诚实的降级。
     if (fieldKey === AGENT_MODEL_KEY) {
-      return <ModelField value={value} onChange={onChange} readOnly={readOnly} />
+      return <ModelField value={value} onChange={onChange} readOnly={readOnly} sourced={sourced} />
     }
     if (fieldKey === AGENT_THINKING_KEY) {
       return (
@@ -360,6 +392,7 @@ export function FrontmatterFieldPicker({
           value={value}
           onChange={onChange}
           readOnly={readOnly}
+          sourced={sourced}
         />
       )
     }

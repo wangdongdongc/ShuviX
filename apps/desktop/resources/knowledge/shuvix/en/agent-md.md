@@ -168,8 +168,8 @@ the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`, 
 
 - **Model and thinking without an override: ShuviX settings.** In a builtin agent's md (opened from
   the sidebar's Agents group) the **Model** and **Thinking** rows of its properties can be changed
-  although the file itself is read-only: the choice is stored in ShuviX (the row is tagged
-  *ShuviX settings*), keyed by the file's `shuvix-id`, and only **fills in** what the file does not
+  although the file itself is read-only: the choice is stored in ShuviX (its value is shown in the
+  accent color with a dotted underline; hover it to see where it comes from), keyed by the file's `shuvix-id`, and only **fills in** what the file does not
   write — a key the file writes always wins, and its row stays read-only. So a builtin such as
   `explore` can run on a cheaper model without an override copy, and keeps getting the shipped text
   on every update. An override copy keeps the builtin's id, so it gets the same settings. In your

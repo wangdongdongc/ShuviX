@@ -60,6 +60,8 @@ export interface ModelSelectProps {
    * 给「清单里的一格」用（笔记本属性卡），设置页的下拉框保持默认的盒子。
    */
   flat?: boolean
+  /** 触发器上模型名那段文字的样式（缺省是正文色）—— 属性卡用它标出「值不来自文件」 */
+  valueClassName?: string
   /** 未选中时的占位文案 */
   placeholder?: string
   /** boxed：显示清除图标以回到未选态 */
@@ -93,6 +95,7 @@ export function ModelSelect({
   modelLockedHint,
   width = 260,
   flat = false,
+  valueClassName,
   placeholder,
   allowClear = false,
   clearLabel,
@@ -292,7 +295,11 @@ export function ModelSelect({
               <ProviderIcon name={current?.iconKey || ''} />
               <span className="text-text-tertiary shrink-0">{current?.label || provider}</span>
               <span className="text-text-tertiary/50 shrink-0">·</span>
-              <span className="text-text-primary truncate flex-1 text-left">{model}</span>
+              <span
+                className={`${valueClassName ?? 'text-text-primary'} truncate flex-1 text-left`}
+              >
+                {model}
+              </span>
             </>
           ) : (
             <span className="text-text-tertiary truncate flex-1 text-left">{noneText}</span>

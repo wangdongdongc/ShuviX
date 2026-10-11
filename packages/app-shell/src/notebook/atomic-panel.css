@@ -629,3 +629,13 @@ button.cm-atomic-search-btn svg {
   line-height: 1.5;
   user-select: none;
 }
+
+/* 属性卡里「值来自 ShuviX、不在文件里」的补缺值（FrontmatterFillField → FrontmatterFieldPicker 的
+   `sourced`）：只做样式上的区别 —— 强调色 + 一条浅的点状下划线，不挂文字标签；点状下划线本身就是
+   「悬停看解释」的老规矩，解释在补缺行包裹的 title 里。 */
+.cm-shuvix-fmcard-sourced {
+  color: var(--color-accent);
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  text-underline-offset: 3px;
+}
