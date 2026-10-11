@@ -26,7 +26,9 @@ import {
   isMainPage,
   isBrowserWindowPage,
   isMarkdownWindowPage,
+  isFilePreviewWindowPage,
   markdownWindowOf,
+  filePreviewWindowOf,
   setTimeoutDiagnostic,
   listTargets,
   sleep,
@@ -100,6 +102,13 @@ export interface E2EAppBase {
    * （不等待，配合 `until`）。调用方用完自己 close()。
    */
   connectMarkdownWindow(pathSubstr: string): Promise<CdpClient | null>
+  /** 此刻开着的文件预览窗口（#file-preview；不等待，配合 `until`），形状同 md 窗口 */
+  filePreviewWindows(): Promise<MarkdownWindowTarget[]>
+  /**
+   * 连上真实路径含 `pathSubstr` 的那个文件预览窗口，等它的 `window.api` 就绪；没有回 null
+   * （不等待，配合 `until`）。调用方用完自己 close()。
+   */
+  connectFilePreviewWindow(pathSubstr: string): Promise<CdpClient | null>
   /**
    * 此刻的主窗口页面（`window.api` 已就绪）；没有主窗口回 null（不等待，配合 `until`）。
    * 从 md 启动的实例，主窗口是之后才被建出来的（第二个实例 / Dock）—— 用它发现。
@@ -443,6 +452,14 @@ export async function launchApp(
         return md ? [{ ...md, url: t.url, webSocketDebuggerUrl: t.webSocketDebuggerUrl }] : []
       })
 
+  const filePreviewWindows = async (): Promise<MarkdownWindowTarget[]> =>
+    (await listTargets(port).catch(() => [] as CdpTarget[]))
+      .filter((t) => isFilePreviewWindowPage(t, appUrl))
+      .flatMap((t) => {
+        const fp = filePreviewWindowOf(t)
+        return fp ? [{ ...fp, url: t.url, webSocketDebuggerUrl: t.webSocketDebuggerUrl }] : []
+      })
+
   /** 连一个页面并等它的 window.api（preload 跑完）；连不上 / 等不到都回 null（配合 until） */
   const connectReady = async (wsUrl: string): Promise<CdpClient | null> => {
     const client = await connect(wsUrl).catch(() => null)
@@ -564,6 +581,11 @@ export async function launchApp(
       markdownWindows,
       async connectMarkdownWindow(pathSubstr) {
         const hit = (await markdownWindows()).find((w) => w.path.includes(pathSubstr))
+        return hit ? connectReady(hit.webSocketDebuggerUrl) : null
+      },
+      filePreviewWindows,
+      async connectFilePreviewWindow(pathSubstr) {
+        const hit = (await filePreviewWindows()).find((w) => w.path.includes(pathSubstr))
         return hit ? connectReady(hit.webSocketDebuggerUrl) : null
       },
       async mainWindow() {

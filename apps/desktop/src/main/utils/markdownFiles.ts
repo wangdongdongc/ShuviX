@@ -1,6 +1,9 @@
 /**
  * 从系统「打开方式」交进来的 md 文件 —— 路径判定与命令行解析。
  *
+ * 安装包不登记任何文件关联（不进默认应用、也不进「打开方式」列表）；这里接收的是用户自己在
+ * 「打开方式 → 其他…」里手动选了 ShuviX 的那一下。
+ *
  * 三个平台交路径的方式不同：macOS 只走 `open-file` 事件（冷启动与已运行都是），Windows / Linux
  * 冷启动时在 `process.argv` 里、已运行时在 `second-instance` 的 argv 里。这里只管「这一串参数里
  * 哪些是要打开的 md 文件」，不管窗口。
@@ -8,7 +11,7 @@
 import { extname, resolve } from 'path'
 import { statSync } from 'fs'
 
-/** 认作 markdown 的扩展名（小写、带点）。与 electron-builder 的文件关联同一份 */
+/** 认作 markdown 的扩展名（小写、带点）—— 从系统接收、应用内点开进协作编辑窗口，都按这一份 */
 export const MARKDOWN_EXTENSIONS: readonly string[] = ['.md', '.markdown']
 
 /** 按扩展名判定（大小写不敏感） */

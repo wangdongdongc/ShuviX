@@ -1,6 +1,7 @@
 /**
- * 从系统打开的 md 窗口 —— 用户在 Finder / 资源管理器里「用 ShuviX 打开」一个 md 文件，
- * 得到的不是主窗口，而是一个独立的笔记本窗口：live preview 编辑器 + 底部输入卡片。
+ * md 协作编辑窗口 —— 用户在 Finder / 资源管理器里手动「用 ShuviX 打开」一个 md 文件（安装包不登记
+ * 文件关联），或在应用里点开一个 md（Files 面板 / [[双链]] / 对话里的链接，经 previewWindowService），
+ * 得到的都是一个独立的笔记本窗口：live preview 编辑器 + 底部输入卡片。
  *
  * 一个窗口一条**内存会话**（sessionService.create 的 `ephemeral`）：行与对话树都只在内存里，
  * 不进侧栏、不进日历、不记活跃；窗口关掉就删会话，对话随之消失。会话在开窗时就建 —— 编辑器读写
@@ -117,8 +118,7 @@ export function openMarkdownFile(filePath: string): boolean {
       contextIsolation: true
     }
   })
-  // 刻意不 setRepresentedFilename：它在标题栏放一个文件代理图标，而 md 的文档图标就是 ShuviX 的
-  // 应用图标（electron-builder 给文档类型填的 CFBundleTypeIconFile）—— 标题栏只留文件名
+  // 刻意不 setRepresentedFilename：它在标题栏放一个文件代理图标 —— 标题栏只留文件名
   // 与主窗口同样的守卫：正文里的链接点开走系统浏览器，而不是把这个窗口带去外站
   guardAppWindow(win)
 

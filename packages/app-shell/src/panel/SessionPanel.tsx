@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Eye, FolderTree, ListTodo, X } from 'lucide-react'
+import { FolderTree, ListTodo, X } from 'lucide-react'
 import { useChatStore, useBgTaskCount, useBgTaskRunningCount } from '@shuvix/chat-ui'
-import { usePreviewPanelStore } from '../preview/previewPanelStore'
 import { BgTaskPanel } from './BgTaskPanel'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
 import { PanelCloseInsetContext } from './panelCloseInset'
@@ -11,58 +10,43 @@ import { PanelCloseInsetContext } from './panelCloseInset'
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
  *
  *   - SessionToolbar：顶栏右侧按钮簇里的工具入口组（在窗口控制那一簇左侧、以竖线分隔）。
- *     Files 常驻；Preview 仅在宿主注入（showPreview）
- *     **且存在预览目标**时出现（与 Sub-agent 同款「有内容才显示」语义）；Sub-agent 仅当前
- *     会话有子会话时出现（含数量徽标）。点按展开面板并切到该工具。
+ *     Files 常驻；任务仅当前会话有后台任务时出现（含数量徽标）。点按展开面板并切到该工具。
+ *     （文件预览不在面板里 —— 桌面统一开独立窗口。）
  *   - SessionPanel：正文区右侧的悬浮卡片（四周留白 + 圆角 + 边框 + 投影，布局上与对话并排、
  *     对话收缩让位）。收起按钮悬在卡片右上角、与各工具自己的首行同线（工具切换在顶栏的
  *     tabs），让位机制见 panelCloseInset.ts。
- *     装载 Files / Preview / Sub-agent / 后台任务，展开期间各工具均保持挂载、visibility 切换
- *     （保住预览/手风琴等临时 UI 态）；收起时整体卸载（避免后台文件扫描）。
+ *     装载 Files / 后台任务，展开期间各工具均保持挂载、visibility 切换
+ *     （保住手风琴等临时 UI 态）；收起时整体卸载（避免后台文件扫描）。
  *
  * 注：运行时 Agent 快照（系统提示词 / 已装载工具 / 模型细节）不在这里 —— 它归桌面设置页的
  * 「监视器 → 智能体」，那页覆盖进程内**全部** agent（含派生），而不只是当前会话这一个。
  *
  * 宿主差异经 props / 外层注入：files 内容整体注入（filesContent —— 桌面为 FilesPanel + 桌面
- * caps，扩展为 FSA 权限门控包装）；preview 内容可选注入（previewContent —— 无 app 级右侧
- * 面板的宿主（桌面悬浮窗 / 扩展）注入共享 PreviewPanel；桌面主窗预览在右侧面板，不注入）；
- * 媒体 URL 解析由宿主在外层包 MediaUrlProvider。
+ * caps，扩展为 FSA 权限门控包装）；媒体 URL 解析由宿主在外层包 MediaUrlProvider。
  * 状态在共享 useSessionPanelStore（按会话记忆）；宽度持久化由宿主在 store 外接。
  */
 
 /**
- * 展示工具（含兜底）：面板停在 Preview 但预览目标已关闭（Eye 按钮随之隐藏）→ 回落到 Files；
- * 停在后台任务但任务已清空（ListTodo 按钮随之隐藏）→ 同样回落到 Files。
+ * 展示工具（含兜底）：停在后台任务但任务已清空（ListTodo 按钮随之隐藏）→ 回落到 Files。
  * 'subagent' 是已并入 tasks 的旧值（按会话记忆的 store 里可能还留着）→ 一并接到 tasks。
  */
 export function useSessionPanelTool(sessionId: string | null): SessionPanelTool | null {
   const openTool = useSessionPanelStore((s) =>
     sessionId ? (s.openBySession[sessionId] ?? null) : null
   )
-  const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
   const taskCount = useBgTaskCount(sessionId)
   const tool = openTool === 'subagent' ? 'tasks' : openTool
-  if (tool === 'preview' && !hasPreviewTarget) return 'files'
   if (tool === 'tasks' && taskCount === 0) return 'files'
   return tool
 }
 
 /**
- * 揭示信号 → 会话面板（宿主常驻组件内调用一次；面板收起时内容未挂载，故须在此消费）：
- *   - filePreviewRequest（仅 previewInPanel=true 的宿主）→ 展开并切到 Preview ——
- *     预览目标本身由宿主经 usePreviewRequestBridge 落入共享 usePreviewPanelStore；
- *     桌面主窗预览在 app 级右侧面板（useRightPanelBridge 揭示），不传此标志。
- * （Sub-agent tab 不再自动揭示 —— 子会话经工具栏胶囊的数量徽标可见，由用户手动打开。）
+ * 揭示信号 → 会话面板（宿主常驻组件内调用一次；面板收起时内容未挂载，故须在此消费）。
+ * （Sub-agent tab 不再自动揭示 —— 子会话经工具栏胶囊的数量徽标可见，由用户手动打开；
+ * 文件预览也不进面板 —— 桌面统一开独立窗口。）
  * 信号含单调 nonce，重复触发同样生效。enabled=false 时忽略（如 WebUI / 悬浮占位态）。
  */
-export function useSessionPanelReveal(enabled = true, previewInPanel = false): void {
-  const filePreviewRequest = useChatStore((s) => s.filePreviewRequest)
-  useEffect(() => {
-    if (!enabled || !previewInPanel || !filePreviewRequest) return
-    const sid = useChatStore.getState().activeSessionId
-    if (sid) useSessionPanelStore.getState().show(sid, 'preview')
-  }, [filePreviewRequest, enabled, previewInPanel])
-
+export function useSessionPanelReveal(enabled = true): void {
   // 任务揭示：对话流里那张工具卡的行尾状态被点了 —— 派生 agent 的转写在面板里，
   // 这是从卡片回到转写的唯一一条路，所以这一条**主动揭示**（与 Sub-agent 旧 tab 不同）
   const taskRevealRequest = useChatStore((s) => s.taskRevealRequest)
@@ -82,24 +66,17 @@ interface SessionPanelToolItem {
 
 /**
  * 面板工具入口列表（工具栏胶囊与面板头部 tabs 共用同一来源）：Files 常驻；
- * Preview 仅宿主注入且存在预览目标时出现；任务仅在本会话有任务时出现（含运行中数量徽标）。
+ * 任务仅在本会话有任务时出现（含运行中数量徽标）。
  *
  * 原先并列的 Sub-agent 入口已并入任务 —— 派生 agent 是后台任务的一类，
  * 与 bash、子会话同列一张表（见 BgTaskPanel）。
  */
-function useSessionPanelToolItems(
-  sessionId: string | null,
-  includePreview: boolean
-): SessionPanelToolItem[] {
+function useSessionPanelToolItems(sessionId: string | null): SessionPanelToolItem[] {
   const { t } = useTranslation()
-  const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
   const taskCount = useBgTaskCount(sessionId)
   const runningTaskCount = useBgTaskRunningCount(sessionId)
   return [
     { tool: 'files', Icon: FolderTree, label: t('panel.files') },
-    ...(includePreview && hasPreviewTarget
-      ? [{ tool: 'preview' as const, Icon: Eye, label: t('panel.previewTab') }]
-      : []),
     // 用 ListTodo：Terminal 已被 ssh 的运行时指示器占用，同栏必须一眼分得开。
     // 徽标取「运行中」数而非总数 —— 全跑完之后 tab 仍在（用户还要看日志），但不该继续挂个数字
     ...(taskCount > 0
@@ -126,19 +103,13 @@ function useSessionPanelToolItems(
  * 专注模式的淡化因此由顶栏整体负责 —— 这里再叠一层 opacity 会与顶栏相乘。
  */
 export function SessionToolbar({
-  sessionId,
-  showPreview = false
+  sessionId
 }: {
   sessionId: string | null
-  /** 是否显示 Preview 工具入口（与 SessionPanel 的 previewContent 注入配套） */
-  showPreview?: boolean
 }): React.JSX.Element | null {
-  const openTool = useSessionPanelTool(sessionId)
-  const tools = useSessionPanelToolItems(sessionId, showPreview)
+  const activeTool = useSessionPanelTool(sessionId)
+  const tools = useSessionPanelToolItems(sessionId)
   if (!sessionId) return null
-
-  // 与 SessionPanel 同款兜底：停在 Preview 但宿主没注入 previewContent → 实际显示的是 Files
-  const activeTool = openTool === 'preview' && !showPreview ? 'files' : openTool
 
   return (
     <div className="flex items-center gap-0.5">
@@ -149,7 +120,7 @@ export function SessionToolbar({
             key={tool}
             data-session-tool={tool}
             onClick={() =>
-              openTool
+              activeTool
                 ? useSessionPanelStore.getState().show(sessionId, tool)
                 : useSessionPanelStore.getState().toggle(sessionId, tool)
             }
@@ -176,23 +147,17 @@ export interface SessionPanelProps {
   sessionId: string | null
   /** Files 工具的内容（宿主装配：桌面 FilesPanel + 桌面 caps；扩展 FSA 权限门控 + FilesPanel） */
   filesContent: ReactNode
-  /** Preview 工具的内容（可选注入：桌面悬浮窗 / 扩展传共享 PreviewPanel；桌面主窗不传 —— 预览在右侧面板） */
-  previewContent?: ReactNode
 }
 
 /** 会话面板卡片本体 —— 收起（或无会话）时渲染 null */
 export function SessionPanel({
   sessionId,
-  filesContent,
-  previewContent
+  filesContent
 }: SessionPanelProps): React.JSX.Element | null {
   const { t } = useTranslation()
-  const rawTool = useSessionPanelTool(sessionId)
+  const tool = useSessionPanelTool(sessionId)
   const width = useSessionPanelStore((s) => s.width)
-  if (!sessionId || !rawTool) return null
-
-  // 兜底：面板停在 Preview 但宿主未注入 previewContent（不该发生）→ 回落到 Files
-  const tool = rawTool === 'preview' && !previewContent ? 'files' : rawTool
+  if (!sessionId || !tool) return null
 
   return (
     // 外层：占位列（宽度参与 flex 布局），右/下留白让卡片「悬浮」；上留白略小使其贴近顶栏工具区。
@@ -260,16 +225,6 @@ export function SessionPanel({
             >
               {filesContent}
             </div>
-            {previewContent !== undefined && (
-              <div
-                className="absolute inset-0"
-                style={
-                  tool === 'preview' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
-                }
-              >
-                {previewContent}
-              </div>
-            )}
             <div
               className="absolute inset-0"
               style={tool === 'tasks' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}

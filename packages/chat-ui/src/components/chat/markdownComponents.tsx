@@ -262,7 +262,7 @@ function resolveForPreview(p: string, projectPath: string | null): string | null
 
 /**
  * 路径 —— 与链接同形：前置文件类型图标 + 紧凑文本，无底色块。
- * 点击在预览面板打开该文件（走 requestFilePreview，与 Files 面板点文件同一条信号）；
+ * 点击在独立窗口打开该文件（走 requestFilePreview，与 Files 面板点文件同一条信号）；
  * 目录 / 无法解析的路径退回复制，⌘（Ctrl）+ 点击始终复制。完整路径留在 title 里。
  */
 function PathChip({ path }: { path: string }): React.JSX.Element {

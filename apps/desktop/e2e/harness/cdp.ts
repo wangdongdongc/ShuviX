@@ -39,7 +39,8 @@ const SECONDARY_WINDOW_HASHES = [
   '#pinned-chat',
   '#widget-window',
   '#browser-window',
-  '#markdown-window'
+  '#markdown-window',
+  '#file-preview'
 ]
 
 /**
@@ -77,6 +78,30 @@ export function isMarkdownWindowPage(t: CdpTarget, appUrl?: string): boolean {
 /** md 窗口 target 的 hash 解开（与渲染端 MarkdownWindowShell.parseHash 同一种读法） */
 export function markdownWindowOf(t: CdpTarget): { sessionId: string; path: string } | null {
   const at = t.url.indexOf('#markdown-window')
+  if (at < 0) return null
+  const hash = t.url.slice(at + 1)
+  const q = hash.indexOf('?')
+  if (q < 0) return null
+  const params = new URLSearchParams(hash.slice(q + 1))
+  const sessionId = params.get('sessionId')
+  const path = params.get('path')
+  return sessionId && path ? { sessionId, path } : null
+}
+
+/**
+ * 文件预览窗口（#file-preview）的页面判别 —— 应用里点开的非 md 可预览文件（md 进 md 窗口）。
+ * 一个文件一个窗口，按 hash 里的 path 区分（见 filePreviewWindowOf）。
+ */
+export function isFilePreviewWindowPage(t: CdpTarget, appUrl?: string): boolean {
+  if (t.type !== 'page' || !t.url.includes('out/renderer') || !t.url.includes('#file-preview')) {
+    return false
+  }
+  return !appUrl || t.url.startsWith(appUrl)
+}
+
+/** 预览窗口 target 的 hash 解开（与渲染端 FilePreviewWindowShell.parseHash 同一种读法） */
+export function filePreviewWindowOf(t: CdpTarget): { sessionId: string; path: string } | null {
+  const at = t.url.indexOf('#file-preview')
   if (at < 0) return null
   const hash = t.url.slice(at + 1)
   const q = hash.indexOf('?')

@@ -18,8 +18,9 @@
  *   E-7  项目里的 agent md（项目笔记本）：mdMeta.get 回 null、没有条；它的 id 下存着补缺值，档位行也不挂小标
  *   E-8  IPC 拒绝：旧 id → no-object-id；shuvix-tools → key-not-allowed；max → invalid-value；setEnabled 收到 agent id /
  *        UUID / 不存在的内置 → key-not-allowed、非布尔 → invalid-value；注册表不变
- *   E-9  A 的卡片有补缺行、显示 A 存的值并挂小标；A 的笔记里点 `[[meta-b]]` 在右侧预览 meta-b（它自己也存着补缺值）：
- *        预览里的卡片没有补缺行、没有小标、没有条（不借 A 的会话显示任何东西）
+ *   E-9  A 的卡片有补缺行、显示 A 存的值并挂小标；A 的笔记里点 `[[meta-b]]` → meta-b.md 在它自己的 md 窗口打开
+ *        （它也存着补缺值）：那条内存会话不是注册表笔记，卡上不显示 B 的补缺值、没有小标、没有条（也不借 A 的会话）；
+ *        主窗口里仍只有 A 那一张卡
  *   E-11 两份文件共用一个 id：经 IPC 补 medium → twin-b 的档位行显示 medium、挂小标
  *   E-10 补缺值跨重启还在（stop({keepHome}) + launchApp({home}))—— 放最后，它换了实例
  *
@@ -476,7 +477,7 @@ describe('属性卡上的补缺值 —— agent 的模型与思考档位', () =>
     expect(titleHook?.disabled).toBeUndefined()
   })
 
-  it('E-9 A 的卡片有补缺行、显示 A 存的值并挂小标；预览里 meta-b 的卡片（它自己也存着值）没有补缺行、没有小标、没有条', async () => {
+  it('E-9 A 的卡片有补缺行、显示 A 存的值并挂小标；点 [[meta-b]] 在 md 窗口打开 meta-b，那张卡（它自己也存着值）不显示补缺值、没有小标、没有条', async () => {
     writeIdAgent('meta-b', V, [], 'B BODY.')
     writeIdAgent('meta-a', A_ID, [], 'See [[meta-b]] for details.')
     await agents.refresh()
@@ -499,20 +500,43 @@ describe('属性卡上的补缺值 —— agent 的模型与思考档位', () =>
       '[[meta-b]] resolved'
     )
     await editor.clickWikiLink('meta-b')
-    await until(async () => (await fill.cards()).length === 2, 'preview card mounted')
-    // 预览里的卡片挂完之后再多等一会儿：补缺行与条都是异步挂的（get 回来才渲染）
-    await sleep(800)
+    // 点开的 md 不再落到右侧预览：meta-b.md 在它自己的协作编辑窗口（#markdown-window）里打开
+    const mdWin = await until(
+      () => app.connectMarkdownWindow('meta-b.md'),
+      'meta-b.md opened in a markdown window'
+    )
+    try {
+      const winFill = fmFillPane(mdWin)
+      await until(async () => (await winFill.cards()).length === 1, 'md window card mounted')
+      // 补缺行与条都是异步挂的（get 回来才渲染）—— 挂完再多等一会儿
+      await sleep(800)
+      // md 窗口是一条内存会话，不是 `__agents__` 下的注册表笔记：主进程认不出它是哪份注册表文件，
+      // 所以 B 存着的补缺值（medium）不显示、不挂来源说明，也没有条；更不借 A 的会话显示 A 的值
+      const [winCard] = await winFill.cards()
+      expect(winCard.name).toBe('meta-b')
+      expect(winCard.fillTags).toBe(0)
+      expect(winCard.strip).toBe(false)
+      expect(winCard.text).not.toContain(en.notebook.frontmatter.metaTitle)
+      const winThinking = await winFill.row(THINKING)
+      expect(winThinking?.value).toBe('')
+      expect(winThinking?.tagged).toBe(false)
+    } finally {
+      await mdWin.eval('window.close()').catch(() => undefined)
+      mdWin.close()
+    }
+    await until(
+      async () => !(await app.markdownWindows()).some((w) => w.path.includes('meta-b.md')),
+      'md window closed'
+    )
+
+    // 主窗口里仍只有 A 自己那一张卡（没有右侧预览了），A 的补缺行照旧
     const cards = await fill.cards()
-    const own = cards.find((c) => c.name === 'meta-a')
-    const preview = cards.find((c) => c.name === 'meta-b')
-    expect(own?.fillWrappers).toBe(2)
-    expect(own?.fillTags).toBe(1)
-    expect(own?.strip).toBe(false)
-    expect(preview).toBeDefined()
-    expect(preview!.fillWrappers).toBe(0)
-    expect(preview!.fillTags).toBe(0)
-    expect(preview!.strip).toBe(false)
-    expect(preview!.text).not.toContain(en.notebook.frontmatter.metaTitle)
+    expect(cards).toHaveLength(1)
+    const own = cards[0]
+    expect(own.name).toBe('meta-a')
+    expect(own.fillWrappers).toBe(2)
+    expect(own.fillTags).toBe(1)
+    expect(own.strip).toBe(false)
   })
 
   it('E-11 两份文件共用一个 id：经 IPC 补 medium → twin-b 的档位行显示 medium、挂小标', async () => {

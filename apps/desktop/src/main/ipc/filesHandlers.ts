@@ -6,6 +6,7 @@ import {
   unwatchSessionFile
 } from '../services/filesWatcherService'
 import { previewSessionFile, writeSessionFile } from '../services/filePreviewService'
+import { openFileInWindow, type OpenFileParams } from '../services/previewWindowService'
 import { findArtifact, readArtifact } from '../services/artifacts/store'
 import { sessionRecords } from '../services/sessionRecords'
 
@@ -27,6 +28,8 @@ export function registerFilesHandlers(): void {
   ipcMain.handle('files:read', (_event, params: { sessionId: string; path: string }) =>
     previewSessionFile(params.sessionId, params.path)
   )
+  // 在独立窗口里打开文件（md → 协作编辑窗口；其余可预览的 → 预览窗口；不支持预览的不响应）
+  ipcMain.handle('files:open', (_event, params: OpenFileParams) => openFileInWindow(params))
   ipcMain.handle(
     'files:write',
     (_event, params: { sessionId: string; path: string; content: string }) =>

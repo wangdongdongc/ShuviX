@@ -1,7 +1,7 @@
 /**
  * AudioDock —— 贴在 FilesPanel 底部的迷你播放器
  *
- * 与 FilePreview 的 MediaView 关键差异：不进预览覆盖层，让用户听歌的同时
+ * 与 FilePreview 的 MediaView 关键差异：不开预览窗口，让用户听歌的同时
  * 文件树继续可见可操作。播放过程中点击其它文件不会打断；点击新音频替换源；
  * 关闭按钮或播放错误时下架。
  */
@@ -19,7 +19,7 @@ interface AudioDockProps {
   sessionId: string
   /** 停止播放 + 移除 dock */
   onClose: () => void
-  /** 把当前媒体转入预览覆盖层（FilePreview 的 MediaView 全屏视图） */
+  /** 把当前媒体转入独立预览窗口（FilePreview 的 MediaView） */
   onExpand: () => void
 }
 

@@ -1,17 +1,17 @@
 /**
- * File preview 服务 —— 为 FilesPanel 的预览覆盖层提供文件内容读取
+ * File preview 服务 —— 为文件预览窗口提供文件内容读取（开不开窗见 previewWindowService）
  *
  * 与 ReadTool 的关键差异：
  *  - 准入判定走 isPathReadAllowed（不弹询问）—— 被动 UI 不应在每次点击时打扰用户
  *  - 返回 FileReadResult discriminated union，二进制/超大/越权状态走专门分支而非抛异常
  *  - 不做 LLM 化处理：无行号 header、无 byte-cap 截断、无 tool_results 持久化、不压缩图片
  *
- * 分类 / 大小门控 / hex-magic 逻辑全在 @shuvix/agent-runtime 的 previewFile 共享内核里
- * （与扩展 FSA 后端共用一份）；本文件只做「桌面准入 + 注入 Node fs port」。
+ * 分类 / 大小门控逻辑全在 @shuvix/agent-runtime 的 previewFile 共享内核里（开不开窗的
+ * classifyPreviewFile 同一份）；本文件只做「解析路径 + 注入 Node fs port」。
  */
 
 import { chmod, rename, stat, unlink, writeFile } from 'fs/promises'
-import { basename, dirname, join } from 'path'
+import { basename, dirname, isAbsolute, join } from 'path'
 import { previewFile } from '@shuvix/agent-runtime'
 import { sessionService } from './sessionService'
 import { observeRegistryWrite } from './registryNotes'
@@ -32,11 +32,13 @@ import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 export async function previewSessionFile(sessionId: string, path: string): Promise<FileReadResult> {
   const session = sessionService.getById(sessionId)
   const workingDirectory = session?.workingDirectory
-  if (!workingDirectory) {
+  // 会话只用来解相对路径：预览窗口借的会话可能已经删了（例如从 md 窗口点开的图，md 窗口一关
+  // 它的内存会话就没了），而它交来的永远是绝对路径 —— 那就照读
+  if (!workingDirectory && !isAbsolute(path)) {
     return { kind: 'not-allowed', path, reason: 'No active workspace for this session' }
   }
 
-  const absolutePath = resolveReadPath(path, workingDirectory)
+  const absolutePath = resolveReadPath(path, workingDirectory ?? '')
 
   // 桌面 port 操作绝对路径；结果里的 path 也用绝对路径 —— 渲染端媒体/PDF 拼
   // shuvix-preview://...&path=<abs> 交给 customProtocols 流式播放（需要绝对路径）。

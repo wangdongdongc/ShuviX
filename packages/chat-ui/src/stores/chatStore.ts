@@ -192,10 +192,10 @@ interface ChatState {
   /** 当前活跃会话 ID —— 由 active 派生的只读镜像，勿直接 set */
   activeSessionId: string | null
   /**
-   * 请求打开某文件预览的信号（绝对路径 + 单调 nonce）—— 独立预览面板的唯一入口。
-   * 触发方：笔记本 [[双链]] / Files 面板点击文件。
-   * 消费方：宿主经 usePreviewRequestBridge 落为预览目标并揭示自己的预览面板
-   * （桌面右侧 preview tab / 扩展与悬浮窗 PreviewOverlay）。
+   * 请求打开某文件预览的信号（绝对路径 + 单调 nonce）—— 「在应用里点开一个文件」的唯一入口。
+   * 触发方：笔记本 [[双链]] / Files 面板点击文件 / 对话里的路径 / 工具缩略图 / 音视频 dock。
+   * 消费方：桌面宿主的 useFilePreviewBridge 交主进程开独立窗口（md → 协作编辑窗口，
+   * 其余可预览的 → 预览窗口，不支持预览的不响应）。
    * 含 nonce 以便重复请求同一文件也能触发（值变化）。
    */
   filePreviewRequest: { absPath: string; nonce: number; openedBy: 'agent' | 'user' } | null

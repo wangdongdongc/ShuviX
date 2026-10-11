@@ -4,13 +4,12 @@ import { create } from 'zustand'
 export const SESSION_PANEL_MIN_W = 240
 export const SESSION_PANEL_MAX_W = 600
 
-/** 会话面板可装载的工具（会话工具栏按钮与之一一对应；preview 仅注入了 previewContent 的宿主有，
- *  tasks 仅本会话有后台任务时有） */
-export type SessionPanelTool = 'files' | 'preview' | 'subagent' | 'tasks'
+/** 会话面板可装载的工具（会话工具栏按钮与之一一对应；tasks 仅本会话有后台任务时有） */
+export type SessionPanelTool = 'files' | 'subagent' | 'tasks'
 
 /**
  * 共享会话面板视图状态（桌面 / 扩展共用）—— 聊天区内部右侧的「会话工具栏」悬浮卡片
- * （装载 Files / Preview / Sub-agent / 后台任务，见 SessionPanel / SessionToolbar）。
+ * （装载 Files / 后台任务，见 SessionPanel / SessionToolbar）。
  *
  * 与 usePanelStore（app 级右侧面板）的定位区分：本面板挂在对话列内部、与会话绑定 ——
  * 展开态+激活工具按 sessionId 记忆（内存态不持久化，重启默认收起）；宽度全局共享。
@@ -24,7 +23,7 @@ export interface SessionPanelStoreState {
 
   /** 工具栏点按语义：已开且同工具 → 收起；否则展开并切到该工具 */
   toggle: (sessionId: string, tool: SessionPanelTool) => void
-  /** 揭示语义：确保展开并切到该工具（不 toggle）—— 文件预览 / 子代理注册用 */
+  /** 揭示语义：确保展开并切到该工具（不 toggle）—— 任务揭示用 */
   show: (sessionId: string, tool: SessionPanelTool) => void
   close: (sessionId: string) => void
   setWidth: (width: number) => void

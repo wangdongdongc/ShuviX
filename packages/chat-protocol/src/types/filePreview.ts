@@ -3,6 +3,8 @@
  *
  * Discriminated union over outcome so the renderer can show placeholders for
  * binary / oversized / sandbox-rejected files without surfacing them as Errors.
+ * (Binary files are not previewable — the desktop never opens a preview window for one;
+ * `binary` stays as a fallback for a file that turned binary while its window was open.)
  */
 
 export type FileReadResult =
@@ -69,22 +71,6 @@ export type FileReadResult =
       mimeType: string
       size: number
       ext: string
-    }
-  | {
-      kind: 'hex'
-      path: string
-      /** 文件实际字节数；truncated 时 > data.length */
-      size: number
-      ext: string
-      /** 文件前 bytesShown 个字节。走 Electron 结构化克隆原生 Uint8Array 路径，不 base64。
-       *  Buffer 是 Uint8Array 子类，主进程可直接返回 Buffer，类型兼容。 */
-      data: Uint8Array
-      /** data.length，渲染端不必重算 */
-      bytesShown: number
-      /** size > bytesShown */
-      truncated: boolean
-      /** 例 "PE (Windows EXE/DLL)" / "PNG image" / "Mach-O 64-bit"；无匹配则 undefined */
-      magic?: string
     }
   | {
       kind: 'too-large'

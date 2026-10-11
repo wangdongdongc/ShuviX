@@ -6,7 +6,15 @@
  * ask-on-external-path 不问，故读文件不会挂在等人应答上；询问用例（C-10）的 `write` 则写到
  * 会话目录**之外**：ask-on-external-path 对那里的写入 ask，那正是被测对象。
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { until } from '../../harness/cdp'
@@ -20,7 +28,13 @@ import {
   writePng,
   type EventRecorder
 } from '../../harness/seed'
-import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
+import {
+  chatPane,
+  filePreviewWindowImages,
+  sidebarPane,
+  type ChatPane,
+  type SidebarPane
+} from '../../harness/pages'
 import { syncProbe, type SyncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
@@ -374,15 +388,23 @@ describe('模型收到的那张图', () => {
       expect(block.result ?? '').not.toContain(head)
     })
 
-    it('点缩略图：同一路径在工具子树之外打开（既有的预览信号）', async () => {
+    it('点缩略图：同一路径在独立的文件预览窗口里打开（既有的预览信号）', async () => {
       await chat.setToolRowExpanded(0, true)
       await chat.waitToolImages(1)
       await chat.clickToolImage(0)
-      const outside = await until(async () => {
-        const imgs = await chat.previewPanelImages()
-        return imgs.some((i) => i.path === smallPng()) ? imgs : null
-      }, 'preview outside the tool subtree')
-      expect(outside.some((i) => i.path === smallPng())).toBe(true)
+      // 窗口按真实路径开（/tmp → /private/tmp 之类的写法差异由主进程 realpath 抹平）
+      const real = realpathSync(smallPng())
+      const win = await until(() => app.connectFilePreviewWindow(real), 'file preview window')
+      try {
+        const imgs = await until(async () => {
+          const shots = await filePreviewWindowImages(win)
+          return shots.some((i) => i.path === real && i.naturalWidth === 40) ? shots : null
+        }, 'image decoded in the preview window')
+        expect(imgs.find((i) => i.path === real)?.naturalHeight).toBe(24)
+      } finally {
+        await win.eval('window.close()').catch(() => undefined)
+        win.close()
+      }
     })
 
     it('活过关闭再打开：重投影后仍是同一 path，展开仍能解码', async () => {

@@ -35,6 +35,7 @@ const EXPECTED_WINDOW_FILES: Record<string, number> = {
   'services/browser/browserWindowService.ts': 1,
   'services/browser/stagingWindow.ts': 1,
   'services/markdownWindowService.ts': 1,
+  'services/previewWindowService.ts': 1,
   'services/pinnedChatService.ts': 1,
   'services/widgetWindowService.ts': 1
 }

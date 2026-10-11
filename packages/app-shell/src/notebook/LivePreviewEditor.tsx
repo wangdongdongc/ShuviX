@@ -189,7 +189,7 @@ export interface LivePreviewEditorProps {
    *  readOnly 模式下不会触发（无文档改动），可省略。 */
   onSave?: (content: string) => void
   /**
-   * 只读 live-preview：仅渲染、不可编辑（供 Files 面板 md 预览复用笔记本渲染）。
+   * 只读 live-preview：仅渲染、不可编辑（供文件预览窗口复用笔记本渲染）。
    * 编辑器不可聚焦 → inline-preview 全量渲染（无光标行揭示源码）；同时关闭自动保存、
    * 编辑右键菜单与目录跳转聚焦。双链 [[file]] / 内嵌 ![[image]] 仍生效。
    */
@@ -207,7 +207,7 @@ export interface LivePreviewEditorProps {
   handleRef?: React.RefObject<LivePreviewEditorHandle | null>
   /**
    * 项目文件上下文（来自 NotebookView）。提供后启用 Obsidian 风格双链：
-   * `[[file]]` 可点击跳转（在右侧 Files 面板打开预览）、`![[image]]` 行内预览，
+   * `[[file]]` 可点击跳转（宿主在独立窗口里打开）、`![[image]]` 行内预览，
    * 均按文件名在该会话工作目录内解析。笔记本式独立文档不传则不启用。
    */
   fileContext?: { sessionId: string }
@@ -618,8 +618,8 @@ export function LivePreviewEditor({
       if (!sessionId) return
       const abs = lookupAbs(FILE_MAPS.get(sessionId) ?? null, target)
       if (!abs) return
-      // 点击 [[file]] → 一律在右侧 Files 面板打开该文件预览（代码/文本/媒体/二进制都可预览），
-      // 不再按扩展名分流到外部打开——保持外层编辑器与表格单元格内的 wikiLink 行为一致。
+      // 点击 [[file]] → 一律发预览信号，由宿主开独立窗口（md 进协作编辑窗口、其余可预览的进预览窗口、
+      // 不支持的不响应）—— 保持外层编辑器与表格单元格内的 wikiLink 行为一致。
       useChatStore.getState().requestFilePreview(abs)
     },
     [sessionId]

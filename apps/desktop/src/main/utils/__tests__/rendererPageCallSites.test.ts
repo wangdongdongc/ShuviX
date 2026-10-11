@@ -40,6 +40,7 @@ const EXPECTED_PAGE_LOADS: Record<string, number> = {
   'index.ts': 2,
   'services/browser/browserWindowService.ts': 1,
   'services/markdownWindowService.ts': 1,
+  'services/previewWindowService.ts': 1,
   'services/pinnedChatService.ts': 1,
   'services/widgetWindowService.ts': 1
 }

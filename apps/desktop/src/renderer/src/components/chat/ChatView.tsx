@@ -1,5 +1,5 @@
 import { getSessionChannelApi, getHostApi } from '@shuvix/chat-ui'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { PictureInPicture2, Pin, PinOff, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
@@ -9,14 +9,12 @@ import { useBottomPanelStore } from '../../stores/bottomPanelStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 // 会话面板真源在 @shuvix/app-shell；经桌面接线文件导入以确保宽度持久化订阅被加载
 import '../../stores/sessionPanelStore'
-import { useSettingsStore } from '../../stores/settingsStore'
 import {
   WelcomeView,
   ChatBody,
   FilesPanel,
   MediaUrlProvider,
   PanelToggleButton,
-  PreviewPanel,
   SessionConfigDialog,
   SessionPanel,
   SessionToolbar,
@@ -77,26 +75,10 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       : false
   )
 
-  // 揭示信号 → 会话面板（子智能体注册切 Sub-agent；共享 hook）。
-  // 悬浮占位态不响应。文件预览：主窗由右侧面板承接（useRightPanelBridge），
-  // 悬浮窗无 app 级右面板 → 会话面板的 Preview 工具页承接（previewInPanel）。
+  // 揭示信号 → 会话面板（任务揭示；共享 hook）。悬浮占位态不响应。
+  // 文件预览不进任何面板：useFilePreviewBridge 交主进程开独立窗口
   const isFloating = pinnedMode === 'floating'
-  useSessionPanelReveal(!isWeb && pinnedMode !== 'placeholder', isFloating)
-
-  /** 悬浮窗 Preview 工具页的 markdown 宿主能力（主题 / 外链）—— 与右侧面板 Preview tab 同源 */
-  const notebookTheme = useSettingsStore((s) => s.notebookTheme)
-  const floatingPreviewContent = useMemo(
-    () =>
-      isFloating ? (
-        <PreviewPanel
-          notebookCaps={{
-            notebookTheme,
-            openExternal: (url: string) => void window.api.app.openExternal(url)
-          }}
-        />
-      ) : undefined,
-    [isFloating, notebookTheme]
-  )
+  useSessionPanelReveal(!isWeb && pinnedMode !== 'placeholder')
 
   /** 悬浮窗"始终置顶"状态 —— 仅 floating 模式下使用 */
   const [alwaysOnTop, setAlwaysOnTopState] = useState(true)
@@ -130,7 +112,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   const sessionTools =
     !isWeb && pinnedMode !== 'placeholder' && activeSessionId ? (
       <>
-        <SessionToolbar sessionId={activeSessionId} showPreview={isFloating} />
+        <SessionToolbar sessionId={activeSessionId} />
         <div className="w-px h-3.5 bg-border-secondary/60 mx-0.5" />
       </>
     ) : null
@@ -239,7 +221,6 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
             <SessionPanel
               sessionId={activeSessionId}
               filesContent={<FilesPanel onOpenFolder={(p) => void window.api.app.openFolder(p)} />}
-              previewContent={floatingPreviewContent}
             />
           </MediaUrlProvider>
         ) : undefined

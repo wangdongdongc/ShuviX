@@ -169,13 +169,8 @@ export type { FilesPanelProps } from './files/FilesPanel'
 export { MediaUrlProvider, shuvixPreviewResolver, useResolveMediaUrl } from '@shuvix/chat-ui'
 export type { ResolveMediaUrl, MediaSource } from '@shuvix/chat-ui'
 
-// 独立预览面板（会话无关）：store + 桥 + 面板/覆盖层两种露出形态
-export {
-  usePreviewPanelStore,
-  usePreviewRequestBridge,
-  type PreviewTarget
-} from './preview/previewPanelStore'
-export { PreviewPanel, type PreviewPanelProps } from './preview/PreviewPanel'
+// 文件预览视图（按 files.read 的结果分派渲染）—— 桌面装进独立的预览窗口
+export { FilePreview, type FilePreviewProps } from './files/FilePreview'
 // 宿主无关路径工具（不依赖 node:path）——供宿主拼接笔记本绑定路径 / 求相对路径复用
 export { extOf, basename, joinPath, relativize } from './files/paths'
 
@@ -185,7 +180,6 @@ export { NotebookView } from './notebook/NotebookView'
 export type { NotebookViewProps } from './notebook/NotebookView'
 export { NotebookSession } from './notebook/NotebookSession'
 export type { NotebookSessionProps } from './notebook/NotebookSession'
-export { useCreateNotebook } from './notebook/useCreateNotebook'
 export { EFFECT_CLASS as POLICY_EFFECT_CLASS } from './notebook/frontmatterCard'
 export { LivePreviewEditor } from './notebook/LivePreviewEditor'
 export type {

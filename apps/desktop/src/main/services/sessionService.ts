@@ -304,7 +304,7 @@ export class SessionService {
    * 创建时可改（updateEnabledTools）。
    *
    * params.notebookPath 非空时创建「笔记本会话」：绑定项目内的一个 md 文件、标题默认取 basename
-   * （去后缀的标题由共享的 useCreateNotebook 显式传入 params.title）。
+   * （调用方可经 params.title 显式给标题）。
    *
    * params.parentId 非空时创建**子会话**：形态仍是普通会话，只是多一个父指针。
    * projectId 恒随父会话（工作目录是会话的地基，跨项目的子会话没有可用语义）——

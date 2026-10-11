@@ -174,8 +174,6 @@ export function useAgentEvents(): void {
           useBgTaskStore.getState().upsert(event.task)
           break
 
-        // 注：browser_event（右侧浏览器/预览面板）由宿主的 useRightPanelBridge 处理，对话框本身不响应
-
         // ─── 运行时出生：扩展能力勾选从此只读，直到它关停完毕 ───
         case 'agent_created':
           store.setAgentCreated(sid, true)

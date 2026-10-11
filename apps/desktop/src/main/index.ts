@@ -36,6 +36,7 @@ import {
 } from './services/notificationService'
 import { sessionRunErrorText, setSessionAskObserver } from './services/sessionSignals'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
+import { initPreviewWindowService } from './services/previewWindowService'
 import { markdownFilesFromArgv } from './utils/markdownFiles'
 import { loadRendererPage } from './utils/rendererPage'
 import {
@@ -479,6 +480,10 @@ function initSharedWindowServices(): void {
       getZoomFactor: getStartupZoomFactor,
       createFrontend: (window, id) => new ElectronFrontend(window, id)
     })
+  )
+  // 应用内点开的文件：md 进上面的协作编辑窗口，其余可预览的进只读预览窗口（不建会话）
+  step('windowServices › preview', () =>
+    initPreviewWindowService({ getThemeBgColor, getZoomFactor: getStartupZoomFactor })
   )
 }
 

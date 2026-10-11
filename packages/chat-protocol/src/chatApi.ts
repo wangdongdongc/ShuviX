@@ -892,8 +892,17 @@ export interface HostApi {
      */
     readInvocation: (params: { sessionId: string; toolCallId: string }) => Promise<string | null>
   }
-  /** 文件回写（属管理类，渠道端无权） */
+  /** 文件回写与开窗（属管理类，渠道端无权） */
   files: {
+    /**
+     * 在独立窗口里打开文件（桌面）：md → 协作编辑窗口，其余可预览的 → 只读预览窗口；
+     * 不支持预览的（二进制、超限、读不了）不响应，回 false。
+     */
+    open: (params: {
+      sessionId: string
+      path: string
+      openedBy?: 'agent' | 'user'
+    }) => Promise<boolean>
     write: (params: {
       sessionId: string
       path: string

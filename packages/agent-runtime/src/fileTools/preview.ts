@@ -1,10 +1,11 @@
 /**
- * File preview 共享内核 —— 为 FilesPanel 的预览覆盖层决定 FileReadResult。
+ * File preview 共享内核 —— 为文件预览窗口决定 FileReadResult，以及「这个文件能不能预览」。
  *
- * 宿主无关：只依赖注入的 FileSystemPort（stat + readBytes），桌面用 Node fs、
- * 扩展用 File System Access。两端共用同一份分类/大小门控/magic 逻辑，杜绝行为漂移。
+ * 宿主无关：只依赖注入的 FileSystemPort（stat + readBytes）。分类与读取共用同一份
+ * 判定（classifyPreviewFile），「开不开窗」与「窗里显示什么」不会漂移。
+ * 二进制文件不支持预览（曾经的 hex 视图已移除）。
  *
- * 内存安全（核心不变量）：任何「整读」分支前一定先过 size cap；hex/嗅探只经
+ * 内存安全（核心不变量）：任何「整读」分支前一定先过 size cap；嗅探只经
  * readBytes(offset,length) 读有限字节。故预览 GB 级文件也不会把整体载入内存。
  */
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
@@ -15,8 +16,6 @@ import { parseImagePixelSize } from './imageSize'
 export const PREVIEW_TEXT_MAX_BYTES = 2 * 1024 * 1024
 /** 图片 base64 直出上限：超过给 too-large 占位 */
 export const PREVIEW_IMAGE_MAX_BYTES = 10 * 1024 * 1024
-/** Hex 视图只读取前 1 MiB —— 更大用户应换专门工具，预览面板只做“瞄一眼” */
-export const PREVIEW_HEX_MAX_BYTES = 1024 * 1024
 /** Office 整读 base64 上限：渲染端（docx-preview / SheetJS）同步解析，cap 防 UI 长冻结 */
 export const PREVIEW_OFFICE_MAX_BYTES = 15 * 1024 * 1024
 /**
@@ -56,14 +55,8 @@ const AUDIO_MIME_BY_EXT: Record<string, string> = {
 }
 
 /**
- * hex 视图无价值的扩展名 —— 即使是二进制也只给 binary 占位卡片，不读字节。
- * 归档（zip/tar/...）和编码后媒体（.avi）头部之后是压缩/编码后随机字节，hex 没可读性。
- */
-const HEX_VIEW_DENYLIST = new Set<string>(['.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.avi'])
-
-/**
  * 电子书 → 渲染端解析器路由。
- * `.cbz` 走电子书而非归档占位 —— 它就是一包按序图片，逐页翻比 hex/占位有用得多。
+ * `.cbz` 走电子书而非归档占位 —— 它就是一包按序图片，逐页翻比「不支持预览」有用得多。
  * 刻意不含 .mobi/.azw3：它们的资源模型绕不开 blob: URL，而渲染器 CSP 不放行（见 ebookLoaders 注释）。
  */
 const EBOOK_KIND_BY_EXT: Record<string, 'epub' | 'fb2' | 'cbz'> = {
@@ -85,18 +78,25 @@ const OFFICE_KIND_BY_EXT: Record<string, 'docx' | 'sheet'> = {
 }
 
 /**
- * 无浏览器端渲染方案的富文档容器 —— 内容是二进制且 NULL 嗅探不一定识别，
- * 显式列出走 binary 占位避免渲染成乱码。（.docx/.xlsx 等走 'office' kind 浏览器端渲染；
- * .pdf 单独走 'pdf' kind 喂给 iframe，均不在此集合。）
+ * 已知二进制扩展名 —— 不读字节直接判为 binary（不支持预览）。
+ * 无浏览器端渲染方案的富文档容器（.doc/.pptx …）、归档、编码后媒体、可执行文件 / 库 / 字体 /
+ * 数据库等都在这里；NULL 嗅探识别不了的（富容器头部常是可打印字节）靠它兜住，避免当文本乱码渲染。
+ * （.docx/.xlsx 等走 'office'，.pdf 走 'pdf'，.cbz 走电子书，均不在此集合。）
  */
-const RICH_BINARY_PREVIEW_EXTENSIONS = new Set<string>(['.doc', '.pptx'])
-
-/** 已知二进制扩展名 → hex view（文本渲染会乱码，但 hex 有可读价值：可执行/库/字体/数据库…） */
-const KNOWN_BINARY_EXTENSIONS = new Set<string>([
+const BINARY_EXTENSIONS = new Set<string>([
+  '.doc',
+  '.pptx',
   '.ppt',
   '.odt',
   '.odp',
   '.rtf',
+  '.zip',
+  '.tar',
+  '.gz',
+  '.bz2',
+  '.7z',
+  '.rar',
+  '.avi',
   '.exe',
   '.dll',
   '.so',
@@ -148,298 +148,177 @@ function sniffBinary(head: Uint8Array): boolean {
   return false
 }
 
-interface MagicSignature {
-  /** 起始偏移 —— 缺省 0 */
-  offset?: number
-  /** 必须命中的字节序列；mask 中为 0 的位置为通配 */
-  pattern: number[]
-  /** 与 pattern 同长度，0=通配，0xFF=必匹配。缺省全 0xFF */
-  mask?: number[]
-  label: string
-  /** 命中后进一步判断（例 RIFF 容器读 8-11 字节决定 WAVE/AVI/WEBP） */
-  sub?: (buf: Uint8Array) => string
-}
-
-/** 读 ASCII 子串（用于 magic 子类型判定），越界安全 */
-function asciiAt(buf: Uint8Array, start: number, end: number): string {
-  let s = ''
-  for (let i = start; i < end && i < buf.length; i++) s += String.fromCharCode(buf[i])
-  return s
-}
-
-/** 顺序敏感：长签名在前，避免短前缀提前命中 */
-const MAGIC_SIGNATURES: ReadonlyArray<MagicSignature> = [
-  { pattern: [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00], label: 'RAR v5 archive' },
-  { pattern: [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00], label: 'RAR v1.5+ archive' },
-  {
-    pattern: [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1],
-    label: 'OLE Compound (legacy .doc/.xls)'
-  },
-  { pattern: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], label: 'PNG image' },
-  {
-    pattern: [
-      0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33
-    ],
-    label: 'SQLite 3 database'
-  },
-  { pattern: [0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c], label: '7-Zip archive' },
-  { pattern: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61], label: 'GIF89a image' },
-  { pattern: [0x47, 0x49, 0x46, 0x38, 0x37, 0x61], label: 'GIF87a image' },
-  {
-    pattern: [0xca, 0xfe, 0xba, 0xbe],
-    // 后面 4 字节如果是 `00 00 00 ??` 说明 Java class；否则 Mach-O fat
-    sub: (buf) => {
-      if (buf.length >= 8 && buf[4] === 0 && buf[5] === 0 && buf[6] === 0) return 'Java class file'
-      return 'Mach-O fat binary'
-    },
-    label: 'Mach-O fat binary'
-  },
-  { pattern: [0xfe, 0xed, 0xfa, 0xcf], label: 'Mach-O 64-bit (BE)' },
-  { pattern: [0xfe, 0xed, 0xfa, 0xce], label: 'Mach-O 32-bit (BE)' },
-  { pattern: [0xcf, 0xfa, 0xed, 0xfe], label: 'Mach-O 64-bit' },
-  { pattern: [0xce, 0xfa, 0xed, 0xfe], label: 'Mach-O 32-bit' },
-  { pattern: [0x7f, 0x45, 0x4c, 0x46], label: 'ELF executable' },
-  { pattern: [0x25, 0x50, 0x44, 0x46], label: 'PDF document' },
-  { pattern: [0x50, 0x4b, 0x03, 0x04], label: 'ZIP / .docx / .jar' },
-  { pattern: [0x50, 0x4b, 0x05, 0x06], label: 'ZIP archive (empty)' },
-  { pattern: [0x50, 0x4b, 0x07, 0x08], label: 'ZIP archive (spanned)' },
-  { pattern: [0x00, 0x61, 0x73, 0x6d], label: 'WebAssembly module' },
-  { pattern: [0x4f, 0x67, 0x67, 0x53], label: 'OGG container' },
-  { pattern: [0x66, 0x4c, 0x61, 0x43], label: 'FLAC audio' },
-  {
-    pattern: [0x52, 0x49, 0x46, 0x46],
-    // 字节 8-11 决定子类型
-    sub: (buf) => {
-      if (buf.length < 12) return 'RIFF container'
-      const tag = asciiAt(buf, 8, 12)
-      if (tag === 'WAVE') return 'WAVE audio'
-      if (tag === 'AVI ') return 'AVI video'
-      if (tag === 'WEBP') return 'WebP image'
-      return 'RIFF container'
-    },
-    label: 'RIFF container'
-  },
-  { pattern: [0x4f, 0x54, 0x54, 0x4f], label: 'OpenType font (CFF)' },
-  { pattern: [0x77, 0x4f, 0x46, 0x32], label: 'WOFF2 font' },
-  { pattern: [0x77, 0x4f, 0x46, 0x46], label: 'WOFF font' },
-  { pattern: [0x25, 0x21, 0x50, 0x53], label: 'PostScript document' },
-  { pattern: [0x00, 0x01, 0x00, 0x00, 0x00], label: 'TrueType font' },
-  // 偏移 4: `66 74 79 70` —— MP4 box header
-  { offset: 4, pattern: [0x66, 0x74, 0x79, 0x70], label: 'MP4 / QuickTime container' },
-  { pattern: [0xff, 0xd8, 0xff], label: 'JPEG image' },
-  { pattern: [0x42, 0x5a, 0x68], label: 'bzip2 archive' },
-  { pattern: [0x49, 0x44, 0x33], label: 'MP3 audio (ID3v2)' },
-  { pattern: [0xef, 0xbb, 0xbf], label: 'UTF-8 BOM' },
-  { pattern: [0x1f, 0x8b], label: 'gzip archive' },
-  { pattern: [0x42, 0x4d], label: 'BMP image' },
-  { pattern: [0x4d, 0x5a], label: 'PE (Windows EXE/DLL)' }
-]
-
-function detectMagic(buf: Uint8Array): string | undefined {
-  for (const sig of MAGIC_SIGNATURES) {
-    const off = sig.offset ?? 0
-    if (buf.length < off + sig.pattern.length) continue
-    let hit = true
-    for (let i = 0; i < sig.pattern.length; i++) {
-      const m = sig.mask?.[i] ?? 0xff
-      if (m === 0) continue
-      if ((buf[off + i] & m) !== (sig.pattern[i] & m)) {
-        hit = false
-        break
-      }
+/**
+ * 预览分类 —— 只决定「这个文件按哪种方式预览」，不读正文字节（最多读前 8KB 做 NULL 嗅探）。
+ *
+ * 与 previewFile 同一份判定：previewFile = 分类 + 按分类读字节。宿主在**打开预览之前**
+ * 先问这里（桌面据此决定开不开预览窗口），免得为一次「开不开」把整份文件读进内存。
+ */
+export type PreviewClass =
+  | { kind: 'pdf'; size: number; ext: string }
+  | {
+      kind: 'media'
+      mediaType: 'video' | 'audio'
+      mimeType: string
+      size: number
+      ext: string
     }
-    if (!hit) continue
-    return sig.sub ? sig.sub(buf) : sig.label
-  }
-  return undefined
+  | { kind: 'image'; mimeType: string; size: number; ext: string }
+  | { kind: 'ebook'; ebookKind: 'epub' | 'fb2' | 'cbz'; size: number; ext: string }
+  | { kind: 'office'; officeKind: 'docx' | 'sheet'; size: number; ext: string }
+  | { kind: 'text'; size: number; ext: string }
+  | { kind: 'binary'; size: number; ext: string }
+  | { kind: 'too-large'; size: number; cap: number }
+  | { kind: 'error'; message: string }
+
+/** 能打开预览的分类（其余 —— 二进制 / 超限 / 读不了 —— 不支持预览） */
+export function isPreviewable(c: PreviewClass): boolean {
+  return (
+    c.kind === 'pdf' ||
+    c.kind === 'media' ||
+    c.kind === 'image' ||
+    c.kind === 'ebook' ||
+    c.kind === 'office' ||
+    c.kind === 'text'
+  )
 }
 
-/** 经 port 只读前 min(size, 1 MiB) 字节，构造 hex 结果 */
-async function readHexResult(
-  port: FileSystemPort,
-  portPath: string,
-  displayPath: string,
-  ext: string,
-  size: number
-): Promise<FileReadResult> {
-  const length = Math.min(size, PREVIEW_HEX_MAX_BYTES)
-  const data = length === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, length)
-  return {
-    kind: 'hex',
-    path: displayPath,
-    size,
-    ext,
-    data,
-    bytesShown: data.length,
-    truncated: size > data.length,
-    magic: detectMagic(data)
-  }
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 /**
- * 为预览面板决定 FileReadResult（宿主无关内核）。
+ * 给文件分类（宿主无关内核）。准入、工作目录解析由各宿主在调用前完成。
  *
- * @param port        注入的文件系统 port（stat + readBytes）
- * @param portPath    交给 port 的路径（桌面=绝对路径；扩展=相对句柄根）
- * @param displayPath 回填到结果里的路径（渲染端展示 / 拼媒体 URL 用；缺省同 portPath）
- *
- * 准入、工作目录解析由各宿主在调用前完成 —— 内核只做「已准入文件」的分类。
+ * @param port     注入的文件系统 port（stat + readBytes）
+ * @param portPath 交给 port 的路径（桌面=绝对路径）
  */
-export async function previewFile(
+export async function classifyPreviewFile(
   port: FileSystemPort,
-  portPath: string,
-  displayPath: string = portPath
-): Promise<FileReadResult> {
+  portPath: string
+): Promise<PreviewClass> {
   const ext = extOfPath(portPath)
 
   let stat: Awaited<ReturnType<FileSystemPort['stat']>>
   try {
     stat = await port.stat(portPath)
   } catch (err) {
-    return {
-      kind: 'error',
-      path: displayPath,
-      message: err instanceof Error ? err.message : String(err)
-    }
+    return { kind: 'error', message: errorMessage(err) }
   }
-  if (!stat) return { kind: 'error', path: displayPath, message: 'File not found' }
-  if (stat.isDirectory) return { kind: 'error', path: displayPath, message: 'Path is a directory' }
-  if (!stat.isFile)
-    return { kind: 'error', path: displayPath, message: 'Path is not a regular file' }
+  if (!stat) return { kind: 'error', message: 'File not found' }
+  if (stat.isDirectory) return { kind: 'error', message: 'Path is a directory' }
+  if (!stat.isFile) return { kind: 'error', message: 'Path is not a regular file' }
   const size = stat.size
 
   // PDF：交给 iframe + Chromium 内置 PDFium，不读字节
-  if (ext === '.pdf') return { kind: 'pdf', path: displayPath, size, ext }
+  if (ext === '.pdf') return { kind: 'pdf', size, ext }
 
   // 视频 / 音频：交给 Chromium 原生 <video>/<audio>，流式播放，不读字节
   if (ext in VIDEO_MIME_BY_EXT)
-    return {
-      kind: 'media',
-      mediaType: 'video',
-      path: displayPath,
-      mimeType: VIDEO_MIME_BY_EXT[ext],
-      size,
-      ext
-    }
+    return { kind: 'media', mediaType: 'video', mimeType: VIDEO_MIME_BY_EXT[ext], size, ext }
   if (ext in AUDIO_MIME_BY_EXT)
-    return {
-      kind: 'media',
-      mediaType: 'audio',
-      path: displayPath,
-      mimeType: AUDIO_MIME_BY_EXT[ext],
-      size,
-      ext
-    }
+    return { kind: 'media', mediaType: 'audio', mimeType: AUDIO_MIME_BY_EXT[ext], size, ext }
 
-  // 图像（含 SVG）：size cap 命中前不读字节；通过后 base64 直出
+  // 图像（含 SVG）
   if (ext === '.svg' || ext in IMAGE_MIME_BY_EXT) {
     if (size > PREVIEW_IMAGE_MAX_BYTES)
-      return { kind: 'too-large', path: displayPath, size, cap: PREVIEW_IMAGE_MAX_BYTES }
-    const mimeType = ext === '.svg' ? 'image/svg+xml' : IMAGE_MIME_BY_EXT[ext]
-    try {
-      const bytes = size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, size)
-      // 像素尺寸从已读到的字节里顺带解析（只看文件头，零额外 I/O）；SVG 无固有像素尺寸，跳过
-      const pixels = ext === '.svg' ? null : parseImagePixelSize(bytes)
-      return {
-        kind: 'image',
-        path: displayPath,
-        mimeType,
-        dataBase64: bytesToBase64(bytes),
-        size,
-        ext,
-        pixelWidth: pixels?.width,
-        pixelHeight: pixels?.height
-      }
-    } catch (err) {
-      return {
-        kind: 'error',
-        path: displayPath,
-        message: err instanceof Error ? err.message : String(err)
-      }
+      return { kind: 'too-large', size, cap: PREVIEW_IMAGE_MAX_BYTES }
+    return {
+      kind: 'image',
+      mimeType: ext === '.svg' ? 'image/svg+xml' : IMAGE_MIME_BY_EXT[ext],
+      size,
+      ext
     }
   }
 
-  // 电子书：只回元数据，字节由渲染端经 useMediaUrl 自取（见 'ebook' kind 注释）
+  // 电子书：字节由渲染端经 useMediaUrl 自取（见 'ebook' kind 注释）
   const ebookKind = EBOOK_KIND_BY_EXT[ext]
   if (ebookKind) {
     if (size > PREVIEW_EBOOK_MAX_BYTES)
-      return { kind: 'too-large', path: displayPath, size, cap: PREVIEW_EBOOK_MAX_BYTES }
-    return { kind: 'ebook', path: displayPath, ebookKind, size, ext }
+      return { kind: 'too-large', size, cap: PREVIEW_EBOOK_MAX_BYTES }
+    return { kind: 'ebook', ebookKind, size, ext }
   }
 
-  // Office 文档（docx/xlsx/xlsm/xls/ods）：size cap 通过后整读 base64，
-  // 渲染端 OfficeView 懒加载 docx-preview / SheetJS 解析渲染
+  // Office 文档（docx/xlsx/xlsm/xls/ods）
   const officeKind = OFFICE_KIND_BY_EXT[ext]
   if (officeKind) {
     if (size > PREVIEW_OFFICE_MAX_BYTES)
-      return { kind: 'too-large', path: displayPath, size, cap: PREVIEW_OFFICE_MAX_BYTES }
-    try {
-      const bytes = size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, size)
-      return {
-        kind: 'office',
-        path: displayPath,
-        officeKind,
-        dataBase64: bytesToBase64(bytes),
-        size,
-        ext
-      }
-    } catch (err) {
-      return {
-        kind: 'error',
-        path: displayPath,
-        message: err instanceof Error ? err.message : String(err)
-      }
-    }
+      return { kind: 'too-large', size, cap: PREVIEW_OFFICE_MAX_BYTES }
+    return { kind: 'office', officeKind, size, ext }
   }
 
-  // 无渲染方案的富容器 / 归档 / 编码后媒体 —— hex 无价值，给 binary 占位
-  if (RICH_BINARY_PREVIEW_EXTENSIONS.has(ext) || HEX_VIEW_DENYLIST.has(ext))
-    return { kind: 'binary', path: displayPath, size, ext }
+  // 已知二进制：不读字节
+  if (BINARY_EXTENSIONS.has(ext)) return { kind: 'binary', size, ext }
 
-  // 其余已知二进制扩展名 → hex view（只读前 1 MiB）
-  if (KNOWN_BINARY_EXTENSIONS.has(ext)) {
-    try {
-      return await readHexResult(port, portPath, displayPath, ext, size)
-    } catch {
-      return { kind: 'binary', path: displayPath, size, ext }
-    }
-  }
-
-  // 启发式 NULL 字节嗅探 —— 仅读前 8KB，对 GB 文件也便宜，故放在 size cap 之前。
-  // 命中后不论文件大小一律给 hex view（readHexResult 自带 1 MiB 上限）。
-  let nullSniffed = false
+  // 启发式 NULL 字节嗅探 —— 仅读前 8KB，对 GB 文件也便宜，故放在文本 size cap 之前
   try {
     const head =
       size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, Math.min(size, 8192))
-    nullSniffed = sniffBinary(head)
+    if (sniffBinary(head)) return { kind: 'binary', size, ext }
   } catch (err) {
-    return {
-      kind: 'error',
-      path: displayPath,
-      message: err instanceof Error ? err.message : String(err)
-    }
-  }
-  if (nullSniffed) {
-    try {
-      return await readHexResult(port, portPath, displayPath, ext, size)
-    } catch {
-      return { kind: 'binary', path: displayPath, size, ext }
-    }
+    return { kind: 'error', message: errorMessage(err) }
   }
 
-  // 走到这里说明是文本：先做文本大小检查，再整读（gate 在读之前，杜绝大文件全载）
-  if (size > PREVIEW_TEXT_MAX_BYTES)
-    return { kind: 'too-large', path: displayPath, size, cap: PREVIEW_TEXT_MAX_BYTES }
+  // 走到这里说明是文本
+  if (size > PREVIEW_TEXT_MAX_BYTES) return { kind: 'too-large', size, cap: PREVIEW_TEXT_MAX_BYTES }
+  return { kind: 'text', size, ext }
+}
+
+/**
+ * 为预览决定 FileReadResult（宿主无关内核）= classifyPreviewFile + 按分类读字节。
+ *
+ * @param port        注入的文件系统 port（stat + readBytes）
+ * @param portPath    交给 port 的路径（桌面=绝对路径）
+ * @param displayPath 回填到结果里的路径（渲染端展示 / 拼媒体 URL 用；缺省同 portPath）
+ */
+export async function previewFile(
+  port: FileSystemPort,
+  portPath: string,
+  displayPath: string = portPath
+): Promise<FileReadResult> {
+  const c = await classifyPreviewFile(port, portPath)
+  const path = displayPath
   try {
-    const bytes = size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, size)
-    const content = new TextDecoder().decode(bytes)
-    const lines = content.length === 0 ? 0 : content.split('\n').length
-    return { kind: 'text', path: displayPath, content, size, lines, ext }
-  } catch (err) {
-    return {
-      kind: 'error',
-      path: displayPath,
-      message: err instanceof Error ? err.message : String(err)
+    switch (c.kind) {
+      case 'image': {
+        // size cap 已在分类里过了；通过后 base64 直出
+        const bytes = c.size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, c.size)
+        // 像素尺寸从已读到的字节里顺带解析（只看文件头，零额外 I/O）；SVG 无固有像素尺寸，跳过
+        const pixels = c.ext === '.svg' ? null : parseImagePixelSize(bytes)
+        return {
+          kind: 'image',
+          path,
+          mimeType: c.mimeType,
+          dataBase64: bytesToBase64(bytes),
+          size: c.size,
+          ext: c.ext,
+          pixelWidth: pixels?.width,
+          pixelHeight: pixels?.height
+        }
+      }
+      case 'office': {
+        // 整读 base64，渲染端 OfficeView 懒加载 docx-preview / SheetJS 解析渲染
+        const bytes = c.size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, c.size)
+        return {
+          kind: 'office',
+          path,
+          officeKind: c.officeKind,
+          dataBase64: bytesToBase64(bytes),
+          size: c.size,
+          ext: c.ext
+        }
+      }
+      case 'text': {
+        const bytes = c.size === 0 ? new Uint8Array(0) : await port.readBytes(portPath, 0, c.size)
+        const content = new TextDecoder().decode(bytes)
+        const lines = content.length === 0 ? 0 : content.split('\n').length
+        return { kind: 'text', path, content, size: c.size, lines, ext: c.ext }
+      }
+      default:
+        // pdf / media / ebook / binary / too-large / error：分类即结果，不读字节
+        return { ...c, path }
     }
+  } catch (err) {
+    return { kind: 'error', path, message: errorMessage(err) }
   }
 }

@@ -50,6 +50,9 @@ vi.mock('../../services/filePreviewService', () => ({
   previewSessionFile: vi.fn(),
   writeSessionFile: vi.fn()
 }))
+vi.mock('../../services/previewWindowService', () => ({
+  openFileInWindow: vi.fn()
+}))
 
 import { registerFilesHandlers } from '../filesHandlers'
 import { writeArtifact } from '../../services/artifacts/store'

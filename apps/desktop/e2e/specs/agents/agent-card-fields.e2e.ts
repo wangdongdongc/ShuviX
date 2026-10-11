@@ -215,7 +215,11 @@ const D_CLOSE = md(
   'D CLOSE BODY MARKER.'
 )
 
-/** 只读宿主的素材：不建会话，经宿主笔记本里的 [[readonly-card]] 点开右侧 Preview */
+/**
+ * 只读宿主的素材：经宿主笔记本里的 [[readonly-card.mdx]] 点开文件预览窗口。用 .mdx 是因为 .md / .markdown
+ * 都进 md 协作编辑窗口（那里编辑器显示的是会话自己的文件，可编辑）；借用宿主、只读渲染的属性卡
+ * 只在预览窗口里（FilePreview 的 markdown 只读 live-preview）
+ */
 const E_READONLY_CARD = md(
   '---',
   'shuvix: agent v1',
@@ -229,7 +233,7 @@ const E_READONLY_CARD = md(
 )
 
 /** 宿主笔记本自身**不带 frontmatter** —— 保证 DOM 里同时只有预览那一张卡 */
-const E_HOST = md('# AC-22 host', '', 'E HOST BODY MARKER', '', '[[readonly-card]]')
+const E_HOST = md('# AC-22 host', '', 'E HOST BODY MARKER', '', '[[readonly-card.mdx]]')
 
 /** CRLF 文件：CM6 载入即按 /\r\n?|\n/ 切行，任何一次写回都会把整份归一为 LF */
 const F_CRLF = [
@@ -382,7 +386,7 @@ beforeAll(async () => {
   projDir = join(app.home, 'proj-card-fields')
   mkdirSync(projDir, { recursive: true })
   for (const seed of NOTEBOOKS) writeFileSync(filePath(seed.file), seed.content)
-  writeFileSync(filePath('readonly-card.md'), E_READONLY_CARD)
+  writeFileSync(filePath('readonly-card.mdx'), E_READONLY_CARD)
 
   // 模型目录：两个自定义提供商（插入即启用）+ 手动加模型（addModel 插入的即 isEnabled=1）。
   // 内置提供商种子数据是 isEnabled=0 —— AC-14 正是靠这条落差断言「面板只列已启用的」。
@@ -879,51 +883,71 @@ describe('E 组 · 宿主差异', () => {
     ).toBe(true)
   })
 
-  // 末位：点开右侧 Preview 会改变主窗布局（对话区收缩），之后的坐标类断言都不再可比
-  it('AC-22 只读宿主（右侧 Preview）：控件形态与可编辑态一致，全部禁用；无跳源码按钮', async () => {
+  it('AC-22 只读宿主（文件预览窗口）：控件形态与可编辑态一致，全部禁用；无跳源码按钮', async () => {
     await openNotebook(byFile('e-host.md'))
-    const LINK = `document.querySelector('.cm-atomic-wiki-link-resolved[data-wiki-link-target="readonly-card"]')`
+    const LINK = `document.querySelector('.cm-atomic-wiki-link-resolved[data-wiki-link-target="readonly-card.mdx"]')`
     await until(() => app.main.eval<boolean>(`${LINK} !== null`), 'wiki link resolved')
     await app.main.eval(`${LINK}.dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
 
-    // 宿主笔记本自身无 frontmatter → DOM 里出现的这张卡就是预览里的那张
-    await until(
-      () =>
-        app.main.eval<boolean>(
-          `[...document.querySelectorAll('.cm-content')].some((c) => c.textContent.includes('READONLY CARD BODY MARKER.'))`
-        ),
-      'read-only preview mounted'
+    const win = await until(
+      () => app.connectFilePreviewWindow('readonly-card.mdx'),
+      'file preview window for readonly-card.mdx'
     )
-    await card.waitReady({ slots: 4 })
+    try {
+      const inWin = <T>(expr: string): Promise<T> => win.eval<T>(expr)
+      const winCount = (selector: string): Promise<number> =>
+        inWin<number>(`document.querySelectorAll(${JSON.stringify(selector)}).length`)
+      await until(
+        () =>
+          inWin<boolean>(
+            `[...document.querySelectorAll('.cm-content')].some((c) => c.textContent.includes('READONLY CARD BODY MARKER.'))`
+          ),
+        'read-only preview mounted'
+      )
+      await fmCardPane(win).waitReady({ slots: 4 })
 
-    // 只读宿主渲染同一套控件（model / thinking / tools / instruction-files 四个槽位 + 文本输入框），
-    // 只是全部禁用 —— 只读不换长相，只换可否交互
-    expect(await count('.cm-shuvix-fmcard-slot')).toBe(4)
-    expect(await slotText('shuvix-tools')).toContain('bash, read')
-    // 指令文件清单是普通逗号串输入（刻意不挂文件选择器：档案编辑期不知道将来的工作目录）
-    expect(await slotText('shuvix-instruction-files')).toBe('')
-    expect(
-      await app.main.eval<string>(
-        `${rowSelector('shuvix-instruction-files')}?.querySelector('input')?.value ?? ''`
-      )
-    ).toBe('AGENTS.md')
-    expect(
-      await app.main.eval<boolean>(
-        `[...document.querySelectorAll('.cm-shuvix-fmcard-input')].every((i) => i.disabled)`
-      )
-    ).toBe(true)
-    expect(
-      await app.main.eval<boolean>(
-        `[...document.querySelectorAll('.cm-shuvix-fmcard-slot button')].every((b) => b.disabled)`
-      )
-    ).toBe(true)
-    expect(await count('.cm-shuvix-fmcard-src')).toBe(0)
-    // 布尔行一个：项目感知（项目提示词与项目记忆合成的那一个；会话感知已退役）
-    expect(
-      await app.main.eval<boolean[]>(
-        `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((t) => t.disabled)`
-      )
-    ).toEqual([true])
+      // 只读宿主渲染同一套控件（model / thinking / tools / instruction-files 四个槽位 + 文本输入框），
+      // 只是全部禁用 —— 只读不换长相，只换可否交互
+      expect(await winCount('.cm-shuvix-fmcard-slot')).toBe(4)
+      expect(
+        await inWin<string>(
+          `(${rowSelector('shuvix-tools')}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
+        )
+      ).toContain('bash, read')
+      // 指令文件清单是普通逗号串输入（刻意不挂文件选择器：档案编辑期不知道将来的工作目录）
+      expect(
+        await inWin<string>(
+          `(${rowSelector('shuvix-instruction-files')}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
+        )
+      ).toBe('')
+      expect(
+        await inWin<string>(
+          `${rowSelector('shuvix-instruction-files')}?.querySelector('input')?.value ?? ''`
+        )
+      ).toBe('AGENTS.md')
+      expect(
+        await inWin<boolean>(
+          `[...document.querySelectorAll('.cm-shuvix-fmcard-input')].every((i) => i.disabled)`
+        )
+      ).toBe(true)
+      expect(
+        await inWin<boolean>(
+          `[...document.querySelectorAll('.cm-shuvix-fmcard-slot button')].every((b) => b.disabled)`
+        )
+      ).toBe(true)
+      expect(await winCount('.cm-shuvix-fmcard-src')).toBe(0)
+      // 布尔行一个：项目感知（项目提示词与项目记忆合成的那一个；会话感知已退役）
+      expect(
+        await inWin<boolean[]>(
+          `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((t) => t.disabled)`
+        )
+      ).toEqual([true])
+      // 主窗口里没有冒出第二张卡：预览不再落在右侧面板
+      expect(await count('.cm-shuvix-fmcard')).toBe(0)
+    } finally {
+      await win.eval('window.close()').catch(() => undefined)
+      win.close()
+    }
   })
 })
 
@@ -937,11 +961,6 @@ function rowExists(key: string): string {
 }
 function rowHasSlot(key: string): string {
   return `${rowSelector(key)}?.querySelector('.cm-shuvix-fmcard-slot') != null`
-}
-function slotText(key: string): Promise<string> {
-  return app.main.eval<string>(
-    `(${rowSelector(key)}?.querySelector('.cm-shuvix-fmcard-slot')?.textContent ?? '').trim()`
-  )
 }
 function rowValueText(key: string): Promise<string> {
   return app.main.eval<string>(

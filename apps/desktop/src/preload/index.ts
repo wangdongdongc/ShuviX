@@ -967,6 +967,9 @@ const api = {
       ipcRenderer.invoke('files:read', params) as Promise<
         import('@shuvix/chat-protocol/types/filePreview').FileReadResult
       >,
+    /** 在独立窗口里打开文件：md → 协作编辑窗口，其余可预览的 → 预览窗口，不支持预览的不响应（回 false） */
+    open: (params: { sessionId: string; path: string; openedBy?: 'agent' | 'user' }) =>
+      ipcRenderer.invoke('files:open', params) as Promise<boolean>,
     /** 回写文件内容（中间区 Markdown 编辑器自动保存）。准入范围外路径返回 ok:false，不弹询问 */
     write: (params: { sessionId: string; path: string; content: string }) =>
       ipcRenderer.invoke('files:write', params) as Promise<

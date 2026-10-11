@@ -23,8 +23,7 @@ function parseSessionIdFromHash(): string | null {
  * - 复用主窗口的初始化钩子（每个 BrowserWindow 是独立 Zustand 实例，互不影响）
  * - 不渲染 Sidebar，也无 app 级右侧面板（Browser/Widget 依赖主窗全局资源，不跨窗口）；
  *   会话绑定的 Files/Sub-agent 面板在 ChatView 内部（会话面板），与主窗独立
- * - 文件预览（Files 面板点击）在会话面板的 Preview 工具页展示 ——
- *   悬浮窗无 app 级右侧面板；ChatView 按 pinnedMode='floating' 注入 previewContent
+ * - 文件预览（Files 面板点击等）与主窗一样开独立窗口（SessionRuntime 里的 useFilePreviewBridge）
  * - 主题 / 字体大小：直接复用 settingsStore，效果与主窗一致
  */
 export function PinnedChatShell(): React.JSX.Element {

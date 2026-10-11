@@ -1,5 +1,5 @@
 /**
- * FilePreview — 覆盖在 FilesTree 上的二级视图
+ * FilePreview — 文件预览视图（桌面装在独立的预览窗口里，见 previewWindowService）
  *
  * 各 kind 渲染策略：
  *  - text + .md/.mdx/.markdown   → MarkdownView（只读 Atomic live-preview，可切源码模式）
@@ -8,7 +8,8 @@
  *  - pdf / media                 → 通过 shuvix-preview 协议喂给 Chromium 原生 PDFium / <video>/<audio>
  *  - office (docx/xlsx/xls/ods)  → OfficeView（docx-preview / SheetJS 懒加载浏览器端渲染）
  *  - ebook (.epub)               → EbookView（foliate 解析 + 资源内联 + 沙箱 iframe 渲染）
- *  - hex / binary / too-large / not-allowed / error → 各自的占位/专用视图
+ *  - binary / too-large / not-allowed / error → 各自的占位
+ *    （二进制不支持预览，宿主根本不为它开窗；binary 占位只兜「开着时文件变成了二进制」）
  *
  * 两处「先告知再渲染」（都在正文区之前，互不相关）：
  *  - 成本门控：Office 按字节、图片按像素超阈值时先出 HeavyRenderGate 确认卡
@@ -24,7 +25,6 @@ import {
   Check,
   Code2,
   Copy,
-  FileText,
   FileX,
   FolderOpen,
   Gauge,
@@ -37,7 +37,6 @@ import {
 } from 'lucide-react'
 import { CodeView, getHostApi, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
 import { LivePreviewEditor, type NotebookCaps } from '../notebook/LivePreviewEditor'
-import { HexView } from './HexView'
 import { EbookView } from './EbookView'
 import { OfficeView, SHEET_CONFIRM_BYTES, DOCX_CONFIRM_BYTES } from './OfficeView'
 import { useMediaUrl } from '@shuvix/chat-ui'
@@ -45,13 +44,12 @@ import { basename } from './paths'
 import { usePanelCloseInset } from '../panel/panelCloseInset'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 
-interface FilePreviewProps {
+export interface FilePreviewProps {
   /** 绝对路径 */
   path: string
   sessionId: string
-  onClose: () => void
-  /** 提供则在预览顶栏加「创建笔记本」小按钮（仅 markdown 预览时由 FilesPanel 传入） */
-  onCreateNotebook?: () => void
+  /** 提供则顶栏显示关闭按钮（独立窗口有系统标题栏的关闭，不传） */
+  onClose?: () => void
   /** 宿主能力注入（笔记本主题 / 外链）；markdown 走只读 live-preview 渲染时透传给编辑器 */
   caps?: NotebookCaps
   /** 预览由谁发起：'agent' 时顶栏下方显示来源横幅并亮出完整路径（缺省视为用户主动打开）。
@@ -65,7 +63,6 @@ export function FilePreview({
   path,
   sessionId,
   onClose,
-  onCreateNotebook,
   caps,
   openedBy = 'user'
 }: FilePreviewProps): React.JSX.Element {
@@ -143,7 +140,7 @@ export function FilePreview({
   return (
     <div className="flex flex-col h-full bg-bg-secondary">
       {/* 顶栏：左侧只显示文件名（宽度全给文件名，完整路径见 tooltip）；右侧按钮组（wrap 切换 + 关闭）。
-          在会话面板里还要给悬在卡片右上角的收起按钮让位（pr-8 = 8px 内缩 + 21px 按钮 + 缝） */}
+          若装在会话面板里还要给悬在卡片右上角的收起按钮让位（pr-8 = 8px 内缩 + 21px 按钮 + 缝） */}
       <div
         className={`flex-shrink-0 flex items-center justify-between gap-2 px-2 h-7 border-b border-border-secondary/30${
           closeInset ? ' pr-8' : ''
@@ -166,16 +163,6 @@ export function FilePreview({
           >
             {pathCopied ? <Check size={11} /> : <Copy size={11} />}
           </button>
-          {/* 创建绑定该 md 的笔记本会话 —— 仅 markdown 预览且宿主提供回调时显示。 */}
-          {onCreateNotebook && (
-            <button
-              onClick={onCreateNotebook}
-              className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
-              title={t('panel.preview.createNotebook')}
-            >
-              <FileText size={11} />
-            </button>
-          )}
           {/* 定位到文件所在目录 —— 仅完整宿主（桌面）有系统文件管理器 */}
           {getHostApi() && (
             <button
@@ -228,13 +215,15 @@ export function FilePreview({
               </button>
             </>
           )}
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
-            title={t('panel.preview.close')}
-          >
-            <X size={11} />
-          </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1 rounded text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
+              title={t('panel.preview.close')}
+            >
+              <X size={11} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -251,7 +240,7 @@ export function FilePreview({
         </div>
       )}
 
-      {/* 内容区不带 overflow —— CodeView / MarkdownView 的 .cm-scroller、HexView 虚拟化、
+      {/* 内容区不带 overflow —— CodeView / MarkdownView 的 .cm-scroller、
         PdfView iframe、媒体元素 都各自管理滚动，避免双滚动条 */}
       <div className="flex-1 min-h-0">
         {heavyReasonKey && result ? (
@@ -341,17 +330,6 @@ function renderBody(r: FileReadResult | null, opts: RenderBodyOpts): React.React
           mimeType={r.mimeType}
           sessionId={sessionId}
           t={t}
-        />
-      )
-    case 'hex':
-      return (
-        <HexView
-          data={r.data}
-          size={r.size}
-          bytesShown={r.bytesShown}
-          truncated={r.truncated}
-          magic={r.magic}
-          ext={r.ext}
         />
       )
     case 'binary':
@@ -500,7 +478,7 @@ function PdfView({ path, sessionId }: { path: string; sessionId: string }): Reac
  * 风格行内渲染），相比旧的 react-markdown 静态渲染特殊样式（表格 / 任务列表 / 双链 / 内嵌图片）
  * 效果更佳。readOnly 模式不可编辑、不聚焦，故全文渲染（无光标行源码揭示）。
  *
- * fileContext 启用双链：[[file]] 点击在本 Files 面板打开目标预览、![[image]] 行内预览，
+ * fileContext 启用双链：[[file]] 点击在独立窗口打开目标（md 进协作编辑窗口）、![[image]] 行内预览，
  * 均按文件名在该会话工作目录内解析。
  *
  * key={content} —— 外部写回（files.changed 触发重读）后内容变化时重挂载编辑器载入新内容
@@ -571,7 +549,7 @@ function heavyRenderReasonKey(r: FileReadResult | null): string | null {
  * HeavyRenderGate —— 大文件渲染前的确认卡片。
  *
  * 存在的理由是「成本」而非「安全」：表格经 SheetJS 同步解析、大文档经 docx-preview 建 DOM，
- * 都跑在界面线程上，文件够大时会把界面冻住数秒 —— 而预览面板的语义是「瞄一眼」，
+ * 都跑在界面线程上，文件够大时会把界面冻住数秒 —— 而预览的语义是「瞄一眼」，
  * 不该在用户毫无预期时付这个代价。所以先摊开可判断的信息（文件名 / 完整路径 / 大小 /
  * 会发生什么），由用户决定。
  *

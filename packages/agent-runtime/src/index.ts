@@ -86,10 +86,12 @@ export { applyEdit, type EditParams } from './fileTools/edit'
 export { buildTree } from './fileTools/ls'
 export {
   previewFile,
+  classifyPreviewFile,
+  isPreviewable,
+  type PreviewClass,
   extOfPath,
   PREVIEW_TEXT_MAX_BYTES,
   PREVIEW_IMAGE_MAX_BYTES,
-  PREVIEW_HEX_MAX_BYTES,
   PREVIEW_OFFICE_MAX_BYTES,
   PREVIEW_EBOOK_MAX_BYTES
 } from './fileTools/preview'

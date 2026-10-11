@@ -30,7 +30,7 @@ interface VideoDockProps {
   sessionId: string
   /** 停止播放 + 移除 dock */
   onClose: () => void
-  /** 把当前媒体转入预览覆盖层（FilePreview 的 MediaView 全屏视图） */
+  /** 把当前媒体转入独立预览窗口（FilePreview 的 MediaView） */
   onExpand: () => void
 }
 

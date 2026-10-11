@@ -10,7 +10,7 @@
  * 搜索：输入搜索词时全量扫一次注入树内，清空后清回懒加载视图。
  *
  * 文件预览不在本面板内：点击文件（音视频除外，走底部 dock）发 chatStore.requestFilePreview，
- * 由宿主的独立预览面板（桌面右侧 preview tab / 扩展与悬浮窗 PreviewOverlay）承接展示。
+ * 由宿主承接（桌面：md 进协作编辑窗口，其余可预览文件进独立预览窗口，不支持的文件不响应）。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -371,7 +371,7 @@ export function FilesPanel({ onOpenFolder }: FilesPanelProps = {}): React.JSX.El
               type: audioMime ? 'audio' : 'video'
             })
           } else {
-            // 其它文件：发预览请求（宿主的独立预览面板承接展示）
+            // 其它文件：发预览请求（宿主开独立窗口；不支持预览的文件宿主不响应）
             useChatStore.getState().requestFilePreview(abs)
           }
           // 立即取消 pierre 选中：不取消会卡 selectionVersion —— 再次点击同一文件

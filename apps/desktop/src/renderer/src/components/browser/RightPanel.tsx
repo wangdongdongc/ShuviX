@@ -1,40 +1,28 @@
 /**
- * RightPanel — 右侧面板容器（app 级工具栏：Preview / Widget / Calendar / Agents，终端在底部栏 BottomPanel；
- * 会话绑定的 Files / Sub-agent 在聊天区内的会话面板 SessionPanel；浏览器是独立窗口 BrowserWindowShell）
- *
- * Preview 是会话无关的独立文件预览（Files 面板点击 / 笔记本 [[双链]] 均落到此），
- * 目标状态在共享 usePreviewPanelStore；媒体/PDF 经桌面 shuvix-preview:// 协议。
+ * RightPanel — 右侧面板容器（app 级工具栏：Widget / Calendar / Agents，终端在底部栏 BottomPanel；
+ * 会话绑定的 Files / Sub-agent 在聊天区内的会话面板 SessionPanel；浏览器是独立窗口 BrowserWindowShell；
+ * 文件预览是独立窗口，见 previewWindowService）
  *
  * 各面板始终挂载，通过 visibility 切换，避免 iframe 重建
  */
 
-import { useEffect, useMemo } from 'react'
-import { Activity, CalendarDays, Eye, Wrench } from 'lucide-react'
+import { useEffect } from 'react'
+import { Activity, CalendarDays, Wrench } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBrowserStore, type PanelTab } from '../../stores/browserStore'
-import {
-  MediaUrlProvider,
-  PanelTabBar,
-  PreviewPanel,
-  shuvixPreviewResolver,
-  useCreateNotebook,
-  usePreviewPanelStore,
-  type PanelTabItem
-} from '@shuvix/app-shell'
+import { PanelTabBar, type PanelTabItem } from '@shuvix/app-shell'
 import { WidgetPanel } from './WidgetPanel'
 import { CalendarPanel } from './CalendarPanel'
 import { AgentMonitorPanel } from './AgentMonitorPanel'
 import { useWidgetStore } from '../../stores/widgetStore'
-import { useSettingsStore } from '../../stores/settingsStore'
 
 interface TabDef {
   key: PanelTab
   labelKey: string
-  Icon: typeof Eye
+  Icon: typeof Wrench
 }
 
 const tabs: TabDef[] = [
-  { key: 'preview', labelKey: 'panel.previewTab', Icon: Eye },
   { key: 'widget', labelKey: 'panel.widget', Icon: Wrench },
   { key: 'calendar', labelKey: 'panel.calendar', Icon: CalendarDays },
   { key: 'agents', labelKey: 'panel.agents', Icon: Activity }
@@ -46,29 +34,14 @@ export function RightPanel(): React.JSX.Element {
   const setActiveTab = useBrowserStore((s) => s.setActiveTab)
   const width = useBrowserStore((s) => s.width)
   const widgetCount = useWidgetStore((s) => s.widgets.length)
-  // Preview tab 与会话面板 Sub-agent 同款语义：有预览目标才出现（关闭预览即隐藏）
-  const hasPreviewTarget = usePreviewPanelStore((s) => s.target !== null)
-  const visibleTabs = tabs.filter((td) => td.key !== 'preview' || hasPreviewTarget)
-
-  // activeTab 兜底：共享 store 默认 'files'（该 tab 已移至会话面板）→ 落到 widget；
-  // 停在 preview 但目标已关闭（tab 随之隐藏）同走此兜底
+  // activeTab 兜底：共享 store 默认 'files'（该 tab 已移至会话面板）、持久化里留着已移除的
+  // 'preview'（文件预览改成了独立窗口）→ 落到 widget
   useEffect(() => {
-    if (!visibleTabs.some((td) => td.key === activeTab)) setActiveTab('widget')
-  }, [visibleTabs, activeTab, setActiveTab])
-
-  /** Preview tab 的 markdown 宿主能力（主题 / 外链）与「创建笔记本」—— 与会话面板 Files 同源 */
-  const createNotebook = useCreateNotebook()
-  const notebookTheme = useSettingsStore((s) => s.notebookTheme)
-  const notebookCaps = useMemo(
-    () => ({
-      notebookTheme,
-      openExternal: (url: string) => void window.api.app.openExternal(url)
-    }),
-    [notebookTheme]
-  )
+    if (!tabs.some((td) => td.key === activeTab)) setActiveTab('widget')
+  }, [activeTab, setActiveTab])
 
   // tab 模型交共享 PanelTabBar 渲染（统一外观 + 自动 compact + 专注淡化）；徽标按 tab 取计数
-  const tabItems: PanelTabItem[] = visibleTabs.map(({ key, labelKey, Icon }) => ({
+  const tabItems: PanelTabItem[] = tabs.map(({ key, labelKey, Icon }) => ({
     key,
     label: t(labelKey),
     Icon,
@@ -88,16 +61,6 @@ export function RightPanel(): React.JSX.Element {
 
       {/* 内容区 — 所有面板共存，visibility 切换 */}
       <div className="flex-1 min-h-0 relative">
-        <div
-          className="absolute inset-0"
-          style={
-            activeTab === 'preview' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
-          }
-        >
-          <MediaUrlProvider value={shuvixPreviewResolver}>
-            <PreviewPanel notebookCaps={notebookCaps} onCreateNotebook={createNotebook} />
-          </MediaUrlProvider>
-        </div>
         <div
           className="absolute inset-0"
           style={

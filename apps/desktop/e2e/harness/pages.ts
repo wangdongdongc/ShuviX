@@ -391,10 +391,8 @@ export interface ChatPane {
   waitToolImages(count: number, timeoutMs?: number): Promise<ToolImageShot[]>
   /** 工具子树内的图片降级文案（文件没了时 ToolImageThumb 不留破图，改说一句） */
   toolImageFallbacks(): Promise<string[]>
-  /** 点第 i 张工具内联图（走 requestFilePreview，与 Files 面板点文件同一条信号） */
+  /** 点第 i 张工具内联图（走 requestFilePreview，与 Files 面板点文件同一条信号 → 独立预览窗口） */
   clickToolImage(index: number): Promise<void>
-  /** 工具子树**之外**的图片（右侧预览面板/覆盖层；那里的图走 data: URL，path 取自 alt） */
-  previewPanelImages(): Promise<ToolImageShot[]>
   /** 相邻同名调用合并行的计数徽章文本 */
   groupBadges(): Promise<string[]>
   /** 展开所有合并行 */
@@ -480,9 +478,6 @@ export function chatPane(main: CdpClient): ChatPane {
   // 又灌进渲染进程），这里会认不到，用例即红，这正是想要的
   const TOOL_IMGS = `[...document.querySelectorAll('[data-tool-name] img')]
     .filter((i) => (i.getAttribute('src') || '').startsWith('shuvix-preview://'))`
-  // 工具子树之外的图（右侧预览面板走 data: URL）：不限协议，路径从 alt 取
-  const OUTSIDE_IMGS = `[...document.querySelectorAll('img')]
-    .filter((i) => i.closest('[data-tool-name]') === null)`
   // path 用正则解而非 new URL：自定义 scheme 不是 special scheme，各引擎对其
   // searchParams 的支持不必赌
   const IMG_SHOT = (list: string): string =>
@@ -998,7 +993,6 @@ export function chatPane(main: CdpClient): ChatPane {
       await main.eval(`${TOOL_IMGS}[${index}]?.click()`)
       await new Promise((r) => setTimeout(r, 300))
     },
-    previewPanelImages: () => main.eval<ToolImageShot[]>(IMG_SHOT(OUTSIDE_IMGS)),
     groupBadges: () =>
       main.eval<string[]>(`${GROUP_BADGES}.map((s) => (s.textContent ?? '').trim())`),
     expandGroups: async () => {
@@ -6768,7 +6762,7 @@ export interface RightPanelPane {
   setPanelWidth(px: number): Promise<void>
   /**
    * 切到日历 tab（标签栏里含 `.lucide-calendar-days` 的那颗）并等日历内容区可见。日历内容区 = 内容区固定序
-   * 里倒数第二个子节点（preview / widget / calendar / agents 常驻挂载）
+   * 里倒数第二个子节点（widget / calendar / agents 常驻挂载；文件预览已是独立窗口，面板里没有它）
    */
   activateCalendarTab(): Promise<void>
   /**
@@ -6815,7 +6809,7 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
     },
     agentsActive,
     activateWidgetTab: async () => {
-      // 与 tabIcons 同一根标签栏，按图标点名 widget tab（它常驻可见，不像 preview 要有目标才出现）
+      // 与 tabIcons 同一根标签栏，按图标点名 widget tab（常驻可见）
       const WIDGET_TAB = `[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
         .find((b) => b.querySelector('.lucide-wrench'))`
       await until(() => main.eval<boolean>(`!!${WIDGET_TAB}`), 'widget tab mounted')
@@ -7192,7 +7186,9 @@ export interface NotebookEditorPane {
    */
   wikiLinkStatus(target: string): Promise<'resolved' | 'missing' | null>
   /**
-   * 点正文里的 `[[target]]`（左键 click，经编辑器的 domEventHandlers → 右侧 Files 面板预览那份文件）。
+   * 点正文里的 `[[target]]`（左键 click，经编辑器的 domEventHandlers → requestFilePreview → 主进程在独立窗口里
+   * 打开那份文件：md 进 md 窗口（`app.connectMarkdownWindow`），其余可预览的进文件预览窗口
+   * （`app.connectFilePreviewWindow`），不支持预览的不响应）。
    * 链接不在屏则抛错。
    */
   clickWikiLink(target: string): Promise<void>
@@ -9105,4 +9101,46 @@ export function notebookFigurePane(
       })()`)
     }
   }
+}
+
+// ─── 文件预览窗口（#file-preview）─────────────────────────────────────────────
+
+/**
+ * 文件预览窗口里的图片快照（FilePreview 的 image kind：data: URL，path 取自 alt）。
+ * `client` 是 `app.connectFilePreviewWindow(...)` 连上的那个窗口。
+ */
+export function filePreviewWindowImages(client: CdpClient): Promise<ToolImageShot[]> {
+  return client.eval<ToolImageShot[]>(
+    `[...document.querySelectorAll('[data-file-preview-window] img')].map((i) => ({
+      src: (i.getAttribute('src') || '').slice(0, 120),
+      path: i.getAttribute('alt') || '',
+      naturalWidth: i.naturalWidth,
+      naturalHeight: i.naturalHeight,
+      complete: i.complete
+    }))`
+  )
+}
+
+/** 文件预览窗口的整体快照（`client` 同上） */
+export interface FilePreviewWindowShot {
+  /** 窗口根 `[data-file-preview-window]` 已挂上 */
+  mounted: boolean
+  /** 窗口根的全文（文本预览的正文、来源横幅的文案与路径都在里面） */
+  text: string
+}
+
+export function filePreviewWindowShot(client: CdpClient): Promise<FilePreviewWindowShot> {
+  return client.eval<FilePreviewWindowShot>(`(() => {
+    const root = document.querySelector('[data-file-preview-window]')
+    return { mounted: !!root, text: root?.textContent ?? '' }
+  })()`)
+}
+
+// ─── 会话面板工具栏（SessionToolbar：`[data-session-tool=<tool>]`）────────────────
+
+/** 主窗顶栏会话工具按钮的 tool 键（DOM 序；Files / 后台任务 …） */
+export function sessionToolKeys(main: CdpClient): Promise<string[]> {
+  return main.eval<string[]>(
+    `[...document.querySelectorAll('[data-session-tool]')].map((b) => b.getAttribute('data-session-tool') ?? '')`
+  )
 }
