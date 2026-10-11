@@ -736,6 +736,7 @@ describe('L-9 a DB rewound to v29', () => {
   let app: E2EApp
   let home = ''
   const ids = { nb: '', legacyNb: '', chat: '', tab: '' }
+  let latestVersion = ''
   let nbRowBefore: SessionRow | undefined
   let chatRowBefore: SessionRow | undefined
   let nbMessagesBefore: string[] = []
@@ -797,6 +798,9 @@ describe('L-9 a DB rewound to v29', () => {
     expect(existsSync(durableStoragePathOf(home, ids.nb))).toBe(true)
     expect(existsSync(durableStoragePathOf(home, ids.chat))).toBe(true)
 
+    // 拨回前的库版本 = 这个版本的最新迁移；重启后迁移要从 v30 一路重跑回它（v31 起不止 v30 一条）
+    latestVersion = sqlite(home, 'PRAGMA user_version').trim()
+    expect(Number(latestVersion)).toBeGreaterThanOrEqual(30)
     rewindSessionsToV29(home)
 
     app = await launchApp({ home })
@@ -809,13 +813,13 @@ describe('L-9 a DB rewound to v29', () => {
     await provider?.close()
   })
 
-  it('L-9 v30 re-ran: the column is back, user_version is 30, and the switchover ran on the all-legacy rows', () => {
+  it('L-9 v30 re-ran: the column is back, user_version is back at the latest migration, and the switchover ran on the all-legacy rows', () => {
     const columns = sqliteJson<{ name: string; dflt_value: string }>(
       home,
       'PRAGMA table_info(sessions)'
     )
     expect(columns.find((c) => c.name === 'storageKind')?.dflt_value).toBe(`'${LEGACY}'`)
-    expect(sqlite(home, 'PRAGMA user_version').trim()).toBe('30')
+    expect(sqlite(home, 'PRAGMA user_version').trim()).toBe(latestVersion)
     const runs = legacySwitchoverRuns(app)
     expect(runs.at(-1)).toMatchObject({ reset: 2, deleted: 1, failed: 0 })
   })

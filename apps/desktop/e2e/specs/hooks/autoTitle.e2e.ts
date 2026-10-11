@@ -611,9 +611,10 @@ describe('运行归属、去重与收尾', () => {
     provider.release()
     await until(() => endOf(held.sessionId), 'held echo run settled after release')
     expect(await hookRegisters(sid, { description: 'echo' })).toHaveLength(1)
+    // hook agent 跑完即卸（cfb221cf，spawn.ts「hook agent 用完即卸」）：不会闲着留在列表里，而是离开它
     await until(
-      async () => (await monitorList()).find((e) => e.agentId === held.sessionId)?.phase === 'idle',
-      'echo agent back to idle'
+      async () => !(await monitorList()).some((e) => e.agentId === held.sessionId) || null,
+      'echo agent left the monitor once its run settled'
     )
 
     // 道空出来了：下一轮照常派发
