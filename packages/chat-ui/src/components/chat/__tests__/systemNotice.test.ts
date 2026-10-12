@@ -150,6 +150,16 @@ describe('summarizeSystemNotice —— 合并通知与降级', () => {
     ])
   })
 
+  it('N-5b 空回复追问块没有摘要句：与后台任务拼在一起时只出后台任务那一句', () => {
+    const merged = [
+      bgNotice({ command: 'npm test', status: 'exited with code 0', duration: '12s' }),
+      '<empty-reply>\nYour previous reply had no visible text.\n</empty-reply>'
+    ].join('\n\n')
+    expect(summarizeSystemNotice(merged)).toEqual([
+      { kind: 'background-task', text: 'npm test · exited with code 0 · 12s' }
+    ])
+  })
+
   it('N-6 认不出的格式 → unknown，文本取首个非空行（去首尾空白）', () => {
     expect(summarizeSystemNotice('  \n  Something happened  \nmore lines')).toEqual([
       { kind: 'unknown', text: 'Something happened' }

@@ -235,6 +235,49 @@ describe('withoutSpawnPrompt（P3-14 PIN-15）', () => {
   })
 })
 
+describe('系统写的 user 消息在子代理面板里（NTC-1）', () => {
+  const N = '<empty-reply>\nYour previous reply had no visible text.\n</empty-reply>'
+
+  it('NTC-1 空回复追问（isSystemNotice + empty-reply）是一行淡色标签，不是用户气泡', () => {
+    showMessages([
+      assistant('a1', [read('t1')], 'sub-1'),
+      assistant('a2', [thinking('I will read it')], 'sub-1'),
+      user('u2', N, 'sub-1', { isSystemNotice: true, noticeKind: 'empty-reply' }),
+      assistant('a3', [text('found')], 'sub-1')
+    ])
+    expect(userBubbles()).toEqual(['draw it'])
+    expect(userBubbles().some((b) => b.includes('<empty-reply>'))).toBe(false)
+    const line = container.querySelector('[data-system-notice="empty-reply"]')
+    expect(line).not.toBeNull()
+    expect(line!.textContent).toBe(i18n.t('emptyReplyNotice.title'))
+    expect(container.textContent).not.toContain('<empty-reply>')
+    expect(occurrences('found')).toBe(1)
+  })
+
+  it('NTC-1 没有种类的系统通知（后台完成）同样是一行标签，data-system-notice 为空串', () => {
+    showMessages([
+      user('u2', '<background-task pid="1" status="done">ok</background-task>', 'sub-1', {
+        isSystemNotice: true
+      }),
+      assistant('a1', [text('noted')], 'sub-1')
+    ])
+    expect(userBubbles()).toEqual(['draw it'])
+    const line = container.querySelector('[data-system-notice=""]')
+    expect(line).not.toBeNull()
+    expect(line!.textContent).toBe(i18n.t('backgroundNotice.title'))
+  })
+
+  it('NTC-1 对照组：只有 noticeKind、没有 isSystemNotice 的 user 消息照常画成用户气泡', () => {
+    showMessages([
+      user('u2', N, 'sub-1', { noticeKind: 'empty-reply' }),
+      assistant('a1', [text('ok')], 'sub-1')
+    ])
+    expect(container.querySelector('[data-system-notice]')).toBeNull()
+    expect(userBubbles()).toHaveLength(2)
+    expect(userBubbles()[1]).toContain('<empty-reply>')
+  })
+})
+
 describe('已落盘转写的步骤合并（与主对话卡同一套，GRP-1..4）', () => {
   // 宿主下发的呈现表：有了它，折叠的工具卡才带摘要（参数里的 `tN.txt`），callOf 认得出是哪一次调用
   beforeEach(() => {

@@ -360,6 +360,62 @@ describe('P3-10b-15 重新生成 = 回退 + 重发', () => {
   })
 })
 
+describe('重新生成跳过系统写的 user 消息', () => {
+  const N = '<empty-reply>\nYour previous reply had no visible text.\n</empty-reply>'
+  const notice = (
+    id: string,
+    content: string,
+    metadata: UserTextMessage['metadata']
+  ): UserTextMessage => ({
+    ...user(id, content),
+    metadata
+  })
+  const toolCard = (id: string): AssistantMessage => ({
+    ...assistant(id, ''),
+    blocks: [{ type: 'tool', toolCallId: 'c1', toolName: 'read', args: {}, result: 'alpha' }]
+  })
+  const thinkingCard = (id: string): AssistantMessage => ({
+    ...assistant(id, ''),
+    blocks: [{ type: 'thinking', text: 'I will read it' }]
+  })
+
+  it('空回复追问（isSystemNotice）不是用户的话：回退到它前面的 go 并重发 go，占位从不带信封', async () => {
+    seed([
+      user('1', 'go', T),
+      toolCard('2'),
+      thinkingCard('3'),
+      notice('4', N, { isSystemNotice: true, noticeKind: 'empty-reply' }),
+      assistant('5', 'final')
+    ])
+    await mountProbe()
+    await act(async () => actions.handleRegenerate('5'))
+
+    expect(names()).toEqual(['message.rollback', 'agent.init', 'agent.prompt'])
+    expect(callsOf('message.rollback')).toEqual([[{ sessionId: SID, messageId: '1' }]])
+    expect(callsOf('agent.prompt')).toEqual([[{ sessionId: SID, text: 'go', inlineTokens: T }]])
+    expect(pendingAtPrompt).toEqual([{ content: 'go', tokens: T }])
+    expect(JSON.stringify(timeline)).not.toContain('empty-reply')
+  })
+
+  it('后台完成通知与指令注入同样被跳过', async () => {
+    seed([
+      user('1', 'go'),
+      assistant('2', 'started'),
+      notice('3', '<background-task pid="1" status="done">ok</background-task>', {
+        isSystemNotice: true
+      }),
+      notice('4', 'injected instructions', { isInstructionInjection: true }),
+      assistant('5', 'final')
+    ])
+    await mountProbe()
+    await act(async () => actions.handleRegenerate('5'))
+    expect(callsOf('message.rollback')).toEqual([[{ sessionId: SID, messageId: '1' }]])
+    expect(callsOf('agent.prompt')).toEqual([
+      [{ sessionId: SID, text: 'go', inlineTokens: undefined }]
+    ])
+  })
+})
+
 describe('P3-10b-16 重新生成的重入（PIN-07）', () => {
   it('P3-10b-16 第一次没落定前连点两下 → 一次回退、一次 prompt；落定之后再点又能用', async () => {
     seed([user('5', 'hi'), assistant('6')])

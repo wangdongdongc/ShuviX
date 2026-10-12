@@ -255,6 +255,9 @@
   "dateNotice": {
     "title": "日付の変更"
   },
+  "emptyReplyNotice": {
+    "title": "空の返信 — モデルに続行を促しました"
+  },
   "instruction": {
     "title": "プロジェクト指示"
   },

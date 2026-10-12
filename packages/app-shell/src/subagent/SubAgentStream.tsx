@@ -30,6 +30,10 @@ import { ThinkingBlock } from '@shuvix/chat-ui'
 import { StepGroupView, groupConsecutiveSteps, buildVisibleItems } from '@shuvix/chat-ui'
 import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
+import {
+  DATE_NOTICE_KIND,
+  EMPTY_REPLY_NOTICE_KIND
+} from '@shuvix/chat-protocol/systemNoticeContract'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 
 /**
@@ -149,6 +153,22 @@ const SubMessageBubble = memo(function SubMessageBubble({
 }: {
   msg: ChatMessage
 }): React.JSX.Element | null {
+  const { t } = useTranslation()
+  // 系统写的 user 消息（空回复追问 / 后台完成 / 日期）不是谁说的话：一行淡色标签，不画成用户气泡
+  if (msg.role === 'user' && msg.type === 'text' && msg.metadata?.isSystemNotice) {
+    const kind = msg.metadata.noticeKind
+    const label =
+      kind === EMPTY_REPLY_NOTICE_KIND
+        ? t('emptyReplyNotice.title')
+        : kind === DATE_NOTICE_KIND
+          ? t('dateNotice.title')
+          : t('backgroundNotice.title')
+    return (
+      <div className="text-[11px] text-text-tertiary break-words" data-system-notice={kind ?? ''}>
+        {label}
+      </div>
+    )
+  }
   // 用户后续追问：复用 UserBubble（与起始指令同形）
   if (msg.role === 'user' && msg.type === 'text') {
     const tokens = (msg.metadata as { inlineTokens?: Record<string, InlineToken> } | null)

@@ -2,7 +2,7 @@
  * P3-02 · 纯投影（手写条目 / 手写的 pi.live、pi.inbox）。真流程（faux 驱动）在 project.flows.test.ts，
  * 与旧投影的对照在 project.golden.test.ts。
  *
- *   01-03 user 与显示侧车        06-07 通知（条目种类 / 正文形状）   09-11 assistant 块与用量
+ *   01-03 user 与显示侧车        06-07b 通知（条目种类 / 正文形状 / 空回复追问）   09-11 assistant 块与用量
  *   12-16 工具回填、诊断段剥离、落盘   18 配对                          19-22, 24, 26-27 重试折叠
  *   28 中止的中间卡              30 压缩头                           32 跳过的种类
  *   34-36 实时卡与 toolRuns      37-38 run.retry / run.compacting    39 队列
@@ -24,6 +24,7 @@ import type { DisplayItem } from '../display'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as runtime from '../../../index'
 import { truncationDiagnostic, type ProcessToolOutputResult } from '../../../toolOutput/spill'
+import { EMPTY_REPLY_NOTICE_TEXT } from '../../emptyReply'
 import { imagePlaceholder } from '../../../toolResultText'
 import * as displayModule from '../display'
 import * as entryTextModule from '../entryText'
@@ -186,6 +187,26 @@ describe('P3-02 · pure projector: notices', () => {
       {}
     ])
     expect(view.messages[3]!.content).toBe('')
+  })
+
+  it('P3-02-07b the empty-reply nudge (emptyReply.ts): a pi.user that is only <empty-reply> blocks carries noticeKind empty-reply; joined with another notice it is a plain notice', () => {
+    const view = P([U(1, EMPTY_REPLY_NOTICE_TEXT, 10)])
+    expect(view.messages).toStrictEqual([
+      {
+        id: '1',
+        sessionId: 's',
+        role: 'user',
+        type: 'text',
+        content: EMPTY_REPLY_NOTICE_TEXT,
+        model: '',
+        createdAt: 10,
+        metadata: { isSystemNotice: true, noticeKind: 'empty-reply' }
+      }
+    ])
+    const joined = `${bg('t1', 'a')}\n\n${EMPTY_REPLY_NOTICE_TEXT}`
+    expect(P([U(2, joined)]).messages[0]!.metadata).toStrictEqual({ isSystemNotice: true })
+    // 信封外多一句人写的话：普通用户消息
+    expect(P([U(3, `${EMPTY_REPLY_NOTICE_TEXT}\nok`)]).messages[0]!.metadata).toStrictEqual({})
   })
 })
 

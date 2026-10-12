@@ -89,7 +89,8 @@ export interface UserTextMeta {
   isSystemNotice?: boolean
   /**
    * 系统通知来自 `shuvix.notice` 条目时，条目的 `data.kind`（`background` / `date`，见
-   * systemNoticeContract 的 `DATE_NOTICE_KIND`）。按正文形状认出的通知没有这个字段 —— 它们都是后台完成通知
+   * systemNoticeContract 的 `DATE_NOTICE_KIND`）。按正文形状认出的通知里，空回复追问记
+   * `EMPTY_REPLY_NOTICE_KIND`；其余没有这个字段 —— 它们都是后台完成通知
    */
   noticeKind?: string
   /** 日期通知（`noticeKind: 'date'`）告知的本地日期 `YYYY-MM-DD` */

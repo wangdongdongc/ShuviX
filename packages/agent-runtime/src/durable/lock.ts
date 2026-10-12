@@ -48,6 +48,7 @@ import {
   type ConversationId,
   type Extension,
   type Harness,
+  type HookRegistration,
   type Registry,
   type ToolRegistration
 } from '@earendil-works/pi-durable'
@@ -58,6 +59,7 @@ import { lockRecordJson, parseLockRecord, type LockRecord } from './agentRecord'
 import { normalizeToolNames, resolveThinkingLevel } from './agentSpec'
 import { backgroundContext as BG, errorText } from './context'
 import { SessionStateDoc } from './docs'
+import { emptyReplyHook } from './emptyReply'
 import { computeFrozenAgentPrompt, freezePersona } from './prompt/persona'
 import type { PromptExtensions } from './prompt/sections'
 import type { SessionProcessRecord } from './processRecord'
@@ -191,8 +193,19 @@ export function composeAgentTools(input: {
   return { toolNames, tools, agentTools }
 }
 
-export function builtinExtension(tools: readonly ToolRegistration[]): Extension {
-  return defineExtension({ name: SHUVIX_BUILTIN_EXTENSION, tools })
+/**
+ * 内置扩展：内置工具 + 宿主的 generation hook（空回复追问）。每个对话都选中它（根对话的锁、派生 agent
+ * 的记录），所以 hook 对根对话与派生 agent 一并生效
+ */
+export function builtinExtension(
+  tools: readonly ToolRegistration[],
+  hooks: readonly HookRegistration[] = []
+): Extension {
+  return defineExtension({
+    name: SHUVIX_BUILTIN_EXTENSION,
+    tools,
+    ...(hooks.length === 0 ? {} : { hooks })
+  })
 }
 
 export function agentExtension(
@@ -255,8 +268,14 @@ export class AgentLock {
   /** 打开时完整初始化（连 MCP）的中止：会话关停时触发 */
   private readonly restoreAbort = new AbortController()
   private disposed = false
+  /** 内置扩展带的 generation hook（每会话建一次，三处装内置扩展共用） */
+  private readonly hooks: readonly HookRegistration[]
 
-  constructor(private readonly deps: AgentLockDeps) {}
+  constructor(private readonly deps: AgentLockDeps) {
+    this.hooks = [
+      emptyReplyHook({ harness: deps.harness, sessionId: deps.sessionId, logger: deps.logger })
+    ]
+  }
 
   /** 此刻的锁记录（同步） */
   get current(): LockRecord | undefined {
@@ -308,7 +327,7 @@ export class AgentLock {
         sessionId,
         sandboxed: lock.sandboxed
       })
-      this.deps.registry.install(builtinExtension(builtin))
+      this.deps.registry.install(builtinExtension(builtin, this.hooks))
     } catch (error) {
       logger.warn(`session ${sessionId}: building the builtin tools failed: ${errorText(error)}`)
       await this.clearStoredLock()
@@ -358,7 +377,7 @@ export class AgentLock {
           sandboxed: this.record?.sandboxed
         })
         if (registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION) === undefined) {
-          registry.install(builtinExtension(builtin))
+          registry.install(builtinExtension(builtin, this.hooks))
         }
       })().finally(() => {
         if (this.installingBuiltin === tracked) this.installingBuiltin = undefined
@@ -491,7 +510,7 @@ export class AgentLock {
     cancelled()
 
     const composed = composeAgentTools({ names, builtin, set: resolved })
-    const builtinExt = builtinExtension(builtin)
+    const builtinExt = builtinExtension(builtin, this.hooks)
     const agentExt = agentExtension(conversation.id, composed.agentTools)
     const extensions: Extension[] = [
       builtinExt,

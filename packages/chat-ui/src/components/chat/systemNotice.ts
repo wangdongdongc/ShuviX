@@ -52,7 +52,7 @@ export function summarizeSystemNotice(content: string): SystemNoticeSummary[] {
       const head = clipLine(firstLine(inner), HEAD_LEN)
       const parts = [head, attrs.status, attrs.duration].filter(Boolean)
       out.push({ kind: 'background-task', text: clipLine(parts.join(' · '), MAX_LEN) })
-    } else {
+    } else if (tag === 'sub-session') {
       // 标题缺失时退到 id，再退到正文首行 —— 一条通知不该在摘要位上是空白
       const head = clipLine(attrs.title || attrs.id || firstLine(inner), HEAD_LEN)
       const parts = [head, attrs.status].filter(Boolean)

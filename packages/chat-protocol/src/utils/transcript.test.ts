@@ -138,6 +138,36 @@ describe('transcribeConversation', () => {
     expect(withNotices).toContain('injected instructions')
   })
 
+  it('系统写的 user 消息（isSystemNotice：后台完成 / 日期 / 空回复追问）从不记在 User 下：缺省丢掉，includeSystemNotices 时以系统通知导出', () => {
+    const notice = '<empty-reply>\nYour previous reply had no visible text.\n</empty-reply>'
+    const msgs: ChatMessage[] = [
+      userText('go'),
+      assistantCard([{ type: 'thinking', text: 'I will read it' }]),
+      userText(notice, { metadata: { isSystemNotice: true, noticeKind: 'empty-reply' } }),
+      userText('<background-task pid="1" status="done">ok</background-task>', {
+        metadata: { isSystemNotice: true }
+      }),
+      assistantText('done')
+    ]
+    const plain = transcribeConversation(msgs)
+    expect(plain).not.toContain('empty-reply')
+    expect(plain).not.toContain('background-task')
+    expect(plain.match(/### User/g)).toHaveLength(1)
+    expect(plain).toContain('go')
+    expect(plain).toContain('done')
+
+    const withNotices = transcribeConversation(msgs, { includeSystemNotices: true })
+    expect(withNotices.match(/### User/g)).toHaveLength(1)
+    expect(withNotices.match(/### System/g)).toHaveLength(2)
+    const sections = withNotices.split(/\n(?=### )/)
+    const noticeSection = sections.find((section) => section.includes('<empty-reply>'))!
+    expect(noticeSection.startsWith('### System')).toBe(true)
+    expect(sections.find((section) => section.includes('background-task'))!).toMatch(/^### System/)
+    expect(sections.filter((section) => section.startsWith('### User'))).toEqual([
+      expect.stringContaining('go')
+    ])
+  })
+
   it('title / headingLevel / timestamps / labels', () => {
     const msgs = [userText('hi'), assistantText('yo')]
     const md = transcribeConversation(msgs, {

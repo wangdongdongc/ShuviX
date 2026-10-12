@@ -6,9 +6,13 @@ import { UserBubble } from './UserBubble'
 import { AssistantBubble } from './AssistantBubble'
 import { BackgroundNoticeRow } from './BackgroundNoticeRow'
 import { DateNoticeRow } from './DateNoticeRow'
+import { EmptyReplyNoticeRow } from './EmptyReplyNoticeRow'
 import { InstructionNoticeRow } from './InstructionNoticeRow'
 import { CompactionNoticeRow } from './CompactionNoticeRow'
-import { DATE_NOTICE_KIND } from '@shuvix/chat-protocol/systemNoticeContract'
+import {
+  DATE_NOTICE_KIND,
+  EMPTY_REPLY_NOTICE_KIND
+} from '@shuvix/chat-protocol/systemNoticeContract'
 
 /** 流式占位卡的固定 id（Conversation 追加，AssistantBubble 据此读流式状态） */
 export const STREAMING_PLACEHOLDER_ID = 'streaming-live'
@@ -124,9 +128,12 @@ function MessageBody({
       return <InstructionNoticeRow msg={msg} />
     }
     // 自动续跑那一轮的「用户消息」其实是系统写的通知 —— 用户没说过这句话，不能画成用户气泡。
-    // 日期通知另有一行：它不是「后台任务已完成」（种类由投影从通知条目带来）
+    // 日期通知、空回复追问各有一行：它们不是「后台任务已完成」（种类由投影带来）
     if (msg.metadata?.isSystemNotice) {
       if (msg.metadata.noticeKind === DATE_NOTICE_KIND) return <DateNoticeRow msg={msg} />
+      if (msg.metadata.noticeKind === EMPTY_REPLY_NOTICE_KIND) {
+        return <EmptyReplyNoticeRow msg={msg} />
+      }
       return <BackgroundNoticeRow msg={msg} />
     }
     // 乐观占位（还没落库）：按用户气泡画但压淡，不给回退 —— 树上还没有它

@@ -6,7 +6,13 @@
  * 也不能把用户真正说的话认成系统通知。
  */
 import { describe, it, expect } from 'vitest'
-import { isSystemNoticeText, systemNoticeBlockRe, SYSTEM_NOTICE_TAGS } from './systemNoticeContract'
+import {
+  EMPTY_REPLY_NOTICE_KIND,
+  isEmptyReplyNoticeText,
+  isSystemNoticeText,
+  systemNoticeBlockRe,
+  SYSTEM_NOTICE_TAGS
+} from './systemNoticeContract'
 
 const bgTask = [
   '<background-task pid="17162" status="killed by SIGTERM" duration="23s">',
@@ -69,5 +75,39 @@ describe('systemNoticeBlockRe', () => {
     for (const tag of SYSTEM_NOTICE_TAGS) {
       expect(systemNoticeBlockRe().test(`<${tag} a="1">\nbody\n</${tag}>`)).toBe(true)
     }
+  })
+})
+
+describe('empty-reply notice (emptyReply.ts 的空回复追问)', () => {
+  const emptyReply = '<empty-reply>\nYour previous reply had no visible text.\n</empty-reply>'
+
+  // 追问正文本身（agent-runtime 的 EMPTY_REPLY_NOTICE_TEXT）对这两把尺的断言在
+  // agent-runtime/src/durable/__tests__/emptyReply.test.ts —— chat-protocol 是叶子包，不反引它
+  it('ER-1 种类是 empty-reply、在标签表里；一整块 <empty-reply> 信封两把尺都认', () => {
+    expect(EMPTY_REPLY_NOTICE_KIND).toBe('empty-reply')
+    expect(SYSTEM_NOTICE_TAGS).toContain(EMPTY_REPLY_NOTICE_KIND)
+    expect(isSystemNoticeText(emptyReply)).toBe(true)
+    expect(isEmptyReplyNoticeText(emptyReply)).toBe(true)
+  })
+
+  it.each([
+    ['two empty-reply blocks separated by a blank line', `${emptyReply}\n\n${emptyReply}`, true],
+    ['a block with attributes', '<empty-reply attempt="1">\nbody\n</empty-reply>', true],
+    ['empty-reply joined with a background-task', `${emptyReply}\n\n${bgTask}`, false],
+    ['a background-task only', bgTask, false],
+    ['a sub-session only', subSession, false],
+    ['the empty string', '', false],
+    ['plain text', 'please carry on', false],
+    ['the envelope plus a human sentence', `${emptyReply}\nand also deploy`, false],
+    ['a human sentence before the envelope', `hi ${emptyReply}`, false],
+    ['an unclosed envelope', '<empty-reply>\nbody', false],
+    ['a self-closing tag', '<empty-reply/>', false]
+  ])('ER-2 isEmptyReplyNoticeText: %s → %s', (_label, text, expected) => {
+    expect(isEmptyReplyNoticeText(text)).toBe(expected)
+  })
+
+  it('ER-3 混拼的一条仍是系统通知（isSystemNoticeText），只是不是空回复追问', () => {
+    expect(isSystemNoticeText(`${emptyReply}\n\n${bgTask}`)).toBe(true)
+    expect(isEmptyReplyNoticeText(`${emptyReply}\n\n${bgTask}`)).toBe(false)
   })
 })

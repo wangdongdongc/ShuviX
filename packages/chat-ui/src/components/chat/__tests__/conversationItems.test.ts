@@ -138,6 +138,30 @@ describe('buildVisibleItems —— 分组', () => {
   })
 })
 
+describe('buildVisibleItems —— 空回复追问', () => {
+  it('ER-G-1 u → 工具 → 只有思考的空回复 → 追问（系统写的 user 消息）→ 终答：空回复收口第一张卡，追问自成一项，终答另起一张卡', () => {
+    const thinkingOnly: AssistantMessage = {
+      ...agentMsg('m2'),
+      content: '',
+      blocks: [{ type: 'thinking', text: 'I will read it' }]
+    }
+    const notice: UserTextMessage = {
+      ...userMsg('n1'),
+      content: '<empty-reply>\nYour previous reply had no visible text.\n</empty-reply>',
+      metadata: { isSystemNotice: true, noticeKind: 'empty-reply' }
+    }
+    const items = buildVisibleItems(
+      [userMsg('u1'), agentMsg('m1', { tools: 1 }), thinkingOnly, notice, agentMsg('m3')],
+      false
+    )
+    expect(items.map((i) => i.msg.id)).toEqual(['u1', 'm2', 'n1', 'm3'])
+    expect(items[1].msgs?.map((m) => m.id)).toEqual(['m1', 'm2'])
+    expect(items[2].key).toBe('n1')
+    expect(items[2].msgs).toBeUndefined()
+    expect(items[3].msgs?.map((m) => m.id)).toEqual(['m3'])
+  })
+})
+
 /**
  * 压缩摘要虽然也是 assistant 消息，却是**边界标记**而不是哪一轮的终答：自成一项，
  * 不并入前后任何一张卡。并进去的话，一段没有终答的过程（中止 / steer）会把摘要

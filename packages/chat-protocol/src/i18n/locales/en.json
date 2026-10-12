@@ -255,6 +255,9 @@
   "dateNotice": {
     "title": "Date changed"
   },
+  "emptyReplyNotice": {
+    "title": "Empty reply — asked the model to continue"
+  },
   "instruction": {
     "title": "Project instructions"
   },

@@ -66,9 +66,10 @@ describe('SpawnCoordinator · submit and wait', () => {
       'final'
     ],
     [
+      // 工具结果之后的空回复会被追问一次（emptyReply.ts）；追问之后再空才是最终回答
       'no final text',
-      [callTool('probe'), answer('')],
-      'Agent did not produce a final text response (2 assistant message(s), 1 tool call(s)). stopReason=stop.'
+      [callTool('probe'), answer(''), answer('')],
+      'Agent did not produce a final text response (3 assistant message(s), 1 tool call(s)). stopReason=stop.'
     ]
   ]
 

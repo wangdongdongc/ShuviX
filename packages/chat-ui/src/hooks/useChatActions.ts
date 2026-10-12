@@ -97,13 +97,19 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
       if (!activeSessionId || regeneratingRef.current) return
       const store = useChatStore.getState()
       const idx = store.messages.findIndex((m) => m.id === assistantMsgId)
-      // 向前查找最近的 user/text 消息
+      // 向前查找最近的、用户自己说的 user/text 消息 —— 系统写的通知（后台完成 / 日期 / 空回复追问）
+      // 不是用户的话，回退到它再把信封当输入重发就错了
       let lastUserText = ''
       let lastUserTokens: Record<string, InlineToken> | undefined
       let userMsgId = ''
       for (let j = idx - 1; j >= 0; j--) {
         const m = store.messages[j]
-        if (m.role === 'user' && m.type === 'text') {
+        if (
+          m.role === 'user' &&
+          m.type === 'text' &&
+          !m.metadata?.isSystemNotice &&
+          !m.metadata?.isInstructionInjection
+        ) {
           lastUserText = m.content
           lastUserTokens = m.metadata?.inlineTokens
           userMsgId = m.id

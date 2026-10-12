@@ -5,6 +5,7 @@
  *
  *   P2-14-01 人发的消息：次序、逐字文本、图片丢掉、pi.system 不产出
  *   P2-14-02 通知从来不算人写的：条目按来源（shuvix.notice 一律），pi.user 按整段形状
+ *   P2-14-02b 空回复追问（写在当前对话里的 onYield 续写）也不算人写的
  *   P2-14-04 显示侧车解析的边角：没 submission / 没放下 / 形状坏 / 侧车胜过形状 / 压缩切点之前
  *   P2-14-05 assistant 正文：文本块拼接，思考永不交出
  *   P2-14-06a 错误与重试（冻结投影口径）：带 errorMessage 的失败轮整条不算，里面的调用不配对
@@ -27,6 +28,7 @@ import { imagePlaceholder } from '../../toolResultText'
 import { backgroundContext as BG } from '../context'
 import { DisplayDoc, noticeEntryDraft } from '../docs'
 import { SessionClosedError, type DurableSession } from '../durableSession'
+import { EMPTY_REPLY_NOTICE_TEXT } from '../emptyReply'
 import * as display from '../projection/display'
 import * as entryText from '../projection/entryText'
 import { digestEntries, readTranscriptDigest, type TranscriptDigestItem } from '../transcriptDigest'
@@ -105,6 +107,22 @@ describe('P2-14 · transcript digest extraction', () => {
       U(7, `${bg('t5', 'd')} and also deploy`),
       U(8, dateChange)
     ])
+  })
+
+  it('P2-14-02b the empty-reply nudge (emptyReply.ts) written into the current conversation is never human', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      userDraft('go', 1),
+      assistantDraft([call('read', { path: 'notes.txt' }, 'r1')], 2),
+      resultDraft('r1', 'alpha', { toolName: 'read' }),
+      assistantDraft([thinking('I will read it')], 3),
+      userDraft(EMPTY_REPLY_NOTICE_TEXT, 4),
+      assistantDraft('done', 5)
+    ])
+    const items = await digest(session)
+    // 只有人发的 go 是 user；思考与工具调用照旧是空正文的 agent 项（P2-14-05）
+    expect(items).toEqual([U(1, 'go'), A(2, ''), A(3, ''), A(5, 'done')])
+    expect(JSON.stringify(items)).not.toContain('empty-reply')
   })
 
   it('P2-14-04 sidecar resolution edge cases: orphan / unplaced / malformed items fall back, a resolved sidecar beats the notice shape, a cut entry gives nothing; nothing throws', async () => {

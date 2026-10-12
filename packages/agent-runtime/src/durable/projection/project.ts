@@ -10,7 +10,8 @@
  * 规则在冻结的旧投影（`legacy/harnessV3/projection.ts`）之上扩展：
  *  - **user**：`pi.user` → UserTextMessage。显示侧车解析到这条条目时用侧车的标记态原文 + inlineTokens
  *    （展开后的 payload 永不出现在界面文字里）；没有侧车时整段是通知块形状（`isSystemNoticeText`）→
- *    `isSystemNotice`。`model: ''`、没有 provider，时间 = `model[0].timestamp`。
+ *    `isSystemNotice`，其中空回复追问另带 `noticeKind: 'empty-reply'`。`model: ''`、没有 provider，
+ *    时间 = `model[0].timestamp`。
  *  - **通知**：`shuvix.notice` 一律 `isSystemNotice`（按条目种类，不看文字、不看 `data.kind`）。
  *  - **assistant**：`pi.assistant` → 一张卡（thinking / text / tool 按模型输出顺序，只有空白的思考丢掉）+
  *    这次调用的 usage。什么都没产出的不留空卡。`stopReason === 'error'` 且带 errorMessage → 一行
@@ -79,7 +80,12 @@ import {
   capabilitiesOfStorageKind,
   DURABLE_SQLITE_1
 } from '@shuvix/chat-protocol/sessionStorageKind'
-import { DATE_NOTICE_KIND, isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
+import {
+  DATE_NOTICE_KIND,
+  EMPTY_REPLY_NOTICE_KIND,
+  isEmptyReplyNoticeText,
+  isSystemNoticeText
+} from '@shuvix/chat-protocol/systemNoticeContract'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { spillLocatorOf } from '../../toolOutput/spill'
 import { toolResultText } from '../../toolResultText'
@@ -721,6 +727,7 @@ function buildMessage(sessionId: string, slot: Slot): ChatMessage {
       const tokens =
         resolved !== undefined ? jsonCopy<Record<string, never>>(resolved.tokens) : undefined
       const notice = resolved === undefined && isSystemNoticeText(content)
+      const emptyReply = notice && isEmptyReplyNoticeText(content)
       return {
         id,
         sessionId,
@@ -732,7 +739,8 @@ function buildMessage(sessionId: string, slot: Slot): ChatMessage {
         metadata: {
           ...(images === undefined ? {} : { images }),
           ...(tokens === undefined ? {} : { inlineTokens: tokens }),
-          ...(notice ? { isSystemNotice: true } : {})
+          ...(notice ? { isSystemNotice: true } : {}),
+          ...(emptyReply ? { noticeKind: EMPTY_REPLY_NOTICE_KIND } : {})
         }
       }
     }

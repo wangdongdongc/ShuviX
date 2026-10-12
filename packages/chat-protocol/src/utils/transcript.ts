@@ -48,7 +48,7 @@ export interface TranscribeOptions {
   includeToolResults?: boolean
   /** 纳入过程正文：与工具调用同处一条消息的 text 块（模型边做边说的话） */
   includeStepText?: boolean
-  /** 纳入系统通知：error_event + 指令注入消息 */
+  /** 纳入系统通知：error_event + 指令注入消息 + 系统写的 user 消息（后台完成 / 日期 / 空回复追问） */
   includeSystemNotices?: boolean
   /** 纳入图片占位（绝不内联 base64，仅输出 `[image]`） */
   includeImages?: boolean
@@ -162,7 +162,8 @@ export function transcribeConversation(
 
     if (msg.role === 'user') {
       const meta = msg.metadata
-      if (meta?.isInstructionInjection) {
+      // 系统写的 user 消息不能记成用户说的：与指令注入一样只在「系统通知」开关下、以系统通知导出
+      if (meta?.isInstructionInjection || meta?.isSystemNotice) {
         if (options.includeSystemNotices) {
           pushBody(
             `${labels.systemNotice}${ts}`,
