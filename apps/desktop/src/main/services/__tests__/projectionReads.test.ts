@@ -4,7 +4,7 @@
  * 的真 SQLite 会话存储与 artifacts 目录）。
  *
  *   02 基本一致：messageService.listBySession = freshMount 的 messages；id 是 String(entryId)；D1 的内容与
- *      inlineTokens、payload 不出现；通知 isSystemNotice；工具块已回填
+ *      inlineTokens、payload 不出现；通知 isSystemNotice + noticeKind；工具块已回填
  *   07 读你所写：gateway.prompt 落定之后立刻 list —— 有投影挂着 / 没有都含最终回答、= freshMount
  *   09 关掉的会话：host.close 之后 list → peek 重开、与关之前相同；从不 open、什么都不续跑
  *   10 宿主封存之后 list 是 [] 且不抛；内存会话从内存给出投影、盘上没有文件
@@ -330,7 +330,10 @@ describe('P3-07 list parity (S)', () => {
       expect(listed[0]!.metadata).toStrictEqual({ inlineTokens: K1 })
       // payload 只在 metadata.inlineTokens 里（P3-03 起的约定），从不进任何 content
       for (const message of listed) expect(message.content).not.toContain('PAYLOAD-K1')
-      expect(listed.at(-1)!.metadata).toStrictEqual({ isSystemNotice: true })
+      expect(listed.at(-1)!.metadata).toStrictEqual({
+        isSystemNotice: true,
+        noticeKind: 'background'
+      })
       const tool = listed
         .flatMap((m) => (m.role === 'assistant' && m.type === 'message' ? m.blocks : []))
         .find((b) => b.type === 'tool')
@@ -451,7 +454,10 @@ describe('P3-07 list parity (S)', () => {
 
       await openSession('s1').writeNotice({ text: 'later', kind: 'background', requestId: 'n' })
       listed = await messageService.listBySession('s1')
-      expect(listed.at(-1)!.metadata).toStrictEqual({ isSystemNotice: true })
+      expect(listed.at(-1)!.metadata).toStrictEqual({
+        isSystemNotice: true,
+        noticeKind: 'background'
+      })
       expect(await messageService.findLastBySession('s1')).toStrictEqual(listed.at(-1))
     },
     TIMEOUT
