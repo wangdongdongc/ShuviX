@@ -1418,7 +1418,7 @@ describe('KT-32..KT-33 文案与 limit', () => {
     expect(KNOWLEDGE_DESCRIPTION).toContain('`read`')
     // 这两句是本轮的重点，掉了就等于没改
     expect(KNOWLEDGE_DESCRIPTION).toContain('not the prose')
-    expect(KNOWLEDGE_DESCRIPTION).toMatch(/two steps/i)
+    expect(KNOWLEDGE_DESCRIPTION).toContain('then `read`')
 
     // 类型层守卫：`snippet` 回来的话这一行先红（片段正是「每条命中拖一段正文」的那一半）
     const keys: Record<keyof KnowledgeSearchHit, true> = {

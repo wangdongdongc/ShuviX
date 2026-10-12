@@ -38,13 +38,14 @@ describe('KG-1..4 知识库围栏正文', () => {
     expect(raw.split('\n').filter((line) => line.startsWith('- '))).toEqual(['- b', '- a', '- b'])
   })
 
-  it('KG-3 正文只有清单 + 三句话：给入口不给内容', () => {
+  it('KG-3 正文只有清单 + 几句话：给入口不给内容', () => {
     const text = renderKnowledgeGuide([{ name: 'notes' }, { name: 'project', label: 'Acme' }])!
 
-    // 入口三件：用哪个工具、可以不点名 base 地搜、什么值得记
+    // 入口：用哪个工具、什么时候搜、什么值得记
     expect(text).toContain('`search`')
-    expect(text).toContain('leave `base` out')
     expect(text).toContain('`create`')
+    // 「留空 base 搜全部」是怎么用，归工具描述（KT-12 钉在那边），围栏不再重复付一遍
+    expect(text).not.toContain('`base` out')
 
     // 不给内容：没有条目文件名、没有条目计数、没有任何路径（印了路径就等于邀请 agent 直接 write）
     expect(text).not.toContain('.md')

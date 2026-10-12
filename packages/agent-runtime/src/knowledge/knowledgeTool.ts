@@ -61,19 +61,18 @@ export const KnowledgeParamsSchema = Type.Object({
   action: Type.Unsafe<KnowledgeAction>({
     type: 'string',
     enum: [...ACTIONS],
-    description: 'What to do. See the tool description for what each action does.'
+    description: 'See the tool description.'
   }),
   base: Type.Optional(
     Type.String({
-      description:
-        'Which knowledge base to work in — one of the names "bases" lists for this session. Required for every action except "bases" and "search"; omitting it on "search" covers every base this session has.'
+      description: 'A name from "bases". Required except for "bases" and "search".'
     })
   ),
   query: Type.Optional(Type.String({ description: 'For "search": free-text query.' })),
   path: Type.Optional(
     Type.String({
       description:
-        'Bundle-relative path of an existing entry, e.g. "/token-refresh.md". Required for "read"; for "validate" it narrows the check to one entry.'
+        'Path relative to the base, e.g. "/token-refresh.md". Required for "read"; narrows "validate" to one entry.'
     })
   ),
   type: Type.Optional(
@@ -93,7 +92,7 @@ export const KnowledgeParamsSchema = Type.Object({
   body: Type.Optional(
     Type.String({
       description:
-        'For "create": the entry itself in markdown (the knowledge, not the metadata). Link other entries with bundle-absolute markdown links like [title](/auth/session.md).'
+        'For "create": the entry in markdown, without metadata. Link entries with base-absolute links like [title](/auth/session.md).'
     })
   ),
   tags: Type.Optional(Type.Array(Type.String(), { description: 'For "create": tags.' })),
@@ -121,7 +120,7 @@ export const KnowledgeParamsSchema = Type.Object({
       type: 'string',
       enum: [...OKF_STATUSES],
       description:
-        'For "create": the entry lifecycle — "stable" (the default) once it is ready to be relied on, "draft" while it is still incomplete, "deprecated" for something kept only for its links and history.'
+        'For "create": "stable" (the default) once it can be relied on, "draft" while incomplete, "deprecated" when kept only for its links and history.'
     })
   ),
   limit: Type.Optional(
@@ -145,31 +144,24 @@ export interface KnowledgeToolParams {
   limit?: number
 }
 
-export const KNOWLEDGE_DESCRIPTION = `Search, read, check and add to this session's knowledge bases — OKF bundles of markdown entries that later sessions read.
-
-**The user picks which bases a session works with**, and they are mostly the user's own: subject-shaped collections built on purpose and meant to be used. "bases" lists the ones in play here and \`base\` names one of them; a name that is not in that list is refused rather than guessed at.
+/**
+ * 工具描述只讲「怎么用」；「什么时候搜、什么值得记」住在 `<knowledge_bases>` 围栏（knowledgeGuide.ts）——
+ * 围栏只在会话真有库时才注入，这份描述则只要档案带 `knowledge` 就恒付，所以压到最短。
+ * 理由不进描述：新建与修改为什么分两条路见文件头，为什么只索引门面见桌面 `services/knowledge/search.ts` 文件头。
+ */
+export const KNOWLEDGE_DESCRIPTION = `Search, read and add to this session's knowledge bases — markdown entries (OKF) that later sessions read. The user picks which bases a session works with: "bases" lists them, and \`base\` names one.
 
 Actions:
-- "bases": list this session's knowledge bases (no other parameters).
-- "search": find candidate entries by free text (\`query\`, optional \`base\` / \`limit\`). **Leave \`base\` out to search every base this session has** — the user's selection is already the scope; name one only to stay inside it.
-- "list": list the notes of one base — entries ShuviX created and the user's own notes alike.
+- "bases": list this session's bases.
+- "search": find entries by free text (\`query\`). Leave \`base\` out to search every base. Only each entry's title, description, tags, type and headings are indexed, not the prose — pick by title and description, then \`read\`. For a literal string inside bodies, \`grep\` the base's directory.
+- "list": list every note in one base.
 - "read": return one entry by \`path\`.
-- "create": add a new entry — \`type\`, \`title\`, \`description\`, \`body\`, optional \`tags\` / \`sources\` / \`stale_after\` / \`status\`. The host assembles the metadata, names the file after the title, and answers with the absolute path it wrote.
-- "validate": report problems in one note (\`path\`) or in the whole base (no \`path\`). Entries that carry ShuviX's self-description line are held to OKF; the user's own notes are only checked for broken frontmatter. Run it after editing an entry.
+- "create": add an entry; the host writes the metadata and the file name.
+- "validate": check one entry (\`path\`) or the whole base. Run it after editing an entry.
 
-**A base marked read-only in "bases"** is ShuviX's own reference, shipped with the app: search and read it for how ShuviX's files and features work, but never create or edit anything there — record what you learn in one of the user's bases.
+Listings name the base's absolute directory; to change an entry, \`edit\` the file there, and never create one with \`write\`. A base may hold the user's own notes without metadata — use them as they are and never add metadata unless asked. Never write \`verified\`: it is the user's record of having checked an entry. Paths are relative to the base ("/token-refresh.md"); point into another base with a \`shuvix://\` URI.
 
-**Search then read — two steps, on purpose.** The index holds each entry's *face* only: title, description, tags, type and the headings inside it — **not the prose**. A result list therefore tells you which entries are plausibly about your subject, never what they say: pick the ones whose title and description fit, then \`read\` those. (Indexing whole bodies was tried and reverted: one ordinary word pulled back half the base, every hit dragging a paragraph along, and the entry actually wanted was buried in the noise.) To find a literal string inside bodies — an error message, a symbol, a URL — use \`grep\` over the base's directory, which every listing prints: more precise than any index, and it returns far less.
-
-**A base can hold the user's own notes with no metadata at all.** They are part of the base: search, read and edit them as they are, and never add or "fix" metadata on a user's note unless the user asks. Only entries created through "create" are guaranteed to carry OKF metadata.
-
-**Create entries here, change them with \`edit\`.** Only "create" writes through this tool; to revise an existing entry, \`edit\` the file at the absolute path that "search" / "list" / "read" / "create" gave you — a surgical diff beats re-sending the whole body. Never create an entry with \`write\`: the metadata (the self-description line, the key order, \`generated\`) would be yours to get right.
-
-The metadata the host owns in every entry it writes: the \`shuvix\` self-description and \`generated\`. \`status\` is the entry's lifecycle and yours to judge — \`stable\` (the default) once it is ready to be relied on, \`draft\` while it is still incomplete, \`deprecated\` when it is superseded or wrong. \`verified\` is a different axis: the user's record of having checked the entry — **never write it**.
-
-Paths in this tool are relative to the base, e.g. "/token-refresh.md"; every listing names the base's absolute directory, which is what \`edit\` needs. To point at something in another base, use a \`shuvix://\` URI instead of a path.
-
-Record what will be looked up again: decisions and why they went that way, pitfalls, conventions the code does not state, facts that took effort to establish. Put it in the base the subject belongs to — that is what the bases are cut by. Search before creating and revise the entry that already covers the subject rather than adding a near-duplicate. Do not record what the repository already states, or what only matters to this conversation.`
+Search before creating, and revise the entry that already covers a subject rather than adding a near-duplicate.`
 
 /** 一个库都没启用时对 agent 说的话 —— 别让它以为是自己参数写错了 */
 const NO_BASES =
@@ -187,7 +179,7 @@ export interface KnowledgeBundleTarget {
 
 /**
  * 一条检索命中 —— **只有门面，没有正文片段**：检索回答的是「哪几条可能相关」，正文由 `read` 取。
- * 每条命中都拖一段正文，是全文入索引时最占上下文的那一半（见 knowledgeTool 描述里的两步走）。
+ * 每条命中都拖一段正文，是全文入索引时最占上下文的那一半（工具描述据此教「先按门面挑、再 `read`」）。
  */
 export interface KnowledgeSearchHit {
   path: string
