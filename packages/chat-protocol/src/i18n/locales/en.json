@@ -1263,5 +1263,10 @@
     "noOtherTabs": "No other tabs",
     "emptyTitle": "Ask about this page",
     "emptyHint": "ShuviX can read this page, pull information out of it, fill it in, or get something done across your other tabs."
+  },
+  "experimental": {
+    "tag": "Beta",
+    "hint": "Experimental: a later version may change this in incompatible ways or remove it, without migrating your settings or data.",
+    "hintTelegramBots": "Experimental and unfinished: bots are only registered here. ShuviX does not connect to Telegram or send or receive messages yet. A later version may change this in incompatible ways or remove it."
   }
 }

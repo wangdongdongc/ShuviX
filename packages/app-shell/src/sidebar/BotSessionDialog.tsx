@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FolderOpen, X } from 'lucide-react'
 import { BotAvatar, useDialogClose } from '@shuvix/chat-ui'
+import { ExperimentalTag } from '../common/ExperimentalTag'
 
 /** 候选行所需的最小字段（桌面 BotInfo 是它的超集，可直接透传） */
 export interface BotPickItem {
@@ -111,7 +112,10 @@ export function BotSessionDialog({
       >
         <div className="flex items-start justify-between px-4 pt-3 pb-2">
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-text-primary">{t('bot.dialogTitle')}</h3>
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-text-primary">
+              {t('bot.dialogTitle')}
+              <ExperimentalTag feature="bots" />
+            </h3>
             <p className="text-xs text-text-tertiary mt-0.5">{t('bot.dialogSubtitle')}</p>
           </div>
           <button

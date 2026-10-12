@@ -7,12 +7,15 @@
  * 不持有状态、不读 store / window.api；activeTab 受控（宿主用 settingsStore / hash / chrome.storage）。
  */
 import type { ReactNode } from 'react'
+import type { ExperimentalFeature } from '@shuvix/chat-protocol/experimentalFeatures'
 import { TabButton } from './TabButton'
 
 export interface SettingsTab {
   id: string
   label: string
   icon?: ReactNode
+  /** 实验功能：导航里文案后缀一枚「实验」小标签（见 chat-protocol EXPERIMENTAL_FEATURES） */
+  experimental?: ExperimentalFeature
   /** 该 tab 的内容（宿主自行决定是否包滚动容器） */
   content: ReactNode
 }
@@ -48,12 +51,20 @@ export function SettingsContainer({
       </div>
 
       <div className="flex flex-1 min-h-0">
-        <div className="w-[180px] flex-shrink-0 border-r border-border-secondary py-4 px-3 space-y-1 bg-bg-secondary overflow-y-auto">
+        {/*
+         * 192px 是英文「Telegram Bots」+ Beta 标签放得下的宽度（180px 时差约 6px，文案会被截断）；
+         * data-settings-nav 是 e2e 认这一列的锚点，别再按宽度类名认
+         */}
+        <div
+          data-settings-nav
+          className="w-48 flex-shrink-0 border-r border-border-secondary py-4 px-3 space-y-1 bg-bg-secondary overflow-y-auto"
+        >
           {tabs.map((tab) => (
             <TabButton
               key={tab.id}
               icon={tab.icon}
               label={tab.label}
+              experimental={tab.experimental}
               active={active?.id === tab.id}
               onClick={() => onTabChange(tab.id)}
             />

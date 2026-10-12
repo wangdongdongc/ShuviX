@@ -97,6 +97,7 @@ export function SettingsPanel(): React.JSX.Element {
     {
       id: 'voice',
       label: t('settings.tabVoice'),
+      experimental: 'voice',
       icon: <Mic size={14} />,
       content: (
         <Scroll>
@@ -107,6 +108,7 @@ export function SettingsPanel(): React.JSX.Element {
     {
       id: 'telegramBots',
       label: t('settings.tabTelegramBots'),
+      experimental: 'telegramBots',
       icon: <Send size={14} />,
       content: <TelegramBotsSettings />
     },

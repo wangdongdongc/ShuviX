@@ -120,7 +120,7 @@ describe('页内结构（PanelTabBar）', () => {
     expect(bar!.tabs[0].folderIcon).toBe(true)
     expect(SUB_TAB_PROJECTS).toContain(bar!.tabs[0].text)
     expect(bar!.tabs[0].underline).toBe(true)
-    // 整改拆掉的旧结构：除一级 180px 列外，内容区不得再有 w-[220px] / border-r 的竖向子导航列
+    // 整改拆掉的旧结构：除一级导航列外，内容区不得再有 w-[220px] / border-r 的竖向子导航列
     expect(await archived.verticalSubNavs()).toBe(0)
   })
 

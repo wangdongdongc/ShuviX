@@ -3050,19 +3050,22 @@ export interface SettingsTabsPane {
 }
 
 /**
- * 设置窗口的 tab 导航（SettingsContainer 左栏：w-[180px] 列里的 TabButton）。
+ * 设置窗口的 tab 导航（SettingsContainer 左栏 `[data-settings-nav]` 里的 TabButton）。
  * 「某个 tab 还在不在」这类否定断言的唯一入口 —— 按文案认（精确匹配，别 includes：
- * 「Telegram Bots」是另一个 tab）。
+ * 「Telegram Bots」是另一个 tab）。文案取 `[data-tab-label]`，不取整颗按钮的 textContent ——
+ * 实验功能的 tab 后面还跟着一枚「实验」小标签。
  */
 export async function settingsTabsPane(settings: CdpClient): Promise<SettingsTabsPane> {
-  const NAV = `document.querySelector('.w-\\\\[180px\\\\]')`
+  const NAV = `document.querySelector('[data-settings-nav]')`
   const TABS = `[...(${NAV}?.querySelectorAll(':scope > button') ?? [])]`
+  const LABEL = (b: string): string =>
+    `(${b}.querySelector('[data-tab-label]')?.textContent ?? '').trim()`
   await until(() => settings.eval<boolean>(`${TABS}.length > 0`), 'settings tab nav ready')
   return {
-    labels: () => settings.eval<string[]>(`${TABS}.map((b) => (b.textContent ?? '').trim())`),
+    labels: () => settings.eval<string[]>(`${TABS}.map((b) => ${LABEL('b')})`),
     activeLabel: () =>
       settings.eval<string>(
-        `(${TABS}.find((b) => b.className.includes('bg-accent/10'))?.textContent ?? '').trim()`
+        `((b) => (b ? ${LABEL('b')} : ''))(${TABS}.find((b) => b.className.includes('bg-accent/10')))`
       ),
     hash: () => settings.eval<string>('location.hash')
   }
@@ -6517,7 +6520,7 @@ export function dbConnectionsPane(settings: CdpClient): DbConnectionsPane {
 // 结构契约：左栏只剩「已归档」一个入口（不再有第二个「项目」）、页内只有一条横向标签条、
 // 归档列表 / 空态 / 行按钮挂在内容区里。
 // 作用域坑：旧一级入口与页内子 tab 同叫「项目」，一切断言必须限定作用域 —— 一级导航的
-// 断言走 nav*（限 180px 左栏），页内断言限内容区（左栏的下一个兄弟），裸查 document
+// 断言走 nav*（限左栏 [data-settings-nav]），页内断言限内容区（左栏的下一个兄弟），裸查 document
 // 必然误命中另一头。
 
 /** 左栏一级导航按钮的快照 */
@@ -6576,8 +6579,8 @@ export interface ArchivedSettingsPane {
 
 /** 「已归档」设置页（ArchivedSettings；openSettings('archived') 后调用） */
 export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane {
-  // 一级导航列 = SettingsContainer 的 180px 列；内容区 = 它的下一个兄弟
-  const NAV = `document.querySelector('div[class*="w-[180px]"]')`
+  // 一级导航列 = SettingsContainer 的 [data-settings-nav] 列；内容区 = 它的下一个兄弟
+  const NAV = `document.querySelector('[data-settings-nav]')`
   const CONTENT = `((${NAV})?.nextElementSibling ?? null)`
   const NAV_BTN = (labels: string[]): string =>
     `[...((${NAV})?.querySelectorAll('button') ?? [])].find((b) =>
@@ -7018,7 +7021,7 @@ export function statusBannerPane(main: CdpClient): StatusBannerPane {
 //
 // 锚点：子标签条 = `[data-monitor-toolbar]` 最近的 HttpLogSettings 根（.flex.flex-col.h-full
 // .min-h-0）的祖父（MonitorSettings 根）的第一个子节点（PanelTabBar，按钮是直接子节点）；
-// 激活态认按钮里的选中下划线 `span.bg-accent`。顶层 tab 导航沿用 `.w-[180px]` 那列
+// 激活态认按钮里的选中下划线 `span.bg-accent`。顶层 tab 导航沿用 `[data-settings-nav]` 那列
 // （settingsTabsPane 同一锚点），「智能体」tab 已拆除的判据是导航里不再出现它的图标
 // （lucide-bot）—— 文案是 i18n 产物，不认。
 
@@ -7037,8 +7040,8 @@ export interface MonitorSettingsPane {
 export async function monitorSettingsPane(settings: CdpClient): Promise<MonitorSettingsPane> {
   const TOOLBAR = `document.querySelector('[data-monitor-toolbar]')`
   const SUB_BAR = `${TOOLBAR}?.closest('.flex.flex-col.h-full.min-h-0')?.parentElement?.parentElement?.firstElementChild`
-  // 与 settingsTabsPane 同一根导航列；attribute 子串写法免得给 `[` 转义
-  const NAV = `document.querySelector('div[class*="w-[180px]"]')`
+  // 与 settingsTabsPane 同一根导航列
+  const NAV = `document.querySelector('[data-settings-nav]')`
   await until(() => settings.eval<boolean>(`${TOOLBAR} !== null`), 'monitor settings ready')
   return {
     subTabCount: () =>

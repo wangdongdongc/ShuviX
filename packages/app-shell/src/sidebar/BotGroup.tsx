@@ -181,6 +181,7 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
     <SessionGroup
       label={t('sidebar.botsGroup')}
       variant="bots"
+      experimental="bots"
       collapsed={collapsed}
       onToggle={toggle}
       active={isNoteActive}

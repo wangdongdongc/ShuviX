@@ -37,7 +37,9 @@ import {
   Users,
   Webhook
 } from 'lucide-react'
+import type { ExperimentalFeature } from '@shuvix/chat-protocol/experimentalFeatures'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
+import { ExperimentalTag } from '../common/ExperimentalTag'
 import { RowMenuButton } from './RowMenuButton'
 
 export interface SessionGroupProps {
@@ -63,6 +65,8 @@ export interface SessionGroupProps {
   showDividerAbove?: boolean
   /** 组头菜单（右键标题行 / 点 ⋮ 走同一个回调）；缺省即两者都无 */
   onMenu?: (e: React.MouseEvent) => void
+  /** 实验功能：标签后缀一枚「实验」小标签（只在可折叠形态的组头上画） */
+  experimental?: ExperimentalFeature
   /** 分组内的会话项（SessionItem 列表） */
   children: React.ReactNode
 }
@@ -76,6 +80,7 @@ export function SessionGroup({
   dim = false,
   showDividerAbove = false,
   onMenu,
+  experimental,
   children
 }: SessionGroupProps): React.JSX.Element {
   // temp / section 是摊开的纯分节：没有折叠，也就没有折叠图标（见文件头注释）
@@ -128,6 +133,7 @@ export function SessionGroup({
             >
               <Icon size={12} className="flex-shrink-0" />
               <span className="truncate font-medium uppercase tracking-wider">{label}</span>
+              {experimental && <ExperimentalTag feature={experimental} />}
             </button>
           )}
           {onMenu && (
