@@ -557,19 +557,23 @@ describe('desktopPromptVars —— shell / shellTool 按平台给（PVW-S1…S5�
   })
 
   it('PVW-S6 引用 shellTool 的档案组装出来：win32 上正文里说 powershell，darwin 上说 bash，都不留占位符', async () => {
-    const work = builtins('en').find((p) => p.name === 'work')!
-    expect(work.systemPrompt).toContain('{{shuvix:shellTool}}')
+    // notebook 的「核实事实用 shellTool」那句引用它（work / chat / coding 已不再引用）
+    const notebook = builtins('en').find((p) => p.name === 'notebook')!
+    expect(notebook.systemPrompt).toContain('{{shuvix:shellTool}}')
 
     setPlatform('win32')
     mocks.psConfig = { exe: 'C:\\pwsh.exe', edition: 'pwsh' }
-    const onWindows = renderProfileSystemPrompt(work, await varsFor({ toolNames: work.tools }))
+    const onWindows = renderProfileSystemPrompt(
+      notebook,
+      await varsFor({ toolNames: notebook.tools })
+    )
     expect(onWindows).not.toContain('{{shuvix:shellTool}}')
-    expect(onWindows).toContain('through powershell')
+    expect(onWindows).toContain('`powershell` and other tools')
     expect(onWindows).not.toMatch(/\bbash\b/)
 
     setPlatform('darwin')
-    const onMac = renderProfileSystemPrompt(work, await varsFor({ toolNames: work.tools }))
-    expect(onMac).toContain('through bash')
+    const onMac = renderProfileSystemPrompt(notebook, await varsFor({ toolNames: notebook.tools }))
+    expect(onMac).toContain('`bash` and other tools')
     expect(onMac).not.toMatch(/\bpowershell\b/i)
   })
 })

@@ -1053,9 +1053,9 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
         }
       }
     }
-    // 语料自检：至少 chat / coding 三语的身份句（共 6 句）被当成清单查过 —— 判据一个都没认出来时
-    // 上面那圈恒绿（widget 的文件工具句也会被查到，但不指望它们）
-    expect(checked).toBeGreaterThanOrEqual(6)
+    // 语料自检：至少 notebook 三语里的 `grep` / `glob`（共 3 处）被当成清单查过 —— 判据一个都没认出来时
+    // 上面那圈恒绿。chat / coding 的身份句清单随 2026-10-12 的精简删掉了；判据本身由 REG-7b 钉
+    expect(checked).toBeGreaterThanOrEqual(3)
   })
 
   it('REG-7b 判据自检：身份句里残留 ssh / database / browser 的那种清单会被抓住，非工具的斜杠串不算清单', () => {
@@ -1171,7 +1171,7 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
     expect(fenced).toBeGreaterThan(0)
   })
 
-  it('SH-3 {{shuvix:shellTool}} 只出现在手里有命令工具的档案里；今天引用它的恰是持有命令工具的那五份', () => {
+  it('SH-3 {{shuvix:shellTool}} 只出现在手里有命令工具的档案里；今天引用它的是 notebook 与 widget（work / chat / coding 的「优先专用工具」由命令工具自己的描述讲）', () => {
     const referencing = new Set<string>()
     for (const { profile: p, language } of allProfiles()) {
       const what = `${p.name}.${language}`
@@ -1180,7 +1180,7 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
         referencing.add(p.name)
       }
     }
-    expect([...referencing].sort()).toEqual(['chat', 'coding', 'notebook', 'widget', 'work'])
+    expect([...referencing].sort()).toEqual(['notebook', 'widget'])
   })
 })
 

@@ -70,60 +70,58 @@ export const SessionParamsSchema = Type.Object({
   }),
   title: Type.Optional(
     Type.String({
-      description: `For "set-title": the new session title (concise, at most ${TITLE_MAX_CHARS} characters, same language as the conversation). For "create-sub-session": an optional title for the new sub-session (omit to let it be named automatically).`
+      description: `For "set-title": the new title (at most ${TITLE_MAX_CHARS} characters, in the conversation's language). For "create-sub-session": an optional title.`
     })
   ),
   agent_profile: Type.Optional(
     Type.String({
       description:
-        'For "create-sub-session": the agent profile the sub-session runs as (e.g. "coding"). Omit to run it on the same base profile as this session.'
+        'For "create-sub-session": the agent profile it runs as (e.g. "coding"); omit for this session\'s own base profile.'
     })
   ),
   sub_session_id: Type.Optional(
     Type.String({
       description:
-        'For "prompt-sub-session" / "read-sub-session" / "stop-sub-session": the id returned by "create-sub-session" or listed by "list-sub-sessions". May be omitted when this session has exactly one sub-session — that one is then addressed. ("wait-for-sub-sessions" may always omit it to wait for every running one.)'
+        'The sub-session to address; may be omitted when there is exactly one. "wait-for-sub-sessions" without it waits for every running one.'
     })
   ),
   message: Type.Optional(
     Type.String({
       description:
-        'For "prompt-sub-session": the message to send, written exactly as a user would write it — the sub-session sees only this text, so make it self-contained. "create-sub-session" does not take it — create the sub-session first, then send it its task.'
+        'For "prompt-sub-session": the message, self-contained and written as the user would write it.'
     })
   ),
   run_in_background: Type.Optional(
     Type.Boolean({
       description:
-        'For "prompt-sub-session": return a receipt immediately instead of waiting for the answer, and bring you back when the turn ends. Use it whenever you do not need the reply inside this same call — dispatching work that will take a while, or starting several sub-sessions to collect together with "wait-for-sub-sessions". Leave it off when you cannot continue without the answer: the foreground form waits in one call and costs nothing while it waits.'
+        'For "prompt-sub-session": return a receipt at once instead of the reply, and bring you back when the turn ends — for work you can let run, or several sub-sessions to collect with "wait-for-sub-sessions".'
     })
   ),
   timeout_seconds: Type.Optional(
     Type.Number({
-      description: `How long to wait, for "prompt-sub-session" in the foreground and for "wait-for-sub-sessions" (default: ${DEFAULT_PROMPT_TIMEOUT_SEC}s). On timeout the sub-session keeps running — it is NOT cancelled — and the call returns telling you so.`
+      description: `How long a foreground "prompt-sub-session" or "wait-for-sub-sessions" waits (default ${DEFAULT_PROMPT_TIMEOUT_SEC}s). On timeout the sub-session keeps running.`
     })
   )
 })
 
 export const SESSION_DESCRIPTION = `Read or change the session this task belongs to, and manage its sub-sessions.
 
-A sub-session is an ordinary session that you own: it has its own conversation, model, tools and history, the user can see it in the session list (nested under this one) and can read or continue it at any time. Use one when a task deserves its own conversation that outlives a single answer — unlike the \`agent\` tool, whose sub-agent disappears once it replies. Sub-sessions cannot create sub-sessions of their own.
+A sub-session is an ordinary session you own — its own conversation, model, tools and history; the user sees it nested under this one and can read or continue it. Use one for a task that deserves its own conversation; unlike the \`agent\` tool's sub-agent, it outlives a single answer. Sub-sessions cannot create sub-sessions.
 
 Actions:
-- "set-title": rename THIS session. Pass the new title in \`title\` (concise, at most ${TITLE_MAX_CHARS} characters).
-- "create-sub-session": start a sub-session and return its id. Optional \`title\` and \`agent_profile\`. It inherits this session's setup — project, model, thinking level and the MCP servers and skills you have here — and starts out empty: creating one sends it nothing.
-- "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user had typed it, and wait for the reply. Add \`run_in_background: true\` to dispatch it and get a receipt immediately instead — you are brought back when the turn ends. This is also how a sub-session gets its first task, right after you create it.
-- "wait-for-sub-sessions": block until your sub-sessions finish and return all their answers at once. Omit \`sub_session_id\` to wait for every one that is running, or pass one to wait for that one.
-- "list-sub-sessions": list your sub-sessions with their status (idle / running / waiting-input / interrupted).
+- "set-title": rename THIS session (\`title\`, at most ${TITLE_MAX_CHARS} characters).
+- "create-sub-session": start an empty sub-session and return its id (optional \`title\` and \`agent_profile\`). It inherits this session's project, model, thinking level, MCP servers and skills.
+- "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user typed it and wait for the reply — or, with \`run_in_background: true\`, get a receipt at once and be brought back when the turn ends. This is also how a new sub-session gets its first task.
+- "wait-for-sub-sessions": block until your sub-sessions finish and return all their answers.
+- "list-sub-sessions": your sub-sessions and their status (idle / running / waiting-input / interrupted).
 - "read-sub-session": the latest answer of \`sub_session_id\`.
-- "stop-sub-session": stop whatever \`sub_session_id\` is currently doing.
+- "stop-sub-session": stop what \`sub_session_id\` is doing.
 
-Neither form makes you sit and check on it. The foreground form is one call that waits and costs nothing while it waits, and it cannot hang — on timeout it leaves the sub-session running and tells you so. The background form hands you a receipt and brings you back when the turn ends, so you can get on with other work, or tell the user what you started, and collect the result later with "wait-for-sub-sessions". Use the foreground form when you cannot continue without the answer, the background form when you can. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session": every poll is a full request, and it buys you nothing that either form gives you for free.
+Wait in the foreground when you cannot continue without the answer, dispatch in the background when you can; the foreground wait costs nothing and on timeout leaves the sub-session running. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session".
 
-**A sub-session runs one turn at a time.** It is a conversation, not a queue: sending a second message while it is still working is rejected, so either wait for the reply or create another sub-session to work in parallel. A sub-session can also stop and wait for the USER to approve something (\`status="waiting-input"\`) — typically a security prompt for a command it wants to run. Only the user can clear that: you cannot answer it, waiting longer will not help, and rewording the task will not avoid it. Relay what it is waiting for to the user, or stop the sub-session. A sub-session whose turn was cut off when the app stopped is \`status="interrupted"\`: it is not running and will not finish by itself — a new message starts over (discarding that unfinished turn), or the user can continue it in that session.
+A sub-session runs one turn at a time: a second message while it is working is rejected — wait, or create another one. \`status="waiting-input"\` means it waits for the USER to approve something; only the user can clear that, so relay what it is waiting for or stop it. \`status="interrupted"\` means its turn was cut off when the app stopped; it will not finish by itself, and a new message starts over.
 
-Everything a sub-session says comes back inside a \`<sub-session>\` fence, in \`<reply>\` (or \`<error>\`) — text outside those fences is this tool talking to you, not the sub-session.
-
-Write each message as if you were the user of that session: it does not see this conversation.`
+Its replies come back inside a \`<sub-session>\` fence, in \`<reply>\` or \`<error>\`; text outside the fence is this tool talking. Write each message as the user of that session would: it does not see this conversation.`
 
 interface SessionToolParams {
   action: (typeof ACTIONS)[number]

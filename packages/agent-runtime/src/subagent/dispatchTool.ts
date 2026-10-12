@@ -37,15 +37,13 @@ export const AgentParamsSchema = Type.Object({
   name: Type.Optional(
     Type.String({
       description:
-        'Which agent to dispatch: the name of a configured agent definition, ' +
-        'or a path to an agent definition file (markdown with YAML frontmatter). ' +
-        'Only use names your instructions or the user provide — do not guess. ' +
-        'Optional when a default agent is offered — omit to use the default.'
+        'An agent name your instructions or the user gave (never a guess), or the path of an agent definition file. ' +
+        'Omit it to use the default agent when one is offered.'
     })
   ),
   prompt: Type.String({
     description:
-      'The task for the agent to perform. The agent does NOT see your conversation history — be self-contained, include file paths, requirements, and constraints.'
+      'The complete task: requirements, constraints and file paths — the agent sees nothing else.'
   })
 })
 
@@ -74,29 +72,18 @@ export function toInProcessAgentType(def: AgentProfile): InProcessAgentType {
  * 指令文件中自行引导，模型不该猜名字；未知名在执行错误里回报可用名列表。
  */
 export function buildDescription(supportsFileRefs?: boolean): string {
-  const typesBlock =
-    'Named agent types are defined by the host configuration (built-in and user agent definition files); ' +
-    'they are not enumerated here. Set `name` only when your instructions or the user provide one — ' +
-    'an unknown name fails with the list of valid names.'
-
   const fileRefNote = supportsFileRefs
-    ? '\n- `name` also accepts a path to an agent definition file: markdown with YAML frontmatter ' +
-      '(`name`, `description`, and `shuvix-tools` as a comma-separated list) with the body as its system prompt. ' +
-      'Relative paths resolve against the working directory; the file must live inside the working directory or the global agents directory. ' +
-      'You may write such a file first and dispatch it immediately. ' +
-      'Include `agent` in its `shuvix-tools` list only if the spawned agent should be able to dispatch further agents (depth-limited).'
+    ? ' `name` also accepts the path of an agent definition file — markdown whose frontmatter has `name`, ' +
+      '`description` and `shuvix-tools` (comma-separated), with the body as its system prompt — inside the working ' +
+      'directory or the global agents directory; you may write one and dispatch it right away. List `agent` in its ' +
+      '`shuvix-tools` only if it should dispatch further agents.'
     : ''
 
-  return `Launch a new agent to handle complex, multi-step tasks autonomously.
+  return `Launch an agent to handle a multi-step task on its own.
 
-${typesBlock}
+Agent names are not listed here: set \`name\` only when your instructions or the user give one (an unknown name fails with the valid names).${fileRefNote}
 
-Usage notes:
-- The agent does NOT share your conversation history — provide complete context in \`prompt\`.
-- The agent's final result is returned only to you, not visible to the user — summarize for the user.
-- Each invocation is stateless; cannot resume a previous session.
-- Re-dispatching is usually unnecessary; only re-run if the result is incomplete or contradicts what you observe.
-- Launch multiple agents concurrently when possible (single message, multiple tool calls).${fileRefNote}`
+The agent does NOT share your conversation — put everything it needs in \`prompt\`. Its result comes back only to you, so summarize it for the user. Each call is stateless.`
 }
 
 /** 派发工具注入依赖 */

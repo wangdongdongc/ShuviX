@@ -100,16 +100,7 @@ export class SkillTool extends BaseTool<SkillParams> {
         .join('\n')
 
       this.description = [
-        'Load a specialized skill that provides domain-specific instructions and workflows.',
-        '',
-        'When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.',
-        '',
-        'The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.',
-        '',
-        'Tool output includes a `<skill_content name="...">` block with the loaded content.',
-        '',
-        'The following skills provide specialized sets of instructions for particular tasks.',
-        'Invoke this tool to load a skill when a task matches one of the available skills listed below:',
+        'Load a skill — instructions, workflows and bundled resources for one kind of task — when the task matches one listed below. Its content comes back in a `<skill_content name="...">` block.',
         '',
         '<available_skills>',
         skillListXml,
