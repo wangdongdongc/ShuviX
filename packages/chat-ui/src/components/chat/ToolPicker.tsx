@@ -2,6 +2,7 @@ import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Server, BookOpen, WifiOff, Lock, Loader2 } from 'lucide-react'
+import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
 import { useChatStore, selectMcpConnecting } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useSessionTools } from '../../hooks/useSessionTools'
@@ -34,8 +35,9 @@ function parseSkillDisplay(name: string): { label: string; builtin: boolean } {
 /**
  * 工具选择器 — 会话的扩展能力勾选（MCP / Skill），与会话设置里的扩展能力是同一份数据。
  *
- * 内置工具与 SubAgent 始终启用，不在此处控制。会话的 agent 档案声明的 mcp:/skill: 项同样恒生效
- * （`declaredBy`）：画成已勾、挂锁，悬停说是哪个档案声明的；它们算进计数，勾选写回时不碰它们。
+ * 内置工具与 SubAgent 始终启用，不在此处控制。会话的 agent 档案声明的 mcp:/skill: 项（`declaredBy`）
+ * 缺省勾上，悬停说是哪个档案带的；取消它写的是勾选里的取消记号（chat-protocol `toolSelection`），
+ * 只作用于这条会话 —— 例如改用别的作图技能时取消内置的那份。
  * 勾选只在创建 Agent 时读一次：会话已有运行时就只读（面板照常能打开看：整排条目按禁用态画、
  * 触发钮挂锁，原因只在悬停时说）。
  * 还没有会话（欢迎页）时勾的是草稿（useSessionTools），直接发送新建会话时写进那条会话；
@@ -80,28 +82,21 @@ export function ToolPicker(): React.JSX.Element | null {
 
   if (mcpTools.length === 0 && skillTools.length === 0) return null
 
-  // 档案声明的项恒生效（会话勾选只能在其上叠加），所以它算「已启用」，与会话自己勾没勾无关
-  const isOn = (tool: ToolItem): boolean => !!tool.declaredBy || enabledTools.includes(tool.name)
+  // 档案声明的项缺省开着、被取消才关；其余项勾了才开（记号见 chat-protocol toolSelection）
+  const isOn = (tool: ToolItem): boolean =>
+    isToolSelected(enabledTools, tool.name, !!tool.declaredBy)
   const enabledMcpTools = mcpTools.filter(isOn)
   const enabledSkillTools = skillTools.filter(isOn)
 
   const toggle = (tool: ToolItem): void => {
-    if (locked || tool.declaredBy) return
-    const next = enabledTools.includes(tool.name)
-      ? enabledTools.filter((n) => n !== tool.name)
-      : [...enabledTools, tool.name]
-    void setEnabledTools(next)
+    if (locked) return
+    void setEnabledTools(setToolSelected(enabledTools, tool.name, !!tool.declaredBy, !isOn(tool)))
   }
 
-  // 只读时整排按禁用态画（压暗 + 禁用光标），不响应悬停：一眼看出改不了；原因放在悬停提示里。
-  // 档案声明的那一行也改不了，但它是**开着的**：不压暗，只挂一把锁、光标不变手型
-  const rowCls = (declared: boolean): string =>
+  // 只读时整排按禁用态画（压暗 + 禁用光标），不响应悬停：一眼看出改不了；原因放在悬停提示里
+  const rowCls = (): string =>
     `flex items-center gap-1.5 w-full px-2 py-0.5 transition-colors ${
-      locked
-        ? 'cursor-not-allowed opacity-40'
-        : declared
-          ? 'cursor-default'
-          : 'hover:bg-bg-hover cursor-pointer'
+      locked ? 'cursor-not-allowed opacity-40' : 'hover:bg-bg-hover cursor-pointer'
     }`
   const lockedHint = locked ? t('sessionConfig.extensionsLocked') : undefined
   const rowHint = (tool: ToolItem): string | undefined =>
@@ -109,10 +104,6 @@ export function ToolPicker(): React.JSX.Element | null {
     (tool.declaredBy
       ? t('sessionConfig.extensionDeclared', { profile: tool.declaredBy })
       : undefined)
-  const declaredLock = (tool: ToolItem): React.JSX.Element | null =>
-    tool.declaredBy ? (
-      <Lock size={9} data-tool-declared className="text-text-tertiary flex-shrink-0" />
-    ) : null
 
   return (
     <div
@@ -187,18 +178,17 @@ export function ToolPicker(): React.JSX.Element | null {
                       data-tool-item={tool.name}
                       data-offline={failed || undefined}
                       data-declared={tool.declaredBy ? true : undefined}
-                      aria-disabled={locked || !!tool.declaredBy || undefined}
+                      aria-disabled={locked || undefined}
                       title={rowHint(tool)}
-                      className={`${rowCls(!!tool.declaredBy)} ${failed && !locked ? 'opacity-50' : ''}`}
+                      className={`${rowCls()} ${failed && !locked ? 'opacity-50' : ''}`}
                     >
                       <input
                         type="checkbox"
                         checked={isOn(tool)}
-                        disabled={locked || !!tool.declaredBy}
+                        disabled={locked}
                         onChange={() => toggle(tool)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />
-                      {declaredLock(tool)}
                       {tool.isBuiltin && (
                         <span className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0">
                           {t('input.skillBuiltinBadge')}
@@ -238,18 +228,17 @@ export function ToolPicker(): React.JSX.Element | null {
                       key={tool.name}
                       data-tool-item={tool.name}
                       data-declared={tool.declaredBy ? true : undefined}
-                      aria-disabled={locked || !!tool.declaredBy || undefined}
+                      aria-disabled={locked || undefined}
                       title={rowHint(tool)}
-                      className={rowCls(!!tool.declaredBy)}
+                      className={rowCls()}
                     >
                       <input
                         type="checkbox"
                         checked={isOn(tool)}
-                        disabled={locked || !!tool.declaredBy}
+                        disabled={locked}
                         onChange={() => toggle(tool)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />
-                      {declaredLock(tool)}
                       {builtin && (
                         <span className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0">
                           {t('input.skillBuiltinBadge')}

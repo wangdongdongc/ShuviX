@@ -91,8 +91,11 @@ same file works on every machine. An agent that lists only `bash` has no command
 Entries are de-duplicated in order. A name that does not exist on this host is silently dropped
 — the agent is created without it. **Everything the list names is on**, however the agent is put
 to use. When it is the root of a session, its `mcp:` / `skill:` entries appear in that session's
-extension pickers ticked and locked (hovering says which agent declared them); the session's own
-ticks only add to them, and taking one away means overriding the agent. Narrowing a list is
+extension pickers ticked by default (hovering says which agent declared them). The session can
+tick more, and can untick a declared one for itself — say, to use another drawing skill instead of
+`builtin:drawing`; the session stores that as `-skill:<name>` in its selection, a project's
+default can carry it too, and the agent file is not touched. Removing an entry for every session
+still means overriding the agent. Builtin tool names cannot be unticked. Narrowing a list is
 **not** how a role is expressed in ShuviX: an agent without `grep` just greps through `bash`.
 The builtin `work`, `chat` and `coding` agents deliberately share one list (`bash, powershell, read, write,
 edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing`) and differ only in their bodies.
@@ -186,7 +189,8 @@ the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`, 
    user.
 2. **As the persona of a sub-session** — the `session` tool's `agent_profile` (any agent that is
    not a base). The child keeps the extensions it copied from its parent; the `mcp:` / `skill:`
-   entries in that agent's `shuvix-tools` are on in addition, like everything else the list names.
+   entries in that agent's `shuvix-tools` are on in addition, like everything else the list names,
+   unless the copied selection unticks them.
 3. **As a hook's agent** (`shuvix-hook-agent` — see the `hook-md` entry).
 4. **As a base override** (above).
 

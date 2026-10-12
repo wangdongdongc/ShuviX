@@ -78,12 +78,6 @@ export function ProjectEditDialog({
     if (result) setPath(result)
   }
 
-  const toggleExtTool = (toolName: string): void => {
-    setEnabledTools((prev) =>
-      prev.includes(toolName) ? prev.filter((n) => n !== toolName) : [...prev, toolName]
-    )
-  }
-
   const toggleKnowledgeBase = (name: string): void => {
     setKbTouched(true)
     setKnowledgeBases((prev) =>
@@ -145,7 +139,7 @@ export function ProjectEditDialog({
             mcpTools={mcpTools}
             skillTools={skillTools}
             enabledTools={enabledTools}
-            onToggle={toggleExtTool}
+            onChange={setEnabledTools}
           />
           <KnowledgeBasesSection
             title={t('projectForm.knowledgeBases')}

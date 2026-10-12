@@ -52,12 +52,6 @@ function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.J
   const skillTools = tools.filter((tool) => tool.group === SKILLS_GROUP)
   if (mcpTools.length === 0 && skillTools.length === 0) return null
 
-  const toggle = (name: string): void => {
-    void setEnabledTools(
-      enabledTools.includes(name) ? enabledTools.filter((n) => n !== name) : [...enabledTools, name]
-    )
-  }
-
   return (
     <ExtensionsSection
       title={t('sessionConfig.extensionsGroup')}
@@ -65,7 +59,7 @@ function SessionExtensionsSection({ sessionId }: { sessionId: string }): React.J
       mcpTools={mcpTools}
       skillTools={skillTools}
       enabledTools={enabledTools}
-      onToggle={toggle}
+      onChange={(next) => void setEnabledTools(next)}
       readonly={locked}
       readonlyHint={t('sessionConfig.extensionsLocked')}
     />

@@ -94,3 +94,12 @@ describe('内置部分只算这台机器上存在的工具', () => {
     expect(filterAvailableTools(['powershell', 'bash'])).toEqual(['bash'])
   })
 })
+
+describe('取消档案声明项的记号不按可用性滤', () => {
+  it('TA-OPT-1: 「-mcp:/-skill:」原样留着（它说的是「不要」，那一项在不在都一样）；内置名的「-read」不是记号，照常剔除', () => {
+    // 可用：mcp:a、skill:x（外加内置 bash / read / edit）
+    expect(
+      filterAvailableTools(['-skill:gone', 'mcp:a', '-mcp:a', 'skill:none', '-read', '-skill:x'])
+    ).toEqual(['-skill:gone', 'mcp:a', '-mcp:a', '-skill:x'])
+  })
+})

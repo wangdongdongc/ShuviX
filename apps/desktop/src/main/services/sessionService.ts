@@ -1,4 +1,9 @@
 import { v7 as uuidv7 } from 'uuid'
+import {
+  isSessionScopedToolName,
+  isToolSelectionEntry,
+  toolOptOut
+} from '@shuvix/chat-protocol/toolSelection'
 import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionRecords } from './sessionRecords'
@@ -117,9 +122,12 @@ function workingDirectoryOf(
   return projectPath || settings?.workingDirectory || getTempWorkspace(sessionId)
 }
 
-/** 只留会话级工具名（mcp:/skill:）并去重保序 —— 扩展能力勾选里不该有别的东西 */
+/**
+ * 只留勾选里该有的条目并去重保序：会话级工具名（mcp:/skill:）与取消档案声明项的记号
+ * （`-mcp:` / `-skill:`，见 chat-protocol `toolSelection.ts`）—— 扩展能力勾选里不该有别的东西
+ */
 function sessionScopedTools(names: readonly string[]): string[] {
-  return [...new Set(names.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:')))]
+  return [...new Set(names.filter(isToolSelectionEntry))]
 }
 
 /**
@@ -530,8 +538,8 @@ export class SessionService {
       log.info(`pinAgentProfile 应用档案思考档位 ${thinkingLevel}`)
     }
 
-    // 档案声明的 mcp:/skill: 由名单归一恒生效，不写进勾选：继承来的那份原样留着
-    const tools = sessionScopedTools(profile.tools)
+    // 档案声明的 mcp:/skill: 由名单归一缺省带上，不写进勾选：继承来的那份（含取消记号）原样留着
+    const tools = [...new Set(profile.tools.filter(isSessionScopedToolName))]
 
     broadcastSessionConfigChanged(sessionId)
     return { success: true, applied: { model, thinkingLevel, tools }, modelUnavailable }
@@ -774,9 +782,12 @@ export class SessionService {
     const workingDirectory = workingDirectoryOf(sessionId, project?.path, session.settings)
     // 滤掉已不可用的 MCP（配置里已停用 / 已删）与 skill（已删 / 已停用）；设置里的原值不动。
     // 可用性**不看连接状态** —— MCP 惰性启动，没连上的那台正要在下一步（装配工具）被连起来。
-    // `mcp:chrome`（用户真实的 Chrome）不接受会话勾选：只由 Chrome 标签页会话的基座档案声明
+    // `mcp:chrome`（用户真实的 Chrome）不接受会话勾选，加或取消都不收：只由 Chrome 标签页会话的
+    // 基座档案声明，那是 tab 基座唯一的浏览能力 —— 经 IPC 写进去的取消记号也不能把它摘掉
     const enabledTools = filterAvailableTools(
-      selectedTools.filter((name) => name !== CHROME_TOOL_NAME),
+      selectedTools.filter(
+        (name) => name !== CHROME_TOOL_NAME && name !== toolOptOut(CHROME_TOOL_NAME)
+      ),
       project?.path
     )
     return {

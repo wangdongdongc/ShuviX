@@ -112,9 +112,11 @@ other file of the project.
      picker) — stored in the session's `settings.enabledTools` as `skill:<name>`; a project's
      own defaults seed new sessions; the selection is read once when the session's agent is
      created and is read-only while that agent exists. Entries the session's agent file declares
-     are listed there too, ticked and locked: they are on regardless of the selection.
+     are listed there too, ticked by default; unticking one stores `-skill:<name>` and turns it
+     off for that session only (or for a project's new sessions, when done in the project's
+     settings) — how a session swaps the builtin drawing skill for another one.
    - **Per agent file**: `shuvix-tools: …, skill:<name>` in an agent md — that agent always has
-     the skill, whatever the session selected.
+     the skill by default; a session rooted on it can untick it for itself (above).
    - Project-level skills are visible to the `skill` tool of any root agent working in that
      project.
 3. **As a file to read** — nothing stops an agent from reading `SKILL.md` directly; the two

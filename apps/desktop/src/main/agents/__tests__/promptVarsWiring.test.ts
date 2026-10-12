@@ -603,4 +603,26 @@ describe('desktopPromptVars —— 锁的名单形态（H11-62）', () => {
     const spawned = await varsFor({ kind: 'spawned', sessionId: 'agent-1', cwd: '', toolNames })
     expect('notebookPath' in spawned).toBe(false)
   })
+
+  it('H11-62b 会话取消了档案声明的作图技能（勾选 [-skill:builtin:drawing]）：技能照样在架，visualGuide 整段为空 —— 不指路、不教 adopt、不教交互块；不取消时指路恰一次', async () => {
+    const work = builtins('en').find((p) => p.name === 'work')!
+    expect(work.tools).toContain(DRAWING)
+    const toolNames = normalizeToolNames('root', work.tools, ['-skill:builtin:drawing'])
+    expect(toolNames).not.toContain(DRAWING)
+    // 技能没被停用：变量表按名单判，不按「在不在架」判
+    mocks.findEnabled.mockReturnValue([BUILTIN])
+    mocks.pickSettings.mockReturnValue({})
+
+    const optedOut = await varsFor({ kind: 'root', toolNames })
+    expect(optedOut.visualGuide).toBe('')
+    expect(optedOut.visualGuide).not.toContain(POINTER)
+    expect(optedOut.visualGuide).not.toContain(ADOPT)
+    expect(optedOut.visualGuide).not.toContain('```interactive')
+
+    const control = await varsFor({
+      kind: 'root',
+      toolNames: normalizeToolNames('root', work.tools, [])
+    })
+    expect(countOf(control.visualGuide, POINTER)).toBe(1)
+  })
 })

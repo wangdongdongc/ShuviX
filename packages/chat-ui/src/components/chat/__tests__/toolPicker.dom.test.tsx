@@ -2,14 +2,14 @@
 /**
  * ToolPicker（输入框的工具选择器）DOM 测试（jsdom）—— 档案声明的 mcp:/skill: 项（`declaredBy`）：
  *
- *   - 画成**已勾、锁住**：勾选框勾着且禁用、行上 `data-declared` + `aria-disabled`、挂一把
- *     `data-tool-declared` 小锁，悬停说是哪个档案声明的（sessionConfig.extensionDeclared）；
- *     它是**开着的**，所以不压暗（没有 opacity-40）—— 压暗专属「运行时已建、整排只读」；
- *   - 算进触发钮的计数与悬浮摘要（它确实生效），但勾选写回时**不碰它**：会话勾选只是在它之上
- *     叠加，写进去的永远只有会话自己勾的那些；已经混进勾选里的声明项也不会被顺手抹掉；
- *   - 组件自己挡住对它的切换 —— 禁用的勾选框浏览器根本不派发 click，所以先摘掉 disabled 再点
+ *   - **缺省勾上、可以取消**：行上 `data-declared`（没有 `aria-disabled`、没有声明锁），勾选框勾着且可点，
+ *     悬停说是哪个档案带的、取消只在这里生效（sessionConfig.extensionDeclared）；不压暗、手型光标 ——
+ *     压暗专属「运行时已建、整排只读」；
+ *   - 取消它写的是勾选里的取消记号 `-<name>`（chat-protocol `toolSelection`），再勾回来撤掉记号；
+ *     开着时算进触发钮的计数与悬浮摘要，取消了就不算；没被取消时勾选里不写它的名字；
+ *   - 运行时已建（sessionAgentCreated）时整排只读，声明项与其它行一样压暗、换成只读的悬停原因，
+ *     组件自己挡住切换 —— 禁用的勾选框浏览器根本不派发 click，所以先摘掉 disabled 再点
  *     （与 e2e `toolPickerPane.toggle(…, { force: true })` 同一个办法）才证明得了这一点；
- *   - 运行时已建（sessionAgentCreated）时整排只读，声明项与其它行一样压暗、换成只读的悬停原因；
  *   - 欢迎页（没有会话，TP-10..14）：照样渲染，勾的是新会话的草稿（`welcomeEnabledTools`，不走 IPC），
  *     条目按欢迎页新建会话将用的档案列（`tools.list(undefined, {profile:'chat'})`）；别的会话有没有
  *     运行时与它无关；会话一换，晚到的那份条目不上屏。
@@ -129,6 +129,16 @@ async function openPanel(): Promise<void> {
   if (!container.querySelector('label[data-tool-item]')) throw new Error('panel did not open')
 }
 
+/** 收起面板（再点一次触发钮）—— 悬浮摘要只在收起时渲染 */
+async function closePanel(): Promise<void> {
+  if (!container.querySelector('label[data-tool-item]')) return
+  await act(async () => {
+    trigger().click()
+  })
+  await flush()
+  if (container.querySelector('label[data-tool-item]')) throw new Error('panel did not close')
+}
+
 const row = (name: string): HTMLLabelElement => {
   const hit = [...container.querySelectorAll<HTMLLabelElement>('label[data-tool-item]')].find(
     (label) => label.getAttribute('data-tool-item') === name
@@ -200,8 +210,8 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('档案声明的条目：已勾、锁住、不压暗', () => {
-  it('TP-1 声明项：data-declared + aria-disabled、勾着且禁用、挂声明锁、悬停说是谁声明的、不压暗', async () => {
+describe('档案声明的条目：缺省勾上、可以取消', () => {
+  it('TP-1 声明项：data-declared、没有 aria-disabled、勾着且可点、没有声明锁、悬停说是谁带的、不压暗、手型光标', async () => {
     seedSession(['skill:foo'])
     await renderPicker()
     await openPanel()
@@ -212,17 +222,19 @@ describe('档案声明的条目：已勾、锁住、不压暗', () => {
     for (const name of DECLARED) {
       const label = row(name)
       expect(label.hasAttribute('data-declared'), name).toBe(true)
-      expect(label.getAttribute('aria-disabled'), name).toBe('true')
+      expect(label.hasAttribute('aria-disabled'), name).toBe(false)
       expect(box(name).checked, name).toBe(true)
-      expect(box(name).disabled, name).toBe(true)
-      expect(label.querySelector('[data-tool-declared]'), name).not.toBeNull()
+      expect(box(name).disabled, name).toBe(false)
+      expect(label.querySelector('[data-tool-declared]'), name).toBeNull()
       expect(label.title, name).toBe(declaredHint)
-      // 它是开着的：压暗专属「运行时已建」的只读态
+      // 压暗专属「运行时已建」的只读态
       expect(label.className, name).not.toContain('opacity-40')
+      expect(label.className, name).toContain('cursor-pointer')
     }
+    expect(container.querySelector('[data-tool-declared]')).toBeNull()
   })
 
-  it('TP-2 其它条目照常：可勾、只有会话自己勾的 foo 是勾着的，不带声明标记与声明锁', async () => {
+  it('TP-2 其它条目照常：可勾、只有会话自己勾的 foo 是勾着的，不带声明标记', async () => {
     seedSession(['skill:foo'])
     await renderPicker()
     await openPanel()
@@ -236,7 +248,7 @@ describe('档案声明的条目：已勾、锁住、不压暗', () => {
     }
   })
 
-  it('TP-3 声明项算进计数与悬浮摘要：MCP 1（ctx）、Skills 2（drawing, foo）', async () => {
+  it('TP-3 没被取消的声明项算进计数与悬浮摘要：MCP 1（ctx）、Skills 2（drawing, foo）', async () => {
     seedSession(['skill:foo'])
     await renderPicker()
     // 面板收起时：触发钮计数 + 悬浮摘要
@@ -246,23 +258,44 @@ describe('档案声明的条目：已勾、锁住、不压暗', () => {
   })
 })
 
-describe('勾选写回：只写会话自己的那些', () => {
-  it('TP-4 绕过禁用态硬点声明项 → 什么也不写（组件自己挡住，不只靠 disabled）', async () => {
+describe('勾选写回：取消声明项写取消记号，其余照常', () => {
+  it('TP-4 点声明项 → 写取消记号、行变未勾但仍是声明项、计数与摘要跟着少；再点 → 撤掉记号', async () => {
     seedSession(['skill:foo'])
     await renderPicker()
     await openPanel()
-    for (const name of DECLARED) await forceClick(name)
-    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
-    expect(storedTools()).toEqual(['skill:foo'])
-    // 点完仍是已勾、锁住
-    for (const name of DECLARED) expect(box(name).checked, name).toBe(true)
-    // 对照：同一个硬点手法落在普通条目上是真能写进去的 —— 上面的「没写」不是手法失灵
-    await forceClick('skill:bar')
+
+    await click('mcp:ctx')
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
-    expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
+    expect(mocks.updateEnabledTools).toHaveBeenLastCalledWith({
       id: SID,
-      enabledTools: ['skill:foo', 'skill:bar']
+      enabledTools: ['skill:foo', '-mcp:ctx']
     })
+    expect(storedTools()).toEqual(['skill:foo', '-mcp:ctx'])
+    expect(box('mcp:ctx').checked).toBe(false)
+    expect(box('mcp:ctx').disabled).toBe(false)
+    expect(row('mcp:ctx').hasAttribute('data-declared')).toBe(true)
+    expect(counts().mcp).toBe('0')
+
+    await click('mcp:ctx')
+    expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(2)
+    expect(mocks.updateEnabledTools).toHaveBeenLastCalledWith({
+      id: SID,
+      enabledTools: ['skill:foo']
+    })
+    expect(box('mcp:ctx').checked).toBe(true)
+    expect(counts().mcp).toBe('1')
+
+    expect(counts().skill).toBe('2')
+    await click('skill:builtin:drawing')
+    expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(3)
+    expect(mocks.updateEnabledTools).toHaveBeenLastCalledWith({
+      id: SID,
+      enabledTools: ['skill:foo', '-skill:builtin:drawing']
+    })
+    expect(box('skill:builtin:drawing').checked).toBe(false)
+    expect(counts().skill).toBe('1')
+    await closePanel()
+    expect(summaryOf('[Skills]')).toBe('foo')
   })
 
   it('TP-5 勾上 bar → 恰好写一次，写的是 [foo, bar]（声明项不被写进勾选）', async () => {
@@ -329,12 +362,11 @@ describe('运行时已建：整排只读，声明项也不例外', () => {
 })
 
 describe('回归：没有任何声明项时一切照旧', () => {
-  it('TP-9 条目都不带 declaredBy → 计数只算会话勾选（MCP 0、Skills 1），面板里没有声明锁', async () => {
+  it('TP-9 条目都不带 declaredBy → 计数只算会话勾选（MCP 0、Skills 1），面板里没有声明标记', async () => {
     seedSession(['skill:foo'])
     await renderPicker(ITEMS.map(({ declaredBy: _declaredBy, ...rest }) => rest))
     expect(counts()).toEqual({ mcp: '0', skill: '1' })
     await openPanel()
-    expect(container.querySelector('[data-tool-declared]')).toBeNull()
     expect(container.querySelector('label[data-declared]')).toBeNull()
     expect(box('mcp:ctx').disabled).toBe(false)
     expect(box('mcp:ctx').checked).toBe(false)
@@ -370,7 +402,7 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
     await flush()
   }
 
-  it("TP-10 渲染；tools.list 的参数正好是 (undefined, {profile:'chat'})；不锁；声明项照常已勾锁住、悬停点 chat", async () => {
+  it("TP-10 渲染；tools.list 的参数正好是 (undefined, {profile:'chat'})；不锁；声明项缺省勾上、可点、悬停点 chat", async () => {
     seedWelcome()
     listBySid()
     await mount()
@@ -384,8 +416,9 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
     expect(hint).toContain(CHAT)
     for (const name of DECLARED) {
       expect(row(name).hasAttribute('data-declared'), name).toBe(true)
+      expect(row(name).hasAttribute('aria-disabled'), name).toBe(false)
       expect(box(name).checked, name).toBe(true)
-      expect(box(name).disabled, name).toBe(true)
+      expect(box(name).disabled, name).toBe(false)
       expect(row(name).title, name).toBe(hint)
       expect(row(name).className, name).not.toContain('opacity-40')
     }
@@ -413,16 +446,25 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
     expect(storedTools()).toEqual(['skill:bar'])
   })
 
-  it('TP-12 硬点声明项 → 草稿不变', async () => {
+  it('TP-12 取消声明项 → 草稿写取消记号、零 IPC、行变未勾、计数跟着少；再点 → 草稿撤掉记号', async () => {
     seedWelcome(['skill:foo'])
     listBySid()
     await mount()
+    expect(counts().skill).toBe('2')
     await openPanel()
-    const before = welcomeDraft()
-    for (const name of DECLARED) await forceClick(name)
-    expect(welcomeDraft()).toBe(before)
+
+    await click('skill:builtin:drawing')
+    expect(welcomeDraft()).toEqual(['skill:foo', '-skill:builtin:drawing'])
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+    expect(box('skill:builtin:drawing').checked).toBe(false)
+    expect(row('skill:builtin:drawing').hasAttribute('data-declared')).toBe(true)
+    expect(counts().skill).toBe('1')
+
+    await click('skill:builtin:drawing')
     expect(welcomeDraft()).toEqual(['skill:foo'])
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+    expect(box('skill:builtin:drawing').checked).toBe(true)
+    expect(counts().skill).toBe('2')
   })
 
   it('TP-13 欢迎页那份挂着时切到会话，会话那份先回并上屏；欢迎页那份晚到被忽略', async () => {
@@ -532,5 +574,38 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
     expect(box('skill:foo').checked).toBe(true)
     expect(box('skill:bar').checked).toBe(true)
     expect(welcomeDraft()).toEqual(['skill:foo', 'skill:bar'])
+  })
+})
+
+// ─── 已经取消过的声明项 ─────────────────────────────────────────────────────
+
+describe('勾选里带着取消记号的会话', () => {
+  it('TP-15 [-skill:builtin:drawing, skill:foo]：计数 MCP 1 / Skills 1、摘要只有 foo；drawing 未勾、仍是声明项、可点', async () => {
+    seedSession(['-skill:builtin:drawing', 'skill:foo'])
+    await renderPicker()
+    expect(counts()).toEqual({ mcp: '1', skill: '1' })
+    expect(summaryOf('[Skills]')).toBe('foo')
+    await openPanel()
+    const label = row('skill:builtin:drawing')
+    expect(box('skill:builtin:drawing').checked).toBe(false)
+    expect(box('skill:builtin:drawing').disabled).toBe(false)
+    expect(label.hasAttribute('data-declared')).toBe(true)
+    expect(label.hasAttribute('aria-disabled')).toBe(false)
+    // 别的声明项不受这条记号影响
+    expect(box('mcp:ctx').checked).toBe(true)
+  })
+
+  it('TP-15 运行时已建：取消过的 drawing 仍画成未勾，禁用 + aria-disabled、悬停说只读原因；硬点什么也不写', async () => {
+    seedSession(['-skill:builtin:drawing', 'skill:foo'], true)
+    await renderPicker()
+    await openPanel()
+    const label = row('skill:builtin:drawing')
+    expect(box('skill:builtin:drawing').checked).toBe(false)
+    expect(box('skill:builtin:drawing').disabled).toBe(true)
+    expect(label.getAttribute('aria-disabled')).toBe('true')
+    expect(label.title).toBe(i18n.t('sessionConfig.extensionsLocked'))
+    await forceClick('skill:builtin:drawing')
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+    expect(storedTools()).toEqual(['-skill:builtin:drawing', 'skill:foo'])
   })
 })

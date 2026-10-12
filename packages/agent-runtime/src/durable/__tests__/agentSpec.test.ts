@@ -29,7 +29,7 @@ describe('resolveThinkingLevel / normalizeToolNames — root 决策列', () => {
     expect(resolveThinkingLevel('root', PROFILE, 'medium')).toBe('medium')
   })
 
-  it('归一名单保序去重、root overlay 只收 mcp:/skill:', () => {
+  it('归一名单保序去重、root overlay 只收 mcp:/skill:（及其取消记号）', () => {
     // bash 不在档案白名单里：勾选里混进的内置名不能借 overlay 越过档案
     expect(
       normalizeToolNames('root', PROFILE.tools, ['mcp:ctx', 'bash', 'skill:pdf', 'mcp:ctx'])
@@ -68,9 +68,10 @@ describe('resolveThinkingLevel — 档案思考档位（shuvix-thinking）', () 
 })
 
 /**
- * 工具名单归一（TN）—— 档案 `shuvix-tools` 声明的一切（内置名 / mcp: / skill:）对 root 与 spawned
- * **恒生效**；root 会话的勾选（overlay，只收 mcp:/skill:）只能往上**加**：既去不掉档案声明的
- * 项，也带不进一个内置工具名。同一份名单喂给人设冻结时的变量表（`promptVars` 的 `toolNames`）与工具解析
+ * 工具名单归一（TN）—— 档案 `shuvix-tools` 声明的一切（内置名 / mcp: / skill:）是这个 agent 的底子；
+ * root 会话的勾选（overlay）在其上**增减**：`mcp:` / `skill:` 加一项，`-mcp:` / `-skill:` 取消档案声明的
+ * 一项（记号见 chat-protocol `toolSelection.ts`；同一项既勾又取消时取消赢）。内置名既带不进来，也取消不掉；
+ * spawned 没有勾选，档案即全部。同一份名单喂给人设冻结时的变量表（`promptVars` 的 `toolNames`）与工具解析
  *（都在锁里，见 lock.create.test.ts）。
  */
 describe('normalizeToolNames —— 工具名单归一（TN）', () => {
@@ -87,7 +88,7 @@ describe('normalizeToolNames —— 工具名单归一（TN）', () => {
     ])
   })
 
-  it('TN-2 root 不带勾选 / 勾选为空：档案全量照样生效 —— 勾选去不掉档案声明的项', () => {
+  it('TN-2 root 不带勾选 / 勾选为空：档案全量照样生效 —— 声明项缺省就在，不必勾', () => {
     for (const overlay of [undefined, []]) {
       expect(normalizeToolNames('root', P, overlay), JSON.stringify(overlay)).toEqual(P)
     }
@@ -115,6 +116,48 @@ describe('normalizeToolNames —— 工具名单归一（TN）', () => {
     expect(spawned).toEqual(P)
     // 同一条规则：档案写了什么，这个 agent 就带什么 —— 不再分 root / spawned 两套
     expect(normalizeToolNames('root', P, undefined)).toEqual(spawned)
+  })
+
+  it('TN-5 root 取消记号：去掉档案声明的那一项，其余原位；加的照样接在末尾', () => {
+    expect(normalizeToolNames('root', P, ['-skill:prof'])).toEqual(['read', 'mcp:prof', 'agent'])
+    expect(normalizeToolNames('root', P, ['-mcp:prof', 'skill:sel'])).toEqual([
+      'read',
+      'skill:prof',
+      'agent',
+      'skill:sel'
+    ])
+  })
+
+  it('TN-6 同一项既勾又取消：两种顺序都是取消赢 —— 声明项与未声明项一样', () => {
+    for (const overlay of [
+      ['skill:prof', '-skill:prof'],
+      ['-skill:prof', 'skill:prof']
+    ]) {
+      expect(normalizeToolNames('root', P, overlay), JSON.stringify(overlay)).toEqual([
+        'read',
+        'mcp:prof',
+        'agent'
+      ])
+    }
+    for (const overlay of [
+      ['skill:x', '-skill:x'],
+      ['-skill:x', 'skill:x']
+    ]) {
+      const names = normalizeToolNames('root', P, overlay)
+      expect(names, JSON.stringify(overlay)).toEqual(P)
+      expect(names).not.toContain('skill:x')
+    }
+  })
+
+  it('TN-7 取消不了的：档案没声明的项、内置名、畸形记号 —— 名单恰为档案全量；spawned 不读勾选', () => {
+    // 取消一个档案没声明的项什么也不做
+    expect(normalizeToolNames('root', P, ['-skill:undeclared'])).toEqual(P)
+    // 内置名（-read / -agent）不是取消记号：bot 基座的窄名单、派发能力都只由档案决定；
+    // 双减号、大写前缀也都不是记号
+    expect(normalizeToolNames('root', P, ['-read', '-agent', '--skill:prof', '-MCP:prof'])).toEqual(
+      P
+    )
+    expect(normalizeToolNames('spawned', P, undefined)).toEqual(P)
   })
 })
 

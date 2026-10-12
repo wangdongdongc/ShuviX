@@ -1,6 +1,6 @@
 /**
- * 会话的扩展能力勾选（`settings.enabledTools`：mcp:/skill:）—— 新建会话时定下、只在创建根 Agent
- * 时读一次、运行时存在（含创建中 / 关停中）期间只读。
+ * 会话的扩展能力勾选（`settings.enabledTools`：mcp:/skill: 加一项，`-mcp:` / `-skill:` 取消档案声明的
+ * 一项）—— 新建会话时定下、只在创建根 Agent 时读一次、运行时存在（含创建中 / 关停中）期间只读。
  *
  * 链路：sessionService.create（继承）→ agent.init（原值 + created）→ 运行时的锁建出 agent →
  * `agent_created` / `agent_closing` → chat-ui 的 sessionAgentCreated → 输入框工具选择器与会话设置
@@ -15,8 +15,10 @@
  * 懒建；需要消息的那条走 promptAndListMessages（容忍隔离实例无 API key 的失败）。
  *
  * 档案声明的项：项目会话的根档案是 work，它的 `shuvix-tools` 点了内置作图技能 `skill:builtin:drawing`
- * —— 档案声明的 mcp:/skill: 恒生效，会话勾选只能在其上叠加。所以两处入口里它恒画成已勾、禁用、
- * `data-declared`（与「运行时已建」的只读是两回事），它既不在会话勾选里、也不会被写进去（EXT-E-8 / 9）。
+ * —— 档案声明的 mcp:/skill: **缺省勾上、可以取消**。三处入口（选择器、会话设置、项目设置）里它画成
+ * 已勾、可点、`data-declared`；没取消时它不在勾选里，取消写的是 `-skill:builtin:drawing` 记号，
+ * 只作用于这条会话 / 这个项目的新会话，取消了运行时就不带它、提示里也不再指路（EXT-E-6 / 8 / 10）。
+ * 禁用只来自「运行时已建」的只读。
  *
  * ⚠️ 不用 `location.reload()`：主进程的 will-navigate 守卫会取消它（见 seed.waitRendererReady）。
  */
@@ -56,16 +58,22 @@ const A = `skill:${SKILL_A}`
 const B = `skill:${SKILL_B}`
 /** 内置、离线（隔离实例没有它的 API key）的 MCP —— 恒在工具列表里 */
 const TAVILY = 'mcp:tavily'
-/** 内置作图技能：work 档案在 shuvix-tools 里声明了它 —— 项目会话的两处入口里恒已勾、锁住 */
+/** 内置作图技能：work 档案在 shuvix-tools 里声明了它 —— 项目会话的入口里缺省勾上、可以取消 */
 const DRAWING = 'skill:builtin:drawing'
+/** 取消作图技能的记号 */
+const NO_DRAWING = '-skill:builtin:drawing'
 /** 系统提示里「先加载作图技能」那句指路的记号（三语一字不差） */
 const DRAWING_POINTER = 'builtin:drawing'
 /** 手艺段的范例围栏（技能不在架时整段手艺常驻，它就在提示里） */
 const DRAWING_EXAMPLE = '```svg\n<svg'
+/** 交互块那一段的记号（作图技能在架才教） */
+const INTERACTIVE = '```interactive'
 /** 项目组头按名字认（pages.ts 的 GroupTarget），名字须全局唯一 */
 const P1_NAME = 'EXT-项目一'
 const P2_NAME = 'EXT-项目二'
 const P3_NAME = 'EXT-项目三'
+/** EXT-E-6 ④ 的新项目：在项目设置里取消作图技能 */
+const P4_NAME = 'EXT-项目四'
 
 interface InitResult {
   success: boolean
@@ -378,7 +386,7 @@ describe('输入框工具选择器与会话设置卡（DOM）', () => {
 })
 
 describe('项目编辑弹窗的扩展能力（DOM）', () => {
-  it('EXT-E-6 从没保存过就一个都不勾（档案声明的那项除外：已勾、锁住）、保存过的照原样，其余全都可改（会话运行时锁不到它）；原样保存写下 []', async () => {
+  it('EXT-E-6 从没保存过就一个都不勾（档案声明的那项除外：缺省勾上、可以取消）、保存过的照原样，全都可改（会话运行时锁不到它）；原样保存写下 []；取消作图技能后保存写下取消记号，新会话照抄', async () => {
     // 先让 P2 下一条会话的运行时建出来 —— 只读是会话级的，不能漏到项目弹窗上
     const bystander = await createSession({ title: 'EXT-E6-有运行时', projectId: p2 })
     await ensureRuntime(bystander)
@@ -395,7 +403,7 @@ describe('项目编辑弹窗的扩展能力（DOM）', () => {
     }
 
     // ① P1 从没保存过：自己的勾选一个都没有（没有「默认全开」），这些全部可改；
-    // 唯一勾着的是 work 档案声明的作图技能 —— 已勾、禁用、带声明标记，它不属于项目的勾选
+    // 唯一勾着的是 work 档案声明的作图技能 —— 缺省勾上、同样可点、带声明标记，它不在项目的勾选里
     const p1Items = await openProject(P1_NAME)
     for (const key of [A, B, TAVILY]) {
       expect(extItem(p1Items, key), key).toMatchObject({
@@ -406,7 +414,7 @@ describe('项目编辑弹窗的扩展能力（DOM）', () => {
     }
     expect(extItem(p1Items, DRAWING)).toMatchObject({
       checked: true,
-      disabled: true,
+      disabled: false,
       declared: true
     })
     await projectEdit.close()
@@ -419,7 +427,7 @@ describe('项目编辑弹窗的扩展能力（DOM）', () => {
     await projectEdit.close()
 
     // ③ P1 不动扩展能力直接保存：写下的就是弹窗展示的那个空默认，之后新建的会话同样为空。
-    // 画成已勾的作图技能也没被写进去 —— 声明项恒生效，从来不进项目默认 / 会话勾选
+    // 画成已勾的作图技能也没被写进去 —— 声明项缺省就开着，没取消时不进项目默认 / 会话勾选
     expect(await projectTools(p1)).toBeUndefined()
     await openProject(P1_NAME)
     await projectEdit.save()
@@ -427,6 +435,29 @@ describe('项目编辑弹窗的扩展能力（DOM）', () => {
     expect(await projectTools(p1)).toEqual([])
     const fresh = await createSession({ title: 'EXT-E6-保存后新建', projectId: p1 })
     expect(await storedTools(fresh)).toEqual([])
+
+    // ④ 新项目 P4：在项目设置里取消作图技能再保存 → 项目默认写下取消记号；之后新建的会话照抄它，
+    // 而这条会话的数据源里作图技能仍是档案声明的（取消只是这条会话的选择，不改档案）
+    const p4 = (await createProject(app.main, { name: P4_NAME, path: projectDir('ext-p4') })).id
+    expect(await projectTools(p4)).toBeUndefined()
+    const p4Items = await openProject(P4_NAME)
+    expect(extItem(p4Items, DRAWING)).toMatchObject({
+      checked: true,
+      disabled: false,
+      declared: true
+    })
+    await projectEdit.toggleExt(DRAWING)
+    await until(async () => {
+      const item = extItem(await projectEdit.extItems(), DRAWING)
+      return item?.checked === false && item.declared && !item.disabled
+    }, 'P4 dialog: drawing unticked, still declared and editable')
+    await projectEdit.save()
+    await until(async () => Array.isArray(await projectTools(p4)), 'P4 saved its extensions')
+    expect(await projectTools(p4)).toEqual([NO_DRAWING])
+    const p4Session = await createSession({ title: 'EXT-E6-项目四新建', projectId: p4 })
+    expect(await storedTools(p4Session)).toEqual([NO_DRAWING])
+    const p4Rows = await toolsList(p4Session)
+    expect(p4Rows.find((r) => r.name === DRAWING)?.declaredBy).toBeTypeOf('string')
   })
 })
 
@@ -475,7 +506,7 @@ describe('离线的 MCP 不被抹掉（DOM + IPC）', () => {
 })
 
 describe('档案声明的作图技能（IPC + DOM）', () => {
-  it('EXT-E-8 空勾选的 work 会话：声明项标着 declaredBy、在选择器里已勾锁住；勾选只写会话自己的，运行时带齐两本、提示里指路并教 adopt', async () => {
+  it('EXT-E-8 空勾选的 work 会话：声明项标着 declaredBy、在选择器里缺省勾上且可点；勾选只写会话自己的，运行时带齐两本、提示里指路并教 adopt', async () => {
     const title = 'EXT-E8-档案声明'
     const s = await createSession({ title, projectId: p1 })
     expect(await storedTools(s)).toEqual([])
@@ -487,7 +518,7 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
     expect(declaredBy!.length).toBeGreaterThan(0)
     expect(rows.find((r) => r.name === A)?.declaredBy).toBeUndefined()
 
-    // ② 选择器：会话没有运行时（不是只读），声明项仍是已勾、禁用、带声明标记，悬停说是谁声明的
+    // ② 选择器：会话没有运行时（不是只读），声明项已勾、可点、带声明标记，悬停说是哪个档案带的
     await waitRow(title)
     expect(await sidebar.openSession(title)).toBe(true)
     await until(() => picker.present(), 'tool picker present')
@@ -497,7 +528,12 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
       async () => (await pickerItem(DRAWING)) ?? null,
       'drawing row listed'
     )
-    expect(drawingRow).toMatchObject({ checked: true, disabled: true, declared: true })
+    expect(drawingRow).toMatchObject({
+      checked: true,
+      disabled: false,
+      lockedLook: false,
+      declared: true
+    })
     expect(drawingRow.title).toContain(declaredBy!)
 
     // ③ 勾上 a：写下的恰是 [a] —— 声明项不被带进会话勾选
@@ -505,9 +541,7 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
     expect(await picker.toggle(A)).toBe(true)
     await until(async () => sameList(await storedTools(s), [A]), 'picker wrote exactly [a]')
 
-    // ④ 绕过禁用态硬点声明项：什么也不变（组件与写入口自己挡住，不只靠 disabled）
-    expect(await picker.toggle(DRAWING, { force: true })).toBe(true)
-    await sleep(600)
+    // ④ 声明项照旧勾着：勾 a 没有顺手把它写进勾选，也没把它取消
     expect(await storedTools(s)).toEqual([A])
     expect(await pickerItem(DRAWING)).toMatchObject({ checked: true, declared: true })
     await picker.close()
@@ -544,6 +578,87 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
       await setSkillEnabled('builtin:drawing', true)
     }
   })
+
+  it('EXT-E-10 在选择器里取消作图技能：写下取消记号、两处入口都画成未勾；运行时不带它、提示里不指路不教交互块；清空后勾回来，新运行时又指路', async () => {
+    const title = 'EXT-E10-取消作图'
+    const s = await createSession({ title, projectId: p1 })
+    expect(await storedTools(s)).toEqual([])
+    await waitRow(title)
+    expect(await sidebar.openSession(title)).toBe(true)
+
+    // ① 取消：写下的是取消记号，init 回原值；那一行未勾、仍是声明项、仍可点
+    await until(() => picker.present(), 'tool picker present')
+    await picker.open()
+    await until(
+      async () => (await pickerItem(DRAWING))?.disabled === false,
+      'drawing listed, editable'
+    )
+    expect(await picker.toggle(DRAWING)).toBe(true)
+    await until(async () => sameList(await storedTools(s), [NO_DRAWING]), 'picker wrote [-drawing]')
+    expect((await init(s)).enabledTools).toEqual([NO_DRAWING])
+    await until(
+      async () => (await pickerItem(DRAWING))?.checked === false,
+      'picker shows drawing unticked'
+    )
+    expect(await pickerItem(DRAWING)).toMatchObject({
+      checked: false,
+      disabled: false,
+      declared: true
+    })
+    await picker.close()
+
+    // 会话设置卡：同一份数据，同样未勾、仍是声明项、可点
+    await sidebar.pickRowMenu(title, 'session-config')
+    await sessionConfig.waitOpen()
+    const cardItem = await until(async () => {
+      const item = extItem(await sessionConfig.extItems(), DRAWING)
+      return item && !item.disabled ? item : null
+    }, 'config dialog lists drawing, editable')
+    expect(cardItem).toMatchObject({ checked: false, declared: true })
+    await sessionConfig.close()
+
+    // ② 运行时：没有 skill 工具（名单里唯一的技能被取消了），提示里既不指路也不教交互块
+    const info = await ensureRuntime(s)
+    expect(info).not.toBeNull()
+    expect(info!.tools.map((t) => t.name)).not.toContain('skill')
+    expect(info!.systemPrompt).not.toContain(DRAWING_POINTER)
+    expect(info!.systemPrompt).not.toContain(INTERACTIVE)
+
+    // 只读期间：仍画成未勾，禁用
+    await until(() => picker.locked(), 'tool picker locked once the runtime exists')
+    await picker.open()
+    await until(
+      async () => (await pickerItem(DRAWING))?.disabled === true,
+      'drawing disabled while locked'
+    )
+    expect(await pickerItem(DRAWING)).toMatchObject({
+      checked: false,
+      disabled: true,
+      lockedLook: true,
+      declared: true
+    })
+    await picker.close()
+
+    // ③ 清空（关停运行时）→ 解锁 → 勾回来：取消记号撤掉，勾选回到 []；新运行时又带它、又指路
+    await clearAndWaitClosed(s)
+    await until(async () => !(await picker.locked()), 'tool picker unlocked after clear')
+    await picker.open()
+    await until(
+      async () => (await pickerItem(DRAWING))?.disabled === false,
+      'drawing editable again'
+    )
+    expect(await picker.toggle(DRAWING)).toBe(true)
+    await until(async () => sameList(await storedTools(s), []), 'picker wrote [] (re-ticked)')
+    await until(
+      async () => (await pickerItem(DRAWING))?.checked === true,
+      'picker shows drawing ticked again'
+    )
+    await picker.close()
+    const again = await ensureRuntime(s)
+    expect(again).not.toBeNull()
+    expect(skillDescription(again)).toContain('<name>builtin:drawing</name>')
+    expect(again!.systemPrompt).toContain(DRAWING_POINTER)
+  })
 })
 
 describe('只读态的外观（DOM）', () => {
@@ -564,17 +679,28 @@ describe('只读态的外观（DOM）', () => {
       }, what)
     }
 
-    // ① 没有运行时：整排可改，组名旁一把锁都没有，悬停提示是 skill 自己的说明
+    // ① 没有运行时：整排可改，组名旁一把锁都没有，悬停提示是 skill 自己的说明；
+    // 档案声明的作图技能悬停说是哪个档案带的
     await openAndRead('extensions listed before the runtime exists')
     const editable = await until(async () => {
       const items = await sessionConfig.extItems()
-      return extItem(items, A)?.disabled === false ? items : null
+      return extItem(items, A)?.disabled === false && extItem(items, DRAWING) ? items : null
     }, 'extension items editable before the runtime exists')
     expect(extItem(editable, A)).toMatchObject({
       checked: true,
       disabled: false,
       lockedLook: false,
       title: SKILL_A_DESC
+    })
+    const declaredBy = (await toolsList(s)).find((r) => r.name === DRAWING)?.declaredBy
+    expect(declaredBy).toBeTypeOf('string')
+    const declaredHint = extItem(editable, DRAWING)?.title ?? ''
+    expect(declaredHint).toContain(declaredBy!)
+    expect(extItem(editable, DRAWING)).toMatchObject({
+      checked: true,
+      disabled: false,
+      lockedLook: false,
+      declared: true
     })
     expect(await sessionConfig.lockIndicatorCount()).toBe(0)
     // 说明文字比对的是**两态下的同一句**（读两次比字符串），不钉具体本地化文案。
@@ -596,7 +722,7 @@ describe('只读态的外观（DOM）', () => {
     const lockedHint = extItem(locked, A)?.title ?? ''
     expect(lockedHint).not.toBe(SKILL_A_DESC)
     expect(lockedHint).not.toBe('')
-    // 档案声明的作图技能此刻同样说「为什么改不了」—— 只读的原因盖过「谁声明的」
+    // 档案声明的作图技能此刻同样说「为什么改不了」—— 只读的原因盖过「哪个档案带的」
     expect(extItem(locked, DRAWING)).toMatchObject({
       checked: true,
       declared: true,
@@ -606,22 +732,20 @@ describe('只读态的外观（DOM）', () => {
     expect(await sessionConfig.hintText()).toBe(hint)
     await sessionConfig.close()
 
-    // ③ 清空（关停运行时）：锁消失，会话自己能勾的那些整排重新可改。档案声明的作图技能不在
-    // 「整排」里 —— 它恒开着、恒锁着（与有没有运行时无关），所以只看没被声明的那些
+    // ③ 清空（关停运行时）：锁消失，整排（档案声明的作图技能也在内）重新可改
     await clearAndWaitClosed(s)
     await openAndRead('extensions listed after the runtime closed')
     const unlocked = await until(async () => {
       const items = await sessionConfig.extItems()
-      const free = items.filter((it) => !it.declared)
-      return free.length > 0 && free.every((it) => !it.disabled && !it.lockedLook) ? items : null
-    }, 'undeclared extension items editable again after the runtime closed')
+      return items.length > 0 && items.every((it) => !it.disabled && !it.lockedLook) ? items : null
+    }, 'every extension item editable again after the runtime closed')
     expect(await sessionConfig.lockIndicatorCount()).toBe(0)
     expect(extItem(unlocked, A)).toMatchObject({ title: SKILL_A_DESC })
     const drawing = extItem(unlocked, DRAWING)
-    expect(drawing).toMatchObject({ checked: true, disabled: true, declared: true })
-    // 它的悬停说的是谁声明的，不是只读原因（运行时已经不在了）
+    expect(drawing).toMatchObject({ checked: true, disabled: false, declared: true })
+    // 它的悬停说的是哪个档案带的，不是只读原因（运行时已经不在了）
+    expect(drawing?.title).toBe(declaredHint)
     expect(drawing?.title).not.toBe(lockedHint)
-    expect(drawing?.title).not.toBe('')
     await sessionConfig.close()
   })
 

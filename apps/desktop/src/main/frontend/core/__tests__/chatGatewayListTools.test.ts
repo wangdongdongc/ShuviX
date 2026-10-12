@@ -1,7 +1,7 @@
 /**
  * DefaultChatGateway.listTools 的 `declaredBy` —— 会话根 Agent 的档案在 `shuvix-tools` 里声明的
- * mcp:/skill: 项对这条会话恒生效（createAgent 的名单归一：会话勾选只能在其上叠加），选择器与会话
- * 设置据此把它们画成「已勾、锁住」，悬停说是谁声明的。
+ * mcp:/skill: 项对这条会话缺省生效（名单归一：会话勾选在其上增减，`-<name>` 取消声明的一项），选择器与
+ * 会话设置据此把它们画成「默认勾上、可以取消」，悬停说是哪个档案带的。
  *
  * 钉的是这张表：
  *  - 档案由会话形态推导（`resolveAgentProfileName(sid)`），没有会话回落 work；
@@ -181,7 +181,7 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
     )
     const rows = chatGateway.listTools(SID)
     expect(mocks.getProfile).toHaveBeenCalledWith('bot')
-    // 标的是 bot 自己声明的那一项：work 声明的 mcp:ctx 在 bot 会话里不锁
+    // 标的是 bot 自己声明的那一项：work 声明的 mcp:ctx 在 bot 会话里不标
     expect(declaredOf(rows)).toEqual({ 'skill:builtin:drawing': 'Bot Persona' })
   })
 
@@ -215,14 +215,14 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
     expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work', 'skill:builtin:drawing': 'Work' })
   })
 
-  it('LT-8 声明的技能被全局停用（findEnabled 不再返回它）→ 列表里没有这一条，更谈不上锁', () => {
+  it('LT-8 声明的技能被全局停用（findEnabled 不再返回它）→ 列表里没有这一条，更谈不上标', () => {
     mocks.findEnabled.mockReturnValue([USER_FOO])
     const rows = chatGateway.listTools(SID)
     expect(rowOf(rows, 'skill:builtin:drawing')).toBeUndefined()
     expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work' })
   })
 
-  it('LT-9 按全名精确匹配：档案点的是 skill:drawing，就不锁 skill:builtin:drawing', () => {
+  it('LT-9 按全名精确匹配：档案点的是 skill:drawing，就不标 skill:builtin:drawing', () => {
     mocks.getProfile.mockImplementation((name: string) =>
       name === 'work' ? { ...WORK, tools: ['read', 'skill:drawing'] } : undefined
     )
@@ -235,7 +235,7 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
 
 /**
  * 平台特定的内置工具：工具列表是「这台机器上能用什么」，读按平台过滤后的注册表视图 —— 档案点了
- * `bash, powershell` 两个，这台机器上只有其中一个，另一个既不出现、也不凭空造一行来锁。
+ * `bash, powershell` 两个，这台机器上只有其中一个，另一个既不出现、也不凭空造一行来标。
  */
 describe('DefaultChatGateway.listTools —— 另一个平台的命令工具不列', () => {
   it('LT-P1 档案点了 powershell（Windows 版）：内置段没有这一行，也没有它的 declaredBy；bash 照列', () => {
@@ -255,7 +255,7 @@ describe('DefaultChatGateway.listTools —— 另一个平台的命令工具不�
 
 /**
  * 内置 `chrome`（用户真实的 Chrome）不是会话可勾选的扩展能力：只出现在声明它的档案那里 ——
- * Chrome 标签页会话的基座 `tab` —— 而且是锁住的已勾形态。桌面自己的会话（以及没有会话的
+ * Chrome 标签页会话的基座 `tab`（那里没有选择器，也取消不了它）。桌面自己的会话（以及没有会话的
  * 项目编辑页）的选择器里根本见不到它。
  */
 describe('DefaultChatGateway.listTools —— 内置 mcp:chrome 只给声明它的档案', () => {
@@ -291,7 +291,7 @@ describe('DefaultChatGateway.listTools —— 内置 mcp:chrome 只给声明它�
     expect(rowOf(rows, 'mcp:ctx')?.declaredBy).toBe('Work')
   })
 
-  it("LT-C2 tab 档案的会话：mcp:chrome 在，锁成 'Chrome Tab' 声明的；mcp:browser 不锁", () => {
+  it("LT-C2 tab 档案的会话：mcp:chrome 在，标成 'Chrome Tab' 声明的；mcp:browser 不标", () => {
     mocks.resolveAgentProfileName.mockReturnValue('tab')
     const rows = chatGateway.listTools(SID)
     expect(rowOf(rows, 'mcp:chrome')).toMatchObject({
@@ -356,7 +356,7 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
     expect(mocks.resolveAgentProfileName).not.toHaveBeenCalled()
     expect(mocks.getProfile).toHaveBeenCalledWith('chat')
     expect(mocks.getProfile).not.toHaveBeenCalledWith('work')
-    // chat 没声明 mcp:ctx：欢迎页上它不锁
+    // chat 没声明 mcp:ctx：欢迎页上它不标
     expect(declaredOf(rows)).toEqual({ 'skill:builtin:drawing': 'Chat Persona' })
     expect(rowOf(rows, 'mcp:ctx')).toBeDefined()
     expect(rowOf(rows, 'mcp:ctx')?.declaredBy).toBeUndefined()

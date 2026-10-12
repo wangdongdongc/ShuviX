@@ -1,9 +1,10 @@
 /**
- * sessionService —— 会话的扩展能力勾选（`settings.enabledTools`，只收 mcp:/skill:）。
+ * sessionService —— 会话的扩展能力勾选（`settings.enabledTools`，只收 mcp:/skill: 与取消档案声明项的
+ * 记号 `-mcp:` / `-skill:`，见 chat-protocol `toolSelection.ts`）。
  *
  * 契约：
  *   - `create` **恒写键**（空数组也写）：项目会话继承项目**保存过**的勾选，项目没保存过 /
- *     无项目 / 项目已删为空；子会话抄父会话。继承只做 mcp:/skill: 净化与去重，**不按可用性过滤**
+ *     无项目 / 项目已删为空；子会话抄父会话（取消记号一并继承 / 抄过去）。继承只做净化与去重，**不按可用性过滤**
  *     （MCP 的可用 = 此刻已连接，过滤后落库就是永久丢项）；
  *   - 缺键的旧行在首次解析时按同一条规则补一次并落库（子会话抄父会话、不替父会话落库），
  *     之后是快照，不随项目配置漂移；
@@ -264,6 +265,29 @@ describe('EXT-U-6 / 7 / 8 create 恒写键，项目会话继承项目保存过�
     sessionService.create({ projectId: 'p1' })
     expect(insertedSettings().enabledTools).toEqual(['skill:b', 'mcp:a'])
   })
+
+  it.each([
+    ['普通会话', {}],
+    ['bot 会话', { bot: 'scout' }],
+    ['笔记本会话', { notebookPath: 'n.md' }]
+  ])(
+    'EXT-U-8b %s：项目里取消档案声明项的记号原样继承（净化只丢内置名与畸形记号、去重保序）',
+    (_label, extra) => {
+      // 项目上取消了作图技能 → 这个项目里每一条新会话都不带它（bot / 笔记本会话也一样）
+      seedProject('p1', {
+        enabledTools: [
+          '-skill:builtin:drawing',
+          'bash',
+          '-read',
+          'skill:b',
+          '-skill:builtin:drawing',
+          '--skill:z'
+        ]
+      })
+      sessionService.create({ projectId: 'p1', ...extra })
+      expect(insertedSettings().enabledTools).toEqual(['-skill:builtin:drawing', 'skill:b'])
+    }
+  )
 })
 
 describe('EXT-U-9 / 10 子会话抄父会话的勾选', () => {
@@ -286,6 +310,13 @@ describe('EXT-U-9 / 10 子会话抄父会话的勾选', () => {
     seedSession({ id: PARENT, projectId: 'p1', settings: { enabledTools: [] } })
     sessionService.create({ parentId: PARENT })
     expect(insertedSettings().enabledTools).toEqual([])
+  })
+
+  it('EXT-U-9c 父会话的取消记号一并抄过去（不回落项目那份）', () => {
+    seedProject('p1', { enabledTools: ['mcp:proj'] })
+    seedSession({ id: PARENT, projectId: 'p1', settings: { enabledTools: ['-mcp:x', 'skill:p'] } })
+    sessionService.create({ parentId: PARENT })
+    expect(insertedSettings().enabledTools).toEqual(['-mcp:x', 'skill:p'])
   })
 
   it('EXT-U-10 父会话是缺键旧行 → 按父会话的项目继承；create 不替父会话落库', () => {
@@ -406,18 +437,20 @@ describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用
     expect((await sessionService.resolveAgentConfig(SID)).toolOverlay).toEqual(['skill:changed'])
   })
 
-  it('EXT-U-12c 勾选里的 mcp:chrome 不作数：过滤与创建都见不到它；init 回原值；不写库', async () => {
+  it('EXT-U-12c 勾选里的 mcp:chrome 与 -mcp:chrome 都不作数：过滤与创建都见不到它们；init 回原值；不写库', async () => {
     // 内置 `chrome`（用户真实的 Chrome）不是会话可勾选的扩展能力 —— 只由 Chrome 标签页会话的
-    // 基座 `tab` 声明。桌面会话的勾选里就算有它（手改的库、旧数据），也不能借此碰到用户的 Chrome
+    // 基座 `tab` 声明。桌面会话的勾选里就算有它（手改的库、旧数据），也不能借此碰到用户的 Chrome；
+    // 反过来，经 IPC 写进去的取消记号也不能把 tab 基座唯一的浏览能力摘掉
     seedProject('p1')
     seedSession({
       id: SID,
       projectId: 'p1',
-      settings: { enabledTools: ['mcp:chrome', 'mcp:ssh', 'skill:x'] }
+      settings: { enabledTools: ['mcp:chrome', '-mcp:chrome', 'mcp:ssh', 'skill:x'] }
     })
 
     expect((await sessionService.initAgent(SID)).enabledTools).toEqual([
       'mcp:chrome',
+      '-mcp:chrome',
       'mcp:ssh',
       'skill:x'
     ])
@@ -427,7 +460,33 @@ describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用
     for (const tools of filtered) expect(tools).toEqual(['mcp:ssh', 'skill:x'])
     expect(config.toolOverlay).toEqual(['mcp:ssh', 'skill:x'])
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:chrome', 'mcp:ssh', 'skill:x'])
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual([
+      'mcp:chrome',
+      '-mcp:chrome',
+      'mcp:ssh',
+      'skill:x'
+    ])
+  })
+
+  it('EXT-U-12d 取消记号一路传到创建：init 回原值、过滤收到它、toolOverlay 带着它；不写库', async () => {
+    seedProject('p1')
+    seedSession({
+      id: SID,
+      projectId: 'p1',
+      settings: { enabledTools: ['-skill:builtin:drawing', 'skill:x'] }
+    })
+
+    expect((await sessionService.initAgent(SID)).enabledTools).toEqual([
+      '-skill:builtin:drawing',
+      'skill:x'
+    ])
+    const config = await sessionService.resolveAgentConfig(SID)
+    const filtered = mocks.filterAvailableTools.mock.calls.map(([tools]) => tools)
+    expect(filtered.length).toBeGreaterThan(0)
+    for (const tools of filtered) expect(tools).toEqual(['-skill:builtin:drawing', 'skill:x'])
+    expect(config.toolOverlay).toContain('-skill:builtin:drawing')
+    expect(config.toolOverlay).toEqual(['-skill:builtin:drawing', 'skill:x'])
+    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
   })
 })
 
@@ -460,6 +519,30 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     expect(writesTo(SID)[1]).toEqual([SID, { enabledTools: [] }])
     expect(sessions.get(SID)!.settings.enabledTools).toEqual([])
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID], [SID]])
+  })
+
+  it('EXT-U-13b 取消记号照收（去重保序）；内置名的 -read、双减号、大写前缀不是记号，丢掉；锁着照样拒绝、零写入', () => {
+    seedSession({ id: SID, settings: { enabledTools: [] } })
+    expect(
+      sessionService.updateEnabledTools(SID, [
+        '-skill:a',
+        'skill:a',
+        '-read',
+        '--mcp:b',
+        '-MCP:c',
+        '-skill:a',
+        '-mcp:d'
+      ])
+    ).toBe(true)
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['-skill:a', 'skill:a', '-mcp:d'] }]])
+    expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID]])
+
+    // 锁着：取消一项同样是改勾选，拒绝
+    fakeHost.put(SID, { lock: lockRecord() })
+    expect(sessionService.updateEnabledTools(SID, ['-skill:builtin:drawing'])).toBe(false)
+    expect(writesTo(SID)).toHaveLength(1)
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['-skill:a', 'skill:a', '-mcp:d'])
+    expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledTimes(1)
   })
 
   it('EXT-U-14 锁着（开着看运行时的锁 / 没开看锁镜像）/ 销毁在途都拒绝且零副作用，解锁才放行；initAgent().created 同一口径', async () => {
@@ -641,6 +724,21 @@ describe('LA-D initAgent reports the locked agent, not the session settings (opt
     expect(fakeHost.callsOf('peek')).toEqual([])
     // 会话设置一个字都没动
     expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:settings-only', 'skill:a'])
+  })
+
+  it("EXT-U-12d (locked, as LA-D1) the lock's selection carries the opt-out it was created from, not the settings", async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['skill:a'] } })
+    fakeHost.put(SID, {
+      lock: lockRecord({
+        model: { provider: 'anthropic', modelId: 'claude-x' },
+        selection: ['-skill:builtin:drawing', 'skill:x']
+      })
+    })
+    expect(await sessionService.initAgent(SID)).toMatchObject({
+      created: true,
+      enabledTools: ['-skill:builtin:drawing', 'skill:x']
+    })
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['skill:a'])
   })
 
   it('LA-D2 a custom provider keeps its row id; a provider row that is gone leaves the pi id as it is (no capabilities)', async () => {

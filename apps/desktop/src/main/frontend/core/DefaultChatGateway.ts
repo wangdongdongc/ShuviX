@@ -329,8 +329,8 @@ export class DefaultChatGateway implements ChatGateway {
       : options?.profile || WORK_PROFILE_NAME
     const profile = agentService.getProfile(profileName)
     const defaultProfileTools = profile?.tools ?? []
-    // 档案声明的 mcp:/skill: 项对这条会话恒生效（createAgent 的名单归一），选择器据此画成已勾、锁住；
-    // 值是档案显示名，悬停时说「谁声明的」—— 要去掉只能覆盖那份档案，会话里取消不了
+    // 档案声明的 mcp:/skill: 项对这条会话缺省生效（名单归一），选择器据此画成默认勾上、可以取消
+    //（取消写成勾选里的 `-<name>` 记号，见 chat-protocol toolSelection）；值是档案显示名，悬停时说「谁声明的」
     const declared = new Set(defaultProfileTools)
     const declaredBy = (name: string): string | undefined =>
       declared.has(name) ? profile?.displayName || profileName : undefined
@@ -350,7 +350,8 @@ export class DefaultChatGateway implements ChatGateway {
 
     /**
      * MCP 工具。内置 `chrome`（用户真实的 Chrome）只出现在声明它的档案（Chrome 标签页会话的 `tab`）
-     * 那里，以锁住的已勾形态 —— 别的会话选不到它：桌面自己的会话只用应用内的浏览器面板
+     * 那里 —— 别的会话选不到它：桌面自己的会话只用应用内的浏览器面板（tab 会话没有选择器，也取消不了它，
+     * 见 sessionService.resolveSessionAgentContext）
      */
     const mcpTools = mcpService
       .getAllToolInfos()

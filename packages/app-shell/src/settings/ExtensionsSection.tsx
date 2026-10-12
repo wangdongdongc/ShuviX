@@ -5,12 +5,14 @@
  * 勾选 —— Agent 创建之后只读）。本组件只管展示与回调，数据与持久化都在调用方。
  *
  * 两条展示规矩：
- *  - agent 档案声明的项（`declaredBy`）恒生效：画成已勾、挂锁、点不动，悬停说是哪个档案声明的。
- *    它不在勾选里，也不会被写进勾选 —— 会话勾选只是在它之上叠加。
+ *  - agent 档案声明的项（`declaredBy`）缺省勾上，悬停说是哪个档案带的；取消它在勾选里写一个取消记号
+ *    （`-<name>`，chat-protocol `toolSelection`），只作用于这条会话 / 这个项目的新会话。
+ *    读写都经 `isToolSelected` / `setToolSelected`，调用方拿到的 `onChange` 是整份新勾选。
  *  - 每组里 ShuviX 自带的项（内置 MCP / 内置技能）排在最前，其余保持后端给的顺序。
  */
 import { useTranslation } from 'react-i18next'
 import { Puzzle, BookOpen, WifiOff, Lock } from 'lucide-react'
+import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
 import type { ToolItem } from '../common/ToolSelectList'
 import { SettingsSection } from './SettingsPrimitives'
 
@@ -23,7 +25,7 @@ interface ExtItem {
   desc?: string
   builtin?: boolean
   offline?: boolean
-  /** 会话的 agent 档案声明了它（值为档案显示名）：恒生效，画成已勾、锁住 */
+  /** 会话的 agent 档案声明了它（值为档案显示名）：缺省勾上，取消写取消记号 */
   declaredBy?: string
 }
 
@@ -42,7 +44,7 @@ interface ExtGroupRowProps {
   tone: keyof typeof EXT_TONES
   items: ExtItem[]
   enabledTools: string[]
-  onToggle: (toolName: string) => void
+  onChange: (next: string[]) => void
   readonly: boolean
   readonlyHint?: string
 }
@@ -53,7 +55,7 @@ function ExtGroupRow({
   tone,
   items,
   enabledTools,
-  onToggle,
+  onChange,
   readonly,
   readonlyHint
 }: ExtGroupRowProps): React.JSX.Element {
@@ -73,21 +75,19 @@ function ExtGroupRow({
         <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
           {items.map((it) => {
             const declared = !!it.declaredBy
-            const checked = declared || enabledTools.includes(it.key)
-            const fixed = readonly || declared
+            const checked = isToolSelected(enabledTools, it.key, declared)
             // 只读时整排按禁用态画（压暗 + 禁用光标）：勾选的还看得出是勾选的（描边留着），
-            // 但一眼就知道改不了；原因放在悬停提示里，不另起一行文字。
-            // 档案声明的那一项同样改不了，但它是**开着的**：不压暗，只挂一把锁
+            // 但一眼就知道改不了；原因放在悬停提示里，不另起一行文字
             const stateCls = checked
               ? EXT_TONES[tone].checked
-              : `border-border-secondary/60${fixed ? '' : ' hover:bg-bg-hover/60'}`
+              : `border-border-secondary/60${readonly ? '' : ' hover:bg-bg-hover/60'}`
             return (
               <label
                 key={it.key}
                 data-ext-item={it.key}
                 data-offline={it.offline || undefined}
                 data-declared={declared || undefined}
-                aria-disabled={fixed || undefined}
+                aria-disabled={readonly || undefined}
                 title={
                   readonly
                     ? readonlyHint
@@ -98,25 +98,20 @@ function ExtGroupRow({
                         : it.desc
                 }
                 className={`inline-flex items-center gap-1.5 h-6 max-w-full px-2 rounded-md border transition-colors ${
-                  readonly
-                    ? 'cursor-not-allowed opacity-40'
-                    : declared
-                      ? 'cursor-default'
-                      : 'cursor-pointer'
+                  readonly ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'
                 } ${stateCls}`}
               >
                 <input
                   type="checkbox"
                   checked={checked}
-                  disabled={fixed}
+                  disabled={readonly}
                   onChange={() => {
-                    if (!declared) onToggle(it.key)
+                    // 与工具选择器同一道闸：只读时一次点击也不交出去（不只靠 disabled）
+                    if (readonly) return
+                    onChange(setToolSelected(enabledTools, it.key, declared, !checked))
                   }}
                   className="rounded border-border-primary accent-accent w-3 h-3 shrink-0"
                 />
-                {declared && (
-                  <Lock size={9} data-ext-declared className="text-text-tertiary shrink-0" />
-                )}
                 {it.builtin && (
                   <span className="px-1 rounded text-[9px] text-amber-500 bg-amber-500/10 whitespace-nowrap shrink-0">
                     {t('input.skillBuiltinBadge')}
@@ -157,7 +152,8 @@ export interface ExtensionsSectionProps {
   mcpTools: ToolItem[]
   skillTools: ToolItem[]
   enabledTools: string[]
-  onToggle: (toolName: string) => void
+  /** 勾选改了：交回整份新勾选（含取消档案声明项的记号），由调用方落库 */
+  onChange: (next: string[]) => void
   /** 只读：整排按禁用态画、勾选框禁用、点击无效（会话已有 Agent 运行时） */
   readonly?: boolean
   /** 只读的原因，作为条目的悬停提示 —— 界面上不另起一行文字说 */
@@ -170,7 +166,7 @@ export function ExtensionsSection({
   mcpTools,
   skillTools,
   enabledTools,
-  onToggle,
+  onChange,
   readonly = false,
   readonlyHint
 }: ExtensionsSectionProps): React.JSX.Element {
@@ -208,7 +204,7 @@ export function ExtensionsSection({
         tone="purple"
         items={mcpItems}
         enabledTools={enabledTools}
-        onToggle={onToggle}
+        onChange={onChange}
         readonly={readonly}
         readonlyHint={readonlyHint}
       />
@@ -218,7 +214,7 @@ export function ExtensionsSection({
         tone="emerald"
         items={skillItems}
         enabledTools={enabledTools}
-        onToggle={onToggle}
+        onChange={onChange}
         readonly={readonly}
         readonlyHint={readonlyHint}
       />

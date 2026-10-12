@@ -59,7 +59,7 @@ export interface LockRecord {
   /** 技能工具列出的技能 */
   skills: string[]
   /**
-   * 创建时会话的扩展能力勾选（`AgentConfig.toolOverlay`，`mcp:` / `skill:`；只有根的锁有）—— 「这个 agent 是按
+   * 创建时会话的扩展能力勾选（`AgentConfig.toolOverlay`，`mcp:` / `skill:` 与取消记号；只有根的锁有）—— 「这个 agent 是按
    * 哪份勾选建的」：连不上的 MCP 也在其中（K7：它们下次创建再试），档案自己声明的不在。`agent.init` 锁着时
    * 报它（option A）。这个字段之前建的锁没有它 → 缺省
    */

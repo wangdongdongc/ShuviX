@@ -3,6 +3,7 @@
  * 独立于 agent / sessionService，避免循环依赖
  */
 
+import { isToolOptOut } from '@shuvix/chat-protocol/toolSelection'
 import { getPlatformBuiltinToolEntries } from './toolRegistry'
 import { mcpService } from './mcpService'
 import { skillService } from './skillService'
@@ -20,9 +21,12 @@ export function getAllToolNames(projectPath?: string): string[] {
   return [...builtinNames, ...mcpService.getEnabledToolNames(), ...skillNames]
 }
 
-/** 过滤已保存的扩展能力勾选，移除已不存在的工具（继承项目配置、创建 Agent 时调用） */
+/**
+ * 过滤已保存的扩展能力勾选，移除已不存在的工具（继承项目配置、创建 Agent 时调用）。
+ * 取消档案声明项的记号（`-skill:…`）原样留着：它说的是「不要」，那一项此刻在不在都不影响它的意思
+ */
 export function filterAvailableTools(enabledTools: string[], projectPath?: string): string[] {
   const available = new Set(getAllToolNames(projectPath))
-  const result = enabledTools.filter((name) => available.has(name))
+  const result = enabledTools.filter((name) => isToolOptOut(name) || available.has(name))
   return result
 }

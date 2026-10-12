@@ -1,6 +1,7 @@
 import { getHostApi, getSessionChannelApi } from '@shuvix/chat-ui'
 import { useCallback } from 'react'
 import type { AgentInitResult } from '@shuvix/chat-protocol/chatApi'
+import { withToolsSelected } from '@shuvix/chat-protocol/toolSelection'
 import { useChatStore } from '../stores/chatStore'
 
 /** 空勾选常量，避免选择器每次返回新引用 */
@@ -33,7 +34,10 @@ export async function refreshSessionTools(sessionId: string): Promise<void> {
 }
 
 export interface SessionToolsState {
-  /** 这条会话的扩展能力勾选（mcp:/skill:）；没有会话时是欢迎页的草稿 */
+  /**
+   * 这条会话的扩展能力勾选（mcp:/skill: 加一项，`-mcp:` / `-skill:` 取消档案声明的一项，见
+   * chat-protocol toolSelection）；没有会话时是欢迎页的草稿
+   */
   enabledTools: string[]
   /**
    * 只读：会话此刻有 Agent 运行时（或正在关停）。勾选只在创建运行时那一刻读一次，
@@ -78,6 +82,7 @@ export async function writeSessionTools(sessionId: string | null, next: string[]
 
 /**
  * 在某会话（null = 欢迎页草稿）此刻的勾选上补上缺的那几项 —— 斜杠命令自动勾上依赖的扩展能力用。
+ * 被取消了的档案声明项也算缺：撤掉它的取消记号（命令要用它，取消着就用不上）。
  * 目标由调用方点名而不是取渲染时的当前会话：欢迎页直接发送时，命令要到新会话建好之后才展开，
  * 那一刻草稿已经写进新会话并清空了，依赖项该落到新会话上。
  */
@@ -86,9 +91,9 @@ export async function addSessionTools(
   names: readonly string[]
 ): Promise<void> {
   const current = currentTools(sessionId)
-  const missing = [...new Set(names)].filter((name) => !current.includes(name))
-  if (missing.length === 0) return
-  await writeSessionTools(sessionId, [...current, ...missing])
+  const next = withToolsSelected(current, names)
+  if (next.length === current.length && next.every((entry, i) => entry === current[i])) return
+  await writeSessionTools(sessionId, next)
 }
 
 /**

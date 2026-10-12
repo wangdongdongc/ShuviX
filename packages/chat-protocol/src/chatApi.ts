@@ -55,7 +55,9 @@ export interface SessionModelMetadata {
 export interface SessionSettings {
   allowList?: string[]
   /**
-   * 这条会话的扩展能力勾选（`mcp:<server>` / `skill:<name>`，只收这两类）。
+   * 这条会话的扩展能力勾选：`mcp:<server>` / `skill:<name>` 在 agent 档案之上加一项，
+   * `-mcp:<server>` / `-skill:<name>` 取消档案 `shuvix-tools` 声明的一项（记号与读写见
+   * `toolSelection.ts`）。只收这几种条目。
    *
    * 新建会话时定下来：项目会话继承项目保存过的扩展能力（项目没保存过就是空，与无项目的会话
    * 一致）、子会话抄父会话。
@@ -164,6 +166,7 @@ export interface ToolSettings {
 }
 
 export interface ProjectSettings {
+  /** 这个项目新会话的扩展能力勾选缺省（与会话的同一种记号，含取消档案声明项的 `-<name>`） */
   enabledTools?: string[]
   /** 这个项目里新会话缺省启用哪几个知识库（用户库名 / 保留名 `project`）；没设过 = 全部用户库 + 项目库 */
   knowledgeBases?: string[]
@@ -427,7 +430,7 @@ export interface SessionUpdateProjectParams {
 
 export interface SessionUpdateEnabledToolsParams {
   id: string
-  /** 完整勾选（整份替换，不是增量）；只收 mcp:/skill: 条目，其余被丢弃 */
+  /** 完整勾选（整份替换，不是增量）；只收 mcp:/skill: 条目与它们的取消记号（`-mcp:` / `-skill:`），其余被丢弃 */
   enabledTools: string[]
 }
 

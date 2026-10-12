@@ -86,8 +86,10 @@ style, each with file and line. Never modify files.
 
 条目按顺序去重。本机上不存在的名字静默丢弃 —— agent 照常创建，只是没有它。**列表里写了的都恒生效**，
 无论这个 agent 以哪种方式被用上。它做会话的根时，其中的 `mcp:` / `skill:` 项在这条会话的扩展能力
-选择器里显示为已勾、锁住（悬停会说是哪个 agent 声明的）；会话自己的勾选只能在其上叠加，要去掉一项
-就得覆盖这个 agent。**收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
+选择器里显示为默认勾上（悬停会说是哪个 agent 声明的）。会话可以再勾别的，也可以只为自己取消声明的某一项
+—— 比如改用别的作图技能、不要 `builtin:drawing`；取消在会话的勾选里记成 `-skill:<name>`，项目的缺省
+也可以带着它，agent 文件不动。要让每条会话都去掉一项，仍然是覆盖这个 agent。内置工具名取消不了。
+**收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
 `bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, powershell, read, write, edit, ask,
 ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing`），
 只在正文上有区别。
@@ -159,7 +161,7 @@ agent `coding`、`explore`、`widget`、`titler`、`knowledge-writer`，以及 `
    返回。这个工具**不会**向模型列举可用的 agent —— 名字得来自提示词或用户。
 2. **作为子会话的人格** —— `session` 工具的 `agent_profile`（任何不是基座的 agent）。子会话保留从
    父会话抄来的扩展能力；该 agent `shuvix-tools` 里的 `mcp:` / `skill:` 条目和列表里的其余各项一样
-   恒生效，叠加在上面。
+   生效，叠加在上面 —— 抄来的勾选里取消了的除外。
 3. **作为 hook 的 agent**（`shuvix-hook-agent` —— 见 `hook-md` 条目）。
 4. **作为基座覆盖**（见上）。
 

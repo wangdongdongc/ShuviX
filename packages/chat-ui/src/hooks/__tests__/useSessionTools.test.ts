@@ -9,7 +9,8 @@
  *     不改 store；
  *   - `writeSessionTools` / `addSessionTools`（WS-U）：整份替换 / 补缺项的写入口。`null` 是欢迎页的
  *     草稿（`welcomeEnabledTools`，只改 store、不走 IPC）；会话则先乐观写 store 再落库，只读态
- *     （有运行时 / 关停中）与渠道端（无 HostApi）什么也不做，被拒就回拉真实状态。
+ *     （有运行时 / 关停中）与渠道端（无 HostApi）什么也不做，被拒就回拉真实状态。`addSessionTools`
+ *     把被取消的档案声明项也算缺（撤掉 `-<name>` 记号），比的是**列表**而不是生效状态（WS-U-9）。
  *
  * 不建 hook 测试设施（无 jsdom / renderHook）：hook 本身只是这几样的组合，交互由 e2e 在真实 UI 里钉。
  * `useSessionTools.ts` 自引用包入口（getHostApi / getSessionChannelApi），而入口会带上模块加载期就读
@@ -234,6 +235,64 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
     })
     // store 里也不凭空长出这条会话
     expect(useChatStore.getState().sessions.map((x) => x.id)).toEqual([SID])
+  })
+
+  it('WS-U-9 addSessionTools(sid) 撤掉被点名项的取消记号、补上名字、别的取消记号不动；列表没变 → 零 IPC', async () => {
+    mocks.hasHost = true
+    useChatStore
+      .getState()
+      .updateSessionSettings(SID, { enabledTools: ['-skill:builtin:drawing', 'skill:a', '-mcp:z'] })
+
+    await addSessionTools(SID, ['skill:builtin:drawing'])
+    expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
+    expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
+      id: SID,
+      enabledTools: ['skill:a', '-mcp:z', 'skill:builtin:drawing']
+    })
+    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:a', '-mcp:z', 'skill:builtin:drawing'])
+
+    // 已经勾着：列表不变 → 不写
+    const before = useChatStore.getState().sessions
+    await addSessionTools(SID, ['skill:builtin:drawing'])
+    await addSessionTools(SID, ['skill:a'])
+    expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().sessions).toBe(before)
+  })
+
+  it('WS-U-9 比的是列表而不是生效状态：声明项缺省开着、勾选里没有它的名字 → 照样补上名字（写一次）', async () => {
+    mocks.hasHost = true
+    useChatStore.getState().updateSessionSettings(SID, { enabledTools: [] })
+    await addSessionTools(SID, ['skill:builtin:drawing'])
+    expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
+    expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
+      id: SID,
+      enabledTools: ['skill:builtin:drawing']
+    })
+  })
+
+  it('WS-U-9 addSessionTools(null) 欢迎页草稿同理：撤掉取消记号、补名字；零 IPC；已勾着 → 草稿引用不变', async () => {
+    mocks.hasHost = true
+    useChatStore.setState({ welcomeEnabledTools: ['-skill:builtin:drawing', 'skill:a', '-mcp:z'] })
+    await addSessionTools(null, ['skill:builtin:drawing'])
+    expect(welcome()).toEqual(['skill:a', '-mcp:z', 'skill:builtin:drawing'])
+
+    const before = welcome()
+    await addSessionTools(null, ['skill:builtin:drawing'])
+    expect(welcome()).toBe(before)
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+  })
+
+  it('WS-U-9 只读（有运行时）→ 取消记号也不撤：零 IPC、store 不变', async () => {
+    mocks.hasHost = true
+    useChatStore
+      .getState()
+      .updateSessionSettings(SID, { enabledTools: ['-skill:builtin:drawing', 'skill:a'] })
+    useChatStore.setState({ sessionAgentCreated: { [SID]: true } })
+    const before = useChatStore.getState().sessions
+    await addSessionTools(SID, ['skill:builtin:drawing'])
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions).toBe(before)
+    expect(settingsOf(SID)?.enabledTools).toEqual(['-skill:builtin:drawing', 'skill:a'])
   })
 
   it('WS-U-8 welcomeEnabledTools 初始为 []；setWelcomeEnabledTools 整份替换', () => {

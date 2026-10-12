@@ -11,9 +11,10 @@
  *     只会得到说不清的组合；
  *   - **成功链顺序**：落库 → invalidateAgent → 种子（模型 / 思考档位）→ 广播。
  *     落库在 invalidate 前、种子在 invalidate 后：钉档案与重建之间不能有一个还在写树的旧运行时；
- *   - **工具不写进勾选**：档案声明的 mcp:/skill: 经 createAgent 的名单归一恒生效，
- *     扩展能力勾选（`settings.enabledTools`）留着 create 时从父会话抄来的那份；
- *     `applied.tools` 只回传声明的那截；
+ *   - **工具不写进勾选**：档案声明的 mcp:/skill: 经名单归一缺省生效，
+ *     扩展能力勾选（`settings.enabledTools`）留着 create 时从父会话抄来的那份 —— 连同其中取消
+ *     声明项的记号（`-skill:…`）：父会话取消了的，钉上一个声明它的档案也照样取消着；
+ *     `applied.tools` 只回传声明的那截（没有取消记号）；
  *   - 模型三态：可解析 → 写种子 + `applied.model`；不可解析 → 不写、`modelUnavailable` 回传原值、
  *     其余照常；未声明 → 不去解析；
  *   - 思考档位（`shuvix-thinking`）两态：声明了 → 写种子 + `applied.thinkingLevel`（档位是枚举值，
@@ -228,7 +229,7 @@ describe('成功链', () => {
     // 写了（哪怕写的是缺省档）就会盖掉 seedRunConfig 随后补上的父会话档位
     expect(res.applied?.thinkingLevel).toBeUndefined()
     expect(mocks.recordSessionThinkingLevel).not.toHaveBeenCalled()
-    // 只落库一次：钉档案。档案声明的 mcp:/skill: 经 createAgent 的名单归一恒生效，
+    // 只落库一次：钉档案。档案声明的 mcp:/skill: 经名单归一缺省生效，
     // 不写进扩展能力勾选 —— 写了只会替换掉从父会话继承来的那份
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'myprof' }]])
     expect(invalidateSpy).toHaveBeenCalledWith(SID)
@@ -280,8 +281,8 @@ describe('成功链', () => {
     expect(invalidateSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('PIN-7 声明的 mcp:/skill: 永不写进勾选：继承来的那份原样留着，applied.tools 只回传声明的那截', async () => {
-    // 声明经名单归一恒生效；写进勾选只剩「替换掉从父会话继承来的」这一个作用 ——
+  it('PIN-7 声明的 mcp:/skill: 永不写进勾选：继承来的那份（含取消记号）原样留着，applied.tools 只回传声明的那截', async () => {
+    // 声明经名单归一缺省生效；写进勾选只剩「替换掉从父会话继承来的」这一个作用 ——
     // 内置 coding 声明了 skill:builtin:drawing，那样每条 coding 子会话都会丢掉项目的 MCP 与 skill
     mocks.getProfile.mockReturnValue(profile('builtin-only', { tools: ['read', 'bash'] }))
     const res = await pin('builtin-only')
@@ -296,6 +297,23 @@ describe('成功链', () => {
     const mixed = await pin('mixed')
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'mixed' }]])
     expect(mixed.applied?.tools).toEqual(['skill:a', 'mcp:b'])
+
+    // 子会话从父会话抄来的勾选取消了作图技能；钉上一个声明它的档案 —— 取消照旧（决定：子会话抄父会话的
+    // 取消记号，即便钉的档案声明了那一项），applied.tools 是声明的那截，不带任何取消记号
+    mocks.daoUpdateSettings.mockClear()
+    const stored: Record<string, unknown> = { enabledTools: ['-skill:builtin:drawing', 'skill:i'] }
+    mocks.daoUpdateSettings.mockImplementation((_id: string, patch: Record<string, unknown>) => {
+      Object.assign(stored, patch)
+    })
+    mocks.getProfile.mockReturnValue(
+      profile('drawer', { tools: ['read', 'skill:builtin:drawing', 'mcp:p', '-skill:z'] })
+    )
+    const drawer = await pin('drawer')
+    expect(drawer.success).toBe(true)
+    expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'drawer' }]])
+    expect(stored.enabledTools).toEqual(['-skill:builtin:drawing', 'skill:i'])
+    expect(drawer.applied?.tools).toEqual(['skill:builtin:drawing', 'mcp:p'])
+    expect(drawer.applied?.tools.some((name) => name.startsWith('-'))).toBe(false)
   })
 
   it('PIN-9 档案声明思考档位 off：思考种子恰写一次、applied.thinkingLevel 回传；顺序 invalidate → 种子 → 广播', async () => {

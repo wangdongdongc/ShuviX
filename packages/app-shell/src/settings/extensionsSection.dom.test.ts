@@ -2,10 +2,11 @@
 /**
  * ExtensionsSection（会话设置与项目编辑页共用的扩展能力卡）DOM 测试（jsdom）—— 两条展示规矩：
  *
- *   - agent 档案声明的项（`declaredBy`）恒生效：画成已勾、禁用、`data-declared` + `aria-disabled`，
- *     挂一把 `data-ext-declared` 小锁，悬停说是哪个档案声明的；它是**开着的**，所以不压暗、不换
- *     禁用光标（那是整卡只读的样子）。它不在勾选里，也不会经 onToggle 被写进勾选 —— 组件自己挡，
- *     不只靠 disabled（禁用的勾选框浏览器不派发 click，所以先摘掉 disabled 再点才证明得了）；
+ *   - agent 档案声明的项（`declaredBy`）**缺省勾上、可以取消**：画成已勾、可点，带 `data-declared`，
+ *     没有 `aria-disabled`、没有声明锁，悬停说是哪个档案带的、取消只在这里生效；取消写的是勾选里的
+ *     取消记号 `-<name>`（chat-protocol `toolSelection`），交回调用方的 `onChange(next)` 是整份新勾选；
+ *     传进来的数组不被改动。整卡只读时一次点击也不交出去 —— 组件自己挡，不只靠 disabled（禁用的
+ *     勾选框浏览器不派发 click，所以先摘掉 disabled 再点才证明得了）；
  *   - 每组里 ShuviX 自带的项（内置 MCP / 内置技能）排最前，其余保持传入顺序（稳定排序，不按字母）；
  *     排序不改调用方传进来的数组。
  *
@@ -48,7 +49,7 @@ const SKILL_TOOLS = [skill('builtin:drawing', { declaredBy: PROFILE }), skill('f
 
 let container: HTMLDivElement
 let root: Root
-let onToggle: ReturnType<typeof vi.fn>
+let onChange: ReturnType<typeof vi.fn<(next: string[]) => void>>
 
 function render(props: Partial<ExtensionsSectionProps> = {}): void {
   act(() => {
@@ -58,7 +59,7 @@ function render(props: Partial<ExtensionsSectionProps> = {}): void {
         mcpTools: MCP_TOOLS,
         skillTools: SKILL_TOOLS,
         enabledTools: ['skill:foo'],
-        onToggle: onToggle as unknown as (toolName: string) => void,
+        onChange,
         ...props
       })
     )
@@ -103,7 +104,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  onToggle = vi.fn()
+  onChange = vi.fn<(next: string[]) => void>()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -115,8 +116,8 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('档案声明的项：已勾、锁住、点不动', () => {
-  it('ES-1 声明项不在勾选里也画成已勾：禁用、data-declared、aria-disabled、声明锁、悬停说谁声明的；不压暗', () => {
+describe('档案声明的项：缺省勾上、可以取消', () => {
+  it('ES-1 声明项不在勾选里也画成已勾：可点、data-declared、无 aria-disabled、无声明锁、悬停说谁带的；手型光标、不压暗', () => {
     render()
     const declaredHint = i18n.t('sessionConfig.extensionDeclared', { profile: PROFILE })
     expect(declaredHint).not.toBe('sessionConfig.extensionDeclared')
@@ -124,12 +125,13 @@ describe('档案声明的项：已勾、锁住、点不动', () => {
     for (const key of ['mcp:ctx', 'skill:builtin:drawing']) {
       const label = item(key)
       expect(box(key).checked, key).toBe(true)
-      expect(box(key).disabled, key).toBe(true)
+      expect(box(key).disabled, key).toBe(false)
       expect(label.hasAttribute('data-declared'), key).toBe(true)
-      expect(label.getAttribute('aria-disabled'), key).toBe('true')
-      expect(label.querySelector('[data-ext-declared]'), key).not.toBeNull()
+      expect(label.hasAttribute('aria-disabled'), key).toBe(false)
+      expect(label.querySelector('[data-ext-declared]'), key).toBeNull()
       expect(label.title, key).toBe(declaredHint)
-      // 它是开着的：压暗与禁用光标专属「整卡只读」
+      expect(label.className, key).toContain('cursor-pointer')
+      // 压暗与禁用光标专属「整卡只读」
       expect(label.className, key).not.toContain('opacity-40')
       expect(label.className, key).not.toContain('cursor-not-allowed')
     }
@@ -138,43 +140,72 @@ describe('档案声明的项：已勾、锁住、点不动', () => {
       expect(box(key).checked, key).toBe(key === 'skill:foo')
       expect(box(key).disabled, key).toBe(false)
       expect(item(key).hasAttribute('data-declared'), key).toBe(false)
-      expect(item(key).querySelector('[data-ext-declared]'), key).toBeNull()
+      expect(item(key).hasAttribute('aria-disabled'), key).toBe(false)
     }
-    // 卡片没有只读：组名旁一把锁都没有
+    // 整张卡里没有任何声明锁；卡片没有只读：组名旁一把锁都没有
+    expect(container.querySelectorAll('[data-ext-declared]')).toHaveLength(0)
     expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(0)
   })
 
-  it('ES-2 硬点声明项 → onToggle 不被调用；点别的条目 → 恰好一次、带它自己的 key', () => {
-    render()
-    forceClick('mcp:ctx')
-    forceClick('skill:builtin:drawing')
-    expect(onToggle).not.toHaveBeenCalled()
+  it('ES-2 点声明项 → onChange 交回带取消记号的整份勾选；再点被取消的 → 撤掉记号；普通项照常增删；传入数组不被改动', () => {
+    const enabled = Object.freeze(['skill:foo']) as string[]
+    render({ enabledTools: enabled })
 
-    // 同一个手法落在普通条目上（它本就可点）是真能到 onToggle 的 —— 上面的「没调」不是手法失灵
-    forceClick('skill:bar')
-    expect(onToggle).toHaveBeenCalledTimes(1)
-    expect(onToggle).toHaveBeenCalledWith('skill:bar')
+    click('mcp:ctx')
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenLastCalledWith(['skill:foo', '-mcp:ctx'])
+
+    click('skill:bar')
+    expect(onChange).toHaveBeenLastCalledWith(['skill:foo', 'skill:bar'])
+    click('skill:foo')
+    expect(onChange).toHaveBeenLastCalledWith([])
+    expect(onChange).toHaveBeenCalledTimes(3)
+    expect(enabled).toEqual(['skill:foo'])
+
+    // 取消过作图技能的勾选：那一行画成未勾，但仍是声明项、仍可点
+    const optedOut = Object.freeze(['-skill:builtin:drawing']) as string[]
+    render({ enabledTools: optedOut })
+    expect(box('skill:builtin:drawing').checked).toBe(false)
+    expect(box('skill:builtin:drawing').disabled).toBe(false)
+    expect(item('skill:builtin:drawing').hasAttribute('data-declared')).toBe(true)
+    expect(item('skill:builtin:drawing').hasAttribute('aria-disabled')).toBe(false)
+    // 另一个声明项不受这条记号影响
+    expect(box('mcp:ctx').checked).toBe(true)
+
+    click('skill:builtin:drawing')
+    expect(onChange).toHaveBeenCalledTimes(4)
+    expect(onChange).toHaveBeenLastCalledWith([])
+    expect(optedOut).toEqual(['-skill:builtin:drawing'])
+  })
+
+  it('ES-6 没被声明的项：勾 + 取消两个记号同时在时算没勾；点它 → 只留名字', () => {
+    render({ enabledTools: ['-skill:bar', 'skill:bar'] })
+    expect(box('skill:bar').checked).toBe(false)
+    expect(item('skill:bar').hasAttribute('data-declared')).toBe(false)
+    click('skill:bar')
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(onChange).toHaveBeenCalledWith(['skill:bar'])
   })
 })
 
 describe('整卡只读（会话已有 Agent 运行时）', () => {
-  it('ES-3 只读压过声明：声明项的悬停换成只读原因、压暗 + 禁用光标、仍勾着；两组各挂一把锁；点了都没用', () => {
+  it('ES-3 只读压过声明：声明项的悬停换成只读原因、压暗 + 禁用光标、仍勾着且禁用；两组各挂一把锁；硬点哪一行都没用', () => {
     render({ readonly: true, readonlyHint: READONLY_HINT })
     for (const key of ['mcp:ctx', 'skill:builtin:drawing']) {
       const label = item(key)
       expect(label.title, key).toBe(READONLY_HINT)
       expect(label.className, key).toContain('cursor-not-allowed')
       expect(label.className, key).toContain('opacity-40')
+      expect(label.getAttribute('aria-disabled'), key).toBe('true')
       expect(box(key).checked, key).toBe(true)
       expect(box(key).disabled, key).toBe(true)
     }
     expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(2)
     // 用户那一侧：禁用的勾选框点了没有任何反应
     for (const key of keys()) click(key)
-    // 声明项连绕过禁用态都点不动（组件自己挡）
-    forceClick('mcp:ctx')
-    forceClick('skill:builtin:drawing')
-    expect(onToggle).not.toHaveBeenCalled()
+    // 绕过禁用态硬点每一行（声明项与普通项都算）：组件自己挡，一次也不交出去
+    for (const key of keys()) forceClick(key)
+    expect(onChange).not.toHaveBeenCalled()
   })
 })
 
@@ -204,7 +235,7 @@ describe('每组里内置项排前，其余保持传入顺序', () => {
       'skill:foo',
       'skill:bar'
     ])
-    // 被声明的 user-b / bar 仍在同组非内置项里的原位（没有因为「已勾、锁住」被提到前面）
+    // 被声明的 user-b / bar 仍在同组非内置项里的原位（没有因为「缺省勾上」被提到前面）
     expect(item('mcp:user-b').hasAttribute('data-declared')).toBe(true)
     expect(item('skill:bar').hasAttribute('data-declared')).toBe(true)
   })

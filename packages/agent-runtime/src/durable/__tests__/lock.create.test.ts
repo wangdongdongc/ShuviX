@@ -378,6 +378,57 @@ describe('lock · create', () => {
     ])
   })
 
+  it.each([
+    ['unticked alone', [] as string[], false],
+    ['unticked while skill:pdf is ticked', ['skill:pdf'], true]
+  ])(
+    'LC-16b an opt-out of a profile-declared skill (%s): resolution, promptVars and the tool list lose it; the lock keeps the selection verbatim, also after a reopen',
+    async (_label, extra, skillTool) => {
+      const config = scenarioConfig()
+      config.profile = {
+        ...config.profile,
+        name: 'bot',
+        tools: ['read', 'ls', 'ask', 'edit', 'skill:builtin:drawing']
+      }
+      const overlay = ['-skill:builtin:drawing', 'mcp:ctx', ...extra]
+      config.toolOverlay = overlay
+      const seen: string[][] = []
+      const { t } = await scenarioW({
+        config,
+        promptVars: (ctx) => {
+          seen.push([...ctx.toolNames])
+          return { marker: 'M1' }
+        }
+      })
+      const session = await t.open()
+      await session.createAgent()
+
+      const resolved = t.toolHost.resolveCalls[0]!.names
+      expect(resolved).toEqual(['read', 'ls', 'ask', 'edit', 'mcp:ctx', ...extra])
+      expect(resolved).not.toContain('skill:builtin:drawing')
+      // 冻结人设时的变量表看到的是同一份名单 —— 作图段落据此整段不出现
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toEqual(resolved)
+      expect(seen[0]).not.toContain('skill:builtin:drawing')
+      if (skillTool) expect(session.lock!.toolNames).toContain('skill')
+      else expect(session.lock!.toolNames).not.toContain('skill')
+      expect(session.lock!.toolNames).toEqual(
+        expect.arrayContaining(['mcp__ctx__resolve', 'mcp__ctx__docs'])
+      )
+      // 锁记录的勾选是创建时那份原样（含取消记号）：agent.init 锁着时报它
+      expect(session.lock!.selection).toEqual(overlay)
+      expect((await storedLock(session)) as { selection?: unknown }).toMatchObject({
+        selection: overlay
+      })
+
+      // 同一进程里关掉再打开（LRU）：锁还在，勾选照旧
+      await t.host.close('s1')
+      const reopened = await t.open()
+      expect(reopened.lock).toBeDefined()
+      expect(reopened.lock!.selection).toEqual(overlay)
+    }
+  )
+
   it('LC-17 an ephemeral (memory) session locks exactly like a persisted one (K19)', async () => {
     const { t } = await scenarioW({ ephemeral: ['s1'] })
     const session = await t.open()

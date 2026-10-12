@@ -7,29 +7,26 @@
  * | 项        | root                                    | spawned                             |
  * |-----------|-----------------------------------------|-------------------------------------|
  * | 思考档位   | 传入值（会话设置）                       | 档案 shuvix-thinking 优先，否则继承  |
- * | 工具名单   | 档案全量 + 会话勾选（只收 mcp:/skill:）  | 档案全量 + overlay                  |
+ * | 工具名单   | 档案全量 ± 会话勾选（只收 mcp:/skill:）  | 档案全量 + overlay                  |
  *
  * 初始模型那一行不在这里：root 以会话设置为准（锁），spawned 的 `shuvix-model` 由协调器经
  * `SessionHostDeps.resolveProfileModel` 解析（`spawn.ts`）。系统提示词也不在这里拼：人设在创建 agent 时冻结
  *（`prompt/persona.ts`），其余注入各是一个现解析的段落扩展（`prompt/sections.ts`）。
  */
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import { isSessionScopedToolName, optedOutTools } from '@shuvix/chat-protocol/toolSelection'
 import type { InProcessAgentType } from '../subagent/types'
 import type { AgentKind } from '../agentProfile/promptVars'
 
-/** 会话级工具（用户能在工具选择器里勾选的那两类）；其余为内置工具名 + 'agent' */
-const isSessionScopedTool = (name: string): boolean =>
-  name.startsWith('mcp:') || name.startsWith('skill:')
-
 /**
- * 名单归一：档案白名单 + 会话勾选 overlay，去重保序。
+ * 名单归一：档案白名单 ± 会话勾选 overlay，去重保序。
  *
- * 档案的 `shuvix-tools` 对内置 / mcp / skill 三类是**一并声明**的，而且三类都**恒生效** ——
- * root 与 spawned 同一条规则：档案写了什么，这个 agent 就带什么。会话勾选只能往上**加**：
- *  - 内置工具名恒由档案决定（选择器里本就看不到它们）；
- *  - mcp: / skill: 档案声明的那截恒在，会话勾选在其上叠加。选择器与会话设置把档案声明的项
- *    画成「已勾、锁住」（`tools.list` 的 `declaredBy`）—— 界面上取消不了，也就不存在
- *    「取消了却被档案并集加回来」的假勾选。要去掉一项，路径是覆盖这份档案 md。
+ * 档案的 `shuvix-tools` 对内置 / mcp / skill 三类是**一并声明**的 —— root 与 spawned 同一条规则：
+ * 档案写了什么，这个 agent 就带什么。root 的会话勾选（记号见 chat-protocol `toolSelection.ts`）在其上增减：
+ *  - 内置工具名恒由档案决定（选择器里本就看不到它们，取消记号也取消不了它们）；
+ *  - mcp: / skill: 档案声明的那截是**缺省勾上**：会话勾选能加别的，也能用 `-mcp:…` / `-skill:…` 把
+ *    声明的某一项取消（选择器与会话设置把声明项画成默认勾上、可以取消，`tools.list` 的 `declaredBy`）。
+ *    同一项既被勾又被取消时取消赢；取消一个档案没声明的项什么也不做。
  *  - root 的 overlay **只收** mcp: / skill:：勾选里混进一个内置名（手改的设置、被新会话继承的
  *    项目配置）不能借 overlay 越过档案 —— bot 基座的窄名单因此是结构保证。
  *  - spawned 没有选择器也没有会话设置，档案即全部（overlay 恒为空）。
@@ -42,8 +39,13 @@ export function normalizeToolNames(
   profileTools: readonly string[],
   overlay: readonly string[] | undefined
 ): string[] {
-  const added = kind === 'root' ? (overlay ?? []).filter(isSessionScopedTool) : (overlay ?? [])
-  return [...new Set([...profileTools, ...added])]
+  if (kind !== 'root') return [...new Set([...profileTools, ...(overlay ?? [])])]
+  const selection = overlay ?? []
+  const removed = optedOutTools(selection)
+  const added = selection.filter(isSessionScopedToolName)
+  return [...new Set([...profileTools, ...added])].filter(
+    (name) => !(removed.has(name) && isSessionScopedToolName(name))
+  )
 }
 
 /**

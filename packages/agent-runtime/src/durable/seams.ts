@@ -211,7 +211,7 @@ export interface ModelCatalog {
 export interface AgentConfig {
   /** 会话的基座档案（form-derived：work / chat / notebook / bot / tab …） */
   profile: InProcessAgentType
-  /** 会话的扩展勾选（`settings.enabledTools`，只收 mcp: / skill:） */
+  /** 会话的扩展勾选（`settings.enabledTools`：mcp: / skill: 加一项，`-mcp:` / `-skill:` 取消档案声明的一项） */
   toolOverlay?: readonly string[]
   /** 会话的模型选择（provider = provider 行 id）；默认模型由宿主先套上，没有就拒绝创建 */
   model?: ModelSelection

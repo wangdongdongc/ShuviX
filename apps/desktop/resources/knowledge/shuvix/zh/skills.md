@@ -92,9 +92,10 @@ Agent Skills 的跨工具约定位置（Codex、pi 读它，`npx skills add -g` 
    长 skill 没用到时零成本。
    - **按会话**：会话配置的扩展能力一节（以及输入框的工具选择器）—— 存在会话的 `settings.enabledTools`
      里，形如 `skill:<name>`；项目自己的缺省会种进新会话；这份选择在会话的 agent 创建时读一次，agent
-     存在期间只读。会话的 agent 文件声明的条目也列在那里，显示为已勾、锁住：不管怎么选，它们都开着。
-   - **按 agent 文件**：agent md 里 `shuvix-tools: …, skill:<name>` —— 不管会话选了什么，那个 agent
-     总有这个 skill。
+     存在期间只读。会话的 agent 文件声明的条目也列在那里，默认勾上；取消一项记成 `-skill:<name>`，
+     只对这条会话关掉它（在项目设置里取消，则对这个项目的新会话）—— 会话改用别的作图技能、不要内置的那份就是这么做。
+   - **按 agent 文件**：agent md 里 `shuvix-tools: …, skill:<name>` —— 那个 agent 默认带着这个
+     skill；以它为根的会话可以只为自己取消（见上）。
    - 项目级 skill 对在该项目里工作的任何根 agent 的 `skill` 工具都可见。
 3. **当作文件读** —— 没有什么拦着 agent 直接读 `SKILL.md`；上面两条机制只是省掉找路径这一步。
 
