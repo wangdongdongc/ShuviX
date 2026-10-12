@@ -9,7 +9,8 @@
  * toolResult → pi.tool-result（诊断为空）；compaction → pi.compaction（外壳包好的摘要，头标记）；
  * 内联侧车 + 紧随的 user → 显示侧车；系统通知侧车 + 紧随的 user → shuvix.notice；model_change /
  * thinking_level_change → 丢掉；其余 custom 与元条目 → 未知种类；指令 custom_message → 两边都去掉。
- * 归一化：两边都过 JSON；id 按位置对应；去掉 createdAt；user 与压缩摘要去掉 model / provider（PIN-21）。
+ * 归一化：两边都过 JSON；id 按位置对应；去掉 createdAt；user 与压缩摘要去掉 model / provider（PIN-21）；
+ * 通知去掉 noticeKind / noticeDate（durable 从 shuvix.notice 条目带来，旧投影没有这两个键 —— 刻意的差异）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -165,15 +166,19 @@ function convert(context: readonly HarnessV3Entry[]): Converted {
   return { entries, display, removed }
 }
 
-/** 归一化：过 JSON，id 换成位置，去掉 createdAt，user / 压缩摘要去掉 model / provider */
+/** 归一化：过 JSON，id 换成位置，去掉 createdAt，user / 压缩摘要去掉 model / provider，通知去掉种类 */
 function normalize(messages: readonly ChatMessage[]): unknown[] {
   return (JSON.parse(JSON.stringify(messages)) as Record<string, unknown>[]).map(
     (message, index) => {
       const { createdAt: _createdAt, id: _id, ...rest } = message
-      const metadata = rest.metadata as { isCompactionSummary?: boolean } | null
+      const metadata = rest.metadata as Record<string, unknown> | null
       if (rest.role === 'user' || metadata?.isCompactionSummary === true) {
         delete rest.model
         delete rest.provider
+      }
+      if (metadata) {
+        delete metadata.noticeKind
+        delete metadata.noticeDate
       }
       return { at: index, ...rest }
     }

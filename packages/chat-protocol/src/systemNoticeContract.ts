@@ -12,6 +12,14 @@
  * 与 chat-ui 的通知摘要解析。三处认同一份标签表，改这里一处。
  */
 
+/**
+ * 日期通知的种类（`shuvix.notice` 条目的 `data.kind`）。跨天后第一次用户输入之前写下，正文是
+ * `<date-change>Today is …</date-change>`（agent-runtime `renderDateNotice`），不是上面的标签块；
+ * 投影按条目种类打 `isSystemNotice`，并把这个种类带进 `UserTextMeta.noticeKind`，渲染侧据此
+ * 不把它画成「后台任务已完成」。
+ */
+export const DATE_NOTICE_KIND = 'date'
+
 /** 通知信封的标签名（不含尖括号） */
 export const SYSTEM_NOTICE_TAGS = ['background-task', 'sub-session'] as const
 

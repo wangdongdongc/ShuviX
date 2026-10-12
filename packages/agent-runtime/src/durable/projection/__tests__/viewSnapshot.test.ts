@@ -88,7 +88,10 @@ describe('P3-07 · viewSnapshot parity', () => {
       expect(messages[0]!.content).toBe(D1.content)
       expect(messages[0]!.metadata).toStrictEqual({ inlineTokens: K1 })
       for (const message of messages) expect(message.content).not.toContain('PAYLOAD-K1')
-      expect(messages.at(-1)!.metadata).toStrictEqual({ isSystemNotice: true })
+      expect(messages.at(-1)!.metadata).toStrictEqual({
+        isSystemNotice: true,
+        noticeKind: 'background'
+      })
       const tool = messages
         .flatMap((m) => (m.role === 'assistant' && m.type === 'message' ? m.blocks : []))
         .find((b) => b.type === 'tool')

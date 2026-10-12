@@ -87,6 +87,13 @@ export interface UserTextMeta {
    * isInstructionInjection 同一条纪律：转写不得把系统写的话记成用户说的。
    */
   isSystemNotice?: boolean
+  /**
+   * 系统通知来自 `shuvix.notice` 条目时，条目的 `data.kind`（`background` / `date`，见
+   * systemNoticeContract 的 `DATE_NOTICE_KIND`）。按正文形状认出的通知没有这个字段 —— 它们都是后台完成通知
+   */
+  noticeKind?: string
+  /** 日期通知（`noticeKind: 'date'`）告知的本地日期 `YYYY-MM-DD` */
+  noticeDate?: string
 }
 
 /** 助手消息元数据 */

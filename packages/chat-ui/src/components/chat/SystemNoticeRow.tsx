@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react'
 import { StepRow } from './StepRow'
 
-/** 三种系统通知 —— 也是根节点 `data-system-notice` 的取值（e2e 据此定位） */
-export type SystemNoticeKind = 'compaction' | 'background' | 'instruction'
+/** 系统通知的几种 —— 也是根节点 `data-system-notice` 的取值（e2e 据此定位） */
+export type SystemNoticeKind = 'compaction' | 'background' | 'date' | 'instruction'
 
 interface SystemNoticeRowProps {
   kind: SystemNoticeKind

@@ -252,6 +252,9 @@
   "backgroundNotice": {
     "title": "Background work finished"
   },
+  "dateNotice": {
+    "title": "Date changed"
+  },
   "instruction": {
     "title": "Project instructions"
   },

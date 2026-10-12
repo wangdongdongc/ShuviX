@@ -252,6 +252,9 @@
   "backgroundNotice": {
     "title": "バックグラウンドの処理が完了しました"
   },
+  "dateNotice": {
+    "title": "日付の変更"
+  },
   "instruction": {
     "title": "プロジェクト指示"
   },

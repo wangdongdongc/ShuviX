@@ -283,11 +283,17 @@ describe('P3-02 · projector over real flows', () => {
         v2.messages.find((m) => m.content === bg('t2', 'done')),
         v3.messages.find((m) => m.content === bg('t3', 'done'))
       ]
-      for (const notice of notices) {
+      // (1) is a notice by text shape; (2) and (3) are notice entries and carry their kind
+      const expectedMeta = [
+        { isSystemNotice: true },
+        { isSystemNotice: true, noticeKind: 'background' },
+        { isSystemNotice: true, noticeKind: 'background' }
+      ]
+      notices.forEach((notice, i) => {
         expect(notice).toBeDefined()
         expect(notice!.role).toBe('user')
-        expect(notice!.metadata).toStrictEqual({ isSystemNotice: true })
-      }
+        expect(notice!.metadata).toStrictEqual(expectedMeta[i])
+      })
       // none of them is a plain user bubble
       for (const view of [v1, v2, v3]) {
         const plain = view.messages.filter(

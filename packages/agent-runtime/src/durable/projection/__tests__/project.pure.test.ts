@@ -127,7 +127,10 @@ describe('P3-02 · pure projector: user messages and inline tokens', () => {
       ])
     })
     expect(others.messages.map((m) => m.content)).toEqual(['n', 'a'])
-    expect(others.messages[0]!.metadata).toStrictEqual({ isSystemNotice: true })
+    expect(others.messages[0]!.metadata).toStrictEqual({
+      isSystemNotice: true,
+      noticeKind: 'background'
+    })
   })
 })
 
@@ -148,7 +151,7 @@ describe('P3-02 · pure projector: notices', () => {
         content: subSession,
         model: '',
         createdAt: 50,
-        metadata: { isSystemNotice: true }
+        metadata: { isSystemNotice: true, noticeKind: 'background' }
       },
       {
         id: '6',
@@ -158,7 +161,7 @@ describe('P3-02 · pure projector: notices', () => {
         content: 'Today is 2026-10-05',
         model: '',
         createdAt: 60,
-        metadata: { isSystemNotice: true }
+        metadata: { isSystemNotice: true, noticeKind: 'date' }
       },
       {
         id: '7',
@@ -168,7 +171,7 @@ describe('P3-02 · pure projector: notices', () => {
         content: 'ab',
         model: '',
         createdAt: 70,
-        metadata: { isSystemNotice: true }
+        metadata: { isSystemNotice: true, noticeKind: 'zzz' }
       }
     ])
   })

@@ -252,6 +252,9 @@
   "backgroundNotice": {
     "title": "后台任务已完成"
   },
+  "dateNotice": {
+    "title": "日期变更"
+  },
   "instruction": {
     "title": "项目指令"
   },

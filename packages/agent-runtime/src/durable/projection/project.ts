@@ -61,7 +61,8 @@ import {
   type ImageMeta,
   type RetriedInfo,
   type ToolResultDetails,
-  type UsageInfo
+  type UsageInfo,
+  type UserTextMeta
 } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type {
@@ -78,7 +79,7 @@ import {
   capabilitiesOfStorageKind,
   DURABLE_SQLITE_1
 } from '@shuvix/chat-protocol/sessionStorageKind'
-import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
+import { DATE_NOTICE_KIND, isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { spillLocatorOf } from '../../toolOutput/spill'
 import { toolResultText } from '../../toolResultText'
@@ -694,6 +695,19 @@ function projectHistory(
   return result
 }
 
+/**
+ * 通知条目的种类（与日期通知告知的日期）进元数据：渲染侧按它挑通知行 —— 日期通知不能画成「后台任务已完成」。
+ * 认不出的 `data` 什么也不带，渲染侧照旧当后台完成通知
+ */
+function noticeMetaOf(entry: EntryRecord): Pick<UserTextMeta, 'noticeKind' | 'noticeDate'> {
+  if (!NoticeEntry.is(entry)) return {}
+  const { kind, date } = entry.data
+  if (typeof kind !== 'string') return {}
+  return kind === DATE_NOTICE_KIND && typeof date === 'string'
+    ? { noticeKind: kind, noticeDate: date }
+    : { noticeKind: kind }
+}
+
 /** 按一个槽新建它的消息（工具结果在交出之前回填完） */
 function buildMessage(sessionId: string, slot: Slot): ChatMessage {
   const { entry } = slot
@@ -732,7 +746,7 @@ function buildMessage(sessionId: string, slot: Slot): ChatMessage {
         content: userText(message.content),
         model: '',
         createdAt: tsOf(message),
-        metadata: { isSystemNotice: true }
+        metadata: { isSystemNotice: true, ...noticeMetaOf(entry) }
       }
     }
     case 'compaction': {

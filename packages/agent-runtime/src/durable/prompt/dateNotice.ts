@@ -16,12 +16,13 @@
  * requestId `shuvix:date:<conversationId>:<date>` 让「写了通知、还没记下日期就崩了」的重试不重复。
  */
 import type { Conversation, EntryRecord } from '@earendil-works/pi-durable'
+import { DATE_NOTICE_KIND } from '@shuvix/chat-protocol/systemNoticeContract'
 import { backgroundContext as BG } from '../context'
 import { AgentStateDoc, NoticeEntry } from '../docs'
 import type { DurableSession, NoticeResult } from '../durableSession'
 
-/** 通知条目的 `data.kind` */
-export const DATE_NOTICE_KIND = 'date'
+/** 通知条目的 `data.kind`（定义在 chat-protocol：渲染侧按它区分日期通知与后台完成通知） */
+export { DATE_NOTICE_KIND }
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
