@@ -37,10 +37,14 @@ export function ScrollToBottomButton({
       aria-hidden={!visible}
       tabIndex={visible ? 0 : -1}
       onClick={onClick}
-      // 底边 = 输入卡片外框高度（含 p-2 的 8px 外边距）+ 4px：与卡片描边之间留 12px
-      style={{ bottom: 'calc(var(--chat-input-h, 0px) + 4px)' }}
+      // 底边 = 输入卡片外框高度（含 p-2 的 8px 外边距）+ 4px：与卡片描边之间留 12px。
+      // 横向居中在列表内容区上（右侧让出滚动条，--chat-scrollbar-w），与正文、输入卡片同一根中线
+      style={{
+        bottom: 'calc(var(--chat-input-h, 0px) + 4px)',
+        left: 'calc((100% - var(--chat-scrollbar-w, 0px)) / 2)'
+      }}
       // 外观取输入卡片同款（半透明底 + 磨砂 + 淡描边 + shadow-md），读起来是那张卡片的附属件
-      className={`group absolute left-1/2 -translate-x-1/2 flex items-center justify-center w-7 h-7 rounded-full border bg-bg-primary/80 backdrop-blur-md shadow-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-[opacity,translate,border-color] duration-150 ${
+      className={`group absolute -translate-x-1/2 flex items-center justify-center w-7 h-7 rounded-full border bg-bg-primary/80 backdrop-blur-md shadow-md text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-[opacity,translate,border-color] duration-150 ${
         showDots ? 'border-accent/45' : 'border-border-secondary/60'
       } ${visible ? 'opacity-100' : 'opacity-0 translate-y-1 pointer-events-none'}`}
     >

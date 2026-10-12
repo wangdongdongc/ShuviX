@@ -74,13 +74,19 @@ interface MessageListProps {
   running: boolean
   /** 本会话待办的日历跳转（点进某天 → 滚到当天第一条用户消息）；没有为 null */
   scrollRequest: { messageId: string; nonce: number } | null
+  /**
+   * 滚动容器的竖向滚动条占了多宽（px，没有滚动条为 0）；变了才报，卸载时报 0。
+   * 正文按滚动容器的内容区居中，悬浮在列表上的输入卡片与「回到底部」按钮要据此让出同一条，三者才同一根中线
+   */
+  onScrollbarWidthChange: (px: number) => void
 }
 
 function MessageList({
   items,
   renderItem,
   running,
-  scrollRequest
+  scrollRequest,
+  onScrollbarWidthChange
 }: MessageListProps): React.JSX.Element {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const scrollerRef = useRef<HTMLElement | null>(null)
@@ -166,6 +172,19 @@ function MessageList({
   const resizeRef = useRef<ResizeObserver | null>(null)
   useEffect(() => () => resizeRef.current?.disconnect(), [])
 
+  // 滚动条宽度：内容溢出后才出现（滚动条样式化后不再是浮层，要占布局宽度 —— 对话列是 10px，见 base.css）。
+  // 它出现 / 消失时滚动容器的内容区变窄 / 变宽，上面那个 ResizeObserver 正好察觉
+  const scrollbarWidthRef = useRef(0)
+  const reportScrollbarWidth = useCallback(
+    (px: number) => {
+      if (px === scrollbarWidthRef.current) return
+      scrollbarWidthRef.current = px
+      onScrollbarWidthChange(px)
+    },
+    [onScrollbarWidthChange]
+  )
+  useEffect(() => () => reportScrollbarWidth(0), [reportScrollbarWidth])
+
   const handleScrollerRef = useCallback(
     (el: HTMLElement | Window | null) => {
       scrollerRef.current = el instanceof HTMLElement ? el : null
@@ -175,9 +194,13 @@ function MessageList({
       resizeRef.current = null
       const scroller = scrollerRef.current
       if (!scroller) return
+      const measureScrollbar = (): void =>
+        reportScrollbarWidth(scroller.offsetWidth - scroller.clientWidth)
+      measureScrollbar()
       if (typeof ResizeObserver !== 'undefined') {
         let prevHeight = scroller.clientHeight
         const observer = new ResizeObserver(() => {
+          measureScrollbar()
           const height = scroller.clientHeight
           const wasAtEnd = scroller.scrollHeight - scroller.scrollTop - prevHeight <= 2
           if (pinnedRef.current || (height < prevHeight && wasAtEnd)) stickToBottom()
@@ -204,7 +227,7 @@ function MessageList({
       )
       listenersRef.current = listeners
     },
-    [unpin, stickToBottom]
+    [unpin, stickToBottom, reportScrollbarWidth]
   )
   const scrollToBottom = useCallback(() => {
     const el = scrollerRef.current
@@ -273,6 +296,10 @@ export function Conversation({
   const rootRef = useRef<HTMLDivElement>(null)
   const handleInputHeightChange = useCallback((h: number) => {
     rootRef.current?.style.setProperty('--chat-input-h', `${h}px`)
+  }, [])
+  // 列表滚动条宽度 → --chat-scrollbar-w：输入卡片与「回到底部」按钮在右侧让出这一条（见 MessageList）
+  const handleScrollbarWidthChange = useCallback((w: number) => {
+    rootRef.current?.style.setProperty('--chat-scrollbar-w', `${w}px`)
   }, [])
 
   const focusMode = useChatHost().appearance.focusMode
@@ -360,6 +387,7 @@ export function Conversation({
             renderItem={renderItem}
             running={isStreaming}
             scrollRequest={scrollRequest}
+            onScrollbarWidthChange={handleScrollbarWidthChange}
           />
         )}
 

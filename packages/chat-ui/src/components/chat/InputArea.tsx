@@ -797,10 +797,13 @@ export function InputArea({
           ? // 内嵌（欢迎页）：随文档流布局，仅保留拖拽高亮
             `transition-colors ${isDragging ? 'bg-accent/5' : ''}`
           : // 悬浮：绝对定位贴底，容器透明 + 不拦截指针，仅输入框本体接收事件，背景不遮挡正文
-            `absolute bottom-0 left-0 right-0 pointer-events-none transition-colors ${
+            `absolute bottom-0 left-0 pointer-events-none transition-colors ${
               isDragging ? 'bg-accent/5' : ''
             }`
       }
+      // 悬浮时右缘让出下面列表的滚动条（--chat-scrollbar-w，对话列由 Conversation 写入；没写过即 0）：
+      // 正文按滚动容器的内容区居中，卡片也得在同一块宽度里居中，否则一出滚动条两者就错开半条
+      style={inline ? undefined : { right: 'var(--chat-scrollbar-w, 0px)' }}
       // 只读会话没有附图入口，拖进来的图片无处可去
       onDragOver={isLegacy ? undefined : handleDragOver}
       onDragLeave={isLegacy ? undefined : handleDragLeave}
