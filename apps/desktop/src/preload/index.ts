@@ -12,6 +12,7 @@ import type {
   AgentSetModelParams,
   AgentSetThinkingLevelParams,
   HttpLogListParams,
+  ClassifierLogListParams,
   ProjectCreateParams,
   ProjectUpdateParams,
   ProjectDeleteParams,
@@ -231,6 +232,8 @@ const api = {
       ipcRenderer.invoke('provider:toggleEnabled', params),
     listModels: (providerId: string) => ipcRenderer.invoke('provider:listModels', providerId),
     listAvailableModels: () => ipcRenderer.invoke('provider:listAvailableModels'),
+    /** 可选的命令分类模型（「分类」类模型，通用设置的分类模型下拉用） */
+    listClassifierModels: () => ipcRenderer.invoke('provider:listClassifierModels'),
     toggleModelEnabled: (params: ProviderToggleModelEnabledParams) =>
       ipcRenderer.invoke('provider:toggleModelEnabled', params),
     syncModels: (params: ProviderSyncModelsParams) =>
@@ -335,6 +338,14 @@ const api = {
     list: (params?: HttpLogListParams) => ipcRenderer.invoke('httpLog:list', params),
     get: (id: string) => ipcRenderer.invoke('httpLog:get', id),
     clear: () => ipcRenderer.invoke('httpLog:clear')
+  },
+
+  // ============ 分类器调用日志 ============
+  classifierLog: {
+    list: (params?: ClassifierLogListParams) => ipcRenderer.invoke('classifierLog:list', params),
+    get: (id: string) => ipcRenderer.invoke('classifierLog:get', id),
+    scenes: () => ipcRenderer.invoke('classifierLog:scenes'),
+    clear: () => ipcRenderer.invoke('classifierLog:clear')
   },
 
   // ============ Runtime (统一资源) ============

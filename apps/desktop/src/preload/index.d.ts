@@ -21,6 +21,9 @@ import type {
   AgentSetThinkingLevelParams,
   HttpLog,
   HttpLogListParams,
+  ClassifierLog,
+  ClassifierLogListParams,
+  ClassifierLogSummary,
   HttpLogSummary,
   ProjectCreateParams,
   ProjectUpdateParams,
@@ -410,6 +413,7 @@ declare global {
       toggleEnabled: (params: ProviderToggleEnabledParams) => Promise<{ success: boolean }>
       listModels: (providerId: string) => Promise<ProviderModelInfo[]>
       listAvailableModels: () => Promise<AvailableModel[]>
+      listClassifierModels: () => Promise<AvailableModel[]>
       toggleModelEnabled: (
         params: ProviderToggleModelEnabledParams
       ) => Promise<{ success: boolean }>
@@ -494,6 +498,12 @@ declare global {
     httpLog: {
       list: (params?: HttpLogListParams) => Promise<HttpLogSummary[]>
       get: (id: string) => Promise<HttpLog | undefined>
+      clear: () => Promise<{ success: boolean }>
+    }
+    classifierLog: {
+      list: (params?: ClassifierLogListParams) => Promise<ClassifierLogSummary[]>
+      get: (id: string) => Promise<ClassifierLog | undefined>
+      scenes: () => Promise<string[]>
       clear: () => Promise<{ success: boolean }>
     }
     runtime: {

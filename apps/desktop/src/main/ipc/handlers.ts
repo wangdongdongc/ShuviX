@@ -6,6 +6,7 @@ import { registerMessageHandlers } from './messageHandlers'
 import { registerSettingsHandlers } from './settingsHandlers'
 import { registerProviderHandlers } from './providerHandlers'
 import { registerHttpLogHandlers } from './httpLogHandlers'
+import { registerClassifierLogHandlers } from './classifierLogHandlers'
 import { registerMcpHandlers } from './mcpHandlers'
 import { registerSkillHandlers } from './skillHandlers'
 import { registerDbCredentialHandlers } from './dbCredentialHandlers'
@@ -48,6 +49,7 @@ export function registerIpcHandlers(): void {
   registerSettingsHandlers()
   registerProviderHandlers()
   registerHttpLogHandlers()
+  registerClassifierLogHandlers()
   registerMcpHandlers()
   registerSkillHandlers()
   registerDbCredentialHandlers()

@@ -15,12 +15,14 @@
 import { assembleRules } from './assemble'
 import { projectCommandFacts, projectPowerShellFacts, type CommandFactAttrs } from './commandFacts'
 import { analyzePowerShellCommand } from './powershell/analyze'
+import { isCommandRisk, pickCommandRisk } from './commandRisk'
 import { evaluate } from './evaluate'
 import { executeDecision } from './enforce'
 import { buildPolicyVars } from './policyVars'
 import type {
   AccessMode,
   CommandObjectInput,
+  CommandRisk,
   EnforceOpts,
   EnforceOutcome,
   SecurityContext,
@@ -122,6 +124,49 @@ function atRealPath(
     ...object,
     path: realPath ? realPath(object.path) : object.path,
     requestedPath: typeof object.requestedPath === 'string' ? object.requestedPath : object.path
+  }
+}
+
+/**
+ * 问宿主要这条命令的风险分类（见 SecurityHostProvider.classifyCommand）。宿主不实现、回 null、抛错，
+ * 或者回了个不完整的东西，都当作「这次没分类」—— 客体上不挂 risk，引用它的规则走严格语义的 fail-safe。
+ * 回来的东西不完整、抛错各记一条告警（回 null 是宿主说「这次不分」，不记）。
+ *
+ * 和审查一样与 signal 赛跑：用户按了停止就不再等宿主（宿主可能根本不看 signal），静默交回 null ——
+ * 后面的门（审查、询问）自己会看见 signal 落下、按中止收尾。
+ */
+async function classifyCommandSafely(
+  provider: SecurityHostProvider,
+  input: CommandObjectInput,
+  signal: AbortSignal | undefined,
+  toolCallId: string | undefined
+): Promise<CommandRisk | null> {
+  const classify = provider.classifyCommand
+  if (!classify || signal?.aborted) return null
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<null>((resolve) => {
+    onAbort = (): void => resolve(null)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    const risk = await Promise.race([
+      Promise.resolve().then(() => classify.call(provider, input, { signal, toolCallId })),
+      aborted
+    ])
+    if (signal?.aborted || risk === null || risk === undefined) return null
+    if (!isCommandRisk(risk)) {
+      provider.logger?.warn('命令风险分类的结果不完整，按未分类处理')
+      return null
+    }
+    return pickCommandRisk(risk)
+  } catch (err) {
+    if (signal?.aborted) return null
+    provider.logger?.warn(
+      `命令风险分类失败，按未分类处理：${err instanceof Error ? err.message : String(err)}`
+    )
+    return null
+  } finally {
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
   }
 }
 
@@ -249,7 +294,10 @@ export function createSecurityContext(
           `shell 解析器初始化失败，命令按未解析处理：${err instanceof Error ? err.message : String(err)}`
         )
       }
-      return enforce('execute', buildCommandObject(object, provider), opts)
+      const command = buildCommandObject(object, provider)
+      const risk = await classifyCommandSafely(provider, object, opts.signal, opts.toolCallId)
+      if (risk) command.risk = risk
+      return enforce('execute', command, opts)
     },
 
     // L1 全工具门：**allow 即非事件**（默认放行 / force-allow / 静态 allow 同待遇）——

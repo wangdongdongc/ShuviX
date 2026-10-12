@@ -32,6 +32,7 @@ import type {
   SecurityRequest
 } from './types'
 import { recordDecision } from './decisionLog'
+import { commandRiskOf } from './commandRisk'
 import {
   noteHumanFeedback,
   noteReviewAllowed,
@@ -270,6 +271,7 @@ export async function executeDecision(args: {
               ms: review.ms
             }
           : undefined,
+        commandRisk: commandRiskOf(request.object),
         evaluateMs: args.evaluateMs,
         totalMs: withTotal ? Date.now() - startTs : undefined
       },

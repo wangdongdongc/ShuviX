@@ -27,13 +27,15 @@ import { evaluate } from '../evaluate'
 import { buildPolicyVars } from '../policyVars'
 import { inDirOnlyVarNames } from '../celMatch'
 import { urlObjectOf } from '../urlObject'
-import type {
-  ParsedPolicyFile,
-  PolicyRuleSpec,
-  PolicyVarValue,
-  SecurityDecision,
-  SecurityHostProvider,
-  SecurityObject
+import {
+  COMMAND_RISK_CATEGORIES,
+  type CommandRisk,
+  type ParsedPolicyFile,
+  type PolicyRuleSpec,
+  type PolicyVarValue,
+  type SecurityDecision,
+  type SecurityHostProvider,
+  type SecurityObject
 } from '../types'
 import {
   createInlinePolicyMdReader,
@@ -234,15 +236,17 @@ describe('buildBuiltinPolicies', () => {
     expect(inDirOnlyVarNames(write.match!)).toEqual(['grantedWrite', 'sessionDirs'])
   })
 
-  it('BP-3 ask-on-command：ask × execute × command，只问没被圈进沙箱的命令（无渠道收窄）', () => {
+  it('BP-3 ask-on-command：ask × execute × command，只问没被圈进沙箱的命令（无渠道收窄），分类器很有把握判为 read_only 的除外', () => {
     const policy = byName('ask-on-command')
     expect(policy.rules).toHaveLength(1)
     expect(policy.scope).toEqual({ 'subject.kind': ['agent'], 'object.type': ['command'] })
-    // 判据是宿主上报的 sandboxed 事实，不看命令文本；缺这个属性（手工构造的客体）按未圈住处理
+    // 判据是宿主上报的 sandboxed 事实与（配了分类模型时）object.risk，不看命令文本；
+    // 缺 sandboxed（手工构造的客体）按未圈住处理，缺 risk 按没分类处理（照问）
     expect(withoutPrompt(policy.rules[0])).toEqual({
       effect: 'ask',
       conditions: { action: ['execute'] },
-      match: '!has(object.sandboxed) || !object.sandboxed'
+      match:
+        "(!has(object.sandboxed) || !object.sandboxed) && !(has(object.risk) && object.risk.category == 'read_only' && object.risk.readOnly >= 0.9)"
     })
     expect(policy.rules[0].prompt).toBeTruthy()
   })
@@ -1522,6 +1526,141 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(failSafe[0]).toContain("'ask-on-command#0'")
     expect(failSafe[0]).toContain('treating as matched (fail-safe)')
   })
+
+  /** 一份完整的分类：选中 category，把握与 readOnly 都按给的值 */
+  const riskOf = (category: CommandRisk['category'], readOnly: number): CommandRisk => ({
+    category,
+    confidence: category === 'read_only' ? readOnly : 0.9,
+    readOnly,
+    probabilities: Object.fromEntries(
+      COMMAND_RISK_CATEGORIES.map((c) => [
+        c,
+        c === 'read_only' ? readOnly : c === category ? 0.9 : 0
+      ])
+    ) as CommandRisk['probabilities'],
+    model: 'openrouter/~typesafe/jev-latest'
+  })
+
+  /** 带分类的命令客体（risk 可以是不完整的东西 —— 钉 PEP 违约时的 fail-safe） */
+  const classifiedCommand = (
+    risk: unknown,
+    fields: Record<string, string | boolean> = { sandboxed: false }
+  ): SecurityObject => ({ ...commandAt(fields), risk: risk as SecurityObject['risk'] })
+
+  it.each<[string, SecurityObject, 'allow' | 'ask', number, ('agent' | 'user')?]>([
+    ['没圈住、read_only 0.95', classifiedCommand(riskOf('read_only', 0.95)), 'allow', 0],
+    ['没圈住、read_only 0.9（边界含）', classifiedCommand(riskOf('read_only', 0.9)), 'allow', 0],
+    ['没圈住、read_only 1', classifiedCommand(riskOf('read_only', 1)), 'allow', 0],
+    ['没圈住、read_only 0.8999', classifiedCommand(riskOf('read_only', 0.8999)), 'ask', 0],
+    ['没圈住、read_only 0.85', classifiedCommand(riskOf('read_only', 0.85)), 'ask', 0],
+    [
+      '没圈住、personal_data（readOnly 0.95）',
+      classifiedCommand(riskOf('personal_data', 0.95)),
+      'ask',
+      0
+    ],
+    ['没圈住、destructive', classifiedCommand(riskOf('destructive', 0.01)), 'ask', 0],
+    [
+      '圈住、destructive',
+      classifiedCommand(riskOf('destructive', 0.01), { sandboxed: true }),
+      'allow',
+      0
+    ],
+    [
+      'ssh（带 host）、read_only 0.95',
+      classifiedCommand(riskOf('read_only', 0.95), {
+        channel: 'ssh',
+        host: 'prod',
+        sandboxed: false
+      }),
+      'allow',
+      0
+    ],
+    ['缺 sandboxed、read_only 0.95', classifiedCommand(riskOf('read_only', 0.95), {}), 'allow', 0],
+    [
+      "risk 只有 { category: 'read_only' }（缺 readOnly）",
+      classifiedCommand({ category: 'read_only' }),
+      'ask',
+      1
+    ],
+    [
+      "readOnly 是字符串 '0.95'",
+      classifiedCommand({ ...riskOf('read_only', 0.95), readOnly: '0.95' }),
+      'ask',
+      1
+    ],
+    ['user 主体、没圈住、没分类', commandAt({ sandboxed: false }), 'allow', 0, 'user']
+  ])(
+    'PO-2 ask-on-command 读分类：%s → %s（fail-safe 告警 %i 条）',
+    (label, object, expected, failSafeWarnings, subjectKind = 'agent') => {
+      const sinks = warnSinks()
+      const decision = decide('execute', object, {
+        provider: makeProvider({ logger: sinks.logger }),
+        warn: sinks.evalWarn,
+        subjectKind
+      })
+      if (expected === 'allow') {
+        expect({ label, ...decision }).toMatchObject({
+          label,
+          effect: 'allow',
+          winning: 'default:command',
+          matched: []
+        })
+      } else {
+        expect({ label, effect: decision.effect, winning: decision.winning }).toEqual({
+          label,
+          effect: 'ask',
+          winning: 'ask-on-command#0'
+        })
+      }
+      const evalWarnings = sinks.evalWarn.mock.calls.map((c) => String(c[0]))
+      expect(evalWarnings, label).toHaveLength(failSafeWarnings)
+      for (const w of evalWarnings) {
+        expect(w).toContain("'ask-on-command#0'")
+        expect(w).toContain('treating as matched (fail-safe)')
+      }
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    }
+  )
+
+  it("PO-2b 钉住：手工客体把 sandboxed 写成 'yes' 且分到 read_only 0.95 → CEL 的 && 吸收掉求值失败，放行、不告警（门面总把 sandboxed 归一成布尔，生产路径到不了这里）", () => {
+    const sinks = warnSinks()
+    const decision = decide(
+      'execute',
+      classifiedCommand(riskOf('read_only', 0.95), { sandboxed: 'yes' }),
+      { provider: makeProvider({ logger: sinks.logger }), warn: sinks.evalWarn }
+    )
+    expect(decision).toMatchObject({ effect: 'allow', winning: 'default:command', matched: [] })
+    expect(sinks.evalWarn).not.toHaveBeenCalled()
+  })
+
+  it('PO-3 用户用旧版 match 写的同名覆盖副本盖住内置：read_only 0.95 照样问（豁免只在内置这份里）', () => {
+    const sinks = warnSinks()
+    const override: ParsedPolicyFile = {
+      name: 'ask-on-command',
+      displayName: 'ask-on-command',
+      description: '',
+      scope: { 'subject.kind': ['agent'], 'object.type': ['command'] },
+      rules: [
+        {
+          effect: 'ask',
+          conditions: { action: ['execute'] },
+          match: '!has(object.sandboxed) || !object.sandboxed'
+        }
+      ],
+      body: ''
+    }
+    const decision = decide('execute', classifiedCommand(riskOf('read_only', 0.95)), {
+      provider: makeProvider({ logger: sinks.logger, getUserPolicies: () => [override] }),
+      warn: sinks.evalWarn
+    })
+    expect(decision).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-command#0',
+      matched: ['ask-on-command#0']
+    })
+    expect(sinks.evalWarn).not.toHaveBeenCalled()
+  })
 })
 
 /**
@@ -1594,6 +1733,84 @@ describe('内置策略 × 退役的变量与名字', () => {
       }
     }
     expect(hits).toEqual([])
+  })
+
+  /** 某份策略的判定面：每条规则的 match、lets、scope、条件（带出处） */
+  const decisionTexts = (policy: ParsedPolicyFile): Array<[string, string]> => [
+    ...policy.rules.map((r, i): [string, string] => [`rule #${i} match`, r.match ?? '']),
+    ...Object.entries(policy.lets ?? {}).map(([k, v]): [string, string] => [`let ${k}`, v]),
+    ['scope', JSON.stringify(policy.scope ?? {})],
+    ...policy.rules.map((r, i): [string, string] => [
+      `rule #${i} conditions`,
+      JSON.stringify(r.conditions ?? {})
+    ])
+  ]
+
+  it('BP-R 每门语言里只有 ask-on-command 读命令的风险分类，只在它那条 ask 规则的 match 里，且都在 `has(object.risk) &&` 的守卫之下（没分类的命令照问、不报求值失败）', () => {
+    for (const language of LANGUAGES) {
+      const readers = parsedAll()
+        .filter((p) => p.language === language)
+        .filter(({ policy }) => decisionTexts(policy).some(([, text]) => /\brisk\b/.test(text)))
+        .map((p) => p.name)
+      expect(readers, language).toEqual(['ask-on-command'])
+    }
+    for (const { language, policy } of parsedAll().filter((p) => p.name === 'ask-on-command')) {
+      const where = decisionTexts(policy)
+        .filter(([, text]) => /\brisk\b/.test(text))
+        .map(([w]) => w)
+      expect(where, language).toEqual(['rule #0 match'])
+      expect(policy.rules[0].effect, language).toBe('ask')
+      // 每一处 object.risk 的引用都落在 `has(object.risk) && (…)` 的守卫里
+      const match = policy.rules[0].match!
+      const guard = match.indexOf('has(object.risk) &&')
+      expect(guard, language).toBeGreaterThanOrEqual(0)
+      const uses = [...match.matchAll(/object\.risk\b/g)].map((m) => m.index!)
+      expect(uses.length, language).toBeGreaterThan(1)
+      // 第一处是 has() 里的那一个，其余都在守卫之后、同一对括号之内
+      expect(uses[0], language).toBe(guard + 'has('.length)
+      const groupStart = match.lastIndexOf('(', guard)
+      let depth = 0
+      let groupEnd = -1
+      for (let i = groupStart; i < match.length; i++) {
+        if (match[i] === '(') depth++
+        else if (match[i] === ')' && --depth === 0) {
+          groupEnd = i
+          break
+        }
+      }
+      for (const at of uses) {
+        expect(at, `${language} @${at}`).toBeGreaterThan(groupStart)
+        expect(at, `${language} @${at}`).toBeLessThan(groupEnd)
+      }
+    }
+  })
+
+  it('BP-R3 ask-on-command 读的 object.risk 字段都是 CommandRisk 的键、比较的类别都是已知类别、阈值是 0.9（类型 / 类别表改名时这里先红）', () => {
+    const RISK_KEYS = ['category', 'confidence', 'readOnly', 'probabilities', 'model']
+    for (const { language, policy } of parsedAll().filter((p) => p.name === 'ask-on-command')) {
+      const match = policy.rules[0].match!
+      const fields = [...match.matchAll(/object\.risk\.(\w+)/g)].map((m) => m[1])
+      expect(fields.length, language).toBeGreaterThan(0)
+      for (const field of fields) expect(RISK_KEYS, `${language}: ${field}`).toContain(field)
+
+      const compared = [...match.matchAll(/object\.risk\.category\s*(?:==|!=)\s*'([^']*)'/g)].map(
+        (m) => m[1]
+      )
+      for (const list of match.matchAll(/object\.risk\.category\s+in\s*\[([^\]]*)\]/g)) {
+        compared.push(...[...list[1].matchAll(/'([^']*)'/g)].map((m) => m[1]))
+      }
+      expect(compared, language).toEqual(['read_only'])
+      for (const category of compared) {
+        expect(COMMAND_RISK_CATEGORIES as readonly string[], `${language}: ${category}`).toContain(
+          category
+        )
+      }
+
+      const thresholds = [...match.matchAll(/object\.risk\.readOnly\s*>=\s*([\d.]+)/g)].map((m) =>
+        Number(m[1])
+      )
+      expect(thresholds, language).toEqual([0.9])
+    }
   })
 })
 

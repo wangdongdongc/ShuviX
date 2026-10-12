@@ -541,6 +541,9 @@
     "defaultProvider": "デフォルトプロバイダー",
     "defaultModel": "デフォルトモデル",
     "defaultModelNone": "なし",
+    "classifierModelRow": "分類モデル",
+    "classifierModelRowDesc": "コマンドを実行する前に、分類モデルでそれがどの種類の操作か（読み取り専用、個人ファイルに触れる、ファイルを変更、ソフトウェアのインストール、データの送信、データの削除…）を判定します。サンドボックス外のコマンドが明らかに読み取り専用（read_only で確率 0.9 以上）と判定されれば、確認も自動レビューもなしで実行し、それ以外はこれまでどおり確認します。結果は object.risk としてセキュリティポリシーに渡され、分類はすべて「モニター → 分類器」に記録されます。選ばなければ分類しません。分類モデルは独立した種類のモデルです（例：OpenRouter や OpenCode の Jev）。",
+    "classifierModelNone": "分類しない",
     "appearanceGroup": "外観",
     "languageGroup": "言語",
     "themeMode": "テーマモード",
@@ -892,7 +895,34 @@
     "chromeExtRepair": "修復",
     "chromeExtHostPending": "登録しています…",
     "chromeExtHostInstalled": "登録先",
-    "chromeExtHostNoBrowser": "このコンピューターに Chromium 系ブラウザーが見つからない"
+    "chromeExtHostNoBrowser": "このコンピューターに Chromium 系ブラウザーが見つからない",
+    "monitorSubTabClassifier": "分類器",
+    "classifierLog": {
+      "hint": "分類モデルの呼び出しはすべてここに記録されます：何を尋ね、何を送り、どう答え、どれだけかかったか。最新の {{max}} 件を保持します。",
+      "empty": "まだ分類の記録がありません。「設定 → 一般」で分類モデルを選ぶと、コマンドの実行前に分類されます。",
+      "allScenes": "すべての場面",
+      "allStatuses": "すべての状態",
+      "scenes": {
+        "command-risk": "コマンドのリスク"
+      },
+      "status": {
+        "ok": "成功",
+        "incomplete": "回答が不完全",
+        "failed": "失敗",
+        "timeout": "タイムアウト",
+        "aborted": "キャンセル",
+        "misconfigured": "設定に問題"
+      },
+      "model": "モデル",
+      "duration": "所要時間",
+      "session": "セッション",
+      "toolCall": "ツール呼び出し",
+      "subject": "分類対象",
+      "questions": "設問と回答",
+      "sent": "分類器に送った内容",
+      "rawAnswers": "生の回答",
+      "clearConfirm": "分類器のログをすべて削除しますか？"
+    }
   },
   "about": {
     "description": "あなたのAIアシスタント",

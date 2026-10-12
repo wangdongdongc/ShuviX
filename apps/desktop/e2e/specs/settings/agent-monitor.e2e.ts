@@ -6,8 +6,8 @@
  * `monitorSnapshot()` —— 没有事件计数器、没有孤儿（会话删了它的行一起没），缓存与花费取自 `pi.usage`。
  *
  * 实例复用（减少启动开销，故几组用例收在同一文件）：
- *   - 组一（AM-1/2/10/8/9）：无 provider 的全新实例 —— 空态、tab 存在性、未发消息的
- *     新会话横幅缺席、设置页形态与旧 hash 回落；
+ *   - 组一（AM-1/2/10/8/9/9b）：无 provider 的全新实例 —— 空态、tab 存在性、未发消息的
+ *     新会话横幅缺席、设置页形态（两个子页）与旧 hash 回落；
  *   - 组二（AM-3~7、AM-11~23）：fakeProvider 实例 —— 根 agent 上屏、相位灯、血缘缩进、
  *     删会话连同派生行一起消失、详情手风琴，横幅标记的出现/相位/点击三联动/筛选 chip，缓存命中率的
  *     三态（尚无用量 / 未上报 / 百分数）、按 token 加权的累计、中止不计入而零内容空回复计入（它也是花费，
@@ -46,6 +46,7 @@ import zh from '../../../../../packages/chat-protocol/src/i18n/locales/zh.json'
 import { listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../harness/fakeProvider'
 import { launchApp, type E2EApp } from '../../harness/launch'
+import { PROVIDER_KEY_ENV } from '../../harness/providerEnv'
 import {
   chatPane,
   monitorSettingsPane,
@@ -161,7 +162,7 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
   let settings: CdpClient | null = null
 
   beforeAll(async () => {
-    app = await launchApp()
+    app = await launchApp({ env: PROVIDER_KEY_ENV })
     await waitRendererReady(app.main)
     pane = rightPanelPane(app.main)
   })
@@ -214,22 +215,15 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
     expect(list.some((e) => e.agentId === sid || e.rootSessionId === sid)).toBe(false)
   })
 
-  it('AM-8 设置窗口只剩 LLM 请求子页：子标签条恰 1 个 tab，顶层导航无「智能体」项（旧 tab 的 lucide-bot 图标不再出现）', async () => {
-    settings = await app.openSettings('monitor/httpLogs')
-    // 构造器自带 [data-monitor-toolbar] 就绪等待
-    const ms = await monitorSettingsPane(settings)
-    expect(await ms.subTabCount()).toBe(1)
-    expect(await ms.navIcons()).not.toContain('lucide-bot')
-  })
-
-  it('AM-9 旧 hash monitor/agents 回落：与 AM-8 同态（唯一子 tab 激活），hash 不被重写', async () => {
-    // openSettings 对已存在窗口只聚焦不切 tab，且按「url 含 #settings」找 target —— 旧窗必须死透、
-    // 连 target 也从 /json 里消失，才能保证重开的是新窗、连上的也是新窗。
+  /** 关掉设置窗口并等它的 target 从 /json 里消失（openSettings 对已存在的窗口只聚焦、不切 tab） */
+  async function closeSettings(): Promise<void> {
+    if (!settings) return
     // 判据取 /json（主进程侧的事实），不取页内探活：页内 eval 在窗口拆掉时可能收不到回包，
     // 而「800ms 没回包就算死了」在满载时会把一个还活着的窗口当成已死。
     // window.close() 与回包赛跑：回包先到则 resolve，socket 先断则 reject（cdp.ts 的 onclose），都不挂
-    await settings!.eval('window.close()').catch(() => undefined)
-    settings!.close()
+    await settings.eval('window.close()').catch(() => undefined)
+    settings.close()
+    settings = null
     await until(
       async () =>
         !(await listTargets(app.port)).some(
@@ -237,13 +231,45 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
         ) || null,
       'settings window target gone from /json'
     )
+  }
 
+  it('AM-8 设置窗口监视器页恰两个子页（LLM 请求 / 分类器），monitor/httpLogs 停在第一个；顶层导航无「智能体」项（旧 tab 的 lucide-bot 图标不再出现）', async () => {
+    settings = await app.openSettings('monitor/httpLogs')
+    // 构造器自带工具栏就绪等待
+    const ms = await monitorSettingsPane(settings)
+    expect(await ms.subTabCount()).toBe(2)
+    expect(await ms.subTabIcons()).toEqual(['lucide-file-text', 'lucide-scan-search'])
+    expect(await ms.activeSubTab()).toBe(0)
+    expect(await ms.page()).toBe('httpLogs')
+    expect(await ms.navIcons()).not.toContain('lucide-bot')
+  })
+
+  it('AM-9 旧 hash monitor/agents 回落到 LLM 请求（第一个子 tab 激活），hash 不被重写', async () => {
+    await closeSettings()
     settings = await app.openSettings('monitor/agents')
     const ms = await monitorSettingsPane(settings)
-    expect(await ms.subTabCount()).toBe(1)
+    expect(await ms.subTabCount()).toBe(2)
     expect(await ms.subTabActive()).toBe(true)
+    expect(await ms.activeSubTab()).toBe(0)
+    expect(await ms.page()).toBe('httpLogs')
     // 子段非法只影响回落到哪个子页，hash 原样保留（不重写成 monitor/httpLogs）
     expect(await ms.hash()).toBe('#settings/monitor/agents')
+  })
+
+  it('AM-9b monitor/classifierLogs 直接停在第二个子 tab（分类器日志页）；点第一个回到 LLM 请求', async () => {
+    await closeSettings()
+    settings = await app.openSettings('monitor/classifierLogs')
+    const ms = await monitorSettingsPane(settings)
+    expect(await ms.subTabCount()).toBe(2)
+    expect(await ms.activeSubTab()).toBe(1)
+    expect(await ms.page()).toBe('classifierLogs')
+
+    await ms.clickSubTab(0)
+    await until(
+      async () => (await ms.page()) === 'httpLogs' || null,
+      'back on the LLM request page'
+    )
+    expect(await ms.activeSubTab()).toBe(0)
   })
 })
 
@@ -259,7 +285,7 @@ describe('fakeProvider：运行时的上屏、相位、血缘与详情', () => {
   const sids: Record<string, string> = {}
 
   beforeAll(async () => {
-    app = await launchApp()
+    app = await launchApp({ env: PROVIDER_KEY_ENV })
     provider = await startFakeProvider()
     await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
     await waitRendererReady(app.main)
@@ -961,7 +987,7 @@ describe('重启：只列打开着的会话', () => {
 
   beforeAll(async () => {
     provider = await startFakeProvider()
-    app = await launchApp()
+    app = await launchApp({ env: PROVIDER_KEY_ENV })
     await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
     await waitRendererReady(app.main)
   })
@@ -1008,7 +1034,7 @@ describe('重启：只列打开着的会话', () => {
     const home = first.home
     await first.stop({ keepHome: true })
     app = undefined
-    app = await launchApp({ home })
+    app = await launchApp({ home, env: PROVIDER_KEY_ENV })
     await waitRendererReady(app.main)
     const main = app.main
 

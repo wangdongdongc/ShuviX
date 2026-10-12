@@ -4,14 +4,14 @@ shuvix-id: policy:builtin:ask-on-command
 shuvix-builtin: true
 name: ask-on-command
 shuvix-displayName: Ask Before Running an Unconfined Command
-description: A bash / PowerShell / ssh command that is not confined to the sandbox asks you per command; confined commands run without asking.
+description: A bash / PowerShell / ssh command that is not confined to the sandbox asks you per command — unless your classifier model rates it read-only with high confidence; confined commands run without asking.
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [command]
 shuvix-policy-rules:
   - effect: ask
     action: [execute]
-    match: '!has(object.sandboxed) || !object.sandboxed'
+    match: "(!has(object.sandboxed) || !object.sandboxed) && !(has(object.risk) && object.risk.category == 'read_only' && object.risk.readOnly >= 0.9)"
     prompt: This command is not confined — once allowed it runs with your full system privileges, any file, any network access. Read what it actually does before allowing.
 ---
 
@@ -33,8 +33,19 @@ without asking. What asks:
 - every ssh command — it runs on the remote machine, which no local sandbox
   reaches.
 
-The ask is decided by the `sandboxed` attribute the host reports for this
-run, never by what the command text looks like.
+With a classifier model, a command from any of these that the classifier
+rates plainly read-only runs without asking (see below).
+
+Whether to ask is decided by the `sandboxed` attribute the host reports for
+this run — and, if you picked a classifier model (Settings → General), by its
+classification: a command the classifier puts in the `read_only` category with
+a probability of at least 0.9 runs without asking and without the automatic
+review (`object.risk.category` / `object.risk.readOnly`). Without a classifier
+model, or when classifying fails, times out or comes back incomplete, there is
+no `object.risk` and the command asks as before. The classifier only judges
+what kind of action a command is — it cannot see a script's contents or what
+you asked for — so anything that is not plainly read-only still asks. Every
+classification is listed under Settings → Monitor → Classifier.
 
 **What keeps a confined command confined**, besides the file boundary: it
 cannot open apps, send Apple Events or schedule jobs (`open`, `osascript`,
@@ -54,4 +65,6 @@ outside the sandbox and the file boundary would be moot.
   clearly harmful and puts the rest in front of you with its opinion.
 
 **To adjust**: create an override copy and edit it. Dropping the `match`
-line makes every command ask again, confined or not.
+line makes every command ask again, confined or not; dropping the
+`object.risk` part keeps every unconfined command asking even with a
+classifier model, and raising or lowering 0.9 changes how sure it has to be.

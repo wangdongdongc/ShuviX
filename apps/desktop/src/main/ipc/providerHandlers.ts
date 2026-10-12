@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { routeExternalUrl } from '../services/externalOpen'
 import { providerService } from '../services/providerService'
 import { providerOAuthService } from '../services/providerOAuthService'
+import { commandClassifier } from '../services/commandClassifier'
 import type {
   ProviderOAuthUiEvent,
   ProviderAddModelParams,
@@ -63,6 +64,11 @@ export function registerProviderHandlers(): void {
   /** 获取所有可用模型（已启用提供商 + 已启用模型，用于对话选择器） */
   ipcMain.handle('provider:listAvailableModels', () => {
     return providerService.listAvailableModels()
+  })
+
+  /** 可选的命令分类模型（已启用提供商目录里的「分类」类模型，见 commandClassifier） */
+  ipcMain.handle('provider:listClassifierModels', () => {
+    return commandClassifier.listModels()
   })
 
   /** 切换模型启用状态 */

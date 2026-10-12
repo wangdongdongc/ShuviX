@@ -781,6 +781,40 @@ export const migrations: Migration[] = [
         )
       `)
     }
+  },
+  {
+    version: 32,
+    description:
+      '分类器调用日志：classifier_logs 表（每次调用分类模型一行 —— 场景、对象摘要、题目与发送内容、答案、耗时、状态；供审计，与场景无关）',
+    up: (db) => {
+      // 通用于所有分类场景（今天只有命令风险分类 scene='command-risk'）：request / response 原样存 pi 的
+      // ClassifierContext 与答案 JSON，界面按题型通用渲染，新场景不用加列、不用加页面。条数有上限（服务层修剪）
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS classifier_logs (
+          id          TEXT    PRIMARY KEY,
+          createdAt   INTEGER NOT NULL,
+          scene       TEXT    NOT NULL,
+          sessionId   TEXT    NOT NULL DEFAULT '',
+          toolCallId  TEXT    NOT NULL DEFAULT '',
+          subject     TEXT    NOT NULL DEFAULT '',
+          provider    TEXT    NOT NULL DEFAULT '',
+          model       TEXT    NOT NULL DEFAULT '',
+          request     TEXT    NOT NULL DEFAULT '',
+          response    TEXT    NOT NULL DEFAULT '',
+          status      TEXT    NOT NULL,
+          error       TEXT    NOT NULL DEFAULT '',
+          ms          INTEGER NOT NULL DEFAULT 0,
+          inputTokens INTEGER NOT NULL DEFAULT 0,
+          cost        REAL    NOT NULL DEFAULT 0
+        )
+      `)
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_classifier_logs_createdAt ON classifier_logs(createdAt DESC)'
+      )
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_classifier_logs_scene ON classifier_logs(scene, createdAt DESC)'
+      )
+    }
   }
 ]
 

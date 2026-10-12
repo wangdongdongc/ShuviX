@@ -45,6 +45,7 @@ export { evaluate, buildMatchContext, type EvaluateOpts } from './evaluate'
 export { compileMatch, evaluateMatch, evaluateLet } from './celMatch'
 export { executeDecision } from './enforce'
 export { createSecurityContext } from './context'
+export { isCommandRisk, commandRiskOf, pickCommandRisk } from './commandRisk'
 export { urlObjectOf } from './urlObject'
 export {
   projectCommandFacts,

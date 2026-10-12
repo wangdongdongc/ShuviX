@@ -114,7 +114,11 @@ export type AttrScalar = string | number | boolean
  * cel-js 的列表是强类型的（`[null,'x']` 直接报 type mismatch），层级越深越容易
  * 写出求值期才炸的表达式，而 deny 规则求值失败会 fail-safe 成命中。
  */
-export type AttrValue = AttrScalar | string[] | Record<string, AttrScalar | string[]>[]
+export type AttrValue =
+  | AttrScalar
+  | string[]
+  | Record<string, AttrScalar | string[] | Record<string, AttrScalar>>
+  | Record<string, AttrScalar | string[]>[]
 
 /**
  * 客体：操作对象 —— **开放属性文档**。`type` 只是粗分类标签（询问材料推导、
@@ -403,6 +407,16 @@ export interface SecurityHostProvider {
     /** 同步解析（CEL 求值是同步的，解析必须在求值前就绪） */
     analyze(command: string): ShellFacts
   }
+  /**
+   * 命令风险分类（宿主配了分类模型时实现）：enforceCommand 在策略求值**之前**等它 —— CEL 求值是
+   * 同步的，分类是一次网络请求，只能先算好挂上去（客体的 `risk`，见 CommandRisk）。每条命令都分，
+   * 不论是否在沙箱里。回 null = 这次没分类（未配置 / 失败 / 超时），客体上就没有 risk；抛错按 null
+   * 处理。signal 随工具调用取消；toolCallId 给宿主记分类日志时对上是哪次调用。省略 = 不分类。
+   */
+  classifyCommand?(
+    input: CommandObjectInput,
+    opts: { signal?: AbortSignal; toolCallId?: string }
+  ): Promise<CommandRisk | null>
   /** 已共享的挂起/恢复原语；无前端时按 EnforceOpts.missingChannel 处置 */
   requestUserInput?(req: InputRequest): Promise<InputResponse>
   /**
@@ -528,6 +542,61 @@ export interface McpInvocationFacts {
 }
 
 export type EnforceOutcome = { status: 'allowed' } | { status: 'feedback'; text: string }
+
+/**
+ * 命令风险分类的类别（分类器做一道单选题：这条命令属于哪一类，多项符合时选最危险的那一项）。
+ * 类别名就是策略里 `object.risk.category` 的取值，也是 `object.risk.probabilities` 的键。
+ */
+export const COMMAND_RISK_CATEGORIES = [
+  /** 只读：读取、列出、搜索或显示信息（本地或远端服务），什么都不改 */
+  'read_only',
+  /** 读取或列出项目之外的个人文件或数据（文档、桌面、下载、笔记、shell 历史、SSH / 云凭据目录…） */
+  'personal_data',
+  /** 运行项目自己的脚本、构建或测试 —— 效果取决于项目代码，分类器看不见 */
+  'runs_project_code',
+  /** 只在当前项目或临时目录里创建、修改或删除文件 */
+  'local_change',
+  /** 改动项目之外的文件或设置、用户或系统配置 */
+  'outside_change',
+  /** 安装、升级或卸载软件或依赖包 */
+  'install',
+  /** 在远端服务器、集群、数据库或云服务上创建、修改、重启或删除东西 */
+  'remote_change',
+  /** 把本地文件或数据上传、发送到别的机器或在线服务 */
+  'data_out',
+  /** 打印、复制或外发密钥 / 令牌 / 密码 / 凭据文件 / .env 的内容 */
+  'secrets',
+  /** 删除或覆盖可能找不回的数据 */
+  'destructive',
+  /** 提权（sudo / 管理员）或改权限、属主 */
+  'privilege',
+  /** 留下持续运行或日后自动运行的东西（服务、定时任务、启动项、shell 启动文件、git hook） */
+  'persistence'
+] as const
+
+export type CommandRiskCategory = (typeof COMMAND_RISK_CATEGORIES)[number]
+
+/**
+ * 命令的风险分类 —— 宿主的分类模型给出（`SecurityHostProvider.classifyCommand`），挂在命令客体的
+ * `risk` 上供策略读：`object.risk.category == 'read_only' && object.risk.readOnly >= 0.9` 之类。
+ *
+ * 分类没做成（没设分类模型 / 请求失败 / 超时 / 答案不完整）时客体上**没有**这个键：严格语义下引用它的
+ * ask / deny 规则按命中、allow 规则按不命中，所以分类出了问题只会多问、不会多放。要区分就写
+ * `has(object.risk)`。它是模型的判断，不是证明 —— 适合用来少问或加严，单独拿它放行要自己掂量。
+ */
+// type 而非 interface：要能放进客体的开放属性表（interface 没有隐式索引签名）
+export type CommandRisk = {
+  /** 选中的类别（COMMAND_RISK_CATEGORIES 之一） */
+  category: CommandRiskCategory
+  /** 选中类别的概率（0–1） */
+  confidence: number
+  /** `read_only` 的概率（0–1）—— 内置 ask-on-command 读它，单独拎出来免得写 `probabilities.read_only` */
+  readOnly: number
+  /** 每个类别的概率（0–1），键是类别名 */
+  probabilities: Record<CommandRiskCategory, number>
+  /** 给出分类的模型（`<provider>/<model>`） */
+  model: string
+}
 
 /** enforceCommand 的入参（object 属性文档由门面构造） */
 export interface CommandObjectInput {
@@ -700,6 +769,8 @@ export interface SecurityDecisionRecord {
   userResponse?: 'allowed' | 'allowed_remember' | 'denied' | 'feedback' | 'cancel'
   /** 自动审查的判决（ask 经审查接缝回答了才有；转给人时 userResponse 另记人的回答） */
   review?: { decision: PermissionDecision; risk: PermissionRisk; source: string; ms: number }
+  /** 命令客体的风险分类（分了才有，见 CommandRisk） */
+  commandRisk?: CommandRisk
   evaluateMs: number
   /** 含挂起等待的总耗时（仅 ask 路径有意义） */
   totalMs?: number

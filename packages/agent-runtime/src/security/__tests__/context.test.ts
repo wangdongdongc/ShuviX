@@ -15,11 +15,13 @@ import type {
 } from '@shuvix/chat-protocol/types/inputRequest'
 import type {
   CommandObjectInput,
+  CommandRisk,
   MatchContext,
   ParsedPolicyFile,
   PermissionReviewAnswer,
   PolicyRuleSpec,
   SecurityContext,
+  SecurityDecisionRecord,
   SecurityHostProvider,
   SecurityObject,
   UrlObjectInput,
@@ -4115,5 +4117,967 @@ describe('createSecurityContext — 用户自己的 ask-on-read', () => {
       expectOnlyRetiredVarWarnings(warn)
       expect(warn).toHaveBeenCalled()
     }
+  })
+})
+// ─── 命令风险分类（classifyCommand 接缝 → object.risk / 决策记录的 commandRisk）──────────────
+//
+// 宿主配了分类模型时，enforceCommand 在策略求值**之前**等这条命令的分类（CEL 求值是同步的），完整的
+// 一份作为 `object.risk` 挂上命令客体（只留已知字段的新对象，probabilities 也是新的），决策记录带上
+// `commandRisk`。没分成（没接缝 / 回 null / 抛错 / 不完整 / 被中止）客体上就没有 risk —— 引用它的规则
+// 按严格语义 fail-safe：ask / deny 当命中、allow 当不命中，只会多问、不会多放。接缝与 signal 赛跑（同审查）。
+// 内置 ask-on-command 读它：分到 read_only 且 readOnly >= 0.9 的命令不问（RK-15）。
+
+describe('createSecurityContext — 命令风险分类（classifyCommand → object.risk）', () => {
+  type Classifier = NonNullable<SecurityHostProvider['classifyCommand']>
+  type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+
+  /** 缺省分类：local_change —— 内置 ask-on-command 照样问没圈住的命令 */
+  const RISK: CommandRisk = {
+    category: 'local_change',
+    confidence: 0.7,
+    readOnly: 0.1,
+    probabilities: {
+      read_only: 0.1,
+      personal_data: 0,
+      runs_project_code: 0.05,
+      local_change: 0.7,
+      outside_change: 0.05,
+      install: 0,
+      remote_change: 0,
+      data_out: 0,
+      secrets: 0,
+      destructive: 0.1,
+      privilege: 0,
+      persistence: 0
+    },
+    model: 'openrouter/~typesafe/jev-latest'
+  }
+  const riskWith = (over: Partial<CommandRisk>): CommandRisk => ({
+    ...RISK,
+    ...over,
+    probabilities: { ...RISK.probabilities, ...over.probabilities }
+  })
+  /** 选中 category、把握与 readOnly 都按 p 给的一份（概率表里 category 那一项也是 p） */
+  const readOnlyRisk = (
+    p: number,
+    category: CommandRisk['category'] = 'read_only'
+  ): CommandRisk => ({
+    ...RISK,
+    category,
+    confidence: category === 'read_only' ? p : Math.max(0, 1 - p),
+    readOnly: p,
+    probabilities: {
+      ...RISK.probabilities,
+      local_change: 0,
+      read_only: p,
+      ...(category === 'read_only' ? {} : { [category]: Math.max(0, 1 - p) })
+    }
+  })
+  const withProbabilities = (probabilities: Record<string, unknown>): CommandRisk =>
+    ({ ...RISK, probabilities }) as unknown as CommandRisk
+
+  const BASH = { toolCallId: 'tc-rk', toolName: 'bash' }
+  const CONFINED: CommandObjectInput = { channel: 'bash', command: 'ls -la', sandboxed: true }
+  const UNCONFINED: CommandObjectInput = { channel: 'bash', command: 'ls -la' }
+
+  const usedSids = new Set<string>()
+  let seq = 0
+  afterEach(() => {
+    for (const sid of usedSids) {
+      clearReviewState(sid)
+      clearSessionDecisions(sid)
+    }
+    usedSids.clear()
+  })
+
+  interface RiskProbe {
+    ctx: SecurityContext
+    sid: string
+    classify: ReturnType<typeof vi.fn<Classifier>> | undefined
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+    warn: Mock<(msg: string) => void>
+    info: Mock<(msg: string) => void>
+    /** derived 规则截下的客体（每次评估一条） */
+    objects: Array<MatchContext['object']>
+    lastObject: () => MatchContext['object'] | undefined
+  }
+
+  /**
+   * 本条用例自己的会话 + 分类接缝（缺省回 RISK；`null` = 宿主不实现）+ 一律允许的询问通道 +
+   * 截客体的 derived 规则（静态 allow 层，永不命中）
+   */
+  function riskProbe(
+    opts: {
+      classify?: ReturnType<typeof vi.fn<Classifier>> | null
+      policies?: ParsedPolicyFile[]
+      review?: Reviewer
+      overrides?: Partial<SecurityHostProvider>
+    } = {}
+  ): RiskProbe {
+    const sid = `context-risk-${++seq}`
+    usedSids.add(sid)
+    const classify =
+      opts.classify === null ? undefined : (opts.classify ?? vi.fn<Classifier>(async () => RISK))
+    const requestUserInput = vi.fn(
+      async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+    )
+    const warn = vi.fn<(msg: string) => void>()
+    const info = vi.fn<(msg: string) => void>()
+    const objects: Array<MatchContext['object']> = []
+    const ctx = createSecurityContext(
+      { kind: 'agent', sessionId: sid, agentKind: 'root' },
+      ENVIRONMENT,
+      makeProvider(
+        { allowList: [] },
+        {
+          requestUserInput,
+          logger: { info, warn, error: vi.fn() },
+          getUserPolicies: () => opts.policies ?? [],
+          derivedRules: () => [
+            {
+              id: 'derived:capture',
+              effect: 'allow' as const,
+              tier: 'static-allow' as const,
+              source: { kind: 'derived' as const },
+              matches: (matchCtx) => {
+                objects.push(matchCtx.object)
+                return false
+              }
+            }
+          ],
+          ...(classify ? { classifyCommand: classify } : {}),
+          ...(opts.review ? { onPermissionRequest: opts.review } : {}),
+          ...opts.overrides
+        }
+      )
+    )
+    return {
+      ctx,
+      sid,
+      classify,
+      requestUserInput,
+      warn,
+      info,
+      objects,
+      lastObject: () => objects[objects.length - 1]
+    }
+  }
+
+  /** 固定交回某一份分类的接缝 */
+  const returning = (risk: CommandRisk): ReturnType<typeof vi.fn<Classifier>> =>
+    vi.fn<Classifier>(async () => risk)
+
+  const warnings = (probe: RiskProbe): string[] => probe.warn.mock.calls.map((c) => String(c[0]))
+  /** 规则求值失败的告警（fail-safe 命中与「当不命中」都算） */
+  const evalFailures = (probe: RiskProbe): string[] =>
+    warnings(probe).filter((w) => w.includes('match evaluation failed'))
+  const latest = (probe: RiskProbe): SecurityDecisionRecord => getSessionDecisions(probe.sid)[0]
+  const decisionLines = (probe: RiskProbe): string[] =>
+    probe.info.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('security_decision '))
+  const hasRiskKey = (object: MatchContext['object'] | undefined): boolean =>
+    Object.prototype.hasOwnProperty.call(object, 'risk')
+
+  /** 让已排队的微任务 / 定时器跑完（门面到接缝之间隔着几个 await） */
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+  /** 一个能从外面放行的 Promise */
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((r) => {
+      resolve = r
+    })
+    return { promise, resolve }
+  }
+
+  it('RK-1 每次 enforceCommand 恰调一次分类：入参是同一个 input 对象，第二个参数恰是 { signal, toolCallId }（同一个 signal、本次的 toolCallId，别无它键）；没给 signal 时 .signal 是 undefined', async () => {
+    const probe = riskProbe()
+    const ac = new AbortController()
+    const withSignal: CommandObjectInput = { channel: 'bash', command: 'ls -la', sandboxed: true }
+    await probe.ctx.enforceCommand(withSignal, { ...BASH, signal: ac.signal })
+    expect(probe.classify).toHaveBeenCalledTimes(1)
+    expect(probe.classify!.mock.calls[0][0]).toBe(withSignal)
+    const first = probe.classify!.mock.calls[0][1]
+    expect(first.signal).toBe(ac.signal)
+    expect(first.toolCallId).toBe('tc-rk')
+    expect(Object.keys(first).sort()).toEqual(['signal', 'toolCallId'])
+
+    const noSignal: CommandObjectInput = { channel: 'bash', command: 'pwd', sandboxed: true }
+    await probe.ctx.enforceCommand(noSignal, BASH)
+    expect(probe.classify).toHaveBeenCalledTimes(2)
+    expect(probe.classify!.mock.calls[1][0]).toBe(noSignal)
+    const second = probe.classify!.mock.calls[1][1]
+    expect(second.signal).toBeUndefined()
+    expect(second.toolCallId).toBe('tc-rk')
+    expect(Object.keys(second).every((k) => k === 'signal' || k === 'toolCallId')).toBe(true)
+  })
+
+  it('RK-1b 每次调用带自己的 toolCallId（ssh / powershell 同样）', async () => {
+    const probe = riskProbe()
+    await probe.ctx.enforceCommand(
+      { channel: 'ssh', command: 'uptime', host: 'prod' },
+      { toolCallId: 'tc-ssh', toolName: 'mcp__ssh__exec' }
+    )
+    await probe.ctx.enforceCommand(
+      { channel: 'powershell', command: 'Get-Date' },
+      { toolCallId: 'tc-ps', toolName: 'powershell' }
+    )
+    await probe.ctx.enforceCommand(CONFINED, { toolCallId: 'tc-bash-2', toolName: 'bash' })
+    expect(probe.classify!.mock.calls.map((c) => c[1].toolCallId)).toEqual([
+      'tc-ssh',
+      'tc-ps',
+      'tc-bash-2'
+    ])
+    expect(probe.classify!.mock.calls.map((c) => c[0].channel)).toEqual([
+      'ssh',
+      'powershell',
+      'bash'
+    ])
+  })
+
+  it('RK-2 先分类后求值：分类没回来时没有任何评估、没有卡片；回来后客体上的 risk 与接缝交回的逐字段相同', async () => {
+    const pending = deferred<CommandRisk | null>()
+    const probe = riskProbe({ classify: vi.fn<Classifier>(() => pending.promise) })
+    const result = probe.ctx.enforceCommand(UNCONFINED, BASH)
+    await flush()
+    await flush()
+    expect(probe.classify).toHaveBeenCalledTimes(1)
+    expect(probe.objects).toHaveLength(0)
+    expect(probe.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(probe.sid)).toHaveLength(0)
+
+    pending.resolve(RISK)
+    await expect(result).resolves.toEqual({ status: 'allowed' })
+    expect(probe.objects.length).toBeGreaterThan(0)
+    expect(probe.lastObject()!.risk).toEqual(RISK)
+    // 没圈住的 local_change 命令照旧走到卡片（分类只是多了一个属性，不改判决）
+    expect(probe.requestUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it.each<[string, CommandObjectInput, string]>([
+    ['圈住的 bash', { channel: 'bash', command: 'ls -la', sandboxed: true }, 'bash'],
+    ['powershell', { channel: 'powershell', command: 'Get-Date' }, 'powershell'],
+    ['带 host 的 ssh', { channel: 'ssh', command: 'uptime', host: 'prod' }, 'mcp__ssh__exec']
+  ])('RK-3 %s：分类恰一次、客体带上 risk', async (_label, input, toolName) => {
+    const probe = riskProbe()
+    await probe.ctx.enforceCommand(input, { toolCallId: 'tc-rk3', toolName })
+    expect(probe.classify).toHaveBeenCalledTimes(1)
+    expect(probe.classify!.mock.calls[0][0]).toBe(input)
+    expect(probe.lastObject()!.risk).toEqual(RISK)
+    expect(latest(probe).commandRisk).toEqual(RISK)
+  })
+
+  it('RK-4 宿主不实现接缝：客体上没有 risk 键，判决与 PO-7 相同（圈住 → default:command 放行、没圈住 → ask-on-command#0），记录不带 commandRisk，零告警', async () => {
+    const probe = riskProbe({ classify: null })
+    await expect(probe.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({ status: 'allowed' })
+    expect(hasRiskKey(probe.lastObject())).toBe(false)
+    expect([latest(probe).effect, latest(probe).winning]).toEqual(['allow', 'default:command'])
+    expect(latest(probe).commandRisk).toBeUndefined()
+    expect(probe.requestUserInput).not.toHaveBeenCalled()
+
+    await expect(probe.ctx.enforceCommand(UNCONFINED, BASH)).resolves.toEqual({
+      status: 'allowed'
+    })
+    expect(hasRiskKey(probe.lastObject())).toBe(false)
+    expect([latest(probe).effect, latest(probe).winning]).toEqual(['ask', 'ask-on-command#0'])
+    expect(latest(probe).commandRisk).toBeUndefined()
+    expect(probe.requestUserInput).toHaveBeenCalledTimes(1)
+
+    for (const line of decisionLines(probe)) expect(line).not.toContain('commandRisk')
+    expect(probe.warn).not.toHaveBeenCalled()
+  })
+
+  it('RK-5 接缝回 null（「这次不分」）：没有 risk、零告警、记录不带 commandRisk', async () => {
+    const probe = riskProbe({ classify: vi.fn<Classifier>(async () => null) })
+    await probe.ctx.enforceCommand(CONFINED, BASH)
+    expect(probe.classify).toHaveBeenCalledTimes(1)
+    expect(hasRiskKey(probe.lastObject())).toBe(false)
+    expect(latest(probe).commandRisk).toBeUndefined()
+    expect(probe.warn).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, () => ReturnType<typeof vi.fn<Classifier>>]>([
+    [
+      '异步 reject',
+      () => vi.fn<Classifier>(async () => Promise.reject(new Error('classifier down')))
+    ],
+    [
+      '同步 throw',
+      () =>
+        vi.fn<Classifier>(() => {
+          throw new Error('classifier down')
+        })
+    ]
+  ])(
+    'RK-6 接缝%s：没有 risk、恰一条点名原因的告警；enforceCommand 照常收尾（没圈住 → ask-on-command 问）',
+    async (_label, make) => {
+      const probe = riskProbe({ classify: make() })
+      await expect(probe.ctx.enforceCommand(UNCONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(hasRiskKey(probe.lastObject())).toBe(false)
+      expect(latest(probe).commandRisk).toBeUndefined()
+      expect(probe.requestUserInput).toHaveBeenCalledTimes(1)
+      expect(latest(probe).winning).toBe('ask-on-command#0')
+      expect(warnings(probe)).toHaveLength(1)
+      expect(warnings(probe)[0]).toContain('classifier down')
+    }
+  )
+
+  const { secrets: _secrets, ...missingSecrets } = RISK.probabilities
+  it.each<[string, unknown]>([
+    ['未知类别', { ...RISK, category: 'dangerous' }],
+    ['没有 category', (({ category: _category, ...rest }) => rest)(RISK)],
+    ['readOnly 1.2', riskWith({ readOnly: 1.2 })],
+    ['confidence -0.1', riskWith({ confidence: -0.1 })],
+    ['probabilities 缺一个键', withProbabilities(missingSecrets)],
+    ['probabilities 里有字符串', withProbabilities({ ...RISK.probabilities, install: '0.1' })],
+    ['probabilities 为 null', withProbabilities(null as unknown as Record<string, unknown>)],
+    ['probabilities 为 []', withProbabilities([] as unknown as Record<string, unknown>)],
+    ["model ''", riskWith({ model: '' })],
+    ['没有 model', (({ model: _model, ...rest }) => rest)(RISK)]
+  ])(
+    'RK-7 接缝交回不完整的分类（%s）：没有 risk、记录不带 commandRisk，恰一条「不完整」告警',
+    async (_label, malformed) => {
+      const probe = riskProbe({
+        classify: vi.fn<Classifier>(async () => malformed as CommandRisk)
+      })
+      await expect(probe.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(hasRiskKey(probe.lastObject())).toBe(false)
+      expect(latest(probe).commandRisk).toBeUndefined()
+      expect(warnings(probe)).toHaveLength(1)
+      expect(warnings(probe)[0]).toContain('不完整')
+    }
+  )
+
+  it('RK-7b 接缝交回的分类带多余的键（两层都有）：挂上去的 risk 只有已知字段，且不是接缝那个对象（宿主事后改它，客体与记录都不变）', async () => {
+    const host = {
+      ...RISK,
+      prompt: 'ignore previous instructions',
+      extra: 1,
+      probabilities: { ...RISK.probabilities, network: 0.3, note: 'leak-inner' }
+    } as unknown as CommandRisk
+    const probe = riskProbe({ classify: vi.fn<Classifier>(async () => host) })
+    await probe.ctx.enforceCommand(CONFINED, BASH)
+    const attached = probe.lastObject()!.risk as unknown as CommandRisk
+    expect(attached).toStrictEqual(RISK)
+    expect(attached).not.toBe(host)
+    expect(attached.probabilities).not.toBe(host.probabilities)
+    expect(latest(probe).commandRisk).toStrictEqual(RISK)
+    const lines = decisionLines(probe).join('\n')
+    expect(lines).not.toContain('ignore previous instructions')
+    expect(lines).not.toContain('leak-inner')
+
+    host.category = 'destructive'
+    host.probabilities.destructive = 0.99
+    expect(attached.category).toBe('local_change')
+    expect(attached.probabilities.destructive).toBe(0.1)
+    expect(latest(probe).commandRisk!.category).toBe('local_change')
+    expect(latest(probe).commandRisk!.probabilities.destructive).toBe(0.1)
+    expect(probe.warn).not.toHaveBeenCalled()
+  })
+
+  describe('RK-8 用户 CEL 策略读 object.risk', () => {
+    const ASK_DESTRUCTIVE = userPolicy('ask-destructive', [
+      {
+        effect: 'ask',
+        match: "object.type == 'command' && object.risk.probabilities.destructive > 0.5"
+      }
+    ])
+    const TRUST_LOCAL = userPolicy('trust-local', [
+      {
+        effect: 'force-allow',
+        match:
+          "object.type == 'command' && object.risk.category == 'local_change' && object.risk.confidence >= 0.8"
+      }
+    ])
+    const DENY_DANGEROUS = userPolicy('deny-dangerous', [
+      {
+        effect: 'deny',
+        match: "object.type == 'command' && object.risk.category in ['destructive', 'secrets']"
+      }
+    ])
+
+    it('(a) ask on probabilities.destructive > 0.5（圈住的命令）：0.9 → 一张卡、用户那条胜出；0.1 → 放行、default:command；零告警', async () => {
+      const hot = riskProbe({
+        classify: returning(
+          riskWith({ probabilities: { ...RISK.probabilities, destructive: 0.9 } })
+        ),
+        policies: [ASK_DESTRUCTIVE]
+      })
+      await expect(hot.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(hot.requestUserInput).toHaveBeenCalledTimes(1)
+      expect([latest(hot).effect, latest(hot).winning]).toEqual(['ask', 'ask-destructive#0'])
+      expect(hot.warn).not.toHaveBeenCalled()
+
+      const cold = riskProbe({
+        classify: returning(
+          riskWith({ probabilities: { ...RISK.probabilities, destructive: 0.1 } })
+        ),
+        policies: [ASK_DESTRUCTIVE]
+      })
+      await expect(cold.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(cold.requestUserInput).not.toHaveBeenCalled()
+      expect([latest(cold).effect, latest(cold).winning]).toEqual(['allow', 'default:command'])
+      expect(cold.warn).not.toHaveBeenCalled()
+    })
+
+    it("(b) force-allow on category == 'local_change' && confidence >= 0.8（没圈住的命令）：0.85 → 不弹卡、用户那条胜出；0.7 → ask-on-command#0 的卡", async () => {
+      const sure = riskProbe({
+        classify: returning(riskWith({ confidence: 0.85 })),
+        policies: [TRUST_LOCAL]
+      })
+      await expect(sure.ctx.enforceCommand(UNCONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(sure.requestUserInput).not.toHaveBeenCalled()
+      expect([latest(sure).effect, latest(sure).winning]).toEqual(['allow', 'trust-local#0'])
+
+      const unsure = riskProbe({
+        classify: returning(riskWith({ confidence: 0.7 })),
+        policies: [TRUST_LOCAL]
+      })
+      await expect(unsure.ctx.enforceCommand(UNCONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(unsure.requestUserInput).toHaveBeenCalledTimes(1)
+      expect([latest(unsure).effect, latest(unsure).winning]).toEqual(['ask', 'ask-on-command#0'])
+      expect(sure.warn).not.toHaveBeenCalled()
+      expect(unsure.warn).not.toHaveBeenCalled()
+    })
+
+    it.each<[CommandRisk['category'], boolean]>([
+      ['destructive', true],
+      ['secrets', true],
+      ['local_change', false],
+      ['read_only', false]
+    ])(
+      "(c) deny on category in ['destructive','secrets']：%s → 拒绝 = %s（圈住的命令其余照常放行）",
+      async (category, denied) => {
+        const probe = riskProbe({
+          classify: returning(riskWith({ category })),
+          policies: [DENY_DANGEROUS]
+        })
+        const outcome = await probe.ctx.enforceCommand(CONFINED, BASH).then(
+          () => 'allowed',
+          (err: Error) => err.message
+        )
+        if (denied) {
+          expect(outcome).toMatch(/Denied by security policy rule/)
+          expect([latest(probe).effect, latest(probe).winning]).toEqual([
+            'deny',
+            'deny-dangerous#0'
+          ])
+        } else {
+          expect(outcome).toBe('allowed')
+          expect(latest(probe).matched).not.toContain('deny-dangerous#0')
+        }
+        expect(probe.warn).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each<[number, boolean]>([
+      [1, true],
+      [0, false]
+    ])(
+      "(d) 方括号取值 object.risk.probabilities['read_only'] >= 0.9，概率是整数 %i：命中 = %s，零告警",
+      async (p, hits) => {
+        const policy = userPolicy('bracket-gate', [
+          {
+            effect: 'deny',
+            match: "object.type == 'command' && object.risk.probabilities['read_only'] >= 0.9"
+          }
+        ])
+        const probe = riskProbe({
+          classify: returning(
+            riskWith({
+              probabilities: { ...RISK.probabilities, read_only: p, local_change: 1 - p }
+            })
+          ),
+          policies: [policy]
+        })
+        const outcome = await probe.ctx.enforceCommand(CONFINED, BASH).then(
+          () => 'allowed',
+          () => 'denied'
+        )
+        expect(outcome).toBe(hits ? 'denied' : 'allowed')
+        expect(probe.warn).not.toHaveBeenCalled()
+      }
+    )
+
+    it('(e) exists 遍历概率表：有一项（非 read_only）超过 0.5 → 命中；都不超过 → 不命中，零告警', async () => {
+      const policy = userPolicy('any-hot', [
+        {
+          effect: 'deny',
+          match:
+            "object.type == 'command' && object.risk.probabilities.exists(k, k != 'read_only' && object.risk.probabilities[k] > 0.5)"
+        }
+      ])
+      const hot = riskProbe({ classify: returning(RISK), policies: [policy] }) // local_change 0.7
+      await expect(hot.ctx.enforceCommand(CONFINED, BASH)).rejects.toThrow(
+        /Denied by security policy rule/
+      )
+      expect(hot.warn).not.toHaveBeenCalled()
+
+      const cold = riskProbe({ classify: returning(readOnlyRisk(0.95)), policies: [policy] })
+      await expect(cold.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(cold.warn).not.toHaveBeenCalled()
+    })
+
+    it('(f) 引用概率表里没有的键：has() 守卫 → false、零告警；直接比较 → ask 按 fail-safe 命中 + 一条告警', async () => {
+      const guarded = riskProbe({
+        classify: returning(RISK),
+        policies: [
+          userPolicy('guarded-network', [
+            {
+              effect: 'ask',
+              match:
+                "object.type == 'command' && has(object.risk.probabilities.network) && object.risk.probabilities.network > 0.5"
+            }
+          ])
+        ]
+      })
+      await expect(guarded.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(guarded.requestUserInput).not.toHaveBeenCalled()
+      expect(evalFailures(guarded)).toEqual([])
+
+      const bare = riskProbe({
+        classify: returning(RISK),
+        policies: [
+          userPolicy('bare-network', [
+            {
+              effect: 'ask',
+              match: "object.type == 'command' && object.risk.probabilities.network > 0.5"
+            }
+          ])
+        ]
+      })
+      await bare.ctx.enforceCommand(CONFINED, BASH)
+      expect(bare.requestUserInput).toHaveBeenCalledTimes(1)
+      expect(latest(bare).winning).toBe('bare-network#0')
+      expect(warnings(bare).filter((w) => w.includes('(fail-safe)'))).toHaveLength(1)
+    })
+  })
+
+  describe('RK-9 没有 risk 时按严格语义 fail-safe（只会多问、不会多放）', () => {
+    const ABSENT: Array<[string, () => ReturnType<typeof vi.fn<Classifier>> | null]> = [
+      ['宿主不实现接缝', () => null],
+      ['接缝回 null', () => vi.fn<Classifier>(async () => null)],
+      [
+        '接缝抛错',
+        () =>
+          vi.fn<Classifier>(async () => {
+            throw new Error('offline')
+          })
+      ]
+    ]
+
+    it.each(ABSENT)(
+      "%s：ask on risk → 当命中、弹卡 + fail-safe 告警；deny on category == 'destructive' → 拒绝；force-allow on read_only → 不命中、ask-on-command 照问",
+      async (_label, make) => {
+        const ask = riskProbe({
+          classify: make(),
+          policies: [
+            userPolicy('ask-destructive', [
+              {
+                effect: 'ask',
+                match: "object.type == 'command' && object.risk.probabilities.destructive > 0.5"
+              }
+            ])
+          ]
+        })
+        await ask.ctx.enforceCommand(CONFINED, BASH)
+        expect(ask.requestUserInput).toHaveBeenCalledTimes(1)
+        expect(latest(ask).winning).toBe('ask-destructive#0')
+        expect(warnings(ask).filter((w) => w.includes('(fail-safe)'))).toHaveLength(1)
+
+        const deny = riskProbe({
+          classify: make(),
+          policies: [
+            userPolicy('deny-destructive', [
+              {
+                effect: 'deny',
+                match: "object.type == 'command' && object.risk.category == 'destructive'"
+              }
+            ])
+          ]
+        })
+        await expect(deny.ctx.enforceCommand(CONFINED, BASH)).rejects.toThrow(
+          /Denied by security policy rule/
+        )
+        expect(latest(deny).winning).toBe('deny-destructive#0')
+
+        const trust = riskProbe({
+          classify: make(),
+          policies: [
+            userPolicy('trust-read-only', [
+              {
+                effect: 'force-allow',
+                match: "object.type == 'command' && object.risk.category == 'read_only'"
+              }
+            ])
+          ]
+        })
+        await trust.ctx.enforceCommand(UNCONFINED, BASH)
+        expect(trust.requestUserInput).toHaveBeenCalledTimes(1)
+        expect(latest(trust).winning).toBe('ask-on-command#0')
+        expect(latest(trust).matched).not.toContain('trust-read-only#0')
+      }
+    )
+
+    it.each(ABSENT)(
+      '%s：先写 has(object.risk) 的守卫式（ask / deny）→ 不弹卡、不拒绝、没有求值失败的告警',
+      async (_label, make) => {
+        const probe = riskProbe({
+          classify: make(),
+          policies: [
+            userPolicy('guarded', [
+              {
+                effect: 'ask',
+                match:
+                  "object.type == 'command' && has(object.risk) && object.risk.probabilities.destructive > 0.5"
+              },
+              {
+                effect: 'deny',
+                match:
+                  "object.type == 'command' && has(object.risk) && object.risk.category == 'destructive'"
+              }
+            ])
+          ]
+        })
+        await expect(probe.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({
+          status: 'allowed'
+        })
+        expect(probe.requestUserInput).not.toHaveBeenCalled()
+        expect(latest(probe).winning).toBe('default:command')
+        expect(evalFailures(probe)).toEqual([])
+      }
+    )
+  })
+
+  it('RK-10 记录的 commandRisk 与分类逐字段相同（12 个概率）—— 放行、询问（带 userResponse）、拒绝三种记录都有，security_decision 日志行里也有；没分类的命令与 enforcePath 的记录（接缝在也一样）都没有', async () => {
+    // 放行（圈住）
+    const allow = riskProbe()
+    await allow.ctx.enforceCommand(CONFINED, BASH)
+    expect(latest(allow)).toMatchObject({ effect: 'allow', commandRisk: RISK })
+    expect(Object.keys(latest(allow).commandRisk!.probabilities)).toHaveLength(12)
+    expect(decisionLines(allow).at(-1)).toContain('"commandRisk"')
+    const logged = JSON.parse(decisionLines(allow).at(-1)!.slice('security_decision '.length))
+    expect(logged.commandRisk).toStrictEqual(RISK)
+    expect(Object.keys(logged.commandRisk.probabilities)).toHaveLength(12)
+
+    // 询问（没圈住，人点了允许）
+    const ask = riskProbe()
+    await ask.ctx.enforceCommand(UNCONFINED, BASH)
+    expect(latest(ask)).toMatchObject({
+      effect: 'ask',
+      userResponse: 'allowed',
+      commandRisk: RISK
+    })
+    expect(decisionLines(ask).at(-1)).toContain('"commandRisk"')
+
+    // 拒绝
+    const destructive = riskWith({ category: 'destructive', confidence: 0.9 })
+    const deny = riskProbe({
+      classify: returning(destructive),
+      policies: [
+        userPolicy('deny-destructive', [
+          {
+            effect: 'deny',
+            match: "object.type == 'command' && object.risk.category == 'destructive'"
+          }
+        ])
+      ]
+    })
+    await expect(deny.ctx.enforceCommand(CONFINED, BASH)).rejects.toThrow()
+    expect(latest(deny)).toMatchObject({ effect: 'deny', commandRisk: destructive })
+    expect(decisionLines(deny).at(-1)).toContain('"commandRisk"')
+
+    // 没分类的命令：记录与日志行都没有
+    const unclassified = riskProbe({ classify: vi.fn<Classifier>(async () => null) })
+    await unclassified.ctx.enforceCommand(CONFINED, BASH)
+    expect(latest(unclassified).commandRisk).toBeUndefined()
+    expect(decisionLines(unclassified).at(-1)).not.toContain('commandRisk')
+
+    // 路径客体：接缝在、也不进记录
+    const path = riskProbe()
+    await path.ctx.enforcePath('read', '/ws/a.txt', { toolCallId: 'tc-rk10', toolName: 'read' })
+    expect(latest(path).objectKind).toBe('path')
+    expect(latest(path).commandRisk).toBeUndefined()
+    expect(decisionLines(path).at(-1)).not.toContain('commandRisk')
+  })
+
+  it('RK-11 只有 enforceCommand 分类：enforcePath / enforceGitOp / enforceDatabase / enforceUrl / enforceInvocation、以及字面量命令客体的 evaluate / evaluateReadOnly 都不调接缝', async () => {
+    const probe = riskProbe()
+    await probe.ctx.enforcePath('read', '/ws/a.txt', { toolCallId: 'tc-p', toolName: 'read' })
+    await probe.ctx.enforcePath('write', '/ws/a.txt', { toolCallId: 'tc-p', toolName: 'write' })
+    await probe.ctx.enforceGitOp(GIT_INPUT, { toolCallId: 'tc-g', toolName: 'git' })
+    await probe.ctx.enforceDatabase(DATABASE_INPUT, {
+      toolCallId: 'tc-d',
+      toolName: 'mcp__database__query'
+    })
+    await probe.ctx.enforceUrl(PAGE, { toolCallId: 'tc-u', toolName: 'mcp__browser__navigate' })
+    await probe.ctx.enforceInvocation({ toolCallId: 'tc-i', toolName: 'session' })
+    const literal: SecurityObject = {
+      type: 'command',
+      command: 'rm -rf /',
+      channel: 'bash',
+      sandboxed: false,
+      ...NO_SHELL_FACTS
+    }
+    probe.ctx.evaluate('execute', literal)
+    probe.ctx.evaluateReadOnly('execute', literal)
+    expect(probe.classify).not.toHaveBeenCalled()
+  })
+
+  it('RK-12 解析器初始化失败照样分类；分类不触发惰性解析；risk 是普通的可枚举属性，parsed / commands / writes 仍不可枚举', async () => {
+    const analyze = vi.fn((_command: string): ShellFacts => {
+      throw new Error('analyze should not run')
+    })
+    const probe = riskProbe({
+      overrides: {
+        shellParser: {
+          ensureReady: async () => {
+            throw new Error('wasm missing')
+          },
+          analyze
+        }
+      }
+    })
+    await expect(probe.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({ status: 'allowed' })
+    expect(probe.classify).toHaveBeenCalledTimes(1)
+    expect(analyze).not.toHaveBeenCalled()
+
+    const object = probe.lastObject()!
+    expect(Object.keys(object)).toContain('risk')
+    expect(Object.getOwnPropertyDescriptor(object, 'risk')).toMatchObject({ enumerable: true })
+    for (const key of ['parsed', 'commands', 'writes']) {
+      expect(Object.keys(object)).not.toContain(key)
+      expect(Object.getOwnPropertyDescriptor(object, key)?.enumerable).toBe(false)
+    }
+    // 只有初始化失败那一条告警（分类本身好好的）
+    expect(warnings(probe)).toHaveLength(1)
+    expect(warnings(probe)[0]).toContain('wasm missing')
+    expect(analyze).not.toHaveBeenCalled()
+  })
+
+  it("RK-13 挂着 risk 的 ask-on-command 询问照样先问审查（审查收到的客体带 risk）；用户的 force-ask（category != 'read_only'）不经审查", async () => {
+    const review = vi.fn<Reviewer>(async () => ({
+      verdict: { decision: 'allow', risk: 'low', summary: 's', reason: 'r' },
+      source: 'auto-review'
+    }))
+    const probe = riskProbe({ review })
+    await expect(probe.ctx.enforceCommand(UNCONFINED, BASH)).resolves.toEqual({
+      status: 'allowed'
+    })
+    expect(review).toHaveBeenCalledTimes(1)
+    expect(review.mock.calls[0][0].request.object.risk).toEqual(RISK)
+    expect(probe.requestUserInput).not.toHaveBeenCalled()
+    expect(latest(probe)).toMatchObject({
+      winning: 'ask-on-command#0',
+      review: { decision: 'allow' },
+      commandRisk: RISK
+    })
+
+    const forceAsk = vi.fn<Reviewer>(async () => null)
+    const pinned = riskProbe({
+      review: forceAsk,
+      policies: [
+        userPolicy('always-ask-risky', [
+          {
+            effect: 'force-ask',
+            match: "object.type == 'command' && object.risk.category != 'read_only'"
+          }
+        ])
+      ]
+    })
+    await pinned.ctx.enforceCommand(CONFINED, BASH)
+    expect(forceAsk).not.toHaveBeenCalled()
+    expect(pinned.requestUserInput).toHaveBeenCalledTimes(1)
+    expect(latest(pinned).winning).toBe('always-ask-risky#0')
+  })
+
+  describe('RK-14 中止与分类赛跑', () => {
+    const allowAll = (): Reviewer => vi.fn<Reviewer>(async () => null)
+
+    it('(a) 中止后接缝以 AbortError 拒绝（看的是第二个参数的 .signal）：没有 risk、按中止收尾（ask 路径 → Aborted、不弹卡、记 cancel），不记分类告警', async () => {
+      const probe = riskProbe({
+        review: allowAll(),
+        classify: vi.fn<Classifier>(
+          (_input, { signal }) =>
+            new Promise<CommandRisk | null>((_resolve, reject) => {
+              signal?.addEventListener('abort', () =>
+                reject(new DOMException('This operation was aborted', 'AbortError'))
+              )
+            })
+        )
+      })
+      const ac = new AbortController()
+      const result = probe.ctx.enforceCommand(UNCONFINED, { ...BASH, signal: ac.signal })
+      await flush()
+      expect(probe.classify).toHaveBeenCalledTimes(1)
+      ac.abort()
+      await expect(result).rejects.toThrow('Aborted')
+      expect(probe.requestUserInput).not.toHaveBeenCalled()
+      expect(latest(probe).userResponse).toBe('cancel')
+      expect(latest(probe).commandRisk).toBeUndefined()
+      expect(probe.objects.every((o) => !hasRiskKey(o))).toBe(true)
+      expect(probe.warn).not.toHaveBeenCalled()
+    })
+
+    it('(b) 接缝根本不看 signal：中止后 enforceCommand 立刻收尾（不挂住），不记分类告警', async () => {
+      const never = vi.fn<Classifier>(() => new Promise<CommandRisk | null>(() => {}))
+      const probe = riskProbe({ review: allowAll(), classify: never })
+      const ac = new AbortController()
+      const result = probe.ctx.enforceCommand(UNCONFINED, { ...BASH, signal: ac.signal })
+      await flush()
+      expect(never).toHaveBeenCalledTimes(1)
+      ac.abort()
+      const settled = await Promise.race([
+        result.then(
+          () => 'resolved',
+          (err: Error) => `rejected: ${err.message}`
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 500))
+      ])
+      expect(settled).toBe('rejected: Aborted')
+      expect(probe.requestUserInput).not.toHaveBeenCalled()
+      expect(latest(probe).commandRisk).toBeUndefined()
+      expect(probe.warn).not.toHaveBeenCalled()
+
+      // 圈住的命令（不会走到询问）：中止后同样立刻交回，只是没有 risk
+      const confined = riskProbe({
+        classify: vi.fn<Classifier>(() => new Promise<CommandRisk | null>(() => {}))
+      })
+      const ac2 = new AbortController()
+      const confinedResult = confined.ctx.enforceCommand(CONFINED, { ...BASH, signal: ac2.signal })
+      await flush()
+      ac2.abort()
+      await expect(confinedResult).resolves.toEqual({ status: 'allowed' })
+      expect(hasRiskKey(confined.lastObject())).toBe(false)
+      expect(confined.warn).not.toHaveBeenCalled()
+    })
+
+    it('(c) 进门时 signal 已经落下：接缝一次都不调', async () => {
+      const probe = riskProbe({ review: allowAll() })
+      const ac = new AbortController()
+      ac.abort()
+      await expect(
+        probe.ctx.enforceCommand(UNCONFINED, { ...BASH, signal: ac.signal })
+      ).rejects.toThrow('Aborted')
+      expect(probe.classify).not.toHaveBeenCalled()
+      expect(probe.requestUserInput).not.toHaveBeenCalled()
+      expect(probe.warn).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('RK-15 内置 ask-on-command 的豁免：分到 read_only 且 readOnly >= 0.9 的命令不问', () => {
+    /** 审查接缝：调了就记下（回 null = 交给人） */
+    const reviewSpy = (): ReturnType<typeof vi.fn<Reviewer>> => vi.fn<Reviewer>(async () => null)
+
+    it('(a) 没圈住的 bash、read_only 0.95 → 放行、不弹卡、审查一次都不调；记录 allow / default:command / matched 为空 / 带 commandRisk', async () => {
+      const review = reviewSpy()
+      const risk = readOnlyRisk(0.95)
+      const probe = riskProbe({ classify: returning(risk), review })
+      await expect(probe.ctx.enforceCommand(UNCONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(probe.requestUserInput).not.toHaveBeenCalled()
+      expect(review).not.toHaveBeenCalled()
+      expect(latest(probe)).toMatchObject({
+        effect: 'allow',
+        winning: 'default:command',
+        matched: [],
+        commandRisk: risk
+      })
+      expect(probe.warn).not.toHaveBeenCalled()
+    })
+
+    it.each<[number, boolean]>([
+      [0.9, false],
+      [0.8999, true],
+      [1, false]
+    ])('(b) 阈值边界：readOnly %f → 询问 = %s', async (p, asks) => {
+      const probe = riskProbe({ classify: returning(readOnlyRisk(p)) })
+      await probe.ctx.enforceCommand(UNCONFINED, BASH)
+      expect(probe.requestUserInput).toHaveBeenCalledTimes(asks ? 1 : 0)
+      expect(latest(probe).winning).toBe(asks ? 'ask-on-command#0' : 'default:command')
+      expect(probe.warn).not.toHaveBeenCalled()
+    })
+
+    it('(c) read_only 0.85 → 先问审查（审查交回 null），再弹卡', async () => {
+      const review = reviewSpy()
+      const probe = riskProbe({ classify: returning(readOnlyRisk(0.85)), review })
+      await probe.ctx.enforceCommand(UNCONFINED, BASH)
+      expect(review).toHaveBeenCalledTimes(1)
+      expect(probe.requestUserInput).toHaveBeenCalledTimes(1)
+      expect(review.mock.invocationCallOrder[0]).toBeLessThan(
+        probe.requestUserInput.mock.invocationCallOrder[0]
+      )
+      expect(latest(probe).winning).toBe('ask-on-command#0')
+    })
+
+    it.each<[string, CommandRisk]>([
+      ['personal_data（readOnly 0.95）', { ...readOnlyRisk(0.95), category: 'personal_data' }],
+      ['destructive（readOnly 0.95）', { ...readOnlyRisk(0.95), category: 'destructive' }]
+    ])('(d) 选中的不是 read_only：%s → 照问', async (_label, risk) => {
+      const probe = riskProbe({ classify: returning(risk) })
+      await probe.ctx.enforceCommand(UNCONFINED, BASH)
+      expect(probe.requestUserInput).toHaveBeenCalledTimes(1)
+      expect(latest(probe).winning).toBe('ask-on-command#0')
+      expect(latest(probe).commandRisk!.category).toBe(risk.category)
+    })
+
+    it('(e) 圈住的 destructive 0.99 → 照常放行（default:command）', async () => {
+      const probe = riskProbe({ classify: returning(readOnlyRisk(0.01, 'destructive')) })
+      await expect(probe.ctx.enforceCommand(CONFINED, BASH)).resolves.toEqual({
+        status: 'allowed'
+      })
+      expect(probe.requestUserInput).not.toHaveBeenCalled()
+      expect([latest(probe).effect, latest(probe).winning]).toEqual(['allow', 'default:command'])
+      expect(latest(probe).commandRisk!.category).toBe('destructive')
+    })
+
+    it.each<[string, CommandObjectInput, string]>([
+      ['带 host 的 ssh', { channel: 'ssh', command: 'uptime', host: 'prod' }, 'mcp__ssh__exec'],
+      ['powershell', { channel: 'powershell', command: 'Get-ChildItem' }, 'powershell']
+    ])('(f) %s、read_only 0.95 → 不问（有意的行为变化）', async (_label, input, toolName) => {
+      const probe = riskProbe({ classify: returning(readOnlyRisk(0.95)) })
+      await expect(
+        probe.ctx.enforceCommand(input, { toolCallId: 'tc-rk15f', toolName })
+      ).resolves.toEqual({ status: 'allowed' })
+      expect(probe.requestUserInput).not.toHaveBeenCalled()
+      expect(latest(probe).winning).toBe('default:command')
+    })
+
+    it.each<[string, PolicyRuleSpec['effect']]>([
+      ['ask', 'ask'],
+      ['force-ask', 'force-ask']
+    ])(
+      '(g) 用户自己按 object.command 写的 %s 规则：read_only 0.95 照样问，用户那条胜出',
+      async (_label, effect) => {
+        const probe = riskProbe({
+          classify: returning(readOnlyRisk(0.95)),
+          policies: [
+            userPolicy('ask-ls', [
+              { effect, match: "object.type == 'command' && object.command.startsWith('ls')" }
+            ])
+          ]
+        })
+        await probe.ctx.enforceCommand(UNCONFINED, BASH)
+        expect(probe.requestUserInput).toHaveBeenCalledTimes(1)
+        expect(latest(probe).winning).toBe('ask-ls#0')
+        expect(probe.warn).not.toHaveBeenCalled()
+      }
+    )
   })
 })

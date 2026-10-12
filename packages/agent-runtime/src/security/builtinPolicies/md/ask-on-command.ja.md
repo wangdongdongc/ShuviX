@@ -4,14 +4,14 @@ shuvix-id: policy:builtin:ask-on-command
 shuvix-builtin: true
 name: ask-on-command
 shuvix-displayName: 制限なしのコマンド実行前に確認
-description: サンドボックスに閉じ込められていない bash / PowerShell / ssh コマンドはコマンドごとにユーザー確認が必要。閉じ込められたコマンドはそのまま実行される。
+description: サンドボックスに閉じ込められていない bash / PowerShell / ssh コマンドはコマンドごとにユーザー確認が必要（分類モデルが高い確信で読み取り専用と判定したものを除く）。閉じ込められたコマンドはそのまま実行される。
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [command]
 shuvix-policy-rules:
   - effect: ask
     action: [execute]
-    match: '!has(object.sandboxed) || !object.sandboxed'
+    match: "(!has(object.sandboxed) || !object.sandboxed) && !(has(object.risk) && object.risk.category == 'read_only' && object.risk.readOnly >= 0.9)"
     prompt: このコマンドは制限されていない。許可するとあなたのシステム権限で実行され、任意のファイルへのアクセスも通信もできる。実際に何をするか確かめてから許可すること。
 ---
 
@@ -29,8 +29,15 @@ artifacts とツール結果、そして「許可して記憶」したパス）�
   あるいは ShuviX 自体が別のサンドボックス内で動いている場合）のすべてのコマンド；
 - すべての ssh コマンド —— リモートのマシンで動くため、ローカルのサンドボックスは届かない。
 
-確認するかどうかは、ホストがこの実行について報告する `sandboxed` 属性で決まり、コマンドの
-文面からは判断しない。
+分類モデルがあれば、上のどれであっても、分類器が明らかに読み取り専用と判定したコマンドは確認なしで実行される（下記参照）。
+
+確認するかどうかは、ホストがこの実行について報告する `sandboxed` 属性で決まる。「設定 → 一般」で
+分類モデルを選んでいれば、その分類も使う：分類器がコマンドを `read_only`（読み取り専用）に、確率
+0.9 以上で分類した場合は、確認も自動レビューもせずに実行する（`object.risk.category` /
+`object.risk.readOnly`）。分類モデルがない、または分類が失敗・タイムアウト・不完全なときは
+`object.risk` がなく、これまでどおり確認する。分類器が判断するのはコマンドがどの種類の操作かだけで、
+スクリプトの中身もあなたの依頼も見えないため、明らかに読み取り専用でないものは確認する。分類の記録は
+すべて「設定 → モニター → 分類器」に表示される。
 
 **ファイルの境界のほかに、制限付きコマンドを外に出さないもの**：アプリを開く、Apple Events を
 送る、ジョブを登録する（`open`、`osascript`、`launchctl`）ことはできず、シグナルを送れるのは
@@ -48,4 +55,5 @@ artifacts とツール結果、そして「許可して記憶」したパス）�
   残りは意見を添えてあなたに回す。
 
 **調整するには**：上書きコピーを作成して編集する。`match` の行を消すと、制限の有無に
-かかわらず全コマンドで確認が出る状態に戻る。
+かかわらず全コマンドで確認が出る状態に戻る。`object.risk` の部分を消すと、分類モデルがあっても
+制限なしのコマンドはすべて確認する。0.9 を上げ下げすると、どれだけ確信が必要かが変わる。

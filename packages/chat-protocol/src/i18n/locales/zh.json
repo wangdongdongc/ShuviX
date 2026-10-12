@@ -541,6 +541,9 @@
     "defaultProvider": "默认提供商",
     "defaultModel": "默认模型",
     "defaultModelNone": "无",
+    "classifierModelRow": "分类模型",
+    "classifierModelRowDesc": "执行每条命令前，先用分类模型判断它属于哪一类动作（只读、涉及个人文件、改文件、装软件、外发数据、删除数据……）。沙箱外的命令被判为明摆着只读（read_only 且概率 ≥ 0.9）时直接运行，不问也不走自动审查；其余照旧询问。结果作为 object.risk 交给安全策略，每次分类都列在「监控 → 分类器」里。不选就不分类。分类模型是单独的一类模型，例如 OpenRouter、OpenCode 上的 Jev。",
+    "classifierModelNone": "不分类",
     "appearanceGroup": "外观",
     "languageGroup": "语言",
     "themeMode": "主题模式",
@@ -892,7 +895,34 @@
     "chromeExtRepair": "修复",
     "chromeExtHostPending": "正在登记…",
     "chromeExtHostInstalled": "已登记到",
-    "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器"
+    "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器",
+    "monitorSubTabClassifier": "分类器",
+    "classifierLog": {
+      "hint": "每次调用分类模型都在这里记一行：问了什么、发了什么、怎么回答、用了多久。最多保留最新的 {{max}} 条。",
+      "empty": "还没有分类记录。在「设置 → 通用」里选一个分类模型后，执行命令前会先做分类。",
+      "allScenes": "全部场景",
+      "allStatuses": "全部状态",
+      "scenes": {
+        "command-risk": "命令风险"
+      },
+      "status": {
+        "ok": "成功",
+        "incomplete": "答案不完整",
+        "failed": "失败",
+        "timeout": "超时",
+        "aborted": "已取消",
+        "misconfigured": "配置有误"
+      },
+      "model": "模型",
+      "duration": "耗时",
+      "session": "会话",
+      "toolCall": "工具调用",
+      "subject": "分类对象",
+      "questions": "题目与答案",
+      "sent": "发给分类器的内容",
+      "rawAnswers": "原始答案",
+      "clearConfirm": "清空全部分类器日志？"
+    }
   },
   "about": {
     "description": "您的 AI 助手",

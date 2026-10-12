@@ -3,6 +3,7 @@
  * ModelDefaultsSettings。本层只负责把 settingsStore 的值/持久化绑进共享组件
  * （存储差异落在此处）。
  */
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   useSettingsStore,
@@ -12,8 +13,13 @@ import {
 } from '../../stores/settingsStore'
 import { AppearanceTab, ModelDefaultsSettings, type ThemeMode } from '@shuvix/app-shell'
 import type { SelectableThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
+import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
 
 type Lang = 'zh' | 'en' | 'ja'
+
+/** 命令分类模型的设置键（与主进程 commandClassifier.ts 同名） */
+const CLASSIFIER_PROVIDER_KEY = 'general.classifierProvider'
+const CLASSIFIER_MODEL_KEY = 'general.classifierModel'
 
 export function GeneralSettings(): React.JSX.Element {
   const { i18n: i18nInstance } = useTranslation()
@@ -41,6 +47,33 @@ export function GeneralSettings(): React.JSX.Element {
     setActiveModel,
     setDefaultThinkingLevel
   } = useSettingsStore()
+
+  // 命令分类模型：只在这一页用到，不进全局 store —— 打开设置时现取清单与当前值
+  const [classifierModels, setClassifierModels] = useState<AvailableModel[]>([])
+  const [classifierProvider, setClassifierProvider] = useState('')
+  const [classifierModel, setClassifierModel] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    void Promise.all([
+      window.api.provider.listClassifierModels(),
+      window.api.settings.get(CLASSIFIER_PROVIDER_KEY),
+      window.api.settings.get(CLASSIFIER_MODEL_KEY)
+    ]).then(([models, provider, model]) => {
+      if (cancelled) return
+      setClassifierModels(models)
+      setClassifierProvider(typeof provider === 'string' ? provider : '')
+      setClassifierModel(typeof model === 'string' ? model : '')
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const persistClassifier = (provider: string, model: string): void => {
+    setClassifierProvider(provider)
+    setClassifierModel(model)
+    window.api.settings.set({ key: CLASSIFIER_PROVIDER_KEY, value: provider })
+    window.api.settings.set({ key: CLASSIFIER_MODEL_KEY, value: model })
+  }
 
   /** 仅持久化（store + DB）的单值 setter —— 编排逻辑在共享 ModelDefaultsSettings 内 */
   const persistDefaultProvider = (id: string): void => {
@@ -113,6 +146,12 @@ export function GeneralSettings(): React.JSX.Element {
         setDefaultModel={persistDefaultModel}
         defaultThinkingLevel={defaultThinkingLevel}
         setDefaultThinkingLevel={persistDefaultThinkingLevel}
+        classifier={{
+          models: classifierModels,
+          provider: classifierProvider,
+          model: classifierModel,
+          onChange: persistClassifier
+        }}
       />
     </div>
   )

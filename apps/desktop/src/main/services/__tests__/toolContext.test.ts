@@ -27,6 +27,9 @@
  *   SEC-10 skillsDirs —— 默认 → 内置 → 外部目录 → 在列的共用目录（~/.claude/skills、~/.agents/skills）；
  *   TC-SUBJ 桌面 subject 带上 ctx.agent 的档案名与 root / spawned（审查员的防递归与用户策略都读它）；
  *   TC-RV onPermissionRequest 每次现取注入的审查者（setPermissionReviewer），被动判定从不走到它。
+ *   TC-CC classifyCommand 每次现取注入的命令分类（setCommandClassifier，带上本会话的 sessionId）：
+ *     没注入 → null；注入的分类经真实的桌面 SecurityContext 挂成 object.risk，内置 ask-on-command 对
+ *     很有把握的 read_only 不问（也不经审查），决策记录带 commandRisk。
  * 需要真实评估的用例读仓库里那份内置策略 md（同 askPolicy.test）；用户策略由 tc.userPolicies 喂。
  * reviewState / 决策日志是进程级表：这些用例各用独立 sessionId，afterEach 清掉。
  */
@@ -123,6 +126,7 @@ import {
   makeDesktopSecurityProvider,
   resolveProjectConfig,
   sessionDirExtras,
+  setCommandClassifier,
   setPermissionReviewer,
   withCallAgent,
   type ProjectConfig,
@@ -133,7 +137,10 @@ import { sessionDirsView } from '../sandbox'
 import {
   clearReviewState,
   clearSessionDecisions,
+  getSessionDecisions,
   parsePolicyDefinitionFile,
+  type CommandObjectInput,
+  type CommandRisk,
   type PermissionRequestEvent,
   type PermissionReviewAnswer,
   type SecurityDecision,
@@ -1078,6 +1085,191 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
     })
     expect(ctx.evaluateReadOnly('write', { type: 'path', path: OUTSIDE })).toBe(false)
     expect(agentOf.mock.calls.length).toBe(lookups)
+  })
+})
+
+/**
+ * 命令风险分类接缝（TC-CC）：provider.classifyCommand 每次调用现取 setCommandClassifier 注入的那份
+ * （main 启动时注入；provider 整会话复用，两者谁先谁后都得对）。没注入 = 不分类（null）。注入的那份
+ * 收到 (input, { signal, toolCallId, sessionId })：sessionId 是 provider 自己会话的 id（分类器日志按它对上）。
+ * 内置 ask-on-command 读分类：分到 read_only 且 readOnly >= 0.9 的命令不问（TC-CC2..4）。
+ */
+describe('TC-CC 命令风险分类接缝（setCommandClassifier）', () => {
+  type Classifier = (
+    input: CommandObjectInput,
+    opts: { signal?: AbortSignal; toolCallId?: string; sessionId: string }
+  ) => Promise<CommandRisk | null>
+  type Reviewer = (
+    event: PermissionRequestEvent,
+    signal?: AbortSignal
+  ) => Promise<PermissionReviewAnswer | null>
+  const projectConfig: ProjectConfig = { workingDirectory: '/ws' }
+  const cfg = (): ProjectConfig => projectConfig
+
+  const CATEGORIES = [
+    'read_only',
+    'personal_data',
+    'runs_project_code',
+    'local_change',
+    'outside_change',
+    'install',
+    'remote_change',
+    'data_out',
+    'secrets',
+    'destructive',
+    'privilege',
+    'persistence'
+  ] as const
+  /** 选中 category，readOnly = read_only 的概率 = readOnly */
+  const riskOf = (category: (typeof CATEGORIES)[number], readOnly: number): CommandRisk => ({
+    category,
+    confidence: category === 'read_only' ? readOnly : 0.9,
+    readOnly,
+    probabilities: Object.fromEntries(
+      CATEGORIES.map((c) => [c, c === 'read_only' ? readOnly : c === category ? 0.9 : 0])
+    ) as CommandRisk['probabilities'],
+    model: 'openrouter/~typesafe/jev-latest'
+  })
+  const READ_ONLY = riskOf('read_only', 0.95)
+
+  const usedSessions = new Set<string>()
+  const sid = (id: string): string => {
+    usedSessions.add(id)
+    return id
+  }
+
+  beforeEach(() => {
+    tc.userPolicies = []
+  })
+
+  afterEach(() => {
+    setCommandClassifier(null)
+    setPermissionReviewer(null)
+    tc.userPolicies = []
+    for (const id of usedSessions) {
+      clearReviewState(id)
+      clearSessionDecisions(id)
+    }
+    usedSessions.clear()
+  })
+
+  /** 一个记下卡片的真实桌面 SecurityContext（人一律点允许） */
+  function desktopContext(sessionId: string): {
+    ctx: ReturnType<typeof getDesktopSecurityContext>
+    asks: InputRequest[]
+  } {
+    const asks: InputRequest[] = []
+    const ctx = getDesktopSecurityContext(
+      {
+        sessionId,
+        requestUserInput: async (req) => {
+          asks.push(req)
+          return { kind: 'ask', allowed: true }
+        }
+      },
+      cfg
+    )
+    return { ctx, asks }
+  }
+
+  const LS: CommandObjectInput = { channel: 'bash', command: 'ls', cwd: '/ws' }
+
+  it('TC-CC1 注入之前构造的 provider：classifyCommand 交回 null；注入后收到 (同一个 input, { 同一个 signal, toolCallId, sessionId: 本会话 })、回答原样交回；换一个立刻生效（不是快照）；置 null 复原', async () => {
+    const sessionId = sid('tc-cc1')
+    const provider = makeDesktopSecurityProvider({ sessionId }, cfg)
+    const signal = new AbortController().signal
+    expect(provider.classifyCommand).toBeTypeOf('function')
+    await expect(provider.classifyCommand!(LS, { signal, toolCallId: 'tc-a' })).resolves.toBeNull()
+    await expect(provider.classifyCommand!(LS, {})).resolves.toBeNull()
+
+    const first = vi.fn<Classifier>(async () => READ_ONLY)
+    setCommandClassifier(first)
+    const got = await provider.classifyCommand!(LS, { signal, toolCallId: 'tc-a' })
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(first.mock.calls[0][0]).toBe(LS)
+    expect(first.mock.calls[0][1]).toStrictEqual({ signal, toolCallId: 'tc-a', sessionId })
+    expect(first.mock.calls[0][1].signal).toBe(signal)
+    expect(got).toBe(READ_ONLY)
+
+    const second = vi.fn<Classifier>(async () => null)
+    setCommandClassifier(second)
+    await expect(provider.classifyCommand!(LS, { signal })).resolves.toBeNull()
+    expect(second).toHaveBeenCalledTimes(1)
+    expect(second.mock.calls[0][1].sessionId).toBe(sessionId)
+    expect(first).toHaveBeenCalledTimes(1)
+
+    setCommandClassifier(null)
+    await expect(provider.classifyCommand!(LS, { signal })).resolves.toBeNull()
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  it('TC-CC2 没有用户策略、真实的桌面 SecurityContext：read_only 0.95 → 没圈住的 ls 不问就过，记录 allow / default:command + commandRisk，分类器拿到 toolCallId 与 sessionId；分类器置 null → ask-on-command 照问、没有 commandRisk', async () => {
+    const classifier = vi.fn<Classifier>(async () => READ_ONLY)
+    setCommandClassifier(classifier)
+    const sessionId = sid('tc-cc2')
+    const { ctx, asks } = desktopContext(sessionId)
+
+    await expect(
+      ctx.enforceCommand(LS, { toolCallId: 'tc-cc2-a', toolName: 'bash' })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(classifier).toHaveBeenCalledTimes(1)
+    expect(classifier.mock.calls[0][0]).toBe(LS)
+    expect(classifier.mock.calls[0][1]).toMatchObject({ toolCallId: 'tc-cc2-a', sessionId })
+    expect(asks).toHaveLength(0)
+    expect(getSessionDecisions(sessionId)[0]).toMatchObject({
+      effect: 'allow',
+      winning: 'default:command',
+      matched: [],
+      commandRisk: READ_ONLY
+    })
+
+    setCommandClassifier(null)
+    await expect(
+      ctx.enforceCommand(LS, { toolCallId: 'tc-cc2-b', toolName: 'bash' })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(asks).toHaveLength(1)
+    const latest = getSessionDecisions(sessionId)[0]
+    expect(latest).toMatchObject({ effect: 'ask', winning: 'ask-on-command#0' })
+    expect(latest.commandRisk).toBeUndefined()
+    expect(classifier).toHaveBeenCalledTimes(1)
+  })
+
+  it.each<[string, CommandRisk]>([
+    ['read_only 0.85', riskOf('read_only', 0.85)],
+    ['destructive', riskOf('destructive', 0.01)]
+  ])('TC-CC3 %s → 没圈住的命令照问，记录带 commandRisk', async (_label, risk) => {
+    setCommandClassifier(vi.fn<Classifier>(async () => risk))
+    const sessionId = sid(`tc-cc3-${risk.category}-${risk.readOnly}`)
+    const { ctx, asks } = desktopContext(sessionId)
+    await expect(
+      ctx.enforceCommand(LS, { toolCallId: 'tc-cc3', toolName: 'bash' })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(asks).toHaveLength(1)
+    expect(getSessionDecisions(sessionId)[0]).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-command#0',
+      commandRisk: risk
+    })
+  })
+
+  it('TC-CC4 审查者：豁免的命令（read_only 0.95）不调它；0.85 调一次、收到的客体带 risk', async () => {
+    const reviewer = vi.fn<Reviewer>(async () => null)
+    setPermissionReviewer(reviewer)
+
+    setCommandClassifier(vi.fn<Classifier>(async () => READ_ONLY))
+    const exempt = desktopContext(sid('tc-cc4-exempt'))
+    await exempt.ctx.enforceCommand(LS, { toolCallId: 'tc-cc4-a', toolName: 'bash' })
+    expect(reviewer).not.toHaveBeenCalled()
+    expect(exempt.asks).toHaveLength(0)
+
+    const unsure = riskOf('read_only', 0.85)
+    setCommandClassifier(vi.fn<Classifier>(async () => unsure))
+    const asked = desktopContext(sid('tc-cc4-asked'))
+    await asked.ctx.enforceCommand(LS, { toolCallId: 'tc-cc4-b', toolName: 'bash' })
+    expect(reviewer).toHaveBeenCalledTimes(1)
+    expect(reviewer.mock.calls[0][0].request.object.risk).toEqual(unsure)
+    expect(asked.asks).toHaveLength(1)
   })
 })
 

@@ -30,6 +30,16 @@ export interface ModelDefaultsSettingsProps {
   setDefaultProvider: (id: string) => void
   setDefaultModel: (id: string) => void
   setDefaultThinkingLevel: (level: SelectableThinkingLevel) => void
+  /**
+   * 命令分类模型（可选；宿主不给就不显示这一行）：设了之后每条要执行的命令先过一次分类，
+   * 结果作为 `object.risk` 交给安全策略。`models` 是「分类」类模型的清单，空串 = 不分类。
+   */
+  classifier?: {
+    models: AvailableModel[]
+    provider: string
+    model: string
+    onChange: (provider: string, model: string) => void
+  }
 }
 
 export function ModelDefaultsSettings({
@@ -39,7 +49,8 @@ export function ModelDefaultsSettings({
   defaultThinkingLevel,
   setDefaultProvider,
   setDefaultModel,
-  setDefaultThinkingLevel
+  setDefaultThinkingLevel,
+  classifier
 }: ModelDefaultsSettingsProps): React.JSX.Element {
   const { t } = useTranslation()
 
@@ -80,6 +91,24 @@ export function ModelDefaultsSettings({
             </div>
           }
         />
+        {classifier && (
+          <SettingsRow
+            title={t('settings.classifierModelRow')}
+            description={t('settings.classifierModelRowDesc')}
+            control={
+              <div data-classifier-model>
+                <ModelSelect
+                  availableModels={classifier.models}
+                  provider={classifier.provider}
+                  model={classifier.model}
+                  onChange={classifier.onChange}
+                  allowClear
+                  clearLabel={t('settings.classifierModelNone')}
+                />
+              </div>
+            }
+          />
+        )}
       </SettingsSection>
     </div>
   )

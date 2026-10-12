@@ -4,14 +4,14 @@ shuvix-id: policy:builtin:ask-on-command
 shuvix-builtin: true
 name: ask-on-command
 shuvix-displayName: 未受限的命令执行前询问
-description: 没有被圈进沙箱的 bash / PowerShell / ssh 命令逐条询问用户；圈在沙箱里的命令直接运行。
+description: 没有被圈进沙箱的 bash / PowerShell / ssh 命令逐条询问用户（分类模型很有把握地判为只读的除外）；圈在沙箱里的命令直接运行。
 shuvix-policy-scope:
   subject.kind: [agent]
   object.type: [command]
 shuvix-policy-rules:
   - effect: ask
     action: [execute]
-    match: '!has(object.sandboxed) || !object.sandboxed'
+    match: "(!has(object.sandboxed) || !object.sandboxed) && !(has(object.risk) && object.risk.category == 'read_only' && object.risk.readOnly >= 0.9)"
     prompt: 这条命令没有受限——放行后它以你的完整系统权限运行，可读写任意文件、访问网络。放行前先看清它实际做什么。
 ---
 
@@ -27,7 +27,13 @@ shuvix-policy-rules:
   每一条命令；
 - 每一条 ssh 命令 —— 它跑在远端机器上，本地的沙箱管不到。
 
-问不问看宿主为这次运行上报的 `sandboxed` 属性，从不看命令文本长什么样。
+选了分类模型时，以上任何一种里被分类器判为明摆着只读的命令都直接运行（见下）。
+
+问不问看宿主为这次运行上报的 `sandboxed` 属性；如果你在「设置 → 通用」里选了分类模型，还看它的
+分类：分类器把命令归为 `read_only`（只读）且概率不低于 0.9 时，直接运行，不问也不走自动审查
+（`object.risk.category` / `object.risk.readOnly`）。没选分类模型，或者分类失败、超时、答案不完整，
+客体上就没有 `object.risk`，照旧询问。分类器只判断这条命令是哪一类动作 —— 看不到脚本内容，也不知道你
+让它做什么 —— 所以凡不是明摆着只读的都照样问。每一次分类都列在「设置 → 监控 → 分类器」里。
 
 **除了文件边界，让受限命令出不去的**：它不能打开应用、发 Apple Events、提交计划任务
 （`open`、`osascript`、`launchctl`），只能给自己起的进程发信号，只能连 ShuviX 自己的命令行
@@ -41,4 +47,5 @@ socket 和 DNS，连不上其他本地服务（Docker、ssh-agent……）。没
 - 它不一定摆到你面前：开着自动审查时，审查 agent 先回答 —— 放行日常的工作，
   拒绝明显有害的，其余的附上它的意见交给你。
 
-**想调整**：创建覆盖副本后编辑调整。删掉 `match` 那一行，就回到每条命令都询问。
+**想调整**：创建覆盖副本后编辑调整。删掉 `match` 那一行，就回到每条命令都询问；删掉 `object.risk`
+那一段，选了分类模型也照样逐条询问；把 0.9 调高调低，就是改它要多有把握。

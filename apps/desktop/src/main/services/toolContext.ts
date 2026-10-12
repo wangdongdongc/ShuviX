@@ -29,6 +29,7 @@ import { skillService } from './skillService'
 import { shellParser } from './shellParserService'
 import { policyService } from './policyService'
 import {
+  type CommandRisk,
   createSecurityContext,
   parseAllowEntry,
   type CallOwner,
@@ -355,6 +356,11 @@ export function makeDesktopSecurityProvider(
     // 每次调用现取注入的审查者（provider 可整会话复用，注入发生在启动时）
     onPermissionRequest: (event, signal) =>
       permissionReviewer ? permissionReviewer(event, signal) : Promise.resolve(null),
+    // 命令风险分类同样现取注入的那份（设置里没选分类模型时它自己交回 null）
+    classifyCommand: (input, opts) =>
+      commandClassifier
+        ? commandClassifier(input, { ...opts, sessionId: ctx.sessionId })
+        : Promise.resolve(null),
     logger: securityLog
   }
 }
@@ -369,6 +375,20 @@ let permissionReviewer: PermissionReviewer | null = null
 
 export function setPermissionReviewer(reviewer: PermissionReviewer | null): void {
   permissionReviewer = reviewer
+}
+
+/**
+ * 命令风险分类（安全模块 classifyCommand 接缝的桌面实现，见 commandClassifier.ts）。和审查者一样由
+ * main 启动时注入 —— 它要模型注册表，直接 import 会把 models 拉进本文件的依赖。没注入 = 不分类。
+ */
+type CommandClassifierFn = (
+  input: Parameters<NonNullable<SecurityHostProvider['classifyCommand']>>[0],
+  opts: { signal?: AbortSignal; toolCallId?: string; sessionId: string }
+) => Promise<CommandRisk | null>
+let commandClassifier: CommandClassifierFn | null = null
+
+export function setCommandClassifier(classifier: CommandClassifierFn | null): void {
+  commandClassifier = classifier
 }
 
 /**

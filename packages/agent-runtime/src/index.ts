@@ -205,6 +205,9 @@ export {
 // 请求按 主体/操作/客体/环境 建模；宿主经 SecurityHostProvider 注入平台细节。
 export {
   createSecurityContext,
+  isCommandRisk,
+  COMMAND_RISK_CATEGORIES,
+  commandRiskOf,
   evaluate as evaluateSecurity,
   assembleRules,
   mergePolicyFiles,
@@ -251,6 +254,8 @@ export {
   type MatchContext,
   type SecurityRequest,
   type CommandObjectInput,
+  type CommandRisk,
+  type CommandRiskCategory,
   type GitObjectInput,
   type UrlObjectInput,
   urlObjectOf,

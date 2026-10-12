@@ -3128,6 +3128,104 @@ export function defaultThinkingPane(settings: CdpClient): DefaultThinkingPane {
   }
 }
 
+export interface ClassifierModelPane {
+  /** 等这一行上屏（触发钮在） */
+  ready(): Promise<void>
+  /** 触发钮上的字（没选时是「不分类」的译文，选了是 `<提供商名> · <模型 id>`） */
+  triggerText(): Promise<string>
+  /** 有没有清除钮（只在有选中时出现） */
+  hasClear(): Promise<boolean>
+  /** 清除钮的悬停提示（就是「不分类」的译文）；没有清除钮时为空串 */
+  clearTitle(): Promise<string>
+  /** 点清除钮（没有就抛） */
+  clear(): Promise<void>
+  /** 展开面板并等它上屏（幂等） */
+  open(): Promise<void>
+  /** 收起面板（幂等） */
+  close(): Promise<void>
+  /** 面板里此刻可见的模型行（`data-model-item` 的值 `<providerId>/<modelId>`，DOM 序） */
+  items(): Promise<string[]>
+  /** 选一行：展开面板，行不可见就在搜索框里打模型 id 展开所在组，再点它；行不在返回 false */
+  pick(providerId: string, modelId: string): Promise<boolean>
+}
+
+/**
+ * 设置窗口「通用 → 默认模型」里的命令分类模型一行（ModelDefaultsSettings 的 `classifier`）：包在
+ * `[data-classifier-model]` 里的 boxed ModelSelect —— 第一个 button 是触发钮，有选中时第二个 button
+ * 是清除钮（title = 「不分类」）。面板 portal 到 body（`[data-model-panel]`，同一时刻只有一个），
+ * 模型行是 `[data-model-item="<providerId>/<modelId>"]`。清单只在页面挂载时取一次：改了提供商要
+ * 毁窗重开（openSettings 对已存在的窗口只聚焦）。
+ */
+export function classifierModelPane(settings: CdpClient): ClassifierModelPane {
+  const ROW = `document.querySelector('[data-classifier-model]')`
+  const BUTTONS = `[...(${ROW}?.querySelectorAll('button') ?? [])]`
+  const PANEL = `document.querySelector('[data-model-panel]')`
+  const ITEMS = `[...(${PANEL}?.querySelectorAll('[data-model-item]') ?? [])]`
+  const isOpen = (): Promise<boolean> => settings.eval<boolean>(`${PANEL} !== null`)
+  const clickTrigger = (): Promise<unknown> => settings.eval(`(${BUTTONS}[0]?.click(), true)`)
+  const open = async (): Promise<void> => {
+    if (!(await isOpen())) await clickTrigger()
+    await until(isOpen, 'classifier model panel open')
+  }
+  const clickItem = (key: string): Promise<boolean> =>
+    settings.eval<boolean>(`(() => {
+      const btn = ${ITEMS}.find((b) => b.getAttribute('data-model-item') === ${JSON.stringify(key)})
+      if (!btn) return false
+      btn.click()
+      return true
+    })()`)
+  return {
+    ready: async () => {
+      await until(
+        () => settings.eval<boolean>(`${BUTTONS}.length > 0`),
+        'classifier model row ready'
+      )
+    },
+    triggerText: () => settings.eval<string>(`(${BUTTONS}[0]?.textContent ?? '').trim()`),
+    hasClear: () => settings.eval<boolean>(`${BUTTONS}.length > 1`),
+    clearTitle: () => settings.eval<string>(`${BUTTONS}[1]?.getAttribute('title') ?? ''`),
+    clear: async () => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const btn = ${BUTTONS}[1]
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error('classifier model row has no clear button')
+    },
+    open,
+    close: async () => {
+      if (!(await isOpen())) return
+      await clickTrigger()
+      await until(async () => !(await isOpen()), 'classifier model panel closed')
+    },
+    items: () =>
+      settings.eval<string[]>(`${ITEMS}.map((b) => b.getAttribute('data-model-item') ?? '')`),
+    pick: async (providerId, modelId) => {
+      await open()
+      const key = `${providerId}/${modelId}`
+      if (await clickItem(key)) return true
+      // 没有选中时提供商组都收着：搜模型 id，命中的组全展开
+      await settings.eval(`(() => {
+        const input = ${PANEL}?.querySelector('input[type="text"]')
+        if (!input) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, ${JSON.stringify(modelId)})
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      await until(
+        () =>
+          settings.eval<boolean>(
+            `${ITEMS}.some((b) => b.getAttribute('data-model-item') === ${JSON.stringify(key)})`
+          ),
+        `classifier model row ${key}`
+      ).catch(() => false)
+      return clickItem(key)
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 注册表笔记（bot / agent / 策略 / hook md 的笔记本会话）的正文与属性卡 —— 两个窗口共用。
 //
@@ -7016,42 +7114,291 @@ export function statusBannerPane(main: CdpClient): StatusBannerPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 设置窗口「监视器」页（MonitorSettings）—— 运行时观测迁去 RightPanel 之后，这里只剩
-// 「LLM 请求」一个子页；旧的 `monitor/agents` hash 自然回落到它。
+// 设置窗口「监视器」页（MonitorSettings）—— 运行时观测迁去 RightPanel 之后，这里是两个子页：
+// 「LLM 请求」（HttpLogSettings，缺省）与「分类器」（ClassifierLogSettings）；旧的 `monitor/agents`
+// hash 自然回落到缺省的第一个。
 //
-// 锚点：子标签条 = `[data-monitor-toolbar]` 最近的 HttpLogSettings 根（.flex.flex-col.h-full
-// .min-h-0）的祖父（MonitorSettings 根）的第一个子节点（PanelTabBar，按钮是直接子节点）；
-// 激活态认按钮里的选中下划线 `span.bg-accent`。顶层 tab 导航沿用 `[data-settings-nav]` 那列
-// （settingsTabsPane 同一锚点），「智能体」tab 已拆除的判据是导航里不再出现它的图标
-// （lucide-bot）—— 文案是 i18n 产物，不认。
+// 锚点：当前子页的工具栏 —— `[data-monitor-toolbar]`（请求日志）或 `[data-classifier-log-toolbar]`
+// （分类器日志），二者只在当前子页那一个在 DOM 里。子标签条 = 工具栏最近的子页根（.flex.flex-col
+// .h-full.min-h-0）的祖父（MonitorSettings 根）的第一个子节点（PanelTabBar，按钮是直接子节点）；
+// 激活态认按钮里的选中下划线 `span.bg-accent`，哪个 tab 认按钮里的 lucide 图标类（文案是 i18n 产物，
+// 不认）：lucide-file-text = 请求日志，lucide-scan-search = 分类器。顶层 tab 导航沿用
+// `[data-settings-nav]` 那列（settingsTabsPane 同一锚点），「智能体」tab 已拆除的判据是导航里不再出现
+// 它的图标（lucide-bot）。
 
 export interface MonitorSettingsPane {
-  /** 监视器子标签条的 tab 按钮数（应恒为 1：只剩 LLM 请求） */
+  /** 监视器子标签条的 tab 按钮数（请求日志 + 分类器 = 2） */
   subTabCount(): Promise<number>
-  /** 子标签条的唯一 tab 呈激活态（选中下划线在） */
+  /** 子标签条上有一个 tab 呈激活态（选中下划线在） */
   subTabActive(): Promise<boolean>
+  /** 激活的子 tab 的序号（DOM 序，从 0 数；没有激活的 → -1） */
+  activeSubTab(): Promise<number>
+  /** 子 tab 的图标类（DOM 序）—— 认是哪一页用，不认文案 */
+  subTabIcons(): Promise<string[]>
+  /** 此刻画着的是哪个子页（按工具栏认） */
+  page(): Promise<'httpLogs' | 'classifierLogs' | null>
+  /** 点第 index 个子 tab（DOM 序） */
+  clickSubTab(index: number): Promise<void>
   /** 顶层 tab 导航的图标类（DOM 序）—— 「没有智能体 tab」按没有 lucide-bot 断 */
   navIcons(): Promise<string[]>
   /** 设置窗口当前 hash（`#settings/<tab>[/<sub>]`） */
   hash(): Promise<string>
 }
 
-/** 设置窗口监视器页（`openSettings('monitor/...')` 之后调用；自带 [data-monitor-toolbar] 就绪等待） */
+/** 监视器两个子页的工具栏（只在当前子页那一个在 DOM 里） */
+const MONITOR_PAGE_TOOLBAR = `(document.querySelector('[data-monitor-toolbar]') ?? document.querySelector('[data-classifier-log-toolbar]'))`
+
+/**
+ * 设置窗口监视器页（`openSettings('monitor/...')` 之后调用；自带就绪等待：两个子页的工具栏
+ * `[data-monitor-toolbar]` / `[data-classifier-log-toolbar]` 任一上屏）
+ */
 export async function monitorSettingsPane(settings: CdpClient): Promise<MonitorSettingsPane> {
-  const TOOLBAR = `document.querySelector('[data-monitor-toolbar]')`
-  const SUB_BAR = `${TOOLBAR}?.closest('.flex.flex-col.h-full.min-h-0')?.parentElement?.parentElement?.firstElementChild`
+  const SUB_BAR = `${MONITOR_PAGE_TOOLBAR}?.closest('.flex.flex-col.h-full.min-h-0')?.parentElement?.parentElement?.firstElementChild`
+  const SUB_BUTTONS = `[...(${SUB_BAR}?.querySelectorAll(':scope > button') ?? [])]`
   // 与 settingsTabsPane 同一根导航列
   const NAV = `document.querySelector('[data-settings-nav]')`
-  await until(() => settings.eval<boolean>(`${TOOLBAR} !== null`), 'monitor settings ready')
+  await until(
+    () => settings.eval<boolean>(`${MONITOR_PAGE_TOOLBAR} !== null`),
+    'monitor settings ready'
+  )
   return {
-    subTabCount: () =>
-      settings.eval<number>(`${SUB_BAR}?.querySelectorAll(':scope > button').length ?? 0`),
+    subTabCount: () => settings.eval<number>(`${SUB_BUTTONS}.length`),
     subTabActive: () =>
       settings.eval<boolean>(`!!${SUB_BAR}?.querySelector(':scope > button > span.bg-accent')`),
+    activeSubTab: () =>
+      settings.eval<number>(
+        `${SUB_BUTTONS}.findIndex((b) => b.querySelector(':scope > span.bg-accent') !== null)`
+      ),
+    subTabIcons: () =>
+      settings.eval<string[]>(`${SUB_BUTTONS}
+        .map((b) => [...(b.querySelector('svg')?.classList ?? [])].find((c) => c.startsWith('lucide-') && c !== 'lucide') ?? '')`),
+    page: () =>
+      settings.eval<'httpLogs' | 'classifierLogs' | null>(`(() => {
+        if (document.querySelector('[data-monitor-toolbar]')) return 'httpLogs'
+        if (document.querySelector('[data-classifier-log-toolbar]')) return 'classifierLogs'
+        return null
+      })()`),
+    clickSubTab: async (index) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const btn = ${SUB_BUTTONS}[${index}]
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`monitor sub tab #${index} not found`)
+      await sleep(150)
+    },
     navIcons: () =>
       settings.eval<string[]>(`[...(${NAV}?.querySelectorAll(':scope > button') ?? [])]
         .map((b) => [...(b.querySelector('svg')?.classList ?? [])].find((c) => c.startsWith('lucide-')) ?? '')`),
     hash: () => settings.eval<string>('location.hash')
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 设置窗口「监视器 → 分类器」子页（ClassifierLogSettings）—— 每次调用分类模型一行。
+//
+// 锚点（产品代码专门留的 data 属性）：
+//   - 页根 = `[data-classifier-log-toolbar]` 的父节点；提示行 `[data-classifier-log-hint]`，它的下一个
+//     兄弟是列表滚动区（空态时里面只有一句文案）；
+//   - 行 = `[data-classifier-log-id="<id>"]`（带 `data-status`），行内第一个 button 是行头：
+//     spans 依次为 时间 / 场景标签 / 对象摘要（font-mono）/ 结果（`[data-classifier-log-result]`）/ 耗时；
+//   - 展开的详情里：状态 `[data-classifier-log-status]`（它的父节点是元信息行），错误框是元信息行的下一个
+//     兄弟（带 border-amber），每道题 `[data-classifier-question="<键>"]`，选项
+//     `[data-classifier-option="<名>"]`（选中的带 `data-chosen="true"`）；各节标题是 uppercase 的那个 div，
+//     节内容是它的下一个兄弟 —— 节按标题文案认，文案由 spec 从语言包交进来；
+//   - 工具栏：会话下拉 / 场景下拉 / 状态下拉各占一格（顺序固定），右端两颗图标钮：刷新（lucide-refresh-cw）
+//     与清空（lucide-trash-2 / lucide-trash2）。下拉是 ZenSelect / SessionPicker：第一个 button 是触发钮，
+//     打开后选项是面板里的 button，按选项文字点。
+// id 是 uuid（十六进制与连字符），直接进属性选择器无需转义。
+
+export interface ClassifierLogRowShot {
+  id: string
+  status: string
+  /** 行头上的场景标签（已译；不认识的场景是原名） */
+  scene: string
+  subject: string
+  /** 结果格：ok 是答案摘要（如 `read_only 93%`），否则是状态标签 */
+  result: string
+  /** 耗时格的字（`412 ms`） */
+  ms: string
+}
+
+export interface ClassifierLogDetailShot {
+  /** 状态标签的字与配色（emerald = ok，amber = 其余） */
+  status: string
+  statusTone: 'ok' | 'warn' | ''
+  /** 元信息行全文（模型、耗时、用量、会话、工具调用、状态） */
+  meta: string
+  /** 错误框的字（没有就是 ''） */
+  error: string
+  /** 题目：键 → 选项（DOM 序） */
+  questions: Record<string, Array<{ label: string; chosen: boolean; text: string }>>
+  /** 按节标题取节内容的全文（标题由 spec 交进来，见 `section`） */
+  sections: Record<string, string>
+}
+
+export interface ClassifierLogPane {
+  /** 等工具栏上屏 */
+  ready(): Promise<void>
+  /** 列表此刻的行（DOM 序 = 新的在前） */
+  rows(): Promise<ClassifierLogRowShot[]>
+  /** 等行数变成 n */
+  waitRowCount(n: number): Promise<ClassifierLogRowShot[]>
+  /** 列表区的全文（空态时就是那一句） */
+  listText(): Promise<string>
+  /** 提示行的字 */
+  hint(): Promise<string>
+  /** 清空钮禁用着没有 */
+  clearDisabled(): Promise<boolean>
+  /** 点刷新 */
+  refresh(): Promise<void>
+  /** 点清空（弹确认框；确认 / 取消用 confirmPane） */
+  clickClear(): Promise<void>
+  /** 点某一行的行头（展开 / 收起） */
+  toggle(id: string): Promise<void>
+  /** 展开着的行 id（同时至多一条） */
+  expandedIds(): Promise<string[]>
+  /** 等某一行的详情上屏并取下来；`sectionTitles` 是要取的节标题（语言包里的文案） */
+  detail(id: string, sectionTitles: string[]): Promise<ClassifierLogDetailShot>
+  /** 工具栏第 slot 个下拉（0 = 会话，1 = 场景，2 = 状态）：打开它、点文字为 label 的选项 */
+  pickFilter(slot: 0 | 1 | 2, label: string): Promise<void>
+  /** 工具栏第 slot 个下拉打开后列出的选项文字（再收起） */
+  filterOptions(slot: 0 | 1 | 2): Promise<string[]>
+}
+
+export function classifierLogPane(settings: CdpClient): ClassifierLogPane {
+  const TOOLBAR = `document.querySelector('[data-classifier-log-toolbar]')`
+  const HINT = `document.querySelector('[data-classifier-log-hint]')`
+  const LIST = `${HINT}?.nextElementSibling`
+  const ROW = (id: string): string => `document.querySelector('[data-classifier-log-id="${id}"]')`
+  const ICON_BUTTON = (icons: string[]): string =>
+    `[...(${TOOLBAR}?.querySelectorAll('button') ?? [])].find((b) => ${JSON.stringify(icons)}.some((c) => b.querySelector('svg')?.classList.contains(c)))`
+  const SLOT = (slot: number): string => `${TOOLBAR}?.children[${slot}]`
+  const rows = (): Promise<ClassifierLogRowShot[]> =>
+    settings.eval<
+      ClassifierLogRowShot[]
+    >(`[...document.querySelectorAll('[data-classifier-log-id]')].map((row) => {
+      const spans = [...(row.querySelector('button')?.querySelectorAll(':scope > span') ?? [])]
+      return {
+        id: row.getAttribute('data-classifier-log-id') ?? '',
+        status: row.getAttribute('data-status') ?? '',
+        scene: (spans[1]?.textContent ?? '').trim(),
+        subject: (spans[2]?.textContent ?? '').trim(),
+        result: (row.querySelector('[data-classifier-log-result]')?.textContent ?? '').trim(),
+        ms: (spans[4]?.textContent ?? '').trim()
+      }
+    })`)
+  const openSlot = async (slot: number): Promise<void> => {
+    await settings.eval(`(${SLOT(slot)}?.querySelector('button')?.click(), true)`)
+    await sleep(150)
+  }
+  /** 打开着的下拉面板里的选项按钮（SessionPicker 的分组标题钮除外：它带 lucide 图标） */
+  const SLOT_OPTIONS = (slot: number): string =>
+    `[...(${SLOT(slot)}?.querySelectorAll('.absolute button') ?? [])].filter((b) => !b.querySelector('svg'))`
+  return {
+    ready: async () => {
+      await until(() => settings.eval<boolean>(`${TOOLBAR} !== null`), 'classifier log page ready')
+    },
+    rows,
+    waitRowCount: (n) =>
+      until(async () => {
+        const list = await rows()
+        return list.length === n ? list : null
+      }, `classifier log rows = ${n}`),
+    listText: () => settings.eval<string>(`(${LIST}?.textContent ?? '').trim()`),
+    hint: () => settings.eval<string>(`(${HINT}?.textContent ?? '').trim()`),
+    clearDisabled: () =>
+      settings.eval<boolean>(
+        `${ICON_BUTTON(['lucide-trash-2', 'lucide-trash2'])}?.disabled === true`
+      ),
+    refresh: async () => {
+      await settings.eval(`(${ICON_BUTTON(['lucide-refresh-cw'])}?.click(), true)`)
+      await sleep(200)
+    },
+    clickClear: async () => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const btn = ${ICON_BUTTON(['lucide-trash-2', 'lucide-trash2'])}
+        if (!btn || btn.disabled) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error('classifier log clear button missing or disabled')
+      await sleep(150)
+    },
+    toggle: async (id) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const btn = ${ROW(id)}?.querySelector('button')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`classifier log row ${id} not found`)
+      await sleep(150)
+    },
+    expandedIds: () =>
+      settings.eval<string[]>(`[...document.querySelectorAll('[data-classifier-log-id]')]
+        .filter((row) => row.querySelector('[data-classifier-log-status]'))
+        .map((row) => row.getAttribute('data-classifier-log-id') ?? '')`),
+    detail: async (id, sectionTitles) => {
+      await until(
+        () =>
+          settings.eval<boolean>(
+            `${ROW(id)}?.querySelector('[data-classifier-log-status]') != null`
+          ),
+        `classifier log detail ${id}`
+      )
+      return settings.eval<ClassifierLogDetailShot>(`(() => {
+        const row = ${ROW(id)}
+        const status = row.querySelector('[data-classifier-log-status]')
+        const meta = status.parentElement
+        const next = meta.nextElementSibling
+        const error = next && next.className.includes('border-amber') ? (next.textContent ?? '').trim() : ''
+        const questions = {}
+        for (const q of row.querySelectorAll('[data-classifier-question]')) {
+          questions[q.getAttribute('data-classifier-question')] = [...q.querySelectorAll('[data-classifier-option]')].map((o) => ({
+            label: o.getAttribute('data-classifier-option') ?? '',
+            chosen: o.getAttribute('data-chosen') === 'true',
+            text: (o.textContent ?? '').trim()
+          }))
+        }
+        const sections = {}
+        const titles = ${JSON.stringify(sectionTitles)}
+        for (const el of row.querySelectorAll('div')) {
+          if (el.children.length !== 0) continue
+          const text = (el.textContent ?? '').trim()
+          if (!titles.includes(text) || !el.className.includes('uppercase')) continue
+          sections[text] = (el.nextElementSibling?.textContent ?? '').trim()
+        }
+        return {
+          status: (status.textContent ?? '').trim(),
+          statusTone: status.className.includes('emerald') ? 'ok' : status.className.includes('amber') ? 'warn' : '',
+          meta: (meta.textContent ?? '').trim(),
+          error,
+          questions,
+          sections
+        }
+      })()`)
+    },
+    pickFilter: async (slot, label) => {
+      await openSlot(slot)
+      const ok = await settings.eval<boolean>(`(() => {
+        const btn = ${SLOT_OPTIONS(slot)}.find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(label)})
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`filter #${slot} has no option ${label}`)
+      await sleep(250)
+    },
+    filterOptions: async (slot) => {
+      await openSlot(slot)
+      const labels = await settings.eval<string[]>(
+        `${SLOT_OPTIONS(slot)}.map((b) => (b.textContent ?? '').trim())`
+      )
+      await openSlot(slot)
+      return labels
+    }
   }
 }
 

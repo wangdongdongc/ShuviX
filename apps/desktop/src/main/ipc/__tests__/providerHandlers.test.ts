@@ -15,6 +15,8 @@
  *          窗口已销毁则不推
  *   IPC-10 登录中窗口销毁 → cancelLogin(id)；正常结束后撤掉监听（之后再销毁不取消任何东西）
  *   IPC-11 窗口销毁之后不再打开任何外部地址
+ *   IPC-CC1 `provider:listClassifierModels` 已注册，原样交回 commandClassifier.listModels() 的结果（同一引用、调一次）
+ *   IPC-CC2 listModels 抛错 → 这次调用以同一个错误拒绝
  *
  * electron 是替身（handle 收进 Map；BrowserWindow.fromWebContents 回一个可辨认的窗口）；
  * providerOAuthService / externalOpen 是 spy；发起方的 webContents 是一个 EventEmitter。
@@ -49,6 +51,10 @@ vi.mock('../../services/externalOpen', () => ({
   routeExternalUrl: vi.fn(async () => true)
 }))
 vi.mock('../../services/providerService', () => ({ providerService: {} }))
+// 真模块经 ./models → providerDao → dao/database 去要 app.getPath（electron 替身里没有）：换成 spy
+vi.mock('../../services/commandClassifier', () => ({
+  commandClassifier: { listModels: vi.fn(() => []), classify: vi.fn(async () => null) }
+}))
 vi.mock('../../services/providerOAuthService', () => ({
   providerOAuthService: {
     status: vi.fn(),
@@ -60,6 +66,7 @@ vi.mock('../../services/providerOAuthService', () => ({
 }))
 
 import { routeExternalUrl } from '../../services/externalOpen'
+import { commandClassifier } from '../../services/commandClassifier'
 import { providerOAuthService } from '../../services/providerOAuthService'
 import { registerProviderHandlers } from '../providerHandlers'
 
@@ -378,5 +385,36 @@ describe('provider:oauthAnswer', () => {
     ).toEqual({ success: false })
     expect(oauth.answerPrompt).toHaveBeenLastCalledWith(PROVIDER, 'stale', 'v')
     expect(oauth.answerPrompt).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('provider:listClassifierModels', () => {
+  it('IPC-CC1 已注册：原样交回 commandClassifier.listModels() 的结果（同一个数组引用），恰调一次', async () => {
+    const models = [
+      {
+        id: 'row-or:~typesafe/jev-latest',
+        providerId: 'row-or',
+        modelId: '~typesafe/jev-latest',
+        isEnabled: 1,
+        sortOrder: 0,
+        capabilities: '{}',
+        providerName: 'OpenRouter'
+      }
+    ]
+    const listModels = vi.mocked(commandClassifier.listModels)
+    listModels.mockReturnValueOnce(models)
+    expect(state.handlers.has('provider:listClassifierModels')).toBe(true)
+    expect(await invoke('provider:listClassifierModels')).toBe(models)
+    expect(listModels).toHaveBeenCalledTimes(1)
+  })
+
+  it('IPC-CC2 listModels 抛错 → 这次调用以同一个错误拒绝', async () => {
+    const boom = new Error('catalog unavailable')
+    vi.mocked(commandClassifier.listModels).mockImplementationOnce(() => {
+      throw boom
+    })
+    await expect(
+      Promise.resolve().then(() => invoke('provider:listClassifierModels'))
+    ).rejects.toBe(boom)
   })
 })

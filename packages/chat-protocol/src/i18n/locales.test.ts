@@ -364,4 +364,43 @@ describe('i18n 语言包', () => {
       for (const key of REMOVED) expect(present.has(key), `${lang} ${key}`).toBe(false)
     }
   })
+
+  it('CM-L1 命令分类模型一行的说明三语都点名策略读的属性 object.risk 与豁免的类别 read_only（写策略的人要靠它找到字段）', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const desc = leaf(bundle, 'settings.classifierModelRowDesc')
+      expect(desc, lang).toBeDefined()
+      expect(desc, lang).toContain('object.risk')
+      expect(desc, lang).toContain('read_only')
+      for (const key of ['settings.classifierModelRow', 'settings.classifierModelNone']) {
+        expect(leaf(bundle, key)?.trim(), `${lang} ${key}`).toBeTruthy()
+      }
+    }
+  })
+
+  it('CM-L2 分类器日志页的文案三语齐全：classifierLog.* 每个叶子非空、子页标签与 command-risk 场景名在；状态恰六种且同一门语言里标签互不相同；hint 恰插值 {{max}}', () => {
+    const STATUSES = ['ok', 'incomplete', 'failed', 'timeout', 'aborted', 'misconfigured']
+    const enKeys = flatten(en).filter((k) => k.startsWith('settings.classifierLog.'))
+    expect(enKeys.length).toBeGreaterThan(0)
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const langKeys = flatten(bundle).filter((k) => k.startsWith('settings.classifierLog.'))
+      expect(langKeys.sort(), lang).toEqual([...enKeys].sort())
+      for (const key of langKeys) expect(leaf(bundle, key)?.trim(), `${lang} ${key}`).toBeTruthy()
+
+      expect(leaf(bundle, 'settings.monitorSubTabClassifier')?.trim(), lang).toBeTruthy()
+      expect(leaf(bundle, 'settings.classifierLog.scenes.command-risk')?.trim(), lang).toBeTruthy()
+
+      const statusKeys = langKeys
+        .filter((k) => k.startsWith('settings.classifierLog.status.'))
+        .map((k) => k.slice('settings.classifierLog.status.'.length))
+      expect(statusKeys.sort(), lang).toEqual([...STATUSES].sort())
+      const labels = STATUSES.map((s) => leaf(bundle, `settings.classifierLog.status.${s}`))
+      expect(new Set(labels).size, `${lang} ${labels.join(' / ')}`).toBe(STATUSES.length)
+
+      const hint = leaf(bundle, 'settings.classifierLog.hint')!
+      expect(placeholders(hint), lang).toEqual(['max'])
+      for (const key of langKeys.filter((k) => k !== 'settings.classifierLog.hint')) {
+        expect(placeholders(leaf(bundle, key)!), `${lang} ${key}`).toEqual([])
+      }
+    }
+  })
 })

@@ -50,6 +50,7 @@
     "test:e2e:startup": "npm run test:e2e:startup -w shuvix",
     "probe": "npm run probe -w shuvix",
     "probe:protocols": "npm run probe:protocols -w shuvix",
+    "probe:classifier": "npm run probe:classifier -w shuvix",
     "probe:protocols:dry": "npm run probe:protocols:dry -w shuvix"
   }
 }

@@ -541,6 +541,9 @@
     "defaultProvider": "Default Provider",
     "defaultModel": "Default Model",
     "defaultModelNone": "None",
+    "classifierModelRow": "Classifier model",
+    "classifierModelRowDesc": "Before each command runs, a classifier model decides which kind of action it is (read-only, touches personal files, changes files, installs software, sends data out, deletes data …). A command outside the sandbox that it rates plainly read-only (read_only with probability ≥ 0.9) runs without asking or the automatic review; everything else asks as before. Policies read the result as object.risk, and every classification is listed under Monitor → Classifier. Leave it off to skip classification. Classifier models are their own model type, for example Jev on OpenRouter or OpenCode.",
+    "classifierModelNone": "Off",
     "appearanceGroup": "Appearance",
     "languageGroup": "Language",
     "themeMode": "Theme Mode",
@@ -892,7 +895,34 @@
     "chromeExtRepair": "Repair",
     "chromeExtHostPending": "Registering…",
     "chromeExtHostInstalled": "Registered with",
-    "chromeExtHostNoBrowser": "No Chromium browser found on this computer"
+    "chromeExtHostNoBrowser": "No Chromium browser found on this computer",
+    "monitorSubTabClassifier": "Classifier",
+    "classifierLog": {
+      "hint": "Every call to a classifier model is listed here: what it was asked, what was sent, its answer, how long it took. The newest {{max}} are kept.",
+      "empty": "No classifications yet. Pick a classifier model in Settings → General and commands get classified before they run.",
+      "allScenes": "All scenes",
+      "allStatuses": "All statuses",
+      "scenes": {
+        "command-risk": "Command risk"
+      },
+      "status": {
+        "ok": "OK",
+        "incomplete": "Incomplete",
+        "failed": "Failed",
+        "timeout": "Timed out",
+        "aborted": "Cancelled",
+        "misconfigured": "Not set up"
+      },
+      "model": "Model",
+      "duration": "Took",
+      "session": "Session",
+      "toolCall": "Tool call",
+      "subject": "Classified",
+      "questions": "Questions and answers",
+      "sent": "Sent to the classifier",
+      "rawAnswers": "Raw answers",
+      "clearConfirm": "Clear all classifier logs?"
+    }
   },
   "about": {
     "description": "Your AI Assistant",

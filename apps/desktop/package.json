@@ -39,6 +39,7 @@
     "test:e2e:startup": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/startup/",
     "probe": "electron-vite build && vitest run --config vitest.config.probe.ts",
     "probe:protocols": "vitest run --config vitest.config.protocols.ts e2e/live/protocols.probe.ts",
+    "probe:classifier": "vitest run --config vitest.config.classifier.ts e2e/live/classifier.probe.ts",
     "probe:protocols:dry": "vitest run --config vitest.config.protocols.ts --mode probe-dry e2e/live/protocols.probe.ts"
   },
   "dependencies": {
