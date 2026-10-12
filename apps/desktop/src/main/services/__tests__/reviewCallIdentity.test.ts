@@ -51,7 +51,11 @@ vi.mock('../sessionService', () => ({
   sessionService: { getById: () => undefined, addAllowListPaths: () => {} }
 }))
 vi.mock('../skillService', () => ({
-  skillService: { listExternalDirs: () => [], enabledSkillRoots: () => [] }
+  skillService: {
+    listExternalDirs: () => [],
+    listSharedDirs: () => [],
+    enabledSkillRoots: () => []
+  }
 }))
 vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: () => [] }))
 vi.mock('../policyService', () => ({
@@ -73,6 +77,10 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => '/tmp/shuvix-rv-tool-results',
   getDefaultSkillsDir: () => '/tmp/shuvix-rv-skills',
   getBuiltinSkillsDir: () => '/tmp/shuvix-rv-builtin-skills',
+  getSharedSkillsDirs: () => ({
+    claude: '/tmp/shuvix-rv-home/.claude/skills',
+    agents: '/tmp/shuvix-rv-home/.agents/skills'
+  }),
   getDefaultBotsDir: () => '/tmp/shuvix-rv-bots',
   getDefaultPoliciesDir: () => '/tmp/shuvix-rv-policies',
   getDefaultAgentsDir: () => '/tmp/shuvix-rv-agents',

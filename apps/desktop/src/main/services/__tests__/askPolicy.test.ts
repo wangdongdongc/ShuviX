@@ -79,6 +79,7 @@ vi.mock('../sessionService', () => ({
 vi.mock('../skillService', () => ({
   skillService: {
     listExternalDirs: () => state.externalDirs,
+    listSharedDirs: () => [],
     enabledSkillRoots: () => state.skillRoots
   }
 }))
@@ -109,6 +110,10 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => TOOL_RESULTS,
   getDefaultSkillsDir: () => DEFAULT_SKILLS,
   getBuiltinSkillsDir: () => BUILTIN_SKILLS,
+  getSharedSkillsDirs: () => ({
+    claude: '/nonexistent/shuvix-ask/.claude/skills',
+    agents: '/nonexistent/shuvix-ask/.agents/skills'
+  }),
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
   // vars.shuvixConfigDirs 的四个目录（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => POLICIES_DIR,

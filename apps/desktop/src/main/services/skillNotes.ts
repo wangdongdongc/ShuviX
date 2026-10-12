@@ -5,7 +5,8 @@
  * 与注册表笔记（registryNotes）分开写，因为技能的承载项目不是一张写死的表：
  *   - 默认目录与内置目录各一个固定 id；
  *   - **外部目录数量不定、路径任意**，承载项目按目录名现拼（`__skills:<name>__`），
- *     目录被移除时连同它的承载项目与笔记会话一并清掉 —— 留着就是一堆指向不存在目录的会话。
+ *     目录被移除时连同它的承载项目与笔记会话一并清掉 —— 留着就是一堆指向不存在目录的会话；
+ *   - 共用目录（`~/.claude/skills` / `~/.agents/skills`）按组键套同一个拼法，移不掉，载体也不删。
  * 内置目录的 path 随界面语言变（`Resources/skills/<lang>/`），与内置知识库同策：
  * 切语言时把那一行改指到新语言的目录上（`syncSkillBuiltinProject`）。
  *
@@ -31,7 +32,7 @@ import type { Project, SessionInfo, Skill } from '../types'
 /** 承载项目的名字不对用户露出（项目列表过滤掉了），只在日志与调试里认得出是谁 */
 function carrierName(skill: Skill): string {
   if (skill.source === 'builtin') return 'Builtin Skills'
-  if (skill.source === 'external') return `Skills: ${skill.dirName}`
+  if (skill.source === 'external' || skill.source === 'shared') return `Skills: ${skill.dirName}`
   return 'Skills'
 }
 
@@ -43,6 +44,12 @@ function carrierOf(skill: Skill): { id: string; root: string } | null {
     return { id: SKILL_DEFAULT_PROJECT_ID, root: getDefaultSkillsDir() }
   if (skill.source === 'external' && skill.dirName) {
     const dir = skillService.listExternalDirs().find((d) => d.name === skill.dirName)
+    return dir ? { id: skillExternalProjectId(dir.name), root: dir.path } : null
+  }
+  // 共用目录借外部目录那一套 id（`__skills:claude__` / `__skills:agents__`）：外部目录不能取这两个
+  // 名字，早先已取了的，共用目录那一组就让给它（见 skillService.sharedDirs），所以 id 不会撞
+  if (skill.source === 'shared' && skill.dirName) {
+    const dir = skillService.listSharedDirs().find((d) => d.name === skill.dirName)
     return dir ? { id: skillExternalProjectId(dir.name), root: dir.path } : null
   }
   // 项目级技能不进侧栏（它随当前会话的项目变，而这一组是全局的）

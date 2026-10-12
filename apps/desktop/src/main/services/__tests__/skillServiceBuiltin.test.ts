@@ -21,7 +21,11 @@ const DIRS = vi.hoisted(() => {
 vi.mock('../../utils/paths', () => ({
   // 内置那一层：产线上是 `skills/<lang>/`，这里就是一个放技能目录的普通目录
   getBuiltinSkillsDir: () => DIRS.builtin,
-  getDefaultSkillsDir: () => DIRS.user
+  getDefaultSkillsDir: () => DIRS.user,
+  getSharedSkillsDirs: () => ({
+    claude: `${DIRS.root}/home/.claude/skills`,
+    agents: `${DIRS.root}/home/.agents/skills`
+  })
 }))
 
 import { skillService } from '../skillService'

@@ -27,9 +27,14 @@
  * `skill.changed` 自动重扫；绕过宿主直接写盘的（SK-15 的 writeFileSync 种子）要走组头菜单的
  * 「刷新」。两级开关的语义本身在 skillServiceGroups.test.ts 走 IPC/文件系统断言，这里不重复。
  *
+ * 与别的智能体共用的 `~/.claude/skills` / `~/.agents/skills`（SK-17..19）由宿主固定列出：排在内置
+ * 之后、外部目录之前，行上是路径写法，**整组缺省关着**，移不掉，里面的技能照常可编辑。SK-1 钉着
+ * 确切的目录清单，所以它们的种子在最后才写进隔离实例的假 HOME（同 SK-15，走「刷新」）；那份语义
+ * （opt-in 开关、早先外部目录的让位、准入）在 skillServiceShared.test.ts，这里只看 UI 走通。
+ *
  * 用例间有顺序依赖：同一个主窗口一路点下去。
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
@@ -638,5 +643,133 @@ describe('侧栏技能分组', () => {
       'directly written skill listed after refresh'
     )
     expect((await pane.flatRows()).find((r) => r.name === 'sk15-direct')?.indented).toBe(false)
+  })
+
+  it('SK-17 共用目录（~/.claude/skills、~/.agents/skills）：排在内置之后、外部之前，路径写法、缺省关着、不带锁、菜单里没有移除；链接条目不列', async () => {
+    const claudeDir = join(app.home, '.claude', 'skills')
+    const agentsDir = join(app.home, '.agents', 'skills')
+    seedSkillIn(claudeDir, 'cc-one', { description: 'claude shared skill' })
+    seedSkillIn(agentsDir, 'ag-one', { description: 'agents shared skill' })
+    // `npx skills add -g` 的符号链接模式：真目录在 ~/.agents/skills，别的工具目录里放链接 ——
+    // 那一份只该在 agents 下出现一次
+    if (process.platform !== 'win32') {
+      symlinkSync(join(agentsDir, 'ag-one'), join(claudeDir, 'ag-one'))
+    }
+
+    // 直接写盘不广播 skill.changed：走组头「刷新」
+    await pane.refresh()
+    await until(async () => {
+      const names = (await pane.folders()).map((f) => f.dirName)
+      return names.includes('claude') && names.includes('agents')
+    }, 'shared skill folders listed after refresh')
+
+    const folders = await pane.folders()
+    const order = folders.map((f) => f.dirName)
+    // 内置 → 共用（claude、agents）→ 外部目录（按配置顺序）
+    expect(order.slice(0, 3)).toEqual(['builtin', 'claude', 'agents'])
+    const externals = ['ext-a', 'ext-b', 'ext-c']
+    for (const ext of externals) {
+      expect(order.indexOf(ext), ext).toBeGreaterThan(order.indexOf('agents'))
+    }
+    // 默认目录那一摞仍平铺在最后
+    const flat = (await pane.flatRows()).map((r) => r.name)
+    expect(flat.length).toBeGreaterThan(0)
+    expect((await pane.rows()).map((r) => r.name).slice(-flat.length)).toEqual(flat)
+
+    const claude = folders.find((f) => f.dirName === 'claude')!
+    const agents = folders.find((f) => f.dirName === 'agents')!
+    expect(claude.label).toBe('~/.claude/skills')
+    expect(agents.label).toBe('~/.agents/skills')
+    // 缺省关着（那两个目录是别的工具的：列出来是让它们找得到，开不开由用户定）
+    expect(claude.off).toBe(true)
+    expect(agents.off).toBe(true)
+    // 锁 = 只读；共用目录是用户自己的文件
+    expect(claude.locked).toBe(false)
+    expect(agents.locked).toBe(false)
+
+    expect((await pane.rowsUnder('claude')).map((r) => r.name)).toEqual(['claude:cc-one'])
+    const agentRows = await pane.rowsUnder('agents')
+    expect(agentRows.map((r) => r.name)).toEqual(['agents:ag-one'])
+    expect(agentRows.map((r) => r.label)).toEqual(['ag-one'])
+    // 组关着 → 组内的行也变淡
+    expect(agentRows.every((r) => r.off)).toBe(true)
+
+    // 宿主固定列出的目录没有「移除」（同内置）
+    const menu = await pane.folderMenuIds('agents')
+    expect(menu).toEqual(['toggle', 'open'])
+    expect(menu).not.toContain('remove')
+
+    // IPC 对账：宿主那边就是共用组
+    const shared = await app.main.eval<
+      Array<{ dirName: string; dirPath: string; isShared: boolean; label?: string }>
+    >(
+      `window.api.skill.listGrouped().then((gs) => gs.filter((g) => g.isShared).map((g) => ({
+        dirName: g.dirName, dirPath: g.dirPath, isShared: g.isShared, label: g.label
+      })))`
+    )
+    expect(shared).toEqual([
+      { dirName: 'claude', dirPath: claudeDir, isShared: true, label: '~/.claude/skills' },
+      { dirName: 'agents', dirPath: agentsDir, isShared: true, label: '~/.agents/skills' }
+    ])
+  })
+
+  it('SK-18 从菜单打开 agents：只有它亮起来、配置记 enabledDirs；点里面的技能开可编辑的笔记（载体 __skills:agents__）', async () => {
+    const agentsDir = join(app.home, '.agents', 'skills')
+
+    await pane.pickFolderMenu('agents', 'toggle')
+    await until(
+      async () => (await pane.folders()).find((f) => f.dirName === 'agents')?.off === false,
+      'agents folder enabled'
+    )
+    expect((await pane.rowsUnder('agents')).every((r) => !r.off)).toBe(true)
+    // claude 那一组不受牵连
+    expect((await pane.folders()).find((f) => f.dirName === 'claude')?.off).toBe(true)
+    // 共用目录记的是「打开了」—— opt-in，删掉配置就回到关着
+    const config = JSON.parse(readFileSync(join(skillsDir, '.config.json'), 'utf8'))
+    expect(config.enabledDirs).toEqual(['agents'])
+    expect(config.disabledDirs).not.toContain('agents')
+
+    await pane.openSkill('agents:ag-one')
+    expect(await pane.activeRow()).toBe('agents:ag-one')
+
+    const opened = await openNote('agents:ag-one')
+    expect(opened.projectId).toBe('__skills:agents__')
+    expect(opened.projectId).toBe(skillExternalProjectId('agents'))
+    expect(opened.workingDirectory).toBe(agentsDir)
+    expect(opened.notebookPath).toBe('ag-one/SKILL.md')
+
+    await note.waitCard()
+    await note.waitBody(bodyMarkerOf(join(agentsDir, 'ag-one', 'SKILL.md')))
+    // 可编辑：有悬浮输入卡、编辑器可编辑（只读的只有内置那份）
+    expect(await note.hasInputCard()).toBe(true)
+    expect(await note.editorEditable()).toBe(true)
+  })
+
+  it('SK-19 把 ~/.agents/skills 当外部目录再加一次：取名框里显示拒绝原因、不关，目录清单不变', async () => {
+    const agentsDir = join(app.home, '.agents', 'skills')
+    const before = (await pane.folders()).map((f) => f.dirName)
+
+    await armDirPicker(agentsDir)
+    await pane.pickGroupMenu('add-folder')
+    const dialog = pane.skillDirDialog()
+    await dialog.waitOpen()
+    expect(await dialog.path()).toBe(agentsDir)
+    // 预填的是目录自己的名字（`skills`，不是保留名）—— 拒绝来自「它已在列」这一道
+    expect(await dialog.name()).toBe('skills')
+    await dialog.submit()
+
+    await until(async () => (await dialog.error()) !== '', 'shared-dir refusal shown')
+    expect(await dialog.error()).toBe(
+      '~/.agents/skills is a shared skills directory that ShuviX lists by itself'
+    )
+    expect(await dialog.isOpen()).toBe(true)
+    expect((await pane.folders()).map((f) => f.dirName)).toEqual(before)
+    const external = await app.main.eval<Array<{ name: string; path: string }>>(
+      `window.api.skill.listExternalDirs()`
+    )
+    expect(external.some((d) => d.path === agentsDir || d.name === 'skills')).toBe(false)
+
+    await dialog.cancel()
+    await dialog.waitClosed()
   })
 })

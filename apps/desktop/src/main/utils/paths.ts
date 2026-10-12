@@ -81,6 +81,20 @@ export function getDefaultSkillsDir(): string {
   return join(homedir(), '.shuvix', 'skills')
 }
 
+/**
+ * 与别的智能体共用的用户级 Skills 目录 —— 宿主固定列出，不用用户手动添加：
+ *   - `~/.claude/skills`：Claude Code 的用户级技能目录；
+ *   - `~/.agents/skills`：Agent Skills 的跨工具约定（Codex、pi 等原生就读它；`npx skills add -g`
+ *     在它推荐的符号链接模式下，真目录总落在这里，别的工具目录里放的是指向它的链接）。
+ * 只给路径、不建目录 —— 没用过那些工具的人，这两个目录不该凭空出现。
+ */
+export function getSharedSkillsDirs(): { claude: string; agents: string } {
+  return {
+    claude: join(homedir(), '.claude', 'skills'),
+    agents: join(homedir(), '.agents', 'skills')
+  }
+}
+
 /** 内置 Skills 资源根 —— 打包后 Resources/skills/，开发时 resources/skills/；下面按语言分层 */
 function getBuiltinSkillsRoot(): string {
   // `app?.` 与 getBuiltinKnowledgeDir 同策：单测常只桩半个 electron，少这一个问号就 TypeError

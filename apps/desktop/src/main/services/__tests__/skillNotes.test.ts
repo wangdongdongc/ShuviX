@@ -11,6 +11,10 @@
  *      的 frontmatter，与磁盘目录名并不总是相等（SKN-7）；
  *   ③ 移除外部目录的级联**只删那一个载体**（SKN-9/10）：删多了就是把别的目录的笔记一起抹掉。
  *
+ * 共用目录（`~/.claude/skills` / `~/.agents/skills`，组键 `claude` / `agents`）借外部目录那一套
+ * 拼法（`__skills:claude__` / `__skills:agents__`），根取自 `skillService.listSharedDirs()`
+ * （SKN-14..16）—— 外部目录取不了这两个名字，所以 id 不会撞。
+ *
  * dao / sessionService / skillService 是替身；**fs 是真的** —— 「存在且是普通文件」只有真目录
  * 测得出来（一个叫 `SKILL.md` 的目录就是这么漏过去的，SKN-6）。dao 替身背后挂一份内存表而不是
  * 逐条 mockReturnValue：这一组要断的正是「插了行之后再打开会复用」「级联删了哪几条」这类跨调用
@@ -23,6 +27,7 @@ import { join } from 'node:path'
 import {
   SKILL_BUILTIN_PROJECT_ID,
   SKILL_DEFAULT_PROJECT_ID,
+  isReadOnlySkillProjectId,
   skillExternalProjectId
 } from '@shuvix/chat-protocol/skillNotes'
 import type { Project, Session, Skill, SkillDir } from '../../types'
@@ -37,13 +42,19 @@ const tmp = vi.hoisted(() => {
     state,
     defaultDir: (): string => `${state.base}/skills`,
     builtinDir: (): string => `${state.base}/builtin-skills/${state.builtinLang}`,
-    externalDir: (name: string): string => `${state.base}/external/${name}`
+    externalDir: (name: string): string => `${state.base}/external/${name}`,
+    /** 共用目录（假 home 下）：paths 桩与 listSharedDirs 替身都指这里 */
+    sharedDir: (name: 'claude' | 'agents'): string => `${state.base}/home/.${name}/skills`
   }
 })
 
 vi.mock('../../utils/paths', () => ({
   getDefaultSkillsDir: () => tmp.defaultDir(),
-  getBuiltinSkillsDir: () => tmp.builtinDir()
+  getBuiltinSkillsDir: () => tmp.builtinDir(),
+  getSharedSkillsDirs: () => ({
+    claude: tmp.sharedDir('claude'),
+    agents: tmp.sharedDir('agents')
+  })
 }))
 vi.mock('../../dao/projectDao', () => ({
   projectDao: { findById: vi.fn(), insert: vi.fn(), update: vi.fn(), deleteById: vi.fn() }
@@ -55,7 +66,7 @@ vi.mock('../sessionService', () => ({
   sessionService: { create: vi.fn(), delete: vi.fn() }
 }))
 vi.mock('../skillService', () => ({
-  skillService: { findByName: vi.fn(), listExternalDirs: vi.fn() }
+  skillService: { findByName: vi.fn(), listExternalDirs: vi.fn(), listSharedDirs: vi.fn(() => []) }
 }))
 
 import { projectDao } from '../../dao/projectDao'
@@ -77,8 +88,8 @@ const db = {
   seq: 0
 }
 
-/** 注册表替身：按名字查得到的技能 + 当前配置里的外部目录 */
-const registry = { skills: [] as Skill[], dirs: [] as SkillDir[] }
+/** 注册表替身：按名字查得到的技能 + 当前配置里的外部目录 + 在列的共用目录 */
+const registry = { skills: [] as Skill[], dirs: [] as SkillDir[], shared: [] as SkillDir[] }
 
 /** 放一份 SKILL.md 并把对应的技能登记进注册表替身，返回它 */
 const putSkill = (
@@ -106,6 +117,14 @@ const addExternalDir = (name: string): SkillDir => {
   const dir: SkillDir = { name, path: tmp.externalDir(name) }
   mkdirSync(dir.path, { recursive: true })
   registry.dirs.push(dir)
+  return dir
+}
+
+/** 登记一个在列的共用目录（skillService.listSharedDirs 的那张表） */
+const addSharedDir = (name: 'claude' | 'agents'): SkillDir => {
+  const dir: SkillDir = { name, path: tmp.sharedDir(name) }
+  mkdirSync(dir.path, { recursive: true })
+  registry.shared.push(dir)
   return dir
 }
 
@@ -160,6 +179,7 @@ beforeEach(() => {
   db.seq = 0
   registry.skills = []
   registry.dirs = []
+  registry.shared = []
   tmp.state.builtinLang = 'en'
   tmp.state.base = join(
     tmpdir(),
@@ -205,6 +225,7 @@ beforeEach(() => {
     (name: string) => registry.skills.find((s) => s.name === name) ?? null
   )
   vi.mocked(skillService.listExternalDirs).mockImplementation(() => registry.dirs)
+  vi.mocked(skillService.listSharedDirs).mockImplementation(() => registry.shared)
 })
 
 afterEach(() => {
@@ -404,6 +425,72 @@ describe('openSkillNote —— 三种来源、三种承载项目', () => {
     registry.dirs = []
 
     expect(() => openSkillNote('ext:tool')).toThrow(/has no notebook carrier/)
+    expect(projectDao.insert).not.toHaveBeenCalled()
+  })
+})
+
+describe('openSkillNote —— 共用目录（~/.claude/skills / ~/.agents/skills）', () => {
+  it('SKN-14 共用技能进 `__skills:<组键>__` 载体（可编辑），根 = 那个共用目录；claude 与 agents 各一个载体', () => {
+    const agents = addSharedDir('agents')
+    const claude = addSharedDir('claude')
+    putSkill(agents.path, 'pdf', { name: 'agents:pdf', source: 'shared', dirName: 'agents' })
+    putSkill(claude.path, 'review', { name: 'claude:review', source: 'shared', dirName: 'claude' })
+
+    const pdf = openSkillNote('agents:pdf')
+    // id 逐字钉死：存量会话按它找承载项目，拼法一变就是一批找不到家的笔记
+    expect(pdf.projectId).toBe('__skills:agents__')
+    expect(pdf.workingDirectory).toBe(agents.path)
+    expect(db.projects.get('__skills:agents__')).toMatchObject({
+      name: 'Skills: agents',
+      path: agents.path
+    })
+    expect(sessionService.create).toHaveBeenLastCalledWith({
+      projectId: '__skills:agents__',
+      notebookPath: 'pdf/SKILL.md',
+      title: 'pdf'
+    })
+    // 共用目录是用户自己的文件 —— 笔记可编辑
+    expect(isReadOnlySkillProjectId(pdf.projectId)).toBe(false)
+
+    const review = openSkillNote('claude:review')
+    expect(review.projectId).toBe('__skills:claude__')
+    expect(review.workingDirectory).toBe(claude.path)
+    expect(review.projectId).not.toBe(pdf.projectId)
+    expect(db.projects.get('__skills:claude__')).toMatchObject({
+      name: 'Skills: claude',
+      path: claude.path
+    })
+    expect(db.sessions.map((s) => `${s.projectId}|${s.notebookPath}`)).toEqual([
+      '__skills:agents__|pdf/SKILL.md',
+      '__skills:claude__|review/SKILL.md'
+    ])
+    // 不会去外部目录那张表里找
+    expect(projectDao.insert).toHaveBeenCalledTimes(2)
+  })
+
+  it('SKN-15 共用技能的目录不在 listSharedDirs 里（被同名 / 同路径的外部目录占着）：抛 has no notebook carrier，不插项目行', () => {
+    // 扫描与打开之间那一刻，用户加回了一个早先的外部目录 —— 共用那一组让出去了，没有根可依
+    const dir = tmp.sharedDir('agents')
+    putSkill(dir, 'pdf', { name: 'agents:pdf', source: 'shared', dirName: 'agents' })
+    addSharedDir('claude')
+
+    expect(() => openSkillNote('agents:pdf')).toThrow(/has no notebook carrier/)
+    expect(projectDao.insert).not.toHaveBeenCalled()
+    expect(sessionService.create).not.toHaveBeenCalled()
+  })
+
+  it('SKN-16 已有的 `__skills:claude__` 载体行指着别处：一次 update 改指回共用目录，不另插一行', () => {
+    // home 迁移过、或那一行是早先同名外部目录留下的：不纠正，打开的就是另一个根下的同名相对路径
+    const claude = addSharedDir('claude')
+    putSkill(claude.path, 'review', { name: 'claude:review', source: 'shared', dirName: 'claude' })
+    putCarrier('__skills:claude__', { name: 'Skills: claude', path: '/old/home/.claude/skills' })
+
+    const session = openSkillNote('claude:review')
+    expect(session.projectId).toBe('__skills:claude__')
+    expect(session.workingDirectory).toBe(claude.path)
+    expect(vi.mocked(projectDao.update).mock.calls).toEqual([
+      ['__skills:claude__', { path: claude.path }]
+    ])
     expect(projectDao.insert).not.toHaveBeenCalled()
   })
 })

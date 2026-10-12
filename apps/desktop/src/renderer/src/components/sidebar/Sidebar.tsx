@@ -496,7 +496,8 @@ export function Sidebar(): React.JSX.Element {
   }
 
   /**
-   * 技能分组能力注入 —— 清单按**展示顺序**重排：内置置顶 → 用户添加的外部目录 → 默认目录
+   * 技能分组能力注入 —— 清单按**展示顺序**重排：内置置顶 → 共用目录（~/.claude/skills、
+   * ~/.agents/skills）→ 用户添加的外部目录 → 默认目录
    * （分组组件按 `isDefault` 决定「画不画那行文件夹」，默认目录的技能平铺在最后）。项目级技能
    * 刻意不列：它随当前会话的项目变，而这一组是全局的，混在一起就看不出「当前生不生效」。
    * 点一行开的是那个技能 `SKILL.md` 的笔记本（main 侧按技能标识找文件、去重会话）；
@@ -512,6 +513,8 @@ export function Sidebar(): React.JSX.Element {
           dirPath: g.dirPath,
           isDefault: g.isDefault,
           isBuiltin: g.dirName === 'builtin',
+          isShared: g.isShared,
+          label: g.label,
           isEnabled: g.isEnabled,
           skills: g.skills.map((skill) => ({
             name: skill.name,
@@ -526,11 +529,14 @@ export function Sidebar(): React.JSX.Element {
           }))
         })
         const builtin = groups.filter((g) => g.dirName === 'builtin').map(toFolder)
+        const shared = groups.filter((g) => g.isShared).map(toFolder)
         const external = groups
-          .filter((g) => !g.isDefault && g.dirName !== 'builtin' && g.dirName !== 'project')
+          .filter(
+            (g) => !g.isDefault && !g.isShared && g.dirName !== 'builtin' && g.dirName !== 'project'
+          )
           .map(toFolder)
         const def = groups.filter((g) => g.isDefault).map(toFolder)
-        return [...builtin, ...external, ...def]
+        return [...builtin, ...shared, ...external, ...def]
       },
       open: async (skill) => {
         let session: { id: string }

@@ -17,10 +17,27 @@
  *
  * SSG-17 在各个技能根里放符号链接条目（真技能目录放在各根之外、同一个夹具根之下）：beforeEach 的
  * rmSync(recursive) 删的是链接本身、不跟过去，整棵树照样一次清干净。
+ *
+ * 共用目录（`~/.claude/skills` / `~/.agents/skills`，组键 `claude` / `agents`）归
+ * `skillServiceShared.test.ts`（SSS）。这里的 paths 桩把它们指到夹具根下的假 home，平时不存在；
+ * 只有 SSG-15b 往 agents 那一个里放了一个技能（删除只对默认目录开放，共用目录也不例外）。
+ *
+ * SSG-18..26 是「同一个目录换个写法」：末尾 `/`、`//`、`.` / `..` 段、符号链接（叶子或祖先）、真实位置
+ * 那种写法（夹具根在 macOS 的 TMPDIR 下时是 `/private/var/…`）、不分大小写磁盘上的大小写变体 —— 加外部
+ * 目录时都算同一个；落库的是 resolve 过的写法；`<链接>/..` 这种两边说的不是同一个目录的路径一律不收；
+ * 早先版本写下的带尾斜杠的旧条目照旧认、不改写。符号链接的用例 Windows 上跳过（同 SSS）。
  */
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
+import { basename, join } from 'node:path'
 
 /**
  * 路径字符串在 hoist 期就要定下来（桩工厂先于一切 import 求值，而 skillService 构造时
@@ -40,14 +57,20 @@ const DIRS = vi.hoisted(() => {
     ext2: `${root}/ext2`,
     extMoved: `${root}/ext-moved`,
     /** 越界删除的哨兵：默认根的**兄弟**，`<user>/../sentinel` 正好落在它身上 */
-    sentinel: `${root}/sentinel`
+    sentinel: `${root}/sentinel`,
+    /** 共用目录（假 home 下）：beforeEach 不建，SSG-15b 现造 */
+    sharedClaude: `${root}/home/.claude/skills`,
+    sharedAgents: `${root}/home/.agents/skills`
   }
 })
 
 vi.mock('../../utils/paths', () => ({
   // 内置那一层：产线上是 `skills/<lang>/`，这里就是一个放技能目录的普通目录
   getBuiltinSkillsDir: () => DIRS.builtin,
-  getDefaultSkillsDir: () => DIRS.user
+  getDefaultSkillsDir: () => DIRS.user,
+  // 共用目录指向夹具根下（平时不存在）的假 home：这一组只在 SSG-15b 用到 agents 那一个，
+  // 绝不能读到跑测试那台机器的家目录
+  getSharedSkillsDirs: () => ({ claude: DIRS.sharedClaude, agents: DIRS.sharedAgents })
 }))
 
 import { appEventBus } from '../../utils/appEventBus'
@@ -70,6 +93,9 @@ const writeSkill = (dir: string, dirEntry: string, name = dirEntry, description 
 }
 
 const readConfig = (): string => (existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, 'utf8') : '')
+
+/** 手写一份原样的配置文本（模拟早先版本写下的 .config.json —— 产品代码今天不会再这么写） */
+const writeRawConfig = (text: string): void => writeFileSync(CONFIG_PATH, text, 'utf8')
 
 const namesOf = (skills: { name: string }[]): string[] => skills.map((s) => s.name).sort()
 
@@ -314,6 +340,283 @@ describe('SSG 外部目录的准入与移除', () => {
   })
 })
 
+describe('SSG 同一目录的别种写法', () => {
+  const POSIX = process.platform !== 'win32'
+  const ALREADY_ADDED = /already added/
+  const DEFAULT_DIR = /Cannot add the default skills directory/
+  const AFTER_LINK = /has "\.\." after a symbolic link/
+
+  /**
+   * 一次被拒的添加：抛出的原因匹配 `reason`；配置逐字不变（没有配置文件的，仍然没有）、仍可解析；
+   * 不广播；外部目录清单与分组都不变。返回抛出的原因原文，供调用方再看它带没带调用方的写法
+   */
+  const expectRefused = (dir: { name: string; path: string }, reason: RegExp): string => {
+    const label = `${dir.name} ← ${dir.path}`
+    const before = readConfig()
+    const dirsBefore = skillService.listExternalDirs()
+    const groupsBefore = groupNames()
+    publish.mockClear()
+
+    let message = ''
+    try {
+      skillService.addExternalDir(dir)
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e)
+    }
+    expect(message, label).toMatch(reason)
+
+    expect(readConfig(), label).toBe(before)
+    if (before === '') expect(existsSync(CONFIG_PATH), label).toBe(false)
+    else expect(() => JSON.parse(readConfig()), label).not.toThrow()
+    expect(publish, label).not.toHaveBeenCalled()
+    expect(skillService.listExternalDirs(), label).toEqual(dirsBefore)
+    expect(groupNames(), label).toEqual(groupsBefore)
+    return message
+  }
+
+  it('SSG-18 加过 ext 之后，ext 的别种写法（尾斜杠 / 双斜杠 / . 段 / 经兄弟目录的 ..）一律 already added，原因带着调用方的写法；只有一个 ext 组', () => {
+    // 不拒的话，同一批技能会以两个名字各列一遍（ext:tool 与 other:tool），两个开关各管一份
+    writeSkill(DIRS.ext, 'tool')
+    skillService.addExternalDir({ name: 'ext', path: DIRS.ext })
+
+    for (const path of [
+      `${DIRS.ext}/`,
+      `${DIRS.ext}//`,
+      `${DIRS.ext}/.`,
+      `${DIRS.ext}/./`,
+      `${DIRS.root}/./ext`,
+      `${DIRS.ext2}/../ext`
+    ]) {
+      const message = expectRefused({ name: 'other', path }, ALREADY_ADDED)
+      // 用户在渲染端看到的原因说的是他自己填的那个路径，而不是落库的那个
+      expect(message, path).toContain(`"${path}"`)
+    }
+
+    expect(skillService.listExternalDirs()).toEqual([{ name: 'ext', path: DIRS.ext }])
+    expect(groupNames()).toEqual(['default', 'ext'])
+    expect(namesOf(skillService.findAll())).toEqual(['ext:tool'])
+  })
+
+  it.skipIf(!POSIX)(
+    'SSG-19 符号链接与真实位置：叶子链接 / 祖先链接 / realpath 写法都算 ext；反过来先经链接加进来，再加 ext 本身同样拒',
+    () => {
+      writeSkill(DIRS.ext, 'tool')
+      const extLink = join(DIRS.root, 'ext-link')
+      symlinkSync(DIRS.ext, extLink)
+      const rootLink = join(DIRS.root, 'root-link')
+      symlinkSync(DIRS.root, rootLink)
+
+      skillService.addExternalDir({ name: 'ext', path: DIRS.ext })
+      // 真实位置那种写法：TMPDIR 在 /var/folders 下时，它是 /private/var/folders/…
+      for (const path of [extLink, join(rootLink, 'ext'), realpathSync.native(DIRS.ext)]) {
+        const message = expectRefused({ name: 'other', path }, ALREADY_ADDED)
+        expect(message, path).toContain(`"${path}"`)
+      }
+      expect(namesOf(skillService.findAll())).toEqual(['ext:tool'])
+
+      // 反过来：一份新的配置里先经链接加，记下的是链接那条路（不跟过去）；ext 本身与其尾斜杠写法都拒
+      rmSync(CONFIG_PATH, { force: true })
+      skillService.addExternalDir({ name: 'via-link', path: extLink })
+      expect(skillService.listExternalDirs()).toEqual([{ name: 'via-link', path: extLink }])
+      for (const path of [DIRS.ext, `${DIRS.ext}/`]) {
+        expectRefused({ name: 'ext', path }, ALREADY_ADDED)
+      }
+      expect(namesOf(skillService.findAll())).toEqual(['via-link:tool'])
+    }
+  )
+
+  it('SSG-20 默认目录的别种写法一律 Cannot add the default skills directory —— 没有配置文件时（之后仍没有），与加过 ext 之后（配置逐字不变）', () => {
+    // 默认目录不是外部目录：加进来它的技能就以 `<名字>:<skill>` 再列一遍，开关也分成两份
+    writeSkill(DIRS.user, 'mine')
+    const spellings = [`${DIRS.user}/`, `${DIRS.user}/.`, `${DIRS.ext}/../user`]
+    if (POSIX) {
+      const userLink = join(DIRS.root, 'user-link')
+      symlinkSync(DIRS.user, userLink)
+      const rootLink = join(DIRS.root, 'root-link')
+      symlinkSync(DIRS.root, rootLink)
+      spellings.push(userLink, join(rootLink, 'user'))
+    }
+    spellings.push(realpathSync.native(DIRS.user))
+
+    expect(existsSync(CONFIG_PATH)).toBe(false)
+    for (const path of spellings) expectRefused({ name: 'again', path }, DEFAULT_DIR)
+    expect(existsSync(CONFIG_PATH)).toBe(false)
+
+    skillService.addExternalDir({ name: 'ext', path: DIRS.ext })
+    for (const path of spellings) expectRefused({ name: 'again', path }, DEFAULT_DIR)
+    expect(skillService.listExternalDirs()).toEqual([{ name: 'ext', path: DIRS.ext }])
+    expect(namesOf(skillService.findAll())).toEqual(['mine'])
+  })
+
+  it('SSG-21 落库的是 resolve 过的写法：去掉尾斜杠、. 与 ..，不跟符号链接也不换成真实位置；之后按路径的判断都认它', () => {
+    mkdirSync(DIRS.extMoved, { recursive: true })
+    const link = join(DIRS.root, 'link-to-moved')
+    const added = [
+      { name: 'a', path: `${DIRS.ext}/` },
+      { name: 'b', path: `${DIRS.ext}/../ext2/./` }
+    ]
+    const expected = [
+      { name: 'a', path: DIRS.ext },
+      { name: 'b', path: DIRS.ext2 }
+    ]
+    if (POSIX) {
+      symlinkSync(DIRS.extMoved, link)
+      added.push({ name: 'c', path: `${link}/` })
+      expected.push({ name: 'c', path: link })
+    }
+    for (const dir of added) skillService.addExternalDir(dir)
+
+    expect(skillService.listExternalDirs()).toEqual(expected)
+    const raw = readConfig()
+    expect(JSON.parse(raw).dirs).toEqual(expected)
+    expect(raw).not.toContain('/"')
+    expect(raw).not.toContain('/./')
+    expect(raw).not.toContain('/../')
+    // 不换成真实位置（夹具根在 /var/folders 下时，真实位置是 /private/var/…）
+    const realExt = realpathSync.native(DIRS.ext)
+    if (realExt !== DIRS.ext) expect(raw).not.toContain(realExt)
+    if (POSIX) {
+      // 链接那条路就是用户挑的那条：不跟到 ext-moved
+      expect(raw).not.toContain(DIRS.extMoved)
+      expect(skillService.listExternalDirs()[2].path).not.toBe(realpathSync.native(DIRS.extMoved))
+    }
+
+    // 落库的写法一路传下去：分组的 dirPath、技能的 basePath、可写根、会话的只读技能根
+    writeSkill(DIRS.ext2, 'tool')
+    const b = groupOf('b')
+    expect(b.dirPath).toBe(DIRS.ext2)
+    expect(b.skills.map((s) => [s.name, s.basePath])).toEqual([['b:tool', join(DIRS.ext2, 'tool')]])
+    expect(groupOf('a').dirPath).toBe(DIRS.ext)
+    expect(skillService.isInsideWritableRoot(join(DIRS.ext2, 'tool', 'SKILL.md'))).toBe(true)
+    expect(skillService.enabledSkillRoots()).toContain(DIRS.ext2)
+  })
+
+  const legacySpellings: Array<[string, () => string]> = [
+    ['尾斜杠', () => `${DIRS.ext}/`],
+    ['双斜杠', () => `${DIRS.ext}//`],
+    ['经兄弟目录的 ..', () => `${DIRS.ext2}/../ext`]
+  ]
+
+  it.each(legacySpellings)(
+    'SSG-22 早先版本记下的 ext 写法（%s）：再加干净的 ext 拒、文件逐字不变；别的目录照常加得进，旧条目照旧列它的技能、写法不被改写',
+    (_label, spell) => {
+      writeSkill(DIRS.ext, 'tool')
+      const legacy = spell()
+      writeRawConfig(
+        JSON.stringify({ disabled: [], disabledDirs: [], dirs: [{ name: 'old', path: legacy }] })
+      )
+
+      const message = expectRefused({ name: 'new', path: DIRS.ext }, ALREADY_ADDED)
+      expect(message).toContain(`"${DIRS.ext}"`)
+
+      // 拒的是同一个目录，不是「配置里有怪写法就什么都加不进」
+      skillService.addExternalDir({ name: 'fresh', path: DIRS.ext2 })
+      expect(JSON.parse(readConfig()).dirs).toEqual([
+        { name: 'old', path: legacy },
+        { name: 'fresh', path: DIRS.ext2 }
+      ])
+      expect(groupOf('old').skills.map((s) => s.name)).toEqual(['old:tool'])
+      expect(namesOf(skillService.findEnabled())).toEqual(['old:tool'])
+    }
+  )
+
+  it('SSG-23 通不到任何地方的旧条目（目录不在了 / 悬空链接）不挡别的目录；那个位置后来真的有了，再加它就拒', () => {
+    const legacy = [{ name: 'gone', path: `${DIRS.root}/gone/` }]
+    if (POSIX) {
+      // 悬空：指向一个还不存在的 missing
+      symlinkSync(join(DIRS.root, 'missing'), join(DIRS.root, 'dangling'))
+      legacy.push({ name: 'dang', path: join(DIRS.root, 'dangling') })
+    }
+    writeRawConfig(JSON.stringify({ disabled: [], disabledDirs: [], dirs: legacy }))
+
+    // 解析不了的旧路径按 resolve 之后的字面比 —— 它们不是 ext
+    skillService.addExternalDir({ name: 'ext', path: DIRS.ext })
+    const after = [...legacy, { name: 'ext', path: DIRS.ext }]
+    expect(JSON.parse(readConfig()).dirs).toEqual(after)
+    expect(groupNames()).toEqual(['default', ...after.map((d) => d.name)])
+
+    // 目录回来了：`gone/` 与 `gone` 是同一个
+    mkdirSync(join(DIRS.root, 'gone'))
+    expectRefused({ name: 'gone-again', path: join(DIRS.root, 'gone') }, ALREADY_ADDED)
+
+    if (POSIX) {
+      // 链接的目标有了：dangling 与 missing 现在通到同一个真实位置
+      mkdirSync(join(DIRS.root, 'missing'))
+      expectRefused({ name: 'missing', path: join(DIRS.root, 'missing') }, ALREADY_ADDED)
+    }
+    // 旧条目照写的样子留着
+    expect(JSON.parse(readConfig()).dirs).toEqual(after)
+  })
+
+  it('SSG-24 不多拒：ext 的子目录、名字以 ext 开头的别的目录（经一条链接）、名字以 user 开头的兄弟目录，各自成组', () => {
+    skillService.addExternalDir({ name: 'ext', path: DIRS.ext })
+    const sub = join(DIRS.ext, 'sub')
+    mkdirSync(sub)
+    const user2 = `${DIRS.root}/user-2`
+    mkdirSync(user2)
+    const accepted = [
+      { name: 'sub', path: sub },
+      { name: 'user-2', path: user2 }
+    ]
+    if (POSIX) {
+      mkdirSync(DIRS.extMoved, { recursive: true })
+      const link = join(DIRS.root, 'moved-link')
+      symlinkSync(DIRS.extMoved, link)
+      accepted.push({ name: 'moved', path: link })
+    }
+
+    for (const dir of accepted) {
+      expect(() => skillService.addExternalDir(dir), dir.name).not.toThrow()
+    }
+    expect(skillService.listExternalDirs()).toEqual([{ name: 'ext', path: DIRS.ext }, ...accepted])
+    expect(groupNames()).toEqual(['default', 'ext', ...accepted.map((d) => d.name)])
+    for (const dir of accepted) expect(groupOf(dir.name).dirPath, dir.name).toBe(dir.path)
+  })
+
+  it('SSG-25 不分大小写的磁盘上，大小写变体是同一个目录：EXT 已加过、USER 是默认目录（分大小写的磁盘上跳过）', (ctx) => {
+    // 探针：这块盘上 EXT 找得到，且它的真实位置写作 ext —— 两条都成立才是「不分大小写、真实位置保留原大小写」
+    const upper = `${DIRS.root}/EXT`
+    ctx.skip(
+      !existsSync(upper) || basename(realpathSync.native(upper)) !== 'ext',
+      'case-sensitive disk'
+    )
+
+    skillService.addExternalDir({ name: 'ext', path: DIRS.ext })
+    const message = expectRefused({ name: 'other', path: upper }, ALREADY_ADDED)
+    expect(message).toContain(`"${upper}"`)
+    expectRefused({ name: 'again', path: `${DIRS.root}/USER` }, DEFAULT_DIR)
+    expect(skillService.listExternalDirs()).toEqual([{ name: 'ext', path: DIRS.ext }])
+  })
+
+  it.skipIf(!POSIX)(
+    'SSG-26 链接后面跟 ..（resolve 的字面与系统走到的不是一个目录）：一律拒、从不落库 —— 空配置时也拒',
+    () => {
+      // deep → a/b，所以 `deep/../ext` 系统走到的是 a/ext，resolve 折出来的却是根下的 ext
+      mkdirSync(join(DIRS.root, 'a', 'b'), { recursive: true })
+      mkdirSync(join(DIRS.root, 'a', 'ext'))
+      symlinkSync(join(DIRS.root, 'a', 'b'), join(DIRS.root, 'deep'))
+      const elink = join(DIRS.root, 'elink')
+      symlinkSync(DIRS.ext, elink)
+      symlinkSync(DIRS.user, join(DIRS.root, 'a', 'ulink'))
+      const twisted = `${DIRS.root}/deep/../ext`
+      const twistedUser = `${DIRS.root}/deep/../ulink`
+
+      // 空配置：前面没有任何条目可撞，照样拒（否则记下的是根下的 ext，用户挑的却是 a/ext）
+      const first = expectRefused({ name: 'dup', path: twisted }, AFTER_LINK)
+      expect(first).toContain(`"${twisted}"`)
+
+      skillService.addExternalDir({ name: 'e', path: elink })
+      expectRefused({ name: 'dup', path: twisted }, AFTER_LINK)
+      // 系统走到的是默认目录、字面却是一个不存在的 ulink：两道闸看的不是同一个目录，不收
+      expectRefused({ name: 'u', path: twistedUser }, AFTER_LINK)
+
+      expect(skillService.listExternalDirs()).toEqual([{ name: 'e', path: elink }])
+      expect(readConfig()).not.toContain('ulink')
+      expect(readConfig()).not.toContain('/../')
+    }
+  )
+})
+
 describe('SSG 写入回执', () => {
   it('SSG-11 每个写配置的路径恰好广播一次 skill.changed', () => {
     // 配置是两级开关与外部目录的唯一落点，侧栏那一组靠这条事件重扫。少发一次 → 界面停在
@@ -430,11 +733,16 @@ describe('SSG 删除默认目录里的技能', () => {
     expect(existsSync(join(DIRS.sentinel, 'precious', 'SKILL.md'))).toBe(true)
   })
 
-  it('SSG-15b 不是默认目录的技能删不得：内置与外部各抛一次，目录仍在', () => {
-    // 外部目录是用户自己的文件夹（移除来源即可），内置随包发布 —— 删除只对默认目录开放
+  it('SSG-15b 不是默认目录的技能删不得：内置、外部、共用各抛一次，目录仍在', () => {
+    // 外部目录是用户自己的文件夹（移除来源即可），内置随包发布，共用目录是别的工具的 ——
+    // 删除只对默认目录开放
     writeSkill(DIRS.builtin, 'drawing')
     skillService.addExternalDir({ name: 'ext', path: DIRS.ext })
     const tool = writeSkill(DIRS.ext, 'tool')
+    const pdf = writeSkill(DIRS.sharedAgents, 'pdf')
+    // 打开那一组也一样：开关管「上不上架」，不管「删不删得」
+    skillService.setGroupEnabled('agents', true)
+    expect(skillService.findByName('agents:pdf')?.basePath).toBe(pdf)
 
     expect(() => skillService.deleteDefaultSkill('builtin:drawing')).toThrow(
       /not found in the default skills directory/
@@ -442,8 +750,12 @@ describe('SSG 删除默认目录里的技能', () => {
     expect(() => skillService.deleteDefaultSkill('ext:tool')).toThrow(
       /not found in the default skills directory/
     )
+    expect(() => skillService.deleteDefaultSkill('agents:pdf')).toThrow(
+      /not found in the default skills directory/
+    )
     expect(existsSync(join(DIRS.builtin, 'drawing'))).toBe(true)
     expect(existsSync(tool)).toBe(true)
+    expect(existsSync(join(pdf, 'SKILL.md'))).toBe(true)
   })
 })
 

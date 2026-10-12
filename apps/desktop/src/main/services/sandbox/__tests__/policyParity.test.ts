@@ -54,7 +54,11 @@ vi.mock('../../sessionService', () => ({
   sessionService: { getById: () => undefined, addAllowListPaths: () => {} }
 }))
 vi.mock('../../skillService', () => ({
-  skillService: { listExternalDirs: () => [], enabledSkillRoots: () => state.skillRoots }
+  skillService: {
+    listExternalDirs: () => [],
+    listSharedDirs: () => [],
+    enabledSkillRoots: () => state.skillRoots
+  }
 }))
 vi.mock('../../knowledge/sessionBundle', () => ({
   enabledTargets: () => state.knowledgeTargets

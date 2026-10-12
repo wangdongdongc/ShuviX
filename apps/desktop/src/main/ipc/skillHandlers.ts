@@ -73,8 +73,9 @@ export function registerSkillHandlers(): void {
    * 那些会话指向的文件已经与本应用无关
    */
   ipcMain.handle('skill:removeExternalDir', async (_event, name: string) => {
-    skillService.removeExternalDir(name)
-    await dropExternalSkillCarrier(name)
+    // 只在真的移除了一条外部目录时删承载项目：共用目录的组键（claude / agents）也拼得出同形的
+    // 承载 id，名字对得上不等于该删
+    if (skillService.removeExternalDir(name)) await dropExternalSkillCarrier(name.trim())
     return { success: true }
   })
 

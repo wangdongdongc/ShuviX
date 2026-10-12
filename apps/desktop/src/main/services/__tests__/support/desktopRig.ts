@@ -130,6 +130,10 @@ vi.mock('../../../utils/paths', () => ({
   getDefaultHooksDir: () => rig.hooksDir,
   getDefaultSkillsDir: () => '/nonexistent/shuvix-p212/skills',
   getBuiltinSkillsDir: () => '/nonexistent/shuvix-p212/builtin-skills',
+  getSharedSkillsDirs: () => ({
+    claude: '/nonexistent/shuvix-p212/home/.claude/skills',
+    agents: '/nonexistent/shuvix-p212/home/.agents/skills'
+  }),
   getDefaultBotsDir: () => '/nonexistent/shuvix-p212/bots',
   getDefaultPoliciesDir: () => '/nonexistent/shuvix-p212/policies',
   getDefaultAgentsDir: () => '/nonexistent/shuvix-p212/agents',
@@ -236,6 +240,7 @@ vi.mock('../../skillService', () => ({
     findEnabled: () => [],
     findAll: () => [],
     listExternalDirs: () => [],
+    listSharedDirs: () => [],
     enabledSkillRoots: () => []
   }
 }))

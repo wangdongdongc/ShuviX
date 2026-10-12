@@ -2,11 +2,13 @@
  * SkillGroup —— 侧栏的「技能」分组。一个技能是**目录**（`SKILL.md` + `references/` 那些伴随
  * 文件），所以这一组比智能体那组多一层：
  *
- *   - **目录成行、可折叠**：内置目录置顶（锁徽标、只读），其后是用户添加的外部目录；
+ *   - **目录成行、可折叠**：内置目录置顶（锁徽标、只读），其后是与别的智能体共用的
+ *     `~/.claude/skills` / `~/.agents/skills`（宿主固定列出、移不掉、整组缺省关着），再是用户
+ *     添加的外部目录；
  *   - **默认目录（`~/.shuvix/skills/`）不占一行**，它的技能直接平铺在最后 —— 它是「你自己的
  *     技能」的那一摞，和智能体那组的用户档案同一副样子，多包一层文件夹只是多一次点击。
  *
- * 顺序由宿主给（内置 → 外部目录 → 默认），这里只按 `isDefault` 决定「画不画那行文件夹」。
+ * 顺序由宿主给（内置 → 共用 → 外部目录 → 默认），这里只按 `isDefault` 决定「画不画那行文件夹」。
  *
  * 点任一行技能 = 打开 / 复用它 `SKILL.md` 的**笔记本会话**（内置那份只读）—— 与 Bots、智能体
  * 档案、知识库条目同一条路。技能比它们多一样东西：**启用开关**（单个技能 + 整个目录两级）。
@@ -61,6 +63,13 @@ export interface SkillGroupFolder {
   isDefault: boolean
   /** 内置目录：只读（不能移除、里面的技能不能删） */
   isBuiltin: boolean
+  /**
+   * 与别的智能体共用的目录（`~/.claude/skills` / `~/.agents/skills`）：宿主固定列出，不能移除，
+   * 里面的技能照常可编辑（是用户自己的文件）；整组开关缺省关着
+   */
+  isShared: boolean
+  /** 行上显示的名字（共用目录是它的路径写法）；不给就显示 dirName */
+  label?: string
   /** 整组开关：关掉之后组内技能全部失效 */
   isEnabled: boolean
   skills: SkillGroupItem[]
@@ -68,7 +77,7 @@ export interface SkillGroupFolder {
 
 /** 宿主注入的技能注册表能力（桌面：window.api.skill 的窄投影） */
 export interface SkillGroupAdapter {
-  /** 拉取清单，**按展示顺序**：内置 → 外部目录 → 默认目录（须为稳定引用，避免重复扫描） */
+  /** 拉取清单，**按展示顺序**：内置 → 共用 → 外部目录 → 默认目录（须为稳定引用，避免重复扫描） */
   list: () => Promise<SkillGroupFolder[]>
   /** 打开 / 复用这个技能 SKILL.md 的笔记本会话 */
   open: (skill: SkillGroupItem) => void | Promise<void>
@@ -189,7 +198,8 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
     const items: ContextMenuItem[] = [
       { id: 'toggle', label: folder.isEnabled ? t('common.disable') : t('common.enable') },
       { id: 'open', label: t('settings.skillOpenDir') },
-      ...(folder.isBuiltin
+      // 内置与共用目录都是宿主固定列出的，没有「移除」可言
+      ...(folder.isBuiltin || folder.isShared
         ? []
         : [{ type: 'separator' as const }, { id: 'remove', label: t('settings.skillDirRemove') }])
     ]
@@ -271,7 +281,7 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
           <div className="px-3 py-2 text-xs text-text-tertiary">{t('settings.skillEmpty')}</div>
         ) : (
           <>
-            {/* 目录（内置置顶 → 外部），顺序由宿主给 */}
+            {/* 目录（内置置顶 → 共用 → 外部），顺序由宿主给 */}
             {scanned
               // 空目录也画行：移除入口只长在文件夹行的菜单上，把空目录藏起来就等于
               // 「加错了一个目录，从此只能手改 .config.json」。一个技能都没有的目录展开是空的，
@@ -297,7 +307,9 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
                       <span
                         className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${folder.isEnabled ? '' : 'line-through opacity-60'}`}
                       >
-                        {folder.isBuiltin ? t('settings.skillDirBuiltin') : folder.dirName}
+                        {folder.isBuiltin
+                          ? t('settings.skillDirBuiltin')
+                          : (folder.label ?? folder.dirName)}
                       </span>
                       {folder.isBuiltin && (
                         // 与知识库内置库（ShuviX 系统说明）同一副锁：小号、淡、悬停不隐去

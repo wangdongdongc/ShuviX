@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'ShuviX が読む Skill（SKILL.md）'
-description: 'ShuviX が skill を発見・解析・有効化・配達する仕組み —— 実際に読まれる SKILL.md の frontmatter、三つの skill ソース（グローバル、プロジェクト、外部ディレクトリ）、`.config.json`、スラッシュコマンド展開、`skill` ツール、agent ファイルとセッション拡張機能の `skill:<name>`。'
+description: 'ShuviX が skill を発見・解析・有効化・配達する仕組み —— 実際に読まれる SKILL.md の frontmatter、各 skill ソース（グローバル、プロジェクト、共用、外部ディレクトリ）、`.config.json`、スラッシュコマンド展開、`skill` ツール、agent ファイルとセッション拡張機能の `skill:<name>`。'
 tags: [shuvix, skills, format, spec]
 status: stable
 sources:
@@ -33,16 +33,18 @@ Prefix every review comment with a label…
 Scripts for this skill live in ${CLAUDE_SKILL_DIR}/scripts.
 ```
 
-ShuviX はちょうど二つの frontmatter キーを、**行ベース**のパーサーで読みます（YAML パーサーでは
-ありません）：
+ShuviX はちょうど二つの frontmatter キーを、**行ベース**のパーサーで読みます（YAML は複数行の
+`description` を読むときだけ使われます。後述）：
 
 | キー          | 必須     | 意味                                                                                                                                                                              |
 | ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`        | **はい** | skill の名前 —— スラッシュコマンドであり、`skill:<name>` で使う値。一行。外側の引用符は剥がされる。単純な識別子（文字、数字、`-`）に保つ。                                        |
-| `description` | いいえ   | 一行。`skill` ツールがモデルに見せ、スラッシュコマンドのポップオーバーがユーザーに見せるもの —— *いつこの skill を使うか*として、ユーザーやモデルが検索しそうな語で書く。一行、引用符は剥がされる。 |
+| `description` | いいえ   | なるべく一行（YAML の `>` ブロックも読める）。`skill` ツールがモデルに見せ、スラッシュコマンドのポップオーバーがユーザーに見せるもの —— *いつこの skill を使うか*として、ユーザーやモデルが検索しそうな語で書く。 |
 
 パーサーの規則：ファイルは `---` で始まらなければならない；frontmatter は次の `---` で終わる；各行は
-最初の `:` で分割される；複数行の値は**サポートされない**。`name` が無ければ frontmatter はまったく
+最初の `:` で分割される。複数行で書かれた `description` —— YAML の `>` / `|` ブロック、または次の
+インデント行に続けて書いた一文 —— は、frontmatter が正しい YAML なら YAML を通して読まれる。それ以外の値
+（`name` は常に含む）は行ごとに読んだそのままです。`name` が無ければ frontmatter はまったく
 認識されません：ディレクトリ名が名前になり、**frontmatter のテキストを含むファイル全体**が skill の
 内容になります。閉じる `---` の後のすべてが skill の本文です。
 
@@ -55,8 +57,18 @@ ShuviX が読むのは `SKILL.md` だけです。同梱ファイルは、エー�
 | ------------------ | -------------------------------------------- | ---------------------- | ----------------------------------------------------------------------- |
 | グローバル         | `~/.shuvix/skills/<dir>/SKILL.md`            | `<name>`               | 既定でオン；無効化できる                                                |
 | プロジェクト       | `<project>/.claude/skills/<dir>/SKILL.md`    | `<name>`               | そのプロジェクトのセッションでは**常にオン**；名前が衝突すれば優先      |
+| 共用ディレクトリ   | `~/.claude/skills/<dir>/SKILL.md`、`~/.agents/skills/<dir>/SKILL.md` | `claude:<name>`、`agents:<name>` | **既定でオフ**；行メニューからディレクトリ全体をオンにする |
 | 外部ディレクトリ   | サイドバーの「スキル」グループから追加した任意のフォルダ | `<dirName>:<name>`     | 既定でオン；ディレクトリ全体または個々の skill を無効化できる           |
 | 組み込み           | アプリに同梱、読み取り専用                   | `builtin:<name>`       | 既定でオン；無効化できる                                                |
+
+二つの**共用ディレクトリ**は、ほかのエージェントツールが使う場所です：`~/.claude/skills` は Claude Code の、
+`~/.agents/skills` は Agent Skills のツール横断の慣例的な場所です（Codex や pi が読み、`npx skills add -g`
+が実体を置く）。ShuviX は追加しなくてもこれらを一覧に出します —— skill があればそれぞれ一行になり、その行は
+削除できません —— が、ユーザーがディレクトリをオンにするまでは**オフ**のままです。中身はほかのツールのために
+入れられたものだからです。中の skill はユーザー自身のファイルで、編集できるノートとして開きます。skill
+フォルダ内のシンボリックリンクは skill として読まれないので、`npx skills add` が `~/.claude/skills` に張った
+リンク先の skill は `agents` の下に一度だけ現れます。同じフォルダをすでに外部ディレクトリとして追加していれば、
+そちらが優先されます。
 
 ディレクトリ名と `name` は違っていてもよく、ShuviX は `name` で一致させます。組み込みの skill はアプリに
 同梱され（UI 言語ごとに一つのディレクトリ）、編集できません。現在は `builtin:drawing` —— インライン SVG
@@ -64,13 +76,15 @@ ShuviX が読むのは `SKILL.md` だけです。同梱ファイルは、エー�
 `shuvix-tools` でその名を挙げています。有効化状態は `~/.shuvix/skills/.config.json` にあります：
 
 ```json
-{ "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
+{ "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "enabledDirs": ["agents"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
 ```
+
+`enabledDirs` は `disabledDirs` と逆向きで、既定でオフの共用ディレクトリにだけ使われます。
 
 サイドバーの「スキル」グループから変更してください（行メニューの有効化 / 無効化）。このファイルは ShuviX のもので、手で編集する場所ではありません。
 
 **skill を読むのは確認なし、変えるのは確認あり。** 組み込みの skill、`~/.shuvix/skills`、無効化されて
-いないすべての外部ディレクトリは、どのセッションにとっても読み取り専用のディレクトリです（`policy-md`
+いないすべての外部ディレクトリ、オンにしたすべての共用ディレクトリは、どのセッションにとっても読み取り専用のディレクトリです（`policy-md`
 エントリの `vars.sessionReadDirs`）：ファイルツールは確認なしで読め、サンドボックス内のコマンドも読めます。
 そこへの書き込みは確認が出ます —— skill はエージェント自身が従う指示だからです —— ので、ユーザーの代わりに
 グローバルや外部の skill を作成・編集するときは承認を経ます。プロジェクトレベルの skill は作業

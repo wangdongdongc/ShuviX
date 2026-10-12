@@ -84,7 +84,11 @@ vi.mock('../sessionService', () => ({
 }))
 // 会话设置带来的那部分会话目录（勾选的知识库、技能目录）与本文件无关：一个都不给
 vi.mock('../skillService', () => ({
-  skillService: { listExternalDirs: () => [], enabledSkillRoots: () => [] }
+  skillService: {
+    listExternalDirs: () => [],
+    listSharedDirs: () => [],
+    enabledSkillRoots: () => []
+  }
 }))
 vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: () => [] }))
 vi.mock('../policyService', () => ({
@@ -106,6 +110,10 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => join(state.root, 'tool-results'),
   getDefaultSkillsDir: () => join(state.root, 'skills'),
   getBuiltinSkillsDir: () => join(state.root, 'builtin-skills'),
+  getSharedSkillsDirs: () => ({
+    claude: join(state.root, 'home', '.claude', 'skills'),
+    agents: join(state.root, 'home', '.agents', 'skills')
+  }),
   getDefaultBotsDir: () => join(state.root, 'bots'),
   // getVars 的 shuvixConfigDirs（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => join(state.root, 'policies'),

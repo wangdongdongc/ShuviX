@@ -274,7 +274,8 @@ function hostPolicyVars(
     skillsDirs: [
       getDefaultSkillsDir(),
       getBuiltinSkillsDir(),
-      ...skillService.listExternalDirs().map((d) => d.path)
+      ...skillService.listExternalDirs().map((d) => d.path),
+      ...skillService.listSharedDirs().map((d) => d.path)
     ],
     // 以下三个是事实变量：引用它们的出厂策略（protect-bot-files / protect-shuvix-config /
     // protect-system）已于 2026-10-01 删除，留给用户自写的策略引用 —— 想把「bot 改自己的文件」

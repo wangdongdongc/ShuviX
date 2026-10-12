@@ -24,6 +24,7 @@
  * 询问点的自动审查带来的桌面接线（设计稿 docs/permission-review-design.md）：
  *   SEC-9 shuvixConfigDirs —— policies / agents / hooks / skills 四个目录（事实变量：引用它的出厂
  *     protect-shuvix-config 已于 2026-10-01 退役，留给用户自写的策略）；
+ *   SEC-10 skillsDirs —— 默认 → 内置 → 外部目录 → 在列的共用目录（~/.claude/skills、~/.agents/skills）；
  *   TC-SUBJ 桌面 subject 带上 ctx.agent 的档案名与 root / spawned（审查员的防递归与用户策略都读它）；
  *   TC-RV onPermissionRequest 每次现取注入的审查者（setPermissionReviewer），被动判定从不走到它。
  * 需要真实评估的用例读仓库里那份内置策略 md（同 askPolicy.test）；用户策略由 tc.userPolicies 喂。
@@ -45,6 +46,9 @@ const tc = vi.hoisted(() => ({
   ),
   /** skillService.enabledSkillRoots：默认技能目录 + 没被停用的外部技能目录（HG-2 换） */
   enabledSkillRoots: vi.fn((): string[] => []),
+  /** skillService.listExternalDirs / listSharedDirs：变量表 skillsDirs 的后两段（SEC-10 换） */
+  externalSkillDirs: [] as Array<{ name: string; path: string }>,
+  sharedSkillDirs: [] as Array<{ name: string; path: string }>,
   /** policyService.getUserPolicies 交出的用户策略（TC-SUBJ2 / TC-RV3 换） */
   userPolicies: [] as UserPolicyFile[],
   // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
@@ -63,7 +67,11 @@ vi.mock('../sessionService', () => ({
   sessionService: { getById: tc.getById, addAllowListPaths: () => {} }
 }))
 vi.mock('../skillService', () => ({
-  skillService: { listExternalDirs: () => [], enabledSkillRoots: tc.enabledSkillRoots }
+  skillService: {
+    listExternalDirs: () => tc.externalSkillDirs,
+    listSharedDirs: () => tc.sharedSkillDirs,
+    enabledSkillRoots: tc.enabledSkillRoots
+  }
 }))
 vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: tc.enabledTargets }))
 vi.mock('../policyService', () => ({
@@ -86,6 +94,10 @@ vi.mock('../../utils/paths', () => ({
   getToolResultsBase: () => '/tmp/shuvix-actor-tool-results',
   getDefaultSkillsDir: () => '/tmp/shuvix-actor-skills',
   getBuiltinSkillsDir: () => '/tmp/shuvix-actor-builtin-skills',
+  getSharedSkillsDirs: () => ({
+    claude: '/tmp/shuvix-actor-home/.claude/skills',
+    agents: '/tmp/shuvix-actor-home/.agents/skills'
+  }),
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
   // getVars 的 shuvixConfigDirs 的四个目录（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => '/tmp/shuvix-policies',
@@ -246,6 +258,48 @@ describe('makeDesktopSecurityProvider —— 变量表', () => {
       '/tmp/shuvix-hooks',
       '/tmp/shuvix-actor-skills'
     ])
+  })
+
+  // skillsDirs —— 事实变量：用户策略拿它圈「技能文件」。共用目录（~/.claude/skills、~/.agents/skills）
+  // 里装的同样是技能，漏了它们，一条「技能目录里的写入要问」的用户策略就对那两处失效
+  it('SEC-10 skillsDirs = 默认 → 内置 → 外部目录（配置顺序）→ 在列的共用目录（claude、agents），每次现取', () => {
+    try {
+      expect(vars().skillsDirs).toEqual([
+        '/tmp/shuvix-actor-skills',
+        '/tmp/shuvix-actor-builtin-skills'
+      ])
+
+      tc.externalSkillDirs = [
+        { name: 'ext-a', path: '/tmp/shuvix-ext-a' },
+        { name: 'ext-b', path: '/tmp/shuvix-ext-b' }
+      ]
+      tc.sharedSkillDirs = [
+        { name: 'claude', path: '/tmp/shuvix-actor-home/.claude/skills' },
+        { name: 'agents', path: '/tmp/shuvix-actor-home/.agents/skills' }
+      ]
+      expect(vars().skillsDirs).toEqual([
+        '/tmp/shuvix-actor-skills',
+        '/tmp/shuvix-actor-builtin-skills',
+        '/tmp/shuvix-ext-a',
+        '/tmp/shuvix-ext-b',
+        '/tmp/shuvix-actor-home/.claude/skills',
+        '/tmp/shuvix-actor-home/.agents/skills'
+      ])
+
+      // 被同名 / 同路径的外部目录占着的共用目录不在列：listSharedDirs 不给，这里也不另补（那个目录
+      // 已经以外部目录的身份在前面了，不重复）
+      tc.sharedSkillDirs = [{ name: 'claude', path: '/tmp/shuvix-actor-home/.claude/skills' }]
+      expect(vars().skillsDirs).toEqual([
+        '/tmp/shuvix-actor-skills',
+        '/tmp/shuvix-actor-builtin-skills',
+        '/tmp/shuvix-ext-a',
+        '/tmp/shuvix-ext-b',
+        '/tmp/shuvix-actor-home/.claude/skills'
+      ])
+    } finally {
+      tc.externalSkillDirs = []
+      tc.sharedSkillDirs = []
+    }
   })
 })
 

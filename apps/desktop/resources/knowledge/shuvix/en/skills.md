@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Skills (SKILL.md) as ShuviX reads them'
-description: 'How ShuviX discovers, parses, enables and delivers skills — the SKILL.md frontmatter it actually reads, the three skill sources (global, project, external directories), `.config.json`, the slash-command expansion, the `skill` tool, and the `skill:<name>` entries in agent files and session extensions.'
+description: 'How ShuviX discovers, parses, enables and delivers skills — the SKILL.md frontmatter it actually reads, the skill sources (global, project, shared, external directories), `.config.json`, the slash-command expansion, the `skill` tool, and the `skill:<name>` entries in agent files and session extensions.'
 tags: [shuvix, skills, format, spec]
 status: stable
 sources:
@@ -33,15 +33,18 @@ Prefix every review comment with a label…
 Scripts for this skill live in ${CLAUDE_SKILL_DIR}/scripts.
 ```
 
-ShuviX reads exactly two frontmatter keys, with a **line-based** parser (not a YAML parser):
+ShuviX reads exactly two frontmatter keys, with a **line-based** reader (YAML only helps with a multi-line `description`, below):
 
 | Key           | Required | Meaning                                                                                                                                                                                                                   |
 | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`        | **yes**  | The skill's name — the slash command and the value used in `skill:<name>`. Single line; surrounding quotes are stripped. Keep it a simple identifier (letters, digits, `-`).                                               |
-| `description` | no       | One line. It is what the `skill` tool shows the model and what the slash-command popover shows the user — write it as *when to use this skill*, with the words a user or model would search for. Single line, quotes stripped. |
+| `description` | no       | Preferably one line (a YAML `>` block is read too). It is what the `skill` tool shows the model and what the slash-command popover shows the user — write it as *when to use this skill*, with the words a user or model would search for. |
 
 Rules of the parser: the file must start with `---`; the frontmatter ends at the next `---`; each
-line is split on its first `:`; multi-line values are **not** supported. If `name` is missing the
+line is split on its first `:`. A `description` written over several lines — a YAML `>` or `|`
+block, or a sentence continued on the next indented line — is read through YAML when the
+frontmatter is valid YAML; every other value, `name` always included, stays exactly as the line
+reader sees it. If `name` is missing the
 frontmatter is not recognised at all: the directory name becomes the name and the **entire file,
 frontmatter included**, becomes the skill's content. Everything after the closing `---` is the
 skill's body.
@@ -55,8 +58,18 @@ after loading the skill; refer to them by path from the skill's base directory.
 | ---------------- | -------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
 | global           | `~/.shuvix/skills/<dir>/SKILL.md`            | `<name>`               | on by default; can be disabled                                               |
 | project          | `<project>/.claude/skills/<dir>/SKILL.md`    | `<name>`               | **always on** for sessions in that project; preferred when a name clashes    |
+| shared           | `~/.claude/skills/<dir>/SKILL.md`, `~/.agents/skills/<dir>/SKILL.md` | `claude:<name>`, `agents:<name>` | **off by default**; turn the whole directory on from its row menu |
 | external directory | any folder added from the sidebar's Skills group | `<dirName>:<name>` | on by default; the whole directory or single skills can be disabled          |
 | builtin          | shipped inside the application, read-only    | `builtin:<name>`       | on by default; can be disabled                                               |
+
+The two **shared** directories are the ones other agent tools use: `~/.claude/skills` is Claude
+Code's, `~/.agents/skills` is the cross-tool Agent Skills location (Codex and pi read it, and
+`npx skills add -g` puts the real copy there). ShuviX lists them without being asked — each gets a
+row once it holds a skill, and the row cannot be removed — but leaves them **off** until the user
+turns the directory on, since what is in them was installed for other tools. Their skills are the
+user's own files and open as editable notes. A symbolic link inside any skills folder is not read
+as a skill, so a skill that `npx skills add` linked into `~/.claude/skills` appears once, under
+`agents`. If the same folder was already added as an external directory, that entry keeps it.
 
 The directory name and `name` may differ; ShuviX matches by `name`. Builtin skills come with the
 application (one directory per UI language) and cannot be edited; today there is one,
@@ -65,14 +78,18 @@ application (one directory per UI language) and cannot be edited; today there is
 Enable state lives in `~/.shuvix/skills/.config.json`:
 
 ```json
-{ "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
+{ "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "enabledDirs": ["agents"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
 ```
+
+`enabledDirs` is the opposite of `disabledDirs` and applies only to the shared directories, which
+start off.
 
 Change it through the sidebar's Skills group (the enable / disable item in a row's menu); the
 file is ShuviX's, not a place for hand edits.
 
-**Reading a skill never asks; changing one does.** The builtin skills, `~/.shuvix/skills` and
-every external directory that is not disabled are read-only directories of every session
+**Reading a skill never asks; changing one does.** The builtin skills, `~/.shuvix/skills`,
+every external directory that is not disabled and every shared directory that is turned on are
+read-only directories of every session
 (`vars.sessionReadDirs` in the `policy-md` entry): the file tools read them without asking, and a
 sandboxed command may read them too. Writing there asks — a skill is instructions the agent
 itself follows — so creating or editing a global or external skill on the user's behalf goes

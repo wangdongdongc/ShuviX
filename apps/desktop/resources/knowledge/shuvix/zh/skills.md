@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Skill（SKILL.md）在 ShuviX 里怎么被读取'
-description: 'ShuviX 怎样发现、解析、启用与投递 skill —— 它真正读取的 SKILL.md frontmatter、三个 skill 来源（全局、项目、外部目录）、`.config.json`、斜杠命令展开、`skill` 工具，以及 agent 文件与会话扩展能力里的 `skill:<name>`。'
+description: 'ShuviX 怎样发现、解析、启用与投递 skill —— 它真正读取的 SKILL.md frontmatter、各个 skill 来源（全局、项目、共用、外部目录）、`.config.json`、斜杠命令展开、`skill` 工具，以及 agent 文件与会话扩展能力里的 `skill:<name>`。'
 tags: [shuvix, skills, format, spec]
 status: stable
 sources:
@@ -32,15 +32,16 @@ Prefix every review comment with a label…
 Scripts for this skill live in ${CLAUDE_SKILL_DIR}/scripts.
 ```
 
-ShuviX 恰好读两个 frontmatter 键，用的是**按行**的解析器（不是 YAML 解析器）：
+ShuviX 恰好读两个 frontmatter 键，用的是**按行**的解析器（YAML 只帮多行的 `description`，见下）：
 
 | 键            | 必填   | 含义                                                                                                                                                            |
 | ------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`        | **是** | skill 的名字 —— 斜杠命令，以及 `skill:<name>` 里用的值。单行；外层引号会被剥掉。保持简单的标识符（字母、数字、`-`）。                                              |
-| `description` | 否     | 一行。`skill` 工具给模型看的、斜杠命令弹层给用户看的都是它 —— 写成*什么时候该用这个 skill*，用用户或模型会去搜的词。单行，引号会被剥掉。                           |
+| `description` | 否     | 最好一行（YAML 的 `>` 多行块也读得到）。`skill` 工具给模型看的、斜杠命令弹层给用户看的都是它 —— 写成*什么时候该用这个 skill*，用用户或模型会去搜的词。 |
 
-解析器的规则：文件必须以 `---` 开头；frontmatter 到下一个 `---` 结束；每行按第一个 `:` 切分；**不支持**
-多行值。缺 `name` 时 frontmatter 整个不被认出：目录名成为名字，**整份文件（含 frontmatter 文字）**成为
+解析器的规则：文件必须以 `---` 开头；frontmatter 到下一个 `---` 结束；每行按第一个 `:` 切分。写成多行的
+`description` —— YAML 的 `>` / `|` 块，或者一句话折到下一行缩进接着写 —— 在 frontmatter 是合法 YAML 时
+经 YAML 读出；其余的值（`name` 永远在内）都照按行读到的样子。缺 `name` 时 frontmatter 整个不被认出：目录名成为名字，**整份文件（含 frontmatter 文字）**成为
 skill 的内容。闭合 `---` 之后的全部内容是 skill 的正文。
 
 ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `read` 打开；用相对于 skill 基础目录的
@@ -52,20 +53,30 @@ ShuviX 只读 `SKILL.md`。伴随文件留给 agent 在加载 skill 之后用 `r
 | ---------- | ------------------------------------------- | --------------------- | ------------------------------------------------------------ |
 | 全局       | `~/.shuvix/skills/<dir>/SKILL.md`           | `<name>`              | 缺省开启；可禁用                                             |
 | 项目       | `<project>/.claude/skills/<dir>/SKILL.md`   | `<name>`              | 对该项目里的会话**恒开启**；名字撞车时优先                   |
+| 共用目录   | `~/.claude/skills/<dir>/SKILL.md`、`~/.agents/skills/<dir>/SKILL.md` | `claude:<name>`、`agents:<name>` | **缺省关闭**；在目录行的菜单里整个打开 |
 | 外部目录   | 从侧栏「技能」分组添加的任意文件夹          | `<dirName>:<name>`    | 缺省开启；整个目录或单个 skill 都可禁用                      |
 | 内置       | 随应用发布，只读                            | `builtin:<name>`      | 缺省开启；可禁用                                             |
+
+两个**共用目录**是别的智能体工具在用的：`~/.claude/skills` 是 Claude Code 的，`~/.agents/skills` 是
+Agent Skills 的跨工具约定位置（Codex、pi 读它，`npx skills add -g` 把真目录放在这里）。ShuviX 不用添加
+就列出它们 —— 里面有 skill 时各占一行，这一行移不掉 —— 但在用户把目录打开之前一直**关着**，因为里面的
+东西是为别的工具装的。里面的 skill 是用户自己的文件，点开是可编辑的笔记。技能目录里的符号链接不算 skill，
+所以 `npx skills add` 链进 `~/.claude/skills` 的那份只在 `agents` 下出现一次。同一个文件夹早先已经加成
+外部目录的，归那一条。
 
 目录名与 `name` 可以不同；ShuviX 按 `name` 匹配。内置 skill 随应用发布（按界面语言一个目录），不能编辑；
 目前只有一个 `builtin:drawing` —— 内联 SVG 作图的手艺 —— `work`、`chat`、`coding`、`bot`、`notebook`、
 `coedit`、`tab` 几个 agent 在 `shuvix-tools` 里点了它的名。启用状态存在 `~/.shuvix/skills/.config.json`：
 
 ```json
-{ "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
+{ "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "enabledDirs": ["agents"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
 ```
+
+`enabledDirs` 与 `disabledDirs` 方向相反，只管缺省关着的共用目录。
 
 经侧栏「技能」分组改它（行菜单里的启用 / 停用）；这份文件是 ShuviX 的，不是手改的地方。
 
-**读 skill 从不询问，改 skill 要问。** 内置 skill、`~/.shuvix/skills` 以及每个没被禁用的外部目录，都是
+**读 skill 从不询问，改 skill 要问。** 内置 skill、`~/.shuvix/skills`、每个没被禁用的外部目录以及每个打开了的共用目录，都是
 每条会话的只读目录（`policy-md` 条目里的 `vars.sessionReadDirs`）：文件工具读它们不问，沙箱里的命令也能读。
 往那里写要问 —— skill 是智能体自己要遵守的指令 —— 所以替用户新建或修改全局 / 外部 skill 要经过一次审批。
 项目级 skill 在工作目录里，和项目里的其他文件一样对待。
