@@ -865,18 +865,17 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
     expect(BASE_PROFILE_NAMES.has(BOT_PROFILE_NAME)).toBe(true)
   })
 
-  it('RPer-2 三语正文都点名三个子会话动作与 coding —— 整套交接设计活在散文里', () => {
+  it('RPer-2 三语正文都点名两个子会话动作与 coding —— 整套交接设计活在散文里', () => {
     // 工具清单只说「它有 session 工具」，说不出「把活整包交出去、验收完再用自己的口吻汇报」。
     // 那套流程没有任何机制承载，全部由这段正文表达 —— 翻译漏一个词就等于在那门语言里
-    // 静默关掉它（对照 work 档案的同名钉板）
+    // 静默关掉它（对照 work 档案的同名钉板）。后台派发、wait-for-sub-sessions、不要轮询
+    // 自 2026-10-12 起只由 session 工具描述教，正文不再重复，也就不再钉
     for (const language of LANGS) {
       const body = profile(BOT_PROFILE_NAME, language).systemPrompt
       for (const anchor of [
         'create-sub-session',
         'prompt-sub-session',
-        'wait-for-sub-sessions',
         'agent_profile',
-        'run_in_background',
         '`coding`'
       ]) {
         expect(body, `bot.${language} 需点名 ${anchor}`).toContain(anchor)
