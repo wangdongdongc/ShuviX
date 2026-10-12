@@ -919,14 +919,22 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       'shuvix-tools',
       'shuvix-instruction-files',
       'shuvix-project-awareness',
+      'shuvix-builtin',
       'shuvix-id'
     ])
     // 对象 id 解析器读、卡上不显示（hidden）—— 列进描述符只为不落通用行
     expect(agentDescriptor.fields.find((f) => f.key === 'shuvix-id')?.kind).toBe('hidden')
+    // 唯一的例外：内置文件的自述标记 shuvix-builtin 解析器不读（内置与否看文件来自哪个目录），
+    // 列进描述符只为让这一行有本地化的行名；写成什么值都不影响解析
+    expect(agentDescriptor.fields.find((f) => f.key === 'shuvix-builtin')).toMatchObject({
+      kind: 'boolean',
+      labelKey: 'tool.subAgentBuiltin'
+    })
+    expect(parseAgentDefinitionFile('---\nshuvix-builtin: nope\n---\nbody', 'x')).not.toBeNull()
 
     // boolean kind 的键 = 解析器强制布尔的唯一一个（非布尔即整份非法）
     const booleanKeys = agentDescriptor.fields
-      .filter((f) => f.kind === 'boolean')
+      .filter((f) => f.kind === 'boolean' && f.key !== 'shuvix-builtin')
       .map((f) => f.key)
       .sort()
     expect(booleanKeys).toEqual(['shuvix-project-awareness'])
@@ -950,9 +958,9 @@ describe('WB —— 属性卡描述符与解析器的键集对齐', () => {
       expect(parseAgentDefinitionFile(`---\n${key}: [a, b]\n---\nbody`, 'x'), key).toBeNull()
     }
 
-    // 描述符里没有的键落通用 key/value 行 —— 解析器同样不读（自述标记 shuvix-builtin 是活样本）
+    // 自述标记 shuvix-builtin 在描述符里只为行名，解析结果里不出现它
     const parsed = parseAgentDefinitionFile('---\nname: x\nshuvix-builtin: true\n---\nbody', 'x')!
-    expect(agentDescriptor.fields.some((f) => f.key === 'shuvix-builtin')).toBe(false)
+    expect(Object.keys(parsed)).not.toContain('builtin')
     expect(Object.values(parsed)).not.toContain('shuvix-builtin')
   })
 })

@@ -75,6 +75,17 @@ export interface ShuvixMdTypeDescriptor {
   fields: ShuvixMdFieldSpec[]
 }
 
+/**
+ * 随包发布的内置文件的自述标记（`shuvix-builtin: true`）：agent / policy / hook 三类内置 md 都写着它，
+ * 解析器不读（内置与否由文件来自哪个目录决定）。列进描述符只为让这一行有本地化的行名，
+ * 而不是落通用行、把原始键名摆给人看；内置笔记本只读，开关因此也只读。
+ */
+const BUILTIN_MARKER_FIELD: ShuvixMdFieldSpec = {
+  key: 'shuvix-builtin',
+  labelKey: 'tool.subAgentBuiltin',
+  kind: 'boolean'
+}
+
 /** 对象 id 行：agent / policy / hook / bot 四类都有，卡上不显示（见 ShuvixMdFieldKind 的 hidden） */
 const OBJECT_ID_FIELD: ShuvixMdFieldSpec = {
   key: SHUVIX_ID_KEY,
@@ -101,6 +112,7 @@ const AGENT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'shuvix-tools', labelKey: 'tool.subAgentTools', kind: 'csv' },
     { key: 'shuvix-instruction-files', labelKey: 'tool.subAgentInstructionFiles', kind: 'csv' },
     { key: 'shuvix-project-awareness', labelKey: 'tool.subAgentProjectAwareness', kind: 'boolean' },
+    BUILTIN_MARKER_FIELD,
     OBJECT_ID_FIELD
   ]
 }
@@ -120,6 +132,7 @@ const POLICY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'shuvix-policy-scope', labelKey: 'settings.policyScope', kind: 'conditions' },
     { key: 'shuvix-policy-lets', labelKey: 'settings.policyLets', kind: 'exprMap' },
     { key: 'shuvix-policy-rules', labelKey: 'settings.policyRules', kind: 'policyRules' },
+    BUILTIN_MARKER_FIELD,
     OBJECT_ID_FIELD
   ]
 }
@@ -142,6 +155,7 @@ const HOOK_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
     { key: 'shuvix-hook-agent', labelKey: 'settings.hookAgent', kind: 'mono' },
     { key: 'shuvix-hook-on', labelKey: 'settings.hookOn', kind: 'hookBindings' },
+    BUILTIN_MARKER_FIELD,
     OBJECT_ID_FIELD
   ]
 }

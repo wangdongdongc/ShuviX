@@ -936,12 +936,13 @@ describe('E 组 · 宿主差异', () => {
         )
       ).toBe(true)
       expect(await winCount('.cm-shuvix-fmcard-src')).toBe(0)
-      // 布尔行一个：项目感知（项目提示词与项目记忆合成的那一个；会话感知已退役）
+      // 布尔行两个：项目感知（项目提示词与项目记忆合成的那一个；会话感知已退役），以及夹具里的
+      // 内置自述标记 shuvix-builtin（描述符给了它本地化行名）
       expect(
         await inWin<boolean[]>(
           `[...document.querySelectorAll('.cm-shuvix-fmcard-toggle')].map((t) => t.disabled)`
         )
-      ).toEqual([true])
+      ).toEqual([true, true])
       // 主窗口里没有冒出第二张卡：预览不再落在右侧面板
       expect(await count('.cm-shuvix-fmcard')).toBe(0)
     } finally {
