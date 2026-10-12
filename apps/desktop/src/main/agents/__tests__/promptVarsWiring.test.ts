@@ -564,12 +564,12 @@ describe('desktopPromptVars —— shell / shellTool 按平台给（PVW-S1…S5�
     mocks.psConfig = { exe: 'C:\\pwsh.exe', edition: 'pwsh' }
     const onWindows = renderProfileSystemPrompt(work, await varsFor({ toolNames: work.tools }))
     expect(onWindows).not.toContain('{{shuvix:shellTool}}')
-    expect(onWindows).toContain('over powershell')
+    expect(onWindows).toContain('through powershell')
     expect(onWindows).not.toMatch(/\bbash\b/)
 
     setPlatform('darwin')
     const onMac = renderProfileSystemPrompt(work, await varsFor({ toolNames: work.tools }))
-    expect(onMac).toContain('over bash')
+    expect(onMac).toContain('through bash')
     expect(onMac).not.toMatch(/\bpowershell\b/i)
   })
 })

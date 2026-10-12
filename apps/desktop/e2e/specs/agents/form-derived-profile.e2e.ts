@@ -33,8 +33,8 @@ let projectId: string
 
 /** work 基座独有的两处锚点（chat 的 body 两者皆无 —— 两份 body 工具面相同，差异全在文案） */
 const WORK_ANCHORS = ['Handing work to a sub-session', 'create-sub-session']
-/** coding 正文独有的一句（work / chat 都没有它；"Only do what the user asked" 三份都有，不能用）—— 「戳没被读」的反向锚点 */
-const CODING_ANCHOR = 'under the guise of'
+/** coding 正文独有的一句（work / chat 都没有它；三份共用的「Working style」段不能用）—— 「戳没被读」的反向锚点 */
+const CODING_ANCHOR = 'working as a software engineer'
 const PINNED = 'e2e-pinned'
 const PINNED_BODY = 'PINNED BODY.'
 const NOTE_REL = 'notes/fd-note.md'

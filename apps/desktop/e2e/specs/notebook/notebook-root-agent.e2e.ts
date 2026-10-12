@@ -94,7 +94,7 @@ describe('笔记本会话的根 Agent', () => {
     const { systemPrompt } = await runtimeInfo(nbSid)
     expect(systemPrompt).toContain(NOTE_REL)
     // coding 正文里的一句 —— 戳若被读了，这里会是 coding 的 body
-    expect(systemPrompt).not.toContain('Only do what the user asked')
+    expect(systemPrompt).not.toContain('working as a software engineer')
   })
 })
 

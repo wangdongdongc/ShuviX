@@ -44,7 +44,7 @@ const SKILL_PROFILE = 'e2e-skill-profile'
 const PARENT_TITLE = 'SP-parent'
 /** work 基座独有的锚点；coding 正文里的一句 */
 const WORK_ANCHOR = 'Handing work to a sub-session'
-const CODING_ANCHOR = 'Only do what the user asked'
+const CODING_ANCHOR = 'working as a software engineer'
 
 interface SessionRow {
   id: string
