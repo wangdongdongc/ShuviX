@@ -98,7 +98,13 @@ export function ProjectSessionGroups({
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
   const storeSessions = useChatStore((s) => s.sessions)
-  const sessions = sessionsOverride ?? storeSessions
+  // sessionsOverride 只定「哪几条」，每条的内容仍以 store 为准：日历的当日列表是一次性快照，
+  // 之后的改名（自动标题经 session.titleChanged、手动改名都只写 store）不会回到快照里
+  const sessions = useMemo(() => {
+    if (!sessionsOverride) return storeSessions
+    const byId = new Map(storeSessions.map((s) => [s.id, s]))
+    return sessionsOverride.map((s) => byId.get(s.id) ?? s)
+  }, [sessionsOverride, storeSessions])
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
   const streamingSessions = useChatStore(selectStreamingSessions)
