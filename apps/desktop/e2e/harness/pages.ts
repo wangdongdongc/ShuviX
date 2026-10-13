@@ -5311,7 +5311,7 @@ export function botIntro(main: CdpClient): BotIntroPane {
 // **项目库不在这一组里**（2026-10-10）：它挂在各项目组的「项目知识库」文件夹里（projectKnowledgePane），
 // 锚点同名 —— 所以这里的行与目录一律只在本组正文里找。
 //
-// 层级只能从行的内联 `padding-left` 读（最外层 0px —— 内置库与每个用户库平级 —— 每深一层 +12px）。
+// 层级只能从行的内联 `padding-left` 读（最外层 10px —— 内置库与每个用户库平级 —— 每深一层 +12px）。
 // 目录行与它的正文（AnimatedCollapse 根）是兄弟节点，折叠只收高度、行都还在 DOM 里：展开态读正文的内联
 // `gridTemplateRows`，不数行。路径可能含中文：定位一律 getAttribute 逐个比对，不拼属性选择器。
 //
@@ -5332,7 +5332,7 @@ export interface KnowledgeDirShot {
   path: string
   /** 行上的名字（内置库是本地化的人读名，其余是目录名） */
   label: string
-  /** 行的内联 padding-left（'0px' = 顶层，每深一层 +12px） */
+  /** 行的内联 padding-left（'10px' = 顶层，每深一层 +12px） */
   indent: string
   /** `data-knowledge-readonly`（随应用发布的内置库及其每一层）；普通目录该属性不在 → false */
   readonly: boolean
@@ -5384,7 +5384,7 @@ export interface KnowledgePane extends NotebookReadOnlyProbes {
   expand(): Promise<void>
   /** 全部目录行（任意层级），DOM 序 */
   dirs(): Promise<KnowledgeDirShot[]>
-  /** 顶层目录行（缩进 0px：内置库与每个用户库），DOM 序 */
+  /** 顶层目录行（缩进 10px：内置库与每个用户库），DOM 序 */
   topDirs(): Promise<KnowledgeDirShot[]>
   /** 目录是否展开；目录行不存在返回 false */
   dirOpen(path: string): Promise<boolean>
@@ -5653,7 +5653,7 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
     },
 
     ...tree,
-    topDirs: async () => (await tree.dirs()).filter((d) => d.indent === '0px'),
+    topDirs: async () => (await tree.dirs()).filter((d) => d.indent === '10px'),
 
     groupMenuIds: () => sidebar.groupMenuItems('knowledge'),
     refresh: () => sidebar.pickGroupMenu('knowledge', 'refresh'),

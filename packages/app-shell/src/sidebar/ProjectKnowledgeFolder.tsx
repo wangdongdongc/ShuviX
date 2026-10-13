@@ -201,7 +201,7 @@ export function ProjectKnowledgeFolder({
       <AnimatedCollapse open={!collapsed}>
         {listing !== null && (
           <>
-            {drafts.draft?.parent === bundle && renderKnowledgeDraft(drafts, 1, 10)}
+            {drafts.draft?.parent === bundle && renderKnowledgeDraft(drafts, 1)}
             {node && (
               <KnowledgeTreeView
                 adapter={adapter}
@@ -209,7 +209,6 @@ export function ProjectKnowledgeFolder({
                 files={node.files}
                 dirs={node.dirs}
                 depth={1}
-                indentBase={10}
                 drafts={drafts}
                 isDirOpen={isDirOpen}
                 toggleDir={toggleDir}

@@ -102,11 +102,8 @@ const DRAFT_PLACEHOLDER: Record<DraftKind, string> = {
   entry: 'knowledge.newEntryPlaceholder'
 }
 
-/**
- * 行缩进：每层 12px，再加调用方给的基准。知识库分组**最外层不缩进**（库贴着组标题的左边）；
- * 项目知识库文件夹里给 10px 基准，与项目组里的会话行（SessionItem 的 pl-2.5）对齐。
- */
-const indent = (base: number, depth: number): number => base + depth * 12
+/** 行缩进：基准同 SessionItem 的 pl-2.5（10px），每层再进 12px —— 与侧栏其余各组一致 */
+const indent = (depth: number): number => 10 + depth * 12
 
 /** 活动会话若是知识库笔记本，换算出它打开的条目 id（分组头 / 文件夹高亮 + 命中行选中态） */
 export function useActiveKnowledgeNotePath(): string | null {
@@ -195,16 +192,12 @@ export function useKnowledgeDraft(
 }
 
 /** 一行就地新建的输入框（落点在 `depth` 层） */
-export function renderKnowledgeDraft(
-  drafts: KnowledgeDraftState,
-  depth: number,
-  indentBase = 0
-): React.ReactNode {
+export function renderKnowledgeDraft(drafts: KnowledgeDraftState, depth: number): React.ReactNode {
   return (
     drafts.draft && (
       <KnowledgeDraftRow
         kind={drafts.draft.kind}
-        paddingLeft={indent(indentBase, depth)}
+        paddingLeft={indent(depth)}
         busy={drafts.creating}
         error={drafts.error}
         onCommit={(v) => void drafts.commit(v)}
@@ -223,8 +216,6 @@ export interface KnowledgeTreeViewProps {
   dirs: KnowledgeTreeDir[]
   /** 这一层的层级（缩进按它算） */
   depth: number
-  /** 缩进基准（px） */
-  indentBase?: number
   drafts: KnowledgeDraftState
   /** 目录是否展开 / 翻转（展开状态归调用方：重扫不丢、默认态由调用方定） */
   isDirOpen: (path: string) => boolean
@@ -240,7 +231,6 @@ export function KnowledgeTreeView({
   files,
   dirs,
   depth,
-  indentBase = 0,
   drafts,
   isDirOpen,
   toggleDir,
@@ -249,7 +239,6 @@ export function KnowledgeTreeView({
 }: KnowledgeTreeViewProps): React.JSX.Element {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
-  const pad = (d: number): number => indent(indentBase, d)
 
   /** 起一行内联输入：落点目录先展开 —— 输入框长在收着的地方没人看得见 */
   const startDraft = (kind: DraftKind, parent: string): void => {
@@ -342,7 +331,7 @@ export function KnowledgeTreeView({
         onClick={() => void adapter.open(e.path, e.title)}
         onContextMenu={(ev) => openRowMenu(e, ev)}
         title={`${e.path}${e.description ? ` — ${e.description}` : ''}`}
-        style={{ paddingLeft: pad(d) }}
+        style={{ paddingLeft: indent(d) }}
         className={`group relative flex items-center gap-1.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
           active
             ? 'bg-bg-active/80 text-text-primary'
@@ -421,7 +410,7 @@ export function KnowledgeTreeView({
           onClick={() => toggleDir(node.path)}
           onContextMenu={(ev) => openDirMenu(node, ev)}
           title={node.path}
-          style={{ paddingLeft: pad(d) }}
+          style={{ paddingLeft: indent(d) }}
           className={`group relative flex items-center gap-1.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
             active
               ? 'bg-bg-active/80 text-text-primary'
@@ -450,7 +439,7 @@ export function KnowledgeTreeView({
           )}
         </div>
         <AnimatedCollapse open={open}>
-          {drafts.draft?.parent === node.path && renderKnowledgeDraft(drafts, d + 1, indentBase)}
+          {drafts.draft?.parent === node.path && renderKnowledgeDraft(drafts, d + 1)}
           {node.files.map((f) => renderFile(f, d + 1))}
           {node.dirs.map((sub) => renderDir(sub, d + 1))}
         </AnimatedCollapse>
