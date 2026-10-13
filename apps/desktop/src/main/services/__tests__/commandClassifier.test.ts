@@ -29,6 +29,8 @@
  * B 组（真 createModelRegistry + 假 fetch，`fakeAuthContext()` 不读 process.env —— 不发真请求）：
  *   RR-1..8 清单只来自 classifier 类模型 / 一次 System One 请求的线上形状与 ok 日志 / 缺答案、缺概率与 401 /
  *   没 key / 配置的是对话模型 / fetch 挂住时超时；CL-15 没 key → 每条命令一行 failed 日志、只告警一次。
+ *   RR-9..14 只提供分类模型的内置提供商 TypeSafe：启用才列、恰列 jev-latest（库里的模型行不算）、与 openrouter
+ *   上的 Jev 各归各行；直连请求打 https://api.typesafe.ai/v1/systemone；没 key → 不请求、一行 failed。
  *
  * logger、settingsDao、../models、分类器日志 DAO 与会话记录全部 mock：模块 import 时就建了默认实例与模块级 log。
  * `AbortSignal.timeout` 不跟 vi 的假定时器走，改为 spy 它、交回可以手动触发的 signal。
@@ -46,7 +48,8 @@ import {
   builtinRow,
   customRow,
   fakeAuthContext,
-  fakePort
+  fakePort,
+  modelRow
 } from '../../../../../../packages/agent-runtime/src/models/__tests__/fakePort'
 import type { ClassifierLogInput } from '../classifierLogService'
 
@@ -1273,5 +1276,162 @@ describe('真模型注册表（假 fetch，不发真请求）', () => {
       CALL
     )
     expect(risk).toMatchObject({ category: 'destructive', confidence: 0.8, readOnly: 0.2 })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// B 组续：只提供分类模型的内置提供商 TypeSafe（直连）
+
+/** 一份真注册表 deps：给定的行（缺省一行启用的 typesafe 内置行，displayName TypeSafe）+ 模型行 */
+function typesafeHarness(
+  opts: {
+    rows?: ProviderRow[]
+    modelRows?: ReturnType<typeof modelRow>[]
+    settings?: Record<string, string>
+  } = {}
+): {
+  deps: CommandClassifierDeps
+  registry: ReturnType<typeof createModelRegistry>
+  records: () => ClassifierLogInput[]
+} {
+  const port = fakePort(
+    opts.rows ?? [builtinRow('typesafe', { displayName: 'TypeSafe' })],
+    opts.modelRows ?? []
+  )
+  const registry = createModelRegistry({ port, authContext: fakeAuthContext() })
+  const settings = opts.settings ?? {}
+  const record = vi.fn<(input: ClassifierLogInput) => void>()
+  return {
+    registry,
+    records: () => record.mock.calls.map((c) => c[0]),
+    deps: {
+      readSetting: (key) => settings[key],
+      models: () => registry.models,
+      port: () => port,
+      platform: 'darwin',
+      record
+    }
+  }
+}
+
+describe('真模型注册表：TypeSafe（只提供分类模型的内置提供商）', () => {
+  it('RR-9 启用的 typesafe 行 → 恰一条 jev-latest（形状逐键），与注册表里 typesafe 的 classifier 清单一致', () => {
+    stubFetch()
+    const { deps, registry } = typesafeHarness()
+    const list = createCommandClassifier(deps).listModels()
+    expect(list.filter((m) => m.providerId === 'typesafe')).toStrictEqual([
+      {
+        id: 'typesafe:jev-latest',
+        providerId: 'typesafe',
+        modelId: 'jev-latest',
+        isEnabled: 1,
+        sortOrder: 0,
+        capabilities: '{}',
+        providerName: 'TypeSafe'
+      }
+    ])
+    expect(list.map((m) => m.modelId)).toEqual(
+      registry.models.getModelsOfType('classifier', 'typesafe').map((m) => m.id)
+    )
+  })
+
+  it('RR-10 停用的 typesafe 行 → 清单里没有它', () => {
+    stubFetch()
+    const { deps } = typesafeHarness({
+      rows: [builtinRow('typesafe', { displayName: 'TypeSafe', isEnabled: false })]
+    })
+    expect(
+      createCommandClassifier(deps)
+        .listModels()
+        .filter((m) => m.providerId === 'typesafe')
+    ).toEqual([])
+  })
+
+  it('RR-11 typesafe 与 openrouter 都启用：各列各的（typesafe 的 jev-latest ≠ openrouter 的 ~typesafe/jev-latest），都没有对话模型', () => {
+    stubFetch()
+    const { deps, registry } = typesafeHarness({
+      rows: [
+        builtinRow('typesafe', { displayName: 'TypeSafe' }),
+        builtinRow('openrouter', { id: OR_UUID, displayName: 'OpenRouter' })
+      ]
+    })
+    const list = createCommandClassifier(deps).listModels()
+    const direct = list.find((m) => m.providerId === 'typesafe' && m.modelId === 'jev-latest')
+    const viaRouter = list.find((m) => m.providerId === OR_UUID && m.modelId === JEV)
+    expect(direct).toMatchObject({ id: 'typesafe:jev-latest', providerName: 'TypeSafe' })
+    expect(viaRouter).toMatchObject({ id: `${OR_UUID}:${JEV}`, providerName: 'OpenRouter' })
+    expect(direct!.id).not.toBe(viaRouter!.id)
+    expect(new Set(list.map((m) => m.providerId))).toEqual(new Set(['typesafe', OR_UUID]))
+    expect(list.filter((m) => m.providerId === 'typesafe').map((m) => m.modelId)).toEqual([
+      'jev-latest'
+    ])
+    const chat = new Set(registry.models.getModelsOfType('chat', 'openrouter').map((m) => m.id))
+    expect(registry.models.getModelsOfType('chat', 'typesafe')).toEqual([])
+    expect(list.filter((m) => chat.has(m.modelId))).toEqual([])
+  })
+
+  it('RR-12 库里有 typesafe 的对话模型行：清单仍只有 jev-latest', () => {
+    stubFetch()
+    const { deps } = typesafeHarness({
+      modelRows: [
+        modelRow('typesafe', 'shuvix-chat-unknown'),
+        modelRow('typesafe', 'gpt-shuvix-test', {}, false)
+      ]
+    })
+    expect(
+      createCommandClassifier(deps)
+        .listModels()
+        .map((m) => m.modelId)
+    ).toEqual(['jev-latest'])
+  })
+
+  it('RR-13 选 typesafe / jev-latest：恰一次 POST https://api.typesafe.ai/v1/systemone、Bearer <行上的 key>、请求体的模型是 jev-latest；risk.model = typesafe/jev-latest；ok 日志', async () => {
+    const calls = stubFetch()
+    const { deps, records } = typesafeHarness({
+      rows: [builtinRow('typesafe', { displayName: 'TypeSafe', apiKey: 'sk-ts-test' })],
+      settings: { [CLASSIFIER_PROVIDER_KEY]: 'typesafe', [CLASSIFIER_MODEL_KEY]: 'jev-latest' }
+    })
+    const risk = await createCommandClassifier(deps).classify(
+      { channel: 'bash', command: 'git status', cwd: '/ws', sandboxed: false },
+      CALL
+    )
+    expect(calls).toHaveLength(1)
+    const [req] = calls
+    expect(req.url).toBe('https://api.typesafe.ai/v1/systemone')
+    expect(req.method).toBe('POST')
+    expect(req.headers.get('authorization')).toBe('Bearer sk-ts-test')
+    expect(req.body.model).toBe('jev-latest')
+
+    expect(risk).toStrictEqual({
+      category: 'read_only',
+      confidence: 0.96,
+      readOnly: 0.96,
+      probabilities: WIRE_PROBABILITIES,
+      model: 'typesafe/jev-latest'
+    })
+    expect(records()).toHaveLength(1)
+    expect(records()[0]).toMatchObject({
+      status: 'ok',
+      provider: 'typesafe',
+      model: 'jev-latest',
+      subject: 'git status'
+    })
+    expect(cc.warn).not.toHaveBeenCalled()
+  })
+
+  it('RR-14 typesafe 行上没有 key → null，一次请求都不发，记一行 failed', async () => {
+    const calls = stubFetch()
+    const { deps, records } = typesafeHarness({
+      settings: { [CLASSIFIER_PROVIDER_KEY]: 'typesafe', [CLASSIFIER_MODEL_KEY]: 'jev-latest' }
+    })
+    await expect(createCommandClassifier(deps).classify(BASH, CALL)).resolves.toBeNull()
+    expect(calls).toHaveLength(0)
+    expect(records()).toHaveLength(1)
+    expect(records()[0]).toMatchObject({
+      status: 'failed',
+      provider: 'typesafe',
+      model: 'jev-latest'
+    })
+    expect(records()[0].error).toMatch(/not configured|No API key/)
   })
 })

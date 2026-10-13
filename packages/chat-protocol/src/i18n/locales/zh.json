@@ -545,7 +545,7 @@
     "defaultModel": "默认模型",
     "defaultModelNone": "无",
     "classifierModelRow": "分类模型",
-    "classifierModelRowDesc": "执行每条命令前，先用分类模型判断它属于哪一类动作（只读、涉及个人文件、改文件、装软件、外发数据、删除数据……）。沙箱外的命令被判为明摆着只读（read_only 且概率 ≥ 0.9）时直接运行，不问也不走自动审查；其余照旧询问。结果作为 object.risk 交给安全策略，每次分类都列在「监控 → 分类器」里。不选就不分类。分类模型是单独的一类模型，例如 OpenRouter、OpenCode 上的 Jev。",
+    "classifierModelRowDesc": "执行每条命令前，先用分类模型判断它属于哪一类动作（只读、涉及个人文件、改文件、装软件、外发数据、删除数据……）。沙箱外的命令被判为明摆着只读（read_only 且概率 ≥ 0.9）时直接运行，不问也不走自动审查；其余照旧询问。结果作为 object.risk 交给安全策略，每次分类都列在「监控 → 分类器」里。不选就不分类。分类模型是单独的一类模型，例如 Jev，可直接用 TypeSafe，也可经 OpenRouter、OpenCode 使用。",
     "classifierModelNone": "不分类",
     "appearanceGroup": "外观",
     "languageGroup": "语言",
@@ -925,7 +925,10 @@
       "sent": "发给分类器的内容",
       "rawAnswers": "原始答案",
       "clearConfirm": "清空全部分类器日志？"
-    }
+    },
+    "classifierOnlyProviderHint": "{{name}} 只提供分类模型（例如 Jev），不提供聊天模型。在上方填好 API Key 并启用后，到「设置 → 通用 → 分类模型」里选用。",
+    "classifierTag": "分类器",
+    "classifierTagTitle": "只提供分类模型（用来给命令分类），不提供聊天模型"
   },
   "about": {
     "description": "您的 AI 助手",

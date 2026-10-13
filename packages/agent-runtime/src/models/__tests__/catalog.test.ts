@@ -22,7 +22,7 @@ import {
 import { builtinProviders, getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
 import { BUILTIN_PROVIDERS } from '@shuvix/chat-protocol/providerCatalog'
 import { API_PROTOCOL_OPTIONS } from '@shuvix/chat-protocol/types/provider'
-import { buildProviders, piProviderIdOf } from '../catalog'
+import { buildProviderEntries, buildProviders, piProviderIdOf } from '../catalog'
 import { createDbCredentialStore } from '../credentialStore'
 import {
   builtinRow,
@@ -119,10 +119,30 @@ describe('builtin rows', () => {
     for (const entry of BUILTIN_PROVIDERS) expect(ids.has(entry.name), entry.name).toBe(true)
   })
 
+  it('CAT-05 (typesafe) the classifier-only builtin is in BUILTIN_PROVIDERS, so the loop above covers it', () => {
+    expect(BUILTIN_PROVIDERS.map((entry) => entry.name)).toContain('typesafe')
+  })
+
   it('CAT-05b every declared defaultApi is used by at least one catalog model (M3 rule 1 applies)', () => {
-    for (const entry of BUILTIN_PROVIDERS) {
+    // classifier-only providers (TypeSafe) have no chat catalog and never get overlay chat models
+    for (const entry of BUILTIN_PROVIDERS.filter((e) => !e.classifierOnly)) {
       const apis = new Set(catalogOf(entry.name).map((m) => m.api))
       expect(apis.has(entry.defaultApi), `${entry.name}: ${entry.defaultApi}`).toBe(true)
+    }
+  })
+
+  it('CAT-05c every classifier-only entry: no chat catalog in pi, and a classifier model on its defaultApi and baseUrl', () => {
+    const classifierOnly = BUILTIN_PROVIDERS.filter((entry) => entry.classifierOnly)
+    expect(classifierOnly.length).toBeGreaterThan(0)
+    for (const entry of classifierOnly) {
+      const provider = builtinProviders().find((p) => p.id === entry.name)!
+      // if pi ever gives it chat models, the flag would silently hide them — fail here instead
+      expect(provider.getModels(), entry.name).toEqual([])
+      const classifiers = (provider.getAllModels?.() ?? []).filter(
+        (m) => (m as { type?: string }).type === 'classifier' && m.api === entry.defaultApi
+      )
+      expect(classifiers.length, `${entry.name}: ${entry.defaultApi}`).toBeGreaterThan(0)
+      for (const model of classifiers) expect(model.baseUrl, model.id).toBe(entry.baseUrl)
     }
   })
 
@@ -325,6 +345,81 @@ describe('builtin rows', () => {
     models.setProvider(provider)
     const auth = await models.getAuth(modelOf(provider, 'kimi-shuvix-test-unknown'))
     expect(hasUserAgent(auth?.auth.headers)).toBe(false)
+  })
+})
+
+describe('classifier-only builtin rows (TypeSafe)', () => {
+  it('CAT-33 a typesafe row without model rows → provider "typesafe" with no chat models, only the Jev classifier', () => {
+    const provider = only(buildProviders({ providers: [builtinRow('typesafe')], models: [] }))
+    expect(provider.id).toBe('typesafe')
+    expect(provider.getModels()).toEqual([])
+    expect(provider.classify).toBeDefined()
+
+    const models = createModels()
+    models.setProvider(provider)
+    expect(models.getModelsOfType('classifier', 'typesafe').map((m) => m.id)).toEqual([
+      'jev-latest'
+    ])
+    expect(models.getModelsOfType('chat', 'typesafe')).toEqual([])
+    expect(models.getModel('typesafe', 'jev-latest')).toBeUndefined()
+  })
+
+  it('CAT-34 model rows for a typesafe row never become overlay chat models; the fingerprint ignores them', () => {
+    const rows = [
+      modelRow('typesafe', 'shuvix-chat-unknown'),
+      modelRow('typesafe', 'jev-latest'),
+      modelRow('typesafe', 'shuvix-disabled-unknown', {}, false)
+    ]
+    const [withRows] = buildProviderEntries({ providers: [builtinRow('typesafe')], models: rows })
+    const [bare] = buildProviderEntries({ providers: [builtinRow('typesafe')], models: [] })
+
+    expect(withRows.provider.getModels()).toEqual([])
+    expect(withRows.provider.getAllModels?.().map((m) => m.id)).toEqual(['jev-latest'])
+    const models = createModels()
+    models.setProvider(withRows.provider)
+    expect(models.getAllModels('typesafe').map((m) => m.id)).toEqual(['jev-latest'])
+    for (const id of ['shuvix-chat-unknown', 'shuvix-disabled-unknown']) {
+      expect(models.getModel('typesafe', id), id).toBeUndefined()
+      expect(
+        models.getAllModels().some((m) => m.id === id),
+        id
+      ).toBe(false)
+    }
+    // equal fingerprints: a refresh after someone added a stray row skips setProvider
+    expect(withRows.fingerprint).toBe(bare.fingerprint)
+  })
+
+  it('CAT-35 a legacy row (uuid id, name "TypeSafe") is still classifier-only: no overlay', () => {
+    const legacyId = '0193a7c2-0000-7000-8000-00000000a0e5'
+    const provider = only(
+      buildProviders({
+        providers: [builtinRow('TypeSafe', { id: legacyId })],
+        models: [modelRow(legacyId, 'shuvix-chat-unknown')]
+      })
+    )
+    expect(provider.id).toBe('typesafe')
+    expect(provider.getModels()).toEqual([])
+  })
+
+  it('CAT-36 a custom row named "typesafe" is an ordinary custom provider (the rule keys on the slug)', () => {
+    const provider = only(
+      buildProviders({
+        providers: [customRow(CUSTOM_ID, { name: 'typesafe' })],
+        models: [modelRow(CUSTOM_ID, 'alpha'), modelRow(CUSTOM_ID, 'beta')]
+      })
+    )
+    expect(provider.id).toBe(CUSTOM_ID)
+    expect(provider.getModels().map((m) => m.id)).toEqual(['alpha', 'beta'])
+    for (const model of provider.getModels()) expect(model.api).toBe('openai-completions')
+  })
+
+  it('CAT-37 the wrapped typesafe builtin keeps its env key auth (TYPESAFE_API_KEY)', async () => {
+    const provider = only(buildProviders({ providers: [builtinRow('typesafe')], models: [] }))
+    const models = createModels({ authContext: fakeAuthContext({ TYPESAFE_API_KEY: 'env-ts' }) })
+    models.setProvider(provider)
+    const auth = await models.getAuth('typesafe')
+    expect(auth?.auth.apiKey).toBe('env-ts')
+    expect(auth?.source).toBe('TYPESAFE_API_KEY')
   })
 })
 

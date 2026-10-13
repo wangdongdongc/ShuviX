@@ -30,7 +30,7 @@ import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from '@earendil-works/pi-ai/api/openai-responses.lazy'
 import { anthropicMessagesApi } from '@earendil-works/pi-ai/api/anthropic-messages.lazy'
 import { googleGenerativeAIApi } from '@earendil-works/pi-ai/api/google-generative-ai.lazy'
-import { BUILTIN_PROVIDERS } from '@shuvix/chat-protocol/providerCatalog'
+import { BUILTIN_PROVIDERS, isClassifierOnlyProvider } from '@shuvix/chat-protocol/providerCatalog'
 import type { ApiProtocol, ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import {
   customProviderLabel,
@@ -287,7 +287,10 @@ function buildBuiltin(
 ): BuiltProvider {
   const catalog = base.getModels()
   const known = new Set(catalog.map((model) => model.id))
-  const unknownRows = modelRowsOf(models, row.id).filter((m) => !known.has(m.modelId))
+  // 只提供分类模型的提供商（TypeSafe）不能聊天：库里就算有它的模型行，也不造 overlay 聊天模型
+  const unknownRows = isClassifierOnlyProvider(slug)
+    ? []
+    : modelRowsOf(models, row.id).filter((m) => !known.has(m.modelId))
   const template = unknownRows.length > 0 ? overlayTemplate(slug, catalog) : undefined
   const overlay = template
     ? unknownRows.map((m) =>

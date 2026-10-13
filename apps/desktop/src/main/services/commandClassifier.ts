@@ -11,7 +11,7 @@
  * 主日志只按原因各告警一次。
  *
  * 分类器是 pi-ai 的「分类」类模型（`models.classify`：结构化 state + 一组封闭问题 → 带概率的答案，
- * 例如 TypeSafe 的 Jev，经 OpenRouter / OpenCode / Cloudflare 等内置提供商可用）。给它的只有命令
+ * 例如 TypeSafe 的 Jev：内置提供商 TypeSafe 直连，或经 OpenRouter / OpenCode / Cloudflare）。给它的只有命令
  * 本身与执行环境的事实，不含 agent 写的说明、工具输出或会话内容。
  */
 import type { Models } from '@earendil-works/pi-ai'

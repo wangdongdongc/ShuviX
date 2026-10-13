@@ -403,4 +403,19 @@ describe('i18n 语言包', () => {
       }
     }
   })
+
+  it('LOC-TS-1 / LOC-TS-2 / LOC-TS-3 只提供分类模型的提供商（TypeSafe）：提示与标签三语都非空；提示恰插 {{name}}，标签与其悬停说明不含插值且互不相同', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const hint = leaf(bundle, 'settings.classifierOnlyProviderHint')
+      const tag = leaf(bundle, 'settings.classifierTag')
+      const tagTitle = leaf(bundle, 'settings.classifierTagTitle')
+      for (const [key, text] of Object.entries({ hint, tag, tagTitle })) {
+        expect(text?.trim(), `${lang} ${key}`).toBeTruthy()
+      }
+      expect(placeholders(hint!), lang).toEqual(['name'])
+      expect(placeholders(tag!), lang).toEqual([])
+      expect(placeholders(tagTitle!), lang).toEqual([])
+      expect(tag, lang).not.toBe(tagTitle)
+    }
+  })
 })

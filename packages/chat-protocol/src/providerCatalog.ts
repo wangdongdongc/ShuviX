@@ -20,6 +20,12 @@ export interface BuiltinProvider {
   baseUrl: string
   /** 未知模型兜底协议：pi-ai 的 Api slug（如 anthropic-messages / openai-completions） */
   defaultApi: string
+  /**
+   * 只提供分类模型（pi-ai `type: 'classifier'`，走 System One 之类的分类接口，不走聊天接口）。
+   * 这样的提供商没有聊天模型：设置页不给模型列表 / 同步 / 添加（改为指向「通用 → 分类模型」），
+   * 模型层也不为它造 overlay 聊天模型 —— 它的协议根本不能聊天。
+   */
+  classifierOnly?: boolean
 }
 
 export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
@@ -150,5 +156,18 @@ export const BUILTIN_PROVIDERS: BuiltinProvider[] = [
     displayName: 'Cloudflare AI Gateway',
     baseUrl: '',
     defaultApi: 'openai-completions'
+  },
+  // 只有分类模型（Jev）：用作命令风险分类的「分类模型」，不出现在会话的模型选择里
+  {
+    name: 'typesafe',
+    displayName: 'TypeSafe',
+    baseUrl: 'https://api.typesafe.ai/v1/',
+    defaultApi: 'typesafe-system-one',
+    classifierOnly: true
   }
 ]
+
+/** 这个内置提供商是不是只提供分类模型（按 pi slug 认） */
+export function isClassifierOnlyProvider(name: string): boolean {
+  return BUILTIN_PROVIDERS.some((entry) => entry.name === name && entry.classifierOnly === true)
+}

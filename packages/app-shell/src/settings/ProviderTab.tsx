@@ -32,6 +32,7 @@ import {
   type ProviderModelInfo
 } from '@shuvix/chat-protocol/types/provider'
 import { isImeComposing } from '@shuvix/chat-ui'
+import { isClassifierOnlyProvider } from '@shuvix/chat-protocol/providerCatalog'
 import { AddProviderDialog } from './AddProviderDialog'
 import { ModelCapabilitiesDialog } from './ModelCapabilitiesDialog'
 import { ProviderIcon } from './ProviderIcons'
@@ -548,9 +549,11 @@ export function ProviderTab({
         <div className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
           {sortedProviders.map((p) => {
             const isSelected = selectedProviderId === p.id
+            const classifierOnly = !!p.isBuiltin && isClassifierOnlyProvider(p.name)
             const hasModels = providerModels[p.id]
+            // 只做分类的提供商没有对话模型行，「没有启用的模型」对它不成立
             const noEnabledModels =
-              !!p.isEnabled && hasModels && !hasModels.some((m) => m.isEnabled)
+              !!p.isEnabled && !classifierOnly && hasModels && !hasModels.some((m) => m.isEnabled)
             return (
               <button
                 key={p.id}
@@ -563,8 +566,9 @@ export function ProviderTab({
                 } ${!p.isEnabled ? 'opacity-60' : ''}`}
               >
                 <ProviderIcon name={p.name} />
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 flex items-center gap-1.5">
                   <div className="text-xs font-medium truncate">{p.displayName || p.name}</div>
+                  {classifierOnly && <ClassifierTag />}
                 </div>
                 {noEnabledModels && (
                   <TriangleAlert
@@ -774,6 +778,20 @@ function OAuthPromptField({
   )
 }
 
+/** 「分类器」标签：这个提供商只提供分类模型（列表行与详情标题旁都挂一个） */
+function ClassifierTag(): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <span
+      data-provider-classifier-tag
+      title={t('settings.classifierTagTitle')}
+      className="shrink-0 px-1.5 py-px rounded text-[10px] leading-4 font-medium bg-accent/10 text-accent"
+    >
+      {t('settings.classifierTag')}
+    </span>
+  )
+}
+
 interface ProviderDetailProps {
   provider: ProviderInfo
   providerCrud: boolean
@@ -858,7 +876,9 @@ function ProviderDetail({
     ? sortedModels.filter((m) => m.modelId.toLowerCase().includes(query))
     : sortedModels
 
-  const noEnabledModels = !!p.isEnabled && models.length > 0 && !models.some((m) => m.isEnabled)
+  const classifierOnly = !!p.isBuiltin && isClassifierOnlyProvider(p.name)
+  const noEnabledModels =
+    !!p.isEnabled && !classifierOnly && models.length > 0 && !models.some((m) => m.isEnabled)
 
   return (
     <div className="flex flex-col">
@@ -868,6 +888,7 @@ function ProviderDetail({
           <h3 className="text-sm font-semibold text-text-primary truncate">
             {p.displayName || p.name}
           </h3>
+          {classifierOnly && <ClassifierTag />}
           {p.baseUrl && (
             <span className="text-[11px] font-mono text-text-tertiary truncate">
               {p.baseUrl.replace(/^https?:\/\//, '')}
@@ -1106,118 +1127,130 @@ function ProviderDetail({
           )}
         </SettingsSection>
 
-        <SettingsSection
-          title={t('settings.modelManagement')}
-          headerAction={
-            providerCrud ? (
-              <button
-                onClick={onSyncModels}
-                disabled={syncing}
-                className="px-2 py-1 text-[11px] rounded text-accent hover:bg-accent/10 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-              >
-                {syncing ? t('settings.syncing') : t('settings.syncModels')}
-              </button>
-            ) : undefined
-          }
-        >
-          {syncMessage && (
+        {classifierOnly ? (
+          // 只提供分类模型：没有聊天模型可管，也不能同步 / 添加（会被当成聊天模型）—— 指去用它的地方
+          <SettingsSection title={t('settings.modelManagement')}>
             <div
-              className={`px-4 py-2 text-[11px] leading-relaxed ${
-                syncMessage.isError
-                  ? 'bg-red-500/5 text-error'
-                  : 'bg-emerald-500/5 text-emerald-500'
-              }`}
+              data-classifier-only-hint
+              className="px-4 py-3 text-[11px] leading-relaxed text-text-secondary"
             >
-              {syncMessage.text}
+              {t('settings.classifierOnlyProviderHint', { name: p.displayName || p.name })}
             </div>
-          )}
+          </SettingsSection>
+        ) : (
+          <SettingsSection
+            title={t('settings.modelManagement')}
+            headerAction={
+              providerCrud ? (
+                <button
+                  onClick={onSyncModels}
+                  disabled={syncing}
+                  className="px-2 py-1 text-[11px] rounded text-accent hover:bg-accent/10 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  {syncing ? t('settings.syncing') : t('settings.syncModels')}
+                </button>
+              ) : undefined
+            }
+          >
+            {syncMessage && (
+              <div
+                className={`px-4 py-2 text-[11px] leading-relaxed ${
+                  syncMessage.isError
+                    ? 'bg-red-500/5 text-error'
+                    : 'bg-emerald-500/5 text-emerald-500'
+                }`}
+              >
+                {syncMessage.text}
+              </div>
+            )}
 
-          {providerCrud && (
-            <div className="px-4 py-3 space-y-2">
-              <div className="flex items-center gap-2">
+            {providerCrud && (
+              <div className="px-4 py-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newModelId}
+                    onChange={(e) => onSetNewModelId(e.target.value)}
+                    onKeyDown={(e) => !isImeComposing(e) && e.key === 'Enter' && onAddModel()}
+                    placeholder={t('settings.addModelPlaceholder')}
+                    className="zen-input flex-1 font-mono text-[11px]"
+                  />
+                  <button
+                    onClick={onAddModel}
+                    disabled={!newModelId.trim()}
+                    className="px-2.5 py-1 text-[11px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+                  >
+                    {t('common.add')}
+                  </button>
+                </div>
                 <input
                   type="text"
-                  value={newModelId}
-                  onChange={(e) => onSetNewModelId(e.target.value)}
-                  onKeyDown={(e) => !isImeComposing(e) && e.key === 'Enter' && onAddModel()}
-                  placeholder={t('settings.addModelPlaceholder')}
-                  className="zen-input flex-1 font-mono text-[11px]"
+                  value={modelSearch}
+                  onChange={(e) => onSetModelSearch(e.target.value)}
+                  placeholder={t('settings.searchModel')}
+                  className="zen-input text-[11px]"
                 />
-                <button
-                  onClick={onAddModel}
-                  disabled={!newModelId.trim()}
-                  className="px-2.5 py-1 text-[11px] rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
-                >
-                  {t('common.add')}
-                </button>
               </div>
-              <input
-                type="text"
-                value={modelSearch}
-                onChange={(e) => onSetModelSearch(e.target.value)}
-                placeholder={t('settings.searchModel')}
-                className="zen-input text-[11px]"
-              />
-            </div>
-          )}
+            )}
 
-          {filteredModels.length === 0 ? (
-            <div className="px-4 py-6 text-center text-[11px] text-text-tertiary">
-              {t('settings.noMatchingModels')}
-            </div>
-          ) : (
-            filteredModels.map((m) => {
-              const modelCaps = (() => {
-                try {
-                  return JSON.parse(m.capabilities || '{}')
-                } catch {
-                  return {}
-                }
-              })()
-              return (
-                <SettingsRow
-                  key={m.id}
-                  title={
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="font-mono text-[12px] truncate">{m.modelId}</span>
-                      <div className="flex items-center gap-1 shrink-0 text-text-tertiary">
-                        {modelCaps.vision && <Eye size={10} />}
-                        {modelCaps.functionCalling && <Wrench size={10} />}
-                        {modelCaps.reasoning && <Brain size={10} />}
-                        {modelCaps.imageOutput && <ImageIcon size={10} />}
-                        {modelCaps.audioInput && <Mic size={10} />}
+            {filteredModels.length === 0 ? (
+              <div className="px-4 py-6 text-center text-[11px] text-text-tertiary">
+                {t('settings.noMatchingModels')}
+              </div>
+            ) : (
+              filteredModels.map((m) => {
+                const modelCaps = (() => {
+                  try {
+                    return JSON.parse(m.capabilities || '{}')
+                  } catch {
+                    return {}
+                  }
+                })()
+                return (
+                  <SettingsRow
+                    key={m.id}
+                    title={
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-[12px] truncate">{m.modelId}</span>
+                        <div className="flex items-center gap-1 shrink-0 text-text-tertiary">
+                          {modelCaps.vision && <Eye size={10} />}
+                          {modelCaps.functionCalling && <Wrench size={10} />}
+                          {modelCaps.reasoning && <Brain size={10} />}
+                          {modelCaps.imageOutput && <ImageIcon size={10} />}
+                          {modelCaps.audioInput && <Mic size={10} />}
+                        </div>
                       </div>
-                    </div>
-                  }
-                  control={
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => onEditModel(m, modelCaps)}
-                        className="p-1 rounded text-text-tertiary hover:text-text-primary transition-colors"
-                        title={t('settings.editCapabilities')}
-                      >
-                        <SlidersHorizontal size={12} />
-                      </button>
-                      {providerCrud && (
+                    }
+                    control={
+                      <div className="flex items-center gap-1">
                         <button
-                          onClick={() => onDeleteModel(m.id)}
-                          className="p-1 rounded text-text-tertiary hover:text-error transition-colors"
-                          title={t('settings.deleteModel')}
+                          onClick={() => onEditModel(m, modelCaps)}
+                          className="p-1 rounded text-text-tertiary hover:text-text-primary transition-colors"
+                          title={t('settings.editCapabilities')}
                         >
-                          <X size={12} />
+                          <SlidersHorizontal size={12} />
                         </button>
-                      )}
-                      <Toggle
-                        on={!!m.isEnabled}
-                        onClick={() => onToggleModel(m.id, !m.isEnabled)}
-                      />
-                    </div>
-                  }
-                />
-              )
-            })
-          )}
-        </SettingsSection>
+                        {providerCrud && (
+                          <button
+                            onClick={() => onDeleteModel(m.id)}
+                            className="p-1 rounded text-text-tertiary hover:text-error transition-colors"
+                            title={t('settings.deleteModel')}
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                        <Toggle
+                          on={!!m.isEnabled}
+                          onClick={() => onToggleModel(m.id, !m.isEnabled)}
+                        />
+                      </div>
+                    }
+                  />
+                )
+              })
+            )}
+          </SettingsSection>
+        )}
       </div>
     </div>
   )

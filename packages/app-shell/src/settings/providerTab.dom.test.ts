@@ -31,6 +31,14 @@
  *   PT-27 进行中按 provider 记：A 结束不影响 B 的进行中
  *   PT-28 列表行带 `data-provider-row=<id>`
  *
+ * 只提供分类模型的内置提供商（TypeSafe，`isClassifierOnlyProvider`）：
+ *   PT-29 列表行挂恰一个「分类器」标签（停用时也挂；同名的自定义行不挂）  PT-30 选中后详情标题旁也挂一个
+ *   PT-31 模型管理换成一句提示（点名 displayName），没有同步 / 添加 / 搜索 / 「没有匹配的模型」
+ *   PT-32 没有 displayName → 提示点名 name      PT-33 库里有一条游离的启用模型行：照旧只有提示，不列它
+ *   PT-34 API Key 照旧能填，「保存并启用」= updateConfig 再 toggleEnabled   PT-35 行上的开关照常启用
+ *   PT-36 同名的自定义行、PT-37 别的内置行：照常的模型管理      PT-38 启用但没有（启用的）模型 → 行上没有
+ *         警告三角、详情没有横幅（对照：xai 照旧有）   PT-39 providerCrud=false 时标签与提示照旧
+ *
  * 包入口 `@shuvix/chat-ui` 顶掉：`isImeComposing` 照原实现（组字判定就是它），`useDialogClose` 给两个对话框
  * （本文件不打开它们）。i18n 用 en。文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX。
  */
@@ -40,7 +48,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
-import type { ProviderInfo } from '@shuvix/chat-protocol/types/provider'
+import type { ProviderInfo, ProviderModelInfo } from '@shuvix/chat-protocol/types/provider'
 
 vi.mock('@shuvix/chat-ui', () => ({
   isImeComposing: (e: { nativeEvent?: KeyboardEvent } & Partial<KeyboardEvent>) => {
@@ -823,5 +831,207 @@ describe('logins this component did not start, and per-provider busy state', () 
     await select(XAI)
     expect($('[data-oauth-signin]')).not.toBeNull()
     expect($('[data-oauth-cancel]')).toBeNull()
+  })
+})
+
+describe('classifier-only provider (TypeSafe)', () => {
+  const TS = 'typesafe'
+  const CUSTOM_TS = 'row-custom-ts'
+  const TAG = '[data-provider-classifier-tag]'
+  const HINT = '[data-classifier-only-hint]'
+  const TYPESAFE = provider({
+    id: TS,
+    name: 'typesafe',
+    displayName: 'TypeSafe',
+    isEnabled: 0,
+    baseUrl: 'https://api.typesafe.ai/v1/'
+  })
+  const CUSTOM_TYPESAFE = provider({
+    id: CUSTOM_TS,
+    name: 'typesafe',
+    isBuiltin: 0,
+    baseUrl: 'http://proxy.test/v1'
+  })
+  const TS_PROVIDERS = [...PROVIDERS, TYPESAFE, CUSTOM_TYPESAFE]
+
+  const hintFor = (name: string): string => S.classifierOnlyProviderHint.replace('{{name}}', name)
+
+  const model = (providerId: string, modelId: string, isEnabled = 1): ProviderModelInfo => ({
+    id: `${providerId}:${modelId}`,
+    providerId,
+    modelId,
+    isEnabled,
+    sortOrder: 0,
+    capabilities: '{}'
+  })
+
+  /** listModels 按 provider id 回给定的模型行（没给的回空） */
+  function modelsBy(table: Record<string, ProviderModelInfo[]>): void {
+    vi.mocked(h.api.listModels).mockImplementation(async (id: string) => table[id] ?? [])
+  }
+
+  const row = (id: string): HTMLElement => must(`[data-provider-row="${id}"]`)
+  /** 详情标题（h3）所在的那一栏 */
+  function header(name: string): HTMLElement {
+    const h3 = [...container.querySelectorAll('h3')].find((el) => el.textContent?.trim() === name)
+    if (!h3?.parentElement) throw new Error(`no detail header titled ${name}`)
+    return h3.parentElement
+  }
+  const tags = (scope: ParentNode = container): number => scope.querySelectorAll(TAG).length
+  const triangle = (id: string): Element | null =>
+    row(id).querySelector(`[aria-label="${S.noEnabledModels}"]`)
+  const buttonWithText = (label: string): HTMLButtonElement | undefined =>
+    [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.trim() === label
+    )
+  const inputWithPlaceholder = (placeholder: string): HTMLInputElement | null =>
+    container.querySelector<HTMLInputElement>(`input[placeholder="${placeholder}"]`)
+
+  /** 照常的模型管理：同步按钮、添加输入框都在 */
+  function expectModelManagement(): void {
+    expect($(HINT)).toBeNull()
+    expect(buttonWithText(S.syncModels)).toBeDefined()
+    expect(inputWithPlaceholder(S.addModelPlaceholder)).not.toBeNull()
+  }
+
+  it('PT-29 the TypeSafe row carries exactly one tag (text + title), even disabled; no other row has one', async () => {
+    await render({}, TS_PROVIDERS)
+
+    const rowTags = row(TS).querySelectorAll<HTMLElement>(TAG)
+    expect(rowTags).toHaveLength(1)
+    expect(rowTags[0].textContent?.trim()).toBe(S.classifierTag)
+    expect(rowTags[0].title).toBe(S.classifierTagTitle)
+    for (const id of [XAI, KIMI, OPENAI, ANTHROPIC, CUSTOM_TS]) expect(tags(row(id)), id).toBe(0)
+  })
+
+  it('PT-30 selecting TypeSafe adds one tag beside the detail title; selecting xAI leaves only the row tag', async () => {
+    await render({}, TS_PROVIDERS)
+
+    await select(TS)
+    expect(tags(header('TypeSafe'))).toBe(1)
+    expect(tags()).toBe(2)
+
+    await select(XAI)
+    expect(tags(header('xAI'))).toBe(0)
+    expect(tags()).toBe(1)
+  })
+
+  it('PT-31 TypeSafe: the model section is the hint naming TypeSafe; no sync, add, search or empty-list text', async () => {
+    await render({}, TS_PROVIDERS)
+    await select(TS)
+
+    expect(text(HINT)).toBe(hintFor('TypeSafe'))
+    expect(buttonWithText(S.syncModels)).toBeUndefined()
+    expect(inputWithPlaceholder(S.addModelPlaceholder)).toBeNull()
+    expect(inputWithPlaceholder(S.searchModel)).toBeNull()
+    expect(containerText()).not.toContain(S.noMatchingModels)
+  })
+
+  it('PT-32 no displayName → the hint names the provider by its name', async () => {
+    await render({}, [...PROVIDERS, { ...TYPESAFE, displayName: '' }])
+    await select(TS)
+
+    expect(text(HINT)).toBe(hintFor('typesafe'))
+  })
+
+  it('PT-33 a stray enabled model row is not listed: still only the hint, no model controls, no banner', async () => {
+    modelsBy({ [TS]: [model(TS, 'stray-model')] })
+    await render({}, [...PROVIDERS, { ...TYPESAFE, isEnabled: 1 }])
+    await select(TS)
+
+    expect(h.api.listModels).toHaveBeenCalledWith(TS)
+    expect(text(HINT)).toBe(hintFor('TypeSafe'))
+    expect(containerText()).not.toContain('stray-model')
+    expect(container.querySelector(`button[title="${S.deleteModel}"]`)).toBeNull()
+    expect(container.querySelector(`button[title="${S.editCapabilities}"]`)).toBeNull()
+    expect(containerText()).not.toContain(S.noEnabledModels)
+  })
+
+  it('PT-34 the API key field stays; Save & Enable writes the key, then enables the row', async () => {
+    await render({}, TS_PROVIDERS)
+    await select(TS)
+
+    const key = inputWithPlaceholder(
+      S.apiKeyPlaceholder.replace('{{name}}', 'TypeSafe')
+    ) as HTMLInputElement
+    expect(key).not.toBeNull()
+    expect(key.type).toBe('password')
+
+    await typeInto(key, 'sk-ts')
+    const save = buttonWithText(S.saveConfigAndEnable)
+    expect(save).toBeDefined()
+    await settle(() => save!.click())
+
+    expect(h.api.updateConfig).toHaveBeenCalledWith({ id: TS, apiKey: 'sk-ts' })
+    expect(h.api.toggleEnabled).toHaveBeenCalledWith({ id: TS, isEnabled: true })
+    expect(vi.mocked(h.api.updateConfig).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(h.api.toggleEnabled).mock.invocationCallOrder[0]
+    )
+  })
+
+  it('PT-35 the TypeSafe row’s toggle enables it', async () => {
+    await render({}, TS_PROVIDERS)
+
+    const toggle = row(TS).querySelector<HTMLButtonElement>('button')
+    expect(toggle).not.toBeNull()
+    await settle(() => toggle!.click())
+
+    expect(h.api.toggleEnabled).toHaveBeenCalledWith({ id: TS, isEnabled: true })
+  })
+
+  it('PT-36 a custom row named "typesafe" is ordinary: no tag, no hint, sync + add, its models listed', async () => {
+    modelsBy({ [CUSTOM_TS]: [model(CUSTOM_TS, 'alpha'), model(CUSTOM_TS, 'beta', 0)] })
+    await render({}, TS_PROVIDERS)
+    await select(CUSTOM_TS)
+
+    expect(tags(row(CUSTOM_TS))).toBe(0)
+    expect(tags(header('typesafe'))).toBe(0)
+    expectModelManagement()
+    expect(containerText()).toContain('alpha')
+    expect(containerText()).toContain('beta')
+    expect(container.querySelectorAll(`button[title="${S.deleteModel}"]`)).toHaveLength(2)
+  })
+
+  it('PT-37 another builtin (xAI) keeps the model section: no hint, sync + add, its models listed', async () => {
+    modelsBy({ [XAI]: [model(XAI, 'grok-4.5')] })
+    await render({}, TS_PROVIDERS)
+    await select(XAI)
+
+    expectModelManagement()
+    expect(containerText()).toContain('grok-4.5')
+    expect(container.querySelectorAll(`button[title="${S.editCapabilities}"]`)).toHaveLength(1)
+  })
+
+  it('PT-38 an enabled TypeSafe with no models gets no warning triangle in its row (xAI, likewise empty, does)', async () => {
+    await render({}, [...PROVIDERS, { ...TYPESAFE, isEnabled: 1 }])
+
+    expect(h.api.listModels).toHaveBeenCalledWith(TS)
+    expect(triangle(XAI)).not.toBeNull()
+    expect(triangle(TS)).toBeNull()
+
+    await select(TS)
+    expect(containerText()).not.toContain(S.noEnabledModels)
+  })
+
+  it('PT-38 an enabled TypeSafe whose only model rows are disabled: no triangle, no banner (xAI shows both)', async () => {
+    modelsBy({ [TS]: [model(TS, 'stray-off', 0)], [XAI]: [model(XAI, 'grok-off', 0)] })
+    await render({}, [...PROVIDERS, { ...TYPESAFE, isEnabled: 1 }])
+
+    expect(triangle(XAI)).not.toBeNull()
+    expect(triangle(TS)).toBeNull()
+
+    await select(XAI)
+    expect(containerText()).toContain(S.noEnabledModels)
+    await select(TS)
+    expect(containerText()).not.toContain(S.noEnabledModels)
+  })
+
+  it('PT-39 providerCrud=false: the tag and the hint still render', async () => {
+    await render({ caps: { providerCrud: false } }, TS_PROVIDERS)
+    await select(TS)
+
+    expect(tags(row(TS))).toBe(1)
+    expect(tags(header('TypeSafe'))).toBe(1)
+    expect(text(HINT)).toBe(hintFor('TypeSafe'))
   })
 })

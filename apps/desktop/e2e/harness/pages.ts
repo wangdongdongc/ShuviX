@@ -3227,6 +3227,100 @@ export function classifierModelPane(settings: CdpClient): ClassifierModelPane {
   }
 }
 
+/** 设置 → 提供商：选中那一家的详情此刻的样子 */
+export interface ProviderDetailState {
+  /** 详情标题（第一个 h3）的字；详情没上屏为 null */
+  title: string | null
+  /** 标题那一栏里「分类器」标签的个数 */
+  headerTags: number
+  /** 只提供分类模型的提示（`[data-classifier-only-hint]`）的字；没有为 null */
+  hint: string | null
+  /** 详情里每个按钮的字（trim，DOM 序；纯图标按钮是空串） */
+  buttons: string[]
+  /** 详情里每个 input 的 type 与 placeholder（DOM 序） */
+  inputs: Array<{ type: string; placeholder: string }>
+}
+
+export interface ProviderSettingsPane {
+  /** 等列表里那一行出现，点它 */
+  select(id: string): Promise<void>
+  /** 那一行里「分类器」标签的个数（行不在时抛） */
+  rowTags(id: string): Promise<number>
+  /** 那一行里第一个「分类器」标签的字与悬停提示（没有为 null） */
+  rowTag(id: string): Promise<{ text: string; title: string } | null>
+  /** 选中那一家的详情此刻的样子 */
+  detail(): Promise<ProviderDetailState>
+  /** 等详情满足条件（回最后一次读到的） */
+  waitDetail(
+    pred: (s: ProviderDetailState) => boolean,
+    what: string,
+    timeoutMs?: number
+  ): Promise<ProviderDetailState>
+}
+
+/**
+ * 设置窗口「提供商」页（app-shell ProviderTab）：左栏是 `[data-provider-row=<id>]` 的行，右栏是选中
+ * 那一家的详情。右栏没有自己的锚点，按结构取：行的滚动列 → 左栏（220px 那一列）→ 它的下一个兄弟。
+ * 详情的第一个 h3 是标题（各节的标题 h3 都排在它之后）。只提供分类模型的内置提供商（TypeSafe）在行与
+ * 标题旁挂 `[data-provider-classifier-tag]`，模型管理换成 `[data-classifier-only-hint]`。
+ */
+export function providerSettingsPane(settings: CdpClient): ProviderSettingsPane {
+  const TAG = '[data-provider-classifier-tag]'
+  const rowSel = (id: string): string => `[data-provider-row=${JSON.stringify(id)}]`
+  const DETAIL = `document.querySelector('[data-provider-row]')?.parentElement?.parentElement?.nextElementSibling`
+  const detail = (): Promise<ProviderDetailState> =>
+    settings.eval<ProviderDetailState>(`(() => {
+      const root = ${DETAIL}
+      const h3 = root?.querySelector('h3') ?? null
+      const hint = root?.querySelector('[data-classifier-only-hint]') ?? null
+      return {
+        title: h3 ? (h3.textContent || '').trim() : null,
+        headerTags: h3?.parentElement ? h3.parentElement.querySelectorAll(${JSON.stringify(TAG)}).length : 0,
+        hint: hint ? (hint.textContent || '').trim() : null,
+        buttons: [...(root?.querySelectorAll('button') ?? [])].map((b) => (b.textContent || '').trim()),
+        inputs: [...(root?.querySelectorAll('input') ?? [])].map((i) => ({ type: i.type, placeholder: i.placeholder }))
+      }
+    })()`)
+  const row = async (id: string): Promise<void> => {
+    await until(
+      () => settings.eval<boolean>(`!!document.querySelector(${JSON.stringify(rowSel(id))})`),
+      `provider row ${id}`
+    )
+  }
+  return {
+    async select(id) {
+      await row(id)
+      await settings.eval(`document.querySelector(${JSON.stringify(rowSel(id))}).click()`)
+    },
+    async rowTags(id) {
+      await row(id)
+      return settings.eval<number>(
+        `document.querySelector(${JSON.stringify(rowSel(id))}).querySelectorAll(${JSON.stringify(TAG)}).length`
+      )
+    },
+    async rowTag(id) {
+      await row(id)
+      return settings.eval<{ text: string; title: string } | null>(`(() => {
+        const tag = document.querySelector(${JSON.stringify(rowSel(id))}).querySelector(${JSON.stringify(TAG)})
+        return tag ? { text: (tag.textContent || '').trim(), title: tag.getAttribute('title') || '' } : null
+      })()`)
+    },
+    detail,
+    async waitDetail(pred, what, timeoutMs = 25_000) {
+      let last: ProviderDetailState | undefined
+      await until(
+        async () => {
+          last = await detail()
+          return pred(last)
+        },
+        `${what} (last: ${JSON.stringify(last)})`,
+        timeoutMs
+      )
+      return last!
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 注册表笔记（bot / agent / 策略 / hook md 的笔记本会话）的正文与属性卡 —— 两个窗口共用。
 //

@@ -545,7 +545,7 @@
     "defaultModel": "Default Model",
     "defaultModelNone": "None",
     "classifierModelRow": "Classifier model",
-    "classifierModelRowDesc": "Before each command runs, a classifier model decides which kind of action it is (read-only, touches personal files, changes files, installs software, sends data out, deletes data …). A command outside the sandbox that it rates plainly read-only (read_only with probability ≥ 0.9) runs without asking or the automatic review; everything else asks as before. Policies read the result as object.risk, and every classification is listed under Monitor → Classifier. Leave it off to skip classification. Classifier models are their own model type, for example Jev on OpenRouter or OpenCode.",
+    "classifierModelRowDesc": "Before each command runs, a classifier model decides which kind of action it is (read-only, touches personal files, changes files, installs software, sends data out, deletes data …). A command outside the sandbox that it rates plainly read-only (read_only with probability ≥ 0.9) runs without asking or the automatic review; everything else asks as before. Policies read the result as object.risk, and every classification is listed under Monitor → Classifier. Leave it off to skip classification. Classifier models are their own model type, for example Jev, from TypeSafe directly or through OpenRouter or OpenCode.",
     "classifierModelNone": "Off",
     "appearanceGroup": "Appearance",
     "languageGroup": "Language",
@@ -925,7 +925,10 @@
       "sent": "Sent to the classifier",
       "rawAnswers": "Raw answers",
       "clearConfirm": "Clear all classifier logs?"
-    }
+    },
+    "classifierOnlyProviderHint": "{{name}} only provides classifier models (such as Jev), not chat models. Add its API key above, enable it, then pick one under Settings → General → Classifier model.",
+    "classifierTag": "Classifier",
+    "classifierTagTitle": "Provides classifier models only (used to classify commands), not chat models"
   },
   "about": {
     "description": "Your AI Assistant",
