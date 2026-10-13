@@ -149,6 +149,22 @@ describe('KR-4..KR-6 派给写手的任务文本', () => {
     expect(buildKnowledgeReviewPrompt({ ...REQ, sessionId: '' })).not.toContain('shuvix://')
   })
 
+  it('KR-5b 带 workingDirectory → 多一行工作目录（条目里的相对路径据此解析），排在会话出处之前；不带 → 没有这一行', () => {
+    const lines = buildKnowledgeReviewPrompt({
+      ...REQ,
+      sessionId: 's1',
+      workingDirectory: '/Users/me/acme'
+    }).split('\n')
+    expect(lines).toHaveLength(7)
+    expect(lines[5]).toBe(
+      '- Working directory (resolve relative paths in the entry against it): /Users/me/acme'
+    )
+    expect(lines[6]).toContain('shuvix://session/s1')
+    expect(buildKnowledgeReviewPrompt({ ...REQ, sessionId: 's1' })).not.toContain(
+      'Working directory'
+    )
+  })
+
   it('KR-6 只给事实不给规范：没有自述行、没有类型词汇、没有 status —— 规范住在写手的 md 里（用户可覆盖）', () => {
     const text = buildKnowledgeReviewPrompt({ ...REQ, sessionId: 's1' })
     expect(text).not.toContain('shuvix: okf')

@@ -64,6 +64,8 @@ vi.mock('../../services/toolRegistry', () => ({
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => ({ enforcePath: state.enforcePath }),
+  // 写手的任务文本带提交会话的工作目录（条目里的相对路径据此解析）
+  resolveProjectConfig: () => ({ workingDirectory: '/probe-ws' }),
   TOOL_ABORTED: 'Aborted'
 }))
 // 写手的档案表与派发路由：真 agentService 会扫 ~/.shuvix/agents，真 AgentManager 连着整套运行时
@@ -569,10 +571,13 @@ describe('TR-1..TR-15 submit：派写手与盖章', () => {
         path: abs,
         rel: 'tr1.md',
         submittedBy: SUBMITTER,
-        sessionId: 's1'
+        sessionId: 's1',
+        workingDirectory: '/probe-ws'
       })
     )
     expect(params.prompt).toContain('shuvix://session/s1')
+    // 条目里的相对路径（`src/auth/refresh.ts`）要靠它解析成 sources 的绝对路径
+    expect(params.prompt).toContain('/probe-ws')
     expect(params.description).toBe('Check tr1.md')
     expect(params.resultContract).toBe(KNOWLEDGE_REVIEW_CONTRACT)
     // 写手的模型按通用规则来（md 声明或跟随调用方）：宿主不另给

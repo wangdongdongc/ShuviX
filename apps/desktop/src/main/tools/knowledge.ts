@@ -24,7 +24,12 @@ import {
   type ToolCallScope
 } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
-import { getDesktopSecurityContext, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
+import {
+  getDesktopSecurityContext,
+  resolveProjectConfig,
+  TOOL_ABORTED,
+  type ToolContext
+} from '../services/toolContext'
 import { agentActorOf, withCallAgent, type ToolAgentIdentity } from '../services/toolAgent'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import {
@@ -82,7 +87,11 @@ async function runReview(
     owner: { tool: run.call },
     parentToolCallId: run.toolCallId,
     agentType: toInProcessAgentType(profile),
-    prompt: buildKnowledgeReviewPrompt({ ...req, sessionId: ctx.sessionId }),
+    prompt: buildKnowledgeReviewPrompt({
+      ...req,
+      sessionId: ctx.sessionId,
+      workingDirectory: resolveProjectConfig(ctx.sessionId).workingDirectory
+    }),
     description: `Check ${req.rel}`,
     resultContract: KNOWLEDGE_REVIEW_CONTRACT
   })

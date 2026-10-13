@@ -68,10 +68,11 @@ export type KnowledgeReviewOutcome =
 
 /**
  * 派给写手的任务文本。规范本身住在写手的 md 里（用户可覆盖）；这里只给这一次的事实：哪个文件、
- * 哪个库、谁提交的、本会话的 `shuvix://session/<id>`（对话里确立的事以它为出处）。
+ * 哪个库、谁提交的、提交它的会话的工作目录（相对路径据此解析）、本会话的 `shuvix://session/<id>`
+ *（对话里确立的事以它为出处）。
  */
 export function buildKnowledgeReviewPrompt(
-  req: KnowledgeReviewRequest & { sessionId?: string }
+  req: KnowledgeReviewRequest & { sessionId?: string; workingDirectory?: string }
 ): string {
   return [
     'Check this knowledge-base entry and complete its metadata.',
@@ -79,6 +80,13 @@ export function buildKnowledgeReviewPrompt(
     `- Entry: ${req.path}`,
     `- Base: "${req.base}" (${req.label}) — ${req.bundleDir}`,
     `- Submitted by: ${req.submittedBy}`,
+    // 条目正文里写的多半是项目相对路径（`src/auth/refresh.ts`）；写手的提示词里没有环境段，不给它工作目录，
+    // 它就既找不到那个文件、也写不出 `sources` 要的绝对路径（真模型探针里它因此退回到会话 URI）
+    ...(req.workingDirectory
+      ? [
+          `- Working directory (resolve relative paths in the entry against it): ${req.workingDirectory}`
+        ]
+      : []),
     ...(req.sessionId
       ? [
           `- Source for what was established in the submitting conversation: shuvix://session/${req.sessionId}`

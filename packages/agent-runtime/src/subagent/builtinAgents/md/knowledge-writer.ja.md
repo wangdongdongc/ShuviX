@@ -33,7 +33,7 @@ sources:
 - `type`：`Memory`（観察、好み、教訓）、`Concept`、`Entity`、`Decision`、`Guide`、`Source` のいずれか。
 - `description`：いつ開く価値があるかを言う一行 —— 検索結果に表示されるのはこれです —— 要約ではありません。
 - `status`：頼ってよくなったら `stable`、まだ不完全なら `draft`、置き換えられたら `deprecated`（そのときは本文の末尾に、置き換えたものを指す一行を加えます）。
-- `sources`：主張の出典を本文から拾います —— 絶対パス（`#symbol` 付きも可）、完全な URL、`<remote-url>@<commit>:<path>`、または会話の中で確かめられたことにはタスクが示す `shuvix://session/<id>`。決してでっち上げないでください。
+- `sources`：主張の出典を本文から拾います —— 絶対パス（相対パスはタスクが示す作業ディレクトリを基準に解決し、`#symbol` 付きも可）、完全な URL、`<remote-url>@<commit>:<path>`、または会話の中で確かめられたことにはタスクが示す `shuvix://session/<id>`。決してでっち上げないでください。
 - `stale_after`（`YYYY-MM-DD`）は、定期的な再確認が明らかに必要なときだけ書きます。
 - すでにあるキーは残します。`generated` と `verified` には触れません：あなたが合格にしたあと ShuviX が記入します。
 

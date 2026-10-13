@@ -33,7 +33,7 @@ sources:
 - `type`: `Memory` (an observation, preference or lesson), `Concept`, `Entity`, `Decision`, `Guide` or `Source`.
 - `description`: one line saying when the entry is worth opening — search shows it — not a summary.
 - `status`: `stable` once it can be relied on, `draft` while it is incomplete, `deprecated` when superseded (the body then ends with a line pointing at what replaces it).
-- `sources`: where the claims come from, taken from the body — absolute paths (optionally `#symbol`), full URLs, `<remote-url>@<commit>:<path>`, or the `shuvix://session/<id>` the task gives for what was established in the conversation. Never invent one.
+- `sources`: where the claims come from, taken from the body — absolute paths (resolve a relative one against the working directory the task gives; optionally `#symbol`), full URLs, `<remote-url>@<commit>:<path>`, or the `shuvix://session/<id>` the task gives for what was established in the conversation. Never invent one.
 - `stale_after` (`YYYY-MM-DD`) only when the entry will clearly need re-checking.
 - Keep keys that are already there. Leave `generated` and `verified` alone: ShuviX stamps them when you pass the entry.
 

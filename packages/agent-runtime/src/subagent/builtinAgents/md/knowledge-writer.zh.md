@@ -33,7 +33,7 @@ sources:
 - `type`：`Memory`（观察、偏好、教训）、`Concept`、`Entity`、`Decision`、`Guide` 或 `Source`。
 - `description`：一行，说什么时候值得打开它 —— 检索结果显示的就是它 —— 不是摘要。
 - `status`：`stable` 表示已经可以依赖，`draft` 表示还不完整，`deprecated` 表示已被取代（这时正文末尾加一行指向取代它的东西）。
-- `sources`：说法的出处，从正文里取 —— 绝对路径（可带 `#symbol`）、完整 URL、`<remote-url>@<commit>:<path>`，或任务给出的 `shuvix://session/<id>`（对话里确立的事以它为出处）。绝不编造。
+- `sources`：说法的出处，从正文里取 —— 绝对路径（相对路径按任务给的工作目录解析；可带 `#symbol`）、完整 URL、`<remote-url>@<commit>:<path>`，或任务给出的 `shuvix://session/<id>`（对话里确立的事以它为出处）。绝不编造。
 - `stale_after`（`YYYY-MM-DD`）只在条目明显需要定期复查时写。
 - 已有的键保留。`generated` 和 `verified` 别碰：你判通过之后由 ShuviX 盖。
 
