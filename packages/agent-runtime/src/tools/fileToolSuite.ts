@@ -423,7 +423,8 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeAsk(toolCallId, portPath, signal, call)
+      this.makeAsk(toolCallId, portPath, signal, call),
+      { refuseUnreadOverwrite: (this.deps.knowledge?.locate(portPath) ?? null) !== null }
     )
     // 先审阅（可能回写盖章），再广播变更 —— 让面板刷新读到的是最终内容
     const note = await this.reviewWrittenMd(portPath, call)

@@ -6,8 +6,9 @@
  * 由宿主回答。跨 bundle 的引用走 `shuvix://` URI，不走路径。
  *
  * **读宽写严**：库里任何 md 都是一条笔记（readKnowledgeNote），缺元数据的用户笔记照常列出、检索；
- * 只有 `knowledge` 的 `create` 建出来的条目保证 OKF 合规。改动条目走普通 `edit`（写钩子
- * 回执诊断、给 OKF 条目盖 `generated`，变更管线按 bundle 提交 git），社区 skill 与人工编辑同权。
+ * 条目的新建与改动都走普通 `write` / `edit`（写钩子回执诊断、给 OKF 条目盖 `generated`，变更管线按
+ * bundle 提交 git），社区 skill 与人工编辑同权；`knowledge` 的 `submit` 派写手补元数据、过一道门，
+ * 通过的才由宿主记一笔机器确认（review.ts）。
  *
  * **没有注入面**：把条目自动喂进系统提示词的机制（原 `<knowledge>` 围栏与 agent md 键
  * `shuvix-knowledge`）已整体撤除 —— 怎么注入还没想清楚，留待重新设计。
@@ -33,6 +34,7 @@ export {
   normalizeKnowledgeType,
   isOkfStatus,
   trustTierOf,
+  currentTrustTierOf,
   isVerificationCurrent,
   isStale,
   titleFromPath,
@@ -73,5 +75,14 @@ export {
   type KnowledgeBundleScan,
   type KnowledgeSearchHit
 } from './knowledgeTool'
+export {
+  KNOWLEDGE_WRITER_PROFILE_NAME,
+  KNOWLEDGE_REVIEW_CONTRACT,
+  buildKnowledgeReviewPrompt,
+  readKnowledgeReviewResult,
+  stampKnowledgeReview,
+  type KnowledgeReviewRequest,
+  type KnowledgeReviewOutcome
+} from './review'
 export { toKnowledgeEntry, toKnowledgeEntryFromNote } from './entryView'
 export { renderKnowledgeGuide, type KnowledgeGuideBase } from './knowledgeGuide'

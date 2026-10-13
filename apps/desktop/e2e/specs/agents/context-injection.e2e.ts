@@ -261,8 +261,8 @@ describe('覆盖 work 的清单省略语义', () => {
  * 要围栏得有人勾过 —— 那些用例靠 `createAgentSession({ knowledgeBases })` 在根 Agent 起来之前把选择
  * 放好。项目库之后的次序就是选择里的次序。
  *
- * 围栏里**只有清单、没有内容**：不列条目文件名、不报条目数、不印知识库根的绝对路径 —— 印了路径
- * 就等于邀请 agent 直接 `write` 过去，绕开只有 `create` 才担保的元数据形状。
+ * 围栏里**只有清单、没有内容**：不列条目文件名、不报条目数；每个库带它的**目录**（2026-10-12 起：条目
+ * 由 agent 直接 `write` 进库目录再 `submit` 过门，印目录正是为了让它写得进去）。
  *
  * 选择改了之后围栏**当场跟上**（pi-durable 起，P3-06 PIN-08 / P3-15）：知识库是活段落
  * （`shuvix.prompt.knowledge`，`durable/prompt/sections.ts`），只有人设冻结 —— 下一次请求把变了的那段作为
@@ -285,13 +285,15 @@ describe('知识库围栏', () => {
     return start === -1 || end === -1 ? '' : sp.slice(start + OPEN.length, end)
   }
 
-  /** 围栏只给入口不给内容 */
+  /** 围栏只给入口不给内容：每行 `- 名字 — 标签 — /库目录`，目录之外不该有路径与计数 */
   const expectNoContent = (body: string): void => {
     expect(body, 'the fence is there at all').not.toBe('')
     expect(body, 'no entry file names').not.toContain('.md')
-    // 计数与路径都不该出现：数字与斜杠是它们最省事的判据（库名与项目名都不含）
-    expect(/\d/.test(body), `no counts in: ${body}`).toBe(false)
-    expect(body, 'no paths').not.toContain('/')
+    // 目录（临时 HOME、项目 uuid 都可能带数字）摘掉之后，计数与别的路径都不该出现：数字与斜杠是它们
+    // 最省事的判据（库名与项目名都不含）
+    const rest = body.replace(/ — \/\S+/g, '')
+    expect(/\d/.test(rest), `no counts in: ${rest}`).toBe(false)
+    expect(rest, 'no paths besides the base directories').not.toContain('/')
   }
 
   const systemPromptOf = (sid: string): Promise<string> =>
@@ -301,7 +303,7 @@ describe('知识库围栏', () => {
         .then((info) => info.systemPrompt)`
     )
 
-  it('KBF-E-1 项目会话谁都没勾：围栏照样在、排在项目提示词之后，列出 `- project — <项目名>`，不带任何条目/路径/计数；没有项目记忆那段', async () => {
+  it('KBF-E-1 项目会话谁都没勾：围栏照样在、排在项目提示词之后，列出 `- project — <项目名> — <库目录>`，不带任何条目/计数；没有项目记忆那段', async () => {
     // 不传 knowledgeBases：项目库是隐式启用的，不用勾
     const { systemPrompt: sp } = await createAgentSession(app.main, {
       projectId,
@@ -310,10 +312,11 @@ describe('知识库围栏', () => {
 
     expect(sp.indexOf(OPEN)).toBeGreaterThan(sp.indexOf('</project_prompt>'))
     const fence = fenceBodyOf(sp)
-    // 项目库的标签是项目**当前**的名字（目录名是 uuid，永远不该出现在提示词里）
-    expect(fence).toContain('- project — InjProj')
+    // 项目库的标签是项目**当前**的名字（目录名是 uuid —— 只出现在目录里，从不当名字用）
+    expect(fence).toContain(
+      `- project — InjProj — ${join(app.home, '.shuvix', 'knowledge-shuvix', 'projects', projectId)}`
+    )
     expectNoContent(fence)
-    expect(fence).not.toContain(app.home)
     // 项目记忆已退役：项目库接替了它，不再有那一段
     expect(sp).not.toContain('<project_memory>')
   })
@@ -326,7 +329,7 @@ describe('知识库围栏', () => {
       knowledgeBases: [USER_BASE, 'shuvix']
     })
     expect(sp).toContain(OPEN)
-    expect(fenceBodyOf(sp)).toContain(`- ${USER_BASE}`)
+    expect(fenceBodyOf(sp)).toContain(`- ${USER_BASE} — ${userBaseDir()}`)
     // 内置库那一行带一句它是什么、且只读 —— 那句话本身不含路径与计数
     expect(fenceBodyOf(sp)).toMatch(/\n- shuvix — .*read-only/)
     expectNoContent(fenceBodyOf(sp))
@@ -439,7 +442,7 @@ describe('知识库围栏', () => {
     expect(restored).toBe(sp0)
   })
 
-  it('KBF-E-5 项目会话的围栏次序：项目库恒打头，其后是选择里的次序（`project` → `shuvix` → 用户库），整段仍然无条目/路径/计数', async () => {
+  it('KBF-E-5 项目会话的围栏次序：项目库恒打头，其后是选择里的次序（`project` → `shuvix` → 用户库），整段仍然无条目/计数、每行带库目录', async () => {
     // 这一条要的正是「用户库 + 项目库 + 内置库」三种都在的那一屏
     mkdirSync(userBaseDir(), { recursive: true })
 
@@ -464,9 +467,10 @@ describe('知识库围栏', () => {
     // 内置那一行自带一句「是什么 + 只读」，好让模型知道什么问题该来这里查、又别把笔记记进来
     expect(fence).toMatch(/\n- shuvix — .*read-only/)
 
-    // 多了一种库，「只给入口不给内容」的承诺一字不改（那句说明里既没有路径也没有版本号）
+    // 多了一种库，「只给入口不给内容」的承诺一字不改（那句说明里既没有路径也没有版本号）；
+    // 每行末尾是库目录 —— 条目由 agent 直接 write 进去再 submit
     expectNoContent(fence)
-    expect(fence).not.toContain(app.home)
+    expect(fence).toContain(`- ${USER_BASE} — ${userBaseDir()}`)
   })
 
   it('KBF-E-6 取消勾选 `shuvix` 后新建的会话围栏里没有那一行；已有运行时的系统提示词逐字节不变', async () => {

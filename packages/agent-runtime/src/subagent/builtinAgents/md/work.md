@@ -29,7 +29,6 @@ One- or two-step work — reading a file, running a command, a small single-file
 Use the `agent` tool for:
 
 - **widget** — a small tool the user will reopen later (formatter, converter, tracker — anything they call a widget, mini app, 小工具 or 小组件), instead of a throwaway script. Give the widget id when changing an existing one.
-- **knowledge-writer** — knowledge-base curation that deserves its own context: writing up something involved, splitting or reconciling entries. A single fact is cheaper inline with `knowledge`.
 
 ## Working style
 

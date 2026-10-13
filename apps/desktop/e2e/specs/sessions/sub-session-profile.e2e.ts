@@ -261,12 +261,11 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
     expect((await runtimeInfo(sub.id)).systemPrompt).toContain(WORK_ANCHOR)
   })
 
-  it('SP-5b 曾经只可派发的内置 knowledge-writer 现在也钉得上 —— 会话感知这道门已退役', async () => {
-    // 准入只剩「不是基座」：内置执行体、用户档案一视同仁。戳落下、body 换成它的、不再是父形态基座
+  it('SP-5b 宿主专用的 knowledge-writer 钉不上 —— 它只由 knowledge 工具的 submit 调起：同 SP-4（不落戳、基座 body、创建成功）', async () => {
     const sub = await createSub('writer', { agent_profile: 'knowledge-writer' })
     expect(sub.isError).toBe(false)
-    expect((await settingsOf(sub.id)).agentProfile).toBe('knowledge-writer')
-    expect((await runtimeInfo(sub.id)).systemPrompt).not.toContain(WORK_ANCHOR)
+    expect('agentProfile' in (await settingsOf(sub.id))).toBe(false)
+    expect((await runtimeInfo(sub.id)).systemPrompt).toContain(WORK_ANCHOR)
   })
 
   it('SP-6 不点名：不落戳、基座 body、工具勾选等于父会话的', async () => {

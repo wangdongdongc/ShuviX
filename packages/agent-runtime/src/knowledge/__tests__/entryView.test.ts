@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import type { KnowledgeEntry } from '@shuvix/chat-protocol/knowledge'
 import { readKnowledgeNote, type KnowledgeConcept } from '../conceptFile'
 import { toKnowledgeEntry, toKnowledgeEntryFromNote } from '../entryView'
+import { stampKnowledgeReview } from '../review'
 
 const NOW = new Date('2026-09-10T12:00:00Z')
 
@@ -211,5 +212,66 @@ describe('toKnowledgeEntryFromNote — 笔记 → 条目视图', () => {
     expect(note.concept!.title).toBe('a')
     expect(entry.trustTier).toBe('human-reviewed')
     expect(entry.verifiedCurrent).toBe(true)
+  })
+})
+
+/**
+ * 视图接的是 currentTrustTierOf（为当前内容背书的那几条章），不是 OKF 的 trustTierOf：
+ * 人工核实过、后来被改写又经 `submit` 机器确认的条目，侧栏亮的是机器确认，而不是绿色的人工审阅。
+ */
+describe('toKnowledgeEntry —— 信任档按当前内容判', () => {
+  const T0 = '2026-09-01T00:00:00.000Z'
+  const T1 = '2026-09-02T00:00:00.000Z'
+  const human = stamp('human:alice', T0)
+  const machine = stamp('shuvix-knowledge-writer/x', T1)
+
+  it('EV-9 旧人工章 + 新机器章、generated 与机器章同刻 → machine-confirmed，且核实仍当前', () => {
+    const entry = toKnowledgeEntry(
+      concept({ verified: [human, machine], generated: stamp('shuvix-work/gpt-5', T1) }),
+      { bundle: BUNDLE, now: NOW }
+    )
+    expect({ trustTier: entry.trustTier, verifiedCurrent: entry.verifiedCurrent }).toEqual({
+      trustTier: 'machine-confirmed',
+      verifiedCurrent: true
+    })
+  })
+
+  it('EV-10 只有旧人工章、之后被改写 → human-reviewed 但核实不再当前（侧栏据此画灰色「核实后又被修改」）', () => {
+    const entry = toKnowledgeEntry(
+      concept({ verified: [human], generated: stamp('shuvix-work/gpt-5', T1) }),
+      { bundle: BUNDLE, now: NOW }
+    )
+    expect({ trustTier: entry.trustTier, verifiedCurrent: entry.verifiedCurrent }).toEqual({
+      trustTier: 'human-reviewed',
+      verifiedCurrent: false
+    })
+  })
+
+  it('EV-11 一份经 stampKnowledgeReview 盖过章的文本：笔记视图给出与 EV-9 相同的信任档，generatedBy 是提交者', () => {
+    const text = stampKnowledgeReview(
+      [
+        '---',
+        'shuvix: okf v0.2',
+        'type: Memory',
+        'title: A',
+        'description: da',
+        `verified: { by: "human:alice", at: "${T0}" }`,
+        '---',
+        '',
+        'body',
+        ''
+      ].join('\n'),
+      { submittedBy: 'shuvix-work/gpt-5', reviewer: 'shuvix-knowledge-writer/haiku', at: T1 }
+    )!
+    const entry = toKnowledgeEntryFromNote(readKnowledgeNote(text, 'a.md'), {
+      bundle: BUNDLE,
+      now: NOW
+    })
+    expect(entry).toMatchObject({
+      trustTier: 'machine-confirmed',
+      verifiedCurrent: true,
+      generatedBy: 'shuvix-work/gpt-5',
+      generatedAt: T1
+    })
   })
 })

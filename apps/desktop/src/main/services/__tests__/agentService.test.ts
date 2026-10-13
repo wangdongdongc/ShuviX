@@ -492,8 +492,8 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
     expect(judge('work')).toBe(false)
   })
 
-  it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 titler', () => {
-    for (const name of ['coding', 'explore', 'widget', 'knowledge-writer', 'titler']) {
+  it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 titler（knowledge-writer 已转宿主专用，归 AS-23d）', () => {
+    for (const name of ['coding', 'explore', 'widget', 'titler']) {
       expect(judge(name), name).toBe(true)
     }
   })
@@ -522,6 +522,13 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
     // 名字全等才算：只是前缀相同的是另一份普通档案
     writeAgentFile('permission-reviewer-2.md', agentMd('permission-reviewer-2'))
     expect(judge('permission-reviewer-2')).toBe(true)
+  })
+
+  it('AS-23e 知识库写手（只由 knowledge 工具的 submit 调起）：getProfile 解析得到（宿主要按名派它），但恒 false', () => {
+    const builtin = agentService.getProfile('knowledge-writer')
+    expect(builtin).toBeDefined()
+    expect(builtin!.source).toBe('builtin')
+    expect(judge('knowledge-writer')).toBe(false)
   })
 })
 

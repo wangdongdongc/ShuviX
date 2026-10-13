@@ -12,6 +12,7 @@
  */
 import type { AgentProfile } from '../types'
 import { buildBuiltinProfile, type BuiltinProfileDeps, type BuiltinProfileSpec } from './spec'
+import { KNOWLEDGE_WRITER_PROFILE_NAME } from '../../knowledge/review'
 
 export {
   buildBuiltinProfile,
@@ -139,16 +140,15 @@ export const TITLER_SPEC: BuiltinProfileSpec = {
 }
 
 /**
- * 知识库写入侧（OKF，设计 docs/okf-knowledge-design.md §6.3）—— 派发执行：经 `knowledge` 工具
- * 往**本会话所属项目的那个 bundle** 写条目。没有 git、没有提交协议、没有反链复查：簿记归宿主
- * （P3）。
+ * 知识库条目的提交检查（OKF）—— `knowledge` 工具 `submit` 的执行侧，**只由宿主派发**：主 agent 用文件
+ * 工具把条目写进库，提交时宿主同步派它补齐元数据、判内容站不站得住，经 `next` 交回 `{passed, report}`；
+ * 通过的章由宿主盖（knowledge/review.ts）。元数据的写法（键表、类型词汇表、出处规则）只写在这份提示词里 ——
+ * 主 agent 因此不必为它付每会话的提示词。
  *
- * 不依赖任何宿主参数：它从不点名文件系统路径，目标由工具按会话解析。编辑规范（布局、类型
- * 词汇表、写作规则）内联在这份提示词里 —— 库里不放用户可编辑的规范文件，那种文件一落盘就
- * 再也更新不了，而 agent 又被要求遵循它。
+ * 不依赖任何宿主参数：要检查的文件、所在的库、提交者都由任务文本给出。
  */
 export const KNOWLEDGE_WRITER_SPEC: BuiltinProfileSpec = {
-  name: 'knowledge-writer'
+  name: KNOWLEDGE_WRITER_PROFILE_NAME
 }
 
 /**
@@ -205,11 +205,12 @@ export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
 
 /**
  * 只由宿主派发的档案 —— 比基座更严：派发工具**按名也解析不到**（基座只是不进可用名单），子会话的
- * `agent_profile` 也不收。今天只有权限审查员：被审的 agent 要是能派发它，就能反复拿它试探
- * 「哪种写法能过审」。hook 仍可点名它（内置 `auto-review` 正是这么派发的）。
+ * `agent_profile` 也不收。权限审查员与知识库写手都是一道门：被检查的 agent 要是能直接派发它们，就能
+ * 反复拿它们试探「哪种写法能过」。hook 仍可点名（内置 `auto-review` 正是这么派发审查员的）。
  */
 export const HOST_ONLY_PROFILE_NAMES: ReadonlySet<string> = new Set([
-  PERMISSION_REVIEWER_PROFILE_NAME
+  PERMISSION_REVIEWER_PROFILE_NAME,
+  KNOWLEDGE_WRITER_PROFILE_NAME
 ])
 
 /** 按宿主 deps 现算全部可用内置档案（文案按当前语言解析） */

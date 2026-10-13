@@ -12,11 +12,15 @@
  * builtinPolicies/index.ts）：写确实落盘，只是盖章与管线都绕开它 —— 下个版本随包还原。
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
-import { executeTool, invokeTool } from '@shuvix/agent-runtime/tools/testing/invokeTool'
+import {
+  executeTool,
+  failureText,
+  invokeTool
+} from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const state = vi.hoisted(() => ({
   dir: '',
@@ -69,7 +73,9 @@ vi.mock('../../utils/paths', () => ({
   getShuvixKnowledgeRootDir: () => state.kb,
   getUserKnowledgeRootDir: () => `${state.kb}-user`,
   // 内置库根替身：kb 的兄弟目录（同在临时目录树下，afterAll 一并收）
-  getBuiltinKnowledgeDir: () => `${state.kb}-builtin`
+  getBuiltinKnowledgeDir: () => `${state.kb}-builtin`,
+  // read 工具（FD-9..）的图片落盘目录；文本读取用不上，补上免得替身缺导出
+  getToolResultsDir: () => join(state.dir, 'tool_results')
 }))
 // i18next 是单例：内置库的语言目录从它现读（真身在单测里没 init，`language` 是 undefined）——
 // 替身把「当前界面语言」写死成 en，磁盘上那一层就是 `<内置根>/<库名>/en/`
@@ -78,6 +84,7 @@ vi.mock('../../services/knowledge', () => ({ notifyKnowledgeFileChanged: state.n
 
 import { makeWriteTool } from '../write'
 import { makeEditTool } from '../edit'
+import { makeReadTool } from '../read'
 import { _resetAll } from '../../utils/toolUtils/fileTime'
 // 真的路径算术（fileToolDeps 走的也是这个子模块，不是被替身挡住的 services/knowledge 入口）：
 // FD-6 拿它证明那条路径**确实落在内置库里**，而不是「不属于任何库」—— 否则与 FD-2 就没区别了
@@ -420,5 +427,134 @@ describe('H11-52 文件工具的章按调用盖', () => {
       kind: 'write',
       actor: 'shuvix-explore/unknown'
     })
+  })
+})
+
+/**
+ * FD-9..FD-15 —— 知识库里的覆盖保护（write 按 `knowledge.locate` 打开 applyWrite 的 refuseUnreadOverwrite）：
+ * 落在某个可写库里、本会话没读过的既有文件，`write` 不许整篇覆盖（条目的文件名由 agent 自己挑，撞上已有的
+ * 名字会把别人的条目整篇换掉）。真文件 + 真 fileTime（读取时间按会话分表）。
+ *
+ * 本文件的临时目录在 beforeAll 建、fileTime 每个用例 `_resetAll()`：同一路径跨用例写两次，后一次就会撞上这道
+ * 保护 —— 所以这一组每条用例各用自己的文件名。
+ */
+describe('桌面文件工具 — 知识库条目的覆盖保护', () => {
+  const OVERWRITE = 'already exists in the knowledge base'
+  /** 种一份「别人写的」条目（不经工具，本会话没读过） */
+  const seedTheirs = (p: string): void => {
+    mkdirSync(join(p, '..'), { recursive: true })
+    writeFileSync(p, DRAFT.replace('body', 'their body'), 'utf-8')
+  }
+  /** 拒绝之后：字节不变、不弹卡、变更管线一次都没来 */
+  const expectRefusedUntouched = async (p: string): Promise<void> => {
+    expect(readFileSync(p, 'utf-8')).toBe(DRAFT.replace('body', 'their body'))
+    expect(state.requests).toEqual([])
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(state.notify).not.toHaveBeenCalled()
+  }
+
+  it('FD-9 项目库里一份本会话没读过的条目 → write 被拒', async () => {
+    const p = join(state.kb, 'projects', 'acme', 'fd9.md')
+    seedTheirs(p)
+    const msg = await failureText(
+      executeTool(makeWriteTool(ctx), 'fd9', { path: p, content: DRAFT })
+    )
+    expect(msg).toContain(OVERWRITE)
+    await expectRefusedUntouched(p)
+  })
+
+  it('FD-10 同一会话先 read 再 write → 成功、盖 generated、变更管线收到 write', async () => {
+    const p = join(state.kb, 'projects', 'acme', 'fd10.md')
+    seedTheirs(p)
+    await executeTool(makeReadTool(ctx), 'fd10r', { path: p })
+    const res = await executeTool(makeWriteTool(ctx), 'fd10w', { path: p, content: DRAFT })
+    expect(res.isError).toBeFalsy()
+    const after = readFileSync(p, 'utf-8')
+    expect(after).toContain('generated: { by: "shuvix-work/gpt-5", at: "')
+    expect(after).not.toContain('their body')
+    await vi.waitFor(() => expect(state.notify).toHaveBeenCalledTimes(1))
+    expect(state.notify).toHaveBeenCalledWith(p, { kind: 'write', actor: 'shuvix-work/gpt-5' })
+  })
+
+  it('FD-11 用户库同样生效：没读过的既有条目 → write 被拒', async () => {
+    const p = join(`${state.kb}-user`, 'notes', 'fd11.md')
+    seedTheirs(p)
+    const msg = await failureText(
+      executeTool(makeWriteTool(ctx), 'fd11', { path: p, content: DRAFT })
+    )
+    expect(msg).toContain(OVERWRITE)
+    await expectRefusedUntouched(p)
+  })
+
+  it('FD-12 读取时间按会话：会话 A 读过、会话 B 写同一文件 → 被拒（跨会话的「读过」不算数）', async () => {
+    const p = join(state.kb, 'projects', 'acme', 'fd12.md')
+    seedTheirs(p)
+    await executeTool(makeReadTool({ ...ctx, sessionId: 'kb-a' }), 'fd12r', { path: p })
+    const msg = await failureText(
+      executeTool(makeWriteTool({ ...ctx, sessionId: 'kb-b' }), 'fd12w', {
+        path: p,
+        content: DRAFT
+      })
+    )
+    expect(msg).toContain(OVERWRITE)
+    await expectRefusedUntouched(p)
+  })
+
+  it('FD-13 钉住范围：不在 locate 范围里的路径（内置库、用户根散文件、库内隐藏目录）不受这道保护，照旧覆盖', async () => {
+    for (const p of [
+      join(builtinDir, 'fd13.md'),
+      join(`${state.kb}-user`, 'fd13-loose.md'),
+      join(`${state.kb}-user`, 'notes', '.obsidian', 'fd13.md')
+    ]) {
+      seedTheirs(p)
+      const res = await executeTool(makeWriteTool(ctx), 'fd13', { path: p, content: DRAFT })
+      expect(res.isError, p).toBeFalsy()
+      expect(readFileSync(p, 'utf-8'), p).toBe(DRAFT)
+    }
+    expect(state.requests).toEqual([])
+  })
+
+  it('FD-14 本会话 write 新建之后再 write 同一文件 → 成功（写后记了读取时间）', async () => {
+    const p = join(state.kb, 'projects', 'acme', 'fd14.md')
+    const first = await executeTool(makeWriteTool(ctx), 'fd14a', { path: p, content: DRAFT })
+    expect(first.isError).toBeFalsy()
+    const second = await executeTool(makeWriteTool(ctx), 'fd14b', {
+      path: p,
+      content: DRAFT.replace('body', 'body two')
+    })
+    expect(second.isError).toBeFalsy()
+    expect(readFileSync(p, 'utf-8')).toContain('body two')
+  })
+
+  it('FD-15 跨工具承诺「Re-read it before editing it again」：读过之后文件被宿主改写（模拟 submit 盖章）→ edit 报读后被改；再读一次就能改', async () => {
+    const p = join(state.kb, 'projects', 'acme', 'fd15.md')
+    seedTheirs(p)
+    await executeTool(makeReadTool(ctx), 'fd15r1', { path: p })
+    // 宿主盖章：内容变了，mtime 显式钉在「第一次读之后 100ms」—— fileTime 有 50ms 容差，靠写入时刻碰运气会
+    // flaky；又不能推到将来，否则下面重读之后的 edit 照样被判「读后被改」。等 150ms 让重读落在它之后
+    const readAt = Date.now()
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    writeFileSync(p, DRAFT.replace('body', 'their body stamped'), 'utf-8')
+    const stampedAt = new Date(readAt + 100)
+    utimesSync(p, stampedAt, stampedAt)
+
+    const msg = await failureText(
+      executeTool(makeEditTool(ctx), 'fd15e1', {
+        path: p,
+        oldText: 'their body stamped',
+        newText: 'our body'
+      })
+    )
+    expect(msg).toContain('modified since it was last read')
+    expect(readFileSync(p, 'utf-8')).toContain('their body stamped')
+
+    await executeTool(makeReadTool(ctx), 'fd15r2', { path: p })
+    const ok = await executeTool(makeEditTool(ctx), 'fd15e2', {
+      path: p,
+      oldText: 'their body stamped',
+      newText: 'our body'
+    })
+    expect(ok.isError).toBeFalsy()
+    expect(readFileSync(p, 'utf-8')).toContain('our body')
   })
 })

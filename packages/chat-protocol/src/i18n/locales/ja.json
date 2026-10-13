@@ -171,8 +171,9 @@
     }
   },
   "knowledge": {
-    "badgeDraft": "下書き — 未確認",
-    "badgeVerified": "確認済み",
+    "badgeDraft": "下書き — 未完成",
+    "badgeVerified": "人が確認済み",
+    "badgeMachineConfirmed": "機械確認済み — ナレッジライターの確認を通過、人による確認はまだ",
     "badgeVerifiedOutdated": "確認後に編集あり",
     "badgeStale": "stale_after の期限切れ",
     "badgeDeprecated": "非推奨",
@@ -987,7 +988,7 @@
     "sessionLabel": "セッション",
     "sessionHint": "このタスクが属するセッションを読み書きする —— 名前の変更と、サブセッションの作成・実行",
     "knowledgeLabel": "ナレッジベース",
-    "knowledgeHint": "OKF ナレッジベースのエントリを検索・閲覧・作成する —— グローバル / プロジェクト / セッション / bot の記憶を一つのバンドルで",
+    "knowledgeHint": "セッションのナレッジベースを検索し、エントリをナレッジライターの確認に提出する",
     "agentLabel": "サブエージェント派遣",
     "agentHint": "自己完結したタスクをサブエージェントに委ねる — 独自のシステムプロンプトとツールで実行し、結果だけを返す",
     "subAgentTab": "サブエージェント",

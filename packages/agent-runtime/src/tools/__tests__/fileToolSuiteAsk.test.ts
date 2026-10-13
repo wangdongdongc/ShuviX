@@ -1197,3 +1197,144 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     ])
   })
 })
+
+// ─── 组 9：知识库里的覆盖保护（write 按 knowledge.locate 开关） ────────────────
+
+/**
+ * WriteFileTool 按 `deps.knowledge.locate(portPath)` 打开 applyWrite 的 refuseUnreadOverwrite：落在某个库里、
+ * 本会话没读过的既有文件不许 `write` 整篇覆盖（条目的文件名由 agent 自己挑，撞上已有的名字会把别人的条目
+ * 整篇换掉）。拒绝发生在询问之前：门不问、卡不弹、写钩子不跑。库外、扩展端（不注入 knowledge）、`edit`
+ * 一切照旧。
+ */
+describe('文件工具套件 — 知识库条目的覆盖保护（knowledge.locate）', () => {
+  const ENTRY = [
+    '---',
+    'type: Memory',
+    'title: T',
+    'description: d',
+    'status: draft',
+    '---',
+    '',
+    'body',
+    ''
+  ].join('\n')
+  const THEIRS = ENTRY.replace('body', 'their body')
+  const KB_FILE = '/kb/x.md'
+  const locate = (p: string): string | null =>
+    p.startsWith('/kb/') ? p.slice('/kb/'.length) : null
+  const kbSuite = (
+    extra: Partial<SuiteOptions> = {}
+  ): SuiteHarness & { actor: Mock<(call: ToolCallScope | undefined) => string> } => {
+    const actor = vi.fn((_call: ToolCallScope | undefined) => 'shuvix-work/m1')
+    const h = makeSuite({
+      files: { [KB_FILE]: THEIRS },
+      allowList: ['Write(/kb)', 'Write(/ws)'],
+      respond: allowed,
+      knowledge: { locate, actor },
+      ...extra
+    })
+    return { ...h, actor }
+  }
+
+  it('WO-1 库内既有、本会话没读过 → isError 点名展示路径；不问门、不弹卡、不写、不广播、不记读取、写钩子不跑', async () => {
+    const h = kbSuite()
+    const msg = await failureText(
+      executeTool(h.suite.write, 'wo1', { path: KB_FILE, content: ENTRY })
+    )
+    expect(msg).toContain('already exists in the knowledge base')
+    expect(msg).toContain(KB_FILE)
+    expect(h.requests).toEqual([])
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.spies.writeFile).not.toHaveBeenCalled()
+    expect(h.onFileChange).not.toHaveBeenCalled()
+    expect(h.spies.recordRead).not.toHaveBeenCalled()
+    expect(h.actor).not.toHaveBeenCalled()
+    expect(h.files.get(KB_FILE)).toBe(THEIRS)
+  })
+
+  it('WO-2 同一文件先 read 再 write → 写入成功、盖 generated、onFileChange 一次', async () => {
+    const h = kbSuite()
+    await executeTool(h.suite.read, 'wo2r', { path: KB_FILE })
+    const res = await executeTool(h.suite.write, 'wo2w', { path: KB_FILE, content: ENTRY })
+    expect(res.isError).toBeFalsy()
+    expect(h.files.get(KB_FILE)).toContain('generated: { by: "shuvix-work/m1", at: "')
+    expect(h.files.get(KB_FILE)).toContain('\nbody\n')
+    expect(h.onFileChange).toHaveBeenCalledTimes(1)
+  })
+
+  it('WO-3 库内新文件 → 写入成功；之后同一文件再 write 也成功（写后记了读取时间）', async () => {
+    const h = kbSuite()
+    const first = await executeTool(h.suite.write, 'wo3a', { path: '/kb/new.md', content: ENTRY })
+    expect(first.isError).toBeFalsy()
+    const second = await executeTool(h.suite.write, 'wo3b', {
+      path: '/kb/new.md',
+      content: ENTRY.replace('body', 'body two')
+    })
+    expect(second.isError).toBeFalsy()
+    expect(h.files.get('/kb/new.md')).toContain('body two')
+  })
+
+  it('WO-4 回归：库外既有、没读过的文件照旧写入（没有授权时照常一张卡）', async () => {
+    const h = kbSuite({
+      files: { [KB_FILE]: THEIRS, '/ws/notes.md': 'old\n' },
+      allowList: ['Write(/kb)']
+    })
+    const res = await executeTool(h.suite.write, 'wo4', { path: '/ws/notes.md', content: 'new\n' })
+    expect(res.isError).toBeFalsy()
+    expect(h.files.get('/ws/notes.md')).toBe('new\n')
+    expect(h.requestUserInput).toHaveBeenCalledTimes(1)
+  })
+
+  it('WO-5 回归：不注入 deps.knowledge（扩展端）→ /kb 下没读过的既有文件照样覆盖', async () => {
+    const h = makeSuite({ files: { [KB_FILE]: THEIRS }, allowList: ['Write(/kb)'] })
+    const res = await executeTool(h.suite.write, 'wo5', { path: KB_FILE, content: ENTRY })
+    expect(res.isError).toBeFalsy()
+    expect(h.files.get(KB_FILE)).toBe(ENTRY)
+  })
+
+  it('WO-6 locate 收的是 resolvePath 之后的 port 路径：相对路径按工作区解析后才判在不在库里', async () => {
+    const spyLocate = vi.fn((p: string): string | null =>
+      p.startsWith('/ws/kb2/') ? p.slice('/ws/kb2/'.length) : null
+    )
+    const h = makeSuite({
+      files: { '/ws/kb2/a.md': THEIRS },
+      allowList: ['Write(/ws)'],
+      knowledge: { locate: spyLocate, actor: () => 'shuvix-work/m1' }
+    })
+    const msg = await failureText(
+      executeTool(h.suite.write, 'wo6', { path: 'kb2/a.md', content: ENTRY })
+    )
+    // 判到了库里（所以被拒），话里用的是展示路径
+    expect(msg.startsWith('kb2/a.md already exists in the knowledge base')).toBe(true)
+    expect(spyLocate).toHaveBeenCalledWith('/ws/kb2/a.md')
+    expect(spyLocate).not.toHaveBeenCalledWith('kb2/a.md')
+    expect(h.files.get('/ws/kb2/a.md')).toBe(THEIRS)
+  })
+
+  it('WO-7 拒绝发生在询问之前：会被用户拒的那张卡根本没机会弹，报的是覆盖保护那句', async () => {
+    const h = kbSuite({
+      allowList: [],
+      respond: () => ({ kind: 'ask', allowed: false })
+    })
+    const msg = await failureText(
+      executeTool(h.suite.write, 'wo7', { path: KB_FILE, content: ENTRY })
+    )
+    expect(msg).toContain('already exists in the knowledge base')
+    expect(msg).not.toContain('denied')
+    expect(h.requests).toEqual([])
+    expect(h.files.get(KB_FILE)).toBe(THEIRS)
+  })
+
+  it('WO-8 回归：edit 不受影响 —— 库内既有、没读过的文件照常局部改动', async () => {
+    const h = kbSuite()
+    const res = await executeTool(h.suite.edit, 'wo8', {
+      path: KB_FILE,
+      oldText: 'their body',
+      newText: 'our body'
+    })
+    expect(res.isError).toBeFalsy()
+    expect(h.files.get(KB_FILE)).toContain('our body')
+    expect(h.files.get(KB_FILE)).not.toContain('their body')
+  })
+})

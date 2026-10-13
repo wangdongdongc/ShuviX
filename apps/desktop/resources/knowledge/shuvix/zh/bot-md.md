@@ -81,10 +81,10 @@ talking about, and you never pad feedback with praise.
 选一个 bot）。绑定在创建那一刻定死、**永不改变** —— 换 bot 就是另开一条会话，因为历史全是那个 bot
 说的话。除此之外它是一条普通有根会话：模型选择、扩展能力、压缩、导出、子会话与后台自动续跑一应照常。
 
-它的根人格是内置的 **`bot`** 基座，工具列表刻意收窄：`read, ls, grep, glob, ask, edit, session, agent,
-knowledge, artifact, skill:builtin:drawing` —— 没有 `bash`、`write`，也不声明内置能力服务器
+它的根人格是内置的 **`bot`** 基座，工具列表刻意收窄：`read, ls, grep, glob, ask, write, edit, session, agent,
+knowledge, artifact, skill:builtin:drawing` —— 没有 `bash`，也不声明内置能力服务器
 `mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，那是用户自己的选择）。bot 看得见、
-动不了：任何要改动或执行的事都得开一条子会话（编程活 → `agent_profile: coding`）。`edit` 只为一件事留着 —— 维护自己的文件。
+动不了：任何要改动或执行的事都得开一条子会话（编程活 → `agent_profile: coding`）。`write` 与 `edit` 只为两件事留着 —— 往知识库里记条目、维护自己的文件。
 `~/.shuvix/bots/` 下的写入是一次会话目录以外的普通写入：按内置策略 **ask-on-external-path** 询问，开着
 自动审查时可能由审查员回答（想让每次这样的写入都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask`
 策略，见 `policy-md`）。

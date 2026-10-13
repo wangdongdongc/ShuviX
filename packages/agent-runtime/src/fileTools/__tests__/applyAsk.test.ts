@@ -753,3 +753,119 @@ describe('applyEdit — never-read file baseline registration', () => {
     expect(h.contentOf(P)).toBe('x\n')
   })
 })
+
+// ─── 组：知识库里的覆盖保护（refuseUnreadOverwrite） ───────────────────────────
+
+/**
+ * 条目的文件名由 agent 自己挑：挑中一个已有的名字时，`write` 会把别人的条目整篇换掉。宿主按位置（今天是
+ * 知识库里的条目）打开这个开关 —— 本会话没读过的既有文件一律拒，读过的才算知道自己在覆盖什么。
+ * 拒绝发生在锁内、询问之前：不弹卡、不写、不记读取时间。
+ */
+describe('applyWrite — refuseUnreadOverwrite（知识库条目的覆盖保护）', () => {
+  const KB = '/abs/kb/x.md'
+  const REFUSE = { refuseUnreadOverwrite: true }
+  const message = (display: string): string =>
+    `${display} already exists in the knowledge base and you have not read it — read it and change it with edit, or write the new entry under another file name`
+
+  it('AW-1 开关开、文件存在、本会话没读过 → 抛错；不问、不写、不记读取时间、连「读后被改」都没查', async () => {
+    const h = makeHarness()
+    h.seedFile(KB, 'theirs\n')
+    const ask = spyAsk(h)
+
+    await expect(
+      applyWrite(h.port, h.guards, KB, { path: 'x.md', content: 'mine\n' }, ask.hook, REFUSE)
+    ).rejects.toThrow(message('x.md'))
+    expect(ask.calls).toEqual([])
+    expect(h.writes).toEqual([])
+    expect(h.recordReads).toEqual([])
+    expect(h.assertCalls).toEqual([])
+    expect(h.contentOf(KB)).toBe('theirs\n')
+  })
+
+  it('AW-2 先读过再写 → 照常：询问 → 写入 → 记读取时间', async () => {
+    const h = makeHarness()
+    h.seedFile(KB, 'theirs\n')
+    h.seedRead(KB)
+    const ask = spyAsk(h)
+
+    await applyWrite(h.port, h.guards, KB, { path: 'x.md', content: 'mine\n' }, ask.hook, REFUSE)
+    expect(h.events).toEqual([`ask:x.md`, `write:${KB}`])
+    expect(h.recordReads).toEqual([KB])
+    expect(h.contentOf(KB)).toBe('mine\n')
+  })
+
+  it('AW-3 新文件（不存在）→ 不读也照常写', async () => {
+    const h = makeHarness()
+    const ask = spyAsk(h)
+    const res = await applyWrite(
+      h.port,
+      h.guards,
+      KB,
+      { path: 'x.md', content: 'new\n' },
+      ask.hook,
+      REFUSE
+    )
+    expect(res.details.isNewFile).toBe(true)
+    expect(ask.calls).toHaveLength(1)
+    expect(h.contentOf(KB)).toBe('new\n')
+    expect(h.recordReads).toEqual([KB])
+  })
+
+  it('AW-4 回归：开关关 / 不传 opts → 没读过的既有文件照旧可以覆盖（库外的老行为）', async () => {
+    for (const opts of [undefined, {}, { refuseUnreadOverwrite: false }]) {
+      const h = makeHarness()
+      h.seedFile(KB, 'theirs\n')
+      const ask = spyAsk(h)
+      await applyWrite(h.port, h.guards, KB, { path: 'x.md', content: 'mine\n' }, ask.hook, opts)
+      expect(h.contentOf(KB), JSON.stringify(opts)).toBe('mine\n')
+      expect(ask.calls, JSON.stringify(opts)).toHaveLength(1)
+    }
+  })
+
+  it('AW-5 消息用展示路径（params.path），不漏出 port 路径', async () => {
+    const h = makeHarness()
+    h.seedFile(KB, 'theirs\n')
+    let caught: Error | undefined
+    try {
+      await applyWrite(h.port, h.guards, KB, { path: 'x.md', content: 'mine\n' }, undefined, REFUSE)
+    } catch (err) {
+      caught = err as Error
+    }
+    expect(caught?.message.startsWith('x.md already exists')).toBe(true)
+    expect(caught?.message).not.toContain('/abs/kb')
+  })
+
+  it('AW-6 守卫在文件锁内：拒绝时锁被拿过也被放掉 —— 随后读过再写同一路径能完成、不挂死', async () => {
+    const h = makeHarness()
+    h.seedFile(KB, 'theirs\n')
+    const lock = vi.spyOn(h.guards, 'withFileLock')
+
+    await expect(
+      applyWrite(h.port, h.guards, KB, { path: 'x.md', content: 'mine\n' }, undefined, REFUSE)
+    ).rejects.toThrow('already exists in the knowledge base')
+    expect(lock).toHaveBeenCalledTimes(1)
+    expect(lock.mock.calls[0][0]).toBe(KB)
+
+    h.seedRead(KB)
+    await applyWrite(h.port, h.guards, KB, { path: 'x.md', content: 'mine\n' }, undefined, REFUSE)
+    expect(lock).toHaveBeenCalledTimes(2)
+    expect(h.contentOf(KB)).toBe('mine\n')
+  })
+
+  it('AW-7 读过但之后被外部改动 → 报的是既有的「读后被改」，不是这句新话（读过就归老守卫管）', async () => {
+    const h = makeHarness()
+    h.seedFile(KB, 'theirs\n')
+    h.seedRead(KB)
+    h.externalWrite(KB, 'changed by someone else\n')
+
+    let caught: Error | undefined
+    try {
+      await applyWrite(h.port, h.guards, KB, { path: 'x.md', content: 'mine\n' }, undefined, REFUSE)
+    } catch (err) {
+      caught = err as Error
+    }
+    expect(caught?.message).toContain('has been modified since it was last read')
+    expect(caught?.message).not.toContain('already exists in the knowledge base')
+    expect(h.contentOf(KB)).toBe('changed by someone else\n')
+  })
+})

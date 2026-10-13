@@ -77,12 +77,12 @@ describe('bot 会话 = 一条普通有根会话', () => {
     expect(systemPrompt).toContain('</bot_profile>')
     expect(systemPrompt).toContain('create-sub-session')
 
-    // 基座判据：bot 的工具面（看得见、动不了）
+    // 基座判据：bot 的工具面（看得见、动不了 —— write / edit 只为记知识库条目与维护自己那份文件）
     const tools = await toolsOf(sid)
     expect(tools).toContain('session')
     expect(tools).toContain('edit')
+    expect(tools).toContain('write')
     expect(tools).not.toContain('bash')
-    expect(tools).not.toContain('write')
   })
 
   it('PS-2 普通会话不带围栏 —— 注入只发生在绑定了 bot 的会话上', async () => {

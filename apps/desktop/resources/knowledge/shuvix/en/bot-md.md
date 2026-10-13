@@ -92,12 +92,12 @@ ordinary rooted session: model picker, extensions, compaction, export, sub-sessi
 background auto-resume all work as usual.
 
 Its root persona is the builtin **`bot`** base, whose tool list is deliberately narrow:
-`read, ls, grep, glob, ask, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —
-no `bash` or `write`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
+`read, ls, grep, glob, ask, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —
+no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions — that
 is the user's own call). The bot can look but not touch: anything that changes or runs must go
-to a sub-session (programming work → `agent_profile: coding`). `edit` is there for one purpose —
-maintaining its own file. A write under `~/.shuvix/bots/` is an ordinary write outside the
+to a sub-session (programming work → `agent_profile: coding`). `write` and `edit` are there for
+two purposes — recording knowledge-base entries and maintaining its own file. A write under `~/.shuvix/bots/` is an ordinary write outside the
 session's own directories: it asks under the builtin policy **ask-on-external-path**, and with
 the automatic review on the reviewer may answer it (a
 `force-ask` policy on `vars.botsDir` makes every such write reach the user — see `policy-md`).

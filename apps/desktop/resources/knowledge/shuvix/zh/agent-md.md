@@ -135,8 +135,9 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 （不属于任何项目的会话的根）、`notebook`（笔记本会话的根）、`bot`（bot 会话的根）、`tab`（Chrome 侧边栏
 对话的根，唯一带 `mcp:chrome` —— 用户自己的 Chrome —— 的一个）、`coedit`（从系统打开 md 时那个协作
 编辑窗口的根，只经 `doc_read` / `doc_edit` / `doc_insert` 改那份活文档）—— 加上任务型
-agent `coding`、`explore`、`widget`、`titler`、`knowledge-writer`，以及 `permission-reviewer` —— 它替
-自动审查回答审批请求（见 `policy-md` 条目），只由 ShuviX 派发。
+agent `coding`、`explore`、`widget`、`titler`，以及两个只由 ShuviX 派发的 agent：`permission-reviewer`
+—— 它替自动审查回答审批请求（见 `policy-md` 条目），和 `knowledge-writer` —— 它检查经 `knowledge` 工具
+提交的条目并补齐元数据（见 `knowledge-entry` 条目）。
 
 - **会话的根人格由会话形态推导，从不选择**：协作编辑窗口 → `coedit`，笔记本 → `notebook`，bot 会话 → `bot`，Chrome 侧边栏 →
   `tab`，在项目里 → `work`，否则 → `chat`。没有设置项，没有选择器。想改主对话的行为，**按名字覆盖基座**：

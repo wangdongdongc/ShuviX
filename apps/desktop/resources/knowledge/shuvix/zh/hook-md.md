@@ -40,14 +40,14 @@ ShuviX 把事件附在那段话后面。agent 的回答怎么处理，取决于�
 shuvix: hook v1
 name: capture-decisions
 description: After each turn in a project session, keep any decision worth keeping.
-shuvix-hook-agent: knowledge-writer
+shuvix-hook-agent: coding
 shuvix-hook-on:
   - trigger: session.turn-completed
     when: event.profileName == 'work' && event.textMessageCount >= 2
 ---
 
-Read `recentText` in the event below. If it holds a decision about this project, record it
-in the `project` knowledge base. Otherwise finish without writing.
+Read `recentText` in the event below. If it holds a decision about this project, write it into
+the `project` knowledge base and submit it. Otherwise finish without writing.
 ```
 
 ## frontmatter 键

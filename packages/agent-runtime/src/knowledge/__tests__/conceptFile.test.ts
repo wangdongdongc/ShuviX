@@ -12,6 +12,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   buildConceptText,
+  currentTrustTierOf,
   firstHeading,
   headingsOf,
   isOkfConceptText,
@@ -21,7 +22,9 @@ import {
   normalizeVerified,
   parseConceptText,
   readKnowledgeNote,
-  type BodyHeading
+  trustTierOf,
+  type BodyHeading,
+  type KnowledgeConcept
 } from '../conceptFile'
 import { parseOkfText } from '../okfCodec'
 
@@ -595,5 +598,113 @@ describe('headingsOf —— 索引的正文面', () => {
     }))
     const body = headings.map((h) => `${'#'.repeat(h.level)} ${h.text}`).join('\n\n')
     expect(headingsOf(body)).toEqual(headings)
+  })
+})
+
+/**
+ * currentTrustTierOf —— 为**当前内容**背书的那几条核实的信任档（视图与 `knowledge list` 用）。
+ * OKF 的 trustTierOf 只要有一条 `human:` 就判人工审阅：一份人工核实过、后来被 agent 改写又经 `submit`
+ * 机器确认的条目，按它会读成「人工审阅且仍当前」，可人看过的是旧内容。这里只看不早于 `generated.at`
+ * 的章；核实整体不再当前时退回全部记录的档（视图另以「核实后又被修改」标注）。
+ *
+ * 记号：g = generated（by 无关紧要）、h = `human:alice`、m = `shuvix-knowledge-writer/x`；T0 < T1 < T2 < T3。
+ */
+describe('currentTrustTierOf —— 为当前内容背书的信任档', () => {
+  const T0 = '2026-09-01T00:00:00.000Z'
+  const T1 = '2026-09-02T00:00:00.000Z'
+  const T2 = '2026-09-03T00:00:00.000Z'
+  const T3 = '2026-09-04T00:00:00.000Z'
+  type Input = Pick<KnowledgeConcept, 'verified' | 'generated'>
+  const g = (at: string): KnowledgeConcept['generated'] => ({ by: 'g', at })
+  const h = (at: string): KnowledgeConcept['verified'][number] => ({ by: 'human:alice', at })
+  const m = (at: string): KnowledgeConcept['verified'][number] => ({
+    by: 'shuvix-knowledge-writer/x',
+    at
+  })
+
+  it('CT-1 verified 为空 → unverified（有无 generated 都一样）', () => {
+    expect(currentTrustTierOf({ verified: [] })).toBe('unverified')
+    expect(currentTrustTierOf({ verified: [], generated: g(T1) })).toBe('unverified')
+  })
+
+  it('CT-2 没有 generated：全部章都算数 —— [m] 机器、[h] 人工、[h, m] 人工', () => {
+    expect(currentTrustTierOf({ verified: [m(T0)] })).toBe('machine-confirmed')
+    expect(currentTrustTierOf({ verified: [h(T0)] })).toBe('human-reviewed')
+    expect(currentTrustTierOf({ verified: [h(T0), m(T1)] })).toBe('human-reviewed')
+  })
+
+  it('CT-3 核心回归：旧人工章 + 新机器章、内容在两者之间被改写 → machine-confirmed（OKF 的 trustTierOf 给的是 human-reviewed）', () => {
+    const input: Input = { verified: [h(T0), m(T1)], generated: g(T1) }
+    expect(currentTrustTierOf(input)).toBe('machine-confirmed')
+    // 同一输入并排：差异就是本函数存在的理由
+    expect(trustTierOf(input)).toBe('human-reviewed')
+  })
+
+  it('CT-4 章与 generated 同一时刻算当前', () => {
+    expect(currentTrustTierOf({ verified: [h(T1)], generated: g(T1) })).toBe('human-reviewed')
+  })
+
+  it('CT-5 核实整体不再当前（全部章都早于 generated）→ 退回全部记录的档', () => {
+    expect(currentTrustTierOf({ verified: [h(T0)], generated: g(T1) })).toBe('human-reviewed')
+    expect(currentTrustTierOf({ verified: [m(T0)], generated: g(T1) })).toBe('machine-confirmed')
+    // 视图据此标「核实后又被修改」——那一半靠 isVerificationCurrent
+    expect(isVerificationCurrent({ verified: [h(T0)], generated: g(T1) })).toBe(false)
+  })
+
+  it('CT-6 新章都在 generated 之后：只要当前那批里有人工章就是 human-reviewed（顺序无关）', () => {
+    expect(currentTrustTierOf({ verified: [m(T2), h(T3)], generated: g(T1) })).toBe(
+      'human-reviewed'
+    )
+    expect(currentTrustTierOf({ verified: [h(T2), m(T3)], generated: g(T1) })).toBe(
+      'human-reviewed'
+    )
+  })
+
+  it('CT-7 generated.at 不可解析 → 回落 trustTierOf', () => {
+    expect(currentTrustTierOf({ verified: [h(T0), m(T1)], generated: g('sometime') })).toBe(
+      'human-reviewed'
+    )
+  })
+
+  it('CT-8 [白盒] 不可解析的 verified.at 一律算「当前」；全部不可解析、generated 可解析 → 全算当前', () => {
+    expect(currentTrustTierOf({ verified: [h('whenever'), m(T2)], generated: g(T1) })).toBe(
+      'human-reviewed'
+    )
+    expect(currentTrustTierOf({ verified: [m('whenever')], generated: g(T1) })).toBe(
+      'machine-confirmed'
+    )
+    expect(currentTrustTierOf({ verified: [m('whenever'), h('later')], generated: g(T1) })).toBe(
+      'human-reviewed'
+    )
+  })
+
+  it('CT-9 性质（穷举小表）：核实仍当前就一定不是 unverified；verified 为空恒为 unverified', () => {
+    const times = [T0, T1, T2]
+    const stamps = [...times.map(h), ...times.map(m)]
+    const lists: KnowledgeConcept['verified'][] = [[]]
+    for (const a of stamps) {
+      lists.push([a])
+      for (const b of stamps) lists.push([a, b])
+    }
+    const generateds: (KnowledgeConcept['generated'] | undefined)[] = [undefined, ...times.map(g)]
+    let checked = 0
+    for (const verified of lists) {
+      for (const generated of generateds) {
+        const input: Input = { verified, generated }
+        const tier = currentTrustTierOf(input)
+        if (verified.length === 0) expect(tier, JSON.stringify(input)).toBe('unverified')
+        if (isVerificationCurrent(input)) expect(tier, JSON.stringify(input)).not.toBe('unverified')
+        checked++
+      }
+    }
+    expect(checked).toBe(lists.length * generateds.length)
+  })
+
+  it('CT-10 只要 verified / generated 两个字段，不改动入参（冻结的数组照样能算）', () => {
+    const verified = Object.freeze([Object.freeze(h(T0)), Object.freeze(m(T2))])
+    const generated = Object.freeze(g(T1))
+    const input = Object.freeze({ verified, generated }) as unknown as Input
+    expect(currentTrustTierOf(input)).toBe('machine-confirmed')
+    expect(verified).toEqual([h(T0), m(T2)])
   })
 })

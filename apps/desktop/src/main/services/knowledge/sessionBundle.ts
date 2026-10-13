@@ -21,7 +21,7 @@
 import { existsSync } from 'fs'
 import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
-import type { KnowledgeBaseInfo } from '@shuvix/agent-runtime'
+import type { KnowledgeBaseInfo, KnowledgeGuideBase } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
 import { sessionRecords } from '../sessionRecords'
 import type { Project } from '../../dao/types/project'
@@ -61,8 +61,7 @@ const RESERVED_BASE_NAMES: readonly string[] = [KNOWLEDGE_PROJECT_BASE, KNOWLEDG
 
 /**
  * 内置库在 `<knowledge_bases>` 围栏里的一句说明（英文：那是提示词）。要说清两件事 —— 里面是什么
- * （模型才知道什么问题该来这里查）、只读（免得它把笔记往这里记）。不含斜杠与数字：围栏承诺不带
- * 路径与计数，e2e 就是拿这两个字符判的。
+ * （模型才知道什么问题该来这里查）、只读（免得它把笔记往这里记）。
  */
 const BUILTIN_GUIDE_LABEL =
   "ShuviX's own reference (read-only): how its agent, bot, policy and hook files, knowledge entries and skills are written, and where they live"
@@ -197,12 +196,14 @@ export async function resolveBase(
 
 /**
  * 围栏要列的库：启用且此刻真在的那些。名字用磁盘上的拼写（NFC 归一在 enabledTargets 里做掉了
- * —— 与工具解析同一份结果，不再各过滤一遍），项目库带上项目当前的名字，内置库带一句它是什么。
+ * —— 与工具解析同一份结果，不再各过滤一遍），项目库带上项目当前的名字，内置库带一句它是什么；
+ * 每个都带目录（agent 直接 `write` 进去再 `submit`）。
  */
-export function enabledBaseChoices(rootSessionId: string): KnowledgeBaseOption[] {
+export function enabledBaseChoices(rootSessionId: string): KnowledgeGuideBase[] {
   const projectName = rootProject(rootSessionId)?.name ?? ''
-  return enabledTargets(rootSessionId).map(({ name }) => ({
+  return enabledTargets(rootSessionId).map(({ name, target }) => ({
     name,
+    dir: target.dir,
     label:
       name === KNOWLEDGE_PROJECT_BASE
         ? projectName
@@ -218,7 +219,9 @@ export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInf
     base: name,
     label: target.label,
     dir: target.dir,
-    ...(target.readonly ? { note: 'read-only: search and read it, never create or edit here' } : {})
+    ...(target.readonly
+      ? { note: 'read-only: search and read it, never write or submit here' }
+      : {})
   }))
 }
 

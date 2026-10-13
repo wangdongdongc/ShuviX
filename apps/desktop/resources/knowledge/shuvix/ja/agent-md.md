@@ -148,8 +148,9 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 会話のルート。`mcp:chrome` —— ユーザー自身の Chrome —— を持つのはこれだけ）、`coedit`（OS から md を
 開いたときの共同編集ウィンドウのルート。`doc_read` / `doc_edit` / `doc_insert` だけでライブドキュメントを
 編集する）—— に加えて、タスク型の
-`coding`、`explore`、`widget`、`titler`、`knowledge-writer`、そして `permission-reviewer` —— 自動レビューの
-ために承認リクエストに答えるエージェントで（`policy-md` エントリを参照）、派遣するのは ShuviX だけです。
+`coding`、`explore`、`widget`、`titler`、そして ShuviX だけが派遣する二つのエージェント：`permission-reviewer`
+—— 自動レビューのために承認リクエストに答えます（`policy-md` エントリを参照）—— と、`knowledge-writer` ——
+`knowledge` ツールで提出されたエントリを確認し、メタデータを補います（`knowledge-entry` エントリを参照）。
 
 - **セッションのルート人格はセッションの形から導かれ、決して選ばれません**：共同編集ウィンドウ → `coedit`、ノートブック → `notebook`、
   bot チャット → `bot`、Chrome サイドパネル → `tab`、プロジェクト内 → `work`、それ以外 → `chat`。設定もピッカーもありません。

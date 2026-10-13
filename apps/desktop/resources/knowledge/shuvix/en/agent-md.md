@@ -150,9 +150,10 @@ project), `notebook` (root of a notebook session), `bot` (root of a bot chat) an
 Chrome side panel conversation, the only one holding `mcp:chrome` — the user's own Chrome) and
 `coedit` (root of the co-editing window a markdown file opens in from the OS, editing the live
 document only through `doc_read` / `doc_edit` / `doc_insert`) — plus
-the task agents `coding`, `explore`, `widget`, `titler` and `knowledge-writer`, and
-`permission-reviewer`, which answers approval requests for the automatic review (see the
-`policy-md` entry) and which only ShuviX dispatches.
+the task agents `coding`, `explore`, `widget` and `titler`, and two agents only ShuviX
+dispatches: `permission-reviewer`, which answers approval requests for the automatic review (see
+the `policy-md` entry), and `knowledge-writer`, which checks an entry submitted through the
+`knowledge` tool and completes its metadata (see the `knowledge-entry` entry).
 
 - **A session's root persona is derived from the session's form, never chosen**: co-editing
   window → `coedit`, notebook → `notebook`, bot chat → `bot`, Chrome side panel → `tab`, in a project → `work`, otherwise →

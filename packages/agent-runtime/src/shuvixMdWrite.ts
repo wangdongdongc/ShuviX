@@ -126,16 +126,28 @@ function indentOf(line: string): number {
   return line.length - line.trimStart().length
 }
 
+/** frontmatter 顶层键的缩进：第一条非空、非注释行的缩进（通常是 0） */
+function topLevelIndent(b: Bounds): number {
+  for (let i = b.open + 1; i < b.close; i++) {
+    const t = b.lines[i].trim()
+    if (t !== '' && !t.startsWith('#')) return indentOf(b.lines[i])
+  }
+  return 0
+}
+
 /**
  * 补/改一个**映射**键为流式写法（`key: { … }`）。既有值可能是块式映射 / 序列
  * （`generated:\n  by: …\n  at: …`），只换键那一行会留下孤儿续行、撕破 YAML ——
  * 所以连同比键更深的续行（及同缩进的 `- ` 序列项）一起删掉再插入。返回是否发生改动。
+ *
+ * 只认**顶层**的这个键：嵌在别的键底下的同名键（某条 `sources` 里的 `generated:`）不是它。
  */
 function upsertMapping(b: Bounds, key: string, flowValue: string): boolean {
-  const line = `${key}: ${flowValue}${b.cr}`
+  const top = topLevelIndent(b)
+  const line = `${' '.repeat(top)}${key}: ${flowValue}${b.cr}`
   const re = new RegExp(`^[ \\t]*${key}[ \\t]*:`)
   for (let i = b.open + 1; i < b.close; i++) {
-    if (!re.test(b.lines[i])) continue
+    if (!re.test(b.lines[i]) || indentOf(b.lines[i]) !== top) continue
     const indent = indentOf(b.lines[i])
     let end = i + 1
     while (end < b.close) {
@@ -158,13 +170,29 @@ function upsertMapping(b: Bounds, key: string, flowValue: string): boolean {
 }
 
 /**
+ * 在 frontmatter 里按行补/改若干**映射**键（流式写法，规则同 `upsertMapping`）—— 写后钩子之外的宿主
+ * 盖章（知识库 `submit` 通过后的 `generated` / `verified`）走同一套行级改写，注释、键序、未知键原样留着。
+ * 文件开头不是 frontmatter 返回 null；值都没变返回原文。
+ */
+export function upsertFrontmatterMappings(
+  text: string,
+  entries: readonly (readonly [key: string, flowValue: string])[]
+): string | null {
+  const b = bounds(text)
+  if (!b) return null
+  let changed = false
+  for (const [key, value] of entries) changed = upsertMapping(b, key, value) || changed
+  return changed ? b.lines.join('\n') : text
+}
+
+/**
  * OKF 知识库分支 —— 带 `shuvix: okf` 自述行、或没有任何 `shuvix` 标记，且落在某个 bundle 里的 md。
  * 读宽写严：带自述行的条目（ShuviX 建出来的）严格校验，外来的 OKF 条目只可能出警告，用户的普通笔记
  * 只在 frontmatter 的 YAML 写坏时提醒。只有 OKF 条目补 `generated` 章（每次写都刷新：它记的是
- * 「谁最后改的、何时」），普通笔记宿主一个字节都不改。`verified` 只由 UI 动作写，这里不碰。
+ * 「谁最后改的、何时」），普通笔记宿主一个字节都不改。`verified` 只由 UI 动作与 `submit` 通过后的宿主盖章写，这里不碰。
  * ShuviX 早先生成的 index.md / log.md 不再维护：agent 直写不回执、不盖章；用户自己写的同名笔记按普通笔记办。
  *
- * `knowledge` 工具的 `create` 之外，条目的一切改动都从这里过，所以回执要够用：写废了当场知道。
+ * 条目的新建与改动全走文件工具、都从这里过（`knowledge` 工具不再落正文），所以回执要够用：写废了当场知道。
  */
 function reviewKnowledgeWrite(
   text: string,

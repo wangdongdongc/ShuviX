@@ -5,9 +5,9 @@
  *   - 用 `readFileSync` + `import.meta.url` 从磁盘读，**不走 `?raw`** —— 用例不该依赖打包插件；
  *   - 只读，一个字节都不写盘。
  *
- * 钉的是 2026-09-17 那次裁决（设计附录 Q）落在提示词里的那一半：检索是**两步走** ——
- * `search` 只回答「哪几条可能相关」，正文由 `read` 取，正文里的字面串用 `grep` 找。三种语言
- * 都得教同一件事，且步骤编号结构一致（翻译时漏掉一步，模型就少做一步）。
+ * knowledge-writer（2026-10-12 起是 `knowledge` 工具 `submit` 的检查方）：三种语言的段落结构一致（翻译时
+ * 漏掉一段，模型在那门语言里就少一条规矩），示例 frontmatter 里每个它该补的键都在 —— 键表只住在这份
+ * 提示词里，示例少一个键，写手就少补一个。
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -23,24 +23,28 @@ const localized = (name: string): string[] => [`${name}.md`, `${name}.ja.md`, `$
 
 describe.each(localized('knowledge-writer'))('BA knowledge-writer · %s', (file) => {
   const text = readFileSync(join(MD_DIR, file), 'utf8')
-  /** 编号步骤（每一步恰一行）：`[序号, 那一行的其余部分]` */
-  const steps = text
-    .split('\n')
-    .map((line) => /^(\d+)\. (.*)$/.exec(line))
-    .filter((m): m is RegExpExecArray => m !== null)
-    .map((m): [string, string] => [m[1], m[2]])
+  const sections = text.split('\n').filter((line) => line.startsWith('## '))
+  /** 正文里那段 ```yaml 示例 */
+  const example = /```yaml\n([\s\S]*?)```/.exec(text)?.[1] ?? ''
 
-  it('BA-1 第 1 步教「`search` 出候选 → `read` 取正文」，并把 `grep` 指给找字面串', () => {
-    const first = steps.find(([n]) => n === '1')?.[1]
-    expect(first).toBeDefined()
-    // 三个动作词都得在**同一步**里：拆开写就等于让模型自己拼出两步走
-    for (const verb of ['search', 'read', 'grep']) {
-      expect(first, verb).toContain(`\`${verb}\``)
-    }
+  it('BA-1 三段结构一致：恰三个 `## ` 段（元数据 / 判定 / 交回），没有编号步骤', () => {
+    expect(sections).toHaveLength(3)
+    // 改版前的「search → create → edit → validate」四步流程不该残留
+    expect(text.split('\n').some((line) => /^\d+\. /.test(line))).toBe(false)
   })
 
-  it('BA-2 四步编号结构一致：`1.`–`4.` 按序各一次，不多不少', () => {
-    // 不用 Set / Map：重复的序号得看得见（翻译时复制粘贴漏改就是这么来的）
-    expect(steps.map(([n]) => n)).toEqual(['1', '2', '3', '4'])
+  it('BA-2 示例 frontmatter 带齐写手要补的键，且以自述行开头', () => {
+    const keys = example
+      .split('\n')
+      .map((line) => /^([a-z_]+):/.exec(line)?.[1])
+      .filter((k): k is string => !!k)
+    expect(keys[0]).toBe('shuvix')
+    expect(example).toContain('shuvix: okf v0.2')
+    for (const key of ['type', 'title', 'description', 'tags', 'status', 'sources']) {
+      expect(keys, key).toContain(key)
+    }
+    // 两个宿主章不进示例：示例里出现就是在教它自己写
+    expect(keys).not.toContain('generated')
+    expect(keys).not.toContain('verified')
   })
 })

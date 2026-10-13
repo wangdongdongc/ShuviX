@@ -18,6 +18,7 @@ import {
   Archive,
   BadgeCheck,
   BookMarked,
+  CircleCheck,
   CircleDashed,
   ClockAlert,
   FileText,
@@ -308,13 +309,20 @@ export function KnowledgeTreeView({
           <Archive size={9} className="text-text-tertiary/50" />
         )}
       {e.trustTier !== 'unverified' &&
-        badge(
-          t(e.verifiedCurrent ? 'knowledge.badgeVerified' : 'knowledge.badgeVerifiedOutdated'),
-          <BadgeCheck
-            size={9}
-            className={e.verifiedCurrent ? 'text-emerald-500/80' : 'text-text-tertiary/40'}
-          />
-        )}
+        (!e.verifiedCurrent
+          ? badge(
+              t('knowledge.badgeVerifiedOutdated'),
+              <BadgeCheck size={9} className="text-text-tertiary/40" />
+            )
+          : e.trustTier === 'human-reviewed'
+            ? badge(
+                t('knowledge.badgeVerified'),
+                <BadgeCheck size={9} className="text-emerald-500/80" />
+              )
+            : badge(
+                t('knowledge.badgeMachineConfirmed'),
+                <CircleCheck size={9} className="text-sky-500/70" />
+              ))}
       {e.stale &&
         badge(t('knowledge.badgeStale'), <ClockAlert size={9} className="text-amber-500/70" />)}
     </>

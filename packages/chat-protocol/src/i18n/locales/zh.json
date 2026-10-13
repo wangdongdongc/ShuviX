@@ -171,8 +171,9 @@
     }
   },
   "knowledge": {
-    "badgeDraft": "草稿 —— 尚未核实",
-    "badgeVerified": "已核实",
+    "badgeDraft": "草稿 —— 尚未完成",
+    "badgeVerified": "已人工核实",
+    "badgeMachineConfirmed": "已机器确认 —— 通过了知识库写手的检查，未经人工核实",
     "badgeVerifiedOutdated": "核实后又被修改",
     "badgeStale": "已过 stale_after 日期",
     "badgeDeprecated": "已过时",
@@ -987,7 +988,7 @@
     "sessionLabel": "会话",
     "sessionHint": "读改本任务所属的会话 —— 重命名，以及创建并驱动子会话",
     "knowledgeLabel": "知识库",
-    "knowledgeHint": "检索、阅读与写入 OKF 知识库的条目 —— 全局 / 项目 / 会话 / bot 记忆同在一个 bundle 里",
+    "knowledgeHint": "检索本会话的知识库，并把条目提交给知识库写手检查",
     "agentLabel": "派发子智能体",
     "agentHint": "把一件自足的任务交给子智能体 —— 它以自己的系统提示词与工具独立执行，只把结果回报给你",
     "subAgentTab": "子智能体",

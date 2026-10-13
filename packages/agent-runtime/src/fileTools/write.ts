@@ -28,7 +28,14 @@ export async function applyWrite(
   guards: FileGuards,
   readPath: string,
   params: WriteParams,
-  ask?: WriteAskHook
+  ask?: WriteAskHook,
+  opts?: {
+    /**
+     * 拒绝覆盖本会话没读过的既有文件（宿主按位置判：今天是知识库里的条目）。条目的文件名由 agent 自己挑，
+     * 挑中已有的名字时 write 会把别人的条目整篇换掉 —— 读过再改的才算知道自己在覆盖什么。
+     */
+    refuseUnreadOverwrite?: boolean
+  }
 ): Promise<ToolResult<WriteToolDetails>> {
   return guards.withFileLock(readPath, async () => {
     if (guards.hasReadTime(readPath)) {
@@ -38,6 +45,11 @@ export async function applyWrite(
     // 旧内容用于 diff：不存在 / 读不动（二进制、权限）都按空文件处理，当作新建
     const st = await port.stat(readPath)
     const isNewFile = !st?.isFile
+    if (opts?.refuseUnreadOverwrite && !isNewFile && !guards.hasReadTime(readPath)) {
+      throw new Error(
+        `${params.path} already exists in the knowledge base and you have not read it — read it and change it with edit, or write the new entry under another file name`
+      )
+    }
     let oldContent = ''
     if (!isNewFile) {
       try {

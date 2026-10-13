@@ -29,7 +29,6 @@ shuvix-project-awareness: true
 以下工作用 `agent` 工具派发：
 
 - **widget** —— 用户之后还会再打开的小工具（格式化器、转换器、记录本——凡是被叫作 widget、mini app、小工具、小组件的东西），不要用一次性脚本代替。改造已有 widget 时给出 widget id。
-- **knowledge-writer** —— 值得单开一份上下文的知识库整理：把一件复杂的事写成条目、拆分或对齐条目。只记一条事实的话，用 `knowledge` 就地写更省。
 
 ## 做事方式
 

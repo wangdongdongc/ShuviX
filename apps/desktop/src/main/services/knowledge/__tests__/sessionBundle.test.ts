@@ -523,10 +523,11 @@ describe('SB-11..18 回落链与围栏清单', () => {
     // 选择里存的是 NFC 写法（用户在界面上输入 / 别的机器上写下的）
     mockPick({ projectId: 'p1', settings: { knowledgeBases: [nfc, 'project'] } })
 
-    // 围栏列的名字是**磁盘上的拼写**：归一只在 enabledTargets 里做一次，两侧不各过滤一遍；项目库打头
+    // 围栏列的名字是**磁盘上的拼写**：归一只在 enabledTargets 里做一次，两侧不各过滤一遍；项目库打头。
+    // 每行带库目录（条目由 agent 直接 write 进去再 submit）
     expect(enabledBaseChoices('s1')).toEqual([
-      { name: 'project', label: 'Acme Corp' },
-      { name: nfd, label: '' }
+      { name: 'project', label: 'Acme Corp', dir: bundleAt(root, 'projects/p1') },
+      { name: nfd, label: '', dir: join(userRoot, nfd) }
     ])
     // 同一份结果：围栏列得出来的，工具就解析得到
     expect(await resolveBase('s1', nfc)).toEqual({
@@ -552,7 +553,7 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
   /** builtinTarget 的回包（`bundleDir` 现算到语言那一层） */
   const BUILTIN_LABEL = 'ShuviX reference (read-only)'
   /** listBases 只给它这一行加的只读提示 */
-  const BUILTIN_NOTE = 'read-only: search and read it, never create or edit here'
+  const BUILTIN_NOTE = 'read-only: search and read it, never write or submit here'
   /** 配置卡的人读名：走 i18n 单例（替身把 key 原样包成标记串） */
   const BUILTIN_DISPLAY_NAME = 'i18n(knowledge.builtinBaseName)'
 
@@ -723,8 +724,8 @@ describe('SB-19..27 内置库（只读、保留名、垫底）', () => {
     // 围栏是提示词：要说清里面是什么、以及只读（免得模型把笔记往这里记）
     const choices = enabledBaseChoices('s1')
     expect(choices).toEqual([
-      { name: 'notes', label: '' },
-      { name: 'shuvix', label: expect.stringContaining('read-only') }
+      { name: 'notes', label: '', dir: expect.any(String) },
+      { name: 'shuvix', label: expect.stringContaining('read-only'), dir: expect.any(String) }
     ])
 
     // 两张面：模型读的是说明，用户读的是产品名 —— 哪天有人把它们并成一个键，这条会红
@@ -773,7 +774,9 @@ describe('SB-P1..P10 隐式的项目库', () => {
     expect(await listBases('s1')).toStrictEqual([
       { base: 'project', label: 'project "Acme Corp"', dir: bundleAt(root, 'projects/p1') }
     ])
-    expect(enabledBaseChoices('s1')).toEqual([{ name: 'project', label: 'Acme Corp' }])
+    expect(enabledBaseChoices('s1')).toEqual([
+      { name: 'project', label: 'Acme Corp', dir: bundleAt(root, 'projects/p1') }
+    ])
     // `<knowledge_bases>` 围栏的正文就是拿这份清单渲染的：项目会话开箱就有那一行
     expect(renderKnowledgeGuide(enabledBaseChoices('s1'))).toContain('- project — Acme Corp')
     expect(knowledgeBaseOptions('s1')).toEqual({
@@ -900,10 +903,10 @@ describe('SB-P1..P10 隐式的项目库', () => {
 
   it('SB-P8 项目改名即时生效：listBases 的标签与围栏里的项目名都跟着项目当前的名字', async () => {
     inProject()
-    expect(enabledBaseChoices('s1')).toEqual([{ name: 'project', label: 'Acme Corp' }])
+    expect(enabledBaseChoices('s1')).toMatchObject([{ name: 'project', label: 'Acme Corp' }])
 
     vi.mocked(projectDao.findById).mockReturnValue({ ...PROJECT, name: 'Acme Labs' })
-    expect(enabledBaseChoices('s1')).toEqual([{ name: 'project', label: 'Acme Labs' }])
+    expect(enabledBaseChoices('s1')).toMatchObject([{ name: 'project', label: 'Acme Labs' }])
     expect((await listBases('s1'))[0]).toMatchObject({
       base: 'project',
       label: 'project "Acme Labs"'

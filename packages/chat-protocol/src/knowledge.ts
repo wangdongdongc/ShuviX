@@ -147,6 +147,10 @@ export interface KnowledgeEntry {
   description: string
   status: OkfStatus
   tags: string[]
+  /**
+   * 核实仍当前时 = 为当前内容背书的那几条 `verified` 的档（机器确认 = `submit` 通过，人工审阅 = UI 核实）；
+   * 不再当前时 = 全部记录的档
+   */
   trustTier: OkfTrustTier
   /** 最近一次 `verified` 仍为当前内容背书（不早于 `generated.at`）；未核实恒为 false */
   verifiedCurrent: boolean

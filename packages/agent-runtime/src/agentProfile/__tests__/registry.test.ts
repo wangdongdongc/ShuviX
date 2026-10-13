@@ -194,29 +194,29 @@ describe('buildBuiltinProfiles — 全集现算', () => {
 })
 
 /**
- * knowledge-writer 档案钉板 —— OKF 知识库的派发执行侧（设计 §6.3）：经 `knowledge` 工具写条目；
- * 没有 git、没有提交协议、没有反链复查 —— 簿记归宿主，同意归策略。依赖宿主的知识库根目录参数
- * （扩展端没有 → 自动跳过）。
+ * knowledge-writer 档案钉板 —— 知识库条目提交检查（`knowledge` 工具 `submit`）的执行侧，宿主专用：
+ * 主 agent 用文件工具把条目写进库，submit 时宿主同步派它补元数据、判内容，经 `next` 交回
+ * `{passed, report}`；章由宿主盖（knowledge/review.ts）。
  *
- * 编辑规范（布局表、类型词汇表、写作规则）**住在这份提示词里**：库里不再放一份用户可编辑的
- * SCHEMA.md，因为那样它一落盘就再也更新不了，而 agent 又被要求遵循它。RG-2 因此逐条钉住
+ * 元数据的写法（键表、类型词汇表、出处规则）**只住在这份提示词里**：主 agent 不再为它付每会话的
+ * 提示词，库里也不放用户可编辑的 SCHEMA.md（一落盘就再也更新不了）。RG-2 / RG-3 因此逐条钉住
  * 提示词里必须在场的那几段。
  */
-describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', () => {
-  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/grep/glob/ls/ask，项目感知开、指令文件默认、不声明模型、不是基座、不依赖任何宿主参数', () => {
+describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', () => {
+  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/edit/grep/glob/ls/ask（没有 write），项目感知开、指令文件默认、不声明模型、不是基座、宿主专用、不依赖任何宿主参数', () => {
     expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
-    // 它从不点名文件系统路径 —— 目标 bundle 由 knowledge 工具按会话解析，所以零参数也建得出来
+    // 要检查的文件、所在的库、提交者都由任务文本给出 —— 零参数也建得出来
     expect(KNOWLEDGE_WRITER_SPEC.requiredParams).toBeUndefined()
     expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { readMd })).not.toBeNull()
     expect(BASE_PROFILE_NAMES.has('knowledge-writer')).toBe(false)
+    expect(HOST_ONLY_PROFILE_NAMES.has('knowledge-writer')).toBe(true)
     for (const language of LANGS) {
       const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })
       expect(built, language).not.toBeNull()
-      // 条目用普通 write/edit 写（knowledge 工具只读）；没有 git —— 簿记归宿主
+      // 只就地 edit 被提交的那一份；不新建文件（write）、没有 git —— 簿记归宿主
       expect(built!.tools, language).toEqual([
         'knowledge',
         'read',
-        'write',
         'edit',
         'grep',
         'glob',
@@ -229,40 +229,38 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
     }
   })
 
-  it('RG-2 三语正文接线：不点名任何文件系统路径、点名四步流程的动作、两个宿主章、会话资源 URI', () => {
+  it('RG-2 三语正文接线：点名 read → edit → next 的动作、自述行、两个宿主章（不许碰）、会话资源 URI 与 search；不再教退役的动作', () => {
     for (const language of LANGS) {
       const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })!.systemPrompt
-      // 一个项目一个 bundle，路径由工具按会话解析 —— 提示词里不该再有根目录占位符
-      expect(body, `${language} 占位符`).not.toContain('{{knowledgeRoot}}')
-      // search → create → edit → validate：四步缺一步，agent 就写不出能被收录的条目
       for (const anchor of [
-        '`knowledge`',
-        '`search`',
-        '`create`',
+        '`read`',
         '`edit`',
-        '`validate`',
+        '`next`',
+        '`passed`',
+        '`report`',
+        '`search`',
+        'shuvix: okf v0.2',
         '`generated`',
         '`verified`',
         'shuvix://session/'
       ]) {
         expect(body, `${language} 需含 ${anchor}`).toContain(anchor)
       }
-      // 两个状态词只查裸词：提示词里它们以 `status: deprecated` 这类整句出现，钉反引号形态太脆
       for (const word of ['draft', 'deprecated', 'stable']) {
         expect(body, `${language} 需讲状态 ${word}`).toContain(word)
       }
-      // 已退役的 action：教它们就是教不存在的东西
-      for (const gone of ['set-status', '`locate`']) {
+      // 退役的动作：教它们就是教不存在的东西
+      for (const gone of ['`create`', '`validate`', '`locate`', 'set-status']) {
         expect(body, `${language} 不得再点名退役的 ${gone}`).not.toContain(gone)
       }
-      // 库里不再放 SCHEMA.md：提示词也不该再指着它（指了就是指向一个不存在的文件）
       expect(body, `${language} 不得再点名 SCHEMA.md`).not.toContain('SCHEMA.md')
+      expect(body, `${language} 占位符`).not.toContain('{{knowledgeRoot}}')
     }
   })
 
   /**
-   * 编辑规范内联在提示词里 —— 它曾经住在用户目录的 SCHEMA.md 里，那份文件已撤销。
-   * 三语都得带上类型词汇表（拼不出合法 `type` 就写不成条目）与跨 bundle 的引用规矩。
+   * 编辑规范内联在提示词里 —— 三语都得带上类型词汇表（拼不出合法 `type` 就过不了检查）与跨 bundle
+   * 的引用规矩。
    */
   it('RG-3 三语正文自带编辑规范：类型词汇齐全、跨 bundle 用 shuvix:// URI；不再提退役的目录作用域', () => {
     for (const language of LANGS) {
@@ -270,31 +268,20 @@ describe('knowledge-writer 档案钉板（OKF 知识库的派发执行侧）', (
       for (const type of KNOWLEDGE_TYPES) {
         expect(body, `${language} 需含类型 ${type}`).toContain(`\`${type}\``)
       }
-      // 路径只在自己 bundle 内成立，跨库要用 URI —— 这条不说清楚，agent 会写出解析不了的链接
       expect(body, `${language} 需讲跨 bundle 引用`).toContain('shuvix://')
-      // 目录作用域已退役：提示词里再教 global/ 之类，agent 就会往宿主不认识的目录写
       for (const gone of ['global/', 'bots/', 'wiki/', 'raw/']) {
         expect(body, `${language} 不得再提退役作用域 ${gone}`).not.toContain(gone)
       }
     }
   })
 
-  /**
-   * 库由用户按会话选定，多数是用户自己按主题切开的库 —— 项目库只是 `bases` 里可能有的一个名字。
-   * 提示词要是仍以「这个项目的库」开篇（或在任何地方点名 `"project"`），agent 就会把用户库当成
-   * 边角料，而那正是本轮要主推的形态。工具描述侧有 KT-12 钉同一件事，这里钉执行侧的正文。
-   */
-  it('RG-4 三语正文都不再把项目库摆在第一位：指向 `bases`，不点名 "project"', () => {
+  /** 它被交给的是**一份**具体的文件：不该教它去挑库（`bases`）或点名项目库 */
+  it('RG-4 三语正文不点名 "project"，也不教它挑库', () => {
     for (const language of LANGS) {
       const body = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })!.systemPrompt
-      // 「有哪几个库」只能从 `bases` 得知 —— 不教这一条，agent 只能瞎猜一个名字
-      expect(body, `${language} 需指向 \`bases\``).toContain('`bases`')
       expect(body, `${language} 不得点名 "project"`).not.toContain('"project"')
+      expect(body, `${language} 不教 \`bases\``).not.toContain('`bases`')
     }
-    // 旧开篇（静态围栏的框架句）不得从执行侧提示词里借尸还魂
-    expect(
-      buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language: 'en', readMd })!.systemPrompt
-    ).not.toContain('Each project has')
   })
 })
 
@@ -700,8 +687,11 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
     }
   })
 
-  it('PRV-2 HOST_ONLY_PROFILE_NAMES 恰为 {permission-reviewer}：与基座名单不相交，且在内置 spec 名单里', () => {
-    expect([...HOST_ONLY_PROFILE_NAMES]).toEqual([PERMISSION_REVIEWER_PROFILE_NAME])
+  it('PRV-2 HOST_ONLY_PROFILE_NAMES 恰为 {permission-reviewer, knowledge-writer}：与基座名单不相交，且在内置 spec 名单里', () => {
+    expect([...HOST_ONLY_PROFILE_NAMES]).toEqual([
+      PERMISSION_REVIEWER_PROFILE_NAME,
+      KNOWLEDGE_WRITER_SPEC.name
+    ])
     const specNames = BUILTIN_PROFILE_SPECS.map((spec) => spec.name)
     for (const name of HOST_ONLY_PROFILE_NAMES) {
       // 基座是「不进可用名单」，只由宿主派发是「按名也解析不到」—— 两份名单各管一件事
@@ -847,12 +837,13 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  * 两处一致（RPer-3）。
  */
 describe('bot 档案钉板（bot 会话的基座）', () => {
-  it('REG-4 三语工具清单恰为十一件（十个工具 + 作图技能）、不含 bash/write/ssh/database/browser、不声明模型', () => {
+  it('REG-4 三语工具清单恰为十二件（十一个工具 + 作图技能）、不含 bash/ssh/database/browser、不声明模型', () => {
     // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
-    // bot md（edit），但没有 shell、没有创建文件的路 —— 真要干活只能开子会话，
-    // 而子会话按自己的档案生成提示词、拿不到人设围栏。谁想「顺手给它一个 bash」，
-    // 那条结构保证当场作废（work/chat/coding 三份清单相同的那条惯例在这里刻意不适用）。
-    // 第十一件是内置作图技能：它只往上下文里注入文本、不引入任何能力，窄清单的实质不变
+    // bot md（edit），但没有 shell —— 真要干活只能开子会话，而子会话按自己的档案生成提示词、
+    // 拿不到人设围栏。谁想「顺手给它一个 bash」，那条结构保证当场作废（work/chat/coding
+    // 三份清单相同的那条惯例在这里刻意不适用）。`write` 自 2026-10-12 起在：知识库条目由 agent
+    // 用 write 直接写进库再 submit，没有它 bot 就记不了东西（正文限定它只用来记条目）。
+    // 最后一件是内置作图技能：它只往上下文里注入文本、不引入任何能力，窄清单的实质不变
     for (const language of LANGS) {
       const built = profile(BOT_PROFILE_NAME, language)
       expect(built.tools, `bot.${language}`).toEqual([
@@ -861,6 +852,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'grep',
         'glob',
         'ask',
+        'write',
         'edit',
         'session',
         'agent',
@@ -868,8 +860,8 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'artifact',
         'skill:builtin:drawing'
       ])
-      expect(built.tools, `bot.${language}`).toHaveLength(11)
-      for (const forbidden of ['bash', 'write', 'database', 'mcp:database', 'mcp:browser', 'git']) {
+      expect(built.tools, `bot.${language}`).toHaveLength(12)
+      for (const forbidden of ['bash', 'database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
       // 档案声明的 mcp:/skill: 恒生效 —— 清单里唯一的一项扩展能力就是作图技能，

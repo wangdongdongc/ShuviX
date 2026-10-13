@@ -6,8 +6,8 @@
  * 或 `type` 缺失 / 非字符串 / 空 —— 那不是一份 OKF 概念（保留文件 index.md / log.md 也不是）。
  * 字段形状不符时取缺省并经 `warn` 报告（校验回执用同一套判定，见 validate.ts）。
  *
- * 宿主盖的两个章：`generated` 由写钩子 / knowledge 工具在每次写入时刷新，
- * `verified` 只由 UI 动作追加 —— 本模块不写它们，只读。
+ * 宿主盖的两个章：`generated` 由写钩子在每次写入时刷新，`verified` 由 UI 动作（人工核实）与
+ * knowledge 工具 `submit` 通过后的宿主（机器确认）追加 —— 本模块不写它们，只读。
  */
 import {
   KNOWLEDGE_MARKER,
@@ -336,6 +336,25 @@ export function isVerificationCurrent(
   const generatedAt = Date.parse(concept.generated.at)
   if (latest.length === 0 || Number.isNaN(generatedAt)) return true
   return Math.max(...latest) >= generatedAt
+}
+
+/**
+ * 为**当前内容**背书的那几条核实的信任档（视图用）：只看不早于 `generated.at` 的 `verified`。
+ * OKF 的 `trustTierOf` 只要有一条 `human:` 就判人工审阅 —— 一份人工核实过、后来被 agent 改写又经
+ * `submit` 机器确认的条目，按它会读成「人工审阅且仍当前」，可人看过的是旧内容。核实不再当前时
+ * 退回全部记录的档（视图另以「核实后又被修改」标注）。
+ */
+export function currentTrustTierOf(
+  concept: Pick<KnowledgeConcept, 'verified' | 'generated'>
+): OkfTrustTier {
+  if (!isVerificationCurrent(concept)) return trustTierOf(concept)
+  const generatedAt = concept.generated ? Date.parse(concept.generated.at) : Number.NaN
+  if (Number.isNaN(generatedAt)) return trustTierOf(concept)
+  const current = concept.verified.filter((v) => {
+    const at = Date.parse(v.at)
+    return Number.isNaN(at) || at >= generatedAt
+  })
+  return deriveTrustTier(current)
 }
 
 export function isStale(concept: Pick<KnowledgeConcept, 'staleAfter'>, now: Date): boolean {

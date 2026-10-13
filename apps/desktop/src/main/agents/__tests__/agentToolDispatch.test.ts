@@ -122,10 +122,10 @@ function availableOf(text: string): string[] {
 /** 可用名单的共同断言：审查员与六个基座都不在，coding / explore / 用户档案都在 */
 function expectDispatchableOnly(names: string[]): void {
   expect(names).not.toContain(PERMISSION_REVIEWER_PROFILE_NAME)
+  // 知识库写手同为宿主专用：只经 knowledge 工具的 submit 调起
+  expect(names).not.toContain('knowledge-writer')
   for (const base of BASE_PROFILE_NAMES) expect(names, base).not.toContain(base)
-  expect(names).toEqual(
-    expect.arrayContaining(['coding', 'explore', 'widget', 'titler', 'knowledge-writer'])
-  )
+  expect(names).toEqual(expect.arrayContaining(['coding', 'explore', 'widget', 'titler']))
   expect(names).toContain('my-helper')
 }
 

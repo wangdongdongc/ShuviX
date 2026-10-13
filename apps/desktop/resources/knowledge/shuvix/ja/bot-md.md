@@ -91,10 +91,10 @@ frontmatter がマッピングでない、`shuvix` マーカーが別の種別�
 バックグラウンドの自動再開はすべて通常どおり動きます。
 
 そのルート人格は組み込みの **`bot`** ベースで、ツールリストは意図的に狭められています：`read, ls,
-grep, glob, ask, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —— `bash`、`write`
+grep, glob, ask, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —— `bash`
 はなく、組み込み機能サーバー `mcp:ssh` / `mcp:browser` / `mcp:database` も宣言していません（このセッションの
 拡張機能でユーザーがオンにすることはでき、それはユーザー自身の選択です）。bot は見ることはできても触れません：変更や実行を伴うことはすべてサブセッションへ
-（プログラミングは `agent_profile: coding`）。`edit` は一つの目的 —— 自分のファイルの維持 —— のために
+（プログラミングは `agent_profile: coding`）。`write` と `edit` は二つの目的 —— ナレッジベースへのエントリの記録と、自分のファイルの維持 —— のために
 あります。`~/.shuvix/bots/` 配下への書き込みはセッションのディレクトリの外への普通の書き込みで、
 組み込みポリシー **ask-on-external-path** の確認になり、自動レビューがオンならレビュアーが答えることも
 あります（そうした書き込みを必ずユーザーに届けたいなら、`vars.botsDir` に対する `force-ask` のポリシーを
