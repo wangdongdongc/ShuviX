@@ -3,10 +3,11 @@
  *
  *   策略判出 ask（不含 force-ask）→ 安全模块的 onPermissionRequest 接缝 → 判定型埋点
  *   `permission.request` → 内置 hook `auto-review` → 内置 agent `permission-reviewer`（会话当前
- *   模型上的一次派生运行，工具恰为结果契约工具 `next`）→ 判决 allow / ask / deny 落回安全模块。
+ *   模型上的一次派生运行，工具恰为档案的 `read` 与结果契约工具 `next`）→ 判决 allow / ask / deny
+ *   落回安全模块。审查员可以先 `read` 被运行的脚本；它的读取从不问人（会询问的一律拒绝，E2E-R12）。
  *
  * 模型侧是假提供商：主 agent 与审查员的请求交错到达，所以**每个脚本回合都按内容认领** ——
- * 主 agent 用 `!isReviewerRequest`，审查员用 `isReviewerRequest`（工具表恰为 `['next']`，见
+ * 主 agent 用 `!isReviewerRequest`，审查员用 `isReviewerRequest`（工具表恰为 `read` + `next`，见
  * harness/seed.ts）。命令一律 `touch <marker>`：「命令到底跑没跑」看 marker 文件在不在，
  * 不信工具自己的报告。
  *
@@ -285,11 +286,11 @@ describe('审查员的三种判决', () => {
     expect(existsSync(marker)).toBe(true)
     expect(await asksRaised(sid)).toBe(0)
 
-    // 审查请求恰一次（主 agent 收尾之后数），工具恰为 next
+    // 审查请求恰一次（主 agent 收尾之后数），工具恰为档案的 read + 结果契约的 next
     const reviews = reviewRequests()
     expect(reviews).toHaveLength(1)
     const review = reviews[0]
-    expect(requestToolNames(review)).toEqual(['next'])
+    expect(requestToolNames(review)).toEqual(['read', 'next'])
     expect(review.lastUserText).toContain('<result_contract>')
     // 系统提示词是审查员自己的 md 正文：项目指令文件不注入（对照：主 agent 的请求里有）
     expect(requestSystemText(review)).not.toContain(PROJECT_RULE)
@@ -816,6 +817,124 @@ describe('停用开关', () => {
     expect(await asksRaised(onSid)).toBe(0)
     const reviews = provider.requests().filter(isReviewerRequest)
     expect(reviews).toHaveLength(1)
-    expect(requestToolNames(reviews[0])).toEqual(['next'])
+    expect(requestToolNames(reviews[0])).toEqual(['read', 'next'])
+  })
+})
+
+describe('审查员读文件', () => {
+  it('E2E-R12 [P1] 审查员先 read 被运行的脚本再交卷：工作区里的脚本读得到，家目录里会话目录外的文件被拒（不弹卡）；它的读取不进之后的 recentOperations', async () => {
+    const title = 'R12-reviewer-reads'
+    const sid = await newSession(title)
+    const marker = markerPath('r12')
+    const marker2 = markerPath('r12-second')
+    // 被运行的脚本在工作区（项目目录 = 会话目录）里；那句特征串只在脚本里，审查员读过才看得到
+    const scriptRel = 'scripts/build-r12.sh'
+    const scriptAbs = join(projDir, scriptRel)
+    mkdirSync(join(projDir, 'scripts'), { recursive: true })
+    writeFileSync(scriptAbs, `#!/bin/sh\n# SCRIPT-BODY-R12\ntouch ${marker}\n`)
+    // 家目录里、会话目录外：被审的 agent 读它要问，审查员读它就被拒
+    const outside = join(app.home, 'r12-outside.txt')
+    writeFileSync(outside, 'OUTSIDE-SECRET-R12\n')
+    const readCall = (id: string, path: string): { id: string; name: string; args: string } => ({
+      id,
+      name: 'read',
+      args: JSON.stringify({ path })
+    })
+
+    provider.reset()
+    await events.clear()
+    provider.script(
+      {
+        toolCalls: [
+          {
+            id: 'call_r12',
+            name: 'bash',
+            args: JSON.stringify({ command: `bash ${scriptRel}`, description: 'Run the build' })
+          }
+        ],
+        when: notReviewer
+      },
+      { text: 'R12 done.', when: notReviewer },
+      // 审查员第一轮：同一批里读脚本与那份家目录里的文件
+      {
+        toolCalls: [
+          readCall('call_r12_read_script', scriptAbs),
+          readCall('call_r12_read_out', outside)
+        ],
+        when: (req) => isReviewerRequest(req) && !req.raw.includes('SCRIPT-BODY-R12'),
+        usage: { prompt: 60, completion: 8 }
+      },
+      // 第二轮：读过脚本了，放行
+      reviewerTurn(
+        {
+          decision: 'allow',
+          risk: 'low',
+          summary: 'SUMMARY-R12 runs the project build script',
+          reason: 'REASON-R12 the script only touches a marker in the project'
+        },
+        { when: (req) => req.raw.includes('SCRIPT-BODY-R12') }
+      )
+    )
+
+    await sendPrompt(sid, 'Run the project build script.')
+    await events.waitFor('agent_end', { sessionId: sid })
+
+    // 命令真的跑了，从头到尾没有卡片（审查员那次被拒的读取也没有）
+    expect(existsSync(marker)).toBe(true)
+    expect(await asksRaised(sid)).toBe(0)
+
+    // 审查员的两次请求：第二次带着脚本原文与那次拒绝，不带家目录里那份文件的内容
+    const reviews = provider.requests().filter(isReviewerRequest)
+    expect(reviews).toHaveLength(2)
+    expect(reviews[0].raw).not.toContain('SCRIPT-BODY-R12')
+    expect(reviews[1].raw).toContain('SCRIPT-BODY-R12')
+    expect(reviews[1].raw).toContain('no way to ask')
+    expect(reviews[1].raw).not.toContain('OUTSIDE-SECRET-R12')
+    expect(reviews.every((r) => !r.raw.includes('OUTSIDE-SECRET-R12'))).toBe(true)
+
+    // 决策日志：审查员的两次读（主体是派生的 permission-reviewer）+ 那条命令（审查放行）
+    const decisions = await settledDecisions(sid, 3)
+    expect(decisions).toHaveLength(3)
+    const reads = decisions.filter((d) => d.toolName === 'read')
+    expect(reads).toHaveLength(2)
+    for (const read of reads) {
+      expect(read.subject).toMatchObject({
+        kind: 'agent',
+        profileName: 'permission-reviewer',
+        agentKind: 'spawned'
+      })
+      expect(read.review).toBeUndefined()
+      expect(read.userResponse).toBeUndefined()
+    }
+    const scriptRead = reads.find((d) => d.toolCallId === 'call_r12_read_script')
+    expect(scriptRead?.effect).toBe('allow')
+    const outsideRead = reads.find((d) => d.toolCallId === 'call_r12_read_out')
+    expect(outsideRead).toMatchObject({ effect: 'ask', winning: 'ask-on-external-path#0' })
+    const command = decisions.find((d) => d.toolCallId === 'call_r12')
+    expect(command).toMatchObject({ effect: 'ask', winning: 'ask-on-command#0' })
+    expect(command?.subject).toMatchObject({ profileName: 'work', agentKind: 'root' })
+    expect(command?.review).toMatchObject({ decision: 'allow', source: REVIEW_SOURCE })
+
+    // 同一会话的下一条命令再审一次：recentOperations 里有上一条命令，没有审查员的读取
+    provider.reset()
+    await events.clear()
+    provider.script(
+      { toolCalls: [touchCall('call_r12_second', marker2)], when: notReviewer },
+      { text: 'R12 second done.', when: notReviewer },
+      reviewerTurn({
+        decision: 'allow',
+        risk: 'low',
+        summary: 'SUMMARY-R12b',
+        reason: 'REASON-R12b'
+      })
+    )
+    await sendPrompt(sid, 'Create the second R12 marker.')
+    await events.waitFor('agent_end', { sessionId: sid })
+    expect(existsSync(marker2)).toBe(true)
+    const [second] = provider.requests().filter(isReviewerRequest)
+    expect(second).toBeDefined()
+    const ops = reviewEventOf(second).recentOperations
+    expect(ops.map((op) => op.target)).toContain(`bash: bash ${scriptRel}`)
+    expect(ops.filter((op) => op.target.startsWith('read:'))).toEqual([])
   })
 })

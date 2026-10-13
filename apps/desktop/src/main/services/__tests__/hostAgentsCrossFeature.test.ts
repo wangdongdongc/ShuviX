@@ -14,7 +14,8 @@
  *       K5-06 派生的 coding agent 开子会话：挂在根会话下（PIN-10 裁决）
  *   P2-08 交过来的桌面整合用例（p2-08-test-design.md）
  *       -16 标题经 session 工具落下   -17 第二轮 refine   -19 titler 跑着时删会话
- *       -34 真记录上的防递归   -35 hook 对话不进审查员的输入、也不进 titler 的事实
+ *       -34 真记录上的防递归（审查员的询问按 fail-closed 拒绝）   -34b 没绑的派生 agent 照旧问人
+ *       -35 hook 对话不进审查员的输入、也不进 titler 的事实
  *
  * 不断言 agent_start / agent_end / message_* 事件（phase 3）。
  */
@@ -686,7 +687,7 @@ describe('P2-08 desktop integration cases', () => {
   )
 
   it(
-    'P2-08-34 真记录上的防递归：审查员自己的被设门操作 → 不再审查（判定只有根那一次）、问人的卡片没有 review、主体是真记录的 spawned / permission-reviewer；对照：titler 的被设门操作照常进判定',
+    'P2-08-34 真记录上的防递归：审查员自己的被设门操作 → 不再审查（判定只有根那一次）、也不问人（没有卡片，按 fail-closed 拒绝、工具体没跑）、主体是真记录的 spawned / permission-reviewer；它被拒的操作不进之后的 recentOperations；对照：titler 的被设门操作照常进判定',
     async () => {
       const p = proc()
       setUserPolicy('ask-askop', "tool.name == 'askOp'")
@@ -706,16 +707,36 @@ describe('P2-08 desktop integration cases', () => {
       )
       expect(await withTimeout(p.chatGateway.prompt('s1', 'go'), 15000, 'prompt')).toEqual({})
       expect(decide).toHaveBeenCalledTimes(1)
-      expect(rig.asks).toHaveLength(1)
-      const card = rig.asks[0]!.request as { kind: string; review?: unknown }
-      expect(card.kind).toBe('ask')
-      expect(card.review).toBeUndefined()
+      // 审查员的询问不到人面前：一张卡片都没有
+      expect(rig.asks).toEqual([])
       const [r] = await hookConversations('s1', 'auto-review')
-      expect(askOpCalls.map((c) => c.conversationId)).toEqual([r!.id, await rootConversation('s1')])
+      // 审查员的 askOp 被门拒掉、工具体没跑；只有根的那一次（审查员放行之后）执行了
+      expect(askOpCalls.map((c) => c.conversationId)).toEqual([await rootConversation('s1')])
+      const reviewerRequests = p.router.requests('reviewer')
+      expect(reviewerRequests).toHaveLength(2)
+      expect(JSON.stringify(reviewerRequests[1]!.messages)).toContain('no way to ask')
       expect(p.host.get('s1')!.agentIdentity(r!.id)).toMatchObject({
         kind: 'spawned',
         profileName: 'permission-reviewer'
       })
+
+      // 之后再有一次审查：审查员自己那次被拒的操作（ask、无人回答）不在 recentOperations 里
+      const event = {
+        request: {
+          subject: { kind: 'agent', sessionId: 's1', agentKind: 'root', profileName: 'chat' },
+          tool: { name: 'askOp' },
+          action: 'execute',
+          object: { type: 'invocation' },
+          environment: { platform: process.platform, workspaceDir: '/w' }
+        },
+        decision: { winning: 'ask-askop#1' },
+        command: 'askOp',
+        toolCallId: 'call-later'
+      }
+      const payload = await p.permissionReview.buildPermissionRequestPayload(event as never)
+      expect(payload.recentOperations).toEqual([
+        { target: 'askOp: askOp', outcome: 'reviewer allow' }
+      ])
 
       // 对照：titler 的被设门操作照常进判定
       rig.profiles.titler = { ...rig.profiles.titler, tools: ['session', 'askOp'] }
@@ -728,6 +749,32 @@ describe('P2-08 desktop integration cases', () => {
       expect(decide.mock.calls[1]![1]).toMatchObject({
         agent: { profile: 'titler', kind: 'spawned' }
       })
+    },
+    T
+  )
+
+  it(
+    'P2-08-34b 没绑在 permission.request 上的派生 agent 照旧会问人：titler 的被设门操作交审查，审查员答 ask → 恰一张卡片（带审查意见）',
+    async () => {
+      const p = proc()
+      setUserPolicy('ask-askop', "tool.name == 'askOp'")
+      rig.profiles.titler = { ...rig.profiles.titler, tools: ['session', 'askOp'] }
+      insert('s2', { title: DEFAULT_TITLE })
+      const decide = vi.spyOn(p.hookService, 'decide')
+      p.router.on('root2', role('chat', 'hello'), answer('hi'))
+      p.router.on('titler', role('titler'), callTool('askOp', {}, 'call-titler-ask'), answer('T'))
+      p.router.on('reviewer', role('permission-reviewer'), next('ask'))
+      expect(await withTimeout(p.chatGateway.prompt('s2', 'hello'), 15000, 'prompt s2')).toEqual({})
+      await waitFor(() => rig.asks.length === 1, 10000, 'titler card')
+      await waitFor(async () => (await liveTasksOf('s2')).length === 0, 10000, 'hooks finished')
+      expect(decide).toHaveBeenCalledTimes(1)
+      expect(decide.mock.calls[0]![1]).toMatchObject({
+        agent: { profile: 'titler', kind: 'spawned' }
+      })
+      expect(rig.asks).toHaveLength(1)
+      const card = rig.asks[0]!.request as { kind: string; review?: unknown }
+      expect(card.kind).toBe('ask')
+      expect(card.review).toMatchObject({ risk: 'low', summary: 'ask it', reason: 'because ask' })
     },
     T
   )

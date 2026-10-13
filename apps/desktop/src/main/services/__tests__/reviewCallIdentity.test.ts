@@ -1,8 +1,11 @@
 /**
  * P2-06-20 / P2-06-21（docs/pi-durable/p2-06-test-design.md，PIN-08）—— 防递归的端到端：真 toolContext 的门
- * （getDesktopSecurityContext）+ 真 permissionReview（经 setPermissionReviewer 注入）。会话级 ctx 带
- * `agentOf`：主体按**这次调用**的对话认人，审查员（被绑在 `permission.request` 上的派生 agent）自己要权限
- * 时不再交给审查、直接问人；根与别的派生 agent 照常审查。绑定集合每次现读（`agentsBoundTo`）。
+ * （getDesktopSecurityContext）+ 真 permissionReview（经 setPermissionReviewer 注入，与 main/index.ts 一样带上
+ * isReviewerIdentity）。会话级 ctx 带 `agentOf`：主体按**这次调用**的对话认人，审查员（被绑在
+ * `permission.request` 上的派生 agent）自己要权限时既不交给审查、也不问人 —— 它的调用没有询问通道，
+ * 按 fail-closed 拒绝（`no way to ask`）；根与别的派生 agent 照常审查。绑定集合每次现读（`agentsBoundTo`）。
+ * P2-06-22 / 23 / 24：审查员能读不问就能读的文件、它的操作不进 recentOperations；停用的 hook 不算绑定；
+ * 用户 hook 绑的别的档案同样算审查员。
  *
  * hookService / messageService / settingsService / 前端注册表是替身；toolContext 的 dao / paths / policy /
  * sandbox / skill / knowledge 依赖照 toolContext.test 的做法替身（内置策略读仓库里那一份 md）。
@@ -125,7 +128,8 @@ import {
   type ProjectConfig
 } from '../toolContext'
 import type { ToolAgentIdentity } from '../toolAgent'
-import { reviewPermissionRequest } from '../permissionReview'
+import { isReviewerIdentity, reviewPermissionRequest } from '../permissionReview'
+import { homedir } from 'node:os'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { PermissionRequestEvent } from '@shuvix/agent-runtime'
@@ -163,12 +167,20 @@ const HOOK_T: ToolAgentIdentity = {
 }
 /** 根，但档案名恰好叫 permission-reviewer（不是派生的就不跳过） */
 const ROOT_NAMED_REVIEWER: ToolAgentIdentity = { profileName: 'permission-reviewer', kind: 'root' }
+/** 用户自己的判定型 hook 派的审查员（P2-06-24 才绑上） */
+const MY_REVIEWER: ToolAgentIdentity = {
+  profileName: 'my-reviewer',
+  kind: 'spawned',
+  callerId: 'sub-m1',
+  getModelConfig: haiku
+}
 const IDENTITIES: Record<number, ToolAgentIdentity> = {
   1: WORK,
   2: EXPLORE,
   3: REVIEWER,
   6: HOOK_T,
-  7: ROOT_NAMED_REVIEWER
+  7: ROOT_NAMED_REVIEWER,
+  8: MY_REVIEWER
 }
 
 const verdict = (decision: 'allow' | 'ask' | 'deny'): Record<string, string> => ({
@@ -185,6 +197,17 @@ let ctx: ReturnType<typeof getDesktopSecurityContext>
 /** 会话目录外写一次（这次调用的对话 / taskId） */
 const writeFrom = (conversationId: number, toolCallId: string, taskId = 9): Promise<void> =>
   ctx.enforcePath('write', OUTSIDE, { toolCallId, toolName: 'write', taskId, conversationId })
+/** 读一次（这次调用的对话 / taskId） */
+const readFrom = (
+  conversationId: number,
+  path: string,
+  toolCallId: string,
+  taskId = 9
+): Promise<void> =>
+  ctx.enforcePath('read', path, { toolCallId, toolName: 'read', taskId, conversationId })
+/** 审查员会话没有询问通道时的拒绝 */
+const NO_WAY_TO_ASK =
+  /^Access denied: (path outside workspace and|this needs your confirmation but there is) no way to ask: /
 
 const payloadOf = (call: number): PermissionRequestPayload =>
   rv.decide.mock.calls[call][1] as PermissionRequestPayload
@@ -204,7 +227,8 @@ beforeEach(() => {
   rv.listBySession.mockClear()
   rv.settingsGet.mockClear()
   rv.broadcast.mockClear()
-  setPermissionReviewer(reviewPermissionRequest)
+  // 与 main/index.ts 一样：审查接缝 + 认审查员的判断（PR-W1 钉住 index.ts 的写法）
+  setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity)
   asks = []
   requestUserInput = vi.fn(async (request: InputRequest) => {
     asks.push(request)
@@ -229,14 +253,13 @@ afterEach(() => {
 })
 
 describe('P2-06-20 防递归的端到端（真门 + 真审查接缝）', () => {
-  it('P2-06-20 审查员的对话（3）：不交审查、直接问人；根（1）与派生 explore（2）照常交审查，payload 带各自的主体', async () => {
-    // 1. 审查员自己要权限
-    await expect(writeFrom(3, 'r-3')).resolves.toBeUndefined()
+  it('P2-06-20 审查员的对话（3）：不交审查、也不问人（按 fail-closed 拒绝）；根（1）与派生 explore（2）照常交审查，payload 带各自的主体', async () => {
+    // 1. 审查员自己要权限：没有询问通道 —— 不送审查、不报「审查中」、不弹卡，直接拒绝
+    await expect(writeFrom(3, 'r-3')).rejects.toThrow(NO_WAY_TO_ASK)
     expect(rv.agentsBoundTo).toHaveBeenCalledWith('permission.request')
     expect(rv.decide).not.toHaveBeenCalled()
     expect(reviewBroadcasts('r-3')).toEqual([])
-    expect(requestUserInput).toHaveBeenCalledTimes(1)
-    expect((asks[0] as AskInputRequest).review).toBeUndefined()
+    expect(requestUserInput).not.toHaveBeenCalled()
 
     // 2. 根 agent：交审查，审查员放行 → 不问人
     await expect(writeFrom(1, 'r-1')).resolves.toBeUndefined()
@@ -247,18 +270,19 @@ describe('P2-06-20 防递归的端到端（真门 + 真审查接缝）', () => {
     expect(options).toEqual({ signal: expect.anything(), ownerTaskId: 9 })
     expect(payloadOf(0).agent).toStrictEqual({ profile: 'work', kind: 'root' })
     expect(payloadOf(0).sessionId).toBe(SID)
-    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput).not.toHaveBeenCalled()
     expect(reviewBroadcasts('r-1')).toEqual([true, false])
 
     // 3. 派生 explore（没绑在埋点上）：照常交审查
     await expect(writeFrom(2, 'r-2')).resolves.toBeUndefined()
     expect(rv.decide).toHaveBeenCalledTimes(2)
     expect(payloadOf(1).agent).toStrictEqual({ profile: 'explore', kind: 'spawned' })
+    expect(requestUserInput).not.toHaveBeenCalled()
   })
 })
 
 describe('P2-06-21 只有绑在埋点上的派生档案才跳过，绑定集合现读', () => {
-  it('P2-06-21 titler（没绑）→ 交审查；根但档案名叫 permission-reviewer → 交审查；titler 被绑上之后 → 不交审查、问人', async () => {
+  it('P2-06-21 titler（没绑）→ 交审查；根但档案名叫 permission-reviewer → 交审查；titler 被绑上之后 → 不交审查、不问人（拒绝）；解绑之后又交审查', async () => {
     await expect(writeFrom(6, 't-6')).resolves.toBeUndefined()
     expect(rv.decide).toHaveBeenCalledTimes(1)
     expect(payloadOf(0).agent).toStrictEqual({ profile: 'titler', kind: 'spawned' })
@@ -269,21 +293,69 @@ describe('P2-06-21 只有绑在埋点上的派生档案才跳过，绑定集合�
     expect(requestUserInput).not.toHaveBeenCalled()
 
     rv.agentsBoundTo.mockImplementation(() => new Set(['permission-reviewer', 'titler']))
-    await expect(writeFrom(6, 't-6b')).resolves.toBeUndefined()
+    await expect(writeFrom(6, 't-6b')).rejects.toThrow(NO_WAY_TO_ASK)
     expect(rv.decide).toHaveBeenCalledTimes(2)
+    expect(requestUserInput).not.toHaveBeenCalled()
+
+    // 解绑（比如那份 hook 被停用）：titler 的下一次调用又交审查
+    rv.agentsBoundTo.mockImplementation(() => new Set(['permission-reviewer']))
+    await expect(writeFrom(6, 't-6c')).resolves.toBeUndefined()
+    expect(rv.decide).toHaveBeenCalledTimes(3)
+    expect(payloadOf(2).agent).toStrictEqual({ profile: 'titler', kind: 'spawned' })
+    expect(requestUserInput).not.toHaveBeenCalled()
+  })
+})
+
+describe('P2-06-22 审查员读文件：读得到不问就能读的，读不到的不问人，它的读取不进 recentOperations', () => {
+  it('P2-06-22 根读工作区 → 放行；审查员读工作区里的脚本 → 放行、不交审查；读家目录里会话目录外 → 拒绝、不弹卡、不交审查；之后根的一次写交审查，recentOperations 只有根的读', async () => {
+    await expect(readFrom(1, '/rv-ws/a.txt', 'rd-1')).resolves.toBeUndefined()
+    await expect(readFrom(3, '/rv-ws/run.sh', 'rd-3a')).resolves.toBeUndefined()
+    await expect(readFrom(3, join(homedir(), 'rv-x'), 'rd-3b')).rejects.toThrow(NO_WAY_TO_ASK)
+    expect(rv.decide).not.toHaveBeenCalled()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(reviewBroadcasts('rd-3b')).toEqual([])
+
+    await expect(writeFrom(1, 'w-1')).resolves.toBeUndefined()
+    expect(rv.decide).toHaveBeenCalledTimes(1)
+    const ops = payloadOf(0).recentOperations
+    expect(ops).toContainEqual({ target: 'read: /rv-ws/a.txt', outcome: 'allowed' })
+    expect(JSON.stringify(ops)).not.toContain('run.sh')
+    expect(JSON.stringify(ops)).not.toContain('rv-x')
+    expect(ops).toHaveLength(1)
+  })
+})
+
+describe('P2-06-23 / P2-06-24 谁算审查员：只看「派生 + 现在绑在 permission.request 上」', () => {
+  it('P2-06-23 auto-review 被停用（agentsBoundTo 不再列出 permission-reviewer）：派生的 permission-reviewer 的询问照常到人面前', async () => {
+    rv.agentsBoundTo.mockImplementation(() => new Set())
+    rv.decide.mockImplementation(async () => null)
+    await expect(writeFrom(3, 'r-3-off')).resolves.toBeUndefined()
     expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect((asks[0] as AskInputRequest).id).toBe('r-3-off')
     expect((asks[0] as AskInputRequest).review).toBeUndefined()
+  })
+
+  it('P2-06-24 用户 hook 绑了 my-reviewer：派生的 my-reviewer 被拒、不弹卡、不交审查；绑之前它照常交审查', async () => {
+    await expect(writeFrom(8, 'm-8a')).resolves.toBeUndefined()
+    expect(rv.decide).toHaveBeenCalledTimes(1)
+    expect(payloadOf(0).agent).toStrictEqual({ profile: 'my-reviewer', kind: 'spawned' })
+
+    rv.agentsBoundTo.mockImplementation(() => new Set(['permission-reviewer', 'my-reviewer']))
+    await expect(writeFrom(8, 'm-8b')).rejects.toThrow(NO_WAY_TO_ASK)
+    await expect(readFrom(8, join(homedir(), 'rv-x'), 'm-8c')).rejects.toThrow(NO_WAY_TO_ASK)
+    expect(rv.decide).toHaveBeenCalledTimes(1)
+    expect(requestUserInput).not.toHaveBeenCalled()
   })
 })
 
 describe('P2-07-53 经内置 MCP 服务器的防递归（真 database server + 真门 + 真审查接缝）', () => {
-  it('P2-07-53 审查员（对话 3）经 database 查询：不交审查、问人一次；根（对话 1）交审查，payload 主体是 work，事件带 taskId / conversationId', async () => {
+  it('P2-07-53 审查员（对话 3）经 database 查询：不交审查、不问人，查询被拒（no way to ask）没有执行；根（对话 1）交审查，payload 主体是 work，事件带 taskId / conversationId', async () => {
     rv.userPolicies.push(retiredPolicy('ask-on-database'))
     const events: PermissionRequestEvent[] = []
     setPermissionReviewer((event, signal) => {
       events.push(event)
       return reviewPermissionRequest(event, signal)
-    })
+    }, isReviewerIdentity)
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
     await createDatabaseMcpServerFactory()(
@@ -304,18 +376,19 @@ describe('P2-07-53 经内置 MCP 服务器的防递归（真 database server + �
       })
 
     try {
-      // 1. 审查员自己要权限：不交审查，人被问一次、卡片上没有审查标记
+      // 1. 审查员自己要权限：不交审查、不问人，查询被拒、没有执行
       const asReviewer = (await query({
         'shuvix.dev/toolCallId': 'tc-3',
         'shuvix.dev/agentId': 'sub-r1',
         'shuvix.dev/taskId': 22,
         'shuvix.dev/conversationId': 3
-      })) as { isError?: boolean }
-      expect(asReviewer.isError).toBeFalsy()
+      })) as { isError?: boolean; content?: Array<{ type: string; text?: string }> }
+      expect(asReviewer.isError).toBe(true)
+      expect(asReviewer.content?.map((part) => part.text ?? '').join('')).toContain('no way to ask')
       expect(rv.decide).not.toHaveBeenCalled()
-      expect(requestUserInput).toHaveBeenCalledTimes(1)
-      expect((asks[0] as AskInputRequest).id).toBe('tc-3')
-      expect((asks[0] as AskInputRequest).review).toBeUndefined()
+      expect(requestUserInput).not.toHaveBeenCalled()
+      expect(events.map((e) => e.toolCallId)).not.toContain('tc-3')
+      expect(rv.queries).toEqual([])
 
       // 2. 根 agent：交审查（放行），不再问人
       const asRoot = (await query({
@@ -327,11 +400,12 @@ describe('P2-07-53 经内置 MCP 服务器的防递归（真 database server + �
       expect(asRoot.isError).toBeFalsy()
       expect(rv.decide).toHaveBeenCalledTimes(1)
       expect(payloadOf(0).agent).toStrictEqual({ profile: 'work', kind: 'root' })
-      expect(requestUserInput).toHaveBeenCalledTimes(1)
+      expect(requestUserInput).not.toHaveBeenCalled()
 
       const rootEvent = events.find((e) => e.toolCallId === 'tc-1')
       expect(rootEvent).toMatchObject({ taskId: 20, conversationId: 1 })
-      expect(rv.queries).toEqual(['DELETE FROM t', 'DELETE FROM t'])
+      // 只有根的那一次真的执行了
+      expect(rv.queries).toEqual(['DELETE FROM t'])
     } finally {
       await client.close()
     }

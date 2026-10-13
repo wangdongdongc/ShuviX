@@ -369,12 +369,21 @@ export function makeDesktopSecurityProvider(
  * 询问点的审查者（安全模块 onPermissionRequest 接缝的桌面实现，见 permissionReview.ts）。由 main
  * 启动时注入：直接 import 会经 hookService → AgentManager → agentHost 绕回本文件。
  * 没注入 = 没有审查，一律问人（单测默认如此）。
+ *
+ * `isReviewer` 认出审查员自己（判定型 hook 派出的 agent）：它的工具调用拿不到询问通道，会询问的一律按
+ * fail-closed 拒绝 —— 审查员读文件是为了判断，读不到就当看不见，不能反过来去问人。没注入 = 谁都不是。
  */
 type PermissionReviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+type ReviewerCheck = (agent: ToolAgentIdentity) => boolean
 let permissionReviewer: PermissionReviewer | null = null
+let isReviewer: ReviewerCheck = () => false
 
-export function setPermissionReviewer(reviewer: PermissionReviewer | null): void {
+export function setPermissionReviewer(
+  reviewer: PermissionReviewer | null,
+  reviewerCheck: ReviewerCheck = () => false
+): void {
   permissionReviewer = reviewer
+  isReviewer = reviewerCheck
 }
 
 /**
@@ -410,6 +419,12 @@ export function getDesktopSecurityContext(
 ): SecurityContext {
   const cfg = getConfig ?? ((): ProjectConfig => resolveProjectConfig(ctx.sessionId))
   const provider = makeDesktopSecurityProvider(ctx, cfg)
+  // 审查员的调用：同一个 provider，只是既不送审查也没有询问通道 —— ask 一律按 fail-closed 拒绝
+  // （见 setPermissionReviewer），这条性质在这里自己成立，不靠审查接缝对它交回 null
+  const providerFor = (agent: ToolAgentIdentity | undefined): SecurityHostProvider =>
+    agent && isReviewer(agent)
+      ? { ...provider, onPermissionRequest: undefined, requestUserInput: undefined }
+      : provider
   const contextFor = (agent: ToolAgentIdentity | undefined): SecurityContext =>
     createSecurityContext(
       {
@@ -425,7 +440,7 @@ export function getDesktopSecurityContext(
           return cfg().workingDirectory
         }
       },
-      provider
+      providerFor(agent)
     )
   const base = contextFor(ctx.agent)
   if (!ctx.agentOf) return base

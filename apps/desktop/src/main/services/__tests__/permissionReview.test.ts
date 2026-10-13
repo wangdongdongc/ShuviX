@@ -14,8 +14,10 @@
  *               （人发的消息、内置 ask 工具的回答、安全模块记下的卡片反馈），不认文字 —— 会话树里那段
  *               「User declined …」谁都能用一条 echo 打印出来；子会话里的「用户消息」是父 agent 写的，
  *               只进 delegatedTasks；
- *   - PR-18     recentOperations 取自真的决策日志；
- *   - PR-W1     main/index.ts 把审查者注入 toolContext（读源码）。
+ *   - PR-3c     「是不是审查员」这一个判断（isReviewerAgent / isReviewerIdentity）：只认「派生 + 档案绑在
+ *               permission.request 上」，根 agent 不去扫 hook 目录；
+ *   - PR-18     recentOperations 取自真的决策日志，审查员自己的操作先滤掉再取最近 10 条；
+ *   - PR-W1     main/index.ts 把审查者与「认审查员」的判断一并注入 toolContext（读源码）。
  *
  * 替身：hookService / messageService / sessionRecords / logger / frontend/core / sessionHost。
  * **钉的是旧格式（harness-v3-jsonl）路径**：会话行不带 storageKind，转写经 messageService 读冻结投影；
@@ -93,7 +95,12 @@ vi.mock('../../logger', () => ({
 }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: mocks.broadcast } }))
 
-import { buildPermissionRequestPayload, reviewPermissionRequest } from '../permissionReview'
+import {
+  buildPermissionRequestPayload,
+  isReviewerAgent,
+  isReviewerIdentity,
+  reviewPermissionRequest
+} from '../permissionReview'
 
 // ─── 夹具 ───────────────────────────────────────────────
 
@@ -383,6 +390,53 @@ describe('PR —— 接缝：主体、防递归、结论交回', () => {
     mocks.agentsBoundTo.mockReturnValue(new Set(['permission-reviewer', 'my-reviewer']))
     expect(await reviewPermissionRequest(mine)).toBeNull()
     expect(mocks.decide).toHaveBeenCalledTimes(3)
+  })
+
+  it('PR-3c isReviewerAgent：派生 + 档案在集合里才是；根 agent / 缺 kind / 缺名字不去扫 hook；显式集合优先；集合现读', () => {
+    // 派生、名字在集合里
+    expect(isReviewerAgent('permission-reviewer', 'spawned')).toBe(true)
+    expect(mocks.agentsBoundTo).toHaveBeenCalledWith('permission.request')
+
+    // 根 agent：同名也不是，而且根本不去扫（每次工具调用都会问到这里）
+    mocks.agentsBoundTo.mockClear()
+    expect(isReviewerAgent('permission-reviewer', 'root')).toBe(false)
+    expect(isReviewerAgent('permission-reviewer', undefined)).toBe(false)
+    expect(isReviewerAgent('', 'spawned')).toBe(false)
+    expect(isReviewerAgent(undefined, 'spawned')).toBe(false)
+    expect(mocks.agentsBoundTo).not.toHaveBeenCalled()
+
+    // 派生但没绑
+    expect(isReviewerAgent('titler', 'spawned')).toBe(false)
+    expect(isReviewerAgent('my-reviewer', 'spawned')).toBe(false)
+    expect(mocks.agentsBoundTo).toHaveBeenCalledTimes(2)
+
+    // 显式给了集合就用它，不扫 hook
+    mocks.agentsBoundTo.mockClear()
+    expect(isReviewerAgent('x', 'spawned', new Set(['x']))).toBe(true)
+    expect(isReviewerAgent('permission-reviewer', 'spawned', new Set())).toBe(false)
+    expect(isReviewerAgent('permission-reviewer', 'root', new Set(['permission-reviewer']))).toBe(
+      false
+    )
+    expect(mocks.agentsBoundTo).not.toHaveBeenCalled()
+
+    // 集合每次现读：用户新加的判定型 hook 绑 my-reviewer，下一次就算
+    mocks.agentsBoundTo.mockReturnValue(new Set(['permission-reviewer', 'my-reviewer']))
+    expect(isReviewerAgent('my-reviewer', 'spawned')).toBe(true)
+    // 反过来，内置 hook 被停用（不再算绑定）之后，内置审查员也不算了
+    mocks.agentsBoundTo.mockReturnValue(new Set())
+    expect(isReviewerAgent('permission-reviewer', 'spawned')).toBe(false)
+  })
+
+  it('PR-3c isReviewerIdentity 是同一个判断，收工具调用方的身份 { profileName, kind }', () => {
+    expect(isReviewerIdentity({ profileName: 'permission-reviewer', kind: 'spawned' })).toBe(true)
+    expect(isReviewerIdentity({ profileName: 'explore', kind: 'spawned' })).toBe(false)
+    mocks.agentsBoundTo.mockClear()
+    expect(isReviewerIdentity({ profileName: 'permission-reviewer', kind: 'root' })).toBe(false)
+    expect(isReviewerIdentity({ profileName: '', kind: 'spawned' })).toBe(false)
+    expect(mocks.agentsBoundTo).not.toHaveBeenCalled()
+    mocks.agentsBoundTo.mockReturnValue(new Set(['my-reviewer']))
+    expect(isReviewerIdentity({ profileName: 'my-reviewer', kind: 'spawned' })).toBe(true)
+    expect(isReviewerIdentity({ profileName: 'permission-reviewer', kind: 'spawned' })).toBe(false)
   })
 
   it.each(['allow', 'ask', 'deny'] as const)(
@@ -1482,6 +1536,104 @@ describe('PR —— recentOperations 取自决策日志', () => {
       targets([3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
     )
   })
+
+  /** 派生的内置审查员自己的一条操作（它读脚本留下的决策记录） */
+  const REVIEWER_SUBJECT: SecurityDecisionRecord['subject'] = {
+    kind: 'agent',
+    agentKind: 'spawned',
+    profileName: 'permission-reviewer'
+  }
+
+  it('PR-18c 审查员自己的操作不进 recentOperations，也挤不掉真正的操作：先滤再取最近 10 条；effect allow / ask 一样滤掉；每次投影只扫一次 hook', async () => {
+    const sid = newSession()
+    let ts = 0
+    const reviewerRead = (n: number, effect: 'allow' | 'ask'): void =>
+      recordDecision(
+        decisionRecord(sid, ++ts, {
+          toolCallId: `tc-rv-${n}`,
+          toolName: 'read',
+          action: 'read',
+          objectKind: 'path',
+          objectSummary: `${WS}/reviewer-${n}.sh`,
+          subject: REVIEWER_SUBJECT,
+          effect
+        })
+      )
+    // 12 条根 agent 的操作，审查员的读取穿插其间（3 条），之后再来 12 条更新的审查员读取
+    let reviewerN = 0
+    for (let n = 1; n <= 12; n++) {
+      recordDecision(
+        decisionRecord(sid, ++ts, { toolCallId: `tc-${n}`, objectSummary: `echo ${n}` })
+      )
+      if (n === 4 || n === 8 || n === 11) reviewerRead(++reviewerN, n === 8 ? 'ask' : 'allow')
+    }
+    for (let i = 0; i < 12; i++) reviewerRead(++reviewerN, i % 2 === 0 ? 'allow' : 'ask')
+    expect(reviewerN).toBe(15)
+
+    mocks.agentsBoundTo.mockClear()
+    const payload = await buildPermissionRequestPayload(makeEvent(sid))
+    expect(payload.recentOperations.map((op) => op.target)).toStrictEqual(
+      Array.from({ length: 10 }, (_, i) => `bash: echo ${i + 3}`)
+    )
+    expect(JSON.stringify(payload.recentOperations)).not.toContain('reviewer-')
+    expect(mocks.agentsBoundTo).toHaveBeenCalledTimes(1)
+    expect(mocks.agentsBoundTo).toHaveBeenCalledWith('permission.request')
+  })
+
+  it('PR-18d 只滤「派生 + 绑在 permission.request 上」：派生 titler、根 agent 同名、未绑的 my-reviewer、用户主体都留下；绑上之后 my-reviewer 才滤掉', async () => {
+    const sid = newSession()
+    const rows: Array<[string, SecurityDecisionRecord['subject']]> = [
+      ['titler', { kind: 'agent', agentKind: 'spawned', profileName: 'titler' }],
+      ['root-namesake', { kind: 'agent', agentKind: 'root', profileName: 'permission-reviewer' }],
+      ['mine', { kind: 'agent', agentKind: 'spawned', profileName: 'my-reviewer' }],
+      ['user', { kind: 'user' }],
+      ['builtin-reviewer', REVIEWER_SUBJECT]
+    ]
+    rows.forEach(([label, subject], i) =>
+      recordDecision(decisionRecord(sid, i + 1, { objectSummary: label, subject }))
+    )
+    const targetsNow = async (): Promise<string[]> =>
+      (await buildPermissionRequestPayload(makeEvent(sid))).recentOperations.map((op) => op.target)
+
+    expect(await targetsNow()).toStrictEqual([
+      'bash: titler',
+      'bash: root-namesake',
+      'bash: mine',
+      'bash: user'
+    ])
+    mocks.agentsBoundTo.mockReturnValue(new Set(['permission-reviewer', 'my-reviewer']))
+    expect(await targetsNow()).toStrictEqual(['bash: titler', 'bash: root-namesake', 'bash: user'])
+  })
+
+  it('PR-18e 这一次调用的两条记录（同一次调用里先读后写）加 12 条别的：仍得到 10 条 —— 先排除再取', async () => {
+    const sid = newSession()
+    for (let n = 1; n <= 12; n++) recordDecision(decisionRecord(sid, n))
+    recordDecision(
+      decisionRecord(sid, 13, {
+        toolCallId: 'tc-current',
+        toolName: 'read',
+        action: 'read',
+        objectKind: 'path',
+        objectSummary: `${WS}/a.txt`,
+        effect: 'allow'
+      })
+    )
+    recordDecision(
+      decisionRecord(sid, 14, {
+        toolCallId: 'tc-current',
+        toolName: 'write',
+        action: 'write',
+        objectKind: 'path',
+        objectSummary: `${WS}/a.txt`
+      })
+    )
+    const payload = await buildPermissionRequestPayload(
+      makeEvent(sid, { toolCallId: 'tc-current' })
+    )
+    expect(payload.recentOperations.map((op) => op.target)).toStrictEqual(
+      Array.from({ length: 10 }, (_, i) => `bash: echo ${i + 3}`)
+    )
+  })
 })
 
 // ─── main/index.ts 的注入 ───────────────────────────────
@@ -1515,10 +1667,14 @@ describe('PR-W1 —— main/index.ts 把审查者注入 toolContext', () => {
     return undefined
   }
 
+  /** 注入的两个参数，按次序：审查接缝本身，和「认审查员」的判断 */
+  const INJECTED = ['reviewPermissionRequest', 'isReviewerIdentity'] as const
+
   /**
-   * 注入合规时回 []：恰一处 `setPermissionReviewer(…)`，参数就是标识符 `reviewPermissionRequest`，
-   * 且与它同一段代码里、排在它前面的某一句里调用了 `hookService.init()`。用语法树而不是正则 ——
-   * 注释里的字样不算调用。
+   * 注入合规时回 []：恰一处 `setPermissionReviewer(…)`，参数恰为标识符 `reviewPermissionRequest` 与
+   * `isReviewerIdentity`（漏了第二个 = 谁都不是审查员，审查员的读取又会弹卡问人；内联箭头函数也不认 ——
+   * 判断只在 permissionReview 里写一处），且与它同一段代码里、排在它前面的某一句里调用了
+   * `hookService.init()`。用语法树而不是正则 —— 注释里的字样不算调用。
    */
   function injectionProblems(source: string): string[] {
     const sf = parse(source)
@@ -1529,13 +1685,9 @@ describe('PR-W1 —— main/index.ts 把审查者注入 toolContext', () => {
     }
     const [inject] = injections
     const problems: string[] = []
-    const [arg] = inject.arguments
-    if (
-      inject.arguments.length !== 1 ||
-      !ts.isIdentifier(arg) ||
-      arg.text !== 'reviewPermissionRequest'
-    ) {
-      problems.push(`参数应是 reviewPermissionRequest：${inject.getText(sf)}`)
+    const args = inject.arguments.map((arg) => (ts.isIdentifier(arg) ? arg.text : undefined))
+    if (args.length !== INJECTED.length || args.some((arg, i) => arg !== INJECTED[i])) {
+      problems.push(`参数应是 ${INJECTED.join(', ')}：${inject.getText(sf)}`)
     }
     let statement: ts.Node = inject
     while (!ts.isBlock(statement.parent) && !ts.isSourceFile(statement.parent)) {
@@ -1551,39 +1703,58 @@ describe('PR-W1 —— main/index.ts 把审查者注入 toolContext', () => {
     return problems
   }
 
-  it('PR-W1 扫描器自检：合规的写法回 []；注释、顺序颠倒、两处、参数不对、不在同一段代码里都报出来', () => {
+  it('PR-W1 扫描器自检：合规的写法回 []；注释、顺序颠倒、两处、参数不对、漏了 / 换掉认审查员的判断、不在同一段代码里都报出来', () => {
+    const OK = 'setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity)'
     expect(
       injectionProblems(
         [
           'app.whenReady().then(() => {',
           "  measure('hookService.init', () => hookService.init())",
-          '  setPermissionReviewer(reviewPermissionRequest)',
+          `  ${OK}`,
           '})'
         ].join('\n')
       )
     ).toStrictEqual([])
-    expect(
-      injectionProblems('hookService.init()\n// setPermissionReviewer(reviewPermissionRequest)')
-    ).not.toStrictEqual([])
-    expect(
-      injectionProblems('setPermissionReviewer(reviewPermissionRequest)\nhookService.init()')
-    ).not.toStrictEqual([])
-    expect(
-      injectionProblems(
-        'hookService.init()\nsetPermissionReviewer(reviewPermissionRequest)\nsetPermissionReviewer(reviewPermissionRequest)'
-      )
-    ).not.toStrictEqual([])
+    expect(injectionProblems(`hookService.init()\n// ${OK}`)).not.toStrictEqual([])
+    expect(injectionProblems(`${OK}\nhookService.init()`)).not.toStrictEqual([])
+    expect(injectionProblems(`hookService.init()\n${OK}\n${OK}`)).not.toStrictEqual([])
     expect(injectionProblems('hookService.init()\nsetPermissionReviewer(null)')).not.toStrictEqual(
       []
     )
     expect(
-      injectionProblems(
-        'hookService.init()\nfunction later(): void {\n  setPermissionReviewer(reviewPermissionRequest)\n}'
-      )
+      injectionProblems(`hookService.init()\nfunction later(): void {\n  ${OK}\n}`)
     ).not.toStrictEqual([])
+    // 第二个参数：漏了（= 谁都不是审查员）、写成谁都不认的箭头函数、内联一份判断、两个参数颠倒、多一个
+    for (const bad of [
+      'setPermissionReviewer(reviewPermissionRequest)',
+      'setPermissionReviewer(reviewPermissionRequest, () => false)',
+      'setPermissionReviewer(reviewPermissionRequest, (agent) => isReviewerAgent(agent.profileName, agent.kind))',
+      'setPermissionReviewer(isReviewerIdentity, reviewPermissionRequest)',
+      'setPermissionReviewer(reviewPermissionRequest, isReviewerAgent)',
+      'setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity, extra)'
+    ]) {
+      expect(injectionProblems(`hookService.init()\n${bad}`), bad).not.toStrictEqual([])
+    }
   })
 
-  it('PR-W1 main/index.ts 恰一处 setPermissionReviewer(reviewPermissionRequest)，位于 hookService.init() 之后', () => {
-    expect(injectionProblems(readFileSync(INDEX_TS, 'utf8'))).toStrictEqual([])
+  it('PR-W1 main/index.ts 恰一处 setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity)，位于 hookService.init() 之后；两个名字都从 ./services/permissionReview 导入', () => {
+    const source = readFileSync(INDEX_TS, 'utf8')
+    expect(injectionProblems(source)).toStrictEqual([])
+    const imported = new Set<string>()
+    for (const statement of parse(source).statements) {
+      if (
+        !ts.isImportDeclaration(statement) ||
+        !ts.isStringLiteral(statement.moduleSpecifier) ||
+        statement.moduleSpecifier.text !== './services/permissionReview'
+      ) {
+        continue
+      }
+      const bindings = statement.importClause?.namedBindings
+      if (bindings && ts.isNamedImports(bindings)) {
+        // 不认改名导入（`x as isReviewerIdentity`）：注入的必须就是那个导出
+        for (const el of bindings.elements) if (!el.propertyName) imported.add(el.name.text)
+      }
+    }
+    for (const name of INJECTED) expect([...imported], name).toContain(name)
   })
 })

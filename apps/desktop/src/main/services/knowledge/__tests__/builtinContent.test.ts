@@ -508,4 +508,82 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     expect(agent, `${lang}/agent-md.md`).toContain(locale.notebook.frontmatter.metaTitle)
     expect(agent, `${lang}/agent-md.md`).not.toMatch(/\bstrip\b|new id/i)
   })
+  /**
+   * BK-23 / BK-24 / BK-25 —— 权限审查员能 `read` 了（2026-10-12）：它读文件是为了判断被运行的脚本，它的读取
+   * 从不问人（会询问的一律拒绝）。说明书抄着这两件事：hook-md「内置 hook」那段写审查员的工具清单，
+   * `permission.request` 那节写判定型 hook 派出的 agent 的询问怎么处置；policy-md 讲自动审查时不再指向已删掉的
+   * 设置项（设置 → 通用 → 安全，2026-10-08 删）。正文会折行：比对前把换行折掉（en 折成空格，zh / ja 直接拼上）。
+   */
+  const flat = (text: string): string => text.replace(/\s*\n\s*/g, lang === 'en' ? ' ' : '')
+  /** 「审查员没有工具」的旧说法 */
+  const NO_TOOLS: Record<string, string> = { en: 'no tools', zh: '没有工具', ja: 'ツールを持たず' }
+  /** 指认「判定型 hook 派出的 agent」的说法、它「从不问人」、它的操作「被拒绝」、旧的「交给用户」 */
+  const DECIDE_AGENT: Record<
+    string,
+    { who: string; never: string; refused: string; stale: string }
+  > = {
+    en: {
+      who: 'agent dispatched by a decide hook',
+      never: 'never asks anyone',
+      refused: 'is refused',
+      stale: 'straight to the user'
+    },
+    zh: {
+      who: '判定型 hook 派出的 agent',
+      never: '从不询问任何人',
+      refused: '拒绝',
+      stale: '直接交给用户'
+    },
+    ja: {
+      who: '判定型 hook が派遣したエージェント',
+      never: '誰にも確認を求めません',
+      refused: '拒否',
+      stale: 'そのままユーザーに渡る'
+    }
+  }
+
+  it('BK-23 hook-md.md 讲 auto-review 的那段：反引号圈出的内置工具名（按集合）= 内置 permission-reviewer 档案的工具；不再说它没有工具', () => {
+    const reviewer = profilesOf().find((p) => p.name === 'permission-reviewer')
+    expect(reviewer, `permission-reviewer.${lang} 应当存在`).toBeDefined()
+    expect(reviewer!.tools, '语料自检：审查员声明了工具').not.toEqual([])
+    const withBoth = paragraphs(conceptOf('hook-md.md').body).filter(
+      (p) => p.includes('`permission-reviewer`') && p.includes('`auto-review`')
+    )
+    expect(withBoth, '应当恰有一段同时点名 auto-review 与 permission-reviewer').toHaveLength(1)
+    const named = [...withBoth[0].matchAll(/`([^`]+)`/g)]
+      .map((m) => m[1])
+      .filter((token) => BUILTIN_TOOL_NAMES.includes(token))
+    expect([...new Set(named)].sort()).toEqual([...new Set(reviewer!.tools)].sort())
+    expect(flat(withBoth[0])).not.toContain(NO_TOOLS[lang])
+  })
+
+  it('BK-24 hook-md.md 的 `permission.request` 一节：判定型 hook 派出的 agent 的询问被拒绝、谁都不问，不再说交给用户', () => {
+    const body = conceptOf('hook-md.md').body
+    const start = body.indexOf('## `permission.request`')
+    expect(start, '找不到 `permission.request` 一节').toBeGreaterThanOrEqual(0)
+    const rest = body.slice(start + 3)
+    const end = rest.search(/^## /m)
+    const section = end < 0 ? rest : rest.slice(0, end)
+    const phrases = DECIDE_AGENT[lang]
+    const hits = paragraphs(section)
+      .map(flat)
+      .filter((p) => p.includes(phrases.who))
+    expect(hits, `应当恰有一段讲「${phrases.who}」`).toHaveLength(1)
+    // 从点名它的地方起往后读（同段前面讲 deny 的那句也有「拒绝」，不算）
+    const tail = hits[0].slice(hits[0].indexOf(phrases.who))
+    expect(tail).toContain(phrases.never)
+    expect(tail).toContain(phrases.refused)
+    // 旧说法「它自己的询问交给用户」（同一节别处讲「连续被拒之后交给用户」的那条不算）
+    expect(tail).not.toContain(phrases.stale)
+  })
+
+  it('BK-25 policy-md.md 讲自动审查：不再指向已删掉的「设置 → 通用 → 安全」，说的是停用内置 hook auto-review', () => {
+    const body = flat(conceptOf('policy-md.md').body)
+    const removed = { en: 'General → Security', zh: '通用 → 安全', ja: '一般 → セキュリティ' }[
+      lang as 'en' | 'zh' | 'ja'
+    ]
+    expect(removed, lang).toBeDefined()
+    expect(body).not.toContain(removed)
+    expect(body).toContain('`auto-review`')
+  })
 })

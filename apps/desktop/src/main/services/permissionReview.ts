@@ -18,6 +18,11 @@
  * delegatedTasks（只是声明，不是授权）；子会话里人对 ask 的回答与卡片反馈照样算人写的。已知的粗糙处：
  * 人直接在子会话里打的字也被当成父 agent 的转述（会话树上没有来源标记）—— 方向是更保守（多问）。
  *
+ * 审查员可以 `read`（它常要看一眼被运行的脚本），但它自己的工具调用**从不问人**：会询问的读取直接拒绝
+ * （toolContext 给它的安全上下文不接询问通道，按 fail-closed 拒绝），所以它能读的不超过被审 agent 本来
+ * 不问就能读的范围；它的读取也不进 recentOperations（那是被审 agent 做过的事）。三处用同一个判断
+ * `isReviewerAgent`。
+ *
  * 由 main 启动时经 `setPermissionReviewer` 注入 toolContext（直接 import 会经 hookService →
  * AgentManager → agentHost 绕回 toolContext）。
  */
@@ -156,13 +161,42 @@ function outcomeOf(record: SecurityDecisionRecord): string {
   return record.effect === 'allow' ? 'allowed' : record.effect
 }
 
+/**
+ * 是不是判定型 hook 派出的审查 agent：以派生身份运行、档案绑在 `permission.request` 上（内置的
+ * permission-reviewer，或用户 hook 绑的别的档案）。防递归、不进 recentOperations、它的工具调用不问人
+ * —— 三处都用这一个判断，名单每次现取（hook 文件随时可能变）。
+ */
+export function isReviewerAgent(
+  profileName: string | undefined,
+  agentKind: 'root' | 'spawned' | undefined,
+  reviewers?: ReadonlySet<string>
+): boolean {
+  // 根 agent 先排除：每次工具调用都会问到这里，不为它去扫 hook 目录
+  if (agentKind !== 'spawned' || !profileName) return false
+  return (reviewers ?? hookService.agentsBoundTo('permission.request')).has(profileName)
+}
+
+/** 同一个判断，收工具调用方的身份（toolContext 注入用：main 直接把它交给 setPermissionReviewer） */
+export function isReviewerIdentity(agent: {
+  profileName: string
+  kind: 'root' | 'spawned'
+}): boolean {
+  return isReviewerAgent(agent.profileName, agent.kind)
+}
+
 /** 本会话最近判定过的操作（旧 → 新），不含这一次 */
 function recentOperationsOf(
   sessionId: string,
   toolCallId: string
 ): PermissionRequestPayload['recentOperations'] {
-  return getSessionDecisions(sessionId, RECENT_OPERATIONS + 1)
-    .filter((record) => record.toolCallId !== toolCallId)
+  // 审查员自己的读取不算被审 agent 做过的事：先滤掉再取最近几条，免得它们挤掉真正的操作
+  const reviewers = hookService.agentsBoundTo('permission.request')
+  return getSessionDecisions(sessionId)
+    .filter(
+      (record) =>
+        record.toolCallId !== toolCallId &&
+        !isReviewerAgent(record.subject.profileName, record.subject.agentKind, reviewers)
+    )
     .slice(0, RECENT_OPERATIONS)
     .reverse()
     .map((record) => ({
@@ -307,16 +341,11 @@ export async function reviewPermissionRequest(
 ): Promise<PermissionReviewAnswer | null> {
   const subject = event.request.subject
   if (subject.kind !== 'agent') return null
-  const reviewers = hookService.agentsBoundTo('permission.request')
   // 防递归：判定型 hook 派出的 agent 自己要权限，不再交给审查 —— 否则审查员的一次询问会再派一个
-  // 审查员（它挂在根会话下，深度校验拦不住），一路派下去
-  if (
-    subject.agentKind === 'spawned' &&
-    subject.profileName &&
-    reviewers.has(subject.profileName)
-  ) {
-    return null
-  }
+  // 审查员（它挂在根会话下，深度校验拦不住），一路派下去。它的询问也不会到人面前：它的安全上下文
+  // 不接询问通道（toolContext），这里交回 null 之后按 fail-closed 拒绝
+  if (isReviewerAgent(subject.profileName, subject.agentKind)) return null
+  const reviewers = hookService.agentsBoundTo('permission.request')
   // 没有 hook 绑在这个埋点上就不会有审查：也就不报「审查中」，免得卡片闪一下
   const announce = reviewers.size > 0 && !!event.toolCallId
   if (announce) notifyReviewing(subject.sessionId, event.toolCallId, event.taskId, true)

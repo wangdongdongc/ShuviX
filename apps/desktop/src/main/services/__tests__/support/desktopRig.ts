@@ -312,7 +312,8 @@ export function defaultProfiles(): Record<string, Record<string, unknown>> {
     explore: profile('explore', ['probe']),
     coding: profile('coding', ['session', 'probe']),
     titler: profile('titler', ['session'], { thinkingLevel: 'off', displayName: 'Titler' }),
-    'permission-reviewer': profile('permission-reviewer', [], {
+    // 与内置 md 一样只声明 read（这里没注册 read，解析时静默略过 —— 请求的工具仍只有结果契约的 next）
+    'permission-reviewer': profile('permission-reviewer', ['read'], {
       displayName: 'Permission Reviewer'
     })
   }
@@ -520,7 +521,10 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
 
   // main/index.ts 的启动接线：hook runner、询问点的自动审查、内置 MCP 的调用方解析器
   hookService.init()
-  toolContext.setPermissionReviewer(permissionReview.reviewPermissionRequest)
+  toolContext.setPermissionReviewer(
+    permissionReview.reviewPermissionRequest,
+    permissionReview.isReviewerIdentity
+  )
   setBuiltinMcpAgentResolver(sessionHostModule.sessionAgentResolver())
 
   const toolHostCalls: ToolHostCalls = { resolve: [], rebuild: [] }

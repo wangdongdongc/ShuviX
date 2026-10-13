@@ -792,3 +792,116 @@ describe('桌面安全 provider — 内置安全策略的停用开关（isPolicy
     expect(asks[1]).toMatchObject({ kind: 'ask', id: 'd2-cmd-again' })
   })
 })
+
+/**
+ * PERM-RV —— 权限审查员能读的，恰是被审 agent 不问就能读的。审查员（判定型 hook 派出的派生 agent）的
+ * 调用拿不到询问通道（toolContext 按注入的判断去掉 onPermissionRequest 与 requestUserInput），于是判出
+ * ask 的读取一律按 fail-closed 拒绝；判出 allow 的照常放行。这里用真实的会话目录计算（工作区、本会话
+ * artifacts、勾选的知识库、只读的技能目录、「允许并记住」）把这条等价钉住：对清单里每一个路径，审查员的
+ * enforcePath('read') 放行 ⇔ 同一会话的 evaluate('read') 是 allow。
+ */
+describe('桌面安全 provider — 权限审查员的读取不问人（只读得到不问就能读的）', () => {
+  const REVIEWER = { profileName: 'permission-reviewer', kind: 'spawned' as const }
+  const ROOT = { profileName: 'work', kind: 'root' as const }
+  const isRev = (agent: { profileName: string; kind: 'root' | 'spawned' }): boolean =>
+    agent.kind === 'spawned' && agent.profileName === 'permission-reviewer'
+  const KB = join(homedir(), '.shuvix', 'knowledge', 'shuvix-policy-rv-kb')
+  const SKILLS_HOME = join(homedir(), '.shuvix', 'skills')
+  const ART = join(homedir(), '.shuvix', 'artifacts')
+  const HOME_FILE = join(HOME_PLACE, 'rv', 'run.sh')
+  const sessions: string[] = []
+
+  const PATHS = [
+    join(WORKSPACE, 'scripts', 'build.sh'),
+    join(ART, 's1', 'x'),
+    join(ART, 's2', 'x'),
+    join(BUILTIN_SKILLS, 'drawing', 'SKILL.md'),
+    join(SKILLS_HOME, 'demo', 'SKILL.md'),
+    join(KB, 'notes', 'entry.md'),
+    HOME_FILE,
+    join(OUTSIDE, 'run.sh')
+  ]
+  /** 三种授权状态：没有、Read(HOME_PLACE)、Write(HOME_PLACE)（写授权覆盖读） */
+  const GRANTS: Array<[string, string[] | undefined]> = [
+    ['no grant', undefined],
+    ['Read grant', [`Read(${HOME_PLACE})`]],
+    ['Write grant', [`Write(${HOME_PLACE})`]]
+  ]
+
+  beforeEach(() => {
+    state.knowledgeTargets = [{ name: 'shuvix-policy-rv-kb', target: { dir: KB } }]
+    state.skillRoots = [SKILLS_HOME]
+  })
+
+  afterEach(() => {
+    for (const id of sessions.splice(0)) {
+      clearReviewState(id)
+      clearSessionDecisions(id)
+    }
+  })
+
+  /** 按身份走一遍清单：每个路径 → [evaluate 的 effect, enforcePath 放没放行, 弹没弹卡] */
+  async function sweep(
+    agent: typeof REVIEWER | typeof ROOT,
+    label: string
+  ): Promise<Array<{ path: string; effect: SecurityEffect; passed: boolean; carded: boolean }>> {
+    const reviewer = vi.fn(async (): Promise<PermissionReviewAnswer | null> => null)
+    setPermissionReviewer(reviewer, isRev)
+    const requestUserInput = vi.fn(async () => ({ kind: 'ask' as const, allowed: true }))
+    sessions.push('s1')
+    const ctx = getDesktopSecurityContext(
+      { sessionId: 's1', agent, requestUserInput },
+      () => config
+    )
+    const rows: Array<{ path: string; effect: SecurityEffect; passed: boolean; carded: boolean }> =
+      []
+    for (const [i, path] of PATHS.entries()) {
+      const effect = effectOf(context('s1'), 'read', path)
+      const cards = requestUserInput.mock.calls.length
+      const passed = await ctx
+        .enforcePath('read', path, { toolCallId: `${label}-${i}`, toolName: 'read' })
+        .then(
+          () => true,
+          (err: Error) => {
+            expect(err.message, path).toMatch(/no way to ask/)
+            return false
+          }
+        )
+      rows.push({ path, effect, passed, carded: requestUserInput.mock.calls.length > cards })
+    }
+    if (agent === REVIEWER) expect(reviewer).not.toHaveBeenCalled()
+    return rows
+  }
+
+  it.each(GRANTS)(
+    'PERM-RV1 (%s) 审查员的 enforcePath(read) 放行 ⇔ evaluate(read) 是 allow；拒绝的从不弹卡',
+    async (label, allowList) => {
+      state.settings = allowList ? { allowList } : undefined
+      const rows = await sweep(REVIEWER, `rv1-${label}`)
+      for (const row of rows) {
+        expect({ path: row.path, passed: row.passed, carded: row.carded }).toEqual({
+          path: row.path,
+          passed: row.effect === 'allow',
+          carded: false
+        })
+      }
+      // 自检：清单两边都有（否则等价是空话）—— 没有授权时家目录那一处与别的会话的 artifacts 要问
+      expect(rows.some((row) => row.effect === 'allow')).toBe(true)
+      const refused = rows.filter((row) => !row.passed).map((row) => row.path)
+      expect(refused).toEqual(
+        allowList ? [join(ART, 's2', 'x')] : [join(ART, 's2', 'x'), HOME_FILE]
+      )
+    }
+  )
+
+  it.each(GRANTS)(
+    'PERM-RV2 (%s) 同一份清单换成根 agent：恰在审查员被拒的地方弹卡，其余照样不问',
+    async (label, allowList) => {
+      state.settings = allowList ? { allowList } : undefined
+      const reviewerRows = await sweep(REVIEWER, `rv2r-${label}`)
+      const rootRows = await sweep(ROOT, `rv2-${label}`)
+      expect(rootRows.map((row) => row.passed)).toEqual(PATHS.map(() => true))
+      expect(rootRows.map((row) => row.carded)).toEqual(reviewerRows.map((row) => !row.passed))
+    }
+  )
+})

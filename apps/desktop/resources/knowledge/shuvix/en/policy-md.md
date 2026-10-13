@@ -32,9 +32,9 @@ really confined as the command's `sandboxed` attribute, and the builtin policies
 confined command runs without asking, an unconfined one — sandbox off, not available, the agent
 asking for full access, every `ssh` command — asks, and then runs with the user's full privileges.
 
-An `ask` does not go to the user straight away. With **automatic review** on (Settings → General →
-Security, on by default), a reviewing agent answers it first, in a fresh context that sees only what the
-user wrote and the operation itself: it lets ordinary work through, refuses what is clearly
+An `ask` does not go to the user straight away. Unless you disable the builtin hook `auto-review` (it is on by
+default), a reviewing agent answers it first, in a fresh context that sees what the user wrote, the
+operation itself and, when it needs to, the files the operation runs: it lets ordinary work through, refuses what is clearly
 harmful, and puts the rest in front of the user with its opinion on the card. The reviewer is
 a filter, not a boundary — the sandbox is, and so is any `deny` rule you write. `force-ask` always
 goes to the user. The reviewer is the builtin hook `auto-review` and the agent `permission-reviewer`; see the

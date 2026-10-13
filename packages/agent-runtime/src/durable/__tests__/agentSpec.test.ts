@@ -162,16 +162,16 @@ describe('normalizeToolNames —— 工具名单归一（TN）', () => {
 })
 
 /**
- * 内置权限审查员（permission-reviewer）走同一张决策表 —— 它的「什么都不要」全由档案表达，这里验的是
- * 决策表照办：工具名单为空、档位按档案压到 low。
+ * 内置权限审查员（permission-reviewer）走同一张决策表 —— 它要什么全由档案表达（只要 `read`，好在判断
+ * 运行脚本的命令前看一眼脚本），这里验的是决策表照办：工具名单恰为 ['read']、档位按档案压到 low。
  */
 describe('决策表 —— 内置权限审查员（permission-reviewer）', () => {
-  it('PRV-C1 内置 md → toInProcessAgentType → spawned：名单为空；派发方 high → 运行时 low', () => {
+  it("PRV-C1 内置 md → toInProcessAgentType → spawned：名单恰为 ['read']；派发方 high → 运行时 low", () => {
     const built = buildBuiltinProfile(PERMISSION_REVIEWER_SPEC, { readMd: createInlineMdReader() })
     expect(built).not.toBeNull()
     const profile = toInProcessAgentType(built!)
 
-    expect(normalizeToolNames('spawned', profile.tools, undefined)).toEqual([])
+    expect(normalizeToolNames('spawned', profile.tools, undefined)).toEqual(['read'])
     // 档案的 shuvix-thinking: low 压过派发方的 high
     expect(resolveThinkingLevel('spawned', profile, 'high')).toBe('low')
   })

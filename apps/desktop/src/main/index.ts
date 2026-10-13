@@ -72,7 +72,7 @@ import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
 import { policyService } from './services/policyService'
 import { runLegacySwitchover } from './services/legacySwitchover'
-import { reviewPermissionRequest } from './services/permissionReview'
+import { isReviewerIdentity, reviewPermissionRequest } from './services/permissionReview'
 import { setCommandClassifier, setPermissionReviewer } from './services/toolContext'
 import { commandClassifier } from './services/commandClassifier'
 import { installLlmNetwork } from './services/models'
@@ -800,7 +800,7 @@ app.whenReady().then(async () => {
   // 装配 hook runner（业务埋点在此之前的 fire 静默丢弃）
   measure('hookService.init', () => hookService.init())
   // 询问点的自动审查：安全模块的 onPermissionRequest 经判定型 hook 回答（注入而非 import —— 见 toolContext）
-  setPermissionReviewer(reviewPermissionRequest)
+  setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity)
   // 命令风险分类：同样注入（它要模型注册表）；每次分类记一行分类器日志
   setCommandClassifier((input, opts) => commandClassifier.classify(input, opts))
   // 内置 MCP 服务器按 `_meta` 里的对话认调用方（安全主体）：同样注入而非 import（见 mcpService）

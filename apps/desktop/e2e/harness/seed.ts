@@ -1228,8 +1228,9 @@ export function securityDecisions(app: Pick<E2EApp, 'mainLog'>): SecurityDecisio
 //
 // 审查是会话当前模型上的**一次派生 agent 运行** —— 在 e2e 里它就是又一个发往假提供商的请求，
 // 与主 agent 的请求交错到达，所以两边的脚本都要按内容认领（`when`），FIFO 必然错位。
-// 认它靠工具表：审查员的档案不带任何工具，派发时带的结果契约给它附上 `next` —— 请求里的工具
-// 恰为 `['next']`；任何会话的 agent 都不会只有这一个工具。
+// 认它靠工具表：审查员的档案只声明 `read`（判断运行脚本的命令前看一眼脚本），派发时带的结果契约
+// 再给它附上 `next` —— 请求里的工具恰为 `read` + `next`；任何会话的 agent 都不会恰好只有这两个
+// （手里有 `next` 的只有判定型 hook 派出的 agent）。
 
 /** 审查员的输入（事件围栏的 YAML）与它交回的判决 —— 契约类型，原样转出给 spec 用 */
 export type { PermissionRequestPayload, PermissionVerdict }
@@ -1241,10 +1242,15 @@ export function requestToolNames(req: FakeRequest): string[] {
   )
 }
 
-/** 这是一次审查请求（工具恰为结果契约工具 `next` 一个）—— 给假提供商脚本的 `when` 用 */
+/** 内置审查员请求里的工具（按名排序）：档案的 `read` + 结果契约的 `next` */
+const REVIEWER_TOOLS = ['next', 'read']
+
+/** 这是一次审查请求（工具恰为 `read` 与结果契约工具 `next`，不计次序）—— 给假提供商脚本的 `when` 用 */
 export function isReviewerRequest(req: FakeRequest): boolean {
-  const names = requestToolNames(req)
-  return names.length === 1 && names[0] === 'next'
+  const names = [...requestToolNames(req)].sort()
+  return (
+    names.length === REVIEWER_TOOLS.length && names.every((name, i) => name === REVIEWER_TOOLS[i])
+  )
 }
 
 /** 请求的系统提示词（openai-completions 按模型能力发成 system 或 developer 角色） */
@@ -1264,7 +1270,8 @@ let reviewerCallSeq = 0
 
 /**
  * 审查员的一轮脚本：认领一次审查请求（缺省 `isReviewerRequest`，`when` 可再收窄），调一次 `next`，
- * 参数就是判决 JSON。`next` 带 terminate —— 这一轮就是审查 run 的最后一步，不会再有第二个请求。
+ * 参数就是判决 JSON。`next` 带 terminate —— 这一轮就是审查 run 的最后一步，之后不会再有请求
+ * （审查员先 `read` 再交卷的用例，`read` 那一轮自己写，见 E2E-R12）。
  * `holdMs` 让这一轮挂在收尾之前（审查途中停止的用例用）。
  */
 export function reviewerTurn(

@@ -632,9 +632,11 @@ describe('titler 档案钉板（auto-title 的执行侧）', () => {
  * permission-reviewer 档案钉板 —— 询问点自动审查的执行侧（docs/permission-review-design.md）：
  * 内置判定型 hook `auto-review` 在策略判出 ask、弹卡之前派发它，它经 `next` 交回判决。
  *
- * 它的全部输入就是那次操作的事件（payload 以 YAML 附在任务末尾），所以结构上什么都不要：没有工具
- * （只有结果契约附带的 `next`）、没有指令文件与项目注入、不思考。正文就是审查规则本身 —— 它点名的
- * payload 键与判决字段必须真实存在，否则审查员读的是一份不存在的事件、交的是一份不合格的判决。
+ * 它的输入是那次操作的事件（payload 以 YAML 附在任务末尾），外加一件工具 `read`（判断运行脚本的命令前
+ * 先看一眼脚本；它的读取从不问人 —— 会询问的读取由桌面 toolContext 按 fail-closed 拒绝）。除此之外结构上
+ * 什么都不要：结论经结果契约附带的 `next` 交回、没有指令文件与项目注入、thinking 压到 low。正文就是审查
+ * 规则本身 —— 它点名的 payload 键与判决字段必须真实存在，否则审查员读的是一份不存在的事件、交的是一份
+ * 不合格的判决。
  * 「auto-review 派的就是它」由 hook/__tests__/builtinHooks.test.ts 的 HB-10 / HB-11 钉住
  * （三语的 `shuvix-hook-agent` 都是 'permission-reviewer'，PRV-1 把常量钉在同一个字面量上）。
  */
@@ -679,7 +681,7 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
     return built!
   }
 
-  it('PRV-1 三语结构钉板：工具为空、不吃指令文件、项目感知关、thinkingLevel low、不声明模型；名字即常量；不依赖任何宿主参数', () => {
+  it("PRV-1 三语结构钉板：工具恰为 ['read']、不吃指令文件、项目感知关、thinkingLevel low、不声明模型；名字即常量；不依赖任何宿主参数", () => {
     expect(PERMISSION_REVIEWER_PROFILE_NAME).toBe('permission-reviewer')
     expect(PERMISSION_REVIEWER_SPEC.name).toBe(PERMISSION_REVIEWER_PROFILE_NAME)
     // 零参数也建得出来 —— 它不点名宿主的任何目录
@@ -688,8 +690,8 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
     for (const language of LANGS) {
       const built = reviewerOf(language)
       expect(built.name, language).toBe(PERMISSION_REVIEWER_PROFILE_NAME)
-      // 一件工具都没有：结论只经结果契约附带的 `next` 交回，读不了文件、跑不了命令
-      expect(built.tools, language).toEqual([])
+      // 只有 `read`：能看一眼被运行的脚本，跑不了命令、写不了文件；结论经结果契约附带的 `next` 交回
+      expect(built.tools, language).toEqual(['read'])
       expect(built.instructionFiles, language).toEqual([])
       expect(built.projectAwareness, language).toBe(false)
       expect(built.thinkingLevel, language).toBe('low')
@@ -748,6 +750,24 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
       const body = reviewerOf(language).systemPrompt
       expect(body, language).not.toContain('{{')
       expect(body, language).not.toContain('}}')
+    }
+  })
+
+  it('PRV-5 三语正文点名档案声明的每一件工具；「事件就是你拿到的全部」的旧说法已不在（它还能 read）', () => {
+    /** 能读文件之前的说法：事件是它拿到的全部信息 —— 现在不成立了 */
+    const STALE = {
+      en: 'is everything you get',
+      zh: '就是你拿到的全部信息',
+      ja: '受け取る情報のすべて'
+    }
+    expect(Object.keys(STALE).sort()).toEqual([...LANGS].sort())
+    for (const language of LANGS) {
+      const built = reviewerOf(language)
+      expect(built.tools.length, `${language} 自检：确实声明了工具`).toBeGreaterThan(0)
+      for (const tool of built.tools) {
+        expect(built.systemPrompt, `${language} 需点名 \`${tool}\``).toContain(`\`${tool}\``)
+      }
+      expect(built.systemPrompt, language).not.toContain(STALE[language as keyof typeof STALE])
     }
   })
 })

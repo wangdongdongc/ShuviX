@@ -106,12 +106,13 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
         dispatch: 'hook',
         hook: 'auto-review',
         profileName: 'permission-reviewer',
-        toolNames: ['next']
+        // 档案的 `read` 加结果契约附带的 `next`
+        toolNames: ['read', 'next']
       })
       expect(record.resultContract?.schema).toEqual(PERMISSION_VERDICT_SCHEMA)
 
       const [request] = world.model.laneRequests('reviewer')
-      expect(request!.tools).toEqual(['next'])
+      expect(request!.tools).toEqual(['read', 'next'])
       expect(request!.reasoning).toBe('low')
       expect(request!.modelId).toBe('faux-1')
       const lastUser = textOf([...request!.messages].reverse().find((m) => m.role === 'user'))
@@ -268,6 +269,57 @@ describe('P2-11 · J7 reviewer owner edge and cascade', () => {
         )
       ).toHaveLength(1)
       await sleep(0)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'J7-06 the builtin reviewer reads the file before deciding: two reviewer steps (read, then next), the write runs once with no card and no nudge',
+    async () => {
+      const { sw, session } = await reviewWorld()
+      const { world } = sw
+      const SENTINEL = 'SENTINEL-J7-06: touch /ws/marker'
+      world.fs.files.set('/ws/run.sh', SENTINEL)
+      world.chat(callTool('write', WRITE_ARGS, 'r-w'), answer('saved'))
+      world.model.chatIn(
+        'reviewer',
+        callTool('read', { path: '/ws/run.sh' }, 'v-read'),
+        callTool('next', V_ALLOW, 'v-next')
+      )
+      expect(await withTimeout(session.submitUser('save'), 8000, 'save')).toEqual({})
+
+      const requests = world.model.laneRequests('reviewer')
+      expect(requests).toHaveLength(2)
+      // 第一步之前还没读过；第二步的上下文里带着 read 的结果（文件原文）
+      expect(textOf(requests[0]!.messages.find((m) => m.role === 'toolResult'))).toBe('')
+      const readResult = requests[1]!.messages.find((m) => m.role === 'toolResult')
+      expect(readResult).toMatchObject({ role: 'toolResult', toolName: 'read', isError: false })
+      expect(textOf(readResult)).toContain(SENTINEL)
+      expect(world.fs.reads).toContain('/ws/run.sh')
+
+      expect(world.t.asksOf('input_request')).toEqual([])
+      expect(session.pendingInputCount).toBe(0)
+      expect(world.fs.writesTo('/ws/out.txt')).toBe(1)
+      expect(fate((await toolTaskOf(session, 1, 'r-w')) as never)).toBe('completed')
+
+      const T_w = await toolTaskOf(session, 1, 'r-w')
+      const owned = await ownedBy(session, T_w.id)
+      expect(owned).toHaveLength(1)
+      const R = owned[0]!
+      const lines = await transcriptOf(session, R)
+      // 没被催过：两步之间只有 read 的结果，没有 nudge 用户消息
+      expect(lines.filter((line) => line.startsWith('pi.user:'))).toHaveLength(1)
+      expect(lines.join('\n')).not.toContain(NEXT_NUDGE_TEXT)
+      expect(lines.map((line) => line.slice(0, line.indexOf(':')))).toEqual([
+        'pi.user',
+        'pi.assistant',
+        'pi.tool-result',
+        'pi.assistant',
+        'pi.tool-result'
+      ])
+      expect(sw.ends('auto-review')).toEqual([expect.objectContaining({ ok: true })])
+      await waitFor(async () => (await liveTasks(session)).length === 0, 2000, 'no live tasks')
+      for (const task of await tasksIn(session, R)) expect(task.state.status).toBe('terminal')
     },
     TIMEOUT
   )

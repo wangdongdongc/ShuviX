@@ -35,6 +35,7 @@
  */
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const tc = vi.hoisted(() => ({
@@ -852,6 +853,69 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
     expect(reviewer).not.toHaveBeenCalled()
   })
 
+  // ─── 各工具族的一次 enforce（H11-53 / P2-06-17 / TC-RVR4 共用）───
+
+  const ALWAYS_ASK = [
+    '---',
+    'shuvix: policy v1',
+    'name: h11-always-ask',
+    'description: Every agent operation asks (test).',
+    'shuvix-policy-scope:',
+    '  subject.kind: [agent]',
+    '  object.type: [path, command, gitTool, invocation]',
+    'shuvix-policy-rules:',
+    '  - effect: ask',
+    '    action: [read, write, execute]',
+    "    match: 'true'",
+    '---',
+    ''
+  ].join('\n')
+
+  const WORK = { profileName: 'work', kind: 'root' as const }
+  const owner = { taskId: 3, conversationId: 1 }
+
+  type Gate = ReturnType<typeof getDesktopSecurityContext>
+  /** 每一族的一次调用；拥有者缺省是对话 1（P2-06-17 换成别的对话） */
+  type Family = (ctx: Gate, id: string, at?: typeof owner) => Promise<unknown>
+  const FAMILIES: Array<[string, Family]> = [
+    [
+      'write（会话目录外）',
+      (ctx, id, at = owner) =>
+        ctx.enforcePath('write', OUTSIDE, { toolCallId: id, toolName: 'write', ...at })
+    ],
+    [
+      'ls / grep / glob 读（会话目录外）',
+      (ctx, id, at = owner) =>
+        ctx.enforcePath('read', OUTSIDE, { toolCallId: id, toolName: 'grep', ...at })
+    ],
+    [
+      '没圈住的 bash 命令',
+      (ctx, id, at = owner) =>
+        ctx.enforceCommand(
+          { channel: 'bash', command: 'make build', cwd: WS },
+          { toolCallId: id, toolName: 'bash', ...at }
+        )
+    ],
+    [
+      'git 操作',
+      (ctx, id, at = owner) =>
+        ctx.enforceGitOp(
+          { gitAction: 'commit', command: 'git commit', force: false, delete: false },
+          { toolCallId: id, toolName: 'git', ...at }
+        )
+    ],
+    [
+      'knowledge（create 落盘）',
+      (ctx, id, at = owner) =>
+        ctx.enforcePath('write', OUTSIDE, {
+          toolCallId: id,
+          toolName: 'knowledge',
+          operation: 'create',
+          ...at
+        })
+    ]
+  ]
+
   /**
    * H11-53（P1-11）—— 会话级装配的工具（ctx 带 agentOf、没有固定的 agent）：每次 enforce 按 opts 里这次
    * 调用的 conversationId 现取主体（withCallAgent）。各工具族的 PEP 落在门面的哪个方法上：
@@ -860,67 +924,6 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
    * 一份「agent 主体一律 ask」的用户策略让每一族都走到审查接缝，观察点同 TC-SUBJ1。
    */
   describe('H11-53 会话级 ctx 的主体按调用现取', () => {
-    const ALWAYS_ASK = [
-      '---',
-      'shuvix: policy v1',
-      'name: h11-always-ask',
-      'description: Every agent operation asks (test).',
-      'shuvix-policy-scope:',
-      '  subject.kind: [agent]',
-      '  object.type: [path, command, gitTool, invocation]',
-      'shuvix-policy-rules:',
-      '  - effect: ask',
-      '    action: [read, write, execute]',
-      "    match: 'true'",
-      '---',
-      ''
-    ].join('\n')
-
-    const WORK = { profileName: 'work', kind: 'root' as const }
-    const owner = { taskId: 3, conversationId: 1 }
-
-    type Gate = ReturnType<typeof getDesktopSecurityContext>
-    /** 每一族的一次调用；拥有者缺省是对话 1（P2-06-17 换成别的对话） */
-    type Family = (ctx: Gate, id: string, at?: typeof owner) => Promise<unknown>
-    const FAMILIES: Array<[string, Family]> = [
-      [
-        'write（会话目录外）',
-        (ctx, id, at = owner) =>
-          ctx.enforcePath('write', OUTSIDE, { toolCallId: id, toolName: 'write', ...at })
-      ],
-      [
-        'ls / grep / glob 读（会话目录外）',
-        (ctx, id, at = owner) =>
-          ctx.enforcePath('read', OUTSIDE, { toolCallId: id, toolName: 'grep', ...at })
-      ],
-      [
-        '没圈住的 bash 命令',
-        (ctx, id, at = owner) =>
-          ctx.enforceCommand(
-            { channel: 'bash', command: 'make build', cwd: WS },
-            { toolCallId: id, toolName: 'bash', ...at }
-          )
-      ],
-      [
-        'git 操作',
-        (ctx, id, at = owner) =>
-          ctx.enforceGitOp(
-            { gitAction: 'commit', command: 'git commit', force: false, delete: false },
-            { toolCallId: id, toolName: 'git', ...at }
-          )
-      ],
-      [
-        'knowledge（create 落盘）',
-        (ctx, id, at = owner) =>
-          ctx.enforcePath('write', OUTSIDE, {
-            toolCallId: id,
-            toolName: 'knowledge',
-            operation: 'create',
-            ...at
-          })
-      ]
-    ]
-
     it.each(FAMILIES)(
       'H11-53 %s：对话 1 上锁着 work → subject 带 work / root；认不出（没有锁）→ 不带档案名键',
       async (_label, call) => {
@@ -1085,6 +1088,346 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
     })
     expect(ctx.evaluateReadOnly('write', { type: 'path', path: OUTSIDE })).toBe(false)
     expect(agentOf.mock.calls.length).toBe(lookups)
+  })
+
+  /**
+   * TC-RVR —— 审查员自己的工具调用从不问人（setPermissionReviewer 的第二个参数）。
+   *
+   * 判定型 hook 派出的审查员可以 `read`（看一眼被运行的脚本），但它的调用拿到的是同一个 provider 去掉
+   * onPermissionRequest 与 requestUserInput 的那一份：判出 ask 的一律按 fail-closed 拒绝（`no way to ask`），
+   * 不送审查、不弹卡。判定本身不变 —— 只是这一份上没有可问的人。所以它能读的恰是被审 agent 不问就能读的。
+   * 「是不是审查员」由注入的判断每次调用现答（这里是一个按 bound 集合回答的替身；生产注入的是
+   * permissionReview.isReviewerIdentity）。
+   */
+  describe('TC-RVR 审查员的调用不问人', () => {
+    /** 家目录里的会话目录：读这里不问，全靠它在会话目录清单里（不在家目录里的路径读起来本就不问） */
+    const HOME_WS = join(homedir(), 'shuvix-tc-rvr-ws')
+    const HOME_ART = join(homedir(), 'shuvix-tc-rvr-art')
+    /** 家目录里、会话目录外：ask-on-external-path#0（读） */
+    const HOME_READ = join(homedir(), 'shuvix-tc-rvr', 'secret.txt')
+    const rvrConfig: ProjectConfig = { workingDirectory: HOME_WS }
+    const rvrCfg = (): ProjectConfig => rvrConfig
+
+    const REVIEWER: ToolAgentIdentity = {
+      profileName: 'permission-reviewer',
+      kind: 'spawned',
+      callerId: 'sub-r1'
+    }
+    const AGENTS: Record<number, ToolAgentIdentity> = {
+      1: WORK,
+      2: { profileName: 'explore', kind: 'spawned', callerId: 'sub-a1' },
+      3: REVIEWER,
+      6: { profileName: 'titler', kind: 'spawned', callerId: 'sub-t1' }
+    }
+    const agentOf = (conversationId: number): ToolAgentIdentity | undefined =>
+      AGENTS[conversationId]
+    const at = (conversationId: number): { taskId: number; conversationId: number } => ({
+      taskId: 30 + conversationId,
+      conversationId
+    })
+
+    /** 绑在 permission.request 上的档案（hookService.agentsBoundTo 的替身，可变） */
+    let bound: Set<string>
+    let check: ReturnType<typeof vi.fn<(agent: ToolAgentIdentity) => boolean>>
+    /** 审查接缝：对谁都答不出（null）—— 走到它就该弹卡；审查员根本走不到它 */
+    let seam: ReturnType<typeof vi.fn<Reviewer>>
+    let requestUserInput: ReturnType<
+      typeof vi.fn<(req: InputRequest) => Promise<{ kind: 'ask'; allowed: boolean }>>
+    >
+
+    const sessionCtx = (sessionId: string): Gate =>
+      getDesktopSecurityContext({ sessionId, agentOf, requestUserInput }, rvrCfg)
+    const readFrom = (
+      ctx: Gate,
+      conversationId: number,
+      path: string,
+      id = `rvr-${conversationId}`
+    ): Promise<void> =>
+      ctx.enforcePath('read', path, { toolCallId: id, toolName: 'read', ...at(conversationId) })
+
+    function onePolicy(
+      name: string,
+      effect: string,
+      action: string,
+      match: string
+    ): UserPolicyFile {
+      return userPolicy(
+        `${name}.md`,
+        [
+          '---',
+          'shuvix: policy v1',
+          `name: ${name}`,
+          `description: ${effect} test rule.`,
+          'shuvix-policy-scope:',
+          '  subject.kind: [agent]',
+          '  object.type: [path]',
+          'shuvix-policy-rules:',
+          `  - effect: ${effect}`,
+          `    action: [${action}]`,
+          `    match: ${JSON.stringify(match)}`,
+          '---',
+          ''
+        ].join('\n')
+      )
+    }
+
+    beforeEach(() => {
+      vi.mocked(sessionDirsView).mockImplementation((id, ws) => ({
+        sessionDirs: [ws, join(HOME_ART, id)],
+        sessionReadDirs: []
+      }))
+      bound = new Set(['permission-reviewer'])
+      check = vi.fn(
+        (agent: ToolAgentIdentity) => agent.kind === 'spawned' && bound.has(agent.profileName)
+      )
+      seam = vi.fn<Reviewer>(async () => null)
+      requestUserInput = vi.fn(async () => ({ kind: 'ask' as const, allowed: true }))
+      setPermissionReviewer(seam, check)
+    })
+
+    it('TC-RVR1 审查员读家目录里会话目录外的文件：按 fail-closed 拒绝（no way to ask），不弹卡、不送审查；决策记录是 ask、没有人的回答、主体是派生的 permission-reviewer', async () => {
+      const sessionId = sid('tc-rvr1')
+      const ctx = sessionCtx(sessionId)
+      await expect(readFrom(ctx, 3, HOME_READ)).rejects.toThrow(
+        /^Access denied: path outside workspace and no way to ask: /
+      )
+      expect(requestUserInput).not.toHaveBeenCalled()
+      expect(seam).not.toHaveBeenCalled()
+
+      const records = getSessionDecisions(sessionId)
+      expect(records).toHaveLength(1)
+      expect(records[0]).toMatchObject({
+        toolCallId: 'rvr-3',
+        toolName: 'read',
+        action: 'read',
+        objectKind: 'path',
+        effect: 'ask',
+        winning: 'ask-on-external-path#0',
+        subject: { kind: 'agent', agentKind: 'spawned', profileName: 'permission-reviewer' }
+      })
+      expect(records[0].userResponse).toBeUndefined()
+      expect(records[0].review).toBeUndefined()
+    })
+
+    it('TC-RVR2 不需要询问的读取照常放行：工作区、本会话 artifacts、家目录外（/tmp、/usr/bin/env）、Read 授权、Write 授权（写授权覆盖读）—— 不送审查、不弹卡', async () => {
+      const GRANT_R = join(homedir(), 'shuvix-tc-rvr-grant-r')
+      const GRANT_W = join(homedir(), 'shuvix-tc-rvr-grant-w')
+      tc.pickSettings.mockReturnValue({ allowList: [`Read(${GRANT_R})`, `Write(${GRANT_W})`] })
+      const sessionId = sid('tc-rvr2')
+      const ctx = sessionCtx(sessionId)
+      const paths = [
+        join(HOME_WS, 'scripts', 'build.sh'),
+        join(HOME_ART, sessionId, 'x'),
+        '/tmp/shuvix-tc-rvr/run.sh',
+        '/usr/bin/env',
+        join(GRANT_R, 'notes.txt'),
+        join(GRANT_W, 'notes.txt')
+      ]
+      for (const [i, path] of paths.entries()) {
+        await expect(readFrom(ctx, 3, path, `rvr2-${i}`), path).resolves.toBeUndefined()
+      }
+      expect(seam).not.toHaveBeenCalled()
+      expect(requestUserInput).not.toHaveBeenCalled()
+      // 自检：授权确实是放行的原因 —— 授权根之外、家目录里的同类路径照样拒绝
+      await expect(
+        readFrom(ctx, 3, join(homedir(), 'shuvix-tc-rvr-grant-x', 'notes.txt'), 'rvr2-x')
+      ).rejects.toThrow(/no way to ask/)
+    })
+
+    it.each([
+      ['审查员先', [3, 1, 2, 6]],
+      ['根先', [1, 3, 2, 6, 3]]
+    ] as const)(
+      'TC-RVR3 同一个会话级 ctx（%s）：对话 1 / 2 / 6 各弹一张卡，对话 3 被拒 —— 去掉询问通道的那一份不漏到别的调用上',
+      async (_label, order) => {
+        const sessionId = sid(`tc-rvr3-${order[0]}`)
+        const ctx = sessionCtx(sessionId)
+        for (const [i, conversationId] of order.entries()) {
+          const before = requestUserInput.mock.calls.length
+          const run = readFrom(ctx, conversationId, HOME_READ, `rvr3-${i}`)
+          if (conversationId === 3) {
+            await expect(run).rejects.toThrow(/no way to ask/)
+            expect(requestUserInput.mock.calls.length).toBe(before)
+          } else {
+            await expect(run).resolves.toBeUndefined()
+            expect(requestUserInput.mock.calls.length).toBe(before + 1)
+          }
+        }
+        expect(requestUserInput).toHaveBeenCalledTimes(3)
+        // 接缝只见过别人的请求
+        expect(seam.mock.calls.map(([event]) => event.request.subject.profileName)).toEqual(
+          order.filter((c) => c !== 3).map((c) => AGENTS[c].profileName)
+        )
+      }
+    )
+
+    it.each(FAMILIES)(
+      'TC-RVR4 %s：「agent 一律 ask」的用户策略下，审查员（对话 3）被拒，不弹卡、不送审查',
+      async (_label, call) => {
+        tc.userPolicies = [userPolicy('h11-always-ask.md', ALWAYS_ASK)]
+        const ctx = sessionCtx(sid('tc-rvr4'))
+        await expect(call(ctx, 'tc-rvr4', at(3))).rejects.toThrow(/no way to ask/)
+        expect(requestUserInput).not.toHaveBeenCalled()
+        expect(seam).not.toHaveBeenCalled()
+        // 对照：同一族在对话 1 上照常送审查、弹卡
+        await call(ctx, 'tc-rvr4-root', at(1))
+        expect(seam).toHaveBeenCalledTimes(1)
+        expect(requestUserInput).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it('TC-RVR4 L1 门（enforceInvocation）同样：审查员被拒，不弹卡、不送审查', async () => {
+      tc.userPolicies = [userPolicy('h11-always-ask.md', ALWAYS_ASK)]
+      const ctx = sessionCtx(sid('tc-rvr4-l1'))
+      await expect(
+        ctx.enforceInvocation({ toolCallId: 'tc-rvr4-l1', toolName: 'skill', ...at(3) })
+      ).rejects.toThrow(/no way to ask/)
+      expect(requestUserInput).not.toHaveBeenCalled()
+      expect(seam).not.toHaveBeenCalled()
+    })
+
+    it('TC-RVR5 force-ask（只问人）的读规则落在工作区：审查员被拒，不弹卡、不送审查；根 agent 弹卡', async () => {
+      tc.userPolicies = [
+        onePolicy('rvr-force-ask-ws', 'force-ask', 'read', 'inDir(object.path, vars.workspace)')
+      ]
+      const ctx = sessionCtx(sid('tc-rvr5-fa'))
+      const target = join(HOME_WS, 'a.txt')
+      await expect(readFrom(ctx, 3, target)).rejects.toThrow(/no way to ask/)
+      expect(requestUserInput).not.toHaveBeenCalled()
+      await expect(readFrom(ctx, 1, target)).resolves.toBeUndefined()
+      expect(requestUserInput).toHaveBeenCalledTimes(1)
+      // force-ask 本来就不送审查
+      expect(seam).not.toHaveBeenCalled()
+    })
+
+    it('TC-RVR5 deny 规则：审查员收到的是那条拒绝，不是 no way to ask', async () => {
+      tc.userPolicies = [
+        onePolicy('rvr-deny-secret', 'deny', 'read', 'inDir(object.path, vars.home)')
+      ]
+      const ctx = sessionCtx(sid('tc-rvr5-deny'))
+      const err = await readFrom(ctx, 3, HOME_READ).then(
+        () => null,
+        (e: Error) => e
+      )
+      expect(err).toBeInstanceOf(Error)
+      expect(err!.message).toContain("Denied by security policy rule 'rvr-deny-secret#0'")
+      expect(err!.message).not.toContain('no way to ask')
+      expect(getSessionDecisions('tc-rvr5-deny')[0]).toMatchObject({
+        effect: 'deny',
+        winning: 'rvr-deny-secret#0'
+      })
+      expect(requestUserInput).not.toHaveBeenCalled()
+      expect(seam).not.toHaveBeenCalled()
+    })
+
+    it('TC-RVR5 force-allow 规则：审查员照样放行（没有可问的人，不等于凡事都拒）', async () => {
+      tc.userPolicies = [
+        onePolicy(
+          'rvr-force-allow',
+          'force-allow',
+          'read',
+          `inDir(object.path, ${JSON.stringify(join(homedir(), 'shuvix-tc-rvr'))})`
+        )
+      ]
+      const ctx = sessionCtx(sid('tc-rvr5-fallow'))
+      await expect(readFrom(ctx, 3, HOME_READ)).resolves.toBeUndefined()
+      expect(requestUserInput).not.toHaveBeenCalled()
+      expect(seam).not.toHaveBeenCalled()
+    })
+
+    it.each(['allow', 'ask', 'deny'] as const)(
+      'TC-RVR5 接缝对审查员会答 %s 也问不到它：审查员的调用根本不送审查，按 no way to ask 拒绝',
+      async (decision) => {
+        seam.mockImplementation(async () => answer(decision))
+        const sessionId = sid(`tc-rvr5-seam-${decision}`)
+        const ctx = sessionCtx(sessionId)
+        await expect(readFrom(ctx, 3, HOME_READ)).rejects.toThrow(
+          /^Access denied: path outside workspace and no way to ask: /
+        )
+        expect(seam).not.toHaveBeenCalled()
+        expect(requestUserInput).not.toHaveBeenCalled()
+        expect(getSessionDecisions(sessionId)[0].review).toBeUndefined()
+        // 对照：同一个接缝对根 agent 照常作答
+        const root = readFrom(ctx, 1, HOME_READ, 'rvr5-root')
+        if (decision === 'deny') await expect(root).rejects.toThrow(/^Blocked by the reviewer: /)
+        else await expect(root).resolves.toBeUndefined()
+        expect(seam).toHaveBeenCalledTimes(1)
+        expect(requestUserInput).toHaveBeenCalledTimes(decision === 'ask' ? 1 : 0)
+      }
+    )
+
+    it('TC-RVR6 判断每次调用现答：收到这次调用认出的身份；从集合里拿掉之后，对话 3 的下一次调用弹卡', async () => {
+      const ctx = sessionCtx(sid('tc-rvr6'))
+      await expect(readFrom(ctx, 3, HOME_READ, 'rvr6-a')).rejects.toThrow(/no way to ask/)
+      expect(check).toHaveBeenCalledTimes(1)
+      expect(check.mock.calls[0][0]).toMatchObject({
+        profileName: 'permission-reviewer',
+        kind: 'spawned'
+      })
+      // 对话 2 的调用问的是 explore
+      await readFrom(ctx, 2, HOME_READ, 'rvr6-b')
+      expect(check.mock.calls[1][0]).toMatchObject({ profileName: 'explore', kind: 'spawned' })
+
+      // auto-review 被停用：permission-reviewer 不再算绑定 —— 同一个 ctx 的下一次调用就弹卡
+      bound.delete('permission-reviewer')
+      const cards = requestUserInput.mock.calls.length
+      await expect(readFrom(ctx, 3, HOME_READ, 'rvr6-c')).resolves.toBeUndefined()
+      expect(requestUserInput.mock.calls.length).toBe(cards + 1)
+      expect(check).toHaveBeenCalledTimes(3)
+    })
+
+    it('TC-RVR6 认不出调用方（没有 ctx.agent、agentOf 认不出）按根处理：判断一次都不调', async () => {
+      const ctx = getDesktopSecurityContext(
+        { sessionId: sid('tc-rvr6-none'), agentOf: () => undefined, requestUserInput },
+        rvrCfg
+      )
+      await expect(readFrom(ctx, 9, HOME_READ)).resolves.toBeUndefined()
+      await expect(
+        ctx.enforcePath('read', HOME_READ, { toolCallId: 'rvr6-no-conv', toolName: 'read' })
+      ).resolves.toBeUndefined()
+      const plain = getDesktopSecurityContext(
+        { sessionId: sid('tc-rvr6-plain'), requestUserInput },
+        rvrCfg
+      )
+      await expect(
+        plain.enforcePath('read', HOME_READ, { toolCallId: 'rvr6-plain', toolName: 'read' })
+      ).resolves.toBeUndefined()
+      expect(check).not.toHaveBeenCalled()
+      expect(requestUserInput).toHaveBeenCalledTimes(3)
+    })
+
+    it('TC-RVR7 缺省：setPermissionReviewer(seam) 不带第二个参数 = 谁都不是审查员，对话 3 照旧弹卡；setPermissionReviewer(null) 清掉先前注入的判断', async () => {
+      setPermissionReviewer(seam)
+      const ctx = sessionCtx(sid('tc-rvr7'))
+      await expect(readFrom(ctx, 3, HOME_READ, 'rvr7-a')).resolves.toBeUndefined()
+      expect(requestUserInput).toHaveBeenCalledTimes(1)
+      expect(seam).toHaveBeenCalledTimes(1)
+      expect(check).not.toHaveBeenCalled()
+
+      // 再注入判断 → 拒绝；然后 null 清掉 → 又弹卡（判断也一并清了）
+      setPermissionReviewer(seam, check)
+      await expect(readFrom(ctx, 3, HOME_READ, 'rvr7-b')).rejects.toThrow(/no way to ask/)
+      setPermissionReviewer(null)
+      await expect(readFrom(ctx, 3, HOME_READ, 'rvr7-c')).resolves.toBeUndefined()
+      expect(requestUserInput).toHaveBeenCalledTimes(2)
+      expect(check).toHaveBeenCalledTimes(1)
+    })
+
+    it('TC-RVR8 固定的 ctx.agent 是审查员（没有 agentOf）：enforcePath 读被拒；evaluate 照样判出 ask —— 改的只是送达，不是判定', async () => {
+      const ctx = getDesktopSecurityContext(
+        { sessionId: sid('tc-rvr8'), agent: REVIEWER, requestUserInput },
+        rvrCfg
+      )
+      await expect(
+        ctx.enforcePath('read', HOME_READ, { toolCallId: 'rvr8', toolName: 'read' })
+      ).rejects.toThrow(/no way to ask/)
+      expect(verdictOf(ctx.evaluate('read', { type: 'path', path: HOME_READ }))).toEqual({
+        effect: 'ask',
+        winning: 'ask-on-external-path#0'
+      })
+      expect(requestUserInput).not.toHaveBeenCalled()
+      expect(seam).not.toHaveBeenCalled()
+    })
   })
 })
 
