@@ -163,6 +163,10 @@ export default defineConfig(
           pattern: ['src/main/logger.ts', 'src/main/perf.ts', 'src/main/i18n.ts'],
           mode: 'file'
         },
+        // 通道注册表（defineHandler / pushTo / broadcastToClients）：不碰 Electron 的叶子，放在 ipc/ 下但归
+        // main-util —— 广播要从 service、内聚模块乃至 utils（downloadManager）发出，main-util 是它们都能引的那一层。
+        // 必须写在 main-ipc（目录）之前，先匹配到这个单文件
+        { type: 'main-util', pattern: ['src/main/ipc/registry.ts'], mode: 'file' },
         // main-frontend-core：frontend/core 的运行时编排（Gateway / Registry / OperationContext）
         { type: 'main-frontend-core', pattern: 'src/main/frontend/core' },
         // frontend/sync：视图同步的分发核（视图服务端单例、钩子扇出、窗口链路表），与 Registry 同层 ——

@@ -1,7 +1,7 @@
 /**
  * 视图同步的桌面接线 —— S 用例（pi 1.2 / chord2 上的视图服务端；移植自 phase 3 的 P3-05 / P3-14 / P3-10b /
  * P3-08）：真 SessionHost + 真 SQLite + 真 sessionService / 网关 / messageService / 路由（夹具
- * `services/__tests__/support/desktopRig`），真 `registerSyncHandlers(ipc)`（假 ipcMain、假 webContents），每个窗口里
+ * `services/__tests__/support/desktopRig`），真 `registerSyncHandlers()` + IPC 适配器（假 ipcMain、假 webContents），每个窗口里
  * 是 chat-ui **真的** `createSyncClient` 跑在 preload 的 `createSyncBridge` 上（夹具 `support/ipcLinkRig`）。
  *
  *   DI-1 (P3-05-18)  钉住整合（maxIdleOpen 0）：看着的空闲会话熬过修剪；两个窗口里一个关掉（`wc.destroy()`）仍钉着；
@@ -108,14 +108,17 @@ interface Wired {
 const windows: SyncWindow[] = []
 let currentWiring: Wiring | undefined
 
-/** 这个进程的同步接线：真 registerSyncHandlers（假 ipcMain），窗口 = 真 syncClient + preload 桥 */
+/** 这个进程的同步接线：真 registerSyncHandlers + IPC 适配器（假 ipcMain），窗口 = 真 syncClient + preload 桥 */
 async function wire(): Promise<Wired> {
   const p = proc()
   const wiring = await import('../syncWiring')
   // eslint-disable-next-line boundaries/dependencies -- 同步通道的两半（frontend/sync 的服务端与 ipc 的 sync:frame 处理器）在一个用例里接起来
   const { registerSyncHandlers } = await import('../../../ipc/syncHandlers')
+  // eslint-disable-next-line boundaries/dependencies -- 同上：sync:frame 经通道注册表的 IPC 适配器挂到假 ipcMain 上
+  const { attachIpcAdapter } = await import('../../../ipc/ipcAdapter')
   const ipc = new TappedIpcMain()
-  registerSyncHandlers(ipc)
+  registerSyncHandlers()
+  attachIpcAdapter(ipc)
   currentWiring = wiring
   return {
     p,

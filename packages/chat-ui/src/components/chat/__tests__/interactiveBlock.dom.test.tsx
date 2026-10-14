@@ -12,7 +12,14 @@
  *     的 iframe；消息的形状再过 parseSandboxMessage。sendPrompt 只**填**输入框，从不发送。
  * 外加：围栏闭合才挂（IB-2…5）、长得像的围栏不跑（IB-6）、宿主跑不了时说清楚（IB-7）、
  * 源码切换 / 重跑 / 切主题三种重挂（IB-15…17）、卸载后监听摘干净（IB-18），以及 `.html` 的
- * artifact 引用走同一个沙箱、按**名字**判（IB-20…24）。
+ * artifact 引用走同一个沙箱、按**名字**判（IB-20…24），以及宿主给的库基址（IB-25…28，server mode phase D：
+ * 浏览器里的 web 客户端认不得 `shuvix-lib:`，ChatHost 的 `sandboxLibBase` 给 `<origin>/lib/`）：
+ *
+ *   IB-25 给了合格的基址 → srcdoc 逐字节等于带 libBase 拼的那份：库地址换成基址、没有 shuvix-lib:；sandbox 仍恰是
+ *         allow-scripts
+ *   IB-26 不合格的 / 不给 → 与桌面逐字节相同
+ *   IB-27 `.html` 的 artifact 引用拿到同一个基址
+ *   IB-28 Provider 上的基址变了 → srcdoc 跟着换
  *
  * 桩的形状：
  *   - `getComputedStyle` 换成桩：jsdom 不做级联。桩按**当前 data-theme** 给每个 token 一个可辨认的
@@ -104,9 +111,14 @@ const tokenValue = (themeId: string, name: string): string => `v-${themeId}-${na
 const schemeOf = (themeId: string): string => (themeId.endsWith('-dark') ? 'dark' : 'light')
 const tokensOf = (themeId: string): Record<string, string> =>
   Object.fromEntries(SANDBOX_THEME_TOKENS.map((name) => [name, tokenValue(themeId, name)]))
-/** 某主题下这段源码应得的整份 srcdoc */
-const expectedDoc = (code: string, themeId: string): string =>
-  buildSandboxDocument({ body: code, tokens: tokensOf(themeId), colorScheme: schemeOf(themeId) })
+/** 某主题下这段源码应得的整份 srcdoc（libBase：宿主给的库基址） */
+const expectedDoc = (code: string, themeId: string, libBase?: string): string =>
+  buildSandboxDocument({
+    body: code,
+    tokens: tokensOf(themeId),
+    colorScheme: schemeOf(themeId),
+    ...(libBase === undefined ? {} : { libBase })
+  })
 
 const currentTheme = (): string => document.documentElement.getAttribute('data-theme') ?? ''
 
@@ -129,7 +141,7 @@ const HostProvider = ChatHostProvider as (props: {
   children?: ReactNode
 }) => React.JSX.Element
 
-const hostValue = (flag: boolean | 'omit'): ChatHostValue => ({
+const hostValue = (flag: boolean | 'omit', libBase?: string): ChatHostValue => ({
   appearance: {
     theme: 'light',
     darkTheme: 'd',
@@ -143,7 +155,8 @@ const hostValue = (flag: boolean | 'omit'): ChatHostValue => ({
     setActiveProvider: () => {},
     setActiveModel: () => {}
   },
-  ...(flag === 'omit' ? {} : { interactiveFigures: flag })
+  ...(flag === 'omit' ? {} : { interactiveFigures: flag }),
+  ...(libBase === undefined ? {} : { sandboxLibBase: libBase })
 })
 
 interface ShowOptions {
@@ -153,11 +166,13 @@ interface ShowOptions {
   withSource?: boolean
   /** 宿主开关（缺省 true）；'omit' = 值里没这个键；'no-provider' = 外面根本没有 ChatHostProvider */
   host?: HostFlag
+  /** 宿主给的库基址（`sandboxLibBase`；不给 = 值里没这个键） */
+  libBase?: string
 }
 
 /** 与 AssistantBubble 同形的一棵树 */
 function tree(md: string, opts: ShowOptions = {}): ReactNode {
-  const { streaming = false, withSource = true, host = true } = opts
+  const { streaming = false, withSource = true, host = true, libBase } = opts
   const markdown = createElement(
     MarkdownStreamingContext.Provider,
     { value: streaming },
@@ -176,7 +191,7 @@ function tree(md: string, opts: ShowOptions = {}): ReactNode {
     )
   )
   if (host === 'no-provider') return markdown
-  return createElement(HostProvider, { value: hostValue(host) }, markdown)
+  return createElement(HostProvider, { value: hostValue(host, libBase) }, markdown)
 }
 
 function show(md: string, opts?: ShowOptions): void {
@@ -653,5 +668,71 @@ describe('.html 的 artifact 引用（IB-20…24）', () => {
     const frame = onlyFrame()
     expect(frame.getAttribute('srcdoc')).toContain(content)
     expect(container.querySelector('pre')).toBeNull()
+  })
+})
+
+describe('宿主给的库基址（IB-25…28）', () => {
+  const BASE = 'http://127.0.0.1:7766/lib/'
+  const libCode = (tag: string): string =>
+    `<script src="shuvix-lib://chart.js"></script>\n<canvas id="${tag}"></canvas>\n<script>new Chart(document.getElementById("${tag}"), {})</script>`
+
+  it('IB-25 合格的基址：srcdoc 逐字节等于带 libBase 的那份；库地址换成基址、没有 shuvix-lib:；sandbox 恰是 allow-scripts', async () => {
+    await setTheme('ib25')
+    const code = libCode('ib25')
+    show(fence(code), { libBase: BASE })
+    const frame = onlyFrame()
+    const doc = frame.getAttribute('srcdoc') ?? ''
+    expect(doc).toBe(expectedDoc(code, 'ib25', BASE))
+    expect(doc).toContain(`src="${BASE}chart.js"`)
+    expect(doc).not.toContain('shuvix-lib:')
+    expect(doc).not.toBe(expectedDoc(code, 'ib25'))
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts')
+  })
+
+  it('IB-26 不合格的基址 / 不给 → 与桌面逐字节相同', async () => {
+    await setTheme('ib26')
+    const code = libCode('ib26')
+    for (const libBase of [
+      undefined,
+      'http://h/lib',
+      'shuvix-lib:',
+      'http://*/',
+      'javascript:x/'
+    ]) {
+      clear()
+      show(fence(code), { libBase })
+      expect(onlyFrame().getAttribute('srcdoc'), String(libBase)).toBe(expectedDoc(code, 'ib26'))
+    }
+  })
+
+  it('IB-27 .html 的 artifact 引用拿到同一个基址', async () => {
+    act(() => {
+      useChatStore.getState().setActiveSessionId('ib-artifacts-lib')
+    })
+    await setTheme('ib27')
+    const content = '<title>Lib</title>\n<script src="shuvix-lib://d3.js"></script>\n<p>ib27</p>'
+    artifactRead.mockResolvedValue({ name: 'lib.html', title: 'Lib', content })
+    show('```artifact\nlib.html\n```', { libBase: BASE })
+    await flush()
+    const doc = onlyFrame().getAttribute('srcdoc') ?? ''
+    expect(doc).toBe(expectedDoc(content, 'ib27', BASE))
+    expect(doc).toContain(`src="${BASE}d3.js"`)
+    expect(doc).not.toContain('shuvix-lib:')
+  })
+
+  it('IB-28 Provider 上的基址变了 → srcdoc 跟着换', async () => {
+    await setTheme('ib28')
+    const code = libCode('ib28')
+    show(fence(code), { libBase: BASE })
+    expect(onlyFrame().getAttribute('srcdoc')).toBe(expectedDoc(code, 'ib28', BASE))
+
+    const other = 'http://192.168.1.10:7766/lib/'
+    show(fence(code), { libBase: other })
+    const doc = onlyFrame().getAttribute('srcdoc') ?? ''
+    expect(doc).toBe(expectedDoc(code, 'ib28', other))
+    expect(doc).toContain(`src="${other}chart.js"`)
+
+    show(fence(code))
+    expect(onlyFrame().getAttribute('srcdoc')).toBe(expectedDoc(code, 'ib28'))
   })
 })

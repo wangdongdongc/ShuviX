@@ -12,7 +12,7 @@ export function AboutSettings(): React.JSX.Element {
   const { autoCheckUpdate } = useSettingsStore()
 
   useEffect(() => {
-    void window.electron.ipcRenderer.invoke('app:version').then((v: string) => setAppVersion(v))
+    void window.api.app.getVersion().then((v) => setAppVersion(v))
   }, [])
 
   // 注册实时事件监听（设置窗口独立进程，主窗口的 useAppInit 监听器不共享）

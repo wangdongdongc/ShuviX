@@ -6,6 +6,7 @@
  *       另外两条新通道：open-window 打开 / 聚焦窗口；is-window-open 原样回答窗口服务的判断。
  *       create-tab（主窗 / 浏览器窗口里的「新建 tab」）只建一个激活的 tab，**不**打开浏览器窗口 ——
  *       窗口只由 open-window 打开（ST-U6）。
+ *   NH-8 网络客户端（server mode phase B）发来的 set-layout / set-visible：不是宿主窗口 → 不理、不抛
  *
  * electron 是替身（on / handle 收进 Map）；services/browser 整个换成间谍 —— 宿主判断固定为
  * 「webContents id 7 是宿主」。
@@ -46,8 +47,13 @@ vi.mock('../../services/browser', () => ({
 }))
 
 import { registerBrowserViewHandlers } from '../browserViewHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
+import { listDefinitions } from '../registry'
+import { netCtx } from '../../frontend/network/__tests__/support/fakeNetworkConnection'
 
 registerBrowserViewHandlers()
+// 注册表经 IPC 适配器挂到（替身）ipcMain 上：handlers 里收的是适配器包过的处理函数
+attachIpcAdapter()
 
 const HOST = 7
 const OTHER = 9
@@ -138,5 +144,20 @@ describe('browserViewHandlers：create-tab 不开窗口', () => {
     expect(state.createTab).toHaveBeenLastCalledWith(undefined, { activate: true })
 
     expect(state.openBrowserWindow).not.toHaveBeenCalled()
+  })
+})
+
+describe('NH-8 网络客户端发来的布局 / 可见性', () => {
+  const fromNet = (channel: string, ...args: unknown[]): unknown => {
+    const definition = listDefinitions().find((d) => d.channel === channel)
+    if (!definition) throw new Error(`no definition for ${channel}`)
+    return definition.fn(netCtx(1), ...args)
+  }
+
+  it('NH-8 set-layout / set-visible 从网络来 → 不理、不抛', () => {
+    expect(() => fromNet('browser-view:set-layout', ENTRIES)).not.toThrow()
+    expect(() => fromNet('browser-view:set-visible', false)).not.toThrow()
+    expect(state.setLayout).not.toHaveBeenCalled()
+    expect(state.setPanelVisible).not.toHaveBeenCalled()
   })
 })

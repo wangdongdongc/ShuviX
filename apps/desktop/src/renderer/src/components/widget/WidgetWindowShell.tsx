@@ -3,6 +3,15 @@ import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
 import { Wrench, Pin, RotateCw, X, Loader2 } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { isWebHost } from '../../host/hostMedia'
+import { widgetFrameUrl } from '../../host/hostUrls'
+
+/**
+ * 浏览器里的 web 客户端（server mode phase D）：widget 经网络服务转发，与 web 客户端同源 —— iframe 加沙箱、
+ * 不给 allow-same-origin，widget 的代码于是够不着这一页的 `window.api`（桌面靠跨源做到同一件事）。
+ * 它的 bundle / db / sse 请求照样能用：widget 服务对每个应答都回 `Access-Control-Allow-Origin: *`。
+ */
+const WEB_WIDGET_SANDBOX = 'allow-scripts allow-forms allow-popups allow-modals allow-downloads'
 
 function parseWidgetIdFromHash(): string | null {
   const hash = window.location.hash // 形如 "#widget-window?widgetId=xxx"
@@ -82,9 +91,12 @@ export function WidgetWindowShell(): React.JSX.Element {
           setPhase({ status: 'error', message: t('widgets.serverStopped') })
           return
         }
-        // URL 可能因 server 重启换端口 —— 每次都重挂 iframe
+        // URL 可能因 server 重启换端口 —— 每次都重挂 iframe。web 客户端经网络服务的 /w/ 转发
         setReloadToken((v) => v + 1)
-        setPhase({ status: 'ready', url: res.url })
+        setPhase({
+          status: 'ready',
+          url: widgetFrameUrl(window.api.app.platform, res.url, window.location.origin)
+        })
       })
     },
     [widgetId, t]
@@ -120,7 +132,8 @@ export function WidgetWindowShell(): React.JSX.Element {
 
   // ========== 窗口操作 ==========
   useEffect(() => {
-    if (!widgetId) return
+    // 浏览器标签页没有「始终置顶」
+    if (!widgetId || isWebHost) return
     void window.api.widgetWindow.getAlwaysOnTop(widgetId).then((r) => setAlwaysOnTop(r.alwaysOnTop))
   }, [widgetId])
 
@@ -131,6 +144,11 @@ export function WidgetWindowShell(): React.JSX.Element {
   }, [widgetId, alwaysOnTop])
 
   const closeWindow = useCallback((): void => {
+    // 浏览器标签页：关掉自己（脚本开的标签页才关得掉；关不掉就留着，用户自己关）
+    if (isWebHost) {
+      window.close()
+      return
+    }
     if (widgetId) void window.api.widgetWindow.close(widgetId)
   }, [widgetId])
 
@@ -177,15 +195,17 @@ export function WidgetWindowShell(): React.JSX.Element {
         <Wrench size={13} className="flex-shrink-0 text-violet-400" />
         <span className="flex-1 min-w-0 truncate text-[12px] font-medium">{name || ' '}</span>
         <div className="titlebar-no-drag flex items-center gap-0.5">
-          <button
-            onClick={() => void toggleAlwaysOnTop()}
-            className={`${iconBtn} ${alwaysOnTop ? 'text-violet-400 hover:text-violet-400' : ''}`}
-            title={
-              alwaysOnTop ? t('widgets.windowAlwaysOnTopOff') : t('widgets.windowAlwaysOnTopOn')
-            }
-          >
-            <Pin size={13} className={alwaysOnTop ? 'fill-current' : ''} />
-          </button>
+          {!isWebHost && (
+            <button
+              onClick={() => void toggleAlwaysOnTop()}
+              className={`${iconBtn} ${alwaysOnTop ? 'text-violet-400 hover:text-violet-400' : ''}`}
+              title={
+                alwaysOnTop ? t('widgets.windowAlwaysOnTopOff') : t('widgets.windowAlwaysOnTopOn')
+              }
+            >
+              <Pin size={13} className={alwaysOnTop ? 'fill-current' : ''} />
+            </button>
+          )}
           <button onClick={reloadWidget} className={iconBtn} title={t('widgets.windowReload')}>
             <RotateCw size={13} />
           </button>
@@ -206,6 +226,8 @@ export function WidgetWindowShell(): React.JSX.Element {
             key={reloadToken}
             src={phase.url}
             title={name}
+            data-widget-frame=""
+            sandbox={isWebHost ? WEB_WIDGET_SANDBOX : undefined}
             className="absolute inset-0 w-full h-full border-0"
           />
         )}

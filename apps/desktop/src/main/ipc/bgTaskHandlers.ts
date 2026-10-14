@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { taskRegistry } from '../services/taskRegistry'
 import {
   readBgTaskLog,
@@ -20,34 +20,34 @@ export function registerBgTaskHandlers(): void {
   // ─── 只读（SessionChannelApi 面）──────────────
 
   // 三类任务混排一张表 —— 面板按 kind 选渲染器（bash 终端 / 派生 agent 转写 / 子会话跳转）
-  ipcMain.handle('bgTask:list', (_event, params: { sessionId: string }) =>
+  defineHandler('bgTask:list', (_ctx, params: { sessionId: string }) =>
     taskRegistry.list(params.sessionId)
   )
 
-  ipcMain.handle(
+  defineHandler(
     'bgTask:readLog',
-    (_event, params: { toolCallId: string; fromByte?: number; maxBytes?: number }) =>
+    (_ctx, params: { toolCallId: string; fromByte?: number; maxBytes?: number }) =>
       readBgTaskLog(params)
   )
 
   // ─── 管理动作（HostApi 面）────────────────────
 
-  ipcMain.handle('bgTask:stop', (_event, params: { toolCallId: string; force?: boolean }) => ({
+  defineHandler('bgTask:stop', (_ctx, params: { toolCallId: string; force?: boolean }) => ({
     success: stopBgTask(params.toolCallId, params.force)
   }))
 
-  ipcMain.handle('bgTask:dismiss', (_event, params: { toolCallId: string }) => ({
+  defineHandler('bgTask:dismiss', (_ctx, params: { toolCallId: string }) => ({
     success: dismissBgTask(params.toolCallId)
   }))
 
-  ipcMain.handle('bgTask:clearDone', (_event, params: { sessionId: string }) => ({
+  defineHandler('bgTask:clearDone', (_ctx, params: { sessionId: string }) => ({
     cleared: clearFinishedBgTasks(params.sessionId)
   }))
 
   // 工具卡上「实际执行命令」：只读，但暴露本机沙箱规则与路径，归宿主面（渠道端没有 shell 工具）
-  ipcMain.handle(
+  defineHandler(
     'bgTask:readInvocation',
-    (_event, params: { sessionId: string; toolCallId: string }) =>
+    (_ctx, params: { sessionId: string; toolCallId: string }) =>
       readInvocation(params.sessionId, params.toolCallId)
   )
 }

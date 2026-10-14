@@ -11,12 +11,12 @@
  *   P2-05-39 派生 agent 的三个面板 IPC 按 agentId 交给路由：追问 fire-and-forget、中断 / 销毁等路由做完，
  *           路由的拒绝都只记日志（PIN-17）。
  *   P3-13-19 `agentMonitor:list` 把服务的结果原样交回（每行都是纯 JSON）。
- *   P3-06-31 `agent:getInfo` 在 `createElectronContext(sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
+ *   P3-06-31 `agent:getInfo` 在 `createClientContext(ctx, sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
  *           网关；网关的 null 原样交回。
- *   P3-12-07 `agent:continue` 在 `createElectronContext(sessionId)` 里把 sessionId 交给网关，等它落定才回（PIN-17）；
+ *   P3-12-07 `agent:continue` 在 `createClientContext(ctx, sessionId)` 里把 sessionId 交给网关，等它落定才回（PIN-17）；
  *           `{}` → `{success:true}`，`{error, code}` → `{success:false, error, code}`。
  *   P3-08-60 `agent:respondToInput` 带上答题方 `ipc:<webContentsId>`（PIN-20），只交给网关，回 {success:true}。
- *   P3-11-07 `agent:withdrawQueued` 在 `createElectronContext(sessionId)` 的上下文里把 `(sessionId, submissionId)`
+ *   P3-11-07 `agent:withdrawQueued` 在 `createClientContext(ctx, sessionId)` 的上下文里把 `(sessionId, submissionId)`
  *           交给网关，回 `{ result }`；「下一轮」的通道不再注册。
  *
  * electron 是替身（handle 收进 Map）；`../frontend` 只替到网关与 operationContext 那一层，handler
@@ -38,6 +38,8 @@ const state = vi.hoisted(() => ({
     continue: vi.fn<(sessionId: string) => Promise<{ error?: string; code?: string }>>()
   },
   contexts: [] as unknown[],
+  /** createClientContext 收到的调用上下文的传输（经 IPC 适配器来的都是 'ipc'） */
+  transports: [] as string[],
   /** operationContext.run 的嵌套深度（>0 = 在请求上下文里） */
   runDepth: 0,
   router: {
@@ -67,8 +69,9 @@ vi.mock('../../frontend', () => ({
       }
     }
   },
-  createElectronContext: (sessionId?: string) => {
+  createClientContext: (ctx: { transport: string }, sessionId?: string) => {
     state.contexts.push(sessionId)
+    state.transports.push(ctx.transport)
     return { sessionId }
   }
 }))
@@ -86,14 +89,17 @@ vi.mock('../../services/agentMonitorService', () => ({
 import type { AgentMonitorEntry } from '@shuvix/chat-protocol/types/agentMonitor'
 import { listAgentRuntimes } from '../../services/agentMonitorService'
 import { registerAgentHandlers } from '../agentHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
 
 registerAgentHandlers()
+// 注册表经 IPC 适配器挂到（替身）ipcMain 上：handlers 里收的是适配器包过的处理函数
+attachIpcAdapter()
 
-/** 像渲染端 invoke 那样调一个已注册的处理函数 */
+/** 像渲染端 invoke 那样调一个已注册的处理函数（发送方 = webContents 1） */
 const invoke = (channel: string, ...args: unknown[]): unknown => {
   const handler = state.handlers.get(channel)
   if (!handler) throw new Error(`no handler for ${channel}`)
-  return handler({}, ...args)
+  return handler({ sender: { id: 1 } }, ...args)
 }
 
 const SID = 's1'
@@ -103,6 +109,7 @@ beforeEach(() => {
   state.gateway.destroyAgent.mockReset().mockResolvedValue(undefined)
   state.gateway.listTools.mockReset().mockReturnValue([{ name: 'read', label: 'read' }])
   state.contexts.length = 0
+  state.transports.length = 0
 })
 
 describe('ML-U-8a / 8b agent:setModel', () => {
@@ -178,7 +185,7 @@ describe('P3-06-31 agent:getInfo', () => {
     state.gateway.getAgentInfo.mockReset()
   })
 
-  it('P3-06-31 (sessionId, options) 原样交给网关，且在 createElectronContext(sessionId) 的上下文里', async () => {
+  it('P3-06-31 (sessionId, options) 原样交给网关，且在 createClientContext(ctx, sessionId) 的上下文里', async () => {
     const depths: number[] = []
     state.gateway.getAgentInfo.mockImplementation(async () => {
       depths.push(state.runDepth)
@@ -192,6 +199,7 @@ describe('P3-06-31 agent:getInfo', () => {
     ])
     expect(depths).toEqual([1, 1])
     expect(state.contexts).toEqual([SID, SID])
+    expect(state.transports).toEqual(['ipc', 'ipc'])
   })
 
   it('P3-06-31 网关答 null → null；网关 reject → handler reject', async () => {

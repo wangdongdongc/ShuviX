@@ -17,6 +17,9 @@
  *   IPC-11 窗口销毁之后不再打开任何外部地址
  *   IPC-CC1 `provider:listClassifierModels` 已注册，原样交回 commandClassifier.listModels() 的结果（同一引用、调一次）
  *   IPC-CC2 listModels 抛错 → 这次调用以同一个错误拒绝
+ *   NH-6 网络客户端发起（server mode phase B）：device_code / auth_url 作为 `provider:oauth-event` 推到那条连接上；
+ *        **从不**在这台电脑上开浏览器（routeExternalUrl 不调）；最后一条是 {kind:'finished'}
+ *   NH-7 登录途中连接关了 → cancelLogin(id) 恰一次；正常结束后撤掉监听（之后连接再关也不取消）
  *
  * electron 是替身（handle 收进 Map；BrowserWindow.fromWebContents 回一个可辨认的窗口）；
  * providerOAuthService / externalOpen 是 spy；发起方的 webContents 是一个 EventEmitter。
@@ -69,8 +72,22 @@ import { routeExternalUrl } from '../../services/externalOpen'
 import { commandClassifier } from '../../services/commandClassifier'
 import { providerOAuthService } from '../../services/providerOAuthService'
 import { registerProviderHandlers } from '../providerHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
+import { attachTransport, listDefinitions } from '../registry'
+import { createNetworkTransport } from '../../frontend/network/transport'
+import {
+  fakeConnection,
+  netClient,
+  netCtx,
+  type FakeNetworkConnection
+} from '../../frontend/network/__tests__/support/fakeNetworkConnection'
 
 registerProviderHandlers()
+// 注册表经 IPC 适配器挂到（替身）ipcMain 上：handlers 里收的是适配器包过的处理函数
+attachIpcAdapter()
+// 网络客户端发起的登录：推送经网络传输到假连接
+const networkTransport = createNetworkTransport()
+attachTransport(networkTransport)
 
 const route = vi.mocked(routeExternalUrl)
 const oauth = vi.mocked(providerOAuthService)
@@ -416,5 +433,87 @@ describe('provider:listClassifierModels', () => {
     await expect(
       Promise.resolve().then(() => invoke('provider:listClassifierModels'))
     ).rejects.toBe(boom)
+  })
+})
+
+describe('provider:oauthLogin from a network client', () => {
+  /** 以网络客户端 ws:1 的身份发起登录（经注册表的定义，不走 IPC） */
+  async function startNetLogin(): Promise<{
+    conn: FakeNetworkConnection
+    ipc: Promise<LoginResult>
+    notify: (event: ProviderOAuthEvent) => void
+    finish: (result: LoginResult) => void
+  }> {
+    const conn = fakeConnection(netClient(1))
+    networkTransport.add(conn)
+    let notify: ((event: ProviderOAuthEvent) => void) | undefined
+    let finish: ((result: LoginResult) => void) | undefined
+    oauth.login.mockImplementationOnce(
+      (_id: string, n: (event: ProviderOAuthEvent) => void) =>
+        new Promise<LoginResult>((resolve) => {
+          notify = n
+          finish = resolve
+        })
+    )
+    const definition = listDefinitions().find((d) => d.channel === 'provider:oauthLogin')
+    if (!definition) throw new Error('provider:oauthLogin not defined')
+    const ipc = definition.fn(netCtx(1), PROVIDER) as Promise<LoginResult>
+    await vi.waitFor(() => expect(notify).toBeDefined())
+    return { conn, ipc, notify: notify!, finish: finish! }
+  }
+
+  const pushed = (conn: FakeNetworkConnection): unknown[] =>
+    conn.sent
+      .filter((m) => m.t === 'push' && m.channel === CHANNEL)
+      .map((m) => (m as { args: unknown[] }).args[0])
+
+  it('NH-6 device_code / auth_url are pushed on the connection, nothing is opened, finished comes last', async () => {
+    const { conn, ipc, notify, finish } = await startNetLogin()
+    notify({
+      type: 'device_code',
+      userCode: 'ABCD-1234',
+      verificationUri: 'https://auth.example/device',
+      intervalSeconds: 5,
+      expiresInSeconds: 900
+    })
+    notify({ type: 'auth_url', url: 'https://auth.example/a' })
+    finish({ success: true })
+    await expect(ipc).resolves.toStrictEqual({ success: true })
+    expect(pushed(conn)).toStrictEqual([
+      {
+        providerId: PROVIDER,
+        kind: 'device_code',
+        userCode: 'ABCD-1234',
+        verificationUri: 'https://auth.example/device',
+        expiresInSeconds: 900
+      },
+      { providerId: PROVIDER, kind: 'auth_url', url: 'https://auth.example/a' },
+      { providerId: PROVIDER, kind: 'finished' }
+    ])
+    expect(route).not.toHaveBeenCalled()
+    expect(state.fromWebContents).toEqual([])
+  })
+
+  it('NH-7 the connection closing mid-login cancels that login once', async () => {
+    const { conn, ipc, finish } = await startNetLogin()
+    expect(oauth.cancelLogin).not.toHaveBeenCalled()
+    conn.close(1001, 'gone')
+    expect(oauth.cancelLogin).toHaveBeenCalledTimes(1)
+    expect(oauth.cancelLogin).toHaveBeenCalledWith(PROVIDER)
+    finish({ success: false, error: 'Login cancelled', cancelled: true })
+    await expect(ipc).resolves.toMatchObject({ cancelled: true })
+    expect(oauth.cancelLogin).toHaveBeenCalledTimes(1)
+    expect(pushed(conn)).toStrictEqual([])
+  })
+
+  it('NH-7 after a normal settle the watcher is removed: a later close cancels nothing', async () => {
+    const { conn, ipc, finish } = await startNetLogin()
+    expect(conn.closeHandlerCount()).toBeGreaterThan(0)
+    const before = conn.closeHandlerCount()
+    finish({ success: true })
+    await ipc
+    expect(conn.closeHandlerCount()).toBe(before - 1)
+    conn.close(1000, 'bye')
+    expect(oauth.cancelLogin).not.toHaveBeenCalled()
   })
 })

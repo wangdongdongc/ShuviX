@@ -33,23 +33,10 @@ export interface SessionUpdateTitleParams {
   title: string
 }
 
-/** IPC: 更新会话模型配置参数 */
-export interface SessionUpdateModelConfigParams {
-  id: string
-  provider: string
-  model: string
-}
-
 /** IPC: 更新会话所属项目参数 */
 export interface SessionUpdateProjectParams {
   id: string
   projectId: string | null
-}
-
-/** IPC: 更新会话思考深度参数 */
-export interface SessionUpdateThinkingLevelParams {
-  id: string
-  thinkingLevel: string
 }
 
 /** IPC: 修改扩展能力勾选参数（整份替换；会话已有 Agent 运行时则被拒绝） */

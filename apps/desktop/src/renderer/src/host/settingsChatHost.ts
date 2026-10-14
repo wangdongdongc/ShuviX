@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { ChatHostValue } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../stores/settingsStore'
+import { hostSandboxLibBase } from './hostMedia'
 
 /**
  * 桌面宿主：把 settingsStore 适配成 chat-ui 需要的 ChatHostValue。
@@ -33,8 +34,10 @@ export function useSettingsChatHost(): ChatHostValue {
         setActiveModel
       },
       voice: { ttsEnabled: voiceTtsEnabled },
-      // 桌面能跑 ```interactive：页面 CSP 放行了 `shuvix-lib:`，main 注册了那个库协议
-      interactiveFigures: true
+      // 桌面能跑 ```interactive：页面 CSP 放行了 `shuvix-lib:`，main 注册了那个库协议。
+      // 浏览器里的 web 客户端也能跑：库改从网络服务的 `/lib/` 加载（server mode phase D）
+      interactiveFigures: true,
+      ...(hostSandboxLibBase === undefined ? {} : { sandboxLibBase: hostSandboxLibBase })
     }),
     [
       theme,

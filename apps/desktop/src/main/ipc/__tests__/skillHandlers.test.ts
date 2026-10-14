@@ -9,6 +9,8 @@
  *            那些笔记指着它的旧路径，共用的 claude 组之后按需重建载体。
  *   IPC-SK-4/5 `skill:addExternalDir` 的拒绝不是异常而是 `{ success: false, reason }`：原因原样回到
  *            渲染端（同一目录换个写法时，原因里是调用方填的那个路径）。
+ *   NH-9     `skill:pickExternalDir` 从网络客户端来（server mode phase B）→ `{ success: false, reason: 'unavailable' }`，
+ *            目录选择器不弹（它会弹在这台电脑上）。
  *
  * electron 是替身（handle 收进 Map）；skillNotes 是替身（只看调没调、拿什么调）；**skillService 是真的**
  * —— 「这个名字算不算移除了一条」正是它的判定，替身验不出来。paths 打桩到夹具根下（假 home 不碰
@@ -60,6 +62,10 @@ vi.mock('../../services/skillNotes', () => ({
 }))
 
 import { registerSkillHandlers } from '../skillHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
+import { listDefinitions } from '../registry'
+import { dialog } from 'electron'
+import { netCtx } from '../../frontend/network/__tests__/support/fakeNetworkConnection'
 
 const DIRS = state.dirs
 const CONFIG_PATH = join(DIRS.user, '.config.json')
@@ -73,10 +79,14 @@ const writeSkill = (dir: string, dirEntry: string): void => {
 }
 const readConfig = (): string => (existsSync(CONFIG_PATH) ? readFileSync(CONFIG_PATH, 'utf8') : '')
 
+// 注册一次（同一通道再定义会抛错），经 IPC 适配器挂到替身 ipcMain 上
+registerSkillHandlers()
+attachIpcAdapter()
+
 const invoke = (channel: string, ...args: unknown[]): Promise<unknown> => {
   const fn = state.handlers.get(channel)
   if (!fn) throw new Error(`no handler for ${channel}`)
-  return Promise.resolve(fn({}, ...args))
+  return Promise.resolve(fn({ sender: { id: 1 } }, ...args))
 }
 
 beforeEach(() => {
@@ -84,9 +94,7 @@ beforeEach(() => {
   for (const dir of [DIRS.builtin, DIRS.user, DIRS.ext, DIRS.legacy]) {
     mkdirSync(dir, { recursive: true })
   }
-  state.handlers.clear()
   state.dropExternalSkillCarrier.mockClear()
-  registerSkillHandlers()
 })
 
 afterAll(() => {
@@ -183,5 +191,17 @@ describe('skill:removeExternalDir —— 承载项目的级联', () => {
 
     expect(readConfig()).toBe(before)
     expect(JSON.parse(readConfig()).dirs).toEqual([{ name: 'ext', path: DIRS.ext }])
+  })
+})
+
+describe('skill:pickExternalDir —— 网络客户端', () => {
+  it("NH-9 从网络来 → { success: false, reason: 'unavailable' }，不弹目录选择器", async () => {
+    const definition = listDefinitions().find((d) => d.channel === 'skill:pickExternalDir')
+    if (!definition) throw new Error('skill:pickExternalDir not defined')
+    await expect(Promise.resolve(definition.fn(netCtx(1)))).resolves.toEqual({
+      success: false,
+      reason: 'unavailable'
+    })
+    expect(vi.mocked(dialog.showOpenDialog)).not.toHaveBeenCalled()
   })
 })

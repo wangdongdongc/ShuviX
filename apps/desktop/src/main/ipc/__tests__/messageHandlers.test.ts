@@ -2,7 +2,7 @@
  * messageHandlers —— IPC `message:rollback` 的结果（P3-10b-11，PIN-02）。
  *
  * 真的回退了 → `{success:true}`；没有可回退的目标（运行时拒绝、旧格式会话、id 不是条目 id —— 网关都答
- * false）→ `{success:false}`，界面据此不回填草稿、不重发。处理函数跑在 `createElectronContext(sessionId)`
+ * false）→ `{success:false}`，界面据此不回填草稿、不重发。处理函数跑在 `createClientContext(ctx, sessionId)`
  * 里；运行时抛错原样拒绝（不吞成 `{success:false}`）。
  *
  * electron 是替身（handle 收进 Map）；网关只替到 rollbackMessage 那一层，operationContext 记下上下文。
@@ -45,17 +45,20 @@ vi.mock('../../frontend', () => ({
       }
     }
   },
-  createElectronContext: (sessionId: string) => ({ electron: sessionId })
+  createClientContext: (_ctx: unknown, sessionId: string) => ({ electron: sessionId })
 }))
 
 import { registerMessageHandlers } from '../messageHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
 
 registerMessageHandlers()
+// 注册表经 IPC 适配器挂到（替身）ipcMain 上：handlers 里收的是适配器包过的处理函数
+attachIpcAdapter()
 
 const invoke = (channel: string, ...args: unknown[]): unknown => {
   const handler = state.handlers.get(channel)
   if (!handler) throw new Error(`no handler for ${channel}`)
-  return handler({}, ...args)
+  return handler({ sender: { id: 1 } }, ...args)
 }
 
 beforeEach(() => {
@@ -65,7 +68,7 @@ beforeEach(() => {
 })
 
 describe('P3-10b-11 message:rollback 的结果（PIN-02）', () => {
-  it('P3-10b-11 回退了 → {success:true}；网关在 createElectronContext(sessionId) 里被调', async () => {
+  it('P3-10b-11 回退了 → {success:true}；网关在 createClientContext(ctx, sessionId) 里被调', async () => {
     state.rollbackMessage.mockResolvedValue(true)
     expect(await invoke('message:rollback', { sessionId: 's1', messageId: '42' })).toEqual({
       success: true

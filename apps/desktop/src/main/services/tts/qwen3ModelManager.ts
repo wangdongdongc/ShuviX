@@ -1,11 +1,12 @@
 import { join, dirname } from 'path'
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'fs'
 import { spawn } from 'child_process'
-import { app, BrowserWindow } from 'electron'
+import { app } from 'electron'
 import { getQwen3TtsDir } from '../../utils/paths'
 import { listFiles } from '@huggingface/hub'
 import { downloadManager } from '../../utils/downloadManager'
 import { createLogger } from '../../logger'
+import { broadcastToClients } from '../../ipc/registry'
 
 const log = createLogger('Qwen3Model')
 
@@ -289,11 +290,9 @@ class Qwen3ModelManager {
     })
   }
 
-  /** 广播 setup 进度到所有渲染窗口 */
+  /** 广播 setup 进度到所有客户端（桌面：所有渲染窗口） */
   broadcastProgress(progress: Qwen3SetupProgress): void {
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('tts:setupProgress', progress)
-    }
+    broadcastToClients('tts:setupProgress', progress)
   }
 }
 

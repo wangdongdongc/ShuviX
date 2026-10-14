@@ -1,6 +1,7 @@
 /**
  * 视图同步的 IPC 注册（`ipc/syncHandlers`，pi 1.2 / chord2）—— 链路表 `hub` 是模块级的懒单例，服务端也是
- * （`syncWiring`），所以每个用例 `vi.resetModules()` 之后重新 import。electron 是替身；会话宿主换成 viewRig 的
+ * （`syncWiring`），通道注册表（`ipc/registry`）同样，所以每个用例 `vi.resetModules()` 之后重新 import；注册之后经
+ * IPC 适配器（`ipc/ipcAdapter`）挂到假 / 替身 ipcMain 上，与主入口的接法一样。electron 是替身；会话宿主换成 viewRig 的
  * 假宿主（`getSessionHost` 记调用）；行表 / 旧格式读取器 / 派生 agent 路由 / logger 换成可控的替身。
  *
  *   SH-1 恰好一个 `on('sync:frame')`，没有 `sync:invoke` 的 handle（缺省的 electron ipcMain 与注入的都一样）
@@ -68,6 +69,7 @@ vi.mock('../../logger', () => ({
 
 type HandlersModule = typeof import('../syncHandlers')
 type WiringModule = typeof import('../../frontend/sync/syncWiring')
+type AdapterModule = typeof import('../ipcAdapter')
 
 const S1: SyncTarget = { kind: 'session', sessionId: 's1' }
 const HELLO = { t: 'hello', name: 'renderer', kind: 'client', epoch: 1 } as const
@@ -75,12 +77,26 @@ const HELLO = { t: 'hello', name: 'renderer', kind: 'client', epoch: 1 } as cons
 let windows: SyncWindow[] = []
 let wiring: WiringModule | undefined
 
-/** 新的模块实例（hub / 服务端都是新的） */
-async function fresh(): Promise<{ handlers: HandlersModule; wiring: WiringModule }> {
+/** 新的模块实例（hub / 服务端 / 通道注册表都是新的） */
+async function fresh(): Promise<{
+  handlers: HandlersModule
+  wiring: WiringModule
+  adapter: AdapterModule
+}> {
   vi.resetModules()
   const handlers = await import('../syncHandlers')
+  const adapter = await import('../ipcAdapter')
   wiring = await import('../../frontend/sync/syncWiring')
-  return { handlers, wiring }
+  return { handlers, wiring, adapter }
+}
+
+/** 注册 + 经 IPC 适配器挂到 ipcMain 上（不给就是 electron 的替身 ipcMain） */
+function register(
+  { handlers, adapter }: { handlers: HandlersModule; adapter: AdapterModule },
+  ipcMain?: FakeIpcMain
+): void {
+  handlers.registerSyncHandlers()
+  adapter.attachIpcAdapter(ipcMain)
 }
 
 function page(wc: FakeWebContents, ipcMain: FakeIpcMain): SyncWindow {
@@ -111,17 +127,17 @@ function viewHost(): FakeViewHost {
 
 describe('SH-1 registration', () => {
   it('SH-1 registers exactly one on("sync:frame") and no sync:invoke handler', async () => {
-    const { handlers } = await fresh()
+    const modules = await fresh()
     const ipcMain = new FakeIpcMain()
-    handlers.registerSyncHandlers(ipcMain)
+    register(modules, ipcMain)
     expect(ipcMain.count('sync:frame')).toBe(1)
     expect([...ipcMain.listeners.keys()]).toEqual(['sync:frame'])
     expect(ipcMain.handled).toEqual([])
   })
 
   it('SH-1 the default electron ipcMain gets the same single listener', async () => {
-    const { handlers } = await fresh()
-    handlers.registerSyncHandlers()
+    const modules = await fresh()
+    register(modules)
     expect(holder.electronOn).toHaveBeenCalledTimes(1)
     expect(holder.electronOn.mock.calls[0]![0]).toBe('sync:frame')
     expect(holder.electronHandle).not.toHaveBeenCalled()
@@ -130,9 +146,10 @@ describe('SH-1 registration', () => {
 
 describe('SH-2 lazy creation (PIN-12)', () => {
   it('SH-2 import + register build nothing; the first hello builds the server; the first durable subscribe peeks once', async () => {
-    const { handlers, wiring } = await fresh()
+    const modules = await fresh()
+    const { wiring } = modules
     const ipcMain = new FakeIpcMain()
-    handlers.registerSyncHandlers(ipcMain)
+    register(modules, ipcMain)
     expect(wiring.peekSyncHub()).toBeUndefined()
     expect(holder.getSessionHost).not.toHaveBeenCalled()
 
@@ -159,9 +176,10 @@ describe('SH-2 lazy creation (PIN-12)', () => {
 
 describe('SH-3 the sender is the principal', () => {
   it('SH-3 a frame from webContents 7 opens a link with webContentsId 7; the answer goes back to 7', async () => {
-    const { handlers, wiring } = await fresh()
+    const modules = await fresh()
+    const { wiring } = modules
     const ipcMain = new FakeIpcMain()
-    handlers.registerSyncHandlers(ipcMain)
+    register(modules, ipcMain)
     const server = wiring.getSyncHub()
     const accept = vi.spyOn(server, 'accept')
     const wc7 = new FakeWebContents(7)
@@ -184,9 +202,10 @@ describe('SH-3 the sender is the principal', () => {
 
 describe('SH-4 a failing receive', () => {
   it('SH-4 an error thrown inside receive is logged and not rethrown out of the listener', async () => {
-    const { handlers, wiring } = await fresh()
+    const modules = await fresh()
+    const { wiring } = modules
     const ipcMain = new FakeIpcMain()
-    handlers.registerSyncHandlers(ipcMain)
+    register(modules, ipcMain)
     const broken: SyncWebContents = {
       id: 9,
       send: () => {},
@@ -215,9 +234,10 @@ describe('SH-4 a failing receive', () => {
 
 describe('SH-5 invalid input over IPC', () => {
   it('SH-5 an empty sessionId → client error "invalid", nothing held', async () => {
-    const { handlers, wiring } = await fresh()
+    const modules = await fresh()
+    const { wiring } = modules
     const ipcMain = new FakeIpcMain()
-    handlers.registerSyncHandlers(ipcMain)
+    register(modules, ipcMain)
     const wc = new FakeWebContents(7)
     const window = page(wc, ipcMain)
     const sub = window.client.acquire<SessionView>({ kind: 'session', sessionId: '' })

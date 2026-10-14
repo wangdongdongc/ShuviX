@@ -211,9 +211,12 @@ export function notifyAskResolved(sessionId: string, requestId: string): void {
   center?.askResolved(sessionId, requestId)
 }
 
-/** 渲染进程上报：该窗口当前展示的会话（null = 无会话，如设置窗口） */
-export function reportActiveSession(webContentsId: number, sessionId: string | null): void {
-  activeSessionByWindow.set(webContentsId, sessionId)
+/**
+ * 渲染进程上报：该窗口当前展示的会话（null = 无会话，如设置窗口）。`webContentsId` 为 null = 没有窗口的客户端
+ * （局域网里的浏览器）：不进「窗口 → 会话」表（没有焦点可言，从不算前台），只撤掉该会话名下的通知
+ */
+export function reportActiveSession(webContentsId: number | null, sessionId: string | null): void {
+  if (webContentsId !== null) activeSessionByWindow.set(webContentsId, sessionId)
   // 用户已经看到它了，该会话名下挂着的通知就没意义了
   if (sessionId) center?.sessionOpened(sessionId)
 }

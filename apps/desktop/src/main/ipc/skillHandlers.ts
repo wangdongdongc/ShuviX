@@ -1,4 +1,5 @@
-import { ipcMain, dialog } from 'electron'
+import { dialog } from 'electron'
+import { defineHandler } from './registry'
 import { skillService } from '../services/skillService'
 import { dropExternalSkillCarrier, openSkillNote } from '../services/skillNotes'
 import type { SkillUpdateParams, SkillDir } from '../types'
@@ -8,46 +9,48 @@ import type { SkillUpdateParams, SkillDir } from '../types'
  */
 export function registerSkillHandlers(): void {
   /** 获取所有 Skill */
-  ipcMain.handle('skill:list', () => {
+  defineHandler('skill:list', () => {
     return skillService.findAll()
   })
 
   /** 获取按目录分组的 Skill 列表 */
-  ipcMain.handle('skill:listGrouped', () => {
+  defineHandler('skill:listGrouped', () => {
     return skillService.findAllGrouped()
   })
 
   /** 更新 Skill */
-  ipcMain.handle('skill:update', (_event, params: SkillUpdateParams) => {
+  defineHandler('skill:update', (_ctx, params: SkillUpdateParams) => {
     skillService.update(params)
     return { success: true }
   })
 
   /** 删除默认目录中的 Skill（移除整个子目录） */
-  ipcMain.handle('skill:deleteDefault', (_event, name: string) => {
+  defineHandler('skill:deleteDefault', (_ctx, name: string) => {
     skillService.deleteDefaultSkill(name)
     return { success: true }
   })
 
   /** 解析 SKILL.md 文本 → { name, description, content } */
-  ipcMain.handle('skill:parseMarkdown', (_event, text: string) => {
+  defineHandler('skill:parseMarkdown', (_ctx, text: string) => {
     return skillService.parseSkillMarkdown(text)
   })
 
   /** 获取默认 skills 目录路径 */
-  ipcMain.handle('skill:getDefaultDir', () => {
+  defineHandler('skill:getDefaultDir', () => {
     return skillService.getDefaultSkillsDir()
   })
 
   // ============ 目录管理 ============
 
   /** 获取外部 skill 源目录列表 */
-  ipcMain.handle('skill:listExternalDirs', () => {
+  defineHandler('skill:listExternalDirs', () => {
     return skillService.listExternalDirs()
   })
 
   /** 弹出文件夹选择器（仅返回路径，不执行添加） */
-  ipcMain.handle('skill:pickExternalDir', async () => {
+  defineHandler('skill:pickExternalDir', async (ctx) => {
+    // 网络客户端（浏览器）：目录选择器会弹在这台电脑上 —— 拒掉（phase D）
+    if (ctx.client.kind !== 'window') return { success: false, reason: 'unavailable' }
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'showHiddenFiles'],
       title: 'Select Skill Source Directory'
@@ -59,7 +62,7 @@ export function registerSkillHandlers(): void {
   })
 
   /** 添加外部 skill 源目录 */
-  ipcMain.handle('skill:addExternalDir', (_event, dir: SkillDir) => {
+  defineHandler('skill:addExternalDir', (_ctx, dir: SkillDir) => {
     try {
       skillService.addExternalDir(dir)
       return { success: true }
@@ -72,7 +75,7 @@ export function registerSkillHandlers(): void {
    * 移除外部 skill 源目录 —— 连同它的笔记本承载项目与那些会话一起清掉：目录都不在了，
    * 那些会话指向的文件已经与本应用无关
    */
-  ipcMain.handle('skill:removeExternalDir', async (_event, name: string) => {
+  defineHandler('skill:removeExternalDir', async (_ctx, name: string) => {
     // 只在真的移除了一条外部目录时删承载项目：共用目录的组键（claude / agents）也拼得出同形的
     // 承载 id，名字对得上不等于该删
     if (skillService.removeExternalDir(name)) await dropExternalSkillCarrier(name.trim())
@@ -80,14 +83,14 @@ export function registerSkillHandlers(): void {
   })
 
   /** 打开 / 复用一个技能的 SKILL.md 笔记本（按技能标识认；内置那份是只读的） */
-  ipcMain.handle('skill:openNote', (_event, params: { name: string; title?: string }) =>
+  defineHandler('skill:openNote', (_ctx, params: { name: string; title?: string }) =>
     openSkillNote(params.name, params.title)
   )
 
   /** 切换分组总开关（关闭后整组 skills 失效） */
-  ipcMain.handle(
+  defineHandler(
     'skill:setGroupEnabled',
-    (_event, params: { dirName: string; isEnabled: boolean }) => {
+    (_ctx, params: { dirName: string; isEnabled: boolean }) => {
       skillService.setGroupEnabled(params.dirName, params.isEnabled)
       return { success: true }
     }

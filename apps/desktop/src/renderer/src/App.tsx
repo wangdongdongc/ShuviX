@@ -19,10 +19,11 @@ import { useBottomPanelStore } from './stores/bottomPanelStore'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { useAppInit } from './hooks/useAppInit'
 import { usePinChatSync } from './hooks/usePinChatSync'
-import { ChatHostProvider, MediaUrlProvider, shuvixPreviewResolver } from '@shuvix/chat-ui'
+import { ChatHostProvider, MediaUrlProvider } from '@shuvix/chat-ui'
 import { ContextMenuProvider, type ContextMenuRenderer } from '@shuvix/app-shell'
 import { useSettingsChatHost } from './host/settingsChatHost'
 import { SessionRuntime } from './host/SessionRuntime'
+import { hostMediaResolver } from './host/hostMedia'
 
 /** 根据 URL hash 判断当前窗口类型 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -35,6 +36,10 @@ const isFilePreviewWindow = window.location.hash.startsWith('#file-preview')
 /** 桌面原生右键菜单渲染器（Electron Menu.popup，于光标处弹出，故忽略 position） */
 const nativeContextMenu: ContextMenuRenderer = async (items) =>
   (await window.api.contextMenu.popup({ items })).actionId
+
+/** 浏览器里的 web 客户端没有原生菜单：交给 ContextMenuProvider 自带的 DOM 菜单（undefined = 用它） */
+const contextMenuRenderer: ContextMenuRenderer | undefined =
+  window.api.app.platform === 'web' ? undefined : nativeContextMenu
 
 /**
  * 应用主入口
@@ -170,9 +175,9 @@ function MainOrSettings(): React.JSX.Element {
   // 它在对话流内，够不着 ChatView 里那个只包会话面板的 provider
   return (
     <ChatHostProvider value={chatHost}>
-      <MediaUrlProvider value={shuvixPreviewResolver}>
+      <MediaUrlProvider value={hostMediaResolver}>
         <SessionRuntime sessionId={activeSessionId} />
-        <ContextMenuProvider render={nativeContextMenu}>{content}</ContextMenuProvider>
+        <ContextMenuProvider render={contextMenuRenderer}>{content}</ContextMenuProvider>
       </MediaUrlProvider>
     </ChatHostProvider>
   )

@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Wrench, Trash2, Archive, Square, ChevronRight, RotateCcw } from 'lucide-react'
 import { useWidgetStore } from '../../stores/widgetStore'
-import { useContextMenu } from '../../hooks/useContextMenu'
+import { useContextMenu } from '@shuvix/app-shell'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
+import { isWebHost } from '../../host/hostMedia'
+import { downloadServerFile } from '../../host/serverDownload'
 
 /**
  * Widget 面板 —— Right panel 的 Widget tab 内容
@@ -42,8 +44,24 @@ export function WidgetPanel(): React.JSX.Element {
 
   const isEmpty = loaded && widgets.length === 0
 
-  /** 弹保存对话框 + 执行导出，并把结果记录到本地 state 以便展示 */
+  /**
+   * 弹保存对话框 + 执行导出，并把结果记录到本地 state 以便展示。
+   * 浏览器里的 web 客户端（phase D）没有保存框：导出到服务端的临时目录，再下载到浏览器这边；只有失败才弹框
+   */
   const handleExport = async (w: WidgetSummary): Promise<void> => {
+    if (isWebHost) {
+      const res = await window.api.widget.exportForDownload({ id: w.id })
+      if (res.success) {
+        downloadServerFile(res.zipPath)
+      } else {
+        setExportResult({
+          kind: 'error',
+          name: w.name,
+          message: errorMessageForExportCode(res.code, res.error, t)
+        })
+      }
+      return
+    }
     const pick = await window.api.widget.pickExportTarget({ id: w.id })
     if (!pick.success) return // 用户取消 — 静默
     const res = await window.api.widget.exportAsVite({ id: w.id, targetPath: pick.path })
@@ -94,12 +112,15 @@ export function WidgetPanel(): React.JSX.Element {
                       onOpen={() => void openWidgetWindow(w.id)}
                       onStop={() => void stopWidgetAction(w.id)}
                       onContextMenu={(e) => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                        showContextMenu(
+                        // 共享的菜单（ContextMenuProvider）：桌面弹原生菜单，浏览器里的 web 客户端弹 DOM 菜单
+                        void showContextMenu(
+                          e,
                           [
                             { id: 'openWindow', label: t('widgets.openInWindow') },
-                            { id: 'openPanel', label: t('widgets.openInPanel') },
+                            // 「在浏览器面板里打开」= 内置浏览器窗口：浏览器里的 web 客户端没有它
+                            ...(isWebHost
+                              ? []
+                              : [{ id: 'openPanel', label: t('widgets.openInPanel') }]),
                             ...(isRunning ? [{ id: 'stop', label: t('widgets.stop') }] : []),
                             { id: 'export', label: t('widgets.exportAsVite') },
                             { id: 'archive', label: t('widgets.archive') },

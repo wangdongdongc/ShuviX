@@ -10,7 +10,7 @@
  *  - `shuvix-preview://load/?session=<sid>&path=<encodedAbs>`
  *      文件预览面板的 PDF / 视频 / 音频统一资源协议。
  *      与 shuvix-media 的关键差异：
- *        1. 强制准入校验（isPathReadAllowed），renderer 拿不到工作区外的文件
+ *        1. 相对路径按会话的工作目录解析（与 files.read 同口径；不限路径）
  *        2. Range-aware：解析 `Range: bytes=start-end` 返回 206 Partial Content，
  *           否则 <video>/<audio> 进度条不可拖、PDFium 翻页慢
  *        3. 显式 Content-Type，否则 Chromium 媒体元素拒绝 seek
@@ -28,44 +28,14 @@
 
 import { protocol, net } from 'electron'
 import { createReadStream } from 'fs'
-import { readFile, stat as fsStat } from 'fs/promises'
-import { extname, join } from 'path'
+import { stat as fsStat } from 'fs/promises'
 import { Readable } from 'stream'
-import { SANDBOX_LIBS, SANDBOX_LIB_SCHEME } from '@shuvix/chat-protocol/utils/interactiveFence'
-import { resolveProjectConfig } from './toolContext'
-import { resolveReadPath } from '../utils/toolUtils/pathUtils'
-import { getSandboxLibsDir } from '../utils/paths'
+import { SANDBOX_LIB_SCHEME } from '@shuvix/chat-protocol/utils/interactiveFence'
+import { readSandboxLib, resolvePreviewFilePath } from './fileServing'
+import { parseByteRange, previewMimeOf } from '../utils/fileResponse'
 import { createLogger } from '../logger'
 
 const log = createLogger('CustomProtocols')
-
-/** preview 协议显式 Content-Type 映射 —— Chromium 媒体元素强制要求才允许 seek */
-const PREVIEW_MIME_BY_EXT: Record<string, string> = {
-  // 图片：供 <img src="shuvix-preview://..."> 加载（Markdown 内嵌 ![[img]]）。
-  // 缺这些会回落 application/octet-stream，部分场景 <img> 不渲染。
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.bmp': 'image/bmp',
-  '.avif': 'image/avif',
-  '.ico': 'image/x-icon',
-  '.pdf': 'application/pdf',
-  '.mp4': 'video/mp4',
-  '.m4v': 'video/x-m4v',
-  '.webm': 'video/webm',
-  '.mov': 'video/quicktime',
-  '.ogv': 'video/ogg',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg',
-  '.flac': 'audio/flac',
-  '.m4a': 'audio/mp4',
-  '.aac': 'audio/aac',
-  '.opus': 'audio/opus'
-}
 
 /**
  * 注册 scheme + privileges。**必须在 app.whenReady 之前调用**，否则 Chromium 会按默认
@@ -108,12 +78,10 @@ export function registerCustomProtocolHandlers(): void {
   protocol.handle(SANDBOX_LIB_SCHEME, handleSandboxLibRequest)
 }
 
-/** 读过的库文件（两份、各两三百 KB，随包只读 —— 进程内缓存一次就够） */
-const sandboxLibCache = new Map<string, Buffer>()
-
 /**
  * shuvix-lib —— 名字（URL 的 host）查白名单，命中就回随包文件。路径、查询串一概不看，
  * 所以 `shuvix-lib://chart.js/../../etc/passwd` 与 `shuvix-lib://chart.js` 是同一个请求。
+ * 白名单与读法与网络服务的 `/lib/<名字>` 共用（fileServing.ts）。
  */
 export async function handleSandboxLibRequest(request: GlobalRequest): Promise<GlobalResponse> {
   let name: string
@@ -122,17 +90,10 @@ export async function handleSandboxLibRequest(request: GlobalRequest): Promise<G
   } catch {
     return new Response('Bad request', { status: 400 })
   }
-  // Object.hasOwn：`constructor` / `__proto__` 这类名字不能从原型链上摸到东西
-  const lib = Object.hasOwn(SANDBOX_LIBS, name) ? SANDBOX_LIBS[name] : undefined
-  if (!lib || request.method !== 'GET') {
-    return new Response('Not found', { status: 404 })
-  }
+  if (request.method !== 'GET') return new Response('Not found', { status: 404 })
   try {
-    let body = sandboxLibCache.get(lib.file)
-    if (!body) {
-      body = await readFile(join(getSandboxLibsDir(), lib.file))
-      sandboxLibCache.set(lib.file, body)
-    }
+    const body = await readSandboxLib(name)
+    if (!body) return new Response('Not found', { status: 404 })
     return new Response(new Uint8Array(body), {
       status: 200,
       headers: { 'Content-Type': 'text/javascript; charset=utf-8' }
@@ -149,7 +110,7 @@ function handleMediaRequest(request: GlobalRequest): Promise<GlobalResponse> {
   return net.fetch(`file://${filePath}`)
 }
 
-/** shuvix-preview —— 准入 + Range 完整实现 */
+/** shuvix-preview —— 路径解析 + Range 完整实现（与网络服务的 `/files/preview` 共用 fileServing.ts） */
 async function handlePreviewRequest(request: GlobalRequest): Promise<GlobalResponse> {
   try {
     const url = new URL(request.url)
@@ -159,38 +120,32 @@ async function handlePreviewRequest(request: GlobalRequest): Promise<GlobalRespo
       return new Response('Bad request', { status: 400 })
     }
 
-    const config = resolveProjectConfig(sessionId)
-    const absolutePath = resolveReadPath(rawPath, config.workingDirectory)
+    const absolutePath = resolvePreviewFilePath(sessionId, rawPath)
 
     const stat = await fsStat(absolutePath)
     const totalSize = stat.size
-    const mime =
-      PREVIEW_MIME_BY_EXT[extname(absolutePath).toLowerCase()] ?? 'application/octet-stream'
+    const mime = previewMimeOf(absolutePath)
 
     // Range 请求 → 206 Partial Content；浏览器据此实现 seek
-    const rangeHeader = request.headers.get('range')
-    if (rangeHeader) {
-      const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader)
-      if (m) {
-        const start = m[1] ? parseInt(m[1], 10) : 0
-        const end = m[2] ? parseInt(m[2], 10) : totalSize - 1
-        if (start < totalSize && start <= end && end < totalSize) {
-          const stream = createReadStream(absolutePath, { start, end })
-          return new Response(Readable.toWeb(stream) as ReadableStream, {
-            status: 206,
-            headers: {
-              'Content-Range': `bytes ${start}-${end}/${totalSize}`,
-              'Accept-Ranges': 'bytes',
-              'Content-Length': String(end - start + 1),
-              'Content-Type': mime
-            }
-          })
+    const range = parseByteRange(request.headers.get('range'), totalSize)
+    if (range.kind === 'partial') {
+      const { start, end } = range
+      const stream = createReadStream(absolutePath, { start, end })
+      return new Response(Readable.toWeb(stream) as ReadableStream, {
+        status: 206,
+        headers: {
+          'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': String(end - start + 1),
+          'Content-Type': mime
         }
-        return new Response('', {
-          status: 416,
-          headers: { 'Content-Range': `bytes */${totalSize}` }
-        })
-      }
+      })
+    }
+    if (range.kind === 'unsatisfiable') {
+      return new Response('', {
+        status: 416,
+        headers: { 'Content-Range': `bytes */${totalSize}` }
+      })
     }
 
     // 完整响应：仍带 Accept-Ranges，告诉浏览器后续可以发 Range

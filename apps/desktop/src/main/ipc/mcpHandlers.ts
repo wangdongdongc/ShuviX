@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { v7 as uuidv7 } from 'uuid'
 import { mcpService } from '../services/mcpService'
 import { mcpDao } from '../dao/mcpDao'
@@ -9,7 +9,7 @@ import type { McpServerAddParams, McpServerUpdateParams, McpServerInfo } from '.
  */
 export function registerMcpHandlers(): void {
   /** 列出所有 MCP Server（含运行时状态） */
-  ipcMain.handle('mcp:list', (): McpServerInfo[] => {
+  defineHandler('mcp:list', (): McpServerInfo[] => {
     const servers = mcpDao.findAll()
     return servers.map((s) => {
       // 工具数取 cachedTools（上次连上时发现的）：惰性启动下多数服务器此刻并没有连接，
@@ -43,7 +43,7 @@ export function registerMcpHandlers(): void {
   }
 
   /** 添加 MCP Server（不连接 —— 惰性启动，等哪条会话用到它再连） */
-  ipcMain.handle('mcp:add', (_event, params: McpServerAddParams) => {
+  defineHandler('mcp:add', (_ctx, params: McpServerAddParams) => {
     const problem = nameProblem(params.name)
     if (problem) return { success: false, error: problem }
     const now = Date.now()
@@ -70,7 +70,7 @@ export function registerMcpHandlers(): void {
   })
 
   /** 更新 MCP Server 配置 */
-  ipcMain.handle('mcp:update', async (_event, params: McpServerUpdateParams) => {
+  defineHandler('mcp:update', async (_ctx, params: McpServerUpdateParams) => {
     const existing = mcpDao.pick(params.id, ['isBuiltin'])
     const isBuiltin = existing?.isBuiltin === 1
 
@@ -100,7 +100,7 @@ export function registerMcpHandlers(): void {
   })
 
   /** 删除 MCP Server（内置 server 不可删除） */
-  ipcMain.handle('mcp:delete', async (_event, id: string) => {
+  defineHandler('mcp:delete', async (_ctx, id: string) => {
     const existing = mcpDao.pick(id, ['isBuiltin', 'name'])
     if (existing?.isBuiltin === 1) {
       return { success: false, error: `Built-in MCP server "${existing.name}" cannot be deleted` }
@@ -111,19 +111,19 @@ export function registerMcpHandlers(): void {
   })
 
   /** 手动连接（设置页的连接/重连按钮）—— 不设超时：用户在旁边等着，首次冷启动慢是可以等的 */
-  ipcMain.handle('mcp:connect', async (_event, id: string) => {
+  defineHandler('mcp:connect', async (_ctx, id: string) => {
     const { ok, error } = await mcpService.connect(id)
     return { success: ok, error }
   })
 
   /** 手动断开 */
-  ipcMain.handle('mcp:disconnect', async (_event, id: string) => {
+  defineHandler('mcp:disconnect', async (_ctx, id: string) => {
     await mcpService.disconnect(id)
     return { success: true }
   })
 
   /** 获取指定 server 已发现的工具列表 */
-  ipcMain.handle('mcp:getTools', (_event, id: string) => {
+  defineHandler('mcp:getTools', (_ctx, id: string) => {
     return mcpService.getServerToolInfos(id)
   })
 }

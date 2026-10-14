@@ -283,8 +283,7 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
   const sessionId = useChatStore((s) => s.activeSessionId)
   // 取不到宿主通道（扩展端没有 artifact 存储）就直接按「找不到」呈现 —— **派生出来，不写进
   // state**：在 effect 里同步 setState 会触发级联渲染，react-hooks/set-state-in-effect 拦它
-  const reader = (getHostApi() as { artifact?: { read: (p: unknown) => Promise<unknown> } } | null)
-    ?.artifact?.read
+  const reader = getHostApi()?.artifact?.read
   const canLoad = !!sessionId && !!reader
   const figureRef = useRef<HTMLDivElement>(null)
   const [loaded, setState] = useState<
@@ -298,9 +297,8 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
     let alive = true
     if (!canLoad || !reader) return
     void reader({ sessionId, name })
-      .then((r) => {
+      .then((row) => {
         if (!alive) return
-        const row = r as { name?: string; title: string; content: string } | null
         // 围栏里写的可能是标题而不是文件名（artifact:read 两种都认）：按宿主解析出来的真实文件名走，
         // 否则按标题引用的一件 .html 会落进 <pre> 而不是沙箱
         setState(

@@ -1,10 +1,11 @@
 import { useEffect, useMemo } from 'react'
 import i18next from 'i18next'
-import { ChatHostProvider, MediaUrlProvider, shuvixPreviewResolver } from '@shuvix/chat-ui'
+import { ChatHostProvider, MediaUrlProvider } from '@shuvix/chat-ui'
 import { FilePreview } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useSettingsChatHost } from '../../host/settingsChatHost'
 import { useFilePreviewBridge } from '../../host/useFilePreviewBridge'
+import { hostMediaResolver } from '../../host/hostMedia'
 
 /** `#file-preview?sessionId=…&path=…&openedBy=…` —— path 是文件的绝对（真实）路径 */
 function parseHash(): { sessionId: string | null; path: string | null; agent: boolean } {
@@ -89,7 +90,7 @@ export function FilePreviewWindowShell(): React.JSX.Element {
 
   return (
     <ChatHostProvider value={chatHost}>
-      <MediaUrlProvider value={shuvixPreviewResolver}>
+      <MediaUrlProvider value={hostMediaResolver}>
         <div className="h-full" data-file-preview-window="">
           {sessionId && path ? (
             <FilePreview

@@ -22,6 +22,12 @@
  *    外观守几条关键的形状（不钉具体调出来的像素数）。技能教「写裸标签、别重新设计它们」，前提是
  *    裸标签本身已经像应用。
  *
+ *  - **库基址**（IF-22…26，server mode phase D）：浏览器里的 web 客户端认不得 `shuvix-lib:`，给一个
+ *    `<origin>/lib/` 的基址 —— `isSandboxLibBase` 是唯一的闸门（它要原样进 CSP 的源表达式与 `content="…"`，
+ *    放宽 CSP 的 `*` 与用户信息的 `@` 都不收）；给了合格的基址，CSP 只换 script-src、正文里的
+ *    `shuvix-lib://<名字>` 换成 `<基址><名字的小写>`（名字后面的路径 / 查询串 / 片段丢掉，与桌面一致）；
+ *    不给 / 不合格 → 与改造前**逐字节**相同的桌面文档。
+ *
  * 已知管不到的两条出口（WebRTC、DNS 预取）在源文件头注释里写着，这里不断言它们被挡住。
  */
 import { describe, it, expect } from 'vitest'
@@ -39,7 +45,9 @@ import {
   buildSandboxDocument,
   clampSandboxHeight,
   fenceSourceIsClosed,
+  isSandboxLibBase,
   parseSandboxMessage,
+  sandboxCsp,
   sandboxLibUrl
 } from './interactiveFence'
 
@@ -579,5 +587,172 @@ describe('沙箱的基础样式：只给裸标签、只用注入的 token、只�
     for (const tag of ['input', 'select', 'textarea']) {
       expect(declOf(tag, 'color'), tag).toBe('var(--theme-text-primary)')
     }
+  })
+})
+
+describe('库基址：web 客户端的 /lib/（IF-22…26）', () => {
+  /** 改造前（phase D 之前）写死的那条 CSP —— 桌面不许变 */
+  const PRE_PHASE_D_CSP =
+    "default-src 'none'; script-src 'unsafe-inline' shuvix-lib:; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'"
+  const BASE = 'http://127.0.0.1:7766/lib/'
+  const BODY =
+    '<script src="shuvix-lib://chart.js"></script>\n' +
+    "<script src='shuvix-lib://d3.js'></script>\n" +
+    '<p>图表 — 中文说明</p>\n<canvas id="c"></canvas>'
+  const TOKENS = { '--viz-1': 'light-dark(#111, #eee)', '--theme-text-primary': '#222' }
+  const desktop = (body: string): string =>
+    buildSandboxDocument({ body, tokens: TOKENS, colorScheme: 'light dark' })
+  const web = (body: string, libBase: string): string =>
+    buildSandboxDocument({ body, tokens: TOKENS, colorScheme: 'light dark', libBase })
+  const metaOf = (csp: string): string =>
+    `<meta http-equiv="Content-Security-Policy" content="${csp}">`
+
+  it('IF-22 isSandboxLibBase 收：http(s) 主机[:端口]，以 / 结尾的路径', () => {
+    for (const base of [
+      'http://127.0.0.1:7766/lib/',
+      'https://shuvix.lan:8443/lib/',
+      'http://192.168.1.10:7766/',
+      'http://h/a/b/',
+      'http://[::1]:7766/lib/'
+    ]) {
+      expect(isSandboxLibBase(base), base).toBe(true)
+    }
+  })
+
+  it('IF-22 isSandboxLibBase 拒：不以 / 结尾、别的协议、没有主机、大写协议、查询串 / 片段、空白', () => {
+    for (const base of [
+      'http://h/lib',
+      'shuvix-lib:',
+      'shuvix-lib://',
+      'shuvix-lib://x/',
+      'javascript:alert(1)//',
+      'data:text/js,/',
+      'file:///lib/',
+      'ftp://h/',
+      '//h/lib/',
+      // 钉住：协议只认小写（URL 规范化之后本来就是小写，`location.origin` 给的也是）
+      'HTTP://h/',
+      'http:///lib/',
+      'http://h/lib/?x/',
+      'http://h/lib/#/',
+      'http://h/l b/',
+      'http://h\t/lib/',
+      ' http://h/lib/',
+      'http://h/lib/\n',
+      'http://h/lib/ ',
+      '',
+      'self',
+      "'self'"
+    ]) {
+      expect(isSandboxLibBase(base), JSON.stringify(base)).toBe(false)
+    }
+  })
+
+  it('IF-22 isSandboxLibBase 拒：主机或路径里带 " \' ` ; , < > \\（会弄坏 CSP 或 content 属性）', () => {
+    for (const ch of ['"', "'", '`', ';', ',', '<', '>', '\\']) {
+      expect(isSandboxLibBase(`http://h${ch}x/lib/`), `host ${ch}`).toBe(false)
+      expect(isSandboxLibBase(`http://h/li${ch}b/`), `path ${ch}`).toBe(false)
+    }
+  })
+
+  it('IF-22 isSandboxLibBase 拒：放宽源表达式的 * 与用户信息的 @', () => {
+    for (const base of ['http://*/', 'http://*.lan/lib/', 'http://u@h/lib/', 'http://h/*/']) {
+      expect(isSandboxLibBase(base), base).toBe(false)
+    }
+  })
+
+  it('IF-23 sandboxLibUrl：合格的基址 → 基址 + 名字；不合格 / 不给 → shuvix-lib://<名字>', () => {
+    expect(sandboxLibUrl('chart.js', BASE)).toBe(`${BASE}chart.js`)
+    expect(sandboxLibUrl('d3.js', 'https://shuvix.lan:8443/lib/')).toBe(
+      'https://shuvix.lan:8443/lib/d3.js'
+    )
+    for (const base of [undefined, 'http://h/lib', 'shuvix-lib:', 'http://*/', '']) {
+      expect(sandboxLibUrl('chart.js', base), String(base)).toBe('shuvix-lib://chart.js')
+    }
+  })
+
+  it('IF-24 SANDBOX_CSP === sandboxCsp() === 改造前那条；sandboxCsp(base) 只有 script-src 不同', () => {
+    expect(SANDBOX_CSP).toBe(PRE_PHASE_D_CSP)
+    expect(sandboxCsp()).toBe(SANDBOX_CSP)
+    const desktopParts = SANDBOX_CSP.split('; ')
+    const webParts = sandboxCsp(BASE).split('; ')
+    expect(webParts).toHaveLength(desktopParts.length)
+    for (let i = 0; i < desktopParts.length; i++) {
+      if (desktopParts[i].startsWith('script-src ')) {
+        expect(webParts[i]).toBe(`script-src 'unsafe-inline' ${BASE}`)
+      } else {
+        expect(webParts[i]).toBe(desktopParts[i])
+      }
+    }
+  })
+
+  it('IF-25 不给 / undefined / 不合格的基址 → 与桌面逐字节相同；正文原样；CSP 是 SANDBOX_CSP', () => {
+    const expected = desktop(BODY)
+    expect(expected.endsWith(`<body>\n${BODY}\n</body></html>`)).toBe(true)
+    expect(expected).toContain(metaOf(SANDBOX_CSP))
+    expect(
+      buildSandboxDocument({
+        body: BODY,
+        tokens: TOKENS,
+        colorScheme: 'light dark',
+        libBase: undefined
+      })
+    ).toBe(expected)
+    for (const base of [
+      'shuvix-lib:',
+      'http://h/lib',
+      'javascript:x/',
+      'http://h/lib/"><script>'
+    ]) {
+      expect(web(BODY, base), base).toBe(expected)
+    }
+  })
+
+  it('IF-26 合格的基址：meta CSP 仍排第一且换成 sandboxCsp(base)；库地址换成基址 + 名字；别处一字不动', () => {
+    const doc = web(`${BODY}\n<script src="shuvix-lib://foo-bar_1.js"></script>`, BASE)
+    expect(
+      doc.startsWith(
+        '<!doctype html><html><head><meta charset="utf-8">\n' + metaOf(sandboxCsp(BASE))
+      )
+    ).toBe(true)
+    expect(doc).toContain(`<script src="${BASE}chart.js"></script>`)
+    expect(doc).toContain(`<script src='${BASE}d3.js'></script>`)
+    expect(doc).toContain(`<script src="${BASE}foo-bar_1.js"></script>`)
+    expect(doc).not.toContain('shuvix-lib:')
+
+    // 与桌面文档相比，只有 CSP 与那几处地址变了
+    const substituted = BODY.replace('shuvix-lib://chart.js', `${BASE}chart.js`).replace(
+      'shuvix-lib://d3.js',
+      `${BASE}d3.js`
+    )
+    expect(web(BODY, BASE)).toBe(
+      desktop(substituted).replace(metaOf(SANDBOX_CSP), metaOf(sandboxCsp(BASE)))
+    )
+  })
+
+  it('IF-26 没有 // 的 shuvix-lib:chart.js 不动；名字转小写、名字之后的路径 / 查询串 / 片段丢掉', () => {
+    const doc = web(
+      '<script src="shuvix-lib:chart.js"></script>\n' +
+        '<script src="shuvix-lib://Chart.js/x?y#z"></script>\n' +
+        '<script src="shuvix-lib://chart.js/"></script>',
+      BASE
+    )
+    expect(doc).toContain('<script src="shuvix-lib:chart.js"></script>')
+    expect(doc).toContain(
+      `<script src="${BASE}chart.js"></script>\n<script src="${BASE}chart.js"></script>`
+    )
+    // 只看正文那一截（桥脚本里本来就有 Chart.js 这个词）
+    const body = doc.slice(doc.indexOf('</head><body>'))
+    expect(body).not.toContain('Chart.js')
+    expect(body).not.toContain('x?y#z')
+  })
+
+  it('IF-26 基址里的 $& 原样插入（不是替换模式）；同样的输入两次输出相同', () => {
+    const odd = 'http://h/$&/'
+    expect(isSandboxLibBase(odd)).toBe(true)
+    const doc = web('<script src="shuvix-lib://chart.js"></script>', odd)
+    expect(doc).toContain('<script src="http://h/$&/chart.js"></script>')
+    expect(doc).toContain(metaOf(sandboxCsp(odd)))
+    expect(web(BODY, BASE)).toBe(web(BODY, BASE))
   })
 })

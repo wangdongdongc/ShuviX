@@ -5,13 +5,15 @@
  *   IPC-CL2 list：params 按引用交给服务、结果原样交回；params 缺省 → list(undefined)，不抛
  *   IPC-CL3 get：id 交给 getById、结果原样交回（没有这一行 → undefined）
  *   IPC-CL4 scenes 原样交回；clear 调一次服务的 clear、回 { success: true }
- *   IPC-CL5 preload 暴露的 `classifierLog.*` 用的是同样四条通道名；handlers.ts 注册了它（静态读源码）
+ *   IPC-CL5 `window.api.classifierLog.*`（通道表 shared/apiTable）用的是同样四条通道名、各转发同样个数的参数；
+ *           handlers.ts 注册了它（静态读源码）
  *
  * electron 是替身（handle 收进 Map），服务整个替掉。
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { API_TABLE } from '../../../shared/apiTable'
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown
 
@@ -40,6 +42,7 @@ vi.mock('../../services/classifierLogService', () => ({
 }))
 
 import { registerClassifierLogHandlers } from '../classifierLogHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
 
 const CHANNELS = [
   'classifierLog:list',
@@ -47,19 +50,25 @@ const CHANNELS = [
   'classifierLog:scenes',
   'classifierLog:clear'
 ]
-const handler = (channel: string): Handler => {
-  const fn = state.handlers.get(channel)
-  if (!fn) throw new Error(`no handler for ${channel}`)
-  return fn
-}
+/** 已注册的处理函数（发送方 = webContents 1；事件参数由这里补上） */
+const handler =
+  (channel: string): ((...args: unknown[]) => unknown) =>
+  (...args) => {
+    const fn = state.handlers.get(channel)
+    if (!fn) throw new Error(`no handler for ${channel}`)
+    return fn(IPC_EVENT, ...args)
+  }
+const IPC_EVENT = { sender: { id: 1 } }
+
+// 注册一次（同一通道再定义会抛错），经 IPC 适配器挂到替身 ipcMain 上
+registerClassifierLogHandlers()
+attachIpcAdapter()
 
 beforeEach(() => {
-  state.handlers.clear()
   state.list.mockReset()
   state.getById.mockReset()
   state.scenes.mockReset()
   state.clear.mockReset()
-  registerClassifierLogHandlers()
 })
 
 describe('classifierLog IPC', () => {
@@ -71,46 +80,46 @@ describe('classifierLog IPC', () => {
     const params = { scene: 'command-risk', sessionId: 's1', status: 'failed', limit: 50 }
     const rows = [{ id: 'a' }, { id: 'b' }]
     state.list.mockReturnValue(rows)
-    expect(await handler('classifierLog:list')({}, params)).toBe(rows)
+    expect(await handler('classifierLog:list')(params)).toBe(rows)
     expect(state.list).toHaveBeenCalledTimes(1)
     expect(state.list.mock.calls[0][0]).toBe(params)
 
     state.list.mockReturnValue([])
-    expect(await handler('classifierLog:list')({}, undefined)).toEqual([])
+    expect(await handler('classifierLog:list')(undefined)).toEqual([])
     expect(state.list).toHaveBeenLastCalledWith(undefined)
   })
 
   it('IPC-CL3 get：id 交给 getById，结果原样回；没有这一行 → undefined', async () => {
     const row = { id: 'log-1', request: '{}' }
     state.getById.mockReturnValue(row)
-    expect(await handler('classifierLog:get')({}, 'log-1')).toBe(row)
+    expect(await handler('classifierLog:get')('log-1')).toBe(row)
     expect(state.getById).toHaveBeenCalledWith('log-1')
 
     state.getById.mockReturnValue(undefined)
-    expect(await handler('classifierLog:get')({}, 'missing')).toBeUndefined()
+    expect(await handler('classifierLog:get')('missing')).toBeUndefined()
     expect(state.getById).toHaveBeenLastCalledWith('missing')
   })
 
   it('IPC-CL4 scenes 原样回；clear 调一次服务的 clear、回 { success: true }', async () => {
     const scenes = ['command-risk']
     state.scenes.mockReturnValue(scenes)
-    expect(await handler('classifierLog:scenes')({})).toBe(scenes)
+    expect(await handler('classifierLog:scenes')()).toBe(scenes)
     expect(state.scenes).toHaveBeenCalledTimes(1)
 
-    expect(await handler('classifierLog:clear')({})).toEqual({ success: true })
+    expect(await handler('classifierLog:clear')()).toEqual({ success: true })
     expect(state.clear).toHaveBeenCalledTimes(1)
   })
 
-  it('IPC-CL5 preload 的 classifierLog.* 调的就是这四条通道；handlers.ts 注册了它们', () => {
-    const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf-8')
-    const block = /classifierLog:\s*\{([\s\S]*?)\n {2}\}/.exec(preload)?.[1] ?? ''
-    expect(block).not.toBe('')
-    const invoked = [...block.matchAll(/ipcRenderer\.invoke\('([^']+)'/g)].map((m) => m[1])
-    expect(invoked.sort()).toEqual([...CHANNELS].sort())
-    expect(block).toMatch(/list:[^\n]*'classifierLog:list', params\)/)
-    expect(block).toMatch(/get:[^\n]*'classifierLog:get', id\)/)
-    expect(block).toMatch(/scenes:[^\n]*'classifierLog:scenes'/)
-    expect(block).toMatch(/clear:[^\n]*'classifierLog:clear'/)
+  it('IPC-CL5 window.api 的 classifierLog.* 调的就是这四条通道；handlers.ts 注册了它们', () => {
+    // 通道表里恰好这四个成员：list(params) / get(id) 各转发一个参数，scenes / clear 不带参数
+    expect(API_TABLE.classifierLog).toEqual({
+      list: { kind: 'invoke', channel: 'classifierLog:list', args: 1 },
+      get: { kind: 'invoke', channel: 'classifierLog:get', args: 1 },
+      scenes: { kind: 'invoke', channel: 'classifierLog:scenes', args: 0 },
+      clear: { kind: 'invoke', channel: 'classifierLog:clear', args: 0 }
+    })
+    const channels = Object.values(API_TABLE.classifierLog).map((m) => m.channel)
+    expect(channels.sort()).toEqual([...CHANNELS].sort())
 
     const handlers = readFileSync(join(__dirname, '../handlers.ts'), 'utf-8')
     expect(handlers).toMatch(

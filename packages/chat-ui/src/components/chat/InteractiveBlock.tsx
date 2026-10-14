@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Code, Play, RotateCcw } from 'lucide-react'
 import {
@@ -8,6 +8,7 @@ import {
   parseSandboxMessage
 } from '@shuvix/chat-protocol/utils/interactiveFence'
 import { useChatStore } from '../../stores/chatStore'
+import { ChatHostContext } from '../../host/chatHostContext'
 import { useThemeId } from './useThemeId'
 
 /**
@@ -80,9 +81,11 @@ export function InteractiveBlock({
   }
 
   const theme = hostTheme(themeId)
+  // 库从哪里加载：桌面 shuvix-lib:（不给），浏览器里的 web 客户端 <origin>/lib/
+  const libBase = useContext(ChatHostContext)?.sandboxLibBase
   const srcDoc = useMemo(
-    () => (closed ? buildSandboxDocument({ body: code, ...theme }) : ''),
-    [closed, code, theme]
+    () => (closed ? buildSandboxDocument({ body: code, ...theme, libBase }) : ''),
+    [closed, code, theme, libBase]
   )
 
   useEffect(() => {

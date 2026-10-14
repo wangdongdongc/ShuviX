@@ -37,8 +37,24 @@ export const SANDBOX_LIBS: Readonly<Record<string, { file: string; global: strin
   'd3.js': { file: 'd3.min.js', global: 'd3' }
 }
 
-/** `<script src>` 里写的地址 */
-export const sandboxLibUrl = (name: string): string => `${SANDBOX_LIB_SCHEME}://${name}`
+/**
+ * `<script src>` 里写的地址。缺省（桌面）是 `shuvix-lib://<name>`；给了 `base`（浏览器里的 web 客户端：
+ * `<origin>/lib/`，见 `isSandboxLibBase`）就是 `<base><name>`
+ */
+export const sandboxLibUrl = (name: string, base?: string): string =>
+  base !== undefined && isSandboxLibBase(base)
+    ? `${base}${name}`
+    : `${SANDBOX_LIB_SCHEME}://${name}`
+
+/**
+ * 能不能当库的基址：`http(s)://<主机[:端口]>/…/`，以 `/` 结尾，不带查询串 / 片段，也不带会弄坏 CSP 或
+ * `content="…"` 属性的字符（空白、引号、`;`、`,`、尖括号、反斜杠），也不带会放宽 CSP 源表达式的 `*`
+ * 与用户信息的 `@`。浏览器里的 web 客户端给 `<origin>/lib/`
+ * （server mode phase D：网络服务的 `/lib/<name>` 路由回的是与 `shuvix-lib:` 同一张白名单）
+ */
+export function isSandboxLibBase(base: string): boolean {
+  return /^https?:\/\/[^\s"'`;,<>\\/?#*@]+(?:\/[^\s"'`;,<>\\?#*]*)?\/$/.test(base)
+}
 
 /**
  * 注进沙箱 `:root` 的 token —— 与 ```svg 契约教的是同一套（visual-guide 片段），于是同一张图
@@ -106,21 +122,29 @@ export const SANDBOX_THEME_TOKENS: readonly string[] = [
  * 沙箱文档自己的 CSP。与宿主页面继承下来的那条取交集，所以这里只需要写「最多允许什么」。
  * 没有 'unsafe-eval'（宿主那条本来也没有）：d3.csvParse 这类靠 `new Function` 的 API 用不了，
  * 提示词因此教「数据写成 JS 数组」。
+ *
+ * `libSource` 是库能从哪里来：桌面是 `shuvix-lib:`（缺省），浏览器里的 web 客户端是它的库基址
+ * （`<origin>/lib/`，CSP 的源表达式带路径时只放行这个前缀下的地址）。
  */
-export const SANDBOX_CSP = [
-  "default-src 'none'",
-  `script-src 'unsafe-inline' ${SANDBOX_LIB_SCHEME}:`,
-  "style-src 'unsafe-inline'",
-  'img-src data:',
-  'font-src data:',
-  'media-src data:',
-  "connect-src 'none'",
-  "frame-src 'none'",
-  "worker-src 'none'",
-  "object-src 'none'",
-  "form-action 'none'",
-  "base-uri 'none'"
-].join('; ')
+export function sandboxCsp(libSource: string = `${SANDBOX_LIB_SCHEME}:`): string {
+  return [
+    "default-src 'none'",
+    `script-src 'unsafe-inline' ${libSource}`,
+    "style-src 'unsafe-inline'",
+    'img-src data:',
+    'font-src data:',
+    'media-src data:',
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "worker-src 'none'",
+    "object-src 'none'",
+    "form-action 'none'",
+    "base-uri 'none'"
+  ].join('; ')
+}
+
+/** 桌面的沙箱 CSP（库来自 `shuvix-lib:`） */
+export const SANDBOX_CSP = sandboxCsp()
 
 /** 高度上报的范围（px）。上界之外在块内滚动，不撑长对话 */
 export const SANDBOX_MIN_HEIGHT = 40
@@ -377,20 +401,44 @@ const TOKEN_VALUE_BAD_RE = /[<>{};\\]/
 const COLOR_SCHEME_RE = /^(light|dark|normal|light dark|dark light)$/
 
 export interface SandboxDocumentInput {
-  /** 模型写的围栏体（原样放进 body） */
+  /** 模型写的围栏体（原样放进 body —— 除了下面 `libBase` 说的那一处地址替换） */
   body: string
   /** token 名 → 宿主上的取值（`light-dark(…)` 原串即可，沙箱里同样的 color-scheme 会解析它） */
   tokens: Readonly<Record<string, string>>
   /** 宿主根元素实际生效的 color-scheme */
   colorScheme: string
+  /**
+   * 库的基址（浏览器里的 web 客户端：`<origin>/lib/`，server mode phase D）。浏览器认不得 `shuvix-lib:`，
+   * 给了它（且 `isSandboxLibBase`）就：CSP 的 script-src 放行这个基址而不是 `shuvix-lib:`；正文里写的
+   * `shuvix-lib://<name>` 换成 `<基址><name>`（模型照着技能写的就是那个地址）。不给 / 不合格 → 桌面的写法
+   */
+  libBase?: string
 }
+
+/**
+ * 正文里的 `shuvix-lib://<name>[/…][?…][#…]`。名字的字符集与白名单里的名字一致（字母数字、`.` `_` `-`）；
+ * 换成 `<基址><name 的小写>`、名字之后的路径 / 查询串 / 片段丢掉 —— 与桌面一致：Chromium 把标准协议的 host
+ * 转成小写，`shuvix-lib:` 的处理器只看 host（`shuvix-lib://Chart.js/x` 在桌面上就是 `chart.js`）
+ */
+const LIB_URL_RE = new RegExp(`${SANDBOX_LIB_SCHEME}://([A-Za-z0-9._-]+)(?:[/?#][^\\s"'<>]*)?`, 'g')
 
 /**
  * 拼出 srcdoc。顺序就是安全前提：**meta CSP 第一个**，然后 token、基础样式、桥，最后才是模型内容。
  * 模型内容里再写 `<html>` / `<head>` / `<meta>` 都无妨：解析器在 body 里忽略重复的 html/head 开标签，
  * body 里的 meta CSP 也不生效 —— 只能更严的那条已经在前面了。
  */
-export function buildSandboxDocument({ body, tokens, colorScheme }: SandboxDocumentInput): string {
+export function buildSandboxDocument({
+  body,
+  tokens,
+  colorScheme,
+  libBase
+}: SandboxDocumentInput): string {
+  const base = libBase !== undefined && isSandboxLibBase(libBase) ? libBase : undefined
+  const csp = base === undefined ? SANDBOX_CSP : sandboxCsp(base)
+  const content =
+    base === undefined
+      ? body
+      : body.replace(LIB_URL_RE, (_, name: string) => `${base}${name.toLowerCase()}`)
   const decls: string[] = []
   const scheme = COLOR_SCHEME_RE.test(colorScheme.trim()) ? colorScheme.trim() : 'normal'
   decls.push(`color-scheme:${scheme}`)
@@ -401,11 +449,11 @@ export function buildSandboxDocument({ body, tokens, colorScheme }: SandboxDocum
   }
   return [
     '<!doctype html><html><head><meta charset="utf-8">',
-    `<meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}">`,
+    `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
     `<style>:root{${decls.join(';')}}\n${BASE_STYLE}</style>`,
     `<script>${BRIDGE_SCRIPT}</script>`,
     '</head><body>',
-    body,
+    content,
     '</body></html>'
   ].join('\n')
 }

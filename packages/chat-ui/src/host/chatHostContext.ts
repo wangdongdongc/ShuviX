@@ -52,6 +52,12 @@ export interface ChatHostValue {
    * 块在那里跑不起来，按代码块显示并说明只在桌面端运行。
    */
   interactiveFigures?: boolean
+  /**
+   * 交互图沙箱的库从哪里加载（server mode phase D）。不给（桌面）→ `shuvix-lib://<name>`（main 注册的库协议）；
+   * 浏览器里的 web 客户端认不得那个协议，给 `<origin>/lib/`（网络服务的 `/lib/<name>`，同一张白名单）——
+   * 沙箱的 CSP 随之放行这个基址，模型写的 `shuvix-lib://<name>` 换成它（见 chat-protocol 的 buildSandboxDocument）
+   */
+  sandboxLibBase?: string
 }
 
 export const ChatHostContext = createContext<ChatHostValue | null>(null)

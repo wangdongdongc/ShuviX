@@ -1,5 +1,8 @@
-import { ipcMain, dialog, BrowserWindow, app, shell } from 'electron'
+import { dialog, app, shell } from 'electron'
+import { defineHandler } from './registry'
+import { windowOf } from './ipcAdapter'
 import { join, resolve } from 'path'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'fs'
 import {
   widgetService,
   widgetServer,
@@ -14,10 +17,10 @@ import * as widgetWindowService from '../services/widgetWindowService'
  * 广播事件 `widget:changed` 由 widgetService 内部在状态变更后发出
  */
 export function registerWidgetHandlers(): void {
-  ipcMain.handle('widget:list', () => widgetService.listActive())
-  ipcMain.handle('widget:listArchived', () => widgetService.listArchived())
+  defineHandler('widget:list', () => widgetService.listActive())
+  defineHandler('widget:listArchived', () => widgetService.listArchived())
 
-  ipcMain.handle('widget:open', async (_event, id: string) => {
+  defineHandler('widget:open', async (_ctx, id: string) => {
     try {
       const result = await widgetService.open(id)
       return { success: true, url: result.url, widget: result.widget }
@@ -27,7 +30,7 @@ export function registerWidgetHandlers(): void {
   })
 
   /** 启动单个 widget —— 注册到 server，但不打开浏览器 */
-  ipcMain.handle('widget:startWidget', async (_event, id: string) => {
+  defineHandler('widget:startWidget', async (_ctx, id: string) => {
     try {
       const result = await widgetService.startWidget(id)
       return { success: true, url: result.url, buildSuccess: result.buildSuccess }
@@ -37,26 +40,26 @@ export function registerWidgetHandlers(): void {
   })
 
   /** 停止单个 widget —— 退出 app 语义：关闭独立窗口 + 从 server 注销 */
-  ipcMain.handle('widget:stopWidget', (_event, id: string) => {
+  defineHandler('widget:stopWidget', (_ctx, id: string) => {
     widgetWindowService.close(id) // 关窗后 closed 回调也会反注册；下一行兜底"无窗口仅注册"的情况
     widgetService.stopWidget(id)
     return { success: true }
   })
 
-  ipcMain.handle(
+  defineHandler(
     'widget:rename',
-    async (_event, params: { id: string; name: string; description?: string }) => {
+    async (_ctx, params: { id: string; name: string; description?: string }) => {
       await widgetService.rename(params.id, params.name, params.description)
       return { success: true }
     }
   )
 
-  ipcMain.handle('widget:setArchived', (_event, params: { id: string; archived: boolean }) => {
+  defineHandler('widget:setArchived', (_ctx, params: { id: string; archived: boolean }) => {
     widgetService.setArchived(params.id, params.archived)
     return { success: true }
   })
 
-  ipcMain.handle('widget:delete', async (_event, id: string) => {
+  defineHandler('widget:delete', async (_ctx, id: string) => {
     await widgetService.delete(id)
     return { success: true }
   })
@@ -64,7 +67,7 @@ export function registerWidgetHandlers(): void {
   // ========== 独立窗口（widget app window） ==========
 
   /** 在独立窗口打开 widget（已开则聚焦）。构建 / URL 获取由窗口内 shell 调 widget:open 完成 */
-  ipcMain.handle('widgetWindow:open', (_event, id: string) => {
+  defineHandler('widgetWindow:open', (_ctx, id: string) => {
     try {
       widgetWindowService.open(id)
       return { success: true }
@@ -73,27 +76,24 @@ export function registerWidgetHandlers(): void {
     }
   })
 
-  ipcMain.handle('widgetWindow:close', (_event, id: string) => {
+  defineHandler('widgetWindow:close', (_ctx, id: string) => {
     widgetWindowService.close(id)
     return { success: true }
   })
 
-  ipcMain.handle(
-    'widgetWindow:setAlwaysOnTop',
-    (_event, params: { id: string; value: boolean }) => {
-      return { alwaysOnTop: widgetWindowService.setAlwaysOnTop(params.id, params.value) }
-    }
-  )
+  defineHandler('widgetWindow:setAlwaysOnTop', (_ctx, params: { id: string; value: boolean }) => {
+    return { alwaysOnTop: widgetWindowService.setAlwaysOnTop(params.id, params.value) }
+  })
 
-  ipcMain.handle('widgetWindow:getAlwaysOnTop', (_event, id: string) => {
+  defineHandler('widgetWindow:getAlwaysOnTop', (_ctx, id: string) => {
     return { alwaysOnTop: widgetWindowService.getAlwaysOnTop(id) }
   })
 
   // ========== 服务器状态 ==========
 
-  ipcMain.handle('widget:getServerStatus', () => widgetServer.getStatus())
+  defineHandler('widget:getServerStatus', () => widgetServer.getStatus())
 
-  ipcMain.handle('widget:stopServer', () => {
+  defineHandler('widget:stopServer', () => {
     widgetService.stopServer()
     return { success: true }
   })
@@ -101,13 +101,15 @@ export function registerWidgetHandlers(): void {
   // ========== 导出为独立 Vite 工程 zip ==========
 
   /** 弹出保存对话框选择 zip 落点（仅返回路径，不执行导出） */
-  ipcMain.handle(
+  defineHandler(
     'widget:pickExportTarget',
     async (
-      event,
+      ctx,
       params: { id: string }
     ): Promise<{ success: true; path: string } | { success: false; reason: string }> => {
-      const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+      // 网络客户端（浏览器）：保存框会弹在这台电脑上、而且没有父窗口 —— 这一阶段拒掉（phase D 换成下载）
+      if (ctx.client.kind !== 'window') return { success: false, reason: 'unavailable' }
+      const win = windowOf(ctx)
       const options = {
         title: 'Export widget',
         defaultPath: join(app.getPath('downloads'), `${params.id}.zip`),
@@ -127,16 +129,58 @@ export function registerWidgetHandlers(): void {
    * 在系统文件管理器中定位导出的 zip。
    * 不能复用 app:open-folder —— 那是 shell.openPath，对归档文件等于直接解压/打开。
    */
-  ipcMain.handle('widget:revealExport', (_event, zipPath: string): { success: true } => {
+  defineHandler('widget:revealExport', (_ctx, zipPath: string): { success: true } => {
     shell.showItemInFolder(zipPath)
     return { success: true }
   })
 
+  /**
+   * 导出到服务端的临时目录（server mode phase D）—— 浏览器里的 web 客户端没有保存对话框：导出成 zip 放进
+   * userData 下 `widget-exports/` 里一个新建的空目录，回它的路径，页面再经网络服务的 `/files/download` 把它下载下来。
+   * 每次导出前顺手清掉一小时以前的那些（下载早就完成了）。
+   */
+  defineHandler(
+    'widget:exportForDownload',
+    async (
+      _ctx,
+      params: { id: string }
+    ): Promise<
+      | { success: true; zipPath: string; entryCount: number }
+      | { success: false; code: string; error: string }
+    > => {
+      try {
+        // 先认 widget：不认得就不必建临时目录（导出本身也会报同一个错）
+        const id = typeof params?.id === 'string' ? params.id : ''
+        const widget = id ? widgetService.getById(id) : undefined
+        if (!widget) {
+          throw new WidgetExportError('WIDGET_NOT_FOUND', `Widget "${id}" not found.`)
+        }
+        pruneDownloadExports()
+        const dir = mkdtempSync(join(downloadExportsRoot(), 'export-'))
+        const result = await exportWidget({
+          id: widget.id,
+          targetPath: join(dir, `${widget.id}.zip`),
+          overwrite: false
+        })
+        return { success: true, zipPath: result.zipPath, entryCount: result.entryCount }
+      } catch (err) {
+        if (err instanceof WidgetExportError) {
+          return { success: false, code: err.code, error: err.message }
+        }
+        return {
+          success: false,
+          code: 'UNKNOWN',
+          error: err instanceof Error ? err.message : String(err)
+        }
+      }
+    }
+  )
+
   /** 执行导出 —— 覆盖确认已由保存对话框完成 */
-  ipcMain.handle(
+  defineHandler(
     'widget:exportAsVite',
     async (
-      _event,
+      _ctx,
       params: { id: string; targetPath: string }
     ): Promise<
       | { success: true; zipPath: string; entryCount: number }
@@ -162,4 +206,35 @@ export function registerWidgetHandlers(): void {
       }
     }
   )
+}
+
+/** 下载用导出的临时目录的根（`<userData>/widget-exports`；不在就建） */
+function downloadExportsRoot(): string {
+  const root = join(app.getPath('userData'), 'widget-exports')
+  mkdirSync(root, { recursive: true })
+  return root
+}
+
+/** 下载用导出保留多久 */
+const DOWNLOAD_EXPORT_TTL_MS = 60 * 60 * 1000
+
+/** 清掉一小时以前的下载用导出（失败只是留着，不影响这次导出） */
+function pruneDownloadExports(now = Date.now()): void {
+  const root = downloadExportsRoot()
+  let names: string[]
+  try {
+    names = readdirSync(root)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    const path = join(root, name)
+    try {
+      if (now - statSync(path).mtimeMs > DOWNLOAD_EXPORT_TTL_MS) {
+        rmSync(path, { recursive: true, force: true })
+      }
+    } catch {
+      /* 留着 */
+    }
+  }
 }

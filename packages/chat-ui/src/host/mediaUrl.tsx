@@ -2,6 +2,7 @@
  * 「本地文件 → 可喂给 <img>/<video> 的 URL」注入点 —— 宿主差异收敛处。
  *
  * 桌面：注册了 shuvix-preview:// 自定义协议(主进程流式读盘)，同步拼 URL。
+ * 浏览器里的 web 客户端（server mode phase D）：网络服务的 `/files/preview` HTTP 路由，同步拼 URL。
  * 扩展：无自定义协议 → 由 getFile 读字节生成 blob: object URL(异步，用完 revoke)。
  *
  * 消费方统一经 useMediaUrl 取 URL，不关心来源：app-shell 的 Files 预览
@@ -26,6 +27,25 @@ export type ResolveMediaUrl = (params: {
 const MediaUrlContext = createContext<ResolveMediaUrl | null>(null)
 
 export const MediaUrlProvider = MediaUrlContext.Provider
+
+/**
+ * 本机文件 → 直接喂给 `<audio>` 的地址（TTS 音频这类「路径可信」的文件，不经会话解析）。
+ * 桌面是 `shuvix-media://<绝对路径>`（main 注册的协议）；浏览器里的 web 客户端认不得自定义协议，
+ * 启动时用 `setMediaFileUrlBuilder` 换成网络服务的 HTTP 路由（server mode phase D）。
+ * 所有自己拼 `shuvix-media://` 的地方都改走这一个口子。
+ */
+let mediaFileUrlBuilder: (absolutePath: string) => string = (absolutePath) =>
+  `shuvix-media://${absolutePath}`
+
+/** 换掉 `mediaFileUrl` 的拼法（宿主启动时调一次；web 客户端给 HTTP 路由） */
+export function setMediaFileUrlBuilder(builder: (absolutePath: string) => string): void {
+  mediaFileUrlBuilder = builder
+}
+
+/** 本机文件的媒体地址（桌面 `shuvix-media://`，web 客户端 HTTP） */
+export function mediaFileUrl(absolutePath: string): string {
+  return mediaFileUrlBuilder(absolutePath)
+}
 
 /** 桌面默认实现：shuvix-preview:// 协议 URL（同步） */
 export const shuvixPreviewResolver: ResolveMediaUrl = ({ sessionId, path }) => ({

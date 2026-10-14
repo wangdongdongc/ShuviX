@@ -5,14 +5,12 @@
  * 主窗 + 悬浮窗（各自独立 Zustand），渲染层经 preload events.subscribe → useAppEvent 消费。
  * 与 agent:event 的转发对称。见 docs/internal-events.md。
  */
-import { BrowserWindow } from 'electron'
 import { appEventBus } from '../utils/appEventBus'
+import { broadcastToClients } from '../ipc/registry'
 
-/** 安装「bus → 所有窗口」桥接（在 app ready、窗口体系就绪后调用一次） */
+/** 安装「bus → 所有客户端（桌面：所有窗口）」桥接（在 app ready、窗口体系就绪后调用一次） */
 export function registerAppEventBridge(): void {
   appEventBus.subscribe((event) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send('app:event', event)
-    }
+    broadcastToClients('app:event', event)
   })
 }

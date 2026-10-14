@@ -1,4 +1,5 @@
 import { getSessionChannelApi } from '../../api/chatApi'
+import { mediaFileUrl } from '../../host/mediaUrl'
 
 /**
  * 全局 TTS 音频播放器 — 管理切片队列播放、中断和清理
@@ -38,7 +39,7 @@ class TtsPlayer {
   async play(filePath: string, messageId?: string): Promise<void> {
     this.stop()
 
-    this.audio = new Audio(`shuvix-media://${filePath}`)
+    this.audio = new Audio(mediaFileUrl(filePath))
     this._playingMessageId = messageId ?? null
     this._isPlaying = true
     this._isLoading = false
@@ -102,7 +103,7 @@ class TtsPlayer {
       this.audio.onerror = null
     }
 
-    this.audio = new Audio(`shuvix-media://${filePath}`)
+    this.audio = new Audio(mediaFileUrl(filePath))
     this._isPlaying = true
     this._playingMessageId = messageId ?? null
     this.notify()

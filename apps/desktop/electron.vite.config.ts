@@ -88,6 +88,17 @@ export default defineConfig({
       }
     },
     plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        // 两个页面：桌面窗口（index.html，要 preload）与浏览器里的 web 客户端（web.html，server mode phase C ——
+        // 主进程的网络服务把 out/renderer/web.html 与它的资源给局域网里的浏览器）。资源路径是相对的（base './'），
+        // 经 http 从 `/` 取同样解析得对
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          web: resolve(__dirname, 'src/renderer/web.html')
+        }
+      }
+    },
     server: {
       host: '127.0.0.1'
     }

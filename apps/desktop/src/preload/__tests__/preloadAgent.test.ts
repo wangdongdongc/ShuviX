@@ -17,7 +17,6 @@ vi.mock('electron', () => ({
   },
   ipcRenderer: { invoke: state.invoke, on: vi.fn(), removeListener: vi.fn(), send: vi.fn() }
 }))
-vi.mock('@electron-toolkit/preload', () => ({ electronAPI: {} }))
 
 type AgentApi = Record<string, (...args: unknown[]) => unknown>
 

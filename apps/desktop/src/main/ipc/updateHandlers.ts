@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { updateService } from '../services/updateService'
 
 /**
@@ -6,22 +6,22 @@ import { updateService } from '../services/updateService'
  * 更新状态通过 'update:event' push 事件推送到渲染进程
  */
 export function registerUpdateHandlers(): void {
-  ipcMain.handle('update:check', async () => {
+  defineHandler('update:check', async () => {
     await updateService.checkForUpdates()
     return { success: true }
   })
 
-  ipcMain.handle('update:download', async () => {
+  defineHandler('update:download', async () => {
     await updateService.downloadUpdate()
     return { success: true }
   })
 
-  ipcMain.handle('update:install', () => {
+  defineHandler('update:install', () => {
     updateService.quitAndInstall()
     return { success: true }
   })
 
-  ipcMain.handle('update:getLastEvent', () => {
+  defineHandler('update:getLastEvent', () => {
     return updateService.getLastEvent()
   })
 }

@@ -601,6 +601,7 @@
     "oauthWaiting": "等待在浏览器中授权…",
     "oauthFailed": "订阅登录失败",
     "oauthBrowserHint": "在打开的浏览器窗口里完成登录，完成后这里会自动继续。",
+    "oauthRemoteBrowserHint": "这种登录会把浏览器带回运行 ShuviX 的那台电脑，在这里完成不了。请到那台电脑上完成；或者在下面的页面里登录，再把浏览器最后停下的地址粘贴到下面的输入框。",
     "oauthManualLabel": "浏览器回不到 ShuviX 时（例如在另一台电脑上登录），把它最后停下的地址粘贴到这里：",
     "oauthManualSubmit": "继续",
     "oauthProviders": {
@@ -929,7 +930,23 @@
     },
     "classifierOnlyProviderHint": "{{name}} 只提供分类模型（例如 Jev），不提供聊天模型。在上方填好 API Key 并启用后，到「设置 → 通用 → 分类模型」里选用。",
     "classifierTag": "分类器",
-    "classifierTagTitle": "只提供分类模型（用来给命令分类），不提供聊天模型"
+    "classifierTagTitle": "只提供分类模型（用来给命令分类），不提供聊天模型",
+    "networkTitle": "网络访问",
+    "networkDesc": "在同一网络里的另一台设备上，用浏览器打开 ShuviX。",
+    "networkEnable": "允许局域网访问",
+    "networkRisk": "开启后，同一网络里的任何人都能通过 ShuviX 完全控制这台电脑——读写文件、运行命令。没有密码。只在信任的网络里开启，用完记得关掉。",
+    "networkPort": "端口",
+    "networkPortInvalid": "请填写 1024–65535 之间的整数。",
+    "networkAddresses": "在浏览器中打开",
+    "networkCopy": "复制",
+    "networkCopied": "已复制",
+    "networkClients": "已连接的浏览器",
+    "networkNoClients": "没有浏览器连着。",
+    "networkConnectedSince": "连接于 {{time}}",
+    "networkErrorInUse": "端口 {{port}} 已被占用，请换一个端口。",
+    "networkErrorAccess": "ShuviX 无权监听端口 {{port}}。",
+    "networkErrorOther": "无法监听端口 {{port}}：{{error}}",
+    "networkStarting": "正在启动…"
   },
   "about": {
     "description": "您的 AI 助手",
@@ -1308,5 +1325,26 @@
     "tag": "实验",
     "hint": "实验性功能：后续版本可能做不兼容的变更或直接移除，不保证迁移已有的配置和数据。",
     "hintTelegramBots": "实验性功能，尚未完成：这里只登记 Bot，ShuviX 目前不会连接 Telegram，也不收发消息。后续版本可能做不兼容的变更或直接移除。"
+  },
+  "web": {
+    "connecting": "正在连接 ShuviX…",
+    "reconnecting": "正在重新连接 ShuviX…",
+    "desktopOnly": "这项操作目前需要在 ShuviX 桌面应用里进行。",
+    "pathNoticeFolder": "这个文件夹在运行 ShuviX 的那台电脑上：",
+    "pathNoticeFile": "这个文件在运行 ShuviX 的那台电脑上：",
+    "copyPath": "复制路径",
+    "copied": "已复制",
+    "copyFailed": "没能复制，请选中路径自己复制",
+    "pickFolderTitle": "在运行 ShuviX 的那台电脑上选择一个文件夹",
+    "pickFolderUp": "上一层",
+    "pickFolderHome": "主目录",
+    "pickFolderGo": "前往",
+    "pickFolderLoading": "正在读取…",
+    "pickFolderError": "打不开这个文件夹（{{code}}）",
+    "pickFolderFailed": "没能连上 ShuviX 读取这个文件夹",
+    "pickFolderEmpty": "这里没有文件夹",
+    "pickFolderTruncated": "只显示了前 {{count}} 个文件夹",
+    "pickFolderShowHidden": "显示隐藏文件夹",
+    "pickFolderChoose": "选择这个文件夹"
   }
 }

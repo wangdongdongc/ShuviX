@@ -18,7 +18,6 @@ import {
   SessionConfigDialog,
   SessionPanel,
   SessionToolbar,
-  shuvixPreviewResolver,
   StatusBanner,
   useSessionPanelReveal
 } from '@shuvix/app-shell'
@@ -28,6 +27,7 @@ import { AgentProfileChip } from './AgentProfileChip'
 import { BrowserWindowButton } from './BrowserWindowButton'
 import { NotebookSessionView } from '../notebook/NotebookSessionView'
 import { subscribeAgentMonitor, useAgentMonitorStore } from '../../stores/agentMonitorStore'
+import { hostMediaResolver } from '../../host/hostMedia'
 
 /**
  * 聊天主视图（桌面外壳）—— 经共享 <ChatBody> 渲染顶栏 + 欢迎/笔记本/对话三态，
@@ -61,6 +61,9 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
     bottom.toggle()
   }, [])
 
+  // 浏览器里的 web 客户端（server mode phase C / D）：拿到的是整张通道表，只藏起开窗的那两样 —— 悬浮窗与
+  // 内置浏览器窗口在这台电脑上开窗，浏览器里没有它们。右侧面板（Widget / 日历 / Agents）在浏览器里照样能用
+  // （widget 经网络服务转发，点开在新标签页里）
   const isWeb = getSessionChannelApi().app.platform === 'web'
   const isMac = getSessionChannelApi().app.platform === 'darwin'
 
@@ -78,7 +81,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   // 揭示信号 → 会话面板（任务揭示；共享 hook）。悬浮占位态不响应。
   // 文件预览不进任何面板：useFilePreviewBridge 交主进程开独立窗口
   const isFloating = pinnedMode === 'floating'
-  useSessionPanelReveal(!isWeb && pinnedMode !== 'placeholder')
+  useSessionPanelReveal(pinnedMode !== 'placeholder')
 
   /** 悬浮窗"始终置顶"状态 —— 仅 floating 模式下使用 */
   const [alwaysOnTop, setAlwaysOnTopState] = useState(true)
@@ -107,10 +110,10 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
   /**
    * 顶栏右侧最左段：会话工具栏（Files / Preview / Sub-agent / 后台任务）+ 一道竖线，
    * 与其后的窗口控制簇（悬浮/侧栏/终端/右面板）分开 —— 前者管会话内容，后者管窗口。
-   * 无会话 / web / 悬浮占位时整段消失（与 pin 按钮同一道门）。
+   * 无会话 / 悬浮占位时整段消失。
    */
   const sessionTools =
-    !isWeb && pinnedMode !== 'placeholder' && activeSessionId ? (
+    pinnedMode !== 'placeholder' && activeSessionId ? (
       <>
         <SessionToolbar sessionId={activeSessionId} />
         <div className="w-px h-3.5 bg-border-secondary/60 mx-0.5" />
@@ -144,7 +147,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
     ) : (
       <>
         {/* bot 会话的身份胶囊（非 bot 会话自己渲染为空） */}
-        {!isWeb && pinnedMode !== 'placeholder' && activeSessionId && (
+        {pinnedMode !== 'placeholder' && activeSessionId && (
           <BotBindingChip sessionId={activeSessionId} />
         )}
         {sessionTools}
@@ -159,18 +162,16 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
         )}
         {/* 浏览器是独立窗口：这里开 / 聚焦它；agent 开 tab 不会弹窗，这里的计数告诉用户有页面 */}
         {!isWeb && <BrowserWindowButton />}
-        {!isWeb && <PanelToggleButton side="left" open={isSidebarOpen} onClick={toggleSidebar} />}
-        {/* 底部栏（终端）—— 宿主能力，缺省则隐藏切换按钮 */}
-        {!isWeb && (
-          <PanelToggleButton
-            side="bottom"
-            open={isBottomOpen}
-            onClick={toggleBottomPanel}
-            title={t('panel.terminal')}
-          />
-        )}
-        {/* 右侧面板（浏览器/文件/子代理）属宿主能力，缺省则隐藏切换按钮 */}
-        {!isWeb && <PanelToggleButton side="right" open={isBrowserOpen} onClick={toggleBrowser} />}
+        <PanelToggleButton side="left" open={isSidebarOpen} onClick={toggleSidebar} />
+        {/* 底部栏（终端）：浏览器里也能用（终端输出经网络客户端的推送回来） */}
+        <PanelToggleButton
+          side="bottom"
+          open={isBottomOpen}
+          onClick={toggleBottomPanel}
+          title={t('panel.terminal')}
+        />
+        {/* 右侧面板（Widget / 日历 / Agents） */}
+        <PanelToggleButton side="right" open={isBrowserOpen} onClick={toggleBrowser} />
       </>
     )
 
@@ -203,8 +204,8 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
     <ChatBody
       headerCaps={{
         windowDrag: true,
-        editableTitle: !isWeb,
-        sessionConfig: !isWeb,
+        editableTitle: true,
+        sessionConfig: true,
         // macOS 主窗为 hiddenInset：交通灯常驻窗口左上角。侧边栏展开时它落在侧边栏上（侧边栏的
         // pt-10 已为其留白），收起后顶栏顶到窗口左缘 → 标题会被交通灯压住，故此时改由顶栏留白。
         // 悬浮窗为 frame:false，无交通灯 → 不留。
@@ -213,17 +214,15 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       headerHeightClassName={isMac ? 'h-10' : 'h-8'}
       onOpenSessionConfig={() => setShowSessionConfig(true)}
       rightActions={rightActions}
-      // 会话面板（共享组件）：媒体/PDF 走桌面 shuvix-preview:// 协议，
-      // Files 内容注入桌面 caps（.md 预览可「创建笔记本」/ 系统文件管理器打开目录）
+      // 会话面板（共享组件）：媒体/PDF 走本窗口的解析器（桌面 shuvix-preview://，web 客户端 /files/preview），
+      // Files 内容注入桌面 caps（系统文件管理器打开目录；web 客户端里显示路径并给一个复制按钮）
       sessionPanel={
-        !isWeb ? (
-          <MediaUrlProvider value={shuvixPreviewResolver}>
-            <SessionPanel
-              sessionId={activeSessionId}
-              filesContent={<FilesPanel onOpenFolder={(p) => void window.api.app.openFolder(p)} />}
-            />
-          </MediaUrlProvider>
-        ) : undefined
+        <MediaUrlProvider value={hostMediaResolver}>
+          <SessionPanel
+            sessionId={activeSessionId}
+            filesContent={<FilesPanel onOpenFolder={(p) => void window.api.app.openFolder(p)} />}
+          />
+        </MediaUrlProvider>
       }
       banner={
         // 运行时资源横幅 —— 前段是 agent profile 标记（root agent 出现后才渲染，见
@@ -248,7 +247,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       conversationEmptyState={(sid) => <EmptySessionHint sessionId={sid} />}
       overlays={
         // 会话配置弹窗
-        getSessionChannelApi().app.platform !== 'web' && showSessionConfig && activeSessionId ? (
+        showSessionConfig && activeSessionId ? (
           <SessionConfigDialog
             sessionId={activeSessionId}
             onClose={() => setShowSessionConfig(false)}

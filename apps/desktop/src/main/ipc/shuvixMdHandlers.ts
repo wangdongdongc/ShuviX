@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { validateShuvixMdText } from '@shuvix/agent-runtime'
 
 /**
@@ -7,9 +7,9 @@ import { validateShuvixMdText } from '@shuvix/agent-runtime'
  * 唯一事实源），无状态、不落盘。
  */
 export function registerShuvixMdHandlers(): void {
-  ipcMain.handle(
+  defineHandler(
     'shuvixMd:validate',
-    (_event, params: { type: string; text: string; name?: string }) =>
+    (_ctx, params: { type: string; text: string; name?: string }) =>
       validateShuvixMdText(params.type, params.text, params.name)
   )
 }

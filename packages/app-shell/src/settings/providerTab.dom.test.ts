@@ -39,6 +39,11 @@
  *   PT-36 同名的自定义行、PT-37 别的内置行：照常的模型管理      PT-38 启用但没有（启用的）模型 → 行上没有
  *         警告三角、详情没有横幅（对照：xai 照旧有）   PT-39 providerCrud=false 时标签与提示照旧
  *
+ * 界面不在运行 ShuviX 的那台电脑上（浏览器里的 web 客户端，`caps.remoteSignIn`，server mode phase D）：
+ *   PT-40 auth_url → `[data-oauth-browser][data-oauth-remote]`，文案换成 oauthRemoteBrowserHint；重开按钮与手动粘贴框照旧
+ *   PT-41 没给 / 给 false → 没有 `[data-oauth-remote]`，文案就是 PT-7 那句
+ *   PT-42 设备码流程不受影响：用户码照显示，没有 `[data-oauth-remote]`
+ *
  * 包入口 `@shuvix/chat-ui` 顶掉：`isImeComposing` 照原实现（组字判定就是它），`useDialogClose` 给两个对话框
  * （本文件不打开它们）。i18n 用 en。文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX。
  */
@@ -1033,5 +1038,65 @@ describe('classifier-only provider (TypeSafe)', () => {
     expect(tags(row(TS))).toBe(1)
     expect(tags(header('TypeSafe'))).toBe(1)
     expect(text(HINT)).toBe(hintFor('TypeSafe'))
+  })
+})
+
+describe('remote sign-in (the web client, phase D)', () => {
+  it('PT-40 auth_url with caps.remoteSignIn: the remote hint; reopen and the manual-code field still there', async () => {
+    await open(OPENAI, signedOut('openai'), { caps: { remoteSignIn: true } })
+    await click('[data-oauth-signin]')
+    await emit({ providerId: OPENAI, kind: 'auth_url', url: 'https://auth.example/authorize?s=2' })
+
+    const hint = must('[data-oauth-browser]')
+    expect(hint.hasAttribute('data-oauth-remote')).toBe(true)
+    expect(container.querySelectorAll('[data-oauth-browser]')).toHaveLength(1)
+    expect(text('[data-oauth-browser]')).toBe(S.oauthRemoteBrowserHint)
+    expect(containerText()).not.toContain(S.oauthBrowserHint)
+
+    await click('[data-oauth-reopen]')
+    expect(h.oauth.openExternal).toHaveBeenCalledWith('https://auth.example/authorize?s=2')
+
+    await emit({
+      providerId: OPENAI,
+      kind: 'prompt',
+      promptId: 'p-remote',
+      input: 'manual_code',
+      message: 'Paste the final redirect URL here:',
+      placeholder: 'http://127.0.0.1:1455/auth/callback'
+    })
+    const input = must<HTMLInputElement>('[data-oauth-prompt]')
+    expect(input.type).toBe('text')
+    expect($('[data-oauth-prompt-submit]')).not.toBeNull()
+    expect($('[data-oauth-remote]')).not.toBeNull()
+  })
+
+  it.each([
+    ['caps without remoteSignIn', { caps: {} }],
+    ['remoteSignIn false', { caps: { remoteSignIn: false } }],
+    ['no caps', {}]
+  ] as const)('PT-41 %s: no [data-oauth-remote]; the PT-7 hint', async (_what, over) => {
+    await open(OPENAI, signedOut('openai'), over)
+    await click('[data-oauth-signin]')
+    await emit({ providerId: OPENAI, kind: 'auth_url', url: 'https://auth.example/a' })
+
+    expect($('[data-oauth-remote]')).toBeNull()
+    expect(text('[data-oauth-browser]')).toBe(S.oauthBrowserHint)
+    expect(containerText()).not.toContain(S.oauthRemoteBrowserHint)
+  })
+
+  it('PT-42 device_code with remoteSignIn: the user code shows, no [data-oauth-remote]', async () => {
+    await open(KIMI, signedOut('kimi-coding'), { caps: { remoteSignIn: true } })
+    await click('[data-oauth-signin]')
+    await emit({
+      providerId: KIMI,
+      kind: 'device_code',
+      userCode: 'KIMI-4242',
+      verificationUri: 'https://auth.example/device?user_code=KIMI-4242'
+    })
+
+    expect(text('[data-oauth-device-code]')).toBe('KIMI-4242')
+    expect(containerText()).toContain(S.oauthDeviceHint)
+    expect($('[data-oauth-remote]')).toBeNull()
+    expect($('[data-oauth-browser]')).toBeNull()
   })
 })

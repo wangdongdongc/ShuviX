@@ -1,38 +1,37 @@
-import { ipcMain } from 'electron'
+import { defineHandler, pushTo } from './registry'
 import { ttsService } from '../services/tts'
 import { qwen3ModelManager } from '../services/tts/qwen3ModelManager'
 
 export function registerTtsHandlers(): void {
-  ipcMain.handle('tts:speakOnce', async (event, params: { text: string }) => {
+  defineHandler('tts:speakOnce', async (ctx, params: { text: string }) => {
+    // 每片合成好就推给发起方（它已经没了就不推）
     await ttsService.speakOnce(params, (filePath, index) => {
-      if (!event.sender.isDestroyed()) {
-        event.sender.send('tts:chunk', { filePath, index })
-      }
+      pushTo(ctx.client, 'tts:chunk', { filePath, index })
     })
   })
 
-  ipcMain.handle('tts:abort', () => {
+  defineHandler('tts:abort', () => {
     ttsService.abortSpeakOnce()
   })
 
   // ---- Qwen3 本地 TTS 管理 ----
 
-  ipcMain.handle('tts:getQwen3Status', () => {
+  defineHandler('tts:getQwen3Status', () => {
     return qwen3ModelManager.getStatus()
   })
 
-  ipcMain.handle('tts:getQwen3Voices', () => {
+  defineHandler('tts:getQwen3Voices', () => {
     return qwen3ModelManager.listVoices()
   })
 
-  ipcMain.handle('tts:setupQwen3', async () => {
+  defineHandler('tts:setupQwen3', async () => {
     await qwen3ModelManager.setup((progress) => {
       qwen3ModelManager.broadcastProgress(progress)
     })
     return { success: true }
   })
 
-  ipcMain.handle('tts:cancelSetupQwen3', () => {
+  defineHandler('tts:cancelSetupQwen3', () => {
     qwen3ModelManager.cancelSetup()
     return { success: true }
   })

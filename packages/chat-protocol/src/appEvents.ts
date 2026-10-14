@@ -80,6 +80,11 @@ export type AppEvent =
    * （Obsidian 等）不广播，由消费者在窗口聚焦时重扫兜底（与 bot.changed 同口径）。
    */
   | { type: 'knowledge.changed' }
+  /**
+   * 网络访问（局域网里的浏览器）的状态变了：开始 / 停止监听、监听失败、客户端连上 / 断开 —— 信号事件，
+   * 设置页重拉 network.status。只有桌面应用有这一项。
+   */
+  | { type: 'network.changed' }
 
 export type AppEventType = AppEvent['type']
 

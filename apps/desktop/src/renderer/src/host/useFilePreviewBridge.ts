@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { getSessionChannelApi, useChatStore } from '@shuvix/chat-ui'
+import { useChatStore } from '@shuvix/chat-ui'
 
 /**
  * 文件预览桥：chatStore.filePreviewRequest（Files 面板点文件 / 笔记本 [[双链]] / 对话里的文件链接 /
@@ -13,16 +13,18 @@ import { getSessionChannelApi, useChatStore } from '@shuvix/chat-ui'
  * 预览窗口没有活跃会话，传 `sessionId` 指定借用哪个会话。
  */
 export function useFilePreviewBridge(sessionId?: string): void {
-  const isWeb = getSessionChannelApi().app.platform === 'web'
   const request = useChatStore((s) => s.filePreviewRequest)
   useEffect(() => {
-    if (!request || isWeb) return
+    if (!request) return
     const sid = sessionId ?? useChatStore.getState().activeSessionId
     if (!sid) return
-    void window.api.files.open({
-      sessionId: sid,
-      path: request.absPath,
-      openedBy: request.openedBy
-    })
-  }, [request, isWeb, sessionId])
+    // 浏览器里的 web 客户端：开窗是桌面专属（phase D 之前），调用当场被拒、页面给一条提示 —— 不悄悄吞掉
+    window.api.files
+      .open({
+        sessionId: sid,
+        path: request.absPath,
+        openedBy: request.openedBy
+      })
+      .catch(() => undefined)
+  }, [request, sessionId])
 }

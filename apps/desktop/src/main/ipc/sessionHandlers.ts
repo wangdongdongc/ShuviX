@@ -1,7 +1,9 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { dialog } from 'electron'
+import { defineHandler } from './registry'
+import { windowOf } from './ipcAdapter'
 import { sessionService } from '../services/sessionService'
 import { closeWatcherIfWorkingDirectory } from '../services/filesWatcherService'
-import { chatGateway, operationContext, createElectronContext } from '../frontend'
+import { chatGateway, operationContext, createClientContext } from '../frontend'
 import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
 import type {
   SessionUpdateProjectParams,
@@ -18,25 +20,25 @@ import type {
  */
 export function registerSessionHandlers(): void {
   /** 获取所有会话 */
-  ipcMain.handle('session:list', () => {
+  defineHandler('session:list', () => {
     return sessionService.list()
   })
 
   /** 创建新会话（笔记本会话：params.notebookPath 非空；聊天会话：params.bot 非空） */
   // Chrome 标签页会话只由 Chrome 前端开（它核对过是哪个浏览器、哪个标签页）—— 渲染层传来的一律滤掉
-  ipcMain.handle('session:create', (_event, params?: SessionCreateParams) =>
+  defineHandler('session:create', (_ctx, params?: SessionCreateParams) =>
     sessionService.create(params ? { ...params, chromeTab: undefined } : params)
   )
 
   /** 更新会话标题 */
-  ipcMain.handle('session:updateTitle', (_event, params: SessionUpdateTitleParams) => {
+  defineHandler('session:updateTitle', (_ctx, params: SessionUpdateTitleParams) => {
     sessionService.updateTitle(params.id, params.title)
     return { success: true }
   })
 
   /** 更新会话模型配置（provider/model） */
   /** 更新会话所属项目 */
-  ipcMain.handle('session:updateProject', (_event, params: SessionUpdateProjectParams) => {
+  defineHandler('session:updateProject', (_ctx, params: SessionUpdateProjectParams) => {
     sessionService.updateProjectId(params.id, params.projectId)
     return { success: true }
   })
@@ -45,37 +47,34 @@ export function registerSessionHandlers(): void {
    * 改扩展能力勾选（mcp:/skill:）。会话已有 Agent 运行时（含创建中 / 关停中）时拒绝、
    * 什么也不写 —— 勾选只在创建 Agent 那一刻读一次。
    */
-  ipcMain.handle(
-    'session:updateEnabledTools',
-    (_event, params: SessionUpdateEnabledToolsParams) => ({
-      success: sessionService.updateEnabledTools(params.id, params.enabledTools)
-    })
-  )
+  defineHandler('session:updateEnabledTools', (_ctx, params: SessionUpdateEnabledToolsParams) => ({
+    success: sessionService.updateEnabledTools(params.id, params.enabledTools)
+  }))
 
   /**
    * 改这条会话启用的知识库。与扩展能力不同：**不看有没有运行时** —— 知识库是工具每次调用
    * 现查的，改完下一次调用就生效。
    */
-  ipcMain.handle(
+  defineHandler(
     'session:updateKnowledgeBases',
-    (_event, params: SessionUpdateKnowledgeBasesParams) => ({
+    (_ctx, params: SessionUpdateKnowledgeBasesParams) => ({
       success: sessionService.updateKnowledgeBases(params.id, params.knowledgeBases)
     })
   )
 
   /** 从统一允许列表（仅路径条目）移除条目 */
-  ipcMain.handle('session:removeAllowListEntry', (_event, params: SessionAllowListRemoveParams) => {
+  defineHandler('session:removeAllowListEntry', (_ctx, params: SessionAllowListRemoveParams) => {
     sessionService.removeAllowListEntry(params.id, params.entry)
     return { success: true }
   })
 
   /** 获取单个会话（含 workingDirectory） */
-  ipcMain.handle('session:getById', (_event, id: string) => {
+  defineHandler('session:getById', (_ctx, id: string) => {
     return sessionService.getById(id) || null
   })
 
   /** 删除会话（同时清理 Agent 内存实例、消息、HTTP 日志和临时工作目录） */
-  ipcMain.handle('session:delete', async (_event, id: string) => {
+  defineHandler('session:delete', async (_ctx, id: string) => {
     // 若被删的会话正处于悬浮态，先关闭对应悬浮窗
     if (isPinned(id)) {
       await unpinPinnedChat(id, 'session-deleted')
@@ -93,27 +92,9 @@ export function registerSessionHandlers(): void {
   // （session.prompt-accepted / session.turn-completed 埋点 + titler agent），
   // 该 IPC 本就没有任何渲染端调用方。
 
-  /** 选择文件并读取其文本内容（用于 SSH 私钥等） */
-  ipcMain.handle(
-    'dialog:readTextFile',
-    async (event, params?: { title?: string; filters?: Electron.FileFilter[] }) => {
-      const win = BrowserWindow.fromWebContents(event.sender)
-      if (!win) return null
-      const result = await dialog.showOpenDialog(win, {
-        title: params?.title || 'Select File',
-        properties: ['openFile'],
-        filters: params?.filters || [{ name: 'All Files', extensions: ['*'] }]
-      })
-      if (result.canceled || result.filePaths.length === 0) return null
-      const fs = await import('fs/promises')
-      const content = await fs.readFile(result.filePaths[0], 'utf-8')
-      return { path: result.filePaths[0], content }
-    }
-  )
-
-  /** 打开文件夹选择对话框 */
-  ipcMain.handle('dialog:openDirectory', async (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
+  /** 打开文件夹选择对话框（挂在调用方窗口上；没有窗口 → null） */
+  defineHandler('dialog:openDirectory', async (ctx) => {
+    const win = windowOf(ctx)
     if (!win) return null
     const result = await dialog.showOpenDialog(win, {
       properties: ['openDirectory', 'createDirectory']
@@ -123,15 +104,15 @@ export function registerSessionHandlers(): void {
   })
 
   /** 查询指定 session 的所有运行时资源状态 */
-  ipcMain.handle('runtime:statuses', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
+  defineHandler('runtime:statuses', (ctx, sessionId: string) =>
+    operationContext.run(createClientContext(ctx, sessionId), () =>
       chatGateway.getRuntimeStatuses(sessionId)
     )
   )
 
   /** 销毁指定运行时资源 */
-  ipcMain.handle('runtime:destroy', (_event, params: { sessionId: string; runtimeId: string }) =>
-    operationContext.run(createElectronContext(params.sessionId), () =>
+  defineHandler('runtime:destroy', (ctx, params: { sessionId: string; runtimeId: string }) =>
+    operationContext.run(createClientContext(ctx, params.sessionId), () =>
       chatGateway.destroyRuntime(params.sessionId, params.runtimeId)
     )
   )

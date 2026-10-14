@@ -1,6 +1,6 @@
 import { createWriteStream, existsSync, unlinkSync, renameSync } from 'fs'
-import { BrowserWindow } from 'electron'
 import { createLogger } from '../logger'
+import { broadcastToClients } from '../ipc/registry'
 
 const log = createLogger('DownloadManager')
 
@@ -174,13 +174,9 @@ class DownloadManager {
     return this.tasks.has(taskId)
   }
 
-  /** 广播进度到所有渲染窗口 */
+  /** 广播进度到所有客户端（桌面：所有渲染窗口） */
   private broadcast(progress: DownloadProgress): void {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.webContents.send('download:progress', progress)
-      }
-    }
+    broadcastToClients('download:progress', progress)
   }
 }
 

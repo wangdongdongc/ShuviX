@@ -35,6 +35,8 @@ import { registerNotificationHandlers } from './notificationHandlers'
 import { registerLiveDocumentHandlers } from './liveDocumentHandlers'
 import { registerChromeExtensionHandlers } from './chromeExtensionHandlers'
 import { registerSyncHandlers } from './syncHandlers'
+import { registerNetworkHandlers } from './networkHandlers'
+import { registerFsHandlers } from './fsHandlers'
 
 /**
  * 统一注册所有 IPC 处理器
@@ -78,4 +80,6 @@ export function registerIpcHandlers(): void {
   registerLiveDocumentHandlers()
   registerChromeExtensionHandlers()
   registerSyncHandlers()
+  registerNetworkHandlers()
+  registerFsHandlers()
 }

@@ -1,5 +1,6 @@
 import { mkdirSync } from 'fs'
-import { ipcMain, shell } from 'electron'
+import { shell } from 'electron'
+import { defineHandler } from './registry'
 import {
   createKnowledgeBase,
   createKnowledgeEntry,
@@ -20,26 +21,26 @@ import { openKnowledgeNote } from '../services/knowledgeNotes'
  * `knowledge.changed`，分组据此重扫。改名与删除仍然交给文件系统（「打开知识库目录」那条路）。
  */
 export function registerKnowledgeHandlers(): void {
-  ipcMain.handle('knowledge:list', () => listKnowledgeEntries())
+  defineHandler('knowledge:list', () => listKnowledgeEntries())
   /** 聊天输入框 `@` 引用「知识库」源候选：该会话启用库内的条目视图（含工具指针），只读 */
-  ipcMain.handle('knowledge:mentionEntries', (_event, params: { sessionId: string }) =>
+  defineHandler('knowledge:mentionEntries', (_ctx, params: { sessionId: string }) =>
     listKnowledgeMentionEntries(params.sessionId)
   )
-  ipcMain.handle('knowledge:openNote', (_event, params: { path: string; title?: string }) =>
+  defineHandler('knowledge:openNote', (_ctx, params: { path: string; title?: string }) =>
     openKnowledgeNote(params.path, params.title)
   )
   /**
    * 打开**用户知识库根**：拷库、改名、删库都在这里做 —— 所以目录得先在。
    * 项目库是宿主维护的，条目行的「在文件夹中显示」照样够得着。
    */
-  ipcMain.handle('knowledge:openFolder', async () => {
+  defineHandler('knowledge:openFolder', async () => {
     const root = getUserKnowledgeRoot()
     mkdirSync(root, { recursive: true })
     await shell.openPath(root)
     return { success: true }
   })
   /** 在文件夹中显示条目文件；落不进任何 bundle 的路径忽略 */
-  ipcMain.handle('knowledge:revealFile', (_event, params: { path: string }) => {
+  defineHandler('knowledge:revealFile', (_ctx, params: { path: string }) => {
     const abs = params.path ? entryFilePath(params.path) : ''
     if (!abs || !locateBundle(abs)) return { success: false }
     shell.showItemInFolder(abs)
@@ -49,17 +50,17 @@ export function registerKnowledgeHandlers(): void {
    * 配置界面用的候选库与此刻生效的选择：给会话 id 就回这条会话的（含回落出来的缺省），
    * 不给（项目配置对话框）只回候选项。
    */
-  ipcMain.handle('knowledge:baseOptions', (_event, params?: { sessionId?: string }) =>
+  defineHandler('knowledge:baseOptions', (_ctx, params?: { sessionId?: string }) =>
     knowledgeBaseOptions(params?.sessionId)
   )
   /** 新建：名字不合法 / 重名 / 目录已不在都回 { success:false, error }，侧栏把原因显示在输入行下面 */
-  ipcMain.handle('knowledge:createBase', (_event, params: { name: string }) =>
+  defineHandler('knowledge:createBase', (_ctx, params: { name: string }) =>
     createKnowledgeBase(params.name)
   )
-  ipcMain.handle('knowledge:createFolder', (_event, params: { dir: string; name: string }) =>
+  defineHandler('knowledge:createFolder', (_ctx, params: { dir: string; name: string }) =>
     createKnowledgeFolder(params.dir, params.name)
   )
-  ipcMain.handle('knowledge:createEntry', (_event, params: { dir: string; title: string }) =>
+  defineHandler('knowledge:createEntry', (_ctx, params: { dir: string; title: string }) =>
     createKnowledgeEntry(params.dir, params.title)
   )
 }

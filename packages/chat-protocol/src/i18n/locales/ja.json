@@ -601,6 +601,7 @@
     "oauthWaiting": "ブラウザでの承認を待っています…",
     "oauthFailed": "サブスクリプションのログインに失敗しました",
     "oauthBrowserHint": "開いたブラウザウィンドウでログインを完了してください。完了すると自動的に続行します。",
+    "oauthRemoteBrowserHint": "このログインはブラウザーを ShuviX を実行しているコンピューターに戻すため、ここでは完了できません。そのコンピューターで完了するか、下のページでログインしてから、ブラウザーが最後に表示したアドレスを下の欄に貼り付けてください。",
     "oauthManualLabel": "ブラウザが ShuviX に戻れない場合（別のコンピューターでログインしたときなど）、最後に表示されたアドレスをここに貼り付けてください：",
     "oauthManualSubmit": "続行",
     "oauthProviders": {
@@ -929,7 +930,23 @@
     },
     "classifierOnlyProviderHint": "{{name}} は分類モデル（Jev など）のみを提供し、チャットモデルはありません。上で API キーを入力して有効にし、「設定 → 一般 → 分類モデル」で選んでください。",
     "classifierTag": "分類器",
-    "classifierTagTitle": "分類モデル（コマンドの分類用）のみを提供し、チャットモデルはありません"
+    "classifierTagTitle": "分類モデル（コマンドの分類用）のみを提供し、チャットモデルはありません",
+    "networkTitle": "ネットワークアクセス",
+    "networkDesc": "同じネットワーク上の別のデバイスのブラウザで ShuviX を開きます。",
+    "networkEnable": "ローカルネットワークからのアクセスを許可",
+    "networkRisk": "オンにすると、同じネットワーク上の誰でも ShuviX を通じてこのコンピューターを完全に操作できます（ファイルの読み書き、コマンドの実行）。パスワードはありません。信頼できるネットワークでのみオンにし、使い終わったらオフにしてください。",
+    "networkPort": "ポート",
+    "networkPortInvalid": "1024〜65535 の整数を入力してください。",
+    "networkAddresses": "ブラウザで開く",
+    "networkCopy": "コピー",
+    "networkCopied": "コピーしました",
+    "networkClients": "接続中のブラウザ",
+    "networkNoClients": "接続中のブラウザはありません。",
+    "networkConnectedSince": "{{time}} に接続",
+    "networkErrorInUse": "ポート {{port}} は使用中です。別のポートを選んでください。",
+    "networkErrorAccess": "ShuviX にはポート {{port}} で待ち受ける権限がありません。",
+    "networkErrorOther": "ポート {{port}} で待ち受けできません：{{error}}",
+    "networkStarting": "起動中…"
   },
   "about": {
     "description": "あなたのAIアシスタント",
@@ -1308,5 +1325,26 @@
     "tag": "実験",
     "hint": "実験的な機能です。今後のバージョンで互換性のない変更や削除が行われる可能性があり、既存の設定やデータの移行は保証されません。",
     "hintTelegramBots": "実験的で未完成の機能です。ここでは Bot を登録するだけで、ShuviX は今のところ Telegram に接続せず、メッセージの送受信も行いません。今後のバージョンで互換性のない変更や削除が行われる可能性があります。"
+  },
+  "web": {
+    "connecting": "ShuviX に接続しています…",
+    "reconnecting": "ShuviX に再接続しています…",
+    "desktopOnly": "この操作は現在 ShuviX デスクトップアプリでのみ利用できます。",
+    "pathNoticeFolder": "このフォルダーは ShuviX を実行しているコンピューター上にあります：",
+    "pathNoticeFile": "このファイルは ShuviX を実行しているコンピューター上にあります：",
+    "copyPath": "パスをコピー",
+    "copied": "コピーしました",
+    "copyFailed": "コピーできませんでした。パスを選択してコピーしてください",
+    "pickFolderTitle": "ShuviX を実行しているコンピューター上のフォルダーを選択",
+    "pickFolderUp": "1 つ上へ",
+    "pickFolderHome": "ホームフォルダー",
+    "pickFolderGo": "移動",
+    "pickFolderLoading": "読み込み中…",
+    "pickFolderError": "このフォルダーを開けません（{{code}}）",
+    "pickFolderFailed": "ShuviX に接続できず、このフォルダーを読み込めませんでした",
+    "pickFolderEmpty": "フォルダーがありません",
+    "pickFolderTruncated": "最初の {{count}} 個のフォルダーだけを表示しています",
+    "pickFolderShowHidden": "隠しフォルダーを表示",
+    "pickFolderChoose": "このフォルダーを選択"
   }
 }

@@ -601,6 +601,7 @@
     "oauthWaiting": "Waiting for authorization in your browser…",
     "oauthFailed": "Subscription sign-in failed",
     "oauthBrowserHint": "Finish signing in in the browser window that opened. ShuviX carries on by itself once you're done.",
+    "oauthRemoteBrowserHint": "This sign-in sends your browser back to the computer running ShuviX, so it can't finish from here. Complete it on that computer — or sign in on the page below, then paste the address your browser ends up on into the field below.",
     "oauthManualLabel": "If the browser can't get back to ShuviX (for example, you signed in on another computer), paste the address it ended on:",
     "oauthManualSubmit": "Continue",
     "oauthProviders": {
@@ -929,7 +930,23 @@
     },
     "classifierOnlyProviderHint": "{{name}} only provides classifier models (such as Jev), not chat models. Add its API key above, enable it, then pick one under Settings → General → Classifier model.",
     "classifierTag": "Classifier",
-    "classifierTagTitle": "Provides classifier models only (used to classify commands), not chat models"
+    "classifierTagTitle": "Provides classifier models only (used to classify commands), not chat models",
+    "networkTitle": "Network access",
+    "networkDesc": "Open ShuviX in a browser on another device on the same network.",
+    "networkEnable": "Allow access from the local network",
+    "networkRisk": "Anyone on the same network can fully control this computer through ShuviX — read and write your files and run commands. There is no password. Only turn this on in a network you trust, and turn it off when you are done.",
+    "networkPort": "Port",
+    "networkPortInvalid": "Use a whole number between 1024 and 65535.",
+    "networkAddresses": "Open in a browser",
+    "networkCopy": "Copy",
+    "networkCopied": "Copied",
+    "networkClients": "Connected browsers",
+    "networkNoClients": "No browser is connected.",
+    "networkConnectedSince": "Connected {{time}}",
+    "networkErrorInUse": "Port {{port}} is already in use. Choose another port.",
+    "networkErrorAccess": "ShuviX is not allowed to listen on port {{port}}.",
+    "networkErrorOther": "Could not listen on port {{port}}: {{error}}",
+    "networkStarting": "Starting…"
   },
   "about": {
     "description": "Your AI Assistant",
@@ -1308,5 +1325,26 @@
     "tag": "Beta",
     "hint": "Experimental: a later version may change this in incompatible ways or remove it, without migrating your settings or data.",
     "hintTelegramBots": "Experimental and unfinished: bots are only registered here. ShuviX does not connect to Telegram or send or receive messages yet. A later version may change this in incompatible ways or remove it."
+  },
+  "web": {
+    "connecting": "Connecting to ShuviX…",
+    "reconnecting": "Reconnecting to ShuviX…",
+    "desktopOnly": "This needs the ShuviX desktop app for now.",
+    "pathNoticeFolder": "This folder is on the computer running ShuviX:",
+    "pathNoticeFile": "This file is on the computer running ShuviX:",
+    "copyPath": "Copy path",
+    "copied": "Copied",
+    "copyFailed": "Couldn't copy — select the path and copy it",
+    "pickFolderTitle": "Choose a folder on the computer running ShuviX",
+    "pickFolderUp": "Up one level",
+    "pickFolderHome": "Home folder",
+    "pickFolderGo": "Go",
+    "pickFolderLoading": "Loading…",
+    "pickFolderError": "Can't open this folder ({{code}})",
+    "pickFolderFailed": "Couldn't reach ShuviX to list this folder",
+    "pickFolderEmpty": "No folders here",
+    "pickFolderTruncated": "Only the first {{count}} folders are shown",
+    "pickFolderShowHidden": "Show hidden folders",
+    "pickFolderChoose": "Choose this folder"
   }
 }

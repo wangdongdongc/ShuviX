@@ -1,4 +1,5 @@
-import { ipcMain, BrowserWindow, nativeTheme } from 'electron'
+import { BrowserWindow, nativeTheme } from 'electron'
+import { defineHandler } from './registry'
 import { settingsService, KNOWN_SETTINGS } from '../services/settingsService'
 import { changeLanguage } from '../i18n'
 import { refreshBuiltinKnowledge } from '../services/knowledge'
@@ -27,27 +28,27 @@ export function applyNativeThemeSource(mode: string | null | undefined): void {
  */
 export function registerSettingsHandlers(): void {
   /** 获取所有设置 */
-  ipcMain.handle('settings:getAll', () => {
+  defineHandler('settings:getAll', () => {
     return settingsService.getAll()
   })
 
   /** 获取单个设置 */
-  ipcMain.handle('settings:get', (_event, key: string) => {
+  defineHandler('settings:get', (_ctx, key: string) => {
     return settingsService.get(key)
   })
 
   /** 获取已知设置 key 的元数据（labelKey + desc） */
-  ipcMain.handle('settings:getKnownKeys', () => {
+  defineHandler('settings:getKnownKeys', () => {
     return KNOWN_SETTINGS
   })
 
   /** 命令沙箱的状态（平台支持 / 探测是否可用 / 开关）—— 设置页 bash 子页读 */
-  ipcMain.handle('settings:sandboxStatus', () => {
+  defineHandler('settings:sandboxStatus', () => {
     return sandboxStatus()
   })
 
   /** 保存设置，并广播通知所有窗口刷新 */
-  ipcMain.handle('settings:set', (_event, params: SettingsSetParams) => {
+  defineHandler('settings:set', (_ctx, params: SettingsSetParams) => {
     settingsService.set(params.key, params.value)
     // 语言变更时同步更新主进程 i18n
     if (params.key === 'general.language') {

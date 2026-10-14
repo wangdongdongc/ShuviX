@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import {
   scanSessionFiles,
   scanSessionDir,
@@ -11,34 +11,34 @@ import { findArtifact, readArtifact } from '../services/artifacts/store'
 import { sessionRecords } from '../services/sessionRecords'
 
 export function registerFilesHandlers(): void {
-  ipcMain.handle('files:scan', (_event, params: { sessionId: string }) =>
+  defineHandler('files:scan', (_ctx, params: { sessionId: string }) =>
     scanSessionFiles(params.sessionId)
   )
   // 按目录浅扫描（文件树懒加载）：dir 相对工作目录，空串 = 根
-  ipcMain.handle('files:scanDir', (_event, params: { sessionId: string; dir: string }) =>
+  defineHandler('files:scanDir', (_ctx, params: { sessionId: string; dir: string }) =>
     scanSessionDir(params.sessionId, params.dir)
   )
   // 监听 / 取消监听单个已打开文件的内容变更（笔记本 / 预览自动刷新）
-  ipcMain.handle('files:watch', (_event, params: { sessionId: string; path: string }) => {
+  defineHandler('files:watch', (_ctx, params: { sessionId: string; path: string }) => {
     watchSessionFile(params.sessionId, params.path)
   })
-  ipcMain.handle('files:unwatch', (_event, params: { sessionId: string; path: string }) => {
+  defineHandler('files:unwatch', (_ctx, params: { sessionId: string; path: string }) => {
     unwatchSessionFile(params.sessionId, params.path)
   })
-  ipcMain.handle('files:read', (_event, params: { sessionId: string; path: string }) =>
+  defineHandler('files:read', (_ctx, params: { sessionId: string; path: string }) =>
     previewSessionFile(params.sessionId, params.path)
   )
   // 在独立窗口里打开文件（md → 协作编辑窗口；其余可预览的 → 预览窗口；不支持预览的不响应）
-  ipcMain.handle('files:open', (_event, params: OpenFileParams) => openFileInWindow(params))
-  ipcMain.handle(
+  defineHandler('files:open', (_ctx, params: OpenFileParams) => openFileInWindow(params))
+  defineHandler(
     'files:write',
-    (_event, params: { sessionId: string; path: string; content: string }) =>
+    (_ctx, params: { sessionId: string; path: string; content: string }) =>
       writeSessionFile(params.sessionId, params.path, params.content)
   )
   // 会话 Artifact 按**名字**取内容 —— ```artifact 引用围栏的数据通道。
   // 刻意不走 files:read：那条要绝对路径，而围栏里只该有名字（路径不进转写），
   // 名字→路径的解析是本会话目录的事，归 artifacts 模块。
-  ipcMain.handle('artifact:read', (_event, params: { sessionId: string; name: string }) => {
+  defineHandler('artifact:read', (_ctx, params: { sessionId: string; name: string }) => {
     // 先本会话，再往下找一层子会话：产物的目录跟着**产出它的那场会话**走（见 artifacts/store
     // 的说明），而 `work` 基座的分工正是把具体活交给 `coding` 子会话 —— 子代理画的图，
     // 父会话终答里的引用必须展示得出来。嵌套只有一层，所以不递归。

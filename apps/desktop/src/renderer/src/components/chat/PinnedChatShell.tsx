@@ -3,10 +3,11 @@ import { useChatStore } from '@shuvix/chat-ui'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { CHAT_CONTAINER_ATTR } from '../../stores/browserStore'
 import { useAppInit } from '../../hooks/useAppInit'
-import { ChatHostProvider, MediaUrlProvider, shuvixPreviewResolver } from '@shuvix/chat-ui'
+import { ChatHostProvider, MediaUrlProvider } from '@shuvix/chat-ui'
 import { useSettingsChatHost } from '../../host/settingsChatHost'
 import { SessionRuntime } from '../../host/SessionRuntime'
 import { ChatView } from './ChatView'
+import { hostMediaResolver } from '../../host/hostMedia'
 
 function parseSessionIdFromHash(): string | null {
   const hash = window.location.hash // 形如 "#pinned-chat?sessionId=xxx"
@@ -68,7 +69,7 @@ export function PinnedChatShell(): React.JSX.Element {
   return (
     <ChatHostProvider value={chatHost}>
       {/* 悬浮窗同样要能解析工具卡片内联图的本地文件 URL */}
-      <MediaUrlProvider value={shuvixPreviewResolver}>
+      <MediaUrlProvider value={hostMediaResolver}>
         <SessionRuntime sessionId={activeSessionId} />
         <div className="flex h-full bg-bg-primary">
           <div {...{ [CHAT_CONTAINER_ATTR]: true }} className="flex-1 min-w-[320px] bg-bg-primary">

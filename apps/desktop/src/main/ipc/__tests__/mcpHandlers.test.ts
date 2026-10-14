@@ -49,14 +49,17 @@ vi.mock('../../services/mcpService', () => ({
 import { mcpDao } from '../../dao/mcpDao'
 import { mcpService } from '../../services/mcpService'
 import { registerMcpHandlers } from '../mcpHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
 
 registerMcpHandlers()
+// 注册表经 IPC 适配器挂到（替身）ipcMain 上：handlers 里收的是适配器包过的处理函数
+attachIpcAdapter()
 
 /** 像渲染端 invoke 那样调一个已注册的处理函数 */
 const invoke = (channel: string, ...args: unknown[]): unknown => {
   const handler = state.handlers.get(channel)
   if (!handler) throw new Error(`no handler for ${channel}`)
-  return handler({}, ...args)
+  return handler({ sender: { id: 1 } }, ...args)
 }
 
 const row = (id: string, name: string, over: Row = {}): Row => ({

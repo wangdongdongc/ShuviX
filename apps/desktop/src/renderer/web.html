@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>ShuviX</title>
+    <!-- 浏览器里的 web 客户端（server mode phase C）：局域网里打开 ShuviX 的网络地址时由主进程的网络服务给出。
+         没有 shuvix-* 协议：本地文件、交互图的库、widget 都走这台服务自己的 HTTP 路由（phase D：/files/*、/lib/*、/w/*），
+         所以图片 / 媒体 / iframe / 库脚本都只要 'self' -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self'; connect-src 'self' ws: wss: https:; frame-src 'self';"
+    />
+    <script>
+      // 在 CSS 加载前同步设置主题，避免闪烁
+      ;(function () {
+        var mode = localStorage.getItem('theme') || 'dark'
+        if (mode === 'system') {
+          mode = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        }
+        var themeId =
+          mode === 'light'
+            ? localStorage.getItem('lightTheme') || 'github-light'
+            : localStorage.getItem('darkTheme') || 'github-dark'
+        document.documentElement.setAttribute('data-theme', themeId)
+      })()
+    </script>
+  </head>
+
+  <body style="margin: 0">
+    <div id="root"></div>
+    <script type="module" src="/src/web/main.tsx"></script>
+  </body>
+</html>

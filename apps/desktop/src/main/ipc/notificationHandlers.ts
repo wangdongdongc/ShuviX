@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { consumePendingOpenSession, reportActiveSession } from '../services/notificationService'
 
 /**
@@ -12,10 +12,15 @@ import { consumePendingOpenSession, reportActiveSession } from '../services/noti
  * 窗口重建、渲染就绪后由渲染层来取。窗口还在的情形直接走 `notification:open-session` 推送。
  */
 export function registerNotificationHandlers(): void {
-  ipcMain.handle('notification:reportActiveSession', (event, sessionId: string | null) => {
-    reportActiveSession(event.sender.id, sessionId)
+  // 网络客户端（浏览器）没有窗口、也就没有焦点：照记「它看到了这个会话」（撤掉该会话名下的通知），
+  // 但从不算「用户正看着」—— 桌面的通知照常弹
+  defineHandler('notification:reportActiveSession', (ctx, sessionId: string | null) => {
+    reportActiveSession(ctx.client.kind === 'window' ? ctx.client.webContentsId : null, sessionId)
     return { success: true }
   })
 
-  ipcMain.handle('notification:consumePendingOpenSession', () => consumePendingOpenSession())
+  // 暂存的跳转目标是给「被通知点击重建的主窗口」的：浏览器来取会把它偷走，回 null
+  defineHandler('notification:consumePendingOpenSession', (ctx) =>
+    ctx.client.kind === 'window' ? consumePendingOpenSession() : null
+  )
 }

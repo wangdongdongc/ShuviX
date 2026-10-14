@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { commandService } from '../services/commandService'
 import { skillService } from '../services/skillService'
 import { sessionRecords } from '../services/sessionRecords'
@@ -43,7 +43,7 @@ export function registerCommandHandlers(): void {
    * - 已激活会话：解析出 projectPath，包含项目命令 + 全部 skill 命令
    * - 无会话（欢迎页）：projectPath 为 null，仅返回不依赖项目的命令（如全局/内置/外部 skill）
    */
-  ipcMain.handle('command:list', (_event, params: { sessionId: string | null }) => {
+  defineHandler('command:list', (_ctx, params: { sessionId: string | null }) => {
     let projectPath: string | null = null
     if (params.sessionId) {
       const projectId = sessionRecords.pick(params.sessionId, ['projectId'])?.projectId

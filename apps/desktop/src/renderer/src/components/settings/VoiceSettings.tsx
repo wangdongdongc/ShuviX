@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Loader2, Play, AlertCircle } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { mediaFileUrl } from '@shuvix/chat-ui'
 import {
   SettingsSection,
   SettingsRow,
@@ -142,7 +143,7 @@ function TtsPanel(): React.JSX.Element {
       }
       const removeListener = window.api.tts.onChunk((data) => {
         if (data.index === 0 && !testAudio) {
-          const audio = new Audio(`shuvix-media://${data.filePath}`)
+          const audio = new Audio(mediaFileUrl(data.filePath))
           testAudio = audio
           audio.onended = () => {
             testAudio = null

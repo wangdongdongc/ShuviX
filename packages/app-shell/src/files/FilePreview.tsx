@@ -35,7 +35,13 @@ import {
   WrapText,
   X
 } from 'lucide-react'
-import { CodeView, getHostApi, getSessionChannelApi, useAppEvent } from '@shuvix/chat-ui'
+import {
+  CodeView,
+  copyToClipboard,
+  getHostApi,
+  getSessionChannelApi,
+  useAppEvent
+} from '@shuvix/chat-ui'
 import { LivePreviewEditor, type NotebookCaps } from '../notebook/LivePreviewEditor'
 import { EbookView } from './EbookView'
 import { OfficeView, SHEET_CONFIRM_BYTES, DOCX_CONFIRM_BYTES } from './OfficeView'
@@ -152,7 +158,7 @@ export function FilePreview({
         <div className="flex items-center gap-0.5 flex-shrink-0">
           <button
             onClick={() => {
-              void navigator.clipboard.writeText(path)
+              copyToClipboard(path)
               setPathCopied(true)
               setTimeout(() => setPathCopied(false), 1500)
             }}

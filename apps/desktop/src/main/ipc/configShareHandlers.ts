@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { configShareService } from '../services/configShareService'
 import type {
   ConfigSharePayload,
@@ -10,25 +10,25 @@ import type {
  * 配置导出/导入 IPC 处理器
  */
 export function registerConfigShareHandlers(): void {
-  ipcMain.handle('config:buildExportSnapshot', () => {
+  defineHandler('config:buildExportSnapshot', () => {
     return configShareService.buildExportSnapshot()
   })
 
-  ipcMain.handle('config:buildExportPayload', (_event, options: ExportOptions) => {
+  defineHandler('config:buildExportPayload', (_ctx, options: ExportOptions) => {
     return configShareService.buildExportPayload(options)
   })
 
-  ipcMain.handle('config:parseImportPayload', (_event, encoded: string) => {
+  defineHandler('config:parseImportPayload', (_ctx, encoded: string) => {
     return configShareService.parseImportPayload(encoded)
   })
 
-  ipcMain.handle('config:planImport', (_event, payload: ConfigSharePayload) => {
+  defineHandler('config:planImport', (_ctx, payload: ConfigSharePayload) => {
     return configShareService.planImport(payload)
   })
 
-  ipcMain.handle(
+  defineHandler(
     'config:applyImport',
-    async (_event, params: { payload: ConfigSharePayload; selection: ImportSelection }) => {
+    async (_ctx, params: { payload: ConfigSharePayload; selection: ImportSelection }) => {
       // providers.changed 由 configShareService.applyImportPayload 在服务层发布
       return configShareService.applyImportPayload(params.payload, params.selection)
     }

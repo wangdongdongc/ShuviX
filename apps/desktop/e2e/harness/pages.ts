@@ -352,6 +352,11 @@ export interface ChatPane {
    */
   pendingAskFullAccess(): Promise<boolean>
   /**
+   * 点询问卡片上的「允许」/「拒绝」（与 markdownWindowPane 同一种认法：允许 = 卡片操作栏里唯一的 bg-accent 按钮，
+   * 拒绝 = flex-1 占位之后的第一颗按钮）。没有挂着的询问时抛
+   */
+  answerPendingAsk(which: 'allow' | 'deny'): Promise<void>
+  /**
    * 询问卡片上的审查意见（见 AskReviewShot）；没有挂着的询问、或这张卡没附审查意见（审查关着、
    * 答不出、force-ask 只问人）时为 null
    */
@@ -391,7 +396,10 @@ export interface ChatPane {
   waitToolImages(count: number, timeoutMs?: number): Promise<ToolImageShot[]>
   /** 工具子树内的图片降级文案（文件没了时 ToolImageThumb 不留破图，改说一句） */
   toolImageFallbacks(): Promise<string[]>
-  /** 点第 i 张工具内联图（走 requestFilePreview，与 Files 面板点文件同一条信号 → 独立预览窗口） */
+  /**
+   * 点第 i 张工具内联图（走 requestFilePreview，与 Files 面板点文件同一条信号 → 独立预览窗口；web 客户端里是
+   * 一个新标签页）。点击带用户手势
+   */
   clickToolImage(index: number): Promise<void>
   /** 相邻同名调用合并行的计数徽章文本 */
   groupBadges(): Promise<string[]>
@@ -474,10 +482,14 @@ export function chatPane(main: CdpClient): ChatPane {
   const GROUPS = `[...(${SCROLLER}?.querySelectorAll('[data-step-group]') ?? [])]`
   const NOTICES = `[...(${SCROLLER}?.querySelectorAll('[data-system-notice]') ?? [])]`
   const SEND_BTN = `[...document.querySelectorAll('button')].find((b) => b.querySelector('.lucide-send'))`
-  // 工具卡片里的模型图：**必须**是 shuvix-preview:// —— 若哪天退回 data: URL（base64
-  // 又灌进渲染进程），这里会认不到，用例即红，这正是想要的
+  // 工具卡片里的模型图：**必须**是 shuvix-preview://（桌面）或网络服务的 /files/preview?（浏览器里的
+  // web 客户端，server mode phase D）—— 若哪天退回 data: URL（base64 又灌进渲染进程），这里会认不到，
+  // 用例即红，这正是想要的
   const TOOL_IMGS = `[...document.querySelectorAll('[data-tool-name] img')]
-    .filter((i) => (i.getAttribute('src') || '').startsWith('shuvix-preview://'))`
+    .filter((i) => {
+      const src = i.getAttribute('src') || ''
+      return src.startsWith('shuvix-preview://') || src.startsWith('/files/preview?')
+    })`
   // path 用正则解而非 new URL：自定义 scheme 不是 special scheme，各引擎对其
   // searchParams 的支持不必赌
   const IMG_SHOT = (list: string): string =>
@@ -850,6 +862,21 @@ export function chatPane(main: CdpClient): ChatPane {
           preview: (row?.nextElementSibling?.textContent ?? '').trim()
         }
       })()`),
+    answerPendingAsk: async (which) => {
+      const outcome = await main.eval<string>(`(() => {
+        const title = [...document.querySelectorAll('.rounded-t-2xl p.font-medium.whitespace-nowrap')][0]
+        const root = title?.closest('.space-y-2')
+        const allow = root?.querySelector('button.bg-accent')
+        if (!allow) return 'no ask card'
+        if (${JSON.stringify(which)} === 'allow') { allow.click(); return 'ok' }
+        const spacer = allow.parentElement?.querySelector(':scope > span.flex-1')
+        const deny = spacer?.nextElementSibling
+        if (!deny || deny.tagName !== 'BUTTON') return 'no deny button'
+        deny.click()
+        return 'ok'
+      })()`)
+      if (outcome !== 'ok') throw new Error(`ask card ${which}: ${outcome}`)
+    },
     // 标签在询问卡片的标题行里（与后台标签同一个槽），卡片在待处理面板（rounded-t-2xl）里
     pendingAskFullAccess: () =>
       main.eval<boolean>(`!!document.querySelector('.rounded-t-2xl [data-full-access]')`),
@@ -990,7 +1017,12 @@ export function chatPane(main: CdpClient): ChatPane {
           .filter((s) => /no longer available|已不可用|利用できません/.test(s))`
       ),
     clickToolImage: async (index) => {
-      await main.eval(`${TOOL_IMGS}[${index}]?.click()`)
+      // 带用户手势（与真的点一下等价）：浏览器里的 web 客户端由它 `window.open` 一个预览标签页，没有手势会被拦
+      await main.send('Runtime.evaluate', {
+        expression: `${TOOL_IMGS}[${index}]?.click()`,
+        userGesture: true,
+        returnByValue: true
+      })
       await new Promise((r) => setTimeout(r, 300))
     },
     groupBadges: () =>
@@ -1575,6 +1607,8 @@ export interface InteractivePane {
   shot(): Promise<InteractiveShot | null>
   /** 等沙箱 iframe 挂上，回那一刻的快照 */
   waitFrame(timeoutMs?: number): Promise<InteractiveShot>
+  /** 此刻 iframe 的整份 `srcdoc`（shot 只留前 600 字符）；没有 iframe = null */
+  srcdoc(): Promise<string | null>
   /** 给此刻的 iframe 节点挂一个页内 expando；没有 iframe 回 false */
   markFrame(tag: string): Promise<boolean>
   /** 此刻 iframe 节点上的 expando（换了节点就没了 → null）；没有 iframe 也是 null */
@@ -1663,6 +1697,7 @@ export function interactivePane(main: CdpClient, marker: string): InteractivePan
         `interactive iframe mounted in the bubble with ${JSON.stringify(marker)}`,
         timeoutMs
       ),
+    srcdoc: () => main.eval<string | null>(`(${FRAME})?.getAttribute('srcdoc') ?? null`),
     markFrame: (tag) =>
       main.eval<boolean>(`(() => {
         const frame = ${FRAME}
@@ -1995,6 +2030,11 @@ export interface SidebarPane {
   pickRowMenu(title: string, actionId: string): Promise<void>
   /** 开分组头的 ⋮ 并选中一项（同上） */
   pickGroupMenu(target: GroupTarget, actionId: string): Promise<void>
+  /**
+   * 只点分组头的 ⋮（等组头与 ⋮ 出现；**不**钉桩）—— 浏览器里的 web 客户端没有原生菜单，弹出的是页面里的
+   * DOM 菜单，接着用 `webClientPane.domMenu()` / `pickDomMenu(label)` 读、选
+   */
+  clickGroupMenuButton(target: GroupTarget): Promise<void>
 
   // ── 行 / 组头上还剩什么可点的 ──
   /** 会话行的按钮集合与 ⋮ 静止态；行不存在返回 null */
@@ -2213,6 +2253,10 @@ export function sidebarPane(main: CdpClient): SidebarPane {
   }
 
   return {
+    clickGroupMenuButton: async (target) => {
+      await until(() => main.eval<boolean>(`!!${MENU_BTN(HEADER(target))}`), 'group header ⋮')
+      await main.eval(`${MENU_BTN(HEADER(target))}.click()`)
+    },
     clickNewChat: async () => {
       await pickFromMenu(main, ACTION_HEADER, 'new-chat', 'session group header')
       await new Promise((r) => setTimeout(r, 800))
@@ -2663,6 +2707,13 @@ export interface ProjectEditPane {
   toggleKnowledgeBase(name: string): Promise<void>
   /** 点页脚的「保存」并等弹窗卸载（保存成功后弹窗自己关） */
   save(): Promise<void>
+  /** 文件夹那一行：显示的文件夹名与悬停标题里的完整路径；还没有文件夹 → null */
+  folder(): Promise<{ name: string; path: string } | null>
+  /**
+   * 点文件夹那一行的「更换」。**只在浏览器里的 web 客户端上点**（那里弹的是页面里的目录浏览器）——
+   * 桌面上它走原生目录面板（见下面的警告）
+   */
+  clickChangeFolder(): Promise<void>
 }
 
 /**
@@ -2708,6 +2759,22 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
       })()`)
       if (!clicked) throw new Error('project edit dialog: footer save button not found')
       await until(async () => !(await isOpen()), 'project edit dialog closed after save')
+    },
+    // 文件夹行：图标 + 等宽的文件夹名（title = 完整路径）+「更换」按钮，三者同一个父节点
+    folder: () =>
+      main.eval<{ name: string; path: string } | null>(`(() => {
+        const span = ${PANEL}?.querySelector('span.font-mono[title]')
+        if (!span) return null
+        return { name: (span.textContent ?? '').trim(), path: span.getAttribute('title') ?? '' }
+      })()`),
+    clickChangeFolder: async () => {
+      const clicked = await main.eval<boolean>(`(() => {
+        const button = ${PANEL}?.querySelector('span.font-mono[title]')?.parentElement?.querySelector('button')
+        if (!button) return false
+        button.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error('project edit dialog: change-folder button not found')
     }
   }
 }
@@ -6920,6 +6987,10 @@ export interface RightPanelPane {
   agentsActive(): Promise<boolean>
   /** 切到 widget tab 并等 agents 内容区不可见 —— 「面板开着但在别的 tab」的构造 */
   activateWidgetTab(): Promise<void>
+  /** widget tab 里的卡片（按卡片上那行等宽的 widget id 认，DOM 序） */
+  widgetCardIds(): Promise<string[]>
+  /** 往某张 widget 卡片上派发一次冒泡的右键（contextmenu）事件；没有这张卡片 → false */
+  contextMenuWidgetCard(widgetId: string): Promise<boolean>
   /** 标签栏可见 tab 的 lucide 图标类（DOM 序）—— tab 集合与顺序的判据，不认文案 */
   tabIcons(): Promise<string[]>
   /**
@@ -6977,6 +7048,8 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
   // agents 面板 = 内容区固定序的最后一个（见本节开头的锚点说明）
   const AGENTS = `${PANEL}?.querySelector(':scope > div.relative')?.lastElementChild`
   const ROWS = `[...(${AGENTS}?.querySelectorAll('.divide-y > div > button.w-full') ?? [])]`
+  // widget 卡片（WidgetCard 根：带 group 类、里面有一行等宽的 widget id）—— 只在 widget 面板（内容区第一个）里找
+  const WIDGET_CARDS = `[...(${PANEL}?.querySelector(':scope > div.relative')?.firstElementChild?.querySelectorAll('div.group.cursor-pointer') ?? [])]`
   // 日历面板 = 内容区固定序的倒数第二个（见 activateCalendarTab）
   const CALENDAR = `(() => { const c = ${PANEL}?.querySelector(':scope > div.relative')?.children; return c ? c[c.length - 2] : null })()`
 
@@ -7012,6 +7085,25 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
       await main.eval(`${WIDGET_TAB}.click()`)
       await until(async () => !(await agentsActive()) || null, 'widget tab active')
     },
+    widgetCardIds: () =>
+      main.eval<string[]>(
+        `${WIDGET_CARDS}.map((c) => (c.querySelector('span.font-mono')?.textContent ?? '').trim())`
+      ),
+    contextMenuWidgetCard: (widgetId) =>
+      main.eval<boolean>(`(() => {
+        const card = ${WIDGET_CARDS}.find(
+          (c) => (c.querySelector('span.font-mono')?.textContent ?? '').trim() === ${JSON.stringify(widgetId)}
+        )
+        if (!card) return false
+        const r = card.getBoundingClientRect()
+        card.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          clientX: r.left + 10,
+          clientY: r.top + 10
+        }))
+        return true
+      })()`),
     tabIcons: () =>
       main.eval<string[]>(`[...(${AGENTS_TAB}?.parentElement?.children ?? [])]
         .filter((el) => el.tagName === 'BUTTON')
@@ -9588,4 +9680,285 @@ export function sessionToolKeys(main: CdpClient): Promise<string[]> {
   return main.eval<string[]>(
     `[...document.querySelectorAll('[data-session-tool]')].map((b) => b.getAttribute('data-session-tool') ?? '')`
   )
+}
+
+// ─── 浏览器里的 web 客户端（server mode phase C）────────────────────────────────
+
+/** web 客户端页面的宿主浮层（`client` = 那个浏览器页面的 CDP 客户端） */
+export interface WebClientPane {
+  /** 连接横幅的状态（`data-web-connection`：connecting / reconnecting）；没有横幅（连着）→ null */
+  connectionBanner(): Promise<string | null>
+  /** 连接横幅的文字（随界面语言变）；没有横幅 → null */
+  connectionBannerText(): Promise<string | null>
+  /** 桌面专属提示（`data-web-notice` = 被拒的通道）；不在屏 → null */
+  desktopOnlyNotice(): Promise<string | null>
+  /**
+   * 服务端路径卡片（phase D：「在文件管理器中打开 / 显示」在浏览器里的样子；`data-web-path-notice` = 被换掉的通道，
+   * `data-web-path` = 路径，`text` = 卡片里显示的路径文字）；不在屏 → null
+   */
+  pathNotice(): Promise<{ channel: string; path: string; text: string } | null>
+  /** 关掉服务端路径卡片（没有卡片 → false） */
+  closePathNotice(): Promise<boolean>
+
+  // ── 目录浏览器（phase D：浏览器里代替原生的「选择文件夹」框，`[data-web-directory-picker]`）──
+  /** 目录浏览器此刻的样子；没开着 → null */
+  picker(): Promise<WebDirectoryPickerShot | null>
+  /** 等目录浏览器开着、不在加载、且满足 `pred`（缺省：只要开着），回那一刻的样子 */
+  waitPicker(
+    pred?: (shot: WebDirectoryPickerShot) => boolean,
+    what?: string,
+    timeoutMs?: number
+  ): Promise<WebDirectoryPickerShot>
+  /** 往路径输入框里填字（native value setter + input 事件，走 React 的 onChange）；不提交 */
+  pickerTypePath(text: string): Promise<void>
+  /** 点「Go」（提交路径输入框的表单） */
+  pickerGo(): Promise<void>
+  /** 点列表里名为 `name` 的子目录（进入它）；没有这一行 → false */
+  pickerOpenEntry(name: string): Promise<boolean>
+  /** 点「上一层」 */
+  pickerUp(): Promise<void>
+  /** 点「显示隐藏目录」的勾 */
+  pickerToggleHidden(): Promise<void>
+  /** 点「选择这个文件夹」 */
+  pickerChoose(): Promise<void>
+  /** 点「取消」 */
+  pickerCancel(): Promise<void>
+  /** 在窗口上按一次 Esc（目录浏览器的取消键） */
+  pickerEscape(): Promise<void>
+
+  // ── DOM 右键菜单（浏览器里没有原生菜单：ContextMenuProvider 自带的弹层，`[role="menu"]`）──
+  /** 开着的 DOM 菜单的项（DOM 序；分隔符不算）；没开着 → null */
+  domMenu(): Promise<Array<{ label: string; disabled: boolean }> | null>
+  /** 点开着的 DOM 菜单里文字为 `label` 的那一项；菜单没开 / 没有这一项 → 抛（带上此刻有的项） */
+  pickDomMenu(label: string): Promise<void>
+}
+
+/** web 客户端目录浏览器（WebDirectoryPicker）的一个快照 */
+export interface WebDirectoryPickerShot {
+  /** 路径输入框的值（`data-web-dir-path`；列表一回来就换成实际列的目录） */
+  path: string
+  /** 列出的子目录名（`data-web-dir-entry`，DOM 序） */
+  entries: string[]
+  /** 错误行（`data-web-dir-error` 的值：`ENOENT` … / `request`）；没有 → null */
+  error: string | null
+  /** 「选择这个文件夹」禁用 */
+  chooseDisabled: boolean
+  /** 「上一层」禁用 */
+  upDisabled: boolean
+  /** 「显示隐藏目录」勾着 */
+  showHidden: boolean
+  /** 正在加载（转圈，或列表压淡） */
+  loading: boolean
+  /** role=dialog / aria-modal=true（无障碍的模态声明） */
+  modal: boolean
+}
+
+export function webClientPane(client: CdpClient): WebClientPane {
+  const PICKER = '[data-web-directory-picker]'
+  const picker = (): Promise<WebDirectoryPickerShot | null> =>
+    client.eval<WebDirectoryPickerShot | null>(`(() => {
+      const root = document.querySelector('${PICKER}')
+      if (!root) return null
+      const choose = root.querySelector('[data-web-dir-choose]')
+      const up = root.querySelector('[data-web-dir-up]')
+      return {
+        path: root.querySelector('[data-web-dir-path]')?.value ?? '',
+        entries: [...root.querySelectorAll('[data-web-dir-entry]')].map(
+          (b) => b.getAttribute('data-web-dir-entry') ?? ''
+        ),
+        error: root.querySelector('[data-web-dir-error]')?.getAttribute('data-web-dir-error') ?? null,
+        chooseDisabled: !choose || choose.disabled === true,
+        upDisabled: !up || up.disabled === true,
+        showHidden: root.querySelector('[data-web-dir-hidden]')?.checked === true,
+        loading: !!root.querySelector('.animate-spin, ul.opacity-60'),
+        modal: root.getAttribute('role') === 'dialog' && root.getAttribute('aria-modal') === 'true'
+      }
+    })()`)
+  /** 点目录浏览器里的一颗按钮（按它的 data 锚点）；没有 → 抛 */
+  const clickIn = async (anchor: string): Promise<void> => {
+    const ok = await client.eval<boolean>(`(() => {
+      const el = document.querySelector('${PICKER} ${anchor}')
+      if (!el) return false
+      el.click()
+      return true
+    })()`)
+    if (!ok) throw new Error(`web directory picker: ${anchor} not found`)
+  }
+  return {
+    connectionBanner: () =>
+      client.eval<string | null>(
+        `document.querySelector('[data-web-connection]')?.getAttribute('data-web-connection') ?? null`
+      ),
+    connectionBannerText: () =>
+      client.eval<string | null>(
+        `document.querySelector('[data-web-connection]')?.textContent?.trim() ?? null`
+      ),
+    desktopOnlyNotice: () =>
+      client.eval<string | null>(
+        `document.querySelector('[data-web-notice]')?.getAttribute('data-web-notice') ?? null`
+      ),
+    pathNotice: () =>
+      client.eval<{ channel: string; path: string; text: string } | null>(`(() => {
+        const el = document.querySelector('[data-web-path-notice]')
+        if (!el) return null
+        return {
+          channel: el.getAttribute('data-web-path-notice') ?? '',
+          path: el.getAttribute('data-web-path') ?? '',
+          text: (el.querySelector('[data-web-path-text]')?.textContent ?? '').trim()
+        }
+      })()`),
+    closePathNotice: () =>
+      client.eval<boolean>(`(() => {
+        const button = document.querySelector('[data-web-path-notice] [data-web-path-close]')
+        if (!button) return false
+        button.click()
+        return true
+      })()`),
+    picker,
+    waitPicker: (pred = () => true, what = 'web directory picker', timeoutMs) =>
+      until(
+        async () => {
+          const shot = await picker()
+          return shot && !shot.loading && pred(shot) ? shot : null
+        },
+        what,
+        timeoutMs
+      ),
+    pickerTypePath: async (text) => {
+      const typed = await client.eval<boolean>(`(() => {
+        const input = document.querySelector('${PICKER} [data-web-dir-path]')
+        if (!input) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, ${JSON.stringify(text)})
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      if (!typed) throw new Error('web directory picker: path input not found')
+    },
+    pickerGo: () => clickIn('[data-web-dir-go]'),
+    pickerOpenEntry: (name) =>
+      client.eval<boolean>(`(() => {
+        const row = [...document.querySelectorAll('${PICKER} [data-web-dir-entry]')].find(
+          (b) => b.getAttribute('data-web-dir-entry') === ${JSON.stringify(name)}
+        )
+        if (!row) return false
+        row.click()
+        return true
+      })()`),
+    pickerUp: () => clickIn('[data-web-dir-up]'),
+    pickerToggleHidden: () => clickIn('[data-web-dir-hidden]'),
+    pickerChoose: () => clickIn('[data-web-dir-choose]'),
+    pickerCancel: () => clickIn('[data-web-dir-cancel]'),
+    pickerEscape: async () => {
+      await client.eval(
+        `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`
+      )
+    },
+    domMenu: () =>
+      client.eval<Array<{ label: string; disabled: boolean }> | null>(`(() => {
+        const menu = document.querySelector('[role="menu"]')
+        if (!menu) return null
+        return [...menu.querySelectorAll('[role="menuitem"]')].map((b) => ({
+          label: (b.textContent ?? '').trim(),
+          disabled: b.disabled === true
+        }))
+      })()`),
+    pickDomMenu: async (label) => {
+      const result = await client.eval<{ ok: boolean; labels: string[] }>(`(() => {
+        const items = [...document.querySelectorAll('[role="menu"] [role="menuitem"]')]
+        const item = items.find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(label)})
+        if (!item) return { ok: false, labels: items.map((b) => (b.textContent ?? '').trim()) }
+        item.click()
+        return { ok: true, labels: [] }
+      })()`)
+      if (!result.ok) {
+        throw new Error(
+          `DOM menu item ${JSON.stringify(label)} not on screen (got: ${result.labels.join(', ') || '-'})`
+        )
+      }
+    }
+  }
+}
+
+/** 设置 → 通用 → 网络访问一节（NetworkAccessSettings）的快照 */
+export interface NetworkSettingsShot {
+  /** 这一节在屏 */
+  present: boolean
+  /** 开关（`data-network-toggle`：on / off） */
+  toggle: string | null
+  /** 风险说明（`data-network-risk`）的文字 */
+  risk: string
+  /** 风险说明此刻真的看得见（有尺寸，不是收在气泡里） */
+  riskVisible: boolean
+  /** 列出的地址（`data-network-address`） */
+  addresses: string[]
+  /** 连着的客户端行（`data-network-client` = 客户端 id） */
+  clients: string[]
+  /** 那些客户端行的标题文字（= 对端地址），与 `clients` 同序 */
+  clientTitles: string[]
+  /** 监听失败那一行（`data-network-error`）的文字；没有 → null */
+  error: string | null
+}
+
+export interface NetworkSettingsPane {
+  shot(): Promise<NetworkSettingsShot>
+  /** 点开关 */
+  clickToggle(): Promise<void>
+  /**
+   * 在端口输入框里填 `text` 并提交（输入框的 onBlur 才提交：native value setter + input 事件，再补一个冒泡的
+   * focusout —— 窗口没有 OS 焦点时 blur() 可能什么都不派发，而 React 的 onBlur 听的是 focusout）
+   */
+  commitPort(text: string): Promise<void>
+}
+
+export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
+  return {
+    shot: () =>
+      settings.eval<NetworkSettingsShot>(`(() => {
+        const root = document.querySelector('[data-network-settings]')
+        const risk = root?.querySelector('[data-network-risk]')
+        const rect = risk?.getBoundingClientRect()
+        return {
+          present: !!root,
+          toggle: root?.querySelector('[data-network-toggle]')?.getAttribute('data-network-toggle') ?? null,
+          risk: (risk?.textContent ?? '').trim(),
+          riskVisible: !!rect && rect.width > 0 && rect.height > 0,
+          addresses: [...(root?.querySelectorAll('[data-network-address]') ?? [])].map(
+            (e) => e.getAttribute('data-network-address') ?? ''
+          ),
+          clients: [...(root?.querySelectorAll('[data-network-client]') ?? [])].map(
+            (e) => e.getAttribute('data-network-client') ?? ''
+          ),
+          clientTitles: [...(root?.querySelectorAll('[data-network-client]') ?? [])].map(
+            (e) => (e.textContent ?? '').trim()
+          ),
+          error: root?.querySelector('[data-network-error]')?.textContent?.trim() ?? null
+        }
+      })()`),
+    clickToggle: async () => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const button = document.querySelector('[data-network-toggle] button')
+        if (!button) return false
+        button.click()
+        return true
+      })()`)
+      if (!ok) throw new Error('network access toggle not found')
+    },
+    commitPort: async (text) => {
+      const typed = await settings.eval<boolean>(`(() => {
+        const input = document.querySelector('[data-network-port] input')
+        if (!input || input.disabled) return false
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+        setter.call(input, ${JSON.stringify(text)})
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      if (!typed) throw new Error('network port input not found (or disabled)')
+      // 分两次 eval：草稿的 setState 先落定、重渲染完，onBlur 读到的才是新草稿
+      await settings.eval(`(() => {
+        const input = document.querySelector('[data-network-port] input')
+        input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+      })()`)
+    }
+  }
 }

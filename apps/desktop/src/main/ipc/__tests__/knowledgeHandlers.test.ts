@@ -79,12 +79,13 @@ vi.mock('../../dao/projectDao', () => ({
 
 import { listKnowledgeEntries } from '../../services/knowledge'
 import { registerKnowledgeHandlers } from '../knowledgeHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
 
-/** 像渲染端 invoke 那样调一个已注册的处理函数（事件对象用不到，给个空的） */
+/** 像渲染端 invoke 那样调一个已注册的处理函数（事件对象只用来认发送方：webContents 1） */
 const invoke = (channel: string, ...args: unknown[]): unknown => {
   const handler = state.handlers.get(channel)
   if (!handler) throw new Error(`no handler registered for ${channel}`)
-  return handler({}, ...args)
+  return handler({ sender: { id: 1 } }, ...args)
 }
 
 let root: string
@@ -112,6 +113,7 @@ const seedBuiltin = (rel: string, text = '# Guide\n'): string => {
 
 beforeAll(() => {
   registerKnowledgeHandlers()
+  attachIpcAdapter()
 })
 
 beforeEach(() => {

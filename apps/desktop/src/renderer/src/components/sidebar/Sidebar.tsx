@@ -95,7 +95,7 @@ export function Sidebar(): React.JSX.Element {
 
   /** 打开文件夹并创建为项目（已存在同路径则复用），随后新建会话 */
   const handleOpenFolder = async (): Promise<void> => {
-    const folder = await window.electron.ipcRenderer.invoke('dialog:openDirectory')
+    const folder = await window.api.app.openDirectoryDialog()
     if (!folder) return
     const existing = (await getChatApi().project.list()).find((p) => p.path === folder)
     const projectId = existing?.id ?? (await getChatApi().project.create({ path: folder })).id

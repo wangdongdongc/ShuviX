@@ -1,10 +1,6 @@
-import {
-  NotebookSession,
-  MediaUrlProvider,
-  shuvixPreviewResolver,
-  type NotebookViewProps
-} from '@shuvix/app-shell'
+import { NotebookSession, MediaUrlProvider, type NotebookViewProps } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { hostMediaResolver } from '../../host/hostMedia'
 
 /**
  * 桌面端笔记本会话中间区正文 —— 包一层 @shuvix/app-shell 的 NotebookView，注入桌面能力
@@ -27,7 +23,7 @@ export function NotebookSessionView({
   const notebookTheme = useSettingsStore((s) => s.notebookTheme)
 
   return (
-    <MediaUrlProvider value={shuvixPreviewResolver}>
+    <MediaUrlProvider value={hostMediaResolver}>
       <NotebookSession
         key={sessionId}
         path={path}

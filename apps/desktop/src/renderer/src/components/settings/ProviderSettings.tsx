@@ -8,6 +8,7 @@ import { ProviderTab, type ProviderTabApi } from '@shuvix/app-shell'
 import type { ProviderInfo } from '@shuvix/chat-protocol/types/provider'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { ConfirmDialog } from '../common/ConfirmDialog'
+import { isWebHost } from '../../host/hostMedia'
 
 const providerApi: ProviderTabApi = {
   listModels: (id) => window.api.provider.listModels(id),
@@ -49,7 +50,8 @@ export function ProviderSettings(): React.JSX.Element {
         providers={providers}
         api={providerApi}
         onChanged={refresh}
-        caps={{ providerCrud: true }}
+        // 浏览器里的 web 客户端：要回本机回调的浏览器登录得在运行 ShuviX 的那台电脑上完成
+        caps={{ providerCrud: true, remoteSignIn: isWebHost }}
         onRequestDeleteProvider={(p) => setDeleting(p)}
       />
       {deleting && (

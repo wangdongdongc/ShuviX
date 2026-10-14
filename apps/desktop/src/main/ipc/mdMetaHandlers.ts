@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { noteView, setEnabled, setNoteFill, unsetNoteFill } from '../services/mdMetaService'
 
 /**
@@ -6,19 +6,17 @@ import { noteView, setEnabled, setNoteFill, unsetNoteFill } from '../services/md
  * 按笔记本会话认文件，校验全在 mdMetaService；这是补缺值唯一的写入口（不给工具、不给 CLI）。
  */
 export function registerMdMetaHandlers(): void {
-  ipcMain.handle('mdMeta:get', (_event, params: { sessionId: string }) =>
-    noteView(params?.sessionId)
-  )
-  ipcMain.handle(
+  defineHandler('mdMeta:get', (_ctx, params: { sessionId: string }) => noteView(params?.sessionId))
+  defineHandler(
     'mdMeta:setFill',
-    (_event, params: { sessionId: string; objectId: string; key: string; value: unknown }) =>
+    (_ctx, params: { sessionId: string; objectId: string; key: string; value: unknown }) =>
       setNoteFill(params)
   )
-  ipcMain.handle('mdMeta:setEnabled', (_event, params: { objectId: string; enabled: boolean }) =>
+  defineHandler('mdMeta:setEnabled', (_ctx, params: { objectId: string; enabled: boolean }) =>
     setEnabled(params)
   )
-  ipcMain.handle(
+  defineHandler(
     'mdMeta:unsetFill',
-    (_event, params: { sessionId: string; objectId: string; key: string }) => unsetNoteFill(params)
+    (_ctx, params: { sessionId: string; objectId: string; key: string }) => unsetNoteFill(params)
   )
 }

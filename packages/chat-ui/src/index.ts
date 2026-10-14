@@ -104,6 +104,8 @@ export { useTtsPlayback } from './hooks/useTtsPlayback'
 // 通用 UI 小工具（app 其它处也复用）
 export {
   MediaUrlProvider,
+  mediaFileUrl,
+  setMediaFileUrlBuilder,
   shuvixPreviewResolver,
   useMediaUrl,
   useResolveMediaUrl

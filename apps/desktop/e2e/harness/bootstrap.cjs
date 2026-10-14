@@ -16,6 +16,8 @@
  *
  * 同理 `shell.openExternal` 换成记录器（见 EXTERNAL_OPEN_LOG）：e2e 永远不该在开发者的机器上打开
  * 系统浏览器（订阅登录会自动打开验证页 / 授权页），spec 读这个文件断言「打开了哪个地址」。
+ * `shell.openPath` / `shell.showItemInFolder` 也一样（见 SHELL_OPEN_LOG）：「在文件管理器中打开 / 显示」
+ * 不该在开发者的屏幕上弹出 Finder，spec 读这个文件断言主进程「打开了哪个路径」（或什么也没打开）。
  *
  * 最后，实例**不能活过 harness**（instanceGuards.cjs 记着那次把磁盘写满的事故）：stdout / stderr 管道
  * 断了、或 launcher 进程没了，就不再写控制台、直接退出；本文件追加的每个文件都有上限。
@@ -187,6 +189,39 @@ electron.shell.openExternal = recordExternalOpen
 // 换不上（某个 Electron 版本把 shell 冻住了）就别往下跑：宁可实例起不来，也不能真的打开浏览器
 if (electron.shell.openExternal !== recordExternalOpen) {
   process.stderr.write('[e2e] could not stub shell.openExternal; refusing to start\n')
+  process.exit(1)
+}
+
+/**
+ * 交给系统文件管理器的路径的记录文件名（在 userData 下；每行一个：方法名 + 路径）。主进程里通往 Finder /
+ * 资源管理器的只有 `shell.openPath`（打开目录）与 `shell.showItemInFolder`（在文件夹中显示），调用时才取
+ * `electron.shell` 上的方法，所以在加载产物之前换掉就够了。`openPath` 照它的约定回空串（= 成功）。
+ */
+const SHELL_OPEN_LOG = 'e2e-shell-open.log'
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+function recordShellOpen(method, path) {
+  if (!userData) return
+  appendBounded(join(userData, SHELL_OPEN_LOG), `${method} ${String(path)}\n`)
+}
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+async function recordOpenPath(path) {
+  recordShellOpen('openPath', path)
+  return ''
+}
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+function recordShowItemInFolder(path) {
+  recordShellOpen('showItemInFolder', path)
+}
+electron.shell.openPath = recordOpenPath
+electron.shell.showItemInFolder = recordShowItemInFolder
+// 换不上就别往下跑：宁可实例起不来，也不能真的在开发者屏幕上打开 Finder
+if (
+  electron.shell.openPath !== recordOpenPath ||
+  electron.shell.showItemInFolder !== recordShowItemInFolder
+) {
+  process.stderr.write(
+    '[e2e] could not stub shell.openPath / showItemInFolder; refusing to start\n'
+  )
   process.exit(1)
 }
 

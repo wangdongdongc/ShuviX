@@ -1,4 +1,6 @@
-import { ipcMain, Menu, BrowserWindow, type MenuItemConstructorOptions } from 'electron'
+import { Menu, type MenuItemConstructorOptions } from 'electron'
+import { defineHandler } from './registry'
+import { windowOf } from './ipcAdapter'
 import type {
   ContextMenuItem,
   ContextMenuRequest,
@@ -6,11 +8,11 @@ import type {
 } from '@shuvix/chat-protocol/types/contextMenu'
 
 export function registerContextMenuHandlers(): void {
-  ipcMain.handle(
+  defineHandler(
     'contextMenu:popup',
-    (event, request: ContextMenuRequest): Promise<ContextMenuResult> => {
+    (ctx, request: ContextMenuRequest): Promise<ContextMenuResult> => {
       return new Promise((resolve) => {
-        const win = BrowserWindow.fromWebContents(event.sender)
+        const win = windowOf(ctx)
         if (!win) {
           resolve({ actionId: null })
           return

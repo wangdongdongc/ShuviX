@@ -1,19 +1,12 @@
 // 启动诊断（Perf 时间线 + 主线程卡顿看门狗）必须是第一条 import：它在一切应用模块之前求值
 import './utils/stallWatchdog/boot'
-import {
-  app,
-  session,
-  BrowserWindow,
-  Menu,
-  ipcMain,
-  nativeImage,
-  nativeTheme,
-  screen
-} from 'electron'
+import { app, session, BrowserWindow, Menu, nativeImage, nativeTheme, screen } from 'electron'
 import { join } from 'path'
 import { homedir, userInfo } from 'os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc/handlers'
+import { defineHandler, defineListener } from './ipc/registry'
+import { attachIpcAdapter, webContentsOf, windowOf } from './ipc/ipcAdapter'
 import { registerAppEventBridge } from './services/appEvents'
 import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
@@ -59,6 +52,7 @@ import {
   routeExternalUrl
 } from './services/externalOpen'
 import { widgetServer } from './services/widget'
+import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { cliServer } from './services/cliServer'
 import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
 import { mdMetaStore } from './services/mdMeta'
@@ -66,6 +60,7 @@ import { agentService } from './services/agentService'
 import { chromeBridge } from './services/chromeBridge'
 import { installChromeNativeHost } from './services/chromeExtensionService'
 import { registerChromeFrontend } from './frontend/chrome'
+import { networkService } from './frontend/network'
 import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
@@ -608,14 +603,19 @@ function attachMainWindowListeners(win: BrowserWindow): void {
   })
 }
 
+// 通道注册表挂到 ipcMain 上（ipc/ipcAdapter，唯一碰 ipcMain 的地方）：之后每条 defineHandler / defineListener
+// 随定义随注册 —— 下面这几条 app:* 因此照旧在模块求值时注册，registerIpcHandlers() 里那批照旧在 ready 时
+attachIpcAdapter()
+
 // 获取应用版本号
-ipcMain.handle('app:version', () => {
+defineHandler('app:version', () => {
   return app.getVersion()
 })
 
 // React 挂载完成后显示对应窗口（同时应用已保存的 UI 缩放）
-ipcMain.on('app:window-ready', (event) => {
-  const sender = event.sender
+defineListener('app:window-ready', (ctx) => {
+  const sender = webContentsOf(ctx)
+  if (!sender) return
   // 应用 UI 缩放设置（zoomFactor 与用户设置的百分比 1:1 对应：100% → 1.0）
   const uiZoom = Math.max(
     0.5,
@@ -635,7 +635,10 @@ ipcMain.on('app:window-ready', (event) => {
 })
 
 // Sidebar 按钮触发打开设置窗口
-ipcMain.handle('app:open-settings', (_event, tab?: string) => {
+// 网络客户端（浏览器）不走到这里（通道表的 DESKTOP_ONLY_CHANNELS，web 客户端在新标签页里开 #settings）；
+// 万一走到了也不在这台电脑上开窗
+defineHandler('app:open-settings', (ctx, tab?: string) => {
+  if (ctx.client.kind !== 'window') return { success: false }
   openSettingsWindow(tab)
   return { success: true }
 })
@@ -643,23 +646,25 @@ ipcMain.handle('app:open-settings', (_event, tab?: string) => {
 // 渲染进程要打开的外链（聊天 / 笔记本里的链接、面板的「在系统浏览器打开」、验证页…）。
 // 调用方是自己人，但地址多半来自内容（模型写的 md、面板里那个 tab 的地址），所以照样过闸；
 // 用户是亲手点的，询问因此不设静默期（byUser）。回 success=false 表示没交给系统。
-ipcMain.handle('app:open-external', async (event, url: string) => {
+defineHandler('app:open-external', async (ctx, url: string) => {
+  // 网络客户端（浏览器）的链接该在它自己那边开（web 客户端本地实现）：不替它在这台电脑上开浏览器
+  if (ctx.client.kind !== 'window') return { success: false }
   const success = await routeExternalUrl(url, {
-    parent: BrowserWindow.fromWebContents(event.sender),
+    parent: windowOf(ctx),
     byUser: true
   })
   return { success }
 })
 
 // 用系统文件管理器打开指定文件夹
-ipcMain.handle('app:open-folder', async (_event, folderPath: string) => {
+defineHandler('app:open-folder', async (_ctx, folderPath: string) => {
   const { shell } = await import('electron')
   await shell.openPath(folderPath)
   return { success: true }
 })
 
 // 在系统文件管理器中定位并选中指定文件（openPath 对压缩包等于直接解压/打开，故用 showItemInFolder）
-ipcMain.handle('app:reveal-path', async (_event, filePath: string) => {
+defineHandler('app:reveal-path', async (_ctx, filePath: string) => {
   const { shell } = await import('electron')
   shell.showItemInFolder(filePath)
   return { success: true }
@@ -667,8 +672,8 @@ ipcMain.handle('app:reveal-path', async (_event, filePath: string) => {
 
 // 调整调用方窗口的宽度（delta 为 CSS 像素，按窗口自身 zoom factor 换算）
 // 主窗口最小宽度 800，悬浮窗最小宽度 320（保留各自创建时的 minWidth）
-ipcMain.handle('app:adjust-window-width', (event, delta: number) => {
-  const win = BrowserWindow.fromWebContents(event.sender)
+defineHandler('app:adjust-window-width', (ctx, delta: number) => {
+  const win = windowOf(ctx)
   if (!win || win.isDestroyed()) return
   const zoom = win.webContents.getZoomFactor()
   const scaledDelta = Math.round(delta * zoom)
@@ -685,8 +690,8 @@ ipcMain.handle('app:adjust-window-width', (event, delta: number) => {
 
 // 设置浏览器面板宽度偏移 —— 按 sender 窗口分别跟踪
 // 状态存放在 services/panelLayoutState，避免与 pinnedChatService 间产生循环依赖
-ipcMain.handle('app:set-browser-offset', (event, offset: number) => {
-  const win = BrowserWindow.fromWebContents(event.sender)
+defineHandler('app:set-browser-offset', (ctx, offset: number) => {
+  const win = windowOf(ctx)
   if (!win || win.isDestroyed()) return
   setBrowserOffset(win.webContents.id, offset)
 })
@@ -869,6 +874,30 @@ app.whenReady().then(async () => {
   )
   step('installChromeNativeHost', () => void installChromeNativeHost())
 
+  // 网络访问（局域网里的浏览器，server mode phase B）：缺省关，设置里开着才监听。与 CLI / Chrome 桥一样排在
+  // 旧格式切换之后（浏览器里的界面同样可能碰到那些会话）；监听失败只记进状态（设置页显示原因），不拦启动。
+  // phase D：文件路由（自定义协议的 HTTP 等价物）与 widget 转发的依赖在这里交进去
+  step(
+    'networkService.init',
+    () =>
+      void networkService.init({
+        fileRoutes: {
+          resolvePreviewPath: resolvePreviewFilePath,
+          readSandboxLib,
+          logger: { warn: (message) => log.warn(message) }
+        },
+        widgetProxy: {
+          target: () => {
+            const status = widgetServer.getStatus()
+            return status.running && status.port > 0
+              ? { host: '127.0.0.1', port: status.port }
+              : undefined
+          },
+          logger: { warn: (message) => log.warn(message) }
+        }
+      })
+  )
+
   // 带着 md 文件启动：只开 md 窗口，主窗口等用户要（点 Dock / 再点一次应用图标）才开
   step('initSharedWindowServices', () => initSharedWindowServices())
   windowIntakeReady = true
@@ -905,6 +934,7 @@ const sessionHostQuit = installSessionHostQuitHook(app, {
     mcpService.disconnectAll().catch(() => {})
     widgetServer.dispose()
     chromeBridge.stop()
+    void networkService.shutdown()
     cliServer.stop()
     disposePglite()
     closeAllWatchers()

@@ -1,5 +1,4 @@
 import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
-import { ElectronAPI } from '@electron-toolkit/preload'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { MdMetaNoteView, MdMetaWriteResult } from '@shuvix/chat-protocol/mdMeta'
@@ -38,8 +37,6 @@ import type {
   ProviderUpdateModelCapabilitiesParams,
   ProviderOAuthStatusInfo,
   ProviderOAuthUiEvent,
-  SessionUpdateModelConfigParams,
-  SessionUpdateThinkingLevelParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateKnowledgeBasesParams,
   SessionUpdateProjectParams,
@@ -362,6 +359,10 @@ declare global {
       windowReady: () => void
       onNewChat: (callback: () => void) => () => void
       onNewProject: (callback: () => void) => () => void
+      /** 应用版本号 */
+      getVersion: () => Promise<string>
+      /** 在调用方窗口上弹出文件夹选择对话框；取消（或没有窗口）→ null */
+      openDirectoryDialog: () => Promise<string | null>
     }
     agent: {
       init: (params: AgentInitParams) => Promise<AgentInitResult>
@@ -452,11 +453,7 @@ declare global {
       list: () => Promise<Session[]>
       create: (params?: SessionCreateParams) => Promise<Session>
       updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
-      updateModelConfig: (params: SessionUpdateModelConfigParams) => Promise<{ success: boolean }>
       updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
-      updateThinkingLevel: (
-        params: SessionUpdateThinkingLevelParams
-      ) => Promise<{ success: boolean }>
       /** 改扩展能力勾选；会话已有 Agent 运行时则拒绝（success: false） */
       updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
       /** 改这条会话启用的知识库（整份替换）；不锁 —— 改完下一次工具调用就生效 */
@@ -949,6 +946,13 @@ declare global {
         | { success: false; code: string; error: string }
       >
       revealExport: (zipPath: string) => Promise<{ success: true }>
+      /** 导出到服务端的临时目录（web 客户端随后经 `/files/download` 下载；没有保存对话框） */
+      exportForDownload: (params: {
+        id: string
+      }) => Promise<
+        | { success: true; zipPath: string; entryCount: number }
+        | { success: false; code: string; error: string }
+      >
     }
     widgetWindow: {
       /** 在独立窗口打开 widget（已开则聚焦） */
@@ -959,6 +963,14 @@ declare global {
       setAlwaysOnTop: (params: { id: string; value: boolean }) => Promise<{ alwaysOnTop: boolean }>
       /** 查询独立窗口"始终置顶"状态 */
       getAlwaysOnTop: (id: string) => Promise<{ alwaysOnTop: boolean }>
+    }
+    /** 会话 Artifacts —— 目前只有渲染端读内容这一条（```artifact 引用围栏） */
+    artifact: {
+      /** 按名字（或标题）取一件的内容；不存在返回 null */
+      read: (params: {
+        sessionId: string
+        name: string
+      }) => Promise<{ name: string; title: string; content: string } | null>
     }
     files: {
       scan: (params: { sessionId: string }) => Promise<{
@@ -1026,6 +1038,26 @@ declare global {
       /** 该会话启用库内的知识条目视图（含 knowledge 工具指针 baseName/bundlePath）；未启用任何库返回空 */
       listKnowledgeEntries: (params: { sessionId: string }) => Promise<KnowledgeMentionEntry[]>
     }
+    /** 网络访问（局域网里的浏览器用同一套 API；没有认证 —— 设置页把风险写在明面上） */
+    network: {
+      /** 开关、端口、是否在监听、能打开的地址、连着的客户端、监听失败的原因 */
+      status: () => Promise<import('../shared/network').NetworkStatus>
+      /** 开 / 关（关掉 = 停止监听、断开每个客户端）；回改完之后的状态 */
+      setEnabled: (enabled: boolean) => Promise<import('../shared/network').NetworkStatus>
+      /** 换端口（1024–65535 的整数，否则拒绝）；开着时随即换到新端口重新监听 */
+      setPort: (port: number) => Promise<import('../shared/network').NetworkStatus>
+    }
+    /** 服务端文件系统（web 客户端的目录浏览器、「在文件管理器中打开」的路径） */
+    fs: {
+      /** 列一个目录下的子目录（不给路径 = 主目录；读不了 → error 带错误码，从不拒绝） */
+      listDirectories: (
+        params?: import('../shared/serverFs').ListDirectoriesParams
+      ) => Promise<import('../shared/serverFs').DirectoryListing>
+      /** 「在文件管理器中打开」那几条通道打开的目录（不在就建）/ 条目文件；认不得 → path: null */
+      locateFolder: (
+        params: import('../shared/serverFs').LocateFolderParams
+      ) => Promise<{ path: string | null }>
+    }
     events: {
       subscribe: (
         callback: (event: import('@shuvix/chat-protocol/appEvents').AppEvent) => void
@@ -1083,7 +1115,6 @@ declare global {
   }
 
   interface Window {
-    electron: ElectronAPI
     api: ShuviXAPI
   }
 } // declare global

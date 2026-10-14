@@ -150,7 +150,12 @@ export interface ProviderTabProps {
   api: ProviderTabApi
   /** 写操作后刷新宿主缓存（providers + availableModels） */
   onChanged: () => void | Promise<void>
-  caps?: { providerCrud?: boolean }
+  /**
+   * `remoteSignIn`：界面不在运行 ShuviX 的那台电脑上（浏览器里的 web 客户端，server mode phase D）——
+   * 要回到本机回调地址的浏览器登录在这里完成不了，授权页那一步改说「去那台电脑上完成，或把浏览器最后停下的
+   * 地址粘贴到下面」（设备码流程不受影响）
+   */
+  caps?: { providerCrud?: boolean; remoteSignIn?: boolean }
   /** providerCrud 时删除提供商（宿主负责确认弹窗 + 删除 + onChanged） */
   onRequestDeleteProvider?: (provider: ProviderInfo) => void
 }
@@ -633,7 +638,8 @@ export function ProviderTab({
                       ? (promptId: string, value: string) =>
                           handleOAuthAnswer(selectedProvider.id, promptId, value)
                       : undefined,
-                    onOpenVerification: oauthApi.openExternal
+                    onOpenVerification: oauthApi.openExternal,
+                    remote: caps?.remoteSignIn === true
                   }
                 : null
             }
@@ -825,6 +831,8 @@ interface ProviderDetailProps {
     /** 回答提问；宿主没实现时不显示输入框 */
     onAnswer?: (promptId: string, value: string) => Promise<void>
     onOpenVerification?: (url: string) => void
+    /** 界面在另一台电脑上（web 客户端）：浏览器登录回不到本机回调，换一句说明 */
+    remote?: boolean
   } | null
   onToggleShowKey: () => void
   onUpdateEdit: (
@@ -987,9 +995,19 @@ function ProviderDetail({
                     </>
                   ) : oauth.flow.authUrl ? (
                     <>
-                      <div data-oauth-browser className="text-[11px] text-text-secondary">
-                        {t('settings.oauthBrowserHint')}
-                      </div>
+                      {oauth.remote ? (
+                        <div
+                          data-oauth-browser
+                          data-oauth-remote
+                          className="text-[11px] text-text-secondary"
+                        >
+                          {t('settings.oauthRemoteBrowserHint')}
+                        </div>
+                      ) : (
+                        <div data-oauth-browser className="text-[11px] text-text-secondary">
+                          {t('settings.oauthBrowserHint')}
+                        </div>
+                      )}
                       {oauth.onOpenVerification && (
                         <OAuthReopenButton
                           url={oauth.flow.authUrl}

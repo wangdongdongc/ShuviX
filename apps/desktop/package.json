@@ -8,7 +8,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
-    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:node": "node --max-old-space-size=4096 ../../node_modules/typescript/bin/tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
@@ -34,6 +34,7 @@
     "test:e2e:browser": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/browser",
     "test:e2e:database": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/database",
     "test:e2e:chrome": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/chrome",
+    "test:e2e:network": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/network",
     "test:e2e:markdown": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/markdown",
     "test:e2e:app": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/app",
     "test:e2e:startup": "electron-vite build && vitest run --config vitest.config.e2e.ts e2e/specs/startup/",

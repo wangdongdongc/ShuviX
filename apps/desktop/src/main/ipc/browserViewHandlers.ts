@@ -6,7 +6,7 @@
  * 导航类通道带 tabId 首参；bounds/visible 是面板级（只作用于激活 tab）。
  */
 
-import { ipcMain } from 'electron'
+import { defineHandler, defineListener } from './registry'
 import {
   createTab,
   closeTab,
@@ -25,64 +25,64 @@ export function registerBrowserViewHandlers(): void {
   // ====== 浏览器窗口 ======
 
   /** 用户从主窗口（顶栏按钮 / widget「在浏览器中打开」）打开或聚焦浏览器窗口 */
-  ipcMain.handle('browser-view:open-window', () => {
+  defineHandler('browser-view:open-window', () => {
     openBrowserWindow()
   })
 
   /** 浏览器窗口此刻是否建出来且可见（关窗只是隐藏 → false）；只读 */
-  ipcMain.handle('browser-view:is-window-open', () => isBrowserWindowOpen())
+  defineHandler('browser-view:is-window-open', () => isBrowserWindowOpen())
 
   // ====== tab 生命周期 ======
 
-  ipcMain.handle('browser-view:create-tab', (_event, url?: string) =>
+  defineHandler('browser-view:create-tab', (_ctx, url?: string) =>
     createTab(url, { activate: true })
   )
 
-  ipcMain.handle('browser-view:close-tab', (_event, tabId: string) => {
+  defineHandler('browser-view:close-tab', (_ctx, tabId: string) => {
     closeTab(tabId)
   })
 
-  ipcMain.handle('browser-view:activate-tab', (_event, tabId: string) => {
+  defineHandler('browser-view:activate-tab', (_ctx, tabId: string) => {
     activateTab(tabId)
   })
 
-  ipcMain.handle('browser-view:list-tabs', () => listTabs())
+  defineHandler('browser-view:list-tabs', () => listTabs())
 
   // ====== 导航 ======
 
-  ipcMain.handle('browser-view:navigate', (_event, tabId: string, url: string) => {
+  defineHandler('browser-view:navigate', (_ctx, tabId: string, url: string) => {
     const view = getTabView(tabId)
     if (view) view.webContents.loadURL(url)
   })
 
-  ipcMain.handle('browser-view:go-back', (_event, tabId: string) => {
+  defineHandler('browser-view:go-back', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
     if (view && view.webContents.navigationHistory.canGoBack()) {
       view.webContents.navigationHistory.goBack()
     }
   })
 
-  ipcMain.handle('browser-view:go-forward', (_event, tabId: string) => {
+  defineHandler('browser-view:go-forward', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
     if (view && view.webContents.navigationHistory.canGoForward()) {
       view.webContents.navigationHistory.goForward()
     }
   })
 
-  ipcMain.handle('browser-view:reload', (_event, tabId: string) => {
+  defineHandler('browser-view:reload', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
     if (view) view.webContents.reload()
   })
 
-  ipcMain.handle('browser-view:stop', (_event, tabId: string) => {
+  defineHandler('browser-view:stop', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
     if (view) view.webContents.stop()
   })
 
   /** 抓 tab 画面（平铺墙滚动时的占位图） */
-  ipcMain.handle('browser-view:capture', (_event, tabId: string) => captureTab(tabId))
+  defineHandler('browser-view:capture', (_ctx, tabId: string) => captureTab(tabId))
 
-  ipcMain.handle('browser-view:get-url', (_event, tabId: string) => {
+  defineHandler('browser-view:get-url', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
     return view ? view.webContents.getURL() : ''
   })
@@ -90,10 +90,10 @@ export function registerBrowserViewHandlers(): void {
   // ====== 布局（面板级） ======
 
   /** 更新面板布局（renderer 传 CSS 像素，service 侧 apply 时乘 zoom）；一次提交全部同屏 tab */
-  ipcMain.on(
+  defineListener(
     'browser-view:set-layout',
     (
-      event,
+      ctx,
       entries: Array<{
         tabId: string
         bounds: { x: number; y: number; width: number; height: number }
@@ -102,14 +102,14 @@ export function registerBrowserViewHandlers(): void {
     ) => {
       // 布局表只认宿主窗口（浏览器窗口）上报的矩形：别的窗口发来的会把整张表换掉，
       // 等于让所有 view 消失。主窗口里留下的旧代码若还在发，这里挡住。
-      if (!isHostWebContents(event.sender.id)) return
+      if (ctx.client.kind !== 'window' || !isHostWebContents(ctx.client.webContentsId)) return
       setLayout(entries)
     }
   )
 
   /** 卡片墙自身的可见性门（对话框覆盖层等）；同样只认宿主窗口 */
-  ipcMain.on('browser-view:set-visible', (event, visible: boolean) => {
-    if (!isHostWebContents(event.sender.id)) return
+  defineListener('browser-view:set-visible', (ctx, visible: boolean) => {
+    if (ctx.client.kind !== 'window' || !isHostWebContents(ctx.client.webContentsId)) return
     setPanelVisible(visible)
   })
 }

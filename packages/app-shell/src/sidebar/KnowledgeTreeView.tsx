@@ -26,7 +26,7 @@ import {
   FolderOpen,
   Lock
 } from 'lucide-react'
-import { useChatStore } from '@shuvix/chat-ui'
+import { copyToClipboard, useChatStore } from '@shuvix/chat-ui'
 import {
   KNOWLEDGE_BUILTIN_BASE,
   KNOWLEDGE_BUILTIN_DIR,
@@ -289,7 +289,7 @@ export function KnowledgeTreeView({
     ]
     void showContextMenu(e, items, (action) => {
       if (action === 'reveal') void adapter.revealFile?.(entry.path)
-      if (action === 'copy-path') void navigator.clipboard.writeText(absolutePathOf(entry))
+      if (action === 'copy-path') copyToClipboard(absolutePathOf(entry))
     })
   }
 

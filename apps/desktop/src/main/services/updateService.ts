@@ -1,6 +1,7 @@
-import { BrowserWindow, app } from 'electron'
+import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { createLogger } from '../logger'
+import { broadcastToClients } from '../ipc/registry'
 import type { UpdateEvent } from '../types'
 
 const log = createLogger('Updater')
@@ -99,11 +100,7 @@ class UpdateService {
 
   private broadcast(event: UpdateEvent): void {
     this.lastEvent = event
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) {
-        win.webContents.send('update:event', event)
-      }
-    }
+    broadcastToClients('update:event', event)
   }
 }
 

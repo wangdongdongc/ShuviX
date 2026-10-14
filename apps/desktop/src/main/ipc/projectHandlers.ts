@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { projectService, KNOWN_PROJECT_FIELDS } from '../services/projectService'
 import type { ProjectCreateParams, ProjectUpdateParams, ProjectDeleteParams } from '../types'
 
@@ -9,40 +9,40 @@ import type { ProjectCreateParams, ProjectUpdateParams, ProjectDeleteParams } fr
  */
 export function registerProjectHandlers(): void {
   /** 获取所有项目 */
-  ipcMain.handle('project:list', () => {
+  defineHandler('project:list', () => {
     return projectService.list()
   })
 
   /** 获取已归档项目 */
-  ipcMain.handle('project:listArchived', () => {
+  defineHandler('project:listArchived', () => {
     return projectService.listArchived()
   })
 
   /** 获取单个项目 */
-  ipcMain.handle('project:getById', (_event, id: string) => {
+  defineHandler('project:getById', (_ctx, id: string) => {
     return projectService.getById(id) || null
   })
 
   /** 创建项目 */
-  ipcMain.handle('project:create', (_event, params: ProjectCreateParams) => {
+  defineHandler('project:create', (_ctx, params: ProjectCreateParams) => {
     const project = projectService.create(params)
     return project
   })
 
   /** 更新项目 */
-  ipcMain.handle('project:update', (_event, params: ProjectUpdateParams) => {
+  defineHandler('project:update', (_ctx, params: ProjectUpdateParams) => {
     projectService.update(params.id, params)
     return { success: true }
   })
 
   /** 删除项目 */
-  ipcMain.handle('project:delete', (_event, params: ProjectDeleteParams) => {
+  defineHandler('project:delete', (_ctx, params: ProjectDeleteParams) => {
     projectService.delete(params.id)
     return { success: true }
   })
 
   /** 获取已知项目字段的元数据（labelKey + desc） */
-  ipcMain.handle('project:getKnownFields', () => {
+  defineHandler('project:getKnownFields', () => {
     return KNOWN_PROJECT_FIELDS
   })
 }

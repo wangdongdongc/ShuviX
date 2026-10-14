@@ -804,6 +804,16 @@ export interface HostApi {
     setEnabled: (params: { objectId: string; enabled: boolean }) => Promise<MdMetaWriteResult>
   }
   /**
+   * 会话 Artifacts（**桌面独有**）：```artifact 引用围栏按名字（或标题）取一件的当前内容；不存在 → null。
+   * 扩展端没有 artifact 存储，不实现 —— 引用围栏显示「找不到」。
+   */
+  artifact?: {
+    read: (params: {
+      sessionId: string
+      name: string
+    }) => Promise<{ name: string; title: string; content: string } | null>
+  }
+  /**
    * 桌面日历（按 session_day_prompts：同一会话可出现在多个开口日）。
    */
   calendar?: {

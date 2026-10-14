@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { hookService } from '../services/hookService'
 import { openRegistryNote } from '../services/registryNotes'
 
@@ -13,29 +13,29 @@ import { openRegistryNote } from '../services/registryNotes'
  */
 export function registerHookHandlers(): void {
   /** 列出所有 hook（内置 + 用户 + 被覆盖内置的展示项） */
-  ipcMain.handle('hook:list', () => hookService.listForSettings())
+  defineHandler('hook:list', () => hookService.listForSettings())
 
   /** 取 md 原文（用户读文件；内置回 bundle 原文，作只读查看与覆盖副本初值） */
-  ipcMain.handle('hook:getSource', (_e, params: { name: string; source: 'builtin' | 'user' }) =>
+  defineHandler('hook:getSource', (_e, params: { name: string; source: 'builtin' | 'user' }) =>
     hookService.getSource(params.name, params.source)
   )
 
   /** 新建用户 hook 文件（「新建」与「创建覆盖副本」共用） */
-  ipcMain.handle('hook:create', (_e, params: { text: string }) => hookService.create(params.text))
+  defineHandler('hook:create', (_e, params: { text: string }) => hookService.create(params.text))
 
   /** 删除用户 hook 文件（同名内置随之恢复生效） */
-  ipcMain.handle('hook:delete', (_e, params: { name: string }) => hookService.delete(params.name))
+  defineHandler('hook:delete', (_e, params: { name: string }) => hookService.delete(params.name))
 
   /** 目录里无法解析的文件（设置页「无法解析」分组） */
-  ipcMain.handle('hook:listInvalid', () => hookService.listInvalid())
+  defineHandler('hook:listInvalid', () => hookService.listInvalid())
 
   /** 按文件名删除解析不过的文件（它没有 name） */
-  ipcMain.handle('hook:deleteByFile', (_e, params: { fileName: string }) =>
+  defineHandler('hook:deleteByFile', (_e, params: { fileName: string }) =>
     hookService.deleteByFile(params.fileName)
   )
 
   /** 打开 / 复用一份 hook 文件的笔记本会话（按文件名认 —— 解析不过的文件也这样打开去修） */
-  ipcMain.handle('hook:openNote', (_e, params: { fileName: string; title?: string }) =>
+  defineHandler('hook:openNote', (_e, params: { fileName: string; title?: string }) =>
     openRegistryNote('hook', params.fileName, params.title)
   )
 
@@ -43,14 +43,14 @@ export function registerHookHandlers(): void {
    * 打开 / 复用一份**内置** hook 的只读笔记本 —— 它随包发布在应用包里，运行时读的就是这份文件，
    * 所以按名问 hookService 要「当前语言那一版的文件名」再开，UI 不自己挑语言。
    */
-  ipcMain.handle('hook:openBuiltinNote', (_e, params: { name: string; title?: string }) => {
+  defineHandler('hook:openBuiltinNote', (_e, params: { name: string; title?: string }) => {
     const fileName = hookService.builtinSourceFile(params.name)
     if (!fileName) throw new Error(`Builtin hook "${params.name}" not found`)
     return openRegistryNote('hookBuiltin', fileName, params.title)
   })
 
   /** 打开用户 hook 目录（OS 文件管理器） */
-  ipcMain.handle('hook:openFolder', async () => {
+  defineHandler('hook:openFolder', async () => {
     await hookService.openUserFolder()
     return { success: true }
   })

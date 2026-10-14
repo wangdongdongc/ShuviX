@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { defineHandler } from './registry'
 import { telegramService } from '../services/telegram'
 import type { TelegramBotAddParams, TelegramBotUpdateParams } from '../types'
 
@@ -34,9 +34,9 @@ async function fetchBotIdentity(token: string): Promise<BotIdentity> {
 export function registerTelegramHandlers(): void {
   // ─── Bot CRUD ────────────────────────────────
 
-  ipcMain.handle('telegram:listBots', () => telegramService.listBots())
+  defineHandler('telegram:listBots', () => telegramService.listBots())
 
-  ipcMain.handle('telegram:addBot', async (_event, params: TelegramBotAddParams) => {
+  defineHandler('telegram:addBot', async (_ctx, params: TelegramBotAddParams) => {
     // 先验证 token
     const me = await fetchBotIdentity(params.token)
     return telegramService.addBot({
@@ -47,7 +47,7 @@ export function registerTelegramHandlers(): void {
     })
   })
 
-  ipcMain.handle('telegram:updateBot', async (_event, params: TelegramBotUpdateParams) => {
+  defineHandler('telegram:updateBot', async (_ctx, params: TelegramBotUpdateParams) => {
     // 如果 token 变更，先验证并获取 bot info
     let username: string | undefined
     if (params.token) {
@@ -57,14 +57,14 @@ export function registerTelegramHandlers(): void {
     return { success: true }
   })
 
-  ipcMain.handle('telegram:deleteBot', (_event, id: string) => {
+  defineHandler('telegram:deleteBot', (_ctx, id: string) => {
     telegramService.deleteBot(id)
     return { success: true }
   })
 
   // ─── Token 验证 ──────────────────────────────
 
-  ipcMain.handle('telegram:validateToken', async (_event, token: string) => {
+  defineHandler('telegram:validateToken', async (_ctx, token: string) => {
     try {
       const me = await fetchBotIdentity(token)
       return { valid: true, username: me.username, id: me.id }

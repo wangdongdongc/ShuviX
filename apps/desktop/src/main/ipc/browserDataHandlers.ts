@@ -7,7 +7,8 @@
  * 因此把"已保存站点"定义为"写过 cookie 的 host"，从 session.cookies.get({}) 聚合而来。
  */
 
-import { ipcMain, session } from 'electron'
+import { session } from 'electron'
+import { defineHandler } from './registry'
 import { BROWSER_PARTITION } from '../services/browser'
 import { createLogger } from '../logger'
 
@@ -19,7 +20,7 @@ export interface SavedSite {
 }
 
 export function registerBrowserDataHandlers(): void {
-  ipcMain.handle('browser-data:list-sites', async (): Promise<SavedSite[]> => {
+  defineHandler('browser-data:list-sites', async (): Promise<SavedSite[]> => {
     const sess = session.fromPartition(BROWSER_PARTITION)
     const cookies = await sess.cookies.get({})
     const counts = new Map<string, number>()
@@ -33,7 +34,7 @@ export function registerBrowserDataHandlers(): void {
       .sort((a, b) => a.host.localeCompare(b.host))
   })
 
-  ipcMain.handle('browser-data:clear-site', async (_event, host: string): Promise<void> => {
+  defineHandler('browser-data:clear-site', async (_ctx, host: string): Promise<void> => {
     if (!host || typeof host !== 'string') return
     const sess = session.fromPartition(BROWSER_PARTITION)
 
@@ -61,7 +62,7 @@ export function registerBrowserDataHandlers(): void {
     log.info(`Cleared ${removed} cookies and storage data for ${host}`)
   })
 
-  ipcMain.handle('browser-data:clear-all', async (): Promise<void> => {
+  defineHandler('browser-data:clear-all', async (): Promise<void> => {
     const sess = session.fromPartition(BROWSER_PARTITION)
     // 不传 origin = 清除分区下全部 cookies / localStorage / IndexedDB / cache / Service Worker
     await sess.clearStorageData()

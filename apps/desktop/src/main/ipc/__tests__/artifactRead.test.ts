@@ -55,6 +55,7 @@ vi.mock('../../services/previewWindowService', () => ({
 }))
 
 import { registerFilesHandlers } from '../filesHandlers'
+import { attachIpcAdapter } from '../ipcAdapter'
 import { writeArtifact } from '../../services/artifacts/store'
 
 const HOME_ARTIFACTS = join(homedir(), '.shuvix', 'artifacts')
@@ -76,7 +77,7 @@ interface ArtifactRow {
 const read = (sessionId: string, name: string): ArtifactRow | null => {
   const handler = state.handlers.get('artifact:read')
   expect(handler, 'artifact:read 未注册').toBeDefined()
-  return handler!({}, { sessionId, name }) as ArtifactRow | null
+  return handler!({ sender: { id: 1 } }, { sessionId, name }) as ArtifactRow | null
 }
 
 let seq = 0
@@ -86,6 +87,7 @@ beforeAll(() => {
   homeBefore = homeSnapshot()
   state.root = join(realpathSync(mkdtempSync(join(tmpdir(), 'shuvix-artifact-ipc-'))), 'artifacts')
   registerFilesHandlers()
+  attachIpcAdapter()
 })
 
 afterAll(() => {

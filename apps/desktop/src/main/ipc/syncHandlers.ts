@@ -1,22 +1,10 @@
-import { ipcMain } from 'electron'
-import {
-  createIpcLinkHub,
-  SYNC_FRAME_CHANNEL,
-  type IpcLinkHub,
-  type SyncWebContents
-} from '../frontend/sync/ipcLink'
+import { createIpcLinkHub, type IpcLinkHub } from '../frontend/sync/ipcLink'
 import { getSyncHub } from '../frontend/sync/syncWiring'
 import { createLogger } from '../logger'
+import { defineListener } from './registry'
+import { webContentsOf } from './ipcAdapter'
 
 const log = createLogger('SyncIpc')
-
-/** 注册要的那一点 ipcMain（测试给假的） */
-export interface SyncIpcMain {
-  on(
-    channel: string,
-    listener: (event: { sender: SyncWebContents }, ...args: unknown[]) => void
-  ): unknown
-}
 
 let hub: IpcLinkHub | undefined
 
@@ -31,17 +19,21 @@ function ipcLinks(): IpcLinkHub {
 
 /**
  * 视图同步的 IPC（pi 1.2 / chord2）：渲染端的 chord 链路帧 `sync:frame(link, frame)` 交给窗口链路表
- * （`frontend/sync/ipcLink`，主体 = 发送方 webContents），服务端的帧经 `webContents.send('sync:frame', link, frame)`
- * 推回。没有一问一答的调用了（phase 3 的 `sync:invoke` 已删）。
+ * （`frontend/sync/ipcLink`，主体 = 发送方 webContents —— `webContentsOf(ctx)` 就是 IPC 的 `event.sender`），
+ * 服务端的帧经 `webContents.send('sync:frame', link, frame)` 推回。没有一问一答的调用了（phase 3 的
+ * `sync:invoke` 已删）。通道名与 `ipcLink.SYNC_FRAME_CHANNEL` 相同（这里写字面量，通道守卫按字面量核对）。
  *
  * 注册本身不建服务端、不建宿主（PIN-12）：第一帧到了才建。
  */
-export function registerSyncHandlers(ipc: SyncIpcMain = ipcMain as unknown as SyncIpcMain): void {
-  ipc.on(SYNC_FRAME_CHANNEL, (event, linkId, frame) => {
+export function registerSyncHandlers(): void {
+  defineListener('sync:frame', (ctx, linkId, frame) => {
+    let sender: ReturnType<typeof webContentsOf>
     try {
-      ipcLinks().receive(event.sender, linkId, frame)
+      sender = webContentsOf(ctx)
+      if (!sender) throw new Error('the frame has no sender webContents')
+      ipcLinks().receive(sender, linkId, frame)
     } catch (error) {
-      log.warn(`sync frame from webContents ${event.sender?.id} failed: ${String(error)}`)
+      log.warn(`sync frame from webContents ${sender?.id} failed: ${String(error)}`)
     }
   })
 }

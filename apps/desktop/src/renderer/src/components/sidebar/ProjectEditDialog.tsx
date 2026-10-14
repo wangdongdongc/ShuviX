@@ -74,7 +74,7 @@ export function ProjectEditDialog({
   const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
 
   const handleSelectFolder = async (): Promise<void> => {
-    const result = await window.electron.ipcRenderer.invoke('dialog:openDirectory')
+    const result = await window.api.app.openDirectoryDialog()
     if (result) setPath(result)
   }
 

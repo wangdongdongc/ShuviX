@@ -1,5 +1,5 @@
-import { ipcMain } from 'electron'
-import { chatGateway, operationContext, createElectronContext } from '../frontend'
+import { defineHandler } from './registry'
+import { chatGateway, operationContext, createClientContext } from '../frontend'
 
 /**
  * 消息管理 IPC 处理器
@@ -7,8 +7,8 @@ import { chatGateway, operationContext, createElectronContext } from '../fronten
  */
 export function registerMessageHandlers(): void {
   /** 获取会话消息 */
-  ipcMain.handle('message:list', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), () =>
+  defineHandler('message:list', (ctx, sessionId: string) =>
+    operationContext.run(createClientContext(ctx, sessionId), () =>
       chatGateway.listMessages(sessionId)
     )
   )
@@ -17,8 +17,8 @@ export function registerMessageHandlers(): void {
   // 外部前端不再能凭空插入一条消息进会话树。
 
   /** 清空会话消息 */
-  ipcMain.handle('message:clear', (_event, sessionId: string) =>
-    operationContext.run(createElectronContext(sessionId), async () => {
+  defineHandler('message:clear', (ctx, sessionId: string) =>
+    operationContext.run(createClientContext(ctx, sessionId), async () => {
       await chatGateway.clearMessages(sessionId)
       return { success: true }
     })
@@ -28,8 +28,8 @@ export function registerMessageHandlers(): void {
    * 回退到指定消息之前（P3-10b，PIN-02）：真的回退了 → `{success:true}`；没有可回退的目标（旧格式会话、
    * id 不是条目 id、目标不在当前对话里）→ `{success:false}`，界面据此不回填草稿、不重发。运行时抛错原样拒绝。
    */
-  ipcMain.handle('message:rollback', (_event, params: { sessionId: string; messageId: string }) =>
-    operationContext.run(createElectronContext(params.sessionId), async () => ({
+  defineHandler('message:rollback', (ctx, params: { sessionId: string; messageId: string }) =>
+    operationContext.run(createClientContext(ctx, params.sessionId), async () => ({
       success: await chatGateway.rollbackMessage(params.sessionId, params.messageId)
     }))
   )
