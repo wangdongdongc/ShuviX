@@ -30,6 +30,11 @@ export default defineConfig({
         __dirname,
         '../../packages/agent-runtime/src/browser/extractPage.ts'
       ),
+      // 视图同步的契约（浏览器安全，chat-ui 的 syncClient 引它）；同样得排在下面那条前缀别名之前
+      '@shuvix/agent-runtime/sync/viewContracts': resolvePath(
+        __dirname,
+        '../../packages/agent-runtime/src/sync/viewContracts.ts'
+      ),
       '@shuvix/agent-runtime': resolvePath(__dirname, '../../packages/agent-runtime/src/index.ts'),
       // Electron 提供 node:original-fs（未被 ASAR 补丁的原始 fs），
       // 在 Vitest 的 Node.js 环境中不存在，映射到标准 node:fs

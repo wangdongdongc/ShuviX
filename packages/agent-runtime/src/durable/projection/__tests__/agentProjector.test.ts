@@ -7,12 +7,12 @@
  *      一对里面
  *   43 子 agent 跑到一半崩溃、重开：挂载 = freshMount，run.state interrupted，没有生命周期信号
  *   44 不认识的 agentId → undefined、不挂载；hook agent 可以看（只读，PIN-20）
- *   另：DurableSession 满足 P3-04 SyncHub 的 `SyncSession` 接缝（类型层）
+ *   另：DurableSession 满足视图服务端的 `SyncSession` 接缝（类型层）
  */
 import { fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai'
 import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import type { SyncSession } from '../../../sync/syncHub'
+import type { SyncSession } from '../../../sync/viewServer'
 import type { DurableSession } from '../../durableSession'
 import type { SpawnCreatedInfo } from '../../spawn'
 import { answer, fauxKit, held, type FauxKit } from '../../__tests__/support/faux'

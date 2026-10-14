@@ -2,14 +2,14 @@
  * invokeTool —— 单测里调一次 durable 工具的辅助（tools/testing/invokeTool.ts）。
  *
  * 契约（文件头）：假 api 带调用身份与给定 signal 的 chord context；记下 output() / diagnostic() /
- * details()；结果按 durable 结算口径补齐（缺 content 用 output 文本、缺 details 用最后一次 details()、
- * api 记下的诊断排在结果自带的之前）；只收显式声明了 replay 的 durable 注册项（旧形状在调用前就拒收）；
+ * details()；结果按 durable 结算口径补齐（缺 output 用 output() 文本，交回时叫 content；缺 details 用最后一次
+ * details()；api 记下的诊断排在结果自带的之前）；只收显式声明了 replay 的 durable 注册项（旧形状在调用前就拒收）；
  * 兑现不了的 api 成员一调就抛；调用结束后 api 失效。
  *
  *   IT-1 缺省身份：callId 自动生成且每次不同，taskId 1，conversationId 根对话，context 不带 signal
  *   IT-2 给定的 callId / taskId / conversationId / signal 原样到达 api 与 context
  *   IT-3 output（字符串与 Uint8Array）/ diagnostic / details 按顺序记下
- *   IT-4 结果原样交回；缺 content / details 时按 durable 口径补齐，诊断合并
+ *   IT-4 结果原样交回（durable 的 output 叫 content）；缺 output / details 时按 durable 口径补齐，诊断合并
  *   IT-5 工具抛错（durable 形状 —— 不经 BaseTool 的裸注册项）→ invokeTool 原样 reject
  *   IT-6 调用结算之后再碰 api → 抛
  *   IT-7 兑现不了的成员一调就抛并指路 options.api；options.api 可以补上 / 替换；memo 先到者胜
@@ -41,7 +41,7 @@ describe('IT 调用身份与 context', () => {
     const seen: ToolExecutionApi[] = []
     const tool = rawTool(async (_args, api) => {
       seen.push(api)
-      return { content: [] }
+      return { output: [] }
     })
     const first = await invokeTool(tool, {})
     const second = await invokeTool(tool, {})
@@ -56,7 +56,7 @@ describe('IT 调用身份与 context', () => {
 
   it('IT-2 给定的身份与 signal 原样到达', async () => {
     const tool = rawTool(async (_args, api, context) => ({
-      content: [{ type: 'text', text: `${api.callId}/${api.taskId}/${api.conversationId}` }],
+      output: [{ type: 'text', text: `${api.callId}/${api.taskId}/${api.conversationId}` }],
       details: { aborted: context.abortSignal?.aborted ?? null }
     }))
     const ac = new AbortController()
@@ -81,7 +81,7 @@ describe('IT 记录与结算', () => {
       await api.details({ step: 1 }, context)
       api.diagnostic({ severity: 'warn', message: 'second' })
       await api.details({ step: 2 }, context)
-      return { content: [{ type: 'text', text: 'final' }] }
+      return { output: [{ type: 'text', text: 'final' }] }
     })
     const run = await invokeTool(tool, {})
 
@@ -98,7 +98,7 @@ describe('IT 记录与结算', () => {
     const tool = rawTool(async (_args, api) => {
       api.diagnostic({ severity: 'info', message: 'from api' })
       return {
-        content: [{ type: 'text', text: 'body' }],
+        output: [{ type: 'text', text: 'body' }],
         details: { own: true },
         control: { terminate: true },
         diagnostics: [{ severity: 'warn', message: 'from result' }]
@@ -116,7 +116,7 @@ describe('IT 记录与结算', () => {
     })
   })
 
-  it('IT-4 缺 content → 用 output 文本；缺 details → 用最后一次 details()；什么都没报 → 空 content', async () => {
+  it('IT-4 缺 output → 用 output() 文本；缺 details → 用最后一次 details()；什么都没报 → 空 content', async () => {
     const reported = rawTool(async (_args, api, context) => {
       api.output('streamed')
       await api.details({ v: 1 }, context)
@@ -147,7 +147,7 @@ describe('IT 记录与结算', () => {
     let held: ToolExecutionApi | undefined
     const tool = rawTool(async (_args, api) => {
       held = api
-      return { content: [] }
+      return { output: [] }
     })
     const run = await invokeTool(tool, {}, { callId: 'late' })
     expect(() => held!.output('too late')).toThrow(/late has settled/)
@@ -160,7 +160,7 @@ describe('IT 假 api 的边界', () => {
   it('IT-7 兑现不了的成员一调就抛，并指路 options.api', async () => {
     const tool = rawTool(async (_args, api, context) => {
       await api.commit(() => undefined, context)
-      return { content: [] }
+      return { output: [] }
     })
     await expect(invokeTool(tool, {})).rejects.toThrow(/api\.commit\(\).*options\.api/)
   })
@@ -171,7 +171,7 @@ describe('IT 假 api 的边界', () => {
       const agent = await api.agent(context)
       const out = await api.commit(() => undefined, context)
       return {
-        content: [
+        output: [
           { type: 'text', text: `${String(out)}:${agent.tools.map((t) => t.name).join(',')}` }
         ]
       }
@@ -192,7 +192,7 @@ describe('IT 假 api 的边界', () => {
       const before = await api.memo<string>('k', context)
       const first = await api.memo('k', 'one', context)
       const second = await api.memo('k', 'two', context)
-      return { content: [{ type: 'text', text: `${String(before)}|${first}|${second}` }] }
+      return { output: [{ type: 'text', text: `${String(before)}|${first}|${second}` }] }
     })
     expect(resultText((await invokeTool(tool, {})).result)).toBe('undefined|one|one')
   })
@@ -241,7 +241,7 @@ describe('IT 旧形状工具不再被收', () => {
   })
 
   it('IT-8 replay 不是 safe / unsafe 也拒收（durable 只认这两个值）', async () => {
-    const execute = vi.fn(async () => ({ content: [] }))
+    const execute = vi.fn(async () => ({ output: [] }))
     const tool = { ...rawTool(execute), replay: 'sometimes' } as unknown as AnyTool
     await expect(invokeTool(tool, {})).rejects.toThrow(/declares no replay policy/)
     expect(execute).not.toHaveBeenCalled()
@@ -250,7 +250,7 @@ describe('IT 旧形状工具不再被收', () => {
   it('IT-8 声明了 replay 的裸注册项照常调（safe 与 unsafe 都收）', async () => {
     for (const replay of ['safe', 'unsafe'] as const) {
       const tool = {
-        ...rawTool(async () => ({ content: [{ type: 'text', text: replay }] })),
+        ...rawTool(async () => ({ output: [{ type: 'text', text: replay }] })),
         replay
       }
       expect(resultText((await invokeTool(tool as AnyTool, {})).result)).toBe(replay)

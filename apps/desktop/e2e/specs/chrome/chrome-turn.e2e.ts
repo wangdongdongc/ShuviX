@@ -6,8 +6,8 @@
  * 回到侧边栏。每一段都是生产代码，只有模型与浏览器是假的。本文件证明：
  *   - **主流程**（CTN-1）：随消息带上的标签页 → 桌面现问 Chrome 它在哪（`tabs.get`）→ 它的站点记为已同意；
  *     list_tabs / read_page 真的走到浏览器（按假 Chrome 这一侧的记录断），一张询问卡片都没有；模型看到的
- *     是 tab 档案、chrome 的工具、带标签页那一行的用户消息；侧边栏订阅的会话视图（P3-09：经桥的
- *     `sync.invoke` / `sync.frame`）里两个工具都在 agent_end 之前落定，chat.event 只剩生命周期；标签页会话
+ *     是 tab 档案、chrome 的工具、带标签页那一行的用户消息；侧边栏持有的会话视图（pi 1.2：经桥事件
+ *     `sync.link` 的 chord 链路）里两个工具都在 agent_end 之前落定，chat.event 只剩生命周期；标签页会话
  *     不进日历；
  *   - **调试租约**（CTN-2）：一轮里接管一次，浏览器推来的 CDP 事件回到工具结果里，轮结束才放掉（横幅只在
  *     agent 干活时挂着）；
@@ -327,14 +327,13 @@ describe('一轮对话走到浏览器再回来', () => {
     const agentEndSeq = events.find((e) => e.event.type === 'agent_end')!.seq
     expect(await listDone).toBeLessThan(agentEndSeq)
     expect(await readDone).toBeLessThan(agentEndSeq)
-    // 视图帧按会话路由：信封上的会话 id 与帧的目标都是这条会话
+    // 视图帧按侧边栏路由：这一轮的帧都落在这条会话那个标签页的侧边栏（它自己的链路）上
     const frames = chromeA.syncFrames({ sessionId: sidA5, since: turn.since })
     expect(frames.length).toBeGreaterThan(0)
-    expect(
-      chromeA
-        .syncFrames({ since: turn.since })
-        .filter((f) => f.frame.target.kind === 'session' && f.frame.target.sessionId === sidA5)
-    ).toEqual(frames)
+    expect(frames.every((f) => f.panelId === chromeA.panelOf(sidA5))).toBe(true)
+    expect(chromeA.syncFrames({ panelId: chromeA.panelOf(sidA5), since: turn.since })).toEqual(
+      frames
+    )
 
     // 侧边栏重开时读到的就是这一轮：用户消息带着标签页芯片，工具块带着结果
     const listed = await chromeA.channelCall<

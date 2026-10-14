@@ -6,7 +6,8 @@
     "../../packages/chat-protocol/src/**/*",
     "../../packages/chat-ui/src/**/*",
     "../../packages/app-shell/src/contextmenu/**/*",
-    "../../packages/agent-runtime/src/browser/extractPage.ts"
+    "../../packages/agent-runtime/src/browser/extractPage.ts",
+    "../../packages/agent-runtime/src/sync/viewContracts.ts"
   ],
   "exclude": ["../../packages/**/__tests__/**", "../../packages/**/*.test.ts"],
   "compilerOptions": {
@@ -21,6 +22,9 @@
       "@shuvix/app-shell/*": ["../../packages/app-shell/src/*"],
       "@shuvix/agent-runtime/browser/extractPage": [
         "../../packages/agent-runtime/src/browser/extractPage.ts"
+      ],
+      "@shuvix/agent-runtime/sync/viewContracts": [
+        "../../packages/agent-runtime/src/sync/viewContracts.ts"
       ]
     }
   }

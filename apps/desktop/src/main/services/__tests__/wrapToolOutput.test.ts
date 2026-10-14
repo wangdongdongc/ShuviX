@@ -48,7 +48,7 @@ const SID = 'wrap-tool-output-test-session'
 
 /** 最小 durable 工具（execute 为可编程 vi.fn，返回单文本块 'ran'） */
 function makeTool(name = 'ssh'): { tool: AnyTool; execute: ReturnType<typeof vi.fn> } {
-  const execute = vi.fn(async () => ({ content: [{ type: 'text' as const, text: 'ran' }] }))
+  const execute = vi.fn(async () => ({ output: [{ type: 'text' as const, text: 'ran' }] }))
   const tool = {
     name,
     label: name,
@@ -398,12 +398,12 @@ describe('wrapToolOutput — L1 全工具门', () => {
 // 假工具是 durable 形状（next 是 BaseTool）。
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** execute 交回给定 content、并带 control.terminate 的 durable 形状工具 */
-function makeTerminatingTool(content: Array<{ type: 'text'; text: string }>): {
+/** execute 交回给定 output、并带 control.terminate 的 durable 形状工具 */
+function makeTerminatingTool(output: Array<{ type: 'text'; text: string }>): {
   tool: AnyTool
   execute: ReturnType<typeof vi.fn>
 } {
-  const execute = vi.fn(async () => ({ content, control: { terminate: true as const } }))
+  const execute = vi.fn(async () => ({ output, control: { terminate: true as const } }))
   const tool = {
     name: 'next',
     label: 'next',
@@ -430,7 +430,7 @@ describe('wrapToolOutput — control.terminate 原样带出', () => {
   })
 
   it.each([
-    ['空 content', []],
+    ['空 output', []],
     ['只有空白文本', [{ type: 'text' as const, text: '   ' }]]
   ])('W-T1 %s → 补上 (no output) 之后仍带 terminate:true', async (_label, content) => {
     const { tool } = makeTerminatingTool(content)

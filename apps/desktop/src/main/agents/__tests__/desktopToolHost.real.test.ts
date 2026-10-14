@@ -143,7 +143,7 @@ const BIG = Array.from({ length: 3000 }, (_, i) => `L-${String(i).padStart(4, '0
 /** 回 BIG 的探针（注册成内置工具 `probe`） */
 const probe = (): ToolRegistration => ({
   ...stubTool('probe'),
-  execute: async () => ({ content: [{ type: 'text', text: BIG }] })
+  execute: async () => ({ output: [{ type: 'text', text: BIG }] })
 })
 
 /** 带自己上限与策略的探针（`capped`）：保留开头、至多 10 行 */
@@ -152,15 +152,18 @@ const capped = (): ToolRegistration =>
     ...stubTool('capped'),
     outputMaxLines: 10,
     outputStrategy: 'keep-start',
-    execute: async () => ({ content: [{ type: 'text', text: BIG }] })
+    execute: async () => ({ output: [{ type: 'text', text: BIG }] })
   }) as unknown as ToolRegistration
 
 /** api.agent 的替身：交出一张只含这些工具名的工具表 */
 function agentWith(names: string[]): ToolExecutionApi['agent'] {
+  const tools = names.map((name) => ({ name }) as unknown as AnyTool)
   const agent: Agent = {
     thinkingLevel: 'off',
     extensions: [],
-    tools: names.map((name) => ({ name }) as unknown as AnyTool),
+    tools,
+    callable: tools,
+    deferred: [],
     sections: []
   }
   return async () => agent

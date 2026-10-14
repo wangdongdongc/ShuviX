@@ -214,7 +214,8 @@ export class ProviderOAuthService {
           notify,
           prompt: (p: AuthPrompt) => this.openPrompt(slug, p, notify)
         },
-        { getDeviceId: this.deps.deviceId }
+        // agentName：登录页上向提供商报的应用名（OpenAI 的 agent name hint / Codex originator），缺省是 pi 自己的名字
+        { getDeviceId: this.deps.deviceId, agentName: 'ShuviX' }
       )
       log.info(`${slug} 订阅登录成功`)
       // 列表里的登录状态要跟着变（与 providerService 各 mutator 同一条广播）

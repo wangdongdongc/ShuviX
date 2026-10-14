@@ -16,6 +16,7 @@ import {
   deriveAgentViewFields,
   type SubSessionState
 } from '@shuvix/chat-ui'
+import { SYNC_NOT_FOUND } from '@shuvix/chat-protocol/sync'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { AgentView } from '@shuvix/chat-protocol/types/sessionView'
 import { SubSessionStream } from '../subagent/SubAgentStream'
@@ -233,7 +234,7 @@ function detachedSubOf(task: TaskInfo, view: AgentView, live: boolean): SubSessi
  *
  * 展开即订阅它的 agent 视图（`useAgentView`，收起 = 卸载 = 放手；展开互斥，所以同时只有一条订阅，P3-14）：
  * 登记过的（本次运行里见过它的 register）镜像进 subSessionStore，详情读那份条目（带起始指令、内联 Token
- * 标签）；没登记过的（重建过的渲染端）直接从视图渲染（PIN-13）。订阅失败 `service_not_found`（agent 被销毁 /
+ * 标签）；没登记过的（重建过的渲染端）直接从视图渲染（PIN-13）。订阅失败 `not_found`（agent 被销毁 /
  * 主进程认不出它）→ 说清楚「不在了」，不装作还在。
  */
 function AgentDetail({ task }: { task: TaskInfo }): React.JSX.Element {
@@ -245,7 +246,7 @@ function AgentDetail({ task }: { task: TaskInfo }): React.JSX.Element {
     () => (sub || !binding.view ? undefined : detachedSubOf(task, binding.view, live)),
     [sub, binding.view, live, task]
   )
-  const gone = binding.status === 'error' && binding.code === 'service_not_found'
+  const gone = binding.status === 'error' && binding.code === SYNC_NOT_FOUND
   const goneNote = (
     <div className="px-3 pb-2 text-[10px] text-text-tertiary" data-subagent-gone="">
       {t('panel.tasksAgentGone')}

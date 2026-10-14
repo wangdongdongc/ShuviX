@@ -25,7 +25,7 @@ interface Entry {
  * 订阅一个派生 agent 的视图（P3-08；后台任务面板的派生 agent 详情展开时挂它，P3-14），每一份完整值经
  * `applyAgentView` 镜像进 subSessionStore（只更新登记过的那条，PIN-07），同时交回给调用方（没有登记条目的
  * 面板 —— 重建过的渲染端 —— 直接从它渲染，PIN-13）。订阅失败（如根会话还没在主进程里打开：
- * `service_not_found`，PIN-12）→ `{status:'error', code}`，不写 store。视图不可用 / 订阅失败 / 最后一个使用方
+ * `not_found`，PIN-12）→ `{status:'error', code}`，不写 store。视图不可用 / 订阅失败 / 最后一个使用方
  * 放手 → `detachAgentView` 收掉条目的实时态（已落盘的消息留着）。
  */
 export function useAgentView(agentId: string | null): AgentViewBinding {

@@ -1,16 +1,15 @@
 /**
- * 视图同步的 e2e 探针（P3-15a 的一半，随 P3-08 落地）—— spec 进程里读一条会话「现在长什么样」。
+ * 视图同步的 e2e 探针（P3-15a 的一半，随 P3-08 落地；pi 1.2 换成 chord2 链路）—— spec 进程里读一条会话「现在长什么样」。
  *
- * 会话内容不再走 ChatEvent（P3-08）：消息、流式卡、工具进度、询问都在会话视图（`SessionView`）里，经
- * `window.api.sync` 同步。探针在 spec 进程（node）里跑一个**真的** chord 客户端（agent-runtime 的
- * `TestClient`，浏览器安全，node 里照样跑）：
- *  - 调用：`window.api.sync.invoke(target, call)` 经 CDP `eval` 在页面里发，回复原样带回；
- *  - 帧：页面侧装一个 `window.api.sync.onFrame` 监听，把**探针自己订阅**（id 前缀 `e2e#`）的帧攒进
- *    `window.__e2eSyncFrames`；探针每次读之前把新帧取回来交给 TestClient 解码。
+ * 会话内容不走 ChatEvent：消息、流式卡、工具进度、询问都在会话视图（`SessionView`）里，经 `window.api.sync`
+ * 的 chord 链路同步。探针在 spec 进程（node）里跑一个**真的** chord 客户端宿主，自己开一条链路（链路 id
+ * `e2e-…`，与渲染端自己的链路并存 —— 主进程按（窗口，链路 id）分开）：
+ *  - 发：`window.api.sync.send(link, frame)` 经 CDP `eval` 在页面里发（按序排队）；
+ *  - 收：页面侧装一个 `window.api.sync.onFrame` 监听，把**探针这条链路**的帧攒进
+ *    `window["__e2eSyncFrames:<链路 id>"]`（每个探针一份：同一个页面上可以有几个探针，各自一条 CDP 连接）；
+ *    探针每次读之前把新帧取回来交给链路。链路的 ping 超时放得很长：帧只在读的时候才取回来。
  *
- * 和渲染端自己的订阅互不干扰：同一个 webContents（同一个客户端 id）下订阅 id 各不相同。
- *
- *   viewOf(sid)              订上（第一次）→ 取帧 → 当前值
+ *   viewOf(sid)              持有（第一次）→ 取帧 → 当前值
  *   waitView(sid, pred, ms)  轮询直到值满足 pred
  *   waitRunEnded(sid, rec)   视图 `run.state !== 'busy'` **且** 录到一条该会话的 `agent_end`
  *   nextAsk(sid)             视图里下一条**没见过的**询问（流式游标，替代 `waitFor('input_request')`）
@@ -18,25 +17,51 @@
  *   toolResults(sid)         落盘的工具块（带结果的）：toolCallId / toolName / result / isError / details
  *                            （替代 `tool_end` 事件）
  *   agentViewOf(agentId)     一个派生 agent 的视图（`{kind:'agent'}` 目标，P3-14；根会话要先在主进程里打开过，
- *                            否则订阅以 service_not_found 拒绝 —— 抛出）
+ *                            否则以 `not_found` 失败 —— 抛出，错误带 `.code`）
  *   waitAgentView(id, pred)  轮询直到 agent 视图满足 pred
  */
-import { syncTargetKey, type SyncFrame, type SyncTarget } from '@shuvix/chat-protocol/sync'
+import type { Frame, Handle, Host } from '@earendil-works/chord'
+import { createHost } from '@earendil-works/chord'
+import { SYNC_NOT_FOUND, type SyncTarget } from '@shuvix/chat-protocol/sync'
 import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AssistantToolBlock, ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
-import type { WireServiceProviderUpdate } from '@earendil-works/chord'
 import {
-  TestClient,
-  type TestBinding
-} from '../../../../packages/agent-runtime/src/sync/__tests__/support/client'
+  AgentViewContract,
+  FrameLink,
+  isNotFoundError,
+  SessionViewContract,
+  VIEW_SERVER_HOST
+} from '../../../../packages/agent-runtime/src/sync/viewContracts'
 import type { CdpClient } from './cdp'
-import { until } from './cdp'
+import { sleep, until } from './cdp'
 import type { EventRecorder } from './seed'
 
 const FRAMES = '__e2eSyncFrames'
-/** 探针的客户端名 —— TestClient 的订阅 id 是 `<名>#<序号>` */
-const CLIENT = 'e2e'
+
+/** 持有一个目标、等它活过来最多等多久 */
+const BIND_TIMEOUT_MS = 15_000
+
+/** 探针链路的 ping 超时：帧只在读的时候取回来，空闲再久也不能让链路自己断 */
+const PROBE_PING_TIMEOUT_MS = 24 * 60 * 60 * 1000
+
+type ViewHandle = Handle<typeof SessionViewContract> | Handle<typeof AgentViewContract>
+
+/** 句柄失败的错误 → 带 `.code` 的 Error（「找不到」映射成 `not_found`，与渲染端的 syncClient 同一个口径） */
+export function syncErrorOf(error: unknown): Error & { code?: string } {
+  const chord = error as { code?: unknown; message?: unknown } | null | undefined
+  const code = isNotFoundError(error)
+    ? SYNC_NOT_FOUND
+    : typeof chord?.code === 'string'
+      ? chord.code
+      : undefined
+  const message = error instanceof Error ? error.message : String(error)
+  const wrapped = new Error(code === undefined ? message : `${code}: ${message}`) as Error & {
+    code?: string
+  }
+  if (code !== undefined) wrapped.code = code
+  return wrapped
+}
 
 export interface SyncProbe {
   /** 装页面侧的帧缓冲（幂等；viewOf / waitView 会自动装） */
@@ -72,6 +97,11 @@ export interface SyncProbe {
     timeoutMs?: number,
     what?: string
   ): Promise<AgentView>
+  /**
+   * 一条会话此刻的可用性（第一次读时订阅；订阅失败抛出，错误带 `.code`）。会话被删之后，已有的订阅上
+   * 它变成 `unavailable`（新订阅则以 `not_found` 失败）
+   */
+  availabilityOf(sessionId: string): Promise<'available' | 'unavailable' | undefined>
   /** 放掉一条会话的订阅 */
   release(sessionId: string): Promise<void>
   /** 已订阅的会话 id */
@@ -113,28 +143,28 @@ export function toolResultsIn(messages: readonly ChatMessage[]): ToolResult[] {
 
 const probes = new WeakMap<CdpClient, SyncProbe>()
 
+/** 一个目标的持有：句柄 + 让远端状态一直订着（订着才会被同步过来） */
+interface ProbeBinding {
+  readonly handle: ViewHandle
+  readonly stops: (() => void)[]
+}
+
 /** 某个窗口的探针（每个 CdpClient 一个） */
 export function syncProbe(main: CdpClient): SyncProbe {
   const existing = probes.get(main)
   if (existing) return existing
 
-  let receiver: ((frame: SyncFrame<WireServiceProviderUpdate>) => void) | undefined
-  const client = new TestClient(
-    CLIENT,
-    {
-      invoke: (_clientId, target, call) =>
-        main.eval(
-          // preload 以纯对象 {code?, message} 拒绝（P3-15）：在页面里包回 Error，CDP 的异常描述才带着码与原文
-          `window.api.sync.invoke(${JSON.stringify(target)}, ${JSON.stringify(call)}).then((v) => v === undefined ? null : v, (e) => { throw new Error((e && e.code ? e.code + ': ' : '') + (e && e.message !== undefined ? e.message : String(e))) })`
-        ) as Promise<never>
-    },
-    {
-      attach: (_clientId, deliver) => {
-        receiver = deliver
-      }
-    }
-  )
-  const bindings = new Map<string, TestBinding>()
+  const linkId = `e2e-${Math.random().toString(36).slice(2, 10)}`
+  /** 页面里这个探针自己的帧缓冲（按链路 id 分开：同一个页面上可以有好几个探针 —— 各自一条 CDP 连接） */
+  const buffer = JSON.stringify(`${FRAMES}:${linkId}`)
+  /** 发往页面的帧按序排队（CDP eval 是异步的） */
+  let outbox: Promise<unknown> = Promise.resolve()
+  const link = new FrameLink((frame: Frame) => {
+    const expression = `window.api.sync.send(${JSON.stringify(linkId)}, ${JSON.stringify(frame)})`
+    outbox = outbox.then(() => main.eval(expression)).catch(() => undefined)
+  })
+  let host: Host | undefined
+  const bindings = new Map<string, ProbeBinding>()
   /** nextAsk 的游标：会话 → 已交出过的询问 id */
   const seenAsks = new Map<string, Set<string>>()
   let installed = false
@@ -143,12 +173,10 @@ export function syncProbe(main: CdpClient): SyncProbe {
     if (installed) return
     await main.eval(
       `(() => {
-        if (window.${FRAMES}) return true
-        window.${FRAMES} = []
-        window.api.sync.onFrame((frame) => {
-          if (typeof frame?.subscriptionId === 'string' && frame.subscriptionId.startsWith('${CLIENT}#')) {
-            window.${FRAMES}.push(frame)
-          }
+        if (window[${buffer}]) return true
+        window[${buffer}] = []
+        window.api.sync.onFrame((link, frame) => {
+          if (link === ${JSON.stringify(linkId)}) window[${buffer}].push(frame)
         })
         return true
       })()`
@@ -156,58 +184,75 @@ export function syncProbe(main: CdpClient): SyncProbe {
     installed = true
   }
 
-  /** 取回页面里攒下的帧，按序交给 TestClient */
+  function client(): Host {
+    if (host === undefined) {
+      host = createHost({ name: `e2e-probe:${linkId}`, kind: 'client', onError: () => {} })
+      host.connect(link, { pingTimeout: PROBE_PING_TIMEOUT_MS })
+    }
+    return host
+  }
+
+  /** 发出去的先送到，再取回页面里攒下的帧、按序交给链路 */
   async function drain(): Promise<void> {
-    const frames = await main.eval<SyncFrame<WireServiceProviderUpdate>[]>(
-      `(window.${FRAMES} ?? []).splice(0)`
-    )
-    for (const frame of frames) receiver?.(frame)
+    await outbox
+    const frames = await main.eval<unknown[]>(`(window[${buffer}] ?? []).splice(0)`)
+    for (const frame of frames) link.deliver(frame)
   }
 
-  /** agent 目标的绑定（按 `syncTargetKey` 记，与会话的分开） */
-  const agentBindings = new Map<string, TestBinding>()
+  function release(key: string): void {
+    const binding = bindings.get(key)
+    if (!binding) return
+    bindings.delete(key)
+    for (const stop of binding.stops.splice(0)) stop()
+    binding.handle.release()
+  }
 
-  async function bind(sessionId: string): Promise<TestBinding> {
+  /** 持有一个目标，等它活过来、快照到了；失败 → 放掉、抛带 `.code` 的错（下一次重新持有） */
+  async function bind(target: SyncTarget): Promise<ProbeBinding> {
     await install()
-    let binding = bindings.get(sessionId)
-    if (!binding) {
-      const target: SyncTarget = { kind: 'session', sessionId }
-      binding = client.bind(target)
-      bindings.set(sessionId, binding)
-      await binding.ready()
+    const key =
+      target.kind === 'session' ? `session:${target.sessionId}` : `agent:${target.agentId}`
+    const existing = bindings.get(key)
+    if (existing) return existing
+    const host = client()
+    const handle: ViewHandle =
+      target.kind === 'session'
+        ? host.get(SessionViewContract, { sessionId: target.sessionId }, { at: VIEW_SERVER_HOST })
+        : host.get(AgentViewContract, { agentId: target.agentId }, { at: VIEW_SERVER_HOST })
+    handle.ready.catch(() => undefined)
+    const binding: ProbeBinding = {
+      handle,
+      stops: [handle.view.subscribe(() => {}), handle.availability.subscribe(() => {})]
     }
-    return binding
-  }
-
-  async function bindAgent(agentId: string): Promise<TestBinding> {
-    await install()
-    const target: SyncTarget = { kind: 'agent', agentId }
-    const key = syncTargetKey(target)
-    let binding = agentBindings.get(key)
-    if (!binding) {
-      binding = client.bind(target)
-      try {
-        await binding.ready()
-      } catch (error) {
-        // 订阅被拒：不留绑定，下一次重订
-        await binding.dispose().catch(() => undefined)
-        throw error
+    bindings.set(key, binding)
+    // 自己轮询（`until` 会吞掉错误）：gone = 订阅失败，带着码抛出去
+    const deadline = Date.now() + BIND_TIMEOUT_MS
+    try {
+      for (;;) {
+        await drain()
+        if (handle.status === 'gone') throw syncErrorOf(handle.error)
+        if (handle.status === 'live' && handle.view.value !== undefined) return binding
+        if (Date.now() > deadline) {
+          throw new Error(`timeout waiting: view of ${key} hydrated (status ${handle.status})`)
+        }
+        await sleep(50)
       }
-      agentBindings.set(key, binding)
+    } catch (error) {
+      release(key)
+      throw error
     }
-    return binding
   }
 
   async function agentViewOf(agentId: string): Promise<AgentView | undefined> {
-    const binding = await bindAgent(agentId)
+    const binding = await bind({ kind: 'agent', agentId })
     await drain()
-    return binding.value() as AgentView | undefined
+    return binding.handle.view.value as AgentView | undefined
   }
 
   async function viewOf(sessionId: string): Promise<SessionView | undefined> {
-    const binding = await bind(sessionId)
+    const binding = await bind({ kind: 'session', sessionId })
     await drain()
-    return binding.value() as SessionView | undefined
+    return binding.handle.view.value as SessionView | undefined
   }
 
   const probe: SyncProbe = {
@@ -314,13 +359,19 @@ export function syncProbe(main: CdpClient): SyncProbe {
         throw new Error(`${(error as Error).message}\nlast agent view: ${summary}`)
       }
     },
-    release: async (sessionId) => {
-      const binding = bindings.get(sessionId)
-      if (!binding) return
-      bindings.delete(sessionId)
-      await binding.dispose().catch(() => undefined)
+    availabilityOf: async (sessionId) => {
+      const binding = await bind({ kind: 'session', sessionId })
+      await drain()
+      return binding.handle.availability.value as 'available' | 'unavailable' | undefined
     },
-    sessions: () => [...bindings.keys()]
+    release: async (sessionId) => {
+      release(`session:${sessionId}`)
+      await outbox
+    },
+    sessions: () =>
+      [...bindings.keys()]
+        .filter((key) => key.startsWith('session:'))
+        .map((key) => key.slice('session:'.length))
   }
   probes.set(main, probe)
   return probe

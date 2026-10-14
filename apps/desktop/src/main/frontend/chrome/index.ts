@@ -7,9 +7,9 @@
  *  - `channel.call`：单会话对话接口（白名单 + 归属核对，见 channel.ts）；
  *  - `panel.appearance`：侧边栏跟着桌面的主题 / 字号 / 语言走。
  *
- * 会话内容（消息、流式卡、工具进度、询问）经视图同步到达侧边栏（P3-09）：`channel.call('sync.invoke')`
- * 把 chord 调用交给 SyncHub（客户端 `chrome:<connId>`），帧经路由传输的 `chrome` 那条（chromeSyncTransport）
- * 推成桥事件 `sync.frame`。
+ * 会话内容（消息、流式卡、工具进度、询问）经视图同步到达侧边栏（pi 1.2 / chord2）：每个侧边栏一条 chord 链路，
+ * 帧是两个方向的桥事件 `sync.link`（`chromeLinks.ts`），链路交给视图服务端；侧边栏能看什么由这里登记的
+ * `chrome` 主体核对决定 —— 只能看这个浏览器这一轮的标签页会话（派生 agent 按它的根会话核对）。
  */
 import i18next from 'i18next'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
@@ -18,20 +18,19 @@ import { chatFrontendRegistry } from '../core'
 import { appEventBus } from '../../utils/appEventBus'
 import { settingsDao } from '../../dao/settingsDao'
 import { chromeBridge, type BridgeConnection } from '../../services/chromeBridge'
+import type { ViewPrincipal } from '@shuvix/agent-runtime'
+import type { SyncTarget } from '@shuvix/chat-protocol/sync'
 import { createLogger } from '../../logger'
-import { syncTransport } from '../sync/syncWiring'
+import { getSyncHub, registerViewAuthorizer } from '../sync/syncWiring'
 import { ChromeFrontend } from './ChromeFrontend'
 import { callPanelChannel } from './channel'
-import {
-  CHROME_CLIENT_PREFIX,
-  createChromeSyncTransport,
-  forgetAgentRoots
-} from './chromeSyncTransport'
+import { createChromeLinkHub } from './chromeLinks'
 import {
   closeTabSession,
   connectionOwnsSession,
   openTabSession,
-  sweepTabSessions
+  sweepTabSessions,
+  tabSessionOwnedBy
 } from './tabSessions'
 
 /** 侧边栏外观：与桌面渲染层 settingsStore.loadSettings 同一套取值与缺省 */
@@ -96,6 +95,25 @@ function forwardAppEvent(event: AppEvent): void {
 
 const syncLog = createLogger('SyncChrome')
 
+/**
+ * `chrome` 主体能不能看这个目标：会话目标必须是这个浏览器（installId）这一轮运行（runId）的标签页会话。
+ * **派生 agent 目标一律不让看**（同步判定）：侧边栏从不订阅 agent 视图（`tab` 基座没有 agent 工具，子 agent
+ * 面板只在桌面），而按根会话核对得先异步解析 agent —— 那条路与目标的激活并行，会让未授权的请求也去 peek 别人的
+ * 根会话，「禁止」与「找不到」谁先到也就透露了那个 agent 存不存在
+ */
+export function chromeViewAllowed(principal: ViewPrincipal, target: SyncTarget): boolean {
+  if (target.kind !== 'session') return false
+  const installId = typeof principal.installId === 'string' ? principal.installId : ''
+  const runId = typeof principal.runId === 'string' ? principal.runId : ''
+  return tabSessionOwnedBy(target.sessionId, installId, runId)
+}
+
+/** 侧边栏的视图同步链路（每个侧边栏一条），交给视图服务端（第一条链路到了才建它） */
+const syncLinks = createChromeLinkHub({
+  accept: (link, principal) => getSyncHub().accept(link, principal),
+  logger: syncLog
+})
+
 let registered = false
 
 /** 启动时装一次（在 IPC 注册之后、桥服务开始监听之前） */
@@ -108,21 +126,13 @@ export function registerChromeFrontend(): void {
     onEvent: (conn, name, params) => {
       if (name === 'tabs.removed') {
         void closeTabSession(conn, (params as { tabId?: number })?.tabId as number)
+      } else if (name === 'sync.link') {
+        syncLinks.receive(conn, params)
       }
     }
   })
   appEventBus.subscribe(forwardAppEvent)
-  // 视图同步的 Chrome 传输：帧按客户端 id `chrome:<connId>` 找回那条连接推出去（不建 hub —— 它仍在第一次
-  // 同步调用时才建）
-  syncTransport.addRoute(
-    CHROME_CLIENT_PREFIX,
-    createChromeSyncTransport({
-      connections: {
-        byId: (connId) => chromeBridge.connectionById(connId),
-        onClosed: (listener) => chromeBridge.onConnectionClosed(listener)
-      },
-      logger: syncLog
-    })
-  )
-  chromeBridge.onConnectionClosed((conn) => forgetAgentRoots(conn.id))
+  // 视图同步：侧边栏只能看自己浏览器这一轮的标签页会话；连接断了，它上面的链路全部结束（订阅、钉住随之松开）
+  registerViewAuthorizer('chrome', chromeViewAllowed)
+  chromeBridge.onConnectionClosed((conn) => syncLinks.closeConnection(conn.id))
 }

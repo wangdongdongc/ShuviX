@@ -34,7 +34,12 @@
  * 共享与回收：`DurableSession.projector()` 惰性建一个、同一时刻只有一个；`acquire()` / `release()` 计数，
  * 最后一个 release 之后拆掉（状态保留最后的值）；会话关停时一并拆掉。不依赖 Node / Electron。
  */
-import { replicatedState, type MutableReplicatedState } from '@earendil-works/chord'
+import {
+  replicatedState,
+  type Context,
+  type MutableReplicatedState,
+  type ReplicatedStateDelivery
+} from '@earendil-works/chord'
 import {
   AssistantEntry,
   LiveDoc,
@@ -438,7 +443,7 @@ export abstract class ProjectorCore<V extends object> {
     const next = this.project(mount, this.runStateOf(mount.conversationId))
     // chord 接管初值不拷贝（「不可变的所有权」）：它从不改动接管的值，投影也从不改动交出去过的对象，所以
     // memo 之后接着复用它们在契约之内（挂载不为 P4-09b 多付一次整份拷贝）
-    const state = replicatedState(next)
+    const state = this.guardSubscribers(replicatedState(next))
     this.stateRef = state
     this.applied = { view: next, root: state.value }
     this.listen(mount)
@@ -552,7 +557,41 @@ export abstract class ProjectorCore<V extends object> {
     if (completed || state.value !== before) this.applied = { view: next, root: state.value }
   }
 
-  /** 状态写入：下游监听器抛错（chord 收集后重抛）只记日志，状态本身已经更新（PIN-03 / PIN-12） */
+  /**
+   * 投影状态的监听器抛错（同步抛或 Promise 拒绝）在这里接住、只记日志（PIN-03 / PIN-12）：chord 1.2 起可变
+   * 状态不再把监听器的错误重抛给写入方，而是在微任务里重抛 —— 不接住，主进程里就是一个未捕获异常。
+   * 换的是这份状态自己的 `subscribe`（不另包一层）：每个句柄交出的仍是同一个对象。
+   */
+  private guardSubscribers(state: MutableReplicatedState<V>): MutableReplicatedState<V> {
+    const warn = (error: unknown): void =>
+      this.host.logger.warn(
+        `session ${this.host.sessionId}: projector listener failed: ${errorText(error)}`
+      )
+    const subscribe = state.subscribe.bind(state)
+    const guarded = (
+      listener: (value: V, context: Context, delivery: ReplicatedStateDelivery) => unknown
+    ): (() => void) =>
+      subscribe((value, context, delivery) => {
+        try {
+          const result = listener(value, context, delivery)
+          if (result instanceof Promise) return result.then(undefined, warn)
+        } catch (error) {
+          warn(error)
+        }
+        return undefined
+      })
+    Object.defineProperty(state, 'subscribe', {
+      value: guarded,
+      configurable: true,
+      writable: true
+    })
+    return state
+  }
+
+  /**
+   * 状态写入：对齐本身抛错时 chord 整个放弃（根值没换），只记日志。下游监听器的错误由 `guardedState`
+   * 接住（chord 1.2 起它们不再重抛给写入方）
+   */
   private guard(write: () => void): void {
     try {
       write()

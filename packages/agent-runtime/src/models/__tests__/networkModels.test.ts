@@ -622,7 +622,9 @@ describe('E — failures before any event', () => {
           },
           stopReason: 'error',
           errorMessage: 'Connection error. (UND_ERR_HEADERS_TIMEOUT)',
-          timestamp: expect.any(Number)
+          timestamp: expect.any(Number),
+          // pi-ai 1.1：AssistantMessageEventStream 给最终消息记上耗时（pi 自己的 setup 错误同样带它）
+          durationMs: expect.any(Number)
         }
       }
     ])

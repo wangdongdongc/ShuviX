@@ -8,16 +8,18 @@
  *      (b) 回退在途时开始的 submitUser：都落定之后锁（有的话）在当前对话上、被放弃的分支上没有 run；
  *      (c) 补充：建锁在途时开始回退 —— 建锁被取消（发送当作被中止），之后没有锁在旧对话上
  *   21 投影换挂载：指针变化恰好一次 `[['r', value]]` 修订，值 = freshMount、conversationId = F；
- *      P3-04 的绑定订阅者没有 replaced / unavailable，门面还是同一个对象
+ *      视图服务端（pi 1.2 / chord2）的客户端句柄一直 live、可用性一直 available，值跟上 fork 的视图
  *   22 句柄已关：`{ok:false, reason:'closed'}`，从不重开
  */
 import { ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ServiceProviderUpdate } from '@earendil-works/chord'
-import type { SyncTarget } from '@shuvix/chat-protocol/sync'
+import { createHost, memoryLinkPair, type HandleStatus } from '@earendil-works/chord'
 import { describe, expect, it } from 'vitest'
-import { createSyncHub, type SyncSession, type SyncSessionClosedReason } from '../../sync/syncHub'
-import { TestClient } from '../../sync/__tests__/support/client'
-import { LoopbackTransport, settle } from '../../sync/__tests__/support/rig'
+import {
+  createViewServer,
+  type SyncSession,
+  type SyncSessionClosedReason
+} from '../../sync/viewServer'
+import { SessionViewContract, VIEW_SERVER_HOST } from '../../sync/viewContracts'
 import type { DurableSession } from '../durableSession'
 import { freshMount, opsOf, settleFrames } from '../projection/__tests__/projectorSupport'
 import { answer, held } from './support/faux'
@@ -181,7 +183,7 @@ describe('P3-10a · refusals, races and remount', () => {
   )
 
   it(
-    'P3-10a-21 projector remount: exactly one [["r", value]] revision for the pointer change, = freshMount on F; a SyncHub binding sees no replaced / unavailable and keeps its facade',
+    'P3-10a-21 projector remount: exactly one [["r", value]] revision for the pointer change, = freshMount on F; a view-server client handle stays live and available and catches up',
     async () => {
       const opened = new Set<(session: SyncSession) => void>()
       const closed = new Set<(sessionId: string, reason: SyncSessionClosedReason) => void>()
@@ -195,8 +197,7 @@ describe('P3-10a · refusals, races and remount', () => {
       })
       const session = await t.open('s1')
       const ids = await threeTurns(session, t)
-      const transport = new LoopbackTransport()
-      const hub = createSyncHub({
+      const server = createViewServer({
         host: {
           get sealed() {
             return t.host.sealed
@@ -210,14 +211,25 @@ describe('P3-10a · refusals, races and remount', () => {
             closed.add(listener)
             return () => closed.delete(listener)
           }
-        },
-        transport
+        }
       })
-      const target: SyncTarget = { kind: 'session', sessionId: 's1' }
-      const binding = new TestClient('A', hub, transport).bind(target)
-      await withTimeout(binding.ready(), 5000, 'binding ready')
-      const facade = binding.facade()
-      const view = facade.view
+      const [down, up] = memoryLinkPair()
+      server.accept(down, { kind: 'window', webContentsId: 1 })
+      const client = createHost({
+        name: 'renderer',
+        kind: 'client',
+        upstream: up,
+        onError: () => {}
+      })
+      const handle = client.get(SessionViewContract, { sessionId: 's1' }, { at: VIEW_SERVER_HOST })
+      const availability: unknown[] = []
+      const stopAvailability = handle.availability.subscribe((value) => availability.push(value))
+      const stopView = handle.view.subscribe(() => {})
+      await withTimeout(handle.ready, 5000, 'handle ready')
+      await waitFor(() => handle.view.value !== undefined, 3000, 'snapshot')
+      // 活了之后的每一次状态变化（不该有）
+      const statuses: HandleStatus[] = []
+      handle.onStatus((status) => statuses.push(status))
 
       const proj = await session.projector()
       const h = proj.acquire()
@@ -225,7 +237,6 @@ describe('P3-10a · refusals, races and remount', () => {
       const F = forkedId(await session.rollbackTo(ids.u2))
       await waitFor(() => h.state.value.conversationId === F, 3000, 'remounted')
       await settleFrames()
-      await settle()
       const replaced = ops.revisions.filter((revision) => revision.ops.some((op) => op[0] === 'r'))
       expect(replaced).toHaveLength(1)
       expect(replaced[0]!.ops).toEqual([['r', replaced[0]!.value]])
@@ -235,16 +246,23 @@ describe('P3-10a · refusals, races and remount', () => {
       // 挂着且追上了的投影：viewSnapshot() 交它的值（P3-07），也就是 fork 的视图
       expect(await session.viewSnapshot()).toStrictEqual(h.state.value)
 
-      const types = binding.updates.map((update: ServiceProviderUpdate) => update.type)
-      expect(types).not.toContain('replaced')
-      expect(types).not.toContain('unavailable')
-      expect(binding.facade()).toBe(facade)
-      expect(binding.facade().view).toBe(view)
-      expect(binding.value()).toEqual(h.state.value)
+      // 客户端的句柄一直活着（没有 gone / loading），可用性一直 available，值跟上了 fork 的视图
+      await waitFor(
+        () => (handle.view.value as { conversationId?: unknown } | undefined)?.conversationId === F,
+        3000,
+        'client caught up'
+      )
+      expect(statuses).toEqual([])
+      expect(handle.status).toBe('live')
+      expect(availability.filter((value) => value !== undefined)).toEqual(['available'])
+      expect(handle.view.value).toEqual(h.state.value)
       ops.stop()
       h.release()
-      await binding.dispose()
-      hub.dispose()
+      stopView()
+      stopAvailability()
+      handle.release()
+      await client.close()
+      await server.dispose()
     },
     TIMEOUT
   )

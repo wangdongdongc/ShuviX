@@ -9,13 +9,11 @@
  *  - 面板追问（`agent.subAgentPrompt`）答 `{success:true}`，假提供商收到一条带 A 正文、最后一条用户消息是
  *    `again` 的请求 —— 追问真的落进了 A 的子对话；
  *  - 事件收集器录到 `sub_session_end{sessionId:A}`；
- *  - 一个裸的 `window.api.sync` agent 订阅交回的快照里有这次回答（重启之前它会以 service_not_found 拒绝）。
+ *  - 视图同步探针的 agent 订阅交回的快照里有这次回答（根会话打开之前它以 `not_found` 失败）。
  *
  * 面板上不凭空长出 A 的任务行（C2：重建只服务路由与视图），这里不断言面板。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createServiceSubscribeCall } from '@earendil-works/chord'
-import { CHAT_VIEW_SERVICE_ID } from '@shuvix/chat-protocol/sync'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
@@ -114,20 +112,16 @@ describe('派生 agent 熬过重启（P3-14-23）', () => {
     const main = app.main
     await waitRendererReady(main)
 
-    // 根会话还没打开：agent 目标认不出（PIN-12）
-    // 在页面里直接调。主进程的信封是 {ok:false, error:{code:'service_not_found'}}；预载层以纯对象
-    // {code, message} 拒绝（P3-15：Error 过 contextBridge 只剩 message），所以 code 到得了渲染端 ——
-    // syncClient 再把它还原成带 `.code` 的 Error（单测 P3-15-CB1）
-    const call = createServiceSubscribeCall('e2e-early', CHAT_VIEW_SERVICE_ID, 'singleton')
-    const before = await main.eval<{ code?: string; message: string } | 'subscribed'>(
-      `window.api.sync
-        .invoke(${JSON.stringify({ kind: 'agent', agentId: A })}, ${JSON.stringify(call)})
-        .then(() => 'subscribed', (error) => ({ code: error?.code, message: String(error?.message ?? error) }))`
+    // 根会话还没打开：agent 目标认不出（PIN-12）—— 视图同步以 not_found 失败（chord 的 unavailable/not_found，
+    // 客户端映射成 SYNC_NOT_FOUND），消息原样带着「Unknown agent」
+    const early = syncProbe(main)
+    const failure = await early.agentViewOf(A).then(
+      () => 'subscribed' as const,
+      (error: Error & { code?: string }) => ({ code: error.code, message: error.message })
     )
-    expect(before).not.toBe('subscribed')
-    const failure = before as { code?: string; message: string }
-    expect(failure.code).toBe('service_not_found')
-    expect(failure.message).toContain(`Unknown agent ${A}`)
+    expect(failure).not.toBe('subscribed')
+    expect((failure as { code?: string }).code).toBe('not_found')
+    expect((failure as { message: string }).message).toContain(`Unknown agent ${A}`)
 
     // 侧栏打开根会话 → peek → 重建
     const sidebar = sidebarPane(main)

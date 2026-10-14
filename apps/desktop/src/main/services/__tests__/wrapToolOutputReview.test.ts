@@ -131,7 +131,7 @@ function makeTool(details?: unknown): {
   execute: ReturnType<typeof vi.fn>
 } {
   const execute = vi.fn(async () => ({
-    content: [{ type: 'text' as const, text: 'ran' }],
+    output: [{ type: 'text' as const, text: 'ran' }],
     details
   }))
   const tool = {
@@ -283,7 +283,7 @@ describe('wrapToolOutput — 审查放行的调用在结果上留「已审查」
     // 第一次执行（task 61）扣住，第二次（task 62）立刻跑完
     execute.mockImplementationOnce(async () => {
       await gate.promise
-      return { content: [{ type: 'text' as const, text: 'ran' }], details: undefined }
+      return { output: [{ type: 'text' as const, text: 'ran' }], details: undefined }
     })
     const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, security })
 

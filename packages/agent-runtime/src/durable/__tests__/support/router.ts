@@ -321,11 +321,11 @@ export function contractTool(
           resultContract: options.contract
         })
         options.outcomes.push(outcome)
-        return { content: [{ type: 'text', text: outcome.result }] }
+        return { output: [{ type: 'text', text: outcome.result }] }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         options.outcomes.push({ rejected: message })
-        return { content: [{ type: 'text', text: message }] }
+        return { output: [{ type: 'text', text: message }] }
       }
     }
   })

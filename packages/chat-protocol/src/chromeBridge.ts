@@ -25,8 +25,11 @@
  * 2（P3-09）：侧边栏的会话内容改走视图同步 —— 白名单多了 `sync.invoke` / `agent.continue` /
  * `agent.withdrawQueued`、少了「下一轮」那一档，桌面多推一种事件 `sync.frame`。版本 1 的扩展收不到帧，
  * 侧边栏会一片空白，所以宁可让它提示更新。
+ *
+ * 3（pi 1.2 / chord2）：视图同步换成 chord2 的链路 —— 每个侧边栏一条链路，帧是两个方向的桥事件
+ * `sync.link {panelId, link, frame}`；白名单里的 `sync.invoke` 与桌面事件 `sync.frame` 都没了。
  */
-export const CHROME_BRIDGE_PROTOCOL = 2
+export const CHROME_BRIDGE_PROTOCOL = 3
 
 /** 原生消息宿主名（宿主清单文件名 `<name>.json`，扩展 `connectNative(name)`） */
 export const CHROME_BRIDGE_HOST_NAME = 'com.shuvix.chrome_bridge'
@@ -270,6 +273,34 @@ export interface ExtensionEventMap {
   'debugger.detached': { tabId: number; reason: string }
   /** 标签页关了 —— 挂在它上面的会话随之结束 */
   'tabs.removed': { tabId: number }
+  /**
+   * 视图同步链路上侧边栏发出的一帧（{@link SyncLinkEvent}）。侧边栏端口断开时 SW 替它在它用过的每条链路上
+   * 补一帧 chord 的 `bye`，桌面据此收掉那条链路（订阅、钉住随之松开）
+   */
+  'sync.link': SyncLinkEvent
+}
+
+/**
+ * 视图同步链路的一帧（两个方向同形）。一个侧边栏一条（或先后几条）链路：`panelId` 是侧边栏端口的名字
+ * `panel:<tabId>`（SW 据它把桌面的帧送回那个侧边栏），`link` 是侧边栏为这条链路现取的 id（重连换新的，
+ * 旧链路迟到的帧因此落不进新链路），`frame` 是 chord 的帧 —— SW 不解析它。
+ */
+export interface SyncLinkEvent {
+  panelId: string
+  link: string
+  frame: unknown
+}
+
+/** 侧边栏端口名的前缀（后接标签页 id）—— `SyncLinkEvent.panelId` 也是这个形状 */
+export const CHROME_PANEL_ID_PREFIX = 'panel:'
+
+/** `panel:<tabId>` → tabId；不是这个形状 → undefined */
+export function chromePanelTabId(panelId: unknown): number | undefined {
+  if (typeof panelId !== 'string' || !panelId.startsWith(CHROME_PANEL_ID_PREFIX)) return undefined
+  const rest = panelId.slice(CHROME_PANEL_ID_PREFIX.length)
+  if (!/^[0-9]+$/.test(rest)) return undefined
+  const tabId = Number(rest)
+  return Number.isSafeInteger(tabId) ? tabId : undefined
 }
 
 // ─────────────────────────── 侧边栏 → 桌面的请求 ───────────────────────────
@@ -299,13 +330,7 @@ export const CHROME_PANEL_CHANNEL_PATHS = [
   'tools.list',
   'tools.presentations',
   'tools.definitions',
-  'shuvixMd.validate',
-  /**
-   * 视图同步（P3-09）：`args = [target, call]`，一次 chord 服务调用。目标必须是这条连接自己的标签页会话
-   * （派生 agent 目标按它的根会话核对）；回一个 `SyncInvokeResult` 信封 —— 桥的应答错误只是一段文本，
-   * chord 的错误码（`service_not_found` …）要装在信封里才带得过去
-   */
-  'sync.invoke'
+  'shuvixMd.validate'
 ] as const
 
 export type ChromePanelChannelPath = (typeof CHROME_PANEL_CHANNEL_PATHS)[number]
@@ -399,10 +424,10 @@ export interface DesktopEventMap {
   /** 一条应用事件（AppEvent），已按会话归属过滤 */
   'app.event': { event: unknown }
   /**
-   * 视图同步的一帧（`SyncFrame`，P3-09）。`sessionId` 是帧所属的会话 —— 会话目标就是它本身，派生 agent
-   * 目标是 agent 的根会话 —— SW 按它把帧送给挂着这条会话的侧边栏（帧自己的目标里没有会话 id 可认）
+   * 视图同步链路上桌面发出的一帧（{@link SyncLinkEvent}）：SW 按 `panelId` 送给那个侧边栏。超过原生消息
+   * 上限的照常由桥分片（`splitBridgeMessage`）
    */
-  'sync.frame': { sessionId: string; frame: unknown }
+  'sync.link': SyncLinkEvent
 }
 
 // ─────────────────────────── 设置页看到的状态 ───────────────────────────

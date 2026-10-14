@@ -1,20 +1,27 @@
 /**
- * 视图同步的桌面接线（P3-05，docs/pi-durable/p3-050710a-test-design.md）—— 单元部分：
+ * 视图同步的桌面接线（P3-05，docs/pi-durable/p3-050710a-test-design.md）—— 单元部分（pi 1.2 换成 chord2 之后
+ * 还适用的那些；链路与服务端的用例由下一轮测试设计补上）：
  *
  *   P3-05-13 扇出派发（按登记次序、同一个对象；关闭原因原样）
  *   P3-05-14 注销与隔离（重复注销无事、抛错的监听器只记一笔、派发途中新登记的这一轮不调）
- *   P3-05-16 hub 的宿主适配（sealed 现读、读它不建宿主；peek 交回宿主 peek 的同一个实例；类型层
+ *   P3-05-16 服务端的宿主适配（sealed 现读、读它不建宿主；peek 交回宿主 peek 的同一个实例；类型层
  *            DurableSession 满足 SyncSession）
- *   P3-05-19 legacyView 矩阵（行 / 存储类型 / 读不出来，PIN-05）—— 真文件的那一半在 syncWiringIntegration
- *   P3-05-21 resolveAgent 经路由（原样交回；认不出 → 订阅经 IPC 信封以 service_not_found 拒绝；会话目标从不
- *            问路由）—— 重启之后的那一半在 syncWiringIntegration
+ *   P3-05-19 legacyView 矩阵（行 / 存储类型 / 读不出来，PIN-05）
+ *   P3-05-21 resolveAgent 经路由（原样交回；认不出 → undefined）
+ *   VA-1     主体核对：window 什么都能看；没登记的种类一律不让看；登记 / 注销只摘自己的
+ *   SW-1     服务端单例：懒建、peekSyncHub 不建、resetSyncHubForTests 关掉旧的（之后它拒收链路）、下一次是新的
+ *   SW-2     异步核对：判定原样交回（同一个 promise）；被拒的 promise 也原样往外传（不改成 false ——
+ *            服务端把被拒的判定当作 forbidden，那一半在 viewServer 的用例里）
  *
  * 会话宿主模块整个换成假的（FakeSessionHost；记 getSessionHost 的调用），行表与旧格式读取器换成可控的替身。
  */
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
-import { createServiceSubscribeCall, type JsonValue } from '@earendil-works/chord'
-import type { DurableSession, SyncAgentRef, SyncSession } from '@shuvix/agent-runtime'
-import { CHAT_VIEW_SERVICE_ID } from '@shuvix/chat-protocol/sync'
+import {
+  FrameLink,
+  type DurableSession,
+  type SyncAgentRef,
+  type SyncSession
+} from '@shuvix/agent-runtime'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 const holder = vi.hoisted(() => ({
@@ -59,22 +66,26 @@ vi.mock('../../../logger', () => ({
 }))
 
 import {
+  authorizeView,
   createSessionHookFanout,
   createSyncHubHost,
   getSyncHub,
   legacyViewOf,
   peekSyncHub,
+  registerViewAuthorizer,
   resetSyncHubForTests,
   resolveAgentOf,
   sessionHostHooks
 } from '../syncWiring'
-// eslint-disable-next-line boundaries/dependencies -- 同步通道的两半（frontend/sync 的 hub 与 ipc 的 sync:invoke 处理器）在一个用例里接起来
-import { registerSyncHandlers } from '../../../ipc/syncHandlers'
 import { FakeSessionHost } from '../../../services/__tests__/support/fakeSessionHost'
-import { FakeIpcMain, FakeWebContents, settle } from './support/ipcRig'
-import { FakeSyncSession } from './support/fakeSync'
 
-const session = (id: string): SyncSession => new FakeSyncSession(id)
+const session = (id: string): SyncSession => ({
+  sessionId: id,
+  projector: async () => {
+    throw new Error('not used')
+  },
+  agentProjector: async () => undefined
+})
 
 beforeEach(() => {
   resetSyncHubForTests()
@@ -254,34 +265,98 @@ describe('P3-05-21 resolveAgent 经路由', () => {
     expect(holder.locate).toHaveBeenCalledWith('a1')
   })
 
-  it('P3-05-21 认不出的 agentId → undefined；订阅经 IPC 信封以 service_not_found 拒绝；会话目标从不问路由', async () => {
+  it('P3-05-21 认不出的 agentId → undefined', async () => {
     holder.locate.mockReturnValue(undefined)
     expect(await resolveAgentOf('ghost')).toBeUndefined()
-    holder.locate.mockClear()
+  })
+})
 
-    const ipc = new FakeIpcMain()
-    const wc = new FakeWebContents(7)
-    registerSyncHandlers(ipc, { lookup: (id) => (id === 7 ? wc : undefined) })
-    const sub = (id: string): JsonValue =>
-      createServiceSubscribeCall(id, CHAT_VIEW_SERVICE_ID, 'singleton') as unknown as JsonValue
+describe('VA-1 主体核对', () => {
+  const target = { kind: 'session', sessionId: 's1' } as const
 
-    const reply = await ipc.invokeAs(
-      wc,
-      'sync:invoke',
-      { kind: 'agent', agentId: 'ghost' },
-      sub('a')
-    )
-    expect(reply).toMatchObject({ ok: false, error: { code: 'service_not_found' } })
-    expect(holder.locate).toHaveBeenCalledTimes(1)
-    expect(peekSyncHub()!.hasSubscribers('s1')).toBe(false)
+  it('VA-1 window 什么都能看；没登记的种类一律不让看', () => {
+    expect(authorizeView({ kind: 'window', webContentsId: 1 }, target)).toBe(true)
+    expect(authorizeView({ kind: 'stranger' }, target)).toBe(false)
+  })
 
-    // 会话目标：从不问路由（hub peek 宿主；没有存储 → none 视图）
-    holder.locate.mockClear()
-    holder.rows.set('s1', { id: 's1', storageKind: 'durable-sqlite-1' })
-    const ok = await ipc.invokeAs(wc, 'sync:invoke', { kind: 'session', sessionId: 's1' }, sub('b'))
-    expect(ok).toMatchObject({ ok: true })
-    await settle()
-    expect(holder.locate).not.toHaveBeenCalled()
-    expect(getSyncHub().hasSubscribers('s1')).toBe(true)
+  it('VA-1 登记一种主体的核对；注销只摘自己登记的那一个；核对抛错 = 不让看', () => {
+    const first = vi.fn(() => true)
+    const offFirst = registerViewAuthorizer('probe', first)
+    expect(authorizeView({ kind: 'probe' }, target)).toBe(true)
+    expect(first).toHaveBeenCalledWith({ kind: 'probe' }, target)
+    const second = vi.fn(() => {
+      throw new Error('boom')
+    })
+    const offSecond = registerViewAuthorizer('probe', second)
+    offFirst()
+    expect(authorizeView({ kind: 'probe' }, target)).toBe(false)
+    offSecond()
+    expect(authorizeView({ kind: 'probe' }, target)).toBe(false)
+  })
+})
+
+describe('SW-1 服务端单例', () => {
+  it('SW-1 getSyncHub 懒建同一个实例；peekSyncHub 之前 undefined、之后同一个；reset 关掉旧的，下一次是新的', () => {
+    expect(peekSyncHub()).toBeUndefined()
+    const first = getSyncHub()
+    expect(getSyncHub()).toBe(first)
+    expect(peekSyncHub()).toBe(first)
+    // 建服务端不建会话宿主（宿主在第一次 peek 时才建）
+    expect(holder.getSessionHost).not.toHaveBeenCalled()
+
+    const dispose = vi.spyOn(first, 'dispose')
+    resetSyncHubForTests()
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(peekSyncHub()).toBeUndefined()
+    // 旧的真的关了：新链路一来就收到 bye
+    const sent: unknown[] = []
+    const link = new FrameLink((frame) => void sent.push(frame))
+    first.accept(link, { kind: 'window', webContentsId: 1 })
+    expect(link.closed).toBe(true)
+    expect(sent).toEqual([{ t: 'bye', reason: 'view server disposed' }])
+
+    const second = getSyncHub()
+    expect(second).not.toBe(first)
+    expect(peekSyncHub()).toBe(second)
+    expect(getSyncHub()).toBe(second)
+  })
+
+  it('SW-1 没建过时 reset 无事', () => {
+    expect(peekSyncHub()).toBeUndefined()
+    expect(() => resetSyncHubForTests()).not.toThrow()
+    expect(peekSyncHub()).toBeUndefined()
+  })
+})
+
+describe('SW-2 异步核对', () => {
+  const target = { kind: 'session', sessionId: 's1' } as const
+
+  it('SW-2 异步判定原样交回：同一个 promise，true / false 照旧，主体与目标原样交给核对', async () => {
+    const yes = Promise.resolve(true)
+    const allow = vi.fn(() => yes)
+    const offYes = registerViewAuthorizer('async-yes', allow)
+    const verdict = authorizeView({ kind: 'async-yes', id: 1 }, target)
+    expect(verdict).toBe(yes)
+    await expect(verdict).resolves.toBe(true)
+    expect(allow).toHaveBeenCalledWith({ kind: 'async-yes', id: 1 }, target)
+    offYes()
+
+    const no = Promise.resolve(false)
+    const offNo = registerViewAuthorizer('async-no', () => no)
+    const refused = authorizeView({ kind: 'async-no' }, target)
+    expect(refused).toBe(no)
+    await expect(refused).resolves.toBe(false)
+    offNo()
+  })
+
+  it('SW-2 被拒的 promise 原样往外传（authorizeView 不把它改成 false）', async () => {
+    const error = new Error('lookup failed')
+    const rejected = Promise.reject(error)
+    rejected.catch(() => undefined)
+    const off = registerViewAuthorizer('async-broken', () => rejected)
+    const verdict = authorizeView({ kind: 'async-broken' }, target)
+    expect(verdict).toBe(rejected)
+    await expect(verdict).rejects.toBe(error)
+    off()
   })
 })

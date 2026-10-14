@@ -62,7 +62,7 @@ export function errorMessageOf(error: unknown): string {
  * 不带 details，也不带诊断（诊断会渲染成 `<harness>` 段，正是要避开的那段文字）。
  */
 export function toolErrorResult(error: unknown): ToolExecutionResult {
-  return { isError: true, content: [{ type: 'text', text: errorMessageOf(error) }] }
+  return { isError: true, output: [{ type: 'text', text: errorMessageOf(error) }] }
 }
 
 /**
@@ -95,7 +95,7 @@ export function strictJsonDetails(details: unknown, toolName: string): JsonValue
 export function toExecutionResult(result: ToolResult, toolName: string): ToolExecutionResult {
   const details = strictJsonDetails(result.details, toolName)
   return {
-    content: result.content,
+    output: result.content,
     ...(details === undefined ? {} : { details }),
     ...(result.isError === undefined ? {} : { isError: result.isError }),
     ...(result.control === undefined ? {} : { control: result.control }),

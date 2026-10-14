@@ -27,8 +27,10 @@ import {
   isBrowserWindowPage,
   isMarkdownWindowPage,
   isFilePreviewWindowPage,
+  isPinnedChatPage,
   markdownWindowOf,
   filePreviewWindowOf,
+  pinnedChatSessionOf,
   setTimeoutDiagnostic,
   listTargets,
   sleep,
@@ -109,6 +111,13 @@ export interface E2EAppBase {
    * （不等待，配合 `until`）。调用方用完自己 close()。
    */
   connectFilePreviewWindow(pathSubstr: string): Promise<CdpClient | null>
+  /**
+   * 连上某条会话的悬浮聊天窗口（`window.api.pinChat.pin(sid)` 建出的 #pinned-chat?sessionId=…），等它的
+   * `window.api` 就绪；还没有这个窗口回 null（不等待，配合 `until`）。调用方用完自己 close()。
+   */
+  connectPinnedChatWindow(sessionId: string): Promise<CdpClient | null>
+  /** 此刻开着的悬浮聊天窗口的会话 id（不等待，配合 `until`） */
+  pinnedChatSessions(): Promise<string[]>
   /**
    * 此刻的主窗口页面（`window.api` 已就绪）；没有主窗口回 null（不等待，配合 `until`）。
    * 从 md 启动的实例，主窗口是之后才被建出来的（第二个实例 / Dock）—— 用它发现。
@@ -587,6 +596,18 @@ export async function launchApp(
       async connectFilePreviewWindow(pathSubstr) {
         const hit = (await filePreviewWindows()).find((w) => w.path.includes(pathSubstr))
         return hit ? connectReady(hit.webSocketDebuggerUrl) : null
+      },
+      async connectPinnedChatWindow(sessionId) {
+        const hit = (await listTargets(port).catch(() => [] as CdpTarget[])).find(
+          (t) => isPinnedChatPage(t, appUrl) && pinnedChatSessionOf(t) === sessionId
+        )
+        return hit ? connectReady(hit.webSocketDebuggerUrl) : null
+      },
+      async pinnedChatSessions() {
+        return (await listTargets(port).catch(() => [] as CdpTarget[]))
+          .filter((t) => isPinnedChatPage(t, appUrl))
+          .map((t) => pinnedChatSessionOf(t))
+          .filter((sid): sid is string => sid !== null)
       },
       async mainWindow() {
         const mt = (await listTargets(port).catch(() => [] as CdpTarget[])).find((t) =>

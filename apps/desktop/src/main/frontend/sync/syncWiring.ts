@@ -1,41 +1,45 @@
 /**
- * 视图同步的桌面接线（phase 3，P3-05；plan §C）—— agent-runtime 的 SyncHub 接到桌面上：
+ * 视图同步的桌面接线（phase 3，P3-05；pi 1.2 起换成 chord2 的视图服务端）—— agent-runtime 的 `viewServer` 接到桌面上：
  *
  *  - **钩子扇出**（`sessionHostHooks`）：SessionHost 的 `onSessionOpened` / `onSessionClosed` 是单个回调
- *    （`SessionHostDeps`，`buildSessionHostDeps` 接 `opened` / `closed`），hub 要的是「登记监听器、返回注销」。
+ *    （`SessionHostDeps`，`buildSessionHostDeps` 接 `opened` / `closed`），服务端要的是「登记监听器、返回注销」。
  *    扇出按登记次序逐个调；一个监听器抛错只记日志、不拦后面的；派发途中新登记的这一轮不调。
  *  - **宿主适配**（`createSyncHubHost`）：`sealed` 现读**已有的**单例宿主（没建过 → false，读它不建）；
- *    `peek` 交给 `getSessionHost().peek`（DurableSession 直接满足 hub 的 `SyncSession`）。
+ *    `peek` 交给 `getSessionHost().peek`（DurableSession 直接满足 `SyncSession`）。
  *  - **接缝**：`legacyView` = 旧格式（`harness-v3-jsonl`）行的冻结投影（`readLegacyTranscript`；读不出来 →
  *    空消息，仍是只读的旧格式视图，PIN-05）；`resolveAgent` = 派生 agent 路由的 `locate`（重启之后路由
- *    索引在根会话打开时重建，P3-14；根会话还没在这个进程里打开过 → 认不出，`service_not_found`，P3-14 PIN-12）。
- *  - **传输**（`syncTransport`）：按客户端 id 前缀路由；IPC 那条由 `registerSyncHandlers` 注册时挂上
- *    （它手里有 Electron 的 `webContents`），Chrome 那条 P3-09 挂。
- *  - **钉住 / 删除**：`peekSyncHub()` 只读已建的 hub —— 宿主的 `isPinned` 再数 `hasSubscribers`，
+ *    索引在根会话打开时重建，P3-14；根会话还没在这个进程里打开过 → 认不出 → 「找不到」，P3-14 PIN-12）。
+ *  - **主体核对**（`registerViewAuthorizer`）：链路的主体按 `kind` 找核对函数 —— 桌面窗口（`window`）什么都能看；
+ *    Chrome 侧边栏（`chrome`）由 Chrome 前端登记（只能看它自己浏览器这一轮的标签页会话）；没登记的种类一律不让看。
+ *  - **链路**：桌面窗口的 IPC 链路由 `ipc/syncHandlers` 接（它手里有 Electron 的 `webContents`），Chrome 侧边栏的
+ *    链路由 `frontend/chrome/chromeLinks` 接；两者都只调 `getSyncHub().accept(link, principal)`。
+ *  - **钉住 / 删除**：`peekSyncHub()` 只读已建的服务端 —— 宿主的 `isPinned` 再数 `hasSubscribers`，
  *    sessionService.delete 在关停运行时之后、删行之前调 `deleteSession`（清空从不调，PIN-07）。
  *
- * **懒建**（PIN-12）：import 本模块只建扇出与路由表（两张空表）；hub 在第一次 `getSyncHub()`（第一次
- * `sync:invoke`）才建，宿主在 hub 第一次 peek 时才建。
+ * **懒建**（PIN-12）：import 本模块只建扇出；服务端在第一次 `getSyncHub()`（第一条链路的第一帧）才建，宿主在
+ * 服务端第一次 peek 时才建。（名字沿用 phase 3 的 `SyncHub`：调用方 —— 会话宿主、会话服务与它们的单测 —— 只用
+ * `hasSubscribers` / `deleteSession`，两者语义没变。）
  */
 import {
-  createSyncHub,
+  createViewServer,
   type DurableSession,
   type LegacyTranscript,
   type RuntimeLogger,
   type SessionHost,
-  type SyncHub,
   type SyncHubHost,
   type SyncSession,
-  type SyncSessionClosedReason
+  type SyncSessionClosedReason,
+  type ViewPrincipal,
+  type ViewServer
 } from '@shuvix/agent-runtime'
+import type { SyncTarget } from '@shuvix/chat-protocol/sync'
 import { createLogger } from '../../logger'
 import { getSessionHost, peekSessionHost } from '../../services/sessionHost'
 import { isLegacySession } from '../../services/legacySession'
 import { readLegacyTranscript } from '../../services/sessionStorage'
 import { forgetClosedSession, indexOpenedSession } from '../../services/sessionSignalSeams'
-import { createRoutingSyncTransport, type RoutingSyncTransport } from './ipcSyncTransport'
 
-const log = createLogger('SyncHub')
+const log = createLogger('ViewSync')
 
 const logger: RuntimeLogger = {
   info: (message) => log.info(message),
@@ -172,33 +176,66 @@ export async function resolveAgentOf(
   return agentManager.locate(agentId)
 }
 
-// ─── 传输与 hub ─────────────────────────────────────────
+// ─── 主体核对 ───────────────────────────────────────────
 
-/** 主进程唯一的路由传输（前缀 → 传输）；IPC 那条在 `registerSyncHandlers` 里挂 */
-export const syncTransport: RoutingSyncTransport = createRoutingSyncTransport({ logger })
+/** 某种链路主体的核对：这个主体能不能看这个目标（同步或异步） */
+export type ViewAuthorizer = (
+  principal: ViewPrincipal,
+  target: SyncTarget
+) => boolean | Promise<boolean>
 
-let hub: SyncHub | undefined
+/** 桌面窗口的主体：`{kind:'window', webContentsId}` —— 桌面窗口里的谁都能看任何会话（与 IPC 一致） */
+export const WINDOW_PRINCIPAL_KIND = 'window'
 
-/** 主进程唯一的 SyncHub（懒建：第一次同步调用才建） */
-export function getSyncHub(): SyncHub {
-  hub ??= createSyncHub({
+const authorizers = new Map<string, ViewAuthorizer>([[WINDOW_PRINCIPAL_KIND, () => true]])
+
+/** 登记一种主体的核对（同种再登记 = 替换）；返回注销（只摘自己登记的那一个） */
+export function registerViewAuthorizer(kind: string, authorizer: ViewAuthorizer): () => void {
+  authorizers.set(kind, authorizer)
+  return () => {
+    if (authorizers.get(kind) === authorizer) authorizers.delete(kind)
+  }
+}
+
+/** 服务端的 `authorize`：按主体的 kind 找核对；没登记的种类一律不让看 */
+export function authorizeView(
+  principal: ViewPrincipal,
+  target: SyncTarget
+): boolean | Promise<boolean> {
+  const authorizer = authorizers.get(principal.kind)
+  if (authorizer === undefined) return false
+  try {
+    return authorizer(principal, target)
+  } catch (error) {
+    log.warn(`view authorizer ${principal.kind} failed: ${errorText(error)}`)
+    return false
+  }
+}
+
+// ─── 服务端 ─────────────────────────────────────────────
+
+let server: ViewServer | undefined
+
+/** 主进程唯一的视图服务端（懒建：第一条链路的第一帧才建） */
+export function getSyncHub(): ViewServer {
+  server ??= createViewServer({
     host: createSyncHubHost(),
-    transport: syncTransport,
     legacyView: legacyViewOf,
     resolveAgent: resolveAgentOf,
+    authorize: authorizeView,
     logger
   })
-  return hub
+  return server
 }
 
-/** 已建的 hub（不建）—— 钉住与删除只读它：没有 hub 就没有订阅 */
-export function peekSyncHub(): SyncHub | undefined {
-  return hub
+/** 已建的服务端（不建）—— 钉住与删除只读它：没有服务端就没有人在看 */
+export function peekSyncHub(): ViewServer | undefined {
+  return server
 }
 
-/** 丢掉单例（先 dispose）；下一次 `getSyncHub()` 新建 —— 仅供单测 */
+/** 丢掉单例（先关掉它，不等）；下一次 `getSyncHub()` 新建 —— 仅供单测 */
 export function resetSyncHubForTests(): void {
-  const previous = hub
-  hub = undefined
-  previous?.dispose()
+  const previous = server
+  server = undefined
+  void previous?.dispose().catch(() => undefined)
 }

@@ -1,9 +1,9 @@
 /**
  * P3-03 用例的共用夹具（对着设计稿的约定）：
  *
- *  - `opsOf(state)`：把复制状态包进一个一次性的 `RemoteServiceProvider`（服务 `t`，`{view: state}`）并订阅
- *    —— 唯一能拿到**精确操作流**的通道（公共 subscribe 会合并）。记下快照、每次修订的 `{sequence, ops}`
- *    与那一刻的值；`replay()` 从快照起用 chord 的 `applyImmutable` 逐条重放（P3-03-54）。
+ *  - `opsOf(state)`：**精确操作流**（chord 1.2 起由影子 tracker 重算，见 `opStream.ts`；公共 subscribe 只给值）。
+ *    记下快照、每次修订的 `{sequence, ops}` 与那一刻的值；`replay()` 从快照起用 chord 的 `applyImmutable`
+ *    逐条重放（P3-03-54）。
  *  - `attachOracle(session, state)`：身份预言（PIN-10 修订版）—— 在投影**之后**挂一个独立的 watch，每一帧
  *    记下帧值、那一刻的 `runState` / 询问与投影的状态值；`verify()` 事后用纯投影 + `resolveDisplayItems`
  *    （P3-02 的共享解析）+ 独立的排队侧车查询逐帧重算并深比较。投影换挂载（`["r"]`）时预言跟着换。
@@ -13,13 +13,7 @@
  *  - `liveCommit(session, mutate)`：直接写当前对话的 `pi.live`（精确控制流式中间态的用例用）。
  *  - 测试工具：`readTool`、`streamTool`（逐段 `api.output`）、`spillTool`（带落盘诊断的结果）。
  */
-import {
-  RemoteServiceProvider,
-  defineService,
-  type MutableReplicatedState,
-  type ReplicatedState,
-  type Service
-} from '@earendil-works/chord'
+import type { MutableReplicatedState, ReplicatedState } from '@earendil-works/chord'
 import { applyImmutable, type Op } from '@earendil-works/chord/delta'
 import { Type } from '@earendil-works/pi-ai'
 import {
@@ -42,6 +36,7 @@ import { DisplayDoc } from '../../docs'
 import type { DurableSession } from '../../durableSession'
 import type { TestHost } from '../../__tests__/support/host'
 import { sleep } from '../../__tests__/support/wait'
+import { tapOps } from './opStream'
 import { AgentProjectorImpl } from '../agentProjector'
 import { displayItemOf, resolveDisplayItems, type DisplayItem } from '../display'
 import { projectSessionView } from '../project'
@@ -55,11 +50,6 @@ import {
 } from '../sessionProjector'
 
 // ─────────────────────────── 操作流 ───────────────────────────
-
-/** 一次性的视图服务 `t`（`{view: state}`） */
-function viewService<V>(): Service<{ view: ReplicatedState<V> }> {
-  return (defineService as (id: string) => Service<{ view: ReplicatedState<V> }>)('t')
-}
 
 export interface Revision<V> {
   readonly sequence: number
@@ -82,29 +72,21 @@ export function opsOf<V extends object>(
   state: ReplicatedState<V> | MutableReplicatedState<V>,
   onRevision?: (revision: Revision<V>) => void
 ): OpsRecorder<V> {
-  const service = viewService<V>()
-  const provider = new RemoteServiceProvider([{ id: 't' }])
-  provider.provide(service, { view: state as ReplicatedState<V> } as never)
   const revisions: Revision<V>[] = []
-  const subscription = provider.subscribe('t', 'singleton', (update) => {
-    if (update.type === 'state') {
-      const revision = { sequence: update.sequence, ops: update.ops, value: state.value as V }
-      revisions.push(revision)
-      onRevision?.(revision)
-    } else {
-      throw new Error(`unexpected provider update ${update.type}`)
-    }
+  const tap = tapOps(state as MutableReplicatedState<V>, (revision) => {
+    revisions.push(revision)
+    onRevision?.(revision)
   })
-  const member = subscription.snapshot.instances[0]!.members[0]!
-  if (member.kind !== 'state') throw new Error('expected a state member')
-  const root = member.ops[0] as Op
-  const snapshot = { sequence: member.sequence, value: (root as ['r', V])[1] }
-  subscription.activate()
+  const { snapshot } = tap
+  const noDivergence = (): void => {
+    expect(tap.problems, 'shadow tracker (opStream.ts)').toEqual([])
+  }
   return {
     snapshot,
     revisions,
     allOps: () => revisions.flatMap((revision, index) => revision.ops.map((op) => ({ index, op }))),
     replay: () => {
+      noDivergence()
       let value: V = snapshot.value
       for (const [index, revision] of revisions.entries()) {
         value = applyImmutable(value, revision.ops)
@@ -112,30 +94,23 @@ export function opsOf<V extends object>(
       }
     },
     stop: () => {
-      void subscription.close()
-      provider.dispose()
+      tap.stop()
+      noDivergence()
     }
   }
 }
 
 /**
- * 一个每次更新都抛错的服务订阅（SyncHub 的发送同步抛错的角色，PIN-03 / PIN-12）：chord 把它收集起来
- * 重抛给调用 `state.change` 的人 —— 也就是投影。返回退订函数。
+ * 一个每次更新都抛错的下游订阅（SyncHub 的发送同步抛错的角色，PIN-03 / PIN-12）。chord 1.0 把它收集起来
+ * 重抛给调用 `state.change` 的人 —— 也就是投影；chord 1.2 不再抛给写入方，而是自己在微任务里重抛（每个订阅
+ * 隔离，投递照常继续）。返回退订函数。
  */
 export function throwingSubscriber<V extends object>(
   state: ReplicatedState<V> | MutableReplicatedState<V>
 ): () => void {
-  const service = viewService<V>()
-  const provider = new RemoteServiceProvider([{ id: 't' }])
-  provider.provide(service, { view: state as ReplicatedState<V> } as never)
-  const subscription = provider.subscribe('t', 'singleton', () => {
-    throw new Error('downstream boom')
+  return state.subscribe((_value, _context, delivery) => {
+    if (delivery.kind === 'update') throw new Error('downstream boom')
   })
-  subscription.activate()
-  return () => {
-    void subscription.close()
-    provider.dispose()
-  }
 }
 
 /** 一条操作的路径（`r` 没有路径 → []） */
@@ -400,7 +375,7 @@ export function readTool(): ToolRegistration {
     name: 'read',
     description: 'read: reads a file',
     parameters: Type.Object({ path: Type.Optional(Type.String()) }),
-    execute: async (args) => ({ content: [{ type: 'text', text: `read ${args.path ?? '?'}` }] })
+    execute: async (args) => ({ output: [{ type: 'text', text: `read ${args.path ?? '?'}` }] })
   })
 }
 
@@ -415,7 +390,7 @@ export function streamTool(chunks: readonly string[], gapMs = 150): ToolRegistra
         api.output(chunk)
         await sleep(gapMs)
       }
-      return { content: [{ type: 'text', text: 'ok' }] }
+      return { output: [{ type: 'text', text: 'ok' }] }
     }
   })
 }
@@ -440,7 +415,7 @@ export function spillTool(): ToolRegistration {
           locator: SPILL_PATH
         })!
       )
-      return { content: [{ type: 'text', text: 'preview' }] }
+      return { output: [{ type: 'text', text: 'preview' }] }
     }
   })
 }

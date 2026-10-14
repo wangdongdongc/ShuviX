@@ -38,6 +38,10 @@
       "@shuvix/agent-runtime/tools/testing/invokeTool": [
         "../../packages/agent-runtime/src/tools/testing/invokeTool.ts"
       ],
+      // 视图同步的契约（chat-ui 的 syncClient 与 e2e 探针引它）
+      "@shuvix/agent-runtime/sync/viewContracts": [
+        "../../packages/agent-runtime/src/sync/viewContracts.ts"
+      ],
       "@shuvix/agent-runtime": ["../../packages/agent-runtime/src/index.ts"]
     }
   }

@@ -39,7 +39,7 @@ export function holdTool(
       if (options.signalAware === false || signal === undefined) await gate
       else await Promise.race([gate, aborted(signal)])
       await options.afterGate?.(signal)
-      return { content: [{ type: 'text', text: options.result ?? `${name} done` }] }
+      return { output: [{ type: 'text', text: options.result ?? `${name} done` }] }
     }
   })
 }
@@ -74,7 +74,7 @@ export function askingTool(
         createdAt: 0
       })
       options.onResolved?.(response, context.abortSignal?.aborted)
-      return { content: [{ type: 'text', text: JSON.stringify(response) }] }
+      return { output: [{ type: 'text', text: JSON.stringify(response) }] }
     }
   })
 }

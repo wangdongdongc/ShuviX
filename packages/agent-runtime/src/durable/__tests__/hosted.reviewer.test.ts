@@ -269,7 +269,7 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
             permissionPayload({ sessionId }),
             opts
           )
-          return { content: [{ type: 'text', text: `${read?.hook}/${write?.hook}` }] }
+          return { output: [{ type: 'text', text: `${read?.hook}/${write?.hook}` }] }
         }
       })
     ]
@@ -510,10 +510,10 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
                 },
                 evaluateMs: 0
               })
-              return { content: [{ type: 'text', text: 'ran' }] }
+              return { output: [{ type: 'text', text: 'ran' }] }
             } catch (error) {
               return {
-                content: [
+                output: [
                   { type: 'text', text: error instanceof Error ? error.message : String(error) }
                 ],
                 isError: true

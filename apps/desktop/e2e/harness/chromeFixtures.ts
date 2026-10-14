@@ -20,11 +20,13 @@
  * `debugger.attach` 幂等；桌面的分片用与扩展同一个组装器还原。握手不自动做 —— 扩展是收到
  * `host: connected` 才说 hello，用例显式调 `hello()`，时序看得见。
  *
- * **会话内容走视图同步**（P3-09）：消息、工具进度、询问不再是 chat.event，而是侧边栏订阅的会话视图。
- * 假 Chrome 像侧边栏那样订阅（`channel.call('sync.invoke')`，帧经桥事件 `sync.frame` 回来），用一个**真的**
- * chord 客户端（agent-runtime 的 `TestClient`，node 里照样跑）解码：`viewOf` / `waitView` 读当前值，
+ * **会话内容走视图同步**（pi 1.2 / chord2）：消息、工具进度、询问不再是 chat.event，而是侧边栏持有的会话视图。
+ * 假 Chrome 像侧边栏那样**每个侧边栏一条 chord 链路**（桥事件 `sync.link {panelId, link, frame}`，两个方向），
+ * 链路另一头是一个**真的** chord 客户端宿主（node 里照样跑）：用 `openTabSession` 开过的会话挂在它那个标签页的
+ * 侧边栏（`panel:<tabId>`）上，别的会话（别的浏览器的、桌面自己的）挂在 `panel:0` 上。`viewOf` / `waitView` 读当前值，
  * `viewSeqWhere` 给出「视图第一次满足某条件」是哪一帧（与 chat.event 同一条到达序列，可断先后），
  * `asksSeen` 记下视图里出现过的每一张询问卡（一闪而过的也算）。chat.event 只剩生命周期与余项事件。
+ * 桌面报 offline 时像扩展那样把全部链路收掉，之后的 `viewOf` 换新链路。
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { join } from 'node:path'
@@ -44,17 +46,19 @@ import {
 } from '@shuvix/chat-protocol/chromeBridge'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
-import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
-import type { SyncFrame, SyncInvokeResult } from '@shuvix/chat-protocol/sync'
+import type { AgentView, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { makeTokenMarker } from '@shuvix/chat-protocol/utils/inlineTokens'
-import type { WireServiceProviderUpdate } from '@earendil-works/chord'
+import { createHost, remote, type Frame, type Handle, type Host } from '@earendil-works/chord'
+import { Type } from 'typebox'
 import {
-  TestClient,
-  type TestBinding
-} from '../../../../packages/agent-runtime/src/sync/__tests__/support/client'
+  AgentViewContract,
+  FrameLink,
+  SessionViewContract,
+  VIEW_SERVER_HOST
+} from '../../../../packages/agent-runtime/src/sync/viewContracts'
 import { sleep, until } from './cdp'
 import type { FakeProvider, FakeTurn } from './fakeProvider'
-import { toolResultsIn } from './sync'
+import { syncErrorOf, toolResultsIn } from './sync'
 
 /** Chrome 拉起本地组件时追加的参数：调用方扩展的 origin */
 export const CHROME_EXTENSION_ORIGIN = `chrome-extension://${CHROME_EXTENSION_ID}/`
@@ -140,12 +144,15 @@ export interface ChromeAppEvent {
   event: { type: string; [key: string]: unknown }
 }
 
-/** 一条收到的视图同步帧（`sync.frame` 的载荷） */
+/** 一条收到的视图同步链路帧（`sync.link` 的载荷） */
 export interface ChromeSyncFrame {
   seq: number
-  /** 信封上的会话 id —— SW 按它把帧送给挂着这条会话的侧边栏（agent 目标是它的根会话） */
+  /** 帧所在的侧边栏（SW 按它送）—— `panel:<tabId>` */
+  panelId: string
+  /** 这个侧边栏上持有着的会话（恰好一条时；`panel:0` 上可能有几条 → 空串） */
   sessionId: string
-  frame: SyncFrame<WireServiceProviderUpdate>
+  /** chord 的帧 */
+  frame: { t?: string; [key: string]: unknown }
 }
 
 /** 视图里出现过的一张询问卡（第一次出现在哪一帧之后） */
@@ -275,14 +282,13 @@ export interface FakeChrome {
   ): Promise<ChromeChatEvent>
   appEvents(opts?: { since?: number }): ChromeAppEvent[]
 
-  // ── 视图同步（侧边栏的会话内容，P3-09） ──
-  /**
-   * `channel.call('sync.invoke', target, call)` 的结果：信封 ok → value；信封 ok:false 或桥拒绝 → 抛错，
-   * `.code` = chord 的错误码 / 桥的错误文本
-   */
-  syncInvoke(target: unknown, call: unknown): Promise<unknown>
-  /** 一条会话此刻的视图（第一次读时订阅；订阅被拒抛错，带 `.code`） */
+  // ── 视图同步（侧边栏的会话内容，chord2 链路） ──
+  /** 一条会话此刻的视图（第一次读时持有；被拒抛错，带 `.code`：`forbidden` / `not_found` …） */
   viewOf(sessionId: string): Promise<SessionView | undefined>
+  /** 一个派生 agent 此刻的视图（挂在 `panel:0` 上；被拒抛错，带 `.code`） */
+  agentViewOf(agentId: string): Promise<AgentView | undefined>
+  /** 持有一个服务端不认识的远程类型 —— 回服务端给的错误（`.code` 是 chord 的码） */
+  holdUnknownType(): Promise<Error & { code?: string }>
   /** 等视图满足 `pred`；超时抛错（带最后一份视图的摘要） */
   waitView(
     sessionId: string,
@@ -300,9 +306,11 @@ export interface FakeChrome {
   ): Promise<number>
   /** 视图里出现过的询问卡（按第一次出现的次序；`since` 之后的） */
   asksSeen(sessionId: string, opts?: { since?: number }): ChromeSeenAsk[]
-  /** 收到的 `sync.frame`（可按会话、起点过滤） */
-  syncFrames(opts?: { sessionId?: string; since?: number }): ChromeSyncFrame[]
-  /** 放掉一条会话的视图订阅（发退订） */
+  /** 收到的 `sync.link` 帧（可按会话、侧边栏、起点过滤） */
+  syncFrames(opts?: { sessionId?: string; panelId?: string; since?: number }): ChromeSyncFrame[]
+  /** 一条会话挂在哪个侧边栏上（`panel:<tabId>`；不是本浏览器开的会话 → `panel:0`） */
+  panelOf(sessionId: string): string
+  /** 放掉一条会话的视图持有（发 release） */
   releaseView(sessionId: string): Promise<void>
 
   /** 收到的每一帧的正文字节数（按到达顺序）—— 「没有一帧超过原生消息上限」按它断 */
@@ -370,6 +378,38 @@ export function withChromeTabTokens(
   })
   return { text: `${markers.join(' ')} ${text}`, inlineTokens }
 }
+
+type SyncHandle = Handle<typeof SessionViewContract> | Handle<typeof AgentViewContract>
+
+/** 一个持有着的视图：句柄 + 让远端状态一直订着 */
+interface PanelView {
+  readonly handle: SyncHandle
+  readonly stops: (() => void)[]
+}
+
+/** 一个（假的）侧边栏的视图同步链路 */
+interface PanelSync {
+  readonly panelId: string
+  readonly linkId: string
+  readonly link: FrameLink
+  readonly host: Host
+  /** 会话 → 持有 */
+  readonly views: Map<string, PanelView>
+  /** 派生 agent → 持有 */
+  readonly agents: Map<string, PanelView>
+}
+
+function releaseBinding(binding: PanelView): void {
+  for (const stop of binding.stops.splice(0)) stop()
+  binding.handle.release()
+}
+
+/** 服务端不认识的远程类型（看它回什么错） */
+const UnknownViewContract = remote('e2e.not-a-view', {
+  version: 1,
+  input: Type.Object({}),
+  variants: { owner: { state: { view: Type.Unknown() } } }
+})
 
 export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
   const installId = opts.installId
@@ -456,9 +496,10 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
   const syncLog: ChromeSyncFrame[] = []
   const seenAsks: ChromeSeenAsk[] = []
   const seenAskIds = new Set<string>()
-  /** 视图同步：TestClient 的帧接收口、按会话的绑定、等某个条件第一次成立的观察者 */
-  let syncReceiver: ((frame: SyncFrame<WireServiceProviderUpdate>) => void) | undefined
-  const viewBindings = new Map<string, TestBinding>()
+  /** 视图同步：每个侧边栏一条链路 + 一个客户端宿主；会话 → 它挂的侧边栏；等某个条件第一次成立的观察者 */
+  const panelSyncs = new Map<string, PanelSync>()
+  const panelOfSession = new Map<string, string>()
+  let linkSeq = 0
   const viewWatchers = new Set<{
     sessionId: string
     pred: (view: SessionView) => boolean
@@ -590,6 +631,8 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
     switch (message.type) {
       case 'host':
         hostLog.push({ seq: at, desktop: message.desktop })
+        // 桌面走了：它那头的链路随连接一起没了 —— 像扩展那样收掉，之后的 viewOf 换新链路
+        if (message.desktop === 'offline') dropPanelSyncs('desktop offline')
         return
       case 'welcome':
         welcomes.push({ seq: at, welcome: message })
@@ -633,17 +676,19 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
         } else if (message.name === 'app.event') {
           const p = (message.params ?? {}) as { event?: ChromeAppEvent['event'] }
           appLog.push({ seq: at, event: p.event ?? { type: '?' } })
-        } else if (message.name === 'sync.frame') {
-          const p = (message.params ?? {}) as {
-            sessionId?: string
-            frame?: SyncFrame<WireServiceProviderUpdate>
-          }
-          const sessionId = String(p.sessionId ?? '')
-          if (p.frame) {
-            syncLog.push({ seq: at, sessionId, frame: p.frame })
-            syncReceiver?.(p.frame)
-            afterViewChange(sessionId, at)
-          }
+        } else if (message.name === 'sync.link') {
+          const p = (message.params ?? {}) as { panelId?: unknown; link?: unknown; frame?: unknown }
+          const panel = typeof p.panelId === 'string' ? panelSyncs.get(p.panelId) : undefined
+          if (!panel || p.link !== panel.linkId || typeof p.frame !== 'object' || !p.frame) return
+          const held = [...panel.views.keys()]
+          syncLog.push({
+            seq: at,
+            panelId: panel.panelId,
+            sessionId: held.length === 1 ? held[0] : '',
+            frame: p.frame as ChromeSyncFrame['frame']
+          })
+          panel.link.deliver(p.frame)
+          for (const sessionId of held) afterViewChange(sessionId, at)
         }
         return
       }
@@ -720,33 +765,53 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
 
   // ── 视图同步 ──
 
-  /** `channel.call('sync.invoke')`：信封拆开；失败抛带 `.code` 的错误（与侧边栏 channelApi 同一个口径） */
-  const syncInvoke = async (target: unknown, syncCall: unknown): Promise<unknown> => {
-    const r = await channel('sync.invoke', target, syncCall)
-    const fail = (code: string | undefined, message: string): never => {
-      const error = new Error(message) as Error & { code?: string }
-      if (code !== undefined) error.code = code
-      throw error
-    }
-    if (!r.ok) return fail(r.error, r.error ?? 'error')
-    const envelope = r.result as SyncInvokeResult
-    if (!envelope.ok) return fail(envelope.error.code, envelope.error.message)
-    // TestClient 把回复 JSON 往返一遍：undefined（退订的回复）交 null
-    return envelope.value === undefined ? null : envelope.value
+  /** 某个侧边栏的链路与客户端宿主（第一次要用时建） */
+  function panelSync(panelId: string): PanelSync {
+    const existing = panelSyncs.get(panelId)
+    if (existing && !existing.link.closed) return existing
+    const linkId = `fake-${installId}.${++linkSeq}`
+    const link = new FrameLink((frame: Frame) => {
+      send({ type: 'event', name: 'sync.link', params: { panelId, link: linkId, frame } })
+    })
+    const host = createHost({ name: `fake-panel:${linkId}`, kind: 'client', onError: () => {} })
+    host.connect(link)
+    const created: PanelSync = { panelId, linkId, link, host, views: new Map(), agents: new Map() }
+    panelSyncs.set(panelId, created)
+    return created
   }
 
-  const syncClient = new TestClient(
-    `e2e-${installId}`,
-    { invoke: (_clientId, target, syncCall) => syncInvoke(target, syncCall) as Promise<never> },
-    {
-      attach: (_clientId, deliver) => {
-        syncReceiver = deliver
-      }
+  /** 全部链路收掉（桌面走了） */
+  function dropPanelSyncs(reason: string): void {
+    for (const panel of panelSyncs.values()) {
+      panel.link.ended(reason)
+      void panel.host.close().catch(() => undefined)
     }
-  )
+    panelSyncs.clear()
+  }
+
+  const panelOf = (sessionId: string): string => panelOfSession.get(sessionId) ?? 'panel:0'
+
+  /** 等一个句柄活过来、快照到了；gone → 放掉、抛带 `.code` 的错 */
+  async function hydrated(handle: SyncHandle, what: string, release: () => void): Promise<void> {
+    const deadline = Date.now() + DEFAULT_TIMEOUT_MS
+    for (;;) {
+      if (handle.status === 'gone') {
+        release()
+        throw syncErrorOf(handle.error)
+      }
+      if (handle.status === 'live' && handle.view.value !== undefined) return
+      if (Date.now() > deadline) {
+        release()
+        throw new Error(`timeout waiting: ${what} hydrated (status ${handle.status})${diag()}`)
+      }
+      await sleep(20)
+    }
+  }
 
   const currentView = (sessionId: string): SessionView | undefined =>
-    viewBindings.get(sessionId)?.value() as SessionView | undefined
+    panelSyncs.get(panelOf(sessionId))?.views.get(sessionId)?.handle.view.value as
+      | SessionView
+      | undefined
 
   /** 一帧交给解码器之后：记下新出现的询问卡、叫醒条件已成立的观察者 */
   function afterViewChange(sessionId: string, at: number): void {
@@ -764,25 +829,59 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
     }
   }
 
-  const bindView = async (sessionId: string): Promise<TestBinding> => {
-    let binding = viewBindings.get(sessionId)
-    if (binding) return binding
-    binding = syncClient.bind({ kind: 'session', sessionId })
-    try {
-      await binding.ready()
-    } catch (error) {
-      await binding.dispose().catch(() => undefined)
-      throw error
+  const bindView = async (sessionId: string): Promise<void> => {
+    const panel = panelSync(panelOf(sessionId))
+    if (panel.views.has(sessionId)) return
+    const handle = panel.host.get(SessionViewContract, { sessionId }, { at: VIEW_SERVER_HOST })
+    handle.ready.catch(() => undefined)
+    const binding: PanelView = {
+      handle,
+      stops: [handle.view.subscribe(() => {}), handle.availability.subscribe(() => {})]
     }
-    viewBindings.set(sessionId, binding)
-    // 快照（订阅的回复，不是帧）里已有的询问卡也算「出现过」
+    panel.views.set(sessionId, binding)
+    await hydrated(handle, `view of ${sessionId}`, () => {
+      if (panel.views.get(sessionId) === binding) panel.views.delete(sessionId)
+      releaseBinding(binding)
+    })
+    // 快照里已有的询问卡也算「出现过」
     afterViewChange(sessionId, seq)
-    return binding
   }
 
   const viewOf = async (sessionId: string): Promise<SessionView | undefined> => {
     await bindView(sessionId)
     return currentView(sessionId)
+  }
+
+  const agentViewOf = async (agentId: string): Promise<AgentView | undefined> => {
+    const panel = panelSync('panel:0')
+    let binding = panel.agents.get(agentId)
+    if (!binding) {
+      const handle = panel.host.get(AgentViewContract, { agentId }, { at: VIEW_SERVER_HOST })
+      handle.ready.catch(() => undefined)
+      const created: PanelView = {
+        handle,
+        stops: [handle.view.subscribe(() => {}), handle.availability.subscribe(() => {})]
+      }
+      binding = created
+      panel.agents.set(agentId, created)
+      await hydrated(handle, `agent view of ${agentId}`, () => {
+        if (panel.agents.get(agentId) === created) panel.agents.delete(agentId)
+        releaseBinding(created)
+      })
+    }
+    return binding.handle.view.value as AgentView | undefined
+  }
+
+  const holdUnknownType = async (): Promise<Error & { code?: string }> => {
+    const panel = panelSync('panel:0')
+    const handle = panel.host.get(UnknownViewContract, {}, { at: VIEW_SERVER_HOST })
+    return handle.ready.then(
+      () => {
+        handle.release()
+        throw new Error('the desktop served a type it does not know')
+      },
+      (error: unknown) => syncErrorOf(error)
+    )
   }
 
   const summarize = (view: SessionView | undefined): string =>
@@ -914,6 +1013,8 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
         tabId,
         title: title ?? tabs.get(tabId)?.title
       })
+      // 这条会话的视图挂在这个标签页的侧边栏上
+      panelOfSession.set(r.sessionId, `panel:${tabId}`)
       return r.sessionId
     },
     channel,
@@ -976,8 +1077,9 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
         wopts.timeoutMs ?? 60_000
       ),
     appEvents: (aopts = {}) => appLog.filter((e) => e.seq > (aopts.since ?? 0)),
-    syncInvoke,
     viewOf,
+    agentViewOf,
+    holdUnknownType,
     waitView,
     viewSeqWhere,
     asksSeen: (sessionId, aopts = {}) =>
@@ -986,19 +1088,23 @@ export function startFakeChrome(opts: FakeChromeOptions): FakeChrome {
       syncLog.filter(
         (f) =>
           f.seq > (fopts.since ?? 0) &&
-          (fopts.sessionId === undefined || f.sessionId === fopts.sessionId)
+          (fopts.sessionId === undefined || f.sessionId === fopts.sessionId) &&
+          (fopts.panelId === undefined || f.panelId === fopts.panelId)
       ),
+    panelOf,
     releaseView: async (sessionId) => {
-      const binding = viewBindings.get(sessionId)
-      if (!binding) return
-      viewBindings.delete(sessionId)
-      await binding.dispose().catch(() => undefined)
+      const panel = panelSyncs.get(panelOf(sessionId))
+      const binding = panel?.views.get(sessionId)
+      if (!panel || !binding) return
+      panel.views.delete(sessionId)
+      releaseBinding(binding)
     },
     frameSizes: () => [...frameSizes],
     chunkFrames: () => chunkFrames,
     stderr: () => stderrText,
     exitCode: () => exitCode,
     close: async () => {
+      dropPanelSyncs('fake chrome closed')
       if (!exited) child.stdin?.end()
       const t0 = Date.now()
       while (!exited && Date.now() - t0 < 5000) await sleep(50)

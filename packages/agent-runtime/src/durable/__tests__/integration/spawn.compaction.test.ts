@@ -86,7 +86,13 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
         answer('root done')
       )
       let rounds = 0
+      // 压缩余量在子 agent 还在跑的时候取（pi-durable 1.2 起后台压缩的摘要请求可能在子 agent 答完之后才发出，
+      // 那时已经没有在跑的派生模型、余量回到根的窗口）：压缩状态刚出现、子 agent 还在生成的那一刻
+      let settingsWhileChildRuns: unknown
       const probing = when(() => {
+        if (compactionsSeen(sw).length > 0 && settingsWhileChildRuns === undefined) {
+          settingsWhileChildRuns = { ...session.effectiveSettings.compaction }
+        }
         if (compactionsSeen(sw).length > 0 || rounds >= 10) return answer('child done')
         rounds++
         return callTool('probe', { text: 'details '.repeat(125) }, `p${rounds}`)
@@ -95,7 +101,7 @@ describe('P2-11 · J5 small-window compaction of a spawned agent', () => {
 
       const sending = session.submitUser(ROOT_TEXT)
       await withTimeout(summary.reached, 8000, 'summary request')
-      expect(session.effectiveSettings.compaction).toEqual({
+      expect(settingsWhileChildRuns).toEqual({
         reserveTokens: 750,
         backgroundTokens: 750,
         keepRecentTokens: 750

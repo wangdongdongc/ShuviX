@@ -147,7 +147,7 @@ async function hostRunResult(
 ): Promise<InvokedToolResult> {
   const probe = Object.create(tool) as object
   Object.defineProperty(probe, 'execute', {
-    value: async () => ({ content: [{ type: 'text' as const, text }], details: undefined }),
+    value: async () => ({ output: [{ type: 'text' as const, text }], details: undefined }),
     writable: true,
     enumerable: true,
     configurable: true

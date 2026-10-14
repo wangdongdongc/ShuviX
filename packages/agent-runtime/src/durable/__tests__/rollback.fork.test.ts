@@ -223,7 +223,7 @@ describe('P3-10a · fork point', () => {
         execute: async (_args, _api, context) => {
           started.resolve()
           await Promise.race([gate.promise, aborted(context.abortSignal!)])
-          return { content: [{ type: 'text', text: 'waited' }] }
+          return { output: [{ type: 'text', text: 'waited' }] }
         }
       })
       const t = await makeHost({ tools: [waitTool] })

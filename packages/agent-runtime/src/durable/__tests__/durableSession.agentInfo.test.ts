@@ -219,7 +219,7 @@ describe('P3-06 A · agentInfo content', () => {
         name: 'labeled',
         description: 'labeled: a host tool with a label',
         parameters: Type.Object({ path: Type.String(), depth: Type.Number() }),
-        execute: async () => ({ content: [{ type: 'text' as const, text: 'ok' }] })
+        execute: async () => ({ output: [{ type: 'text' as const, text: 'ok' }] })
       }),
       label: 'Labeled Tool'
     } as ToolRegistration
@@ -227,7 +227,7 @@ describe('P3-06 A · agentInfo content', () => {
       name: 'schemaless',
       description: 'schemaless: no properties at all',
       parameters: Type.Unsafe<Record<string, unknown>>({ type: 'object' }),
-      execute: async () => ({ content: [{ type: 'text', text: 'ok' }] })
+      execute: async () => ({ output: [{ type: 'text', text: 'ok' }] })
     }
     const { t } = await scenarioW({
       toolHost: scenarioToolHost({ agentTools: [labeled, schemaless] })
@@ -343,7 +343,7 @@ describe('P3-06 A · agentInfo content', () => {
       name: 'probe',
       description: 'probe: probes',
       parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: 'text' as const, text: 'probe done' }] })
+      execute: async () => ({ output: [{ type: 'text' as const, text: 'probe done' }] })
     })
     const tools = await makeHost({ tools: [probe] })
     const other = await tools.open('s2')
@@ -519,11 +519,12 @@ describe('P3-06 B · root vs spawned', () => {
     const childConversation = (await d.session.harness.conversation(child, BG))!
     expect(childInfo.messageCount).toBe(nonSystem((await childConversation.context(BG)).messages))
     expect(childInfo.messageCount).toBe(1)
-    // 根的上下文：user、assistant(派发调用)，外加 durable 给在途调用补的那条 toolResult —— 子对话的不算
+    // 根的上下文：user、assistant(派发调用)，外加 durable 给在途调用补的那条 toolResult —— 子对话的不算；
+    // 对话的首条 system 消息领头（pi-durable 1.1 起，不再跟在开启这次运行的输入之后）
     const rootContext = (await (await rootOf(d.session)).context(BG)).messages
     expect(rootContext.map((message) => message.role)).toEqual([
-      'user',
       'system',
+      'user',
       'assistant',
       'toolResult'
     ])

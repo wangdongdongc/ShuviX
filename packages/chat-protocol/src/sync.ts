@@ -1,22 +1,14 @@
 /**
- * 视图同步的线协议（phase 3，形态 A）—— 前端订阅一个**目标**（一条会话，或一个派生 agent），
- * 服务端为每个目标挂一个 chord `RemoteServiceProvider`，单例服务 `shuvix.chat.view` 交出
- * `{ view: ReplicatedState<SessionView | AgentView> }`。帧是 `{target, subscriptionId, update}`，
- * `update` 是 chord 服务状态编码器的输出（本包不依赖 chord，所以这里不展开它的形状）。
+ * 视图同步的线协议（pi 1.2 / chord2）—— 前端持有一个**目标**（一条会话，或一个派生 agent）的视图。
+ *
+ * 视图经 chord2 的链路（link）同步：主进程是 chord 宿主（`agent-runtime/sync/viewServer`），每个前端是一个
+ * 客户端宿主（chat-ui 的 syncClient），两者之间是一条**链路**，链路上跑 chord 自己的帧（hello / hold /
+ * sub / state …）。本包不依赖 chord，所以这里只有宿主之间约定的那一点：目标、错误码，以及承载链路的
+ * **链路渠道**（{@link SyncLinkChannel}）。
  */
-
-/** 视图服务的 id（每个目标一个 provider，服务本身是单例） */
-export const CHAT_VIEW_SERVICE_ID = 'shuvix.chat.view'
 
 /** 同步目标：一条会话（根对话的 SessionView），或一个派生 agent（它对话的 AgentView） */
 export type SyncTarget = { kind: 'session'; sessionId: string } | { kind: 'agent'; agentId: string }
-
-/** 服务端推给某个前端的一帧：哪个目标、哪个订阅、编码后的更新 */
-export interface SyncFrame<U = unknown> {
-  target: SyncTarget
-  subscriptionId: string
-  update: U
-}
 
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 
@@ -34,8 +26,6 @@ export function syncTargetKey(target: SyncTarget): string {
   return target.kind === 'session' ? `session:${target.sessionId}` : `agent:${target.agentId}`
 }
 
-// ─────────────────────────── 渠道上的调用（P3-05） ───────────────────────────
-
 /** 线上的严格 JSON 值（与 chord 的 `JsonValue` 同形；本包不依赖 chord） */
 export type JsonValue =
   | null
@@ -46,58 +36,31 @@ export type JsonValue =
   | { [key: string]: JsonValue }
 
 /**
- * 一次同步调用跨进程回来的信封（P3-05 PIN-01）：Electron 的 `ipcMain.handle` 拒绝时只带 `message`，
- * chord 的 `RemoteServiceError.code`（如 `service_not_found`）会丢 —— 所以服务端总是 resolve 这个信封，
- * 客户端遇到 `ok:false` 再抛一个带 `.code` 的 Error。
+ * 视图绑定 `error` 时的码：目标不存在（会话被删、派生 agent 认不出 / 根会话还没在主进程里打开过）。
+ * 服务端抛的是 chord 的 `unavailable` + reason `not_found`，客户端把它映射成这个码；其余 chord 错误原样用
+ * chord 的码（`forbidden` / `invalid` / `unavailable` …）。
  */
-export type SyncInvokeResult =
-  | { ok: true; value: JsonValue | undefined }
-  | { ok: false; error: { code?: string; message: string } }
+export const SYNC_NOT_FOUND = 'not_found'
 
 /**
- * 渠道的视图同步面（`SessionChannelApi.sync`）：`invoke` 把一次 chord 服务调用发给某个目标，
- * `onFrame` 收服务端推来的帧（每个订阅一个解码器，见 chat-ui 的 syncClient）。失败的调用以带 `code` 的
- * Error 拒绝 —— 或者，在会剥掉 Error 自有属性的边界上（Electron 的 contextBridge 只拷 `message`），以
- * 信封失败分支那个**纯对象** `{code?, message}` 拒绝；消费方一律经 `reviveSyncInvokeError` 还原成带
- * `.code` 的 Error（chat-ui 的 syncClient 就这么做）。
+ * 承载视图同步链路的渠道（`SessionChannelApi.sync`）—— 全是普通函数，好过 Electron 的 contextBridge。
+ *
+ * 一条渠道上可以有多条链路，每条有一个**链路 id**（客户端为每条新链路现取一个，不复用）：帧带着它走，
+ * 收的一侧按它分开。于是重连 / 页面重载之后，旧链路迟到的帧不会落进新链路（chord 的 hold / sub id 每条
+ * 链路都从 1 数起），同一个窗口里也可以并存几个客户端（e2e 探针）。
+ *
+ *  - 桌面窗口：`ipcRenderer.send('sync:frame', link, frame)` / `sync:frame` 推回；传输永远在（没有 up/down）。
+ *  - Chrome 侧边栏：桥事件 `sync.link {panelId, link, frame}`；桥断开 / 桌面不在时 down，回到 ready 时 up。
  */
-export interface SyncChannel {
-  invoke(target: SyncTarget, call: JsonValue): Promise<JsonValue | undefined>
-  onFrame(callback: (frame: SyncFrame) => void): () => void
-}
-
-/** `SyncInvokeResult` 的失败分支 → 带 `.code` 的 Error（preload 与扩展共用一个口径） */
-export function syncInvokeError(error: { code?: string; message: string }): Error & {
-  code?: string
-} {
-  const thrown = new Error(error.message) as Error & { code?: string }
-  if (typeof error.code === 'string') thrown.code = error.code
-  return thrown
-}
-
-/** `SyncInvokeResult` 的失败分支：跨 contextBridge 拒绝时用的纯对象（不是 Error，属性才拷得过去） */
-export type SyncInvokeFailure = { code?: string; message: string }
-
-/** `SyncInvokeResult` 的失败分支 → 可以跨 contextBridge 拒绝的纯对象（只带 `code` / `message`） */
-export function syncInvokeFailure(error: { code?: string; message: string }): SyncInvokeFailure {
-  return typeof error.code === 'string'
-    ? { code: error.code, message: error.message }
-    : { message: error.message }
-}
-
-/**
- * 渠道拒绝的理由 → 带 `.code` 的 Error（渲染端那一侧的还原）：
- *  - 已经是 Error：原样交回（同一上下文里抛的、带 code 的那种；或别的传输错误）；
- *  - `{message: string, code?: string}` 纯对象（preload 过 contextBridge 的拒绝）→ `syncInvokeError`；
- *  - 其它：包成一个没有 code 的 Error。
- */
-export function reviveSyncInvokeError(reason: unknown): Error & { code?: string } {
-  if (reason instanceof Error) return reason as Error & { code?: string }
-  if (typeof reason === 'object' && reason !== null) {
-    const { message, code } = reason as { message?: unknown; code?: unknown }
-    if (typeof message === 'string') {
-      return syncInvokeError(typeof code === 'string' ? { code, message } : { message })
-    }
-  }
-  return new Error(String(reason))
+export interface SyncLinkChannel {
+  /** 发一帧到服务端（某条链路上） */
+  send(link: string, frame: JsonValue): void
+  /** 收服务端推来的帧（带链路 id）；返回注销 */
+  onFrame(callback: (link: string, frame: JsonValue) => void): () => void
+  /** 传输断了：这条渠道上的每条链路都没了（可选；没有 = 传输不会自己断） */
+  onDown?(callback: (reason: string) => void): () => void
+  /** 传输断过之后又能用了（可选） */
+  onUp?(callback: () => void): () => void
+  /** 传输此刻能不能用（可选；没有 = 总能用） */
+  isUp?(): boolean
 }

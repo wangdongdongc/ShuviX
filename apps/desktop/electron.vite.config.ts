@@ -6,6 +6,9 @@ import tailwindcss from '@tailwindcss/vite'
 const chatProtocol = resolve(__dirname, '../../packages/chat-protocol/src')
 const chatUi = resolve(__dirname, '../../packages/chat-ui/src/index.ts')
 const agentRuntime = resolve(__dirname, '../../packages/agent-runtime/src/index.ts')
+// 视图同步的契约（浏览器安全：只引 chord 与 typebox）—— 渲染端的 chat-ui syncClient 只取这一个子路径，
+// 不经包入口（入口会把 pi-* 整个拖进来）。主进程那边必须排在裸包别名之前（Vite 按前缀匹配）
+const viewContracts = resolve(__dirname, '../../packages/agent-runtime/src/sync/viewContracts.ts')
 // 目录别名（非 index.ts 文件）：让裸包与子路径（/settings/*、/themes.css）都能解析
 const appShell = resolve(__dirname, '../../packages/app-shell/src')
 const atomicEditorSrc = resolve(__dirname, '../../packages/atomic-editor/src')
@@ -21,6 +24,7 @@ export default defineConfig({
     resolve: {
       alias: {
         '@shuvix/chat-protocol': chatProtocol,
+        '@shuvix/agent-runtime/sync/viewContracts': viewContracts,
         '@shuvix/agent-runtime': agentRuntime
       }
     },
@@ -77,6 +81,7 @@ export default defineConfig({
       alias: {
         '@renderer': resolve('src/renderer/src'),
         '@shuvix/chat-protocol': chatProtocol,
+        '@shuvix/agent-runtime/sync/viewContracts': viewContracts,
         '@shuvix/chat-ui': chatUi,
         '@shuvix/app-shell': appShell,
         ...atomicEditorAlias

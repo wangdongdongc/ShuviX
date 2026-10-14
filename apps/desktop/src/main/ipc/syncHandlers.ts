@@ -1,60 +1,47 @@
-import { ipcMain, webContents } from 'electron'
-import type { SyncHub } from '@shuvix/agent-runtime'
-import type { SyncInvokeResult } from '@shuvix/chat-protocol/sync'
-import { clientIdOf, IPC_CLIENT_PREFIX, type SyncIpcEvent } from '../frontend/sync/clientIdentity'
-import { createIpcSyncTransport, type SyncWebContents } from '../frontend/sync/ipcSyncTransport'
-import { getSyncHub, syncTransport } from '../frontend/sync/syncWiring'
+import { ipcMain } from 'electron'
+import {
+  createIpcLinkHub,
+  SYNC_FRAME_CHANNEL,
+  type IpcLinkHub,
+  type SyncWebContents
+} from '../frontend/sync/ipcLink'
+import { getSyncHub } from '../frontend/sync/syncWiring'
 import { createLogger } from '../logger'
 
 const log = createLogger('SyncIpc')
 
-/** 渲染进程 → 主进程的同步调用通道（preload 的 `sync.invoke`） */
-export const SYNC_INVOKE_CHANNEL = 'sync:invoke'
-
 /** 注册要的那一点 ipcMain（测试给假的） */
 export interface SyncIpcMain {
-  handle(channel: string, listener: (event: SyncIpcEvent, ...args: unknown[]) => unknown): void
+  on(
+    channel: string,
+    listener: (event: { sender: SyncWebContents }, ...args: unknown[]) => void
+  ): unknown
 }
 
-export interface SyncHandlerOptions {
-  /** hub（缺省：主进程单例，第一次调用时才建） */
-  readonly hub?: () => Pick<SyncHub, 'invoke'>
-  /** webContents id → webContents（缺省：`webContents.fromId`） */
-  readonly lookup?: (webContentsId: number) => SyncWebContents | undefined
-}
+let hub: IpcLinkHub | undefined
 
-function codeOf(error: unknown): string | undefined {
-  const code = (error as { code?: unknown } | null | undefined)?.code
-  return typeof code === 'string' ? code : undefined
+/** 桌面窗口的链路表（懒建：第一帧才建，连带视图服务端） */
+function ipcLinks(): IpcLinkHub {
+  hub ??= createIpcLinkHub({
+    accept: (link, principal) => getSyncHub().accept(link, principal),
+    logger: log
+  })
+  return hub
 }
 
 /**
- * 视图同步的 IPC（phase 3，P3-05）：
- *  - `sync:invoke(target, call)` → `hub.invoke('ipc:<webContentsId>', target, call)`。回复总是
- *    **resolve** 一个信封（PIN-01）：`{ok:true, value}` / `{ok:false, error:{code, message}}` ——
- *    `ipcMain.handle` 的拒绝只把 `message` 带过去，chord 的错误码（`service_not_found` …）会丢。
- *  - 帧经 `webContents.send('sync:frame', frame)` 推回（路由传输的 `ipc` 那条，在这里挂上）。
+ * 视图同步的 IPC（pi 1.2 / chord2）：渲染端的 chord 链路帧 `sync:frame(link, frame)` 交给窗口链路表
+ * （`frontend/sync/ipcLink`，主体 = 发送方 webContents），服务端的帧经 `webContents.send('sync:frame', link, frame)`
+ * 推回。没有一问一答的调用了（phase 3 的 `sync:invoke` 已删）。
  *
- * 注册本身不建 hub、不建宿主（PIN-12）：hub 在第一次调用时才建。
+ * 注册本身不建服务端、不建宿主（PIN-12）：第一帧到了才建。
  */
-export function registerSyncHandlers(
-  ipc: SyncIpcMain = ipcMain as unknown as SyncIpcMain,
-  options: SyncHandlerOptions = {}
-): void {
-  const lookup =
-    options.lookup ??
-    ((id: number): SyncWebContents | undefined => webContents.fromId(id) ?? undefined)
-  syncTransport.addRoute(IPC_CLIENT_PREFIX, createIpcSyncTransport({ lookup, logger: log }))
-  const hubOf = options.hub ?? getSyncHub
-
-  ipc.handle(SYNC_INVOKE_CHANNEL, async (event, target, call): Promise<SyncInvokeResult> => {
+export function registerSyncHandlers(ipc: SyncIpcMain = ipcMain as unknown as SyncIpcMain): void {
+  ipc.on(SYNC_FRAME_CHANNEL, (event, linkId, frame) => {
     try {
-      const value = await hubOf().invoke(clientIdOf(event), target, call)
-      return { ok: true, value }
+      ipcLinks().receive(event.sender, linkId, frame)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const code = codeOf(error)
-      return { ok: false, error: code === undefined ? { message } : { code, message } }
+      log.warn(`sync frame from webContents ${event.sender?.id} failed: ${String(error)}`)
     }
   })
 }

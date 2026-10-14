@@ -14,9 +14,9 @@
  *   CB-19      七种消息形状的分片往返（打乱顺序）
  *   CB-20      isBridgeMessage 只认 type
  *   CB-21      chromeBridgeSocketPath：POSIX 与 Windows named pipe
- *   CB-22      CHROME_PANEL_CHANNEL_PATHS 钉死 —— 多一条就是给侧边栏多开一个口子（P3-09-01：17 条，
- *              加了 continue / withdrawQueued / sync.invoke，没有「下一轮」）
- *   CB-36      DesktopEventMap 的 `sync.frame`：`{sessionId, frame}`（P3-09，SW 按 sessionId 路由）
+ *   CB-22      CHROME_PANEL_CHANNEL_PATHS 钉死 —— 多一条就是给侧边栏多开一个口子（16 条：P3-09 加了
+ *              continue / withdrawQueued，没有「下一轮」；pi 1.2 拿掉了 sync.invoke —— 视图同步改走链路）
+ *   CB-36      两个方向的 `sync.link`：`{panelId, link, frame}`（pi 1.2，SW 按 panelId 路由）；panelId 的形状
  *   CB-23~32   组装器的三道上限（片数 / 组数 / 总字符数）与额度记账：边界、淘汰顺序、四条丢弃路径
  *              都要把额度退回来、重复片只算一次、几 MB 的正常消息照样过、坏 data 既不抛也不投毒
  *   CB-33/34   地址是**读**出来的：地址文件的位置；Windows 管道名里的随机后缀（POSIX 无视它）
@@ -41,8 +41,10 @@ import {
   CHROME_GROUP_COLORS,
   CHROME_NATIVE_MESSAGE_MAX_BYTES,
   CHROME_PANEL_CHANNEL_PATHS,
+  CHROME_PANEL_ID_PREFIX,
   CHROME_TAB_TOKEN_TYPE,
   chromeBridgeAddressFile,
+  chromePanelTabId,
   chromeBridgeSocketPath,
   chromeTabIdsOf,
   chromeTabPayload,
@@ -51,7 +53,9 @@ import {
   splitBridgeMessage,
   type BridgeChunk,
   type BridgeMessage,
-  type DesktopEventMap
+  type DesktopEventMap,
+  type ExtensionEventMap,
+  type SyncLinkEvent
 } from './chromeBridge'
 
 const MAX = CHROME_NATIVE_MESSAGE_MAX_BYTES
@@ -149,8 +153,8 @@ const sampleEvent = (text: string): BridgeMessage => ({
 })
 
 describe('Chrome 桥协议：常量', () => {
-  it('CB-1 协议版本 2（P3-09 PIN-13：侧边栏改走视图同步）；宿主名合 Chrome 的命名规则；上限 1 MB；标签组颜色恰是 Chrome 的九种、不重复；线上错误码', () => {
-    expect(CHROME_BRIDGE_PROTOCOL).toBe(2)
+  it('CB-1 协议版本 3（pi 1.2：视图同步改走 chord2 链路）；宿主名合 Chrome 的命名规则；上限 1 MB；标签组颜色恰是 Chrome 的九种、不重复；线上错误码', () => {
+    expect(CHROME_BRIDGE_PROTOCOL).toBe(3)
     expect(CHROME_BRIDGE_HOST_NAME).toBe('com.shuvix.chrome_bridge')
     // Chrome 对原生消息宿主名的要求：小写字母、数字、下划线，点分段，不以点开头 / 结尾、不连点
     expect(CHROME_BRIDGE_HOST_NAME).toMatch(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/)
@@ -939,7 +943,7 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
     }
   })
 
-  it('CB-22 / P3-09-01 CHROME_PANEL_CHANNEL_PATHS 恰是这 17 条（顺序也钉，PIN-22）；文件、斜杠命令、朗读、子会话、设置、改模型、下一轮之类一概不在', () => {
+  it('CB-22 / P3-09-01 CHROME_PANEL_CHANNEL_PATHS 恰是这 16 条（顺序也钉，PIN-22）；文件、斜杠命令、朗读、子会话、设置、改模型、下一轮之类一概不在', () => {
     expect([...CHROME_PANEL_CHANNEL_PATHS]).toEqual([
       'agent.init',
       'agent.prompt',
@@ -956,10 +960,9 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
       'tools.list',
       'tools.presentations',
       'tools.definitions',
-      'shuvixMd.validate',
-      'sync.invoke'
+      'shuvixMd.validate'
     ])
-    expect(CHROME_PANEL_CHANNEL_PATHS).toHaveLength(17)
+    expect(CHROME_PANEL_CHANNEL_PATHS).toHaveLength(16)
     expect(new Set(CHROME_PANEL_CHANNEL_PATHS).size).toBe(CHROME_PANEL_CHANNEL_PATHS.length)
     // 重开侧边栏仍要读整段历史
     expect(CHROME_PANEL_CHANNEL_PATHS).toContain('message.list')
@@ -980,30 +983,36 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
       'session.create',
       'session.updateEnabledTools',
       // 「下一轮」这一档已从产品里去掉（Q-P3-09）
-      'agent.nextTurn'
+      'agent.nextTurn',
+      // 视图同步改走链路（pi 1.2）
+      'sync.invoke'
     ]) {
       expect(paths).not.toContain(path)
     }
   })
 
-  it('CB-36 DesktopEventMap 有 sync.frame：{sessionId, frame}（SW 按 sessionId 送给挂着那条会话的侧边栏）', () => {
-    expectTypeOf<DesktopEventMap['sync.frame']>().toEqualTypeOf<{
-      sessionId: string
-      frame: unknown
-    }>()
-    expectTypeOf<keyof DesktopEventMap>().toEqualTypeOf<'chat.event' | 'app.event' | 'sync.frame'>()
+  it('CB-36 两个方向的 sync.link：{panelId, link, frame}；panelId 是 panel:<tabId>', () => {
+    expectTypeOf<DesktopEventMap['sync.link']>().toEqualTypeOf<SyncLinkEvent>()
+    expectTypeOf<ExtensionEventMap['sync.link']>().toEqualTypeOf<SyncLinkEvent>()
+    expectTypeOf<SyncLinkEvent>().toEqualTypeOf<{ panelId: string; link: string; frame: unknown }>()
+    expectTypeOf<keyof DesktopEventMap>().toEqualTypeOf<'chat.event' | 'app.event' | 'sync.link'>()
     // 线上就是一条普通事件：分片照常、组装照常
-    const frame = {
-      target: { kind: 'session', sessionId: 's1' },
-      subscriptionId: 'x#1',
-      update: {}
-    }
     const event: BridgeMessage = {
       type: 'event',
-      name: 'sync.frame',
-      params: { sessionId: 's1', frame } satisfies DesktopEventMap['sync.frame']
+      name: 'sync.link',
+      params: {
+        panelId: 'panel:5',
+        link: 'tab5.x.1',
+        frame: { t: 'ping', n: 1 }
+      } satisfies SyncLinkEvent
     }
     expect(isBridgeMessage(JSON.parse(JSON.stringify(event)))).toBe(true)
+    expect(CHROME_PANEL_ID_PREFIX).toBe('panel:')
+    expect(chromePanelTabId('panel:5')).toBe(5)
+    expect(chromePanelTabId('panel:0')).toBe(0)
+    for (const bad of ['panel:', 'panel:-1', 'panel:1.5', 'tab:5', 'panel:5x', 5, undefined]) {
+      expect(chromePanelTabId(bad), String(bad)).toBeUndefined()
+    }
   })
 })
 

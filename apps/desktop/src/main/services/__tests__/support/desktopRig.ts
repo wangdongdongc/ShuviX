@@ -895,7 +895,7 @@ function probeTool(
         subject: withCallAgent(ctx, api).agent,
         resolved: rig.builtinResolver?.(ctx.sessionId, api.conversationId)
       })
-      return { content: [{ type: 'text', text: 'probed' }] }
+      return { output: [{ type: 'text', text: 'probed' }] }
     }
   })
 }
@@ -913,7 +913,7 @@ function askOpTool(ctx: ProbeCtx): ToolRegistration {
         conversationId: api.conversationId,
         taskId: api.taskId
       })
-      return { content: [{ type: 'text', text: 'askOp done' }] }
+      return { output: [{ type: 'text', text: 'askOp done' }] }
     }
   })
 }

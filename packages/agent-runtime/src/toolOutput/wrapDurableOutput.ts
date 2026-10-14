@@ -138,9 +138,9 @@ export function wrapDurableOutput(tool: AnyTool, opts: WrapDurableOutputOptions)
     let reportedOutput = false
     const trackedApi: ToolExecutionApi = {
       ...api,
-      output: (chunk) => {
+      output: (chunk, skipped) => {
         if (!reportedOutput && hasVisibleOutput(chunk)) reportedOutput = true
-        api.output(chunk)
+        api.output(chunk, skipped)
       }
     }
 
@@ -155,7 +155,7 @@ export function wrapDurableOutput(tool: AnyTool, opts: WrapDurableOutputOptions)
     if (result.isError) return result
 
     // 工具靠 api.output() 汇报：结果正文交给 durable 用它留存的输出，这里既不截也不补 (no output)
-    if (result.content === undefined && reportedOutput) return result
+    if (result.output === undefined && reportedOutput) return result
 
     const callSink = spillSinkFor(sink, spill, api, context)
     let truncated = false
@@ -163,7 +163,7 @@ export function wrapDurableOutput(tool: AnyTool, opts: WrapDurableOutputOptions)
     const diagnostics: ToolDiagnostic[] = []
     const content: ToolContent[] = []
     let textIndex = 0
-    for (const block of result.content ?? []) {
+    for (const block of result.output ?? []) {
       if (block.type !== 'text') {
         content.push(block)
         continue
@@ -203,7 +203,7 @@ export function wrapDurableOutput(tool: AnyTool, opts: WrapDurableOutputOptions)
     const allDiagnostics = [...(result.diagnostics ?? []), ...diagnostics]
     return {
       ...result,
-      content,
+      output: content,
       ...(details === undefined ? {} : { details }),
       ...(allDiagnostics.length === 0 ? {} : { diagnostics: allDiagnostics })
     }

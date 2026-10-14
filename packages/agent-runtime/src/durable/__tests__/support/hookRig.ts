@@ -253,7 +253,7 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
         )
         const result = decision === null ? 'asked-human' : `verdict:${decision.result.decision}`
         askCalls.push({ sessionId, taskId: api.taskId, result })
-        return { content: [{ type: 'text', text: result }] }
+        return { output: [{ type: 'text', text: result }] }
       }
     })
 
@@ -264,7 +264,7 @@ export async function hookRig(options: HookRigOptions = {}): Promise<HookRig> {
       parameters: Type.Object({ title: Type.Optional(Type.String()) }),
       execute: async (_args, api) => {
         titleCalls.push({ sessionId, conversationId: api.conversationId, taskId: api.taskId })
-        return { content: [{ type: 'text', text: 'titled' }] }
+        return { output: [{ type: 'text', text: 'titled' }] }
       }
     })
 

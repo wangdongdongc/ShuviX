@@ -14,13 +14,16 @@
  *     拥有它的连接；项目、会话列表、知识库、bot 之类一概不出桌面进程；
  *   - 外观：与桌面渲染层同一套取值与缺省（dark / github-dark / github-light / 14 / 专注开 /
  *     存的语言 → i18next 当前语言 → en）；
- *   - 视图同步（P3-09-08）：装好之后路由传输认领了 `chrome` 前缀，帧按 `chrome:<connId>` 找回那条连接推出去；
- *     装它不建 hub（hub 仍在第一次同步调用时才建，P3-05 PIN-12）。
+ *   - 视图同步（pi 1.2）：装好之后登记了 `chrome` 主体的核对（只能看本浏览器这一轮的标签页会话）；装它不建
+ *     视图服务端（第一条链路的第一帧才建，P3-05 PIN-12）；
+ *   - CX-1 扩展的 `sync.link` 事件 → 链路表（hello 建链路，主体取自那条连接）；`tabs.removed` 照旧；
+ *     CX-2 `chromeBridge.onConnectionClosed` 只登记一次，它一响那条连接的链路全部结束；
+ *     CX-3 `chromeViewAllowed`：派生 agent 目标一律同步 false（不解析 agent），会话目标缺 installId / runId → false。
  *
  * 会话层（tabSessions）与对话接口（channel）换成 spy；ChromeFrontend、i18next 与 syncWiring 是真的
  * （会话宿主、行表、旧格式读取器、派生 agent 路由换成替身 —— syncWiring 只在建 hub 时才碰它们）。
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import i18next from 'i18next'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 import type { BridgeHello } from '@shuvix/chat-protocol/chromeBridge'
@@ -37,9 +40,11 @@ const mocks = vi.hoisted(() => ({
   closeTabSession: vi.fn(),
   sweepTabSessions: vi.fn(),
   connectionOwnsSession: vi.fn(),
+  tabSessionOwnedBy: vi.fn(),
   connectionById: vi.fn(),
   onConnectionClosed: vi.fn(),
-  getSessionHost: vi.fn()
+  getSessionHost: vi.fn(),
+  locate: vi.fn()
 }))
 
 vi.mock('../../core', () => ({ chatFrontendRegistry: { bind: mocks.bind } }))
@@ -64,18 +69,19 @@ vi.mock('../../../services/sessionStorage', () => ({ readLegacyTranscript: () =>
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
+vi.mock('../../../agents/AgentManager', () => ({ agentManager: { locate: mocks.locate } }))
 vi.mock('../channel', () => ({ callPanelChannel: mocks.callPanelChannel }))
 vi.mock('../tabSessions', () => ({
   openTabSession: mocks.openTabSession,
   closeTabSession: mocks.closeTabSession,
   sweepTabSessions: mocks.sweepTabSessions,
-  connectionOwnsSession: mocks.connectionOwnsSession
+  connectionOwnsSession: mocks.connectionOwnsSession,
+  tabSessionOwnedBy: mocks.tabSessionOwnedBy
 }))
 
-import { panelAppearance, registerChromeFrontend } from '../index'
+import { chromeViewAllowed, panelAppearance, registerChromeFrontend } from '../index'
 import { ChromeFrontend } from '../ChromeFrontend'
-import { agentRootOf, rememberAgentRoot } from '../chromeSyncTransport'
-import { peekSyncHub, syncTransport } from '../../sync/syncWiring'
+import { authorizeView, getSyncHub, peekSyncHub, resetSyncHubForTests } from '../../sync/syncWiring'
 
 interface FakeConn {
   id: string
@@ -95,10 +101,13 @@ const asConn = (c: FakeConn): BridgeConnection => c as unknown as BridgeConnecti
 let handlers: ChromeBridgeHandlers
 let onAppEvent: (event: AppEvent) => void
 let registerCounts: { setHandlers: number; subscribe: number }
-let routesBeforeRegister: string[]
+let chromeAllowedBeforeRegister: unknown
 
 beforeAll(() => {
-  routesBeforeRegister = syncTransport.routes()
+  chromeAllowedBeforeRegister = authorizeView(
+    { kind: 'chrome', installId: 'i1', runId: 'r1' },
+    { kind: 'session', sessionId: 's1' }
+  )
   registerChromeFrontend()
   registerChromeFrontend()
   registerCounts = {
@@ -121,7 +130,9 @@ beforeEach(() => {
     mocks.closeTabSession,
     mocks.sweepTabSessions,
     mocks.connectionOwnsSession,
-    mocks.connectionById
+    mocks.tabSessionOwnedBy,
+    mocks.connectionById,
+    mocks.locate
   ]) {
     m.mockReset()
   }
@@ -147,37 +158,24 @@ describe('IX-1 registerChromeFrontend 只装一次', () => {
   })
 })
 
-describe('P3-09-08 视图同步的 Chrome 传输', () => {
-  it('P3-09-08 装好之后路由传输认领了 chrome（只一份）；import 与装它都不建 hub、不碰会话宿主', () => {
-    expect(routesBeforeRegister).not.toContain('chrome')
-    expect(syncTransport.routes().filter((r) => r === 'chrome')).toHaveLength(1)
+describe('视图同步的 chrome 主体核对', () => {
+  it('装好之后才有 chrome 的核对；import 与装它都不建视图服务端、不碰会话宿主', () => {
+    expect(chromeAllowedBeforeRegister).toBe(false)
     expect(peekSyncHub()).toBeUndefined()
     expect(mocks.getSessionHost).not.toHaveBeenCalled()
   })
 
-  it('P3-09-08 帧按 chrome:<connId> 找回那条连接，推成 sync.frame {sessionId, frame}；别的连接收不到', () => {
-    mocks.connectionById.mockImplementation((id: string) =>
-      id === 'c1' ? c1 : id === 'c2' ? c2 : undefined
+  it('会话目标按 installId + runId 核对标签页会话的归属', () => {
+    mocks.tabSessionOwnedBy.mockImplementation(
+      (sid: unknown, installId: string, runId: string) =>
+        sid === 's1' && installId === 'i1' && runId === 'r1'
     )
-    const frame = {
-      target: { kind: 'session' as const, sessionId: 's1' },
-      subscriptionId: 'tab5.x#1',
-      update: { type: 'state', ops: [] } as never
-    }
-    syncTransport.send('chrome:c1', frame)
-    expect(mocks.connectionById).toHaveBeenCalledWith('c1')
-    expect(c1.emit.mock.calls).toEqual([['sync.frame', { sessionId: 's1', frame }]])
-    expect(c2.emit).not.toHaveBeenCalled()
-    // 连接不在：丢掉、不抛
-    expect(() => syncTransport.send('chrome:gone', frame)).not.toThrow()
-  })
-
-  it('P3-09-08 连接断开时它记下的派生 agent 根会话一并丢掉', () => {
-    rememberAgentRoot('c9', 'a1', 's1')
-    const closers = mocks.onConnectionClosed.mock.calls.map(([fn]) => fn as (c: unknown) => void)
-    expect(closers.length).toBeGreaterThan(0)
-    for (const close of closers) close({ ...fakeConn('c9') })
-    expect(agentRootOf('c9', 'a1')).toBeUndefined()
+    const principal = { kind: 'chrome', installId: 'i1', runId: 'r1', connId: 'c1', tabId: 5 }
+    expect(authorizeView(principal, { kind: 'session', sessionId: 's1' })).toBe(true)
+    expect(authorizeView(principal, { kind: 'session', sessionId: 's2' })).toBe(false)
+    expect(authorizeView({ ...principal, runId: 'r0' }, { kind: 'session', sessionId: 's1' })).toBe(
+      false
+    )
   })
 })
 
@@ -410,5 +408,130 @@ describe('PA-1 / PA-2 panelAppearance', () => {
     i18next.language = 'ja'
     mocks.settings.set('general.language', 'zh')
     expect(panelAppearance().language).toBe('zh')
+  })
+})
+
+// ─── 视图同步的链路（pi 1.2 / chord2） ─────────────────────────────────────────
+
+describe('CX-1 … CX-3 侧边栏的视图同步链路与 chrome 主体', () => {
+  /** chord 客户端宿主的 hello（侧边栏那条链路的第一帧） */
+  const HELLO = { t: 'hello', name: 'client:tab5', kind: 'client', epoch: 0 }
+  const onEvent = (conn: FakeConn, name: string, params: unknown): void =>
+    handlers.onEvent!(asConn(conn), name, params)
+  const onClosed = (conn: FakeConn): void =>
+    (mocks.onConnectionClosed.mock.calls[0][0] as (c: BridgeConnection) => void)(asConn(conn))
+  const isClosed = (link: unknown): boolean => (link as { closed: boolean }).closed
+
+  afterAll(() => {
+    resetSyncHubForTests()
+  })
+
+  it('CX-1 sync.link 的 hello → 按这条连接盖章建链路（视图服务端在同一条连接上回 hello）；tabs.removed 照旧', () => {
+    const conn = fakeConn('cx1')
+    conn.info = { installId: 'i9', runId: 'r9' }
+    const accept = vi.spyOn(getSyncHub(), 'accept')
+    try {
+      onEvent(conn, 'sync.link', { panelId: 'panel:5', link: 'L1', frame: HELLO, tabId: 1 })
+      expect(accept).toHaveBeenCalledTimes(1)
+      expect(accept.mock.calls[0][1]).toStrictEqual({
+        kind: 'chrome',
+        installId: 'i9',
+        runId: 'r9',
+        connId: 'cx1',
+        tabId: 5
+      })
+      expect(isClosed(accept.mock.calls[0][0])).toBe(false)
+      // 视图服务端（chord 宿主 main）在同一条连接、同一个侧边栏的同一条链路上回了自己的 hello
+      expect(conn.emit).toHaveBeenCalledWith('sync.link', {
+        panelId: 'panel:5',
+        link: 'L1',
+        frame: expect.objectContaining({ t: 'hello', kind: 'host', name: 'main' })
+      })
+      expect(mocks.closeTabSession).not.toHaveBeenCalled()
+
+      // 形状不对的 sync.link：不建链路
+      onEvent(conn, 'sync.link', { panelId: 'tab:5', link: 'L2', frame: HELLO })
+      onEvent(conn, 'sync.link', { panelId: 'panel:5', link: 'L3', frame: { t: 'hold', id: 1 } })
+      expect(accept).toHaveBeenCalledTimes(1)
+
+      // 浏览器事件照旧：tabs.removed → closeTabSession；它不碰链路
+      onEvent(conn, 'tabs.removed', { tabId: 5 })
+      expect(mocks.closeTabSession.mock.calls).toEqual([[conn, 5]])
+      expect(accept).toHaveBeenCalledTimes(1)
+      expect(isClosed(accept.mock.calls[0][0])).toBe(false)
+    } finally {
+      onClosed(conn)
+      accept.mockRestore()
+    }
+  })
+
+  it('CX-2 onConnectionClosed 只登记一次；它一响，那条连接的链路全部结束、不发帧，别的连接不动', () => {
+    expect(mocks.onConnectionClosed).toHaveBeenCalledTimes(1)
+    const a = fakeConn('cx2a')
+    const b = fakeConn('cx2b')
+    const accept = vi.spyOn(getSyncHub(), 'accept')
+    try {
+      onEvent(a, 'sync.link', { panelId: 'panel:5', link: 'L1', frame: HELLO })
+      onEvent(a, 'sync.link', { panelId: 'panel:7', link: 'L1', frame: HELLO })
+      onEvent(b, 'sync.link', { panelId: 'panel:5', link: 'L1', frame: HELLO })
+      const links = accept.mock.calls.map(([link]) => link)
+      expect(links).toHaveLength(3)
+      const emittedOnA = a.emit.mock.calls.length
+
+      onClosed(a)
+      expect(links.map(isClosed)).toEqual([true, true, false])
+      expect(a.emit.mock.calls.length).toBe(emittedOnA)
+      // a 上旧链路 id 的迟到帧：丢，不建链路
+      onEvent(a, 'sync.link', { panelId: 'panel:5', link: 'L1', frame: { t: 'ping', n: 1 } })
+      expect(accept).toHaveBeenCalledTimes(3)
+
+      onClosed(b)
+      expect(isClosed(links[2])).toBe(true)
+      expect(() => onClosed(b)).not.toThrow()
+    } finally {
+      onClosed(a)
+      onClosed(b)
+      accept.mockRestore()
+    }
+  })
+
+  it('CX-3 派生 agent 目标：同步回 false（是布尔值，不是 promise），从不解析 agent、不核对会话归属', () => {
+    // 哪怕 agent 认得、根会话正是这个浏览器这一轮的标签页会话
+    mocks.locate.mockResolvedValue({ sessionId: 's1', conversationId: 2 })
+    mocks.tabSessionOwnedBy.mockReturnValue(true)
+    const principal = { kind: 'chrome', installId: 'i1', runId: 'r1', connId: 'c1', tabId: 5 }
+    for (const agentId of ['ag-own', 'ag-elsewhere', 'ag-unknown']) {
+      const direct = chromeViewAllowed(principal, { kind: 'agent', agentId })
+      expect(direct).toBe(false)
+      expect(typeof direct).toBe('boolean')
+      const viaServer = authorizeView(principal, { kind: 'agent', agentId })
+      expect(viaServer).toBe(false)
+    }
+    expect(mocks.locate).not.toHaveBeenCalled()
+    expect(mocks.tabSessionOwnedBy).not.toHaveBeenCalled()
+  })
+
+  it('CX-3 会话目标：主体缺 installId / runId（或不是字符串）→ 按空串核对 → false；齐全且归属 → true', () => {
+    // 与真的 tabSessionOwnedBy 同一口径：任何一项为空都不归属
+    mocks.tabSessionOwnedBy.mockImplementation(
+      (sid: unknown, installId: string, runId: string) =>
+        sid === 's1' && installId === 'i1' && runId === 'r1'
+    )
+    const target = { kind: 'session' as const, sessionId: 's1' }
+    expect(chromeViewAllowed({ kind: 'chrome', installId: 'i1', runId: 'r1' }, target)).toBe(true)
+    expect(chromeViewAllowed({ kind: 'chrome', runId: 'r1', tabId: 5 }, target)).toBe(false)
+    expect(chromeViewAllowed({ kind: 'chrome', installId: 'i1', tabId: 5 }, target)).toBe(false)
+    expect(chromeViewAllowed({ kind: 'chrome', installId: 5, runId: 'r1' }, target)).toBe(false)
+    expect(chromeViewAllowed({ kind: 'chrome', installId: 'i1', runId: null }, target)).toBe(false)
+    expect(chromeViewAllowed({ kind: 'chrome' }, target)).toBe(false)
+    expect(mocks.tabSessionOwnedBy.mock.calls).toEqual([
+      ['s1', 'i1', 'r1'],
+      ['s1', '', 'r1'],
+      ['s1', 'i1', ''],
+      ['s1', '', 'r1'],
+      ['s1', 'i1', ''],
+      ['s1', '', '']
+    ])
+    expect(mocks.locate).not.toHaveBeenCalled()
   })
 })

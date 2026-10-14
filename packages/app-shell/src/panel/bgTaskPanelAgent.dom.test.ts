@@ -13,7 +13,7 @@
  *   P3-14-18 忙比过期的状态优先（PIN-14）：status done + run busy → 没有输入框；idle / interrupted → 有
  *   P3-14-19 重建过的渲染端（PIN-13）：任务行在、没有登记条目 → 详情从视图渲染（含第一条用户条目），不说「不在了」，
  *            不建条目
- *   P3-14-20 订阅失败 / 不可用：service_not_found → 「不在了」的文案、不抛；中途 unavailable → 画过的消息留着、
+ *   P3-14-20 订阅失败 / 不可用：not_found → 「不在了」的文案、不抛；中途 unavailable → 画过的消息留着、
  *            不再流式、登记条目不删
  *   P3-14-21 hook agent 的行（没有 parentToolCallId）走同一条路；同一份视图来两次 → 每条消息对象不变、DOM 不重挂
  *   GRP-5    视图一条条长出新的 assistant 消息：合并行是同一个 DOM 节点、展开态与里面展开着的工具卡都在，计数跟着长；
@@ -527,10 +527,10 @@ describe('P3-14-19 a recreated renderer (PIN-13)', () => {
 })
 
 describe('P3-14-20 subscription failure / unavailable', () => {
-  it('service_not_found → the "no longer available" text; nothing throws', async () => {
+  it('not_found → the "no longer available" text; nothing throws', async () => {
     useBgTaskStore.getState().upsert(agentTask('a1', { status: 'done', endedAt: 2 }))
     server.serve(target('a1'), agentView('a1'))
-    server.failSubscribe('service_not_found')
+    server.failSubscribe('not_found')
     render()
     await toggle('a1')
     const gone = container.querySelector('[data-subagent-gone]')

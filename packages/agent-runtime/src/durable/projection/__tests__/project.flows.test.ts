@@ -623,7 +623,7 @@ describe('P3-02 · projector over real flows', () => {
         description: 'returns diagnostics',
         parameters: Type.Object({ n: Type.Number() }),
         execute: async (args) => ({
-          content: [{ type: 'text', text: `out ${(args as { n: number }).n}` }],
+          output: [{ type: 'text', text: `out ${(args as { n: number }).n}` }],
           diagnostics: sets[(args as { n: number }).n]!
         })
       })
@@ -691,7 +691,7 @@ describe('P3-02 · projector over real flows', () => {
           name: 'echo',
           description: 'echo',
           parameters: Type.Object({}),
-          execute: async () => ({ content: [{ type: 'text', text: 'echoed' }] })
+          execute: async () => ({ output: [{ type: 'text', text: 'echoed' }] })
         })
         const first = await makeHost({ tools: [echo] })
         const session = await first.open()

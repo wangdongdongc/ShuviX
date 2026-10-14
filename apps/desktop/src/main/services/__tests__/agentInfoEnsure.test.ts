@@ -228,7 +228,7 @@ const probe: ToolRegistration = defineTool({
   name: 'probe',
   description: 'probe: looks at things',
   parameters: Type.Object({ target: Type.String() }),
-  execute: async () => ({ content: [{ type: 'text', text: 'probe done' }] })
+  execute: async () => ({ output: [{ type: 'text', text: 'probe done' }] })
 })
 
 const countingToolHost: ToolHost = {

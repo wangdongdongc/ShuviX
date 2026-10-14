@@ -5,16 +5,13 @@
  *    预言：同一串视图喂给它与新路径，状态与操作流都必须一样；
  *  - `recordingDraft(draft, log)`：把 chord 的草稿再包一层代理，记下对它的每一次读 / 写 / 枚举（路径），
  *    用来证明「同一引用的子树一次都没碰」与「一帧碰的槽数与历史长度无关」；
- *  - `revisionsOf(state)`：精确操作流（同 `projectorSupport.opsOf`，不拖会话夹具进来）。
+ *  - `revisionsOf(state)`：精确操作流（同 `projectorSupport.opsOf`，都靠 `opStream.ts` 的影子 tracker；
+ *    不拖会话夹具进来）。
  */
-import {
-  RemoteServiceProvider,
-  defineService,
-  type MutableReplicatedState,
-  type ReplicatedState,
-  type Service
-} from '@earendil-works/chord'
+import type { MutableReplicatedState } from '@earendil-works/chord'
 import type { Op } from '@earendil-works/chord/delta'
+import { expect } from 'vitest'
+import { inShadowReplay, tapOps } from './opStream'
 
 type JsonRecord = { [key: string]: unknown }
 
@@ -90,12 +87,15 @@ export function legacyReconcile(draft: object, next: object): void {
 /**
  * 包一层记录代理：`get` / `set` / `deleteProperty` / `has` / `ownKeys` / `getOwnPropertyDescriptor` 都记下
  * 路径（`get:messages/3/blocks`）。读出来的子容器同样包起来，所以整棵子树的访问都看得见。
+ * 操作流记录器在影子 tracker 上重放同一个 mutate 时（`inShadowReplay()`）照样包（草稿被同样驱动），但记到
+ * 一份丢弃的记录里 —— 访问只记真状态那一遍。
  */
 export function recordingDraft<T extends object>(
   target: T,
-  log: string[],
+  given: string[],
   path: readonly (string | number)[] = []
 ): T {
+  const log = path.length === 0 && inShadowReplay() ? [] : given
   const at = (key: PropertyKey): string => [...path, String(key)].join('/')
   return new Proxy(target, {
     get(object, key) {
@@ -146,21 +146,15 @@ export interface RevisionLog {
   stop(): void
 }
 
-/** 精确操作流：一次性的 `RemoteServiceProvider` 订阅（公共 subscribe 会合并修订） */
+/** 精确操作流（影子 tracker，见 `opStream.ts`；公共 subscribe 只给值） */
 export function revisionsOf<V extends object>(state: MutableReplicatedState<V>): RevisionLog {
-  const service = (defineService as (id: string) => Service<{ view: ReplicatedState<V> }>)('t')
-  const provider = new RemoteServiceProvider([{ id: 't' }])
-  provider.provide(service, { view: state as ReplicatedState<V> } as never)
   const revisions: (readonly Op[])[] = []
-  const subscription = provider.subscribe('t', 'singleton', (update) => {
-    if (update.type === 'state') revisions.push(update.ops)
-  })
-  subscription.activate()
+  const tap = tapOps(state, (revision) => revisions.push(revision.ops))
   return {
     revisions,
     stop: () => {
-      void subscription.close()
-      provider.dispose()
+      tap.stop()
+      expect(tap.problems, 'shadow tracker (opStream.ts)').toEqual([])
     }
   }
 }

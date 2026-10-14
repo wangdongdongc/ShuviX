@@ -797,25 +797,26 @@ export {
   type JoinOutcome,
   type SettlePatch
 } from './task/registry'
-// 视图同步（phase 3，P3-04）：每目标一个 chord provider、每（客户端，目标）一个端点；传输与会话由宿主接
+// 视图同步（pi 1.2 / chord2）：一个 chord 宿主 `main`，每个目标一条共享的 ViewSource 记录；链路由宿主接进来
 export {
-  createSyncHub,
+  createViewServer,
   type SyncAgentRef,
-  type SyncHub,
-  type SyncHubDeps,
   type SyncHubHost,
-  type SyncServerTransport,
   type SyncSession,
   type SyncSessionClosedReason,
-  type SyncWireFrame,
   type ViewLease,
-  type ViewProjector
-} from './sync/syncHub'
+  type ViewPrincipal,
+  type ViewProjector,
+  type ViewServer,
+  type ViewServerDeps
+} from './sync/viewServer'
 export {
-  chatViewService,
-  legacySessionView,
-  staticViewState,
-  type ChatViewService,
-  type LegacyTranscript,
-  type SyncView
-} from './sync/services'
+  AgentViewContract,
+  FrameLink,
+  isNotFoundError,
+  notFoundError,
+  SessionViewContract,
+  VIEW_SERVER_HOST,
+  type ViewAvailability
+} from './sync/viewContracts'
+export { legacySessionView, type LegacyTranscript, type SyncView } from './sync/services'

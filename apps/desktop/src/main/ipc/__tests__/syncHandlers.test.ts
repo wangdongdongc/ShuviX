@@ -1,210 +1,242 @@
 /**
- * 视图同步的 IPC 处理器（P3-05，docs/pi-durable/p3-050710a-test-design.md「IPC handler」）：
+ * 视图同步的 IPC 注册（`ipc/syncHandlers`，pi 1.2 / chord2）—— 链路表 `hub` 是模块级的懒单例，服务端也是
+ * （`syncWiring`），所以每个用例 `vi.resetModules()` 之后重新 import。electron 是替身；会话宿主换成 viewRig 的
+ * 假宿主（`getSessionHost` 记调用）；行表 / 旧格式读取器 / 派生 agent 路由 / logger 换成可控的替身。
  *
- *   P3-05-08 `sync:invoke` 的注册与懒建（PIN-12）
- *   P3-05-09 错误带着 code 回来（PIN-01 信封；preload 以纯对象 `{code?, message}` 拒绝 —— 过 contextBridge
- *            不丢 code，渲染端经 reviveSyncInvokeError 还原成带 `.code` 的 Error，P3-15）
- *
- * hub 是真的（syncWiring 的单例），宿主是假的（会话宿主模块整个换掉，记 getSessionHost / peek）。
+ *   SH-1 恰好一个 `on('sync:frame')`，没有 `sync:invoke` 的 handle（缺省的 electron ipcMain 与注入的都一样）
+ *   SH-2 import + 注册不建服务端、不碰会话宿主（PIN-12）；第一个 hello 建服务端（还不碰宿主）；第一次订阅一条
+ *        durable 会话 → `peek(id)` 恰好一次
+ *   SH-3 webContents 7 发来的帧开一条主体 `webContentsId: 7` 的链路，回帧发回 7
+ *   SH-4 `receive` 抛错 → 记一笔 warn，不从监听器里抛出去
+ *   SH-5 经 IPC 订阅空的 sessionId → 客户端错误 `invalid`，什么都没持有
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SyncTarget } from '@shuvix/chat-protocol/sync'
+import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import {
-  createServiceSubscribeCall,
-  RemoteServiceError,
-  type JsonValue
-} from '@earendil-works/chord'
-import type { SyncHub } from '@shuvix/agent-runtime'
+  fakeViewHost,
+  type FakeViewHost
+} from '../../../../../../packages/agent-runtime/src/sync/__tests__/support/viewRig'
 import {
-  CHAT_VIEW_SERVICE_ID,
-  reviveSyncInvokeError,
-  type SyncTarget
-} from '@shuvix/chat-protocol/sync'
+  FakeIpcMain,
+  FakeWebContents,
+  settle,
+  syncWindow,
+  until,
+  type SyncWindow
+} from '../../frontend/sync/__tests__/support/ipcLinkRig'
+import type { SyncWebContents } from '../../frontend/sync/ipcLink'
 
 const holder = vi.hoisted(() => ({
   host: undefined as unknown,
   created: false,
   getSessionHost: vi.fn(),
-  createSessionHost: vi.fn()
+  electronOn: vi.fn(),
+  electronHandle: vi.fn(),
+  logs: [] as string[]
 }))
 
 vi.mock('electron', () => ({
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { on: holder.electronOn, handle: holder.electronHandle },
   webContents: { fromId: vi.fn(() => undefined) }
 }))
 vi.mock('../../services/sessionHost', () => ({
-  getSessionHost: (...args: unknown[]) => {
-    holder.getSessionHost(...args)
-    if (!holder.created) {
-      holder.created = true
-      holder.createSessionHost()
-    }
+  getSessionHost: () => {
+    holder.getSessionHost()
+    holder.created = true
     return holder.host
   },
   peekSessionHost: () => (holder.created ? holder.host : undefined)
 }))
 vi.mock('../../services/sessionRecords', () => ({
-  sessionRecords: {
-    pick: (id: string) =>
-      id === 'missing' ? undefined : { id, storageKind: 'durable-sqlite-1' as string }
-  }
+  sessionRecords: { pick: () => undefined }
 }))
-vi.mock('../../services/sessionStorage', () => ({ readLegacyTranscript: vi.fn(() => null) }))
-vi.mock('../../agents/AgentManager', () => ({ agentManager: { locate: () => undefined } }))
+vi.mock('../../services/sessionStorage', () => ({
+  readLegacyTranscript: () => null
+}))
+vi.mock('../../agents/AgentManager', () => ({
+  agentManager: { locate: () => undefined }
+}))
 vi.mock('../../logger', () => ({
-  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
+  createLogger: (name: string) => ({
+    info: () => {},
+    debug: () => {},
+    warn: (message: string) => holder.logs.push(`${name} warn: ${message}`),
+    error: (message: string) => holder.logs.push(`${name} error: ${message}`)
+  })
 }))
 
-import { registerSyncHandlers, SYNC_INVOKE_CHANNEL } from '../syncHandlers'
-import { peekSyncHub, resetSyncHubForTests } from '../../frontend/sync/syncWiring'
-// eslint-disable-next-line boundaries/dependencies -- 信封的另一半在 preload：同一个用例里钉住「主进程 resolve 信封 → 渲染端抛带 code 的 Error」
-import { createSyncBridge } from '../../../preload/syncBridge'
-import {
-  FakeIpcMain,
-  FakeWebContents,
-  fakeIpcRenderer,
-  settle
-} from '../../frontend/sync/__tests__/support/ipcRig'
-import { FakeSyncHost } from '../../frontend/sync/__tests__/support/fakeSync'
+type HandlersModule = typeof import('../syncHandlers')
+type WiringModule = typeof import('../../frontend/sync/syncWiring')
 
-/** 导入完这些模块时 getSessionHost / createSessionHost 被调了几次（应为 0：懒建） */
-const callsAtImport = {
-  get: holder.getSessionHost.mock.calls.length,
-  create: holder.createSessionHost.mock.calls.length
+const S1: SyncTarget = { kind: 'session', sessionId: 's1' }
+const HELLO = { t: 'hello', name: 'renderer', kind: 'client', epoch: 1 } as const
+
+let windows: SyncWindow[] = []
+let wiring: WiringModule | undefined
+
+/** 新的模块实例（hub / 服务端都是新的） */
+async function fresh(): Promise<{ handlers: HandlersModule; wiring: WiringModule }> {
+  vi.resetModules()
+  const handlers = await import('../syncHandlers')
+  wiring = await import('../../frontend/sync/syncWiring')
+  return { handlers, wiring }
 }
 
-const s1: SyncTarget = { kind: 'session', sessionId: 's1' }
-const subscribe = (id: string): JsonValue =>
-  createServiceSubscribeCall(id, CHAT_VIEW_SERVICE_ID, 'singleton') as unknown as JsonValue
+function page(wc: FakeWebContents, ipcMain: FakeIpcMain): SyncWindow {
+  const window = syncWindow(wc, ipcMain)
+  windows.push(window)
+  return window
+}
 
-let fakeHost: FakeSyncHost
-
-beforeEach(() => {
-  resetSyncHubForTests()
-  fakeHost = new FakeSyncHost()
-  fakeHost.add('s1')
-  holder.host = { sealed: false, peek: vi.fn((id: string) => fakeHost.peek(id)) }
+beforeEach(async () => {
+  for (const window of windows) window.client.dispose()
+  windows = []
+  await settle()
+  await wiring?.peekSyncHub()?.dispose()
+  wiring = undefined
+  const host: FakeViewHost = fakeViewHost()
+  host.add('s1')
+  holder.host = host
   holder.created = false
   holder.getSessionHost.mockClear()
-  holder.createSessionHost.mockClear()
+  holder.electronOn.mockClear()
+  holder.electronHandle.mockClear()
+  holder.logs.length = 0
 })
 
-describe('P3-05-08 sync:invoke 的注册与懒建（PIN-12）', () => {
-  it("P3-05-08 只在 'sync:invoke' 上注册恰一个处理器；它以 'ipc:7' 调 hub.invoke（同一组引用）并交回 hub 的值", async () => {
-    const ipc = new FakeIpcMain()
-    const value = { snapshot: true } as unknown as JsonValue
-    const invoke = vi.fn(async () => value)
-    registerSyncHandlers(ipc, { hub: () => ({ invoke }) as unknown as SyncHub })
-    expect(ipc.handle).toHaveBeenCalledTimes(1)
-    expect(ipc.handle.mock.calls[0]![0]).toBe('sync:invoke')
-    expect(SYNC_INVOKE_CHANNEL).toBe('sync:invoke')
+function viewHost(): FakeViewHost {
+  return holder.host as FakeViewHost
+}
 
-    const handler = ipc.handlers.get('sync:invoke')!
-    const target = { kind: 'session', sessionId: 's1' }
-    const call = { method: '$chord.service', args: [] }
-    const reply = (await handler({ sender: { id: 7 } }, target, call)) as {
-      ok: boolean
-      value: unknown
-    }
-    expect(invoke).toHaveBeenCalledTimes(1)
-    const [clientId, passedTarget, passedCall] = invoke.mock.calls[0] as unknown as unknown[]
-    expect(clientId).toBe('ipc:7')
-    expect(passedTarget).toBe(target)
-    expect(passedCall).toBe(call)
-    expect(reply.ok).toBe(true)
-    expect(reply.value).toBe(value)
+describe('SH-1 registration', () => {
+  it('SH-1 registers exactly one on("sync:frame") and no sync:invoke handler', async () => {
+    const { handlers } = await fresh()
+    const ipcMain = new FakeIpcMain()
+    handlers.registerSyncHandlers(ipcMain)
+    expect(ipcMain.count('sync:frame')).toBe(1)
+    expect([...ipcMain.listeners.keys()]).toEqual(['sync:frame'])
+    expect(ipcMain.handled).toEqual([])
   })
 
-  it('P3-05-08 import syncHandlers / syncWiring 并注册：不建 hub、不碰宿主；第一次订阅 durable 会话 → getSessionHost().peek(id) 恰一次', async () => {
-    expect(callsAtImport).toEqual({ get: 0, create: 0 })
-    const ipc = new FakeIpcMain()
-    registerSyncHandlers(ipc, { lookup: () => undefined })
-    expect(peekSyncHub()).toBeUndefined()
+  it('SH-1 the default electron ipcMain gets the same single listener', async () => {
+    const { handlers } = await fresh()
+    handlers.registerSyncHandlers()
+    expect(holder.electronOn).toHaveBeenCalledTimes(1)
+    expect(holder.electronOn.mock.calls[0]![0]).toBe('sync:frame')
+    expect(holder.electronHandle).not.toHaveBeenCalled()
+  })
+})
+
+describe('SH-2 lazy creation (PIN-12)', () => {
+  it('SH-2 import + register build nothing; the first hello builds the server; the first durable subscribe peeks once', async () => {
+    const { handlers, wiring } = await fresh()
+    const ipcMain = new FakeIpcMain()
+    handlers.registerSyncHandlers(ipcMain)
+    expect(wiring.peekSyncHub()).toBeUndefined()
     expect(holder.getSessionHost).not.toHaveBeenCalled()
-    expect(holder.createSessionHost).not.toHaveBeenCalled()
 
-    const wc = new FakeWebContents(7)
-    registerSyncHandlers(ipc, { lookup: (id) => (id === 7 ? wc : undefined) })
-    const reply = (await ipc.invokeAs(wc, 'sync:invoke', s1, subscribe('a'))) as { ok: boolean }
-    expect(reply.ok).toBe(true)
-    expect(peekSyncHub()).toBeDefined()
-    expect(holder.createSessionHost).toHaveBeenCalledTimes(1)
-    const peek = (holder.host as { peek: ReturnType<typeof vi.fn> }).peek
-    expect(peek).toHaveBeenCalledTimes(1)
-    expect(peek).toHaveBeenCalledWith('s1')
+    // 第一个 hello：建服务端，仍不碰会话宿主
+    const probe = new FakeWebContents(3)
+    ipcMain.emitFrom(probe, 'sync:frame', 'probe.1', HELLO)
+    const server = wiring.peekSyncHub()
+    expect(server).toBeDefined()
+    expect(holder.getSessionHost).not.toHaveBeenCalled()
+    expect(viewHost().peeks).toEqual([])
+
+    // 第一次订阅一条 durable 会话：peek 恰好一次
+    const window = page(new FakeWebContents(7), ipcMain)
+    const sub = window.client.acquire<SessionView>(S1)
+    await until(() => sub.state().status === 'live', 'live')
+    expect(viewHost().peeks).toEqual(['s1'])
+    expect(sub.value()).toEqual(viewHost().session('s1')!.root.value)
+    expect(wiring.peekSyncHub()).toBe(server)
+    expect(server!.hasSubscribers('s1')).toBe(true)
+    await settle()
+    expect(viewHost().peeks).toEqual(['s1'])
   })
 })
 
-describe('P3-05-09 错误带着 code 回来（PIN-01）', () => {
-  function rig(hub?: () => SyncHub): {
-    ipc: FakeIpcMain
-    wc: FakeWebContents
-    bridge: ReturnType<typeof createSyncBridge>
-  } {
-    const ipc = new FakeIpcMain()
-    const wc = new FakeWebContents(7)
-    registerSyncHandlers(ipc, {
-      lookup: (id) => (id === 7 ? wc : undefined),
-      ...(hub === undefined ? {} : { hub })
-    })
-    return { ipc, wc, bridge: createSyncBridge(fakeIpcRenderer(wc, ipc)) }
-  }
+describe('SH-3 the sender is the principal', () => {
+  it('SH-3 a frame from webContents 7 opens a link with webContentsId 7; the answer goes back to 7', async () => {
+    const { handlers, wiring } = await fresh()
+    const ipcMain = new FakeIpcMain()
+    handlers.registerSyncHandlers(ipcMain)
+    const server = wiring.getSyncHub()
+    const accept = vi.spyOn(server, 'accept')
+    const wc7 = new FakeWebContents(7)
+    const wc8 = new FakeWebContents(8)
 
-  it("P3-05-09 hub 以 RemoteServiceError('service_not_found') 拒绝 → 信封 {ok:false, error:{code, message}}；preload 的 sync.invoke 以纯对象 {code:'service_not_found', message} 拒绝，还原后是带 code 的 Error", async () => {
-    const error = new RemoteServiceError('service_not_found', 'Unknown agent a9')
-    const { ipc, wc, bridge } = rig(
-      () =>
-        ({
-          invoke: async () => {
-            throw error
-          }
-        }) as unknown as SyncHub
-    )
-    const reply = await ipc.invokeAs(wc, 'sync:invoke', s1, subscribe('a'))
-    expect(reply).toEqual({
-      ok: false,
-      error: { code: 'service_not_found', message: error.message }
-    })
-    const rejected = await bridge.invoke(s1, subscribe('b')).catch((e: unknown) => e)
-    // 纯对象（contextBridge 按值拷得过去）；structuredClone 近似那次拷贝
-    expect(rejected).not.toBeInstanceOf(Error)
-    expect(structuredClone(rejected)).toEqual({ code: 'service_not_found', message: error.message })
-    const revived = reviveSyncInvokeError(structuredClone(rejected))
-    expect(revived).toBeInstanceOf(Error)
-    expect(revived.code).toBe('service_not_found')
-    expect(revived.message).toBe(error.message)
+    ipcMain.emitFrom(wc7, 'sync:frame', 'L1', HELLO)
+    expect(accept).toHaveBeenCalledTimes(1)
+    expect(accept.mock.calls[0]![1]).toEqual({ kind: 'window', webContentsId: 7 })
+    // 服务端的 hello 回到 7（同一个链路 id），8 什么都没收到
+    expect(wc7.frames()).toEqual([['L1', expect.objectContaining({ t: 'hello', kind: 'host' })]])
+    expect(wc8.sent).toEqual([])
+
+    ipcMain.emitFrom(wc8, 'sync:frame', 'L1', HELLO)
+    expect(accept).toHaveBeenCalledTimes(2)
+    expect(accept.mock.calls[1]![1]).toEqual({ kind: 'window', webContentsId: 8 })
+    expect(wc8.frames()).toHaveLength(1)
+    expect(wc7.frames()).toHaveLength(1)
   })
+})
 
-  it('P3-05-09 普通 Error → 带着 message 回来，code 为 undefined', async () => {
-    const { ipc, wc, bridge } = rig(
-      () =>
-        ({
-          invoke: async () => {
-            throw new Error('plain failure')
-          }
-        }) as unknown as SyncHub
-    )
-    expect(await ipc.invokeAs(wc, 'sync:invoke', s1, subscribe('a'))).toEqual({
-      ok: false,
-      error: { message: 'plain failure' }
-    })
-    const rejected = (await bridge.invoke(s1, subscribe('b')).catch((e: unknown) => e)) as Error & {
-      code?: string
+describe('SH-4 a failing receive', () => {
+  it('SH-4 an error thrown inside receive is logged and not rethrown out of the listener', async () => {
+    const { handlers, wiring } = await fresh()
+    const ipcMain = new FakeIpcMain()
+    handlers.registerSyncHandlers(ipcMain)
+    const broken: SyncWebContents = {
+      id: 9,
+      send: () => {},
+      isDestroyed: () => false,
+      on: () => {
+        throw new Error('listener table broken')
+      },
+      removeListener: () => {}
     }
-    expect(rejected.message).toBe('plain failure')
-    expect(rejected.code).toBeUndefined()
-  })
+    expect(() => ipcMain.emitFrom(broken, 'sync:frame', 'L1', HELLO)).not.toThrow()
+    expect(holder.logs).toHaveLength(1)
+    expect(holder.logs[0]).toMatch(/^SyncIpc warn: /)
+    expect(holder.logs[0]).toContain('webContents 9')
+    expect(holder.logs[0]).toContain('listener table broken')
 
-  it("P3-05-09 不合法的目标 {kind:'monitor'} → 被拒，hub 里什么都不留（每个 id 的 hasSubscribers 都是 false）", async () => {
-    const { bridge } = rig()
-    const rejected = await bridge
-      .invoke({ kind: 'monitor' } as unknown as SyncTarget, subscribe('m'))
-      .catch((e: unknown) => e)
-    expect(rejected).not.toBeInstanceOf(Error)
-    expect((rejected as { message: string }).message).toMatch(/Invalid sync target/)
-    expect(reviveSyncInvokeError(rejected).message).toMatch(/Invalid sync target/)
+    // 没有 sender 的事件同样只记一笔
+    const listener = [...ipcMain.listeners.get('sync:frame')!][0]!
+    expect(() =>
+      listener({ sender: undefined as unknown as SyncWebContents }, 'L1', HELLO)
+    ).not.toThrow()
+    expect(holder.logs).toHaveLength(2)
+    expect(holder.logs[1]).toContain('webContents undefined')
+    expect(wiring.peekSyncHub()).toBeUndefined()
+  })
+})
+
+describe('SH-5 invalid input over IPC', () => {
+  it('SH-5 an empty sessionId → client error "invalid", nothing held', async () => {
+    const { handlers, wiring } = await fresh()
+    const ipcMain = new FakeIpcMain()
+    handlers.registerSyncHandlers(ipcMain)
+    const wc = new FakeWebContents(7)
+    const window = page(wc, ipcMain)
+    const sub = window.client.acquire<SessionView>({ kind: 'session', sessionId: '' })
+    await until(() => sub.state().status === 'error', 'error')
+    expect(sub.state()).toEqual({ status: 'error', code: 'invalid' })
+    expect(sub.value()).toBeUndefined()
+    // 判定来自服务端：拒绝是经 IPC 回来的一帧 gone
+    expect(
+      wc
+        .frames()
+        .some(
+          ([, frame]) =>
+            (frame as { t?: unknown }).t === 'gone' &&
+            (frame as { error?: { code?: unknown } }).error?.code === 'invalid'
+        )
+    ).toBe(true)
     await settle()
-    const hub = peekSyncHub()!
-    for (const id of ['s1', 'monitor', 'ipc:7', '']) expect(hub.hasSubscribers(id)).toBe(false)
-    expect(fakeHost.peeks).toEqual([])
+    expect(viewHost().peeks).toEqual([])
+    expect(holder.getSessionHost).not.toHaveBeenCalled()
+    expect(wiring.peekSyncHub()?.hasSubscribers('') ?? false).toBe(false)
   })
 })

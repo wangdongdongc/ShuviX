@@ -345,6 +345,11 @@ class SessionHostImpl implements SessionHost {
         this.reportRunState(sessionId, session.runState)
         // 真正打开了一次（PIN-09）：在运行状态报过之后
         this.notifyOpened(session)
+        // 存储报错会让 Harness 自己失败并关闭（pi-durable 1.2 起读也算）：把它从表里摘掉，免得被看着的会话
+        // 一直钉在表里、每个调用都失败到重启为止；下一次使用照常重开，durable 从已提交的状态恢复
+        void harness.closed.then((end) => {
+          if (end.reason === 'failed') this.onSessionFailed(sessionId, session, end.error)
+        })
         return session
       } catch (error) {
         await harness.close(BG).catch(() => undefined)
@@ -361,6 +366,28 @@ class SessionHostImpl implements SessionHost {
     this.reportRunState(sessionId, state)
     // 忙 → 闲：可回收的会话多了一个
     if (previous === 'busy' && state !== 'busy') this.scheduleTrim()
+  }
+
+  /** 会话失败（存储报错）：记日志、报一条错误、摘掉（还是表里这一份时）—— 关闭照常报 `remove` */
+  private onSessionFailed(sessionId: string, session: DurableSessionImpl, error: unknown): void {
+    this.logger.error(
+      `session failed after a storage error session=${sessionId}: ${errorText(error)}`
+    )
+    try {
+      this.deps.eventSink.broadcast({
+        type: 'error',
+        sessionId,
+        error: `This conversation stopped after a storage error and will reopen on its next use: ${errorText(error)}`
+      })
+    } catch (broadcastError) {
+      this.logger.warn(
+        `failed-session notice failed session=${sessionId}: ${errorText(broadcastError)}`
+      )
+    }
+    if (this.manager.get(sessionId) !== session) return
+    this.manager.remove(sessionId, 'remove').catch((closeError: unknown) => {
+      this.logger.warn(`closing failed session ${sessionId}: ${errorText(closeError)}`)
+    })
   }
 
   /** `onSessionOpened`（PIN-09）：抛错只记日志 */

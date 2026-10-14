@@ -986,7 +986,7 @@ describe('rebuildAgentTools', () => {
       {} as Context
     )
     expect(result.isError).toBe(true)
-    expect(JSON.stringify(result.content)).toContain('not connected')
+    expect(JSON.stringify(result.output)).toContain('not connected')
   })
 
   it('H11-38 / P2-06-29 fork 上的锁（对话 5）照样重建，callerIdOf(5) = s1', async () => {

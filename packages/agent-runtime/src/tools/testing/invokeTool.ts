@@ -5,7 +5,8 @@
  * 一份假的：调用身份（callId / taskId / conversationId）、chord context（带上给定的 signal），
  * 并把工具经 api 汇报的东西记下来 —— `output()` 的文本、`diagnostic()` 的附注、`details()` 的每一版。
  * 返回值里的 `result` 按 durable 结算的口径补齐（tool.ts 的 finalResult，不含截断与 afterTool）：
- * 没给 content 就用 output 文本，没给 details 就用最后一次 `details()`，api 记下的诊断排在结果自带的之前。
+ * 没给 output 就用 `api.output()` 汇报的文本（结果里仍叫 `content`），没给 details 就用最后一次 `details()`，
+ * api 记下的诊断排在结果自带的之前。
  *
  * 只收 durable 注册项，而且必须**显式**声明 `replay`（ShuviX 的约定，见 toolResult.ts）：pi 0.80 的
  * 旧形状工具 `execute(toolCallId, params, signal)` 从来没有这个字段，按 durable 签名调它只会把
@@ -125,7 +126,14 @@ export async function invokeTool<T extends InvokableTool>(
     tasks: () => [],
     task: () => undefined
   }
-  const agent: Agent = { thinkingLevel: 'off', extensions: [], tools: [registration], sections: [] }
+  const agent: Agent = {
+    thinkingLevel: 'off',
+    extensions: [],
+    tools: [registration],
+    callable: [registration],
+    deferred: [],
+    sections: []
+  }
 
   const base = {
     taskId: (options.taskId ?? 1) as TaskId,
@@ -177,9 +185,11 @@ export async function invokeTool<T extends InvokableTool>(
 
   const merged = [...diagnostics, ...(raw.diagnostics ?? [])]
   const lastDetails = details.length > 0 ? details[details.length - 1] : undefined
+  // durable 的 `output`（给模型的正文）在这里叫 `content`：与 ShuviX 自己的 ToolResult 同名，用例读 `.content`
+  const { output: rawOutput, ...rest } = raw
   const result: InvokedToolResult = {
-    ...raw,
-    content: raw.content ?? (output === '' ? [] : [{ type: 'text', text: output }])
+    ...rest,
+    content: rawOutput ?? (output === '' ? [] : [{ type: 'text', text: output }])
   }
   if (raw.details === undefined && lastDetails !== undefined) result.details = lastDetails
   if (merged.length > 0) result.diagnostics = merged

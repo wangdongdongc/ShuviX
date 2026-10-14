@@ -115,10 +115,10 @@ export function fakeMcpServer(
       if (!tools.some((decl) => decl.name === tool)) {
         return {
           isError: true,
-          content: [{ type: 'text', text: `[MCP Error] unknown tool ${tool} on ${name}` }]
+          output: [{ type: 'text', text: `[MCP Error] unknown tool ${tool} on ${name}` }]
         }
       }
-      return { content: [{ type: 'text', text: `${name}.${tool}:${JSON.stringify(args)}` }] }
+      return { output: [{ type: 'text', text: `${name}.${tool}:${JSON.stringify(args)}` }] }
     }
   }
   return server

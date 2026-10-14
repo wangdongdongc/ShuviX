@@ -7,7 +7,7 @@
  *   P3-08-07 不可用：钩子报 unavailable、store 回到空视图的值（PIN-14）；之后 replaced → 又是 live、store 是新值
  *   P3-08-08 两个使用方：一次订阅；卸掉一个不退订、视图切片还在；都卸掉退订一次、切片丢掉
  *   P3-08-09 A → B → A（React 合批内）：最终 store 是 A 的；B 的切片不残留
- *   P3-08-24 useAgentView：订阅 `{kind:'agent'}`；service_not_found → error + code、不建条目；卸载退订一次
+ *   P3-08-24 useAgentView：订阅 `{kind:'agent'}`；not_found → error + code、不建条目；卸载退订一次
  *
  * 渠道是 `fakeServer` 的真 chord 服务端，经 `setSessionChannelApi` 注入。
  */
@@ -108,10 +108,10 @@ describe('useSessionView', () => {
 
   it('P3-08-04 订阅失败：钩子 {error, code}、只订一次、这条会话的切片一个都不写', async () => {
     server.serve(S1, V('s1'))
-    server.failSubscribe('service_not_found')
+    server.failSubscribe('not_found')
     render(createElement(SessionProbe, { id: 's1', tag: 'a' }))
     await settle()
-    expect(states.a).toEqual({ status: 'error', code: 'service_not_found' })
+    expect(states.a).toEqual({ status: 'error', code: 'not_found' })
     expect(server.calls.filter((c) => /^(subscribe|fail):/.test(c))).toHaveLength(1)
     expect(store().sessionViews.s1).toBeUndefined()
     expect(store().sessionStreams.s1).toBeUndefined()
@@ -239,12 +239,12 @@ describe('useAgentView', () => {
     expect(server.calls.filter((c) => c.startsWith('unsubscribe:'))).toHaveLength(1)
   })
 
-  it('P3-08-24 service_not_found → error + code、不建条目', async () => {
+  it('P3-08-24 not_found → error + code、不建条目', async () => {
     server.serve(AGENT, agentView())
-    server.failSubscribe('service_not_found')
+    server.failSubscribe('not_found')
     render(createElement(AgentProbe, { id: 'a1' }))
     await settle()
-    expect(states.agent).toEqual({ status: 'error', code: 'service_not_found' })
+    expect(states.agent).toEqual({ status: 'error', code: 'not_found' })
     expect(useSubSessionStore.getState().subSessions.a1).toBeUndefined()
   })
 })

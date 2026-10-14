@@ -265,7 +265,7 @@ describe('auxiliary work · abort-marked at open, never resumed', () => {
           const handle = await api.conversation(reviewer, context)
           const submission = await handle!.submit({ type: 'input', content: 'REVIEW-ME' }, context)
           await submission.wait(context)
-          return { content: [{ type: 'text', text: 'reviewed' }] }
+          return { output: [{ type: 'text', text: 'reviewed' }] }
         }
       })
       const first = await host({ tools: [askReview] })

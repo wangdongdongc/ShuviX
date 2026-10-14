@@ -109,7 +109,7 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
         })
         if (outcome.status === 'feedback') {
           return {
-            content: [
+            output: [
               {
                 type: 'text',
                 text: `Tool was not executed. User responded with feedback instead:\n${outcome.text}`

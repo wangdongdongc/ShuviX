@@ -99,7 +99,7 @@ function simpleTool(
     parameters: Type.Object({}),
     replay,
     execute: async (): Promise<ToolExecutionResult> => ({
-      content: [{ type: 'text', text: `${name} ok` }]
+      output: [{ type: 'text', text: `${name} ok` }]
     })
   })
 }
@@ -144,7 +144,7 @@ function mcpTool(server: FakeMcpServer, decl: McpToolDeclaration): ToolRegistrat
         if (context.abortSignal?.aborted) throw error
         return {
           isError: true,
-          content: [
+          output: [
             {
               type: 'text',
               text: `[MCP Error] ${error instanceof Error ? error.message : String(error)}`

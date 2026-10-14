@@ -7,7 +7,6 @@ import { createRoot } from 'react-dom/client'
 import { setSessionChannelApi, syncClientFor } from '@shuvix/chat-ui'
 import { PanelLink } from './panelLink'
 import { createPanelChannelApi } from './channelApi'
-import { resetSyncOnReconnect } from './syncReset'
 import { dropTab, initTabSelection } from './tabSelection'
 import { applyAppearance, DEFAULT_APPEARANCE } from './appearance'
 import { App } from './App'
@@ -30,12 +29,10 @@ if (!Number.isInteger(tabId) || tabId < 0) {
   // 单会话渠道：宿主管理类界面（模型 / 项目 / 会话配置 / 设置入口）随 getHostApi() 为空自动隐藏
   const api = createPanelChannelApi(link)
   setSessionChannelApi(api)
-  // 视图同步的客户端先于任何视图 hook 建好：同一条桥连接上的几个侧边栏共用一个桌面客户端
-  // （`chrome:<connId>`），订阅 id 按标签页 + 本页随机数加前缀才不会撞（P3-09-12）
+  // 视图同步的客户端先于任何视图 hook 建好：链路 id 按标签页 + 本页随机数加前缀（同一条桥连接上有好几个
+  // 侧边栏）。掉线 / 重连由客户端自己跟着渠道的 down / up 换链路、重新持有
   const nonce = Math.random().toString(36).slice(2, 8)
-  const syncClient = syncClientFor(api.sync, { idPrefix: `tab${tabId}.${nonce}` })
-  // 重连（非 ready → ready）之后旧连接上的订阅都不在了：丢掉绑定、重订一份新快照（PIN-10）
-  resetSyncOnReconnect(link, syncClient)
+  syncClientFor(api.sync, { idPrefix: `tab${tabId}.${nonce}` })
   if (rootEl) {
     createRoot(rootEl).render(
       <StrictMode>

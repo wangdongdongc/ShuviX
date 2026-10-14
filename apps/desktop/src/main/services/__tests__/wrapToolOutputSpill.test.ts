@@ -40,14 +40,14 @@ const bigText = (tag: string): string =>
 const IMAGE_BLOCK = { type: 'image' as const, data: 'AAAABBBBCCCC', mimeType: 'image/png' }
 
 /** details 声明了 truncated / persisted 的工具 —— 包装器只在声明过时才合并 */
-function makeTool(content: unknown[]): AnyTool {
+function makeTool(output: unknown[]): AnyTool {
   return {
     name: 'probe',
     label: 'probe',
     description: 'test tool',
     parameters: {},
     replay: 'unsafe',
-    execute: async () => ({ content, details: { truncated: false, persisted: false } })
+    execute: async () => ({ output, details: { truncated: false, persisted: false } })
   } as unknown as AnyTool
 }
 

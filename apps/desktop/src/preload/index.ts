@@ -1038,7 +1038,7 @@ const api = {
     // 单一 ipcRenderer 监听 + 本地扇出（见上方 subscribeAppEvent），避免 app:event 监听器泄漏告警
     subscribe: (callback: (event: AppEvent) => void) => subscribeAppEvent(callback)
   },
-  /** 视图同步（P3-05）：chord 服务调用 `sync:invoke`（信封 → 带 code 的 Error）+ 服务端推帧 `sync:frame` */
+  /** 视图同步（pi 1.2 / chord2）：chord 链路的帧经 `sync:frame` 两个方向走（带链路 id） */
   sync: createSyncBridge(ipcRenderer)
 }
 

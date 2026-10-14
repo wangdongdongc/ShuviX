@@ -376,7 +376,7 @@ describe('P3-01 · SessionView types and the JSON guard', () => {
     const viewModule = await import('@shuvix/chat-protocol/types/sessionView')
     expect(viewModule.emptySessionView).toBe(emptySessionView)
     const syncModule = await import('@shuvix/chat-protocol/sync')
-    expect(syncModule.CHAT_VIEW_SERVICE_ID).toBe('shuvix.chat.view')
+    expect(syncModule.SYNC_NOT_FOUND).toBe('not_found')
   })
 
   it('P3-01-12 emptySessionView: exact value, passes the guard, a fresh object per call', () => {

@@ -310,7 +310,7 @@ export function identityProbe(
     parameters: Type.Object({}),
     execute: async (_args, api) => {
       seen.push(getSession().agentIdentity(api.conversationId))
-      return { content: [{ type: 'text', text: `${name} done` }] }
+      return { output: [{ type: 'text', text: `${name} done` }] }
     }
   })
 }
@@ -366,7 +366,7 @@ export function dispatch(options: DispatchOptions): ToolRegistration {
       )
       options.outcomes.push(outcome)
       await options.afterSpawn?.(context)
-      return { content: [{ type: 'text', text: outcome.result }] }
+      return { output: [{ type: 'text', text: outcome.result }] }
     }
   })
 }
@@ -448,7 +448,7 @@ export function probeTool(name = 'probe'): ToolRegistration {
     name,
     description: `${name}: probes`,
     parameters: Type.Object({}),
-    execute: async () => ({ content: [{ type: 'text', text: `${name} done` }] })
+    execute: async () => ({ output: [{ type: 'text', text: `${name} done` }] })
   })
 }
 

@@ -29,7 +29,7 @@ export class PanelLink {
   private readonly stateListeners = new Set<Listener<PanelLinkState>>()
   private readonly chatListeners = new Set<Listener<unknown>>()
   private readonly appListeners = new Set<Listener<unknown>>()
-  private readonly frameListeners = new Set<Listener<unknown>>()
+  private readonly syncListeners = new Set<(link: string, frame: unknown) => void>()
   /**
    * 进入 `ready` 的次数（每次断开又连上 +1）。桌面那头的会话绑定、视图订阅都属于某一次就绪：
    * 换了一次就绪，旧的一律作废（PIN-10）
@@ -74,8 +74,8 @@ export class PanelLink {
       case 'app.event':
         for (const fn of this.appListeners) fn(message.event)
         return
-      case 'sync.frame':
-        for (const fn of [...this.frameListeners]) fn(message.frame)
+      case 'sync.link':
+        for (const fn of [...this.syncListeners]) fn(message.link, message.frame)
         return
     }
   }
@@ -126,12 +126,27 @@ export class PanelLink {
     return () => this.appListeners.delete(fn)
   }
 
-  /** 视图同步的帧（每个登记一份；注销只摘自己那份，重复注销无事） */
-  onSyncFrame(fn: Listener<unknown>): () => void {
-    const entry: Listener<unknown> = (frame) => fn(frame)
-    this.frameListeners.add(entry)
+  /**
+   * 发一帧视图同步链路的帧给 SW（再转桌面）。没连着 / 没就绪就丢掉 —— 链路本身在传输不在时先攒着帧
+   * （chat-ui 的 syncClient），掉线时它随 `onState` 结束，不会往这里塞
+   */
+  sendSync(link: string, frame: unknown): void {
+    const port = this.port
+    if (!port || this.state !== 'ready') return
+    const message: PanelToWorker = { kind: 'sync.link', link, frame }
+    try {
+      port.postMessage(message)
+    } catch {
+      /* 端口刚断：链路随之结束 */
+    }
+  }
+
+  /** 视图同步链路上桌面发来的帧（每个登记一份；注销只摘自己那份，重复注销无事） */
+  onSyncLink(fn: (link: string, frame: unknown) => void): () => void {
+    const entry = (link: string, frame: unknown): void => fn(link, frame)
+    this.syncListeners.add(entry)
     return () => {
-      this.frameListeners.delete(entry)
+      this.syncListeners.delete(entry)
     }
   }
 }

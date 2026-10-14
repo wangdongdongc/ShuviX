@@ -53,7 +53,7 @@ export function stubTool(name: string, extra: Record<string, unknown> = {}): Too
     description: `${name}: stub`,
     parameters: Type.Object({}),
     replay: SAFE.has(name) ? 'safe' : 'unsafe',
-    execute: async () => ({ content: [{ type: 'text', text: `${name} ok` }] }),
+    execute: async () => ({ output: [{ type: 'text', text: `${name} ok` }] }),
     ...extra
   } as ToolRegistration
 }
@@ -177,7 +177,7 @@ export function mcpRegistration(server: string, d: McpToolDeclaration): ToolRegi
     parameters: Type.Unsafe<Record<string, unknown>>(d.inputSchema as Record<string, unknown>),
     replay: 'unsafe',
     mcpMeta: { server, tool: d.name, trusted: d.trusted },
-    execute: async () => ({ content: [{ type: 'text', text: `${d.name} ok` }] })
+    execute: async () => ({ output: [{ type: 'text', text: `${d.name} ok` }] })
   } as unknown as ToolRegistration
 }
 

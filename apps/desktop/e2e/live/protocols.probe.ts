@@ -650,7 +650,7 @@ function probeTool(nonce: Rig['nonce']): ToolRegistration {
     execute: async () => {
       nonce.calls++
       nonce.value = `PX-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
-      return { content: [{ type: 'text', text: nonce.value }] }
+      return { output: [{ type: 'text', text: nonce.value }] }
     }
   })
 }

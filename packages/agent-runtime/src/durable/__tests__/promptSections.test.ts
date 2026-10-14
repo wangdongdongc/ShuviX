@@ -531,7 +531,7 @@ describe('sections through a real durable request', () => {
       parameters: Type.Object({}),
       execute: async () => {
         live.values.instruction = { filename: 'AGENTS.md', content: 'Use npm.' }
-        return { content: [{ type: 'text', text: 'flipped' }] }
+        return { output: [{ type: 'text', text: 'flipped' }] }
       }
     })
     const t = await makeHost({ promptHost: live.host })

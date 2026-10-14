@@ -13,9 +13,7 @@
  *   - `agent.respondToInput` 只送进这条会话自己的运行时（答题方记成 `chrome:<connId>`，审计用）；没人认领
  *     什么也不发（卡片跟着视图走，P3-08）—— 别的会话的 requestId 永远送不到那条会话；
  *   - `agent.continue` / `agent.withdrawQueued`（P3-09-15）：过了归属核对才调网关，回包与 IPC 同形；
- *   - `sync.invoke`（P3-09-02..05）：目标必须归这条连接（派生 agent 目标按它的根会话核对，认不出的 agent
- *     与不归它的同一句话）；过了关交给 hub（客户端 `chrome:<connId>`，在 chrome 上下文里），回信封 ——
- *     hub 的错误码装在信封里，不是桥的一段错误文本。
+ *   - 视图同步不在这里（pi 1.2：每个侧边栏一条 chord 链路，走桥事件 `sync.link`，见 chromeLinks.ts）。
  *
  * 归属判定用真的 `../tabSessions`（规则住在那里），sessionDao 是一张 pickSettings 的内存表。
  */
@@ -56,10 +54,7 @@ const mocks = vi.hoisted(() => {
     presentations: vi.fn(),
     definitions: vi.fn(),
     grantSite: vi.fn(),
-    pickSettings: vi.fn(),
-    hubInvoke: vi.fn(),
-    resolveAgentOf: vi.fn(),
-    getSyncHub: vi.fn()
+    pickSettings: vi.fn()
   }
 })
 
@@ -87,10 +82,6 @@ vi.mock('../../../services/chromeBridge', () => ({
   existingChromeBrowserState: vi.fn()
 }))
 vi.mock('../../../dao/sessionDao', () => ({ sessionDao: { pickSettings: mocks.pickSettings } }))
-vi.mock('../../sync/syncWiring', () => ({
-  getSyncHub: mocks.getSyncHub,
-  resolveAgentOf: mocks.resolveAgentOf
-}))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -103,11 +94,8 @@ vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
   }
 })
 
-import { createServiceSubscribeCall, createServiceUnsubscribeCall } from '@earendil-works/chord'
 import { validateShuvixMdText } from '@shuvix/agent-runtime'
-import { CHAT_VIEW_SERVICE_ID } from '@shuvix/chat-protocol/sync'
-import { BAD_SYNC_TARGET, callPanelChannel, isPanelChannelPath, NOT_YOUR_SESSION } from '../channel'
-import { agentRootOf, forgetAgentRoots } from '../chromeSyncTransport'
+import { callPanelChannel, isPanelChannelPath, NOT_YOUR_SESSION } from '../channel'
 
 const OWNED = 'tab-owned'
 const OTHER_RUN = 'tab-other-run'
@@ -118,11 +106,6 @@ const CHROME_CTX = (sessionId: string): Ctx => ({
   source: { type: 'chrome', installId: 'i1' },
   sessionId
 })
-
-/** 一次视图订阅 / 退订调用（chord 的服务控制调用） */
-const SUBSCRIBE = createServiceSubscribeCall('tab5.n#1', CHAT_VIEW_SERVICE_ID, 'singleton')
-const UNSUBSCRIBE = createServiceUnsubscribeCall('tab5.n#1')
-const sessionTarget = (sessionId: unknown): unknown => ({ kind: 'session', sessionId })
 
 interface FakeConn {
   id: string
@@ -156,7 +139,6 @@ const allDelegates = (): Array<ReturnType<typeof vi.fn>> => [
   mocks.taskList,
   mocks.presentations,
   mocks.definitions,
-  mocks.hubInvoke,
   vi.mocked(validateShuvixMdText) as unknown as ReturnType<typeof vi.fn>
 ]
 const totalDelegateCalls = (): number =>
@@ -223,20 +205,10 @@ beforeEach(() => {
     mocks.taskList,
     mocks.presentations,
     mocks.definitions,
-    mocks.grantSite,
-    mocks.hubInvoke,
-    mocks.resolveAgentOf,
-    mocks.getSyncHub
+    mocks.grantSite
   ]) {
     spy.mockReset()
   }
-  mocks.hubInvoke.mockImplementation(async (...args: unknown[]) => {
-    mocks.calls.push({ name: 'hub.invoke', args, ctx: mocks.ctx.current })
-    return { snapshot: 'encoded' }
-  })
-  mocks.getSyncHub.mockImplementation(() => ({ invoke: mocks.hubInvoke }))
-  mocks.resolveAgentOf.mockResolvedValue(undefined)
-  forgetAgentRoots('conn-1')
   mocks.getById.mockImplementation((id: string) => {
     mocks.calls.push({ name: 'getById', args: [id], ctx: mocks.ctx.current })
     return { id, title: 'Chrome · Page' }
@@ -321,8 +293,7 @@ const FIXTURES: Record<string, { args: unknown[]; delegate: () => ReturnType<typ
   'shuvixMd.validate': {
     args: [{ type: 'agent', text: '---\nname: x\n---\n' }],
     delegate: () => vi.mocked(validateShuvixMdText) as unknown as ReturnType<typeof vi.fn>
-  },
-  'sync.invoke': { args: [sessionTarget(OWNED), SUBSCRIBE], delegate: () => mocks.hubInvoke }
+  }
 }
 
 describe('CH-2 白名单里的每条路径都落到恰好一个委托上', () => {
@@ -343,7 +314,7 @@ describe('CH-2 白名单里的每条路径都落到恰好一个委托上', () =>
 
 // ─── 归属核对 ───────────────────────────────────────────────────────────────
 
-/** 带会话的 14 条路径：会话怎么放进参数 */
+/** 带会话的 13 条路径：会话怎么放进参数 */
 const SESSION_PATHS: Array<[string, (sid: unknown) => unknown[]]> = [
   ['agent.init', (sid) => [{ sessionId: sid }]],
   ['agent.prompt', (sid) => [{ sessionId: sid, text: 'hi', inlineTokens: { t: tabToken(5) } }]],
@@ -360,8 +331,7 @@ const SESSION_PATHS: Array<[string, (sid: unknown) => unknown[]]> = [
   ['message.list', (sid) => [sid]],
   ['runtime.statuses', (sid) => [sid]],
   ['bgTask.list', (sid) => [{ sessionId: sid }]],
-  ['tools.list', (sid) => [sid]],
-  ['sync.invoke', (sid) => [sessionTarget(sid), SUBSCRIBE]]
+  ['tools.list', (sid) => [sid]]
 ]
 
 describe('CH-3 带会话的调用：会话不归这条连接 → 拒绝，什么也不调', () => {
@@ -384,12 +354,7 @@ describe('CH-3 带会话的调用：会话不归这条连接 → 拒绝，什么
 
   for (const [path, argsOf] of SESSION_PATHS) {
     it.each(cases)(`CH-3 ${path}：%s`, async (_label, sid) => {
-      // 视图同步的目标里会话 id 不是非空字符串 = 不是同步目标：另一句话（P3-09-03），同样什么也不调
-      const refusal =
-        path === 'sync.invoke' && (typeof sid !== 'string' || !sid)
-          ? BAD_SYNC_TARGET
-          : NOT_YOUR_SESSION
-      await expect(call(path, argsOf(sid))).rejects.toThrow(refusal)
+      await expect(call(path, argsOf(sid))).rejects.toThrow(NOT_YOUR_SESSION)
       expect(totalDelegateCalls()).toBe(0)
       expect(mocks.runInContext).not.toHaveBeenCalled()
       // agent.prompt：不归它的会话连标签页都不去问、站点更不会记
@@ -636,125 +601,6 @@ describe('P3-09-15 agent.continue / agent.withdrawQueued', () => {
     expect(mocks.gateway.continue).not.toHaveBeenCalled()
     expect(mocks.gateway.withdrawQueued).not.toHaveBeenCalled()
     expect(mocks.runInContext).not.toHaveBeenCalled()
-  })
-})
-
-// ─── 视图同步（P3-09-02..05） ───────────────────────────────────────────────
-
-describe('P3-09-02 sync.invoke：自己的会话', () => {
-  it('P3-09-02 交给 hub 恰一次：客户端 chrome:<connId>、目标与调用原样，在 chrome 上下文里；回 {ok:true, value}', async () => {
-    const result = await call('sync.invoke', [sessionTarget(OWNED), SUBSCRIBE])
-    expect(result).toStrictEqual({ ok: true, value: { snapshot: 'encoded' } })
-    expect(mocks.hubInvoke.mock.calls).toEqual([['chrome:conn-1', sessionTarget(OWNED), SUBSCRIBE]])
-    expect(mocks.calls.find((c) => c.name === 'hub.invoke')!.ctx).toEqual(CHROME_CTX(OWNED))
-    // 会话目标从不问派生 agent 路由
-    expect(mocks.resolveAgentOf).not.toHaveBeenCalled()
-  })
-
-  it('P3-09-02 退订同样过核对、同样交给 hub；hub 回 undefined → {ok:true, value:undefined}', async () => {
-    mocks.hubInvoke.mockResolvedValue(undefined)
-    expect(await call('sync.invoke', [sessionTarget(OWNED), UNSUBSCRIBE])).toStrictEqual({
-      ok: true,
-      value: undefined
-    })
-    expect(mocks.hubInvoke.mock.calls).toEqual([
-      ['chrome:conn-1', sessionTarget(OWNED), UNSUBSCRIBE]
-    ])
-  })
-})
-
-describe('P3-09-03 sync.invoke：归属不对 / 目标不对', () => {
-  it.each([
-    ['桌面自己的会话', DESKTOP],
-    ['别的浏览器的标签页会话', OTHER_INSTALL],
-    ['同一浏览器上一轮运行的会话', OTHER_RUN],
-    ['不存在的会话', 'no-such-session']
-  ])('P3-09-03 %s → NOT_YOUR_SESSION，hub 一次都没调', async (_label, sid) => {
-    await expect(call('sync.invoke', [sessionTarget(sid), SUBSCRIBE])).rejects.toThrow(
-      NOT_YOUR_SESSION
-    )
-    expect(mocks.hubInvoke).not.toHaveBeenCalled()
-    expect(mocks.getSyncHub).not.toHaveBeenCalled()
-    expect(mocks.runInContext).not.toHaveBeenCalled()
-  })
-
-  it.each([
-    ['不是对象', 'tab-owned'],
-    ['没有 kind', { sessionId: OWNED }],
-    ['不认识的 kind', { kind: 'tab', sessionId: OWNED }],
-    ['会话 id 是空串', { kind: 'session', sessionId: '' }],
-    ['agent id 不是字符串', { kind: 'agent', agentId: 5 }],
-    ['null', null]
-  ])('P3-09-03 目标%s → 「bad target」，hub 一次都没调', async (_label, target) => {
-    await expect(call('sync.invoke', [target, SUBSCRIBE])).rejects.toThrow(BAD_SYNC_TARGET)
-    expect(mocks.hubInvoke).not.toHaveBeenCalled()
-    expect(mocks.resolveAgentOf).not.toHaveBeenCalled()
-  })
-
-  it('P3-09-03 参数不是数组 → NOT_YOUR_SESSION，hub 一次都没调', async () => {
-    await expect(call('sync.invoke', { 0: sessionTarget(OWNED), 1: SUBSCRIBE })).rejects.toThrow(
-      NOT_YOUR_SESSION
-    )
-    await expect(call('sync.invoke', undefined)).rejects.toThrow(NOT_YOUR_SESSION)
-    expect(mocks.hubInvoke).not.toHaveBeenCalled()
-  })
-})
-
-describe('P3-09-04 sync.invoke：派生 agent 目标按根会话核对', () => {
-  const AGENT = { kind: 'agent', agentId: 'a1' }
-
-  it('P3-09-04 根会话归这条连接 → 放行（上下文是根会话）；推帧要用的根会话记下了', async () => {
-    mocks.resolveAgentOf.mockResolvedValue({ sessionId: OWNED, conversationId: 4 })
-    expect(await call('sync.invoke', [AGENT, SUBSCRIBE])).toStrictEqual({
-      ok: true,
-      value: { snapshot: 'encoded' }
-    })
-    expect(mocks.resolveAgentOf.mock.calls).toEqual([['a1']])
-    expect(mocks.hubInvoke.mock.calls).toEqual([['chrome:conn-1', AGENT, SUBSCRIBE]])
-    expect(mocks.calls.find((c) => c.name === 'hub.invoke')!.ctx).toEqual(CHROME_CTX(OWNED))
-    expect(agentRootOf('conn-1', 'a1')).toBe(OWNED)
-  })
-
-  it.each([
-    ['根会话是桌面的', { sessionId: DESKTOP, conversationId: 4 }],
-    ['根会话是别的浏览器的', { sessionId: OTHER_INSTALL, conversationId: 4 }],
-    ['认不出的 agent（不透露它存不存在）', undefined]
-  ])('P3-09-04 %s → NOT_YOUR_SESSION，hub 一次都没调，什么也没记', async (_label, located) => {
-    mocks.resolveAgentOf.mockResolvedValue(located)
-    await expect(call('sync.invoke', [AGENT, SUBSCRIBE])).rejects.toThrow(NOT_YOUR_SESSION)
-    expect(mocks.hubInvoke).not.toHaveBeenCalled()
-    expect(agentRootOf('conn-1', 'a1')).toBeUndefined()
-  })
-
-  it('P3-09-04 路由自己抛错 → 同样 NOT_YOUR_SESSION（不把路由的错误透给侧边栏）', async () => {
-    mocks.resolveAgentOf.mockRejectedValue(new Error('router not built'))
-    await expect(call('sync.invoke', [AGENT, SUBSCRIBE])).rejects.toThrow(NOT_YOUR_SESSION)
-    expect(mocks.hubInvoke).not.toHaveBeenCalled()
-  })
-})
-
-describe('P3-09-05 sync.invoke：hub 的错误码装在信封里', () => {
-  it('P3-09-05 hub 以 code 拒绝 → resolve {ok:false, error:{code, message}}（不是桥的 ok:false 文本）', async () => {
-    mocks.hubInvoke.mockRejectedValue(
-      Object.assign(new Error('Session s was deleted'), { code: 'service_not_found' })
-    )
-    expect(await call('sync.invoke', [sessionTarget(OWNED), SUBSCRIBE])).toStrictEqual({
-      ok: false,
-      error: { code: 'service_not_found', message: 'Session s was deleted' }
-    })
-  })
-
-  it('P3-09-05 没有 code 的错误 → {ok:false, error:{message}}；抛的不是 Error 也一样', async () => {
-    mocks.hubInvoke.mockRejectedValueOnce(new TypeError('Invalid service call'))
-    expect(await call('sync.invoke', [sessionTarget(OWNED), { bogus: true }])).toStrictEqual({
-      ok: false,
-      error: { message: 'Invalid service call' }
-    })
-    mocks.hubInvoke.mockRejectedValueOnce('plain')
-    expect(await call('sync.invoke', [sessionTarget(OWNED), SUBSCRIBE])).toStrictEqual({
-      ok: false,
-      error: { message: 'plain' }
-    })
   })
 })
 

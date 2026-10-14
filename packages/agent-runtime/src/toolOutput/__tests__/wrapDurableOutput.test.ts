@@ -9,7 +9,7 @@
  *    durable 把诊断渲染成结果末尾的 `<harness>\n[info] …\n</harness>`；
  *  - 包装后的 `outputLimits` 让 durable 不再截已经截好的正文；
  *  - `spill: 'auto'` 按这次调用的 agent 工具表（`api.agent(context)`）里有没有 `read` 现判；
- *  - 工具没给 content、靠 `api.output()` 汇报时不补「(no output)」；
+ *  - 工具没给 output、靠 `api.output()` 汇报时不补「(no output)」；
  *  - isError 结果原样交回。
  *
  * P1-06b：这些用例原在桌面的 wrapDurableTool.test.ts（编号不变），随内核搬到这里；落盘口换成内存表
@@ -114,15 +114,18 @@ function probe(execute: Execute, extra: Record<string, unknown> = {}): AnyTool {
 
 /** 回给定文本块的探针 */
 const textProbe = (...texts: string[]): AnyTool =>
-  probe(async () => ({ content: texts.map((text) => ({ type: 'text' as const, text })) }))
+  probe(async () => ({ output: texts.map((text) => ({ type: 'text' as const, text })) }))
 
 /** api.agent 的替身：交出一张只含这些工具名的工具表，并数被问了几次 */
 function agentWith(names: string[]): { agent: ToolExecutionApi['agent']; calls: () => number } {
   let calls = 0
+  const tools = names.map((name) => ({ name }) as unknown as AnyTool)
   const agent: Agent = {
     thinkingLevel: 'off',
     extensions: [],
-    tools: names.map((name) => ({ name }) as unknown as AnyTool),
+    tools,
+    callable: tools,
+    deferred: [],
     sections: []
   }
   return {
@@ -234,7 +237,7 @@ describe('WD 落盘位置走 diagnostics', () => {
   it('WD-5 工具自己的诊断在前、截断说明在后；未超限的结果不多出 diagnostics 键', async () => {
     const own: ToolDiagnostic = { severity: 'warn', code: 'own', message: 'tool remark' }
     const tool = probe(async () => ({
-      content: [{ type: 'text' as const, text: big() }],
+      output: [{ type: 'text' as const, text: big() }],
       diagnostics: [own]
     }))
     const result = await run(wrap(tool))
@@ -247,7 +250,7 @@ describe('WD 落盘位置走 diagnostics', () => {
 
   it('WD-6 details 声明了 truncated / persisted 才合并（落盘 → 两个都 true）', async () => {
     const tool = probe(async () => ({
-      content: [{ type: 'text' as const, text: big() }],
+      output: [{ type: 'text' as const, text: big() }],
       details: { truncated: false, persisted: false, other: 1 }
     }))
     const result = await run(wrap(tool))
@@ -319,7 +322,7 @@ describe('WD spill:auto —— 按这次调用的 agent 工具表现判', () => 
 })
 
 describe('WD api.output() 与「(no output)」', () => {
-  it('WD-12 工具只经 api.output() 汇报、不给 content → 不补 (no output)：结果正文就是汇报的输出，且确实交到了外层 api', async () => {
+  it('WD-12 工具只经 api.output() 汇报、不给 output → 不补 (no output)：结果正文就是汇报的输出，且确实交到了外层 api', async () => {
     const tool = probe(async (_args, api) => {
       api.output('line one\n')
       api.output(new TextEncoder().encode('line two\n'))
@@ -332,7 +335,7 @@ describe('WD api.output() 与「(no output)」', () => {
     expect(resultText(inv.result)).not.toContain('(no output)')
   })
 
-  it('WD-13 既没 content、也没汇报过看得见的输出（空白不算）→ (no output)', async () => {
+  it('WD-13 既没 output、也没汇报过看得见的输出（空白不算）→ (no output)', async () => {
     const silent = probe(async () => ({}))
     expect((await run(wrap(silent))).content).toEqual([{ type: 'text', text: '(no output)' }])
 
@@ -343,10 +346,10 @@ describe('WD api.output() 与「(no output)」', () => {
     expect((await run(wrap(blank))).content).toEqual([{ type: 'text', text: '(no output)' }])
   })
 
-  it('WD-14 显式给了空 content（哪怕汇报过输出）→ (no output)：durable 只在 content 缺省时才拿留存的输出当正文', async () => {
+  it('WD-14 显式给了空 output（哪怕汇报过输出）→ (no output)：durable 只在 output 缺省时才拿留存的输出当正文', async () => {
     const tool = probe(async (_args, api) => {
       api.output('progress…\n')
-      return { content: [] }
+      return { output: [] }
     })
     expect((await run(wrap(tool))).content).toEqual([{ type: 'text', text: '(no output)' }])
   })
@@ -355,18 +358,19 @@ describe('WD api.output() 与「(no output)」', () => {
 describe('WD 失败结果与元数据', () => {
   it('WD-15 isError 结果原样交回：超长也不截、不落盘、不加诊断、不补 (no output)', async () => {
     const mem = memorySink()
-    const failure = { isError: true, content: [{ type: 'text' as const, text: big() }] }
+    const failure = { isError: true, output: [{ type: 'text' as const, text: big() }] }
     const result = await run(
       wrap(
         probe(async () => failure),
         { sink: mem.sink }
       )
     )
-    expect(result).toStrictEqual(failure)
+    // invokeTool 把 durable 的 `output` 交回成 `content`
+    expect(result).toStrictEqual({ isError: true, content: failure.output })
     expect(mem.writes()).toBe(0)
 
-    const empty = { isError: true, content: [] }
-    expect(await run(wrap(probe(async () => empty)))).toStrictEqual(empty)
+    const empty = { isError: true, output: [] }
+    expect(await run(wrap(probe(async () => empty)))).toStrictEqual({ isError: true, content: [] })
   })
 
   it('WD-18 工具抛错 → isError 结果、文字即错误消息（裁定 Q12）；调用已取消时照旧抛', async () => {
@@ -438,7 +442,7 @@ const IMAGE_BLOCK = { type: 'image' as const, data: 'AAAABBBBCCCC', mimeType: 'i
 /** 一次调用回「文本 + 图片 + 文本」—— 图片块不该进后处理 */
 const multiBlockProbe = (): AnyTool =>
   probe(async () => ({
-    content: [
+    output: [
       { type: 'text' as const, text: 'first block' },
       IMAGE_BLOCK,
       { type: 'text' as const, text: 'second block' }
@@ -545,7 +549,7 @@ const readStub = defineTool({
   name: 'read',
   description: 'read stub',
   parameters: Type.Object({}),
-  execute: async () => ({ content: [{ type: 'text', text: 'unused' }] })
+  execute: async () => ({ output: [{ type: 'text', text: 'unused' }] })
 }) as unknown as AnyTool
 
 describe('WD-R 一轮真的 pi-durable', () => {
@@ -591,7 +595,7 @@ describe('WD-R 一轮真的 pi-durable', () => {
     // 3000 行 × 40 字节 ≈ 120 KB：内存截断到 80 KB，正好落在 durable 缺省 50 KB 之上
     const line = (i: number): string => `${String(i).padStart(4, '0')}-${'x'.repeat(34)}`
     const text = Array.from({ length: 3000 }, (_, i) => line(i)).join('\n')
-    const tool = probe(async () => ({ content: [{ type: 'text' as const, text }] }), {
+    const tool = probe(async () => ({ output: [{ type: 'text' as const, text }] }), {
       outputMaxBytes: 80 * 1024
     })
     const wrapped = wrapDurableOutput(tool, { spill: false })

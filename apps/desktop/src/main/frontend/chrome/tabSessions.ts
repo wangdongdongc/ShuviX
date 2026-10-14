@@ -41,13 +41,18 @@ export function tabSessionsOf(installId: string): Array<{ id: string; binding: C
   return out
 }
 
+/** 这条会话是不是这个浏览器（installId）这一轮运行（runId）的标签页会话 */
+export function tabSessionOwnedBy(sessionId: unknown, installId: string, runId: string): boolean {
+  if (typeof sessionId !== 'string' || !sessionId || !installId || !runId) return false
+  const binding = chromeTabOf(sessionRecords.pickSettings(sessionId, ['chromeTab']))
+  return !!binding && binding.installId === installId && binding.runId === runId
+}
+
 /** 这条会话是不是这条连接（这个浏览器的这一轮运行）的标签页会话 */
 export function connectionOwnsSession(conn: BridgeConnection, sessionId: unknown): boolean {
-  if (typeof sessionId !== 'string' || !sessionId) return false
   const info = conn.info
   if (!info) return false
-  const binding = chromeTabOf(sessionRecords.pickSettings(sessionId, ['chromeTab']))
-  return !!binding && binding.installId === info.installId && binding.runId === info.runId
+  return tabSessionOwnedBy(sessionId, info.installId, info.runId)
 }
 
 /** 同一个标签页的并发 open 串成一次（面板重开、重连时的重复请求不会建出两条会话） */

@@ -40,6 +40,14 @@ import {
 // 纯逻辑（题目、答案映射、state）在 commandRiskCore —— 探针在不起应用的 node 里也要用它们
 export { CLASSIFY_TIMEOUT_MS, COMMAND_RISK_QUESTIONS, classifierState, riskFromAnswers }
 
+/**
+ * 还没用分类探针（`npm run probe:classifier`）测过的分类模型，不进「分类模型」列表：分类题目是按 Jev
+ * 调的，一个没测过的模型若把危险命令判成「只读、p ≥ 0.9」，那条命令会跳过自动审查。测过再从这里删掉。
+ *  - `openai/gpt-6-luna`（pi-ai 1.1 的 OpenAI Decisions API）：还没测；而且用「Sign in with ChatGPT」登录的
+ *    账号调它必然失败（Decisions API 不收 ChatGPT 令牌）
+ */
+const UNPROBED_CLASSIFIERS: ReadonlySet<string> = new Set(['openai/gpt-6-luna'])
+
 const log = createLogger('CommandClassifier')
 
 /** 分类器日志里这个场景的名字 */
@@ -118,17 +126,19 @@ export function createCommandClassifier(
           } catch (err) {
             log.warn(`列出 ${row.name} 的分类模型失败：${errorText(err)}`)
           }
-          return found.map(
-            (model, index): AvailableModel => ({
-              id: `${row.id}:${model.id}`,
-              providerId: row.id,
-              modelId: model.id,
-              isEnabled: 1,
-              sortOrder: index,
-              capabilities: '{}',
-              providerName: row.displayName || row.name
-            })
-          )
+          return found
+            .filter((model) => !UNPROBED_CLASSIFIERS.has(`${providerId}/${model.id}`))
+            .map(
+              (model, index): AvailableModel => ({
+                id: `${row.id}:${model.id}`,
+                providerId: row.id,
+                modelId: model.id,
+                isEnabled: 1,
+                sortOrder: index,
+                capabilities: '{}',
+                providerName: row.displayName || row.name
+              })
+            )
         })
     },
 

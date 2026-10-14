@@ -1,7 +1,8 @@
 /**
  * P3-08-11（静态）—— 视图同步客户端跑在浏览器里（桌面渲染进程、Chrome 侧边栏）：`sync/**` 与两个钩子
- * 只引 chord 的根入口 / `/context`、chat-protocol、React，以及 chat-ui 自己的模块；没有 `node:` 内建，
- * 没有 agent-runtime（它是主进程的）。
+ * 只引 chord 的根入口 / `/context`、chat-protocol、React、chat-ui 自己的模块，以及 agent-runtime 里**唯一**一个
+ * 浏览器安全的模块 `sync/viewContracts`（pi 1.2：契约只有一份；它自己只引 chord 与 typebox，另有守护用例）；
+ * 没有 `node:` 内建，没有 agent-runtime 的别的模块（它们是主进程的）。
  *
  * 解读（设计稿的字面是「只引 chord 与 chat-protocol」）：钩子必须引 React 与 store，所以白名单再放进
  * `react` 与包内相对路径；禁止项不变。
@@ -35,7 +36,10 @@ function importsOf(source: string): string[] {
   return out
 }
 
+const VIEW_CONTRACTS = '@shuvix/agent-runtime/sync/viewContracts'
+
 const ALLOWED = (spec: string): boolean =>
+  spec === VIEW_CONTRACTS ||
   spec === '@earendil-works/chord' ||
   spec === '@earendil-works/chord/context' ||
   spec.startsWith('@shuvix/chat-protocol/') ||
@@ -60,6 +64,8 @@ describe('P3-08-11 视图同步客户端是浏览器安全的', () => {
     const offenders = specs.filter((spec) => !ALLOWED(spec))
     expect(offenders).toEqual([])
     expect(specs.some((spec) => spec.startsWith('node:'))).toBe(false)
-    expect(specs.some((spec) => spec.includes('agent-runtime'))).toBe(false)
+    expect(specs.some((spec) => spec.includes('agent-runtime') && spec !== VIEW_CONTRACTS)).toBe(
+      false
+    )
   })
 })

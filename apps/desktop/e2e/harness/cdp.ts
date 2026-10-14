@@ -112,6 +112,24 @@ export function filePreviewWindowOf(t: CdpTarget): { sessionId: string; path: st
   return sessionId && path ? { sessionId, path } : null
 }
 
+/** 悬浮聊天窗口（#pinned-chat?sessionId=…）的页面判别 —— 一条会话一个窗口，按 hash 里的 sessionId 区分 */
+export function isPinnedChatPage(t: CdpTarget, appUrl?: string): boolean {
+  if (t.type !== 'page' || !t.url.includes('out/renderer') || !t.url.includes('#pinned-chat')) {
+    return false
+  }
+  return !appUrl || t.url.startsWith(appUrl)
+}
+
+/** 悬浮聊天窗口 target 的会话 id（hash 里的 `sessionId`）；不是悬浮窗 / 没带 → null */
+export function pinnedChatSessionOf(t: CdpTarget): string | null {
+  const at = t.url.indexOf('#pinned-chat')
+  if (at < 0) return null
+  const hash = t.url.slice(at + 1)
+  const q = hash.indexOf('?')
+  if (q < 0) return null
+  return new URLSearchParams(hash.slice(q + 1)).get('sessionId')
+}
+
 /**
  * 连一个页面 target。
  *

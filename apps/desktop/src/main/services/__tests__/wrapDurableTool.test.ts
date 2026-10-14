@@ -51,16 +51,19 @@ function textProbe(...texts: string[]): AnyTool {
     description: 'probe tool',
     parameters: Type.Object({}),
     replay: 'unsafe',
-    execute: async () => ({ content: texts.map((text) => ({ type: 'text' as const, text })) })
+    execute: async () => ({ output: texts.map((text) => ({ type: 'text' as const, text })) })
   } as unknown as AnyTool
 }
 
 /** api.agent 的替身：交出一张只含这些工具名的工具表 */
 function agentWith(names: string[]): ToolExecutionApi['agent'] {
+  const tools = names.map((name) => ({ name }) as unknown as AnyTool)
   const agent: Agent = {
     thinkingLevel: 'off',
     extensions: [],
-    tools: names.map((name) => ({ name }) as unknown as AnyTool),
+    tools,
+    callable: tools,
+    deferred: [],
     sections: []
   }
   return async () => agent

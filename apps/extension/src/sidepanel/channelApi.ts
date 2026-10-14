@@ -10,45 +10,39 @@
  */
 import type { SessionChannelApi } from '@shuvix/chat-protocol/chatApi'
 import type { ChromePanelChannelPath } from '@shuvix/chat-protocol/chromeBridge'
-import {
-  syncInvokeError,
-  type JsonValue,
-  type SyncChannel,
-  type SyncFrame,
-  type SyncInvokeResult
-} from '@shuvix/chat-protocol/sync'
+import type { JsonValue, SyncLinkChannel } from '@shuvix/chat-protocol/sync'
 import type { PanelLink } from './panelLink'
 import { resolveSelectedTabs, withTabTokens } from './tabSelection'
 
 /** 侧边栏连接里视图同步要的那一点（PanelLink 满足它） */
-type SyncLink = Pick<PanelLink, 'request' | 'onSyncFrame'>
+type SyncLink = Pick<PanelLink, 'state' | 'onState' | 'sendSync' | 'onSyncLink'>
 
 /**
- * 视图同步的渠道（P3-09）：`invoke` = `channel.call('sync.invoke', [target, call])`，桌面回一个信封
- * （`SyncInvokeResult`）—— `ok:false` 抛带 `.code` 的 Error（chord 的错误码，如 `service_not_found`）；
- * 桥这一层的失败（`desktop-offline`、归属核对没过 …）只是一段文本，按 PIN-13 原样当成 `.code`。
- * `onFrame` 收 SW 转来的 `sync.frame`（只有挂着这条会话的侧边栏收得到）。
+ * 视图同步的链路渠道（pi 1.2 / chord2）：chat-ui 的 syncClient 在它上面跑 chord 客户端。帧经 SW 走桥事件
+ * `sync.link`（SW 按端口补 `panelId`）；传输就是这个侧边栏到桌面的连接 —— 离开 `ready` 即 down（桌面那头的链路随
+ * 桥连接一起没了），回到 `ready` 即 up（syncClient 换一条新链路、重新持有，拿新快照）。
  */
-export function createPanelSyncChannel(link: SyncLink): SyncChannel {
+export function createPanelSyncChannel(link: SyncLink): SyncLinkChannel {
   return {
-    invoke: async (target, call) => {
-      let envelope: SyncInvokeResult
-      try {
-        envelope = (await link.request('channel.call', {
-          path: 'sync.invoke',
-          args: [target, call]
-        })) as SyncInvokeResult
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        throw syncInvokeError({ code: message, message })
-      }
-      if (!envelope || typeof envelope !== 'object') {
-        throw syncInvokeError({ message: 'ShuviX sent a malformed sync reply.' })
-      }
-      if (envelope.ok) return envelope.value as JsonValue | undefined
-      throw syncInvokeError(envelope.error ?? { message: 'ShuviX reported an error.' })
+    send: (id, frame) => link.sendSync(id, frame),
+    onFrame: (callback) => link.onSyncLink((id, frame) => callback(id, frame as JsonValue)),
+    isUp: () => link.state === 'ready',
+    onDown: (callback) => {
+      let up = link.state === 'ready'
+      return link.onState((state) => {
+        const next = state === 'ready'
+        if (up && !next) callback(`side panel link ${state}`)
+        up = next
+      })
     },
-    onFrame: (callback) => link.onSyncFrame((frame) => callback(frame as SyncFrame))
+    onUp: (callback) => {
+      let up = link.state === 'ready'
+      return link.onState((state) => {
+        const next = state === 'ready'
+        if (!up && next) callback()
+        up = next
+      })
+    }
   }
 }
 

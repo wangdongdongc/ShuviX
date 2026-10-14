@@ -371,7 +371,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
       execute: async (_args, api, context) => {
         holds.push(api.callId)
         await Promise.race([gate(api.callId).promise, aborted(context.abortSignal!)])
-        return { content: [{ type: 'text', text: 'held done' }] }
+        return { output: [{ type: 'text', text: 'held done' }] }
       }
     }),
     defineTool({
@@ -385,7 +385,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
           conversationId: api.conversationId,
           identity: sessionOf(sessionId)?.agentIdentity(api.conversationId)
         })
-        return { content: [{ type: 'text', text: args.text ?? 'probe done' }] }
+        return { output: [{ type: 'text', text: args.text ?? 'probe done' }] }
       }
     }),
     defineTool({
@@ -403,7 +403,7 @@ export async function spawnWorld(options: SpawnWorldOptions = {}): Promise<Spawn
           conversationId: api.conversationId,
           identity: sessionOf(sessionId)?.agentIdentity(api.conversationId)
         })
-        return { content: [{ type: 'text', text: 'title set' }] }
+        return { output: [{ type: 'text', text: 'title set' }] }
       }
     })
   ]
