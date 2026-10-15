@@ -1,6 +1,6 @@
 ---
 name: drawing
-description: "The contract and the craft for inline SVG figures — what a figure must keep to render at all (viewBox, color tokens, what gets stripped), picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, mark specs, label and legend rules, the categorical/sequential/status palette, the look (type scale, two weights, category tints, lines, spacing, number formatting), interactive blocks where your system prompt describes them (when one earns its place, layout, wiring, a worked example), and a catalog of what goes wrong. Load this before the first figure in a conversation, even a two-box sketch."
+description: "The contract and the craft for inline SVG figures — what a figure must keep to render at all (viewBox, color tokens, what gets stripped), picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, mark specs, label and legend rules, the categorical/sequential/status palette, the look (type scale, two weights, category tints, lines, spacing, number formatting), interactive blocks where your system prompt describes them (when one earns its place, layout, wiring, a worked example), saving a figure as a standalone .svg file, and a catalog of what goes wrong. Load this before the first figure in a conversation, even a two-box sketch, and before writing a figure to a .svg file."
 ---
 
 # Drawing figures
@@ -20,6 +20,8 @@ However small the figure, break one of these and it renders wrong.
   - Category boxes `--viz-N-tint` (fill) with `--viz-N-ink` (text) · a raised surface or neutral box `--viz-wash`
 - **Text in text tokens, never a series color** — `fill="var(--theme-text-secondary)"` (or `-primary` / `-tertiary`), `font-family="var(--theme-font-sans)"`, `font-size` at least 11. The one exception: text on a category tint is that slot's ink — `var(--viz-2-ink)` on `var(--viz-2-tint)`.
 - **No `<style>`, `<foreignObject>`, `<script>` or remote `href` / `src`** — they are stripped before display. `url(#id)` references are fine; `url(https://…)` is not.
+
+These rules are for a figure in your reply. **A figure saved as a `.svg` file is opened outside ShuviX, where none of these tokens exist** — read `references/files.md` before writing one.
 
 ## Boxes and arrows: the budget
 
