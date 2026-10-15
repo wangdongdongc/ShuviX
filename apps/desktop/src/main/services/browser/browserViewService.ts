@@ -290,8 +290,17 @@ export function createTab(url?: string, opts?: { activate?: boolean }): string {
   })
 
   // 从停放窗口出生（可见、桌面尺寸）：浏览器窗口开不开都能被 agent 操作；
-  // 浏览器窗口的 renderer 给它排出卡片槽后，applyLayout 再把它挂上墙
-  park(tabId, view)
+  // 浏览器窗口的 renderer 给它排出卡片槽后，applyLayout 再把它挂上墙。
+  // 停放窗口建不出来（无头运行的服务器上 Chromium 拒绝开窗之类）：收掉这个 view、抛给调用方 ——
+  // agent 的工具据此回一个失败，而不是留下一个挂不上任何窗口的 webContents
+  try {
+    park(tabId, view)
+  } catch (error) {
+    parentOf.delete(tabId)
+    if (!view.webContents.isDestroyed()) view.webContents.close()
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`Could not create the browser's hidden window: ${reason}`)
+  }
 
   const wc = view.webContents
 

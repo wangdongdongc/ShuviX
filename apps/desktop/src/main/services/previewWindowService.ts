@@ -25,6 +25,7 @@ import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import { createLogger } from '../logger'
 import { loadRendererPage } from '../utils/rendererPage'
+import { isHeadless } from '../utils/headless'
 
 const log = createLogger('PreviewWindow')
 
@@ -71,6 +72,11 @@ export interface OpenFileParams {
  * @returns 是否有一个窗口在显示这个文件（新开的或已有的）
  */
 export async function openFileInWindow(params: OpenFileParams): Promise<boolean> {
+  // 无头运行：不开窗（网络客户端本来就在自己的浏览器里开新标签页，走不到这里）
+  if (isHeadless()) {
+    log.info(`无头运行：不开预览窗口，忽略 ${params.path}`)
+    return false
+  }
   const workingDirectory = sessionService.getById(params.sessionId)?.workingDirectory
   // 相对路径只有会话的工作目录能解；会话没了又给的是相对路径 → 解不出来，不响应
   if (!isAbsolute(params.path) && !workingDirectory) {

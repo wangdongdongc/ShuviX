@@ -326,6 +326,13 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # 命令行安装脚本随每个 release 附上：
+      # curl -fsSL https://github.com/wangdongdongc/ShuviX/releases/latest/download/install-linux.sh | bash
+      - name: Attach the Linux install script
+        run: |
+          bash -n scripts/install-linux.sh
+          cp scripts/install-linux.sh dist/install-linux.sh
+
       - name: List artifacts
         run: ls -lhR dist/
 

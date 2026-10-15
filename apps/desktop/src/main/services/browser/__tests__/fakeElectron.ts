@@ -27,7 +27,9 @@
  *    `('message', event, method, params)` 派发一条 CDP 事件，sendCommand 是间谍（缺省回 `{}`）；
  *  - `dialog.showOpenDialog` 是间谍（缺省回「用户取消」）—— 断「没弹原生文件框」用；
  *  - 停放窗口 = 构造选项 `focusable: false` 的那个（`fx.staging()`）；浏览器窗口 = 加载了
- *    `#browser-window` 的那些（`fx.browserWindows()`）。
+ *    `#browser-window` 的那些（`fx.browserWindows()`）；
+ *  - `fx.windowError` 有值时每次 `new BrowserWindow` 都抛它、不记进窗口表（没有显示器的服务器上
+ *    Chromium 拒绝开窗）；reset 清掉。
  */
 import { vi, type Mock } from 'vitest'
 
@@ -218,6 +220,8 @@ export interface FakeElectron {
   appHandlers: Map<string, Handler[]>
   /** 假窗口 getBounds 的回答 */
   bounds: Rect
+  /** 有值时每次 `new BrowserWindow` 都抛它（不记进窗口表）；用例自己清掉，reset 也清 */
+  windowError: Error | null
   session: FakeSession
   app: {
     on(event: string, fn: Handler): void
@@ -266,7 +270,8 @@ function create(): FakeElectron {
     log: [] as string[],
     doubleParented: [] as string[],
     appHandlers: new Map<string, Handler[]>(),
-    bounds: { x: 10, y: 20, width: 900, height: 700 } as Rect
+    bounds: { x: 10, y: 20, width: 900, height: 700 } as Rect,
+    windowError: null
   } as FakeElectron
 
   const pushHandler = (map: Map<string, Handler[]>, event: string, fn: Handler): void => {
@@ -338,6 +343,7 @@ function create(): FakeElectron {
     private handlers = new Map<string, Handler[]>()
 
     constructor(opts: Record<string, unknown>) {
+      if (fx.windowError) throw fx.windowError
       this.opts = opts
       this.label = opts.focusable === false ? 'staging' : `win${++winSeq}`
       this.webContents.id = nextWcId++
@@ -465,6 +471,7 @@ function create(): FakeElectron {
     fx.doubleParented.length = 0
     fx.appHandlers.clear()
     fx.bounds = { x: 10, y: 20, width: 900, height: 700 }
+    fx.windowError = null
     session.handlers.clear()
     session.permissionHandler = undefined
     fx.fromPartition.mockClear()

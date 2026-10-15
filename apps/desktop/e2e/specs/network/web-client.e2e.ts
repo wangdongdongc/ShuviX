@@ -197,6 +197,7 @@ describe('network access: the web client in a real page', () => {
     expect(initial).toStrictEqual({
       enabled: false,
       port: 7766,
+      lan: false,
       listening: false,
       addresses: [],
       clients: []
@@ -206,6 +207,7 @@ describe('network access: the web client in a real page', () => {
     expect(await setPort(P1)).toStrictEqual({
       enabled: false,
       port: P1,
+      lan: false,
       listening: false,
       addresses: [],
       clients: []
@@ -213,13 +215,17 @@ describe('network access: the web client in a real page', () => {
 
     await mainAppEvents.clear()
     const on = await setEnabled(true)
-    expect(on).toMatchObject({ enabled: true, port: P1, listening: true, clients: [] })
+    expect(on).toMatchObject({
+      enabled: true,
+      port: P1,
+      listening: true,
+      clients: [],
+      lan: false,
+      bindAddress: '127.0.0.1'
+    })
     expect('error' in on).toBe(false)
-    // phase D：只监听 IPv4，所以列 127.0.0.1 而不是 localhost（localhost 可能先解析成 ::1）
-    expect(on.addresses.at(-1)).toBe(`http://127.0.0.1:${P1}`)
-    for (const address of on.addresses.slice(0, -1)) {
-      expect(address).toMatch(new RegExp(`^http://\\d+\\.\\d+\\.\\d+\\.\\d+:${P1}$`))
-    }
+    // 局域网开关缺省关：只监听 127.0.0.1、只列它（phase D：列 127.0.0.1 而不是 localhost —— localhost 可能先解析成 ::1）
+    expect(on.addresses).toStrictEqual([`http://127.0.0.1:${P1}`])
     await until(
       async () => (await mainAppEvents.count('network.changed')) >= 1,
       'network.changed after enabling'
@@ -289,6 +295,14 @@ describe('network access: the web client in a real page', () => {
     expect(shot).toStrictEqual({
       present: true,
       toggle: 'on',
+      toggleDisabled: false,
+      lan: 'off',
+      lanDisabled: false,
+      portDisabled: false,
+      localOnly: en.settings.networkLocalOnly.replaceAll('{{port}}', String(P1)),
+      headlessNote: null,
+      headlessLanNote: null,
+      headlessPortNote: null,
       risk: en.settings.networkRisk,
       riskVisible: true,
       addresses: withClient.addresses,
@@ -702,6 +716,7 @@ describe('network access: the web client in a real page', () => {
     expect(off).toStrictEqual({
       enabled: false,
       port: P1,
+      lan: false,
       listening: false,
       addresses: [],
       clients: []

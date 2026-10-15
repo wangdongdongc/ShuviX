@@ -932,9 +932,11 @@
     "classifierTag": "Classifier",
     "classifierTagTitle": "Provides classifier models only (used to classify commands), not chat models",
     "networkTitle": "Network access",
-    "networkDesc": "Open ShuviX in a browser on another device on the same network.",
-    "networkEnable": "Allow access from the local network",
-    "networkRisk": "Anyone on the same network can fully control this computer through ShuviX — read and write your files and run commands. There is no password. Only turn this on in a network you trust, and turn it off when you are done.",
+    "networkDesc": "Open ShuviX in a browser: on this computer, through an SSH tunnel, or from other devices on the local network.",
+    "networkEnable": "Allow access from a browser",
+    "networkLan": "Allow other devices on the local network",
+    "networkRisk": "With other devices allowed, anyone on the same network can fully control this computer through ShuviX — read and write your files and run commands. There is no password. Only allow it in a network you trust, and turn it off when you are done.",
+    "networkLocalOnly": "Only this computer can connect (from another device, use an SSH tunnel: ssh -L {{port}}:127.0.0.1:{{port}} <user>@<this computer>).",
     "networkPort": "Port",
     "networkPortInvalid": "Use a whole number between 1024 and 65535.",
     "networkAddresses": "Open in a browser",
@@ -946,7 +948,10 @@
     "networkErrorInUse": "Port {{port}} is already in use. Choose another port.",
     "networkErrorAccess": "ShuviX is not allowed to listen on port {{port}}.",
     "networkErrorOther": "Could not listen on port {{port}}: {{error}}",
-    "networkStarting": "Starting…"
+    "networkStarting": "Starting…",
+    "networkHeadlessNote": "Headless mode keeps network access on; stop the ShuviX service to turn it off.",
+    "networkHeadlessPortNote": "Set with --port or in the service file.",
+    "networkHeadlessLanNote": "Chosen at startup (--lan); restart ShuviX to change it."
   },
   "about": {
     "description": "Your AI Assistant",
@@ -964,7 +969,11 @@
     "updateError": "Update error: {{message}}",
     "autoCheckUpdate": "Check for updates on startup",
     "updateGroup": "Updates",
-    "projectGroup": "Project"
+    "projectGroup": "Project",
+    "updateManual": "Update it on the computer running ShuviX by running this there (the service keeps its port and network settings):",
+    "updateManualNoCommand": "Install the new version on the computer running ShuviX, then restart ShuviX.",
+    "copyCommand": "Copy",
+    "commandCopied": "Copied"
   },
   "agent": {
     "defaultTitle": "New Chat",

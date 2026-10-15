@@ -17,6 +17,7 @@ import { join } from 'path'
 import { settingsDao } from '../../dao/settingsDao'
 import { createLogger } from '../../logger'
 import { loadRendererPage } from '../../utils/rendererPage'
+import { isHeadless } from '../../utils/headless'
 import { t } from '../../i18n'
 import { guardAppWindow } from '../externalOpen'
 import { destroyAllTabs, setHostWindow } from './browserViewService'
@@ -147,6 +148,11 @@ function create(): BrowserWindow {
 
 /** 打开（或聚焦）浏览器窗口 —— 只由用户的动作触发（顶栏按钮 / widget 在浏览器中打开） */
 export function openBrowserWindow(): void {
+  // 无头运行：浏览器窗口不开（agent 的 tab 照常住在从不显示的停放窗口里）
+  if (isHeadless()) {
+    log.info('无头运行：不开浏览器窗口')
+    return
+  }
   const target = win && !win.isDestroyed() ? win : create()
   if (target.isMinimized()) target.restore()
   target.show()

@@ -23,7 +23,13 @@
  *           否则静默拒绝、不因此信任 host；同 host 的并发合并成一个框；
  *   ST-U11  tab 数的应用事件 `browser.tabsChanged`：每次建 / 关成功各一条、count = 此刻的 tab 数；
  *           关不存在的、开第 13 个（抛错）都不发；
- *   ST-U12  initBrowserWindowService 幂等。
+ *   ST-U12  initBrowserWindowService 幂等；
+ *   BW-H1   无头运行：openBrowserWindow 不建窗口、不 show / focus（再点也一样）；createTab 照常 —— tab 落在
+ *           show:false 的停放窗口里、从不显示；
+ *   BV-H1   停放窗口建不出来（new BrowserWindow 抛 `no display`）：createTab 抛
+ *           `Could not create the browser's hidden window: no display`、收掉这个 view（webContents.close）、
+ *           listTabs 仍空、不发 browser.tabsChanged、不给浏览器窗口发 browser-view:tab-created；
+ *           窗口建得出来之后再 createTab 照常（恰一个 tab）。
  *
  * electron 整个换成 ./fakeElectron.ts 的假件；browserViewService / browserWindowService / stagingWindow /
  * appEventBus 与 externalOpen 的裁决都用真的（externalOpen 只把 guardAppWindow 换成间谍）。模块级状态
@@ -868,5 +874,72 @@ describe('initBrowserWindowService 幂等（ST-U12）', () => {
     expect(bw.opts.backgroundColor).toBe('#abcdef')
     // 窗口自己的 close 拦截也只挂了一次
     expect(bw.handlerCount('close')).toBe(1)
+  })
+})
+
+describe('无头运行（BW-H1）', () => {
+  afterEach(async () => {
+    // 与被测模块同一份实例（beforeEach 的 resetModules 之后、load() 里才导入）
+    ;(await import('../../../utils/headless')).resetHeadlessModeForTests()
+  })
+
+  it('BW-H1 openBrowserWindow 不建窗口、不 show / focus；createTab 照常落在 show:false 的停放窗口里', async () => {
+    const { views, wins } = await load()
+    const headless = await import('../../../utils/headless')
+    headless.enableHeadlessMode()
+
+    wins.openBrowserWindow()
+    wins.openBrowserWindow()
+    expect(fx.windows).toHaveLength(0)
+    expect(fx.browserWindows()).toEqual([])
+    expect(fx.allSurfacing()).toEqual([])
+    expect(wins.isBrowserWindowOpen()).toBe(false)
+
+    const tabId = views.createTab('https://x.test/')
+    expect(views.listTabs().map((t) => t.id)).toEqual([tabId])
+    expect(fx.windows).toHaveLength(1)
+    const staging = theStaging()
+    expect(staging.opts.show).toBe(false)
+    expect(staging.children).toEqual([fx.views[0]])
+    expect(fx.views[0].webContents.loaded).toEqual(['https://x.test/'])
+    expect(fx.browserWindows()).toEqual([])
+    expect(fx.allSurfacing()).toEqual([])
+    expect(staging.visible).toBe(false)
+  })
+})
+
+describe('停放窗口建不出来（BV-H1）', () => {
+  it("BV-H1 createTab 抛 Could not create the browser's hidden window: no display，收掉 view、不留 tab、不发事件；之后照常", async () => {
+    const { views, wins, bus } = await load()
+    // 先开浏览器窗口：tab-created 若发会发给它，好断「没发」
+    wins.openBrowserWindow()
+    const bw = theBrowserWindow()
+    bw.webContents.send.mockClear()
+    const counts: number[] = []
+    bus.subscribe((event) => {
+      if (event.type === 'browser.tabsChanged') counts.push(event.count)
+    })
+
+    fx.windowError = new Error('no display')
+    expect(() => views.createTab('https://x.test/')).toThrow(
+      "Could not create the browser's hidden window: no display"
+    )
+    expect(fx.views).toHaveLength(1)
+    const failed = fx.views[0]
+    expect(failed.webContents.close).toHaveBeenCalledTimes(1)
+    expect(failed.webContents.loadURL).not.toHaveBeenCalled()
+    expect(views.listTabs()).toEqual([])
+    expect(counts).toEqual([])
+    const sentChannels = bw.webContents.send.mock.calls.map(([channel]) => channel)
+    expect(sentChannels).not.toContain('browser-view:tab-created')
+    expect(fx.staging()).toBeUndefined()
+    expect(fx.windows).toEqual([bw])
+
+    fx.windowError = null
+    const tabId = views.createTab('https://y.test/')
+    expect(views.listTabs().map((t) => t.id)).toEqual([tabId])
+    expect(counts).toEqual([1])
+    expect(theStaging().children).toEqual([fx.views[1]])
+    expect(fx.views[1].webContents.close).not.toHaveBeenCalled()
   })
 })

@@ -1,13 +1,19 @@
 /**
  * 设置 → 通用 → 网络访问（server mode phase B，docs/server/phase-bc-network-and-web.md §B1）。
  *
- * 开关 + 端口；开着时列出能用来打开的地址（每个可复制）、连着的浏览器（地址、浏览器、连上的时刻，实时）；监听失败
- * （端口被占 …）时一行原因。**风险写在明面上**（不只收进 `?` 气泡）：开着时局域网里的任何人都能通过 ShuviX
- * 完全控制这台电脑，没有密码。状态跟着 `network.changed` 重拉。
+ * 两个开关 + 端口：「允许从浏览器访问」开着时只监听 127.0.0.1（只有这台电脑能连，别处经 SSH 隧道 —— 关着局域网开关时
+ * 有一行说明）；其下「允许局域网里的其他设备」开着才监听 0.0.0.0（网络访问关着时这个开关不可点）。开着时列出能用来
+ * 打开的地址（每个可复制）、连着的浏览器（地址、浏览器、连上的时刻，实时）；监听失败（端口被占 …）时一行原因。
+ * **风险写在明面上**（不只收进 `?` 气泡，紧挨着局域网开关）：允许其他设备后局域网里的任何人都能通过 ShuviX 完全
+ * 控制这台电脑，没有密码。状态跟着 `network.changed` 重拉。
+ *
+ * 无头运行（`shuvix --headless`，状态带 `headless: true`）：网络访问开关显示为开、锁住，局域网开关显示启动时的选择
+ * （`--lan`）、锁住，端口也锁住，各带一句说明 —— 主进程本来就拒绝关掉、换共享与换端口（关掉等于把唯一的入口关掉；
+ * 后两件让这个浏览器当场断开），这些由命令行 / 服务文件定。
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Copy, Globe, MonitorSmartphone, TriangleAlert } from 'lucide-react'
+import { Check, Copy, Globe, Laptop, MonitorSmartphone, Network, TriangleAlert } from 'lucide-react'
 import { copyToClipboard, useAppEvent } from '@shuvix/chat-ui'
 import {
   isValidNetworkPort,
@@ -101,6 +107,18 @@ export function NetworkAccessSettings(): React.JSX.Element {
     }
   }
 
+  const toggleLan = async (): Promise<void> => {
+    if (!status || busy) return
+    setBusy(true)
+    try {
+      setStatus(await window.api.network.setLan(!status.lan))
+    } catch {
+      load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const commitPort = async (): Promise<void> => {
     if (portDraft === null || !status) return
     const trimmed = portDraft.trim()
@@ -123,6 +141,9 @@ export function NetworkAccessSettings(): React.JSX.Element {
   }
 
   const enabled = status?.enabled ?? false
+  const lan = status?.lan ?? false
+  /** 无头运行：两个开关与端口都锁住（主进程拒绝关掉、换共享与换端口） */
+  const headless = status?.headless === true
 
   return (
     <div className="px-5 pb-5" data-network-settings>
@@ -135,12 +156,40 @@ export function NetworkAccessSettings(): React.JSX.Element {
               <Toggle
                 on={enabled}
                 color="amber"
-                disabled={!status || busy}
+                disabled={!status || busy || headless}
                 onClick={() => void toggle()}
               />
             </span>
           }
         />
+        {headless && (
+          <SettingsBlock>
+            <div data-network-headless className="text-[11px] text-text-tertiary">
+              {t('settings.networkHeadlessNote')}
+            </div>
+          </SettingsBlock>
+        )}
+        <SettingsRow
+          icon={<Network size={11} className="text-text-tertiary shrink-0" />}
+          title={t('settings.networkLan')}
+          control={
+            <span data-network-lan={lan ? 'on' : 'off'}>
+              <Toggle
+                on={lan}
+                color="amber"
+                disabled={!status || busy || headless || !enabled}
+                onClick={() => void toggleLan()}
+              />
+            </span>
+          }
+        />
+        {headless && (
+          <SettingsBlock>
+            <div data-network-headless-lan className="text-[11px] text-text-tertiary">
+              {t('settings.networkHeadlessLanNote')}
+            </div>
+          </SettingsBlock>
+        )}
         <SettingsBlock>
           <div
             data-network-risk
@@ -150,11 +199,26 @@ export function NetworkAccessSettings(): React.JSX.Element {
             <span>{t('settings.networkRisk')}</span>
           </div>
         </SettingsBlock>
+        {enabled && !lan && status && (
+          <SettingsBlock>
+            <div
+              data-network-local-only
+              className="flex items-start gap-2 text-[11px] leading-relaxed text-text-tertiary"
+            >
+              <Laptop size={12} className="mt-[2px] shrink-0" />
+              <span className="select-text">
+                {t('settings.networkLocalOnly', { port: status.port })}
+              </span>
+            </div>
+          </SettingsBlock>
+        )}
         <SettingsRow
           title={t('settings.networkPort')}
           subtitle={
             portInvalid ? (
               <span className="text-error">{t('settings.networkPortInvalid')}</span>
+            ) : headless ? (
+              <span data-network-headless-port>{t('settings.networkHeadlessPortNote')}</span>
             ) : undefined
           }
           control={
@@ -165,7 +229,7 @@ export function NetworkAccessSettings(): React.JSX.Element {
                 min={1024}
                 max={65535}
                 monospace
-                disabled={!status || busy}
+                disabled={!status || busy || headless}
                 value={portDraft ?? (status ? String(status.port) : '')}
                 onChange={(v) => {
                   setPortDraft(v)

@@ -418,4 +418,33 @@ describe('i18n 语言包', () => {
       expect(tag, lang).not.toBe(tagTitle)
     }
   })
+
+  /**
+   * UPD-L1：无头运行时关于页的手动更新区块（说明 / 没有命令时的说明 / 复制钮的两种状态）。命令本身是代码拼的，
+   * 不进文案，所以四句都不含插值；zh / ja 不能是没翻的英文原文；复制钮的两种状态在同一门语言里得分得清。
+   */
+  it('UPD-L1 about 的手动更新四句三语都非空、不含插值，zh / ja 与 en 不同；复制 ≠ 已复制', () => {
+    const KEYS = [
+      'about.updateManual',
+      'about.updateManualNoCommand',
+      'about.copyCommand',
+      'about.commandCopied'
+    ]
+    for (const key of KEYS) {
+      for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+        const text = leaf(bundle, key)
+        expect(text?.trim(), `${lang} ${key}`).toBeTruthy()
+        expect(placeholders(text!), `${lang} ${key}`).toEqual([])
+        expect(text!, `${lang} ${key}`).not.toMatch(/\{\{|\}\}/)
+      }
+      expect(leaf(zh, key), `zh ${key}`).not.toBe(leaf(en, key))
+      expect(leaf(ja, key), `ja ${key}`).not.toBe(leaf(en, key))
+    }
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      expect(leaf(bundle, 'about.copyCommand'), lang).not.toBe(leaf(bundle, 'about.commandCopied'))
+      expect(leaf(bundle, 'about.updateManual'), lang).not.toBe(
+        leaf(bundle, 'about.updateManualNoCommand')
+      )
+    }
+  })
 })

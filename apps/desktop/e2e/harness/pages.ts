@@ -9886,6 +9886,22 @@ export interface NetworkSettingsShot {
   present: boolean
   /** 开关（`data-network-toggle`：on / off） */
   toggle: string | null
+  /** 开关的按钮禁用着（没有这个按钮 → null；无头运行时锁住） */
+  toggleDisabled: boolean | null
+  /** 局域网开关（`data-network-lan`：on / off） */
+  lan: string | null
+  /** 局域网开关的按钮禁用着（没有 → null；网络访问关着 / 无头运行时锁住） */
+  lanDisabled: boolean | null
+  /** 端口输入框禁用着（没有 → null；无头运行时锁住） */
+  portDisabled: boolean | null
+  /** 「只有这台电脑能连」那一行（`data-network-local-only`，网络访问开着、局域网关着时才有）的文字；没有 → null */
+  localOnly: string | null
+  /** 无头运行的说明（`data-network-headless`）；没有 → null */
+  headlessNote: string | null
+  /** 无头运行时局域网开关下的说明（`data-network-headless-lan`）；没有 → null */
+  headlessLanNote: string | null
+  /** 无头运行时端口下的说明（`data-network-headless-port`）；没有 → null */
+  headlessPortNote: string | null
   /** 风险说明（`data-network-risk`）的文字 */
   risk: string
   /** 风险说明此刻真的看得见（有尺寸，不是收在气泡里） */
@@ -9904,6 +9920,8 @@ export interface NetworkSettingsPane {
   shot(): Promise<NetworkSettingsShot>
   /** 点开关 */
   clickToggle(): Promise<void>
+  /** 点「允许局域网里的其他设备」开关（按钮禁用着也照点 —— 禁用的按钮不派发 click，调用方据此断言什么也没发生） */
+  clickLan(): Promise<void>
   /**
    * 在端口输入框里填 `text` 并提交（输入框的 onBlur 才提交：native value setter + input 事件，再补一个冒泡的
    * focusout —— 窗口没有 OS 焦点时 blur() 可能什么都不派发，而 React 的 onBlur 听的是 focusout）
@@ -9918,9 +9936,25 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
         const root = document.querySelector('[data-network-settings]')
         const risk = root?.querySelector('[data-network-risk]')
         const rect = risk?.getBoundingClientRect()
+        const text = (sel) => {
+          const el = root?.querySelector(sel)
+          return el ? (el.textContent ?? '').trim() : null
+        }
+        const disabled = (sel) => {
+          const el = root?.querySelector(sel)
+          return el ? el.disabled === true : null
+        }
         return {
           present: !!root,
           toggle: root?.querySelector('[data-network-toggle]')?.getAttribute('data-network-toggle') ?? null,
+          toggleDisabled: disabled('[data-network-toggle] button'),
+          lan: root?.querySelector('[data-network-lan]')?.getAttribute('data-network-lan') ?? null,
+          lanDisabled: disabled('[data-network-lan] button'),
+          portDisabled: disabled('[data-network-port] input'),
+          localOnly: text('[data-network-local-only]'),
+          headlessNote: text('[data-network-headless]'),
+          headlessLanNote: text('[data-network-headless-lan]'),
+          headlessPortNote: text('[data-network-headless-port]'),
           risk: (risk?.textContent ?? '').trim(),
           riskVisible: !!rect && rect.width > 0 && rect.height > 0,
           addresses: [...(root?.querySelectorAll('[data-network-address]') ?? [])].map(
@@ -9943,6 +9977,15 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
         return true
       })()`)
       if (!ok) throw new Error('network access toggle not found')
+    },
+    clickLan: async () => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const button = document.querySelector('[data-network-lan] button')
+        if (!button) return false
+        button.click()
+        return true
+      })()`)
+      if (!ok) throw new Error('network LAN toggle not found')
     },
     commitPort: async (text) => {
       const typed = await settings.eval<boolean>(`(() => {

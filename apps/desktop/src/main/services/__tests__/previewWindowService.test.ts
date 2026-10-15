@@ -28,6 +28,7 @@
  *   W-8  openedBy=agent 原样进 hash
  *   W-9  错开：每个已开窗口 +24，锚在聚焦窗口；没有聚焦窗口不给 x/y
  *   W-10 已开窗口的文件之后被删了：再开仍聚焦那扇窗、回 true（查表先于分类）
+ *   PW-H1 无头运行（已初始化）：可预览的 .txt 与 .md 都回 false；不交给 openMarkdownFile、不开窗、不装守卫
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -441,5 +442,26 @@ describe('W-10 查表先于分类', () => {
     expect(await open(gone)).toBe(true)
     expect(windows()).toHaveLength(1)
     expect(win.focus).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('PW-H1 无头运行', () => {
+  afterEach(async () => {
+    // 与服务同一份模块实例（beforeEach 的 resetModules 之后才导入）
+    ;(await import('../../utils/headless')).resetHeadlessModeForTests()
+  })
+
+  it('PW-H1 可预览的 .txt 与 .md 都回 false；不交给 openMarkdownFile、不开窗', async () => {
+    init()
+    const headless = await import('../../utils/headless')
+    headless.enableHeadlessMode()
+
+    expect(await open(p('dir', 'a.txt'))).toBe(false)
+    expect(await open(p('dir', 'doc.md'))).toBe(false)
+    expect(await open('dir/doc.md')).toBe(false)
+
+    expect(fx.openMarkdownFile).not.toHaveBeenCalled()
+    expect(windows()).toHaveLength(0)
+    expect(fx.guardAppWindow).not.toHaveBeenCalled()
   })
 })

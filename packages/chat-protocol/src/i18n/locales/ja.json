@@ -932,9 +932,11 @@
     "classifierTag": "分類器",
     "classifierTagTitle": "分類モデル（コマンドの分類用）のみを提供し、チャットモデルはありません",
     "networkTitle": "ネットワークアクセス",
-    "networkDesc": "同じネットワーク上の別のデバイスのブラウザで ShuviX を開きます。",
-    "networkEnable": "ローカルネットワークからのアクセスを許可",
-    "networkRisk": "オンにすると、同じネットワーク上の誰でも ShuviX を通じてこのコンピューターを完全に操作できます（ファイルの読み書き、コマンドの実行）。パスワードはありません。信頼できるネットワークでのみオンにし、使い終わったらオフにしてください。",
+    "networkDesc": "ブラウザで ShuviX を開きます（このコンピューター上、SSH トンネル経由、またはローカルネットワークの他のデバイスから）。",
+    "networkEnable": "ブラウザからのアクセスを許可",
+    "networkLan": "ローカルネットワークの他のデバイスを許可",
+    "networkRisk": "他のデバイスを許可すると、同じネットワーク上の誰でも ShuviX を通じてこのコンピューターを完全に操作できます（ファイルの読み書き、コマンドの実行）。パスワードはありません。信頼できるネットワークでのみ許可し、使い終わったらオフにしてください。",
+    "networkLocalOnly": "このコンピューターからのみ接続できます（他のデバイスからは SSH トンネルを使ってください: ssh -L {{port}}:127.0.0.1:{{port}} <ユーザー>@<このコンピューター>）。",
     "networkPort": "ポート",
     "networkPortInvalid": "1024〜65535 の整数を入力してください。",
     "networkAddresses": "ブラウザで開く",
@@ -946,7 +948,10 @@
     "networkErrorInUse": "ポート {{port}} は使用中です。別のポートを選んでください。",
     "networkErrorAccess": "ShuviX にはポート {{port}} で待ち受ける権限がありません。",
     "networkErrorOther": "ポート {{port}} で待ち受けできません：{{error}}",
-    "networkStarting": "起動中…"
+    "networkStarting": "起動中…",
+    "networkHeadlessNote": "ヘッドレスモードではネットワークアクセスは常にオンです。オフにするには ShuviX のサービスを停止してください。",
+    "networkHeadlessPortNote": "--port またはサービスファイルで設定します。",
+    "networkHeadlessLanNote": "起動時に決まります（--lan）。変更するには ShuviX を再起動してください。"
   },
   "about": {
     "description": "あなたのAIアシスタント",
@@ -964,7 +969,11 @@
     "updateError": "更新エラー：{{message}}",
     "autoCheckUpdate": "起動時に自動更新を確認",
     "updateGroup": "アップデート",
-    "projectGroup": "プロジェクト"
+    "projectGroup": "プロジェクト",
+    "updateManual": "ShuviX を実行しているコンピューターで次のコマンドを実行して更新してください（サービスのポートとネットワーク設定はそのまま残ります）：",
+    "updateManualNoCommand": "ShuviX を実行しているコンピューターに新しいバージョンをインストールし、ShuviX を再起動してください。",
+    "copyCommand": "コピー",
+    "commandCopied": "コピーしました"
   },
   "agent": {
     "defaultTitle": "新規チャット",

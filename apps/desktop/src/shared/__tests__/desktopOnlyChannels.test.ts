@@ -6,8 +6,8 @@
  *   DO-1 每个键都是通道表里某个 invoke 成员的通道
  *   DO-2 没有一个键是 event / send 通道（表或 override 里），也不是 override 通道
  *   DO-3 每个值（原因）是非空字符串；共 19 条
- *   DO-4 network:status / setEnabled / setPort 都不是桌面专属
- *   DO-6 `API_TABLE.network` 恰是三条 invoke（status 0 参、setEnabled / setPort 各 1 参）
+ *   DO-4 network:status / setEnabled / setPort / setLan 都不是桌面专属
+ *   DO-6 `API_TABLE.network` 恰是四条 invoke（status 0 参、setEnabled / setPort / setLan 各 1 参）
  *   DO-7 phase D 的三条新通道（fs:listDirectories / fs:locateFolder / widget:exportForDownload）是 1 参的 invoke，
  *        网络客户端能用（不是桌面专属）；桌面专属仍是 19 条
  */
@@ -73,20 +73,26 @@ describe('DO-3 原因与条数', () => {
   })
 })
 
-describe('DO-4 网络设置的三条通道不是桌面专属', () => {
-  it('DO-4 network:status / setEnabled / setPort', () => {
-    for (const channel of ['network:status', 'network:setEnabled', 'network:setPort']) {
+describe('DO-4 网络设置的四条通道不是桌面专属', () => {
+  it('DO-4 network:status / setEnabled / setPort / setLan', () => {
+    for (const channel of [
+      'network:status',
+      'network:setEnabled',
+      'network:setPort',
+      'network:setLan'
+    ]) {
       expect(Object.hasOwn(DESKTOP_ONLY_CHANNELS, channel), channel).toBe(false)
     }
   })
 })
 
 describe('DO-6 API_TABLE.network', () => {
-  it('DO-6 恰是三条 invoke', () => {
+  it('DO-6 恰是四条 invoke', () => {
     expect(API_TABLE.network).toStrictEqual({
       status: { kind: 'invoke', channel: 'network:status', args: 0 },
       setEnabled: { kind: 'invoke', channel: 'network:setEnabled', args: 1 },
-      setPort: { kind: 'invoke', channel: 'network:setPort', args: 1 }
+      setPort: { kind: 'invoke', channel: 'network:setPort', args: 1 },
+      setLan: { kind: 'invoke', channel: 'network:setLan', args: 1 }
     })
   })
 })

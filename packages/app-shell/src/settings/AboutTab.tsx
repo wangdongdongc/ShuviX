@@ -3,9 +3,12 @@
  *
  * 从桌面 AboutSettings 抽出。版本号 / openExternal 由宿主注入；更新区块通过可选 `update`
  * 注入：桌面传入完整更新 API，扩展不传 → 自动屏蔽更新区块（其余完全一致）。
+ * 主进程装不了更新时（无头运行），`available` 事件带 `manual`：不给下载按钮，改为说明 + 要在那台电脑上执行的命令。
  * about.* 文案来自共享 chat-protocol locales，两端一致。
  */
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { copyToClipboard } from '@shuvix/chat-ui'
 import {
   Github,
   ExternalLink,
@@ -14,7 +17,9 @@ import {
   RotateCcw,
   AlertCircle,
   CheckCircle,
-  Bug
+  Bug,
+  Copy,
+  Check
 } from 'lucide-react'
 import type { UpdateEvent } from '@shuvix/chat-protocol/chatApi'
 import logoImg from '../assets/ngnl_xiubi_color_mini.jpg'
@@ -50,6 +55,14 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
   const isDownloading = e?.type === 'downloading'
   const isAvailable = e?.type === 'available'
   const isReady = e?.type === 'ready'
+  const manual = e?.type === 'available' ? e.manual : undefined
+
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
 
   const renderUpdateAction = (): React.JSX.Element | null => {
     if (!update) return null
@@ -64,7 +77,7 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
         </button>
       )
     }
-    if (isAvailable) {
+    if (isAvailable && !manual) {
       return (
         <button
           onClick={update.onDownload}
@@ -150,6 +163,34 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
             subtitle={statusDesc || undefined}
             control={renderUpdateAction()}
           />
+          {manual && (
+            <div className="px-4 py-3 space-y-2" data-update-manual>
+              <p className="text-[11px] text-text-secondary leading-relaxed">
+                {manual.command ? t('about.updateManual') : t('about.updateManualNoCommand')}
+              </p>
+              {manual.command && (
+                <div className="flex items-start gap-2">
+                  <code
+                    className="flex-1 min-w-0 break-all rounded-md bg-bg-tertiary px-2 py-1.5 text-[11px] font-mono text-text-primary select-all"
+                    data-update-command
+                  >
+                    {manual.command}
+                  </code>
+                  <button
+                    onClick={() => {
+                      copyToClipboard(manual.command ?? '')
+                      setCopied(true)
+                    }}
+                    className="flex shrink-0 items-center gap-1 px-2 py-1 rounded-md text-[11px] text-text-secondary border border-border-secondary/50 hover:text-text-primary hover:border-border-secondary transition-colors"
+                    data-update-command-copy
+                  >
+                    {copied ? <Check size={11} /> : <Copy size={11} />}
+                    {copied ? t('about.commandCopied') : t('about.copyCommand')}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <SettingsRow
             title={t('about.autoCheckUpdate')}
             control={<Toggle on={update.autoCheck} onClick={update.onToggleAutoCheck} />}

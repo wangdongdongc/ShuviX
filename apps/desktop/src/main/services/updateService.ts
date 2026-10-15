@@ -3,12 +3,18 @@ import { autoUpdater } from 'electron-updater'
 import { createLogger } from '../logger'
 import { broadcastToClients } from '../ipc/registry'
 import type { UpdateEvent } from '../types'
+import { headlessUpdateCommand, headlessUpdateError, isHeadless } from '../utils/headless'
 
 const log = createLogger('Updater')
 
 /**
  * 自动更新服务 — 封装 electron-updater。
  * autoDownload 禁用，用户需主动点击下载和安装。
+ *
+ * 无头运行时只检查不安装：electron-updater 在 Linux 上装 deb 要么走 sudo（服务进程没有地方输密码 → 失败），
+ * 要么以 root 直接 `dpkg -i` 后正常退出再自己拉起 —— systemd 的 `Restart=on-failure` 不管正常退出，还会把拉起
+ * 的进程一起杀掉，服务就停了。所以 `available` 带上 `manual`（Linux 上是重跑安装脚本的命令），下载 / 安装
+ * 一律拒绝，退出时也不顺手装（`autoInstallOnAppQuit`：`systemctl stop` 时装到一半会被杀）。
  */
 class UpdateService {
   private initialized = false
@@ -24,7 +30,7 @@ class UpdateService {
     autoUpdater.logger = log as any
 
     autoUpdater.autoDownload = false
-    autoUpdater.autoInstallOnAppQuit = true
+    autoUpdater.autoInstallOnAppQuit = !isHeadless()
 
     // 开发模式下需要 dev-app-update.yml 才能测试更新流程
     if (!app.isPackaged) {
@@ -42,7 +48,8 @@ class UpdateService {
         type: 'available',
         version: info.version,
         releaseDate: info.releaseDate,
-        releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : null
+        releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : null,
+        ...(isHeadless() ? { manual: { command: headlessUpdateCommand(info.version) } } : {})
       })
     })
 
@@ -82,6 +89,7 @@ class UpdateService {
   }
 
   async downloadUpdate(): Promise<void> {
+    if (isHeadless()) throw headlessUpdateError()
     try {
       await autoUpdater.downloadUpdate()
     } catch (err) {
@@ -91,6 +99,7 @@ class UpdateService {
   }
 
   quitAndInstall(): void {
+    if (isHeadless()) throw headlessUpdateError()
     autoUpdater.quitAndInstall(false, true)
   }
 

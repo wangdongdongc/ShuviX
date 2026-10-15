@@ -5,6 +5,7 @@
  * 渲染端产物目录是临时目录（`rendererDir` 现取，用例可以换）；`connectionSeq` 是进程级的，所以只断言 `/^ws:\d+$/`。
  *
  *   NS-1  start(0,'127.0.0.1') 回 > 0 的端口，等于 server.port
+ *   NSL-14 server.host：start 之前 undefined；start(port,'127.0.0.1') 之后 '127.0.0.1'；stop() 之后 undefined
  *   NS-2  GET / 与 /web.html → 200，web.html 的内容；content-type / cache-control / nosniff / content-length
  *   NS-3  资源：js / css / woff2 的 MIME；HEAD → 200、content-length、空 body
  *   NS-4  404 'Not found.'：/index.html、/assets/、/assets（目录）、/missing.js
@@ -297,6 +298,21 @@ describe('NS-1 start', () => {
     const bound = await boot()
     expect(bound).toBeGreaterThan(0)
     expect(server!.port).toBe(bound)
+  })
+})
+
+describe('NSL-14 host', () => {
+  it("NSL-14 start 之前 undefined；start(port,'127.0.0.1') 之后 '127.0.0.1'；stop() 之后 undefined", async () => {
+    const dispatcher = createNetworkDispatcher({ definitionOf: transport.definitionOf })
+    server = createNetworkServer({ transport, dispatcher, links, rendererDir: () => currentDir })
+    expect(server.host).toBeUndefined()
+    const free = await freePort()
+    port = await server.start(free, '127.0.0.1')
+    expect(port).toBe(free)
+    expect(server.host).toBe('127.0.0.1')
+    await server.stop()
+    expect(server.host).toBeUndefined()
+    expect(server.port).toBeUndefined()
   })
 })
 

@@ -6,6 +6,8 @@
  *         不查窗口
  *   NH-11 `registerNetworkHandlers()`：network:status 原样交回 networkService.status() 的值（同一引用）；setEnabled / setPort
  *         把参数交给服务、原样交回它 resolve 的值；setPort 的拒绝原样拒绝；窗口与网络两种上下文表现一样
+ *   NH-11b network:setLan（局域网开关）：把参数（true / false）交给服务、原样交回它 resolve 的值（同一引用）；拒绝（如无头运行的
+ *         `code: 'headless'`）原样拒绝；窗口与网络两种上下文表现一样
  *
  * `widget:exportForDownload`（server mode phase D：web 客户端没有保存框，导出到 userData 下的临时目录再经 `/files/download`
  * 下载）。userData 是临时目录；exportWidget 与 widgetService.getById 是替身，WidgetExportError 是带 code 的同形类。
@@ -59,7 +61,8 @@ const state = vi.hoisted(() => {
     fromId: vi.fn(() => undefined),
     status: vi.fn(),
     setEnabled: vi.fn(),
-    setPort: vi.fn()
+    setPort: vi.fn(),
+    setLan: vi.fn()
   }
 })
 
@@ -80,7 +83,12 @@ vi.mock('../../services/widget', () => ({
 }))
 vi.mock('../../services/widgetWindowService', () => ({}))
 vi.mock('../../frontend/network', () => ({
-  networkService: { status: state.status, setEnabled: state.setEnabled, setPort: state.setPort }
+  networkService: {
+    status: state.status,
+    setEnabled: state.setEnabled,
+    setPort: state.setPort,
+    setLan: state.setLan
+  }
 }))
 
 import { listDefinitions } from '../registry'
@@ -152,6 +160,47 @@ describe('NH-11 registerNetworkHandlers', () => {
     const error = new Error('The port must be an integer between 1024 and 65535.')
     state.setPort.mockRejectedValue(error)
     await expect(call(ctx, 'network:setPort', 80)).rejects.toBe(error)
+  })
+})
+
+describe('NH-11b network:setLan', () => {
+  it.each([
+    ['window', winCtx],
+    ['network', netCtx]
+  ])('NH-11b %s 上下文：参数交给服务、原样交回 resolve 的值', async (_name, ctx) => {
+    const base = {
+      enabled: true,
+      port: 7766,
+      listening: true,
+      addresses: ['http://127.0.0.1:7766'],
+      clients: []
+    }
+    const shared = { ...base, lan: true, bindAddress: '0.0.0.0' }
+    state.setLan.mockResolvedValueOnce(shared)
+    await expect(call(ctx, 'network:setLan', true)).resolves.toBe(shared)
+    expect(state.setLan).toHaveBeenCalledTimes(1)
+    expect(state.setLan).toHaveBeenLastCalledWith(true)
+
+    const local = { ...base, lan: false, bindAddress: '127.0.0.1' }
+    state.setLan.mockResolvedValueOnce(local)
+    await expect(call(ctx, 'network:setLan', false)).resolves.toBe(local)
+    expect(state.setLan).toHaveBeenCalledTimes(2)
+    expect(state.setLan).toHaveBeenLastCalledWith(false)
+
+    expect(state.setEnabled).not.toHaveBeenCalled()
+    expect(state.setPort).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['window', winCtx],
+    ['network', netCtx]
+  ])('NH-11b %s 上下文：setLan 的拒绝原样拒绝（无头运行的 code 留着）', async (_name, ctx) => {
+    const error = Object.assign(new Error('ShuviX is running headless.'), { code: 'headless' })
+    state.setLan.mockRejectedValue(error)
+    const settled = Promise.resolve(call(ctx, 'network:setLan', true))
+    await expect(settled).rejects.toBe(error)
+    await expect(settled).rejects.toMatchObject({ code: 'headless' })
+    expect(state.setLan).toHaveBeenCalledWith(true)
   })
 })
 

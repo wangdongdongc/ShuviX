@@ -4,6 +4,7 @@
  * 只放原始的网络与 IPC 小工具，不放任何 DOM 选择器（那些在 pages.ts：`webClientPane` / `networkSettingsPane`）：
  *
  *   networkStatus(main)         `window.api.network.status()`（主窗口的 IPC）
+ *   privateIPv4Addresses()      spec 进程自己看到的私有 IPv4 网卡地址（服务在局域网共享时列出的应当恰是这些）
  *   httpProbe(opts)             一次普通 HTTP 请求：**永远连 127.0.0.1**（或显式给的 `connectHost`），只伪造 `Host` 头 ——
  *                               服务只绑 IPv4，`localhost` 在 macOS 上可能先解析成 ::1
  *   rawHttpProbe(port, text)    原样写一段请求报文（Node 的 http 客户端只会说 HTTP/1.1、总要带 Host）
@@ -28,6 +29,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { request, type IncomingHttpHeaders } from 'node:http'
 import { connect as netConnect, type Socket } from 'node:net'
+import { networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { connectTabPage } from './browserFixtures'
 import { until, type CdpClient } from './cdp'
@@ -45,15 +47,43 @@ export interface NetworkClientInfo {
 export interface NetworkStatus {
   enabled: boolean
   port: number
+  /** 允许局域网里的其他设备（关 → 只监听 127.0.0.1） */
+  lan: boolean
+  /** 此刻监听的地址（`127.0.0.1` / `0.0.0.0`）；没在监听 → 没有 */
+  bindAddress?: string
   listening: boolean
   addresses: string[]
   clients: NetworkClientInfo[]
   error?: string
+  /** 无头运行 → true；桌面 → 没有 */
+  headless?: true
 }
 
 /** 主窗口里读一次网络状态 */
 export function networkStatus(main: CdpClient): Promise<NetworkStatus> {
   return main.eval<NetworkStatus>('window.api.network.status()')
+}
+
+/**
+ * spec 进程自己看到的私有 IPv4 网卡地址（非内部；10/8、172.16/12、192.168/16、169.254/16；去重、按网卡顺序）——
+ * 与服务在局域网共享时列出的应当相同。手写判断，不引产品的 guards.ts
+ */
+export function privateIPv4Addresses(): string[] {
+  const out: string[] = []
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      const family = entry.family as unknown
+      if (entry.internal || (family !== 'IPv4' && family !== 4)) continue
+      const [a, b] = entry.address.split('.').map(Number)
+      const isPrivate =
+        a === 10 ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 169 && b === 254)
+      if (isPrivate && !out.includes(entry.address)) out.push(entry.address)
+    }
+  }
+  return out
 }
 
 /** 一次探测的结果：拿到了应答，或者连接层面的错误码（`ECONNREFUSED` / `ETIMEDOUT` …） */

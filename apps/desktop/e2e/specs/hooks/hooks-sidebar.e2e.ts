@@ -839,8 +839,10 @@ describe('侧栏 Hooks 分组', () => {
     const settings = await app.openSettings('general')
     const tabs = await settingsTabsPane(settings)
     const labels = await tabs.labels()
-    // 对照：导航真的拉到了（当前界面语言是 zh，故按 zh 断一个恒在的 tab）
-    expect(labels).toContain(zh.settings.tabGeneral)
+    // 对照：导航真的拉到了（界面语言跟随系统语言，三语里任一个「通用」tab 在即可）
+    expect([en, zh, ja].map((l) => l.settings.tabGeneral).some((g) => labels.includes(g))).toBe(
+      true
+    )
     for (const label of [en, zh, ja].map((l) => l.sidebar.hooksGroup)) {
       expect(labels).not.toContain(label)
     }

@@ -1,0 +1,216 @@
+# Linux 无头模式的端到端检查（docs/headless/design.md §3）：在真正的 Ubuntu（x64 与 arm64）上构建本架构的 deb，
+# 用 scripts/install-linux.sh 装好并以 systemd 服务无头起来，再像局域网里的浏览器那样把它用一遍。
+# macOS 上的 e2e 够不到的那一半都在这里：没有显示服务器时的 Ozone headless、deb 的沙箱（SUID / AppArmor）、
+# systemd 的启停与 journald 里的那几行。journal 与主进程日志总是作为 artifact 上传。
+#
+# 手动触发，或推到 headless-ci/** 分支。
+name: Linux headless
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'headless-ci/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-headless-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  headless:
+    name: headless (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+            deb_arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            deb_arch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    env:
+      PORT: '7766'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # 原生模块（better-sqlite3 / node-pty）由 electron-builder 按 Electron 的 ABI 从源码重编，fpm 打 deb 要 ar / fakeroot
+      - name: Build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 fakeroot binutils
+
+      - name: Verify lockfile native deps
+        run: node .github/scripts/check-lockfile-natives.mjs
+
+      # GitHub 设了 CI=true：根 postinstall 不跑 electron-rebuild（打包时 electron-builder 自己重编）
+      - name: Install dependencies
+        shell: bash
+        run: |
+          for i in 1 2 3; do
+            npm ci && exit 0
+            echo "::warning::npm ci attempt $i failed, retrying in 10s"
+            sleep 10
+          done
+          exit 1
+
+      - name: Build the ${{ matrix.deb_arch }} deb
+        working-directory: apps/desktop
+        run: |
+          npx electron-vite build
+          npx electron-builder --linux deb --${{ matrix.arch }} --publish never
+          ls -l dist/*.deb
+
+      # 缺省：只给这台电脑（127.0.0.1）
+      - name: Install with install-linux.sh (--deb --service, localhost only)
+        run: |
+          set -- apps/desktop/dist/shuvix-*-${{ matrix.deb_arch }}.deb
+          deb="$1"
+          test -f "$deb"
+          echo "SHUVIX_DEB=$deb" >> "$GITHUB_ENV"
+          bash scripts/install-linux.sh --deb "$deb" --service --port "$PORT"
+
+      - name: Localhost only — ready line, 127.0.0.1 serves, the LAN address does not
+        run: |
+          line="$(sudo journalctl -u shuvix --no-pager -o cat | grep -F 'ShuviX headless: ready — open one of: ' | tail -n 1)"
+          echo "$line"
+          echo "Ready line (default): \`$line\`" >> "$GITHUB_STEP_SUMMARY"
+          test "$line" = "ShuviX headless: ready — open one of: http://127.0.0.1:$PORT/"
+          systemctl is-active shuvix
+          curl -fsS --max-time 15 "http://127.0.0.1:$PORT/" -o page.html
+          grep -q '<div id="root">' page.html
+          lan_ip="$(hostname -I | awk '{print $1}')"
+          test -n "$lan_ip"
+          echo "SHUVIX_LAN_IP=$lan_ip" >> "$GITHUB_ENV"
+          set +e
+          curl -sS --max-time 10 "http://$lan_ip:$PORT/" -o /dev/null
+          code=$?
+          set -e
+          echo "curl http://$lan_ip:$PORT/ exited $code"
+          # 7 = could not connect: nothing listens on that address
+          test "$code" -eq 7
+
+      - name: WebSocket smoke client, localhost only (invoke + view sync)
+        run: node scripts/headless-smoke.mjs "http://127.0.0.1:$PORT" --expect-local
+
+      - name: A second instance prints the running instance's addresses
+        run: |
+          set +e
+          out="$(timeout 90 shuvix-server 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" -eq 0
+          printf '%s\n' "$out" | grep -F "ShuviX headless: already running — open one of: http://127.0.0.1:$PORT/"
+
+      # 重跑安装脚本加 --lan：同一个包（apt 什么也不换），改写服务文件、重启 —— 也就把「重跑 = 升级」那条路走了一遍
+      - name: Rerun with --lan (share on the local network)
+        run: bash scripts/install-linux.sh --deb "$SHUVIX_DEB" --service --port "$PORT" --lan
+
+      - name: LAN — ready line lists the LAN address, every advertised address serves
+        run: |
+          line="$(sudo journalctl -u shuvix --no-pager -o cat | grep -F 'ShuviX headless: ready — open one of: ' | tail -n 1)"
+          echo "$line"
+          echo "Ready line (--lan): \`$line\`" >> "$GITHUB_STEP_SUMMARY"
+          urls="${line#*open one of: }"
+          echo "SHUVIX_URLS=$urls" >> "$GITHUB_ENV"
+          case " $urls " in
+            *" http://$SHUVIX_LAN_IP:$PORT/ "*) ;;
+            *) echo "the LAN address $SHUVIX_LAN_IP is not advertised"; exit 1 ;;
+          esac
+          case "$urls" in
+            *"http://127.0.0.1:$PORT/") ;;
+            *) echo "127.0.0.1 is not the last advertised address"; exit 1 ;;
+          esac
+          for url in $urls; do
+            echo "== $url"
+            curl -fsS --max-time 15 "$url" -o page.html
+            grep -q '<div id="root">' page.html
+          done
+
+      - name: WebSocket smoke client over the LAN address
+        run: |
+          # a LAN IP as Host / Origin goes through the same guards as a browser on another device
+          node scripts/headless-smoke.mjs "http://$SHUVIX_LAN_IP:$PORT" --expect-lan
+          node scripts/headless-smoke.mjs "http://127.0.0.1:$PORT" --expect-lan
+
+      - name: Restart quits gracefully and comes back
+        run: |
+          old="$(systemctl show -p InvocationID --value shuvix)"
+          sudo systemctl restart shuvix
+          new="$(systemctl show -p InvocationID --value shuvix)"
+          test "$old" != "$new"
+          ready=0
+          for i in $(seq 1 60); do
+            # no grep -q in a pipeline: the shell runs with pipefail, and an early exit would SIGPIPE journalctl
+            if sudo journalctl --no-pager -o cat "_SYSTEMD_INVOCATION_ID=$new" | grep -F 'ShuviX headless: ready' >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" -eq 1
+          sudo journalctl --no-pager -o cat "_SYSTEMD_INVOCATION_ID=$old" | grep -F 'ShuviX headless: shutting down'
+          sudo journalctl --no-pager -o cat "_SYSTEMD_INVOCATION_ID=$old" | grep -F 'ShuviX headless: stopped'
+          node scripts/headless-smoke.mjs "http://127.0.0.1:$PORT"
+
+      # 只看信息：不带 --ozone-platform=headless，只靠代码里补的开关能不能起来（服务与 shuvix-server 都带着开关，不依赖它）
+      - name: In-code Ozone switch alone (informational)
+        continue-on-error: true
+        run: |
+          set +e
+          home="$(mktemp -d)"
+          env -u DISPLAY -u WAYLAND_DISPLAY HOME="$home" /opt/ShuviX/shuvix --headless --port 7767 > inline-switch.log 2>&1 &
+          pid=$!
+          ok=0
+          for i in $(seq 1 45); do
+            if grep -qF 'ShuviX headless: ready' inline-switch.log; then ok=1; break; fi
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 2
+          done
+          kill -TERM "$pid" 2>/dev/null
+          wait "$pid"
+          if [ "$ok" -eq 1 ]; then
+            echo "In-code Ozone switch alone: **starts**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "In-code Ozone switch alone: **does not start** (see inline-switch.log)" >> "$GITHUB_STEP_SUMMARY"
+            tail -n 60 inline-switch.log
+            exit 1
+          fi
+
+      - name: Uninstall
+        run: |
+          bash scripts/install-linux.sh --uninstall
+          if systemctl cat shuvix.service >/dev/null 2>&1; then echo "the service is still installed"; exit 1; fi
+          if dpkg -s shuvix >/dev/null 2>&1; then echo "the package is still installed"; exit 1; fi
+          test ! -e /usr/local/bin/shuvix-server
+
+      - name: Collect logs
+        if: always()
+        run: |
+          mkdir -p headless-logs
+          sudo journalctl -u shuvix --no-pager -o short-precise > headless-logs/journal-shuvix.txt || true
+          cp "$HOME/.config/shuvix/logs/main.log" headless-logs/main.log 2>/dev/null || true
+          cp inline-switch.log headless-logs/ 2>/dev/null || true
+          ls -l headless-logs
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-headless-${{ matrix.deb_arch }}
+          path: headless-logs/
+          if-no-files-found: warn

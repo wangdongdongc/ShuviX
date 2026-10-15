@@ -1046,6 +1046,8 @@ declare global {
       setEnabled: (enabled: boolean) => Promise<import('../shared/network').NetworkStatus>
       /** 换端口（1024–65535 的整数，否则拒绝）；开着时随即换到新端口重新监听 */
       setPort: (port: number) => Promise<import('../shared/network').NetworkStatus>
+      /** 允许 / 不许局域网里的其他设备（关 → 只监听 127.0.0.1；开 → 0.0.0.0）；开着时随即换绑地址 */
+      setLan: (lan: boolean) => Promise<import('../shared/network').NetworkStatus>
     }
     /** 服务端文件系统（web 客户端的目录浏览器、「在文件管理器中打开」的路径） */
     fs: {

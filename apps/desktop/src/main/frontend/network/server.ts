@@ -82,6 +82,8 @@ export interface NetworkServer {
   stop(reason?: string): Promise<void>
   /** 此刻在监听的端口；没在监听 → undefined */
   readonly port: number | undefined
+  /** 此刻监听的地址（`127.0.0.1` / `0.0.0.0` …）；没在监听 → undefined */
+  readonly host: string | undefined
 }
 
 let connectionSeq = 0
@@ -167,6 +169,7 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
   let wss: WebSocketServer | undefined
   let heartbeat: ReturnType<typeof setInterval> | undefined
   let boundPort: number | undefined
+  let boundHost: string | undefined
   /** 每条连接：上一拍之后回过 pong 没有 */
   const alive = new Map<WebSocket, boolean>()
   /** 还没真正关掉的 socket（关闭握手可能还在途中）—— stop 等一小会儿之后强行断开剩下的 */
@@ -480,6 +483,10 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
       return boundPort
     },
 
+    get host() {
+      return boundPort === undefined ? undefined : boundHost
+    },
+
     async start(port, host = '0.0.0.0') {
       if (http) throw new Error('network server is already running')
       const server = createServer(onRequest)
@@ -501,6 +508,7 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
       server.on('error', (error) => logger.warn(`network: server error: ${String(error)}`))
       http = server
       boundPort = (server.address() as AddressInfo).port
+      boundHost = host
       wss = new WebSocketServer({ noServer: true, maxPayload: MAX_NETWORK_MESSAGE_BYTES })
       heartbeat = setInterval(beat, heartbeatMs)
       heartbeat.unref?.()

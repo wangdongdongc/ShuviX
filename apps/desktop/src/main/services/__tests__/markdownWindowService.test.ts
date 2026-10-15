@@ -32,6 +32,7 @@
  *   MW-10 closed → 表里拿掉（再开是新会话）、前端解绑、delete(sid) 恰一次；文件与目录都还在
  *   MW-11 （白盒）旧窗口迟到的 closed：同一路径的新窗口已登记 → 新的那条不被拿掉
  *   MW-12 （白盒）delete 失败 → 记一条 warn，不抛、不留未处理的 rejection
+ *   MW-H1 无头运行（已初始化、真的 md）→ false，不开窗、不建会话、不绑前端
  *   W1    开窗把 webContents 挂上：会话的 doc 请求经这个窗口的 send 发出（别的会话不经它）
  *   W2    closed → 在途的 doc 请求以「closed」失败，先于删会话；之后的请求「No document window」
  */
@@ -297,6 +298,25 @@ describe('MW-1 / MW-2 不开窗', () => {
     expect(fx.create).not.toHaveBeenCalled()
     expect(fx.guardAppWindow).not.toHaveBeenCalled()
     expect(registry.bind).not.toHaveBeenCalled()
+  })
+})
+
+describe('MW-H1 无头运行', () => {
+  afterEach(async () => {
+    // 与服务同一份模块实例（beforeEach 的 resetModules 之后才导入）
+    ;(await import('../../utils/headless')).resetHeadlessModeForTests()
+  })
+
+  it('MW-H1 已初始化 + 真的 md → false，不开窗、不建会话、不绑前端', async () => {
+    init()
+    const headless = await import('../../utils/headless')
+    headless.enableHeadlessMode()
+    expect(service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))).toBe(false)
+    expect(windows()).toHaveLength(0)
+    expect(fx.create).not.toHaveBeenCalled()
+    expect(fx.guardAppWindow).not.toHaveBeenCalled()
+    expect(registry.bind).not.toHaveBeenCalled()
+    expect(frontends).toHaveLength(0)
   })
 })
 

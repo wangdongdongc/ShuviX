@@ -82,12 +82,74 @@ import { mark, measure, measureAsync, step } from './perf'
 import { logLaunchTiming } from './utils/stallWatchdog/launchTiming'
 import { simulateStartupStall } from './utils/stallWatchdog/simulate'
 import { liveSingletonLockHolder } from './utils/stallWatchdog/singletonLock'
+import {
+  enableHeadlessMode,
+  HEADLESS_SHUTTING_DOWN_LINE,
+  HEADLESS_STOPPED_LINE,
+  headlessArgsErrorLine,
+  headlessLan,
+  headlessListenErrorLine,
+  headlessPortOverride,
+  headlessReadyLine,
+  headlessUsage,
+  isHeadless,
+  parseHeadlessArgs,
+  printHeadlessLine
+} from './utils/headless'
+import {
+  readHeadlessAddress,
+  removeHeadlessAddress,
+  secondInstanceVerdict,
+  writeHeadlessAddress
+} from './utils/headlessInstance'
+import { NETWORK_PORT_KEY, parseNetworkPort } from '../shared/network'
 const log = createLogger('App')
 mark('main: imports evaluated')
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null
 const isMac = process.platform === 'darwin'
+
+/**
+ * 无头运行（docs/headless/design.md §1）：`--headless` 或 `SHUVIX_HEADLESS=1`。一扇窗都不开（启动、Dock 重开、
+ * 第二个实例、点通知、从系统打开的 md、菜单快捷键都不开），网络访问强制开着（端口：`--port`，否则设置里的，
+ * 否则 7766；缺省只监听 127.0.0.1，`--lan` / `SHUVIX_LAN=1` 才给局域网；都不写设置），stdout 上打印就绪 / 出错 /
+ * 退出那几行。`--help` 打印用法后退出。
+ *
+ * 必须在单实例锁之前：`--help` 不该去敲正在跑的那个实例，Linux 的 Ozone 开关也得在 ready 之前加上。
+ */
+const headlessArgs = parseHeadlessArgs(process.argv, process.env)
+if (headlessArgs.help) {
+  printHeadlessLine(headlessUsage())
+  app.exit(0)
+} else if (headlessArgs.headless && headlessArgs.error !== undefined) {
+  printHeadlessLine(headlessArgsErrorLine(headlessArgs.error))
+  app.exit(2)
+} else if (headlessArgs.headless) {
+  enableHeadlessMode({ port: headlessArgs.port, lan: headlessArgs.lan })
+  // macOS：不要 Dock 图标（ready 之后再藏一次，见下）
+  if (isMac) app.dock?.hide()
+  if (process.platform === 'linux') {
+    // 没有显示服务器的 Linux：Chromium 要 Ozone 的 headless 平台才起得来。启动脚本（systemd 服务、
+    // shuvix-server）在真正的命令行上带着 `--ozone-platform=headless --disable-gpu`，那是有保证的一条路；
+    // 这里再补一次，好让直接敲 `shuvix --headless` 也有机会起来（够不够早要看 Electron 版本）
+    app.commandLine.appendSwitch('ozone-platform', 'headless')
+    app.disableHardwareAcceleration()
+  }
+  // 主进程未捕获的异常：Electron 缺省弹一个原生框 —— 没有屏幕的服务器上没人点得掉。记日志，照常跑下去
+  process.on('uncaughtException', (error) => {
+    log.error(
+      `uncaught exception: ${error instanceof Error ? (error.stack ?? error.message) : error}`
+    )
+  })
+  log.info(
+    `无头运行（headless）：端口 ${headlessArgs.port ?? '取设置'}，` +
+      `${headlessArgs.lan ? '局域网共享（0.0.0.0）' : '只给这台电脑（127.0.0.1）'}，pid ${process.pid}，不开任何窗口`
+  )
+}
+
+/** 无头运行时这次退出的退出码（启动时监听不了 → 1）；`quit` 事件里交给 `app.exit` */
+let headlessExitCode = 0
 
 /**
  * 这次启动自己带来的 md 文件（Windows / Linux 的 argv；macOS 冷启动的 open-file 早于 ready 就到）。
@@ -103,7 +165,7 @@ const earlySecondInstance = { files: [] as string[], wantsMainWindow: false }
 /** ready 之后（共享窗口服务已装配）才能开窗；之前到的一律先记下 */
 let windowIntakeReady = false
 
-/** 把主窗口带到眼前：没开过 / 已关掉就现开一个 */
+/** 把主窗口带到眼前：没开过 / 已关掉就现开一个（无头运行时什么也不做 —— createWindow 自己拦） */
 function showMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow()
@@ -187,6 +249,10 @@ function getSavedSettingsWindowBounds(): {
 
 /** 打开独立设置窗口（单例） */
 function openSettingsWindow(tab?: string): void {
+  if (isHeadless()) {
+    log.info('无头运行：不开设置窗口')
+    return
+  }
   // 已存在则聚焦
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.focus()
@@ -484,6 +550,11 @@ function initSharedWindowServices(): void {
 }
 
 function createWindow(): void {
+  // 无头运行：一扇窗都不开 —— Dock 重开、第二个实例、点通知、菜单都汇到这里
+  if (isHeadless()) {
+    log.info('无头运行：不开主窗口')
+    return
+  }
   // 退出半途没了、应用照常跑下去（Dock 重开 / 第二个实例 / 点通知）：会话宿主若已被退出封存，撤销 ——
   // 否则这个新主窗口里每条会话都只剩配置、一条消息都没有。正常启动与普通的关窗再开都是无操作
   sessionHostQuit.resume()
@@ -705,14 +776,43 @@ if (lockHolder) {
       'a previous ShuviX is still running or quitting; requestSingleInstanceLock waits on it'
   )
 }
-const gotTheLock = step('requestSingleInstanceLock', () => app.requestSingleInstanceLock())
+// 要无头运行的第二个实例把这一点交过去（additionalData）：跑着的桌面应用据此不开窗
+const gotTheLock = step('requestSingleInstanceLock', () =>
+  app.requestSingleInstanceLock(headlessArgs.headless ? { shuvixHeadless: true } : undefined)
+)
 if (!gotTheLock) {
-  log.info('另一个 ShuviX 实例已在运行（单实例锁未获取），本进程退出')
-  app.quit()
+  // 跑着的若是无头实例：打印它的地址、退出码 0（带不带 --headless 都一样，无头进程里不开窗）；
+  // 跑着的是桌面应用而这里要无头：说一句、退出码 1；都不是：照旧把 argv 交给桌面应用（它带出主窗口）
+  const verdict = secondInstanceVerdict({
+    wantsHeadless: headlessArgs.headless,
+    address: readHeadlessAddress(app.getPath('userData')),
+    lockHolderPid: lockHolder?.pid
+  })
+  if (verdict.line !== undefined) {
+    log.info(`另一个 ShuviX 实例已在运行：${verdict.line}`)
+    printHeadlessLine(verdict.line)
+    app.exit(verdict.exitCode)
+  } else {
+    log.info('另一个 ShuviX 实例已在运行（单实例锁未获取），本进程退出')
+    app.quit()
+  }
 } else {
+  // 无头实例：拿到锁就写地址文件（第二个实例读它；开始监听后补上地址，退出时删掉）
+  if (isHeadless()) writeHeadlessAddress(app.getPath('userData'), { pid: process.pid, urls: [] })
+
   // 第二个实例：Windows / Linux 上「用 ShuviX 打开」一个 md，文件在它的 argv 里 —— 在这里开 md 窗口；
   // 什么文件都没带（再点一次应用图标）才是要主窗口，没开过（从 md 启动的）就现开一个
-  app.on('second-instance', (_event, argv, workingDirectory) => {
+  app.on('second-instance', (_event, argv, workingDirectory, additionalData) => {
+    // 无头运行：不开窗（第二个进程自己打印这边的地址后退出）
+    if (isHeadless()) {
+      log.info('第二个实例启动：无头运行，忽略（它自己打印地址后退出）')
+      return
+    }
+    // 第二个进程要无头运行而这里是桌面应用：它自己说一句后退出，这边不弹主窗口
+    if ((additionalData as { shuvixHeadless?: unknown } | null)?.shuvixHeadless === true) {
+      log.info('第二个实例要无头运行，而这里是桌面应用：忽略')
+      return
+    }
     const files = markdownFilesFromArgv(argv, workingDirectory)
     if (!windowIntakeReady) {
       if (files.length > 0) earlySecondInstance.files.push(...files)
@@ -727,6 +827,10 @@ if (!gotTheLock) {
   // 是不是 md 交给 openMarkdownFile 判（它两头都认：点的名字与链接指向的真实文件）
   app.on('open-file', (event, path) => {
     event.preventDefault()
+    if (isHeadless()) {
+      log.info(`无头运行：不开窗，忽略要打开的文件 ${path}`)
+      return
+    }
     if (windowIntakeReady) openMarkdownFile(path)
     else launchMarkdownFiles.push(path)
   })
@@ -772,8 +876,12 @@ app.whenReady().then(async () => {
     )
   )
 
+  // 无头运行：没有 Dock 图标（入口那次之外再藏一次：ready 之前那次不是每个版本都算数）
+  if (isHeadless() && process.platform === 'darwin') app.dock?.hide()
+
   // 设置应用图标（开发模式下 Dock/任务栏也显示自定义图标）
   step('dock icon', () => {
+    if (isHeadless()) return
     const iconPath = join(app.getAppPath(), 'resources/icon.png')
     const appIcon = nativeImage.createFromPath(iconPath)
     if (process.platform === 'darwin' && app.dock && !appIcon.isEmpty()) {
@@ -793,7 +901,8 @@ app.whenReady().then(async () => {
     applyNativeThemeSource(settingsDao.findByKey('general.theme'))
   })
 
-  measure('setupMenu', () => setupApplicationMenu())
+  // 无头运行没有窗口，菜单（与它的快捷键）没有用处
+  if (!isHeadless()) measure('setupMenu', () => setupApplicationMenu())
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -876,39 +985,52 @@ app.whenReady().then(async () => {
 
   // 网络访问（局域网里的浏览器，server mode phase B）：缺省关，设置里开着才监听。与 CLI / Chrome 桥一样排在
   // 旧格式切换之后（浏览器里的界面同样可能碰到那些会话）；监听失败只记进状态（设置页显示原因），不拦启动。
-  // phase D：文件路由（自定义协议的 HTTP 等价物）与 widget 转发的依赖在这里交进去
-  step(
-    'networkService.init',
-    () =>
-      void networkService.init({
-        fileRoutes: {
-          resolvePreviewPath: resolvePreviewFilePath,
-          readSandboxLib,
-          logger: { warn: (message) => log.warn(message) }
+  // phase D：文件路由（自定义协议的 HTTP 等价物）与 widget 转发的依赖在这里交进去。
+  // 无头运行：强制开着（端口：--port，否则设置里的，否则 7766；只给这台电脑，--lan 才给局域网；不写设置），
+  // 开始监听后打印就绪那一行
+  if (isHeadless()) {
+    networkService.setHeadless({
+      port: headlessPortOverride() ?? parseNetworkPort(settingsDao.findByKey(NETWORK_PORT_KEY)),
+      lan: headlessLan()
+    })
+  }
+  const networkReady = step('networkService.init', () =>
+    networkService.init({
+      fileRoutes: {
+        resolvePreviewPath: resolvePreviewFilePath,
+        readSandboxLib,
+        logger: { warn: (message) => log.warn(message) }
+      },
+      widgetProxy: {
+        target: () => {
+          const status = widgetServer.getStatus()
+          return status.running && status.port > 0
+            ? { host: '127.0.0.1', port: status.port }
+            : undefined
         },
-        widgetProxy: {
-          target: () => {
-            const status = widgetServer.getStatus()
-            return status.running && status.port > 0
-              ? { host: '127.0.0.1', port: status.port }
-              : undefined
-          },
-          logger: { warn: (message) => log.warn(message) }
-        }
-      })
+        logger: { warn: (message) => log.warn(message) }
+      }
+    })
   )
+  if (isHeadless()) void networkReady.then(announceHeadlessNetwork)
 
-  // 带着 md 文件启动：只开 md 窗口，主窗口等用户要（点 Dock / 再点一次应用图标）才开
+  // 带着 md 文件启动：只开 md 窗口，主窗口等用户要（点 Dock / 再点一次应用图标）才开。
+  // 无头运行：窗口服务照样装配（通知中心、内置浏览器的 partition …），但一扇窗都不开
   step('initSharedWindowServices', () => initSharedWindowServices())
   windowIntakeReady = true
-  let openedAtLaunch = 0
-  for (const file of launchMarkdownFiles.splice(0)) {
-    if (step('open launch md file', () => openMarkdownFile(file))) openedAtLaunch++
-  }
-  if (openedAtLaunch > 0) {
-    log.info(`从系统打开 ${openedAtLaunch} 个 md 文件，不开主窗口`)
+  if (isHeadless()) {
+    const ignored = launchMarkdownFiles.splice(0)
+    if (ignored.length > 0) log.info(`无头运行：不开窗，忽略 ${ignored.length} 个要打开的 md 文件`)
   } else {
-    measure('createWindow', () => createWindow())
+    let openedAtLaunch = 0
+    for (const file of launchMarkdownFiles.splice(0)) {
+      if (step('open launch md file', () => openMarkdownFile(file))) openedAtLaunch++
+    }
+    if (openedAtLaunch > 0) {
+      log.info(`从系统打开 ${openedAtLaunch} 个 md 文件，不开主窗口`)
+    } else {
+      measure('createWindow', () => createWindow())
+    }
   }
   // ready 之前第二个实例交来的请求：照做，但不影响上面这次启动开不开主窗口
   for (const file of earlySecondInstance.files.splice(0)) openMarkdownFile(file)
@@ -917,7 +1039,9 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => {
     // macOS dock 点击时重新创建主窗口。按主窗口本身判断，不按「一个窗口都没有」：
-    // 浏览器的停放窗口从不显示却一直在（主窗口关着时后台 agent 仍可能在用浏览器）
+    // 浏览器的停放窗口从不显示却一直在（主窗口关着时后台 agent 仍可能在用浏览器）。
+    // 无头运行不开窗（`open -a ShuviX` 也会走到这里）
+    if (isHeadless()) return
     if (!mainWindow || mainWindow.isDestroyed()) createWindow()
   })
 })
@@ -941,12 +1065,53 @@ const sessionHostQuit = installSessionHostQuitHook(app, {
   }
 })
 
-// macOS 下关闭窗口不退出应用
+// macOS 下关闭窗口不退出应用。无头运行本来就没有窗口：内置浏览器的停放窗口收掉时也不该把应用带走
 app.on('window-all-closed', () => {
+  if (isHeadless()) return
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
+
+/**
+ * 无头运行：网络服务第一次对完账 —— 在监听就打印就绪那一行（地址与设置页列出的同一份）并补进地址文件；
+ * 监听不了（端口被占 …）就打印原因、以退出码 1 退出（systemd 据此记一次失败）
+ */
+function announceHeadlessNetwork(): void {
+  const status = networkService.status()
+  if (status.listening) {
+    printHeadlessLine(headlessReadyLine(status.addresses))
+    writeHeadlessAddress(app.getPath('userData'), {
+      pid: process.pid,
+      port: status.port,
+      urls: status.addresses
+    })
+    log.info(`无头运行：就绪，端口 ${status.port}`)
+    return
+  }
+  const line = headlessListenErrorLine(status.port, status.error ?? 'not listening')
+  log.error(line)
+  printHeadlessLine(line)
+  headlessExitCode = 1
+  app.quit()
+}
+
+// 无头运行的退出：开始退出时一行（信号也走这里 —— Electron 把 SIGINT / SIGTERM 变成一次正常的 quit，
+// 第二个信号走系统缺省直接结束），退出流程走完一行；地址文件删掉；启动失败的退出码在这里交出去
+if (isHeadless()) {
+  let shuttingDown = false
+  app.on('before-quit', () => {
+    if (shuttingDown) return
+    shuttingDown = true
+    log.info('无头运行：开始退出')
+    printHeadlessLine(HEADLESS_SHUTTING_DOWN_LINE)
+  })
+  app.on('quit', () => {
+    removeHeadlessAddress(app.getPath('userData'), process.pid)
+    printHeadlessLine(HEADLESS_STOPPED_LINE)
+    if (headlessExitCode !== 0) app.exit(headlessExitCode)
+  })
+}
 
 // 主入口求值完毕：此后到 app.whenReady 之间是 Chromium / macOS 自己的启动（不在 JS 里），
 // 卡在那段时看门狗报的位置就是「after "main: entry evaluated…"」

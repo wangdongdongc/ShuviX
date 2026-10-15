@@ -932,9 +932,11 @@
     "classifierTag": "分类器",
     "classifierTagTitle": "只提供分类模型（用来给命令分类），不提供聊天模型",
     "networkTitle": "网络访问",
-    "networkDesc": "在同一网络里的另一台设备上，用浏览器打开 ShuviX。",
-    "networkEnable": "允许局域网访问",
-    "networkRisk": "开启后，同一网络里的任何人都能通过 ShuviX 完全控制这台电脑——读写文件、运行命令。没有密码。只在信任的网络里开启，用完记得关掉。",
+    "networkDesc": "用浏览器打开 ShuviX：在这台电脑上、经 SSH 隧道，或在局域网里的其他设备上。",
+    "networkEnable": "允许从浏览器访问",
+    "networkLan": "允许局域网里的其他设备",
+    "networkRisk": "允许其他设备后，同一网络里的任何人都能通过 ShuviX 完全控制这台电脑——读写文件、运行命令。没有密码。只在信任的网络里开启，用完记得关掉。",
+    "networkLocalOnly": "只有这台电脑能连接（在别的设备上请用 SSH 隧道：ssh -L {{port}}:127.0.0.1:{{port}} <用户>@<这台电脑>）。",
     "networkPort": "端口",
     "networkPortInvalid": "请填写 1024–65535 之间的整数。",
     "networkAddresses": "在浏览器中打开",
@@ -946,7 +948,10 @@
     "networkErrorInUse": "端口 {{port}} 已被占用，请换一个端口。",
     "networkErrorAccess": "ShuviX 无权监听端口 {{port}}。",
     "networkErrorOther": "无法监听端口 {{port}}：{{error}}",
-    "networkStarting": "正在启动…"
+    "networkStarting": "正在启动…",
+    "networkHeadlessNote": "无头模式下网络访问一直开着；要关掉，请停止 ShuviX 服务。",
+    "networkHeadlessPortNote": "用 --port 或在服务文件里设置。",
+    "networkHeadlessLanNote": "由启动参数决定（--lan）；要改，请重启 ShuviX。"
   },
   "about": {
     "description": "您的 AI 助手",
@@ -964,7 +969,11 @@
     "updateError": "更新出错：{{message}}",
     "autoCheckUpdate": "启动时自动检查更新",
     "updateGroup": "更新",
-    "projectGroup": "项目"
+    "projectGroup": "项目",
+    "updateManual": "请在运行 ShuviX 的那台电脑上执行下面的命令来更新（服务原有的端口和局域网设置保持不变）：",
+    "updateManualNoCommand": "请在运行 ShuviX 的那台电脑上安装新版本，然后重启 ShuviX。",
+    "copyCommand": "复制",
+    "commandCopied": "已复制"
   },
   "agent": {
     "defaultTitle": "新对话",

@@ -38,6 +38,7 @@ import {
   type CdpClient,
   type CdpTarget
 } from './cdp'
+import { connectWs } from './wsClient'
 
 const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 /**
@@ -90,6 +91,11 @@ export interface E2EAppBase {
   mainLog(): string
   /** 实例 stdout + stderr 的全文（取证用；有序断言请用 mainLog） */
   output(): string
+  /**
+   * 只有 stdout 的全文 —— 无头那几行（`ShuviX headless: …`）在这里。两条管道交错拼进 `output()` 时，一行可能被另一条
+   * 管道的数据从中间切开；按整行断言请用它
+   */
+  stdout(): string
   /**
    * 浏览器独立窗口（#browser-window）的页面；窗口还没被建出来时回 null（不等待，配合 `until`）。
    * 窗口是懒创建的，而且**只有用户**能把它建出来（顶栏按钮 / `browserView.openWindow()`）——
@@ -155,6 +161,8 @@ export interface QuitOutcome {
   jsExited: boolean
   /** 从投递 SIGTERM 到进程退出（没退出 = 等到上限）的毫秒数 */
   ms: number
+  /** 进程的退出码（没退出 / 被信号杀掉 → null） */
+  code: number | null
 }
 
 /** 默认启动：主窗口开着（绝大多数 spec） */
@@ -164,6 +172,20 @@ export interface E2EApp extends E2EAppBase {
   /** 打开设置窗口并连接其页面（tab 缺省 'general' —— 智能体 / 技能 / 安全策略 / Hooks 四个 tab 已搬去侧栏） */
   openSettings(tab?: string): Promise<CdpClient>
 }
+
+/** 无头启动（`headless: true`）：没有任何窗口 */
+export interface E2EHeadlessApp extends E2EAppBase {
+  main: null
+  /** 网络访问的端口 */
+  networkPort: number
+  /** stdout 上的就绪那一行（原样） */
+  readyLine: string
+  /** 就绪那一行列出的地址（`http://…:<port>/`，按出现顺序） */
+  urls: string[]
+}
+
+/** stdout 上就绪那一行的前缀（与 src/main/utils/headless.ts 的措辞一致；e2e 按值钉住） */
+export const HEADLESS_READY_PREFIX = 'ShuviX headless: ready — open one of: '
 
 /** 带着 md 文件启动、不等主窗口（`expectMainWindow: false`）：启动时没有主窗口 */
 export interface E2EMarkdownApp extends E2EAppBase {
@@ -207,6 +229,24 @@ export interface LaunchOptions {
    * （`isMainPage` 认的是它）—— 见 rendererServer.ts。不给就读本 checkout 的产物文件。
    */
   env?: Record<string, string>
+}
+
+/**
+ * 无头启动（`shuvix --headless`，docs/headless/design.md）：一扇窗都不开，所以不等任何页面 target，等的是 stdout 上的
+ * 就绪那一行（`ShuviX headless: ready — open one of: …`）。网络访问端口缺省现借一个空闲端口（`--port <n>`），
+ * 永远不落在 7766 上 —— 开发者自己的 ShuviX 可能正开着网络访问。自动审查经网络访问（Node 侧 WebSocket）关掉。
+ */
+export interface HeadlessLaunchOptions extends LaunchOptions {
+  headless: true
+  /**
+   * 网络访问端口（缺省现借一个空闲端口）。`'setting'` = 命令行上**不带** `--port`：实例取设置里存的端口（再没有就是 7766
+   * —— 调用方得先存一个空闲端口，e2e 从不在 7766 上监听）；`networkPort` 则从就绪那一行的地址里读出来
+   */
+  networkPort?: number | 'setting'
+  /** 用环境变量 `SHUVIX_HEADLESS=1` 打开，命令行上不带 `--headless`（端口照样经 `--port`） */
+  viaEnv?: boolean
+  /** 给局域网共享（`--lan`，监听 0.0.0.0）；缺省只给这台电脑（127.0.0.1） */
+  lan?: boolean
 }
 
 export interface MarkdownLaunchOptions extends LaunchOptions {
@@ -373,11 +413,28 @@ async function applyAutoReview(client: CdpClient, on: boolean): Promise<void> {
 
 export function launchApp(opts?: LaunchOptions): Promise<E2EApp>
 export function launchApp(opts: MarkdownLaunchOptions): Promise<E2EMarkdownApp>
+export function launchApp(opts: HeadlessLaunchOptions): Promise<E2EHeadlessApp>
 export async function launchApp(
-  opts: LaunchOptions | MarkdownLaunchOptions = {}
-): Promise<E2EApp | E2EMarkdownApp> {
-  const expectMain = !('expectMainWindow' in opts && opts.expectMainWindow === false)
-  const expectMarkdown = expectMain ? 0 : ((opts as MarkdownLaunchOptions).markdownWindows ?? 1)
+  opts: LaunchOptions | MarkdownLaunchOptions | HeadlessLaunchOptions = {}
+): Promise<E2EApp | E2EMarkdownApp | E2EHeadlessApp> {
+  const headless = 'headless' in opts && opts.headless === true
+  const expectMain = !headless && !('expectMainWindow' in opts && opts.expectMainWindow === false)
+  const expectMarkdown =
+    expectMain || headless ? 0 : ((opts as MarkdownLaunchOptions).markdownWindows ?? 1)
+  const headlessOpts = headless ? (opts as HeadlessLaunchOptions) : undefined
+  const fromSetting = headlessOpts?.networkPort === 'setting'
+  let networkPort =
+    headlessOpts && !fromSetting
+      ? ((headlessOpts.networkPort as number | undefined) ?? (await freePort()))
+      : 0
+  const headlessArgs = headlessOpts
+    ? [
+        ...(headlessOpts.viaEnv ? [] : ['--headless']),
+        ...(fromSetting ? [] : ['--port', String(networkPort)]),
+        ...(headlessOpts.lan ? ['--lan'] : [])
+      ]
+    : []
+  const extraEnv = headlessOpts?.viaEnv ? { ...opts.env, SHUVIX_HEADLESS: '1' } : opts.env
   /** 本实例渲染端的地址前缀：缺省是产物目录；spec 给了 dev server 地址就是它（见 LaunchOptions.env） */
   const appUrl = opts.env?.ELECTRON_RENDERER_URL ?? APP_URL
   const pinned = process.env.SHUVIX_E2E_PORT
@@ -428,20 +485,29 @@ export async function launchApp(
       // 这两个开关让实例不理会遮挡与后台化，e2e 结果于是与「屏幕上还有什么窗口」无关。
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
+      ...headlessArgs,
       ...(opts.args ?? [])
     ],
     {
       cwd: opts.cwd ?? DESKTOP_ROOT,
-      env: instanceEnv(home, opts.env),
+      env: instanceEnv(home, extraEnv),
       stdio: ['ignore', 'pipe', 'pipe']
     }
   )
   track(child)
   let output = ''
-  child.stdout?.on('data', (c: Buffer) => (output += c.toString()))
+  let stdout = ''
+  child.stdout?.on('data', (c: Buffer) => {
+    output += c.toString()
+    stdout += c.toString()
+  })
   child.stderr?.on('data', (c: Buffer) => (output += c.toString()))
   let exited = false
-  child.on('exit', () => (exited = true))
+  let exitCode: number | null = null
+  child.on('exit', (code) => {
+    exited = true
+    exitCode = code
+  })
 
   const fail = (why: string): Error =>
     new Error(`${why}\n--- instance output (tail) ---\n${output.slice(-2000)}`)
@@ -488,8 +554,22 @@ export async function launchApp(
     const deadline = Date.now() + 60_000
     let seen: CdpTarget[] = []
     let target: CdpTarget | undefined
+    let readyLine = ''
     for (;;) {
       if (exited) throw fail('instance exited during startup')
+      if (headless) {
+        // 无头：没有页面可等，等 stdout 上的就绪那一行（监听失败那一行 → 进程随后以非零码退出）。
+        // 只认整行（行尾已经到了）：取设置里的端口时要从这一行里读端口，读到半行就错了
+        readyLine =
+          stdout
+            .split('\n')
+            .slice(0, -1)
+            .find((line) => line.startsWith(HEADLESS_READY_PREFIX)) ?? ''
+        if (readyLine) break
+        if (Date.now() > deadline) throw fail('timeout waiting: the headless ready line on stdout')
+        await sleep(50)
+        continue
+      }
       seen = await listTargets(port).catch(() => [])
       if (expectMain) {
         target = seen.find((t) => isMainPage(t, appUrl))
@@ -513,7 +593,30 @@ export async function launchApp(
     }
 
     let main: CdpClient | null = null
-    if (target) {
+    if (headless && fromSetting) {
+      // 端口取自设置：从就绪那一行的最后一个地址里读（127.0.0.1 那一条总在最后）
+      const last = readyLine.slice(HEADLESS_READY_PREFIX.length).trim().split(/\s+/).at(-1) ?? ''
+      networkPort = Number(/:(\d+)\/?$/.exec(last)?.[1] ?? NaN)
+      if (!Number.isInteger(networkPort)) throw fail(`no port in the ready line: ${readyLine}`)
+    }
+    if (headless) {
+      installTargetForensics(port)
+      // 没有窗口：自动审查的停用开关经网络访问写（与窗口里那条是同一条 IPC 通道）
+      const ws = await connectWs(networkPort)
+      try {
+        const result = await ws.invoke<{ success: boolean; reason?: string; message?: string }>(
+          'mdMeta:setEnabled',
+          { objectId: AUTO_REVIEW_OBJECT_ID, enabled: opts.autoReview === true }
+        )
+        if (!result?.success) {
+          throw new Error(
+            `could not set the builtin auto-review hook: ${result?.message ?? result?.reason}`
+          )
+        }
+      } finally {
+        ws.close()
+      }
+    } else if (target) {
       main = await connect(target.webSocketDebuggerUrl)
       await until(() => main!.eval<boolean>('!!window.api'), 'window.api ready')
       await installForensics(main)
@@ -569,7 +672,8 @@ export async function launchApp(
       return {
         exited: done,
         jsExited: output.includes(JS_EXITED_MARKER, markerFrom),
-        ms: Date.now() - t0
+        ms: Date.now() - t0,
+        code: done ? exitCode : null
       }
     }
 
@@ -583,6 +687,7 @@ export async function launchApp(
       userData,
       mainLog,
       output: () => output,
+      stdout: () => stdout,
       async browserWindow() {
         const bt = (await listTargets(port)).find((t) => isBrowserWindowPage(t, appUrl))
         return bt ? connect(bt.webSocketDebuggerUrl) : null
@@ -619,6 +724,10 @@ export async function launchApp(
       quit
     }
 
+    if (headless) {
+      const urls = readyLine.slice(HEADLESS_READY_PREFIX.length).trim().split(/\s+/)
+      return { ...base, main: null, networkPort, readyLine: readyLine.trimEnd(), urls }
+    }
     if (!main) return { ...base, main: null }
     const mainClient = main
     return {
@@ -660,6 +769,8 @@ export interface SecondInstanceResult {
   signal: NodeJS.Signals | null
   /** stdout + stderr */
   output: string
+  /** 只有 stdout（无头那几行在这里） */
+  stdout: string
 }
 
 /**
@@ -671,16 +782,24 @@ export interface SecondInstanceResult {
  */
 export async function spawnSecondInstance(
   app: E2EAppBase,
-  opts: { args?: string[]; cwd?: string; timeoutMs?: number } = {}
+  opts: { args?: string[]; cwd?: string; timeoutMs?: number; env?: Record<string, string> } = {}
 ): Promise<SecondInstanceResult> {
   const child = spawn(
     electronBinary(),
     [join(DESKTOP_ROOT, 'e2e/harness/bootstrap.cjs'), ...(opts.args ?? [])],
-    { cwd: opts.cwd ?? DESKTOP_ROOT, env: instanceEnv(app.home), stdio: ['ignore', 'pipe', 'pipe'] }
+    {
+      cwd: opts.cwd ?? DESKTOP_ROOT,
+      env: instanceEnv(app.home, opts.env),
+      stdio: ['ignore', 'pipe', 'pipe']
+    }
   )
   track(child)
   let output = ''
-  child.stdout?.on('data', (c: Buffer) => (output += c.toString()))
+  let stdout = ''
+  child.stdout?.on('data', (c: Buffer) => {
+    output += c.toString()
+    stdout += c.toString()
+  })
   child.stderr?.on('data', (c: Buffer) => (output += c.toString()))
   const timeoutMs = opts.timeoutMs ?? 30_000
   return new Promise<SecondInstanceResult>((resolveResult, rejectResult) => {
@@ -699,7 +818,120 @@ export async function spawnSecondInstance(
     })
     child.on('exit', (code, signal) => {
       clearTimeout(timer)
-      resolveResult({ code, signal, output })
+      resolveResult({ code, signal, output, stdout })
+    })
+  })
+}
+
+/** 一次跑到底的启动的结局（`runToExit`） */
+export interface RunToExitResult {
+  /** 退出码（被信号杀掉时为 null） */
+  code: number | null
+  signal: NodeJS.Signals | null
+  /** stdout + stderr */
+  output: string
+  /** 只有 stdout（无头那几行在这里） */
+  stdout: string
+}
+
+/**
+ * 起一个**自己会退出**的实例（`--help`、参数不对、无头启动时端口被占 …）：同一个 electron + 引导脚本，fresh HOME
+ * （或给定的 `home`，不删），**不带**调试端口；等它退出才 resolve。上界内没退出就杀掉并抛。
+ */
+export async function runToExit(
+  opts: { args?: string[]; env?: Record<string, string>; home?: string; timeoutMs?: number } = {}
+): Promise<RunToExitResult> {
+  const tmpBase = existsSync('/private/tmp') ? '/private/tmp' : tmpdir()
+  const ownsHome = !opts.home
+  const home = opts.home ?? mkdtempSync(join(tmpBase, 'shuvix-e2e-'))
+  mkdirSync(join(home, 'userdata'), { recursive: true })
+  const child = spawn(
+    electronBinary(),
+    [join(DESKTOP_ROOT, 'e2e/harness/bootstrap.cjs'), ...(opts.args ?? [])],
+    { cwd: DESKTOP_ROOT, env: instanceEnv(home, opts.env), stdio: ['ignore', 'pipe', 'pipe'] }
+  )
+  track(child)
+  let output = ''
+  let stdout = ''
+  child.stdout?.on('data', (c: Buffer) => {
+    output += c.toString()
+    stdout += c.toString()
+  })
+  child.stderr?.on('data', (c: Buffer) => (output += c.toString()))
+  const timeoutMs = opts.timeoutMs ?? 60_000
+  try {
+    return await new Promise<RunToExitResult>((resolveResult, rejectResult) => {
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        rejectResult(
+          new Error(
+            `instance did not exit within ${timeoutMs}ms` +
+              `\n--- its output (tail) ---\n${output.slice(-2000)}`
+          )
+        )
+      }, timeoutMs)
+      child.on('error', (err) => {
+        clearTimeout(timer)
+        rejectResult(err)
+      })
+      child.on('exit', (code, signal) => {
+        clearTimeout(timer)
+        resolveResult({ code, signal, output, stdout })
+      })
+    })
+  } finally {
+    if (ownsHome) rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
+}
+
+/** `runCli` 的结局 */
+export interface CliResult {
+  /** 退出码（被信号杀掉时为 null） */
+  code: number | null
+  stdout: string
+  stderr: string
+}
+
+/**
+ * 像命令工具里的 `shuvix …` 那样跑一次 CLI（resources/cli 的 shim 做的事：`ELECTRON_RUN_AS_NODE=1` 的 Electron 跑
+ * `out/main/cli.js`）。HOME 是实例的 fake HOME —— CLI 据此找到这个实例的 `~/.shuvix/cli.sock` 与 cli-token。
+ * 等它退出才 resolve；上界内没退出就杀掉并抛。
+ */
+export async function runCli(
+  app: Pick<E2EAppBase, 'home'>,
+  args: string[],
+  opts: { env?: Record<string, string>; timeoutMs?: number } = {}
+): Promise<CliResult> {
+  // instanceEnv 剔除了 ELECTRON_RUN_AS_NODE（实例要的是 Electron）；CLI 正好相反，之后补上
+  const env = { ...instanceEnv(app.home, opts.env), ELECTRON_RUN_AS_NODE: '1' }
+  const child = spawn(electronBinary(), [join(DESKTOP_ROOT, 'out', 'main', 'cli.js'), ...args], {
+    cwd: DESKTOP_ROOT,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  track(child)
+  let stdout = ''
+  let stderr = ''
+  child.stdout?.on('data', (c: Buffer) => (stdout += c.toString()))
+  child.stderr?.on('data', (c: Buffer) => (stderr += c.toString()))
+  const timeoutMs = opts.timeoutMs ?? 30_000
+  return new Promise<CliResult>((resolveResult, rejectResult) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      rejectResult(
+        new Error(
+          `shuvix ${args.join(' ')} did not exit within ${timeoutMs}ms` +
+            `\n--- stdout ---\n${stdout.slice(-1000)}\n--- stderr ---\n${stderr.slice(-1000)}`
+        )
+      )
+    }, timeoutMs)
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      rejectResult(err)
+    })
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      resolveResult({ code, stdout, stderr })
     })
   })
 }

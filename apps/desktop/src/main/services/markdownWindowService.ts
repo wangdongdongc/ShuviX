@@ -26,6 +26,7 @@ import { guardAppWindow } from './externalOpen'
 import { isExistingFile, isMarkdownPath } from '../utils/markdownFiles'
 import { createLogger } from '../logger'
 import { loadRendererPage } from '../utils/rendererPage'
+import { isHeadless } from '../utils/headless'
 
 const log = createLogger('MarkdownWindow')
 
@@ -77,6 +78,11 @@ function canonicalPath(path: string): string {
  * @returns 是否有一个窗口在显示这个文件（新开的或已有的）
  */
 export function openMarkdownFile(filePath: string): boolean {
+  // 无头运行：不开窗
+  if (isHeadless()) {
+    log.info(`无头运行：不开 md 窗口，忽略 ${filePath}`)
+    return false
+  }
   if (!deps) {
     log.error(`服务未初始化，忽略 ${filePath}`)
     return false

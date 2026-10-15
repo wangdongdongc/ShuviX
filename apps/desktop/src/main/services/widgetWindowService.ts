@@ -6,6 +6,7 @@ import { widgetService } from './widget'
 import { appEventBus } from '../utils/appEventBus'
 import { createLogger } from '../logger'
 import { loadRendererPage } from '../utils/rendererPage'
+import { headlessWindowError, isHeadless } from '../utils/headless'
 
 const log = createLogger('WidgetWindow')
 
@@ -100,6 +101,8 @@ export function initWidgetWindowService(opts: { getThemeBgColor: () => string })
  * - 未开：立即创建窗口；构建 / URL 获取由窗口内 shell 调 widget:open 完成
  */
 export function open(widgetId: string): void {
+  // 无头运行：不在这台电脑上开窗（CLI 的 `shuvix widget open` 因此回一个失败，agent 照常看得到原因）
+  if (isHeadless()) throw headlessWindowError(`widget window for "${widgetId}"`)
   const widget = widgetService.getById(widgetId)
   if (!widget) throw new Error(`Widget "${widgetId}" not found`)
   if (widget.archivedAt > 0) throw new Error(`Widget "${widgetId}" is archived`)

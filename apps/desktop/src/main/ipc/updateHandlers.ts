@@ -16,7 +16,8 @@ export function registerUpdateHandlers(): void {
     return { success: true }
   })
 
-  defineHandler('update:install', () => {
+  // async：无头模式下 quitAndInstall 抛的 `code: 'headless'` 要作为 rejection 回到调用方
+  defineHandler('update:install', async () => {
     updateService.quitAndInstall()
     return { success: true }
   })

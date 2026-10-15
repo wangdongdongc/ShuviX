@@ -6,12 +6,15 @@
  *
  *   LA-1  listenAddresses：每个非内部、私有的 IPv4 接口一条（数字 family 也认、去重），外加 127.0.0.1（phase D：不再是 localhost）；空表 → 只有 127.0.0.1
  *   LA-2  公网地址与 CGNAT（100.64/10）不列；172.16/12 与 169.254/16 列
- *   NSV-1 关着：status 恰是 {enabled:false, port:7766, listening:false, addresses:[], clients:[]}（没有 error 键）；对账不发 changed
- *   NSV-2 开着：对账 → 在 P 上监听，status 带地址；changed 一次；GET / → 200
+ *   NSV-1 关着：status 恰是 {enabled:false, port:7766, lan:false, listening:false, addresses:[], clients:[]}（没有 error /
+ *         bindAddress 键）；对账不发 changed
+ *   NSV-2 开着（局域网开关缺省关）：对账 → 在 P 上监听，status 恰是 lan:false、bindAddress '127.0.0.1'、地址只有
+ *         127.0.0.1；changed 一次；GET / → 200
  *   NSV-3 设置没变再对账：不重启（客户端还开着），不再发 changed
  *   NSV-4 换端口：客户端以 1001 'network port changed' 断开；旧端口不再服务、新端口服务；changed 恰 +2；unregister 调到
  *   NSV-5 关掉：客户端 1001 'network access turned off'；端口放开；listening false、地址空；changed +2；unregister 调到
- *   NSV-6 端口被占：对账从不拒绝；listening false、error 'EADDRINUSE'、地址空；changed +1；端口空出来再对账 → 监听、没有 error
+ *   NSV-6 端口被占：对账从不拒绝；listening false、error 'EADDRINUSE'、地址空、没有 bindAddress；changed +1；端口空出来再
+ *         对账 → 监听、没有 error
  *   NSV-7 出错又从没监听过时关掉 → changed +1、error 清掉；关着、没出错、没监听 → 对账什么也不发
  *   NSV-8 setEnabled：写 'true' / 'false'，回改完之后的状态；非布尔 → 拒绝 'enabled must be a boolean'，什么也不写
  *   NSV-9 setPort：1024 / 65535 写成字符串、状态的端口跟着变；不合法 → 拒绝（固定的一句话），什么也不写
@@ -19,13 +22,48 @@
  *   NSV-11 客户端列表：id / remoteAddress / userAgent / connectedAt；断开之后为空
  *   NSV-12 连上：registerDefault 收到 id 'network:'+clientId、userInput 的前端；连上与断开各发一次 changed
  *   NSV-13 init（注入传输）：registerViewAuthorizer('network', fn) 且 fn() 为真；settings.changed 只在 keys 缺失或含
- *          network.* 时对账；init 两次只订阅、登记一次
+ *          network.*（含 network.lan）时对账；init 两次只订阅、登记一次
  *   NSV-14 init 不注入传输：传输挂到注册表（isClientAlive 认得连着的客户端）；第二次 init 不抛；注入传输时不挂（测试接缝）
- *   NSV-15 shutdown：客户端 1001 'ShuviX is quitting'；之后对账 / settings.changed 都不再开始监听
+ *   NSV-15 shutdown：客户端 1001 'ShuviX is quitting'；没有 bindAddress；之后对账 / settings.changed 都不再开始监听
  *   NSV-16 开着时两次并发对账 → 只启动一次（status 没有 error）
  *   NSV-17 readSetting 抛 → 对账照样 resolve；之后读得出来的对账照常开始监听
  *   NSV-18 phase D 的路由由 init 交进来：不给 → `/lib/x` 404；给了 fileRoutes / widgetProxy → `/lib/x` 200（读取收到
  *          'x'）、`/w/a-b/` 503（widget 服务没在跑）；之后不带参数的 init 不清掉已经交进来的路由
+ *
+ * 无头运行（`setHeadless`，docs/headless/design.md §1）：
+ *   NSH-1  network.enabled 缺、network.port = Q：setHeadless({port:P}) → 在 P 上监听，status 恰带 headless:true；Q 空着；
+ *          什么也不写；network.* 设置一个都不读
+ *   NSH-2  存着 network.enabled='false' 照样监听 P
+ *   NSH-3  setEnabled(false) → 拒绝（code 'headless'）；不写；照样监听、连着的客户端照样开着
+ *   NSH-4  setEnabled(true) → 回状态（headless、listening）；不写
+ *   NSH-5  setEnabled('true') → 'enabled must be a boolean'（先校验）
+ *   NSH-6  setPort(P) → 回状态、不写；换别的合法端口 → 拒绝（code 'headless'），照样在 P、客户端开着；1023 / '7766' →
+ *          端口那句、不带 code 'headless'
+ *   NSH-7  init 之后设置里关掉网络访问、换端口并发 settings.changed → 照样在 P、客户端开着、changed 没多
+ *   NSH-8  P 被占 → 对账照样 resolve；listening false、error EADDRINUSE、地址空、headless、enabled、没有 bindAddress；
+ *          空出来再对账 → 监听
+ *   NSH-9  setHeadless 的端口不合法（1023 / 65536 / 1.5 / NaN）→ 抛端口那句；之后 status 没有 headless 键
+ *   NSH-10 桌面模式的 status 没有 headless 键
+ *   NSH-11 setHeadless 之后、对账之前：status 恰是 {enabled:true, port:P, lan:false, listening:false, …, headless:true}
+ *   NSH-12 无头的 shutdown：客户端 1001 'ShuviX is quitting'、端口放开；之后对账不再开始监听
+ *
+ * 局域网开关（`network.lan`，2026-10-14；服务绑的地址在单测里固定是 127.0.0.1 —— 真的 0.0.0.0 见 networkServiceBind.test.ts
+ * 的假服务与 e2e）：
+ *   NSL-1  开着、network.lan 缺 → status 恰是 lan:false、bindAddress '127.0.0.1'、地址只有 127.0.0.1
+ *   NSL-2  network.lan='true' → lan true；地址 = listenAddresses(P, 假网卡)；bindAddress 照样是给定的 127.0.0.1
+ *   NSL-3  监听中切换局域网开关（关→开、开→关）→ 客户端 1001 'network sharing changed'；changed +2；unregister；P 照样服务
+ *   NSL-4  同一次对账里局域网与端口都变 → 'network port changed'
+ *   NSL-5  setLan(true) 恰写 [['network.lan','true']]、回 lan:true、像 NSL-3 那样重启；setLan(false) 写 'false'；
+ *          'true' / 1 / null / undefined → 'lan must be a boolean'，什么也不写
+ *   NSL-6  只有字面量 'true'：'TRUE' / '1' / 'yes' → lan false
+ *   NSL-7  局域网开着、设置没变再对账 → 不重启、客户端开着、changed 不变
+ *   NSL-8  init 之后 settings.changed keys ['network.lan'] → 对账并重启；['general.language'] → 不对账
+ *   NSL-9  没在监听就没有 bindAddress：关着；关着时 setLan(true)（lan true、listening false、不发 changed）；EADDRINUSE
+ *   NSL-10 无头：存着 network.lan='true' 但 setHeadless({port}) → lan false、只有 127.0.0.1；存着 'false' 但
+ *          setHeadless({port, lan:true}) → lan true、地址是 listenAddresses 那一份
+ *   NSL-11 无头的 setLan：同值 → 回状态、不写；别的值 → 拒绝（code 'headless'，消息提到 --lan）；'x' → 'lan must be a
+ *          boolean'；照样监听、客户端开着
+ *   NSL-12 shutdown 之后：没有 bindAddress、地址空
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
@@ -237,11 +275,13 @@ describe('NSV-1..NSV-7 对账', () => {
     expect(status).toStrictEqual({
       enabled: false,
       port: 7766,
+      lan: false,
       listening: false,
       addresses: [],
       clients: []
     })
     expect('error' in status).toBe(false)
+    expect('bindAddress' in status).toBe(false)
     await svc.reconcile()
     expect(changed).not.toHaveBeenCalled()
   })
@@ -251,11 +291,14 @@ describe('NSV-1..NSV-7 对账', () => {
     enable(P)
     const svc = makeService()
     await svc.reconcile()
+    // 局域网开关缺省关：只列 127.0.0.1（局域网地址那一份见 NSL-2）
     expect(svc.status()).toStrictEqual({
       enabled: true,
       port: P,
+      lan: false,
+      bindAddress: '127.0.0.1',
       listening: true,
-      addresses: mod.listenAddresses(P, FAKE_IFACES),
+      addresses: [`http://127.0.0.1:${P}`],
       clients: []
     })
     expect(changed).toHaveBeenCalledTimes(1)
@@ -322,6 +365,7 @@ describe('NSV-1..NSV-7 对账', () => {
     expect(status.listening).toBe(false)
     expect(status.error).toBe('EADDRINUSE')
     expect(status.addresses).toStrictEqual([])
+    expect('bindAddress' in status).toBe(false)
     expect(changed).toHaveBeenCalledTimes(1)
 
     await release(blocker)
@@ -460,6 +504,8 @@ describe('NSV-13 / NSV-14 init', () => {
     expect(reconcile).toHaveBeenCalledTimes(2)
     appEventBus.publish({ type: 'network.changed' })
     expect(reconcile).toHaveBeenCalledTimes(2)
+    appEventBus.publish({ type: 'settings.changed', keys: ['network.lan'] })
+    expect(reconcile).toHaveBeenCalledTimes(3)
   })
 
   it('NSV-14 不注入传输：挂到注册表；第二次 init 不抛；注入传输则不挂（测试接缝）', async () => {
@@ -497,6 +543,7 @@ describe('NSV-15..NSV-17 退出与并发', () => {
     await svc.shutdown()
     expect(await client.closed).toStrictEqual({ code: 1001, reason: 'ShuviX is quitting' })
     expect(svc.status().listening).toBe(false)
+    expect('bindAddress' in svc.status()).toBe(false)
     await svc.reconcile()
     appEventBus.publish({ type: 'settings.changed', keys: ['network.enabled'] })
     await new Promise((resolve) => setTimeout(resolve, 30))
@@ -557,5 +604,425 @@ describe('NSV-18 phase D 的路由', () => {
     expect(await getPathStatus(P, '/w/a-b/')).toBe(503)
     expect(readSandboxLib).toHaveBeenCalledTimes(2)
     expect(target).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('NSH 无头运行', () => {
+  it('NSH-1 强制开着、端口固定、不读也不写 network.* 设置', async () => {
+    const P = await freePort()
+    const Q = await freePort()
+    settings.set('network.port', String(Q))
+    const readSetting = vi.fn((k: string) => settings.get(k))
+    const svc = makeService({ readSetting })
+    svc.setHeadless({ port: P })
+    await svc.reconcile()
+    expect(svc.status()).toStrictEqual({
+      enabled: true,
+      port: P,
+      lan: false,
+      bindAddress: '127.0.0.1',
+      listening: true,
+      addresses: [`http://127.0.0.1:${P}`],
+      clients: [],
+      headless: true
+    })
+    expect(await getStatus(P)).toBe(200)
+    expect(await canListen(Q)).toBe(true)
+    expect(writes).toStrictEqual([])
+    expect(readSetting.mock.calls.filter(([k]) => k.startsWith('network.'))).toStrictEqual([])
+  })
+
+  it("NSH-2 存着 network.enabled='false' 照样监听", async () => {
+    const P = await freePort()
+    settings.set('network.enabled', 'false')
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    await svc.reconcile()
+    expect(svc.status().listening).toBe(true)
+    expect(await getStatus(P)).toBe(200)
+  })
+
+  it('NSH-3 setEnabled(false) 拒绝；不写；照样监听、客户端开着', async () => {
+    const P = await freePort()
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    await svc.reconcile()
+    const client = await connect(P)
+    const error = await svc.setEnabled(false).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string }
+    )
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('headless')
+    expect(error!.message).toContain('headless')
+    expect(writes).toStrictEqual([])
+    expect(svc.status().listening).toBe(true)
+    expect(await getStatus(P)).toBe(200)
+    expect(client.ws.readyState).toBe(WebSocket.OPEN)
+  })
+
+  it('NSH-4 setEnabled(true) 回状态；不写', async () => {
+    const P = await freePort()
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    await svc.reconcile()
+    const status = await svc.setEnabled(true)
+    expect(status.headless).toBe(true)
+    expect(status.listening).toBe(true)
+    expect(status.enabled).toBe(true)
+    expect(writes).toStrictEqual([])
+  })
+
+  it("NSH-5 setEnabled('true') → 先校验", async () => {
+    const svc = makeService()
+    svc.setHeadless({ port: await freePort() })
+    const error = await svc.setEnabled('true').then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string }
+    )
+    expect(error?.message).toBe('enabled must be a boolean')
+    expect(error?.code).toBeUndefined()
+  })
+
+  it('NSH-6 setPort：同一个端口回状态；换端口拒绝；不合法照旧那句', async () => {
+    const P = await freePort()
+    const other = await freePort()
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    await svc.reconcile()
+    const client = await connect(P)
+    const same = await svc.setPort(P)
+    expect(same.port).toBe(P)
+    expect(same.headless).toBe(true)
+    expect(writes).toStrictEqual([])
+
+    const refused = await svc.setPort(other).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string }
+    )
+    expect(refused?.code).toBe('headless')
+    expect(svc.status().port).toBe(P)
+    expect(svc.status().listening).toBe(true)
+    expect(await getStatus(P)).toBe(200)
+    await expect(getStatus(other)).rejects.toMatchObject({ code: 'ECONNREFUSED' })
+    expect(client.ws.readyState).toBe(WebSocket.OPEN)
+
+    for (const bad of [1023, '7766']) {
+      const error = await svc.setPort(bad).then(
+        () => null,
+        (e: unknown) => e as Error & { code?: string }
+      )
+      expect(error?.message).toBe('The port must be an integer between 1024 and 65535.')
+      expect(error?.code).not.toBe('headless')
+    }
+    expect(writes).toStrictEqual([])
+  })
+
+  it('NSH-7 设置里关掉 / 换端口：照样在 P、客户端开着、changed 没多', async () => {
+    const { appEventBus } = await import('../../../utils/appEventBus')
+    const P = await freePort()
+    const other = await freePort()
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    await svc.init()
+    const client = await connect(P)
+    await vi.waitFor(() => expect(svc.status().clients).toHaveLength(1))
+    const before = changed.mock.calls.length
+
+    settings.set('network.enabled', 'false')
+    appEventBus.publish({ type: 'settings.changed', keys: ['network.enabled'] })
+    await svc.reconcile()
+    settings.set('network.port', String(other))
+    appEventBus.publish({ type: 'settings.changed', keys: ['network.port'] })
+    await svc.reconcile()
+
+    expect(svc.status().listening).toBe(true)
+    expect(svc.status().port).toBe(P)
+    expect(await getStatus(P)).toBe(200)
+    expect(client.ws.readyState).toBe(WebSocket.OPEN)
+    expect(changed.mock.calls.length).toBe(before)
+  })
+
+  it('NSH-8 端口被占：对账照样 resolve；状态带原因；空出来再对账 → 监听', async () => {
+    const P = await freePort()
+    const blocker = await occupy(P)
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    await expect(svc.reconcile()).resolves.toBeUndefined()
+    const status = svc.status()
+    expect(status.listening).toBe(false)
+    expect(status.error).toBe('EADDRINUSE')
+    expect(status.addresses).toStrictEqual([])
+    expect(status.headless).toBe(true)
+    expect(status.enabled).toBe(true)
+    expect('bindAddress' in status).toBe(false)
+
+    await release(blocker)
+    await svc.reconcile()
+    expect(svc.status().listening).toBe(true)
+    expect('error' in svc.status()).toBe(false)
+  })
+
+  it('NSH-9 setHeadless 的端口不合法 → 抛；之后没有 headless 键', () => {
+    const svc = makeService()
+    for (const bad of [1023, 65536, 1.5, NaN]) {
+      expect(() => svc.setHeadless({ port: bad }), String(bad)).toThrow(
+        'The port must be an integer between 1024 and 65535.'
+      )
+    }
+    expect('headless' in svc.status()).toBe(false)
+  })
+
+  it('NSH-10 桌面模式没有 headless 键', () => {
+    expect('headless' in makeService().status()).toBe(false)
+  })
+
+  it('NSH-11 对账之前的状态', async () => {
+    const P = await freePort()
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    expect(svc.status()).toStrictEqual({
+      enabled: true,
+      port: P,
+      lan: false,
+      listening: false,
+      addresses: [],
+      clients: [],
+      headless: true
+    })
+  })
+
+  it("NSH-12 无头的 shutdown：1001 'ShuviX is quitting'、端口放开、之后不再开始监听", async () => {
+    const P = await freePort()
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    await svc.init()
+    const client = await connect(P)
+    await svc.shutdown()
+    expect(await client.closed).toStrictEqual({ code: 1001, reason: 'ShuviX is quitting' })
+    expect(await canListen(P)).toBe(true)
+    await svc.reconcile()
+    expect(svc.status().listening).toBe(false)
+    expect(await canListen(P)).toBe(true)
+  })
+})
+
+describe('NSL 局域网开关', () => {
+  it('NSL-1 开着、network.lan 缺 → 只给这台电脑', async () => {
+    const P = await freePort()
+    enable(P)
+    const svc = makeService()
+    await svc.reconcile()
+    expect(svc.status()).toStrictEqual({
+      enabled: true,
+      port: P,
+      lan: false,
+      bindAddress: '127.0.0.1',
+      listening: true,
+      addresses: [`http://127.0.0.1:${P}`],
+      clients: []
+    })
+  })
+
+  it("NSL-2 network.lan='true' → lan、局域网地址；绑的地址照样是给定的 host", async () => {
+    const P = await freePort()
+    enable(P)
+    settings.set('network.lan', 'true')
+    const svc = makeService()
+    await svc.reconcile()
+    const status = svc.status()
+    expect(status.lan).toBe(true)
+    expect(status.addresses).toStrictEqual(mod.listenAddresses(P, FAKE_IFACES))
+    expect(status.addresses).toStrictEqual([
+      `http://192.168.1.10:${P}`,
+      `http://10.0.0.2:${P}`,
+      `http://127.0.0.1:${P}`
+    ])
+    expect(status.bindAddress).toBe('127.0.0.1')
+  })
+
+  it("NSL-3 监听中切换局域网开关 → 1001 'network sharing changed'；changed +2；unregister；P 照样服务", async () => {
+    const P = await freePort()
+    enable(P)
+    const svc = makeService()
+    await svc.reconcile()
+    for (const next of ['true', 'false']) {
+      const client = await connect(P)
+      await vi.waitFor(() => expect(svc.status().clients).toHaveLength(1))
+      const clientId = svc.status().clients[0].id
+      const before = changed.mock.calls.length
+      settings.set('network.lan', next)
+      await svc.reconcile()
+      expect(await client.closed).toStrictEqual({ code: 1001, reason: 'network sharing changed' })
+      await vi.waitFor(() => expect(changed.mock.calls.length - before).toBe(2))
+      expect(mocks.unregister).toHaveBeenCalledWith('network:' + clientId)
+      expect(svc.status().lan).toBe(next === 'true')
+      expect(svc.status().listening).toBe(true)
+      expect(await getStatus(P)).toBe(200)
+    }
+  })
+
+  it("NSL-4 局域网与端口一起变 → 'network port changed'", async () => {
+    const P = await freePort()
+    const P2 = await freePort()
+    enable(P)
+    const svc = makeService()
+    await svc.reconcile()
+    const client = await connect(P)
+    settings.set('network.lan', 'true')
+    settings.set('network.port', String(P2))
+    await svc.reconcile()
+    expect(await client.closed).toStrictEqual({ code: 1001, reason: 'network port changed' })
+    expect(svc.status().lan).toBe(true)
+    expect(svc.status().port).toBe(P2)
+    expect(await getStatus(P2)).toBe(200)
+  })
+
+  it('NSL-5 setLan：写设置、回状态、重启；非布尔拒绝且不写', async () => {
+    const P = await freePort()
+    enable(P)
+    const svc = makeService()
+    await svc.reconcile()
+    const client = await connect(P)
+    const on = await svc.setLan(true)
+    expect(writes).toStrictEqual([['network.lan', 'true']])
+    expect(on.lan).toBe(true)
+    expect(on.listening).toBe(true)
+    expect(await client.closed).toStrictEqual({ code: 1001, reason: 'network sharing changed' })
+
+    const off = await svc.setLan(false)
+    expect(writes).toStrictEqual([
+      ['network.lan', 'true'],
+      ['network.lan', 'false']
+    ])
+    expect(off.lan).toBe(false)
+    for (const bad of ['true', 1, null, undefined]) {
+      await expect(svc.setLan(bad), String(bad)).rejects.toThrow('lan must be a boolean')
+    }
+    expect(writes).toHaveLength(2)
+  })
+
+  it("NSL-6 只有字面量 'true' 才开", async () => {
+    const P = await freePort()
+    enable(P)
+    const svc = makeService()
+    for (const raw of ['TRUE', '1', 'yes']) {
+      settings.set('network.lan', raw)
+      await svc.reconcile()
+      const status = svc.status()
+      expect(status.lan, raw).toBe(false)
+      expect(status.addresses, raw).toStrictEqual([`http://127.0.0.1:${P}`])
+    }
+  })
+
+  it('NSL-7 局域网开着、设置没变再对账 → 不重启', async () => {
+    const P = await freePort()
+    enable(P)
+    settings.set('network.lan', 'true')
+    const svc = makeService()
+    await svc.reconcile()
+    const client = await connect(P)
+    await vi.waitFor(() => expect(svc.status().clients).toHaveLength(1))
+    const before = changed.mock.calls.length
+    await svc.reconcile()
+    expect(client.ws.readyState).toBe(WebSocket.OPEN)
+    expect(changed.mock.calls.length).toBe(before)
+  })
+
+  it("NSL-8 settings.changed ['network.lan'] → 对账并重启；['general.language'] → 不对账", async () => {
+    const { appEventBus } = await import('../../../utils/appEventBus')
+    const P = await freePort()
+    enable(P)
+    const svc = makeService()
+    await svc.init()
+    const client = await connect(P)
+    const reconcile = vi.spyOn(svc, 'reconcile')
+    settings.set('network.lan', 'true')
+    appEventBus.publish({ type: 'settings.changed', keys: ['general.language'] })
+    expect(reconcile).not.toHaveBeenCalled()
+    expect(client.ws.readyState).toBe(WebSocket.OPEN)
+    appEventBus.publish({ type: 'settings.changed', keys: ['network.lan'] })
+    expect(reconcile).toHaveBeenCalledTimes(1)
+    expect(await client.closed).toStrictEqual({ code: 1001, reason: 'network sharing changed' })
+    await vi.waitFor(() => expect(svc.status().lan).toBe(true))
+    await vi.waitFor(() => expect(svc.status().listening).toBe(true))
+  })
+
+  it('NSL-9 没在监听就没有 bindAddress', async () => {
+    const svc = makeService()
+    expect('bindAddress' in svc.status()).toBe(false)
+    const status = await svc.setLan(true)
+    expect(status.lan).toBe(true)
+    expect(status.listening).toBe(false)
+    expect('bindAddress' in status).toBe(false)
+    expect(changed).not.toHaveBeenCalled()
+
+    const P = await freePort()
+    await occupy(P)
+    enable(P)
+    await svc.reconcile()
+    const failed = svc.status()
+    expect(failed.error).toBe('EADDRINUSE')
+    expect('bindAddress' in failed).toBe(false)
+  })
+
+  it('NSL-10 无头不读存着的局域网开关，只认启动参数', async () => {
+    const P = await freePort()
+    settings.set('network.lan', 'true')
+    const loopbackOnly = makeService()
+    loopbackOnly.setHeadless({ port: P })
+    await loopbackOnly.reconcile()
+    expect(loopbackOnly.status().lan).toBe(false)
+    expect(loopbackOnly.status().addresses).toStrictEqual([`http://127.0.0.1:${P}`])
+    await loopbackOnly.shutdown()
+
+    const P2 = await freePort()
+    settings.set('network.lan', 'false')
+    const shared = makeService()
+    shared.setHeadless({ port: P2, lan: true })
+    await shared.reconcile()
+    expect(shared.status().lan).toBe(true)
+    expect(shared.status().addresses).toStrictEqual(mod.listenAddresses(P2, FAKE_IFACES))
+  })
+
+  it('NSL-11 无头的 setLan：同值回状态；别的值拒绝；非布尔照旧那句', async () => {
+    const P = await freePort()
+    const svc = makeService()
+    svc.setHeadless({ port: P })
+    await svc.reconcile()
+    const client = await connect(P)
+    const same = await svc.setLan(false)
+    expect(same.lan).toBe(false)
+    expect(same.headless).toBe(true)
+    expect(writes).toStrictEqual([])
+
+    const refused = await svc.setLan(true).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string }
+    )
+    expect(refused?.code).toBe('headless')
+    expect(refused?.message).toContain('--lan')
+    const invalid = await svc.setLan('x').then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string }
+    )
+    expect(invalid?.message).toBe('lan must be a boolean')
+    expect(writes).toStrictEqual([])
+    expect(svc.status().listening).toBe(true)
+    expect(svc.status().lan).toBe(false)
+    expect(client.ws.readyState).toBe(WebSocket.OPEN)
+  })
+
+  it('NSL-12 shutdown 之后没有 bindAddress、地址空', async () => {
+    const P = await freePort()
+    enable(P)
+    settings.set('network.lan', 'true')
+    const svc = makeService()
+    await svc.reconcile()
+    expect(svc.status().bindAddress).toBe('127.0.0.1')
+    await svc.shutdown()
+    const status = svc.status()
+    expect('bindAddress' in status).toBe(false)
+    expect(status.addresses).toStrictEqual([])
   })
 })

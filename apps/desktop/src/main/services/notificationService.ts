@@ -26,6 +26,7 @@ import { settingsDao } from '../dao/settingsDao'
 import { focusFloating, isPinned } from './pinnedChatService'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
+import { isHeadless } from '../utils/headless'
 
 const log = createLogger('Notification')
 
@@ -112,6 +113,11 @@ function focusSession(sessionId: string): void {
 }
 
 function show(notification: AgentNotification): void {
+  // 无头运行（服务器上没有桌面）：不弹，记一行日志
+  if (isHeadless()) {
+    log.info(`通知（无头运行，不弹）: kind=${notification.kind} session=${notification.sessionId}`)
+    return
+  }
   if (!Notification.isSupported()) return
   // 同 key 覆盖：先撤旧的，避免通知中心里堆同一件事的历史版本
   live.get(notification.key)?.close()
