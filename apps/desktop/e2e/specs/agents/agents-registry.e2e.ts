@@ -55,8 +55,9 @@ describe('内置档案', () => {
     ])
     // 派发专用的窄档案两样都不要：AGENTS.md/CLAUDE.md 是写代码的工程约定，
     // 而拟一个标题（titler）不是工程活，项目上下文对它只是噪声。审查员（permission-reviewer）
-    // 更严：它的全部输入就是事件围栏，项目里的任何文字都可能是冲它来的注入
-    const narrow = ['titler', 'permission-reviewer']
+    // 更严：它的全部输入就是事件围栏，项目里的任何文字都可能是冲它来的注入。知识库写手是库管员：
+    // 只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带
+    const narrow = ['titler', 'permission-reviewer', 'knowledge-writer']
     for (const a of builtins) {
       // notebook 是笔记本会话根 Agent 的基座：开项目感知（笔记就写在项目里），但不吃指令文件。
       // bot（bot 会话的基座）同一取舍：AGENTS.md/CLAUDE.md 是写代码的工程约定，而真正

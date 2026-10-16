@@ -81,10 +81,11 @@ export function buildKnowledgeReviewPrompt(
     `- Base: "${req.base}" (${req.label}) — ${req.bundleDir}`,
     `- Submitted by: ${req.submittedBy}`,
     // 条目正文里写的多半是项目相对路径（`src/auth/refresh.ts`）；写手的提示词里没有环境段，不给它工作目录，
-    // 它就既找不到那个文件、也写不出 `sources` 要的绝对路径（真模型探针里它因此退回到会话 URI）
+    // 它就写不出 `sources` 要的绝对路径（真模型探针里它因此退回到会话 URI）。只给它拼路径用：写手是库管员，
+    // 不核实事实 —— 早先这一行写的是「据此解析相对路径」，用户反馈它真的跑去工作区翻源码确认技术细节
     ...(req.workingDirectory
       ? [
-          `- Working directory (resolve relative paths in the entry against it): ${req.workingDirectory}`
+          `- Working directory of the submitting session (only for turning a relative path the entry names into an absolute one in sources; do not open anything there): ${req.workingDirectory}`
         ]
       : []),
     ...(req.sessionId

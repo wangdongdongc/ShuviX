@@ -149,7 +149,7 @@ describe('KR-4..KR-6 派给写手的任务文本', () => {
     expect(buildKnowledgeReviewPrompt({ ...REQ, sessionId: '' })).not.toContain('shuvix://')
   })
 
-  it('KR-5b 带 workingDirectory → 多一行工作目录（条目里的相对路径据此解析），排在会话出处之前；不带 → 没有这一行', () => {
+  it('KR-5b 带 workingDirectory → 多一行工作目录（只用来把相对路径拼成绝对路径，明说不去打开），排在会话出处之前；不带 → 没有这一行', () => {
     const lines = buildKnowledgeReviewPrompt({
       ...REQ,
       sessionId: 's1',
@@ -157,7 +157,7 @@ describe('KR-4..KR-6 派给写手的任务文本', () => {
     }).split('\n')
     expect(lines).toHaveLength(7)
     expect(lines[5]).toBe(
-      '- Working directory (resolve relative paths in the entry against it): /Users/me/acme'
+      '- Working directory of the submitting session (only for turning a relative path the entry names into an absolute one in sources; do not open anything there): /Users/me/acme'
     )
     expect(lines[6]).toContain('shuvix://session/s1')
     expect(buildKnowledgeReviewPrompt({ ...REQ, sessionId: 's1' })).not.toContain(

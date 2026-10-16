@@ -203,7 +203,7 @@ describe('buildBuiltinProfiles — 全集现算', () => {
  * 提示词里必须在场的那几段。
  */
 describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', () => {
-  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/edit/grep/glob/ls/ask（没有 write），项目感知开、指令文件默认、不声明模型、不是基座、宿主专用、不依赖任何宿主参数', () => {
+  it('RG-1 三语结构钉板：工具面恰为 knowledge/read/edit（库管员：没有 write，也没有能在库外翻找的 grep/glob/ls），不注入项目文档、不开项目感知、不声明模型、不是基座、宿主专用、不依赖任何宿主参数', () => {
     expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
     // 要检查的文件、所在的库、提交者都由任务文本给出 —— 零参数也建得出来
     expect(KNOWLEDGE_WRITER_SPEC.requiredParams).toBeUndefined()
@@ -213,18 +213,11 @@ describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', ()
     for (const language of LANGS) {
       const built = buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { language, readMd })
       expect(built, language).not.toBeNull()
-      // 只就地 edit 被提交的那一份；不新建文件（write）、没有 git —— 簿记归宿主
-      expect(built!.tools, language).toEqual([
-        'knowledge',
-        'read',
-        'edit',
-        'grep',
-        'glob',
-        'ls',
-        'ask'
-      ])
-      expect(built!.projectAwareness, language).toBe(true)
-      expect(built!.instructionFiles, language).toEqual(['AGENTS.md', 'CLAUDE.md'])
+      // 只就地 edit 被提交的那一份；不新建文件（write）、没有 git —— 簿记归宿主。浏览库靠 knowledge 的
+      // search / list 加 read：grep / glob / ls 曾让它跑去会话工作区翻源码核实技术细节（用户反馈）
+      expect(built!.tools, language).toEqual(['knowledge', 'read', 'edit'])
+      expect(built!.projectAwareness, language).toBe(false)
+      expect(built!.instructionFiles, language).toEqual([])
       expect(built!.model, language).toBeUndefined()
     }
   })
@@ -356,10 +349,11 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / tab / coedit / titler / permission-reviewer 除外）、项目感知默认开（titler / permission-reviewer 除外）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / tab / coedit / titler / permission-reviewer / knowledge-writer 除外）、项目感知默认开（titler / permission-reviewer / knowledge-writer 除外）', () => {
     /** 两样注入都不要的执行型档案（上下文无关的一次性任务，注入整份项目文档纯属浪费 token 且稀释指令） */
-    // 权限审查员同理：它的全部输入就是那次操作的事件，项目文档只会稀释审查规则
-    const NO_INJECTION = ['titler', 'permission-reviewer']
+    // 权限审查员同理：它的全部输入就是那次操作的事件，项目文档只会稀释审查规则。
+    // 知识库写手（库管员）也是：它只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带
+    const NO_INJECTION = ['titler', 'permission-reviewer', 'knowledge-writer']
     for (const spec of BUILTIN_PROFILE_SPECS) {
       const built = buildBuiltinProfile(spec, ALL_PARAMS)!
       // 两项注入的开关面不同：
