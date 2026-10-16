@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FolderTree, ListTodo, X } from 'lucide-react'
+import { Folder, Layers, X } from 'lucide-react'
 import { useChatStore, useBgTaskCount, useBgTaskRunningCount } from '@shuvix/chat-ui'
 import { BgTaskPanel } from './BgTaskPanel'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
@@ -27,7 +27,7 @@ import { PanelCloseInsetContext } from './panelCloseInset'
  */
 
 /**
- * 展示工具（含兜底）：停在后台任务但任务已清空（ListTodo 按钮随之隐藏）→ 回落到 Files。
+ * 展示工具（含兜底）：停在后台任务但任务已清空（任务按钮随之隐藏）→ 回落到 Files。
  * 'subagent' 是已并入 tasks 的旧值（按会话记忆的 store 里可能还留着）→ 一并接到 tasks。
  */
 export function useSessionPanelTool(sessionId: string | null): SessionPanelTool | null {
@@ -59,7 +59,7 @@ export function useSessionPanelReveal(enabled = true): void {
 
 interface SessionPanelToolItem {
   tool: SessionPanelTool
-  Icon: typeof FolderTree
+  Icon: typeof Folder
   label: string
   badge?: number
 }
@@ -76,14 +76,14 @@ function useSessionPanelToolItems(sessionId: string | null): SessionPanelToolIte
   const taskCount = useBgTaskCount(sessionId)
   const runningTaskCount = useBgTaskRunningCount(sessionId)
   return [
-    { tool: 'files', Icon: FolderTree, label: t('panel.files') },
-    // 用 ListTodo：Terminal 已被 ssh 的运行时指示器占用，同栏必须一眼分得开。
+    { tool: 'files', Icon: Folder, label: t('panel.files') },
+    // 用 Layers（一摞后台任务）：Terminal 已被 ssh 的运行时指示器占用、Activity 是右侧面板 Agents 页签，同一窗口必须一眼分得开。
     // 徽标取「运行中」数而非总数 —— 全跑完之后 tab 仍在（用户还要看日志），但不该继续挂个数字
     ...(taskCount > 0
       ? [
           {
             tool: 'tasks' as const,
-            Icon: ListTodo,
+            Icon: Layers,
             label: t('panel.tasks'),
             badge: runningTaskCount
           }
