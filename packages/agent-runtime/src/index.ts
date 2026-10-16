@@ -306,12 +306,14 @@ export {
 } from './tools/toolResult'
 export {
   createFileToolSuite,
+  writeFileContent,
   ReadParamsSchema,
   WriteParamsSchema,
   EditParamsSchema,
   type FileToolDeps,
   type FileToolSuite,
-  type ReadDecoders
+  type ReadDecoders,
+  type WriteFileContentArgs
 } from './tools/fileToolSuite'
 // edit 内部的纯函数（行尾/BOM/diff、多级回退匹配链）—— 供桌面/扩展直接复用与单测
 export {
@@ -452,7 +454,6 @@ export {
   NOTEBOOK_SPEC,
   BOT_PROFILE_NAME,
   TAB_PROFILE_NAME,
-  COEDIT_PROFILE_NAME,
   BOT_SPEC,
   CODING_SPEC,
   EXPLORE_SPEC,

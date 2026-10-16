@@ -233,7 +233,7 @@ const profile = (name: string): AgentProfile =>
     projectAwareness: false
   }) as unknown as AgentProfile
 
-const KNOWN_PROFILES = new Set(['work', 'chat', 'notebook', 'coedit', 'bot', 'tab', 'coding'])
+const KNOWN_PROFILES = new Set(['work', 'chat', 'notebook', 'bot', 'tab', 'coding'])
 
 function row(id: string, patch: Partial<Session> = {}): Session {
   return {
@@ -464,7 +464,11 @@ describe('D10-14 resolveAgentConfig 的档案矩阵', () => {
     ['有项目', { projectId: 'p1' }, 'work'],
     ['无项目', {}, 'chat'],
     ['笔记本', { settings: { notebookPath: 'a.md' } }, 'notebook'],
-    ['笔记本 + coEdit', { settings: { notebookPath: 'a.md', coEdit: true } }, 'coedit'],
+    [
+      '笔记本 + 旧版本留下的 coEdit 键',
+      { settings: { notebookPath: 'a.md', coEdit: true } as Session['settings'] },
+      'notebook'
+    ],
     ['bot', { settings: { bot: 'scout' } }, 'bot'],
     ['chromeTab', { settings: { chromeTab: { installId: 'i', runId: 'r', tabId: 1 } } }, 'tab'],
     ['钉成 coding 的子会话', { parentId: 'P', settings: { agentProfile: 'coding' } }, 'coding'],

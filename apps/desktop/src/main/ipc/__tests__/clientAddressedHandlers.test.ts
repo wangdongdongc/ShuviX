@@ -9,6 +9,11 @@
  *   CH-3 `notification:reportActiveSession(sid)`（wc7 调）→ `reportActiveSession(7, sid)`；没有窗口时
  *        （`fromWebContents` → null）`dialog:openDirectory` 回 null、`contextMenu:popup` 回 `{ actionId: null }`，
  *        不弹对话框、不建菜单
+ *   CH-4 `liveDoc:attach`（wc7 调）`{ sessionId, attachId }` → `attachLiveDocument(sessionId, wc7 本身, attachId)`，
+ *        回 `{ success: true }`
+ *   CH-5 `liveDoc:detach`（wc7 调）→ `detachLiveDocument(sessionId, attachId, wc7 本身)`（只摘调用方自己挂的），
+ *        回 `{ success: true }`
+ *   CH-6 两条通道缺参数（没有参数 / 缺 attachId / 缺 sessionId / sessionId 空串）→ `{ success: false }`，不调桥
  *
  * 网络客户端（server mode phase B）调这些处理器：经注册表的定义直接以网络上下文调用（`listDefinitions()`），网络传输挂在
  * 注册表上、连接是假的（`frontend/network/__tests__/support/fakeNetworkConnection`）。
@@ -20,6 +25,9 @@
  *        不查 fromWebContents / fromId
  *   NH-5 `tts:speakOnce` 从网络来：每片 → 那条连接收到 `{t:'push', channel:'tts:chunk', args:[{filePath, index}]}`；连接关了之后
  *        不再发，invoke 照样落定
+ *   NH-6 `liveDoc:attach` 从网络来 → `{ success: false }`，不调 attachLiveDocument（网络客户端没有 webContents，
+ *        它开着的笔记本走磁盘回落）
+ *   NH-7 `liveDoc:detach` 从网络来 → `{ success: false }`，不调 detachLiveDocument
  *
  * electron 是替身（BrowserWindow / webContents / dialog / Menu）；webContents 用视图同步夹具的 `FakeWebContents`。
  */
@@ -34,6 +42,8 @@ const state = vi.hoisted(() => ({
   buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })),
   speakOnce: vi.fn(),
   resolveLiveDocumentResponse: vi.fn(),
+  attachLiveDocument: vi.fn(),
+  detachLiveDocument: vi.fn(),
   reportActiveSession: vi.fn()
 }))
 
@@ -57,7 +67,9 @@ vi.mock('../../services/tts/qwen3ModelManager', () => ({
   }
 }))
 vi.mock('../../services/liveDocumentBridge', () => ({
-  resolveLiveDocumentResponse: state.resolveLiveDocumentResponse
+  resolveLiveDocumentResponse: state.resolveLiveDocumentResponse,
+  attachLiveDocument: state.attachLiveDocument,
+  detachLiveDocument: state.detachLiveDocument
 }))
 vi.mock('../../services/notificationService', () => ({
   reportActiveSession: state.reportActiveSession,
@@ -205,6 +217,45 @@ describe('CH-2 liveDoc:respond 认的是调用方那个 webContents', () => {
   })
 })
 
+describe('CH-4 / CH-5 / CH-6 编辑器的挂接与摘下认的是调用方那个 webContents', () => {
+  it('CH-4 liveDoc:attach → attachLiveDocument(s1, wc7 本身, a1)，回 { success: true }', () => {
+    expect(invokeFrom(wc7, 'liveDoc:attach', { sessionId: 's1', attachId: 'a1' })).toEqual({
+      success: true
+    })
+    expect(state.attachLiveDocument).toHaveBeenCalledTimes(1)
+    const [sid, sender, attachId] = state.attachLiveDocument.mock.calls[0]
+    expect(sid).toBe('s1')
+    expect(sender).toBe(wc7)
+    expect(attachId).toBe('a1')
+    expect(state.detachLiveDocument).not.toHaveBeenCalled()
+    expect(state.fromId).not.toHaveBeenCalled()
+  })
+
+  it('CH-5 liveDoc:detach → detachLiveDocument(s1, a1, wc7 本身)，回 { success: true }', () => {
+    expect(invokeFrom(wc7, 'liveDoc:detach', { sessionId: 's1', attachId: 'a1' })).toEqual({
+      success: true
+    })
+    expect(state.detachLiveDocument).toHaveBeenCalledTimes(1)
+    const [sid, attachId, sender] = state.detachLiveDocument.mock.calls[0]
+    expect(sid).toBe('s1')
+    expect(attachId).toBe('a1')
+    expect(sender).toBe(wc7)
+    expect(state.attachLiveDocument).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['没有参数', undefined],
+    ['缺 attachId', { sessionId: 's1' }],
+    ['缺 sessionId', { attachId: 'a1' }],
+    ['sessionId 空串', { sessionId: '', attachId: 'a1' }]
+  ])('CH-6 %s → 两条通道都回 { success: false }，不调桥', (_label, params) => {
+    expect(invokeFrom(wc7, 'liveDoc:attach', params)).toEqual({ success: false })
+    expect(invokeFrom(wc7, 'liveDoc:detach', params)).toEqual({ success: false })
+    expect(state.attachLiveDocument).not.toHaveBeenCalled()
+    expect(state.detachLiveDocument).not.toHaveBeenCalled()
+  })
+})
+
 describe('CH-3 按调用方报会话；没有窗口时不弹东西', () => {
   it('CH-3 notification:reportActiveSession(sid) → reportActiveSession(7, sid)', () => {
     expect(invokeFrom(wc7, 'notification:reportActiveSession', 's-1')).toEqual({ success: true })
@@ -267,6 +318,22 @@ describe('NH-3 / NH-4 要窗口的处理器从网络来', () => {
     expect(state.showOpenDialog).not.toHaveBeenCalled()
     expect(state.fromWebContents).not.toHaveBeenCalled()
     expect(state.fromId).not.toHaveBeenCalled()
+  })
+})
+
+describe('NH-6 / NH-7 编辑器的挂接与摘下从网络来', () => {
+  it('NH-6 liveDoc:attach → { success: false }，不调 attachLiveDocument', () => {
+    expect(invokeFromNet('liveDoc:attach', { sessionId: 's1', attachId: 'a1' })).toEqual({
+      success: false
+    })
+    expect(state.attachLiveDocument).not.toHaveBeenCalled()
+  })
+
+  it('NH-7 liveDoc:detach → { success: false }，不调 detachLiveDocument', () => {
+    expect(invokeFromNet('liveDoc:detach', { sessionId: 's1', attachId: 'a1' })).toEqual({
+      success: false
+    })
+    expect(state.detachLiveDocument).not.toHaveBeenCalled()
   })
 })
 

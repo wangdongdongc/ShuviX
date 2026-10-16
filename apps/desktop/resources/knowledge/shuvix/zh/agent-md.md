@@ -131,21 +131,21 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 
 ## 内置 agent 与覆盖
 
-随应用发布（按界面语言一份，同一个解析器读）：六个**基座**人格 `work`（项目内会话的根）、`chat`
-（不属于任何项目的会话的根）、`notebook`（笔记本会话的根）、`bot`（bot 会话的根）、`tab`（Chrome 侧边栏
-对话的根，唯一带 `mcp:chrome` —— 用户自己的 Chrome —— 的一个）、`coedit`（从系统打开 md 时那个协作
-编辑窗口的根，只经 `doc_read` / `doc_edit` / `doc_insert` 改那份活文档）—— 加上任务型
+随应用发布（按界面语言一份，同一个解析器读）：五个**基座**人格 `work`（项目内会话的根）、`chat`
+（不属于任何项目的会话的根）、`notebook`（笔记本会话的根 —— 主窗口里的笔记，或在单独窗口里打开的 md
+文件 —— 只经 `doc_read` / `doc_edit` / `doc_insert` 改那份文档）、`bot`（bot 会话的根）、`tab`（Chrome
+侧边栏对话的根，唯一带 `mcp:chrome` —— 用户自己的 Chrome —— 的一个）—— 加上任务型
 agent `coding`、`explore`、`widget`、`titler`，以及两个只由 ShuviX 派发的 agent：`permission-reviewer`
 —— 它替自动审查回答审批请求（见 `policy-md` 条目），和 `knowledge-writer` —— 它检查经 `knowledge` 工具
 提交的条目并补齐元数据（见 `knowledge-entry` 条目）。
 
-- **会话的根人格由会话形态推导，从不选择**：协作编辑窗口 → `coedit`，笔记本 → `notebook`，bot 会话 → `bot`，Chrome 侧边栏 →
+- **会话的根人格由会话形态推导，从不选择**：笔记本或 md 窗口 → `notebook`，bot 会话 → `bot`，Chrome 侧边栏 →
   `tab`，在项目里 → `work`，否则 → `chat`。没有设置项，没有选择器。想改主对话的行为，**按名字覆盖基座**：
   `~/.shuvix/agents/work.md` 整个取代内置的 `work`（侧栏「智能体」分组里内置行菜单的「创建覆盖副本」给你当前文本作起点）。
 - 任何 `name` 与内置同名的用户文件都取代那个内置。用户文件之间的同名按 `shuvix-files` 条目里的规则
   裁决；输的那几份列为已被覆盖。写坏的覆盖永远不会遮蔽内置。
 - 基座**从不被派发、从不被点名**：`agent` 工具、hook 的 `shuvix-hook-agent`、子会话的 `agent_profile`
-  都拒绝 `work` / `chat` / `notebook` / `bot` / `tab` / `coedit`。`permission-reviewer` 同样被 `agent` 工具与
+  都拒绝 `work` / `chat` / `notebook` / `bot` / `tab`。`permission-reviewer` 同样被 `agent` 工具与
   `agent_profile` 拒绝 —— 能随手调用自己审查员的 agent，可以一遍遍换说法直到某一种能过 —— 但 hook 可以点名它。
 
 - **不复制覆盖也能定模型与思考档位：ShuviX 设置。** 从侧栏「智能体」分组打开一份内置 agent 的 md，虽然文件本身只读，

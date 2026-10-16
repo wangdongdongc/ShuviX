@@ -10,6 +10,16 @@
  *   TC-WD3 无项目、没有自带目录 → getById 给的临时工作区
  *   TC-WD4 会话不存在 → 临时工作区（按 sessionId 取）
  *
+ * resolveSessionDocument / isSessionDocument —— 笔记本会话自己那份文档（doc_* 的磁盘回落读写它，write / edit
+ * 不许碰它）：settings.notebookPath 按上面那个工作目录解析；比较时跟过链接、按文件系统的大小写规则：
+ *   TC-DOC1 不是笔记本会话（notebookPath 缺 / null）→ null；isSessionDocument 恒 false
+ *   TC-DOC2 项目会话的相对 notebookPath → <项目根>/<notebookPath>；同一路径与带 `..` 的写法都认，兄弟文件不认
+ *   TC-DOC3 绝对 notebookPath → 原样
+ *   TC-DOC4 无项目、自带工作目录 → 按那个目录拼
+ *   TC-DOC5 会话不存在 → null / false
+ *   TC-DOC6 真实临时目录、父目录是符号链接：经链接的写法与真实写法两个方向都认
+ *   TC-DOC7 已存在文件的大小写变体 → 认（只在大小写不敏感的文件系统上跑）
+ *
  * 命令沙箱的宿主胶水（HG-1）：
  *   getSessionPathGrants —— 会话 allowList 的 Write(...) / Read(...) 拆成写 / 读授权根，
  *     历史遗留的 Bash(...) 与写坏的条目不授予任何东西；
@@ -33,9 +43,18 @@
  * 需要真实评估的用例读仓库里那份内置策略 md（同 askPolicy.test）；用户策略由 tc.userPolicies 喂。
  * reviewState / 决策日志是进程级表：这些用例各用独立 sessionId，afterEach 清掉。
  */
-import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const tc = vi.hoisted(() => ({
@@ -123,9 +142,11 @@ import {
   getDesktopSecurityContext,
   getSessionPathGrants,
   isPathReadAllowed,
+  isSessionDocument,
   isPathWriteAllowed,
   makeDesktopSecurityProvider,
   resolveProjectConfig,
+  resolveSessionDocument,
   sessionDirExtras,
   setCommandClassifier,
   setPermissionReviewer,
@@ -364,6 +385,109 @@ describe('resolveProjectConfig —— 工作目录照抄 getById 的口径', () 
     tc.getById.mockReturnValue(undefined)
     expect(resolveProjectConfig('gone')).toEqual({ workingDirectory: '/tmp/shuvix-actor-ws' })
     expect(tc.getTempWorkspace).toHaveBeenCalledWith('gone')
+  })
+})
+
+describe('resolveSessionDocument / isSessionDocument —— 笔记本会话自己那份文档', () => {
+  beforeEach(() => {
+    tc.getById.mockReset()
+    tc.projectPick.mockReset()
+    tc.pickSettings.mockReset()
+  })
+
+  /** 会话行：settings.notebookPath + getById 给出的工作目录（有项目时项目根即 /proj） */
+  const session = (
+    notebookPath: string | null,
+    where: { projectPath?: string; workingDirectory?: string }
+  ): void => {
+    tc.pickSettings.mockImplementation((_id, keys) =>
+      keys.includes('notebookPath') ? { notebookPath } : undefined
+    )
+    if (where.projectPath) {
+      tc.getById.mockReturnValue({
+        id: 's-doc',
+        projectId: 'p1',
+        settings: {},
+        workingDirectory: where.projectPath
+      })
+      tc.projectPick.mockReturnValue({ id: 'p1', path: where.projectPath, settings: {} })
+    } else {
+      tc.getById.mockReturnValue({
+        id: 's-doc',
+        projectId: null,
+        settings: { workingDirectory: where.workingDirectory },
+        workingDirectory: where.workingDirectory
+      })
+    }
+  }
+
+  it('TC-DOC1 不是笔记本会话 → null；isSessionDocument 恒 false', () => {
+    session(null, { projectPath: '/proj' })
+    expect(resolveSessionDocument('s-doc')).toBeNull()
+    expect(isSessionDocument('s-doc', '/proj/notes/a.md')).toBe(false)
+    expect(tc.pickSettings).toHaveBeenCalledWith('s-doc', ['notebookPath'])
+
+    tc.pickSettings.mockReturnValue({})
+    expect(resolveSessionDocument('s-doc')).toBeNull()
+  })
+
+  it('TC-DOC2 项目会话的相对 notebookPath → 项目根下；`..` 写法也认，兄弟文件不认', () => {
+    session('notes/a.md', { projectPath: '/proj' })
+    expect(resolveSessionDocument('s-doc')).toBe('/proj/notes/a.md')
+    expect(isSessionDocument('s-doc', '/proj/notes/a.md')).toBe(true)
+    expect(isSessionDocument('s-doc', '/proj/notes/../notes/a.md')).toBe(true)
+    expect(isSessionDocument('s-doc', '/proj/notes/b.md')).toBe(false)
+    expect(isSessionDocument('s-doc', '/proj/a.md')).toBe(false)
+  })
+
+  it('TC-DOC3 绝对 notebookPath → 原样', () => {
+    session('/elsewhere/doc.md', { projectPath: '/proj' })
+    expect(resolveSessionDocument('s-doc')).toBe('/elsewhere/doc.md')
+    expect(isSessionDocument('s-doc', '/elsewhere/doc.md')).toBe(true)
+    expect(isSessionDocument('s-doc', '/proj/elsewhere/doc.md')).toBe(false)
+  })
+
+  it('TC-DOC4 无项目、自带工作目录 → 按那个目录拼', () => {
+    session('x.md', { workingDirectory: '/own/dir' })
+    expect(resolveSessionDocument('s-doc')).toBe('/own/dir/x.md')
+    expect(isSessionDocument('s-doc', '/own/dir/x.md')).toBe(true)
+    expect(tc.getTempWorkspace).not.toHaveBeenCalledWith('s-doc')
+  })
+
+  it('TC-DOC5 会话不存在 → null / false', () => {
+    tc.pickSettings.mockReturnValue(undefined)
+    tc.getById.mockReturnValue(undefined)
+    expect(resolveSessionDocument('gone')).toBeNull()
+    expect(isSessionDocument('gone', '/tmp/shuvix-actor-ws/x.md')).toBe(false)
+  })
+
+  describe('真实文件系统', () => {
+    let root = ''
+    beforeAll(() => {
+      root = realpathSync(mkdtempSync(join(tmpdir(), 'shuvix-session-doc-')))
+      mkdirSync(join(root, 'real', 'notes'), { recursive: true })
+      writeFileSync(join(root, 'real', 'notes', 'a.md'), '# a\n')
+      symlinkSync(join(root, 'real'), join(root, 'link'))
+    })
+    afterAll(() => rmSync(root, { recursive: true, force: true }))
+
+    it('TC-DOC6 父目录是符号链接：经链接的写法与真实写法两个方向都认', () => {
+      session('notes/a.md', { workingDirectory: join(root, 'link') })
+      expect(resolveSessionDocument('s-doc')).toBe(join(root, 'link', 'notes', 'a.md'))
+      expect(isSessionDocument('s-doc', join(root, 'real', 'notes', 'a.md'))).toBe(true)
+      expect(isSessionDocument('s-doc', join(root, 'real', 'notes', 'b.md'))).toBe(false)
+
+      session('notes/a.md', { workingDirectory: join(root, 'real') })
+      expect(isSessionDocument('s-doc', join(root, 'link', 'notes', 'a.md'))).toBe(true)
+    })
+
+    it('TC-DOC7 已存在文件的大小写变体 → 认（大小写不敏感的文件系统）', (testCtx) => {
+      const insensitive = existsSync(join(root, 'REAL', 'NOTES', 'A.MD'))
+      if (!insensitive) testCtx.skip()
+      session('notes/a.md', { workingDirectory: join(root, 'real') })
+      expect(isSessionDocument('s-doc', join(root, 'real', 'NOTES', 'A.md'))).toBe(true)
+      expect(isSessionDocument('s-doc', join(root, 'REAL', 'notes', 'a.MD'))).toBe(true)
+    })
   })
 })
 

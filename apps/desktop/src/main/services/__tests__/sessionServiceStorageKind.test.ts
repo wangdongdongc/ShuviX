@@ -246,7 +246,10 @@ describe('SC-1 / SC-2 新会话盖当前存储', () => {
 describe('SC-3 每一种创建形态都盖 CURRENT', () => {
   it.each<[string, () => Session]>([
     ['笔记本会话', () => create({ projectId: 'p1', notebookPath: 'notes/a.md' })],
-    ['协作编辑会话', () => create({ notebookPath: 'a.md' }, { ...EPH, coEdit: true })],
+    [
+      'md 窗口的会话',
+      () => create({ notebookPath: 'a.md' }, { ...EPH, workingDirectory: '/docs' })
+    ],
     ['bot 会话', () => create({ bot: 'scout' })],
     [
       'Chrome 标签页会话',
@@ -280,8 +283,8 @@ describe('SC-3 每一种创建形态都盖 CURRENT', () => {
       chromeTab: { installId: 'i1', runId: 'r1', tabId: 5 }
     } as unknown as CreateParams)
     expect(sessionService.resolveAgentProfileName(tab.id)).toBe('tab')
-    const coEdit = create({ notebookPath: 'a.md' }, { ...EPH, coEdit: true })
-    expect(sessionService.getById(coEdit.id)!.settings.coEdit).toBe(true)
+    const md = create({ notebookPath: 'a.md' }, { ...EPH, workingDirectory: '/docs' })
+    expect(sessionService.resolveAgentProfileName(md.id)).toBe('notebook')
     const wd = create({}, { workingDirectory: '/work/dir' })
     expect(sessionService.getById(wd.id)!.settings.workingDirectory).toBe('/work/dir')
   })

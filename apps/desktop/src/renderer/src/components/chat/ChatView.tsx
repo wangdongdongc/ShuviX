@@ -243,7 +243,7 @@ export function ChatView({ pinnedMode }: ChatViewProps = {}): React.JSX.Element 
       }
       contentOverride={placeholder}
       welcome={<WelcomeView />}
-      renderNotebook={(path, sid) => <NotebookSessionView path={path} sessionId={sid} />}
+      renderNotebook={(path, sid) => <NotebookSessionView key={sid} path={path} sessionId={sid} />}
       conversationEmptyState={(sid) => <EmptySessionHint sessionId={sid} />}
       overlays={
         // 会话配置弹窗

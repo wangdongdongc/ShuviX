@@ -33,6 +33,11 @@ export interface ShuvixMdWriteContext {
    * 那样这份文件与普通 md 无异。
    */
   knowledge?: { rel: string; actor: string; now: string }
+  /**
+   * 只要诊断：不补缺省字段、不盖 `generated` 章（`content` 恒为 null），只回校验的话。给那些宿主不往里
+   * 回写的改动用 —— doc_* 改的是编辑器里的活文档，落盘归编辑器的自动保存，宿主往里写东西会被它覆盖。
+   */
+  diagnoseOnly?: boolean
 }
 
 export interface ShuvixMdWriteOutcome {
@@ -208,7 +213,7 @@ function reviewKnowledgeWrite(
   const errors = diagnostics.filter((d) => d.level === 'error').map((d) => `- ${d.message}`)
   if (errors.length > 0) {
     return {
-      note: `[OKF] The file was written, but it breaks the knowledge base format and will not be read as intended until fixed:\n${errors.join('\n')}`,
+      note: `[OKF] ${changedLead(ctx)}, but it breaks the knowledge base format and will not be read as intended until fixed:\n${errors.join('\n')}`,
       content: null
     }
   }
@@ -221,7 +226,10 @@ function reviewKnowledgeWrite(
 
   // `generated` 只盖在 OKF 条目上（带自述行的，或有 `type` 的外来条目）—— 用户的普通笔记宿主一个
   // 字节都不改，也不催它补自述行：那一行只保证 ShuviX 自己建出来的条目带着。保留名从来不是条目
-  const b = !isReservedFile(rel) && (hasMarker || isOkfConceptText(text)) ? bounds(text) : null
+  const b =
+    !ctx.diagnoseOnly && !isReservedFile(rel) && (hasMarker || isOkfConceptText(text))
+      ? bounds(text)
+      : null
   const stamped =
     !!b &&
     upsertMapping(
@@ -236,6 +244,11 @@ function reviewKnowledgeWrite(
   }
   if (notes.length === 0) return null
   return { note: notes.join('\n\n'), content: stamped && b ? b.lines.join('\n') : null }
+}
+
+/** 回执的开头：落了盘就说写进去了；只要诊断的（编辑器里的改动，还没存盘）说的是文档改了 */
+function changedLead(ctx: ShuvixMdWriteContext): string {
+  return ctx.diagnoseOnly ? 'The document was changed' : 'The file was written'
 }
 
 /** 展示型契约（chart，validate 回 unknown）的兜底：frontmatter 过不了真 YAML 就报语法错首行 */
@@ -275,7 +288,7 @@ export function reviewShuvixMdWrite(
       ? validation.messages.map((m) => `- ${m}`).join('\n')
       : '- (the parser gave no reason)'
     return {
-      note: `[${label}] The file was written, but it is INVALID and will be ignored until fixed:\n${why}`,
+      note: `[${label}] ${changedLead(ctx)}, but it is INVALID and will be ignored until fixed:\n${why}`,
       content: null
     }
   }
@@ -288,7 +301,7 @@ export function reviewShuvixMdWrite(
     const yamlError = frontmatterSyntaxError(text)
     if (yamlError) {
       return {
-        note: `[${label}] The file was written, but its frontmatter is not valid YAML — ShuviX previews will show a syntax error instead of the fields until fixed:\n- ${yamlError}`,
+        note: `[${label}] ${changedLead(ctx)}, but its frontmatter is not valid YAML — ShuviX previews will show a syntax error instead of the fields until fixed:\n- ${yamlError}`,
         content: null
       }
     }
@@ -301,7 +314,7 @@ export function reviewShuvixMdWrite(
     )
   }
 
-  const fillers = FIELD_FILLERS[marker.type] ?? []
+  const fillers = ctx.diagnoseOnly ? [] : (FIELD_FILLERS[marker.type] ?? [])
   const b = fillers.length > 0 ? bounds(text) : null
   const filled: string[] = []
   if (b) {

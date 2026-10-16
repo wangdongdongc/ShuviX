@@ -45,7 +45,6 @@ import {
   NOTEBOOK_PROFILE_NAME,
   BOT_PROFILE_NAME,
   TAB_PROFILE_NAME,
-  COEDIT_PROFILE_NAME,
   WORK_PROFILE_NAME,
   rowForProviderId,
   toInProcessAgentType,
@@ -330,15 +329,12 @@ export class SessionService {
    * `options.workingDirectory`（绝对路径）给**不属于任何项目**的会话指定工作目录，代替临时工作区；
    * 有项目时忽略。子会话不看 options，随父会话（父会话有就同一个目录）。同样只有主进程能给。
    *
-   * `options.coEdit` 标记**协作编辑会话**（须同时给 notebookPath）：根档案由形态推出基座 `coedit`，
-   * 文档经 doc_* 工具在编辑窗口的活缓冲上修改。只给根会话；子会话、Chrome 标签页会话忽略。
-   *
    * `options.id` 由调用方定 id（P2-10 PIN-05，子会话 create 动作的重跑幂等）：同一父会话下已有这一行 →
    * 原样交回、什么都不写；这个 id 落在别的父会话（或根上）→ 抛错。同样只有主进程能给。
    */
   create(
     params?: SessionCreateParams,
-    options?: { ephemeral?: boolean; workingDirectory?: string; coEdit?: boolean; id?: string }
+    options?: { ephemeral?: boolean; workingDirectory?: string; id?: string }
   ): Session {
     // 调用方给定 id（子会话的 create 动作把它记在工具的 memo 里，崩溃后重跑拿到同一个，P2-10 PIN-05）：
     // 幂等 —— 同一父会话下已有这一行就原样交回（不再插入、不再广播、勾选不再抄一遍）；落在别处就拒绝
@@ -386,8 +382,6 @@ export class SessionService {
       // 指令文件不预写配置：留空即「未显式配置」，注入时按 AGENTS.md → CLAUDE.md 优先级自动选
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
-        // 协作编辑只对根上的笔记本会话有意义：它说的是「这份 md 开在一个协作窗口里」
-        ...(notebookPath && !parentId && options?.coEdit ? { coEdit: true } : {}),
         // 自带工作目录只给无项目会话：有项目时工作目录恒为项目根。子会话随父会话（与 projectId
         // 同一条理由 —— 工作目录是会话的地基），调用方给的不算
         ...(!pid && workingDirectory ? { workingDirectory } : {}),
@@ -443,8 +437,6 @@ export class SessionService {
     // 排在最前：create 不会让它同时是笔记本 / bot，万一行里真有那些键，也不能让它落到一个
     // 没有 mcp:chrome 的基座上
     if (isChromeTabSessionSettings(settings)) return TAB_PROFILE_NAME
-    // 协作编辑窗口里的笔记本：基座 `coedit`（只经 doc_* 改那份活文档，不握 write / edit）
-    if (settings?.notebookPath && settings.coEdit) return COEDIT_PROFILE_NAME
     if (settings?.notebookPath) return NOTEBOOK_PROFILE_NAME
     // bot 会话：根 Agent 恒为基座 `bot`，人设与记忆是活的 `bot_profile` 段落（agentHost 的 resolveBotContext）。
     // 与笔记本一样按形态推导，没有设置项

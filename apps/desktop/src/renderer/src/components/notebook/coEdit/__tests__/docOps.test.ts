@@ -17,17 +17,13 @@
  *   D5 userChangesPatch：相同 → undefined；hunk 头、无文件头；「\ No newline」丢掉；超长截断
  *   D6 diffToChanges 两种粒度的往返（空↔文本、CJK、emoji、相邻的删 + 增）
  *   D7 mergeExternalChange：见上面第四条
+ *   D8 describeDocChange（落点描述搬进 chat-protocol、两边共用之后）与搬家前渲染端按 CM6 Text 算的口径
+ *      逐字一致 —— 预言函数照旧公式用 Text 重算 line / context，DC-1..DC-8 八份样本两边比
  */
 import { describe, expect, it } from 'vitest'
 import { ChangeSet, Text } from '@codemirror/state'
-import {
-  diffToChanges,
-  mergeExternalChange,
-  occurrences,
-  partialJsonString,
-  planDocChange,
-  userChangesPatch
-} from '../docOps'
+import { describeDocChange, occurrences, planDocChange } from '@shuvix/chat-protocol/liveDocument'
+import { diffToChanges, mergeExternalChange, partialJsonString, userChangesPatch } from '../docOps'
 
 const edit = (find: string, replace: string): Parameters<typeof planDocChange>[1] => ({
   kind: 'edit',
@@ -389,5 +385,49 @@ describe('D7 mergeExternalChange', () => {
     expect(merged(base, ours, disk)).toBe(
       'start, with a much longer user insertion. middle. THE END.'
     )
+  })
+})
+
+describe('D8 describeDocChange 与搬家前的 CM6 口径一致', () => {
+  /** 搬家前渲染端的算法：在改动后的 CM6 Text 上算新内容的首行与上下文 */
+  function oracle(
+    after: string,
+    plan: { from: number; insert: string }
+  ): { line: number; context: string } {
+    const d = Text.of(after.split('\n'))
+    const len = d.length
+    const leading = /^\n*/.exec(plan.insert)?.[0].length ?? 0
+    const fromLine = Math.max(1, d.lineAt(plan.from).number - 1)
+    const lastLine = d.lineAt(Math.min(plan.from + plan.insert.length, len)).number
+    const firstLine = d.lineAt(Math.min(plan.from + leading, len)).number
+    const toLine = Math.min(d.lines, Math.max(lastLine + 1, fromLine), fromLine + 24)
+    const width = String(toLine).length
+    const context: string[] = []
+    for (let n = fromLine; n <= toLine; n++) {
+      context.push(`${String(n).padStart(width, ' ')}│${d.line(n).text}`)
+    }
+    return { line: firstLine, context: context.join('\n') }
+  }
+
+  const rows = Array.from({ length: 20 }, (_, i) => `r${i + 1}`).join('\n')
+  const longInsert = '\n' + Array.from({ length: 40 }, (_, i) => `n${i + 1}`).join('\n')
+  const longFrom = rows.indexOf('r9') + 'r9'.length
+  const samples: Array<[string, string, { from: number; insert: string }]> = [
+    ['DC-1', 'L1\nL2\nNEW\nL4\nL5', { from: 6, insert: 'NEW' }],
+    ['DC-2', '# T\n\npara one\n\nnew para\n\npara two', { from: 13, insert: '\n\nnew para' }],
+    ['DC-3', 'top\nfirst\nsecond', { from: 0, insert: 'top\n' }],
+    ['DC-4', 'a\nb\nc', { from: 3, insert: '\nc' }],
+    ['DC-5', 'a\n\n', { from: 1, insert: '\n\n' }],
+    ['DC-6', 'x\nz', { from: 2, insert: '' }],
+    [
+      'DC-7',
+      rows.slice(0, longFrom) + longInsert + rows.slice(longFrom),
+      { from: longFrom, insert: longInsert }
+    ],
+    ['DC-8', 'a\nX\nb\nc', { from: 2, insert: 'X\n' }]
+  ]
+
+  it.each(samples)('%s 与 CM6 口径逐字相同', (_id, after, plan) => {
+    expect(describeDocChange(after, plan)).toEqual(oracle(after, plan))
   })
 })

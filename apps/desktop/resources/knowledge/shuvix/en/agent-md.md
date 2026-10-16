@@ -144,19 +144,19 @@ An empty frontmatter (`---` directly followed by `---`) is valid: every field ta
 
 ## Builtin agents and overriding them
 
-Shipped inside the application (per UI language, with the same parser): the six **base**
+Shipped inside the application (per UI language, with the same parser): the five **base**
 personas `work` (root of a session inside a project), `chat` (root of a session outside any
-project), `notebook` (root of a notebook session), `bot` (root of a bot chat) and `tab` (root of a
-Chrome side panel conversation, the only one holding `mcp:chrome` — the user's own Chrome) and
-`coedit` (root of the co-editing window a markdown file opens in from the OS, editing the live
-document only through `doc_read` / `doc_edit` / `doc_insert`) — plus
+project), `notebook` (root of a notebook session — a note in the main window or a markdown file
+opened in its own window — changing the document only through `doc_read` / `doc_edit` /
+`doc_insert`), `bot` (root of a bot chat) and `tab` (root of a Chrome side panel conversation, the
+only one holding `mcp:chrome` — the user's own Chrome) — plus
 the task agents `coding`, `explore`, `widget` and `titler`, and two agents only ShuviX
 dispatches: `permission-reviewer`, which answers approval requests for the automatic review (see
 the `policy-md` entry), and `knowledge-writer`, which checks an entry submitted through the
 `knowledge` tool and completes its metadata (see the `knowledge-entry` entry).
 
-- **A session's root persona is derived from the session's form, never chosen**: co-editing
-  window → `coedit`, notebook → `notebook`, bot chat → `bot`, Chrome side panel → `tab`, in a project → `work`, otherwise →
+- **A session's root persona is derived from the session's form, never chosen**: notebook or
+  markdown window → `notebook`, bot chat → `bot`, Chrome side panel → `tab`, in a project → `work`, otherwise →
   `chat`. There is no setting
   and no picker. To change how a main conversation behaves, **override the base by name**:
   `~/.shuvix/agents/work.md` replaces the builtin `work` completely ("Create override copy" in
@@ -166,7 +166,7 @@ the `policy-md` entry), and `knowledge-writer`, which checks an entry submitted 
   Overridden. A broken override never shadows the builtin.
 - The bases are **never dispatched and never named**: the `agent` tool, a hook's
   `shuvix-hook-agent` and a sub-session's `agent_profile` all refuse `work` / `chat` /
-  `notebook` / `bot` / `tab` / `coedit`. `permission-reviewer` is refused by the `agent` tool and
+  `notebook` / `bot` / `tab`. `permission-reviewer` is refused by the `agent` tool and
   by `agent_profile` as well — an agent that could call its own reviewer at will could keep trying
   phrasings until one passed — but a hook may name it.
 

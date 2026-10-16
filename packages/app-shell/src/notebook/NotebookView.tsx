@@ -155,6 +155,12 @@ export function NotebookView({
           const r = await getSessionChannelApi()
             .files.read({ sessionId, path })
             .catch(() => null)
+          // 盘上已经就是这份内容（最常见：刚并进来的外部改动触发的这次保存）：不写。写一遍同样的字节
+          // 不只是多余 —— 读盘与写盘之间若又有人写了，这一次会把它盖掉
+          if (r?.kind === 'text' && r.content === md) {
+            lastSyncedContentRef.current = md
+            return
+          }
           if (r?.kind === 'text' && isForeign(r.content)) {
             absorbDisk(r.content)
             return

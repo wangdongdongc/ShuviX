@@ -1095,8 +1095,12 @@ declare global {
       /** 监听通知点击要求打开的会话；返回取消订阅函数 */
       onOpenSession: (callback: (sessionId: string) => void) => () => void
     }
-    /** 协作编辑（md 窗口）：主进程把 agent 的 doc_* 工具调用交给本窗口的编辑器执行 */
+    /** 协作编辑：主进程把 agent 的 doc_* 工具调用交给正显示着那条笔记本会话的编辑器执行 */
     liveDoc: {
+      /** 本窗口的一个编辑器开始显示这条会话的文档（attachId 由编辑器自取）；网络客户端恒为 false */
+      attach: (params: { sessionId: string; attachId: string }) => Promise<{ success: boolean }>
+      /** 那个编辑器不再显示它 */
+      detach: (params: { sessionId: string; attachId: string }) => Promise<{ success: boolean }>
       onRequest: (
         callback: (request: import('@shuvix/chat-protocol/liveDocument').LiveDocRequest) => void
       ) => () => void

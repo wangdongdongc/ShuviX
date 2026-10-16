@@ -10,8 +10,8 @@
  *     ready-to-show 才显示 + 聚焦；页面自己的 <title> 盖不掉文件名；macOS 才设代理图标；
  *   - 同一个文件（按真实路径）只开一个窗口，再开就把它带到前面（最小化的先还原）；
  *   - 关窗：从表里拿掉、解绑前端、删会话（只删一次），用户的文件与目录不动；删除失败只记日志；
- *   - 协作编辑：开窗把这个窗口的 webContents 挂到会话上（agent 的 doc_* 请求发给它）；关窗先解绑 ——
- *     还在等这个窗口答复的请求立刻失败，而且在删会话之前（停 Agent 时工具已经收场，不等超时）。
+ *   - 协作编辑：开窗**不**替编辑器挂接 —— 挂接由窗口里的编辑器自己报（renderer useCoEditing → liveDoc:attach），
+ *     所以编辑器报到之前，这条会话的 doc_* 走磁盘回落，不往窗口发任何请求；关窗后的清理归桥（webContents 销毁）。
  *
  * electron 换成一个记账的假 BrowserWindow；sessionService / externalOpen 是间谍；前端注册表用**真的**
  * （只替掉 frontend/core 这个入口，免得把网关那一整张依赖图拉进来）并在上面挂 spy。文件是真的临时文件。
@@ -33,8 +33,7 @@
  *   MW-11 （白盒）旧窗口迟到的 closed：同一路径的新窗口已登记 → 新的那条不被拿掉
  *   MW-12 （白盒）delete 失败 → 记一条 warn，不抛、不留未处理的 rejection
  *   MW-H1 无头运行（已初始化、真的 md）→ false，不开窗、不建会话、不绑前端
- *   W1    开窗把 webContents 挂上：会话的 doc 请求经这个窗口的 send 发出（别的会话不经它）
- *   W2    closed → 在途的 doc 请求以「closed」失败，先于删会话；之后的请求「No document window」
+ *   W1    开窗不挂接：编辑器报到之前，会话的 doc 请求走磁盘回落，窗口什么都没收到
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -127,9 +126,7 @@ const fx = vi.hoisted(() => {
     create: vi.fn(),
     delete: vi.fn<(id: string) => Promise<void>>(),
     guardAppWindow: vi.fn(),
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    /** 关窗时各步的先后（W2：解绑协作编辑 → 删会话） */
-    order: [] as string[]
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
   }
 })
 
@@ -150,17 +147,6 @@ vi.mock('../sessionService', () => ({
   sessionService: { create: fx.create, delete: fx.delete }
 }))
 vi.mock('../externalOpen', () => ({ guardAppWindow: fx.guardAppWindow }))
-// 桥是真的，只在 detach 上记一笔先后（W2）
-vi.mock('../liveDocumentBridge', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../liveDocumentBridge')>()
-  return {
-    ...real,
-    detachLiveDocument: (sessionId: string) => {
-      fx.order.push(`detach:${sessionId}`)
-      real.detachLiveDocument(sessionId)
-    }
-  }
-})
 vi.mock('../../logger', () => ({ createLogger: () => fx.log }))
 
 type FakeWindow = InstanceType<typeof fx.FakeWindow>
@@ -209,7 +195,6 @@ beforeEach(async () => {
   fx.FakeWindow.all = []
   fx.FakeWindow.focused = null
   fx.isDev = false
-  fx.order.length = 0
   frontends = []
   fx.create.mockImplementation(() => ({ id: `sid-${++sidSeq}` }))
   fx.delete.mockResolvedValue(undefined)
@@ -331,7 +316,7 @@ describe('MW-3 ~ MW-7 开窗', () => {
     expect(fx.create.mock.calls).toEqual([
       [
         { title: 'a.md', notebookPath: 'a.md' },
-        { ephemeral: true, workingDirectory: dirname(real), coEdit: true }
+        { ephemeral: true, workingDirectory: dirname(real) }
       ]
     ])
     const sid = fx.create.mock.results[0].value.id as string
@@ -476,7 +461,7 @@ describe('MW-8 / MW-8b / MW-9 同一个文件 / 链接 / 多个文件', () => {
     expect(fx.create.mock.calls).toEqual([
       [
         { title: 'notes.txt', notebookPath: 'notes.txt' },
-        { ephemeral: true, workingDirectory: dirname(real), coEdit: true }
+        { ephemeral: true, workingDirectory: dirname(real) }
       ]
     ])
     const win = onlyWindow()
@@ -606,80 +591,18 @@ describe('MW-10 ~ MW-12 关窗', () => {
   })
 })
 
-describe('W1 / W2 协作编辑的窗口绑定', () => {
-  /** 这个窗口收到的 liveDoc:request */
-  const requestsOf = (win: FakeWindow): Array<{ requestId: string; sessionId: string }> =>
-    win.webContents.send.mock.calls
-      .filter((c) => c[0] === 'liveDoc:request')
-      .map((c) => c[1] as { requestId: string; sessionId: string })
-
-  it('W1 开窗把 webContents 挂到会话上：doc 请求经这个窗口发出，别的会话不经它', async () => {
-    init()
-    service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))
-    service.openMarkdownFile(join(realRoot, 'dir', 'b.md'))
-    const [aWin, bWin] = windows()
-    const [aSid, bSid] = fx.create.mock.results.map((r) => r.value.id as string)
-
-    const pending = bridge.requestLiveDocument(aSid, { kind: 'read' })
-    await flush()
-    expect(requestsOf(aWin)).toEqual([
-      { requestId: expect.any(String), sessionId: aSid, op: { kind: 'read' } }
-    ])
-    expect(requestsOf(bWin)).toEqual([])
-
-    // 这个窗口作答 → 了结
-    const result = {
-      ok: true as const,
-      kind: 'read' as const,
-      text: '# a\n',
-      user: { cursorLine: 1, visibleFromLine: 1, visibleToLine: 2, lastEditAgoMs: null }
-    }
-    bridge.resolveLiveDocumentResponse(
-      aWin.webContents as never,
-      requestsOf(aWin)[0].requestId,
-      result
-    )
-    await expect(pending).resolves.toEqual(result)
-
-    // b 的请求经 b 的窗口
-    const other = bridge.requestLiveDocument(bSid, { kind: 'read' })
-    await flush()
-    expect(requestsOf(bWin)).toHaveLength(1)
-    expect(requestsOf(aWin)).toHaveLength(1)
-    bridge.detachLiveDocument(bSid)
-    await expect(other).rejects.toThrow()
-  })
-
-  it('W2 closed → 在途请求以 closed 失败，先于删会话；之后的请求没有窗口可发', async () => {
+describe('W1 协作编辑的挂接归编辑器', () => {
+  it('W1 开窗不挂接：编辑器报到之前 doc 请求走磁盘回落，窗口什么都没收到', async () => {
     init()
     service.openMarkdownFile(join(realRoot, 'dir', 'a.md'))
     const win = onlyWindow()
     const sid = fx.create.mock.results[0].value.id as string
+    const disk = vi.fn(async () => ({ ok: true as const, kind: 'read' as const, text: 'disk' }))
 
-    // 删会话要等 Agent 停下来 —— 这里干脆永不了结：在途的请求也不能等它
-    fx.delete.mockImplementation(() => {
-      fx.order.push(`delete:${sid}`)
-      return new Promise<void>(() => {})
-    })
-    const inFlight = bridge.requestLiveDocument(sid, {
-      kind: 'edit',
-      toolCallId: 'tc',
-      find: 'a',
-      replace: 'b'
-    })
-    await flush()
-    expect(requestsOf(win)).toHaveLength(1)
-
-    win.destroyed = true
-    win.emit('closed')
-    await expect(inFlight).rejects.toThrow('The document window was closed.')
-    expect(fx.order).toEqual([`detach:${sid}`, `delete:${sid}`])
-    // 关窗不往已销毁的窗口发撤回
-    expect(win.webContents.send.mock.calls.filter((c) => c[0] === 'liveDoc:cancel')).toEqual([])
-
-    await expect(bridge.requestLiveDocument(sid, { kind: 'read' })).rejects.toThrow(
-      'No document window is open for this session.'
-    )
-    expect(requestsOf(win)).toHaveLength(1)
+    await expect(
+      bridge.requestLiveDocument(sid, { kind: 'read' }, undefined, disk)
+    ).resolves.toEqual({ ok: true, kind: 'read', text: 'disk' })
+    expect(disk).toHaveBeenCalledTimes(1)
+    expect(win.webContents.send.mock.calls.filter((c) => c[0] === 'liveDoc:request')).toEqual([])
   })
 })

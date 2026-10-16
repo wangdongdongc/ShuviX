@@ -339,3 +339,151 @@ describe('reviewShuvixMdWrite — shuvix-id', () => {
     expect(reviewShuvixMdWrite(note, 'x', ctx)).toBeNull()
   })
 })
+
+/**
+ * DO —— 只要诊断（`diagnoseOnly`）：doc_* 改的是编辑器里的活文档，落盘归编辑器的自动保存，宿主往里
+ * 回写的东西会被它覆盖。于是：不补缺省字段、不盖 `generated`（`content` 恒为 null），只回校验的话；
+ * 回执开头说的是「文档改了」（还没存盘），而不是「文件写进去了」—— 其余一字不差。
+ *
+ *   DO-1 合法的记忆 md：诊断模式 → null（对照：不带开关时回写里有 shuvix-memory-updated）
+ *   DO-2 会被盖章的 OKF 条目：诊断模式 → null
+ *   DO-3 缺 description 的条目：只剩「Written with warnings」那段，content null、不盖章
+ *   DO-4 三种错误回执（OKF 错、非法 agent md、展示型契约的 YAML 错）：除开头外与写盘时逐字相同，content null
+ *   DO-5 解析器软提示：诊断模式下照样整段带回，没有「Filled in for you」（记忆 md 没有解析器 ——
+ *        validate 回 unknown、不出软提示 —— 软提示取 agent md 的写坏 id）
+ *   LEAD 两个开头逐字钉住：写盘 = `The file was written`，诊断 = `The document was changed`
+ */
+describe('reviewShuvixMdWrite — 只要诊断（diagnoseOnly）', () => {
+  const ACTOR = { actor: 'shuvix-notebook/gpt-5', now: '2026-10-15T08:00:00.000Z' }
+  const MARKER = 'shuvix: okf v0.2'
+  const concept = (lines: string[]): string => ['---', ...lines, '---', '', 'body', ''].join('\n')
+  const DESCRIPTION_WARNING =
+    "- 'description' (one line) is recommended — it is what list and search show"
+  /** 同一份文本：写盘口径 / 诊断口径各审一次 */
+  const both = (
+    text: string,
+    rel: string | null = null
+  ): {
+    written: ReturnType<typeof reviewShuvixMdWrite>
+    changed: ReturnType<typeof reviewShuvixMdWrite>
+  } => {
+    const ctx = {
+      sessionId: 'sess-do',
+      today: '2026-10-15',
+      knowledge: rel === null ? undefined : { rel, ...ACTOR }
+    }
+    return {
+      written: reviewShuvixMdWrite(text, 'x', ctx),
+      changed: reviewShuvixMdWrite(text, 'x', { ...ctx, diagnoseOnly: true })
+    }
+  }
+  const MEMORY =
+    '---\nshuvix: memory v1\nname: x\ndescription: d\nshuvix-memory-recall: r\n---\nbody\n'
+  const INVALID_AGENT = ['---', 'shuvix: agent v1', 'name: [unclosed', '---', 'body'].join('\n')
+  const BROKEN_DISPLAY = [
+    '---',
+    'shuvix: note v1',
+    'name: n',
+    'description: your own notes: the agent reads them',
+    '---',
+    '',
+    'body'
+  ].join('\n')
+
+  it('DO-1 合法的记忆 md → null；不带开关时照旧补 shuvix-memory-updated', () => {
+    const { written, changed } = both(MEMORY)
+    expect(written?.content).toContain('shuvix-memory-updated: 2026-10-15')
+    expect(written?.note).toContain('Filled in for you')
+    expect(changed).toBeNull()
+  })
+
+  it('DO-2 会被盖章的 OKF 条目 → null（不盖 generated、不回执）', () => {
+    const entry = concept([MARKER, 'type: Memory', 'title: T', 'description: d', 'status: draft'])
+    const { written, changed } = both(entry, 'notes/x.md')
+    expect(written?.note).toContain('[OKF] Stamped generated:')
+    expect(written?.content).toContain('generated:')
+    expect(changed).toBeNull()
+  })
+
+  it('DO-3 缺 description 的条目 → 只剩告警那段；content null，不盖章', () => {
+    const entry = concept([MARKER, 'type: Memory', 'title: T', 'status: draft'])
+    const { written, changed } = both(entry, 'notes/x.md')
+    // 对照：写盘时告警 + 盖章两段
+    expect(written?.note).toContain('[OKF] Stamped generated:')
+    expect(changed).toEqual({
+      note: `[OKF] Written with warnings:\n${DESCRIPTION_WARNING}`,
+      content: null
+    })
+  })
+
+  it.each([
+    ['OKF 错（带自述行却缺 type）', concept([MARKER, 'title: T', 'description: d']), 'notes/x.md'],
+    ['非法 agent md', INVALID_AGENT, null],
+    ['展示型契约的 YAML 错', BROKEN_DISPLAY, null]
+  ])('DO-4 %s：除开头外与写盘时逐字相同，content null', (_label, text, rel) => {
+    const { written, changed } = both(text, rel)
+    expect(written?.content).toBeNull()
+    expect(changed?.content).toBeNull()
+    expect(written?.note).toContain('The file was written, but')
+    expect(changed?.note).toContain('The document was changed, but')
+    expect(changed?.note).not.toContain('The file was written')
+    expect(changed?.note).toBe(
+      written!.note!.replace('The file was written', 'The document was changed')
+    )
+  })
+
+  it('DO-5 解析器软提示照样整段带回，没有 Filled in for you；content null', () => {
+    const agent = [
+      '---',
+      'shuvix: agent v1',
+      'shuvix-id: nope',
+      'name: a1',
+      'description: d',
+      '---',
+      '',
+      'Body.',
+      ''
+    ].join('\n')
+    const { written, changed } = both(agent)
+    expect(changed).not.toBeNull()
+    expect(changed!.note).toMatch(/^\[shuvix agent v1\] Written with parser warnings:\n- /)
+    expect(changed!.note).toContain("'shuvix-id' is not a valid object id")
+    expect(changed!.note).not.toContain('Filled in for you')
+    expect(changed!.content).toBeNull()
+    expect(changed).toEqual(written)
+  })
+
+  it('LEAD 两个开头逐字钉住', () => {
+    const agent = both(INVALID_AGENT)
+    expect(
+      agent.written!.note!.startsWith(
+        '[shuvix agent v1] The file was written, but it is INVALID and will be ignored until fixed:\n- '
+      )
+    ).toBe(true)
+    expect(
+      agent.changed!.note!.startsWith(
+        '[shuvix agent v1] The document was changed, but it is INVALID and will be ignored until fixed:\n- '
+      )
+    ).toBe(true)
+
+    const okf = both(concept([MARKER, 'title: T', 'description: d']), 'notes/x.md')
+    expect(okf.written!.note).toBe(
+      "[OKF] The file was written, but it breaks the knowledge base format and will not be read as intended until fixed:\n- 'type' is required and must be a non-empty string"
+    )
+    expect(okf.changed!.note).toBe(
+      "[OKF] The document was changed, but it breaks the knowledge base format and will not be read as intended until fixed:\n- 'type' is required and must be a non-empty string"
+    )
+
+    const display = both(BROKEN_DISPLAY)
+    expect(
+      display.written!.note!.startsWith(
+        '[shuvix note v1] The file was written, but its frontmatter is not valid YAML'
+      )
+    ).toBe(true)
+    expect(
+      display.changed!.note!.startsWith(
+        '[shuvix note v1] The document was changed, but its frontmatter is not valid YAML'
+      )
+    ).toBe(true)
+  })
+})

@@ -1,5 +1,10 @@
 /**
- * 协作编辑的渲染端控制器（从系统打开的 md 窗口）。三件事：
+ * 协作编辑的渲染端控制器 —— 每个笔记本编辑器都挂它（主窗口 / 固定窗口里的笔记、md 窗口、网页客户端）。
+ * 四件事：
+ *
+ *  0. **挂接**：CM6 视图建好时向主进程报「这条会话的文档由我显示」（liveDoc.attach，带一个自取的 attachId），
+ *     视图销毁时摘下 —— agent 的 doc_* 只在有编辑器挂着时交给编辑器，否则主进程直接改磁盘。网络客户端
+ *     挂不上（主进程答 false），它收到的只有磁盘回落写出来的外部改动，照样经三方合并并进来。
  *
  *  1. **虚影**：读本会话视图的实时卡（P3-08：`ghostSourcesOf`），doc_edit / doc_insert 的参数一边生成，一边
  *     从半截 JSON 里取出定位原文与新内容，在目标处画虚影（coEditState）。落盘（实时卡没了）、本轮结束
@@ -22,6 +27,9 @@ import { useChatStore } from '@shuvix/chat-ui'
 import {
   DOC_EDIT_TOOL,
   DOC_INSERT_TOOL,
+  describeDocChange,
+  planDocChange,
+  type DocChangePlan,
   type LiveDocOp,
   type LiveDocRequest,
   type LiveDocResult,
@@ -41,13 +49,7 @@ import {
   type GhostMode
 } from './coEditState'
 import { ghostSourcesOf } from './ghostSources'
-import {
-  mergeExternalChange,
-  partialJsonString,
-  planDocChange,
-  userChangesPatch,
-  type DocChangePlan
-} from './docOps'
+import { mergeExternalChange, partialJsonString, userChangesPatch } from './docOps'
 
 /** 用户停手多久算「停下来了」 */
 const IDLE_MS = 1500
@@ -88,10 +90,27 @@ export interface CoEditing {
   reveal: () => void
 }
 
+/**
+ * 挂接 id：只要在本页里不重复（主进程另按 webContents 核对来源，它不是凭证）。不用 `crypto.randomUUID` ——
+ * 它只在安全上下文里有，局域网里经 http 打开的网页客户端没有
+ */
+let attachSeq = 0
+function newAttachId(): string {
+  attachSeq += 1
+  return `${Date.now().toString(36)}-${attachSeq}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export function useCoEditing(sessionId: string): CoEditing {
   const { t } = useTranslation()
   const editorRef = useRef<LivePreviewEditorHandle | null>(null)
   const [indicator, setIndicator] = useState<CoEditIndicator>(EMPTY_INDICATOR)
+  /** 视图插件拿到的那个视图（挂接期间有值）—— 句柄还没交回来时也能执行请求 */
+  const pluginView = useRef<EditorView | null>(null)
+  /**
+   * 本编辑器挂着的 attachId（每个 CM6 视图挂接时自取一个；编辑器重挂载时新旧视图各一个，互不摘错）。
+   * 主进程的请求带着它，只有它在这里的才执行
+   */
+  const attachIds = useRef(new Set<string>())
 
   // ─── 可变状态（都在 ref 里：事件回调与 CM6 监听器共用，不引起重渲染） ───
   /** 用户上一次改动文字的时刻（agent 与外部合并的事务不算） */
@@ -118,7 +137,10 @@ export function useCoEditing(sessionId: string): CoEditing {
   const readingRef = useRef(false)
   const refreshScheduled = useRef(false)
 
-  const getView = useCallback((): EditorView | null => editorRef.current?.getView() ?? null, [])
+  const getView = useCallback(
+    (): EditorView | null => editorRef.current?.getView() ?? pluginView.current,
+    []
+  )
 
   // ─── 提示条 ───────────────────────────────────────────
   const refreshIndicator = useCallback((): void => {
@@ -192,14 +214,30 @@ export function useCoEditing(sessionId: string): CoEditing {
         }
         refreshIndicator()
       }),
-      // 滚动发生在 scrollDOM 上（不冒泡到 contentDOM 的事件处理器）：提示条要跟着滚动更新
+      // 滚动发生在 scrollDOM 上（不冒泡到 contentDOM 的事件处理器）：提示条要跟着滚动更新。
+      // 同一个插件管挂接：视图在 = 这份文档由本编辑器显示，视图没了就摘下
       ViewPlugin.define((view) => {
         const onScroll = (): void => refreshIndicator()
         view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
-        return { destroy: () => view.scrollDOM.removeEventListener('scroll', onScroll) }
+        pluginView.current = view
+        const attachId = newAttachId()
+        if (sessionId) {
+          attachIds.current.add(attachId)
+          void window.api.liveDoc.attach({ sessionId, attachId }).catch(() => {})
+        }
+        return {
+          destroy: () => {
+            view.scrollDOM.removeEventListener('scroll', onScroll)
+            if (pluginView.current === view) pluginView.current = null
+            if (attachIds.current.delete(attachId)) {
+              void window.api.liveDoc.detach({ sessionId, attachId }).catch(() => {})
+            }
+          }
+        }
       })
     ]
-    // 挂载时捕获一次：标签随语言变化要等下次开窗，与编辑器其他扩展同一规则
+    // 挂载时捕获一次：标签随语言变化要等下次开窗，与编辑器其他扩展同一规则；会话 id 同样只取一次 ——
+    // 宿主按会话给这个钩子重挂载（NotebookSessionView 以会话 id 为 key）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -386,26 +424,15 @@ export function useCoEditing(sessionId: string): CoEditing {
       if (!current) return { ok: false, error: 'The document window is closing.' }
       applyAgentChange(current, { id: op.toolCallId, ...plan })
       streams.current.delete(op.toolCallId)
-      const doc = current.state.doc
-      // 报「新内容从哪一行开始」：插入常以换行开头（接在锚点之后），跳过那几个换行
-      const leading = /^\n*/.exec(plan.insert)?.[0].length ?? 0
-      const firstLine = doc.lineAt(Math.min(plan.from + leading, doc.length)).number
-      const lastLine = doc.lineAt(Math.min(plan.from + plan.insert.length, doc.length)).number
-      const fromLine = Math.max(1, doc.lineAt(plan.from).number - 1)
-      const toLine = Math.min(doc.lines, Math.max(lastLine + 1, fromLine), fromLine + 24)
-      const width = String(toLine).length
-      const context: string[] = []
-      for (let n = fromLine; n <= toLine; n++) {
-        context.push(`${String(n).padStart(width, ' ')}│${doc.line(n).text}`)
-      }
+      const text = current.state.doc.toString()
       refreshIndicator()
       const waited = Date.now() - started
       return {
         ok: true,
         kind: op.kind,
-        line: firstLine,
-        context: context.join('\n'),
-        waitedMs: waited > 250 ? waited : 0
+        ...describeDocChange(text, plan),
+        waitedMs: waited > 250 ? waited : 0,
+        text
       }
     },
     [getView, dropGhost, drawGhost, userBusyNear, refreshIndicator]
@@ -453,7 +480,7 @@ export function useCoEditing(sessionId: string): CoEditing {
   // ─── 订阅：主进程的请求 / 撤回、本会话视图的实时卡（虚影）、轮结束 ─────────
   useEffect(() => {
     const offRequest = window.api.liveDoc.onRequest((request) => {
-      if (request.sessionId !== sessionId) return
+      if (request.sessionId !== sessionId || !attachIds.current.has(request.attachId)) return
       queue.current = queue.current.then(() => handleRequest(request)).catch(() => {})
     })
     const offCancel = window.api.liveDoc.onCancel(({ requestId }) => {

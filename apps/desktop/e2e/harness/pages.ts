@@ -7715,8 +7715,18 @@ export interface NotebookEditorPane {
   tagEditor(): Promise<string>
   /** `.cm-editor` 上的标记（没有 / 重挂载过为 null） */
   editorTag(): Promise<string | null>
-  /** 协作编辑的改动痕迹数（`.cm-coedit-change`）—— 普通笔记本上恒为 0 */
+  /** 协作编辑的改动痕迹数（`.cm-coedit-change`，含外部写盘并进来的 external 痕迹） */
   coEditMarks(): Promise<number>
+  /**
+   * 协作编辑的改动痕迹（按文档顺序；跨行的痕迹每行一段）—— 与 markdownWindowPane.changeMarks 同形：
+   * `external` = 外部写盘并进来的（不是 agent 的），`fading` = 用户已看见、正在淡出
+   */
+  changeMarks(): Promise<CoEditMarkShot[]>
+  /**
+   * 把光标放到文末，经 CDP `Input.insertText` 打进一段文字（可信输入，与 markdownWindowPane.typeAtEnd
+   * 同一条路：DOM 变更 → CM6 的观察器 → 事务 → 防抖自动保存）
+   */
+  typeAtEnd(text: string): Promise<void>
   /**
    * 正文里 `[[target]]` 双链的解析态（atomic-editor wiki-links：`cm-atomic-wiki-link-resolved` /
    * `-missing`）；这条链接不在屏为 null。文件表是异步扫的 —— 点之前先等它 resolved。
@@ -7753,6 +7763,38 @@ export function notebookEditorPane(main: CdpClient): NotebookEditorPane {
     },
     editorTag: () => main.eval<string | null>(`${EDITOR}?.getAttribute('data-e2e-mount') ?? null`),
     coEditMarks: () => main.eval<number>(`document.querySelectorAll('.cm-coedit-change').length`),
+    changeMarks: () =>
+      main.eval<CoEditMarkShot[]>(
+        `[...(${EDITOR}?.querySelectorAll('.cm-content .cm-coedit-change') ?? [])].map((el) => ({
+          text: el.textContent ?? '',
+          fading: el.classList.contains('cm-coedit-fading'),
+          external: el.classList.contains('cm-coedit-external')
+        }))`
+      ),
+    typeAtEnd: async (text) => {
+      // 主窗口不一定是系统里有焦点的那个：焦点仿真让页面认为自己有焦点（只在这条 CDP 连接上生效）——
+      // 没有焦点时 CM6 不理 DOM 选区的变化，字会落在它自己记着的光标处（文首）
+      await main.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+      const placed = await main.eval<boolean>(`(() => {
+        const content = ${EDITOR}?.querySelector('.cm-content')
+        if (!content) return false
+        content.focus()
+        const lines = content.querySelectorAll('.cm-line')
+        const last = lines[lines.length - 1]
+        if (!last) return false
+        const range = document.createRange()
+        range.selectNodeContents(last)
+        range.collapse(false)
+        const sel = getSelection()
+        sel.removeAllRanges()
+        sel.addRange(range)
+        return true
+      })()`)
+      if (!placed) throw new Error('notebook: no editor to type into')
+      // 让 CM6 先把 selectionchange 读进自己的状态，再落字
+      await sleep(150)
+      await main.send('Input.insertText', { text })
+    },
     wikiLinkStatus: (target) =>
       main.eval<'resolved' | 'missing' | null>(`(() => {
         const link = ${EDITOR}?.querySelector(

@@ -14,6 +14,15 @@
  * （makeSuite 的 `review`）。这里只看工具壳这一侧 —— 放行 / 拒绝 / 转给人三种回答落到文件上是什么样，
  * 以及工具调用的 signal 有没有从三个询问点（write / edit 的 apply 层、read 的 securityCheck）一路
  * 接到接缝上。审查状态是进程级表，这一组每条用例各用一个会话 id（makeSuite 的 `sessionId`）。
+ *
+ * 组 10（RW）是宿主的 `refuseWrite`：write / edit 不许碰的路径（桌面：笔记本会话自己那份文档，只经 doc_* 改）。
+ * 它在符号链接那一步之后、询问之前判 —— 拒了就是它的原话，门不问、卡不弹、决策日志不记、一个字节都不写；
+ * read 从不问它。
+ *
+ * 组 11（WFC）是导出的 `writeFileContent`：宿主自己的写入型工具（doc_* 的磁盘回落）走 write 工具同一条
+ * 流程 —— 锁内读后被改守卫、带 diff 预览的写前询问（卡上的工具名 / 调用 id / 展示路径都取调用方给的）、
+ * 写后处理（回执单独交回，不并进结果文字）、广播变更；不问 refuseWrite、不看符号链接（那是 write 工具对
+ * 模型给的路径的把关）。
  */
 
 import {
@@ -44,6 +53,7 @@ import { clearSessionDecisions, getSessionDecisions } from '../../security/decis
 import { clearReviewState } from '../../security/reviewState'
 import {
   createFileToolSuite,
+  writeFileContent,
   type FileToolDeps,
   type FileToolSuite,
   type ReadDecoders
@@ -100,6 +110,8 @@ interface SuiteOptions {
   sessionId?: string
   /** 询问点的审查接缝（接到 provider.onPermissionRequest）；不传 = 没有审查，ask 直接问人 */
   review?: SecurityHostProvider['onPermissionRequest']
+  /** write / edit 不许碰的路径（宿主答）；不传 = 没有这一道（扩展端口径） */
+  refuseWrite?: FileToolDeps['refuseWrite']
 }
 
 /** port.readLink 的非 null 答复 */
@@ -126,6 +138,10 @@ interface SuiteHarness {
   resolvePath: Mock<(p: string, mode: AccessMode) => string>
   /** 门面 enforcePath 的 spy（照常调真实现，只记实参） */
   enforcePath: MockInstance<SecurityContext['enforcePath']>
+  /** 交给套件的那一份 deps（writeFileContent 直接拿它调） */
+  deps: FileToolDeps
+  /** 与 deps.guards 同一个对象（用例改它的方法 = 改守卫的行为） */
+  guards: FileGuards
   /** port / guards 各方法的 spy（照常调真实现，只记实参） */
   spies: {
     stat: MockInstance<FileSystemPort['stat']>
@@ -250,7 +266,8 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     labels: { read: 'Read', write: 'Write', edit: 'Edit' },
     descriptions: { read: 'read', write: 'write', edit: 'edit' },
     onFileChange,
-    knowledge: opts.knowledge
+    knowledge: opts.knowledge,
+    ...(opts.refuseWrite ? { refuseWrite: opts.refuseWrite } : {})
   }
 
   return {
@@ -266,6 +283,8 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     readLink,
     resolvePath,
     enforcePath,
+    deps,
+    guards,
     spies
   }
 }
@@ -1337,4 +1356,253 @@ describe('文件工具套件 — 知识库条目的覆盖保护（knowledge.loca
     expect(h.files.get(KB_FILE)).toContain('our body')
     expect(h.files.get(KB_FILE)).not.toContain('their body')
   })
+})
+
+// ─── 组 10：宿主的 refuseWrite（write / edit 不许碰的路径） ─────────────────────
+
+describe('文件工具套件 — 宿主的 refuseWrite', () => {
+  const REFUSAL =
+    "This is the document open in this notebook session. Change it with doc_edit or doc_insert, so the change lands in the user's editor; write and edit are for other files."
+  const DOC = '/ws/doc.md'
+  const refuseDoc = (): Mock<(p: string) => string | null> =>
+    vi.fn((p: string) => (p === DOC ? REFUSAL : null))
+
+  beforeEach(() => clearSessionDecisions(SID))
+
+  it('RW-1 write 被拒：失败文字就是那句原话；门不问、卡不弹、决策日志不记、不写；refuseWrite 收到解析后的 port 路径', async () => {
+    const refuseWrite = refuseDoc()
+    const h = makeSuite({ files: { [DOC]: 'old\n' }, respond: allowed, refuseWrite })
+    expect(
+      await failureText(executeTool(h.suite.write, 'rw1', { path: 'doc.md', content: 'new\n' }))
+    ).toBe(REFUSAL)
+    expect(refuseWrite).toHaveBeenCalledWith(DOC)
+    expect(refuseWrite).not.toHaveBeenCalledWith('doc.md')
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)).toEqual([])
+    expect(h.spies.writeFile).not.toHaveBeenCalled()
+    expect(h.onFileChange).not.toHaveBeenCalled()
+    expect(h.files.get(DOC)).toBe('old\n')
+  })
+
+  it('RW-2 edit 被拒：同一句原话，同样什么都不动（先前的读取时间也原样）', async () => {
+    const refuseWrite = refuseDoc()
+    const h = makeSuite({ files: { [DOC]: 'alpha\nbeta\n' }, respond: allowed, refuseWrite })
+    h.readTimes.add(DOC)
+    expect(
+      await failureText(
+        executeTool(h.suite.edit, 'rw2', { path: DOC, oldText: 'beta', newText: 'BETA' })
+      )
+    ).toBe(REFUSAL)
+    expect(refuseWrite).toHaveBeenCalledWith(DOC)
+    expect(h.enforcePath).not.toHaveBeenCalled()
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)).toEqual([])
+    expect(h.spies.writeFile).not.toHaveBeenCalled()
+    expect(h.spies.withFileLock).not.toHaveBeenCalled()
+    expect(h.files.get(DOC)).toBe('alpha\nbeta\n')
+    expect([...h.readTimes]).toEqual([DOC])
+  })
+
+  it('RW-3 read 从不问 refuseWrite：照常读到', async () => {
+    const refuseWrite = refuseDoc()
+    const h = makeSuite({ files: { [DOC]: 'readable\n' }, respond: allowed, refuseWrite })
+    const res = await executeTool(h.suite.read, 'rw3', { path: 'doc.md' })
+    expect(resultText(res)).toContain('readable')
+    expect(refuseWrite).not.toHaveBeenCalled()
+  })
+
+  it('RW-4 refuseWrite 答 null：照旧 —— 一张带 diff 预览的卡，允许后落盘', async () => {
+    const refuseWrite = refuseDoc()
+    const h = makeSuite({ respond: allowed, refuseWrite })
+    await executeTool(h.suite.write, 'rw4', { path: 'other.md', content: 'fresh\n' })
+    expect(refuseWrite).toHaveBeenCalledWith('/ws/other.md')
+    expect(h.requestUserInput).toHaveBeenCalledTimes(1)
+    expect(askOf(h.requests[0]).preview).toMatchObject({
+      kind: 'diff',
+      path: 'other.md',
+      isNewFile: true
+    })
+    expect(h.files.get('/ws/other.md')).toBe('fresh\n')
+  })
+
+  it('RW-5 路径本身是符号链接：链接那句赢，refuseWrite 根本不问', async () => {
+    const refuseWrite = vi.fn((_p: string): string | null => REFUSAL)
+    const h = makeSuite({
+      files: { '/outside/real.md': 'x\n' },
+      links: { [DOC]: { target: '/outside/real.md', resolved: '/outside/real.md' } },
+      respond: allowed,
+      refuseWrite
+    })
+    const msg = await messageOf(executeTool(h.suite.write, 'rw5', { path: DOC, content: 'y' }))
+    expect(msg).toContain(`Not written: ${DOC} is a symbolic link to /outside/real.md.`)
+    expect(msg).not.toContain('notebook session')
+    expect(refuseWrite).not.toHaveBeenCalled()
+  })
+
+  it('RW-6 deps 不带 refuseWrite：同一份文档照旧问一次、允许后落盘', async () => {
+    const h = makeSuite({ files: { [DOC]: 'old\n' }, respond: allowed })
+    expect(h.deps.refuseWrite).toBeUndefined()
+    h.readTimes.add(DOC)
+    await executeTool(h.suite.write, 'rw6', { path: DOC, content: 'new\n' })
+    expect(h.requestUserInput).toHaveBeenCalledTimes(1)
+    expect(h.files.get(DOC)).toBe('new\n')
+  })
+})
+
+// ─── 组 11：writeFileContent（宿主写入型工具走 write 的同一条流程） ──────────────
+
+describe('文件工具套件 — writeFileContent', () => {
+  const MEMORY =
+    '---\nshuvix: memory v1\nname: x\ndescription: d\nshuvix-memory-recall: r\n---\nbody\n'
+  const args = (
+    over: Partial<Parameters<typeof writeFileContent>[1]> = {}
+  ): Parameters<typeof writeFileContent>[1] => ({
+    toolCallId: 'wfc-call',
+    toolName: 'doc_edit',
+    path: 'shown/doc.md',
+    portPath: '/ws/doc.md',
+    content: MEMORY,
+    ...over
+  })
+
+  beforeEach(() => clearSessionDecisions(SID))
+
+  it('WFC-1 与 write 工具同一结果：同样的字节、同样的 details、`Wrote N bytes to <展示路径>`；回执单独交回（write 工具才把它接在结果文字后面）', async () => {
+    const h = makeSuite({ allowList: [`Write(${ROOT})`] })
+    const viaTool = await executeTool(h.suite.write, 'wfc1', { path: 'a.md', content: MEMORY })
+    const direct = await writeFileContent(
+      h.deps,
+      args({ path: 'b.md', portPath: '/ws/b.md', toolName: 'write' })
+    )
+
+    expect(h.files.get('/ws/b.md')).toBe(h.files.get('/ws/a.md'))
+    expect(h.files.get('/ws/b.md')).toContain('shuvix-memory-updated: ')
+    expect(direct.result.details).toEqual(viaTool.details)
+    expect(direct.result.content).toEqual([
+      { type: 'text', text: `Wrote ${MEMORY.length} bytes to b.md` }
+    ])
+    expect(direct.note).toMatch(/^\[shuvix memory v1\] Filled in for you: shuvix-memory-updated: /)
+    expect(resultText(direct.result)).not.toContain('Filled in')
+    expect(resultText(viaTool)).toBe(`Wrote ${MEMORY.length} bytes to a.md\n\n${direct.note}`)
+  })
+
+  it('WFC-2 恰一张卡：工具名 / 调用 id 取调用方给的，diff 预览的路径是展示路径；拒绝 → reject，不写、不广播', async () => {
+    const h = makeSuite({
+      files: { '/ws/doc.md': 'one\nbody\n' },
+      respond: () => ({ kind: 'ask', allowed: false })
+    })
+    await expect(writeFileContent(h.deps, args({ content: 'one\nBODY\n' }))).rejects.toThrow(
+      /denied/i
+    )
+    expect(h.requestUserInput).toHaveBeenCalledTimes(1)
+    const req = askOf(h.requests[0])
+    expect(req.toolName).toBe('doc_edit')
+    expect(req.id).toBe('wfc-call')
+    expect(req.preview).toMatchObject({ kind: 'diff', path: 'shown/doc.md' })
+    expect(req.preview?.diff).toContain('-2 body')
+    expect(req.preview?.diff).toContain('+2 BODY')
+    expect(h.files.get('/ws/doc.md')).toBe('one\nbody\n')
+    expect(h.spies.writeFile).not.toHaveBeenCalled()
+    expect(h.onFileChange).not.toHaveBeenCalled()
+  })
+
+  it('WFC-3 onFileChange 恰一次：({portPath, kind: write}, 调用方给的 call)，在写后处理回写之后', async () => {
+    const h = makeSuite({ allowList: [`Write(${ROOT})`] })
+    let seen: string | undefined
+    h.onFileChange.mockImplementation(({ portPath }) => {
+      seen = h.files.get(portPath)
+    })
+    const call = { callId: 'wfc-call', taskId: 3, conversationId: 7 } as unknown as ToolCallScope
+    await writeFileContent(h.deps, args({ call }))
+    expect(h.onFileChange).toHaveBeenCalledTimes(1)
+    expect(h.onFileChange.mock.calls[0][0]).toEqual({ portPath: '/ws/doc.md', kind: 'write' })
+    expect(h.onFileChange.mock.calls[0][1]).toBe(call)
+    // 广播时盘上已是写后处理补过字段的版本
+    expect(seen).toContain('shuvix-memory-updated: ')
+  })
+
+  it('WFC-4 不问 refuseWrite、不看符号链接（调用方写的是它自己认定的文件）', async () => {
+    const refuseWrite = vi.fn((_p: string): string | null => 'refused')
+    const h = makeSuite({
+      allowList: [`Write(${ROOT})`],
+      refuseWrite,
+      links: { '/ws/doc.md': { target: '/elsewhere.md', resolved: '/elsewhere.md' } }
+    })
+    await writeFileContent(h.deps, args({ content: 'plain\n' }))
+    expect(refuseWrite).not.toHaveBeenCalled()
+    expect(h.readLink).not.toHaveBeenCalled()
+    expect(h.files.get('/ws/doc.md')).toBe('plain\n')
+  })
+
+  it('WFC-5 读后被改守卫：读过、之后被改 → reject 守卫的话，不问、不写、不广播', async () => {
+    const h = makeSuite({ files: { '/ws/doc.md': 'old\n' }, respond: allowed })
+    h.readTimes.add('/ws/doc.md')
+    h.guards.assertNotModifiedSinceRead = (p) => {
+      throw new Error(`File ${p} has been modified since it was last read.`)
+    }
+    await expect(writeFileContent(h.deps, args({ content: 'new\n' }))).rejects.toThrow(
+      'has been modified since it was last read'
+    )
+    expect(h.requestUserInput).not.toHaveBeenCalled()
+    expect(h.spies.writeFile).not.toHaveBeenCalled()
+    expect(h.onFileChange).not.toHaveBeenCalled()
+    expect(h.files.get('/ws/doc.md')).toBe('old\n')
+  })
+
+  it('WFC-6 知识库里的既有文件：没读过 → 覆盖保护拒绝；读过 → 照常写入', async () => {
+    const KB = '/kb/x.md'
+    const knowledge = {
+      locate: (p: string) => (p.startsWith('/kb/') ? p.slice('/kb/'.length) : null),
+      actor: () => 'shuvix-notebook/m1'
+    }
+    const h = makeSuite({
+      files: { [KB]: 'theirs\n' },
+      allowList: ['Write(/kb)'],
+      knowledge
+    })
+    await expect(
+      writeFileContent(h.deps, args({ path: KB, portPath: KB, content: 'ours\n' }))
+    ).rejects.toThrow('already exists in the knowledge base')
+    expect(h.files.get(KB)).toBe('theirs\n')
+
+    h.readTimes.add(KB)
+    await writeFileContent(h.deps, args({ path: KB, portPath: KB, content: 'ours\n' }))
+    expect(h.files.get(KB)).toBe('ours\n')
+  })
+
+  it.each([
+    ['注入了 abortError', 'TOOL_ABORTED', 'TOOL_ABORTED'],
+    ['没注入', undefined, 'Aborted']
+  ])(
+    'WFC-7 询问挂着时中止（%s）→ reject 的是 %s；不写、不广播',
+    async (_label, abortError, expected) => {
+      const ac = new AbortController()
+      let entered!: () => void
+      const asked = new Promise<void>((r) => (entered = r))
+      const h = makeSuite({
+        files: { '/ws/doc.md': 'old\n' },
+        abortError,
+        // 宿主在调用被中止时把挂着的卡收成 cancel
+        respond: () =>
+          new Promise<InputResponse>((resolve) => {
+            entered()
+            ac.signal.addEventListener('abort', () =>
+              resolve({ kind: 'cancel', reason: 'aborted' })
+            )
+          })
+      })
+      const pending = writeFileContent(h.deps, args({ content: 'new\n', signal: ac.signal }))
+      await asked
+      ac.abort()
+      const err = await pending.then(
+        () => null,
+        (e: Error) => e
+      )
+      expect(err?.message).toBe(expected)
+      expect(h.spies.writeFile).not.toHaveBeenCalled()
+      expect(h.onFileChange).not.toHaveBeenCalled()
+      expect(h.files.get('/ws/doc.md')).toBe('old\n')
+    }
+  )
 })

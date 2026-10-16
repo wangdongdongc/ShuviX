@@ -36,7 +36,7 @@ ShuviX は **`~/.shuvix/` 配下の markdown ファイル**でカスタマイズ
 `cli-token`。古い `memory/`、`wikis/`、`workflows/` は廃止された形式で、もう読まれません。
 
 **組み込みはアプリの中にあり、ディスク上にはありません。** ShuviX は組み込みエージェント（`work`、
-`chat`、`notebook`、`bot`、`tab`、`coedit`、`coding`、`explore`、`widget`、`titler`、`knowledge-writer`、
+`chat`、`notebook`、`bot`、`tab`、`coding`、`explore`、`widget`、`titler`、`knowledge-writer`、
 `permission-reviewer`）、組み込みセキュリティポリシー、二つの組み込み hook（`auto-title`、`auto-review`）、
 そして組み込み skill `builtin:drawing` を同梱しています。組み込みの bot はありません。組み込みは編集できませんが
 **上書き**できます：`name` が組み込みと同じユーザーファイルは、それを丸ごと置き換えます（サイドバーのグループで組み込み行の

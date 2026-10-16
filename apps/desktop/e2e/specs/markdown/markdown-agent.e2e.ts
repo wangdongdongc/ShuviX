@@ -2,20 +2,20 @@
  * md 窗口里的 Agent —— 没有主窗口时，一轮对话从输入卡片发出、在卡片的抽屉里收场。
  *
  * 契约：
- *   - 发送走普通 agent.prompt 管线，根 Agent 是 coedit 档案（协作编辑），工作目录是文件所在目录；
- *     工具表**恰好**是 coedit 的那一份：doc_read / doc_edit / doc_insert 改这份活文档，read / ls / grep /
- *     glob 看邻居，ask 问用户，skill 装绘图技能 —— 没有 write / edit / bash，也不派活、不开子会话；
+ *   - 发送走普通 agent.prompt 管线，根 Agent 是 notebook 档案（与主窗口里的笔记本同一个），工作目录是文件所在目录；
+ *     工具表**恰好**是 notebook 的那一份：doc_read / doc_edit / doc_insert 改这份活文档，read / ls / grep /
+ *     glob 看邻居，write 只写别的文件，ask 问用户，skill 装绘图技能 —— 没有 edit / bash，也不派活、不开子会话；
  *     会话标题一开始就是文件名（不是缺省标题），所以自动起标题那条 hook 不跑 —— 不多花一次请求；
  *   - 改文档经 doc_edit 在编辑器缓冲上当场执行：不问（改动就在用户眼前落下），编辑器先变，自动保存再写盘；
  *   - 读文件照常过安全策略：在工作目录里读不问、读家目录里会话目录以外的（如 ~/.ssh）问；询问卡片出现在**这个窗口**里
  *     （事件经它自己的前端绑定送达，主窗口根本没开）；
  *   - 关窗 = 删会话：跑到一半的一轮被中止（模型那边看得到连接断开）；doc_edit 正在等用户停手、或者
- *     挂着一张 ask 卡片时关窗，删除都在有限时间内完成 —— 等窗口答复的请求随关窗立刻失败，不等超时。
+ *     挂着一张 ask 卡片时关窗，删除都在有限时间内完成 —— 等编辑器答复的请求随窗口销毁立刻失败，不等超时。
  *
  * 模型是脚本化的假提供商（先种好再带着 md 启动，见 markdownFixtures）；「问了没有、谁赢了、用户怎么答的」
  * 读主进程日志里的安全决策（securityDecisions），不读随界面语言变的卡片文案。
  *
- *   AG-1 输入卡片发一句 → 回复出现在抽屉里；请求里的系统提示词带着工作目录与 a.md，工具表恰好是 coedit 的；
+ *   AG-1 输入卡片发一句 → 回复出现在抽屉里；请求里的系统提示词带着工作目录与 a.md，工具表恰好是 notebook 的；
  *        一轮之后标题还是 a.md，没有任何起标题的请求
  *   AG-2 脚本化 doc_edit a.md → 不问；编辑器里先出现，自动保存再写到盘上（AG-3 读到的就是它）
  *   AG-3 read a.md 不问；read ~/.ssh 里的一份文件问（拒绝之后这一轮照常收场）
@@ -108,7 +108,7 @@ const decisionsOf = (toolCallId: string): ReturnType<typeof securityDecisions> =
   securityDecisions(app).filter((d) => d.toolCallId === toolCallId)
 
 describe('md 窗口里的一轮对话', () => {
-  it('AG-1 输入卡片发出 → 抽屉里收到回复；coedit 档案 + 工作目录；不起标题', async () => {
+  it('AG-1 输入卡片发出 → 抽屉里收到回复；notebook 档案 + 工作目录；不起标题', async () => {
     provider.reset()
     provider.script({ text: 'ag1-reply from the model', usage: USAGE })
     await panes.a!.send('ag1: what is in this note?')
@@ -120,12 +120,23 @@ describe('md 窗口里的一轮对话', () => {
     expect(system).toContain(docs)
     expect(system).toContain('a.md')
     expect(system).toContain('Open document: a.md')
-    // 工具表恰好是 coedit 的那一份（skill:builtin:drawing 落成 skill 工具）
+    // 工具表恰好是 notebook 的那一份（skill:builtin:drawing 落成 skill 工具）
     const tools = toolNamesOf(req)
     expect([...tools].sort()).toEqual(
-      ['ask', 'doc_edit', 'doc_insert', 'doc_read', 'glob', 'grep', 'ls', 'read', 'skill'].sort()
+      [
+        'ask',
+        'doc_edit',
+        'doc_insert',
+        'doc_read',
+        'glob',
+        'grep',
+        'ls',
+        'read',
+        'skill',
+        'write'
+      ].sort()
     )
-    for (const absent of ['write', 'edit', 'bash', 'agent', 'session']) {
+    for (const absent of ['edit', 'bash', 'agent', 'session']) {
       expect(tools, absent).not.toContain(absent)
     }
 

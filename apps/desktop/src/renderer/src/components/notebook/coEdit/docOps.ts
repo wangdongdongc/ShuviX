@@ -1,85 +1,12 @@
 /**
- * 协作编辑的纯函数部分 —— 不碰 CM6 视图，只拿字符串算：
- *  - agent 的 doc_edit / doc_insert 落在哪（按原文定位，必须恰好一处）；
+ * 协作编辑的纯函数部分 —— 不碰 CM6 视图，只拿字符串算（doc_edit / doc_insert 落在哪由 chat-protocol
+ * liveDocument.ts 的 planDocChange 定：主进程的磁盘回落用同一套规则）：
  *  - 生成期间的参数 JSON 还没写完时，能先取出哪些字段（画虚影用）；
  *  - 自 agent 上次读以来用户改了什么（给它的统一 diff）；
  *  - 别的程序写了盘时，怎么把那次改动并进正在编辑的缓冲（三方合并）。
  */
 import { diffChars, diffWordsWithSpace, structuredPatch } from 'diff'
 import { ChangeSet } from '@codemirror/state'
-import type { LiveDocOp } from '@shuvix/chat-protocol/liveDocument'
-
-// ─── 定位 ────────────────────────────────────────────────
-
-/** needle 在 doc 里出现的所有起点（允许重叠 —— 「aa」在「aaa」里算两处，定位必须唯一） */
-export function occurrences(doc: string, needle: string, limit = 10): number[] {
-  const found: number[] = []
-  if (!needle) return found
-  let from = 0
-  while (found.length < limit) {
-    const at = doc.indexOf(needle, from)
-    if (at < 0) break
-    found.push(at)
-    from = at + 1
-  }
-  return found
-}
-
-export type DocChangePlan =
-  | { ok: true; from: number; to: number; insert: string }
-  | { ok: false; error: string }
-
-function locate(
-  doc: string,
-  needle: string,
-  what: string
-): { ok: true; at: number } | { ok: false; error: string } {
-  const hits = occurrences(doc, needle, 2)
-  if (hits.length === 0) {
-    return {
-      ok: false,
-      error:
-        `${what} does not match the current document. The user may have just changed that passage — ` +
-        'call doc_read and use the text as it is now.'
-    }
-  }
-  if (hits.length > 1) {
-    const count = occurrences(doc, needle).length
-    return {
-      ok: false,
-      error: `${what} matches ${count >= 10 ? '10 or more' : count} places in the current document; include more of the surrounding text so it matches exactly one.`
-    }
-  }
-  return { ok: true, at: hits[0] }
-}
-
-/** 一次 doc_edit / doc_insert 在当前文本上落在哪、换成什么 */
-export function planDocChange(
-  doc: string,
-  op: Exclude<LiveDocOp, { kind: 'read' }>
-): DocChangePlan {
-  if (op.kind === 'edit') {
-    if (!op.find) return { ok: false, error: '`find` is empty.' }
-    const hit = locate(doc, op.find, '`find`')
-    if (!hit.ok) return hit
-    return { ok: true, from: hit.at, to: hit.at + op.find.length, insert: op.replace }
-  }
-  if (op.after !== undefined && op.before !== undefined) {
-    return { ok: false, error: 'Give `after` or `before`, not both.' }
-  }
-  if (op.after !== undefined) {
-    const hit = locate(doc, op.after, '`after`')
-    if (!hit.ok) return hit
-    const at = hit.at + op.after.length
-    return { ok: true, from: at, to: at, insert: op.text }
-  }
-  if (op.before !== undefined) {
-    const hit = locate(doc, op.before, '`before`')
-    if (!hit.ok) return hit
-    return { ok: true, from: hit.at, to: hit.at, insert: op.text }
-  }
-  return { ok: true, from: doc.length, to: doc.length, insert: op.text }
-}
 
 // ─── 流式参数 ────────────────────────────────────────────
 

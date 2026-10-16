@@ -2,11 +2,11 @@
  * 协作编辑工具 doc_read / doc_edit / doc_insert —— 参数面、结果排版、与主进程桥的接线。
  *
  * 契约（tools/doc.ts 文件头 + chat-protocol liveDocument.ts）：
- *   - 目标文档恒取 ToolContext.sessionId 挂着的窗口，工具不收路径参数；
+ *   - 目标文档恒取 ToolContext.sessionId 那条笔记本会话的文档，工具不收路径参数；交给桥时带上磁盘回落；
  *   - doc_read 的结果：带行号的全文（`<document lines="N">`，行号按总行数补齐宽度，末尾换行多出一个空行），
  *     一句「用户在哪」（光标行与所在标题、选区 JSON 引起来、屏幕上的行 `a–b`、距上次打字多久 / 没打过），
  *     有用户改动时再附一段 diff；超长截断并说明；
- *   - doc_edit / doc_insert 把 toolCallId、会话、signal 交给桥；没给的锚点（含空串）不发；结果说「在第几行」，
+ *   - doc_edit / doc_insert 把 toolCallId、会话、signal、磁盘回落交给桥；没给的锚点（含空串）不发；结果说「在第几行」，
  *     等过用户就说等了多久（不到一秒说 under a second）；
  *   - 参数本身不成立的（空 find、两个锚点、空 text）在交给桥之前就抛；窗口答 `{ok:false}` → 以它的 error
  *     抛出（步骤行红）；答非所问 → 「Unexpected answer」；
@@ -20,6 +20,15 @@
  *   T3 doc_edit / doc_insert 交给桥的东西与结果排版（等待时长）
  *   T4 交给桥之前就抛的；{ok:false} → 抛；答非所问 → 抛
  *   T5 注册在 general 组；折叠行摘要
+ *   LD 编辑器里落下的改动不经写盘钩子：工具拿编辑器交回的全文（`text`）做一遍契约 md 的校验，只要诊断
+ *      （真的 reviewShuvixMdWrite，`diagnoseOnly`）—— 回执接在结果文字后面，开头说「文档改了」：
+ *      LD-1 写坏的 agent md → `\n\n[shuvix agent v1] The document was changed, but it is INVALID …`；没走磁盘回落
+ *      LD-2 普通 md → 没有回执
+ *      LD-3 合法的记忆 md → 没有回执（不补字段）
+ *      LD-4 知识库条目（bundleRelOf 有答）：合规的 → 没有回执（不盖章）；缺 description → 末尾是告警那段
+ *      LD-5 文档不是 md → 没有回执
+ *      LD-6 会话没有文档 → 没有回执、不抛
+ *      LD-7 doc_read 从不带回执
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -37,11 +46,35 @@ import {
 } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 
 const mocks = vi.hoisted(() => ({
+  /** resolveSessionDocument 的答复（null = 会话没有文档）；每条用例复位成 null */
+  doc: null as string | null,
+  /** bundleRelOf 的答复（null = 不在任何可写 bundle 里） */
+  rel: null as string | null,
+  /** 磁盘回落才会装配的 deps —— 编辑器那条路从不碰它 */
+  makeDeps: vi.fn(() => ({})),
   request:
-    vi.fn<(sessionId: string, op: LiveDocOp, signal?: AbortSignal) => Promise<LiveDocResult>>()
+    vi.fn<
+      (
+        sessionId: string,
+        op: LiveDocOp,
+        signal: AbortSignal | undefined,
+        onDisk: () => Promise<LiveDocResult>
+      ) => Promise<LiveDocResult>
+    >()
 }))
 
 vi.mock('../../services/liveDocumentBridge', () => ({ requestLiveDocument: mocks.request }))
+// 这里只测交给桥的那一面：磁盘回落那一面不经过（docDiskFallback.test 测它）。会话的文档与它在哪个
+// bundle 里由用例给（缺省没有文档 —— 契约 md 的诊断不出声）；诊断本身是真的 reviewShuvixMdWrite
+vi.mock('../../services/toolContext', () => ({ resolveSessionDocument: () => mocks.doc }))
+vi.mock('../fileToolDeps', () => ({
+  bundleRelOf: () => mocks.rel,
+  makeDesktopFileToolDeps: mocks.makeDeps
+}))
+vi.mock('../../services/toolAgent', () => ({
+  agentActorOf: () => 'actor',
+  withCallAgent: <T>(c: T): T => c
+}))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 
 type DocModule = typeof import('../doc')
@@ -59,6 +92,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   mocks.request.mockReset()
+  mocks.makeDeps.mockClear()
+  mocks.doc = null
+  mocks.rel = null
 })
 
 const user = (over: Partial<LiveDocUserContext> = {}): LiveDocUserContext => ({
@@ -148,7 +184,12 @@ describe('T2 doc_read 的结果', () => {
     mocks.request.mockResolvedValueOnce(readResult('x'))
     await run(readTool(), {}, ac.signal)
     expect(mocks.request).toHaveBeenCalledTimes(1)
-    expect(mocks.request.mock.calls[0]).toEqual([SID, { kind: 'read' }, ac.signal])
+    expect(mocks.request.mock.calls[0]).toEqual([
+      SID,
+      { kind: 'read' },
+      ac.signal,
+      expect.any(Function)
+    ])
   })
 
   it('带行号的全文：`<document lines="N">`，末尾换行多出一个空行', async () => {
@@ -243,13 +284,15 @@ describe('T3 doc_edit / doc_insert 交给桥的东西与结果', () => {
       kind: 'edit',
       line: 5,
       context: '4│before\n5│NEW\n6│after',
-      waitedMs: 0
+      waitedMs: 0,
+      text: ''
     })
     const out = await run(editTool(), { find: 'old', replace: 'NEW' }, ac.signal)
     expect(mocks.request.mock.calls[0]).toEqual([
       SID,
       { kind: 'edit', toolCallId: 'tc-1', find: 'old', replace: 'NEW' },
-      ac.signal
+      ac.signal,
+      expect.any(Function)
     ])
     expect(out).toBe('Replaced at line 5. The text there now:\n4│before\n5│NEW\n6│after')
   })
@@ -260,7 +303,8 @@ describe('T3 doc_edit / doc_insert 交给桥的东西与结果', () => {
       kind: 'edit',
       line: 2,
       context: '2│',
-      waitedMs: 0
+      waitedMs: 0,
+      text: ''
     })
     await run(editTool(), { find: 'gone', replace: '' })
     expect(mocks.request.mock.calls[0][1]).toEqual({
@@ -284,7 +328,8 @@ describe('T3 doc_edit / doc_insert 交给桥的东西与结果', () => {
       kind: 'insert',
       line: 9,
       context: '9│hi',
-      waitedMs: 0
+      waitedMs: 0,
+      text: ''
     })
     const out = await run(insertTool(), { ...anchors, text: 'hi' })
     const op = mocks.request.mock.calls[0][1]
@@ -305,7 +350,8 @@ describe('T3 doc_edit / doc_insert 交给桥的东西与结果', () => {
       kind: 'edit',
       line: 3,
       context: '3│x',
-      waitedMs
+      waitedMs,
+      text: ''
     })
     const out = await run(editTool(), { find: 'a', replace: 'x' })
     expect(out.split('\n')[0]).toBe(`Replaced at line 3${waited}. The text there now:`)
@@ -340,9 +386,11 @@ describe('T4 失败', () => {
     expect(await failure(make(), params)).toContain(error)
   })
 
-  it('桥本身失败（没有窗口 / 超时）→ 原样抛', async () => {
-    mocks.request.mockRejectedValueOnce(new Error('No document window is open for this session.'))
-    expect(await failure(readTool(), {})).toContain('No document window is open')
+  it('桥本身失败（编辑器摘下 / 超时）→ 原样抛', async () => {
+    mocks.request.mockRejectedValueOnce(
+      new Error('The editor showing this document did not respond in time.')
+    )
+    expect(await failure(readTool(), {})).toContain('did not respond in time')
   })
 
   it('答非所问 → 「Unexpected answer」', async () => {
@@ -351,7 +399,8 @@ describe('T4 失败', () => {
       kind: 'edit',
       line: 1,
       context: '',
-      waitedMs: 0
+      waitedMs: 0,
+      text: ''
     })
     expect(await failure(readTool(), {})).toMatch(/Unexpected answer/)
 
@@ -396,5 +445,89 @@ describe('T5 注册与折叠行摘要', () => {
 
   it('doc_read 没有摘要', () => {
     expect(BUILTIN_TOOL_PRESENTATIONS.doc_read.buildSummary).toBeUndefined()
+  })
+})
+
+describe('LD 编辑器里落下的改动：契约 md 的诊断回执', () => {
+  const CONTEXT = '1│---\n2│shuvix: agent v1'
+  /** 编辑器答一次 edit，交回改动后的全文 text */
+  const editAnswer = (text: string): LiveDocResult => ({
+    ok: true,
+    kind: 'edit',
+    line: 1,
+    context: CONTEXT,
+    waitedMs: 0,
+    text
+  })
+  const HEAD = `Replaced at line 1. The text there now:\n${CONTEXT}`
+  const INVALID_AGENT = ['---', 'shuvix: agent v1', 'name: [unclosed', '---', 'body'].join('\n')
+  const entry = (lines: string[]): string =>
+    ['---', 'shuvix: okf v0.2', ...lines, '---', '', 'body', ''].join('\n')
+
+  /** 跑一次 doc_edit，编辑器交回 text；回工具输出 */
+  async function editWith(text: string): Promise<string> {
+    mocks.request.mockResolvedValueOnce(editAnswer(text))
+    return run(editTool(), { find: 'a', replace: 'b' })
+  }
+
+  it('LD-1 写坏的 agent md → 结果文字 + 空行 + 「The document was changed, but it is INVALID」；没走磁盘回落', async () => {
+    mocks.doc = '/proj/agents/a1.md'
+    const out = await editWith(INVALID_AGENT)
+    expect(
+      out.startsWith(
+        `${HEAD}\n\n[shuvix agent v1] The document was changed, but it is INVALID and will be ignored until fixed:\n- `
+      )
+    ).toBe(true)
+    expect(out).not.toContain('The file was written')
+    // 桥（假件）没调磁盘回落，工具自己也没去装配写盘的 deps
+    expect(mocks.makeDeps).not.toHaveBeenCalled()
+    expect(mocks.request.mock.calls[0][3]).toEqual(expect.any(Function))
+  })
+
+  it('LD-2 普通 md → 没有回执', async () => {
+    mocks.doc = '/proj/notes/plain.md'
+    expect(await editWith('# Plain\n\nbody\n')).toBe(HEAD)
+  })
+
+  it('LD-3 合法的记忆 md → 没有回执（不补字段：落盘归编辑器）', async () => {
+    mocks.doc = '/proj/notes/mem.md'
+    const memory =
+      '---\nshuvix: memory v1\nname: x\ndescription: d\nshuvix-memory-recall: r\n---\nbody\n'
+    expect(await editWith(memory)).toBe(HEAD)
+  })
+
+  it('LD-4 知识库条目：合规的 → 没有回执（不盖章）；缺 description → 末尾是告警那段', async () => {
+    mocks.doc = '/kb/notes/x.md'
+    mocks.rel = 'x.md'
+    const valid = await editWith(
+      entry(['type: Memory', 'title: T', 'description: d', 'status: draft'])
+    )
+    expect(valid).toBe(HEAD)
+    expect(valid).not.toContain('[OKF] Stamped')
+
+    const warned = await editWith(entry(['type: Memory', 'title: T', 'status: draft']))
+    expect(
+      warned.endsWith(
+        "\n\n[OKF] Written with warnings:\n- 'description' (one line) is recommended — it is what list and search show"
+      )
+    ).toBe(true)
+    expect(warned.startsWith(HEAD)).toBe(true)
+  })
+
+  it('LD-5 文档不是 md → 没有回执（哪怕内容像一份写坏的 agent md）', async () => {
+    mocks.doc = '/proj/notes/a1.txt'
+    expect(await editWith(INVALID_AGENT)).toBe(HEAD)
+  })
+
+  it('LD-6 会话没有文档 → 没有回执、不抛', async () => {
+    mocks.doc = null
+    expect(await editWith(INVALID_AGENT)).toBe(HEAD)
+  })
+
+  it('LD-7 doc_read 从不带回执', async () => {
+    mocks.doc = '/proj/agents/a1.md'
+    const out = await readWith(readResult(INVALID_AGENT))
+    expect(out).not.toContain('[shuvix agent')
+    expect(out).not.toContain('The document was changed')
   })
 })

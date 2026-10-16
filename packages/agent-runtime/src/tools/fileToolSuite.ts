@@ -155,6 +155,121 @@ export interface FileToolDeps {
     locate: (portPath: string) => string | null
     actor: (call: ToolCallScope | undefined) => string
   }
+  /**
+   * write / edit 不许碰的路径（宿主答）：返回拒绝的原因（模型面英文），可写返回 null。今天是笔记本会话
+   * 自己那份文档 —— 它只经 doc_* 改，才有虚影、等用户停手与三方合并。在询问之前判：不为一次不会发生的
+   * 写入弹卡。
+   */
+  refuseWrite?: (portPath: string) => string | null
+}
+
+/**
+ * 写后处理（write/edit 共用）—— 契约 md 落盘之后：校验不通过就把原因带回给模型，
+ * 通过则补上缺省字段并回写。**工具本身仍算成功**，文件已经写进去了。
+ *
+ * 回写与读取都在文件锁内做（与并发 write/edit 互斥），写完补一次 recordRead ——
+ * 否则宿主自己盖的这一章会让 agent 的下一次 edit 撞上「读后被改」。
+ * 整段 try/catch：这一步出任何问题都不该把一次成功的写入变成失败。
+ */
+async function reviewWrittenMd(
+  deps: FileToolDeps,
+  portPath: string,
+  call?: ToolCallScope
+): Promise<string | null> {
+  if (!/\.(md|markdown|mdx)$/i.test(portPath)) return null
+  const { port, guards } = deps
+  try {
+    return await guards.withFileLock(portPath, async () => {
+      const text = await port.readFile(portPath)
+      const now = new Date()
+      const knowledge = deps.knowledge
+      const rel = knowledge?.locate(portPath) ?? null
+      const outcome = reviewShuvixMdWrite(text, fileNameOf(portPath), {
+        sessionId: deps.sessionId,
+        today: now.toISOString().slice(0, 10),
+        knowledge:
+          knowledge && rel !== null
+            ? { rel, actor: knowledge.actor(call), now: now.toISOString() }
+            : undefined
+      })
+      if (!outcome) return null
+      if (outcome.content !== null) {
+        await port.writeFile(portPath, outcome.content)
+        guards.recordRead(portPath)
+      }
+      return outcome.note
+    })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 写入前询问钩子 —— 交给 applyWrite/applyEdit 在锁内调用。
+ *
+ * 走的仍是统一评估链，所以内置/用户策略、allowList 这几层
+ * 一个不少，只是多带了一份 diff 预览；不通过时它自己 throw，写入不会发生。
+ */
+function makeWriteAsk(
+  deps: FileToolDeps,
+  toolName: string,
+  toolCallId: string,
+  portPath: string,
+  signal?: AbortSignal,
+  call?: ToolCallScope
+): WriteAskHook {
+  return async ({ path, diff, isNewFile }) => {
+    await deps.security.enforcePath('write', portPath, {
+      toolCallId,
+      ...callOwnerOf(call),
+      toolName,
+      displayPath: path,
+      abortError: deps.abortError ?? 'Aborted',
+      preview: { kind: 'diff', path, diff, isNewFile },
+      // 询问点的审查随工具调用一起中止
+      signal
+    })
+  }
+}
+
+/** writeFileContent 的参数：路径已由宿主解析好 */
+export interface WriteFileContentArgs {
+  toolCallId: string
+  /** 询问卡片上写的工具名 */
+  toolName: string
+  /** 展示用路径 */
+  path: string
+  /** port 路径 */
+  portPath: string
+  content: string
+  signal?: AbortSignal
+  call?: ToolCallScope
+}
+
+/**
+ * 把一份完整内容写进文件，走 write 工具同一条流程：锁内的读后被改守卫 + 带 diff 预览的写前询问 → 写入 →
+ * 契约 md 写后处理（校验回执、知识库盖章）→ 广播变更。宿主自己的写入型工具（doc_* 的磁盘回落）用它，
+ * 免得另抄一份。不做 write 工具 securityCheck 那两道（符号链接、refuseWrite）—— 那是 write 工具对
+ * 模型给的路径的把关，调用方写的是它自己认定的文件。
+ *
+ * 写后处理的回执（`note`）单独交回：write 工具把它并进结果文字，别的调用方按自己的结果排版放。
+ */
+export async function writeFileContent(
+  deps: FileToolDeps,
+  args: WriteFileContentArgs
+): Promise<{ result: ToolResult<WriteToolDetails>; note: string | null }> {
+  const res = await applyWrite(
+    deps.port,
+    deps.guards,
+    args.portPath,
+    { path: args.path, content: args.content },
+    makeWriteAsk(deps, args.toolName, args.toolCallId, args.portPath, args.signal, args.call),
+    { refuseUnreadOverwrite: (deps.knowledge?.locate(args.portPath) ?? null) !== null }
+  )
+  // 先审阅（可能回写盖章），再广播变更 —— 让面板刷新读到的是最终内容
+  const note = await reviewWrittenMd(deps, args.portPath, args.call)
+  deps.onFileChange?.({ portPath: args.portPath, kind: 'write' }, args.call)
+  return { result: res, note }
 }
 
 const UNSUPPORTED_SUFFIX = '. Supported: text files, PDF, DOC, DOCX, XLSX, PPTX, HTML, IPYNB.'
@@ -223,6 +338,10 @@ abstract class FileToolBase<
     if (this.mode === 'read' && this.isUrl(params.path)) return
     const portPath = this.deps.resolvePath(params.path, this.mode)
     await this.refuseSymlink(params.path, portPath)
+    if (this.mode === 'write') {
+      const refused = this.deps.refuseWrite?.(portPath)
+      if (refused) throw new Error(refused)
+    }
     if (this.deferAskToApply) return
     await this.deps.security.enforcePath(this.mode, portPath, {
       toolCallId,
@@ -232,69 +351,6 @@ abstract class FileToolBase<
       abortError: this.abortError,
       signal
     })
-  }
-
-  /**
-   * 写入前询问钩子 —— 交给 applyWrite/applyEdit 在锁内调用。
-   *
-   * 走的仍是统一评估链，所以内置/用户策略、allowList 这几层
-   * 一个不少，只是多带了一份 diff 预览；不通过时它自己 throw，写入不会发生。
-   */
-  /**
-   * 写后处理（write/edit 共用）—— 契约 md 落盘之后：校验不通过就把原因带回给模型，
-   * 通过则补上缺省字段并回写。**工具本身仍算成功**，文件已经写进去了。
-   *
-   * 回写与读取都在文件锁内做（与并发 write/edit 互斥），写完补一次 recordRead ——
-   * 否则宿主自己盖的这一章会让 agent 的下一次 edit 撞上「读后被改」。
-   * 整段 try/catch：这一步出任何问题都不该把一次成功的写入变成失败。
-   */
-  protected async reviewWrittenMd(portPath: string, call?: ToolCallScope): Promise<string | null> {
-    if (!/\.(md|markdown|mdx)$/i.test(portPath)) return null
-    const { port, guards } = this.deps
-    try {
-      return await guards.withFileLock(portPath, async () => {
-        const text = await port.readFile(portPath)
-        const now = new Date()
-        const knowledge = this.deps.knowledge
-        const rel = knowledge?.locate(portPath) ?? null
-        const outcome = reviewShuvixMdWrite(text, fileNameOf(portPath), {
-          sessionId: this.deps.sessionId,
-          today: now.toISOString().slice(0, 10),
-          knowledge:
-            knowledge && rel !== null
-              ? { rel, actor: knowledge.actor(call), now: now.toISOString() }
-              : undefined
-        })
-        if (!outcome) return null
-        if (outcome.content !== null) {
-          await port.writeFile(portPath, outcome.content)
-          guards.recordRead(portPath)
-        }
-        return outcome.note
-      })
-    } catch {
-      return null
-    }
-  }
-
-  protected makeAsk(
-    toolCallId: string,
-    portPath: string,
-    signal?: AbortSignal,
-    call?: ToolCallScope
-  ): WriteAskHook {
-    return async ({ path, diff, isNewFile }) => {
-      await this.deps.security.enforcePath('write', portPath, {
-        toolCallId,
-        ...callOwnerOf(call),
-        toolName: this.name,
-        displayPath: path,
-        abortError: this.abortError,
-        preview: { kind: 'diff', path, diff, isNewFile },
-        // 询问点的审查随工具调用一起中止
-        signal
-      })
-    }
   }
 }
 
@@ -417,19 +473,16 @@ class WriteFileTool extends FileToolBase<typeof WriteParamsSchema> {
     call?: ToolCallScope
   ): Promise<ToolResult<WriteToolDetails>> {
     if (signal?.aborted) throw new Error(this.abortError)
-    const portPath = this.deps.resolvePath(params.path, 'write')
-    const res = await applyWrite(
-      this.deps.port,
-      this.deps.guards,
-      portPath,
-      params,
-      this.makeAsk(toolCallId, portPath, signal, call),
-      { refuseUnreadOverwrite: (this.deps.knowledge?.locate(portPath) ?? null) !== null }
-    )
-    // 先审阅（可能回写盖章），再广播变更 —— 让面板刷新读到的是最终内容
-    const note = await this.reviewWrittenMd(portPath, call)
-    this.deps.onFileChange?.({ portPath, kind: 'write' }, call)
-    return withNote(res, note)
+    const { result, note } = await writeFileContent(this.deps, {
+      toolCallId,
+      toolName: this.name,
+      path: params.path,
+      portPath: this.deps.resolvePath(params.path, 'write'),
+      content: params.content,
+      signal,
+      call
+    })
+    return withNote(result, note)
   }
 }
 
@@ -462,9 +515,9 @@ class EditFileTool extends FileToolBase<typeof EditParamsSchema> {
       this.deps.guards,
       portPath,
       params,
-      this.makeAsk(toolCallId, portPath, signal, call)
+      makeWriteAsk(this.deps, this.name, toolCallId, portPath, signal, call)
     )
-    const note = await this.reviewWrittenMd(portPath, call)
+    const note = await reviewWrittenMd(this.deps, portPath, call)
     this.deps.onFileChange?.({ portPath, kind: 'edit' }, call)
     return withNote(res, note)
   }

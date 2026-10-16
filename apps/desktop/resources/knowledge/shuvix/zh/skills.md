@@ -66,7 +66,7 @@ Agent Skills 的跨工具约定位置（Codex、pi 读它，`npx skills add -g` 
 
 目录名与 `name` 可以不同；ShuviX 按 `name` 匹配。内置 skill 随应用发布（按界面语言一个目录），不能编辑；
 目前只有一个 `builtin:drawing` —— 内联 SVG 作图的手艺 —— `work`、`chat`、`coding`、`bot`、`notebook`、
-`coedit`、`tab` 几个 agent 在 `shuvix-tools` 里点了它的名。启用状态存在 `~/.shuvix/skills/.config.json`：
+`tab` 几个 agent 在 `shuvix-tools` 里点了它的名。启用状态存在 `~/.shuvix/skills/.config.json`：
 
 ```json
 { "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "enabledDirs": ["agents"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }

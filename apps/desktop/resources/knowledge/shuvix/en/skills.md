@@ -74,7 +74,7 @@ as a skill, so a skill that `npx skills add` linked into `~/.claude/skills` appe
 The directory name and `name` may differ; ShuviX matches by `name`. Builtin skills come with the
 application (one directory per UI language) and cannot be edited; today there is one,
 `builtin:drawing` — the craft for inline SVG figures — which the `work`, `chat`, `coding`, `bot`,
-`notebook`, `coedit` and `tab` agents name in their `shuvix-tools`.
+`notebook` and `tab` agents name in their `shuvix-tools`.
 Enable state lives in `~/.shuvix/skills/.config.json`:
 
 ```json

@@ -20,7 +20,6 @@ import {
   PERMISSION_REVIEWER_PROFILE_NAME,
   PERMISSION_REVIEWER_SPEC,
   TAB_PROFILE_NAME,
-  COEDIT_PROFILE_NAME,
   WIDGET_SPEC,
   WORK_PROFILE_NAME,
   pickLocalizedSource
@@ -115,7 +114,7 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十二个内置,六个基座档案居首;缺 widget 根 → 自动跳过', () => {
+  it('全参数 → 十一个内置,五个基座档案居首;缺 widget 根 → 自动跳过', () => {
     // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
       'work',
@@ -123,7 +122,6 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'notebook',
       'bot',
       'tab',
-      'coedit',
       'coding',
       'explore',
       'widget',
@@ -139,7 +137,6 @@ describe('buildBuiltinProfiles — 全集现算', () => {
       'notebook',
       'bot',
       'tab',
-      'coedit',
       'coding',
       'explore',
       'titler',
@@ -349,7 +346,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
     }
   })
 
-  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / tab / coedit / titler / permission-reviewer / knowledge-writer 除外）、项目感知默认开（titler / permission-reviewer / knowledge-writer 除外）', () => {
+  it('内置档案默认认 AGENTS.md → CLAUDE.md（notebook / bot / tab / titler / permission-reviewer / knowledge-writer 除外）、项目感知默认开（titler / permission-reviewer / knowledge-writer 除外）', () => {
     /** 两样注入都不要的执行型档案（上下文无关的一次性任务，注入整份项目文档纯属浪费 token 且稀释指令） */
     // 权限审查员同理：它的全部输入就是那次操作的事件，项目文档只会稀释审查规则。
     // 知识库写手（库管员）也是：它只看条目与库里已有的内容，项目的工程文档只会把它往「去读代码核实」那边带
@@ -363,12 +360,10 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       // bot 与 notebook 同一取舍：bot 是对话人格，AGENTS.md/CLAUDE.md 是写代码的工程
       // 约定 —— 真正写代码的是它派出去的子会话，那条会话自己会吃这份文件。
       // tab（Chrome 侧边栏会话）也不吃：它处理的是网页，工作目录只是个临时目录。
-      // coedit（协作编辑窗口）与 notebook 同一取舍：改的是一篇文档，工作目录是文件所在的文件夹。
       const instructionsOn =
         spec.name !== NOTEBOOK_PROFILE_NAME &&
         spec.name !== BOT_PROFILE_NAME &&
         spec.name !== TAB_PROFILE_NAME &&
-        spec.name !== COEDIT_PROFILE_NAME &&
         !NO_INJECTION.includes(spec.name)
       const awarenessOn = !NO_INJECTION.includes(spec.name)
       // 清单顺序即优先级：两份都在时取 AGENTS.md（正是改制前那条内置默认优先级）
@@ -451,16 +446,9 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
  * 已随会话内切换一并下线，这里钉住导出面，防它们悄悄复活。
  */
 describe('基座名单钉板', () => {
-  it('恰为 bot / chat / coedit / notebook / tab / work 六个名字', () => {
-    expect([...BASE_PROFILE_NAMES].sort()).toEqual([
-      'bot',
-      'chat',
-      'coedit',
-      'notebook',
-      'tab',
-      'work'
-    ])
-    expect(BASE_PROFILE_NAMES.has(COEDIT_PROFILE_NAME)).toBe(true)
+  it('恰为 bot / chat / notebook / tab / work 五个名字（协作编辑窗口的 coedit 已并进 notebook）', () => {
+    expect([...BASE_PROFILE_NAMES].sort()).toEqual(['bot', 'chat', 'notebook', 'tab', 'work'])
+    expect(BASE_PROFILE_NAMES.has('coedit')).toBe(false)
     expect(BASE_PROFILE_NAMES.has(WORK_PROFILE_NAME)).toBe(true)
     expect(BASE_PROFILE_NAMES.has(CHAT_PROFILE_NAME)).toBe(true)
     expect(BASE_PROFILE_NAMES.has(NOTEBOOK_PROFILE_NAME)).toBe(true)
@@ -757,12 +745,13 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
 })
 
 describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
-  it('工具集含 ask（对话抽屉可应答审批/提问）但不含 agent —— 不嵌套派发', () => {
+  it('工具集含 ask（对话抽屉可应答审批/提问）但不含 agent —— 不嵌套派发；文档只经 doc_* 改', () => {
     const built = profile(NOTEBOOK_PROFILE_NAME)
     expect(built.tools).toContain('ask')
     expect(built.tools).not.toContain('agent')
     expect(built.tools).toContain('read')
-    expect(built.tools).toContain('edit')
+    expect(built.tools).toContain('doc_edit')
+    expect(built.tools).not.toContain('edit')
   })
 
   it('body 引用 notebookPath 占位符 —— 端在渲染时替换为当前笔记路径', () => {
@@ -803,18 +792,19 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
     }
   })
 
-  it('NB-2 三语工具清单逐字相同：读写改 + 查找 + bash + ask + 作图技能，没有浏览器、没有派发', () => {
+  it('NB-2 三语工具清单逐字相同：doc_* + 读 + 写（别的文件）+ 查找 + ask + 作图技能，没有 edit / 命令 / 浏览器 / 派发', () => {
+    // 文档只经 doc_* 改（编辑器开着在编辑器里改，没开着改磁盘）；write 只用来写别的文件。
     // 浏览器是按会话勾选的内置 MCP（mcp:browser）—— 笔记本会话需要时自己勾，档案不声明
     for (const language of LANGS) {
       expect(profile(NOTEBOOK_PROFILE_NAME, language).tools, `notebook.${language}`).toEqual([
+        'doc_read',
+        'doc_edit',
+        'doc_insert',
         'read',
         'write',
-        'edit',
         'ls',
         'grep',
         'glob',
-        'bash',
-        'powershell',
         'ask',
         'skill:builtin:drawing'
       ])
@@ -1059,7 +1049,7 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
         }
       }
     }
-    // 语料自检：至少 notebook 三语里的 `grep` / `glob`（共 3 处）被当成清单查过 —— 判据一个都没认出来时
+    // 语料自检：至少 notebook 三语里的 `ls` / `grep` / `glob`（共 3 处）被当成清单查过 —— 判据一个都没认出来时
     // 上面那圈恒绿。chat / coding 的身份句清单随 2026-10-12 的精简删掉了；判据本身由 REG-7b 钉
     expect(checked).toBeGreaterThanOrEqual(3)
   })
@@ -1159,8 +1149,8 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
       expect(p.tools.includes('powershell'), what).toBe(p.tools.includes('bash'))
       if (p.tools.includes('bash')) paired++
     }
-    // work / chat / coding / notebook / widget × 三语
-    expect(paired, '自检：确实有成对点名的档案').toBeGreaterThanOrEqual(15)
+    // work / chat / coding / widget × 三语（notebook 不握命令工具）
+    expect(paired, '自检：确实有成对点名的档案').toBeGreaterThanOrEqual(12)
   })
 
   it('SH-2 正文（frontmatter 与围栏 info string 之外）不写死 bash / powershell 这两个名字', () => {
@@ -1177,7 +1167,7 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
     expect(fenced).toBeGreaterThan(0)
   })
 
-  it('SH-3 {{shuvix:shellTool}} 只出现在手里有命令工具的档案里；今天引用它的是 notebook 与 widget（work / chat / coding 的「优先专用工具」由命令工具自己的描述讲）', () => {
+  it('SH-3 {{shuvix:shellTool}} 只出现在手里有命令工具的档案里；今天引用它的只有 widget（work / chat / coding 的「优先专用工具」由命令工具自己的描述讲）', () => {
     const referencing = new Set<string>()
     for (const { profile: p, language } of allProfiles()) {
       const what = `${p.name}.${language}`
@@ -1186,7 +1176,7 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
         referencing.add(p.name)
       }
     }
-    expect([...referencing].sort()).toEqual(['notebook', 'widget'])
+    expect([...referencing].sort()).toEqual(['widget'])
   })
 })
 
@@ -1230,14 +1220,15 @@ describe('内置档案的对象 id（shuvix-id）', () => {
     }
   })
 
-  it('OID-G3 内置 id 两两不同；名单里有 permission-reviewer / coedit / tab', () => {
+  it('OID-G3 内置 id 两两不同；名单里有 permission-reviewer / notebook / tab，没有已并进 notebook 的 coedit', () => {
     const ids = buildBuiltinProfiles(ALL_PARAMS).map((p) => p.objectId)
     expect(ids.every((id) => typeof id === 'string')).toBe(true)
     expect(new Set(ids).size).toBe(ids.length)
     expect(ids.length).toBe(BUILTIN_PROFILE_SPECS.length)
-    for (const name of ['permission-reviewer', 'coedit', 'tab']) {
+    for (const name of ['permission-reviewer', 'notebook', 'tab']) {
       expect(ids, name).toContain(builtinObjectId('agent', name))
     }
+    expect(ids).not.toContain(builtinObjectId('agent', 'coedit'))
   })
 
   it('OID-C11 serialize → parse 往返保住每份内置（三语）的 objectId —— 「创建覆盖副本」挂得上内置的元数据', () => {

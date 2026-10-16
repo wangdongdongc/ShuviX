@@ -225,7 +225,7 @@ describe.each([
       chromeTab: { installId: 'i2', runId: 'r2', tabId: 9 },
       enabledTools: ['c'],
       allowList: undefined,
-      coEdit: true
+      titleOrigin: 'auto'
     })
     const row = sessionRecords.findById('s1')!
     expect(row.settings).toEqual({
@@ -237,7 +237,7 @@ describe.each([
       enabledTools: ['c'],
       // undefined 跳过：原值还在
       allowList: ['Read(/x)'],
-      coEdit: true
+      titleOrigin: 'auto'
     })
     expect(row.updatedAt).toBe(LATER)
     expect(row.lastActiveAt).toBe(T0)
@@ -256,7 +256,7 @@ describe.each([
     insert(session('s1', { settings: { bot: 'scout' } }))
     vi.setSystemTime(LATER)
     sessionRecords.updateSettings('s1', {})
-    sessionRecords.updateSettings('s1', { bot: undefined, coEdit: undefined })
+    sessionRecords.updateSettings('s1', { bot: undefined, titleOrigin: undefined })
     expect(sessionRecords.findById('s1')).toEqual(session('s1', { settings: { bot: 'scout' } }))
   })
 

@@ -414,8 +414,10 @@ export const API_TABLE = {
     consumePendingOpenSession: invoke('notification:consumePendingOpenSession', 0),
     onOpenSession: event('notification:open-session', 1)
   },
-  /** 协作编辑（md 窗口） */
+  /** 协作编辑（笔记本的编辑器） */
   liveDoc: {
+    attach: invoke('liveDoc:attach', 1),
+    detach: invoke('liveDoc:detach', 1),
     onRequest: event('liveDoc:request', 1),
     onCancel: event('liveDoc:cancel', 1)
   },

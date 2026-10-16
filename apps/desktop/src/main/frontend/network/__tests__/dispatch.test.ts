@@ -67,6 +67,9 @@ describe('ND-1 networkChannelVerdict', () => {
     expect(networkChannelVerdict('app:version', 'invoke')).toBe('ok')
     expect(networkChannelVerdict('app:window-ready', 'send')).toBe('ok')
     expect(networkChannelVerdict('liveDoc:respond', 'invoke')).toBe('ok')
+    // 编辑器的挂接 / 摘下：网络客户端也能调到处理器（处理器自己答 success: false —— 它没有 webContents）
+    expect(networkChannelVerdict('liveDoc:attach', 'invoke')).toBe('ok')
+    expect(networkChannelVerdict('liveDoc:detach', 'invoke')).toBe('ok')
     expect(networkChannelVerdict('knowledge:baseOptions', 'invoke')).toBe('ok')
     expect(networkChannelVerdict('network:status', 'invoke')).toBe('ok')
   })

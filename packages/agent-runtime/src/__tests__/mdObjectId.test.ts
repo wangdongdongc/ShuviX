@@ -253,7 +253,7 @@ describe('OI-9 三族内置 md 的对象 id 总览', () => {
     const specCount = families.reduce((n, [, specs]) => n + specs.length, 0)
     expect(files).toBe(specCount * LANGS.length)
     expect(ids.size).toBe(specCount)
-    // 今天的盘点：十二份 agent + 两份 hook + 两份策略 —— 名单变了就该有人看一眼这里
-    expect([files, ids.size]).toEqual([48, 16])
+    // 今天的盘点：十一份 agent（coedit 已并进 notebook）+ 两份 hook + 两份策略 —— 名单变了就该有人看一眼这里
+    expect([files, ids.size]).toEqual([45, 15])
   })
 })

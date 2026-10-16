@@ -25,6 +25,7 @@ import {
   isSafeSessionId
 } from '../utils/paths'
 import { resolveRealPath } from '../utils/toolUtils/realPath'
+import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { skillService } from './skillService'
 import { shellParser } from './shellParserService'
 import { policyService } from './policyService'
@@ -510,4 +511,21 @@ export function resolveProjectConfig(sessionId: string): ProjectConfig {
   return {
     workingDirectory: session?.workingDirectory ?? getTempWorkspace(sessionId)
   }
+}
+
+/**
+ * 笔记本会话自己那份文档的绝对路径（notebookPath 按会话工作目录解析）；不是笔记本会话 → null。
+ * doc_* 的磁盘回落读写它；write / edit 不许碰它（只经 doc_* 改，见 fileToolDeps 的 refuseWrite）。
+ */
+export function resolveSessionDocument(sessionId: string): string | null {
+  const notebookPath = sessionRecords.pickSettings(sessionId, ['notebookPath'])?.notebookPath
+  if (!notebookPath) return null
+  return resolveToCwd(notebookPath, resolveProjectConfig(sessionId).workingDirectory)
+}
+
+/** 这个路径是不是这条会话自己那份文档（跟过链接、按文件系统的大小写规则比） */
+export function isSessionDocument(sessionId: string, path: string): boolean {
+  const doc = resolveSessionDocument(sessionId)
+  if (!doc) return false
+  return resolve(doc) === resolve(path) || resolveRealPath(doc) === resolveRealPath(path)
 }

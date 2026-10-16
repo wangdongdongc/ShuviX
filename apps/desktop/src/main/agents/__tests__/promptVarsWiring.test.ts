@@ -184,7 +184,7 @@ describe('desktopPromptVars —— 占位符覆盖', () => {
     const needed = new Set(
       LANGUAGES.flatMap((l) => builtins(l))
         // 笔记本 / 协作编辑两个基座只做会话根 Agent（notebookPath 只有根会话解析得出）
-        .filter((p) => p.name !== 'notebook' && p.name !== 'coedit')
+        .filter((p) => p.name !== 'notebook')
         .flatMap((p) => placeholdersOf(p.systemPrompt))
     )
     for (const name of needed) expect(vars[name], `缺 {{shuvix:${name}}}`).toBeTypeOf('string')
@@ -317,8 +317,7 @@ describe('desktopPromptVars —— 按档案自己的名单组装出的系统提
         await inLanguage(language, async () => {
           for (const profile of builtins(language)) {
             // 笔记本 / 协作编辑基座只做会话根 Agent：派生 ctx 解析不出 notebookPath，本就不供
-            if (kind === 'spawned' && (profile.name === 'notebook' || profile.name === 'coedit'))
-              continue
+            if (kind === 'spawned' && profile.name === 'notebook') continue
             const vars = await varsFor({
               kind,
               cwd: kind === 'root' ? '/w/proj' : '',
@@ -405,7 +404,7 @@ describe('desktopPromptVars —— 交互块按回复落在哪儿给（PVW-12…
           )
           checked++
 
-          if (profile.name === 'notebook' || profile.name === 'coedit') continue
+          if (profile.name === 'notebook') continue
           const spawned = renderProfileSystemPrompt(
             profile,
             await varsFor({
@@ -461,8 +460,8 @@ describe('desktopPromptVars —— 契约只在技能里（PVW-16 / PVW-17）', 
         }
       })
     }
-    // 七个档案（OWN-1 那份名单）× 三语言
-    expect(checked, '一个引用作图片段的档案都没查到 —— 这条在空转').toBeGreaterThanOrEqual(21)
+    // 六个档案（OWN-1 那份名单）× 三语言
+    expect(checked, '一个引用作图片段的档案都没查到 —— 这条在空转').toBeGreaterThanOrEqual(18)
   })
 
   it('PVW-17 每个内置档案 × 三语言按自己的名单组装：提示里没有颜色 token、十六进制颜色、范例图 —— 这些只在技能里', async () => {
@@ -488,8 +487,8 @@ describe('desktopPromptVars —— 契约只在技能里（PVW-16 / PVW-17）', 
       })
     }
     expect(checked, '一个档案都没查到就等于空转').toBeGreaterThan(20)
-    // 正控制组：确实有档案拿到了作图说明（七个档案 × 三语言）
-    expect(pointing).toBeGreaterThanOrEqual(21)
+    // 正控制组：确实有档案拿到了作图说明（六个档案 × 三语言）
+    expect(pointing).toBeGreaterThanOrEqual(18)
   })
 })
 
@@ -557,24 +556,22 @@ describe('desktopPromptVars —— shell / shellTool 按平台给（PVW-S1…S5�
   })
 
   it('PVW-S6 引用 shellTool 的档案组装出来：win32 上正文里说 powershell，darwin 上说 bash，都不留占位符', async () => {
-    // notebook 的「核实事实用 shellTool」那句引用它（work / chat / coding 已不再引用）
-    const notebook = builtins('en').find((p) => p.name === 'notebook')!
-    expect(notebook.systemPrompt).toContain('{{shuvix:shellTool}}')
+    // widget 的「生命周期走 shuvix CLI，用 shellTool 跑」那句引用它（notebook 不再握命令工具，
+    // work / chat / coding 也不再引用）
+    const widget = builtins('en').find((p) => p.name === 'widget')!
+    expect(widget.systemPrompt).toContain('{{shuvix:shellTool}}')
 
     setPlatform('win32')
     mocks.psConfig = { exe: 'C:\\pwsh.exe', edition: 'pwsh' }
-    const onWindows = renderProfileSystemPrompt(
-      notebook,
-      await varsFor({ toolNames: notebook.tools })
-    )
+    const onWindows = renderProfileSystemPrompt(widget, await varsFor({ toolNames: widget.tools }))
     expect(onWindows).not.toContain('{{shuvix:shellTool}}')
-    expect(onWindows).toContain('`powershell` and other tools')
-    expect(onWindows).not.toMatch(/\bbash\b/)
+    expect(onWindows).toContain('run with `powershell`')
+    expect(onWindows).not.toContain('run with `bash`')
 
     setPlatform('darwin')
-    const onMac = renderProfileSystemPrompt(notebook, await varsFor({ toolNames: notebook.tools }))
-    expect(onMac).toContain('`bash` and other tools')
-    expect(onMac).not.toMatch(/\bpowershell\b/i)
+    const onMac = renderProfileSystemPrompt(widget, await varsFor({ toolNames: widget.tools }))
+    expect(onMac).toContain('run with `bash`')
+    expect(onMac).not.toContain('run with `powershell`')
   })
 })
 

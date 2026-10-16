@@ -288,11 +288,13 @@ describe('FD-9 tools.list 的 defaultEnabled 随推导档案', () => {
     expect(db && 'defaultEnabled' in db).toBe(false)
   })
 
-  it('笔记本会话 notebook：knowledge 不勾选、bash 与 ask 勾选', async () => {
+  it('笔记本会话 notebook：knowledge 与 bash 不勾选、doc_edit 与 ask 勾选', async () => {
     const sid = await createSession({ title: 'fd-tools-nb', projectId, notebookPath: NOTE_REL })
     const rows = await toolsOf(sid)
     expect(flag(rows, 'knowledge')).toBe(false)
-    expect(flag(rows, 'bash')).toBe(true)
+    // 文档只经 doc_* 改：notebook 不握命令工具
+    expect(flag(rows, 'bash')).toBe(false)
+    expect(flag(rows, 'doc_edit')).toBe(true)
     expect(flag(rows, 'ask')).toBe(true)
   })
 

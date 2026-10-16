@@ -25,7 +25,7 @@ import './artifact'
 import './session'
 // knowledge：OKF 知识库的结构化读写面（一期基础设施；不在内置基座档案清单，按名解析使用）
 import './knowledge'
-// doc_read / doc_edit / doc_insert：协作编辑（基座 coedit）—— 改编辑器里的活文档，不碰磁盘
+// doc_read / doc_edit / doc_insert：协作编辑（基座 notebook）—— 改编辑器里的活文档，没有编辑器开着才改磁盘
 import './doc'
 
 // 高性能检索

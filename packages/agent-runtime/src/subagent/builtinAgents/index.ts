@@ -47,12 +47,6 @@ export const BOT_PROFILE_NAME = 'bot'
  * 会话只用应用内的浏览器面板。
  */
 export const TAB_PROFILE_NAME = 'tab'
-/**
- * 协作编辑会话的基座。形态判据是 `settings.coEdit`（与 notebookPath 同在）—— 从系统打开的 md 窗口：
- * 用户与 agent 同时编辑一份活文档。它不握 write / edit：改文档只经 `doc_read` / `doc_edit` /
- * `doc_insert`，在编辑器的当前缓冲上当场执行（见 chat-protocol liveDocument.ts）。
- */
-export const COEDIT_PROFILE_NAME = 'coedit'
 
 /**
  * 工作档案 —— 归属项目的会话的基座（形态推导，见 WORK_PROFILE_NAME）：把需求敲定、
@@ -87,6 +81,13 @@ export const BOT_SPEC: BuiltinProfileSpec = {
   name: BOT_PROFILE_NAME
 }
 
+/**
+ * 笔记本档案 —— **每一条笔记本会话的基座**（主窗口里的笔记、知识库条目、bot / agent md、技能，
+ * 从系统或应用里打开的 md 窗口）。文档只经 `doc_read` / `doc_edit` / `doc_insert` 改：有编辑器显示着它
+ * 时在编辑器的当前缓冲上当场执行，没有就直接改磁盘（见 chat-protocol liveDocument.ts）。工具面刻意
+ * 不握 edit / bash：对这份文档的改动都得经协作编辑工具（宿主也让 write / edit 碰它时拒绝），`write`
+ * 只用来写别的文件（要链接过去的新笔记、单独存成文件的图）。
+ */
 export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
   name: NOTEBOOK_PROFILE_NAME
 }
@@ -99,15 +100,6 @@ export const NOTEBOOK_SPEC: BuiltinProfileSpec = {
  */
 export const TAB_SPEC: BuiltinProfileSpec = {
   name: TAB_PROFILE_NAME
-}
-
-/**
- * 协作编辑档案 —— **协作编辑会话的基座**（从系统打开的 md 窗口）。工具面是文档本身（三个 `doc_*`）
- * 加上看看文件邻居的只读工具：没有 write / edit —— 对那份文档的任何改动都得经过协作编辑工具，
- * 否则就又回到「写盘 → 编辑器重载」，用户的光标和正在打的字会被冲掉。
- */
-export const COEDIT_SPEC: BuiltinProfileSpec = {
-  name: COEDIT_PROFILE_NAME
 }
 
 /**
@@ -175,7 +167,6 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   NOTEBOOK_SPEC,
   BOT_SPEC,
   TAB_SPEC,
-  COEDIT_SPEC,
   CODING_SPEC,
   EXPLORE_SPEC,
   WIDGET_SPEC,
@@ -187,7 +178,7 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
 /**
  * 「基座档案」——某种会话形态的根 Agent 人格，由形态推导、按名钉死，而非可派发的具名 agent：
  * `work` 是项目会话，`chat` 是不归属项目的会话，`notebook` 是笔记本会话，`bot` 是 bot 会话，
- * `tab` 是 Chrome 标签页会话，`coedit` 是协作编辑会话（从系统打开的 md 窗口）。
+ * `tab` 是 Chrome 标签页会话。
  *
  * 三者都可被同名用户档案覆盖（这正是自定义人格的入口），但都不该被点名：不进派发工具
  * 的可用名单（会诱导 LLM 拿基座档案当一次性任务 agent 使 —— 它们是某种会话形态的人格，
@@ -199,8 +190,7 @@ export const BASE_PROFILE_NAMES: ReadonlySet<string> = new Set([
   CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
   BOT_PROFILE_NAME,
-  TAB_PROFILE_NAME,
-  COEDIT_PROFILE_NAME
+  TAB_PROFILE_NAME
 ])
 
 /**

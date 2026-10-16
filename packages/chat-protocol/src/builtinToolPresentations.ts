@@ -61,7 +61,7 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
     },
     buildSummary: fileField('path')
   },
-  // 协作编辑（md 窗口的 coedit 基座）：改的是编辑器里那份活文档，不是磁盘文件 —— 折叠行摘要取
+  // 协作编辑（笔记本基座）：改的是编辑器里那份活文档，不是磁盘文件 —— 折叠行摘要取
   // 定位原文 / 插入文字的第一行，参数单独渲染成代码块
   doc_read: {
     labelKey: 'tool.docReadLabel',

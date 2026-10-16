@@ -1,20 +1,19 @@
 /**
- * sessionService —— **协作编辑会话**（`create(params, { coEdit: true })`）的形态与根档案。
+ * sessionService —— md 窗口的会话（`create(params, { ephemeral, workingDirectory })`）的形态与根档案。
  *
- * 契约（sessionService.create / resolveAgentProfileName 的注释 + dao/types/session.ts 的 coEdit）：
- *   - `options.coEdit` 只对**根上的笔记本会话**有意义：带 notebookPath 的根会话才写下 `settings.coEdit`，
- *     根档案由形态推出基座 `coedit`；
- *   - 没有 notebookPath、是子会话、或者 coEdit 混在 params 里（渲染层经 IPC 能给的只有 params）→ 不算数；
- *   - 分支次序：Chrome 标签页（tab）先于一切；coEdit 先于笔记本与 bot；coEdit 没有 notebookPath 不是一种形态。
+ * 契约（sessionService.create / resolveAgentProfileName 的注释）：
+ *   - 笔记本会话只有一种形态：带 notebookPath 的会话根档案恒为 `notebook`，无论它开在主窗口还是 md 窗口里
+ *     （协作编辑与否由有没有编辑器挂着决定，不是会话形态）；曾经的 `coedit` 基座与 `settings.coEdit` 已拆掉；
+ *   - 早先写下的 `coEdit` 键（行里留着、或调用方还在 options / params 里给）不再算数：不写、不读；
+ *   - 分支次序：Chrome 标签页（tab）先于一切；笔记本先于 bot。
  *
  * mock 面整份沿用 sessionServiceEphemeral.test.ts：sessionRecords 是真的，只替掉它底下的 dao/sessionDao
  * （每个方法都是 spy、背后一张内存表），`AgentSession.create` 可捕获。
  *
- *   S1 notebookPath + {coEdit:true} → settings.coEdit、档案 coedit、AgentSession.create 收到 'coedit'；
- *      与 ephemeral + workingDirectory 一起给（md 窗口的真实组合）照样成立
- *   S2 不算数：没有 notebookPath / 子会话（父会话是协作会话也一样）/ coEdit 混在 params 里
- *   S3 分支次序：chromeTab + coEdit → tab；bot + coEdit + notebookPath → coedit；
- *      coEdit 没有 notebookPath（行里硬写进去）→ 按项目 chat / work
+ *   S1 md 窗口的真实组合（ephemeral + workingDirectory + notebookPath）→ 档案 notebook，送进运行时也是；
+ *      行里没有 coEdit 键
+ *   S2 遗留的 coEdit：options / params 里给 → 不写键、仍是 notebook；行里硬写 → 不改变推导
+ *   S3 分支次序：chromeTab + notebookPath → tab；bot + notebookPath → notebook
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import type { Session } from '../../dao/types'
@@ -204,20 +203,11 @@ function stamp(id: string, patch: Record<string, unknown>): void {
   row.settings = { ...row.settings, ...patch }
 }
 
-describe('S1 协作编辑会话', () => {
-  it('notebookPath + { coEdit: true } → settings.coEdit，档案 coedit', () => {
-    const s = create({ title: 'a.md', notebookPath: 'a.md' }, { coEdit: true })
-    expect(settingsOf(s.id)).toMatchObject({ notebookPath: 'a.md', coEdit: true })
-    expect(mocks.daoInsert.mock.calls[0][0]).toMatchObject({
-      settings: { notebookPath: 'a.md', coEdit: true }
-    })
-    expect(sessionService.resolveAgentProfileName(s.id)).toBe('coedit')
-  })
-
-  it('md 窗口的真实组合：ephemeral + workingDirectory + coEdit —— 内存行里有 coEdit 与工作目录，档案 coedit', () => {
+describe('S1 md 窗口的会话', () => {
+  it('ephemeral + workingDirectory + notebookPath → 内存行里有工作目录、没有 coEdit，档案 notebook', () => {
     const s = create(
       { title: 'a.md', notebookPath: 'a.md' },
-      { ephemeral: true, workingDirectory: '/Users/me/docs', coEdit: true }
+      { ephemeral: true, workingDirectory: '/Users/me/docs' }
     )
     expect(sessionRecords.isEphemeral(s.id)).toBe(true)
     expect(mocks.daoInsert).not.toHaveBeenCalled()
@@ -225,56 +215,34 @@ describe('S1 协作编辑会话', () => {
       title: 'a.md',
       projectId: null,
       workingDirectory: '/Users/me/docs',
-      settings: { notebookPath: 'a.md', coEdit: true, workingDirectory: '/Users/me/docs' }
+      settings: { notebookPath: 'a.md', workingDirectory: '/Users/me/docs' }
     })
-    expect(sessionService.resolveAgentProfileName(s.id)).toBe('coedit')
+    expect('coEdit' in settingsOf(s.id)).toBe(false)
+    expect(sessionService.resolveAgentProfileName(s.id)).toBe('notebook')
   })
 
-  it('推导结果送进了运行时：resolveAgentConfig 给出档案 coedit', async () => {
+  it('推导结果送进了运行时：resolveAgentConfig 给出档案 notebook 与文件所在目录', async () => {
     const s = create(
       { title: 'a.md', notebookPath: 'a.md' },
-      { ephemeral: true, workingDirectory: '/Users/me/docs', coEdit: true }
+      { ephemeral: true, workingDirectory: '/Users/me/docs' }
     )
     const config = await sessionService.resolveAgentConfig(s.id)
-    expect(config.profile.name).toBe('coedit')
+    expect(config.profile.name).toBe('notebook')
     expect(config.cwd).toBe('/Users/me/docs')
-  })
-
-  it('coEdit: false / 不给 → 普通笔记本（notebook）', () => {
-    const off = create({ notebookPath: 'a.md' }, { coEdit: false })
-    const none = create({ notebookPath: 'b.md' })
-    for (const s of [off, none]) {
-      expect('coEdit' in settingsOf(s.id)).toBe(false)
-      expect(sessionService.resolveAgentProfileName(s.id)).toBe('notebook')
-    }
   })
 })
 
-describe('S2 不算数的 coEdit', () => {
-  it('没有 notebookPath → 不写键，按项目 chat / work', () => {
-    const scratch = create({ title: 'x' }, { coEdit: true })
-    const project = create({ title: 'y', projectId: 'p1' }, { coEdit: true })
-    expect('coEdit' in settingsOf(scratch.id)).toBe(false)
-    expect('coEdit' in settingsOf(project.id)).toBe(false)
-    expect(sessionService.resolveAgentProfileName(scratch.id)).toBe('chat')
-    expect(sessionService.resolveAgentProfileName(project.id)).toBe('work')
+describe('S2 遗留的 coEdit 不再算数', () => {
+  it('options 里还给 coEdit → 不写键，仍是 notebook', () => {
+    const s = create({ title: 'a.md', notebookPath: 'a.md' }, {
+      ephemeral: true,
+      coEdit: true
+    } as unknown as CreateOptions)
+    expect('coEdit' in settingsOf(s.id)).toBe(false)
+    expect(sessionService.resolveAgentProfileName(s.id)).toBe('notebook')
   })
 
-  it('子会话（带 notebookPath 与 coEdit）→ 不写键；父会话是协作会话也一样', () => {
-    const parent = create(
-      { title: 'a.md', notebookPath: 'a.md' },
-      { ephemeral: true, workingDirectory: '/Users/me/docs', coEdit: true }
-    )
-    const child = create({ parentId: parent.id, notebookPath: 'a.md' }, { coEdit: true })
-    expect('coEdit' in settingsOf(child.id)).toBe(false)
-    expect(sessionService.resolveAgentProfileName(child.id)).toBe('notebook')
-
-    const plainChild = create({ parentId: parent.id })
-    expect('coEdit' in settingsOf(plainChild.id)).toBe(false)
-    expect(sessionService.resolveAgentProfileName(plainChild.id)).toBe('chat')
-  })
-
-  it('coEdit 混在 params 里（渲染层经 IPC 能给的只有 params）→ 不算数', () => {
+  it('params 里混着 coEdit（渲染层经 IPC 能给的只有 params）→ 不写键', () => {
     const s = create({
       title: 'a.md',
       notebookPath: 'a.md',
@@ -282,50 +250,35 @@ describe('S2 不算数的 coEdit', () => {
     } as unknown as CreateParams)
     expect('coEdit' in settingsOf(s.id)).toBe(false)
     expect(sessionService.resolveAgentProfileName(s.id)).toBe('notebook')
+  })
 
-    const viaSettings = create({
-      notebookPath: 'b.md',
-      settings: { coEdit: true }
-    } as unknown as CreateParams)
-    expect('coEdit' in settingsOf(viaSettings.id)).toBe(false)
+  it('行里留着 coEdit（旧版本写下的）→ 推导不变：有 notebookPath 是 notebook，没有按项目 chat / work', () => {
+    const note = create({ notebookPath: 'a.md' })
+    const scratch = create({ title: 'x' })
+    const project = create({ title: 'y', projectId: 'p1' })
+    for (const s of [note, scratch, project]) stamp(s.id, { coEdit: true })
+    expect(sessionService.resolveAgentProfileName(note.id)).toBe('notebook')
+    expect(sessionService.resolveAgentProfileName(scratch.id)).toBe('chat')
+    expect(sessionService.resolveAgentProfileName(project.id)).toBe('work')
   })
 })
 
 describe('S3 分支次序', () => {
-  it('chromeTab + coEdit → tab（标签页会话先于一切，create 也不给它写 coEdit）', () => {
-    const s = create(
-      {
-        notebookPath: 'a.md',
-        chromeTab: { installId: 'i1', runId: 'r1', tabId: 5 }
-      } as unknown as CreateParams,
-      { coEdit: true }
-    )
-    expect('coEdit' in settingsOf(s.id)).toBe(false)
+  it('chromeTab + notebookPath → tab（标签页会话先于一切）', () => {
+    const s = create({
+      notebookPath: 'a.md',
+      chromeTab: { installId: 'i1', runId: 'r1', tabId: 5 }
+    } as unknown as CreateParams)
     expect(sessionService.resolveAgentProfileName(s.id)).toBe('tab')
 
     // 行里硬写进去也一样
-    stamp(s.id, { coEdit: true, notebookPath: 'a.md' })
+    stamp(s.id, { notebookPath: 'a.md' })
     expect(sessionService.resolveAgentProfileName(s.id)).toBe('tab')
   })
 
-  it('bot + coEdit + notebookPath → coedit（协作编辑先于 bot）', () => {
-    const s = create({ bot: 'scout', notebookPath: 'a.md' }, { coEdit: true })
-    expect(settingsOf(s.id)).toMatchObject({ bot: 'scout', coEdit: true, notebookPath: 'a.md' })
-    expect(sessionService.resolveAgentProfileName(s.id)).toBe('coedit')
-  })
-
-  it('coEdit 没有 notebookPath（行里硬写进去）→ 不是一种形态：无项目 chat / 有项目 work', () => {
-    const scratch = create({ title: 'x' })
-    const project = create({ title: 'y', projectId: 'p1' })
-    stamp(scratch.id, { coEdit: true })
-    stamp(project.id, { coEdit: true })
-    expect(sessionService.resolveAgentProfileName(scratch.id)).toBe('chat')
-    expect(sessionService.resolveAgentProfileName(project.id)).toBe('work')
-  })
-
-  it('coEdit + 空串的 notebookPath（行里硬写）→ 同样不是', () => {
-    const s = create({ title: 'x' })
-    stamp(s.id, { coEdit: true, notebookPath: '' })
-    expect(sessionService.resolveAgentProfileName(s.id)).toBe('chat')
+  it('bot + notebookPath → notebook（笔记本先于 bot）', () => {
+    const s = create({ bot: 'scout', notebookPath: 'a.md' })
+    expect(settingsOf(s.id)).toMatchObject({ bot: 'scout', notebookPath: 'a.md' })
+    expect(sessionService.resolveAgentProfileName(s.id)).toBe('notebook')
   })
 })

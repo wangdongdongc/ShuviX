@@ -17,6 +17,7 @@ import {
 import {
   resolveProjectConfig,
   getDesktopSecurityContext,
+  isSessionDocument,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
@@ -43,8 +44,12 @@ function desktopGuards(sessionId: string): FileGuards {
   }
 }
 
+/** 笔记本会话自己那份文档只经 doc_* 改：write / edit 碰它时给模型的话 */
+export const SESSION_DOCUMENT_REFUSAL =
+  "This is the document open in this notebook session. Change it with doc_edit or doc_insert, so the change lands in the user's editor; write and edit are for other files."
+
 /** 落在某个**可写** bundle 里的路径 → bundle 相对路径；内置库（只读）与 bundle 之外一律 null */
-function bundleRelOf(absPath: string): string | null {
+export function bundleRelOf(absPath: string): string | null {
   const located = locateBundle(absPath)
   return located && !isBuiltinBundle(located.bundle) ? located.rel : null
 }
@@ -69,6 +74,15 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
     knowledge: {
       locate: (p) => bundleRelOf(p),
       actor: (call) => agentActorOf(withCallAgent(ctx, call))
+    },
+    // 笔记本会话的文档只经 doc_*：那样改动才落在用户的编辑器里（虚影、等停手、不进撤销栈）。
+    // 这是体验上的分流，不是安全门：查不出来（会话行读不到等）就放行，写入照常过路径门
+    refuseWrite: (p) => {
+      try {
+        return isSessionDocument(sid, p) ? SESSION_DOCUMENT_REFUSAL : null
+      } catch {
+        return null
+      }
     },
     decoders,
     abortError: TOOL_ABORTED,
