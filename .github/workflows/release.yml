@@ -1,11 +1,15 @@
 # 自动构建并发布到 GitHub Releases
 # 触发条件：push 以 v 开头的 tag（如 v1.0.0）
+# 验证：推到 release-ci/** 分支 —— 各平台照样构建、照样检查（含公证），但不发布（publish 只在 tag 上跑），
+# 版本号用 0.0.0-ci.<运行序号>；用来在发版之前确认安装包是好的
 name: Release
 
 on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'release-ci/**'
 
 # 构建产物需要写入 Release 的权限
 permissions:
@@ -71,7 +75,9 @@ jobs:
       - name: Sync version from tag
         shell: bash
         working-directory: apps/desktop
-        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
+          npm version "$V" --no-git-tag-version
 
       - name: Build & Sign
         working-directory: apps/desktop
@@ -127,7 +133,15 @@ jobs:
               case "$STATUS" in
                 Accepted)
                   echo "✅ Notarization accepted, stapling..."
-                  xcrun stapler staple "$dmg"
+                  # 装订要连 Apple 的 CloudKit 取票据，偶尔「network connection was lost」（Error 68）：
+                  # v0.2.10 / v0.2.12 / v0.2.13 都是它，公证本身已经过了 —— 重试几次再算失败
+                  STAPLED=0
+                  for ATTEMPT in 1 2 3 4 5; do
+                    if xcrun stapler staple "$dmg"; then STAPLED=1; break; fi
+                    echo "::warning::stapling $dmg failed (attempt $ATTEMPT), retrying in 20s"
+                    sleep 20
+                  done
+                  if [ "$STAPLED" -ne 1 ]; then echo "❌ stapling $dmg failed"; exit 1; fi
                   echo "✅ $dmg done"
                   break
                   ;;
@@ -174,8 +188,19 @@ jobs:
 
   # ---- Linux 构建：在 Ubuntu 20.04 Docker 中编译，glibc 2.31 兼容 Ubuntu 20.04+ ----
   # 门槛是 Ubuntu 20.04 自带的 glibc 2.31 / libstdc++ GLIBCXX_3.4.28，打包后由 check-packaged-glibc.mjs 逐个二进制验
+  # 每个架构在自己架构的 runner 上原生编译（arm64 用 GitHub 的 arm64 runner，公开仓库免费）：
+  # 从前一台 x64 机器打两个架构，给 arm64 编译 better-sqlite3 / node-pty 时用的还是 x64 的 gcc，arm64 包里装的
+  # 是 x86-64 的模块，一启动就崩（v0.2.13 在 arm64 服务器上才看出来）。原生编译就没有「用错编译器」这回事
   build-linux:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -184,10 +209,10 @@ jobs:
       - name: Build Linux packages in Docker (glibc 2.31)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          # Strip 'v' prefix for npm version
-          export TAG_VERSION="${TAG_VERSION#v}"
+          # tag → 去掉 v 当版本号；release-ci/** 分支 → 0.0.0-ci.<运行序号>
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export TAG_VERSION="${GITHUB_REF_NAME#v}"; else export TAG_VERSION="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
           # CI=true 要显式传进容器（docker 不继承 runner 的环境）：根 postinstall 见 CI 才跳过 electron-rebuild。
           # 不跳过时它不带 --build-from-source，better-sqlite3 走 prebuild-install 下上游的 Electron 预编译件
           # （GLIBC_2.34 / GLIBCXX_3.4.29），还写下 .forge-meta；electron-builder 的 @electron/rebuild 见到
@@ -199,6 +224,7 @@ jobs:
             -e CI=true \
             -e GITHUB_TOKEN \
             -e TAG_VERSION \
+            -e ARCH \
             -e DEBIAN_FRONTEND=noninteractive \
             ubuntu:20.04 \
             bash -c '
@@ -219,8 +245,8 @@ jobs:
                   && gpg --dearmor < /tmp/gcc-ppa.key > /etc/apt/trusted.gpg.d/ubuntu-toolchain-r.gpg
               }
               retry fetch_gcc_key
-              # 只取 amd64（host 编译器）；arm64 交叉编译器来自 ports.ubuntu.com，不依赖此 PPA
-              echo "deb [arch=amd64] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu focal main" \
+              # 本机架构的编译器（x64 runner 上是 amd64，arm64 runner 上是 arm64）
+              echo "deb [arch=$(dpkg --print-architecture)] https://ppa.launchpadcontent.net/ubuntu-toolchain-r/test/ubuntu focal main" \
                 > /etc/apt/sources.list.d/ubuntu-toolchain-r.list
               retry apt-get update
               apt-get install -y gcc-11 g++-11
@@ -232,15 +258,6 @@ jobs:
               bash /tmp/nodesource.sh
               apt-get install -y nodejs
 
-              # arm64 交叉编译工具链
-              dpkg --add-architecture arm64
-              sed -i "s/^deb /deb [arch=amd64] /" /etc/apt/sources.list
-              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main restricted universe multiverse" > /etc/apt/sources.list.d/arm64.list
-              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list
-              echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main restricted universe multiverse" >> /etc/apt/sources.list.d/arm64.list
-              retry apt-get update
-              apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++-10-dev-arm64-cross
-
               # npm ci 在 workspace 根安装；构建命令在 apps/desktop 跑（配置在那里）
               node .github/scripts/check-lockfile-natives.mjs
               retry npm ci
@@ -248,8 +265,8 @@ jobs:
               # 上游换构建机就可能抬高门槛（rollup 4.62.3 即从 2.14 跳到 2.34），
               # 这里是 glibc 2.31 容器，不拦住就要等 electron-vite build 才炸。
               node .github/scripts/check-glibc-compat.mjs
-              # 一台 x64 机器打 x64 + arm64：补上 arm64 的平台原生包（见 add-cross-natives.mjs）
-              node .github/scripts/add-cross-natives.mjs --os=linux --cpu=x64 --cpu=arm64
+              # 只打本机这一个架构；平台原生包 npm ci 已经按本机装好，这里只是兜底（见 add-cross-natives.mjs）
+              node .github/scripts/add-cross-natives.mjs --os=linux --cpu=${ARCH}
               cd apps/desktop
               npm version "${TAG_VERSION}" --no-git-tag-version
               npx electron-vite build
@@ -257,7 +274,9 @@ jobs:
               # （GLIBCXX_3.4.29），Ubuntu 20.04 自带的 libstdc++ 只到 3.4.28 —— 本容器里从源码编出来的
               # better-sqlite3 也照样起不来。PPA 的 libstdc++.a 是 PIC 的；--exclude-libs 把它的符号藏起来，
               # 不从各个 .node 导出。node-gyp 读环境里的 LDFLAGS，@electron/rebuild 原样传下去
-              LDFLAGS="-static-libstdc++ -Wl,--exclude-libs,ALL" npx electron-builder --linux --publish never
+              # 目标名写出来：只给 --${ARCH} 时 electron-builder 仍按 electron-builder.yml 里每个目标的 arch 列表
+              # 把另一个架构也打一遍（arm64 runner 上随后去编 x64 的 better-sqlite3，gcc 不认 -m64）
+              LDFLAGS="-static-libstdc++ -Wl,--exclude-libs,ALL" npx electron-builder --linux AppImage deb --${ARCH} --publish never
               # 每个架构的包都得带着自己架构的平台原生包，否则不上传
               node ../../.github/scripts/check-packaged-natives.mjs dist linux
               # 包里每个 ELF 要求的 glibc / libstdc++ 版本都不得高过 Ubuntu 20.04，否则不上传
@@ -269,7 +288,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-linux
+          name: dist-linux-${{ matrix.arch }}
           path: |
             apps/desktop/dist/*.AppImage
             apps/desktop/dist/*.deb
@@ -308,7 +327,7 @@ jobs:
       - name: Build & zip extension
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="0.0.0-ci.${GITHUB_RUN_NUMBER}"; fi
           # manifest.version 只接受「数字.数字…」，去掉 -beta/-alpha 等预发布后缀
           CHROME_VERSION="${VERSION%%-*}"
           echo "Tag version: $VERSION  →  manifest version: $CHROME_VERSION"
@@ -331,6 +350,8 @@ jobs:
   # ---- 发布阶段：所有构建完成后创建 Release 并上传全部产物 ----
   publish:
     needs: [build, build-linux, build-extension]
+    # release-ci/** 分支只验证，不发布
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       # 说明正文要读 tag 之间的提交与带说明的 tag 对象：拉完整历史；checkout 在 tag 事件里会把带说明的
