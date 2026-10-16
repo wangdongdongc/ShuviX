@@ -62,6 +62,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 一台 runner 给两个架构打包（mac：arm64 runner 打 arm64 + x64；win：x64 打 x64 + arm64），npm ci 只装
+      # 本机架构的平台原生包（@vscode/ripgrep-*、@napi-rs/canvas-*）—— 补上另一个架构的，否则那个架构的包
+      # 带着本机的二进制，启动即崩
+      - name: Add the other architecture's platform packages
+        run: node .github/scripts/add-cross-natives.mjs --os=${{ matrix.platform == 'mac' && 'darwin' || 'win32' }} --cpu=x64 --cpu=arm64
+
       - name: Sync version from tag
         shell: bash
         working-directory: apps/desktop
@@ -79,6 +85,10 @@ jobs:
           CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.CSC_KEY_PASSWORD || '' }}
           # 构建阶段先跳过公证，由下一步单独处理（支持重试）
           MAC_NOTARIZE: false
+
+      # 每个架构的包都得带着自己架构的平台原生包，否则不上传
+      - name: Check each package carries its own platform packages
+        run: node .github/scripts/check-packaged-natives.mjs apps/desktop/dist ${{ matrix.platform == 'mac' && 'darwin' || 'win32' }}
 
       # macOS 公证（提交后轮询结果，避免 --wait 超时导致失败）
       - name: Notarize macOS app
@@ -231,10 +241,14 @@ jobs:
               # 上游换构建机就可能抬高门槛（rollup 4.62.3 即从 2.14 跳到 2.34），
               # 这里是 glibc 2.31 容器，不拦住就要等 electron-vite build 才炸。
               node .github/scripts/check-glibc-compat.mjs
+              # 一台 x64 机器打 x64 + arm64：补上 arm64 的平台原生包（见 add-cross-natives.mjs）
+              node .github/scripts/add-cross-natives.mjs --os=linux --cpu=x64 --cpu=arm64
               cd apps/desktop
               npm version "${TAG_VERSION}" --no-git-tag-version
               npx electron-vite build
               npx electron-builder --linux --publish never
+              # 每个架构的包都得带着自己架构的平台原生包，否则不上传
+              node ../../.github/scripts/check-packaged-natives.mjs dist linux
             '
           # Docker 内创建的文件属主为 root，修正权限以便后续 upload
           sudo chown -R $(id -u):$(id -g) apps/desktop/dist/ || true
