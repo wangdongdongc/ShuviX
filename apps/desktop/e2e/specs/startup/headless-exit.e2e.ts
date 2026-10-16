@@ -15,6 +15,11 @@
  * HX-8b 0.0.0.0:P 被占 + `--lan` → 1，同一行
  * HX-8c 0.0.0.0:P 被占 + SHUVIX_LAN=yes → 1，同一行
  *       （缺省无头 + 0.0.0.0 被占不算失败：macOS 上 127.0.0.1 照样绑得上，不写这一条）
+ * HX-9  `--bind shuvix-nope0`（这台电脑上没有的网卡）→ 1；恰一行「cannot listen on port P: ENOINTERFACE (no network
+ *       interface or local address shuvix-nope0 on this computer)」；没有就绪那一行；之后开始退出 / 退出完各一行；
+ *       没有地址文件
+ * HX-9b 同上，经环境变量 SHUVIX_BIND=shuvix-nope0
+ * HX-10 `--bind 'a;b'` → 2；「invalid --bind value "a;b"」那一行；`--headless --bind`（缺值）→ 2；「--bind needs a value」那一行
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
@@ -23,10 +28,12 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { freePort, runToExit, type RunToExitResult } from '../../harness/launch'
 
 const READY_PREFIX = 'ShuviX headless: ready — open one of: '
-const USAGE_FIRST = 'Usage: shuvix --headless [--port <n>] [--lan]'
+const USAGE_FIRST = 'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]'
 const USAGE_HEADLESS = '  --headless          run without windows (same as SHUVIX_HEADLESS=1)'
 const USAGE_HELP = '  --help, -h          print this help and exit'
 const SHUTTING_DOWN = 'ShuviX headless: shutting down'
+const NO_INTERFACE =
+  'ENOINTERFACE (no network interface or local address shuvix-nope0 on this computer)'
 const STOPPED = 'ShuviX headless: stopped'
 
 const homes: string[] = []
@@ -71,9 +78,14 @@ function expectArgsError(result: RunToExitResult, line: string): void {
   expect(hasReadyLine(result.stdout)).toBe(false)
 }
 
-/** 断言一次「端口被占」的退出（HX-8 / 8b / 8c 共用） */
-function expectListenError(result: RunToExitResult, home: string, port: number): void {
-  const line = `ShuviX headless: cannot listen on port ${port}: EADDRINUSE (the port is already in use)`
+/** 断言一次「监听不了」的退出（HX-8 / 8b / 8c 端口被占、HX-9 / 9b 网卡找不到共用） */
+function expectListenError(
+  result: RunToExitResult,
+  home: string,
+  port: number,
+  reason = 'EADDRINUSE (the port is already in use)'
+): void {
+  const line = `ShuviX headless: cannot listen on port ${port}: ${reason}`
   expect(result.code, result.output.slice(-2000)).toBe(1)
   expect(countLine(result.stdout, line), result.stdout).toBe(1)
   expect(hasReadyLine(result.stdout)).toBe(false)
@@ -199,5 +211,41 @@ describe('headless: launches that exit on their own', () => {
     } finally {
       await unblock(blocker)
     }
+  }, 120_000)
+
+  it('HX-9 --bind naming an interface this computer does not have exits 1 with ENOINTERFACE', async () => {
+    const home = newHome()
+    const port = await freePort()
+    const result = await runToExit({
+      home,
+      args: ['--headless', '--port', String(port), '--bind', 'shuvix-nope0'],
+      timeoutMs: 90_000
+    })
+    expectListenError(result, home, port, NO_INTERFACE)
+  }, 120_000)
+
+  it('HX-9b SHUVIX_BIND=shuvix-nope0 does the same', async () => {
+    const home = newHome()
+    const port = await freePort()
+    const result = await runToExit({
+      home,
+      args: ['--headless', '--port', String(port)],
+      env: { SHUVIX_BIND: 'shuvix-nope0' },
+      timeoutMs: 90_000
+    })
+    expectListenError(result, home, port, NO_INTERFACE)
+  }, 120_000)
+
+  it('HX-10 an invalid or missing --bind value exits 2 with one line', async () => {
+    const invalid = await runToExit({ home: newHome(), args: ['--headless', '--bind', 'a;b'] })
+    expectArgsError(
+      invalid,
+      'ShuviX headless: invalid --bind value "a;b": use a network interface name such as eth1, or an address of this computer (see shuvix --help)'
+    )
+    const missing = await runToExit({ home: newHome(), args: ['--headless', '--bind'] })
+    expectArgsError(
+      missing,
+      'ShuviX headless: --bind needs a value (a network interface name such as eth1, or an address of this computer) (see shuvix --help)'
+    )
   }, 120_000)
 })

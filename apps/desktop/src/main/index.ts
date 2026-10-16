@@ -87,6 +87,7 @@ import {
   HEADLESS_SHUTTING_DOWN_LINE,
   HEADLESS_STOPPED_LINE,
   headlessArgsErrorLine,
+  headlessBind,
   headlessLan,
   headlessListenErrorLine,
   headlessPortOverride,
@@ -126,7 +127,7 @@ if (headlessArgs.help) {
   printHeadlessLine(headlessArgsErrorLine(headlessArgs.error))
   app.exit(2)
 } else if (headlessArgs.headless) {
-  enableHeadlessMode({ port: headlessArgs.port, lan: headlessArgs.lan })
+  enableHeadlessMode({ port: headlessArgs.port, lan: headlessArgs.lan, bind: headlessArgs.bind })
   // macOS：不要 Dock 图标（ready 之后再藏一次，见下）
   if (isMac) app.dock?.hide()
   if (process.platform === 'linux') {
@@ -144,7 +145,7 @@ if (headlessArgs.help) {
   })
   log.info(
     `无头运行（headless）：端口 ${headlessArgs.port ?? '取设置'}，` +
-      `${headlessArgs.lan ? '局域网共享（0.0.0.0）' : '只给这台电脑（127.0.0.1）'}，pid ${process.pid}，不开任何窗口`
+      `${headlessArgs.bind !== undefined ? `只开放给一个网络（${headlessArgs.bind}）` : headlessArgs.lan ? '局域网共享（0.0.0.0）' : '只给这台电脑（127.0.0.1）'}，pid ${process.pid}，不开任何窗口`
   )
 }
 
@@ -991,7 +992,8 @@ app.whenReady().then(async () => {
   if (isHeadless()) {
     networkService.setHeadless({
       port: headlessPortOverride() ?? parseNetworkPort(settingsDao.findByKey(NETWORK_PORT_KEY)),
-      lan: headlessLan()
+      lan: headlessLan(),
+      bind: headlessBind()
     })
   }
   const networkReady = step('networkService.init', () =>

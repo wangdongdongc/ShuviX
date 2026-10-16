@@ -16,15 +16,25 @@
  *   HL-P11 没有 --headless 时坏端口照样记错误（主入口只在无头时据此退出）
  *   HL-P12 --lan / SHUVIX_LAN；--lan=1 / --LAN / --lan-only 不认；['--port','--lan'] → 缺值且 lan
  *   HL-P13 只有 --lan → {headless:false, lan:true, help:false}
+ *   HL-P14 --bind eth1 / --bind=eth1 → bind，隐含 lan（没有 --headless 也照样解析）
+ *   HL-P15 不合法的 --bind 值（空白、shell 元字符、`/`、换行、`%`、超过 64 字符）→ 固定措辞的错误、没有 bind、lan 仍 false；
+ *          64 字符与 IPv4 地址收
+ *   HL-P16 缺值：--bind 在末尾、--bind=、后面跟着开关（--lan 不被吃掉）、--bind -x
+ *   HL-P17 SHUVIX_BIND：去空白、空串不算；命令行没给 --bind 时不合法的值记错误；命令行的 --bind 优先（此时环境变量里
+ *          的错不算数）
+ *   HL-P18 --bind 给了多次：最后一个合法值；错误只记第一个（与端口错误之间也是先到先记）
+ *   HL-P19 --BIND / --bind-to / --binds= 不认；--lan --bind 并存；--help 与 --bind 的错误并存
  *   HL-U1  用法：第一行、提到的开关与环境变量、ssh -L 例子、Chromium 开关、风险那句；只提这几个 --开关；每行 ≤ 80 列
  *   HL-L1  就绪那一行（em dash、每个地址以 / 结尾、已有 / 不重复）
  *   HL-L2  监听失败那一行（EADDRINUSE / EACCES 带解释，其余原样）
+ *   HL-L2b ENOINTERFACE：无头运行给了 --bind → 带网卡名；没给 → 不带（不出现两个空格）
  *   HL-L3  三句固定的行
  *   HL-L4  已经在跑：有地址 / 还在启动
  *   HL-L5  参数错误那一行；每个构造出来的行都以前缀开头、没有换行
  *   HL-M1  模式开关：缺省桌面；enableHeadlessMode() / {port}；reset 回去
  *   HL-M2  headlessWindowError：Error、code 'headless'、固定措辞
  *   HL-M3  headlessLan：缺省 false；{lan:true} → true；非布尔的 lan 不算
+ *   HL-M4  headlessBind：{bind} → bind，隐含 lan（{lan:false, bind} 也是）；没给 / reset → undefined
  *   HL-W1  printHeadlessLine 只在缺换行时补一个；写到给定的 fd（缺省 1）
  *   HL-W2  每次只写进 7 字节：按字节拼回恰好 line + '\n'（含多字节的 —）
  *   HL-W3  EAGAIN 两次后成功 → 全部写完
@@ -55,6 +65,7 @@ import {
   HEADLESS_STOPPED_LINE,
   headlessAlreadyRunningLine,
   headlessArgsErrorLine,
+  headlessBind,
   headlessLan,
   headlessListenErrorLine,
   headlessPortOverride,
@@ -226,32 +237,168 @@ describe('HL-P parseHeadlessArgs', () => {
   it('HL-P13 只有 --lan', () => {
     expect(parse(['--lan'])).toStrictEqual({ headless: false, lan: true, help: false })
   })
+
+  const BIND_NEEDS =
+    '--bind needs a value (a network interface name such as eth1, or an address of this computer)'
+  const bindInvalid = (raw: string): string =>
+    `invalid --bind value "${raw}": use a network interface name such as eth1, or an address of this computer`
+
+  it('HL-P14 --bind 的两种写法；隐含 lan', () => {
+    expect(parse(['--headless', '--bind', 'eth1'])).toStrictEqual({
+      headless: true,
+      lan: true,
+      help: false,
+      bind: 'eth1'
+    })
+    expect(parse(['--headless', '--bind=eth1'])).toStrictEqual({
+      headless: true,
+      lan: true,
+      help: false,
+      bind: 'eth1'
+    })
+    expect(parse(['--bind', 'eth1'])).toStrictEqual({
+      headless: false,
+      lan: true,
+      help: false,
+      bind: 'eth1'
+    })
+  })
+
+  it('HL-P15 不合法的值 → 固定措辞的错误、没有 bind；64 字符与地址收', () => {
+    for (const bad of [
+      'eth 1',
+      'eth1;rm -rf /',
+      '$(id)',
+      'a/b',
+      'eth1\n',
+      'fe80::1%eth0',
+      'a'.repeat(65)
+    ]) {
+      const parsed = parse(['--headless', '--bind', bad])
+      expect(parsed.error, JSON.stringify(bad)).toBe(bindInvalid(bad))
+      expect('bind' in parsed, JSON.stringify(bad)).toBe(false)
+      expect(parsed.lan, JSON.stringify(bad)).toBe(false)
+    }
+    const long = 'a'.repeat(64)
+    expect(parse(['--bind', long]).bind).toBe(long)
+    expect('error' in parse(['--bind', long])).toBe(false)
+    const address = parse(['--headless', '--bind', '192.168.50.10'])
+    expect(address.bind).toBe('192.168.50.10')
+    expect('error' in address).toBe(false)
+  })
+
+  it('HL-P16 缺值：末尾、--bind=、后面跟着开关（不吃掉它）、-x', () => {
+    expect(parse(['--headless', '--bind'])).toStrictEqual({
+      headless: true,
+      lan: false,
+      help: false,
+      error: BIND_NEEDS
+    })
+    expect(parse(['--headless', '--bind='])).toStrictEqual({
+      headless: true,
+      lan: false,
+      help: false,
+      error: BIND_NEEDS
+    })
+    const swallowed = parse(['--bind', '--lan'])
+    expect(swallowed.error).toBe(BIND_NEEDS)
+    expect(swallowed.lan).toBe(true)
+    expect('bind' in swallowed).toBe(false)
+    const dash = parse(['--bind', '-x'])
+    expect(dash.error).toBe(BIND_NEEDS)
+    expect('bind' in dash).toBe(false)
+  })
+
+  it('HL-P17 SHUVIX_BIND', () => {
+    expect(parse([], { SHUVIX_BIND: 'eth1' })).toStrictEqual({
+      headless: false,
+      lan: true,
+      help: false,
+      bind: 'eth1'
+    })
+    expect(parse([], { SHUVIX_BIND: ' eth1 ' }).bind).toBe('eth1')
+    for (const empty of ['', '   ']) {
+      expect(parse([], { SHUVIX_BIND: empty }), JSON.stringify(empty)).toStrictEqual({
+        headless: false,
+        lan: false,
+        help: false
+      })
+    }
+    const bad = parse([], { SHUVIX_BIND: 'a b' })
+    expect(bad.error).toBe(
+      'invalid SHUVIX_BIND value "a b": use a network interface name or an address of this computer'
+    )
+    expect('bind' in bad).toBe(false)
+    expect(bad.lan).toBe(false)
+    // 命令行优先
+    expect(parse(['--bind', 'eth2'], { SHUVIX_BIND: 'eth1' }).bind).toBe('eth2')
+    // 命令行给了 --bind：环境变量里的错不算数
+    const argvWins = parse(['--bind', 'eth2'], { SHUVIX_BIND: 'a b' })
+    expect(argvWins).toStrictEqual({ headless: false, lan: true, help: false, bind: 'eth2' })
+  })
+
+  it('HL-P18 --bind 给了多次：最后一个合法值；错误只记第一个', () => {
+    expect(parse(['--bind', 'eth1', '--bind', 'eth2']).bind).toBe('eth2')
+    const mixed = parse(['--bind', 'a b', '--bind', 'eth2'])
+    expect(mixed.bind).toBe('eth2')
+    expect(mixed.error).toBe(bindInvalid('a b'))
+    const both = parse(['--bind', 'a;b', '--bind', 'c;d'])
+    expect(both.error).toBe(bindInvalid('a;b'))
+    expect(parse(['--bind', 'a b', '--port', 'abc']).error).toBe(bindInvalid('a b'))
+    expect(parse(['--bind', 'eth1', '--port', 'abc']).error).toBe(
+      `invalid --port value "abc": use ${PORT_RANGE}`
+    )
+  })
+
+  it('HL-P19 不认得的写法；与 --lan、--help 并存', () => {
+    for (const args of [['--BIND', 'eth1'], ['--bind-to', 'eth1'], ['--binds=x']]) {
+      expect(parse(args), args.join(' ')).toStrictEqual({
+        headless: false,
+        lan: false,
+        help: false
+      })
+    }
+    expect(parse(['--lan', '--bind', 'eth1'])).toStrictEqual({
+      headless: false,
+      lan: true,
+      help: false,
+      bind: 'eth1'
+    })
+    const help = parse(['--help', '--bind', 'a b'])
+    expect(help.help).toBe(true)
+    expect(help.error).toBe(bindInvalid('a b'))
+  })
 })
 
 describe('HL-U headlessUsage', () => {
   it('HL-U1 用法的内容与宽度', () => {
     const usage = headlessUsage()
     const lines = usage.split('\n')
-    expect(lines[0]).toBe('Usage: shuvix --headless [--port <n>] [--lan]')
+    expect(lines[0]).toBe(
+      'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]'
+    )
     for (const needle of [
       '--headless',
       '--port <n>',
       '--network-port',
       '--lan',
+      '--bind <name>',
       '--help, -h',
       'SHUVIX_HEADLESS=1',
       'SHUVIX_LAN=1',
+      'SHUVIX_BIND=<name>',
       'ssh -L 7766:127.0.0.1:7766',
       '--ozone-platform=headless --disable-gpu'
     ]) {
       expect(usage, needle).toContain(needle)
     }
     expect(
-      lines.some((line) => line.startsWith('Network access has no password: with --lan,'))
+      lines.some((line) => line.startsWith('Network access has no password: with --lan or --bind,'))
     ).toBe(true)
     const flags = new Set(usage.match(/--[A-Za-z][\w=-]*/g) ?? [])
     expect([...flags].sort()).toStrictEqual(
       [
+        '--bind',
         '--disable-gpu',
         '--headless',
         '--help',
@@ -290,6 +437,22 @@ describe('HL-L stdout 的几行', () => {
     )
   })
 
+  it('HL-L2b ENOINTERFACE：有 --bind 带网卡名，没有不带', () => {
+    expect(headlessListenErrorLine(7766, 'ENOINTERFACE')).toBe(
+      'ShuviX headless: cannot listen on port 7766: ENOINTERFACE (no network interface or local address on this computer)'
+    )
+    enableHeadlessMode({ bind: 'eth9' })
+    expect(headlessListenErrorLine(7766, 'ENOINTERFACE')).toBe(
+      'ShuviX headless: cannot listen on port 7766: ENOINTERFACE (no network interface or local address eth9 on this computer)'
+    )
+    enableHeadlessMode({ port: 8123 })
+    const noBind = headlessListenErrorLine(8123, 'ENOINTERFACE')
+    expect(noBind).toBe(
+      'ShuviX headless: cannot listen on port 8123: ENOINTERFACE (no network interface or local address on this computer)'
+    )
+    expect(noBind).not.toContain('  ')
+  })
+
   it('HL-L3 固定的三句', () => {
     expect(HEADLESS_SHUTTING_DOWN_LINE).toBe('ShuviX headless: shutting down')
     expect(HEADLESS_STOPPED_LINE).toBe('ShuviX headless: stopped')
@@ -312,6 +475,7 @@ describe('HL-L stdout 的几行', () => {
       headlessReadyLine([]),
       headlessListenErrorLine(1, 'EADDRINUSE'),
       headlessListenErrorLine(1, 'X'),
+      headlessListenErrorLine(1, 'ENOINTERFACE'),
       headlessAlreadyRunningLine(['http://a:1']),
       headlessAlreadyRunningLine([]),
       headlessArgsErrorLine('x'),
@@ -364,6 +528,23 @@ describe('HL-M 进程级的模式开关', () => {
     enableHeadlessMode({ lan: 'yes' as unknown as boolean })
     expect(headlessLan()).toBe(false)
     resetHeadlessModeForTests()
+    expect(headlessLan()).toBe(false)
+  })
+
+  it('HL-M4 headlessBind：隐含 lan；没给 / reset → undefined', () => {
+    expect(headlessBind()).toBeUndefined()
+    enableHeadlessMode({ bind: 'eth1' })
+    expect(headlessBind()).toBe('eth1')
+    expect(headlessLan()).toBe(true)
+    enableHeadlessMode({ lan: false, bind: 'eth1' })
+    expect(headlessBind()).toBe('eth1')
+    expect(headlessLan()).toBe(true)
+    enableHeadlessMode({})
+    expect(headlessBind()).toBeUndefined()
+    expect(headlessLan()).toBe(false)
+    enableHeadlessMode({ bind: 'eth1' })
+    resetHeadlessModeForTests()
+    expect(headlessBind()).toBeUndefined()
     expect(headlessLan()).toBe(false)
   })
 })

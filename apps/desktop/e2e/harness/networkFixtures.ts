@@ -5,6 +5,8 @@
  *
  *   networkStatus(main)         `window.api.network.status()`（主窗口的 IPC）
  *   privateIPv4Addresses()      spec 进程自己看到的私有 IPv4 网卡地址（服务在局域网共享时列出的应当恰是这些）
+ *   lanCandidatesOf()           spec 进程自己算的「开放给」候选：每块非内部网卡的第一个私有 IPv4（网卡名排序，
+ *                               `{interface, address, cidr}`）—— 状态里的 `lanCandidates` 应当恰是这一份
  *   httpProbe(opts)             一次普通 HTTP 请求：**永远连 127.0.0.1**（或显式给的 `connectHost`），只伪造 `Host` 头 ——
  *                               服务只绑 IPv4，`localhost` 在 macOS 上可能先解析成 ::1
  *   rawHttpProbe(port, text)    原样写一段请求报文（Node 的 http 客户端只会说 HTTP/1.1、总要带 Host）
@@ -44,11 +46,25 @@ export interface NetworkClientInfo {
   connectedAt: number
 }
 
+/** 一个可以开放给的网络（`network:status` 的 `lanNetwork` / `lanCandidates`） */
+export interface NetworkLanInfo {
+  interface: string
+  address: string
+  /** `192.168.50.10/24` */
+  cidr: string
+}
+
 export interface NetworkStatus {
   enabled: boolean
   port: number
   /** 允许局域网里的其他设备（关 → 只监听 127.0.0.1） */
   lan: boolean
+  /** 只开放给哪个网络（设置 `network.lanInterface` / 无头的 `--bind`，原样）；所有网络 → 没有 */
+  lanInterface?: string
+  /** 此刻正只开放给的那个网络（指定了网络且真在监听时）；否则没有 */
+  lanNetwork?: NetworkLanInfo
+  /** 能挑的网络（每块非内部网卡的第一个私有 IPv4，网卡名排序） */
+  lanCandidates: NetworkLanInfo[]
   /** 此刻监听的地址（`127.0.0.1` / `0.0.0.0`）；没在监听 → 没有 */
   bindAddress?: string
   listening: boolean
@@ -82,6 +98,46 @@ export function privateIPv4Addresses(): string[] {
         (a === 169 && b === 254)
       if (isPrivate && !out.includes(entry.address)) out.push(entry.address)
     }
+  }
+  return out
+}
+
+/** 掩码 → 前缀长度（不连续 → undefined） */
+function prefixOfNetmask(netmask: string): number | undefined {
+  const parts = netmask.split('.').map(Number)
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+    return undefined
+  }
+  const bits = parts.map((p) => p.toString(2).padStart(8, '0')).join('')
+  if (!/^1*0*$/.test(bits)) return undefined
+  const firstZero = bits.indexOf('0')
+  return firstZero === -1 ? 32 : firstZero
+}
+
+/**
+ * spec 进程自己算的「开放给」候选：每块非内部网卡上的第一个私有 IPv4（判断同 `privateIPv4Addresses`），按网卡名排序，
+ * 网段取 Node 给的 cidr（没有就按掩码算；算不出就不列）。手写，不引产品的 lanScope.ts
+ */
+export function lanCandidatesOf(): NetworkLanInfo[] {
+  const out: NetworkLanInfo[] = []
+  const all = networkInterfaces()
+  for (const name of Object.keys(all).sort()) {
+    const entry = (all[name] ?? []).find((e) => {
+      const family = e.family as unknown
+      if (e.internal || (family !== 'IPv4' && family !== 4)) return false
+      const [a, b] = e.address.split('.').map(Number)
+      return (
+        a === 10 ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 169 && b === 254)
+      )
+    })
+    if (!entry) continue
+    const fromCidr = entry.cidr ? Number(entry.cidr.slice(entry.cidr.lastIndexOf('/') + 1)) : NaN
+    const prefix = Number.isInteger(fromCidr) ? fromCidr : prefixOfNetmask(entry.netmask)
+    if (prefix === undefined) continue
+    out.push({ interface: name, address: entry.address, cidr: `${entry.address}/${prefix}` })
   }
   return out
 }

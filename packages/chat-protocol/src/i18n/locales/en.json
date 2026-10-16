@@ -951,7 +951,13 @@
     "networkStarting": "Starting…",
     "networkHeadlessNote": "Headless mode keeps network access on; stop the ShuviX service to turn it off.",
     "networkHeadlessPortNote": "Set with --port or in the service file.",
-    "networkHeadlessLanNote": "Chosen at startup (--lan); restart ShuviX to change it."
+    "networkHeadlessLanNote": "Chosen at startup (--lan); restart ShuviX to change it.",
+    "networkLanScope": "Share on",
+    "networkLanScopeAll": "All networks",
+    "networkLanScopeMissing": "{{name}} (not found)",
+    "networkLanScopeOnly": "Only devices in {{cidr}} can connect.",
+    "networkHeadlessScopeNote": "Chosen at startup (--bind); restart ShuviX to change it.",
+    "networkErrorNoInterface": "This computer has no network interface or address \"{{name}}\". Choose another network."
   },
   "about": {
     "description": "Your AI Assistant",

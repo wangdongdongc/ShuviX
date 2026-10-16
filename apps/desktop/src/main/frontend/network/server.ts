@@ -69,6 +69,10 @@ export interface NetworkServerDeps {
   readonly onConnection?: (connection: NetworkConnection) => void
   /** 一个客户端走了（已经从传输的表里摘掉、链路已结束） */
   readonly onDisconnection?: (connection: NetworkConnection) => void
+  /**
+   * 对端地址的附加一道门（只开放给一个网络时：对端必须在那个网段里；现取）。不给 / 回 true → 只看原有的私有地址那道门
+   */
+  readonly acceptPeer?: (address: string) => boolean
   readonly logger?: NetworkServerLogger
   readonly heartbeatMs?: number
   readonly maxBufferedBytes?: number
@@ -98,14 +102,24 @@ const STATUS_TEXT: Record<number, string> = {
   503: 'Service Unavailable'
 }
 
-/** 三道门里的前两道（每个请求、每次升级都过）：不过 → 状态码 + 一句话；过了 → undefined */
+/**
+ * 三道门里的前两道（每个请求、每次升级都过）：不过 → 状态码 + 一句话；过了 → undefined。`acceptPeer`：只开放给一个
+ * 网络时，对端还得在那个网段里
+ */
 export function requestRejection(
   remoteAddress: string | undefined,
   host: string | undefined,
-  port: number
+  port: number,
+  acceptPeer?: (address: string) => boolean
 ): { status: number; text: string } | undefined {
   if (!isPrivatePeerAddress(remoteAddress)) {
     return { status: 403, text: 'ShuviX only accepts connections from the local network.' }
+  }
+  if (acceptPeer !== undefined && !acceptPeer(displayPeerAddress(remoteAddress))) {
+    return {
+      status: 403,
+      text: 'ShuviX only accepts connections from the network it is shared on.'
+    }
   }
   if (!isAllowedHost(host, port)) {
     return { status: 421, text: 'Use an IP address or localhost with the ShuviX port.' }
@@ -223,7 +237,12 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
 
   function onRequest(req: IncomingMessage, res: ServerResponse): void {
     const port = boundPort ?? -1
-    const rejection = requestRejection(req.socket.remoteAddress, req.headers.host, port)
+    const rejection = requestRejection(
+      req.socket.remoteAddress,
+      req.headers.host,
+      port,
+      deps.acceptPeer
+    )
     if (rejection) {
       plain(res, rejection.status, rejection.text, true)
       return
@@ -268,7 +287,12 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
   function onUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
     socket.on('error', () => socket.destroy())
     const port = boundPort ?? -1
-    const rejection = requestRejection(req.socket.remoteAddress, req.headers.host, port)
+    const rejection = requestRejection(
+      req.socket.remoteAddress,
+      req.headers.host,
+      port,
+      deps.acceptPeer
+    )
     if (rejection) {
       rejectUpgrade(socket, rejection.status, rejection.text)
       return

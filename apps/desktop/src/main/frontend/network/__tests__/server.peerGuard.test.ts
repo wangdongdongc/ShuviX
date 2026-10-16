@@ -8,6 +8,12 @@
  *   NSP-4 换回真实现 → 200
  *   NSP-5 phase D 的动态路由也先过这道门：`/files/media?path=…`、`/lib/chart.js`、`/w/demo-widget/` → 403，
  *         connection: close；文件路由的依赖与 widget 转发的 target() 一次都不调
+ *
+ * 只开放给一个网络时的附加一道门（依赖 `acceptPeer`，服务每次现取；这里是可变的 spy，缺省放行）：
+ *   NSP-6 acceptPeer 回 false → GET / 403 'ShuviX only accepts connections from the network it is shared on.'，
+ *         connection: close；spy 收到 '127.0.0.1'
+ *   NSP-7 升级 → 403、onConnection 不调；`/files/media`、`/lib/chart.js`、`/w/demo-widget/` → 403，依赖与 target() 不调
+ *   NSP-8 现取：spy 换成放行 → 下一个 GET / 200；不给 acceptPeer 的服务 → 200
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
@@ -28,6 +34,7 @@ vi.mock('../guards', async (importOriginal) => {
 
 const isPrivate = vi.mocked(guards.isPrivatePeerAddress)
 const FORBIDDEN = 'ShuviX only accepts connections from the local network.'
+const NOT_SHARED = 'ShuviX only accepts connections from the network it is shared on.'
 
 let tmp: string
 let server: NetworkServer
@@ -37,6 +44,7 @@ let resolvePreviewPath: ReturnType<typeof vi.fn<(sessionId: string, path: string
 let readSandboxLib: ReturnType<typeof vi.fn<(name: string) => Promise<Buffer | undefined>>>
 let widgetTarget: ReturnType<typeof vi.fn<() => { host: string; port: number } | undefined>>
 let realImpl: (address: string | undefined | null) => boolean
+let acceptPeer: ReturnType<typeof vi.fn<(address: string) => boolean>>
 
 beforeEach(async () => {
   realImpl = isPrivate.getMockImplementation()!
@@ -48,6 +56,7 @@ beforeEach(async () => {
   resolvePreviewPath = vi.fn((_sessionId: string, path: string) => join(tmp, path))
   readSandboxLib = vi.fn(async () => Buffer.from('lib'))
   widgetTarget = vi.fn(() => ({ host: '127.0.0.1', port: 9 }))
+  acceptPeer = vi.fn((_address: string) => true)
   server = createNetworkServer({
     transport,
     dispatcher: createNetworkDispatcher({ definitionOf: transport.definitionOf }),
@@ -55,6 +64,7 @@ beforeEach(async () => {
     rendererDir: () => tmp,
     fileRoutes: () => ({ resolvePreviewPath, readSandboxLib }),
     widgetProxy: () => ({ target: widgetTarget }),
+    acceptPeer: (address) => acceptPeer(address),
     onConnection
   })
   port = await server.start(0, '127.0.0.1')
@@ -68,15 +78,19 @@ afterEach(async () => {
 
 function http(
   headers: Record<string, string> = {},
-  path = '/'
+  path = '/',
+  toPort = port
 ): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ host: '127.0.0.1', port, path, headers, agent: false }, (res) => {
-      let body = ''
-      res.setEncoding('utf8')
-      res.on('data', (chunk: string) => (body += chunk))
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }))
-    })
+    const req = httpRequest(
+      { host: '127.0.0.1', port: toPort, path, headers, agent: false },
+      (res) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => (body += chunk))
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body }))
+      }
+    )
     req.on('error', reject)
     req.end()
   })
@@ -165,5 +179,63 @@ describe('NSP 对端地址那道门', () => {
     const lib = await http({}, '/lib/chart.js')
     expect(lib.status).toBe(200)
     expect(readSandboxLib).toHaveBeenCalledWith('chart.js')
+  })
+})
+
+describe('NSP-6..NSP-8 只开放给一个网络的那道门', () => {
+  it('NSP-6 acceptPeer 回 false → GET / 403 网段那句，connection: close；收到 127.0.0.1', async () => {
+    acceptPeer.mockReturnValue(false)
+    const res = await http()
+    expect(res.status).toBe(403)
+    expect(res.body).toBe(NOT_SHARED)
+    expect(res.headers.connection).toBe('close')
+    expect(acceptPeer).toHaveBeenCalledWith('127.0.0.1')
+  })
+
+  it('NSP-7 升级 → 403、onConnection 不调；动态路由 → 403，依赖都不调', async () => {
+    acceptPeer.mockReturnValue(false)
+    const upgrade = await upgradeStatus()
+    expect(upgrade.status).toBe(403)
+    expect(upgrade.body).toBe(NOT_SHARED)
+    expect(onConnection).not.toHaveBeenCalled()
+
+    for (const path of [
+      `/files/media?path=${encodeURIComponent(join(tmp, 'secret.txt'))}`,
+      '/lib/chart.js',
+      '/w/demo-widget/'
+    ]) {
+      const res = await http({}, path)
+      expect(res.status, path).toBe(403)
+      expect(res.body, path).toBe(NOT_SHARED)
+      expect(res.headers.connection, path).toBe('close')
+    }
+    expect(resolvePreviewPath).not.toHaveBeenCalled()
+    expect(readSandboxLib).not.toHaveBeenCalled()
+    expect(widgetTarget).not.toHaveBeenCalled()
+  })
+
+  it('NSP-8 现取：换成放行 → 200；不给 acceptPeer → 200', async () => {
+    acceptPeer.mockReturnValue(false)
+    expect((await http()).status).toBe(403)
+    acceptPeer.mockReturnValue(true)
+    const res = await http()
+    expect(res.status).toBe(200)
+    expect(res.body).toBe('<p>web</p>')
+
+    const transport = createNetworkTransport()
+    const plainServer = createNetworkServer({
+      transport,
+      dispatcher: createNetworkDispatcher({ definitionOf: transport.definitionOf }),
+      links: createNetworkLinkHub({ accept: () => {} }),
+      rendererDir: () => tmp
+    })
+    const plainPort = await plainServer.start(0, '127.0.0.1')
+    try {
+      const plainRes = await http({}, '/', plainPort)
+      expect(plainRes.status).toBe(200)
+      expect(plainRes.body).toBe('<p>web</p>')
+    } finally {
+      await plainServer.stop()
+    }
   })
 })

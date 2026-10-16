@@ -26,6 +26,7 @@ import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider
 import { freePort, launchApp, type E2EApp } from '../../harness/launch'
 import {
   httpProbe,
+  lanCandidatesOf,
   networkStatus,
   openWebClient,
   shellOpens,
@@ -198,6 +199,7 @@ describe('network access: the web client in a real page', () => {
       enabled: false,
       port: 7766,
       lan: false,
+      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
       clients: []
@@ -208,6 +210,7 @@ describe('network access: the web client in a real page', () => {
       enabled: false,
       port: P1,
       lan: false,
+      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
       clients: []
@@ -717,6 +720,7 @@ describe('network access: the web client in a real page', () => {
       enabled: false,
       port: P1,
       lan: false,
+      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
       clients: []

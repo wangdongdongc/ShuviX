@@ -39,6 +39,17 @@
  *   IL-25 the headless About page's update command (`headlessUpdateCommand`), run the way it pipes the script in
  *         (`bash -s -- …` with the script on stdin) plus `--dry-run`: installs exactly that version, touches no
  *         service (no unit written, no systemctl enable), runs no command
+ *   IL-26 `--bind eth1` (and `--bind=eth1`, and together with `--lan`): helper and unit carry `--bind eth1` and no --lan;
+ *         after "Manage it with" exactly the one-network line and its no-password line; no SSH hint, no LAN risk line
+ *   IL-27 `--bind` values that are refused (whitespace, shell metacharacters, quotes, `/`, `\`, a tab, a newline that
+ *         would inject a unit line, 65 characters, empty, a leading `-` including `--lan` itself, `%`, a non-ASCII
+ *         letter — also under a UTF-8 locale): exit 2 with one exact message, no stub runs, no unit; 64 characters, an
+ *         IPv6 and an IPv4 literal are accepted
+ *   IL-28 `--bind` with nothing after it: its own message
+ *   IL-29 root + deb + `--service --bind`: --bind before --port, --no-sandbox last; AppImage + `--bind`: the helper gets
+ *         it, the launcher does not
+ *   IL-30 no `--service`: the two one-network lines follow "rerun this script with --service"; the helper's comment
+ *         names `--bind <name>`; `--uninstall --bind eth1` prints the same as `--uninstall`
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
@@ -91,6 +102,14 @@ const NOTE_NO_SANDBOX =
   'note: ShuviX from the AppImage runs with --no-sandbox (the extracted app has no setuid sandbox helper)'
 const PATH_WARNING =
   'warning: /home/alice/.local/bin is not on your PATH; add it to use the shuvix and shuvix-server commands'
+const HELPER_COMMENT =
+  '| # Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>, --lan, --bind <name>.'
+
+/** The two closing lines of a one-network (`--bind`) install (IL-26) */
+const bindHint = (name: string): string[] => [
+  `ShuviX only accepts connections from the network of ${name} (it listens on that address only).`,
+  'Network access has no password: anyone on that network who opens the address can fully control this computer through ShuviX.'
+]
 
 /** The five closing lines of a non-LAN install (IL-20) */
 const sshHint = (port: number, user = 'alice'): string[] => [
@@ -279,6 +298,9 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
       }
       expect(trimmed).toContain(
         '--lan             let other devices on the local network connect (no password!); default: only'
+      )
+      expect(trimmed).toContain(
+        '--bind <name>     share on one network only: a network interface (e.g. eth1) or an address of'
       )
       expect(result.stubCalls).toBeNull()
     })
@@ -764,7 +786,8 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
         ['--version', 'v0.2.12', '--service', '--port', '8123', '--lan', '--dry-run'],
         'deb'
       ],
-      ['IL-22 AppImage + --lan', ['--version', 'v0.2.12', '--lan', '--dry-run'], 'appimage']
+      ['IL-22 AppImage + --lan', ['--version', 'v0.2.12', '--lan', '--dry-run'], 'appimage'],
+      ['IL-26 --bind', ['--version', 'v0.2.12', '--service', '--bind', 'eth1', '--dry-run'], 'deb']
     ])('IL-15 — %s: no stub runs, the temp HOME stays empty', (_label, args, pkg) => {
       const result = runInstaller(args, { env: { HOME: home, SHUVIX_INSTALL_PKG: pkg } })
       expect(result.code).toBe(0)
@@ -1089,6 +1112,188 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
       expect(result.lines[0]).toBe('dry run: nothing is changed (deb, x86_64, user bob)')
       expect(result.lines).toContain("  ssh -L 7766:127.0.0.1:7766 bob@<this machine's address>")
       expectEndsWith(result.lines, sshHint(7766, 'bob'))
+    })
+  })
+
+  // ── IL-26 … IL-30 (one network: --bind) ────────────────────────────────────────────────────────────────────
+
+  describe('IL-26 … IL-30 --bind', () => {
+    const BIND_FLAG_LINES = [
+      '| exec "/opt/ShuviX/shuvix" --headless --bind eth1 --ozone-platform=headless --disable-gpu "$@"',
+      '| ExecStart=/opt/ShuviX/shuvix --headless --bind eth1 --port 8123 --ozone-platform=headless --disable-gpu'
+    ]
+    const MANAGE =
+      'Manage it with: sudo systemctl status|restart|stop shuvix · logs: journalctl -u shuvix -f'
+    const bindError = (value: string): string =>
+      `--bind takes a network interface name or an address (got "${value}")`
+
+    it.each([
+      [['--bind', 'eth1']],
+      [['--bind=eth1']],
+      [['--lan', '--bind', 'eth1']],
+      [['--bind', 'eth1', '--lan']]
+    ])(
+      'IL-26 — %j: helper and unit carry --bind, the one-network lines close the output',
+      (bind) => {
+        const result = runInstaller([
+          '--version',
+          'v0.2.12',
+          '--service',
+          '--port',
+          '8123',
+          ...bind,
+          '--dry-run'
+        ])
+        expect(result.code, result.stderr).toBe(0)
+        expect(result.stderr).toBe('')
+        const { lines } = result
+        expect(flagLines(lines)).toStrictEqual(BIND_FLAG_LINES)
+        for (const line of flagLines(lines)) expect(line).not.toContain('--lan')
+        const manage = lines.indexOf(MANAGE)
+        expect(manage).toBeGreaterThan(0)
+        expect(lines.slice(manage + 1)).toStrictEqual(bindHint('eth1'))
+        expect(lines.filter((line) => line.includes('ssh -L'))).toStrictEqual([])
+        expect(lines).not.toContain(LAN_RISK)
+        expect(result.stubCalls).toBeNull()
+      }
+    )
+
+    it.each([
+      ['a b'],
+      ['a;b'],
+      ['$(id)'],
+      ['a`b'],
+      ['a"b'],
+      ["a'b"],
+      ['a|b'],
+      ['a&b'],
+      ['a>b'],
+      ['a/b'],
+      ['a\\b'],
+      ['a\tb'],
+      ['eth1\nExecStartPre=/bin/x'],
+      ['a'.repeat(65)],
+      ['-x'],
+      ['fe80::1%eth0'],
+      ['ÉTH']
+    ])('IL-27 — --bind %j is refused', (value) => {
+      const result = runInstaller([
+        '--version',
+        'v0.2.12',
+        '--service',
+        '--bind',
+        value,
+        '--dry-run'
+      ])
+      expectArgumentError(result, bindError(value))
+      expect(result.stubCalls).toBeNull()
+      expect(result.stdout).not.toContain('ExecStart=')
+    })
+
+    it('IL-27 — an empty value and a following option are refused too (not taken as the name)', () => {
+      for (const args of [['--bind', ''], ['--bind=']]) {
+        const result = runInstaller(['--version', 'v0.2.12', '--service', ...args, '--dry-run'])
+        expectArgumentError(result, bindError(''))
+        expect(result.stubCalls, JSON.stringify(args)).toBeNull()
+      }
+      const lan = runInstaller([
+        '--version',
+        'v0.2.12',
+        '--service',
+        '--bind',
+        '--lan',
+        '--dry-run'
+      ])
+      expectArgumentError(lan, bindError('--lan'))
+      expect(lan.stubCalls).toBeNull()
+    })
+
+    it('IL-27 — a non-ASCII letter is refused under a UTF-8 locale as well', () => {
+      const result = runInstaller(['--version', 'v0.2.12', '--bind', 'ÉTH', '--dry-run'], {
+        env: { LC_ALL: 'en_US.UTF-8' }
+      })
+      expectArgumentError(result, bindError('ÉTH'))
+      expect(result.stubCalls).toBeNull()
+    })
+
+    it.each([['a'.repeat(64)], ['fe80::1'], ['192.168.50.10']])(
+      'IL-27 — --bind %s is accepted',
+      (value) => {
+        const result = runInstaller([
+          '--version',
+          'v0.2.12',
+          '--service',
+          '--bind',
+          value,
+          '--dry-run'
+        ])
+        expect(result.code, result.stderr).toBe(0)
+        expect(result.stderr).toBe('')
+        expect(flagLines(result.lines)).toStrictEqual([
+          `| exec "/opt/ShuviX/shuvix" --headless --bind ${value} --ozone-platform=headless --disable-gpu "$@"`,
+          `| ExecStart=/opt/ShuviX/shuvix --headless --bind ${value} --port 7766 --ozone-platform=headless --disable-gpu`
+        ])
+        expectEndsWith(result.lines, bindHint(value))
+      }
+    )
+
+    it('IL-28 — --bind with nothing after it', () => {
+      const result = runInstaller(['--bind'])
+      expectArgumentError(result, '--bind needs a network interface or an address')
+      expect(result.stubCalls).toBeNull()
+    })
+
+    it('IL-29 — root + deb + --service --bind: --bind before --port, --no-sandbox last', () => {
+      const result = runInstaller(
+        ['--version', 'v0.2.12', '--service', '--bind', 'eth1', '--dry-run'],
+        { env: { SHUVIX_INSTALL_UID: '0', SHUVIX_INSTALL_USER: 'root', HOME: '/root' } }
+      )
+      expect(result.code, result.stderr).toBe(0)
+      expect(result.lines).toContain(
+        '| ExecStart=/opt/ShuviX/shuvix --headless --bind eth1 --port 7766 --ozone-platform=headless --disable-gpu --no-sandbox'
+      )
+      expect(result.lines).toContain(
+        '| exec "/opt/ShuviX/shuvix" --headless --bind eth1 --ozone-platform=headless --disable-gpu "$@"'
+      )
+      expect(result.lines).toContain(
+        'Manage it with: systemctl status|restart|stop shuvix · logs: journalctl -u shuvix -f'
+      )
+      expectEndsWith(result.lines, bindHint('eth1'))
+    })
+
+    it('IL-29 — AppImage + --bind: the helper gets it, the launcher does not', () => {
+      const result = runInstaller(['--version', 'v0.2.12', '--bind', 'eth1', '--dry-run'], {
+        env: { SHUVIX_INSTALL_PKG: 'appimage' }
+      })
+      expect(result.code).toBe(0)
+      const { lines } = result
+      expect(lines).toContain(
+        '| exec "/home/alice/.local/bin/shuvix" --headless --bind eth1 --ozone-platform=headless --disable-gpu "$@"'
+      )
+      expect(lines).toContain(
+        '| exec "/home/alice/.local/share/shuvix/app/shuvix" --no-sandbox "$@"'
+      )
+      expect(lines).toContain(HELPER_COMMENT)
+      expectEndsWith(lines, bindHint('eth1'))
+    })
+
+    it('IL-30 — no --service: the two one-network lines follow "rerun this script with --service"', () => {
+      const result = runInstaller(['--version', 'v0.2.12', '--bind', 'eth1', '--dry-run'])
+      expect(result.code).toBe(0)
+      const { lines } = result
+      const rerun = lines.indexOf('or install it as a service: rerun this script with --service')
+      expect(rerun).toBeGreaterThan(0)
+      expect(lines.slice(rerun + 1)).toStrictEqual(bindHint('eth1'))
+      expect(lines).toContain(HELPER_COMMENT)
+      expect(lines.filter((line) => line.includes('ssh -L'))).toStrictEqual([])
+    })
+
+    it('IL-30 [W] — --uninstall --bind eth1 prints the same as --uninstall', () => {
+      const plain = runInstaller(['--uninstall', '--dry-run'])
+      const withBind = runInstaller(['--uninstall', '--bind', 'eth1', '--dry-run'])
+      expect(withBind.code).toBe(0)
+      expect(withBind.stdout).toBe(plain.stdout)
+      expect(withBind.stderr).toBe(plain.stderr)
     })
   })
 

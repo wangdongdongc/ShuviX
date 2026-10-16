@@ -33,6 +33,7 @@ import { sleep, until, type CdpClient } from '../../harness/cdp'
 import { freePort, launchApp, type E2EApp } from '../../harness/launch'
 import {
   httpProbe,
+  lanCandidatesOf,
   networkStatus,
   openWebClient,
   privateIPv4Addresses,
@@ -141,6 +142,7 @@ describe('network access: guards, routes and settings', () => {
       enabled: false,
       port: 7766,
       lan: false,
+      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
       clients: []
@@ -482,6 +484,7 @@ describe('network access: guards, routes and settings', () => {
       enabled: true,
       port: Pb,
       lan: true,
+      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
       clients: [],

@@ -951,7 +951,13 @@
     "networkStarting": "正在启动…",
     "networkHeadlessNote": "无头模式下网络访问一直开着；要关掉，请停止 ShuviX 服务。",
     "networkHeadlessPortNote": "用 --port 或在服务文件里设置。",
-    "networkHeadlessLanNote": "由启动参数决定（--lan）；要改，请重启 ShuviX。"
+    "networkHeadlessLanNote": "由启动参数决定（--lan）；要改，请重启 ShuviX。",
+    "networkLanScope": "开放给",
+    "networkLanScopeAll": "所有网络",
+    "networkLanScopeMissing": "{{name}}（找不到）",
+    "networkLanScopeOnly": "只有 {{cidr}} 网段里的设备能连接。",
+    "networkHeadlessScopeNote": "由启动参数决定（--bind）；要改，请重启 ShuviX。",
+    "networkErrorNoInterface": "这台电脑上没有叫 “{{name}}” 的网卡，也没有这个地址。请换一个网络。"
   },
   "about": {
     "description": "您的 AI 助手",

@@ -325,7 +325,9 @@ describe('headless: a default instance (this computer only)', () => {
   it('HE-14 --help on the same HOME prints the usage and leaves the instance alone', async () => {
     const result = await runToExit({ home: app.home, args: ['--help'] })
     expect(result.code, result.output.slice(-1500)).toBe(0)
-    expect(result.stdout).toContain('Usage: shuvix --headless [--port <n>] [--lan]')
+    expect(result.stdout).toContain(
+      'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]'
+    )
     expect(result.stdout).not.toContain('ShuviX headless: already running')
     expect((await httpProbe({ port: P })).status).toBe(200)
     expect((await status()).listening).toBe(true)

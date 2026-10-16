@@ -4,7 +4,8 @@
  *
  * 本文件只放**纯**的那一半（不碰 Electron，单测直接引）：
  *  - 命令行解析：`--headless`（或环境变量 `SHUVIX_HEADLESS=1`）、`--port <n>`（别名 `--network-port`）、`--lan`（或
- *    `SHUVIX_LAN=1`：给局域网里的其他设备用；缺省只给这台电脑，监听 127.0.0.1）、`--help`；
+ *    `SHUVIX_LAN=1`：给局域网里的其他设备用；缺省只给这台电脑，监听 127.0.0.1）、`--bind <网卡名或本机地址>`（或
+ *    `SHUVIX_BIND`：只开放给那一个网络，隐含 `--lan`）、`--help`；
  *    同一条命令行上 Chromium 自己的开关（`--ozone-platform=headless`、`--disable-gpu`、`--no-sandbox` …）原样放过；
  *  - 写到 stdout 的几行（措辞固定：脚本与 systemd 日志按它们找）；
  *  - 进程级的模式开关（主入口在一切之前设一次，各窗口入口据此拒绝开窗）；
@@ -13,13 +14,22 @@
  * 地址文件与「第二个实例」的裁决在 `headlessInstance.ts`（要读写 userData）。
  */
 import { writeSync } from 'node:fs'
-import { isValidNetworkPort, MAX_NETWORK_PORT, MIN_NETWORK_PORT } from '../../shared/network'
+import {
+  NETWORK_ERROR_NO_INTERFACE,
+  isValidLanInterfaceSpec,
+  isValidNetworkPort,
+  MAX_NETWORK_PORT,
+  MIN_NETWORK_PORT
+} from '../../shared/network'
 
 /** 打开无头模式的环境变量（值为 `1` / `true` / `yes`，大小写不敏感） */
 export const HEADLESS_ENV = 'SHUVIX_HEADLESS'
 
 /** 无头运行时给局域网共享的环境变量（同上；缺省只监听 127.0.0.1） */
 export const HEADLESS_LAN_ENV = 'SHUVIX_LAN'
+
+/** 无头运行时只开放给一个网络的环境变量（值是网卡名或本机地址；隐含局域网共享） */
+export const HEADLESS_BIND_ENV = 'SHUVIX_BIND'
 
 /** stdout 每一行的前缀 */
 export const HEADLESS_LINE_PREFIX = 'ShuviX headless:'
@@ -35,6 +45,11 @@ export interface HeadlessArgs {
    * 无头运行不读设置里的局域网开关，只认启动参数
    */
   readonly lan: boolean
+  /**
+   * `--bind <网卡名或本机地址>` 或环境变量 `SHUVIX_BIND`：只开放给那一个网络（只在它的地址上监听、只接受那个网段
+   * 里的对端）。给了它 `lan` 也就是 true。没给 → 没有这一项
+   */
+  readonly bind?: string
   /** `--help` / `-h`：打印用法后退出 */
   readonly help: boolean
   /** 参数不对（端口不合法、缺值）：一句人读的原因；之后应以非零码退出 */
@@ -42,6 +57,18 @@ export interface HeadlessArgs {
 }
 
 const PORT_FLAGS = ['--port', '--network-port'] as const
+
+const BIND_FLAG = '--bind'
+
+function parseBindValue(raw: string | undefined): string {
+  if (raw === undefined || raw === '' || raw.startsWith('-')) {
+    return `${BIND_FLAG} needs a value (a network interface name such as eth1, or an address of this computer)`
+  }
+  if (!isValidLanInterfaceSpec(raw)) {
+    return `invalid ${BIND_FLAG} value "${raw}": use a network interface name such as eth1, or an address of this computer`
+  }
+  return raw
+}
 
 function envSaysYes(value: string | undefined): boolean {
   if (typeof value !== 'string') return false
@@ -71,6 +98,8 @@ export function parseHeadlessArgs(
   let lan = envSaysYes(env[HEADLESS_LAN_ENV])
   let help = false
   let port: number | undefined
+  let bind: string | undefined
+  let sawBindFlag = false
   let error: string | undefined
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -84,6 +113,20 @@ export function parseHeadlessArgs(
     }
     if (arg === '--lan') {
       lan = true
+      continue
+    }
+    if (arg === BIND_FLAG || arg.startsWith(`${BIND_FLAG}=`)) {
+      sawBindFlag = true
+      let raw: string | undefined
+      if (arg === BIND_FLAG) {
+        raw = argv[i + 1]
+        if (raw !== undefined && !raw.startsWith('-')) i++
+      } else {
+        raw = arg.slice(BIND_FLAG.length + 1)
+      }
+      const parsed = parseBindValue(raw)
+      if (parsed === raw) bind = parsed
+      else error ??= parsed
       continue
     }
     const flag = PORT_FLAGS.find((f) => arg === f || arg.startsWith(`${f}=`))
@@ -100,11 +143,19 @@ export function parseHeadlessArgs(
     if (typeof parsed === 'number') port = parsed
     else error ??= parsed
   }
+  // 环境变量只在命令行没给 --bind 时才算（命令行优先，环境变量里的错也就不算数）
+  const envBind = env[HEADLESS_BIND_ENV]?.trim()
+  if (!sawBindFlag && envBind) {
+    if (isValidLanInterfaceSpec(envBind)) bind = envBind
+    else
+      error ??= `invalid ${HEADLESS_BIND_ENV} value "${envBind}": use a network interface name or an address of this computer`
+  }
   return {
     headless,
-    lan,
+    lan: lan || bind !== undefined,
     help,
     ...(port === undefined ? {} : { port }),
+    ...(bind === undefined ? {} : { bind }),
     ...(error === undefined ? {} : { error })
   }
 }
@@ -112,7 +163,7 @@ export function parseHeadlessArgs(
 /** `--help` 打印的用法（只讲无头模式相关的开关） */
 export function headlessUsage(): string {
   return [
-    'Usage: shuvix --headless [--port <n>] [--lan]',
+    'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]',
     '',
     'Run ShuviX without any window and use it from a browser.',
     '',
@@ -123,14 +174,18 @@ export function headlessUsage(): string {
     '  --lan               let other devices on the local network connect',
     '                      (same as SHUVIX_LAN=1); default: only this computer',
     '                      (127.0.0.1), e.g. through ssh -L 7766:127.0.0.1:7766',
+    '  --bind <name>       share only on one network: a network interface',
+    '                      (e.g. eth1) or an address of this computer; listens',
+    '                      only there and accepts only that subnet (implies --lan;',
+    '                      same as SHUVIX_BIND=<name>)',
     '  --help, -h          print this help and exit',
     '',
     'On a Linux server without a display, also pass the Chromium switches',
     '  --ozone-platform=headless --disable-gpu',
     '(the shuvix-server helper and the systemd service from install-linux.sh do).',
     '',
-    'Network access has no password: with --lan, anyone on the same network who',
-    'opens the address can fully control this computer through ShuviX.'
+    'Network access has no password: with --lan or --bind, anyone on that network',
+    'who opens the address can fully control this computer through ShuviX.'
   ].join('\n')
 }
 
@@ -147,6 +202,10 @@ export function headlessReadyLine(urls: readonly string[]): string {
 /** 监听失败的原因（Node 的错误码）→ 码 + 一句解释 */
 function describeListenError(error: string): string {
   if (error === 'EADDRINUSE') return 'EADDRINUSE (the port is already in use)'
+  if (error === NETWORK_ERROR_NO_INTERFACE) {
+    const name = mode?.bind === undefined ? '' : ` ${mode.bind}`
+    return `${NETWORK_ERROR_NO_INTERFACE} (no network interface or local address${name} on this computer)`
+  }
   if (error === 'EACCES') return 'EACCES (permission denied)'
   return error
 }
@@ -181,12 +240,20 @@ export function headlessArgsErrorLine(error: string): string {
 
 // ─── 进程级的模式开关 ────────────────────────────────────
 
-let mode: { readonly port?: number; readonly lan: boolean } | null = null
+let mode: { readonly port?: number; readonly lan: boolean; readonly bind?: string } | null = null
 
-/** 主入口在一切之前调一次：这个进程无头运行（`port`：`--port` 给的端口；`lan`：`--lan`） */
-export function enableHeadlessMode(options: { port?: number; lan?: boolean } = {}): void {
-  const lan = options.lan === true
-  mode = options.port === undefined ? { lan } : { port: options.port, lan }
+/**
+ * 主入口在一切之前调一次：这个进程无头运行（`port`：`--port` 给的端口；`lan`：`--lan`；`bind`：`--bind`，隐含 `lan`）
+ */
+export function enableHeadlessMode(
+  options: { port?: number; lan?: boolean; bind?: string } = {}
+): void {
+  const lan = options.lan === true || options.bind !== undefined
+  mode = {
+    lan,
+    ...(options.port === undefined ? {} : { port: options.port }),
+    ...(options.bind === undefined ? {} : { bind: options.bind })
+  }
 }
 
 /** 这个进程是不是无头运行 */
@@ -202,6 +269,11 @@ export function headlessPortOverride(): number | undefined {
 /** 无头运行时给不给局域网（`--lan` / `SHUVIX_LAN`；不是无头 → false） */
 export function headlessLan(): boolean {
   return mode?.lan === true
+}
+
+/** 无头运行时只开放给哪个网络（`--bind` / `SHUVIX_BIND`；没给 / 不是无头 → undefined） */
+export function headlessBind(): string | undefined {
+  return mode?.bind
 }
 
 /** 单测用：回到桌面模式 */

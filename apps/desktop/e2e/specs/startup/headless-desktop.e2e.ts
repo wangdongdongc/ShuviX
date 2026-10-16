@@ -138,7 +138,9 @@ describe('headless and the desktop app share one data directory', () => {
   it('HD-4 --help on the same HOME prints the usage; no window appears', async () => {
     const result = await runToExit({ home, args: ['--help'] })
     expect(result.code, result.output.slice(-1500)).toBe(0)
-    expect(result.stdout).toContain('Usage: shuvix --headless [--port <n>] [--lan]')
+    expect(result.stdout).toContain(
+      'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]'
+    )
     await sleep(1500)
     expect(await hasMainWindow(d!)).toBe(false)
   }, 90_000)

@@ -1048,6 +1048,8 @@ declare global {
       setPort: (port: number) => Promise<import('../shared/network').NetworkStatus>
       /** 允许 / 不许局域网里的其他设备（关 → 只监听 127.0.0.1；开 → 0.0.0.0）；开着时随即换绑地址 */
       setLan: (lan: boolean) => Promise<import('../shared/network').NetworkStatus>
+      /** 局域网开关开着时只开放给哪个网络（网卡名或本机地址；null / 空串 = 所有网络）；开着时随即换绑地址 */
+      setLanInterface: (spec: string | null) => Promise<import('../shared/network').NetworkStatus>
     }
     /** 服务端文件系统（web 客户端的目录浏览器、「在文件管理器中打开」的路径） */
     fs: {

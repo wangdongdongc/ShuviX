@@ -452,7 +452,8 @@ export const API_TABLE = {
     status: invoke('network:status', 0),
     setEnabled: invoke('network:setEnabled', 1),
     setPort: invoke('network:setPort', 1),
-    setLan: invoke('network:setLan', 1)
+    setLan: invoke('network:setLan', 1),
+    setLanInterface: invoke('network:setLanInterface', 1)
   },
   /** 服务端文件系统（server mode phase D：web 客户端的目录浏览器、「在文件管理器中打开」的路径） */
   fs: {

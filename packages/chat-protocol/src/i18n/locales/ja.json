@@ -951,7 +951,13 @@
     "networkStarting": "起動中…",
     "networkHeadlessNote": "ヘッドレスモードではネットワークアクセスは常にオンです。オフにするには ShuviX のサービスを停止してください。",
     "networkHeadlessPortNote": "--port またはサービスファイルで設定します。",
-    "networkHeadlessLanNote": "起動時に決まります（--lan）。変更するには ShuviX を再起動してください。"
+    "networkHeadlessLanNote": "起動時に決まります（--lan）。変更するには ShuviX を再起動してください。",
+    "networkLanScope": "公開先",
+    "networkLanScopeAll": "すべてのネットワーク",
+    "networkLanScopeMissing": "{{name}}（見つかりません）",
+    "networkLanScopeOnly": "{{cidr}} のデバイスだけが接続できます。",
+    "networkHeadlessScopeNote": "起動時に決まります（--bind）。変更するには ShuviX を再起動してください。",
+    "networkErrorNoInterface": "このコンピューターには「{{name}}」というネットワークインターフェースもアドレスもありません。別のネットワークを選んでください。"
   },
   "about": {
     "description": "あなたのAIアシスタント",

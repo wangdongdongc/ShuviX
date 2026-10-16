@@ -8,6 +8,8 @@
  *         把参数交给服务、原样交回它 resolve 的值；setPort 的拒绝原样拒绝；窗口与网络两种上下文表现一样
  *   NH-11b network:setLan（局域网开关）：把参数（true / false）交给服务、原样交回它 resolve 的值（同一引用）；拒绝（如无头运行的
  *         `code: 'headless'`）原样拒绝；窗口与网络两种上下文表现一样
+ *   NH-11c network:setLanInterface（只开放给一个网络）：网卡名 / null 原样交给服务、原样交回它 resolve 的值（同一引用）；
+ *         拒绝（无头运行的 `code: 'headless'`）原样拒绝；不碰 setLan / setEnabled / setPort；窗口与网络两种上下文表现一样
  *
  * `widget:exportForDownload`（server mode phase D：web 客户端没有保存框，导出到 userData 下的临时目录再经 `/files/download`
  * 下载）。userData 是临时目录；exportWidget 与 widgetService.getById 是替身，WidgetExportError 是带 code 的同形类。
@@ -62,7 +64,8 @@ const state = vi.hoisted(() => {
     status: vi.fn(),
     setEnabled: vi.fn(),
     setPort: vi.fn(),
-    setLan: vi.fn()
+    setLan: vi.fn(),
+    setLanInterface: vi.fn()
   }
 })
 
@@ -87,7 +90,8 @@ vi.mock('../../frontend/network', () => ({
     status: state.status,
     setEnabled: state.setEnabled,
     setPort: state.setPort,
-    setLan: state.setLan
+    setLan: state.setLan,
+    setLanInterface: state.setLanInterface
   }
 }))
 
@@ -201,6 +205,58 @@ describe('NH-11b network:setLan', () => {
     await expect(settled).rejects.toBe(error)
     await expect(settled).rejects.toMatchObject({ code: 'headless' })
     expect(state.setLan).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('NH-11c network:setLanInterface', () => {
+  it.each([
+    ['window', winCtx],
+    ['network', netCtx]
+  ])('NH-11c %s 上下文：网卡名 / null 原样交给服务、原样交回 resolve 的值', async (_name, ctx) => {
+    const base = {
+      enabled: true,
+      port: 7766,
+      lan: true,
+      listening: true,
+      lanCandidates: [],
+      clients: []
+    }
+    const scoped = {
+      ...base,
+      lanInterface: 'eth1',
+      lanNetwork: { interface: 'eth1', address: '192.168.50.10', cidr: '192.168.50.10/24' },
+      bindAddress: '192.168.50.10',
+      addresses: ['http://192.168.50.10:7766']
+    }
+    state.setLanInterface.mockResolvedValueOnce(scoped)
+    await expect(call(ctx, 'network:setLanInterface', 'eth1')).resolves.toBe(scoped)
+    expect(state.setLanInterface).toHaveBeenCalledTimes(1)
+    expect(state.setLanInterface).toHaveBeenLastCalledWith('eth1')
+
+    const all = { ...base, bindAddress: '0.0.0.0', addresses: ['http://127.0.0.1:7766'] }
+    state.setLanInterface.mockResolvedValueOnce(all)
+    await expect(call(ctx, 'network:setLanInterface', null)).resolves.toBe(all)
+    expect(state.setLanInterface).toHaveBeenCalledTimes(2)
+    expect(state.setLanInterface.mock.calls[1]).toStrictEqual([null])
+
+    expect(state.setLan).not.toHaveBeenCalled()
+    expect(state.setEnabled).not.toHaveBeenCalled()
+    expect(state.setPort).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['window', winCtx],
+    ['network', netCtx]
+  ])('NH-11c %s 上下文：拒绝原样拒绝（无头运行的 code 留着）', async (_name, ctx) => {
+    const error = Object.assign(new Error('chosen when it starts headless'), { code: 'headless' })
+    state.setLanInterface.mockRejectedValue(error)
+    const settled = Promise.resolve(call(ctx, 'network:setLanInterface', 'eth0'))
+    await expect(settled).rejects.toBe(error)
+    await expect(settled).rejects.toMatchObject({ code: 'headless' })
+    expect(state.setLanInterface).toHaveBeenCalledWith('eth0')
+    expect(state.setLan).not.toHaveBeenCalled()
+    expect(state.setEnabled).not.toHaveBeenCalled()
+    expect(state.setPort).not.toHaveBeenCalled()
   })
 })
 

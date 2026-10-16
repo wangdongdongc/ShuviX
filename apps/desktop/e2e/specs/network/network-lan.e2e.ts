@@ -13,6 +13,13 @@
  * NL-6 网络访问关着时 setLan(true) → lan true、不监听、没有 bindAddress；再打开网络访问 → 直接绑 0.0.0.0
  * NL-7 设置页：网络访问关着 → 局域网开关关着、点不了；打开后可点，「只有这台电脑」那一行（端口代进去）、风险说明在屏；
  *      点局域网开关 → lan true、那一行消失、列出的地址 = status.addresses
+ * 只开放给一个网络（`network.lanInterface`，2026-10-15；状态里的 `lanCandidates` 在每条恰等用例里 = lanCandidatesOf()）：
+ * NL-8 局域网开着时 setLanInterface('shuvix-nope0')（这台电脑上没有的网卡）→ 不监听、error ENOINTERFACE、没有
+ *      bindAddress；127.0.0.1 与每个私有地址都 ECONNREFUSED；库里存着那个名字；设置页的错误行 = networkErrorNoInterface，
+ *      「开放给」里是 'shuvix-nope0 (not found)' 且选中；setLanInterface(null) → 回到 0.0.0.0，库里 ''
+ * NL-9 （没有私有 IPv4 网卡就跳过）在设置页的「开放给」里选第一个候选网卡 → 只绑它的地址：bindAddress = 那个地址、
+ *      lanNetwork.interface = 那个网卡、地址只列它；127.0.0.1 → ECONNREFUSED；那个地址（Host 带它）→ 200；别的网卡的
+ *      私有地址 → ECONNREFUSED；网段那句在屏
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
@@ -20,6 +27,7 @@ import { until, type CdpClient } from '../../harness/cdp'
 import { freePort, launchApp, type E2EApp } from '../../harness/launch'
 import {
   httpProbe,
+  lanCandidatesOf,
   networkStatus,
   privateIPv4Addresses,
   type NetworkStatus
@@ -39,6 +47,12 @@ const call = (expr: string): Promise<NetworkStatus> =>
 const lanRow = (): string | null =>
   sqliteJson<{ value: string }>(app.home, "select value from settings where key = 'network.lan'")[0]
     ?.value ?? null
+
+const lanInterfaceRow = (): string | null =>
+  sqliteJson<{ value: string }>(
+    app.home,
+    "select value from settings where key = 'network.lanInterface'"
+  )[0]?.value ?? null
 
 const lanUrls = (): string[] =>
   privateIPv4Addresses()
@@ -99,6 +113,7 @@ describe('network access: the LAN switch', () => {
       enabled: true,
       port: P,
       lan: false,
+      lanCandidates: lanCandidatesOf(),
       bindAddress: '127.0.0.1',
       listening: true,
       addresses: [`http://127.0.0.1:${P}`],
@@ -203,5 +218,90 @@ describe('network access: the LAN switch', () => {
     expect(shared.addresses).toStrictEqual(s.addresses)
     expect(shared.riskVisible).toBe(true)
     expect(lanRow()).toBe('true')
+  })
+
+  it('NL-8 an interface this computer does not have: not listening, ENOINTERFACE, shown in Settings', async () => {
+    await call('setEnabled(true)')
+    await call('setLan(true)')
+    const missing = await call(`setLanInterface('shuvix-nope0')`)
+    expect(missing).toMatchObject({
+      enabled: true,
+      lan: true,
+      lanInterface: 'shuvix-nope0',
+      listening: false,
+      error: 'ENOINTERFACE',
+      addresses: []
+    })
+    expect('bindAddress' in missing).toBe(false)
+    expect('lanNetwork' in missing).toBe(false)
+    expect(missing.lanCandidates).toStrictEqual(lanCandidatesOf())
+    expect(await httpProbe({ port: P })).toMatchObject({ error: 'ECONNREFUSED' })
+    await expectLanRefuses()
+    expect(lanInterfaceRow()).toBe('shuvix-nope0')
+
+    const shot = await shotWhen((s) => s.error !== null, 'Settings show the missing interface')
+    expect(shot.error).toBe(
+      en.settings.networkErrorNoInterface.replaceAll('{{name}}', 'shuvix-nope0')
+    )
+    const pane = networkSettingsPane(settings!)
+    const picker = await until(async () => {
+      const p = await pane.scopeOptions()
+      return p?.value === 'shuvix-nope0' ? p : null
+    }, 'the picker shows the missing interface')
+    expect(picker.options.at(-1)).toStrictEqual({
+      value: 'shuvix-nope0',
+      text: en.settings.networkLanScopeMissing.replaceAll('{{name}}', 'shuvix-nope0')
+    })
+    expect(picker.options.at(-1)?.text).toBe('shuvix-nope0 (not found)')
+    expect(await pane.scope()).toBe('shuvix-nope0')
+
+    const all = await call('setLanInterface(null)')
+    expect(all).toMatchObject({ lan: true, listening: true, bindAddress: '0.0.0.0' })
+    expect('lanInterface' in all).toBe(false)
+    expect('error' in all).toBe(false)
+    expect(lanInterfaceRow()).toBe('')
+    await expectLanServes()
+  })
+
+  it('NL-9 choosing an interface in Settings listens on its address only', async (ctx) => {
+    const candidates = lanCandidatesOf()
+    if (candidates.length === 0) ctx.skip()
+    const chosen = candidates[0]
+    const pane = networkSettingsPane(settings!)
+    await until(async () => (await pane.scope()) === 'all', 'Settings show all networks')
+    expect((await pane.scopeOptions())?.options.map((o) => o.value)).toStrictEqual([
+      '',
+      ...candidates.map((c) => c.interface)
+    ])
+
+    await pane.chooseScope(chosen.interface)
+    const scoped = await until(async () => {
+      const st = await status()
+      return st.listening && st.lanNetwork?.interface === chosen.interface ? st : null
+    }, `listening on ${chosen.interface} only`)
+    expect(scoped.bindAddress).toBe(chosen.address)
+    expect(scoped.lanInterface).toBe(chosen.interface)
+    expect(scoped.lanNetwork).toStrictEqual(chosen)
+    expect(scoped.addresses).toStrictEqual([`http://${chosen.address}:${P}`])
+    expect(lanInterfaceRow()).toBe(chosen.interface)
+
+    expect(await httpProbe({ port: P })).toMatchObject({ error: 'ECONNREFUSED' })
+    const page = await httpProbe({
+      port: P,
+      connectHost: chosen.address,
+      host: `${chosen.address}:${P}`
+    })
+    expect(page.status).toBe(200)
+    for (const ip of privateIPv4Addresses().filter((a) => a !== chosen.address)) {
+      expect(await httpProbe({ port: P, connectHost: ip, host: `${ip}:${P}` }), ip).toMatchObject({
+        error: 'ECONNREFUSED'
+      })
+    }
+
+    await until(async () => (await pane.scope()) === chosen.interface, 'Settings show the choice')
+    expect((await pane.scopeOptions())?.value).toBe(chosen.interface)
+    expect(await until(() => pane.scopeOnly(), 'the subnet line')).toBe(
+      en.settings.networkLanScopeOnly.replaceAll('{{cidr}}', chosen.cidr)
+    )
   })
 })

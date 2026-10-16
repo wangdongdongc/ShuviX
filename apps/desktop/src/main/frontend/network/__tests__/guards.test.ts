@@ -13,8 +13,13 @@
  *        无方括号的 IPv6；不完整的 IPv4；空主机；缺失
  *   NG-7 isAllowedOrigin：只有逐字的 `http://<Host>`；末尾斜杠、https、'null'、缺失、换了主机名、大小写不同、空 Host → 假
  *   NG-8 requestRejection：非私有对端 → 403（先查对端）；坏 Host → 421；端口 -1（停止途中）→ 421；都过 → undefined
+ *   NG-9 requestRejection 的第四个参数 acceptPeer（只开放给一个网络）：
+ *        a 回 false → 403「the network it is shared on」
+ *        b 顺序：公网对端 → 局域网那句 403、acceptPeer 不调；acceptPeer false + 坏 Host → 网段那句 403；true + 坏 Host →
+ *          421；true + 好 Host → undefined；不给 → 原来的行为
+ *        c acceptPeer 收到的是拆开之后的点分写法（`::ffff:192.168.50.7` 与 `::ffff:c0a8:3207` 都是 `192.168.50.7`）
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   displayPeerAddress,
   isAllowedHost,
@@ -228,5 +233,58 @@ describe('NG-8 requestRejection', () => {
     for (const host of ['127.0.0.1:7766', 'localhost:-1', '127.0.0.1:1', undefined]) {
       expect(requestRejection('127.0.0.1', host, -1), String(host)).toStrictEqual(MISDIRECTED)
     }
+  })
+})
+
+describe('NG-9 requestRejection 的 acceptPeer', () => {
+  const FORBIDDEN = {
+    status: 403,
+    text: 'ShuviX only accepts connections from the local network.'
+  }
+  const NOT_SHARED = {
+    status: 403,
+    text: 'ShuviX only accepts connections from the network it is shared on.'
+  }
+  const MISDIRECTED = {
+    status: 421,
+    text: 'Use an IP address or localhost with the ShuviX port.'
+  }
+
+  it('NG-9a acceptPeer 回 false → 403 网段那句', () => {
+    expect(requestRejection('192.168.1.5', '127.0.0.1:7766', 7766, () => false)).toStrictEqual(
+      NOT_SHARED
+    )
+  })
+
+  it('NG-9b 顺序：先私有地址、再网段、再 Host', () => {
+    const never = vi.fn(() => true)
+    expect(requestRejection('8.8.8.8', '127.0.0.1:7766', 7766, never)).toStrictEqual(FORBIDDEN)
+    expect(requestRejection(undefined, '127.0.0.1:7766', 7766, never)).toStrictEqual(FORBIDDEN)
+    expect(never).not.toHaveBeenCalled()
+
+    expect(requestRejection('192.168.1.5', 'evil:7766', 7766, () => false)).toStrictEqual(
+      NOT_SHARED
+    )
+    expect(requestRejection('192.168.1.5', 'evil:7766', 7766, () => true)).toStrictEqual(
+      MISDIRECTED
+    )
+    expect(requestRejection('192.168.1.5', '192.168.1.10:7766', 7766, () => true)).toBeUndefined()
+
+    // 不给：原来的行为
+    expect(requestRejection('192.168.1.5', '192.168.1.10:7766', 7766)).toBeUndefined()
+    expect(requestRejection('192.168.1.5', 'evil:7766', 7766)).toStrictEqual(MISDIRECTED)
+    expect(requestRejection('8.8.8.8', '127.0.0.1:7766', 7766)).toStrictEqual(FORBIDDEN)
+  })
+
+  it('NG-9c acceptPeer 收到拆开之后的点分写法', () => {
+    const acceptPeer = vi.fn((_address: string) => true)
+    for (const remote of ['::ffff:192.168.50.7', '::ffff:c0a8:3207', '192.168.50.7']) {
+      expect(requestRejection(remote, '127.0.0.1:7766', 7766, acceptPeer), remote).toBeUndefined()
+    }
+    expect(acceptPeer.mock.calls).toStrictEqual([
+      ['192.168.50.7'],
+      ['192.168.50.7'],
+      ['192.168.50.7']
+    ])
   })
 })

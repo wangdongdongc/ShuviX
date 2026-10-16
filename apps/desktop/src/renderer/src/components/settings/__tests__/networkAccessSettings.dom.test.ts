@@ -17,6 +17,21 @@
  *   NAS-11 networkLan / networkLocalOnly / networkHeadlessLanNote 在 en/zh/ja 都非空，networkLocalOnly 三种语言都含
  *          `{{port}}` 与 `ssh -L`；钉住 en 的 networkLan、networkHeadlessLanNote、networkEnable
  *
+ * 「开放给」（只开放给一个网络，2026-10-15；候选 eth0 10.0.0.5/24、eth1 192.168.50.10/24）：
+ *   NAS-12 桌面、局域网开、有候选、没选：一行 networkLanScope；`[data-network-lan-scope]` = all；选项依次是「所有网络」与
+ *          `<网卡> · <网段>`；选中 ''；没有「只有 … 网段」那句
+ *   NAS-13 局域网关：没有这一行，也没有 select
+ *   NAS-14 选 eth1 → setLanInterface('eth1') 恰一次；回来的状态 → scope eth1、选中 eth1、networkLanScopeOnly({cidr})；
+ *          再选「所有网络」→ setLanInterface(null)（不是 ''）
+ *   NAS-15 存的网卡 eth7 不在候选里且 ENOINTERFACE：最后一个选项 'eth7 (not found)'、选中它；错误行 = networkErrorNoInterface
+ *          （name eth7）；网络访问关着 → 没有错误行
+ *   NAS-16 存的是候选的网卡名 → 没有「找不到」；存的是候选的地址（192.168.50.10）→ 也没有，选中的是那块网卡 eth1
+ *   NAS-17 无头：没有 select，显示存的网卡名、带无头说明（networkHeadlessScopeNote），从不调 setLanInterface；没给 --bind →
+ *          显示「所有网络」与那句说明
+ *   NAS-18 setLanInterface 拒绝 → 重新拉一次 network.status，select 跟着拉回来的值
+ *   NAS-19 networkLanScope / …All / …Missing / …Only / networkHeadlessScopeNote / networkErrorNoInterface 在 en/zh/ja 都非空；
+ *          Missing 与 ErrorNoInterface 含 `{{name}}`、Only 含 `{{cidr}}`、HeadlessScopeNote 含 `--bind`；钉住 en 原文
+ *
  * 桌面 vitest 对渲染层只收 `*.test.ts`（本文件自己切 jsdom），不带 react 插件 —— 一律 createElement。
  * 设置基元用 app-shell 的真件（Toggle 画成 `<button disabled>`、InlineInput 是 `<input disabled>`；按相对路径接进来，
  * 见下面的 mock）；`@shuvix/chat-ui` 只换掉组件用到的 copyToClipboard / useAppEvent。`window.api.network` 四个方法都是 spy。i18n 走真 en/zh/ja 资源
@@ -59,6 +74,7 @@ function statusOf(over: Partial<NetworkStatus> = {}): NetworkStatus {
     enabled: true,
     port: P,
     lan: false,
+    lanCandidates: [],
     bindAddress: '127.0.0.1',
     listening: true,
     addresses: [`http://127.0.0.1:${P}`],
@@ -76,7 +92,8 @@ const network = {
   status: vi.fn<() => Promise<NetworkStatus>>(),
   setEnabled: vi.fn<(enabled: boolean) => Promise<NetworkStatus>>(),
   setPort: vi.fn<(port: number) => Promise<NetworkStatus>>(),
-  setLan: vi.fn<(lan: boolean) => Promise<NetworkStatus>>()
+  setLan: vi.fn<(lan: boolean) => Promise<NetworkStatus>>(),
+  setLanInterface: vi.fn<(spec: string | null) => Promise<NetworkStatus>>()
 }
 
 let container: HTMLDivElement
@@ -122,6 +139,52 @@ const lanButton = (): HTMLButtonElement =>
   container.querySelector<HTMLButtonElement>('[data-network-lan] button')!
 const portInput = (): HTMLInputElement =>
   container.querySelector<HTMLInputElement>('[data-network-port] input')!
+const scope = (): string | null =>
+  $('[data-network-lan-scope]')?.getAttribute('data-network-lan-scope') ?? null
+const scopeSelect = (): HTMLSelectElement | null =>
+  container.querySelector<HTMLSelectElement>('[data-network-lan-scope] select')
+const scopeOptions = (): Array<[string, string]> =>
+  [...(scopeSelect()?.options ?? [])].map((o) => [o.value, o.textContent ?? ''])
+/** 「开放给」那一行的标题（控件包在 `div.shrink-0` 里，行的第一个孩子是标题那一栏） */
+const scopeTitle = (): string | null =>
+  $('[data-network-lan-scope]')?.parentElement?.parentElement?.firstElementChild?.firstElementChild
+    ?.textContent ?? null
+
+async function chooseScope(value: string): Promise<void> {
+  const select = scopeSelect()!
+  await act(async () => {
+    select.value = value
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await flush()
+}
+
+const CANDS = [
+  { interface: 'eth0', address: '10.0.0.5', cidr: '10.0.0.5/24' },
+  { interface: 'eth1', address: '192.168.50.10', cidr: '192.168.50.10/24' }
+]
+
+/** 局域网开、所有网络、有候选 */
+function sharedOf(over: Partial<NetworkStatus> = {}): NetworkStatus {
+  return statusOf({
+    lan: true,
+    bindAddress: '0.0.0.0',
+    lanCandidates: CANDS,
+    addresses: [`http://10.0.0.5:${P}`, `http://192.168.50.10:${P}`, `http://127.0.0.1:${P}`],
+    ...over
+  })
+}
+
+/** 只开放给 eth1 */
+function onEth1Of(over: Partial<NetworkStatus> = {}): NetworkStatus {
+  return sharedOf({
+    lanInterface: 'eth1',
+    lanNetwork: CANDS[1],
+    bindAddress: '192.168.50.10',
+    addresses: [`http://192.168.50.10:${P}`],
+    ...over
+  })
+}
 
 beforeAll(async () => {
   await i18n.use(initReactI18next).init({
@@ -141,6 +204,7 @@ beforeEach(() => {
   network.setEnabled.mockReset()
   network.setPort.mockReset()
   network.setLan.mockReset()
+  network.setLanInterface.mockReset()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -328,5 +392,163 @@ describe('NAS-11 局域网开关的文案', () => {
       'Chosen at startup (--lan); restart ShuviX to change it.'
     )
     expect(raw('en', 'networkEnable')).toBe('Allow access from a browser')
+  })
+})
+
+describe('NAS-12..NAS-18 开放给', () => {
+  it('NAS-12 局域网开、没选：所有网络在前、候选依次列出；选中所有网络；没有网段那句', async () => {
+    await mount(sharedOf())
+    expect(scopeTitle()).toBe(tr('settings.networkLanScope'))
+    expect(scope()).toBe('all')
+    expect(scopeOptions()).toStrictEqual([
+      ['', 'All networks'],
+      ['eth0', 'eth0 · 10.0.0.5/24'],
+      ['eth1', 'eth1 · 192.168.50.10/24']
+    ])
+    expect(scopeSelect()!.value).toBe('')
+    expect($('[data-network-lan-only]')).toBeNull()
+  })
+
+  it('NAS-13 局域网关：没有这一行', async () => {
+    await mount(statusOf({ lanCandidates: CANDS }))
+    expect($('[data-network-lan-scope]')).toBeNull()
+    expect(scopeSelect()).toBeNull()
+  })
+
+  it('NAS-14 选 eth1 → setLanInterface(eth1)；网段那句；再选所有网络 → null', async () => {
+    await mount(sharedOf())
+    network.setLanInterface.mockResolvedValueOnce(onEth1Of())
+    await chooseScope('eth1')
+    expect(network.setLanInterface).toHaveBeenCalledTimes(1)
+    expect(network.setLanInterface).toHaveBeenCalledWith('eth1')
+    expect(scope()).toBe('eth1')
+    expect(scopeSelect()!.value).toBe('eth1')
+    expect(textOf('[data-network-lan-only]')).toBe(
+      tr('settings.networkLanScopeOnly', { cidr: '192.168.50.10/24' })
+    )
+
+    network.setLanInterface.mockResolvedValueOnce(sharedOf())
+    await chooseScope('')
+    expect(network.setLanInterface).toHaveBeenCalledTimes(2)
+    expect(network.setLanInterface.mock.calls[1]).toStrictEqual([null])
+    expect(scope()).toBe('all')
+    expect($('[data-network-lan-only]')).toBeNull()
+    expect(network.setLan).not.toHaveBeenCalled()
+    expect(network.setEnabled).not.toHaveBeenCalled()
+  })
+
+  it('NAS-15 存的网卡找不到：选项里标「找不到」并选中；错误行；关着时没有错误行', async () => {
+    const missing = sharedOf({
+      lanInterface: 'eth7',
+      error: 'ENOINTERFACE',
+      listening: false,
+      bindAddress: undefined,
+      addresses: []
+    })
+    await mount(missing)
+    const options = scopeOptions()
+    expect(options).toHaveLength(4)
+    expect(options.at(-1)).toStrictEqual(['eth7', 'eth7 (not found)'])
+    expect(scopeSelect()!.value).toBe('eth7')
+    expect(scope()).toBe('eth7')
+    expect(textOf('[data-network-error]')).toBe(
+      tr('settings.networkErrorNoInterface', { name: 'eth7' })
+    )
+    expect(textOf('[data-network-error]')).toContain('eth7')
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await mount({ ...missing, enabled: false })
+    expect($('[data-network-error]')).toBeNull()
+  })
+
+  it('NAS-16 存的是候选的网卡名或地址：没有「找不到」，选中那块网卡', async () => {
+    await mount(onEth1Of())
+    expect(scopeOptions().map(([, text]) => text)).not.toContain('eth1 (not found)')
+    expect(scopeOptions()).toHaveLength(3)
+    expect(scopeSelect()!.value).toBe('eth1')
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await mount(onEth1Of({ lanInterface: '192.168.50.10' }))
+    expect(scopeOptions()).toStrictEqual([
+      ['', 'All networks'],
+      ['eth0', 'eth0 · 10.0.0.5/24'],
+      ['eth1', 'eth1 · 192.168.50.10/24']
+    ])
+    expect(scopeOptions().some(([, text]) => text.includes('(not found)'))).toBe(false)
+    expect(scopeSelect()!.value).toBe('eth1')
+    expect(scope()).toBe('192.168.50.10')
+  })
+
+  it('NAS-17 无头：没有 select，只显示网卡名与说明；从不调 setLanInterface', async () => {
+    await mount(onEth1Of({ headless: true }))
+    expect(scopeSelect()).toBeNull()
+    expect(textOf('[data-network-lan-scope]')).toBe('eth1')
+    expect(textOf('[data-network-headless-scope]')).toBe(tr('settings.networkHeadlessScopeNote'))
+    expect($('[data-network-lan-only]')).toBeNull()
+    expect(network.setLanInterface).not.toHaveBeenCalled()
+
+    act(() => root.unmount())
+    root = createRoot(container)
+    await mount(sharedOf({ headless: true }))
+    expect(scopeSelect()).toBeNull()
+    expect(scope()).toBe('all')
+    expect(textOf('[data-network-lan-scope]')).toBe('All networks')
+    expect(textOf('[data-network-headless-scope]')).toBe(tr('settings.networkHeadlessScopeNote'))
+    expect(network.setLanInterface).not.toHaveBeenCalled()
+  })
+
+  it('NAS-18 setLanInterface 拒绝 → 重新拉 status，select 跟着拉回来的值', async () => {
+    await mount(sharedOf())
+    expect(network.status).toHaveBeenCalledTimes(1)
+    network.setLanInterface.mockRejectedValueOnce(new Error('boom'))
+    network.status.mockResolvedValue(
+      sharedOf({
+        lanInterface: 'eth0',
+        lanNetwork: CANDS[0],
+        bindAddress: '10.0.0.5',
+        addresses: [`http://10.0.0.5:${P}`]
+      })
+    )
+    await chooseScope('eth1')
+    expect(network.setLanInterface).toHaveBeenCalledWith('eth1')
+    expect(network.status).toHaveBeenCalledTimes(2)
+    expect(scopeSelect()!.value).toBe('eth0')
+    expect(scope()).toBe('eth0')
+  })
+})
+
+describe('NAS-19 开放给的文案', () => {
+  it('NAS-19 en/zh/ja 都非空、占位符齐全；钉住 en 原文', () => {
+    const keys = [
+      'networkLanScope',
+      'networkLanScopeAll',
+      'networkLanScopeMissing',
+      'networkLanScopeOnly',
+      'networkHeadlessScopeNote',
+      'networkErrorNoInterface'
+    ]
+    for (const lang of ['en', 'zh', 'ja'] as const) {
+      for (const key of keys) {
+        const text = raw(lang, key)
+        expect(typeof text, `${lang}.${key}`).toBe('string')
+        expect((text as string).trim().length, `${lang}.${key}`).toBeGreaterThan(0)
+      }
+      expect(raw(lang, 'networkLanScopeMissing'), lang).toContain('{{name}}')
+      expect(raw(lang, 'networkErrorNoInterface'), lang).toContain('{{name}}')
+      expect(raw(lang, 'networkLanScopeOnly'), lang).toContain('{{cidr}}')
+      expect(raw(lang, 'networkHeadlessScopeNote'), lang).toContain('--bind')
+    }
+    expect(raw('en', 'networkLanScope')).toBe('Share on')
+    expect(raw('en', 'networkLanScopeAll')).toBe('All networks')
+    expect(raw('en', 'networkLanScopeMissing')).toBe('{{name}} (not found)')
+    expect(raw('en', 'networkLanScopeOnly')).toBe('Only devices in {{cidr}} can connect.')
+    expect(raw('en', 'networkHeadlessScopeNote')).toBe(
+      'Chosen at startup (--bind); restart ShuviX to change it.'
+    )
+    expect(raw('en', 'networkErrorNoInterface')).toBe(
+      'This computer has no network interface or address "{{name}}". Choose another network.'
+    )
   })
 })

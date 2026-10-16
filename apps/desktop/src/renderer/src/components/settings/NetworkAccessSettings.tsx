@@ -7,6 +7,10 @@
  * **风险写在明面上**（不只收进 `?` 气泡，紧挨着局域网开关）：允许其他设备后局域网里的任何人都能通过 ShuviX 完全
  * 控制这台电脑，没有密码。状态跟着 `network.changed` 重拉。
  *
+ * 局域网开关开着时多一行「开放给」：所有网络，或这台电脑的某一块网卡（只在它的地址上监听、只接受那个网段 ——
+ * 一台连着几个局域网的电脑只开放给其中一个）。选的网卡不见了 → 选项里留着它（标「找不到」），状态里是
+ * `ENOINTERFACE`，一行原因。
+ *
  * 无头运行（`shuvix --headless`，状态带 `headless: true`）：网络访问开关显示为开、锁住，局域网开关显示启动时的选择
  * （`--lan`）、锁住，端口也锁住，各带一句说明 —— 主进程本来就拒绝关掉、换共享与换端口（关掉等于把唯一的入口关掉；
  * 后两件让这个浏览器当场断开），这些由命令行 / 服务文件定。
@@ -17,6 +21,7 @@ import { Check, Copy, Globe, Laptop, MonitorSmartphone, Network, TriangleAlert }
 import { copyToClipboard, useAppEvent } from '@shuvix/chat-ui'
 import {
   isValidNetworkPort,
+  NETWORK_ERROR_NO_INTERFACE,
   type NetworkClientInfo,
   type NetworkStatus
 } from '../../../../shared/network'
@@ -25,15 +30,20 @@ import {
   SettingsRow,
   SettingsBlock,
   Toggle,
-  InlineInput
+  InlineInput,
+  InlineSelect
 } from './SettingsPrimitives'
 
 /** 监听失败的原因（主进程给的 Node 错误码或消息）→ 人读的一句 */
 function errorText(
   t: (key: string, options?: Record<string, unknown>) => string,
-  error: string,
-  port: number
+  status: NetworkStatus,
+  error: string
 ): string {
+  const port = status.port
+  if (error === NETWORK_ERROR_NO_INTERFACE) {
+    return t('settings.networkErrorNoInterface', { name: status.lanInterface ?? '' })
+  }
   if (error === 'EADDRINUSE') return t('settings.networkErrorInUse', { port })
   if (error === 'EACCES') return t('settings.networkErrorAccess', { port })
   return t('settings.networkErrorOther', { port, error })
@@ -119,6 +129,18 @@ export function NetworkAccessSettings(): React.JSX.Element {
     }
   }
 
+  const chooseScope = async (spec: string): Promise<void> => {
+    if (!status || busy) return
+    setBusy(true)
+    try {
+      setStatus(await window.api.network.setLanInterface(spec === '' ? null : spec))
+    } catch {
+      load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const commitPort = async (): Promise<void> => {
     if (portDraft === null || !status) return
     const trimmed = portDraft.trim()
@@ -144,6 +166,13 @@ export function NetworkAccessSettings(): React.JSX.Element {
   const lan = status?.lan ?? false
   /** 无头运行：两个开关与端口都锁住（主进程拒绝关掉、换共享与换端口） */
   const headless = status?.headless === true
+  /** 开放给的网络（设置里存的网卡名 / 地址；空 = 所有网络） */
+  const scope = status?.lanInterface ?? ''
+  const candidates = status?.lanCandidates ?? []
+  /** 存的是某块网卡的地址 → 选中那块网卡（选项的值是网卡名） */
+  const scopeMatch = candidates.find((c) => c.interface === scope || c.address === scope)
+  const scopeMissing = scope !== '' && scopeMatch === undefined
+  const scopeValue = scopeMatch?.interface ?? scope
 
   return (
     <div className="px-5 pb-5" data-network-settings>
@@ -189,6 +218,47 @@ export function NetworkAccessSettings(): React.JSX.Element {
               {t('settings.networkHeadlessLanNote')}
             </div>
           </SettingsBlock>
+        )}
+        {lan && status && (
+          <SettingsRow
+            title={t('settings.networkLanScope')}
+            subtitle={
+              headless ? (
+                <span data-network-headless-scope>{t('settings.networkHeadlessScopeNote')}</span>
+              ) : status.lanNetwork ? (
+                <span data-network-lan-only>
+                  {t('settings.networkLanScopeOnly', { cidr: status.lanNetwork.cidr })}
+                </span>
+              ) : undefined
+            }
+            control={
+              <span data-network-lan-scope={scope === '' ? 'all' : scope}>
+                {headless ? (
+                  <span className="font-mono text-[11px] text-text-secondary">
+                    {scope === '' ? t('settings.networkLanScopeAll') : scope}
+                  </span>
+                ) : (
+                  <InlineSelect
+                    value={scopeValue}
+                    onChange={(v) => void chooseScope(v)}
+                    width={240}
+                  >
+                    <option value="">{t('settings.networkLanScopeAll')}</option>
+                    {candidates.map((c) => (
+                      <option key={c.interface} value={c.interface}>
+                        {`${c.interface} · ${c.cidr}`}
+                      </option>
+                    ))}
+                    {scopeMissing && (
+                      <option value={scope}>
+                        {t('settings.networkLanScopeMissing', { name: scope })}
+                      </option>
+                    )}
+                  </InlineSelect>
+                )}
+              </span>
+            }
+          />
         )}
         <SettingsBlock>
           <div
@@ -244,7 +314,7 @@ export function NetworkAccessSettings(): React.JSX.Element {
           <SettingsBlock>
             <div data-network-error className="flex items-start gap-2 text-[11px] text-error">
               <TriangleAlert size={12} className="mt-[2px] shrink-0" />
-              <span>{errorText(t, status.error, status.port)}</span>
+              <span>{errorText(t, status, status.error)}</span>
             </div>
           </SettingsBlock>
         )}

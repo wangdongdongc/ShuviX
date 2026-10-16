@@ -247,6 +247,11 @@ export interface HeadlessLaunchOptions extends LaunchOptions {
   viaEnv?: boolean
   /** 给局域网共享（`--lan`，监听 0.0.0.0）；缺省只给这台电脑（127.0.0.1） */
   lan?: boolean
+  /**
+   * 只开放给一个网络（`--bind <网卡名或本机地址>`，隐含 --lan）：实例只在那个地址上监听，127.0.0.1 连不上 —— 所以就绪
+   * 之后 harness 自己（关自动审查那一下）连的是就绪那一行里的地址，而不是 127.0.0.1
+   */
+  bind?: string
 }
 
 export interface MarkdownLaunchOptions extends LaunchOptions {
@@ -431,7 +436,8 @@ export async function launchApp(
     ? [
         ...(headlessOpts.viaEnv ? [] : ['--headless']),
         ...(fromSetting ? [] : ['--port', String(networkPort)]),
-        ...(headlessOpts.lan ? ['--lan'] : [])
+        ...(headlessOpts.lan ? ['--lan'] : []),
+        ...(headlessOpts.bind !== undefined ? ['--bind', headlessOpts.bind] : [])
       ]
     : []
   const extraEnv = headlessOpts?.viaEnv ? { ...opts.env, SHUVIX_HEADLESS: '1' } : opts.env
@@ -601,8 +607,13 @@ export async function launchApp(
     }
     if (headless) {
       installTargetForensics(port)
-      // 没有窗口：自动审查的停用开关经网络访问写（与窗口里那条是同一条 IPC 通道）
-      const ws = await connectWs(networkPort)
+      // 没有窗口：自动审查的停用开关经网络访问写（与窗口里那条是同一条 IPC 通道）。只开放给一个网络时只有就绪那一行
+      // 里的地址连得上（127.0.0.1 上没有在监听）
+      const readyHost =
+        headlessOpts?.bind !== undefined
+          ? new URL(readyLine.slice(HEADLESS_READY_PREFIX.length).trim().split(/\s+/)[0]).hostname
+          : undefined
+      const ws = await connectWs(networkPort, readyHost === undefined ? {} : { host: readyHost })
       try {
         const result = await ws.invoke<{ success: boolean; reason?: string; message?: string }>(
           'mdMeta:setEnabled',

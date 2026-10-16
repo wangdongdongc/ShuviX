@@ -9927,6 +9927,16 @@ export interface NetworkSettingsPane {
    * focusout —— 窗口没有 OS 焦点时 blur() 可能什么都不派发，而 React 的 onBlur 听的是 focusout）
    */
   commitPort(text: string): Promise<void>
+  /** 「开放给」那一行（局域网开关开着时才有）的 `data-network-lan-scope`：`all` 或存着的网卡名 / 地址；没有这一行 → null */
+  scope(): Promise<string | null>
+  /** 「开放给」的选项（`{value, text}`，按顺序）与此刻选中的值；没有 select（无头运行 / 没有这一行）→ null */
+  scopeOptions(): Promise<{ value: string; options: Array<{ value: string; text: string }> } | null>
+  /** 「只有 … 网段里的设备能连接」那句（`data-network-lan-only`）；没有 → null */
+  scopeOnly(): Promise<string | null>
+  /** 无头运行时「开放给」下的说明（`data-network-headless-scope`）；没有 → null */
+  headlessScopeNote(): Promise<string | null>
+  /** 在「开放给」里选 `value`（`''` = 所有网络）：native value + 冒泡的 change（React 的 select 听 change） */
+  chooseScope(value: string): Promise<void>
 }
 
 export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
@@ -9988,20 +9998,69 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
       if (!ok) throw new Error('network LAN toggle not found')
     },
     commitPort: async (text) => {
-      const typed = await settings.eval<boolean>(`(() => {
-        const input = document.querySelector('[data-network-port] input')
-        if (!input || input.disabled) return false
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
-        setter.call(input, ${JSON.stringify(text)})
-        input.dispatchEvent(new Event('input', { bubbles: true }))
-        return true
-      })()`)
-      if (!typed) throw new Error('network port input not found (or disabled)')
+      // 输入框在状态拉到之前、以及上一次改动（开关 / 端口）还在等主进程回话时是禁用的 —— 机器忙时这一段
+      // 会拖长，等它可用再输入（最多 10 秒），别把「还没好」当成「找不到」
+      const deadline = Date.now() + 10_000
+      let typed = false
+      while (!typed) {
+        typed = await settings.eval<boolean>(`(() => {
+          const input = document.querySelector('[data-network-port] input')
+          if (!input || input.disabled) return false
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+          setter.call(input, ${JSON.stringify(text)})
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          return true
+        })()`)
+        if (typed) break
+        if (Date.now() > deadline) throw new Error('network port input not found (or disabled)')
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
       // 分两次 eval：草稿的 setState 先落定、重渲染完，onBlur 读到的才是新草稿
       await settings.eval(`(() => {
         const input = document.querySelector('[data-network-port] input')
         input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
       })()`)
+    },
+    scope: () =>
+      settings.eval<string | null>(
+        `document.querySelector('[data-network-lan-scope]')?.getAttribute('data-network-lan-scope') ?? null`
+      ),
+    scopeOptions: () =>
+      settings.eval<{
+        value: string
+        options: Array<{ value: string; text: string }>
+      } | null>(`(() => {
+        const select = document.querySelector('[data-network-lan-scope] select')
+        if (!select) return null
+        return {
+          value: select.value,
+          options: [...select.options].map((o) => ({ value: o.value, text: (o.textContent ?? '').trim() }))
+        }
+      })()`),
+    scopeOnly: () =>
+      settings.eval<string | null>(
+        `document.querySelector('[data-network-lan-only]')?.textContent?.trim() ?? null`
+      ),
+    headlessScopeNote: () =>
+      settings.eval<string | null>(
+        `document.querySelector('[data-network-headless-scope]')?.textContent?.trim() ?? null`
+      ),
+    chooseScope: async (value) => {
+      const result = await settings.eval<{ ok: boolean; values: string[] }>(`(() => {
+        const select = document.querySelector('[data-network-lan-scope] select')
+        if (!select) return { ok: false, values: [] }
+        const values = [...select.options].map((o) => o.value)
+        if (!values.includes(${JSON.stringify(value)})) return { ok: false, values }
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+        setter.call(select, ${JSON.stringify(value)})
+        select.dispatchEvent(new Event('change', { bubbles: true }))
+        return { ok: true, values }
+      })()`)
+      if (!result.ok) {
+        throw new Error(
+          `network scope option ${JSON.stringify(value)} not on screen (got: ${result.values.map((v) => JSON.stringify(v)).join(', ') || 'no select'})`
+        )
+      }
     }
   }
 }

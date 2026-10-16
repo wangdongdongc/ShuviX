@@ -9,7 +9,8 @@
 # headless in the foreground; --service adds a systemd service that runs it headless as you (as root too:
 # then ShuviX runs with --no-sandbox, since Electron does not start as root otherwise). By default
 # ShuviX only accepts connections from the machine itself (127.0.0.1; reach it through an SSH tunnel);
-# --lan lets every device on the local network connect.
+# --lan lets every device on the local network connect, --bind <interface or address> only the devices
+# on that one network (a machine on several networks shares on one of them).
 #
 # Rerunning upgrades in place. Your data (~/.config/shuvix, ~/.shuvix) is never touched, not even by
 # --uninstall. The only prompt is sudo's password.
@@ -31,6 +32,9 @@ Usage: install-linux.sh [options]
   --port <n>        port for the service (default 7766)
   --lan             let other devices on the local network connect (no password!); default: only
                     this machine (127.0.0.1), reachable from elsewhere through an SSH tunnel
+  --bind <name>     share on one network only: a network interface (e.g. eth1) or an address of
+                    this machine — ShuviX listens only there and accepts only that subnet (no
+                    password!); implies --lan
   --deb <file>      install a local .deb instead of downloading one (CI / offline)
   --uninstall       remove the service, the shuvix-server helper and ShuviX itself (keeps your data)
   --dry-run         print what would be done without changing anything
@@ -38,8 +42,8 @@ Usage: install-linux.sh [options]
 
 The service runs ShuviX as the user who runs this script: a normal user with sudo rights, or root on a
 machine of its own (an isolated VM) — as root ShuviX runs with --no-sandbox, so Chromium's process
-sandbox is off. Network access has no password — with --lan, anyone on the same network who opens the
-address can fully control this computer through ShuviX.
+sandbox is off. Network access has no password — with --lan (or --bind), anyone on that network who
+opens the address can fully control this computer through ShuviX.
 EOF
 }
 
@@ -55,6 +59,8 @@ READY_TIMEOUT_S=120
 VERSION_TAG=""
 SERVICE=0
 LAN=0
+BIND=""
+BIND_GIVEN=0
 PORT=7766
 DEB_FILE=""
 UNINSTALL=0
@@ -141,6 +147,8 @@ parse_args() {
       --deb=*) DEB_FILE="${1#*=}"; shift ;;
       --service) SERVICE=1; shift ;;
       --lan) LAN=1; shift ;;
+      --bind) [ $# -ge 2 ] || usage_error "--bind needs a network interface or an address"; BIND="$2"; BIND_GIVEN=1; shift 2 ;;
+      --bind=*) BIND="${1#*=}"; BIND_GIVEN=1; shift ;;
       --uninstall) UNINSTALL=1; shift ;;
       --dry-run) DRY_RUN=1; shift ;;
       -h | --help) usage; exit 0 ;;
@@ -155,6 +163,17 @@ parse_args() {
   fi
   if [ -n "$DEB_FILE" ] && [ -n "$VERSION_TAG" ]; then
     usage_error "use either --deb or --version, not both"
+  fi
+  if [ "$BIND_GIVEN" -eq 1 ]; then
+    # it goes into the service file and the helper's command line: interface names and IP literals only
+    # (letters spelled out rather than a range, so the check does not depend on the locale; no "%" —
+    # systemd reads it as a specifier; no leading "-" — it would read as an option)
+    case "$BIND" in
+      '' | -* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-]*)
+        usage_error "--bind takes a network interface name or an address (got \"$BIND\")" ;;
+    esac
+    [ "${#BIND}" -le 64 ] || usage_error "--bind takes a network interface name or an address (got \"$BIND\")"
+    LAN=1
   fi
 }
 
@@ -338,9 +357,11 @@ exec \"${target}\" --no-sandbox \"\$@\""
   esac
 }
 
-# The ShuviX flags for a headless run (the service and the helper): --lan only when asked for.
+# The ShuviX flags for a headless run (the service and the helper): --bind / --lan only when asked for.
 headless_flags() {
-  if [ "$LAN" -eq 1 ]; then
+  if [ -n "$BIND" ]; then
+    printf '%s' "--headless --bind ${BIND}"
+  elif [ "$LAN" -eq 1 ]; then
     printf '%s' "--headless --lan"
   else
     printf '%s' "--headless"
@@ -352,7 +373,7 @@ install_helper() {
     # the deb's helper is shared by every user of the machine: whoever runs it as root needs --no-sandbox
     write_file "$HELPER" 0755 root "#!/bin/sh
 ${MARKER}
-# Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>, --lan.
+# Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>, --lan, --bind <name>.
 # Electron does not start as root unless Chromium's sandbox is off.
 if [ \"\$(id -u)\" = 0 ]; then set -- --no-sandbox \"\$@\"; fi
 exec \"${SHUVIX_BIN}\" $(headless_flags) --ozone-platform=headless --disable-gpu \"\$@\""
@@ -360,7 +381,7 @@ exec \"${SHUVIX_BIN}\" $(headless_flags) --ozone-platform=headless --disable-gpu
     # the AppImage launcher already passes --no-sandbox
     write_file "$HELPER" 0755 user "#!/bin/sh
 ${MARKER}
-# Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>, --lan.
+# Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>, --lan, --bind <name>.
 exec \"${SHUVIX_BIN}\" $(headless_flags) --ozone-platform=headless --disable-gpu \"\$@\""
   fi
 }
@@ -431,9 +452,13 @@ wait_for_service() {
   die "the ${SERVICE_NAME} service did not start (see: ${SUDO_HINT}journalctl -u ${SERVICE_NAME})"
 }
 
-# How to reach ShuviX: from other devices (--lan), or through an SSH tunnel (the default).
+# How to reach ShuviX: from one network (--bind), from other devices (--lan), or through an SSH tunnel.
 access_hint() {
-  if [ "$LAN" -eq 1 ]; then
+  if [ -n "$BIND" ]; then
+    firewall_hint
+    say "ShuviX only accepts connections from the network of ${BIND} (it listens on that address only)."
+    say "Network access has no password: anyone on that network who opens the address can fully control this computer through ShuviX."
+  elif [ "$LAN" -eq 1 ]; then
     firewall_hint
     say "Network access has no password: anyone on the same network who opens the address can fully control this computer through ShuviX."
   else

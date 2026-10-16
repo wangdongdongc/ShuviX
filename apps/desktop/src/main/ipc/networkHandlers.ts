@@ -23,4 +23,11 @@ export function registerNetworkHandlers(): void {
 
   /** 允许 / 不许局域网里的其他设备（关 → 只监听 127.0.0.1；无头运行：换成另一种 → 拒绝） */
   defineHandler('network:setLan', (_ctx, lan: boolean) => networkService.setLan(lan))
+
+  /**
+   * 局域网开关开着时只开放给哪个网络（网卡名或本机地址；`null` / 空串 = 所有网络；无头运行：换成别的 → 拒绝）
+   */
+  defineHandler('network:setLanInterface', (_ctx, spec: string | null) =>
+    networkService.setLanInterface(spec)
+  )
 }
