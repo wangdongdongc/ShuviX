@@ -224,6 +224,16 @@ export const CHROME_GROUP_COLORS: readonly ChromeGroupColor[] = [
 ]
 
 /**
+ * 会话 id → 稳定的颜色（同一条会话的颜色不随重建变）。用户 Chrome 里那条会话的标签组颜色、
+ * 应用内浏览器标签上「这页正被哪个会话使用」的圆点，用的都是它 —— 同一条会话在两边是同一个颜色。
+ */
+export function sessionColorFor(sessionId: string): ChromeGroupColor {
+  let h = 0
+  for (let i = 0; i < sessionId.length; i++) h = (h * 31 + sessionId.charCodeAt(i)) >>> 0
+  return CHROME_GROUP_COLORS[h % CHROME_GROUP_COLORS.length]
+}
+
+/**
  * 桌面向扩展要的浏览器操作。方法名 → 参数 / 结果。
  * 扩展只是执行者：选哪个标签页、要不要过门，全在桌面。
  */

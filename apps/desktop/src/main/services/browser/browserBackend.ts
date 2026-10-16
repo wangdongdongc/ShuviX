@@ -2,9 +2,10 @@
  * DesktopBrowserBackend —— 统一 browser 工具的桌面端实现。
  *
  * 操作内置浏览器的多 tab WebContentsView（隔离 partition，非用户系统浏览器）：
- *   - tab 管理走 browserViewService（真源）；每个带 tabId 的操作执行前隐式 activateTab
- *     （浏览器窗口开着时卡片墙会把激活卡片滚进视野）。**任何操作都不会把浏览器窗口弄出来** ——
- *     tab 不上墙时住在停放窗口里照常可操作，agent 不能打扰用户在主窗口里打字和操作。
+ *   - tab 管理走 browserViewService（真源）。**agent 的操作从不选中 tab**：open_tab 开在后台，操作哪页都
+ *     不切过去（选中的那页是用户正在看的，只由用户改 —— 2026-10-16 用户裁定），只记下「这页此刻被哪个
+ *     会话在用」（noteAgentUse：标签上的圆点、提示条）。**任何操作都不会把浏览器窗口弄出来** ——
+ *     tab 不在窗口里显示时住在停放窗口里照常可操作，agent 不能打扰用户在主窗口里打字和操作。
  *     browser_event open/close 仍然广播，给 web 平台的会话镜像与旧 CLI 语义用。
  *   - CDP 交互/快照/调试委托共享 browserCdpOps（与扩展同一份配方），per-tab 会话走
  *     browserCdpManager。
@@ -36,11 +37,11 @@ import { createLogger } from '../../logger'
 import { browserCdpManager } from './browserCdpService'
 import { fileChooserNote, withAgentGuards } from './agentGuards'
 import {
-  activateTab,
   closeTab as closeTabView,
   createTab,
   getTabView,
-  listTabs as listTabsService
+  listTabs as listTabsService,
+  noteAgentUse
 } from './browserViewService'
 
 const log = createLogger('Browser:Backend')
@@ -85,10 +86,13 @@ function resolveTabId(tabId: string): string {
   return uuid
 }
 
-/** 解析 + 隐式激活（面板跟随 agent 操作）+ 返回 view */
-function resolveAndActivate(tabId: string): { uuid: string; view: WebContentsView } {
+/** 解析 + 记下这页正被哪个会话使用（不选中它）+ 返回 view */
+function resolveForAgent(
+  tabId: string,
+  sessionId: string
+): { uuid: string; view: WebContentsView } {
   const uuid = resolveTabId(tabId)
-  activateTab(uuid)
+  noteAgentUse(uuid, sessionId)
   return { uuid, view: getTabView(uuid)! }
 }
 
@@ -98,7 +102,7 @@ class DesktopBrowserBackend implements BrowserBackend {
   constructor(private sessionId: string) {}
 
   private async session(tabId: string): Promise<{ session: TabCdpSession; uuid: string }> {
-    const { uuid } = resolveAndActivate(tabId)
+    const { uuid } = resolveForAgent(tabId, this.sessionId)
     const session = await browserCdpManager.session(uuid)
     // 对话框自动处理（幂等）：alert/confirm 弹出不会卡死自动化链
     await session.enableDialogHandling().catch(() => {})
@@ -128,9 +132,15 @@ class DesktopBrowserBackend implements BrowserBackend {
 
   // ── tab 管理 ──
 
+  /**
+   * (active) = 用户此刻在浏览器窗口里选中的那页（与 Chrome 那条路同义：浏览器当前的标签页）；
+   * (opened by you) = 本会话的 agent 开的（与 Chrome 那条路同一个说法）。
+   */
   async listTabs(): Promise<BrowserOpOutput> {
     const lines = listTabsService().map((t) => {
-      const tag = `${t.active ? ' (active)' : ''}${t.crashed ? ' (crashed)' : ''}`
+      const tag =
+        `${t.active ? ' (active)' : ''}${t.crashed ? ' (crashed)' : ''}` +
+        `${t.openerSessionId === this.sessionId ? ' (opened by you)' : ''}`
       return `[${shortIdFor(t.id)}]${tag} ${t.title || '(untitled)'} — ${t.url}`
     })
     return { text: lines.join('\n') || '(no open tabs — use open_tab to open one)' }
@@ -146,7 +156,8 @@ class DesktopBrowserBackend implements BrowserBackend {
     // 先建一个空白 tab、接上 CDP（attach 时装好文件框 / 打印防护），**再**导航过去：页面若一加载就
     // 调 window.print()，防护得已经在第一个文档之前装好（新文档注入脚本只作用于之后的文档）。
     // 显式加载 about:blank：从没导航过的 webContents 还没有渲染进程，attach 之后的 CDP 命令会一直等下去
-    const uuid = createTab('about:blank', { activate: true })
+    // 开在后台：用户正看着的那页不换（窗口里一个 tab 都没有时它自然成为选中的那页）
+    const uuid = createTab('about:blank', { openerSessionId: this.sessionId })
     const short = shortIdFor(uuid)
     // 不把浏览器窗口弄出来：agent 的动作不能打扰用户在主窗口里打字和操作（showInactive 在
     // macOS 上会把窗口叠到最前、盖住主窗口）。新 tab 在停放窗口里照常可操作；用户从顶栏按钮
@@ -234,7 +245,7 @@ class DesktopBrowserBackend implements BrowserBackend {
     fullPage?: boolean
     uid?: string
   }): Promise<BrowserOpOutput> {
-    const { view, uuid } = resolveAndActivate(p.tabId)
+    const { view, uuid } = resolveForAgent(p.tabId, this.sessionId)
     const wc = view.webContents
     // 崩了的页面什么也不画：capturePage 只会回一张空图
     if (wc.isCrashed()) throw new Error(PAGE_CRASHED_MESSAGE)
@@ -331,7 +342,7 @@ class DesktopBrowserBackend implements BrowserBackend {
     landscape?: boolean
     scale?: number
   }): Promise<BrowserOpOutput> {
-    const { view } = resolveAndActivate(p.tabId)
+    const { view } = resolveForAgent(p.tabId, this.sessionId)
     if (view.webContents.isCrashed()) throw new Error(PAGE_CRASHED_MESSAGE)
 
     const absolutePath = isAbsolute(p.outputPath)

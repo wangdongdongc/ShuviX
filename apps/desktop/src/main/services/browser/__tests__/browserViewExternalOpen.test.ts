@@ -127,6 +127,8 @@ vi.mock('electron', () => ({
       isCrashed() {
         return this.crashed
       },
+      isLoading: () => false,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
       getZoomFactor: () => 1,
       setZoomFactor() {},
       close() {}
@@ -745,7 +747,7 @@ describe('浏览器窗口不在前台：外部协议与下载一律不打扰（S
   )
 
   it.each(NOT_IN_FRONT)(
-    'ST-U9b 窗口 %s：https 照样新开一个激活的 tab（住在停放窗口），不交给系统、不弹框',
+    'ST-U9b 窗口 %s：https 照样新开一个 tab（住在停放窗口，开在后台 —— 没人正看着），不交给系统、不弹框',
     async (how) => {
       const svc = await load()
       const opener = tabAt(svc)
@@ -755,13 +757,14 @@ describe('浏览器窗口不在前台：外部协议与下载一律不打扰（S
       expect(state.views).toHaveLength(2)
       const view = state.views[1]
       expect(view.webContents.loaded).toEqual(['https://example.com/next'])
-      expect(svc.getActiveView()).toBe(view)
+      // 选中的还是开它的那页：没人正看着浏览器窗口时弹出页开在后台（选中只由用户改）
+      expect(svc.getActiveView()).toBe(opener)
       expect(
         svc
           .listTabs()
           .filter((t) => t.active)
           .map((t) => t.url)
-      ).toEqual(['https://example.com/next'])
+      ).toEqual([OPENER])
       await flush()
       expect(state.openExternal).not.toHaveBeenCalled()
       expect(state.showMessageBox).not.toHaveBeenCalled()

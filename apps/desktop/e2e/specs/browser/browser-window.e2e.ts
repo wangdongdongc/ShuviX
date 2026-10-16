@@ -1,21 +1,21 @@
 /**
  * 内置浏览器的独立窗口 —— 窗口本身的语义（假提供商脚本化；夹具网站记下每一个请求）。
  *
- * 浏览器从主窗口右侧面板搬进了自己的窗口（`#browser-window`：BrowserWindowShell → BrowserWall
- * 卡片墙）。**agent 的浏览器动作绝不打扰主窗口里的用户**：窗口只由用户打开（顶栏按钮），tab 在一个
+ * 浏览器从主窗口右侧面板搬进了自己的窗口（`#browser-window`：BrowserWindowShell = 标签条 + 工具条 +
+ * 页面区；页面区缺省是单页视图，平铺墙 BrowserWall 是第二种视图 —— 本 spec 测的是墙，E1 开窗后就切过去）。**agent 的浏览器动作绝不打扰主窗口里的用户**：窗口只由用户打开（顶栏按钮），tab 在一个
  * 从不显示的停放窗口里出生、不在墙上时也住在那里（1280×800、一直可见），agent 照常操作它们；关窗
  * 只隐藏。本 spec 按顺序走一个实例：
  *
  *   ST-E0 新实例、窗口从没开过：agent 开两个 tab（后开的叠在先开的上面），在被盖住的那个上快照 →
  *         打字 → 点（服务器收到提交）→ 读 → 量视口（1280×800）→ 截图（1.6 比例的 PNG），另一个上
  *         照样点；全程浏览器窗口不出现（target 都没有）、右侧面板不开，顶栏按钮上的徽标数着 tab；
- *   E1    顶栏按钮把窗口建出来并显示，墙是空的；
+ *   E1    顶栏按钮把窗口建出来并显示，缺省是单页视图；切到平铺墙，墙是空的；
  *   E2    关窗 = 隐藏：`window.close()` 走真的 close → hide 拦截；tab 不动、target 还在；重开是同一张
  *         墙，页面一次都没重载（夹具的请求计数不变，外壳页面上打的标记还在）；
  *   E3    窗口隐藏时 agent 工具照常：快照 → 填 → 点（服务器收到提交）→ 读 → 截图（PNG），全程
  *         窗口仍隐藏；
- *   E4    隐藏时 open_tab：窗口不亮、徽标 +1、右侧面板不开；用户点顶栏按钮后新卡片是唯一激活的那张、
- *         整格露出，页面没有因为上墙而重载；
+ *   E4    隐藏时 open_tab：窗口不亮、徽标 +1、右侧面板不开、选中的还是原来那页（agent 开的 tab 在后台）；
+ *         用户点顶栏按钮后新卡片在墙上、整格露出，选中的仍是原来那张，页面没有因为上墙而重载；
  *   E5    网格：一张铺满墙、两张并排各占一半、激活标记恰好一个；新 tab 落在视口之外时被滚进来；
  *   ST-E6 墙上两列（页面缩放 < 1）的 tab 被对话框覆盖层请下墙：停放时**保留卡片的页面缩放**（视口 =
  *         1280 / 缩放），跨站导航 → 快照 → 填 → 点 → 截图照常；覆盖层撤掉后回到卡片视口。
@@ -356,7 +356,7 @@ describe('agent 在后台用浏览器，窗口从不出现（ST-E0）', () => {
 })
 
 describe('窗口的生命周期（E1 / E2）', () => {
-  it('E1 ST-E0 之后仍然没有窗口、没有 tab、没有徽标；顶栏按钮把窗口建出来并显示，墙是空的', async () => {
+  it('E1 ST-E0 之后仍然没有窗口、没有 tab、没有徽标；顶栏按钮把窗口建出来并显示（单页视图），切到平铺墙，墙是空的', async () => {
     expect(await app.browserWindow()).toBeNull()
     expect(await isWindowOpen()).toBe(false)
     expect(await listTabs()).toEqual([])
@@ -367,7 +367,11 @@ describe('窗口的生命周期（E1 / E2）', () => {
     wall = browserWallPane(bw)
     await until(() => isWindowOpen(), 'browser window shown by the header button')
     await until(() => wall.mounted(), 'browser window shell ([data-browser-window]) mounted')
+    expect(await wall.viewMode()).toBe('single')
+    // 往下都是墙的语义：切到平铺视图（记进设置，关窗重开还是它）
+    await wall.useView('wall')
     expect(await wall.cardIds()).toEqual([])
+    expect(await wall.tabIds()).toEqual([])
     expect(await listTabs()).toEqual([])
   }, 60_000)
 
@@ -496,11 +500,14 @@ describe('隐藏的窗口与 agent（E3 / E4）', () => {
     expect(await isWindowOpen()).toBe(false)
   }, 120_000)
 
-  it('E4 窗口隐藏时 open_tab：窗口不亮、徽标 +1、右侧面板不开；用户点顶栏按钮后新卡片是唯一激活的那张、整格露出，上墙不重载', async () => {
+  it('E4 窗口隐藏时 open_tab：窗口不亮、徽标 +1、右侧面板不开、选中不变；用户点顶栏按钮后新卡片在墙上、整格露出，选中的仍是原来那张，上墙不重载', async () => {
     expect(await isWindowOpen()).toBe(false)
     expect(await rightPanelPane(app.main).isOpen()).toBe(false)
     const badgeBefore = (await headerButton().count()) ?? 0
     expect(badgeBefore).toBe((await listTabs()).length)
+    // E3 的表单页是选中的那页
+    const selectedBefore = (await listTabs()).find((t) => t.active)?.id
+    expect(selectedBefore).toBeTruthy()
 
     provider.reset()
     const path = '/counter.html?bw=e4'
@@ -509,7 +516,9 @@ describe('隐藏的窗口与 agent（E3 / E4）', () => {
     expect(ends.e4_open?.isError, ends.e4_open?.result).toBe(false)
     expect(fixture.hits(path)).toBe(1)
     const tab = (await listTabs()).find((t) => t.url === url)
-    expect(tab?.active).toBe(true)
+    // agent 开的 tab 在后台：选中的还是原来那页（选中只由用户改）
+    expect(tab?.active).toBe(false)
+    expect((await listTabs()).find((t) => t.active)?.id).toBe(selectedBefore)
 
     // 窗口不亮：当场不亮，过一会儿也不亮
     expect(await isWindowOpen()).toBe(false)
@@ -526,8 +535,8 @@ describe('隐藏的窗口与 agent（E3 / E4）', () => {
     await until(() => isWindowOpen(), 'browser window shown by the header button')
     await eventually(
       () => wall.activeCardIds(),
-      (ids) => expect(ids).toEqual([tab!.id]),
-      'the new card is the only active one'
+      (ids) => expect(ids).toEqual([selectedBefore]),
+      'the previously selected card is still the only active one'
     )
     expect(await wall.cardIds()).toContain(tab!.id)
     await eventually(

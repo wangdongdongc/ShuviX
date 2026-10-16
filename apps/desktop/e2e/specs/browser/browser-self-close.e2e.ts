@@ -17,8 +17,8 @@
  *         徽标 −1、别的页面没重载；再对它点关闭（卡片上的 ✕ = IPC closeTab）静默无事；再关左边一张、
  *         最后一张：墙空、徽标消失，之后新开的 tab 照常上墙、是唯一激活的那张；
  *   SC-4  agent 点 target=_blank 打开的登录弹出页（开它的 tab 在 agent 手里，弹出页加载之前就接上了 CDP）
- *         加载 800ms 后自己关掉：开它的那张重新激活（左邻）、list_tabs 不再列它、徽标回原值，没有未捕获
- *         的异常。
+ *         加载 800ms 后自己关掉：选中的那页自始至终没变（agent 开的 tab、agent 点出来的弹出页都开在后台）、
+ *         list_tabs 不再列它（OAuth 页标着 opened by you）、徽标回原值，没有未捕获的异常。
  *
  * 每一段都先确认页面真的关了 —— DevTools 的 target 列表里没有它了（`waitTabPageGone`）—— 再断产品，
  * 把「Electron 没关它」与「产品没注意到」分开。页面关自己用 `pageClosesItself`：DevTools 只是让页面自己的
@@ -314,6 +314,8 @@ describe('agent 驱动过的 tab 自己关掉，浏览器窗口从没开过（SC
     wall = browserWallPane(bw)
     await until(() => isWindowOpen(), 'browser window shown by the header button')
     await until(() => wall.mounted(), 'browser window shell ([data-browser-window]) mounted')
+    // 本 spec 按卡片 / 墙格读窗口里的 tab：切到平铺视图（缺省是单页视图）
+    await wall.useView('wall')
     await eventually(
       async () => ({ cards: await wall.cardIds(), active: await wall.activeCardIds() }),
       ({ cards, active }) => {
@@ -552,7 +554,10 @@ describe('墙开着，激活卡片的页面自己关掉（SC-1，纯用户路径
 })
 
 describe('登录弹出页加载后自己关掉（SC-4）', () => {
-  it('SC-4 agent 点 target=_blank 打开的弹出页 800ms 后自己关掉：开它的那张重新激活、list_tabs 不列它、徽标回原值，没有未捕获的异常', async () => {
+  it('SC-4 agent 点 target=_blank 打开的弹出页 800ms 后自己关掉：选中的那页自始至终没变（agent 开的、agent 点出来的都在后台）、list_tabs 不列它、徽标回原值，没有未捕获的异常', async () => {
+    // SC-1 收尾时用户开的那页是选中的；agent 的动作从不改选中（2026-10-16 用户裁定）
+    const selectedBefore = (await listTabs()).find((t) => t.active)?.id
+    expect(selectedBefore, 'a tab selected by the user before SC-4').toBeTruthy()
     provider.reset()
     const urlO = fixture.url('/oauth.html')
     const opened = await driver.run(sid, [
@@ -560,7 +565,8 @@ describe('登录弹出页加载后自己关掉（SC-4）', () => {
     ])
     const tO = tabIdOf(ok(opened.ends, 'sc4_open').result)
     const oauth = (await listTabs()).find((t) => t.url === urlO)
-    expect(oauth?.active, 'the OAuth tab is active').toBe(true)
+    expect(oauth, 'the OAuth tab is listed').toBeTruthy()
+    expect(oauth?.active, 'the OAuth tab opened in the background').toBe(false)
     const tabsBefore = (await listTabs()).length
     await waitBadge(tabsBefore)
 
@@ -584,10 +590,10 @@ describe('登录弹出页加载后自己关掉（SC-4）', () => {
       () => listTabs(),
       (tabs) => {
         expect(tabs.some((t) => t.url.includes('tag=popup'))).toBe(false)
-        expect(tabs.find((t) => t.id === oauth!.id)?.active).toBe(true)
+        expect(tabs.find((t) => t.active)?.id).toBe(selectedBefore)
         expect(tabs).toHaveLength(tabsBefore)
       },
-      'the popup gone, the OAuth tab (left neighbour) active again'
+      'the popup gone, the selection unchanged'
     )
     await waitBadge(tabsBefore)
 
@@ -595,7 +601,8 @@ describe('登录弹出页加载后自己关掉（SC-4）', () => {
     const listed = await driver.run(sid, [{ id: 'sc4_list', tool: 'list_tabs', args: {} }])
     const text = ok(listed.ends, 'sc4_list').result
     expect(text).not.toContain('closer.html')
-    expect(text).toContain(`[${tO}] (active)`)
+    expect(text).toContain(`[${tO}] (opened by you)`)
+    expect(text).not.toContain(`[${tO}] (active)`)
     // 弹出页只加载过一次（没有被谁重新打开）
     await sleep(300)
     expect(fixture.hits(popupPath)).toBe(1)

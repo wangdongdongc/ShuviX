@@ -751,6 +751,8 @@
     "toolDbDuplicateName": "凭据名称已存在",
     "toolBrowserTitle": "浏览器面板",
     "toolBrowserDesc": "内置浏览器面板的行为 —— 你自己浏览、以及会话启用了浏览器时 AI 访问网页，都按这里的设置。",
+    "toolBrowserSearchEngine": "地址栏搜索引擎",
+    "toolBrowserSearchEngineHint": "在内置浏览器的地址栏里输入的不是网址时，用它来搜索。",
     "toolBrowserIgnoreCertificateErrors": "忽略证书错误",
     "toolBrowserIgnoreCertificateErrorsHint": "关闭时遇到自签名 / 不受信任证书会弹窗确认；开启后将静默放行所有证书错误。",
     "toolBrowserSecurityWarning": "警告：开启后所有 HTTPS 证书错误（自签名、过期、域名不匹配）都会被忽略，包括公网钓鱼站。请仅在受控的内网环境中启用。",
@@ -1132,7 +1134,6 @@
     "subAgentInterrupt": "中断子智能体",
     "subAgentReplyPlaceholder": "任务还未完成？继续对话...",
     "subAgentReplySend": "发送",
-    "urlPlaceholder": "输入 URL",
     "newTerminal": "新建终端",
     "closeTerminal": "关闭终端",
     "files": "文件",
@@ -1208,15 +1209,9 @@
     "refresh": "刷新",
     "stop": "停止加载",
     "openExternal": "在系统浏览器中打开",
-    "gridCount": "同屏 {{shown}}/{{total}}",
-    "zoomHint": "缩放 {{pct}}% —— 页面按 {{width}}px 宽排版后缩到卡片大小",
     "newTab": "新建标签页",
     "closeTab": "关闭标签页",
     "untitledTab": "新标签页",
-    "agent": {
-      "connected": "AI 已接入此标签页（可观察和操作页面）",
-      "intercepting": "AI 已开启请求拦截——此标签页加载的内容可能被修改或替换"
-    },
     "cert": {
       "title": "证书不受信任：{{host}}",
       "continue": "继续访问",
@@ -1229,6 +1224,34 @@
       "crashedTitle": "页面崩溃了",
       "crashedDetail": "页面的进程停止了（{{reason}}）。",
       "retry": "重试"
+    },
+    "omniboxPlaceholder": "在 {{engine}} 中搜索，或输入网址",
+    "notSecure": "不安全",
+    "zoomIndicator": "缩放：{{pct}}%（点一下恢复为 100%）",
+    "searchTabs": "搜索标签页",
+    "tabUsedBy": "正在被「{{session}}」使用",
+    "view": {
+      "single": "单页显示",
+      "wall": "平铺所有标签页"
+    },
+    "menu": {
+      "more": "更多",
+      "duplicate": "复制标签页",
+      "copyLink": "复制链接",
+      "closeOthers": "关闭其他标签页",
+      "closeRight": "关闭右侧标签页",
+      "reopenClosed": "重新打开关闭的标签页",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "zoomReset": "恢复默认大小（当前 {{pct}}%）",
+      "settings": "浏览数据与证书设置…"
+    },
+    "infobar": {
+      "using": "「{{session}}」正在使用此页面",
+      "usingUnknown": "AI 正在使用此页面",
+      "intercepting": "「{{session}}」正在使用此页面，并拦截了它的网络请求 —— 页面内容可能被修改",
+      "interceptingUnknown": "AI 正在使用此页面，并拦截了它的网络请求 —— 页面内容可能被修改",
+      "openSession": "查看对话"
     }
   },
   "command": {

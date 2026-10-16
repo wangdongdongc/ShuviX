@@ -22,11 +22,13 @@ import { destroyTerminalsByWindow } from './services/terminalService'
 import { killAllBgTasks } from './services/bgTaskService'
 import { initPinnedChatService, unpinAll as unpinAllPinnedChat } from './services/pinnedChatService'
 import {
+  focusSession,
   initNotificationService,
   notifyAskRaised,
   notifyAskResolved,
   setRunErrorTextSource
 } from './services/notificationService'
+import { sessionRecords } from './services/sessionRecords'
 import { sessionRunErrorText, setSessionAskObserver } from './services/sessionSignals'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
 import { initPreviewWindowService } from './services/previewWindowService'
@@ -44,7 +46,8 @@ import {
   initBrowserSession,
   initBrowserWindowService,
   closeBrowserWindowWithMain,
-  destroyBrowserWindow
+  destroyBrowserWindow,
+  setBrowserSessionHooks
 } from './services/browser'
 import {
   approveOpenExternalPermission,
@@ -533,6 +536,15 @@ function initSharedWindowServices(): void {
 
   // 初始化内置浏览器 partition 的权限策略（独立于 defaultSession，默认拒绝所有权限请求）
   step('windowServices › browserSession', () => initBrowserSession())
+  // 浏览器窗口上的会话名（标签悬停、「〈会话〉正在使用此页面」）与「查看对话」
+  setBrowserSessionHooks({
+    sessionTitle: (id) => sessionRecords.pick(id, ['title'])?.title ?? '',
+    openSession: (id) => {
+      if (!sessionRecords.findById(id)) return false
+      focusSession(id)
+      return true
+    }
+  })
   // 浏览器是独立窗口（懒创建）：只在用户点开时才建，关窗只隐藏；agent 的 tab 住在停放窗口里
   step('windowServices › browserWindow', () => initBrowserWindowService({ getThemeBgColor }))
 

@@ -18,7 +18,11 @@
  * 状态表是进程级的 —— 每个用例用自己的 installId / 会话 id。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
-import { CHROME_GROUP_COLORS, type ChromeTabInfo } from '@shuvix/chat-protocol/chromeBridge'
+import {
+  CHROME_GROUP_COLORS,
+  sessionColorFor,
+  type ChromeTabInfo
+} from '@shuvix/chat-protocol/chromeBridge'
 import { browserToolsForCaps } from '@shuvix/agent-runtime'
 
 vi.mock('../../../logger', () => ({
@@ -246,6 +250,20 @@ describe('list_tabs 的正文与标签组的名字', () => {
       expect(CHROME_GROUP_COLORS).toContain(colors[i])
     }
     expect(new Set(colors).size).toBeGreaterThanOrEqual(3)
+  })
+
+  it('CB-U15a groupColorFor 与 chat-protocol 的 sessionColorFor 是同一个哈希（Chrome 的标签组颜色 = 应用内浏览器标签上的圆点颜色）', () => {
+    const ids = [
+      '',
+      'a',
+      's1',
+      's2',
+      '0193f0b2-7c4e-7a51-9b1e-3c2d1e0f9a8b',
+      '会话-中文',
+      'x'.repeat(500),
+      ...Array.from({ length: 300 }, (_, i) => `sess-${i}-${(i * 104729) % 9973}`)
+    ]
+    for (const id of ids) expect(groupColorFor(id), id).toBe(sessionColorFor(id))
   })
 
   it('CBB-P6 端能力：没有 pdf / 上传 / 全页与元素截图 / 截图落盘；工具表里因此没有 upload_file 与 pdf；后端用的就是这一份', () => {

@@ -18,7 +18,11 @@ import {
   setPanelVisible,
   isHostWebContents,
   openBrowserWindow,
-  isBrowserWindowOpen
+  isBrowserWindowOpen,
+  reopenClosedTab,
+  requestOmniboxFocus,
+  zoomTab,
+  openAgentSession
 } from '../services/browser'
 
 export function registerBrowserViewHandlers(): void {
@@ -34,13 +38,19 @@ export function registerBrowserViewHandlers(): void {
 
   // ====== tab 生命周期 ======
 
-  defineHandler('browser-view:create-tab', (_ctx, url?: string) =>
-    createTab(url, { activate: true })
-  )
-
-  defineHandler('browser-view:close-tab', (_ctx, tabId: string) => {
-    closeTab(tabId)
+  /** 用户新开 tab（开在前台）；空白页顺手把光标放进地址栏（照 Chrome） */
+  defineHandler('browser-view:create-tab', (_ctx, url?: string) => {
+    const id = createTab(url, { activate: true })
+    if (!url) requestOmniboxFocus()
+    return id
   })
+
+  /** 用户关的（标签上的 ×、菜单）：记下地址，⌘⇧T / reopenClosedTab 能重开 */
+  defineHandler('browser-view:close-tab', (_ctx, tabId: string) => {
+    closeTab(tabId, { remember: true })
+  })
+
+  defineHandler('browser-view:reopen-closed-tab', () => reopenClosedTab())
 
   defineHandler('browser-view:activate-tab', (_ctx, tabId: string) => {
     activateTab(tabId)
@@ -77,6 +87,22 @@ export function registerBrowserViewHandlers(): void {
   defineHandler('browser-view:stop', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
     if (view) view.webContents.stop()
+  })
+
+  /** 按站点调页面缩放（⋮ 菜单、地址栏右端的缩放标识）；快捷键 ⌘+ / ⌘− / ⌘0 在主进程里直接走同一个函数 */
+  defineHandler('browser-view:zoom', (_ctx, tabId: string, direction: 'in' | 'out' | 'reset') => {
+    if (direction === 'in' || direction === 'out' || direction === 'reset') {
+      zoomTab(tabId, direction)
+    }
+  })
+
+  /**
+   * 提示条「〈会话〉正在使用此页面 · 查看对话」：把主窗口拉到前面并切到那个会话（用户自己点的）。
+   * 会话已经删了就什么也不做。
+   */
+  defineHandler('browser-view:open-session', (ctx, sessionId: string) => {
+    if (ctx.client.kind !== 'window' || typeof sessionId !== 'string') return
+    openAgentSession(sessionId)
   })
 
   /** 抓 tab 画面（平铺墙滚动时的占位图） */

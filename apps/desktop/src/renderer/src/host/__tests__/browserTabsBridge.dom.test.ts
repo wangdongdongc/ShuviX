@@ -8,6 +8,15 @@
  *   - 水合：浏览器窗口晚于崩溃才打开（崩溃事件当时没人收），listTabs 的行带 `crashed` → 补一条
  *     `{ errorCode 0, errorDescription 'crashed', url, crashed: true }`；没崩的行 loadError 为 null。
  *
+ * Chrome 化之后（CB-U37…39）：
+ *   CB-U37  地址栏只在用户的动作之后聚焦：tab-created **从不**加 omniboxFocusNonce（连 `{about:blank, active:true}`
+ *           也不加 —— 空浏览器里 agent 开的第一个 tab 长得一模一样）；只有 `browser-view:command {focusOmnibox}`
+ *           加一次，不认识的命令不动；
+ *   CB-U38  tab-agent 记下会话与时刻（agentActiveAt，圆点据此脉动）；tab-zoom 改 zoomPercent；did-navigate
+ *           只带地址时只改地址（后退 / 前进 / 缩放留着），全量时全改；tab-closed 的 activeTabId 照主进程给的；
+ *   CB-U39  水合：loading → isLoading，后退 / 前进 / 缩放 / agent 会话照抄；**不**给 agentActiveAt（重开窗口
+ *           不脉动）。
+ *
  * `window.api.browserView` 是假的：每个 on* 记下回调（用例直接调它当作主进程发来的事件），listTabs 由用例
  * 决定回什么。挂一个只调这个 hook 的小组件；store 每条用例清空。桌面 vitest 对渲染层只收 `*.test.ts`
  * （本文件自己切 jsdom），不带 react 插件 —— 一律 createElement。
@@ -33,6 +42,13 @@ interface ListedTab {
   cdpAttached: boolean
   cdpIntercepting: boolean
   crashed: boolean
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+  zoomPercent: number
+  agentSessionId?: string
+  agentSessionTitle?: string
+  openerSessionId?: string
 }
 
 /** 每个 on* 收下的回调（按方法名） */
@@ -48,6 +64,9 @@ const ON_METHODS = [
   'onTabTitleUpdated',
   'onTabFaviconUpdated',
   'onTabCdpState',
+  'onTabAgent',
+  'onTabZoom',
+  'onCommand',
   'onDidStartLoading',
   'onDidNavigate',
   'onDidStopLoading',
@@ -100,7 +119,7 @@ const PAGE_URL = 'https://x.test/page'
 beforeEach(() => {
   callbacks = {}
   listed = Promise.resolve([])
-  useBrowserTabsStore.setState({ tabs: [], activeTabId: null })
+  useBrowserTabsStore.setState({ tabs: [], activeTabId: null, omniboxFocusNonce: 0 })
   ;(window as unknown as { api: unknown }).api = { browserView: fakeBrowserViewApi() }
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -166,7 +185,11 @@ describe('水合：浏览器窗口晚于崩溃才打开（CR-U17）', () => {
       active: id === 't1',
       cdpAttached: false,
       cdpIntercepting: false,
-      crashed
+      crashed,
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      zoomPercent: 100
     })
     listed = Promise.resolve([
       row('t1', 'https://crashed.test/', true),
@@ -183,5 +206,169 @@ describe('水合：浏览器窗口晚于崩溃才打开（CR-U17）', () => {
     })
     expect(tab('t2')?.loadError).toBeNull()
     expect(useBrowserTabsStore.getState().activeTabId).toBe('t1')
+  })
+})
+
+describe('地址栏只在用户的动作之后聚焦（CB-U37）', () => {
+  const nonce = (): number => useBrowserTabsStore.getState().omniboxFocusNonce
+
+  it('CB-U37 tab-created 从不加 nonce —— 连 {about:blank, active:true} 也不加', async () => {
+    await mount()
+    fire('onTabCreated', { tabId: 't1', url: 'about:blank', active: true })
+    fire('onTabCreated', { tabId: 't2', url: 'https://a.test/', active: true })
+    fire('onTabCreated', { tabId: 't3', url: 'about:blank', active: false })
+    expect(nonce()).toBe(0)
+    expect(useBrowserTabsStore.getState().activeTabId).toBe('t2')
+  })
+
+  it('CB-U37 command focusOmnibox → nonce +1；不认识的命令不动', async () => {
+    await mount()
+    fire('onCommand', { command: 'focusOmnibox' })
+    expect(nonce()).toBe(1)
+    fire('onCommand', { command: 'somethingElse' })
+    fire('onCommand', {})
+    expect(nonce()).toBe(1)
+    fire('onCommand', { command: 'focusOmnibox' })
+    expect(nonce()).toBe(2)
+  })
+})
+
+describe('agent 标记、缩放、导航、关闭（CB-U38）', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('CB-U38 tab-agent → agentSessionId / agentSessionTitle / agentActiveAt（= 此刻）；再来一次刷新时刻', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(1_000_000))
+    await mount()
+    fire('onTabCreated', { tabId: 't1', url: PAGE_URL, active: true })
+    fire('onTabAgent', { tabId: 't1', sessionId: 's1', sessionTitle: 'Alpha' })
+    expect(tab('t1')).toMatchObject({
+      agentSessionId: 's1',
+      agentSessionTitle: 'Alpha',
+      agentActiveAt: 1_000_000
+    })
+    vi.setSystemTime(new Date(1_005_000))
+    fire('onTabAgent', { tabId: 't1', sessionId: 's2', sessionTitle: 'Beta' })
+    expect(tab('t1')).toMatchObject({
+      agentSessionId: 's2',
+      agentSessionTitle: 'Beta',
+      agentActiveAt: 1_005_000
+    })
+  })
+
+  it('CB-U38 tab-zoom → zoomPercent', async () => {
+    await mount()
+    fire('onTabCreated', { tabId: 't1', url: PAGE_URL, active: true })
+    expect(tab('t1')?.zoomPercent).toBe(100)
+    fire('onTabZoom', { tabId: 't1', zoomPercent: 125 })
+    expect(tab('t1')?.zoomPercent).toBe(125)
+  })
+
+  it('CB-U38 did-navigate 只带 {tabId, url}：只改地址；全量：全改', async () => {
+    await mount()
+    fire('onTabCreated', { tabId: 't1', url: PAGE_URL, active: true })
+    fire('onDidNavigate', {
+      tabId: 't1',
+      url: 'https://x.test/one',
+      canGoBack: true,
+      canGoForward: true,
+      zoomPercent: 150
+    })
+    expect(tab('t1')).toMatchObject({
+      url: 'https://x.test/one',
+      canGoBack: true,
+      canGoForward: true,
+      zoomPercent: 150
+    })
+
+    fire('onDidNavigate', { tabId: 't1', url: 'https://y.test/two' })
+    expect(tab('t1')).toMatchObject({
+      url: 'https://y.test/two',
+      canGoBack: true,
+      canGoForward: true,
+      zoomPercent: 150
+    })
+
+    fire('onDidNavigate', {
+      tabId: 't1',
+      url: 'https://y.test/two',
+      canGoBack: false,
+      canGoForward: false,
+      zoomPercent: 100
+    })
+    expect(tab('t1')).toMatchObject({ canGoBack: false, canGoForward: false, zoomPercent: 100 })
+  })
+
+  it('CB-U38 tab-closed：activeTabId 照主进程给的（包括 null）', async () => {
+    await mount()
+    fire('onTabCreated', { tabId: 't1', url: PAGE_URL, active: true })
+    fire('onTabCreated', { tabId: 't2', url: PAGE_URL, active: false })
+    fire('onTabCreated', { tabId: 't3', url: PAGE_URL, active: false })
+    fire('onTabClosed', { tabId: 't1', activeTabId: 't3' })
+    expect(useBrowserTabsStore.getState().activeTabId).toBe('t3')
+    expect(useBrowserTabsStore.getState().tabs.map((t) => t.id)).toEqual(['t2', 't3'])
+    fire('onTabClosed', { tabId: 't3', activeTabId: 't2' })
+    fire('onTabClosed', { tabId: 't2', activeTabId: null })
+    expect(useBrowserTabsStore.getState().activeTabId).toBeNull()
+    expect(useBrowserTabsStore.getState().tabs).toEqual([])
+  })
+})
+
+describe('水合带上 Chrome 化的字段（CB-U39）', () => {
+  it('CB-U39 loading → isLoading；后退 / 前进 / 缩放 / agent 会话照抄；不给 agentActiveAt', async () => {
+    listed = Promise.resolve([
+      {
+        id: 't1',
+        url: 'https://a.test/',
+        title: 'A',
+        active: false,
+        cdpAttached: true,
+        cdpIntercepting: false,
+        crashed: false,
+        loading: true,
+        canGoBack: true,
+        canGoForward: false,
+        zoomPercent: 125,
+        agentSessionId: 's1',
+        agentSessionTitle: 'Alpha',
+        openerSessionId: 's1'
+      },
+      {
+        id: 't2',
+        url: 'https://b.test/',
+        title: 'B',
+        active: true,
+        cdpAttached: false,
+        cdpIntercepting: false,
+        crashed: false,
+        loading: false,
+        canGoBack: false,
+        canGoForward: true,
+        zoomPercent: 100
+      }
+    ])
+    await mount()
+
+    expect(tab('t1')).toMatchObject({
+      isLoading: true,
+      canGoBack: true,
+      canGoForward: false,
+      zoomPercent: 125,
+      cdpAttached: true,
+      agentSessionId: 's1',
+      agentSessionTitle: 'Alpha'
+    })
+    expect(tab('t1')).not.toHaveProperty('agentActiveAt')
+    expect(tab('t2')).toMatchObject({
+      isLoading: false,
+      canGoBack: false,
+      canGoForward: true,
+      zoomPercent: 100
+    })
+    expect(tab('t2')).not.toHaveProperty('agentSessionId')
+    expect(tab('t2')).not.toHaveProperty('agentActiveAt')
+    expect(useBrowserTabsStore.getState().activeTabId).toBe('t2')
   })
 })

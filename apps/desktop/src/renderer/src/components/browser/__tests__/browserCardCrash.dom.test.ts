@@ -7,7 +7,8 @@
  * 没有「Error code」那行、也没有证书提示。重试按 loadError 的地址导航（主进程那头就是 IPC navigate）。
  * 对照：普通的加载失败（-105）照旧是「This site can't be reached」+「Error code: -105 (…)」。
  *
- * 真 en 资源；`window.api.browserView` 只是个空壳（工具条的按钮不点）。桌面 vitest 对渲染层只收
+ * 错误页的 DOM（PageErrorView）由单页视图与平铺墙的卡片共用；这里从卡片那一侧看（卡片里是小号）。
+ * 真 en 资源；`window.api.browserView` 只是个空壳（卡片头的按钮不点）。桌面 vitest 对渲染层只收
  * `*.test.ts`（本文件自己切 jsdom），不带 react 插件 —— 一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -37,7 +38,10 @@ function tabWith(loadError: BrowserTabInfo['loadError']): BrowserTabInfo {
     isLoading: false,
     loadError,
     cdpAttached: false,
-    cdpIntercepting: false
+    cdpIntercepting: false,
+    canGoBack: false,
+    canGoForward: false,
+    zoomPercent: 100
   }
 }
 
@@ -49,11 +53,9 @@ function props(tab: BrowserTabInfo): BrowserCardProps & {
     tab,
     isActive: true,
     live: true,
-    zoomPercent: 50,
     onActivate: vi.fn(),
     onClose: vi.fn(),
     onNavigate: vi.fn<(url: string) => void>(),
-    onOpenExternal: vi.fn(),
     registerPlaceholder: vi.fn<(el: HTMLDivElement | null) => void>()
   }
 }

@@ -113,6 +113,10 @@ const page = (title: string, body: string): string =>
  *   的形状：点完当场关掉）。
  * - `/oauth.html`：一个 target=_blank 的 Sign in 链接，指向加载后 800ms 自己关掉的 `/closer.html`
  *   （登录弹出页）。
+ *
+ * 浏览器窗口的外壳（browser-chrome-shell）：
+ * - `/popper.html`：一个 target=_blank 的 Open popup 链接，指向一个什么也不做的页面
+ *   （`/ask-me.html?from=popper`）—— 看弹出页开在前台还是后台、记在谁名下，页面本身不能再弹东西。
  */
 const PAGES: Record<string, () => { headers?: Record<string, string>; html: string }> = {
   '/form.html': () => ({
@@ -279,6 +283,12 @@ const PAGES: Record<string, () => { headers?: Record<string, string>; html: stri
         '  })();',
         '</script>'
       ].join('\n')
+    )
+  }),
+  '/popper.html': () => ({
+    html: page(
+      'E2E Popper',
+      '<h1>Popper</h1>\n<a id="pop" href="/ask-me.html?from=popper" target="_blank">Open popup</a>'
     )
   }),
   '/oauth.html': () => ({

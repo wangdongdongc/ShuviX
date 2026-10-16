@@ -16,7 +16,9 @@
  *   ST-U14  (a) src/main 里（跳过 __tests__）调用 `openBrowserWindow(` 的只有 ipc/browserViewHandlers.ts
  *               （用户的按钮经它进来）；定义与再导出不算调用；
  *           (b) services/browser/*.ts 里 `.show / .showInactive / .focus / .restore / .moveTop(` 的调用
- *               只出现在 openBrowserWindow 的函数体里，stagingWindow.ts 一处都没有；
+ *               只出现在 openBrowserWindow 的函数体里，stagingWindow.ts 一处都没有；唯一的例外是
+ *               `focusOmniboxInFront`（⌘L / ⌘T 把键盘焦点从页面挪回地址栏），而且它的函数体里必须先调
+ *               `browserWindowInFront(` —— 窗口已经在前台且有焦点才挪，所以它永远弄不出一个窗口来；
  *           (c) services/browser/*.ts 里每一处 `.setVisible(` 恰好一个参数、就是字面量 `true`
  *               —— tab 的 view 永远不隐藏（隐藏的 view 截图失败、点击不落地）。
  *   NG-U10  (a) browserBackend.ts 里每一处 `browserCdpOps.X(` 调用都在传给 `this.guarded(` 的函数字面量里
@@ -94,12 +96,24 @@ function badSetVisible(source: string): string[] {
     .map((c) => `${lineOf(sf, c)}:(${c.arguments.map((a) => a.getText(sf)).join(', ')})`)
 }
 
+/** 只在「浏览器窗口已经在前台」时挪焦点的函数：函数体里先有 `browserWindowInFront(` 才放行 */
+const FOCUS_IN_FRONT = 'focusOmniboxInFront'
+
 /** 源码里「弄到眼前」的方法调用中，不在 `openBrowserWindow` 函数体里的，`行号:方法名` */
 function surfacingOutsideOpen(source: string): string[] {
   const sf = parse(source)
   const insideOpen = (node: ts.Node): boolean => {
     for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
       if (ts.isFunctionDeclaration(p) && p.name?.text === 'openBrowserWindow') return true
+      if (
+        ts.isFunctionDeclaration(p) &&
+        p.name?.text === FOCUS_IN_FRONT &&
+        calls(p).some(
+          (c) => calleeName(c) === 'browserWindowInFront' && c.getStart(sf) < node.getStart(sf)
+        )
+      ) {
+        return true
+      }
     }
     return false
   }
@@ -365,10 +379,19 @@ describe('只有用户能把浏览器窗口弄出来、tab 永远不隐藏（ST-
           "win['show']()",
           'app.focus({ steal: true })',
           '// win.show()',
-          'show()'
+          'show()',
+          // 例外：focusOmniboxInFront 里、在 browserWindowInFront( 之后的 focus 放行
+          'function focusOmniboxInFront(): void {',
+          '  const w = browserWindowInFront()',
+          '  if (!w) return',
+          '  w.webContents.focus()',
+          '}',
+          // 判断写在 focus 之后、或换了函数名：都不放行
+          'function focusOmniboxInFront(): void { w.webContents.focus(); browserWindowInFront() }',
+          'function focusOmnibox(): void { browserWindowInFront(); w.webContents.focus() }'
         ].join('\n')
       )
-    ).toEqual(['7:showInactive', '8:moveTop', '9:show', '10:focus'])
+    ).toEqual(['7:showInactive', '8:moveTop', '9:show', '10:focus', '18:focus', '19:focus'])
 
     expect(
       badSetVisible(

@@ -7,6 +7,9 @@
  *       create-tab（主窗 / 浏览器窗口里的「新建 tab」）只建一个激活的 tab，**不**打开浏览器窗口 ——
  *       窗口只由 open-window 打开（ST-U6）。
  *   NH-8 网络客户端（server mode phase B）发来的 set-layout / set-visible：不是宿主窗口 → 不理、不抛
+ *   CB-U36 Chrome 化之后的几条通道：close-tab 是用户关的（记下地址给 ⌘⇧T）；reopen-closed-tab 原样回服务的值；
+ *       zoom 只认 in / out / reset；open-session 只认窗口客户端发来的字符串；create-tab 不带地址时把光标
+ *       放进地址栏（requestOmniboxFocus），带地址时不放
  *
  * electron 是替身（on / handle 收进 Map）；services/browser 整个换成间谍 —— 宿主判断固定为
  * 「webContents id 7 是宿主」。
@@ -22,7 +25,12 @@ const state = vi.hoisted(() => ({
   setPanelVisible: vi.fn<(visible: boolean) => void>(),
   openBrowserWindow: vi.fn<() => void>(),
   createTab: vi.fn<(url?: string, opts?: { activate?: boolean }) => string>(() => 'tab-new'),
-  isBrowserWindowOpen: vi.fn<() => boolean>(() => false)
+  isBrowserWindowOpen: vi.fn<() => boolean>(() => false),
+  closeTab: vi.fn<(tabId: string, opts?: { remember?: boolean }) => void>(),
+  reopenClosedTab: vi.fn<() => string | null>(() => null),
+  zoomTab: vi.fn<(tabId: string, direction: string) => void>(),
+  openAgentSession: vi.fn<(sessionId: string) => boolean>(() => false),
+  requestOmniboxFocus: vi.fn<() => void>()
 }))
 
 vi.mock('electron', () => ({
@@ -34,7 +42,7 @@ vi.mock('electron', () => ({
 // mock 路径按**测试文件**解析：被测模块 import 的 '../services/browser' 在这里是 '../../services/browser'
 vi.mock('../../services/browser', () => ({
   createTab: (url?: string, opts?: { activate?: boolean }) => state.createTab(url, opts),
-  closeTab: vi.fn(),
+  closeTab: (tabId: string, opts?: { remember?: boolean }) => state.closeTab(tabId, opts),
   activateTab: vi.fn(),
   listTabs: vi.fn(() => []),
   getTabView: vi.fn(() => null),
@@ -43,7 +51,11 @@ vi.mock('../../services/browser', () => ({
   setPanelVisible: (visible: boolean) => state.setPanelVisible(visible),
   isHostWebContents: (id: number) => id === 7,
   openBrowserWindow: () => state.openBrowserWindow(),
-  isBrowserWindowOpen: () => state.isBrowserWindowOpen()
+  isBrowserWindowOpen: () => state.isBrowserWindowOpen(),
+  requestOmniboxFocus: () => state.requestOmniboxFocus(),
+  reopenClosedTab: () => state.reopenClosedTab(),
+  zoomTab: (tabId: string, direction: string) => state.zoomTab(tabId, direction),
+  openAgentSession: (sessionId: string) => state.openAgentSession(sessionId)
 }))
 
 import { registerBrowserViewHandlers } from '../browserViewHandlers'
@@ -83,6 +95,13 @@ beforeEach(() => {
   state.openBrowserWindow.mockClear()
   state.createTab.mockClear()
   state.isBrowserWindowOpen.mockReset()
+  state.closeTab.mockClear()
+  state.reopenClosedTab.mockReset()
+  state.reopenClosedTab.mockReturnValue(null)
+  state.zoomTab.mockClear()
+  state.openAgentSession.mockReset()
+  state.openAgentSession.mockReturnValue(false)
+  state.requestOmniboxFocus.mockClear()
 })
 
 describe('browserViewHandlers：布局只认宿主窗口', () => {
@@ -159,5 +178,61 @@ describe('NH-8 网络客户端发来的布局 / 可见性', () => {
     expect(() => fromNet('browser-view:set-visible', false)).not.toThrow()
     expect(state.setLayout).not.toHaveBeenCalled()
     expect(state.setPanelVisible).not.toHaveBeenCalled()
+  })
+})
+
+describe('Chrome 化的通道（CB-U36）', () => {
+  const fromNet = (channel: string, ...args: unknown[]): unknown => {
+    const definition = listDefinitions().find((d) => d.channel === channel)
+    if (!definition) throw new Error(`no definition for ${channel}`)
+    return definition.fn(netCtx(1), ...args)
+  }
+
+  it('CB-U36 close-tab → closeTab(id, { remember: true })（用户关的，⌘⇧T 能重开）', async () => {
+    await invoke('browser-view:close-tab', HOST, 'T')
+    expect(state.closeTab.mock.calls).toEqual([['T', { remember: true }]])
+  })
+
+  it('CB-U36 reopen-closed-tab 原样回服务的值（新 tab id 或 null）', async () => {
+    expect(await invoke('browser-view:reopen-closed-tab', HOST)).toBeNull()
+    state.reopenClosedTab.mockReturnValue('tab-reopened')
+    expect(await invoke('browser-view:reopen-closed-tab', HOST)).toBe('tab-reopened')
+    expect(state.reopenClosedTab).toHaveBeenCalledTimes(2)
+  })
+
+  it('CB-U36 zoom：in / out / reset 交给 zoomTab；别的方向不调', async () => {
+    await invoke('browser-view:zoom', HOST, 'T', 'in')
+    await invoke('browser-view:zoom', HOST, 'T', 'out')
+    await invoke('browser-view:zoom', HOST, 'T', 'reset')
+    expect(state.zoomTab.mock.calls).toEqual([
+      ['T', 'in'],
+      ['T', 'out'],
+      ['T', 'reset']
+    ])
+    state.zoomTab.mockClear()
+    await invoke('browser-view:zoom', HOST, 'T', 'sideways')
+    await invoke('browser-view:zoom', HOST, 'T', undefined)
+    await invoke('browser-view:zoom', HOST, 'T', 'IN')
+    expect(state.zoomTab).not.toHaveBeenCalled()
+  })
+
+  it('CB-U36 open-session：窗口客户端发来的字符串 → openAgentSession；网络客户端、非字符串 → 不调', async () => {
+    await invoke('browser-view:open-session', HOST, 's1')
+    expect(state.openAgentSession.mock.calls).toEqual([['s1']])
+    state.openAgentSession.mockClear()
+
+    await invoke('browser-view:open-session', HOST, 42)
+    await invoke('browser-view:open-session', HOST, undefined)
+    await invoke('browser-view:open-session', HOST, { id: 's1' })
+    await fromNet('browser-view:open-session', 's1')
+    expect(state.openAgentSession).not.toHaveBeenCalled()
+  })
+
+  it('CB-U36 create-tab：不带地址 → requestOmniboxFocus 一次；带地址 → 不调', async () => {
+    await invoke('browser-view:create-tab', HOST)
+    expect(state.requestOmniboxFocus).toHaveBeenCalledTimes(1)
+    state.requestOmniboxFocus.mockClear()
+    await invoke('browser-view:create-tab', HOST, 'https://a.example/')
+    expect(state.requestOmniboxFocus).not.toHaveBeenCalled()
   })
 })

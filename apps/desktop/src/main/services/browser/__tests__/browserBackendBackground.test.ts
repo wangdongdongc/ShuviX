@@ -13,6 +13,12 @@
  *           回「开了」+ 那个会话结束原因的那句（真的 tabGoneNote），不是失败，也不叫 agent 去 snapshot。
  *   CR-U15a 页面的渲染进程崩了的 tab：screenshot（视口 / 整页 / 元素）当场以那句话失败 —— 不 capturePage
  *           （崩溃页只会拍出一张空图）、不为截图接 CDP、不落盘；list_tabs 在 (active) 之后标 (crashed)。
+ *   CB-U33  用户选中着一页时 open_tab 开在后台（选中不变、行上记着开它的会话），不建窗口、不弄到眼前；
+ *           一个 tab 都没有时 agent 的 tab 成为选中的那页；
+ *   CB-U34  在没选中的 tab 上 snapshot / screenshot / click 不改选中，那一行记下在用它的会话；
+ *   CB-U35  list_tabs：(active) = 用户选中的那页、(opened by you) = 本会话开的（另一个会话看反过来）；
+ *           选中 + 崩了 + 本会话开的读作 ` (active) (crashed) (opened by you)`；agent 的 close_tab 不进
+ *           ⌘⇧T 的重开记录。
  *
  * 后端、tab 服务、窗口服务、停放窗口都是真的，跑在 ./fakeElectron.ts 的假件上；CDP 会话是个空壳，
  * `browserCdpOps` 里用到的配方换成立即回答的桩 —— 这里只关心「窗口动没动」，不关心配方本身。
@@ -299,5 +305,153 @@ describe('页面崩了的 tab（CR-U15a）', () => {
     expect((await createDesktopBrowserBackend('s1').listTabs()).text?.split('\n')[2]).toBe(
       '[t3] (active) (untitled) — https://c.test/'
     )
+  })
+})
+
+describe('agent 从不选中 tab（CB-U33 / CB-U34 / CB-U35）', () => {
+  /** 新导入的服务 + 后端工厂（模块级状态每条用例都是新的） */
+  const loadAll = async (): Promise<{
+    views: typeof import('../browserViewService')
+    wins: typeof import('../browserWindowService')
+    backendFor: typeof import('../browserBackend').createDesktopBrowserBackend
+  }> => {
+    const views = await import('../browserViewService')
+    const wins = await import('../browserWindowService')
+    const { createDesktopBrowserBackend } = await import('../browserBackend')
+    wins.initBrowserWindowService({ getThemeBgColor: () => '#000000' })
+    return { views, wins, backendFor: createDesktopBrowserBackend }
+  }
+  const selectedId = (views: typeof import('../browserViewService')): string | undefined =>
+    views.listTabs().find((t) => t.active)?.id
+  const shortOf = (text: string | undefined): string => {
+    const m = /in new tab (t\d+)/.exec(text ?? '')
+    if (!m) throw new Error(`no tab id in: ${text}`)
+    return m[1]
+  }
+  /** list_tabs 正文里某个短号那一行的标记部分（`[tN]` 与标题之间） */
+  const tagsOf = (text: string | undefined, short: string): string => {
+    const line = (text ?? '').split('\n').find((l) => l.startsWith(`[${short}]`))
+    if (line === undefined) throw new Error(`no line for ${short} in:\n${text}`)
+    const m = /^\[t\d+\]((?: \([^)]*\))*?) (?:\(untitled\)|[^(]).*$/.exec(line)
+    return m ? m[1] : line
+  }
+  /** list_tabs 里某个地址那一行的短号 */
+  const shortForUrl = (text: string | undefined, url: string): string => {
+    const line = (text ?? '').split('\n').find((l) => l.endsWith(` — ${url}`))
+    const m = /^\[(t\d+)\]/.exec(line ?? '')
+    if (!m) throw new Error(`no line for ${url} in:\n${text}`)
+    return m[1]
+  }
+
+  it('CB-U33 用户选中着一页时 open_tab：选中不变，新行 openerSessionId = 这个会话；不建窗口、谁都没被弄到眼前', async () => {
+    const { views, wins, backendFor } = await loadAll()
+    wins.openBrowserWindow()
+    const bw = fx.browserWindows()[0]
+    const user = views.createTab('https://user.test/', { activate: true })
+    fx.clearCalls()
+    bw.webContents.send.mockClear()
+
+    const opened = await backendFor('s1').openTab({ url: 'https://a.example/' })
+    expect(opened.text).toMatch(/^Opened /)
+    expect(selectedId(views)).toBe(user)
+    const agentRow = views.listTabs().find((t) => t.id !== user)
+    expect(agentRow?.openerSessionId).toBe('s1')
+    expect(agentRow?.active).toBe(false)
+    expect(views.listTabs().find((t) => t.id === user)).not.toHaveProperty('openerSessionId')
+    expect(
+      bw.webContents.send.mock.calls.filter(([c]) => c === 'browser-view:tab-activated')
+    ).toEqual([])
+    expect(fx.browserWindows()).toHaveLength(1)
+    expect(fx.allSurfacing()).toEqual([])
+  })
+
+  it('CB-U33 一个 tab 都没有：agent 开的 tab 成为选中的那页（仍记在会话名下）', async () => {
+    const { views, backendFor } = await loadAll()
+    await backendFor('s1').openTab({ url: 'https://a.example/' })
+    const rows = views.listTabs()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].active).toBe(true)
+    expect(rows[0].openerSessionId).toBe('s1')
+    expect(fx.browserWindows()).toEqual([])
+  })
+
+  it('CB-U34 在没选中的 tab 上 snapshot / screenshot / click：选中不变、不发 tab-activated；那一行记下会话', async () => {
+    const { views, wins, backendFor } = await loadAll()
+    wins.openBrowserWindow()
+    const bw = fx.browserWindows()[0]
+    const user = views.createTab('https://user.test/', { activate: true })
+    views.createTab('https://u2.test/')
+    const backend = backendFor('s1')
+    const own = shortOf((await backend.openTab({ url: 'https://a.example/' })).text)
+    const u2 = shortForUrl((await backend.listTabs()).text, 'https://u2.test/')
+    bw.webContents.send.mockClear()
+    fx.clearCalls()
+
+    for (const tabId of [own, u2]) {
+      await backend.snapshot({ tabId })
+      await backend.screenshot({ tabId })
+      await backend.click({ tabId, uid: 'e1' })
+    }
+    expect(selectedId(views)).toBe(user)
+    expect(
+      bw.webContents.send.mock.calls.filter(([c]) => c === 'browser-view:tab-activated')
+    ).toEqual([])
+    const rows = views.listTabs()
+    const byUrl = (u: string): (typeof rows)[number] | undefined => rows.find((r) => r.url === u)
+    expect(byUrl('https://u2.test/')?.agentSessionId).toBe('s1')
+    expect(rows.find((r) => r.openerSessionId === 's1')?.agentSessionId).toBe('s1')
+    expect(byUrl('https://user.test/')).not.toHaveProperty('agentSessionId')
+    const agentEvents = bw.webContents.send.mock.calls
+      .filter(([c]) => c === 'browser-view:tab-agent')
+      .map(([, p]) => (p as { sessionId: string }).sessionId)
+    expect(agentEvents.length).toBeGreaterThan(0)
+    expect(new Set(agentEvents)).toEqual(new Set(['s1']))
+    expect(fx.allSurfacing()).toEqual([])
+  })
+
+  it('CB-U35 list_tabs：(active) = 用户选中的那页，(opened by you) = 本会话开的；从另一个会话看反过来', async () => {
+    const { views, backendFor } = await loadAll()
+    views.createTab('https://user.test/', { activate: true })
+    const s1 = backendFor('s1')
+    const s2 = backendFor('s2')
+    const mine = shortOf((await s1.openTab({ url: 'https://a.example/' })).text)
+    const theirs = shortOf((await s2.openTab({ url: 'https://b.example/' })).text)
+
+    const fromS1 = (await s1.listTabs()).text
+    const userShort = shortForUrl(fromS1, 'https://user.test/')
+    expect(tagsOf(fromS1, userShort)).toBe(' (active)')
+    expect(tagsOf(fromS1, mine)).toBe(' (opened by you)')
+    expect(tagsOf(fromS1, theirs)).toBe('')
+
+    const fromS2 = (await s2.listTabs()).text
+    expect(tagsOf(fromS2, userShort)).toBe(' (active)')
+    expect(tagsOf(fromS2, mine)).toBe('')
+    expect(tagsOf(fromS2, theirs)).toBe(' (opened by you)')
+  })
+
+  it('CB-U35 选中且崩了的、本会话开的 tab：正好是 ` (active) (crashed) (opened by you)`', async () => {
+    const { views, backendFor } = await loadAll()
+    views.createTab('https://user.test/', { activate: true })
+    const s1 = backendFor('s1')
+    const mine = shortOf((await s1.openTab({ url: 'https://a.example/' })).text)
+    const mineRow = views.listTabs().find((t) => t.openerSessionId === 's1')!
+    views.activateTab(mineRow.id)
+    fx.views[1].webContents.crashed = true
+
+    const text = (await s1.listTabs()).text
+    const line = text?.split('\n').find((l) => l.startsWith(`[${mine}]`))
+    expect(line).toBe(`[${mine}] (active) (crashed) (opened by you) (untitled) — about:blank`)
+    expect(tagsOf(text, mine)).toBe(' (active) (crashed) (opened by you)')
+  })
+
+  it('CB-U35 agent 的 close_tab 不进重开记录：之后 reopenClosedTab → null', async () => {
+    const { views, backendFor } = await loadAll()
+    views.createTab('https://user.test/', { activate: true })
+    const s1 = backendFor('s1')
+    const mine = shortOf((await s1.openTab({ url: 'https://a.example/' })).text)
+    expect((await s1.closeTab({ tabId: mine })).text).toBe(`Closed tab ${mine}.`)
+    const before = fx.views.length
+    expect(views.reopenClosedTab()).toBeNull()
+    expect(fx.views).toHaveLength(before)
   })
 })

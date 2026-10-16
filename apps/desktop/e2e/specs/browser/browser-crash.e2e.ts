@@ -443,6 +443,8 @@ describe('接管之前就崩了的 tab，浏览器窗口晚于崩溃才打开（
     bw = await until(() => app.browserWindow(), 'browser window page')
     wall = browserWallPane(bw)
     await until(() => wall.mounted(), 'browser window shell mounted')
+    // 本 spec 按卡片读页面区（崩了的卡片不挂页面）：切到平铺视图（缺省是单页视图）；视图记在设置里，重开还是它
+    await wall.useView('wall')
     const uuidB2 = (await rowOf(urlB2))?.id
     expect(uuidB2, 'B (rescued in CR-E2) in IPC listTabs').toBeTruthy()
     await eventually(

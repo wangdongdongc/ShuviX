@@ -53,7 +53,8 @@ vi.mock('../../externalOpen', async (importOriginal) => ({
 vi.mock('../agentGuards', () => ({
   installAgentGuards: (tabId: string, wc: unknown) => state.installAgentGuards(tabId, wc),
   uninstallAgentGuards: (tabId: string) => state.uninstallAgentGuards(tabId),
-  hasAgentGuards: (tabId: string) => state.hasAgentGuards(tabId)
+  hasAgentGuards: (tabId: string) => state.hasAgentGuards(tabId),
+  agentActing: () => false
 }))
 vi.mock('../browserCdpService', () => ({
   browserCdpManager: {
@@ -239,8 +240,8 @@ describe('createTab 与弹出页（NG-U8c / NG-U8d）', () => {
     expect(order(pop.webContents.loadURL, 0)).toBeLessThan(order(state.session))
     expect(order(state.session)).toBeLessThan(order(state.enableDialogHandling))
     expect(order(state.enableDialogHandling)).toBeLessThan(order(pop.webContents.loadURL, 1))
-    // 新 tab 是激活的那个（agent 的默认目标）
-    expect(views.listTabs().find((t) => t.active)?.id).toBe(popId)
+    // 弹出页开在后台：用户没在看，选中的还是开它的那页（选中只由用户改）
+    expect(views.listTabs().find((t) => t.active)?.id).toBe(views.listTabs()[0].id)
     expect(fx.dialog.showMessageBox).not.toHaveBeenCalled()
     expect(fx.shell.openExternal).not.toHaveBeenCalled()
   })

@@ -158,6 +158,15 @@ export function hasAgentGuards(tabId: string): boolean {
   return guards.has(tabId)
 }
 
+/**
+ * agent 此刻是否正在这个 tab 上动作（动作进行中，或动作结束后的 FILE_CHOOSER_GRACE_MS 宽限期里）。
+ * 页面这时弹出的新页多半是 agent 那一下点出来的 —— 开在后台，不换掉用户正在看的那一页。
+ */
+export function agentActing(tabId: string): boolean {
+  const g = guards.get(tabId)
+  return !!g && (g.inflight > 0 || g.disarmTimer !== null)
+}
+
 /** detach / tab 关闭时摘掉 */
 export function uninstallAgentGuards(tabId: string): void {
   const g = guards.get(tabId)

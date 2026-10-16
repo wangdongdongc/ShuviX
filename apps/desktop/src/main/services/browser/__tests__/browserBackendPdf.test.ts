@@ -22,7 +22,8 @@ const state = vi.hoisted(() => ({
   /** printToPDF 收到的选项 */
   printed: [] as Array<Record<string, unknown>>,
   /** 被激活的 tab（面板跟随 agent 正在操作的页面） */
-  activated: [] as string[],
+  /** noteAgentUse 收到的 tab（agent 用了哪页 —— 不选中它） */
+  used: [] as string[],
   bytes: Buffer.from('%PDF-1.7 fake'),
   /** 页面的渲染进程崩了（isCrashed 读它；用例直接拨） */
   crashed: false
@@ -42,7 +43,7 @@ vi.mock('../browserViewService', () => {
     }
   }
   return {
-    activateTab: (id: string) => void state.activated.push(id),
+    noteAgentUse: (id: string) => void state.used.push(id),
     closeTab: () => {},
     createTab: () => 'tab-uuid',
     listTabs: () => [],
@@ -75,7 +76,7 @@ afterAll(() => {
 
 beforeEach(() => {
   state.printed.length = 0
-  state.activated.length = 0
+  state.used.length = 0
   state.crashed = false
 })
 
@@ -88,7 +89,7 @@ describe('DesktopBrowserBackend.pdf', () => {
     expect(out).toEqual({ text: `Page exported to PDF: ${target} (A4)` })
     expect(out.details?.error).toBeUndefined()
     expect(readFileSync(target)).toEqual(state.bytes)
-    expect(state.activated).toEqual(['tab-uuid'])
+    expect(state.used).toEqual(['tab-uuid'])
   })
 
   it('BB-2 相对路径按会话工作目录解析，上级目录一路建好', async () => {

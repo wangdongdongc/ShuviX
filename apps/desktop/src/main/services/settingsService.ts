@@ -45,6 +45,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
     labelKey: 'settings.toolBrowserIgnoreCertificateErrors',
     desc: 'true | false — bypass HTTPS certificate validation for the embedded browser'
   },
+  'browser.searchEngine': {
+    labelKey: 'settings.toolBrowserSearchEngine',
+    desc: 'google | bing | baidu | duckduckgo — what the in-app browser address bar searches with when the input is not a web address; default google'
+  },
   'voice.tts.enabled': {
     labelKey: 'settings.voiceTtsEnabled',
     desc: 'true | false — auto-play TTS after agent response'

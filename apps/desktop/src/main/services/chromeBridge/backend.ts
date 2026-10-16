@@ -23,7 +23,11 @@ import {
   type ScrollDirection,
   type TabCdpSession
 } from '@shuvix/agent-runtime'
-import { CHROME_GROUP_COLORS, type ChromeTabInfo } from '@shuvix/chat-protocol/chromeBridge'
+import {
+  CHROME_GROUP_COLORS,
+  sessionColorFor,
+  type ChromeTabInfo
+} from '@shuvix/chat-protocol/chromeBridge'
 import { chromeTabOf, type ChromeTabBinding } from '@shuvix/chat-protocol/chromeTabSession'
 import { sessionRecords } from '../sessionRecords'
 import { chromeBrowserState, requireConnection, type ChromeBrowserState } from './browserState'
@@ -50,11 +54,9 @@ const TAB_URL_TIMEOUT_MS = 10_000
 /** 标签组标题里带的页面标题长度 */
 const GROUP_TITLE_PAGE_CHARS = 18
 
-/** 会话 id → 稳定的组颜色（同一条会话的组颜色不随重建变） */
+/** 会话 id → 稳定的组颜色（同一条会话的组颜色不随重建变；与应用内浏览器标签上的圆点同色） */
 export function groupColorFor(sessionId: string): (typeof CHROME_GROUP_COLORS)[number] {
-  let h = 0
-  for (let i = 0; i < sessionId.length; i++) h = (h * 31 + sessionId.charCodeAt(i)) >>> 0
-  return CHROME_GROUP_COLORS[h % CHROME_GROUP_COLORS.length]
+  return sessionColorFor(sessionId)
 }
 
 /** 标签组标题：`ShuviX · <挂着的页的标题>` */

@@ -138,6 +138,19 @@ export interface FakeViewWebContents {
   getTitle(): string
   isDestroyed(): boolean
   isCrashed(): boolean
+  isLoading(): boolean
+  /** 后退 / 前进（用例直接拨 canBack / canForward） */
+  canBack: boolean
+  canForward: boolean
+  navigationHistory: {
+    canGoBack(): boolean
+    canGoForward(): boolean
+    goBack: Mock<() => void>
+    goForward: Mock<() => void>
+  }
+  reload: Mock<() => void>
+  reloadIgnoringCache: Mock<() => void>
+  focus: Mock<() => void>
   getZoomFactor: Mock<() => number>
   setZoomFactor: Mock<(zoom: number) => void>
   close: Mock<() => void>
@@ -176,6 +189,7 @@ export interface FakeWindow {
     getZoomFactor(): number
     setWindowOpenHandler: Mock
     on: Mock
+    focus: Mock<() => void>
   }
   contentView: {
     addChildView: Mock<(view: FakeView) => void>
@@ -294,7 +308,8 @@ function create(): FakeElectron {
         return this.zoom
       },
       setWindowOpenHandler: vi.fn(),
-      on: vi.fn()
+      on: vi.fn(),
+      focus: vi.fn()
     }
     contentView = {
       addChildView: vi.fn((view: FakeView) => {
@@ -407,6 +422,18 @@ function create(): FakeElectron {
         getTitle: () => '',
         isDestroyed: () => wc.destroyed,
         isCrashed: () => wc.crashed,
+        isLoading: () => false,
+        canBack: false,
+        canForward: false,
+        navigationHistory: {
+          canGoBack: () => wc.canBack,
+          canGoForward: () => wc.canForward,
+          goBack: vi.fn(),
+          goForward: vi.fn()
+        },
+        reload: vi.fn(),
+        reloadIgnoringCache: vi.fn(),
+        focus: vi.fn(),
         getZoomFactor: vi.fn(() => wc.zoom),
         setZoomFactor: vi.fn((z: number) => {
           wc.zoom = z

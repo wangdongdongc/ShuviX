@@ -4,6 +4,11 @@
  * Tab 真源在主进程：Map<tabId, WebContentsView> + activeTabId。
  * renderer 侧 store 只是镜像，经 `browser-view:tab-*` 事件单向同步。
  *
+ * **activeTabId 是用户选中的那一页（Chrome 的「当前标签页」），只由用户改**：点标签、快捷键、
+ * 新开 tab、关掉选中的那页时落到邻居。agent 的动作从不改它 —— agent 开的 tab 在后台、操作哪页都
+ * 不切过去（2026-10-16 用户裁定：选中永不跟随 agent），否则用户正看着的页面会被 agent 换走。
+ * agent 在哪页上干活另记一份（agentUse：最近操作它的会话），标签上的圆点与提示条读它。
+ *
  * 位置由浏览器窗口的 renderer 一次性上报的**布局表**决定（tabId → bounds，CSS px 存储、
  * apply 时乘 zoomFactor）：出现在表里的 tab 挂进浏览器窗口、铺在它自己的卡片矩形上；
  * 没出现的**停到停放窗口**（stagingWindow.ts：从不显示的窗口，桌面尺寸）。
@@ -16,7 +21,7 @@
  * 关窗不销毁 tab（保留页面状态），销毁只发生在 closeTab 与 app 退出。
  */
 
-import { WebContentsView, BrowserWindow, dialog, session } from 'electron'
+import { WebContentsView, BrowserWindow, dialog, session, type WebContents } from 'electron'
 import { randomUUID } from 'crypto'
 import { createLogger } from '../../logger'
 import { settingsDao } from '../../dao/settingsDao'
@@ -25,7 +30,8 @@ import { browserCdpManager } from './browserCdpService'
 import { clipUrl, externalOpenDecision, routeExternalUrl } from '../externalOpen'
 import { appEventBus } from '../../utils/appEventBus'
 import { destroyStagingWindow, getStagingWindow, STAGING_SIZE } from './stagingWindow'
-import { hasAgentGuards, uninstallAgentGuards } from './agentGuards'
+import { agentActing, hasAgentGuards, uninstallAgentGuards } from './agentGuards'
+import { browserShortcutFor, nextZoomPercent, type BrowserShortcut } from './shortcuts'
 
 const log = createLogger('BrowserView')
 
@@ -38,6 +44,10 @@ export const BROWSER_PARTITION = 'persist:shuvix-browser'
 
 /** tab 数量上限 — 每个 WebContentsView 是独立渲染进程，防失控 */
 const MAX_TABS = 12
+/** ⌘⇧T 能重开的、最近被用户关掉的页面个数 */
+const MAX_CLOSED_URLS = 10
+/** 同一个 tab 上 agent 动作的提示（tab-agent 事件）最密多久发一次 */
+const AGENT_USE_THROTTLE_MS = 250
 
 /** 插入序即 tab 条顺序 */
 const tabs = new Map<string, WebContentsView>()
@@ -56,8 +66,11 @@ interface Rect {
 /** 一个 tab 在面板里的落位：矩形 + 页面缩放（卡片小的时候按桌面宽度排版再整体缩小） */
 interface Slot {
   bounds: Rect
-  /** 页面 zoomFactor；1 = 原样。与宿主窗口的 UI zoom 无关 */
-  zoom: number
+  /**
+   * 页面 zoomFactor；1 = 原样。与宿主窗口的 UI zoom 无关。
+   * 不给 = 用户自己按站点调的缩放（⌘+ / ⌘−，见 userZoom）—— 单页视图就是这样；平铺墙按卡片宽度给。
+   */
+  zoom?: number
 }
 
 /** renderer 上报的布局表：tabId → 落位（CSS px；apply 时才乘窗口 zoom，避免 zoom 变化后陈旧） */
@@ -67,6 +80,45 @@ let panelVisible = false
 let sessionInitialized = false
 /** 运行期信任的自签名 host 集合（跨 tab 共享），进程结束即失效 */
 const trustedHosts = new Set<string>()
+
+/** 最近一个在这页上动作的会话（标签上的圆点、「〈会话〉正在使用此页面」提示条） */
+interface AgentUse {
+  sessionId: string
+  /** 上一次给 renderer 发提示的时刻（节流用） */
+  sentAt: number
+}
+const agentUse = new Map<string, AgentUse>()
+/** 哪个会话的 agent 开的这个 tab（list_tabs 给它标「opened by you」）；用户开的不在表里 */
+const openerSession = new Map<string, string>()
+/**
+ * 宿主接进来的两件与会话有关的事。浏览器模块不碰会话表、不碰主窗口（单测也就不必拉起数据库）：
+ * main/index.ts 启动时注入。
+ */
+export interface BrowserSessionHooks {
+  /** 会话标题（提示条、标签悬停里写的会话名）；查不到回空串 */
+  sessionTitle: (sessionId: string) => string
+  /** 把主窗口拉到前面并切到这个会话（提示条上的「查看对话」）；会话不存在回 false */
+  openSession: (sessionId: string) => boolean
+}
+let sessionHooks: BrowserSessionHooks = { sessionTitle: () => '', openSession: () => false }
+
+export function setBrowserSessionHooks(hooks: BrowserSessionHooks): void {
+  sessionHooks = hooks
+}
+
+/** 「查看对话」：交给宿主把主窗口切到那个会话 */
+export function openAgentSession(sessionId: string): boolean {
+  return sessionHooks.openSession(sessionId)
+}
+
+/** 用户最近关掉的页面地址（⌘⇧T 从尾巴上取） */
+const closedUrls: string[] = []
+/**
+ * 用户按站点调的页面缩放（host → zoomFactor），照 Chrome：⌘+ / ⌘− 记在站点上，换 tab、导航回来都还在。
+ * Chromium 自己的缩放也按 host 共享，但平铺墙会按卡片宽度把同站页面改小 —— 这份表是用户的那个值，
+ * 回到单页视图时照它恢复。进程结束即失效。
+ */
+const userZoom = new Map<string, number>()
 /** 同一 host 的并发证书弹窗合并：复用 in-flight 决策 Promise */
 const pendingCertPrompts = new Map<string, Promise<boolean>>()
 
@@ -172,9 +224,34 @@ function reapplyZoom(tabId: string): void {
   const slot = layout.get(tabId)
   const view = tabs.get(tabId)
   if (!slot || !view || view.webContents.isDestroyed()) return
-  if (Math.abs(view.webContents.getZoomFactor() - slot.zoom) > 0.001) {
-    view.webContents.setZoomFactor(slot.zoom)
+  const zoom = slot.zoom ?? userZoomOf(view)
+  if (Math.abs(view.webContents.getZoomFactor() - zoom) > 0.001) {
+    view.webContents.setZoomFactor(zoom)
   }
+}
+
+/**
+ * 缩放按站点记，与 Chromium 自己的按站点缩放同一个键（HostZoomMap：有主机名用主机名 —— 不含端口；
+ * 没有主机名的 file: / about: 之类用整个地址，不含 # 之后）：localhost:3000 与 localhost:4000 是同一个站点，
+ * 两个本地文件各是各的。
+ */
+function zoomKeyOf(url: string): string {
+  try {
+    const u = new URL(url)
+    return u.hostname || url.split('#')[0]
+  } catch {
+    return url
+  }
+}
+
+/** 这个 view 当前站点上用户调的缩放（没调过 = 1） */
+function userZoomOf(view: WebContentsView): number {
+  return userZoom.get(zoomKeyOf(view.webContents.getURL())) ?? 1
+}
+
+/** 用户缩放的百分比（提示与地址栏右端的缩放标识用） */
+function userZoomPercentOf(view: WebContentsView): number {
+  return Math.round(userZoomOf(view) * 100)
 }
 
 /**
@@ -192,7 +269,8 @@ function applyLayout(): void {
       continue
     }
     attachTo(tabId, view, host)
-    const { bounds, zoom } = slot
+    const { bounds } = slot
+    const zoom = slot.zoom ?? userZoomOf(view)
     view.setBounds({
       x: Math.round(bounds.x * winZoom),
       y: Math.round(bounds.y * winZoom),
@@ -218,14 +296,22 @@ function applyLayout(): void {
  * window.open 出来的 http(s) 页面开成新 tab。开它的 tab 若在 agent 手里（装着防护），这个弹出页也是
  * agent 活动的一部分：先接管、装好文件框 / 打印防护、开好对话框自动处理，**再**加载 —— 否则一加载就
  * 自动打印的「打印版」页面、弹 alert 的页面会从后台弹出原生对话框。
+ *
+ * 选不选中它照 Chrome：用户在自己正看着的那页上点出来的（窗口在前台、开它的就是选中的那页、agent 此刻
+ * 没在那页上动作）开在前台；其余 —— agent 点出来的、后台页面自己弹的 —— 开在后台，不换掉用户正看着的页。
+ * agent 那页弹出的新页记在同一个会话名下（list_tabs 里是「opened by you」）。
  */
 function openPopupTab(openerTabId: string, url: string): void {
+  const byAgent = agentActing(openerTabId)
+  const activate = !!browserWindowInFront() && openerTabId === activeTabId && !byAgent
+  const opener = byAgent ? agentUse.get(openerTabId)?.sessionId : undefined
+  const opts = { activate, ...(opener ? { openerSessionId: opener } : {}) }
   try {
     if (!hasAgentGuards(openerTabId)) {
-      createTab(url, { activate: true })
+      createTab(url, opts)
       return
     }
-    const id = createTab('about:blank', { activate: true })
+    const id = createTab('about:blank', opts)
     void browserCdpManager
       .session(id)
       .then(async (session) => {
@@ -259,8 +345,17 @@ function routeWindowOpen(openerTabId: string, targetUrl: string, pageUrl: string
   })
 }
 
-/** 创建新 tab；返回 tabId。超过 MAX_TABS 抛错 */
-export function createTab(url?: string, opts?: { activate?: boolean }): string {
+/**
+ * 创建新 tab；返回 tabId。超过 MAX_TABS 抛错。
+ *
+ * `activate`：开在前台（用户的动作：新标签页、⌘T、自己点出来的弹出页）。不给就开在后台 —— 但一个 tab
+ * 都没选中时（窗口是空的）新 tab 照样成为选中的那页，没有谁正看着别的页会被换走。
+ * `openerSessionId`：agent 开的 tab 记下是哪个会话开的。
+ */
+export function createTab(
+  url?: string,
+  opts?: { activate?: boolean; openerSessionId?: string }
+): string {
   if (tabs.size >= MAX_TABS) {
     throw new Error(`Too many browser tabs (max ${MAX_TABS}). Close some tabs first.`)
   }
@@ -303,6 +398,9 @@ export function createTab(url?: string, opts?: { activate?: boolean }): string {
   }
 
   const wc = view.webContents
+
+  // 浏览器快捷键（⌘T / ⌘W / ⌘L / ⌘R …）：焦点在页面里时由这里接。只有真实键盘触发，agent 的 CDP 按键不会
+  installShortcuts(wc)
 
   // 弹窗 / target=_blank：http(s) 在面板新开 tab，其他协议能否交给系统见 routeWindowOpen
   wc.setWindowOpenHandler(({ url: targetUrl }) => {
@@ -403,14 +501,25 @@ export function createTab(url?: string, opts?: { activate?: boolean }): string {
     sendToRenderer('browser-view:did-navigate', { tabId, url: details.url })
   })
 
+  // 提交了导航：地址、能否后退 / 前进、这个站点上用户调的缩放（换了站点就换一个值）
+  const sendCommitted = (navUrl: string): void => {
+    sendToRenderer('browser-view:did-navigate', {
+      tabId,
+      url: navUrl,
+      canGoBack: wc.navigationHistory.canGoBack(),
+      canGoForward: wc.navigationHistory.canGoForward(),
+      zoomPercent: userZoomPercentOf(view)
+    })
+  }
+
   wc.on('did-navigate', (_event, navUrl) => {
     reapplyZoom(tabId)
-    sendToRenderer('browser-view:did-navigate', { tabId, url: navUrl })
+    sendCommitted(navUrl)
   })
 
   wc.on('did-navigate-in-page', (_event, navUrl, isMainFrame) => {
     if (!isMainFrame) return
-    sendToRenderer('browser-view:did-navigate', { tabId, url: navUrl })
+    sendCommitted(navUrl)
   })
 
   wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -445,17 +554,19 @@ export function createTab(url?: string, opts?: { activate?: boolean }): string {
     forgetTab(tabId, view)
   })
 
+  const activate = !!opts?.activate || activeTabId === null
   tabs.set(tabId, view)
+  if (opts?.openerSessionId) openerSession.set(tabId, opts.openerSessionId)
   sendToRenderer('browser-view:tab-created', {
     tabId,
     url: url ?? 'about:blank',
-    active: !!opts?.activate
+    active: activate
   })
 
   // 总是真的导航一次（没给地址就是 about:blank）：从没导航过的 webContents 没有渲染进程，
   // agent 之后 attach 上去发的 CDP 命令会一直等下去
   void wc.loadURL(url ?? 'about:blank')
-  if (opts?.activate) activateTab(tabId)
+  if (activate) activateTab(tabId)
   publishTabCount()
 
   log.info(`Tab created: ${tabId}${url ? ` → ${url}` : ''} (${tabs.size} total)`)
@@ -463,8 +574,8 @@ export function createTab(url?: string, opts?: { activate?: boolean }): string {
 }
 
 /**
- * 激活指定 tab —— 只改「谁是 agent 的默认目标 + 卡片高亮」。
- * 可见性与位置一律由 renderer 的布局表决定，这里不动任何 view 的落位。
+ * 选中指定 tab（用户的动作）—— 只改「用户当前看的是哪一页」。
+ * 可见性与位置一律由 renderer 的布局表决定（单页视图据此只给选中的那页排位），这里不动任何 view 的落位。
  */
 export function activateTab(tabId: string): void {
   const view = tabs.get(tabId)
@@ -477,13 +588,31 @@ export function activateTab(tabId: string): void {
   sendToRenderer('browser-view:tab-activated', { tabId })
 }
 
-/** 关闭 tab；若关的是激活 tab，激活右邻（无则左邻），关最后一个则置空 */
-export function closeTab(tabId: string): void {
+/**
+ * 关闭 tab；若关的是选中的 tab，选中右邻（无则左邻），关最后一个则置空。
+ * `remember`：用户关的（标签上的 ×、⌘W、菜单）记下地址，⌘⇧T 能重开；agent 的 close_tab 不记。
+ */
+export function closeTab(tabId: string, opts?: { remember?: boolean }): void {
   const view = tabs.get(tabId)
   if (!view) return
   const wc = view.webContents
+  if (opts?.remember) {
+    const url = wc.getURL()
+    if (url && url !== 'about:blank') {
+      closedUrls.push(url)
+      if (closedUrls.length > MAX_CLOSED_URLS) closedUrls.shift()
+    }
+  }
   forgetTab(tabId, view)
   wc.close()
+}
+
+/** 重开最近被用户关掉的页面（⌘⇧T），开在前台；没有可重开的回 null */
+export function reopenClosedTab(): string | null {
+  // 开满了就什么也不做、记录留着 —— 先取出来再建会在 createTab 抛错时把那个地址弄丢
+  if (tabs.size >= MAX_TABS) return null
+  const url = closedUrls.pop()
+  return url ? createTab(url, { activate: true }) : null
 }
 
 /**
@@ -498,6 +627,8 @@ function forgetTab(tabId: string, view: WebContentsView): void {
   const ids = [...tabs.keys()]
   tabs.delete(tabId)
   layout.delete(tabId)
+  agentUse.delete(tabId)
+  openerSession.delete(tabId)
   const parent = parentOf.get(tabId)
   parentOf.delete(tabId)
   if (parent && !parent.isDestroyed()) parent.contentView.removeChildView(view)
@@ -524,29 +655,208 @@ export function getTabView(tabId: string): WebContentsView | null {
   return tabs.get(tabId) ?? null
 }
 
-/** tab 列表快照（renderer 水合用），顺序 = tab 条顺序；带 CDP 状态供重载后恢复标识 */
-export function listTabs(): Array<{
+/** tab 列表快照里的一行 */
+export interface BrowserTabSnapshot {
   id: string
   url: string
   title: string
+  /** 用户选中的那一页 */
   active: boolean
   cdpAttached: boolean
   cdpIntercepting: boolean
   /** 渲染进程崩了（浏览器窗口晚于崩溃才打开时，靠它把卡片画成「页面崩溃了」） */
   crashed: boolean
-}> {
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+  /** 用户在这个站点上调的缩放（百分比） */
+  zoomPercent: number
+  /** 最近在这页上动作的会话（没有 agent 碰过就没有） */
+  agentSessionId?: string
+  agentSessionTitle?: string
+  /** 开这个 tab 的会话（agent 开的才有） */
+  openerSessionId?: string
+}
+
+/** tab 列表快照（renderer 水合用），顺序 = tab 条顺序；带 CDP 状态供重载后恢复标识 */
+export function listTabs(): BrowserTabSnapshot[] {
   return [...tabs.entries()].map(([id, view]) => {
     const cdp = browserCdpManager.cdpState(id)
+    const wc = view.webContents
+    const use = agentUse.get(id)
+    const opener = openerSession.get(id)
     return {
       id,
-      url: view.webContents.getURL() || 'about:blank',
-      title: view.webContents.getTitle(),
+      url: wc.getURL() || 'about:blank',
+      title: wc.getTitle(),
       active: id === activeTabId,
       cdpAttached: cdp.attached,
       cdpIntercepting: cdp.intercepting,
-      crashed: view.webContents.isCrashed()
+      crashed: wc.isCrashed(),
+      loading: wc.isLoading(),
+      canGoBack: wc.navigationHistory.canGoBack(),
+      canGoForward: wc.navigationHistory.canGoForward(),
+      zoomPercent: userZoomPercentOf(view),
+      ...(use
+        ? { agentSessionId: use.sessionId, agentSessionTitle: sessionTitleOf(use.sessionId) }
+        : {}),
+      ...(opener ? { openerSessionId: opener } : {})
     }
   })
+}
+
+/** 开这个 tab 的会话（agent 开的才有） */
+export function openerSessionOf(tabId: string): string | undefined {
+  return openerSession.get(tabId)
+}
+
+function sessionTitleOf(sessionId: string): string {
+  try {
+    return sessionHooks.sessionTitle(sessionId)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * agent 在这页上动作了一下（每个带 tabId 的工具调用都会来）：记下是哪个会话，告诉浏览器窗口 ——
+ * 标签上的圆点亮起 / 脉动一下，选中这页时提示条写出会话名。**不选中它**（选中只由用户改）。
+ * 同一个会话连续动作时节流；换了会话立刻发。
+ */
+export function noteAgentUse(tabId: string, sessionId: string): void {
+  if (!tabs.has(tabId)) return
+  const now = Date.now()
+  const prev = agentUse.get(tabId)
+  if (prev && prev.sessionId === sessionId && now - prev.sentAt < AGENT_USE_THROTTLE_MS) return
+  agentUse.set(tabId, { sessionId, sentAt: now })
+  sendToRenderer('browser-view:tab-agent', {
+    tabId,
+    sessionId,
+    sessionTitle: sessionTitleOf(sessionId)
+  })
+}
+
+/**
+ * 按站点调缩放（⌘+ / ⌘− / ⌘0，⋮ 菜单）：记进 userZoom，同站点的 tab 一起换（Chrome 的缩放也是按站点的）。
+ * 正挂在平铺墙上的卡片按卡片宽度另有缩放，不动它们 —— 回到单页视图时照这个值恢复。
+ */
+export function zoomTab(tabId: string, direction: 'in' | 'out' | 'reset'): void {
+  const view = tabs.get(tabId)
+  if (!view || view.webContents.isDestroyed()) return
+  const key = zoomKeyOf(view.webContents.getURL())
+  const percent = nextZoomPercent(userZoomPercentOf(view), direction)
+  if (percent === 100) userZoom.delete(key)
+  else userZoom.set(key, percent / 100)
+  for (const [id, v] of tabs) {
+    if (v.webContents.isDestroyed() || zoomKeyOf(v.webContents.getURL()) !== key) continue
+    // 只动按用户缩放排位的（单页视图里的那页）；平铺墙的卡片按卡片宽度另有缩放，停放的不在表里
+    const slot = layout.get(id)
+    if (slot && slot.zoom === undefined) reapplyZoom(id)
+    sendToRenderer('browser-view:tab-zoom', { tabId: id, zoomPercent: percent })
+  }
+}
+
+// ====== 键盘快捷键 ======
+
+/** 已经接上快捷键的 webContents（外壳每次建窗都会来一次；同一个不接两遍） */
+const shortcutTargets = new WeakSet<WebContents>()
+
+/**
+ * 把浏览器快捷键接到一个 webContents 上：每个 tab 的页面（createTab 里）和浏览器窗口的外壳
+ * （browserWindowService 建窗时）。只认用户真按的键（见 shortcuts.ts 文件头）；停放窗口里的页面
+ * 拿不到键盘焦点，所以实际只有挂在浏览器窗口里的那几页会走到这里。
+ */
+export function installShortcuts(wc: WebContents): void {
+  if (shortcutTargets.has(wc)) return
+  shortcutTargets.add(wc)
+  wc.on('before-input-event', (event, input) => {
+    const action = browserShortcutFor(input, process.platform)
+    if (!action) return
+    event.preventDefault()
+    runShortcut(action)
+  })
+}
+
+/** 选中的那一页（快捷键的作用对象）；没选中任何页回 null */
+function selectedView(): { id: string; view: WebContentsView } | null {
+  if (!activeTabId) return null
+  const view = tabs.get(activeTabId)
+  return view && !view.webContents.isDestroyed() ? { id: activeTabId, view } : null
+}
+
+/**
+ * 用户在外壳里新开了一个空白页（标签条上的 +、菜单、新标签页）：请 renderer 把光标放进地址栏。
+ * 键盘焦点本来就在外壳上（用户刚点了它），不碰任何窗口。agent 开的 tab 从不走这里 —— 光标不跟着 agent。
+ */
+export function requestOmniboxFocus(): void {
+  sendToRenderer('browser-view:command', { command: 'focusOmnibox' })
+}
+
+/**
+ * 让地址栏拿到焦点：键盘焦点先回到外壳（按键时焦点可能在页面里），再请 renderer 聚焦输入框。
+ *
+ * **只在浏览器窗口已经在前台且有焦点时**才动：`webContents.focus()` 在 macOS / Linux 上会顺手聚焦它所在的
+ * 窗口（Electron 的 WebContents::Focus）。快捷键只来自用户真按的键，窗口必然在前台；这道判断保证这里
+ * 永远不会把一个窗口弄到眼前（noDisturbGuard.test.ts 的 ST-U14 只放行带着这道判断的这一个函数）。
+ */
+function focusOmniboxInFront(): void {
+  const win = browserWindowInFront()
+  if (!win) return
+  win.webContents.focus()
+  sendToRenderer('browser-view:command', { command: 'focusOmnibox' })
+}
+
+/** 执行一个快捷键动作（也供 IPC 复用：外壳的按钮与菜单走同一条路） */
+export function runShortcut(action: BrowserShortcut): void {
+  const selected = selectedView()
+  const ids = [...tabs.keys()]
+  switch (action.type) {
+    case 'newTab':
+      if (tabs.size >= MAX_TABS) return
+      createTab(undefined, { activate: true })
+      focusOmniboxInFront()
+      return
+    case 'closeTab':
+      if (selected) closeTab(selected.id, { remember: true })
+      return
+    case 'reopenClosedTab':
+      if (tabs.size < MAX_TABS) reopenClosedTab()
+      return
+    case 'focusOmnibox':
+      focusOmniboxInFront()
+      return
+    case 'reload':
+      if (!selected) return
+      if (action.ignoreCache) selected.view.webContents.reloadIgnoringCache()
+      else selected.view.webContents.reload()
+      return
+    case 'back':
+      if (selected?.view.webContents.navigationHistory.canGoBack()) {
+        selected.view.webContents.navigationHistory.goBack()
+      }
+      return
+    case 'forward':
+      if (selected?.view.webContents.navigationHistory.canGoForward()) {
+        selected.view.webContents.navigationHistory.goForward()
+      }
+      return
+    case 'nextTab':
+    case 'previousTab': {
+      if (ids.length === 0) return
+      const at = activeTabId ? ids.indexOf(activeTabId) : -1
+      const step = action.type === 'nextTab' ? 1 : -1
+      activateTab(ids[(at + step + ids.length) % ids.length])
+      return
+    }
+    case 'selectTab': {
+      const id = action.index === -1 ? ids[ids.length - 1] : ids[action.index]
+      if (id) activateTab(id)
+      return
+    }
+    case 'zoom':
+      if (selected) zoomTab(selected.id, action.direction)
+      return
+  }
 }
 
 /**
@@ -555,7 +865,13 @@ export function listTabs(): Array<{
  * 也是不做逐 tab 增量更新的原因（拖拽/切模式时 N 次 IPC 会撕裂）。
  */
 export function setLayout(entries: Array<{ tabId: string; bounds: Rect; zoom?: number }>): void {
-  layout = new Map(entries.map((e) => [e.tabId, { bounds: e.bounds, zoom: e.zoom ?? 1 }]))
+  // 没给 zoom 的（单页视图）按用户在那个站点上调的缩放显示，见 Slot.zoom
+  layout = new Map(
+    entries.map((e): [string, Slot] => [
+      e.tabId,
+      { bounds: e.bounds, ...(typeof e.zoom === 'number' ? { zoom: e.zoom } : {}) }
+    ])
+  )
   applyLayout()
 }
 
@@ -598,6 +914,10 @@ export function destroyAllTabs(): void {
   tabs.clear()
   parentOf.clear()
   layout.clear()
+  agentUse.clear()
+  openerSession.clear()
+  closedUrls.length = 0
+  userZoom.clear()
   activeTabId = null
   hostWindow = null
   destroyStagingWindow()

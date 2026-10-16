@@ -751,6 +751,8 @@
     "toolDbDuplicateName": "認証情報名はすでに存在します",
     "toolBrowserTitle": "ブラウザパネル",
     "toolBrowserDesc": "内蔵ブラウザパネルの動作 —— ご自身での閲覧にも、ブラウザを有効にしたセッションで AI がウェブを開くときにも適用されます。",
+    "toolBrowserSearchEngine": "アドレスバーの検索エンジン",
+    "toolBrowserSearchEngineHint": "内蔵ブラウザのアドレスバーに入力したものが URL でないとき、これで検索します。",
     "toolBrowserIgnoreCertificateErrors": "証明書エラーを無視",
     "toolBrowserIgnoreCertificateErrorsHint": "オフの場合、自己署名 / 信頼されていない証明書では確認ダイアログを表示します。オンにするとすべての証明書エラーを無視します。",
     "toolBrowserSecurityWarning": "警告：オンにするとフィッシングサイトを含むすべての HTTPS 証明書エラー（自己署名、期限切れ、ホスト名不一致）が無視されます。信頼できる社内ネットワークでのみ有効にしてください。",
@@ -1132,7 +1134,6 @@
     "subAgentInterrupt": "サブエージェントを中断",
     "subAgentReplyPlaceholder": "タスクが未完了ですか？会話を続ける...",
     "subAgentReplySend": "送信",
-    "urlPlaceholder": "URL を入力",
     "newTerminal": "新規ターミナル",
     "closeTerminal": "ターミナルを閉じる",
     "files": "ファイル",
@@ -1208,15 +1209,9 @@
     "refresh": "再読み込み",
     "stop": "読み込みを停止",
     "openExternal": "システムブラウザーで開く",
-    "gridCount": "表示中 {{shown}}/{{total}}",
-    "zoomHint": "ズーム {{pct}}% —— ページを {{width}}px 幅でレイアウトしてからカードに合わせて縮小",
     "newTab": "新しいタブ",
     "closeTab": "タブを閉じる",
     "untitledTab": "新しいタブ",
-    "agent": {
-      "connected": "AI がこのタブに接続しています（ページの閲覧・操作が可能）",
-      "intercepting": "AI がリクエストのインターセプトを有効にしています——このタブが読み込む内容は変更・差し替えられている可能性があります"
-    },
     "cert": {
       "title": "信頼されていない証明書：{{host}}",
       "continue": "続行",
@@ -1229,6 +1224,34 @@
       "crashedTitle": "このページはクラッシュしました",
       "crashedDetail": "ページのプロセスが停止しました（{{reason}}）。",
       "retry": "再試行"
+    },
+    "omniboxPlaceholder": "{{engine}} で検索、または URL を入力",
+    "notSecure": "保護されていない通信",
+    "zoomIndicator": "ズーム: {{pct}}%（クリックで 100% に戻す）",
+    "searchTabs": "タブを検索",
+    "tabUsedBy": "「{{session}}」が使用中",
+    "view": {
+      "single": "1 ページ表示",
+      "wall": "すべてのタブを並べて表示"
+    },
+    "menu": {
+      "more": "その他",
+      "duplicate": "タブを複製",
+      "copyLink": "リンクをコピー",
+      "closeOthers": "他のタブを閉じる",
+      "closeRight": "右側のタブを閉じる",
+      "reopenClosed": "閉じたタブを開き直す",
+      "zoomIn": "拡大",
+      "zoomOut": "縮小",
+      "zoomReset": "既定のサイズに戻す（現在 {{pct}}%）",
+      "settings": "閲覧データと証明書の設定…"
+    },
+    "infobar": {
+      "using": "「{{session}}」がこのページを使用しています",
+      "usingUnknown": "AI がこのページを使用しています",
+      "intercepting": "「{{session}}」がこのページを使用し、ネットワークリクエストを傍受しています — ページの内容が変更される可能性があります",
+      "interceptingUnknown": "AI がこのページを使用し、ネットワークリクエストを傍受しています — ページの内容が変更される可能性があります",
+      "openSession": "会話を表示"
     }
   },
   "command": {

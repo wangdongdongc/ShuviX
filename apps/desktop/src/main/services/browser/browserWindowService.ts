@@ -20,7 +20,7 @@ import { loadRendererPage } from '../../utils/rendererPage'
 import { isHeadless } from '../../utils/headless'
 import { t } from '../../i18n'
 import { guardAppWindow } from '../externalOpen'
-import { destroyAllTabs, setHostWindow } from './browserViewService'
+import { destroyAllTabs, installShortcuts, setHostWindow } from './browserViewService'
 
 const log = createLogger('BrowserWindow')
 
@@ -118,6 +118,8 @@ function create(): BrowserWindow {
 
   // 外壳自己不该被带去外站（卡片里的页面是 WebContentsView，各有各的闸）
   guardAppWindow(created)
+  // 焦点在标签条 / 地址栏上时的浏览器快捷键（焦点在页面里时由各 tab 自己的 webContents 接）
+  installShortcuts(created.webContents)
 
   const hash = 'browser-window'
   loadRendererPage(created, hash)

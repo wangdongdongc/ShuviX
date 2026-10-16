@@ -309,7 +309,9 @@ describe('tab 的动作不碰浏览器窗口（ST-U3）', () => {
       expect(await views.captureTab(a)).toMatch(/^data:image\/png;base64,/)
       expect(popup(fx.views[0], 'https://b/')).toStrictEqual({ action: 'deny' })
       expect(fx.views).toHaveLength(3)
-      expect(views.listTabs().find((t) => t.url === 'https://b/')?.active).toBe(true)
+      // 没人正看着浏览器窗口：弹出页开在后台，选中的还是空白页（选中只由用户改）
+      expect(views.listTabs().find((t) => t.url === 'https://b/')?.active).toBe(false)
+      expect(views.listTabs().find((t) => t.id === blank)?.active).toBe(true)
       views.closeTab(blank)
       await flush()
 

@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
 import { useBrowserTabsStore, type BrowserTabInfo } from '../../stores/browserTabsStore'
 import { BrowserCard, type BrowserCardProps } from './BrowserCard'
+import { NewTabPage } from './PageFaces'
+import { useDialogOverlay } from './useDialogOverlay'
+import type { SearchEngineId } from './omnibox'
 import { CARD_MIN_H, CARD_TARGET_H, CARD_TARGET_W, MAX_COLS, cardZoomFor } from './tabUtils'
 
 /** 卡片挂上真页面后隔多久抓一张快照（滚动时顶替用） */
 const SNAPSHOT_DELAY = 700
 
 /**
- * 浏览器窗口的网格卡片墙
+ * 浏览器窗口的第二种视图：平铺墙（同时看几页 —— 看几个 agent 各自在干什么）。缺省是单页视图
+ * （BrowserSinglePage），用户在工具条上切换（2026-10-16 用户裁定：墙留作第二种视图）。
  *
- * 每个 tab 是一张自带迷你工具条的卡片；页面本体是主进程的 WebContentsView，叠在本组件
- * 给出的 placeholder 矩形上方。本组件把**布局表**（tabId → 矩形 + 页面缩放）同步给主进程，
- * 表里有谁谁就显示，主进程不需要知道任何布局规则。
+ * 每个 tab 是一张卡片（卡片头 + 页面）；后退 / 前进 / 地址栏在窗口顶上，作用于选中的那张。页面本体是
+ * 主进程的 WebContentsView，叠在本组件给出的 placeholder 矩形上方。本组件把**布局表**（tabId → 矩形 +
+ * 页面缩放）同步给主进程，表里有谁谁就显示，主进程不需要知道任何布局规则。
  *
  * 三条硬约束都源自「原生 view 画在 DOM 之上、不跟着 DOM 滚、也不能被裁剪」——
  * 与窗口形态无关，搬进独立窗口后一条都没少：
@@ -22,14 +25,14 @@ const SNAPSHOT_DELAY = 700
  *
  * 列数/行数由窗口尺寸自动算：一个 tab 就铺满整窗，多了才分格。
  */
-export function BrowserWall(): React.JSX.Element {
-  const { t } = useTranslation()
+export function BrowserWall({ engine }: { engine: SearchEngineId }): React.JSX.Element {
   const tabs = useBrowserTabsStore((s) => s.tabs)
   const activeTabId = useBrowserTabsStore((s) => s.activeTabId)
   const createTab = useBrowserTabsStore((s) => s.createTab)
   const closeTab = useBrowserTabsStore((s) => s.closeTab)
   const activateTab = useBrowserTabsStore((s) => s.activateTab)
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
+  const hasDialogOverlay = useDialogOverlay()
 
   const contentRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -37,22 +40,8 @@ export function BrowserWall(): React.JSX.Element {
   const [size, setSize] = useState({ width: 0, height: 0 })
   /** 当前挂着真页面的 tab（其余卡片显示快照/占位） */
   const [liveIds, setLiveIds] = useState<string[]>([])
-  /** 当前卡片宽度对应的页面缩放（整数百分比，各卡片同宽故只存一份） */
-  const [zoomPercent, setZoomPercent] = useState(100)
   /** tabId → 最近一次抓到的画面 dataURL */
   const [snapshots, setSnapshots] = useState<Record<string, string>>({})
-
-  // 检测是否有对话框覆盖层打开（WebContentsView 在原生层渲染，需要手动让位）
-  const [hasDialogOverlay, setHasDialogOverlay] = useState(false)
-  useEffect(() => {
-    const check = (): void => {
-      setHasDialogOverlay(document.querySelector('.dialog-overlay') !== null)
-    }
-    const mo = new MutationObserver(check)
-    mo.observe(document.body, { childList: true, subtree: true })
-    check()
-    return () => mo.disconnect()
-  }, [])
 
   // ====== 网格几何 ======
 
@@ -66,9 +55,6 @@ export function BrowserWall(): React.JSX.Element {
   )
   /** 行高：向下取整让 rows 行一定塞得进视口（scroll-snap 才对得齐） */
   const slotH = Math.max(CARD_MIN_H, Math.floor(size.height / rows))
-  /** 实际能完整露出几张（状态栏「同屏 x/y」的 x） */
-  const shownCount = Math.min(tabs.length, cols * Math.max(1, Math.floor(size.height / slotH)))
-
   // ====== 布局同步 ======
 
   /** 各卡片的页面区（空白页 / 错误页的卡片不注册，它们永远不挂真页面） */
@@ -92,11 +78,9 @@ export function BrowserWall(): React.JSX.Element {
         bounds: { x: number; y: number; width: number; height: number }
         zoom: number
       }> = []
-      let cardWidth = 0
       for (const [tabId, el] of cardEls.current) {
         const rect = el.getBoundingClientRect()
         if (rect.width <= 0 || rect.height <= 0) continue
-        cardWidth = rect.width
         // 原生 view 不能被裁剪：露出一半的卡片不挂真页面，交给快照图
         if (clip && (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5)) continue
         entries.push({
@@ -115,10 +99,6 @@ export function BrowserWall(): React.JSX.Element {
 
       const ids = entries.map((e) => e.tabId)
       setLiveIds((prev) => (prev.join('|') === ids.join('|') ? prev : ids))
-      if (cardWidth > 0) {
-        const pct = Math.round(cardZoomFor(cardWidth) * 100)
-        setZoomPercent((prev) => (prev === pct ? prev : pct))
-      }
     })
   }, [wallActive])
 
@@ -151,9 +131,9 @@ export function BrowserWall(): React.JSX.Element {
     return () => ro.disconnect()
   }, [syncLayout])
 
-  // 激活 tab 变了（agent 刚开的新 tab、agent 转去操作另一张、用户点了一张）：把它那一格滚进
-  // 视口。新 tab 追加在墙尾，不滚的话 agent 刚打开的页面常常落在看不见的地方。
-  // block: 'nearest' —— 已经完整可见就不动，免得 agent 在同屏几张之间来回时整墙乱跳。
+  // 选中的 tab 变了（用户点了一张、按了 ⌘1–9 / Ctrl+Tab、新开了一张）：把它那一格滚进视口。
+  // 新 tab 追加在墙尾，不滚的话刚开的那页常常落在看不见的地方。agent 的动作不改选中，所以墙不会跟着
+  // agent 跳。block: 'nearest' —— 已经完整可见就不动。
   useEffect(() => {
     if (!activeTabId) return
     const cell = scrollRef.current?.querySelector(`[data-wall-cell="${activeTabId}"]`)
@@ -206,32 +186,18 @@ export function BrowserWall(): React.JSX.Element {
     tab,
     isActive: tab.id === activeTabId,
     live: liveIds.includes(tab.id),
-    zoomPercent,
     snapshot: snapshots[tab.id],
     onActivate: () => activateTab(tab.id),
     onClose: () => handleCloseTab(tab.id),
     onNavigate: (target: string) => navigateTab(tab.id, target),
-    onOpenExternal: () => {
-      if (tab.url && tab.url !== 'about:blank') window.open(tab.url, '_blank')
-    },
     registerPlaceholder: (el: HTMLDivElement | null) => registerCard(tab.id, el)
   })
 
-  const anyLoading = tabs.some((tab) => tab.isLoading)
-
   return (
-    <div className="flex flex-col h-full min-h-0 bg-bg-primary overflow-hidden">
+    <div className="flex flex-col h-full min-h-0 bg-bg-primary overflow-hidden" data-browser-wall>
       <div ref={contentRef} className="flex-1 min-h-0 relative">
         {tabs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 h-full select-none">
-            <p className="text-xs text-text-tertiary/50">{t('panel.urlPlaceholder')}</p>
-            <button
-              onClick={() => createTab()}
-              className="px-3 py-1.5 rounded-md text-xs text-text-secondary border border-border-secondary/60 hover:bg-bg-hover/50 transition-colors"
-            >
-              {t('browser.newTab')}
-            </button>
-          </div>
+          <NewTabPage engine={engine} onNavigate={(url) => createTab(url)} />
         ) : (
           /* 整墙可滚，scroll-snap 保证停下时是整数行卡片铺满 */
           <div
@@ -252,21 +218,6 @@ export function BrowserWall(): React.JSX.Element {
             ))}
           </div>
         )}
-      </div>
-
-      {/* ====== 底部状态栏 ====== */}
-      <div className="flex-shrink-0 flex items-center justify-end gap-1.5 px-2.5 h-6 border-t border-border-secondary/30 bg-bg-secondary/40 text-[10px] text-text-tertiary select-none">
-        {anyLoading && (
-          <span className="h-1 w-1 rounded-full flex-shrink-0 bg-accent animate-pulse" />
-        )}
-        {tabs.length > 0 && (
-          <span className="opacity-60">
-            {t('browser.gridCount', { shown: shownCount, total: tabs.length })}
-          </span>
-        )}
-        <span className="tabular-nums opacity-60">
-          {size.width} x {size.height}
-        </span>
       </div>
     </div>
   )

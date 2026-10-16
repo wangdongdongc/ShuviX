@@ -799,18 +799,34 @@ declare global {
       openWindow: () => Promise<void>
       /** 浏览器窗口此刻是否建出来且可见（关窗只是隐藏 → false） */
       isWindowOpen: () => Promise<boolean>
+      /** 用户新开一个 tab（开在前台、成为选中的那页） */
       createTab: (url?: string) => Promise<string>
+      /** 用户关一个 tab（记下地址，reopenClosedTab 能重开） */
       closeTab: (tabId: string) => Promise<void>
+      /** 重开最近被用户关掉的页面；没有可重开的回 null */
+      reopenClosedTab: () => Promise<string | null>
+      /** 选中一个 tab（用户的动作；agent 的动作从不选中） */
       activateTab: (tabId: string) => Promise<void>
       listTabs: () => Promise<
         Array<{
           id: string
           url: string
           title: string
+          /** 用户选中的那一页 */
           active: boolean
           cdpAttached: boolean
           cdpIntercepting: boolean
           crashed: boolean
+          loading: boolean
+          canGoBack: boolean
+          canGoForward: boolean
+          /** 用户在这个站点上调的缩放（百分比） */
+          zoomPercent: number
+          /** 最近在这页上动作的会话 */
+          agentSessionId?: string
+          agentSessionTitle?: string
+          /** 开这个 tab 的会话（agent 开的才有） */
+          openerSessionId?: string
         }>
       >
       navigate: (tabId: string, url: string) => Promise<void>
@@ -827,6 +843,10 @@ declare global {
         }>
       ) => void
       capture: (tabId: string) => Promise<string>
+      /** 按站点调页面缩放（同一站点的 tab 一起换） */
+      zoom: (tabId: string, direction: 'in' | 'out' | 'reset') => Promise<void>
+      /** 把主窗口拉到前面并切到这个会话（提示条上的「查看对话」） */
+      openSession: (sessionId: string) => Promise<void>
       setVisible: (visible: boolean) => void
       onTabCreated: (
         callback: (payload: { tabId: string; url: string; active: boolean }) => void
@@ -848,8 +868,27 @@ declare global {
           cdpIntercepting: boolean
         }) => void
       ) => () => void
+      /** agent 在这页上动作了一下（哪个会话） */
+      onTabAgent: (
+        callback: (payload: { tabId: string; sessionId: string; sessionTitle: string }) => void
+      ) => () => void
+      /** 这页的用户缩放变了（百分比） */
+      onTabZoom: (callback: (payload: { tabId: string; zoomPercent: number }) => void) => () => void
+      /** 主进程请外壳做的事（快捷键 ⌘L / ⌘T 之后聚焦地址栏） */
+      onCommand: (callback: (payload: { command: 'focusOmnibox' }) => void) => () => void
       onDidStartLoading: (callback: (payload: { tabId: string }) => void) => () => void
-      onDidNavigate: (callback: (payload: { tabId: string; url: string }) => void) => () => void
+      /**
+       * 导航：一开始只带地址（地址栏即时反馈）；提交后还带能否后退 / 前进、这个站点上的用户缩放
+       */
+      onDidNavigate: (
+        callback: (payload: {
+          tabId: string
+          url: string
+          canGoBack?: boolean
+          canGoForward?: boolean
+          zoomPercent?: number
+        }) => void
+      ) => () => void
       onDidStopLoading: (callback: (payload: { tabId: string }) => void) => () => void
       onDidFailLoad: (
         callback: (payload: {

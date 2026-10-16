@@ -7590,16 +7590,20 @@ export function classifierLogPane(settings: CdpClient): ClassifierLogPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 浏览器独立窗口（#browser-window）：BrowserWindowShell → BrowserWall 卡片墙；以及主窗顶栏
-// 右侧打开它的那颗按钮。
+// 浏览器独立窗口（#browser-window）：BrowserWindowShell = 标签条 + 工具条 + 提示条 + 页面区，页面区
+// 是单页视图（缺省，BrowserSinglePage）或平铺墙（BrowserWall 卡片墙）；以及主窗顶栏右侧打开它的那颗按钮。
 //
 // 锚点（全是产品代码专门留的 data 属性，不认文案 / 类名）：
-//   - 窗口根 = `[data-browser-window]`；
+//   - 窗口根 = `[data-browser-window]`，当前视图在它的 `data-view-mode`（single | wall）；
+//   - 标签条上的标签 = `[data-browser-tab="<tabId>"]`，选中的那个带 `data-selected="true"`（两种视图都有）；
+//   - 工具条上的视图切换 = `[data-browser-view-toggle]`（值是当前视图）；
+//   - 单页视图的页面区 = `[data-browser-page="<tabId>"]`（只给选中的那页；空白 / 出错时没有）；
 //   - 墙格 = `[data-wall-cell="<tabId>"]`，滚动容器 = 墙格的父节点（BrowserWall 的 grid，
 //     墙空时它不在 DOM 里）；
-//   - 卡片 = `[data-browser-card="<tabId>"]`，激活的那张带 `data-active="true"`；
+//   - 卡片 = `[data-browser-card="<tabId>"]`，选中的那张带 `data-active="true"`；
 //   - 页面区 = 卡片里的 `[data-page-area]`（主进程把 WebContentsView 叠在它的矩形上）；
 //   - 主窗开窗按钮 = `[data-open-browser-window]`。
+// 墙上的那几样（cardIds / cellRect / pageAreaRect / wallRect …）只在平铺视图里有：测墙的用例先 useView('wall')。
 // tab id 是 UUID（十六进制与连字符），直接进属性选择器无需转义。
 //
 // 窗口「开没开」不从这里读：e2e 带着 `--disable-renderer-backgrounding` /
@@ -7619,6 +7623,18 @@ export interface WallRect {
 export interface BrowserWallPane {
   /** 窗口根 `[data-browser-window]` 已挂载 */
   mounted(): Promise<boolean>
+  /** 当前视图；窗口根没挂载时回 null */
+  viewMode(): Promise<'single' | 'wall' | null>
+  /** 切到某个视图（点工具条上的切换按钮；已经是就不点），等外壳换好 */
+  useView(mode: 'single' | 'wall'): Promise<void>
+  /** 标签条上的标签 tab id（顺序 = 标签条顺序）—— 两种视图都有 */
+  tabIds(): Promise<string[]>
+  /** 标签条上选中的标签（正常恰好一个；没有 tab 时为空） */
+  selectedTabIds(): Promise<string[]>
+  /** 单页视图里显示着的那页（`[data-browser-page]`）；没有页面区（平铺视图、空白页、错误页）回 null */
+  singlePageTabId(): Promise<string | null>
+  /** 单页视图页面区的矩形；没有回 null */
+  singlePageRect(): Promise<WallRect | null>
   /** 墙上卡片的 tab id（DOM 序 = tab 顺序） */
   cardIds(): Promise<string[]>
   /** 带 `data-active="true"` 的卡片的 tab id（正常恰好一个；墙空时为空） */
@@ -7637,7 +7653,7 @@ export interface BrowserWallPane {
   scrollToTop(): Promise<void>
 }
 
-/** 浏览器窗口的卡片墙（`app.browserWindow()` 连上的那个页面） */
+/** 浏览器窗口（`app.browserWindow()` 连上的那个页面）：标签条、视图切换、单页视图与卡片墙 */
 export function browserWallPane(bw: CdpClient): BrowserWallPane {
   const SCROLLER = `document.querySelector('[data-wall-cell]')?.parentElement`
   const rectOf = (expr: string): Promise<WallRect | null> =>
@@ -7648,8 +7664,32 @@ export function browserWallPane(bw: CdpClient): BrowserWallPane {
       return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
     })()`)
   const scrollTop = (): Promise<number> => bw.eval<number>(`${SCROLLER}?.scrollTop ?? 0`)
+  const viewMode = (): Promise<'single' | 'wall' | null> =>
+    bw.eval<'single' | 'wall' | null>(
+      `document.querySelector('[data-browser-window]')?.dataset.viewMode ?? null`
+    )
   return {
     mounted: () => bw.eval<boolean>(`!!document.querySelector('[data-browser-window]')`),
+    viewMode,
+    useView: async (mode) => {
+      await until(async () => (await viewMode()) !== null, 'browser window shell mounted')
+      if ((await viewMode()) === mode) return
+      await bw.eval(`document.querySelector('[data-browser-view-toggle]').click()`)
+      await until(async () => (await viewMode()) === mode, `browser window in ${mode} view`)
+    },
+    tabIds: () =>
+      bw.eval<string[]>(
+        `[...document.querySelectorAll('[data-browser-tab]')].map((el) => el.dataset.browserTab)`
+      ),
+    selectedTabIds: () =>
+      bw.eval<string[]>(
+        `[...document.querySelectorAll('[data-browser-tab][data-selected="true"]')].map((el) => el.dataset.browserTab)`
+      ),
+    singlePageTabId: () =>
+      bw.eval<string | null>(
+        `document.querySelector('[data-browser-page]')?.dataset.browserPage ?? null`
+      ),
+    singlePageRect: () => rectOf(`document.querySelector('[data-browser-page]')`),
     cardIds: () =>
       bw.eval<string[]>(
         `[...document.querySelectorAll('[data-browser-card]')].map((el) => el.dataset.browserCard)`
@@ -7668,6 +7708,203 @@ export function browserWallPane(bw: CdpClient): BrowserWallPane {
       await bw.eval(`(() => { const s = ${SCROLLER}; if (s) s.scrollTop = 0 })()`)
       await until(async () => (await scrollTop()) === 0, 'browser wall scrolled to top')
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 浏览器窗口的外壳（Chrome 的样子）：标签条、工具条（地址栏 / 缩放标识 / ⋮）、提示条、新标签页。
+// 锚点同样只认产品留的 data 属性：
+//   - 标签 = `[data-browser-tab="<tabId>"]`（mousedown 选中、右键出菜单），标签上的 agent 圆点 =
+//     `[data-agent-dot="<sessionId>"]`；标签条的 + = `[data-browser-new-tab]`，右端「搜索标签页」=
+//     `[data-browser-tab-search]`；
+//   - 地址栏未聚焦 = `[data-omnibox-display="<完整地址>"]`（mousedown 进编辑），编辑中 = `[data-omnibox-input]`；
+//     缩放标识 = `[data-browser-zoom="<百分比>"]`；⋮ = `[data-browser-more]`；
+//   - 提示条 = `[data-agent-infobar="<sessionId>"]`，「查看对话」= `[data-agent-infobar-open]`；
+//   - 新标签页 = `[data-new-tab-page]`。
+// 菜单是原生的（`contextMenu:popup`）：bootstrap.cjs 的桩在**发起调用的窗口**里读 `__E2E_MENU_PICK`、写
+// `__E2E_MENU_ITEMS`，所以这里的菜单助手把钉选与读项都做在浏览器窗口这个客户端上（armMenu / lastMenuItems）。
+
+export interface BrowserOmniboxInput {
+  value: string
+  /** 是 document.activeElement */
+  focused: boolean
+  selectionStart: number | null
+  selectionEnd: number | null
+}
+
+export interface BrowserShellPane {
+  /** 左键 mousedown 一个标签（标签条在 mousedown 时选中）；标签不在抛错 */
+  clickTab(tabId: string): Promise<void>
+  /** 点标签条上的 + */
+  clickNewTab(): Promise<void>
+  /** 标签上 agent 圆点的会话 id（`data-agent-dot`，不知道会话时是空串）；没有圆点回 null */
+  agentDot(tabId: string): Promise<string | null>
+  /** 提示条：会话 id 与文字；没有提示条回 null */
+  infobar(): Promise<{ sessionId: string; text: string } | null>
+  /** 点提示条上的「查看对话」；按钮不在抛错 */
+  clickInfobarOpen(): Promise<void>
+  /** 地址栏未聚焦时显示的完整地址（空白页为空串）；正在编辑时回 null */
+  omniboxDisplay(): Promise<string | null>
+  /** mousedown 地址栏进编辑，等 input 挂上并拿到焦点 */
+  beginOmniboxEdit(): Promise<void>
+  /** 地址栏 input 的状态；不在编辑回 null */
+  omniboxInput(): Promise<BrowserOmniboxInput | null>
+  /** 往地址栏 input 里打一段字（整段替换：原生 value setter + input 事件） */
+  typeInOmnibox(text: string): Promise<void>
+  /** 在地址栏 input 上按一个键 */
+  pressInOmnibox(key: 'Enter' | 'Escape'): Promise<void>
+  /** 地址栏右端缩放标识的百分比；没有标识回 null */
+  zoomIndicator(): Promise<number | null>
+  /** 点缩放标识（重置到 100%）；标识不在抛错 */
+  clickZoomIndicator(): Promise<void>
+  /** 页面区是新标签页 */
+  newTabPageShown(): Promise<boolean>
+  /** 右键一个标签：钉好要选的项（null = 取消）、等菜单弹出，回菜单项 */
+  tabMenu(tabId: string, pick: string | null): Promise<MenuItemShot[]>
+  /** 工具条上的 ⋮ */
+  moreMenu(pick: string | null): Promise<MenuItemShot[]>
+  /** 标签条右端的「搜索标签页」 */
+  tabSearchMenu(pick: string | null): Promise<MenuItemShot[]>
+}
+
+/** 浏览器窗口的外壳（`app.browserWindow()` 连上的那个页面） */
+export function browserShellPane(bw: CdpClient): BrowserShellPane {
+  const TAB = (id: string): string => `document.querySelector('[data-browser-tab="${id}"]')`
+  const INPUT = `document.querySelector('[data-omnibox-input]')`
+  const clickSel = async (sel: string, what: string): Promise<void> => {
+    const ok = await bw.eval<boolean>(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)})
+      if (!el) return false
+      el.click()
+      return true
+    })()`)
+    if (!ok) throw new Error(`${what} (${sel}) not in the browser window`)
+  }
+  const omniboxInput = (): Promise<BrowserOmniboxInput | null> =>
+    bw.eval<BrowserOmniboxInput | null>(`(() => {
+      const el = ${INPUT}
+      if (!el) return null
+      return {
+        value: el.value,
+        focused: document.activeElement === el,
+        selectionStart: el.selectionStart,
+        selectionEnd: el.selectionEnd
+      }
+    })()`)
+  /** 钉好选择 → 触发 → 等菜单弹出、回项（项里没有钉的那一项就抛：桩照钉的回，什么也不会发生） */
+  const menu = async (
+    trigger: string,
+    pick: string | null,
+    what: string
+  ): Promise<MenuItemShot[]> => {
+    await armMenu(bw, pick)
+    const fired = await bw.eval<boolean>(`(() => { ${trigger} })()`)
+    if (!fired) throw new Error(`${what}: trigger not in the browser window`)
+    const items = await lastMenuItems(bw)
+    if (pick !== null && !items.some((it) => it.id === pick)) {
+      throw new Error(
+        `${what}: item "${pick}" not offered (got: ${items.map((it) => it.id ?? '-').join(', ')})`
+      )
+    }
+    return items
+  }
+  return {
+    clickTab: async (tabId) => {
+      const ok = await bw.eval<boolean>(`(() => {
+        const el = ${TAB(tabId)}
+        if (!el) return false
+        el.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }))
+        el.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true, cancelable: true }))
+        el.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error(`tab ${tabId} not in the browser window's tab strip`)
+    },
+    clickNewTab: () => clickSel('[data-browser-new-tab]', 'new-tab button'),
+    agentDot: (tabId) =>
+      bw.eval<string | null>(
+        `${TAB(tabId)}?.querySelector('[data-agent-dot]')?.getAttribute('data-agent-dot') ?? null`
+      ),
+    infobar: () =>
+      bw.eval<{ sessionId: string; text: string } | null>(`(() => {
+        const el = document.querySelector('[data-agent-infobar]')
+        if (!el) return null
+        return { sessionId: el.getAttribute('data-agent-infobar') ?? '', text: el.textContent ?? '' }
+      })()`),
+    clickInfobarOpen: () => clickSel('[data-agent-infobar-open]', 'infobar "View conversation"'),
+    omniboxDisplay: () =>
+      bw.eval<string | null>(
+        `document.querySelector('[data-omnibox-display]')?.getAttribute('data-omnibox-display') ?? null`
+      ),
+    beginOmniboxEdit: async () => {
+      const ok = await bw.eval<boolean>(`(() => {
+        const el = document.querySelector('[data-omnibox-display]')
+        if (!el) return false
+        el.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error('omnibox display not in the browser window')
+      await until(
+        async () => (await omniboxInput())?.focused === true,
+        'omnibox input mounted and focused'
+      )
+    },
+    omniboxInput,
+    typeInOmnibox: async (text) => {
+      const ok = await bw.eval<boolean>(`(() => {
+        const el = ${INPUT}
+        if (!el) return false
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+        setter.call(el, ${JSON.stringify(text)})
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error('omnibox is not in edit mode')
+      await until(async () => (await omniboxInput())?.value === text, `omnibox reads "${text}"`)
+    },
+    pressInOmnibox: async (key) => {
+      const ok = await bw.eval<boolean>(`(() => {
+        const el = ${INPUT}
+        if (!el) return false
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error('omnibox is not in edit mode')
+    },
+    zoomIndicator: () =>
+      bw.eval<number | null>(`(() => {
+        const el = document.querySelector('[data-browser-zoom]')
+        return el ? Number(el.getAttribute('data-browser-zoom')) : null
+      })()`),
+    clickZoomIndicator: () => clickSel('[data-browser-zoom]', 'zoom indicator'),
+    newTabPageShown: () => bw.eval<boolean>(`!!document.querySelector('[data-new-tab-page]')`),
+    tabMenu: (tabId, pick) =>
+      menu(
+        `const el = ${TAB(tabId)}
+        if (!el) return false
+        el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+        return true`,
+        pick,
+        `tab ${tabId} context menu`
+      ),
+    moreMenu: (pick) =>
+      menu(
+        `const el = document.querySelector('[data-browser-more]')
+        if (!el) return false
+        el.click()
+        return true`,
+        pick,
+        'toolbar ⋮ menu'
+      ),
+    tabSearchMenu: (pick) =>
+      menu(
+        `const el = document.querySelector('[data-browser-tab-search]')
+        if (!el) return false
+        el.click()
+        return true`,
+        pick,
+        'search-tabs menu'
+      )
   }
 }
 

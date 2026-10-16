@@ -8,7 +8,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Loader2, Trash2, TriangleAlert, Globe } from 'lucide-react'
-import { SettingsSection, SettingsRow, Toggle } from './SettingsPrimitives'
+import { SettingsSection, SettingsRow, Toggle, InlineSelect } from './SettingsPrimitives'
+import {
+  SEARCH_ENGINE_SETTING,
+  SEARCH_ENGINES,
+  searchEngineOf,
+  type SearchEngineId
+} from '../browser/omnibox'
 
 interface SavedSite {
   host: string
@@ -19,6 +25,7 @@ export function BrowserDataSettings(): React.JSX.Element {
   const { t } = useTranslation()
 
   const [ignoreCert, setIgnoreCert] = useState(false)
+  const [engine, setEngine] = useState<SearchEngineId>(searchEngineOf(undefined))
   const [loading, setLoading] = useState(true)
   const [sites, setSites] = useState<SavedSite[]>([])
   const [sitesLoading, setSitesLoading] = useState(true)
@@ -40,6 +47,7 @@ export function BrowserDataSettings(): React.JSX.Element {
   useEffect(() => {
     window.api.settings.getAll().then((settings) => {
       setIgnoreCert(settings['tool.browser.ignoreCertificateErrors'] === 'true')
+      setEngine(searchEngineOf(settings[SEARCH_ENGINE_SETTING]))
       setLoading(false)
     })
     loadSites()
@@ -52,6 +60,12 @@ export function BrowserDataSettings(): React.JSX.Element {
       key: 'tool.browser.ignoreCertificateErrors',
       value: String(next)
     })
+  }
+
+  const handleEngine = (value: string): void => {
+    const next = searchEngineOf(value)
+    setEngine(next)
+    void window.api.settings.set({ key: SEARCH_ENGINE_SETTING, value: next })
   }
 
   const handleClearSite = async (host: string): Promise<void> => {
@@ -90,6 +104,19 @@ export function BrowserDataSettings(): React.JSX.Element {
           </div>
         ) : (
           <>
+            <SettingsRow
+              title={t('settings.toolBrowserSearchEngine')}
+              description={t('settings.toolBrowserSearchEngineHint')}
+              control={
+                <InlineSelect value={engine} onChange={handleEngine} width={160}>
+                  {(Object.keys(SEARCH_ENGINES) as SearchEngineId[]).map((id) => (
+                    <option key={id} value={id}>
+                      {SEARCH_ENGINES[id].name}
+                    </option>
+                  ))}
+                </InlineSelect>
+              }
+            />
             <SettingsRow
               title={t('settings.toolBrowserIgnoreCertificateErrors')}
               description={t('settings.toolBrowserIgnoreCertificateErrorsHint')}

@@ -1,29 +1,35 @@
-import { useEffect } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useEffect, useState } from 'react'
 import i18next from 'i18next'
-import { Globe, Plus } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { useBrowserTabsStore } from '../../stores/browserTabsStore'
+import { VIEW_MODE_SETTING, type BrowserViewMode } from '../../stores/browserTabsStore'
 import { useBrowserTabsBridge } from '../../host/useBrowserTabsBridge'
+import { BrowserTabStrip } from './BrowserTabStrip'
+import { BrowserToolbar } from './BrowserToolbar'
+import { AgentInfobar } from './AgentInfobar'
+import { BrowserSinglePage } from './BrowserSinglePage'
 import { BrowserWall } from './BrowserWall'
-
-/** macOS 交通灯占位：主进程 trafficLightPosition.x = 14，三颗灯约 52px 宽，留足余量 */
-const MAC_TRAFFIC_LIGHT_PAD = 78
+import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_SETTING, searchEngineOf } from './omnibox'
 
 /**
- * 浏览器独立窗口根组件（hash #browser-window）
+ * 浏览器独立窗口根组件（hash #browser-window）—— 照 Chrome 的样子（2026-10-16 用户裁定）：
  *
- * - 最小应用初始化：仅加载设置（主题 / 字号 / 语言），不加载会话 / 提供商 —— 与 widget 窗口同款
- * - tab 状态经 useBrowserTabsBridge 镜像主进程真源；页面本体是主进程挂在本窗口上的
- *   WebContentsView，本窗口只负责上报布局表（BrowserWall）
+ *   标签条（就是标题栏）
+ *   工具条：后退 / 前进 / 刷新、地址栏、视图切换、⋮
+ *   提示条：选中的那页正接着 agent 时才有
+ *   页面区：单页视图（缺省，只显示选中的那页）或平铺墙（第二种视图）
+ *
+ * - 最小应用初始化：仅加载设置（主题 / 字号 / 语言 / 搜索引擎 / 视图），不加载会话 / 提供商 —— 与 widget
+ *   窗口同款
+ * - tab 状态经 useBrowserTabsBridge 镜像主进程真源；页面本体是主进程挂在本窗口上的 WebContentsView，
+ *   本窗口只负责上报布局表
  * - 关窗只是隐藏（主进程 browserWindowService），tab 与页面状态都留着
+ * - 键盘快捷键全在主进程（before-input-event，见 services/browser/shortcuts.ts）：焦点在页面里还是在
+ *   外壳上都一样，agent 的 CDP 按键碰不到
  */
 export function BrowserWindowShell(): React.JSX.Element {
-  const { t } = useTranslation()
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
-  const tabCount = useBrowserTabsStore((s) => s.tabs.length)
-  const createTab = useBrowserTabsStore((s) => s.createTab)
-  const isMac = window.api.app.platform === 'darwin'
+  const [engine, setEngine] = useState(DEFAULT_SEARCH_ENGINE)
+  const [viewMode, setViewMode] = useState<BrowserViewMode>('single')
 
   useBrowserTabsBridge()
 
@@ -32,6 +38,8 @@ export function BrowserWindowShell(): React.JSX.Element {
     const loadSettings = async (): Promise<void> => {
       const settings = await window.api.settings.getAll()
       useSettingsStore.getState().loadSettings(settings)
+      setEngine(searchEngineOf(settings[SEARCH_ENGINE_SETTING]))
+      setViewMode(settings[VIEW_MODE_SETTING] === 'wall' ? 'wall' : 'single')
       const savedLang = settings['general.language']
       if (savedLang && savedLang !== i18next.language) {
         void i18next.changeLanguage(savedLang)
@@ -70,32 +78,27 @@ export function BrowserWindowShell(): React.JSX.Element {
     }
   }, [theme, darkTheme, lightTheme])
 
-  return (
-    <div className="flex flex-col h-full bg-bg-primary text-text-primary" data-browser-window>
-      {/* 标题栏（36px，与主进程 trafficLightPosition 对齐）：整条可拖拽，按钮区豁免 */}
-      <div
-        className="titlebar-drag flex-shrink-0 flex items-center gap-2 h-9 pr-2 border-b border-border-secondary/40 select-none"
-        style={{ paddingLeft: isMac ? MAC_TRAFFIC_LIGHT_PAD : 12 }}
-      >
-        <Globe size={13} className="flex-shrink-0 text-text-tertiary" />
-        <span className="text-[12px] font-medium">{t('panel.browser')}</span>
-        {tabCount > 0 && (
-          <span className="text-[10px] text-text-tertiary tabular-nums">{tabCount}</span>
-        )}
-        <div className="flex-1" />
-        <div className="titlebar-no-drag flex items-center">
-          <button
-            onClick={() => createTab()}
-            className="p-1.5 rounded-md text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/50 transition-colors"
-            title={t('browser.newTab')}
-          >
-            <Plus size={13} />
-          </button>
-        </div>
-      </div>
+  /** 切视图：当场换，并记进设置（下次开窗还是这个视图） */
+  const changeViewMode = (mode: BrowserViewMode): void => {
+    setViewMode(mode)
+    void window.api.settings.set({ key: VIEW_MODE_SETTING, value: mode })
+  }
 
+  return (
+    <div
+      className="flex flex-col h-full bg-bg-primary text-text-primary"
+      data-browser-window
+      data-view-mode={viewMode}
+    >
+      <BrowserTabStrip />
+      <BrowserToolbar engine={engine} viewMode={viewMode} onViewMode={changeViewMode} />
+      <AgentInfobar />
       <div className="flex-1 min-h-0">
-        <BrowserWall />
+        {viewMode === 'wall' ? (
+          <BrowserWall engine={engine} />
+        ) : (
+          <BrowserSinglePage engine={engine} />
+        )}
       </div>
     </div>
   )

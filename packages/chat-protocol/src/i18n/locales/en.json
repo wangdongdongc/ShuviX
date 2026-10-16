@@ -751,6 +751,8 @@
     "toolDbDuplicateName": "Credential name already exists",
     "toolBrowserTitle": "Browser panel",
     "toolBrowserDesc": "How the embedded browser panel behaves — for your own browsing and for the AI when a session has the browser enabled.",
+    "toolBrowserSearchEngine": "Address bar search engine",
+    "toolBrowserSearchEngineHint": "What the in-app browser searches with when what you type in the address bar is not a web address.",
     "toolBrowserIgnoreCertificateErrors": "Ignore certificate errors",
     "toolBrowserIgnoreCertificateErrorsHint": "When off, you'll be prompted on self-signed / untrusted certificates. When on, all certificate errors are silently bypassed.",
     "toolBrowserSecurityWarning": "Warning: enabling this bypasses ALL HTTPS certificate validation (self-signed, expired, mismatched hostnames) — including potential phishing sites. Only enable this on trusted internal networks.",
@@ -1132,7 +1134,6 @@
     "subAgentInterrupt": "Interrupt sub-agent",
     "subAgentReplyPlaceholder": "Task not finished? Continue the conversation...",
     "subAgentReplySend": "Send",
-    "urlPlaceholder": "Enter a URL",
     "newTerminal": "New Terminal",
     "closeTerminal": "Close terminal",
     "files": "Files",
@@ -1208,15 +1209,9 @@
     "refresh": "Refresh",
     "stop": "Stop loading",
     "openExternal": "Open in system browser",
-    "gridCount": "{{shown}} of {{total}} on screen",
-    "zoomHint": "Zoom {{pct}}% — the page is laid out at {{width}}px wide, then scaled to fit the card",
     "newTab": "New tab",
     "closeTab": "Close tab",
     "untitledTab": "New Tab",
-    "agent": {
-      "connected": "AI agent is connected to this tab (can observe and operate the page)",
-      "intercepting": "AI agent has request interception enabled — content this tab loads may be modified or replaced"
-    },
     "cert": {
       "title": "Untrusted certificate: {{host}}",
       "continue": "Continue anyway",
@@ -1229,6 +1224,34 @@
       "crashedTitle": "This page crashed",
       "crashedDetail": "The page's process stopped ({{reason}}).",
       "retry": "Retry"
+    },
+    "omniboxPlaceholder": "Search {{engine}} or type a URL",
+    "notSecure": "Not secure",
+    "zoomIndicator": "Zoom: {{pct}}% (click to reset to 100%)",
+    "searchTabs": "Search tabs",
+    "tabUsedBy": "In use by “{{session}}”",
+    "view": {
+      "single": "Show one page",
+      "wall": "Tile all tabs"
+    },
+    "menu": {
+      "more": "More",
+      "duplicate": "Duplicate tab",
+      "copyLink": "Copy link",
+      "closeOthers": "Close other tabs",
+      "closeRight": "Close tabs to the right",
+      "reopenClosed": "Reopen closed tab",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "zoomReset": "Reset zoom (now {{pct}}%)",
+      "settings": "Browsing data and certificates…"
+    },
+    "infobar": {
+      "using": "“{{session}}” is using this page",
+      "usingUnknown": "An agent is using this page",
+      "intercepting": "“{{session}}” is using this page and intercepting its network requests — page content may be changed",
+      "interceptingUnknown": "An agent is using this page and intercepting its network requests — page content may be changed",
+      "openSession": "View conversation"
     }
   },
   "command": {

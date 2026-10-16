@@ -88,8 +88,10 @@ function notificationsEnabled(): boolean {
   return settingsDao.findByKey('notification.enabled') !== 'false'
 }
 
-/** 把会话拉到用户眼前，并切到它 */
-function focusSession(sessionId: string): void {
+/**
+ * 把会话拉到用户眼前，并切到它。也是浏览器窗口提示条上「查看对话」的去处（用户自己点的）。
+ */
+export function focusSession(sessionId: string): void {
   // 悬浮窗优先：会话被 pin 出去了，用户期待的是那个窗口，而不是主窗切过去
   if (isPinned(sessionId)) {
     focusFloating(sessionId)
