@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import { useTranslation } from 'react-i18next'
 import {
   Github,
@@ -340,4 +341,31 @@ export const markdownComponents = {
  * `environment: 'node'` 的单测能直接吃**生产同一份数组**（插件顺序就是这条管线的安全
  * 边界，理由写在那个文件头）。这里原样转出，调用方的 import 路径不变。
  */
-export { markdownRemarkPlugins, markdownRehypePlugins } from '../../utils/markdownPlugins'
+import { markdownRemarkPlugins, markdownRehypePlugins } from '../../utils/markdownPlugins'
+export { markdownRemarkPlugins, markdownRehypePlugins }
+
+// ─── 按文本缓存的渲染 ────────────────────────────────────
+
+/**
+ * 对话流里一段 markdown —— 文本不变就不重渲染。
+ *
+ * 一次渲染要把整段重新解析、重新高亮、重新排公式；运行中的会话每秒推来十来次更新，一张卡里只要有
+ * 一处跟着变（流式正文、新落盘的一步），卡里每一段中间文本都会被连带重做一遍，卡越长越卡（滚回
+ * 一轮长任务里时尤其明显）。文本相同就跳过：上下文（MarkdownStreamingContext / SourceContext）
+ * 变化照样会传到读它们的代码块，不受 memo 影响。
+ */
+export const MarkdownText = memo(function MarkdownText({
+  text
+}: {
+  text: string
+}): React.JSX.Element {
+  return (
+    <ReactMarkdown
+      remarkPlugins={markdownRemarkPlugins}
+      rehypePlugins={markdownRehypePlugins}
+      components={markdownComponents}
+    >
+      {text}
+    </ReactMarkdown>
+  )
+})

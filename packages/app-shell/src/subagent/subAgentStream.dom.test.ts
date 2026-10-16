@@ -14,6 +14,7 @@
  * （段在用户消息、错误行、不带工具块的终答处收口），段内块摊平交给 `groupConsecutiveSteps` → `StepGroupView`：
  * 相邻的思考 / 已成功完成的工具调用并成一行 `[data-step-group]`；中间文本、运行中、出错的调用切开一段；
  * 只有一步的不成组。断言按转写区的直接子节点逐个比对（每个分组都是那一层的直接子节点）。
+ * 中间文本行带转写用的小一号类名 `markdown-body text-xs`（SA-1：StepGroupView 按分组内容 memo 之后照旧）。
  *
  * 包入口 `@shuvix/chat-ui` 用真的（上下文与 CodeBlock 必须是同一份模块）；`mermaid` 顶掉。
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
@@ -408,5 +409,21 @@ describe('已落盘转写的步骤合并（与主对话卡同一套，GRP-1..4�
     expect(rows()).toEqual(expected)
     // 没有哪一组跨过了收口那条（一组 3 步只会是 read + 思考 + read 并到了一起）
     expect(groups().map((g) => g.getAttribute('data-group-size'))).not.toContain('3')
+  })
+
+  it('SA-1 中间文本行的外层类名是转写用的 markdown-body text-xs（分组 memo 之后照旧）；同一份转写再画一遍也不变', () => {
+    const messages: ChatMessage[] = [
+      assistant('a1', [read('t1'), text('mid sa1'), read('t2')], 'sub-1'),
+      assistant('a2', [text('final sa1')], 'sub-1')
+    ]
+    const midRow = (): HTMLElement =>
+      [...container.querySelectorAll<HTMLElement>('.markdown-body')].find(
+        (el) => el.textContent?.trim() === 'mid sa1'
+      )!
+    showMessages(messages)
+    expect(midRow().className).toBe('markdown-body text-xs')
+
+    showMessages(messages)
+    expect(midRow().className).toBe('markdown-body text-xs')
   })
 })

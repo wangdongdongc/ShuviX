@@ -1,15 +1,10 @@
 import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import ReactMarkdown from 'react-markdown'
 import { Copy, Check, Code, FileText, RefreshCw, Volume2, Square, Loader2 } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
-import {
-  markdownComponents,
-  markdownRemarkPlugins,
-  markdownRehypePlugins
-} from './markdownComponents'
+import { MarkdownText } from './markdownComponents'
 import { MarkdownSourceContext, MarkdownStreamingContext } from './markdownStreaming'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock } from './ToolCallBlock'
@@ -27,6 +22,10 @@ import {
 } from '../../stores/chatStore'
 import { useTtsPlayback } from '../../hooks/useTtsPlayback'
 
+/** 已落定的卡不读流式状态时给的常量（引用稳定，不触发重渲染） */
+const NO_TOOL_CALLS: ReturnType<typeof selectCompletedStreamingToolCalls> = []
+const NO_SERVERS: ReturnType<typeof selectMcpConnecting> = []
+
 interface AssistantBubbleProps {
   /**
    * 一张卡覆盖的连续 assistant 消息（= 连续的 assistant entry）。
@@ -34,8 +33,8 @@ interface AssistantBubbleProps {
    */
   msgs: AssistantMessage[]
   isStreaming?: boolean
-  /** 重新生成此消息 */
-  onRegenerate?: () => void
+  /** 重新生成此消息（以这张卡的代表消息 id 调用；不给 = 不显示按钮）。传稳定的引用，免得 memo 每次都失效 */
+  onRegenerate?: (assistantMsgId: string) => void
 }
 
 /**
@@ -61,12 +60,18 @@ export const AssistantBubble = memo(function AssistantBubble({
   const isThisPlaying = isPlaying && playingMessageId === anchor.id
   const isThisLoading = isLoading && playingMessageId === anchor.id
 
-  // 流式模式下从 store 直接读取状态
-  const storeStreamingContent = useChatStore(selectStreamingContent)
-  const storeStreamingThinking = useChatStore(selectStreamingThinking)
-  const streamingToolCall = useChatStore(selectStreamingToolCall)
-  const completedStreamingToolCalls = useChatStore(selectCompletedStreamingToolCalls)
-  const mcpConnecting = useChatStore(selectMcpConnecting)
+  // 流式状态**只有流式卡读**：运行中的会话每秒推来十来次更新，已落定的卡若也订阅，每次都跟着重渲染
+  // （memo 拦不住订阅）—— 卡里每段中间文本重新解析、每个代码块重新高亮，一轮越长越卡，滚回这一轮里
+  // 时最明显。已落定的卡读常量，订阅的值永远不变，也就不再被这股更新带着重画
+  const storeStreamingContent = useChatStore((s) => (isStreaming ? selectStreamingContent(s) : ''))
+  const storeStreamingThinking = useChatStore((s) =>
+    isStreaming ? selectStreamingThinking(s) : ''
+  )
+  const streamingToolCall = useChatStore((s) => (isStreaming ? selectStreamingToolCall(s) : null))
+  const completedStreamingToolCalls = useChatStore((s) =>
+    isStreaming ? selectCompletedStreamingToolCalls(s) : NO_TOOL_CALLS
+  )
+  const mcpConnecting = useChatStore((s) => (isStreaming ? selectMcpConnecting(s) : NO_SERVERS))
 
   // 过程区的块 / 终答正文：末条不含工具块 = 本轮终答，它的 text 块下沉为正文；
   // 其余（含中间轮自己的 text）按原序留在过程区
@@ -167,13 +172,7 @@ export const AssistantBubble = memo(function AssistantBubble({
               <MarkdownStreamingContext.Provider value={!!isStreaming}>
                 {/* 交互图要确切知道自己的围栏闭合没有，靠节点位置切回这段源文本 */}
                 <MarkdownSourceContext.Provider value={isStreaming ? displayContent : null}>
-                  <ReactMarkdown
-                    remarkPlugins={markdownRemarkPlugins}
-                    rehypePlugins={markdownRehypePlugins}
-                    components={markdownComponents}
-                  >
-                    {displayContent}
-                  </ReactMarkdown>
+                  <MarkdownText text={displayContent} />
                 </MarkdownSourceContext.Provider>
               </MarkdownStreamingContext.Provider>
               {isStreaming && displayContent && !streamingToolCall && (
@@ -271,7 +270,7 @@ export const AssistantBubble = memo(function AssistantBubble({
             {/* 重新生成 */}
             {onRegenerate && (
               <button
-                onClick={onRegenerate}
+                onClick={() => onRegenerate(anchor.id)}
                 className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
                 title={t('message.regenerate')}
               >

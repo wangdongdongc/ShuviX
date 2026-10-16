@@ -21,6 +21,17 @@ import rehypeKatex from 'rehype-katex'
 import { remarkMathDollarGuard } from './remarkMathDollarGuard'
 import { rehypeSanitizeRawHtml } from './rehypeSanitizeRawHtml'
 
+/**
+ * 代码高亮，**全进程只建一次**。react-markdown 10 每次渲染都新建一个 unified 处理器、重新调用每个插件的
+ * attacher，而 rehype-highlight 的 attacher 每次都 `createLowlight(common)` —— 把三十多种语法重新注册一遍
+ * （运行中的会话每秒重绘十来次，性能剖析里它独占三分之一）。它返回的变换函数不持有每份文档的状态，
+ * 可以共用；attacher 改成每次交回同一个变换函数。
+ */
+const highlightTransform = rehypeHighlight()
+export function rehypeHighlightShared(): typeof highlightTransform {
+  return highlightTransform
+}
+
 /** TeX 公式：remark-math 分词 → 单 `$` 按 Pandoc 规则复核（见 remarkMathDollarGuard） */
 export const markdownRemarkPlugins = [remarkGfm, remarkMath, remarkMathDollarGuard]
 
@@ -41,6 +52,6 @@ export const markdownRemarkPlugins = [remarkGfm, remarkMath, remarkMathDollarGua
 export const markdownRehypePlugins = [
   rehypeRaw,
   rehypeSanitizeRawHtml,
-  rehypeHighlight,
+  rehypeHighlightShared,
   rehypeKatex
 ]

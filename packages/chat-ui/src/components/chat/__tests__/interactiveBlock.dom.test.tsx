@@ -21,6 +21,12 @@
  *   IB-27 `.html` 的 artifact 引用拿到同一个基址
  *   IB-28 Provider 上的基址变了 → srcdoc 跟着换
  *
+ * 正文按文本 memo 之后（MarkdownText，AssistantBubble 用的那个），只有上下文变、文本不变的那一次渲染里
+ * markdown 本身不重渲 —— 代码块得靠自己订阅的上下文拿到新值（IB-29 / 30，`memoShow`）：
+ *
+ *   IB-29 闭合的围栏、流式中拿不到源文本 → 占位；同一段文本只是给了源文本 → 恰一个 iframe
+ *   IB-30 没闭合的围栏、流式中 → 占位；同一段文本、流式标志翻成 false（源文本随之为 null）→ 挂上
+ *
  * 桩的形状：
  *   - `getComputedStyle` 换成桩：jsdom 不做级联。桩按**当前 data-theme** 给每个 token 一个可辨认的
  *     值（`v-<主题>-<token>`），于是「srcdoc 里写的是哪个主题的颜色」直接可读，也能用
@@ -51,6 +57,7 @@ import {
 vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 
 import {
+  MarkdownText,
   markdownComponents,
   markdownRehypePlugins,
   markdownRemarkPlugins
@@ -203,6 +210,36 @@ function show(md: string, opts?: ShowOptions): void {
 function clear(): void {
   act(() => {
     root.render(createElement('div'))
+  })
+}
+
+/**
+ * 宿主值固定为同一个对象：memo 变体里「这一次只有那对上下文变了」要成立，ChatHostContext 就不能每次
+ * 都是新值（CodeBlock 也读它，新值本身就会让代码块重渲，把要测的那条路盖住）
+ */
+const MEMO_HOST = hostValue(true)
+
+/** 与 AssistantBubble 同形、正文走 MarkdownText 的一棵树（文本不变时 markdown 不重渲） */
+function memoTree(md: string, opts: Pick<ShowOptions, 'streaming' | 'withSource'> = {}): ReactNode {
+  const { streaming = false, withSource = true } = opts
+  return createElement(
+    HostProvider,
+    { value: MEMO_HOST },
+    createElement(
+      MarkdownStreamingContext.Provider,
+      { value: streaming },
+      createElement(
+        MarkdownSourceContext.Provider,
+        { value: streaming && withSource ? md : null },
+        createElement(MarkdownText, { text: md })
+      )
+    )
+  )
+}
+
+function memoShow(md: string, opts?: Pick<ShowOptions, 'streaming' | 'withSource'>): void {
+  act(() => {
+    root.render(memoTree(md, opts))
   })
 }
 
@@ -578,6 +615,30 @@ describe('源码 / 重跑 / 切主题（IB-15…17）', () => {
 
     await setTheme('ib17a')
     expect(onlyFrame().getAttribute('srcdoc')).toBe(firstDoc)
+  })
+})
+
+describe('正文按文本 memo 时只变上下文（IB-29 / 30）', () => {
+  it('IB-29 闭合的围栏、流式中拿不到源文本 → 占位；同一段文本只是给了源文本 → 恰一个 iframe', () => {
+    const md = `${fence('<p>ib29</p>')}\n\ntail-ib29`
+    memoShow(md, { streaming: true, withSource: false })
+    expect(pendingOf()).not.toBeNull()
+    expect(frames()).toHaveLength(0)
+
+    memoShow(md, { streaming: true, withSource: true })
+    onlyFrame()
+    expect(pendingOf()).toBeNull()
+  })
+
+  it('IB-30 没闭合的围栏、流式中 → 占位；同一段文本、流式标志翻成 false（源文本随之为 null）→ 挂上', () => {
+    const md = 'intro-ib30\n\n```interactive\n<p>ib30</p>'
+    memoShow(md, { streaming: true })
+    expect(pendingOf()?.textContent).toBe('Building the interactive figure… (1 lines)')
+    expect(frames()).toHaveLength(0)
+
+    memoShow(md, { streaming: false })
+    onlyFrame()
+    expect(pendingOf()).toBeNull()
   })
 })
 

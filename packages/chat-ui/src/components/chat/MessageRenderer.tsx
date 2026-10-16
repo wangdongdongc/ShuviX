@@ -25,9 +25,9 @@ export const STREAMING_PLACEHOLDER_ID = 'streaming-live'
  */
 export interface VisibleItem {
   /**
-   * 列表项身份（React / Virtuoso 的 key）：取组内**首条**消息的 id。
-   * 与 `msg.id` 分开是有意的 —— 流式占位卡并入已有组时组首不变，
-   * 本轮结束、占位换成真实终答时这一项不会重挂载，展开着的工具卡/思考块不被折回。
+   * 列表项身份（React / Virtuoso 的 key）：助手卡按轮次 `turn:<第几条用户消息>.<这一轮的第几张卡>`，
+   * 其余项按自己的消息 id（见 buildVisibleItems）。与 `msg.id` 分开是有意的 —— 一张卡从流式到落定
+   * 组内消息会换人，key 不变，展开着的工具卡/思考块不被折回。
    */
   key: string
   /** 代表消息：决定 data-msg-* 与渲染分发（助手组取末条 = 终答） */
@@ -147,9 +147,9 @@ function MessageBody({
     <AssistantBubble
       msgs={item.msgs}
       isStreaming={item.isStreamingPlaceholder}
-      onRegenerate={
-        msg.id === lastAssistantId && onRegenerate ? () => onRegenerate(msg.id) : undefined
-      }
+      // 直接把调用方给的（稳定的）回调交下去，卡以自己的代表消息 id 调用 —— 每次渲染新建一个闭包会让
+      // 最后一张卡的 memo 永远失效
+      onRegenerate={msg.id === lastAssistantId ? onRegenerate : undefined}
     />
   )
 }

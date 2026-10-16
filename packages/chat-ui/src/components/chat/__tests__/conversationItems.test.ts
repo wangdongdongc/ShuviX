@@ -5,6 +5,9 @@
  * 代表消息 `msg` 取组**末**条。助手卡的 key **按轮次起**（`turn:<用户消息条数>.<本轮第几张卡>`），
  * 不取任何一条消息的 id —— 流式到落定之间卡里的消息 id 会换三次（见 K 组），key 一次都不能跟着换，
  * 否则整张卡重挂载。用户消息 / 压缩摘要 / 错误行仍按自己的 id。压缩摘要是边界标记，自成一项。
+ *
+ * 另有一组钉**项的复用**（IR 组）：内容没变的项交回上一次的同一个对象（助手项连同同一个 msgs 数组），
+ * 卡的 memo 才拦得住 —— 缓存按消息对象记（模块级 WeakMap），所以 IR 组每条用例都用自己新造的消息对象。
  */
 import { describe, it, expect } from 'vitest'
 import type {
@@ -127,8 +130,8 @@ describe('buildVisibleItems —— 分组', () => {
   })
 
   it('G-6 纯函数：连调两次结果一致，且不改写传入的 ChatMessage', () => {
-    // 项是新造的对象 —— 若哪天把派生字段挂到消息对象上，store 里的消息会被一次渲染
-    // 悄悄改脏，而 zustand 的浅比较看不出来
+    // 项是另造的对象（没变的项会被复用，见 IR 组），派生字段从不挂到消息对象上 —— 若哪天挂上去，
+    // store 里的消息会被一次渲染悄悄改脏，而 zustand 的浅比较看不出来
     const messages: ChatMessage[] = [agentMsg('m1', { tools: 1 }), agentMsg('m2'), userMsg('u1')]
     const snapshot = JSON.parse(JSON.stringify(messages)) as ChatMessage[]
     const once = buildVisibleItems(messages, false)
@@ -360,5 +363,205 @@ describe('buildVisibleItems —— 助手卡的 key 从流式到落定不变', (
       'turn:2.0',
       'turn:2.1'
     ])
+  })
+})
+
+/**
+ * 运行中的会话每落盘一步整张列表都要重建；没变的项若每次都是新对象，每张助手卡的 memo 全数失效、屏幕上每张卡都
+ * 重新解析自己的 markdown。按身份缓存之后只有真变了的那几项是新的。命中的条件：同一条消息对象（助手项看组首），
+ * 且 key、流式标记、组内消息逐个相同 —— 少一条都会把旧项错当成新项交出去（key 错了是重挂载，msgs 错了是画旧内容）。
+ */
+describe('buildVisibleItems —— 项的复用', () => {
+  type Items = ReturnType<typeof buildVisibleItems>
+
+  it('IR-1 同一份 messages 连建两次：每一项都是上一次的同一个对象，助手项的 msgs 也是同一个数组', () => {
+    const messages: ChatMessage[] = [
+      userMsg('ir1-u1'),
+      agentMsg('ir1-m1', { tools: 1 }),
+      agentMsg('ir1-m2'),
+      errMsg('ir1-e1'),
+      compactionMsg('ir1-c'),
+      userMsg('ir1-u2'),
+      agentMsg('ir1-m3')
+    ]
+    const first = buildVisibleItems(messages, false)
+    const second = buildVisibleItems(messages, false)
+    expect(second).toHaveLength(first.length)
+    second.forEach((item, i) => {
+      expect(item, `第 ${i} 项`).toBe(first[i])
+      expect(item.msgs, `第 ${i} 项的 msgs`).toBe(first[i].msgs)
+    })
+  })
+
+  it('IR-2 末尾追加一条用户消息（新数组、原来的对象）：之前的项都复用，新那一项是新的', () => {
+    const u1 = userMsg('ir2-u1')
+    const m1 = agentMsg('ir2-m1', { tools: 1 })
+    const m2 = agentMsg('ir2-m2')
+    const before = buildVisibleItems([u1, m1, m2], false)
+    const u2 = userMsg('ir2-u2')
+    const after = buildVisibleItems([u1, m1, m2, u2], false)
+    expect(after).toHaveLength(3)
+    expect(after[0]).toBe(before[0])
+    expect(after[1]).toBe(before[1])
+    expect(after[2].msg).toBe(u2)
+    expect(before).not.toContain(after[2])
+  })
+
+  it('IR-3 组末条换成同 id 的新对象（块变了）：卡是新项、msgs 是新数组，末条与 msg 都是新对象，key 不变', () => {
+    const u1 = userMsg('ir3-u1')
+    const m1 = agentMsg('ir3-m1', { tools: 1 })
+    const m2 = agentMsg('ir3-m2')
+    const before = buildVisibleItems([u1, m1, m2], false)
+    const m2b: AssistantMessage = { ...m2, blocks: [{ type: 'text', text: 'changed' }] }
+    const after = buildVisibleItems([u1, m1, m2b], false)
+    expect(after[0]).toBe(before[0])
+    expect(after[1]).not.toBe(before[1])
+    expect(after[1].msgs).not.toBe(before[1].msgs)
+    expect(after[1].msgs![0]).toBe(m1)
+    expect(after[1].msgs![1]).toBe(m2b)
+    expect(after[1].msg).toBe(m2b)
+    expect(after[1].key).toBe('turn:1.0')
+    expect(after[1].key).toBe(before[1].key)
+  })
+
+  it('IR-4 组首换成同 id 的新对象：新项，msgs[0] 是新对象', () => {
+    const u1 = userMsg('ir4-u1')
+    const m1 = agentMsg('ir4-m1', { tools: 1 })
+    const m2 = agentMsg('ir4-m2')
+    const before = buildVisibleItems([u1, m1, m2], false)
+    const m1b: AssistantMessage = { ...m1, blocks: [...m1.blocks] }
+    const after = buildVisibleItems([u1, m1b, m2], false)
+    expect(after[1]).not.toBe(before[1])
+    expect(after[1].msgs![0]).toBe(m1b)
+    expect(after[1].msgs![1]).toBe(m2)
+    expect(after[1].key).toBe(before[1].key)
+  })
+
+  it('IR-5 [u1, m1(工具)] → [u1, m1, m2(终答)]：卡是新项（msgs [m1, m2]、msg m2）；旧项没被改写（msgs 仍是 [m1]）', () => {
+    const u1 = userMsg('ir5-u1')
+    const m1 = agentMsg('ir5-m1', { tools: 1 })
+    const before = buildVisibleItems([u1, m1], false)
+    const oldCard = before[1]
+    const m2 = agentMsg('ir5-m2')
+    const after = buildVisibleItems([u1, m1, m2], false)
+    expect(after[0]).toBe(before[0])
+    expect(after[1]).not.toBe(oldCard)
+    expect(after[1].msgs).toEqual([m1, m2])
+    expect(after[1].msg).toBe(m2)
+    expect(oldCard.msgs).toEqual([m1])
+    expect(oldCard.msgs![0]).toBe(m1)
+    expect(oldCard.msg).toBe(m1)
+  })
+
+  it('IR-6 [u1, m1(工具), m2] → [u1, m1]（末条撤回）：卡是新项，msgs 只剩 [m1]', () => {
+    const u1 = userMsg('ir6-u1')
+    const m1 = agentMsg('ir6-m1', { tools: 1 })
+    const m2 = agentMsg('ir6-m2')
+    const before = buildVisibleItems([u1, m1, m2], false)
+    const after = buildVisibleItems([u1, m1], false)
+    expect(after[1]).not.toBe(before[1])
+    expect(after[1].msgs).toEqual([m1])
+    expect(after[1].msg).toBe(m1)
+  })
+
+  it('IR-7 同一个组首、key 变了（前面多了一条用户消息 / 同一轮里前面的卡没了）：交出的是带新 key 的新项', () => {
+    const u0 = userMsg('ir7-u0')
+    const u1 = userMsg('ir7-u1')
+    const m1 = agentMsg('ir7-m1')
+    const shortList = buildVisibleItems([u1, m1], false)
+    expect(shortList[1].key).toBe('turn:1.0')
+    const longer = buildVisibleItems([u0, u1, m1], false)
+    expect(longer[2].key).toBe('turn:2.0')
+    expect(longer[2]).not.toBe(shortList[1])
+    expect(longer[2].msg).toBe(m1)
+
+    const v1 = userMsg('ir7-v1')
+    const n1 = agentMsg('ir7-n1')
+    const n2 = agentMsg('ir7-n2')
+    const both = buildVisibleItems([v1, n1, n2], false)
+    expect(both[2].key).toBe('turn:1.1')
+    const onlySecond = buildVisibleItems([v1, n2], false)
+    expect(onlySecond[1].key).toBe('turn:1.0')
+    expect(onlySecond[1]).not.toBe(both[2])
+    expect(onlySecond[1].msg).toBe(n2)
+  })
+
+  it('IR-8 流式标记不同就不复用：流式 → 落定 → 落定 → 流式，只有两次落定之间复用', () => {
+    const u1 = userMsg('ir8-u1')
+    const m1 = agentMsg('ir8-m1', { tools: 1 })
+    const messages: ChatMessage[] = [u1, m1]
+    const last = (items: Items): Items[number] => items.at(-1)!
+
+    const A = last(buildVisibleItems(messages, true))
+    expect(A.isStreamingPlaceholder).toBe(true)
+
+    const B = last(buildVisibleItems(messages, false))
+    expect(B.key).toBe(A.key)
+    expect('isStreamingPlaceholder' in B).toBe(false)
+    expect(B.msgs).toEqual([m1])
+    expect(B).not.toBe(A)
+
+    const C = last(buildVisibleItems(messages, false))
+    expect(C).toBe(B)
+
+    const D = last(buildVisibleItems(messages, true))
+    expect(D.isStreamingPlaceholder).toBe(true)
+    expect(D).not.toBe(B)
+    expect(D.key).toBe(B.key)
+  })
+
+  it('IR-9 单条项（用户 / 错误 / 压缩摘要 / 乐观占位）：同一个对象 → 同一个项；同 id 的新对象 → 新项、msg 是新对象、key 不变', () => {
+    const u1 = userMsg('ir9-u1')
+    const e1 = errMsg('ir9-e1')
+    const c1 = compactionMsg('ir9-c')
+    const pending = pendingPromptMessage(SID, 'sending')
+    const before = buildVisibleItems([u1, e1, c1], false, pending)
+    const again = buildVisibleItems([u1, e1, c1], false, pending)
+    again.forEach((item, i) => expect(item, `第 ${i} 项`).toBe(before[i]))
+
+    const u1b: UserTextMessage = { ...u1 }
+    const pendingB = pendingPromptMessage(SID, 'sending')
+    const after = buildVisibleItems([u1b, e1, c1], false, pendingB)
+    expect(after[0]).not.toBe(before[0])
+    expect(after[0].msg).toBe(u1b)
+    expect(after[0].key).toBe(before[0].key)
+    expect(after[1]).toBe(before[1])
+    expect(after[2]).toBe(before[2])
+    expect(after[3]).not.toBe(before[3])
+    expect(after[3].msg).toBe(pendingB)
+    expect(after[3].key).toBe(PENDING_PROMPT_ID)
+  })
+
+  it('IR-10 两份列表来回交替：每次 key 都对，旧项不会串到另一份里', () => {
+    const u0 = userMsg('ir10-u0')
+    const u1 = userMsg('ir10-u1')
+    const m1 = agentMsg('ir10-m1')
+    const keysOf = (items: Items): string[] => items.map((i) => i.key)
+    for (let round = 0; round < 3; round++) {
+      const long = buildVisibleItems([u0, u1, m1], false)
+      expect(keysOf(long), `第 ${round} 轮 · 长`).toEqual(['ir10-u0', 'ir10-u1', 'turn:2.0'])
+      expect(long[2].msgs).toEqual([m1])
+      const short = buildVisibleItems([u1, m1], false)
+      expect(keysOf(short), `第 ${round} 轮 · 短`).toEqual(['ir10-u1', 'turn:1.0'])
+      expect(short[1].msgs).toEqual([m1])
+      expect(short[1]).not.toBe(long[2])
+    }
+  })
+
+  it('IR-11 缓存热了之后，输出与一份深拷贝（全是新对象）建出来的逐项相等', () => {
+    const messages: ChatMessage[] = [
+      userMsg('ir11-u1'),
+      agentMsg('ir11-m1', { tools: 2 }),
+      agentMsg('ir11-m2'),
+      compactionMsg('ir11-c'),
+      errMsg('ir11-e1'),
+      userMsg('ir11-u2'),
+      agentMsg('ir11-m3', { tools: 1 })
+    ]
+    buildVisibleItems(messages, true)
+    const warm = buildVisibleItems(messages, false)
+    const cold = buildVisibleItems(structuredClone(messages), false)
+    expect(warm).toEqual(cold)
+    expect(warm[1]).not.toBe(cold[1])
   })
 })

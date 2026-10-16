@@ -22,9 +22,15 @@
  */
 import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
+import rehypeRaw from 'rehype-raw'
+import rehypeKatex from 'rehype-katex'
 import { unified } from 'unified'
 import { describe, it, expect } from 'vitest'
-import { markdownRemarkPlugins, markdownRehypePlugins } from './markdownPlugins'
+import {
+  markdownRemarkPlugins,
+  markdownRehypePlugins,
+  rehypeHighlightShared
+} from './markdownPlugins'
 import { rehypeSanitizeRawHtml, isSafeMarkdownUrl, sanitizeHastTree } from './rehypeSanitizeRawHtml'
 
 interface HastNode {
@@ -151,6 +157,19 @@ describe('0 · 管线本身', () => {
   it('闸紧跟在 rehype-raw 之后，且排在 highlight / katex 之前', () => {
     expect(markdownRehypePlugins.indexOf(rehypeSanitizeRawHtml)).toBe(1)
     expect(markdownRehypePlugins).toHaveLength(4)
+  })
+
+  /**
+   * 整张表逐项按引用：高亮那一格是全进程共用一个变换的 rehypeHighlightShared（见 markdownPlugins.ts），
+   * 不是 rehype-highlight 的默认导出 —— 换回去不会让哪条形状断言变红，只会让每次渲染重新注册三十多种语法
+   */
+  it('整张表就是 [rehype-raw, 闸, 共用的高亮, rehype-katex]', () => {
+    expect(markdownRehypePlugins).toEqual([
+      rehypeRaw,
+      rehypeSanitizeRawHtml,
+      rehypeHighlightShared,
+      rehypeKatex
+    ])
   })
 })
 

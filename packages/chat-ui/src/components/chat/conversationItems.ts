@@ -20,6 +20,33 @@ export function isFinalAnswer(msg: AssistantMessage): boolean {
   return !msg.blocks.some((b) => b.type === 'tool')
 }
 
+/**
+ * 上一次为同一条消息建出的项 —— 内容没变就交回**同一个对象**（助手项连同同一个 msgs 数组）。
+ *
+ * 每次 messages 变化（运行中的会话每落盘一步）整张列表都要重建；若每一项都是新对象，助手卡的 memo
+ * 全数失效，屏幕上每张卡都会重渲染、重新解析自己的 markdown。按身份缓存之后，只有真变了的那几项是
+ * 新的。键是消息对象本身（WeakMap：消息被换掉就跟着回收）；助手项按组首消息记，命中还要 key、
+ * 流式标记与组内消息逐个相同。项是只读的数据，在几处列表（多个窗口、ThreadDrawer）之间共用也无妨。
+ */
+const assistantItemCache = new WeakMap<ChatMessage, VisibleItem>()
+const singleItemCache = new WeakMap<ChatMessage, VisibleItem>()
+
+function sameMessages(
+  a: readonly AssistantMessage[] | undefined,
+  b: readonly AssistantMessage[]
+): boolean {
+  return a !== undefined && a.length === b.length && a.every((m, i) => m === b[i])
+}
+
+/** 单条项（用户消息、压缩摘要、错误行 …）：key 就是消息 id，同一条消息交回同一个项 */
+function singleItem(msg: ChatMessage): VisibleItem {
+  const cached = singleItemCache.get(msg)
+  if (cached && cached.key === msg.id) return cached
+  const item: VisibleItem = { key: msg.id, msg }
+  singleItemCache.set(msg, item)
+  return item
+}
+
 /** 流式占位卡：正文/思考/工具调用由 AssistantBubble 自己从 store 读 */
 export function streamingPlaceholder(sessionId: string): AssistantMessage {
   return {
@@ -70,12 +97,25 @@ export function buildVisibleItems(
 
   const flush = (streamingTail = false): void => {
     if (group.length === 0) return
-    items.push({
-      key: `turn:${turn}.${card}`,
-      msg: group[group.length - 1],
-      msgs: group,
-      ...(streamingTail ? { isStreamingPlaceholder: true } : {})
-    })
+    const key = `turn:${turn}.${card}`
+    const cached = assistantItemCache.get(group[0])
+    if (
+      cached &&
+      cached.key === key &&
+      (cached.isStreamingPlaceholder === true) === streamingTail &&
+      sameMessages(cached.msgs, group)
+    ) {
+      items.push(cached)
+    } else {
+      const item: VisibleItem = {
+        key,
+        msg: group[group.length - 1],
+        msgs: group,
+        ...(streamingTail ? { isStreamingPlaceholder: true } : {})
+      }
+      assistantItemCache.set(group[0], item)
+      items.push(item)
+    }
     card++
     group = []
   }
@@ -93,7 +133,7 @@ export function buildVisibleItems(
       // 并进去的话，一段没有终答的过程（中止 / steer）会把摘要当成自己的「结论」
       if (msg.metadata?.isCompactionSummary) {
         flush()
-        items.push({ key: msg.id, msg })
+        items.push(singleItem(msg))
         continue
       }
       group.push(msg)
@@ -103,14 +143,14 @@ export function buildVisibleItems(
 
     flush()
     if (msg.role === 'user') userTurn()
-    items.push({ key: msg.id, msg })
+    items.push(singleItem(msg))
   }
 
   // 乐观占位的用户消息：先把没收口的助手卡收掉 —— 它是上一轮的，新一轮的占位卡不该并进去
   if (pending) {
     flush()
     userTurn()
-    items.push({ key: pending.id, msg: pending })
+    items.push(singleItem(pending))
   }
 
   if (isStreaming) {

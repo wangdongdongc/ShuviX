@@ -102,6 +102,7 @@ vi.mock('mermaid', () => ({ default: { initialize: mm.initialize, render: mm.ren
 
 import { MermaidBlock } from '../MermaidBlock'
 import { MarkdownStreamingContext } from '../markdownStreaming'
+import { MarkdownText } from '../markdownComponents'
 import { CodeBlock } from '../CodeBlock'
 import { mermaidThemeVariables } from '../mermaidFit'
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
@@ -490,6 +491,41 @@ describe('流式期间不渲染（ST）', () => {
     expect(renderedCodes()).toEqual([code])
     await resolveRender(code, 400, 300, 'st7')
     expect(tagOf()).toBe('st7')
+  })
+
+  it('ST-8 正文走 MarkdownText（按文本 memo）、文本不变只翻流式标志：流式中失败不出错误卡，翻成 false 才出', async () => {
+    // AssistantBubble 落定那一刻正文文本不变，MarkdownText 不重渲 —— 写完了这件事只能经上下文传到这块
+    const code = 'graph LR\n  st8a -->'
+    const md = `before st8\n\n\`\`\`mermaid\n${code}\n\`\`\``
+    const showMd = (streaming: boolean): void => {
+      act(() => {
+        root.render(
+          createElement(
+            MarkdownStreamingContext.Provider,
+            { value: streaming },
+            createElement(MarkdownText, { text: md })
+          )
+        )
+      })
+    }
+
+    showMd(true)
+    await advance(800)
+    expect(renderedCodes()).toEqual([code])
+    await rejectRenders(code)
+    expect(pendingOf()).not.toBeNull()
+    expect(errorOf()).toBeNull()
+
+    showMd(false)
+    const card = errorOf()
+    expect(card).not.toBeNull()
+    expect(card!.querySelector('pre')?.textContent).toBe(code)
+    expect(pendingOf()).toBeNull()
+
+    // 写完那一刻按同一段源码再试一次 —— 收掉它，错误卡不变
+    await advance(0)
+    await rejectRenders(code)
+    expect(errorOf()?.querySelector('pre')?.textContent).toBe(code)
   })
 })
 
