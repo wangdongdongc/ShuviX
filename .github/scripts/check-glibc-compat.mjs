@@ -63,6 +63,8 @@ console.log(`系统 glibc: ${systemGlibc}`)
 // npm ci 阶段 prebuild-install 拉下来的是 Node ABI 预编译件（可能是在更新的 glibc 上打的），
 // 但 electron-builder 配了 npmRebuild + buildDependenciesFromSource，打包时会在本容器里
 // 用容器自己的 glibc 从源码重编，那个临时件根本不会进产物。扫它只会误报。
+// （前提是容器里带着 CI=true：否则根 postinstall 的 electron-rebuild 先装上游的 Electron 预编译件并写下
+// .forge-meta，electron-builder 就不重编了 —— v0.2.13 及以前即如此。产物由 check-packaged-glibc.mjs 兜底。）
 // --target 只为自测用（CI 里不传，默认就是当前平台）
 const platformToken = argOf('target', `${process.platform}-${process.arch}`)
 

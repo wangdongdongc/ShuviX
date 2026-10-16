@@ -173,6 +173,7 @@ jobs:
           if-no-files-found: ignore
 
   # ---- Linux 构建：在 Ubuntu 20.04 Docker 中编译，glibc 2.31 兼容 Ubuntu 20.04+ ----
+  # 门槛是 Ubuntu 20.04 自带的 glibc 2.31 / libstdc++ GLIBCXX_3.4.28，打包后由 check-packaged-glibc.mjs 逐个二进制验
   build-linux:
     runs-on: ubuntu-latest
 
@@ -187,9 +188,15 @@ jobs:
         run: |
           # Strip 'v' prefix for npm version
           export TAG_VERSION="${TAG_VERSION#v}"
+          # CI=true 要显式传进容器（docker 不继承 runner 的环境）：根 postinstall 见 CI 才跳过 electron-rebuild。
+          # 不跳过时它不带 --build-from-source，better-sqlite3 走 prebuild-install 下上游的 Electron 预编译件
+          # （GLIBC_2.34 / GLIBCXX_3.4.29），还写下 .forge-meta；electron-builder 的 @electron/rebuild 见到
+          # 同架构同 ABI 的 .forge-meta 就跳过，buildDependenciesFromSource 形同虚设 —— v0.2.13 及以前的 x64 包
+          # 里就是上游那份原件（sha256 一致），Ubuntu 20.04 一启动就 GLIBC_2.33 not found
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
+            -e CI=true \
             -e GITHUB_TOKEN \
             -e TAG_VERSION \
             -e DEBIAN_FRONTEND=noninteractive \
@@ -246,9 +253,15 @@ jobs:
               cd apps/desktop
               npm version "${TAG_VERSION}" --no-git-tag-version
               npx electron-vite build
-              npx electron-builder --linux --publish never
+              # libstdc++ 静态链进原生模块：GCC 11 的 <vector> 等头文件会引用 std::__throw_bad_array_new_length
+              # （GLIBCXX_3.4.29），Ubuntu 20.04 自带的 libstdc++ 只到 3.4.28 —— 本容器里从源码编出来的
+              # better-sqlite3 也照样起不来。PPA 的 libstdc++.a 是 PIC 的；--exclude-libs 把它的符号藏起来，
+              # 不从各个 .node 导出。node-gyp 读环境里的 LDFLAGS，@electron/rebuild 原样传下去
+              LDFLAGS="-static-libstdc++ -Wl,--exclude-libs,ALL" npx electron-builder --linux --publish never
               # 每个架构的包都得带着自己架构的平台原生包，否则不上传
               node ../../.github/scripts/check-packaged-natives.mjs dist linux
+              # 包里每个 ELF 要求的 glibc / libstdc++ 版本都不得高过 Ubuntu 20.04，否则不上传
+              node ../../.github/scripts/check-packaged-glibc.mjs dist
             '
           # Docker 内创建的文件属主为 root，修正权限以便后续 upload
           sudo chown -R $(id -u):$(id -g) apps/desktop/dist/ || true
