@@ -6,7 +6,8 @@
  *  - 按钮只在离底部够远、且初始定位过了之后才出现：不在底部时显示、可点、居中压在输入卡片上方，
  *    点它回到底部；切会话不闪、状态不串到别的会话；运行中兼作运行指示；
  *  - 右侧面板分割线的命中区不再盖住对话列的滚动条（滚动条可点宽度 10px）；真鼠标能拖滑块、能拖分割线；
- *  - 日历点进某天仍落在当天第一条消息上，按钮随之出现；
+ *  - 日历点进某天：那天之后还有内容 → 落在当天第一条消息上，按钮随之出现（SCR-9）；那天就是这条会话最后
+ *    活跃的一天（通常是今天）→ 照常落在真底（SCR-9b）；
  *  - 落点之后输入卡片更高（挂着询问）或末项自己长高（mermaid 图异步画出）：仍停在真底（SCR-10a/b，
  *    落地后的短暂跟随）。
  *
@@ -19,7 +20,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
-import { createProject, seedFakeProvider, waitRendererReady } from '../../harness/seed'
+import {
+  createProject,
+  seedFakeProvider,
+  sqlite,
+  sqliteJson,
+  sqlLit,
+  waitRendererReady
+} from '../../harness/seed'
 import {
   chatPane,
   conversationScrollPane,
@@ -387,7 +395,53 @@ describe('右侧面板分割线与滚动条', () => {
 })
 
 describe('日历跳转', () => {
-  it('SCR-9 日历点进某天：落在当天第一条消息上（不在底部），按钮随之出现，点它回到底部', async () => {
+  it('SCR-9 日历点进某天（之后还有内容）：落在当天第一条消息上（不在底部），按钮随之出现，点它回到底部', async () => {
+    // 今天要「之后还有内容」：把 S-long-1 的最后活跃时间挪到明天（日历只按它判断选中的那天是不是最后一天；
+    // 种不出真的明天的消息），测完还原
+    const [{ lastActiveAt: originalActive }] = sqliteJson<{ lastActiveAt: number }>(
+      app.home,
+      `SELECT lastActiveAt FROM sessions WHERE id = ${sqlLit(sids.l1)}`
+    )
+    sqlite(
+      app.home,
+      `UPDATE sessions SET lastActiveAt = ${Date.now() + 86_400_000} WHERE id = ${sqlLit(sids.l1)}`
+    )
+    // 日历面板若已挂着（前面的用例开过右侧面板），它的当天列表是改库之前拉的；会话列表成员一变它就重拉 ——
+    // 建一条临时会话触发一次（测完删掉）
+    const refresher = await app.main.eval<string>(
+      `window.api.session.create(${JSON.stringify({ title: 'S-calendar-refresh' })}).then((s) => s.id)`
+    )
+    await sleep(500)
+    try {
+      await calendarJumpChecks()
+    } finally {
+      await app.main.eval(
+        `window.api.session.delete(${JSON.stringify(refresher)}).then(() => true)`
+      )
+      sqlite(
+        app.home,
+        `UPDATE sessions SET lastActiveAt = ${originalActive} WHERE id = ${sqlLit(sids.l1)}`
+      )
+    }
+  })
+
+  it('SCR-9b 日历点进一条今天最后活跃的会话：照常落在真底（不跳回今天的第一条消息），按钮不出现', async () => {
+    // 从另一条会话出发（SCR-9 停在 S-long-1 的日历落点上；再「打开」当前会话不会重新落位）
+    await openAndLand(TITLES.running, await lastIdOf(sids.running))
+    await panel.open()
+    await panel.activateCalendarTab()
+    const t0 = Date.now()
+    await panel.clickCalendarSession(TITLES.l2)
+    await until(async () => (await sidebar.activeTitle()) === TITLES.l2, 'S-long-2 active')
+    const shot = await scroll.waitAtBottom()
+    expect(shot.lastItem?.id).toBe(await lastIdOf(sids.l2))
+    // 不是停在会话开头：六轮长回答
+    expect(shot.scrollTop).toBeGreaterThan(0)
+    await expectButtonStillHidden(t0)
+    await panel.close()
+  })
+
+  async function calendarJumpChecks(): Promise<void> {
     const target = await app.main.eval<string | null>(
       `window.api.calendar.firstEntryOnDay(${JSON.stringify({ sessionId: sids.l1, day: localDayKey() })})`
     )
@@ -430,7 +484,7 @@ describe('日历跳转', () => {
     await expectAtTarget()
     await scroll.waitButton(true, 2_000)
     await panel.close()
-  })
+  }
 })
 
 /**

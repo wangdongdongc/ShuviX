@@ -86,11 +86,16 @@ export function CalendarPanel(): React.JSX.Element {
       const api = getHostApi()?.calendar
       if (!api) return
       const day = dayKey(selected)
+      // 选中的这天就是这条会话最后活跃的一天（通常是今天，会话也许还在跑）：点它是要接着看、接着聊，照常落在
+      // 最新内容上 —— 跳到这天的第一条消息就等于跳回一条今天才开的会话的开头。只有更早的一天（之后还有内容）
+      // 才跳到那天的第一条消息
+      const session = daySessions.find((s) => s.id === id)
+      if (session && dayKey(new Date(session.lastActiveAt)) === day) return
       void api.firstEntryOnDay({ sessionId: id, day }).then((entryId) => {
         if (entryId) requestScrollToMessage(id, entryId)
       })
     },
-    [pinnedSessionIds, requestScrollToMessage, selected, setActiveSessionId]
+    [daySessions, pinnedSessionIds, requestScrollToMessage, selected, setActiveSessionId]
   )
 
   const handleNewChat = async (projectId: string | null): Promise<void> => {
