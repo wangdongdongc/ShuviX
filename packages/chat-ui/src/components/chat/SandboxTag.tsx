@@ -37,7 +37,7 @@ export function SandboxBadge({ state }: { state: ShellSandboxState }): React.JSX
         : t('toolCall.sandbox.unconfined')
   return (
     <span
-      className={`flex-shrink-0 self-center px-1 rounded font-sans text-[10px] leading-[1.5] select-none ${BADGE_CLASS[state]}`}
+      className={`inline-block mr-1.5 px-1 rounded font-sans text-[10px] leading-[1.5] whitespace-nowrap select-none ${BADGE_CLASS[state]}`}
       title={t(`toolCall.sandbox.${state}Hint`)}
       data-sandbox={state}
     >

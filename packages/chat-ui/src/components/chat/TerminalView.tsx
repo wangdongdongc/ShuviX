@@ -47,7 +47,7 @@ interface TerminalViewProps {
  * 终端形态的工具详情 —— 命令和输出是一次交互的两半，拼成一段终端会话来读。
  *
  * 与通用表单形态的区别：不带「参数 / 结果」标签，不给命令套代码块外壳和行号；
- * 提示符行给出 cwd，多行命令的后续行自然对齐在首字符下方（跟真实终端一致）。
+ * 提示符行给出 cwd；长命令折行、多行命令的后续行都从最左边起（跟真实终端一致）。
  */
 export function TerminalView({
   command,
@@ -92,19 +92,26 @@ export function TerminalView({
         {copied ? <Check size={10} className="text-success" /> : <Copy size={10} />}
       </button>
 
-      {/* 提示符行：cwd + ❯ + 命令（多行命令续行自动对齐到命令首字符） */}
-      <div className="flex items-start gap-1.5 px-2 pt-1.5 pr-7">
+      {/*
+        提示符行：cwd + ❯ + 命令排在同一段行内文字里，长命令折行回到最左边 —— 跟真实终端一样。
+        不用 flex：flex 下命令是独立一栏，cwd 与标记各占一栏，长命令只在右边窄栏里折，左边空出一大块。
+        退出码先于其它内容浮到右侧，所以留在首行行尾、后续行从它下面流过。
+      */}
+      <div className="px-2 pt-1.5 pr-7 break-words">
+        {failed && (
+          <span className="float-right ml-2 text-error/80 select-none">exit {exitCode}</span>
+        )}
         {location && (
-          <span className="flex-shrink-0 max-w-[45%] truncate text-accent/80" title={host || cwd}>
+          <span
+            className="inline-block max-w-[45%] truncate align-top mr-1.5 text-accent/80"
+            title={host || cwd}
+          >
             {location}
           </span>
         )}
         {sandbox && <SandboxBadge state={sandbox} />}
-        <span className="flex-shrink-0 text-success/70 select-none">❯</span>
-        <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-text-primary">
-          {command}
-        </span>
-        {failed && <span className="flex-shrink-0 text-error/80 select-none">exit {exitCode}</span>}
+        <span className="mr-1.5 text-success/70 select-none">❯</span>
+        <span className="whitespace-pre-wrap text-text-primary">{command}</span>
       </div>
 
       {/* 输出：紧跟命令，无标签无分隔线 —— 终端里本来就是连着的 */}
