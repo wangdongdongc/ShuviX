@@ -113,7 +113,6 @@ export function restorePlatform(): void {
 
 export const PROFILES: readonly AgentProfile[] = buildBuiltinProfiles({
   language: 'en',
-  widgetsRoot: '/w/widgets',
   readMd: createInlineMdReader()
 })
 

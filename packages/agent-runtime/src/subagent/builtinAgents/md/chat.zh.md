@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:chat
 shuvix-builtin: true
 name: chat
 description: 聊天智能体——不归属任何项目的会话的基座档案。握着完整的内置工具链，倾向于自己把活干完。
-shuvix-tools: bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing
+shuvix-tools: bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget
 shuvix-displayName: 聊天
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

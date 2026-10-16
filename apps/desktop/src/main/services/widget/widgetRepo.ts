@@ -1,10 +1,10 @@
 /**
  * WidgetRepo —— 每个 widget 目录一个独立 git 仓库，仓库的"存在性"由宿主保证。
  *
- * 分工：
- *   - 宿主（这里）负责 init、scaffold 基线提交、以及平台自身写文件后的提交（重命名改 manifest）；
- *   - agent 负责提交它自己的开发改动（经 git 工具，署名走正常解析链）。
- * 这样"这是不是个仓库""要不要 init""脏了怎么办"这类不变量不依赖 LLM 判断。
+ * 分工：全归宿主 —— init、scaffold 基线提交、平台自身写文件后的提交（重命名改 manifest），以及
+ * **每次构建成功后提交整棵树**（`commitBuild`，`shuvix widget build <id> [--message]`）。改 widget 的 agent
+ * 不碰 git：基础档案刻意不带 git 工具，沙箱里的 bash git 又读不到 `~/.gitconfig`。
+ * 这样"这是不是个仓库""要不要 init""脏了怎么办""该不该提交"这类不变量不依赖 LLM 判断。
  *
  * 一切失败只记日志：版本控制是增益能力，绝不能让 widget 的创建 / 构建 / 重命名因它而失败。
  * 用 initOp/addOp/commitOp 而非 isomorphic-git 裸 API，是为了复用 git 工具里已被测试覆盖的
@@ -33,6 +33,12 @@ const log = createLogger('WidgetRepo')
  */
 const HOST_AUTHOR = { authorName: 'ShuviX', authorEmail: 'widget@shuvix.local' }
 
+/**
+ * 构建成功后那条提交的署名 —— 提交的是改 widget 的人（agent 或用户手改）的工作，与平台行为区分开。
+ * 与从前内置 widget agent 经 git 工具提交时用的署名相同，新旧历史读起来是一个作者。
+ */
+const WORK_AUTHOR = { authorName: 'ShuviX Widget', authorEmail: 'widget@shuvix.local' }
+
 function envFor(dir: string): GitEnv {
   return { fs: nodeFs as unknown as GitFsClient, dir }
 }
@@ -48,21 +54,26 @@ async function stageAndCommit(
   env: GitEnv,
   cache: GitCache,
   message: string,
-  paths: string[]
-): Promise<boolean> {
+  paths: string[],
+  author: { authorName: string; authorEmail: string } = HOST_AUTHOR
+): Promise<{ landed: boolean; oid?: string }> {
   const added = await addOp(env, cache, { paths })
   const addError = failureOf(added)
   if (addError) {
     log.warn(`git add failed in ${env.dir}: ${addError}`)
-    return false
+    return { landed: false }
   }
-  const committed = await commitOp(env, cache, { message, ...HOST_AUTHOR })
+  const committed = await commitOp(env, cache, { message, ...author })
   const commitError = failureOf(committed)
   if (commitError && !/nothing to commit/i.test(commitError)) {
     log.warn(`git commit failed in ${env.dir}: ${commitError}`)
-    return false
+    return { landed: false }
   }
-  return true
+  const oid = committed.details?.oid
+  return {
+    landed: true,
+    oid: commitError === undefined && typeof oid === 'string' ? oid : undefined
+  }
 }
 
 /**
@@ -70,7 +81,7 @@ async function stageAndCommit(
  * 否则 init 并把当前全部文件作为基线提交。
  *
  * 对历史遗留 widget（创建时还没有版本控制）来说，这是它们的第一个提交 ——
- * 因此 agent 的维护流程要求"先 build 再改"，让基线落在改动之前。
+ * 因此 widget 技能的维护流程要求"先 build 再改"，让基线落在改动之前。
  */
 export async function ensureRepo(dir: string, baselineMessage: string): Promise<void> {
   try {
@@ -84,9 +95,9 @@ export async function ensureRepo(dir: string, baselineMessage: string): Promise<
       log.warn(`git init failed in ${dir}: ${initError}`)
       return
     }
-    const committed = await stageAndCommit(env, cache, baselineMessage, ['.'])
+    const { landed } = await stageAndCommit(env, cache, baselineMessage, ['.'])
     log.info(
-      committed
+      landed
         ? `initialized widget repo at ${dir}`
         : `initialized widget repo at ${dir}, but the baseline commit did not land`
     )
@@ -112,5 +123,25 @@ export async function commitHostChange(
     await stageAndCommit(envFor(dir), {}, message, paths)
   } catch (err) {
     log.warn(`commitHostChange failed for ${dir}: ${(err as Error).message}`)
+  }
+}
+
+/** 构建成功后的那条提交的默认说明（`--message` 没给时） */
+export function defaultBuildMessage(id: string): string {
+  return `chore(${id}): build`
+}
+
+/**
+ * 构建成功后提交整棵树（`.`，删除的文件一并记下）。不是仓库就什么都不做（`ensureRepo` 在构建之前已经补过）。
+ * 返回新提交的 oid；没有改动（"nothing to commit"）或提交失败 → undefined。失败只记日志，构建结果照常返回。
+ */
+export async function commitBuild(dir: string, message: string): Promise<string | undefined> {
+  try {
+    if (!existsSync(join(dir, '.git'))) return undefined
+    const { oid } = await stageAndCommit(envFor(dir), {}, message, ['.'], WORK_AUTHOR)
+    return oid
+  } catch (err) {
+    log.warn(`commitBuild failed for ${dir}: ${(err as Error).message}`)
+    return undefined
   }
 }

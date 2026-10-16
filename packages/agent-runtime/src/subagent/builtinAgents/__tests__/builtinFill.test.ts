@@ -119,7 +119,7 @@ describe('buildBuiltinProfile —— fill 依赖', () => {
 })
 
 describe('buildBuiltinProfiles —— 真实内置 md 全集', () => {
-  const deps = { readMd: createInlineMdReader(), language: 'en', widgetsRoot: '/w' }
+  const deps = { readMd: createInlineMdReader(), language: 'en' }
 
   it('BF-5 每份构建出的内置档案各问一次读口，id 是 agent:builtin:<spec 名>；只答 explore 时只有 explore 变了', () => {
     const plain = buildBuiltinProfiles(deps)

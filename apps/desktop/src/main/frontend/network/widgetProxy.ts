@@ -6,6 +6,11 @@
  *    `Host` 换成 widget 服务自己的；
  *  - 应答的状态码与头（同样去掉逐跳的）照搬，HTML 应答另加一条沙箱 CSP（`WIDGET_DOCUMENT_CSP`），正文**流式**转回 —— widget 的 `sse`（热重载）是一条不结束的
  *    事件流，不能攒完再发；
+ *  - widget 的文件路由（`/w/<id>/fs/…`，见 `shared/widgetRoutes.ts`）的应答补一个 `Access-Control-Allow-Origin: *`：
+ *    widget 服务自己故意不带（不限路径的文件读，带上就是让用户浏览器里任何网页都能读本机文件），但转发过来的
+ *    widget 文档是沙箱里的不透明源，它 `fetch` 同一台服务的 `/w/<id>/fs/list` 就是跨源，没有这个头读不到应答。
+ *    这一面（局域网、不认证）的 `/files/media` 本来就不限路径，补这个头不比现状多放出任何东西。转发自己回的
+ *    503 / 502 在文件路由上也带它，widget 才看得到 `!res.ok` 而不是一个 fetch 的 TypeError；
  *  - 浏览器那头断了 → 上游请求随之断开（sse 不会在 widget 服务那头留下一个没人读的客户端）；
  *  - widget 服务没在跑（它是懒启动的：第一次打开 widget 时才监听）→ 503；上游连不上 / 中途出错 → 502。
  *
@@ -18,6 +23,7 @@ import {
   type IncomingMessage,
   type ServerResponse
 } from 'node:http'
+import { isWidgetFilesPath } from '../../../shared/widgetRoutes'
 
 /** widget 服务此刻在哪（没在跑 → undefined） */
 export interface WidgetProxyTarget {
@@ -70,7 +76,7 @@ export function forwardableHeaders(
   return out
 }
 
-function plain(res: ServerResponse, status: number, text: string): void {
+function plain(res: ServerResponse, status: number, text: string, cors = false): void {
   if (res.headersSent) {
     res.destroy()
     return
@@ -78,7 +84,9 @@ function plain(res: ServerResponse, status: number, text: string): void {
   res.writeHead(status, {
     'Content-Type': 'text/plain; charset=utf-8',
     'Content-Length': Buffer.byteLength(text),
-    'Cache-Control': 'no-store'
+    'Cache-Control': 'no-store',
+    // 文件路由的错误也要读得到：没有这个头，沙箱里的 widget 拿到的是 fetch 的 TypeError 而不是 !res.ok
+    ...(cors ? { 'Access-Control-Allow-Origin': '*' } : {})
   })
   res.end(text)
 }
@@ -89,9 +97,10 @@ export function proxyWidgetRequest(
   res: ServerResponse,
   deps: WidgetProxyDeps
 ): void {
+  const filesRoute = isWidgetFilesPath((req.url ?? '/').split('?')[0])
   const target = deps.target()
   if (target === undefined) {
-    plain(res, 503, 'The ShuviX widget server is not running. Open the widget again.')
+    plain(res, 503, 'The ShuviX widget server is not running. Open the widget again.', filesRoute)
     return
   }
   const headers = forwardableHeaders(req.headers, ['host'])
@@ -108,6 +117,9 @@ export function proxyWidgetRequest(
     },
     (upstreamRes) => {
       const headers = forwardableHeaders(upstreamRes.headers)
+      if (filesRoute) {
+        headers['access-control-allow-origin'] = '*'
+      }
       const type = headers['content-type']
       if (typeof type === 'string' && /^text\/html\b/i.test(type)) {
         const existing = headers['content-security-policy']
@@ -130,7 +142,7 @@ export function proxyWidgetRequest(
     // 浏览器先走了（下面那个 close 主动断的上游）、或已经转完：没人可回
     if (finished || res.destroyed) return
     deps.logger?.warn(`network: widget proxy ${req.method} ${req.url} failed: ${String(error)}`)
-    plain(res, 502, 'The ShuviX widget server did not answer.')
+    plain(res, 502, 'The ShuviX widget server did not answer.', filesRoute)
   })
   // 浏览器那头走了（关了 tab、sse 断开）：上游一起断
   res.on('close', () => {

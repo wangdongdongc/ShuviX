@@ -457,7 +457,6 @@ export {
   BOT_SPEC,
   CODING_SPEC,
   EXPLORE_SPEC,
-  WIDGET_SPEC,
   TITLER_SPEC,
   builtinMdFileNames,
   type BuiltinMdReader,

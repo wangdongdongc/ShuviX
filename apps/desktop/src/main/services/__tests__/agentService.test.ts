@@ -35,7 +35,6 @@ import type { AgentProfile, ParsedAgentFile } from '@shuvix/agent-runtime'
 
 const state = vi.hoisted(() => ({
   dir: '',
-  widgets: '',
   // 内置档案的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
   // src/main/services/__tests__ 往上六级是仓库根；hoisted 里没有 import，故不走 resolve()
   builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/subagent/builtinAgents/md`
@@ -46,7 +45,6 @@ vi.mock('../../utils/paths', () => ({
   getDefaultAgentsDir: () => state.dir,
   // 内置档案的事实源：运行时读随包发布的目录，单测直接读仓库里那一份（同一批文件）
   getBuiltinAgentsDir: () => state.builtinDir,
-  getWidgetsDir: () => state.widgets,
   getShuvixKnowledgeRootDir: () => '/tmp/shuvix-knowledge-shuvix'
 }))
 vi.mock('../../logger', () => ({
@@ -59,7 +57,6 @@ let agentService: AgentService
 beforeAll(async () => {
   const base = mkdtempSync(join(tmpdir(), 'shuvix-agentsvc-'))
   state.dir = join(base, 'agents')
-  state.widgets = join(base, 'widgets')
   ;({ agentService } = await import('../agentService'))
 })
 afterAll(() => {
@@ -197,15 +194,10 @@ describe('agentService.getSource —— 原文编辑器的数据源', () => {
     }
   })
 
-  it('AS-4 内置回写保真：{{shuvix:*}} 会话变量原样留给 createAgent，{{widgetsRoot}} 宿主参数已插值', () => {
+  it('AS-4 内置回写保真：{{shuvix:*}} 会话变量原样留给 createAgent', () => {
     const workText = (agentService.getSource('work', 'builtin') as { text: string }).text
     // 会话级变量在 createAgent 才替换 —— 副本里必须还是占位符，否则用户拿到的是别人的环境
     expect(workText).toContain('{{shuvix:workingDirectory}}')
-
-    const widgetText = (agentService.getSource('widget', 'builtin') as { text: string }).text
-    // 宿主参数在构建档案时就地替换 —— 用户看到的是真实路径
-    expect(widgetText).toContain(state.widgets)
-    expect(widgetText).not.toContain('{{widgetsRoot}}')
   })
 
   it('AS-35 内置 titler 的回写 md 带 shuvix-thinking: off，且再解析仍是 off（覆盖副本不丢「不思考」这条声明）', () => {
@@ -493,7 +485,7 @@ describe('agentService.isSessionProfile —— 可作子会话档案的判据表
   })
 
   it('AS-23b 其余内置全部为 true —— 含曾经只可派发的 titler（knowledge-writer 已转宿主专用，归 AS-23d）', () => {
-    for (const name of ['coding', 'explore', 'widget', 'titler']) {
+    for (const name of ['coding', 'explore', 'titler']) {
       expect(judge(name), name).toBe(true)
     }
   })

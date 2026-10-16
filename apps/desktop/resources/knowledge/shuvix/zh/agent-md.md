@@ -91,7 +91,7 @@ style, each with file and line. Never modify files.
 也可以带着它，agent 文件不动。要让每条会话都去掉一项，仍然是覆盖这个 agent。内置工具名取消不了。
 **收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
 `bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, powershell, read, write, edit, ask,
-ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing`），
+ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget`），
 只在正文上有区别。
 
 ### 正文 —— 系统提示词
@@ -135,7 +135,7 @@ frontmatter 之后的全部内容（去首尾空白）就是系统提示词。�
 （不属于任何项目的会话的根）、`notebook`（笔记本会话的根 —— 主窗口里的笔记，或在单独窗口里打开的 md
 文件 —— 只经 `doc_read` / `doc_edit` / `doc_insert` 改那份文档）、`bot`（bot 会话的根）、`tab`（Chrome
 侧边栏对话的根，唯一带 `mcp:chrome` —— 用户自己的 Chrome —— 的一个）—— 加上任务型
-agent `coding`、`explore`、`widget`、`titler`，以及两个只由 ShuviX 派发的 agent：`permission-reviewer`
+agent `coding`、`explore`、`titler`，以及两个只由 ShuviX 派发的 agent：`permission-reviewer`
 —— 它替自动审查回答审批请求（见 `policy-md` 条目），和 `knowledge-writer` —— 它检查经 `knowledge` 工具
 提交的条目并补齐元数据（见 `knowledge-entry` 条目）。
 

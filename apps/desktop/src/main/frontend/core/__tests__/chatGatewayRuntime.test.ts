@@ -279,7 +279,7 @@ describe('DefaultChatGateway.listTools —— 内置 database server 那一行',
   it.each(['en', 'zh', 'ja'])(
     'GW-3 (%s) 五个基座档案（work / chat / notebook / bot / coding）都不声明 mcp:database；那一行是内置的、没有 declaredBy；退役的 database 工具不是谁的默认',
     (language) => {
-      const profiles = buildBuiltinProfiles({ language, widgetsRoot: '/w', readMd })
+      const profiles = buildBuiltinProfiles({ language, readMd })
       mocks.getProfile.mockImplementation((name: string) => profiles.find((p) => p.name === name))
       mocks.mcpInfos = [
         {

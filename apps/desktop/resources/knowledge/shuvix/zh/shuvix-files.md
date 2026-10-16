@@ -35,7 +35,7 @@ skill 目录）、`widgets/`、`tts/`、`cli-token`。旧的 `memory/`、`wikis/
 不再读取。
 
 **内置的东西在应用里，不在磁盘上。** ShuviX 自带内置 agent（`work`、`chat`、`notebook`、`bot`、`tab`、
-`coding`、`explore`、`widget`、`titler`、`knowledge-writer`、`permission-reviewer`）、内置安全策略、
+`coding`、`explore`、`titler`、`knowledge-writer`、`permission-reviewer`）、内置安全策略、
 两个内置 hook（`auto-title`、`auto-review`）与内置 skill `builtin:drawing`。没有内置 bot。
 内置的不能编辑，但可以**覆盖**：一份 `name` 与内置同名的用户文件会整个取代它（侧栏分组里内置行的菜单
 提供「创建覆盖副本」，把内置的当前文本写进你的目录作为起点）。

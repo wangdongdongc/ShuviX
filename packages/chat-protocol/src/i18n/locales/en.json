@@ -1297,7 +1297,8 @@
     "skills": {
       "browser": "Open and interact with web pages — view, click, fill forms, capture screenshots or PDFs",
       "drawing": "Craft guidance for inline SVG figures — choosing the form, mark specs, and what goes wrong",
-      "pglite": "Analyze data with SQL — query CSVs, build quick tables, summarize results"
+      "pglite": "Analyze data with SQL — query CSVs, build quick tables, summarize results",
+      "widget": "Build, change and debug ShuviX Widgets — the CLI lifecycle, data, local files and the design guide"
     }
   },
   "configShare": {

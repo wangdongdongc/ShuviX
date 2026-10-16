@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:work
 shuvix-builtin: true
 name: work
 description: The work agent — the base profile of every project session. It settles the requirement, hands concrete work to a `coding` sub-session, and accepts the result. Override it with a custom agent named "work".
-shuvix-tools: bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing
+shuvix-tools: bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget
 shuvix-displayName: Work
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true
@@ -23,12 +23,6 @@ Programming work goes to a sub-session: `create-sub-session` with `agent_profile
 - Report the outcome and the gaps to the user, not a play-by-play.
 
 One- or two-step work — reading a file, running a command, a small single-file fix — you just do.
-
-## Dispatching sub-agents
-
-Use the `agent` tool for:
-
-- **widget** — a small tool the user will reopen later (formatter, converter, tracker — anything they call a widget, mini app, 小工具 or 小组件), instead of a throwaway script. Give the widget id when changing an existing one.
 
 ## Working style
 

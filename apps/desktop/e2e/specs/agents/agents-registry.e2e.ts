@@ -49,7 +49,6 @@ describe('内置档案', () => {
       'permission-reviewer',
       'tab',
       'titler',
-      'widget',
       'work'
     ])
     // 派发专用的窄档案两样都不要：AGENTS.md/CLAUDE.md 是写代码的工程约定，

@@ -1,5 +1,5 @@
 /**
- * cliServer `widget.build`（HG-3）—— **先校验 id，再授权**。
+ * cliServer `widget.build`（HG-3 / HG-4）—— **先校验 id，再授权**；`message` 只有是字符串才转给构建。
  *
  * 授权（sessionService.addAllowListPaths）是持久写进会话 allowList 的，而 id 原样拼进路径：
  * `../../etc` 这类 id 若先授权后校验，会话就凭空多出一个任意目录的读写授权（命令沙箱还会把写授权
@@ -7,6 +7,12 @@
  *
  * handler 从私有的 `handlers` 表里取（构造时注册，不用 start 起 socket）。`widgetService.validateId`
  * 保持真实（真正的 id 规则：kebab-case 且至少一个短横）；getWidgetDir 是透传 spy，build 是假的。
+ *
+ *   HG-3  非法 id 拒绝在授权与构建之前；合法 id 先授读写再构建（不带 message → `{ message: undefined }`）
+ *   HG-4a 字符串 message 原样转给 build；handler 的结果就是 build 的返回（含 commit）
+ *   HG-4b 不是字符串的 message（数字 / null / 对象）→ `{ message: undefined }`
+ *   HG-4c 空字符串 message 原样转（缺省说明由 widgetService 自己补）
+ *   HG-4d 非法 id 带着 message 照样在授权与构建之前被拒
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { join } from 'path'
@@ -36,7 +42,12 @@ vi.mock('../widget/widgetDb', () => ({
   dropWidgetSchema: vi.fn(),
   WidgetDbError: class WidgetDbError extends Error {}
 }))
-vi.mock('../widget/widgetRepo', () => ({ ensureRepo: vi.fn(), commitHostChange: vi.fn() }))
+vi.mock('../widget/widgetRepo', () => ({
+  ensureRepo: vi.fn(),
+  commitHostChange: vi.fn(),
+  commitBuild: vi.fn(),
+  defaultBuildMessage: (id: string) => `chore(${id}): build`
+}))
 vi.mock('../../utils/paths', () => ({ getWidgetsDir: () => WIDGETS_DIR }))
 vi.mock('../widgetWindowService', () => ({ open: vi.fn() }))
 vi.mock('../sessionService', () => ({
@@ -100,7 +111,7 @@ describe('HG-3 widget.build —— 先校验 id，再授权', () => {
       ['sess-1', 'read', [dir]],
       ['sess-1', 'write', [dir]]
     ])
-    expect(buildSpy.mock.calls).toEqual([['json-formatter']])
+    expect(buildSpy.mock.calls).toEqual([['json-formatter', { message: undefined }]])
     // 授权在构建之前：构建本身（以及之后 agent 改源码）要用到这两条授权
     const lastGrant = Math.max(...mocks.addAllowListPaths.mock.invocationCallOrder)
     expect(lastGrant).toBeLessThan(buildSpy.mock.invocationCallOrder[0])
@@ -110,6 +121,40 @@ describe('HG-3 widget.build —— 先校验 id，再授权', () => {
     await expect(buildHandler()({ id: 'json-formatter' }, undefined)).resolves.toEqual(BUILD_RESULT)
 
     expect(mocks.addAllowListPaths).not.toHaveBeenCalled()
-    expect(buildSpy.mock.calls).toEqual([['json-formatter']])
+    expect(buildSpy.mock.calls).toEqual([['json-formatter', { message: undefined }]])
+  })
+})
+
+describe('HG-4 widget.build 的 message', () => {
+  it('HG-4a 字符串 message 原样转给 build；结果就是 build 的返回（含 commit）', async () => {
+    const withCommit = { ...BUILD_RESULT, commit: 'abc1234' }
+    buildSpy.mockResolvedValue(withCommit)
+
+    const out = await buildHandler()({ id: 'json-formatter', message: 'feat: x' }, 'sess-1')
+
+    expect(out).toBe(withCommit)
+    expect(out).toEqual({ ...BUILD_RESULT, commit: 'abc1234' })
+    expect(buildSpy.mock.calls).toEqual([['json-formatter', { message: 'feat: x' }]])
+  })
+
+  it.each([42, null, { a: 1 }])(
+    'HG-4b message %j 不是字符串 → { message: undefined }',
+    async (m) => {
+      await buildHandler()({ id: 'json-formatter', message: m }, 'sess-1')
+      expect(buildSpy.mock.calls).toEqual([['json-formatter', { message: undefined }]])
+    }
+  )
+
+  it("HG-4c message '' 原样转", async () => {
+    await buildHandler()({ id: 'json-formatter', message: '' }, 'sess-1')
+    expect(buildSpy.mock.calls).toEqual([['json-formatter', { message: '' }]])
+  })
+
+  it('HG-4d 非法 id 带 message → 照样在授权与构建之前拒绝', async () => {
+    await expect(buildHandler()({ id: '../../etc', message: 'feat: x' }, 'sess-1')).rejects.toThrow(
+      'Invalid widget id'
+    )
+    expect(mocks.addAllowListPaths).not.toHaveBeenCalled()
+    expect(buildSpy).not.toHaveBeenCalled()
   })
 })

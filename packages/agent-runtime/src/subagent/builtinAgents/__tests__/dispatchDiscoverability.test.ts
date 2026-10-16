@@ -38,7 +38,6 @@ const LANGS = ['en', 'zh', 'ja'] as const
 const build = (spec: BuiltinProfileSpec, language: string): AgentProfile =>
   buildBuiltinProfile(spec, {
     language,
-    widgetsRoot: '/w',
     readMd: createInlineMdReader()
   }) as AgentProfile
 

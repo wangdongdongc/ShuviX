@@ -20,6 +20,13 @@
  *   WP-9  坏 Host → 421；target() 一次都不调
  *   WP-10 转发着一条事件流时 server.stop() 1.5 秒内 resolve，上游看到断开
  *   WP-11 HTML 应答加沙箱 CSP（`WIDGET_DOCUMENT_CSP`）；上游自带 CSP → 接在后面；不是 HTML 的应答原样
+ *   WP-12 widget 文件路由（`/w/<id>/fs/…`）的应答补 `Access-Control-Allow-Origin: *`：
+ *         a 上游不带 → 客户端带，上游收到同样的路径与查询串；HEAD 只回头、GET + Range 的 206 也带
+ *         b 上游的错误（404 文本、400 JSON）状态与正文照搬、也带
+ *         c 上游自带别的 ACAO → 文件路由上换成 `*`，别的路由原样
+ *         d 转发自己回的 503（target 不在）/ 502（上游没在听）：文件路由带，别的路由不带
+ *         e 不是文件路由（页面、db、`fsx`、`FS`、`//fs`）且上游不带 → 不补
+ *         f 文件路由上 text/html 的应答照样加沙箱 CSP，也带 ACAO
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import {
@@ -586,5 +593,135 @@ describe('WP-11 HTML 应答的沙箱 CSP', () => {
     }
     const js = await http('/w/demo-widget/bundle.js')
     expect(js.headers['content-security-policy']).toBe("script-src 'none'")
+  })
+})
+
+describe('WP-12 widget 文件路由补 ACAO *', () => {
+  beforeEach(async () => {
+    await boot()
+  })
+
+  it('WP-12a 上游不带 ACAO → 客户端带 *；路径与查询串照搬；HEAD 与 Range 的 206 也带', async () => {
+    script = (req, res) => {
+      if (req.url?.startsWith('/w/demo-widget/fs/list')) {
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end('{"path":"/tmp","entries":[],"truncated":false}')
+        return
+      }
+      if (req.headers.range) {
+        res.writeHead(206, {
+          'content-type': 'image/png',
+          'content-range': 'bytes 0-1/4',
+          'content-length': '2'
+        })
+        res.end('ab')
+        return
+      }
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': '4' })
+      res.end(req.method === 'HEAD' ? undefined : 'abcd')
+    }
+    const list = await http('/w/demo-widget/fs/list?path=%2Ftmp')
+    expect(list.status).toBe(200)
+    expect(list.headers['access-control-allow-origin']).toBe('*')
+    expect(list.body.toString()).toBe('{"path":"/tmp","entries":[],"truncated":false}')
+    expect(seen.at(-1)!.url).toBe('/w/demo-widget/fs/list?path=%2Ftmp')
+
+    const head = await http('/w/demo-widget/fs/file?path=%2Fa.png', { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    expect(head.headers['access-control-allow-origin']).toBe('*')
+    expect(head.headers['content-length']).toBe('4')
+    expect(head.body.length).toBe(0)
+    expect(seen.at(-1)!.method).toBe('HEAD')
+    expect(seen.at(-1)!.url).toBe('/w/demo-widget/fs/file?path=%2Fa.png')
+
+    const range = await http('/w/demo-widget/fs/file?path=%2Fa.png', {
+      headers: { range: 'bytes=0-1' }
+    })
+    expect(range.status).toBe(206)
+    expect(range.headers['access-control-allow-origin']).toBe('*')
+    expect(range.headers['content-range']).toBe('bytes 0-1/4')
+    expect(range.body.toString()).toBe('ab')
+    expect(seen.at(-1)!.headers.range).toBe('bytes=0-1')
+  })
+
+  it('WP-12b 上游的错误状态与正文照搬，也带 ACAO *', async () => {
+    script = (_req, res) => {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('Not found.')
+    }
+    const missing = await http('/w/demo-widget/fs/file?path=%2Fnope')
+    expect(missing.status).toBe(404)
+    expect(missing.body.toString()).toBe('Not found.')
+    expect(missing.headers['access-control-allow-origin']).toBe('*')
+
+    const badBody = '{"code":"BAD_PATH","message":"path must be an absolute path or start with ~"}'
+    script = (_req, res) => {
+      res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(badBody)
+    }
+    const bad = await http('/w/demo-widget/fs/list?path=rel')
+    expect(bad.status).toBe(400)
+    expect(bad.body.toString()).toBe(badBody)
+    expect(bad.headers['access-control-allow-origin']).toBe('*')
+  })
+
+  it('WP-12c 上游自带别的 ACAO：文件路由上换成 *，别的路由原样', async () => {
+    script = (_req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        'access-control-allow-origin': 'https://a.example'
+      })
+      res.end('x')
+    }
+    const files = await http('/w/demo-widget/fs/file?path=%2Fa')
+    expect(files.headers['access-control-allow-origin']).toBe('*')
+    const other = await http('/w/demo-widget/bundle.js')
+    expect(other.headers['access-control-allow-origin']).toBe('https://a.example')
+  })
+
+  it('WP-12d 转发自己回的 503 / 502：文件路由带 ACAO *，别的路由不带', async () => {
+    current = undefined
+    const filesDown = await http('/w/demo-widget/fs/list?path=%2Ftmp')
+    expect(filesDown.status).toBe(503)
+    expect(filesDown.body.toString()).toBe(NOT_RUNNING)
+    expect(filesDown.headers['access-control-allow-origin']).toBe('*')
+    const pageDown = await http('/w/demo-widget/')
+    expect(pageDown.status).toBe(503)
+    expect(pageDown.headers['access-control-allow-origin']).toBeUndefined()
+
+    current = { host: '127.0.0.1', port: await freePort() }
+    const filesGone = await http('/w/demo-widget/fs/file?path=%2Fa')
+    expect(filesGone.status).toBe(502)
+    expect(filesGone.body.toString()).toBe(NO_ANSWER)
+    expect(filesGone.headers['access-control-allow-origin']).toBe('*')
+    const pageGone = await http('/w/demo-widget/')
+    expect(pageGone.status).toBe(502)
+    expect(pageGone.headers['access-control-allow-origin']).toBeUndefined()
+    expect(seen).toHaveLength(0)
+  })
+
+  it('WP-12e 不是文件路由、上游不带 → 不补 ACAO', async () => {
+    for (const path of [
+      '/w/demo-widget/',
+      '/w/demo-widget/db/todos',
+      '/w/demo-widget/fsx/file',
+      '/w/demo-widget/FS/file',
+      '/w/demo-widget//fs/file'
+    ]) {
+      const res = await http(path)
+      expect(res.status, path).toBe(200)
+      expect(res.headers['access-control-allow-origin'], path).toBeUndefined()
+    }
+    expect(seen).toHaveLength(5)
+  })
+
+  it('WP-12f 文件路由上 text/html 的应答照样加沙箱 CSP，也带 ACAO *', async () => {
+    script = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end('<p>x</p>')
+    }
+    const res = await http('/w/demo-widget/fs/file?path=%2Fa.html')
+    expect(res.headers['content-security-policy']).toBe(WIDGET_DOCUMENT_CSP)
+    expect(res.headers['access-control-allow-origin']).toBe('*')
   })
 })

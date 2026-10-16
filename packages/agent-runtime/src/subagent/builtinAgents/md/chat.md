@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:chat
 shuvix-builtin: true
 name: chat
 description: The chat agent — the base profile for sessions that belong to no project. It holds the full builtin toolchain and does the work itself.
-shuvix-tools: bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing
+shuvix-tools: bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget
 shuvix-displayName: Chat
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

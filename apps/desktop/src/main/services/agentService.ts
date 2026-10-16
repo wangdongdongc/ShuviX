@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlink
 import { basename, isAbsolute, join, resolve, sep } from 'path'
 import { shell } from 'electron'
 import i18next from 'i18next'
-import { getBuiltinAgentsDir, getDefaultAgentsDir, getWidgetsDir } from '../utils/paths'
+import { getBuiltinAgentsDir, getDefaultAgentsDir } from '../utils/paths'
 import {
   buildBuiltinProfiles,
   parseAgentDefinitionFile,
@@ -177,7 +177,7 @@ class AgentService implements AgentProfileRegistry {
   }
 
   /**
-   * 内置 agent 列表（统一 spec 构建器；每次现算以反映当前语言与 widget 根等宿主参数）。
+   * 内置 agent 列表（统一 spec 构建器；每次现算以反映当前语言）。
    *
    * 文案**从随包发布的目录现读**（getBuiltinAgentsDir），不再是构建期内联的字符串：这批 md
    * 就是内置档案的事实源，用户在侧栏点开的只读笔记本读的也是它，两边由同一次语言回退挑中
@@ -192,7 +192,6 @@ class AgentService implements AgentProfileRegistry {
     return buildBuiltinProfiles({
       ...(withFill ? this.fillOptions() : {}),
       language: i18next.language,
-      widgetsRoot: getWidgetsDir(),
       readMd: (fileName) => {
         try {
           return readFileSync(join(dir, fileName), 'utf-8')

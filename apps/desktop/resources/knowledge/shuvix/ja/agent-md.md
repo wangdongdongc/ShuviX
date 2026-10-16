@@ -99,7 +99,7 @@ skill を使うとき。外した項目はセッションの選択に `-skill:<n
 します。組み込みツール名は外せません。リストを狭めることは ShuviX で役割を表す方法では
 **ありません**：`grep` の無いエージェントは `bash` で grep するだけです。組み込みの `work`、`chat`、`coding`
 は意図的に一つのリスト（`bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge,
-artifact, skill:builtin:drawing`）を共有し、本文だけが異なります。
+artifact, skill:builtin:drawing, skill:builtin:widget`）を共有し、本文だけが異なります。
 
 ### 本文 —— システムプロンプト
 
@@ -148,7 +148,7 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
 ファイル。`doc_read` / `doc_edit` / `doc_insert` だけでドキュメントを編集する）、`bot`（bot チャットの
 ルート）、`tab`（Chrome サイドパネルの会話のルート。`mcp:chrome` —— ユーザー自身の Chrome —— を持つのは
 これだけ）—— に加えて、タスク型の
-`coding`、`explore`、`widget`、`titler`、そして ShuviX だけが派遣する二つのエージェント：`permission-reviewer`
+`coding`、`explore`、`titler`、そして ShuviX だけが派遣する二つのエージェント：`permission-reviewer`
 —— 自動レビューのために承認リクエストに答えます（`policy-md` エントリを参照）—— と、`knowledge-writer` ——
 `knowledge` ツールで提出されたエントリを確認し、メタデータを補います（`knowledge-entry` エントリを参照）。
 

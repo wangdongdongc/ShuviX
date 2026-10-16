@@ -13,10 +13,8 @@
  * **按文件整体回退**（半中半英的档案比全英文更难读）。未翻译的语言文件里正文先放英文原文，
  * 翻译债因此出现在正确的位置。
  *
- * 宿主参数（`{{widgetsRoot}}`）在**构建档案时**就地替换（设置页/只读笔记本之外的地方展示
- * 内置档案时看到的是真实路径而非占位符）；spec 经 requiredParams 声明依赖，deps 缺参时该
- * agent 自动跳过（如扩展无 widget 根目录）。会话级的 `{{shuvix:*}}` 占位符不在此处理，
- * 留给 createAgent。
+ * 会话级的 `{{shuvix:*}}` 占位符不在此处理，留给 createAgent。（构建期的宿主参数 `{{widgetsRoot}}`
+ * 只有内置 widget agent 用过，它在 2026-10-16 改成内置技能 `builtin:widget` 后，这套机制一并删了。）
  */
 import { parseAgentDefinitionFile } from '../../agentProfile/definitionFile'
 import type { AgentProfile } from '../types'
@@ -30,15 +28,11 @@ export type BuiltinMdReader = (fileName: string) => string | null
 /** 内置档案声明 —— 纯结构，文案全在 md 里 */
 export interface BuiltinProfileSpec {
   name: string
-  /** md 正文/描述里的宿主参数名；deps 缺参时跳过本 agent */
-  requiredParams?: readonly 'widgetsRoot'[]
 }
 
 export interface BuiltinProfileDeps {
   /** 当前界面语言（i18next.language，如 'zh' / 'zh-CN' / 'ja'）；缺省 en */
   language?: string
-  /** widget 根目录（桌面 ~/.shuvix/widgets 展开路径）；缺省时跳过 widget agent */
-  widgetsRoot?: string
   /** 内置 md 的读取口（见 BuiltinMdReader） */
   readMd: BuiltinMdReader
   /**
@@ -82,33 +76,20 @@ export function pickLocalizedSource(
   return sources[lang] ?? sources[lang.split('-')[0]] ?? sources.en
 }
 
-/** 宿主参数插值：`{{name}}`（不含 shuvix: 前缀的才是宿主参数，会话变量留给 createAgent） */
-function interpolateHostParams(text: string, params: Record<string, string>): string {
-  return text.replace(/\{\{([A-Za-z][\w-]*)\}\}/g, (match, key: string) => params[key] ?? match)
-}
-
 /**
- * 按 spec + 宿主 deps 现算一个内置档案；缺必需参数、或一份候选文件都读不到时返回 null。
+ * 按 spec + 宿主 deps 现算一个内置档案；一份候选文件都读不到时返回 null。
  * md 格式非法也返回 null —— 内置 md 随包发布，出现即为开发期错误（有守护测试）。
  */
 export function buildBuiltinProfile(
   spec: BuiltinProfileSpec,
   deps: BuiltinProfileDeps
 ): AgentProfile | null {
-  const params: Record<string, string> = {}
-  for (const key of spec.requiredParams ?? []) {
-    const value = deps[key]
-    if (!value) return null
-    params[key] = value
-  }
-
   for (const fileName of builtinMdFileNames(spec.name, deps.language)) {
     const source = deps.readMd(fileName)
     if (source === null) continue
-    const raw = interpolateHostParams(source, params)
     // 内置 md 解析失败属开发期错误（随包发布）——诊断通道现成，别静默
     const parsed = parseAgentDefinitionFile(
-      raw,
+      source,
       spec.name,
       (msg) => console.warn(`[builtinAgents] ${fileName}: ${msg}`),
       { fill: deps.fill }

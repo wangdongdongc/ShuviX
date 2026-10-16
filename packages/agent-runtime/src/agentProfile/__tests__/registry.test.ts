@@ -20,7 +20,7 @@ import {
   PERMISSION_REVIEWER_PROFILE_NAME,
   PERMISSION_REVIEWER_SPEC,
   TAB_PROFILE_NAME,
-  WIDGET_SPEC,
+  EXPLORE_SPEC,
   WORK_PROFILE_NAME,
   pickLocalizedSource
 } from '../../subagent/builtinAgents'
@@ -54,42 +54,23 @@ const sourcesOf = (name: string): Record<string, string> => {
   }
   return out
 }
-const ALL_PARAMS = { widgetsRoot: '/w', readMd }
+const ALL_PARAMS = { readMd }
 const LANGS = ['en', 'zh', 'ja'] as const
 const profile = (name: string, language?: string): AgentProfile =>
   buildBuiltinProfiles({ ...ALL_PARAMS, language }).find((a) => a.name === name)!
 
-describe('buildBuiltinProfile — md 解析 + 宿主参数插值', () => {
-  it('en 档案解析出全部字段，宿主参数就地替换', () => {
-    const built = buildBuiltinProfile(WIDGET_SPEC, { widgetsRoot: '/widgets', readMd })!
-    expect(built.displayName).toBe('Widget Builder')
-    expect(built.description).toBe(
-      'Creates, maintains and exports ShuviX Widgets — persistent mini React apps that live in the Widget panel.'
-    )
-    expect(built.systemPrompt).toContain('Widgets live at /widgets/<id>/')
-    expect(built.systemPrompt).not.toContain('{{widgetsRoot}}')
+describe('buildBuiltinProfile — md 解析', () => {
+  it('en 档案解析出全部字段', () => {
+    const built = buildBuiltinProfile(EXPLORE_SPEC, { readMd })!
+    expect(built.displayName).toBe('Explore')
+    expect(built.description.length).toBeGreaterThan(0)
+    expect(built.systemPrompt.length).toBeGreaterThan(0)
     expect(built.source).toBe('builtin')
-    expect(built.tools).toEqual([
-      'read',
-      'write',
-      'edit',
-      'ls',
-      'glob',
-      'grep',
-      'bash',
-      'powershell',
-      'git'
-    ])
+    expect(built.tools).toEqual(['read', 'ls', 'grep', 'glob'])
   })
 
   it('会话级 {{shuvix:*}} 占位符不在此替换（留给 createAgent）', () => {
     expect(profile(WORK_PROFILE_NAME).systemPrompt).toContain('{{shuvix:workingDirectory}}')
-  })
-
-  it('缺必需宿主参数 → 返回 null(该端不支持此 agent)', () => {
-    expect(buildBuiltinProfile(WIDGET_SPEC, { readMd })).toBeNull()
-    // 给了别的参数也不算数 —— 缺的是它自己声明的那一个
-    expect(buildBuiltinProfile(WIDGET_SPEC, { language: 'zh', readMd })).toBeNull()
   })
 })
 
@@ -114,24 +95,10 @@ describe('语言解析 — 精确 → 基础 → en，按文件整体回退', ()
 })
 
 describe('buildBuiltinProfiles — 全集现算', () => {
-  it('全参数 → 十一个内置,五个基座档案居首;缺 widget 根 → 自动跳过', () => {
-    // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它
+  it('十个内置，五个基座档案居首', () => {
+    // bot-notes 已退役（bot 自己维护自己的正文，没有单独的笔记段）—— 名单里不该再有它；
+    // widget 在 2026-10-16 改成了内置技能 builtin:widget，也不该再有它
     expect(buildBuiltinProfiles(ALL_PARAMS).map((a) => a.name)).toEqual([
-      'work',
-      'chat',
-      'notebook',
-      'bot',
-      'tab',
-      'coding',
-      'explore',
-      'widget',
-      'titler',
-      'knowledge-writer',
-      'permission-reviewer'
-    ])
-    // titler / knowledge-writer / permission-reviewer 无宿主参数依赖：缺 widget 根也在
-    //（模型走 shuvix-model 通用链路，内置不声明；知识库目标由工具按会话解析，不吃参数）
-    expect(buildBuiltinProfiles({ readMd }).map((a) => a.name)).toEqual([
       'work',
       'chat',
       'notebook',
@@ -203,7 +170,6 @@ describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', ()
   it('RG-1 三语结构钉板：工具面恰为 knowledge/read/edit（库管员：没有 write，也没有能在库外翻找的 grep/glob/ls），不注入项目文档、不开项目感知、不声明模型、不是基座、宿主专用、不依赖任何宿主参数', () => {
     expect(KNOWLEDGE_WRITER_SPEC.name).toBe('knowledge-writer')
     // 要检查的文件、所在的库、提交者都由任务文本给出 —— 零参数也建得出来
-    expect(KNOWLEDGE_WRITER_SPEC.requiredParams).toBeUndefined()
     expect(buildBuiltinProfile(KNOWLEDGE_WRITER_SPEC, { readMd })).not.toBeNull()
     expect(BASE_PROFILE_NAMES.has('knowledge-writer')).toBe(false)
     expect(HOST_ONLY_PROFILE_NAMES.has('knowledge-writer')).toBe(true)
@@ -295,7 +261,8 @@ const SHARED_BASE_TOOLS = [
   'session',
   'knowledge',
   'artifact',
-  'skill:builtin:drawing'
+  'skill:builtin:drawing',
+  'skill:builtin:widget'
 ]
 
 describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事实源)', () => {
@@ -322,7 +289,8 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'session',
       'knowledge',
       'artifact',
-      'skill:builtin:drawing'
+      'skill:builtin:drawing',
+      'skill:builtin:widget'
     ])
     expect(built.tools).toEqual(SHARED_BASE_TOOLS)
     // git 不进任何基座（见 allTools.ts 的注释：主 Agent 默认无，用户可覆盖
@@ -403,7 +371,8 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'session',
       'knowledge',
       'artifact',
-      'skill:builtin:drawing'
+      'skill:builtin:drawing',
+      'skill:builtin:widget'
     ])
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual(SHARED_BASE_TOOLS)
     // 这是裁决过的形态：两个基座工具面完全相同，「自己干活 / 把活交给 coding 子会话」
@@ -514,7 +483,8 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'session',
       'knowledge',
       'artifact',
-      'skill:builtin:drawing'
+      'skill:builtin:drawing',
+      'skill:builtin:widget'
     ])
     expect(built.tools).toEqual(SHARED_BASE_TOOLS)
     // 拆分之初 coding 的卖点之一是「基座让出的 ssh/database 在这里」，那条理由已经
@@ -554,16 +524,20 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
     }
   })
 
-  it('两侧派发清单各按场景裁剪（派发工具不枚举 agent 名，名字只能来自提示词）', () => {
+  it('派发清单按场景裁剪（派发工具不枚举 agent 名，名字只能来自提示词）', () => {
     for (const language of LANGS) {
       const coding = profile('coding', language).systemPrompt
       const work = profile(WORK_PROFILE_NAME, language).systemPrompt
       // coding：工程场景只要广域调研（结构图在回复里手画 ```svg，不派子智能体）
       expect(coding, `coding.${language} 需点名 explore`).toContain('explore')
-      expect(coding, `coding.${language} 不应点名 widget`).not.toContain('widget')
-      // work：通用场景要小工具，广域调研留给 coding 子会话
-      expect(work, `work.${language} 需点名 widget`).toContain('widget')
+      // work：广域调研留给 coding 子会话；小组件不再是可派发的 agent，而是书架上的技能 builtin:widget
       expect(work, `work.${language} 不应点名 explore`).not.toContain('explore')
+      for (const [name, body] of [
+        ['coding', coding],
+        ['work', work]
+      ]) {
+        expect(body, `${name}.${language} 不应再点名 widget 子智能体`).not.toContain('widget')
+      }
     }
   })
 })
@@ -654,7 +628,6 @@ describe('permission-reviewer 档案钉板（询问点自动审查的执行侧�
     expect(PERMISSION_REVIEWER_PROFILE_NAME).toBe('permission-reviewer')
     expect(PERMISSION_REVIEWER_SPEC.name).toBe(PERMISSION_REVIEWER_PROFILE_NAME)
     // 零参数也建得出来 —— 它不点名宿主的任何目录
-    expect(PERMISSION_REVIEWER_SPEC.requiredParams).toBeUndefined()
     expect(buildBuiltinProfile(PERMISSION_REVIEWER_SPEC, { readMd })).not.toBeNull()
     for (const language of LANGS) {
       const built = reviewerOf(language)
@@ -1149,25 +1122,23 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
       expect(p.tools.includes('powershell'), what).toBe(p.tools.includes('bash'))
       if (p.tools.includes('bash')) paired++
     }
-    // work / chat / coding / widget × 三语（notebook 不握命令工具）
-    expect(paired, '自检：确实有成对点名的档案').toBeGreaterThanOrEqual(12)
+    // work / chat / coding × 三语（notebook 不握命令工具）
+    expect(paired, '自检：确实有成对点名的档案').toBeGreaterThanOrEqual(9)
   })
 
   it('SH-2 正文（frontmatter 与围栏 info string 之外）不写死 bash / powershell 这两个名字', () => {
-    let fenced = 0
     for (const { profile: p, language } of allProfiles()) {
       const body = withoutFenceInfo(p.systemPrompt)
-      if (body !== p.systemPrompt) fenced++
       const hit = /\b(?:bash|powershell)\b/i.exec(body)
       // 命中时把前后文一起报出来，省得去三份 md 里翻
       const context = hit ? body.slice(Math.max(0, hit.index - 40), hit.index + 40) : ''
       expect(hit?.[0] ?? null, `${p.name}.${language}: ${context}`).toBeNull()
     }
-    // 自检：剥 info string 这一步确实剥到了东西（widget 正文里有 ```bash 代码块）
-    expect(fenced).toBeGreaterThan(0)
+    // 自检：剥 info string 这一步确实剥得掉（今天没有哪份正文带 ```bash 代码块，拿一段样例验）
+    expect(withoutFenceInfo('a\n```bash\nls\n```\n')).toBe('a\n```\nls\n```\n')
   })
 
-  it('SH-3 {{shuvix:shellTool}} 只出现在手里有命令工具的档案里；今天引用它的只有 widget（work / chat / coding 的「优先专用工具」由命令工具自己的描述讲）', () => {
+  it('SH-3 {{shuvix:shellTool}} 只出现在手里有命令工具的档案里；今天没有内置档案引用它（引用过它的 widget 已改为技能，work / chat / coding 的「优先专用工具」由命令工具自己的描述讲）', () => {
     const referencing = new Set<string>()
     for (const { profile: p, language } of allProfiles()) {
       const what = `${p.name}.${language}`
@@ -1176,7 +1147,7 @@ describe('命令工具成对 + 正文用 {{shuvix:shellTool}} 指代（三语全
         referencing.add(p.name)
       }
     }
-    expect([...referencing].sort()).toEqual(['widget'])
+    expect([...referencing].sort()).toEqual([])
   })
 })
 

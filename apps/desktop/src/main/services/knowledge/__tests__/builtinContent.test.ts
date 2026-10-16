@@ -254,7 +254,6 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
   const profilesOf = (): ReturnType<typeof buildBuiltinProfiles> =>
     buildBuiltinProfiles({
       language: lang,
-      widgetsRoot: '/w/widgets',
       readMd: createInlineMdReader()
     })
 

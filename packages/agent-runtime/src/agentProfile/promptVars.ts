@@ -4,8 +4,7 @@
  * md 正文（含内置档案各语言 body）用 `{{shuvix:name}}` 占位符引用会话动态值；
  * createAgent 时宿主经 `promptVars(ctx)` 现算一张变量表，`renderProfileSystemPrompt`
  * 对 body 做统一替换。语法与 i18next 插值互不干扰（`{{shuvix:*}}` 对 i18next 是
- * 缺值变量，skipOnVariables 默认开启 → 原样穿透；宿主参数如 `{{widgetsRoot}}`
- * 仍在档案构建期由 i18next 替换）。
+ * 缺值变量，skipOnVariables 默认开启 → 原样穿透）。
  *
  * 约定：
  * - 标量（workingDirectory/platform/date/…）：md 自己组织句子与列表；

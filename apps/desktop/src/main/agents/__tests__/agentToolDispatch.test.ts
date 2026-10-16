@@ -76,7 +76,7 @@ function profileOf(name: string, source: 'builtin' | 'user' = 'builtin'): AgentP
 function defaultProfiles(): AgentProfile[] {
   return [
     ...[...BASE_PROFILE_NAMES].map((name) => profileOf(name)),
-    ...['coding', 'explore', 'widget', 'titler', 'knowledge-writer'].map((name) => profileOf(name)),
+    ...['coding', 'explore', 'titler', 'knowledge-writer'].map((name) => profileOf(name)),
     profileOf(PERMISSION_REVIEWER_PROFILE_NAME),
     profileOf('my-helper', 'user')
   ]
@@ -125,7 +125,7 @@ function expectDispatchableOnly(names: string[]): void {
   // 知识库写手同为宿主专用：只经 knowledge 工具的 submit 调起
   expect(names).not.toContain('knowledge-writer')
   for (const base of BASE_PROFILE_NAMES) expect(names, base).not.toContain(base)
-  expect(names).toEqual(expect.arrayContaining(['coding', 'explore', 'widget', 'titler']))
+  expect(names).toEqual(expect.arrayContaining(['coding', 'explore', 'titler']))
   expect(names).toContain('my-helper')
 }
 

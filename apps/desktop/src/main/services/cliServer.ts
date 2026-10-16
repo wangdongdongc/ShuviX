@@ -277,7 +277,8 @@ class CliServer {
         sessionService.addAllowListPaths(sessionId, 'read', [dir])
         sessionService.addAllowListPaths(sessionId, 'write', [dir])
       }
-      return await widgetService.build(id)
+      const message = typeof p.message === 'string' ? p.message : undefined
+      return await widgetService.build(id, { message })
     })
 
     // widget 的"预览"就是把它当独立小应用打开（已开则聚焦）。构建 / URL 由窗口内 shell

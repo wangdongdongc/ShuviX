@@ -125,7 +125,7 @@ const countOf = (text: string, needle: string): number => text.split(needle).len
 
 /** 桌面这一端供全部内置档案（含派生用的 coding / explore / titler …），不只四个基座 */
 const builtins = (language: string): AgentProfile[] =>
-  buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd: createInlineMdReader() })
+  buildBuiltinProfiles({ language, readMd: createInlineMdReader() })
 
 const varsFor = async (ctx: Partial<PromptVarsCtx> = {}): Promise<PromptVars> => {
   return await desktopPromptVars({
@@ -556,10 +556,13 @@ describe('desktopPromptVars —— shell / shellTool 按平台给（PVW-S1…S5�
   })
 
   it('PVW-S6 引用 shellTool 的档案组装出来：win32 上正文里说 powershell，darwin 上说 bash，都不留占位符', async () => {
-    // widget 的「生命周期走 shuvix CLI，用 shellTool 跑」那句引用它（notebook 不再握命令工具，
-    // work / chat / coding 也不再引用）
-    const widget = builtins('en').find((p) => p.name === 'widget')!
-    expect(widget.systemPrompt).toContain('{{shuvix:shellTool}}')
+    // 今天没有内置档案引用它（引用过它的 widget agent 已改为技能 builtin:widget），用户档案照样可以引用 ——
+    // 拿 coding 的工具清单配一段引用它的正文
+    const coding = builtins('en').find((p) => p.name === 'coding')!
+    const widget = {
+      ...coding,
+      systemPrompt: 'Lifecycle commands run with `{{shuvix:shellTool}}`.'
+    }
 
     setPlatform('win32')
     mocks.psConfig = { exe: 'C:\\pwsh.exe', edition: 'pwsh' }

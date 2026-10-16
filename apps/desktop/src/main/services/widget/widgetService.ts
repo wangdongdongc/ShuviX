@@ -23,7 +23,7 @@ import { getWidgetsDir } from '../../utils/paths'
 import { writeFileAtomic } from '../../utils/atomicWrite'
 import { createLogger } from '../../logger'
 import { applyWidgetSchema, dropWidgetSchema, WidgetDbError } from './widgetDb'
-import { ensureRepo, commitHostChange } from './widgetRepo'
+import { ensureRepo, commitHostChange, commitBuild, defaultBuildMessage } from './widgetRepo'
 
 /** 发布 widget 列表 / 服务器状态变更（AppEvent 'widget.changed'，经总线广播到所有窗口） */
 export function broadcastWidgetChanged(): void {
@@ -85,6 +85,13 @@ export interface BuildWidgetResult {
   url: string
   buildSuccess: boolean
   buildErrors?: string[]
+  /** 构建成功后宿主提交的那条提交（短 oid）；没有改动、不是仓库或提交失败时没有 */
+  commit?: string
+}
+
+export interface BuildWidgetOptions {
+  /** 构建成功后那条提交的说明；缺省 `chore(<id>): build` */
+  message?: string
 }
 
 class WidgetService {
@@ -199,8 +206,11 @@ class WidgetService {
     }
   }
 
-  /** 重新打包 —— 未注册时会先读清单补注册（例如新会话里 AI 调 build 而未经 open） */
-  async build(id: string): Promise<BuildWidgetResult> {
+  /**
+   * 重新打包 —— 未注册时会先读清单补注册（例如新会话里 AI 调 build 而未经 open）。
+   * 构建成功就提交整棵树（widgetRepo.commitBuild）：改 widget 的 agent 不碰 git，版本由这里记。
+   */
+  async build(id: string, options: BuildWidgetOptions = {}): Promise<BuildWidgetResult> {
     this.validateId(id)
     const widget = widgetRegistry.findById(id)
     if (!widget) throw new Error(`Widget "${id}" not found`)
@@ -209,7 +219,7 @@ class WidgetService {
       throw new Error(`Widget directory missing: ${dir}`)
     }
 
-    // 历史遗留 widget（创建时还没有版本控制）在这里补上仓库。agent 的维护流程要求
+    // 历史遗留 widget（创建时还没有版本控制）在这里补上仓库。widget 技能的维护流程要求
     // 先 build 再改，正是为了让基线提交落在它的改动之前。
     await ensureRepo(dir, `chore(${id}): baseline of existing widget`)
 
@@ -221,7 +231,18 @@ class WidgetService {
       result = await widgetServer.registerAndBuild(id, dir, widget.entryFile)
     }
     const url = widgetServer.getUrl(id) ?? ''
-    return { id, url, buildSuccess: result.success, buildErrors: result.errors }
+    const out: BuildWidgetResult = {
+      id,
+      url,
+      buildSuccess: result.success,
+      buildErrors: result.errors
+    }
+    if (result.success) {
+      const message = options.message?.trim() || defaultBuildMessage(id)
+      const oid = await commitBuild(dir, message)
+      if (oid) out.commit = oid.slice(0, 7)
+    }
+    return out
   }
 
   /**
@@ -407,7 +428,7 @@ ${params.description}
 ## 可用依赖
 React、ReactDOM、React Router、Tailwind CSS v4 —— 无其他 npm 包。
 
-> 通用设计规范（紧凑单一用途、强制暗黑模式、调色板）由内置的 **Widget Builder** 子智能体持有，
+> 通用的开发规范（构建、数据库、读本机文件、设计规范）在内置技能 \`builtin:widget\` 里，
 > 这里不再复述；本文件只记录这个 widget 自己的信息。
 
 ## 扩展记录

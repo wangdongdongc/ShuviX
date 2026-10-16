@@ -125,7 +125,7 @@ const placeholdersOf = (text: string): string[] =>
 const profilesUsing = (placeholder: string): string[] => {
   const names = new Set<string>()
   for (const language of LANGUAGES) {
-    for (const profile of buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd })) {
+    for (const profile of buildBuiltinProfiles({ language, readMd })) {
       if (placeholdersOf(profile.systemPrompt).includes(placeholder)) names.add(profile.name)
     }
   }
@@ -433,7 +433,7 @@ describe('mermaid 不再被教给模型（NM）', () => {
   })
 
   it.each(LANGUAGES)('NM-2 %s：内置档案（含正文、描述、工具名单）里都没有 mermaid', (language) => {
-    const profiles = buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd })
+    const profiles = buildBuiltinProfiles({ language, readMd })
     // 正控制组：会画图的五份档案都在清单里 —— 清单若是空的，下面那圈恒绿
     const names = profiles.map((p) => p.name)
     for (const name of ['notebook', 'work', 'chat', 'coding', 'bot']) {
@@ -475,7 +475,7 @@ describe('作图技能的归属（OWN）', () => {
   it.each(LANGUAGES)(
     'OWN-1 %s：声明 skill:builtin:drawing 的档案集合 = 引用 visualGuide / visualCraft 的档案集合',
     (language) => {
-      const profiles = buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd })
+      const profiles = buildBuiltinProfiles({ language, readMd })
       const declaring = profiles
         .filter((p) => p.tools.includes('skill:builtin:drawing'))
         .map((p) => p.name)
@@ -523,9 +523,7 @@ describe('{{shuvix:visualGuide}} 的归属', () => {
       )
       expect(marks.length, '一条特征串都没取到 —— 下面那圈会空转').toBeGreaterThan(0)
       for (const language of LANGUAGES) {
-        const profile = buildBuiltinProfiles({ language, widgetsRoot: '/w/widgets', readMd }).find(
-          (p) => p.name === name
-        )
+        const profile = buildBuiltinProfiles({ language, readMd }).find((p) => p.name === name)
         expect(profile, `${name}.${language} 应当存在`).toBeDefined()
         expect(placeholdersOf(profile!.systemPrompt), `${name}.${language}`).not.toContain(
           'visualGuide'

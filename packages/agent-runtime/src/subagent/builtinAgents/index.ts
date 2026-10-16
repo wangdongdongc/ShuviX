@@ -116,11 +116,6 @@ export const EXPLORE_SPEC: BuiltinProfileSpec = {
   name: 'explore'
 }
 
-export const WIDGET_SPEC: BuiltinProfileSpec = {
-  name: 'widget',
-  requiredParams: ['widgetsRoot']
-}
-
 /**
  * 标题生成 agent —— auto-title 内置 hook 的执行侧。
  * 模型走 agent md `shuvix-model` 的通用链路：内置档案不声明 → 跟随派发方 = 会话当前模型；
@@ -157,10 +152,7 @@ export const PERMISSION_REVIEWER_SPEC: BuiltinProfileSpec = {
   name: PERMISSION_REVIEWER_PROFILE_NAME
 }
 
-/**
- * 内置 spec 全集（五个基座档案 work / chat / notebook / bot / tab 居首，其后为可派发的具名 agent；
- * widget 依赖宿主根目录参数，缺参自动跳过）
- */
+/** 内置 spec 全集（五个基座档案 work / chat / notebook / bot / tab 居首，其后为可派发的具名 agent） */
 export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   WORK_SPEC,
   CHAT_SPEC,
@@ -169,7 +161,6 @@ export const BUILTIN_PROFILE_SPECS: readonly BuiltinProfileSpec[] = [
   TAB_SPEC,
   CODING_SPEC,
   EXPLORE_SPEC,
-  WIDGET_SPEC,
   TITLER_SPEC,
   KNOWLEDGE_WRITER_SPEC,
   PERMISSION_REVIEWER_SPEC

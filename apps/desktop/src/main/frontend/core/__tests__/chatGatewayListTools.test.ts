@@ -398,7 +398,6 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
     (language) => {
       const profiles = buildBuiltinProfiles({
         language,
-        widgetsRoot: '/w',
         readMd: createInlineMdReader()
       })
       const chat = profiles.find((p) => p.name === 'chat')

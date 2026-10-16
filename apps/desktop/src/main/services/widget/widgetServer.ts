@@ -7,6 +7,15 @@
  *   GET /w/<id>/bundle.css
  *   GET /w/<id>/tailwind.js   → Tailwind browser runtime（共享）
  *   GET /w/<id>/sse           → Server-Sent Events，推送 reload 事件
+ *   *   /w/<id>/db/<table>    → widget 数据库的 REST 接口（widgetDb.ts）
+ *   GET /w/<id>/fs/file|list  → 读本机文件 / 列目录（widgetFiles.ts，路由表见 shared/widgetRoutes.ts）
+ *
+ * 两道门（每个请求都过）：
+ *   - **Host** 必须是 `127.0.0.1:<端口>` 或 `localhost:<端口>`，否则 421 —— 挡 DNS 重绑定（恶意网页把自己的域名
+ *     解析到 127.0.0.1，就和这里同源了）。网络服务转发时已经把 Host 换成 127.0.0.1:<端口>（widgetProxy.ts）。
+ *   - **`fs/` 的应答不带 `Access-Control-Allow-Origin`**：别的路由沿用 `*`（数据库接口一直如此，已知遗留），
+ *     但文件路由不限路径，带上 `*` 就是让用户浏览器里任何网页都能读走本机文件。桌面里 widget 是同源请求，
+ *     用不着它；远程模式下 widget 是沙箱里的不透明源，由 widgetProxy 在转发时补上（那一面本来就不认证）。
  *
  * 懒启动：首次 registerWidget / rebuild 触发 server 监听
  * 打包复用 esbuild 插件的 BundlerService（共享预置的 React/Router 依赖）
@@ -18,6 +27,8 @@ import { readFileSync } from 'fs'
 import { bundlerService, bundlerResourcePath } from '../bundler'
 import { createLogger } from '../../logger'
 import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
+import { serveWidgetFiles } from './widgetFiles'
+import { isWidgetFilesPath, WIDGET_FILES_SEGMENT } from '../../../shared/widgetRoutes'
 
 const log = createLogger('WidgetServer')
 
@@ -256,19 +267,28 @@ export class WidgetServer {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    const url = req.url ?? '/'
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204)
-      res.end()
+    if (!isOwnHost(req.headers.host, this.port)) {
+      res.writeHead(421, { 'Content-Type': 'text/plain', Connection: 'close' })
+      res.end('Misdirected request')
       return
     }
-
+    const url = req.url ?? '/'
     // /w/<id>/<rest> —— 注意 rest 可能带 ?query，先剥离 query string
     const pathOnly = url.split('?')[0]
+
+    // 文件路由不带 CORS 头（见文件头），也就没有预检：OPTIONS 落到 serveWidgetFiles 回 405
+    if (!isWidgetFilesPath(pathOnly)) {
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204)
+        res.end()
+        return
+      }
+    }
+
     const match = pathOnly.match(/^\/w\/([a-z0-9]+(?:-[a-z0-9]+)+)(\/.*)?$/)
     if (!match) {
       res.writeHead(404, { 'Content-Type': 'text/plain' })
@@ -294,6 +314,22 @@ export class WidgetServer {
           res.end(
             JSON.stringify({ code: 'INTERNAL', message: (err as Error).message ?? String(err) })
           )
+        }
+      })
+      return
+    }
+
+    // /fs/file、/fs/list —— 读本机文件
+    if (rest.startsWith(WIDGET_FILES_SEGMENT)) {
+      const qsIdx = url.indexOf('?')
+      const search = new URLSearchParams(qsIdx === -1 ? '' : url.slice(qsIdx + 1))
+      serveWidgetFiles(rest, req, res, search).catch((err) => {
+        log.warn(`unhandled fs error widget=${widgetId} route=${rest}:`, err)
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' })
+          res.end('Internal error')
+        } else {
+          res.destroy()
         }
       })
       return
@@ -417,6 +453,13 @@ export class WidgetServer {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify(body))
   }
+}
+
+/** `Host` 头是不是这台 widget 服务自己的（`127.0.0.1:<端口>` / `localhost:<端口>`，不分大小写） */
+function isOwnHost(host: string | undefined, port: number): boolean {
+  if (!host || port <= 0) return false
+  const value = host.toLowerCase()
+  return value === `127.0.0.1:${port}` || value === `localhost:${port}`
 }
 
 /** 收完请求体并解析为 JSON。空 body 视为 undefined。 */

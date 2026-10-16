@@ -98,7 +98,7 @@ default can carry it too, and the agent file is not touched. Removing an entry f
 still means overriding the agent. Builtin tool names cannot be unticked. Narrowing a list is
 **not** how a role is expressed in ShuviX: an agent without `grep` just greps through `bash`.
 The builtin `work`, `chat` and `coding` agents deliberately share one list (`bash, powershell, read, write,
-edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing`) and differ only in their bodies.
+edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget`) and differ only in their bodies.
 
 ### The body — the system prompt
 
@@ -150,7 +150,7 @@ project), `notebook` (root of a notebook session — a note in the main window o
 opened in its own window — changing the document only through `doc_read` / `doc_edit` /
 `doc_insert`), `bot` (root of a bot chat) and `tab` (root of a Chrome side panel conversation, the
 only one holding `mcp:chrome` — the user's own Chrome) — plus
-the task agents `coding`, `explore`, `widget` and `titler`, and two agents only ShuviX
+the task agents `coding`, `explore` and `titler`, and two agents only ShuviX
 dispatches: `permission-reviewer`, which answers approval requests for the automatic review (see
 the `policy-md` entry), and `knowledge-writer`, which checks an entry submitted through the
 `knowledge` tool and completes its metadata (see the `knowledge-entry` entry).

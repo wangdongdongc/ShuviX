@@ -66,7 +66,7 @@ function printUsage(): void {
     [
       'Usage:',
       '  shuvix widget init <id> --name "Display Name" [--description "..."]',
-      '  shuvix widget build <id>',
+      '  shuvix widget build <id> [--message "<commit subject>"]',
       '  shuvix widget open <id>',
       '  shuvix widget export <id> --to <dir|file.zip>',
       '  shuvix widget list [--archived]',
@@ -110,7 +110,9 @@ function parseWidget(rest: string[]): ParsedCommand | null {
         process.stderr.write('widget build: <id> is required\n')
         process.exit(1)
       }
-      return { command: 'widget.build', params: { id } }
+      // 构建成功后宿主提交整棵树，--message 是那条提交的说明（缺省 `chore(<id>): build`）
+      const message = flagValue(args, '--message')
+      return { command: 'widget.build', params: message ? { id, message } : { id } }
     }
     case 'open': {
       const id = args[0]

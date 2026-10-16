@@ -144,7 +144,6 @@ describe('buildBuiltinProfiles —— 一份坏 md 的影响面', () => {
       }
 
       const names = buildBuiltinProfiles({
-        widgetsRoot: '/w',
         readMd: (fileName) => table[fileName] ?? null
       }).map((a) => a.name)
 

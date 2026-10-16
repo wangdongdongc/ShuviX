@@ -1635,12 +1635,13 @@ describe('resolveAgentTools (spawned)', () => {
     expect(sessionOf).not.toHaveBeenCalled()
   })
 
-  it('P2-04-03 技能只看派生名单：会话勾选（pickSettings）一眼不看；coding 归一名单 → SkillTool 一次、只拿 builtin:drawing；没有 MCP', async () => {
+  it('P2-04-03 技能只看派生名单：会话勾选（pickSettings）一眼不看；coding 归一名单 → SkillTool 一次、只拿它点名的 builtin:drawing / builtin:widget；没有 MCP', async () => {
     mocks.pickSettings.mockReturnValue({ enabledTools: ['skill:other', 'mcp:ssh'] })
     const names = normalizeToolNames('spawned', profileOf('coding').tools, undefined)
     const resolved = await host.resolveAgentTools(SR_D({ names }), { signal: signal() })
     expect(mocks.skillToolCalls).toHaveLength(1)
-    expect(mocks.skillToolCalls[0].args[0]).toEqual(['builtin:drawing'])
+    expect(mocks.skillToolCalls[0].args[0]).toEqual(['builtin:drawing', 'builtin:widget'])
+    // 架上（findEnabled 的假数据）只有 builtin:drawing —— 点了名但不在架的 widget 不挂
     expect(resolved.skills).toEqual(['builtin:drawing'])
     expect(resolved.mcp).toEqual([])
     expect(mocks.ensureServerByName).not.toHaveBeenCalled()
