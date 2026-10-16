@@ -241,19 +241,33 @@ export class ProviderService {
   }
 
   /**
-   * 从提供商 API 拉取并同步模型列表
-   * 目前先支持 OpenAI
+   * 同步模型列表：从提供商 API 拉取（OpenAI 兼容 / Google）；订阅登录的内置提供商改用 pi-ai 目录
    */
   async syncModelsFromProvider(
     providerId: string
   ): Promise<{ providerId: string; total: number; added: number }> {
-    const provider = providerDao.pick(providerId, ['apiKey', 'apiProtocol', 'baseUrl', 'name'])
+    const provider = providerDao.pick(providerId, [
+      'apiKey',
+      'apiProtocol',
+      'baseUrl',
+      'name',
+      'isBuiltin',
+      'oauthConnected'
+    ])
     if (!provider) {
       throw new Error(`未找到提供商：${providerId}`)
     }
 
-    // 凭据按模型层的规则取（与会话请求同一套）：订阅登录优先 —— 登录之后 apiKey 通常就是空的，
-    // 拉模型列表也该用订阅令牌（过期先刷新，刷新在凭据库的串行队列里做）。模型层解析不出来
+    // 订阅登录的内置提供商：模型取 pi-ai 的目录，不拉 /models。请求凭据里 OAuth 压过 API Key，
+    // pi 拿订阅令牌也只调它目录里的模型；而提供商的 /models 不按订阅令牌列模型 —— ChatGPT 登录
+    // 的令牌在 api.openai.com/v1/models 上答的是空列表
+    if (provider.isBuiltin && provider.oauthConnected) {
+      const result = this.syncBuiltinModels(providerId, provider.name)
+      this.notifyChanged()
+      return { providerId, ...result }
+    }
+
+    // 凭据按模型层的规则取（与会话请求同一套，内置提供商含环境变量兜底）。模型层解析不出来
     // （行不在注册表里）时退回库里的 key
     const apiKey = (await resolveRequestApiKey(providerId)) || provider.apiKey?.trim()
     if (!apiKey) {
