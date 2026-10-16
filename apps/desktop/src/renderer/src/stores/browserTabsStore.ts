@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { internalPageOf, type InternalPage } from '../../../shared/browserInternalPages'
 
 /** 浏览器 tab 的镜像信息（真源在主进程 browserViewService，经 useBrowserTabsBridge 事件同步） */
 export interface BrowserTabInfo {
@@ -29,6 +30,24 @@ export interface BrowserTabInfo {
   agentActiveAt?: number
 }
 
+/** 设置页要跳到哪一节（站点信息气泡里的「网站设置」）；nonce 每次请求加一 */
+export interface SettingsFocus {
+  section: 'search' | 'privacy' | 'certificates'
+  /** 网站数据的搜索框预填（那个站点） */
+  search?: string
+  nonce: number
+}
+
+/**
+ * 页面被一个 DOM 弹层盖住的时候（站点信息气泡）：原生页面画在 DOM 之上、会把弹层盖住，所以这段时间
+ * 页面区换成它的截图，原生 view 让位（布局表报 setVisible(false)），弹层关掉再换回来。
+ */
+export interface PageCover {
+  tabId: string
+  /** 截图（dataURL）；还没抓到时为空串（页面区先空着） */
+  snapshot: string
+}
+
 /** 浏览器窗口的两种视图：单页（Chrome 的样子，缺省）与平铺墙（同时看多页） */
 export type BrowserViewMode = 'single' | 'wall'
 export const VIEW_MODE_SETTING = 'browser.viewMode'
@@ -47,6 +66,8 @@ interface BrowserTabsState {
   activeTabId: string | null
   /** 每加一次，地址栏就聚焦一次（⌘L / ⌘T / 新标签页） */
   omniboxFocusNonce: number
+  settingsFocus: SettingsFocus | null
+  pageCover: PageCover | null
 
   createTab: (url?: string) => void
   closeTab: (id: string) => void
@@ -55,6 +76,11 @@ interface BrowserTabsState {
   navigateTab: (id: string, url: string) => void
   zoomTab: (id: string, direction: 'in' | 'out' | 'reset') => void
   requestOmniboxFocus: () => void
+  /** 打开设置页并跳到某一节（站点信息气泡里的「网站设置」） */
+  openSettings: (section?: SettingsFocus['section'], search?: string) => void
+  setPageCover: (cover: PageCover | null) => void
+  /** 设置页用掉了跳转请求 */
+  clearSettingsFocus: () => void
 }
 
 function api(): (typeof window.api)['browserView'] | undefined {
@@ -65,6 +91,8 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
   tabs: [],
   activeTabId: null,
   omniboxFocusNonce: 0,
+  settingsFocus: null,
+  pageCover: null,
 
   createTab: (url) => {
     void api()?.createTab(url)
@@ -84,8 +112,27 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
   zoomTab: (id, direction) => {
     void api()?.zoom(id, direction)
   },
-  requestOmniboxFocus: () => set((s) => ({ omniboxFocusNonce: s.omniboxFocusNonce + 1 }))
+  requestOmniboxFocus: () => set((s) => ({ omniboxFocusNonce: s.omniboxFocusNonce + 1 })),
+  openSettings: (section, search) => {
+    void api()?.openInternal('settings')
+    if (section) {
+      set((s) => ({
+        settingsFocus: {
+          section,
+          ...(search !== undefined ? { search } : {}),
+          nonce: (s.settingsFocus?.nonce ?? 0) + 1
+        }
+      }))
+    }
+  },
+  setPageCover: (cover) => set({ pageCover: cover }),
+  clearSettingsFocus: () => set({ settingsFocus: null })
 }))
+
+/** 这个 tab 是不是内部页面（shuvix://settings …）；是就回页名 */
+export function internalPageOfTab(tab: Pick<BrowserTabInfo, 'url'>): InternalPage | null {
+  return internalPageOf(tab.url)
+}
 
 /** 选中的那一页（没有就 null） */
 export function selectedTab(

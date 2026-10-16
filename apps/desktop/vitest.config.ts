@@ -36,6 +36,8 @@ export default defineConfig({
         '../../packages/agent-runtime/src/sync/viewContracts.ts'
       ),
       '@shuvix/agent-runtime': resolvePath(__dirname, '../../packages/agent-runtime/src/index.ts'),
+      // 渲染层的 DOM 单测会引到 app-shell（设置页的 SettingsPrimitives 等）
+      '@shuvix/app-shell': resolvePath(__dirname, '../../packages/app-shell/src'),
       // Electron 提供 node:original-fs（未被 ASAR 补丁的原始 fs），
       // 在 Vitest 的 Node.js 环境中不存在，映射到标准 node:fs
       'node:original-fs': 'node:fs'

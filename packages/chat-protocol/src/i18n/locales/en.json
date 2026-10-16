@@ -749,18 +749,13 @@
     "toolDbEmpty": "No saved database credentials",
     "toolDbEmptyHint": "Add a connection so a session that ticks the database server can query it",
     "toolDbDuplicateName": "Credential name already exists",
-    "toolBrowserTitle": "Browser panel",
-    "toolBrowserDesc": "How the embedded browser panel behaves — for your own browsing and for the AI when a session has the browser enabled.",
     "toolBrowserSearchEngine": "Address bar search engine",
     "toolBrowserSearchEngineHint": "What the in-app browser searches with when what you type in the address bar is not a web address.",
     "toolBrowserIgnoreCertificateErrors": "Ignore certificate errors",
     "toolBrowserIgnoreCertificateErrorsHint": "When off, you'll be prompted on self-signed / untrusted certificates. When on, all certificate errors are silently bypassed.",
     "toolBrowserSecurityWarning": "Warning: enabling this bypasses ALL HTTPS certificate validation (self-signed, expired, mismatched hostnames) — including potential phishing sites. Only enable this on trusted internal networks.",
-    "toolBrowserSavedSitesTitle": "Saved sites",
-    "toolBrowserSavedSitesDesc": "Hosts that have stored cookies in the embedded browser partition.",
     "toolBrowserNoSites": "No sites with saved data",
     "toolBrowserClearSite": "Clear this site's data",
-    "toolBrowserClearAll": "Clear all",
     "tabMcp": "MCP",
     "mcpTitle": "MCP Server Management",
     "mcpDesc": "Configure MCP (Model Context Protocol) servers to extend AI with more tool capabilities.",
@@ -959,7 +954,11 @@
     "networkLanScopeMissing": "{{name}} (not found)",
     "networkLanScopeOnly": "Only devices in {{cidr}} can connect.",
     "networkHeadlessScopeNote": "Chosen at startup (--bind); restart ShuviX to change it.",
-    "networkErrorNoInterface": "This computer has no network interface or address \"{{name}}\". Choose another network."
+    "networkErrorNoInterface": "This computer has no network interface or address \"{{name}}\". Choose another network.",
+    "toolBrowserMovedTitle": "Browser settings",
+    "toolBrowserMovedRow": "Search engine, site data, certificates",
+    "toolBrowserMovedDesc": "These are settings of the browser itself; they now live on the browser window’s settings page (⋮ → Settings).",
+    "toolBrowserMovedOpen": "Open browser settings"
   },
   "about": {
     "description": "Your AI Assistant",
@@ -1212,15 +1211,9 @@
     "newTab": "New tab",
     "closeTab": "Close tab",
     "untitledTab": "New Tab",
-    "cert": {
-      "title": "Untrusted certificate: {{host}}",
-      "continue": "Continue anyway",
-      "cancel": "Cancel"
-    },
     "error": {
       "title": "This site can't be reached",
       "code": "Error code: {{code}} ({{description}})",
-      "certHint": "The site uses a self-signed or untrusted certificate.",
       "crashedTitle": "This page crashed",
       "crashedDetail": "The page's process stopped ({{reason}}).",
       "retry": "Retry"
@@ -1244,7 +1237,7 @@
       "zoomIn": "Zoom in",
       "zoomOut": "Zoom out",
       "zoomReset": "Reset zoom (now {{pct}}%)",
-      "settings": "Browsing data and certificates…"
+      "settings": "Settings"
     },
     "infobar": {
       "using": "“{{session}}” is using this page",
@@ -1252,6 +1245,52 @@
       "intercepting": "“{{session}}” is using this page and intercepting its network requests — page content may be changed",
       "interceptingUnknown": "An agent is using this page and intercepting its network requests — page content may be changed",
       "openSession": "View conversation"
+    },
+    "internal": {
+      "settings": "Settings"
+    },
+    "settingsPage": {
+      "title": "Settings",
+      "search": "Search engine",
+      "privacy": "Privacy and security",
+      "certificates": "Certificates",
+      "clearAll": "Delete browsing data",
+      "clearAllDesc": "Cookies, cache and stored data of every site. You will be signed out of them.",
+      "clearAllButton": "Delete…",
+      "clearAllConfirm": "Confirm delete",
+      "siteData": "Site data",
+      "siteDataDesc": "Sites that stored cookies in the built-in browser. Deleting a site’s data signs you out of it.",
+      "searchSites": "Search sites",
+      "noMatch": "No matching sites",
+      "cookies_one": "{{count}} cookie",
+      "cookies_other": "{{count}} cookies",
+      "certExceptions": "Allowed sites",
+      "certExceptionsDesc": "Sites you chose to proceed to on the certificate warning. No more warnings for them until ShuviX quits.",
+      "noCertExceptions": "None"
+    },
+    "certError": {
+      "title": "Your connection is not private",
+      "detail": "Attackers might be trying to steal your information from {{host}} (for example, passwords, messages or credit cards).",
+      "advanced": "Advanced",
+      "hideAdvanced": "Hide advanced",
+      "advancedDetail": "This server could not prove that it is {{host}}; its security certificate is not trusted by this device. It may be misconfigured, or someone may be impersonating it.",
+      "proceed": "Proceed to {{host}} (unsafe)",
+      "back": "Back to safety"
+    },
+    "siteInfo": {
+      "button": "View site information",
+      "secure": "Connection is secure",
+      "insecure": "Connection is not secure",
+      "insecureDetail": "Don’t enter sensitive information like passwords or credit cards on this site.",
+      "certException": "You turned off certificate warnings for this site",
+      "certExceptionDetail": "No more warnings until ShuviX quits.",
+      "local": "You’re viewing a local file",
+      "cookies": "Cookies and site data",
+      "cookieCount_one": "This site has {{count}} cookie",
+      "cookieCount_other": "This site has {{count}} cookies",
+      "clear": "Delete data for this site",
+      "clearConfirm": "Confirm (signs you out)",
+      "siteSettings": "Site settings"
     }
   },
   "command": {

@@ -32,7 +32,10 @@ export function BrowserWall({ engine }: { engine: SearchEngineId }): React.JSX.E
   const closeTab = useBrowserTabsStore((s) => s.closeTab)
   const activateTab = useBrowserTabsStore((s) => s.activateTab)
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
-  const hasDialogOverlay = useDialogOverlay()
+  const dialogOpen = useDialogOverlay()
+  // 站点信息气泡开着时同理：原生页面全部让位，卡片显示各自的快照
+  const covered = useBrowserTabsStore((s) => !!s.pageCover)
+  const hasDialogOverlay = dialogOpen || covered
 
   const contentRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -109,7 +112,12 @@ export function BrowserWall({ engine }: { engine: SearchEngineId }): React.JSX.E
 
   /** 卡片集合 / 各卡片是否要显示页面（空白、错误都不显示）变化时都要重排 */
   const layoutKey = tabs
-    .map((tab) => `${tab.id}:${tab.loadError ? 'e' : ''}${tab.url === 'about:blank' ? 'b' : ''}`)
+    .map(
+      (tab) =>
+        `${tab.id}:${tab.loadError ? 'e' : ''}${tab.url === 'about:blank' ? 'b' : ''}${
+          tab.url.startsWith('shuvix://') ? 'i' : ''
+        }`
+    )
     .join('|')
 
   useEffect(() => {

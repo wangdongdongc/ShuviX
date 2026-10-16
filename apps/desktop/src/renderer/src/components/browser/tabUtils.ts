@@ -1,4 +1,6 @@
+import i18next from 'i18next'
 import type { BrowserTabInfo } from '../../stores/browserTabsStore'
+import { internalPageOf } from '../../../../shared/browserInternalPages'
 
 /**
  * 浏览器面板的纯函数工具与布局常数。
@@ -26,8 +28,10 @@ export function cardZoomFor(cardWidth: number): number {
   return Math.min(1, Math.max(MIN_CARD_ZOOM, cardWidth / CARD_LOGICAL_W))
 }
 
-/** tab 标题：title → URL host → 空白页文案 */
+/** tab 标题：内部页面的名字 → title → URL host → 空白页文案 */
 export function tabLabel(tab: BrowserTabInfo, untitled: string): string {
+  const page = internalPageOf(tab.url || '')
+  if (page) return i18next.t(`browser.internal.${page}`)
   if (tab.title) return tab.title
   if (tab.url && tab.url !== 'about:blank') {
     try {

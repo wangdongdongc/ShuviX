@@ -19,8 +19,17 @@
  *   ST-U8   主窗口关闭联动：墙上的 tab 先停回停放窗口再销毁浏览器窗口、存一次状态；macOS 上 tab 与停放
  *           窗口都留着，其余平台全部关掉、停放窗口也销毁；重开的新窗口按存下的尺寸建，开窗时不挂任何
  *           view，新宿主报了布局表之后才上墙；
- *   ST-U9   证书错误的询问只在用户正看着浏览器窗口（可见、未最小化、有焦点）时弹，挂在浏览器窗口上；
- *           否则静默拒绝、不因此信任 host；同 host 的并发合并成一个框；
+ *   BS-U11  证书错误照 Chrome 用整页警告、从不弹框（2026-10-16）：无论浏览器窗口处于哪种状态（没建过 / 隐藏 /
+ *           没焦点 / 最小化 / 在前台），主框架的证书错误都 preventDefault 一次、**同步** cb(false)、不调
+ *           dialog.showMessageBox、谁都没被弄到眼前，并记下这次错误（警告页上的「继续前往」能用）；
+ *   BS-U12  设置里开了「忽略证书错误」→ cb(true)，什么也不记；
+ *   BS-U13  子框架的证书错误 → cb(false)、不记，也不覆盖先前主框架的那条记录；
+ *   BS-U14  proceedPastCertError 放行记下的那次：回 true、certExceptionHosts() = 主机名（不含端口）、重新加载
+ *           出错的那个地址；第二次回 false；之后同一主机名（任何端口 / 路径 / tab）的错误直接放行，别的主机照拦；
+ *   BS-U15  没有记录 / 记录在别的 tab / 不存在的 id / 已销毁的 webContents → 回 false、什么也不信任；
+ *   BS-U16  最近一次主框架错误为准；主框架、非同文档的 did-start-navigation 去别的地址作废记录，去同一个地址不作废；
+ *   BS-U17  解析不了的地址 → cb(false)、不记；closeTab 忘掉这个 tab 的记录但已放行的主机照旧；destroyAllTabs
+ *           清掉放行。
  *   ST-U11  tab 数的应用事件 `browser.tabsChanged`：每次建 / 关成功各一条、count = 此刻的 tab 数；
  *           关不存在的、开第 13 个（抛错）都不发；
  *   ST-U12  initBrowserWindowService 幂等；
@@ -136,7 +145,7 @@ function stubPlatform(platform: string): void {
   Object.defineProperty(process, 'platform', { value: platform, configurable: true })
 }
 
-/** 让出事件循环一拍（证书询问是 async 的） */
+/** 让出事件循环一拍 */
 const flush = (): Promise<void> => new Promise<void>((r) => setImmediate(r))
 
 beforeEach(() => {
@@ -663,18 +672,18 @@ describe('主窗口关闭联动（ST-U8）', () => {
   })
 })
 
-describe('证书错误只在用户正看着浏览器窗口时问（ST-U9）', () => {
+describe('证书错误：整页警告，从不弹框（BS-U11 … BS-U17）', () => {
   const HOST = 'self-signed.example'
   const URL_A = `https://${HOST}/a`
+  const IGNORE_KEY = 'tool.browser.ignoreCertificateErrors'
 
   interface CertCall {
     event: { preventDefault: Mock }
     cb: Mock<(trusted: boolean) => void>
-    done: Promise<unknown>
   }
 
-  /** 以 view 的名义报一次证书错误；done 在处理函数（async）走完时落定 */
-  function certError(view: FakeView, url = URL_A): CertCall {
+  /** 以 view 的名义报一次证书错误（Electron 的参数形状：event, url, error, certificate, callback, isMainFrame） */
+  function certError(view: FakeView, url = URL_A, isMainFrame = true): CertCall {
     const event = { preventDefault: vi.fn() }
     const cb = vi.fn<(trusted: boolean) => void>()
     const results = view.webContents.fire(
@@ -683,30 +692,42 @@ describe('证书错误只在用户正看着浏览器窗口时问（ST-U9）', ()
       url,
       'net::ERR_CERT_AUTHORITY_INVALID',
       {},
-      cb
+      cb,
+      isMainFrame
     )
     expect(results, 'createTab 没有登记 certificate-error 处理函数').toHaveLength(1)
-    return { event, cb, done: Promise.resolve(results[0]) }
+    return { event, cb }
   }
 
-  /** 下一次询问框一直不答，返回作答函数（0 = 继续访问，1 = 取消） */
-  function holdNextDialog(): (response: number) => void {
-    let answer: ((value: { response: number }) => void) | undefined
-    fx.dialog.showMessageBox.mockImplementationOnce(() => new Promise((r) => (answer = r)))
-    return (response) => {
-      if (!answer) throw new Error('询问框还没弹出来')
-      answer({ response })
-    }
+  /** 主框架、非同文档的一次导航开始 */
+  function startNav(
+    view: FakeView,
+    url: string,
+    over: { isMainFrame?: boolean; isSameDocument?: boolean } = {}
+  ): void {
+    view.webContents.fire('did-start-navigation', {
+      url,
+      isMainFrame: over.isMainFrame ?? true,
+      isSameDocument: over.isSameDocument ?? false
+    })
   }
 
   type Front = 'none' | 'hidden' | 'unfocused' | 'minimized' | 'front'
 
-  /** 一个 tab + 浏览器窗口摆成某个状态；每个状态只差一个条件，四个判据各自有用例盯着 */
-  async function setup(front: Front): Promise<{ view: FakeView; bw: FakeWindow | undefined }> {
+  /** 一个 tab + 浏览器窗口摆成某个状态 */
+  async function setup(front: Front): Promise<{
+    views: ViewService
+    tabId: string
+    view: FakeView
+    bw: FakeWindow | undefined
+  }> {
     const { views, wins } = await load()
-    views.createTab('https://opener.example/')
+    const tabId = views.createTab('https://opener.example/')
     const view = fx.views[0]
-    if (front === 'none') return { view, bw: undefined }
+    if (front === 'none') {
+      fx.clearCalls()
+      return { views, tabId, view, bw: undefined }
+    }
     wins.openBrowserWindow()
     const bw = theBrowserWindow()
     const flags: Record<Exclude<Front, 'none'>, [boolean, boolean, boolean]> = {
@@ -718,116 +739,203 @@ describe('证书错误只在用户正看着浏览器窗口时问（ST-U9）', ()
     }
     ;[bw.visible, bw.minimized, bw.focused] = flags[front]
     fx.clearCalls()
-    return { view, bw }
+    return { views, tabId, view, bw }
   }
 
-  afterEach(() => {
-    // 从不挂在停放窗口上
-    const staging = fx.staging()
-    for (const [parent] of fx.dialog.showMessageBox.mock.calls) {
-      expect(parent).not.toBe(staging)
-    }
-  })
-
-  it('ST-U9 设置里开了「忽略证书错误」：直接放行，不弹框（窗口在前台也不问）', async () => {
-    state.settings.set('tool.browser.ignoreCertificateErrors', 'true')
-    const { view } = await setup('front')
-    const call = certError(view)
-    await call.done
-    expect(call.event.preventDefault).toHaveBeenCalledTimes(1)
-    expect(call.cb).toHaveBeenCalledWith(true)
-    expect(fx.dialog.showMessageBox).not.toHaveBeenCalled()
-  })
-
-  it.each(['none', 'hidden', 'unfocused', 'minimized'] as const)(
-    'ST-U9 浏览器窗口 %s：静默拒绝（cb(false)），不弹框',
+  it.each(['none', 'hidden', 'unfocused', 'minimized', 'front'] as const)(
+    'BS-U11 浏览器窗口 %s：preventDefault 一次、同步 cb(false)、不弹框、谁都没被弄到眼前；记下了这次错误',
     async (front) => {
-      const { view } = await setup(front)
+      const { views, tabId, view } = await setup(front)
       const call = certError(view)
-      await call.done
+      // 同步：处理函数返回时回调已经答了
+      expect(call.cb.mock.calls).toEqual([[false]])
       expect(call.event.preventDefault).toHaveBeenCalledTimes(1)
+      await flush()
       expect(call.cb).toHaveBeenCalledTimes(1)
-      expect(call.cb).toHaveBeenCalledWith(false)
       expect(fx.dialog.showMessageBox).not.toHaveBeenCalled()
       expect(fx.allSurfacing()).toEqual([])
+      expect(views.certExceptionHosts()).toEqual([])
+      // 记下了：警告页上的「继续前往」能用
+      expect(views.proceedPastCertError(tabId)).toBe(true)
     }
   )
 
-  it('ST-U9 窗口可见且有焦点：恰好一个挂在浏览器窗口上的框；点继续 → cb(true) 且信任该 host —— 之后窗口没焦点也直接放行', async () => {
-    const { view, bw } = await setup('front')
-    const answer = holdNextDialog()
-    const first = certError(view)
-    await flush()
-    expect(fx.dialog.showMessageBox).toHaveBeenCalledTimes(1)
-    expect(fx.dialog.showMessageBox.mock.calls[0][0]).toBe(bw)
-    expect(first.cb).not.toHaveBeenCalled()
-
-    answer(0)
-    await first.done
-    expect(first.event.preventDefault).toHaveBeenCalledTimes(1)
-    expect(first.cb).toHaveBeenCalledWith(true)
-
-    bw!.focused = false
-    const second = certError(view, `https://${HOST}/other`)
-    await second.done
-    expect(second.cb).toHaveBeenCalledWith(true)
-    expect(fx.dialog.showMessageBox).toHaveBeenCalledTimes(1)
-  })
-
-  it('ST-U9 点取消 → cb(false)，不信任；下一次（窗口仍在前台）再问', async () => {
-    const { view } = await setup('front')
-    const answer = holdNextDialog()
-    const first = certError(view)
-    await flush()
-    answer(1)
-    await first.done
-    expect(first.cb).toHaveBeenCalledWith(false)
-
-    const second = certError(view)
-    await flush()
-    expect(fx.dialog.showMessageBox).toHaveBeenCalledTimes(2)
-    await second.done // 缺省回答是取消
-    expect(second.cb).toHaveBeenCalledWith(false)
-  })
-
-  it('ST-U9 同一 host 的两次并发错误：只弹一个框，两个回调都拿到这个回答', async () => {
-    const { view } = await setup('front')
-    const answer = holdNextDialog()
-    const one = certError(view, `https://${HOST}/page`)
-    const two = certError(view, `https://${HOST}/style.css`)
-    await flush()
-    expect(fx.dialog.showMessageBox).toHaveBeenCalledTimes(1)
-
-    answer(0)
-    await Promise.all([one.done, two.done])
-    expect(one.cb).toHaveBeenCalledWith(true)
-    expect(two.cb).toHaveBeenCalledWith(true)
-    expect(fx.dialog.showMessageBox).toHaveBeenCalledTimes(1)
-  })
-
-  it('ST-U9 静默拒绝不等于信任：窗口没焦点时拒掉的 host，用户回到窗口后重试照样问', async () => {
-    const { view, bw } = await setup('unfocused')
-    const silent = certError(view)
-    await silent.done
-    expect(silent.cb).toHaveBeenCalledWith(false)
-    expect(fx.dialog.showMessageBox).not.toHaveBeenCalled()
-
-    bw!.focused = true
-    const retry = certError(view)
-    await flush()
-    expect(fx.dialog.showMessageBox).toHaveBeenCalledTimes(1)
-    expect(fx.dialog.showMessageBox.mock.calls[0][0]).toBe(bw)
-    await retry.done
-    expect(retry.cb).toHaveBeenCalledWith(false)
-  })
-
-  it('ST-U9 解析不了的地址：cb(false)，不弹框（窗口在前台也一样）', async () => {
-    const { view } = await setup('front')
-    const call = certError(view, 'not a url')
-    await call.done
+  it('BS-U12 设置里开了「忽略证书错误」：cb(true)、不弹框、不记（继续前往无事可做）', async () => {
+    state.settings.set(IGNORE_KEY, 'true')
+    const { views, tabId, view } = await setup('front')
+    const call = certError(view)
     expect(call.event.preventDefault).toHaveBeenCalledTimes(1)
-    expect(call.cb).toHaveBeenCalledWith(false)
+    expect(call.cb.mock.calls).toEqual([[true]])
     expect(fx.dialog.showMessageBox).not.toHaveBeenCalled()
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+    expect(views.certExceptionHosts()).toEqual([])
+  })
+
+  it("BS-U12 设置是 'false' 或别的值：照拦", async () => {
+    state.settings.set(IGNORE_KEY, 'false')
+    const { view } = await setup('front')
+    expect(certError(view).cb.mock.calls).toEqual([[false]])
+    state.settings.set(IGNORE_KEY, 'yes')
+    expect(certError(view).cb.mock.calls).toEqual([[false]])
+  })
+
+  it('BS-U13 子框架的证书错误：cb(false)、不记', async () => {
+    const { views, tabId, view } = await setup('front')
+    const call = certError(view, 'https://frame.example/embed', false)
+    expect(call.event.preventDefault).toHaveBeenCalledTimes(1)
+    expect(call.cb.mock.calls).toEqual([[false]])
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+  })
+
+  it('BS-U13 子框架的错误不覆盖先前主框架的记录：继续前往放行的仍是主框架那个主机、重新加载的仍是那个地址', async () => {
+    const { views, tabId, view } = await setup('front')
+    certError(view, URL_A)
+    certError(view, 'https://frame.example/embed', false)
+    view.webContents.loadURL.mockClear()
+
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+    expect(views.certExceptionHosts()).toEqual([HOST])
+    expect(view.webContents.loadURL.mock.calls).toEqual([[URL_A]])
+  })
+
+  it('BS-U14 继续前往：回 true、放行主机名（不含端口）、重新加载出错的地址；第二次回 false', async () => {
+    const { views, tabId, view } = await setup('front')
+    const failed = `https://${HOST}:8443/a?q=1`
+    certError(view, failed)
+    view.webContents.loadURL.mockClear()
+
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+    expect(views.certExceptionHosts()).toEqual([HOST])
+    expect(view.webContents.loadURL.mock.calls.at(-1)).toEqual([failed])
+    expect(view.webContents.loadURL).toHaveBeenCalledTimes(1)
+
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+    expect(view.webContents.loadURL).toHaveBeenCalledTimes(1)
+    expect(fx.dialog.showMessageBox).not.toHaveBeenCalled()
+    expect(fx.allSurfacing()).toEqual([])
+  })
+
+  it('BS-U14 放行之后：同一主机名在任何端口 / 路径 / tab 上直接放行（不记）；别的主机照拦', async () => {
+    const { views, tabId, view } = await setup('unfocused')
+    certError(view, `https://${HOST}:8443/a`)
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+
+    for (const url of [`https://${HOST}/`, `https://${HOST}:9443/other?x`, URL_A]) {
+      expect(certError(view, url).cb.mock.calls, url).toEqual([[true]])
+    }
+    const otherTab = views.createTab('https://second.example/')
+    const otherView = fx.views[1]
+    expect(certError(otherView, `https://${HOST}:1234/z`).cb.mock.calls).toEqual([[true]])
+    // 放行的那几次没有记成新的错误
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+    expect(views.proceedPastCertError(otherTab)).toBe(false)
+
+    const other = certError(otherView, 'https://evil.example/')
+    expect(other.cb.mock.calls).toEqual([[false]])
+    // 子域不是同一个主机
+    expect(certError(otherView, `https://sub.${HOST}/`).cb.mock.calls).toEqual([[false]])
+    expect(views.certExceptionHosts()).toEqual([HOST])
+  })
+
+  it('BS-U14 放行的主机按字母序列出、不重复', async () => {
+    const { views, tabId, view } = await setup('front')
+    certError(view, 'https://zeta.example/')
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+    certError(view, 'https://alpha.example:8443/')
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+    expect(views.certExceptionHosts()).toEqual(['alpha.example', 'zeta.example'])
+  })
+
+  it('BS-U15 回 false、什么也不信任：没有记录 / 记录在别的 tab / 不存在的 id / 已销毁的 webContents', async () => {
+    const { views, tabId, view } = await setup('front')
+    // 没有记录
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+
+    // 记录在别的 tab
+    const other = views.createTab('https://second.example/')
+    certError(fx.views[1], URL_A)
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+
+    // 不存在的 id
+    expect(views.proceedPastCertError('no-such-tab')).toBe(false)
+
+    // 已销毁的 webContents（记录还在，tab 也还在表里）
+    certError(view, 'https://gone.example/')
+    view.webContents.destroyed = true
+    view.webContents.loadURL.mockClear()
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+    expect(view.webContents.loadURL).not.toHaveBeenCalled()
+
+    expect(views.certExceptionHosts()).toEqual([])
+    // 别的 tab 自己的记录还能用
+    expect(views.proceedPastCertError(other)).toBe(true)
+    expect(views.certExceptionHosts()).toEqual([HOST])
+  })
+
+  it('BS-U16 最近一次主框架错误为准', async () => {
+    const { views, tabId, view } = await setup('front')
+    certError(view, 'https://first.example/one')
+    certError(view, 'https://second.example/two')
+    view.webContents.loadURL.mockClear()
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+    expect(views.certExceptionHosts()).toEqual(['second.example'])
+    expect(view.webContents.loadURL.mock.calls).toEqual([['https://second.example/two']])
+  })
+
+  it('BS-U16 主框架、非同文档的导航去别的地址：记录作废；去同一个地址：记录留着', async () => {
+    const { views, tabId, view } = await setup('front')
+    certError(view, URL_A)
+    startNav(view, URL_A)
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+
+    certError(view, 'https://second.example/x')
+    startNav(view, 'https://elsewhere.example/')
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+    expect(views.certExceptionHosts()).toEqual([HOST])
+  })
+
+  it('BS-U16 子框架 / 同文档的导航不作废记录', async () => {
+    const { views, tabId, view } = await setup('front')
+    certError(view, URL_A)
+    startNav(view, 'https://elsewhere.example/', { isMainFrame: false })
+    startNav(view, `${URL_A}#frag`, { isSameDocument: true })
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+  })
+
+  it('BS-U17 解析不了的地址：cb(false)、不记、不弹框', async () => {
+    const { views, tabId, view } = await setup('front')
+    const call = certError(view, 'not a url')
+    expect(call.event.preventDefault).toHaveBeenCalledTimes(1)
+    expect(call.cb.mock.calls).toEqual([[false]])
+    expect(fx.dialog.showMessageBox).not.toHaveBeenCalled()
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+  })
+
+  it('BS-U17 closeTab 忘掉这个 tab 的记录；已放行的主机照旧放行', async () => {
+    const { views, tabId, view } = await setup('front')
+    certError(view, URL_A)
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+    certError(view, 'https://pending.example/')
+    views.closeTab(tabId)
+    expect(views.proceedPastCertError(tabId)).toBe(false)
+
+    views.createTab('https://next.example/')
+    const next = fx.views[1]
+    expect(certError(next, `https://${HOST}/again`).cb.mock.calls).toEqual([[true]])
+    expect(views.certExceptionHosts()).toEqual([HOST])
+  })
+
+  it('BS-U17 destroyAllTabs 清掉放行：之后同一主机又被拦', async () => {
+    const { views, tabId, view } = await setup('front')
+    certError(view, URL_A)
+    expect(views.proceedPastCertError(tabId)).toBe(true)
+    expect(views.certExceptionHosts()).toEqual([HOST])
+
+    views.destroyAllTabs()
+    expect(views.certExceptionHosts()).toEqual([])
+    views.createTab('https://next.example/')
+    const fresh = fx.views[fx.views.length - 1]
+    expect(certError(fresh, URL_A).cb.mock.calls).toEqual([[false]])
   })
 })
 

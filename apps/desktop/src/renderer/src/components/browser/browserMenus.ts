@@ -129,8 +129,8 @@ export async function showMoreMenu(opts: {
       if (page) openExternal(page)
       return
     case 'settings':
-      // 浏览数据与证书的设置住在设置 → MCP 里内置 browser 那一行的展开区
-      void window.api.app.openSettings('mcp')
+      // 浏览器自己的设置页（shuvix://settings；已经开着就选中它）
+      store.openSettings()
       return
   }
 }

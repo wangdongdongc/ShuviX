@@ -827,6 +827,8 @@ declare global {
           agentSessionTitle?: string
           /** 开这个 tab 的会话（agent 开的才有） */
           openerSessionId?: string
+          /** 内部页面（shuvix://settings …）；url 是它的显示地址 */
+          internalPage?: import('../shared/browserInternalPages').InternalPage
         }>
       >
       navigate: (tabId: string, url: string) => Promise<void>
@@ -842,11 +844,18 @@ declare global {
           zoom?: number
         }>
       ) => void
-      capture: (tabId: string) => Promise<string>
+      /** 抓 tab 画面（dataURL）；maxWidth 缺省 480（平铺墙的快照），站点信息气泡按页面区宽度要 */
+      capture: (tabId: string, maxWidth?: number) => Promise<string>
       /** 按站点调页面缩放（同一站点的 tab 一起换） */
       zoom: (tabId: string, direction: 'in' | 'out' | 'reset') => Promise<void>
       /** 把主窗口拉到前面并切到这个会话（提示条上的「查看对话」） */
       openSession: (sessionId: string) => Promise<void>
+      /** 打开浏览器窗口并打开设置页（主设置窗口里的「打开浏览器设置」；桌面专属） */
+      openSettings: () => Promise<void>
+      /** 在浏览器窗口里打开一个内部页面（已经开着就选中它） */
+      openInternal: (page: import('../shared/browserInternalPages').InternalPage) => Promise<void>
+      /** 证书警告页上的「继续前往（不安全）」：放行这个 tab 刚被挡下的站点；回是否放行了 */
+      proceedUnsafe: (tabId: string) => Promise<boolean>
       setVisible: (visible: boolean) => void
       onTabCreated: (
         callback: (payload: { tabId: string; url: string; active: boolean }) => void
@@ -908,6 +917,12 @@ declare global {
       listSites: () => Promise<Array<{ host: string; cookieCount: number }>>
       clearSite: (host: string) => Promise<void>
       clearAll: () => Promise<void>
+      /** 站点信息气泡：这页的 cookie 数（含父域）与证书放行状态 */
+      siteInfo: (url: string) => Promise<{ cookieCount: number; certException: boolean }>
+      /** 清除这个地址带着的 cookie（含父域）与这个 origin 的存储 */
+      clearSiteData: (url: string) => Promise<void>
+      /** 用户放行过证书错误的站点（直到退出） */
+      certExceptions: () => Promise<string[]>
     }
     skill: {
       /** 打开 / 复用一个技能的 SKILL.md 笔记本（一份文件至多一条会话）；内置那份只读 */

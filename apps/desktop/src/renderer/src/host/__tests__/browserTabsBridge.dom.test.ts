@@ -16,6 +16,9 @@
  *           只带地址时只改地址（后退 / 前进 / 缩放留着），全量时全改；tab-closed 的 activeTabId 照主进程给的；
  *   CB-U39  水合：loading → isLoading，后退 / 前进 / 缩放 / agent 会话照抄；**不**给 agentActiveAt（重开窗口
  *           不脉动）。
+ *   BS-U46  内部页面（shuvix://settings）：水合与 tab-created 都原样留着 `url: 'shuvix://settings'`（外壳据它画设置页）；
+ *           store 的 openSettings()：openInternal('settings')，不带一节时不碰 settingsFocus；带一节时写
+ *           settingsFocus（每次 nonce 加一）、没给搜索词就没有 search 这个键；clearSettingsFocus() → null。
  *
  * `window.api.browserView` 是假的：每个 on* 记下回调（用例直接调它当作主进程发来的事件），listTabs 由用例
  * 决定回什么。挂一个只调这个 hook 的小组件；store 每条用例清空。桌面 vitest 对渲染层只收 `*.test.ts`
@@ -370,5 +373,86 @@ describe('水合带上 Chrome 化的字段（CB-U39）', () => {
     expect(tab('t2')).not.toHaveProperty('agentSessionId')
     expect(tab('t2')).not.toHaveProperty('agentActiveAt')
     expect(useBrowserTabsStore.getState().activeTabId).toBe('t2')
+  })
+})
+
+describe('内部页面与设置页跳转（BS-U46）', () => {
+  const openInternal = vi.fn(async (_page: string) => undefined)
+  const browserView = (): Record<string, unknown> =>
+    (window as unknown as { api: { browserView: Record<string, unknown> } }).api.browserView
+
+  beforeEach(() => {
+    openInternal.mockClear()
+    browserView().openInternal = openInternal
+    useBrowserTabsStore.setState({ settingsFocus: null })
+  })
+
+  it('BS-U46 水合：设置页那一行的 url 原样是 shuvix://settings；tab-created 同样', async () => {
+    listed = Promise.resolve([
+      {
+        id: 's',
+        url: 'shuvix://settings',
+        title: '',
+        active: true,
+        cdpAttached: false,
+        cdpIntercepting: false,
+        crashed: false,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        zoomPercent: 100
+      }
+    ])
+    await mount()
+    expect(tab('s')).toMatchObject({ url: 'shuvix://settings', loadError: null })
+    expect(useBrowserTabsStore.getState().activeTabId).toBe('s')
+
+    fire('onTabCreated', { tabId: 's2', url: 'shuvix://settings', active: false })
+    expect(tab('s2')?.url).toBe('shuvix://settings')
+    // 普通标签变成设置页：did-navigate 只带地址
+    fire('onTabCreated', { tabId: 'p', url: PAGE_URL, active: false })
+    fire('onDidNavigate', { tabId: 'p', url: 'shuvix://settings' })
+    expect(tab('p')?.url).toBe('shuvix://settings')
+  })
+
+  it("BS-U46 openSettings()：openInternal('settings')，settingsFocus 不动", () => {
+    const keep = { section: 'search' as const, nonce: 3 }
+    useBrowserTabsStore.setState({ settingsFocus: keep })
+    useBrowserTabsStore.getState().openSettings()
+    expect(openInternal.mock.calls).toEqual([['settings']])
+    expect(useBrowserTabsStore.getState().settingsFocus).toBe(keep)
+
+    useBrowserTabsStore.setState({ settingsFocus: null })
+    useBrowserTabsStore.getState().openSettings()
+    expect(useBrowserTabsStore.getState().settingsFocus).toBeNull()
+  })
+
+  it("BS-U46 openSettings('privacy', 'a') 两次：都开设置页，nonce 每次加一", () => {
+    const store = useBrowserTabsStore.getState()
+    store.openSettings('privacy', 'a')
+    const first = useBrowserTabsStore.getState().settingsFocus
+    expect(first).toEqual({ section: 'privacy', search: 'a', nonce: expect.any(Number) })
+    store.openSettings('privacy', 'a')
+    const second = useBrowserTabsStore.getState().settingsFocus
+    expect(second).toEqual({ section: 'privacy', search: 'a', nonce: first!.nonce + 1 })
+    expect(second).not.toBe(first)
+    expect(openInternal.mock.calls).toEqual([['settings'], ['settings']])
+  })
+
+  it("BS-U46 openSettings('certificates')：没有 search 这个键；clearSettingsFocus() → null", () => {
+    useBrowserTabsStore.getState().openSettings('certificates')
+    const focus = useBrowserTabsStore.getState().settingsFocus
+    expect(focus).toMatchObject({ section: 'certificates' })
+    expect(focus).not.toHaveProperty('search')
+    useBrowserTabsStore.getState().clearSettingsFocus()
+    expect(useBrowserTabsStore.getState().settingsFocus).toBeNull()
+  })
+
+  it("BS-U46 openSettings('privacy', '')：空搜索词也是搜索词（键在、值是空串）", () => {
+    useBrowserTabsStore.getState().openSettings('privacy', '')
+    expect(useBrowserTabsStore.getState().settingsFocus).toMatchObject({
+      section: 'privacy',
+      search: ''
+    })
   })
 })

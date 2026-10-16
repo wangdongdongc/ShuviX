@@ -3,20 +3,27 @@
  *
  * 浏览器从「LLM 工具」里的一个内置工具，改成了按会话勾选的内置 MCP 能力服务器
  * （`type: 'inproc'`，v27 种下的 `builtin-mcp-browser` 行，全局启用、会话默认不勾）。于是它在设置里
- * 换了家：MCP 页上一行只读的内置服务器，面板自己的设置（证书错误、已保存站点）挂在那一行的展开区；
- * 「LLM 工具」页上不再有它。本 spec 钉这几件事：
+ * 换了家：MCP 页上一行只读的内置服务器；「LLM 工具」页上不再有它。浏览器**自己的**设置（搜索引擎、
+ * 网站数据、证书）2026-10-16 又搬进了浏览器窗口的内部设置页 `shuvix://settings`（照 Chrome 的
+ * chrome://settings），那一行的展开区只剩一个入口。本 spec 钉这几件事：
  *
  *   - 种子行的形状与「整行只读」（删不掉、改不了名字 / 类型 / 命令 / 地址、名字不能被占）；
  *   - 列表里内置置顶、内置行的徽章与按钮（没有编辑、没有重连、删除灰着）；
- *   - 展开区：browser 那一行挂着浏览器面板的设置（database 那一行挂的是已保存的数据库连接，
- *     见 database 区；ssh / tavily 没有附加设置），开关写的是 `tool.browser.ignoreCertificateErrors`，
- *     已保存站点可以逐个清掉；
+ *   - BS-E1  展开区：browser 那一行只有「浏览器设置」入口（打开按钮；没有开关、没有站点列表、没有输入框；
+ *     database 那一行挂的是已保存的数据库连接，见 database 区；ssh / tavily 没有附加设置）；
+ *   - BS-E2  点入口：浏览器窗口开出来，恰好一个设置页 tab（listTabs 的 internalPage）、被选中、外壳画着设置页、
+ *     地址栏写 shuvix://settings；选了别的 tab 再点 → 还是那一个、又被选中；设置页里拨「忽略证书错误」写
+ *     `tool.browser.ignoreCertificateErrors`、警告跟着出现 / 消失；选 Bing 写 `browser.searchEngine`，新空白页的
+ *     新标签页写着 Bing；MCP 那一行一直启用着；
+ *   - BS-E3  访问夹具网站（写一个 cookie）之后，设置页的网站数据列出 127.0.0.1（1 个 cookie）；搜索能留住 /
+ *     滤掉它；逐站删除之后 listSites 里没了；再访问一次，「删除浏览数据」+ 确认之后 listSites 空了；
  *   - 第一次用到才连（会话级实例），连上之后工具数与工具名、会话删掉之后回到「未启动」；
  *   - 启用开关：关掉会断开活着的会话实例，新会话再勾它也拿不到工具（而且不报错、不转圈），
  *     重新打开之后新会话又有了。
  *
- * 断言优先走 IPC（`window.api.mcp.*` / `tools.*` / `settings.*` / `browserData.*`）；DOM 只断「呈现」，
- * 一律经 pages.ts 的 mcpSettingsPane。文案随界面语言变 —— 需要比对文字的地方按三语候选认。
+ * 断言优先走 IPC（`window.api.mcp.*` / `tools.*` / `settings.*` / `browserData.*` / `browserView.*`）；DOM 只断
+ * 「呈现」，一律经 pages.ts 的 mcpSettingsPane / browserShellPane / browserSettingsPagePane。文案随界面语言变 ——
+ * 需要比对文字的地方按三语候选认。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { sleep, until, type CdpClient } from '../../harness/cdp'
@@ -29,9 +36,15 @@ import {
   type RecordedEvent
 } from '../../harness/seed'
 import {
+  browserSettingsPagePane,
+  browserShellPane,
+  browserWallPane,
   mcpSettingsPane,
   settingsNavPane,
-  type McpExtraShot,
+  type BrowserSettingsPagePane,
+  type BrowserSettingsPageShot,
+  type BrowserShellPane,
+  type BrowserWallPane,
   type McpSettingsPane
 } from '../../harness/pages'
 import {
@@ -45,16 +58,14 @@ const BROWSER_ID = 'builtin-mcp-browser'
 const SSH_ID = 'builtin-mcp-ssh'
 const TAVILY_ID = 'builtin-mcp-tavily'
 const CERT_KEY = 'tool.browser.ignoreCertificateErrors'
+const ENGINE_KEY = 'browser.searchEngine'
+const SETTINGS_URL = 'shuvix://settings'
 const ALL_BROWSER_TOOLS = BROWSER_TOOL_NAMES.map(browserTool).sort()
 
 /** 三语候选（chat-protocol 语言包原文） */
 const BROWSER_LABELS = ['Browser', '浏览器', 'ブラウザ']
-const PANEL_TITLES = ['Browser panel', '浏览器面板', 'ブラウザパネル']
-const NO_SITES = [
-  'No sites with saved data',
-  '暂无已保存数据的站点',
-  '保存されたデータのあるサイトはありません'
-]
+/** 网站数据一行里「1 个 cookie」的写法 */
+const ONE_COOKIE = ['1 cookie', '1 个 Cookie', 'Cookie 1 件']
 const CANNOT_DELETE = [
   'Built-in servers cannot be deleted',
   '内置服务不可删除',
@@ -85,11 +96,25 @@ interface ListedTool {
   declaredBy?: string
 }
 
+interface TabRow {
+  id: string
+  url: string
+  active: boolean
+  internalPage?: string
+}
+
 let app: E2EApp
 let settings: CdpClient
 let mcp: McpSettingsPane
 let events: EventRecorder
 let fixture: FixtureServer
+/** 浏览器窗口（BS-E2 起，点入口开出来的） */
+let bw: CdpClient | null = null
+let shell: BrowserShellPane
+let wall: BrowserWallPane
+let page: BrowserSettingsPagePane
+/** BS-E2 开出来的设置页 tab */
+let settingsTab = ''
 
 // ─── IPC 助手 ───
 
@@ -113,6 +138,26 @@ const settingGet = (key: string): Promise<string | undefined> =>
   app.main.eval(`window.api.settings.get(${JSON.stringify(key)})`)
 const listSites = (): Promise<Array<{ host: string; cookieCount: number }>> =>
   app.main.eval(`window.api.browserData.listSites()`)
+const listTabs = (): Promise<TabRow[]> =>
+  app.main.eval<TabRow[]>(`window.api.browserView.listTabs()`)
+const createTab = (url: string): Promise<string> =>
+  app.main.eval<string>(`window.api.browserView.createTab(${JSON.stringify(url)})`)
+const closeTab = (id: string): Promise<unknown> =>
+  app.main.eval(`window.api.browserView.closeTab(${JSON.stringify(id)})`)
+const isWindowOpen = (): Promise<boolean> =>
+  app.main.eval<boolean>('window.api.browserView.isWindowOpen()')
+const selectedId = async (): Promise<string | undefined> =>
+  (await listTabs()).find((t) => t.active)?.id
+const settingsRows = async (): Promise<TabRow[]> =>
+  (await listTabs()).filter((t) => t.internalPage === 'settings')
+/** 等设置页挂上、读完它自己的三样（开关与站点列表都是异步读出来的） */
+const loadedPage = (): Promise<BrowserSettingsPageShot> =>
+  until(async () => {
+    const shot = await page.shot()
+    const settled =
+      shot.present && shot.ignoreCertOn !== null && (shot.sites.length > 0 || !!shot.sitesEmptyText)
+    return settled ? shot : null
+  }, 'browser settings page loaded')
 
 const createSession = (title: string): Promise<string> =>
   app.main.eval<string>(`window.api.session.create(${JSON.stringify({ title })}).then((s) => s.id)`)
@@ -138,15 +183,6 @@ const tickedSession = async (title: string): Promise<{ sid: string; tools: strin
 const deleteSession = (sid: string): Promise<unknown> =>
   app.main.eval(`window.api.session.delete(${JSON.stringify(sid)})`)
 
-/** 等浏览器那一行的附加设置加载完（开关与站点列表都是异步读出来的） */
-const loadedExtra = (): Promise<McpExtraShot> =>
-  until(async () => {
-    const x = await mcp.extra('browser')
-    const settled =
-      x.present && x.firstToggleOn !== null && (x.sites.length > 0 || !!x.sitesEmptyText)
-    return settled ? x : null
-  }, 'browser extra settings loaded')
-
 beforeAll(async () => {
   app = await launchApp()
   await ensureDefaultModel(app.main)
@@ -160,6 +196,7 @@ beforeAll(async () => {
 }, 120_000)
 
 afterAll(async () => {
+  bw?.close()
   await fixture?.close()
   await app?.stop()
 })
@@ -268,14 +305,13 @@ describe('MCP 设置页（DOM）', () => {
     expect(tavily).toMatchObject({ builtinBadge: false, hasEdit: true, deleteDisabled: false })
   }, 120_000)
 
-  it('BRS-4 browser 那一行展开后是面板设置：面板标题、证书开关关着、没有已保存站点；ssh / tavily 没有附加设置', async () => {
+  it('BS-E1 browser 那一行展开后只有「浏览器设置」入口：打开按钮在，没有开关、站点列表、输入框；ssh / tavily 没有附加设置', async () => {
     await mcp.setExpanded('browser', true)
-    const extra = await loadedExtra()
-    expect(PANEL_TITLES).toContain(extra.sectionTitles[0])
-    expect(extra.firstToggleOn).toBe(false)
-    expect(extra.warning).toBe(false)
-    expect(extra.sites).toEqual([])
-    expect(NO_SITES).toContain(extra.sitesEmptyText)
+    const link = await until(async () => {
+      const l = await mcp.browserSettingsLink()
+      return l.present ? l : null
+    }, 'browser settings link in the expanded row')
+    expect(link).toEqual({ present: true, openButton: true, toggles: 0, siteRows: 0, inputs: 0 })
 
     // 同一时刻只展开一行：换成 ssh / tavily，它们的展开区里没有附加设置
     await mcp.setExpanded('ssh', true)
@@ -285,60 +321,149 @@ describe('MCP 设置页（DOM）', () => {
     expect((await mcp.extra('tavily')).present).toBe(false)
     await mcp.setExpanded('tavily', false)
   }, 120_000)
+})
 
-  it('BRS-5 证书开关写的是 tool.browser.ignoreCertificateErrors，打开有警告，不动行的启用位', async () => {
+describe('浏览器窗口自己的设置页（BS-E2 / BS-E3）', () => {
+  it('BS-E2 点入口：浏览器窗口开出来，恰好一个设置页 tab、选中、地址栏 shuvix://settings；再点还是它；拨证书开关、选 Bing 都写进设置；MCP 行一直启用', async () => {
+    expect(await isWindowOpen()).toBe(false)
     await mcp.setExpanded('browser', true)
-    expect((await loadedExtra()).firstToggleOn).toBe(false)
+    await until(async () => (await mcp.browserSettingsLink()).present, 'browser settings link')
+    await mcp.openBrowserSettings()
 
-    await mcp.clickExtraFirstToggle('browser')
+    await until(() => isWindowOpen(), 'browser window opened by the link')
+    bw = await until(() => app.browserWindow(), 'browser window page')
+    shell = browserShellPane(bw)
+    wall = browserWallPane(bw)
+    page = browserSettingsPagePane(bw)
+    await until(() => wall.mounted(), 'browser window shell mounted')
+
+    const rows = await until(async () => {
+      const list = await settingsRows()
+      return list.length === 1 && list[0].active ? list : null
+    }, 'exactly one selected settings tab')
+    settingsTab = rows[0].id
+    expect(rows[0].url).toBe(SETTINGS_URL)
+    const first = await loadedPage()
+    expect(first.navIds).toEqual(['search', 'privacy', 'certificates'])
+    expect(await shell.omniboxDisplay()).toBe(SETTINGS_URL)
+    expect(await wall.selectedTabIds()).toEqual([settingsTab])
+
+    // ── 选了别的 tab 再点入口：还是那一个设置页，又被选中 ──
+    const other = await createTab(fixture.url('/counter.html?bs=e2'))
+    await until(async () => (await selectedId()) === other, 'user tab selected')
+    await until(async () => !(await page.shot()).present, 'settings page off screen')
+    const countBefore = (await listTabs()).length
+    await mcp.openBrowserSettings()
+    await until(async () => (await selectedId()) === settingsTab, 'settings tab selected again')
+    expect((await settingsRows()).map((t) => t.id)).toEqual([settingsTab])
+    expect(await listTabs()).toHaveLength(countBefore)
+    const again = await loadedPage()
+
+    // ── 忽略证书错误：写设置、警告跟着走 ──
+    expect(again.ignoreCertOn).toBe(false)
+    expect(again.warning).toBe(false)
+    await page.toggleIgnoreCert()
     await until(async () => (await settingGet(CERT_KEY)) === 'true', 'ignore-cert stored on')
-    const on = await until(async () => {
-      const x = await mcp.extra('browser')
-      return x.firstToggleOn === true && x.warning ? x : null
+    await until(async () => {
+      const x = await page.shot()
+      return x.ignoreCertOn === true && x.warning
     }, 'ignore-cert toggle on + warning')
-    expect(on.warning).toBe(true)
-    // 附加设置里的开关与行尾的启用开关是两颗：点前者不该碰后者
+    await page.toggleIgnoreCert()
+    await until(async () => (await settingGet(CERT_KEY)) === 'false', 'ignore-cert stored off')
+    await until(async () => {
+      const x = await page.shot()
+      return x.ignoreCertOn === false && !x.warning
+    }, 'ignore-cert toggle off, warning gone')
+
+    // ── 搜索引擎：选 Bing → 写设置；新空白页的新标签页写着 Bing ──
+    expect(again.engine).toBe('google')
+    await page.chooseEngine('bing')
+    await until(async () => (await settingGet(ENGINE_KEY)) === 'bing', 'search engine stored')
+    await shell.clickNewTab()
+    const blank = await until(async () => {
+      const list = await listTabs()
+      const last = list.at(-1)
+      return last && last.active && last.url === 'about:blank' ? last.id : null
+    }, 'new blank tab selected')
+    await until(
+      async () => (await shell.newTabPagePlaceholder())?.includes('Bing') === true,
+      'new-tab page names Bing'
+    )
+
+    // ── MCP 那一行一直启用着（设置页里的开关不是它的启用位）──
     expect((await rowOf(BROWSER_ID)).isEnabled).toBe(1)
     expect((await mcp.row('browser'))?.enabledOn).toBe(true)
 
-    await mcp.clickExtraFirstToggle('browser')
-    await until(async () => (await settingGet(CERT_KEY)) === 'false', 'ignore-cert stored off')
-    await until(
-      async () => !(await mcp.extra('browser')).warning,
-      'warning gone once the toggle is off'
+    // 收拾：引擎回缺省，关掉多开的两个 tab（设置页留给 BS-E3）
+    await app.main.eval(
+      `window.api.settings.set(${JSON.stringify({ key: ENGINE_KEY, value: 'google' })})`
     )
-    expect((await rowOf(BROWSER_ID)).isEnabled).toBe(1)
+    await until(async () => (await settingGet(ENGINE_KEY)) === 'google', 'engine back to google')
+    await closeTab(blank)
+    await closeTab(other)
+    await until(async () => (await listTabs()).length === countBefore - 1, 'extra tabs closed')
   }, 120_000)
 
-  it('BRS-6 已保存站点：面板里访问过的站点出现在列表里，逐个清掉之后两边都没了', async () => {
-    // 不经 agent：直接在面板里开一个 tab（那一页写一个持久 cookie）
-    const tabId = await app.main.eval<string>(
-      `window.api.browserView.createTab(${JSON.stringify(fixture.url('/form.html'))})`
+  it('BS-E3 网站数据：访问过的 127.0.0.1（1 个 cookie）列出来；搜索留住 / 滤掉；逐站删除；再访问后删除浏览数据', async () => {
+    if (!bw) throw new Error('BS-E2 did not open the browser window')
+    const visit = await createTab(fixture.url('/form.html?bs=e3a'))
+    await until(
+      async () => (await listSites()).some((s) => s.host === '127.0.0.1'),
+      'fixture cookie saved in the browser partition'
     )
-    try {
-      await until(
-        async () => (await listSites()).some((s) => s.host === '127.0.0.1'),
-        'fixture cookie saved in the browser partition'
-      )
-      expect(fixture.hits('/form.html')).toBeGreaterThan(0)
+    expect((await listSites()).find((s) => s.host === '127.0.0.1')?.cookieCount).toBe(1)
 
-      await mcp.setExpanded('browser', true)
-      await loadedExtra()
-      await mcp.refreshSites('browser')
-      await until(
-        async () => (await mcp.extra('browser')).sites.includes('127.0.0.1'),
-        'saved site listed'
-      )
+    // ── 打开设置页（⋮ → 设置：已经开着就选中它，页面重新挂载、重新列站点）──
+    await shell.moreMenu('settings')
+    await until(async () => (await selectedId()) === settingsTab, 'settings tab selected')
+    const listed = await until(async () => {
+      const x = await page.shot()
+      return x.sites.some((r) => r.host === '127.0.0.1') ? x : null
+    }, 'settings page lists 127.0.0.1')
+    const row = listed.sites.find((r) => r.host === '127.0.0.1')!
+    expect(
+      ONE_COOKIE.some((t) => row.text.includes(t)),
+      row.text
+    ).toBe(true)
 
-      await mcp.clearSite('browser', '127.0.0.1')
-      await until(
-        async () => !(await mcp.extra('browser')).sites.includes('127.0.0.1'),
-        'saved site gone from the list'
-      )
-      expect((await listSites()).some((s) => s.host === '127.0.0.1')).toBe(false)
-    } finally {
-      await app.main.eval(`window.api.browserView.closeTab(${JSON.stringify(tabId)})`)
-    }
+    // ── 搜索：子串留住、不匹配滤掉 ──
+    await page.typeSiteSearch('127.0')
+    expect((await page.shot()).sites.map((r) => r.host)).toContain('127.0.0.1')
+    await page.typeSiteSearch('no-such-site.example')
+    const filtered = await page.shot()
+    expect(filtered.sites).toEqual([])
+    expect(filtered.sitesEmptyText).not.toBe('')
+    await page.typeSiteSearch('')
+    expect((await page.shot()).sites.map((r) => r.host)).toContain('127.0.0.1')
+
+    // ── 逐站删除 ──
+    await page.clearSite('127.0.0.1')
+    await until(
+      async () => !(await listSites()).some((s) => s.host === '127.0.0.1'),
+      'site data gone from the partition'
+    )
+    await until(
+      async () => !(await page.shot()).sites.some((r) => r.host === '127.0.0.1'),
+      'site row gone from the settings page'
+    )
+
+    // ── 再访问一次，然后删除浏览数据 ──
+    const revisit = await createTab(fixture.url('/form.html?bs=e3b'))
+    await until(
+      async () => (await listSites()).some((s) => s.host === '127.0.0.1'),
+      'cookie saved again on revisit'
+    )
+    await shell.clickTab(settingsTab)
+    await until(
+      async () => (await page.shot()).sites.some((r) => r.host === '127.0.0.1'),
+      'settings page lists the revisited site'
+    )
+    await page.clearAll()
+    await until(async () => (await listSites()).length === 0, 'every site gone after delete all')
+    await until(async () => (await page.shot()).sites.length === 0, 'site list empty')
+
+    await closeTab(visit)
+    await closeTab(revisit)
   }, 120_000)
 })
 

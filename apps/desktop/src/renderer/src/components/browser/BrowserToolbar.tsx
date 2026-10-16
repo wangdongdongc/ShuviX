@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   Lock,
   RotateCw,
+  Settings,
   Square,
   TriangleAlert,
   X,
@@ -22,6 +23,7 @@ import {
 } from '../../stores/browserTabsStore'
 import { resolveOmniboxInput, SEARCH_ENGINES, urlDisplayOf, type SearchEngineId } from './omnibox'
 import { showMoreMenu } from './browserMenus'
+import { SiteInfoBubble } from './SiteInfoBubble'
 
 const iconBtn =
   'flex-shrink-0 p-1.5 rounded-full text-text-secondary hover:bg-bg-hover/70 disabled:opacity-35 disabled:hover:bg-transparent transition-colors'
@@ -81,7 +83,7 @@ export function BrowserToolbar({
       ) : (
         <button
           className={iconBtn}
-          disabled={!tab || tab.url === 'about:blank'}
+          disabled={!tab || tab.url === 'about:blank' || tab.url.startsWith('shuvix://')}
           onClick={() => tab && void view.reload(tab.id)}
           title={t('browser.refresh')}
           aria-label={t('browser.refresh')}
@@ -133,8 +135,41 @@ function Omnibox({
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
   const createTab = useBrowserTabsStore((s) => s.createTab)
   const zoomTab = useBrowserTabsStore((s) => s.zoomTab)
+  const setPageCover = useBrowserTabsStore((s) => s.setPageCover)
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState('')
+  /** 站点信息气泡开着的是哪个 tab 的哪个地址（换了 tab / 地址就当它关了） */
+  const [siteInfoFor, setSiteInfoFor] = useState<{ tabId: string; url: string } | null>(null)
+  const siteInfoOpen = !!tab && siteInfoFor?.tabId === tab.id && siteInfoFor.url === tab.url
+
+  // 气泡因为换了 tab / 地址而失效：把页面区的截图撤掉（views 回到页面区）
+  useEffect(() => {
+    if (siteInfoFor && !siteInfoOpen) {
+      const raf = requestAnimationFrame(() => {
+        setSiteInfoFor(null)
+        setPageCover(null)
+      })
+      return () => cancelAnimationFrame(raf)
+    }
+    return undefined
+  }, [siteInfoFor, siteInfoOpen, setPageCover])
+
+  /**
+   * 打开站点信息气泡：先按页面区的宽度抓一张截图顶上（原生页面会盖住 DOM 气泡），再开气泡。
+   * 抓不到图也照开 —— 页面区那段时间空着而已。
+   */
+  const openSiteInfo = async (): Promise<void> => {
+    if (!tab) return
+    const area = document.querySelector('[data-page-area]')?.getBoundingClientRect()
+    const width = Math.round((area?.width || window.innerWidth) * window.devicePixelRatio)
+    const snapshot = await window.api.browserView.capture(tab.id, width).catch(() => '')
+    setPageCover({ tabId: tab.id, snapshot })
+    setSiteInfoFor({ tabId: tab.id, url: tab.url })
+  }
+  const closeSiteInfo = (): void => {
+    setSiteInfoFor(null)
+    setPageCover(null)
+  }
 
   const url = tab && tab.url !== 'about:blank' ? tab.url : ''
 
@@ -180,11 +215,16 @@ function Omnibox({
         ? TriangleAlert
         : display.kind === 'local'
           ? FileText
-          : Globe
+          : display.kind === 'internal'
+            ? Settings
+            : Globe
+  /** 有站点信息可看的页面（网页与本地文件）：安全图标是个按钮 */
+  const hasSiteInfo =
+    display.kind === 'secure' || display.kind === 'insecure' || display.kind === 'local'
 
   return (
     <div
-      className={`flex-1 min-w-0 flex items-center gap-2 h-8 mx-1 px-3 rounded-full transition-colors ${
+      className={`relative flex-1 min-w-0 flex items-center gap-2 h-8 mx-1 px-3 rounded-full transition-colors ${
         editing ? 'bg-bg-primary ring-2 ring-accent/50' : 'bg-bg-secondary hover:bg-bg-hover/60'
       }`}
       data-omnibox
@@ -222,16 +262,27 @@ function Omnibox({
         >
           {url ? (
             <>
-              <span
-                className={`flex-shrink-0 flex items-center gap-1 ${
-                  display.kind === 'insecure' ? 'text-text-secondary' : 'text-text-tertiary'
-                }`}
-              >
-                <SecurityIcon size={13} />
-                {display.kind === 'insecure' && (
-                  <span className="text-[12px]">{t('browser.notSecure')}</span>
-                )}
-              </span>
+              {hasSiteInfo ? (
+                <button
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => (siteInfoOpen ? closeSiteInfo() : void openSiteInfo())}
+                  className={`flex-shrink-0 -ml-1.5 flex items-center gap-1 px-1.5 py-0.5 rounded-full hover:bg-bg-hover ${
+                    display.kind === 'insecure' ? 'text-text-secondary' : 'text-text-tertiary'
+                  }`}
+                  title={t('browser.siteInfo.button')}
+                  aria-label={t('browser.siteInfo.button')}
+                  data-site-info-button
+                >
+                  <SecurityIcon size={13} />
+                  {display.kind === 'insecure' && (
+                    <span className="text-[12px]">{t('browser.notSecure')}</span>
+                  )}
+                </button>
+              ) : (
+                <span className="flex-shrink-0 flex items-center text-text-tertiary">
+                  <SecurityIcon size={13} />
+                </span>
+              )}
               <span className="min-w-0 truncate text-[13px]">
                 <span className="text-text-primary">{display.host}</span>
                 <span className="text-text-tertiary">{display.rest}</span>
@@ -254,6 +305,7 @@ function Omnibox({
           {tab.zoomPercent}%
         </button>
       )}
+      {siteInfoOpen && tab && <SiteInfoBubble tab={tab} onClose={closeSiteInfo} />}
     </div>
   )
 }

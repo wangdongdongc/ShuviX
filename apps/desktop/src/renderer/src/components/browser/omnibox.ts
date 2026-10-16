@@ -3,6 +3,8 @@
  * 单独成文件（不放组件文件里）是因为组件文件只能导出组件，否则 fast refresh 失效。
  */
 
+import { internalPageOf } from '../../../../shared/browserInternalPages'
+
 /** 地址栏不是网址时用的搜索引擎（设置 → MCP → 内置浏览器那一行里可改） */
 export type SearchEngineId = 'google' | 'bing' | 'baidu' | 'duckduckgo'
 
@@ -52,6 +54,8 @@ const DOMAIN = /^[\p{L}\p{N}-]+(\.[\p{L}\p{N}-]+)*\.\p{L}{2,63}$/u
 export function resolveOmniboxInput(input: string, engine: SearchEngineId): string | null {
   const text = input.trim()
   if (!text) return null
+  // 认得的内部页面（shuvix://settings）原样交给主进程，由它打开那一页；不认得的 shuvix:// 当搜索词
+  if (internalPageOf(text)) return text
   if (PASS_THROUGH.test(text) || PASS_THROUGH_OPAQUE.test(text)) return text
   if (/\s/.test(text)) return searchUrl(text, engine)
 
@@ -74,13 +78,14 @@ export function resolveOmniboxInput(input: string, engine: SearchEngineId): stri
 
 /** 地址栏未聚焦时的样子：协议换成一个图标，主机名突出、其余变淡（Chrome 的显示方式） */
 export interface UrlDisplay {
-  /** secure = https；insecure = http；local = file:；other = 其余（about: / data: …） */
-  kind: 'secure' | 'insecure' | 'local' | 'other'
+  /** secure = https；insecure = http；local = file:；internal = shuvix://（设置页…）；other = 其余 */
+  kind: 'secure' | 'insecure' | 'local' | 'internal' | 'other'
   host: string
   rest: string
 }
 
 export function urlDisplayOf(url: string): UrlDisplay {
+  if (/^shuvix:\/\//i.test(url)) return { kind: 'internal', host: url, rest: '' }
   try {
     const u = new URL(url)
     const rest = `${u.pathname === '/' ? '' : u.pathname}${u.search}${u.hash}`

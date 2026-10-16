@@ -9,7 +9,7 @@
 
 import { session } from 'electron'
 import { defineHandler } from './registry'
-import { BROWSER_PARTITION } from '../services/browser'
+import { BROWSER_PARTITION, certExceptionHosts } from '../services/browser'
 import { createLogger } from '../logger'
 
 const log = createLogger('BrowserData')
@@ -17,6 +17,25 @@ const log = createLogger('BrowserData')
 export interface SavedSite {
   host: string
   cookieCount: number
+}
+
+/** 地址栏站点信息气泡里关于当前这页的几件事 */
+export interface SiteInfo {
+  /** 这个地址会带上的 cookie 数（含父域上的，比如 www.github.com 带着 .github.com 的） */
+  cookieCount: number
+  /** 用户在证书警告页上放行过这个站点（直到退出） */
+  certException: boolean
+}
+
+/** http(s) 地址 → URL；别的（about: / file: / 内部页面 / 不合法）回 null */
+function webUrl(url: unknown): URL | null {
+  if (typeof url !== 'string') return null
+  try {
+    const u = new URL(url)
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u : null
+  } catch {
+    return null
+  }
 }
 
 export function registerBrowserDataHandlers(): void {
@@ -61,6 +80,46 @@ export function registerBrowserDataHandlers(): void {
 
     log.info(`Cleared ${removed} cookies and storage data for ${host}`)
   })
+
+  /** 站点信息气泡：这页的 cookie 数与证书放行状态（非网页回 0 / false） */
+  defineHandler('browser-data:site-info', async (_ctx, url: string): Promise<SiteInfo> => {
+    const u = webUrl(url)
+    if (!u) return { cookieCount: 0, certException: false }
+    const sess = session.fromPartition(BROWSER_PARTITION)
+    const cookies = await sess.cookies.get({ url: u.href })
+    return {
+      cookieCount: cookies.length,
+      certException: certExceptionHosts().includes(u.hostname)
+    }
+  })
+
+  /**
+   * 站点信息气泡里的「清除此网站的数据」：这个地址带着的全部 cookie（含父域上的）+ 这个 origin 的
+   * localStorage / IndexedDB / 缓存。按 cookie 的 domain 精确匹配的 clear-site 在这里不够 —— www.x.com
+   * 的登录态常写在 .x.com 上。
+   */
+  defineHandler('browser-data:clear-site-data', async (_ctx, url: string): Promise<void> => {
+    const u = webUrl(url)
+    if (!u) return
+    const sess = session.fromPartition(BROWSER_PARTITION)
+    const cookies = await sess.cookies.get({ url: u.href })
+    for (const c of cookies) {
+      const host = (c.domain ?? '').replace(/^\./, '')
+      try {
+        await sess.cookies.remove(
+          `${c.secure ? 'https' : 'http'}://${host}${c.path ?? '/'}`,
+          c.name
+        )
+      } catch (e) {
+        log.warn(`Failed to remove cookie ${c.name}@${c.domain}`, e)
+      }
+    }
+    await sess.clearStorageData({ origin: u.origin })
+    log.info(`Cleared ${cookies.length} cookies and storage data for ${u.origin}`)
+  })
+
+  /** 设置页「证书」一节：用户放行过证书错误的站点（直到退出） */
+  defineHandler('browser-data:cert-exceptions', (): string[] => certExceptionHosts())
 
   defineHandler('browser-data:clear-all', async (): Promise<void> => {
     const sess = session.fromPartition(BROWSER_PARTITION)

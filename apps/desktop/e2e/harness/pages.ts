@@ -6296,7 +6296,7 @@ export function settingsNavPane(settings: CdpClient): SettingsNavPane {
 // 设置窗口「MCP」页（McpClientPanel；openSettings('mcp') 后调用）
 //
 // 锚点：行根 `[data-mcp-server=<name>]`，展开区里宿主附加的设置 `[data-mcp-server-extra=<name>]`
-// （桌面：内置 browser 那一行挂着 BrowserDataSettings）。行内按钮按**图标**认（重连
+// （桌面：内置 browser 那一行挂着 BrowserSettingsLink —— 打开浏览器窗口设置页的入口）。行内按钮按**图标**认（重连
 // refresh-cw / 编辑 pencil / 删除 trash-2），启用开关是行尾 `span[title]` 里的 Toggle，开的判据是
 // 它的 `bg-accent` 背景（关是 bg-bg-hover）。文案是 i18n 产物，一律不钉。
 //
@@ -6321,7 +6321,11 @@ export interface McpRowShot {
   expanded: boolean
 }
 
-/** 展开区里宿主附加设置（`data-mcp-server-extra`）的快照；这一行没有附加设置时 `present: false` */
+/**
+ * 展开区里宿主附加设置（`data-mcp-server-extra`）的快照；这一行没有附加设置时 `present: false`。
+ * 除 `present` 外的字段按旧的浏览器面板（行为一节 + 已保存站点一节）的结构读 —— 那块面板 2026-10-16 已搬进
+ * 浏览器窗口的设置页，`browser` 行如今只剩入口，用 `browserSettingsLink()` 读它。
+ */
 export interface McpExtraShot {
   present: boolean
   /** 附加设置里各分节的标题（h3，DOM 序） */
@@ -6349,14 +6353,30 @@ export interface McpSettingsPane {
   expandedToolNames(name: string): Promise<string[]>
   /** 展开区里宿主附加设置的快照 */
   extra(name: string): Promise<McpExtraShot>
-  /** 点附加设置第一节的第一颗开关（浏览器：忽略证书错误） */
-  clickExtraFirstToggle(name: string): Promise<void>
-  /** 点附加设置「已保存站点」一节的刷新（标题行里的最后一颗按钮） */
-  refreshSites(name: string): Promise<void>
-  /** 点某个站点行的删除，再点随之出现的确认 */
-  clearSite(name: string, host: string): Promise<void>
+  /** 内置 `browser` 行展开区里那块「浏览器设置」入口（BrowserSettingsLink）的快照 */
+  browserSettingsLink(): Promise<McpBrowserLinkShot>
+  /** 点那块入口里的「打开浏览器设置」（开浏览器窗口并打开 shuvix://settings） */
+  openBrowserSettings(): Promise<void>
   /** 点某一行的启用开关 */
   clickEnabled(name: string): Promise<void>
+}
+
+/**
+ * 内置 `browser` 行展开区（2026-10-16 起只剩一个入口，浏览器自己的设置在浏览器窗口的 shuvix://settings）：
+ * 锚点 = `[data-mcp-server-extra="browser"]` 里的 `[data-browser-settings-link]`，按钮 =
+ * `[data-open-browser-settings]`。开关 / 站点列表 / 输入框按数量报，好断「一个都没有」。
+ */
+export interface McpBrowserLinkShot {
+  /** 展开区里有这块入口 */
+  present: boolean
+  /** 入口里有「打开浏览器设置」按钮 */
+  openButton: boolean
+  /** 展开区里的开关（Toggle：`button.rounded-full`）个数 */
+  toggles: number
+  /** 展开区里的站点行（`[data-site-row]` 或旧面板的等宽 host 文字）个数 */
+  siteRows: number
+  /** 展开区里的输入框 / 下拉框个数 */
+  inputs: number
 }
 
 export function mcpSettingsPane(settings: CdpClient): McpSettingsPane {
@@ -6366,8 +6386,6 @@ export function mcpSettingsPane(settings: CdpClient): McpSettingsPane {
   const EXTRA = (name: string): string =>
     `[...document.querySelectorAll('[data-mcp-server-extra]')]
       .find((el) => el.getAttribute('data-mcp-server-extra') === ${JSON.stringify(name)})`
-  // 附加设置里的第二节 = 已保存站点（BrowserDataSettings 的固定顺序：行为 → 站点）
-  const SITES_SECTION = (name: string): string => `(${EXTRA(name)})?.querySelectorAll('section')[1]`
   // 展开区 = 行根里头行之后那块 py-3 的容器（头行自己也是 px-4 py-3，所以跳过第一个子节点；
   // 两者之间可能夹着一条 py-2 的错误行）
   const BODY = (rowExpr: string): string =>
@@ -6446,58 +6464,29 @@ export function mcpSettingsPane(settings: CdpClient): McpSettingsPane {
           sitesEmptyText: (sites?.querySelector('div.text-center')?.textContent ?? '').trim()
         }
       })()`),
-    clickExtraFirstToggle: async (name) => {
+    browserSettingsLink: () =>
+      settings.eval<McpBrowserLinkShot>(`(() => {
+        const extra = ${EXTRA('browser')}
+        const link = extra?.querySelector('[data-browser-settings-link]')
+        return {
+          present: !!link,
+          openButton: !!link?.querySelector('[data-open-browser-settings]'),
+          toggles: extra?.querySelectorAll('button.rounded-full').length ?? 0,
+          siteRows:
+            (extra?.querySelectorAll('[data-site-row]').length ?? 0) +
+            (extra?.querySelectorAll('span.font-mono').length ?? 0),
+          inputs: extra?.querySelectorAll('input, select').length ?? 0
+        }
+      })()`),
+    openBrowserSettings: async () => {
       const ok = await settings.eval<boolean>(`(() => {
-        const t = (${EXTRA(name)})?.querySelector('section button.rounded-full')
-        if (!t) return false
-        t.click()
+        const btn = (${EXTRA('browser')})?.querySelector('[data-open-browser-settings]')
+        if (!btn) return false
+        btn.click()
         return true
       })()`)
-      if (!ok) throw new Error(`mcp settings: extra toggle of "${name}" not found`)
+      if (!ok) throw new Error('mcp settings: "Open browser settings" not in the browser row')
       await sleep(200)
-    },
-    refreshSites: async (name) => {
-      const ok = await settings.eval<boolean>(`(() => {
-        const head = (${SITES_SECTION(name)})?.firstElementChild
-        const btns = [...(head?.querySelectorAll('button') ?? [])]
-        const refresh = btns[btns.length - 1]
-        if (!refresh) return false
-        refresh.click()
-        return true
-      })()`)
-      if (!ok) throw new Error(`mcp settings: saved-sites refresh of "${name}" not found`)
-      await sleep(300)
-    },
-    clearSite: async (name, host) => {
-      // 站点行 = 含这个 host 的等宽文字的那一行（SettingsRow 根：px-4 py-3 的 flex 行）
-      const SITE_ROW = `[...((${SITES_SECTION(name)})?.querySelectorAll('span.font-mono') ?? [])]
-        .find((s) => (s.textContent ?? '').trim() === ${JSON.stringify(host)})
-        ?.closest('div.px-4')`
-      const clickIn = async (expr: string, what: string): Promise<void> => {
-        await until(
-          () =>
-            settings.eval<boolean>(`(() => {
-              const row = ${SITE_ROW}
-              const btn = row ? (${expr}) : null
-              if (!btn) return false
-              btn.click()
-              return true
-            })()`),
-          `saved site "${host}": ${what}`
-        )
-        await sleep(200)
-      }
-      await clickIn(
-        `[...row.querySelectorAll('button')].find((b) => b.querySelector('.lucide-trash-2'))`,
-        'delete'
-      )
-      // 删除点下去之后原地换成「确认 / 取消」两颗文字按钮，确认在前（等垃圾桶那颗真的换下去）
-      await clickIn(
-        `[...row.querySelectorAll('button')].some((b) => b.querySelector('.lucide-trash-2'))
-          ? null
-          : row.querySelectorAll('button')[0]`,
-        'confirm'
-      )
     },
     clickEnabled: (name) =>
       clickInRow(
@@ -7759,6 +7748,10 @@ export interface BrowserShellPane {
   clickZoomIndicator(): Promise<void>
   /** 页面区是新标签页 */
   newTabPageShown(): Promise<boolean>
+  /** 新标签页搜索框的占位文字（写着搜索引擎名）；没有新标签页回 null */
+  newTabPagePlaceholder(): Promise<string | null>
+  /** 标签条上某个标签的文字（标题 / 内部页面的名字）；标签不在回 null */
+  tabLabel(tabId: string): Promise<string | null>
   /** 右键一个标签：钉好要选的项（null = 取消）、等菜单弹出，回菜单项 */
   tabMenu(tabId: string, pick: string | null): Promise<MenuItemShot[]>
   /** 工具条上的 ⋮ */
@@ -7878,6 +7871,15 @@ export function browserShellPane(bw: CdpClient): BrowserShellPane {
       })()`),
     clickZoomIndicator: () => clickSel('[data-browser-zoom]', 'zoom indicator'),
     newTabPageShown: () => bw.eval<boolean>(`!!document.querySelector('[data-new-tab-page]')`),
+    newTabPagePlaceholder: () =>
+      bw.eval<string | null>(
+        `document.querySelector('[data-new-tab-page] input')?.getAttribute('placeholder') ?? null`
+      ),
+    tabLabel: (tabId) =>
+      bw.eval<string | null>(`(() => {
+        const el = ${TAB(tabId)}
+        return el ? (el.textContent ?? '').trim() : null
+      })()`),
     tabMenu: (tabId, pick) =>
       menu(
         `const el = ${TAB(tabId)}
@@ -7905,6 +7907,268 @@ export function browserShellPane(bw: CdpClient): BrowserShellPane {
         pick,
         'search-tabs menu'
       )
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 浏览器窗口里的三样 DOM（2026-10-16）：内部设置页 shuvix://settings（BrowserSettingsPage）、地址栏的站点信息
+// 气泡（SiteInfoBubble）、证书错误的整页警告（PageFaces 的 CertInterstitial）。都在浏览器窗口这个客户端上读。
+//
+// 锚点：
+//   - 设置页根 = `[data-browser-settings-page]`（**一律以它为范围**：主设置窗口的导航也叫 `data-settings-nav`）；
+//     左侧导航 = 其中的 `[data-settings-nav="<节>"]`，三节 = `[data-settings-section="search|privacy|certificates"]`；
+//     搜索引擎 = search 节里唯一的 `select`；「忽略证书错误」= certificates 节里的 Toggle（`button.rounded-full`，
+//     开 = `bg-accent`），开着时的警告 = 该节里的 `lucide-triangle-alert`；「放行过的网站」= certificates 节卡片的
+//     最后一行，subtitle 是标题块的第二个子节点；站点行 = `[data-site-row="<host>"]`（删除 `[data-clear-site]` →
+//     确认 `[data-clear-site-confirm]`），搜索框 = `[data-site-search]`，空态 = privacy 节里的 `div.text-center p`；
+//     删除浏览数据 = `[data-clear-all]` → `[data-clear-all-confirm]`；
+//   - 站点信息按钮 = `[data-site-info-button]`（地址栏左端，只有网页 / 本地文件有）；气泡 = `[data-site-info="<host>"]`，
+//     连接一行 = `[data-site-connection="secure|insecure|local"]`，cookie 数 = `[data-site-cookies="<n>"]`，删除 =
+//     `[data-site-clear]` → `[data-site-clear-confirm]`，网站设置 = `[data-site-settings]`；气泡开着时页面区的截图 =
+//     `[data-page-cover]`（`<img>`）。Esc 是 document 上的 keydown；
+//   - 证书警告 = `[data-cert-interstitial="<host:port>"]`（也是 `[data-page-error="cert"]`），高级 = `[data-cert-advanced]`，
+//     继续前往 = `[data-cert-proceed]`（高级展开后才有），返回 = `[data-cert-back]`。
+
+export interface BrowserSettingsPageShot {
+  /** 设置页挂着 */
+  present: boolean
+  /** 左侧导航的节（紧凑版没有） */
+  navIds: string[]
+  /** 搜索引擎下拉框的值 */
+  engine: string | null
+  /** 「忽略证书错误」开着；找不到开关为 null */
+  ignoreCertOn: boolean | null
+  /** 开着时的那条警告在 */
+  warning: boolean
+  /** 「放行过的网站」那一行写的字（没有时是「None / 没有 / なし」） */
+  certExceptionsText: string
+  /** 网站数据的行（DOM 序） */
+  sites: Array<{ host: string; text: string }>
+  /** 网站数据搜索框的值；不在为 null */
+  siteSearch: string | null
+  /** 网站数据的空态文字（有行时为空串） */
+  sitesEmptyText: string
+}
+
+export interface BrowserSettingsPagePane {
+  shot(): Promise<BrowserSettingsPageShot>
+  /** 选一个搜索引擎（原生 value setter + change 事件） */
+  chooseEngine(value: string): Promise<void>
+  /** 拨一下「忽略证书错误」 */
+  toggleIgnoreCert(): Promise<void>
+  /** 往网站数据搜索框里打一段字（整段替换） */
+  typeSiteSearch(text: string): Promise<void>
+  /** 某个站点行：删除 → 确认 */
+  clearSite(host: string): Promise<void>
+  /** 删除浏览数据 → 确认 */
+  clearAll(): Promise<void>
+}
+
+/** 浏览器窗口里的设置页（shuvix://settings） */
+export function browserSettingsPagePane(bw: CdpClient): BrowserSettingsPagePane {
+  const ROOT = `document.querySelector('[data-browser-settings-page]')`
+  const SECTION = (id: string): string =>
+    `${ROOT}?.querySelector('[data-settings-section="${id}"]')`
+  const clickIn = async (expr: string, what: string): Promise<void> => {
+    await until(
+      () =>
+        bw.eval<boolean>(`(() => {
+          const el = ${expr}
+          if (!el) return false
+          el.click()
+          return true
+        })()`),
+      `browser settings page: ${what}`
+    )
+    await sleep(150)
+  }
+  return {
+    shot: () =>
+      bw.eval<BrowserSettingsPageShot>(`(() => {
+        const root = ${ROOT}
+        if (!root) {
+          return { present: false, navIds: [], engine: null, ignoreCertOn: null, warning: false,
+            certExceptionsText: '', sites: [], siteSearch: null, sitesEmptyText: '' }
+        }
+        const certs = ${SECTION('certificates')}
+        const toggle = certs?.querySelector('button.rounded-full')
+        const card = certs?.querySelector('div.rounded-xl')
+        const lastRow = card?.lastElementChild
+        const subtitle = lastRow?.firstElementChild?.children?.[1]
+        const search = root.querySelector('[data-site-search]')
+        return {
+          present: true,
+          navIds: [...root.querySelectorAll('[data-settings-nav]')].map((b) => b.getAttribute('data-settings-nav')),
+          engine: ${SECTION('search')}?.querySelector('select')?.value ?? null,
+          ignoreCertOn: toggle ? toggle.className.includes('bg-accent') : null,
+          warning: !!certs?.querySelector('.lucide-triangle-alert'),
+          certExceptionsText: (subtitle?.textContent ?? '').trim(),
+          sites: [...root.querySelectorAll('[data-site-row]')].map((r) => ({
+            host: r.getAttribute('data-site-row') ?? '',
+            text: (r.textContent ?? '').trim()
+          })),
+          siteSearch: search ? search.value : null,
+          sitesEmptyText: (${SECTION('privacy')}?.querySelector('div.text-center p')?.textContent ?? '').trim()
+        }
+      })()`),
+    chooseEngine: async (value) => {
+      const ok = await bw.eval<boolean>(`(() => {
+        const el = ${SECTION('search')}?.querySelector('select')
+        if (!el) return false
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+        setter.call(el, ${JSON.stringify(value)})
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error('browser settings page: search-engine select not found')
+      await sleep(150)
+    },
+    toggleIgnoreCert: () =>
+      clickIn(
+        `${SECTION('certificates')}?.querySelector('button.rounded-full')`,
+        'ignore-cert toggle'
+      ),
+    typeSiteSearch: async (text) => {
+      const ok = await bw.eval<boolean>(`(() => {
+        const el = ${ROOT}?.querySelector('[data-site-search]')
+        if (!el) return false
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+        setter.call(el, ${JSON.stringify(text)})
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error('browser settings page: site search box not found')
+      await sleep(100)
+    },
+    clearSite: async (host) => {
+      const ROW = `${ROOT}?.querySelector('[data-site-row="${host}"]')`
+      await clickIn(`${ROW}?.querySelector('[data-clear-site]')`, `delete site ${host}`)
+      await clickIn(`${ROW}?.querySelector('[data-clear-site-confirm]')`, `confirm delete ${host}`)
+    },
+    clearAll: async () => {
+      await clickIn(`${ROOT}?.querySelector('[data-clear-all]')`, 'delete browsing data')
+      await clickIn(
+        `${ROOT}?.querySelector('[data-clear-all-confirm]')`,
+        'confirm delete browsing data'
+      )
+    }
+  }
+}
+
+export interface BrowserSiteInfoShot {
+  /** 气泡的 `data-site-info`（主机名） */
+  host: string
+  /** `data-site-connection`：secure / insecure / local */
+  connection: string
+  /** 连接那一行的文字 */
+  connectionText: string
+  /** `data-site-cookies` 的值（还没回答时为空串）；本地文件没有这一节为 null */
+  cookies: string | null
+}
+
+export interface BrowserSiteInfoPane {
+  /** 地址栏左端有站点信息按钮 */
+  buttonPresent(): Promise<boolean>
+  /** 点站点信息按钮（开 / 关气泡） */
+  clickButton(): Promise<void>
+  /** 气泡的快照；没开回 null */
+  bubble(): Promise<BrowserSiteInfoShot | null>
+  /**
+   * 页面区截图（`[data-page-cover]`）的 src 的**前 64 个字符**（整张 dataURL 动辄几 MB，经 CDP 回传会失败）；
+   * 没有回 null
+   */
+  coverSrc(): Promise<string | null>
+  /** 在 document 上按 Esc */
+  pressEscape(): Promise<void>
+  /** 删除此网站的数据 → 确认 */
+  clearData(): Promise<void>
+  /** 点「网站设置」 */
+  openSiteSettings(): Promise<void>
+}
+
+/** 地址栏的站点信息气泡 */
+export function browserSiteInfoPane(bw: CdpClient): BrowserSiteInfoPane {
+  const BUBBLE = `document.querySelector('[data-site-info]')`
+  const clickIn = async (expr: string, what: string): Promise<void> => {
+    await until(
+      () =>
+        bw.eval<boolean>(`(() => {
+          const el = ${expr}
+          if (!el || el.disabled) return false
+          el.click()
+          return true
+        })()`),
+      `site info: ${what}`
+    )
+    await sleep(150)
+  }
+  return {
+    buttonPresent: () => bw.eval<boolean>(`!!document.querySelector('[data-site-info-button]')`),
+    clickButton: () => clickIn(`document.querySelector('[data-site-info-button]')`, 'button'),
+    bubble: () =>
+      bw.eval<BrowserSiteInfoShot | null>(`(() => {
+        const el = ${BUBBLE}
+        if (!el) return null
+        const conn = el.querySelector('[data-site-connection]')
+        const cookies = el.querySelector('[data-site-cookies]')
+        return {
+          host: el.getAttribute('data-site-info') ?? '',
+          connection: conn?.getAttribute('data-site-connection') ?? '',
+          connectionText: (conn?.textContent ?? '').trim(),
+          cookies: cookies ? cookies.getAttribute('data-site-cookies') : null
+        }
+      })()`),
+    coverSrc: () =>
+      bw.eval<string | null>(
+        `document.querySelector('[data-page-cover]')?.getAttribute('src')?.slice(0, 64) ?? null`
+      ),
+    pressEscape: async () => {
+      await bw.eval(
+        `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`
+      )
+      await sleep(100)
+    },
+    clearData: async () => {
+      await clickIn(`${BUBBLE}?.querySelector('[data-site-clear]')`, 'delete data for this site')
+      await clickIn(`${BUBBLE}?.querySelector('[data-site-clear-confirm]')`, 'confirm delete')
+    },
+    openSiteSettings: () =>
+      clickIn(`${BUBBLE}?.querySelector('[data-site-settings]')`, 'site settings')
+  }
+}
+
+export interface BrowserCertInterstitialPane {
+  /** 页面区显示着的证书警告的 host（`data-cert-interstitial`）；没有回 null */
+  host(): Promise<string | null>
+  /** 「继续前往（不安全）」在（高级展开后才有） */
+  proceedVisible(): Promise<boolean>
+  clickAdvanced(): Promise<void>
+  clickProceed(): Promise<void>
+  clickBack(): Promise<void>
+}
+
+/** 证书错误的整页警告 */
+export function browserCertInterstitialPane(bw: CdpClient): BrowserCertInterstitialPane {
+  const ROOT = `document.querySelector('[data-cert-interstitial]')`
+  const clickSel = async (sel: string, what: string): Promise<void> => {
+    await until(
+      () =>
+        bw.eval<boolean>(`(() => {
+          const el = ${ROOT}?.querySelector(${JSON.stringify(sel)})
+          if (!el) return false
+          el.click()
+          return true
+        })()`),
+      `certificate warning: ${what}`
+    )
+    await sleep(150)
+  }
+  return {
+    host: () => bw.eval<string | null>(`${ROOT}?.getAttribute('data-cert-interstitial') ?? null`),
+    proceedVisible: () => bw.eval<boolean>(`!!${ROOT}?.querySelector('[data-cert-proceed]')`),
+    clickAdvanced: () => clickSel('[data-cert-advanced]', 'Advanced'),
+    clickProceed: () => clickSel('[data-cert-proceed]', 'Proceed (unsafe)'),
+    clickBack: () => clickSel('[data-cert-back]', 'Back to safety')
   }
 }
 

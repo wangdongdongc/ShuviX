@@ -262,8 +262,10 @@ describe('⋮ 菜单（CB-U47）', () => {
     ])
     await more(zoomed, 'single', 'openExternal')
     expect(api.app.openExternal.mock.calls).toEqual([['https://a.test/']])
+    // ⋮ → 设置：打开浏览器自己的设置页（内部页面），不再去主设置窗口
     await more(zoomed, 'single', 'settings')
-    expect(api.app.openSettings.mock.calls).toEqual([['mcp']])
+    expect(api.browserView.openInternal.mock.calls).toEqual([['settings']])
+    expect(api.app.openSettings).not.toHaveBeenCalled()
   })
 
   it('CB-U47 viewWall / viewSingle → onViewMode', async () => {

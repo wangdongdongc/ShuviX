@@ -13,7 +13,8 @@
  *  - `app:open-folder` / `app:reveal-path` / `widget:revealExport` → 显示那个服务端路径、给一个复制按钮；
  *    `*:openFolder` / `knowledge:revealFile` 先经 `fs:locateFolder` 问到路径，再同样显示。
  *
- * 剩下的（`pinChat:pin` / `pinChat:focus` / `browser-view:open-window` / `widget:pickExportTarget`）浏览器里没有
+ * 剩下的（`pinChat:pin` / `pinChat:focus` / `browser-view:open-window` / `browser-view:open-settings` /
+ * `widget:pickExportTarget`）浏览器里没有
  * 对应的东西：入口在 web 上是藏起来的，万一被调到就当场拒绝并给一条看得见的提示（不悄悄假装成功）。
  */
 import { API_TABLE, DESKTOP_ONLY_CHANNELS } from '../../../shared/apiTable'

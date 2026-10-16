@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { selectedTab, useBrowserTabsStore } from '../../stores/browserTabsStore'
+import { internalPageOfTab, selectedTab, useBrowserTabsStore } from '../../stores/browserTabsStore'
 import { NewTabPage, PageErrorView } from './PageFaces'
+import { BrowserSettingsPage } from './BrowserSettingsPage'
 import { useDialogOverlay } from './useDialogOverlay'
 import type { SearchEngineId } from './omnibox'
 
@@ -15,12 +16,16 @@ import type { SearchEngineId } from './omnibox'
 export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React.JSX.Element {
   const tab = useBrowserTabsStore(selectedTab)
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
-  const overlay = useDialogOverlay()
+  const dialogOpen = useDialogOverlay()
+  const cover = useBrowserTabsStore((s) => s.pageCover)
+  // 对话框、站点信息气泡开着：原生页面让位（它会盖住 DOM 弹层），页面区由截图顶着
+  const overlay = dialogOpen || !!cover
   const pageRef = useRef<HTMLDivElement | null>(null)
   const rafRef = useRef(0)
 
+  const internal = tab ? internalPageOfTab(tab) : null
   const isBlank = !tab || !tab.url || tab.url === 'about:blank'
-  const showsPage = !!tab && !isBlank && !tab.loadError
+  const showsPage = !!tab && !isBlank && !internal && !tab.loadError
   const tabId = tab?.id ?? null
 
   const syncLayout = useCallback(() => {
@@ -80,13 +85,25 @@ export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React
           engine={engine}
           onNavigate={(url) => useBrowserTabsStore.getState().createTab(url)}
         />
+      ) : internal === 'settings' ? (
+        <BrowserSettingsPage />
       ) : isBlank ? (
         <NewTabPage engine={engine} onNavigate={(url) => navigateTab(tab.id, url)} />
       ) : tab.loadError ? (
         <PageErrorView tab={tab} onRetry={(url) => navigateTab(tab.id, url)} />
       ) : (
         /* WebContentsView 占位区域 —— 选中那页的 view 叠放在此 div 上方 */
-        <div ref={pageRef} className="absolute inset-0" data-page-area data-browser-page={tab.id} />
+        <div ref={pageRef} className="absolute inset-0" data-page-area data-browser-page={tab.id}>
+          {cover?.tabId === tab.id && cover.snapshot && (
+            <img
+              src={cover.snapshot}
+              alt=""
+              draggable={false}
+              className="absolute inset-0 w-full h-full object-cover object-top"
+              data-page-cover
+            />
+          )}
+        </div>
       )}
     </div>
   )

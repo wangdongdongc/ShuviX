@@ -325,9 +325,12 @@ export const API_TABLE = {
     stop: invoke('browser-view:stop', 1),
     getUrl: invoke('browser-view:get-url', 1),
     setLayout: send('browser-view:set-layout', 1),
-    capture: invoke('browser-view:capture', 1),
+    capture: invoke('browser-view:capture', 2),
     zoom: invoke('browser-view:zoom', 2),
     openSession: invoke('browser-view:open-session', 1),
+    openSettings: invoke('browser-view:open-settings', 0),
+    openInternal: invoke('browser-view:open-internal', 1),
+    proceedUnsafe: invoke('browser-view:proceed-unsafe', 1),
     setVisible: send('browser-view:set-visible', 1),
     onTabCreated: event('browser-view:tab-created', 1),
     onTabClosed: event('browser-view:tab-closed', 1),
@@ -352,7 +355,10 @@ export const API_TABLE = {
   browserData: {
     listSites: invoke('browser-data:list-sites', 0),
     clearSite: invoke('browser-data:clear-site', 1),
-    clearAll: invoke('browser-data:clear-all', 0)
+    clearAll: invoke('browser-data:clear-all', 0),
+    siteInfo: invoke('browser-data:site-info', 1),
+    clearSiteData: invoke('browser-data:clear-site-data', 1),
+    certExceptions: invoke('browser-data:cert-exceptions', 0)
   },
   /** 技能 */
   skill: {
@@ -498,7 +504,8 @@ export const DESKTOP_ONLY_CHANNELS: Readonly<Record<string, string>> = {
   'widgetWindow:open': 'opens a widget window on this computer',
   'pinChat:pin': 'opens a floating chat window on this computer',
   'pinChat:focus': 'focuses a floating chat window on this computer',
-  'browser-view:open-window': 'opens the in-app browser window on this computer'
+  'browser-view:open-window': 'opens the in-app browser window on this computer',
+  'browser-view:open-settings': 'opens the in-app browser window on this computer'
 }
 
 /** 一个 override 成员底下用到的通道（`null` = 不走通道，如 `app.platform`） */

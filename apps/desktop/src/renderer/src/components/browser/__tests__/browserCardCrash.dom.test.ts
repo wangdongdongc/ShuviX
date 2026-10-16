@@ -106,7 +106,7 @@ describe('页面崩溃了的卡片（CR-U18）', () => {
     expect(heading()?.textContent?.trim()).toBe('This page crashed')
     expect(detail()).toBe("The page's process stopped (oom).")
     expect(container.textContent).not.toContain('Error code')
-    expect(container.textContent).not.toContain(i18n.t('browser.error.certHint'))
+    expect(container.querySelector('[data-cert-interstitial]')).toBeNull()
     expect(container.textContent).not.toContain("This site can't be reached")
     expect(container.querySelector('[data-page-area]')).toBeNull()
     expect(p.registerPlaceholder.mock.calls.filter(([el]) => el != null)).toEqual([])

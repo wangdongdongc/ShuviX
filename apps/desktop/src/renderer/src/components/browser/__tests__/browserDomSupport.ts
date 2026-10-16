@@ -62,7 +62,14 @@ export interface FakeApi {
   app: Record<string, unknown> & { openExternal: Mock; openSettings: Mock; windowReady: Mock }
   settings: { getAll: Mock; set: Mock }
   events: { subscribe: Mock }
-  browserData: { listSites: Mock; clearSite: Mock; clearAll: Mock }
+  browserData: {
+    listSites: Mock
+    clearSite: Mock
+    clearAll: Mock
+    siteInfo: Mock
+    clearSiteData: Mock
+    certExceptions: Mock
+  }
   /** 下一次菜单弹出时「选」哪一项（null = 取消）；弹一次清一次 */
   menuPick: string | null
   /** settings.getAll 回什么 */
@@ -97,6 +104,9 @@ const ACTIONS = [
   'stop',
   'zoom',
   'openSession',
+  'openSettings',
+  'openInternal',
+  'proceedUnsafe',
   'setLayout',
   'setVisible',
   'capture'
@@ -131,7 +141,10 @@ export function installFakeApi(platform = 'darwin'): FakeApi {
     browserData: {
       listSites: vi.fn(async () => []),
       clearSite: vi.fn(async () => undefined),
-      clearAll: vi.fn(async () => undefined)
+      clearAll: vi.fn(async () => undefined),
+      siteInfo: vi.fn(async () => ({ cookieCount: 0, certException: false })),
+      clearSiteData: vi.fn(async () => undefined),
+      certExceptions: vi.fn(async () => [])
     },
     menuPick: null,
     settingsMap: {}

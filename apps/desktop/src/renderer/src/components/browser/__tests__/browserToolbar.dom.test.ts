@@ -11,6 +11,13 @@
  *   CB-U43  缩放标识只在不是 100% 的非空白页上出现，点它 → zoom(id, 'reset')；
  *   CB-U44  后退 / 前进按 canGoBack / canGoForward 禁用、点了调 goBack / goForward；加载中是停止按钮；
  *           空白页刷新禁用；视图切换回另一种视图；⋮ 弹原生菜单。
+ *   BS-U25  内部页面（shuvix://settings）：地址栏显示 shuvix://settings、没有站点信息按钮、刷新禁用；
+ *   BS-U26  地址栏里敲 shuvix://settings + Enter → navigate(id, 'shuvix://settings')（交给主进程，不搜索）；
+ *   BS-U27  站点信息按钮：https / http（写着 Not secure）/ file: 有；about:blank / 没有 tab / data: 没有；
+ *   BS-U28  点它：先按页面区宽度 × devicePixelRatio（取整）capture，抓到之前没有气泡、没有 pageCover；抓到之后
+ *           pageCover = {tabId, snapshot}、出现 [data-site-info]；capture 失败 → cover 的截图是 ''，气泡照开；
+ *   BS-U29  关掉（气泡没了、pageCover 回 null）：Esc、在外面 mousedown、气泡上的 X、再点一次按钮（不再抓图）、
+ *           选中的 tab 换了、地址变了、tab 关了；截图回来之前用户已经换了 tab → 不留气泡、pageCover 为 null。
  *
  * store 直接灌；`window.api` 是 browserDomSupport 的假件；真 en 文案。
  */
@@ -32,6 +39,7 @@ import {
   keyDown,
   mountInto,
   mouseDown,
+  stubRects,
   tabInfo,
   typeInto,
   type FakeApi,
@@ -341,5 +349,247 @@ describe('按钮（CB-U44）', () => {
     click(btn('[data-browser-more]'))
     await flush()
     expect(api.contextMenu.popup).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('内部页面（BS-U25 / BS-U26）', () => {
+  it('BS-U25 设置页：地址栏显示 shuvix://settings，没有站点信息按钮，刷新禁用', async () => {
+    seed([tabInfo({ id: 's', url: 'shuvix://settings' })], 's')
+    await mount()
+    const d = display()!
+    expect(d.getAttribute('data-omnibox-display')).toBe('shuvix://settings')
+    expect(d.textContent).toContain('shuvix://settings')
+    expect($('[data-site-info-button]')).toBeNull()
+    expect(d.textContent).not.toContain('Not secure')
+    expect($<HTMLButtonElement>('[data-browser-reload]')!.disabled).toBe(true)
+  })
+
+  it('BS-U26 敲 shuvix://settings + Enter → navigate(id, shuvix://settings)', async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/' })], 't1')
+    await mount()
+    const el = await beginEdit()
+    typeInto(el, '  shuvix://settings ')
+    keyDown(el, 'Enter')
+    expect(api.browserView.navigate.mock.calls).toEqual([['t1', 'shuvix://settings']])
+    expect(api.browserView.createTab).not.toHaveBeenCalled()
+  })
+
+  it('BS-U26 没有选中的 tab：敲 shuvix://settings → createTab(shuvix://settings)', async () => {
+    seed([], null)
+    await mount()
+    const el = await beginEdit()
+    typeInto(el, 'shuvix://settings')
+    keyDown(el, 'Enter')
+    expect(api.browserView.createTab.mock.calls).toEqual([['shuvix://settings']])
+  })
+})
+
+describe('站点信息按钮（BS-U27）', () => {
+  it.each([
+    ['https', 'https://example.com/a', false],
+    ['http', 'http://plain.test/a', true],
+    ['file:', 'file:///Users/me/a.html', false]
+  ] as const)('BS-U27 %s：有按钮', async (_l, url, notSecure) => {
+    seed([tabInfo({ id: 't1', url })], 't1')
+    await mount()
+    const btn = $('[data-site-info-button]')
+    expect(btn).not.toBeNull()
+    expect(btn!.getAttribute('aria-label')).toBe('View site information')
+    expect(btn!.textContent?.includes('Not secure')).toBe(notSecure)
+  })
+
+  it.each([
+    ['about:blank', [tabInfo({ id: 't1', url: 'about:blank' })], 't1'],
+    ['no tab', [], null],
+    ['data:', [tabInfo({ id: 't1', url: 'data:text/html,hi' })], 't1']
+  ] as const)('BS-U27 %s：没有按钮', async (_l, tabs, active) => {
+    seed([...tabs], active)
+    await mount()
+    expect($('[data-site-info-button]')).toBeNull()
+  })
+})
+
+describe('站点信息气泡的开与关（BS-U28 / BS-U29）', () => {
+  const AREA_WIDTH = 550.3
+  const DPR = 2
+  let pageArea: HTMLDivElement | null = null
+  const realDpr = window.devicePixelRatio
+
+  /** 一个还没回答的 capture */
+  function deferred(): {
+    promise: Promise<string>
+    resolve(v: string): void
+    reject(e: unknown): void
+  } {
+    let resolve!: (v: string) => void
+    let reject!: (e: unknown) => void
+    const promise = new Promise<string>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
+  const bubble = (): HTMLElement | null => document.querySelector('[data-site-info]')
+  const cover = (): unknown => useBrowserTabsStore.getState().pageCover
+  const siteButton = (): HTMLButtonElement => {
+    const b = $<HTMLButtonElement>('[data-site-info-button]')
+    if (!b) throw new Error('no site-info button')
+    return b
+  }
+
+  /** 点按钮、让 capture 回 snapshot，等气泡开出来 */
+  async function openBubble(snapshot = 'data:image/png;base64,AAA'): Promise<void> {
+    api.browserView.capture.mockResolvedValueOnce(snapshot)
+    click(siteButton())
+    await flush()
+    if (!bubble()) throw new Error('site-info bubble did not open')
+  }
+
+  async function expectClosed(): Promise<void> {
+    await flush()
+    expect(bubble()).toBeNull()
+    expect(cover()).toBeNull()
+  }
+
+  beforeEach(() => {
+    useBrowserTabsStore.setState({ pageCover: null, settingsFocus: null })
+    pageArea = document.createElement('div')
+    pageArea.setAttribute('data-page-area', '')
+    document.body.appendChild(pageArea)
+    stubRects({ x: 0, y: 76, width: AREA_WIDTH, height: 600 })
+    Object.defineProperty(window, 'devicePixelRatio', { value: DPR, configurable: true })
+  })
+
+  afterEach(() => {
+    pageArea?.remove()
+    pageArea = null
+    Object.defineProperty(window, 'devicePixelRatio', { value: realDpr, configurable: true })
+    vi.restoreAllMocks()
+  })
+
+  it('BS-U28 先按页面区宽度 × dpr（取整）抓图；抓到之前没有气泡、没有 pageCover；抓到之后 pageCover + [data-site-info]', async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+    await mount()
+    const shot = deferred()
+    api.browserView.capture.mockImplementationOnce(() => shot.promise)
+
+    click(siteButton())
+    await flush()
+    expect(api.browserView.capture.mock.calls).toEqual([['t1', Math.round(AREA_WIDTH * DPR)]])
+    expect(Math.round(AREA_WIDTH * DPR)).toBe(1101)
+    expect(bubble()).toBeNull()
+    expect(cover()).toBeNull()
+
+    await act(async () => {
+      shot.resolve('data:image/png;base64,SNAP')
+    })
+    await flush()
+    expect(cover()).toEqual({ tabId: 't1', snapshot: 'data:image/png;base64,SNAP' })
+    expect(bubble()).not.toBeNull()
+    expect(bubble()!.getAttribute('data-site-info')).toBe('example.com')
+  })
+
+  it("BS-U28 capture 失败：cover 的截图是 ''，气泡照开", async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+    await mount()
+    api.browserView.capture.mockRejectedValueOnce(new Error('capture failed'))
+    click(siteButton())
+    await flush()
+    expect(cover()).toEqual({ tabId: 't1', snapshot: '' })
+    expect(bubble()).not.toBeNull()
+  })
+
+  it('BS-U29 Esc 关掉', async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+    await mount()
+    await openBubble()
+    keyDown(document.body, 'Escape')
+    await expectClosed()
+  })
+
+  it('BS-U29 在气泡外面 mousedown 关掉；在气泡里面 mousedown 不关', async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+    await mount()
+    await openBubble()
+    mouseDown(bubble()!)
+    await flush()
+    expect(bubble()).not.toBeNull()
+    mouseDown(document.body)
+    await expectClosed()
+  })
+
+  it('BS-U29 气泡上的 X 关掉', async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+    await mount()
+    await openBubble()
+    const x = bubble()!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')
+    expect(x).not.toBeNull()
+    click(x!)
+    await expectClosed()
+  })
+
+  it('BS-U29 再点一次按钮关掉，不再抓图', async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+    await mount()
+    await openBubble()
+    expect(api.browserView.capture).toHaveBeenCalledTimes(1)
+    mouseDown(siteButton())
+    click(siteButton())
+    await expectClosed()
+    expect(api.browserView.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('BS-U29 选中的 tab 换了：关掉', async () => {
+    seed(
+      [
+        tabInfo({ id: 't1', url: 'https://example.com/a' }),
+        tabInfo({ id: 't2', url: 'https://other.test/' })
+      ],
+      't1'
+    )
+    await mount()
+    await openBubble()
+    act(() => useBrowserTabsStore.setState({ activeTabId: 't2' }))
+    await expectClosed()
+  })
+
+  it('BS-U29 地址变了：关掉', async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+    await mount()
+    await openBubble()
+    act(() =>
+      useBrowserTabsStore.setState({ tabs: [tabInfo({ id: 't1', url: 'https://example.com/b' })] })
+    )
+    await expectClosed()
+  })
+
+  it('BS-U29 tab 关了：关掉', async () => {
+    seed([tabInfo({ id: 't1', url: 'https://example.com/a' })], 't1')
+    await mount()
+    await openBubble()
+    act(() => useBrowserTabsStore.setState({ tabs: [], activeTabId: null }))
+    await expectClosed()
+  })
+
+  it('BS-U29 截图回来之前用户换了 tab：不留气泡，pageCover 为 null', async () => {
+    seed(
+      [
+        tabInfo({ id: 't1', url: 'https://example.com/a' }),
+        tabInfo({ id: 't2', url: 'https://other.test/' })
+      ],
+      't1'
+    )
+    await mount()
+    const shot = deferred()
+    api.browserView.capture.mockImplementationOnce(() => shot.promise)
+    click(siteButton())
+    await flush()
+    act(() => useBrowserTabsStore.setState({ activeTabId: 't2' }))
+    await flush()
+    await act(async () => {
+      shot.resolve('data:image/png;base64,LATE')
+    })
+    await expectClosed()
   })
 })

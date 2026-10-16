@@ -5,9 +5,9 @@
  *     打开的就是它 —— 「点击真的发生了」「被拒的地址一次都没请求过」都按服务器这一侧的记录断，
  *     不信工具自己的回报。同一个端口在 IPv6 回环 `::1` 上也听一份，于是 `http://localhost:<port>`
  *     （`localhostUrl`）是同一台服务器的**另一个站点** —— 要一次跨站导航（新渲染进程）时用它。
- *     **只用 http**：https 证书不受信时（且没开「忽略证书错误」），浏览器窗口正在前台有焦点的话
- *     主进程会弹 `dialog.showMessageBox`，CDP 关不掉它，整条 spec 会挂死（窗口不在前台时是静默拒绝，
- *     见 browserViewService 的证书处理）。
+ *     平常只用 http。证书不受信的 https 不再弹原生框（2026-10-16 起是页面区的整页警告，见 browserViewService
+ *     的证书处理），要它的用例用 `startSelfSignedHttpsServer`（现场用 openssl 签一张 127.0.0.1 的自签名证书，
+ *     没有 openssl 的机器上跳过）。
  *  2. **脚本化运行**：把一串 `mcp__browser__*` 调用排进假提供商（每个元素一轮 LLM 调用），
  *     经 IPC 发一条 prompt，等 `agent_end`，按 toolCallId 取回每个调用落盘的结果（会话视图里的工具块，P3-08）。
  *     元素 id（uid）要从上一步快照的结果里读，所以「打开 → 快照 → 点击」是三次运行，不是一次。
@@ -18,6 +18,11 @@
  *     （旧的「右侧面板要开着」已不成立 —— tab 永远不会被 setVisible(false)，见 browserViewService）。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer as createHttpsServer } from 'node:https'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { connect, listTargets, until, type CdpClient } from './cdp'
 import type { FakeProvider, FakeTurn } from './fakeProvider'
@@ -60,6 +65,8 @@ export const browserTool = (tool: string): string => `mcp__browser__${tool}`
 export interface FixtureRequest {
   method: string
   path: string
+  /** 请求带着的 Cookie 头（没有为空串）—— 「删掉了的 cookie 没再被发回来」按它断 */
+  cookie: string
 }
 
 export interface FixtureServer {
@@ -303,7 +310,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
   const log: FixtureRequest[] = []
   const handle = (req: IncomingMessage, res: ServerResponse): void => {
     const path = req.url ?? '/'
-    log.push({ method: req.method ?? 'GET', path })
+    log.push({ method: req.method ?? 'GET', path, cookie: req.headers.cookie ?? '' })
     const pathname = path.split('?')[0]
     if (pathname === '/submit' || pathname === '/report') {
       res.writeHead(200, { 'Content-Type': 'text/plain' })
@@ -347,6 +354,90 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     close: async () => {
       await Promise.all([closeOne(server), ...(listening6 ? [closeOne(server6)] : [])])
     }
+  }
+}
+
+// ─── 自签名 https 夹具（证书警告页） ─────────────────────────────────────
+
+/** 这台机器上有 openssl（没有的话证书警告的用例跳过） */
+export function opensslAvailable(): boolean {
+  const r = spawnSync('openssl', ['version'], { encoding: 'utf8' })
+  return r.status === 0
+}
+
+export interface HttpsFixtureServer {
+  /** `https://127.0.0.1:<port>` */
+  origin: string
+  port: number
+  url(path: string): string
+  /** 真的到了 HTTP 层的请求（TLS 握手因证书不受信被浏览器放弃的那种，一条都不会有） */
+  requests(): FixtureRequest[]
+  hits(prefix: string): number
+  close(): Promise<void>
+}
+
+/**
+ * 现场签一张只给 127.0.0.1 用的自签名证书（`openssl req -x509 … -subj /CN=127.0.0.1
+ * -addext subjectAltName=IP:127.0.0.1 -days 2`，临时目录里、关掉时删），用它起一台 `127.0.0.1:0` 的
+ * https 服务，记下每一个到了 HTTP 层的请求。任何路径都回一页标题 `E2E TLS <path>` 的小页面。
+ * 证书只是 CN/SAN 对得上、没有可信的签发者 —— Chromium 报 ERR_CERT_AUTHORITY_INVALID。
+ */
+export async function startSelfSignedHttpsServer(): Promise<HttpsFixtureServer> {
+  const dir = mkdtempSync(join(tmpdir(), 'shuvix-e2e-tls-'))
+  const keyPath = join(dir, 'key.pem')
+  const certPath = join(dir, 'cert.pem')
+  const gen = spawnSync(
+    'openssl',
+    [
+      'req',
+      '-x509',
+      '-nodes',
+      '-newkey',
+      'rsa:2048',
+      '-subj',
+      '/CN=127.0.0.1',
+      '-addext',
+      'subjectAltName=IP:127.0.0.1',
+      '-days',
+      '2',
+      '-keyout',
+      keyPath,
+      '-out',
+      certPath
+    ],
+    { encoding: 'utf8' }
+  )
+  if (gen.status !== 0) {
+    rmSync(dir, { recursive: true, force: true })
+    throw new Error(`openssl could not make a self-signed certificate: ${gen.stderr}`)
+  }
+  const key = readFileSync(keyPath)
+  const cert = readFileSync(certPath)
+  rmSync(dir, { recursive: true, force: true })
+
+  const log: FixtureRequest[] = []
+  const server = createHttpsServer({ key, cert }, (req, res) => {
+    const path = req.url ?? '/'
+    log.push({ method: req.method ?? 'GET', path, cookie: req.headers.cookie ?? '' })
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    res.end(page(`E2E TLS ${path.split('?')[0]}`, `<h1>TLS ${path}</h1>`))
+  })
+  // 握手失败（浏览器拒绝了证书）在服务器这一侧是 tlsClientError：吞掉，别让它变成未处理的错误
+  server.on('tlsClientError', () => undefined)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as AddressInfo).port
+  const origin = `https://127.0.0.1:${port}`
+  return {
+    origin,
+    port,
+    url: (path) => `${origin}${path}`,
+    requests: () => [...log],
+    hits: (prefix) => log.filter((r) => r.path.startsWith(prefix)).length,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections()
+        server.close(() => resolve())
+      })
   }
 }
 

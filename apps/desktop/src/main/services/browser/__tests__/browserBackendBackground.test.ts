@@ -19,6 +19,13 @@
  *   CB-U35  list_tabs：(active) = 用户选中的那页、(opened by you) = 本会话开的（另一个会话看反过来）；
  *           选中 + 崩了 + 本会话开的读作 ` (active) (crashed) (opened by you)`；agent 的 close_tab 不进
  *           ⌘⇧T 的重开记录。
+ *   BS-U8   内部页面（shuvix://settings）对 agent 不存在：list_tabs 不列它（没有 shuvix://、没有它的 uuid；
+ *           它是选中的那页时没有哪一行带 (active)；只剩它时回「没有打开的 tab」）；
+ *   BS-U9   拿设置页的原始 uuid 去 snapshot / screenshot / click / navigate / evaluate / close_tab：一律以
+ *           `No browser tab "<uuid>". Use list_tabs to see open tabs, or open_tab to open one.` 失败 ——
+ *           tab 还在、没要过 CDP 会话、没发 tab-agent、没截图；tabUrl 回 undefined（别的 tab 照常回答）；
+ *   BS-U10  agent 自己开的 tab 被用户在地址栏里换成设置页：它的短号被拒、不再列出；用户再把它导航回网页 →
+ *           以**同一个短号**重新列出，snapshot 照常。
  *
  * 后端、tab 服务、窗口服务、停放窗口都是真的，跑在 ./fakeElectron.ts 的假件上；CDP 会话是个空壳，
  * `browserCdpOps` 里用到的配方换成立即回答的桩 —— 这里只关心「窗口动没动」，不关心配方本身。
@@ -77,6 +84,7 @@ vi.mock('../browserCdpService', () => ({
       }
     })),
     handleExternalDetach: vi.fn(),
+    detach: vi.fn(async () => {}),
     cdpState: () => ({ attached: false, intercepting: false }),
     detachAll: vi.fn(async () => {})
   }
@@ -453,5 +461,126 @@ describe('agent 从不选中 tab（CB-U33 / CB-U34 / CB-U35）', () => {
     const before = fx.views.length
     expect(views.reopenClosedTab()).toBeNull()
     expect(fx.views).toHaveLength(before)
+  })
+})
+
+describe('内部页面对 agent 不存在（BS-U8 / BS-U9 / BS-U10）', () => {
+  const SETTINGS = 'shuvix://settings'
+  const loadAll = async (): Promise<{
+    views: typeof import('../browserViewService')
+    wins: typeof import('../browserWindowService')
+    cdp: typeof import('../browserCdpService').browserCdpManager
+    backendFor: typeof import('../browserBackend').createDesktopBrowserBackend
+  }> => {
+    const views = await import('../browserViewService')
+    const wins = await import('../browserWindowService')
+    const { browserCdpManager } = await import('../browserCdpService')
+    const { createDesktopBrowserBackend } = await import('../browserBackend')
+    wins.initBrowserWindowService({ getThemeBgColor: () => '#000000' })
+    return { views, wins, cdp: browserCdpManager, backendFor: createDesktopBrowserBackend }
+  }
+  const noTab = (id: string): string =>
+    `No browser tab "${id}". Use list_tabs to see open tabs, or open_tab to open one.`
+
+  it('BS-U8 list_tabs 不列设置页：没有 shuvix://、没有它的 uuid；它是选中的那页时没有 (active)', async () => {
+    const { views, backendFor } = await loadAll()
+    views.createTab('https://a.test/')
+    views.createTab('https://b.test/')
+    const s = views.openInternalPage('settings')
+    expect(views.listTabs().find((t) => t.active)?.id).toBe(s)
+
+    const text = (await backendFor('s1').listTabs()).text ?? ''
+    const lines = text.split('\n')
+    expect(lines).toHaveLength(2)
+    expect(lines.map((l) => l.replace(/^\[t\d+\]/, '[t]'))).toEqual([
+      '[t] (untitled) — https://a.test/',
+      '[t] (untitled) — https://b.test/'
+    ])
+    expect(text).not.toContain('shuvix://')
+    expect(text).not.toContain(s)
+    expect(text).not.toContain('(active)')
+  })
+
+  it('BS-U8 只剩设置页：回「没有打开的 tab」', async () => {
+    const { views, backendFor } = await loadAll()
+    views.openInternalPage('settings')
+    expect((await backendFor('s1').listTabs()).text).toBe(
+      '(no open tabs — use open_tab to open one)'
+    )
+  })
+
+  it('BS-U9 设置页的原始 uuid：snapshot / screenshot / click / navigate / evaluate / close_tab 都以「No browser tab」失败；tab 还在、没要 CDP 会话、没发 tab-agent、没截图', async () => {
+    const { views, wins, cdp, backendFor } = await loadAll()
+    wins.openBrowserWindow()
+    const bw = fx.browserWindows()[0]
+    views.createTab('https://a.test/')
+    const s = views.openInternalPage('settings')
+    const settingsView = fx.views[1]
+    expect(views.isInternalTab(s)).toBe(true)
+    vi.mocked(cdp.session).mockClear()
+    bw.webContents.send.mockClear()
+    const backend = backendFor('s1')
+
+    const attempts: Array<[string, () => Promise<unknown>]> = [
+      ['snapshot', () => backend.snapshot({ tabId: s })],
+      ['screenshot', () => backend.screenshot({ tabId: s })],
+      ['click', () => backend.click({ tabId: s, uid: 'e1' })],
+      ['navigate', () => backend.navigate({ tabId: s, nav: 'goto', url: 'https://x.test/' })],
+      ['evaluate', () => backend.evaluate!({ tabId: s, expression: '1' })],
+      ['closeTab', () => backend.closeTab({ tabId: s })]
+    ]
+    for (const [name, attempt] of attempts) {
+      await expect(attempt(), name).rejects.toThrow(noTab(s))
+      // 恰好是那句话（不是包了一层的别的错误）
+      await attempt().catch((err: Error) => expect(err.message, name).toBe(noTab(s)))
+    }
+
+    expect(views.listTabs().map((t) => t.id)).toContain(s)
+    expect(views.isInternalTab(s)).toBe(true)
+    expect(cdp.session).not.toHaveBeenCalled()
+    expect(settingsView.webContents.capturePage).not.toHaveBeenCalled()
+    expect(settingsView.webContents.close).not.toHaveBeenCalled()
+    expect(bw.webContents.send.mock.calls.filter(([c]) => c === 'browser-view:tab-agent')).toEqual(
+      []
+    )
+    expect(views.listTabs().find((t) => t.id === s)).not.toHaveProperty('agentSessionId')
+  })
+
+  it('BS-U9 tabUrl：设置页回 undefined，别的 tab 照常回答它的地址', async () => {
+    const { views, backendFor } = await loadAll()
+    const a = views.createTab('https://a.test/x')
+    const s = views.openInternalPage('settings')
+    const backend = backendFor('s1')
+    expect(await backend.tabUrl!({ tabId: s })).toBeUndefined()
+    expect(await backend.tabUrl!({ tabId: a })).toBe('https://a.test/x')
+  })
+
+  it('BS-U10 agent 自己的 tab 被用户换成设置页：短号被拒、不列出；换回网页 → 同一个短号重新列出、snapshot 照常', async () => {
+    const { views, backendFor } = await loadAll()
+    views.createTab('https://user.test/', { activate: true })
+    const backend = backendFor('s1')
+    const opened = await backend.openTab({ url: 'https://b.example/' })
+    const short = /in new tab (t\d+)/.exec(opened.text ?? '')?.[1] ?? ''
+    expect(short).not.toBe('')
+    const uuid = views.listTabs().find((t) => t.openerSessionId === 's1')!.id
+    expect((await backend.listTabs()).text).toContain(`[${short}] (opened by you)`)
+
+    // 用户在地址栏里敲 shuvix://settings
+    views.navigateTab(uuid, SETTINGS)
+    expect(views.isInternalTab(uuid)).toBe(true)
+    const hidden = (await backend.listTabs()).text ?? ''
+    expect(hidden).not.toContain(`[${short}]`)
+    expect(hidden).not.toContain('shuvix://')
+    await expect(backend.snapshot({ tabId: short })).rejects.toThrow(noTab(short))
+    expect(await backend.tabUrl!({ tabId: short })).toBeUndefined()
+
+    // 用户把它导航回网页
+    views.navigateTab(uuid, 'https://b.example/again')
+    expect(views.isInternalTab(uuid)).toBe(false)
+    const back = (await backend.listTabs()).text ?? ''
+    const line = back.split('\n').find((l) => l.startsWith(`[${short}]`))
+    expect(line).toBe(`[${short}] (opened by you) (untitled) — https://b.example/again`)
+    expect(await backend.snapshot({ tabId: short })).toEqual({ text: 'ok' })
+    expect(await backend.tabUrl!({ tabId: short })).toBe('https://b.example/again')
   })
 })

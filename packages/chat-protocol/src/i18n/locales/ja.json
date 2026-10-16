@@ -749,18 +749,13 @@
     "toolDbEmpty": "データベース認証情報がありません",
     "toolDbEmptyHint": "接続を追加すると、データベースサーバーをオンにしたセッションから参照できます",
     "toolDbDuplicateName": "認証情報名はすでに存在します",
-    "toolBrowserTitle": "ブラウザパネル",
-    "toolBrowserDesc": "内蔵ブラウザパネルの動作 —— ご自身での閲覧にも、ブラウザを有効にしたセッションで AI がウェブを開くときにも適用されます。",
     "toolBrowserSearchEngine": "アドレスバーの検索エンジン",
     "toolBrowserSearchEngineHint": "内蔵ブラウザのアドレスバーに入力したものが URL でないとき、これで検索します。",
     "toolBrowserIgnoreCertificateErrors": "証明書エラーを無視",
     "toolBrowserIgnoreCertificateErrorsHint": "オフの場合、自己署名 / 信頼されていない証明書では確認ダイアログを表示します。オンにするとすべての証明書エラーを無視します。",
     "toolBrowserSecurityWarning": "警告：オンにするとフィッシングサイトを含むすべての HTTPS 証明書エラー（自己署名、期限切れ、ホスト名不一致）が無視されます。信頼できる社内ネットワークでのみ有効にしてください。",
-    "toolBrowserSavedSitesTitle": "保存済みサイト",
-    "toolBrowserSavedSitesDesc": "内蔵ブラウザパーティションに Cookie を保存しているサイト。",
     "toolBrowserNoSites": "保存されたデータのあるサイトはありません",
     "toolBrowserClearSite": "このサイトのデータを消去",
-    "toolBrowserClearAll": "すべて消去",
     "tabMcp": "MCP",
     "mcpTitle": "MCP Server 管理",
     "mcpDesc": "MCP (Model Context Protocol) サーバーを設定して、AIにツール機能を追加します。",
@@ -959,7 +954,11 @@
     "networkLanScopeMissing": "{{name}}（見つかりません）",
     "networkLanScopeOnly": "{{cidr}} のデバイスだけが接続できます。",
     "networkHeadlessScopeNote": "起動時に決まります（--bind）。変更するには ShuviX を再起動してください。",
-    "networkErrorNoInterface": "このコンピューターには「{{name}}」というネットワークインターフェースもアドレスもありません。別のネットワークを選んでください。"
+    "networkErrorNoInterface": "このコンピューターには「{{name}}」というネットワークインターフェースもアドレスもありません。別のネットワークを選んでください。",
+    "toolBrowserMovedTitle": "ブラウザの設定",
+    "toolBrowserMovedRow": "検索エンジン・サイトのデータ・証明書",
+    "toolBrowserMovedDesc": "ブラウザ自体の設定は、ブラウザウィンドウの設定ページに移りました（⋮ → 設定）。",
+    "toolBrowserMovedOpen": "ブラウザの設定を開く"
   },
   "about": {
     "description": "あなたのAIアシスタント",
@@ -1212,15 +1211,9 @@
     "newTab": "新しいタブ",
     "closeTab": "タブを閉じる",
     "untitledTab": "新しいタブ",
-    "cert": {
-      "title": "信頼されていない証明書：{{host}}",
-      "continue": "続行",
-      "cancel": "キャンセル"
-    },
     "error": {
       "title": "このサイトにアクセスできません",
       "code": "エラーコード：{{code}} ({{description}})",
-      "certHint": "このサイトは自己署名または信頼されていない証明書を使用しています。",
       "crashedTitle": "このページはクラッシュしました",
       "crashedDetail": "ページのプロセスが停止しました（{{reason}}）。",
       "retry": "再試行"
@@ -1244,7 +1237,7 @@
       "zoomIn": "拡大",
       "zoomOut": "縮小",
       "zoomReset": "既定のサイズに戻す（現在 {{pct}}%）",
-      "settings": "閲覧データと証明書の設定…"
+      "settings": "設定"
     },
     "infobar": {
       "using": "「{{session}}」がこのページを使用しています",
@@ -1252,6 +1245,52 @@
       "intercepting": "「{{session}}」がこのページを使用し、ネットワークリクエストを傍受しています — ページの内容が変更される可能性があります",
       "interceptingUnknown": "AI がこのページを使用し、ネットワークリクエストを傍受しています — ページの内容が変更される可能性があります",
       "openSession": "会話を表示"
+    },
+    "internal": {
+      "settings": "設定"
+    },
+    "settingsPage": {
+      "title": "設定",
+      "search": "検索エンジン",
+      "privacy": "プライバシーとセキュリティ",
+      "certificates": "証明書",
+      "clearAll": "閲覧データを削除",
+      "clearAllDesc": "すべてのサイトの Cookie・キャッシュ・保存データ。各サイトからログアウトします。",
+      "clearAllButton": "削除…",
+      "clearAllConfirm": "削除する",
+      "siteData": "サイトのデータ",
+      "siteDataDesc": "内蔵ブラウザで Cookie を保存したサイト。サイトのデータを削除するとそのサイトからログアウトします。",
+      "searchSites": "サイトを検索",
+      "noMatch": "一致するサイトはありません",
+      "cookies_one": "Cookie {{count}} 件",
+      "cookies_other": "Cookie {{count}} 件",
+      "certExceptions": "許可したサイト",
+      "certExceptionsDesc": "証明書の警告ページで「アクセスする」を選んだサイト。ShuviX を終了するまで警告しません。",
+      "noCertExceptions": "なし"
+    },
+    "certError": {
+      "title": "この接続ではプライバシーが保護されません",
+      "detail": "攻撃者が {{host}} から情報（パスワード、メッセージ、クレジットカード情報など）を盗み取ろうとしている可能性があります。",
+      "advanced": "詳細設定",
+      "hideAdvanced": "詳細を非表示",
+      "advancedDetail": "このサーバーが {{host}} であることを確認できませんでした。セキュリティ証明書がこのデバイスで信頼されていません。設定の誤りか、なりすましの可能性があります。",
+      "proceed": "{{host}} にアクセスする（安全ではありません）",
+      "back": "安全なページに戻る"
+    },
+    "siteInfo": {
+      "button": "サイト情報を表示",
+      "secure": "接続は保護されています",
+      "insecure": "保護されていない通信",
+      "insecureDetail": "このサイトではパスワードやクレジットカードなどの機密情報を入力しないでください。",
+      "certException": "このサイトの証明書の警告をオフにしました",
+      "certExceptionDetail": "ShuviX を終了するまで警告しません。",
+      "local": "ローカルファイルを表示しています",
+      "cookies": "Cookie とサイトデータ",
+      "cookieCount_one": "このサイトの Cookie: {{count}} 件",
+      "cookieCount_other": "このサイトの Cookie: {{count}} 件",
+      "clear": "このサイトのデータを削除",
+      "clearConfirm": "削除する（ログアウトします）",
+      "siteSettings": "サイトの設定"
     }
   },
   "command": {

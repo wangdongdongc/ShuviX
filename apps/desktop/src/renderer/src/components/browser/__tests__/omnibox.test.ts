@@ -9,6 +9,8 @@
  *   CB-U12  四个搜索引擎的结果页地址与搜索词的编码（`$&` 不被当成替换模式）；
  *   CB-U13  设置值 → 搜索引擎：只认四个自有键，其余一律缺省 google；
  *   CB-U14  未聚焦时的显示：https / http / file / 其余。
+ *   BS-U24  内部页面：`shuvix://settings` 的显示是 internal（整串当 host、rest 为空）；地址栏里敲认得的内部页面
+ *           原样交给主进程（去首尾空白），不认得的 `shuvix://…` 当搜索词。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -208,6 +210,33 @@ describe('未聚焦时的显示（CB-U14）', () => {
     'CB-U14 %j → other，原样',
     (url) => {
       expect(urlDisplayOf(url)).toStrictEqual({ kind: 'other', host: '', rest: url })
+    }
+  )
+})
+
+describe('内部页面（BS-U24）', () => {
+  it('BS-U24 urlDisplayOf(shuvix://settings) → internal，整串当 host、rest 为空', () => {
+    expect(urlDisplayOf('shuvix://settings')).toStrictEqual({
+      kind: 'internal',
+      host: 'shuvix://settings',
+      rest: ''
+    })
+  })
+
+  it.each([
+    'shuvix://settings',
+    '  shuvix://settings\t',
+    'SHUVIX://Settings',
+    'shuvix://settings/'
+  ])('BS-U24 resolveOmniboxInput(%j) → 原样（去首尾空白）交给主进程，不搜索', (input) => {
+    expect(resolveOmniboxInput(input, 'google')).toBe(input.trim())
+    expect(resolveOmniboxInput(input, 'bing')).toBe(input.trim())
+  })
+
+  it.each(['shuvix://unknown', 'shuvix://settings/privacy'])(
+    'BS-U24 resolveOmniboxInput(%j)：不认得的内部页面 → 搜索',
+    (input) => {
+      expect(resolveOmniboxInput(input, 'google')).toBe(google(input))
     }
   )
 })

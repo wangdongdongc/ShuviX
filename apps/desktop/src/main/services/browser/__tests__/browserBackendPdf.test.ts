@@ -47,6 +47,7 @@ vi.mock('../browserViewService', () => {
     closeTab: () => {},
     createTab: () => 'tab-uuid',
     listTabs: () => [],
+    isInternalTab: () => false,
     getTabView: (id: string) => (id === 'tab-uuid' ? view : null)
   }
 })

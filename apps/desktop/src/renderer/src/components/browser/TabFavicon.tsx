@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Globe, TriangleAlert } from 'lucide-react'
-import type { BrowserTabInfo } from '../../stores/browserTabsStore'
+import { Globe, Settings, TriangleAlert } from 'lucide-react'
+import { internalPageOfTab, type BrowserTabInfo } from '../../stores/browserTabsStore'
 import { INTERCEPTING_DOT_COLOR, sessionDotColor } from './sessionColor'
 
 /** agent 动作一下之后，圆点脉动多久 */
@@ -36,7 +36,9 @@ export function TabFavicon({
 }): React.JSX.Element {
   const [failed, setFailed] = useState<string | null>(null)
   const pulsing = useRecent(tab.agentActiveAt, AGENT_PULSE_MS)
-  const icon = tab.loadError?.crashed ? (
+  const icon = internalPageOfTab(tab) ? (
+    <Settings size={size} className="text-text-secondary" />
+  ) : tab.loadError?.crashed ? (
     <TriangleAlert size={size} className="text-amber-500" />
   ) : tab.isLoading ? (
     <span

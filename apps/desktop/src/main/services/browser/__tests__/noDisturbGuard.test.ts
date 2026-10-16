@@ -27,6 +27,9 @@
  *               loadNote / tabGoneNote）。新加一个会点、会按键、会跑页面脚本的动作却忘了包，文件框就会从后台弹出来；
  *           (b) services/browser/*.ts 里调用 `showOpenDialog(` 与 `.print(` 的只有 agentGuards.ts ——
  *               原生文件框与原生打印框只能从那道「用户正看着浏览器窗口」的判断后面出来。
+ *   BS-U18  证书错误是整页警告、从不弹框（2026-10-16）：services/browser/*.ts 里没有哪一处调用
+ *           `showMessageBox(` / `showMessageBoxSync(`，browserViewService.ts 也不从 'electron' 导入 `dialog`
+ *           —— 旧的「浏览器窗口在前台时弹确认框」那条路回不来。
  *
  * 用 TypeScript 的语法树而不是正则：源码注释里就写着 `setVisible(false)`、`showInactive` 这些字样
  * （解释为什么不许用），正则会把注释当调用。每个扫描器先对着几段手写的小源码自检。
@@ -257,6 +260,40 @@ function nativeDialogCalls(source: string): string[] {
       return name === 'print' && !ts.isIdentifier(c.expression)
     })
     .map((c) => `${lineOf(sf, c)}:${calleeName(c)}`)
+}
+
+/** 会弹原生询问框的调用：`showMessageBox(` / `showMessageBoxSync(`（任何形状，`行号:名字`） */
+function messageBoxCalls(source: string): string[] {
+  const sf = parse(source)
+  return calls(sf)
+    .filter((c) => {
+      const name = calleeName(c)
+      return name === 'showMessageBox' || name === 'showMessageBoxSync'
+    })
+    .map((c) => `${lineOf(sf, c)}:${calleeName(c)}`)
+}
+
+/** 从 'electron' 导入的值名字（`{ a as b }` 记原名 a；`import type` 与仅类型的成员不算） */
+function electronValueImports(source: string): string[] {
+  const sf = parse(source)
+  const names: string[] = []
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt)) continue
+    if (!ts.isStringLiteral(stmt.moduleSpecifier) || stmt.moduleSpecifier.text !== 'electron') {
+      continue
+    }
+    const clause = stmt.importClause
+    if (!clause || clause.isTypeOnly) continue
+    const bindings = clause.namedBindings
+    if (bindings && ts.isNamespaceImport(bindings)) names.push(`* as ${bindings.name.text}`)
+    if (bindings && ts.isNamedImports(bindings)) {
+      for (const el of bindings.elements) {
+        if (el.isTypeOnly) continue
+        names.push((el.propertyName ?? el.name).text)
+      }
+    }
+  }
+  return names
 }
 
 // ─── 被扫的源码 ───
@@ -511,5 +548,55 @@ describe('会打开文件框的动作都包在防护里、原生文件框 / 打�
     expect(byFile.map(([name]) => name)).toEqual(['agentGuards.ts'])
     // 扫到的确实是那两处：一处替用户弹文件框、一处替用户打印
     expect(byFile[0][1].map((hit) => hit.split(':')[1]).sort()).toEqual(['print', 'showOpenDialog'])
+  })
+})
+
+describe('证书错误不弹框（BS-U18）', () => {
+  it('BS-U18 扫描器自检：showMessageBox / showMessageBoxSync 的各种写法算调用；注释、字符串、别的方法不算', () => {
+    expect(
+      messageBoxCalls(
+        [
+          'dialog.showMessageBox(win, {})',
+          'showMessageBox(win)',
+          'dialog.showMessageBoxSync(win, {})',
+          "dialog['showMessageBox'](win)",
+          '// dialog.showMessageBox(win)',
+          "const s = 'dialog.showMessageBox(win)'",
+          'dialog.showOpenDialog(win, {})',
+          'dialog.showErrorBox(t, m)'
+        ].join('\n')
+      )
+    ).toEqual(['1:showMessageBox', '2:showMessageBox', '3:showMessageBoxSync', '4:showMessageBox'])
+  })
+
+  it("BS-U18 扫描器自检：从 'electron' 导入的值名字（别名记原名、命名空间导入单列；仅类型的、别的模块的、注释里的不算）", () => {
+    expect(electronValueImports("import { dialog, app } from 'electron'")).toEqual([
+      'dialog',
+      'app'
+    ])
+    expect(electronValueImports("import { dialog as d } from 'electron'")).toEqual(['dialog'])
+    expect(electronValueImports("import * as electron from 'electron'")).toEqual(['* as electron'])
+    expect(electronValueImports("import type { Dialog } from 'electron'")).toEqual([])
+    expect(electronValueImports("import { type WebContents, session } from 'electron'")).toEqual([
+      'session'
+    ])
+    expect(electronValueImports("import { dialog } from 'electron-log'")).toEqual([])
+    expect(electronValueImports("// import { dialog } from 'electron'")).toEqual([])
+  })
+
+  it('BS-U18 services/browser 里没有哪一处调用 showMessageBox( / showMessageBoxSync(', () => {
+    expect(browserFiles.length).toBeGreaterThan(3)
+    const hits = browserFiles.flatMap((name) =>
+      messageBoxCalls(readBrowser(name)).map((hit) => `${name}:${hit}`)
+    )
+    expect(hits).toEqual([])
+  })
+
+  it("BS-U18 browserViewService.ts 不从 'electron' 导入 dialog（扫描器看得见它导入的那些）", () => {
+    const names = electronValueImports(readBrowser('browserViewService.ts'))
+    // 扫描器没扫空：tab 服务确实从 electron 拿了 WebContentsView / BrowserWindow / session
+    expect(names).toEqual(expect.arrayContaining(['WebContentsView', 'BrowserWindow', 'session']))
+    expect(names).not.toContain('dialog')
+    expect(names.some((n) => n.startsWith('* as '))).toBe(false)
   })
 })

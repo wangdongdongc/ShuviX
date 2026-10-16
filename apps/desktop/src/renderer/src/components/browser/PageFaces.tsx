@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Search, TriangleAlert } from 'lucide-react'
+import { Search, ShieldAlert, TriangleAlert } from 'lucide-react'
 import type { BrowserTabInfo } from '../../stores/browserTabsStore'
 import { resolveOmniboxInput, SEARCH_ENGINES, type SearchEngineId } from './omnibox'
 
@@ -65,7 +65,99 @@ export function NewTabPage({
   )
 }
 
-/** 打不开 / 崩了的页面：说明 + 重试（重试按出错的那个地址导航） */
+/**
+ * 证书错误的整页警告（Chrome 的「您的连接不是私密连接」）：主进程把这次加载挡下了（不弹框），这里说明情况；
+ * 「返回安全的页面」后退（没有可退的就回新标签页）；「高级」展开后才有「继续前往（不安全）」——
+ * 点它主进程放行这个站点直到退出，再重新加载。按钮在外壳的 DOM 里，agent 点不到。
+ */
+function CertInterstitial({
+  tab,
+  compact
+}: {
+  tab: BrowserTabInfo
+  compact?: boolean
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const [advanced, setAdvanced] = useState(false)
+  const failedUrl = tab.loadError?.url || tab.url
+  let host = failedUrl
+  try {
+    host = new URL(failedUrl).host
+  } catch {
+    // 留原样
+  }
+  const view = window.api.browserView
+  const back = (): void => {
+    if (tab.canGoBack) void view.goBack(tab.id)
+    else void view.navigate(tab.id, 'about:blank')
+  }
+  const text = compact ? 'text-[11px]' : 'text-[13px]'
+  return (
+    <div
+      className={`absolute inset-0 overflow-y-auto bg-bg-primary ${compact ? 'px-4 py-4' : 'px-8 py-16'}`}
+      data-page-error="cert"
+      data-cert-interstitial={host}
+    >
+      <div className="mx-auto max-w-[560px]">
+        <ShieldAlert size={compact ? 24 : 44} className="text-error mb-4" />
+        <h2
+          className={`${compact ? 'text-[13px]' : 'text-[22px]'} font-medium text-text-primary mb-3`}
+        >
+          {t('browser.certError.title')}
+        </h2>
+        <p className={`${text} text-text-secondary leading-relaxed mb-2`}>
+          {t('browser.certError.detail', { host })}
+        </p>
+        <p className="text-[11px] font-mono text-text-tertiary mb-6">
+          net::{tab.loadError?.errorDescription || 'ERR_CERT_INVALID'}
+        </p>
+        <div className="flex items-center justify-between gap-3">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setAdvanced((v) => !v)
+            }}
+            className={`${text} text-text-secondary hover:text-text-primary underline-offset-2 hover:underline`}
+            data-cert-advanced
+          >
+            {t(advanced ? 'browser.certError.hideAdvanced' : 'browser.certError.advanced')}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              back()
+            }}
+            className={`rounded-md bg-accent text-white hover:bg-accent-hover transition-colors ${
+              compact ? 'px-2.5 py-1 text-[11px]' : 'px-4 py-1.5 text-[13px]'
+            }`}
+            data-cert-back
+          >
+            {t('browser.certError.back')}
+          </button>
+        </div>
+        {advanced && (
+          <div className={`mt-6 pt-4 border-t border-border-secondary/40 ${text} leading-relaxed`}>
+            <p className="text-text-secondary mb-3">
+              {t('browser.certError.advancedDetail', { host })}
+            </p>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                void view.proceedUnsafe(tab.id)
+              }}
+              className="text-error underline underline-offset-2 hover:opacity-80"
+              data-cert-proceed
+            >
+              {t('browser.certError.proceed', { host })}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 打不开 / 崩了的页面：说明 + 重试（重试按出错的那个地址导航）；证书错误换成整页警告 */
 export function PageErrorView({
   tab,
   onRetry,
@@ -78,6 +170,9 @@ export function PageErrorView({
   const { t } = useTranslation()
   const { loadError } = tab
   if (!loadError) return null
+  if (!loadError.crashed && isCertError(loadError.errorCode)) {
+    return <CertInterstitial tab={tab} compact={compact} />
+  }
   const text = compact ? 'text-[11px]' : 'text-[13px]'
   return (
     <div
@@ -98,11 +193,6 @@ export function PageErrorView({
               description: loadError.errorDescription
             })}
       </p>
-      {isCertError(loadError.errorCode) && (
-        <p className={`${text} text-amber-500/90 mb-1 text-center max-w-md`}>
-          {t('browser.error.certHint')}
-        </p>
-      )}
       <button
         onClick={(e) => {
           e.stopPropagation()

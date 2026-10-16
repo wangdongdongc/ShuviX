@@ -10,6 +10,14 @@
  *   CB-U36 Chrome 化之后的几条通道：close-tab 是用户关的（记下地址给 ⌘⇧T）；reopen-closed-tab 原样回服务的值；
  *       zoom 只认 in / out / reset；open-session 只认窗口客户端发来的字符串；create-tab 不带地址时把光标
  *       放进地址栏（requestOmniboxFocus），带地址时不放
+ *   BS-U19 open-settings（主设置窗口里的「打开浏览器设置」，哪个窗口发来都行）：先 openBrowserWindow 再
+ *       openInternalPage('settings')；open-internal 只认窗口客户端、只认 INTERNAL_PAGES 里的页名（大小写不同、
+ *       undefined、数字都不认），从不开窗口；
+ *   BS-U20 proceed-unsafe 只认浏览器窗口外壳（宿主 7）：proceedPastCertError 恰好收到 tabId（多余参数丢掉）、
+ *       原样回它的值；别的窗口（9）、网络客户端、非字符串 tabId → false、不调；
+ *   BS-U21 navigate 交给 navigateTab（含 shuvix://），非字符串不理；capture 的 maxWidth 只认正数，其余给
+ *       undefined；create-tab 带内部页面地址 → openInternalPage（不 createTab、不聚焦地址栏）、回它的 id；
+ *       get-url 回 tabDisplayUrl。
  *
  * electron 是替身（on / handle 收进 Map）；services/browser 整个换成间谍 —— 宿主判断固定为
  * 「webContents id 7 是宿主」。
@@ -30,7 +38,12 @@ const state = vi.hoisted(() => ({
   reopenClosedTab: vi.fn<() => string | null>(() => null),
   zoomTab: vi.fn<(tabId: string, direction: string) => void>(),
   openAgentSession: vi.fn<(sessionId: string) => boolean>(() => false),
-  requestOmniboxFocus: vi.fn<() => void>()
+  requestOmniboxFocus: vi.fn<() => void>(),
+  openInternalPage: vi.fn<(page: string) => string>(() => 'tab-settings'),
+  navigateTab: vi.fn<(tabId: string, url: string) => void>(),
+  proceedPastCertError: vi.fn<(...args: unknown[]) => boolean>(() => true),
+  tabDisplayUrl: vi.fn<(tabId: string) => string>(() => 'shuvix://settings'),
+  captureTab: vi.fn<(tabId: string, maxWidth?: number) => Promise<string>>(async () => 'data:x')
 }))
 
 vi.mock('electron', () => ({
@@ -46,7 +59,7 @@ vi.mock('../../services/browser', () => ({
   activateTab: vi.fn(),
   listTabs: vi.fn(() => []),
   getTabView: vi.fn(() => null),
-  captureTab: vi.fn(async () => ''),
+  captureTab: (tabId: string, maxWidth?: number) => state.captureTab(tabId, maxWidth),
   setLayout: (entries: unknown) => state.setLayout(entries),
   setPanelVisible: (visible: boolean) => state.setPanelVisible(visible),
   isHostWebContents: (id: number) => id === 7,
@@ -55,7 +68,12 @@ vi.mock('../../services/browser', () => ({
   requestOmniboxFocus: () => state.requestOmniboxFocus(),
   reopenClosedTab: () => state.reopenClosedTab(),
   zoomTab: (tabId: string, direction: string) => state.zoomTab(tabId, direction),
-  openAgentSession: (sessionId: string) => state.openAgentSession(sessionId)
+  openAgentSession: (sessionId: string) => state.openAgentSession(sessionId),
+  openInternalPage: (page: string) => state.openInternalPage(page),
+  navigateTab: (tabId: string, url: string) => state.navigateTab(tabId, url),
+  // 原样转交全部实参：「多余参数丢掉」要在 handler 那一侧看得见
+  proceedPastCertError: (...args: unknown[]) => state.proceedPastCertError(...args),
+  tabDisplayUrl: (tabId: string) => state.tabDisplayUrl(tabId)
 }))
 
 import { registerBrowserViewHandlers } from '../browserViewHandlers'
@@ -102,6 +120,12 @@ beforeEach(() => {
   state.openAgentSession.mockReset()
   state.openAgentSession.mockReturnValue(false)
   state.requestOmniboxFocus.mockClear()
+  state.openInternalPage.mockClear()
+  state.navigateTab.mockClear()
+  state.proceedPastCertError.mockReset()
+  state.proceedPastCertError.mockReturnValue(true)
+  state.tabDisplayUrl.mockClear()
+  state.captureTab.mockClear()
 })
 
 describe('browserViewHandlers：布局只认宿主窗口', () => {
@@ -234,5 +258,124 @@ describe('Chrome 化的通道（CB-U36）', () => {
     state.requestOmniboxFocus.mockClear()
     await invoke('browser-view:create-tab', HOST, 'https://a.example/')
     expect(state.requestOmniboxFocus).not.toHaveBeenCalled()
+  })
+})
+
+describe('内部页面与证书警告的通道（BS-U19 / BS-U20 / BS-U21）', () => {
+  const fromNet = (channel: string, ...args: unknown[]): unknown => {
+    const definition = listDefinitions().find((d) => d.channel === channel)
+    if (!definition) throw new Error(`no definition for ${channel}`)
+    return definition.fn(netCtx(1), ...args)
+  }
+
+  it.each([
+    ['宿主窗口 7', HOST],
+    ['主窗口 9', OTHER]
+  ])(
+    "BS-U19 open-settings（%s）：先 openBrowserWindow、再 openInternalPage('settings')",
+    async (_l, sender) => {
+      await invoke('browser-view:open-settings', sender)
+      expect(state.openBrowserWindow).toHaveBeenCalledTimes(1)
+      expect(state.openInternalPage.mock.calls).toEqual([['settings']])
+      expect(state.openBrowserWindow.mock.invocationCallOrder[0]).toBeLessThan(
+        state.openInternalPage.mock.invocationCallOrder[0]
+      )
+      expect(state.createTab).not.toHaveBeenCalled()
+    }
+  )
+
+  it("BS-U19 open-internal('settings') 从窗口来：openInternalPage 一次，从不开窗口", async () => {
+    await invoke('browser-view:open-internal', HOST, 'settings')
+    expect(state.openInternalPage.mock.calls).toEqual([['settings']])
+    await invoke('browser-view:open-internal', OTHER, 'settings')
+    expect(state.openInternalPage).toHaveBeenCalledTimes(2)
+    expect(state.openBrowserWindow).not.toHaveBeenCalled()
+    expect(state.createTab).not.toHaveBeenCalled()
+  })
+
+  it('BS-U19 open-internal：网络客户端发来的不理', async () => {
+    await fromNet('browser-view:open-internal', 'settings')
+    expect(state.openInternalPage).not.toHaveBeenCalled()
+    expect(state.openBrowserWindow).not.toHaveBeenCalled()
+  })
+
+  it.each([['unknown'], ['Settings'], [undefined], [42], [{ page: 'settings' }]])(
+    'BS-U19 open-internal(%j)：不认识的页名不调',
+    async (page) => {
+      await invoke('browser-view:open-internal', HOST, page)
+      expect(state.openInternalPage).not.toHaveBeenCalled()
+      expect(state.openBrowserWindow).not.toHaveBeenCalled()
+    }
+  )
+
+  it('BS-U20 proceed-unsafe 从宿主窗口 7：proceedPastCertError 恰好收到 [tabId]（多余参数丢掉），回它的值', async () => {
+    expect(await invoke('browser-view:proceed-unsafe', HOST, 'T', 'extra', 42)).toBe(true)
+    expect(state.proceedPastCertError.mock.calls).toEqual([['T']])
+    state.proceedPastCertError.mockReturnValue(false)
+    expect(await invoke('browser-view:proceed-unsafe', HOST, 'U')).toBe(false)
+    expect(state.proceedPastCertError.mock.calls).toEqual([['T'], ['U']])
+  })
+
+  it('BS-U20 proceed-unsafe 从别的窗口（9）或网络客户端：回 false、不调', async () => {
+    expect(await invoke('browser-view:proceed-unsafe', OTHER, 'T')).toBe(false)
+    expect(await fromNet('browser-view:proceed-unsafe', 'T')).toBe(false)
+    expect(state.proceedPastCertError).not.toHaveBeenCalled()
+  })
+
+  it.each([[42], [undefined], [null], [{ tabId: 'T' }], [['T']]])(
+    'BS-U20 proceed-unsafe(%j) 从宿主窗口：tabId 不是字符串 → false、不调',
+    async (tabId) => {
+      expect(await invoke('browser-view:proceed-unsafe', HOST, tabId)).toBe(false)
+      expect(state.proceedPastCertError).not.toHaveBeenCalled()
+    }
+  )
+
+  it('BS-U21 navigate(T, url) → navigateTab(T, url)，shuvix:// 也一样；非字符串不理', async () => {
+    await invoke('browser-view:navigate', HOST, 'T', 'https://a.example/')
+    await invoke('browser-view:navigate', OTHER, 'T', 'shuvix://settings')
+    expect(state.navigateTab.mock.calls).toEqual([
+      ['T', 'https://a.example/'],
+      ['T', 'shuvix://settings']
+    ])
+    state.navigateTab.mockClear()
+    await invoke('browser-view:navigate', HOST, 42, 'https://a.example/')
+    await invoke('browser-view:navigate', HOST, 'T', 42)
+    await invoke('browser-view:navigate', HOST, 'T')
+    await invoke('browser-view:navigate', HOST, undefined, undefined)
+    expect(state.navigateTab).not.toHaveBeenCalled()
+  })
+
+  it('BS-U21 capture(T, 1600) → captureTab(T, 1600)，回它的值', async () => {
+    expect(await invoke('browser-view:capture', HOST, 'T', 1600)).toBe('data:x')
+    expect(state.captureTab.mock.calls).toEqual([['T', 1600]])
+  })
+
+  it.each([
+    ['不给', []],
+    ['0', [0]],
+    ['-1', [-1]],
+    ["'800'", ['800']],
+    ['NaN', [Number.NaN]]
+  ] as const)('BS-U21 capture(T, %s) → captureTab(T, undefined)', async (_l, extra) => {
+    await invoke('browser-view:capture', HOST, 'T', ...extra)
+    expect(state.captureTab.mock.calls).toEqual([['T', undefined]])
+  })
+
+  it("BS-U21 create-tab('shuvix://settings') → openInternalPage('settings')、回它的 id；不 createTab、不聚焦地址栏", async () => {
+    expect(await invoke('browser-view:create-tab', HOST, 'shuvix://settings')).toBe('tab-settings')
+    expect(state.openInternalPage.mock.calls).toEqual([['settings']])
+    expect(state.createTab).not.toHaveBeenCalled()
+    expect(state.requestOmniboxFocus).not.toHaveBeenCalled()
+  })
+
+  it('BS-U21 create-tab 不认识的 shuvix:// 当普通地址交给 createTab', async () => {
+    await invoke('browser-view:create-tab', HOST, 'shuvix://unknown')
+    expect(state.openInternalPage).not.toHaveBeenCalled()
+    expect(state.createTab.mock.calls).toEqual([['shuvix://unknown', { activate: true }]])
+  })
+
+  it('BS-U21 get-url → tabDisplayUrl(T) 的值', async () => {
+    expect(await invoke('browser-view:get-url', HOST, 'T')).toBe('shuvix://settings')
+    expect(state.tabDisplayUrl.mock.calls).toEqual([['T']])
   })
 })

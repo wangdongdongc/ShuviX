@@ -40,6 +40,7 @@ import {
   closeTab as closeTabView,
   createTab,
   getTabView,
+  isInternalTab,
   listTabs as listTabsService,
   noteAgentUse
 } from './browserViewService'
@@ -78,7 +79,8 @@ function shortIdFor(uuid: string): string {
 /** 解析 agent 传入的 tabId（短号或原始 UUID）→ UUID；不存在的 tab 给出可行动的错误 */
 function resolveTabId(tabId: string): string {
   const uuid = shortToUuid.get(tabId) ?? tabId
-  if (!getTabView(uuid)) {
+  // 内部页面（shuvix://settings …）对 agent 不存在：清浏览数据、关证书检查只能用户自己点
+  if (!getTabView(uuid) || isInternalTab(uuid)) {
     throw new Error(
       `No browser tab "${tabId}". Use list_tabs to see open tabs, or open_tab to open one.`
     )
@@ -137,18 +139,22 @@ class DesktopBrowserBackend implements BrowserBackend {
    * (opened by you) = 本会话的 agent 开的（与 Chrome 那条路同一个说法）。
    */
   async listTabs(): Promise<BrowserOpOutput> {
-    const lines = listTabsService().map((t) => {
-      const tag =
-        `${t.active ? ' (active)' : ''}${t.crashed ? ' (crashed)' : ''}` +
-        `${t.openerSessionId === this.sessionId ? ' (opened by you)' : ''}`
-      return `[${shortIdFor(t.id)}]${tag} ${t.title || '(untitled)'} — ${t.url}`
-    })
+    const lines = listTabsService()
+      .filter((t) => !t.internalPage)
+      .map((t) => {
+        const tag =
+          `${t.active ? ' (active)' : ''}${t.crashed ? ' (crashed)' : ''}` +
+          `${t.openerSessionId === this.sessionId ? ' (opened by you)' : ''}`
+        return `[${shortIdFor(t.id)}]${tag} ${t.title || '(untitled)'} — ${t.url}`
+      })
     return { text: lines.join('\n') || '(no open tabs — use open_tab to open one)' }
   }
 
   /** 不激活、不 attach —— server 只是想知道这个 tab 眼下显示的是什么 */
   async tabUrl(p: { tabId: string }): Promise<string | undefined> {
-    const view = getTabView(shortToUuid.get(p.tabId) ?? p.tabId)
+    const uuid = shortToUuid.get(p.tabId) ?? p.tabId
+    if (isInternalTab(uuid)) return undefined
+    const view = getTabView(uuid)
     return view && !view.webContents.isDestroyed() ? view.webContents.getURL() : undefined
   }
 

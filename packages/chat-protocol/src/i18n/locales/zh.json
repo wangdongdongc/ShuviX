@@ -749,18 +749,13 @@
     "toolDbEmpty": "暂无数据库凭据",
     "toolDbEmptyHint": "添加连接后，勾选了数据库服务器的会话即可查询它",
     "toolDbDuplicateName": "凭据名称已存在",
-    "toolBrowserTitle": "浏览器面板",
-    "toolBrowserDesc": "内置浏览器面板的行为 —— 你自己浏览、以及会话启用了浏览器时 AI 访问网页，都按这里的设置。",
     "toolBrowserSearchEngine": "地址栏搜索引擎",
     "toolBrowserSearchEngineHint": "在内置浏览器的地址栏里输入的不是网址时，用它来搜索。",
     "toolBrowserIgnoreCertificateErrors": "忽略证书错误",
     "toolBrowserIgnoreCertificateErrorsHint": "关闭时遇到自签名 / 不受信任证书会弹窗确认；开启后将静默放行所有证书错误。",
     "toolBrowserSecurityWarning": "警告：开启后所有 HTTPS 证书错误（自签名、过期、域名不匹配）都会被忽略，包括公网钓鱼站。请仅在受控的内网环境中启用。",
-    "toolBrowserSavedSitesTitle": "已保存站点",
-    "toolBrowserSavedSitesDesc": "内置浏览器分区中写入过 cookie 的站点。",
     "toolBrowserNoSites": "暂无已保存数据的站点",
     "toolBrowserClearSite": "清除该站点数据",
-    "toolBrowserClearAll": "清空全部",
     "tabMcp": "MCP",
     "mcpTitle": "MCP Server 管理",
     "mcpDesc": "配置 MCP (Model Context Protocol) 服务器，为 AI 扩展更多工具能力。",
@@ -959,7 +954,11 @@
     "networkLanScopeMissing": "{{name}}（找不到）",
     "networkLanScopeOnly": "只有 {{cidr}} 网段里的设备能连接。",
     "networkHeadlessScopeNote": "由启动参数决定（--bind）；要改，请重启 ShuviX。",
-    "networkErrorNoInterface": "这台电脑上没有叫 “{{name}}” 的网卡，也没有这个地址。请换一个网络。"
+    "networkErrorNoInterface": "这台电脑上没有叫 “{{name}}” 的网卡，也没有这个地址。请换一个网络。",
+    "toolBrowserMovedTitle": "浏览器设置",
+    "toolBrowserMovedRow": "搜索引擎、网站数据、证书",
+    "toolBrowserMovedDesc": "这些设置管的是浏览器本身，现在在浏览器窗口的设置页里（⋮ → 设置）。",
+    "toolBrowserMovedOpen": "打开浏览器设置"
   },
   "about": {
     "description": "您的 AI 助手",
@@ -1212,15 +1211,9 @@
     "newTab": "新建标签页",
     "closeTab": "关闭标签页",
     "untitledTab": "新标签页",
-    "cert": {
-      "title": "证书不受信任：{{host}}",
-      "continue": "继续访问",
-      "cancel": "取消"
-    },
     "error": {
       "title": "无法访问此网站",
       "code": "错误代码：{{code}} ({{description}})",
-      "certHint": "该网站使用了自签名或不受信任的证书。",
       "crashedTitle": "页面崩溃了",
       "crashedDetail": "页面的进程停止了（{{reason}}）。",
       "retry": "重试"
@@ -1244,7 +1237,7 @@
       "zoomIn": "放大",
       "zoomOut": "缩小",
       "zoomReset": "恢复默认大小（当前 {{pct}}%）",
-      "settings": "浏览数据与证书设置…"
+      "settings": "设置"
     },
     "infobar": {
       "using": "「{{session}}」正在使用此页面",
@@ -1252,6 +1245,52 @@
       "intercepting": "「{{session}}」正在使用此页面，并拦截了它的网络请求 —— 页面内容可能被修改",
       "interceptingUnknown": "AI 正在使用此页面，并拦截了它的网络请求 —— 页面内容可能被修改",
       "openSession": "查看对话"
+    },
+    "internal": {
+      "settings": "设置"
+    },
+    "settingsPage": {
+      "title": "设置",
+      "search": "搜索引擎",
+      "privacy": "隐私和安全",
+      "certificates": "证书",
+      "clearAll": "删除浏览数据",
+      "clearAllDesc": "所有网站的 Cookie、缓存和本地存储，登录状态也会一起清掉。",
+      "clearAllButton": "删除…",
+      "clearAllConfirm": "确认删除",
+      "siteData": "网站数据",
+      "siteDataDesc": "在内置浏览器里存过 Cookie 的网站。删除某个网站的数据会让你在那个网站上退出登录。",
+      "searchSites": "搜索网站",
+      "noMatch": "没有匹配的网站",
+      "cookies_one": "{{count}} 个 Cookie",
+      "cookies_other": "{{count}} 个 Cookie",
+      "certExceptions": "已放行的网站",
+      "certExceptionsDesc": "你在证书警告页上选择了「继续前往」的网站，直到退出 ShuviX 前都不会再警告。",
+      "noCertExceptions": "没有"
+    },
+    "certError": {
+      "title": "你的连接不是私密连接",
+      "detail": "攻击者可能会试图从 {{host}} 窃取你的信息（例如密码、消息或信用卡信息）。",
+      "advanced": "高级",
+      "hideAdvanced": "隐藏详情",
+      "advancedDetail": "这个服务器无法证明它是 {{host}}：它的安全证书不受这台设备信任。可能是配置有误，也可能有人在冒充它。",
+      "proceed": "继续前往 {{host}}（不安全）",
+      "back": "返回安全的页面"
+    },
+    "siteInfo": {
+      "button": "查看网站信息",
+      "secure": "连接是安全的",
+      "insecure": "连接不安全",
+      "insecureDetail": "不要在这个网站上输入密码、信用卡等敏感信息。",
+      "certException": "你已让这个网站跳过证书检查",
+      "certExceptionDetail": "直到退出 ShuviX 前都不会再提醒。",
+      "local": "这是一个本地文件",
+      "cookies": "Cookie 和网站数据",
+      "cookieCount_one": "此网站有 {{count}} 个 Cookie",
+      "cookieCount_other": "此网站有 {{count}} 个 Cookie",
+      "clear": "清除此网站的数据",
+      "clearConfirm": "确认清除（会退出登录）",
+      "siteSettings": "网站设置"
     }
   },
   "command": {

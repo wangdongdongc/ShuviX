@@ -21,17 +21,21 @@
  * 关窗不销毁 tab（保留页面状态），销毁只发生在 closeTab 与 app 退出。
  */
 
-import { WebContentsView, BrowserWindow, dialog, session, type WebContents } from 'electron'
+import { WebContentsView, BrowserWindow, session, type WebContents } from 'electron'
 import { randomUUID } from 'crypto'
 import { createLogger } from '../../logger'
 import { settingsDao } from '../../dao/settingsDao'
-import { t } from '../../i18n'
 import { browserCdpManager } from './browserCdpService'
 import { clipUrl, externalOpenDecision, routeExternalUrl } from '../externalOpen'
 import { appEventBus } from '../../utils/appEventBus'
 import { destroyStagingWindow, getStagingWindow, STAGING_SIZE } from './stagingWindow'
 import { agentActing, hasAgentGuards, uninstallAgentGuards } from './agentGuards'
 import { browserShortcutFor, nextZoomPercent, type BrowserShortcut } from './shortcuts'
+import {
+  internalPageOf,
+  internalPageUrl,
+  type InternalPage
+} from '../../../shared/browserInternalPages'
 
 const log = createLogger('BrowserView')
 
@@ -78,8 +82,21 @@ let layout = new Map<string, Slot>()
 /** 卡片墙此刻是否让 view 上墙（有对话框覆盖层时 renderer 报 false，view 全部回停放窗口让位） */
 let panelVisible = false
 let sessionInitialized = false
-/** 运行期信任的自签名 host 集合（跨 tab 共享），进程结束即失效 */
+/**
+ * 用户在证书警告页上点了「继续前往（不安全）」的站点（host，跨 tab 共享）；进程结束即失效。
+ * 照 Chrome：放行只对这个站点、只到退出为止。
+ */
 const trustedHosts = new Set<string>()
+/**
+ * 每个 tab 最近一次因证书错误被挡下的主框架加载：警告页上的「继续前往」只认这一条（host 与要重新加载的地址），
+ * 不接受 renderer 报来的任意 host —— 放行哪个站点由主进程自己看到的那次错误决定。
+ */
+const certBlocked = new Map<string, { host: string; url: string }>()
+/**
+ * 内部页面（shuvix://settings …）：tabId → 页名。这种 tab 的 webContents 只是一张 about:blank 占位，
+ * 页面本身是浏览器窗口外壳里的 DOM（见 shared/browserInternalPages.ts）；agent 看不到它们。
+ */
+const internalPages = new Map<string, InternalPage>()
 
 /** 最近一个在这页上动作的会话（标签上的圆点、「〈会话〉正在使用此页面」提示条） */
 interface AgentUse {
@@ -119,8 +136,6 @@ const closedUrls: string[] = []
  * 回到单页视图时照它恢复。进程结束即失效。
  */
 const userZoom = new Map<string, number>()
-/** 同一 host 的并发证书弹窗合并：复用 in-flight 决策 Promise */
-const pendingCertPrompts = new Map<string, Promise<boolean>>()
 
 /**
  * 初始化浏览器 partition 的权限策略。
@@ -354,7 +369,7 @@ function routeWindowOpen(openerTabId: string, targetUrl: string, pageUrl: string
  */
 export function createTab(
   url?: string,
-  opts?: { activate?: boolean; openerSessionId?: string }
+  opts?: { activate?: boolean; openerSessionId?: string; internalPage?: InternalPage }
 ): string {
   if (tabs.size >= MAX_TABS) {
     throw new Error(`Too many browser tabs (max ${MAX_TABS}). Close some tabs first.`)
@@ -408,15 +423,21 @@ export function createTab(
     return { action: 'deny' }
   })
 
-  // ====== 自签名 / 不受信任证书放行（按 host 信任，会话内跨 tab 有效） ======
-  // 行为对齐 Chrome：用户点"继续访问"即对该 host 自动放行至会话结束；
-  // 同一 host 的并发 cert-error（页面子资源）合并为一次弹窗。
-  wc.on('certificate-error', async (event, certUrl, _error, _cert, callback) => {
+  // ====== 证书错误：照 Chrome 用整页警告，不弹框 ======
+  // 证书有问题的主框架加载一律挡下（页面区显示「您的连接不是私密连接」）；用户在警告上点「继续前往（不安全）」
+  // 才放行这个站点、直到退出（proceedPastCertError）。按钮在浏览器窗口外壳里，agent 点不到 —— agent 发起的
+  // 导航既不会凭空弹出对话框，也不能替用户放行。设置里「忽略全部证书错误」打开时一律放行（内网自签名用）。
+  wc.on('certificate-error', (event, certUrl, _error, _cert, callback, isMainFrame) => {
     event.preventDefault()
+    // 照 Chrome，放行按主机名记（不含端口）
     let host: string
     try {
-      host = new URL(certUrl).host
+      host = new URL(certUrl).hostname
     } catch {
+      callback(false)
+      return
+    }
+    if (!host) {
       callback(false)
       return
     }
@@ -425,44 +446,9 @@ export function createTab(
       callback(true)
       return
     }
-    // 证书问题要用户当场裁决，但弹窗绝不能打扰用户手上的事：只有用户正看着浏览器窗口
-    // （窗口可见且有焦点）时才问。否则拒绝这次加载 —— 卡片上会显示证书错误与「重试」，
-    // 用户点重试时窗口正有焦点，再问。agent 发起的导航因此永远不会凭空弹出对话框、抢走焦点。
-    const parent = browserWindowInFront()
-    if (!parent) {
-      log.info(`Certificate error for ${host} while the browser window is not in front: refused`)
-      callback(false)
-      return
-    }
-
-    let pending = pendingCertPrompts.get(host)
-    if (!pending) {
-      pending = (async () => {
-        try {
-          const { response } = await dialog.showMessageBox(parent, {
-            type: 'warning',
-            buttons: [t('browser.cert.continue'), t('browser.cert.cancel')],
-            defaultId: 1,
-            cancelId: 1,
-            message: t('browser.cert.title', { host }),
-            detail: certUrl
-          })
-          if (response === 0) {
-            trustedHosts.add(host)
-            return true
-          }
-          return false
-        } catch (err) {
-          log.warn('certificate-error dialog failed', err)
-          return false
-        } finally {
-          pendingCertPrompts.delete(host)
-        }
-      })()
-      pendingCertPrompts.set(host, pending)
-    }
-
-    callback(await pending)
+    if (isMainFrame) certBlocked.set(tabId, { host, url: certUrl })
+    log.info(`Certificate error for ${host}: blocked (the page shows the warning)`)
+    callback(false)
   })
 
   // ====== 转发事件到 renderer（payload 均带 tabId） ======
@@ -498,14 +484,18 @@ export function createTab(
   // 地址栏即时反馈：导航一开始就把目标 URL 交给 renderer（主框架、非 same-document）
   wc.on('did-start-navigation', (details) => {
     if (!details.isMainFrame || details.isSameDocument) return
-    sendToRenderer('browser-view:did-navigate', { tabId, url: details.url })
+    // 内部页面那张 about:blank 占位之外的导航（地址栏、后退前进）：这个 tab 不再是内部页面
+    if (internalPages.has(tabId) && details.url !== 'about:blank') internalPages.delete(tabId)
+    // 去了别的地址：上一次被挡下的证书错误作废（警告页上的「继续前往」只对它自己那次加载有效）
+    if (certBlocked.get(tabId)?.url !== details.url) certBlocked.delete(tabId)
+    sendToRenderer('browser-view:did-navigate', { tabId, url: displayUrlOf(tabId, details.url) })
   })
 
   // 提交了导航：地址、能否后退 / 前进、这个站点上用户调的缩放（换了站点就换一个值）
   const sendCommitted = (navUrl: string): void => {
     sendToRenderer('browser-view:did-navigate', {
       tabId,
-      url: navUrl,
+      url: displayUrlOf(tabId, navUrl),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
       zoomPercent: userZoomPercentOf(view)
@@ -557,15 +547,16 @@ export function createTab(
   const activate = !!opts?.activate || activeTabId === null
   tabs.set(tabId, view)
   if (opts?.openerSessionId) openerSession.set(tabId, opts.openerSessionId)
+  if (opts?.internalPage) internalPages.set(tabId, opts.internalPage)
   sendToRenderer('browser-view:tab-created', {
     tabId,
-    url: url ?? 'about:blank',
+    url: opts?.internalPage ? internalPageUrl(opts.internalPage) : (url ?? 'about:blank'),
     active: activate
   })
 
-  // 总是真的导航一次（没给地址就是 about:blank）：从没导航过的 webContents 没有渲染进程，
-  // agent 之后 attach 上去发的 CDP 命令会一直等下去
-  void wc.loadURL(url ?? 'about:blank')
+  // 总是真的导航一次（没给地址就是 about:blank；内部页面也是 —— 页面本身在外壳里）：从没导航过的
+  // webContents 没有渲染进程，agent 之后 attach 上去发的 CDP 命令会一直等下去
+  void wc.loadURL(opts?.internalPage ? 'about:blank' : (url ?? 'about:blank'))
   if (activate) activateTab(tabId)
   publishTabCount()
 
@@ -597,7 +588,7 @@ export function closeTab(tabId: string, opts?: { remember?: boolean }): void {
   if (!view) return
   const wc = view.webContents
   if (opts?.remember) {
-    const url = wc.getURL()
+    const url = displayUrlOf(tabId, wc.getURL())
     if (url && url !== 'about:blank') {
       closedUrls.push(url)
       if (closedUrls.length > MAX_CLOSED_URLS) closedUrls.shift()
@@ -612,7 +603,10 @@ export function reopenClosedTab(): string | null {
   // 开满了就什么也不做、记录留着 —— 先取出来再建会在 createTab 抛错时把那个地址弄丢
   if (tabs.size >= MAX_TABS) return null
   const url = closedUrls.pop()
-  return url ? createTab(url, { activate: true }) : null
+  if (!url) return null
+  // 关掉的是设置页之类的内部页面：照样开回来（已经开着就选中它）
+  const page = internalPageOf(url)
+  return page ? openInternalPage(page) : createTab(url, { activate: true })
 }
 
 /**
@@ -629,6 +623,8 @@ function forgetTab(tabId: string, view: WebContentsView): void {
   layout.delete(tabId)
   agentUse.delete(tabId)
   openerSession.delete(tabId)
+  internalPages.delete(tabId)
+  certBlocked.delete(tabId)
   const parent = parentOf.get(tabId)
   parentOf.delete(tabId)
   if (parent && !parent.isDestroyed()) parent.contentView.removeChildView(view)
@@ -676,6 +672,8 @@ export interface BrowserTabSnapshot {
   agentSessionTitle?: string
   /** 开这个 tab 的会话（agent 开的才有） */
   openerSessionId?: string
+  /** 内部页面（shuvix://settings …）：url 是它的显示地址 */
+  internalPage?: InternalPage
 }
 
 /** tab 列表快照（renderer 水合用），顺序 = tab 条顺序；带 CDP 状态供重载后恢复标识 */
@@ -685,9 +683,10 @@ export function listTabs(): BrowserTabSnapshot[] {
     const wc = view.webContents
     const use = agentUse.get(id)
     const opener = openerSession.get(id)
+    const internal = internalPages.get(id)
     return {
       id,
-      url: wc.getURL() || 'about:blank',
+      url: displayUrlOf(id, wc.getURL() || 'about:blank'),
       title: wc.getTitle(),
       active: id === activeTabId,
       cdpAttached: cdp.attached,
@@ -700,9 +699,84 @@ export function listTabs(): BrowserTabSnapshot[] {
       ...(use
         ? { agentSessionId: use.sessionId, agentSessionTitle: sessionTitleOf(use.sessionId) }
         : {}),
-      ...(opener ? { openerSessionId: opener } : {})
+      ...(opener ? { openerSessionId: opener } : {}),
+      ...(internal ? { internalPage: internal } : {})
     }
   })
+}
+
+/** 地址栏里显示的地址：内部页面显示 shuvix://…，其余照原样 */
+function displayUrlOf(tabId: string, rawUrl: string): string {
+  const page = internalPages.get(tabId)
+  return page ? internalPageUrl(page) : rawUrl
+}
+
+/** 这个 tab 是不是内部页面（agent 那一侧据此当它不存在） */
+export function isInternalTab(tabId: string): boolean {
+  return internalPages.has(tabId)
+}
+
+/**
+ * 打开一个内部页面（⋮ → 设置、站点信息里的「网站设置」、主设置窗口里的「打开浏览器设置」）：
+ * 照 Chrome，已经开着就选中那一页，否则新开一个并选中。回 tabId。
+ */
+export function openInternalPage(page: InternalPage): string {
+  for (const [id, p] of internalPages) {
+    if (p === page && tabs.has(id)) {
+      activateTab(id)
+      return id
+    }
+  }
+  return createTab(undefined, { activate: true, internalPage: page })
+}
+
+/**
+ * 用户在地址栏 / 新标签页 / 错误页的重试里让这个 tab 去一个地址：`shuvix://…` 变成内部页面，
+ * 其余照常加载（这个 tab 若原本是内部页面，就不再是了）。
+ */
+export function navigateTab(tabId: string, url: string): void {
+  const view = tabs.get(tabId)
+  if (!view || view.webContents.isDestroyed()) return
+  const page = internalPageOf(url)
+  if (page) {
+    internalPages.set(tabId, page)
+    // 这页从此对 agent 不存在：agent 若接着它，断开、去掉「正被谁使用」的标记（圆点、提示条跟着消失）
+    agentUse.delete(tabId)
+    uninstallAgentGuards(tabId)
+    void browserCdpManager.detach(tabId).catch(() => undefined)
+    sendToRenderer('browser-view:did-navigate', { tabId, url: internalPageUrl(page) })
+    void view.webContents.loadURL('about:blank')
+    return
+  }
+  internalPages.delete(tabId)
+  void view.webContents.loadURL(url)
+}
+
+/**
+ * 证书警告页上的「继续前往（不安全）」：放行这个 tab 最近一次被挡下的那个站点（直到退出），重新加载那个地址。
+ * 只认主进程自己看到的那次错误；没有就什么也不做（回 false）。
+ */
+export function proceedPastCertError(tabId: string): boolean {
+  const blocked = certBlocked.get(tabId)
+  const view = tabs.get(tabId)
+  if (!blocked || !view || view.webContents.isDestroyed()) return false
+  certBlocked.delete(tabId)
+  trustedHosts.add(blocked.host)
+  log.info(`Certificate warning bypassed by the user for ${blocked.host}`)
+  void view.webContents.loadURL(blocked.url)
+  return true
+}
+
+/** 用户放行过证书错误的站点（主机名，不含端口；设置页、站点信息里显示；直到退出） */
+export function certExceptionHosts(): string[] {
+  return [...trustedHosts].sort()
+}
+
+/** 地址栏里显示的地址（内部页面是 shuvix://…；IPC get-url 用） */
+export function tabDisplayUrl(tabId: string): string {
+  const view = tabs.get(tabId)
+  if (!view || view.webContents.isDestroyed()) return ''
+  return displayUrlOf(tabId, view.webContents.getURL())
 }
 
 /** 开这个 tab 的会话（agent 开的才有） */
@@ -916,6 +990,8 @@ export function destroyAllTabs(): void {
   layout.clear()
   agentUse.clear()
   openerSession.clear()
+  internalPages.clear()
+  certBlocked.clear()
   closedUrls.length = 0
   userZoom.clear()
   activeTabId = null
