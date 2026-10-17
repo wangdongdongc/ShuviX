@@ -773,6 +773,59 @@ export function uncaughtExceptions(app: Pick<E2EAppBase, 'userData'>): string {
   return existsSync(file) ? readFileSync(file, 'utf8') : ''
 }
 
+/** bootstrap.cjs 记的一条窗口事件（`<userData>/e2e-windows.log`） */
+export interface WindowEvent {
+  /** BrowserWindow 的 id */
+  id: number
+  event: 'created' | 'show' | 'focus' | 'closed' | 'navigate'
+  /** created：那一刻的 isVisible() */
+  visible?: boolean | null
+  /** created：那一刻的 isFocusable() */
+  focusable?: boolean | null
+  /** navigate：顶层导航到的地址 */
+  url?: string
+}
+
+/** 实例里每扇窗的事件（按发生顺序）；一条都没有时回空数组。之前的记录用 `.slice(n)` 跳过 */
+export function windowEvents(app: Pick<E2EAppBase, 'userData'>): WindowEvent[] {
+  const file = join(app.userData, 'e2e-windows.log')
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as WindowEvent)
+}
+
+/** 一扇窗的事件归拢（`windowsOf`） */
+export interface WindowHistory {
+  id: number
+  /** created 那一条（窗口建在记录范围之前时没有） */
+  created?: WindowEvent
+  /** 顶层导航过的地址（按顺序） */
+  urls: string[]
+  shown: boolean
+  focused: boolean
+  closed: boolean
+}
+
+/** 把事件按窗口归拢（按每扇窗第一次出现的顺序） */
+export function windowsOf(events: WindowEvent[]): WindowHistory[] {
+  const byId = new Map<number, WindowHistory>()
+  for (const e of events) {
+    let w = byId.get(e.id)
+    if (!w) {
+      w = { id: e.id, urls: [], shown: false, focused: false, closed: false }
+      byId.set(e.id, w)
+    }
+    if (e.event === 'created') w.created = e
+    else if (e.event === 'navigate' && e.url) w.urls.push(e.url)
+    else if (e.event === 'show') w.shown = true
+    else if (e.event === 'focus') w.focused = true
+    else if (e.event === 'closed') w.closed = true
+  }
+  return [...byId.values()]
+}
+
 /** 第二个实例的结局 */
 export interface SecondInstanceResult {
   /** 退出码（被信号杀掉时为 null） */

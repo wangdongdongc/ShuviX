@@ -1,6 +1,6 @@
 ---
 name: widget
-description: "如何构建、修改、导出和调试 ShuviX 小组件（widget）—— 用户从「Widget 面板」反复打开、各自在独立窗口里运行的常驻 React 小应用：`shuvix widget` CLI 的生命周期、封闭的依赖集、把记录存进小组件自己的数据库、以从浏览器使用 ShuviX 时也能工作的方式读取用户电脑上的文件、设计指南，以及改造旧的小组件。用户要一个 widget、mini app、小工具或小组件，或者一个会反复回来用的小工具时加载它；修改或调试已有的小组件之前也要加载。"
+description: "如何构建、修改、导出和调试 ShuviX 小组件（widget）—— 用户从「Widget 面板」反复打开的常驻 React 小应用：`shuvix widget` CLI 的生命周期、封闭的依赖集、把记录存进小组件自己的数据库、以从浏览器使用 ShuviX 时也能工作的方式读取用户电脑上的文件、面板、宽窗口和手机三处的设计指南、用截图检查排版，以及改造旧的小组件。用户要一个 widget、mini app、小工具或小组件，或者一个会反复回来用的小工具时加载它；修改或调试已有的小组件之前也要加载。"
 ---
 
 # ShuviX 小组件
@@ -26,8 +26,8 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 4. **只待在小组件自己的目录（`projectDir`）里。** 绝不编辑或删除 `widget.json`：它是小组件的身份，ShuviX 会自己重写它。
 5. **小组件 fetch 的一切都在它自己的 `/w/<id>/` 下**：`db/<table>` 是它的记录（`references/data.md`），`fs/file` 和 `fs/list` 是用户电脑上的文件（`references/files.md`）。绝不写 `shuvix-media://`、`file://` 或 `http://127.0.0.1:<port>`：它们只在桌面端有效，小组件从浏览器打开时就坏了。
 6. **持久状态放进数据库**，不放 `localStorage`、`IndexedDB` 或 cookie：从浏览器打开时小组件运行在沙箱里、没有自己的源（origin），这些都不可用。
-7. **从 320px 宽起就要能用。** 小组件多半在右侧面板里打开，面板通常只有 300–400px 宽。**暗色模式是必须的。** 这两条和其余外观要求都在 `references/design.md`：写 UI 之前先读它。
-8. **绝不汇报一个没构建成功的小组件。** 以一次绿色构建收尾，然后 `shuvix widget open <id>`。
+7. **在面板、宽窗口和手机上都要能用。** 同一个小组件会在右侧面板（300–420px 宽）、它自己的窗口或浏览器标签页（可能全屏）以及手机浏览器（触屏）里打开。**暗色模式是必须的。** 怎么为这三处排版，以及其余外观要求，都在 `references/design.md`：写 UI 之前先读它。
+8. **绝不汇报一个没构建成功的小组件。** 以一次绿色构建收尾。**不要替用户打开它**：告诉用户它已经在 Widget 面板里，说出它的名字。小组件在哪里开着，构建就会让它在哪里自动刷新。只有用户要你打开时才运行 `shuvix widget open <id>`。
 
 ## 新建小组件
 
@@ -37,7 +37,8 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 4. 按 `references/design.md` 实现它。
 5. 用 `name` 的语言写一份简短的 `README.md`：它做什么、主要交互、数据模型、读取哪些文件、扩展点。
 6. `shuvix widget build <id> --message "<one-line summary>"`。遇到 `buildSuccess: false` 就修好 `buildErrors` 再构建。
-7. `shuvix widget open <id>`，然后汇报。
+7. `shuvix widget preview <id>`，用 `read` 看截图；修改、构建、再预览，直到每个尺寸都没问题（`references/design.md` 的「检查」）。
+8. 汇报它已经在 Widget 面板里（规则 8）。
 
 ## 修改已有的小组件
 
@@ -45,7 +46,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 2. **动任何东西之前**先 `shuvix widget build <id> --message "chore: baseline before <task>"`：它能看出这个小组件能否构建，给本次对话访问它目录的权限，并且（构建成功时）把目录里已有的东西提交掉，让你的改动落成一个独立的提交。
 3. 读 `README.md` 和你要改的每一个文件，遵循它们的约定。本技能出现之前写的小组件，可能需要的不止你被要求的那处改动：读 `references/maintenance.md`。
 4. 用有针对性的 `edit` 来改，并在 README 的更新日志里加一行，用 README 的语言。
-5. `shuvix widget build <id> --message "<what changed>"`，修掉所有错误，然后 `shuvix widget open <id>` 并汇报。
+5. `shuvix widget build <id> --message "<what changed>"`，修掉所有错误。如果改了它的样子，预览一次（`references/design.md` 的「检查」）。然后汇报（规则 8）。
 
 绝不重命名、改作他用、归档或删除用户没问到的小组件。
 

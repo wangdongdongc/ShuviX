@@ -27,6 +27,7 @@ import {
   runWidgetDbQuery
 } from './widget'
 import * as widgetWindowService from './widgetWindowService'
+import { parsePreviewSizes, parsePreviewTheme, previewWidget } from './widgetPreviewService'
 import { sessionService } from './sessionService'
 import { resolveProjectConfig, isPathWithinWorkspace } from './toolContext'
 import { resolve as resolvePath } from 'path'
@@ -281,13 +282,25 @@ class CliServer {
       return await widgetService.build(id, { message })
     })
 
-    // widget 的"预览"就是把它当独立小应用打开（已开则聚焦）。构建 / URL 由窗口内 shell
-    // 自行完成，这里不等待，也不走 widgetService.open —— 避免与 shell 重复计一次打开数。
+    // 在 widget 自己的窗口里打开（已开则聚焦）—— 技能只让 agent 在用户要它打开时用。构建 / URL 由窗口内
+    // shell 自行完成，这里不等待，也不走 widgetService.open —— 避免与 shell 重复计一次打开数。
     this.handlers.set('widget.open', async (p) => {
       const id = String(p.id ?? '')
       if (!id) throw new Error('id required')
       widgetWindowService.open(id)
       return { id, opened: true }
+    })
+
+    // agent 自查排版：在看不见的窗口里按几种尺寸渲染、各截一张图（不弹窗口、不计打开），截图写进本会话的
+    // tool_results（会话目录，read 读得到）
+    this.handlers.set('widget.preview', async (p, sessionId) => {
+      const id = String(p.id ?? '')
+      if (!id) throw new Error('id required')
+      return await previewWidget(id, {
+        sizes: parsePreviewSizes(p.size),
+        theme: parsePreviewTheme(p.theme),
+        sessionId
+      })
     })
 
     this.handlers.set('widget.export', async (p, sessionId) => {

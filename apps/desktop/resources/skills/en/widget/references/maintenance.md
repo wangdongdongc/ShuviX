@@ -23,7 +23,7 @@ Then read `README.md` and every file you are about to change, and follow their c
 - Targeted `edit`s, not rewrites. Keep the mount block and its "DO NOT DELETE" comment.
 - Table changes follow `data.md` ("Changing tables").
 - Add one line to the README's changelog, in the README's language.
-- `shuvix widget build <id> --message "<what changed>"`, then `shuvix widget open <id>`.
+- `shuvix widget build <id> --message "<what changed>"`, and `shuvix widget preview <id>` if its look changed. Do not open it for the user (`SKILL.md`, rule 8).
 
 ## Widgets written before this skill
 
@@ -43,6 +43,6 @@ shuvix-media:|file://|127\.0\.0\.1|localhost:|localStorage|sessionStorage|indexe
 
 A hard-coded home folder (`/Users/<name>/…`) can stay, but `~/…` is better (`files.md`).
 
-Many older widgets were laid out for a window of their own. When updating one, check that it works from 320px wide (`design.md`, "Width").
+Many older widgets were laid out for a window of their own. When updating one, preview it and make it work in the panel, a wide window and on a phone (`design.md`, "Where it runs").
 
-After the change, build, open, and tell the user what you converted, so they can check the widget from a browser too.
+After the change, build, preview, and tell the user what you converted, so they can check the widget from a browser too.

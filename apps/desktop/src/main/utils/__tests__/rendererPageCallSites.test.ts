@@ -29,10 +29,13 @@ const PAGE_LOAD = /loadRendererPage\(/g
 /**
  * 不加载渲染端页面的窗口：文件 → 这种窗口的个数。
  * 停放窗口（stagingWindow）从不显示、自己什么页面都不加载，只是浏览器 tab 的 view 不在卡片墙上时的宿主。
+ * `shuvix widget preview` 的截图窗口（widgetPreviewService）从不显示，加载的是 widget 服务器上那个小组件自己的地址，
+ * 不是渲染端。
  * 往这里加之前先想清楚：只要窗口里显示的是我们的渲染端，它就该走 loadRendererPage。
  */
 const NO_PAGE_WINDOWS: Record<string, number> = {
-  'services/browser/stagingWindow.ts': 1
+  'services/browser/stagingWindow.ts': 1,
+  'services/widgetPreviewService.ts': 1
 }
 
 /** 今天调 loadRendererPage 的文件与次数（数目对不上说明有人新加/挪走了窗口，顺手把表也更新掉） */

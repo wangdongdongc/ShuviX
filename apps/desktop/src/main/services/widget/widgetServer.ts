@@ -217,6 +217,11 @@ export class WidgetServer {
     return this.entries.has(id)
   }
 
+  /** 上一次构建的错误（空 = 成功）；没注册 → undefined */
+  lastBuildErrors(id: string): readonly string[] | undefined {
+    return this.entries.get(id)?.buildErrors
+  }
+
   /** 构建 URL（server 未启动则返回 null） */
   getUrl(id: string): string | null {
     if (!this.server) return null

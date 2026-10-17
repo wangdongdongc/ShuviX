@@ -68,6 +68,7 @@ function printUsage(): void {
       '  shuvix widget init <id> --name "Display Name" [--description "..."]',
       '  shuvix widget build <id> [--message "<commit subject>"]',
       '  shuvix widget open <id>',
+      '  shuvix widget preview <id> [--size panel,window,phone] [--theme light|dark]',
       '  shuvix widget export <id> --to <dir|file.zip>',
       '  shuvix widget list [--archived]',
       '  shuvix widget db-init <id> --sql "<DDL>" | --file <path>',
@@ -121,6 +122,20 @@ function parseWidget(rest: string[]): ParsedCommand | null {
         process.exit(1)
       }
       return { command: 'widget.open', params: { id } }
+    }
+    case 'preview': {
+      const id = args[0]
+      if (!id) {
+        process.stderr.write('widget preview: <id> is required\n')
+        process.exit(1)
+      }
+      // 尺寸与主题的合法性在主进程里判（一份规则）；这里只原样转交
+      const size = flagValue(args, '--size')
+      const theme = flagValue(args, '--theme')
+      return {
+        command: 'widget.preview',
+        params: { id, ...(size ? { size } : {}), ...(theme ? { theme } : {}) }
+      }
     }
     case 'export': {
       const id = args[0]

@@ -1,6 +1,6 @@
 ---
 name: widget
-description: "How to build, change, export and debug ShuviX Widgets — persistent mini React apps the user reopens from the Widget panel, each in its own window: the `shuvix widget` CLI lifecycle, the closed dependency set, storing records in the widget's own database, reading files on the user's computer in a way that also works when ShuviX is used from a browser, the design guide, and reworking an older widget. Load this when the user asks for a widget, mini app, 小工具 or 小组件, or a small tool they will come back to, and before changing or debugging an existing widget."
+description: "How to build, change, export and debug ShuviX Widgets — persistent mini React apps the user reopens from the Widget panel: the `shuvix widget` CLI lifecycle, the closed dependency set, storing records in the widget's own database, reading files on the user's computer in a way that also works when ShuviX is used from a browser, the design guide for the panel, a wide window and a phone, checking the layout with screenshots, and reworking an older widget. Load this when the user asks for a widget, mini app, 小工具 or 小组件, or a small tool they will come back to, and before changing or debugging an existing widget."
 ---
 
 # ShuviX Widgets
@@ -26,8 +26,8 @@ This file is the whole workflow. The references hold the details; each row of th
 4. **Stay inside the widget's own directory** (`projectDir`). Never edit or delete `widget.json`: it is the widget's identity, and ShuviX rewrites it itself.
 5. **Everything the widget fetches lives under its own `/w/<id>/`**: `db/<table>` for its records (`references/data.md`), `fs/file` and `fs/list` for files on the user's computer (`references/files.md`). Never write `shuvix-media://`, `file://` or `http://127.0.0.1:<port>`: they only work on the desktop, and the widget breaks when it is opened from a browser.
 6. **Persistent state goes in the database**, not `localStorage`, `IndexedDB` or cookies: opened from a browser, the widget runs sandboxed without an origin of its own, where those are unavailable.
-7. **It works from 320px wide.** The widget usually opens inside the right panel, which is often 300–400px wide. **Dark mode is mandatory.** Both, and the rest of the look, are in `references/design.md`: read it before writing UI.
-8. **Never report a widget that has not built.** Finish with a green build, then `shuvix widget open <id>`.
+7. **It works in the panel, a wide window and on a phone.** The same widget opens in the right panel (300–420px wide), in its own window or a browser tab (up to full screen), and in a phone's browser (touch). **Dark mode is mandatory.** How to lay it out for all three, and the rest of the look, are in `references/design.md`: read it before writing UI.
+8. **Never report a widget that has not built.** Finish with a green build. **Do not open it for the user**: say it is ready in the Widget panel, by its name. A build reloads the widget wherever it is already open. Run `shuvix widget open <id>` only when the user asks you to open it.
 
 ## A new widget
 
@@ -37,7 +37,8 @@ This file is the whole workflow. The references hold the details; each row of th
 4. Implement it, following `references/design.md`.
 5. Write a short `README.md` in the language of `name`: what it does, its main interactions, its data model, the files it reads, its extension points.
 6. `shuvix widget build <id> --message "<one-line summary>"`. On `buildSuccess: false`, fix `buildErrors` and build again.
-7. `shuvix widget open <id>`, then report.
+7. `shuvix widget preview <id>` and `read` the screenshots; fix, build and preview again until it looks right at every size (`references/design.md`, "Check it").
+8. Report that it is ready in the Widget panel (rule 8).
 
 ## Changing an existing widget
 
@@ -45,7 +46,7 @@ This file is the whole workflow. The references hold the details; each row of th
 2. `shuvix widget build <id> --message "chore: baseline before <task>"` **before touching anything**: it shows whether the widget builds, gives this conversation access to its directory, and, if it builds, commits whatever was already there, so your change lands as its own commit.
 3. Read `README.md` and every file you are about to change, and follow their conventions. A widget written before this skill existed may need more than the change you were asked for: read `references/maintenance.md`.
 4. Change it with targeted `edit`s and add one line to the README's changelog, in the README's language.
-5. `shuvix widget build <id> --message "<what changed>"`, fix any errors, then `shuvix widget open <id>` and report.
+5. `shuvix widget build <id> --message "<what changed>"` and fix any errors. If you changed what it looks like, preview it (`references/design.md`, "Check it"). Then report (rule 8).
 
 Never rename, repurpose, archive or delete a widget the user did not ask about.
 

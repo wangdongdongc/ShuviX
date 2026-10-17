@@ -18,6 +18,7 @@
  * 系统浏览器（订阅登录会自动打开验证页 / 授权页），spec 读这个文件断言「打开了哪个地址」。
  * `shell.openPath` / `shell.showItemInFolder` 也一样（见 SHELL_OPEN_LOG）：「在文件管理器中打开 / 显示」
  * 不该在开发者的屏幕上弹出 Finder，spec 读这个文件断言主进程「打开了哪个路径」（或什么也没打开）。
+ * 窗口的建出 / 显示 / 聚焦 / 关闭也记一份（见 WINDOW_LOG，只记不改）：「这扇窗从没出现在用户面前」只有主进程看得到。
  *
  * 最后，实例**不能活过 harness**（instanceGuards.cjs 记着那次把磁盘写满的事故）：stdout / stderr 管道
  * 断了、或 launcher 进程没了，就不再写控制台、直接退出；本文件追加的每个文件都有上限。
@@ -224,6 +225,36 @@ if (
   )
   process.exit(1)
 }
+
+/**
+ * 窗口事件的记录文件名（在 userData 下；每行一个 JSON：`{ id, event, … }`）。**只记、不改任何行为**：每扇
+ * BrowserWindow 的建出（带着那一刻的 isVisible / isFocusable）、show、focus、closed，以及页面的顶层导航（url）。
+ * 「一扇窗从没显示过、从没拿到过焦点」只有主进程看得到 —— CDP 的 /json 只证明 target 存在过，而 e2e 带着
+ * `--disable-backgrounding-occluded-windows`，页面里的 visibilityState 也不作数。
+ */
+const WINDOW_LOG = 'e2e-windows.log'
+app.on('browser-window-created', (_event, win) => {
+  if (!userData) return
+  const id = win.id
+  // eslint-disable-next-line @typescript-eslint/explicit-function-return-type -- 纯 CommonJS，写不了类型标注
+  function record(entry) {
+    if (harnessGone) return
+    appendBounded(join(userData, WINDOW_LOG), `${JSON.stringify({ id, ...entry })}\n`)
+  }
+  let visible = null
+  let focusable = null
+  try {
+    visible = win.isVisible()
+    focusable = win.isFocusable()
+  } catch {
+    /* 读不到就记 null */
+  }
+  record({ event: 'created', visible, focusable })
+  win.on('show', () => record({ event: 'show' }))
+  win.on('focus', () => record({ event: 'focus' }))
+  win.on('closed', () => record({ event: 'closed' }))
+  win.webContents.on('did-navigate', (_e, url) => record({ event: 'navigate', url: String(url) }))
+})
 
 dialog.showOpenDialog = async (...args) => {
   recordNativeDialog('showOpenDialog', args)

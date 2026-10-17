@@ -24,10 +24,16 @@ const GUARD_CALL = /guardAppWindow\(/g
 
 /**
  * 明确不需要守卫的窗口：文件（相对 src/main 的路径）→ 免检的窗口数。
- * 今天一个都没有。往这里加之前先想清楚那个窗口里会显示什么 —— 只要页面上可能出现不是我们写的
+ * 往这里加之前先想清楚那个窗口里会显示什么 —— 只要页面上可能出现不是我们写的
  * 链接或 iframe（PDF、widget 里模型写的 HTML、聊天里的模型输出），它就该有守卫。
+ *
+ * - widgetPreviewService：`shuvix widget preview` 的截图窗口从不显示、没人在看 —— guardAppWindow 会把外链交给
+ *   系统打开，在这里就成了替 agent 开外站；它自己的守卫更严（弹窗、出 `/w/<id>/` 的导航、下载、权限一律拒，
+ *   什么都不交给系统）。
  */
-const UNGUARDED_ALLOWLIST: Record<string, number> = {}
+const UNGUARDED_ALLOWLIST: Record<string, number> = {
+  'services/widgetPreviewService.ts': 1
+}
 
 /** 今天造窗口的文件与各自的窗口数；数目对不上说明有人新加/挪走了窗口，顺手把这张表也更新掉 */
 const EXPECTED_WINDOW_FILES: Record<string, number> = {
@@ -37,6 +43,7 @@ const EXPECTED_WINDOW_FILES: Record<string, number> = {
   'services/markdownWindowService.ts': 1,
   'services/previewWindowService.ts': 1,
   'services/pinnedChatService.ts': 1,
+  'services/widgetPreviewService.ts': 1,
   'services/widgetWindowService.ts': 1
 }
 

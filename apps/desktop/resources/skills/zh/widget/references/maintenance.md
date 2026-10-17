@@ -23,7 +23,7 @@
 - 有针对性的 `edit`，不要重写。保留挂载块和它的 "DO NOT DELETE" 注释。
 - 表的改动遵循 `data.md`（「修改表」）。
 - 在 README 的更新日志里加一行，用 README 的语言。
-- `shuvix widget build <id> --message "<what changed>"`，然后 `shuvix widget open <id>`。
+- `shuvix widget build <id> --message "<what changed>"`，外观变了就再 `shuvix widget preview <id>`。不要替用户打开它（`SKILL.md` 规则 8）。
 
 ## 本技能出现之前写的小组件
 
@@ -43,6 +43,6 @@ shuvix-media:|file://|127\.0\.0\.1|localhost:|localStorage|sessionStorage|indexe
 
 硬编码的主文件夹（`/Users/<name>/…`）可以保留，但 `~/…` 更好（`files.md`）。
 
-很多旧的小组件是按独立窗口的大小排版的。更新这样的小组件时，检查它从 320px 宽起是否能用（`design.md` 的「宽度」）。
+很多旧的小组件是按独立窗口的大小排版的。更新这样的小组件时，预览它，并让它在面板、宽窗口和手机上都能用（`design.md` 的「在哪里运行」）。
 
-改完之后构建、打开，并告诉用户你转换了什么，好让他们也从浏览器检查一下这个小组件。
+改完之后构建、预览，并告诉用户你转换了什么，好让他们也从浏览器检查一下这个小组件。
