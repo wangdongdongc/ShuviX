@@ -399,6 +399,8 @@ export const API_TABLE = {
     rename: invoke('widget:rename', 1),
     setArchived: invoke('widget:setArchived', 1),
     delete: invoke('widget:delete', 1),
+    getIcon: invoke('widget:getIcon', 1),
+    setHomeOrder: invoke('widget:setHomeOrder', 1),
     getServerStatus: invoke('widget:getServerStatus', 0),
     stopServer: invoke('widget:stopServer', 0),
     startWidget: invoke('widget:startWidget', 1),
@@ -412,6 +414,8 @@ export const API_TABLE = {
   widgetWindow: {
     open: invoke('widgetWindow:open', 1),
     close: invoke('widgetWindow:close', 1),
+    status: invoke('widgetWindow:status', 1),
+    setPreferWindow: invoke('widgetWindow:setPreferWindow', 1),
     setAlwaysOnTop: invoke('widgetWindow:setAlwaysOnTop', 1),
     getAlwaysOnTop: invoke('widgetWindow:getAlwaysOnTop', 1)
   },
@@ -506,6 +510,8 @@ export const DESKTOP_ONLY_CHANNELS: Readonly<Record<string, string>> = {
   'knowledge:revealFile': 'opens the system file manager on this computer',
   'files:open': 'opens a preview / markdown window on this computer',
   'widgetWindow:open': 'opens a widget window on this computer',
+  'widgetWindow:status': "reports this computer's widget windows, which a browser does not have",
+  'widgetWindow:setPreferWindow': "remembers this computer's window-or-panel choice for a widget",
   'pinChat:pin': 'opens a floating chat window on this computer',
   'pinChat:focus': 'focuses a floating chat window on this computer',
   'browser-view:open-window': 'opens the in-app browser window on this computer',

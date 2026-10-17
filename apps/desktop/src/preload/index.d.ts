@@ -996,6 +996,10 @@ declare global {
       }) => Promise<{ success: boolean }>
       setArchived: (params: { id: string; archived: boolean }) => Promise<{ success: boolean }>
       delete: (id: string) => Promise<{ success: boolean }>
+      /** `icon.svg` 原文（没有 → null）；显示前要经 sanitizeAuthoredSvg */
+      getIcon: (id: string) => Promise<{ svg: string | null }>
+      /** 主屏图标顺序（整份替换） */
+      setHomeOrder: (ids: string[]) => Promise<{ success: boolean }>
       getServerStatus: () => Promise<{
         running: boolean
         port: number
@@ -1033,6 +1037,10 @@ declare global {
       open: (id: string) => Promise<{ success: true } | { success: false; error: string }>
       /** 关闭指定 widget 的独立窗口 */
       close: (id: string) => Promise<{ success: true }>
+      /** 此刻开着独立窗口的 widget，以及给出的 id 里上次选了独立窗口的那些 */
+      status: (ids: string[]) => Promise<{ open: string[]; preferWindow: string[] }>
+      /** 记下用户在面板里选的打开方式 */
+      setPreferWindow: (params: { id: string; value: boolean }) => Promise<{ success: boolean }>
       /** 切换独立窗口"始终置顶" */
       setAlwaysOnTop: (params: { id: string; value: boolean }) => Promise<{ alwaysOnTop: boolean }>
       /** 查询独立窗口"始终置顶"状态 */
@@ -1194,6 +1202,8 @@ declare global {
     updatedAt: number
     lastOpenedAt: number
     archivedAt: number
+    /** `icon.svg` 的修改时间（没有图标 → 0） */
+    iconMtime: number
   }
 
   interface Window {

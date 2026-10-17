@@ -10,7 +10,7 @@
  * 消费方：
  * - src/main/index.ts —— 在应用退出前优雅关闭
  * - src/main/ipc/widgetHandlers.ts —— 向 renderer 暴露 widget:* IPC
- * - src/main/services/cliServer.ts —— `shuvix widget …` CLI（内置 widget 子代理的作业面）
+ * - src/main/services/cliServer.ts —— `shuvix widget …` CLI（agent 照内置技能 builtin:widget 用它）
  * - src/main/services/widgetWindowService.ts —— widget 独立窗口的存在性校验 / 反注册
  */
 

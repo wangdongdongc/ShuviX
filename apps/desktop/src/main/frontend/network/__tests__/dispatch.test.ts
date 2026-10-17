@@ -92,7 +92,7 @@ describe('ND-1 networkChannelVerdict', () => {
 
 describe('DO-5 桌面专属表与分发器交叉核对', () => {
   it('DO-5 每个键：invoke → desktop_only，send → unknown', () => {
-    expect(DESKTOP_ONLY_KEYS.length).toBe(20)
+    expect(DESKTOP_ONLY_KEYS.length).toBe(22)
     for (const key of DESKTOP_ONLY_KEYS) {
       expect(networkChannelVerdict(key, 'invoke'), key).toBe('desktop_only')
       expect(networkChannelVerdict(key, 'send'), key).toBe('unknown')

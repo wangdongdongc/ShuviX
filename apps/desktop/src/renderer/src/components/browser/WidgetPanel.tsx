@@ -1,33 +1,76 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Wrench, Trash2, Archive, Square, ChevronRight, RotateCcw } from 'lucide-react'
+import { ChevronLeft, RotateCw, AppWindow } from 'lucide-react'
 import { useWidgetStore } from '../../stores/widgetStore'
 import { useContextMenu } from '@shuvix/app-shell'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { AnimatedCollapse } from '../common/AnimatedCollapse'
 import { isWebHost } from '../../host/hostMedia'
 import { downloadServerFile } from '../../host/serverDownload'
+import { WidgetHome, IOS_EASING } from '../widget/WidgetHome'
+import { WidgetFrame } from '../widget/WidgetFrame'
+import { WidgetIcon } from '../widget/WidgetIcon'
+import { ICON_SIZE } from '../widget/homeLayout'
+
+/** 打开 / 关回主屏的动效时长 */
+const OPEN_MS = 460
+const CLOSE_MS = 400
+/** 主屏在应用打开时缩到多小 */
+const HOME_SCALE = 0.9
+
+/** 一次进行中的打开 / 关回动效 */
+interface Transition {
+  kind: 'open' | 'close'
+  id: string
+}
+
+/** 图标在面板里的位置（相对面板左上角） */
+interface Box {
+  left: number
+  top: number
+  width: number
+  height: number
+}
 
 /**
- * Widget 面板 —— Right panel 的 Widget tab 内容
- * 卡片 ≈ app 图标：点击即在独立窗口打开（未构建时窗口内呈现加载态），运行中显示绿点；
- * "停止"= 退出 app（关窗 + 反注册）。server 是懒启动的实现细节，不在此展示状态
+ * Widget 面板 —— Right panel 的 Widget tab：一块像手机主屏的面板。
+ *
+ * - 主屏（WidgetHome）：分页的图标网格；点图标在面板里打开应用（占满面板），右键菜单里有两种打开方式与
+ *   停止 / 整理图标 / 导出 / 归档 / 删除。已归档的小组件在设置 → 已归档里。
+ * - 应用：顶栏左边返回（回主屏）和名字，右边重新加载和「在独立窗口打开」。回主屏不关应用：它留在后台、
+ *   状态还在，下次点图标直接回到它（不限个数，「停止」才真的退出）。
+ * - 打开与关回仿手机主屏：应用从图标的位置展开成整块面板（图标的样子先铺满、再淡出露出应用），主屏同时
+ *   缩小淡出；关回时反过来缩回图标。
+ * - 一个小组件同一时间只开在一处：开着独立窗口的、或上次选了独立窗口的，点图标直接开 / 聚焦那个窗口；
+ *   用户在这里选的打开方式记在主进程（widgetWindow:setPreferWindow），窗口的位置大小由窗口自己记。
  */
 export function WidgetPanel(): React.JSX.Element {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
   const widgets = useWidgetStore((s) => s.widgets)
-  const archived = useWidgetStore((s) => s.archived)
   const loaded = useWidgetStore((s) => s.loaded)
   const serverStatus = useWidgetStore((s) => s.serverStatus)
+  const panelApps = useWidgetStore((s) => s.panelApps)
+  const foregroundApp = useWidgetStore((s) => s.foregroundApp)
   const reload = useWidgetStore((s) => s.reload)
-  const openWidget = useWidgetStore((s) => s.openWidget)
-  const openWidgetWindow = useWidgetStore((s) => s.openWidgetWindow)
-  const stopWidgetAction = useWidgetStore((s) => s.stopWidget)
+  const openInPanel = useWidgetStore((s) => s.openInPanel)
+  const goHome = useWidgetStore((s) => s.goHome)
+  const openInWindow = useWidgetStore((s) => s.openInWindow)
+  const focusWindow = useWidgetStore((s) => s.focusWindow)
+  const chooseOpenInPanel = useWidgetStore((s) => s.chooseOpenInPanel)
+  const launchTarget = useWidgetStore((s) => s.launchTarget)
+  const setHomeOrder = useWidgetStore((s) => s.setHomeOrder)
+  const stopWidget = useWidgetStore((s) => s.stopWidget)
   const archiveWidget = useWidgetStore((s) => s.archiveWidget)
   const deleteWidget = useWidgetStore((s) => s.deleteWidget)
+
+  const rootRef = useRef<HTMLDivElement>(null)
+  const homeRef = useRef<HTMLDivElement>(null)
+  const appRefs = useRef(new Map<string, HTMLDivElement>())
+  const [editing, setEditing] = useState(false)
+  const [transition, setTransition] = useState<Transition | null>(null)
+  const pendingOpen = useRef<{ id: string; from: Box | null } | null>(null)
+  const [reloadNonces, setReloadNonces] = useState<Record<string, number>>({})
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [archivedOpen, setArchivedOpen] = useState(false)
   const [exportResult, setExportResult] = useState<
     | { kind: 'success'; name: string; zipPath: string }
     | { kind: 'error'; name: string; message: string }
@@ -42,7 +85,190 @@ export function WidgetPanel(): React.JSX.Element {
     })
   }, [reload])
 
-  const isEmpty = loaded && widgets.length === 0
+  const byId = useMemo(() => new Map(widgets.map((w) => [w.id, w])), [widgets])
+  const runningIds = useMemo(
+    () => new Set(serverStatus?.running ? (serverStatus.registeredIds ?? []) : []),
+    [serverStatus]
+  )
+
+  /** 图标元素在面板里的位置；元素不在（翻到别的页、已删）→ 面板中央一个图标大小的方块 */
+  const boxOf = useCallback((el: Element | null): Box => {
+    const root = rootRef.current
+    const rootRect = root?.getBoundingClientRect()
+    if (!root || !rootRect) return { left: 0, top: 0, width: ICON_SIZE, height: ICON_SIZE }
+    const rect = el?.getBoundingClientRect()
+    if (!rect || rect.width === 0) {
+      return {
+        left: rootRect.width / 2 - ICON_SIZE / 2,
+        top: rootRect.height / 2 - ICON_SIZE / 2,
+        width: ICON_SIZE,
+        height: ICON_SIZE
+      }
+    }
+    return {
+      left: rect.left - rootRect.left,
+      top: rect.top - rootRect.top,
+      width: rect.width,
+      height: rect.height
+    }
+  }, [])
+
+  /** 整块面板裁到某个方块（图标）的 clip-path */
+  const clipTo = useCallback((box: Box): string => {
+    const root = rootRef.current
+    const w = root?.clientWidth ?? 0
+    const h = root?.clientHeight ?? 0
+    const right = Math.max(0, w - box.left - box.width)
+    const bottom = Math.max(0, h - box.top - box.height)
+    const radius = Math.round(box.width * 0.23)
+    return `inset(${box.top}px ${right}px ${bottom}px ${box.left}px round ${radius}px)`
+  }, [])
+
+  /**
+   * 闪屏（图标的样子）的 transform：`box` = 图标那一格时它就是图标本身大小、在图标的位置；`cover` = 整块面板时
+   * 它等比放大到盖住面板（取长边）、居中。图标瓦片是 ICON_SIZE 见方、origin 在左上角，所以放大用 scale、
+   * 平移把中心对上。与应用的 clip-path 同一条曲线插值，看上去就是图标在长大 / 缩回
+   */
+  const splashAt = useCallback((box: Box | 'cover'): string => {
+    const root = rootRef.current
+    const w = root?.clientWidth ?? 0
+    const h = root?.clientHeight ?? 0
+    const size = box === 'cover' ? Math.max(w, h) : box.width
+    const cx = box === 'cover' ? w / 2 : box.left + box.width / 2
+    const cy = box === 'cover' ? h / 2 : box.top + box.height / 2
+    return `translate(${cx - size / 2}px, ${cy - size / 2}px) scale(${size / ICON_SIZE})`
+  }, [])
+
+  // ── 打开：先把应用挂上（不可见），下一帧从图标的位置展开 ──
+  const launchInPanel = useCallback(
+    (id: string, iconEl: HTMLElement | null): void => {
+      if (transition) return
+      pendingOpen.current = { id, from: iconEl ? boxOf(iconEl) : null }
+      setTransition({ kind: 'open', id })
+      openInPanel(id)
+    },
+    [transition, boxOf, openInPanel]
+  )
+
+  useLayoutEffect(() => {
+    const pending = pendingOpen.current
+    if (!pending || transition?.kind !== 'open' || transition.id !== pending.id) return
+    const layer = appRefs.current.get(pending.id)
+    if (!layer) return
+    pendingOpen.current = null
+    const from = pending.from ?? boxOf(null)
+    const opts: KeyframeAnimationOptions = { duration: OPEN_MS, easing: IOS_EASING, fill: 'both' }
+    const grow = layer.animate(
+      [{ clipPath: clipTo(from) }, { clipPath: 'inset(0px 0px 0px 0px round 0px)' }],
+      opts
+    )
+    const splash = layer.querySelector<HTMLElement>('[data-app-splash]')
+    splash?.animate(
+      [
+        { transform: splashAt(from), opacity: 1, offset: 0 },
+        { opacity: 1, offset: 0.32 },
+        { opacity: 0, offset: 0.78 },
+        { transform: splashAt('cover'), opacity: 0, offset: 1 }
+      ],
+      opts
+    )
+    const origin = `${from.left + from.width / 2}px ${from.top + from.height / 2}px`
+    homeRef.current?.animate(
+      [
+        { transform: 'scale(1)', opacity: 1, transformOrigin: origin },
+        { transform: `scale(${HOME_SCALE})`, opacity: 0, transformOrigin: origin }
+      ],
+      opts
+    )
+    void grow.finished
+      .catch(() => undefined)
+      .then(() => {
+        grow.cancel()
+        splash?.getAnimations().forEach((a) => a.cancel())
+        homeRef.current?.getAnimations().forEach((a) => a.cancel())
+        setTransition(null)
+      })
+  }, [transition, boxOf, clipTo, splashAt])
+
+  // ── 关回主屏：先让图标所在的页露出来，下一帧量位置、缩回图标 ──
+  const [revealId, setRevealId] = useState<string | null>(null)
+  const closeToHome = useCallback((): void => {
+    if (!foregroundApp || transition) return
+    setRevealId(foregroundApp)
+    setTransition({ kind: 'close', id: foregroundApp })
+  }, [foregroundApp, transition])
+
+  useEffect(() => {
+    if (transition?.kind !== 'close') return undefined
+    const id = transition.id
+    const layer = appRefs.current.get(id)
+    // 等主屏切好页（revealId 的 layoutEffect）再量
+    const raf = requestAnimationFrame(() => {
+      const icon = homeRef.current?.querySelector(`[data-home-slot="${id}"] [data-widget-icon]`)
+      const to = boxOf(icon ?? null)
+      if (!layer) {
+        goHome()
+        setTransition(null)
+        return
+      }
+      const opts: KeyframeAnimationOptions = {
+        duration: CLOSE_MS,
+        easing: IOS_EASING,
+        fill: 'both'
+      }
+      const shrink = layer.animate(
+        [{ clipPath: 'inset(0px 0px 0px 0px round 0px)' }, { clipPath: clipTo(to) }],
+        opts
+      )
+      layer.querySelector<HTMLElement>('[data-app-splash]')?.animate(
+        [
+          { transform: splashAt('cover'), opacity: 0, offset: 0 },
+          { opacity: 0, offset: 0.2 },
+          { opacity: 1, offset: 0.6 },
+          { transform: splashAt(to), opacity: 1, offset: 1 }
+        ],
+        opts
+      )
+      const origin = `${to.left + to.width / 2}px ${to.top + to.height / 2}px`
+      homeRef.current?.animate(
+        [
+          { transform: `scale(${HOME_SCALE})`, opacity: 0, transformOrigin: origin },
+          { transform: 'scale(1)', opacity: 1, transformOrigin: origin }
+        ],
+        opts
+      )
+      void shrink.finished
+        .catch(() => undefined)
+        .then(() => {
+          goHome()
+          setTransition(null)
+          setRevealId(null)
+          // 动效留下的 fill 收掉：应用在后台时按 visibility 藏着，回到前台时得是整块
+          requestAnimationFrame(() => {
+            layer.getAnimations({ subtree: true }).forEach((a) => a.cancel())
+            homeRef.current?.getAnimations().forEach((a) => a.cancel())
+          })
+        })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [transition, boxOf, clipTo, splashAt, goHome])
+
+  // ── 点图标 / 菜单 ──
+  const handleLaunch = useCallback(
+    (id: string, iconEl: HTMLElement | null): void => {
+      if (launchTarget(id) === 'window') {
+        // 开着的窗口 / 上次选的窗口：开或聚焦它，不改偏好（agent 开的窗口不算用户的选择）
+        void focusWindow(id)
+        return
+      }
+      launchInPanel(id, iconEl)
+    },
+    [launchTarget, focusWindow, launchInPanel]
+  )
+
+  const iconElOf = (id: string): HTMLElement | null =>
+    homeRef.current?.querySelector<HTMLElement>(`[data-home-slot="${id}"] [data-widget-icon]`) ??
+    null
 
   /**
    * 弹保存对话框 + 执行导出，并把结果记录到本地 state 以便展示。
@@ -75,110 +301,140 @@ export function WidgetPanel(): React.JSX.Element {
       })
     }
   }
-  // 删除目标可能在 active 或 archived 列表中，两边都搜
-  const deletingWidget =
-    widgets.find((w) => w.id === deletingId) ?? archived.find((w) => w.id === deletingId) ?? null
-  const running = serverStatus?.running === true
+
+  const handleContextMenu = (e: React.MouseEvent, w: WidgetSummary): void => {
+    const isRunning = runningIds.has(w.id)
+    // 共享的菜单（ContextMenuProvider）：桌面弹原生菜单，浏览器里的 web 客户端弹 DOM 菜单
+    void showContextMenu(
+      e,
+      [
+        { id: 'openPanel', label: t('widgets.openInPanel') },
+        { id: 'openWindow', label: t('widgets.openInWindow') },
+        ...(isRunning ? [{ id: 'stop', label: t('widgets.stop') }] : []),
+        { id: 'sep1', label: '', type: 'separator' as const },
+        { id: 'arrange', label: t('widgets.arrange') },
+        { id: 'export', label: t('widgets.exportAsVite') },
+        { id: 'archive', label: t('widgets.archive') },
+        { id: 'sep2', label: '', type: 'separator' as const },
+        { id: 'delete', label: t('widgets.delete') }
+      ],
+      (actionId) => {
+        if (actionId === 'openPanel') {
+          void chooseOpenInPanel(w.id).then(() => launchInPanel(w.id, iconElOf(w.id)))
+        }
+        if (actionId === 'openWindow') void openInWindow(w.id)
+        if (actionId === 'stop') void stopWidget(w.id)
+        if (actionId === 'arrange') setEditing(true)
+        if (actionId === 'export') void handleExport(w)
+        if (actionId === 'archive') void archiveWidget(w.id, true)
+        if (actionId === 'delete') setDeletingId(w.id)
+      }
+    )
+  }
+
+  const deletingWidget = widgets.find((w) => w.id === deletingId) ?? null
+  const homeVisible = foregroundApp === null || transition !== null
 
   return (
-    <div className="flex flex-col h-full bg-bg-primary overflow-hidden">
-      {/* 内容区 */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+    <div
+      ref={rootRef}
+      data-widget-panel=""
+      className="relative h-full bg-bg-primary overflow-hidden"
+      style={transition ? { pointerEvents: 'none' } : undefined}
+    >
+      {/* 主屏 */}
+      <div
+        ref={homeRef}
+        className="absolute inset-0"
+        style={homeVisible ? undefined : { visibility: 'hidden' }}
+      >
         {!loaded ? (
           <div className="flex items-center justify-center h-full text-[11px] text-text-tertiary/40">
             …
           </div>
-        ) : isEmpty && archived.length === 0 ? (
-          <div className="flex items-center justify-center h-full select-none px-6">
-            <div className="text-center">
-              <Wrench size={20} className="text-text-tertiary/30 mx-auto mb-2" />
-              <p className="text-[11px] text-text-tertiary/60 leading-relaxed">
-                {t('widgets.panelEmptyHint')}
-              </p>
-            </div>
-          </div>
         ) : (
-          <>
-            {widgets.length > 0 && (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2 p-3">
-                {widgets.map((w) => {
-                  const isRunning =
-                    running && (serverStatus?.registeredIds?.includes(w.id) ?? false)
-                  return (
-                    <WidgetCard
-                      key={w.id}
-                      widget={w}
-                      isRunning={isRunning}
-                      onOpen={() => void openWidgetWindow(w.id)}
-                      onStop={() => void stopWidgetAction(w.id)}
-                      onContextMenu={(e) => {
-                        // 共享的菜单（ContextMenuProvider）：桌面弹原生菜单，浏览器里的 web 客户端弹 DOM 菜单
-                        void showContextMenu(
-                          e,
-                          [
-                            { id: 'openWindow', label: t('widgets.openInWindow') },
-                            // 「在浏览器面板里打开」= 内置浏览器窗口：浏览器里的 web 客户端没有它
-                            ...(isWebHost
-                              ? []
-                              : [{ id: 'openPanel', label: t('widgets.openInPanel') }]),
-                            ...(isRunning ? [{ id: 'stop', label: t('widgets.stop') }] : []),
-                            { id: 'export', label: t('widgets.exportAsVite') },
-                            { id: 'archive', label: t('widgets.archive') },
-                            { id: 'sep', label: '', type: 'separator' },
-                            { id: 'delete', label: t('widgets.delete') }
-                          ],
-                          (actionId) => {
-                            if (actionId === 'openWindow') void openWidgetWindow(w.id)
-                            if (actionId === 'openPanel') void openWidget(w.id)
-                            if (actionId === 'stop') void stopWidgetAction(w.id)
-                            if (actionId === 'export') void handleExport(w)
-                            if (actionId === 'archive') void archiveWidget(w.id, true)
-                            if (actionId === 'delete') setDeletingId(w.id)
-                          }
-                        )
-                      }}
-                      onArchive={() => void archiveWidget(w.id, true)}
-                      onRequestDelete={() => setDeletingId(w.id)}
-                      t={t}
-                    />
-                  )
-                })}
-              </div>
-            )}
-            {archived.length > 0 && (
-              <div className="border-t border-border-secondary/30 mt-1">
-                <button
-                  onClick={() => setArchivedOpen((v) => !v)}
-                  className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-colors"
-                >
-                  <ChevronRight
-                    size={11}
-                    className={`flex-shrink-0 transition-transform ${archivedOpen ? 'rotate-90' : ''}`}
-                  />
-                  <Archive size={11} className="text-text-tertiary/60" />
-                  <span className="font-medium uppercase tracking-wider">
-                    {t('widgets.archivedSection')}
-                  </span>
-                  <span className="text-text-tertiary/50 tabular-nums">{archived.length}</span>
-                </button>
-                <AnimatedCollapse open={archivedOpen}>
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-1.5 px-3 pb-3 pt-1">
-                    {archived.map((w) => (
-                      <ArchivedWidgetRow
-                        key={w.id}
-                        widget={w}
-                        onRestore={() => void archiveWidget(w.id, false)}
-                        onRequestDelete={() => setDeletingId(w.id)}
-                        t={t}
-                      />
-                    ))}
-                  </div>
-                </AnimatedCollapse>
-              </div>
-            )}
-          </>
+          <WidgetHome
+            widgets={widgets}
+            runningIds={runningIds}
+            editing={editing}
+            onEditingChange={setEditing}
+            onLaunch={handleLaunch}
+            onContextMenu={handleContextMenu}
+            onReorder={(ids) => void setHomeOrder(ids)}
+            revealId={revealId}
+          />
         )}
       </div>
+
+      {/* 面板里开着的应用：都挂着（状态留着），只有前台那个可见 */}
+      {panelApps.map((id) => {
+        const w = byId.get(id)
+        if (!w) return null
+        const visible = foregroundApp === id || transition?.id === id
+        return (
+          <div
+            key={id}
+            ref={(el) => {
+              if (el) appRefs.current.set(id, el)
+              else appRefs.current.delete(id)
+            }}
+            data-panel-app={id}
+            data-foreground={foregroundApp === id ? '' : undefined}
+            className="absolute inset-0 flex flex-col bg-bg-primary"
+            style={visible ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}
+          >
+            <div className="flex-shrink-0 flex items-center gap-1 h-9 pl-1 pr-1.5 border-b border-border-secondary/40">
+              <button
+                type="button"
+                data-app-back=""
+                onClick={closeToHome}
+                className="flex items-center gap-0.5 min-w-0 h-7 pl-0.5 pr-2 rounded-md text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors"
+                title={t('widgets.backToHome')}
+                aria-label={t('widgets.backToHome')}
+              >
+                <ChevronLeft size={16} className="flex-shrink-0" />
+                <span className="truncate text-[12px] font-medium text-text-primary">{w.name}</span>
+              </button>
+              <div className="flex-1" />
+              <button
+                type="button"
+                data-app-reload=""
+                onClick={() => setReloadNonces((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }))}
+                className="p-1.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors"
+                title={t('widgets.windowReload')}
+                aria-label={t('widgets.windowReload')}
+              >
+                <RotateCw size={13} />
+              </button>
+              <button
+                type="button"
+                data-app-popout=""
+                onClick={() => void openInWindow(id)}
+                className="p-1.5 rounded hover:bg-bg-hover text-text-tertiary hover:text-text-secondary transition-colors"
+                title={t('widgets.openInWindow')}
+                aria-label={t('widgets.openInWindow')}
+              >
+                <AppWindow size={14} />
+              </button>
+            </div>
+            <WidgetFrame
+              widgetId={id}
+              title={w.name}
+              reloadNonce={reloadNonces[id] ?? 0}
+              className="flex-1 min-h-0"
+            />
+            {/* 打开 / 关回时随应用一起长大 / 缩回的图标（平时透明；位置与大小全由动效给，见 splashAt） */}
+            <div
+              data-app-splash=""
+              aria-hidden="true"
+              className="absolute left-0 top-0 pointer-events-none"
+              style={{ width: ICON_SIZE, height: ICON_SIZE, opacity: 0, transformOrigin: '0 0' }}
+            >
+              <WidgetIcon widget={w} size={ICON_SIZE} />
+            </div>
+          </div>
+        )
+      })}
 
       {deletingWidget && (
         <ConfirmDialog
@@ -249,163 +505,4 @@ function errorMessageForExportCode(
     default:
       return fallback
   }
-}
-
-interface WidgetCardProps {
-  widget: WidgetSummary
-  isRunning: boolean
-  onOpen: () => void
-  onStop: () => void
-  onContextMenu: (e: React.MouseEvent) => void
-  onArchive: () => void
-  onRequestDelete: () => void
-  t: (k: string, opts?: Record<string, unknown>) => string
-}
-
-function WidgetCard({
-  widget,
-  isRunning,
-  onOpen,
-  onStop,
-  onContextMenu,
-  onArchive,
-  onRequestDelete,
-  t
-}: WidgetCardProps): React.JSX.Element {
-  const last = widget.lastOpenedAt || widget.createdAt
-  return (
-    <div
-      onClick={onOpen}
-      onContextMenu={onContextMenu}
-      className="group relative rounded-md border border-border-secondary/40 bg-bg-secondary/30 hover:border-border-secondary hover:bg-bg-hover/60 transition-colors p-2.5 cursor-pointer"
-    >
-      <div className="flex items-start gap-2">
-        {/* app 图标 —— 运行中右下角亮绿点 */}
-        <div className="relative flex-shrink-0 w-7 h-7 rounded-md flex items-center justify-center bg-violet-500/10 text-violet-500">
-          <Wrench size={13} />
-          {isRunning && (
-            <span className="absolute -right-0.5 -bottom-0.5 w-2 h-2 rounded-full bg-emerald-400 border border-bg-primary" />
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-[12px] font-semibold text-text-primary truncate pr-14">
-            {widget.name}
-          </div>
-          {widget.description && (
-            <p className="mt-0.5 text-[11px] text-text-tertiary/80 leading-snug line-clamp-2">
-              {widget.description}
-            </p>
-          )}
-          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-text-tertiary/50 tabular-nums">
-            <span className="font-mono truncate">{widget.id}</span>
-            <span className="text-text-tertiary/30">·</span>
-            <span className="shrink-0">{formatRelative(last, t)}</span>
-          </div>
-        </div>
-      </div>
-      {/* 悬浮操作按钮 */}
-      <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
-        {isRunning && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onStop()
-            }}
-            className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
-            title={t('widgets.stopWidgetTooltip')}
-          >
-            <Square size={10} className="fill-current" />
-          </button>
-        )}
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onArchive()
-          }}
-          className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-amber-400"
-          title={t('widgets.archive')}
-        >
-          <Archive size={11} />
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onRequestDelete()
-          }}
-          className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
-          title={t('widgets.delete')}
-        >
-          <Trash2 size={11} />
-        </button>
-      </div>
-    </div>
-  )
-}
-
-interface ArchivedWidgetRowProps {
-  widget: WidgetSummary
-  onRestore: () => void
-  onRequestDelete: () => void
-  t: (k: string, opts?: Record<string, unknown>) => string
-}
-
-function ArchivedWidgetRow({
-  widget,
-  onRestore,
-  onRequestDelete,
-  t
-}: ArchivedWidgetRowProps): React.JSX.Element {
-  return (
-    <div className="group relative flex items-center gap-2 rounded-md border border-border-secondary/30 bg-bg-secondary/20 px-2.5 py-1.5">
-      <Archive size={11} className="flex-shrink-0 text-text-tertiary/60" />
-      <div className="flex-1 min-w-0">
-        <div className="text-[12px] font-medium text-text-secondary truncate">{widget.name}</div>
-        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-text-tertiary/60 tabular-nums">
-          <span className="font-mono truncate">{widget.id}</span>
-          {widget.archivedAt > 0 && (
-            <>
-              <span className="text-text-tertiary/30">·</span>
-              <span className="shrink-0">
-                {t('widgets.archivedAt')} {formatRelative(widget.archivedAt, t)}
-              </span>
-            </>
-          )}
-        </div>
-      </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          onClick={onRestore}
-          className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-emerald-500"
-          title={t('widgets.restore')}
-        >
-          <RotateCcw size={11} />
-        </button>
-        <button
-          onClick={onRequestDelete}
-          className="p-1 rounded hover:bg-bg-active text-text-tertiary hover:text-error"
-          title={t('widgets.delete')}
-        >
-          <Trash2 size={11} />
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/** 相对时间 —— 返回短文本 */
-function formatRelative(
-  ts: number,
-  t: (k: string, opts?: Record<string, unknown>) => string
-): string {
-  if (!ts) return t('widgets.never')
-  const diff = Date.now() - ts
-  const minute = 60_000
-  const hour = 60 * minute
-  const day = 24 * hour
-  if (diff < minute) return t('widgets.justNow')
-  if (diff < hour) return t('widgets.minutesAgo', { count: Math.floor(diff / minute) })
-  if (diff < day) return t('widgets.hoursAgo', { count: Math.floor(diff / hour) })
-  if (diff < 7 * day) return t('widgets.daysAgo', { count: Math.floor(diff / day) })
-  const d = new Date(ts)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }

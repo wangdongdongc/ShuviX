@@ -20,6 +20,8 @@
  *         非字符串的 sessionId / path、参数是 undefined → false，不开
  *   WA-7  widgetWindow:open：'demo-widget' → {success:true}、新标签页开 widgetPageUrl；空 / undefined / 非字符串 →
  *         {success:false, error:'missing widget id'}，不开
+ *   WA-7b widgetWindow:status → 不论参数都回 {open:[],preferWindow:[]}；widgetWindow:setPreferWindow → {success:true}；
+ *         两条都不经注入的 invoke（不走网络）、不开标签页
  *   WA-8  注入的 pickDirectory：dialog:openDirectory 回字符串或 null；skill:pickExternalDir → {success:true,path} /
  *         {success:false,reason:'canceled'}
  *   WA-9  注入的 showPath：app:open-folder → 目录卡；app:reveal-path → 文件卡；空 / undefined → {success:false}、不显示；
@@ -140,11 +142,11 @@ describe('WA-3 webDesktopOnlyChannels', () => {
     expect(set.has('app:open-external')).toBe(false)
   })
 
-  it('WA-3 {} → 20；只认自有属性', () => {
-    expect(webDesktopOnlyChannels({}).size).toBe(20)
+  it('WA-3 {} → 22；只认自有属性', () => {
+    expect(webDesktopOnlyChannels({}).size).toBe(22)
     const inherited = webDesktopOnlyChannels(Object.create({ 'app:open-folder': () => {} }))
     expect(inherited.has('app:open-folder')).toBe(true)
-    expect(inherited.size).toBe(20)
+    expect(inherited.size).toBe(22)
   })
 })
 
@@ -173,7 +175,9 @@ describe('WA-4 本地实现的通道', () => {
         'skill:pickExternalDir',
         'subAgent:openFolder',
         'widget:revealExport',
-        'widgetWindow:open'
+        'widgetWindow:open',
+        'widgetWindow:setPreferWindow',
+        'widgetWindow:status'
       ].sort()
     )
     for (const key of keys) {
@@ -342,6 +346,27 @@ describe('WA-7 widgetWindow:open', () => {
     for (const id of ['', undefined, 5]) {
       expect(open(id), String(id)).toStrictEqual({ success: false, error: 'missing widget id' })
     }
+    expect(fakeWin.open).not.toHaveBeenCalled()
+  })
+})
+
+describe('WA-7b widgetWindow:status / setPreferWindow', () => {
+  it('WA-7b status：不论参数都回两张空表；setPreferWindow → {success:true}；都不走网络', async () => {
+    const invoke = vi.fn(async () => ({ open: ['x-y'], preferWindow: ['x-y'] }))
+    const local = webLocalHandlers(fakeWin, { invoke })
+    for (const args of [[], [undefined], [['a-b', 'c-d']], ['a-b'], [null]]) {
+      expect(await local['widgetWindow:status'](...args), JSON.stringify(args)).toStrictEqual({
+        open: [],
+        preferWindow: []
+      })
+    }
+    for (const args of [[{ id: 'a-b', value: true }], [{ id: 'a-b', value: false }], [], [5]]) {
+      expect(
+        await local['widgetWindow:setPreferWindow'](...args),
+        JSON.stringify(args)
+      ).toStrictEqual({ success: true })
+    }
+    expect(invoke).not.toHaveBeenCalled()
     expect(fakeWin.open).not.toHaveBeenCalled()
   })
 })

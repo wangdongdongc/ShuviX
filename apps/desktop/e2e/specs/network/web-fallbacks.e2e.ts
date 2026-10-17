@@ -7,9 +7,11 @@
  * WF-3 交互图里的 Chart.js / D3 经 /lib/ 加载（沙箱 CSP 放行的是这个地址，不是 shuvix-lib:）
  * WF-4 页面里的目录浏览器代替原生「选择文件夹」框（项目配置换文件夹、打开文件夹的取消、外部技能目录）
  * WF-5 widget 经 /w/ 转发，在新标签页里的沙箱 iframe 里跑
- * WF-6 widget 导出 = 卡片右键（页面里的 DOM 菜单，没有「在浏览器面板里打开」）→ 导到服务端的临时目录 + 经 /files/download 下载
+ * WF-6 widget 导出 = 主屏图标右键（页面里的 DOM 菜单，两种打开方式都在）→ 导到服务端的临时目录 + 经 /files/download 下载
  * WF-7「在文件管理器中打开 / 显示」换成显示路径的卡片，路径与桌面打开的是同一个
  * WF-8 web 客户端不跟桌面的悬浮窗：桌面悬浮了的会话在页面里照常显示；右侧面板也在
+ * WF-9 web 客户端不认桌面的「在独立窗口打开」偏好：桌面记着偏好、窗口也开着，页面里点图标仍在页面的面板里打开、不开新标签页；
+ *      ↗ 开一个 #widget-window 标签页；之后桌面的偏好不变（页面里的选择不往回记）
  *
  * 约定同 web-client.e2e.ts：界面语言先设成 en；**从不在缺省端口 7766 上打开**，一律先 setPort(空闲端口) 再
  * setEnabled(true)；会话只经主进程 IPC 带明确标题创建（不跑 titler，假提供商的 FIFO 干净）；HTTP 探测一律连
@@ -46,7 +48,8 @@ import {
   projectEditPane,
   rightPanelPane,
   sidebarPane,
-  webClientPane
+  webClientPane,
+  widgetHomePane
 } from '../../harness/pages'
 import {
   createProject,
@@ -758,8 +761,8 @@ describe('network access phase D: what the web client does instead of the deskto
       const labels = menu.map((item) => item.label)
       expect(labels).toContain(en.widgets.exportAsVite)
       expect(labels).toContain(en.widgets.openInWindow)
-      // 「在浏览器面板里打开」= 内置浏览器窗口：web 客户端没有它
-      expect(labels).not.toContain(en.widgets.openInPanel)
+      // 两种打开方式都在：面板里（主屏上的应用）与独立窗口（web 客户端里是新标签页）
+      expect(labels).toContain(en.widgets.openInPanel)
       await pane.pickDomMenu(en.widgets.exportAsVite)
       const clicks = await until(async () => {
         const list = await anchorClicks()
@@ -820,6 +823,73 @@ describe('network access phase D: what the web client does instead of the deskto
     }
 
     await exportAndDownload()
+  }, 120_000)
+
+  it('WF-9 the web panel ignores the desktop window preference: a tap opens in the web panel, ↗ opens a tab, the desktop choice stays', async () => {
+    const tabUrl = `http://127.0.0.1:${P}/#widget-window?widgetId=${WIDGET_ID}`
+    const desktopStatus = (): Promise<{ open: string[]; preferWindow: string[] }> =>
+      app.main.eval(`window.api.widgetWindow.status(${JSON.stringify([WIDGET_ID])})`)
+    const desktopWindowOpen = async (): Promise<boolean> =>
+      (await listTargets(app.port)).some(
+        (t) => t.url.startsWith('file://') && t.url.includes(`#widget-window?widgetId=${WIDGET_ID}`)
+      )
+    const home = widgetHomePane(webPage())
+    const panel = rightPanelPane(webPage())
+    try {
+      // 桌面：上次选的是独立窗口，而且那个窗口此刻开着
+      await app.main.eval(
+        `window.api.widgetWindow.setPreferWindow(${JSON.stringify({ id: WIDGET_ID, value: true })}).then(() => true)`
+      )
+      await app.main.eval(
+        `window.api.widgetWindow.open(${JSON.stringify(WIDGET_ID)}).then(() => true)`
+      )
+      await until(desktopWindowOpen, 'the desktop widget window')
+      expect(await desktopStatus()).toStrictEqual({ open: [WIDGET_ID], preferWindow: [WIDGET_ID] })
+
+      await panel.open()
+      await panel.activateWidgetTab()
+      await until(
+        async () => (await home.slotIds()).includes(WIDGET_ID) || null,
+        'the widget icon on the web home screen'
+      )
+      const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
+
+      // 页面里点图标：在页面的面板里打开，不开新标签页
+      await home.tap(WIDGET_ID)
+      await until(
+        async () => (await home.foregroundApp()) === WIDGET_ID || null,
+        'the widget in the web panel'
+      )
+      await until(() => home.frameReady(WIDGET_ID), 'the web panel iframe', 60_000)
+      await until(
+        async () => (await home.openAnimation(WIDGET_ID)).panelPointerEvents === '' || null,
+        'the open transition finished'
+      )
+      expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
+
+      // ↗：一个 #widget-window 标签页（web 客户端的「独立窗口」），面板里收走
+      await home.popout()
+      const tab = await openedTab((u) => u === tabUrl, 'the #widget-window tab from ↗')
+      await until(
+        async () => !(await home.panelApps()).includes(WIDGET_ID) || null,
+        'the widget left the web panel'
+      )
+      await closeTab(tab.id)
+
+      // 浏览器里的选择不往回记：桌面的偏好不变
+      expect((await desktopStatus()).preferWindow).toEqual([WIDGET_ID])
+    } finally {
+      await app.main.eval(
+        `window.api.widgetWindow.close(${JSON.stringify(WIDGET_ID)}).then(() => true)`
+      )
+      await app.main.eval(
+        `window.api.widgetWindow.setPreferWindow(${JSON.stringify({ id: WIDGET_ID, value: false })}).then(() => true)`
+      )
+      await until(
+        async () => !(await desktopWindowOpen()) || null,
+        'the desktop widget window closed'
+      )
+    }
   }, 120_000)
 
   it('WF-7 the path card shows the same folder / file the desktop opens; web calls never reach the file manager', async () => {

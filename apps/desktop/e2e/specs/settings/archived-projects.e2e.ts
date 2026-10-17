@@ -8,7 +8,7 @@
  *     裸查 document 会把内容区的子 tab 误认成「旧入口还在」—— 两头都得断。
  *   - hash 直达（ARC-E-2）与文案非裸键（ARC-E-3 / ARC-E-5）：`#settings/archived` 是新 id，
  *     旧书签 `#settings/projects` 落空后回 general 而不是猜一个（ARC-E-12 的另一半）。
- *   - 页内结构（ARC-E-4）：横向 PanelTabBar + 唯一子 tab + 选中下划线在，竖向子导航列不在。
+ *   - 页内结构（ARC-E-4）：横向 PanelTabBar + 子 tab（「项目」选中、其后是桌面交进来的「小组件」），竖向子导航列不在。
  *     行按钮只钉结构与 title（ARC-E-8）：`group-hover` 是 CSS 伪类，合成事件触发不了，
  *     「悬停才浮现」的像素级表现不可测。
  *   - 恢复 / 删除的行为面（ARC-E-9 / ARC-E-10）走 IPC 与主窗侧栏断「分桶换边」，
@@ -42,6 +42,7 @@ const L = [en, zh, ja]
 /** 一级导航「已归档」/ 页内子 tab「项目」/ 空态 / 通用 tab 的三语候选 */
 const TAB_ARCHIVED = L.map((l) => l.settings.tabArchived)
 const SUB_TAB_PROJECTS = L.map((l) => l.settings.archivedSubTabProjects)
+const SUB_TAB_WIDGETS = L.map((l) => l.settings.archivedSubTabWidgets)
 const NO_ARCHIVED = L.map((l) => l.settings.projectsNoArchived)
 const TAB_GENERAL = L.map((l) => l.settings.tabGeneral)
 /** 行按钮与确认弹窗的三语候选（复用侧栏同名动作的键） */
@@ -110,16 +111,19 @@ describe('一级导航与 hash 直达', () => {
 })
 
 describe('页内结构（PanelTabBar）', () => {
-  it('ARC-E-4 内容区顶部是 PanelTabBar：横向条 + 唯一子 tab + 选中下划线，没有第二条竖向子导航列', async () => {
+  it('ARC-E-4 内容区顶部是 PanelTabBar：横向条 + 子 tab「项目」（选中下划线）与「小组件」，没有第二条竖向子导航列', async () => {
     const bar = await archived.tabBar()
     expect(bar).not.toBeNull()
     expect(bar!.className).toContain('flex')
     expect(bar!.className).toContain('h-8')
     expect(bar!.className).toContain('border-b')
-    expect(bar!.tabs).toHaveLength(1)
+    // 「项目」之后是桌面经 extraTabs 交进来的「小组件」（2026-10-16）；默认选中的仍是「项目」
+    expect(bar!.tabs).toHaveLength(2)
     expect(bar!.tabs[0].folderIcon).toBe(true)
     expect(SUB_TAB_PROJECTS).toContain(bar!.tabs[0].text)
     expect(bar!.tabs[0].underline).toBe(true)
+    expect(SUB_TAB_WIDGETS).toContain(bar!.tabs[1].text)
+    expect(bar!.tabs[1].underline).toBe(false)
     // 整改拆掉的旧结构：除一级导航列外，内容区不得再有 w-[220px] / border-r 的竖向子导航列
     expect(await archived.verticalSubNavs()).toBe(0)
   })

@@ -2,6 +2,14 @@
 
 Widgets are dense, single-purpose utilities: think menu-bar app or extension popup, not a landing page.
 
+## Width
+
+The widget usually opens inside ShuviX's right panel, which is often 300–400px wide; the user can widen the panel or move the widget to its own window. Lay it out for 320px first:
+
+- One column; controls `w-full`; no fixed width above 300px.
+- A wide table or code block scrolls inside its own container (`overflow-x-auto`), never the whole page.
+- Use extra room when it is there, with `sm:` / `md:` breakpoints (a second column, a side list).
+
 - **Layout**: open straight into the working UI and fill the viewport (`max-w-3xl mx-auto`, `p-3` or `p-4`); no hero, welcome title, "Get Started" button or onboarding. Stack vertically; use `grid` / `flex-row` only for genuinely columnar data.
 - **Typography**: body `text-xs` or `text-sm`, nothing above `text-base`; `font-medium` / `font-semibold`, not `font-bold`; code, data and their inputs in `font-mono text-xs`.
 - **Spacing**: padding `p-2.5`–`p-4`, gaps `gap-1.5`–`gap-3`, margins `mt-1`–`mt-4`.
@@ -30,6 +38,23 @@ Every color utility has its `dark:` counterpart. Use this palette:
 | Warning         | `text-amber-600`                                    | `dark:text-amber-400`       |
 
 Inputs, buttons and output blocks share it: `rounded-md`, `text-xs` / `text-sm`, the surface and border colors above, and `focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500` on inputs.
+
+## Icon
+
+`icon.svg` in the widget's directory is its icon on the Widget panel's home screen and in its window's title bar. It is optional: without it ShuviX shows the first letter of the name on a color picked from the id.
+
+- A square `viewBox="0 0 64 64"` with `xmlns="http://www.w3.org/2000/svg"` on the root. Fill the whole square: ShuviX rounds the corners, so draw no rounded background or border of your own.
+- One simple shape that still reads at 16px. No text.
+- Colors from the theme tokens, so the icon follows the app theme: a background of `var(--viz-1)` … `var(--viz-8)` or the matching `var(--viz-N-tint)`, and the shape in `var(--theme-bg-primary)` or `var(--viz-N-ink)`. `<style>`, `<script>`, `<foreignObject>` and external `href`s are stripped before it is shown.
+- Avoid `id`s, since every icon sits on the same page; if a gradient needs one, prefix it with the widget id.
+- Keep it under 64 KB. The home screen picks up a new or changed icon after the next `shuvix widget build`.
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" fill="var(--viz-3)"/>
+<path d="M18 22h28M18 32h28M18 42h18" stroke="var(--theme-bg-primary)" stroke-width="5" stroke-linecap="round"/>
+</svg>
+```
 
 ## Assets
 

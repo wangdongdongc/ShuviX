@@ -1,9 +1,12 @@
 /**
  * 已归档设置页（桌面）—— 薄封装共享 <ArchivedSettings>（已归档项目列表 + 恢复），
- * 注入桌面专属删除：弹 ConfirmDialog 确认，确认后级联删除并在必要时重指活跃会话。
+ * 注入桌面专属删除：弹 ConfirmDialog 确认，确认后级联删除并在必要时重指活跃会话；
+ * 再加一类只有桌面才有的归档对象：小组件（ArchivedWidgets）。
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Wrench } from 'lucide-react'
+import { ArchivedWidgets } from './ArchivedWidgets'
 import { ArchivedSettings as SharedArchivedSettings } from '@shuvix/app-shell'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -27,7 +30,17 @@ export function ArchivedSettings(): React.JSX.Element {
 
   return (
     <>
-      <SharedArchivedSettings onDeleteProject={(id) => setDeletingProjectId(id)} />
+      <SharedArchivedSettings
+        onDeleteProject={(id) => setDeletingProjectId(id)}
+        extraTabs={[
+          {
+            key: 'widgets',
+            label: t('settings.archivedSubTabWidgets'),
+            Icon: Wrench,
+            content: <ArchivedWidgets />
+          }
+        ]}
+      />
       {deletingProjectId && (
         <ConfirmDialog
           title={t('sidebar.confirmDeleteProject')}

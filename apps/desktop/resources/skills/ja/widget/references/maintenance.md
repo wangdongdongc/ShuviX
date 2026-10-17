@@ -43,4 +43,6 @@ shuvix-media:|file://|127\.0\.0\.1|localhost:|localStorage|sessionStorage|indexe
 
 A hard-coded home folder (`/Users/<name>/…`) can stay, but `~/…` is better (`files.md`).
 
+Older widgets also predate the home screen: most have no `icon.svg`, and many were laid out for a window of their own. When updating one, draw its icon and check that it works from 320px wide (`design.md`, "Icon" and "Width").
+
 After the change, build, open, and tell the user what you converted, so they can check the widget from a browser too.

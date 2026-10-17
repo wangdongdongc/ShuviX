@@ -48,6 +48,7 @@
     "test:e2e:network": "npm run test:e2e:network -w shuvix",
     "test:e2e:markdown": "npm run test:e2e:markdown -w shuvix",
     "test:e2e:app": "npm run test:e2e:app -w shuvix",
+    "test:e2e:widgets": "npm run test:e2e:widgets -w shuvix",
     "test:e2e:startup": "npm run test:e2e:startup -w shuvix",
     "probe": "npm run probe -w shuvix",
     "probe:protocols": "npm run probe:protocols -w shuvix",

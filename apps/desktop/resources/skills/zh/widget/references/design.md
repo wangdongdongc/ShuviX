@@ -2,6 +2,14 @@
 
 小组件（widget）是紧凑、单一用途的工具：想想菜单栏应用或扩展的弹出窗口，而不是落地页。
 
+## 宽度
+
+小组件多半在 ShuviX 的右侧面板里打开，面板通常只有 300–400px 宽；用户可以把面板拉宽，或把小组件移到独立窗口。先按 320px 排版：
+
+- 单栏；控件 `w-full`；不要超过 300px 的固定宽度。
+- 宽表格或代码块在自己的容器里横向滚动（`overflow-x-auto`），不要让整页滚。
+- 有余地时再用 `sm:` / `md:` 断点利用起来（第二栏、侧边列表）。
+
 - **布局**：一打开就直接是工作界面，并填满视口（`max-w-3xl mx-auto`、`p-3` 或 `p-4`）；不要 hero 区、欢迎标题、"Get Started" 按钮或新手引导。纵向堆叠；只有真正成列的数据才用 `grid` / `flex-row`。
 - **字体排印**：正文 `text-xs` 或 `text-sm`，不超过 `text-base`；用 `font-medium` / `font-semibold`，不用 `font-bold`；代码、数据和它们的输入框用 `font-mono text-xs`。
 - **间距**：内边距 `p-2.5`–`p-4`，间隙 `gap-1.5`–`gap-3`，外边距 `mt-1`–`mt-4`。
@@ -30,6 +38,23 @@
 | 警告        | `text-amber-600`                                    | `dark:text-amber-400`       |
 
 输入框、按钮和输出块共用这套色板：`rounded-md`、`text-xs` / `text-sm`、上面的表面色和边框色，输入框上加 `focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500`。
+
+## 图标
+
+小组件目录里的 `icon.svg` 是它在 Widget 面板主屏上、以及它窗口标题栏里的图标。它是可选的：没有时，ShuviX 显示名字的第一个字，底色按 id 选定。
+
+- 正方形 `viewBox="0 0 64 64"`，根元素带 `xmlns="http://www.w3.org/2000/svg"`。铺满整个正方形：圆角由 ShuviX 裁，不要自己画圆角背景或边框。
+- 一个在 16px 下也认得出的简单图形。不要文字。
+- 颜色用主题 token，图标才会跟着应用主题走：背景用 `var(--viz-1)` … `var(--viz-8)` 或对应的 `var(--viz-N-tint)`，图形用 `var(--theme-bg-primary)` 或 `var(--viz-N-ink)`。`<style>`、`<script>`、`<foreignObject>` 和外部 `href` 在显示前会被剥掉。
+- 避免用 `id`，因为所有图标都在同一个页面上；渐变确实需要时，用小组件 id 作前缀。
+- 保持在 64 KB 以内。新画或改过的图标在下一次 `shuvix widget build` 之后出现在主屏上。
+
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" fill="var(--viz-3)"/>
+<path d="M18 22h28M18 32h28M18 42h18" stroke="var(--theme-bg-primary)" stroke-width="5" stroke-linecap="round"/>
+</svg>
+```
 
 ## 资源
 

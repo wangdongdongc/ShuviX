@@ -6824,6 +6824,12 @@ export interface ArchivedSettingsPane {
   emptyText(): Promise<string | null>
   /** 等到空态文案出现并返回它 */
   waitEmpty(): Promise<string>
+  /** 点内容区顶部标签条里文本 ∈ labels 的子 tab（如「小组件」）；找不到抛 */
+  selectSubTab(labels: string[]): Promise<void>
+  /** 「小组件」子 tab 里已归档的小组件行（`data-archived-widget`，DOM 序） */
+  archivedWidgetIds(): Promise<string[]>
+  /** 点某个已归档小组件行上 title ∈ titles 的按钮（恢复 / 删除）；行或按钮找不到抛 */
+  clickArchivedWidget(id: string, titles: string[]): Promise<void>
 }
 
 /** 「已归档」设置页（ArchivedSettings；openSettings('archived') 后调用） */
@@ -6917,7 +6923,34 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
       await sleep(200)
     },
     emptyText,
-    waitEmpty: () => until(async () => (await emptyText()) || null, 'archived empty state')
+    waitEmpty: () => until(async () => (await emptyText()) || null, 'archived empty state'),
+    selectSubTab: async (labels) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const b = [...((${TAB_BAR})?.querySelectorAll('button') ?? [])].find((x) =>
+          ${JSON.stringify(labels)}.includes((x.textContent ?? '').trim()))
+        if (!b) return false
+        b.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`archived sub tab (${labels.join(' / ')}) not found`)
+      await sleep(100)
+    },
+    archivedWidgetIds: () =>
+      settings.eval<string[]>(
+        `[...((${CONTENT})?.querySelectorAll('[data-archived-widget]') ?? [])].map((r) => r.getAttribute('data-archived-widget') ?? '')`
+      ),
+    clickArchivedWidget: async (id, titles) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const row = (${CONTENT})?.querySelector('[data-archived-widget="' + ${JSON.stringify(id)} + '"]')
+        const btn = [...(row?.querySelectorAll('button') ?? [])].find((b) =>
+          ${JSON.stringify(titles)}.includes(b.getAttribute('title') ?? ''))
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`archived widget "${id}" button (${titles.join(' / ')}) not found`)
+      await sleep(200)
+    }
   }
 }
 
@@ -6976,9 +7009,9 @@ export interface RightPanelPane {
   agentsActive(): Promise<boolean>
   /** 切到 widget tab 并等 agents 内容区不可见 —— 「面板开着但在别的 tab」的构造 */
   activateWidgetTab(): Promise<void>
-  /** widget tab 里的卡片（按卡片上那行等宽的 widget id 认，DOM 序） */
+  /** widget tab 主屏上的图标（按格子的 `data-home-slot` 认，DOM 序 = 主屏顺序） */
   widgetCardIds(): Promise<string[]>
-  /** 往某张 widget 卡片上派发一次冒泡的右键（contextmenu）事件；没有这张卡片 → false */
+  /** 往某个主屏图标上派发一次冒泡的右键（contextmenu）事件；没有这个图标 → false */
   contextMenuWidgetCard(widgetId: string): Promise<boolean>
   /** 标签栏可见 tab 的 lucide 图标类（DOM 序）—— tab 集合与顺序的判据，不认文案 */
   tabIcons(): Promise<string[]>
@@ -7037,8 +7070,8 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
   // agents 面板 = 内容区固定序的最后一个（见本节开头的锚点说明）
   const AGENTS = `${PANEL}?.querySelector(':scope > div.relative')?.lastElementChild`
   const ROWS = `[...(${AGENTS}?.querySelectorAll('.divide-y > div > button.w-full') ?? [])]`
-  // widget 卡片（WidgetCard 根：带 group 类、里面有一行等宽的 widget id）—— 只在 widget 面板（内容区第一个）里找
-  const WIDGET_CARDS = `[...(${PANEL}?.querySelector(':scope > div.relative')?.firstElementChild?.querySelectorAll('div.group.cursor-pointer') ?? [])]`
+  // 主屏上的图标（WidgetHome 的格子，`data-home-slot` = widget id，按 DOM 序 = 主屏顺序，所有页都在 DOM 里）
+  const WIDGET_CARDS = `[...(${PANEL}?.querySelector(':scope > div.relative')?.firstElementChild?.querySelectorAll('[data-home-slot]') ?? [])]`
   // 日历面板 = 内容区固定序的倒数第二个（见 activateCalendarTab）
   const CALENDAR = `(() => { const c = ${PANEL}?.querySelector(':scope > div.relative')?.children; return c ? c[c.length - 2] : null })()`
 
@@ -7075,13 +7108,11 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
       await until(async () => !(await agentsActive()) || null, 'widget tab active')
     },
     widgetCardIds: () =>
-      main.eval<string[]>(
-        `${WIDGET_CARDS}.map((c) => (c.querySelector('span.font-mono')?.textContent ?? '').trim())`
-      ),
+      main.eval<string[]>(`${WIDGET_CARDS}.map((c) => c.getAttribute('data-home-slot') ?? '')`),
     contextMenuWidgetCard: (widgetId) =>
       main.eval<boolean>(`(() => {
         const card = ${WIDGET_CARDS}.find(
-          (c) => (c.querySelector('span.font-mono')?.textContent ?? '').trim() === ${JSON.stringify(widgetId)}
+          (c) => c.getAttribute('data-home-slot') === ${JSON.stringify(widgetId)}
         )
         if (!card) return false
         const r = card.getBoundingClientRect()
@@ -10739,5 +10770,494 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
         )
       }
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Widget 面板的主屏（WidgetHome）与面板里的应用（WidgetPanel）。
+//
+// 锚点全是产品侧的纯标记，不认文案：
+//   - 面板根 `[data-widget-panel]`；主屏根 `[data-widget-home]`（整理状态多一个 `data-editing`）；
+//   - 主屏的一页 `[data-home-page]`，一格 `[data-home-slot=<widget id>]`（所有页都在 DOM 里，DOM 序 = 主屏顺序），
+//     格子里的图标 `[data-widget-icon]`（有 icon.svg 时里面是内联的 `<svg>`），运行中的小点 `[data-running]`；
+//   - 页码点 `[data-home-dot]`（只有一页时不画），整理状态的「完成」`[data-home-done]`；
+//   - 面板里开着的应用 `[data-panel-app=<id>]`（前台那个带 `data-foreground`），顶栏的返回 / 重新加载 /
+//     独立窗口 `[data-app-back]` / `[data-app-reload]` / `[data-app-popout]`，iframe `[data-widget-frame=<id>]`。
+
+export interface WidgetHomePane {
+  /**
+   * 让面板重新取一次列表：停一个不存在的 widget（`stopWidget` 总会广播 widget.changed，又什么都不改 ——
+   * 不能用 setHomeOrder，它会把存下的主屏顺序冲掉）。spec 往磁盘种了 / 改了 widget 之后用
+   */
+  reload(): Promise<void>
+  /** 主屏上的图标（DOM 序 = 主屏顺序） */
+  slotIds(): Promise<string[]>
+  /** 主屏有几页 */
+  pageCount(): Promise<number>
+  /** 这个图标里是不是内联了 svg（有 icon.svg 且清洗得过） */
+  hasInlineSvg(id: string): Promise<boolean>
+  /** 点一下主屏上的图标 */
+  tap(id: string): Promise<void>
+  /** 前台的应用；在主屏上为 null */
+  foregroundApp(): Promise<string | null>
+  /** 面板里开着的应用（含后台的） */
+  panelApps(): Promise<string[]>
+  /** 这个应用的 iframe 挂上了没有 */
+  frameReady(id: string): Promise<boolean>
+  /** iframe 元素的身份戳（第一次问时打上）—— 同一个戳 = 同一个 iframe，没有重建 */
+  frameStamp(id: string): Promise<number | null>
+  /** 点前台应用顶栏的返回 */
+  back(): Promise<void>
+  /** 把面板那一块截成 PNG（给人看的证据，不是断言） */
+  screenshot(filePath: string): Promise<void>
+
+  // ── 页码与分页 ──
+  /** 当前页（带 `aria-current="page"` 的页码点）；只有一页（没有点）时为 0 */
+  currentPage(): Promise<number>
+  /** 页码点的个数（只有一页时为 0） */
+  dotCount(): Promise<number>
+  /** 点第 i 个页码点 */
+  clickDot(i: number): Promise<void>
+  /** 第 i 页上的图标（DOM 序） */
+  slotsOnPage(i: number): Promise<string[]>
+  /** 此刻整块落在面板里的图标（当前页上的那些） */
+  visibleSlotIds(): Promise<string[]>
+  /** 第 i 页左缘相对主屏根左缘的偏移（px）—— 当前页停稳时为 0，拖动时跟手 */
+  pageOffset(i: number): Promise<number>
+  /** 主屏根的视口矩形与尺寸（clientWidth / clientHeight / scrollHeight） */
+  homeRect(): Promise<WidgetHomeRect | null>
+  /** 主屏不在时（没有 widget）面板里显示的那句空态文本；主屏在 / 还没加载完 → null */
+  emptyHint(): Promise<string | null>
+
+  // ── 图标 ──
+  /** 某个图标格的中心点（视口 CSS px）；不在 → null */
+  slotCenter(id: string): Promise<{ x: number; y: number } | null>
+  /** 图标（`[data-widget-icon]`）相对面板根左上角的方块，与面板的 clientWidth / clientHeight */
+  iconBox(id: string): Promise<WidgetIconBox | null>
+  /** 图标的内容：内联 svg 的标记（没有 → null）、里面有没有 script / on* 属性、字、内联的底色 */
+  iconInfo(id: string): Promise<WidgetIconInfo | null>
+  /** 图标下有没有「运行中」的小点 */
+  running(id: string): Promise<boolean>
+
+  // ── 整理图标 ──
+  /** 主屏在不在「整理图标」状态 */
+  editing(): Promise<boolean>
+  /** 点「完成」 */
+  clickDone(): Promise<void>
+  /** 在当前页最后一行下方的空白处真点一下（可信输入）；找不到空白处抛 */
+  clickBlank(): Promise<void>
+
+  // ── 可信的指针 / 键盘输入（CDP Input.*；setPointerCapture 只认它） ──
+  /** 在某点按下鼠标左键 */
+  press(point: { x: number; y: number }): Promise<void>
+  /** 按着移动到某点（`steps` 步、共 `ms` 毫秒） */
+  moveTo(point: { x: number; y: number }, opts?: { steps?: number; ms?: number }): Promise<void>
+  /** 在最后的位置松开左键 */
+  release(): Promise<void>
+  /**
+   * 横向拖一下主屏：`dx` 像素、`steps` 步、`ms` 毫秒。缺省从页码点那一条的空白处起（向左拖从右侧起、向右拖从左侧起），
+   * `fromId` 则从那个图标起；`hold: true` 不松手（之后 `release()`）
+   */
+  swipe(
+    dx: number,
+    opts?: { fromId?: string; steps?: number; ms?: number; hold?: boolean }
+  ): Promise<void>
+  /** 在图标上按住 `ms` 毫秒再原地松开 */
+  longPress(id: string, ms: number): Promise<void>
+  /**
+   * 拖一个图标到某点：先按住 `holdMs`（不在整理状态时 = 长按进入整理），再分步移过去；`release: false` 不松手
+   */
+  dragIcon(
+    id: string,
+    to: { x: number; y: number },
+    opts?: { holdMs?: number; steps?: number; ms?: number; release?: boolean }
+  ): Promise<void>
+  /** 在主屏中央派发 `times` 次滚轮（deltaX / deltaY），一次紧接一次 */
+  wheel(dx: number, dy: number, times?: number): Promise<void>
+  /** 按一下 Escape（可信键盘输入） */
+  pressEscape(): Promise<void>
+
+  // ── 右键菜单（contextMenu:popup 的桩） ──
+  /** 这个图标右键菜单的项 id（含分隔符的 id），菜单取消 */
+  menuItemIds(id: string): Promise<string[]>
+  /** 右键这个图标并选中 `actionId` */
+  pickMenu(id: string, actionId: string): Promise<void>
+
+  // ── 面板里的应用 ──
+  /** 这个应用的那一层此刻可见（visibility） */
+  appVisible(id: string): Promise<boolean>
+  /** 点前台应用顶栏的「重新加载」 */
+  reloadApp(): Promise<void>
+  /** 点前台应用顶栏的「在独立窗口打开」（↗；带用户手势，web 客户端里开新标签页也放行） */
+  popout(): Promise<void>
+  /**
+   * 这个应用那一层自己身上正在跑的 clip-path 动效（打开 / 关回）的首尾关键帧，以及主屏那一层在不在动、面板根的
+   * pointer-events；没有在跑的动效 → `clip` 为 null
+   */
+  openAnimation(id: string): Promise<WidgetAppAnimationShot>
+}
+
+/** 主屏根的矩形与尺寸 */
+export interface WidgetHomeRect extends ViewportRect {
+  clientWidth: number
+  clientHeight: number
+  scrollHeight: number
+}
+
+/** 图标相对面板根的方块 */
+export interface WidgetIconBox {
+  left: number
+  top: number
+  width: number
+  height: number
+  panelWidth: number
+  panelHeight: number
+}
+
+/** 图标的内容 */
+export interface WidgetIconInfo {
+  svg: string | null
+  hasScript: boolean
+  hasOnAttr: boolean
+  /** 没有 svg 时图标上的字（有 svg 时为空串） */
+  text: string
+  /** 图标元素内联 style 的 background */
+  background: string
+}
+
+/** 应用那一层的动效快照 */
+export interface WidgetAppAnimationShot {
+  clip: { first: string; last: string } | null
+  homeAnimating: boolean
+  panelPointerEvents: string
+}
+
+export function widgetHomePane(main: CdpClient): WidgetHomePane {
+  const PANEL = `document.querySelector('[data-widget-panel]')`
+  const HOME = `${PANEL}?.querySelector('[data-widget-home]')`
+  const slot = (id: string): string =>
+    `${PANEL}?.querySelector('[data-home-slot="' + ${JSON.stringify(id)} + '"]')`
+  const frame = (id: string): string =>
+    `${PANEL}?.querySelector('iframe[data-widget-frame="' + ${JSON.stringify(id)} + '"]')`
+  const app = (id: string): string =>
+    `${PANEL}?.querySelector('[data-panel-app="' + ${JSON.stringify(id)} + '"]')`
+  const clickIn = async (selector: string, what: string): Promise<void> => {
+    const ok = await main.eval<boolean>(
+      `(() => { const b = ${selector}; if (!b) return false; b.click(); return true })()`
+    )
+    if (!ok) throw new Error(`widget panel: no ${what}`)
+  }
+
+  // 可信的鼠标：按下 / 移动 / 松开都经 CDP，最后的位置记在这里（release 用）
+  let at = { x: 0, y: 0 }
+  let down = false
+  const mouse = (
+    type: 'mouseMoved' | 'mousePressed' | 'mouseReleased',
+    x: number,
+    y: number
+  ): Promise<unknown> =>
+    main.send('Input.dispatchMouseEvent', {
+      type,
+      x,
+      y,
+      ...(type === 'mouseMoved'
+        ? down
+          ? { button: 'left', buttons: 1 }
+          : {}
+        : { button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1 })
+    })
+  const press = async (p: { x: number; y: number }): Promise<void> => {
+    await mouse('mouseMoved', p.x, p.y)
+    down = true
+    at = { ...p }
+    await mouse('mousePressed', p.x, p.y)
+  }
+  const moveTo = async (
+    p: { x: number; y: number },
+    opts: { steps?: number; ms?: number } = {}
+  ): Promise<void> => {
+    const steps = Math.max(1, opts.steps ?? 10)
+    const ms = opts.ms ?? 150
+    const from = { ...at }
+    for (let i = 1; i <= steps; i++) {
+      const x = from.x + ((p.x - from.x) * i) / steps
+      const y = from.y + ((p.y - from.y) * i) / steps
+      at = { x, y }
+      await mouse('mouseMoved', x, y)
+      if (ms > 0) await sleep(ms / steps)
+    }
+  }
+  const release = async (): Promise<void> => {
+    await mouse('mouseReleased', at.x, at.y)
+    down = false
+  }
+
+  const homeRect = (): Promise<WidgetHomeRect | null> =>
+    main.eval<WidgetHomeRect | null>(`(() => {
+      const h = ${HOME}
+      if (!h) return null
+      const r = h.getBoundingClientRect()
+      return { x: r.left, y: r.top, width: r.width, height: r.height,
+        clientWidth: h.clientWidth, clientHeight: h.clientHeight, scrollHeight: h.scrollHeight }
+    })()`)
+  const slotCenter = (id: string): Promise<{ x: number; y: number } | null> =>
+    main.eval<{ x: number; y: number } | null>(`(() => {
+      const s = ${slot(id)}
+      if (!s) return null
+      const r = s.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    })()`)
+  const centerOf = async (id: string): Promise<{ x: number; y: number }> => {
+    const c = await slotCenter(id)
+    if (!c) throw new Error(`no home screen icon for ${id}`)
+    return c
+  }
+  const openMenu = async (id: string, pick: string | null): Promise<void> => {
+    await armMenu(main, pick)
+    const ok = await rightPanelPane(main).contextMenuWidgetCard(id)
+    if (!ok) throw new Error(`no home screen icon for ${id}`)
+  }
+
+  return {
+    reload: async () => {
+      await main.eval(`window.api.widget.stopWidget('e2e-noop-widget').then(() => true)`)
+    },
+    slotIds: () =>
+      main.eval<string[]>(
+        `[...(${PANEL}?.querySelectorAll('[data-home-slot]') ?? [])].map((el) => el.getAttribute('data-home-slot') ?? '')`
+      ),
+    pageCount: () =>
+      main.eval<number>(`${PANEL}?.querySelectorAll('[data-home-page]').length ?? 0`),
+    hasInlineSvg: (id) =>
+      main.eval<boolean>(`!!${slot(id)}?.querySelector('[data-widget-icon] svg')`),
+    tap: async (id) => {
+      const ok = await main.eval<boolean>(
+        `(() => { const b = ${slot(id)}; if (!b) return false; b.click(); return true })()`
+      )
+      if (!ok) throw new Error(`no home screen icon for ${id}`)
+    },
+    foregroundApp: () =>
+      main.eval<string | null>(
+        `${PANEL}?.querySelector('[data-panel-app][data-foreground]')?.getAttribute('data-panel-app') ?? null`
+      ),
+    panelApps: () =>
+      main.eval<string[]>(
+        `[...(${PANEL}?.querySelectorAll('[data-panel-app]') ?? [])].map((el) => el.getAttribute('data-panel-app') ?? '')`
+      ),
+    frameReady: (id) => main.eval<boolean>(`!!${frame(id)}`),
+    frameStamp: (id) =>
+      main.eval<number | null>(`(() => {
+        const f = ${frame(id)}
+        if (!f) return null
+        if (f.__e2eStamp === undefined) f.__e2eStamp = Math.random()
+        return f.__e2eStamp
+      })()`),
+    back: async () => {
+      const ok = await main.eval<boolean>(
+        `(() => { const b = ${PANEL}?.querySelector('[data-panel-app][data-foreground] [data-app-back]'); if (!b) return false; b.click(); return true })()`
+      )
+      if (!ok) throw new Error('no foreground app to go back from')
+    },
+    screenshot: async (filePath) => {
+      const rect = await main.eval<ViewportRect | null>(`(() => {
+        const p = ${PANEL}
+        if (!p) return null
+        const r = p.getBoundingClientRect()
+        return { x: r.left, y: r.top, width: r.width, height: r.height }
+      })()`)
+      if (!rect) throw new Error('no widget panel on screen to screenshot')
+      const shot = await main.send<{ data: string }>('Page.captureScreenshot', {
+        format: 'png',
+        clip: { ...rect, scale: 1 }
+      })
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, Buffer.from(shot.data, 'base64'))
+    },
+
+    currentPage: () =>
+      main.eval<number>(
+        `Number(${PANEL}?.querySelector('[data-home-dot][aria-current="page"]')?.getAttribute('data-home-dot') ?? 0)`
+      ),
+    dotCount: () => main.eval<number>(`${PANEL}?.querySelectorAll('[data-home-dot]').length ?? 0`),
+    clickDot: (i) => clickIn(`${PANEL}?.querySelector('[data-home-dot="${i}"]')`, `page dot ${i}`),
+    slotsOnPage: (i) =>
+      main.eval<string[]>(
+        `[...(${PANEL}?.querySelector('[data-home-page="${i}"]')?.querySelectorAll('[data-home-slot]') ?? [])].map((el) => el.getAttribute('data-home-slot') ?? '')`
+      ),
+    visibleSlotIds: () =>
+      main.eval<string[]>(`(() => {
+        const p = ${PANEL}
+        if (!p) return []
+        const box = p.getBoundingClientRect()
+        return [...p.querySelectorAll('[data-home-slot]')]
+          .filter((el) => {
+            const r = el.getBoundingClientRect()
+            return r.width > 0 && r.left >= box.left - 1 && r.right <= box.right + 1
+          })
+          .map((el) => el.getAttribute('data-home-slot') ?? '')
+      })()`),
+    pageOffset: (i) =>
+      main.eval<number>(`(() => {
+        const h = ${HOME}
+        const pg = h?.querySelector('[data-home-page="${i}"]')
+        if (!h || !pg) return NaN
+        return pg.getBoundingClientRect().left - h.getBoundingClientRect().left
+      })()`),
+    homeRect,
+    emptyHint: () =>
+      main.eval<string | null>(`(() => {
+        const p = ${PANEL}
+        if (!p || p.querySelector('[data-widget-home]')) return null
+        const t = (p.querySelector('p')?.textContent ?? '').trim()
+        return t || null
+      })()`),
+
+    slotCenter,
+    iconBox: (id) =>
+      main.eval<WidgetIconBox | null>(`(() => {
+        const p = ${PANEL}
+        const icon = ${slot(id)}?.querySelector('[data-widget-icon]')
+        if (!p || !icon) return null
+        const pr = p.getBoundingClientRect()
+        const r = icon.getBoundingClientRect()
+        return { left: r.left - pr.left, top: r.top - pr.top, width: r.width, height: r.height,
+          panelWidth: p.clientWidth, panelHeight: p.clientHeight }
+      })()`),
+    iconInfo: (id) =>
+      main.eval<WidgetIconInfo | null>(`(() => {
+        const icon = ${slot(id)}?.querySelector('[data-widget-icon]')
+        if (!icon) return null
+        const svg = icon.querySelector('svg')
+        return {
+          svg: svg ? svg.outerHTML : null,
+          hasScript: !!icon.querySelector('script'),
+          hasOnAttr: [...icon.querySelectorAll('*')].some((el) =>
+            [...el.attributes].some((a) => a.name.toLowerCase().startsWith('on'))),
+          text: svg ? '' : (icon.textContent ?? '').trim(),
+          background: icon.style.background
+        }
+      })()`),
+    running: (id) => main.eval<boolean>(`!!${slot(id)}?.querySelector('[data-running]')`),
+
+    editing: () => main.eval<boolean>(`!!${HOME}?.hasAttribute('data-editing')`),
+    clickDone: () => clickIn(`${PANEL}?.querySelector('[data-home-done]')`, 'Done button'),
+    clickBlank: async () => {
+      // 当前页（停稳后左缘贴着主屏左缘的那一页）里，最后一格下方第一个命中页本身的点
+      const point = await main.eval<{ x: number; y: number } | null>(`(() => {
+        const h = ${HOME}
+        if (!h) return null
+        const hr = h.getBoundingClientRect()
+        const page = [...h.querySelectorAll('[data-home-page]')].find(
+          (pg) => Math.abs(pg.getBoundingClientRect().left - hr.left) < 2)
+        if (!page) return null
+        const slots = [...page.querySelectorAll('[data-home-slot]')]
+        const last = slots[slots.length - 1]
+        const top = last ? last.getBoundingClientRect().bottom + 2 : hr.top + 4
+        const x = hr.left + hr.width / 2
+        for (let y = top; y < hr.bottom - 28; y += 4) {
+          if (document.elementFromPoint(x, y) === page) return { x, y }
+        }
+        return null
+      })()`)
+      if (!point) throw new Error('widget home: no blank space below the last row of this page')
+      await press(point)
+      await release()
+    },
+
+    press,
+    moveTo,
+    release,
+    swipe: async (dx, opts = {}) => {
+      let start: { x: number; y: number }
+      if (opts.fromId) {
+        start = await centerOf(opts.fromId)
+      } else {
+        const r = await homeRect()
+        if (!r) throw new Error('widget home not on screen')
+        // 页码点那一条（DOTS_HEIGHT 高）的空白处：点在中间，两侧没有
+        start = { x: dx < 0 ? r.x + r.width - 20 : r.x + 20, y: r.y + r.height - 8 }
+      }
+      await press(start)
+      await moveTo({ x: start.x + dx, y: start.y }, { steps: opts.steps, ms: opts.ms })
+      if (!opts.hold) await release()
+    },
+    longPress: async (id, ms) => {
+      await press(await centerOf(id))
+      await sleep(ms)
+      await release()
+    },
+    dragIcon: async (id, to, opts = {}) => {
+      await press(await centerOf(id))
+      if (opts.holdMs) await sleep(opts.holdMs)
+      await moveTo(to, { steps: opts.steps ?? 12, ms: opts.ms ?? 240 })
+      if (opts.release !== false) await release()
+    },
+    wheel: async (dx, dy, times = 1) => {
+      const r = await homeRect()
+      if (!r) throw new Error('widget home not on screen')
+      const x = r.x + r.width / 2
+      const y = r.y + r.height / 2
+      for (let i = 0; i < times; i++) {
+        await main.send('Input.dispatchMouseEvent', {
+          type: 'mouseWheel',
+          x,
+          y,
+          deltaX: dx,
+          deltaY: dy
+        })
+      }
+    },
+    pressEscape: async () => {
+      const base = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }
+      await main.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
+      await main.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    },
+
+    menuItemIds: async (id) => {
+      await openMenu(id, null)
+      return (await lastMenuItems(main)).filter((it) => it.id).map((it) => it.id as string)
+    },
+    pickMenu: async (id, actionId) => {
+      await openMenu(id, actionId)
+      const ids = (await lastMenuItems(main)).map((it) => it.id)
+      if (!ids.includes(actionId)) {
+        throw new Error(`widget menu for ${id} has no "${actionId}" (has ${ids.join(', ')})`)
+      }
+    },
+
+    appVisible: (id) =>
+      main.eval<boolean>(
+        `(() => { const a = ${app(id)}; return !!a && getComputedStyle(a).visibility === 'visible' })()`
+      ),
+    reloadApp: () =>
+      clickIn(
+        `${PANEL}?.querySelector('[data-panel-app][data-foreground] [data-app-reload]')`,
+        'foreground app reload button'
+      ),
+    popout: async () => {
+      // 带用户手势：浏览器里的 web 客户端靠 window.open 开新标签页，没有手势会被拦
+      const r = await main.send<{ result?: { value?: unknown } }>('Runtime.evaluate', {
+        expression: `(() => { const b = ${PANEL}?.querySelector('[data-panel-app][data-foreground] [data-app-popout]'); if (!b) return false; b.click(); return true })()`,
+        returnByValue: true,
+        userGesture: true
+      })
+      if (r.result?.value !== true)
+        throw new Error('widget panel: no foreground app pop-out button')
+    },
+    openAnimation: (id) =>
+      main.eval<WidgetAppAnimationShot>(`(() => {
+        const p = ${PANEL}
+        const layer = ${app(id)}
+        const anim = layer
+          ?.getAnimations()
+          .find((a) => a.playState === 'running' && a.effect?.getKeyframes().some((k) => k.clipPath))
+        const frames = anim?.effect?.getKeyframes() ?? []
+        const home = ${HOME}?.parentElement
+        return {
+          clip: anim ? { first: String(frames[0].clipPath), last: String(frames[frames.length - 1].clipPath) } : null,
+          homeAnimating: !!home && home.getAnimations().length > 0,
+          panelPointerEvents: p?.style.pointerEvents ?? ''
+        }
+      })()`)
   }
 }

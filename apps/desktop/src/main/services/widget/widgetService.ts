@@ -13,7 +13,7 @@
  * shuvix CLI 自举时给自己开目录权限）；没有走 ipc 的注入路径。
  */
 
-import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'fs'
+import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync } from 'fs'
 import { createHash } from 'crypto'
 import { join } from 'path'
 import { widgetRegistry, WIDGET_ID_REGEX, type Widget } from './widgetRegistry'
@@ -50,6 +50,23 @@ export interface WidgetSummary {
   updatedAt: number
   lastOpenedAt: number
   archivedAt: number
+  /** `<dir>/icon.svg` 的修改时间（没有图标 → 0）；渲染端拿它当图标缓存的版本号 */
+  iconMtime: number
+}
+
+/** widget 的图标文件（可选；由改 widget 的 agent 照 builtin:widget 技能画） */
+export const WIDGET_ICON_FILE = 'icon.svg'
+
+/** 图标文件大小上限：图标是一个小图形，超过它多半不是图标，不读 */
+const WIDGET_ICON_MAX_BYTES = 64 * 1024
+
+function iconMtimeOf(id: string): number {
+  try {
+    const info = statSync(join(getWidgetsDir(), id, WIDGET_ICON_FILE))
+    return info.isFile() ? info.mtimeMs : 0
+  } catch {
+    return 0
+  }
 }
 
 function toSummary(w: Widget): WidgetSummary {
@@ -60,7 +77,8 @@ function toSummary(w: Widget): WidgetSummary {
     createdAt: w.createdAt,
     updatedAt: w.updatedAt,
     lastOpenedAt: w.lastOpenedAt,
-    archivedAt: w.archivedAt
+    archivedAt: w.archivedAt,
+    iconMtime: iconMtimeOf(w.id)
   }
 }
 
@@ -114,6 +132,28 @@ class WidgetService {
 
   listArchived(): WidgetSummary[] {
     return widgetRegistry.findAllArchived().map(toSummary)
+  }
+
+  /**
+   * 读图标原文（`icon.svg`）。没有、不是文件、超过上限、id 不合法 → null。
+   * 不在这里清洗：渲染端按「外来作者」那一档清洗后内联显示（sanitizeAuthoredSvg），图标里的主题 token 才生效
+   */
+  readIcon(id: string): string | null {
+    if (!WIDGET_ID_REGEX.test(id)) return null
+    const path = join(this.getWidgetDir(id), WIDGET_ICON_FILE)
+    try {
+      const info = statSync(path)
+      if (!info.isFile() || info.size > WIDGET_ICON_MAX_BYTES) return null
+      return readFileSync(path, 'utf-8')
+    } catch {
+      return null
+    }
+  }
+
+  /** 主屏顺序（面板「整理图标」的结果）；之后 listActive 按它排 */
+  setHomeOrder(ids: readonly string[]): void {
+    widgetRegistry.setHomeOrder(ids)
+    broadcastWidgetChanged()
   }
 
   getById(id: string): Widget | undefined {
@@ -241,6 +281,8 @@ class WidgetService {
       const message = options.message?.trim() || defaultBuildMessage(id)
       const oid = await commitBuild(dir, message)
       if (oid) out.commit = oid.slice(0, 7)
+      // 图标可能刚画好 / 改过（iconMtime 随列表下发）
+      broadcastWidgetChanged()
     }
     return out
   }
@@ -302,6 +344,8 @@ class WidgetService {
     widgetRegistry.update(id, { archivedAt: archived ? Date.now() : 0 })
     if (archived) {
       widgetServer.unregisterWidget(id)
+      // 取消归档时回到主屏末尾（与新建的一样），不占着原来的位置
+      widgetRegistry.removeFromHomeOrder(id)
     }
     broadcastWidgetChanged()
   }

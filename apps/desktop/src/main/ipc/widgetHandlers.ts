@@ -59,6 +59,18 @@ export function registerWidgetHandlers(): void {
     return { success: true }
   })
 
+  /** 图标原文（`icon.svg`，没有 → null）；渲染端清洗后内联显示 */
+  defineHandler('widget:getIcon', (_ctx, id: string) => ({
+    svg: typeof id === 'string' ? widgetService.readIcon(id) : null
+  }))
+
+  /** 主屏（Widget 面板）的图标顺序 —— 「整理图标」拖完后整份交来 */
+  defineHandler('widget:setHomeOrder', (_ctx, ids: unknown) => {
+    if (!Array.isArray(ids)) return { success: false }
+    widgetService.setHomeOrder(ids.filter((id): id is string => typeof id === 'string'))
+    return { success: true }
+  })
+
   defineHandler('widget:delete', async (_ctx, id: string) => {
     await widgetService.delete(id)
     return { success: true }
@@ -74,6 +86,25 @@ export function registerWidgetHandlers(): void {
     } catch (e) {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+  })
+
+  /**
+   * Widget 面板点图标前问的两件事：此刻开着独立窗口的有哪些（同一个 widget 只开在一处），以及给出的这些
+   * widget 里哪些上次是在独立窗口里打开的。浏览器里的 web 客户端不用它：它的「独立窗口」是自己的标签页
+   */
+  defineHandler('widgetWindow:status', (_ctx, ids: unknown) => {
+    const list = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+    return {
+      open: widgetWindowService.openIds(),
+      preferWindow: widgetWindowService.preferWindowIds(list)
+    }
+  })
+
+  /** 用户在面板里选了打开方式（↗ / 菜单）—— 下次点图标照它来 */
+  defineHandler('widgetWindow:setPreferWindow', (_ctx, params: { id: string; value: boolean }) => {
+    if (typeof params?.id !== 'string') return { success: false }
+    widgetWindowService.setPreferWindow(params.id, params.value === true)
+    return { success: true }
   })
 
   defineHandler('widgetWindow:close', (_ctx, id: string) => {

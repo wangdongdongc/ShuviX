@@ -14,6 +14,7 @@
  *   BC-7 widget 已注册 → 走 rebuild（不走 registerAndBuild），提交照样落
  *   BC-8 .gitignore 里的 node_modules 不进提交
  *   BC-9 commitBuild 直接调在不是仓库的目录上 → undefined、不建 .git；defaultBuildMessage 的格式
+ *   HO-4 构建成功发布 widget.changed（图标可能刚改过，iconMtime 随列表下发）；构建失败不发布
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import * as nodeFs from 'node:fs'
@@ -50,6 +51,7 @@ vi.mock('../../../logger', () => ({
 
 import { widgetService } from '../widgetService'
 import { commitBuild, defaultBuildMessage, ensureRepo } from '../widgetRepo'
+import { appEventBus } from '../../../utils/appEventBus'
 
 const ID = 'photo-wall'
 let dir = ''
@@ -264,5 +266,36 @@ describe('BC-9 commitBuild / defaultBuildMessage', () => {
 
   it('BC-9 defaultBuildMessage 的格式', () => {
     expect(defaultBuildMessage('a-b')).toBe('chore(a-b): build')
+  })
+})
+
+describe('HO-4 构建后的 widget.changed', () => {
+  const changedCount = (spy: ReturnType<typeof vi.spyOn>): number =>
+    spy.mock.calls.filter(([e]) => (e as { type: string }).type === 'widget.changed').length
+
+  it('HO-4 构建成功 → 发布 widget.changed', async () => {
+    await fixture()
+    const publish = vi.spyOn(appEventBus, 'publish')
+    try {
+      writeFileSync(join(dir, 'index.tsx'), 'export const v = 40\n')
+      const result = await widgetService.build(ID)
+      expect(result.buildSuccess).toBe(true)
+      expect(changedCount(publish)).toBeGreaterThanOrEqual(1)
+    } finally {
+      publish.mockRestore()
+    }
+  })
+
+  it('HO-4 构建失败 → 不发布 widget.changed', async () => {
+    await fixture()
+    setResult({ success: false, errors: ['boom'] })
+    const publish = vi.spyOn(appEventBus, 'publish')
+    try {
+      const result = await widgetService.build(ID)
+      expect(result.buildSuccess).toBe(false)
+      expect(changedCount(publish)).toBe(0)
+    } finally {
+      publish.mockRestore()
+    }
   })
 })

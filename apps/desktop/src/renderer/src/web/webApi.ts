@@ -9,6 +9,7 @@
  *  - `app:open-external(url)` → 新标签页里开那个地址（只认 http / https / mailto，其余回 `success:false`）；
  *  - `files:open` → 新标签页里开 `#file-preview?…`（只读预览；md 也在那里只读渲染 —— 协作编辑窗口仍只在桌面）；
  *  - `widgetWindow:open` → 新标签页里开 `#widget-window?widgetId=…`（widget 经网络服务的 `/w/` 转发）；
+ *    `widgetWindow:status` → 两张空表、`widgetWindow:setPreferWindow` 不记（那些标签页宿主看不见）；
  *  - `dialog:openDirectory` / `skill:pickExternalDir` → 页面里的目录浏览器（列的是服务端的目录）；
  *  - `app:open-folder` / `app:reveal-path` / `widget:revealExport` → 显示那个服务端路径、给一个复制按钮；
  *    `*:openFolder` / `knowledge:revealFile` 先经 `fs:locateFolder` 问到路径，再同样显示。
@@ -119,6 +120,10 @@ export function webLocalHandlers(
       win.open(widgetPageUrl(win.location, id), '_blank')
       return { success: true }
     },
+    // 浏览器里的「独立窗口」是自己开的标签页，宿主不知道它开着没有，桌面那边记的偏好也不是这个浏览器的 ——
+    // Widget 面板于是总在面板里打开，选择也不往回记
+    'widgetWindow:status': () => ({ open: [], preferWindow: [] }),
+    'widgetWindow:setPreferWindow': () => ({ success: true }),
     'dialog:openDirectory': () => pickDirectory(),
     'skill:pickExternalDir': async () => {
       const path = await pickDirectory()

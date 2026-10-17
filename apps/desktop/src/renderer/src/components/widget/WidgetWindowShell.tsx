@@ -1,17 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
-import { Wrench, Pin, RotateCw, X, Loader2 } from 'lucide-react'
+import { Pin, RotateCw, X } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { isWebHost } from '../../host/hostMedia'
-import { widgetFrameUrl } from '../../host/hostUrls'
-
-/**
- * 浏览器里的 web 客户端（server mode phase D）：widget 经网络服务转发，与 web 客户端同源 —— iframe 加沙箱、
- * 不给 allow-same-origin，widget 的代码于是够不着这一页的 `window.api`（桌面靠跨源做到同一件事）。
- * 它的 bundle / db / sse 请求照样能用：widget 服务对每个应答都回 `Access-Control-Allow-Origin: *`。
- */
-const WEB_WIDGET_SANDBOX = 'allow-scripts allow-forms allow-popups allow-modals allow-downloads'
+import { WidgetFrame } from './WidgetFrame'
+import { WidgetIcon } from './WidgetIcon'
 
 function parseWidgetIdFromHash(): string | null {
   const hash = window.location.hash // 形如 "#widget-window?widgetId=xxx"
@@ -21,30 +15,21 @@ function parseWidgetIdFromHash(): string | null {
   return params.get('widgetId')
 }
 
-type LoadPhase =
-  | { status: 'loading' }
-  | { status: 'ready'; url: string }
-  | { status: 'error'; message: string }
-
 /**
  * Widget 独立窗口根组件（hash #widget-window?widgetId=…）
  *
  * - 从 URL hash 解析 widgetId（同步可用，避免 store 加载竞态）
  * - 最小应用初始化：仅加载设置（主题 / 字号 / 语言），不加载会话 / 提供商
- * - 挂载时调 widget.open：懒启动 server + 注册构建 + 拿 URL —— URL 永远现取不持久化，
- *   天然规避 server 随机端口在重启后过期的问题
- * - 内容用跨源 iframe 承载（127.0.0.1 在 renderer CSP frame-src 白名单内）；
- *   preload 只注入顶层 shell，widget 的 agent 生成代码拿不到 window.api
+ * - widget 页面由 WidgetFrame 承载（与 Widget 面板里的应用同一个组件：启动、iframe、加载态、重试）
  */
 export function WidgetWindowShell(): React.JSX.Element {
   const widgetId = useMemo(() => parseWidgetIdFromHash(), [])
   const { t } = useTranslation()
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
-  const [phase, setPhase] = useState<LoadPhase>({ status: 'loading' })
   const [name, setName] = useState('')
+  const [iconMtime, setIconMtime] = useState(0)
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
-  const [reloadToken, setReloadToken] = useState(0)
-  const openedRef = useRef(false)
+  const [reloadNonce, setReloadNonce] = useState(0)
 
   // ========== 最小应用初始化：设置 + 通知主进程（applyZoom）==========
   useEffect(() => {
@@ -66,69 +51,23 @@ export function WidgetWindowShell(): React.JSX.Element {
     })
   }, [])
 
-  // ========== 打开 / 重载 widget ==========
+  const onWidget = useCallback((widget: WidgetSummary): void => {
+    setName(widget.name)
+    setIconMtime(widget.iconMtime ?? 0)
+    document.title = widget.name
+  }, [])
 
-  /**
-   * initial=true 走 widget.open（计一次打开）；重载 / 重试走 startWidget（不计数）。
-   * setState 全部收在 .then 回调里（异步续体），loading 态由调用方（事件 handler）负责
-   */
-  const startWidget = useCallback(
-    (initial: boolean): void => {
-      if (!widgetId) return
-      const req = initial
-        ? window.api.widget.open(widgetId)
-        : window.api.widget.startWidget(widgetId)
-      void req.then((res) => {
-        if (!res.success) {
-          setPhase({ status: 'error', message: res.error })
-          return
-        }
-        if ('widget' in res) {
-          setName(res.widget.name)
-          document.title = res.widget.name
-        }
-        if (!res.url) {
-          setPhase({ status: 'error', message: t('widgets.serverStopped') })
-          return
-        }
-        // URL 可能因 server 重启换端口 —— 每次都重挂 iframe。web 客户端经网络服务的 /w/ 转发
-        setReloadToken((v) => v + 1)
-        setPhase({
-          status: 'ready',
-          url: widgetFrameUrl(window.api.app.platform, res.url, window.location.origin)
-        })
-      })
-    },
-    [widgetId, t]
-  )
-
-  /** 重载 / 重试入口（事件 handler 里同步置 loading，再走异步流程） */
-  const reloadWidget = useCallback((): void => {
-    setPhase({ status: 'loading' })
-    startWidget(false)
-  }, [startWidget])
-
-  useEffect(() => {
-    // StrictMode 下 effect 会双跑 —— ref 防止 widget.open 重复计数 / 重复构建
-    if (openedRef.current) return
-    openedRef.current = true
-    startWidget(true)
-  }, [startWidget])
-
-  // 改名同步标题；删除 / 归档时主进程会直接关窗，这里无需处理
+  // 改名 / 换图标同步标题栏；删除 / 归档时主进程会直接关窗，这里无需处理
   useEffect(() => {
     if (!widgetId) return undefined
     return window.api.events.subscribe((event) => {
       if (event.type !== 'widget.changed') return
       void window.api.widget.list().then((list) => {
         const w = list.find((x) => x.id === widgetId)
-        if (w) {
-          setName(w.name)
-          document.title = w.name
-        }
+        if (w) onWidget(w)
       })
     })
-  }, [widgetId])
+  }, [widgetId, onWidget])
 
   // ========== 窗口操作 ==========
   useEffect(() => {
@@ -192,7 +131,11 @@ export function WidgetWindowShell(): React.JSX.Element {
     <div className="flex flex-col h-full bg-bg-primary text-text-primary">
       {/* 自绘标题栏：整条可拖拽，按钮区豁免 */}
       <div className="titlebar-drag flex-shrink-0 flex items-center gap-2 h-9 px-3 border-b border-border-secondary/40 select-none">
-        <Wrench size={13} className="flex-shrink-0 text-violet-400" />
+        <WidgetIcon
+          widget={{ id: widgetId, name, iconMtime }}
+          size={16}
+          className="flex-shrink-0"
+        />
         <span className="flex-1 min-w-0 truncate text-[12px] font-medium">{name || ' '}</span>
         <div className="titlebar-no-drag flex items-center gap-0.5">
           {!isWebHost && (
@@ -206,7 +149,11 @@ export function WidgetWindowShell(): React.JSX.Element {
               <Pin size={13} className={alwaysOnTop ? 'fill-current' : ''} />
             </button>
           )}
-          <button onClick={reloadWidget} className={iconBtn} title={t('widgets.windowReload')}>
+          <button
+            onClick={() => setReloadNonce((v) => v + 1)}
+            className={iconBtn}
+            title={t('widgets.windowReload')}
+          >
             <RotateCw size={13} />
           </button>
           <button
@@ -220,42 +167,13 @@ export function WidgetWindowShell(): React.JSX.Element {
       </div>
 
       {/* 内容区：跨源 iframe 承载 widget 页面 */}
-      <div className="flex-1 min-h-0 relative">
-        {phase.status === 'ready' && (
-          <iframe
-            key={reloadToken}
-            src={phase.url}
-            title={name}
-            data-widget-frame=""
-            sandbox={isWebHost ? WEB_WIDGET_SANDBOX : undefined}
-            className="absolute inset-0 w-full h-full border-0"
-          />
-        )}
-        {phase.status === 'loading' && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="flex items-center gap-2 text-[12px] text-text-tertiary">
-              <Loader2 size={14} className="animate-spin" />
-              <span>{t('widgets.windowStarting')}</span>
-            </div>
-          </div>
-        )}
-        {phase.status === 'error' && (
-          <div className="absolute inset-0 flex items-center justify-center px-6">
-            <div className="text-center max-w-sm">
-              <p className="text-[12px] text-text-secondary mb-1">
-                {t('widgets.windowStartFailed')}
-              </p>
-              <p className="text-[11px] text-text-tertiary/70 break-all mb-3">{phase.message}</p>
-              <button
-                onClick={reloadWidget}
-                className="px-3 py-1 rounded-md text-[11px] bg-bg-tertiary/80 hover:bg-bg-hover text-text-secondary transition-colors"
-              >
-                {t('widgets.windowRetry')}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
+      <WidgetFrame
+        widgetId={widgetId}
+        title={name}
+        reloadNonce={reloadNonce}
+        onWidget={onWidget}
+        className="flex-1 min-h-0"
+      />
     </div>
   )
 }

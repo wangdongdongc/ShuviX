@@ -5,7 +5,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 
 # ShuviX 小组件
 
-小组件（widget）是一个小型 React 应用，放在 ShuviX 的 widgets 文件夹下属于它自己的目录里。ShuviX 负责打包它、在 `/w/<id>/` 下提供服务，用户从右侧面板的「Widget」标签页打开它 —— 在桌面端是它自己的窗口，远程使用 ShuviX 时是一个浏览器标签页。每个小组件有自己的数据库 schema 和自己的 git 仓库。每次构建成功后 ShuviX 都会记录一次提交，所以你从不自己运行 git。
+小组件（widget）是一个小型 React 应用，放在 ShuviX 的 widgets 文件夹下属于它自己的目录里。ShuviX 负责打包它、在 `/w/<id>/` 下提供服务。右侧面板的「Widget」标签页是一块摆着应用图标的主屏：点图标就在面板里打开这个小组件，用户也可以把它移到独立窗口（远程使用 ShuviX 时是一个浏览器标签页）。每个小组件有自己的数据库 schema 和自己的 git 仓库。每次构建成功后 ShuviX 都会记录一次提交，所以你从不自己运行 git。
 
 本文件就是完整的工作流程。细节在参考文件里；文末索引的每一行都写明了什么时候读哪一份。
 
@@ -26,7 +26,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 4. **只待在小组件自己的目录（`projectDir`）里。** 绝不编辑或删除 `widget.json`：它是小组件的身份，ShuviX 会自己重写它。
 5. **小组件 fetch 的一切都在它自己的 `/w/<id>/` 下**：`db/<table>` 是它的记录（`references/data.md`），`fs/file` 和 `fs/list` 是用户电脑上的文件（`references/files.md`）。绝不写 `shuvix-media://`、`file://` 或 `http://127.0.0.1:<port>`：它们只在桌面端有效，小组件从浏览器打开时就坏了。
 6. **持久状态放进数据库**，不放 `localStorage`、`IndexedDB` 或 cookie：从浏览器打开时小组件运行在沙箱里、没有自己的源（origin），这些都不可用。
-7. **暗色模式是必须的**，外观遵循 `references/design.md`。写 UI 之前先读它。
+7. **从 320px 宽起就要能用。** 小组件多半在右侧面板里打开，面板通常只有 300–400px 宽。**暗色模式是必须的。** 这两条和其余外观要求都在 `references/design.md`：写 UI 之前先读它。
 8. **绝不汇报一个没构建成功的小组件。** 以一次绿色构建收尾，然后 `shuvix widget open <id>`。
 
 ## 新建小组件
@@ -34,7 +34,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 1. **Id**：小写 ASCII kebab-case，至少带一个连字符（`/^[a-z0-9]+(-[a-z0-9]+)+$/`），例如 `json-formatter`，不管用户用什么语言。**`name` 和 `description`** 用用户的语言写；它们会原样显示在小组件的卡片和窗口标题上。
 2. `shuvix widget init <id> --name "…" --description "…"`。在返回的 `projectDir` 下工作；入口文件是 `index.tsx`。
 3. **写代码之前**，先决定它是否存储记录（`references/data.md`；如果存，现在就写好并安装 `schema.sql`），以及它是否读取用户的文件（`references/files.md`）。
-4. 按 `references/design.md` 实现它。
+4. 按 `references/design.md` 实现它，并画出它在主屏上的图标 `icon.svg`（同一份文件的「图标」一节）。
 5. 用 `name` 的语言写一份简短的 `README.md`：它做什么、主要交互、数据模型、读取哪些文件、扩展点。
 6. `shuvix widget build <id> --message "<one-line summary>"`。遇到 `buildSuccess: false` 就修好 `buildErrors` 再构建。
 7. `shuvix widget open <id>`，然后汇报。
