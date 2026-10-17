@@ -10,6 +10,8 @@
  *           不 reload、不 onClose、气泡留着（确认还能再点）、没有未处理的拒绝；「网站设置」→ onClose、
  *           openInternal('settings')、settingsFocus = {section:'privacy', search:<主机名，不含端口>}；本地文件
  *           没有 search 这个键。
+ *   SD-U38  「网站设置」带上 siteInfo 回的 `site`（网站数据的分组键）→ settingsFocus 多一个 site（设置页直接进那个网站的
+ *           详情），search 照旧是主机名；siteInfo 还没回答 / 回答里没有 site → 没有 site 这个键；本地文件两个键都没有。
  *
  * `window.api` 是 browserDomSupport 的假件；store 是真的；真 en 文案。
  */
@@ -239,5 +241,72 @@ describe('删除与网站设置（BS-U32）', () => {
     const focus = useBrowserTabsStore.getState().settingsFocus
     expect(focus).toMatchObject({ section: 'privacy' })
     expect(focus).not.toHaveProperty('search')
+  })
+})
+
+describe('网站设置带上网站（SD-U38）', () => {
+  it('SD-U38 siteInfo 回了 site：settingsFocus = {privacy, search: 主机名, site}', async () => {
+    api.browserData.siteInfo.mockResolvedValue({
+      cookieCount: 2,
+      certException: false,
+      site: 'github.com'
+    })
+    await mount(tabInfo({ id: 't1', url: 'https://www.github.com/x?y=1' }))
+    click(btn('[data-site-settings]'))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(api.browserView.openInternal.mock.calls).toEqual([['settings']])
+    const focus = useBrowserTabsStore.getState().settingsFocus
+    expect(focus).toEqual({
+      section: 'privacy',
+      search: 'www.github.com',
+      site: 'github.com',
+      nonce: expect.any(Number)
+    })
+  })
+
+  it('SD-U38 IP 地址带端口：site 是 127.0.0.1，search 是不含端口的主机名', async () => {
+    api.browserData.siteInfo.mockResolvedValue({
+      cookieCount: 1,
+      certException: false,
+      site: '127.0.0.1'
+    })
+    await mount(tabInfo({ id: 't1', url: 'http://127.0.0.1:5173/x' }))
+    click(btn('[data-site-settings]'))
+    expect(useBrowserTabsStore.getState().settingsFocus).toMatchObject({
+      section: 'privacy',
+      search: '127.0.0.1',
+      site: '127.0.0.1'
+    })
+  })
+
+  it('SD-U38 siteInfo 还没回答：有 search，没有 site 这个键', async () => {
+    api.browserData.siteInfo.mockImplementation(() => new Promise(() => undefined))
+    await mount(tabInfo({ id: 't1', url: 'https://www.github.com/' }))
+    click(btn('[data-site-settings]'))
+    const focus = useBrowserTabsStore.getState().settingsFocus
+    expect(focus).toMatchObject({ section: 'privacy', search: 'www.github.com' })
+    expect(focus).not.toHaveProperty('site')
+  })
+
+  it('SD-U38 siteInfo 的回答里没有 site：没有 site 这个键', async () => {
+    api.browserData.siteInfo.mockResolvedValue({ cookieCount: 0, certException: false })
+    await mount(tabInfo({ id: 't1', url: 'https://www.github.com/' }))
+    click(btn('[data-site-settings]'))
+    expect(useBrowserTabsStore.getState().settingsFocus).not.toHaveProperty('site')
+  })
+
+  it('SD-U38 本地文件：search 与 site 都没有', async () => {
+    api.browserData.siteInfo.mockResolvedValue({
+      cookieCount: 0,
+      certException: false,
+      site: 'should-not-be-used'
+    })
+    await mount(tabInfo({ id: 't1', url: 'file:///Users/me/a.html' }))
+    click(btn('[data-site-settings]'))
+    const focus = useBrowserTabsStore.getState().settingsFocus
+    expect(focus).toMatchObject({ section: 'privacy' })
+    expect(focus).not.toHaveProperty('search')
+    expect(focus).not.toHaveProperty('site')
+    expect(api.browserData.siteInfo).not.toHaveBeenCalled()
   })
 })

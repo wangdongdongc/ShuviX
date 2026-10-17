@@ -914,11 +914,31 @@ declare global {
       repair: () => Promise<ChromeExtensionStatus>
     }
     browserData: {
-      listSites: () => Promise<Array<{ host: string; cookieCount: number }>>
-      clearSite: (host: string) => Promise<void>
+      /** 网站列表：Cookie、配额存储、本地存储按网站（可注册域名）分组 */
+      listSites: () => Promise<import('../shared/browserSiteData').SiteSummary[]>
+      /** 删除一个网站的全部数据 */
+      clearSite: (site: string) => Promise<void>
+      /** 一个网站的详情；没有数据回 null */
+      siteDetails: (site: string) => Promise<import('../shared/browserSiteData').SiteDetails | null>
+      /** 按类别删除一个网站的数据 */
+      clearSiteCategory: (
+        site: string,
+        category: import('../shared/browserSiteData').SiteDataCategory
+      ) => Promise<void>
+      /** 删除一个来源的存储（不含 Cookie） */
+      clearOrigin: (origin: string) => Promise<void>
+      /** 删除一条 Cookie */
+      removeCookie: (cookie: {
+        name: string
+        domain: string
+        path: string
+        secure: boolean
+      }) => Promise<void>
       clearAll: () => Promise<void>
-      /** 站点信息气泡：这页的 cookie 数（含父域）与证书放行状态 */
-      siteInfo: (url: string) => Promise<{ cookieCount: number; certException: boolean }>
+      /** 站点信息气泡：这页的 cookie 数（含父域）、证书放行状态、所属网站 */
+      siteInfo: (
+        url: string
+      ) => Promise<{ cookieCount: number; certException: boolean; site?: string }>
       /** 清除这个地址带着的 cookie（含父域）与这个 origin 的存储 */
       clearSiteData: (url: string) => Promise<void>
       /** 用户放行过证书错误的站点（直到退出） */

@@ -35,6 +35,8 @@ export interface SettingsFocus {
   section: 'search' | 'privacy' | 'certificates'
   /** 网站数据的搜索框预填（那个站点） */
   search?: string
+  /** 直接打开这个网站的详情（站点信息气泡里的「网站设置」） */
+  site?: string
   nonce: number
 }
 
@@ -77,7 +79,7 @@ interface BrowserTabsState {
   zoomTab: (id: string, direction: 'in' | 'out' | 'reset') => void
   requestOmniboxFocus: () => void
   /** 打开设置页并跳到某一节（站点信息气泡里的「网站设置」） */
-  openSettings: (section?: SettingsFocus['section'], search?: string) => void
+  openSettings: (section?: SettingsFocus['section'], search?: string, site?: string) => void
   setPageCover: (cover: PageCover | null) => void
   /** 设置页用掉了跳转请求 */
   clearSettingsFocus: () => void
@@ -113,13 +115,14 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
     void api()?.zoom(id, direction)
   },
   requestOmniboxFocus: () => set((s) => ({ omniboxFocusNonce: s.omniboxFocusNonce + 1 })),
-  openSettings: (section, search) => {
+  openSettings: (section, search, site) => {
     void api()?.openInternal('settings')
     if (section) {
       set((s) => ({
         settingsFocus: {
           section,
           ...(search !== undefined ? { search } : {}),
+          ...(site !== undefined ? { site } : {}),
           nonce: (s.settingsFocus?.nonce ?? 0) + 1
         }
       }))

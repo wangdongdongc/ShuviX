@@ -15,8 +15,10 @@
  *     地址栏写 shuvix://settings；选了别的 tab 再点 → 还是那一个、又被选中；设置页里拨「忽略证书错误」写
  *     `tool.browser.ignoreCertificateErrors`、警告跟着出现 / 消失；选 Bing 写 `browser.searchEngine`，新空白页的
  *     新标签页写着 Bing；MCP 那一行一直启用着；
- *   - BS-E3  访问夹具网站（写一个 cookie）之后，设置页的网站数据列出 127.0.0.1（1 个 cookie）；搜索能留住 /
- *     滤掉它；逐站删除之后 listSites 里没了；再访问一次，「删除浏览数据」+ 确认之后 listSites 空了；
+ *   - SD-E1  访问夹具网站（写一个 cookie）之后，listSites 按网站分组：127.0.0.1 一行（1 个 cookie、网站名不带端口）；
+ *     设置页的网站数据列出它（「大小 · 1 cookie」）、合计一行数着 1 个网站；搜索能留住 / 滤掉它（合计一行不变）；
+ *     逐站删除之后 listSites 里没了；再访问一次，「删除浏览数据」+ 确认之后 listSites 空了、合计一行也没了
+ *     （按网站分组的详情、各类删除见 browser-site-data.e2e.ts）；
  *   - 第一次用到才连（会话级实例），连上之后工具数与工具名、会话删掉之后回到「未启动」；
  *   - 启用开关：关掉会断开活着的会话实例，新会话再勾它也拿不到工具（而且不报错、不转圈），
  *     重新打开之后新会话又有了。
@@ -53,6 +55,7 @@ import {
   startFixtureServer,
   type FixtureServer
 } from '../../harness/browserFixtures'
+import { formatBytes, type SiteSummary } from '../../../src/shared/browserSiteData'
 
 const BROWSER_ID = 'builtin-mcp-browser'
 const SSH_ID = 'builtin-mcp-ssh'
@@ -66,6 +69,8 @@ const ALL_BROWSER_TOOLS = BROWSER_TOOL_NAMES.map(browserTool).sort()
 const BROWSER_LABELS = ['Browser', '浏览器', 'ブラウザ']
 /** 网站数据一行里「1 个 cookie」的写法 */
 const ONE_COOKIE = ['1 cookie', '1 个 Cookie', 'Cookie 1 件']
+/** 合计一行「1 个网站」的写法（chat-protocol 语言包 browser.siteData.total_one） */
+const ONE_SITE_TOTAL = /^(1 site, .+ in total|共 1 个网站，占用 .+|1 サイト、合計 .+)$/
 const CANNOT_DELETE = [
   'Built-in servers cannot be deleted',
   '内置服务不可删除',
@@ -136,8 +141,7 @@ const mcpTools = (id: string): Promise<Array<{ name: string }>> =>
   app.main.eval(`window.api.mcp.getTools(${JSON.stringify(id)})`)
 const settingGet = (key: string): Promise<string | undefined> =>
   app.main.eval(`window.api.settings.get(${JSON.stringify(key)})`)
-const listSites = (): Promise<Array<{ host: string; cookieCount: number }>> =>
-  app.main.eval(`window.api.browserData.listSites()`)
+const listSites = (): Promise<SiteSummary[]> => app.main.eval(`window.api.browserData.listSites()`)
 const listTabs = (): Promise<TabRow[]> =>
   app.main.eval<TabRow[]>(`window.api.browserView.listTabs()`)
 const createTab = (url: string): Promise<string> =>
@@ -323,7 +327,7 @@ describe('MCP 设置页（DOM）', () => {
   }, 120_000)
 })
 
-describe('浏览器窗口自己的设置页（BS-E2 / BS-E3）', () => {
+describe('浏览器窗口自己的设置页（BS-E2 / SD-E1）', () => {
   it('BS-E2 点入口：浏览器窗口开出来，恰好一个设置页 tab、选中、地址栏 shuvix://settings；再点还是它；拨证书开关、选 Bing 都写进设置；MCP 行一直启用', async () => {
     expect(await isWindowOpen()).toBe(false)
     await mcp.setExpanded('browser', true)
@@ -394,7 +398,7 @@ describe('浏览器窗口自己的设置页（BS-E2 / BS-E3）', () => {
     expect((await rowOf(BROWSER_ID)).isEnabled).toBe(1)
     expect((await mcp.row('browser'))?.enabledOn).toBe(true)
 
-    // 收拾：引擎回缺省，关掉多开的两个 tab（设置页留给 BS-E3）
+    // 收拾：引擎回缺省，关掉多开的两个 tab（设置页留给 SD-E1）
     await app.main.eval(
       `window.api.settings.set(${JSON.stringify({ key: ENGINE_KEY, value: 'google' })})`
     )
@@ -404,63 +408,79 @@ describe('浏览器窗口自己的设置页（BS-E2 / BS-E3）', () => {
     await until(async () => (await listTabs()).length === countBefore - 1, 'extra tabs closed')
   }, 120_000)
 
-  it('BS-E3 网站数据：访问过的 127.0.0.1（1 个 cookie）列出来；搜索留住 / 滤掉；逐站删除；再访问后删除浏览数据', async () => {
+  it('SD-E1 网站数据：127.0.0.1（1 个 cookie、按网站分组、不带端口）列出来、合计一行；搜索留住 / 滤掉；逐站删除；再访问后删除浏览数据', async () => {
     if (!bw) throw new Error('BS-E2 did not open the browser window')
     const visit = await createTab(fixture.url('/form.html?bs=e3a'))
-    await until(
-      async () => (await listSites()).some((s) => s.host === '127.0.0.1'),
+    const site = await until(
+      async () => (await listSites()).find((s) => s.site === '127.0.0.1') ?? null,
       'fixture cookie saved in the browser partition'
     )
-    expect((await listSites()).find((s) => s.host === '127.0.0.1')?.cookieCount).toBe(1)
+    expect(site).toMatchObject({
+      site: '127.0.0.1',
+      cookieCount: 1,
+      cookieBytes: 'e2e_visit1'.length,
+      localStorage: false
+    })
+    // 网站名是分组键：主机名本身，不带端口
+    const all = await listSites()
+    for (const s of all) expect(s.site, s.site).not.toContain(':')
 
     // ── 打开设置页（⋮ → 设置：已经开着就选中它，页面重新挂载、重新列站点）──
     await shell.moreMenu('settings')
     await until(async () => (await selectedId()) === settingsTab, 'settings tab selected')
     const listed = await until(async () => {
       const x = await page.shot()
-      return x.sites.some((r) => r.host === '127.0.0.1') ? x : null
+      return x.sites.some((r) => r.site === '127.0.0.1') ? x : null
     }, 'settings page lists 127.0.0.1')
-    const row = listed.sites.find((r) => r.host === '127.0.0.1')!
+    const row = listed.sites.find((r) => r.site === '127.0.0.1')!
     expect(
-      ONE_COOKIE.some((t) => row.text.includes(t)),
-      row.text
+      ONE_COOKIE.some((t) => row.subtitle.includes(t)),
+      row.subtitle
     ).toBe(true)
+    expect(row.subtitle.startsWith(`${formatBytes(site.usageBytes + site.cookieBytes)} · `)).toBe(
+      true
+    )
+    expect(listed.siteTotal).toMatch(ONE_SITE_TOTAL)
 
-    // ── 搜索：子串留住、不匹配滤掉 ──
+    // ── 搜索：子串留住、不匹配滤掉；合计一行数的是全部网站，不随搜索变 ──
     await page.typeSiteSearch('127.0')
-    expect((await page.shot()).sites.map((r) => r.host)).toContain('127.0.0.1')
+    expect((await page.shot()).sites.map((r) => r.site)).toContain('127.0.0.1')
     await page.typeSiteSearch('no-such-site.example')
     const filtered = await page.shot()
     expect(filtered.sites).toEqual([])
     expect(filtered.sitesEmptyText).not.toBe('')
+    expect(filtered.siteTotal).toBe(listed.siteTotal)
     await page.typeSiteSearch('')
-    expect((await page.shot()).sites.map((r) => r.host)).toContain('127.0.0.1')
+    expect((await page.shot()).sites.map((r) => r.site)).toContain('127.0.0.1')
 
     // ── 逐站删除 ──
     await page.clearSite('127.0.0.1')
     await until(
-      async () => !(await listSites()).some((s) => s.host === '127.0.0.1'),
+      async () => !(await listSites()).some((s) => s.site === '127.0.0.1'),
       'site data gone from the partition'
     )
     await until(
-      async () => !(await page.shot()).sites.some((r) => r.host === '127.0.0.1'),
+      async () => !(await page.shot()).sites.some((r) => r.site === '127.0.0.1'),
       'site row gone from the settings page'
     )
 
     // ── 再访问一次，然后删除浏览数据 ──
     const revisit = await createTab(fixture.url('/form.html?bs=e3b'))
     await until(
-      async () => (await listSites()).some((s) => s.host === '127.0.0.1'),
+      async () => (await listSites()).some((s) => s.site === '127.0.0.1'),
       'cookie saved again on revisit'
     )
     await shell.clickTab(settingsTab)
     await until(
-      async () => (await page.shot()).sites.some((r) => r.host === '127.0.0.1'),
+      async () => (await page.shot()).sites.some((r) => r.site === '127.0.0.1'),
       'settings page lists the revisited site'
     )
     await page.clearAll()
     await until(async () => (await listSites()).length === 0, 'every site gone after delete all')
-    await until(async () => (await page.shot()).sites.length === 0, 'site list empty')
+    await until(async () => {
+      const x = await page.shot()
+      return x.sites.length === 0 && x.siteTotal === null
+    }, 'site list empty, no total line')
 
     await closeTab(visit)
     await closeTab(revisit)

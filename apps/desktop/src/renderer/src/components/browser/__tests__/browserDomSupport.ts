@@ -65,6 +65,11 @@ export interface FakeApi {
   browserData: {
     listSites: Mock
     clearSite: Mock
+    /** 缺省回 null（这个网站没有数据） */
+    siteDetails: Mock
+    clearSiteCategory: Mock
+    clearOrigin: Mock
+    removeCookie: Mock
     clearAll: Mock
     siteInfo: Mock
     clearSiteData: Mock
@@ -141,6 +146,10 @@ export function installFakeApi(platform = 'darwin'): FakeApi {
     browserData: {
       listSites: vi.fn(async () => []),
       clearSite: vi.fn(async () => undefined),
+      siteDetails: vi.fn(async () => null),
+      clearSiteCategory: vi.fn(async () => undefined),
+      clearOrigin: vi.fn(async () => undefined),
+      removeCookie: vi.fn(async () => undefined),
       clearAll: vi.fn(async () => undefined),
       siteInfo: vi.fn(async () => ({ cookieCount: 0, certException: false })),
       clearSiteData: vi.fn(async () => undefined),

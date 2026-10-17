@@ -355,6 +355,10 @@ export const API_TABLE = {
   browserData: {
     listSites: invoke('browser-data:list-sites', 0),
     clearSite: invoke('browser-data:clear-site', 1),
+    siteDetails: invoke('browser-data:site-details', 1),
+    clearSiteCategory: invoke('browser-data:clear-site-category', 2),
+    clearOrigin: invoke('browser-data:clear-origin', 1),
+    removeCookie: invoke('browser-data:remove-cookie', 1),
     clearAll: invoke('browser-data:clear-all', 0),
     siteInfo: invoke('browser-data:site-info', 1),
     clearSiteData: invoke('browser-data:clear-site-data', 1),

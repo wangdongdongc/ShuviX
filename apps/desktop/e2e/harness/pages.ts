@@ -7919,9 +7919,17 @@ export function browserShellPane(bw: CdpClient): BrowserShellPane {
 //     左侧导航 = 其中的 `[data-settings-nav="<节>"]`，三节 = `[data-settings-section="search|privacy|certificates"]`；
 //     搜索引擎 = search 节里唯一的 `select`；「忽略证书错误」= certificates 节里的 Toggle（`button.rounded-full`，
 //     开 = `bg-accent`），开着时的警告 = 该节里的 `lucide-triangle-alert`；「放行过的网站」= certificates 节卡片的
-//     最后一行，subtitle 是标题块的第二个子节点；站点行 = `[data-site-row="<host>"]`（删除 `[data-clear-site]` →
-//     确认 `[data-clear-site-confirm]`），搜索框 = `[data-site-search]`，空态 = privacy 节里的 `div.text-center p`；
+//     最后一行，subtitle 是标题块的第二个子节点；站点行 = `[data-site-row="<网站>"]`（网站 = 可注册域名 / IP /
+//     localhost；删除 `[data-clear-site]` → 确认 `[data-clear-site-confirm]`；网站名按钮 `[data-site-open="<网站>"]`
+//     进详情；subtitle = 行里的 `.mt-0.5`），搜索框 = `[data-site-search]`，排序 = privacy 节里唯一的 `select`，
+//     合计一行 = `[data-site-data-total]`，空态 = privacy 节里的 `div.text-center p`；
 //     删除浏览数据 = `[data-clear-all]` → `[data-clear-all-confirm]`；
+//   - 站点详情（BrowserSiteDetails，设置页里点进一个网站）= `[data-site-details="<网站>"]`，返回 = `[data-site-details-back]`，
+//     网站名下的一行 = `h2 + p`，空态 = `[data-site-details-empty]`；存储类别 = `[data-site-category="<类别>"]`（值 =
+//     `.tabular-nums`），来源 = `[data-site-origin="<origin>"]`（subtitle `.mt-0.5`）；删除 = `[data-site-data-delete="<key>"]`
+//     → 确认 `[data-site-data-confirm="<key>"]`（key = site / 类别 / `origin:<origin>` / cookies）；Cookie 行 =
+//     `[data-site-cookie="<名字>"]`，唯一键 `data-site-cookie-key="<域>|<路径>|<名字>"`，展开 = `[data-site-cookie-toggle]`，
+//     值 = `[data-site-cookie-value]`，删这一条（不确认）= `[data-site-cookie-delete]`；
 //   - 站点信息按钮 = `[data-site-info-button]`（地址栏左端，只有网页 / 本地文件有）；气泡 = `[data-site-info="<host>"]`，
 //     连接一行 = `[data-site-connection="secure|insecure|local"]`，cookie 数 = `[data-site-cookies="<n>"]`，删除 =
 //     `[data-site-clear]` → `[data-site-clear-confirm]`，网站设置 = `[data-site-settings]`；气泡开着时页面区的截图 =
@@ -7942,10 +7950,14 @@ export interface BrowserSettingsPageShot {
   warning: boolean
   /** 「放行过的网站」那一行写的字（没有时是「None / 没有 / なし」） */
   certExceptionsText: string
-  /** 网站数据的行（DOM 序） */
-  sites: Array<{ host: string; text: string }>
+  /** 网站数据的行（DOM 序）：网站（`data-site-row`）、整行文字、标题下那行字（大小 · cookies[ · 本地存储]） */
+  sites: Array<{ site: string; text: string; subtitle: string }>
   /** 网站数据搜索框的值；不在为 null */
   siteSearch: string | null
+  /** 网站数据的排序下拉框的值（name / size）；不在为 null */
+  siteSort: string | null
+  /** 合计一行的文字；没有为 null */
+  siteTotal: string | null
   /** 网站数据的空态文字（有行时为空串） */
   sitesEmptyText: string
 }
@@ -7959,9 +7971,13 @@ export interface BrowserSettingsPagePane {
   /** 往网站数据搜索框里打一段字（整段替换） */
   typeSiteSearch(text: string): Promise<void>
   /** 某个站点行：删除 → 确认 */
-  clearSite(host: string): Promise<void>
+  clearSite(site: string): Promise<void>
   /** 删除浏览数据 → 确认 */
   clearAll(): Promise<void>
+  /** 网站数据的排序（原生 value setter + change 事件） */
+  chooseSiteSort(value: 'name' | 'size'): Promise<void>
+  /** 点某一行的网站名，进它的详情 */
+  openSite(site: string): Promise<void>
 }
 
 /** 浏览器窗口里的设置页（shuvix://settings） */
@@ -7988,7 +8004,8 @@ export function browserSettingsPagePane(bw: CdpClient): BrowserSettingsPagePane 
         const root = ${ROOT}
         if (!root) {
           return { present: false, navIds: [], engine: null, ignoreCertOn: null, warning: false,
-            certExceptionsText: '', sites: [], siteSearch: null, sitesEmptyText: '' }
+            certExceptionsText: '', sites: [], siteSearch: null, siteSort: null, siteTotal: null,
+            sitesEmptyText: '' }
         }
         const certs = ${SECTION('certificates')}
         const toggle = certs?.querySelector('button.rounded-full')
@@ -8004,10 +8021,13 @@ export function browserSettingsPagePane(bw: CdpClient): BrowserSettingsPagePane 
           warning: !!certs?.querySelector('.lucide-triangle-alert'),
           certExceptionsText: (subtitle?.textContent ?? '').trim(),
           sites: [...root.querySelectorAll('[data-site-row]')].map((r) => ({
-            host: r.getAttribute('data-site-row') ?? '',
-            text: (r.textContent ?? '').trim()
+            site: r.getAttribute('data-site-row') ?? '',
+            text: (r.textContent ?? '').trim(),
+            subtitle: (r.querySelector('.mt-0\\\\.5')?.textContent ?? '').trim()
           })),
           siteSearch: search ? search.value : null,
+          siteSort: ${SECTION('privacy')}?.querySelector('select')?.value ?? null,
+          siteTotal: root.querySelector('[data-site-data-total]')?.textContent?.trim() ?? null,
           sitesEmptyText: (${SECTION('privacy')}?.querySelector('div.text-center p')?.textContent ?? '').trim()
         }
       })()`),
@@ -8040,10 +8060,10 @@ export function browserSettingsPagePane(bw: CdpClient): BrowserSettingsPagePane 
       if (!ok) throw new Error('browser settings page: site search box not found')
       await sleep(100)
     },
-    clearSite: async (host) => {
-      const ROW = `${ROOT}?.querySelector('[data-site-row="${host}"]')`
-      await clickIn(`${ROW}?.querySelector('[data-clear-site]')`, `delete site ${host}`)
-      await clickIn(`${ROW}?.querySelector('[data-clear-site-confirm]')`, `confirm delete ${host}`)
+    clearSite: async (site) => {
+      const ROW = `${ROOT}?.querySelector('[data-site-row="${site}"]')`
+      await clickIn(`${ROW}?.querySelector('[data-clear-site]')`, `delete site ${site}`)
+      await clickIn(`${ROW}?.querySelector('[data-clear-site-confirm]')`, `confirm delete ${site}`)
     },
     clearAll: async () => {
       await clickIn(`${ROOT}?.querySelector('[data-clear-all]')`, 'delete browsing data')
@@ -8051,7 +8071,121 @@ export function browserSettingsPagePane(bw: CdpClient): BrowserSettingsPagePane 
         `${ROOT}?.querySelector('[data-clear-all-confirm]')`,
         'confirm delete browsing data'
       )
-    }
+    },
+    chooseSiteSort: async (value) => {
+      const ok = await bw.eval<boolean>(`(() => {
+        const el = ${SECTION('privacy')}?.querySelector('select')
+        if (!el) return false
+        const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+        setter.call(el, ${JSON.stringify(value)})
+        el.dispatchEvent(new Event('change', { bubbles: true }))
+        return true
+      })()`)
+      if (!ok) throw new Error('browser settings page: site sort select not found')
+      await sleep(100)
+    },
+    openSite: (site) =>
+      clickIn(
+        `${ROOT}?.querySelector('[data-site-open=${JSON.stringify(site)}]')`,
+        `open site ${site}`
+      )
+  }
+}
+
+export interface BrowserSiteDetailsShot {
+  /** `data-site-details` 的网站；不在详情里为 null */
+  site: string | null
+  /** 还在读（Loading…） */
+  loading: boolean
+  /** 空态（`[data-site-details-empty]`：这个网站没有数据） */
+  empty: boolean
+  /** 网站名下那一行（大小 · N cookies · N origins；空态时是空态那句） */
+  header: string
+  /** 存储类别：类别 → 右侧的值（大小，或本地存储的「有数据」） */
+  categories: Array<{ category: string; value: string }>
+  /** 来源行：origin 与标题下那行字 */
+  origins: Array<{ origin: string; subtitle: string }>
+  /** Cookie 行（DOM 序）：名字、唯一键、整行文字、展开着的值（收着为 null） */
+  cookies: Array<{ name: string; key: string; text: string; value: string | null }>
+  /** 待确认的删除（`data-site-data-confirm` 的 key）；没有为 null */
+  pendingConfirm: string | null
+}
+
+export interface BrowserSiteDetailsPane {
+  shot(): Promise<BrowserSiteDetailsShot>
+  /** 返回网站列表 */
+  back(): Promise<void>
+  /** 一个要确认的删除：点垃圾桶 → 确认（key = site / 类别 / `origin:<origin>` / cookies） */
+  deleteConfirmed(key: string): Promise<void>
+  /** 展开 / 收起一条 Cookie 的值（key = `<域>|<路径>|<名字>`） */
+  toggleCookie(key: string): Promise<void>
+  /** 删一条 Cookie（不确认） */
+  deleteCookie(key: string): Promise<void>
+}
+
+/** 设置页里的站点详情（BrowserSiteDetails） */
+export function browserSiteDetailsPane(bw: CdpClient): BrowserSiteDetailsPane {
+  const ROOT = `document.querySelector('[data-browser-settings-page] [data-site-details]')`
+  const clickIn = async (expr: string, what: string): Promise<void> => {
+    await until(
+      () =>
+        bw.eval<boolean>(`(() => {
+          const el = ${expr}
+          if (!el || el.disabled) return false
+          el.click()
+          return true
+        })()`),
+      `site details: ${what}`
+    )
+    await sleep(150)
+  }
+  const cookieRow = (key: string): string =>
+    `${ROOT}?.querySelector('[data-site-cookie-key=${JSON.stringify(key)}]')`
+  return {
+    shot: () =>
+      bw.eval<BrowserSiteDetailsShot>(`(() => {
+        const root = ${ROOT}
+        if (!root) {
+          return { site: null, loading: false, empty: false, header: '', categories: [], origins: [],
+            cookies: [], pendingConfirm: null }
+        }
+        return {
+          site: root.getAttribute('data-site-details'),
+          loading: !!root.querySelector('.animate-spin') && !root.querySelector('h2'),
+          empty: !!root.querySelector('[data-site-details-empty]'),
+          header: (root.querySelector('h2 + p')?.textContent ?? '').trim(),
+          categories: [...root.querySelectorAll('[data-site-category]')].map((r) => ({
+            category: r.getAttribute('data-site-category') ?? '',
+            value: (r.querySelector('.tabular-nums')?.textContent ?? '').trim()
+          })),
+          origins: [...root.querySelectorAll('[data-site-origin]')].map((r) => ({
+            origin: r.getAttribute('data-site-origin') ?? '',
+            subtitle: (r.querySelector('.mt-0\\\\.5')?.textContent ?? '').trim()
+          })),
+          cookies: [...root.querySelectorAll('[data-site-cookie]')].map((r) => ({
+            name: r.getAttribute('data-site-cookie') ?? '',
+            key: r.getAttribute('data-site-cookie-key') ?? '',
+            text: (r.textContent ?? '').trim(),
+            value: r.querySelector('[data-site-cookie-value]')?.textContent ?? null
+          })),
+          pendingConfirm: root.querySelector('[data-site-data-confirm]')?.getAttribute('data-site-data-confirm') ?? null
+        }
+      })()`),
+    back: () => clickIn(`${ROOT}?.querySelector('[data-site-details-back]')`, 'back'),
+    deleteConfirmed: async (key) => {
+      await clickIn(
+        `${ROOT}?.querySelector('[data-site-data-delete=${JSON.stringify(key)}]')`,
+        `delete ${key}`
+      )
+      await clickIn(
+        `${ROOT}?.querySelector('[data-site-data-confirm=${JSON.stringify(key)}]')`,
+        `confirm delete ${key}`
+      )
+    },
+    toggleCookie: (key) =>
+      clickIn(`${cookieRow(key)}?.querySelector('[data-site-cookie-toggle]')`, `toggle ${key}`),
+    deleteCookie: (key) =>
+      clickIn(`${cookieRow(key)}?.querySelector('[data-site-cookie-delete]')`, `delete ${key}`)
   }
 }
 

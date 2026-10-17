@@ -9,15 +9,30 @@
 
 import { session } from 'electron'
 import { defineHandler } from './registry'
-import { BROWSER_PARTITION, certExceptionHosts } from '../services/browser'
+import {
+  BROWSER_PARTITION,
+  certExceptionHosts,
+  clearOrigin,
+  clearSite,
+  clearSiteCategory,
+  listSites,
+  removeCookie,
+  siteDetails,
+  siteOfUrl
+} from '../services/browser'
+import type { SiteDataCategory, SiteDetails, SiteSummary } from '../../shared/browserSiteData'
+
+const CATEGORIES: readonly SiteDataCategory[] = [
+  'cookies',
+  'localStorage',
+  'indexedDB',
+  'cacheStorage',
+  'serviceWorkers',
+  'other'
+]
 import { createLogger } from '../logger'
 
 const log = createLogger('BrowserData')
-
-export interface SavedSite {
-  host: string
-  cookieCount: number
-}
 
 /** 地址栏站点信息气泡里关于当前这页的几件事 */
 export interface SiteInfo {
@@ -25,6 +40,8 @@ export interface SiteInfo {
   cookieCount: number
   /** 用户在证书警告页上放行过这个站点（直到退出） */
   certException: boolean
+  /** 这个地址所属的网站（设置页网站数据的分组键）；非网页没有 */
+  site?: string
 }
 
 /** http(s) 地址 → URL；别的（about: / file: / 内部页面 / 不合法）回 null */
@@ -39,47 +56,51 @@ function webUrl(url: unknown): URL | null {
 }
 
 export function registerBrowserDataHandlers(): void {
-  defineHandler('browser-data:list-sites', async (): Promise<SavedSite[]> => {
-    const sess = session.fromPartition(BROWSER_PARTITION)
-    const cookies = await sess.cookies.get({})
-    const counts = new Map<string, number>()
-    for (const c of cookies) {
-      const host = (c.domain ?? '').replace(/^\./, '')
-      if (!host) continue
-      counts.set(host, (counts.get(host) ?? 0) + 1)
-    }
-    return Array.from(counts.entries())
-      .map(([host, cookieCount]) => ({ host, cookieCount }))
-      .sort((a, b) => a.host.localeCompare(b.host))
+  /** 设置页的网站列表：Cookie、配额存储、本地存储按网站分组（见 services/browser/siteData.ts） */
+  defineHandler('browser-data:list-sites', (): Promise<SiteSummary[]> => listSites())
+
+  /**
+   * 一个网站的详情（各来源的占用、全部 Cookie —— **含 Cookie 的值**，也就是登录令牌）；没有数据回 null。
+   * 只回应桌面窗口：服务器模式下局域网客户端没有鉴权，不能经它读走内置浏览器里的登录态
+   * （网络客户端本来也没有浏览器窗口、用不到这张详情）。
+   */
+  defineHandler(
+    'browser-data:site-details',
+    (ctx, site: string): Promise<SiteDetails | null> =>
+      ctx.client.kind === 'window' && typeof site === 'string' && site
+        ? siteDetails(site)
+        : Promise.resolve(null)
+  )
+
+  /** 删除一个网站的全部数据 */
+  defineHandler('browser-data:clear-site', async (_ctx, site: string): Promise<void> => {
+    if (typeof site === 'string' && site) await clearSite(site)
   })
 
-  defineHandler('browser-data:clear-site', async (_ctx, host: string): Promise<void> => {
-    if (!host || typeof host !== 'string') return
-    const sess = session.fromPartition(BROWSER_PARTITION)
-
-    // 1) 显式按 cookie 维度删除：origin-based clearStorageData 不会清掉
-    //    domain=.host 这种 wildcard-domain cookie，必须用 cookies.remove。
-    const cookies = await sess.cookies.get({})
-    let removed = 0
-    for (const c of cookies) {
-      const cookieHost = (c.domain ?? '').replace(/^\./, '')
-      if (cookieHost !== host) continue
-      const scheme = c.secure ? 'https' : 'http'
-      const url = `${scheme}://${cookieHost}${c.path ?? '/'}`
-      try {
-        await sess.cookies.remove(url, c.name)
-        removed++
-      } catch (e) {
-        log.warn(`Failed to remove cookie ${c.name}@${c.domain}`, e)
-      }
+  /** 按类别删除一个网站的数据 */
+  defineHandler(
+    'browser-data:clear-site-category',
+    async (_ctx, site: string, category: SiteDataCategory): Promise<void> => {
+      if (typeof site !== 'string' || !site || !CATEGORIES.includes(category)) return
+      await clearSiteCategory(site, category)
     }
+  )
 
-    // 2) localStorage / IndexedDB / cache：同 origin 在 https / http 下是不同 bucket，分别清
-    await sess.clearStorageData({ origin: `https://${host}` })
-    await sess.clearStorageData({ origin: `http://${host}` })
-
-    log.info(`Cleared ${removed} cookies and storage data for ${host}`)
+  /** 删除一个来源的存储（不含 Cookie） */
+  defineHandler('browser-data:clear-origin', async (_ctx, origin: string): Promise<void> => {
+    if (typeof origin === 'string') await clearOrigin(origin)
   })
+
+  /** 删除一条 Cookie */
+  defineHandler(
+    'browser-data:remove-cookie',
+    async (
+      _ctx,
+      cookie: { name: string; domain: string; path: string; secure: boolean }
+    ): Promise<void> => {
+      if (cookie && typeof cookie === 'object') await removeCookie(cookie)
+    }
+  )
 
   /** 站点信息气泡：这页的 cookie 数与证书放行状态（非网页回 0 / false） */
   defineHandler('browser-data:site-info', async (_ctx, url: string): Promise<SiteInfo> => {
@@ -87,9 +108,11 @@ export function registerBrowserDataHandlers(): void {
     if (!u) return { cookieCount: 0, certException: false }
     const sess = session.fromPartition(BROWSER_PARTITION)
     const cookies = await sess.cookies.get({ url: u.href })
+    const site = siteOfUrl(u.href)
     return {
       cookieCount: cookies.length,
-      certException: certExceptionHosts().includes(u.hostname)
+      certException: certExceptionHosts().includes(u.hostname),
+      ...(site ? { site } : {})
     }
   })
 

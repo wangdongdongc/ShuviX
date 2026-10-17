@@ -56,4 +56,13 @@ export {
   isBrowserWindowOpen
 } from './browserWindowService'
 export { browserCdpManager } from './browserCdpService'
+export {
+  listSites,
+  siteDetails,
+  clearSite,
+  clearSiteCategory,
+  clearOrigin,
+  removeCookie,
+  siteOfUrl
+} from './siteData'
 export { createDesktopBrowserBackend, DESKTOP_BROWSER_CAPS } from './browserBackend'

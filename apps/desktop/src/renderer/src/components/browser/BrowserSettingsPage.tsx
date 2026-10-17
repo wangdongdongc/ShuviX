@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  ChevronRight,
   Globe,
   Loader2,
   Search,
@@ -17,6 +18,8 @@ import {
   searchEngineOf,
   type SearchEngineId
 } from './omnibox'
+import { BrowserSiteDetails } from './BrowserSiteDetails'
+import { formatBytes, type SiteSummary } from '../../../../shared/browserSiteData'
 
 const IGNORE_CERT_SETTING = 'tool.browser.ignoreCertificateErrors'
 
@@ -28,17 +31,19 @@ const SECTIONS: Array<{ id: BrowserSettingsSection; icon: typeof Search; labelKe
   { id: 'certificates', icon: ShieldAlert, labelKey: 'browser.settingsPage.certificates' }
 ]
 
-interface SavedSite {
-  host: string
-  cookieCount: number
-}
+/** 网站列表的排序 */
+type SiteSort = 'name' | 'size'
+
+/** 一个网站在列表里显示的占用：配额存储 + Cookie */
+const siteBytes = (s: SiteSummary): number => s.usageBytes + s.cookieBytes
 
 /**
  * 浏览器的设置页 —— 内部页面 `shuvix://settings`（Chrome 的 chrome://settings 那个位置），在一个标签页里
  * 打开（⋮ → 设置；主设置窗口 MCP → 内置 browser 那一行的「打开浏览器设置」）。2026-10-16 从 MCP 设置里
  * 搬过来：这些设置讲的是浏览器本身，不是 agent 的能力。
  *
- * 三节照 Chrome 的分法：搜索引擎；隐私和安全（删除浏览数据、网站数据 —— chrome://settings/content/all）；
+ * 三节照 Chrome 的分法：搜索引擎；隐私和安全（删除浏览数据、网站数据 —— chrome://settings/content/all：
+ * 按网站分组、占用、排序，点进去是站点详情 BrowserSiteDetails）；
  * 证书（忽略全部证书错误 —— Chrome 没有这个开关，留给内网自签名证书用 —— 与本次运行里放行过的网站）。
  * 页面是浏览器窗口外壳里的 DOM，agent 碰不到（它那一侧根本看不到这个 tab）。
  */
@@ -50,8 +55,11 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
 
   const [engine, setEngine] = useState<SearchEngineId>(searchEngineOf(undefined))
   const [ignoreCert, setIgnoreCert] = useState(false)
-  const [sites, setSites] = useState<SavedSite[] | null>(null)
+  const [sites, setSites] = useState<SiteSummary[] | null>(null)
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<SiteSort>('name')
+  /** 正在看哪个网站的详情（null = 设置页本身） */
+  const [detailSite, setDetailSite] = useState<string | null>(null)
   const [confirmHost, setConfirmHost] = useState<string | null>(null)
   const [busyHost, setBusyHost] = useState<string | null>(null)
   const [confirmAll, setConfirmAll] = useState(false)
@@ -59,7 +67,11 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
   const [certHosts, setCertHosts] = useState<string[]>([])
 
   const loadSites = useCallback(async () => {
-    setSites(await window.api.browserData.listSites())
+    try {
+      setSites(await window.api.browserData.listSites())
+    } catch {
+      // 读不到：列表保持上一次的样子
+    }
   }, [])
 
   useEffect(() => {
@@ -87,13 +99,27 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
     if (!focus) return
     const raf = requestAnimationFrame(() => {
       if (focus.search !== undefined) setQuery(focus.search)
-      scrollRef.current
-        ?.querySelector(`[data-settings-section="${focus.section}"]`)
-        ?.scrollIntoView({ block: 'start' })
+      if (focus.site) {
+        // 站点信息气泡里的「网站设置」：直接进那个网站的详情
+        setDetailSite(focus.site)
+      } else {
+        const scroll = (): void =>
+          scrollRef.current
+            ?.querySelector(`[data-settings-section="${focus.section}"]`)
+            ?.scrollIntoView({ block: 'start' })
+        if (detailSite) {
+          // 先离开详情，下一帧那一节才渲染出来，再滚
+          setDetailSite(null)
+          void loadSites()
+          requestAnimationFrame(scroll)
+        } else {
+          scroll()
+        }
+      }
       clearSettingsFocus()
     })
     return () => cancelAnimationFrame(raf)
-  }, [focus, clearSettingsFocus])
+  }, [focus, clearSettingsFocus, detailSite, loadSites])
 
   const changeEngine = (value: string): void => {
     const next = searchEngineOf(value)
@@ -108,10 +134,13 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
   }
 
   const clearSite = async (host: string): Promise<void> => {
+    // host 是网站的分组键（可注册域名）
     setBusyHost(host)
     try {
       await window.api.browserData.clearSite(host)
       await loadSites()
+    } catch {
+      // 没删掉：列表保持原样，可以再点一次
     } finally {
       setBusyHost(null)
       setConfirmHost(null)
@@ -123,18 +152,27 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
     try {
       await window.api.browserData.clearAll()
       await loadSites()
+    } catch {
+      // 没删掉：保持原样，可以再点一次
     } finally {
       setClearingAll(false)
       setConfirmAll(false)
     }
   }
 
-  // 主机名也认它的父域：www.github.com 的登录态常记在 github.com 上
+  // 网站名包含搜索词，或搜索词是它下面的一个主机（www.github.com → github.com）
   const needle = query.trim().toLowerCase()
-  const shown = (sites ?? []).filter((s) => {
-    const host = s.host.toLowerCase()
-    return !needle || host.includes(needle) || needle.endsWith(`.${host}`)
-  })
+  const shown = (sites ?? [])
+    .filter((s) => {
+      const site = s.site.toLowerCase()
+      return !needle || site.includes(needle) || needle.endsWith(`.${site}`)
+    })
+    .sort((a, b) =>
+      sort === 'size'
+        ? siteBytes(b) - siteBytes(a) || a.site.localeCompare(b.site)
+        : a.site.localeCompare(b.site)
+    )
+  const totalBytes = (sites ?? []).reduce((n, s) => n + siteBytes(s), 0)
   const confirmBtn =
     'px-2 py-0.5 text-[11px] text-error hover:bg-error/10 rounded transition-colors disabled:opacity-50 flex items-center gap-1'
   const cancelBtn =
@@ -151,11 +189,17 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
           {SECTIONS.map(({ id, icon: Icon, labelKey }) => (
             <button
               key={id}
-              onClick={() =>
-                scrollRef.current
-                  ?.querySelector(`[data-settings-section="${id}"]`)
-                  ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-              }
+              onClick={() => {
+                if (detailSite) {
+                  setDetailSite(null)
+                  void loadSites()
+                }
+                requestAnimationFrame(() =>
+                  scrollRef.current
+                    ?.querySelector(`[data-settings-section="${id}"]`)
+                    ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+                )
+              }}
               className="w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-[12px] text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary transition-colors"
               data-settings-nav={id}
             >
@@ -168,173 +212,223 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
 
       <div ref={scrollRef} className="flex-1 min-w-0 overflow-y-auto">
         <div className={`mx-auto max-w-[720px] space-y-5 ${compact ? 'px-3 py-3' : 'px-6 py-6'}`}>
-          {/* ── 搜索引擎 ── */}
-          <div data-settings-section="search" className="scroll-mt-4">
-            <SettingsSection title={t('browser.settingsPage.search')}>
-              <SettingsRow
-                title={t('settings.toolBrowserSearchEngine')}
-                description={t('settings.toolBrowserSearchEngineHint')}
-                control={
-                  <InlineSelect value={engine} onChange={changeEngine} width={160}>
-                    {(Object.keys(SEARCH_ENGINES) as SearchEngineId[]).map((id) => (
-                      <option key={id} value={id}>
-                        {SEARCH_ENGINES[id].name}
-                      </option>
-                    ))}
-                  </InlineSelect>
-                }
-              />
-            </SettingsSection>
-          </div>
+          {detailSite ? (
+            <BrowserSiteDetails
+              // 换了网站就整个重来：上一个网站待确认的删除、展开的 Cookie 不能带到这一个上
+              key={detailSite}
+              site={detailSite}
+              onBack={() => {
+                setDetailSite(null)
+                void loadSites()
+              }}
+            />
+          ) : (
+            <>
+              {/* ── 搜索引擎 ── */}
+              <div data-settings-section="search" className="scroll-mt-4">
+                <SettingsSection title={t('browser.settingsPage.search')}>
+                  <SettingsRow
+                    title={t('settings.toolBrowserSearchEngine')}
+                    description={t('settings.toolBrowserSearchEngineHint')}
+                    control={
+                      <InlineSelect value={engine} onChange={changeEngine} width={160}>
+                        {(Object.keys(SEARCH_ENGINES) as SearchEngineId[]).map((id) => (
+                          <option key={id} value={id}>
+                            {SEARCH_ENGINES[id].name}
+                          </option>
+                        ))}
+                      </InlineSelect>
+                    }
+                  />
+                </SettingsSection>
+              </div>
 
-          {/* ── 隐私和安全 ── */}
-          <div data-settings-section="privacy" className="scroll-mt-4 space-y-5">
-            <SettingsSection title={t('browser.settingsPage.privacy')}>
-              <SettingsRow
-                title={t('browser.settingsPage.clearAll')}
-                description={t('browser.settingsPage.clearAllDesc')}
-                control={
-                  confirmAll ? (
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => void clearAll()}
-                        disabled={clearingAll}
-                        className={confirmBtn}
-                        data-clear-all-confirm
+              {/* ── 隐私和安全 ── */}
+              <div data-settings-section="privacy" className="scroll-mt-4 space-y-5">
+                <SettingsSection title={t('browser.settingsPage.privacy')}>
+                  <SettingsRow
+                    title={t('browser.settingsPage.clearAll')}
+                    description={t('browser.settingsPage.clearAllDesc')}
+                    control={
+                      confirmAll ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => void clearAll()}
+                            disabled={clearingAll}
+                            className={confirmBtn}
+                            data-clear-all-confirm
+                          >
+                            {clearingAll && <Loader2 size={10} className="animate-spin" />}
+                            {t('browser.settingsPage.clearAllConfirm')}
+                          </button>
+                          <button
+                            onClick={() => setConfirmAll(false)}
+                            disabled={clearingAll}
+                            className={cancelBtn}
+                          >
+                            {t('common.cancel')}
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmAll(true)}
+                          className="px-2.5 py-1 text-[11px] rounded-md border border-border-secondary/60 text-text-secondary hover:bg-bg-hover/60 transition-colors"
+                          data-clear-all
+                        >
+                          {t('browser.settingsPage.clearAllButton')}
+                        </button>
+                      )
+                    }
+                  />
+                </SettingsSection>
+
+                <SettingsSection
+                  title={t('browser.settingsPage.siteData')}
+                  description={t('browser.settingsPage.siteDataDesc')}
+                  headerAction={
+                    <div className="flex items-center gap-2">
+                      <InlineSelect
+                        value={sort}
+                        onChange={(v) => setSort(v === 'size' ? 'size' : 'name')}
+                        width={110}
                       >
-                        {clearingAll && <Loader2 size={10} className="animate-spin" />}
-                        {t('browser.settingsPage.clearAllConfirm')}
-                      </button>
-                      <button
-                        onClick={() => setConfirmAll(false)}
-                        disabled={clearingAll}
-                        className={cancelBtn}
-                      >
-                        {t('common.cancel')}
-                      </button>
+                        <option value="name">{t('browser.siteData.sortName')}</option>
+                        <option value="size">{t('browser.siteData.sortSize')}</option>
+                      </InlineSelect>
+                      <label className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-bg-secondary border border-border-secondary/40 focus-within:border-accent/50">
+                        <Search size={11} className="text-text-tertiary" />
+                        <input
+                          value={query}
+                          onChange={(e) => setQuery(e.target.value)}
+                          placeholder={t('browser.settingsPage.searchSites')}
+                          spellCheck={false}
+                          className="w-36 bg-transparent text-[11px] outline-none placeholder:text-text-tertiary"
+                          data-site-search
+                        />
+                      </label>
+                    </div>
+                  }
+                >
+                  {sites !== null && sites.length > 0 && (
+                    <div className="px-4 py-2 text-[11px] text-text-tertiary" data-site-data-total>
+                      {t('browser.siteData.total', {
+                        count: sites.length,
+                        size: formatBytes(totalBytes)
+                      })}
+                    </div>
+                  )}
+                  {sites === null ? (
+                    <div className="flex items-center gap-2 px-4 py-4 text-text-tertiary">
+                      <Loader2 size={12} className="animate-spin" />
+                      <span className="text-[11px]">{t('common.loading')}</span>
+                    </div>
+                  ) : shown.length === 0 ? (
+                    <div className="px-4 py-6 text-center">
+                      <p className="text-[11px] text-text-tertiary">
+                        {sites.length === 0
+                          ? t('settings.toolBrowserNoSites')
+                          : t('browser.settingsPage.noMatch')}
+                      </p>
                     </div>
                   ) : (
-                    <button
-                      onClick={() => setConfirmAll(true)}
-                      className="px-2.5 py-1 text-[11px] rounded-md border border-border-secondary/60 text-text-secondary hover:bg-bg-hover/60 transition-colors"
-                      data-clear-all
-                    >
-                      {t('browser.settingsPage.clearAllButton')}
-                    </button>
-                  )
-                }
-              />
-            </SettingsSection>
-
-            <SettingsSection
-              title={t('browser.settingsPage.siteData')}
-              description={t('browser.settingsPage.siteDataDesc')}
-              headerAction={
-                <label className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-bg-secondary border border-border-secondary/40 focus-within:border-accent/50">
-                  <Search size={11} className="text-text-tertiary" />
-                  <input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder={t('browser.settingsPage.searchSites')}
-                    spellCheck={false}
-                    className="w-36 bg-transparent text-[11px] outline-none placeholder:text-text-tertiary"
-                    data-site-search
-                  />
-                </label>
-              }
-            >
-              {sites === null ? (
-                <div className="flex items-center gap-2 px-4 py-4 text-text-tertiary">
-                  <Loader2 size={12} className="animate-spin" />
-                  <span className="text-[11px]">{t('common.loading')}</span>
-                </div>
-              ) : shown.length === 0 ? (
-                <div className="px-4 py-6 text-center">
-                  <p className="text-[11px] text-text-tertiary">
-                    {sites.length === 0
-                      ? t('settings.toolBrowserNoSites')
-                      : t('browser.settingsPage.noMatch')}
-                  </p>
-                </div>
-              ) : (
-                shown.map((site) => (
-                  <div key={site.host} data-site-row={site.host}>
-                    <SettingsRow
-                      icon={<Globe size={12} className="text-text-tertiary shrink-0" />}
-                      title={<span className="font-mono">{site.host}</span>}
-                      control={
-                        <div className="flex items-center gap-2">
-                          <span className="text-[11px] text-text-tertiary tabular-nums">
-                            {t('browser.settingsPage.cookies', { count: site.cookieCount })}
-                          </span>
-                          {confirmHost === site.host ? (
+                    shown.map((site) => (
+                      <div key={site.site} data-site-row={site.site}>
+                        <SettingsRow
+                          icon={<Globe size={12} className="text-text-tertiary shrink-0" />}
+                          title={
+                            <button
+                              onClick={() => setDetailSite(site.site)}
+                              className="font-mono text-left hover:underline underline-offset-2"
+                              data-site-open={site.site}
+                            >
+                              {site.site}
+                            </button>
+                          }
+                          subtitle={[
+                            formatBytes(siteBytes(site)),
+                            t('browser.settingsPage.cookies', { count: site.cookieCount }),
+                            ...(site.localStorage ? [t('browser.siteData.cat.localStorage')] : [])
+                          ].join(' · ')}
+                          control={
                             <div className="flex items-center gap-1">
+                              {confirmHost === site.site ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => void clearSite(site.site)}
+                                    disabled={busyHost === site.site}
+                                    className={confirmBtn}
+                                    data-clear-site-confirm
+                                  >
+                                    {busyHost === site.site && (
+                                      <Loader2 size={10} className="animate-spin" />
+                                    )}
+                                    {t('common.confirm')}
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmHost(null)}
+                                    disabled={busyHost === site.site}
+                                    className={cancelBtn}
+                                  >
+                                    {t('common.cancel')}
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => setConfirmHost(site.site)}
+                                  className="p-1 text-text-tertiary hover:text-error transition-colors"
+                                  title={t('settings.toolBrowserClearSite')}
+                                  aria-label={t('settings.toolBrowserClearSite')}
+                                  data-clear-site
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              )}
                               <button
-                                onClick={() => void clearSite(site.host)}
-                                disabled={busyHost === site.host}
-                                className={confirmBtn}
-                                data-clear-site-confirm
+                                onClick={() => setDetailSite(site.site)}
+                                className="p-1 text-text-tertiary hover:text-text-primary transition-colors"
+                                title={t('browser.siteData.openSite')}
+                                aria-label={t('browser.siteData.openSite')}
                               >
-                                {busyHost === site.host && (
-                                  <Loader2 size={10} className="animate-spin" />
-                                )}
-                                {t('common.confirm')}
-                              </button>
-                              <button
-                                onClick={() => setConfirmHost(null)}
-                                disabled={busyHost === site.host}
-                                className={cancelBtn}
-                              >
-                                {t('common.cancel')}
+                                <ChevronRight size={14} />
                               </button>
                             </div>
-                          ) : (
-                            <button
-                              onClick={() => setConfirmHost(site.host)}
-                              className="p-1 text-text-tertiary hover:text-error transition-colors"
-                              title={t('settings.toolBrowserClearSite')}
-                              aria-label={t('settings.toolBrowserClearSite')}
-                              data-clear-site
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          )}
-                        </div>
-                      }
-                    />
-                  </div>
-                ))
-              )}
-            </SettingsSection>
-          </div>
+                          }
+                        />
+                      </div>
+                    ))
+                  )}
+                </SettingsSection>
+              </div>
 
-          {/* ── 证书 ── */}
-          <div data-settings-section="certificates" className="scroll-mt-4">
-            <SettingsSection title={t('browser.settingsPage.certificates')}>
-              <SettingsRow
-                title={t('settings.toolBrowserIgnoreCertificateErrors')}
-                description={t('settings.toolBrowserIgnoreCertificateErrorsHint')}
-                control={<Toggle on={ignoreCert} onClick={toggleIgnoreCert} />}
-              />
-              {ignoreCert && (
-                <div className="flex items-start gap-2 px-4 py-3 bg-amber-500/5">
-                  <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
-                  <p className="text-[11px] text-text-secondary leading-relaxed">
-                    {t('settings.toolBrowserSecurityWarning')}
-                  </p>
-                </div>
-              )}
-              <SettingsRow
-                title={t('browser.settingsPage.certExceptions')}
-                description={t('browser.settingsPage.certExceptionsDesc')}
-                subtitle={
-                  certHosts.length === 0
-                    ? t('browser.settingsPage.noCertExceptions')
-                    : certHosts.join(' · ')
-                }
-              />
-            </SettingsSection>
-          </div>
+              {/* ── 证书 ── */}
+              <div data-settings-section="certificates" className="scroll-mt-4">
+                <SettingsSection title={t('browser.settingsPage.certificates')}>
+                  <SettingsRow
+                    title={t('settings.toolBrowserIgnoreCertificateErrors')}
+                    description={t('settings.toolBrowserIgnoreCertificateErrorsHint')}
+                    control={<Toggle on={ignoreCert} onClick={toggleIgnoreCert} />}
+                  />
+                  {ignoreCert && (
+                    <div className="flex items-start gap-2 px-4 py-3 bg-amber-500/5">
+                      <TriangleAlert size={12} className="text-amber-500 shrink-0 mt-0.5" />
+                      <p className="text-[11px] text-text-secondary leading-relaxed">
+                        {t('settings.toolBrowserSecurityWarning')}
+                      </p>
+                    </div>
+                  )}
+                  <SettingsRow
+                    title={t('browser.settingsPage.certExceptions')}
+                    description={t('browser.settingsPage.certExceptionsDesc')}
+                    subtitle={
+                      certHosts.length === 0
+                        ? t('browser.settingsPage.noCertExceptions')
+                        : certHosts.join(' · ')
+                    }
+                  />
+                </SettingsSection>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

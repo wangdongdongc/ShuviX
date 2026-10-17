@@ -1,6 +1,13 @@
 /**
- * browserDataHandlers —— 站点信息气泡与浏览器设置页「证书」一节用到的三条通道（2026-10-16）。
+ * browserDataHandlers —— 浏览器设置页的网站数据、站点信息气泡与「证书」一节用到的通道（2026-10-16）。
  *
+ *   SD-U20 list-sites 原样转给 listSites()；site-details 只回应桌面窗口：窗口客户端 → siteDetails(site) 的结果，
+ *          网络客户端（服务器模式的局域网浏览器，没有鉴权）→ null、连服务都不调（Cookie 的值是登录令牌）；
+ *          不合法的 site（空串 / 非字符串）→ null、不调；
+ *   SD-U21 删除通道的校验：clear-site 只收非空字符串；clear-site-category 只收六个类别（别的串、原型上的键、
+ *          非字符串都忽略）且网站要是非空字符串；clear-origin 只收字符串；remove-cookie 只收对象；
+ *   SD-U22 site-info 对网页地址多回一个 `site`（siteOfUrl 给出分组键时；给不出就没有这个键）；非网页照旧
+ *          `{0, false}`、连 siteOfUrl 都不问；
  *   BS-U22 site-info(url)：只认 http(s) —— 取浏览器分区里**这个地址会带上的** cookie（`cookies.get({url})`），
  *          回 `{cookieCount, certException}`；certException 按地址的主机名（不含端口）比对 certExceptionHosts()；
  *          about: / file: / shuvix:// / 不合法 / 空串 / 非字符串一律回 `{0, false}`，连 cookie 都不碰；
@@ -10,7 +17,8 @@
  *          失败不影响其余、也不让整个调用失败；非网页地址什么也不做。
  *
  * electron 是替身（handle 收进 Map；session.fromPartition 回一个带间谍的假分区），services/browser 换成
- * 只有 BROWSER_PARTITION 与 certExceptionHosts 的替身。
+ * 替身（BROWSER_PARTITION、certExceptionHosts 与网站数据的七个函数都是间谍）。窗口客户端经 IPC 适配器调，
+ * 网络客户端直接取注册表里的定义、带一个 network 上下文调。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -31,7 +39,14 @@ const state = vi.hoisted(() => {
     remove: vi.fn(),
     clearStorageData: vi.fn(),
     fromPartition: vi.fn(),
-    certExceptionHosts: vi.fn<() => string[]>(() => [])
+    certExceptionHosts: vi.fn<() => string[]>(() => []),
+    listSites: vi.fn(async () => [] as unknown[]),
+    siteDetails: vi.fn(async (_site: string) => null as unknown),
+    clearSite: vi.fn(async (_site: string) => undefined),
+    clearSiteCategory: vi.fn(async (_site: string, _category: string) => undefined),
+    clearOrigin: vi.fn(async (_origin: string) => undefined),
+    removeCookie: vi.fn(async (_cookie: unknown) => undefined),
+    siteOfUrl: vi.fn((_url: string): string | null => null)
   }
   s.get.mockImplementation(async () => s.cookies)
   s.remove.mockImplementation(async () => undefined)
@@ -55,7 +70,14 @@ vi.mock('electron', () => ({
 // mock 路径按**测试文件**解析：被测模块 import 的 '../services/browser' 在这里是 '../../services/browser'
 vi.mock('../../services/browser', () => ({
   BROWSER_PARTITION: 'persist:shuvix-browser',
-  certExceptionHosts: () => state.certExceptionHosts()
+  certExceptionHosts: () => state.certExceptionHosts(),
+  listSites: () => state.listSites(),
+  siteDetails: (site: string) => state.siteDetails(site),
+  clearSite: (site: string) => state.clearSite(site),
+  clearSiteCategory: (site: string, category: string) => state.clearSiteCategory(site, category),
+  clearOrigin: (origin: string) => state.clearOrigin(origin),
+  removeCookie: (cookie: unknown) => state.removeCookie(cookie),
+  siteOfUrl: (url: string) => state.siteOfUrl(url)
 }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} })
@@ -63,12 +85,24 @@ vi.mock('../../logger', () => ({
 
 import { registerBrowserDataHandlers } from '../browserDataHandlers'
 import { attachIpcAdapter } from '../ipcAdapter'
+import { listDefinitions, type ClientContext } from '../registry'
 
 const IPC_EVENT = { sender: { id: 1 } }
 const call = (channel: string, ...args: unknown[]): Promise<unknown> => {
   const fn = state.handlers.get(channel)
   if (!fn) throw new Error(`no handler for ${channel}`)
   return Promise.resolve(fn(IPC_EVENT, ...args))
+}
+
+/** 网络客户端（服务器模式）：不经 IPC 适配器，直接调注册表里的定义 */
+const NET_CTX: ClientContext = {
+  client: { kind: 'network', id: 'ws:1', remoteAddress: '192.168.1.20', userAgent: 'UA/1' },
+  transport: 'network'
+}
+const callAs = (ctx: ClientContext, channel: string, ...args: unknown[]): Promise<unknown> => {
+  const definition = listDefinitions().find((d) => d.channel === channel)
+  if (!definition) throw new Error(`no definition for ${channel}`)
+  return Promise.resolve(definition.fn(ctx, ...args))
 }
 
 // 注册一次（同一通道再定义会抛错），经 IPC 适配器挂到替身 ipcMain 上
@@ -84,6 +118,18 @@ beforeEach(() => {
   state.fromPartition.mockClear()
   state.certExceptionHosts.mockReset()
   state.certExceptionHosts.mockReturnValue([])
+  for (const fn of [
+    state.listSites,
+    state.siteDetails,
+    state.clearSite,
+    state.clearSiteCategory,
+    state.clearOrigin,
+    state.removeCookie,
+    state.siteOfUrl
+  ]) {
+    // 回到 vi.fn 时给的缺省实现（排着的 mockResolvedValueOnce 一并清掉）
+    fn.mockReset()
+  }
 })
 
 const cookie = (over: FakeCookie): FakeCookie => over
@@ -207,6 +253,159 @@ describe('clear-site-data（BS-U23）', () => {
       expect(state.get).not.toHaveBeenCalled()
       expect(state.remove).not.toHaveBeenCalled()
       expect(state.clearStorageData).not.toHaveBeenCalled()
+    }
+  )
+})
+
+describe('网站列表与站点详情（SD-U20）', () => {
+  const SITES = [
+    {
+      site: 'github.com',
+      cookieCount: 2,
+      cookieBytes: 20,
+      usageBytes: 1000,
+      localStorage: true,
+      originCount: 2,
+      lastAccessed: 1_760_000_000_000
+    },
+    {
+      site: '127.0.0.1',
+      cookieCount: 1,
+      cookieBytes: 9,
+      usageBytes: 0,
+      localStorage: false,
+      originCount: 0
+    }
+  ]
+
+  it('SD-U20 list-sites：原样回 listSites() 的结果，不带参数调一次', async () => {
+    state.listSites.mockResolvedValueOnce(SITES)
+    expect(await call('browser-data:list-sites')).toEqual(SITES)
+    expect(state.listSites.mock.calls).toEqual([[]])
+  })
+
+  it('SD-U20 site-details 从桌面窗口来：转给 siteDetails(site)，原样回它的结果（含 null）', async () => {
+    const details = {
+      ...SITES[0],
+      origins: [],
+      cookies: [{ name: 'sid', value: 'secret-token', domain: '.github.com', path: '/' }]
+    }
+    state.siteDetails.mockResolvedValueOnce(details)
+    expect(await call('browser-data:site-details', 'github.com')).toEqual(details)
+    expect(state.siteDetails.mock.calls).toEqual([['github.com']])
+
+    state.siteDetails.mockResolvedValueOnce(null)
+    expect(await call('browser-data:site-details', 'nope.test')).toBeNull()
+    expect(state.siteDetails.mock.calls.at(-1)).toEqual(['nope.test'])
+  })
+
+  it('SD-U20 site-details 从网络客户端来：null，连 siteDetails 都不调（Cookie 的值是登录令牌）', async () => {
+    state.siteDetails.mockResolvedValue({ site: 'github.com', cookies: [{ value: 'secret' }] })
+    expect(await callAs(NET_CTX, 'browser-data:site-details', 'github.com')).toBeNull()
+    expect(state.siteDetails).not.toHaveBeenCalled()
+  })
+
+  it('SD-U20 网络客户端照样能列网站（列表里没有 Cookie 的值）', async () => {
+    state.listSites.mockResolvedValueOnce(SITES)
+    expect(await callAs(NET_CTX, 'browser-data:list-sites')).toEqual(SITES)
+  })
+
+  it.each([[''], [42], [null], [undefined], [{ site: 'github.com' }], [['github.com']]])(
+    'SD-U20 site-details(%j)：不合法 → null，不调',
+    async (site) => {
+      expect(await call('browser-data:site-details', site)).toBeNull()
+      expect(state.siteDetails).not.toHaveBeenCalled()
+    }
+  )
+})
+
+describe('删除通道的校验（SD-U21）', () => {
+  it('SD-U21 clear-site：非空字符串 → clearSite(site)；别的忽略', async () => {
+    await call('browser-data:clear-site', 'github.com')
+    expect(state.clearSite.mock.calls).toEqual([['github.com']])
+    for (const bad of ['', 42, null, undefined, { site: 'x' }]) {
+      await call('browser-data:clear-site', bad)
+    }
+    expect(state.clearSite).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['cookies'],
+    ['localStorage'],
+    ['indexedDB'],
+    ['cacheStorage'],
+    ['serviceWorkers'],
+    ['other']
+  ])('SD-U21 clear-site-category(github.com, %s) → clearSiteCategory', async (category) => {
+    await call('browser-data:clear-site-category', 'github.com', category)
+    expect(state.clearSiteCategory.mock.calls).toEqual([['github.com', category]])
+  })
+
+  it.each([
+    ['github.com', 'toString'],
+    ['github.com', 'constructor'],
+    ['github.com', 'cache'],
+    ['github.com', 'Cookies'],
+    ['github.com', ''],
+    ['github.com', 42],
+    ['github.com', undefined],
+    ['', 'cookies'],
+    [42, 'cookies'],
+    [null, 'indexedDB']
+  ])('SD-U21 clear-site-category(%j, %j)：忽略', async (site, category) => {
+    await call('browser-data:clear-site-category', site, category)
+    expect(state.clearSiteCategory).not.toHaveBeenCalled()
+  })
+
+  it('SD-U21 clear-origin：字符串原样转给 clearOrigin（是不是一个来源由它判断）；非字符串忽略', async () => {
+    await call('browser-data:clear-origin', 'https://www.github.com')
+    await call('browser-data:clear-origin', 'garbage')
+    expect(state.clearOrigin.mock.calls).toEqual([['https://www.github.com'], ['garbage']])
+    for (const bad of [42, null, undefined, { origin: 'https://a.test' }]) {
+      await call('browser-data:clear-origin', bad)
+    }
+    expect(state.clearOrigin).toHaveBeenCalledTimes(2)
+  })
+
+  it('SD-U21 remove-cookie：对象原样转给 removeCookie；非对象忽略', async () => {
+    const cookie = { name: 'sid', domain: '.github.com', path: '/', secure: true }
+    await call('browser-data:remove-cookie', cookie)
+    expect(state.removeCookie.mock.calls).toEqual([[cookie]])
+    for (const bad of [null, undefined, 'sid', 42]) {
+      await call('browser-data:remove-cookie', bad)
+    }
+    expect(state.removeCookie).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('site-info 的 site（SD-U22）', () => {
+  it('SD-U22 siteOfUrl 给出分组键：回包多一个 site；按地址的 href 问', async () => {
+    state.cookies = [cookie({ name: 'a', domain: '.github.com', path: '/', secure: true })]
+    state.siteOfUrl.mockReturnValue('github.com')
+    expect(await call('browser-data:site-info', 'https://www.github.com/x')).toEqual({
+      cookieCount: 1,
+      certException: false,
+      site: 'github.com'
+    })
+    expect(state.siteOfUrl.mock.calls).toEqual([['https://www.github.com/x']])
+  })
+
+  it('SD-U22 siteOfUrl 给不出（null）：没有 site 这个键', async () => {
+    const info = await call('browser-data:site-info', 'http://127.0.0.1:5173/')
+    expect(info).toEqual({ cookieCount: 0, certException: false })
+    expect(info).not.toHaveProperty('site')
+    expect(state.siteOfUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([['about:blank'], ['file:///a.html'], ['shuvix://settings'], [''], [42]])(
+    'SD-U22 site-info(%j)：不是网页 → {0, false}，没有 site，不问 siteOfUrl',
+    async (url) => {
+      state.siteOfUrl.mockReturnValue('should-not-be-used')
+      expect(await call('browser-data:site-info', url)).toEqual({
+        cookieCount: 0,
+        certException: false
+      })
+      expect(state.siteOfUrl).not.toHaveBeenCalled()
     }
   )
 })

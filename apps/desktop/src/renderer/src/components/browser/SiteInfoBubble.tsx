@@ -30,7 +30,11 @@ export function SiteInfoBubble({
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   const openSettings = useBrowserTabsStore((s) => s.openSettings)
-  const [info, setInfo] = useState<{ cookieCount: number; certException: boolean } | null>(null)
+  const [info, setInfo] = useState<{
+    cookieCount: number
+    certException: boolean
+    site?: string
+  } | null>(null)
   const [confirm, setConfirm] = useState(false)
   const [clearing, setClearing] = useState(false)
 
@@ -190,7 +194,8 @@ export function SiteInfoBubble({
       <button
         onClick={() => {
           onClose()
-          openSettings('privacy', web && hostname ? hostname : undefined)
+          // 进这个网站的详情（主进程按可注册域名给出分组键）；还没查到就退回网站数据一节、搜索框填主机名
+          openSettings('privacy', web && hostname ? hostname : undefined, info?.site)
         }}
         className="w-full flex items-center gap-3 px-4 py-2.5 border-t border-border-secondary/40 rounded-b-xl text-text-primary hover:bg-bg-hover/50"
         data-site-settings
