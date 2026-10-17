@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
 import { getChatApi, useChatStore } from '@shuvix/chat-ui'
@@ -52,9 +52,31 @@ import { fileNameOf, uniqueName } from '../common/registryFiles'
  *   - 底部更新提示。侧栏只有项目视图 —— 日历已迁至右面板 Calendar tab（CalendarPanel）
  *   - 归档项目的恢复 / 删除已移至「设置 → 已归档 → 项目」
  */
-export function Sidebar(): React.JSX.Element {
+export interface SidebarProps {
+  /**
+   * 画哪一部分（web 客户端的手机布局把侧栏拆成两页）：`full` = 桌面整条侧栏（缺省）；`sessions` = 只有项目与
+   * 临时会话；`library` = 只有 Bots / 智能体 / 安全策略 / Hooks / 技能 / 知识库这些分组
+   */
+  mode?: 'full' | 'sessions' | 'library'
+  /** 用户从这里打开了一个会话（含笔记本会话；同一个会话再点一次也算）—— 手机布局据此推入对话页 */
+  onOpenSession?: (sessionId: string) => void
+}
+
+export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): React.JSX.Element {
   const { t } = useTranslation()
-  const setActiveSessionId = useChatStore((s) => s.setActiveSessionId)
+  const storeSetActiveSessionId = useChatStore((s) => s.setActiveSessionId)
+  const onOpenSessionRef = useRef(onOpenSession)
+  useEffect(() => {
+    onOpenSessionRef.current = onOpenSession
+  }, [onOpenSession])
+  /** 选中会话（侧栏里所有「打开」都经它）；有 onOpenSession 时一并告知 */
+  const setActiveSessionId = useCallback(
+    (id: string | null): void => {
+      storeSetActiveSessionId(id)
+      if (id) onOpenSessionRef.current?.(id)
+    },
+    [storeSetActiveSessionId]
+  )
   const { projects } = useProjects()
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
   const updateEvent = useUpdateStore((s) => s.updateEvent)
@@ -606,9 +628,128 @@ export function Sidebar(): React.JSX.Element {
     [setActiveSessionId]
   )
 
+  const groups = (
+    <>
+      <BotGroup adapter={botGroupAdapter} />
+      <AgentGroup adapter={agentGroupAdapter} />
+      <PolicyGroup adapter={policyGroupAdapter} />
+      <HookGroup adapter={hookGroupAdapter} />
+      <SkillGroup adapter={skillGroupAdapter} />
+      <KnowledgeGroup adapter={knowledgeAdapter} />
+    </>
+  )
+
+  const overlays = (
+    <>
+      {editingProjectId && (
+        <ProjectEditDialog projectId={editingProjectId} onClose={() => setEditingProjectId(null)} />
+      )}
+      {configuringSessionId && (
+        <SessionConfigDialog
+          sessionId={configuringSessionId}
+          onClose={() => setConfiguringSessionId(null)}
+        />
+      )}
+      {deleteDialog}
+      {confirmingBotDelete && (
+        <ConfirmDialog
+          title={t('settings.botDeleteConfirmTitle')}
+          description={
+            'name' in confirmingBotDelete
+              ? t('settings.botDeleteConfirmDesc', { name: confirmingBotDelete.name })
+              : t('settings.botDeleteFileConfirmDesc', { name: confirmingBotDelete.fileName })
+          }
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => void handleBotDelete(confirmingBotDelete)}
+          onCancel={() => setConfirmingBotDelete(null)}
+        />
+      )}
+      {confirmingSkill && (
+        <ConfirmDialog
+          title={
+            confirmingSkill.kind === 'skill'
+              ? t('settings.skillDeleteConfirm', { name: confirmingSkill.name })
+              : t('settings.skillDirRemoveConfirm', { name: confirmingSkill.dirName })
+          }
+          confirmText={
+            confirmingSkill.kind === 'skill' ? t('common.delete') : t('settings.skillDirRemove')
+          }
+          cancelText={t('common.cancel')}
+          onConfirm={() => void handleSkillConfirm(confirmingSkill)}
+          onCancel={() => setConfirmingSkill(null)}
+        />
+      )}
+      {namingSkillDir && (
+        <SkillDirDialog
+          path={namingSkillDir}
+          onSubmit={async (name) => {
+            const r = await window.api.skill.addExternalDir({ name, path: namingSkillDir })
+            return r.success ? null : (r.reason ?? 'Failed to add directory')
+          }}
+          onClose={() => setNamingSkillDir(null)}
+        />
+      )}
+      {confirmingAgentDelete && (
+        <ConfirmDialog
+          title={t('tool.subAgentDeleteConfirmTitle')}
+          description={
+            'name' in confirmingAgentDelete
+              ? t('tool.subAgentDeleteConfirmDesc', { name: confirmingAgentDelete.displayName })
+              : t('tool.subAgentDeleteFileConfirmDesc', { name: confirmingAgentDelete.fileName })
+          }
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => void handleAgentDelete(confirmingAgentDelete)}
+          onCancel={() => setConfirmingAgentDelete(null)}
+        />
+      )}
+      {confirmingPolicyDelete && (
+        <ConfirmDialog
+          title={t('settings.policyDeleteConfirmTitle')}
+          description={
+            'name' in confirmingPolicyDelete
+              ? t('settings.policyDeleteConfirmDesc', { name: confirmingPolicyDelete.displayName })
+              : t('settings.policyDeleteFileConfirmDesc', { name: confirmingPolicyDelete.fileName })
+          }
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => void handlePolicyDelete(confirmingPolicyDelete)}
+          onCancel={() => setConfirmingPolicyDelete(null)}
+        />
+      )}
+      {confirmingHookDelete && (
+        <ConfirmDialog
+          title={t('settings.hookDeleteConfirmTitle')}
+          description={
+            'name' in confirmingHookDelete
+              ? t('settings.hookDeleteConfirmDesc', { name: confirmingHookDelete.displayName })
+              : t('settings.hookDeleteFileConfirmDesc', { name: confirmingHookDelete.fileName })
+          }
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => void handleHookDelete(confirmingHookDelete)}
+          onCancel={() => setConfirmingHookDelete(null)}
+        />
+      )}
+    </>
+  )
+
+  // 手机布局的「资料库」页：只有那几组注册表（不画项目 / 会话、不画底部设置栏）
+  if (mode === 'library') {
+    return (
+      <div className="h-full overflow-y-auto pl-2 pr-1 py-1 bg-bg-secondary/50" data-mobile-list="">
+        {groups}
+        {overlays}
+      </div>
+    )
+  }
+
+  const full = mode === 'full'
   return (
     <SharedSidebar
-      caps={{ windowDrag: true, pin: true }}
+      caps={full ? { windowDrag: true, pin: true } : {}}
+      hideFooter={!full}
       bots={botsAdapter}
       projectKnowledge={knowledgeAdapter}
       projects={projects}
@@ -641,126 +782,8 @@ export function Sidebar(): React.JSX.Element {
           </button>
         ) : undefined
       }
-      groupsPrepend={
-        <>
-          <BotGroup adapter={botGroupAdapter} />
-          <AgentGroup adapter={agentGroupAdapter} />
-          <PolicyGroup adapter={policyGroupAdapter} />
-          <HookGroup adapter={hookGroupAdapter} />
-          <SkillGroup adapter={skillGroupAdapter} />
-          <KnowledgeGroup adapter={knowledgeAdapter} />
-        </>
-      }
-      overlays={
-        <>
-          {editingProjectId && (
-            <ProjectEditDialog
-              projectId={editingProjectId}
-              onClose={() => setEditingProjectId(null)}
-            />
-          )}
-          {configuringSessionId && (
-            <SessionConfigDialog
-              sessionId={configuringSessionId}
-              onClose={() => setConfiguringSessionId(null)}
-            />
-          )}
-          {deleteDialog}
-          {confirmingBotDelete && (
-            <ConfirmDialog
-              title={t('settings.botDeleteConfirmTitle')}
-              description={
-                'name' in confirmingBotDelete
-                  ? t('settings.botDeleteConfirmDesc', { name: confirmingBotDelete.name })
-                  : t('settings.botDeleteFileConfirmDesc', { name: confirmingBotDelete.fileName })
-              }
-              confirmText={t('common.delete')}
-              cancelText={t('common.cancel')}
-              onConfirm={() => void handleBotDelete(confirmingBotDelete)}
-              onCancel={() => setConfirmingBotDelete(null)}
-            />
-          )}
-          {confirmingSkill && (
-            <ConfirmDialog
-              title={
-                confirmingSkill.kind === 'skill'
-                  ? t('settings.skillDeleteConfirm', { name: confirmingSkill.name })
-                  : t('settings.skillDirRemoveConfirm', { name: confirmingSkill.dirName })
-              }
-              confirmText={
-                confirmingSkill.kind === 'skill' ? t('common.delete') : t('settings.skillDirRemove')
-              }
-              cancelText={t('common.cancel')}
-              onConfirm={() => void handleSkillConfirm(confirmingSkill)}
-              onCancel={() => setConfirmingSkill(null)}
-            />
-          )}
-          {namingSkillDir && (
-            <SkillDirDialog
-              path={namingSkillDir}
-              onSubmit={async (name) => {
-                const r = await window.api.skill.addExternalDir({ name, path: namingSkillDir })
-                return r.success ? null : (r.reason ?? 'Failed to add directory')
-              }}
-              onClose={() => setNamingSkillDir(null)}
-            />
-          )}
-          {confirmingAgentDelete && (
-            <ConfirmDialog
-              title={t('tool.subAgentDeleteConfirmTitle')}
-              description={
-                'name' in confirmingAgentDelete
-                  ? t('tool.subAgentDeleteConfirmDesc', {
-                      name: confirmingAgentDelete.displayName
-                    })
-                  : t('tool.subAgentDeleteFileConfirmDesc', {
-                      name: confirmingAgentDelete.fileName
-                    })
-              }
-              confirmText={t('common.delete')}
-              cancelText={t('common.cancel')}
-              onConfirm={() => void handleAgentDelete(confirmingAgentDelete)}
-              onCancel={() => setConfirmingAgentDelete(null)}
-            />
-          )}
-          {confirmingPolicyDelete && (
-            <ConfirmDialog
-              title={t('settings.policyDeleteConfirmTitle')}
-              description={
-                'name' in confirmingPolicyDelete
-                  ? t('settings.policyDeleteConfirmDesc', {
-                      name: confirmingPolicyDelete.displayName
-                    })
-                  : t('settings.policyDeleteFileConfirmDesc', {
-                      name: confirmingPolicyDelete.fileName
-                    })
-              }
-              confirmText={t('common.delete')}
-              cancelText={t('common.cancel')}
-              onConfirm={() => void handlePolicyDelete(confirmingPolicyDelete)}
-              onCancel={() => setConfirmingPolicyDelete(null)}
-            />
-          )}
-          {confirmingHookDelete && (
-            <ConfirmDialog
-              title={t('settings.hookDeleteConfirmTitle')}
-              description={
-                'name' in confirmingHookDelete
-                  ? t('settings.hookDeleteConfirmDesc', {
-                      name: confirmingHookDelete.displayName
-                    })
-                  : t('settings.hookDeleteFileConfirmDesc', {
-                      name: confirmingHookDelete.fileName
-                    })
-              }
-              confirmText={t('common.delete')}
-              cancelText={t('common.cancel')}
-              onConfirm={() => void handleHookDelete(confirmingHookDelete)}
-              onCancel={() => setConfirmingHookDelete(null)}
-            />
-          )}
-        </>
-      }
+      groupsPrepend={full ? groups : undefined}
+      overlays={overlays}
     />
   )
 }

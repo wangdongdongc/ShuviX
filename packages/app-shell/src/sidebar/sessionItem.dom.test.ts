@@ -6,6 +6,8 @@
  *   - 在跑（`isStreaming`）时不显示圆点；
  *   - 与待答询问计数并存；
  *   - 顶层行、子会话行（`isSub`）、bot 行都一样。
+ *
+ * 另：SR-1 每一行（顶层行、子会话行）的根节点都带 `data-session-row` —— 手机布局的 CSS 认它把行加高（40px）。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { act, createElement } from 'react'
@@ -87,5 +89,19 @@ describe('P3-12-14 sidebar row', () => {
   ])('P3-12-14 a %s row supports it', (_label, props) => {
     render({ ...props, interrupted: true })
     expect(dot()).not.toBeNull()
+  })
+})
+
+describe('SR-1 row anchor', () => {
+  it.each<[string, Partial<SessionItemProps>]>([
+    ['top-level', {}],
+    ['sub-session', { isSub: true }]
+  ])('SR-1 a %s row carries data-session-row on its root', (_label, props) => {
+    render(props)
+    const row = container.firstElementChild as HTMLElement
+    expect(row.hasAttribute('data-session-row')).toBe(true)
+    expect(container.querySelectorAll('[data-session-row]')).toHaveLength(1)
+    expect(row.textContent).toContain('Session one')
+    if (props.isSub) expect(row.hasAttribute('data-sub')).toBe(true)
   })
 })

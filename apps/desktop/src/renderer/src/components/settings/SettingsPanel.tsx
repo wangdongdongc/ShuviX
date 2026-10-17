@@ -43,9 +43,25 @@ function Scroll({ children }: { children: React.ReactNode }): React.JSX.Element 
   return <div className="flex-1 overflow-y-auto">{children}</div>
 }
 
-export function SettingsPanel(): React.JSX.Element {
+export interface SettingsPanelProps {
+  /**
+   * 手机布局（web 客户端，窄屏）：分区先排成一列，点进去是那一个分区、头部有返回键（SettingsContainer 的
+   * stacked）。缺省 = 桌面的左侧导航
+   */
+  stacked?: boolean
+  /** 排在最后的额外分区（手机布局：智能体监视 —— 桌面上它在右侧面板里） */
+  extraTabs?: SettingsTab[]
+}
+
+export function SettingsPanel({
+  stacked = false,
+  extraTabs = []
+}: SettingsPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSettingsTab, setActiveSettingsTab } = useSettingsStore()
+  /** 叠放布局里此刻显示的是分区列表（hash 点名了某个分区就直接进去） */
+  const [showList, setShowList] = useState(() => !parseSettingsHash().tab)
+  const [extraTab, setExtraTab] = useState<string | null>(null)
   // 子 tab 初值直接从 hash 取（惰性初始化，不走 effect）
   const [monitorSubTab, setMonitorSubTab] = useState<MonitorSubTab>(() => {
     const { sub } = parseSettingsHash()
@@ -135,6 +151,27 @@ export function SettingsPanel(): React.JSX.Element {
       )
     }
   ]
+
+  if (stacked) {
+    const allTabs = [...tabs, ...extraTabs]
+    return (
+      <SettingsContainer
+        tabs={allTabs}
+        activeTab={extraTab ?? activeSettingsTab}
+        onTabChange={(id) => {
+          if (extraTabs.some((tab) => tab.id === id)) {
+            setExtraTab(id)
+          } else {
+            setExtraTab(null)
+            setActiveSettingsTab(id as typeof activeSettingsTab)
+          }
+          setShowList(false)
+        }}
+        title={t('settings.title')}
+        stacked={{ showList, onBack: () => setShowList(true) }}
+      />
+    )
+  }
 
   return (
     <SettingsContainer

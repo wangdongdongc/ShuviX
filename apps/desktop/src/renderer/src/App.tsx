@@ -24,6 +24,8 @@ import { ContextMenuProvider, type ContextMenuRenderer } from '@shuvix/app-shell
 import { useSettingsChatHost } from './host/settingsChatHost'
 import { SessionRuntime } from './host/SessionRuntime'
 import { hostMediaResolver } from './host/hostMedia'
+import { useCompactLayout } from './mobile/useCompactLayout'
+import { MobileShell } from './mobile/MobileShell'
 
 /** 根据 URL hash 判断当前窗口类型 */
 const isSettingsWindow = window.location.hash.startsWith('#settings')
@@ -96,6 +98,8 @@ function MainOrSettings(): React.JSX.Element {
   const isSidebarResizing = useSidebarStore((s) => s.isResizing)
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
   const isBottomOpen = useBottomPanelStore((s) => s.isOpen)
+  /** 浏览器里的 web 客户端开在窄屏上（手机）：换成手机布局；桌面应用的窗口恒为 false */
+  const compact = useCompactLayout()
 
   // ========== 核心流程 hook ==========
   useAppInit()
@@ -140,7 +144,9 @@ function MainOrSettings(): React.JSX.Element {
 
   // 设置窗口：只渲染设置面板；主窗口：侧边栏 + 聊天区 + 预览面板
   const content = isSettingsWindow ? (
-    <SettingsPanel />
+    <SettingsPanel stacked={compact} />
+  ) : compact ? (
+    <MobileShell />
   ) : (
     <div className="flex h-full bg-bg-primary">
       <div

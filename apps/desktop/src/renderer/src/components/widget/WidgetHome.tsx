@@ -60,7 +60,8 @@ export function WidgetHome({
   onLaunch,
   onContextMenu,
   onReorder,
-  revealId
+  revealId,
+  longPressToArrange = true
 }: {
   widgets: WidgetSummary[]
   runningIds: ReadonlySet<string>
@@ -70,6 +71,11 @@ export function WidgetHome({
   onContextMenu: (e: React.MouseEvent, widget: WidgetSummary) => void
   onReorder: (ids: string[]) => void
   revealId: string | null
+  /**
+   * 长按图标进入「整理图标」（缺省，桌面）。web 客户端的手机布局关掉它：手机上长按是菜单（长按 = 右键，
+   * 菜单里有「整理图标」），两样同时发生会既弹菜单又开始拖
+   */
+  longPressToArrange?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -262,6 +268,7 @@ export function WidgetHome({
       return
     }
     cancelLongPress()
+    if (!longPressToArrange) return
     longPress.current = setTimeout(() => {
       longPress.current = null
       if (swipe.current?.moved) return

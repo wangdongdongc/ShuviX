@@ -49,6 +49,11 @@ export interface ChatBodyProps {
   conversationEmptyState?: (sessionId: string) => ReactNode
   /** 根容器类（宿主按布局上下文传：桌面 h-full；扩展 flex-1 min-w-0 …） */
   className?: string
+  /**
+   * 整个顶栏换成宿主自己的（web 客户端的手机布局：返回键 + 标题 + 文件 / 任务）。缺省 = 共享 ChatHeader，
+   * 此时 headerCaps / headerHeightClassName / onOpenSessionConfig / rightActions 才生效
+   */
+  header?: ReactNode
 }
 
 export function ChatBody({
@@ -63,7 +68,8 @@ export function ChatBody({
   welcome,
   renderNotebook,
   conversationEmptyState,
-  className = 'relative flex flex-col h-full'
+  className = 'relative flex flex-col h-full',
+  header
 }: ChatBodyProps): React.JSX.Element {
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const sessions = useChatStore((s) => s.sessions)
@@ -92,12 +98,14 @@ export function ChatBody({
 
   return (
     <div className={className}>
-      <ChatHeader
-        caps={headerCaps}
-        heightClassName={headerHeightClassName}
-        onOpenSessionConfig={onOpenSessionConfig}
-        rightActions={rightActions}
-      />
+      {header ?? (
+        <ChatHeader
+          caps={headerCaps}
+          heightClassName={headerHeightClassName}
+          onOpenSessionConfig={onOpenSessionConfig}
+          rightActions={rightActions}
+        />
+      )}
       {/* 正文行：左为正文列，右为可选会话面板（悬浮卡片）列 —— 只有顶栏整宽横贯。
           横幅在**正文列之内**（不是顶栏与正文行之间的整宽一条）：它是对话的状态，
           不该在会话面板与顶栏之间横插一杠，把那张卡片从顶栏下方推下去。

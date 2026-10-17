@@ -128,8 +128,8 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
     if (!next) void scan()
   }
 
+  // 点正打开着的那一份也照样交给宿主（与其他分组一致）：手机布局靠这一下把收起的对话页推回来
   const openFile = (fileName: string, title?: string): void => {
-    if (activeFileName === fileName) return
     void adapter.open(fileName, title)
   }
 

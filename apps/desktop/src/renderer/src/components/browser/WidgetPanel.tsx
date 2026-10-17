@@ -43,7 +43,15 @@ interface Box {
  * - 一个小组件同一时间只开在一处：开着独立窗口的、或上次选了独立窗口的，点图标直接开 / 聚焦那个窗口；
  *   用户在这里选的打开方式记在主进程（widgetWindow:setPreferWindow），窗口的位置大小由窗口自己记。
  */
-export function WidgetPanel(): React.JSX.Element {
+export interface WidgetPanelProps {
+  /**
+   * 点图标总在新页面打开、从不嵌在面板里（web 客户端的手机布局：手机上没有「面板」可言，小组件要整页）。
+   * 菜单里也就没有「在面板中打开」。缺省 = 桌面的行为（面板里打开，或按记住的选择开窗口）
+   */
+  launchInNewPage?: boolean
+}
+
+export function WidgetPanel({ launchInNewPage = false }: WidgetPanelProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const showContextMenu = useContextMenu()
   const widgets = useWidgetStore((s) => s.widgets)
@@ -256,14 +264,15 @@ export function WidgetPanel(): React.JSX.Element {
   // ── 点图标 / 菜单 ──
   const handleLaunch = useCallback(
     (id: string, iconEl: HTMLElement | null): void => {
-      if (launchTarget(id) === 'window') {
-        // 开着的窗口 / 上次选的窗口：开或聚焦它，不改偏好（agent 开的窗口不算用户的选择）
+      if (launchInNewPage || launchTarget(id) === 'window') {
+        // 开着的窗口 / 上次选的窗口：开或聚焦它，不改偏好（agent 开的窗口不算用户的选择）。
+        // 手机布局：总是新页面（web 客户端的「窗口」就是一个新标签页）
         void focusWindow(id)
         return
       }
       launchInPanel(id, iconEl)
     },
-    [launchTarget, focusWindow, launchInPanel]
+    [launchInNewPage, launchTarget, focusWindow, launchInPanel]
   )
 
   const iconElOf = (id: string): HTMLElement | null =>
@@ -308,7 +317,7 @@ export function WidgetPanel(): React.JSX.Element {
     void showContextMenu(
       e,
       [
-        { id: 'openPanel', label: t('widgets.openInPanel') },
+        ...(launchInNewPage ? [] : [{ id: 'openPanel', label: t('widgets.openInPanel') }]),
         { id: 'openWindow', label: t('widgets.openInWindow') },
         ...(isRunning ? [{ id: 'stop', label: t('widgets.stop') }] : []),
         { id: 'sep1', label: '', type: 'separator' as const },
@@ -362,6 +371,7 @@ export function WidgetPanel(): React.JSX.Element {
             onContextMenu={handleContextMenu}
             onReorder={(ids) => void setHomeOrder(ids)}
             revealId={revealId}
+            longPressToArrange={!launchInNewPage}
           />
         )}
       </div>

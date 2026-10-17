@@ -2,6 +2,12 @@
 <html>
   <head>
     <meta charset="UTF-8" />
+    <!-- 手机（web 客户端）：按设备宽度排版、铺到刘海 / 底部横条区域（安全区由手机布局自己留），软键盘出来时
+         缩的是布局视口（Chrome / Android），输入框跟着键盘上移 -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>ShuviX</title>
     <!-- 浏览器里的 web 客户端（server mode phase C）：局域网里打开 ShuviX 的网络地址时由主进程的网络服务给出。
          没有 shuvix-* 协议：本地文件、交互图的库、widget 都走这台服务自己的 HTTP 路由（phase D：/files/*、/lib/*、/w/*），

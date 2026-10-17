@@ -96,6 +96,7 @@ export function SessionItem({
       // 父子关系的稳定锚点：缩进与折叠态靠 class / 内联样式表达，
       // 它们会随样式调整变化 —— e2e 认这三个属性。折叠态另给一个是因为折叠只是把
       // AnimatedCollapse 的高度收成 0，子行仍在 DOM 里，光看有没有行判不出来
+      data-session-row=""
       data-sub={isSub ? '' : undefined}
       data-sub-count={subCount > 0 ? subCount : undefined}
       data-subs={subCount > 0 ? (subCollapsed ? 'collapsed' : 'expanded') : undefined}

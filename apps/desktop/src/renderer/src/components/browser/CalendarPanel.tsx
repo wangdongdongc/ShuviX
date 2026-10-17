@@ -34,7 +34,12 @@ function daysToDates(days: string[]): Date[] {
  * 日历面板 —— Right panel 的 Calendar tab 内容。月历圆点与当日列表来自
  * session_day_prompts（IPC `calendar.*`），不再按 lastActiveAt 单日落点。
  */
-export function CalendarPanel(): React.JSX.Element {
+export interface CalendarPanelProps {
+  /** 用户从日历里打开了一个会话（同一个再点一次也算）—— 手机布局据此推入对话页；桌面不传 */
+  onOpenSession?: (sessionId: string) => void
+}
+
+export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React.JSX.Element {
   const { projects } = useProjects()
   const width = useBrowserStore((s) => s.width)
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
@@ -82,6 +87,7 @@ export function CalendarPanel(): React.JSX.Element {
   const handleSelect = useCallback(
     (id: string): void => {
       setActiveSessionId(id)
+      onOpenSession?.(id)
       if (pinnedSessionIds.has(id)) void window.api.pinChat.focus(id)
       const api = getHostApi()?.calendar
       if (!api) return
@@ -95,7 +101,14 @@ export function CalendarPanel(): React.JSX.Element {
         if (entryId) requestScrollToMessage(id, entryId)
       })
     },
-    [daySessions, pinnedSessionIds, requestScrollToMessage, selected, setActiveSessionId]
+    [
+      daySessions,
+      pinnedSessionIds,
+      requestScrollToMessage,
+      selected,
+      setActiveSessionId,
+      onOpenSession
+    ]
   )
 
   const handleNewChat = async (projectId: string | null): Promise<void> => {

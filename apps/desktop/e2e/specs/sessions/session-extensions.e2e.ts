@@ -555,7 +555,7 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
     expect(info!.systemPrompt).toContain('adopt')
   })
 
-  it('EXT-E-9 在侧栏停用内置作图技能后新建的会话：没有这一条、没有 skill 工具、提示里整份作图说明都不出', async () => {
+  it('EXT-E-9 在侧栏停用内置作图技能后新建的会话：没有这一条、skill 工具里没有它、提示里整份作图说明都不出', async () => {
     await setSkillEnabled('builtin:drawing', false)
     try {
       const s = await createSession({ title: 'EXT-E9-停用作图技能', projectId: p1 })
@@ -565,10 +565,11 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
       const rows = await toolsList(s)
       expect(rows.map((r) => r.name)).not.toContain(DRAWING)
 
-      // 名单里唯一的 skill 不在架、会话也没勾别的 → 空手的 skill 工具不挂
+      // 作图技能不在架：skill 工具里没有它。工具本身还在 —— work 还点了内置的 widget 技能（2026-10-16 起）
       const info = await ensureRuntime(s)
       expect(info).not.toBeNull()
-      expect(info!.tools.map((t) => t.name)).not.toContain('skill')
+      expect(skillDescription(info)).not.toContain('<name>builtin:drawing</name>')
+      expect(skillDescription(info)).toContain('<name>builtin:widget</name>')
       // 契约与手艺只在技能里（2026-09-24 起）：技能加载不到，就整份作图说明都不出 —— 不指路，
       // 也没有一份常驻的手艺或范例图可以兜底（指一个拿不到的技能是死路）
       expect(info!.systemPrompt).not.toContain(DRAWING_POINTER)
@@ -617,10 +618,11 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
     expect(cardItem).toMatchObject({ checked: false, declared: true })
     await sessionConfig.close()
 
-    // ② 运行时：没有 skill 工具（名单里唯一的技能被取消了），提示里既不指路也不教交互块
+    // ② 运行时：skill 工具里没有作图技能（只剩 work 点的另一个内置技能 widget），提示里既不指路也不教交互块
     const info = await ensureRuntime(s)
     expect(info).not.toBeNull()
-    expect(info!.tools.map((t) => t.name)).not.toContain('skill')
+    expect(skillDescription(info)).not.toContain('<name>builtin:drawing</name>')
+    expect(skillDescription(info)).toContain('<name>builtin:widget</name>')
     expect(info!.systemPrompt).not.toContain(DRAWING_POINTER)
     expect(info!.systemPrompt).not.toContain(INTERACTIVE)
 

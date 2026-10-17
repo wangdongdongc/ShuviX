@@ -1466,5 +1466,20 @@
     "pickFolderTruncated": "最初の {{count}} 個のフォルダーだけを表示しています",
     "pickFolderShowHidden": "隠しフォルダーを表示",
     "pickFolderChoose": "このフォルダーを選択"
+  },
+  "mobile": {
+    "tabSessions": "チャット",
+    "tabWidgets": "ウィジェット",
+    "tabLibrary": "ライブラリ",
+    "tabSettings": "設定",
+    "back": "戻る",
+    "files": "ファイル",
+    "tasks": "タスク",
+    "calendar": "カレンダー",
+    "list": "リスト",
+    "newChat": "新しいチャット",
+    "newChatIn": "チャットを始める場所",
+    "tempChat": "一時チャット",
+    "noTasks": "この会話にはバックグラウンドタスクがありません"
   }
 }

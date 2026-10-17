@@ -42,3 +42,44 @@
     transform: rotate(-1.6deg);
   }
 }
+
+/*
+ * web 客户端的手机布局（mobile/MobileShell.tsx）—— 全部限定在 [data-mobile-shell] 之内，桌面布局里没有这个属性，
+ * 这几条一概不生效。
+ *  - 输入框 16px：iOS Safari 聚焦字号小于 16px 的输入框时会放大整页。对话输入框的高亮镜像层与 textarea
+ *    逐字对齐，两者一起改；
+ *  - 列表（会话、资料库）里长按是菜单（longPress.ts），不要让系统弹出选字 / 链接预览；
+ *  - 底部抽屉升起的动画。
+ */
+[data-mobile-shell] input:not([type='checkbox']):not([type='radio']):not([type='range']),
+[data-mobile-shell] select,
+[data-mobile-shell] div:has(> textarea) > :is(textarea, div) {
+  font-size: 16px;
+}
+[data-mobile-shell] [data-mobile-list] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+/*
+ * 设置的叠放布局（手机）：一行放不下「标题 + 控件」时控件换到下一行，标题至少留 9 个字宽 —— 不然像下拉框这类宽控件
+ * 会把标题挤成一列单字。只在 [data-settings-stacked] 之内（桌面设置窗口没有它）
+ */
+[data-settings-stacked] [data-settings-row] {
+  flex-wrap: wrap;
+}
+[data-settings-stacked] [data-settings-row] > :first-child {
+  min-width: 9em;
+}
+/* 手机列表里的行高一些，手指点得准（桌面侧栏的行是给鼠标的高度） */
+[data-mobile-shell] [data-mobile-list] [data-session-row] {
+  min-height: 40px;
+}
+@keyframes mobile-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}

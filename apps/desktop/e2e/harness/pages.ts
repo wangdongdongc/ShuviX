@@ -2598,6 +2598,11 @@ export interface SessionConfigPane {
   knowledgeHint(): Promise<string>
   /** 弹窗遮罩的 z-index —— 说明气泡（portal 到 body）必须压在它上面才看得见 */
   overlayZ(): Promise<number>
+  /**
+   * 点页脚的「删除」（垃圾桶那颗）。没有消息的会话直接删、弹窗随之关上；有消息的先弹确认框
+   * （confirmPane 接着点）。弹窗不在 → 抛
+   */
+  clickDelete(): Promise<void>
 }
 
 /** 会话配置弹窗（SessionConfigDialog；由行菜单的 session-config 拉起） */
@@ -2636,7 +2641,18 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
       main.eval<number>(`(() => {
         const overlay = document.querySelector('.dialog-overlay')
         return overlay ? Number(getComputedStyle(overlay).zIndex) || 0 : -1
+      })()`),
+    clickDelete: async () => {
+      const ok = await main.eval<boolean>(`(() => {
+        const button = [...(${PANEL}?.querySelectorAll('button') ?? [])].find((b) =>
+          b.querySelector('.lucide-trash-2')
+        )
+        if (!button) return false
+        button.click()
+        return true
       })()`)
+      if (!ok) throw new Error('session config dialog: no delete button')
+    }
   }
 }
 
@@ -11259,5 +11275,550 @@ export function widgetHomePane(main: CdpClient): WidgetHomePane {
           panelPointerEvents: p?.style.pointerEvents ?? ''
         }
       })()`)
+  }
+}
+
+// ─── web 客户端的手机布局（MobileShell，`[data-mobile-shell]`）────────────────────────────────
+//
+// 浏览器里的 web 客户端开在窄屏（或触屏的矮屏）上时换成手机布局：底部四个标签（会话 / 小组件 / 资料库 /
+// 设置）、对话页整屏推入、底部抽屉、长按 = 右键。锚点：
+//   - 标签按钮 `data-mobile-tab=<key>`（当前那颗 `aria-current="page"`），标签页 `data-mobile-page=<key>`，
+//     对话页 `data-mobile-page="chat"`；标签栏 `data-mobile-tabbar` 的父节点是整层标签页（对话页推入时
+//     `aria-hidden` + `visibility: hidden`）；
+//   - 会话页的列表与日历都装在 `data-mobile-list` 里：两个孩子，带 `.calendar-container` 的那个是日历 ——
+//     **会话行只在列表那一半里认**（sidebarPane 的行选择器连日历里的行一起认）；
+//   - 对话页顶栏 `data-mobile-back` / `data-mobile-chat-title` / `data-mobile-files` / `data-mobile-tasks`，
+//     底部抽屉 `data-bottom-sheet`（遮罩 `data-bottom-sheet-backdrop`，面板 role=dialog）；
+//   - 设置的叠放布局 `data-settings-stacked`（列表行 `data-settings-tab=<id>`、返回键 `data-settings-back`），
+//     设置行 `data-settings-row`（document 级：#settings 路由的页面里没有 shell 也认得到）。
+//
+// 触摸是真的：`Input.dispatchTouchEvent`（页面要先开着触屏模拟 —— `Emulation.setTouchEmulationEnabled`），
+// 点在元素中心，点之前先滚进视口、并核对中心那一点确实落在这个元素上（落在别处 → 抛，免得悄悄点到邻居）。
+
+export type WebMobileTab = 'sessions' | 'widgets' | 'library' | 'settings'
+
+/** 用真触摸去点 / 按住的东西（选择器只在这里） */
+export type WebMobileTouchTarget =
+  | { tab: WebMobileTab }
+  /** 会话页列表里的会话行（按标题；不含日历） */
+  | { sessionRow: string }
+  /** 会话页列表里一个项目组头的折叠钮（按项目名） */
+  | { listGroupToggle: string }
+  /** 日历里选中那天的会话行（按标题） */
+  | { calendarRow: string }
+  /** 日历里的一天（`YYYY-MM-DD`，react-day-picker 的 `data-day`） */
+  | { calendarDay: string }
+  /** 资料库 Bots 组里的合法行（bot name） */
+  | { botRow: string }
+  /** 资料库智能体组里的内置行（档案名） */
+  | { agentBuiltinRow: string }
+  /** 小组件主屏上的图标（widget id） */
+  | { widgetIcon: string }
+  | { chat: 'back' | 'title' | 'files' | 'tasks' }
+  | { sessions: 'calendarToggle' | 'newChat' }
+  /** 新建会话抽屉里的一项（'' = 临时会话，否则项目 id） */
+  | { newChatTarget: string }
+  /** 设置分区列表里的一行（tab id） */
+  | { settingsTab: string }
+  | { settingsBack: true }
+  /** 开着的底部抽屉的遮罩 */
+  | { sheetBackdrop: true }
+
+/** 手机布局里一个标签按钮 */
+export interface WebMobileTabShot {
+  key: string
+  label: string
+  current: boolean
+}
+
+/** 设置分区列表里的一行 */
+export interface WebMobileSettingsTabShot {
+  id: string
+  label: string
+  /** 行里那枚「实验」小标签的文字（没有 → null） */
+  experimental: string | null
+}
+
+export interface WebMobilePane {
+  shellPresent(): Promise<boolean>
+  /** 页面里有没有 `<meta name="viewport">`，有就回它的 content */
+  viewportMeta(): Promise<string | null>
+  tabs(): Promise<WebMobileTabShot[]>
+  /** `aria-current="page"` 的那颗标签；没有 → null */
+  activeTab(): Promise<string | null>
+  /** 此刻挂在 DOM 里的页（`data-mobile-page`，DOM 序；含对话页） */
+  mountedPages(): Promise<string[]>
+  /** 各页的计算 display（没挂载的不在里面） */
+  pageDisplays(): Promise<Record<string, string>>
+  /** 整层标签页（标签栏的父节点）的 aria-hidden 与 visibility；不在 → null */
+  tabsLayer(): Promise<{ ariaHidden: string | null; visibility: string } | null>
+  /** 某个标签页里的分组头（`data-group`，DOM 序；会话页只数列表那一半） */
+  groupsIn(page: WebMobileTab): Promise<string[]>
+  /** 某个标签页里有没有：设置栏（`data-sidebar-settings`）、拖拽带（`.titlebar-drag`） */
+  desktopChromeIn(page: WebMobileTab): Promise<{ settingsRow: boolean; dragStrip: boolean }>
+  /** 整页里有没有侧栏底部的设置栏（`data-sidebar-settings`：桌面布局才有） */
+  sidebarSettingsRow(): Promise<boolean>
+  /** 整页里的分组头（`data-group`，DOM 序）—— 桌面布局里是一整条侧栏 */
+  documentGroups(): Promise<string[]>
+  /** 会话页列表里的会话行标题（DOM 序；不含日历） */
+  listRows(): Promise<string[]>
+  /** 会话页列表里一个项目组是不是展开着（组头不在 → null） */
+  listGroupExpanded(project: string): Promise<boolean | null>
+
+  /** 真触摸点一下（按下 `holdMs` 后松开，缺省 60ms） */
+  tap(target: WebMobileTouchTarget, opts?: { holdMs?: number }): Promise<void>
+  /** 真触摸按住 `ms` 再松开；`moveBy` = 按下 100ms 后挪到（相对按下点）那里再接着按 */
+  longPress(
+    target: WebMobileTouchTarget,
+    ms?: number,
+    moveBy?: { dx: number; dy: number }
+  ): Promise<void>
+  /** 按一下 Escape（可信键盘输入：关 DOM 菜单） */
+  pressEscape(): Promise<void>
+
+  chatOpen(): Promise<boolean>
+  chatTitle(): Promise<string>
+  /** 对话页里有没有 agent 胶囊（`data-agent-chip`） */
+  chatAgentChip(): Promise<boolean>
+  /** 整页里有没有 agent 胶囊（桌面布局的横幅里） */
+  agentChipAnywhere(): Promise<boolean>
+  /** 整页里有没有桌面顶栏的那几颗：开内置浏览器窗口、侧栏 / 面板开关（`button[data-side]`） */
+  desktopHeaderControls(): Promise<{ openBrowserWindow: boolean; sideToggles: number }>
+  /** 开着的底部抽屉（标题与正文文字 —— 连同 shadow DOM 里的，空白折成一个空格）；没有 → null */
+  sheet(): Promise<{ title: string; text: string } | null>
+  /**
+   * 开着的底部抽屉里文件树（@pierre/trees，行在 shadow DOM 里）列出的文件路径（`data-item-path`，
+   * 只要 `data-item-type="file"` 的；树里的文件名是拆段渲染的，按文字认不出来）；没有抽屉 → []
+   */
+  sheetFiles(): Promise<string[]>
+  /** 任务抽屉里的空态文字（`data-mobile-tasks-empty`）；没有 → null */
+  tasksEmpty(): Promise<string | null>
+  /** 新建会话抽屉里的各项（DOM 序；id '' = 临时会话） */
+  newChatTargets(): Promise<Array<{ id: string; label: string }>>
+  /** 对话页里有没有笔记本编辑器（`.cm-editor`） */
+  chatNotebook(): Promise<boolean>
+
+  /** 日历开关的 aria-label */
+  calendarToggleLabel(): Promise<string>
+  /** 日历挂着没有、此刻看不看得见 */
+  calendarState(): Promise<{ mounted: boolean; visible: boolean }>
+  /** 日历里选中的那天（`data-day`）；日历不在 → null */
+  calendarSelectedDay(): Promise<string | null>
+  /** 日历当前月里可点的日子（`data-day`，不含相邻月份的） */
+  calendarDays(): Promise<string[]>
+  /** 日历里列出的会话行标题 */
+  calendarRows(): Promise<string[]>
+
+  /** 设置分区列表；不在列表视图 → [] */
+  settingsTabs(): Promise<WebMobileSettingsTabShot[]>
+  /** 叠放布局在不在 */
+  settingsStacked(): Promise<boolean>
+  /** 分区视图头部的分区名；不在分区视图（没有返回键）→ null */
+  settingsHeader(): Promise<string | null>
+  /** 返回键的文字与 aria-label；没有 → null */
+  settingsBackButton(): Promise<{ text: string; ariaLabel: string } | null>
+  /** 第一行 `data-settings-row` 的 flex-wrap，与它第一个孩子（标题那一栏）的 min-width / font-size */
+  settingsRowStyle(): Promise<{
+    flexWrap: string
+    titleMinWidth: string
+    titleFontSize: string
+  } | null>
+
+  /** 对话输入框（第一个 textarea）的计算字号；没有 → null */
+  composerFontSize(): Promise<string | null>
+  /** 看得见的（高 > 0）会话行的高度（document 级，`data-session-row`） */
+  sessionRowHeights(): Promise<number[]>
+  /** `.opacity-30`（专注模式压暗）的个数：'shell' 只数手机布局里的，'document' 整页 */
+  dimmedCount(scope: 'shell' | 'document'): Promise<number>
+
+  /**
+   * 在 window 上挂一个 contextmenu 计数器（并归零）—— **捕获**阶段：菜单的处理函数（showContextMenu）会
+   * stopPropagation，冒泡到 window 的那一程走不到；捕获阶段数得到页面里派发的每一次（我们合成的、浏览器自己的）
+   */
+  installContextMenuCounter(): Promise<void>
+  contextMenuCount(): Promise<number>
+  /** 浏览器历史：当前条目带不带手机布局的标记、历史长度 */
+  history(): Promise<{ mark: boolean; length: number }>
+}
+
+export function webMobilePane(client: CdpClient): WebMobilePane {
+  const SHELL = `document.querySelector('[data-mobile-shell]')`
+  const PAGE = (key: string): string =>
+    `document.querySelector('[data-mobile-page=${JSON.stringify(key)}]')`
+  const MOBILE_LIST = `${PAGE('sessions')}?.querySelector('[data-mobile-list]')`
+  const LIST = `[...(${MOBILE_LIST}?.children ?? [])].find((c) => !c.querySelector('.calendar-container'))`
+  const CALENDAR = `[...(${MOBILE_LIST}?.children ?? [])].find((c) => c.querySelector('.calendar-container'))`
+  const ROW_TITLE = `((r) => (r.querySelector(':scope > div > span.truncate')?.textContent ?? '').trim())`
+  const ROW_IN = (scope: string, title: string): string =>
+    `[...((${scope})?.querySelectorAll('[data-session-row]') ?? [])].find((r) => ${ROW_TITLE}(r) === ${JSON.stringify(title)})`
+  const LIST_HEADER = (project: string): string =>
+    `[...((${LIST})?.querySelectorAll('div[class*="group/header"][data-group="project"]') ?? [])].find(
+      (h) => (h.querySelector('button span.truncate')?.textContent ?? '').trim() === ${JSON.stringify(project)}
+    )`
+  const SHEET = `document.querySelector('[data-bottom-sheet]')`
+  const STACKED = `document.querySelector('[data-settings-stacked]')`
+  /**
+   * 元素的全部文字，连同开着的 shadow root 里的（文件树是 @pierre/trees，行都在 shadow DOM 里，
+   * textContent 读不到）；style / script 不算
+   */
+  const DEEP_TEXT = `((root) => {
+    let text = ''
+    const walk = (node) => {
+      if (node.nodeType === 3) {
+        text += node.textContent
+        return
+      }
+      if (node.nodeName === 'STYLE' || node.nodeName === 'SCRIPT') return
+      if (node.shadowRoot) walk(node.shadowRoot)
+      for (const child of node.childNodes) walk(child)
+    }
+    if (root) walk(root)
+    return text.replace(/\\s+/g, ' ').trim()
+  })`
+
+  const elementOf = (target: WebMobileTouchTarget): string => {
+    if ('tab' in target)
+      return `document.querySelector('[data-mobile-tab=${JSON.stringify(target.tab)}]')`
+    if ('sessionRow' in target) return ROW_IN(LIST, target.sessionRow)
+    if ('listGroupToggle' in target)
+      return `[...(${LIST_HEADER(target.listGroupToggle)}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
+    if ('calendarRow' in target) return ROW_IN(CALENDAR, target.calendarRow)
+    if ('calendarDay' in target)
+      return `(${CALENDAR})?.querySelector('[data-day=${JSON.stringify(target.calendarDay)}] button')`
+    if ('botRow' in target)
+      return `${PAGE('library')}?.querySelector('[data-bot-row=${JSON.stringify(target.botRow)}]')`
+    if ('agentBuiltinRow' in target)
+      return `${PAGE('library')}?.querySelector('[data-agent-builtin-row=${JSON.stringify(target.agentBuiltinRow)}]')`
+    if ('widgetIcon' in target)
+      return `${PAGE('widgets')}?.querySelector('[data-home-slot=${JSON.stringify(target.widgetIcon)}]')`
+    if ('chat' in target) {
+      const attr = {
+        back: 'data-mobile-back',
+        title: 'data-mobile-chat-title',
+        files: 'data-mobile-files',
+        tasks: 'data-mobile-tasks'
+      }[target.chat]
+      return `${PAGE('chat')}?.querySelector('[${attr}]')`
+    }
+    if ('sessions' in target) {
+      const attr =
+        target.sessions === 'calendarToggle'
+          ? 'data-mobile-calendar-toggle'
+          : 'data-mobile-new-chat'
+      return `${PAGE('sessions')}?.querySelector('[${attr}]')`
+    }
+    if ('newChatTarget' in target)
+      return `[...document.querySelectorAll('[data-mobile-new-chat-target]')].find((b) => b.getAttribute('data-mobile-new-chat-target') === ${JSON.stringify(target.newChatTarget)})`
+    if ('settingsTab' in target)
+      return `${STACKED}?.querySelector('[data-settings-tab=${JSON.stringify(target.settingsTab)}]')`
+    if ('settingsBack' in target) return `${STACKED}?.querySelector('[data-settings-back]')`
+    return `${SHEET}?.querySelector('[data-bottom-sheet-backdrop]')`
+  }
+
+  /**
+   * 滚进视口后元素中心的坐标（CSS 像素）。遮罩点它最上面那一截（下半部分压着抽屉面板）。
+   * 等到中心那一点确实落在这个元素上、而且不再挪动（被折叠、被遮住、还在动就一直等，超时抛 —— 带上遮住它的
+   * 那个元素）
+   */
+  const pointOf = async (target: WebMobileTouchTarget): Promise<{ x: number; y: number }> => {
+    const what = JSON.stringify(target)
+    /** 最近一次「中心落在别的元素上」时那个元素（展开 / 滑入动画还没走完时会这样，等它走完） */
+    let covered = ''
+    /**
+     * 上一轮量到的中心：要连着两轮落在同一点才点 —— 列表刚上屏时还会挪（项目到货后项目组一次性收起，
+     * 下面的行整体上移），按下与松开之间行挪了位，click 就落到了它们共同的祖先上
+     */
+    let prev = ''
+    try {
+      return await until(async () => {
+        const point = await client.eval<{
+          x: number
+          y: number
+          hit: boolean
+          info: string
+        } | null>(`(() => {
+          const el = ${elementOf(target)}
+          if (!el) return null
+          el.scrollIntoView({ block: 'center', inline: 'center' })
+          const r = el.getBoundingClientRect()
+          if (r.width === 0 || r.height === 0) return null
+          const x = r.left + r.width / 2
+          const y = ${'sheetBackdrop' in target ? 'r.top + 40' : 'r.top + r.height / 2'}
+          const at = document.elementFromPoint(x, y)
+          return {
+            x,
+            y,
+            hit: !!at && (at === el || el.contains(at)),
+            info: at ? at.outerHTML.slice(0, 160) : 'nothing'
+          }
+        })()`)
+        if (!point) return null
+        if (!point.hit) {
+          covered = point.info
+          prev = ''
+          return null
+        }
+        const key = `${point.x},${point.y}`
+        if (key !== prev) {
+          prev = key
+          return null
+        }
+        return { x: point.x, y: point.y }
+      }, `touch target ${what} on screen, uncovered and settled`)
+    } catch (e) {
+      throw new Error(
+        `${(e as Error).message}${covered ? `\ncovered at its centre by ${covered}` : ''}`
+      )
+    }
+  }
+
+  const touch = (type: string, points: Array<{ x: number; y: number }>): Promise<unknown> =>
+    client.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: points.map((p) => ({ x: p.x, y: p.y, id: 1 }))
+    })
+
+  return {
+    shellPresent: () => client.eval<boolean>(`!!${SHELL}`),
+    viewportMeta: () =>
+      client.eval<string | null>(
+        `document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? null`
+      ),
+    tabs: () =>
+      client.eval<WebMobileTabShot[]>(
+        `[...document.querySelectorAll('[data-mobile-tab]')].map((b) => ({
+          key: b.getAttribute('data-mobile-tab') ?? '',
+          label: (b.textContent ?? '').trim(),
+          current: b.getAttribute('aria-current') === 'page'
+        }))`
+      ),
+    activeTab: () =>
+      client.eval<string | null>(
+        `document.querySelector('[data-mobile-tab][aria-current="page"]')?.getAttribute('data-mobile-tab') ?? null`
+      ),
+    mountedPages: () =>
+      client.eval<string[]>(
+        `[...document.querySelectorAll('[data-mobile-page]')].map((p) => p.getAttribute('data-mobile-page') ?? '')`
+      ),
+    pageDisplays: () =>
+      client.eval<Record<string, string>>(
+        `Object.fromEntries([...document.querySelectorAll('[data-mobile-page]')].map((p) => [
+          p.getAttribute('data-mobile-page') ?? '',
+          getComputedStyle(p).display
+        ]))`
+      ),
+    tabsLayer: () =>
+      client.eval<{ ariaHidden: string | null; visibility: string } | null>(`(() => {
+        const layer = document.querySelector('[data-mobile-tabbar]')?.parentElement
+        if (!layer) return null
+        return { ariaHidden: layer.getAttribute('aria-hidden'), visibility: getComputedStyle(layer).visibility }
+      })()`),
+    groupsIn: (page) =>
+      client.eval<string[]>(
+        `[...((${page === 'sessions' ? LIST : PAGE(page)})?.querySelectorAll('[data-group]') ?? [])].map(
+          (g) => g.getAttribute('data-group') ?? ''
+        )`
+      ),
+    desktopChromeIn: (page) =>
+      client.eval<{ settingsRow: boolean; dragStrip: boolean }>(`(() => {
+        const p = ${PAGE(page)}
+        return {
+          settingsRow: !!p?.querySelector('[data-sidebar-settings]'),
+          dragStrip: !!p?.querySelector('.titlebar-drag')
+        }
+      })()`),
+    documentGroups: () =>
+      client.eval<string[]>(
+        `[...document.querySelectorAll('[data-group]')].map((g) => g.getAttribute('data-group') ?? '')`
+      ),
+    sidebarSettingsRow: () =>
+      client.eval<boolean>(`!!document.querySelector('[data-sidebar-settings]')`),
+    listRows: () =>
+      client.eval<string[]>(
+        `[...((${LIST})?.querySelectorAll('[data-session-row]') ?? [])].map(${ROW_TITLE})`
+      ),
+    listGroupExpanded: (project) =>
+      client.eval<boolean | null>(`(() => {
+        const header = ${LIST_HEADER(project)}
+        if (!header) return null
+        // 项目组正文 = 组头的下一个兄弟（AnimatedCollapse 的 grid 层：展开 1fr、收起 0fr）
+        const rows = header.nextElementSibling?.style.gridTemplateRows
+        return rows ? rows === '1fr' : true
+      })()`),
+
+    tap: async (target, opts = {}) => {
+      const p = await pointOf(target)
+      await touch('touchStart', [p])
+      await sleep(opts.holdMs ?? 60)
+      await touch('touchEnd', [])
+    },
+    longPress: async (target, ms = 800, moveBy) => {
+      const p = await pointOf(target)
+      await touch('touchStart', [p])
+      if (moveBy) {
+        await sleep(100)
+        await touch('touchMove', [{ x: p.x + moveBy.dx, y: p.y + moveBy.dy }])
+        await sleep(Math.max(0, ms - 100))
+      } else {
+        await sleep(ms)
+      }
+      await touch('touchEnd', [])
+    },
+    pressEscape: async () => {
+      const base = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }
+      await client.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
+      await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    },
+
+    chatOpen: () => client.eval<boolean>(`!!${PAGE('chat')}`),
+    chatTitle: () =>
+      client.eval<string>(
+        `(${PAGE('chat')}?.querySelector('[data-mobile-chat-title]')?.textContent ?? '').trim()`
+      ),
+    chatAgentChip: () =>
+      client.eval<boolean>(`!!${PAGE('chat')}?.querySelector('[data-agent-chip]')`),
+    agentChipAnywhere: () => client.eval<boolean>(`!!document.querySelector('[data-agent-chip]')`),
+    desktopHeaderControls: () =>
+      client.eval<{ openBrowserWindow: boolean; sideToggles: number }>(`({
+        openBrowserWindow: !!document.querySelector('[data-open-browser-window]'),
+        sideToggles: document.querySelectorAll('button[data-side]').length
+      })`),
+    sheet: () =>
+      client.eval<{ title: string; text: string } | null>(`(() => {
+        const panel = ${SHEET}?.querySelector('[role="dialog"]')
+        if (!panel) return null
+        // 面板 = 把手 + 标题（有的话）+ 正文：标题是正文之前、把手之后的那一格
+        const body = panel.lastElementChild
+        const title = body?.previousElementSibling
+        return {
+          title: title && title !== panel.firstElementChild ? (title.textContent ?? '').trim() : '',
+          text: ${DEEP_TEXT}(body)
+        }
+      })()`),
+    sheetFiles: () =>
+      client.eval<string[]>(`(() => {
+        const out = []
+        const walk = (root) => {
+          for (const el of root.querySelectorAll('*')) {
+            if (el.getAttribute('data-item-type') === 'file' && el.hasAttribute('data-item-path')) {
+              out.push(el.getAttribute('data-item-path'))
+            }
+            if (el.shadowRoot) walk(el.shadowRoot)
+          }
+        }
+        const sheet = ${SHEET}
+        if (sheet) walk(sheet)
+        return [...new Set(out)]
+      })()`),
+    tasksEmpty: () =>
+      client.eval<string | null>(
+        `document.querySelector('[data-mobile-tasks-empty]')?.textContent?.trim() ?? null`
+      ),
+    newChatTargets: () =>
+      client.eval<Array<{ id: string; label: string }>>(
+        `[...document.querySelectorAll('[data-mobile-new-chat-target]')].map((b) => ({
+          id: b.getAttribute('data-mobile-new-chat-target') ?? '',
+          label: (b.textContent ?? '').trim()
+        }))`
+      ),
+    chatNotebook: () => client.eval<boolean>(`!!${PAGE('chat')}?.querySelector('.cm-editor')`),
+
+    calendarToggleLabel: () =>
+      client.eval<string>(
+        `${PAGE('sessions')}?.querySelector('[data-mobile-calendar-toggle]')?.getAttribute('aria-label') ?? ''`
+      ),
+    calendarState: () =>
+      client.eval<{ mounted: boolean; visible: boolean }>(`(() => {
+        const cal = ${CALENDAR}
+        return { mounted: !!cal, visible: !!cal && getComputedStyle(cal).display !== 'none' }
+      })()`),
+    calendarSelectedDay: () =>
+      client.eval<string | null>(
+        `(${CALENDAR})?.querySelector('[data-day][data-selected="true"]')?.getAttribute('data-day') ?? null`
+      ),
+    calendarDays: () =>
+      client.eval<string[]>(
+        `[...((${CALENDAR})?.querySelectorAll('[data-day]:not([data-outside]) button') ?? [])].map(
+          (b) => b.closest('[data-day]')?.getAttribute('data-day') ?? ''
+        )`
+      ),
+    calendarRows: () =>
+      client.eval<string[]>(
+        `[...((${CALENDAR})?.querySelectorAll('[data-session-row]') ?? [])].map(${ROW_TITLE})`
+      ),
+
+    settingsTabs: () =>
+      client.eval<WebMobileSettingsTabShot[]>(
+        `[...(${STACKED}?.querySelectorAll('[data-settings-tab]') ?? [])].map((b) => {
+          const tag = b.querySelector('[data-experimental]')
+          const label = [...b.querySelectorAll('span')].find((s) => s.className.includes('truncate'))
+          return {
+            id: b.getAttribute('data-settings-tab') ?? '',
+            label: (label?.textContent ?? '').trim(),
+            experimental: tag ? (tag.textContent ?? '').trim() : null
+          }
+        })`
+      ),
+    settingsStacked: () => client.eval<boolean>(`!!${STACKED}`),
+    settingsHeader: () =>
+      client.eval<string | null>(`(() => {
+        const back = ${STACKED}?.querySelector('[data-settings-back]')
+        if (!back) return null
+        return (back.nextElementSibling?.textContent ?? '').trim()
+      })()`),
+    settingsBackButton: () =>
+      client.eval<{ text: string; ariaLabel: string } | null>(`(() => {
+        const back = ${STACKED}?.querySelector('[data-settings-back]')
+        if (!back) return null
+        return { text: (back.textContent ?? '').trim(), ariaLabel: back.getAttribute('aria-label') ?? '' }
+      })()`),
+    settingsRowStyle: () =>
+      client.eval<{
+        flexWrap: string
+        titleMinWidth: string
+        titleFontSize: string
+      } | null>(`(() => {
+        const row = document.querySelector('[data-settings-row]')
+        const title = row?.firstElementChild
+        if (!row || !title) return null
+        const ts = getComputedStyle(title)
+        return {
+          flexWrap: getComputedStyle(row).flexWrap,
+          titleMinWidth: ts.minWidth,
+          titleFontSize: ts.fontSize
+        }
+      })()`),
+
+    composerFontSize: () =>
+      client.eval<string | null>(`(() => {
+        const ta = document.querySelector('textarea')
+        return ta ? getComputedStyle(ta).fontSize : null
+      })()`),
+    sessionRowHeights: () =>
+      client.eval<number[]>(
+        `[...document.querySelectorAll('[data-session-row]')]
+          .map((r) => r.getBoundingClientRect().height)
+          .filter((h) => h > 0)`
+      ),
+    dimmedCount: (scope) =>
+      client.eval<number>(
+        `(${scope === 'shell' ? SHELL : 'document'})?.querySelectorAll('.opacity-30').length ?? 0`
+      ),
+
+    installContextMenuCounter: async () => {
+      await client.eval(`(() => {
+        window.__e2eMobileCtx = 0
+        if (!window.__e2eMobileCtxInstalled) {
+          window.__e2eMobileCtxInstalled = true
+          window.addEventListener('contextmenu', () => { window.__e2eMobileCtx++ }, true)
+        }
+        return true
+      })()`)
+    },
+    contextMenuCount: () => client.eval<number>(`window.__e2eMobileCtx ?? 0`),
+    history: () =>
+      client.eval<{ mark: boolean; length: number }>(
+        `({ mark: !!history.state?.shuvixMobileChat, length: history.length })`
+      )
   }
 }

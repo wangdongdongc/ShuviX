@@ -45,6 +45,8 @@ export interface SidebarProps {
   bots?: SidebarBotsAdapter
   /** 知识库能力（桌面注入）：每个项目组里的「项目知识库」子文件夹；缺省时不显示 */
   projectKnowledge?: KnowledgeGroupAdapter
+  /** 不画底部的设置栏（web 客户端的手机布局：设置是底部标签栏里单独的一页） */
+  hideFooter?: boolean
 }
 
 /**
@@ -68,7 +70,8 @@ export function Sidebar({
   groupsPrepend,
   overlays,
   bots,
-  projectKnowledge
+  projectKnowledge,
+  hideFooter = false
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
@@ -187,19 +190,21 @@ export function Sidebar({
       </div>
 
       {/* 底部设置栏 + 宿主额外按钮（桌面更新提示） */}
-      <div
-        className={`flex items-center gap-1 px-2 py-1 border-t border-border-secondary/30 transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
-      >
-        <button
-          onClick={() => onOpenSettings()}
-          className="flex items-center gap-2 flex-1 pl-3 pr-2 py-1.5 rounded-md text-[13px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
-          data-sidebar-settings
+      {!hideFooter && (
+        <div
+          className={`flex items-center gap-1 px-2 py-1 border-t border-border-secondary/30 transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}
         >
-          <Settings size={14} className="text-text-tertiary/70" />
-          <span>{t('sidebar.settings')}</span>
-        </button>
-        {footerActions}
-      </div>
+          <button
+            onClick={() => onOpenSettings()}
+            className="flex items-center gap-2 flex-1 pl-3 pr-2 py-1.5 rounded-md text-[13px] text-text-tertiary hover:bg-bg-hover/60 hover:text-text-secondary transition-colors"
+            data-sidebar-settings
+          >
+            <Settings size={14} className="text-text-tertiary/70" />
+            <span>{t('sidebar.settings')}</span>
+          </button>
+          {footerActions}
+        </div>
+      )}
 
       {overlays}
 

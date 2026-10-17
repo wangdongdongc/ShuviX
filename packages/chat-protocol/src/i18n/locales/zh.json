@@ -1466,5 +1466,20 @@
     "pickFolderTruncated": "只显示了前 {{count}} 个文件夹",
     "pickFolderShowHidden": "显示隐藏文件夹",
     "pickFolderChoose": "选择这个文件夹"
+  },
+  "mobile": {
+    "tabSessions": "会话",
+    "tabWidgets": "小组件",
+    "tabLibrary": "资料库",
+    "tabSettings": "设置",
+    "back": "返回",
+    "files": "文件",
+    "tasks": "任务",
+    "calendar": "日历",
+    "list": "列表",
+    "newChat": "新会话",
+    "newChatIn": "在哪里新建会话",
+    "tempChat": "临时会话",
+    "noTasks": "这个会话还没有后台任务"
   }
 }

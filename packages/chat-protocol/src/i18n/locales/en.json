@@ -1466,5 +1466,20 @@
     "pickFolderTruncated": "Only the first {{count}} folders are shown",
     "pickFolderShowHidden": "Show hidden folders",
     "pickFolderChoose": "Choose this folder"
+  },
+  "mobile": {
+    "tabSessions": "Chats",
+    "tabWidgets": "Widgets",
+    "tabLibrary": "Library",
+    "tabSettings": "Settings",
+    "back": "Back",
+    "files": "Files",
+    "tasks": "Tasks",
+    "calendar": "Calendar",
+    "list": "List",
+    "newChat": "New chat",
+    "newChatIn": "Start a chat in",
+    "tempChat": "Temporary chat",
+    "noTasks": "No background tasks in this conversation"
   }
 }
