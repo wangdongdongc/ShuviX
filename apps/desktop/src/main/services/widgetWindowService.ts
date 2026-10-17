@@ -17,7 +17,7 @@ const log = createLogger('WidgetWindow')
  * - 不绑定 ChatFrontend（widget 窗口没有聊天事件流）
  * - bounds / 置顶状态按 widget 各存各的（widget ≈ 独立小应用，不共享全局一份）；bounds 在移动 / 缩放时
  *   （防抖）和关窗时都记，存下的位置已不在任何显示器上时（外接屏拔了）不用它、回到居中
- * - 「上次是不是在独立窗口里打开的」（`preferWindow`）也记在这里：Widget 面板点图标时据此直接开窗口。
+ * - 「上次是不是在独立窗口里打开的」（`preferWindow`）也记在这里：Widget 面板点卡片时据此直接开窗口。
  *   只由用户在面板里的选择改写（↗ / 菜单「在独立窗口打开」→ true，菜单「在面板中打开」→ false）；
  *   agent 经 CLI 开窗不算用户的选择，不碰它
  * - 窗口只承载 renderer 的 WidgetWindowShell；server 懒启动、URL 获取都由 shell
@@ -39,7 +39,7 @@ interface WindowState {
   height: number
   /** 默认 false —— widget 窗口是"普通小应用"，与悬浮聊天的默认置顶语义不同 */
   alwaysOnTop: boolean
-  /** 用户上次选的是独立窗口（Widget 面板点图标时直接开窗口）；缺省 false = 在面板里打开 */
+  /** 用户上次选的是独立窗口（Widget 面板点卡片时直接开窗口）；缺省 false = 在面板里打开 */
   preferWindow: boolean
 }
 
@@ -222,7 +222,7 @@ export function open(widgetId: string): void {
   appEventBus.publish({ type: 'widget.changed' })
 }
 
-/** 此刻开着独立窗口的 widget —— Widget 面板据此决定点图标是在面板里打开，还是把那个窗口提到前面 */
+/** 此刻开着独立窗口的 widget —— Widget 面板据此决定点卡片是在面板里打开，还是把那个窗口提到前面 */
 export function openIds(): string[] {
   return [...windows.entries()].filter(([, win]) => !win.isDestroyed()).map(([id]) => id)
 }

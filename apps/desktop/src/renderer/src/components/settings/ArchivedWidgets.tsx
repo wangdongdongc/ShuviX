@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RotateCcw, Trash2 } from 'lucide-react'
+import { Archive, RotateCcw, Trash2 } from 'lucide-react'
 import { useWidgetStore } from '../../stores/widgetStore'
 import { ConfirmDialog } from '../common/ConfirmDialog'
-import { WidgetIcon } from '../widget/WidgetIcon'
 
 /**
- * 设置 → 已归档 → 小组件：归档的小组件不再占 Widget 面板主屏的位置，都在这里 —— 恢复（回到主屏末尾）或删除。
+ * 设置 → 已归档 → 小组件：归档的小组件不在 Widget 面板里，都在这里 —— 恢复或删除。
  * 数据与面板同一个 widgetStore，订阅 'widget.changed' 刷新（设置是独立窗口时，面板那边的 store 不在这里）。
  */
 export function ArchivedWidgets(): React.JSX.Element {
@@ -40,14 +39,15 @@ export function ArchivedWidgets(): React.JSX.Element {
               data-archived-widget={w.id}
               className="group relative flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-text-secondary hover:bg-bg-hover"
             >
-              <WidgetIcon widget={w} size={22} className="flex-shrink-0" />
-              <div className="flex-1 min-w-0 group-hover:pr-16">
+              <Archive size={13} className="flex-shrink-0 text-text-tertiary/60" />
+              <div className="flex-1 min-w-0 group-hover:pr-16 [@media(hover:none)]:pr-16">
                 <div className="truncate text-[13px]">{w.name}</div>
                 {w.description && (
                   <div className="truncate text-[11px] text-text-tertiary">{w.description}</div>
                 )}
               </div>
-              <div className="absolute right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              {/* 没有悬停的设备（触屏、手机布局）上一直显示：这两个按钮是恢复 / 删除的唯一入口 */}
+              <div className="absolute right-2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
                 <button
                   onClick={() => void archiveWidget(w.id, false)}
                   className="p-1 rounded hover:bg-bg-hover text-text-tertiary/70 hover:text-text-secondary"

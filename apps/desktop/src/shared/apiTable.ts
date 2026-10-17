@@ -399,8 +399,6 @@ export const API_TABLE = {
     rename: invoke('widget:rename', 1),
     setArchived: invoke('widget:setArchived', 1),
     delete: invoke('widget:delete', 1),
-    getIcon: invoke('widget:getIcon', 1),
-    setHomeOrder: invoke('widget:setHomeOrder', 1),
     getServerStatus: invoke('widget:getServerStatus', 0),
     stopServer: invoke('widget:stopServer', 0),
     startWidget: invoke('widget:startWidget', 1),

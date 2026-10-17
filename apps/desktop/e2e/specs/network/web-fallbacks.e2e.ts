@@ -6,11 +6,11 @@
  * WF-2 聊天里的图片经 HTTP 渲染，点开是一个预览标签页（md 也在预览标签页里只读渲染）；服务端那台电脑上不开窗
  * WF-3 交互图里的 Chart.js / D3 经 /lib/ 加载（沙箱 CSP 放行的是这个地址，不是 shuvix-lib:）
  * WF-4 页面里的目录浏览器代替原生「选择文件夹」框（项目配置换文件夹、打开文件夹的取消、外部技能目录）
- * WF-5 widget 经 /w/ 转发，在新标签页里的沙箱 iframe 里跑
- * WF-6 widget 导出 = 主屏图标右键（页面里的 DOM 菜单，两种打开方式都在）→ 导到服务端的临时目录 + 经 /files/download 下载
+ * WF-5 widget 经 /w/ 转发，在新标签页里的沙箱 iframe 里跑（标题栏是扳手 + 名字）
+ * WF-6 widget 导出 = 卡片右键（页面里的 DOM 菜单，两种打开方式都在）→ 导到服务端的临时目录 + 经 /files/download 下载
  * WF-7「在文件管理器中打开 / 显示」换成显示路径的卡片，路径与桌面打开的是同一个
  * WF-8 web 客户端不跟桌面的悬浮窗：桌面悬浮了的会话在页面里照常显示；右侧面板也在
- * WF-9 web 客户端不认桌面的「在独立窗口打开」偏好：桌面记着偏好、窗口也开着，页面里点图标仍在页面的面板里打开、不开新标签页；
+ * WF-9 web 客户端不认桌面的「在独立窗口打开」偏好：桌面记着偏好、窗口也开着，页面里点卡片仍在页面的面板里打开、不开新标签页；
  *      ↗ 开一个 #widget-window 标签页；之后桌面的偏好不变（页面里的选择不往回记）
  *
  * 约定同 web-client.e2e.ts：界面语言先设成 en；**从不在缺省端口 7766 上打开**，一律先 setPort(空闲端口) 再
@@ -49,7 +49,8 @@ import {
   rightPanelPane,
   sidebarPane,
   webClientPane,
-  widgetHomePane
+  widgetPanelPane,
+  widgetWindowPane
 } from '../../harness/pages'
 import {
   createProject,
@@ -644,8 +645,11 @@ describe('network access phase D: what the web client does instead of the deskto
       })()`)
     const frame = await until(frameOf, 'the widget iframe mounted', 60_000)
     expect(frame).toStrictEqual({ src: frameSrc, sandbox: WEB_WIDGET_SANDBOX })
-    // 浏览器标签页没有「始终置顶」
+    // 浏览器标签页没有「始终置顶」；标题栏是扳手 + 名字（没有 v0.2.16 的图标）
     expect(await tab.page.eval<boolean>(`!!document.querySelector('.lucide-pin')`)).toBe(false)
+    const shell = widgetWindowPane(tab.page)
+    expect(await shell.titleGlyph()).toBe('lucide-wrench')
+    expect(await shell.legacyIcon()).toBe(false)
 
     // iframe 跑在自己的 target 里：widget 的输出在，源是不透明的，够不着父页面
     const target = await until(
@@ -761,7 +765,7 @@ describe('network access phase D: what the web client does instead of the deskto
       const labels = menu.map((item) => item.label)
       expect(labels).toContain(en.widgets.exportAsVite)
       expect(labels).toContain(en.widgets.openInWindow)
-      // 两种打开方式都在：面板里（主屏上的应用）与独立窗口（web 客户端里是新标签页）
+      // 两种打开方式都在：面板里与独立窗口（web 客户端里是新标签页）
       expect(labels).toContain(en.widgets.openInPanel)
       await pane.pickDomMenu(en.widgets.exportAsVite)
       const clicks = await until(async () => {
@@ -833,7 +837,7 @@ describe('network access phase D: what the web client does instead of the deskto
       (await listTargets(app.port)).some(
         (t) => t.url.startsWith('file://') && t.url.includes(`#widget-window?widgetId=${WIDGET_ID}`)
       )
-    const home = widgetHomePane(webPage())
+    const home = widgetPanelPane(webPage())
     const panel = rightPanelPane(webPage())
     try {
       // 桌面：上次选的是独立窗口，而且那个窗口此刻开着
@@ -849,22 +853,18 @@ describe('network access phase D: what the web client does instead of the deskto
       await panel.open()
       await panel.activateWidgetTab()
       await until(
-        async () => (await home.slotIds()).includes(WIDGET_ID) || null,
-        'the widget icon on the web home screen'
+        async () => (await home.cardIds()).includes(WIDGET_ID) || null,
+        'the widget card in the web panel'
       )
       const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
 
-      // 页面里点图标：在页面的面板里打开，不开新标签页
-      await home.tap(WIDGET_ID)
+      // 页面里点卡片：在页面的面板里打开，不开新标签页
+      await home.clickCard(WIDGET_ID)
       await until(
         async () => (await home.foregroundApp()) === WIDGET_ID || null,
         'the widget in the web panel'
       )
       await until(() => home.frameReady(WIDGET_ID), 'the web panel iframe', 60_000)
-      await until(
-        async () => (await home.openAnimation(WIDGET_ID)).panelPointerEvents === '' || null,
-        'the open transition finished'
-      )
       expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
 
       // ↗：一个 #widget-window 标签页（web 客户端的「独立窗口」），面板里收走

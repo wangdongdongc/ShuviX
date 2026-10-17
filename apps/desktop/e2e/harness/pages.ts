@@ -6846,6 +6846,13 @@ export interface ArchivedSettingsPane {
   archivedWidgetIds(): Promise<string[]>
   /** 点某个已归档小组件行上 title ∈ titles 的按钮（恢复 / 删除）；行或按钮找不到抛 */
   clickArchivedWidget(id: string, titles: string[]): Promise<void>
+  /**
+   * 一条已归档小组件行：行首那颗 svg 的 lucide-* 类、行里有没有 v0.2.16 的图标（`[data-widget-icon]`）、
+   * 行尾按钮那一组的计算 opacity（桌面上悬停才显示；没有悬停的设备上一直是 1）；行不在 → null
+   */
+  archivedWidgetRow(
+    id: string
+  ): Promise<{ glyph: string; legacyIcon: boolean; actionsOpacity: number } | null>
 }
 
 /** 「已归档」设置页（ArchivedSettings；openSettings('archived') 后调用） */
@@ -6966,7 +6973,18 @@ export function archivedSettingsPane(settings: CdpClient): ArchivedSettingsPane 
       })()`)
       if (!ok) throw new Error(`archived widget "${id}" button (${titles.join(' / ')}) not found`)
       await sleep(200)
-    }
+    },
+    archivedWidgetRow: (id) =>
+      settings.eval<{ glyph: string; legacyIcon: boolean; actionsOpacity: number } | null>(`(() => {
+        const row = (${CONTENT})?.querySelector('[data-archived-widget="' + ${JSON.stringify(id)} + '"]')
+        if (!row) return null
+        const actions = row.querySelector('button')?.parentElement
+        return {
+          glyph: [...(row.querySelector('svg')?.classList ?? [])].find((k) => k.startsWith('lucide-')) ?? '',
+          legacyIcon: !!row.querySelector('[data-widget-icon]'),
+          actionsOpacity: actions ? Number(getComputedStyle(actions).opacity) : NaN
+        }
+      })()`)
   }
 }
 
@@ -7025,9 +7043,9 @@ export interface RightPanelPane {
   agentsActive(): Promise<boolean>
   /** 切到 widget tab 并等 agents 内容区不可见 —— 「面板开着但在别的 tab」的构造 */
   activateWidgetTab(): Promise<void>
-  /** widget tab 主屏上的图标（按格子的 `data-home-slot` 认，DOM 序 = 主屏顺序） */
+  /** widget tab 里的卡片（按 `data-widget-card` 认，DOM 序 = 列表顺序） */
   widgetCardIds(): Promise<string[]>
-  /** 往某个主屏图标上派发一次冒泡的右键（contextmenu）事件；没有这个图标 → false */
+  /** 往某张卡片上派发一次冒泡的右键（contextmenu）事件；没有这张卡片 → false */
   contextMenuWidgetCard(widgetId: string): Promise<boolean>
   /** 标签栏可见 tab 的 lucide 图标类（DOM 序）—— tab 集合与顺序的判据，不认文案 */
   tabIcons(): Promise<string[]>
@@ -7086,8 +7104,8 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
   // agents 面板 = 内容区固定序的最后一个（见本节开头的锚点说明）
   const AGENTS = `${PANEL}?.querySelector(':scope > div.relative')?.lastElementChild`
   const ROWS = `[...(${AGENTS}?.querySelectorAll('.divide-y > div > button.w-full') ?? [])]`
-  // 主屏上的图标（WidgetHome 的格子，`data-home-slot` = widget id，按 DOM 序 = 主屏顺序，所有页都在 DOM 里）
-  const WIDGET_CARDS = `[...(${PANEL}?.querySelector(':scope > div.relative')?.firstElementChild?.querySelectorAll('[data-home-slot]') ?? [])]`
+  // widget tab 里的卡片（WidgetPanel 的 `data-widget-card` = widget id，DOM 序 = 列表顺序）
+  const WIDGET_CARDS = `[...(${PANEL}?.querySelector(':scope > div.relative')?.firstElementChild?.querySelectorAll('[data-widget-card]') ?? [])]`
   // 日历面板 = 内容区固定序的倒数第二个（见 activateCalendarTab）
   const CALENDAR = `(() => { const c = ${PANEL}?.querySelector(':scope > div.relative')?.children; return c ? c[c.length - 2] : null })()`
 
@@ -7124,11 +7142,11 @@ export function rightPanelPane(main: CdpClient): RightPanelPane {
       await until(async () => !(await agentsActive()) || null, 'widget tab active')
     },
     widgetCardIds: () =>
-      main.eval<string[]>(`${WIDGET_CARDS}.map((c) => c.getAttribute('data-home-slot') ?? '')`),
+      main.eval<string[]>(`${WIDGET_CARDS}.map((c) => c.getAttribute('data-widget-card') ?? '')`),
     contextMenuWidgetCard: (widgetId) =>
       main.eval<boolean>(`(() => {
         const card = ${WIDGET_CARDS}.find(
-          (c) => c.getAttribute('data-home-slot') === ${JSON.stringify(widgetId)}
+          (c) => c.getAttribute('data-widget-card') === ${JSON.stringify(widgetId)}
         )
         if (!card) return false
         const r = card.getBoundingClientRect()
@@ -10790,31 +10808,94 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Widget 面板的主屏（WidgetHome）与面板里的应用（WidgetPanel）。
+// Widget 面板（WidgetPanel）：卡片列表与面板里开着的应用。
 //
 // 锚点全是产品侧的纯标记，不认文案：
-//   - 面板根 `[data-widget-panel]`；主屏根 `[data-widget-home]`（整理状态多一个 `data-editing`）；
-//   - 主屏的一页 `[data-home-page]`，一格 `[data-home-slot=<widget id>]`（所有页都在 DOM 里，DOM 序 = 主屏顺序），
-//     格子里的图标 `[data-widget-icon]`（有 icon.svg 时里面是内联的 `<svg>`），运行中的小点 `[data-running]`；
-//   - 页码点 `[data-home-dot]`（只有一页时不画），整理状态的「完成」`[data-home-done]`；
+//   - 面板根 `[data-widget-panel]`；卡片列表 `[data-widget-list]`（应用在前台时 visibility: hidden）；
+//   - 卡片 `[data-widget-card=<widget id>]`（DOM 序 = 列表顺序；运行中多一个 `data-running`），卡片右上角的悬浮按钮
+//     `[data-card-stop]` / `[data-card-archive]` / `[data-card-delete]`（停止只在运行中时有）；
 //   - 面板里开着的应用 `[data-panel-app=<id>]`（前台那个带 `data-foreground`），顶栏的返回 / 重新加载 /
 //     独立窗口 `[data-app-back]` / `[data-app-reload]` / `[data-app-popout]`，iframe `[data-widget-frame=<id>]`。
+// 卡片里的名字 / 描述 / id / 时间没有标记，按结构认（见 card）；变脆了就给产品加 `data-card-name` 之类的标记。
 
-export interface WidgetHomePane {
+/**
+ * 卡片「右上角」那一点离卡片右缘 / 上缘的距离（px）：webMobilePane 的 `widgetCardCorner` 点在这里，
+ * widgetPanelPane.cornerButton 说那一点落在哪个悬浮按钮的方块里
+ */
+const CARD_CORNER_INSET = 12
+
+/** 一张卡片的内容 */
+export interface WidgetCardShot {
+  name: string
+  /** 描述那一段（`p`）；没有描述 → null */
+  description: string | null
+  /** 描述那一段是不是截到两行（line-clamp-2） */
+  descriptionClamped: boolean
+  /** 最后一行里的 id */
+  idText: string
+  /** 最后一行里的相对时间（i18n 产物，spec 按三语候选比） */
+  time: string
+  /** 卡片里第一个 svg 的 lucide-* 类（app 图标） */
+  glyph: string
+  running: boolean
+  /** 卡片上有哪几个悬浮按钮（DOM 里在不在，不管看不看得见） */
+  buttons: Array<'stop' | 'archive' | 'delete'>
+}
+
+/** 面板里一个应用的顶栏 */
+export interface WidgetAppTopBarShot {
+  /** 返回键里的名字 */
+  title: string
+  /** 返回键里那颗 svg 的 lucide-* 类 */
+  backGlyph: string
+  hasReload: boolean
+  hasPopout: boolean
+}
+
+/** 面板上此刻在跑的动效（只数元素自己身上的，不连子树 —— iframe 的加载转圈 animate-spin 会算进去） */
+export interface WidgetPanelMotionShot {
+  /** 这个应用那一层自己身上的 */
+  appAnimations: number
+  /** 卡片列表自己身上的 */
+  listAnimations: number
+  /** 面板根的内联 pointer-events */
+  panelPointerEvents: string
+}
+
+export interface WidgetPanelPane {
   /**
-   * 让面板重新取一次列表：停一个不存在的 widget（`stopWidget` 总会广播 widget.changed，又什么都不改 ——
-   * 不能用 setHomeOrder，它会把存下的主屏顺序冲掉）。spec 往磁盘种了 / 改了 widget 之后用
+   * 让面板重新取一次列表：停一个不存在的 widget（`stopWidget` 总会广播 widget.changed，又什么都不改）。
+   * spec 往磁盘种了 / 改了 widget 之后用
    */
   reload(): Promise<void>
-  /** 主屏上的图标（DOM 序 = 主屏顺序） */
-  slotIds(): Promise<string[]>
-  /** 主屏有几页 */
-  pageCount(): Promise<number>
-  /** 这个图标里是不是内联了 svg（有 icon.svg 且清洗得过） */
-  hasInlineSvg(id: string): Promise<boolean>
-  /** 点一下主屏上的图标 */
-  tap(id: string): Promise<void>
-  /** 前台的应用；在主屏上为 null */
+  /** 列表里的卡片（DOM 序 = 列表顺序） */
+  cardIds(): Promise<string[]>
+  /** 一张卡片的内容；没有 → null */
+  card(id: string): Promise<WidgetCardShot | null>
+  /** 点一下卡片（合成 click）；没有这张卡片抛 */
+  clickCard(id: string): Promise<void>
+  /** 点卡片上的一个悬浮按钮（合成 click，不管看不看得见）；按钮不在抛 */
+  clickCardButton(id: string, which: 'stop' | 'archive' | 'delete'): Promise<void>
+  /** 把鼠标真的挪到卡片中心（CDP 可信输入：`:hover` 只认它）；没有这张卡片抛 */
+  hoverCard(id: string): Promise<void>
+  /** 把鼠标挪到视口左上角（离开所有卡片） */
+  unhover(): Promise<void>
+  /** 卡片悬浮按钮那一组的计算 opacity；没有这张卡片 → NaN */
+  cardButtonsOpacity(id: string): Promise<number>
+  /**
+   * 卡片右上角那一点（右缘往左、上缘往下各 CARD_CORNER_INSET）落在哪个悬浮按钮的方块里（只看几何，不管它接不接点击）；
+   * 都不在 → null。证明「点右上角」的用例点的确实是按钮所在的地方
+   */
+  cornerButton(id: string): Promise<'stop' | 'archive' | 'delete' | null>
+  /** 卡片列表此刻可见（computed visibility） */
+  listVisible(): Promise<boolean>
+  /** 没有卡片时列表里显示的那句空态文本；有卡片 / 还没加载完 → null */
+  emptyHint(): Promise<string | null>
+  /** 文档里还剩几个 v0.2.16 主屏的标记（主屏 / 页 / 格子 / 页码点 / 完成 / 图标） */
+  legacyMarkers(): Promise<number>
+  /** 有没有「运行中」的点（卡片的 `data-running`） */
+  running(id: string): Promise<boolean>
+  /** 前台的应用；在卡片列表上为 null */
   foregroundApp(): Promise<string | null>
   /** 面板里开着的应用（含后台的） */
   panelApps(): Promise<string[]>
@@ -10824,234 +10905,134 @@ export interface WidgetHomePane {
   frameStamp(id: string): Promise<number | null>
   /** 点前台应用顶栏的返回 */
   back(): Promise<void>
-  /** 把面板那一块截成 PNG（给人看的证据，不是断言） */
-  screenshot(filePath: string): Promise<void>
-
-  // ── 页码与分页 ──
-  /** 当前页（带 `aria-current="page"` 的页码点）；只有一页（没有点）时为 0 */
-  currentPage(): Promise<number>
-  /** 页码点的个数（只有一页时为 0） */
-  dotCount(): Promise<number>
-  /** 点第 i 个页码点 */
-  clickDot(i: number): Promise<void>
-  /** 第 i 页上的图标（DOM 序） */
-  slotsOnPage(i: number): Promise<string[]>
-  /** 此刻整块落在面板里的图标（当前页上的那些） */
-  visibleSlotIds(): Promise<string[]>
-  /** 第 i 页左缘相对主屏根左缘的偏移（px）—— 当前页停稳时为 0，拖动时跟手 */
-  pageOffset(i: number): Promise<number>
-  /** 主屏根的视口矩形与尺寸（clientWidth / clientHeight / scrollHeight） */
-  homeRect(): Promise<WidgetHomeRect | null>
-  /** 主屏不在时（没有 widget）面板里显示的那句空态文本；主屏在 / 还没加载完 → null */
-  emptyHint(): Promise<string | null>
-
-  // ── 图标 ──
-  /** 某个图标格的中心点（视口 CSS px）；不在 → null */
-  slotCenter(id: string): Promise<{ x: number; y: number } | null>
-  /** 图标（`[data-widget-icon]`）相对面板根左上角的方块，与面板的 clientWidth / clientHeight */
-  iconBox(id: string): Promise<WidgetIconBox | null>
-  /** 图标的内容：内联 svg 的标记（没有 → null）、里面有没有 script / on* 属性、字、内联的底色 */
-  iconInfo(id: string): Promise<WidgetIconInfo | null>
-  /** 图标下有没有「运行中」的小点 */
-  running(id: string): Promise<boolean>
-
-  // ── 整理图标 ──
-  /** 主屏在不在「整理图标」状态 */
-  editing(): Promise<boolean>
-  /** 点「完成」 */
-  clickDone(): Promise<void>
-  /** 在当前页最后一行下方的空白处真点一下（可信输入）；找不到空白处抛 */
-  clickBlank(): Promise<void>
-
-  // ── 可信的指针 / 键盘输入（CDP Input.*；setPointerCapture 只认它） ──
-  /** 在某点按下鼠标左键 */
-  press(point: { x: number; y: number }): Promise<void>
-  /** 按着移动到某点（`steps` 步、共 `ms` 毫秒） */
-  moveTo(point: { x: number; y: number }, opts?: { steps?: number; ms?: number }): Promise<void>
-  /** 在最后的位置松开左键 */
-  release(): Promise<void>
-  /**
-   * 横向拖一下主屏：`dx` 像素、`steps` 步、`ms` 毫秒。缺省从页码点那一条的空白处起（向左拖从右侧起、向右拖从左侧起），
-   * `fromId` 则从那个图标起；`hold: true` 不松手（之后 `release()`）
-   */
-  swipe(
-    dx: number,
-    opts?: { fromId?: string; steps?: number; ms?: number; hold?: boolean }
-  ): Promise<void>
-  /** 在图标上按住 `ms` 毫秒再原地松开 */
-  longPress(id: string, ms: number): Promise<void>
-  /**
-   * 拖一个图标到某点：先按住 `holdMs`（不在整理状态时 = 长按进入整理），再分步移过去；`release: false` 不松手
-   */
-  dragIcon(
-    id: string,
-    to: { x: number; y: number },
-    opts?: { holdMs?: number; steps?: number; ms?: number; release?: boolean }
-  ): Promise<void>
-  /** 在主屏中央派发 `times` 次滚轮（deltaX / deltaY），一次紧接一次 */
-  wheel(dx: number, dy: number, times?: number): Promise<void>
-  /** 按一下 Escape（可信键盘输入） */
-  pressEscape(): Promise<void>
-
-  // ── 右键菜单（contextMenu:popup 的桩） ──
-  /** 这个图标右键菜单的项 id（含分隔符的 id），菜单取消 */
-  menuItemIds(id: string): Promise<string[]>
-  /** 右键这个图标并选中 `actionId` */
-  pickMenu(id: string, actionId: string): Promise<void>
-
-  // ── 面板里的应用 ──
   /** 这个应用的那一层此刻可见（visibility） */
   appVisible(id: string): Promise<boolean>
+  /** 这个应用的顶栏；面板里没有它 → null */
+  appTopBar(id: string): Promise<WidgetAppTopBarShot | null>
   /** 点前台应用顶栏的「重新加载」 */
   reloadApp(): Promise<void>
   /** 点前台应用顶栏的「在独立窗口打开」（↗；带用户手势，web 客户端里开新标签页也放行） */
   popout(): Promise<void>
-  /**
-   * 这个应用那一层自己身上正在跑的 clip-path 动效（打开 / 关回）的首尾关键帧，以及主屏那一层在不在动、面板根的
-   * pointer-events；没有在跑的动效 → `clip` 为 null
-   */
-  openAnimation(id: string): Promise<WidgetAppAnimationShot>
+  /** 此刻在跑的动效个数（应用那一层、卡片列表）与面板根的 pointer-events */
+  motion(id: string): Promise<WidgetPanelMotionShot>
+  /** 这张卡片右键菜单的项 id（含分隔符的 id），菜单取消 */
+  menuItemIds(id: string): Promise<string[]>
+  /** 右键这张卡片并选中 `actionId` */
+  pickMenu(id: string, actionId: string): Promise<void>
+  /** 把面板那一块截成 PNG（给人看的证据，不是断言） */
+  screenshot(filePath: string): Promise<void>
 }
 
-/** 主屏根的矩形与尺寸 */
-export interface WidgetHomeRect extends ViewportRect {
-  clientWidth: number
-  clientHeight: number
-  scrollHeight: number
-}
-
-/** 图标相对面板根的方块 */
-export interface WidgetIconBox {
-  left: number
-  top: number
-  width: number
-  height: number
-  panelWidth: number
-  panelHeight: number
-}
-
-/** 图标的内容 */
-export interface WidgetIconInfo {
-  svg: string | null
-  hasScript: boolean
-  hasOnAttr: boolean
-  /** 没有 svg 时图标上的字（有 svg 时为空串） */
-  text: string
-  /** 图标元素内联 style 的 background */
-  background: string
-}
-
-/** 应用那一层的动效快照 */
-export interface WidgetAppAnimationShot {
-  clip: { first: string; last: string } | null
-  homeAnimating: boolean
-  panelPointerEvents: string
-}
-
-export function widgetHomePane(main: CdpClient): WidgetHomePane {
+export function widgetPanelPane(main: CdpClient): WidgetPanelPane {
   const PANEL = `document.querySelector('[data-widget-panel]')`
-  const HOME = `${PANEL}?.querySelector('[data-widget-home]')`
-  const slot = (id: string): string =>
-    `${PANEL}?.querySelector('[data-home-slot="' + ${JSON.stringify(id)} + '"]')`
+  const LIST = `${PANEL}?.querySelector('[data-widget-list]')`
+  const card = (id: string): string =>
+    `${PANEL}?.querySelector('[data-widget-card="' + ${JSON.stringify(id)} + '"]')`
   const frame = (id: string): string =>
     `${PANEL}?.querySelector('iframe[data-widget-frame="' + ${JSON.stringify(id)} + '"]')`
   const app = (id: string): string =>
     `${PANEL}?.querySelector('[data-panel-app="' + ${JSON.stringify(id)} + '"]')`
+  /** 卡片悬浮按钮那一组 = 归档按钮（总在）的父节点 */
+  const buttonsOf = (id: string): string =>
+    `${card(id)}?.querySelector('[data-card-archive]')?.parentElement`
   const clickIn = async (selector: string, what: string): Promise<void> => {
     const ok = await main.eval<boolean>(
       `(() => { const b = ${selector}; if (!b) return false; b.click(); return true })()`
     )
     if (!ok) throw new Error(`widget panel: no ${what}`)
   }
-
-  // 可信的鼠标：按下 / 移动 / 松开都经 CDP，最后的位置记在这里（release 用）
-  let at = { x: 0, y: 0 }
-  let down = false
-  const mouse = (
-    type: 'mouseMoved' | 'mousePressed' | 'mouseReleased',
-    x: number,
-    y: number
-  ): Promise<unknown> =>
-    main.send('Input.dispatchMouseEvent', {
-      type,
-      x,
-      y,
-      ...(type === 'mouseMoved'
-        ? down
-          ? { button: 'left', buttons: 1 }
-          : {}
-        : { button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1 })
-    })
-  const press = async (p: { x: number; y: number }): Promise<void> => {
-    await mouse('mouseMoved', p.x, p.y)
-    down = true
-    at = { ...p }
-    await mouse('mousePressed', p.x, p.y)
-  }
-  const moveTo = async (
-    p: { x: number; y: number },
-    opts: { steps?: number; ms?: number } = {}
-  ): Promise<void> => {
-    const steps = Math.max(1, opts.steps ?? 10)
-    const ms = opts.ms ?? 150
-    const from = { ...at }
-    for (let i = 1; i <= steps; i++) {
-      const x = from.x + ((p.x - from.x) * i) / steps
-      const y = from.y + ((p.y - from.y) * i) / steps
-      at = { x, y }
-      await mouse('mouseMoved', x, y)
-      if (ms > 0) await sleep(ms / steps)
-    }
-  }
-  const release = async (): Promise<void> => {
-    await mouse('mouseReleased', at.x, at.y)
-    down = false
-  }
-
-  const homeRect = (): Promise<WidgetHomeRect | null> =>
-    main.eval<WidgetHomeRect | null>(`(() => {
-      const h = ${HOME}
-      if (!h) return null
-      const r = h.getBoundingClientRect()
-      return { x: r.left, y: r.top, width: r.width, height: r.height,
-        clientWidth: h.clientWidth, clientHeight: h.clientHeight, scrollHeight: h.scrollHeight }
-    })()`)
-  const slotCenter = (id: string): Promise<{ x: number; y: number } | null> =>
-    main.eval<{ x: number; y: number } | null>(`(() => {
-      const s = ${slot(id)}
-      if (!s) return null
-      const r = s.getBoundingClientRect()
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
-    })()`)
-  const centerOf = async (id: string): Promise<{ x: number; y: number }> => {
-    const c = await slotCenter(id)
-    if (!c) throw new Error(`no home screen icon for ${id}`)
-    return c
-  }
   const openMenu = async (id: string, pick: string | null): Promise<void> => {
     await armMenu(main, pick)
     const ok = await rightPanelPane(main).contextMenuWidgetCard(id)
-    if (!ok) throw new Error(`no home screen icon for ${id}`)
+    if (!ok) throw new Error(`no widget card for ${id}`)
   }
+  const mouseTo = (x: number, y: number): Promise<unknown> =>
+    main.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
 
   return {
     reload: async () => {
       await main.eval(`window.api.widget.stopWidget('e2e-noop-widget').then(() => true)`)
     },
-    slotIds: () =>
+    cardIds: () =>
       main.eval<string[]>(
-        `[...(${PANEL}?.querySelectorAll('[data-home-slot]') ?? [])].map((el) => el.getAttribute('data-home-slot') ?? '')`
+        `[...(${LIST}?.querySelectorAll('[data-widget-card]') ?? [])].map((el) => el.getAttribute('data-widget-card') ?? '')`
       ),
-    pageCount: () =>
-      main.eval<number>(`${PANEL}?.querySelectorAll('[data-home-page]').length ?? 0`),
-    hasInlineSvg: (id) =>
-      main.eval<boolean>(`!!${slot(id)}?.querySelector('[data-widget-icon] svg')`),
-    tap: async (id) => {
+    card: (id) =>
+      main.eval<WidgetCardShot | null>(`(() => {
+        const c = ${card(id)}
+        if (!c) return null
+        const col = c.querySelector('.flex-1.min-w-0')
+        const p = col?.querySelector('p') ?? null
+        const spans = [...(col?.lastElementChild?.querySelectorAll('span') ?? [])]
+        const svg = c.querySelector('svg')
+        return {
+          name: (col?.querySelector('.font-semibold')?.textContent ?? '').trim(),
+          description: p ? (p.textContent ?? '').trim() : null,
+          descriptionClamped: !!p && p.classList.contains('line-clamp-2'),
+          idText: (spans[0]?.textContent ?? '').trim(),
+          time: (spans[spans.length - 1]?.textContent ?? '').trim(),
+          glyph: [...(svg?.classList ?? [])].find((k) => k.startsWith('lucide-')) ?? '',
+          running: c.hasAttribute('data-running'),
+          buttons: ['stop', 'archive', 'delete'].filter((b) => !!c.querySelector('[data-card-' + b + ']'))
+        }
+      })()`),
+    clickCard: async (id) => {
       const ok = await main.eval<boolean>(
-        `(() => { const b = ${slot(id)}; if (!b) return false; b.click(); return true })()`
+        `(() => { const c = ${card(id)}; if (!c) return false; c.click(); return true })()`
       )
-      if (!ok) throw new Error(`no home screen icon for ${id}`)
+      if (!ok) throw new Error(`no widget card for ${id}`)
     },
+    clickCardButton: (id, which) =>
+      clickIn(`${card(id)}?.querySelector('[data-card-${which}]')`, `${which} button on ${id}`),
+    hoverCard: async (id) => {
+      const c = await main.eval<{ x: number; y: number } | null>(`(() => {
+        const c = ${card(id)}
+        if (!c) return null
+        c.scrollIntoView({ block: 'nearest' })
+        const r = c.getBoundingClientRect()
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      })()`)
+      if (!c) throw new Error(`no widget card for ${id}`)
+      await mouseTo(c.x, c.y)
+    },
+    unhover: async () => {
+      await mouseTo(1, 1)
+    },
+    cardButtonsOpacity: (id) =>
+      main.eval<number>(`(() => {
+        const g = ${buttonsOf(id)}
+        return g ? Number(getComputedStyle(g).opacity) : NaN
+      })()`),
+    cornerButton: (id) =>
+      main.eval<'stop' | 'archive' | 'delete' | null>(`(() => {
+        const c = ${card(id)}
+        if (!c) return null
+        const r = c.getBoundingClientRect()
+        const x = r.right - ${CARD_CORNER_INSET}
+        const y = r.top + ${CARD_CORNER_INSET}
+        return ['stop', 'archive', 'delete'].find((b) => {
+          const btn = c.querySelector('[data-card-' + b + ']')
+          if (!btn) return false
+          const br = btn.getBoundingClientRect()
+          return x >= br.left && x <= br.right && y >= br.top && y <= br.bottom
+        }) ?? null
+      })()`),
+    listVisible: () =>
+      main.eval<boolean>(
+        `(() => { const l = ${LIST}; return !!l && getComputedStyle(l).visibility === 'visible' })()`
+      ),
+    emptyHint: () =>
+      main.eval<string | null>(`(() => {
+        const l = ${LIST}
+        if (!l || l.querySelector('[data-widget-card]')) return null
+        const t = (l.querySelector('p')?.textContent ?? '').trim()
+        return t || null
+      })()`),
+    legacyMarkers: () =>
+      main.eval<number>(
+        `document.querySelectorAll('[data-widget-home], [data-home-page], [data-home-slot], [data-home-dot], [data-home-done], [data-widget-icon]').length`
+      ),
+    running: (id) => main.eval<boolean>(`!!${card(id)}?.hasAttribute('data-running')`),
     foregroundApp: () =>
       main.eval<string | null>(
         `${PANEL}?.querySelector('[data-panel-app][data-foreground]')?.getAttribute('data-panel-app') ?? null`
@@ -11074,177 +11055,22 @@ export function widgetHomePane(main: CdpClient): WidgetHomePane {
       )
       if (!ok) throw new Error('no foreground app to go back from')
     },
-    screenshot: async (filePath) => {
-      const rect = await main.eval<ViewportRect | null>(`(() => {
-        const p = ${PANEL}
-        if (!p) return null
-        const r = p.getBoundingClientRect()
-        return { x: r.left, y: r.top, width: r.width, height: r.height }
-      })()`)
-      if (!rect) throw new Error('no widget panel on screen to screenshot')
-      const shot = await main.send<{ data: string }>('Page.captureScreenshot', {
-        format: 'png',
-        clip: { ...rect, scale: 1 }
-      })
-      mkdirSync(dirname(filePath), { recursive: true })
-      writeFileSync(filePath, Buffer.from(shot.data, 'base64'))
-    },
-
-    currentPage: () =>
-      main.eval<number>(
-        `Number(${PANEL}?.querySelector('[data-home-dot][aria-current="page"]')?.getAttribute('data-home-dot') ?? 0)`
-      ),
-    dotCount: () => main.eval<number>(`${PANEL}?.querySelectorAll('[data-home-dot]').length ?? 0`),
-    clickDot: (i) => clickIn(`${PANEL}?.querySelector('[data-home-dot="${i}"]')`, `page dot ${i}`),
-    slotsOnPage: (i) =>
-      main.eval<string[]>(
-        `[...(${PANEL}?.querySelector('[data-home-page="${i}"]')?.querySelectorAll('[data-home-slot]') ?? [])].map((el) => el.getAttribute('data-home-slot') ?? '')`
-      ),
-    visibleSlotIds: () =>
-      main.eval<string[]>(`(() => {
-        const p = ${PANEL}
-        if (!p) return []
-        const box = p.getBoundingClientRect()
-        return [...p.querySelectorAll('[data-home-slot]')]
-          .filter((el) => {
-            const r = el.getBoundingClientRect()
-            return r.width > 0 && r.left >= box.left - 1 && r.right <= box.right + 1
-          })
-          .map((el) => el.getAttribute('data-home-slot') ?? '')
-      })()`),
-    pageOffset: (i) =>
-      main.eval<number>(`(() => {
-        const h = ${HOME}
-        const pg = h?.querySelector('[data-home-page="${i}"]')
-        if (!h || !pg) return NaN
-        return pg.getBoundingClientRect().left - h.getBoundingClientRect().left
-      })()`),
-    homeRect,
-    emptyHint: () =>
-      main.eval<string | null>(`(() => {
-        const p = ${PANEL}
-        if (!p || p.querySelector('[data-widget-home]')) return null
-        const t = (p.querySelector('p')?.textContent ?? '').trim()
-        return t || null
-      })()`),
-
-    slotCenter,
-    iconBox: (id) =>
-      main.eval<WidgetIconBox | null>(`(() => {
-        const p = ${PANEL}
-        const icon = ${slot(id)}?.querySelector('[data-widget-icon]')
-        if (!p || !icon) return null
-        const pr = p.getBoundingClientRect()
-        const r = icon.getBoundingClientRect()
-        return { left: r.left - pr.left, top: r.top - pr.top, width: r.width, height: r.height,
-          panelWidth: p.clientWidth, panelHeight: p.clientHeight }
-      })()`),
-    iconInfo: (id) =>
-      main.eval<WidgetIconInfo | null>(`(() => {
-        const icon = ${slot(id)}?.querySelector('[data-widget-icon]')
-        if (!icon) return null
-        const svg = icon.querySelector('svg')
-        return {
-          svg: svg ? svg.outerHTML : null,
-          hasScript: !!icon.querySelector('script'),
-          hasOnAttr: [...icon.querySelectorAll('*')].some((el) =>
-            [...el.attributes].some((a) => a.name.toLowerCase().startsWith('on'))),
-          text: svg ? '' : (icon.textContent ?? '').trim(),
-          background: icon.style.background
-        }
-      })()`),
-    running: (id) => main.eval<boolean>(`!!${slot(id)}?.querySelector('[data-running]')`),
-
-    editing: () => main.eval<boolean>(`!!${HOME}?.hasAttribute('data-editing')`),
-    clickDone: () => clickIn(`${PANEL}?.querySelector('[data-home-done]')`, 'Done button'),
-    clickBlank: async () => {
-      // 当前页（停稳后左缘贴着主屏左缘的那一页）里，最后一格下方第一个命中页本身的点
-      const point = await main.eval<{ x: number; y: number } | null>(`(() => {
-        const h = ${HOME}
-        if (!h) return null
-        const hr = h.getBoundingClientRect()
-        const page = [...h.querySelectorAll('[data-home-page]')].find(
-          (pg) => Math.abs(pg.getBoundingClientRect().left - hr.left) < 2)
-        if (!page) return null
-        const slots = [...page.querySelectorAll('[data-home-slot]')]
-        const last = slots[slots.length - 1]
-        const top = last ? last.getBoundingClientRect().bottom + 2 : hr.top + 4
-        const x = hr.left + hr.width / 2
-        for (let y = top; y < hr.bottom - 28; y += 4) {
-          if (document.elementFromPoint(x, y) === page) return { x, y }
-        }
-        return null
-      })()`)
-      if (!point) throw new Error('widget home: no blank space below the last row of this page')
-      await press(point)
-      await release()
-    },
-
-    press,
-    moveTo,
-    release,
-    swipe: async (dx, opts = {}) => {
-      let start: { x: number; y: number }
-      if (opts.fromId) {
-        start = await centerOf(opts.fromId)
-      } else {
-        const r = await homeRect()
-        if (!r) throw new Error('widget home not on screen')
-        // 页码点那一条（DOTS_HEIGHT 高）的空白处：点在中间，两侧没有
-        start = { x: dx < 0 ? r.x + r.width - 20 : r.x + 20, y: r.y + r.height - 8 }
-      }
-      await press(start)
-      await moveTo({ x: start.x + dx, y: start.y }, { steps: opts.steps, ms: opts.ms })
-      if (!opts.hold) await release()
-    },
-    longPress: async (id, ms) => {
-      await press(await centerOf(id))
-      await sleep(ms)
-      await release()
-    },
-    dragIcon: async (id, to, opts = {}) => {
-      await press(await centerOf(id))
-      if (opts.holdMs) await sleep(opts.holdMs)
-      await moveTo(to, { steps: opts.steps ?? 12, ms: opts.ms ?? 240 })
-      if (opts.release !== false) await release()
-    },
-    wheel: async (dx, dy, times = 1) => {
-      const r = await homeRect()
-      if (!r) throw new Error('widget home not on screen')
-      const x = r.x + r.width / 2
-      const y = r.y + r.height / 2
-      for (let i = 0; i < times; i++) {
-        await main.send('Input.dispatchMouseEvent', {
-          type: 'mouseWheel',
-          x,
-          y,
-          deltaX: dx,
-          deltaY: dy
-        })
-      }
-    },
-    pressEscape: async () => {
-      const base = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }
-      await main.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base })
-      await main.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
-    },
-
-    menuItemIds: async (id) => {
-      await openMenu(id, null)
-      return (await lastMenuItems(main)).filter((it) => it.id).map((it) => it.id as string)
-    },
-    pickMenu: async (id, actionId) => {
-      await openMenu(id, actionId)
-      const ids = (await lastMenuItems(main)).map((it) => it.id)
-      if (!ids.includes(actionId)) {
-        throw new Error(`widget menu for ${id} has no "${actionId}" (has ${ids.join(', ')})`)
-      }
-    },
-
     appVisible: (id) =>
       main.eval<boolean>(
         `(() => { const a = ${app(id)}; return !!a && getComputedStyle(a).visibility === 'visible' })()`
       ),
+    appTopBar: (id) =>
+      main.eval<WidgetAppTopBarShot | null>(`(() => {
+        const a = ${app(id)}
+        if (!a) return null
+        const back = a.querySelector('[data-app-back]')
+        return {
+          title: (back?.textContent ?? '').trim(),
+          backGlyph: [...(back?.querySelector('svg')?.classList ?? [])].find((k) => k.startsWith('lucide-')) ?? '',
+          hasReload: !!a.querySelector('[data-app-reload]'),
+          hasPopout: !!a.querySelector('[data-app-popout]')
+        }
+      })()`),
     reloadApp: () =>
       clickIn(
         `${PANEL}?.querySelector('[data-panel-app][data-foreground] [data-app-reload]')`,
@@ -11260,21 +11086,67 @@ export function widgetHomePane(main: CdpClient): WidgetHomePane {
       if (r.result?.value !== true)
         throw new Error('widget panel: no foreground app pop-out button')
     },
-    openAnimation: (id) =>
-      main.eval<WidgetAppAnimationShot>(`(() => {
-        const p = ${PANEL}
+    motion: (id) =>
+      main.eval<WidgetPanelMotionShot>(`(() => {
         const layer = ${app(id)}
-        const anim = layer
-          ?.getAnimations()
-          .find((a) => a.playState === 'running' && a.effect?.getKeyframes().some((k) => k.clipPath))
-        const frames = anim?.effect?.getKeyframes() ?? []
-        const home = ${HOME}?.parentElement
+        const list = ${LIST}
         return {
-          clip: anim ? { first: String(frames[0].clipPath), last: String(frames[frames.length - 1].clipPath) } : null,
-          homeAnimating: !!home && home.getAnimations().length > 0,
-          panelPointerEvents: p?.style.pointerEvents ?? ''
+          appAnimations: layer ? layer.getAnimations().length : 0,
+          listAnimations: list ? list.getAnimations().length : 0,
+          panelPointerEvents: ${PANEL}?.style.pointerEvents ?? ''
         }
+      })()`),
+    menuItemIds: async (id) => {
+      await openMenu(id, null)
+      return (await lastMenuItems(main)).filter((it) => it.id).map((it) => it.id as string)
+    },
+    pickMenu: async (id, actionId) => {
+      await openMenu(id, actionId)
+      const ids = (await lastMenuItems(main)).map((it) => it.id)
+      if (!ids.includes(actionId)) {
+        throw new Error(`widget menu for ${id} has no "${actionId}" (has ${ids.join(', ')})`)
+      }
+    },
+    screenshot: async (filePath) => {
+      const rect = await main.eval<ViewportRect | null>(`(() => {
+        const p = ${PANEL}
+        if (!p) return null
+        const r = p.getBoundingClientRect()
+        return { x: r.left, y: r.top, width: r.width, height: r.height }
       })()`)
+      if (!rect) throw new Error('no widget panel on screen to screenshot')
+      const shot = await main.send<{ data: string }>('Page.captureScreenshot', {
+        format: 'png',
+        clip: { ...rect, scale: 1 }
+      })
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, Buffer.from(shot.data, 'base64'))
+    }
+  }
+}
+
+// Widget 的独立窗口（WidgetWindowShell，`#widget-window?widgetId=<id>`；桌面的窗口与 web 客户端的标签页同一个外壳）。
+// 自绘标题栏 `.titlebar-drag`：第一颗 svg 是 app 图标，`span.truncate` 是名字。
+
+export interface WidgetWindowPane {
+  /** 标题栏里第一个 svg 的 lucide-* 类；没有 → '' */
+  titleGlyph(): Promise<string>
+  /** 标题栏里的名字 */
+  titleText(): Promise<string>
+  /** 文档里还有没有 v0.2.16 的图标（`[data-widget-icon]`） */
+  legacyIcon(): Promise<boolean>
+}
+
+export function widgetWindowPane(client: CdpClient): WidgetWindowPane {
+  const BAR = `document.querySelector('.titlebar-drag')`
+  return {
+    titleGlyph: () =>
+      client.eval<string>(
+        `[...(${BAR}?.querySelector('svg')?.classList ?? [])].find((k) => k.startsWith('lucide-')) ?? ''`
+      ),
+    titleText: () =>
+      client.eval<string>(`(${BAR}?.querySelector('span.truncate')?.textContent ?? '').trim()`),
+    legacyIcon: () => client.eval<boolean>(`!!document.querySelector('[data-widget-icon]')`)
   }
 }
 
@@ -11312,8 +11184,10 @@ export type WebMobileTouchTarget =
   | { botRow: string }
   /** 资料库智能体组里的内置行（档案名） */
   | { agentBuiltinRow: string }
-  /** 小组件主屏上的图标（widget id） */
-  | { widgetIcon: string }
+  /** 小组件页里的卡片（widget id） */
+  | { widgetCard: string }
+  /** 同一张卡片，点它右上角往里 CARD_CORNER_INSET 的那一点（桌面上悬浮按钮所在的地方） */
+  | { widgetCardCorner: string }
   | { chat: 'back' | 'title' | 'files' | 'tasks' }
   | { sessions: 'calendarToggle' | 'newChat' }
   /** 新建会话抽屉里的一项（'' = 临时会话，否则项目 id） */
@@ -11489,8 +11363,10 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `${PAGE('library')}?.querySelector('[data-bot-row=${JSON.stringify(target.botRow)}]')`
     if ('agentBuiltinRow' in target)
       return `${PAGE('library')}?.querySelector('[data-agent-builtin-row=${JSON.stringify(target.agentBuiltinRow)}]')`
-    if ('widgetIcon' in target)
-      return `${PAGE('widgets')}?.querySelector('[data-home-slot=${JSON.stringify(target.widgetIcon)}]')`
+    if ('widgetCard' in target)
+      return `${PAGE('widgets')}?.querySelector('[data-widget-card=${JSON.stringify(target.widgetCard)}]')`
+    if ('widgetCardCorner' in target)
+      return `${PAGE('widgets')}?.querySelector('[data-widget-card=${JSON.stringify(target.widgetCardCorner)}]')`
     if ('chat' in target) {
       const attr = {
         back: 'data-mobile-back',
@@ -11516,7 +11392,8 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
   }
 
   /**
-   * 滚进视口后元素中心的坐标（CSS 像素）。遮罩点它最上面那一截（下半部分压着抽屉面板）。
+   * 滚进视口后元素中心的坐标（CSS 像素）。遮罩点它最上面那一截（下半部分压着抽屉面板），`widgetCardCorner` 点卡片
+   * 右上角往里 CARD_CORNER_INSET（命中检查照旧：悬浮按钮在卡片里面，落在它上面也算命中 —— 断的是点下去的结果）。
    * 等到中心那一点确实落在这个元素上、而且不再挪动（被折叠、被遮住、还在动就一直等，超时抛 —— 带上遮住它的
    * 那个元素）
    */
@@ -11542,8 +11419,8 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           el.scrollIntoView({ block: 'center', inline: 'center' })
           const r = el.getBoundingClientRect()
           if (r.width === 0 || r.height === 0) return null
-          const x = r.left + r.width / 2
-          const y = ${'sheetBackdrop' in target ? 'r.top + 40' : 'r.top + r.height / 2'}
+          const x = ${'widgetCardCorner' in target ? `r.right - ${CARD_CORNER_INSET}` : 'r.left + r.width / 2'}
+          const y = ${'sheetBackdrop' in target ? 'r.top + 40' : 'widgetCardCorner' in target ? `r.top + ${CARD_CORNER_INSET}` : 'r.top + r.height / 2'}
           const at = document.elementFromPoint(x, y)
           return {
             x,

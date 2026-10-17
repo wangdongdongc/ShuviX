@@ -30,19 +30,6 @@
   --font-serif: var(--theme-font-serif);
 }
 
-/* Widget 面板主屏「整理图标」时图标的抖动（与手机主屏一样）；相邻图标错开起始相位，见 WidgetHome */
-@keyframes widget-jiggle {
-  0% {
-    transform: rotate(-1.6deg);
-  }
-  50% {
-    transform: rotate(1.6deg);
-  }
-  100% {
-    transform: rotate(-1.6deg);
-  }
-}
-
 /*
  * web 客户端的手机布局（mobile/MobileShell.tsx）—— 全部限定在 [data-mobile-shell] 之内，桌面布局里没有这个属性，
  * 这几条一概不生效。

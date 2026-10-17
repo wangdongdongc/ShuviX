@@ -5,7 +5,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 
 # ShuviX 小组件
 
-小组件（widget）是一个小型 React 应用，放在 ShuviX 的 widgets 文件夹下属于它自己的目录里。ShuviX 负责打包它、在 `/w/<id>/` 下提供服务。右侧面板的「Widget」标签页是一块摆着应用图标的主屏：点图标就在面板里打开这个小组件，用户也可以把它移到独立窗口（远程使用 ShuviX 时是一个浏览器标签页）。每个小组件有自己的数据库 schema 和自己的 git 仓库。每次构建成功后 ShuviX 都会记录一次提交，所以你从不自己运行 git。
+小组件（widget）是一个小型 React 应用，放在 ShuviX 的 widgets 文件夹下属于它自己的目录里。ShuviX 负责打包它、在 `/w/<id>/` 下提供服务。用户在右侧面板的「Widget」标签页里打开它，它在面板里运行，或者在独立窗口里（远程使用 ShuviX 时是一个浏览器标签页）。每个小组件有自己的数据库 schema 和自己的 git 仓库。每次构建成功后 ShuviX 都会记录一次提交，所以你从不自己运行 git。
 
 本文件就是完整的工作流程。细节在参考文件里；文末索引的每一行都写明了什么时候读哪一份。
 
@@ -34,7 +34,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 1. **Id**：小写 ASCII kebab-case，至少带一个连字符（`/^[a-z0-9]+(-[a-z0-9]+)+$/`），例如 `json-formatter`，不管用户用什么语言。**`name` 和 `description`** 用用户的语言写；它们会原样显示在小组件的卡片和窗口标题上。
 2. `shuvix widget init <id> --name "…" --description "…"`。在返回的 `projectDir` 下工作；入口文件是 `index.tsx`。
 3. **写代码之前**，先决定它是否存储记录（`references/data.md`；如果存，现在就写好并安装 `schema.sql`），以及它是否读取用户的文件（`references/files.md`）。
-4. 按 `references/design.md` 实现它，并画出它在主屏上的图标 `icon.svg`（同一份文件的「图标」一节）。
+4. 按 `references/design.md` 实现它。
 5. 用 `name` 的语言写一份简短的 `README.md`：它做什么、主要交互、数据模型、读取哪些文件、扩展点。
 6. `shuvix widget build <id> --message "<one-line summary>"`。遇到 `buildSuccess: false` 就修好 `buildErrors` 再构建。
 7. `shuvix widget open <id>`，然后汇报。

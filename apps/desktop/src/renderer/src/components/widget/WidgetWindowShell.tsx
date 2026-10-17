@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18next from 'i18next'
-import { Pin, RotateCw, X } from 'lucide-react'
+import { Wrench, Pin, RotateCw, X } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { isWebHost } from '../../host/hostMedia'
 import { WidgetFrame } from './WidgetFrame'
-import { WidgetIcon } from './WidgetIcon'
 
 function parseWidgetIdFromHash(): string | null {
   const hash = window.location.hash // 形如 "#widget-window?widgetId=xxx"
@@ -27,7 +26,6 @@ export function WidgetWindowShell(): React.JSX.Element {
   const { t } = useTranslation()
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
   const [name, setName] = useState('')
-  const [iconMtime, setIconMtime] = useState(0)
   const [alwaysOnTop, setAlwaysOnTop] = useState(false)
   const [reloadNonce, setReloadNonce] = useState(0)
 
@@ -53,11 +51,10 @@ export function WidgetWindowShell(): React.JSX.Element {
 
   const onWidget = useCallback((widget: WidgetSummary): void => {
     setName(widget.name)
-    setIconMtime(widget.iconMtime ?? 0)
     document.title = widget.name
   }, [])
 
-  // 改名 / 换图标同步标题栏；删除 / 归档时主进程会直接关窗，这里无需处理
+  // 改名同步标题栏；删除 / 归档时主进程会直接关窗，这里无需处理
   useEffect(() => {
     if (!widgetId) return undefined
     return window.api.events.subscribe((event) => {
@@ -131,11 +128,7 @@ export function WidgetWindowShell(): React.JSX.Element {
     <div className="flex flex-col h-full bg-bg-primary text-text-primary">
       {/* 自绘标题栏：整条可拖拽，按钮区豁免 */}
       <div className="titlebar-drag flex-shrink-0 flex items-center gap-2 h-9 px-3 border-b border-border-secondary/40 select-none">
-        <WidgetIcon
-          widget={{ id: widgetId, name, iconMtime }}
-          size={16}
-          className="flex-shrink-0"
-        />
+        <Wrench size={13} className="flex-shrink-0 text-violet-400" />
         <span className="flex-1 min-w-0 truncate text-[12px] font-medium">{name || ' '}</span>
         <div className="titlebar-no-drag flex items-center gap-0.5">
           {!isWebHost && (

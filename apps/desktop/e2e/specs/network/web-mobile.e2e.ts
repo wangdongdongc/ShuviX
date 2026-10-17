@@ -26,8 +26,9 @@
  *   M-11 对话页没有桌面顶栏的按钮（内置浏览器窗口、侧栏 / 面板开关）；点标题 → 会话设置
  *   M-12 文件抽屉列出 hello.txt，点遮罩收起；任务抽屉是空态（mobile.noTasks）
  *   M-13 在会话设置里删掉这条会话 → 对话页收起、列表里没了这一行、那条历史标记退掉
- *   M-14 真点小组件图标 → 新标签页 #widget-window?widgetId=…，页面里不开面板；真长按图标 → DOM 菜单里有
- *        「在独立窗口打开」、没有「在面板中打开」，也没有进整理状态
+ *   M-14 真点小组件卡片 → 新标签页 #widget-window?widgetId=…，页面里不开面板；真长按卡片 → DOM 菜单恰是
+ *        「在独立窗口打开 / 导出 / 归档 / 删除」（运行中多一个「停止」），没有「在面板中打开」
+ *   M-14b 真点卡片右上角（桌面上悬浮按钮所在的地方）→ 与点中间一样开新标签页：没有归档、没有删除确认框、没有停掉
  *   M-15 设置：分区列表 general … about + agents（voice / telegramBots 带 Beta）；进「通用」→ 返回键、头部名、
  *        设置行 flex-wrap: wrap 且标题栏 min-width 9em；回列表；「智能体」分区头部是 Agents
  *   M-16 #settings/general 在手机宽度直接进分区、返回是列表；#settings 是列表；1280 宽不是叠放
@@ -70,7 +71,8 @@ import {
   sidebarPane,
   webClientPane,
   webMobilePane,
-  widgetHomePane,
+  confirmPane,
+  widgetPanelPane,
   type WebMobileTab
 } from '../../harness/pages'
 import {
@@ -648,31 +650,74 @@ describe('phone layout: the shell', () => {
     expect(await config.isOpen()).toBe(false)
   })
 
-  it('M-14 a widget icon opens in a new tab on a tap; a long press shows the icon menu without arrange mode', async () => {
-    const home = widgetHomePane(page())
+  it('M-14 a widget card opens in a new tab on a tap; a long press shows the card menu', async () => {
+    const cards = widgetPanelPane(page())
     await mobile().tap({ tab: 'widgets' })
-    await until(async () => (await home.slotIds()).includes(WIDGET_ID), 'the widget icon')
+    await until(async () => (await cards.cardIds()).includes(WIDGET_ID), 'the widget card')
     const tabUrl = `http://127.0.0.1:${P}/#widget-window?widgetId=${WIDGET_ID}`
-    await mobile().tap({ widgetIcon: WIDGET_ID })
+    await mobile().tap({ widgetCard: WIDGET_ID })
     const tab = await waitBrowserTab(app, (u) => u === tabUrl, 'the #widget-window tab')
     openedTabs.add(tab.id)
-    expect(await home.panelApps()).toEqual([])
+    expect(await cards.panelApps()).toEqual([])
+    expect(await cards.foregroundApp()).toBeNull()
     await closeBrowserTab(app, tab.id)
     openedTabs.delete(tab.id)
 
     const tabsBefore = (await browserTabs(app)).map((t) => t.id).sort()
-    await mobile().longPress({ widgetIcon: WIDGET_ID }, 800)
-    const menu = await until(() => webClientPane(page()).domMenu(), 'the icon menu')
+    await mobile().longPress({ widgetCard: WIDGET_ID }, 800)
+    const menu = await until(() => webClientPane(page()).domMenu(), 'the card menu')
     const labels = menu.map((m) => m.label)
-    expect(labels).toContain(en.widgets.openInWindow)
     expect(labels).not.toContain(en.widgets.openInPanel)
-    expect(await home.editing()).toBe(false)
+    // 「停止」在不在取决于那个标签页把它注册上了没有；除此之外恰是这四项（也就没有整理图标）
+    expect(labels.filter((l) => l !== en.widgets.stop)).toEqual([
+      en.widgets.openInWindow,
+      en.widgets.exportAsVite,
+      en.widgets.archive,
+      en.widgets.delete
+    ])
     await sleep(500)
-    expect(await home.editing()).toBe(false)
     expect((await browserTabs(app)).map((t) => t.id).sort()).toEqual(tabsBefore)
-    expect(await home.panelApps()).toEqual([])
+    expect(await cards.panelApps()).toEqual([])
     await mobile().pressEscape()
     await until(async () => (await webClientPane(page()).domMenu()) === null, 'the menu closed')
+  })
+
+  it('M-14b a tap on the top-right corner of a card opens it like a tap in the middle (no hidden hover buttons)', async () => {
+    const cards = widgetPanelPane(page())
+    const registered = async (): Promise<string[]> =>
+      (await app.main.eval<{ registeredIds?: string[] }>('window.api.widget.getServerStatus()'))
+        .registeredIds ?? []
+    // afterEach 的 resetShell 把壳放回了会话页
+    await toTab('widgets')
+    await until(async () => (await cards.cardIds()).includes(WIDGET_ID), 'the widget card')
+    const tabUrl = `http://127.0.0.1:${P}/#widget-window?widgetId=${WIDGET_ID}`
+    // 那一点正是悬浮按钮（删除）所在的地方：按钮在触屏上不接点击，点下去的是卡片
+    expect(await cards.cornerButton(WIDGET_ID)).not.toBeNull()
+    const tabsBefore = (await browserTabs(app)).map((t) => t.id)
+    await mobile().tap({ widgetCardCorner: WIDGET_ID })
+    const tab = await waitBrowserTab(
+      app,
+      (u) => u === tabUrl,
+      'the #widget-window tab from the corner'
+    )
+    openedTabs.add(tab.id)
+    expect(tabsBefore).not.toContain(tab.id)
+    // 那个标签页把它注册上了，之后没有被停掉
+    await until(async () => (await registered()).includes(WIDGET_ID), 'the widget registered')
+    await sleep(300)
+    expect((await confirmPane(page()).snapshot()).open).toBe(false)
+    expect(
+      await app.main.eval<string[]>(
+        'window.api.widget.listArchived().then((l) => l.map((w) => w.id))'
+      )
+    ).not.toContain(WIDGET_ID)
+    expect(
+      await app.main.eval<string[]>('window.api.widget.list().then((l) => l.map((w) => w.id))')
+    ).toContain(WIDGET_ID)
+    expect(await registered()).toContain(WIDGET_ID)
+    expect(await cards.panelApps()).toEqual([])
+    await closeBrowserTab(app, tab.id)
+    openedTabs.delete(tab.id)
   })
 
   it('M-15 settings: the section list, a section with a back button and wrapping rows, the agents monitor section', async () => {

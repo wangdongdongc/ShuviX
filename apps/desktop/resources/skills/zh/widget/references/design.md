@@ -39,23 +39,6 @@
 
 输入框、按钮和输出块共用这套色板：`rounded-md`、`text-xs` / `text-sm`、上面的表面色和边框色，输入框上加 `focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500`。
 
-## 图标
-
-小组件目录里的 `icon.svg` 是它在 Widget 面板主屏上、以及它窗口标题栏里的图标。它是可选的：没有时，ShuviX 显示名字的第一个字，底色按 id 选定。
-
-- 正方形 `viewBox="0 0 64 64"`，根元素带 `xmlns="http://www.w3.org/2000/svg"`。铺满整个正方形：圆角由 ShuviX 裁，不要自己画圆角背景或边框。
-- 一个在 16px 下也认得出的简单图形。不要文字。
-- 颜色用主题 token，图标才会跟着应用主题走：背景用 `var(--viz-1)` … `var(--viz-8)` 或对应的 `var(--viz-N-tint)`，图形用 `var(--theme-bg-primary)` 或 `var(--viz-N-ink)`。`<style>`、`<script>`、`<foreignObject>` 和外部 `href` 在显示前会被剥掉。
-- 避免用 `id`，因为所有图标都在同一个页面上；渐变确实需要时，用小组件 id 作前缀。
-- 保持在 64 KB 以内。新画或改过的图标在下一次 `shuvix widget build` 之后出现在主屏上。
-
-```svg
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-<rect width="64" height="64" fill="var(--viz-3)"/>
-<path d="M18 22h28M18 32h28M18 42h18" stroke="var(--theme-bg-primary)" stroke-width="5" stroke-linecap="round"/>
-</svg>
-```
-
 ## 资源
 
 - 随小组件一起提供的图片放在它的目录里，并通过 import 引入（`import logo from './logo.svg'`）：`.svg`、`.png`、`.jpg` 和 `.gif` 会变成内联 data URL，所以要保持小。其他图片格式不能 import；改为通过 `fs/file` 从磁盘读取（`files.md`）。

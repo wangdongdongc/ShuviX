@@ -996,10 +996,6 @@ declare global {
       }) => Promise<{ success: boolean }>
       setArchived: (params: { id: string; archived: boolean }) => Promise<{ success: boolean }>
       delete: (id: string) => Promise<{ success: boolean }>
-      /** `icon.svg` 原文（没有 → null）；显示前要经 sanitizeAuthoredSvg */
-      getIcon: (id: string) => Promise<{ svg: string | null }>
-      /** 主屏图标顺序（整份替换） */
-      setHomeOrder: (ids: string[]) => Promise<{ success: boolean }>
       getServerStatus: () => Promise<{
         running: boolean
         port: number
@@ -1202,8 +1198,6 @@ declare global {
     updatedAt: number
     lastOpenedAt: number
     archivedAt: number
-    /** `icon.svg` 的修改时间（没有图标 → 0） */
-    iconMtime: number
   }
 
   interface Window {

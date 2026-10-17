@@ -5,7 +5,7 @@ description: "How to build, change, export and debug ShuviX Widgets — persiste
 
 # ShuviX Widgets
 
-A widget is a small React app in its own directory under ShuviX's widgets folder. ShuviX bundles it and serves it under `/w/<id>/`. The Widget tab of the right panel is a home screen of app icons: tapping one opens the widget inside the panel, and the user can move it to its own window (a browser tab when they use ShuviX remotely). Each widget has its own database schema and its own git repository. ShuviX records a commit after every successful build, so you never run git yourself.
+A widget is a small React app in its own directory under ShuviX's widgets folder. ShuviX bundles it and serves it under `/w/<id>/`. The user opens it from the Widget tab of the right panel, where it runs inside the panel or in its own window (a browser tab when they use ShuviX remotely). Each widget has its own database schema and its own git repository. ShuviX records a commit after every successful build, so you never run git yourself.
 
 This file is the whole workflow. The references hold the details; each row of the index at the end says when to read one.
 
@@ -34,7 +34,7 @@ This file is the whole workflow. The references hold the details; each row of th
 1. **Id**: lowercase ASCII kebab-case with at least one dash (`/^[a-z0-9]+(-[a-z0-9]+)+$/`), e.g. `json-formatter`, whatever the user's language. **`name` and `description`** in the user's language; they show verbatim on the widget's card and in its window title.
 2. `shuvix widget init <id> --name "…" --description "…"`. Work under the returned `projectDir`; the entry file is `index.tsx`.
 3. **Before writing code**, decide whether it stores records (`references/data.md`; if so, write and install `schema.sql` now) and whether it reads the user's files (`references/files.md`).
-4. Implement it, following `references/design.md`, and draw its home-screen icon, `icon.svg` (same file, "Icon").
+4. Implement it, following `references/design.md`.
 5. Write a short `README.md` in the language of `name`: what it does, its main interactions, its data model, the files it reads, its extension points.
 6. `shuvix widget build <id> --message "<one-line summary>"`. On `buildSuccess: false`, fix `buildErrors` and build again.
 7. `shuvix widget open <id>`, then report.

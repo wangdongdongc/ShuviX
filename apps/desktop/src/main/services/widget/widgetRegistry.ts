@@ -65,11 +65,6 @@ interface WidgetState {
 
 interface ConfigFile {
   state: Record<string, Partial<WidgetState>>
-  /**
-   * 主屏（Widget 面板）上图标的顺序：用户在「整理图标」里拖出来的那一份。不在表里的 widget（新建的、
-   * 刚取消归档的）排在后面、按创建时间先后 —— 与手机主屏一样，新应用落在最后一页的末尾。
-   */
-  homeOrder?: string[]
 }
 
 const DEFAULT_STATE: WidgetState = {
@@ -98,12 +93,7 @@ function readConfig(): ConfigFile | undefined {
   try {
     const raw = readFileSync(configPath(), 'utf-8')
     const parsed = JSON.parse(raw) as Partial<ConfigFile>
-    return {
-      state: parsed.state && typeof parsed.state === 'object' ? parsed.state : {},
-      ...(Array.isArray(parsed.homeOrder)
-        ? { homeOrder: parsed.homeOrder.filter((id): id is string => typeof id === 'string') }
-        : {})
-    }
+    return { state: parsed.state && typeof parsed.state === 'object' ? parsed.state : {} }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: {} } // 首次运行
     log.warn(
@@ -211,36 +201,11 @@ class WidgetRegistry {
     return out
   }
 
-  /** 未归档，按主屏顺序（`homeOrder`；不在表里的排后面，按创建时间先后） */
+  /** 未归档，按最近打开倒序（没打开过的按创建时间倒序） */
   findAllActive(): Widget[] {
-    const order = readConfig()?.homeOrder ?? []
-    const rank = new Map(order.map((id, i) => [id, i]))
-    const at = (w: Widget): number => rank.get(w.id) ?? Number.MAX_SAFE_INTEGER
     return this.listAll()
       .filter((w) => w.archivedAt === 0)
-      .sort(
-        (a, b) =>
-          at(a) - at(b) || a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-      )
-  }
-
-  /** 把一个 id 从主屏顺序里拿掉（归档时：取消归档后它回到主屏末尾，而不是原来的位置） */
-  removeFromHomeOrder(id: string): void {
-    const config = readConfig()
-    if (!config?.homeOrder?.includes(id)) return
-    config.homeOrder = config.homeOrder.filter((x) => x !== id)
-    writeConfig(config)
-  }
-
-  /**
-   * 记下主屏顺序。只收合法 id、去重；整份替换 —— 调用方（面板的「整理图标」）交的就是它看到的全部顺序。
-   * 账目读不出来时不写（同 patchState 的理由）
-   */
-  setHomeOrder(ids: readonly string[]): void {
-    const config = readConfig()
-    if (!config) return
-    config.homeOrder = [...new Set(ids.filter((id) => WIDGET_ID_REGEX.test(id)))]
-    writeConfig(config)
+      .sort((a, b) => b.lastOpenedAt - a.lastOpenedAt || b.createdAt - a.createdAt)
   }
 
   /** 已归档，按归档时间倒序 */
@@ -312,11 +277,8 @@ class WidgetRegistry {
   /** 删除账目条目（目录本身由 widgetService 负责移除） */
   deleteById(id: string): void {
     const config = readConfig()
-    if (!config) return
-    const inOrder = config.homeOrder?.includes(id) ?? false
-    if (config.state[id] === undefined && !inOrder) return
+    if (!config || config.state[id] === undefined) return
     delete config.state[id]
-    if (inOrder) config.homeOrder = config.homeOrder!.filter((x) => x !== id)
     writeConfig(config)
   }
 

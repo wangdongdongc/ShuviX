@@ -1,12 +1,14 @@
 /**
- * 设置 → 已归档 → 小组件（2026-10-16）—— 归档的小组件不再占 Widget 面板主屏的位置，都在这里：恢复（回到主屏**末尾**，
- * 不回原来的位置 —— 归档时它已从 homeOrder 里拿掉）或删除。桌面经 `extraTabs` 把「小组件」子 tab 交给共享的 ArchivedSettings。
+ * 设置 → 已归档 → 小组件（2026-10-16）—— 归档的小组件不在 Widget 面板里，都在这里：恢复（回到面板里按上次打开的时间
+ * 该在的位置 —— 归档不动 lastOpenedAt）或删除。桌面经 `extraTabs` 把「小组件」子 tab 交给共享的 ArchivedSettings。
  *
- * 真的 isolated 实例，种 4 个最小 widget；归档 / 主屏顺序经 IPC 摆好，恢复 / 删除在设置窗口里点。主屏顺序看主窗右侧面板。
- * 三语取串照抄 archived-projects.e2e.ts：隔离实例跟系统语言走，断的是「是哪一句」。
+ * 真的 isolated 实例，种 4 个最小 widget（A 在账目里一分钟前打开过，其余没打开过）；归档经 IPC 摆好，恢复 / 删除在设置窗口里点。
+ * 面板顺序看主窗右侧面板的卡片。三语取串照抄 archived-projects.e2e.ts：隔离实例跟系统语言走，断的是「是哪一句」。
  *
- *   AW-1 已归档页的子 tab 是「项目」「小组件」；小组件 tab：没有归档的 → widgets.noArchived；归档三个 → 按归档时间倒序列出
- *   AW-2 恢复 → 那一行没了；主窗主屏上它排在最后（尽管它创建得最早、归档前排第一）
+ *   AW-1 已归档页的子 tab 是「项目」「小组件」；小组件 tab：没有归档的 → widgets.noArchived；归档三个 → 按归档时间倒序列出；
+ *        每行行首是归档图标，没有 v0.2.16 的小组件图标
+ *   AW-1b 没有悬停的设备（触屏模拟让 `(hover: none)` 成立）上行尾的恢复 / 删除一直显示；有悬停、鼠标不在行上时透明
+ *   AW-2 恢复 → 那一行没了；面板里它排在最前（它打开过，别的没有），不是末尾
  *   AW-3 删除：确认框点名这个小组件；取消 → 还在；确认 → listArchived 里没了、目录删了
  *   AW-4 切回「项目」→ 项目的空态
  */
@@ -22,7 +24,7 @@ import {
   archivedSettingsPane,
   confirmPane,
   rightPanelPane,
-  widgetHomePane,
+  widgetPanelPane,
   type ArchivedSettingsPane
 } from '../../harness/pages'
 import { waitRendererReady } from '../../harness/seed'
@@ -88,9 +90,15 @@ beforeAll(async () => {
   await panel.open()
   await panel.activateWidgetTab()
   await panel.setPanelWidth(360)
-  const home = widgetHomePane(app.main)
+  // A 一分钟前打开过（第一次刷新之前写好账目）：它排最前，其余按创建时间倒序
+  writeFileSync(
+    join(app.home, '.shuvix', 'widgets', '.config.json'),
+    JSON.stringify({ state: { 'aw-aa': { lastOpenedAt: Date.now() - 60_000 } } }, null, 2) + '\n'
+  )
+  const home = widgetPanelPane(app.main)
   await home.reload()
-  await until(async () => (await home.slotIds()).join() === ids.join() || null, 'all icons')
+  const order = ['aw-aa', 'aw-dd', 'aw-cc', 'aw-bb']
+  await until(async () => (await home.cardIds()).join() === order.join() || null, 'all cards')
 
   settings = await app.openSettings('archived')
   archived = archivedSettingsPane(settings)
@@ -116,8 +124,6 @@ describe('archived widgets in settings', () => {
     expect(tabs[1].underline).toBe(true)
     expect(tabs[0].underline).toBe(false)
 
-    // 主屏顺序先落一份（恢复时要看出「回到末尾」而不是「回到原位」）
-    await app.main.eval(`window.api.widget.setHomeOrder(${JSON.stringify(ids)}).then(() => true)`)
     for (const id of ids.slice(0, 3)) {
       await setArchived(id, true)
       await sleep(20) // 归档时间分得开
@@ -128,20 +134,55 @@ describe('archived widgets in settings', () => {
       'archived widgets listed newest first'
     )
     expect(await archivedIds()).toEqual(newestFirst)
+    for (const id of newestFirst) {
+      const row = (await archived.archivedWidgetRow(id))!
+      expect(row.glyph, id).toBe('lucide-archive')
+      expect(row.legacyIcon, id).toBe(false)
+    }
   })
 
-  it('AW-2 Restore puts the widget back at the end of the home screen', async () => {
-    const home = widgetHomePane(app.main)
-    await until(async () => (await home.slotIds()).join() === 'aw-dd' || null, 'only D on home')
+  it('AW-1b on a device without hover the Restore / Delete buttons are always shown', async () => {
+    // CDP 的鼠标挪到窗口左上角：之后真鼠标不动，行就不在 :hover 里
+    await settings.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 })
+    expect(await settings.eval<boolean>(`matchMedia('(hover: none)').matches`)).toBe(false)
+    await until(
+      async () => (await archived.archivedWidgetRow('aw-aa'))?.actionsOpacity === 0 || null,
+      'the row buttons hidden without hover'
+    )
+    await settings.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
+    try {
+      expect(
+        await settings.eval<boolean>(`matchMedia('(hover: none)').matches`),
+        'precondition: touch emulation makes hover none'
+      ).toBe(true)
+      await until(
+        async () => (await archived.archivedWidgetRow('aw-aa'))?.actionsOpacity === 1 || null,
+        'the row buttons shown without hover'
+      )
+    } finally {
+      await settings.send('Emulation.setTouchEmulationEnabled', { enabled: false })
+    }
+    await until(
+      async () => (await archived.archivedWidgetRow('aw-aa'))?.actionsOpacity === 0 || null,
+      'the row buttons hidden again with hover'
+    )
+  })
+
+  it('AW-2 Restore puts the widget back where its last open places it (first), not at the end', async () => {
+    const home = widgetPanelPane(app.main)
+    await until(
+      async () => (await home.cardIds()).join() === 'aw-dd' || null,
+      'only D in the panel'
+    )
     await archived.clickArchivedWidget('aw-aa', RESTORE)
     await until(
       async () => !(await archived.archivedWidgetIds()).includes('aw-aa') || null,
       'the restored row gone'
     )
-    expect(await activeIds()).toEqual(['aw-dd', 'aw-aa'])
+    expect(await activeIds()).toEqual(['aw-aa', 'aw-dd'])
     await until(
-      async () => (await home.slotIds()).join() === 'aw-dd,aw-aa' || null,
-      'A last on the home screen'
+      async () => (await home.cardIds()).join() === 'aw-aa,aw-dd' || null,
+      'A first in the panel'
     )
   })
 
