@@ -913,8 +913,6 @@ describe('D10-56 子会话发送被拒（模型被拒）', () => {
       parentId: 'P',
       childId: 'c1',
       message: 'go',
-      background: false,
-      timeoutSeconds: 5,
       requestId: 'subsession:P:56'
     })
     expect('error' in outcome).toBe(true)
@@ -954,7 +952,7 @@ describe('D10-57 stop', () => {
 })
 
 describe('D10-58 新格式子会话的答复（P2-10-28）', () => {
-  it("D10-58 / P2-10-28 前台 prompt 跑完 kind:'answered'，答复取自子会话的 lastAnswer", async () => {
+  it('D10-58 / P2-10-28 prompt 只回执 started（§20）；跑完之后 read 交回子会话的 lastAnswer，快照 idle', async () => {
     insert('P')
     insert('c1', { parentId: 'P' })
     fakeHost.configure = (session) => (session.answer = { text: 'DONE.' })
@@ -962,13 +960,10 @@ describe('D10-58 新格式子会话的答复（P2-10-28）', () => {
       parentId: 'P',
       childId: 'c1',
       message: 'go',
-      background: false,
-      timeoutSeconds: 5,
       requestId: 'subsession:P:58'
     })
-    expect(outcome).toEqual({
-      kind: 'answered',
-      id: 'c1',
+    expect(outcome).toEqual({ kind: 'started', id: 'c1' })
+    expect(await subSessionRunner.read('P', 'c1')).toEqual({
       answer: 'DONE.',
       info: expect.objectContaining({ id: 'c1', status: 'idle' })
     })

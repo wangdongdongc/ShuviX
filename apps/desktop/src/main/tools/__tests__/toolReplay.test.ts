@@ -41,7 +41,7 @@ vi.mock('../../services/sessionRecords', () => ({ sessionRecords: { pick: vi.fn(
 vi.mock('../../services/sessionService', () => ({ sessionService: { updateTitle: vi.fn() } }))
 vi.mock('../../services/subSessionRunner', () => ({
   subSessionRunner: {},
-  DEFAULT_PROMPT_TIMEOUT_SEC: 300
+  DEFAULT_WAIT_TIMEOUT_SEC: 300
 }))
 vi.mock('../../services/artifacts/store', () => ({
   listArtifacts: vi.fn(),

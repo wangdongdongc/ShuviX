@@ -7,7 +7,7 @@
  *
  *   K4  titler / 审查员留在所属会话的存储里，从不被续跑
  *       K4-01 titler 落在哪   K4-02 titler 崩溃时被扣住   K4-03 审查员崩溃时被扣住（继续 / abort-then-send）
- *       K4-04 子会话里的审查员（Q16）   K4-05 重新挂上不触发 hook（P2-10 PIN-03）
+ *       K4-04 子会话里的审查员（Q16）   K4-05 崩溃与恢复不再触发 hook（P2-10 PIN-03）
  *   K5  派生 agent 经真桌面 ToolHost（P2-04）与派发工具（P2-05）；身份（P2-06 / P2-07）
  *       K5-01 派发主线   K5-02 每次调用的身份（安全主体 + 内置 MCP 解析器）   K5-03 策略看见派生身份、审查员归
  *       子 agent 的那次调用   K5-04 子 agent 中途崩溃 → 桌面重建   K5-05 子 agent 跑着时 Esc
@@ -315,12 +315,15 @@ describe('K4 titler and reviewer stay in the owning session and are never resume
   )
 
   it(
-    'K4-05 重新挂上不触发 hook（P2-10 PIN-03）：进程 1 后 C 恰一个 titler 对话；崩溃、P.continue() 之后仍是一个，进程 2 没有 titler 请求，也没有 refine',
+    'K4-05 崩溃与恢复不再触发 hook（P2-10 PIN-03）：进程 1 后 C 恰一个 titler 对话；崩溃落在回执之后，P.continue() 只请求 P（§20：不再重跑 prompt、不再重新挂上 C），用户再继续 C —— 仍是一个 titler 对话，进程 2 没有 titler 请求，也没有 refine',
     async () => {
+      // 「重新挂上（同一幂等键再发一次）不受理、不触发 session.prompt-accepted」本身由 subSessionDurable.unit 的
+      // P2-10-10 / BG-33 用假宿主钉：§20 起崩溃落在回执之后，真宿主里 P 的继续走不到重新挂上那一路
       const p1 = proc()
       insert('P')
       insert('C', { parentId: 'P', title: DEFAULT_TITLE })
-      const stall = stalled()
+      const cStall = stalled()
+      const pStall = stalled()
       p1.router.on(
         'P',
         role('chat', 'start'),
@@ -328,12 +331,17 @@ describe('K4 titler and reviewer stay in the owning session and are never resume
           'session',
           { action: 'prompt-sub-session', sub_session_id: 'C', message: 'C-task' },
           'call-prompt'
-        )
+        ),
+        pStall.step
       )
-      p1.router.on('C', role('chat', 'C-task'), stall.step)
+      p1.router.on('C', role('chat', 'C-task'), cStall.step)
       p1.router.on('titler', role('titler'), answer('T'))
       void p1.track(p1.chatGateway.prompt('P', 'start'))
-      await withTimeout(stall.reached, 10000, 'C request')
+      await withTimeout(
+        Promise.all([cStall.reached, pStall.reached]),
+        10000,
+        'C request and P next step'
+      )
       await waitFor(
         async () => (await hookConversations('C', 'auto-title')).length === 1,
         10000,
@@ -343,12 +351,16 @@ describe('K4 titler and reviewer stay in the owning session and are never resume
       await waitFor(() => settingsOf('C').runState === 'busy', 5000, 'C busy')
 
       const p2 = await crash()
-      p2.router.on('C', role('chat', 'C-task'), answer('C-done'))
       p2.router.on('P', role('chat', 'start'), answer('P-final'))
       const parent = await p2.sessionService.ensureAgentSession('P')
       expect(await withTimeout(parent!.continue(), 15000, 'P.continue')).toEqual({})
+      expect(p2.router.served).toEqual(['P'])
+
+      p2.router.on('C', role('chat', 'C-task'), answer('C-done'))
+      const child = await p2.sessionService.ensureAgentSession('C')
+      expect(await withTimeout(child!.continue(), 15000, 'C.continue')).toEqual({})
       await sleep(300)
-      expect(p2.router.served).toEqual(['C', 'P'])
+      expect(p2.router.served).toEqual(['P', 'C'])
       expect(p2.router.unmatched).toEqual([])
       expect(await hookConversations('C', 'auto-title')).toHaveLength(1)
     },
@@ -561,11 +573,7 @@ describe('K5 spawned agents through the real desktop ToolHost', () => {
         'coding',
         role('coding'),
         callTool('session', { action: 'create-sub-session', title: 'worker' }, 'call-create'),
-        callTool(
-          'session',
-          { action: 'prompt-sub-session', message: 'sub-task', run_in_background: true },
-          'call-prompt'
-        ),
+        callTool('session', { action: 'prompt-sub-session', message: 'sub-task' }, 'call-prompt'),
         answer('dispatched')
       )
       p.router.on('sub', role('chat', 'sub-task'), hold.step)

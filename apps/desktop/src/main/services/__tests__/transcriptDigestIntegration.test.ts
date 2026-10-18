@@ -326,12 +326,12 @@ describe('P2-14-36 nothing is created', () => {
 })
 
 describe('RSRC · 真发送路径上的来源（§19.7）', () => {
-  /** 父会话驱动子会话的那份发送参数（subSessionRunner 给的形状） */
+  /** 父会话驱动子会话的那份发送参数（subSessionRunner 给的形状；§20 起标记恒为后台） */
   const drive = (
     n: number
   ): { requestId: string; driven: { parentId: string; background: boolean } } => ({
     requestId: `subsession:top:${n}`,
-    driven: { parentId: 'top', background: false }
+    driven: { parentId: 'top', background: true }
   })
 
   async function seedTopAndChild(): Promise<void> {

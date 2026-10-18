@@ -1,20 +1,23 @@
 /**
  * 父会话介入子会话（docs/sub-session-design.md §19）—— 跨会话、跨进程才证得出来的那几条链路：
  *
- *   子会话在父会话发起的那一轮里停下来问 → 这一轮的后台任务进「等待输入」→ 前台等待当场交回 / 没人等就经枢纽
- *   通知父会话（空闲 → 自动续跑）→ 父会话 `answer-sub-session` 代答（应答只送进子会话自己，答题方由宿主记下）→
- *   子会话接着跑完；权限卡只转告；`steer-sub-session` 落进跑着的一轮；`inspect-sub-session` 的大纲 / 展开 / 搜索；
- *   用户自己发起的一轮不通知、不能代答、不能插话。
+ *   子会话在父会话发起的那一轮里停下来问 → 这一轮的后台任务进「等待输入」→ `wait-for-sub-sessions` 握着就由它交回 /
+ *   没人等就经枢纽通知父会话（空闲 → 自动续跑）→ 父会话 `answer-sub-session` 代答（只回执；应答只送进子会话自己，
+ *   答题方由宿主记下）→ 子会话接着跑完，答复经完成通知或 wait 交回；权限卡只转告；`steer-sub-session` 落进跑着的
+ *   一轮；`inspect-sub-session` 的大纲 / 展开 / 搜索；用户自己发起的一轮不通知、不能代答、不能插话；父会话被停不
+ *   级联到子会话（§20）。
  *
  * 模型侧是假提供商，**每个回合都按内容认领**（父会话与子会话的请求交错到达）：
  *  - `isParent` = 请求里有父会话的第一条用户消息（`P_MARK`）—— 它永远在父会话的历史里、子会话的历史里永远没有；
  *  - `isChild`  = 不是父会话 + 最后一条用户消息恰为派进去的任务（`C_MARK`）。**先排除父会话**：父会话的历史里有
  *    `prompt-sub-session` 的参数，裸的 `raw.includes(C_MARK)` 会把它认成子会话。
  *
- * 确定性的三个抓手：
+ * 确定性的四个抓手：
  *  1. 先让父会话空闲、再放子会话出问题：子会话第一轮挂在具名 hold 槽 `child` 里，父会话那一轮落定之后才放；
  *  2. 要看「卡在等输入」的中间态，就把父会话被叫醒的那一轮挂在 `parent` 槽里（两个槽可以同时挂着）；
- *  3. 否定断言用有界静默窗（`quiet`，1500 ms > 枢纽合并窗口 + 续跑合并窗口），只用于「不该有」，正向一律等。
+ *  3. 否定断言用有界静默窗（`quiet`，1500 ms > 枢纽合并窗口 + 续跑合并窗口），只用于「不该有」，正向一律等；
+ *  4. `prompt` / `answer` 只回执（§20），回执的种类取决于子会话在 50 ms 确认窗里停没停下来问 —— 凡断言回执的，子会话
+ *     那一步都挂着（于是恒为 `started`）；要 `wait` 握着它的，先等视图里那次 wait 在跑（`waitArmed`）再放。
  *
  * **不装 `installAutoAllow`**（刻意）：它对任何挂着的询问都回「允许 + 空选」，会抢在父会话前面把选择题答掉。
  * 除 WP6-06 那张故意的权限卡外，脚本只碰免询问的路径（项目目录里的 ls / read、ask）。
@@ -58,6 +61,11 @@ const MODEL = 'e2e-model'
 const HOLD_MS = 30_000
 /** 否定断言的静默窗 */
 const QUIET_MS = 1500
+/**
+ * 父会话的 `wait` 在视图里已经在跑之后，再留给它登记成「握着这条子会话」的余量（中间只隔两次 memo 读写）。
+ * 枢纽的询问通知与完成通知都在那一刻看「有没有 wait 握着」，所以放子会话往下走之前必须先过这一段
+ */
+const WAIT_ARMED_MS = 300
 /** 一条流程的用例上限（几轮父会话 + 子会话 + 通知的合并窗口） */
 const FLOW_TIMEOUT = 120_000
 
@@ -161,6 +169,21 @@ const resultsOf = async (sid: string, callId: string): Promise<ToolResult[]> =>
 
 const quiet = (ms = QUIET_MS): Promise<void> => sleep(ms)
 
+/** 等这条会话的某次工具调用（wait）真的挂上了：视图里它在跑，再留登记的余量 */
+const waitArmed = async (sid: string, callId: string): Promise<void> => {
+  await probe.waitView(
+    sid,
+    (v) => v.toolRuns[callId]?.status === 'running',
+    30_000,
+    `${callId} running in ${sid}`
+  )
+  await sleep(WAIT_ARMED_MS)
+}
+
+/** 结果带不带后台标签（`details.background`，与 bash 后台任务同一枚） */
+const backgroundTagOf = (r: ToolResult): boolean | undefined =>
+  (r.details as { background?: boolean } | undefined)?.background
+
 /** 等某个 hold 槽里挂着的恰好是满足 pred 的那个请求 */
 const waitHeld = (
   key: string,
@@ -254,9 +277,9 @@ afterAll(async () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────
-// A. 后台主链：问 → 父会话被叫醒 → 代答 → 前台等回这一轮的答复（WP6-01 / 02 / 03 一条流程）
+// A. 主链：问 → 父会话被叫醒 → 代答（回执）→ 跑完再被完成通知叫醒、wait 收回答复（WP6-01 / 02 / 03 一条流程）
 
-describe('后台子会话停下来问：通知、代答、留痕', () => {
+describe('子会话停下来问：通知、代答、留痕', () => {
   const P_MARK = 'P1-PARENT-ASK-FLOW'
   const C_MARK = 'C1-CHILD-TASK'
   const QUESTION = 'Q1-keep-old-api?'
@@ -271,6 +294,8 @@ describe('后台子会话停下来问：通知、代答、留痕', () => {
   const isChild = (r: FakeRequest): boolean => !isParent(r) && r.lastUserText === C_MARK
   const parentWoken = (r: FakeRequest): boolean =>
     isParent(r) && r.lastUserText.includes('status="waiting-input"')
+  const parentDone = (r: FakeRequest): boolean =>
+    isParent(r) && r.lastUserText.includes('has finished')
 
   let pair: Pair
   let bystander = ''
@@ -281,7 +306,7 @@ describe('后台子会话停下来问：通知、代答、留痕', () => {
   let midRow: TaskRowShot | null = null
 
   it(
-    'WP6-01 后台子会话停下来问 → 空闲的父会话被通知、自动续跑 → 代答 → 前台等回这一轮的答复',
+    'WP6-01 子会话停下来问 → 空闲的父会话被通知、自动续跑 → 代答只回执 → 跑完再被完成通知叫醒，wait 收回答复',
     async () => {
       pair = await newPair('A')
       bystander = await app.main.eval<string>(
@@ -295,8 +320,7 @@ describe('后台子会话停下来问：通知、代答、留痕', () => {
             sessionCall('call_a_prompt', {
               action: 'prompt-sub-session',
               sub_session_id: pair.child,
-              message: C_MARK,
-              run_in_background: true
+              message: C_MARK
             })
           ],
           when: isParent
@@ -325,10 +349,18 @@ describe('后台子会话停下来问：通知、代答、留痕', () => {
           toolCalls: [
             sessionCall('call_a_answer', { action: 'answer-sub-session', selections: [KEEP] })
           ],
-          when: isParent
+          when: parentWoken
         },
-        { text: 'C1-CHILD-FINAL', when: isChild },
-        { text: 'P1-ALL-DONE', when: isParent },
+        // 代答只回执：被叫醒的这一轮就此收尾
+        { text: 'answered.', when: parentWoken },
+        // 答完之后子会话的下一步：挂住，等父会话那一轮落定再放 —— 完成通知只能经自动续跑到达
+        { text: 'C1-CHILD-FINAL', when: isChild, holdMs: HOLD_MS, holdKey: 'child2' },
+        // 被完成通知叫醒的那一轮：照通知说的，用 wait 收
+        {
+          toolCalls: [sessionCall('call_a_collect', { action: 'wait-for-sub-sessions' })],
+          when: parentDone
+        },
+        { text: 'P1-ALL-DONE', when: parentDone },
         // 旁观会话：同一个询问 id
         {
           toolCalls: [askCall(ASK_ID, 'B1-question?', ['B1-OPT-X', 'B1-OPT-Y'])],
@@ -373,11 +405,15 @@ describe('后台子会话停下来问：通知、代答、留痕', () => {
       )
       provider.release('parent')
 
+      // 代答回执、那一轮收尾时子会话的下一步还挂着；放它跑完 → 完成通知 → 父会话再被叫醒
+      await waitAssistant(pair.parent, 'answered.')
+      await waitHeld('child2', isChild, 'child turn 2 held')
+      provider.release('child2')
       const parentMsgs = await waitAssistant(pair.parent, 'P1-ALL-DONE')
 
-      // 1. 恰好一条系统通知：可代答的那一块，不是转告
+      // 1. 两条系统通知：先是可代答的那一块（不是转告），再是跑完的那一条
       const notices = systemNotices(parentMsgs)
-      expect(notices).toHaveLength(1)
+      expect(notices).toHaveLength(2)
       const notice = notices[0].content
       expect(notice).toContain('status="waiting-input"')
       expect(notice).toContain('It stopped to ask a question in the turn you started')
@@ -388,26 +424,41 @@ describe('后台子会话停下来问：通知、代答、留痕', () => {
       expect(notice).toContain('answer-sub-session')
       expect(notice).not.toContain('for="user"')
       expect(notice).not.toContain('<blocked-on-user-approval>')
+      const finished = notices[1].content
+      expect(finished).toContain(`<sub-session id="${pair.child}"`)
+      expect(finished).toContain('has finished')
+      expect(finished).toContain('wait-for-sub-sessions')
+      // 父会话代答不是用户插手
+      expect(finished.split('\n')[0]).not.toContain('user-intervened')
 
       // 2. 模型以 user 角色看到它；续跑不是用户发起的 —— 父会话没有新的非通知用户消息
       expect(wokenRequest.lastUserText.trim()).toBe(notice.trim())
       expect(userMessages(parentMsgs)).toEqual([P_MARK])
 
-      // 3. 代答的结果：前台交回这一轮的答复（不是回执）
+      // 3. 代答的结果只是回执：在跑、带后台标签，不带答复
       const answer = await resultOf(pair.parent, 'call_a_answer')
       expect(answer.isError).toBe(false)
-      expect(answer.result).toContain('<reply>\nC1-CHILD-FINAL\n</reply>')
-      expect(answer.result).toContain(`<sub-session id="${pair.child}"`)
-      expect(openTagOf(answer.result, pair.child)).not.toContain('user-intervened')
-      expect((answer.details as { background?: boolean } | undefined)?.background).not.toBe(true)
+      expect(answer.result).toContain(`<sub-session id="${pair.child}" status="running"/>`)
+      expect(answer.result).toContain('Answered; it carries on in the background.')
+      expect(answer.result).not.toContain('<reply>')
+      expect(answer.result).not.toContain('C1-CHILD-FINAL')
+      expect(backgroundTagOf(answer)).toBe(true)
 
-      // 4. 代答不是一条用户消息
+      // 4. 答复经 wait 收回，在围栏里；代答不算用户插手
+      const collected = await resultOf(pair.parent, 'call_a_collect')
+      expect(collected.isError).toBe(false)
+      expect(collected.result).toContain('<sub-sessions status="settled">')
+      expect(collected.result).toContain('<reply>\nC1-CHILD-FINAL\n</reply>')
+      expect(openTagOf(collected.result, pair.child)).not.toContain('user-intervened')
+      expect(backgroundTagOf(collected)).not.toBe(true)
+
+      // 5. 代答不是一条用户消息
       expect(userMessages(await listMessages(pair.child))).toEqual([C_MARK])
 
-      // 5. 这一轮的完成由 answer 那次调用交回，不另发完成通知
+      // 6. 没有第三条通知；父会话的请求：派活、收尾、被叫醒（插话）、代答、收尾、被叫醒（wait）、收尾
       await quiet()
-      expect(systemNotices(await listMessages(pair.parent))).toHaveLength(1)
-      expect(provider.requests().filter(isParent)).toHaveLength(5)
+      expect(systemNotices(await listMessages(pair.parent))).toHaveLength(2)
+      expect(provider.requests().filter(isParent)).toHaveLength(7)
     },
     FLOW_TIMEOUT
   )
@@ -494,20 +545,22 @@ describe('后台子会话停下来问：通知、代答、留痕', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────
-// B. 前台代答（WP6-04）
+// B. wait 握着时停下来问（WP6-04）
 
-describe('前台等待遇到询问：当场交回、代答、零通知', () => {
+describe('wait 握着时停下来问：wait 交回、代答只回执、零通知', () => {
   const P_MARK = 'P4-PARENT-FG'
   const C_MARK = 'C4-CHILD-TASK'
   const isParent = (r: FakeRequest): boolean => r.raw.includes(P_MARK)
   const isChild = (r: FakeRequest): boolean => !isParent(r) && r.lastUserText === C_MARK
 
   it(
-    'WP6-04 当场交回；wait 报 asking；错选项被拒且没发；message 代答后下一问再次交回；selections 代答收到答复；全程零通知',
+    'WP6-04 prompt 只回执；wait 报 asking；错选项被拒且没发；message 代答只回执、下一问由 wait 交回；selections 代答之后 wait 收到答复；全程零通知',
     async () => {
       const pair = await newPair('B')
       provider.reset()
       await events.clear()
+      // 整条都在父会话的一轮里。子会话的每一步都挂住，等父会话下一次 wait 握着了才放 —— 它停下来问 / 跑完都落在
+      // 某次 wait 里（于是一条通知都没有），回执也恒为「在跑」
       provider.script(
         {
           toolCalls: [
@@ -521,11 +574,13 @@ describe('前台等待遇到询问：当场交回、代答、零通知', () => {
         },
         {
           toolCalls: [askCall('call_b_ask1', 'Q4a-which-path?', ['OPT-B1-A', 'OPT-B1-B'])],
-          when: isChild
+          when: isChild,
+          holdMs: HOLD_MS,
+          holdKey: 'child'
         },
         {
           toolCalls: [
-            sessionCall('call_b_wait', {
+            sessionCall('call_b_wait1', {
               action: 'wait-for-sub-sessions',
               sub_session_id: pair.child
             })
@@ -553,7 +608,18 @@ describe('前台等待遇到询问：当场交回、代答、零通知', () => {
         },
         {
           toolCalls: [askCall('call_b_ask2', 'Q4b-which-name?', ['OPT-B2-A', 'OPT-B2-B'])],
-          when: isChild
+          when: isChild,
+          holdMs: HOLD_MS,
+          holdKey: 'child2'
+        },
+        {
+          toolCalls: [
+            sessionCall('call_b_wait2', {
+              action: 'wait-for-sub-sessions',
+              sub_session_id: pair.child
+            })
+          ],
+          when: isParent
         },
         {
           toolCalls: [
@@ -561,32 +627,52 @@ describe('前台等待遇到询问：当场交回、代答、零通知', () => {
           ],
           when: isParent
         },
-        { text: 'C4-CHILD-FINAL', when: isChild },
+        { text: 'C4-CHILD-FINAL', when: isChild, holdMs: HOLD_MS, holdKey: 'child3' },
+        {
+          toolCalls: [
+            sessionCall('call_b_wait3', {
+              action: 'wait-for-sub-sessions',
+              sub_session_id: pair.child
+            })
+          ],
+          when: isParent
+        },
         { text: 'P4-DONE', when: isParent }
       )
 
-      // 整条都在父会话的一轮里：返回即落定
-      await promptSession(pair.parent, P_MARK)
+      const turn = promptSession(pair.parent, P_MARK).catch((error: unknown) => error)
+      await waitHeld('child', isChild, 'child step 1 held')
+      await waitArmed(pair.parent, 'call_b_wait1')
+      provider.release('child')
+      await waitHeld('child2', isChild, 'child step 2 held')
+      await waitArmed(pair.parent, 'call_b_wait2')
+      provider.release('child2')
+      await waitHeld('child3', isChild, 'child step 3 held')
+      await waitArmed(pair.parent, 'call_b_wait3')
+      provider.release('child3')
+      await turn
       expect(hasAssistantText(await listMessages(pair.parent), 'P4-DONE')).toBe(true)
 
-      // 1. 前台 prompt 遇到询问当场交回：这一轮还开着、转为脱离（后台标签）
+      // 1. prompt 只回执：在跑、带后台标签，没有询问也没有答复
       const first = await resultOf(pair.parent, 'call_b_prompt')
       expect(first.isError).toBe(false)
-      expect(first.result).toContain('status="waiting-input"')
-      expect(first.result).toContain('<question ask_id="call_b_ask1">')
-      expect(first.result).toContain('Q4a-which-path?')
-      expect(first.result).toContain('1. OPT-B1-A')
-      expect(first.result).toContain('2. OPT-B1-B')
-      expect(first.result).toContain('You may answer it for the user')
-      expect(first.result).toContain('The turn is still open')
-      expect(first.result).not.toContain('for="user"')
-      expect((first.details as { background?: boolean } | undefined)?.background).toBe(true)
+      expect(first.result).toContain(`<sub-session id="${pair.child}" status="running"/>`)
+      expect(first.result).toContain('Started in the background')
+      expect(first.result).not.toContain('<question')
+      expect(backgroundTagOf(first)).toBe(true)
 
-      // 2. wait 报 asking，带同一块询问，尾注指向 answer
-      const waited = await resultOf(pair.parent, 'call_b_wait')
+      // 2. wait 报 asking，带那一块询问（可代答），尾注指向 answer；wait 不带后台标签
+      const waited = await resultOf(pair.parent, 'call_b_wait1')
       expect(waited.result).toContain('<sub-sessions status="asking">')
+      expect(waited.result).toContain('status="waiting-input"')
       expect(waited.result).toContain('<question ask_id="call_b_ask1">')
+      expect(waited.result).toContain('Q4a-which-path?')
+      expect(waited.result).toContain('1. OPT-B1-A')
+      expect(waited.result).toContain('2. OPT-B1-B')
+      expect(waited.result).toContain('You may answer it for the user')
+      expect(waited.result).not.toContain('for="user"')
       expect(waited.result.split('</sub-sessions>')[1] ?? '').toContain('answer-sub-session')
+      expect(backgroundTagOf(waited)).not.toBe(true)
 
       // 3. 错选项被拒、什么都没发，列出全部选项
       const wrong = await resultOf(pair.parent, 'call_b_wrong')
@@ -596,20 +682,35 @@ describe('前台等待遇到询问：当场交回、代答、零通知', () => {
       expect(wrong.result).toContain('- OPT-B1-A')
       expect(wrong.result).toContain('- OPT-B1-B')
 
-      // 4. message 代答之后，下一问又一次当场交回
+      // 4. message 代答只回执（子会话的下一步挂着，回执恒为在跑）
       const free = await resultOf(pair.parent, 'call_b_free')
       expect(free.isError).toBe(false)
-      expect(free.result).toContain('<question ask_id="call_b_ask2">')
-      expect(free.result).toContain('Q4b-which-name?')
-      expect(free.result).not.toContain('call_b_ask1')
+      expect(free.result).toContain(`<sub-session id="${pair.child}" status="running"/>`)
+      expect(free.result).toContain('Answered; it carries on in the background.')
+      expect(free.result).not.toContain('<question')
+      expect(backgroundTagOf(free)).toBe(true)
 
-      // 5. selections 代答收到这一轮的答复（不带后台标签）
+      // 5. 下一问由下一次 wait 交回，不再带上一问
+      const waited2 = await resultOf(pair.parent, 'call_b_wait2')
+      expect(waited2.result).toContain('<sub-sessions status="asking">')
+      expect(waited2.result).toContain('<question ask_id="call_b_ask2">')
+      expect(waited2.result).toContain('Q4b-which-name?')
+      expect(waited2.result).not.toContain('call_b_ask1')
+
+      // 6. selections 代答同样只回执；这一轮的答复由最后一次 wait 交回（不带后台标签）
       const pick = await resultOf(pair.parent, 'call_b_pick')
       expect(pick.isError).toBe(false)
-      expect(pick.result).toContain('<reply>\nC4-CHILD-FINAL\n</reply>')
-      expect((pick.details as { background?: boolean } | undefined)?.background).not.toBe(true)
+      expect(pick.result).toContain('Answered; it carries on in the background.')
+      expect(pick.result).not.toContain('<reply>')
+      expect(pick.result).not.toContain('C4-CHILD-FINAL')
+      expect(backgroundTagOf(pick)).toBe(true)
+      const collected = await resultOf(pair.parent, 'call_b_wait3')
+      expect(collected.isError).toBe(false)
+      expect(collected.result).toContain('<sub-sessions status="settled">')
+      expect(collected.result).toContain('<reply>\nC4-CHILD-FINAL\n</reply>')
+      expect(backgroundTagOf(collected)).not.toBe(true)
 
-      // 6. 子会话里两问的结果：错选项没有送到；两次都记着答题方
+      // 7. 子会话里两问的结果：错选项没有送到；两次都记着答题方
       const ask1 = await resultsOf(pair.child, 'call_b_ask1')
       expect(ask1).toHaveLength(1)
       expect(ask1[0].result).toBe(
@@ -624,11 +725,11 @@ describe('前台等待遇到询问：当场交回、代答、零通知', () => {
         ).toBe(pair.parent)
       }
 
-      // 7. 有人在 join 就由那次调用交回：没有任何系统通知（prompt 与 answer 两种等待各验一次）
+      // 8. 每次停下来都有 wait 握着：没有任何系统通知（询问两次、跑完一次）
       expect(systemNotices(await listMessages(pair.parent))).toEqual([])
       await quiet()
       expect(systemNotices(await listMessages(pair.parent))).toEqual([])
-      expect(provider.requests().filter(isParent)).toHaveLength(6)
+      expect(provider.requests().filter(isParent)).toHaveLength(8)
       const tasks = await subTasks(pair.parent, pair.child)
       expect(tasks).toHaveLength(1)
       expect(tasks[0].status).toBe('done')
@@ -663,8 +764,7 @@ describe('用户先在子会话里答了', () => {
             sessionCall('call_c5_prompt', {
               action: 'prompt-sub-session',
               sub_session_id: pair.child,
-              message: C_MARK,
-              run_in_background: true
+              message: C_MARK
             })
           ],
           when: isParent
@@ -779,8 +879,7 @@ describe('子会话卡在权限卡上', () => {
             sessionCall('call_d_prompt', {
               action: 'prompt-sub-session',
               sub_session_id: pair.child,
-              message: C_MARK,
-              run_in_background: true
+              message: C_MARK
             })
           ],
           when: isParent
@@ -879,6 +978,7 @@ describe('用户在子会话里自己发起的一轮', () => {
   const isParent = (r: FakeRequest): boolean => r.raw.includes(P_MARK)
   const parentFirst = (r: FakeRequest): boolean => isParent(r) && r.lastUserText === P_MARK
   const parentSecond = (r: FakeRequest): boolean => isParent(r) && r.lastUserText === P_SECOND
+  const childFirst = (r: FakeRequest): boolean => !isParent(r) && r.lastUserText === C0
   const childOwn = (r: FakeRequest): boolean => !isParent(r) && r.lastUserText === U
 
   it(
@@ -898,7 +998,17 @@ describe('用户在子会话里自己发起的一轮', () => {
           ],
           when: parentFirst
         },
-        { text: 'C7-FIRST-DONE', when: (r) => !isParent(r) && r.lastUserText === C0 },
+        // 挂住，等父会话的 wait 握着它再放：那一轮在父会话这一轮里交回，不另发完成通知（③ 要的就是「没有通知」）
+        { text: 'C7-FIRST-DONE', when: childFirst, holdMs: HOLD_MS, holdKey: 'child' },
+        {
+          toolCalls: [
+            sessionCall('call_e_wait', {
+              action: 'wait-for-sub-sessions',
+              sub_session_id: pair.child
+            })
+          ],
+          when: parentFirst
+        },
         { text: 'ok', when: parentFirst },
         { toolCalls: [askCall(ASK_ID, 'Q7-which-db?', ['OPT-E-A', 'OPT-E-B'])], when: childOwn },
         {
@@ -925,9 +1035,16 @@ describe('用户在子会话里自己发起的一轮', () => {
         { text: 'U7-FINAL', when: childOwn }
       )
 
-      // ① 父会话驱动的一轮落定（这条子会话被驱动过、那一轮已销账）
-      await promptSession(pair.parent, P_MARK)
+      // ① 父会话驱动的一轮落定（这条子会话被驱动过、那一轮已销账），由 wait 在同一轮里收回
+      const first = promptSession(pair.parent, P_MARK).catch((error: unknown) => error)
+      await waitHeld('child', childFirst, 'child first turn held')
+      await waitArmed(pair.parent, 'call_e_wait')
+      provider.release('child')
+      await first
       expect(hasAssistantText(await listMessages(pair.child), 'C7-FIRST-DONE')).toBe(true)
+      expect((await resultOf(pair.parent, 'call_e_wait')).result).toContain(
+        '<reply>\nC7-FIRST-DONE\n</reply>'
+      )
 
       // ② 用户自己在子会话里发起一轮，模型问了一句
       await sendPrompt(pair.child, U)
@@ -1023,8 +1140,7 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
             sessionCall('call_f_prompt', {
               action: 'prompt-sub-session',
               sub_session_id: pair.child,
-              message: C_MARK,
-              run_in_background: true
+              message: C_MARK
             })
           ],
           when: isParent
@@ -1217,4 +1333,121 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
     expect(line).not.toContain(SEED_FILE)
     expect(snippet.join('  … ')).toContain(SEED_FILE)
   })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// G. 父会话被停不级联（§20）
+
+describe('父会话被停：派出去的子会话照跑完', () => {
+  const P_MARK = 'P9-PARENT-STOP'
+  const P_NEXT = 'P9-PARENT-NEXT'
+  const C_MARK = 'C9-CHILD-TASK'
+  const isParent = (r: FakeRequest): boolean => r.raw.includes(P_MARK)
+  const isChild = (r: FakeRequest): boolean => !isParent(r) && r.lastUserText === C_MARK
+
+  it(
+    'BG-E2 停止父会话：子会话那一轮不跟着停、照常答完，任务落到 done；父会话不被叫醒，完成通知随用户下一句话送到模型',
+    async () => {
+      const pair = await newPair('G')
+      provider.reset()
+      await events.clear()
+      provider.script(
+        {
+          toolCalls: [
+            sessionCall('call_g_prompt', {
+              action: 'prompt-sub-session',
+              sub_session_id: pair.child,
+              message: C_MARK
+            })
+          ],
+          when: isParent
+        },
+        // 父会话的下一步挂住：停止落在它还在跑的时候
+        { text: 'P9-NEVER', when: isParent, holdMs: HOLD_MS, holdKey: 'parent' },
+        // 子会话那一轮挂住：父会话被停的那一刻它一定还在跑
+        { text: 'C9-CHILD-FINAL', when: isChild, holdMs: HOLD_MS, holdKey: 'child' },
+        { text: 'P9-NEXT-DONE', when: (r) => isParent(r) && r.raw.includes(P_NEXT) }
+      )
+
+      // 任务面板只画活动会话 —— 父会话先在侧栏里打开
+      await until(
+        async () => (await sidebar.titles()).includes(pair.parentTitle) || null,
+        'parent listed'
+      )
+      expect(await sidebar.openSession(pair.parentTitle)).toBe(true)
+
+      await sendPrompt(pair.parent, P_MARK)
+      await waitHeld('child', isChild, 'child turn held')
+      const parentStep = await waitHeld('parent', isParent, 'parent next step held')
+      const receipt = await resultOf(pair.parent, 'call_g_prompt')
+      expect(receipt.result).toContain('Started in the background')
+      expect(backgroundTagOf(receipt)).toBe(true)
+
+      // 1. 用户停掉父会话（点「停止生成」的同一条 IPC）
+      await app.main.eval(`window.api.agent.abort(${JSON.stringify(pair.parent)})`)
+      await probe.waitView(pair.parent, (v) => v.run.state !== 'busy', 30_000, 'parent stopped')
+      await until(() => parentStep.aborted || null, "parent's held request aborted")
+
+      // 2. 子会话那一轮没被级联中止：请求还挂着、没断开，会话还在跑，任务还开着
+      expect(provider.heldRequest('child')?.aborted).toBe(false)
+      expect((await probe.viewOf(pair.child))?.run.state).toBe('busy')
+      const open = await subTasks(pair.parent, pair.child)
+      expect(open).toHaveLength(1)
+      expect(open[0].endedAt).toBeNull()
+
+      // 3. 放行 → 子会话照常答完：一条任务、一条答复，没有中止 / 错误那一行
+      const mark = provider.requests().length
+      provider.release('child')
+      const childMsgs = await waitAssistant(pair.child, 'C9-CHILD-FINAL')
+      expect(childMsgs.map((m) => m.role)).toEqual(['user', 'assistant'])
+      expect(userMessages(childMsgs)).toEqual([C_MARK])
+      expect(
+        provider
+          .requests()
+          .filter(isChild)
+          .map((r) => r.aborted)
+      ).toEqual([false])
+
+      // 4. 任务落到 done：枢纽与面板行
+      await until(
+        async () => (await subTasks(pair.parent, pair.child))[0]?.status === 'done' || null,
+        'sub-session task done'
+      )
+      const tasks = tasksPanelPane(app.main)
+      await tasks.open()
+      await until(
+        async () =>
+          (await tasks.rows()).some(
+            (r) => r.kind === 'sub-session' && r.title === pair.childTitle && r.status === 'done'
+          ) || null,
+        'sub-session task row done'
+      )
+
+      // 5. 父会话刚被用户停过：完成通知写进它的对话（一条），但不起自动续跑 —— 静默窗里没有新的模型请求
+      await until(
+        async () =>
+          systemNotices(await listMessages(pair.parent)).some((m) =>
+            m.content.includes('has finished')
+          ) || null,
+        'completion notice written into the stopped parent'
+      )
+      await quiet()
+      expect(provider.requests().slice(mark).filter(isParent)).toEqual([])
+      expect((await probe.viewOf(pair.parent))?.run.state).not.toBe('busy')
+
+      // 6. 用户再说一句：这一次请求里模型看得到那条完成通知（在这句话之前）
+      await promptSession(pair.parent, P_NEXT)
+      const next = provider.requests().slice(mark).filter(isParent)
+      expect(next).toHaveLength(1)
+      const users = userTextsOf(next[0])
+      const noticeAt = users.findIndex(
+        (t) => t.includes(`<sub-session id="${pair.child}"`) && t.includes('has finished')
+      )
+      expect(noticeAt).toBeGreaterThan(-1)
+      expect(users.lastIndexOf(P_NEXT)).toBeGreaterThan(noticeAt)
+      const parentMsgs = await waitAssistant(pair.parent, 'P9-NEXT-DONE')
+      expect(systemNotices(parentMsgs)).toHaveLength(1)
+    },
+    FLOW_TIMEOUT
+  )
 })

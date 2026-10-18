@@ -6,27 +6,25 @@
  *
  *  1. **形态准入**：谁能当父（普通会话）、谁能被驱动（必须是调用方自己的子会话）。
  *     越权在这里落空，工具层只负责把拒绝理由翻译给模型。
- *  2. **等待与降级**：前台 await 整轮拿最终答复；超时**不杀**，降级成后台
- *     （bash 超时杀的是一个进程，这里杀的是一段用户看得见、可能已经改了半个仓库的对话）。
+ *  2. **派活一律后台**（§20）：`prompt` / `answer` 只等「确认发出去了」的 50ms 就回执；要答复只有 `wait`
+ *     （挂住、有一条停下来问就返回、超时什么都不停）。
  *  3. **记账交给后台任务枢纽**：一次 `prompt` 就是一个任务（`services/taskRegistry`），任务 id 就是
- *     这次发送的幂等键 `subsession:<父会话>:<工具任务>`（P2-10）。「前台 / 后台」退化成同一个 `join`
- *     的两组参数（等整轮 / 只等确认发出去了）。
+ *     这次发送的幂等键 `subsession:<父会话>:<工具任务>`（P2-10）。回执是同一个 `join` 只等确认窗。
  *  4. **完成通知只有一条路**（P2-10 PIN-01）：子会话的 driven-run 标记落定 → 运行时的
  *     `onDrivenSettled` → 这里决定通不通知、经 `sessionService.deliverSubSessionNotice` 送达父会话
  *     （带 `subsession-done:<子会话>:<submission>`，跨进程按它去重）。枢纽自己的通知对子会话任务是关的。
- *     不通知的情形：本进程有人在前台等着它 / 已经把这次落定交回去了、`wait` 握着它 / 已经交回了它、
- *     是智能体自己停的（stop / 前台级联 / 中断父会话的级联 / 同一父会话的新消息顶掉了它），以及
- *     前台驱动它的那个父会话工具任务还活着（重跑时会就地收下答复，PIN-14 的裁定）。
- *     **能叫醒父会话的只有本进程发起、还记着的驱动**（`records` 里的 released：后台形态、前台超时降级）：
+ *     不通知的情形：`wait` 握着它 / 已经在同一轮里交回了它、是智能体自己停的（stop / 同一父会话的新消息顶掉了它）。
+ *     过了确认窗才发现没发出去的，由 `settle` 另发一条（`subsession-undelivered:…`）。
+ *     **能叫醒父会话的只有本进程发起、还记着的驱动**（`records` 里的那些）：
  *     本进程不认得的（上个进程发起的、子会话打开时扫描重报的）只写一条通知进父会话的转写，不起一轮 ——
  *     父会话的下一轮看得见它（option A：重启之后被搁着的父会话不该被叫醒）。
  *  5. **崩溃之后的重跑**（P2-10，Q-P2-01/02）：`session` 工具是 replay `safe`，每个动作都幂等 ——
- *     `prompt` 先问子会话认不认得这个幂等键：已落定 → 直接读答复；没落定 → 重新挂上（被中断就续上），
- *     从不再发一条；`wait` 重跑时续上被中断的目标再等。父会话的「继续」因此在同一轮里把子会话带起来。
+ *     `prompt` 先问子会话认不认得这个幂等键：已落定 → 回执「已经结束」；没落定 → 重新挂上（被中断就续上），
+ *     从不再发一条；`wait` 重跑时续上被中断的目标再等。没在 `wait` 的父会话，「继续」不再把子会话带起来（§20）。
  *  6. **上限**：并发 4 / 总数 20，防的是无人值守的循环，不是正常使用。
  *  7. **父会话介入自己发起的那一轮**（docs/sub-session-design.md §19）：这一轮绑定的后台任务（`runs` 里的
  *     那条、任务还活着）就是判据 —— 子会话弹出询问时它进「等待输入」（`onAskRaised` / `onAskResolved`，
- *     main 入口经 `setSessionAskObserver` 接进来），前台的 `prompt` / `answer` 当场把询问交回，没人等就经
+ *     main 入口经 `setSessionAskObserver` 接进来），确认窗里的 `prompt` / `answer` 当场把询问交回，没人等就经
  *     枢纽通知父会话（`inputNotice`）；`answer` 代答 ask 工具的选择题（权限卡除外），`steer` 往这一轮里插话。
  *     没有绑定任务（用户自己发起的一轮、这一轮已经结束、重启之后）→ 不通知、不能代答、不能插话。
  *
@@ -34,9 +32,9 @@
  * 用户消息落树（各前端经会话视图看到）、埋点、auto-title、自动压缩，全部因此照常发生。
  * 任何绕过这道门的实现都会让「子会话表现与普通会话一致」从第一天起就带例外。
  *
- * 中止的语义与改制前一致（Q-P2-03）：前台驱动的那一轮跟着父会话停；后台与 `wait` 的目标从不。
- * 父会话被中断（上个进程留下的）时没有活的工具信号，那条级联由会话的中止前 seam 补上
- * （`cascadeParentAbort`，PIN-08）。
+ * **派活一律是后台语义**（§20，2026-10-17 用户裁决）：`prompt` / `answer` 只回执，跑完经完成通知、停下来问经这一轮的
+ * 后台任务把父会话叫回来；要在这一轮里拿答复只有 `wait`。父会话被停止**不**级联到任何子会话（与 bash 后台任务一致；
+ * 原来「前台那一轮跟着父会话停」的级联与中止前 seam 里的 `cascadeParentAbort` 一并删了）。
  */
 import { chatGateway } from '../frontend/core'
 import { sessionService } from './sessionService'
@@ -84,8 +82,8 @@ export const MAX_SUB_SESSIONS = 20
  */
 const SEND_CONFIRM_MS = 50
 
-/** 前台等待的缺省上限（秒）。到点降级成后台，不中止 */
-export const DEFAULT_PROMPT_TIMEOUT_SEC = 300
+/** `wait-for-sub-sessions` 的缺省上限（秒）。到点交回，不中止任何子会话 */
+export const DEFAULT_WAIT_TIMEOUT_SEC = 300
 
 /**
  * 没发出去的那几类结果（PIN-02）：忙、模型被拒、会话已关、还排着队 —— 以及没有分类的错误（网关打不开
@@ -142,23 +140,17 @@ export interface WaitOutcome {
   results: Array<SubSessionInfo & AnswerFields>
 }
 
+/**
+ * `prompt` / `answer` 的结果 —— **一律是回执**（§20：派活默认就是后台语义，要在这一轮里拿答复只有 `wait`）。
+ * 'started' = 发出去了、在跑；'input' = 确认窗里子会话就停下来问了一句（`info.pendingAsks` 里是那几条询问；
+ * 这一轮仍在 —— 答了之后接着跑，跑完照常通知）。
+ */
 export interface PromptOutcome {
-  /**
-   * 'answered' = 本轮跑完拿到答复；'timeout' = 降级成后台；'started' = 后台形态的启动回执；
-   * 'input' = 子会话停下来问了一句（§19.3：前台等待当场交回，`info.pendingAsks` 里是那几条询问；
-   * 这一轮仍在、转为脱离 —— 跑完照常通知）
-   */
-  kind: 'answered' | 'timeout' | 'started' | 'input'
+  /** 'finished' = 崩溃之后重跑时那一轮早就落定了（没再发；答复在子会话里，用 read / wait 收） */
+  kind: 'started' | 'input' | 'finished'
   /** 落定的子会话 id —— `sub_session_id` 省略时被自动补全成的那条，回执围栏要用真实 id */
   id: string
-  /** kind==='answered' 时的最终答复（这一轮的回答；出错则是错误原文） */
-  answer?: string
-  /** 这一轮以错误收场 */
-  isError?: boolean
-  /**
-   * kind==='answered' 时子会话的快照。顺带带回来是为了省掉调用方「再 read 一次」——
-   * 那会把整棵转写重新投影一遍，只为拿一个标题和状态。
-   */
+  /** kind==='input' 时子会话的快照（带着询问） */
   info?: SubSessionInfo
 }
 
@@ -175,16 +167,11 @@ interface DrivenRun {
 }
 
 /**
- * 一次发送在完成通知眼里的样子（按幂等键记）：`held` = 有人在前台等着它（落定由那次调用交回）；
- * `released` = 没人等（后台形态、前台超时降级）—— 落定时该通知。
+ * 本进程发出的一次发送（按幂等键记，靠对象身份认）：它在，就说明这次驱动是本进程发起、还记着的 —— 落定时该通知、
+ * 能叫醒父会话。派活一律是后台语义（§20），没有「有人在前台等着它」这一档。
  */
 interface DriveRecord {
-  state: 'held' | 'released'
-  /**
-   * 前台在等它的调用有几个（`answer` 可能并行两次：同一子会话两道题一起答）。最后一个放手才 released ——
-   * 否则先返回的那次会把记账改回 released，这一轮落定时就多发一条叫醒父会话的完成通知。缺省 = 1（held 时）。
-   */
-  holders?: number
+  readonly requestId: string
 }
 
 /**
@@ -209,27 +196,6 @@ function intervenedIn(
   return last !== undefined && authors.get(last) === 'human'
 }
 
-/** 一个前台调用开始等这一轮 */
-function holdRecord(record: DriveRecord): void {
-  record.holders = record.state === 'held' ? (record.holders ?? 1) + 1 : 1
-  record.state = 'held'
-}
-
-/** 一个前台调用不再等了（超时降级 / 停下来询问交回）：最后一个放手才 released */
-function releaseRecord(record: DriveRecord): void {
-  const holders = (record.holders ?? 1) - 1
-  record.holders = Math.max(0, holders)
-  if (record.holders === 0) record.state = 'released'
-}
-
-/** `subsession:<父会话>:<工具任务 id>` → 工具任务 id（不是这个父会话的 / 临时键 → undefined） */
-function taskIdOf(requestId: string, parentId: string): number | undefined {
-  const prefix = `subsession:${parentId}:`
-  if (!requestId.startsWith(prefix)) return undefined
-  const rest = requestId.slice(prefix.length)
-  return /^\d+$/.test(rest) ? Number(rest) : undefined
-}
-
 class SubSessionRunner {
   private runs = new Map<string, DrivenRun>()
   /** 正在准入的子会话（同步占位：异步判定之前就占住，见 prompt） */
@@ -244,6 +210,16 @@ class SubSessionRunner {
   private superseded = new Set<string>()
   /** 正在被 `wait` 等着的子会话（计数：可能有几个 wait 同时握着它） */
   private waiters = new Map<string, number>()
+  /**
+   * 还在确认窗里的发送（按幂等键）：这时「没发出去」由那次调用自己报。过了确认窗才落定为「没发出去」的（打开会话慢、
+   * 模型解析慢……）没人等着报 —— 由 `settle` 单独通知父会话，否则它会以为活在跑、永远等不到回音（§20）
+   */
+  private confirming = new Set<string>()
+  /**
+   * 最近一次驱动以错误收场、却没有留下助手条目的子会话（子会话 id → 错误原文）：`read` / `wait` 拿不到答复时
+   * 用它，免得只说「还没有答复」（§20 之前前台等待会把错误原文直接交回）
+   */
+  private turnErrors = new Map<string, string>()
   /**
    * 已经交给父会话看过的询问（按这一轮的幂等键）：同一条询问只告诉它一次 —— 前台交回、`wait` 交回、
    * 通知，三条路里先到的那条算数（§19.3）
@@ -630,14 +606,9 @@ class SubSessionRunner {
   // ─── 驱动 ──────────────────────────────────────
 
   /**
-   * 代替用户往子会话发一条用户消息。
-   *
-   * 前台：await 整轮并返回最终答复；`timeoutSeconds` 到点降级成后台（不中止）。
-   * 后台：立刻回执，跑完经完成通知告诉父会话 —— 都**不带内容**，内容会永久留在
-   * 父会话上下文里并被每一步重发（bash 后台形态同一条纪律）。
-   *
-   * `signal` 是本次工具调用的中止信号：前台形态下父会话被停止 ⇒ 级联中止子会话当前 run
-   * （与派生 agent 一致）；后台形态**不**级联，那正是后台的意义。
+   * 代替用户往子会话发一条用户消息，**立刻回执**（§20：派活默认就是后台语义）。跑完经完成通知告诉父会话、停下来
+   * 问了经这一轮的后台任务告诉它；要在这一轮里拿答复就 `wait`。回执**不带内容**：内容会永久留在父会话上下文里
+   * 并被每一步重发（bash 后台形态同一条纪律）。父会话被停止**不**级联到子会话（用户裁决：与 bash 后台任务一致）。
    *
    * `requestId` 是这次发送的幂等键（工具给 `subsession:<父会话>:<工具任务 id>`）。子会话已经认得它 =
    * 这是崩溃之后的重跑（PIN-03）：已落定 → 不再发送，直接读答复；没落定 → 重新挂上那一条（跳过忙 /
@@ -648,12 +619,9 @@ class SubSessionRunner {
     parentId: string
     childId: string
     message: string
-    background: boolean
-    timeoutSeconds: number
-    signal?: AbortSignal
     requestId?: string
   }): Promise<{ error: string } | PromptOutcome> {
-    const { parentId, message, background, timeoutSeconds, signal } = params
+    const { parentId, message } = params
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
     const resolved = this.resolveChild(parentId, params.childId)
@@ -682,7 +650,7 @@ class SubSessionRunner {
       params.requestId ?? `subsession:${parentId}:adhoc-${globalThis.crypto.randomUUID()}`
     this.claiming.add(childId)
     // 先记下这次发送，再做任何异步判定：子会话被打开的那一刻就可能报出一次落定（打开时的扫描）
-    const record: DriveRecord = { state: background ? 'released' : 'held' }
+    const record: DriveRecord = { requestId }
     this.records.set(requestId, record)
 
     let run: DrivenRun
@@ -691,17 +659,9 @@ class SubSessionRunner {
         params.requestId === undefined ? 'none' : await this.requestStateOf(childId, requestId)
 
       if (known === 'settled') {
-        // 崩溃之前就落定了：不再发送，答复就在子会话里（PIN-03）
-        const consumed = this.dropRecord(requestId, record)
-        if (background) return { kind: 'started', id: childId }
-        if (!consumed) this.inBand.add(requestId)
-        const [answer, baseInfo, intervened] = await Promise.all([
-          this.lastAnswer(childId),
-          this.infoOf(parentId, childId),
-          this.userIntervened(childId)
-        ])
-        const info = baseInfo && intervened ? { ...baseInfo, userIntervened: true } : baseInfo
-        return { kind: 'answered', id: childId, ...answer, ...(info ? { info } : {}) }
+        // 崩溃之前就落定了：不再发送（PIN-03）—— 答复就在子会话里；回执如实说「已经结束」，别说成还在跑
+        this.dropRecord(requestId, record)
+        return { kind: 'finished', id: childId }
       }
 
       if (known === 'none') {
@@ -711,6 +671,7 @@ class SubSessionRunner {
           return { error: refusal }
         }
         await this.noteSupersede(parentId, childId, requestId)
+        this.turnErrors.delete(childId)
       }
 
       taskRegistry.create({
@@ -733,7 +694,7 @@ class SubSessionRunner {
         done: chatGateway
           .prompt(childId, message, undefined, undefined, {
             requestId,
-            driven: { parentId, background }
+            driven: { parentId, background: true }
           })
           .catch((err: unknown): SubmitResult => {
             log.warn(`子会话 ${childId} 发送失败: ${err}`)
@@ -749,84 +710,61 @@ class SubSessionRunner {
     if (this.statusOf(childId) === 'waiting-input') {
       taskRegistry.update(requestId, { status: 'waiting-input' })
     }
-    return this.awaitTurn({ parentId, child, run, record, background, timeoutSeconds, signal })
+    return this.confirmSent({ parentId, child, run, record })
   }
 
   /**
-   * 等这一轮（`prompt` 发出之后、`answer` 应答之后共用）—— 两种形态的差别全在这组参数里：
-   *   后台只等「确认发出去了」（发送失败是同步落定的，正常那一路要跑到轮结束）；
-   *   前台等整轮，到点**不杀**、转异步（杀掉的会是一段用户看得见、可能已改了半个仓库的对话）；
-   *   前台遇到子会话停下来问一句就当场交回（§19.3），询问由这次调用带回去。
-   * 前台才接中止信号：父会话被停 ⇒ 级联停子会话当前 run；后台形态不级联，那正是后台的意义。
+   * 发出去（`prompt`）/ 答完（`answer`）之后的回执：只等「确认发出去了」的那一小会儿（`SEND_CONFIRM_MS`）——
+   * 发送失败（拒 busy）是同步就落定的，正常那一路要跑到轮结束，不在这里等它。确认窗里子会话就停下来问了 → 由这次
+   * 交回（否则枢纽见它有人等就不排通知，之后再没人补，§19.3）。不接中止信号：父会话被停不级联（§20）。
    */
-  private async awaitTurn(p: {
+  private async confirmSent(p: {
     parentId: string
     child: { id: string; title: string }
     run: DrivenRun
     record: DriveRecord
-    background: boolean
-    timeoutSeconds: number
-    signal?: AbortSignal
+    /** 'answer'：这一轮早就发出去了 —— 确认窗里它以什么结果收场都不是「没发出去」，只回执 */
+    after?: 'prompt' | 'answer'
   }): Promise<{ error: string } | PromptOutcome> {
-    const { parentId, child, run, record, background, timeoutSeconds, signal } = p
+    const { parentId, child, run, record, after = 'prompt' } = p
     const childId = child.id
     const requestId = run.requestId
-    const outcome: JoinOutcome | undefined = await taskRegistry.join(requestId, {
-      maxWait: background ? SEND_CONFIRM_MS : Math.max(1, timeoutSeconds) * 1000,
-      onTimeout: 'detach',
-      // 进入等输入就交回 —— 后台形态也是：确认窗里弹出的询问若不由这次交回，枢纽见它有人等就不排通知，之后再
-      // 没人补（§19.3）
-      onInput: 'return' as const,
-      ...(background ? {} : { signal, onAbort: 'kill' as const })
-    })
+    this.confirming.add(requestId)
+    let outcome: JoinOutcome | undefined
+    try {
+      outcome = await taskRegistry.join(requestId, {
+        maxWait: SEND_CONFIRM_MS,
+        onTimeout: 'detach',
+        onInput: 'return'
+      })
+    } finally {
+      this.confirming.delete(requestId)
+    }
 
     if (outcome?.kind === 'detached') {
-      // 没人等它了：它此后落定就该通知（后台形态本来就没占着记账 —— 别动并行的前台 answer 握着的那份）
-      if (!background) releaseRecord(record)
       if (outcome.reason === 'input') {
-        // 停下来问了：询问由这次调用交回（同一条不再通知），这一轮转为脱离、仍在
+        // 停下来问了：询问由这次调用交回（同一条不再通知），这一轮仍在
         this.markShown(requestId, this.pendingAsksOf(childId))
         const info = this.infoOf(parentId, childId)
-        log.info(`子会话 ${childId} 停下来询问，${background ? '后台确认窗' : '前台等待'}交回`)
+        log.info(`子会话 ${childId} 停下来询问，确认窗里交回`)
         return { kind: 'input', id: childId, ...(info ? { info } : {}) }
       }
-      if (background) {
-        log.info(`prompt sub-session ${childId} (background)`)
-        return { kind: 'started', id: childId }
-      }
-      // 卡在询问上的不是「还在跑」——它不会自己好起来，说成还在跑等于让父级白等第二轮
-      if (this.statusOf(childId) === 'waiting-input') {
-        return { error: this.blockedError(child.title, childId) }
-      }
-      log.info(`子会话 ${childId} 前台等待超时 ${timeoutSeconds}s，降级为后台`)
-      return { kind: 'timeout', id: childId }
-    }
-
-    // 落定（含被中止后收尾）：run.done 此刻必然已 resolve
-    const sent = await run.done
-    if (sent.error && (sent.code === undefined || NOT_DELIVERED.has(sent.code))) {
-      this.dropRecord(requestId, record)
-      return { error: this.sendFailedError(childId, child.title, sent) }
-    }
-    if (background) {
       log.info(`prompt sub-session ${childId} (background)`)
       return { kind: 'started', id: childId }
     }
-    // 前台答复由这次调用交回：完成通知不再发（不论它比这里早到还是晚到）
-    if (!this.dropRecord(requestId, record)) this.inBand.add(requestId)
-    const [answer, baseInfo, intervened] = await Promise.all([
-      this.lastAnswer(childId),
-      this.infoOf(parentId, childId),
-      this.userIntervened(childId)
-    ])
-    const info = baseInfo && intervened ? { ...baseInfo, userIntervened: true } : baseInfo
-    // 那一轮以错误收场（模型请求失败 / run 意外失败 / 接不上，PIN-02）：答复是错误原文
-    const reply: AnswerFields = sent.error
-      ? answer.isError
-        ? answer
-        : { answer: sent.error, isError: true }
-      : answer
-    return { kind: 'answered', id: childId, ...reply, ...(info ? { info } : {}) }
+
+    // 确认窗里就落定了：没发出去（忙、模型被拒……）如实报；发出去了、跑完了也只是回执 —— 完成通知会把答复的去处说清
+    const sent = await run.done
+    if (
+      after === 'prompt' &&
+      sent.error &&
+      (sent.code === undefined || NOT_DELIVERED.has(sent.code))
+    ) {
+      this.dropRecord(requestId, record)
+      return { error: this.sendFailedError(childId, child.title, sent) }
+    }
+    log.info(`prompt sub-session ${childId} (background, settled at once)`)
+    return { kind: 'started', id: childId }
   }
 
   /** 子会话认不认得这个幂等键（没有存储 / 旧格式 → 'none'；peek 从不创建） */
@@ -1058,7 +996,43 @@ class SubSessionRunner {
   private settle(childId: string, run: DrivenRun, sent: SubmitResult): void {
     if (this.runs.get(childId) === run) this.runs.delete(childId)
     this.shownAsks.delete(run.requestId)
+    const notDelivered = !!sent?.error && (sent.code === undefined || NOT_DELIVERED.has(sent.code))
+    if (sent?.error && !notDelivered) this.turnErrors.set(childId, sent.error)
+    // 过了确认窗才发现没发出去：那次调用早已回执「在跑」，单独告诉父会话（还在确认窗里的由那次调用自己报）
+    if (notDelivered && !this.confirming.has(run.requestId)) {
+      const record = this.records.get(run.requestId)
+      if (record) {
+        this.records.delete(run.requestId)
+        void this.reportUndelivered(run, childId, sent)
+      }
+    }
     taskRegistry.settle(run.requestId, { status: sent?.error ? 'error' : 'done' })
+  }
+
+  /** 过了确认窗才落定的「没发出去」→ 一条通知（叫醒父会话；按幂等键去重） */
+  private async reportUndelivered(
+    run: DrivenRun,
+    childId: string,
+    sent: SubmitResult
+  ): Promise<void> {
+    const title = sessionRecords.pick(childId, ['title'])?.title ?? childId
+    const text = [
+      `<sub-session id="${attrValue(childId)}" title="${attrValue(title)}" status="${this.statusOf(childId)}">`,
+      this.sendFailedError(childId, title, sent),
+      '</sub-session>'
+    ].join('\n')
+    try {
+      await sessionService.deliverSubSessionNotice(
+        run.parentId,
+        text,
+        `subsession-undelivered:${run.requestId}`,
+        { wake: true }
+      )
+    } catch (err) {
+      log.warn(
+        `子会话 ${childId} 没发出去的通知送达失败: ${err instanceof Error ? err.message : err}`
+      )
+    }
   }
 
   // ─── 父会话介入（§19） ─────────────────────────
@@ -1124,11 +1098,8 @@ class SubSessionRunner {
     askId?: string
     selections?: readonly string[]
     message?: string
-    background: boolean
-    timeoutSeconds: number
-    signal?: AbortSignal
   }): Promise<{ error: string } | PromptOutcome> {
-    const { parentId, background, timeoutSeconds, signal } = params
+    const { parentId } = params
     const rejected = this.rejectIfNotNormal(parentId)
     if (rejected) return { error: rejected }
     const resolved = this.resolveChild(parentId, params.childId)
@@ -1180,11 +1151,10 @@ class SubSessionRunner {
 
     let record = this.records.get(run.requestId)
     if (!record) {
-      record = { state: 'released' }
+      record = { requestId: run.requestId }
       this.records.set(run.requestId, record)
     }
-    if (!background) holdRecord(record)
-    return this.awaitTurn({ parentId, child, run, record, background, timeoutSeconds, signal })
+    return this.confirmSent({ parentId, child, run, record, after: 'answer' })
   }
 
   /** 子会话转写里这次 ask 调用得到的回答（结果文本的首行，截短）；没有 / 读不了 → undefined */
@@ -1384,7 +1354,7 @@ class SubSessionRunner {
   async onDrivenSettled(event: DrivenSettledEvent): Promise<void> {
     // 能叫醒父会话（自动续跑一轮）的只有本进程发起、还记着的驱动（含前台超时降级成的 released）——
     // 在 suppressNotice 销账之前看
-    const tracked = this.records.get(event.requestId)?.state === 'released'
+    const tracked = this.records.has(event.requestId)
     if (await this.suppressNotice(event)) {
       log.info(`子会话 ${event.sessionId} 的完成通知不发 request=${event.requestId}`)
       return
@@ -1393,6 +1363,9 @@ class SubSessionRunner {
       log.info(
         `子会话 ${event.sessionId} 的完成通知只写入、不叫醒父会话（不是本进程发起的驱动）request=${event.requestId}`
       )
+    }
+    if (event.result.error && !NOT_DELIVERED.has(event.result.code ?? '')) {
+      this.turnErrors.set(event.sessionId, event.result.error)
     }
     const intervened = await this.userIntervened(event.sessionId)
     await sessionService.deliverSubSessionNotice(
@@ -1411,24 +1384,13 @@ class SubSessionRunner {
     const stopped = this.agentStopped.delete(requestId)
     const superseded = this.superseded.delete(requestId)
     if (stopped || superseded) return true
-    // 本进程有人在前台等着它（结果由那次调用交回）/ 已经在同一轮里交回去了
-    if (record?.state === 'held') return true
+    // 已经在同一轮里交回去了（wait 交回的落定）
     if (this.inBand.delete(requestId)) return true
     // wait 正握着它：落定会在同一轮里交回去
     if (this.waiters.has(childId)) return true
-    // 本进程不认得的前台驱动（上个进程发的、用户先在子会话里把它续完了）：驱动它的那个父会话工具任务
-    // 还活着 → 父会话重跑时会就地收下答复，不通知（PIN-14 的裁定）；任务已终结才通知
-    if (!record && !event.background) return this.parentTaskLive(event.parentId, requestId)
+    // 原来还有一条（PIN-14）：上个进程发的前台驱动、发起它的父会话工具任务还活着 → 不通知，等重跑就地收下答复。
+    // 派活一律后台之后（§20）重跑只回执、不再收答复，压掉这条通知答复就没了去处 —— 删了，照常通知
     return false
-  }
-
-  /** 发起这次前台驱动的父会话工具任务还活着吗（peek 父会话，从不创建；不认得的键 → false） */
-  private async parentTaskLive(parentId: string, requestId: string): Promise<boolean> {
-    const taskId = taskIdOf(requestId, parentId)
-    if (taskId === undefined || !isDurableSession(parentId)) return false
-    const parent = await this.peekFacade(parentId)
-    if (!parent) return false
-    return (await parent.taskLiveness(taskId))?.live === true
   }
 
   /**
@@ -1451,7 +1413,9 @@ class SubSessionRunner {
         ? 'It stopped to ask the user for approval and cannot continue until the user answers in that session.'
         : stopped
           ? 'The turn you started was stopped by the user before it finished.'
-          : 'The turn you started in the background has finished.',
+          : event.result.error
+            ? `The turn you started ended with an error: ${event.result.error}`
+            : 'The turn you started in the background has finished.',
       asked?.length ? `It is asking: ${asked.join(' | ')}` : '',
       status === 'waiting-input'
         ? 'Tell the user what it is waiting for — you cannot answer it yourself.'
@@ -1507,38 +1471,6 @@ class SubSessionRunner {
     return true
   }
 
-  /**
-   * 父会话的中止级联到它前台驱动着、此刻被中断的子会话（P2-10 PIN-08，Q-P2-03）。
-   *
-   * 父会话在跑时，级联走的是工具调用的中止信号（`join` 的 onAbort:'kill'）；父会话被中断（上个进程留下的）
-   * 时没有活的信号，由会话的中止前 seam 走到这里：只中止 driven-run 标记是**前台**、由这个父会话发起、
-   * 发起它的工具任务此刻还活着（或正是被这次中止标记的）的那几条。后台、`wait` 的目标、早先已经超时降级
-   * 的前台（工具任务已正常终结）一概不碰。不通知；peek，从不创建；幂等（已经不再被中断的跳过）。
-   */
-  async cascadeParentAbort(parentId: string): Promise<void> {
-    const children = sessionRecords.findChildren(parentId)
-    if (children.length === 0) return
-    for (const child of children) {
-      try {
-        if (this.statusOf(child.id) !== 'interrupted') continue
-        const agent = await this.peekFacade(child.id)
-        if (!agent?.isInterrupted) continue
-        const marker = agent.drivenRun
-        if (!marker || marker.background || marker.parentId !== parentId) continue
-        const taskId = taskIdOf(marker.requestId, parentId)
-        if (taskId === undefined) continue
-        const parent = await this.peekFacade(parentId)
-        const liveness = await parent?.taskLiveness(taskId)
-        if (!liveness || !(liveness.live || liveness.abortRequested)) continue
-        this.agentStopped.add(marker.requestId)
-        log.info(`父会话 ${parentId} 中止 → 级联中止被中断的子会话 ${child.id}`)
-        await agent.abort()
-      } catch (err) {
-        log.warn(`级联中止子会话 ${child.id} 失败: ${err instanceof Error ? err.message : err}`)
-      }
-    }
-  }
-
   // ─── 结果抽取 ──────────────────────────────────
 
   /**
@@ -1547,6 +1479,16 @@ class SubSessionRunner {
    * 旧格式会话（父会话清空之后留下的老子会话，PIN-12）按原来的「末条消息」读。
    */
   private async lastAnswer(childId: string): Promise<AnswerFields> {
+    const answer = await this.recordedAnswer(childId)
+    if (answer.answer !== undefined) return answer
+    // 这一轮以错误收场、却没有留下助手条目（请求失败 / run 意外失败）：交回错误原文，别只说「还没有答复」
+    const error = this.turnErrors.get(childId)
+    return error !== undefined && this.statusOf(childId) !== 'running'
+      ? { answer: error, isError: true }
+      : answer
+  }
+
+  private async recordedAnswer(childId: string): Promise<AnswerFields> {
     if (!isDurableSession(childId)) {
       const last = await messageService.findLastBySession(childId)
       if (!last) return {}
@@ -1638,6 +1580,8 @@ class SubSessionRunner {
     this.superseded.clear()
     this.waiters.clear()
     this.shownAsks.clear()
+    this.confirming.clear()
+    this.turnErrors.clear()
   }
 }
 

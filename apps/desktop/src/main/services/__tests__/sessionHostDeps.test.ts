@@ -21,8 +21,9 @@
  *   D10-24 isPinned = 会话还有活着的后台任务（PIN-04）
  *   P3-05-15 onSessionOpened / onSessionClosed 接 syncWiring 的扇出（D10-13 的延伸）
  *   P3-05-17 isPinned 再数 hub 的订阅（D10-24 的延伸：矩阵、hub 没建不建、hasSubscribers 抛错 = 钉住）
- *   P2-10-06 onDrivenSettled 接到子会话运行器的处理器（overrides 可整项替换）；beforeAbort 同时把中断父会话的
- *            级联交给运行器；import sessionHost 不加载运行器（按需动态加载，加载期无环）
+ *   P2-10-06 onDrivenSettled 接到子会话运行器的处理器（overrides 可整项替换）；beforeAbort 只作废审查、
+ *            不碰运行器（§20：父会话被停不级联，原来那条中断父会话的级联已删）；import sessionHost 不加载运行器
+ *            （按需动态加载，加载期无环）
  *   D10-62 退出钩子：第一次 before-quit 拦下、closeAll（封顶）、再 quit；之后放行
  *   D10-63 重新 quit 在它自己的任务里（不在 before-quit 那次派发的 microtask 清空里 —— 重入 Browser::Quit）
  *   D10-64 其余清理（teardown）每次退出恰好一次，在被放行的那次 before-quit 里；没建过宿主就在第一次里
@@ -79,8 +80,7 @@ const mocks = vi.hoisted(() => ({
   createDesktopToolHost: vi.fn(),
   promptHost: { tag: 'promptHost' },
   promptVars: vi.fn(() => ({})),
-  onDrivenSettled: vi.fn(async () => {}),
-  cascadeParentAbort: vi.fn(async () => {})
+  onDrivenSettled: vi.fn(async () => {})
 }))
 
 vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
@@ -157,10 +157,8 @@ vi.mock('../settingsService', () => ({ settingsService: { get: mocks.settingsGet
 vi.mock('../subSessionRunner', () => {
   holder.runnerLoads++
   return {
-    subSessionRunner: {
-      onDrivenSettled: mocks.onDrivenSettled,
-      cascadeParentAbort: mocks.cascadeParentAbort
-    }
+    // §20：只剩完成通知这一个入口（cascadeParentAbort 已删 —— 运行器假件里也不给，回来就是回归）
+    subSessionRunner: { onDrivenSettled: mocks.onDrivenSettled }
   }
 })
 vi.mock('../agentService', () => ({
@@ -763,6 +761,22 @@ describe('D10-22 审查 seam（真 reviewState）', () => {
 })
 
 describe('P2-10-06 子会话 seam', () => {
+  // 放在本组第一条：之后的用例会把运行器加载起来，这里才看得出 beforeAbort 有没有去加载它
+  it('P2-10-06 / BG-30 beforeAbort 只作废这条会话进行中的审查：不加载、不调用子会话运行器（父会话被停不级联，§20）', async () => {
+    const loadsBefore = holder.runnerLoads
+    expect(loadsBefore).toBe(0)
+    const review = new AbortController()
+    const untrack = trackReview('parent-x', review)
+    deps.beforeAbort?.('parent-x')
+    expect(review.signal.aborted).toBe(true)
+    // 原来这里是一次不等的动态 import + cascadeParentAbort：给它足够的时间也不该发生
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(holder.runnerLoads).toBe(loadsBefore)
+    expect(mocks.onDrivenSettled).not.toHaveBeenCalled()
+    untrack?.()
+    deps.onInputsReopened?.('parent-x')
+  })
+
   it('P2-10-06 onDrivenSettled 把事件原样交给运行器的处理器，并等它落定（拒绝原样上抛）', async () => {
     expect(runnerLoadsAtImport).toBe(0)
     const event = { sessionId: 'c1', parentId: 'P', requestId: 'subsession:P:5' } as never
@@ -779,10 +793,7 @@ describe('P2-10-06 子会话 seam', () => {
     )
   })
 
-  it('P2-10-06 beforeAbort 把中断父会话的级联交给运行器（不等它）', async () => {
-    deps.beforeAbort?.('parent-x')
-    await vi.waitFor(() => expect(mocks.cascadeParentAbort).toHaveBeenCalledWith('parent-x'))
-  })
+  // 原「P2-10-06 beforeAbort 把中断父会话的级联交给运行器」被 §20 取消：反向钉在上面的 BG-30
 })
 
 describe('D10-23 autoResume', () => {

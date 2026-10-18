@@ -133,15 +133,13 @@ describe('inspect-sub-session —— 接到真子会话上', () => {
       const afterHuman = (await inspectLines(p, { turns: 5 })).lines
       expect(afterHuman.some((l) => l.endsWith(' [user] human words'))).toBe(true)
 
-      // 父会话再派一轮（后台），C 停在 LLM 请求上时父会话 steer 一条
+      // 父会话再派一轮，C 停在 LLM 请求上时父会话 steer 一条
       const gate = held(callTool('probe', {}, 'p3'))
       p.router.push('C', gate.step, answer('C-final'))
       const started = await p.runner.prompt({
         parentId: 'P',
         childId: 'C',
         message: 'second task',
-        background: true,
-        timeoutSeconds: 30,
         requestId: 'subsession:P:9001'
       })
       expect(started).toEqual({ kind: 'started', id: 'C' })

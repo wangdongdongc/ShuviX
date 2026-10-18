@@ -42,7 +42,7 @@ import { sessionService } from '../services/sessionService'
 import { blockedOnApproval, renderPendingAsks } from '../services/subSessionText'
 import {
   subSessionRunner,
-  DEFAULT_PROMPT_TIMEOUT_SEC,
+  DEFAULT_WAIT_TIMEOUT_SEC,
   type AnswerFields,
   type PromptOutcome,
   type SubSessionInfo
@@ -131,15 +131,9 @@ export const SessionParamsSchema = Type.Object({
         'For "inspect-sub-session": continue an outline that was cut at the size limit — pass the ref it gave you.'
     })
   ),
-  run_in_background: Type.Optional(
-    Type.Boolean({
-      description:
-        'For "prompt-sub-session" / "answer-sub-session": return a receipt at once instead of the reply, and bring you back when the turn ends — for work you can let run, or several sub-sessions to collect with "wait-for-sub-sessions".'
-    })
-  ),
   timeout_seconds: Type.Optional(
     Type.Number({
-      description: `How long a foreground "prompt-sub-session" / "answer-sub-session" or "wait-for-sub-sessions" waits (default ${DEFAULT_PROMPT_TIMEOUT_SEC}s). On timeout the sub-session keeps running.`
+      description: `For "wait-for-sub-sessions": how long to wait (default ${DEFAULT_WAIT_TIMEOUT_SEC}s). On timeout the sub-sessions keep running.`
     })
   )
 })
@@ -151,16 +145,16 @@ A sub-session is an ordinary session you own — its own conversation, model, to
 Actions:
 - "set-title": rename THIS session (\`title\`, at most ${TITLE_MAX_CHARS} characters).
 - "create-sub-session": start an empty sub-session and return its id (optional \`title\` and \`agent_profile\`). It inherits this session's project, model, thinking level, MCP servers and skills.
-- "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user typed it and wait for the reply — or, with \`run_in_background: true\`, get a receipt at once and be brought back when the turn ends. This is also how a new sub-session gets its first task.
-- "wait-for-sub-sessions": block until your sub-sessions finish and return all their answers.
+- "prompt-sub-session": send \`message\` into \`sub_session_id\` as if the user typed it. It returns a receipt at once and the turn runs in the background. This is also how a new sub-session gets its first task.
+- "wait-for-sub-sessions": block until your sub-sessions finish (or one stops to ask something) and return all their answers — the only action that waits.
 - "list-sub-sessions": your sub-sessions and their status (idle / running / waiting-input / interrupted).
 - "read-sub-session": the latest answer of \`sub_session_id\`.
 - "stop-sub-session": stop what \`sub_session_id\` is doing.
-- "answer-sub-session": answer a question it asked in a turn you started (\`ask_id\`, then \`selections\` with exact option labels or \`message\` in your own words), then wait for the turn like "prompt-sub-session".
+- "answer-sub-session": answer a question it asked in a turn you started (\`ask_id\`, then \`selections\` with exact option labels or \`message\` in your own words); like "prompt-sub-session" it returns at once and the turn carries on in the background.
 - "steer-sub-session": tell a turn you started something while it is running (\`message\`); it reads it at its next step.
 - "inspect-sub-session": look at what happened inside \`sub_session_id\` — an outline of its latest turn, one line per step with a ref (\`turns\` for more, \`before\` to page back), \`item\` to expand one ref, \`match\` to search the whole conversation. Collect answers with "read-sub-session" / "wait-for-sub-sessions"; inspect only when the answer does not explain what happened (a failure, a stall, something unexpected, \`user-intervened="true"\` — the user spoke in it since your last message), and expand only the line you need.
 
-Wait in the foreground when you cannot continue without the answer, dispatch in the background when you can; the foreground wait costs nothing, comes back early when the sub-session stops to ask something, and on timeout leaves the sub-session running. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session".
+Everything you send runs in the background: when a turn ends, or stops to ask you something, you are brought back with a notice — get on with other work meanwhile, or end your turn. When you cannot continue without the answer, call "wait-for-sub-sessions": it costs nothing while it waits, comes back early when one stops to ask, and on timeout leaves everything running. Stopping this session does not stop its sub-sessions. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session".
 
 A sub-session runs one turn at a time: a second message while it is working is rejected — steer it, wait, or create another one. \`status="waiting-input"\` means it stopped to ask something. A \`<question>\` asked in a turn you started is yours to answer when the answer follows from what the user told you or from the task; when it is the user's own preference or beyond what you were asked, relay it. An approval prompt (\`<blocked-on-user-approval>\`) and a question marked \`for="user"\` only the user can answer, so relay them or stop the sub-session. \`status="interrupted"\` means its turn was cut off when the app stopped; it will not finish by itself, and a new message starts over.
 
@@ -178,7 +172,6 @@ interface SessionToolParams {
   item?: string
   match?: string
   before?: string
-  run_in_background?: boolean
   timeout_seconds?: number
 }
 
@@ -198,7 +191,7 @@ interface SessionToolParams {
  *（被叫回来、或一次 wait）这句话里都给全了。
  */
 const COLLECT_HINT =
-  'You do not have to wait here: when the turn ends you are brought back with a notice (at the latest, when the user next speaks). Get on with other work, or tell the user what you started. If you would rather have the answer inside this same turn, collect it with action "wait-for-sub-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
+  'You do not have to wait here: when the turn ends, or stops to ask you something, you are brought back with a notice (at the latest, when the user next speaks). Get on with other work, or tell the user what you started. If you need the answer inside this same turn, collect it with action "wait-for-sub-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
 
 /** 结果排版：一段文本，行间空行 —— 与其他工具的多段结果同形 */
 function text(...lines: string[]): ToolResult<SessionToolDetails | undefined> {
@@ -279,15 +272,14 @@ function renderChild(info: SubSessionInfo & AnswerFields): string {
 }
 
 /**
- * 一次「发出去、等这一轮」的结果排版（prompt 与 answer 共用）。
+ * `prompt` / `answer` 的回执排版（§20：派活一律是后台语义，两者都只回执）。
  *
- * 后台/降级的回执刻意不带内容：它会永久留在本会话上下文里并被每一步重发。收尾指引说的是**真实**机制：
- * 跑完会把你叫回来，要在这一轮里拿到结果就 wait（挂住、不花钱），而不是先说完话再回来轮询。
- * 停下来询问（§19.3）的那一种同样带后台标签：这一轮还开着、没人在等它，跑完照常通知。
+ * 回执刻意不带内容：它会永久留在本会话上下文里并被每一步重发。收尾指引说的是**真实**机制：跑完 / 停下来问会把你
+ * 叫回来，要在这一轮里拿到结果就 wait（挂住、不花钱），而不是先说完话再回来轮询。确认窗里就停下来问了的那一种
+ * 把询问带回来（§19.3）。两种都带后台标签：这次调用甩下了一件还在跑的活。
  */
 function renderTurn(
   res: PromptOutcome,
-  timeoutSeconds: number,
   startedLine: string
 ): ToolResult<SessionToolDetails | undefined> {
   if (res.kind === 'started') {
@@ -297,36 +289,24 @@ function renderTurn(
       COLLECT_HINT
     )
   }
-  if (res.kind === 'timeout') {
-    return backgroundText(
-      `<sub-session id="${attr(res.id)}" status="running"/>`,
-      `Still running after ${timeoutSeconds}s — it was NOT cancelled and keeps going.`,
-      COLLECT_HINT
+  // 崩溃之后重跑、那一轮早就落定了：没再发，如实说结束了（它不在跑，没什么可等的）
+  if (res.kind === 'finished') {
+    return text(
+      `<sub-session id="${attr(res.id)}" status="idle"/>`,
+      'That turn already finished before the app restarted — nothing was sent again. Read its answer with "read-sub-session".'
     )
   }
   // 停下来问了、快照却缺（会话恰好被删 / 读不到）：不猜它问的是什么，指向 read
-  if (res.kind === 'input' && !res.info) {
+  if (!res.info) {
     return backgroundText(
       `<sub-session id="${attr(res.id)}" status="waiting-input"/>`,
       'It stopped to ask something in the turn you started. See the question with "read-sub-session".'
     )
   }
-  // info 由 runner 顺带带回（省掉再 read 一次 = 再投影一遍整棵转写）；
-  // 它理论上可能缺（会话恰好被删），那时退化成只有围栏骨架的一块
-  const info: SubSessionInfo = res.info ?? {
-    id: res.id,
-    title: res.id,
-    status: res.kind === 'input' ? 'waiting-input' : 'idle',
-    driven: false,
-    updatedAt: 0
-  }
-  if (res.kind === 'input') {
-    return backgroundText(
-      renderChild(info),
-      'The turn is still open: once it is answered it carries on, and you are brought back when it ends.'
-    )
-  }
-  return text(renderChild({ ...info, answer: res.answer, isError: res.isError }))
+  return backgroundText(
+    renderChild(res.info),
+    'The turn is still open: once it is answered it carries on, and you are brought back when it ends.'
+  )
 }
 
 /** memo 的键（这次调用的 durable memo，崩溃后重跑读回同一份） */
@@ -366,7 +346,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       case 'create-sub-session':
         return this.createSubSession(params, call)
       case 'prompt-sub-session':
-        return this.promptSubSession(params, call, signal)
+        return this.promptSubSession(params, call)
       case 'wait-for-sub-sessions':
         return this.waitForSubSessions(params, call, signal)
       case 'list-sub-sessions':
@@ -376,7 +356,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       case 'stop-sub-session':
         return this.stopSubSession(params)
       case 'answer-sub-session':
-        return this.answerSubSession(params, signal)
+        return this.answerSubSession(params)
       case 'steer-sub-session':
         return this.steerSubSession(params, call)
       case 'inspect-sub-session':
@@ -409,7 +389,8 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     // create **只建会话**。曾经它带 message 就顺手转 prompt（少一次往返），代价是
     // 「开一条子会话去干 X」这个最常见的写法恒为前台形态：派活那一刻就把父会话按住，
     // 最长 300s 才降级 —— 而派活的人多半根本不需要当场拿到答复。派发的形态选择属于
-    // `prompt-sub-session`（`run_in_background`），不该由「顺手」替它定死。
+    // `prompt-sub-session`，不该由「顺手」替它定死。（2026-10-17 起派活一律是后台语义，§20 —— 选择只剩
+    // 「要不要 wait」，那也是派活之后的事。）
     //
     // 收到 message 不静默丢掉：那才是真的坑 —— 模型会以为活已经派下去了，转头去
     // wait 一个根本没开始的东西。回执明说没发，并把下一步给全。
@@ -418,56 +399,40 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       params.message?.trim()
         ? 'Nothing was sent to it: "create-sub-session" does not take `message`.'
         : '',
-      'Send it its task with action "prompt-sub-session" — add `run_in_background: true` to dispatch it without waiting for the reply.'
+      'Send it its task with action "prompt-sub-session" — it runs in the background, and you are brought back when it is done.'
     )
   }
 
   private async promptSubSession(
     params: SessionToolParams,
-    call: ToolCallScope,
-    signal?: AbortSignal
+    call: ToolCallScope
   ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.prompt({
       parentId: this.ctx.sessionId,
       childId: (params.sub_session_id ?? '').trim(),
       message: params.message ?? '',
-      background: params.run_in_background === true,
-      timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
-      signal,
       // 发送的身份是这次调用的 durable 工具任务（会话内唯一，崩溃后重跑不变），不是 provider 的
       // tool_call id —— 有的中转每轮从 call_0 数起，会撞（fact 20）。派生 agent 调它时 ctx.sessionId 同样是
       // 根会话（工具上下文恒按根会话建）：子会话挂在根会话下，任务 id 在同一个存储里唯一，不会撞（P2-12 PIN-10）
       requestId: `subsession:${this.ctx.sessionId}:${call.taskId}`
     })
     if ('error' in res) throw new Error(res.error)
-    return renderTurn(
-      res,
-      params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
-      'Started in the background.'
-    )
+    return renderTurn(res, 'Started in the background.')
   }
 
-  /** 代答子会话的提问（§19.4）：应答之后与 prompt 同一种等法、同一种排版 */
+  /** 代答子会话的提问（§19.4）：应答之后与 prompt 同一种回执（§20） */
   private async answerSubSession(
-    params: SessionToolParams,
-    signal?: AbortSignal
+    params: SessionToolParams
   ): Promise<ToolResult<SessionToolDetails | undefined>> {
     const res = await subSessionRunner.answer({
       parentId: this.ctx.sessionId,
       childId: (params.sub_session_id ?? '').trim(),
       ...(params.ask_id ? { askId: params.ask_id } : {}),
       ...(params.selections ? { selections: params.selections } : {}),
-      ...(params.message !== undefined ? { message: params.message } : {}),
-      background: params.run_in_background === true,
-      timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
-      signal
+      ...(params.message !== undefined ? { message: params.message } : {})
     })
     if ('error' in res) throw new Error(res.error)
-    return renderTurn(
-      res,
-      params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
-      'Answered; it carries on in the background.'
-    )
+    return renderTurn(res, 'Answered; it carries on in the background.')
   }
 
   /**
@@ -548,7 +513,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       res.earlier
         ? 'This steer was already delivered earlier — nothing was sent again.'
         : 'Steer delivered — it reads it at its next step.',
-      'Its reply still comes back the way this turn was started: to the call that is waiting for it, or as a notice when the turn ends.'
+      'Its reply comes back the way every turn does: as a notice when the turn ends, or to "wait-for-sub-sessions" if you are waiting.'
     )
   }
 
@@ -563,7 +528,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
     const res = await subSessionRunner.wait({
       parentId: this.ctx.sessionId,
       ...(id ? { childId: id } : {}),
-      timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
+      timeoutSeconds: params.timeout_seconds ?? DEFAULT_WAIT_TIMEOUT_SEC,
       signal,
       ...(rerunTargets !== undefined
         ? { rerunTargets }
@@ -592,7 +557,7 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
               ? 'Nothing finished: a sub-session is waiting for something only the user can answer. Waiting again will not help — relay it to the user.'
               : ''
     // **不带后台标签**：那枚标签的含义是「这次调用甩下了一件还在跑的活」（bash 的
-    // run_in_background、prompt 的后台形态与超时降级都是）。wait 什么也没起 —— 它是一次
+    // run_in_background、prompt / answer 的回执都是）。wait 什么也没起 —— 它是一次
     // 读取；即便超时，还在跑的那件活是**上一次 prompt** 甩下的，标签早就打在那张卡上了。
     // blocked 更不是：那时根本没有东西在跑，是有人在等用户点批准。
     return text(`<sub-sessions status="${res.kind}">\n${body}\n</sub-sessions>`, trailer)

@@ -16,6 +16,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
 import type { PendingAskInfo } from '../../services/subSessionText'
 import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
+import { Check } from 'typebox/value'
 import {
   executeTool,
   failureText,
@@ -47,7 +48,7 @@ vi.mock('../../services/sessionService', () => ({
 }))
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: mocks.registerBuiltinTool }))
 vi.mock('../../services/subSessionRunner', () => ({
-  DEFAULT_PROMPT_TIMEOUT_SEC: 300,
+  DEFAULT_WAIT_TIMEOUT_SEC: 300,
   subSessionRunner: {
     create: mocks.runnerCreate,
     prompt: mocks.runnerPrompt,
@@ -109,11 +110,11 @@ describe('SessionTool — 参数面与目标会话边界', () => {
       'item',
       'match',
       'before',
-      'run_in_background',
       'timeout_seconds'
     ])
     // 参数面只为新能力加必要的几项（§19：代答的 ask_id / selections，查看现场的 turns / item / match / before）：
-    // wait / answer 复用 sub_session_id / timeout_seconds，steer / answer 复用 message
+    // wait / answer 复用 sub_session_id，steer / answer 复用 message；§20 起没有 run_in_background，
+    // timeout_seconds 只属于 wait（BG-37）
     // 「改哪条会话」的选择权始终不给模型：本会话恒取 ToolContext.sessionId，
     // 而 sub_session_id 只能指向调用方自己的子会话（判定在 runner，见其用例）
     expect(keys).not.toContain('sessionId')
@@ -198,7 +199,7 @@ describe('SessionTool — 注册与描述', () => {
 //
 // 工具层是**翻译层**：调 runner → 有 error 就抛（文案原样，它握着准入规则）→
 // 没有就把结果排版成文本。所以这里钉的是「转调了什么」与「回话长什么样」，
-// 语义（准入 / 上限 / 超时降级 / 越权）全在 subSessionRunner 的用例里。
+// 语义（准入 / 上限 / 回执 / 越权）全在 subSessionRunner 的用例里。
 
 const textOf = (r: unknown): string =>
   ((r as { content: Array<{ text: string }> }).content ?? []).map((c) => c.text).join('')
@@ -244,11 +245,10 @@ describe('SessionTool — 子会话 action', () => {
     expect(textOf(res)).toContain('重构 parser')
   })
 
-  it('create 只建会话：带了 message 也不发，且回执明说没发出去', async () => {
+  it('BG-41 create 只建会话：带了 message 也不发，且回执明说没发出去；下一步只指向 prompt（不再提 run_in_background）', async () => {
     // 曾经 create 带 message 会顺手转 prompt —— 于是「开一条子会话去干 X」这个最常见的
-    // 写法恒为前台形态，派活那一刻就把父会话按住。形态的选择权还给 prompt 之后，
-    // 这个参数在 create 上就只剩一种正确处理：**明说没发**。静默丢弃才是坑 ——
-    // 模型会以为活已经派下去了，转头去 wait 一个根本没开始的东西
+    // 写法恒为前台形态，派活那一刻就把父会话按住。这个参数在 create 上只剩一种正确处理：
+    // **明说没发**。静默丢弃才是坑 —— 模型会以为活已经派下去了，转头去 wait 一个根本没开始的东西
     mocks.runnerCreate.mockResolvedValue({ id: 'sub-1', title: '重构 parser' })
     const res = await executeTool(tool, 'tc-1', {
       action: 'create-sub-session',
@@ -256,10 +256,11 @@ describe('SessionTool — 子会话 action', () => {
     })
     expect(mocks.runnerPrompt).not.toHaveBeenCalled()
     expect(textOf(res)).toContain('Nothing was sent to it')
-    // 下一步给全：派活的形态选择属于 prompt，回执必须把那个参数摆到模型面前，
-    // 否则拆成两步之后它只会用缺省的前台形态，问题原样搬家
+    // 下一步给全：用 prompt 派活；§20 起派活一律后台，回执说的是真实机制（后台跑、跑完叫回来）
     expect(textOf(res)).toContain('prompt-sub-session')
-    expect(textOf(res)).toContain('run_in_background')
+    expect(textOf(res)).toContain('runs in the background')
+    expect(textOf(res)).toContain('brought back')
+    expect(textOf(res)).not.toContain('run_in_background')
     // 没带 message 的那条不该无端多出这句
     mocks.runnerCreate.mockResolvedValue({ id: 'sub-2', title: 'B' })
     expect(textOf(await executeTool(tool, 'tc-1', { action: 'create-sub-session' }))).not.toContain(
@@ -274,44 +275,28 @@ describe('SessionTool — 子会话 action', () => {
     ).toContain('Chat sessions cannot have sub-sessions.')
   })
 
-  it('P2-10-01 发送的幂等键是 subsession:<本会话>:<工具任务 id>，不再是 tool_call id', async () => {
-    mocks.runnerPrompt.mockResolvedValue({
-      kind: 'answered',
-      id: 'c1',
-      answer: 'ok',
-      info: info('c1', 'C', 'idle')
-    })
+  it('P2-10-01 发送的幂等键是 subsession:<本会话>:<工具任务 id>，不再是 tool_call id；参数恰为这四项（§20 无前台参数）', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'c1' })
     await invokeTool(
       tool,
       { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'm' },
       { callId: 'call_0', taskId: 7 }
     )
     const args = mocks.runnerPrompt.mock.calls[0][0] as Record<string, unknown>
-    expect(args).toMatchObject({
+    expect(args).toEqual({
       parentId: 's1',
       childId: 'c1',
       message: 'm',
-      requestId: 'subsession:s1:7',
-      background: false,
-      timeoutSeconds: 300
+      requestId: 'subsession:s1:7'
     })
     expect(args).not.toHaveProperty('toolCallId')
     expect(JSON.stringify(args)).not.toContain('call_0')
   })
 
-  it('P2-10-28 / P2-10-33 渲染：答复在 <reply> 里；被中断的一块是 <note>，从不说「还在跑」或「还没回话」；描述里列出 interrupted', async () => {
-    mocks.runnerPrompt.mockResolvedValue({
-      kind: 'answered',
-      id: 'c1',
-      answer: 'DONE.',
-      info: info('c1', 'C', 'idle')
-    })
+  it('P2-10-28 / P2-10-33 渲染：答复在 <reply> 里（经 read，§20 起 prompt 只回执）；被中断的一块是 <note>，从不说「还在跑」或「还没回话」；描述里列出 interrupted', async () => {
+    mocks.runnerRead.mockResolvedValue({ info: info('c1', 'C', 'idle'), answer: 'DONE.' })
     const answered = textOf(
-      await executeTool(tool, 'tc-1', {
-        action: 'prompt-sub-session',
-        sub_session_id: 'c1',
-        message: 'go'
-      })
+      await executeTool(tool, 'tc-1', { action: 'read-sub-session', sub_session_id: 'c1' })
     )
     expect(answered).toContain('<reply>\nDONE.\n</reply>')
 
@@ -348,34 +333,65 @@ describe('SessionTool — 子会话 action', () => {
     expect(source).not.toContain('answerUnavailable')
   })
 
-  it('prompt-sub-session 前台：parentId 取 ToolContext，缺省超时 300s，答复在 <reply> 围栏内', async () => {
-    // info 由 prompt 顺带带回（工具层不再为一个标题重投影整棵转写）
-    mocks.runnerPrompt.mockResolvedValue({
-      kind: 'answered',
-      id: 'sub-1',
-      answer: 'DONE.',
-      info: info('sub-1', 'A', 'idle')
-    })
-    const res = await executeTool(tool, 'tc-1', {
-      action: 'prompt-sub-session',
-      sub_session_id: 'sub-1',
-      message: '去把测试跑绿'
-    })
-    expect(mocks.runnerPrompt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentId: 's1',
-        childId: 'sub-1',
-        message: '去把测试跑绿',
-        background: false,
-        timeoutSeconds: 300
-      })
+  // 原「prompt-sub-session 前台：缺省超时 300s、答复在 <reply> 围栏内」被 §20 取消：prompt 一律只回执，
+  // 没有前台等待、也没有超时参数（由下面的 BG-28 / BG-39 替代）
+
+  it('BG-28 prompt / answer 不把中止信号、前台参数交给 runner；wait 仍收中止信号', async () => {
+    const controller = new AbortController()
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1' })
+    await invokeTool(
+      tool,
+      { action: 'prompt-sub-session', sub_session_id: 'sub-1', message: '去把测试跑绿' },
+      { taskId: 3, signal: controller.signal }
     )
-    // 子会话说的话恒在围栏内 —— 围栏外的每个字都是工具在说话
-    expect(textOf(res)).toContain('<reply>\nDONE.\n</reply>')
-    expect(textOf(res)).toContain('<sub-session id="sub-1"')
+    expect(mocks.runnerPrompt.mock.calls[0][0]).toEqual({
+      parentId: 's1',
+      childId: 'sub-1',
+      message: '去把测试跑绿',
+      requestId: 'subsession:s1:3'
+    })
+
+    mocks.runnerAnswer.mockResolvedValue({ kind: 'started', id: 'sub-1' })
+    await invokeTool(
+      tool,
+      {
+        action: 'answer-sub-session',
+        sub_session_id: 'sub-1',
+        ask_id: 'q1',
+        selections: ['A'],
+        message: 'and keep a shim'
+      },
+      { taskId: 4, signal: controller.signal }
+    )
+    expect(mocks.runnerAnswer.mock.calls[0][0]).toEqual({
+      parentId: 's1',
+      childId: 'sub-1',
+      askId: 'q1',
+      selections: ['A'],
+      message: 'and keep a shim'
+    })
+
+    // 只有 wait 会等：它照旧收这次调用的中止信号（被中止只是放手，不级联 —— 那是 runner 的用例）
+    mocks.runnerWait.mockResolvedValue({ kind: 'settled', results: [] })
+    await invokeTool(
+      tool,
+      { action: 'wait-for-sub-sessions' },
+      { taskId: 5, signal: controller.signal }
+    )
+    const waitArgs = mocks.runnerWait.mock.calls[0][0] as { signal?: AbortSignal }
+    expect(waitArgs.signal).toBeInstanceOf(AbortSignal)
   })
 
-  it('后台与超时降级的结果带 details.background —— UI 上与 bash 后台任务同一枚标签', async () => {
+  it('BG-06 省略 sub_session_id：转调传空串，回执围栏用 runner 补全的真实 id', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'only-child' })
+    const out = textOf(
+      await executeTool(tool, 'tc-1', { action: 'prompt-sub-session', message: 'go' })
+    )
+    expect(mocks.runnerPrompt.mock.calls[0][0]).toMatchObject({ childId: '' })
+    expect(out.split('\n')[0]).toBe('<sub-session id="only-child" status="running"/>')
+  })
+
+  it('BG-39 prompt 的两种回执（started / input）都带 details.background —— UI 上与 bash 后台任务同一枚标签', async () => {
     const detailsOf = (r: unknown): unknown => (r as { details?: unknown }).details
     mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1' })
     expect(
@@ -383,29 +399,16 @@ describe('SessionTool — 子会话 action', () => {
         await executeTool(tool, 'tc-1', {
           action: 'prompt-sub-session',
           sub_session_id: 'sub-1',
-          message: 'go',
-          run_in_background: true
-        })
-      )
-    ).toEqual({ type: 'session', background: true })
-
-    mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout', id: 'sub-1' })
-    expect(
-      detailsOf(
-        await executeTool(tool, 'tc-1', {
-          action: 'prompt-sub-session',
-          sub_session_id: 'sub-1',
           message: 'go'
         })
       )
     ).toEqual({ type: 'session', background: true })
 
-    // 前台拿到答复 = 这次调用等到底了，不是后台形态
+    // 确认窗里就停下来问了：这一轮还开着、没人在等它 —— 同样是甩下了一件还在跑的活
     mocks.runnerPrompt.mockResolvedValue({
-      kind: 'answered',
+      kind: 'input',
       id: 'sub-1',
-      answer: 'ok',
-      info: info('sub-1', 'A', 'idle')
+      info: info('sub-1', 'A', 'waiting-input', { pendingAsks: [] })
     })
     expect(
       detailsOf(
@@ -415,7 +418,8 @@ describe('SessionTool — 子会话 action', () => {
           message: 'go'
         })
       )
-    ).toBeUndefined()
+    ).toEqual({ type: 'session', background: true })
+    // 原来这里还有「超时降级带标签」「前台答复不带标签」两段：§20 取消了超时降级与前台答复
   })
 
   it('wait **从不**带后台标签 —— 它什么也没起，是一次读取', async () => {
@@ -434,58 +438,107 @@ describe('SessionTool — 子会话 action', () => {
     }
   })
 
-  it('后台形态与超时降级：都只给回执，**不带任何内容**（内容会永久留在上下文并被每步重发）', async () => {
+  it('BG-39 回执**不带任何内容**（内容会永久留在上下文并被每步重发）；收尾指引说清两种叫回来的时机与 wait', async () => {
     mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1' })
     const started = textOf(
       await executeTool(tool, 'tc-1', {
         action: 'prompt-sub-session',
         sub_session_id: 'sub-1',
-        message: 'go',
-        run_in_background: true
+        message: 'go'
       })
     )
-    expect(mocks.runnerPrompt).toHaveBeenCalledWith(expect.objectContaining({ background: true }))
-    expect(started).toMatch(/background/i)
-    // 收尾指引**明说会被叫回来**：自动续跑（d886985）落地之后那就是事实 ——
+    const [head, second] = started.split('\n\n')
+    expect(head).toBe('<sub-session id="sub-1" status="running"/>')
+    expect(second).toBe('Started in the background.')
+    // 收尾指引**明说会被叫回来**（跑完，或停下来问你）：自动续跑落地之后那就是事实 ——
     // 子会话跑完经 AgentSession.notify 回报，空闲的父会话会自己起一轮。
-    // 原先这里断言的是相反的一句（不承诺通知），而那句话正是把模型逼回前台阻塞的东西：
-    // 它读完只剩「原地把整轮等完」一条路
+    expect(started).toContain('or stops to ask you something')
     expect(started).toContain('brought back')
     // 两条兑现得了的收法都得在：被叫回来，或者一次 wait。轮询照旧写死禁止
     expect(started).toContain('wait-for-sub-sessions')
     expect(started).toContain('Do NOT sleep and poll')
+    for (const banned of ['<reply>', '<error>', 'Still running after', 'NOT cancelled']) {
+      expect(started).not.toContain(banned)
+    }
+    // 原来这里还有「超时降级的回执说 NOT cancelled」一段：§20 没有超时降级了
+  })
 
-    mocks.runnerPrompt.mockResolvedValue({ kind: 'timeout', id: 'sub-1' })
-    const timedOut = textOf(
-      await executeTool(tool, 'tc-1', {
+  it('BG-27 崩溃之后重跑撞上早已落定的那一轮（finished）：status="idle"，说清什么都没再发、用 read 拿答复；不带后台标签、不说在跑', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'finished', id: 'sub-1' })
+    const res = await executeTool(tool, 'tc-1', {
+      action: 'prompt-sub-session',
+      sub_session_id: 'sub-1',
+      message: 'go'
+    })
+    const out = textOf(res)
+    expect(out).toBe(
+      '<sub-session id="sub-1" status="idle"/>\n\nThat turn already finished before the app restarted — nothing was sent again. Read its answer with "read-sub-session".'
+    )
+    expect((res as { details?: unknown }).details).toBeUndefined()
+    expect(out).not.toContain('status="running"')
+    expect(out).not.toContain('Started in the background')
+  })
+
+  it('BG-40 模型照旧习惯给 prompt / answer 传 run_in_background / timeout_seconds：schema 不拒、不转发、照样回执（轻决定：宽容忽略）', async () => {
+    const legacy = { run_in_background: false, timeout_seconds: 30 }
+    // typebox Object 没设 additionalProperties:false：多出来的旧键过得了校验
+    expect(
+      Check(mod.SessionParamsSchema, {
         action: 'prompt-sub-session',
         sub_session_id: 'sub-1',
         message: 'go',
-        timeout_seconds: 30
+        ...legacy
       })
+    ).toBe(true)
+
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'sub-1' })
+    const prompted = await invokeTool(
+      tool,
+      { action: 'prompt-sub-session', sub_session_id: 'sub-1', message: 'go', ...legacy } as never,
+      { taskId: 2 }
     )
-    // 超时**没有**中止子会话 —— 这句话必须写在回执里，否则模型会以为工作被丢了
-    expect(timedOut).toContain('NOT cancelled')
-    expect(timedOut).toContain('wait-for-sub-sessions')
+    expect(mocks.runnerPrompt.mock.calls[0][0]).toEqual({
+      parentId: 's1',
+      childId: 'sub-1',
+      message: 'go',
+      requestId: 'subsession:s1:2'
+    })
+    expect(textOf(prompted.result)).toContain('Started in the background.')
+
+    mocks.runnerAnswer.mockResolvedValue({ kind: 'started', id: 'sub-1' })
+    const answered = await executeTool(tool, 'tc-1', {
+      action: 'answer-sub-session',
+      sub_session_id: 'sub-1',
+      selections: ['A'],
+      ...legacy
+    } as never)
+    expect(mocks.runnerAnswer.mock.calls[0][0]).toEqual({
+      parentId: 's1',
+      childId: 'sub-1',
+      selections: ['A']
+    })
+    expect(textOf(answered)).toContain('Answered; it carries on in the background.')
   })
 
-  it('失败的一轮走 <error> 围栏（同一份事实，但与正常答复分得开）', async () => {
-    mocks.runnerPrompt.mockResolvedValue({
-      kind: 'answered',
-      id: 'sub-1',
+  it('失败的一轮走 <error> 围栏（同一份事实，但与正常答复分得开）—— 经 read / wait 交回（§20 起 prompt 只回执）', async () => {
+    mocks.runnerRead.mockResolvedValue({
+      info: info('sub-1', 'A', 'idle'),
       answer: 'boom',
-      isError: true,
-      info: info('sub-1', 'A', 'idle')
+      isError: true
     })
     expect(
       textOf(
-        await executeTool(tool, 'tc-1', {
-          action: 'prompt-sub-session',
-          sub_session_id: 'sub-1',
-          message: 'go'
-        })
+        await executeTool(tool, 'tc-1', { action: 'read-sub-session', sub_session_id: 'sub-1' })
       )
     ).toContain('<error>\nboom\n</error>')
+
+    mocks.runnerWait.mockResolvedValue({
+      kind: 'settled',
+      results: [{ ...info('sub-1', 'A', 'idle'), answer: 'boom', isError: true }]
+    })
+    const waited = textOf(await executeTool(tool, 'tc-1', { action: 'wait-for-sub-sessions' }))
+    expect(waited).toContain('<error>\nboom\n</error>')
+    expect(waited).not.toContain('<reply>')
   })
 
   it('wait-for-sub-sessions：不传 id = 等全部；结果一次交齐（含答复正文）', async () => {
@@ -638,7 +691,7 @@ const approvalAsk = (id: string, summary: string): PendingAskInfo => ({
 })
 
 describe('SessionTool — §19 参数面', () => {
-  it('WP3-83 action 恰 10 项、含三个新动作；未知 action 的错误列出这 10 个；新参数各自注明 For "…"', async () => {
+  it('WP3-83 / BG-37 action 恰 10 项、含三个新动作；未知 action 的错误列出这 10 个；新参数各自注明 For "…"；timeout_seconds 只属于 wait', async () => {
     const props = mod.SessionParamsSchema.properties as unknown as Record<
       string,
       { description?: string; enum?: string[] }
@@ -658,17 +711,18 @@ describe('SessionTool — §19 参数面', () => {
     for (const action of ['"prompt-sub-session"', '"steer-sub-session"', '"answer-sub-session"']) {
       expect(props.message.description).toContain(action)
     }
-    expect(props.run_in_background.description).toContain('answer-sub-session')
-    expect(props.timeout_seconds.description).toContain('answer-sub-session')
+    // §20：没有 run_in_background；timeout_seconds 只给 wait（缺省 300s，到点什么都不停）
+    expect(props).not.toHaveProperty('run_in_background')
+    const timeout = props.timeout_seconds.description!
+    expect(timeout.startsWith('For "wait-for-sub-sessions"')).toBe(true)
+    expect(timeout).toContain('300')
+    expect(timeout).toContain('keep running')
+    expect(timeout).not.toContain('prompt-sub-session')
+    expect(timeout).not.toContain('answer-sub-session')
   })
 
-  it('WP3-84 answer-sub-session：转调 runner.answer（id trim、ask_id / selections 原样、缺省前台 300s、带中止信号），不带 message 也不带幂等键', async () => {
-    mocks.runnerAnswer.mockResolvedValue({
-      kind: 'answered',
-      id: 'c1',
-      answer: 'ok',
-      info: info('c1', 'C', 'idle')
-    })
+  it('WP3-84 answer-sub-session：转调 runner.answer（id trim、ask_id / selections 原样），不带 message、不带幂等键，也没有前台参数（§20：无 background / timeoutSeconds / signal）', async () => {
+    mocks.runnerAnswer.mockResolvedValue({ kind: 'started', id: 'c1' })
     await executeTool(tool, 'tc-1', {
       action: 'answer-sub-session',
       sub_session_id: ' c1 ',
@@ -676,21 +730,15 @@ describe('SessionTool — §19 参数面', () => {
       selections: ['A']
     })
     expect(mocks.runnerAnswer).toHaveBeenCalledTimes(1)
-    const args = mocks.runnerAnswer.mock.calls[0][0] as Record<string, unknown>
-    expect(args).toMatchObject({
+    expect(mocks.runnerAnswer.mock.calls[0][0]).toEqual({
       parentId: 's1',
       childId: 'c1',
       askId: 'q1',
-      selections: ['A'],
-      background: false,
-      timeoutSeconds: 300
+      selections: ['A']
     })
-    expect('signal' in args).toBe(true)
-    expect(args).not.toHaveProperty('message')
-    expect(args).not.toHaveProperty('requestId')
   })
 
-  it('WP3-85 空的 ask_id 不传；message 原样传（判空在 runner）；run_in_background / timeout_seconds 照 prompt 的口径', async () => {
+  it('WP3-85 空的 ask_id 不传；message 原样传（判空在 runner）；run_in_background / timeout_seconds 不转发（BG-40）', async () => {
     mocks.runnerAnswer.mockResolvedValue({ kind: 'started', id: 'c1' })
     await executeTool(tool, 'tc-1', {
       action: 'answer-sub-session',
@@ -699,10 +747,7 @@ describe('SessionTool — §19 参数面', () => {
       message: ''
     })
     const first = mocks.runnerAnswer.mock.calls[0][0] as Record<string, unknown>
-    expect(first).not.toHaveProperty('askId')
-    expect(first).not.toHaveProperty('selections')
-    expect(first.message).toBe('')
-    expect(first).toMatchObject({ background: false, timeoutSeconds: 300 })
+    expect(first).toEqual({ parentId: 's1', childId: 'c1', message: '' })
 
     await executeTool(tool, 'tc-1', {
       action: 'answer-sub-session',
@@ -710,11 +755,11 @@ describe('SessionTool — §19 参数面', () => {
       message: 'keep it',
       run_in_background: true,
       timeout_seconds: 30
-    })
-    expect(mocks.runnerAnswer.mock.calls[1][0]).toMatchObject({
-      message: 'keep it',
-      background: true,
-      timeoutSeconds: 30
+    } as never)
+    expect(mocks.runnerAnswer.mock.calls[1][0]).toEqual({
+      parentId: 's1',
+      childId: 'c1',
+      message: 'keep it'
     })
   })
 
@@ -764,17 +809,7 @@ describe('SessionTool — §19 渲染', () => {
       selections: ['A']
     })
 
-  it('WP3-86 answer 的四种结果：答复在 <reply>（无后台标签）；又停下来问 / 后台回执 / 超时降级都带后台标签', async () => {
-    mocks.runnerAnswer.mockResolvedValueOnce({
-      kind: 'answered',
-      id: 'c1',
-      answer: 'ok',
-      info: info('c1', 'C', 'idle')
-    })
-    const answered = await answerOnce()
-    expect(textOf(answered)).toContain('<reply>\nok\n</reply>')
-    expect(detailsOf(answered)).toBeUndefined()
-
+  it('WP3-86 answer 的三种结果（§20：没有答复、没有超时）：又停下来问 / 回执 / 停下来问但快照缺，都带后台标签，从不出现 <reply>', async () => {
     mocks.runnerAnswer.mockResolvedValueOnce({
       kind: 'input',
       id: 'c1',
@@ -798,15 +833,26 @@ describe('SessionTool — §19 渲染', () => {
 
     mocks.runnerAnswer.mockResolvedValueOnce({ kind: 'started', id: 'c1' })
     const started = await answerOnce()
-    expect(textOf(started)).toContain('Answered; it carries on in the background.')
+    expect(textOf(started).split('\n\n').slice(0, 2)).toEqual([
+      '<sub-session id="c1" status="running"/>',
+      'Answered; it carries on in the background.'
+    ])
     expect(textOf(started)).toContain('wait-for-sub-sessions')
     expect(textOf(started)).toContain('Do NOT sleep and poll')
     expect(detailsOf(started)).toEqual({ type: 'session', background: true })
 
-    mocks.runnerAnswer.mockResolvedValueOnce({ kind: 'timeout', id: 'c1' })
-    const timedOut = await answerOnce()
-    expect(textOf(timedOut)).toContain('Still running after 300s')
-    expect(detailsOf(timedOut)).toEqual({ type: 'session', background: true })
+    mocks.runnerAnswer.mockResolvedValueOnce({ kind: 'input', id: 'c1' })
+    const bare = await answerOnce()
+    expect(textOf(bare)).toContain('<sub-session id="c1" status="waiting-input"/>')
+    expect(textOf(bare)).toContain('See the question with "read-sub-session"')
+    expect(detailsOf(bare)).toEqual({ type: 'session', background: true })
+
+    for (const res of [input, started, bare]) {
+      for (const banned of ['<reply>', '<error>', 'Still running after', 'NOT cancelled']) {
+        expect(textOf(res)).not.toContain(banned)
+      }
+    }
+    // 原来这里还有「答复在 <reply>、无后台标签」「超时降级 Still running after 300s」两段：§20 一并取消
   })
 
   it.each([
@@ -876,7 +922,11 @@ describe('SessionTool — §19 渲染', () => {
     })
     expect(textOf(delivered)).toContain('<sub-session id="c1" title="C" status="running"/>')
     expect(textOf(delivered)).toContain('Steer delivered — it reads it at its next step.')
-    expect(textOf(delivered)).toContain('Its reply still comes back the way this turn was started')
+    // §20：只剩两条去处 —— 完成通知，或正在等的 wait（不再有「等着它的那次前台调用」）
+    expect(textOf(delivered)).toContain(
+      'Its reply comes back the way every turn does: as a notice when the turn ends, or to "wait-for-sub-sessions" if you are waiting.'
+    )
+    expect(textOf(delivered)).not.toContain('the call that is waiting for it')
     expect(detailsOf(delivered)).toBeUndefined()
 
     mocks.runnerSteer.mockResolvedValueOnce({ id: 'c1', title: 'C', earlier: true })
@@ -933,12 +983,31 @@ describe('SessionTool — §19 渲染', () => {
     expect(legacy).not.toContain('<question')
   })
 
-  it('WP3-94 工具描述：三个新动作、提前返回、何时代答何时转告、只有用户能答的两种、忙时的去处；旧的「waiting-input 一律等用户批」说法已删', () => {
+  it('WP3-94 / BG-38 工具描述：三个新动作、派活一律后台、只有 wait 会等（提前返回）、停本会话不停子会话、何时代答何时转告、只有用户能答的两种、忙时的去处；旧的前台说法已删', () => {
     const d = mod.SESSION_DESCRIPTION
     for (const action of ['answer-sub-session', 'steer-sub-session', 'inspect-sub-session']) {
       expect(d).toContain(`"${action}"`)
     }
-    expect(d).toContain('comes back early when the sub-session stops to ask')
+    for (const phrase of [
+      'It returns a receipt at once and the turn runs in the background',
+      'the only action that waits',
+      'Everything you send runs in the background',
+      'comes back early when one stops to ask',
+      'Stopping this session does not stop its sub-sessions',
+      'Never sleep and then poll'
+    ]) {
+      expect(d).toContain(phrase)
+    }
+    const answerLine = d.split('\n').find((l) => l.startsWith('- "answer-sub-session"'))!
+    expect(answerLine).toContain('returns at once')
+    for (const gone of [
+      'run_in_background',
+      'foreground',
+      'Wait in the foreground',
+      'wait for the reply'
+    ]) {
+      expect(d).not.toContain(gone)
+    }
     expect(d).toContain('`<question>`')
     expect(d).toMatch(/yours to answer when[\s\S]*relay it/)
     expect(d).toContain('for="user"')

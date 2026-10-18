@@ -61,6 +61,13 @@ const PROJECT_RULE = 'PROJECT-RULE-MARKER'
 const REVIEW_SOURCE = 'auto-review'
 /** 审查拒绝时工具错误里那句固定的「别绕过」 */
 const NO_EVASION = 'Do not rephrase'
+/** 子会话用例里一轮挂在 hold 里的上限：远长于要它挂着的时间，放行靠 `release(key)` */
+const HOLD_MS = 30_000
+/**
+ * 父会话的 `wait` 在视图里已经在跑之后，再留给它登记成「握着这条子会话」的余量（中间只隔两次 memo 读写）：
+ * 子会话停下来问 / 跑完时看「有没有 wait 握着」决定交回还是通知，所以放它往下走之前先过这一段
+ */
+const WAIT_ARMED_MS = 300
 
 interface AskEvent extends RecordedEvent {
   request: {
@@ -705,8 +712,12 @@ describe('子会话', () => {
     expect(child, 'sub-session created after the review allowed it').toBeDefined()
     const childSid = child!.id
 
-    // ② 父 agent 把任务派进去（前台）：子会话里的 bash 同样经审查
+    // ② 父 agent 把任务派进去（只回执，§20）：子会话里的 bash 同样经审查；子会话跑完由完成通知叫醒父会话
     const marker = markerPath('r10')
+    const wokenByCompletion = (r: FakeRequest): boolean =>
+      notReviewer(r) &&
+      r.lastUserText.includes(`<sub-session id="${childSid}"`) &&
+      r.lastUserText.includes('has finished')
     provider.reset()
     await events.clear()
     provider.script(
@@ -727,6 +738,8 @@ describe('子会话', () => {
       { toolCalls: [touchCall('call_r10_child', marker)], when: byText(delegated) },
       { text: 'CHILD DONE R10.', when: byText(delegated) },
       { text: 'parent done.', when: byText(askDelegate) },
+      // 被完成通知叫醒的那一轮（空闲的父会话自动续跑）
+      { text: 'parent collected R10.', when: wokenByCompletion },
       reviewerTurn({
         decision: 'allow',
         risk: 'low',
@@ -735,7 +748,18 @@ describe('子会话', () => {
       })
     )
     await sendPrompt(parentSid, askDelegate)
-    await events.waitFor('agent_end', { sessionId: parentSid })
+    // 父会话那一轮拿到回执就收尾了：要等的是子会话那一轮跑完、被它叫醒的父会话那一轮也落定
+    await events.waitFor('agent_end', { sessionId: childSid, timeoutMs: 60_000 })
+    await syncProbe(app.main).waitView(
+      parentSid,
+      (v) =>
+        v.run.state !== 'busy' &&
+        v.messages.some(
+          (m) => m.role === 'assistant' && m.content.includes('parent collected R10.')
+        ),
+      60_000,
+      'parent woken by the completion notice and settled'
+    )
 
     expect(existsSync(marker)).toBe(true)
     const childReviews = reviewRequests()
@@ -766,10 +790,29 @@ describe('子会话', () => {
     const parentTurn = (r: FakeRequest): boolean => notReviewer(r) && r.lastUserText === intent
     const childTurn = (r: FakeRequest): boolean => notReviewer(r) && r.lastUserText === delegated
 
+    const probe = syncProbe(app.main)
+    /** 等某个 hold 槽里挂着的恰好是子会话的那一步 */
+    const childHeld = (key: string): Promise<unknown> =>
+      until(() => {
+        const held = provider.heldRequest(key)
+        return held && childTurn(held) ? held : null
+      }, `child step held in "${key}"`)
+    /** 等父会话的某次 wait 真的挂上了（视图里在跑 + 登记余量） */
+    const waitArmed = async (callId: string): Promise<void> => {
+      await probe.waitView(
+        parentSid,
+        (v) => v.toolRuns[callId]?.status === 'running',
+        30_000,
+        `${callId} running`
+      )
+      await sleep(WAIT_ARMED_MS)
+    }
+
     provider.reset()
     await events.clear()
     provider.script(
-      // 前台派活：子会话一问就当场交回（不经通知、不靠计时）
+      // 派活只回执（§20）；子会话的每一步都挂着，等父会话的 wait 握着它再放 —— 询问与答复都由 wait 在这一轮里
+      // 交回（不经通知、不靠计时）
       {
         toolCalls: [
           {
@@ -798,9 +841,21 @@ describe('子会话', () => {
             })
           }
         ],
-        when: childTurn
+        when: childTurn,
+        holdMs: HOLD_MS,
+        holdKey: 'child'
       },
-      // 父会话代用户答「是」，前台等这一轮
+      {
+        toolCalls: [
+          {
+            id: 'call_r13_wait1',
+            name: 'session',
+            args: JSON.stringify({ action: 'wait-for-sub-sessions', sub_session_id: childSid })
+          }
+        ],
+        when: parentTurn
+      },
+      // 父会话代用户答「是」（只回执）
       {
         toolCalls: [
           {
@@ -818,16 +873,39 @@ describe('子会话', () => {
         summary: 'SUMMARY-R13',
         reason: 'REASON-R13'
       }),
-      { text: 'CHILD DONE R13.', when: childTurn },
+      { text: 'CHILD DONE R13.', when: childTurn, holdMs: HOLD_MS, holdKey: 'child2' },
+      {
+        toolCalls: [
+          {
+            id: 'call_r13_wait2',
+            name: 'session',
+            args: JSON.stringify({ action: 'wait-for-sub-sessions', sub_session_id: childSid })
+          }
+        ],
+        when: parentTurn
+      },
       { text: 'parent done.', when: parentTurn }
     )
     await sendPrompt(parentSid, intent)
+    await childHeld('child')
+    await waitArmed('call_r13_wait1')
+    provider.release('child')
+    await childHeld('child2')
+    await waitArmed('call_r13_wait2')
+    provider.release('child2')
     await events.waitFor('agent_end', { sessionId: parentSid, timeoutMs: 60_000 })
 
-    // 父会话那一轮里，子会话的答复由前台的代答交回
+    // 父会话那一轮里：询问由 wait 交回；代答只回执；子会话的答复由下一次 wait 交回
+    const asking = await toolBlock(parentSid, 'call_r13_wait1')
+    expect(asking.result).toContain('<sub-sessions status="asking">')
+    expect(asking.result).toContain('Q-R13 clean the marker?')
     const answered = await toolBlock(parentSid, 'call_r13_answer')
     expect(answered.isError).toBeFalsy()
-    expect(answered.result).toContain('CHILD DONE R13.')
+    expect(answered.result).toContain('Answered; it carries on in the background.')
+    expect(answered.result).not.toContain('CHILD DONE R13.')
+    const collected = await toolBlock(parentSid, 'call_r13_wait2')
+    expect(collected.isError).toBeFalsy()
+    expect(collected.result).toContain('<reply>\nCHILD DONE R13.\n</reply>')
 
     // 1. 恰好一次审查：子会话里那条命令；放行之后真的跑了
     expect(existsSync(marker)).toBe(true)

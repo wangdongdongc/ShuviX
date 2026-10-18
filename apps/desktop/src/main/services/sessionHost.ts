@@ -98,16 +98,11 @@ export async function onSubSessionDrivenSettled(event: DrivenSettledEvent): Prom
 }
 
 /**
- * 会话的中止前 seam（同步，在中止标记提交之前）：作废这条会话进行中的自动审查；再把父会话的中止级联给
- * 它前台驱动着、此刻被中断的子会话（P2-10 PIN-08；不等、幂等，失败只记日志）。
+ * 会话的中止前 seam（同步，在中止标记提交之前）：作废这条会话进行中的自动审查。父会话的中止**不**级联到子会话
+ * （§20：派活一律是后台语义；原来这里还会停掉它前台驱动着、被中断的子会话，PIN-08，已删）。
  */
 export function beforeSessionAbort(sessionId: string): void {
   abortSessionReviews(sessionId)
-  void subSessionRunnerModule()
-    .then(({ subSessionRunner }) => subSessionRunner.cascadeParentAbort(sessionId))
-    .catch((err: unknown) =>
-      log.warn(`父会话中止的级联失败 session=${sessionId}: ${errorText(err)}`)
-    )
 }
 
 const runtimeLog: RuntimeLogger = {

@@ -4,10 +4,11 @@
  * 每个「进程」一张新的模块图（`support/desktopRig.ts`，PIN-01）；「崩溃」= 限时 closeAll（PIN-02）。
  * P = 父会话，C = 子会话，R(t) = `subsession:P:<工具任务 id>`。
  *
- *   K1  继续的级联 P → C 跨崩溃
- *       K1-01 主线（前台）   K1-02 进程 2 里 C 没开着（经 peek 够到、只打开一次）   K1-03 两次崩溃
- *       K1-04 用户先继续 C（P2-10 PIN-14 裁决）   K1-05 wait 两个子会话跨崩溃
- *       K1-06 嵌套：被等着的子会话里还有一个派生 agent
+ *   K1  崩溃之后父会话的「继续」与子会话（§20：派活一律回执 —— 崩溃落在回执之后，P 的继续不再把 C 带起来，
+ *       C 留在被中断，用户在里面继续，P 收一条写入的通知；只有正在 wait 的 P 重跑时会续上它等的那几条）
+ *       K1-01 主线   K1-02 进程 2 里 C 没开着（P 的继续不碰它）   K1-03 两次崩溃
+ *       K1-04 用户先继续 C（PIN-14 的抑制已删：照常写入通知）   K1-05 wait 两个子会话跨崩溃
+ *       K1-06 嵌套：被中断的子会话里还有一个派生 agent
  *   K2  新消息发进被中断的子会话（abort-then-send，R5）
  *       K2-01 子会话自己的一轮被中断   K2-02 P 自己的后台一轮被顶掉（P2-10 PIN-19）
  *       K2-03 被中断的子会话里有活着的派生 agent
@@ -16,7 +17,7 @@
  *       K3-01 C 落定时 P 关着   K3-02 自动续跑关掉   K3-03 用户停掉被中断的子会话
  *       K3-04 两个补报的子会话一起落定   K3-05 C 落定之前 P 被删
  *   K6  删除的级联
- *       K6-01 什么都在跑的父会话   K6-02 删 P 前台等着的子会话   K6-03 崩溃后删父会话（子会话带着标记）
+ *       K6-01 什么都在跑的父会话   K6-03 崩溃后删父会话（子会话带着标记）
  *       K6-04 用户删一条在跑的后台子会话（PIN-06）
  *
  * 不断言 agent_start / agent_end / message_* 事件（phase 3）；观察面是网关与 continue 的结果、durable 转写与
@@ -69,22 +70,9 @@ afterEach(async () => {
 
 // ─── 小工具 ──────────────────────────────────────────────────────────────
 
-const promptChild = (
-  child: string,
-  message: string,
-  id: string,
-  background = false
-): ReturnType<typeof callTool> =>
-  callTool(
-    'session',
-    {
-      action: 'prompt-sub-session',
-      sub_session_id: child,
-      message,
-      ...(background ? { run_in_background: true } : {})
-    },
-    id
-  )
+/** P 的模型派活给子会话（§20：一律回执，没有前台 / 后台之分） */
+const promptChild = (child: string, message: string, id: string): ReturnType<typeof callTool> =>
+  callTool('session', { action: 'prompt-sub-session', sub_session_id: child, message }, id)
 
 const dispatch = (name: string, prompt: string, id = 'call-agent'): ReturnType<typeof callTool> =>
   callTool('agent', { name, prompt, description: 'look' }, id)
@@ -107,6 +95,8 @@ async function sessionToolResults(sessionId: string): Promise<string[]> {
 }
 
 const REPLY = (text: string): string => `<reply>\n${text}\n</reply>`
+/** prompt-sub-session 的回执（§20：派活一律后台语义） */
+const RECEIPT = 'Started in the background.'
 
 async function markerOf(sessionId: string): Promise<unknown> {
   return (await sessionOf(sessionId))?.drivenRun
@@ -124,20 +114,25 @@ async function reopenAddsNothing(order: string[]): Promise<void> {
 }
 
 /**
- * 进程 1：P 的模型前台 prompt-sub-session 进 C（'C-task'），C 的请求卡住 → 崩溃。交回 R(t) 与 C 那条提交的 id。
+ * 进程 1：P 的模型 prompt-sub-session 进 C（'C-task'），C 的请求卡住；P 拿到回执、它的下一步模型请求也卡住 → 崩溃。
+ * 崩溃点是确定的：P 的下一步请求只在回执落进转写之后才发出（原来的「崩在前台等待里」只在崩溃恰好落进 50ms
+ * 确认窗时才成立）。`cChild` 给 C 那一轮的应答（缺省卡住）。交回 R(t) 与 C 那条提交的 id。
  */
-async function crashInForegroundPrompt(
-  options: { cTitle?: string } = {}
+async function crashAfterReceipt(
+  options: { cTitle?: string; cStep?: Parameters<ReturnType<typeof proc>['router']['on']>[2] } = {}
 ): Promise<{ requestId: string; submissionId: number }> {
   const p1 = proc()
   insert('P')
   insert('C', { parentId: 'P', ...(options.cTitle ? { title: options.cTitle } : {}) })
-  const stall = stalled()
-  p1.router.on('P', role('chat', 'start'), promptChild('C', 'C-task', 'call-prompt'))
-  p1.router.on('C', role('chat', 'C-task'), stall.step)
+  const cStall = stalled()
+  const pStall = stalled()
+  p1.router.on('P', role('chat', 'start'), promptChild('C', 'C-task', 'call-prompt'), pStall.step)
+  p1.router.on('C', role('chat', 'C-task'), options.cStep ?? cStall.step)
   void p1.track(p1.chatGateway.prompt('P', 'start'))
-  await withTimeout(stall.reached, 10000, 'C request')
+  await withTimeout(pStall.reached, 10000, 'P next step after the receipt')
+  if (!options.cStep) await withTimeout(cStall.reached, 10000, 'C request')
   await waitFor(() => settingsOf('C').runState === 'busy', 5000, 'C busy marker')
+  expect(await sessionToolResults('P')).toEqual([expect.stringContaining(RECEIPT)])
   const requestId = `subsession:P:${await toolTask('P', 'call-prompt')}`
   const submission = await submissionOf('C', requestId)
   if (!submission) throw new Error('C has no submission for R(t)')
@@ -145,13 +140,53 @@ async function crashInForegroundPrompt(
   return { requestId, submissionId: submission.id }
 }
 
-/** 进程 1：P 后台 prompt 进 C（'bg'）、P 的这一轮答 ok；C 卡住 → 崩溃。交回 R */
+/**
+ * 进程 2 起：P 的「继续」只请求 P 自己 —— 结果仍是第一次的回执，C 没被碰（BG-36）。`notices` = P 此前已经收到的
+ * 子会话通知条数（继续本身不添）。
+ */
+async function continueParentOnly(p: Proc, notices = 0): Promise<void> {
+  p.router.on('P', role('chat', 'start'), answer('P-final'))
+  const parent = await p.sessionService.ensureAgentSession('P')
+  expect(settingsOf('P').runState).toBe('interrupted')
+  const cRequests = p.router.requests('C').length
+  expect(await withTimeout(parent!.continue(), 15000, 'P.continue')).toEqual({})
+  expect(p.router.requests('C')).toHaveLength(cRequests)
+  const results = await sessionToolResults('P')
+  expect(results).toHaveLength(1)
+  expect(results[0]).toContain(RECEIPT)
+  expect(results[0]).not.toContain('<reply>')
+  expect(results[0]).not.toMatch(/may have partially run/)
+  const entries = await transcriptOf('P')
+  expect(entries.filter((e) => e.startsWith('pi.assistant:')).at(-1)).toBe('pi.assistant:P-final')
+  expect(noticesIn(entries)).toHaveLength(notices)
+  await waitFor(() => settingsOf('P').runState === 'idle', 5000, 'P idle')
+}
+
+/** 用户在 C 里继续那一轮（C 的路由已配好）：答完；P 恰多出一条写入的通知（上个进程的驱动 —— 不叫醒，option A） */
+async function userContinuesChild(p: Proc): Promise<void> {
+  const deliver = spyNotices(p)
+  const pRequests = p.router.requests('P').length
+  const child = await p.sessionService.ensureAgentSession('C')
+  expect(p.host.get('C')!.isInterrupted()).toBe(true)
+  expect(await withTimeout(child!.continue(), 15000, 'C.continue')).toEqual({})
+  await waitFor(async () => noticesIn(await transcriptOf('P')).length === 1, 10000, 'notice in P')
+  const [notice] = noticesIn(await transcriptOf('P'))
+  expect(notice).toMatch(/^shuvix\.notice:<sub-session id="C"/)
+  expect(deliver.mock.calls.every((call) => (call[3] as { wake: boolean }).wake === false)).toBe(
+    true
+  )
+  await sleep(300)
+  expect(p.router.requests('P')).toHaveLength(pRequests)
+  await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle')
+}
+
+/** 进程 1：P prompt 进 C（'bg'，回执）、P 的这一轮答 ok；C 卡住 → 崩溃。交回 R */
 async function crashInBackgroundPrompt(): Promise<{ requestId: string }> {
   const p1 = proc()
   insert('P')
   insert('C', { parentId: 'P' })
   const stall = stalled()
-  p1.router.on('P', role('chat', 'start'), promptChild('C', 'bg', 'call-bg', true), answer('ok'))
+  p1.router.on('P', role('chat', 'start'), promptChild('C', 'bg', 'call-bg'), answer('ok'))
   p1.router.on('C', role('chat', 'bg'), stall.step)
   expect(await withTimeout(p1.chatGateway.prompt('P', 'start'), 15000, 'P prompt')).toEqual({})
   await withTimeout(stall.reached, 10000, 'C request')
@@ -167,32 +202,28 @@ function spyNotices(p: Proc): { readonly mock: { readonly calls: unknown[][] } }
 
 // ─── K1 继续的级联 ───────────────────────────────────────────────────────
 
-describe('K1 continue cascade P → C across a crash', () => {
+describe('K1 continue after a crash: the parent no longer brings the child back (§20, BG-36)', () => {
   it(
-    'K1-01 主线：continue 等两边都答完才 {}；C 的转写恰 [C-task, C-done]、R(t) 提交 id 不变且 done；P 的结果带答复、不是「可能已部分执行」；两次请求 C → P；没有通知；镜像 idle；没被钉住；只有 P、C 两个存储',
+    'K1-01 主线：崩溃落在回执之后 → P.continue 只请求 P、结果仍是那张回执、没有通知；C 仍被中断（只有一条 pi.user、R(t) 没落定）；用户继续 C → C 答完、R(t) 提交 id 不变且 done，P 恰一条写入的通知；镜像 idle；没被钉住；只有 P、C 两个存储',
     async () => {
-      const { requestId, submissionId } = await crashInForegroundPrompt()
+      const { requestId, submissionId } = await crashAfterReceipt()
       const p2 = proc()
-      const parent = await p2.sessionService.ensureAgentSession('P')
-      expect(settingsOf('P').runState).toBe('interrupted')
       // C 没开着：镜像还是崩溃留下的 busy —— 没开着的会话不可能真在跑，按 interrupted 报（P2-10 PIN-09）
       expect(settingsOf('C').runState).toBe('busy')
+      await continueParentOnly(p2)
+      expect(p2.router.served).toEqual(['P'])
+      expect(p2.host.get('C')).toBeUndefined()
+      expect((await transcriptOf('C')).filter((e) => e.startsWith('pi.user:'))).toEqual([
+        'pi.user:C-task'
+      ])
+      expect(await submissionOf('C', requestId)).toMatchObject({ id: submissionId })
+      expect((await submissionOf('C', requestId))!.status).not.toBe('done')
 
       p2.router.on('C', role('chat', 'C-task'), answer('C-done'))
-      p2.router.on('P', role('chat', 'start'), answer('P-final'))
-      expect(await withTimeout(parent!.continue(), 15000, 'P.continue')).toEqual({})
-      expect(p2.router.served).toEqual(['C', 'P'])
-
+      await userContinuesChild(p2)
       expect(await transcriptOf('C')).toEqual(['pi.user:C-task', 'pi.assistant:C-done'])
       expect(await submissionOf('C', requestId)).toMatchObject({ id: submissionId, status: 'done' })
-      const results = await sessionToolResults('P')
-      expect(results).toHaveLength(1)
-      expect(results[0]).toContain(REPLY('C-done'))
-      expect(results[0]).not.toMatch(/may have partially run/)
-      expect((await transcriptOf('P')).at(-1)).toBe('pi.assistant:P-final')
-      expect(noticesIn(await transcriptOf('P'))).toEqual([])
-      await waitFor(() => settingsOf('P').runState === 'idle', 5000, 'P idle')
-      await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle')
+      expect(p2.router.served).toEqual(['P', 'C'])
       expect(p2.taskRegistry.runningCount('P')).toBe(0)
       expect(storageIds()).toEqual(['C', 'P'])
     },
@@ -200,10 +231,10 @@ describe('K1 continue cascade P → C across a crash', () => {
   )
 
   it(
-    'K1-02 进程 2 里 C 没开着：list 报 interrupted；continue 时经 peek 够到 C、存储只打开一次且一直在；别的 id 从不建存储；结果同 K1-01',
+    'K1-02 进程 2 里 C 没开着：list 报 interrupted；P.continue 不碰 C（不 peek、不打开它的存储）；C 的存储一直在；别的 id 从不建存储',
     async () => {
       const opened: string[] = []
-      await crashInForegroundPrompt()
+      await crashAfterReceipt()
       const p2 = await crash({ onOpenStorage: (id) => opened.push(id) })
       const listed = p2.runner.list('P')
       if ('error' in listed) throw new Error(listed.error)
@@ -211,81 +242,62 @@ describe('K1 continue cascade P → C across a crash', () => {
       expect(p2.host.get('C')).toBeUndefined()
 
       const peek = vi.spyOn(p2.host, 'peek')
-      const cFile = join(rig.sessionsDir, 'C.sqlite')
-      let cMissing = false
-      const watch = setInterval(() => {
-        if (!existsSync(cFile)) cMissing = true
-      }, 5)
-      try {
-        p2.router.on('C', role('chat', 'C-task'), answer('C-done'))
-        p2.router.on('P', role('chat', 'start'), answer('P-final'))
-        const parent = await p2.sessionService.ensureAgentSession('P')
-        expect(await withTimeout(parent!.continue(), 15000, 'P.continue')).toEqual({})
-      } finally {
-        clearInterval(watch)
-      }
-      expect(cMissing).toBe(false)
-      expect(peek.mock.calls.some(([id]) => id === 'C')).toBe(true)
-      expect(opened.filter((id) => id === 'C')).toHaveLength(1)
-      expect([...new Set(opened)].sort()).toEqual(['C', 'P'])
+      await continueParentOnly(p2)
+      expect(peek.mock.calls.filter(([id]) => id === 'C')).toEqual([])
+      expect(opened).toEqual(['P'])
+      expect(existsSync(join(rig.sessionsDir, 'C.sqlite'))).toBe(true)
       expect(storageIds()).toEqual(['C', 'P'])
-      expect(await transcriptOf('C')).toEqual(['pi.user:C-task', 'pi.assistant:C-done'])
-      expect((await sessionToolResults('P'))[0]).toContain(REPLY('C-done'))
-      expect(noticesIn(await transcriptOf('P'))).toEqual([])
     },
     T
   )
 
   it(
-    'K1-03 两次崩溃：进程 2 里 C 又卡住、再崩；进程 3 continue → C 仍只有一条 pi.user、R(t) done；P 那次调用恰一条结果带答复；没有通知；镜像 idle',
+    'K1-03 两次崩溃：进程 2 里 P 的继续又卡住、再崩；进程 3 P.continue → 只请求 P；C 仍只有一条 pi.user；P 那次调用恰一条结果、仍是回执；没有通知；之后用户继续 C → P 恰一条写入的通知',
     async () => {
-      const { requestId } = await crashInForegroundPrompt()
+      const { requestId } = await crashAfterReceipt()
       const p2 = proc()
       const stall = stalled()
-      p2.router.on('C', role('chat', 'C-task'), stall.step)
+      p2.router.on('P', role('chat', 'start'), stall.step)
       const parent2 = await p2.sessionService.ensureAgentSession('P')
       void p2.track(parent2!.continue())
-      await withTimeout(stall.reached, 10000, 'C request in process 2')
+      await withTimeout(stall.reached, 10000, 'P request in process 2')
+      expect(p2.router.requests('C')).toHaveLength(0)
 
       const p3 = await crash()
-      p3.router.on('C', role('chat', 'C-task'), answer('C-done'))
-      p3.router.on('P', role('chat', 'start'), answer('P-final'))
-      const parent3 = await p3.sessionService.ensureAgentSession('P')
-      expect(await withTimeout(parent3!.continue(), 15000, 'P.continue')).toEqual({})
+      await continueParentOnly(p3)
+      expect(p3.router.served).toEqual(['P'])
       expect((await transcriptOf('C')).filter((e) => e.startsWith('pi.user:'))).toEqual([
         'pi.user:C-task'
       ])
+      p3.router.on('C', role('chat', 'C-task'), answer('C-done'))
+      await userContinuesChild(p3)
       expect(await submissionOf('C', requestId)).toMatchObject({ status: 'done' })
-      const results = await sessionToolResults('P')
-      expect(results).toHaveLength(1)
-      expect(results[0]).toContain(REPLY('C-done'))
-      expect(noticesIn(await transcriptOf('P'))).toEqual([])
-      await waitFor(() => settingsOf('P').runState === 'idle', 5000, 'P idle')
-      await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle')
     },
     T
   )
 
   it(
-    'K1-04 用户先继续 C（PIN-14 裁决）：C 答完、idle；之后 P.continue 不再请求 C、R(t) 早已 settled；P 拿到答复；P 自始至终没有通知（任务 t 还活着）；C 的标记清掉',
+    'K1-04 用户先继续 C（PIN-14 的抑制已删）：C 答完、idle，P 照常收一条写入的通知（不叫醒）—— P 被中断着，它推迟到 P 继续的那一轮收尾时落下；P.continue 只请求 P、R(t) 早已 settled、结果仍是回执；P 的通知恰一条；C 的标记清掉',
     async () => {
-      const { requestId } = await crashInForegroundPrompt()
+      const { requestId } = await crashAfterReceipt()
       const p2 = proc()
+      const deliver = spyNotices(p2)
       p2.router.on('C', role('chat', 'C-task'), answer('C-done'))
       const child = await p2.sessionService.ensureAgentSession('C')
       expect(await withTimeout(child!.continue(), 15000, 'C.continue')).toEqual({})
       await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle')
-      await sleep(300)
-      expect(noticesIn(await transcriptOf('P'))).toEqual([])
+      await waitFor(() => deliver.mock.calls.length === 1, 5000, 'notice delivered')
+      expect(deliver.mock.calls[0]![3]).toEqual({ wake: false })
       expect(await p2.host.get('C')!.requestState(requestId)).toBe('settled')
+      await sleep(300)
+      expect(p2.router.requests('P')).toHaveLength(0)
 
-      p2.router.on('P', role('chat', 'start'), answer('P-final'))
-      const parent = await p2.sessionService.ensureAgentSession('P')
-      expect(await withTimeout(parent!.continue(), 15000, 'P.continue')).toEqual({})
+      await continueParentOnly(p2, 1)
       expect(p2.router.served).toEqual(['C', 'P'])
-      expect((await sessionToolResults('P'))[0]).toContain(REPLY('C-done'))
-      await sleep(200)
-      expect(noticesIn(await transcriptOf('P'))).toEqual([])
+      // 推迟的那条在继续的那一轮收尾时落下（P 的下一轮看得见它），没有因它多起一轮
+      const p = await transcriptOf('P')
+      expect(p.at(-1)).toMatch(/^shuvix\.notice:<sub-session id="C"/)
+      expect(p2.router.requests('P')).toHaveLength(1)
       await waitFor(async () => (await markerOf('C')) === undefined, 5000, 'C marker cleared')
     },
     T
@@ -303,8 +315,8 @@ describe('K1 continue cascade P → C across a crash', () => {
       p1.router.on(
         'P',
         role('chat', 'start'),
-        promptChild('C1', 'one-task', 'call-p1', true),
-        promptChild('C2', 'two-task', 'call-p2', true),
+        promptChild('C1', 'one-task', 'call-p1'),
+        promptChild('C2', 'two-task', 'call-p2'),
         callTool('session', { action: 'wait-for-sub-sessions' }, 'call-wait')
       )
       p1.router.on('C1', role('chat', 'one-task'), s1.step)
@@ -339,28 +351,39 @@ describe('K1 continue cascade P → C across a crash', () => {
   )
 
   it(
-    'K1-06 嵌套：C 里派生的 explore 卡住、崩溃 → 三次请求 explore、C、P；explore 在 C 的存储里只有一条 pi.user、记录 tool / 父对话 1 / depth 1；C 的派发结果 found；进程 2 的路由注册 / 结束各一条（父、根都是 C）；P 拿到答复；没有在跑的任务；P 的存储里没有派生对话',
+    'K1-06 嵌套：C 里派生的 explore 卡住、P 回执之后也卡住、崩溃 → P.continue 只请求 P（explore 与 C 都不被带起来）；用户继续 C → explore 续上、C 答完（请求依次 P、explore、C）；explore 在 C 的存储里只有一条 pi.user、记录 tool / 父对话 1 / depth 1；C 的派发结果 found；进程 2 的路由注册 / 结束各一条（父、根都是 C）；P 恰一条写入的通知；没有在跑的任务；P 的存储里没有派生对话',
     async () => {
       const p1 = proc()
       insert('P')
       insert('C', { parentId: 'P' })
-      const stall = stalled()
-      p1.router.on('P', role('chat', 'start'), promptChild('C', 'C-task', 'call-prompt'))
+      const exploreStall = stalled()
+      const pStall = stalled()
+      p1.router.on(
+        'P',
+        role('chat', 'start'),
+        promptChild('C', 'C-task', 'call-prompt'),
+        pStall.step
+      )
       p1.router.on('C', role('chat', 'C-task'), dispatch('explore', 'look'))
-      p1.router.on('explore', role('explore'), stall.step)
+      p1.router.on('explore', role('explore'), exploreStall.step)
       void p1.track(p1.chatGateway.prompt('P', 'start'))
-      await withTimeout(stall.reached, 10000, 'explore request')
+      await withTimeout(
+        Promise.all([exploreStall.reached, pStall.reached]),
+        10000,
+        'explore request and P next step'
+      )
       const agentId = broadcastsOf('sub_session_register')[0]!.sessionId as string
 
       // 进程 1 关停时路由照常为被中止的等待报一条 end：那是上一个进程的，清掉之后才看进程 2 的
       const p2 = await crash()
       rig.broadcasts.length = 0
+      await continueParentOnly(p2)
+      expect(p2.router.served).toEqual(['P'])
+
       p2.router.on('explore', role('explore'), answer('found'))
       p2.router.on('C', role('chat', 'C-task'), answer('C-done'))
-      p2.router.on('P', role('chat', 'start'), answer('P-final'))
-      const parent = await p2.sessionService.ensureAgentSession('P')
-      expect(await withTimeout(parent!.continue(), 15000, 'P.continue')).toEqual({})
-      expect(p2.router.served).toEqual(['explore', 'C', 'P'])
+      await userContinuesChild(p2)
+      expect(p2.router.served).toEqual(['P', 'explore', 'C'])
 
       const spawned = (await conversationsOf('C')).filter((c) => c.record?.dispatch === 'tool')
       expect(spawned).toHaveLength(1)
@@ -383,7 +406,6 @@ describe('K1 continue cascade P → C across a crash', () => {
       expect(registers[0]).toMatchObject({ parentSessionId: 'C', rootSessionId: 'C' })
       const ends = broadcastsOf('sub_session_end').filter((e) => e.sessionId === agentId)
       expect(ends).toEqual([expect.objectContaining({ isError: false })])
-      expect((await sessionToolResults('P'))[0]).toContain(REPLY('C-done'))
       expect(p2.taskRegistry.runningCount('P')).toBe(0)
       expect(p2.taskRegistry.runningCount('C')).toBe(0)
       expect((await conversationsOf('P')).filter((c) => c.record !== undefined)).toEqual([])
@@ -396,7 +418,7 @@ describe('K1 continue cascade P → C across a crash', () => {
 
 describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => {
   it(
-    'K2-01 C 自己的一轮被中断：old 没答（中止前 seam 恰一次）；C 恰一次请求、最后一条用户消息是 new；C 的转写以 [new, fresh] 收尾；P 拿到 fresh；没有通知；C 的镜像 idle',
+    'K2-01 C 自己的一轮被中断：old 没答（中止前 seam 恰一次）；C 恰一次请求、最后一条用户消息是 new；C 的转写以 [new, fresh] 收尾；P 拿到回执、再由 wait 收到 fresh；没有通知（wait 握着它）；C 的镜像 idle',
     async () => {
       const p1 = proc()
       insert('P')
@@ -408,15 +430,34 @@ describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => 
       await waitFor(() => settingsOf('C').runState === 'busy', 5000, 'C busy')
 
       const p2 = await crash()
-      p2.router.on('P', role('chat', 'start'), promptChild('C', 'new', 'call-prompt'), answer('ok'))
-      p2.router.on('C', role('chat', 'old'), answer('fresh'))
-      expect(await withTimeout(p2.chatGateway.prompt('P', 'start'), 15000, 'P prompt')).toEqual({})
+      // C 的应答扣到 P 挂上 wait 之后：落定由 wait 在同一轮里交回（否则就是一条完成通知，时序说了算）
+      const hold = held(answer('fresh'))
+      p2.router.on(
+        'P',
+        role('chat', 'start'),
+        promptChild('C', 'new', 'call-prompt'),
+        callTool('session', { action: 'wait-for-sub-sessions' }, 'call-wait'),
+        answer('ok')
+      )
+      p2.router.on('C', role('chat', 'old'), hold.step)
+      const pTurn = p2.track(p2.chatGateway.prompt('P', 'start'))
+      await withTimeout(hold.reached, 10000, 'C request')
+      await waitFor(() => p2.router.left('P') === 1, 10000, 'P called wait')
+      await sleep(300)
+      hold.release()
+      expect(await withTimeout(pTurn, 15000, 'P prompt')).toEqual({})
       expect(p2.aborts.filter((id) => id === 'C')).toHaveLength(1)
       const cRequests = p2.router.requests('C')
       expect(cRequests).toHaveLength(1)
       expect(lastUserText(cRequests[0]!)).toBe('new')
       expect(await transcriptOf('C')).toEqual(['pi.user:old', 'pi.user:new', 'pi.assistant:fresh'])
-      expect((await sessionToolResults('P'))[0]).toContain(REPLY('fresh'))
+      const results = await sessionToolResults('P')
+      expect(results[0]).toContain(RECEIPT)
+      expect(results[0]).not.toContain(REPLY('fresh'))
+      const wait = (await transcriptOf('P')).find((e) => e.includes('<sub-sessions status='))!
+      expect(wait).toContain('<sub-sessions status="settled">')
+      expect(wait).toContain(REPLY('fresh'))
+      await sleep(200)
       expect(noticesIn(await transcriptOf('P'))).toEqual([])
       await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle')
     },
@@ -424,23 +465,41 @@ describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => 
   )
 
   it(
-    'K2-02 P 自己的后台一轮被顶掉（PIN-19）：R(1) aborted 落定、P 没有通知；P 拿到 redone；C 的标记最后清掉；进程 3 先开 C 再开 P 什么都不多',
+    'K2-02 P 自己的一轮被顶掉（PIN-19）：R(1) aborted 落定、它不通知；redo 回执；redo 跑完恰一条完成通知（说的是 redo 跑完了，不是「被用户停掉」）并叫醒 P；C 的标记最后清掉；进程 3 先开 C 再开 P 什么都不多',
     async () => {
       const { requestId: r1 } = await crashInBackgroundPrompt()
       const p2 = proc()
+      const hold = held(answer('redone'))
       p2.router.on(
         'P',
         role('chat', 'start'),
         promptChild('C', 'redo', 'call-redo'),
-        answer('fine')
+        answer('fine'),
+        answer('ack')
       )
-      p2.router.on('C', role('chat', 'bg'), answer('redone'))
+      p2.router.on('C', role('chat', 'bg'), hold.step)
       expect(await withTimeout(p2.chatGateway.prompt('P', 'again'), 15000, 'P prompt')).toEqual({})
       expect(await submissionOf('C', r1)).toMatchObject({ status: 'unanswered' })
-      expect((await sessionToolResults('P')).at(-1)).toContain(REPLY('redone'))
+      const results = await sessionToolResults('P')
+      expect(results.at(-1)).toContain(RECEIPT)
+      expect(results.at(-1)).not.toContain(REPLY('redone'))
+      // P 的这一轮已经收尾：redo 落定的完成通知叫醒它，起一轮 ack
+      await withTimeout(hold.reached, 10000, 'C request')
+      hold.release()
+      await waitFor(
+        async () => (await transcriptOf('P')).at(-1) === 'pi.assistant:ack',
+        10000,
+        'P woken'
+      )
+      const notices = noticesIn(await transcriptOf('P'))
+      expect(notices).toHaveLength(1)
+      expect(notices[0]).toMatch(/^pi\.user:<sub-session id="C"/)
+      expect(notices[0]).toContain('has finished')
+      expect(notices[0]).not.toContain('stopped by the user')
       await waitFor(async () => (await markerOf('C')) === undefined, 5000, 'C marker cleared')
+      await waitFor(() => settingsOf('P').runState === 'idle', 10000, 'P idle')
       await sleep(300)
-      expect(noticesIn(await transcriptOf('P'))).toEqual([])
+      expect(noticesIn(await transcriptOf('P'))).toHaveLength(1)
       expect(p2.router.unmatched).toEqual([])
       await reopenAddsNothing(['C', 'P'])
     },
@@ -448,7 +507,7 @@ describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => 
   )
 
   it(
-    'K2-03 被中断的 C 里有活着的派生 agent：explore 的任务全部终结、进程 2 没有请求；新消息照跑（C 一次、然后 P）；进程 2 的路由不为 explore 广播；C 没有在跑的；C 的镜像 idle',
+    'K2-03 被中断的 C 里有活着的派生 agent：explore 的任务全部终结、进程 2 没有请求；新消息照跑（C 一次；P 回执之后接着走，C 跑完叫醒 P 一轮）；进程 2 的路由不为 explore 广播；C 没有在跑的；C 的镜像 idle',
     async () => {
       const p1 = proc()
       insert('P')
@@ -462,10 +521,27 @@ describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => 
 
       const p2 = await crash()
       rig.broadcasts.length = 0
-      p2.router.on('P', role('chat', 'start'), promptChild('C', 'new', 'call-prompt'), answer('ok'))
-      p2.router.on('C', role('chat', 'old'), answer('fresh'))
+      // C 的应答扣住到 P 这一轮收尾之后：之后的完成通知叫醒 P，那一轮也给配上路由（ack）
+      const hold = held(answer('fresh'))
+      p2.router.on(
+        'P',
+        role('chat', 'start'),
+        promptChild('C', 'new', 'call-prompt'),
+        answer('ok'),
+        answer('ack')
+      )
+      p2.router.on('C', role('chat', 'old'), hold.step)
       expect(await withTimeout(p2.chatGateway.prompt('P', 'start'), 15000, 'P prompt')).toEqual({})
-      expect(p2.router.served).toEqual(['P', 'C', 'P'])
+      await withTimeout(hold.reached, 10000, 'C request')
+      // 回执之后 P 接着走、C 同时起跑：两者谁先请求不定，只数各几次
+      expect([...p2.router.served].sort()).toEqual(['C', 'P', 'P'])
+      hold.release()
+      await waitFor(
+        async () => (await transcriptOf('P')).at(-1) === 'pi.assistant:ack',
+        10000,
+        'P woken'
+      )
+      expect(p2.router.unmatched).toEqual([])
       const [explore] = (await conversationsOf('C')).filter((c) => c.record?.dispatch === 'tool')
       await waitFor(async () => (await liveTasksOf('C')).length === 0, 5000, 'C tasks terminal')
       expect(
@@ -602,8 +678,8 @@ describe('K3 background completion re-arm across a restart', () => {
       p1.router.on(
         'P',
         role('chat', 'start'),
-        promptChild('C1', 'one-task', 'call-p1', true),
-        promptChild('C2', 'two-task', 'call-p2', true),
+        promptChild('C1', 'one-task', 'call-p1'),
+        promptChild('C2', 'two-task', 'call-p2'),
         answer('ok')
       )
       p1.router.on('C1', role('chat', 'one-task'), s1.step)
@@ -761,37 +837,7 @@ describe('K6 deletion cascades', () => {
     T
   )
 
-  it(
-    'K6-02 删 P 前台等着的子会话：P 的工具交回错误 / 关闭的围栏而不是挂住；P 这一轮以 k 收尾；没有通知；P 镜像 idle、存储完好',
-    async () => {
-      const p = proc()
-      insert('P')
-      insert('C', { parentId: 'P' })
-      const hold = held(answer('never'))
-      p.router.on(
-        'P',
-        role('chat', 'start'),
-        promptChild('C', 'C-task', 'call-prompt'),
-        answer('k')
-      )
-      p.router.on('C', role('chat', 'C-task'), hold.step)
-      const pending = p.track(p.chatGateway.prompt('P', 'start'))
-      await withTimeout(hold.reached, 10000, 'C request')
-      await withTimeout(p.sessionService.delete('C'), 10000, 'delete C')
-      expect(await withTimeout(pending, 15000, 'P turn')).toEqual({})
-      const entries = await transcriptOf('P')
-      const toolResult = entries.find((e) => e.startsWith('pi.tool-result:'))!
-      expect(toolResult).toBeDefined()
-      expect(toolResult).not.toContain(REPLY('never'))
-      expect(entries.at(-1)).toBe('pi.assistant:k')
-      await sleep(200)
-      expect(noticesIn(entries)).toEqual([])
-      expect(noticesIn(await transcriptOf('P'))).toEqual([])
-      await waitFor(() => settingsOf('P').runState === 'idle', 5000, 'P idle')
-      expect(storageIds()).toEqual(['P'])
-    },
-    T
-  )
+  // 原 K6-02（删 P 前台等着的子会话：P 的工具交回错误而不是挂住）被 §20 取消：没有前台等待了（与 K6-04 重复）
 
   it(
     'K6-03 崩溃后删父会话（子会话带着标记、被中断）：先删子会话；两个 .sqlite 都没了（200ms 内也没回来）；没有未处理的拒绝；两行都没了',
@@ -826,7 +872,7 @@ describe('K6 deletion cascades', () => {
       insert('C', { parentId: 'P' })
       insert('C9', { parentId: 'P', title: 'other-child' })
       const hold = held(answer('never'))
-      p.router.on('P', role('chat', 'start'), promptChild('C', 'bg', 'call-bg', true), answer('ok'))
+      p.router.on('P', role('chat', 'start'), promptChild('C', 'bg', 'call-bg'), answer('ok'))
       p.router.on('C', role('chat', 'bg'), hold.step)
       expect(await withTimeout(p.chatGateway.prompt('P', 'start'), 15000, 'P prompt')).toEqual({})
       await withTimeout(hold.reached, 10000, 'C request')
@@ -849,6 +895,55 @@ describe('K6 deletion cascades', () => {
       expect(read).toContain('"C" is not a sub-session of this session')
       expect(read).toContain('C9')
       expect(noticesIn(await transcriptOf('P'))).toHaveLength(1)
+    },
+    T
+  )
+})
+
+// ─── K7 父会话被用户停掉、它派出去的子会话照跑（§20：不级联） ─────────────────────
+
+describe('K7 the user stops the parent while its sub-session runs (§20: no cascade)', () => {
+  it(
+    'K7-01 / BG-32 P 回执之后的下一步与 C 的那一轮都挂着，用户停掉 P：只中止 P —— C 不被中止、放行后答完；完成通知恰一次（本进程记着的驱动）；P 刚被喊停，不自动续跑（router 里 P 没有新请求）；P 的下一条用户消息的请求里带着这条通知',
+    async () => {
+      const p = proc()
+      insert('P')
+      insert('C', { parentId: 'P' })
+      const pHold = held(answer('never'))
+      const cHold = held(answer('C-done'))
+      p.router.on('P', role('chat', 'start'), promptChild('C', 'C-task', 'call-prompt'), pHold.step)
+      p.router.on('C', role('chat', 'C-task'), cHold.step)
+      const deliver = spyNotices(p)
+      const pTurn = p.track(p.chatGateway.prompt('P', 'start'))
+      await withTimeout(Promise.all([pHold.reached, cHold.reached]), 10000, 'both held')
+      expect(await sessionToolResults('P')).toEqual([expect.stringContaining(RECEIPT)])
+
+      await withTimeout(p.chatGateway.abort('P'), 10000, 'abort P')
+      await withTimeout(pTurn, 10000, 'P turn').catch(() => undefined)
+      await waitFor(() => settingsOf('P').runState === 'idle', 5000, 'P idle')
+      expect(p.aborts).toEqual(['P'])
+      expect(p.host.get('C')!.isBusy()).toBe(true)
+
+      cHold.release()
+      await waitFor(
+        async () => (await transcriptOf('C')).at(-1) === 'pi.assistant:C-done',
+        10000,
+        'C done'
+      )
+      expect(p.aborts).toEqual(['P'])
+      await waitFor(() => deliver.mock.calls.length === 1, 5000, 'completion notice')
+      expect(deliver.mock.calls[0]![3]).toEqual({ wake: true })
+      expect(String(deliver.mock.calls[0]![1])).toContain('has finished')
+      await sleep(700)
+      // 请求只有 P 的头两步（派活、被停的那一步）：用户刚喊停，通知排到下一句话
+      expect(p.router.requests('P')).toHaveLength(2)
+
+      p.router.push('P', answer('seen'))
+      expect(await withTimeout(p.chatGateway.prompt('P', 'next'), 15000, 'next')).toEqual({})
+      const users = userTexts(p.router.requests('P').at(-1)!)
+      expect(users.filter((u) => u.includes('<sub-session id="C"'))).toHaveLength(1)
+      expect(users.at(-1)).toBe('next')
+      expect(deliver.mock.calls).toHaveLength(1)
     },
     T
   )

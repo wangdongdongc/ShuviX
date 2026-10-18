@@ -6,7 +6,7 @@
  *   - **准入与 read 同一套**：越权 / 不存在 / 省略 id 的补全 / 调用方形态 / 旧格式会话拒绝；
  *   - **读不了就说读不了**：没有存储、读视图失败都给明确的回话（不是一个吓人的异常、也不是凭空的「没有这一条」）；
  *   - **`userIntervened`**：父会话最近一次发进去的消息之后人又说过话 —— 有来源记录 = 不是人打的；系统通知不算；
- *     读不了就当没有。在 read / wait / 前台答复 / 完成通知 / 崩溃后重跑的落定答复 / inspect 上带，list 与回执不带。
+ *     读不了就当没有。在 read / wait / 完成通知 / inspect 上带，list 与回执（prompt / answer，§20 起一律只回执）不带。
  *     判法与大纲、自动审查同一份（`authorsOf`，§19.7 2026-10-17 裁决第 4 条）：只有最近一条用户消息被判为人打的
  *     （没有记录、且在第一条有记录的消息之后）才是 true；整条都没有记录的分不清，不算（AUTH-I1..4）。
  *
@@ -668,72 +668,8 @@ describe('userIntervened —— 人在子会话里插过话的那个便宜信号
       expect(res.results.map((r) => r.userIntervened)).toEqual([true])
     })
 
-    it('带：前台 prompt 的答复', async () => {
-      const res = await runner.prompt({
-        parentId: PARENT,
-        childId: CHILD,
-        message: 'go',
-        background: false,
-        timeoutSeconds: 30
-      })
-      expect(res).toMatchObject({
-        kind: 'answered',
-        answer: 'DONE.',
-        info: { userIntervened: true }
-      })
-    })
-
-    it('带：前台 answer-sub-session 落定（与 prompt 同一个等法）', async () => {
-      const open = fakeAgent()
-      open.view = closedChild.view
-      open.sources = closedChild.sources
-      open.lastAnswer.mockResolvedValue({ text: 'ANSWERED.' })
-      mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? open : undefined))
-      const release = holdGateway()
-      expect(
-        await runner.prompt({
-          parentId: PARENT,
-          childId: CHILD,
-          message: 'go',
-          background: true,
-          timeoutSeconds: 30
-        })
-      ).toEqual({ kind: 'started', id: CHILD })
-      // 这一轮停下来问了一道选择题
-      const question: ChoiceInputRequest = {
-        id: 'q1',
-        kind: 'choice',
-        toolName: 'ask',
-        createdAt: 0,
-        question: 'Keep it?',
-        options: [
-          { label: 'Yes', description: '' },
-          { label: 'No', description: '' }
-        ]
-      }
-      open.isStreaming = true
-      open.pendingInputCount = 1
-      open.pending = [question]
-      const answering = runner.answer({
-        parentId: PARENT,
-        childId: CHILD,
-        askId: 'q1',
-        selections: ['Yes'],
-        background: false,
-        timeoutSeconds: 30
-      })
-      await tick()
-      expect(open.respondToInput).toHaveBeenCalledTimes(1)
-      open.isStreaming = false
-      open.pendingInputCount = 0
-      open.pending = []
-      release()
-      expect(await answering).toMatchObject({
-        kind: 'answered',
-        answer: 'ANSWERED.',
-        info: { userIntervened: true }
-      })
-    })
+    // 原「带：前台 prompt 的答复」「带：前台 answer-sub-session 落定」被 §20 取消：prompt / answer 一律只回执，
+    // 没有答复可带（不带的那一面见下面的 BG-42）
 
     it('带：后台跑完的完成通知（开标签上）', async () => {
       await runner.onDrivenSettled(settled())
@@ -751,22 +687,17 @@ describe('userIntervened —— 人在子会话里插过话的那个便宜信号
       expect(mocks.deliver.mock.calls[0][1] as string).not.toContain('user-intervened')
     })
 
-    it('WP4-125 带：崩溃之后重跑、这一轮已经落定（直接读答复的那一支）与首跑一致', async () => {
+    it('WP4-125 不带：崩溃之后重跑、这一轮已经落定 —— 回执「已经结束」（finished），没有快照；答复留给 read（那里照带）', async () => {
       closedChild.requestState.mockResolvedValue('settled')
       const res = await runner.prompt({
         parentId: PARENT,
         childId: CHILD,
         message: 'go',
-        background: false,
-        timeoutSeconds: 30,
         requestId: 'subsession:parent-1:7'
       })
       expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
-      expect(res).toMatchObject({
-        kind: 'answered',
-        answer: 'DONE.',
-        info: { userIntervened: true }
-      })
+      expect(res).toEqual({ kind: 'finished', id: CHILD })
+      expect((await readInfo()).userIntervened).toBe(true)
     })
 
     it('不带：list', () => {
@@ -775,48 +706,25 @@ describe('userIntervened —— 人在子会话里插过话的那个便宜信号
       expect(listed.subSessions[0]).not.toHaveProperty('userIntervened')
     })
 
-    it('不带：后台回执、前台超时（回执里根本没有快照）', async () => {
+    it('不带：回执（回执里根本没有快照）', async () => {
       const release = holdGateway()
-      expect(
-        await runner.prompt({
-          parentId: PARENT,
-          childId: CHILD,
-          message: 'go',
-          background: true,
-          timeoutSeconds: 30
-        })
-      ).toEqual({ kind: 'started', id: CHILD })
+      expect(await runner.prompt({ parentId: PARENT, childId: CHILD, message: 'go' })).toEqual({
+        kind: 'started',
+        id: CHILD
+      })
       release()
       await tick()
-
-      runner.resetForTests()
-      registry.taskRegistry.killAll()
-      const releaseSlow = holdGateway()
-      expect(
-        await runner.prompt({
-          parentId: PARENT,
-          childId: CHILD,
-          message: 'go',
-          background: false,
-          timeoutSeconds: 1
-        })
-      ).toEqual({ kind: 'timeout', id: CHILD })
-      releaseSlow()
+      // 原来这里还有「前台超时降级的回执」一段：§20 没有超时降级了
     })
 
-    it('不带：前台等待停下来询问、当场交回的那一次', async () => {
+    it('BG-42 不带：确认窗里停下来询问、当场交回的那一次（快照在、人插过话也不带）', async () => {
       const open = fakeAgent()
       open.view = closedChild.view
       open.sources = closedChild.sources
       mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? open : undefined))
       const release = holdGateway()
-      const pending = runner.prompt({
-        parentId: PARENT,
-        childId: CHILD,
-        message: 'go',
-        background: false,
-        timeoutSeconds: 30
-      })
+      const pending = runner.prompt({ parentId: PARENT, childId: CHILD, message: 'go' })
+      // 等到任务建出来（确认窗是 50ms，tick 只走 10ms）
       await tick()
       const question: ChoiceInputRequest = {
         id: 'q1',
@@ -834,6 +742,61 @@ describe('userIntervened —— 人在子会话里插过话的那个便宜信号
       expect(res.kind).toBe('input')
       expect(res.info).toBeDefined()
       expect(res.info).not.toHaveProperty('userIntervened')
+      // 读得了的时候确实是 true（上面的「不带」不是因为视图本身）
+      expect((await readInfo()).userIntervened).toBe(true)
+      release()
+    })
+
+    it('BG-42 不带：answer-sub-session 的两种回执（又停下来问的 input、接着跑的 started）', async () => {
+      const open = fakeAgent()
+      open.view = closedChild.view
+      open.sources = closedChild.sources
+      mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? open : undefined))
+      const release = holdGateway()
+      expect(await runner.prompt({ parentId: PARENT, childId: CHILD, message: 'go' })).toEqual({
+        kind: 'started',
+        id: CHILD
+      })
+      const ask = (id: string): ChoiceInputRequest => ({
+        id,
+        kind: 'choice',
+        toolName: 'ask',
+        createdAt: 0,
+        question: `${id}?`,
+        options: [
+          { label: 'Yes', description: '' },
+          { label: 'No', description: '' }
+        ]
+      })
+      open.isStreaming = true
+      open.pending = [ask('q1'), ask('q2')]
+      open.pendingInputCount = 2
+      runner.onAskRaised(CHILD, ask('q1'))
+      // 应答：先从表里移除，再调落定钩子（与真 PendingInputRequests 同序）
+      open.respondToInput.mockImplementation((requestId: string) => {
+        open.pending = (open.pending ?? []).filter((r) => r.id !== requestId)
+        open.pendingInputCount = open.pending.length
+        runner.onAskResolved(CHILD, requestId)
+        return true
+      })
+      // 答掉 q1、q2 还挂着：当场交回 input（带快照）
+      const first = (await runner.answer({
+        parentId: PARENT,
+        childId: CHILD,
+        askId: 'q1',
+        selections: ['Yes']
+      })) as { kind: string; info?: Record<string, unknown> }
+      expect(first.kind).toBe('input')
+      expect(first.info).toBeDefined()
+      expect(first.info).not.toHaveProperty('userIntervened')
+      // 答掉最后一道：过完确认窗就回执 started，没有快照
+      const second = await runner.answer({
+        parentId: PARENT,
+        childId: CHILD,
+        askId: 'q2',
+        selections: ['No']
+      })
+      expect(second).toEqual({ kind: 'started', id: CHILD })
       release()
     })
   })

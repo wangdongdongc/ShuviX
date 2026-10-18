@@ -10,8 +10,8 @@
  *   D  P2-10-24 / 27 进程重启之后的重跑（单元面）
  *   E  P2-10-30 / 31 答复（没有答复 / 被中断 / PIN-02 矩阵）
  *   F  P2-10-33      wait 与被中断的子会话
- *   G  P2-10-35..44  完成通知：送达、抑制、不重复
- *   H  P2-10-45 / 47 中止语义（Q-P2-03）与中断父会话的级联（PIN-08，存活情况由假会话的脚本给）
+ *   G  P2-10-35..44  完成通知：送达、抑制、不重复（BG-24 的矩阵：§20 派活一律后台之后谁通知、谁不通知）
+ *   H  P2-10-45      中止语义：父会话被停不级联（§20；中断父会话的级联 PIN-08 / P2-10-47 已删）
  *   I  P2-10-48      新消息发进被中断的子会话
  *   J  WP3-99..103   §19 父会话介入自己发起的那一轮：代答 / 插话 / 询问通知经真门面落到哪里
  */
@@ -246,7 +246,13 @@ async function call(
 
 /** 运行时报来的一次 driven 落定 */
 function settledEvent(
-  over: Partial<{ childId: string; requestId: string; background: boolean; reason: string }> = {}
+  over: Partial<{
+    childId: string
+    requestId: string
+    background: boolean
+    reason: string
+    result: DrivenSettledEvent['result']
+  }> = {}
 ): DrivenSettledEvent {
   const childId = over.childId ?? 'c1'
   return {
@@ -257,7 +263,7 @@ function settledEvent(
     conversationId: 1 as DrivenSettledEvent['conversationId'],
     submissionId: 42 as DrivenSettledEvent['submissionId'],
     noticeRequestId: `subsession-done:${childId}:42`,
-    result: {},
+    result: over.result ?? {},
     record:
       over.reason === undefined ? { status: 'done' } : { status: 'unanswered', reason: over.reason }
   }
@@ -281,8 +287,8 @@ const noticesTo = (session: FakeDurableSession): unknown[][] => [
 ]
 
 /**
- * 本进程发起的后台驱动（option A：只有它们落定时能叫醒父会话）：子会话的发送扣在闸门上，`prompt` 交回
- * 启动回执、记账成 released。交回子会话（用完放闸门）。
+ * 本进程发起的驱动（option A：只有它们落定时能叫醒父会话）：子会话的发送扣在闸门上，`prompt` 交回
+ * 启动回执、记着这次发送。交回子会话（用完放闸门）。
  */
 async function startBackground(childId: string, taskId: number): Promise<FakeDurableSession> {
   const child = fakeHost.put(childId, { submitGate: gate() })
@@ -290,8 +296,6 @@ async function startBackground(childId: string, taskId: number): Promise<FakeDur
     parentId: 'P',
     childId,
     message: 'go',
-    background: true,
-    timeoutSeconds: 5,
     requestId: R(taskId)
   })
   expect(started).toMatchObject({ kind: 'started' })
@@ -319,15 +323,13 @@ afterEach(() => {
 // ─── A. 幂等键的贯通 ───────────────────────────────────────────────────────
 
 describe('A. requestId plumbing', () => {
-  it('P2-10-02 选项一路到底：枢纽任务 id = 幂等键；子会话收到 requestId + driven + onAdmitted；跑着时 driven', async () => {
+  it('P2-10-02 / BG-07 选项一路到底：枢纽任务 id = 幂等键；子会话收到 requestId + driven（恒为后台）+ onAdmitted；跑着时 driven', async () => {
     family('c1')
     const c1 = fakeHost.put('c1', { submitGate: gate() })
     const pending = runner.prompt({
       parentId: 'P',
       childId: 'c1',
       message: 'go',
-      background: true,
-      timeoutSeconds: 5,
       requestId: R(5)
     })
     expect(await pending).toEqual({ kind: 'started', id: 'c1' })
@@ -347,18 +349,13 @@ describe('A. requestId plumbing', () => {
       expect(after.subSessions.find((s) => s.id === 'c1')!.driven).toBe(false)
     })
 
-    // 前台：driven.background === false
+    // §20：没有前台形态了 —— 第二次发送同样是后台标记、同样只回执
     const c1b = fakeHost.get('c1')!
     c1b.submitGate = undefined
-    await runner.prompt({
-      parentId: 'P',
-      childId: 'c1',
-      message: 'again',
-      background: false,
-      timeoutSeconds: 5,
-      requestId: R(6)
-    })
-    expect(submitsOf(c1b).at(-1)!.driven).toEqual({ parentId: 'P', background: false })
+    expect(
+      await runner.prompt({ parentId: 'P', childId: 'c1', message: 'again', requestId: R(6) })
+    ).toEqual({ kind: 'started', id: 'c1' })
+    expect(submitsOf(c1b).at(-1)!.driven).toEqual({ parentId: 'P', background: true })
   })
 
   it('P2-10-03 用户自己的发送（IPC agent:prompt）不带 requestId，也不带 driven', async () => {
@@ -525,22 +522,15 @@ describe('B. session tool idempotency', () => {
     createSpy.mockRestore()
   })
 
-  it('P2-10-10 prompt 重跑（被中断、键 pending）：跳过忙 / 等批准 / 上限，重新挂上（带 driven），不受理、不中止，答复取 lastAnswer', async () => {
-    family('c1', 'b1', 'b2', 'b3', 'b4')
+  it('P2-10-10 / BG-33 prompt 重跑（被中断、键 pending）：跳过忙 / 等批准 / 上限，重新挂上一次（driven 恒为后台），不受理、不中止；回执 started、不带答复；落定时本进程记着 → 恰一次叫醒父会话', async () => {
+    const parent = family('c1', 'b1', 'b2', 'b3', 'b4')
     // 本进程里已有 4 条在跑（并发上限顶满）—— 重新挂上不看它
     for (const id of ['b1', 'b2', 'b3', 'b4']) {
       fakeHost.put(id, { submitGate: gate() })
-      await runner.prompt({
-        parentId: 'P',
-        childId: id,
-        message: 'x',
-        background: true,
-        timeoutSeconds: 5,
-        requestId: R(`bg-${id}`)
-      })
+      await runner.prompt({ parentId: 'P', childId: id, message: 'x', requestId: R(`bg-${id}`) })
       fakeHost.get(id)!.busy = true
     }
-    const c1 = fakeHost.put('c1', { interrupted: true, answer: { text: 'A9' } })
+    const c1 = fakeHost.put('c1', { interrupted: true, submitGate: gate(), answer: { text: 'A9' } })
     c1.requestStates.set(R(9), 'pending')
     mocks.fire.mockClear()
     const res = await call(
@@ -548,42 +538,72 @@ describe('B. session tool idempotency', () => {
       { taskId: 9 }
     )
     expect(res.isError).toBe(false)
-    expect(res.text).toContain('<reply>\nA9\n</reply>')
+    expect(res.text).toContain('Started in the background')
+    expect(res.details).toEqual({ type: 'session', background: true })
+    expect(res.text).not.toContain('<reply>')
+    expect(res.text).not.toContain('A9')
+    expect(submitsOf(c1)).toHaveLength(1)
     const [options] = submitsOf(c1)
     expect(options!.requestId).toBe(R(9))
-    expect(options!.driven).toEqual({ parentId: 'P', background: false })
+    expect(options!.driven).toEqual({ parentId: 'P', background: true })
     expect(mocks.fire.mock.calls.filter(([name]) => name === 'session.prompt-accepted')).toEqual([])
     expect(c1.callsOf('abort')).toEqual([])
+
+    c1.submitGate!.release()
+    await vi.waitFor(() => expect(taskRegistry.get(R(9))!.status).toBe('done'))
+    await runner.onDrivenSettled(settledEvent({ requestId: R(9) }))
+    expect(parent.callsOf('notify')).toHaveLength(1)
+    expect(parent.callsOf('writeNotice')).toEqual([])
     for (const id of ['b1', 'b2', 'b3', 'b4']) fakeHost.get(id)!.submitGate!.release()
   })
 
-  it('P2-10-11 prompt 重跑（在跑、键 pending）：不报「在跑」，闸门放开之后 answered', async () => {
+  it('P2-10-11 / P2-10-14 / BG-34 prompt 重跑（在跑、键 pending）：不报「在跑」，不等闸门放开就回执 started；只挂上一次、没有第二条输入', async () => {
     family('c1')
     const c1 = fakeHost.put('c1', { busy: true, submitGate: gate(), answer: { text: 'later' } })
     c1.requestStates.set(R(9), 'pending')
-    const pending = call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
-      { taskId: 9 }
-    )
-    await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
-    c1.submitGate!.release()
-    const res = await pending
-    expect(res.isError).toBe(false)
-    expect(res.text).toContain('<reply>\nlater\n</reply>')
-  })
-
-  it('P2-10-12 prompt 重跑（键 settled）：不再发送，直接 answered；子会话没有报错广播、没有埋点', async () => {
-    family('c1')
-    const c1 = fakeHost.put('c1', { answer: { text: 'A' } })
-    c1.requestStates.set(R(9), 'settled')
     const res = await call(
       { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
-    expect(res.text).toContain('<reply>\nA\n</reply>')
+    // 闸门还关着：回执不等这一轮
+    expect(res.isError).toBe(false)
+    expect(res.text).not.toMatch(/is running/)
+    expect(res.text).toContain('Started in the background')
+    expect(res.details).toEqual({ type: 'session', background: true })
+    expect(res.text).not.toContain('later')
+    expect(c1.callsOf('submitUser')).toHaveLength(1)
+    c1.submitGate!.release()
+  })
+
+  it('P2-10-12 / BG-27 prompt 重跑（键 settled、子会话没开着）：不再发送、没有报错广播、没有埋点；回执说那一轮已经结束（status="idle"），不说在跑；打开时扫描报的那次落定被本进程接住 → 恰一次叫醒父会话', async () => {
+    const parent = family('c1')
+    fakeHost.storages.add('c1')
+    fakeHost.configure = (session) => {
+      if (session.sessionId !== 'c1') return
+      session.answer = { text: 'A' }
+      session.requestStates.set(R(9), 'settled')
+      // 打开时的扫描：运行时在 peek 交回之前报出这次落定（runner 先记下发送、再问幂等键，正为接住它）
+      void runner.onDrivenSettled(settledEvent({ requestId: R(9) }))
+    }
+    const res = await call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { taskId: 9 }
+    )
+    expect(res.isError).toBe(false)
+    expect(res.text).toBe(
+      '<sub-session id="c1" status="idle"/>\n\nThat turn already finished before the app restarted — nothing was sent again. Read its answer with "read-sub-session".'
+    )
+    expect(res.details).toBeUndefined()
+    const c1 = fakeHost.get('c1')!
     expect(c1.callsOf('submitUser')).toEqual([])
     expect(mocks.broadcast.mock.calls.filter(([e]) => e.sessionId === 'c1')).toEqual([])
     expect(mocks.fire).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(parent.callsOf('notify')).toHaveLength(1))
+    expect(parent.callsOf('writeNotice')).toEqual([])
+    // 答复就在子会话里：read 收得到
+    expect((await call({ action: 'read-sub-session', sub_session_id: 'c1' })).text).toContain(
+      '<reply>\nA\n</reply>'
+    )
   })
 
   it("P2-10-13 键 'none'：正常路径 —— 在跑的子会话照旧被拒", async () => {
@@ -597,24 +617,7 @@ describe('B. session tool idempotency', () => {
     expect(res.text).toMatch(/is running/)
   })
 
-  it('P2-10-14 后台 prompt 重跑（键 pending）：确认窗口之后回执 started，只挂上一次、没有第二条输入', async () => {
-    family('c1')
-    const c1 = fakeHost.put('c1', { submitGate: gate() })
-    c1.requestStates.set(R(9), 'pending')
-    const res = await call(
-      {
-        action: 'prompt-sub-session',
-        sub_session_id: 'c1',
-        message: 'task',
-        run_in_background: true
-      },
-      { taskId: 9 }
-    )
-    expect(res.text).toContain('Started in the background')
-    expect(res.details).toEqual({ type: 'session', background: true })
-    expect(c1.callsOf('submitUser')).toHaveLength(1)
-    c1.submitGate!.release()
-  })
+  // 原 P2-10-14（后台 prompt 重跑、键 pending）并进上面的 P2-10-11 / BG-34：§20 起没有前台 / 后台之分
 
   it('P2-10-15 wait 第一次：挂住的时候 memo 里已是要等的那几条；从不 resumeInterrupted', async () => {
     family('c1', 'c2')
@@ -768,7 +771,7 @@ describe('B. session tool idempotency', () => {
 // ─── D. 重启之后的重跑 ──────────────────────────────────────────────────────
 
 describe('D. continue cascade (unit)', () => {
-  it('P2-10-24 模拟重启：进程 1 前台 prompt 卡着；进程 2 里子会话被中断、键 pending → 同一 taskId 重跑重新挂上，回执带 lastAnswer', async () => {
+  it('P2-10-24 / BG-33 模拟重启：进程 1 派活卡着；进程 2 里子会话被中断、键 pending → 同一 taskId 重跑重新挂上一次，回执 started（不带答复）、不受理；落定时进程 2 记着 → 恰一次叫醒父会话', async () => {
     family('c1')
     fakeHost.put('c1', { submitGate: gate() })
     const memo = sharedMemo()
@@ -779,7 +782,7 @@ describe('D. continue cascade (unit)', () => {
     await vi.waitFor(() => expect(submitsOf(fakeHost.get('c1')!)).toHaveLength(1))
 
     newProcess()
-    fakeHost.put('P', { lock: lockRecord() })
+    const parent = fakeHost.put('P', { lock: lockRecord() })
     const c1 = fakeHost.put('c1', { interrupted: true, answer: { text: 'C9' } })
     c1.requestStates.set(R(9), 'pending')
     mocks.fire.mockClear()
@@ -787,21 +790,33 @@ describe('D. continue cascade (unit)', () => {
       { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
       { taskId: 9, memo }
     )
-    expect(res.text).toContain('<reply>\nC9\n</reply>')
+    expect(res.isError).toBe(false)
+    expect(res.text).toContain('Started in the background')
+    expect(res.text).not.toContain('<reply>')
     expect(submitsOf(c1).map((o) => o.requestId)).toEqual([R(9)])
     expect(mocks.fire.mock.calls.filter(([name]) => name === 'session.prompt-accepted')).toEqual([])
+    await runner.onDrivenSettled(settledEvent({ requestId: R(9) }))
+    expect(parent.callsOf('notify')).toHaveLength(1)
   })
 
-  it('P2-10-27 崩溃前子会话已经答完、父会话的工具还没收：重跑立刻 answered，子会话不再发请求', async () => {
-    family('c1')
+  it('P2-10-27 / BG-27 崩溃前子会话已经答完、父会话的工具还没收（子会话早已开着，扫描早报过）：重跑回执「已经结束」，子会话不再发请求；父会话只有早先写入的那一条通知', async () => {
+    const parent = family('c1')
     const c1 = fakeHost.put('c1', { answer: { text: 'C-done' } })
     c1.requestStates.set(R(9), 'settled')
+    // 子会话打开时扫描报过的那一次（本进程不认得的驱动：只写入）
+    await runner.onDrivenSettled(settledEvent({ requestId: R(9) }))
+    expect(parent.callsOf('writeNotice')).toHaveLength(1)
     const res = await call(
       { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
-    expect(res.text).toContain('<reply>\nC-done\n</reply>')
+    expect(res.text).toContain('<sub-session id="c1" status="idle"/>')
+    expect(res.text).toContain('nothing was sent again')
+    expect(res.text).not.toContain('Started in the background')
+    expect(res.text).not.toContain('C-done')
     expect(c1.callsOf('submitUser')).toEqual([])
+    expect(parent.callsOf('notify')).toEqual([])
+    expect(parent.callsOf('writeNotice')).toHaveLength(1)
   })
 })
 
@@ -836,36 +851,44 @@ describe('E. answers via lastAnswer', () => {
     ['faulted', true],
     ['orphaned', true]
   ] as const)(
-    'P2-10-31 网关结果 %s → %s 时算答复（带 isError），否则 NOT delivered',
-    async (code, answered) => {
-      family('c1')
-      const c1 = fakeHost.put('c1', { submitResults: [{ error: `${code} text`, code }] })
+    'P2-10-31 / BG-03 / BG-04 网关结果 %s → %s 时是发出去了（回执 started、那一轮以错误收场），否则 NOT delivered',
+    async (code, delivered) => {
+      const parent = family('c1')
+      fakeHost.put('c1', { submitResults: [{ error: `${code} text`, code }] })
       const res = await runner.prompt({
         parentId: 'P',
         childId: 'c1',
         message: 'go',
-        background: false,
-        timeoutSeconds: 5,
         requestId: R(31)
       })
-      if (answered) {
-        // lastAnswer 读不到错误条目时退回结果里的错误原文
-        expect(res).toMatchObject({ kind: 'answered', answer: `${code} text`, isError: true })
-        c1.answer = { text: `${code} from transcript`, isError: true }
-        const again = await runner.prompt({
-          parentId: 'P',
-          childId: 'c1',
-          message: 'go',
-          background: false,
-          timeoutSeconds: 5,
-          requestId: R(32)
-        })
-        expect(again).toMatchObject({ answer: `${code} from transcript`, isError: true })
-      } else {
-        expect((res as { error: string }).error).toContain('NOT delivered')
-      }
       expect(taskRegistry.get(R(31))!.status).toBe('error')
       expect(taskRegistry.runningCount('P')).toBe(0)
+      const finished = settledEvent({ requestId: R(31), result: { error: `${code} text`, code } })
+      if (delivered) {
+        expect(res).toEqual({ kind: 'started', id: 'c1' })
+        expect(res).not.toHaveProperty('error')
+        // 那一轮没有留下助手条目：read 交回错误原文（§20 之前前台等待直接交回它）
+        expect(await runner.read('P', 'c1')).toMatchObject({
+          answer: `${code} text`,
+          isError: true
+        })
+        // 记账在：完成通知照发一次、叫醒父会话，说清以错误收场
+        await runner.onDrivenSettled(finished)
+        expect(parent.callsOf('notify')).toHaveLength(1)
+        expect(String(parent.callsOf('notify')[0]![1])).toContain(
+          `The turn you started ended with an error: ${code} text`
+        )
+      } else {
+        expect((res as { error: string }).error).toContain('NOT delivered')
+        const listed = runner.list('P')
+        if ('error' in listed) throw new Error(listed.error)
+        expect(listed.subSessions.find((s) => s.id === 'c1')!.driven).toBe(false)
+        // 记账已撤：之后同一键的落定报来也不叫醒（只写入）
+        await runner.onDrivenSettled(finished)
+        expect(parent.callsOf('notify')).toEqual([])
+        expect(parent.callsOf('writeNotice')).toHaveLength(1)
+      }
+      // 原来这里还有「lastAnswer 读不到错误条目时退回结果原文」那半：§20 起 prompt 只回执，错误原文改由 read / wait 交回
     }
   )
 })
@@ -904,8 +927,6 @@ describe('G. completion notices', () => {
       parentId: 'P',
       childId: 'c1',
       message: 'go',
-      background: true,
-      timeoutSeconds: 5,
       requestId: R(5)
     })
     await sleep(300)
@@ -920,55 +941,241 @@ describe('G. completion notices', () => {
     expect(parent.callsOf('writeNotice')).toEqual([])
   })
 
-  it('P2-10-36 前台答完 → 不通知，两种先后都一样', async () => {
-    const parent = family('c1')
-    const c1 = fakeHost.put('c1', { submitGate: gate(), answer: { text: 'A' } })
-    const pending = runner.prompt({
-      parentId: 'P',
-      childId: 'c1',
-      message: 'go',
-      background: false,
-      timeoutSeconds: 5,
-      requestId: R(1)
-    })
-    await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
-    // (a) 落定先报来、前台还在等
-    await runner.onDrivenSettled(settledEvent({ requestId: R(1), background: false }))
-    c1.submitGate!.release()
-    expect(await pending).toMatchObject({ kind: 'answered', answer: 'A' })
-    // (b) 前台先交回了，落定后报来
-    c1.submitGate = undefined
-    expect(
-      await runner.prompt({
-        parentId: 'P',
-        childId: 'c1',
-        message: 'go',
-        background: false,
-        timeoutSeconds: 5,
-        requestId: R(2)
-      })
-    ).toMatchObject({ kind: 'answered' })
-    await runner.onDrivenSettled(settledEvent({ requestId: R(2), background: false }))
-    expect(noticesTo(parent)).toEqual([])
-  })
+  // 原 P2-10-36（前台答完 → 不通知）、P2-10-37（前台超时降级 → 后来跑完一条通知）被 §20 取消：没有前台等待，
+  // 由下面的 BG-24 矩阵替代（确认窗里就跑完、回执之后跑完都是恰一条）
 
-  it('P2-10-37 前台超时降级成后台 → 后来跑完恰一条通知', async () => {
-    const parent = family('c1')
-    const c1 = fakeHost.put('c1', { submitGate: gate() })
-    expect(
-      await runner.prompt({
-        parentId: 'P',
-        childId: 'c1',
-        message: 'go',
-        background: false,
-        timeoutSeconds: 1,
-        requestId: R(3)
-      })
-    ).toEqual({ kind: 'timeout', id: 'c1' })
-    c1.submitGate!.release()
-    await runner.onDrivenSettled(settledEvent({ requestId: R(3), background: false }))
-    expect(parent.callsOf('notify')).toHaveLength(1)
-  })
+  /** 等本进程这次驱动的任务落定（发送那一侧销账之后） */
+  const settledTask = async (rid: string): Promise<void> => {
+    await vi.waitFor(() => expect(taskRegistry.get(rid)?.endedAt).not.toBeNull())
+  }
+
+  /** 确认窗里等到任务建出来（微任务就够：假宿主的每一步都是立刻落定的 promise） */
+  const untilTask = async (rid: string): Promise<void> => {
+    for (let i = 0; i < 1000 && !taskRegistry.get(rid); i++) await Promise.resolve()
+    expect(taskRegistry.get(rid)).toBeDefined()
+  }
+
+  /** c1 在这一轮里停下来问一道选择题（假宿主没有 index.ts 的接线，询问钩子由用例直接调） */
+  const askOn = (c1: FakeDurableSession): void => {
+    c1.busy = true
+    c1.respondResult = true
+    c1.pendingRequests.push({
+      id: 'q1',
+      kind: 'choice',
+      toolName: 'ask',
+      question: 'Keep?',
+      options: [{ label: 'A', description: '' }],
+      createdAt: 0
+    })
+    c1.onResponded = (requestId) => runner.onAskResolved('c1', requestId)
+    runner.onAskRaised('c1', c1.pendingRequests[0]!)
+  }
+
+  /** 这一轮跑完：询问清空、不在跑、放闸门 */
+  const finish = async (c1: FakeDurableSession, rid: string): Promise<void> => {
+    c1.pendingRequests.length = 0
+    c1.busy = false
+    c1.submitGate?.release()
+    await settledTask(rid)
+  }
+
+  type Scenario = (parent: FakeDurableSession) => Promise<void>
+  const matrix: Array<[string, Scenario, number, string?]> = [
+    [
+      '回执之后没人管，跑完',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+      },
+      1
+    ],
+    [
+      '确认窗里就跑完（BG-02）',
+      async () => {
+        fakeHost.put('c1')
+        expect(
+          await runner.prompt({ parentId: 'P', childId: 'c1', message: 'go', requestId: R(1) })
+        ).toEqual({ kind: 'started', id: 'c1' })
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+      },
+      1
+    ],
+    [
+      'prompt 回 input 之后跑完',
+      async () => {
+        const c1 = fakeHost.put('c1', { submitGate: gate() })
+        const pending = runner.prompt({
+          parentId: 'P',
+          childId: 'c1',
+          message: 'go',
+          requestId: R(1)
+        })
+        await untilTask(R(1))
+        askOn(c1)
+        expect(await pending).toMatchObject({ kind: 'input', id: 'c1' })
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+      },
+      1
+    ],
+    [
+      'answer 回执之后跑完',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        askOn(c1)
+        expect(await runner.answer({ parentId: 'P', childId: 'c1', selections: ['A'] })).toEqual({
+          kind: 'started',
+          id: 'c1'
+        })
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+      },
+      1
+    ],
+    [
+      'wait 握着它时落定',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        c1.busy = true
+        const waiting = runner.wait({ parentId: 'P', childId: 'c1', timeoutSeconds: 5 })
+        await sleep(20)
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+        await finish(c1, R(1))
+        expect(await waiting).toMatchObject({ kind: 'settled' })
+      },
+      0
+    ],
+    [
+      'wait 已经在同一轮里交回那次落定、事件后到（collectInBand）',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        c1.busy = true
+        const waiting = runner.wait({ parentId: 'P', childId: 'c1', timeoutSeconds: 5 })
+        await sleep(20)
+        c1.requestStates.set(R(1), 'settled')
+        await finish(c1, R(1))
+        expect(await waiting).toMatchObject({ kind: 'settled' })
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+      },
+      0
+    ],
+    [
+      'wait 超时放手之后才落定',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        c1.busy = true
+        expect(
+          await runner.wait({ parentId: 'P', childId: 'c1', timeoutSeconds: 1 })
+        ).toMatchObject({ kind: 'timeout' })
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+      },
+      1
+    ],
+    [
+      'wait 被中止放手之后才落定',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        c1.busy = true
+        const ac = new AbortController()
+        const waiting = runner.wait({
+          parentId: 'P',
+          childId: 'c1',
+          timeoutSeconds: 5,
+          signal: ac.signal
+        })
+        ac.abort()
+        expect(await waiting).toMatchObject({ kind: 'aborted' })
+        expect(c1.callsOf('abort')).toEqual([])
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+      },
+      1
+    ],
+    [
+      'stop-sub-session 停的',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        c1.busy = true
+        await runner.stop('P', 'c1')
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
+      },
+      0
+    ],
+    [
+      '同一父会话的新消息顶掉了它（PIN-19）',
+      async () => {
+        fakeHost.put('c1', {
+          interrupted: true,
+          drivenRun: {
+            requestId: R(1),
+            parentId: 'P',
+            background: true,
+            conversationId: 1 as never
+          }
+        })
+        await call(
+          { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'new' },
+          { taskId: 2 }
+        )
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
+      },
+      0
+    ],
+    [
+      '用户从面板停',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        expect(taskRegistry.stop(R(1), { by: 'user' })).toBe(true)
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
+      },
+      1,
+      'stopped by the user'
+    ],
+    [
+      '用户在子会话里自己停',
+      async () => {
+        const c1 = await startBackground('c1', 1)
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
+      },
+      1,
+      'stopped by the user'
+    ],
+    [
+      '父会话被中止（不级联，子会话自己跑完）',
+      async () => {
+        const c1 = fakeHost.put('c1', { submitGate: gate() })
+        const ac = new AbortController()
+        const receipt = call(
+          { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'go' },
+          { taskId: 1, signal: ac.signal }
+        )
+        await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
+        ac.abort()
+        expect((await receipt).text).toContain('Started in the background')
+        expect(c1.callsOf('abort')).toEqual([])
+        await finish(c1, R(1))
+        await runner.onDrivenSettled(settledEvent({ requestId: R(1) }))
+      },
+      1
+    ]
+  ]
+
+  it.each(matrix)(
+    'BG-24 本进程发起、记着的驱动 —— %s：完成通知 %i 条（叫醒父会话，从不只写入）',
+    async (_label, scenario, expected, wording) => {
+      const parent = family('c1')
+      await scenario(parent)
+      const notices = parent.callsOf('notify')
+      expect(notices).toHaveLength(expected)
+      expect(parent.callsOf('writeNotice')).toEqual([])
+      if (wording) expect(String(notices[0]![1])).toContain(wording)
+    }
+  )
 
   it('P2-10-38 wait 握着它 → 不通知；wait 已经交回那次落定之后才报来 → 同样不通知', async () => {
     const parent = family('c1', 'c2')
@@ -978,8 +1185,6 @@ describe('G. completion notices', () => {
       parentId: 'P',
       childId: 'c1',
       message: 'go',
-      background: true,
-      timeoutSeconds: 5,
       requestId: R(1)
     })
     c1.busy = true
@@ -996,8 +1201,6 @@ describe('G. completion notices', () => {
       parentId: 'P',
       childId: 'c2',
       message: 'go',
-      background: true,
-      timeoutSeconds: 5,
       requestId: R(2)
     })
     c2.busy = true
@@ -1011,7 +1214,7 @@ describe('G. completion notices', () => {
     expect(noticesTo(parent)).toEqual([])
   })
 
-  it('P2-10-39 智能体自己停的 → 不通知（stop、前台信号级联）；用户停的 → 恰一条（面板停止键、用户在子会话里自己停）', async () => {
+  it('P2-10-39 智能体自己停的 → 不通知（stop）；用户停的 → 恰一条（面板停止键、用户在子会话里自己停）', async () => {
     const parent = family('c1', 'c2', 'c3', 'c4')
     // stop-sub-session
     const c1 = fakeHost.put('c1', { submitGate: gate() })
@@ -1019,34 +1222,13 @@ describe('G. completion notices', () => {
       parentId: 'P',
       childId: 'c1',
       message: 'go',
-      background: true,
-      timeoutSeconds: 5,
       requestId: R(1)
     })
     c1.busy = true
     await runner.stop('P', 'c1')
     c1.submitGate!.release()
     await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
-    // 前台信号级联
-    const c2 = fakeHost.put('c2', { submitGate: gate() })
-    const ac = new AbortController()
-    const fg = runner.prompt({
-      parentId: 'P',
-      childId: 'c2',
-      message: 'go',
-      background: false,
-      timeoutSeconds: 5,
-      signal: ac.signal,
-      requestId: R(2)
-    })
-    await vi.waitFor(() => expect(submitsOf(c2)).toHaveLength(1))
-    ac.abort()
-    await vi.waitFor(() => expect(c2.callsOf('abort')).toHaveLength(1))
-    await runner.onDrivenSettled(
-      settledEvent({ childId: 'c2', requestId: R(2), background: false, reason: 'aborted' })
-    )
-    c2.submitGate!.release()
-    await fg
+    // 原来这里还有「前台信号级联」一段（c2）：§20 起父会话被停不级联，那一段删了（反向见 BG-24 / BG-29）
     expect(noticesTo(parent)).toEqual([])
 
     // 用户从面板停
@@ -1055,8 +1237,6 @@ describe('G. completion notices', () => {
       parentId: 'P',
       childId: 'c3',
       message: 'go',
-      background: true,
-      timeoutSeconds: 5,
       requestId: R(3)
     })
     expect(taskRegistry.stop(R(3), { by: 'user' })).toBe(true)
@@ -1072,8 +1252,6 @@ describe('G. completion notices', () => {
       parentId: 'P',
       childId: 'c4',
       message: 'go',
-      background: true,
-      timeoutSeconds: 5,
       requestId: R(4)
     })
     c4.submitGate!.release()
@@ -1157,24 +1335,27 @@ describe('G. completion notices', () => {
     expect(fakeHost.calls).toEqual([])
   })
 
-  it('P2-10-43 进程 2 里重跑并重新挂上的前台握着结果 → 不通知；waiting-input 的通知文案不变', async () => {
+  it('P2-10-43 进程 2 里重跑并重新挂上的那一次只回执（§20：不再就地握着结果）→ 落定时本进程记着，恰一次叫醒父会话；waiting-input 的通知文案不变', async () => {
     const parent = family('c1', 'c2')
     const c1 = fakeHost.put('c1', { interrupted: true, submitGate: gate(), answer: { text: 'A' } })
     c1.requestStates.set(R(9), 'pending')
-    const pending = call(
+    const receipt = await call(
       { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
-    await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
-    await runner.onDrivenSettled(settledEvent({ requestId: R(9), background: false }))
+    expect(receipt.text).toContain('Started in the background')
+    expect(receipt.text).not.toContain('<reply>')
+    expect(submitsOf(c1)).toHaveLength(1)
     c1.submitGate!.release()
-    expect((await pending).text).toContain('<reply>\nA\n</reply>')
-    expect(noticesTo(parent)).toEqual([])
+    await vi.waitFor(() => expect(taskRegistry.get(R(9))!.status).toBe('done'))
+    await runner.onDrivenSettled(settledEvent({ requestId: R(9) }))
+    expect(parent.callsOf('notify')).toHaveLength(1)
+    expect(parent.callsOf('writeNotice')).toEqual([])
 
     fakeHost.put('c2', { pendingInputCount: 1, pendingInputSummaries: ['bash: rm -rf build'] })
     await runner.onDrivenSettled(settledEvent({ childId: 'c2', requestId: R(10) }))
-    // 本进程不认得的后台驱动：只写入（option A），文案照旧
-    expect(parent.callsOf('notify')).toEqual([])
+    // 本进程不认得的驱动：只写入（option A），文案照旧
+    expect(parent.callsOf('notify')).toHaveLength(1)
     const text = String((parent.callsOf('writeNotice')[0]![1] as { text: string }).text)
     expect(text).toContain('ask the user for approval')
     expect(text).toContain('rm -rf build')
@@ -1200,52 +1381,27 @@ describe('G. completion notices', () => {
     for (const child of children) child.submitGate!.release()
   })
 
-  it('PIN-14 的裁定：本进程不认得的前台落定 —— 驱动它的父会话工具任务还活着 → 不通知；已终结 → 通知（只写入，不叫醒父会话，option A）', async () => {
+  it('PIN-14 抑制已删 / BG-26：上个进程留下的**前台**标记（background:false）落定 —— 不管驱动它的父会话工具任务还活不活着，都写入一条通知（不叫醒，option A）；从不去问任务存活', async () => {
+    // §20 起重跑只回执、不再就地收下答复：压掉这条通知，答复就没了去处
     const parent = family('c1')
     parent.taskStates.set(9, { live: true, abortRequested: false })
     await runner.onDrivenSettled(settledEvent({ requestId: R(9), background: false }))
-    expect(noticesTo(parent)).toEqual([])
     parent.taskStates.set(10, { live: false, abortRequested: false })
     await runner.onDrivenSettled(settledEvent({ requestId: R(10), background: false }))
     expect(parent.callsOf('notify')).toEqual([])
-    expect(parent.callsOf('writeNotice')).toHaveLength(1)
+    expect(parent.callsOf('writeNotice')).toHaveLength(2)
+    expect(parent.callsOf('taskLiveness')).toEqual([])
   })
 })
 
 // ─── H. 中止语义 ────────────────────────────────────────────────────────────
 
 describe('H. abort semantics', () => {
-  it('P2-10-45 前台 + 父会话信号 → 中止子会话；后台、wait + 父会话中止 → 不中止；重跑重新挂上的前台 + 信号 → 中止；重跑 wait 续上之后父会话中止 → 子会话照跑，后来恰一条通知', async () => {
-    const parent = family('c1', 'c2', 'c3', 'c4')
-    const c1 = fakeHost.put('c1', { submitGate: gate() })
-    const ac1 = new AbortController()
-    const fg = runner.prompt({
-      parentId: 'P',
-      childId: 'c1',
-      message: 'go',
-      background: false,
-      timeoutSeconds: 5,
-      signal: ac1.signal,
-      requestId: R(1)
-    })
-    await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
-    ac1.abort()
-    await vi.waitFor(() => expect(c1.callsOf('abort')).toHaveLength(1))
-    c1.submitGate!.release()
-    await fg
-
+  it('P2-10-45 父会话被停从不级联：派出去之后 wait 被中止 → 子会话不中止；重跑 wait 续上之后父会话中止 → 子会话照跑，后来恰一条（写入的）通知', async () => {
+    // 原来这里还有「前台 + 父会话信号 → 中止子会话」「重跑重新挂上的前台 + 信号 → 中止」两段：§20 一并取消（反向见 BG-29）
+    const parent = family('c2', 'c4')
     const c2 = fakeHost.put('c2', { submitGate: gate() })
-    const ac2 = new AbortController()
-    await runner.prompt({
-      parentId: 'P',
-      childId: 'c2',
-      message: 'go',
-      background: true,
-      timeoutSeconds: 5,
-      signal: ac2.signal,
-      requestId: R(2)
-    })
-    ac2.abort()
+    await runner.prompt({ parentId: 'P', childId: 'c2', message: 'go', requestId: R(2) })
     c2.busy = true
     const ac3 = new AbortController()
     const waiting = runner.wait({
@@ -1258,20 +1414,6 @@ describe('H. abort semantics', () => {
     expect(await waiting).toMatchObject({ kind: 'aborted' })
     expect(c2.callsOf('abort')).toEqual([])
     c2.submitGate!.release()
-
-    // 重跑重新挂上的前台 + 信号
-    const c3 = fakeHost.put('c3', { interrupted: true, submitGate: gate() })
-    c3.requestStates.set(R(3), 'pending')
-    const ac4 = new AbortController()
-    const rerun = call(
-      { action: 'prompt-sub-session', sub_session_id: 'c3', message: 'task' },
-      { taskId: 3, signal: ac4.signal }
-    )
-    await vi.waitFor(() => expect(submitsOf(c3)).toHaveLength(1))
-    ac4.abort()
-    await vi.waitFor(() => expect(c3.callsOf('abort')).toHaveLength(1))
-    c3.submitGate!.release()
-    await rerun.catch(() => undefined)
 
     // 重跑 wait 续上之后父会话中止
     const c4 = fakeHost.put('c4', {
@@ -1296,38 +1438,49 @@ describe('H. abort semantics', () => {
     expect(parent.callsOf('notify').length).toBe(notifiesBefore)
   })
 
-  it('P2-10-47 中断的父会话被中止：只级联前台驱动、工具任务还活着的那条；后台 / wait 目标 / 早先超时降级的前台一概不碰；不通知', async () => {
-    const parent = family('fg', 'bg', 'waited', 'degraded')
-    parent.interrupted = true
-    parent.taskStates.set(7, { live: true, abortRequested: false })
-    parent.taskStates.set(3, { live: false, abortRequested: false })
-    const marker = (requestId: string, background: boolean): FakeDurableSession['drivenRun'] => ({
-      requestId,
-      parentId: 'P',
-      background,
-      conversationId: 1 as never
-    })
-    const fg = fakeHost.put('fg', { interrupted: true, drivenRun: marker(R(7), false) })
-    const bg = fakeHost.put('bg', { interrupted: true, drivenRun: marker(R(5), true) })
-    // wait 的目标：之前是后台发的（标记是后台的），或者干脆是用户自己的那一轮（没有标记）
-    const waited = fakeHost.put('waited', { interrupted: true })
-    const degraded = fakeHost.put('degraded', { interrupted: true, drivenRun: marker(R(3), false) })
-
-    await runner.cascadeParentAbort('P')
-    expect(fg.callsOf('abort')).toHaveLength(1)
-    expect(bg.callsOf('abort')).toEqual([])
-    expect(waited.callsOf('abort')).toEqual([])
-    expect(degraded.callsOf('abort')).toEqual([])
-    expect(bg.interrupted).toBe(true)
-    // 级联中止的那一轮落定时不通知
-    await runner.onDrivenSettled(
-      settledEvent({ childId: 'fg', requestId: R(7), background: false, reason: 'aborted' })
+  it('BG-29 派出去之后父会话的工具信号中止（确认窗里 / 回执之后各一次）：子会话不中止、任务不被停也没落定；放行后各恰一次叫醒父会话', async () => {
+    const parent = family('c1', 'c2')
+    // (a) 确认窗里就中止
+    const c1 = fakeHost.put('c1', { submitGate: gate() })
+    const ac1 = new AbortController()
+    const inWindow = call(
+      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'go' },
+      { taskId: 1, signal: ac1.signal }
     )
-    expect(noticesTo(parent)).toEqual([])
-    // 幂等：再来一遍什么都不多做
-    await runner.cascadeParentAbort('P')
-    expect(fg.callsOf('abort')).toHaveLength(1)
+    await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1), { interval: 1 })
+    ac1.abort()
+    expect((await inWindow).text).toContain('Started in the background')
+    // (b) 回执之后才中止
+    const c2 = fakeHost.put('c2', { submitGate: gate() })
+    const ac2 = new AbortController()
+    expect(
+      (
+        await call(
+          { action: 'prompt-sub-session', sub_session_id: 'c2', message: 'go' },
+          { taskId: 2, signal: ac2.signal }
+        )
+      ).text
+    ).toContain('Started in the background')
+    ac2.abort()
+    await sleep(100)
+    for (const [child, rid] of [
+      [c1, R(1)],
+      [c2, R(2)]
+    ] as const) {
+      expect(child.callsOf('abort')).toEqual([])
+      expect(taskRegistry.get(rid)).toMatchObject({ status: 'running', endedAt: null })
+    }
+    c1.submitGate!.release()
+    c2.submitGate!.release()
+    await vi.waitFor(() => expect(taskRegistry.runningCount('P')).toBe(0))
+    await runner.onDrivenSettled(settledEvent({ childId: 'c1', requestId: R(1) }))
+    await runner.onDrivenSettled(settledEvent({ childId: 'c2', requestId: R(2) }))
+    expect(parent.callsOf('notify')).toHaveLength(2)
+    expect(parent.callsOf('writeNotice')).toEqual([])
   })
+
+  // 原 P2-10-47（中断的父会话被中止 → 级联它前台驱动着、被中断的子会话，cascadeParentAbort）被 §20 删除：
+  // 父会话被停不级联（反向见 sessionHostDeps 的 BG-30、subSessionDurable 的 BG-31）
 })
 
 // ─── I. 新消息发进被中断的子会话 ────────────────────────────────────────────
@@ -1410,8 +1563,7 @@ describe('J. §19 parent intervention through the real facade', () => {
       {
         action: 'prompt-sub-session',
         sub_session_id: 'c1',
-        message: 'go',
-        run_in_background: true
+        message: 'go'
       },
       { taskId: 1 }
     )
@@ -1429,10 +1581,7 @@ describe('J. §19 parent intervention through the real facade', () => {
 
   it('WP3-99 代答经真门面只落到这条子会话的 durable：三参调用，附带信息里是 parent:<P> 与答题方；载荷里没有 answeredBy；别的会话一次都没被应答', async () => {
     const { parent, c1 } = await askingChild()
-    const res = await call(
-      { action: 'answer-sub-session', selections: ['A'], run_in_background: true },
-      { taskId: 2 }
-    )
+    const res = await call({ action: 'answer-sub-session', selections: ['A'] }, { taskId: 2 })
     expect(res.isError).toBe(false)
     expect(res.text).toContain('Answered; it carries on in the background.')
     expect(c1.respondArgs).toEqual([
@@ -1464,8 +1613,7 @@ describe('J. §19 parent intervention through the real facade', () => {
           {
             action: 'prompt-sub-session',
             sub_session_id: 'c1',
-            message: 'go',
-            run_in_background: true
+            message: 'go'
           },
           { taskId: 1 }
         )
@@ -1520,7 +1668,7 @@ describe('J. §19 parent intervention through the real facade', () => {
   it('WP3-103 换进程之后重跑同一次代答（子会话的 ask 重跑、同一 id 再挂）：工具失败，新进程里子会话 durable 一次都没被应答', async () => {
     const { c1 } = await askingChild()
     const memo = sharedMemo()
-    const args = { action: 'answer-sub-session', selections: ['A'], run_in_background: true }
+    const args = { action: 'answer-sub-session', selections: ['A'] }
     // 第一个进程里答过一次（q1 被受理）
     expect((await call(args, { taskId: 2, memo })).isError).toBe(false)
     expect(c1.callsOf('respondToInput')).toHaveLength(1)

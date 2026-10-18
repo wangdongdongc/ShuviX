@@ -1,7 +1,7 @@
 /**
  * 子会话全链路（设计：docs/sub-session-design.md）——
- * 父会话的模型调 `session` 工具 → 建出一条**普通会话** → 代替用户往里发消息 →
- * 子会话自己跑一轮 → 答复回到父会话的工具结果里。
+ * 父会话的模型调 `session` 工具 → 建出一条**普通会话** → 代替用户往里发消息（只回执，§20：派活一律后台）→
+ * 子会话自己跑一轮 → 跑完由完成通知把父会话叫回来（空闲则自动续跑），答复经 `wait-for-sub-sessions` 收回。
  *
  * 被测的是那条「不该有第二份」的路径：工具 → subSessionRunner → **chatGateway.prompt**
  * （IPC `agent:prompt` 的同一个函数）→ 子会话运行时。所以这里刻意不 mock 任何一层，
@@ -12,11 +12,14 @@
  *
  * P3-14-24：后台那一轮在父会话的任务页里是一条子会话行（落到 done）；它的「打开」把活动会话换成子会话，
  * 对话区从子会话自己的视图画出答复。
+ *
+ * 子会话的那一轮一律挂在具名 hold 槽 `child` 里、按需放行：假提供商立刻作答，不按住的话它可能在父会话的下一步
+ * 之前就跑完 —— 完成通知是自动续跑一轮还是插进当前轮、`wait` 有没有握着它，全凭时序。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { until } from '../../harness/cdp'
+import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import {
@@ -27,10 +30,20 @@ import {
   waitRendererReady
 } from '../../harness/seed'
 import { sidebarPane, tasksPanelPane, type SidebarPane } from '../../harness/pages'
+import { syncProbe, type SyncProbe } from '../../harness/sync'
 
 const MODEL = 'e2e-model'
 const PARENT_TITLE = 'S-parent'
 const SUB_TITLE = '子任务 A'
+/** 一轮挂在 hold 里的上限：远长于用例要它挂着的时间，放行靠 `release(key)` */
+const HOLD_MS = 30_000
+/**
+ * 父会话的 `wait` 在视图里已经在跑之后，再留给它登记成「握着这条子会话」的余量（中间只隔两次 memo 读写）。
+ * 完成通知在落定那一刻看「有没有 wait 握着」，所以放子会话跑完之前必须先过这一段
+ */
+const WAIT_ARMED_MS = 300
+/** 否定断言的静默窗（> 自动续跑的合并窗口） */
+const QUIET_MS = 1500
 
 interface SessionRow {
   id: string
@@ -43,11 +56,20 @@ interface ListedMessage {
   id: string
   role: string
   content: string
-  blocks?: Array<{ type: string; toolName?: string; result?: string; isError?: boolean }>
+  metadata?: { isSystemNotice?: boolean } | null
+  blocks?: Array<{
+    type: string
+    toolCallId?: string
+    toolName?: string
+    result?: string
+    isError?: boolean
+    details?: Record<string, unknown> | null
+  }>
 }
 
 let app: E2EApp
 let provider: FakeProvider
+let probe: SyncProbe
 let sidebar: SidebarPane
 let projectId = ''
 let parentSid = ''
@@ -71,11 +93,61 @@ const toolResults = (msgs: ListedMessage[]): string[] =>
     (m.blocks ?? []).filter((b) => b.toolName === 'session').map((b) => b.result ?? '')
   )
 
+/** 某次 session 工具调用的结果块（等它落盘） */
+const sessionBlock = (
+  sid: string,
+  callId: string
+): Promise<NonNullable<ListedMessage['blocks']>[number]> =>
+  until(
+    async () =>
+      (await listMessages(sid))
+        .flatMap((m) => m.blocks ?? [])
+        .find((b) => b.toolCallId === callId && b.result !== undefined),
+    `result of ${callId}`
+  )
+
+/** 系统通知（子会话回报父会话的那几条：role user + metadata.isSystemNotice） */
+const systemNotices = (msgs: ListedMessage[]): ListedMessage[] =>
+  msgs.filter((m) => m.role === 'user' && m.metadata?.isSystemNotice === true)
+
 /** 请求认领：按最后一条用户消息的正文区分父会话与子会话 */
 const byUserText =
   (text: string) =>
   (r: { lastUserText: string }): boolean =>
     r.lastUserText === text
+
+/** 被子会话的完成通知叫醒的那一轮：末条用户消息就是那条通知 */
+const wokenByCompletion = (r: { lastUserText: string }): boolean =>
+  r.lastUserText.includes(`<sub-session id="${subSid}"`) && r.lastUserText.includes('has finished')
+
+/** 等子会话的那一轮挂进 `child` 槽（它收到的用户消息恰为 text） */
+const childHeld = (text: string): Promise<unknown> =>
+  until(
+    () => provider.heldRequest('child')?.lastUserText === text || null,
+    `child turn "${text}" held`
+  )
+
+/** 等父会话的某次 wait 真的挂上了（视图里在跑 + 登记余量） */
+const waitArmed = async (callId: string): Promise<void> => {
+  await probe.waitView(
+    parentSid,
+    (v) => v.toolRuns[callId]?.status === 'running',
+    30_000,
+    `${callId} running`
+  )
+  await sleep(WAIT_ARMED_MS)
+}
+
+/** 等父会话转写里出现这段助手正文、且这一轮落定（续跑那一轮不是 agent.prompt 发起的，不能等它的返回） */
+const waitParentSettled = (text: string): Promise<unknown> =>
+  probe.waitView(
+    parentSid,
+    (v) =>
+      v.run.state !== 'busy' &&
+      v.messages.some((m) => m.role === 'assistant' && m.content.includes(text)),
+    60_000,
+    `"${text}" in the parent`
+  )
 
 beforeAll(async () => {
   app = await launchApp()
@@ -93,6 +165,8 @@ beforeAll(async () => {
       .then((s) => s.id)`
   )
   sidebar = sidebarPane(app.main)
+  probe = syncProbe(app.main)
+  await probe.install()
   // 开子会话出厂不问（2026-10-01 删了 ask-on-sub-session）。「点允许一次」的桩只当安全网：
   // 真冒出一张卡也不会把整条 spec 挂到超时 —— 用例里断言它一次都没被用上
   await installAutoAllow(app.main)
@@ -147,8 +221,8 @@ describe('create-sub-session', () => {
   })
 })
 
-describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
-  it('前台：子会话真的跑了一轮，答复回到父会话的工具结果里', async () => {
+describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§20）', () => {
+  it('BG-E1 回执不带答复；子会话跑完 → 恰一条完成通知叫醒空闲的父会话 → 一次 wait 收回答复', async () => {
     provider.reset()
     provider.script(
       {
@@ -165,11 +239,39 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
         ],
         when: byUserText('让它干活')
       },
-      // 子会话自己的那一轮（它收到的用户消息就是「干活」）
-      { text: 'CHILD DONE.', when: byUserText('干活') },
-      { text: 'ok.', when: byUserText('让它干活') }
+      // 子会话自己的那一轮（它收到的用户消息就是「干活」）：挂住，父会话那一轮先收尾
+      { text: 'CHILD DONE.', when: byUserText('干活'), holdMs: HOLD_MS, holdKey: 'child' },
+      { text: 'dispatched.', when: byUserText('让它干活') },
+      // 被完成通知叫醒的那一轮：照通知说的，用 wait 收
+      {
+        toolCalls: [
+          {
+            id: 'call_collect',
+            name: 'session',
+            args: JSON.stringify({ action: 'wait-for-sub-sessions' })
+          }
+        ],
+        when: wokenByCompletion
+      },
+      { text: 'collected.', when: wokenByCompletion }
     )
+    // 父会话这一轮落定（回执、收尾）时子会话还挂着
     await promptParent('让它干活')
+    await childHeld('干活')
+
+    // 1. 回执：在跑、带后台标签，**不带**答复（子会话这时候也还没答）
+    const receipt = await sessionBlock(parentSid, 'call_prompt')
+    expect(receipt.isError).toBeFalsy()
+    expect(receipt.result).toContain(`<sub-session id="${subSid}" status="running"/>`)
+    expect(receipt.result).toContain('Started in the background')
+    expect(receipt.result).not.toContain('CHILD DONE.')
+    expect(receipt.result).not.toContain('<reply>')
+    expect((receipt.details as { background?: boolean } | null | undefined)?.background).toBe(true)
+    expect(systemNotices(await listMessages(parentSid))).toEqual([])
+
+    // 2. 放子会话跑完 → 完成通知 → 空闲的父会话自动续跑那一轮
+    provider.release('child')
+    await waitParentSettled('collected.')
 
     // 子会话的转写：一条用户消息（父级代发）+ 一条助手答复，与人手敲的一模一样
     const childMsgs = await listMessages(subSid)
@@ -177,13 +279,28 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
     expect(childMsgs[0].content).toBe('干活')
     expect(childMsgs[1].content).toContain('CHILD DONE.')
 
-    // 父会话拿到的是子会话的最终答复，且**在围栏里** —— 围栏外的字都是工具在说话
-    const parentResults = toolResults(await listMessages(parentSid)).join('\n')
-    expect(parentResults).toContain('<reply>\nCHILD DONE.\n</reply>')
-    expect(parentResults).toContain('<sub-session id="' + subSid + '"')
+    // 3. 恰一条系统通知：说跑完了、指向 wait，本身不带答复
+    const parentMsgs = await listMessages(parentSid)
+    const notices = systemNotices(parentMsgs)
+    expect(notices).toHaveLength(1)
+    expect(notices[0].content).toContain(`<sub-session id="${subSid}"`)
+    expect(notices[0].content).toContain('has finished')
+    expect(notices[0].content).toContain('wait-for-sub-sessions')
+    expect(notices[0].content).not.toContain('CHILD DONE.')
+    // 模型以 user 角色看到的就是它
+    const woken = provider.requests().filter(wokenByCompletion)
+    expect(woken).toHaveLength(2)
+    expect(woken[0].lastUserText.trim()).toBe(notices[0].content.trim())
+
+    // 4. 收回来的答复**在围栏里** —— 围栏外的字都是工具在说话
+    const collected = await sessionBlock(parentSid, 'call_collect')
+    expect(collected.isError).toBeFalsy()
+    expect(collected.result).toContain('<sub-sessions status="settled">')
+    expect(collected.result).toContain(`<sub-session id="${subSid}"`)
+    expect(collected.result).toContain('<reply>\nCHILD DONE.\n</reply>')
   })
 
-  it('后台：立刻回执且**不带答复正文**，跑完再由 read 取', async () => {
+  it('同一轮里 wait 收回：回执**不带答复正文**，一次 wait 交回答复、不另发完成通知', async () => {
     provider.reset()
     provider.script(
       {
@@ -194,14 +311,14 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
             args: JSON.stringify({
               action: 'prompt-sub-session',
               sub_session_id: subSid,
-              message: '后台干活',
-              run_in_background: true
+              message: '后台干活'
             })
           }
         ],
         when: byUserText('后台跑')
       },
-      { text: 'BG DONE.', when: byUserText('后台干活'), chunkDelayMs: 60 },
+      // 挂住，等父会话的 wait 握着它了再放：落定在同一轮里交回，不通知
+      { text: 'BG DONE.', when: byUserText('后台干活'), holdMs: HOLD_MS, holdKey: 'child' },
       // 父级随后用一次 wait 收结果 —— 替掉「sleep + 反复 list/read」的那条路
       {
         toolCalls: [
@@ -220,12 +337,18 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
       async () => (await sidebar.openSession(PARENT_TITLE)) || null,
       'parent session opened'
     )
-    await promptParent('后台跑')
+    const noticesBefore = systemNotices(await listMessages(parentSid)).length
+    const turn = promptParent('后台跑').catch((error: unknown) => error)
+    await childHeld('后台干活')
+    await waitArmed('call_wait')
+    provider.release('child')
+    await turn
+    await waitParentSettled('collected.')
 
     const results = toolResults(await listMessages(parentSid))
-    // 认那句独有的回执文案而不是「哪条结果里有 background 这个词」—— 创建回执里也有
-    // （它要把 `run_in_background` 摆给模型看），松判据会挑中它
-    const receipt = results.find((r) => r.includes('Started in the background')) ?? ''
+    // 按调用 id 认这一次的回执：上一条用例的回执同样在父会话里，文案也一样
+    const receipt = (await sessionBlock(parentSid, 'call_bg')).result ?? ''
+    expect(receipt).toContain('Started in the background')
     // 回执**明说跑完会把你叫回来**（自动续跑之后那是事实），并给出「要当轮就拿到答复」的收法
     expect(receipt).toContain('brought back')
     expect(receipt).toContain('wait-for-sub-sessions')
@@ -237,6 +360,11 @@ describe('prompt-sub-session —— 代替用户发消息并等结果', () => {
     expect(collected, 'wait 应把子会话的答复一次交回').toBeDefined()
     expect(collected).toContain('<sub-sessions status="settled">')
     expect(collected).toContain('<reply>\nBG DONE.\n</reply>')
+
+    // wait 握着的那次落定已经在同一轮里交回：没有新的完成通知（也就没有被它叫醒的一轮）
+    await sleep(QUIET_MS)
+    expect(systemNotices(await listMessages(parentSid))).toHaveLength(noticesBefore)
+    expect(provider.requests().filter((r) => r.lastUserText.includes('has finished'))).toEqual([])
 
     await until(
       async () => (await listMessages(subSid)).some((m) => m.content.includes('BG DONE.')),

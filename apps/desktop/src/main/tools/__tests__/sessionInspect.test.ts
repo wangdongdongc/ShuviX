@@ -5,7 +5,7 @@
  *   - 只转发模型给了的那几项查询参数，**从不**转发上限类参数（防灌爆的上限不交给模型）；
  *   - 子会话说的每一个字都在 `<transcript>` 围栏里，围栏外的提示都是工具在说话（§15 的纪律）；
  *   - 属性值不能撕破标签；runner 的错误原样抛（不出半截围栏）；
- *   - `user-intervened="true"` 只在该带时出现、位置固定（read / wait / 前台答复 / inspect 的开标签）。
+ *   - `user-intervened="true"` 只在该带时出现、位置固定（read / wait / inspect 的开标签；prompt / answer 的回执从不带，§20）。
  * 另附工具卡摘要（PRES）：inspect 的那一行摘要。
  *
  * mock 形状照 session.test.ts（那一份归另一组用例；这里的 runner mock 多一个 `inspect`）。用例编号 WP4-xx 对应测试设计清单。
@@ -43,7 +43,7 @@ vi.mock('../../services/sessionService', () => ({
 }))
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: mocks.registerBuiltinTool }))
 vi.mock('../../services/subSessionRunner', () => ({
-  DEFAULT_PROMPT_TIMEOUT_SEC: 300,
+  DEFAULT_WAIT_TIMEOUT_SEC: 300,
   subSessionRunner: {
     create: mocks.runnerCreate,
     prompt: mocks.runnerPrompt,
@@ -430,13 +430,9 @@ describe('user-intervened —— 只在该带时出现、位置固定', () => {
     expect(out.match(/user-intervened/g)).toHaveLength(1)
   })
 
-  it('WP4-138 前台 prompt / answer 的答复', async () => {
-    mocks.runnerPrompt.mockResolvedValue({
-      kind: 'answered',
-      id: 'c1',
-      answer: 'DONE.',
-      info: info({ status: 'running', userIntervened: true })
-    })
+  // 原「WP4-138 前台 prompt / answer 的答复」被 §20 取消：prompt / answer 一律只回执，没有答复可带 user-intervened
+  it('WP4-138 / BG-42 prompt / answer 的回执从不带 user-intervened（started 无快照；input 的快照里 runner 不放它）', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'started', id: 'c1' })
     const prompted = textOf(
       await executeTool(tool, 'tc-1', {
         action: 'prompt-sub-session',
@@ -444,13 +440,13 @@ describe('user-intervened —— 只在该带时出现、位置固定', () => {
         message: 'go'
       })
     )
-    expect(prompted.split('\n')[0]).toBe(OPEN_WITH)
+    expect(prompted.split('\n')[0]).toBe('<sub-session id="c1" status="running"/>')
+    expect(prompted).not.toContain('user-intervened')
 
     mocks.runnerAnswer.mockResolvedValue({
-      kind: 'answered',
+      kind: 'input',
       id: 'c1',
-      answer: 'DONE.',
-      info: info({ status: 'running' })
+      info: { ...info({ status: 'waiting-input' }), pendingAsks: [] }
     })
     const answered = textOf(
       await executeTool(tool, 'tc-1', {
@@ -459,7 +455,8 @@ describe('user-intervened —— 只在该带时出现、位置固定', () => {
         selections: ['A']
       })
     )
-    expect(answered.split('\n')[0]).toBe(OPEN_WITHOUT)
+    expect(answered.split('\n')[0]).toBe('<sub-session id="c1" title="C" status="waiting-input">')
+    expect(answered).not.toContain('user-intervened')
   })
 
   it('§19.10 第 18 条 inspect 的开标签也带它', async () => {
