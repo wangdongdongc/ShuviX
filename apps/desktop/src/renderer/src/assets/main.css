@@ -58,10 +58,6 @@
 [data-settings-stacked] [data-settings-row] > :first-child {
   min-width: 9em;
 }
-/* 手机列表里的行高一些，手指点得准（桌面侧栏的行是给鼠标的高度） */
-[data-mobile-shell] [data-mobile-list] [data-session-row] {
-  min-height: 40px;
-}
 @keyframes mobile-sheet-in {
   from {
     transform: translateY(100%);

@@ -315,7 +315,7 @@ export interface ChatPane {
   tokenBadges(msgId: string): Promise<string[]>
   /** 用户气泡内的附图解码状态 */
   images(): Promise<Array<{ naturalWidth: number; complete: boolean }>>
-  /** 思考块数量（ThinkingText 的 font-serif 按钮） */
+  /** 思考块数量（ThinkingBlock 的 `data-thinking-block`：role="button" 的 div，只在对话滚动区里数） */
   thinkingBlocks(): Promise<number>
   /** 错误行数量（error_event 条目） */
   errorRows(): Promise<number>
@@ -745,7 +745,7 @@ export function chatPane(main: CdpClient): ChatPane {
           .map((img) => ({ naturalWidth: img.naturalWidth, complete: img.complete }))`
       ),
     thinkingBlocks: () =>
-      main.eval<number>(`${SCROLLER}?.querySelectorAll('button.font-serif').length ?? 0`),
+      main.eval<number>(`${SCROLLER}?.querySelectorAll('[data-thinking-block]').length ?? 0`),
     errorRows: () =>
       main.eval<number>(`document.querySelectorAll('[data-msg-type="error_event"]').length`),
 
@@ -11205,6 +11205,74 @@ export interface WebMobileTabShot {
   current: boolean
 }
 
+/** 视口里的一个矩形（getBoundingClientRect 的几项，CSS px） */
+export interface BoxShot {
+  left: number
+  top: number
+  right: number
+  bottom: number
+  width: number
+  height: number
+}
+
+/** 输入卡片底部工具行的几何（见 `composerLayout`） */
+export interface ComposerLayoutShot {
+  card: BoxShot
+  /** 工具行本身的宽度（它是 `@container`，队列按钮的字按它显隐） */
+  toolbarWidth: number
+  /** 发送键（`.lucide-send` 那颗；运行中没有 → null） */
+  send: BoxShot | null
+  /** 停止键（`.lucide-square` 那颗；空闲时没有 → null） */
+  stop: BoxShot | null
+  /** 上下文用量环：`svg[width="15"]` 本身，与它所在的那一格（工具行的直接子节点） */
+  ring: BoxShot | null
+  ringItem: BoxShot | null
+  /** 扩展选择器（`data-tool-picker`） */
+  toolPicker: BoxShot | null
+  /** 模型选择器的触发器（显示模型名的那格 span 的父节点：可点时是 button，只读时是 span） */
+  modelTrigger: BoxShot | null
+  modelName: { box: BoxShot; scrollWidth: number; clientWidth: number } | null
+  /** 两个选择器的锁（运行时在 → 都锁上：模型选择器的 `data-model-lock`、扩展选择器的 `data-locked`） */
+  locks: { model: boolean; tools: boolean }
+  /** 运行中的两个队列出口（`data-queue-tier`，DOM 序）；字在按钮里那格 span 上 */
+  queue: Array<{
+    tier: string
+    box: BoxShot
+    scrollWidth: number
+    clientWidth: number
+    ariaLabel: string
+    title: string
+    /** 字那格 span 的计算 display 与文字；没有那格 → null / '' */
+    labelDisplay: string | null
+    labelText: string
+  }>
+  /** 页面级的横向溢出：document 与手机壳（`data-mobile-shell`，不在 → null） */
+  page: {
+    docScrollWidth: number
+    innerWidth: number
+    shellScrollWidth: number | null
+    shellClientWidth: number | null
+  }
+}
+
+/** 一个思考块的几何（见 `thinkingShots`） */
+export interface ThinkingBlockShot {
+  /** 同一张卡终答正文的文字（找不到 → ''） */
+  reply: string
+  expanded: boolean
+  /** 计算 visibility 是 visible（Virtuoso 落到初始位置之前整张列表是 hidden 的；innerText 那时是空串） */
+  visible: boolean
+  height: number
+  /** 终答正文顶边 − 思考块底边（没有终答正文 → null） */
+  gap: number | null
+  /** 里面那一格内容盒（块唯一的孩子）的计算样式与宽度 */
+  whiteSpace: string
+  textOverflow: string
+  scrollWidth: number
+  clientWidth: number
+  innerText: string
+}
+
 /** 设置分区列表里的一行 */
 export interface WebMobileSettingsTabShot {
   id: string
@@ -11300,8 +11368,31 @@ export interface WebMobilePane {
 
   /** 对话输入框（第一个 textarea）的计算字号；没有 → null */
   composerFontSize(): Promise<string | null>
-  /** 看得见的（高 > 0）会话行的高度（document 级，`data-session-row`） */
-  sessionRowHeights(): Promise<number[]>
+  /**
+   * 一条会话行（按标题）的高度：'list' 只在手机会话页的列表那一半里找，'document' 整页里第一条看得见的
+   * （高 > 0；桌面布局的侧栏）。不在 / 看不见 → null
+   */
+  sessionRowHeight(title: string, scope: 'list' | 'document'): Promise<number | null>
+  /**
+   * 手机会话页列表里一个项目组的三种行的高度：组头（`group/header` 那层）、它的「项目知识库」文件夹行
+   * （`data-project-knowledge=<projectId>`）、组里按标题的一条会话行。哪一个不在 / 看不见 → 那一项 null
+   */
+  listGroupRhythm(
+    project: { id: string; name: string },
+    rowTitle: string
+  ): Promise<{ header: number | null; knowledge: number | null; row: number | null }>
+  /**
+   * 输入卡片（`textarea.closest('.rounded-2xl')`）与它底部工具行里各控件的几何（视口坐标，CSS px）；
+   * 卡片不在 → null。`modelName` = 模型选择器里显示的模型 id（按文字认那一格 span）
+   */
+  composerLayout(modelName: string): Promise<ComposerLayoutShot | null>
+  /**
+   * 对话滚动区里每个思考块（`data-thinking-block`，DOM 序）的几何：块高、到同一张卡终答正文（`.min-w-0 >
+   * .markdown-body`）顶边的间距、里面那一格内容盒的排版（white-space / text-overflow / 宽度）与文字
+   */
+  thinkingShots(): Promise<ThinkingBlockShot[]>
+  /** 程序化点一下终答正文为 `reply` 的那张卡里的思考块（切换展开）；找不到 → 抛 */
+  clickThinking(reply: string): Promise<void>
   /** `.opacity-30`（专注模式压暗）的个数：'shell' 只数手机布局里的，'document' 整页 */
   dimmedCount(scope: 'shell' | 'document'): Promise<number>
 
@@ -11671,12 +11762,124 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
         const ta = document.querySelector('textarea')
         return ta ? getComputedStyle(ta).fontSize : null
       })()`),
-    sessionRowHeights: () =>
-      client.eval<number[]>(
-        `[...document.querySelectorAll('[data-session-row]')]
+    sessionRowHeight: (title, scope) =>
+      client.eval<number | null>(`(() => {
+        const rows = [...((${scope === 'list' ? LIST : 'document'})?.querySelectorAll('[data-session-row]') ?? [])]
+          .filter((r) => ${ROW_TITLE}(r) === ${JSON.stringify(title)})
           .map((r) => r.getBoundingClientRect().height)
-          .filter((h) => h > 0)`
-      ),
+          .filter((h) => h > 0)
+        return rows.length > 0 ? rows[0] : null
+      })()`),
+    listGroupRhythm: (project, rowTitle) =>
+      client.eval<{ header: number | null; knowledge: number | null; row: number | null }>(`(() => {
+        const h = (el) => {
+          const height = el ? el.getBoundingClientRect().height : 0
+          return height > 0 ? height : null
+        }
+        const list = ${LIST}
+        const folder = [...(list?.querySelectorAll('[data-project-knowledge]') ?? [])].find(
+          (el) => el.getAttribute('data-project-knowledge') === ${JSON.stringify(project.id)}
+        )
+        return {
+          header: h(${LIST_HEADER(project.name)}),
+          knowledge: h(folder),
+          row: h(${ROW_IN(LIST, rowTitle)})
+        }
+      })()`),
+    composerLayout: (modelName) =>
+      client.eval<ComposerLayoutShot | null>(`(() => {
+        const box = (el) => {
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+        }
+        const ta = document.querySelector('textarea')
+        const card = ta?.closest('.rounded-2xl')
+        if (!card) return null
+        // 底部工具行 = textarea 容器的下一个兄弟（同 chatPane 的 TOOL_ROW）
+        const toolbar = ta.parentElement?.nextElementSibling ?? null
+        const scope = toolbar ?? card
+        const ring = scope.querySelector('svg[width="15"]')
+        let ringItem = ring
+        while (ringItem && ringItem.parentElement && ringItem.parentElement !== toolbar) ringItem = ringItem.parentElement
+        const name = [...card.querySelectorAll('span')].find((s) => s.textContent === ${JSON.stringify(modelName)})
+        const shell = document.querySelector('[data-mobile-shell]')
+        return {
+          card: box(card),
+          toolbarWidth: toolbar ? toolbar.getBoundingClientRect().width : 0,
+          send: box(scope.querySelector('.lucide-send')?.closest('button') ?? null),
+          stop: box(scope.querySelector('.lucide-square')?.closest('button') ?? null),
+          ring: box(ring),
+          ringItem: ring && ringItem?.parentElement === toolbar ? box(ringItem) : null,
+          toolPicker: box(scope.querySelector('[data-tool-picker]')),
+          modelTrigger: box(name?.parentElement ?? null),
+          modelName: name ? { box: box(name), scrollWidth: name.scrollWidth, clientWidth: name.clientWidth } : null,
+          locks: {
+            model: !!scope.querySelector('[data-model-lock]'),
+            tools: !!scope.querySelector('[data-tool-picker][data-locked]')
+          },
+          queue: [...scope.querySelectorAll('[data-queue-tier]')].map((b) => {
+            const label = b.querySelector(':scope > span')
+            return {
+              tier: b.getAttribute('data-queue-tier') ?? '',
+              box: box(b),
+              scrollWidth: b.scrollWidth,
+              clientWidth: b.clientWidth,
+              ariaLabel: b.getAttribute('aria-label') ?? '',
+              title: b.getAttribute('title') ?? '',
+              labelDisplay: label ? getComputedStyle(label).display : null,
+              labelText: (label?.textContent ?? '').trim()
+            }
+          }),
+          page: {
+            docScrollWidth: document.documentElement.scrollWidth,
+            innerWidth: window.innerWidth,
+            shellScrollWidth: shell ? shell.scrollWidth : null,
+            shellClientWidth: shell ? shell.clientWidth : null
+          }
+        }
+      })()`),
+    thinkingShots: () =>
+      client.eval<ThinkingBlockShot[]>(`(() => {
+        const answerOf = (card) =>
+          [...(card?.querySelectorAll('.markdown-body') ?? [])].find((m) =>
+            (m.parentElement?.className ?? '').includes('min-w-0')
+          ) ?? null
+        const scroller = document.querySelector('.conversation-scroller')
+        return [...(scroller?.querySelectorAll('[data-thinking-block]') ?? [])].map((el) => {
+          const r = el.getBoundingClientRect()
+          const answer = answerOf(el.closest('[data-msg-id]'))
+          const inner = el.firstElementChild
+          const cs = inner ? getComputedStyle(inner) : null
+          return {
+            reply: (answer?.textContent ?? '').trim(),
+            expanded: el.getAttribute('aria-expanded') === 'true',
+            visible: getComputedStyle(el).visibility === 'visible',
+            height: r.height,
+            gap: answer ? answer.getBoundingClientRect().top - r.bottom : null,
+            whiteSpace: cs?.whiteSpace ?? '',
+            textOverflow: cs?.textOverflow ?? '',
+            scrollWidth: inner?.scrollWidth ?? 0,
+            clientWidth: inner?.clientWidth ?? 0,
+            innerText: inner instanceof HTMLElement ? inner.innerText : ''
+          }
+        })
+      })()`),
+    clickThinking: async (reply) => {
+      const clicked = await client.eval<boolean>(`(() => {
+        const scroller = document.querySelector('.conversation-scroller')
+        const el = [...(scroller?.querySelectorAll('[data-thinking-block]') ?? [])].find((b) => {
+          const answer = [...(b.closest('[data-msg-id]')?.querySelectorAll('.markdown-body') ?? [])].find((m) =>
+            (m.parentElement?.className ?? '').includes('min-w-0')
+          )
+          return (answer?.textContent ?? '').trim() === ${JSON.stringify(reply)}
+        })
+        if (!el) return false
+        el.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error(`no thinking block in the card answering ${reply}`)
+    },
     dimmedCount: (scope) =>
       client.eval<number>(
         `(${scope === 'shell' ? SHELL : 'document'})?.querySelectorAll('.opacity-30').length ?? 0`

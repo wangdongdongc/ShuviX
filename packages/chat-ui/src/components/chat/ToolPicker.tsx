@@ -110,7 +110,7 @@ export function ToolPicker(): React.JSX.Element | null {
       ref={toolsRef}
       data-tool-picker
       data-locked={locked || undefined}
-      className="relative flex items-center group"
+      className="relative flex-shrink-0 flex items-center group"
     >
       <button
         onClick={() => setOpen(!open)}

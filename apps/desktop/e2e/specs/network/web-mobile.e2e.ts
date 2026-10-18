@@ -37,8 +37,16 @@
  *        挪 30px 没有菜单、挪 5px 照样有；关掉菜单之后的下一次轻点照常推入；资料库里内置智能体行按住 →
  *        菜单里有「创建覆盖副本」
  *   M-18 专注模式缺省开着：手机布局里打开再返回，壳里没有 .opacity-30；1280 宽的桌面布局里至少一处
- *   M-19 手机布局里对话输入框 16px、会话行至少 40px 高；1280 宽时输入框不是 16px、会话行矮于 40px
+ *   M-19 手机布局里对话输入框 16px；1280 宽时不是 16px。会话行与项目组头、「项目知识库」文件夹行同高（±2px，
+ *        不再有 40px 的下限：行 < 30px），且与桌面侧栏里同一条会话行同高（±1px）
  *   M-20 popstate 只在落到不带标记的那一条时收起对话页；重载时留下的那条带标记的历史在挂载时被摘掉
+ *   M-21 360 宽的卡片（英文、模型名很长）：空闲时发送键在卡片里、模型名截断；运行中（两个选择器都上了锁）两个
+ *        队列出口只剩图标（字那格 display none，aria-label 仍是字）、队列 / 停止 / 用量环都在卡片里、环不缩、
+ *        扩展选择器不压到环上、模型触发器不压到扩展选择器上、模型名 < 120px 且截断、页面与壳没有横向溢出；
+ *        跑完发送键又在卡片里。1280 宽：模型名恰 120px（封顶、不缩），运行中队列出口带字
+ *   M-22 很长的多段思考折叠成一行：块高与一句话的思考相同（±1）、到终答正文的间距也相同（±1，回归点：之前外层
+ *        按里面整段换行的高度留位，折叠的思考块下面空出一大块）、内容盒 nowrap + ellipsis 且确实溢出；点开 →
+ *        高 > 3 倍、文字从第一段开头到最后一段结尾（首尾空行去掉）、段落空行留着；再点 → 回到一行高
  *
  * 约定同 web-fallbacks.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；会话只经主进程 IPC 带明确标题创建
  * （不跑 titler）；预置回复经主进程的 agent.prompt 跑完一轮。设备模拟走 CDP（`Emulation.setDeviceMetricsOverride`
@@ -73,6 +81,9 @@ import {
   webMobilePane,
   confirmPane,
   widgetPanelPane,
+  type BoxShot,
+  type ComposerLayoutShot,
+  type ThinkingBlockShot,
   type WebMobileTab
 } from '../../harness/pages'
 import {
@@ -90,13 +101,26 @@ const BOT = 'mobbot'
 const REGISTRY_GROUPS = ['bots', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
 const PHONE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }
 const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }
+/** M-21：最窄的常见手机 */
+const NARROW = { width: 360, height: 780, deviceScaleFactor: 2, mobile: true }
+/** M-21 的会话用的模型：名字长到在 360 宽的卡片里一定放不下 */
+const LONG = 'e2e-model-with-an-unusually-long-identifier-for-phones'
+/** M-22：一句话的思考（参照）与五段、首尾带空行的长思考 */
+const THINK_SHORT = 'Short thought.'
+const THINK_PARAS = [1, 2, 3, 4, 5].map(
+  (n) =>
+    `Paragraph ${n} opens here and keeps going ` +
+    'with a long run of ordinary words that wraps several times on a phone '.repeat(2) +
+    `until paragraph ${n} closes.`
+)
+const THINK_LONG = '\n\n' + THINK_PARAS.join('\n\n') + '\n\n\n'
 
 let app: E2EApp
 let provider: FakeProvider
 let web: WebClientHandle | undefined
 let P = 0
 const projects = { main: { id: '', name: 'MobProj' }, other: { id: '', name: 'MobProj2' } }
-const sids = { chat: '', temp: '', doomed: '' }
+const sids = { chat: '', temp: '', doomed: '', narrow: '', think: '' }
 /** 用例里开的浏览器 tab（失败时 afterAll 兜底关） */
 const openedTabs = new Set<string>()
 
@@ -115,9 +139,14 @@ const sessionsInMain = (): Promise<
     `window.api.session.list().then((ss) => ss.map((s) => ({ id: s.id, title: s.title, projectId: s.projectId ?? null })))`
   )
 
-/** 主进程里跑完一轮（脚本化的回复）—— 会话有了消息、有了今天的日历记录、也有了运行时 */
-async function seedReply(sid: string, prompt: string, reply: string): Promise<void> {
-  provider.script({ text: reply, usage: USAGE })
+/** 主进程里跑完一轮（脚本化的回复，可带思考）—— 会话有了消息、有了今天的日历记录、也有了运行时 */
+async function seedReply(
+  sid: string,
+  prompt: string,
+  reply: string,
+  thinking?: string
+): Promise<void> {
+  provider.script({ text: reply, thinking, usage: USAGE })
   await app.main.eval(
     `window.api.agent.prompt(${JSON.stringify({ sessionId: sid, text: prompt })}).then(() => true)`
   )
@@ -215,8 +244,25 @@ beforeAll(async () => {
   app = await launchApp()
   await app.main.eval(`window.api.settings.set({ key: 'general.language', value: 'en' })`)
   provider = await startFakeProvider()
-  await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
+  const { providerId } = await seedFakeProvider(app.main, {
+    baseUrl: provider.baseUrl,
+    modelId: MODEL
+  })
   await waitRendererReady(app.main)
+  // M-21 的长名字模型（带上下文上限，用量环才画）—— 在打开 web 客户端之前加，它载入的模型目录里就有
+  await app.main.eval(
+    `(async () => {
+      const args = ${JSON.stringify({ providerId, modelId: LONG })}
+      await window.api.provider.addModel(args)
+      const row = (await window.api.provider.listModels(args.providerId)).find((m) => m.modelId === args.modelId)
+      if (!row) throw new Error('the long model row was not added')
+      await window.api.provider.updateModelCapabilities({
+        id: row.id,
+        capabilities: { maxInputTokens: 200000, maxOutputTokens: 4096 }
+      })
+      return true
+    })()`
+  )
 
   const mainDir = join(app.home, 'mob-proj')
   mkdirSync(mainDir, { recursive: true })
@@ -235,8 +281,19 @@ beforeAll(async () => {
   sids.chat = await create('MOB-chat', projects.main.id)
   sids.temp = await create('MOB-temp', null)
   sids.doomed = await create('MOB-doomed', null)
+  sids.narrow = await create('MOB-narrow', null)
+  sids.think = await create('MOB-think', null)
   await seedReply(sids.chat, 'hello phone', 'MOB-REPLY')
   await seedReply(sids.temp, 'hello temp', 'MOB-TEMP-REPLY')
+  // M-21：还没有运行时，选模型照常写得进去
+  expect(
+    await app.main.eval<{ success: boolean }>(
+      `window.api.agent.setModel(${JSON.stringify({ sessionId: sids.narrow, provider: providerId, model: LONG })})`
+    )
+  ).toMatchObject({ success: true })
+  // M-22：一轮一句话的思考、一轮五段的长思考
+  await seedReply(sids.think, 'think briefly', 'MOB-THINK-1', THINK_SHORT)
+  await seedReply(sids.think, 'think at length', 'MOB-THINK-2', THINK_LONG)
 
   writeBotMd(app, BOT, { displayName: 'Mob Bot' })
 
@@ -892,24 +949,51 @@ describe('phone layout: the shell', () => {
     }
   })
 
-  it('M-19 16px composer and 40px rows in the shell; neither at 1280', async () => {
-    // M-18 重载过：项目组又是收起的，这里用临时组里的那一条
+  it('M-19 16px composer in the shell (not at 1280); session rows keep the sidebar rhythm', async () => {
+    // M-18 重载过：项目组又是收起的，输入框这一半用临时组里的那一条
     await openFromList('MOB-temp')
     await chatPane(page()).ready()
     expect(await mobile().composerFontSize()).toBe('16px')
     await backToList()
-    const phoneRows = await mobile().sessionRowHeights()
-    expect(phoneRows.length).toBeGreaterThan(0)
-    for (const h of phoneRows) expect(h).toBeGreaterThanOrEqual(40)
+
+    // 会话行、项目组头、「项目知识库」文件夹行同一个高度（手机上不再单独加高会话行）
+    await mobile().tap({ listGroupToggle: projects.main.name })
+    await until(
+      async () => (await mobile().listGroupExpanded(projects.main.name)) === true,
+      'MobProj expanded'
+    )
+    // 展开动画走完、三行都上屏且连着两次量到同样的数
+    let prev = ''
+    const rhythm = await until(async () => {
+      const r = await mobile().listGroupRhythm(projects.main, 'MOB-chat')
+      if (r.header === null || r.knowledge === null || r.row === null) return null
+      const key = JSON.stringify(r)
+      if (key !== prev) {
+        prev = key
+        return null
+      }
+      return { header: r.header, knowledge: r.knowledge, row: r.row }
+    }, 'the MobProj header, its knowledge folder and the MOB-chat row measured')
+    expect(Math.abs(rhythm.row - rhythm.header), JSON.stringify(rhythm)).toBeLessThanOrEqual(2)
+    expect(Math.abs(rhythm.row - rhythm.knowledge), JSON.stringify(rhythm)).toBeLessThanOrEqual(2)
+    expect(Math.abs(rhythm.header - rhythm.knowledge), JSON.stringify(rhythm)).toBeLessThanOrEqual(
+      2
+    )
+    expect(rhythm.row).toBeLessThan(30)
+    const phoneTemp = await mobile().sessionRowHeight('MOB-temp', 'list')
+    expect(phoneTemp).not.toBeNull()
 
     await desktopView()
     await chatPane(page()).ready()
     const desktopFont = await mobile().composerFontSize()
     expect(desktopFont).not.toBeNull()
     expect(desktopFont).not.toBe('16px')
-    const desktopRows = await mobile().sessionRowHeights()
-    expect(desktopRows.length).toBeGreaterThan(0)
-    for (const h of desktopRows) expect(h).toBeLessThan(40)
+    // 桌面侧栏里同一条会话行：与手机上一样高
+    const desktopTemp = await until(
+      () => mobile().sessionRowHeight('MOB-temp', 'document'),
+      'the MOB-temp row in the desktop sidebar'
+    )
+    expect(Math.abs(desktopTemp - phoneTemp!)).toBeLessThanOrEqual(1)
   })
 
   it('M-20 popstate closes the chat only onto an unmarked entry; a mark left behind by a reload is cleared', async () => {
@@ -936,4 +1020,208 @@ describe('phone layout: the shell', () => {
     await backToList()
     expect((await mobile().history()).mark).toBe(false)
   })
+
+  it('M-21 a 360-wide card keeps send / queue / stop inside; the model name gives way', async () => {
+    const chat = chatPane(page())
+    const layout = (): Promise<ComposerLayoutShot | null> => mobile().composerLayout(LONG)
+    try {
+      await emulate(page(), NARROW, true)
+      await until(
+        async () => (await page().eval<number>('innerWidth')) === NARROW.width,
+        'the page at 360 wide'
+      )
+      expect(await mobile().shellPresent()).toBe(true)
+      await openFromList('MOB-narrow')
+      await chat.ready()
+
+      // 空闲（还没有运行时：两个选择器都没上锁）
+      const idle = await until(async () => {
+        const s = await layout()
+        return s?.modelName && s.send && s.ring ? s : null
+      }, 'the idle composer showing the long model')
+      expect(idle.locks).toEqual({ model: false, tools: false })
+      expectInside(idle.send, idle.card, 'send (idle)')
+      expectTruncated(idle.modelName, 'the model name (idle)')
+
+      // 运行中：等到两个队列出口、停止键都在，且两个选择器都上了锁（最挤的样子）
+      provider.script({ text: 'MOB-NARROW-REPLY', holdMs: 20_000, usage: USAGE })
+      await chat.typeAndSend('narrow ask')
+      const running = await until(async () => {
+        if (!(await chat.isBusy())) return null
+        const s = await layout()
+        return s && s.queue.length === 2 && s.stop && s.locks.model && s.locks.tools ? s : null
+      }, 'the running composer: two queue tiers, stop, both pickers locked')
+      const what = JSON.stringify(widthsOf(running))
+      // 工具行窄于 26rem：两个出口只剩图标，字还在 aria-label / title 上
+      expect(running.toolbarWidth, what).toBeLessThan(26 * 16)
+      expect(running.queue.map((q) => q.tier)).toEqual(['steer', 'followUp'])
+      for (const q of running.queue) {
+        const tier = q.tier as 'steer' | 'followUp'
+        expect(q.labelDisplay, `${tier} label`).toBe('none')
+        expect(q.ariaLabel).toBe(en.queue[tier])
+        expect(q.title).toBe(en.queue[`${tier}Hint`])
+        expectInside(q.box, running.card, `queue ${tier}`)
+        expect(q.scrollWidth, `queue ${tier} not clipped`).toBeLessThanOrEqual(q.clientWidth)
+      }
+      expectInside(running.stop, running.card, 'stop')
+      expect(running.stop!.width).toBeGreaterThanOrEqual(20)
+      expectInside(running.ring, running.card, 'the context ring')
+      expect(running.ring!.width).toBeCloseTo(15, 0)
+      // 谁都不压到谁身上：扩展选择器在用量环那一格左边，模型触发器在扩展选择器左边
+      expect(running.toolPicker, what).not.toBeNull()
+      expect(running.modelTrigger, what).not.toBeNull()
+      const ringLeft = (running.ringItem ?? running.ring)!.left
+      expect(running.toolPicker!.right, what).toBeLessThanOrEqual(ringLeft + 0.5)
+      expect(running.modelTrigger!.right, what).toBeLessThanOrEqual(running.toolPicker!.left + 0.5)
+      expectInside(running.modelTrigger, running.card, 'the model trigger')
+      expect(running.modelName!.box.width, what).toBeLessThan(120)
+      expectTruncated(running.modelName, 'the model name (running)')
+      expect(running.page.docScrollWidth).toBeLessThanOrEqual(running.page.innerWidth)
+      expect(running.page.shellScrollWidth).not.toBeNull()
+      expect(running.page.shellScrollWidth!).toBeLessThanOrEqual(running.page.shellClientWidth!)
+
+      // 跑完：发送键回来，仍在卡片里（这时两个锁都在，是更挤的空闲态）
+      provider.release()
+      await chat.waitIdle()
+      const after = await until(async () => {
+        const s = await layout()
+        return s?.send && s.locks.model && s.locks.tools ? s : null
+      }, 'the idle composer after the run, both pickers locked')
+      expectInside(after.send, after.card, 'send (after the run)')
+      expectInside(after.ring, after.card, 'the context ring (after the run)')
+      expect(after.toolPicker!.right).toBeLessThanOrEqual(
+        (after.ringItem ?? after.ring)!.left + 0.5
+      )
+      expect(after.modelTrigger!.right).toBeLessThanOrEqual(after.toolPicker!.left + 0.5)
+      expectTruncated(after.modelName, 'the model name (after the run)')
+
+      // 1280 宽：模型名封顶 120px、不缩；运行中队列出口带字
+      await desktopView()
+      await chat.ready()
+      const wide = await until(async () => {
+        const s = await layout()
+        return s?.modelName && s.send ? s : null
+      }, 'the desktop composer showing the long model')
+      expect(wide.modelName!.box.width).toBeCloseTo(120, 0)
+      provider.script({ text: 'MOB-WIDE-REPLY', holdMs: 20_000, usage: USAGE })
+      await chat.typeAndSend('wide ask')
+      const wideRunning = await until(async () => {
+        if (!(await chat.isBusy())) return null
+        const s = await layout()
+        return s && s.queue.length === 2 ? s : null
+      }, 'the desktop composer running')
+      expect(wideRunning.toolbarWidth).toBeGreaterThanOrEqual(26 * 16)
+      for (const q of wideRunning.queue) {
+        const tier = q.tier as 'steer' | 'followUp'
+        expect(q.labelDisplay, `${tier} label at 1280`).not.toBe('none')
+        expect(q.labelText).toBe(en.queue[tier])
+        expectInside(q.box, wideRunning.card, `queue ${tier} at 1280`)
+      }
+      provider.release()
+      await chat.waitIdle()
+    } finally {
+      provider.release()
+      await phone()
+    }
+  })
+
+  it('M-22 a long multi-paragraph thought collapses to one line and reserves nothing below it', async () => {
+    const chat = chatPane(page())
+    await openFromList('MOB-think')
+    await chat.ready()
+    await until(async () => {
+      const replies = (await chat.settledItems())
+        .filter((i) => i.role === 'assistant')
+        .map((i) => i.text)
+      return (
+        replies.includes('MOB-THINK-1') &&
+        replies.includes('MOB-THINK-2') &&
+        (await chat.thinkingBlocks()) === 2
+      )
+    }, 'both thinking cards on the chat page')
+    const shotOf = async (reply: string): Promise<ThinkingBlockShot | null> =>
+      (await mobile().thinkingShots()).find((t) => t.reply === reply) ?? null
+
+    // 连着两次量到同样的数（列表落位、字体载入之后）
+    let prev = ''
+    const [short, long] = await until(async () => {
+      const a = await shotOf('MOB-THINK-1')
+      const b = await shotOf('MOB-THINK-2')
+      // Virtuoso 把列表藏着（visibility: hidden）直到落到初始位置：落位之前量的不是用户看到的
+      if (!a?.visible || !b?.visible) return null
+      const key = JSON.stringify([a, b])
+      if (key !== prev) {
+        prev = key
+        return null
+      }
+      return [a, b] as const
+    }, 'both thinking blocks on screen and measured')
+    const what = JSON.stringify({
+      short,
+      long: { ...long, innerText: long.innerText.slice(0, 40) }
+    })
+    expect(short.expanded).toBe(false)
+    expect(long.expanded).toBe(false)
+    expect(Math.abs(long.height - short.height), what).toBeLessThanOrEqual(1)
+    expect(long.height, what).toBeLessThanOrEqual(30)
+    expect(short.gap, what).not.toBeNull()
+    expect(long.gap, what).not.toBeNull()
+    // 回归点：折叠的长思考下面不留位
+    expect(Math.abs(long.gap! - short.gap!), what).toBeLessThanOrEqual(1)
+    expect(long.whiteSpace).toBe('nowrap')
+    expect(long.textOverflow).toBe('ellipsis')
+    expect(long.scrollWidth, what).toBeGreaterThan(long.clientWidth)
+
+    await mobile().clickThinking('MOB-THINK-2')
+    const open = await until(async () => {
+      const t = await shotOf('MOB-THINK-2')
+      return t?.expanded && t.visible ? t : null
+    }, 'the long thought expanded')
+    expect(open.height).toBeGreaterThan(3 * short.height)
+    expect(open.innerText.startsWith('Paragraph 1 opens here'), open.innerText.slice(0, 60)).toBe(
+      true
+    )
+    expect(open.innerText.endsWith('until paragraph 5 closes.'), open.innerText.slice(-60)).toBe(
+      true
+    )
+    expect(open.innerText).toContain('\n\n')
+
+    await mobile().clickThinking('MOB-THINK-2')
+    const closed = await until(async () => {
+      const t = await shotOf('MOB-THINK-2')
+      return t && !t.expanded && t.visible ? t : null
+    }, 'the long thought collapsed again')
+    expect(Math.abs(closed.height - short.height)).toBeLessThanOrEqual(1)
+  })
 })
+
+/** b 整个落在 card 里（±0.5px） */
+function expectInside(b: BoxShot | null, card: BoxShot, what: string): void {
+  expect(b, `${what} on screen`).not.toBeNull()
+  const msg = `${what} ${JSON.stringify(b)} inside the card ${JSON.stringify(card)}`
+  expect(b!.left, msg).toBeGreaterThanOrEqual(card.left - 0.5)
+  expect(b!.right, msg).toBeLessThanOrEqual(card.right + 0.5)
+  expect(b!.top, msg).toBeGreaterThanOrEqual(card.top - 0.5)
+  expect(b!.bottom, msg).toBeLessThanOrEqual(card.bottom + 0.5)
+}
+
+function expectTruncated(name: ComposerLayoutShot['modelName'], what: string): void {
+  expect(name, `${what} on screen`).not.toBeNull()
+  expect(name!.scrollWidth, `${what} is truncated`).toBeGreaterThan(name!.clientWidth)
+}
+
+/** 失败信息里带上的宽度（取整到 0.1px） */
+function widthsOf(s: ComposerLayoutShot): Record<string, number | null> {
+  const w = (b: BoxShot | null): number | null => (b ? Math.round(b.width * 10) / 10 : null)
+  return {
+    card: w(s.card),
+    toolbar: Math.round(s.toolbarWidth * 10) / 10,
+    modelTrigger: w(s.modelTrigger),
+    modelName: s.modelName ? w(s.modelName.box) : null,
+    toolPicker: w(s.toolPicker),
+    ringItem: w(s.ringItem),
+    queueSteer: s.queue[0] ? w(s.queue[0].box) : null,
+    queueFollowUp: s.queue[1] ? w(s.queue[1].box) : null,
+    stop: w(s.stop)
+  }
+}

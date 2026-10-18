@@ -206,9 +206,9 @@ const liveToolRows = (label: string): NodeListOf<Element> =>
   cardEl(label).querySelectorAll('[data-tool-status="pending"], [data-tool-status="generating"]')
 const mcpRow = (label: string): HTMLElement | null =>
   cardEl(label).querySelector<HTMLElement>('[data-mcp-connecting]')
-/** ThinkingBlock 是一枚衬线体按钮（没有 data 锚点） */
+/** ThinkingBlock：`data-thinking-block`（role="button" 的 div） */
 const thinkingRows = (label: string): HTMLElement[] => [
-  ...cardEl(label).querySelectorAll<HTMLElement>('button.font-serif')
+  ...cardEl(label).querySelectorAll<HTMLElement>('[data-thinking-block]')
 ]
 
 beforeAll(async () => {

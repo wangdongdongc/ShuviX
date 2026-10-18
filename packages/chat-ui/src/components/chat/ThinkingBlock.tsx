@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react'
  * 等高、在过程区里排成齐整的一列。
  *
  * 行高写死而不是跟着 `leading-relaxed`：思考用的是 13.5px 衬线，relaxed(1.625) 的行盒
- * 是 21.9px，比工具行高出 5px —— 一眼就能看出两种行不在一个节奏上。展开态仍走按钮上的
+ * 是 21.9px，比工具行高出 5px —— 一眼就能看出两种行不在一个节奏上。展开态仍走外层的
  * `leading-relaxed`（那里是大段正文，宽松行距才好读），只有折叠这一行收紧。
  */
 const COLLAPSED_LINE = 'h-[16.5px] leading-[16.5px]'
@@ -14,6 +14,11 @@ const COLLAPSED_LINE = 'h-[16.5px] leading-[16.5px]'
 /**
  * 思考块 —— 一段特殊的中间文本，不是「行」：无图标、无标签、无边框。
  * 折叠时收成**一行**，点击原地撑开同一段文字（不另起一块，避免开头重复出现两遍）。
+ *
+ * 折叠的已完成态是真正的单行（不换行、超出处省略号），而不是「整段换行再裁到一行高」：后者让
+ * 盒子里藏着整段文字的高度，手机浏览器里外层按 `<button>` 排版时会按那个高度留位，折叠的思考块
+ * 下面空出一大块（越长越大）。外层因此也不用 `<button>`，用 `role="button"` 的 div（Enter /
+ * 空格同样展开），测试用 `data-thinking-block` 找它。
  */
 export function ThinkingBlock({
   content,
@@ -41,18 +46,27 @@ export function ThinkingBlock({
   ) : null
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      data-thinking-block=""
       // 展开后是大段可读文本，选中文字时不该顺手折叠掉
       onClick={() => {
         if (window.getSelection()?.toString()) return
         setExpanded(!expanded)
       }}
-      className="w-full my-0.5 px-1 py-1 rounded-md text-left font-serif text-[13.5px] leading-relaxed text-text-tertiary select-text cursor-pointer transition-colors hover:text-text-secondary hover:bg-bg-tertiary/40"
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        setExpanded(!expanded)
+      }}
+      className="block w-full my-0.5 px-1 py-1 rounded-md text-left font-serif text-[13.5px] leading-relaxed text-text-tertiary select-text cursor-pointer transition-colors hover:text-text-secondary hover:bg-bg-tertiary/40"
     >
       {expanded ? (
+        // 首尾的空行去掉：不少模型的思考以几个换行收尾，pre-wrap 下就是展开后一截空白
         <div ref={viewRef} className="whitespace-pre-wrap break-words max-h-96 overflow-y-auto">
-          {content}
+          {content.trim()}
           {caret}
         </div>
       ) : isGenerating ? (
@@ -62,8 +76,8 @@ export function ThinkingBlock({
           {caret}
         </div>
       ) : (
-        <div className={`${COLLAPSED_LINE} overflow-hidden break-words`}>{flat}</div>
+        <div className={`${COLLAPSED_LINE} truncate`}>{flat}</div>
       )}
-    </button>
+    </div>
   )
 }

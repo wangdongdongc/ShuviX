@@ -699,8 +699,10 @@ export function InputArea({
 
   // ─── 复用片段：模型/工具选择器 + 麦克风 + 发送/停止 ──
   // 统一布局：全部收纳进卡片底部同一行（普通会话另在右侧追加上下文用量 / Agent 信息 / 压缩入口）。
+  // 窄卡片（手机）里位置不够时选择器先让：模型名继续截短；右侧的用量环与发送 / 停止从不收缩，
+  // 不会被挤出卡片
   const pickers = (
-    <div className="flex-shrink-0 flex items-center gap-1.5">
+    <div className="min-w-0 flex items-center gap-1.5">
       <ModelPicker readonly={!canEdit} />
       {canEdit && <ToolPicker />}
     </div>
@@ -708,7 +710,7 @@ export function InputArea({
 
   const queueDisabled = !inputText.trim()
   const sendStopButtons = isStreaming ? (
-    <div className="flex items-center gap-1">
+    <div className="flex-shrink-0 flex items-center gap-1">
       {activePendingInput ? (
         // 待处理请求优先：这个按钮投「其它」反馈，不进队列
         <button
@@ -736,6 +738,7 @@ export function InputArea({
               onClick={() => handleQueueSend(tier)}
               disabled={queueDisabled}
               title={t(`queue.${tier}Hint`)}
+              aria-label={t(`queue.${tier}`)}
               className={`flex items-center gap-1 px-2 py-1 text-[11px] transition-colors ${
                 i > 0 ? 'border-l border-border-secondary/60' : ''
               } ${
@@ -747,7 +750,9 @@ export function InputArea({
               }`}
             >
               <Icon size={12} />
-              {t(`queue.${tier}`)}
+              {/* 窄卡片（手机）里只留图标：带字的两个出口加停止键会占掉整行，把选择器挤到它们底下；
+                  按工具行自身的宽度判断（容器查询），桌面的对话栏都比这宽 */}
+              <span className="hidden @[26rem]:inline">{t(`queue.${tier}`)}</span>
             </button>
           ))}
         </div>
@@ -764,7 +769,7 @@ export function InputArea({
     <button
       onClick={handleSend}
       disabled={!canSend}
-      className={`p-1.5 rounded-lg transition-colors ${
+      className={`flex-shrink-0 p-1.5 rounded-lg transition-colors ${
         canSend
           ? 'bg-accent text-white hover:bg-accent-hover'
           : 'text-text-tertiary cursor-not-allowed'
@@ -993,7 +998,7 @@ export function InputArea({
               </div>
 
               {/* 底部工具行（统一布局）：选择器居左；右侧为上下文用量环，最右为发送/停止 */}
-              <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-0.5 text-text-tertiary whitespace-nowrap">
+              <div className="@container flex items-center gap-1.5 px-2 pb-1.5 pt-0.5 text-text-tertiary whitespace-nowrap">
                 {pickers}
 
                 {/* 弹性空白 → 把右侧按钮簇推到最右 */}
@@ -1004,7 +1009,7 @@ export function InputArea({
                 {(maxContextTokens > 0 || usedContextTokens !== null) && (
                   <span
                     aria-label={ctxTooltip}
-                    className="relative group/token p-1 rounded flex items-center"
+                    className="relative group/token flex-shrink-0 p-1 rounded flex items-center"
                   >
                     <svg width="15" height="15" viewBox="0 0 16 16" className="flex-shrink-0">
                       {/* 轨道 */}

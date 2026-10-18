@@ -299,8 +299,8 @@ describe('P3-14-14 committed and live text', () => {
     })
     const toolNode = container.querySelector('[data-tool-name="read"]')!
     expect(toolNode.textContent).toContain('R0')
-    const thinkingNode = [...container.querySelectorAll('button')].find((b) =>
-      b.textContent?.includes('pondering')
+    const thinkingNode = [...container.querySelectorAll<HTMLElement>('[data-thinking-block]')].find(
+      (b) => b.textContent?.includes('pondering')
     )!
     act(() => thinkingNode.click())
 
@@ -323,7 +323,9 @@ describe('P3-14-14 committed and live text', () => {
     expect(container.querySelector('[data-tool-name="read"]')).toBe(toolNode)
     expect(toolNode.textContent).toContain('R0')
     expect(
-      [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('pondering'))
+      [...container.querySelectorAll<HTMLElement>('[data-thinking-block]')].find((b) =>
+        b.textContent?.includes('pondering')
+      )
     ).toBe(thinkingNode)
   })
 
@@ -778,8 +780,8 @@ describe('GRP-5/6 step groups across view updates', () => {
     expect(groupNode.getAttribute('data-group-state')).toBe('expanded')
 
     // ① 实时：一行思考、一张在跑的 read，都在合并行之外；合并行仍是 2
-    const thoughts = [...container.querySelectorAll('button')].filter((b) =>
-      b.textContent?.includes('live thought')
+    const thoughts = [...container.querySelectorAll<HTMLElement>('[data-thinking-block]')].filter(
+      (b) => b.textContent?.includes('live thought')
     )
     expect(thoughts).toHaveLength(1)
     expect(groupNode.contains(thoughts[0]!)).toBe(false)

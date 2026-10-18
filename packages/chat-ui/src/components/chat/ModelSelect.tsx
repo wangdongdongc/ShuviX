@@ -238,14 +238,15 @@ export function ModelSelect({
   }
 
   // ── 触发器 ──
-  const brain = showThinking && thinking!.level !== 'off' ? <Brain size={10} /> : null
+  const brain =
+    showThinking && thinking!.level !== 'off' ? <Brain size={10} className="flex-shrink-0" /> : null
   const trigger =
     variant === 'inline' ? (
       readonly ? (
-        <span className="inline-flex items-center gap-1 text-[11px] text-text-tertiary cursor-default">
+        <span className="min-w-0 inline-flex items-center gap-1 text-[11px] text-text-tertiary cursor-default">
           {hasSelection ? (
             <>
-              <span className="max-w-[120px] truncate">{model}</span>
+              <span className="min-w-0 max-w-[120px] truncate">{model}</span>
               {brain}
             </>
           ) : (
@@ -257,7 +258,7 @@ export function ModelSelect({
           type="button"
           onClick={toggle}
           title={modelLocked ? modelLockedHint : undefined}
-          className={`inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 transition-colors border border-transparent ${
+          className={`min-w-0 max-w-full inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 transition-colors border border-transparent ${
             hasSelection
               ? 'text-text-tertiary hover:text-text-secondary hover:border-border-secondary'
               : 'text-amber-500 hover:text-amber-400'
@@ -267,13 +268,13 @@ export function ModelSelect({
           {modelLocked && <Lock size={10} data-model-lock className="flex-shrink-0" />}
           {hasSelection ? (
             <>
-              <span className="max-w-[120px] truncate">{model}</span>
+              <span className="min-w-0 max-w-[120px] truncate">{model}</span>
               {brain}
             </>
           ) : (
-            <span>{t('input.selectModel')}</span>
+            <span className="truncate">{t('input.selectModel')}</span>
           )}
-          <ChevronDown size={11} />
+          <ChevronDown size={11} className="flex-shrink-0" />
         </button>
       )
     ) : (
@@ -321,7 +322,7 @@ export function ModelSelect({
 
   const containerClass =
     variant === 'inline'
-      ? 'relative inline-flex items-center group'
+      ? 'relative min-w-0 inline-flex items-center group'
       : 'relative inline-flex items-center gap-1 text-left'
 
   return (
