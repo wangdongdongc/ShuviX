@@ -8,7 +8,8 @@
  *      画到画布上读像素，与屏幕颜色比 —— 「文件在 ShuviX 之外长得一样」的最终证据；
  *   2. **浅 / 深按用户设定的那两套主题取色**（FE-4/9）：界面是 nord，导出浅色得是 solarized-light 的
  *      颜色 —— 包括 `--viz-wash` 这种在 themes.css 里由别的 token 派生的（只声明在 :root 上时它会
- *      顶着 nord 的文字色，这条就是那一改的回归护栏）；mermaid 在挂着那套主题的离屏容器里重渲；
+ *      顶着 nord 的文字色，这条就是那一改的回归护栏）；mermaid（pele 画的、颜色是 `var(--pele-*)`）
+ *      与手写图同一条烘焙路径，连边标签衬底都按它坐着的卡片底取色；
  *   3. **真落盘 / 真位图**（FE-0/5/6/15）：`Page.setDownloadBehavior` 把「另存为」改成直接写进临时目录
  *      （**FE-0 先跑**：没生效的话后面每一条都会挂在一个关不掉的系统面板上），PNG 的 IHDR / JPEG 的
  *      SOF 尺寸、像素、透明；
@@ -35,6 +36,7 @@ import {
   figureExportButtonsIn,
   figureExportPanel,
   interactivePane,
+  mermaidPane,
   sidebarPane,
   type ChatPane,
   type FigureCardKind,
@@ -544,47 +546,70 @@ describe('对话图卡的导出', () => {
     expect(p.checkerboard).toBe(true)
   }, 120_000)
 
-  it('FE-9 mermaid：当前主题复用屏幕上那次渲染；文件名取 title；浅色按 solarized-light 重渲（节点面 / 底色）；PNG 里标签画出来了', async () => {
-    const code = '---\ntitle: Flow chart\n---\ngraph LR\n  fe9a[Plan] --> fe9b[Ship it]'
+  it('FE-9 mermaid（pele）：与手写图同样烘焙 —— 当前主题 = 屏幕上的颜色、边标签衬底 = 卡片底；文件名取 title；浅色按 solarized-light 取色（透明底也一样）；PNG 里标签画出来了', async () => {
+    const code = '---\ntitle: Flow chart\n---\ngraph LR\n  fe9a[Plan] -->|go| fe9b[Ship it]'
     const card = await figureCard('FE-9', 'mermaid', fence('mermaid', code))
-    const onScreenId = await card.figureId()
-    expect(onScreenId).not.toBe('')
+    const screen = await mermaidPane(app.main, 'MARK-FE-9').colors()
+    expect(screen.edgeLabelFill).not.toBe('')
     await card.openExport()
     expect((await panel.waitReady()).fileName).toBe('Flow chart.png')
 
+    // 当前主题（nord）+ 填充：独立成立、颜色就是屏幕上的
     await panel.choose('format', 'svg')
     const current = await panel.previewSvg()
     const cur = await svgFileFacts(app.main, current)
     expect(cur.parseError).toBe(false)
-    expect(cur.id).toBe(onScreenId)
+    expect(current).not.toMatch(NOT_STANDALONE)
     expect(cur.rootStyle ?? '').not.toContain('max-width')
+    expect(cur.rootStyle ?? '').not.toMatch(/height\s*:\s*auto/)
     expect(Number(cur.width)).toBeGreaterThan(0)
+    expect(cur.first?.tag).toBe('rect')
+    const curBg = hexRgb(cur.first!.attrs.fill)
+    near(curBg, await cssColorIn(app.main, DARK, CARD_SURFACE_CSS), 1, 'current bg = nord card')
+    const curNode = await mermaidFileFacts(app.main, current)
+    near(rgbOf(curNode.nodeFill), rgbOf(screen.nodeFill), 1, 'current node fill = on screen')
+    near(rgbOf(curNode.nodeFill), rgbOf(screen.bgPrimary), 1, 'current node fill = nord bg-primary')
+    near(rgbOf(curNode.labelFill), rgbOf(screen.labelColor), 1, 'current label = on screen')
+    near(rgbOf(curNode.edgeLabelFill), curBg, 1, 'current edge label backing = bg rect')
 
+    // 浅色：按设定的 solarized-light 取色，界面主题不动
     const light = await panel.choose('scheme', 'light')
     expect(light.preview).toBe('ready')
     const lightSvg = await panel.previewSvg()
     const lf = await svgFileFacts(app.main, lightSvg)
     expect(lf.parseError).toBe(false)
-    expect(lf.id).not.toBe(onScreenId)
+    expect(lightSvg).not.toMatch(NOT_STANDALONE)
+    const lightCard = await cssColorIn(app.main, LIGHT, CARD_SURFACE_CSS)
     const node = await mermaidFileFacts(app.main, lightSvg)
-    const lightTertiary = await cssColorIn(app.main, LIGHT, 'var(--theme-bg-tertiary)')
-    near(rgbOf(node.nodeFill), lightTertiary, 1, 'light node fill')
     near(
-      hexRgb(lf.first!.attrs.fill),
-      await cssColorIn(app.main, LIGHT, CARD_SURFACE_CSS),
+      rgbOf(node.nodeFill),
+      await cssColorIn(app.main, LIGHT, 'var(--theme-bg-primary)'),
       1,
-      'light bg'
+      'light node fill'
     )
+    expect(lf.first?.tag).toBe('rect')
+    near(hexRgb(lf.first!.attrs.fill), lightCard, 1, 'light bg')
+    near(rgbOf(node.edgeLabelFill), lightCard, 1, 'light edge label backing')
     expect(await app.main.eval<string>(`document.documentElement.getAttribute('data-theme')`)).toBe(
       DARK
     )
 
+    // 浅色 + 透明底：没有底色矩形，边标签衬底仍是浅色卡片底（图坐在卡片上，衬底跟着卡片走）
+    await panel.choose('background', 'none')
+    const bare = await panel.previewSvg()
+    const bf = await svgFileFacts(app.main, bare)
+    expect(bf.parseError).toBe(false)
+    expect(bf.first?.tag).not.toBe('rect')
+    const bareNode = await mermaidFileFacts(app.main, bare)
+    near(rgbOf(bareNode.edgeLabelFill), lightCard, 1, 'transparent export edge label backing')
+
+    await panel.choose('background', 'fill')
     await panel.choose('format', 'png')
     await panel.download()
     const buf = await downloads.waitFile('Flow chart.png')
     const size = pngSize(buf)
     expect(size.width).toBeGreaterThan(0)
-    // 节点框里不是一片纯色：标签（foreignObject）画进了位图
+    // 节点框里不是一片纯色：标签（pele 画的 <text>）画进了位图
     const k = 2
     const r = await rasterFacts(
       app.main,

@@ -58,11 +58,7 @@ export { SlashCommandPopover } from './components/chat/SlashCommandPopover'
 
 // ── 图导出（对话图卡与笔记本 widget 共用一个面板） ──
 export { FigureExportPanel, FigureExportButton } from './components/figure/FigureExportPanel'
-export {
-  authoredFigureSource,
-  standaloneSvg,
-  figureLabelOf
-} from './components/figure/figureExport'
+export { authoredFigureSource, figureLabelOf } from './components/figure/figureExport'
 export type {
   FigureExportSource,
   FigureBuildOptions,

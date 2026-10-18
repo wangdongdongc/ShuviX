@@ -42,8 +42,6 @@ import type {
   InlineToken
 } from '@shuvix/chat-protocol/types/chatMessage'
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
-
 import {
   ChatHostProvider,
   setSessionChannelApi,

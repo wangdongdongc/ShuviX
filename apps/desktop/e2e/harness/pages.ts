@@ -1243,6 +1243,9 @@ export function bubbleWatch(main: CdpClient): BubbleWatch {
 // 锚点全是组件自己打的 data 属性：`data-mermaid-figure`（放图那一格，值是布局 fit / clip /
 // natural）、`data-mermaid-pending`（占位行）、`data-mermaid-error`（错误卡）、`data-mermaid-expand`
 // （放大按钮）、`data-mermaid-dialog`（放大弹窗的面板；遮罩是它的父节点，面板本身不是遮罩）。
+// 图里面是 pele 的产物：节点 `g.pele-node`（形状是它的 rect / path / polygon / circle，标签
+// `text.pele-label`），边上的标签 `g.pele-edge-label`（一块衬底 rect + 一段 text）。卡片外壳挂着
+// `data-figure-surface="card"`（themes.css 由它给出 --figure-surface / --figure-raised）。
 // 卡片上的东西一律在**正文里含本轮标记的那条**助手消息里找（见 assistantBodyWith）—— 同一会话
 // 前几轮的图还在上面；弹窗 portal 到 body 上，全局只会有一个。弹窗里的图认「不是 `.lucide` 的
 // 那个 svg」：关闭按钮的 X 也是 svg。
@@ -1276,14 +1279,18 @@ export interface MermaidShot {
 
 /** 颜色取样 —— 图里读的与令牌解析出来的，**同一次 eval** 里取（中间切了主题也不会错位） */
 export interface MermaidColors {
-  /** 第一个节点形状（fill 不是 none 的那个）的 computed fill */
+  /** 第一个节点形状（`.pele-node` 里 fill 不是 none 的那个）的 computed fill */
   nodeFill: string
-  /** 第一个节点标签的 computed color（`<text>` 标签取 fill） */
+  /** 第一个节点标签（`.pele-node .pele-label`，一段 `<text>`）的 computed fill */
   labelColor: string
-  /** 此刻 `var(--theme-bg-tertiary)` 的解析值 */
-  bgTertiary: string
+  /** 第一个边标签衬底（`.pele-edge-label rect`）的 computed fill；图里没有边标签 = '' */
+  edgeLabelFill: string
+  /** 此刻 `var(--theme-bg-primary)` 的解析值 */
+  bgPrimary: string
   /** 此刻 `var(--theme-text-primary)` 的解析值 */
   textPrimary: string
+  /** 卡片（`[data-figure-surface]`）里面解析出来的 `var(--figure-surface)` —— 图坐着的那层底 */
+  figureSurface: string
   /** 放图那一格的 computed background-color（透明 = 图直接坐在卡片底色上） */
   figureBackground: string
 }
@@ -1297,6 +1304,8 @@ export interface MermaidGeometry {
   svg: { width: number; height: number }
   /** 放图那一格的外框（border-box） */
   box: { width: number; height: number }
+  /** 放图那一格的内容宽（去掉左右内边距）—— 图能占的最宽处 */
+  contentWidth: number
   /** 截断时外框的上限：480 + 上下内边距 1.5rem（按根字号换算） */
   capHeight: number
 }
@@ -1322,8 +1331,11 @@ export interface MermaidPane {
   waitFigure(timeoutMs?: number): Promise<void>
   colors(): Promise<MermaidColors>
   geometry(): Promise<MermaidGeometry>
-  /** mermaid 失败时可能留在 body 上的东西：临时容器 `#d<id>`、它自己画的错误图 */
-  leftovers(): Promise<{ tempNodes: number; syntaxError: boolean }>
+  /**
+   * 屏幕上那张根 `<svg>` 的身份编号（页内 WeakMap 发号，不给节点挂东西）：同一个元素 = 同一个号，
+   * 换了新元素（重渲）= 新号；没有图 = 0。pele 的根没有 id，不能拿 id 认
+   */
+  svgTag(): Promise<number>
   /** 根上的 data-theme */
   theme(): Promise<string>
   /** 直接改根上的 data-theme（MermaidBlock 观察的就是这个属性；不经设置，不落盘） */
@@ -1392,31 +1404,32 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
         const figure = ${FIGURE}
         const svg = figure?.querySelector(':scope > svg')
         if (!svg) throw new Error('no mermaid figure on screen')
-        const shape = [...svg.querySelectorAll('.node rect, .node path, .node polygon, .node circle')]
-          .find((el) => {
-            const fill = getComputedStyle(el).fill
-            return !!fill && fill !== 'none'
-          })
-        const label = svg.querySelector('.node .nodeLabel, .node text')
-        const probe = document.createElement('span')
-        document.body.appendChild(probe)
-        const resolve = (token) => {
-          probe.style.color = 'var(' + token + ')'
-          return getComputedStyle(probe).color
+        const shape = [
+          ...svg.querySelectorAll(
+            '.pele-node rect, .pele-node path, .pele-node polygon, .pele-node circle'
+          )
+        ].find((el) => {
+          const fill = getComputedStyle(el).fill
+          return !!fill && fill !== 'none'
+        })
+        const label = svg.querySelector('.pele-node .pele-label')
+        const edgeBg = svg.querySelector('.pele-edge-label rect')
+        const resolveIn = (parent, css) => {
+          const probe = document.createElement('span')
+          probe.style.color = css
+          parent.appendChild(probe)
+          const color = getComputedStyle(probe).color
+          probe.remove()
+          return color
         }
-        const bgTertiary = resolve('--theme-bg-tertiary')
-        const textPrimary = resolve('--theme-text-primary')
-        probe.remove()
-        const labelStyle = label ? getComputedStyle(label) : null
+        const card = figure.closest('[data-figure-surface]')
         return {
           nodeFill: shape ? getComputedStyle(shape).fill : '',
-          labelColor: !labelStyle
-            ? ''
-            : label.tagName.toLowerCase() === 'text'
-              ? labelStyle.fill
-              : labelStyle.color,
-          bgTertiary,
-          textPrimary,
+          labelColor: label ? getComputedStyle(label).fill : '',
+          edgeLabelFill: edgeBg ? getComputedStyle(edgeBg).fill : '',
+          bgPrimary: resolveIn(document.body, 'var(--theme-bg-primary)'),
+          textPrimary: resolveIn(document.body, 'var(--theme-text-primary)'),
+          figureSurface: card ? resolveIn(card, 'var(--figure-surface)') : '',
           figureBackground: getComputedStyle(figure).backgroundColor
         }
       })()`),
@@ -1434,14 +1447,21 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
           viewBox: { width: vb[2] ?? 0, height: vb[3] ?? 0 },
           svg: { width: sr.width, height: sr.height },
           box: { width: fr.width, height: fr.height },
+          contentWidth:
+            figure.clientWidth -
+            parseFloat(getComputedStyle(figure).paddingLeft) -
+            parseFloat(getComputedStyle(figure).paddingRight),
           capHeight: 480 + 1.5 * rem
         }
       })()`),
-    leftovers: () =>
-      main.eval<{ tempNodes: number; syntaxError: boolean }>(`({
-        tempNodes: document.querySelectorAll('[id^="dmermaid"]').length,
-        syntaxError: (document.body.innerText ?? '').includes('Syntax error in text')
-      })`),
+    svgTag: () =>
+      main.eval<number>(`(() => {
+        const svg = (${FIGURE})?.querySelector(':scope > svg')
+        if (!svg) return 0
+        const tags = (window.__e2eSvgTags ??= { map: new WeakMap(), next: 1 })
+        if (!tags.map.has(svg)) tags.map.set(svg, tags.next++)
+        return tags.map.get(svg)
+      })()`),
     theme: () => main.eval<string>(`document.documentElement.getAttribute('data-theme') ?? ''`),
     setTheme: async (id) => {
       await main.eval(
@@ -1495,6 +1515,10 @@ export interface MermaidFrame {
   busy: boolean
   /** 正文里是否已出现尾部标记（= 最后一片已经上屏） */
   tail: boolean
+  /** 图里的节点数（`[data-mermaid-figure] .pele-node`）；没有图 = 0 */
+  nodes: number
+  /** 卡片工具栏上有没有导出按钮（`[data-figure-export]`） */
+  exportable: boolean
 }
 
 export interface MermaidWatch {
@@ -1524,13 +1548,17 @@ export function mermaidWatch(main: CdpClient): MermaidWatch {
         const snap = () => {
           const body = ${assistantBodyWith(headMarker)}
           const pending = body?.querySelector('[data-mermaid-pending]')
+          // 卡片 = 放图那一格 / 占位行的父节点（两者都是卡片的直接孩子）；错误卡没有导出
+          const card = body?.querySelector('[data-mermaid-figure],[data-mermaid-pending]')?.parentElement
           const frame = {
             t: Date.now(),
             pending: pending ? (pending.textContent ?? '').trim() : null,
             figure: !!body?.querySelector('[data-mermaid-figure] > svg'),
             error: !!body?.querySelector('[data-mermaid-error]'),
             busy: !!document.querySelector('[data-msg-id="streaming-live"]'),
-            tail: (body?.textContent ?? '').includes(marker)
+            tail: (body?.textContent ?? '').includes(marker),
+            nodes: body?.querySelectorAll('[data-mermaid-figure] .pele-node').length ?? 0,
+            exportable: !!card?.querySelector('[data-figure-export]')
           }
           const last = state.frames[state.frames.length - 1]
           if (
@@ -1539,7 +1567,9 @@ export function mermaidWatch(main: CdpClient): MermaidWatch {
             last.figure === frame.figure &&
             last.error === frame.error &&
             last.busy === frame.busy &&
-            last.tail === frame.tail
+            last.tail === frame.tail &&
+            last.nodes === frame.nodes &&
+            last.exportable === frame.exportable
           )
             return
           state.frames.push(frame)
@@ -10260,6 +10290,11 @@ export interface NotebookFigurePane {
   surfaceStack(): Promise<string[]>
   /** 屏幕上那张图里每个 data-k 元素的计算样式 */
   svgFacts(): Promise<Record<string, OnScreenPaint>>
+  /**
+   * mermaid（pele）图在屏幕上的颜色：第一个节点形状（`.pele-node` 里 fill 不是 none 的那个）与
+   * 第一个边标签衬底（`.pele-edge-label rect`）的 computed fill；没有 = ''
+   */
+  peleColors(): Promise<{ nodeFill: string; edgeLabelFill: string }>
   /** 焦点进编辑器、光标放到这个围栏的起点（围栏于是揭示成源码） */
   placeCaretInFence(): Promise<void>
 }
@@ -10379,6 +10414,24 @@ export function notebookFigurePane(
           }
         }
         return out
+      })()`),
+    peleColors: () =>
+      main.eval<{ nodeFill: string; edgeLabelFill: string }>(`(() => {
+        const svg = ${SVG}
+        if (!svg) throw new Error('no notebook ${kind} figure on screen')
+        const shape = [
+          ...svg.querySelectorAll(
+            '.pele-node rect, .pele-node path, .pele-node polygon, .pele-node circle'
+          )
+        ].find((el) => {
+          const fill = getComputedStyle(el).fill
+          return !!fill && fill !== 'none'
+        })
+        const edgeBg = svg.querySelector('.pele-edge-label rect')
+        return {
+          nodeFill: shape ? getComputedStyle(shape).fill : '',
+          edgeLabelFill: edgeBg ? getComputedStyle(edgeBg).fill : ''
+        }
       })()`),
     placeCaretInFence: async () => {
       if (!focusEmulated) {

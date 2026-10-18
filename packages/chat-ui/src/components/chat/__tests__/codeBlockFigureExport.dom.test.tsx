@@ -22,8 +22,6 @@ import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
-
 import { CodeBlock } from '../CodeBlock'
 import { MarkdownStreamingContext } from '../markdownStreaming'
 import { setChatApi } from '../../../api/chatApi'

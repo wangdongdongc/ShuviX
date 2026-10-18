@@ -13,10 +13,12 @@
  * 主题是靠 `[data-theme='…']` 属性选择器挂上的，不限根节点（见 themes.css），所以离屏容器挂上
  * 用户设定的浅色 / 深色主题，里面的图就按那套主题解析 —— 不必切整个界面。
  *
- * ## mermaid 不烘焙
+ * ## mermaid 也一样烘焙
  *
- * mermaid 的产物本身就是具体颜色（主题 token 在渲染时已经解析好喂给它），只需补上尺寸、底色
- * 再按 XML 序列化（它的 htmlLabels 里有 `<br>`，按 HTML 序列化出来的不是合法 XML）。
+ * ```mermaid 由 pele 渲染，产物的颜色是 `var(--pele-*)`，经 themes.css 的 `.pele` 那段接到同一套
+ * 主题 token 上 —— 所以它与手写图走同一条路：挂进挂着那套主题的离屏容器、读计算样式、写具体值。
+ * 唯一多出来的一件：pele 的图要知道自己坐在哪一层底色上（边上标签的衬底、节点的凸起都按它取），
+ * 所以离屏容器照屏幕上那样挂上 `data-figure-surface`（见 bakeAuthoredSvg 的 `under`）。
  *
  * 这一层只认标记字符串与 DOM，不认来源；四个入口（对话 svg / 产物 / mermaid、笔记本 svg /
  * mermaid）各自把自己的图包成一个 FigureExportSource 交给面板。
@@ -296,7 +298,15 @@ function planElement(el: SVGElement): BakePlan {
         // 表里的属性下面写成表现属性；自定义属性只是 var() 的中转，引用它的声明都已换成计算值
         styleFixes.push([name, null])
       } else if (TOKEN_RE.test(style.getPropertyValue(name))) {
-        styleFixes.push([name, concreteValue(cs.getPropertyValue(name))])
+        const value = concreteValue(cs.getPropertyValue(name))
+        if (value !== null && parseCssColor(value)) {
+          // 颜色挪成表现属性：写回 style 的话 Chromium 会把 #hex 重新序列化成 rgb()，
+          // 独立文件就不再是只用十六进制（pele 的根上有 `color:var(--_fg)`）
+          styleFixes.push([name, null])
+          attrFixes.push([name, value])
+        } else {
+          styleFixes.push([name, value])
+        }
       }
     }
   }
@@ -370,7 +380,7 @@ function figureBox(svg: SVGSVGElement): { x: number; y: number; width: number; h
 
 /**
  * 补齐「独立文件」要的东西并序列化：固定宽高（= 坐标框，查看器按这个尺寸打开）、viewBox、
- * 可选的底色矩形；去掉页面里排版用的 `width="100%"` / `max-width`（mermaid 带的）。
+ * 可选的底色矩形；去掉页面里排版用的 `width="100%"` / `max-width` / `height:auto`（pele 的产物带的）。
  */
 function finalize(svg: SVGSVGElement, background: ParsedColor | null): StandaloneSvg {
   const box = figureBox(svg)
@@ -409,7 +419,7 @@ function finalize(svg: SVGSVGElement, background: ParsedColor | null): Standalon
 
 /** 把一段（已净化的）SVG 标记挂进容器，返回其中的根 <svg> */
 function mountMarkup(box: HTMLElement, markup: string): SVGSVGElement {
-  // 标记已经过 sanitizeAuthoredSvg / sanitizeRenderedSvg（与屏幕上那份同一份产物），
+  // 标记已经过 sanitizeAuthoredSvg（与屏幕上那份同一份产物），
   // 这里只是再挂一次：离屏、透明、不可交互，挂完即摘
   box.innerHTML = markup
   const svg = box.querySelector('svg')
@@ -418,16 +428,24 @@ function mountMarkup(box: HTMLElement, markup: string): SVGSVGElement {
 }
 
 /**
- * 手写图（```svg 围栏 / svg 产物）→ 独立 SVG。
+ * token 着色的图（```svg 围栏 / svg 产物 / pele 画的 mermaid）→ 独立 SVG。
  *
  * `markup` 必须是屏幕上那份**净化过的**标记；`themeId` 决定按哪套主题取色；
- * `surface` 给出底色取自哪一层（null = 透明）。
+ * `surface` 给出底色取自哪一层（null = 透明）；`under` 是图在屏幕上坐在哪一层（缺省同 `surface`）——
+ * 透明导出也要知道它，pele 的标签衬底按它取色（见 themes.css 的 `[data-figure-surface]`）。
  */
 export function bakeAuthoredSvg(
   markup: string,
-  opts: { themeId: string; surface: FigureSurface | null; inheritFrom?: Element | null }
+  opts: {
+    themeId: string
+    surface: FigureSurface | null
+    under?: FigureSurface
+    inheritFrom?: Element | null
+  }
 ): StandaloneSvg {
   return withOffscreen(opts.themeId, opts.inheritFrom, (box) => {
+    const under = opts.under ?? opts.surface
+    if (under) box.setAttribute('data-figure-surface', under)
     const svg = mountMarkup(box, markup)
     const bg = opts.surface ? resolveColorIn(box, SURFACE_CSS[opts.surface]) : null
     bakeComputedStyles(svg)
@@ -436,27 +454,8 @@ export function bakeAuthoredSvg(
 }
 
 /**
- * 已是具体颜色的 SVG（mermaid 的产物）→ 独立 SVG：不烘焙，只补尺寸 / 底色、按 XML 序列化。
- * 底色可以是一层 surface（按 themeId 解析），也可以是一个写死的颜色（笔记本里白底卡片上的 mermaid）。
- */
-export function standaloneSvg(
-  markup: string,
-  opts: { themeId: string; background: FigureSurface | string | null }
-): StandaloneSvg {
-  return withOffscreen(opts.themeId, null, (box) => {
-    const svg = mountMarkup(box, markup)
-    const bg =
-      opts.background === null
-        ? null
-        : opts.background === 'card' || opts.background === 'page'
-          ? resolveColorIn(box, SURFACE_CSS[opts.background])
-          : resolveColorIn(box, opts.background)
-    return finalize(svg, bg)
-  })
-}
-
-/**
- * 手写图的图源：对话的 ```svg / svg 产物（底色 = 图卡）与笔记本的 ```svg（底色 = 页面）共用。
+ * token 着色的图的图源：对话的 ```svg / svg 产物 / mermaid（底色 = 图卡）与笔记本的 ```svg /
+ * mermaid（底色 = 页面）共用。
  * `markup` 是屏幕上那份净化过的标记；`inheritFrom` 是放图的那一格（取它的字体，见 withOffscreen）。
  */
 export function authoredFigureSource(
@@ -469,6 +468,7 @@ export function authoredFigureSource(
       bakeAuthoredSvg(markup, {
         themeId,
         surface: background ? opts.surface : null,
+        under: opts.surface,
         inheritFrom: opts.inheritFrom?.() ?? null
       })
   }

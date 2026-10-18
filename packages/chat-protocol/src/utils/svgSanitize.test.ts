@@ -22,7 +22,8 @@ import {
   sanitizeRenderedSvg,
   isSafeSvgUrl,
   urlFunctionsAreFragmentOnly,
-  SVG_SANITIZE_TIERS
+  SVG_SANITIZE_TIERS,
+  SVG_MAX_LENGTH
 } from './svgSanitize'
 
 // ─────────────────────────── URL 语料 ───────────────────────────
@@ -223,5 +224,11 @@ describe('sanitizeRenderedSvg', () => {
     // 这同时是生产侧的兜底分支（理论不可达：调用方都在渲染端）。
     expect(typeof DOMParser).toBe('undefined')
     expect(sanitizeRenderedSvg('<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>')).toBe('')
+  })
+})
+
+describe('SVG_MAX_LENGTH', () => {
+  it('SS-L1 导出的长度上限 = 256KB（mermaid 的 outputLimit 对齐它，见 mermaidFence）', () => {
+    expect(SVG_MAX_LENGTH).toBe(262144)
   })
 })

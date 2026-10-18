@@ -16,7 +16,6 @@ import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { AssistantMessage, ErrorEventMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { LiveCard } from '@shuvix/chat-protocol/types/sessionView'
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 
 import { applySessionView } from '../../../stores/chatStore'

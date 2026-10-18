@@ -32,8 +32,7 @@
  *     值（`v-<主题>-<token>`），于是「srcdoc 里写的是哪个主题的颜色」直接可读，也能用
  *     `buildSandboxDocument` 算出期望的整份 srcdoc 逐字节比；
  *   - `setChatApi` 注入一个记录一切调用的间谍：artifact.read 按用例回内容，其余任何调用都记下来 ——
- *     IB-12 断言除了 artifact.read 之外一个都没有；
- *   - `mermaid` 顶掉：CodeBlock 经 MermaidBlock 引入它，这里用不到。
+ *     IB-12 断言除了 artifact.read 之外一个都没有。
  *
  * ⚠️ 组件的视图状态（按源码）与主题 token 缓存（按主题 id）都是**模块级**的，跨用例共享：
  * 每条用例用自己独有的源码，也用自己独有的 data-theme id（与 mermaidBlock.dom.test.tsx 同一条纪律）。
@@ -53,8 +52,6 @@ import {
   SANDBOX_THEME_TOKENS,
   buildSandboxDocument
 } from '@shuvix/chat-protocol/utils/interactiveFence'
-
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 
 import {
   MarkdownText,

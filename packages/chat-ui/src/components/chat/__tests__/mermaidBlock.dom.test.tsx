@@ -1,33 +1,33 @@
 // @vitest-environment jsdom
 /**
- * MermaidBlock（```mermaid 代码块 → 图）DOM 测试（jsdom）。组件头注释里的四条就是这里的四组：
+ * MermaidBlock（```mermaid 代码块 → 图，渲染器是 pele）DOM 测试（jsdom）。组件头注释里的四条就是这里的
+ * 几组：
  *
- *   - **缺省显示图**（DF）：挂上就渲，出图后工具栏的切换按钮写「源码」；
- *   - **流式期间不渲染**（ST）：只显示「已写多少行」的占位，源码停 800ms 或整条消息写完才渲；
- *     流式中的失败只是还没写完 —— 错误卡只在写完之后出，而且不拿半截源码渲出的旧图顶替；
- *   - **配色跟主题**（TH）：根上的 data-theme 一变就按新主题重渲，旧图留到新图出来；
- *   - **限高 + 放大查看**（LY / EX）：布局规则本身在 mermaidFit.test.ts，这里只钉组件把它
- *     落成了什么（`data-mermaid-figure` / `--mermaid-w` / max-height / 渐隐遮罩 / 放大按钮与弹窗）。
- * 外加两条横切的：渲染**串行**且**去重**（SQ）、单张卡住的渲染 15s 后让出队列；以及图卡上的
- * **导出**入口（EXP）：什么时候有按钮、「当前主题」命中缓存、「浅 / 深」在挂着那套主题的离屏容器里重渲。
+ *   - **缺省显示图**（DF）：同步出图；图类型第一次出现时先「渲染中」，分包加载完才画（DF-2 / LD-1）；
+ *   - **流式期间逐帧画**（ST）：围栏开着时丢掉写到一半的最后一行、补尾巴、往回退 —— 帧只在多写完一行
+ *     时重算（ST-5），一帧都画不出时是「正在生成」占位；错误卡只在消息写完后出（ST-6 / CB-2）；
+ *   - **配色是 token**（TH）：切主题不重渲、连 DOM 都不换；图卡挂着 `data-figure-surface="card"`；
+ *   - **限高 + 按栏宽重排 + 放大查看**（LY / FW / EX）：布局规则本身在 mermaidFit.test.ts、帧与重排
+ *     规则在 chat-protocol 的 mermaidFence 测试，这里只钉组件把它们落成了什么；
+ *   - 失败关闭（ER）、写完的图的缓存（CA）、图 / 源码切换（SV）、CodeBlock 分发（CB）、导出（EXP）。
  *
  * 桩的形状（为什么这么搭）：
- *   - `mermaid` 整个顶掉：initialize / render 都记进同一条日志（看得出「init → render」的先后与
- *     串行）；render 返回测试手里的 deferred，何时成、何时败由用例决定。桩出的 SVG 带
- *     `data-tag`（认是哪一张）与 `data-primary` —— 后者取**紧挨着这次 render 的那次 initialize**
- *     传进来的 primaryColor，于是「这张图是按哪个主题渲的」在 DOM 上直接可读；
- *   - `getComputedStyle` 换成桩：jsdom 不做级联，`var(--x)` 永远解析不出颜色。桩把「探针所在那一层的
- *     data-theme + 探针上写的 color」原样拼回去（`T1:var(--theme-bg-tertiary)`），主题与 token 两样都看得见；
- *   - jsdom 没有 ResizeObserver：栏宽恒为 0，走「还没量到」那一支（按限高整张缩）。只有 LY-4 装一个
- *     假的，报一个固定栏宽。
+ *   - `pele/lazy` **真跑**，只把 `render` / `load` 包成透传的 spy：数得出渲了几次、带了什么选项，
+ *     也能让某一次返回 / 加载按用例脚本走（`mockReturnValueOnce` / `mockRejectedValueOnce`）。
+ *     类型注册是**本文件的模块级状态**：beforeAll 只加载 flowchart；DF-2 依赖 pie 在本文件里第一次
+ *     出现，LD-1 依赖 gantt **永远**加载失败（两次都用 mockRejectedValueOnce 挡在真加载之前）；
+ *   - `getComputedStyle` 换成桩：jsdom 不做级联。组件只从 body 读字体；导出面板烘焙时读一份初值记录、
+ *     探针颜色读一个固定的 rgb —— 够烘焙跑通（导出本身的烘焙规则在 figure/__tests__ 里测）；
+ *   - jsdom 没有画布（pele 退回自己的字宽表，尺寸确定）、没有 ResizeObserver（栏宽恒为 0，走「还没量到」
+ *     那一支）。LY-4 / FW 装一个假的，由用例手动报栏宽；
+ *   - `SVGSVGElement.viewBox`：jsdom 没有，按属性解析（导出面板的烘焙要它）。
  *
- * ⚠️ 组件的缓存 / 视图状态 / 去重表 / 串行队列都是**模块级**的，跨用例共享（刻意不 resetModules ——
- * 那正是要测的东西）。所以：每条用例用自己独有的源码；每个 deferred 都在用例结束前收掉 —— 一个
- * 悬着的渲染会堵住队列，后面所有用例连带失败（afterEach 兜底收掉并报出来）。
+ * ⚠️ 组件的结果缓存 / 视图状态都是**模块级**的，跨用例共享（刻意不 resetModules —— 那正是要测的
+ * 东西）。所以每条用例用自己独有的源码（节点名带用例号）。
  *
  * i18n 走真 en 资源；文件是 .tsx 但不写 JSX，一律 createElement（与同目录的 tokenChip 一致）。
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
@@ -39,98 +39,104 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-/** 一次 mermaid.render 调用：测试手里的 deferred */
-interface PendingRender {
-  id: string
-  code: string
-  /** 这次渲染所用主题的节点面色（紧挨着它的那次 initialize 传进来的 primaryColor） */
-  primary: string
-  settled: boolean
-  resolve(svg: string): void
-  reject(error: Error): void
-}
-
-/** 桩出的一张图：viewBox 宽高 + 认图用的 tag + 渲染时的主题色 */
-const svgOf = (w: number, h: number, tag: string, primary: string): string =>
-  `<svg viewBox="0 0 ${w} ${h}" data-tag="${tag}" data-primary="${primary}"><rect/></svg>`
-
-const mm = vi.hoisted(() => {
-  const state = {
-    /** `init` / `render:<code>`，按调用先后 */
-    log: [] as string[],
-    inits: [] as Array<{ themeVariables?: Record<string, unknown> } & Record<string, unknown>>,
-    pending: [] as PendingRender[],
-    /** 源码 → 一调用就成功的那张图（缺省：挂起，等用例自己收） */
-    instant: new Map<string, { w: number; h: number; tag: string }>()
-  }
-  const initialize = vi.fn((config: (typeof state.inits)[number]) => {
-    state.inits.push(config)
-    state.log.push('init')
-  })
-  const render = vi.fn(
-    (id: string, code: string) =>
-      new Promise<{ svg: string }>((resolve, reject) => {
-        state.log.push(`render:${code}`)
-        const primary = String(state.inits.at(-1)?.themeVariables?.primaryColor ?? '')
-        const entry: PendingRender = {
-          id,
-          code,
-          primary,
-          settled: false,
-          resolve: (svg) => {
-            entry.settled = true
-            resolve({ svg })
-          },
-          reject: (error) => {
-            entry.settled = true
-            reject(error)
-          }
-        }
-        state.pending.push(entry)
-        const instant = state.instant.get(code)
-        if (instant) {
-          entry.resolve(
-            `<svg viewBox="0 0 ${instant.w} ${instant.h}" data-tag="${instant.tag}" data-primary="${primary}"><rect/></svg>`
-          )
-        }
-      })
-  )
-  return { state, initialize, render }
+// 透传 spy：真 pele，但数得出次数、看得到选项
+vi.mock('pele/lazy', async (importOriginal) => {
+  const m = await importOriginal<typeof import('pele/lazy')>()
+  return { ...m, render: vi.fn(m.render), load: vi.fn(m.load) }
+})
+// 透传 spy：看 MermaidBlock 交给导出面板的是哪一份图（EXP-2）
+vi.mock('../../figure/figureExport', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../../figure/figureExport')>()
+  return { ...m, authoredFigureSource: vi.fn(m.authoredFigureSource) }
 })
 
-vi.mock('mermaid', () => ({ default: { initialize: mm.initialize, render: mm.render } }))
-
+import { load, render as peleRender } from 'pele/lazy'
 import { MermaidBlock } from '../MermaidBlock'
-import { MarkdownStreamingContext } from '../markdownStreaming'
+import { MarkdownSourceContext, MarkdownStreamingContext } from '../markdownStreaming'
 import { MarkdownText } from '../markdownComponents'
 import { CodeBlock } from '../CodeBlock'
-import { mermaidThemeVariables } from '../mermaidFit'
-import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
+import { MERMAID_MAX_HEIGHT, mermaidLayout } from '../mermaidFit'
+import { authoredFigureSource } from '../../figure/figureExport'
+
+const render = vi.mocked(peleRender)
+const loadSpy = vi.mocked(load)
+const authoredSpy = vi.mocked(authoredFigureSource)
 
 let container: HTMLDivElement
 let root: Root
-/** 桩 getComputedStyle 此刻报给根元素的 color-scheme */
-const ui = { colorScheme: 'light' }
 const realGetComputedStyle = window.getComputedStyle
 const realGetContext = HTMLCanvasElement.prototype.getContext
+
+/** 烘焙要的那几项计算值（初值形状） */
+const INITIAL: Record<string, string> = {
+  fill: 'rgb(0, 0, 0)',
+  'fill-opacity': '1',
+  stroke: 'none',
+  'stroke-opacity': '1',
+  'font-family': 'Test Sans',
+  'font-size': '13px',
+  opacity: '1',
+  'stop-color': 'rgb(0, 0, 0)',
+  'stop-opacity': '1',
+  'flood-color': 'rgb(0, 0, 0)',
+  'flood-opacity': '1'
+}
+
+// ─── 假 ResizeObserver ─────────────────────────────────────
+
+/** 当前活着的观察者：用例用 `resizeCards(w)` 给它们报一个栏宽 */
+const observers = new Set<{ cb: ResizeObserverCallback; self: ResizeObserver }>()
+class FakeResizeObserver {
+  private entry: { cb: ResizeObserverCallback; self: ResizeObserver }
+  constructor(cb: ResizeObserverCallback) {
+    this.entry = { cb, self: this as unknown as ResizeObserver }
+  }
+  observe(): void {
+    observers.add(this.entry)
+  }
+  unobserve(): void {
+    // 组件只用 observe / disconnect
+  }
+  disconnect(): void {
+    observers.delete(this.entry)
+  }
+}
+const installResizeObserver = (): void => {
+  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = FakeResizeObserver
+}
+const resizeCards = (width: number): void => {
+  act(() => {
+    for (const { cb, self } of observers) {
+      cb([{ contentRect: { width } } as unknown as ResizeObserverEntry], self)
+    }
+  })
+}
 
 // ─── 挂载与推进 ─────────────────────────────────────────────
 
 /** 一组 MermaidBlock；`streaming` 缺省 = 不包 Provider（组件读到的缺省值是「没在流式」） */
-const tree = (codes: string[], streaming?: boolean): ReactNode => {
+const tree = (codes: string[], closed: boolean, streaming?: boolean): ReactNode => {
   const blocks = createElement(
     'div',
     null,
-    ...codes.map((code, i) => createElement(MermaidBlock, { key: i, code }))
+    ...codes.map((code, i) => createElement(MermaidBlock, { key: i, code, closed }))
   )
   return streaming === undefined
     ? blocks
     : createElement(MarkdownStreamingContext.Provider, { value: streaming }, blocks)
 }
 
-const show = (codes: string | string[], streaming?: boolean): void => {
+/** 挂一个（或一组）写完了的块 */
+const show = (codes: string | string[]): void => {
   act(() => {
-    root.render(tree(Array.isArray(codes) ? codes : [codes], streaming))
+    root.render(tree(Array.isArray(codes) ? codes : [codes], true))
+  })
+}
+
+/** 挂一个块，指定围栏闭合没有、消息在不在流式 */
+const showFrame = (code: string, opts: { closed: boolean; streaming: boolean }): void => {
+  act(() => {
+    root.render(tree([code], opts.closed, opts.streaming))
   })
 }
 
@@ -141,105 +147,56 @@ const clear = (): void => {
   })
 }
 
-/** 推进假时钟并把期间冒出来的微任务 / React 更新都收干净 */
-const advance = async (ms: number): Promise<void> => {
+/** 等所有已发起的图类型加载落定，再让 React 把状态更新收干净 */
+const settleLoads = async (): Promise<void> => {
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms)
+    await Promise.allSettled(loadSpy.mock.results.map((r) => r.value))
+    await new Promise((resolve) => setTimeout(resolve, 0))
   })
 }
-
-const setTheme = async (theme: string): Promise<void> => {
-  await act(async () => {
-    document.documentElement.setAttribute('data-theme', theme)
-  })
-}
-
-// ─── 收 deferred ────────────────────────────────────────────
-
-const unsettled = (code?: string): PendingRender[] =>
-  mm.state.pending.filter((p) => !p.settled && (code === undefined || p.code === code))
-
-const pendingFor = (code: string): PendingRender => {
-  const hit = unsettled(code)[0]
-  if (!hit) throw new Error(`没有挂起的 render：${JSON.stringify(code)}`)
-  return hit
-}
-
-const resolveRender = async (code: string, w: number, h: number, tag: string): Promise<void> => {
-  const p = pendingFor(code)
-  await act(async () => {
-    p.resolve(svgOf(w, h, tag, p.primary))
-    await vi.advanceTimersByTimeAsync(0)
-  })
-}
-
-/** 用一段原样的「渲染产物」收掉（净化用例用） */
-const resolveRaw = async (code: string, svg: string): Promise<void> => {
-  const p = pendingFor(code)
-  await act(async () => {
-    p.resolve(svg)
-    await vi.advanceTimersByTimeAsync(0)
-  })
-}
-
-/** 让这段源码所有挂起的 render 失败（mermaid 的解析错误） */
-const rejectRenders = async (code: string): Promise<void> => {
-  const list = unsettled(code)
-  if (list.length === 0) throw new Error(`没有挂起的 render：${JSON.stringify(code)}`)
-  await act(async () => {
-    for (const p of list) p.reject(new Error('Parse error on line 2'))
-    await vi.advanceTimersByTimeAsync(0)
-  })
-}
-
-/** 按排队顺序一张张收：每收一张，队列里下一张才会真的调到 mermaid.render */
-const resolveQueueInOrder = async (tagOf: (p: PendingRender) => string): Promise<void> => {
-  for (let guard = 0; guard < 20; guard++) {
-    const next = unsettled()[0]
-    if (!next) return
-    await act(async () => {
-      next.resolve(svgOf(400, 300, tagOf(next), next.primary))
-      await vi.advanceTimersByTimeAsync(0)
-    })
-  }
-  throw new Error('队列收不完')
-}
-
-const renderedCodes = (): string[] => mm.render.mock.calls.map((call) => call[1])
 
 // ─── DOM 读取 ───────────────────────────────────────────────
 
-/** 第 i 个块的根节点（卡片，或整块换成的错误卡） */
-const block = (i = 0): Element => {
-  const el = container.firstElementChild?.children[i]
-  if (!el) throw new Error(`没有第 ${i} 个块`)
-  return el
-}
 const figureOf = (scope: Element = container): HTMLElement | null =>
   scope.querySelector<HTMLElement>('[data-mermaid-figure]')
-const figureSvgOf = (scope: Element = container): SVGElement | null =>
-  scope.querySelector<SVGElement>('[data-mermaid-figure] > svg')
-const tagOf = (scope: Element = container): string | null =>
-  figureSvgOf(scope)?.getAttribute('data-tag') ?? null
-const primaryOf = (scope: Element = container): string =>
-  figureSvgOf(scope)?.getAttribute('data-primary') ?? ''
+const figureSvgOf = (scope: Element = container): SVGSVGElement | null =>
+  scope.querySelector<SVGSVGElement>('[data-mermaid-figure] > svg')
+const nodeIds = (scope: Element = container): string[] =>
+  Array.from(scope.querySelectorAll('[data-mermaid-figure] .pele-node')).map(
+    (n) => n.getAttribute('data-id') ?? ''
+  )
 const pendingOf = (scope: Element = container): HTMLElement | null =>
   scope.querySelector<HTMLElement>('[data-mermaid-pending]')
 const errorOf = (scope: Element = container): HTMLElement | null =>
-  scope.matches('[data-mermaid-error]')
-    ? (scope as HTMLElement)
-    : scope.querySelector<HTMLElement>('[data-mermaid-error]')
+  scope.querySelector<HTMLElement>('[data-mermaid-error]')
 const expandOf = (scope: Element = container): HTMLButtonElement | null =>
   scope.querySelector<HTMLButtonElement>('[data-mermaid-expand]')
+const exportBtn = (scope: Element = container): HTMLButtonElement | null =>
+  scope.querySelector<HTMLButtonElement>('[data-figure-export]')
 /** 图 / 源码切换按钮：工具栏里除「导出」外唯一带 title 的按钮 */
 const toggleOf = (scope: Element = container): HTMLButtonElement => {
-  // 工具栏上的「导出」按钮也带 title、且排在前面 —— 按它的标记排除掉
   const btn = scope.querySelector<HTMLButtonElement>('button[title]:not([data-figure-export])')
   if (!btn) throw new Error('没有切换按钮')
   return btn
 }
 const dialogPanel = (): HTMLElement | null =>
   document.body.querySelector<HTMLElement>('[data-mermaid-dialog]')
+/** 根 <svg> 上 pele 写的宽高（= 渲染结果的 width / height） */
+const svgSize = (svg: Element): { w: number; h: number } => ({
+  w: Number(svg.getAttribute('width')),
+  h: Number(svg.getAttribute('height'))
+})
+/** 用例脚本里替 pele 返回的一次渲染结果（只有 svg / 宽高被组件读） */
+const fakeResult = (svg: string, width: number, height: number): ReturnType<typeof peleRender> => ({
+  svg,
+  width,
+  height,
+  type: 'flowchart',
+  links: []
+})
+/** 带 maxWidth 的渲染调用 */
+const narrowCalls = (): Array<Parameters<typeof peleRender>> =>
+  render.mock.calls.filter((c) => c[1]?.maxWidth !== undefined)
 
 const click = (el: Element): void => {
   act(() => {
@@ -247,604 +204,432 @@ const click = (el: Element): void => {
   })
 }
 
+/** 一条竖向的 n 节点链 */
+const tdChain = (prefix: string, n: number): string =>
+  [
+    'graph TD',
+    ...Array.from({ length: n - 1 }, (_, i) => `  ${prefix}${i} --> ${prefix}${i + 1}`)
+  ].join('\n')
+/** 一条横向的 6 节点链（自然宽度远超 300） */
+const lrChain = (prefix: string): string =>
+  `flowchart LR\n  ${['A', 'B', 'C', 'D', 'E', 'F'].map((x) => `${prefix}${x}`).join('-->')}`
+
 beforeAll(async () => {
   await i18n.use(initReactI18next).init({
     lng: 'en',
     resources: { en: { translation: en } }
   })
+  Object.defineProperty(SVGSVGElement.prototype, 'viewBox', {
+    configurable: true,
+    get(this: SVGSVGElement) {
+      const n = (this.getAttribute('viewBox') ?? '')
+        .trim()
+        .split(/[\s,]+/)
+        .map(Number)
+      const ok = n.length === 4 && n.every(Number.isFinite)
+      const [x, y, width, height] = ok ? n : [0, 0, 0, 0]
+      return { baseVal: { x, y, width, height } }
+    }
+  })
+  // jsdom 没有画布：pele 退回字宽表（必须在第一次渲染之前桩好，尺寸才确定）
+  HTMLCanvasElement.prototype.getContext = (() =>
+    null) as unknown as typeof HTMLCanvasElement.prototype.getContext
+  await load('flowchart')
+})
+
+afterAll(() => {
+  delete (SVGSVGElement.prototype as { viewBox?: unknown }).viewBox
+  HTMLCanvasElement.prototype.getContext = realGetContext
 })
 
 beforeEach(() => {
-  vi.useFakeTimers()
-  mm.state.log.length = 0
-  mm.state.inits.length = 0
-  mm.state.pending.length = 0
-  mm.state.instant.clear()
-  mm.initialize.mockClear()
-  mm.render.mockClear()
-  ui.colorScheme = 'light'
+  render.mockClear()
+  loadSpy.mockClear()
+  authoredSpy.mockClear()
+  observers.clear()
   document.documentElement.setAttribute('data-theme', 'T1')
   localStorage.clear()
-  // jsdom 不做级联：把「主题 id + 探针上写的 var(...)」原样拼回去当解析结果。主题取探针**所在那一层**
-  // （closest 的 data-theme）：导出按另一套主题重渲时，探针挂在带那套主题的离屏容器里（EXP-3）
-  window.getComputedStyle = ((el: Element) => ({
-    color: `${(el.closest('[data-theme]') ?? document.documentElement).getAttribute('data-theme')}:${(el as HTMLElement).style?.color ?? ''}`,
-    colorScheme: ui.colorScheme,
-    fontFamily: 'Test Sans'
-  })) as unknown as typeof window.getComputedStyle
-  // jsdom 没有画布（导出补底色时认不出桩拼出来的颜色会走画布兜底）：回 null，不往控制台喊
-  HTMLCanvasElement.prototype.getContext = (() =>
-    null) as unknown as typeof HTMLCanvasElement.prototype.getContext
+  window.getComputedStyle = ((el: Element) => {
+    const probe = el.tagName === 'SPAN' ? (el as HTMLElement).style.color : ''
+    return {
+      getPropertyValue: (p: string) => INITIAL[p] ?? '',
+      fontFamily: 'Test Sans',
+      fontSize: '13px',
+      fontWeight: '400',
+      lineHeight: '20px',
+      colorScheme: 'light',
+      color: probe.includes('var(') ? 'rgb(30, 31, 32)' : 'rgb(0, 0, 0)'
+    }
+  }) as unknown as typeof window.getComputedStyle
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
 })
 
-afterEach(async () => {
-  // 兜底：没收掉的渲染会堵住模块级串行队列 —— 先让它们失败以免连累后面的用例，再报出来。
-  // 要循环收：排在后面的那张只有前一张落定之后才真的调到 mermaid.render，冒出新的 deferred
-  const leftover = unsettled().map((p) => p.code)
-  for (let guard = 0; guard < 20 && unsettled().length > 0; guard++) {
-    await act(async () => {
-      for (const p of unsettled()) p.reject(new Error('left over by the test'))
-      await vi.advanceTimersByTimeAsync(0)
-    })
-  }
+afterEach(() => {
   act(() => root.unmount())
   container.remove()
   document.body.innerHTML = ''
   window.getComputedStyle = realGetComputedStyle
-  HTMLCanvasElement.prototype.getContext = realGetContext
   delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver
   vi.useRealTimers()
-  expect(leftover, '用例结束时还有没收掉的 mermaid.render').toEqual([])
 })
+
+// ═══════════════════════════════════════════════════════════════
 
 describe('缺省显示图（DF）', () => {
-  it('DF-1 不在流式：先是「渲染中」，推进 0ms 就出图；init 在 render 之前、取 base 主题 + 解析后的 token', async () => {
-    const code = 'graph TD\n  df1a --> df1b'
-    mm.state.instant.set(code, { w: 400, h: 300, tag: 'df1' })
-    show(code) // 不包 Provider：缺省就是「没在流式」
-
-    expect(pendingOf()?.textContent).toBe('Rendering…')
-    expect(mm.render).not.toHaveBeenCalled()
-
-    await advance(0)
-    expect(tagOf()).toBe('df1')
+  it('MB-DF-1 写完的流程图：第一次提交就是图（svg.pele.pele-flowchart），没有占位 / 错误卡；切换按钮写「Source」；卡片挂 data-figure-surface="card"', () => {
+    show('graph TD\n  df1a --> df1b')
+    expect(
+      container.querySelector('[data-mermaid-figure] > svg.pele.pele-flowchart')
+    ).not.toBeNull()
     expect(pendingOf()).toBeNull()
-    // 缺省是图，不是源码（从前缺省是源码，长流程图先以一大段代码摊在对话里）
-    expect(container.querySelector('pre')).toBeNull()
+    expect(errorOf()).toBeNull()
     expect(toggleOf().textContent).toBe('Source')
-
-    expect(mm.render).toHaveBeenCalledTimes(1)
-    expect(mm.render).toHaveBeenCalledWith(expect.stringMatching(/^mermaid_\d+$/), code)
-    expect(mm.state.log).toEqual(['init', `render:${code}`])
-    expect(mm.state.inits[0]).toMatchObject({ startOnLoad: false, theme: 'base' })
-    expect(mm.state.inits[0].themeVariables).toEqual(
-      mermaidThemeVariables((token) => `T1:var(${token})`, false, 'Test Sans')
-    )
-    // 从前那块写死的白底：深色主题下是一块白板
-    expect(document.querySelector('.bg-white')).toBeNull()
+    const card = container.firstElementChild!.firstElementChild!
+    expect(card.getAttribute('data-figure-surface')).toBe('card')
+    expect(card.contains(figureOf())).toBe(true)
   })
 
-  it('DF-1 变体：根元素的 color-scheme 是 dark → darkMode 为真', async () => {
-    const code = 'graph TD\n  df1dark --> df1dark2'
-    mm.state.instant.set(code, { w: 400, h: 300, tag: 'df1-dark' })
-    ui.colorScheme = 'dark'
-    show(code)
-    await advance(0)
-    expect(tagOf()).toBe('df1-dark')
-    expect(mm.state.inits[0].themeVariables?.darkMode).toBe(true)
+  it('MB-DF-2 某种图第一次出现（pie）：先「Rendering…」，分包加载完出图；从头到尾没有错误卡', async () => {
+    show('pie title Pets df2\n  "Dogs" : 386\n  "Cats" : 85')
+    expect(pendingOf()?.textContent).toBe(i18n.t('message.rendering'))
+    expect(figureOf()).toBeNull()
+    expect(errorOf()).toBeNull()
+    expect(loadSpy).toHaveBeenCalledWith('pie')
+
+    await settleLoads()
+    expect(container.querySelector('[data-mermaid-figure] > svg.pele')).not.toBeNull()
+    expect(pendingOf()).toBeNull()
+    expect(errorOf()).toBeNull()
+  })
+
+  it('MB-DF-3 根本不是 mermaid（认不出图类型）、写完了：第一次提交就是错误卡', () => {
+    show('hello df3\nworld')
+    expect(errorOf()).not.toBeNull()
+    expect(pendingOf()).toBeNull()
+    expect(figureOf()).toBeNull()
+    expect(loadSpy).not.toHaveBeenCalled()
   })
 })
 
-describe('流式期间不渲染（ST）', () => {
-  it('ST-1 流式中只显示行数占位；源码停满 800ms 才渲，出图时消息仍在流式', async () => {
-    const code = 'graph LR\n  st1a --> st1b\n  st1b --> st1c'
-    show(code, true)
-    expect(pendingOf()?.textContent).toBe('Drawing the diagram… (3 lines)')
+describe('流式期间逐帧画（ST）', () => {
+  const open = { closed: false, streaming: true }
 
-    await advance(799)
-    expect(mm.render).not.toHaveBeenCalled()
-    await advance(1)
-    expect(renderedCodes()).toEqual([code])
-
-    await resolveRender(code, 400, 300, 'st1')
-    expect(tagOf()).toBe('st1')
-    expect(pendingOf()).toBeNull()
-  })
-
-  it('ST-2 源码还在长：计时从最后一次变化重新算，只渲最新那一版', async () => {
-    const v1 = 'graph LR\n  st2a --> st2b\n  st2b --> st2c'
-    const v2 = `${v1}\n  st2c --> st2d`
-    show(v1, true)
-    await advance(500)
-    show(v2, true)
-    expect(pendingOf()?.textContent).toBe('Drawing the diagram… (4 lines)')
-
-    await advance(500) // 距 v1 已 1000ms，距 v2 才 500ms
-    expect(mm.render).not.toHaveBeenCalled()
-    await advance(300) // 距 v2 满 800ms
-    expect(renderedCodes()).toEqual([v2])
-
-    await resolveRender(v2, 400, 300, 'st2')
-    expect(tagOf()).toBe('st2')
-    expect(renderedCodes()).toEqual([v2])
-  })
-
-  it('ST-3 流式中渲染失败不是错误：占位照旧；写完之后才出错误卡（带源码）', async () => {
-    const code = 'graph LR\n  st3a -->'
-    show(code, true)
-    await advance(800)
-    expect(renderedCodes()).toEqual([code])
-    await rejectRenders(code)
-    expect(pendingOf()?.textContent).toBe('Drawing the diagram… (2 lines)')
+  it('MB-ST-1 只写了图类型那一行：「正在生成」占位（带行数），没有错误卡', () => {
+    showFrame('graph TD', open)
+    expect(pendingOf()?.textContent).toBe(i18n.t('message.diagramGenerating', { lines: 1 }))
     expect(errorOf()).toBeNull()
-
-    show(code, false)
-    const card = errorOf()
-    expect(card).not.toBeNull()
-    expect(card!.querySelector('pre')?.textContent).toBe(code)
-    expect(pendingOf()).toBeNull()
-
-    // 写完那一刻会按同一段源码再试一次（streaming 变了）—— 收掉它，错误卡不变
-    await advance(0)
-    await rejectRenders(code)
-    expect(errorOf()?.querySelector('pre')?.textContent).toBe(code)
+    expect(figureOf()).toBeNull()
   })
 
-  it('ST-4 已有一张图时源码又变了：旧图一直留着，占位一次都不出，新图出来才换', async () => {
-    const v1 = 'graph LR\n  st4a --> st4b'
-    const v2 = `${v1}\n  st4b --> st4c`
-    show(v1, true)
-    await advance(800)
-    await resolveRender(v1, 400, 300, 'A')
-    expect(tagOf()).toBe('A')
-
-    show(v2, true)
-    expect(tagOf()).toBe('A')
-    expect(pendingOf()).toBeNull()
-    await advance(799)
-    expect(tagOf()).toBe('A')
-    expect(pendingOf()).toBeNull()
-    await advance(1)
-    expect(renderedCodes()).toEqual([v1, v2])
-    expect(tagOf()).toBe('A') // v2 还在渲
-    expect(pendingOf()).toBeNull()
-
-    await resolveRender(v2, 400, 300, 'B')
-    expect(tagOf()).toBe('B')
-    expect(container.querySelectorAll('[data-mermaid-figure] > svg')).toHaveLength(1)
+  it('MB-ST-2 开着的围栏：写完的行都画出来，写到一半的最后一行不画；流式中没有导出按钮', () => {
+    showFrame('graph TD\n  st2a-->st2b\n  st2b-->st2c\n  st2c-->st2dpart', open)
+    expect(figureSvgOf()).not.toBeNull()
+    const ids = nodeIds()
+    expect(ids).toEqual(expect.arrayContaining(['st2a', 'st2b', 'st2c']))
+    expect(ids).not.toContain('st2dpart')
+    expect(exportBtn()).toBeNull()
   })
 
-  it('ST-5 流式中新一版失败：旧图照旧、不出错；写完后出错误卡（新源码），旧图撤下', async () => {
-    const v1 = 'graph LR\n  st5a --> st5b'
-    const v2 = `${v1}\n  st5b -->`
-    show(v1, true)
-    await advance(800)
-    await resolveRender(v1, 400, 300, 'A')
-
-    show(v2, true)
-    await advance(800)
-    await rejectRenders(v2)
-    expect(tagOf()).toBe('A')
-    expect(errorOf()).toBeNull()
-
-    show(v2, false)
-    // 真失败时不拿半截源码渲出来的旧图顶替 —— 那等于把错误藏在一张不完整的图后面
-    expect(errorOf()?.querySelector('pre')?.textContent).toBe(v2)
-    expect(figureSvgOf()).toBeNull()
-
-    await advance(0)
-    await rejectRenders(v2)
-    expect(errorOf()?.querySelector('pre')?.textContent).toBe(v2)
-  })
-
-  it('ST-5 变体：新一版的 800ms 还没到消息就写完了 → 推进 0ms 就渲，失败即出错误卡', async () => {
-    const v1 = 'graph LR\n  st5va --> st5vb'
-    const v2 = `${v1}\n  st5vb -->`
-    show(v1, true)
-    await advance(800)
-    await resolveRender(v1, 400, 300, 'A')
-
-    show(v2, true)
-    await advance(300)
-    show(v2, false)
-    expect(renderedCodes()).toEqual([v1]) // 流式那一版的计时已经作废
-    await advance(0)
-    expect(renderedCodes()).toEqual([v1, v2])
-    await rejectRenders(v2)
-    expect(errorOf()?.querySelector('pre')?.textContent).toBe(v2)
-  })
-
-  it('ST-6a 流式中已经渲成功：消息写完不再渲第二遍', async () => {
-    const code = 'graph LR\n  st6a --> st6b'
-    show(code, true)
-    await advance(800)
-    await resolveRender(code, 400, 300, 'st6a')
-    show(code, false)
-    await advance(1000)
-    expect(mm.render).toHaveBeenCalledTimes(1)
-    expect(tagOf()).toBe('st6a')
-  })
-
-  it('ST-6b 写完那一刻渲染还没回来：并进同一次（不再调 render），回来就出图', async () => {
-    const code = 'graph LR\n  st6c --> st6d'
-    show(code, true)
-    await advance(800)
-    expect(mm.render).toHaveBeenCalledTimes(1)
-    show(code, false)
-    await advance(0)
-    expect(mm.render).toHaveBeenCalledTimes(1)
-    await resolveRender(code, 400, 300, 'st6b')
-    expect(tagOf()).toBe('st6b')
-    expect(mm.render).toHaveBeenCalledTimes(1)
-  })
-
-  it('ST-7 最后一次改动 300ms 后消息就写完了：推进 0ms 就渲，不再等剩下的 500ms', async () => {
-    const code = 'graph LR\n  st7a --> st7b'
-    show(code, true)
-    await advance(300)
-    show(code, false)
-    expect(mm.render).not.toHaveBeenCalled()
-    await advance(0)
-    expect(renderedCodes()).toEqual([code])
-    await resolveRender(code, 400, 300, 'st7')
-    expect(tagOf()).toBe('st7')
-  })
-
-  it('ST-8 正文走 MarkdownText（按文本 memo）、文本不变只翻流式标志：流式中失败不出错误卡，翻成 false 才出', async () => {
-    // AssistantBubble 落定那一刻正文文本不变，MarkdownText 不重渲 —— 写完了这件事只能经上下文传到这块
-    const code = 'graph LR\n  st8a -->'
-    const md = `before st8\n\n\`\`\`mermaid\n${code}\n\`\`\``
-    const showMd = (streaming: boolean): void => {
-      act(() => {
-        root.render(
-          createElement(
-            MarkdownStreamingContext.Provider,
-            { value: streaming },
-            createElement(MarkdownText, { text: md })
-          )
-        )
-      })
+  it('MB-ST-3 多写完一行：节点数不减；出过图之后不再出占位', () => {
+    const lines = ['graph TD', '  st3a-->st3b', '  st3b-->st3c', '  st3c-->st3d', '  st3d-->st3e']
+    let last = 0
+    let drawn = false
+    for (let n = 2; n <= lines.length; n++) {
+      // 末尾带一个写到一半的新行
+      showFrame(`${lines.slice(0, n).join('\n')}\n  st3pa`, open)
+      const count = nodeIds().length
+      if (count > 0) drawn = true
+      if (drawn) expect(pendingOf(), `第 ${n} 行`).toBeNull()
+      expect(count, `第 ${n} 行`).toBeGreaterThanOrEqual(last)
+      last = count
     }
+    expect(drawn).toBe(true)
+    expect(last).toBeGreaterThanOrEqual(5)
+  })
 
-    showMd(true)
-    await advance(800)
-    expect(renderedCodes()).toEqual([code])
-    await rejectRenders(code)
-    expect(pendingOf()).not.toBeNull()
+  it('MB-ST-4 往回退：刚写完一行坏的，屏幕上仍是之前那一帧（不闪占位、不出错）', () => {
+    const good = 'graph TD\n  st4a-->st4b\n  st4b-->st4c\n'
+    showFrame(`${good}  st4p`, open)
+    const before = nodeIds()
+    expect(before).toEqual(expect.arrayContaining(['st4a', 'st4b', 'st4c']))
+
+    showFrame(`${good}  st4x -->\n  st4y`, open)
+    expect(nodeIds()).toEqual(expect.arrayContaining(before))
+    expect(pendingOf()).toBeNull()
+    expect(errorOf()).toBeNull()
+  })
+
+  it('MB-ST-5 只有写到一半的最后一行在变：不重渲', () => {
+    const base = 'graph TD\n  st5a-->st5b\n  st5b-->st5c\n'
+    showFrame(`${base}  st5`, open)
+    const calls = render.mock.calls.length
+    expect(calls).toBeGreaterThan(0)
+    showFrame(`${base}  st5c-`, open)
+    showFrame(`${base}  st5c-->st5`, open)
+    expect(render.mock.calls.length).toBe(calls)
+  })
+
+  it('MB-ST-6 围栏闭合了、消息还在写，源码画不出来：留着能画的那一帧，不出错；消息写完才出错误卡', () => {
+    const code = 'graph TD\n  st6a-->st6b\n  st6b -->'
+    showFrame(code, { closed: true, streaming: true })
+    expect(nodeIds()).toEqual(expect.arrayContaining(['st6a', 'st6b']))
     expect(errorOf()).toBeNull()
 
-    showMd(false)
+    showFrame(code, { closed: true, streaming: false })
     const card = errorOf()
     expect(card).not.toBeNull()
+    expect(card!.textContent).toContain('Parse error')
     expect(card!.querySelector('pre')?.textContent).toBe(code)
-    expect(pendingOf()).toBeNull()
+    expect(figureOf()).toBeNull()
+  })
 
-    // 写完那一刻按同一段源码再试一次 —— 收掉它，错误卡不变
-    await advance(0)
-    await rejectRenders(code)
-    expect(errorOf()?.querySelector('pre')?.textContent).toBe(code)
+  // 原用例要求「图还是同一个 <svg> 节点」。React 19 只按 `dangerouslySetInnerHTML` 对象的**身份**判断
+  // 要不要重设 innerHTML（不再比 __html 字符串），而组件每次渲染都新建 `{ __html }` —— 于是任何一次
+  // 重渲染都会换掉 <svg> 节点（内容逐字相同）。这里钉能成立的那半：不再调 pele、标记逐字不变。
+  it('MB-ST-7 写得完好的闭合围栏、消息还在写：有图但没有导出；写完后出导出按钮，图不重渲、标记不变', () => {
+    const code = 'graph TD\n  st7a-->st7b'
+    showFrame(code, { closed: true, streaming: true })
+    const markup = figureOf()?.innerHTML
+    expect(figureSvgOf()).not.toBeNull()
+    expect(exportBtn()).toBeNull()
+
+    const calls = render.mock.calls.length
+    showFrame(code, { closed: true, streaming: false })
+    expect(exportBtn()).not.toBeNull()
+    expect(figureOf()?.innerHTML).toBe(markup)
+    // 写完那一刻走写完的缓存键：至多补渲一次自然尺寸（之前那一帧不进缓存），不会按帧再试
+    expect(render.mock.calls.length - calls).toBeLessThanOrEqual(1)
   })
 })
 
 describe('失败关闭（ER）', () => {
-  it('ER-1 写完了还解析不了：错误卡（文案 + 源码），没有图，也没有任何按钮', async () => {
-    const code = 'graph TD\n  er1a -->'
+  it('MB-ER-1 写完了还解析不了：错误卡（标签 + pele 的错误 + 源码），没有图，也没有任何按钮', () => {
+    const code = 'graph TD\n  er1 -->'
     show(code)
-    await advance(0)
-    await rejectRenders(code)
     const card = errorOf()
     expect(card).not.toBeNull()
-    expect(card!.textContent).toContain('Mermaid render failed')
+    const [label, message] = Array.from(card!.querySelectorAll('div'))
+    expect(label.textContent).toBe(i18n.t('message.mermaidFailed'))
+    expect(message.textContent!.length).toBeGreaterThan(0)
     expect(card!.querySelector('pre')?.textContent).toBe(code)
-    expect(figureOf()).toBeNull()
-    expect(container.querySelectorAll('button')).toHaveLength(0)
+    expect(container.querySelector('svg')).toBeNull()
+    expect(exportBtn()).toBeNull()
+    expect(expandOf()).toBeNull()
   })
 
-  it('ER-2 渲染产物净化后什么都不剩：按失败处理，而不是一张空图卡', async () => {
-    const code = 'graph TD\n  er2a --> er2b'
-    show(code)
-    await advance(0)
-    await resolveRaw(code, '<p>no svg</p>')
-    expect(errorOf()?.querySelector('pre')?.textContent).toBe(code)
+  it('MB-ER-2 渲染产物净化后什么都不剩：按失败处理（SVG sanitization failed），DOM 里没有 <script>', () => {
+    render.mockReturnValueOnce(fakeResult('<svg><script>x</script></svg>', 10, 10))
+    show('graph TD\n  er2a --> er2b')
+    const card = errorOf()
+    expect(card).not.toBeNull()
+    expect(card!.textContent).toContain('SVG sanitization failed')
+    expect(document.querySelector('script')).toBeNull()
     expect(figureOf()).toBeNull()
   })
 
-  it('ER-3 渲染产物里的 javascript: 链接与事件属性被剥掉，图形本身留下', async () => {
-    const code = 'graph TD\n  er3a --> er3b'
-    show(code)
-    await advance(0)
-    await resolveRaw(
-      code,
-      '<svg viewBox="0 0 120 60" data-tag="er3"><a href="javascript:alert(1)">' +
-        '<rect width="10" height="10" onclick="alert(2)"/></a></svg>'
+  it('MB-ER-3 产物里的事件属性被剥掉，图形本身留下', () => {
+    render.mockReturnValueOnce(
+      fakeResult('<svg viewBox="0 0 10 10"><rect onclick="x"/></svg>', 10, 10)
     )
-    expect(tagOf()).toBe('er3')
-    expect(figureOf()!.querySelector('rect')).not.toBeNull()
-    expect(document.querySelector('[onclick]')).toBeNull()
-    expect(document.body.innerHTML).not.toMatch(/javascript:/i)
+    show('graph TD\n  er3a --> er3b')
+    const rect = container.querySelector('[data-mermaid-figure] svg rect')
+    expect(rect).not.toBeNull()
+    expect(rect!.hasAttribute('onclick')).toBe(false)
+    expect(errorOf()).toBeNull()
   })
 })
 
-describe('渲染串行且去重（SQ）', () => {
-  it('SQ-1 两张图同时挂上：一张渲完才开始下一张（每张都先 init 再 render）', async () => {
-    const a = 'graph TD\n  sq1a1 --> sq1a2'
-    const b = 'graph TD\n  sq1b1 --> sq1b2'
-    show([a, b])
-    await advance(0)
-    expect(mm.state.log).toEqual(['init', `render:${a}`])
-
-    await resolveRender(a, 400, 300, 'sq1-a')
-    expect(mm.state.log).toEqual(['init', `render:${a}`, 'init', `render:${b}`])
-    await resolveRender(b, 400, 300, 'sq1-b')
-    expect(tagOf(block(0))).toBe('sq1-a')
-    expect(tagOf(block(1))).toBe('sq1-b')
-  })
-
-  it('SQ-1 变体：前一张失败不会卡住队列，后一张照样渲', async () => {
-    const a = 'graph TD\n  sq1va -->'
-    const b = 'graph TD\n  sq1vb1 --> sq1vb2'
-    show([a, b])
-    await advance(0)
-    expect(mm.state.log).toEqual(['init', `render:${a}`])
-
-    await rejectRenders(a)
-    expect(mm.state.log).toEqual(['init', `render:${a}`, 'init', `render:${b}`])
-    await resolveRender(b, 400, 300, 'sq1v-b')
-    expect(errorOf(block(0))).not.toBeNull()
-    expect(tagOf(block(1))).toBe('sq1v-b')
-  })
-
-  it('SQ-2 两块同一段源码：只渲一次，两块都出图', async () => {
-    const code = 'graph TD\n  sq2a --> sq2b'
-    show([code, code])
-    await advance(0)
-    expect(mm.render).toHaveBeenCalledTimes(1)
-    await resolveRender(code, 400, 300, 'sq2')
-    expect(tagOf(block(0))).toBe('sq2')
-    expect(tagOf(block(1))).toBe('sq2')
-    expect(mm.render).toHaveBeenCalledTimes(1)
-  })
-
-  it('SQ-3 卸下再挂同一段源码（同一主题）：第一帧就是图，不再渲', async () => {
-    const code = 'graph TD\n  sq3a --> sq3b'
-    show(code)
-    await advance(0)
-    await resolveRender(code, 400, 300, 'sq3')
-    clear()
-    expect(figureOf()).toBeNull()
-
-    show(code)
-    // 还没推进任何计时器：缓存命中就是第一帧
-    expect(tagOf()).toBe('sq3')
-    expect(pendingOf()).toBeNull()
-    await advance(0)
-    expect(mm.render).toHaveBeenCalledTimes(1)
-  })
-
-  it('SQ-4 一张卡死的渲染 15s 后按失败让出队列：它出错误卡，排在后面的那张接着渲', async () => {
-    const a = 'graph TD\n  sq4a --> sq4b'
-    const b = 'graph TD\n  sq4c --> sq4d'
-    show([a, b])
-    await advance(0)
-    expect(mm.state.log).toEqual(['init', `render:${a}`])
-
-    await advance(14_999)
-    expect(errorOf(block(0))).toBeNull()
-    expect(pendingOf(block(0))?.textContent).toBe('Rendering…')
-    expect(mm.state.log).toEqual(['init', `render:${a}`])
-
-    await advance(1)
-    expect(errorOf(block(0))?.querySelector('pre')?.textContent).toBe(a)
-    expect(mm.state.log).toEqual(['init', `render:${a}`, 'init', `render:${b}`])
-    await resolveRender(b, 400, 300, 'sq4-b')
-    expect(tagOf(block(1))).toBe('sq4-b')
-
-    // 卡住的那次终于回来了 —— 已经判了失败，回来得太晚，什么都不改
-    await resolveRender(a, 400, 300, 'too-late')
-    expect(errorOf(block(0))).not.toBeNull()
-    expect(tagOf(block(0))).toBeNull()
-  })
-})
-
-describe('配色跟主题（TH）', () => {
-  it('TH-1 切主题：旧图留着、不闪占位；按新主题重渲后换上；切回来直接用缓存', async () => {
+describe('配色是 token（TH）', () => {
+  it('MB-TH-1 切主题：组件不订阅主题，<svg> 节点原样留着；之后同 props 重渲染也不再调 pele、标记不变', async () => {
     const code = 'graph TD\n  th1a --> th1b'
     show(code)
-    await advance(0)
-    await resolveRender(code, 400, 300, 'A')
-    expect(tagOf()).toBe('A')
-    expect(primaryOf()).toMatch(/^T1:/)
+    const svg = figureSvgOf()
+    const markup = figureOf()!.innerHTML
+    const calls = render.mock.calls.length
+    await act(async () => {
+      document.documentElement.setAttribute('data-theme', 'T2')
+    })
+    expect(figureSvgOf()).toBe(svg)
+    expect(render.mock.calls.length).toBe(calls)
 
-    await setTheme('T2')
-    expect(tagOf()).toBe('A')
-    expect(pendingOf()).toBeNull()
-    expect(mm.render).toHaveBeenCalledTimes(1)
-
-    await advance(0)
-    expect(mm.render).toHaveBeenCalledTimes(2)
-    await resolveRender(code, 400, 300, 'B')
-    expect(tagOf()).toBe('B')
-    expect(primaryOf()).toMatch(/^T2:/)
-
-    await setTheme('T1')
-    expect(tagOf()).toBe('A')
-    await advance(0)
-    expect(mm.render).toHaveBeenCalledTimes(2)
+    // 父层因为别的原因重渲染（同 props）：不重渲图。<svg> 节点会被换掉（React 19 按 { __html }
+    // 对象身份重设 innerHTML，见 MB-ST-7 的注），但标记逐字相同
+    show(code)
+    expect(figureOf()!.innerHTML).toBe(markup)
+    expect(render.mock.calls.length).toBe(calls)
   })
+})
 
-  it('TH-4 排队期间切了主题：排着的那张仍按请求那一刻的主题渲（不把新主题的颜色存进旧主题的键）', async () => {
-    const a = 'graph TD\n  th4a1 --> th4a2'
-    const b = 'graph TD\n  th4b1 --> th4b2'
-    show([a, b])
-    await advance(0)
-    expect(mm.state.log).toEqual(['init', `render:${a}`]) // B 在 T1 下排在 A 后面
-
-    await setTheme('T2')
-    await advance(0)
-    await resolveQueueInOrder((p) => `${p.code === a ? 'a' : 'b'}@${p.primary.split(':')[0]}`)
-
-    await setTheme('T1')
-    expect(tagOf(block(1))).toBe('b@T1')
-    expect(primaryOf(block(1))).toMatch(/^T1:/)
-    expect(primaryOf(block(0))).toMatch(/^T1:/)
+describe('写完的图的缓存（CA）', () => {
+  it('MB-CA-1 卸下再挂同一段源码：第一次提交就是图，不再渲', () => {
+    const code = 'graph TD\n  ca1a --> ca1b'
+    show(code)
+    const calls = render.mock.calls.length
+    expect(calls).toBeGreaterThan(0)
+    clear()
+    show(code)
+    expect(figureSvgOf()).not.toBeNull()
+    expect(render.mock.calls.length).toBe(calls)
   })
 })
 
 describe('图 / 源码切换（SV）', () => {
-  it('SV-1 切到源码：只剩源码、没有放大按钮、按钮写「图」；切回来不再渲', async () => {
-    const code = 'graph TD\n  sv1a --> sv1b'
+  it('MB-SV-1 切到源码：只剩源码、没有放大按钮、按钮写「Diagram」；切回来不再渲', () => {
+    const code = tdChain('sv1n', 20) // 高图：有放大按钮，看得出切到源码时它没了
     show(code)
-    await advance(0)
-    await resolveRender(code, 400, 960, 'sv1')
     expect(expandOf()).not.toBeNull()
+    const calls = render.mock.calls.length
 
     click(toggleOf())
-    expect(container.querySelector('pre')?.textContent).toBe(code)
     expect(figureOf()).toBeNull()
+    expect(container.querySelector('pre')?.textContent).toBe(code)
     expect(expandOf()).toBeNull()
     expect(toggleOf().textContent).toBe('Diagram')
 
     click(toggleOf())
-    expect(tagOf()).toBe('sv1')
-    await advance(0)
-    expect(mm.render).toHaveBeenCalledTimes(1)
+    expect(figureSvgOf()).not.toBeNull()
+    expect(container.querySelector('pre')).toBeNull()
+    expect(toggleOf().textContent).toBe('Source')
+    expect(render.mock.calls.length).toBe(calls)
   })
 
-  it('SV-2 视图状态按源码记住：同一段卸下再挂仍是源码；别的源码照旧缺省显示图', async () => {
+  it('MB-SV-2 视图状态按源码记住：同一段卸下再挂仍是源码；别的源码照旧缺省显示图', () => {
     const x = 'graph TD\n  sv2x1 --> sv2x2'
     const y = 'graph TD\n  sv2y1 --> sv2y2'
     show(x)
-    await advance(0)
-    await resolveRender(x, 400, 300, 'x')
     click(toggleOf())
+    expect(figureOf()).toBeNull()
     clear()
 
     show(x)
-    expect(container.querySelector('pre')?.textContent).toBe(x)
     expect(figureOf()).toBeNull()
-    expect(toggleOf().textContent).toBe('Diagram')
-
+    expect(container.querySelector('pre')?.textContent).toBe(x)
     clear()
+
     show(y)
-    await advance(0)
-    await resolveRender(y, 400, 300, 'y')
-    expect(tagOf()).toBe('y')
-    expect(container.querySelector('pre')).toBeNull()
+    expect(figureSvgOf()).not.toBeNull()
   })
 })
 
 describe('限高（LY）—— 布局规则见 mermaidFit.test.ts，这里只看组件把它落成了什么', () => {
-  it('LY-1 小图：fit、原宽、不限高、不给放大', async () => {
-    const code = 'graph TD\n  ly1a --> ly1b'
-    show(code)
-    await advance(0)
-    await resolveRender(code, 400, 300, 'ly1')
+  it('MB-LY-1 小图：fit、--mermaid-w = 图的原宽、不限高、不给放大', () => {
+    show('graph TD\n  ly1a --> ly1b')
     const fig = figureOf()!
-    expect(fig.dataset.mermaidFigure).toBe('fit')
-    expect(fig.style.getPropertyValue('--mermaid-w')).toBe('400px')
+    expect(fig.getAttribute('data-mermaid-figure')).toBe('fit')
+    const { w, h } = svgSize(figureSvgOf()!)
+    expect(h).toBeLessThanOrEqual(MERMAID_MAX_HEIGHT)
+    expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${w}px`)
     expect(fig.style.maxHeight).toBe('')
     expect(expandOf()).toBeNull()
   })
 
-  it('LY-2 高图（栏宽未知）：整张缩到限高、给放大，没有截断遮罩', async () => {
-    const code = 'graph TD\n  ly2a --> ly2b'
-    show(code)
-    await advance(0)
-    await resolveRender(code, 400, 960, 'ly2')
+  it('MB-LY-2 高图（栏宽未知）：整张缩到限高、给放大，没有截断遮罩', () => {
+    show(tdChain('ly2n', 20))
     const fig = figureOf()!
-    expect(fig.dataset.mermaidFigure).toBe('fit')
-    expect(fig.style.getPropertyValue('--mermaid-w')).toBe('200px')
+    const { w, h } = svgSize(figureSvgOf()!)
+    expect(h).toBeGreaterThan(MERMAID_MAX_HEIGHT)
+    expect(fig.getAttribute('data-mermaid-figure')).toBe('fit')
+    expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${(MERMAID_MAX_HEIGHT * w) / h}px`)
     expect(expandOf()).not.toBeNull()
     expect(fig.className).not.toContain('mask-image')
-  })
-
-  it('LY-3 产物没有 viewBox：原样放（natural），不设宽度、不给放大', async () => {
-    const code = 'graph TD\n  ly3a --> ly3b'
-    show(code)
-    await advance(0)
-    await resolveRaw(code, '<svg data-tag="ly3"><rect/></svg>')
-    const fig = figureOf()!
-    expect(fig.dataset.mermaidFigure).toBe('natural')
-    expect(fig.style.getPropertyValue('--mermaid-w')).toBe('')
-    expect(expandOf()).toBeNull()
-  })
-
-  it('LY-4 量到栏宽 600：长竖图按栏宽截断（限高框 + 底部渐隐）；栏宽 599 就只能整张缩', async () => {
-    let reported = 600
-    class FakeResizeObserver {
-      private readonly callback: (entries: Array<{ contentRect: { width: number } }>) => void
-      constructor(callback: (entries: Array<{ contentRect: { width: number } }>) => void) {
-        this.callback = callback
-      }
-      observe(): void {
-        this.callback([{ contentRect: { width: reported } }])
-      }
-      disconnect(): void {
-        // 假的观察器不持有任何东西，没有可断开的
-      }
-    }
-    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = FakeResizeObserver
-
-    const code = 'graph TD\n  ly4a --> ly4b'
-    show(code)
-    await advance(0)
-    await resolveRender(code, 1000, 2000, 'ly4')
-    let fig = figureOf()!
-    expect(fig.dataset.mermaidFigure).toBe('clip')
-    expect(fig.style.getPropertyValue('--mermaid-w')).toBe('600px')
-    // 框高 = 图的可见高度 480 + 上下内边距（p-3）
-    expect(fig.style.maxHeight).toBe('calc(480px + 1.5rem)')
-    expect(fig.className).toContain('mask-image')
-    expect(expandOf()).not.toBeNull()
-
-    clear()
-    reported = 599
-    show(code) // 缓存命中，图立刻挂上，栏宽按 599 报
-    fig = figureOf()!
-    expect(fig.dataset.mermaidFigure).toBe('fit')
-    expect(fig.style.getPropertyValue('--mermaid-w')).toBe('240px')
     expect(fig.style.maxHeight).toBe('')
-    expect(mm.render).toHaveBeenCalledTimes(1)
+  })
+
+  it('MB-LY-4 量到栏宽 600：模式 / 宽度 / 放大与 mermaidLayout(尺寸, 600 − 24) 一致；截断时限高框 + 底部渐隐', () => {
+    installResizeObserver()
+    show(tdChain('ly4n', 20))
+    resizeCards(600)
+    const fig = figureOf()!
+    const { w, h } = svgSize(figureSvgOf()!)
+    const expected = mermaidLayout({ width: w, height: h }, 600 - 24)
+    expect(fig.getAttribute('data-mermaid-figure')).toBe(expected.mode)
+    expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${expected.width}px`)
+    expect(expandOf() !== null).toBe(expected.expandable)
+    // 一长串竖向链：整张缩读不动，按栏宽截断
+    expect(expected.mode).toBe('clip')
+    expect(fig.style.maxHeight).toBe(`calc(${MERMAID_MAX_HEIGHT}px + 1.5rem)`)
+    expect(fig.className).toContain('mask-image')
+  })
+})
+
+describe('按栏宽重排（FW）—— 规则见 mermaidFence 的 fitWidth', () => {
+  it('MB-FW-1 宽图放不下这一栏：按栏宽（卡片宽 − 24）再渲一次，显示的是窄的那张；栏够宽就从不带 maxWidth', () => {
+    installResizeObserver()
+    show(lrChain('fw1'))
+    const natural = svgSize(figureSvgOf()!).w
+    const W = 300
+    expect(W - 24).toBeLessThan(natural)
+    resizeCards(W)
+    expect(narrowCalls().some((c) => c[1]?.maxWidth === W - 24)).toBe(true)
+    expect(svgSize(figureSvgOf()!).w).toBeLessThanOrEqual(W - 24)
+    clear()
+
+    render.mockClear()
+    show(lrChain('fw1w'))
+    resizeCards(2000)
+    expect(render.mock.calls.length).toBeGreaterThan(0)
+    expect(narrowCalls()).toHaveLength(0)
+  })
+
+  it('MB-FW-2 栏先窄后宽：先是窄的那张，再回到自然尺寸 —— 自然尺寸那张命中缓存，不再渲', () => {
+    installResizeObserver()
+    const code = lrChain('fw2')
+    show(code)
+    const natural = svgSize(figureSvgOf()!).w
+    resizeCards(300)
+    expect(svgSize(figureSvgOf()!).w).toBeLessThanOrEqual(276)
+
+    const plainCalls = (): number =>
+      render.mock.calls.filter((c) => c[1]?.maxWidth === undefined).length
+    const before = plainCalls()
+    resizeCards(2000)
+    expect(svgSize(figureSvgOf()!).w).toBe(natural)
+    expect(plainCalls()).toBe(before)
   })
 })
 
 describe('放大查看（EX）', () => {
-  /** 一张会给「放大查看」的高图（400×960），出图后返回 */
-  const tallFigure = async (code: string, tag: string): Promise<void> => {
-    show(code)
-    await advance(0)
-    await resolveRender(code, 400, 960, tag)
+  /** 一张会给「放大查看」的高图，出图后返回它的原宽 */
+  const tallFigure = (prefix: string): number => {
+    show(tdChain(prefix, 20))
     expect(expandOf()).not.toBeNull()
+    return svgSize(figureSvgOf()!).w
   }
 
-  it('EX-1 弹窗挂在 body 上（卡片之外），里面是同一张图，按原宽摆', async () => {
-    await tallFigure('graph TD\n  ex1a --> ex1b', 'ex1')
+  it('MB-EX-1 弹窗挂在 body 上（卡片之外），里面是同一张图，按原宽摆', () => {
+    const w = tallFigure('ex1n')
+    const markup = figureOf()!.innerHTML
     click(expandOf()!)
     const panel = dialogPanel()
     expect(panel).not.toBeNull()
     expect(document.body.contains(panel)).toBe(true)
     expect(container.contains(panel)).toBe(false)
-    const svg = panel!.querySelector('svg[data-tag]')
-    expect(svg?.getAttribute('data-tag')).toBe('ex1')
+    const svg = panel!.querySelector('svg.pele')!
+    expect(svg).not.toBeNull()
+    expect((svg.parentElement as HTMLElement).innerHTML).toBe(markup)
     // 原宽 + 左右内边距 + 竖滚动条的位置
-    expect(panel!.style.width).toBe('456px')
-    expect((svg!.parentElement as HTMLElement).style.width).toBe('400px')
+    expect(panel!.style.width).toBe(`${w + 56}px`)
+    expect((svg.parentElement as HTMLElement).style.width).toBe(`${w}px`)
   })
 
-  it('EX-2 Esc：立刻进入关闭动效，120ms 后卸下；放大按钮还在，能再打开', async () => {
-    await tallFigure('graph TD\n  ex2a --> ex2b', 'ex2')
+  it('MB-EX-2 Esc：立刻进入关闭动效，120ms 后卸下；放大按钮还在，能再打开', async () => {
+    tallFigure('ex2n')
+    vi.useFakeTimers()
     click(expandOf()!)
     const overlay = dialogPanel()!.parentElement!
     act(() => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
     expect(overlay.classList.contains('dialog-closing')).toBe(true)
-    await advance(119)
+    act(() => {
+      vi.advanceTimersByTime(119)
+    })
     expect(dialogPanel()).not.toBeNull()
-    await advance(1)
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
     expect(dialogPanel()).toBeNull()
 
     expect(expandOf()).not.toBeNull()
@@ -853,25 +638,33 @@ describe('放大查看（EX）', () => {
     expect(dialogPanel()!.parentElement!.classList.contains('dialog-closing')).toBe(false)
   })
 
-  it('EX-3 点弹窗里面不关；点外面的遮罩 120ms 后关', async () => {
-    await tallFigure('graph TD\n  ex3a --> ex3b', 'ex3')
+  it('MB-EX-3 点弹窗里面不关；点外面的遮罩 120ms 后关', () => {
+    tallFigure('ex3n')
+    vi.useFakeTimers()
     click(expandOf()!)
     const panel = dialogPanel()!
     click(panel)
-    await advance(120)
+    act(() => {
+      vi.advanceTimersByTime(120)
+    })
     expect(dialogPanel()).not.toBeNull()
     expect(panel.parentElement!.classList.contains('dialog-closing')).toBe(false)
 
     click(panel.parentElement!)
-    await advance(120)
+    act(() => {
+      vi.advanceTimersByTime(120)
+    })
     expect(dialogPanel()).toBeNull()
   })
 
-  it('EX-4 关闭按钮：120ms 后关', async () => {
-    await tallFigure('graph TD\n  ex4a --> ex4b', 'ex4')
+  it('MB-EX-4 关闭按钮：120ms 后关', () => {
+    tallFigure('ex4n')
+    vi.useFakeTimers()
     click(expandOf()!)
     click(dialogPanel()!.querySelector('button[aria-label="Close"]')!)
-    await advance(120)
+    act(() => {
+      vi.advanceTimersByTime(120)
+    })
     expect(dialogPanel()).toBeNull()
   })
 })
@@ -900,64 +693,65 @@ describe('CodeBlock 的 mermaid 分发（CB）', () => {
     ]
   })
   const showCodeBlock = (text: string): void => {
-    const node = hast(text)
     act(() => {
       root.render(
         createElement(
           CodeBlock,
-          { node },
+          { node: hast(text) },
           createElement('code', { className: 'language-mermaid' }, text)
         )
       )
     })
   }
 
-  it('CB-1 mermaid 围栏交给 MermaidBlock，源码去掉末尾那一个换行；空围栏落回普通代码块', async () => {
-    showCodeBlock('graph TD\nA-->B\n')
-    await advance(0)
-    expect(renderedCodes()).toEqual(['graph TD\nA-->B'])
-    await resolveRender('graph TD\nA-->B', 400, 300, 'cb1')
-    expect(tagOf()).toBe('cb1')
+  it('MB-CB-1 mermaid 围栏交给 MermaidBlock，源码去掉末尾那一个换行；空围栏落回普通代码块', () => {
+    showCodeBlock('graph TD\ncb1A-->cb1B\n')
+    expect(figureSvgOf()).not.toBeNull()
+    click(toggleOf())
+    expect(container.querySelector('pre')?.textContent).toBe('graph TD\ncb1A-->cb1B')
 
     clear()
     showCodeBlock('')
-    await advance(0)
     expect(container.querySelector('pre')).not.toBeNull()
+    expect(container.querySelector('[data-figure-surface]')).toBeNull()
     expect(pendingOf()).toBeNull()
     expect(figureOf()).toBeNull()
-    expect(mm.render).toHaveBeenCalledTimes(1)
+  })
+
+  it('MB-CB-2 真的上下文（流式标志 + 源文本）包着 MarkdownText：开着的围栏写到一半不出错；闭合且写完才出错误卡', () => {
+    const body = '```mermaid\ngraph TD\n  cb2a-->cb2b\n  cb2b -->'
+    const showMd = (md: string, streaming: boolean): void => {
+      act(() => {
+        root.render(
+          createElement(
+            MarkdownStreamingContext.Provider,
+            { value: streaming },
+            createElement(
+              MarkdownSourceContext.Provider,
+              { value: streaming ? md : null },
+              createElement(MarkdownText, { text: md })
+            )
+          )
+        )
+      })
+    }
+
+    const unclosed = `before cb2\n\n${body}`
+    showMd(unclosed, true)
+    expect(errorOf()).toBeNull()
+    expect(nodeIds()).toEqual(expect.arrayContaining(['cb2a', 'cb2b']))
+
+    const closed = `${unclosed}\n\`\`\``
+    showMd(closed, true)
+    expect(errorOf()).toBeNull()
+
+    showMd(closed, false)
+    expect(errorOf()).not.toBeNull()
+    expect(errorOf()!.querySelector('pre')?.textContent).toBe('graph TD\n  cb2a-->cb2b\n  cb2b -->')
   })
 })
 
 describe('导出（EXP）—— 面板本身见 figure/__tests__/figureExportPanel.dom.test.tsx', () => {
-  /** 宿主外观：浅 / 深两套主题 id 是可辨认的桩值 */
-  const host: ChatHostValue = {
-    appearance: {
-      theme: 'light',
-      lightTheme: 'L1',
-      darkTheme: 'D1',
-      fontSize: 14,
-      focusMode: false
-    },
-    models: {
-      activeProvider: '',
-      activeModel: '',
-      setActiveProvider: () => {},
-      setActiveModel: () => {}
-    }
-  }
-  const HostProvider = ChatHostContext.Provider as unknown as (props: {
-    value: ChatHostValue
-    children?: ReactNode
-  }) => React.JSX.Element
-  const showWithHost = (code: string, streaming?: boolean): void => {
-    act(() => {
-      root.render(createElement(HostProvider, { value: host }, tree([code], streaming)))
-    })
-  }
-
-  const exportBtn = (scope: Element = container): HTMLButtonElement | null =>
-    scope.querySelector<HTMLButtonElement>('[data-figure-export]')
   const exportPanel = (): HTMLElement | null =>
     document.body.querySelector<HTMLElement>('[data-figure-export-panel]')
   const panelPreview = (): string | null =>
@@ -965,139 +759,99 @@ describe('导出（EXP）—— 面板本身见 figure/__tests__/figureExportPan
     null
   const panelFileName = (): string =>
     exportPanel()?.querySelector('[data-figure-filename]')?.textContent ?? ''
-  const panelSvg = (): string => {
-    const src = exportPanel()?.querySelector('img')?.getAttribute('src') ?? ''
-    return decodeURIComponent(src.replace(/^data:image\/svg\+xml;charset=utf-8,/, ''))
+  const flush = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
   }
   /** 点开导出面板并让「当前主题」那一次建图落定 */
   const openExport = async (): Promise<void> => {
     const btn = exportBtn()
     if (!btn) throw new Error('没有导出按钮')
     click(btn)
-    await advance(0)
+    await flush()
     expect(exportPanel()).not.toBeNull()
   }
-  const chooseOption = async (key: string): Promise<void> => {
-    const opt = exportPanel()?.querySelector(`[data-figure-option="${key}"]`)
-    if (!opt) throw new Error(`没有选项 ${key}`)
-    click(opt)
-    await advance(0)
-  }
 
-  it('EXP-1 出图了才有导出按钮：渲染中没有；写完还解析不了（错误卡）也没有', async () => {
-    const ok = 'graph TD\n  exp1a --> exp1b'
-    show(ok)
-    await advance(0)
-    expect(pendingOf()).not.toBeNull()
-    expect(exportBtn()).toBeNull()
-    await resolveRender(ok, 400, 300, 'exp1')
+  it('MB-EXP-1 写完、画出来了才有导出按钮（文字 Export）；流式中的帧没有；错误卡也没有', () => {
+    show('graph TD\n  exp1a --> exp1b')
     expect(exportBtn()).not.toBeNull()
     expect(exportBtn()!.textContent).toBe('Export')
-
     clear()
-    const bad = 'graph TD\n  exp1c -->'
-    show(bad)
-    await advance(0)
-    await rejectRenders(bad)
+
+    showFrame('graph TD\n  exp1c --> exp1d\n  exp1d --> exp1e\n  x', {
+      closed: false,
+      streaming: true
+    })
+    expect(figureSvgOf()).not.toBeNull()
+    expect(exportBtn()).toBeNull()
+    clear()
+
+    show('graph TD\n  exp1f -->')
     expect(errorOf()).not.toBeNull()
     expect(exportBtn()).toBeNull()
   })
 
-  it('EXP-2 「当前主题」：命中屏幕上那份缓存，不再渲；预览就绪；文件名缺省 mermaid.png', async () => {
-    const code = 'graph TD\n  exp2a --> exp2b'
-    show(code)
-    await advance(0)
-    await resolveRender(code, 400, 300, 'exp2')
+  it('MB-EXP-2 交给面板的是屏幕上那份标记：底色层 card，字体从放图那一格抄', async () => {
+    show('graph TD\n  exp2a --> exp2b')
     await openExport()
-    expect(mm.render).toHaveBeenCalledTimes(1)
+    expect(authoredSpy).toHaveBeenCalledTimes(1)
+    const [markup, opts] = authoredSpy.mock.calls[0]
+    const fig = figureOf()!
+    expect(markup).toBe(fig.innerHTML)
+    expect(opts.surface).toBe('card')
+    expect(opts.inheritFrom?.()).toBe(fig)
+  })
+
+  it('MB-EXP-3 文件名：frontmatter 标题 → accTitle → 「mermaid」', async () => {
+    const cases: Array<[string, string]> = [
+      ['---\ntitle: Flow chart\n---\ngraph TD\n  exp3a --> exp3b', 'Flow chart.png'],
+      ['flowchart TD\n  accTitle: My Flow\n  exp3c --> exp3d', 'My Flow.png'],
+      ['graph TD\n  exp3e --> exp3f', 'mermaid.png']
+    ]
+    for (const [code, name] of cases) {
+      show(code)
+      await openExport()
+      expect(panelFileName(), code).toBe(name)
+      click(exportBtn()!) // 收起
+      await flush()
+      clear()
+    }
+  })
+
+  it('MB-EXP-4 在面板里选「浅色」：按那套主题烘焙同一份标记，不重渲；预览就绪', async () => {
+    show('graph TD\n  exp4a --> exp4b')
+    await openExport()
+    const calls = render.mock.calls.length
+    const opt = exportPanel()?.querySelector('[data-figure-option="scheme:light"]')
+    expect(opt, '没有「浅色」选项').not.toBeNull()
+    click(opt!)
+    await flush()
     expect(panelPreview()).toBe('ready')
-    expect(panelSvg()).toContain('data-tag="exp2"')
-    expect(panelFileName()).toBe('mermaid.png')
+    expect(render.mock.calls.length).toBe(calls)
   })
+})
 
-  it('EXP-2 变体：源码里写了 title → 文件名取标题', async () => {
-    const code = '---\ntitle: Release flow\n---\ngraph TD\n  exp2c --> exp2d'
+describe('图类型分包加载失败（LD）', () => {
+  it('MB-LD-1 加载失败不卡在「渲染中」：写完的出错误卡（not supported）；流式中开着的围栏仍是「正在生成」占位', async () => {
+    const code =
+      'gantt\n  title ld1\n  dateFormat YYYY-MM-DD\n  section S\n  t1 :a1, 2024-01-01, 3d'
+    loadSpy.mockRejectedValueOnce(new Error('chunk failed'))
     show(code)
-    await advance(0)
-    await resolveRender(code, 400, 300, 'exp2t')
-    await openExport()
-    expect(panelFileName()).toBe('Release flow.png')
-  })
+    expect(pendingOf()).not.toBeNull()
+    await settleLoads()
+    expect(errorOf()).not.toBeNull()
+    expect(errorOf()!.textContent).toContain('not supported')
+    expect(pendingOf()).toBeNull()
+    clear()
 
-  it('EXP-3 「浅色」：按宿主设的浅色主题重渲一次 —— token 在挂着那套主题的离屏容器里解析；根上的主题不动；再开命中缓存', async () => {
-    const code = 'graph TD\n  exp3a --> exp3b'
-    showWithHost(code)
-    await advance(0)
-    await resolveRender(code, 400, 300, 'exp3-T1')
-    await openExport()
-    expect(mm.render).toHaveBeenCalledTimes(1)
-
-    await chooseOption('scheme:light')
-    expect(mm.render).toHaveBeenCalledTimes(2)
-    // 紧挨着这次 render 的那次 initialize：token 全是在 L1 那一层解析的
-    const vars = mm.state.inits.at(-1)?.themeVariables ?? {}
-    const tokenValues = Object.values(vars).filter(
-      (v): v is string => typeof v === 'string' && v.includes(':var(')
+    loadSpy.mockRejectedValueOnce(new Error('chunk failed again'))
+    const streamingCode = `gantt\n  title ld1s\n  dateFormat YYYY-MM-DD\n  section S\n  t1 :a1, 2024-01-01, 3d\n  t2`
+    showFrame(streamingCode, { closed: false, streaming: true })
+    await settleLoads()
+    expect(pendingOf()?.textContent).toBe(
+      i18n.t('message.diagramGenerating', { lines: streamingCode.split('\n').length })
     )
-    expect(tokenValues.length).toBeGreaterThan(5)
-    expect(
-      tokenValues.every((v) => v.startsWith('L1:')),
-      JSON.stringify(vars)
-    ).toBe(true)
-    expect(document.documentElement.getAttribute('data-theme')).toBe('T1')
-    // 离屏容器用完即摘
-    expect(document.querySelector('div[aria-hidden="true"][data-theme="L1"]')).toBeNull()
-
-    expect(panelPreview()).toBe('building')
-    await resolveRender(code, 400, 300, 'exp3-L1')
-    expect(panelPreview()).toBe('ready')
-    expect(panelSvg()).toContain('data-tag="exp3-L1"')
-    // 卡片上的图没被换掉
-    expect(tagOf()).toBe('exp3-T1')
-
-    // 收起、再开（记住了「浅色」）：命中缓存，不再渲
-    click(exportBtn()!)
-    await advance(0)
-    expect(exportPanel()).toBeNull()
-    await openExport()
-    expect(panelPreview()).toBe('ready')
-    expect(mm.render).toHaveBeenCalledTimes(2)
-  })
-
-  it('EXP-4 按所选主题渲失败：面板预览出错，卡片上的图不受影响', async () => {
-    const code = 'graph TD\n  exp4a --> exp4b'
-    showWithHost(code)
-    await advance(0)
-    await resolveRender(code, 400, 300, 'exp4')
-    await openExport()
-    await chooseOption('scheme:dark')
-    await rejectRenders(code)
-    expect(panelPreview()).toBe('error')
-    expect(exportPanel()?.textContent).toContain("Couldn't export:")
-    expect(tagOf()).toBe('exp4')
     expect(errorOf()).toBeNull()
-  })
-
-  it('EXP-5 流式中：留着的旧图不给导出；写完、这一版源码渲出来之后才有按钮', async () => {
-    const v1 = 'graph LR\n  exp5a --> exp5b'
-    const v2 = `${v1}\n  exp5b --> exp5c`
-    show(v1, true)
-    await advance(800)
-    await resolveRender(v1, 400, 300, 'A')
-    expect(tagOf()).toBe('A')
-    // 这一版已经渲出来了，但消息还在流式：不给
-    expect(exportBtn()).toBeNull()
-
-    show(v2, true)
-    expect(tagOf()).toBe('A')
-    expect(exportBtn()).toBeNull()
-
-    show(v2, false)
-    expect(exportBtn()).toBeNull()
-    await advance(0)
-    expect(exportBtn()).toBeNull() // v2 还在渲，屏幕上是 v1 的旧图
-    await resolveRender(v2, 400, 300, 'B')
-    expect(tagOf()).toBe('B')
-    expect(exportBtn()).not.toBeNull()
   })
 })

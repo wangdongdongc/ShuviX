@@ -13,8 +13,7 @@ export { inlinePreview } from './inline-preview';
 export type { InlinePreviewConfig } from './inline-preview';
 export { imageBlocks, refreshImageBlocks } from './image-blocks';
 export type { ImageBlocksConfig } from './image-blocks';
-export { mermaidBlocks, renderMermaid } from './mermaid-blocks';
-export type { MermaidResult, MermaidTheme } from './mermaid-blocks';
+export { mermaidBlocks } from './mermaid-blocks';
 export { svgBlocks } from './svg-blocks';
 export type {
   FigureExportConfig,

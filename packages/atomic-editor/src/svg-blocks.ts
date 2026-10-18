@@ -13,26 +13,28 @@ import { attachFigureExport, type FigureExportConfig } from './figure-export';
 // carrier is the point: an agent that learned to draw a figure draws it the
 // same way whether the figure lands in a reply or in a note.
 //
-// Three things are deliberately NOT like the mermaid widget next door:
+// Since pele replaced mermaid.js the mermaid widget next door works the same
+// way — synchronous, no white card, the authored sanitizer tier — so what is
+// left to say is what *this* one does on its own:
 //
-//  1. **Rendering is synchronous.** Sanitizing is a pure function over the
-//     source, so there is no loading state and no render queue. There *is* a
-//     memo, for a different reason than mermaid's: the answer is needed twice
-//     per rebuild — once to decide whether to decorate at all, once to paint —
-//     and `buildBlocks` asks on every selection change. Keys are fence sources
-//     that have actually been rendered, and a fence being typed into is not
-//     decorated at all (the cursor is inside it), so this does not accumulate
-//     a key per keystroke.
-//  2. **No white card.** Mermaid renders its own light-themed product, so it
-//     needs a light surface under it; an authored figure takes every color
-//     from --viz-* / --theme-* tokens (see themes.css and the visual-guide
-//     prompt fragment) and belongs directly on the editor surface. A white
-//     card would turn a dark-theme figure into pale ink in a white box.
-//  3. **`sanitizeAuthoredSvg`, not the rendered tier.** The author controls
-//     every tag here rather than writing mermaid source, so <style>,
-//     <foreignObject> and anything that would fetch are all refused — see the
-//     header of svgSanitize.ts for why each one.
-//
+//  1. **Rendering is sanitizing.** It is a pure function over the source,
+//     so there is no loading state and no render queue. There *is* a
+//     memo: the answer is needed twice per rebuild — once to decide whether
+//     to decorate at all, once to paint — and `buildBlocks` asks on every
+//     selection change. Keys are fence sources that have actually been
+//     rendered, and a fence being typed into is not decorated at all (the
+//     cursor is inside it), so this does not accumulate a key per keystroke.
+//  2. **No white card.** An authored figure takes every color from
+//     --viz-* / --theme-* tokens (see themes.css and the visual-guide prompt
+//     fragment) and belongs directly on the editor surface. A white card
+//     would turn a dark-theme figure into pale ink in a white box.
+//  3. **`sanitizeAuthoredSvg`.** The author controls every tag here, so
+//     <style>, <foreignObject> and anything that would fetch are all
+//     refused — see the header of svgSanitize.ts for why each one.
+//  4. **A truncated source still draws.** A file cut off on disk shows the
+//     part that is there (authoredSvgFrame); a mermaid fence is either a
+//     whole diagram or an error card.
+
 // 来源比聊天那边更宽：聊天里那段 SVG 一定是模型刚写的，而笔记本打开的可能是任何一个 md
 // —— 从网上拷进知识库的笔记、仓库里的某个文件。净化档位（authored）恰好就是为这种情况
 // 写的那一档，而且失败关闭，所以来源变宽不改变结论；但值得写下来，别让下一个人以为这里

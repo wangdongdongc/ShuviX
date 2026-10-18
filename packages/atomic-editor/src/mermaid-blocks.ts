@@ -1,6 +1,17 @@
 import { EditorView, WidgetType } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
-import { sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize';
+import {
+  detectType,
+  load,
+  registered,
+  render as peleRender,
+  type DiagramType,
+} from 'pele/lazy';
+import {
+  renderMermaidFigure,
+  type MermaidEngine,
+  type MermaidRenderResult,
+} from '@shuvix/chat-protocol/utils/mermaidFence';
 import { fencedPreviewField, revealOnClick } from './fenced-preview';
 import { attachFigureExport, type FigureExportConfig } from './figure-export';
 
@@ -9,93 +20,67 @@ import { attachFigureExport, type FigureExportConfig } from './figure-export';
 // Obsidian-style live preview for ```mermaid fenced code. The reveal
 // machinery (cursor in → source, cursor out → diagram) lives in
 // `fenced-preview.ts` and is shared with ```svg; this file is mermaid's
-// half: the async render, its cache, and the widget.
-
-// ---------------------------------------------------------------------
-// Async mermaid rendering
+// half: the render, its cache, and the widget.
 //
-// `mermaid` is heavy, so it's loaded lazily on first diagram and the
-// SVG is cached by source. The widget owns its async lifecycle: it
-// paints a placeholder, renders, then mutates its own DOM in place —
-// no decoration rebuild needed for completion (and `eq` keeps the DOM
-// across cursor moves, so a cached diagram never re-renders).
+// The renderer is pele (Obsidian's own Mermaid → SVG renderer, which
+// replaced mermaid.js here and in chat on 2026-10-17). What that changed:
+//
+//  1. **Synchronous.** Rendering is a sub-millisecond pure call, so a
+//     diagram paints in the same frame as the widget — no render queue.
+//     The one async step left is loading a diagram type the first time it
+//     is used (`pele/lazy` ships one chunk per type).
+//  2. **No white card.** pele colors everything with `var(--pele-*)`, which
+//     ShuviX's themes.css maps onto the theme tokens (the `.pele` block), so
+//     a diagram sits on the editor surface and follows the theme exactly
+//     like an ```svg figure. mermaid.js's `default` theme was light-only,
+//     which is what the white card used to be for.
+//  3. **The authored sanitizer tier.** pele's output carries no <style>,
+//     <foreignObject> or url(), so it passes the strictest tier — the shared
+//     render-and-sanitize step lives in chat-protocol's `mermaidFence.ts`,
+//     the same one the chat renderer calls.
+//
+// No streaming here: the widget only exists while the cursor is outside the
+// fence, so the source it sees is final — a broken fence is an error card.
 
-export type MermaidResult = { svg?: string; error?: string };
-export type MermaidTheme = 'default' | 'dark';
-
-const mermaidCache = new Map<string, MermaidResult>();
-const mermaidPending = new Map<string, Promise<MermaidResult>>();
-let mermaidModule: Promise<typeof import('mermaid')> | null = null;
-let mermaidIdCounter = 0;
-/** 渲染串行链 —— initialize 是全局副作用，不同主题的并发渲染必须排队防串味 */
-let renderChain: Promise<unknown> = Promise.resolve();
-
-/** 缓存键：主题参与分键（同一份源码亮/暗两份 SVG 各自缓存） */
-const cacheKey = (theme: MermaidTheme, code: string): string => `${theme}\u0000${code}`;
-
-function loadMermaid(): Promise<typeof import('mermaid')> {
-  if (!mermaidModule) {
-    mermaidModule = import('mermaid');
-  }
-  return mermaidModule;
-}
+const engine: MermaidEngine = { render: peleRender };
 
 /**
- * 渲染 mermaid 源码为 SVG（懒加载模块 + 按 主题+源码 缓存）。
- * 编辑器内嵌 widget 固定 'default'（白底卡片）；对话里的 mermaid 块按宿主明暗传入主题。
+ * Results by font + source. Widgets compare by source (`eq`), so a cursor
+ * move keeps the DOM; this cache is for a fence that scrolls out of the
+ * viewport and back, or the same diagram in two notes.
  */
-export function renderMermaid(
-  code: string,
-  opts: { theme?: MermaidTheme } = {},
-): Promise<MermaidResult> {
-  const theme = opts.theme ?? 'default';
-  const key = cacheKey(theme, code);
-  const cached = mermaidCache.get(key);
-  if (cached) return Promise.resolve(cached);
-  const inFlight = mermaidPending.get(key);
-  if (inFlight) return inFlight;
+const mermaidCache = new Map<string, MermaidRenderResult>();
+const MERMAID_CACHE_MAX = 64;
 
-  const promise = (renderChain = renderChain.then(
-    async (): Promise<MermaidResult> => {
-      const id = `atomic-mermaid-${mermaidIdCounter++}`;
-      try {
-        const m = await loadMermaid();
-        // 每次都 initialize，不记「上次初始化的是哪个主题」：mermaid 的配置是**整个页面共用**的，
-        // 对话里的 mermaid 块（chat-ui MermaidBlock）每渲一张也会按 `base` 主题重设一遍 —— 记下来的
-        // 主题因此会过期，笔记本的图就按对话的配色渲了出来。initialize 只是写一份配置，几乎不花钱。
-        m.default.initialize({
-          startOnLoad: false,
-          theme,
-          securityLevel: 'loose',
-          fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-        });
-        const { svg } = await m.default.render(id, code);
-        // 净化后再出厂：调用方（笔记本 widget / 对话 mermaid 块）都是 innerHTML 直接注入特权渲染进程，
-        // 而 mermaid 的 `click X href "javascript:..."` 指令会把 javascript: 锚点原样带进 SVG。
-        // 在这里做而不是在各注入点做 —— 缓存里存的就是净化后的结果，新增消费方不会漏。
-        const clean = sanitizeRenderedSvg(svg);
-        // 失败关闭：净化器解析不了就当渲染失败，让问题可见而不是静默出一张空图
-        const result: MermaidResult = clean
-          ? { svg: clean }
-          : { error: 'SVG sanitization failed' };
-        mermaidCache.set(key, result);
-        return result;
-      } catch (e) {
-        const result: MermaidResult = {
-          error: e instanceof Error ? e.message : String(e),
-        };
-        mermaidCache.set(key, result);
-        return result;
-      } finally {
-        mermaidPending.delete(key);
-        // mermaid leaves its measurement node behind on parse error.
-        document.getElementById(id)?.remove();
-        document.getElementById(`d${id}`)?.remove();
-      }
-    },
-  )) as Promise<MermaidResult>;
-  mermaidPending.set(key, promise);
-  return promise;
+function detectMermaidType(code: string): DiagramType | null {
+  try {
+    return detectType(code);
+  } catch {
+    return null;
+  }
+}
+
+/** Font of the editor's text — pele measures labels with it, so it must be the font that draws them. */
+function editorFont(view: EditorView): { family: string; size: number } {
+  const style = getComputedStyle(view.contentDOM);
+  const size = Math.round(parseFloat(style.fontSize));
+  return { family: style.fontFamily, size: Number.isFinite(size) && size > 0 ? size : 14 };
+}
+
+function renderMermaid(code: string, font: { family: string; size: number }): MermaidRenderResult {
+  const key = `${font.family}\u0000${font.size}\u0000${code}`;
+  const hit = mermaidCache.get(key);
+  if (hit) return hit;
+  const result = renderMermaidFigure(engine, code, {
+    closed: true,
+    fontFamily: font.family,
+    fontSize: font.size,
+  }) ?? { error: 'Mermaid render failed' };
+  mermaidCache.set(key, result);
+  if (mermaidCache.size > MERMAID_CACHE_MAX) {
+    mermaidCache.delete(mermaidCache.keys().next().value as string);
+  }
+  return result;
 }
 
 class MermaidWidget extends WidgetType {
@@ -122,28 +107,50 @@ class MermaidWidget extends WidgetType {
     diagram.className = 'cm-atomic-mermaid-diagram';
     wrap.appendChild(diagram);
 
-    const cached = mermaidCache.get(cacheKey('default', this.code));
-    if (cached?.svg) {
-      diagram.innerHTML = cached.svg;
-      attachFigureExport(this.exportConfig, 'mermaid', this.code, wrap, diagram);
-    } else if (cached?.error) {
-      paintError(diagram, this.code, cached.error);
+    const paint = (): void => {
+      diagram.classList.remove('cm-atomic-mermaid-loading');
+      const result = renderMermaid(this.code, editorFont(view));
+      if ('figure' in result) {
+        // 失败关闭：figure.svg 已过手写档净化（renderMermaidFigure 里），空串不会走到这里
+        diagram.innerHTML = result.figure.svg;
+        // 按钮等图出来再挂：失败的卡片没有可导出的东西
+        attachFigureExport(this.exportConfig, 'mermaid', this.code, wrap, diagram);
+      } else {
+        paintError(diagram, this.code, result.error);
+      }
+    };
+
+    const type = detectMermaidType(this.code);
+    if (type === null || registered(type)) {
+      if (view.contentDOM.classList.contains('cm-content')) {
+        paint();
+      } else {
+        // CM6 draws the first widgets inside the EditorView constructor,
+        // before the content DOM gets its `cm-content` class and theme —
+        // the font read then is the inherited one, not the editor body's,
+        // and pele would measure (and draw) the labels at the wrong size.
+        // The constructor finishes synchronously, so a microtask later the
+        // editor is styled.
+        queueMicrotask(() => {
+          paint();
+          if (wrap.isConnected) view.requestMeasure();
+        });
+      }
     } else {
+      // First diagram of this type in this run: fetch its chunk, then paint.
+      // A failed load paints too — the render then reports the type as
+      // unsupported instead of leaving a placeholder up forever.
       diagram.classList.add('cm-atomic-mermaid-loading');
       diagram.textContent = 'Rendering diagram…';
-      void renderMermaid(this.code).then((res) => {
-        diagram.classList.remove('cm-atomic-mermaid-loading');
-        if (res.svg) {
-          diagram.innerHTML = res.svg;
-          // 按钮等图出来再挂：渲染中 / 失败的卡片没有可导出的东西
-          attachFigureExport(this.exportConfig, 'mermaid', this.code, wrap, diagram);
-        } else {
-          paintError(diagram, this.code, res.error ?? 'Unknown error');
-        }
+      const done = (): void => {
+        paint();
         // The SVG changed the widget's height — ask CM6 to re-measure
-        // so the block heightmap and scroll stay correct.
-        view.requestMeasure();
-      });
+        // so the block heightmap and scroll stay correct. A widget that was
+        // already dropped (document switched, editor destroyed) has nothing
+        // left to measure.
+        if (wrap.isConnected) view.requestMeasure();
+      };
+      load(type).then(done, done);
     }
 
     revealOnClick(view, wrap);
@@ -174,7 +181,7 @@ function paintError(el: HTMLElement, code: string, message: string): void {
 export function mermaidBlocks(exportConfig?: FigureExportConfig): Extension {
   return fencedPreviewField({
     lang: 'mermaid',
-    // 渲染失败不在这里判：mermaid 是异步的，此刻还不知道结果，widget 自己会画错误卡
+    // 渲染失败不在这里判：widget 自己画错误卡（写完了还画不出来就是写坏了，源码要看得见）
     widget: (code) => new MermaidWidget(code, exportConfig),
   });
 }

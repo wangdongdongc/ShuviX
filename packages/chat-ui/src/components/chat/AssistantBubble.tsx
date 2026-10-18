@@ -168,7 +168,7 @@ export const AssistantBubble = memo(function AssistantBubble({
             <pre className="code-surface text-sm text-text-primary font-mono">{displayContent}</pre>
           ) : (
             <div className="markdown-body text-sm">
-              {/* 代码块自己看不出围栏写没写完（mermaid 要完整源码才解析），由这一层告诉它 */}
+              {/* 代码块自己看不出消息写没写完（mermaid 写完才出错误卡、才能导出），由这一层告诉它 */}
               <MarkdownStreamingContext.Provider value={!!isStreaming}>
                 {/* 交互图要确切知道自己的围栏闭合没有，靠节点位置切回这段源文本 */}
                 <MarkdownSourceContext.Provider value={isStreaming ? displayContent : null}>

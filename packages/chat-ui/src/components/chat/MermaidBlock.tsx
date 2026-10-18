@@ -1,211 +1,193 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { Code, FileText, Maximize2, X } from 'lucide-react'
-import mermaid from 'mermaid'
-import { sanitizeRenderedSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
+import { detectType, load, registered, render as peleRender, type DiagramType } from 'pele/lazy'
+import {
+  renderMermaidFigure,
+  type MermaidEngine,
+  type MermaidRenderResult
+} from '@shuvix/chat-protocol/utils/mermaidFence'
 import { useDialogClose } from '../../hooks/useDialogClose'
 import { useMarkdownStreaming } from './markdownStreaming'
-import { useThemeId } from './useThemeId'
 import { FigureExportButton } from '../figure/FigureExportPanel'
-import { standaloneSvg, withOffscreen, type FigureExportSource } from '../figure/figureExport'
+import { authoredFigureSource, figureLabelOf } from '../figure/figureExport'
 import { mermaidTitleOf } from '../figure/figureExportPure'
 import {
+  MERMAID_FONT_SIZE,
   MERMAID_MAX_HEIGHT,
   mermaidLayout,
-  mermaidNaturalSize,
-  mermaidThemeVariables,
   type MermaidSize
 } from './mermaidFit'
 
 /**
- * ```mermaid 代码块 → 图。
+ * ```mermaid 代码块 → 图，渲染器是 pele（见 chat-protocol 的 mermaidFence）。
  *
  * ShuviX 不再主动引导模型画 mermaid（结构图走手写 ```svg，见 visual-guide 提示片段与作图技能），
  * 但用户自己的 agent、或者用户要求时，它仍会出现 —— 这里只负责把它**显示好**：
  *
  * 1. **缺省显示图。** 从前缺省是源码：一张长流程图先以一大段代码摊在对话里，图要再点一下。
- * 2. **流式期间不渲染。** mermaid 要完整源码才能解析，写到一半的围栏解析失败不是错误；
- *    流式中只显示一行占位（已写多少行），源码停止变化一会儿（围栏多半已写完，模型在写后面的
- *    正文）或整条消息写完后再渲染。错误卡只在消息写完后出。
- * 3. **配色跟主题。** 从前是 mermaid 的 default 浅色主题铺在写死的白底上，深色主题下是一块白板。
- *    现在把主题 token 解析成颜色喂给它的 `base` 主题（见 mermaidFit），切主题（根上的 data-theme）
- *    就按新主题重渲染。
- * 4. **限高。** 内联只占一块不超过 MERMAID_MAX_HEIGHT 的地方：整张缩得进去且字还读得清就整张缩，
- *    读不清就按栏宽显示、截在限高处（底部渐隐）—— 规则见 mermaidLayout。显示的不是全貌时工具栏
- *    多一个「放大查看」，按原尺寸在弹窗里看（可滚动）。
+ * 2. **流式期间逐帧画。** pele 同步、亚毫秒级，于是与 ```svg 一样边写边画：围栏还开着时，丢掉
+ *    可能写到一半的最后一行、补上没闭合的块再画（帧判定见 mermaidFrameSources）；一帧都画不出
+ *    （才写了图类型那一行）时显示「正在生成」占位。错误卡只在消息写完后出。帧只在多写完一行时
+ *    重算 —— 渲染的输入是「到最后一个换行为止」的那一截。
+ * 3. **配色是 token。** pele 的产物把颜色写成 `var(--pele-*)`，themes.css 的 `.pele` 那段把它们接到
+ *    主题 token 上；卡片挂着 `data-figure-surface="card"`，图于是知道自己坐在卡片底上（标签衬底
+ *    与卡片同色、节点比卡片凸一级）。切主题不重渲。
+ * 4. **限高。** 内联只占一块不超过 MERMAID_MAX_HEIGHT 的地方：宽度先交给 pele 按栏宽重排，
+ *    仍然太高时整张缩得进去且字还读得清就整张缩，读不清就按栏宽显示、截在限高处（底部渐隐）——
+ *    规则见 mermaidLayout。显示的不是全貌时工具栏多一个「放大查看」，按原尺寸在弹窗里看（可滚动）。
  *
- * 渲染串行：mermaid.render 不可重入（它借用 document 上的临时节点），一页好几张图同时挂载时
- * 排队一张一张来。
+ * 图类型按需加载（pele/lazy：每种图一个分包），所以每种图第一次出现时有一小段「渲染中」。
  */
 
-/** 流式期间：源码这么久没变，就当围栏已写完、先渲染 —— 模型多半已经在写后面的正文 */
-const STREAM_SETTLE_MS = 800
-/**
- * 单张图的渲染上限。渲染是串行的，一张卡住的图会挡住这个窗口里后面所有的图 ——
- * 到点就按失败处理、让出队列（正常的图哪怕几十个节点也在一秒内渲完）
- */
-const RENDER_TIMEOUT_MS = 15_000
+const engine: MermaidEngine = { render: peleRender }
 
-/** 渲染结果缓存：主题 id + 源码 → 净化后的 SVG（同一主题下同一段源码恒得同一结果） */
-const mermaidSvgCache = new Map<string, string>()
 /** 视图状态：源码 → 是否在看源码（组件频繁重挂载时保持） */
 const mermaidViewState = new Map<string, boolean>()
-/** 正在渲染的：同一个 key 只渲一次（流式结束那一刻 effect 会以同一 key 再跑一遍） */
-const inflight = new Map<string, Promise<string>>()
-let mermaidIdCounter = 0
-let renderQueue: Promise<unknown> = Promise.resolve()
 
 /**
- * 某一层的主题 token 解析值 —— 拿一个探针元素读 computed color（light-dark() 也在这一步解析）。
- * `scope` 平时是 body（此刻界面上的主题）；导出按另一套主题重渲时是挂着那套主题的离屏容器。
+ * 写完的图的渲染结果：字体 + 源码 → 结果（含失败）。列表滚动时卡片反复挂载，每次重渲一遍要
+ * 一两毫秒（解析 + 净化）；流式中间帧不进来 —— 每一帧都是一截新源码。按插入顺序淘汰最旧的。
  */
-function themeVariablesIn(scope: HTMLElement): Record<string, string | boolean> {
-  const probe = document.createElement('span')
-  probe.style.display = 'none'
-  scope.appendChild(probe)
+const settledCache = new Map<string, MermaidRenderResult>()
+const SETTLED_CACHE_MAX = 64
+
+/** 卡片的左右内边距（p-3）：放图那一格比卡片窄这么多 */
+const FIGURE_PADDING_X = 24
+
+function settledFigure(code: string, fontFamily: string): MermaidRenderResult {
+  const key = `${fontFamily}\u0000${code}`
+  const hit = settledCache.get(key)
+  if (hit) return hit
+  const result = renderMermaidFigure(engine, code, {
+    closed: true,
+    fontFamily,
+    fontSize: MERMAID_FONT_SIZE
+  }) ?? { error: 'Mermaid render failed' }
+  settledCache.set(key, result)
+  if (settledCache.size > SETTLED_CACHE_MAX) {
+    settledCache.delete(settledCache.keys().next().value as string)
+  }
+  return result
+}
+
+function detectMermaidType(code: string): DiagramType | null {
   try {
-    const resolve = (token: string): string => {
-      probe.style.color = `var(${token})`
-      return getComputedStyle(probe).color
+    return detectType(code)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 这张图的图类型能不能同步渲染了：没认出类型（还没写到类型那一行，或者根本不是 mermaid）也算能 ——
+ * 渲染会给出「不支持的图」，那就是答案。加载失败同样放行，让渲染把失败报出来，而不是永远「渲染中」。
+ */
+function useMermaidTypeReady(type: DiagramType | null): boolean {
+  const [settledType, setSettledType] = useState<DiagramType | null>(null)
+  const ready = type === null || registered(type) || settledType === type
+  useEffect(() => {
+    if (ready || type === null) return
+    let alive = true
+    const done = (): void => {
+      if (alive) setSettledType(type)
     }
-    // color-scheme 是继承属性：读这一层的就是这一层实际生效的明暗
-    const dark = getComputedStyle(scope).colorScheme.includes('dark')
-    return mermaidThemeVariables(resolve, dark, getComputedStyle(scope).fontFamily)
-  } finally {
-    probe.remove()
-  }
-}
-
-/** 此刻界面主题下的 token 解析值 */
-const currentThemeVariables = (): Record<string, string | boolean> =>
-  themeVariablesIn(document.body)
-
-/**
- * 按某一套主题渲染（导出面板的「浅色 / 深色」用）。与屏幕上那张共用缓存与串行队列：
- * 键同样是「主题 id + 源码」，所以「当前主题」直接命中屏幕上那一份，不会再渲一遍。
- */
-export function renderMermaidForTheme(code: string, themeId: string): Promise<string> {
-  const key = `${themeId}\u0000${code}`
-  const cached = mermaidSvgCache.get(key)
-  if (cached) return Promise.resolve(cached)
-  const vars = withOffscreen(themeId, null, (box) => themeVariablesIn(box))
-  return renderMermaid(key, code, vars)
-}
-
-// ─── 渲染：串行、去重、净化后才入缓存 ─────────────────────────
-
-/**
- * `themeVariables` 由调用方在**请求时**取好传进来，不在排到队时再读：缓存键里的主题是请求那一刻的，
- * 排队期间切了主题的话，到点再读会把新主题的颜色存进旧主题的键下。
- */
-function renderMermaid(
-  key: string,
-  code: string,
-  themeVariables: Record<string, string | boolean>
-): Promise<string> {
-  const pending = inflight.get(key)
-  if (pending) return pending
-  const run = async (): Promise<string> => {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'base',
-      securityLevel: 'loose',
-      suppressErrorRendering: true,
-      themeVariables
-    })
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('Mermaid render timed out')), RENDER_TIMEOUT_MS)
-    })
-    const { svg } = await Promise.race([
-      mermaid.render(`mermaid_${mermaidIdCounter++}`, code),
-      timeout
-    ]).finally(() => clearTimeout(timer))
-    // 净化后再入缓存/注入 —— 图表源码来自智能体输出（可能受提示注入影响），而下方是
-    // dangerouslySetInnerHTML 直入特权渲染进程。mermaid 的 click href 指令会带出
-    // javascript: 锚点，本行是把它挡在 DOM 之外的地方。
-    const clean = sanitizeRenderedSvg(svg)
-    if (!clean) throw new Error('SVG sanitization failed') // 失败关闭
-    mermaidSvgCache.set(key, clean)
-    return clean
-  }
-  const job = renderQueue.then(run, run)
-  renderQueue = job.catch(() => undefined)
-  inflight.set(key, job)
-  void job.finally(() => inflight.delete(key)).catch(() => undefined)
-  return job
+    load(type).then(done, done)
+    return () => {
+      alive = false
+    }
+  }, [ready, type])
+  return ready
 }
 
 // ─── 组件 ─────────────────────────────────────────────
 
-export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
+export function MermaidBlock({
+  code,
+  closed
+}: {
+  code: string
+  /** 围栏闭合了没有（消息写完了也算）—— 见 CodeBlock 的 codeFenceIsClosed */
+  closed: boolean
+}): React.JSX.Element {
   const { t } = useTranslation()
   const streaming = useMarkdownStreaming()
-  const themeId = useThemeId()
-  const key = `${themeId}\u0000${code}`
-  const cached = mermaidSvgCache.get(key)
+  const typeReady = useMermaidTypeReady(detectMermaidType(code))
+  const settled = closed && !streaming
 
-  // 最近一次渲染的结果（带 key，判断是不是「这一版」的）+ 最近一张成功的图：源码还在长、
-  // 或刚切了主题时，新图出来之前先留着上一张，不闪回占位
-  const [result, setResult] = useState<{ key: string; error?: string } | null>(null)
-  const [lastGood, setLastGood] = useState<string | null>(null)
   const [showSource, setShowSourceState] = useState(mermaidViewState.get(code) ?? false)
   const [expanded, setExpanded] = useState(false)
-  const [boxWidth, setBoxWidth] = useState(0)
-  // 栏宽变了（窗口缩放、侧栏开合）才知道图是否被缩小 —— 只观察放图的那一格。
-  // 回调 ref：那一格挂上 / 卸下时自己接上 / 断开观察（React 19 的 ref 清理函数）
-  const boxRef = useCallback((el: HTMLDivElement | null) => {
+  const [cardWidth, setCardWidth] = useState(0)
+  const figureRef = useRef<HTMLDivElement>(null)
+  // 栏宽变了（窗口缩放、侧栏开合）才知道图要不要按窄栏重排、是否被缩小 —— 观察整张卡片（它一直在，
+  // 放图那一格在占位阶段还没有）。回调 ref：挂上 / 卸下时自己接上 / 断开观察（React 19 的 ref 清理函数）
+  const cardRef = useCallback((el: HTMLDivElement | null) => {
     if (!el || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver((entries) => setBoxWidth(entries[0].contentRect.width))
+    const observer = new ResizeObserver((entries) => setCardWidth(entries[0].contentRect.width))
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
+  const boxWidth = Math.max(0, cardWidth - FIGURE_PADDING_X)
 
   const setShowSource = (v: boolean): void => {
     mermaidViewState.set(code, v)
     setShowSourceState(v)
   }
 
-  useEffect(() => {
-    if (cached) return
-    let alive = true
-    const timer = setTimeout(
-      () => {
-        renderMermaid(key, code, currentThemeVariables()).then(
-          (svg) => {
-            if (!alive) return
-            setLastGood(svg)
-            setResult({ key })
-          },
-          (e: unknown) => {
-            if (alive) setResult({ key, error: e instanceof Error ? e.message : String(e) })
-          }
-        )
-      },
-      streaming ? STREAM_SETTLE_MS : 0
-    )
-    return () => {
-      alive = false
-      clearTimeout(timer)
+  // 帧只取决于「到最后一个换行为止」的那一截（最后一行可能写到一半，帧判定会丢掉它）
+  const frameKey = closed ? code : code.slice(0, code.lastIndexOf('\n') + 1)
+  const result = useMemo((): MermaidRenderResult | null => {
+    if (!typeReady) return null
+    const fontFamily = getComputedStyle(document.body).fontFamily
+    const opts = { fontFamily, fontSize: MERMAID_FONT_SIZE }
+    const draw = (fitWidth?: number): MermaidRenderResult | null => {
+      if (settled) {
+        return fitWidth
+          ? renderMermaidFigure(engine, frameKey, { ...opts, closed: true, fitWidth })
+          : settledFigure(frameKey, fontFamily)
+      }
+      const r = renderMermaidFigure(engine, frameKey, { ...opts, closed, fitWidth })
+      // 围栏已经闭合、消息却还在写，而这段源码画不出来：消息写完之前那还不算失败 ——
+      // 按开着的围栏取帧（末尾补一个换行：每一行都已写完），屏幕上留着能画出来的那一部分
+      if (r && 'error' in r) {
+        return renderMermaidFigure(engine, `${frameKey}\n`, { ...opts, closed: false, fitWidth })
+      }
+      return r
     }
-  }, [cached, code, key, streaming])
+    const natural = draw()
+    // 自然尺寸放不下这一栏：让 pele 按栏宽重排一次（换行、收间距，必要时横排改竖排）。
+    // 放得下就不传栏宽 —— 宽栏里的图与宽度无关，写完的那张才能按源码缓存
+    if (natural && 'figure' in natural && boxWidth > 0 && natural.figure.width > boxWidth) {
+      const narrow = draw(boxWidth)
+      if (narrow && 'figure' in narrow) return narrow
+    }
+    return natural
+  }, [typeReady, frameKey, closed, settled, boxWidth])
 
-  const svg = cached ?? lastGood
-  const error = !cached && result?.key === key ? result.error : undefined
-  const size: MermaidSize | null = svg ? mermaidNaturalSize(svg) : null
-  const layout = size ? mermaidLayout(size, boxWidth) : null
+  const svg = result && 'figure' in result ? result.figure.svg : null
+  // React 19 只要 dangerouslySetInnerHTML 的对象换了就重设 innerHTML（不比字符串）：每次渲染新建
+  // 一个对象，流式每来一片就换一次 <svg> 节点。按标记记住它，同一张图就是同一个节点
+  const figureHtml = useMemo(() => ({ __html: svg ?? '' }), [svg])
+  const error = result && 'error' in result ? result.error : null
+  const size: MermaidSize | null =
+    result && 'figure' in result
+      ? { width: result.figure.width, height: result.figure.height }
+      : null
+  const layout = size && size.width > 0 && size.height > 0 ? mermaidLayout(size, boxWidth) : null
 
-  // 消息写完了还解析不了才是真失败；流式期间的失败只是还没写完。真失败时不拿先前那张
-  // （流式中途按半截源码渲出来的）顶替 —— 那等于把错误藏在一张不完整的图后面
-  if (error && !streaming) {
+  // 消息写完了还画不出来才是真失败；流式期间画不出来只是还没写完（上面已经退回能画的那一帧）
+  if (error && settled) {
     return (
       <div
         data-mermaid-error
         className="rounded-lg border border-orange-500/30 bg-orange-500/5 p-3"
       >
         <div className="text-[10px] text-orange-400 mb-1">{t('message.mermaidFailed')}</div>
+        <div className="text-[11px] text-text-tertiary mb-1 whitespace-pre-wrap break-words">
+          {error}
+        </div>
         <pre className="text-[11px] text-text-secondary whitespace-pre-wrap break-words">
           {code}
         </pre>
@@ -224,6 +206,8 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
 
   return (
     <div
+      ref={cardRef}
+      data-figure-surface="card"
       className="my-2 rounded-lg overflow-hidden"
       style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
     >
@@ -232,9 +216,18 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
         style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
       >
         <span className="text-[10px] text-text-tertiary font-medium mr-auto">Mermaid</span>
-        {/* 只导出**这一版源码**渲出来的、且消息已写完的图：流式中途屏幕上留着的可能是半截源码
-            渲出的旧图，而导出会按此刻的（可能还没写完的）源码重渲 —— 与 ```svg「写完才导出」同一条 */}
-        {cached && !streaming && <FigureExportButton getSource={() => mermaidExportSource(code)} />}
+        {/* 只导出写完了的图：流式中途屏幕上的是按半截源码画出的一帧 —— 与 ```svg「写完才导出」同一条 */}
+        {svg && settled && (
+          <FigureExportButton
+            getSource={() =>
+              authoredFigureSource(svg, {
+                name: mermaidTitleOf(code) ?? figureLabelOf(svg) ?? 'mermaid',
+                surface: 'card',
+                inheritFrom: () => figureRef.current
+              })
+            }
+          />
+        )}
         {svg && layout?.expandable && !showSource && (
           <button
             onClick={() => setExpanded(true)}
@@ -260,7 +253,7 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
         </pre>
       ) : svg ? (
         <div
-          ref={boxRef}
+          ref={figureRef}
           data-mermaid-figure={layout?.mode ?? 'natural'}
           style={figureStyle}
           className={`flex justify-center overflow-hidden p-3 [&_svg]:h-auto ${
@@ -271,11 +264,13 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
               ? 'items-start [mask-image:linear-gradient(to_bottom,black_calc(100%_-_56px),transparent)]'
               : ''
           }`}
-          dangerouslySetInnerHTML={{ __html: svg }}
+          dangerouslySetInnerHTML={figureHtml}
         />
       ) : (
         <div data-mermaid-pending className="px-4 py-3 text-[11px] text-text-tertiary">
-          {streaming ? t('message.diagramGenerating', { lines }) : t('message.rendering')}
+          {streaming && !closed
+            ? t('message.diagramGenerating', { lines })
+            : t('message.rendering')}
         </div>
       )}
       {expanded && svg && (
@@ -283,21 +278,6 @@ export function MermaidBlock({ code }: { code: string }): React.JSX.Element {
       )}
     </div>
   )
-}
-
-/**
- * 导出用的图源：按所选主题渲（「当前主题」命中屏幕上那份缓存），底色取图卡那一层。
- * mermaid 的产物已是具体颜色，不烘焙（见 figureExport 头注释）。
- */
-function mermaidExportSource(code: string): FigureExportSource {
-  return {
-    name: mermaidTitleOf(code) ?? 'mermaid',
-    build: async ({ themeId, background }) =>
-      standaloneSvg(await renderMermaidForTheme(code, themeId), {
-        themeId,
-        background: background ? 'card' : null
-      })
-  }
 }
 
 /** 原尺寸查看：图按 viewBox 的原宽摆，大于窗口就在弹窗里滚动 */
@@ -312,6 +292,7 @@ function MermaidDialog({
 }): React.JSX.Element {
   const overlayRef = useRef<HTMLDivElement>(null)
   const { closing, handleClose } = useDialogClose(onClose)
+  const html = useMemo(() => ({ __html: svg }), [svg])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -349,7 +330,7 @@ function MermaidDialog({
           <div
             style={width ? { width } : undefined}
             className="[&_svg]:w-full [&_svg]:h-auto [&_svg]:max-w-none"
-            dangerouslySetInnerHTML={{ __html: svg }}
+            dangerouslySetInnerHTML={html}
           />
         </div>
       </div>

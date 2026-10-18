@@ -19,10 +19,11 @@
  *
  * 两个导出共享同一套白名单与同一次遍历，只在三点上不同 —— 因为来源的威胁模型不同：
  *
- * - `sanitizeRenderedSvg`：**渲染器的产物**（mermaid 把受限语法编译出的 SVG）。作者只能
- *   写 mermaid 源码，标记结构由 mermaid 决定，且它自己先过了一遍 DOMPurify。
- * - `sanitizeAuthoredSvg`：**模型手写的整段 SVG**（聊天里的 ```svg 围栏）。作者直接控制
- *   每一个标签和属性，于是三处在 mermaid 那档必须放行的东西在这档必须关掉：
+ * - `sanitizeRenderedSvg`：**渲染器的产物**（当初是 mermaid.js 把受限语法编译出的 SVG）。作者只能
+ *   写 mermaid 源码，标记结构由渲染器决定。**目前没有调用方**：2026-10-17 起 ```mermaid 由 pele
+ *   渲染，它的产物不带 <style> / <foreignObject> / url()，走的是下面那一档（见 mermaidFence.ts）。
+ * - `sanitizeAuthoredSvg`：**模型手写的整段 SVG**（聊天里的 ```svg 围栏），以及 pele 画出的
+ *   mermaid 图。作者直接控制每一个标签和属性，于是三处在 mermaid.js 那档必须放行的东西在这档必须关掉：
  *
  *   1. `<style>` —— 注进宿主 DOM 的 <style> 是**全局 CSS**，不是图的局部样式。mermaid 的
  *      样式选择器带自己的 id 前缀，手写的不会；一句 `* { display: none }` 就能把整个界面
@@ -184,12 +185,12 @@ export function sanitizeAuthoredSvg(svg: string): string {
  * 能把渲染进程卡死若干秒，抛出的 RangeError 还会从渲染里冒出去，而且失败结果不进缓存、
  * 于是每次重渲染再炸一次。一张静态图远用不到这个量级；超限是「这不是一张图」的信号。
  */
-const MAX_SVG_LENGTH = 256 * 1024
+export const SVG_MAX_LENGTH = 256 * 1024
 
 /** 两档共用的实现；`authored` = 来源是模型手写而非渲染器产物 */
 function sanitizeSvg(svg: string, authored: boolean): string {
   if (!svg) return ''
-  if (svg.length > MAX_SVG_LENGTH) return ''
+  if (svg.length > SVG_MAX_LENGTH) return ''
   if (typeof DOMParser === 'undefined') return '' // 非浏览器环境不应调用；同样失败关闭
   let doc: Document
   try {
@@ -285,7 +286,17 @@ function scopeAuthoredIds(root: Element): string {
     if (id && ids.has(id)) el.setAttribute('id', `${prefix}-${id}`)
     for (let i = el.attributes.length - 1; i >= 0; i--) {
       const attr = el.attributes[i]
-      if (attr.name.toLowerCase() === 'id') continue
+      const name = attr.name.toLowerCase()
+      if (name === 'id') continue
+      // 无障碍引用是空格分隔的 id 表（pele 的 mermaid 图用它把根指向 <title> / <desc>）
+      if (name === 'aria-labelledby' || name === 'aria-describedby') {
+        const next = attr.value
+          .split(/\s+/)
+          .map((ref) => (ids.has(ref) ? `${prefix}-${ref}` : ref))
+          .join(' ')
+        if (next !== attr.value) el.setAttribute(attr.name, next)
+        continue
+      }
       const next = attr.value.replace(
         /url\(\s*(['"]?)#([^'")\s]+)\1\s*\)|^#([^\s]+)$/g,
         (match, quote: string, fnId: string, bareId: string) => {

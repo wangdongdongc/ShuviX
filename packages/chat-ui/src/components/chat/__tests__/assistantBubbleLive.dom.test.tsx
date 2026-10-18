@@ -27,7 +27,7 @@
  *   - **Profiler**（A-8）：只在父级不重渲染、更新全由 store 驱动时有效（父级重渲染时 react-dom 19 会把
  *     memo 跳过的子树也记成一次 update），所以那条用例只 render 一次。
  *
- * 数据走真的 chatStore（直接写 `sessionStreams`，或 A-9 的 `applySessionView`）。mermaid 与包入口
+ * 数据走真的 chatStore（直接写 `sessionStreams`，或 A-9 的 `applySessionView`）。包入口
  * （`getHostApi`）顶掉，i18n 走真 en 资源；文件是 .tsx 但不写 JSX，一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -47,7 +47,6 @@ const probe = vi.hoisted(() => ({
   card: null as Context<string> | null
 }))
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 vi.mock('../../../hooks/useTtsPlayback', async () => {
   const React = await import('react')

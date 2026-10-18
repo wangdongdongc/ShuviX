@@ -21,8 +21,6 @@ import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { ChatApi } from '@shuvix/chat-protocol/chatApi'
 import type { TaskInfo, TaskStatus } from '@shuvix/chat-protocol/types/task'
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
-
 import {
   ChatHostProvider,
   setChatApi,

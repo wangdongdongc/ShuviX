@@ -11,12 +11,17 @@
  *     继承属性只在与父元素**乘过之后**的值不同时才写；`url()` 只留片段；表外带 token 的属性 /
  *     style 声明换成计算值或删掉 —— 产物里一个 `var(` 都不能留；
  *   - 尺寸 / 底色 / 序列化（FX-12…17）：固定 width/height = viewBox、底色矩形、合法 XML；
- *   - 名字、文件、剪贴板（FX-18…23）。
+ *   - 名字、文件、剪贴板（FX-18…23）；
+ *   - pele 画的 mermaid（FX-24…27）：2026-10-17 起 ```mermaid 也走烘焙（`standaloneSvg` 那条「不烘焙、
+ *     只补尺寸」的路删了）。多出来的一件是离屏容器要挂上 `data-figure-surface` —— pele 的标签衬底
+ *     与节点凸起按它取色（themes.css 的 `[data-figure-surface]`），透明导出也要知道图坐在哪一层。
  *
  * 桩的形状（jsdom 不做级联，计算样式全靠桩）：
  *   - `getComputedStyle`：每个 SVG 元素按自己的 `data-k` 在一张表里查**它自己写的那几项**，没写的
  *     继承项从父元素（同样按表算）抄、非继承项取初值 —— 于是桩给出的是 Chromium 那样的**完整**
  *     计算记录（初值 fill 是 `rgb(0, 0, 0)`、stroke 是 `none` …），而不是只有被问到的那一项；
+ *     桩同时记下每个 data-k 元素被读时 `closest('[data-figure-surface]')` 的值（`surfaceSeen`）——
+ *     「烘焙时图坐在哪一层」只能这样看：离屏容器用完即摘；
  *   - 探针 `<span>`（离屏容器里解析底色用的那个）：按 `closest('[data-theme]')` 的主题 + 探针上写的
  *     CSS 表达式查表 —— 测试看得见「底色是按哪套主题取的」；
  *   - `SVGSVGElement.viewBox`：jsdom 没有，按属性解析出 `baseVal`；画布 `getContext` 回 null
@@ -31,11 +36,13 @@ import {
   downloadBlob,
   figureLabelOf,
   rasterizeFigure,
-  standaloneSvg,
   svgFileBlob,
   withOffscreen
 } from '../figureExport'
-import { parseCssColor } from '../figureExportPure'
+import * as figureExport from '../figureExport'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // ─── 计算样式桩 ──────────────────────────────────────────────
 
@@ -98,6 +105,9 @@ const INHERITED = new Set([
 /** data-k → 这个元素**自己**的计算值（用例各自拨） */
 let table: Record<string, Rec> = {}
 
+/** data-k → 最近一次被读计算样式时，它所在的 `[data-figure-surface]` 那一层（null = 不在任何一层里） */
+let surfaceSeen: Record<string, string | null> = {}
+
 /** 主题 → 探针表达式 → 计算出的颜色；'' 键是「根上那套主题」 */
 const SURFACES: Record<string, Rec> = {
   ROOT: { card: 'rgb(30, 31, 32)', page: 'rgb(10, 11, 12)' },
@@ -141,7 +151,11 @@ const realGetContext = HTMLCanvasElement.prototype.getContext
 
 function installStubs(): void {
   window.getComputedStyle = ((el: Element) => {
-    if (el.hasAttribute('data-k')) return declOf(computedOf(el))
+    if (el.hasAttribute('data-k')) {
+      surfaceSeen[el.getAttribute('data-k')!] =
+        el.closest('[data-figure-surface]')?.getAttribute('data-figure-surface') ?? null
+      return declOf(computedOf(el))
+    }
     if (el.tagName === 'SPAN') {
       // 离屏容器里解析底色的探针
       const expr = (el as HTMLElement).style.color
@@ -179,6 +193,7 @@ afterAll(() => {
 
 beforeEach(() => {
   table = {}
+  surfaceSeen = {}
   document.documentElement.setAttribute('data-theme', 'ROOT')
   installStubs()
 })
@@ -407,15 +422,30 @@ describe('颜色烘焙（FX-3…11）', () => {
 
   // 回归：planElement 的表外属性循环曾把 `style` 属性本身也当成「带 token 的属性」整条删掉 ——
   // 普通声明（tabular-nums）与换成计算值的 color 一起丢了
-  it('FX-7b 带 token 的 style 里：普通声明留下，表外 token 声明（color）换成计算值', () => {
+  it('FX-7b 带 token 的 style 里：普通声明留下；表外 token 声明（color）算出来是颜色 → 挪成表现属性 #hex，离开 style', () => {
     fx7Table()
     const { root } = bake(FX7)
-    const style = byK(root, 's').getAttribute('style') ?? ''
+    const s = byK(root, 's')
+    const style = s.getAttribute('style') ?? ''
     expect(style).toMatch(/font-variant-numeric:\s*tabular-nums/)
-    // 产品写的是 #0a141e；内联样式的序列化器（jsdom 与 Chromium 都是）会把十六进制规范成
-    // rgb()，所以按「解析出来是同一个不透明色」比，而不是比字面
-    const color = /(?:^|;)\s*color:\s*([^;]+)/.exec(style)?.[1]?.trim() ?? ''
-    expect(parseCssColor(color)).toEqual({ hex: '#0a141e', alpha: 1 })
+    // 写回 style 的话 Chromium 会把 #hex 重新序列化成 rgb()（独立文件就不是只用十六进制了）
+    expect(style).not.toMatch(/(^|;)\s*color\s*:/)
+    expect(s.getAttribute('color')).toBe('#0a141e')
+  })
+
+  // 不是颜色的那条用 font-variant-numeric 而不是 rx：jsdom 的 CSSOM 认不得 rx，解析 style 时直接丢掉，
+  // 那样「留在 style」就测不到了（Chromium 认得，行为相同）
+  it('FX-7c 根上 style="color:var(--x);font-variant-numeric:var(--q)"：颜色挪成属性 #hex；不是颜色的 token 声明以计算值留在 style', () => {
+    table.r = { color: 'rgb(10, 20, 30)', 'font-variant-numeric': 'tabular-nums' }
+    const { svg, root } = bake(
+      '<svg data-k="r" viewBox="0 0 10 10" style="color:var(--x);font-variant-numeric:var(--q)"><rect data-k="a"/></svg>'
+    )
+    expect(root.getAttribute('color')).toBe('#0a141e')
+    const style = root.getAttribute('style') ?? ''
+    expect(style).not.toMatch(/(^|;)\s*color\s*:/)
+    expect(style).toMatch(/(^|;)\s*font-variant-numeric:\s*tabular-nums/)
+    expect(root.hasAttribute('font-variant-numeric')).toBe(false)
+    expect(svg).not.toContain('var(')
   })
 
   it('FX-8 url() 的计算值带着文档地址 → 只留片段；fill-opacity 只按自己的不透明度', () => {
@@ -578,46 +608,8 @@ describe('尺寸、底色、序列化（FX-12…17）', () => {
     expect(fillFor('D')).toBe('#28292a')
   })
 
-  it('FX-15 standaloneSvg（mermaid 那种）：width="100%" / max-width 去掉，换成数值宽高；空 style 整条删', () => {
-    const markup =
-      '<svg width="100%" style="max-width: 400px;" viewBox="0 0 400 300"><rect width="10" height="10" fill="#ff0000"/></svg>'
-    const out = standaloneSvg(markup, { themeId: '', background: '#333333' })
-    const root = parseOut(out.svg)
-    expect(root.getAttribute('width')).toBe('400')
-    expect(root.getAttribute('height')).toBe('300')
-    expect(root.hasAttribute('style')).toBe(false)
-    expect(attrsOf(root.firstElementChild!)).toMatchObject({ fill: '#333333', stroke: 'none' })
-    // 不烘焙：原来的具体颜色原样
-    expect(root.querySelectorAll('rect')[1].getAttribute('fill')).toBe('#ff0000')
-    expect([out.width, out.height]).toEqual([400, 300])
-  })
-
-  it('FX-15 变体：background card / page 按 themeId 的探针取；null 没有底色', () => {
-    const markup = '<svg viewBox="0 0 10 10"><rect/></svg>'
-    const card = parseOut(standaloneSvg(markup, { themeId: 'L', background: 'card' }).svg)
-    expect(card.firstElementChild!.getAttribute('fill')).toBe('#f0f1f2')
-    const page = parseOut(standaloneSvg(markup, { themeId: 'D', background: 'page' }).svg)
-    expect(page.firstElementChild!.getAttribute('fill')).toBe('#0d1117')
-    const none = parseOut(standaloneSvg(markup, { themeId: '', background: null }).svg)
-    expect(none.querySelectorAll('rect')).toHaveLength(1)
-  })
-
-  it('FX-16 foreignObject 里的 HTML 按 XML 序列化：<br> 自闭合、根上有 svg 命名空间、能被 XML 解析', () => {
-    const out = standaloneSvg(
-      '<svg viewBox="0 0 100 40"><foreignObject width="100" height="40"><div>a<br>b</div></foreignObject></svg>',
-      { themeId: '', background: null }
-    )
-    const root = parseOut(out.svg)
-    expect(root.namespaceURI).toBe('http://www.w3.org/2000/svg')
-    expect(out.svg).toMatch(/^<svg[^>]*xmlns="http:\/\/www\.w3\.org\/2000\/svg"/)
-    expect(out.svg).toMatch(/<br\s*\/>/)
-  })
-
   it('FX-17 标记里没有 <svg>：抛「No <svg> element in the figure」，离屏容器不留', () => {
     expect(() => bakeAuthoredSvg('<p>not a figure</p>', { themeId: '', surface: null })).toThrow(
-      'No <svg> element in the figure'
-    )
-    expect(() => standaloneSvg('', { themeId: '', background: null })).toThrow(
       'No <svg> element in the figure'
     )
     expect(offscreenBoxes()).toHaveLength(0)
@@ -775,5 +767,78 @@ describe('名字、图源、文件、剪贴板（FX-18…23）', () => {
     } finally {
       g.Image = prevImage
     }
+  })
+})
+
+describe('pele 画的 mermaid 也走烘焙（FX-24…27）', () => {
+  const MARKUP = '<svg data-k="r" viewBox="0 0 10 10"><rect data-k="a" width="1" height="1"/></svg>'
+  /** 产物第一个子元素是不是底色矩形（底色矩形不带 data-k） */
+  const hasBackgroundRect = (svg: string): boolean =>
+    !parseOut(svg).firstElementChild!.hasAttribute('data-k')
+
+  it('FX-24 离屏容器的 data-figure-surface：under 优先，缺省跟 surface；底色矩形只跟 surface', () => {
+    const cases: Array<{
+      opts: { surface: 'card' | 'page' | null; under?: 'card' | 'page' }
+      seen: string | null
+      rect: boolean
+    }> = [
+      { opts: { surface: 'card' }, seen: 'card', rect: true },
+      { opts: { surface: null, under: 'card' }, seen: 'card', rect: false },
+      { opts: { surface: 'page', under: 'card' }, seen: 'card', rect: true },
+      { opts: { surface: null }, seen: null, rect: false }
+    ]
+    for (const { opts, seen, rect } of cases) {
+      surfaceSeen = {}
+      const out = bakeAuthoredSvg(MARKUP, { themeId: '', ...opts })
+      const what = JSON.stringify(opts)
+      expect(surfaceSeen.a, what).toBe(seen)
+      expect(surfaceSeen.r, what).toBe(seen)
+      expect(hasBackgroundRect(out.svg), what).toBe(rect)
+    }
+    // surface page + under card：底色取的是页面那一层（ROOT 的 page），不是图坐的那一层
+    const pageUnderCard = bakeAuthoredSvg(MARKUP, { themeId: '', surface: 'page', under: 'card' })
+    expect(parseOut(pageUnderCard.svg).firstElementChild!.getAttribute('fill')).toBe('#0a0b0c')
+    expect(offscreenBoxes()).toHaveLength(0)
+  })
+
+  it('FX-25 authoredFigureSource：透明导出也挂上图坐的那一层（card / page），只是不画底色矩形', async () => {
+    for (const surface of ['card', 'page'] as const) {
+      const src = authoredFigureSource(MARKUP, { name: 'x', surface })
+      surfaceSeen = {}
+      const bare = await src.build({ scheme: 'current', themeId: '', background: false })
+      expect(surfaceSeen.a, surface).toBe(surface)
+      expect(hasBackgroundRect(bare.svg), surface).toBe(false)
+
+      surfaceSeen = {}
+      const filled = await src.build({ scheme: 'current', themeId: '', background: true })
+      expect(surfaceSeen.a, surface).toBe(surface)
+      expect(hasBackgroundRect(filled.svg), surface).toBe(true)
+    }
+  })
+
+  it('FX-26 pele 形状的根：去掉 max-width / height:auto / --_* 中转变量，产物无 var(，宽高 = viewBox，合法 XML', () => {
+    table.r = { color: 'rgb(31, 31, 31)' }
+    table.a = { fill: 'rgb(243, 243, 243)' }
+    const out = bakeAuthoredSvg(
+      '<svg data-k="r" class="pele" viewBox="0 0 829 60" width="829" height="60" ' +
+        'style="max-width:100%;height:auto;--_bg:var(--pele-bg,#fff);color:var(--_fg)">' +
+        '<rect data-k="a" fill="var(--_s)"/></svg>',
+      { themeId: '', surface: null }
+    )
+    const root = parseOut(out.svg)
+    expect(root.getAttribute('width')).toBe('829')
+    expect(root.getAttribute('height')).toBe('60')
+    expect(out.svg).not.toContain('max-width')
+    expect(out.svg).not.toMatch(/height:\s*auto/)
+    expect(out.svg).not.toContain('--_')
+    expect(out.svg).not.toContain('var(')
+    expect(byK(root, 'a').getAttribute('fill')).toBe('#f3f3f3')
+  })
+
+  it('FX-27 standaloneSvg 已删：模块里没有，chat-ui 的出口也不再导出它', () => {
+    expect('standaloneSvg' in figureExport).toBe(false)
+    const here = dirname(fileURLToPath(import.meta.url))
+    const index = readFileSync(resolve(here, '../../../index.ts'), 'utf8')
+    expect(index).not.toContain('standaloneSvg')
   })
 })

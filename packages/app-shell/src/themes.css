@@ -123,6 +123,51 @@
   --viz-wash: color-mix(in srgb, var(--theme-text-primary) 5%, transparent);
 }
 
+/* ========== ```mermaid 图（pele）→ 主题 token ==========
+   对话与笔记本里的 mermaid 由 pele 渲染：它的产物把颜色都写成 var(--pele-*)（带默认值），这里把
+   那组变量接到 ShuviX 的 token 上 —— mermaid 图于是与手写 ```svg 图同一套配色，切主题瞬时重绘、
+   不重渲染；导出时离屏容器挂着另一套主题，同一条规则在那里按那套主题取色，烘焙成具体颜色。
+
+   声明在 .pele（图的根 <svg>）上：自定义属性里的 var() 在声明它的元素上代入，而 --theme-* /
+   --viz-* 从最近的 [data-theme] 祖先继承下来 —— 图在哪一层主题下就取哪一层的色。
+
+   图坐在哪一层底色上，由 --figure-surface / --figure-raised 告诉它（见下方 [data-figure-surface]）：
+   边上标签的衬底必须与底色一致（否则是一块看得见的补丁），节点要比底色凸一级。缺省是页面底 ——
+   笔记本里的图直接画在编辑器底色上。
+   字体不在这里：pele 渲染时按传进去的字体量字宽，在这里另设 --pele-font 就可能画的不是量的那个字。
+   字重只用 400 / 500，与作图技能的规矩一致（600 以上挨着正文显得重）。 */
+.pele {
+  --pele-bg: var(--figure-surface, var(--theme-bg-primary));
+  --pele-surface: var(--figure-raised, var(--theme-bg-tertiary));
+  --pele-surface-alt: var(--viz-wash);
+  --pele-fg: var(--theme-text-primary);
+  --pele-muted: var(--theme-text-secondary);
+  --pele-line: var(--theme-text-tertiary);
+  --pele-border: var(--theme-border-primary);
+  --pele-accent: var(--viz-1);
+  --pele-critical: var(--viz-8);
+  --pele-error: var(--viz-8);
+  --pele-radius: 6px;
+  --pele-title-weight: 500;
+  --pele-heading-weight: 500;
+  --pele-bold-weight: 500;
+  --pele-series-1: var(--viz-1);
+  --pele-series-2: var(--viz-2);
+  --pele-series-3: var(--viz-3);
+  --pele-series-4: var(--viz-4);
+  --pele-series-5: var(--viz-5);
+  --pele-series-6: var(--viz-6);
+  --pele-series-7: var(--viz-7);
+  --pele-series-8: var(--viz-8);
+}
+
+/* 对话的图卡：卡片底是 bg-tertiary 60% 叠在 bg-primary 上（CodeBlock / MermaidBlock 的卡片，也是
+   导出面板「card」底色的配方 —— figureExport 的 SURFACE_CSS），节点取 bg-primary，在卡片上挖出来。 */
+[data-figure-surface='card'] {
+  --figure-surface: color-mix(in srgb, var(--theme-bg-tertiary) 60%, var(--theme-bg-primary));
+  --figure-raised: var(--theme-bg-primary);
+}
+
 /* ========== 深色主题 ========== */
 
 /* GitHub Dark（默认深色） */

@@ -338,9 +338,11 @@
 }
 
 /* Mermaid block — the rendered diagram that replaces a ```mermaid
- * fence when the cursor is outside it. The diagram renders on a light
- * surface (mermaid's `default` theme is light) so it stays legible in
- * the dark editor, matching the chat renderer. */
+ * fence when the cursor is outside it. Like the ```svg figure below there
+ * is no light surface: pele colors the diagram with --pele-* variables that
+ * the host maps onto its theme tokens, so it sits on the editor's own
+ * background and follows the theme. The svg carries its natural pixel size
+ * and only shrinks to fit. */
 .cm-atomic-mermaid {
   padding: 0.35em 0;
 }
@@ -350,7 +352,6 @@
   justify-content: center;
   overflow: auto;
   padding: 0.75rem;
-  background: #ffffff;
   border: 1px solid var(--atomic-editor-border, #3d3d3d);
   border-radius: 0.4em;
 }
@@ -360,7 +361,7 @@
   height: auto;
 }
 
-/* Placeholder shown while mermaid loads / renders. */
+/* Placeholder shown while a diagram type's chunk loads (first use only). */
 .cm-atomic-mermaid-loading {
   display: flex;
   justify-content: center;
@@ -396,9 +397,9 @@
 }
 
 /* ```svg figure — hand-written SVG that replaces the fence when the cursor
- * is outside it. Unlike the mermaid card there is **no light surface**: an
- * authored figure takes every color from --viz-* / --theme-* tokens, so it
- * belongs on the editor's own background and follows the theme with it. */
+ * is outside it. There is **no light surface**: an authored figure takes
+ * every color from --viz-* / --theme-* tokens, so it belongs on the editor's
+ * own background and follows the theme with it. */
 .cm-atomic-svg {
   padding: 0.35em 0;
 }

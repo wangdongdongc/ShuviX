@@ -330,15 +330,24 @@ export function svgFileFacts(main: CdpClient, text: string): Promise<SvgFileFact
   })()`)
 }
 
+/** 导出的 mermaid（pele）SVG 里读出来的颜色与第一个节点的框 */
+export interface MermaidFileFacts {
+  /** 第一个节点形状（`.pele-node` 里 fill 不是 none 的那个）的 computed fill */
+  nodeFill: string
+  /** 第一个节点标签（`.pele-node .pele-label`）的 computed fill */
+  labelFill: string
+  /** 第一个边标签衬底（`.pele-edge-label rect`）的 computed fill；没有边标签 = '' */
+  edgeLabelFill: string
+  /** 第一个节点在用户坐标（viewBox）里的框 */
+  nodeBox: { x: number; y: number; width: number; height: number }
+}
+
 /**
- * 导出的 mermaid SVG 挂进一个 shadow root（它自带的 `<style>` 只在那里面生效，不污染页面、
- * 也不吃页面的样式），读第一个节点形状的 fill 与第一个节点在用户坐标里的框。
+ * 导出的 mermaid SVG 挂进一个 shadow root 读计算样式 —— 页面的样式（themes.css 里把 `--pele-*`
+ * 接到 token 上的那段）进不去，读到的只能是文件自己写死的颜色：「离开 ShuviX 也是这个色」。
  */
-export function mermaidFileFacts(
-  main: CdpClient,
-  text: string
-): Promise<{ nodeFill: string; nodeBox: { x: number; y: number; width: number; height: number } }> {
-  return main.eval(`(async () => {
+export function mermaidFileFacts(main: CdpClient, text: string): Promise<MermaidFileFacts> {
+  return main.eval<MermaidFileFacts>(`(async () => {
     const host = document.createElement('div')
     host.style.cssText = 'position:fixed;left:-20000px;top:0'
     document.body.appendChild(host)
@@ -346,9 +355,13 @@ export function mermaidFileFacts(
       const shadow = host.attachShadow({ mode: 'open' })
       shadow.innerHTML = ${JSON.stringify(text.replace(/^<\?xml[^>]*>\s*/, ''))}
       const svg = shadow.querySelector('svg')
-      const shape = [...svg.querySelectorAll('.node rect, .node path, .node polygon, .node circle')]
-        .find((el) => { const f = getComputedStyle(el).fill; return !!f && f !== 'none' })
-      const node = shape.closest('.node')
+      const shape = [
+        ...svg.querySelectorAll('.pele-node rect, .pele-node path, .pele-node polygon, .pele-node circle')
+      ].find((el) => { const f = getComputedStyle(el).fill; return !!f && f !== 'none' })
+      if (!shape) throw new Error('no filled .pele-node shape in the exported SVG')
+      const node = shape.closest('.pele-node')
+      const label = svg.querySelector('.pele-node .pele-label')
+      const edgeBg = svg.querySelector('.pele-edge-label rect')
       const sr = svg.getBoundingClientRect()
       const nr = node.getBoundingClientRect()
       const vb = svg.viewBox.baseVal
@@ -356,6 +369,8 @@ export function mermaidFileFacts(
       const ky = vb.height / sr.height
       return {
         nodeFill: getComputedStyle(shape).fill,
+        labelFill: label ? getComputedStyle(label).fill : '',
+        edgeLabelFill: edgeBg ? getComputedStyle(edgeBg).fill : '',
         nodeBox: {
           x: vb.x + (nr.left - sr.left) * kx,
           y: vb.y + (nr.top - sr.top) * ky,

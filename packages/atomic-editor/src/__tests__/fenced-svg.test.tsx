@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { act } from 'react-dom/test-utils';
 import { EditorView } from '@codemirror/view';
@@ -35,15 +35,6 @@ document.addEventListener = ((type: string, ...rest: unknown[]) => {
   if (type === 'selectionchange') return;
   return (nativeAddEventListener as unknown as (...args: unknown[]) => void)(type, ...rest);
 }) as typeof document.addEventListener;
-
-// mermaid 是全仓唯一值得在这里挡掉的动态 import：只有 FP-5（两种围栏共存）需要一个
-// mermaid widget 真的存在，而真模块会把这份用例拖慢到不成比例。
-vi.mock('mermaid', () => ({
-  default: {
-    initialize: () => {},
-    render: (id: string) => Promise.resolve({ svg: `<svg data-mermaid="${id}"></svg>` }),
-  },
-}));
 
 // ---- 夹具 ---------------------------------------------------------------
 
@@ -232,7 +223,8 @@ describe('```svg 围栏的揭示（光标进出）', () => {
     // 行号：1 ```svg / 2-4 图 / 5 ``` / 6 空 / 7 ```mermaid / 8-9 图源 / 10 ```
     const m = mount(doc);
     await focus(m);
-    // mermaid widget 的渲染是异步的（此处已 mock），让它落定再断言，免得卸载时炸在 then 里
+    // 这一轮第一次用到 flowchart 时 mermaid widget 要先取图类型的分包（pele/lazy，异步），
+    // 让它有机会落定再断言 —— 断言只数 widget 本身，落没落定都成立
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     caretAtLine(m, 8); // 进 mermaid

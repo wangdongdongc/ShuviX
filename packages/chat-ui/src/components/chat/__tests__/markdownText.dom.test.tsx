@@ -11,7 +11,7 @@
  *   MT-4 走的仍是生产管线：代码围栏有 hljs 高亮；裸 HTML 过闸（script 没了、onclick 没了）
  *   MT-5 两个兄弟实例各高亮各的语言；只重渲染其中一个，另一个原样不动（共用的高亮器不串文档）
  *
- * 探针：`react-markdown` 换成透传的包装，记下每次被渲染时的 props —— 一次即一次解析。mermaid 与包入口
+ * 探针：`react-markdown` 换成透传的包装，记下每次被渲染时的 props —— 一次即一次解析。包入口
  * 顶掉，i18n 走真 en 资源；文件是 .tsx 但不写 JSX，一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -26,7 +26,6 @@ const probe = vi.hoisted(() => ({
   calls: [] as Array<Record<string, unknown>>
 }))
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 vi.mock('react-markdown', async (importOriginal) => {
   const real = await importOriginal<typeof import('react-markdown')>()

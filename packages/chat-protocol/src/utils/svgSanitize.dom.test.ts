@@ -394,6 +394,65 @@ describe('手写档 · id 隔离', () => {
   })
 })
 
+// ───────────────────────── 手写档 · 无障碍引用随 id 改写 ─────────────────────────
+//
+// pele 画的 mermaid 图把根 <svg> 用 aria-labelledby / aria-describedby 指向自己的 <title> / <desc>。
+// 这两个属性是**空格分隔的 id 表**（不是 url(#…) / #id），id 隔离若不改写它们，屏幕阅读器读到的
+// 就是一条指向不存在（或别的图）的引用。
+
+describe('手写档 · aria-labelledby / aria-describedby', () => {
+  const parse = (out: string): SVGSVGElement =>
+    new DOMParser().parseFromString(out, 'text/html').body.querySelector('svg')!
+
+  it('SS-A1 两个引用都改成带前缀的 id，与 <title> / <desc> 的新 id 同一个前缀、指得到', () => {
+    const out = sanitizeAuthoredSvg(
+      '<svg aria-labelledby="t" aria-describedby="d"><title id="t">T</title><desc id="d">D</desc><rect/></svg>'
+    )
+    const root = parse(out)
+    const titleId = root.querySelector('title')!.id
+    const descId = root.querySelector('desc')!.id
+    const prefix = /^(s[a-z0-9]+)-t$/.exec(titleId)?.[1]
+    expect(prefix, out).toBeDefined()
+    expect(descId).toBe(`${prefix}-d`)
+    expect(root.getAttribute('aria-labelledby')).toBe(`${prefix}-t`)
+    expect(root.getAttribute('aria-describedby')).toBe(`${prefix}-d`)
+    expect(root.querySelector('rect')).not.toBeNull()
+  })
+
+  it('SS-A2 id 表里只改本文档定义过的那几个，其余原样', () => {
+    const root = parse(
+      sanitizeAuthoredSvg('<svg aria-labelledby="t x"><title id="t">T</title><rect/></svg>')
+    )
+    const prefix = root.querySelector('title')!.id.replace(/-t$/, '')
+    expect(root.getAttribute('aria-labelledby')).toBe(`${prefix}-t x`)
+  })
+
+  it('SS-A3 嵌套元素上的引用同样改写', () => {
+    const root = parse(
+      sanitizeAuthoredSvg('<svg><desc id="d">D</desc><g aria-describedby="d"><rect/></g></svg>')
+    )
+    const descId = root.querySelector('desc')!.id
+    expect(descId).not.toBe('d')
+    expect(root.querySelector('g')!.getAttribute('aria-describedby')).toBe(descId)
+  })
+
+  it('SS-A4 文档里一个 id 都没定义：引用一个字节都不动', () => {
+    const out = sanitizeAuthoredSvg('<svg aria-labelledby="t"><rect/></svg>')
+    expect(out).toContain('aria-labelledby="t"')
+    expect(out).toContain('<rect')
+  })
+
+  it('SS-A5 mermaid 档（sanitizeRenderedSvg）不做 id 隔离，引用也原样', () => {
+    const out = sanitizeRenderedSvg(
+      '<svg aria-labelledby="t" aria-describedby="d"><title id="t">T</title><desc id="d">D</desc><rect/></svg>'
+    )
+    expect(out).toContain('aria-labelledby="t"')
+    expect(out).toContain('aria-describedby="d"')
+    expect(out).toContain('id="t"')
+    expect(out).toContain('<rect')
+  })
+})
+
 // ───────────────────────── 不变式第 1 层（DOM 半）─────────────────────────
 
 /**

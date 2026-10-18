@@ -1,42 +1,21 @@
 /**
  * mermaid 图在对话里怎么摆 —— 纯函数，不碰 DOM（单测在 node 环境直接跑）。
  *
- * 两件事：
- *  - **尺寸**：mermaid 按图的内容自己定画布，一张三十个节点的竖向流程图天然两千像素高，
- *    原样放进对话就把一整屏占掉；横向的宽图压到栏宽，字又小到读不了。内联只占一块限高的
- *    地方（整张缩进去，或缩不动时按栏宽截断，见 mermaidLayout），显示的不是全貌时给「放大查看」。
- *  - **配色**：mermaid 的主题要具体颜色值（它自己拿颜色做加深减淡），`var(--x)` 喂不进去；
- *    所以把 ShuviX 的主题 token 解析成颜色再交给它的 base 主题 —— 解析交给调用方传进来的
- *    `resolve`，这里只管「哪个 token 对哪个 mermaid 变量」。
+ * 渲染器按图的内容自己定画布，一张三十个节点的竖向流程图天然两千像素高，原样放进对话就把
+ * 一整屏占掉；横向的宽图压到栏宽，字又小到读不了。宽度这一头渲染器自己会让（pele 按栏宽重排，
+ * 见 mermaidFence 的 fitWidth），高度这一头由这里管：内联只占一块限高的地方（整张缩进去，或缩
+ * 不动时按栏宽截断，见 mermaidLayout），显示的不是全貌时给「放大查看」。
+ *
+ * 配色不在这里：pele 的产物是 `var(--pele-*)`，由 themes.css 的 `.pele` 那段接到主题 token 上。
  */
 
 /** 内联显示的最大高度（CSS px）：再高的图也只占这么一块，完整的在「放大查看」里看 */
 export const MERMAID_MAX_HEIGHT = 480
 
-/** 图的原始尺寸（mermaid 产物根 `<svg>` 的 viewBox 宽高） */
+/** 图的原始尺寸（产物根 `<svg>` 的 viewBox 宽高） */
 export interface MermaidSize {
   width: number
   height: number
-}
-
-/**
- * 从 mermaid 产物的根 `<svg>` 上读 viewBox 的宽高。读不到、或宽高不是正的有限数时返回 null ——
- * 调用方那时不做限高，按原样放（宁可大，也不按一个猜出来的比例把图压变形）。
- */
-export function mermaidNaturalSize(svg: string): MermaidSize | null {
-  const root = /<svg\b[^>]*>/i.exec(svg)?.[0]
-  if (!root) return null
-  // 前面必须是空白：`data-viewBox=` 这类属性名里含 viewBox 的不算
-  const viewBox = /\sviewBox\s*=\s*["']([^"']*)["']/i.exec(root)?.[1]
-  if (!viewBox) return null
-  const parts = viewBox
-    .trim()
-    .split(/[\s,]+/)
-    .map(Number)
-  if (parts.length !== 4) return null
-  const [, , width, height] = parts
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
-  return { width, height }
 }
 
 /**
@@ -88,50 +67,5 @@ export function mermaidLayout(
   return { mode: 'fit', width: shown, expandable: true }
 }
 
-/** 内联图的字号：比 mermaid 缺省的 16px 小一档，贴近对话正文（text-sm） */
-export const MERMAID_FONT_SIZE = '13px'
-
-/**
- * ShuviX 主题 token → mermaid `base` 主题变量。
- *
- * 只给几个根变量（底色 / 节点面 / 边框 / 字色 / 连线），其余由 mermaid 自己从它们推导 ——
- * 这样流程图、时序图、状态图、甘特图……共用一套取色，不必逐种图型去对 class 名。
- * 节点面用 `--theme-bg-tertiary`（比卡片底再高一级），连线用三级字色：结构安静，字最显眼。
- *
- * `resolve(token)` 返回该 token 此刻解析出的颜色串（如 `rgb(22, 27, 34)`），由调用方负责。
- */
-export function mermaidThemeVariables(
-  resolve: (token: string) => string,
-  dark: boolean,
-  fontFamily: string
-): Record<string, string | boolean> {
-  const surface = resolve('--theme-bg-secondary')
-  const node = resolve('--theme-bg-tertiary')
-  const raised = resolve('--theme-bg-hover')
-  const border = resolve('--theme-border-primary')
-  const text = resolve('--theme-text-primary')
-  const line = resolve('--theme-text-tertiary')
-  return {
-    darkMode: dark,
-    background: surface,
-    primaryColor: node,
-    mainBkg: node,
-    secondaryColor: raised,
-    tertiaryColor: surface,
-    primaryBorderColor: border,
-    nodeBorder: border,
-    primaryTextColor: text,
-    textColor: text,
-    titleColor: text,
-    lineColor: line,
-    defaultLinkColor: line,
-    clusterBkg: surface,
-    clusterBorder: border,
-    edgeLabelBackground: surface,
-    noteBkgColor: raised,
-    noteTextColor: text,
-    noteBorderColor: border,
-    fontFamily,
-    fontSize: MERMAID_FONT_SIZE
-  }
-}
+/** 内联图的字号（px）：比 pele 缺省的 16 小一档，贴近对话正文（text-sm） */
+export const MERMAID_FONT_SIZE = 13

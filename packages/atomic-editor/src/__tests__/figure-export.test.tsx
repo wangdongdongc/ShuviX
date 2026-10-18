@@ -8,7 +8,7 @@ import {
   type FigureExportHandler,
   type FigureExportRequest,
 } from '../figure-export';
-import { renderMermaid } from '../mermaid-blocks';
+import { load } from 'pele/lazy';
 
 // ```svg / ```mermaid 预览上的「导出」按钮（figure-export.ts + 两个 widget 的接线）。
 //
@@ -19,8 +19,11 @@ import { renderMermaid } from '../mermaid-blocks';
 //    写完了的图才有（错误卡、渲染中、截断源码画出来的半张图都没有）；只读文档也有；
 //  - 交出去的是什么（AE-3）：围栏源码原样、按钮本身、放 <svg> 的那一格；
 //  - 按钮不揭示源码（AE-4）：widget 在 mousedown 上揭示源码，按钮把自己的 mousedown 吞掉；
-//  - 宿主换了处理函数不必重挂编辑器（AE-7/8/12）：点击与标签都在那一刻重读；
-//  - mermaid 每次渲染前都按请求的主题重新 initialize（AE-13，配置是整页共用的）。
+//  - 宿主换了处理函数不必重挂编辑器（AE-7/8/12）：点击与标签都在那一刻重读。
+//
+// mermaid 由 pele 真渲（2026-10-17 起，同步）。`pele/lazy` 的图类型注册是本文件的模块级状态：
+// AE-6 依赖 flowchart 在本文件里**第一次**被用到（先出「渲染中」，加载完才出图 + 按钮）。
+// 渲染本身的细节（字体、净化、缓存、加载失败）在 mermaid-blocks.test.tsx。
 //
 // 焦点 / selectionchange 的两条注意事项与 fenced-svg.test.tsx 文件头一致，助手照抄过来。
 
@@ -30,38 +33,6 @@ document.addEventListener = ((type: string, ...rest: unknown[]) => {
   if (type === 'selectionchange') return;
   return (nativeAddEventListener as unknown as (...args: unknown[]) => void)(type, ...rest);
 }) as typeof document.addEventListener;
-
-// mermaid：initialize / render 记进同一条日志；render 返回测试手里的 deferred（或立即成功）
-const mm = vi.hoisted(() => {
-  const state = {
-    log: [] as string[],
-    pending: [] as Array<{
-      code: string;
-      resolve: (v: { svg: string }) => void;
-      reject: (e: Error) => void;
-    }>,
-    /** 这些源码一调用就成功 */
-    instant: new Set<string>(),
-  };
-  return state;
-});
-
-vi.mock('mermaid', () => ({
-  default: {
-    initialize: (config: { theme?: string }) => {
-      mm.log.push(`init:${config.theme}`);
-    },
-    render: (id: string, code: string) =>
-      new Promise<{ svg: string }>((resolve, reject) => {
-        mm.log.push(`render:${code}`);
-        if (mm.instant.has(code)) {
-          resolve({ svg: `<svg data-mermaid="${id}" viewBox="0 0 10 10"><rect/></svg>` });
-          return;
-        }
-        mm.pending.push({ code, resolve, reject });
-      }),
-  },
-}));
 
 // ---- 夹具 ---------------------------------------------------------------
 
@@ -112,18 +83,20 @@ function mount(
   return m;
 }
 
+const realGetContext = HTMLCanvasElement.prototype.getContext;
+
 beforeEach(() => {
-  mm.log.length = 0;
+  // pele 量字宽：没有画布就退回自己的字宽表（尺寸确定）
+  HTMLCanvasElement.prototype.getContext = (() =>
+    null) as unknown as typeof HTMLCanvasElement.prototype.getContext;
 });
 
-afterEach(async () => {
+afterEach(() => {
   for (const m of mounts.splice(0)) {
     act(() => m.root.unmount());
     m.host.remove();
   }
-  // 挂着的 mermaid 渲染会堵住模块级串行链：收掉
-  for (const p of mm.pending.splice(0)) p.reject(new Error('left over by the test'));
-  await settle();
+  HTMLCanvasElement.prototype.getContext = realGetContext;
 });
 
 async function flushFocus(): Promise<void> {
@@ -131,7 +104,7 @@ async function flushFocus(): Promise<void> {
   await new Promise<void>((resolve) => queueMicrotask(resolve));
 }
 
-/** 让 mermaid 的异步渲染（懒加载 + 串行链）落定 */
+/** 让图类型分包加载之后的那次补画落定 */
 async function settle(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -289,58 +262,45 @@ describe('```svg 图上的导出按钮', () => {
 });
 
 describe('```mermaid 图上的导出按钮', () => {
-  it('AE-6 渲染中没有；出图后有（data-figure-export="mermaid"）；同一段源码再挂（缓存命中）第一帧就有', async () => {
+  it('AE-6 第一次用到流程图：加载中没有按钮；出图后有（data-figure-export="mermaid"），交出去的是源码 / 放图那一格 / 按钮本身；同一段源码再挂第一帧就有', async () => {
     const code = 'graph TD\n  ae6a --> ae6b';
     const h = handler();
     const m = mount(mermaidDoc(code), { figureExport: h });
-    await settle();
     expect(m.host.querySelector('.cm-atomic-mermaid-loading')).not.toBeNull();
     expect(buttons(m)).toHaveLength(0);
 
-    const p = mm.pending.find((x) => x.code === code);
-    expect(p, 'mermaid.render 没被调到').toBeDefined();
-    p!.resolve({ svg: '<svg data-ae6="1" viewBox="0 0 10 10"><rect/></svg>' });
-    mm.pending.splice(mm.pending.indexOf(p!), 1);
+    await load('flowchart');
     await settle();
+    expect(m.host.querySelector('.cm-atomic-mermaid-loading')).toBeNull();
+    expect(m.host.querySelector('.cm-atomic-mermaid-diagram > svg.pele')).not.toBeNull();
     const [btn] = buttons(m);
     expect(btn?.getAttribute('data-figure-export')).toBe('mermaid');
     clickButton(btn);
+    expect(h.onExport).toHaveBeenCalledTimes(1);
     const req = h.onExport.mock.calls[0][0];
     expect(req.kind).toBe('mermaid');
     expect(req.code).toBe(code);
+    expect(req.anchor).toBe(btn);
     expect(req.figure.classList.contains('cm-atomic-mermaid-diagram')).toBe(true);
-    expect(req.figure.querySelector('svg[data-ae6]')).not.toBeNull();
+    expect(req.figure.querySelector('svg.pele')).not.toBeNull();
+    expect(req.figure.contains(btn)).toBe(false);
 
-    // 缓存命中：第一帧就是图 + 按钮
+    // 类型已注册（且结果在缓存里）：不经过「渲染中」—— 挂载那一刻的 widget 等编辑器挂上正文样式
+    // 再画（推迟一个微任务，见 mermaid-blocks），冲掉微任务就是图 + 按钮
     const again = mount(mermaidDoc(code), { figureExport: handler() });
-    expect(again.host.querySelector('.cm-atomic-mermaid-diagram svg')).not.toBeNull();
+    await act(async () => {});
+    expect(again.host.querySelector('.cm-atomic-mermaid-loading')).toBeNull();
+    expect(again.host.querySelector('.cm-atomic-mermaid-diagram > svg.pele')).not.toBeNull();
     expect(buttons(again)).toHaveLength(1);
   });
 
-  it('AE-6 渲染失败：错误卡，没有按钮', async () => {
-    const code = 'graph TD\n  ae6c -->';
-    const m = mount(mermaidDoc(code), { figureExport: handler() });
-    await settle();
-    const p = mm.pending.find((x) => x.code === code);
-    expect(p).toBeDefined();
-    p!.reject(new Error('Parse error'));
-    mm.pending.splice(mm.pending.indexOf(p!), 1);
-    await settle();
+  it('AE-6b 写坏了的流程图：错误卡，没有按钮', async () => {
+    await load('flowchart');
+    const m = mount(mermaidDoc('graph TD\n  ae6c -->'), { figureExport: handler() });
+    await act(async () => {});
     expect(m.host.querySelector('.cm-atomic-mermaid-error')).not.toBeNull();
+    expect(m.host.querySelector('.cm-atomic-mermaid-diagram svg')).toBeNull();
     expect(buttons(m)).toHaveLength(0);
-  });
-
-  it('AE-13 每次渲染前都按请求的主题 initialize —— 连着两次 dark 也不省（中间可能被对话那边改过）', async () => {
-    const codes = ['ae13-a', 'ae13-b', 'ae13-c', 'ae13-d'].map((s) => `graph TD\n  ${s}1 --> ${s}2`);
-    codes.forEach((c) => mm.instant.add(c));
-    const themes = ['dark', 'dark', 'default', 'dark'] as const;
-    for (let i = 0; i < codes.length; i++) {
-      const res = await renderMermaid(codes[i], { theme: themes[i] });
-      expect(res.svg).toBeTruthy();
-    }
-    expect(mm.log).toEqual(
-      codes.flatMap((c, i) => [`init:${themes[i]}`, `render:${c}`]),
-    );
   });
 });
 

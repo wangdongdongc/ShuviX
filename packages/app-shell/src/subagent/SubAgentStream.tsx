@@ -294,7 +294,7 @@ export const SubSessionStream = memo(function SubSessionStream({
         {sub.streamingContent && (
           <div className="markdown-body text-xs">
             {/* 与 AssistantBubble 同一对上下文：没有它们，代码块会以为自己写完了 —— 交互图会在半截时
-                挂上、每来一片就整块重载，mermaid 也会拿半截源码去解析 */}
+                挂上、每来一片就整块重载，mermaid 会把半截源码当成写坏了的图 */}
             <MarkdownStreamingContext.Provider value={sub.isStreaming}>
               <MarkdownSourceContext.Provider value={sub.isStreaming ? sub.streamingContent : null}>
                 <ReactMarkdown

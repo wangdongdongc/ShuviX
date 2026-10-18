@@ -14,13 +14,9 @@
  *
  * 组件本身要 DOM（useEffect + 宿主通道 + dangerouslySetInnerHTML），判定不要 —— 所以判定
  * 单独导出再单测，理由与 svgFenceIsRenderable 已经这么做过的一样。引用块与交互图的组件行为
- * （含 `.html` 引用进沙箱）在 interactiveBlock.dom.test.tsx。mermaid 的 mock 留着，但理由已经不是「起不来」：它如今在 MermaidBlock
- * 里逐次渲染时才 initialize()（CodeBlock 经 MermaidBlock 引入它），mermaid 11.16 在 node 下也能
- * import —— 顶掉是为了不让一个纯函数单测为了两个判定去加载一整个重型渲染库。
+ * （含 `.html` 引用进沙箱）在 interactiveBlock.dom.test.tsx。
  */
-import { describe, it, expect, vi } from 'vitest'
-
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
+import { describe, it, expect } from 'vitest'
 
 import {
   artifactRefIsHtml,

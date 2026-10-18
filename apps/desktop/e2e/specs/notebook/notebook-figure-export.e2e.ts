@@ -6,8 +6,10 @@
  *   - **悬停才显形、真鼠标点得到、点它不揭示源码**（NB-1）：按钮吞掉自己的 mousedown，CM6 的选区
  *     一格不动、图还在 —— 合成事件证明不了这一条，走 CDP 的可信鼠标；
  *   - **底色取页面那一层、颜色是屏幕上的**（NB-2）：笔记本的图直接画在编辑器底色上，不像对话坐在卡里；
- *   - **mermaid 的三档**（NB-3）：当前 / 浅色都是屏幕上那张白卡上的 default 图（同一次渲染、同一个 id），
- *     深色是 mermaid 自己的 dark 主题配 #333333；文件名取 frontmatter 的 title；
+ *   - **mermaid 与手写图同一条烘焙路径**（NB-3）：pele 画的图颜色是 `var(--pele-*)`，在笔记本里直接坐
+ *     在页面底上（没有白卡）、节点是 bg-tertiary；导出当前 / 浅色 / 深色都按那套主题把 token 解成
+ *     具体色（浅 / 深 = 设定里的 solarized-light / nord），底色与边标签衬底都是页面底；文件名取
+ *     frontmatter 的 title；
  *   - **面板跟着按钮走**（NB-4…6）：开着面板去点另一张图的按钮 → 换成那张图；再点同一颗 → 收起；
  *     光标进了那个围栏（widget 被换成源码、按钮没了）→ 收起；
  *   - **记住的选择与对话共用**（NB-7）。
@@ -34,6 +36,7 @@ import {
   compositeStack,
   cssColorIn,
   hexRgb,
+  mermaidFileFacts,
   parseComputedColor,
   rgbHex,
   svgFileFacts
@@ -55,7 +58,13 @@ const FIG2 = [
   '</svg>'
 ].join('\n')
 
-const MERMAID = ['---', 'title: Flow', '---', 'graph LR', '  nba[Plan] --> nbb[Ship]'].join('\n')
+const MERMAID = ['---', 'title: Flow', '---', 'graph LR', '  nba[Plan] -->|go| nbb[Ship]'].join(
+  '\n'
+)
+
+/** 导出「浅色 / 深色」用的两套主题（设定里写死，与界面当前的主题不同，按错主题取色立刻看得出来） */
+const LIGHT = 'solarized-light'
+const DARK = 'nord'
 
 const NOTE = [
   '# Figure export note',
@@ -91,7 +100,13 @@ let flow: NotebookFigurePane
 
 beforeAll(async () => {
   app = await launchApp()
-  await app.main.eval(`window.api.settings.set({ key: 'general.language', value: 'en' })`)
+  for (const [key, value] of [
+    ['general.language', 'en'],
+    ['general.lightTheme', LIGHT],
+    ['general.darkTheme', DARK]
+  ]) {
+    await app.main.eval(`window.api.settings.set(${JSON.stringify({ key, value })})`)
+  }
   const projDir = join(app.home, 'proj-figure-export')
   mkdirSync(projDir, { recursive: true })
   writeFileSync(join(projDir, NOTE_FILE), NOTE)
@@ -175,34 +190,68 @@ describe('笔记本里图的导出', () => {
     near(hexRgb(facts.perK.x.fill!), parseComputedColor(screen.x.fill), 1, 'x')
   }, 120_000)
 
-  it('NB-3 mermaid：当前 = 屏幕上那张（同一个 id、白卡底）；浅色与当前一模一样；深色是 dark 主题配 #333333；文件名 Flow', async () => {
-    const onScreenId = await flow.onScreenId()
-    expect(onScreenId).not.toBe('')
-    const cardBg = (await flow.surfaceStack())[0]
-    expect(cardBg).toBe('rgb(255, 255, 255)')
+  it('NB-3 mermaid（pele）：屏幕上坐在页面底上（没有白卡）、节点 = bg-tertiary；导出按当前 / 浅色 / 深色那套主题烘焙，底色与边标签衬底 = 页面底；文件名 Flow', async () => {
+    const stack = await flow.surfaceStack()
+    // 放图那一格自己透明：图直接画在编辑器底色上，不再垫一块白卡
+    expect(parseComputedColor(stack[0]).a).toBe(0)
+    const page = await cssColorIn(app.main, '', PAGE_SURFACE_CSS)
+    near(compositeStack(stack), page, 1, 'notebook mermaid sits on the page surface')
+    const screen = await flow.peleColors()
+    near(
+      parseComputedColor(screen.nodeFill),
+      await cssColorIn(app.main, '', 'var(--theme-bg-tertiary)'),
+      1,
+      'on-screen node fill = bg-tertiary'
+    )
 
     await flow.hover()
     await flow.clickExport()
     const p = await panel.waitReady()
     expect(p.fileName).toBe('Flow.png')
+
+    // 当前主题 + 填充
     await panel.choose('format', 'svg')
     const current = await panel.previewSvg()
+    expect(current).not.toMatch(NOT_STANDALONE)
     const cur = await svgFileFacts(app.main, current)
     expect(cur.parseError).toBe(false)
-    expect(cur.id).toBe(onScreenId)
-    expect(cur.first?.attrs.fill).toBe('#ffffff')
+    expect(cur.first?.tag).toBe('rect')
+    const curBg = hexRgb(cur.first!.attrs.fill)
+    near(curBg, page, 1, 'current bg = page')
+    const curFile = await mermaidFileFacts(app.main, current)
+    near(
+      parseComputedColor(curFile.nodeFill),
+      parseComputedColor(screen.nodeFill),
+      1,
+      'current node fill = on screen'
+    )
+    near(parseComputedColor(curFile.edgeLabelFill), curBg, 1, 'current edge label backing = bg')
 
-    await panel.choose('scheme', 'light')
-    expect(await panel.previewSvg()).toBe(current)
-
-    await panel.choose('scheme', 'dark')
-    const dark = await panel.previewSvg()
-    const df = await svgFileFacts(app.main, dark)
-    expect(df.parseError).toBe(false)
-    expect(df.first?.attrs.fill).toBe('#333333')
-    expect(df.id).not.toBe(onScreenId)
-    expect(df.styleText).not.toBe('')
-    expect(df.styleText).not.toBe(cur.styleText)
+    // 浅色 / 深色：设定里的那两套主题
+    const previews: Record<string, string> = {}
+    for (const [scheme, theme] of [
+      ['light', LIGHT],
+      ['dark', DARK]
+    ] as const) {
+      await panel.choose('scheme', scheme)
+      const svg = await panel.previewSvg()
+      previews[scheme] = svg
+      expect(svg, scheme).not.toMatch(NOT_STANDALONE)
+      const facts = await svgFileFacts(app.main, svg)
+      expect(facts.parseError).toBe(false)
+      expect(facts.first?.tag).toBe('rect')
+      const bg = await cssColorIn(app.main, theme, PAGE_SURFACE_CSS)
+      near(hexRgb(facts.first!.attrs.fill), bg, 1, `${scheme} bg = ${theme} page`)
+      const file = await mermaidFileFacts(app.main, svg)
+      near(
+        parseComputedColor(file.nodeFill),
+        await cssColorIn(app.main, theme, 'var(--theme-bg-tertiary)'),
+        1,
+        `${scheme} node fill = ${theme} bg-tertiary`
+      )
+      near(parseComputedColor(file.edgeLabelFill), bg, 1, `${scheme} edge label backing`)
+    }
+    expect(previews.light).not.toBe(previews.dark)
     expect((await panel.shot())?.fileName).toBe('Flow.svg')
   }, 120_000)
 

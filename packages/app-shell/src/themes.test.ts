@@ -22,11 +22,18 @@
  *    再从聊天卡片的组件源码里取卡片底的比例，按同一公式逐套主题复算 ink 对 tint 的对比度。数值本身
  *    不从 css 注释里抄：注释里的 5.16 只是「现在最差的那一格」，这里只守门槛 4.5。
  *
+ * 4. **mermaid 图（pele）的配色全部接到主题 token 上（TH-9…11）。** pele 的产物把每个颜色写成
+ *    `var(--pele-*, <它自己的缺省>)`；`.pele` 那一块漏接一个名字，那一处就静默落回 pele 的缺省色
+ *    （白底黑字），只在某种图、某个元素上露出来。TH-11 用**真 pele** 把几种常见图都渲一遍，收集产物里
+ *    出现的每个 `--pele-*`，逐个查 `.pele` 里有没有接 —— 名单从产物算出来，不抄。图坐在哪一层底色上
+ *    由 `[data-figure-surface]` 告诉它（TH-9 与 TH-8 的导出卡片底是同一个比例）。
+ *
  * 刻意不测的：调色板本身的具体色值与色觉可分性（数值来源与校验结果写在 css 的注释里，复述一遍只是
  * 把同一批数字抄成第二份），以及真实浏览器里 `light-dark()` / `color-mix()` 的解析（jsdom 没有 CSSOM
  * 支持，已在真实 Chromium 里用一次性探针验过；e2e 的 chat-interactive E-3 比对宿主与沙箱的解析值）。
  */
 import { describe, it, expect } from 'vitest'
+import { detectType, load, render as peleRender } from 'pele/lazy'
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -427,6 +434,87 @@ describe('导出的卡片底（TH-8）', () => {
       const pcts = [...new Set([...text.matchAll(CARD_RE)].map((m) => Number(m[1])))]
       expect(pcts, `${file} 里找不到卡片底的 color-mix`).toHaveLength(1)
       expect(pcts[0], file).toBe(exportPct)
+    }
+  })
+})
+
+// ─── mermaid 图（pele）→ 主题 token（TH-9…11） ─────────────────────────
+
+describe('themes.css —— pele 的 --pele-* 接到主题 token 上（TH-9…11）', () => {
+  /** `.pele { … }` 那一块的正文（选择器在行首、右花括号在行首收尾，与本文件的书写约定一致） */
+  const PELE_BLOCK = /^\.pele\s*\{([\s\S]*?)^\}/m.exec(CSS)?.[1] ?? ''
+  /** `.pele` 里声明的 --pele-* → 值 */
+  const PELE_DECLS = new Map(
+    [...PELE_BLOCK.matchAll(/(--pele-[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()])
+  )
+
+  it("TH-9 [data-figure-surface='card']：--figure-surface 与导出卡片底同一个比例，--figure-raised 取 bg-primary；只在这一块声明", () => {
+    const exportSrc = readFileSync(
+      resolve(HERE, '../../chat-ui/src/components/figure/figureExport.ts'),
+      'utf8'
+    )
+    const exportPct = Number(
+      /card:\s*'color-mix\(in srgb, var\(--theme-bg-tertiary\) (\d+(?:\.\d+)?)%, var\(--theme-bg-primary\)\)'/.exec(
+        exportSrc
+      )?.[1]
+    )
+    expect(Number.isFinite(exportPct), 'figureExport.ts 的 SURFACE_CSS.card 写法变了').toBe(true)
+    expect(declOf('--figure-surface')).toBe(
+      `color-mix(in srgb, var(--theme-bg-tertiary) ${exportPct}%, var(--theme-bg-primary))`
+    )
+    expect(declOf('--figure-raised')).toBe('var(--theme-bg-primary)')
+    expect(selectorsDeclaring('--figure-surface')).toEqual(["[data-figure-surface='card']"])
+    expect(selectorsDeclaring('--figure-raised')).toEqual(["[data-figure-surface='card']"])
+    // 只声明一次：第二处声明就是第二份配方
+    expect([...CSS.matchAll(/--figure-surface\s*:/g)]).toHaveLength(1)
+    expect([...CSS.matchAll(/--figure-raised\s*:/g)]).toHaveLength(1)
+  })
+
+  it('TH-10 --pele-bg / --pele-surface / --pele-fg 声明在 .pele（图的根）上', () => {
+    for (const name of ['--pele-bg', '--pele-surface', '--pele-fg']) {
+      expect(selectorsDeclaring(name), name).toEqual(['.pele'])
+    }
+  })
+
+  it('TH-11 真 pele 渲几种常见图：产物里的每个 --pele-*（字体与缩放除外）都在 .pele 里接上；接到的 token 都有定义', async () => {
+    const SOURCES = [
+      // 流程图：frontmatter 标题、边上标签、subgraph
+      '---\ntitle: Flow\n---\nflowchart TD\n  subgraph S\n    a[Plan] -->|go| b[Ship]\n  end\n  b --> c',
+      'sequenceDiagram\n  Alice->>Bob: Hi\n  Bob-->>Alice: Yo\n  Note over Alice: n\n  loop L\n    Alice->>Bob: x\n  end',
+      'pie title Pets\n  "Dogs" : 386\n  "Cats" : 85',
+      'gantt\n  title G\n  dateFormat YYYY-MM-DD\n  section S\n  Crit task :crit, a1, 2024-01-01, 3d\n  Other :a2, after a1, 2d',
+      'xychart\n  title "Sales"\n  x-axis [jan, feb, mar]\n  y-axis "Rev" 0 --> 100\n  bar [10, 50, 80]\n  line [20, 40, 90]',
+      'stateDiagram-v2\n  [*] --> A\n  A --> B: go\n  state B {\n    x --> y\n  }\n  B --> [*]'
+    ]
+    const used = new Set<string>()
+    for (const source of SOURCES) {
+      const type = detectType(source)
+      expect(type, source).not.toBeNull()
+      expect(await load(type), `${type} 加载失败`).toBe(true)
+      const { svg } = peleRender(source, {})
+      for (const m of svg.matchAll(/--pele-[a-z0-9-]+/g)) used.add(m[0])
+    }
+    // 自检：真的收到了东西（否则下面整圈空转）
+    expect(used.has('--pele-bg')).toBe(true)
+    expect(used.has('--pele-series-1')).toBe(true)
+
+    const mustDeclare = [...used].filter(
+      (n) => n !== '--pele-font' && n !== '--pele-font-mono' && !n.startsWith('--pele-zoom-')
+    )
+    const missing = mustDeclare.filter((n) => !PELE_DECLS.has(n))
+    expect(missing, '这些 --pele-* 会静默落回 pele 的缺省色').toEqual([])
+
+    expect(PELE_DECLS.get('--pele-bg')).toBe('var(--figure-surface, var(--theme-bg-primary))')
+    expect(PELE_DECLS.get('--pele-surface')).toBe('var(--figure-raised, var(--theme-bg-tertiary))')
+    // 字体刻意不接（pele 按传进去的字体量字宽，另设 --pele-font 就可能画的不是量的那个字）
+    expect(PELE_DECLS.has('--pele-font')).toBe(false)
+
+    const referenced = new Set(
+      [...PELE_BLOCK.matchAll(/--(?:theme|viz)-[a-z0-9]+(?:-[a-z0-9]+)*/g)].map((m) => m[0])
+    )
+    expect(referenced.size).toBeGreaterThan(5)
+    for (const token of referenced) {
+      expect(DEFINED.has(token), `.pele 接的 ${token} 在 themes.css 里没有定义`).toBe(true)
     }
   })
 })

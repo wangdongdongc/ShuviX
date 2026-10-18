@@ -18,7 +18,6 @@ import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { UserTextMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 
 import { MessageRenderer } from '../MessageRenderer'

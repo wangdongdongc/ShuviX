@@ -10,6 +10,7 @@ import {
   isSvgComplete,
   svgFenceIsRenderable
 } from '@shuvix/chat-protocol/utils/svgFence'
+import { MERMAID_FENCE_LANG } from '@shuvix/chat-protocol/utils/mermaidFence'
 import {
   INTERACTIVE_FENCE_LANG,
   fenceSourceIsClosed
@@ -65,8 +66,8 @@ interface HastNode {
 }
 
 /**
- * 这个代码块的围栏闭合了没有（交互图要等闭合才挂）。消息不在流式中 → 写完了；流式中则按
- * 节点位置把源文本切回来，看最后一行是不是闭合栅栏。拿不到位置或源文本时保守地当没写完 ——
+ * 这个代码块的围栏闭合了没有（交互图要等闭合才挂；mermaid 闭合前按帧画、闭合后整段画）。
+ * 消息不在流式中 → 写完了；流式中则按节点位置把源文本切回来，看最后一行是不是闭合栅栏。拿不到位置或源文本时保守地当没写完 ——
  * 消息写完那一刻流式标志翻成 false，块照样会挂上。
  */
 export function codeFenceIsClosed(
@@ -115,9 +116,9 @@ export function CodeBlock({
   }
   const rawCode = codeNode ? extractText(codeNode).replace(/\n$/, '') : ''
 
-  // 检测 mermaid
-  if (lang === 'mermaid' && rawCode) {
-    return <MermaidBlock code={rawCode} />
+  // mermaid：与 ```svg 一样边写边画，但要知道围栏闭合没有 —— 开着时最后一行可能写到一半
+  if (lang === MERMAID_FENCE_LANG && rawCode) {
+    return <MermaidBlock code={rawCode} closed={codeFenceIsClosed(node, source, streaming)} />
   }
 
   // 手写 SVG 图：开标签一闭合就开始逐帧画，之前落到下方的普通代码块（见 authoredSvgFrame）
@@ -165,15 +166,14 @@ export function CodeBlock({
 /**
  * 手写 SVG 代码块 → 图，支持图/源码切换。
  *
- * 与 MermaidBlock 的刻意不同：
+ * 与 MermaidBlock 同一条路（pele 的产物也是 token 着色的静态 SVG），差别只在「帧」怎么来：
  *
- * 1. **边写边画，不等写完。** 「渲染」只是一次同步净化（纯函数），开标签一闭合就能出第一帧；
- *    mermaid 要完整源码才能解析，只能等写完。
+ * 1. **边写边画，一笔一笔长出来。** 「渲染」只是一次同步净化（纯函数），开标签一闭合就能出
+ *    第一帧，之后每一帧只是在后面追加元素；mermaid 每多写完一行就整张重新布局一次。
  * 2. **颜色直接是 token。** 手写 SVG 一律走 --viz-* / --theme-* 取色（见 themes.css 的调色板段与
- *    visual-guide 提示片段），paint 时由 CSS 解析，切主题不必重渲染；mermaid 要具体颜色值，
- *    切主题得重新渲染一遍。
- * 3. **净化用 sanitizeAuthoredSvg 这一档。** 来源是模型直接手写的整段标记，不是渲染器
- *    的产物 —— <style>/<foreignObject>/远程地址都必须关掉，理由见 svgSanitize 头注释。
+ *    visual-guide 提示片段），paint 时由 CSS 解析，切主题不必重渲染。
+ * 3. **净化用 sanitizeAuthoredSvg 这一档。** 来源是模型直接手写的整段标记 ——
+ *    <style>/<foreignObject>/远程地址都必须关掉，理由见 svgSanitize 头注释。
  *
  * 失败关闭：净化返回空串（找不到 <svg> 根，或整段被剥空）即判死，绝不注入未经检查的标记 ——
  * 与 mermaid 同策。但**错误卡只在完成态出**：流式中间帧偶尔会被判死（此刻恰好只写到一个

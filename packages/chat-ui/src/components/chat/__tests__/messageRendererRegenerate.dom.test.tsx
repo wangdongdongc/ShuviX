@@ -15,7 +15,7 @@
  *   R-8 直接渲染 AssistantBubble：单条卡 / 三条卡都以组末条 id 调用
  *
  * 可见项由真的 `buildVisibleItems` 造（R-6 的「同一个 item」依赖它的复用）。渲染次数的探针：`useTtsPlayback`
- * 只有 AssistantBubble 调，桩里计数即卡的渲染次数。mermaid 与包入口（`getHostApi`）顶掉，i18n 走真 en 资源。
+ * 只有 AssistantBubble 调，桩里计数即卡的渲染次数。包入口（`getHostApi`）顶掉，i18n 走真 en 资源。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -27,7 +27,6 @@ import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 const probe = vi.hoisted(() => ({ renders: 0 }))
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 vi.mock('../../../hooks/useTtsPlayback', () => {
   const tts = {

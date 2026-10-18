@@ -16,17 +16,15 @@
  * 只有一步的不成组。断言按转写区的直接子节点逐个比对（每个分组都是那一层的直接子节点）。
  * 中间文本行带转写用的小一号类名 `markdown-body text-xs`（SA-1：StepGroupView 按分组内容 memo 之后照旧）。
  *
- * 包入口 `@shuvix/chat-ui` 用真的（上下文与 CodeBlock 必须是同一份模块）；`mermaid` 顶掉。
+ * 包入口 `@shuvix/chat-ui` 用真的（上下文与 CodeBlock 必须是同一份模块）。
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { act, createElement, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
-
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 
 import {
   ChatHostProvider,

@@ -6,14 +6,12 @@
  *        已完成 = 结束时间倒序、平手看启动时间倒序、全平手保持输入顺序；isBlocked 只问运行中的；不改输入
  *   E-*  endedAgo：分钟 / 小时 / 天的边界，时钟早于结束时间按「刚刚」；真 en 文案
  *
- * jsdom + mermaid 桩：`bgTaskOrder.ts` 从 `@shuvix/chat-ui` 的桶里拿 `isTaskFinished`，桶在 node 环境里装不起来。
+ * jsdom：`bgTaskOrder.ts` 从 `@shuvix/chat-ui` 的桶里拿 `isTaskFinished`，桶在 node 环境里装不起来。
  */
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import i18n from 'i18next'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { TaskInfo, TaskStatus } from '@shuvix/chat-protocol/types/task'
-
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 
 import { FINISHED_PREVIEW, endedAgo, orderTasks } from './bgTaskOrder'
 

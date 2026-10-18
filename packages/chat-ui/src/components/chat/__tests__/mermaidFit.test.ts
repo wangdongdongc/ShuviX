@@ -1,38 +1,27 @@
 /**
- * mermaid 图在对话里怎么摆（`mermaidFit.ts`）—— 三个纯函数，node 环境直接跑：
+ * mermaid 图在对话里怎么摆（`mermaidFit.ts`）—— 纯函数，node 环境直接跑：
  *
- *  - `mermaidNaturalSize`：从 mermaid 产物的根 `<svg>` 读 viewBox 宽高。读不到就 null ——
- *    调用方那时不做限高、按原样放，所以 **null 是一个安全的答案，猜错的数不是**：一个从嵌套
- *    `<svg>`、`data-viewBox` 或半截属性里读出来的比例，会把整张图压变形。F4 那一串都是这种输入。
- *  - `mermaidLayout`：内联给多宽、整张缩还是按栏宽截、值不值得给「放大查看」。逐格的数值用例
- *    （F5..F13）钉住每一个分支边界；F14 是一张网格上的不变式扫描 —— 边界之间的任何一点都得
- *    满足「不放大、不超栏、整张缩时不超限高、截断时字读得清」。
- *  - `mermaidThemeVariables`：ShuviX 主题 token → mermaid base 主题变量。只钉「哪个 token 对哪个
- *    变量」，以及每个 token 在 11 套主题里都真有定义（F16）—— 少一套，那套主题下 mermaid 拿到的
- *    是空串，图的颜色静默回落成它自己的缺省。
+ *  - `mermaidFitWidth` / `mermaidLayout`：内联给多宽、整张缩还是按栏宽截、值不值得给「放大查看」。
+ *    逐格的数值用例（F5..F13）钉住每一个分支边界；F14 是一张网格上的不变式扫描 —— 边界之间的
+ *    任何一点都得满足「不放大、不超栏、整张缩时不超限高、截断时字读得清」。
+ *  - `MERMAID_FONT_SIZE`：传给 pele `render` 的字号（数字，px）—— pele 按它量字宽（F17）。
  *
- * 真实 mermaid 产物的根长什么样见 F1：`width="100%"` 与 `style="max-width: …px"` 都在，
- * 能信的只有 viewBox。
+ * 2026-10-17 mermaid.js 换成 pele 之后，这里不再管尺寸读取与配色：图的自然尺寸由 pele 的
+ * `render` 直接给出（`mermaidNaturalSize` 删了），配色是 `var(--pele-*)`、由 themes.css 的 `.pele`
+ * 接到主题 token 上（`mermaidThemeVariables` 删了，token 覆盖在 app-shell 的 themes.test.ts）。
+ * F18 钉住这两个导出确实不在了 —— 它们回来就意味着又有人按 mermaid.js 的方式取尺寸 / 取色。
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import * as mermaidFit from '../mermaidFit'
 import {
   MERMAID_FONT_SIZE,
   MERMAID_MAX_HEIGHT,
   MERMAID_MIN_READABLE_SCALE,
   mermaidFitWidth,
   mermaidLayout,
-  mermaidNaturalSize,
-  mermaidThemeVariables,
   type MermaidLayout,
   type MermaidSize
 } from '../mermaidFit'
-
-const HERE = dirname(fileURLToPath(import.meta.url))
-/** `packages/chat-ui/src/components/chat/__tests__` 往上五层是 `packages/` */
-const THEMES_CSS = readFileSync(resolve(HERE, '../../../../../app-shell/src/themes.css'), 'utf8')
 
 const size = (width: number, height: number): MermaidSize => ({ width, height })
 const layout = (
@@ -43,51 +32,6 @@ const layout = (
   mode,
   width,
   expandable
-})
-
-describe('mermaidNaturalSize —— 只信根上的 viewBox', () => {
-  it('F1 真实 mermaid 产物的根：width="100%" 与 max-width 都不算，取 viewBox 的宽高', () => {
-    const root =
-      '<svg id="mermaid_0" width="100%" xmlns="http://www.w3.org/2000/svg" class="flowchart" ' +
-      'style="max-width: 307.513671875px;" viewBox="0 0 307.513671875 1657.5" ' +
-      'role="graphics-document document" aria-roledescription="flowchart-v2"><g></g></svg>'
-    expect(mermaidNaturalSize(root)).toEqual({ width: 307.513671875, height: 1657.5 })
-  })
-
-  it('F2 原点不在 0,0（mermaid 常留 8 的边）：宽高仍取后两个数', () => {
-    expect(mermaidNaturalSize('<svg viewBox="-8 -8 416 316"></svg>')).toEqual({
-      width: 416,
-      height: 316
-    })
-  })
-
-  it('F3 逗号分隔、单引号、首尾与逗号旁的空白、小写 viewbox 与等号两侧的空白都认', () => {
-    expect(mermaidNaturalSize('<svg viewBox="0,0,400,300"></svg>')).toEqual(size(400, 300))
-    expect(mermaidNaturalSize("<svg viewBox=' 0, 0 , 400 300 '></svg>")).toEqual(size(400, 300))
-    expect(mermaidNaturalSize('<svg viewbox = "0 0 400.5 300.25"></svg>')).toEqual(
-      size(400.5, 300.25)
-    )
-  })
-
-  it.each([
-    ['空串', ''],
-    ['不是 svg', '<div>x</div>'],
-    [
-      '根上没有 viewBox，嵌套的 <svg> 有（不能拿嵌套那个的比例）',
-      '<svg width="10"><svg viewBox="0 0 5 5"></svg></svg>'
-    ],
-    ['三个数', '<svg viewBox="0 0 400"></svg>'],
-    ['五个数', '<svg viewBox="0 0 400 300 1"></svg>'],
-    ['宽不是数', '<svg viewBox="0 0 auto 300"></svg>'],
-    ['宽为 0', '<svg viewBox="0 0 0 300"></svg>'],
-    ['高为负', '<svg viewBox="0 0 400 -1"></svg>'],
-    ['viewBox 为空串', '<svg viewBox=""></svg>'],
-    ['Infinity 不是有限数', '<svg viewBox="0 0 Infinity 300"></svg>'],
-    ['<svgx> 不是 <svg>', '<svgx viewBox="0 0 1 1"></svgx>'],
-    ['只有 data-viewBox（属性名里含 viewBox 的不算）', '<svg data-viewBox="0 0 10 10"></svg>']
-  ])('F4 %s → null（不按一个猜出来的比例压图）', (_label, svg) => {
-    expect(mermaidNaturalSize(svg)).toBeNull()
-  })
 })
 
 describe('mermaidFitWidth —— 不放大，按比例缩到限高以内', () => {
@@ -198,68 +142,14 @@ describe('mermaidLayout —— 整张缩、按栏宽截，还是给「放大查�
   })
 })
 
-describe('mermaidThemeVariables —— 主题 token → mermaid base 主题变量', () => {
-  /** 桩：把 token 原样包起来，谁对谁一眼可见 */
-  const tag = (token: string): string => `<${token}>`
-
-  it('F15 每个 mermaid 变量取的是哪个 token', () => {
-    const vars = mermaidThemeVariables(tag, false, 'Sans')
-    const expected: Record<string, string[]> = {
-      '--theme-bg-secondary': ['background', 'tertiaryColor', 'clusterBkg', 'edgeLabelBackground'],
-      '--theme-bg-tertiary': ['primaryColor', 'mainBkg'],
-      '--theme-bg-hover': ['secondaryColor', 'noteBkgColor'],
-      '--theme-border-primary': [
-        'primaryBorderColor',
-        'nodeBorder',
-        'clusterBorder',
-        'noteBorderColor'
-      ],
-      '--theme-text-primary': ['primaryTextColor', 'textColor', 'titleColor', 'noteTextColor'],
-      '--theme-text-tertiary': ['lineColor', 'defaultLinkColor']
-    }
-    for (const [token, keys] of Object.entries(expected)) {
-      for (const key of keys) expect(vars[key], key).toBe(tag(token))
-    }
+describe('MERMAID_FONT_SIZE 与已删的导出', () => {
+  it("F17 字号是数字 13（px）—— pele 的 fontSize 选项要数字，不是 '13px'", () => {
+    expect(MERMAID_FONT_SIZE).toBe(13)
+    expect(typeof MERMAID_FONT_SIZE).toBe('number')
   })
 
-  it('F16 除三个非颜色项外每个值都来自 resolve()，且用到的 token 在 11 套主题里都有定义', () => {
-    const asked: string[] = []
-    const vars = mermaidThemeVariables(
-      (token) => {
-        asked.push(token)
-        return tag(token)
-      },
-      false,
-      'Sans'
-    )
-    const NON_COLOR = new Set(['darkMode', 'fontFamily', 'fontSize'])
-    const colorEntries = Object.entries(vars).filter(([key]) => !NON_COLOR.has(key))
-    expect(colorEntries.length).toBeGreaterThan(0)
-    for (const [key, value] of colorEntries) {
-      expect(asked.map(tag), key).toContain(value)
-    }
-
-    // 各 `[data-theme='…'] { … }` 块 —— 与 app-shell 的 themes.test.ts 同一条正则
-    const blocks = [...THEMES_CSS.matchAll(/^\[data-theme='([^']+)'\]\s*\{([\s\S]*?)^\}/gm)].map(
-      (m) => ({ theme: m[1], body: m[2] })
-    )
-    expect(blocks).toHaveLength(11)
-    const tokens = [...new Set(asked)]
-    expect(tokens.length).toBeGreaterThan(0)
-    for (const token of tokens) {
-      for (const { theme, body } of blocks) {
-        expect(body, `${theme} 没有定义 ${token}`).toMatch(new RegExp(`^\\s*${token}\\s*:`, 'm'))
-      }
-    }
-  })
-
-  it('F17 darkMode / fontFamily 原样透传；字号固定为 MERMAID_FONT_SIZE', () => {
-    expect(mermaidThemeVariables(tag, true, 'A').darkMode).toBe(true)
-    expect(mermaidThemeVariables(tag, false, 'A').darkMode).toBe(false)
-    expect(mermaidThemeVariables(tag, false, 'Inter, sans-serif').fontFamily).toBe(
-      'Inter, sans-serif'
-    )
-    expect(MERMAID_FONT_SIZE).toBe('13px')
-    expect(mermaidThemeVariables(tag, false, 'A').fontSize).toBe(MERMAID_FONT_SIZE)
+  it('F18 mermaid.js 时代的 mermaidThemeVariables / mermaidNaturalSize 不在模块里', () => {
+    expect('mermaidThemeVariables' in mermaidFit).toBe(false)
+    expect('mermaidNaturalSize' in mermaidFit).toBe(false)
   })
 })

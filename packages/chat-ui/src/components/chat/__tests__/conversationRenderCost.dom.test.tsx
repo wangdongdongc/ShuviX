@@ -38,7 +38,6 @@ const probe = vi.hoisted(() => ({
   noop: () => {}
 }))
 
-vi.mock('mermaid', () => ({ default: { initialize: () => {}, render: () => {} } }))
 vi.mock('@shuvix/chat-ui', () => ({
   useChatHost: () => ({ appearance: { focusMode: false } }),
   getHostApi: () => null
