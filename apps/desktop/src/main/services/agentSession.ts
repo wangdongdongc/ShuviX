@@ -1,6 +1,7 @@
 import {
   clearReviewState,
   clearSessionDecisions,
+  readInputSources,
   SessionClosedError,
   type AdmitOptions,
   type AdmitResult,
@@ -9,6 +10,7 @@ import {
   type DurableSession,
   type InlineTokensSidecar,
   type InputResponseMeta,
+  type InputSource,
   type LastAnswer,
   type NotifyOptions,
   type RequestState,
@@ -19,6 +21,7 @@ import {
 import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
@@ -128,7 +131,9 @@ export class AgentSession {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     display?: InlineTokensSidecar,
-    drive?: DriveOptions
+    drive?: DriveOptions,
+    /** 不是被驱动的发送、却不是人亲手打的（回退后原样重发一条父会话代发的消息，§19.7）：沿用的来源 */
+    source?: InputSource
   ): Promise<SubmitResult> {
     log.info(
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
@@ -142,7 +147,16 @@ export class AgentSession {
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
-      ...(drive === undefined ? {} : { requestId: drive.requestId, driven: drive.driven }),
+      // 被驱动的发送同时记下来源（§19.7）：这条「用户消息」是父会话写的，不是人打的
+      ...(drive === undefined
+        ? source === undefined
+          ? {}
+          : { source }
+        : {
+            requestId: drive.requestId,
+            driven: drive.driven,
+            source: { kind: 'parent-session' as const, sessionId: drive.driven.parentId }
+          }),
       onAdmitted: (info) => {
         admitted = true
         dayPrompt.onAdmitted(info)
@@ -160,8 +174,20 @@ export class AgentSession {
 
   /** 运行中插话（空闲时起一轮）。被拒 → reject（调用方把文案报给界面） */
   async steer(text: string): Promise<void> {
-    const result = await this.durable.steer(text, this.dayPromptCallbacks())
+    const result = await this.admitSteer(text)
     if (result.error) throw new Error(admissionErrorText(result))
+  }
+
+  /**
+   * 插话并交回受理结果（不抛）：父会话往子会话里发引导（§19.6）要知道送没送到，而且要带上幂等键与来源。
+   * 被拒时 `error` 已是给人读的文案（模型被拒同样本地化）。
+   */
+  async admitSteer(
+    text: string,
+    options: { requestId?: string; source?: InputSource } = {}
+  ): Promise<AdmitResult> {
+    const result = await this.durable.steer(text, { ...this.dayPromptCallbacks(), ...options })
+    return result.error ? { ...result, error: admissionErrorText(result) } : result
   }
 
   /** 本轮结束后接着说（空闲时起一轮）。被拒 → reject */
@@ -283,6 +309,26 @@ export class AgentSession {
   /** 待答询问的人读摘要（父会话据此把问题转告用户） */
   get pendingInputSummaries(): string[] {
     return this.durable.pendingInputSummaries
+  }
+
+  /** 此刻挂着的询问（按出现次序）—— 父会话代答时要看完整的问题与选项（§19.4） */
+  pendingInputs(): InputRequest[] {
+    return this.durable.pendingInputs()
+  }
+
+  /** 界面投影此刻的视图（父会话的大纲读它，§19.7）—— 投影由会话信号接线挂着，这里只读 */
+  async sessionView(): Promise<SessionView> {
+    return (await this.durable.projector()).value
+  }
+
+  /** 当前活上下文里不是人亲手打的那些用户消息：消息 id → 来源（父会话代发的消息与引导，§19.7） */
+  inputSources(): Promise<Map<string, InputSource>> {
+    return readInputSources(this.durable)
+  }
+
+  /** 订阅这条会话的询问挂起 / 落定（父会话的绑定任务据此进出「等待输入」，§19.3）；返回退订函数 */
+  subscribeInputs(hooks: Parameters<DurableSession['subscribeInputs']>[0]): () => void {
+    return this.durable.subscribeInputs(hooks)
   }
 
   requestUserInput(request: InputRequest): Promise<InputResponse> {

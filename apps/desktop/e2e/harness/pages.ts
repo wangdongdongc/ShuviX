@@ -93,6 +93,11 @@ export interface ChatToolRowShot extends ChatToolRow {
    * （主机 / 目录 + 命令）连同输出；没展开、或这一行的详情不是终端形态时为 null。
    */
   terminal: string | null
+  /**
+   * 「父会话代答」标签（ask 卡，`[data-answered-by-parent]`）的悬停提示（`title`，带父会话标题；随界面语言变）——
+   * 这一行没有那枚标签时为 null。只认属于这一行自己的标签（不认嵌套在它详情里的别的工具行）
+   */
+  answeredByParent: string | null
 }
 
 /** 步骤合并行（StepGroup）的完整快照 */
@@ -826,6 +831,12 @@ export function chatPane(main: CdpClient): ChatPane {
               terminal: (() => {
                 const term = el.querySelector('[data-terminal-view]')
                 return term ? (term.textContent ?? '').trim() : null
+              })(),
+              answeredByParent: (() => {
+                const tag = [...el.querySelectorAll('[data-answered-by-parent]')].find(
+                  (t) => t.closest('[data-tool-name]') === el
+                )
+                return tag ? (tag.getAttribute('title') ?? '') : null
               })()
             }
           })
@@ -9450,8 +9461,8 @@ export function notebookOutlinePane(main: CdpClient): NotebookOutlinePane {
 // 会话面板 · 任务页（BgTaskPanel，P3-14）
 //
 // 锚点：工具栏按钮 `[data-session-tool="tasks"]`；每一行 `[data-task-row=<kind>]` + `[data-task-status=<status>]`
-// （枢纽的状态，不随语言变）；派生 agent 的行另有 `[data-subagent-run=<档案名>]` /
-// `[data-subagent-expanded]`；子会话行的「打开」是 `[data-task-open]`。详情（派生 agent 的转写）是行根节点下
+// （枢纽的状态，不随语言变）+ `[data-task-id]`，行首状态点 `[data-task-dot]`（running / blocked / ended）；
+// 派生 agent 的行另有 `[data-subagent-run=<档案名>]` / `[data-subagent-expanded]`；子会话行的「打开」是 `[data-task-open]`。详情（派生 agent 的转写）是行根节点下
 // 标题行之后的那一块；「不在了」的文案是 `[data-subagent-gone]`。
 
 /** 任务页的一行（子会话等非派生 agent 的行按标题认） */
@@ -9459,6 +9470,10 @@ export interface TaskRowShot {
   kind: string
   status: string
   title: string
+  /** 行首状态点（`[data-task-dot]`）：`running` / `blocked`（等人回答）/ `ended` */
+  dot: string
+  /** 任务 id（`data-task-id`，即发起它的那次调用的幂等键） */
+  id: string
 }
 
 export interface TasksPanelPane {
@@ -9514,7 +9529,9 @@ export function tasksPanelPane(main: CdpClient): TasksPanelPane {
         `[...document.querySelectorAll('[data-task-row]')].map((r) => ({
           kind: r.getAttribute('data-task-row') ?? '',
           status: r.getAttribute('data-task-status') ?? '',
-          title: r.querySelector('.truncate')?.textContent ?? ''
+          title: r.querySelector('.truncate')?.textContent ?? '',
+          dot: r.querySelector('[data-task-dot]')?.getAttribute('data-task-dot') ?? '',
+          id: r.getAttribute('data-task-id') ?? ''
         }))`
       ),
     hasAgentRow: (profile) => main.eval<boolean>(`!!${AGENT_ROW(profile)}`),

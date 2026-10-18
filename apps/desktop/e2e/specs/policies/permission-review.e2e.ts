@@ -751,6 +751,104 @@ describe('子会话', () => {
     expect(payload.delegatedTasks).toEqual([delegated])
     expect(await asksRaised(childSid)).toBe(0)
   })
+
+  it('E2E-R13 [P0] 代答不算授权：父会话代答「删掉」之后子会话跑命令，审查员的载荷把代答列进 delegatedTasks，人写的话里没有它', async () => {
+    const intent = 'USER-INTENT-R13'
+    const delegated = 'DELEGATED-TASK-R13'
+    const yes = 'OPT-R13-YES'
+    const parentSid = await newSession('R13-parent')
+    // 子会话 IPC 直建（parentId；项目随父会话），不经 create-sub-session —— 这里测的是代答，不是开子会话
+    const childSid = await app.main.eval<string>(
+      `window.api.session.create(${JSON.stringify({ parentId: parentSid, title: 'R13-child' })}).then((s) => s.id)`
+    )
+    const marker = markerPath('r13')
+    // 审查员的任务文本里有父会话的人话：两边的回合都先排除审查请求
+    const parentTurn = (r: FakeRequest): boolean => notReviewer(r) && r.lastUserText === intent
+    const childTurn = (r: FakeRequest): boolean => notReviewer(r) && r.lastUserText === delegated
+
+    provider.reset()
+    await events.clear()
+    provider.script(
+      // 前台派活：子会话一问就当场交回（不经通知、不靠计时）
+      {
+        toolCalls: [
+          {
+            id: 'call_r13_prompt',
+            name: 'session',
+            args: JSON.stringify({
+              action: 'prompt-sub-session',
+              sub_session_id: childSid,
+              message: delegated
+            })
+          }
+        ],
+        when: parentTurn
+      },
+      {
+        toolCalls: [
+          {
+            id: 'call_r13_ask',
+            name: 'ask',
+            args: JSON.stringify({
+              question: 'Q-R13 clean the marker?',
+              options: [
+                { label: yes, description: '' },
+                { label: 'OPT-R13-NO', description: '' }
+              ]
+            })
+          }
+        ],
+        when: childTurn
+      },
+      // 父会话代用户答「是」，前台等这一轮
+      {
+        toolCalls: [
+          {
+            id: 'call_r13_answer',
+            name: 'session',
+            args: JSON.stringify({ action: 'answer-sub-session', selections: [yes] })
+          }
+        ],
+        when: parentTurn
+      },
+      { toolCalls: [touchCall('call_r13_touch', marker)], when: childTurn },
+      reviewerTurn({
+        decision: 'allow',
+        risk: 'low',
+        summary: 'SUMMARY-R13',
+        reason: 'REASON-R13'
+      }),
+      { text: 'CHILD DONE R13.', when: childTurn },
+      { text: 'parent done.', when: parentTurn }
+    )
+    await sendPrompt(parentSid, intent)
+    await events.waitFor('agent_end', { sessionId: parentSid, timeoutMs: 60_000 })
+
+    // 父会话那一轮里，子会话的答复由前台的代答交回
+    const answered = await toolBlock(parentSid, 'call_r13_answer')
+    expect(answered.isError).toBeFalsy()
+    expect(answered.result).toContain('CHILD DONE R13.')
+
+    // 1. 恰好一次审查：子会话里那条命令；放行之后真的跑了
+    expect(existsSync(marker)).toBe(true)
+    const reviews = reviewRequests()
+    expect(reviews).toHaveLength(1)
+    const payload = reviewEventOf(reviews[0])
+    expect(payload.sessionId).toBe(childSid)
+    expect(payload.operation.target).toBe(`touch ${marker}`)
+
+    // 2. 人写的话取父会话里人发的那条，代答不在其中 —— 否则「对，删掉」就成了用户的同意
+    expect(payload.userMessages.some((m) => m.includes(intent))).toBe(true)
+    expect(payload.userMessages.some((m) => m.includes(yes))).toBe(false)
+
+    // 3. 代答与派进来的任务一样，只是声明：列进 delegatedTasks
+    expect(payload.delegatedTasks.some((t) => t.includes(delegated))).toBe(true)
+    expect(
+      payload.delegatedTasks.some(
+        (t) => t.includes('the parent session answered') && t.includes(yes)
+      )
+    ).toBe(true)
+  }, 90_000)
 })
 
 describe('停用开关', () => {

@@ -14,9 +14,12 @@
  * echo 打印出来，按开头认就是给注入开门。代价：卡片反馈只活在内存里，重启之后不再出现（少一份输入 =
  * 多问，方向是保守的）。
  *
- * 子会话里的「用户消息」是父 agent 写的：人发的消息取顶层会话，子会话自己的那些单独列作
- * delegatedTasks（只是声明，不是授权）；子会话里人对 ask 的回答与卡片反馈照样算人写的。已知的粗糙处：
- * 人直接在子会话里打的字也被当成父 agent 的转述（会话树上没有来源标记）—— 方向是更保守（多问）。
+ * 子会话里的「用户消息」多半是父 agent 写的：人发的消息取顶层会话；子会话自己的用户消息按**来源记录**分
+ * （`SourceDoc`，转写摘要 user 项的 `source`，§19.7，2026-10-17 裁决）—— 有记录的是父会话代发的，列作
+ * delegatedTasks（只是声明，不是授权）；没有记录、且在这条对话**第一条有记录的消息之后**的，是人在子会话里亲手
+ * 打的，算进 userMessages；在它之前的、以及整条都没有记录的（升级之前的子会话、旧格式会话），照旧当成父 agent
+ * 写的 —— 升级前父会话发的任务同样没有记录，不确定时往保守的方向偏（多问）。子会话里人对 ask 的回答与卡片反馈
+ * 照样算人写的，**父会话代答的 ask 不算**（它也进 delegatedTasks —— 不然父 agent 代答一句就成了用户的同意，§19.5）。
  *
  * 审查员可以 `read`（它常要看一眼被运行的脚本），但它自己的工具调用**从不问人**：会询问的读取直接拒绝
  * （toolContext 给它的安全上下文不接询问通道，按 fail-closed 拒绝），所以它能读的不超过被审 agent 本来
@@ -38,6 +41,7 @@ import { chatFrontendRegistry } from '../frontend/core'
 import { hookService, hookTriggers } from './hookService'
 import { sessionRecords } from './sessionRecords'
 import { readSessionTranscript, type TranscriptItem } from './transcriptSource'
+import { authorsOf } from '@shuvix/agent-runtime'
 import { createLogger } from '../logger'
 
 const log = createLogger('PermissionReview')
@@ -82,21 +86,34 @@ interface HumanInput {
 }
 
 /**
- * 会话转写里人写的东西（旧 → 新）：人发的消息（includeUserMessages 时；系统写的 —— 后台完成通知、指令注入 ——
- * 不算），人对 ask 工具的回答（连同问题）。读的是当前上下文 —— 压缩掉的早期消息不在其中（压缩摘要是模型写的，
+ * 子会话里哪些用户消息是人亲手打的（§19.7 的口径）：没有来源记录、且排在这条对话第一条有来源记录的消息之后。
+ * 整条都没有来源记录 → 一条都不算（升级之前的子会话、旧格式会话：父会话写的任务同样没有记录，分不出来）。
+ */
+function childHumanMessages(items: readonly TranscriptItem[]): Set<TranscriptItem> {
+  const users = items.filter((item) => item.kind === 'user' && !item.systemWritten)
+  const authors = authorsOf(users, (item) => item.kind === 'user' && !!item.source)
+  return new Set(users.filter((item) => authors.get(item) === 'human'))
+}
+
+/**
+ * 会话转写里人写的东西（旧 → 新）：人发的消息（`isHumanMessage` 说算的那些；系统写的 —— 后台完成通知、指令注入 ——
+ * 一律不算），人对 ask 工具的回答（连同问题）。读的是当前上下文 —— 压缩掉的早期消息不在其中（压缩摘要是模型写的，
  * 本来也不收）。ask 的回答按所在那条 assistant 消息的时间排（回答本身晚一点，但早于下一条消息）。
  */
 function transcriptInputsOf(
   items: readonly TranscriptItem[],
-  includeUserMessages: boolean
+  isHumanMessage: (item: TranscriptItem) => boolean
 ): HumanInput[] {
   const inputs: HumanInput[] = []
   for (const item of items) {
     if (item.kind === 'user') {
-      if (!includeUserMessages || item.systemWritten) continue
+      if (item.systemWritten || !isHumanMessage(item)) continue
       const text = item.text.trim()
       if (text) inputs.push({ ts: item.ts, text: clip(text, USER_MESSAGE_MAX_CHARS) })
     } else if (item.kind === 'ask') {
+      // 父会话代答的不是人写的（§19.5）：它进 delegatedTasks（声明，不是授权），这里不收 ——
+      // 否则父 agent 代答一句「对，删掉它」就成了用户的同意
+      if (item.answeredBy) continue
       inputs.push({
         ts: item.ts,
         text: clip(
@@ -121,8 +138,8 @@ function feedbackInputsOf(sessionId: string): HumanInput[] {
 }
 
 /**
- * 人写的输入（旧 → 新）：顶层会话里人发的消息与对 ask 的回答、卡片反馈；子会话再加上它自己的
- * ask 回答与卡片反馈（它的「用户消息」是父 agent 写的，不在其中）。
+ * 人写的输入（旧 → 新）：顶层会话里人发的消息与对 ask 的回答、卡片反馈；子会话再加上人在它里面亲手打的消息
+ * （`childHumanMessages`）、它自己的 ask 回答（父会话代答的除外）与卡片反馈。
  */
 function humanInputsOf(
   sessionId: string,
@@ -130,20 +147,42 @@ function humanInputsOf(
   topItems: readonly TranscriptItem[],
   ownItems: readonly TranscriptItem[]
 ): string[] {
-  const inputs = [...transcriptInputsOf(topItems, true), ...feedbackInputsOf(top)]
+  // 顶层会话：人发的都算 —— 只有带来源记录的不算（正常流程里顶层不会有，失败闭合，与代答的 ask 同一方向）
+  const inputs = [
+    ...transcriptInputsOf(topItems, (item) => !(item.kind === 'user' && item.source)),
+    ...feedbackInputsOf(top)
+  ]
   if (sessionId !== top) {
-    inputs.push(...transcriptInputsOf(ownItems, false), ...feedbackInputsOf(sessionId))
+    const human = childHumanMessages(ownItems)
+    inputs.push(
+      ...transcriptInputsOf(ownItems, (item) => human.has(item)),
+      ...feedbackInputsOf(sessionId)
+    )
   }
   // 稳定排序：同一时刻的先后保持来源内的次序
   inputs.sort((a, b) => a.ts - b.ts)
   return firstAndTail(inputs.map((input) => input.text))
 }
 
-/** 子会话自己的「用户消息」—— 父 agent 写的任务（旧 → 新） */
+/**
+ * 子会话里父 agent 写的东西（旧 → 新）：它的「用户消息」（父 agent 写的任务），以及父会话代答的 ask
+ * （§19.5 —— 同样是父 agent 的话，只是声明，不是授权）。
+ */
 function delegatedTasksOf(items: readonly TranscriptItem[]): string[] {
   const tasks: string[] = []
+  // 人在子会话里亲手打的不是任务，它们进 userMessages（§19.7）
+  const human = childHumanMessages(items)
   for (const item of items) {
-    if (item.kind !== 'user' || item.systemWritten) continue
+    if (item.kind === 'ask' && item.answeredBy) {
+      tasks.push(
+        clip(
+          `(the parent session answered the agent's question "${item.question}" for the user) ${item.answer}`,
+          USER_MESSAGE_MAX_CHARS
+        )
+      )
+      continue
+    }
+    if (item.kind !== 'user' || item.systemWritten || human.has(item)) continue
     const text = item.text.trim()
     if (text) tasks.push(clip(text, USER_MESSAGE_MAX_CHARS))
   }

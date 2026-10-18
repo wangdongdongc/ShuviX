@@ -8,9 +8,14 @@
  *
  * 两边用同一组毫秒时间戳（v3 条目的 ISO 时间 = durable 消息的 timestamp），所以两边的 payload / 事实
  * 应当逐字相等。另有一个按 types.ts 构造 ask 事件的 `makeEvent` 与 MemoryStorage 宿主。
+ *
+ * WP2（§19.5 / §19.7）的两项只在 durable 一侧有意义：`result` 的 `details`（ask 的答题方在这里；v3 那边
+ * 也原样写进 toolResult，旧读者不看它）与 `sourcedUser` 的来源（SourceDoc + 放下的 submission，与显示侧车
+ * 同一套写法；v3 没有来源，那边照常是一条 user）。
  */
 import { fauxAssistantMessage } from '@earendil-works/pi-ai'
 import type { ImageContent, TextContent, ThinkingContent, ToolCall } from '@earendil-works/pi-ai'
+import type { JsonValue } from '@earendil-works/chord'
 import {
   MemoryStorage,
   type ConversationId,
@@ -21,6 +26,7 @@ import {
 import {
   backgroundContext as BG,
   DisplayDoc,
+  SourceDoc,
   noticeEntryDraft,
   type DurableSession,
   type PermissionRequestEvent,
@@ -28,6 +34,7 @@ import {
   type SessionHost
 } from '@shuvix/agent-runtime'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ParentSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import { wrapSummary } from '../../../../../../../packages/agent-runtime/src/durable/__tests__/support/digest'
 import { makeRealHost } from './realHost'
 
@@ -50,6 +57,8 @@ export type TwinStep =
       ts: number
       content: string | (TextContent | ImageContent)[]
       display?: DisplaySidecar
+      /** 不是人打的：父会话代用户发的（durable 一侧记进 SourceDoc） */
+      source?: ParentSessionRef
     }
   | {
       type: 'assistant'
@@ -65,6 +74,8 @@ export type TwinStep =
       toolName?: string
       content: string | (TextContent | ImageContent)[]
       isError?: boolean
+      /** toolResult 的 details（ask 的答题方 `answeredBy` 在这里） */
+      details?: JsonValue
     }
   | { type: 'notice'; ts: number; text: string }
   /** `keptFrom` = 第一条保留的那一步在脚本里的下标 */
@@ -75,6 +86,13 @@ export const user = (
   content: string | (TextContent | ImageContent)[],
   display?: DisplaySidecar
 ): TwinStep => ({ type: 'user', ts, content, ...(display ? { display } : {}) })
+
+/** 父会话代用户发进子会话的那条消息（带来源，§19.7） */
+export const sourcedUser = (
+  ts: number,
+  content: string | (TextContent | ImageContent)[],
+  source: ParentSessionRef
+): TwinStep => ({ type: 'user', ts, content, source })
 
 export const assistant = (
   ts: number,
@@ -89,7 +107,7 @@ export const result = (
   ts: number,
   callId: string,
   content: string | (TextContent | ImageContent)[],
-  options: { toolName?: string; isError?: boolean } = {}
+  options: { toolName?: string; isError?: boolean; details?: JsonValue } = {}
 ): TwinStep => ({ type: 'result', ts, callId, content, ...options })
 
 export const notice = (ts: number, text: string): TwinStep => ({ type: 'notice', ts, text })
@@ -168,7 +186,8 @@ export function legacyJsonl(sessionId: string, steps: readonly TwinStep[]): stri
                 toolName: step.toolName ?? 'ask',
                 content: toolResultContent(step.content),
                 isError: step.isError ?? false,
-                timestamp: step.ts
+                timestamp: step.ts,
+                ...(step.details === undefined ? {} : { details: step.details })
               }
             },
             step.ts
@@ -254,7 +273,8 @@ export async function writeDurable(
               toolName: step.toolName ?? 'ask',
               content: toolResultContent(step.content),
               isError: step.isError ?? false,
-              timestamp: step.ts
+              timestamp: step.ts,
+              ...(step.details === undefined ? {} : { details: step.details })
             }
           ],
           data: { diagnostics: [] }
@@ -279,6 +299,7 @@ export async function writeDurable(
         break
     }
     const display = step.type === 'user' ? step.display : undefined
+    const source = step.type === 'user' ? step.source : undefined
     const requestId = `twin-${++seq}`
     if (display) {
       await conversation.commit(async (tx) => {
@@ -286,9 +307,15 @@ export async function writeDurable(
         doc.items[requestId] = display as unknown as JsonObject
       }, BG)
     }
+    if (source) {
+      await conversation.commit(async (tx) => {
+        const doc = await tx.doc(SourceDoc, id)
+        doc.items[requestId] = { ...source } as unknown as JsonObject
+      }, BG)
+    }
     const record = await session.harness.commit(async (tx) => {
       const entry = await tx.appendEntry(id, draft)
-      if (display) {
+      if (display || source) {
         await tx.createSubmission({
           conversationId: id,
           requestId,

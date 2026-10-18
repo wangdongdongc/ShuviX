@@ -44,6 +44,15 @@ export interface ChatGateway {
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   steer(sessionId: string, text: string): void
+  /**
+   * 父会话往自己驱动着的子会话里插话（§19.6）：与 `steer` 同一道门，但**交回受理结果**（`{error}` = 没送到，
+   * 文案给人读），并带上幂等键与来源。只交给打开着的会话 —— 正被驱动的子会话必然开着。主进程内专用，IPC 不走它。
+   */
+  steerDriven(
+    sessionId: string,
+    text: string,
+    drive: { requestId: string; parentId: string }
+  ): Promise<{ error?: string; code?: SubmitErrorCode }>
   /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
   followUp(sessionId: string, text: string): void
   /**

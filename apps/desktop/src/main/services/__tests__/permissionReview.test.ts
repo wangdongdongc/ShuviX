@@ -13,7 +13,7 @@
  *   - PR-15..17 reasoning-blind 的输入边界：userMessages 只收人写的东西，而「人写的」只认**来源**
  *               （人发的消息、内置 ask 工具的回答、安全模块记下的卡片反馈），不认文字 —— 会话树里那段
  *               「User declined …」谁都能用一条 echo 打印出来；子会话里的「用户消息」是父 agent 写的，
- *               只进 delegatedTasks；
+ *               只进 delegatedTasks（旧格式没有来源记录：消息元数据里形似的 `source` 也不算，RSRC-27）；
  *   - PR-3c     「是不是审查员」这一个判断（isReviewerAgent / isReviewerIdentity）：只认「派生 + 档案绑在
  *               permission.request 上」，根 agent 不去扫 hook 目录；
  *   - PR-18     recentOperations 取自真的决策日志，审查员自己的操作先滤掉再取最近 10 条；
@@ -101,6 +101,7 @@ import {
   isReviewerIdentity,
   reviewPermissionRequest
 } from '../permissionReview'
+import { transcriptItemsOf } from '../transcriptSource'
 
 // ─── 夹具 ───────────────────────────────────────────────
 
@@ -1418,6 +1419,23 @@ describe('PR —— 子会话：人写的取顶层，父 agent 写的只进 dele
       fb('-- prod\nDROP TABLE sessions', 'never drop tables')
     ])
     expect(payload.delegatedTasks).toStrictEqual(['Migrate the database'])
+  })
+
+  it('RSRC-27 [guard] 旧格式消息元数据里的 metadata.source 不被当成来源：转写项没有 source 键、不长出锚点，后面那条仍是任务', async () => {
+    const top = newSession()
+    const sub = newSession(top)
+    transcripts.set(top, [userMsg(top, 'top intent', 500)])
+    transcripts.set(sub, [
+      userMsg(sub, 'P', 1000, { source: { type: 'parent-session', sessionId: 'P1' } }),
+      userMsg(sub, 'H', 2000)
+    ])
+    const items = transcriptItemsOf(await mocks.listBySession(sub))
+    expect(items).toHaveLength(2)
+    for (const item of items) expect(item).not.toHaveProperty('source')
+
+    const payload = await buildPermissionRequestPayload(makeEvent(sub))
+    expect(payload.delegatedTasks).toStrictEqual(['P', 'H'])
+    expect(payload.userMessages).toStrictEqual(['top intent'])
   })
 })
 

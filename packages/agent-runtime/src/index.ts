@@ -73,6 +73,7 @@ export {
   createAskTool,
   AskParamsSchema,
   ASK_DESCRIPTION,
+  PARENT_ANSWERED,
   type AskTool,
   type CreateAskToolOptions
 } from './askTool'
@@ -686,11 +687,13 @@ export {
   DisplayDoc,
   NoticeEntry,
   SessionStateDoc,
+  SourceDoc,
   noticeEntryDraft,
   seedConversationDocs,
   type AgentStateRecord,
   type DeferredNotice,
   type DisplayState,
+  type SourceState,
   type DrivenRun,
   type NoticeData,
   type SessionState
@@ -707,6 +710,25 @@ export {
   type TranscriptDigestSession,
   type TranscriptUserItem
 } from './durable/transcriptDigest'
+// 会话大纲（§19.7）：父会话查看子会话现场 —— 先目录、再按编号展开，有字数上限（纯函数）
+export {
+  buildSessionOutline,
+  OUTLINE_LIMITS,
+  type OutlineQuery,
+  type OutlineReader,
+  type OutlineResult,
+  type OutlineView
+} from './outline/sessionOutline'
+// 用户输入的来源（§19.7）：父会话代用户发进子会话的消息 / 引导，按条目 id 交出（只读）
+export {
+  authorsOf,
+  inputSourceOf,
+  readInputSources,
+  resolveInputSources,
+  type InputSource,
+  type InputSourceSession,
+  type MessageAuthor
+} from './durable/inputSource'
 // 界面投影（phase 3，纯函数）：活上下文 + pi.live / pi.inbox + 显示侧车 + 询问 + 运行状态 → SessionView /
 // AgentView；与转写摘要共用的显示侧车解析与压缩外壳也在这里导出
 // 长期投影的结构共享（P4-09b）：`ProjectionMemo` 逐帧传给它们，没变的部分交回上一次的对象

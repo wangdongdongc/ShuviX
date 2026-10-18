@@ -107,9 +107,25 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
   session: {
     labelKey: 'tool.sessionLabel',
     presentation: { icon: 'Wrench', iconColor: '#8b5cf6' },
-    // action + 该 action 最有信息量的参数（set-title → 新标题）
-    buildSummary: (args) =>
-      [asStr(args.action), asStr(args.title)].filter(Boolean).join(' · ') || undefined
+    // action + 该 action 最有信息量的参数（set-title → 新标题；代答 → 选项或答复首行；插话 → 消息首行；
+    // 查看现场 → 展开的编号 / 搜索词，§19）
+    buildSummary: (args) => {
+      const action = asStr(args.action)
+      const selections = Array.isArray(args.selections)
+        ? args.selections.filter((s): s is string => typeof s === 'string').join(', ')
+        : undefined
+      const spoken =
+        action === 'answer-sub-session' || action === 'steer-sub-session'
+          ? firstLine(args.message)
+          : undefined
+      const detail =
+        asStr(args.title) ??
+        (selections || undefined) ??
+        spoken ??
+        asStr(args.item) ??
+        asStr(args.match)
+      return [action, detail].filter(Boolean).join(' · ') || undefined
+    }
   },
   git: {
     labelKey: 'tool.gitLabel',

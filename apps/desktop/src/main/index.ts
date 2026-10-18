@@ -30,6 +30,7 @@ import {
 } from './services/notificationService'
 import { sessionRecords } from './services/sessionRecords'
 import { sessionRunErrorText, setSessionAskObserver } from './services/sessionSignals'
+import { subSessionRunner } from './services/subSessionRunner'
 import { initMarkdownWindowService, openMarkdownFile } from './services/markdownWindowService'
 import { initPreviewWindowService } from './services/previewWindowService'
 import { markdownFilesFromArgv } from './utils/markdownFiles'
@@ -527,8 +528,30 @@ function initSharedWindowServices(): void {
       }
     })
   )
-  // 询问不再是 ChatEvent（P3-08）：会话信号接线把询问的挂起 / 落定交给通知；失败通知的正文从投影读
-  setSessionAskObserver({ askRaised: notifyAskRaised, askResolved: notifyAskResolved })
+  // 询问不再是 ChatEvent（P3-08）：会话信号接线把询问的挂起 / 落定交给通知；失败通知的正文从投影读。
+  // 同一对钩子也告诉子会话运行器：父会话发起的那一轮停下来问了，它的绑定任务进出「等待输入」（§19.3）
+  // 两路各自隔离：一路抛错不拦另一路
+  const eachSafely = (...calls: Array<() => void>): void => {
+    for (const call of calls) {
+      try {
+        call()
+      } catch (error) {
+        log.warn(`询问钩子失败: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+  }
+  setSessionAskObserver({
+    askRaised: (sessionId, request) =>
+      eachSafely(
+        () => notifyAskRaised(sessionId, request),
+        () => subSessionRunner.onAskRaised(sessionId, request)
+      ),
+    askResolved: (sessionId, requestId) =>
+      eachSafely(
+        () => notifyAskResolved(sessionId, requestId),
+        () => subSessionRunner.onAskResolved(sessionId, requestId)
+      )
+  })
   setRunErrorTextSource(sessionRunErrorText)
 
   // 初始化 widget 独立窗口服务（owns widget app 窗口）

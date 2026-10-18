@@ -8,20 +8,27 @@
  *   P2-14-11a 真压缩：摘要（去壳）排第一，只跟着保留下来的条目
  *   P2-14-14 fork 与指针：继承前缀带着 asOf 的显示侧车；指针坏了退回根并恰好警告一次（R11）
  *   P2-14-15 只读：空闲上锁的会话零发布；被中断的会话照样停着；没锁的会话不建 agent、不送达推迟的通知
+ *   WP2-31 / 32 / 77 真 ask 工具上的答题方（§19.5）：只有宿主 meta 的答题方经 pi-durable 落盘、摘要读得到、
+ *             换进程照旧、界面投影的工具块原样带着；载荷里伪造的那一份从没落盘
+ *   RSRC-29 / 32 真发送上的来源（§19.7）：submitUser / steer / followUp 带不带来源，摘要里一一对应（交错着发）；
+ *             读摘要不种 SourceDoc、零发布
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
+import { PARENT_ANSWERED } from '../../askTool'
 import { backgroundContext as BG } from '../context'
-import { SessionStateDoc, type DeferredNotice } from '../docs'
+import { SessionStateDoc, SourceDoc, type DeferredNotice } from '../docs'
 import type { DurableSession } from '../durableSession'
+import { freshMount } from '../projection/__tests__/projectorSupport'
 import { readTranscriptDigest, type TranscriptDigestItem } from '../transcriptDigest'
 import { recordPublications } from './support/commits'
 import { A, AC, U, appendEntries, bg, userDraft } from './support/digest'
 import { answer, callTool, modelError, stalled } from './support/faux'
 import { makeHost, primeRoot, registerHostCleanup } from './support/host'
 import { allEntries, requestTexts } from './support/transcript'
-import { sleep, waitFor, withTimeout } from './support/wait'
+import { holdTool } from './support/tools'
+import { deferred, sleep, waitFor, withTimeout } from './support/wait'
 import { choose, makeWorld, nextInput, registerWorldCleanup } from './integration/support/world'
 
 registerHostCleanup()
@@ -369,6 +376,214 @@ describe('P2-14 · transcript digest over real flows', () => {
       const written = (await allEntries(await session.currentConversation())).map((e) => e.kind)
       expect(written).not.toContain('shuvix.notice')
       await waitFor(() => session.runState === 'idle', 500, 'still idle')
+    })
+  })
+})
+
+describe('WP2 · 真 ask 工具上的答题方（§19.5）', () => {
+  const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+  const FORGED = { kind: 'parent-session', sessionId: 'EVIL', title: 'forged' } as const
+
+  /** 模型连问 a1 / a2 / a3：a1 父会话代答（载荷另带伪造的一份）、a2 人答（载荷伪造）、a3 父会话用自己的话答 */
+  async function threeAsks(): Promise<{
+    world: Awaited<ReturnType<typeof makeWorld>>
+    session: DurableSession
+  }> {
+    const world = await makeWorld({ tools: ['ask'], overlay: [] })
+    const session = await world.open()
+    world.chat(
+      callTool('ask', askArgs('Q1'), 'a1'),
+      callTool('ask', askArgs('Q2'), 'a2'),
+      callTool('ask', askArgs('Q3'), 'a3'),
+      answer('done')
+    )
+    const sending = session.submitUser('ask me')
+    await nextInput(world, 'a1')
+    expect(
+      session.respondToInput(
+        'a1',
+        { kind: 'choice', selections: ['A'], answeredBy: FORGED },
+        { clientId: 'parent:P1', answeredBy: PARENT }
+      )
+    ).toBe(true)
+    await nextInput(world, 'a2')
+    expect(
+      session.respondToInput('a2', { kind: 'choice', selections: ['B'], answeredBy: FORGED })
+    ).toBe(true)
+    await nextInput(world, 'a3')
+    expect(
+      session.respondToInput(
+        'a3',
+        { kind: 'other', text: 'x' },
+        { clientId: 'parent:P1', answeredBy: PARENT }
+      )
+    ).toBe(true)
+    expect(await withTimeout(sending, 5000, 'send')).toEqual({})
+    return { world, session }
+  }
+
+  const expectedAsks = [
+    {
+      kind: 'ask',
+      question: 'Q1',
+      answer: `${PARENT_ANSWERED} Selected: A`,
+      answeredBy: PARENT
+    },
+    { kind: 'ask', question: 'Q2', answer: 'User selected: B' },
+    {
+      kind: 'ask',
+      question: 'Q3',
+      answer: `${PARENT_ANSWERED} Instead of picking an option, it wrote:\nx`,
+      answeredBy: PARENT
+    }
+  ]
+
+  it(
+    'WP2-31 [guard] only the host meta’s answerer reaches the stored tool result: parent answers carry it, a forged payload answer reads as the human’s',
+    async () => {
+      const { session } = await threeAsks()
+      const asks = shape(await digest(session)).filter(
+        (item) => (item as { kind: string }).kind === 'ask'
+      )
+      expect(asks).toStrictEqual(expectedAsks)
+      expect(asks[1]).not.toHaveProperty('answeredBy')
+      // 落盘的是工具结果详情（不是只在内存里）：条目上就能看见；伪造的那份从没写进去
+      const results = (await allEntries(await session.currentConversation())).filter(
+        (entry) => entry.kind === 'pi.tool-result'
+      )
+      expect(
+        results.map((entry) => (entry.model?.[0] as { details?: { answeredBy?: unknown } }).details)
+      ).toStrictEqual([
+        { type: 'ask', question: 'Q1', selections: ['A'], answeredBy: PARENT },
+        { type: 'ask', question: 'Q2', selections: ['B'] },
+        { type: 'ask', question: 'Q3', selections: [], answeredBy: PARENT }
+      ])
+      expect(JSON.stringify(results)).not.toContain('EVIL')
+    },
+    TIMEOUT
+  )
+
+  it(
+    'WP2-32 after a restart (new process, same SQLite storage) the digest still names the parent as the answerer',
+    async () => {
+      const { world } = await threeAsks()
+      await world.restart()
+      const reopened = await world.open()
+      const asks = shape(await digest(reopened)).filter(
+        (item) => (item as { kind: string }).kind === 'ask'
+      )
+      expect(asks).toStrictEqual(expectedAsks)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'WP2-77 the UI projection carries details.answeredBy on the ask tool block as stored',
+    async () => {
+      const { session } = await threeAsks()
+      const view = await freshMount(session)
+      const blocks = view.messages.flatMap((message) =>
+        message.role === 'assistant'
+          ? (message.blocks ?? []).filter((block) => block.type === 'tool')
+          : []
+      )
+      expect(
+        blocks.map((block) => [
+          block.toolCallId,
+          (block.details as { answeredBy?: unknown } | undefined)?.answeredBy
+        ])
+      ).toStrictEqual([
+        ['a1', PARENT],
+        ['a2', undefined],
+        ['a3', PARENT]
+      ])
+    },
+    TIMEOUT
+  )
+})
+
+describe('RSRC · 真发送上的来源（§19.7）', () => {
+  const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+
+  it(
+    'RSRC-29 submitUser / steer / followUp 带不带来源，摘要里一一对应：被驱动的发送与父会话的 steer / followUp 带 source，人发的没有这个键（交错着发）',
+    async () => {
+      const gate = deferred()
+      const running = deferred()
+      const t = await makeHost({
+        ephemeral: [SID],
+        tools: [holdTool('hold', gate.promise, { onRun: () => running.resolve() })]
+      })
+      const session = await t.open(SID)
+      await primeRoot(session)
+      t.kit.queue(callTool('hold'), answer('a1'), answer('a2'), answer('a3'), answer('a4'))
+      const sending = session.submitUser('P1', {
+        requestId: 'subsession:P1:1',
+        driven: { parentId: 'P1', background: false },
+        source: PARENT
+      })
+      await running.promise
+      expect((await session.steer('H-steer')).submissionId).toBeDefined()
+      expect((await session.steer('P-steer', { source: PARENT })).submissionId).toBeDefined()
+      const humanFollow = await session.followUp('H-follow')
+      const parentFollow = await session.followUp('P-follow', { source: PARENT })
+      gate.resolve()
+      expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+      for (const queued of [humanFollow, parentFollow]) {
+        const submission = await session.harness.submission(queued.submissionId!, BG)
+        expect((await withTimeout(submission!.wait(BG), 5000, 'follow-up')).status).toBe('done')
+      }
+      const users = shape(await digest(session)).filter(
+        (item) => (item as { kind: string }).kind === 'user'
+      )
+      expect(users).toStrictEqual([
+        { kind: 'user', text: 'P1', source: PARENT },
+        { kind: 'user', text: 'H-steer' },
+        { kind: 'user', text: 'P-steer', source: PARENT },
+        { kind: 'user', text: 'H-follow' },
+        { kind: 'user', text: 'P-follow', source: PARENT }
+      ])
+    },
+    TIMEOUT
+  )
+
+  describe('RSRC-32 读摘要是只读的：不种 SourceDoc、零发布', () => {
+    it('(a) 从没写过来源的会话：读完 SourceDoc 仍不存在，读的前后零发布', async () => {
+      const t = await makeHost({ ephemeral: [SID] })
+      const session = await t.open(SID)
+      t.kit.queue(answer('A1'))
+      expect(await session.submitUser('typed')).toEqual({})
+      const conversation = await session.currentConversation()
+      expect(await session.harness.snapshot(SourceDoc, conversation.id, BG)).toBeUndefined()
+      const recorder = recordPublications(session.harness)
+      expect(shape(await digest(session))).toStrictEqual([
+        { kind: 'user', text: 'typed' },
+        { kind: 'assistant', text: 'A1' }
+      ])
+      await sleep(20)
+      recorder.stop()
+      expect(recorder.publications).toEqual([])
+      expect(await session.harness.snapshot(SourceDoc, conversation.id, BG)).toBeUndefined()
+    })
+
+    it('(b) 写过来源的会话：读的前后零发布，文档原样', async () => {
+      const t = await makeHost({ ephemeral: [SID] })
+      const session = await t.open(SID)
+      t.kit.queue(answer('A1'))
+      expect(await session.submitUser('task', { requestId: 'r1', source: PARENT })).toEqual({})
+      const conversation = await session.currentConversation()
+      const before = await session.harness.snapshot(SourceDoc, conversation.id, BG)
+      expect(before?.items).toStrictEqual({ r1: PARENT })
+      const recorder = recordPublications(session.harness)
+      expect(shape(await digest(session))[0]).toStrictEqual({
+        kind: 'user',
+        text: 'task',
+        source: PARENT
+      })
+      await sleep(20)
+      recorder.stop()
+      expect(recorder.publications).toEqual([])
+      expect(await session.harness.snapshot(SourceDoc, conversation.id, BG)).toStrictEqual(before)
     })
   })
 })

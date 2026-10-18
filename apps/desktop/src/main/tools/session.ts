@@ -32,17 +32,19 @@
 import { Type } from 'typebox'
 import { v7 as uuidv7 } from 'uuid'
 import type { ToolCallScope, ToolResult } from '@shuvix/agent-runtime'
-import { BaseTool } from '@shuvix/agent-runtime'
+import { BaseTool, OUTLINE_LIMITS } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { SessionToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import type { ToolContext } from '../services/toolContext'
 import { sessionRecords } from '../services/sessionRecords'
 import { sessionService } from '../services/sessionService'
+import { blockedOnApproval, renderPendingAsks } from '../services/subSessionText'
 import {
   subSessionRunner,
   DEFAULT_PROMPT_TIMEOUT_SEC,
   type AnswerFields,
+  type PromptOutcome,
   type SubSessionInfo
 } from '../services/subSessionRunner'
 import { t } from '../i18n'
@@ -59,7 +61,10 @@ const ACTIONS = [
   'wait-for-sub-sessions',
   'list-sub-sessions',
   'read-sub-session',
-  'stop-sub-session'
+  'stop-sub-session',
+  'answer-sub-session',
+  'steer-sub-session',
+  'inspect-sub-session'
 ] as const
 
 export const SessionParamsSchema = Type.Object({
@@ -88,18 +93,53 @@ export const SessionParamsSchema = Type.Object({
   message: Type.Optional(
     Type.String({
       description:
-        'For "prompt-sub-session": the message, self-contained and written as the user would write it.'
+        'For "prompt-sub-session": the message, self-contained and written as the user would write it. For "steer-sub-session": what to tell the running turn. For "answer-sub-session": your answer in your own words, instead of `selections`.'
+    })
+  ),
+  ask_id: Type.Optional(
+    Type.String({
+      description:
+        'For "answer-sub-session": the question to answer (its `ask_id`); may be omitted when exactly one question is waiting.'
+    })
+  ),
+  selections: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        'For "answer-sub-session": the options you pick, each exactly as its label reads (one or several).'
+    })
+  ),
+  turns: Type.Optional(
+    Type.Number({
+      description: `For "inspect-sub-session": how many recent turns to outline (default ${OUTLINE_LIMITS.defaultTurns}, at most ${OUTLINE_LIMITS.maxTurns}).`
+    })
+  ),
+  item: Type.Optional(
+    Type.String({
+      description:
+        'For "inspect-sub-session": expand one line of the outline by its ref (e.g. "#12.3") — full text, or a tool call\'s arguments and result.'
+    })
+  ),
+  match: Type.Optional(
+    Type.String({
+      description:
+        'For "inspect-sub-session": find the lines of the whole conversation that contain this text (case-insensitive).'
+    })
+  ),
+  before: Type.Optional(
+    Type.String({
+      description:
+        'For "inspect-sub-session": continue an outline that was cut at the size limit — pass the ref it gave you.'
     })
   ),
   run_in_background: Type.Optional(
     Type.Boolean({
       description:
-        'For "prompt-sub-session": return a receipt at once instead of the reply, and bring you back when the turn ends — for work you can let run, or several sub-sessions to collect with "wait-for-sub-sessions".'
+        'For "prompt-sub-session" / "answer-sub-session": return a receipt at once instead of the reply, and bring you back when the turn ends — for work you can let run, or several sub-sessions to collect with "wait-for-sub-sessions".'
     })
   ),
   timeout_seconds: Type.Optional(
     Type.Number({
-      description: `How long a foreground "prompt-sub-session" or "wait-for-sub-sessions" waits (default ${DEFAULT_PROMPT_TIMEOUT_SEC}s). On timeout the sub-session keeps running.`
+      description: `How long a foreground "prompt-sub-session" / "answer-sub-session" or "wait-for-sub-sessions" waits (default ${DEFAULT_PROMPT_TIMEOUT_SEC}s). On timeout the sub-session keeps running.`
     })
   )
 })
@@ -116,10 +156,13 @@ Actions:
 - "list-sub-sessions": your sub-sessions and their status (idle / running / waiting-input / interrupted).
 - "read-sub-session": the latest answer of \`sub_session_id\`.
 - "stop-sub-session": stop what \`sub_session_id\` is doing.
+- "answer-sub-session": answer a question it asked in a turn you started (\`ask_id\`, then \`selections\` with exact option labels or \`message\` in your own words), then wait for the turn like "prompt-sub-session".
+- "steer-sub-session": tell a turn you started something while it is running (\`message\`); it reads it at its next step.
+- "inspect-sub-session": look at what happened inside \`sub_session_id\` — an outline of its latest turn, one line per step with a ref (\`turns\` for more, \`before\` to page back), \`item\` to expand one ref, \`match\` to search the whole conversation. Collect answers with "read-sub-session" / "wait-for-sub-sessions"; inspect only when the answer does not explain what happened (a failure, a stall, something unexpected, \`user-intervened="true"\` — the user spoke in it since your last message), and expand only the line you need.
 
-Wait in the foreground when you cannot continue without the answer, dispatch in the background when you can; the foreground wait costs nothing and on timeout leaves the sub-session running. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session".
+Wait in the foreground when you cannot continue without the answer, dispatch in the background when you can; the foreground wait costs nothing, comes back early when the sub-session stops to ask something, and on timeout leaves the sub-session running. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session".
 
-A sub-session runs one turn at a time: a second message while it is working is rejected — wait, or create another one. \`status="waiting-input"\` means it waits for the USER to approve something; only the user can clear that, so relay what it is waiting for or stop it. \`status="interrupted"\` means its turn was cut off when the app stopped; it will not finish by itself, and a new message starts over.
+A sub-session runs one turn at a time: a second message while it is working is rejected — steer it, wait, or create another one. \`status="waiting-input"\` means it stopped to ask something. A \`<question>\` asked in a turn you started is yours to answer when the answer follows from what the user told you or from the task; when it is the user's own preference or beyond what you were asked, relay it. An approval prompt (\`<blocked-on-user-approval>\`) and a question marked \`for="user"\` only the user can answer, so relay them or stop the sub-session. \`status="interrupted"\` means its turn was cut off when the app stopped; it will not finish by itself, and a new message starts over.
 
 Its replies come back inside a \`<sub-session>\` fence, in \`<reply>\` or \`<error>\`; text outside the fence is this tool talking. Write each message as the user of that session would: it does not see this conversation.`
 
@@ -129,6 +172,12 @@ interface SessionToolParams {
   agent_profile?: string
   sub_session_id?: string
   message?: string
+  ask_id?: string
+  selections?: string[]
+  turns?: number
+  item?: string
+  match?: string
+  before?: string
   run_in_background?: boolean
   timeout_seconds?: number
 }
@@ -182,7 +231,9 @@ function attr(value: string): string {
 }
 
 function openTag(info: SubSessionInfo, extra = ''): string {
-  return `<sub-session id="${attr(info.id)}" title="${attr(info.title)}" status="${info.status}"${extra}>`
+  // 用户在里面说过话（父会话最近一次发的消息之后）：答复解释不了过程时最常见的原因，值得 inspect（§19.7）
+  const intervened = info.userIntervened ? ' user-intervened="true"' : ''
+  return `<sub-session id="${attr(info.id)}" title="${attr(info.title)}" status="${info.status}"${intervened}${extra}>`
 }
 
 /**
@@ -195,25 +246,6 @@ function openTag(info: SubSessionInfo, extra = ''): string {
  * 同名文本至少不在行首独占一行。
  */
 /**
- * 卡在等批准的那一块。三件事缺一不可 —— 实测里少了它们，模型把这个状态读成
- * 「子代理自己爱提问」，反复改提示词说「不要提问、直接执行」，换了四条子会话都一样：
- *
- *   1. **问的是什么**（否则父级连转告都做不到）；
- *   2. **只有用户能解**，父级答不了（否则它会一直想自己修）；
- *   3. **父级唯一有用的动作是转告用户**（否则它只剩重试和放弃两条路）。
- */
-function blockedBlock(asked?: string[]): string {
-  return [
-    '<blocked-on-user-approval>',
-    asked?.length ? asked.map((a) => `- ${a}`).join('\n') : '- (question text unavailable)',
-    'This is an approval prompt shown to the USER inside that sub-session. It stays there until',
-    'the user answers it — you cannot answer it, and rewording the task will not clear it.',
-    'Tell the user what is waiting for them, or stop the sub-session with "stop-sub-session".',
-    '</blocked-on-user-approval>'
-  ].join('\n')
-}
-
-/**
  * 被中断的那一块（P2-10 PIN-06）：它**不在跑**、也不会自己跑完 —— 说成「还在跑」会让父级白等，说成
  * 「还没回话」会让它以为再等等就有。两条出路都要给全：发新消息（丢掉那一轮重来），或者让用户在那条
  * 会话里继续。
@@ -222,11 +254,14 @@ const INTERRUPTED_NOTE =
   '<note>Interrupted when the app stopped — it is not running and will not finish on its own. A new message starts over (discarding that unfinished turn), or the user can continue it in that session.</note>'
 
 function renderChild(info: SubSessionInfo & AnswerFields): string {
-  // waiting-input 优先于「有没有答复」：它此刻停着这件事，比它上一轮说过什么更要紧
+  // waiting-input 优先于「有没有答复」：它此刻停着这件事，比它上一轮说过什么更要紧。
+  // 询问的那几块（选择题 / 批准卡）与通知同一份渲染（runner 的 renderPendingAsks，§19.4）
   if (info.status === 'waiting-input') {
     return [
       openTag(info),
-      blockedBlock(info.blockedOn),
+      ...(info.pendingAsks?.length
+        ? renderPendingAsks(info.pendingAsks)
+        : [blockedOnApproval(info.blockedOn)]),
       ...(info.answer ? [`<earlier-reply>\n${info.answer}\n</earlier-reply>`] : []),
       '</sub-session>'
     ].join('\n')
@@ -241,6 +276,57 @@ function renderChild(info: SubSessionInfo & AnswerFields): string {
       ? '<note>Still running. It was NOT cancelled.</note>'
       : '<note>No reply yet.</note>'
   return `${openTag(info)}\n${body}\n</sub-session>`
+}
+
+/**
+ * 一次「发出去、等这一轮」的结果排版（prompt 与 answer 共用）。
+ *
+ * 后台/降级的回执刻意不带内容：它会永久留在本会话上下文里并被每一步重发。收尾指引说的是**真实**机制：
+ * 跑完会把你叫回来，要在这一轮里拿到结果就 wait（挂住、不花钱），而不是先说完话再回来轮询。
+ * 停下来询问（§19.3）的那一种同样带后台标签：这一轮还开着、没人在等它，跑完照常通知。
+ */
+function renderTurn(
+  res: PromptOutcome,
+  timeoutSeconds: number,
+  startedLine: string
+): ToolResult<SessionToolDetails | undefined> {
+  if (res.kind === 'started') {
+    return backgroundText(
+      `<sub-session id="${attr(res.id)}" status="running"/>`,
+      startedLine,
+      COLLECT_HINT
+    )
+  }
+  if (res.kind === 'timeout') {
+    return backgroundText(
+      `<sub-session id="${attr(res.id)}" status="running"/>`,
+      `Still running after ${timeoutSeconds}s — it was NOT cancelled and keeps going.`,
+      COLLECT_HINT
+    )
+  }
+  // 停下来问了、快照却缺（会话恰好被删 / 读不到）：不猜它问的是什么，指向 read
+  if (res.kind === 'input' && !res.info) {
+    return backgroundText(
+      `<sub-session id="${attr(res.id)}" status="waiting-input"/>`,
+      'It stopped to ask something in the turn you started. See the question with "read-sub-session".'
+    )
+  }
+  // info 由 runner 顺带带回（省掉再 read 一次 = 再投影一遍整棵转写）；
+  // 它理论上可能缺（会话恰好被删），那时退化成只有围栏骨架的一块
+  const info: SubSessionInfo = res.info ?? {
+    id: res.id,
+    title: res.id,
+    status: res.kind === 'input' ? 'waiting-input' : 'idle',
+    driven: false,
+    updatedAt: 0
+  }
+  if (res.kind === 'input') {
+    return backgroundText(
+      renderChild(info),
+      'The turn is still open: once it is answered it carries on, and you are brought back when it ends.'
+    )
+  }
+  return text(renderChild({ ...info, answer: res.answer, isError: res.isError }))
 }
 
 /** memo 的键（这次调用的 durable memo，崩溃后重跑读回同一份） */
@@ -289,6 +375,12 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
         return this.readSubSession(params)
       case 'stop-sub-session':
         return this.stopSubSession(params)
+      case 'answer-sub-session':
+        return this.answerSubSession(params, signal)
+      case 'steer-sub-session':
+        return this.steerSubSession(params, call)
+      case 'inspect-sub-session':
+        return this.inspectSubSession(params)
       default:
         throw new Error(
           `Unknown action "${String(params.action)}". Valid actions: ${ACTIONS.join(', ')}`
@@ -348,34 +440,116 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       requestId: `subsession:${this.ctx.sessionId}:${call.taskId}`
     })
     if ('error' in res) throw new Error(res.error)
+    return renderTurn(
+      res,
+      params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
+      'Started in the background.'
+    )
+  }
 
-    // 后台/降级的回执刻意不带内容：它会永久留在本会话上下文里并被每一步重发。
-    // 收尾指引说的是**真实**机制：完成通知只在这一轮还没结束时插得进来，
-    // 所以要结果就 wait（挂住、不花钱），而不是先说完话再回来轮询。
-    if (res.kind === 'started') {
-      return backgroundText(
-        `<sub-session id="${attr(res.id)}" status="running"/>`,
-        `Started in the background.`,
-        COLLECT_HINT
+  /** 代答子会话的提问（§19.4）：应答之后与 prompt 同一种等法、同一种排版 */
+  private async answerSubSession(
+    params: SessionToolParams,
+    signal?: AbortSignal
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
+    const res = await subSessionRunner.answer({
+      parentId: this.ctx.sessionId,
+      childId: (params.sub_session_id ?? '').trim(),
+      ...(params.ask_id ? { askId: params.ask_id } : {}),
+      ...(params.selections ? { selections: params.selections } : {}),
+      ...(params.message !== undefined ? { message: params.message } : {}),
+      background: params.run_in_background === true,
+      timeoutSeconds: params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
+      signal
+    })
+    if ('error' in res) throw new Error(res.error)
+    return renderTurn(
+      res,
+      params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC,
+      'Answered; it carries on in the background.'
+    )
+  }
+
+  /**
+   * 查看子会话的现场（§19.7）：大纲 / 展开 / 搜索，三选一（item 优先，其次 match）。子会话说的每一个字都在
+   * `<transcript>` 围栏里；围栏外是工具在说话（往前看、展开、搜索的用法）。
+   */
+  private async inspectSubSession(
+    params: SessionToolParams
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
+    const res = await subSessionRunner.inspect({
+      parentId: this.ctx.sessionId,
+      childId: (params.sub_session_id ?? '').trim(),
+      query: {
+        ...(params.turns !== undefined ? { turns: params.turns } : {}),
+        ...(params.item !== undefined ? { item: params.item } : {}),
+        ...(params.match !== undefined ? { match: params.match } : {}),
+        ...(params.before !== undefined ? { before: params.before } : {})
+      }
+    })
+    if ('error' in res) throw new Error(res.error)
+    const { info, result } = res
+    const open = openTag(info)
+    if (result.kind === 'item') {
+      return text(
+        `${open}\n<transcript item="${attr(result.ref)}">\n${result.lines.join('\n')}\n</transcript>\n</sub-session>`
       )
     }
-    if (res.kind === 'timeout') {
-      return backgroundText(
-        `<sub-session id="${attr(res.id)}" status="running"/>`,
-        `Still running after ${params.timeout_seconds ?? DEFAULT_PROMPT_TIMEOUT_SEC}s — it was NOT cancelled and keeps going.`,
-        COLLECT_HINT
+    if (result.kind === 'match') {
+      if (result.hits === 0) {
+        return text(`${open}\n<transcript match="${attr(result.query)}" hits="0"/>\n</sub-session>`)
+      }
+      return text(
+        `${open}\n<transcript match="${attr(result.query)}" hits="${result.hits}" shown="${result.shown}">\n${result.lines.join('\n')}\n</transcript>\n</sub-session>`,
+        result.shown < result.hits
+          ? `Showing the latest ${result.shown} of ${result.hits} matches; narrow \`match\` to see others.`
+          : '',
+        'Expand a line with `item`.'
       )
     }
-    // info 由 runner 顺带带回（省掉再 read 一次 = 再投影一遍整棵转写）；
-    // 它理论上可能缺（会话恰好被删），那时退化成只有围栏骨架的一块
-    const info: SubSessionInfo = res.info ?? {
-      id: res.id,
-      title: res.id,
-      status: 'idle',
-      driven: false,
-      updatedAt: 0
+    if (result.kind === 'outline' && result.shown === 0) {
+      return text(
+        `${open}\n<transcript turns="0"/>\n</sub-session>`,
+        params.before?.trim()
+          ? 'Nothing comes before that line.'
+          : 'Nothing has happened in it yet.'
+      )
     }
-    return text(renderChild({ ...info, answer: res.answer, isError: res.isError }))
+    if (result.kind !== 'outline') throw new Error('Unexpected inspect result')
+    const turns =
+      result.turnFrom === result.turnTo
+        ? `${result.turnTo} of ${result.turnCount}`
+        : `${result.turnFrom}-${result.turnTo} of ${result.turnCount}`
+    return text(
+      `${open}\n<transcript turns="${turns}" shown="${result.shown}/${result.total}">\n${result.lines.join('\n')}\n</transcript>\n</sub-session>`,
+      result.before
+        ? `Cut at the size limit — pass \`before: "${result.before}"\` to see the earlier lines.`
+        : '',
+      result.earlierTurns ? 'Earlier turns: pass `turns`.' : '',
+      'Expand one line with `item: "<ref>"`; search the whole conversation with `match`.'
+    )
+  }
+
+  /** 往自己发起、正在跑的那一轮里插话（§19.6）：立刻回执，结果仍由原来那次 prompt 的那条路交回 */
+  private async steerSubSession(
+    params: SessionToolParams,
+    call: ToolCallScope
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
+    const res = await subSessionRunner.steer({
+      parentId: this.ctx.sessionId,
+      childId: (params.sub_session_id ?? '').trim(),
+      message: params.message ?? '',
+      // 与 prompt 同一个口径：这次调用的 durable 工具任务（崩溃后重跑不变），子会话认得它就不再发
+      requestId: `subsession-steer:${this.ctx.sessionId}:${call.taskId}`
+    })
+    if ('error' in res) throw new Error(res.error)
+    return text(
+      `<sub-session id="${attr(res.id)}" title="${attr(res.title)}" status="running"/>`,
+      res.earlier
+        ? 'This steer was already delivered earlier — nothing was sent again.'
+        : 'Steer delivered — it reads it at its next step.',
+      'Its reply still comes back the way this turn was started: to the call that is waiting for it, or as a notice when the turn ends.'
+    )
   }
 
   private async waitForSubSessions(
@@ -412,9 +586,11 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
         ? 'Timed out waiting. Nothing was cancelled — wait again, or carry on and collect later.'
         : res.kind === 'aborted'
           ? 'The wait was interrupted; the sub-sessions above keep running.'
-          : res.kind === 'blocked'
-            ? 'Nothing finished: a sub-session is waiting for the user to approve something. Waiting again will not help — relay it to the user.'
-            : ''
+          : res.kind === 'asking'
+            ? 'Not finished: a sub-session stopped to ask a question in the turn you started. Waiting again will not help — answer it with "answer-sub-session", or relay it to the user.'
+            : res.kind === 'blocked'
+              ? 'Nothing finished: a sub-session is waiting for something only the user can answer. Waiting again will not help — relay it to the user.'
+              : ''
     // **不带后台标签**：那枚标签的含义是「这次调用甩下了一件还在跑的活」（bash 的
     // run_in_background、prompt 的后台形态与超时降级都是）。wait 什么也没起 —— 它是一次
     // 读取；即便超时，还在跑的那件活是**上一次 prompt** 甩下的，标签早就打在那张卡上了。

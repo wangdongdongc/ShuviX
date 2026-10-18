@@ -13,12 +13,16 @@
  *    展开后的 payload（命令 / 文件全文）不是人打的字，也是注入面，绝不交出。整段正文只由通知块组成
  *    （steer / 自动续跑写下的通知，`isSystemNoticeText`）→ 不算人写的；侧车解析到了就不再按形状判
  *    （冻结投影同理）。
+ *  - **来源**：有来源记录（`SourceDoc`，父会话代发进子会话的消息与引导，§19.7）的 user 项带上 `source`；没有记录的
+ *    不带 —— 升级之前的消息同样没有记录，「没有」不等于「一定是人」，怎么算由读者定（自动审查的口径见
+ *    permissionReview）。
  *  - **通知**：`shuvix.notice` 条目一律不交出（不管 `data.kind`、不管文字）—— 系统写的话不能记成人说的。
  *  - **assistant**：`pi.assistant` 的文本块按 '' 拼接（思考永不交出）。`stopReason === 'error'` 且带
  *    errorMessage 的条目整条不算（冻结投影里它是一条错误事件），它里面的工具调用也不配对；什么都没产出的
  *    （没有正文 / 有字的思考 / 工具调用）不留空项。
  *  - **ask**：内置 ask 工具（名字恰为 `ask`，第三方工具恒带 `mcp__` 前缀）的调用与它的结果配对，结果不是
- *    错误（取消 / 中止不算回答）。回答 = `toolResultText(content)`（与冻结投影一字不差），问题 =
+ *    错误（取消 / 中止不算回答）。父会话代答的（结果详情带 `answeredBy`）照样交出，带上答题方 —— 它不是人答的，
+ *    读者自己决定怎么算（自动审查不把它当人的意思，§19.5）。回答 = `toolResultText(content)`（与冻结投影一字不差），问题 =
  *    `arguments.question`（不是字符串 → ''）。项紧跟在它那条 assistant 之后、按调用次序，时间戳取那条
  *    assistant 的；同一 id 被 provider 重用时配给最近一次还没配上的调用；没结果的（挂着的卡片）不交出，
  *    孤儿结果（调用在压缩切点之前）丢掉。
@@ -53,6 +57,8 @@ import {
   type EntryRecord
 } from '@earendil-works/pi-durable'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
+import type { ParentSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
+import { resolveInputSources, type InputSource } from './inputSource'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { toolResultText } from '../toolResultText'
 import { backgroundContext as BG, isClosedError } from './context'
@@ -75,6 +81,11 @@ export interface TranscriptUserItem {
   readonly kind: 'user'
   readonly ts: number
   readonly text: string
+  /**
+   * 这条输入记下了来源 = 不是人亲手打的（父会话代发进子会话的消息 / 引导，`SourceDoc`，§19.7）。缺省 = 没有
+   * 来源记录 —— 读者自己决定怎么算（升级之前的消息也没有记录，所以「没有」不等于「一定是人」）。
+   */
+  readonly source?: InputSource
 }
 
 /** agent 的一条正文（一次 LLM 调用的文本块拼接）；`compaction` = 压缩摘要（剥掉外壳） */
@@ -85,12 +96,17 @@ export interface TranscriptAssistantItem {
   readonly compaction?: true
 }
 
-/** 人对内置 ask 工具的一次回答（连同问题）；时间戳是提问那条 assistant 的 */
+/** 对内置 ask 工具的一次回答（连同问题）；时间戳是提问那条 assistant 的 */
 export interface TranscriptAskItem {
   readonly kind: 'ask'
   readonly ts: number
   readonly question: string
   readonly answer: string
+  /**
+   * 不是人答的：父会话代答了子会话的询问（ask 工具结果 `details.answeredBy`，宿主写的，
+   * docs/sub-session-design.md §19.5）。缺省 = 人答的。自动审查据此不把它当成人的意思。
+   */
+  readonly answeredBy?: ParentSessionRef
 }
 
 export type TranscriptDigestItem = TranscriptUserItem | TranscriptAssistantItem | TranscriptAskItem
@@ -119,16 +135,19 @@ interface PendingAsk {
   readonly ts: number
   readonly question: string
   answer?: string
+  answeredBy?: ParentSessionRef
 }
 
 /**
  * 纯核心：活上下文条目（`ContextView.entries` 次序）→ 摘要项。
  *
  * @param displayTexts 条目 id → 显示侧车的标记态原文（`readTranscriptDigest` 解析好的；缺省 = 没有侧车）
+ * @param sources      条目 id → 输入来源（`SourceDoc` 解析好的；缺省 = 都没有记录）
  */
 export function digestEntries(
   entries: readonly EntryRecord[],
-  displayTexts: ReadonlyMap<EntryId, string> = new Map()
+  displayTexts: ReadonlyMap<EntryId, string> = new Map(),
+  sources: ReadonlyMap<EntryId, InputSource> = new Map()
 ): TranscriptDigestItem[] {
   const out: (TranscriptDigestItem | PendingAsk)[] = []
   /** toolCallId → 最近一次还没配上结果的调用（不是 ask 的记 null：它配上结果也不产出） */
@@ -139,14 +158,16 @@ export function digestEntries(
       case UserEntry.kind: {
         const message = firstMessage(entry, 'user')
         if (message === undefined) break
+        const source = sources.get(entry.id)
+        const sourced = source === undefined ? {} : { source }
         const display = displayTexts.get(entry.id)
         if (display !== undefined) {
-          out.push({ kind: 'user', ts: tsOf(message), text: display })
+          out.push({ kind: 'user', ts: tsOf(message), text: display, ...sourced })
           break
         }
         const text = userText(message.content)
         if (isSystemNoticeText(text)) break
-        out.push({ kind: 'user', ts: tsOf(message), text })
+        out.push({ kind: 'user', ts: tsOf(message), text, ...sourced })
         break
       }
       case AssistantEntry.kind: {
@@ -181,7 +202,13 @@ export function digestEntries(
   for (const item of out) {
     if (item.kind !== 'pending-ask') items.push(item)
     else if (item.answer !== undefined) {
-      items.push({ kind: 'ask', ts: item.ts, question: item.question, answer: item.answer })
+      items.push({
+        kind: 'ask',
+        ts: item.ts,
+        question: item.question,
+        answer: item.answer,
+        ...(item.answeredBy === undefined ? {} : { answeredBy: item.answeredBy })
+      })
     }
   }
   return items
@@ -234,7 +261,25 @@ function settleCall(calls: Map<string, PendingAsk | null>, message: ToolResultMe
     ask.answer = toolResultText(
       message.content as ReadonlyArray<TextContent | ImageContent> | undefined
     )
+    const answeredBy = answeredByOf((message as { details?: unknown }).details)
+    if (answeredBy !== undefined) ask.answeredBy = answeredBy
   }
+}
+
+/**
+ * ask 工具结果详情里的答题方。**失败闭合**：详情里只要带着一个 `answeredBy` 对象（形状对不对都算），就当作
+ * 不是人答的 —— 危险的方向是把别人的话记成人的意思，形状坏了的那一项宁可算「父会话代答」。认不出的字段
+ * 补成空串。没有 `answeredBy` → undefined（人答的）。
+ */
+function answeredByOf(details: unknown): ParentSessionRef | undefined {
+  if (typeof details !== 'object' || details === null) return undefined
+  const by = (details as { answeredBy?: unknown }).answeredBy
+  if (typeof by !== 'object' || by === null) return undefined
+  const { sessionId, title } = by as { sessionId?: unknown; title?: unknown }
+  const id = typeof sessionId === 'string' ? sessionId : ''
+  return typeof title === 'string'
+    ? { kind: 'parent-session', sessionId: id, title }
+    : { kind: 'parent-session', sessionId: id }
 }
 
 // ─────────────────────────── 读会话 ───────────────────────────
@@ -249,10 +294,13 @@ export async function readTranscriptDigest(
   try {
     const conversation = await session.currentConversation()
     const view = await conversation.context(BG)
-    const displays = await resolveDisplayItems(session.harness, conversation.id, view.entries)
+    const [displays, sources] = await Promise.all([
+      resolveDisplayItems(session.harness, conversation.id, view.entries),
+      resolveInputSources(session.harness, conversation.id, view.entries)
+    ])
     const displayTexts = new Map<EntryId, string>()
     for (const [entryId, display] of displays) displayTexts.set(entryId, display.content)
-    return { items: digestEntries(view.entries, displayTexts) }
+    return { items: digestEntries(view.entries, displayTexts, sources) }
   } catch (error) {
     if (isClosedError(error)) throw new SessionClosedError(session.sessionId)
     throw error

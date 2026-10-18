@@ -23,7 +23,13 @@
  * 「又开始比对戳」的回归静默通过）与 `sessionService.resolveAgentProfileName`（不点名就什么
  * 也不写，父子形态天然一致，runner 不需要知道父会话跑的是哪个基座）。
  */
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi, type Mock } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
+import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
+import type { PromptOutcome } from '../subSessionRunner'
 
 const mocks = vi.hoisted(() => ({
   pick: vi.fn<(id: string, cols: string[]) => unknown>(),
@@ -37,6 +43,13 @@ const mocks = vi.hoisted(() => ({
   ensureAgentSession: vi.fn(),
   deliver: vi.fn(),
   gatewayPrompt: vi.fn(),
+  // §19：往子会话这一轮里插话走网关的 steerDriven（S1）
+  gatewaySteerDriven: vi.fn(),
+  // §19：sessionService / 全局 broker 的应答入口 —— 代答**不该**经过它们（S8，反向断言用）
+  respondToInput: vi.fn(),
+  brokerRespond: vi.fn(),
+  // §19：后台任务枢纽的通知投递（S5：询问通知走枢纽，完成通知走 deliver）
+  hubDeliver: vi.fn(),
   recordSessionModel: vi.fn(),
   recordSessionThinkingLevel: vi.fn(),
   findLastBySession: vi.fn(),
@@ -59,10 +72,20 @@ vi.mock('../../services/sessionService', () => ({
     getAgentSession: mocks.getAgentSession,
     peekAgentSession: mocks.peekAgentSession,
     ensureAgentSession: mocks.ensureAgentSession,
-    deliverSubSessionNotice: mocks.deliver
+    deliverSubSessionNotice: mocks.deliver,
+    respondToInput: mocks.respondToInput
   }
 }))
-vi.mock('../../frontend/core', () => ({ chatGateway: { prompt: mocks.gatewayPrompt } }))
+vi.mock('../../frontend/core', () => ({
+  chatGateway: { prompt: mocks.gatewayPrompt, steerDriven: mocks.gatewaySteerDriven }
+}))
+// 全局 broker 按 requestId 遍历所有会话认领：代答绝不走它（ask 的 id 是 provider 的 toolCallId，会话之间会撞）
+vi.mock('../userInputBroker', () => ({
+  respondToUserInput: mocks.brokerRespond,
+  registerUserInputParticipant: vi.fn(),
+  requestUserInputFor: vi.fn(),
+  resetUserInputParticipantsForTests: vi.fn()
+}))
 vi.mock('../../services/messageService', () => ({
   messageService: { findLastBySession: mocks.findLastBySession }
 }))
@@ -84,14 +107,28 @@ let registry: typeof import('../taskRegistry')
 const PARENT = 'parent-1'
 const CHILD = 'child-1'
 
-/** 一个假的子会话运行时（AgentSession 的最小面：状态 getter + abort/notify + P2-10 的读路径） */
-function fakeAgent(
-  over: Partial<{ isStreaming: boolean; pendingInputCount: number; isInterrupted: boolean }> = {}
-): {
+/** 与运行时 `PendingInputRequests.summaries` 同一种写法（工具名: 命令 / 问题） */
+function summaryOf(request: InputRequest): string {
+  const r = request as { kind: string; toolName: string; command?: string; question?: string }
+  return [r.toolName, r.command ?? r.question ?? r.kind].filter(Boolean).join(': ')
+}
+
+/** 一个假的子会话运行时（AgentSession 的最小面：状态 getter + abort/notify + P2-10 的读路径 + §19 的询问面） */
+interface FakeAgent {
+  sessionId: string
   isStreaming: boolean
   isInterrupted: boolean
+  /**
+   * 可脚本的询问表（§19，S2）：`pendingInputs()` / `pendingInputCount` / `pendingInputSummaries` 都从它派生
+   * （再加上旧写法直接设的计数 / 摘要 —— 那些用例只设摘要，渲染与改动前一致）
+   */
+  asks: InputRequest[]
   pendingInputCount: number
   pendingInputSummaries: string[]
+  /** true = respondToInput 认领不到（用户先在子会话里答了） */
+  respondRefuses: boolean
+  /** sessionView() 交的视图（缺省空视图） */
+  view: SessionView | undefined
   drivenRun: unknown
   abort: ReturnType<typeof vi.fn>
   notify: ReturnType<typeof vi.fn>
@@ -99,21 +136,106 @@ function fakeAgent(
   requestState: ReturnType<typeof vi.fn>
   resumeInterrupted: ReturnType<typeof vi.fn>
   taskLiveness: ReturnType<typeof vi.fn>
-} {
-  return {
+  respondToInput: Mock<(requestId: string, response?: InputResponse, meta?: unknown) => boolean>
+  sessionView: ReturnType<typeof vi.fn>
+  inputSources: ReturnType<typeof vi.fn>
+  pendingInputs: () => InputRequest[]
+}
+
+function fakeAgent(
+  over: Partial<{ isStreaming: boolean; pendingInputCount: number; isInterrupted: boolean }> = {},
+  sessionId: string = CHILD
+): FakeAgent {
+  // 旧写法：直接设计数 / 摘要（摘要按 `工具: 命令` 还原成权限卡）
+  let extraCount = over.pendingInputCount ?? 0
+  let extraSummaries: string[] = []
+  const agent: FakeAgent = {
+    sessionId,
     isStreaming: over.isStreaming ?? false,
     isInterrupted: over.isInterrupted ?? false,
-    pendingInputCount: over.pendingInputCount ?? 0,
-    pendingInputSummaries: [],
+    asks: [],
+    get pendingInputCount(): number {
+      return agent.asks.length + extraCount
+    },
+    set pendingInputCount(n: number) {
+      extraCount = n
+    },
+    // blockedError 的「只有用户能答」那一支读的是摘要，不是 pendingInputs()：两者必须同源
+    get pendingInputSummaries(): string[] {
+      return [...agent.asks.map(summaryOf), ...extraSummaries]
+    },
+    set pendingInputSummaries(list: string[]) {
+      extraSummaries = list
+    },
+    respondRefuses: false,
+    view: undefined,
     drivenRun: undefined,
     abort: vi.fn().mockResolvedValue(undefined),
     notify: vi.fn().mockResolvedValue(undefined),
     lastAnswer: vi.fn().mockResolvedValue(undefined),
     requestState: vi.fn().mockResolvedValue('none'),
     resumeInterrupted: vi.fn().mockResolvedValue({}),
-    taskLiveness: vi.fn().mockResolvedValue(undefined)
+    taskLiveness: vi.fn().mockResolvedValue(undefined),
+    // S3：模拟真实顺序 —— 认得的 id 先从表里移除，再同步调 runner 的落定钩子（真 PendingInputRequests.settle
+    // 先 delete 再调钩子，main 入口再转给 runner）；不认得 / 用户先答了 → false
+    respondToInput: vi.fn(
+      (requestId: string, _response?: InputResponse, _meta?: unknown): boolean => {
+        if (agent.respondRefuses) return false
+        const at = agent.asks.findIndex((a) => a.id === requestId)
+        if (at < 0) return false
+        agent.asks.splice(at, 1)
+        runner.onAskResolved(agent.sessionId, requestId)
+        return true
+      }
+    ),
+    // S7：userIntervened / answeredAsk 读这两样；不给就每次走 catch 打 warn
+    sessionView: vi.fn(
+      async (): Promise<SessionView> => agent.view ?? emptySessionView(agent.sessionId)
+    ),
+    inputSources: vi.fn(async (): Promise<Map<string, unknown>> => new Map()),
+    pendingInputs: (): InputRequest[] => [
+      ...agent.asks,
+      ...extraSummaries.map((summary, i): InputRequest => {
+        const [toolName, ...rest] = summary.split(': ')
+        return { id: `ask-${i}`, kind: 'ask', toolName, command: rest.join(': '), createdAt: 0 }
+      })
+    ]
   }
+  return agent
 }
+
+/** ask 工具的一道选择题（§19：父会话能代答的那一种） */
+function choice(
+  id: string,
+  question: string,
+  options: Array<{ label: string; description: string }>
+): InputRequest {
+  return { id, kind: 'choice', toolName: 'ask', question, options, createdAt: 0 }
+}
+
+/** 一张权限卡（只有用户能批） */
+function approval(id: string, toolName: string, command: string): InputRequest {
+  return { id, kind: 'ask', toolName, command, createdAt: 0 }
+}
+
+const q1 = (): InputRequest =>
+  choice('q1', 'Keep the old API?', [
+    { label: 'A', description: 'keep a shim' },
+    { label: 'B', description: '' }
+  ])
+const q2 = (): InputRequest =>
+  choice('q2', 'Which dir?', [
+    { label: 'X', description: '' },
+    { label: 'Y', description: '' }
+  ])
+const q3 = (): InputRequest =>
+  choice('q3', 'Third?', [
+    { label: 'Yes', description: '' },
+    { label: 'No', description: '' }
+  ])
+const ap = (): InputRequest => approval('ap1', 'bash', 'rm -rf build')
+/** 用户（或别的答题方）在卡片上点了一个选项 */
+const picked = (label: string): InputResponse => ({ kind: 'choice', selections: [label] })
 
 /** 没开着的子会话被 peek 打开之后的那个门面（lastAnswer / requestState 从它读） */
 let closedChild: ReturnType<typeof fakeAgent>
@@ -164,6 +286,8 @@ function defaultWorld(): void {
   mocks.durable.value = true
   // 发送成功 = 落定为 {}；带 error 才是「没发出去」
   mocks.gatewayPrompt.mockResolvedValue({})
+  // 插话送到 = {}（§19.6：网关回报受理结果）
+  mocks.gatewaySteerDriven.mockResolvedValue({})
   mocks.findLastBySession.mockResolvedValue(undefined)
   mocks.resolveRunConfig.mockResolvedValue({ model: null, thinkingLevel: 'medium' })
   // 点名的档案缺省钉得上（普通具名档案，没声明模型也没声明 mcp:/skill:）
@@ -171,10 +295,16 @@ function defaultWorld(): void {
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
 }
 
+let frontendRegistry: (typeof import('../../frontend/core/ChatFrontendRegistry'))['chatFrontendRegistry']
+
 beforeAll(async () => {
   mod = await import('../subSessionRunner')
   runner = mod.subSessionRunner
   registry = await import('../taskRegistry')
+  // S5：枢纽的通知器（产品里由 sessionService 注入；这里 sessionService 是假件，不接就没人收询问通知）
+  registry.setTaskNotifier((sessionId, text) => mocks.hubDeliver(sessionId, text))
+  ;({ chatFrontendRegistry: frontendRegistry } =
+    await import('../../frontend/core/ChatFrontendRegistry'))
 })
 
 beforeEach(() => {
@@ -496,7 +626,9 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     release()
   })
 
-  it('超时时若卡在询问上 ⇒ 报「它不会自己好起来」，而不是「还在跑」', async () => {
+  it('发出之后、挂上等待之前子会话已停在询问上（走「重新挂上后检查一次状态」那一支，询问钩子没调）⇒ 当场交回询问（§19.3），绝不说「还在跑」', async () => {
+    // 这条**不**经 onAskRaised：状态是在 prompt 的 `await noteSupersede` 期间改的，建任务之后那次
+    // 「已经在等输入就 update」的检查（本为重新挂上而设）让它当场交回。钩子那条路见 §19 B 的 WP3-09 起。
     // 派活时必须空闲（否则命中忙碌拒绝，走不到超时那一支）
     const asking = fakeAgent()
     mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? asking : undefined))
@@ -511,10 +643,10 @@ describe('prompt —— 前台 / 后台 / 超时 / 中止', () => {
     asking.isStreaming = true
     asking.pendingInputCount = 1
     asking.pendingInputSummaries = ['bash: rm -rf build']
-    const res = await pending
-    // 「还在跑，回头再来收」在这里是错的：没人回答它就一直停着
-    expect(err(res)).toContain('will NOT proceed on its own')
-    expect(err(res)).toContain('rm -rf build')
+    const res = (await pending) as { kind?: string; error?: string }
+    // 「还在跑，回头再来收」在这里是错的：没人回答它就一直停着 —— 前台等待把那条询问交回来
+    expect(res.error).toBeUndefined()
+    expect(res.kind).toBe('input')
     expect(asking.abort).not.toHaveBeenCalled()
     release()
   })
@@ -939,5 +1071,1527 @@ describe('list / read / stop', () => {
       id === PARENT ? { settings: {}, parentId: null } : { settings: {}, parentId: 'other' }
     )
     expect(err(await runner.stop(PARENT, 'stranger'))).toContain('is not a sub-session')
+  })
+})
+
+// ─── §19 父会话介入自己发起的那一轮（询问通知 / 代答 / 插话） ─────────────────────────
+//
+// 判据（§19.2）：子会话此刻这一轮是本进程替这个父会话驱动的、绑定的后台任务还活着。询问钩子
+// （main 入口经 `setSessionAskObserver` 接进来的 onAskRaised / onAskResolved）在这里由 `raise` 与假门面的
+// respondToInput 直接调（runner 单测里没有 index.ts）。枢纽是真的（桌面实例，合并窗口 250ms），时钟是假的：
+// wait 的 200ms 轮询、后台 50ms 确认窗、前台超时、合并窗口都走同一个假时钟。
+// 期望以 §19.10（含测试设计阶段改过的第 11–18 条）与源码为准。
+
+const CHILD2 = 'child-2'
+/** 这一轮的幂等键 = 枢纽里的任务 id（工具给 `subsession:<父会话>:<工具任务>`） */
+const R = (n: number): string => `subsession:${PARENT}:${n}`
+const STEER_RID = `subsession-steer:${PARENT}:9`
+
+type Release = (result?: { error?: string; code?: string }) => void
+type Runner = Mod['subSessionRunner']
+
+/** 成功的结果（带 error 就让用例当场失败，而不是在后面的断言里含糊地红） */
+function ok<T>(result: { error: string } | T): T {
+  if (result && typeof result === 'object' && 'error' in result) {
+    throw new Error(`unexpected error: ${(result as { error: string }).error}`)
+  }
+  return result as T
+}
+
+describe('§19 父会话介入自己发起的那一轮', () => {
+  let child: FakeAgent
+
+  const task = (rid: string): ReturnType<typeof registry.taskRegistry.get> =>
+    registry.taskRegistry.get(rid)
+  const advance = async (ms: number): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(ms)
+  }
+
+  /** S9：让下一次 gatewayPrompt 挂住；交回放行它的函数（缺省落定为 {} = 发出去了、这一轮正常结束） */
+  function hold(): Release {
+    let release!: (result: { error?: string; code?: string }) => void
+    mocks.gatewayPrompt.mockReturnValueOnce(
+      new Promise<{ error?: string; code?: string }>((r) => {
+        release = r
+      })
+    )
+    return (result = {}) => release(result)
+  }
+
+  /** S11：prompt 在建任务之前还有几次 await —— 等到任务出现（建任务与挂上等待者在同一段同步代码里） */
+  async function untilTask(rid: string): Promise<void> {
+    for (let i = 0; i < 100; i++) {
+      if (registry.taskRegistry.get(rid)) return
+      await Promise.resolve()
+    }
+    throw new Error(`任务 ${rid} 一直没建出来`)
+  }
+
+  /** 后台发一轮、过完 50ms 确认窗拿到启动回执；这一轮扣在闸门上（交回放行它的函数） */
+  async function startBackground(
+    n = 7,
+    agent: FakeAgent = child
+  ): Promise<{ rid: string; release: Release }> {
+    const release = hold()
+    const rid = R(n)
+    const pending = runner.prompt({
+      parentId: PARENT,
+      childId: agent.sessionId,
+      message: 'go',
+      background: true,
+      timeoutSeconds: 60,
+      requestId: rid
+    })
+    await untilTask(rid)
+    agent.isStreaming = true
+    await advance(60)
+    expect(await pending).toEqual({ kind: 'started', id: agent.sessionId })
+    return { rid, release }
+  }
+
+  /** 前台发一轮、挂上等待（不推进时钟）；交回那次调用的 promise */
+  async function startForeground(
+    opts: { timeoutSeconds?: number; signal?: AbortSignal } = {}
+  ): Promise<{
+    rid: string
+    release: Release
+    pending: Promise<{ error: string } | PromptOutcome>
+  }> {
+    const release = hold()
+    const rid = R(7)
+    const pending = runner.prompt({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'go',
+      background: false,
+      timeoutSeconds: opts.timeoutSeconds ?? 60,
+      signal: opts.signal,
+      requestId: rid
+    })
+    await untilTask(rid)
+    child.isStreaming = true
+    return { rid, release, pending }
+  }
+
+  /** S4：子会话弹出一条询问（模拟 main 入口的接线：询问此刻已在挂着的表里，再同步调钩子） */
+  function raise(request: InputRequest, agent: FakeAgent = child): void {
+    agent.asks.push(request)
+    agent.isStreaming = true
+    runner.onAskRaised(agent.sessionId, request)
+  }
+
+  /** 这一轮跑完：询问清空、不在跑，放行发送并等 runner 销账 */
+  async function finishTurn(release: Release, agent: FakeAgent = child): Promise<void> {
+    agent.asks = []
+    agent.isStreaming = false
+    release()
+    await runner.drainForTests()
+  }
+
+  /** D 组的缺省前置：后台这一轮在跑（绑定任务活着）、停在 q1 上 */
+  async function askingInBackground(): Promise<{ rid: string; release: Release }> {
+    const turn = await startBackground()
+    raise(q1())
+    return turn
+  }
+
+  /** 前台这一轮因一条询问当场交回（WP3-09 的前置） */
+  async function foregroundInput(
+    request: InputRequest = q1()
+  ): Promise<{ rid: string; release: Release; res: PromptOutcome }> {
+    const { rid, release, pending } = await startForeground()
+    raise(request)
+    return { rid, release, res: ok(await pending) }
+  }
+
+  const answer = (
+    over: Partial<Parameters<Runner['answer']>[0]> = {}
+  ): ReturnType<Runner['answer']> =>
+    runner.answer({
+      parentId: PARENT,
+      childId: CHILD,
+      selections: ['A'],
+      background: false,
+      timeoutSeconds: 60,
+      ...over
+    })
+
+  /** 后台代答：过完确认窗再拿结果（被拒的当场就有，推进时钟不碍事） */
+  async function answerInBackground(
+    over: Partial<Parameters<Runner['answer']>[0]> = {}
+  ): ReturnType<Runner['answer']> {
+    const pending = answer({ background: true, ...over })
+    await advance(60)
+    return pending
+  }
+
+  const steer = (over: Partial<Parameters<Runner['steer']>[0]> = {}): ReturnType<Runner['steer']> =>
+    runner.steer({
+      parentId: PARENT,
+      childId: CHILD,
+      message: 'also X',
+      requestId: STEER_RID,
+      ...over
+    })
+
+  /** 第 i 次枢纽投递的正文 */
+  const hubText = (i = 0): string => mocks.hubDeliver.mock.calls[i][1] as string
+  const count = (text: string, needle: string): number => text.split(needle).length - 1
+
+  /** 某个会话行换一份（其余照缺省世界） */
+  function overridePick(id: string, row: Record<string, unknown>): void {
+    const base = mocks.pick.getMockImplementation()!
+    mocks.pick.mockImplementation((asked: string, cols: string[]) =>
+      asked === id ? row : base(asked, cols)
+    )
+  }
+
+  /** 第二条子会话（WP3-50 ④ / WP3-77..82） */
+  function addSecondChild(): FakeAgent {
+    const other = fakeAgent({}, CHILD2)
+    overridePick(CHILD2, { settings: {}, parentId: PARENT, title: 'Child 2', updatedAt: 3 })
+    mocks.findChildren.mockReturnValue([
+      { id: CHILD, title: 'Child', updatedAt: 2 },
+      { id: CHILD2, title: 'Child 2', updatedAt: 3 }
+    ])
+    mocks.getAgentSession.mockImplementation((id: string) =>
+      id === CHILD ? child : id === CHILD2 ? other : undefined
+    )
+    return other
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    // S6：infoOf 从 findChildren 取行 —— 不给就没有 info（WP3-16 专门测那一种）
+    mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 2 }])
+    child = fakeAgent()
+    mocks.getAgentSession.mockImplementation((id: string) => (id === CHILD ? child : undefined))
+  })
+
+  // ── A. 询问让绑定任务进出「等待输入」 ─────────────────────────────
+
+  describe('A. 询问让绑定任务进出「等待输入」', () => {
+    it('WP3-01 后台这一轮停下来问 ⇒ 绑定任务进 waiting-input：不落定、不中止、不另发', async () => {
+      const { rid, release } = await startBackground()
+      raise(q1())
+      expect(task(rid)).toMatchObject({ status: 'waiting-input', endedAt: null })
+      expect(child.abort).not.toHaveBeenCalled()
+      expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
+      release()
+    })
+
+    it('WP3-02 两条一起挂着：答掉一条仍在等输入，最后一条答掉才回到 running（仍不落定）', async () => {
+      const { rid, release } = await startBackground()
+      raise(q1())
+      raise(q2())
+      expect(child.respondToInput('q1', picked('A'))).toBe(true)
+      // 还挂着一条：onAskResolved 读的是计数
+      expect(task(rid)?.status).toBe('waiting-input')
+      expect(child.respondToInput('q2', picked('X'))).toBe(true)
+      expect(task(rid)).toMatchObject({ status: 'running', endedAt: null })
+      release()
+    })
+
+    it('WP3-03 用户自己在子会话里发起的一轮（runner 从没驱动过它）：不建任务、不通知', async () => {
+      child.isStreaming = true
+      expect(() => raise(q1())).not.toThrow()
+      await advance(300)
+      expect(registry.taskRegistry.list(PARENT)).toEqual([])
+      expect(registry.taskRegistry.runningCount(PARENT)).toBe(0)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      expect(mocks.deliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-04 这一轮已落定之后再问：原任务仍是 done（对已结束的任务 update 无效），不通知', async () => {
+      const { rid, release } = await startBackground()
+      await finishTurn(release)
+      expect(task(rid)?.status).toBe('done')
+      raise(q1())
+      await advance(300)
+      expect(task(rid)?.status).toBe('done')
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-05 换进程（枢纽与 runner 的记账清空）之后的询问钩子：不抛、不建任务、不通知 —— 父会话要等自己重跑那次调用', async () => {
+      const { rid, release } = await startBackground()
+      raise(q1())
+      registry.taskRegistry.killAll()
+      runner.resetForTests()
+      expect(() => {
+        raise(q2())
+        runner.onAskResolved(CHILD, 'q1')
+      }).not.toThrow()
+      await advance(300)
+      expect(task(rid)).toBeUndefined()
+      expect(registry.taskRegistry.list(PARENT)).toEqual([])
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('WP3-06 绑定任务已被杀（删会话的级联）、run 还没销账：boundRun 失效 —— 不更新、不通知，answer / steer 都拒', async () => {
+      const { release } = await startBackground()
+      registry.taskRegistry.killBySession(PARENT)
+      raise(q1())
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      expect(err(await answerInBackground())).toContain('not in a turn you are driving now')
+      expect(child.respondToInput).not.toHaveBeenCalled()
+      expect(err(await steer())).toContain('was not started by you')
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('WP3-07 main 入口对每一条开着的会话都调这对钩子：没有驱动的会话、父会话自己、不存在的 id —— 都不抛、不碰枢纽', async () => {
+      expect(() => {
+        runner.onAskRaised('random-id', q1())
+        runner.onAskRaised(PARENT, q1())
+        runner.onAskResolved('random-id', 'x')
+        runner.onAskResolved(PARENT, 'q1')
+      }).not.toThrow()
+      await advance(300)
+      expect(registry.taskRegistry.list(PARENT)).toEqual([])
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-08 任务面板第一次能显示「等待输入」：bg_task 广播依次出现 waiting-input 与 running 的快照', async () => {
+      const spy = vi.spyOn(frontendRegistry, 'broadcast')
+      try {
+        const { rid, release } = await startBackground()
+        raise(q1())
+        child.respondToInput('q1', picked('A'))
+        const statuses = spy.mock.calls
+          .map(([event]) => event as { type: string; task?: { taskId: string; status: string } })
+          .filter((e) => e.type === 'bg_task' && e.task?.taskId === rid)
+          .map((e) => e.task!.status)
+        expect(statuses).toContain('waiting-input')
+        expect(statuses.slice(statuses.indexOf('waiting-input'))).toEqual([
+          'waiting-input',
+          'running'
+        ])
+        release()
+      } finally {
+        spy.mockRestore()
+      }
+    })
+  })
+
+  // ── B. 前台等待当场交回 ─────────────────────────────────────────
+
+  describe('B. 前台等待当场交回询问', () => {
+    it('WP3-09 前台 prompt 等着时子会话弹出选择题（经 onAskRaised 钩子）⇒ 不等超时当场交回 input，带完整的询问；不中止', async () => {
+      // 不推进时钟：这次返回不是超时降级
+      const { res, release } = await foregroundInput()
+      expect(res).toMatchObject({ kind: 'input', id: CHILD })
+      expect(res.info?.status).toBe('waiting-input')
+      expect(res.info?.pendingAsks).toEqual([
+        {
+          id: 'q1',
+          kind: 'question',
+          question: 'Keep the old API?',
+          options: [
+            { label: 'A', description: 'keep a shim' },
+            { label: 'B', description: '' }
+          ],
+          answerable: true
+        }
+      ])
+      expect(child.abort).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('WP3-10 交回之后这一轮仍在：任务没落定、仍在等输入、转为脱离', async () => {
+      const { rid, release } = await foregroundInput()
+      expect(task(rid)).toMatchObject({ endedAt: null, status: 'waiting-input', detached: true })
+      release()
+    })
+
+    it('WP3-11 同一条询问已由这次调用交回 ⇒ 窗口结束也不再通知', async () => {
+      const { release } = await foregroundInput()
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('WP3-12 交回之后这一轮跑完：照常经完成通知回报，并能叫醒父会话（wake）', async () => {
+      const { rid, release } = await foregroundInput()
+      await finishTurn(release)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: false }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+      expect(mocks.deliver.mock.calls[0][3]).toEqual({ wake: true })
+    })
+
+    it('WP3-13 前台等待遇到权限卡也当场交回（§19.10 第 2 条），询问是 approval 摘要', async () => {
+      const { res, release } = await foregroundInput(ap())
+      expect(res.kind).toBe('input')
+      expect(res.info?.pendingAsks).toEqual([
+        { id: 'ap1', kind: 'approval', summary: 'bash: rm -rf build' }
+      ])
+      release()
+    })
+
+    it('WP3-14 重新挂上（幂等键 pending）时子会话已停在询问上：当场交回 input（不报忙、不说卡住），枢纽不再补通知', async () => {
+      const rid = R(7)
+      child.requestState.mockImplementation(async (id: string) => (id === rid ? 'pending' : 'none'))
+      // 打开时被重新问了一遍：那时还没有绑定的 run，钩子什么都不做
+      raise(q1())
+      expect(registry.taskRegistry.list(PARENT)).toEqual([])
+      const release = hold()
+      const res = ok(
+        await runner.prompt({
+          parentId: PARENT,
+          childId: CHILD,
+          message: 'go',
+          background: false,
+          timeoutSeconds: 60,
+          requestId: rid
+        })
+      )
+      expect(res).toMatchObject({ kind: 'input', id: CHILD })
+      expect(res.info?.pendingAsks).toEqual([
+        expect.objectContaining({ id: 'q1', answerable: true })
+      ])
+      expect(task(rid)?.status).toBe('waiting-input')
+      // update 先于 join 排了一次通知，但 join 当场交回时已记成看过：到点交回空
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('WP3-15 同 WP3-14 但后台：确认窗里就把询问交回（裁决 3：结果是 input 而不是 started），枢纽不再补通知；跑完照常通知', async () => {
+      const rid = R(7)
+      child.requestState.mockImplementation(async (id: string) => (id === rid ? 'pending' : 'none'))
+      raise(q1())
+      const release = hold()
+      const res = ok(
+        await runner.prompt({
+          parentId: PARENT,
+          childId: CHILD,
+          message: 'go',
+          background: true,
+          timeoutSeconds: 60,
+          requestId: rid
+        })
+      )
+      expect(res).toMatchObject({ kind: 'input', id: CHILD })
+      expect(res.info?.pendingAsks?.map((a) => a.id)).toEqual(['q1'])
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      // 这一轮仍是后台的、没人在等它：跑完照常通知、叫醒父会话
+      await finishTurn(release)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+      expect(mocks.deliver.mock.calls[0][3]).toEqual({ wake: true })
+    })
+
+    it('WP3-16 交回时子会话行恰好不见了：结果没有 info，但询问照样记成看过（裁决 9）—— 之后只通知新的那条', async () => {
+      mocks.findChildren.mockReturnValue([])
+      const { res, release } = await foregroundInput()
+      expect(res).toEqual({ kind: 'input', id: CHILD })
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      raise(q2())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      expect(hubText()).toContain('<question ask_id="q2">')
+      expect(hubText()).not.toContain('ask_id="q1"')
+      release()
+    })
+  })
+
+  // ── C. 没人等时的通知 ──────────────────────────────────────────
+
+  describe('C. 没人等时经枢纽通知父会话', () => {
+    it('WP3-17 / WP3-18 后台这一轮停在选择题上、没人在等：合并窗口结束恰一条通知，走枢纽（不是完成通知那条路）', async () => {
+      await startBackground()
+      raise(q1())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      const [sessionId, text] = mocks.hubDeliver.mock.calls[0] as [string, string]
+      expect(sessionId).toBe(PARENT)
+      expect(
+        text.startsWith('<sub-session id="child-1" title="Child" status="waiting-input">')
+      ).toBe(true)
+      expect(text.endsWith('</sub-session>')).toBe(true)
+      expect(text).toContain('It stopped to ask a question in the turn you started.')
+      expect(text).toContain('<question ask_id="q1">')
+      expect(text).toContain('Keep the old API?')
+      expect(text).toContain('1. A — keep a shim')
+      // 没有描述的选项不带破折号
+      expect(text).toContain('\n2. B\n')
+      expect(text).toContain('answer-sub-session')
+      expect(text).not.toContain('for="user"')
+      expect(text).not.toContain('<blocked-on-user-approval>')
+      // WP3-18：完成通知那条路（sessionService.deliverSubSessionNotice）没被用
+      expect(mocks.deliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-19 窗口里用户先答掉了：通知文本到窗口结束才求值，那时没有没看过的询问 ⇒ 不发', async () => {
+      await startBackground()
+      raise(q1())
+      await advance(100)
+      child.respondToInput('q1', picked('A'))
+      await advance(200)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-20 窗口里这一轮落定了（询问还留在表里）⇒ 不发', async () => {
+      const { release } = await startBackground()
+      raise(q1())
+      // 只放行这一轮，不清询问：隔离「这一轮已结束」这一条
+      release()
+      await runner.drainForTests()
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-21 wait 正握着这条子会话：wait 自己交回（asking），枢纽不通知', async () => {
+      await startBackground()
+      const waiting = runner.wait({ parentId: PARENT, childId: CHILD, timeoutSeconds: 30 })
+      await advance(0)
+      raise(q1())
+      await advance(300)
+      expect(ok(await waiting).kind).toBe('asking')
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-22 同一窗口里先后两条询问：并成一条通知、一个 <sub-session> 块，两道题按出现次序', async () => {
+      await startBackground()
+      raise(q1())
+      raise(q2())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      const text = hubText()
+      expect(count(text, '<sub-session')).toBe(1)
+      expect(count(text, '<question')).toBe(2)
+      expect(text.indexOf('ask_id="q1"')).toBeLessThan(text.indexOf('ask_id="q2"'))
+    })
+
+    it('WP3-23 已经通知过 q1（仍挂着）之后又来 q2：第二条通知只说 q2', async () => {
+      await startBackground()
+      raise(q1())
+      await advance(260)
+      raise(q2())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(2)
+      const second = hubText(1)
+      expect(second).toContain('ask_id="q2"')
+      expect(second).not.toContain('ask_id="q1"')
+      expect(second).not.toContain('Keep the old API?')
+    })
+
+    it('WP3-24 前台已因 q1 交回、用户在子会话里先答掉了它，之后再问 q2：通知只含 q2，仍能代答（这一轮仍是父会话发起的）', async () => {
+      const { release } = await foregroundInput()
+      // 先到者胜：用户在子会话里答了（不经父会话）
+      expect(child.respondToInput('q1', picked('A'))).toBe(true)
+      raise(q2())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      const text = hubText()
+      expect(text).toContain('<question ask_id="q2">')
+      expect(text).not.toContain('ask_id="q1"')
+      expect(text).not.toContain('for="user"')
+      expect(text).toContain('answer-sub-session')
+      release()
+    })
+
+    it('WP3-25 停在权限卡上：同路通知，内容只是转告（是什么、只有用户能解、该做什么）', async () => {
+      await startBackground()
+      raise(ap())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      const text = hubText()
+      expect(text).toContain(
+        'It stopped to ask the user for approval in the turn you started and cannot continue until the user answers in that session.'
+      )
+      expect(text).toContain('<blocked-on-user-approval>')
+      expect(text).toContain('- bash: rm -rf build')
+      expect(text).toContain('you cannot answer it')
+      expect(text).toContain('stop-sub-session')
+      expect(text).not.toContain('<question')
+      expect(text).not.toContain('answer-sub-session')
+    })
+
+    it('WP3-26 同一窗口里权限卡与选择题都有：按选择题开头，<question> 块在前、权限卡合成一块放最后', async () => {
+      await startBackground()
+      raise(ap())
+      raise(q1())
+      await advance(260)
+      const text = hubText()
+      expect(text.split('\n')[1]).toBe('It stopped to ask a question in the turn you started.')
+      expect(text.indexOf('<question ask_id="q1">')).toBeGreaterThan(-1)
+      expect(text.indexOf('<question ask_id="q1">')).toBeLessThan(
+        text.indexOf('<blocked-on-user-approval>')
+      )
+    })
+
+    it('WP3-27 通知正文按形状认得出是系统通知（不记成用户说的话）—— 选择题、权限卡，以及与后台任务通知拼在一起', async () => {
+      await startBackground()
+      raise(q1())
+      await advance(260)
+      const question = hubText(0)
+      child.respondToInput('q1', picked('A'))
+      raise(ap())
+      await advance(260)
+      const approvalText = hubText(1)
+      expect(approvalText).toContain('<blocked-on-user-approval>')
+      const combined = `${question}\n\n<background-task id="t1" status="exited">\nexit 0\n</background-task>`
+      expect(isSystemNoticeText(question)).toBe(true)
+      expect(isSystemNoticeText(approvalText)).toBe(true)
+      expect(isSystemNoticeText(combined)).toBe(true)
+    })
+
+    it('WP3-28 标题 / 询问 id 是 LLM 写的：开标签里属性转义；问题正文原样（多行保留、不改写）', async () => {
+      overridePick(CHILD, { settings: {}, parentId: PARENT, title: 'Re"fac\ntor', updatedAt: 2 })
+      await startBackground()
+      raise(choice('c"1', 'Line one "quoted"\nline two', [{ label: 'A', description: '' }]))
+      await advance(260)
+      const text = hubText()
+      expect(text.split('\n')[0]).toBe(
+        `<sub-session id="child-1" title="Re'fac tor" status="waiting-input">`
+      )
+      expect(text).toContain(`<question ask_id="c'1">\nLine one "quoted"\nline two\n1. A\n`)
+    })
+
+    it('WP3-29 停止已下令、还没落定（用户从面板停）：之后弹出的询问不通知 —— 落定那条规则管它', async () => {
+      const { rid, release } = await startBackground()
+      expect(registry.taskRegistry.stop(rid, { by: 'user' })).toBe(true)
+      raise(q1())
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('WP3-30 窗口里换了一轮（A 落定、同一子会话起了 B 又问 q3）：恰一块通知、只说 q3 —— A 那块按「绑定的不再是它」交回空', async () => {
+      const a = await startBackground(7)
+      raise(q1())
+      // 窗口内：q1 被答掉、A 跑完
+      child.respondToInput('q1', picked('A'))
+      await finishTurn(a.release)
+      // 同一子会话新的后台一轮 B（发送时子会话空闲，否则被拒）
+      const b = await startBackground(8)
+      raise(q3())
+      await advance(300)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      const text = hubText()
+      expect(count(text, '<sub-session')).toBe(1)
+      expect(text).toContain('ask_id="q3"')
+      expect(text).not.toContain('ask_id="q1"')
+      b.release()
+    })
+
+    it('WP3-31 同一 id 被重新问了一遍（superseded 重问）：按 id 记，同一条只告诉一次', async () => {
+      await startBackground()
+      raise(q1())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      child.asks = [q1()]
+      runner.onAskRaised(CHILD, child.asks[0])
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+    })
+
+    it('WP3-32 后台 prompt 的 50ms 确认窗里就弹出询问：由那次调用交回（裁决 3：结果 input），枢纽不补通知；跑完照常通知', async () => {
+      const release = hold()
+      const rid = R(7)
+      const pending = runner.prompt({
+        parentId: PARENT,
+        childId: CHILD,
+        message: 'go',
+        background: true,
+        timeoutSeconds: 60,
+        requestId: rid
+      })
+      await untilTask(rid)
+      child.isStreaming = true
+      await advance(10)
+      raise(q1())
+      const res = ok(await pending)
+      expect(res).toMatchObject({ kind: 'input', id: CHILD })
+      expect(res.info?.pendingAsks).toEqual([
+        expect.objectContaining({ id: 'q1', kind: 'question', answerable: true })
+      ])
+      await advance(400)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      await finishTurn(release)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+      expect(mocks.deliver.mock.calls[0][3]).toEqual({ wake: true })
+    })
+  })
+
+  // ── D. answer-sub-session ──────────────────────────────────────
+
+  describe('D. answer-sub-session', () => {
+    it('WP3-33 应答只送进这条子会话自己：答题方只走附带信息（clientId parent:… + answeredBy），载荷里没有 answeredBy', async () => {
+      await askingInBackground()
+      expect(await answerInBackground({ timeoutSeconds: 5 })).toEqual({
+        kind: 'started',
+        id: CHILD
+      })
+      expect(child.respondToInput).toHaveBeenCalledTimes(1)
+      expect(child.respondToInput).toHaveBeenCalledWith(
+        'q1',
+        { kind: 'choice', selections: ['A'] },
+        {
+          clientId: 'parent:parent-1',
+          answeredBy: { kind: 'parent-session', sessionId: 'parent-1', title: 'Parent' }
+        }
+      )
+      expect(child.respondToInput.mock.calls[0][1]).not.toHaveProperty('answeredBy')
+    })
+
+    it('WP3-34 父会话行没有标题：answeredBy 恰为 {kind, sessionId}（没有 title 键）', async () => {
+      overridePick(PARENT, { settings: {}, parentId: null, updatedAt: 1 })
+      await askingInBackground()
+      ok(await answerInBackground())
+      const meta = child.respondToInput.mock.calls[0][2] as { answeredBy: unknown }
+      expect(meta.answeredBy).toStrictEqual({ kind: 'parent-session', sessionId: PARENT })
+    })
+
+    it('WP3-35 selections 先 trim、去重、丢空串，保持首次出现顺序', async () => {
+      await askingInBackground()
+      ok(await answerInBackground({ selections: ['A', ' A ', 'B', ''] }))
+      expect(child.respondToInput.mock.calls[0][1]).toEqual({
+        kind: 'choice',
+        selections: ['A', 'B']
+      })
+    })
+
+    it.each([
+      [
+        '只给 message（两头空白去掉）',
+        { selections: undefined, message: '  keep it  ' },
+        { kind: 'other', text: 'keep it' }
+      ],
+      [
+        'selections 是空数组 + message：空数组不算给了 selections',
+        { selections: [], message: 'x' },
+        { kind: 'other', text: 'x' }
+      ]
+    ])('WP3-36 %s ⇒ 用自己的话回答（other）', async (_label, over, sent) => {
+      await askingInBackground()
+      ok(await answerInBackground(over))
+      expect(child.respondToInput.mock.calls[0][1]).toEqual(sent)
+    })
+
+    it('WP3-37 selections 与 message 二选一：都给就拒绝，什么都不发', async () => {
+      await askingInBackground()
+      const msg = err(await answerInBackground({ selections: ['A'], message: 'x' }))
+      expect(msg).toContain('either')
+      expect(msg).toContain('Nothing was sent')
+      expect(child.respondToInput).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['什么都不给', { selections: undefined }],
+      ['message 全是空白', { selections: undefined, message: '   ' }],
+      ['selections 只有空白', { selections: ['  '] }]
+    ])('WP3-38 %s ⇒ 拒绝，并列出全部选项', async (_label, over) => {
+      await askingInBackground()
+      const msg = err(await answerInBackground(over))
+      expect(msg).toContain('`selections`')
+      expect(msg).toContain('`message`')
+      expect(msg).toContain('- A')
+      expect(msg).toContain('- B')
+      expect(child.respondToInput).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      [['a'], '"a"'],
+      [['A', 'C'], '"C"']
+    ])(
+      'WP3-39 selections %j 对不上选项（逐字、大小写敏感）⇒ 拒绝，只点名对不上的那几个',
+      async (selections, named) => {
+        await askingInBackground()
+        const msg = err(await answerInBackground({ selections }))
+        expect(msg).toContain(`Not an option: ${named}.`)
+        expect(msg).toContain('Nothing was sent')
+        expect(msg).toContain('`message`')
+        expect(msg).toContain('- A')
+        expect(msg).toContain('- B')
+        expect(child.respondToInput).not.toHaveBeenCalled()
+      }
+    )
+
+    it('WP3-40 label 自带首尾空白：按 trim 之后匹配，送出去的是原 label', async () => {
+      await startBackground()
+      raise(
+        choice('q1', 'Keep?', [
+          { label: ' A ', description: '' },
+          { label: 'B', description: '' }
+        ])
+      )
+      ok(await answerInBackground({ selections: ['A'] }))
+      expect(child.respondToInput.mock.calls[0][1]).toEqual({
+        kind: 'choice',
+        selections: [' A ']
+      })
+    })
+
+    it('WP3-41 不给 ask_id、另外还挂着一张权限卡：只数选择题，答的是 q1', async () => {
+      await askingInBackground()
+      raise(ap())
+      const res = ok(await answerInBackground())
+      expect(child.respondToInput).toHaveBeenCalledTimes(1)
+      expect(child.respondToInput.mock.calls[0][0]).toBe('q1')
+      // 权限卡还挂着：确认窗里当场交回（这一轮仍在等用户批）
+      expect(res.kind).toBe('input')
+    })
+
+    it('WP3-42 两道选择题都挂着、不给 ask_id ⇒ 问「哪一道」，列出 id 与问题（换行压成空格）', async () => {
+      await askingInBackground()
+      raise(
+        choice('q2', 'Which\ndir?', [
+          { label: 'X', description: '' },
+          { label: 'Y', description: '' }
+        ])
+      )
+      const msg = err(await answerInBackground())
+      expect(msg.startsWith('Which question?')).toBe(true)
+      expect(msg).toContain('  q1  Keep the old API?')
+      expect(msg).toContain('  q2  Which dir?')
+      expect(child.respondToInput).not.toHaveBeenCalled()
+    })
+
+    it('WP3-43 ask_id 点名一道不存在的题：有可答的就列出来；只挂着权限卡就不列', async () => {
+      await askingInBackground()
+      const listed = err(await answerInBackground({ askId: 'nope' }))
+      expect(listed).toContain('No question "nope"')
+      expect(listed).toContain('Waiting questions:')
+      expect(listed).toContain('q1  Keep the old API?')
+
+      // 只挂着权限卡
+      child.asks = [ap()]
+      const bare = err(await answerInBackground({ askId: 'nope' }))
+      expect(bare).toContain('No question "nope"')
+      expect(bare).not.toContain('Waiting questions')
+      expect(child.respondToInput).not.toHaveBeenCalled()
+    })
+
+    it('WP3-44 只挂着权限卡：点名它（裁决 7：明说只有用户能批）或不点名（只有用户能解的那种拒绝）都不应答', async () => {
+      await startBackground()
+      raise(ap())
+      const named = err(await answerInBackground({ askId: 'ap1' }))
+      expect(named).toContain('"ap1" is an approval prompt — only the user can answer it')
+      expect(named).toContain('stop-sub-session')
+      expect(named).toContain('Nothing was sent.')
+      expect(named).not.toContain('answer-sub-session')
+      expect(named).not.toContain('Questions you may answer')
+
+      const unnamed = err(await answerInBackground())
+      expect(unnamed).toContain('rm -rf build')
+      expect(unnamed).toContain('Tell the user')
+      expect(unnamed).toContain('stop-sub-session')
+      expect(unnamed).not.toContain('answer-sub-session')
+      expect(child.respondToInput).not.toHaveBeenCalled()
+    })
+
+    it('WP3-45 同时挂着 q1 与权限卡、ask_id 点名权限卡：拒绝（明说只有用户能批），并附上可答的那几道', async () => {
+      await askingInBackground()
+      raise(ap())
+      const msg = err(await answerInBackground({ askId: 'ap1' }))
+      expect(msg).toContain('"ap1" is an approval prompt — only the user can answer it')
+      expect(msg).toContain('Nothing was sent.')
+      expect(msg).toContain('Questions you may answer:')
+      expect(msg).toContain('  q1  Keep the old API?')
+      expect(child.respondToInput).not.toHaveBeenCalled()
+    })
+
+    it('WP3-45b ask_id 点名的题已经不在挂着、而转写里它已有回答 ⇒ 拒绝并带出那个回答（多半是用户先答了，裁决 6）', async () => {
+      await askingInBackground()
+      // 用户先在子会话里答了 q1；转写里那次 ask 调用已经有结果
+      child.respondToInput('q1', picked('B'))
+      child.view = {
+        ...emptySessionView(CHILD),
+        messages: [
+          {
+            id: '5',
+            role: 'assistant',
+            type: 'message',
+            blocks: [
+              {
+                type: 'tool',
+                toolCallId: 'q1',
+                toolName: 'ask',
+                result: 'User selected:\n  B'
+              }
+            ],
+            metadata: null
+          } as never
+        ]
+      }
+      const msg = err(await answerInBackground({ askId: 'q1' }))
+      expect(msg).toContain('Question "q1" in sub-session "Child" was already answered')
+      expect(msg).toContain('most likely by the user')
+      expect(msg).toContain(': User selected: B. Nothing was sent.')
+      expect(child.respondToInput).toHaveBeenCalledTimes(1)
+    })
+
+    /** 转写里有一次已经答过的 ask（toolCallId = q1） */
+    const answeredInTranscript = (): SessionView => ({
+      ...emptySessionView(CHILD),
+      messages: [
+        {
+          id: '5',
+          role: 'assistant',
+          type: 'message',
+          blocks: [
+            { type: 'tool', toolCallId: 'q1', toolName: 'ask', result: 'User selected:\n  B' }
+          ],
+          metadata: null
+        } as never
+      ]
+    })
+
+    /** 父会话那一轮停在 q1 上、用户先在子会话里答了，这一轮随即跑完（绑定任务已落定，boundRun 不在） */
+    async function answeredThenSettled(): Promise<void> {
+      const { rid, release } = await askingInBackground()
+      child.respondToInput('q1', picked('B'))
+      child.view = answeredInTranscript()
+      await finishTurn(release)
+      expect(task(rid)?.status).toBe('done')
+    }
+
+    it('WP3-45c 这一轮已落定之后再点名一道已答的题：「已经答过」先于「这一轮归不归你」报，带出那个回答，不应答', async () => {
+      await answeredThenSettled()
+      const msg = err(await answerInBackground({ askId: 'q1' }))
+      expect(msg).toContain('Question "q1" in sub-session "Child" was already answered')
+      expect(msg).toContain(': User selected: B. Nothing was sent.')
+      expect(msg).not.toContain('not waiting for an answer')
+      expect(msg).not.toContain('not in a turn you are driving now')
+      // 只有用户那一次
+      expect(child.respondToInput).toHaveBeenCalledTimes(1)
+    })
+
+    it('WP3-45c 反向：这一轮已落定、ask_id 指向转写里没有的 id ⇒ 仍是原来的 not-waiting / not-yours 文案', async () => {
+      await answeredThenSettled()
+      // 子会话空闲、没挂询问：不在等回答
+      const idle = err(await answerInBackground({ askId: 'nope' }))
+      expect(idle).toContain('is not waiting for an answer (status: idle)')
+      expect(idle).not.toContain('already answered')
+
+      // 用户随后在子会话里起了新的一轮、又问了 q2：那一轮不是父会话的
+      child.isStreaming = true
+      child.asks.push(q2())
+      const notYours = err(await answerInBackground({ askId: 'nope' }))
+      expect(notYours).toContain('not in a turn you are driving now')
+      expect(notYours).not.toContain('already answered')
+      expect(child.respondToInput).toHaveBeenCalledTimes(1)
+    })
+
+    it('WP3-46 用户自己在子会话里发起的一轮里的提问：不是父会话的 —— 拒绝、不应答', async () => {
+      child.isStreaming = true
+      child.asks.push(q1())
+      const msg = err(await answerInBackground())
+      expect(msg).toContain('not in a turn you are driving now')
+      expect(msg).toContain("the user's to answer")
+      expect(msg).toContain('Nothing was sent.')
+      expect(child.respondToInput).not.toHaveBeenCalled()
+    })
+
+    it('WP3-47 父会话那一轮已落定，之后用户的新一轮问 q1：同 WP3-46', async () => {
+      const { release } = await startBackground()
+      await finishTurn(release)
+      child.isStreaming = true
+      child.asks.push(q1())
+      const msg = err(await answerInBackground())
+      expect(msg).toContain('not in a turn you are driving now')
+      expect(msg).toContain("the user's to answer")
+      expect(child.respondToInput).not.toHaveBeenCalled()
+    })
+
+    it('WP3-48 子会话没开着：不在等回答 —— 从不为此打开会话', async () => {
+      mocks.getAgentSession.mockImplementation(() => undefined)
+      const msg = err(await answerInBackground())
+      expect(msg).toContain('is not waiting for an answer (status: idle)')
+      expect(msg).toContain('Nothing was sent')
+      expect(mocks.peekAgentSession).not.toHaveBeenCalled()
+      expect(mocks.ensureAgentSession).not.toHaveBeenCalled()
+    })
+
+    it('WP3-49 绑定任务活着但没挂任何询问 ⇒ 不在等回答', async () => {
+      await startBackground()
+      expect(err(await answerInBackground())).toContain(
+        'is not waiting for an answer. Nothing was sent.'
+      )
+    })
+
+    it.each([
+      [
+        '① 父会话是笔记本会话',
+        (): void => overridePick(PARENT, { settings: { notebookPath: 'n.md' }, parentId: null }),
+        CHILD,
+        ['Notebook sessions']
+      ],
+      [
+        '② 父会话自己是子会话',
+        (): void => overridePick(PARENT, { settings: {}, parentId: 'grand', title: 'Parent' }),
+        CHILD,
+        ['nesting is limited to one level']
+      ],
+      [
+        '③ childId 是别人的子会话',
+        (): void => overridePick('stranger', { settings: {}, parentId: 'other', title: 'S' }),
+        'stranger',
+        ['is not a sub-session of this session', `${CHILD}  Child`]
+      ],
+      ['④ 两条子会话、省略 id', (): void => void addSecondChild(), '', ['Which sub-session?']]
+    ])(
+      'WP3-50 %s ⇒ 与 prompt 同一套准入：拒绝、不应答',
+      async (_label, arrange, childId, expected) => {
+        await askingInBackground()
+        arrange()
+        const msg = err(await answerInBackground({ childId }))
+        for (const part of expected) expect(msg).toContain(part)
+        expect(child.respondToInput).not.toHaveBeenCalled()
+      }
+    )
+
+    it('WP3-50 ⑤ 恰一条子会话、省略 id ⇒ 自动补全到那一条并受理', async () => {
+      await askingInBackground()
+      ok(await answerInBackground({ childId: '' }))
+      expect(child.respondToInput).toHaveBeenCalledWith('q1', picked('A'), expect.anything())
+    })
+
+    it('WP3-51 用户先答了（respond 认领不到）：前台也立刻如实回「什么都没发」，不挂住；记账没被改坏 —— 跑完照发一次完成通知', async () => {
+      const { rid, release } = await askingInBackground()
+      child.respondRefuses = true
+      // 不推进时钟也返回
+      const msg = err(await answer())
+      expect(msg).toContain('already answered')
+      expect(msg).toContain('nothing was sent')
+      expect(msg).toContain('read-sub-session')
+      await finishTurn(release)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    it('WP3-52 不经全局：broker 的 respondToUserInput、sessionService.respondToInput、网关都没被用来应答', async () => {
+      await askingInBackground()
+      ok(await answerInBackground())
+      expect(child.respondToInput).toHaveBeenCalledTimes(1)
+      expect(mocks.brokerRespond).not.toHaveBeenCalled()
+      expect(mocks.respondToInput).not.toHaveBeenCalled()
+      // 网关只有那一次 prompt，没有为代答另发什么
+      expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+    })
+
+    it('WP3-53 前台代答：应答之后接着在前台等这一轮，跑完交回这一轮的答复', async () => {
+      const { release } = await askingInBackground()
+      let returned = false
+      const pending = answer({ timeoutSeconds: 60 }).then((r) => {
+        returned = true
+        return r
+      })
+      // 先确认仍在等（S3 让任务回到 running，join 挂住而不是当场交回）
+      await advance(1000)
+      expect(returned).toBe(false)
+      child.lastAnswer.mockResolvedValue({ text: 'DONE' })
+      child.isStreaming = false
+      release()
+      const res = ok(await pending)
+      expect(res).toMatchObject({ kind: 'answered', id: CHILD, answer: 'DONE' })
+      expect(res.info).toBeDefined()
+      expect(res.info?.status).not.toBe('waiting-input')
+    })
+
+    it.each([
+      ['落定先报来、前台代答还在等', 'settled-first'],
+      ['前台代答先交回、落定后报来', 'answer-first']
+    ])('WP3-54 %s ⇒ 都不发完成通知（前台已交回答复）', async (_label, order) => {
+      const { rid, release } = await askingInBackground()
+      child.lastAnswer.mockResolvedValue({ text: 'DONE' })
+      const pending = answer()
+      await advance(0)
+      child.isStreaming = false
+      if (order === 'settled-first') {
+        await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+        release()
+        expect(ok(await pending).kind).toBe('answered')
+      } else {
+        release()
+        expect(ok(await pending).kind).toBe('answered')
+        await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      }
+      expect(mocks.deliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-55 前台代答之后子会话又问了一道：再次当场交回（只带新的那道），不通知；之后跑完又脱离了 —— 完成通知一次', async () => {
+      const { rid, release } = await askingInBackground()
+      const pending = answer()
+      await advance(0)
+      raise(q2())
+      const res = ok(await pending)
+      expect(res).toMatchObject({ kind: 'input', id: CHILD })
+      expect(res.info?.pendingAsks).toEqual([
+        expect.objectContaining({ id: 'q2', kind: 'question' })
+      ])
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      await finishTurn(release)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    it('WP3-56 两道都挂着、点名答 q1：不等 —— 立刻交回还挂着的 q2，任务仍在等输入', async () => {
+      const { rid, release } = await askingInBackground()
+      raise(q2())
+      const res = ok(await answer({ askId: 'q1' }))
+      expect(res.kind).toBe('input')
+      expect(res.info?.pendingAsks?.map((a) => a.id)).toEqual(['q2'])
+      expect(task(rid)?.status).toBe('waiting-input')
+      release()
+    })
+
+    it('WP3-57 前台代答到点：降级（不中止），之后跑完完成通知一次、能叫醒父会话', async () => {
+      const { rid, release } = await askingInBackground()
+      const pending = answer({ timeoutSeconds: 1 })
+      await advance(1000)
+      expect(await pending).toEqual({ kind: 'timeout', id: CHILD })
+      expect(child.abort).not.toHaveBeenCalled()
+      await finishTurn(release)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+      expect(mocks.deliver.mock.calls[0][3]).toEqual({ wake: true })
+    })
+
+    it('WP3-58 前台代答时父会话被停：级联中止子会话（经任务的 stop），收尾之后交回答复，完成通知不发', async () => {
+      const { rid, release } = await askingInBackground()
+      const ac = new AbortController()
+      const pending = answer({ signal: ac.signal })
+      ac.abort()
+      expect(child.abort).toHaveBeenCalledTimes(1)
+      child.isStreaming = false
+      release()
+      expect(ok(await pending).kind).toBe('answered')
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true, reason: 'aborted' }))
+      expect(mocks.deliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-59 后台代答：立刻回执；父会话之后被停**不**级联；跑完完成通知一次、能叫醒父会话', async () => {
+      const { rid, release } = await askingInBackground()
+      const ac = new AbortController()
+      expect(await answerInBackground({ signal: ac.signal })).toEqual({
+        kind: 'started',
+        id: CHILD
+      })
+      ac.abort()
+      expect(child.abort).not.toHaveBeenCalled()
+      await finishTurn(release)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+      expect(mocks.deliver.mock.calls[0][3]).toEqual({ wake: true })
+    })
+
+    it('WP3-60 前台 prompt 已因 q1 交回（记账 released）、再前台代答到跑完：交回答复，完成通知不发（记账改回 held）', async () => {
+      const { rid, release } = await foregroundInput()
+      const pending = answer()
+      await advance(1000)
+      child.lastAnswer.mockResolvedValue({ text: 'DONE' })
+      child.isStreaming = false
+      release()
+      expect(ok(await pending)).toMatchObject({ kind: 'answered', answer: 'DONE' })
+      await runner.onDrivenSettled(settled({ requestId: rid, background: false }))
+      expect(mocks.deliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-61 前台超时降级之后才问：这一轮仍是父会话的 —— 通知里没有 for="user"，代答受理', async () => {
+      const { pending } = await startForeground({ timeoutSeconds: 1 })
+      await advance(1000)
+      expect(await pending).toEqual({ kind: 'timeout', id: CHILD })
+      raise(q1())
+      await advance(260)
+      expect(hubText()).toContain('<question ask_id="q1">')
+      expect(hubText()).not.toContain('for="user"')
+      expect(await answerInBackground()).toEqual({ kind: 'started', id: CHILD })
+      expect(child.respondToInput).toHaveBeenCalledWith('q1', picked('A'), expect.anything())
+    })
+
+    it('WP3-62 换进程之后重跑同一次代答（子会话的 ask 重跑、同一 id 再挂）：绝不答第二次，文案说明可能重启过（裁决 4）', async () => {
+      const { release } = await askingInBackground()
+      registry.taskRegistry.killAll()
+      runner.resetForTests()
+      child.asks = [q1()]
+      runner.onAskRaised(CHILD, child.asks[0])
+      const msg = err(await answerInBackground())
+      expect(child.respondToInput).not.toHaveBeenCalled()
+      expect(msg).toContain('not in a turn you are driving now')
+      expect(msg).toContain('the app restarted since')
+      expect(msg).toContain('Nothing was sent.')
+      release()
+    })
+  })
+
+  // ── E. steer-sub-session ───────────────────────────────────────
+
+  describe('E. steer-sub-session', () => {
+    it('WP3-63 自己发起、正在跑的那一轮：走网关的 steerDriven（trim、幂等键、父会话），不另发、不另建任务', async () => {
+      await startBackground()
+      expect(await steer({ message: '  also X  ' })).toEqual({ id: CHILD, title: 'Child' })
+      expect(mocks.gatewaySteerDriven).toHaveBeenCalledTimes(1)
+      expect(mocks.gatewaySteerDriven).toHaveBeenCalledWith(CHILD, 'also X', {
+        requestId: STEER_RID,
+        parentId: PARENT
+      })
+      expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
+      expect(registry.taskRegistry.list(PARENT)).toHaveLength(1)
+    })
+
+    it('WP3-64 子会话空闲、没有驱动：拒绝，指向 prompt-sub-session', async () => {
+      const msg = err(await steer())
+      expect(msg).toContain('is idle')
+      expect(msg).toContain('prompt-sub-session')
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      [
+        '开着、被中断',
+        (): void => {
+          child.isInterrupted = true
+        }
+      ],
+      [
+        '没开着、DB 镜像 runState interrupted',
+        (): void => {
+          mocks.getAgentSession.mockImplementation(() => undefined)
+          overridePick(CHILD, {
+            settings: { runState: 'interrupted' },
+            parentId: PARENT,
+            title: 'Child',
+            updatedAt: 2
+          })
+        }
+      ]
+    ])('WP3-65 %s ⇒ 拒绝：新的 prompt 会重来', async (_label, arrange) => {
+      arrange()
+      const msg = err(await steer())
+      expect(msg).toContain('interrupted')
+      expect(msg).toContain('prompt-sub-session')
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+    })
+
+    it('WP3-66 在跑的这一轮是用户自己发起的：拒绝', async () => {
+      child.isStreaming = true
+      expect(err(await steer())).toContain('was not started by you')
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+    })
+
+    it('WP3-67 卡在可代答的提问上：拒绝，指向 answer-sub-session（想说的话放进 message）', async () => {
+      await askingInBackground()
+      const msg = err(await steer())
+      expect(msg).toContain('answer-sub-session')
+      expect(msg).toContain('`message`')
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+    })
+
+    it('WP3-68 只卡在权限卡上：拒绝，转告用户（不提 answer-sub-session）', async () => {
+      await startBackground()
+      raise(ap())
+      const msg = err(await steer())
+      expect(msg).toContain('rm -rf build')
+      expect(msg).toContain('Tell the user')
+      expect(msg).not.toContain('answer-sub-session')
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['settled，这一轮仍在跑', 'settled', true],
+      ['pending，这一轮仍在跑', 'pending', true],
+      ['settled，子会话此刻已空闲且没有驱动', 'settled', false]
+    ])(
+      'WP3-69 子会话已认得这个幂等键（%s）⇒ 重跑：照报送达过、不再发（幂等检查先于状态检查）',
+      async (_label, state, driven) => {
+        if (driven) await startBackground()
+        child.requestState.mockImplementation(async (id: string) =>
+          id === STEER_RID ? state : 'none'
+        )
+        expect(await steer()).toEqual({ id: CHILD, title: 'Child', earlier: true })
+        expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+      }
+    )
+
+    it('WP3-70 网关回报没送到（busy）：如实说没送到、没排队', async () => {
+      await startBackground()
+      mocks.gatewaySteerDriven.mockResolvedValue({ error: 'The agent is busy', code: 'busy' })
+      const msg = err(await steer())
+      expect(msg).toContain('NOT delivered')
+      expect(msg).toContain('The agent is busy')
+      expect(msg).toContain('Nothing was queued')
+    })
+
+    it('WP3-71 空消息：拒绝在任何判定之前（不问幂等键、不碰网关）', async () => {
+      expect(err(await steer({ message: '   ' }))).toContain('non-empty')
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+      expect(child.requestState).not.toHaveBeenCalled()
+    })
+
+    it('WP3-72 准入：笔记本父会话、别人的子会话拒绝；恰一条子会话省略 id ⇒ 补全并送达', async () => {
+      await startBackground()
+      overridePick('stranger', { settings: {}, parentId: 'other', title: 'S' })
+      expect(err(await steer({ childId: 'stranger' }))).toContain(
+        'is not a sub-session of this session'
+      )
+      expect(await steer({ childId: '' })).toEqual({ id: CHILD, title: 'Child' })
+      expect(mocks.gatewaySteerDriven).toHaveBeenCalledTimes(1)
+      overridePick(PARENT, { settings: { notebookPath: 'n.md' }, parentId: null })
+      expect(err(await steer())).toContain('Notebook sessions')
+      expect(mocks.gatewaySteerDriven).toHaveBeenCalledTimes(1)
+    })
+
+    it('WP3-73 steer 不改记账：这一轮跑完，结果仍由原来那次 prompt 的路交回 —— 完成通知恰一次', async () => {
+      const { rid, release } = await startBackground()
+      ok(await steer())
+      await finishTurn(release)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    it('WP3-74 现状（§19.10 第 6 条，已知窄窗口）：检查之后、送达之前这一轮刚好结束 —— 照报送达，没有绑定任务', async () => {
+      const { release } = await startBackground()
+      mocks.gatewaySteerDriven.mockImplementation(async () => {
+        child.isStreaming = false
+        release()
+        await runner.drainForTests()
+        return {}
+      })
+      expect(await steer()).toEqual({ id: CHILD, title: 'Child' })
+      expect(registry.taskRegistry.list(PARENT).map((t) => t.status)).toEqual(['done'])
+    })
+  })
+
+  // ── F. wait 的外层状态与 prompt 的拒绝 ─────────────────────────
+
+  describe('F. wait 的外层状态与 prompt 的拒绝', () => {
+    it('WP3-75 自己发起的那一轮停在可代答的提问上：wait 外层是 asking，结果里带完整询问', async () => {
+      await askingInBackground()
+      const res = ok(await runner.wait({ parentId: PARENT, timeoutSeconds: 5 }))
+      expect(res.kind).toBe('asking')
+      expect(res.results[0].pendingAsks?.[0]).toMatchObject({
+        id: 'q1',
+        kind: 'question',
+        answerable: true
+      })
+    })
+
+    it('WP3-76 用户自己那一轮里的提问：wait 外层是 blocked，询问标成不能代答', async () => {
+      child.isStreaming = true
+      child.asks.push(q1())
+      const res = ok(await runner.wait({ parentId: PARENT, childId: CHILD, timeoutSeconds: 5 }))
+      expect(res.kind).toBe('blocked')
+      expect(res.results[0].pendingAsks?.[0]).toMatchObject({ id: 'q1', answerable: false })
+    })
+
+    it('WP3-77 两条：A 在父会话这一轮里问、B 只挂权限卡 ⇒ asking（有一条能代答就是 asking），B 的是 approval', async () => {
+      const other = addSecondChild()
+      await askingInBackground()
+      raise(ap(), other)
+      const res = ok(await runner.wait({ parentId: PARENT, timeoutSeconds: 5 }))
+      expect(res.kind).toBe('asking')
+      expect(res.results.find((r) => r.id === CHILD2)?.pendingAsks).toEqual([
+        { id: 'ap1', kind: 'approval', summary: 'bash: rm -rf build' }
+      ])
+    })
+
+    it('WP3-78 现状（裁决 2）：wait 握着两条、A 问了之后 wait 随即被中止 ⇒ aborted，结果里 A 带着 q1；那条询问不补通知', async () => {
+      const other = addSecondChild()
+      await startBackground(7)
+      await startBackground(8, other)
+      const ac = new AbortController()
+      const waiting = runner.wait({ parentId: PARENT, timeoutSeconds: 30, signal: ac.signal })
+      await advance(0)
+      raise(q1())
+      ac.abort()
+      const res = ok(await waiting)
+      expect(res.kind).toBe('aborted')
+      expect(res.results.find((r) => r.id === CHILD)?.pendingAsks?.[0]).toMatchObject({
+        id: 'q1'
+      })
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+    })
+
+    it('WP3-79 wait 只握着 B：A 的询问照常通知（只说 A）', async () => {
+      const other = addSecondChild()
+      await startBackground(7)
+      await startBackground(8, other)
+      const waiting = runner.wait({ parentId: PARENT, childId: CHILD2, timeoutSeconds: 30 })
+      await advance(0)
+      raise(q1())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      expect(hubText()).toContain('id="child-1"')
+      expect(hubText()).not.toContain(CHILD2)
+      other.isStreaming = false
+      await advance(200)
+      expect(ok(await waiting).kind).toBe('settled')
+    })
+
+    it('WP3-80 再 prompt 撞上自己那一轮停在可代答的提问上（裁决 1）：拒绝文案指向 answer-sub-session 并带 ask_id，不另发', async () => {
+      await askingInBackground()
+      const msg = err(
+        await runner.prompt({
+          parentId: PARENT,
+          childId: CHILD,
+          message: 'next',
+          background: false,
+          timeoutSeconds: 60
+        })
+      )
+      expect(msg).toContain('answer-sub-session')
+      expect(msg).toContain('ask_id q1')
+      expect(msg).not.toContain('wait-for-sub-sessions')
+      expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
+    })
+
+    it('WP3-81 prompt 撞上用户自己那一轮里的提问：拒绝，转告用户（不提 answer-sub-session）', async () => {
+      child.isStreaming = true
+      child.asks.push(q1())
+      const msg = err(
+        await runner.prompt({
+          parentId: PARENT,
+          childId: CHILD,
+          message: 'next',
+          background: false,
+          timeoutSeconds: 60
+        })
+      )
+      expect(msg).toContain('will NOT proceed on its own')
+      expect(msg).toContain('Tell the user')
+      expect(msg).not.toContain('answer-sub-session')
+      expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
+    })
+
+    it('WP3-82 wait 握着两条、A 停下来问（裁决 11）：不再陪着 B 等 —— 返回 asking 带 A 的 q1，B 仍在跑；交回之前已记成看过，枢纽不再通知', async () => {
+      const other = addSecondChild()
+      await startBackground(7)
+      await startBackground(8, other)
+      const waiting = runner.wait({ parentId: PARENT, timeoutSeconds: 30 })
+      await advance(0)
+      raise(q1())
+      await advance(300)
+      const res = ok(await waiting)
+      expect(res.kind).toBe('asking')
+      expect(res.results.find((r) => r.id === CHILD)?.pendingAsks?.[0]).toMatchObject({
+        id: 'q1',
+        answerable: true
+      })
+      expect(res.results.find((r) => r.id === CHILD2)?.status).toBe('running')
+      await advance(500)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── J. 竞态与记账 ──────────────────────────────────────────────
+
+  describe('J. 竞态与记账', () => {
+    it('WP3-104 应答与这一轮结束交错（应答返回之前这一轮已经放行）：交回 answered，不挂死、不报超时；完成通知不发', async () => {
+      const { rid, release } = await askingInBackground()
+      child.lastAnswer.mockResolvedValue({ text: 'DONE' })
+      child.respondToInput.mockImplementation((requestId: string): boolean => {
+        child.asks = child.asks.filter((a) => a.id !== requestId)
+        runner.onAskResolved(CHILD, requestId)
+        child.isStreaming = false
+        release()
+        return true
+      })
+      expect(ok(await answer())).toMatchObject({ kind: 'answered', answer: 'DONE' })
+      await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+      expect(mocks.deliver).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['落定报在先交回 input 的那次之后、另一次还在等时', 'between'],
+      ['两次代答都收尾之后才报来', 'late']
+    ])(
+      'WP3-105 并行两次前台代答（同一子会话两道题）、%s ⇒ 一次 input、一次 answered，完成通知 0 次（按 holders 计，裁决 5）',
+      async (_label, order) => {
+        const { rid, release } = await askingInBackground()
+        raise(q2())
+        child.lastAnswer.mockResolvedValue({ text: 'DONE' })
+        const first = answer({ askId: 'q1' })
+        const second = answer({ askId: 'q2', selections: ['X'] })
+        // 答掉 q1 时 q2 还挂着：先返回的那次是 input
+        expect(ok(await first).kind).toBe('input')
+        if (order === 'between') {
+          await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+        }
+        child.isStreaming = false
+        release()
+        expect(ok(await second)).toMatchObject({ kind: 'answered', answer: 'DONE' })
+        if (order === 'late') {
+          await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
+        }
+        expect(mocks.deliver).not.toHaveBeenCalled()
+      }
+    )
+
+    it('WP3-106 前台 prompt 因 q1 交回 → 前台代答 q1 → 子会话问 q2 → 前台代答 q2 → 跑完：依次 input / input / answered；没有任何通知；任务恰一条、最后 done', async () => {
+      const { rid, release, res: first } = await foregroundInput()
+      const secondPending = answer()
+      raise(q2())
+      const second = ok(await secondPending)
+      const thirdPending = answer({ selections: ['X'] })
+      child.lastAnswer.mockResolvedValue({ text: 'DONE' })
+      child.isStreaming = false
+      release()
+      const third = ok(await thirdPending)
+      expect([first.kind, second.kind, third.kind]).toEqual(['input', 'input', 'answered'])
+      await advance(300)
+      await runner.onDrivenSettled(settled({ requestId: rid, background: false }))
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+      expect(mocks.deliver).not.toHaveBeenCalled()
+      expect(registry.taskRegistry.list(PARENT).map((t) => t.status)).toEqual(['done'])
+    })
+
+    it('WP3-107 read 交出去的询问记成看过（裁决 8）：窗口结束不再通知；list 不渲染询问、不记 —— 之后的新询问照常通知', async () => {
+      await askingInBackground()
+      const read = ok(await runner.read(PARENT, CHILD))
+      expect(read.info.pendingAsks?.map((a) => a.id)).toEqual(['q1'])
+      await advance(300)
+      expect(mocks.hubDeliver).not.toHaveBeenCalled()
+
+      raise(q2())
+      ok(runner.list(PARENT))
+      await advance(300)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      expect(hubText()).toContain('ask_id="q2"')
+      expect(hubText()).not.toContain('ask_id="q1"')
+    })
+
+    it('WP3-108 「看过」按轮记、落定时清掉：新的一轮里与上一轮同 id 的询问照常通知（provider 每轮从 call_0 数起）', async () => {
+      const a = await startBackground(7)
+      raise(q1())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
+      await finishTurn(a.release)
+      const b = await startBackground(8)
+      raise(q1())
+      await advance(260)
+      expect(mocks.hubDeliver).toHaveBeenCalledTimes(2)
+      expect(hubText(1)).toContain('<question ask_id="q1">')
+      b.release()
+    })
+  })
+
+  // ── K. 守护 ─────────────────────────────────────────────────
+
+  it('WP3-109 main 入口：询问钩子的两路（桌面通知 / 子会话运行器）各自接上，且各自 try 隔离（一路抛错不拦另一路）', () => {
+    // initSharedWindowServices 不导出：只能读源码
+    const source = readFileSync(join(__dirname, '..', '..', 'index.ts'), 'utf8')
+    const start = source.indexOf('setSessionAskObserver({')
+    expect(start).toBeGreaterThan(-1)
+    const observer = source.slice(start, source.indexOf('\n  })', start))
+    expect(observer).toMatch(
+      /askRaised:[\s\S]*?eachSafely\(\s*\(\) => notifyAskRaised\(sessionId, request\),\s*\(\) => subSessionRunner\.onAskRaised\(sessionId, request\)\s*\)/
+    )
+    expect(observer).toMatch(
+      /askResolved:[\s\S]*?eachSafely\(\s*\(\) => notifyAskResolved\(sessionId, requestId\),\s*\(\) => subSessionRunner\.onAskResolved\(sessionId, requestId\)\s*\)/
+    )
+    // 每一路各包一个 try：一路抛错只记日志，循环接着调下一路
+    expect(source).toMatch(
+      /const eachSafely = \(\.\.\.calls: Array<\(\) => void>\): void => \{\s*for \(const call of calls\) \{\s*try \{\s*call\(\)\s*\} catch/
+    )
   })
 })

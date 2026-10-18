@@ -1,8 +1,8 @@
 /**
  * 转写摘要（P2-14）用例的小工具：手写条目的草稿、往会话里直接追加条目、摘要项的简写。
  *
- * 简写对着设计稿的记号：`U(ts, text)` 人发的消息、`A(ts, text)` agent 的正文、`AC(ts, text)` 压缩摘要
- * （A*）、`Q(ts, question, answer)` 一次 ask 回答。桌面的孪生用例（transcriptParity）也按相对路径用它。
+ * 简写对着设计稿的记号：`U(ts, text)` 人发的消息（`US(ts, text, source)` 带来源记录的）、`A(ts, text)` agent 的
+ * 正文、`AC(ts, text)` 压缩摘要（A*）、`Q(ts, question, answer)` 一次 ask 回答。桌面的孪生用例（transcriptParity）也按相对路径用它。
  */
 import {
   fauxAssistantMessage,
@@ -19,6 +19,7 @@ import type {
   EntryRecord,
   JsonObject
 } from '@earendil-works/pi-durable'
+import type { JsonValue } from '@earendil-works/chord'
 import { backgroundContext as BG } from '../../context'
 import { COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX } from '../../transcriptDigest'
 import type {
@@ -29,6 +30,12 @@ import type {
 import type { DurableSession } from '../../durableSession'
 
 export const U = (ts: number, text: string): TranscriptUserItem => ({ kind: 'user', ts, text })
+/** 带来源记录的 user 项（父会话代发的，§19.7）；没有来源的仍用 `U`（项里没有 `source` 键） */
+export const US = (
+  ts: number,
+  text: string,
+  source: NonNullable<TranscriptUserItem['source']>
+): TranscriptUserItem => ({ kind: 'user', ts, text, source })
 export const A = (ts: number, text: string): TranscriptAssistantItem => ({
   kind: 'assistant',
   ts,
@@ -40,11 +47,18 @@ export const AC = (ts: number, text: string): TranscriptAssistantItem => ({
   text,
   compaction: true
 })
-export const Q = (ts: number, question: string, answer: string): TranscriptAskItem => ({
+/** `answeredBy` 给了才带上这个键（父会话代答，§19.5）；缺省 = 人答的 */
+export const Q = (
+  ts: number,
+  question: string,
+  answer: string,
+  answeredBy?: TranscriptAskItem['answeredBy']
+): TranscriptAskItem => ({
   kind: 'ask',
   ts,
   question,
-  answer
+  answer,
+  ...(answeredBy === undefined ? {} : { answeredBy })
 })
 
 /** 一张 1×1 的 png（只当内容块用，不解码） */
@@ -90,11 +104,11 @@ export function assistantDraft(
   }
 }
 
-/** `pi.tool-result`（没有诊断） */
+/** `pi.tool-result`（没有诊断）；`details` 给了就写进那条 toolResult 消息（ask 的答题方在这里） */
 export function resultDraft(
   callId: string,
   content: string | (TextContent | ImageContent)[],
-  options: { isError?: boolean; ts?: number; toolName?: string } = {}
+  options: { isError?: boolean; ts?: number; toolName?: string; details?: JsonValue } = {}
 ): EntryDraft {
   return {
     kind: 'pi.tool-result',
@@ -105,7 +119,8 @@ export function resultDraft(
         toolName: options.toolName ?? 'ask',
         content: typeof content === 'string' ? [text(content)] : content,
         isError: options.isError ?? false,
-        timestamp: options.ts ?? 0
+        timestamp: options.ts ?? 0,
+        ...(options.details === undefined ? {} : { details: options.details })
       }
     ],
     data: { diagnostics: [] }

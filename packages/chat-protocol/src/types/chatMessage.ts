@@ -2,6 +2,8 @@
  * 消息相关共享类型 — main / preload / renderer 共用
  * 唯一定义源，消除跨进程类型重复
  */
+import type { ParentSessionRef } from './inputRequest'
+
 // ---- 基础元数据类型 ----
 
 /** 图片元数据（用户附图 / AI 生成图 / 中间步骤图） */
@@ -248,6 +250,11 @@ export interface AskToolDetails {
   type: 'ask'
   question: string
   selections: string[]
+  /**
+   * 不是用户本人答的（父会话代答子会话的询问，docs/sub-session-design.md §19.5）。卡片据此写
+   * 「由父会话「X」代答」，自动审查据此不把这次回答当成用户的意思。缺省 = 用户本人。
+   */
+  answeredBy?: ParentSessionRef
 }
 
 /** ssh 工具详情（connect / exec / disconnect 三种 action 的扁平超集） */

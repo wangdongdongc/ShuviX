@@ -13,6 +13,9 @@
  *   D10-31 invalidate：destroyAgent 之后清 fileTime（恰一次）；销毁失败照样清；不碰审查 / 决策 / 存储
  *   D10-32 destroy：先中止 hook run → 等宿主 delete → 清 fileTime / 决策 / 审查；delete 失败照样清
  *   D10-34 失效的句柄：会话已关 → `{ error, code: 'closed' }`，从不悄悄重开
+ *   WP2-57..62 来源与答题方（docs/sub-session-design.md §19.5 / §19.7）：被驱动的 prompt 记下父会话来源；
+ *          人发的消息不带；回退后原样重发沿用的来源走第 5 个参数（WP2-58b）；admitSteer 带幂等键与来源、交回受理
+ *          结果而不抛；respondToInput 把 meta 原样转下去
  * （D10-33「门面从不授予已读」在 agentSessionBot.test.ts。）
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -65,6 +68,8 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: mocks.warn, error: () => {}, debug: () => {} })
 }))
 
+import type { AdmitResult } from '@shuvix/agent-runtime'
+import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { AgentSession } from '../agentSession'
 import {
   FakeDurableSession,
@@ -410,5 +415,115 @@ describe('D10-34 失效的句柄', () => {
     expect(result.error).toBeTruthy()
     expect(fakeHost.callsOf('open')).toEqual([])
     expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+})
+
+describe('WP2 来源与答题方', () => {
+  const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+
+  it('WP2-57 被驱动的 prompt：options 带 requestId / driven，来源取 driven.parentId（没有 title）', async () => {
+    const { durable, session } = facade()
+    const driven = { parentId: 'P1', background: true }
+    await session.prompt('t', undefined, undefined, { requestId: 'subsession:P1:3', driven })
+    const [, , options] = durable.callsOf('submitUser')[0]!
+    expect(options).toMatchObject({ requestId: 'subsession:P1:3', driven })
+    expect((options as { source?: unknown }).source).toStrictEqual({
+      kind: 'parent-session',
+      sessionId: 'P1'
+    })
+  })
+
+  it('WP2-58 人发的消息（不带 drive，带不带显示侧车都一样）：没有 source / requestId / driven 键', async () => {
+    const { durable, session } = facade()
+    await session.prompt('t')
+    await session.prompt('t', undefined, { content: 'x', tokens: {} } as never)
+    for (const [, , options] of durable.callsOf('submitUser')) {
+      expect(options).not.toHaveProperty('source')
+      expect(options).not.toHaveProperty('requestId')
+      expect(options).not.toHaveProperty('driven')
+    }
+  })
+
+  it('WP2-58b / RSRC-26 不是被驱动、却带着沿用的来源（回退后原样重发，§19.7）：options 只多一个 source；被驱动时来源恒取 drive，第 5 个参数不顶替它', async () => {
+    const { durable, session } = facade()
+    await session.prompt('t', undefined, undefined, undefined, PARENT)
+    const [, , resent] = durable.callsOf('submitUser')[0]!
+    expect((resent as { source?: unknown }).source).toStrictEqual(PARENT)
+    expect(resent).not.toHaveProperty('requestId')
+    expect(resent).not.toHaveProperty('driven')
+
+    const driven = { parentId: 'P2', background: false }
+    await session.prompt(
+      't',
+      undefined,
+      undefined,
+      { requestId: 'subsession:P2:4', driven },
+      PARENT
+    )
+    const [, , options] = durable.callsOf('submitUser')[1]!
+    expect(options).toMatchObject({ requestId: 'subsession:P2:4', driven })
+    expect((options as { source?: unknown }).source).toStrictEqual({
+      kind: 'parent-session',
+      sessionId: 'P2'
+    })
+  })
+
+  it('WP2-59 admitSteer：文本与幂等键 / 来源原样交给 durable.steer（连同门面的受理回调），结果原样交回', async () => {
+    const { durable, session } = facade()
+    durable.steerResult = { submissionId: 5 as AdmitResult['submissionId'] }
+    expect(
+      await session.admitSteer('go', { requestId: 'subsession-steer:P1:9', source: PARENT })
+    ).toStrictEqual({ submissionId: 5 })
+    expect(durable.callsOf('steer')).toEqual([['steer', 'go']])
+    const options = durable.steerOptions[0]!
+    expect(options.requestId).toBe('subsession-steer:P1:9')
+    expect(options.source).toBe(PARENT)
+    expect(typeof options.onAdmitted).toBe('function')
+    expect(typeof options.onPlaced).toBe('function')
+  })
+
+  it.each([
+    [{ error: 'The conversation is busy', code: 'busy' }, 'The conversation is busy'],
+    [
+      { error: 'Provider "Faux" model nope', code: 'no_model' },
+      'chat.agentNoModel:Provider "Faux" model nope'
+    ],
+    [{ error: 'Session s1 is closed', code: 'closed' }, 'Session s1 is closed']
+  ] as const)(
+    'WP2-60 admitSteer 被拒（%o）→ 交回而不抛：error 是给人读的文案，code 保留',
+    async (result, text) => {
+      const { durable, session } = facade()
+      durable.steerResult = { ...result }
+      await expect(session.admitSteer('go', { requestId: 'r', source: PARENT })).resolves.toEqual({
+        error: text,
+        code: result.code
+      })
+    }
+  )
+
+  it('WP2-61 界面的 steer 形状不变：options 里没有 requestId / source；被拒仍带原文 reject', async () => {
+    const { durable, session } = facade()
+    await session.steer('s')
+    expect(durable.steerOptions[0]).not.toHaveProperty('requestId')
+    expect(durable.steerOptions[0]).not.toHaveProperty('source')
+    durable.steerResult = { error: 'The conversation is closed', code: 'closed' }
+    await expect(session.steer('s')).rejects.toThrow('The conversation is closed')
+  })
+
+  it('WP2-62 respondToInput：meta（含答题方）原样转给 durable；不带 meta 时仍两参调用', () => {
+    const { durable, session } = facade()
+    durable.respondResult = true
+    const response: InputResponse = { kind: 'choice', selections: ['A'] }
+    const meta = { clientId: 'parent:P1', answeredBy: PARENT }
+    expect(session.respondToInput('c1', response, meta)).toBe(true)
+    expect(session.respondToInput('c2', response)).toBe(true)
+    expect(durable.callsOf('respondToInput')).toEqual([
+      ['respondToInput', 'c1', response],
+      ['respondToInput', 'c2', response]
+    ])
+    expect(durable.respondArgs).toHaveLength(2)
+    expect(durable.respondArgs[0]!.arity).toBe(3)
+    expect(durable.respondArgs[0]!.meta).toBe(meta)
+    expect(durable.respondArgs[1]).toStrictEqual({ arity: 2 })
   })
 })

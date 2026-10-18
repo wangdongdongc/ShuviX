@@ -37,6 +37,13 @@ export const ASK_DESCRIPTION =
   'The user may tick one option or several, or answer in their own words instead — how many to pick is their call, so do not tell them in the question, and write each option so it stands on its own. ' +
   'Be ready for a result that names more than one option.'
 
+/**
+ * 父会话代答时结果的开头。子会话的模型要知道这不是用户本人选的（它可以据此判断要不要再向用户确认）；
+ * 进模型上下文的字符串不随界面语言变。
+ */
+export const PARENT_ANSWERED =
+  'The user did not answer this — the session that assigned you this task answered on their behalf.'
+
 export interface CreateAskToolOptions {
   /** 挂起并等待用户响应（桌面经 IPC，扩展经 RuntimeSession；均落到共享 chat-ui 面板） */
   requestUserInput: (req: InputRequest) => Promise<InputResponse>
@@ -84,14 +91,23 @@ export function createAskTool({
 
         let text: string
         let selections: string[] = []
+        // 父会话代答（docs/sub-session-design.md §19.5）：结果按答题方写 —— 转写不得把父会话的话记成用户说的
+        // 有答题方就不是用户本人（宿主只在父会话代答时写它，挂起的询问不信载荷里的那一项）
+        const answeredBy = response.answeredBy
+        const byParent = answeredBy !== undefined
         if (response.kind === 'cancel') {
           throw new Error(abortError)
         } else if (response.kind === 'other') {
-          text = `User did not select any option and responded with feedback instead:\n${response.text}`
+          text = byParent
+            ? `${PARENT_ANSWERED} Instead of picking an option, it wrote:\n${response.text}`
+            : `User did not select any option and responded with feedback instead:\n${response.text}`
         } else if (response.kind === 'choice') {
           selections = response.selections
-          text =
-            selections.length === 0
+          text = byParent
+            ? selections.length === 0
+              ? `${PARENT_ANSWERED} It made no selection.`
+              : `${PARENT_ANSWERED} Selected: ${selections.join(', ')}`
+            : selections.length === 0
               ? 'User made no selection'
               : `User selected: ${selections.join(', ')}`
         } else {
@@ -100,7 +116,12 @@ export function createAskTool({
 
         const result: ToolResult<AskToolDetails> = {
           content: [{ type: 'text', text }],
-          details: { type: 'ask', question: params.question, selections }
+          details: {
+            type: 'ask',
+            question: params.question,
+            selections,
+            ...(byParent ? { answeredBy: { ...answeredBy } } : {})
+          }
         }
         return toExecutionResult(result, 'ask')
       })

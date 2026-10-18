@@ -14,6 +14,8 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
+import type { PendingAskInfo } from '../../services/subSessionText'
+import { buildToolSummary } from '@shuvix/chat-protocol/toolSummaries'
 import {
   executeTool,
   failureText,
@@ -32,7 +34,11 @@ const mocks = vi.hoisted(() => ({
   runnerWait: vi.fn(),
   runnerList: vi.fn(),
   runnerRead: vi.fn(),
-  runnerStop: vi.fn()
+  runnerStop: vi.fn(),
+  // §19（T1）：代答 / 插话 / 查看现场
+  runnerAnswer: vi.fn(),
+  runnerSteer: vi.fn(),
+  runnerInspect: vi.fn()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pick: mocks.pick } }))
@@ -48,7 +54,10 @@ vi.mock('../../services/subSessionRunner', () => ({
     wait: mocks.runnerWait,
     list: mocks.runnerList,
     read: mocks.runnerRead,
-    stop: mocks.runnerStop
+    stop: mocks.runnerStop,
+    answer: mocks.runnerAnswer,
+    steer: mocks.runnerSteer,
+    inspect: mocks.runnerInspect
   }
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
@@ -71,7 +80,10 @@ beforeEach(() => {
     mocks.runnerWait,
     mocks.runnerList,
     mocks.runnerRead,
-    mocks.runnerStop
+    mocks.runnerStop,
+    mocks.runnerAnswer,
+    mocks.runnerSteer,
+    mocks.runnerInspect
   ]) {
     fn.mockReset()
   }
@@ -91,10 +103,17 @@ describe('SessionTool — 参数面与目标会话边界', () => {
       'agent_profile',
       'sub_session_id',
       'message',
+      'ask_id',
+      'selections',
+      'turns',
+      'item',
+      'match',
+      'before',
       'run_in_background',
       'timeout_seconds'
     ])
-    // 参数面没有随 action 变多而膨胀：wait 复用 sub_session_id / timeout_seconds
+    // 参数面只为新能力加必要的几项（§19：代答的 ask_id / selections，查看现场的 turns / item / match / before）：
+    // wait / answer 复用 sub_session_id / timeout_seconds，steer / answer 复用 message
     // 「改哪条会话」的选择权始终不给模型：本会话恒取 ToolContext.sessionId，
     // 而 sub_session_id 只能指向调用方自己的子会话（判定在 runner，见其用例）
     expect(keys).not.toContain('sessionId')
@@ -187,13 +206,24 @@ const textOf = (r: unknown): string =>
 const info = (
   id: string,
   title: string,
-  status: 'idle' | 'running' | 'waiting-input' | 'interrupted'
-): { id: string; title: string; status: typeof status; driven: boolean; updatedAt: number } => ({
+  status: 'idle' | 'running' | 'waiting-input' | 'interrupted',
+  // T2：§19 的完整询问（选择题 / 权限卡）
+  extra: { pendingAsks?: PendingAskInfo[]; blockedOn?: string[] } = {}
+): {
+  id: string
+  title: string
+  status: typeof status
+  driven: boolean
+  updatedAt: number
+  pendingAsks?: PendingAskInfo[]
+  blockedOn?: string[]
+} => ({
   id,
   title,
   status,
   driven: false,
-  updatedAt: 1
+  updatedAt: 1,
+  ...extra
 })
 
 describe('SessionTool — 子会话 action', () => {
@@ -577,5 +607,397 @@ describe('SessionTool — 子会话 action', () => {
         await executeTool(tool, 'tc-1', { action: 'stop-sub-session', sub_session_id: 'sub-1' })
       )
     ).toContain('not running')
+  })
+})
+
+// ── §19 代答 / 插话 / 询问的渲染（docs/sub-session-design.md §19.4 / §19.6 / §19.8） ──────
+//
+// 同上：runner 是假件，钉的是参数面（转调了什么）与排版（回话长什么样）；准入与等法在 runner 的 §19 用例里。
+
+const detailsOf = (r: unknown): unknown => (r as { details?: unknown }).details
+
+const question = (
+  id: string,
+  over: Partial<Extract<PendingAskInfo, { kind: 'question' }>> = {}
+): PendingAskInfo => ({
+  id,
+  kind: 'question',
+  question: 'Keep the old API?',
+  options: [
+    { label: 'A', description: 'keep a shim' },
+    { label: 'B', description: '' }
+  ],
+  answerable: true,
+  ...over
+})
+
+const approvalAsk = (id: string, summary: string): PendingAskInfo => ({
+  id,
+  kind: 'approval',
+  summary
+})
+
+describe('SessionTool — §19 参数面', () => {
+  it('WP3-83 action 恰 10 项、含三个新动作；未知 action 的错误列出这 10 个；新参数各自注明 For "…"', async () => {
+    const props = mod.SessionParamsSchema.properties as unknown as Record<
+      string,
+      { description?: string; enum?: string[] }
+    >
+    const actions = props.action.enum!
+    expect(actions).toHaveLength(10)
+    expect(actions).toEqual(
+      expect.arrayContaining(['answer-sub-session', 'steer-sub-session', 'inspect-sub-session'])
+    )
+    const failure = await failureText(
+      executeTool(tool, 'tc-1', { action: 'rename' as 'set-title' })
+    )
+    expect(failure.split('Valid actions: ')[1].split(', ')).toEqual(actions)
+
+    expect(props.ask_id.description!.startsWith('For "answer-sub-session"')).toBe(true)
+    expect(props.selections.description!.startsWith('For "answer-sub-session"')).toBe(true)
+    for (const action of ['"prompt-sub-session"', '"steer-sub-session"', '"answer-sub-session"']) {
+      expect(props.message.description).toContain(action)
+    }
+    expect(props.run_in_background.description).toContain('answer-sub-session')
+    expect(props.timeout_seconds.description).toContain('answer-sub-session')
+  })
+
+  it('WP3-84 answer-sub-session：转调 runner.answer（id trim、ask_id / selections 原样、缺省前台 300s、带中止信号），不带 message 也不带幂等键', async () => {
+    mocks.runnerAnswer.mockResolvedValue({
+      kind: 'answered',
+      id: 'c1',
+      answer: 'ok',
+      info: info('c1', 'C', 'idle')
+    })
+    await executeTool(tool, 'tc-1', {
+      action: 'answer-sub-session',
+      sub_session_id: ' c1 ',
+      ask_id: 'q1',
+      selections: ['A']
+    })
+    expect(mocks.runnerAnswer).toHaveBeenCalledTimes(1)
+    const args = mocks.runnerAnswer.mock.calls[0][0] as Record<string, unknown>
+    expect(args).toMatchObject({
+      parentId: 's1',
+      childId: 'c1',
+      askId: 'q1',
+      selections: ['A'],
+      background: false,
+      timeoutSeconds: 300
+    })
+    expect('signal' in args).toBe(true)
+    expect(args).not.toHaveProperty('message')
+    expect(args).not.toHaveProperty('requestId')
+  })
+
+  it('WP3-85 空的 ask_id 不传；message 原样传（判空在 runner）；run_in_background / timeout_seconds 照 prompt 的口径', async () => {
+    mocks.runnerAnswer.mockResolvedValue({ kind: 'started', id: 'c1' })
+    await executeTool(tool, 'tc-1', {
+      action: 'answer-sub-session',
+      sub_session_id: 'c1',
+      ask_id: '',
+      message: ''
+    })
+    const first = mocks.runnerAnswer.mock.calls[0][0] as Record<string, unknown>
+    expect(first).not.toHaveProperty('askId')
+    expect(first).not.toHaveProperty('selections')
+    expect(first.message).toBe('')
+    expect(first).toMatchObject({ background: false, timeoutSeconds: 300 })
+
+    await executeTool(tool, 'tc-1', {
+      action: 'answer-sub-session',
+      sub_session_id: 'c1',
+      message: 'keep it',
+      run_in_background: true,
+      timeout_seconds: 30
+    })
+    expect(mocks.runnerAnswer.mock.calls[1][0]).toMatchObject({
+      message: 'keep it',
+      background: true,
+      timeoutSeconds: 30
+    })
+  })
+
+  it('WP3-89 answer / steer 的 runner 错误原样成为工具失败的文字（不复述、不改写）', async () => {
+    mocks.runnerAnswer.mockResolvedValue({ error: 'X answer refused' })
+    expect(
+      await failureText(
+        executeTool(tool, 'tc-1', { action: 'answer-sub-session', selections: ['A'] })
+      )
+    ).toBe('X answer refused')
+    mocks.runnerSteer.mockResolvedValue({ error: 'X steer refused' })
+    expect(
+      await failureText(executeTool(tool, 'tc-1', { action: 'steer-sub-session', message: 'm' }))
+    ).toBe('X steer refused')
+  })
+
+  it('WP3-90 steer-sub-session：幂等键是 subsession-steer:<本会话>:<工具任务 id>（不是 tool_call id）；省略 message 时传空串', async () => {
+    mocks.runnerSteer.mockResolvedValue({ id: 'c1', title: 'C' })
+    await invokeTool(
+      tool,
+      { action: 'steer-sub-session', sub_session_id: 'c1', message: 'm' },
+      { callId: 'call_0', taskId: 9 }
+    )
+    const args = mocks.runnerSteer.mock.calls[0][0] as Record<string, unknown>
+    expect(args).toEqual({
+      parentId: 's1',
+      childId: 'c1',
+      message: 'm',
+      requestId: 'subsession-steer:s1:9'
+    })
+    expect(JSON.stringify(args)).not.toContain('call_0')
+
+    await invokeTool(
+      tool,
+      { action: 'steer-sub-session', sub_session_id: 'c1' },
+      { callId: 'call_1', taskId: 10 }
+    )
+    expect(mocks.runnerSteer.mock.calls[1][0]).toMatchObject({ message: '' })
+  })
+})
+
+describe('SessionTool — §19 渲染', () => {
+  const answerOnce = async (): Promise<InvokedToolResult> =>
+    executeTool(tool, 'tc-1', {
+      action: 'answer-sub-session',
+      sub_session_id: 'c1',
+      selections: ['A']
+    })
+
+  it('WP3-86 answer 的四种结果：答复在 <reply>（无后台标签）；又停下来问 / 后台回执 / 超时降级都带后台标签', async () => {
+    mocks.runnerAnswer.mockResolvedValueOnce({
+      kind: 'answered',
+      id: 'c1',
+      answer: 'ok',
+      info: info('c1', 'C', 'idle')
+    })
+    const answered = await answerOnce()
+    expect(textOf(answered)).toContain('<reply>\nok\n</reply>')
+    expect(detailsOf(answered)).toBeUndefined()
+
+    mocks.runnerAnswer.mockResolvedValueOnce({
+      kind: 'input',
+      id: 'c1',
+      info: info('c1', 'C', 'waiting-input', {
+        pendingAsks: [
+          question('q2', {
+            question: 'Which dir?',
+            options: [{ label: 'X', description: '' }]
+          })
+        ]
+      })
+    })
+    const input = await answerOnce()
+    expect(textOf(input)).toContain('status="waiting-input"')
+    expect(textOf(input)).toContain('<question ask_id="q2">')
+    expect(textOf(input)).toContain(
+      'You may answer it for the user with action "answer-sub-session"'
+    )
+    expect(textOf(input)).toContain('The turn is still open')
+    expect(detailsOf(input)).toEqual({ type: 'session', background: true })
+
+    mocks.runnerAnswer.mockResolvedValueOnce({ kind: 'started', id: 'c1' })
+    const started = await answerOnce()
+    expect(textOf(started)).toContain('Answered; it carries on in the background.')
+    expect(textOf(started)).toContain('wait-for-sub-sessions')
+    expect(textOf(started)).toContain('Do NOT sleep and poll')
+    expect(detailsOf(started)).toEqual({ type: 'session', background: true })
+
+    mocks.runnerAnswer.mockResolvedValueOnce({ kind: 'timeout', id: 'c1' })
+    const timedOut = await answerOnce()
+    expect(textOf(timedOut)).toContain('Still running after 300s')
+    expect(detailsOf(timedOut)).toEqual({ type: 'session', background: true })
+  })
+
+  it.each([
+    ['① 可代答的选择题', [question('q1')]],
+    ['② 用户那一轮里的选择题（answerable:false）', [question('q1', { answerable: false })]],
+    [
+      '③ 选择题 + 两张权限卡',
+      [
+        question('q1'),
+        approvalAsk('ap1', 'bash: rm -rf build'),
+        approvalAsk('ap2', 'write: /etc/hosts')
+      ]
+    ]
+  ])(
+    'WP3-87 prompt 当场交回 input（%s）：都在同一个 <sub-session> 围栏里、带后台标签',
+    async (label, pendingAsks) => {
+      mocks.runnerPrompt.mockResolvedValue({
+        kind: 'input',
+        id: 'c1',
+        info: info('c1', 'C', 'waiting-input', { pendingAsks })
+      })
+      const res = await executeTool(tool, 'tc-1', {
+        action: 'prompt-sub-session',
+        sub_session_id: 'c1',
+        message: 'go'
+      })
+      const out = textOf(res)
+      expect(detailsOf(res)).toEqual({ type: 'session', background: true })
+      expect(out.split('<sub-session ').length - 1).toBe(1)
+      expect(out.split('</sub-session>').length - 1).toBe(1)
+      if (label.startsWith('①')) {
+        expect(out).toContain('<question ask_id="q1">')
+        expect(out).toContain('answer-sub-session')
+      } else if (label.startsWith('②')) {
+        expect(out).toContain('<question ask_id="q1" for="user">')
+        expect(out).toContain('only the user answers it')
+        expect(out).not.toContain('answer-sub-session')
+      } else {
+        // 选择题在前，两张权限卡合成一块放在后面
+        expect(out.split('<blocked-on-user-approval>').length - 1).toBe(1)
+        expect(out.indexOf('<question ask_id="q1">')).toBeLessThan(
+          out.indexOf('<blocked-on-user-approval>')
+        )
+        expect(out).toContain('- bash: rm -rf build\n- write: /etc/hosts')
+      }
+    }
+  )
+
+  it('WP3-88 选项一有描述一无；问题多行原样；ask_id 里的引号转成单引号', async () => {
+    mocks.runnerRead.mockResolvedValue({
+      info: info('c1', 'C', 'waiting-input', {
+        pendingAsks: [question('c"1', { question: 'Line one\nline two' })]
+      })
+    })
+    const out = textOf(
+      await executeTool(tool, 'tc-1', { action: 'read-sub-session', sub_session_id: 'c1' })
+    )
+    expect(out).toContain(`<question ask_id="c'1">\nLine one\nline two\n1. A — keep a shim\n2. B\n`)
+  })
+
+  it('WP3-91 steer 的回执：送达 / 早先已送达（重跑）；都不带后台标签', async () => {
+    mocks.runnerSteer.mockResolvedValueOnce({ id: 'c1', title: 'C' })
+    const delivered = await executeTool(tool, 'tc-1', {
+      action: 'steer-sub-session',
+      sub_session_id: 'c1',
+      message: 'm'
+    })
+    expect(textOf(delivered)).toContain('<sub-session id="c1" title="C" status="running"/>')
+    expect(textOf(delivered)).toContain('Steer delivered — it reads it at its next step.')
+    expect(textOf(delivered)).toContain('Its reply still comes back the way this turn was started')
+    expect(detailsOf(delivered)).toBeUndefined()
+
+    mocks.runnerSteer.mockResolvedValueOnce({ id: 'c1', title: 'C', earlier: true })
+    const earlier = await executeTool(tool, 'tc-1', {
+      action: 'steer-sub-session',
+      sub_session_id: 'c1',
+      message: 'm'
+    })
+    expect(textOf(earlier)).toContain('already delivered earlier — nothing was sent again')
+    expect(textOf(earlier)).not.toContain('Steer delivered')
+    expect(detailsOf(earlier)).toBeUndefined()
+  })
+
+  it('WP3-92 wait 外层 asking：<question> 块 + 「代答或转告」的尾注，无后台标签；blocked 的尾注不提 answer-sub-session', async () => {
+    mocks.runnerWait.mockResolvedValue({
+      kind: 'asking',
+      results: [info('c1', 'C', 'waiting-input', { pendingAsks: [question('q1')] })]
+    })
+    const asking = await executeTool(tool, 'tc-1', { action: 'wait-for-sub-sessions' })
+    expect(textOf(asking)).toContain('<sub-sessions status="asking">')
+    expect(textOf(asking)).toContain('<question ask_id="q1">')
+    expect(textOf(asking)).toContain('answer it with "answer-sub-session", or relay it to the user')
+    expect(textOf(asking)).toContain('Waiting again will not help')
+    expect(detailsOf(asking)).toBeUndefined()
+
+    mocks.runnerWait.mockResolvedValue({
+      kind: 'blocked',
+      results: [info('c1', 'C', 'waiting-input', { blockedOn: ['bash: rm -rf build'] })]
+    })
+    const blocked = textOf(await executeTool(tool, 'tc-1', { action: 'wait-for-sub-sessions' }))
+    expect(blocked).toContain('<sub-sessions status="blocked">')
+    expect(blocked).not.toContain('answer-sub-session')
+  })
+
+  it('WP3-93 read 停在询问上：完整的 <question> + 上一轮的 <earlier-reply>；没有 pendingAsks 时仍按 blockedOn 渲染批准块（旧行为不变）', async () => {
+    mocks.runnerRead.mockResolvedValue({
+      info: info('c1', 'C', 'waiting-input', { pendingAsks: [question('q1')] }),
+      answer: 'earlier'
+    })
+    const withAsks = textOf(
+      await executeTool(tool, 'tc-1', { action: 'read-sub-session', sub_session_id: 'c1' })
+    )
+    expect(withAsks).toContain('<question ask_id="q1">')
+    expect(withAsks).toContain('<earlier-reply>\nearlier\n</earlier-reply>')
+    expect(withAsks).not.toContain('(question text unavailable)')
+
+    mocks.runnerRead.mockResolvedValue({
+      info: info('c1', 'C', 'waiting-input', { blockedOn: ['bash: x'] })
+    })
+    const legacy = textOf(
+      await executeTool(tool, 'tc-1', { action: 'read-sub-session', sub_session_id: 'c1' })
+    )
+    expect(legacy).toContain('<blocked-on-user-approval>\n- bash: x')
+    expect(legacy).not.toContain('<question')
+  })
+
+  it('WP3-94 工具描述：三个新动作、提前返回、何时代答何时转告、只有用户能答的两种、忙时的去处；旧的「waiting-input 一律等用户批」说法已删', () => {
+    const d = mod.SESSION_DESCRIPTION
+    for (const action of ['answer-sub-session', 'steer-sub-session', 'inspect-sub-session']) {
+      expect(d).toContain(`"${action}"`)
+    }
+    expect(d).toContain('comes back early when the sub-session stops to ask')
+    expect(d).toContain('`<question>`')
+    expect(d).toMatch(/yours to answer when[\s\S]*relay it/)
+    expect(d).toContain('for="user"')
+    expect(d).toContain('`<blocked-on-user-approval>`')
+    expect(d).toContain('only the user can answer')
+    expect(d).toContain('steer it, wait, or create another')
+    expect(d).not.toContain('waits for the USER to approve something')
+  })
+
+  it('WP3-95 停下来问、快照却缺（裁决 9）：不猜它问的是什么、指向 read —— 不再渲染成权限卡', async () => {
+    mocks.runnerPrompt.mockResolvedValue({ kind: 'input', id: 'c1' })
+    const res = await executeTool(tool, 'tc-1', {
+      action: 'prompt-sub-session',
+      sub_session_id: 'c1',
+      message: 'go'
+    })
+    const out = textOf(res)
+    expect(out).toContain('<sub-session id="c1" status="waiting-input"/>')
+    expect(out).toContain('See the question with "read-sub-session"')
+    expect(out).not.toContain('<blocked-on-user-approval>')
+    expect(out).not.toContain('(question text unavailable)')
+    expect(detailsOf(res)).toEqual({ type: 'session', background: true })
+  })
+})
+
+// 工具卡折叠摘要（chat-protocol builtinToolPresentations 的 session 一项）。放在这里而不是 toolSummaries.test.ts：
+// 那份文件另有人在改，而这是 session 工具自己的卡片
+describe('SessionTool — §19 工具卡折叠摘要', () => {
+  const summary = (args: Record<string, unknown>): string | undefined =>
+    buildToolSummary('session', args)
+
+  it('WP3-96 代答：选项逗号相连；用自己的话答时取首个非空行；混入非字符串的选项丢掉', () => {
+    expect(summary({ action: 'answer-sub-session', selections: ['A', 'B'] })).toBe(
+      'answer-sub-session · A, B'
+    )
+    expect(summary({ action: 'answer-sub-session', message: '\n  keep the shim\nmore' })).toBe(
+      'answer-sub-session · keep the shim'
+    )
+    expect(summary({ action: 'answer-sub-session', selections: ['A', 3] })).toBe(
+      'answer-sub-session · A'
+    )
+  })
+
+  it('WP3-97 插话截到 47 字加省略号；prompt 不显示 message（那是一整段派活）', () => {
+    const line = 'x'.repeat(60)
+    expect(summary({ action: 'steer-sub-session', message: line })).toBe(
+      `steer-sub-session · ${'x'.repeat(47)}…`
+    )
+    expect(summary({ action: 'prompt-sub-session', message: 'x' })).toBe('prompt-sub-session')
+  })
+
+  it('WP3-98 set-title 不变；查看现场显示展开的编号 / 搜索词；空参数没有摘要', () => {
+    expect(summary({ action: 'set-title', title: 'T' })).toBe('set-title · T')
+    expect(summary({ action: 'inspect-sub-session', item: '#12.3' })).toBe(
+      'inspect-sub-session · #12.3'
+    )
+    expect(summary({ action: 'inspect-sub-session', match: 'tokenize' })).toBe(
+      'inspect-sub-session · tokenize'
+    )
+    expect(summary({})).toBeUndefined()
   })
 })

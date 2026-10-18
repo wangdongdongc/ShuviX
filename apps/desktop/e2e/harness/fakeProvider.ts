@@ -63,6 +63,17 @@ export interface FakeTurn {
    * 期间 `release()` 可提前放行；客户端断开（abort）也会立刻结束。
    */
   holdMs?: number
+  /**
+   * 具名 hold 槽（配 `holdMs`）。缺省 = 那一个不具名的槽（`release()` / `holding()` 不带参数时说的就是它，
+   * 既有用例零改动）。要让两个请求**同时**挂着（父会话一轮、子会话一轮）就各给一个名字，按名字放行
+   */
+  holdKey?: string
+  /**
+   * 动态轮次：认领之后、开流之前按这次请求求值，交回的字段覆盖同名字段（`when` 判定不变）。脚本里写不死的
+   * 参数（「上一个工具结果里的那个编号」）靠它从请求里取。**抛错 = 这一轮回 400**（请求错误，不会被重试），
+   * 错误原文记在请求的 `buildError` 上 —— 绝不退回缺省 `OK` 让用例假绿
+   */
+  build?: (req: FakeRequest) => Partial<Pick<FakeTurn, 'text' | 'thinking' | 'toolCalls'>>
   /** 非 2xx 直接返回该状态（provider 报错用例）；不发 SSE */
   httpStatus?: number
 }
@@ -93,6 +104,8 @@ export interface FakeRequest {
    * 断开那一刻原地改成 true —— `requests()` 回的是同一批对象，轮询读得到。
    */
   aborted: boolean
+  /** 认领到的轮次带 `build` 且它抛了：错误原文（这一轮已回 400） */
+  buildError?: string
 }
 
 export interface FakeProvider {
@@ -108,13 +121,15 @@ export interface FakeProvider {
   chatRequests(): FakeRequest[]
   /** 已处理的请求数（= `requests().length`） */
   chatRequestCount(): number
-  /** 提前放行当前 hold（未在 hold 中则无副作用） */
-  release(): void
+  /** 提前放行当前 hold（未在 hold 中则无副作用）；`key` = 那个具名槽（`FakeTurn.holdKey`），缺省 = 不具名的槽 */
+  release(key?: string): void
   /**
    * 此刻是否正挂在某个 turn 的 hold 里（内容片都发完、还没收尾）。`release()` 在 hold 开始之前调是
-   * 空操作 —— 片间隔较长的流式脚本里，先等它为真再放行
+   * 空操作 —— 片间隔较长的流式脚本里，先等它为真再放行。`key` 同 `release`
    */
-  holding(): boolean
+  holding(key?: string): boolean
+  /** 此刻挂在这个 hold 槽里的是哪一个请求（没在 hold → null）—— 「hold 住的是对的那一个」靠它断言 */
+  heldRequest(key?: string): FakeRequest | null
   close(): Promise<void>
 }
 
@@ -135,15 +150,44 @@ function textOfContent(content: unknown): string {
     .join('')
 }
 
+/** 一次请求里的全部消息：角色 + 纯文本，按序 —— 「模型这一步看到了什么、按什么次序」 */
+export function messageTextsOf(req: FakeRequest): Array<{ role: string; text: string }> {
+  return (req.body.messages ?? []).map((m) => ({
+    role: m.role ?? '',
+    text: textOfContent(m.content)
+  }))
+}
+
+/** 一次请求里全部 `role:'tool'` 消息（工具结果）的文本，按序 —— 「模型下一步看到了哪些工具结果」 */
+export function toolTextsOf(req: FakeRequest): string[] {
+  return messageTextsOf(req)
+    .filter((m) => m.role === 'tool')
+    .map((m) => m.text)
+}
+
+/** 一次请求里全部 user 消息的文本，按序 */
+export function userTextsOf(req: FakeRequest): string[] {
+  return messageTextsOf(req)
+    .filter((m) => m.role === 'user')
+    .map((m) => m.text)
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** 不具名的 hold 槽（`FakeTurn.holdKey` 缺省时） */
+const DEFAULT_HOLD = ''
 
 export async function startFakeProvider(): Promise<FakeProvider> {
   const queue: FakeTurn[] = []
   const recorded: FakeRequest[] = []
-  let releaseHold: (() => void) | null = null
+  /**
+   * 挂着的 hold，按槽名。同一个槽再挂一个会顶掉记账（旧的那个只等超时 / 断开）—— 与改成具名槽之前那一个
+   * 不具名槽的口径相同
+   */
+  const holds = new Map<string, { finish: () => void; req: FakeRequest }>()
   /**
    * 客户端已经断开的响应。hold 可能在断开**之后**才开始（中止落在片间隔的 sleep 里）：那时 'close'
-   * 早就发过了，再挂监听永远等不到 —— 这一轮会白挂满 holdMs，还把 releaseHold 占着，下一个用例的
+   * 早就发过了，再挂监听永远等不到 —— 这一轮会白挂满 holdMs，还把 hold 槽占着，下一个用例的
    * release() 放掉的就是这个过期的 hold 而不是它自己的
    */
   const closedResponses = new WeakSet<ServerResponse>()
@@ -161,7 +205,7 @@ export async function startFakeProvider(): Promise<FakeProvider> {
   })
 
   /** 挂住直到 release() / 超时 / 客户端断开，三者取先 */
-  const hold = (res: ServerResponse, ms: number): Promise<void> =>
+  const hold = (res: ServerResponse, ms: number, key: string, req: FakeRequest): Promise<void> =>
     new Promise<void>((resolve) => {
       if (closedResponses.has(res) || res.destroyed) {
         resolve()
@@ -174,15 +218,20 @@ export async function startFakeProvider(): Promise<FakeProvider> {
         clearTimeout(timer)
         res.off('close', finish)
         // 只清自己：别的 turn 的 hold 可能已经接上了
-        if (releaseHold === finish) releaseHold = null
+        if (holds.get(key)?.finish === finish) holds.delete(key)
         resolve()
       }
       const timer = setTimeout(finish, ms)
       res.on('close', finish)
-      releaseHold = finish
+      holds.set(key, { finish, req })
     })
 
-  const streamTurn = async (res: ServerResponse, model: string, turn: FakeTurn): Promise<void> => {
+  const streamTurn = async (
+    res: ServerResponse,
+    model: string,
+    turn: FakeTurn,
+    req: FakeRequest
+  ): Promise<void> => {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache',
@@ -219,7 +268,7 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       }
     }
 
-    if (turn.holdMs) await hold(res, turn.holdMs)
+    if (turn.holdMs) await hold(res, turn.holdMs, turn.holdKey ?? DEFAULT_HOLD, req)
     // 客户端已断开（abort）：不再写收尾帧，让适配器按 aborted 收场
     if (res.writableEnded || res.destroyed || closedResponses.has(res)) return
 
@@ -293,8 +342,25 @@ export async function startFakeProvider(): Promise<FakeProvider> {
 
       // 取队列里第一个「没写 when 或 when 命中」的 turn：无 when 的仍是纯 FIFO
       const at = queue.findIndex((t) => !t.when || t.when(record))
-      const turn =
+      let turn =
         at >= 0 ? queue.splice(at, 1)[0] : ({ text: 'OK', finishReason: 'stop' } as FakeTurn)
+      if (turn.build) {
+        try {
+          turn = { ...turn, ...turn.build(record) }
+        } catch (error) {
+          record.buildError = error instanceof Error ? error.message : String(error)
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(
+            JSON.stringify({
+              error: {
+                message: `e2e turn build failed: ${record.buildError}`,
+                type: 'invalid_request_error'
+              }
+            })
+          )
+          return
+        }
+      }
       if (turn.httpStatus) {
         res.writeHead(turn.httpStatus, { 'Content-Type': 'application/json' })
         // 4xx 报成请求错误：错误文本里带 `server_error` 会被 pi-ai 认成暂时性失败、durable 按退避重试
@@ -303,7 +369,7 @@ export async function startFakeProvider(): Promise<FakeProvider> {
         res.end(JSON.stringify({ error: { message: 'e2e injected failure', type } }))
         return
       }
-      await streamTurn(res, model, turn)
+      await streamTurn(res, model, turn, record)
     })()
   })
 
@@ -320,11 +386,12 @@ export async function startFakeProvider(): Promise<FakeProvider> {
     requests: () => [...recorded],
     chatRequests: () => [...recorded],
     chatRequestCount: () => recorded.length,
-    release: () => releaseHold?.(),
-    holding: () => releaseHold !== null,
+    release: (key = DEFAULT_HOLD) => holds.get(key)?.finish(),
+    holding: (key = DEFAULT_HOLD) => holds.has(key),
+    heldRequest: (key = DEFAULT_HOLD) => holds.get(key)?.req ?? null,
     close: () =>
       new Promise<void>((resolve) => {
-        releaseHold?.()
+        for (const slot of [...holds.values()]) slot.finish()
         server.closeAllConnections()
         server.close(() => resolve())
       })

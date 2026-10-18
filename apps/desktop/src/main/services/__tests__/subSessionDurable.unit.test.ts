@@ -13,6 +13,7 @@
  *   G  P2-10-35..44  完成通知：送达、抑制、不重复
  *   H  P2-10-45 / 47 中止语义（Q-P2-03）与中断父会话的级联（PIN-08，存活情况由假会话的脚本给）
  *   I  P2-10-48      新消息发进被中断的子会话
+ *   J  WP3-99..103   §19 父会话介入自己发起的那一轮：代答 / 插话 / 询问通知经真门面落到哪里
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -132,9 +133,10 @@ vi.mock('../../logger', () => ({
 import { migrations } from '../../dao/migrations'
 import type { Session, SessionCreateParams } from '../../types'
 import type { ToolContext } from '../toolContext'
+import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionRecords } from '../sessionRecords'
 import { clearMemoryStoragesForTests } from '../sessionStorage'
-import { taskRegistry } from '../taskRegistry'
+import { setTaskNotifier, taskRegistry } from '../taskRegistry'
 import {
   FakeDurableSession,
   fakeHost,
@@ -1367,5 +1369,170 @@ describe('I. fresh prompt into an interrupted child', () => {
     )
     await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
     expect(noticesTo(parent)).toEqual([])
+  })
+})
+
+// ─── J. §19 父会话介入（经真门面） ───────────────────────────────────────────
+
+describe('J. §19 parent intervention through the real facade', () => {
+  const question = (id: string, text: string): InputRequest => ({
+    id,
+    kind: 'choice',
+    toolName: 'ask',
+    question: text,
+    options: [
+      { label: 'A', description: 'keep a shim' },
+      { label: 'B', description: '' }
+    ],
+    createdAt: 0
+  })
+
+  beforeEach(() => {
+    // U2：这里 bgTaskService 是假件，枢纽的通知器没人设 —— 接到真 sessionService 注入的那一个
+    setTaskNotifier((sessionId, text) => holder.notifier?.(sessionId, text))
+  })
+
+  afterEach(() => {
+    setTaskNotifier(() => {})
+  })
+
+  /**
+   * 父会话 P 经真 SessionTool 后台 prompt c1（发送扣在闸门上）；c1 随即停在 q1 上。U3：假宿主的
+   * subscribeInputs 是空的、也没有 index.ts，询问钩子由用例直接调（应答受理的那一条经 onResponded）。
+   */
+  async function askingChild(): Promise<{
+    parent: FakeDurableSession
+    c1: FakeDurableSession
+  }> {
+    const parent = family('c1')
+    const c1 = fakeHost.put('c1', { submitGate: gate(), respondResult: true })
+    const started = await call(
+      {
+        action: 'prompt-sub-session',
+        sub_session_id: 'c1',
+        message: 'go',
+        run_in_background: true
+      },
+      { taskId: 1 }
+    )
+    expect(started.isError).toBe(false)
+    c1.busy = true
+    raiseOn(c1, question('q1', 'Keep the old API?'))
+    return { parent, c1 }
+  }
+
+  function raiseOn(session: FakeDurableSession, request: InputRequest): void {
+    session.pendingRequests.push(request)
+    session.onResponded = (requestId) => runner.onAskResolved(session.sessionId, requestId)
+    runner.onAskRaised(session.sessionId, request)
+  }
+
+  it('WP3-99 代答经真门面只落到这条子会话的 durable：三参调用，附带信息里是 parent:<P> 与答题方；载荷里没有 answeredBy；别的会话一次都没被应答', async () => {
+    const { parent, c1 } = await askingChild()
+    const res = await call(
+      { action: 'answer-sub-session', selections: ['A'], run_in_background: true },
+      { taskId: 2 }
+    )
+    expect(res.isError).toBe(false)
+    expect(res.text).toContain('Answered; it carries on in the background.')
+    expect(c1.respondArgs).toEqual([
+      {
+        arity: 3,
+        meta: {
+          clientId: 'parent:P',
+          answeredBy: { kind: 'parent-session', sessionId: 'P', title: 'P' }
+        }
+      }
+    ])
+    const [, requestId, response] = c1.callsOf('respondToInput')[0]!
+    expect(requestId).toBe('q1')
+    expect(response).toEqual({ kind: 'choice', selections: ['A'] })
+    expect(response).not.toHaveProperty('answeredBy')
+    expect(parent.callsOf('respondToInput')).toEqual([])
+    for (const id of fakeHost.openSessionIds().filter((s) => s !== 'c1')) {
+      expect(fakeHost.get(id)!.callsOf('respondToInput')).toEqual([])
+    }
+    c1.submitGate!.release()
+  })
+
+  it('WP3-100 / WP3-101 插话经网关的 steerDriven 落到子会话：幂等键 subsession-steer:<P>:<任务> 与来源（父会话）原样到 steer；重跑时子会话认得键 → 不再发', async () => {
+    family('c1')
+    const c1 = fakeHost.put('c1', { submitGate: gate() })
+    expect(
+      (
+        await call(
+          {
+            action: 'prompt-sub-session',
+            sub_session_id: 'c1',
+            message: 'go',
+            run_in_background: true
+          },
+          { taskId: 1 }
+        )
+      ).isError
+    ).toBe(false)
+    c1.busy = true
+    const memo = sharedMemo()
+    const first = await call({ action: 'steer-sub-session', message: 'm' }, { taskId: 9, memo })
+    expect(first.isError).toBe(false)
+    expect(first.text).toContain('Steer delivered')
+    expect(c1.callsOf('steer')).toEqual([['steer', 'm']])
+    expect(c1.steerOptions[0]).toMatchObject({
+      requestId: 'subsession-steer:P:9',
+      source: { kind: 'parent-session', sessionId: 'P' }
+    })
+
+    // WP3-101：重跑（同一 taskId、同一张 memo 表），子会话已经认得这个键
+    c1.requestStates.set('subsession-steer:P:9', 'settled')
+    const rerun = await call({ action: 'steer-sub-session', message: 'm' }, { taskId: 9, memo })
+    expect(rerun.isError).toBe(false)
+    expect(rerun.text).toContain('already delivered earlier')
+    expect(c1.callsOf('steer')).toHaveLength(1)
+    c1.submitGate!.release()
+  })
+
+  it('WP3-102 后台这一轮停下来问、没人在等：通知经枢纽落到父会话门面的 notify（后台通知那条路：两参，不是完成通知的形状）；父会话没锁 → 只写一条 background 通知条目', async () => {
+    const { parent, c1 } = await askingChild()
+    await sleep(350)
+    const notices = parent.callsOf('notify')
+    expect(notices).toHaveLength(1)
+    // ['notify', text] —— 没有 {kind:'sub-session', requestId:'subsession-done:…'}（那是完成通知的形状）
+    expect(notices[0]).toHaveLength(2)
+    const text = String(notices[0]![1])
+    expect(text).toContain('<question ask_id="q1">')
+    expect(text).toContain('answer-sub-session')
+    expect(parent.callsOf('writeNotice')).toEqual([])
+
+    // 父会话没锁：落成一条通知条目，不起一轮
+    parent.lock = undefined
+    raiseOn(c1, question('q2', 'Which dir?'))
+    await sleep(350)
+    expect(parent.callsOf('notify')).toHaveLength(1)
+    expect(parent.callsOf('writeNotice')).toEqual([
+      [
+        'writeNotice',
+        { text: expect.stringContaining('<question ask_id="q2">'), kind: 'background' }
+      ]
+    ])
+    c1.submitGate!.release()
+  })
+
+  it('WP3-103 换进程之后重跑同一次代答（子会话的 ask 重跑、同一 id 再挂）：工具失败，新进程里子会话 durable 一次都没被应答', async () => {
+    const { c1 } = await askingChild()
+    const memo = sharedMemo()
+    const args = { action: 'answer-sub-session', selections: ['A'], run_in_background: true }
+    // 第一个进程里答过一次（q1 被受理）
+    expect((await call(args, { taskId: 2, memo })).isError).toBe(false)
+    expect(c1.callsOf('respondToInput')).toHaveLength(1)
+    c1.submitGate!.release()
+
+    newProcess()
+    const reopened = fakeHost.put('c1', { respondResult: true, busy: true })
+    raiseOn(reopened, question('q1', 'Keep the old API?'))
+    const rerun = await call(args, { taskId: 2, memo })
+    expect(rerun.isError).toBe(true)
+    expect(rerun.text).toContain('the app restarted since')
+    expect(rerun.text).toContain('Nothing was sent.')
+    expect(reopened.callsOf('respondToInput')).toEqual([])
   })
 })

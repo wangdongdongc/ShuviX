@@ -14,6 +14,9 @@
  *
  *  2. **通知只剩一条规则**：落定时还有人在等 → 结果由那次调用交回，不通知；没人等 → 通知。
  *     原先散在两处的「没宣告过不通知」「已有人在 wait 不通知」被它完全吸收。
+ *     **进入等输入**（`update` 到 `waiting-input`：跑到一半弹出一条询问）是同一条规则的第二个触发点：
+ *     声明了 `onInput: 'return'` 的等待者当场放手（那次调用把询问交回），之后没人在等 → 经
+ *     `formatInputNotice` 通知。不落定、不杀 —— 询问答完它接着跑（docs/sub-session-design.md §19.3）。
  *
  *  3. **宣告是延迟的**。任务一落地就广播会让面板被一排 100ms 就结束的 `ls` 淹掉，
  *     所以：脱离等待者时立刻宣告，否则等 `announceAfter`；没宣告过的任务结束时也不广播
@@ -27,6 +30,9 @@ export type { TaskInfo, TaskKind, TaskStatus, TaskSubject }
 
 /** 通知合并窗口 —— 一批几乎同时落定的任务并成一条通知，而不是连发数条打断智能体 */
 const DEFAULT_COALESCE_MS = 250
+
+/** 合并窗口里的一块通知：现成的文本，或到窗口结束时才求值的函数（交回空 = 这块不发） */
+type NoticeBlock = string | (() => string | null | undefined)
 
 export interface TaskRegistryDeps {
   /** 状态变更广播（快照 upsert）。低频：每任务至多 2 次，输出增量不走这条路 */
@@ -53,6 +59,13 @@ export interface CreateTaskParams {
   announceAfter?: number
   /** 落定时的通知文案；返回空串 / null = 这条不通知 */
   formatNotice?: (task: TaskInfo) => string | null | undefined
+  /**
+   * 跑到一半进入等输入（`update` 到 `waiting-input`）、此刻没人在等它时的通知文案；返回空串 / null = 不通知。
+   * 每次 `update` 到 `waiting-input` 都会排一次（已经在等输入时再来一条询问也排）—— 哪些询问已经说过，
+   * 由拥有者自己记。**到合并窗口结束时才调用**：窗口里询问被答掉、任务落定了，拥有者据当时的状态交回空即可。
+   * 正在被停的任务（`stop` / 被杀）不排。
+   */
+  formatInputNotice?: (task: TaskInfo) => string | null | undefined
   /** 停止实现（killProcessTree / runtime.abort / …）。没给 = 这类任务停不了 */
   stop?: (force: boolean) => void | Promise<void>
 }
@@ -67,6 +80,11 @@ export interface JoinPolicy {
   /** 被中止时怎么办：杀掉（默认）还是放手让它继续跑 */
   onAbort?: 'kill' | 'detach'
   /**
+   * 任务跑到一半进入等输入时怎么办：接着等（默认）还是放手、把这次调用交回去（`detached`，原因 `input`）。
+   * join 时任务已经在等输入、又声明了 `return` → 当场交回。
+   */
+  onInput?: 'wait' | 'return'
+  /**
    * 杀的时候直接下死手（透传给拥有者的停止实现）。
    *
    * 给「超时」与「用户点停止生成」用：这两种情形下进程多半已经不响应温和信号了，
@@ -76,12 +94,14 @@ export interface JoinPolicy {
   killForce?: boolean
 }
 
-export interface JoinOutcome {
-  kind: 'settled' | 'detached'
-  /** 'finished' = 自己跑完的；'timeout' / 'abort' = 因等待策略而落定或放手 */
-  reason: 'finished' | 'timeout' | 'abort'
-  task: TaskInfo
-}
+/**
+ * 一次 join 的结果。reason：'finished' = 自己跑完的；'timeout' / 'abort' = 因等待策略而落定或放手；
+ * 'input' = 进入等输入、按 `onInput: 'return'` 放手 —— 只会是 detached（按 kind 判别，收窄之后的一侧
+ * 不必为它写分支）。
+ */
+export type JoinOutcome =
+  | { kind: 'settled'; reason: 'finished' | 'timeout' | 'abort'; task: TaskInfo }
+  | { kind: 'detached'; reason: 'timeout' | 'abort' | 'input'; task: TaskInfo }
 
 export interface SettlePatch {
   status: Exclude<TaskStatus, 'running' | 'waiting-input'>
@@ -93,6 +113,8 @@ interface Waiter {
   done: boolean
   /** 本次等待因何落定 —— 超时杀 / 中止杀 时由 join 改写，拥有者的 settle 不必知情 */
   reason: 'finished' | 'timeout' | 'abort'
+  /** 进入等输入时放手（`onInput: 'return'` 的等待者才有） */
+  onInput?: () => void
 }
 
 interface TaskEntry {
@@ -104,6 +126,7 @@ interface TaskEntry {
   /** 谁停的 —— 智能体自己停的不必再通知它（它早就知道），用户停的要通知 */
   stoppedBy: 'agent' | 'user' | null
   formatNotice?: (task: TaskInfo) => string | null | undefined
+  formatInputNotice?: (task: TaskInfo) => string | null | undefined
   stop?: (force: boolean) => void | Promise<void>
 }
 
@@ -112,7 +135,10 @@ export interface TaskRegistry {
   join: (taskId: string, policy?: JoinPolicy) => Promise<JoinOutcome | undefined>
   /** 拥有者在底层落定时调用 —— 解挂等待者，没人等就交给通知中枢 */
   settle: (taskId: string, patch: SettlePatch) => void
-  /** 运行中的状态 / 专属面更新（`waiting-input`、日志超阈值…） */
+  /**
+   * 运行中的状态 / 专属面更新（`waiting-input`、日志超阈值…）。更新到 `waiting-input` = 弹出了一条新询问：
+   * `onInput: 'return'` 的等待者放手，之后没人在等就经 `formatInputNotice` 通知（文件头第 2 点）。
+   */
   update: (taskId: string, patch: { status?: TaskStatus; subject?: Partial<TaskSubject> }) => void
   /**
    * 已落定的任务又跑起来了 —— 用户在面板里追问一个跑完的派生 agent。
@@ -135,8 +161,11 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
   const tasks = new Map<string, TaskEntry>()
   const coalesceMs = deps.coalesceMs ?? DEFAULT_COALESCE_MS
   const now = deps.now ?? (() => Date.now())
-  /** 待投递的通知，按会话聚拢 */
-  const pending = new Map<string, { blocks: string[]; timer: ReturnType<typeof setTimeout> }>()
+  /**
+   * 待投递的通知，按会话聚拢。一块可以是现成的文本（落定通知：落定那一刻的事实），也可以是到窗口结束时
+   * 才求值的函数（进入等输入：那时询问可能已经被答掉，交回空就不发）
+   */
+  const pending = new Map<string, { blocks: NoticeBlock[]; timer: ReturnType<typeof setTimeout> }>()
 
   const snapshot = (entry: TaskEntry): TaskInfo => ({
     ...entry.info,
@@ -157,19 +186,32 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
     if (entry.announced) deps.broadcast(snapshot(entry))
   }
 
-  function enqueueNotice(sessionId: string, text: string): void {
+  function enqueueNotice(sessionId: string, block: NoticeBlock): void {
     const slot = pending.get(sessionId)
     if (slot) {
-      slot.blocks.push(text)
+      slot.blocks.push(block)
       return
     }
     const timer = setTimeout(() => {
       const batch = pending.get(sessionId)
       pending.delete(sessionId)
-      if (batch?.blocks.length) deps.deliver(sessionId, batch.blocks.join('\n\n'))
+      const texts: string[] = []
+      for (const b of batch?.blocks ?? []) {
+        let text: string | null | undefined
+        try {
+          text = typeof b === 'function' ? b() : b
+        } catch (error) {
+          deps.logger?.warn?.(
+            `task notice format failed session=${sessionId}: ${error instanceof Error ? error.message : String(error)}`
+          )
+          continue
+        }
+        if (text) texts.push(text)
+      }
+      if (texts.length > 0) deps.deliver(sessionId, texts.join('\n\n'))
     }, coalesceMs)
     timer.unref?.()
-    pending.set(sessionId, { blocks: [text], timer })
+    pending.set(sessionId, { blocks: [block], timer })
   }
 
   /**
@@ -222,6 +264,7 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
         announceTimer: null,
         stoppedBy: null,
         formatNotice: params.formatNotice,
+        formatInputNotice: params.formatInputNotice,
         stop: params.stop
       }
       tasks.set(taskId, entry)
@@ -253,7 +296,26 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
         })
       }
 
-      const { maxWait, onTimeout = 'detach', signal, onAbort = 'kill', killForce = false } = policy
+      const {
+        maxWait,
+        onTimeout = 'detach',
+        signal,
+        onAbort = 'kill',
+        onInput = 'wait',
+        killForce = false
+      } = policy
+
+      // 已经在等输入、又说了「进入等输入就交回」：当场交回，不挂等待者（别人还在等它就不算脱离）
+      if (onInput === 'return' && entry.info.status === 'waiting-input') {
+        if (![...entry.waiters].some((w) => !w.done)) entry.info.detached = true
+        announce(entry)
+        return Promise.resolve<JoinOutcome>({
+          kind: 'detached',
+          reason: 'input',
+          task: snapshot(entry)
+        })
+      }
+
       // 重新 join 一条已脱离的任务（`task.wait`）—— 它重新有人等了
       entry.info.detached = false
 
@@ -270,10 +332,12 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
         waiter.resolve = finish
 
         /** 放手：任务继续跑，本次调用不再等 —— 它此后落定就该走通知 */
-        const letGo = (reason: 'timeout' | 'abort'): void => {
+        const letGo = (reason: 'timeout' | 'abort' | 'input'): void => {
           if (waiter.done) return
           waiter.done = true
-          entry.info.detached = true
+          // 进入等输入时放手的，别人（没说「交回」的等待者）还在等它就不算脱离
+          const othersWaiting = [...entry.waiters].some((w) => w !== waiter && !w.done)
+          if (reason !== 'input' || !othersWaiting) entry.info.detached = true
           announce(entry)
           finish({ kind: 'detached', reason, task: snapshot(entry) })
         }
@@ -282,6 +346,8 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
         const killAndWait = (reason: 'timeout' | 'abort'): void => {
           if (waiter.done) return
           waiter.reason = reason
+          // 已经下令杀了：之后再弹出询问也不放手 —— 这次调用要的是被杀的那个结果
+          waiter.onInput = undefined
           entry.stoppedBy = 'agent'
           void entry.stop?.(killForce)
         }
@@ -292,6 +358,7 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
           else killAndWait('abort')
         }
 
+        if (onInput === 'return') waiter.onInput = () => letGo('input')
         entry.waiters.add(waiter)
 
         if (signal?.aborted) onAbortEvent()
@@ -340,6 +407,22 @@ export function createTaskRegistry(deps: TaskRegistryDeps): TaskRegistry {
         entry.info.subject = { ...entry.info.subject, ...patch.subject } as TaskSubject
       }
       touch(entry)
+      if (patch.status !== 'waiting-input') return
+
+      // 进入等输入（文件头第 2 点）：说了「交回」的等待者放手 —— 那次调用把询问带回去了，不通知；
+      // 还有人在等（没说「交回」的）→ 结果由它交回，同样不通知。只有一个等待者都没有时才通知
+      let handedBack = false
+      for (const waiter of [...entry.waiters]) {
+        if (waiter.done || !waiter.onInput) continue
+        waiter.onInput()
+        handedBack = true
+      }
+      if (handedBack || [...entry.waiters].some((w) => !w.done)) return
+      // 正在被停的任务不通知（不论谁停的：它马上就落定了，落定那条规则管它）
+      if (entry.stoppedBy !== null || !entry.formatInputNotice) return
+      // 通知文本到合并窗口结束时才生成：窗口里询问被答掉 / 任务落定，拥有者交回空就不发
+      const format = entry.formatInputNotice
+      enqueueNotice(entry.info.sessionId, () => format(snapshot(entry)))
     },
 
     reopen(taskId) {

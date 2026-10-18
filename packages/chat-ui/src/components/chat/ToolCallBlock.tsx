@@ -53,7 +53,7 @@ import { ToolImageThumb } from './ToolImageThumb'
 import { CodeView } from '../code/CodeView'
 import { copyToClipboard } from '../../utils/clipboard'
 import { CODE_MAX_H, DETAIL_PRE_CLASS, STREAM_PRE_CLASS } from './detailViewport'
-import { BackgroundBadge, BgTaskRowState } from './BgTaskTag'
+import { AnsweredByParentBadge, BackgroundBadge, BgTaskRowState } from './BgTaskTag'
 import { ReviewedMark, ReviewingIcon } from './ReviewTag'
 import { InvocationView } from './SandboxTag'
 import { toolReviewOf } from '@shuvix/chat-protocol/types/toolReview'
@@ -256,7 +256,12 @@ export function ToolCallBlock({
     icon,
     label: presentation?.label || toolName,
     detail: detail ? <span className="font-mono">{detail}</span> : undefined,
-    badge: isBackground ? <BackgroundBadge /> : undefined,
+    badge: isBackground ? (
+      <BackgroundBadge />
+    ) : details?.type === 'ask' && details.answeredBy ? (
+      // 父会话代答的 ask（§19.5）：一眼看得出这不是用户自己选的
+      <AnsweredByParentBadge title={details.answeredBy.title} />
+    ) : undefined,
     trailing:
       reviewNote || toolCallId ? (
         <>

@@ -113,6 +113,7 @@ import {
   AgentStateDoc,
   DisplayDoc,
   SessionStateDoc,
+  SourceDoc,
   noticeEntryDraft,
   type DeferredNotice,
   type DrivenRun,
@@ -123,6 +124,7 @@ import {
   type InputResponseMeta,
   type PendingInputHooks
 } from './inputRequests'
+import type { InputSource } from './inputSource'
 import {
   AGENT_EXTENSION_PREFIX,
   AgentCreationError,
@@ -211,6 +213,11 @@ export interface UserSendOptions {
   /** 显示侧车（内联 Token 等），记在 DisplayDoc[requestId]；没有 requestId 时自动生成一个 */
   display?: JsonObject
   /**
+   * 这条输入不是人亲手打的：它的来源（父会话代用户发的，§19.7），记在 SourceDoc[requestId]；没有 requestId
+   * 时自动生成一个。读的一侧见 `inputSource.ts`。
+   */
+  source?: InputSource
+  /**
    * 这条输入被受理的那一刻（durable 已接下这次提交，run 还没落定）调用一次。被拒（忙 / 模型被拒 /
    * 会话已关 / 创建被取消）时从不调用；重新挂上也不调用。抛错只记日志，不影响发送本身（桌面：
    * `session.prompt-accepted` 埋点与活跃时间入账在这里）。`entryId` = 受理的那个提交当场落下的 `pi.user`
@@ -230,9 +237,11 @@ export interface AgentRef {
   readonly conversationId?: number
 }
 
-/** steer / followUp 的选项：幂等键与受理回调（与 `UserSendOptions` 同义，PIN-08） */
+/** steer / followUp 的选项：幂等键、来源与受理回调（与 `UserSendOptions` 同义，PIN-08） */
 export interface AdmitOptions {
   requestId?: string
+  /** 同 `UserSendOptions.source`（父会话发进子会话的引导，§19.6） */
+  source?: InputSource
   onAdmitted?: (info: AdmittedInfo) => void
   onPlaced?: (info: PlacedInfo) => void
 }
@@ -1308,6 +1317,10 @@ export class DurableSessionImpl implements DurableSession {
       requestId ??= randomId()
       await this.recordDisplay(conversation, requestId, options.display)
     }
+    if (options.source !== undefined) {
+      requestId ??= randomId()
+      await this.recordSource(conversation, requestId, options.source)
+    }
     if (whenBusy !== 'reject' || !this.isBusy()) {
       await this.flushDeferred(conversation, 'beforeSend')
       await this.announceDate(conversation)
@@ -1574,7 +1587,7 @@ export class DurableSessionImpl implements DurableSession {
     mode: 'steer' | 'followUp',
     options: AdmitOptions
   ): Promise<AdmitResult> {
-    const requestId = options.requestId
+    let requestId = options.requestId
     try {
       return await this.op(() =>
         this.inSection(async () => {
@@ -1584,6 +1597,10 @@ export class DurableSessionImpl implements DurableSession {
           if (this.isInterrupted()) whenBusy = await this.applyInterruptedPolicy(whenBusy)
           this.reopenInputs()
           const conversation = await this.currentConversation()
+          if (options.source !== undefined) {
+            requestId ??= randomId()
+            await this.recordSource(conversation, requestId, options.source)
+          }
           await this.flushDeferred(conversation, 'beforeSend')
           await this.announceDate(conversation)
           const submission = await conversation.submit(
@@ -2181,6 +2198,17 @@ export class DurableSessionImpl implements DurableSession {
         inbox.items.push({ id: record.id, mode: 'write', entry })
       }
       state.deferredNotices.splice(0, notices.length)
+    }, BG)
+  }
+
+  private async recordSource(
+    conversation: Conversation,
+    requestId: string,
+    source: InputSource
+  ): Promise<void> {
+    await conversation.commit(async (tx) => {
+      const doc = await tx.doc(SourceDoc, conversation.id)
+      doc.items[requestId] = copyJson(source, { omitUndefinedProperties: true }) as JsonObject
     }, BG)
   }
 

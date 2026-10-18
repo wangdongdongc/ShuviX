@@ -79,6 +79,27 @@ export function FullAccessBadge(): React.JSX.Element {
 }
 
 /**
+ * ask 卡上的「父会话代答」标签（docs/sub-session-design.md §19.5）：这个问题不是用户本人答的，是派出这项任务的
+ * 会话代答的 —— 转写不得把父会话的话记成用户说的。答题方来自工具结果的 `details.answeredBy`（宿主写的）。
+ */
+export function AnsweredByParentBadge({ title }: { title?: string }): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <span
+      className="flex-shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-accent/15 text-accent"
+      title={
+        title
+          ? t('toolCall.answeredByParentHint', { title })
+          : t('toolCall.answeredByParentHintNoTitle')
+      }
+      data-answered-by-parent
+    >
+      {t('toolCall.answeredByParentTag')}
+    </span>
+  )
+}
+
+/**
  * 工具卡摘要行尾的后台任务状态（标签在行首，见 StepRow 的 badge 槽）。
  *
  * 工具卡的 details 是消息树里的静态数据、不会自更新，所以实时态按 tool_call id 从

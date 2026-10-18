@@ -10,11 +10,15 @@
  *   P2-01）。P1-08 / P1-09 / P2-01 填写；fork 拿到 fork 点时的值。
  * - `DisplayDoc`（每个对话，rewindable + asOf）：内联 Token 等显示侧车，按 submission 的
  *   requestId 索引（第三阶段再解析到 entry）。回退 fork 保留前缀的显示侧车。
+ * - `SourceDoc`（每个对话，rewindable + asOf）：用户输入不是人亲手打的时候它的来源（今天只有一种：
+ *   父会话代用户发进子会话的消息与引导，docs/sub-session-design.md §19.7），按 submission 的 requestId 索引，
+ *   解析方式与显示侧车相同（`inputSource.ts`）。**不补种**：第一次写来源时才建（`tx.doc` 不存在就建），
+ *   读的一侧把「没有这份文档」当成「全是人打的」。
  * - `NoticeEntry`（`shuvix.notice`）：系统写给模型的通知（后台任务完成、日期变更……）。
  *   model 是一条 user 角色消息（模型必须看见它），条目种类让投影把它渲染成通知而不是用户发言 ——
  *   **转写不得把系统写的话记成用户说的**。
  *
- * 三份文档都在每个创建 / fork 对话的提交里补种（`seedConversationDocs`，挂在
+ * 前三份文档都在每个创建 / fork 对话的提交里补种（`seedConversationDocs`，挂在
  * `HarnessOptions.conversationCreated` 上）：已存在的文档原样保留，绝不重置会话状态。
  */
 import { copyJson, type JsonValue } from '@earendil-works/chord'
@@ -144,6 +148,20 @@ export type DisplayState = {
 
 export const DisplayDoc = defineDoc<DisplayState>({
   kind: 'shuvix.display',
+  version: 1,
+  scope: 'conversation',
+  history: 'rewindable',
+  fork: 'asOf',
+  initial: () => ({ items: {} })
+})
+
+export type SourceState = {
+  /** requestId → 这条输入的来源（`InputSource`，JSON） */
+  items: { [requestId: string]: JsonObject }
+}
+
+export const SourceDoc = defineDoc<SourceState>({
+  kind: 'shuvix.source',
   version: 1,
   scope: 'conversation',
   history: 'rewindable',

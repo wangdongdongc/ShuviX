@@ -24,6 +24,11 @@
  *     `prompt` 先问子会话认不认得这个幂等键：已落定 → 直接读答复；没落定 → 重新挂上（被中断就续上），
  *     从不再发一条；`wait` 重跑时续上被中断的目标再等。父会话的「继续」因此在同一轮里把子会话带起来。
  *  6. **上限**：并发 4 / 总数 20，防的是无人值守的循环，不是正常使用。
+ *  7. **父会话介入自己发起的那一轮**（docs/sub-session-design.md §19）：这一轮绑定的后台任务（`runs` 里的
+ *     那条、任务还活着）就是判据 —— 子会话弹出询问时它进「等待输入」（`onAskRaised` / `onAskResolved`，
+ *     main 入口经 `setSessionAskObserver` 接进来），前台的 `prompt` / `answer` 当场把询问交回，没人等就经
+ *     枢纽通知父会话（`inputNotice`）；`answer` 代答 ask 工具的选择题（权限卡除外），`steer` 往这一轮里插话。
+ *     没有绑定任务（用户自己发起的一轮、这一轮已经结束、重启之后）→ 不通知、不能代答、不能插话。
  *
  * **发送必须走 `chatGateway.prompt`**（IPC `agent:prompt` 的同一个函数）。懒创建运行时、
  * 用户消息落树（各前端经会话视图看到）、埋点、auto-title、自动压缩，全部因此照常发生。
@@ -41,9 +46,31 @@ import { recordSessionModel, recordSessionThinkingLevel, isDurableSession } from
 import { isLegacySession } from './legacySession'
 import { sessionRecords } from './sessionRecords'
 import type { AgentSession } from './agentSession'
-import type { DrivenSettledEvent, SubAgentModelConfig, SubmitResult } from '@shuvix/agent-runtime'
+import { authorsOf, buildSessionOutline } from '@shuvix/agent-runtime'
+import type {
+  DrivenSettledEvent,
+  JoinOutcome,
+  OutlineQuery,
+  OutlineResult,
+  SubAgentModelConfig,
+  SubmitResult,
+  TaskInfo
+} from '@shuvix/agent-runtime'
+import type {
+  ChoiceInputRequest,
+  InputRequest,
+  InputResponse
+} from '@shuvix/chat-protocol/types/inputRequest'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import { createLogger } from '../logger'
+import {
+  approvalSummary,
+  attrValue,
+  renderPendingAsks,
+  type PendingAskInfo
+} from './subSessionText'
+
+export type { PendingAskInfo } from './subSessionText'
 
 const log = createLogger('SubSession')
 
@@ -85,6 +112,16 @@ export interface SubSessionInfo {
    * 用户能做、父级做不了。
    */
   blockedOn?: string[]
+  /**
+   * 挂着的询问，完整的（§19.4）：选择题带问题与选项、能不能由父会话代答；权限卡只有摘要（只能转告）。
+   * 只看开着的会话；没有挂着的 → undefined。
+   */
+  pendingAsks?: PendingAskInfo[]
+  /**
+   * 父会话最近一次发进去的消息之后，用户自己在子会话里说过话（§19.7）—— 答复解释不了过程的最常见原因，
+   * 也是 `inspect-sub-session` 值得一看的信号。只在 read / wait / 前台答复这几条路上算（要读一次视图）。
+   */
+  userIntervened?: boolean
 }
 
 /** 子会话这一轮答复的那几个字段（read / wait / 前台 prompt 共用） */
@@ -95,18 +132,23 @@ export interface AnswerFields {
 
 export interface WaitOutcome {
   /**
-   * 'settled' = 全部跑完；'blocked' = 有人卡在**等用户批准**上（不是"完成"，
-   * 报成 settled 会让父级以为成了 —— 实测里它就是这么被骗过去的）；
+   * 'settled' = 全部跑完；'asking' = 有人停下来问了一个**父会话能代答**的问题（§19.4）；
+   * 'blocked' = 有人卡在**只有用户能答**的询问上（批准卡、用户自己发起那一轮里的提问）—— 都不是"完成"，
+   * 报成 settled 会让父级以为成了（实测里它就是这么被骗过去的）；
    * 'timeout' = 到点仍有在跑的；'aborted' = 父会话被停止。
    */
-  kind: 'settled' | 'blocked' | 'timeout' | 'aborted'
+  kind: 'settled' | 'asking' | 'blocked' | 'timeout' | 'aborted'
   /** 等待期间关注的每条子会话（含最终状态与最新答复） */
   results: Array<SubSessionInfo & AnswerFields>
 }
 
 export interface PromptOutcome {
-  /** 'answered' = 本轮跑完拿到答复；'timeout' = 降级成后台；'started' = 后台形态的启动回执 */
-  kind: 'answered' | 'timeout' | 'started'
+  /**
+   * 'answered' = 本轮跑完拿到答复；'timeout' = 降级成后台；'started' = 后台形态的启动回执；
+   * 'input' = 子会话停下来问了一句（§19.3：前台等待当场交回，`info.pendingAsks` 里是那几条询问；
+   * 这一轮仍在、转为脱离 —— 跑完照常通知）
+   */
+  kind: 'answered' | 'timeout' | 'started' | 'input'
   /** 落定的子会话 id —— `sub_session_id` 省略时被自动补全成的那条，回执围栏要用真实 id */
   id: string
   /** kind==='answered' 时的最终答复（这一轮的回答；出错则是错误原文） */
@@ -138,6 +180,46 @@ interface DrivenRun {
  */
 interface DriveRecord {
   state: 'held' | 'released'
+  /**
+   * 前台在等它的调用有几个（`answer` 可能并行两次：同一子会话两道题一起答）。最后一个放手才 released ——
+   * 否则先返回的那次会把记账改回 released，这一轮落定时就多发一条叫醒父会话的完成通知。缺省 = 1（held 时）。
+   */
+  holders?: number
+}
+
+/**
+ * 父会话最近一次发进去的消息之后，用户自己说过话吗：用与自动审查、大纲同一个判法（`authorsOf`：第一条有来源记录的
+ * 消息之后、没有记录的才算人打的；系统通知不算）—— 升级之前没有记录的子会话不会每次都报「用户插过话」。
+ */
+function intervenedIn(
+  messages: ReadonlyArray<{ id: string; role: string; metadata?: unknown }>,
+  sources: ReadonlyMap<string, unknown>
+): boolean {
+  const users = messages.filter((m) => {
+    if (m.role !== 'user') return false
+    const meta = m.metadata as
+      | { isSystemNotice?: boolean; isInstructionInjection?: boolean }
+      | null
+      | undefined
+    return !(meta?.isSystemNotice || meta?.isInstructionInjection)
+  })
+  const authors = authorsOf(users, (m) => sources.has(m.id))
+  // 最近的一条用户消息是人打的（父会话发的、或分不清 → 没有）
+  const last = users[users.length - 1]
+  return last !== undefined && authors.get(last) === 'human'
+}
+
+/** 一个前台调用开始等这一轮 */
+function holdRecord(record: DriveRecord): void {
+  record.holders = record.state === 'held' ? (record.holders ?? 1) + 1 : 1
+  record.state = 'held'
+}
+
+/** 一个前台调用不再等了（超时降级 / 停下来询问交回）：最后一个放手才 released */
+function releaseRecord(record: DriveRecord): void {
+  const holders = (record.holders ?? 1) - 1
+  record.holders = Math.max(0, holders)
+  if (record.holders === 0) record.state = 'released'
 }
 
 /** `subsession:<父会话>:<工具任务 id>` → 工具任务 id（不是这个父会话的 / 临时键 → undefined） */
@@ -162,6 +244,11 @@ class SubSessionRunner {
   private superseded = new Set<string>()
   /** 正在被 `wait` 等着的子会话（计数：可能有几个 wait 同时握着它） */
   private waiters = new Map<string, number>()
+  /**
+   * 已经交给父会话看过的询问（按这一轮的幂等键）：同一条询问只告诉它一次 —— 前台交回、`wait` 交回、
+   * 通知，三条路里先到的那条算数（§19.3）
+   */
+  private shownAsks = new Map<string, Set<string>>()
 
   // ─── 准入 ──────────────────────────────────────
 
@@ -253,14 +340,57 @@ class SubSessionRunner {
   }
 
   private info(row: { id: string; title: string; updatedAt: number }): SubSessionInfo {
+    const pendingAsks = this.pendingAsksOf(row.id)
     return {
       id: row.id,
       title: row.title,
       status: this.statusOf(row.id),
       driven: this.runs.has(row.id),
       updatedAt: row.updatedAt,
-      blockedOn: this.blockedOn(row.id)
+      blockedOn: this.blockedOn(row.id),
+      ...(pendingAsks ? { pendingAsks } : {})
     }
+  }
+
+  /**
+   * 子会话此刻在跑的这一轮是本进程替父会话驱动的、绑定的后台任务还活着 → 那次驱动（§19.2 的判据）。
+   * 用户自己在子会话里发起的一轮、已经落定的、上个进程驱动的（重启之后）→ undefined。
+   */
+  private boundRun(childId: string): DrivenRun | undefined {
+    const run = this.runs.get(childId)
+    if (!run) return undefined
+    const task = taskRegistry.get(run.requestId)
+    return task && task.endedAt === null ? run : undefined
+  }
+
+  /** 挂着的询问（完整的；只看开着的会话）。选择题能不能代答取决于这一轮是不是父会话发起的 */
+  private pendingAsksOf(childId: string): PendingAskInfo[] | undefined {
+    const pending = sessionService.getAgentSession(childId)?.pendingInputs() ?? []
+    if (pending.length === 0) return undefined
+    const answerable = this.boundRun(childId) !== undefined
+    return pending.map(
+      (request): PendingAskInfo =>
+        request.kind === 'choice'
+          ? {
+              id: request.id,
+              kind: 'question',
+              question: request.question,
+              options: request.options.map((o) => ({ label: o.label, description: o.description })),
+              answerable
+            }
+          : { id: request.id, kind: 'approval', summary: approvalSummary(request) }
+    )
+  }
+
+  /** 这些询问已经交给父会话看过了（同一轮里不再通知第二遍） */
+  private markShown(requestId: string, asks: readonly PendingAskInfo[] | undefined): void {
+    if (!asks?.length) return
+    let shown = this.shownAsks.get(requestId)
+    if (!shown) {
+      shown = new Set()
+      this.shownAsks.set(requestId, shown)
+    }
+    for (const ask of asks) shown.add(ask.id)
   }
 
   list(parentId: string): { error: string } | { subSessions: SubSessionInfo[] } {
@@ -279,15 +409,115 @@ class SubSessionRunner {
     if ('error' in resolved) return { error: resolved.error }
     const childId = resolved.id
 
-    const last = await this.lastAnswer(childId)
+    const [last, intervened] = await Promise.all([
+      this.lastAnswer(childId),
+      this.userIntervened(childId)
+    ])
     const row = sessionRecords.pick(childId, ['title', 'updatedAt'])
+    // 交出去的询问记成看过（同一条不再通知）
+    const run = this.boundRun(childId)
+    if (run) this.markShown(run.requestId, this.pendingAsksOf(childId))
     return {
-      info: this.info({
-        id: childId,
-        title: row?.title ?? resolved.title,
-        updatedAt: row?.updatedAt ?? 0
-      }),
+      info: {
+        ...this.info({
+          id: childId,
+          title: row?.title ?? resolved.title,
+          updatedAt: row?.updatedAt ?? 0
+        }),
+        ...(intervened ? { userIntervened: true } : {})
+      },
       ...last
+    }
+  }
+
+  /**
+   * 查看子会话的现场（`inspect-sub-session`，§19.7）：大纲 / 展开一条 / 搜索。只读：开着的会话直接读视图，
+   * 没开的 peek 一次（存储在才打开，从不创建）。父会话可以看自己的任何一条子会话，不受「这一轮是谁发起的」限制。
+   */
+  async inspect(params: {
+    parentId: string
+    childId: string
+    query: OutlineQuery
+  }): Promise<{ error: string } | { info: SubSessionInfo; result: OutlineResult }> {
+    const { parentId, query } = params
+    const rejected = this.rejectIfNotNormal(parentId)
+    if (rejected) return { error: rejected }
+    const resolved = this.resolveChild(parentId, params.childId)
+    if ('error' in resolved) return { error: resolved.error }
+    const childId = resolved.id
+    if (!isDurableSession(childId)) {
+      return {
+        error:
+          `Sub-session "${resolved.title}" was created by an earlier version of ShuviX; its transcript cannot be ` +
+          `inspected from here. "read-sub-session" still gives its last answer.`
+      }
+    }
+    const row = sessionRecords.pick(childId, ['title', 'updatedAt'])
+    const info = this.info({
+      id: childId,
+      title: row?.title ?? resolved.title,
+      updatedAt: row?.updatedAt ?? 0
+    })
+    const agent = await this.peekFacade(childId)
+    if (!agent) {
+      // 还没有存储：什么都没发生过 —— 展开一条就是「没有这一条」，搜索是零命中，大纲是空的
+      if (query.item?.trim()) {
+        return {
+          error: `No item ${query.item.trim().startsWith('#') ? query.item.trim() : `#${query.item.trim()}`} — nothing has happened in that sub-session yet.`
+        }
+      }
+      if (query.match?.trim()) {
+        return {
+          info,
+          result: { kind: 'match', query: query.match.trim(), lines: [], hits: 0, shown: 0 }
+        }
+      }
+      return {
+        info,
+        result: {
+          kind: 'outline',
+          lines: [],
+          turnFrom: 0,
+          turnTo: 0,
+          turnCount: 0,
+          shown: 0,
+          total: 0,
+          earlierTurns: false
+        }
+      }
+    }
+    let view: Awaited<ReturnType<AgentSession['sessionView']>>
+    let sources: Awaited<ReturnType<AgentSession['inputSources']>>
+    try {
+      ;[view, sources] = await Promise.all([agent.sessionView(), agent.inputSources()])
+    } catch (err) {
+      log.warn(`读子会话 ${childId} 的视图失败: ${err instanceof Error ? err.message : err}`)
+      return {
+        error: `Could not read sub-session "${info.title}" right now (it was just closed or is being reopened). Try again.`
+      }
+    }
+    const result = buildSessionOutline(view, { readerId: parentId, sources }, query)
+    if (result.kind === 'error') return { error: result.error }
+    return {
+      info: intervenedIn(view.messages, sources) ? { ...info, userIntervened: true } : info,
+      result
+    }
+  }
+
+  /**
+   * 父会话最近一次发进去的消息之后，用户自己在子会话里说过话吗：最近的一条用户消息被 `authorsOf` 判为人打的（见
+   * `intervenedIn`；系统通知不算）。读不了（旧会话、没有存储、出错）→ false —— 这只是一个提示，不是判据。
+   */
+  private async userIntervened(childId: string): Promise<boolean> {
+    if (!isDurableSession(childId)) return false
+    try {
+      const agent = await this.peekFacade(childId)
+      if (!agent) return false
+      const [view, sources] = await Promise.all([agent.sessionView(), agent.inputSources()])
+      return intervenedIn(view.messages, sources)
+    } catch (err) {
+      log.warn(`读子会话 ${childId} 的来源失败: ${err instanceof Error ? err.message : err}`)
+      return false
     }
   }
 
@@ -437,6 +667,10 @@ class SubSessionRunner {
     // 运行时，而运行时是懒创建的（第一条还没把它建出来），于是两边都判「空闲」双双放行
     // —— 第二条随后被拒 busy，回到模型眼里成了「已提交、排队中」。这一行让第二条当场拿到拒绝理由。
     if (this.runs.has(childId) || this.claiming.has(childId)) {
+      // 你发起的那一轮停下来问了：它在等回答，而不是还在跑 —— 给能解开它的那个动作（可代答 → answer）
+      if (this.statusOf(childId) === 'waiting-input') {
+        return { error: this.blockedError(child.title, childId) }
+      }
       return {
         error:
           `Sub-session "${child.title}" is already running a turn you just started. ` +
@@ -461,10 +695,12 @@ class SubSessionRunner {
         const consumed = this.dropRecord(requestId, record)
         if (background) return { kind: 'started', id: childId }
         if (!consumed) this.inBand.add(requestId)
-        const [answer, info] = await Promise.all([
+        const [answer, baseInfo, intervened] = await Promise.all([
           this.lastAnswer(childId),
-          this.infoOf(parentId, childId)
+          this.infoOf(parentId, childId),
+          this.userIntervened(childId)
         ])
+        const info = baseInfo && intervened ? { ...baseInfo, userIntervened: true } : baseInfo
         return { kind: 'answered', id: childId, ...answer, ...(info ? { info } : {}) }
       }
 
@@ -483,7 +719,9 @@ class SubSessionRunner {
         sessionId: parentId,
         title: child.title,
         subject: { kind: 'sub-session', childSessionId: childId },
-        // 不给 formatNotice：子会话的完成通知只走 onDrivenSettled 这一条路（PIN-01）
+        // 不给 formatNotice：子会话的完成通知只走 onDrivenSettled 这一条路（PIN-01）。
+        // 跑到一半弹出询问、没人在等它时的通知走枢纽（§19.3）—— 它和这一轮的任务同生共死
+        formatInputNotice: (task) => this.inputNotice(task),
         stop: () => {
           void this.abortChild(childId)
         }
@@ -507,20 +745,51 @@ class SubSessionRunner {
       this.claiming.delete(childId)
     }
     void run.done.then((sent) => this.settle(childId, run, sent))
+    // 重新挂上的那一轮可能已经停在询问上（打开时被重新问了一遍）：任务立刻进「等待输入」
+    if (this.statusOf(childId) === 'waiting-input') {
+      taskRegistry.update(requestId, { status: 'waiting-input' })
+    }
+    return this.awaitTurn({ parentId, child, run, record, background, timeoutSeconds, signal })
+  }
 
-    // 同步等待 —— 两种形态的差别全在这组参数里：
-    //   后台只等「确认发出去了」（发送失败是同步落定的，正常那一路要跑到轮结束）；
-    //   前台等整轮，到点**不杀**、转异步（杀掉的会是一段用户看得见、可能已改了半个仓库的对话）。
-    // 前台才接中止信号：父会话被停 ⇒ 级联停子会话当前 run；后台形态不级联，那正是后台的意义。
-    const outcome = await taskRegistry.join(requestId, {
+  /**
+   * 等这一轮（`prompt` 发出之后、`answer` 应答之后共用）—— 两种形态的差别全在这组参数里：
+   *   后台只等「确认发出去了」（发送失败是同步落定的，正常那一路要跑到轮结束）；
+   *   前台等整轮，到点**不杀**、转异步（杀掉的会是一段用户看得见、可能已改了半个仓库的对话）；
+   *   前台遇到子会话停下来问一句就当场交回（§19.3），询问由这次调用带回去。
+   * 前台才接中止信号：父会话被停 ⇒ 级联停子会话当前 run；后台形态不级联，那正是后台的意义。
+   */
+  private async awaitTurn(p: {
+    parentId: string
+    child: { id: string; title: string }
+    run: DrivenRun
+    record: DriveRecord
+    background: boolean
+    timeoutSeconds: number
+    signal?: AbortSignal
+  }): Promise<{ error: string } | PromptOutcome> {
+    const { parentId, child, run, record, background, timeoutSeconds, signal } = p
+    const childId = child.id
+    const requestId = run.requestId
+    const outcome: JoinOutcome | undefined = await taskRegistry.join(requestId, {
       maxWait: background ? SEND_CONFIRM_MS : Math.max(1, timeoutSeconds) * 1000,
       onTimeout: 'detach',
+      // 进入等输入就交回 —— 后台形态也是：确认窗里弹出的询问若不由这次交回，枢纽见它有人等就不排通知，之后再
+      // 没人补（§19.3）
+      onInput: 'return' as const,
       ...(background ? {} : { signal, onAbort: 'kill' as const })
     })
 
     if (outcome?.kind === 'detached') {
-      // 没人等它了：它此后落定就该通知
-      record.state = 'released'
+      // 没人等它了：它此后落定就该通知（后台形态本来就没占着记账 —— 别动并行的前台 answer 握着的那份）
+      if (!background) releaseRecord(record)
+      if (outcome.reason === 'input') {
+        // 停下来问了：询问由这次调用交回（同一条不再通知），这一轮转为脱离、仍在
+        this.markShown(requestId, this.pendingAsksOf(childId))
+        const info = this.infoOf(parentId, childId)
+        log.info(`子会话 ${childId} 停下来询问，${background ? '后台确认窗' : '前台等待'}交回`)
+        return { kind: 'input', id: childId, ...(info ? { info } : {}) }
+      }
       if (background) {
         log.info(`prompt sub-session ${childId} (background)`)
         return { kind: 'started', id: childId }
@@ -545,10 +814,12 @@ class SubSessionRunner {
     }
     // 前台答复由这次调用交回：完成通知不再发（不论它比这里早到还是晚到）
     if (!this.dropRecord(requestId, record)) this.inBand.add(requestId)
-    const [answer, info] = await Promise.all([
+    const [answer, baseInfo, intervened] = await Promise.all([
       this.lastAnswer(childId),
-      this.infoOf(parentId, childId)
+      this.infoOf(parentId, childId),
+      this.userIntervened(childId)
     ])
+    const info = baseInfo && intervened ? { ...baseInfo, userIntervened: true } : baseInfo
     // 那一轮以错误收场（模型请求失败 / run 意外失败 / 接不上，PIN-02）：答复是错误原文
     const reply: AnswerFields = sent.error
       ? answer.isError
@@ -667,8 +938,7 @@ class SubSessionRunner {
     const targets = childId ? [childId] : blockOn
     if (targets.length === 0) {
       const results = await this.infoWithAnswers(parentId)
-      const blocked = results.some((r) => r.status === 'waiting-input')
-      return { kind: blocked ? 'blocked' : 'settled', results }
+      return { kind: this.stoppedKind(results), results }
     }
 
     // 先登记成「被 wait 握着」、再续上：先续上的那一条可能在后一条还在打开时就落定了 —— 那次落定要在同一轮里
@@ -677,7 +947,10 @@ class SubSessionRunner {
     let kind: 'settled' | 'timeout' | 'aborted'
     try {
       for (const id of resume) await this.resumeChild(id)
-      const settled = (): boolean => targets.every((id) => this.statusOf(id) !== 'running')
+      // 都不在跑了；或者有一条停下来问了 —— 它不会自己好起来，而父会话可能答得了，不能让它陪着别的子会话等
+      const settled = (): boolean =>
+        targets.every((id) => this.statusOf(id) !== 'running') ||
+        targets.some((id) => this.statusOf(id) === 'waiting-input')
       kind = await new Promise<'settled' | 'timeout' | 'aborted'>((resolve) => {
         let done = false
         const finish = (r: 'settled' | 'timeout' | 'aborted'): void => {
@@ -701,6 +974,11 @@ class SubSessionRunner {
       })
       // 交回去的落定：它们的完成通知不再发（握着它们的时候先记，免得通知恰好插在中间）
       await this.collectInBand(targets)
+      // 要交回去的询问同样趁还握着先记成看过：放手之后合并窗口才到点的那条通知就不会再说一遍
+      for (const id of targets) {
+        const run = this.boundRun(id)
+        if (run) this.markShown(run.requestId, this.pendingAsksOf(id))
+      }
     } finally {
       for (const id of targets) {
         const n = (this.waiters.get(id) ?? 1) - 1
@@ -709,9 +987,25 @@ class SubSessionRunner {
       }
     }
     const results = await this.infoWithAnswers(parentId, targets)
-    // 落定了但有人卡在等批准 —— 那不是「完成」，外层状态必须说清楚
-    const blocked = results.some((r) => r.status === 'waiting-input')
-    return { kind: kind === 'settled' && blocked ? 'blocked' : kind, results }
+    // 落定了但有人停在询问上 —— 那不是「完成」，外层状态必须说清楚
+    return { kind: kind === 'settled' ? this.stoppedKind(results) : kind, results }
+  }
+
+  /**
+   * 都不在跑了：真跑完了（settled）、有人停下来问了父会话能代答的问题（asking）、还是有人卡在只有用户能答的
+   * 询问上（blocked）。交回的询问记成「已经给父会话看过」—— 同一条不再通知（§19.3）。
+   */
+  private stoppedKind(results: ReadonlyArray<SubSessionInfo>): 'settled' | 'asking' | 'blocked' {
+    const waiting = results.filter((r) => r.status === 'waiting-input')
+    for (const r of waiting) {
+      const run = this.boundRun(r.id)
+      if (run) this.markShown(run.requestId, r.pendingAsks)
+    }
+    if (waiting.length === 0) return 'settled'
+    const answerable = waiting.some((r) =>
+      r.pendingAsks?.some((a) => a.kind === 'question' && a.answerable)
+    )
+    return answerable ? 'asking' : 'blocked'
   }
 
   /** 续上一条被中断的子会话（没开着就打开；不等它跑完） */
@@ -750,14 +1044,334 @@ class SubSessionRunner {
   ): Promise<Array<SubSessionInfo & AnswerFields>> {
     const children = sessionRecords.findChildren(parentId).filter((s) => !ids || ids.includes(s.id))
     return Promise.all(
-      children.map(async (s) => ({ ...this.info(s), ...(await this.lastAnswer(s.id)) }))
+      children.map(async (s) => {
+        const [answer, intervened] = await Promise.all([
+          this.lastAnswer(s.id),
+          this.userIntervened(s.id)
+        ])
+        return { ...this.info(s), ...(intervened ? { userIntervened: true } : {}), ...answer }
+      })
     )
   }
 
   /** 一次驱动结束：销账，把结果交回枢纽（解挂等待者；枢纽对子会话任务不发通知） */
   private settle(childId: string, run: DrivenRun, sent: SubmitResult): void {
     if (this.runs.get(childId) === run) this.runs.delete(childId)
+    this.shownAsks.delete(run.requestId)
     taskRegistry.settle(run.requestId, { status: sent?.error ? 'error' : 'done' })
+  }
+
+  // ─── 父会话介入（§19） ─────────────────────────
+
+  /**
+   * 子会话弹出一条询问（main 入口经 `setSessionAskObserver` 接进来，同步调用 —— 询问此刻已在挂着的表里）。
+   * 这一轮绑定着任务 → 任务进「等待输入」：前台在等的那次调用当场交回，没人等就经枢纽通知父会话（§19.3）。
+   * 没有绑定任务（用户自己发起的一轮、已落定、重启之后）→ 什么都不做，也就没有通知。
+   */
+  onAskRaised(sessionId: string, _request: InputRequest): void {
+    const run = this.boundRun(sessionId)
+    if (!run) return
+    taskRegistry.update(run.requestId, { status: 'waiting-input' })
+  }
+
+  /** 子会话的一条询问落定（应答 / 取消 / 被顶替）：挂着的都没了 → 任务回到「在跑」 */
+  onAskResolved(sessionId: string, _requestId: string): void {
+    const run = this.boundRun(sessionId)
+    if (!run) return
+    if ((sessionService.getAgentSession(sessionId)?.pendingInputCount ?? 0) > 0) return
+    taskRegistry.update(run.requestId, { status: 'running' })
+  }
+
+  /**
+   * 子会话停下来询问、没人在等它时的通知（枢纽在合并窗口结束时调用）。只说还没给父会话看过的那几条；
+   * `wait` 正握着它（它自己会交回）、这一轮已经结束或换了一轮、询问已经被答掉 → 不发。
+   * 文案是模型面向的英文（进上下文的字符串不随界面语言变），整段在一个 `<sub-session>` 块里 —— 渲染侧
+   * 按形状把它认成系统通知，不是用户发言。
+   */
+  private inputNotice(task: TaskInfo): string | null {
+    if (task.subject.kind !== 'sub-session') return null
+    const childId = task.subject.childSessionId
+    if (this.waiters.has(childId)) return null
+    if (this.boundRun(childId)?.requestId !== task.taskId) return null
+    const shown = this.shownAsks.get(task.taskId)
+    const fresh = (this.pendingAsksOf(childId) ?? []).filter((a) => !shown?.has(a.id))
+    if (fresh.length === 0) return null
+    this.markShown(task.taskId, fresh)
+    const title = sessionRecords.pick(childId, ['title'])?.title ?? childId
+    const asksQuestion = fresh.some((a) => a.kind === 'question')
+    return [
+      `<sub-session id="${attrValue(childId)}" title="${attrValue(title)}" status="waiting-input">`,
+      asksQuestion
+        ? 'It stopped to ask a question in the turn you started.'
+        : 'It stopped to ask the user for approval in the turn you started and cannot continue until the user answers in that session.',
+      ...renderPendingAsks(fresh),
+      '</sub-session>'
+    ].join('\n')
+  }
+
+  /**
+   * 代用户回答子会话的选择题（`answer-sub-session`，§19.4）。只答**这个父会话发起、绑定任务还活着的那一轮**
+   * 里 ask 工具的提问；权限卡一律拒绝（只有用户能批）。应答直接送进这条子会话自己 —— 不经全局的
+   * `respondToUserInput`：询问 id 就是 provider 的 toolCallId，会话之间会重复（`call_0`）。
+   *
+   * 答完默认在前台等这一轮（与 `prompt` 同一个 `awaitTurn`：答复 / 下一条询问 / 超时降级），后台形态立刻回执。
+   * 用户先答了 → `respond` 认领不到，如实说什么都没发。重启之后重跑：任务只在内存里，这一轮已不归它，被拒、
+   * 不会答第二次。
+   */
+  async answer(params: {
+    parentId: string
+    childId: string
+    askId?: string
+    selections?: readonly string[]
+    message?: string
+    background: boolean
+    timeoutSeconds: number
+    signal?: AbortSignal
+  }): Promise<{ error: string } | PromptOutcome> {
+    const { parentId, background, timeoutSeconds, signal } = params
+    const rejected = this.rejectIfNotNormal(parentId)
+    if (rejected) return { error: rejected }
+    const resolved = this.resolveChild(parentId, params.childId)
+    if ('error' in resolved) return { error: resolved.error }
+    const child = resolved
+    const childId = child.id
+    const agent = sessionService.getAgentSession(childId)
+    const pending = agent?.pendingInputs() ?? []
+    const askId = params.askId?.trim()
+    // 点名的那道题已经不在挂着了：多半是用户先答了 —— 把它得到的回答带出来（从转写里读）。放在「这一轮归不归
+    // 你」之前：这一轮跑完之后再点名，同样该知道它早就有了回答
+    if (agent && askId && !pending.some((r) => r.id === askId)) {
+      const earlier = await this.answeredAsk(agent, askId)
+      if (earlier !== undefined) {
+        return {
+          error:
+            `Question "${askId}" in sub-session "${child.title}" was already answered (most likely by the user ` +
+            `in that session): ${earlier}. Nothing was sent.`
+        }
+      }
+    }
+    const run = this.boundRun(childId)
+    if (!agent || !run || run.parentId !== parentId) {
+      return { error: this.notYoursToAnswer(child, pending.length > 0) }
+    }
+
+    const target = this.pickQuestion(child, pending, askId)
+    if ('error' in target) return target
+    const response = this.answerResponse(target.question, params.selections, params.message)
+    if ('error' in response) return response
+
+    const parentTitle = sessionRecords.pick(parentId, ['title'])?.title
+    const answered = agent.respondToInput(target.question.id, response.response, {
+      clientId: `parent:${parentId}`,
+      answeredBy: {
+        kind: 'parent-session',
+        sessionId: parentId,
+        ...(parentTitle ? { title: parentTitle } : {})
+      }
+    })
+    if (!answered) {
+      return {
+        error:
+          `The question in sub-session "${child.title}" was already answered (most likely by the user in that session) — ` +
+          `nothing was sent. Check where it stands with "read-sub-session".`
+      }
+    }
+    log.info(`父会话 ${parentId} 代答子会话 ${childId} 的询问 ${target.question.id}`)
+
+    let record = this.records.get(run.requestId)
+    if (!record) {
+      record = { state: 'released' }
+      this.records.set(run.requestId, record)
+    }
+    if (!background) holdRecord(record)
+    return this.awaitTurn({ parentId, child, run, record, background, timeoutSeconds, signal })
+  }
+
+  /** 子会话转写里这次 ask 调用得到的回答（结果文本的首行，截短）；没有 / 读不了 → undefined */
+  private async answeredAsk(agent: AgentSession, askId: string): Promise<string | undefined> {
+    try {
+      const view = await agent.sessionView()
+      for (let i = view.messages.length - 1; i >= 0; i--) {
+        const message = view.messages[i]
+        if (message.role !== 'assistant') continue
+        for (const block of message.blocks) {
+          if (block.type !== 'tool' || block.toolName !== 'ask' || block.toolCallId !== askId)
+            continue
+          if (block.result === undefined || block.isError) return undefined
+          const line = block.result.replace(/\s+/g, ' ').trim()
+          return line.length > 200 ? `${line.slice(0, 197)}...` : line
+        }
+      }
+    } catch {
+      /* 读不了：退回一般的「不在挂着」 */
+    }
+    return undefined
+  }
+
+  /** 这条子会话里不是父会话能代答的（这一轮不是它发起的 / 已经结束 / 根本没在问） */
+  private notYoursToAnswer(child: { id: string; title: string }, asking: boolean): string {
+    if (!asking) {
+      return (
+        `Sub-session "${child.title}" is not waiting for an answer (status: ${this.statusOf(child.id)}). ` +
+        `Nothing was sent.`
+      )
+    }
+    return (
+      `The question in sub-session "${child.title}" is not in a turn you are driving now (the user started that ` +
+      `turn, your turn there has already ended, or the app restarted since) — it is the user's to answer. ` +
+      `Nothing was sent. Tell the user, or leave it.`
+    )
+  }
+
+  /** 要答的那一条：给了 id 就按 id 找（权限卡拒绝）；没给就要求恰好一条选择题 */
+  private pickQuestion(
+    child: { id: string; title: string },
+    pending: readonly InputRequest[],
+    askId: string | undefined
+  ): { question: ChoiceInputRequest } | { error: string } {
+    const questions = pending.filter((r): r is ChoiceInputRequest => r.kind === 'choice')
+    const listing = (): string =>
+      questions.map((q) => `  ${q.id}  ${q.question.replace(/[\r\n]+/g, ' ')}`).join('\n')
+    if (askId) {
+      const found = pending.find((r) => r.id === askId)
+      if (!found) {
+        return {
+          error: questions.length
+            ? `No question "${askId}" is waiting in sub-session "${child.title}" — nothing was sent. Waiting questions:\n${listing()}`
+            : `No question "${askId}" is waiting in sub-session "${child.title}" — nothing was sent.`
+        }
+      }
+      if (found.kind !== 'choice') {
+        return {
+          error:
+            `"${askId}" is an approval prompt — only the user can answer it; tell them, or stop the sub-session ` +
+            `with "stop-sub-session". Nothing was sent.` +
+            (questions.length ? ` Questions you may answer:\n${listing()}` : '')
+        }
+      }
+      return { question: found }
+    }
+    if (questions.length === 1) return { question: questions[0] }
+    if (questions.length === 0) {
+      return {
+        error:
+          pending.length > 0
+            ? this.blockedError(child.title, child.id)
+            : `Sub-session "${child.title}" is not waiting for an answer. Nothing was sent.`
+      }
+    }
+    return { error: `Which question? Pass its id in \`ask_id\`:\n${listing()}` }
+  }
+
+  /** 父会话的答案 → 应答：选项（逐字等于 label，可多选、去重）或自己的话，二选一 */
+  private answerResponse(
+    question: ChoiceInputRequest,
+    rawSelections: readonly string[] | undefined,
+    rawMessage: string | undefined
+  ): { response: InputResponse } | { error: string } {
+    const selections = [...new Set((rawSelections ?? []).map((s) => s.trim()).filter(Boolean))]
+    const message = rawMessage?.trim() ?? ''
+    const labels = question.options.map((o) => o.label)
+    const optionList = labels.map((l) => `  - ${l}`).join('\n')
+    if (selections.length > 0 && message) {
+      return { error: 'Pass either `selections` or `message`, not both. Nothing was sent.' }
+    }
+    if (selections.length === 0 && !message) {
+      return {
+        error:
+          'Pass the answer: `selections` with the exact option labels, or `message` in your own words. ' +
+          `Options:\n${optionList}`
+      }
+    }
+    if (selections.length > 0) {
+      const known = new Set(labels.map((l) => l.trim()))
+      const unknown = selections.filter((s) => !known.has(s))
+      if (unknown.length > 0) {
+        return {
+          error:
+            `Not an option: ${unknown.map((u) => `"${u}"`).join(', ')}. Use the exact labels — or answer in ` +
+            `your own words with \`message\`. Nothing was sent. Options:\n${optionList}`
+        }
+      }
+      const byTrimmed = new Map(labels.map((l) => [l.trim(), l]))
+      return {
+        response: { kind: 'choice', selections: selections.map((s) => byTrimmed.get(s) ?? s) }
+      }
+    }
+    return { response: { kind: 'other', text: message } }
+  }
+
+  /**
+   * 往子会话这一轮里插话（`steer-sub-session`，§19.6）。只插**这个父会话发起、绑定任务还活着、正在跑**的那一轮；
+   * 其余一律拒绝而不是排队，并给出去处（空闲 → prompt；卡在可代答的提问上 → answer；批准卡 → 转告用户）。
+   * 走网关的 steer（界面用的同一道门），带幂等键（重跑时子会话认得它就不再发）与来源（这条消息是父会话写的）。
+   *
+   * 已知的窄窗口：检查之后、送达之前这一轮刚好结束，引导会像界面上的 steer 一样自己起一轮（没有绑定任务）。
+   */
+  async steer(params: {
+    parentId: string
+    childId: string
+    message: string
+    requestId: string
+  }): Promise<{ error: string } | { id: string; title: string; earlier?: boolean }> {
+    const { parentId, requestId } = params
+    const rejected = this.rejectIfNotNormal(parentId)
+    if (rejected) return { error: rejected }
+    const resolved = this.resolveChild(parentId, params.childId)
+    if ('error' in resolved) return { error: resolved.error }
+    const child = resolved
+    const childId = child.id
+    const message = params.message.trim()
+    if (!message) return { error: 'Pass the message text in `message` (a non-empty string).' }
+
+    // 重跑：这条引导上次已经送到了
+    if ((await this.requestStateOf(childId, requestId)) !== 'none') {
+      return { id: childId, title: child.title, earlier: true }
+    }
+
+    const status = this.statusOf(childId)
+    const run = this.boundRun(childId)
+    if (!run || run.parentId !== parentId) {
+      if (status === 'idle') {
+        return {
+          error:
+            `Sub-session "${child.title}" is idle — there is no turn to steer. ` +
+            `Send it a message with "prompt-sub-session".`
+        }
+      }
+      if (status === 'interrupted') {
+        return {
+          error:
+            `Sub-session "${child.title}" was interrupted when the app stopped; there is no running turn to steer. ` +
+            `A new "prompt-sub-session" starts over.`
+        }
+      }
+      return {
+        error:
+          `The turn running in sub-session "${child.title}" was not started by you (the user is working in it), ` +
+          `so you cannot steer it. Wait for it with "wait-for-sub-sessions", or tell the user.`
+      }
+    }
+    if (status === 'waiting-input') {
+      const asks = this.pendingAsksOf(childId)
+      if (asks?.some((a) => a.kind === 'question')) {
+        return {
+          error:
+            `Sub-session "${child.title}" is waiting for an answer to its question, and a steer would only land ` +
+            `after that. Answer it with "answer-sub-session" and put what you want to tell it in \`message\`.`
+        }
+      }
+      return { error: this.blockedError(child.title, childId) }
+    }
+
+    const sent = await chatGateway.steerDriven(childId, message, { requestId, parentId })
+    if (sent.error) {
+      return {
+        error: `The steer was NOT delivered to sub-session "${child.title}": ${sent.error}. Nothing was queued.`
+      }
+    }
+    log.info(`父会话 ${parentId} 向子会话 ${childId} 插话 request=${requestId}`)
+    return { id: childId, title: child.title }
   }
 
   // ─── 完成通知（P2-10 PIN-01） ──────────────────
@@ -780,9 +1394,10 @@ class SubSessionRunner {
         `子会话 ${event.sessionId} 的完成通知只写入、不叫醒父会话（不是本进程发起的驱动）request=${event.requestId}`
       )
     }
+    const intervened = await this.userIntervened(event.sessionId)
     await sessionService.deliverSubSessionNotice(
       event.parentId,
-      this.completionNotice(event),
+      this.completionNotice(event, intervened),
       event.noticeRequestId,
       { wake: tracked }
     )
@@ -823,7 +1438,7 @@ class SubSessionRunner {
    * 要结果就去收。文案是模型面向的英文而非 i18n —— 与 bgTaskService.formatExitNotice
    * 同一条纪律：进模型上下文的字符串不随界面语言变。
    */
-  private completionNotice(event: DrivenSettledEvent): string {
+  private completionNotice(event: DrivenSettledEvent, intervened = false): string {
     const childId = event.sessionId
     const title = sessionRecords.pick(childId, ['title'])?.title ?? childId
     // 状态词用与别处一致的那套；卡在等批准时明说，别让父级以为它跑完了
@@ -831,7 +1446,7 @@ class SubSessionRunner {
     const asked = this.blockedOn(childId)
     const stopped = event.record.reason === 'aborted'
     return [
-      `<sub-session id="${childId}" title="${title}" status="${status}">`,
+      `<sub-session id="${childId}" title="${title}" status="${status}"${intervened ? ' user-intervened="true"' : ''}>`,
       status === 'waiting-input'
         ? 'It stopped to ask the user for approval and cannot continue until the user answers in that session.'
         : stopped
@@ -950,8 +1565,22 @@ class SubSessionRunner {
     }
   }
 
-  /** 卡在询问上：**它不会自己好起来** —— 给的建议必须是「去让用户回答」或「停掉」 */
+  /**
+   * 卡在询问上：**它不会自己好起来** —— 给的建议必须是能解开它的那个动作：问的是父会话能代答的问题 →
+   * `answer-sub-session`（§19.4）；否则「去让用户回答」或「停掉」。
+   */
   private blockedError(title: string, childId: string): string {
+    const answerable = (this.pendingAsksOf(childId) ?? []).filter(
+      (a): a is Extract<PendingAskInfo, { kind: 'question' }> =>
+        a.kind === 'question' && a.answerable
+    )
+    if (answerable.length > 0) {
+      return [
+        `Sub-session "${title}" stopped to ask a question in the turn you started and will NOT proceed until it is answered.`,
+        `It is asking: ${answerable.map((a) => `${a.question} (ask_id ${a.id})`).join(' | ')}`,
+        `Answer it with "answer-sub-session", relay it to the user, or stop it with "stop-sub-session".`
+      ].join(' ')
+    }
     const agent = sessionService.getAgentSession(childId)
     const asked = agent?.pendingInputSummaries ?? []
     return [
@@ -1008,6 +1637,7 @@ class SubSessionRunner {
     this.agentStopped.clear()
     this.superseded.clear()
     this.waiters.clear()
+    this.shownAsks.clear()
   }
 }
 

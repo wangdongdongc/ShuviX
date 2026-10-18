@@ -118,9 +118,26 @@ export type InputRequest = AskInputRequest | ChoiceInputRequest
 
 // ─── 响应侧 ──────────────────────────────────────────
 
+/**
+ * 一条父会话（子会话的驱动方）的引用 —— 代用户回答子会话询问的答题方、代用户发进子会话的那条用户消息的
+ * 来源（docs/sub-session-design.md §19.5）。`title` 只为显示（卡片上的「由父会话「X」代答」），可能过期。
+ */
+export interface ParentSessionRef {
+  kind: 'parent-session'
+  sessionId: string
+  title?: string
+}
+
 interface InputResponseBase {
   /** 工具自定义副作用字段(如 {rememberPath: true}),由工具响应回调消费 */
   extra?: Record<string, unknown>
+  /**
+   * 答题方不是用户本人时由**宿主**写上（今天只有一种：父会话代答子会话的 ask）。
+   *
+   * ⚠️ 从不信任应答载荷里的这一项：IPC 载荷来自渲染端，挂起的询问在交回之前一律用宿主记下的
+   * 答题方覆盖它（没有就删掉）—— 否则一个前端就能把用户自己的回答伪装成父会话代答、或反过来。
+   */
+  answeredBy?: ParentSessionRef
 }
 
 export interface AskResponse extends InputResponseBase {

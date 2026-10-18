@@ -6,6 +6,7 @@
  *            refine 的 CEL `when`（取自内置 auto-title 的 md）因此照样成立
  *   P2-14-31 内联 Token：recentText 用显示侧车的标记态原文，payload 不进
  *   P2-14-32 没有行 → null 且不 peek；durable 行但没有存储 → 零计数；peek / 摘要失败 → 照样拒绝（不编零）
+ *   RSRC-35  回归：来源记录（§19.7）不影响起标题的事实 —— 带来源的 user 照样是一条 user（`User: …`）
  *
  * 替身：sessionRecords（行 = 标题 / 设置 / storageKind）/ messageService（spy）/ sessionHost（`{peek, get, open}`）/
  * i18n。agent-runtime 用真的（MemoryStorage 会话）。
@@ -21,6 +22,7 @@ import {
   bg,
   memoryHost,
   notice,
+  sourcedUser,
   user,
   writeDurable,
   type TwinStep
@@ -146,6 +148,20 @@ describe('P2-14 · turn-completed facts on durable sessions', () => {
     const facts = await buildTurnCompletedFacts(sid)
     expect(facts?.recentText).toBe('User: fix {{shuvixInlineToken:k}}\nAssistant: ok')
     expect(JSON.stringify(facts)).not.toContain('PAYLOAD-X')
+  })
+
+  it('RSRC-35 a source record does not change the facts: counts and recentText equal the unsourced twin (still "User: task")', async () => {
+    const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+    const tail: TwinStep[] = [assistant(1100, 'done'), user(1200, 'thanks')]
+    const sourced = await durable([sourcedUser(1000, 'task', PARENT), ...tail])
+    const plain = await durable([user(1000, 'task'), ...tail])
+    const facts = await buildTurnCompletedFacts(sourced)
+    expect(facts).toStrictEqual(await buildTurnCompletedFacts(plain))
+    expect(facts).toMatchObject({
+      turnCount: 2,
+      textMessageCount: 3,
+      recentText: 'User: task\nAssistant: done\nUser: thanks'
+    })
   })
 
   describe('P2-14-32 missing row, missing storage, failure', () => {

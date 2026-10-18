@@ -9,6 +9,7 @@ import type {
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
+import type { InputSource } from '@shuvix/agent-runtime'
 import '../../tools/allTools'
 import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
@@ -49,7 +50,20 @@ function unavailableSessionError(sessionId: string): string {
 /**
  * ChatGateway 默认实现 — 聚合 Service 层，提供统一的会话级操作入口
  */
+/** 回退之后原样重发、沿用来源的窗口（§19.7） */
+const RESEND_WINDOW_MS = 120_000
+
 export class DefaultChatGateway implements ChatGateway {
+  /**
+   * 回退掉一条父会话代发的用户消息之后，紧接着原样重发同一句 ——「重新生成」与「回退后原样发送」—— 沿用它的来源
+   * （§19.7）：否则父会话写的话经一次重发就成了「人亲手打的」，被自动审查当成用户的意思。只在主进程里记，
+   * 只会让重发的那句「更不算人话」，渲染端借不到它做别的。
+   */
+  private readonly resendSources = new Map<
+    string,
+    { text: string; source: InputSource; at: number }
+  >()
+
   // ─── Agent 对话 ──────────────────────────────
 
   startChat(sessionId: string): Promise<AgentInitResult> {
@@ -63,6 +77,15 @@ export class DefaultChatGateway implements ChatGateway {
     inlineTokens?: Record<string, InlineToken>,
     drive?: DriveOptions
   ): Promise<{ error?: string; code?: SubmitErrorCode }> {
+    // 「重新生成」/ 回退后原样重发一条父会话代发的消息：沿用它的来源（§19.7）。只认紧接着的那一次、原文一字不差、
+    // 两分钟之内 —— 改过的文字是人的话；不管用没用上、这次发送成不成都撤掉（在打开会话之前就取走），免得留给以后的某次发送
+    const resend = drive === undefined ? this.resendSources.get(sessionId) : undefined
+    this.resendSources.delete(sessionId)
+    const source =
+      resend && resend.text === text && Date.now() - resend.at < RESEND_WINDOW_MS
+        ? resend.source
+        : undefined
+
     // lastActiveAt 与日历不在这里 bump：门面在用户条目落下时按条目 id 入账（当场落下的在 onAdmitted，
     // 排队之后被放下的在 onPlaced，P3-07）。打不开 / 被拒 / 被撤回的发送不会落进会话，却会误记一天。
     // 这里只打开会话；agent 在第一次发送时由运行时创建（打开会话 / 笔记本不创建）
@@ -87,11 +110,29 @@ export class DefaultChatGateway implements ChatGateway {
     // 其它前端经会话视图（投影）看到这条用户消息，没有单独的用户消息事件。
     // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」。
     // `drive` 只有子会话的驱动方（subSessionRunner，主进程内）给：幂等键 + driven-run 标记（P2-10）
-    return await session.prompt(promptText, images, display, drive)
+    return await session.prompt(promptText, images, display, drive, source)
   }
 
   steer(sessionId: string, text: string): void {
     this.enqueue(sessionId, (session) => session.steer(text))
+  }
+
+  async steerDriven(
+    sessionId: string,
+    text: string,
+    drive: { requestId: string; parentId: string }
+  ): Promise<{ error?: string; code?: SubmitErrorCode }> {
+    const session = sessionService.getAgentSession(sessionId)
+    if (!session) return { error: 'The session is not open', code: 'closed' }
+    try {
+      const result = await session.admitSteer(text, {
+        requestId: drive.requestId,
+        source: { kind: 'parent-session', sessionId: drive.parentId }
+      })
+      return result.error ? { error: result.error, code: result.code } : {}
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   followUp(sessionId: string, text: string): void {
@@ -251,9 +292,37 @@ export class DefaultChatGateway implements ChatGateway {
    * 运行时的销毁不管这一份。旧格式会话只读、id 不是条目 id、目标不在 → false，什么都不动。
    */
   async rollbackMessage(sessionId: string, messageId: string): Promise<boolean> {
+    // 每次回退都换掉上一次留下的记录：沿用只属于「紧接着这次回退」的那一次发送
+    this.resendSources.delete(sessionId)
+    const resend = await this.sourceOfMessage(sessionId, messageId)
     const rolledBack = await messageService.rollbackToMessage(sessionId, messageId)
     if (rolledBack) sessionService.clearAgentScopedState(sessionId)
+    if (rolledBack && resend) this.resendSources.set(sessionId, { ...resend, at: Date.now() })
     return rolledBack
+  }
+
+  /**
+   * 回退掉的那条用户消息若是父会话代发的（子会话里、有来源记录），交回它的原文与来源 —— 紧接着原样重发时沿用
+   * （见 `resendSources`）。只看子会话；读不了就当没有（重发照旧当作人发的 —— 与改动之前一样）。
+   */
+  private async sourceOfMessage(
+    sessionId: string,
+    messageId: string
+  ): Promise<{ text: string; source: InputSource } | undefined> {
+    if (!sessionRecords.pick(sessionId, ['parentId'])?.parentId) return undefined
+    try {
+      const agent =
+        sessionService.getAgentSession(sessionId) ??
+        (await sessionService.peekAgentSession(sessionId))
+      if (!agent) return undefined
+      const sources = await agent.inputSources()
+      const source = sources.get(messageId)
+      if (!source) return undefined
+      const message = (await agent.sessionView()).messages.find((m) => m.id === messageId)
+      return message?.role === 'user' ? { text: message.content, source } : undefined
+    } catch {
+      return undefined
+    }
   }
 
   // ─── 运行时资源 ──────────────────────────────────

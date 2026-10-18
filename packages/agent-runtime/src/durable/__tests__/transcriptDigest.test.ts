@@ -17,16 +17,22 @@
  *   P2-14-13 只读当前对话
  *   P2-14-16 关掉的句柄
  *   P2-14-17 不依赖 Node、从包入口导出
+ *   WP2-21..30 ask 的答题方（§19.5）：结果详情带 `answeredBy` 的 ask 项带上答题方（失败闭合：详情里只要有
+ *             一个 answeredBy 对象就不算人答的，认不出的字段补成空串）；取消、非 ask 工具、压缩切点之前不交出
+ *   RSRC-28 / 31 user 项的来源（§19.7）：纯核心按 `sources` 给项带上 `source`（没有的不带这个键）；会话上手写的
+ *             SourceDoc —— 认不出的项照样带来源（失败闭合，sessionId 空串），孤儿 / 没放下的不带
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { JsonValue } from '@earendil-works/chord'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
+import { PARENT_ANSWERED } from '../../askTool'
 import * as runtime from '../../index'
 import { imagePlaceholder } from '../../toolResultText'
 import { backgroundContext as BG } from '../context'
-import { DisplayDoc, noticeEntryDraft } from '../docs'
+import { DisplayDoc, SourceDoc, noticeEntryDraft } from '../docs'
 import { SessionClosedError, type DurableSession } from '../durableSession'
 import { EMPTY_REPLY_NOTICE_TEXT } from '../emptyReply'
 import * as display from '../projection/display'
@@ -38,6 +44,7 @@ import {
   IMAGE,
   Q,
   U,
+  US,
   appendEntries,
   assistantDraft,
   bg,
@@ -409,5 +416,302 @@ describe('P2-14 · transcript digest extraction', () => {
     expect(runtime.COMPACTION_SUMMARY_PREFIX).toBe(entryText.COMPACTION_SUMMARY_PREFIX)
     expect(runtime.COMPACTION_SUMMARY_SUFFIX).toBe(entryText.COMPACTION_SUMMARY_SUFFIX)
     expect(runtime.displayContentOf).toBe(display.displayContentOf)
+  })
+})
+
+describe('WP2 · ask 的答题方（§19.5）', () => {
+  const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+  const parentText = (selection: string): string => `${PARENT_ANSWERED} Selected: ${selection}`
+  const askDetails = (
+    question: string,
+    selections: string[],
+    answeredBy?: JsonValue
+  ): JsonValue => ({
+    type: 'ask',
+    question,
+    selections,
+    ...(answeredBy === undefined ? {} : { answeredBy })
+  })
+
+  async function asks(session: DurableSession): Promise<TranscriptDigestItem[]> {
+    return (await digest(session)).filter((item) => item.kind === 'ask')
+  }
+
+  it('WP2-21 父会话代答的 ask：项照样交出，回答逐字，带上答题方', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      assistantDraft([call('ask', { question: 'Delete it?' }, 'q1')], 1000),
+      resultDraft('q1', parentText('Yes'), {
+        details: askDetails('Delete it?', ['Yes'], PARENT)
+      })
+    ])
+    expect(await asks(session)).toStrictEqual([
+      {
+        kind: 'ask',
+        ts: 1000,
+        question: 'Delete it?',
+        answer: parentText('Yes'),
+        answeredBy: PARENT
+      }
+    ])
+  })
+
+  it('WP2-22 详情不带答题方 → 人答的，项里没有 answeredBy 键', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      assistantDraft([call('ask', { question: 'Delete it?' }, 'q1')], 1000),
+      resultDraft('q1', 'User selected: Yes', { details: askDetails('Delete it?', ['Yes']) })
+    ])
+    const [item] = await asks(session)
+    expect(item).toStrictEqual(Q(1000, 'Delete it?', 'User selected: Yes'))
+    expect(item).not.toHaveProperty('answeredBy')
+  })
+
+  it('WP2-23 一条 assistant 里两个 ask：按调用次序紧跟其后，只有父会话答的那个带答题方', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      userDraft('go', 900),
+      assistantDraft(
+        [call('ask', { question: 'one' }, 'q1'), call('ask', { question: 'two' }, 'q2')],
+        1000
+      ),
+      resultDraft('q2', parentText('B'), { details: askDetails('two', ['B'], PARENT) }),
+      resultDraft('q1', 'User selected: A', { details: askDetails('one', ['A']) })
+    ])
+    expect(await digest(session)).toStrictEqual([
+      U(900, 'go'),
+      A(1000, ''),
+      Q(1000, 'one', 'User selected: A'),
+      Q(1000, 'two', parentText('B'), PARENT)
+    ])
+  })
+
+  it.each([
+    ['answeredBy null', askDetails('Q?', ['A'], null)],
+    ['answeredBy a string', askDetails('Q?', ['A'], 'P1')],
+    ['answeredBy a number', askDetails('Q?', ['A'], 42)],
+    ['answeredBy true', askDetails('Q?', ['A'], true)],
+    ['details null', null],
+    ['details a string', 'P1'],
+    ['details an array', [{ answeredBy: { ...PARENT } }] as JsonValue],
+    ['details missing', undefined]
+  ] as const)(
+    'WP2-24a 详情里没有 answeredBy 对象（%s）→ 算人答的，不抛',
+    async (_label, details) => {
+      const { session } = await openSession()
+      await appendEntries(session, [
+        assistantDraft([call('ask', { question: 'Q?' }, 'q1')], 1000),
+        resultDraft('q1', 'User selected: A', details === undefined ? {} : { details })
+      ])
+      const [item] = await asks(session)
+      expect(item).toStrictEqual(Q(1000, 'Q?', 'User selected: A'))
+    }
+  )
+
+  it.each([
+    ['an empty array', [], { kind: 'parent-session', sessionId: '' }],
+    ['kind user', { kind: 'user', sessionId: 'P1' }, { kind: 'parent-session', sessionId: 'P1' }],
+    ['no sessionId', { kind: 'parent-session' }, { kind: 'parent-session', sessionId: '' }],
+    [
+      'a numeric sessionId',
+      { kind: 'parent-session', sessionId: 42 },
+      { kind: 'parent-session', sessionId: '' }
+    ],
+    ['an empty object', {}, { kind: 'parent-session', sessionId: '' }]
+  ] as const)(
+    'WP2-24b [guard] 失败闭合：详情带一个形状不对的 answeredBy 对象（%s）也算父会话代答，认不出的字段补空串',
+    async (_label, answeredBy, expected) => {
+      const { session } = await openSession()
+      await appendEntries(session, [
+        assistantDraft([call('ask', { question: 'Q?' }, 'q1')], 1000),
+        resultDraft('q1', 'User selected: A', {
+          details: askDetails('Q?', ['A'], answeredBy as JsonValue)
+        })
+      ])
+      const [item] = await asks(session)
+      expect(item).toStrictEqual(Q(1000, 'Q?', 'User selected: A', expected))
+    }
+  )
+
+  it('WP2-25 非字符串的 title 丢掉，仍算父会话代答', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      assistantDraft([call('ask', { question: 'Q?' }, 'q1')], 1000),
+      resultDraft('q1', parentText('A'), {
+        details: askDetails('Q?', ['A'], { kind: 'parent-session', sessionId: 'P1', title: 7 })
+      })
+    ])
+    expect((await asks(session))[0]).toStrictEqual(
+      Q(1000, 'Q?', parentText('A'), { kind: 'parent-session', sessionId: 'P1' })
+    )
+  })
+
+  it('WP2-26 答题方的额外字段不交出：只留 kind / sessionId / title', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      assistantDraft([call('ask', { question: 'Q?' }, 'q1')], 1000),
+      resultDraft('q1', parentText('A'), {
+        details: askDetails('Q?', ['A'], { ...PARENT, trusted: true, evil: 'x' })
+      })
+    ])
+    const [item] = await asks(session)
+    expect(item).toStrictEqual(Q(1000, 'Q?', parentText('A'), PARENT))
+    expect(JSON.stringify(item)).not.toContain('evil')
+  })
+
+  it('WP2-27 空串 sessionId 照样算父会话代答（与形状坏的同一口径）', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      assistantDraft([call('ask', { question: 'Q?' }, 'q1')], 1000),
+      resultDraft('q1', parentText('A'), {
+        details: askDetails('Q?', ['A'], { kind: 'parent-session', sessionId: '' })
+      })
+    ])
+    expect((await asks(session))[0]).toStrictEqual(
+      Q(1000, 'Q?', parentText('A'), { kind: 'parent-session', sessionId: '' })
+    )
+  })
+
+  it('WP2-28 父会话代答的结果是错误（取消 / 中止）→ 不交出 ask 项', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      assistantDraft([call('ask', { question: 'Q?' }, 'q1')], 1000),
+      resultDraft('q1', 'Aborted', { isError: true, details: askDetails('Q?', [], PARENT) })
+    ])
+    expect(await asks(session)).toEqual([])
+  })
+
+  it('WP2-29 非 ask 工具（bash、第三方 mcp__x__ask）的结果带 answeredBy：不产生 ask 项，答题方不出现在任何项里', async () => {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      assistantDraft(
+        [call('bash', { command: 'ls' }, 'b1'), call('mcp__x__ask', { question: 'Q?' }, 'm1')],
+        1000
+      ),
+      resultDraft('b1', 'files', { toolName: 'bash', details: { answeredBy: PARENT } }),
+      resultDraft('m1', 'yes', { toolName: 'mcp__x__ask', details: askDetails('Q?', [], PARENT) })
+    ])
+    const items = await digest(session)
+    expect(items).toStrictEqual([A(1000, '')])
+    expect(JSON.stringify(items)).not.toContain('answeredBy')
+  })
+
+  it('WP2-30 压缩：切点之前的那组代答不交出，保留窗口里的那组带着答题方', async () => {
+    const { session } = await openSession()
+    const [, , kept] = await appendEntries(session, [
+      assistantDraft([call('ask', { question: 'old?' }, 'q1')], 1000),
+      resultDraft('q1', parentText('OLD'), { details: askDetails('old?', ['OLD'], PARENT) }),
+      userDraft('next', 2000),
+      assistantDraft([call('ask', { question: 'new?' }, 'q2')], 3000),
+      resultDraft('q2', parentText('NEW'), { details: askDetails('new?', ['NEW'], PARENT) })
+    ])
+    await appendEntries(session, [compactionDraft(kept!.id, 'S', 4000)])
+    const items = await digest(session)
+    expect(items).toStrictEqual([
+      AC(4000, 'S'),
+      U(2000, 'next'),
+      A(3000, ''),
+      Q(3000, 'new?', parentText('NEW'), PARENT)
+    ])
+    expect(JSON.stringify(items)).not.toContain('OLD')
+  })
+})
+
+describe('RSRC · user 项的来源（§19.7）', () => {
+  const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+  /** 认不出的来源记录在摘要里的样子（`resolveInputSources` 失败闭合补的） */
+  const UNKNOWN = { kind: 'parent-session', sessionId: '' } as const
+
+  it('RSRC-28 纯核心 digestEntries 的 sources：有的 user 项带 source，没有的不带这个键；指向非 user 条目的键不出现；通知形状照丢；空正文照留；侧车原文带 source；缺省第三参数 = 都不带', async () => {
+    const { session } = await openSession()
+    const [p, h, a, r, n, empty, shown] = await appendEntries(session, [
+      userDraft('p', 1000),
+      userDraft('h', 1100),
+      assistantDraft([call('ask', { question: 'Q?' }, 'q1')], 1200),
+      resultDraft('q1', 'User selected: A'),
+      userDraft(bg('n', 'x'), 1300),
+      userDraft('', 1400),
+      userDraft('run PAYLOAD', 1500)
+    ])
+    const [cut] = await appendEntries(session, [compactionDraft(p!.id, 'S', 1600)])
+    const view = await (await session.currentConversation()).context(BG)
+    const sources = new Map([
+      [p!.id, PARENT],
+      [a!.id, PARENT],
+      [r!.id, PARENT],
+      [cut!.id, PARENT],
+      [n!.id, PARENT],
+      [empty!.id, PARENT],
+      [shown!.id, PARENT]
+    ])
+    const displays = new Map([[shown!.id, 'run {{shuvixInlineToken:k}}']])
+    expect(h).toBeDefined()
+    const items = digestEntries(view.entries, displays, sources)
+    expect(items).toStrictEqual([
+      AC(1600, 'S'),
+      US(1000, 'p', PARENT),
+      U(1100, 'h'),
+      A(1200, ''),
+      Q(1200, 'Q?', 'User selected: A'),
+      US(1400, '', PARENT),
+      US(1500, 'run {{shuvixInlineToken:k}}', PARENT)
+    ])
+    expect(JSON.stringify(items)).not.toContain('PAYLOAD')
+    // 来源只落在 user 项上：assistant / ask / 压缩摘要项一律没有 source 键
+    for (const item of items) {
+      if (item.kind !== 'user') expect(item).not.toHaveProperty('source')
+    }
+    // 旧调用形（不给第三参数，或连侧车也不给）：没有一项带 source
+    for (const legacyCall of [digestEntries(view.entries, displays), digestEntries(view.entries)]) {
+      expect(legacyCall.filter((item) => 'source' in item)).toStrictEqual([])
+    }
+  })
+
+  it('RSRC-31 会话上手写的 SourceDoc：认不出的项照样带来源（失败闭合，sessionId 空串、不搬它自己的字段），合法的原样，孤儿 / 没放下的不带；不抛', async () => {
+    const { session } = await openSession()
+    const conversation = await session.currentConversation()
+    await conversation.commit(async (tx) => {
+      const doc = await tx.doc(SourceDoc, conversation.id)
+      doc.items['r-hook'] = { kind: 'hook', sessionId: 'H1', title: 'newer' }
+      doc.items['r-num'] = { kind: 'parent-session', sessionId: 42 }
+      doc.items['r-ok'] = PARENT
+      doc.items['r-orphan'] = PARENT
+      doc.items['r-unplaced'] = PARENT
+    }, BG)
+    const [hook, num, ok, plain] = await appendEntries(session, [
+      userDraft('hook-sourced', 1),
+      userDraft('num-sourced', 2),
+      userDraft('ok-sourced', 3),
+      userDraft('plain', 4)
+    ])
+    await session.harness.commit(async (tx) => {
+      for (const [requestId, entry] of [
+        ['r-hook', hook!],
+        ['r-num', num!],
+        ['r-ok', ok!]
+      ] as const) {
+        await tx.createSubmission({
+          conversationId: conversation.id,
+          requestId,
+          type: 'input',
+          status: 'placed',
+          entry: entry.id
+        })
+      }
+      await tx.createSubmission({
+        conversationId: conversation.id,
+        requestId: 'r-unplaced',
+        type: 'input',
+        status: 'unanswered',
+        reason: 'aborted'
+      })
+    }, BG)
+    expect(plain).toBeDefined()
+    expect(await digest(session)).toStrictEqual([
+      US(1, 'hook-sourced', UNKNOWN),
+      US(2, 'num-sourced', UNKNOWN),
+      US(3, 'ok-sourced', PARENT),
+      U(4, 'plain')
+    ])
   })
 })

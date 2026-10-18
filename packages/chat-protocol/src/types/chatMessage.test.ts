@@ -6,11 +6,13 @@ import {
   type AssistantMessage,
   type AssistantMeta,
   type AssistantToolBlock,
+  type AskToolDetails,
   type ChatMessage,
   type ErrorEventMessage,
   type ToolResultDetails,
   type ToolResultImage
 } from './chatMessage'
+import type { InputResponse, ParentSessionRef } from './inputRequest'
 
 const IMAGE: ToolResultImage = { path: '/tmp/shot.jpg', width: 800, height: 600, bytes: 4096 }
 
@@ -132,5 +134,35 @@ describe('P3-01 · ChatMessage additions', () => {
     }
     expect(legacy.metadata).toBeNull()
     expect(folded.metadata?.retried).toEqual({ count: 10, lastError: '503' })
+  })
+})
+
+/** WP2-79 · 答题方（docs/sub-session-design.md §19.5）：一份 `ParentSessionRef`，ask 详情与每种应答都可带 */
+describe('WP2-79 · answeredBy types', () => {
+  it('WP2-79 AskToolDetails.answeredBy is ParentSessionRef | undefined; every InputResponse member may carry it; kind is exactly parent-session', () => {
+    expectTypeOf<AskToolDetails['answeredBy']>().toEqualTypeOf<ParentSessionRef | undefined>()
+    expectTypeOf<ParentSessionRef['kind']>().toEqualTypeOf<'parent-session'>()
+    expectTypeOf<ParentSessionRef['sessionId']>().toEqualTypeOf<string>()
+    expectTypeOf<ParentSessionRef['title']>().toEqualTypeOf<string | undefined>()
+    expectTypeOf<Extract<InputResponse, { kind: 'ask' }>['answeredBy']>().toEqualTypeOf<
+      ParentSessionRef | undefined
+    >()
+    expectTypeOf<Extract<InputResponse, { kind: 'choice' }>['answeredBy']>().toEqualTypeOf<
+      ParentSessionRef | undefined
+    >()
+    expectTypeOf<Extract<InputResponse, { kind: 'other' }>['answeredBy']>().toEqualTypeOf<
+      ParentSessionRef | undefined
+    >()
+    expectTypeOf<Extract<InputResponse, { kind: 'cancel' }>['answeredBy']>().toEqualTypeOf<
+      ParentSessionRef | undefined
+    >()
+    // 缺省 = 用户本人：不带这一项的旧形状照样成立
+    const human: AskToolDetails = { type: 'ask', question: 'Q?', selections: ['A'] }
+    const byParent: AskToolDetails = {
+      ...human,
+      answeredBy: { kind: 'parent-session', sessionId: 'P1' }
+    }
+    expect(human.answeredBy).toBeUndefined()
+    expect(byParent.answeredBy?.sessionId).toBe('P1')
   })
 })

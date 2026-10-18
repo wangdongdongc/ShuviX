@@ -1,10 +1,12 @@
 /**
  * P2-14 · 上限与截断的孪生用例：同一份脚本建成旧格式（v3 JSONL → 冻结投影，经 messageService）与 durable
  * （MemoryStorage 会话 → 转写摘要，经 SessionHost.peek）两条会话，审查 payload（去掉 sessionId）与起标题的
- * 事实必须逐字相等，并且等于这里写死的字面量。
+ * 事实必须逐字相等，并且等于这里写死的字面量。**唯一的有意分叉是来源**（§19.7）：v3 没有来源记录，带来源的脚本
+ * 在 L 那边整条都分不清作者、子会话的用户消息全是任务；D 那边锚点之后的人话进 userMessages（T2b）。
  *
  *   P2-14-18 审查孪生 T1（顶层）：思考 / 正文 / 通知 / 错误 / payload 不进；trim → clip；首条 + 尾部
  *   P2-14-19 审查孪生 T2（子会话）：顶层的人话 + 子会话的 ask 回答与卡片反馈；子会话的「用户消息」进 delegatedTasks
+ *   RSRC-34  T2b（子会话、带来源）：L / D 只在 userMessages / delegatedTasks 上有意分叉，其余逐字相等
  *   P2-14-20 起标题孪生 T3：计数与 recentText；压缩摘要算一条 assistant、排第一
  *   P2-14-21 durable 路径上的边界：先 trim 再 clip、clip 的格式、组合串整体 clip、recentText 的 1000 字尾
  *
@@ -34,6 +36,7 @@ import {
   memoryHost,
   notice,
   result,
+  sourcedUser,
   text,
   thinking,
   user,
@@ -269,6 +272,36 @@ describe('P2-14-19 reviewer twin T2 (sub-session)', () => {
     ])
     expect(JSON.stringify(payload)).not.toContain('CHILD-NOTICE')
     expect(mocks.peek.mock.calls.map(([id]) => id).sort()).toEqual([child.D, top.D].sort())
+  })
+})
+
+describe('RSRC-34 reviewer twin T2b (sub-session with a source record): the one deliberate fork', () => {
+  it('T2b: the legacy twin has no sources, so every child prompt is a delegated task; the durable twin counts the line typed after the anchor as human; everything else is identical', async () => {
+    const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+    const top = await twin('top2b', [user(1000, 'top task')])
+    const child = await twin(
+      'child2b',
+      [sourcedUser(1100, 'task', PARENT), user(1200, 'H'), notice(1300, bg('n', 'x'))],
+      top
+    )
+    const { sessionId: legacyId, ...legacy } = await buildPermissionRequestPayload(
+      makeEvent(child.L)
+    )
+    const { sessionId: durableId, ...durable } = await buildPermissionRequestPayload(
+      makeEvent(child.D)
+    )
+    expect([legacyId, durableId]).toEqual([child.L, child.D])
+    expect(legacy.delegatedTasks).toStrictEqual(['task', 'H'])
+    expect(legacy.userMessages).toStrictEqual(['top task'])
+    expect(durable.delegatedTasks).toStrictEqual(['task'])
+    expect(durable.userMessages).toStrictEqual(['top task', 'H'])
+    const rest = (
+      payload: typeof legacy
+    ): Omit<typeof legacy, 'userMessages' | 'delegatedTasks'> => {
+      const { userMessages: _u, delegatedTasks: _d, ...others } = payload
+      return others
+    }
+    expect(rest(durable)).toStrictEqual(rest(legacy))
   })
 })
 

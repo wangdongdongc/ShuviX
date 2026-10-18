@@ -27,7 +27,8 @@
 import type {
   CancelReason,
   InputRequest,
-  InputResponse
+  InputResponse,
+  ParentSessionRef
 } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
 
@@ -46,9 +47,15 @@ export interface PendingInputHooks {
   onResolved?: (requestId: string, response: InputResponse, clientId?: string) => void
 }
 
-/** 应答的附带信息（P3-08 PIN-20）：谁答的，只供审计 */
+/** 应答的附带信息（P3-08 PIN-20）：谁答的 */
 export interface InputResponseMeta {
+  /** 答题方的前端 / 来源（`ipc:<id>` / `chrome:<id>` / `parent:<会话>`），只供审计 */
   readonly clientId?: string
+  /**
+   * 答题方不是用户本人（父会话代答子会话的 ask，docs/sub-session-design.md §19.5）。它是交给发问工具的
+   * 应答里**唯一**的 `answeredBy` 来源：载荷里自带的那一项一律被它覆盖（没有就删掉）。
+   */
+  readonly answeredBy?: ParentSessionRef
 }
 
 function cancelled(reason: CancelReason): InputResponse {
@@ -101,9 +108,21 @@ export class PendingInputRequests {
     })
   }
 
-  /** 应答一条挂起的询问；不存在（已应答 / 已取消）时返回 false —— 先到者胜 */
+  /**
+   * 应答一条挂起的询问；不存在（已应答 / 已取消）时返回 false —— 先到者胜。
+   * 交给发问工具的应答里 `answeredBy` 只取 `meta`（载荷里的那一项来自前端，不可信）。带 `meta.answeredBy`
+   * 的应答只能落在选择题（`kind: 'choice'`）上，别的一律返回 false、询问原样挂着。
+   */
   respond(requestId: string, response: InputResponse, meta: InputResponseMeta = {}): boolean {
-    return this.settle(requestId, response, meta.clientId)
+    // 代答只给选择题（§19.4）：权限卡、路径确认……只有用户能答 —— 在这里拒收，而不是指望每个调用方都记得
+    if (meta.answeredBy !== undefined && this.pending.get(requestId)?.request.kind !== 'choice') {
+      return false
+    }
+    const { answeredBy: _untrusted, ...rest } = response
+    const delivered = (
+      meta.answeredBy === undefined ? rest : { ...rest, answeredBy: { ...meta.answeredBy } }
+    ) as InputResponse
+    return this.settle(requestId, delivered, meta.clientId)
   }
 
   /** 取消一条挂起的询问；不存在时返回 false */

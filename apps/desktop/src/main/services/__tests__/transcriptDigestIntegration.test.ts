@@ -7,6 +7,9 @@
  *            都来自 durable 存储；会话目录里只有 `<sid>.sqlite`（及 -wal / -shm）
  *   P2-14-36 什么都不创建：从未发过消息的 durable 行、活着 / 已删的内存会话、带 .jsonl 的旧格式行 ——
  *            两个消费者跑完之后磁盘上、内存里都没有多出存储；宿主只被 peek、从不 open
+ *   RSRC-33  真发送路径端到端（§19.7）：被驱动的 prompt / steerDriven 是任务，界面的 prompt / steer 是人话
+ *   RSRC-26  [guard] 「重新生成」/ 回退后原样重发一条父会话代发的消息：经真网关 → 门面 → durable → 转写摘要，
+ *            它仍进 delegatedTasks（resendSources 沿用来源）；改过的文字才是人的话
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -142,6 +145,7 @@ import { buildTurnCompletedFacts } from '../sessionTriggerFacts'
 import {
   answer,
   fauxKit,
+  held,
   testDepsOverrides,
   waitFor,
   withTimeout,
@@ -152,9 +156,13 @@ import { legacyJsonl, makeEvent, user } from './support/transcriptTwins'
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
 let chatGateway: (typeof import('../../frontend/core/DefaultChatGateway'))['chatGateway']
+let sessionService: (typeof import('../sessionService'))['sessionService']
+let messageService: (typeof import('../messageService'))['messageService']
 
 beforeAll(async () => {
   ;({ chatGateway } = await import('../../frontend/core/DefaultChatGateway'))
+  ;({ sessionService } = await import('../sessionService'))
+  ;({ messageService } = await import('../messageService'))
 })
 
 const profile = (name: string): Record<string, unknown> => ({
@@ -315,4 +323,104 @@ describe('P2-14-36 nothing is created', () => {
     expect(host.peek).not.toHaveBeenCalled()
     expect(host.open).not.toHaveBeenCalled()
   })
+})
+
+describe('RSRC · 真发送路径上的来源（§19.7）', () => {
+  /** 父会话驱动子会话的那份发送参数（subSessionRunner 给的形状） */
+  const drive = (
+    n: number
+  ): { requestId: string; driven: { parentId: string; background: boolean } } => ({
+    requestId: `subsession:top:${n}`,
+    driven: { parentId: 'top', background: false }
+  })
+
+  async function seedTopAndChild(): Promise<void> {
+    sessionRecords.insert(row('top'))
+    sessionRecords.insert(row('child', { parentId: 'top' }))
+    kit.queue(answer('r-top'))
+    expect(await chatGateway.prompt('top', 'top intent')).toEqual({})
+  }
+
+  /** 子会话里文本恰为 `text` 的那条用户消息的 id（界面消息 id = 条目 id） */
+  async function userMessageId(text: string): Promise<string> {
+    const found = (await messageService.listBySession('child')).filter(
+      (m) => m.role === 'user' && m.content === text
+    )
+    expect(found, text).toHaveLength(1)
+    return found[0]!.id
+  }
+
+  it('RSRC-33 被驱动的 prompt / steerDriven 是任务，界面的 prompt / steer 是人话（真网关 / 门面 / SQLite）', async () => {
+    await seedTopAndChild()
+    kit.queue(answer('r1'))
+    expect(await chatGateway.prompt('child', 'P task', undefined, undefined, drive(1))).toEqual({})
+    kit.queue(answer('r2'))
+    expect(await chatGateway.prompt('child', 'H typed')).toEqual({})
+
+    // 扣住第三轮：父会话的引导与人的引导都在它跑着的时候进来
+    const run = held(answer('r3'))
+    kit.queue(run.step, answer('r4'), answer('r5'))
+    const sending = chatGateway.prompt('child', 'H second')
+    await run.reached
+    expect(
+      await chatGateway.steerDriven('child', 'P steer', {
+        requestId: 'subsession-steer:top:2',
+        parentId: 'top'
+      })
+    ).toEqual({})
+    chatGateway.steer('child', 'H steer')
+    const agent = sessionService.getAgentSession('child')!
+    await waitFor(async () => (await agent.sessionView()).queue.length === 2, 3000, 'two steers')
+    run.release()
+    expect(await withTimeout(sending, 10000, 'third round')).toEqual({})
+    await waitFor(
+      async () => (await agent.sessionView()).queue.length === 0 && !agent.isStreaming,
+      5000,
+      'steers placed'
+    )
+
+    const payload = await buildPermissionRequestPayload(makeEvent('child'))
+    expect(payload.delegatedTasks).toStrictEqual(['P task', 'P steer'])
+    expect(payload.userMessages).toStrictEqual(['top intent', 'H typed', 'H second', 'H steer'])
+    // 子会话存储里恰有被驱动的那两条来源
+    expect([...(await agent.inputSources()).values()]).toStrictEqual([
+      { kind: 'parent-session', sessionId: 'top' },
+      { kind: 'parent-session', sessionId: 'top' }
+    ])
+  }, 20000)
+
+  it('RSRC-26 [guard] 回退掉父会话代发的那条、原样重发（「重新生成」）：它仍进 delegatedTasks；改过的文字才算人的话', async () => {
+    await seedTopAndChild()
+    kit.queue(answer('r1'), answer('r2'))
+    expect(await chatGateway.prompt('child', 'P1 task', undefined, undefined, drive(1))).toEqual({})
+    expect(
+      await chatGateway.prompt('child', 'delete legacy/ entirely', undefined, undefined, drive(2))
+    ).toEqual({})
+
+    // 重新生成 = 回退到那条之前 + 经 IPC 同一个函数重发同一段文字（没有 drive）
+    expect(
+      await chatGateway.rollbackMessage('child', await userMessageId('delete legacy/ entirely'))
+    ).toBe(true)
+    kit.queue(answer('r3'))
+    expect(await chatGateway.prompt('child', 'delete legacy/ entirely')).toEqual({})
+    const resent = await buildPermissionRequestPayload(makeEvent('child'))
+    expect(resent.delegatedTasks).toStrictEqual(['P1 task', 'delete legacy/ entirely'])
+    expect(resent.userMessages).toStrictEqual(['top intent'])
+    expect(JSON.stringify(resent.userMessages)).not.toContain('delete legacy/')
+
+    // 再回退那条重发的、这次改了字再发：人的话
+    expect(
+      await chatGateway.rollbackMessage('child', await userMessageId('delete legacy/ entirely'))
+    ).toBe(true)
+    kit.queue(answer('r4'))
+    expect(await chatGateway.prompt('child', 'delete legacy/ entirely, but keep README')).toEqual(
+      {}
+    )
+    const edited = await buildPermissionRequestPayload(makeEvent('child'))
+    expect(edited.delegatedTasks).toStrictEqual(['P1 task'])
+    expect(edited.userMessages).toStrictEqual([
+      'top intent',
+      'delete legacy/ entirely, but keep README'
+    ])
+  }, 20000)
 })

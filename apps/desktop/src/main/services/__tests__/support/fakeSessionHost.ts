@@ -14,6 +14,8 @@
  *    entryId，`placeQueued()` 时才 `onPlaced`）；steer / followUp 同样调受理回调；`viewSnapshot()` 交 `view`
  *    （缺省空的 durable 视图）。P3-13：`monitorSnapshot()` 交 `monitorRows`（`monitorError` 时拒绝），
  *    `spawnedRecords()` 交 `spawned`。
+ *    WP2：`steerOptions` 记下每次 steer 的选项，`respondArgs` 记下 respondToInput 的实参个数与 meta。
+ *    WP3：`pendingRequests` 是挂着的询问（`pendingInputs()` 交它、计数随它），应答受理时移除并调 `onResponded`。
  *  - FakeSessionHost：open / peek / get / close / closeAll / reopen / delete；`storages` 是「存储在」的会话集合
  *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
  *
@@ -30,6 +32,7 @@ import type {
   CreateAgentOptions,
   DrivenRun,
   DurableSession,
+  InputResponseMeta,
   LastAnswer,
   LockRecord,
   NoticeInput,
@@ -92,7 +95,21 @@ export class FakeDurableSession implements DurableSession {
   runState: RunState = 'idle'
   busy = false
   interrupted = false
-  pendingInputCount = 0
+  /**
+   * 挂着的询问的脚本（WP3）：`pendingInputs()` 交它、`pendingInputCount` 随它计；`respondResult` 为 true 时
+   * 应答把那一条从表里移除，再调 `onResponded`（真 PendingInputRequests 先移除、再调落定钩子）
+   */
+  pendingRequests: InputRequest[] = []
+  /** 应答移除一条询问之后调（WP3：用例接到 runner 的 onAskResolved —— 假宿主没有 index.ts 的接线） */
+  onResponded: ((requestId: string) => void) | undefined
+  /** 旧写法直接设的计数（与 pendingRequests 的条数相加） */
+  private scriptedPendingCount = 0
+  get pendingInputCount(): number {
+    return this.pendingRequests.length + this.scriptedPendingCount
+  }
+  set pendingInputCount(count: number) {
+    this.scriptedPendingCount = count
+  }
   pendingInputSummaries: string[] = []
   /** 第一次起跑类调用时上的锁（模拟 K3） */
   lockOnFirstUse: LockRecord | undefined
@@ -277,8 +294,12 @@ export class FakeDurableSession implements DurableSession {
     return entryId
   }
 
+  /** 每次 steer 收到的选项（按顺序；WP2：幂等键与来源要原样到这里） */
+  readonly steerOptions: AdmitOptions[] = []
+
   async steer(content: UserInput, options: AdmitOptions = {}): Promise<AdmitResult> {
     this.calls.push(['steer', content])
+    this.steerOptions.push(options)
     this.use()
     if (this.steerResult.error === undefined) this.admitWith(options)
     return this.steerResult
@@ -316,8 +337,23 @@ export class FakeDurableSession implements DurableSession {
     return Promise.resolve({ kind: 'cancel', reason: 'fake' } as unknown as InputResponse)
   }
 
-  respondToInput(requestId: string, response: InputResponse): boolean {
+  /** 每次 respondToInput 的实参个数与附带信息（WP2：门面不带 meta 时两参调用，带了就原样转来） */
+  readonly respondArgs: Array<{ arity: number; meta?: InputResponseMeta }> = []
+
+  respondToInput(
+    requestId: string,
+    response: InputResponse,
+    ...rest: [meta?: InputResponseMeta]
+  ): boolean {
     this.calls.push(['respondToInput', requestId, response])
+    this.respondArgs.push({ arity: 2 + rest.length, ...(rest.length > 0 ? { meta: rest[0] } : {}) })
+    if (this.respondResult) {
+      const at = this.pendingRequests.findIndex((request) => request.id === requestId)
+      if (at >= 0) {
+        this.pendingRequests.splice(at, 1)
+        this.onResponded?.(requestId)
+      }
+    }
     return this.respondResult
   }
 
@@ -427,7 +463,7 @@ export class FakeDurableSession implements DurableSession {
   }
 
   pendingInputs(): InputRequest[] {
-    return []
+    return [...this.pendingRequests]
   }
 
   /** 某类调用（按顺序） */
