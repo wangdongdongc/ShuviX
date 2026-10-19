@@ -27,7 +27,7 @@ A chart is for *shape* — order, proportion, trend, outlier. A table is for *va
 | Above/below a baseline, delta to target | Diverging bars from a centered axis | Polarity |
 | Part-to-whole | One stacked bar, horizontal | Categorical |
 | Before → after per item | Dumbbell (two dots, connector) | One hue, two steps |
-| Structure, flow, state machine | This is a *diagram* — boxes and arrows, drawn by hand → `references/diagrams.md` | — |
+| Structure, flow, state machine | This is a *diagram*: a conventional kind (branching flow, sequence, states, entities, schedule) in ```mermaid → `references/mermaid.md`; an explanatory sketch drawn by hand → `references/diagrams.md` | — |
 
 ## Rules behind the table
 
@@ -52,4 +52,4 @@ Never solve "too many series" by inventing a hue.
 
 ## When it is a diagram, not a chart
 
-Boxes and arrows have their own discipline: one direction of flow (left-to-right for pipelines, top-to-bottom for decisions), boxes on a grid with equal widths, arrows that meet box edges rather than corners, and no crossing lines if any reordering avoids it. Keep it under ~10 boxes — past that, the figure stops being readable and the content wants a different cut.
+First decide the block: a conventional kind is ```mermaid and the renderer handles the layout (`references/mermaid.md`); a sketch drawn by hand follows this discipline: one direction of flow (left-to-right for pipelines, top-to-bottom for decisions), boxes on a grid with equal widths, arrows that meet box edges rather than corners, and no crossing lines if any reordering avoids it. Keep it under ~10 boxes — past that, the figure stops being readable and the content wants a different cut.

@@ -28,6 +28,11 @@
  *    出现的每个 `--pele-*`，逐个查 `.pele` 里有没有接 —— 名单从产物算出来，不抄。图坐在哪一层底色上
  *    由 `[data-figure-surface]` 告诉它（TH-9 与 TH-8 的导出卡片底是同一个比例）。
  *
+ *    TH-12 钉 ```mermaid 里唯一的强调 `:::accent`：`.pele .pele-node.accent` 把节点的中转变量换成
+ *    第一个槽位的浅底 + 描边、标注取同槽位的深字（pele 产物那一侧的细节由 builtinSkillsMermaid.dom.test 的
+ *    MM-5 用真 pele 钉）。作图技能的 `references/mermaid.md` 是第 1 条的唯一例外：它教模型一个颜色都不写，
+ *    所以必须**不**点任何 token。
+ *
  * 刻意不测的：调色板本身的具体色值与色觉可分性（数值来源与校验结果写在 css 的注释里，复述一遍只是
  * 把同一批数字抄成第二份），以及真实浏览器里 `light-dark()` / `color-mix()` 的解析（jsdom 没有 CSSOM
  * 支持，已在真实 Chromium 里用一次性探针验过；e2e 的 chat-interactive E-3 比对宿主与沙箱的解析值）。
@@ -56,6 +61,9 @@ const SKILL_FILES = SKILL_LANGS.flatMap((lang) => {
   }))
 })
 
+/** mermaid 那一页参考：教的是一个颜色都不写，所以它是「必须点名 token」的唯一例外 */
+const isMermaidReference = (name: string): boolean => name.endsWith('/references/mermaid.md')
+
 /** 三份 visual-guide 提示片段 —— 系统提示里常驻的那一段，只指路，不教 token */
 const FRAGMENT_DIR = resolve(HERE, '../../agent-runtime/src/agentProfile/fragments')
 const FRAGMENTS = ['visual-guide.md', 'visual-guide.zh.md', 'visual-guide.ja.md'].map((name) => ({
@@ -73,12 +81,32 @@ const tokensIn = (text: string): string[] =>
   ].sort()
 
 describe('themes.css —— 作图技能教的 token 都有定义', () => {
-  it.each(SKILL_FILES)('$name 里的每个 --viz-* / --theme-* 都能在 css 里找到', ({ text }) => {
-    const tokens = tokensIn(text)
-    expect(tokens.length, '这份技能文件里应当真的点名了 token').toBeGreaterThan(0)
-    for (const token of tokens) {
-      expect(DEFINED.has(token), `${token} 在 themes.css 里没有定义`).toBe(true)
+  it.each(SKILL_FILES.filter((f) => !isMermaidReference(f.name)))(
+    '$name 里的每个 --viz-* / --theme-* 都能在 css 里找到',
+    ({ text }) => {
+      const tokens = tokensIn(text)
+      expect(tokens.length, '这份技能文件里应当真的点名了 token').toBeGreaterThan(0)
+      for (const token of tokens) {
+        expect(DEFINED.has(token), `${token} 在 themes.css 里没有定义`).toBe(true)
+      }
     }
+  )
+
+  it.each(SKILL_FILES.filter((f) => isMermaidReference(f.name)))(
+    '$name（mermaid 的契约）是唯一的例外：一个 --viz-* / --theme-* 都不点，也不写十六进制颜色',
+    ({ text }) => {
+      // mermaid 图的颜色全由 themes.css 的 .pele 映射给出，模型一个颜色都不写 —— 这一页点了 token，
+      // 就是在教模型往 mermaid 里写颜色（classDef 里写不了 var()，最后落成写死的颜色）
+      expect(text).toContain('```mermaid')
+      expect(tokensIn(text)).toEqual([])
+      expect(text).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+    }
+  )
+
+  it('例外名单只有 mermaid.md 这一份、三语各一份 —— 别的技能文件不能借它免检', () => {
+    expect(SKILL_FILES.filter((f) => isMermaidReference(f.name)).map((f) => f.name)).toEqual(
+      SKILL_LANGS.map((lang) => `${lang}/drawing/references/mermaid.md`)
+    )
   })
 
   it.each(SKILL_LANGS)('%s 的 SKILL.md 自己就把 token 表讲全了（契约段那张表）', (lang) => {
@@ -473,6 +501,31 @@ describe('themes.css —— pele 的 --pele-* 接到主题 token 上（TH-9…11
   it('TH-10 --pele-bg / --pele-surface / --pele-fg 声明在 .pele（图的根）上', () => {
     for (const name of ['--pele-bg', '--pele-surface', '--pele-fg']) {
       expect(selectorsDeclaring(name), name).toEqual(['.pele'])
+    }
+  })
+
+  it('TH-12 `:::accent`：.pele-node.accent 把形状的中转变量换成第一个槽位的浅底 + 描边，标注取同槽位的深字', () => {
+    // 作图技能教模型给唯一要突出的节点写 `:::accent`（不写颜色）；pele 把类名挂到节点的 <g> 上，
+    // 形状 fill / stroke 是 var(--_s) / var(--_b) —— 这两条规则是那个类名唯一的着色来源
+    const ruleOf = (selector: string): Map<string, string> => {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const body = new RegExp(`^${escaped}\\s*\\{([^}]*)\\}`, 'm').exec(CSS)?.[1]
+      expect(body, `${selector} 那一块不在 themes.css 里`).toBeDefined()
+      return new Map(
+        [...body!.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()])
+      )
+    }
+    expect(ruleOf('.pele .pele-node.accent')).toEqual(
+      new Map([
+        ['--_s', 'var(--viz-1-tint)'],
+        ['--_b', 'var(--viz-1)']
+      ])
+    )
+    expect(ruleOf('.pele .pele-node.accent .pele-label')).toEqual(
+      new Map([['fill', 'var(--viz-1-ink)']])
+    )
+    for (const token of ['--viz-1-tint', '--viz-1', '--viz-1-ink']) {
+      expect(DEFINED.has(token), `${token} 在 themes.css 里没有定义`).toBe(true)
     }
   })
 

@@ -161,6 +161,20 @@
   --pele-series-8: var(--viz-8);
 }
 
+/* ```mermaid 里唯一的强调：`:::accent` 让 pele 把类名原样挂到节点的 <g> 上（classDef 里写不了 var()，
+   所以作图技能教的是这个类名，不是颜色），这里把那一个节点换成第一个分类槽位：浅底、同色描边、深字。
+   形状的 fill / stroke 是 `var(--_s)` / `var(--_b)`，在形状自己身上代入，所以在节点上改中转变量就够；
+   文字的颜色是从根继承下来的计算值（根上 `fill="var(--_fg)"` 早已代入），只能直接设 fill。
+   `--_s` / `--_b` 是 pele 产物的内部中转名 —— pele 锁定了版本，themes.test 钉住它们还在。 */
+.pele .pele-node.accent {
+  --_s: var(--viz-1-tint);
+  --_b: var(--viz-1);
+}
+
+.pele .pele-node.accent .pele-label {
+  fill: var(--viz-1-ink);
+}
+
 /* 对话的图卡：卡片底是 bg-tertiary 60% 叠在 bg-primary 上（CodeBlock / MermaidBlock 的卡片，也是
    导出面板「card」底色的配方 —— figureExport 的 SURFACE_CSS），节点取 bg-primary，在卡片上挖出来。 */
 [data-figure-surface='card'] {

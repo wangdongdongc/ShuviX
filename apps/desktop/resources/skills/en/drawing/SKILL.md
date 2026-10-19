@@ -1,15 +1,27 @@
 ---
 name: drawing
-description: "The contract and the craft for inline SVG figures — what a figure must keep to render at all (viewBox, color tokens, what gets stripped), picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, mark specs, label and legend rules, the categorical/sequential/status palette, the look (type scale, two weights, category tints, lines, spacing, number formatting), interactive blocks where your system prompt describes them (when one earns its place, layout, wiring, a worked example), saving a figure as a standalone .svg file, and a catalog of what goes wrong. Load this before the first figure in a conversation, even a two-box sketch, and before writing a figure to a .svg file."
+description: "The contract and the craft for inline SVG figures — what a figure must keep to render at all (viewBox, color tokens, what gets stripped), picking the form (and when not to draw a chart at all), boxes-and-arrows diagrams that stay small enough to read, which diagrams to write as ```mermaid instead (flows with branches, sequences, state machines, entity relations, schedules) and their budget, mark specs, label and legend rules, the categorical/sequential/status palette, the look (type scale, two weights, category tints, lines, spacing, number formatting), interactive blocks where your system prompt describes them (when one earns its place, layout, wiring, a worked example), saving a figure as a standalone .svg file, and a catalog of what goes wrong. Load this before the first figure in a conversation, even a two-box sketch, and before writing a figure to a .svg file."
 ---
 
 # Drawing figures
 
-This skill is the whole guide to figures: first the **contract** a ```svg figure has to keep to render at all, then the **craft** — what to draw, and how to make it read. Your system prompt only tells you to load it. Once loaded it stays in the conversation, so the next figure does not need it again.
+This skill is the whole guide to figures: which block a figure belongs in, the **contract** a ```svg figure has to keep to render at all, then the **craft** — what to draw, and how to make it read. Your system prompt only tells you to load it. Once loaded it stays in the conversation, so the next figure does not need it again.
+
+## ```svg or ```mermaid
+
+Two fenced blocks render as figures in your reply. Pick by what the figure is:
+
+| The figure | Block | Read first |
+|---|---|---|
+| A diagram whose kind has a conventional layout — a flow with branches or loops, messages between parties over time, a state machine, entities and their relations, a class structure, a schedule, a timeline | ```mermaid | `references/mermaid.md` |
+| A sketch that explains — a few boxes where the arrangement, a grouping or one highlighted part makes the point; layers; before and after; an annotated schematic | ```svg | `references/diagrams.md` |
+| Data — bars, lines, proportions, distributions | ```svg | the steps below |
+
+If you would only be computing coordinates for a layout every reader already expects, write ```mermaid: the renderer lays it out, it costs a fraction of the tokens, and nothing in it can overlap or clip. If the arrangement itself is the argument, draw ```svg. Either way the figure follows the theme only if you write no colors of your own.
 
 ## The contract
 
-However small the figure, break one of these and it renders wrong.
+However small the ```svg figure, break one of these and it renders wrong. (A ```mermaid diagram has its own, shorter contract in `references/mermaid.md`.)
 
 - **One element per line** — `edit` needs anchors; a minified figure can only be redrawn.
 - **`viewBox` on the root, never `width` / `height`, and 640 wide** — the figure is scaled to the column and overflow is clipped. 640 is about the column's width, so a unit is about a pixel and `font-size="11"` reads as 11; a narrower `viewBox` is blown up, text and all (320 wide renders 11 as 22). Narrow content stays in a 640-wide `viewBox`, centered.
@@ -30,8 +42,9 @@ A figure that explains must be smaller than the thing it explains. Before a flow
 - At most 5 boxes, at most 4 in a row, one direction; a box holds a short phrase, not a sentence.
 - More parts than that: draw the overview — the boxes and the main flow only — then one small figure per part that matters, with prose between; or draw the overview and offer to open a part.
 - Arrows stop at box edges and cross no other box.
+- A ```mermaid diagram is laid out for you, so its numbers are larger but it still has them: at most 10 nodes (a sequence: at most 5 participants and 12 messages), short labels, at most one highlighted node — `references/mermaid.md`.
 
-Flows, structures, layers, before-and-after have their own reference: `references/diagrams.md`. Read it before drawing one; the steps below are for figures that carry data.
+Hand-drawn flows, structures, layers, before-and-after have their own reference: `references/diagrams.md`. Read it before drawing one; the steps below are for figures that carry data.
 
 **Interactive blocks** (```interactive — sliders, step-throughs, hover-to-read charts) have theirs too: `references/interactive.md` — **only if your system prompt describes ```interactive blocks**; where it does not, your replies are shown somewhere that cannot run them, so do not write one. Read it before writing one; the palette rules below apply inside a block as well.
 

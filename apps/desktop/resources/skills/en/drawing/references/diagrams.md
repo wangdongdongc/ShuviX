@@ -1,6 +1,6 @@
 # Boxes and arrows
 
-Flows, structures, layers, before-and-after — every figure made of boxes and arrows. It is drawn by hand, like every other figure here.
+Flows, structures, layers, before-and-after drawn by hand in ```svg — the sketches where the arrangement makes the point. A diagram of a conventional kind (a branching flow, a sequence, states, entities, a schedule) is written as ```mermaid instead: `references/mermaid.md`.
 
 **A figure that explains must be smaller than the thing it explains.** When someone asks for a picture of a plan, they are asking for less than the plan: the shape of it, the part that matters. Turning every step into a box hands the same complexity back in a harder notation. You wrote the plan, so a thirty-box graph reads fine to you — to them it has no way in.
 

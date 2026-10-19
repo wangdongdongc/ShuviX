@@ -23,6 +23,13 @@
  * visual-skill-hint*.md 已删）；新增 BS-14（三段在每种语言的 SKILL.md 里各恰好一处）与 BS-15
  * （片段里一行都不重复它们 —— 契约只有一份）。这一处只能认本地化的小标题（DRAWING_SECTIONS），
  * 与片段测试的 TWO_BOX 同一种手维护表。
+ *
+ * 2026-10-19：drawing 技能按图的种类分两种载体 —— 约定俗成的图（带分支的流程、时序、状态机、
+ * 实体 / 类、排期 / 时间线）写 ```mermaid（pele 渲染），讲道理的草图与数据图照旧手画 ```svg。
+ * BS-13 因此从「哪里都不提 mermaid」改为「只有 drawing 的四份文件提它」（SKILL.md、
+ * references/mermaid.md、choosing-a-form.md、diagrams.md），别的技能一个字都不提；DRAWING_SECTIONS
+ * 多了选型那一段（routing，BS-14 / BS-15 随之覆盖它）；DS-2 钉选型段与契约 / 预算段的指路，
+ * DS-3 钉选型表里那一行同时指向两份参考。常驻提示片段里仍然不提 mermaid（fragments.test 的 NM-1/2）。
  */
 import { describe, it, expect, afterAll } from 'vitest'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -123,19 +130,36 @@ const MATRIX: [lang: string, name: string][] = LANGS.flatMap((lang) =>
  * drawing 的 SKILL.md 里那三段的小标题 —— 只能按本地化措辞认（ja 目前是 en 的逐字副本，见 BS-12）。
  * 改了措辞请同步表：BS-14 会红，但红的原因是表过期而不是技能坏了。
  */
-const DRAWING_SECTIONS: Record<string, { contract: string; budget: string; example: string }> = {
+const DRAWING_SECTIONS: Record<
+  string,
+  { routing: string; contract: string; budget: string; example: string }
+> = {
   en: {
+    routing: '## ```svg or ```mermaid',
     contract: '## The contract',
     budget: '## Boxes and arrows: the budget',
     example: '## A small figure in full'
   },
   ja: {
+    routing: '## ```svg or ```mermaid',
     contract: '## The contract',
     budget: '## Boxes and arrows: the budget',
     example: '## A small figure in full'
   },
-  zh: { contract: '## 契约', budget: '## 框与箭头：预算', example: '## 一张完整的小图' }
+  zh: {
+    routing: '## ```svg 还是 ```mermaid',
+    contract: '## 契约',
+    budget: '## 框与箭头：预算',
+    example: '## 一张完整的小图'
+  }
 }
+/** drawing 里允许（也必须）提 mermaid 的文件 —— 相对技能根；别的文件、别的技能一律不提 */
+const MERMAID_FILES = [
+  'SKILL.md',
+  'references/choosing-a-form.md',
+  'references/diagrams.md',
+  'references/mermaid.md'
+]
 /** 契约段必须点到的代码记号（三语一字不差） */
 const DRAWING_CONTRACT = [
   'viewBox',
@@ -366,21 +390,77 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
     expect(untranslated).toBeGreaterThan(0)
   })
 
-  it('BS-13 所有语言的技能文件里都不再提 mermaid —— 结构图也手画 ```svg', () => {
+  it('BS-13 mermaid 只在 drawing 的四份文件里提 —— 别的文件、别的技能一个字都不提', () => {
+    // 两个方向都要红：drawing 少提了一处（选型表 / 契约指路掉了），或者 mermaid 漏进了与它
+    // 无关的地方（另一个技能、drawing 的别的参考 —— 那里教的是手画 svg）
     let scanned = 0
     for (const lang of LANGS) {
       for (const name of dirNamesIn(join(SKILLS_ROOT, lang))) {
-        for (const rel of filesUnder(skillDir(lang, name))) {
+        const mentioning = filesUnder(skillDir(lang, name)).filter((rel) => {
           scanned++
-          expect(
-            readFileSync(join(skillDir(lang, name), rel), 'utf8'),
-            `${lang}/${name}/${rel}`
-          ).not.toMatch(/mermaid/i)
-        }
+          return /mermaid/i.test(readFileSync(join(skillDir(lang, name), rel), 'utf8'))
+        })
+        expect({ lang, name, mentioning }).toEqual({
+          lang,
+          name,
+          mentioning: name === 'drawing' ? MERMAID_FILES : []
+        })
       }
     }
     expect(scanned).toBeGreaterThan(0)
+    // 正控制组：drawing 之外确实还有技能被扫到（否则「别的技能不提」在空集上恒真）
+    expect(SKILL_NAMES.filter((n) => n !== 'drawing').length).toBeGreaterThan(0)
   })
+
+  it.each(LANGS)(
+    'DS-2 %s：SKILL.md 的选型段两种载体都在、各指向自己的参考；契约段与预算段都指向 references/mermaid.md，预算段写着 mermaid 的数字',
+    (lang) => {
+      const text = readSkillMd(lang, 'drawing')
+      const headings = DRAWING_SECTIONS[lang]
+      expect(text, `${lang}：SKILL.md 没点名 references/mermaid.md`).toContain(
+        'references/mermaid.md'
+      )
+      const routing = sectionOf(text, headings.routing)
+      expect(routing, `${lang}：选型段`).not.toBe('')
+      // 选型表：一行写 ```mermaid 并指 mermaid.md，一行写 ```svg 并指 diagrams.md
+      const rows = routing.split('\n').filter((line) => line.startsWith('|'))
+      const mermaidRows = rows.filter((r) => r.includes('references/mermaid.md'))
+      const diagramRows = rows.filter((r) => r.includes('references/diagrams.md'))
+      expect(mermaidRows, `${lang}：选型表里指向 mermaid.md 的行`).toHaveLength(1)
+      expect(mermaidRows[0]).toContain('```mermaid')
+      expect(mermaidRows[0]).not.toContain('```svg')
+      expect(diagramRows, `${lang}：选型表里指向 diagrams.md 的行`).toHaveLength(1)
+      expect(diagramRows[0]).toContain('```svg')
+      expect(diagramRows[0]).not.toContain('```mermaid')
+      // 契约段：svg 的契约照旧，mermaid 的契约在别处 —— 但得指过去
+      expect(sectionOf(text, headings.contract), `${lang}：契约段`).toContain(
+        'references/mermaid.md'
+      )
+      // 预算段：节点 10、时序 5 个参与方、12 条消息
+      const budget = sectionOf(text, headings.budget)
+      expect(budget, `${lang}：预算段`).toContain('references/mermaid.md')
+      expect(budget, `${lang}：预算段`).toContain('```mermaid')
+      for (const n of ['10', '5', '12']) {
+        expect(budget, `${lang}：预算段缺 ${n}`).toMatch(new RegExp(`(^|\\D)${n}(\\D|$)`))
+      }
+    }
+  )
+
+  it.each(LANGS)(
+    'DS-3 %s：choosing-a-form 里指向 mermaid.md 的恰好一行，就是指向 diagrams.md 的那一行',
+    (lang) => {
+      const rows = readFileSync(
+        join(skillDir(lang, 'drawing'), 'references/choosing-a-form.md'),
+        'utf8'
+      )
+        .split('\n')
+        .filter((line) => line.startsWith('|'))
+      const mermaidRows = rows.filter((r) => r.includes('references/mermaid.md'))
+      expect(mermaidRows).toHaveLength(1)
+      expect(mermaidRows[0]).toContain('references/diagrams.md')
+      expect(mermaidRows[0]).toContain('```mermaid')
+    }
+  )
 })
 
 describe('BS 内置技能的两条接线', () => {
