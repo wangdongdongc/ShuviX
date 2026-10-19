@@ -142,6 +142,38 @@ export async function openSessionStorage(sessionId: string): Promise<Storage> {
   return openNodeSqliteStorage(durableStoragePath(sessionId))
 }
 
+// ─── 会话 fork：整拷一份新格式存储 ─────────────────────────────
+
+/**
+ * 把一条新格式会话的存储整拷成另一条会话的（会话 fork，services/sessionFork）：另开一个连接 `VACUUM INTO`
+ * 目标文件。源会话的存储此刻多半正被 SessionHost 开着 —— WAL 下另一个连接照样读得到已提交的一切，拿到的是
+ * 一致的快照，源会话不受影响；调用方在源会话的 `whileIdle` 里调，拷的时候没有新的输入被受理。
+ * 目标文件已存在会失败（`VACUUM INTO` 不覆盖）。只给新格式会话（内存会话 / 旧格式没有这种文件）。
+ */
+export async function copyDurableStorage(
+  fromSessionId: string,
+  toSessionId: string
+): Promise<void> {
+  installSqliteWarningFilter()
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(durableStoragePath(fromSessionId))
+  try {
+    db.prepare('VACUUM INTO ?').run(durableStoragePath(toSessionId))
+  } finally {
+    db.close()
+  }
+}
+
+/**
+ * 直接按路径打开一条会话的新格式存储，**不经存储路由**（会话 fork 的拷贝收尾：那一刻新会话还没有行）。
+ * 其余时候一律走 `openSessionStorage`。
+ */
+export async function openDurableStorageFile(sessionId: string): Promise<Storage> {
+  installSqliteWarningFilter()
+  const { openNodeSqliteStorage } = await import('@earendil-works/pi-durable/storage/sqlite/node')
+  return openNodeSqliteStorage(durableStoragePath(sessionId))
+}
+
 /**
  * 这条会话的存储是否存在（SessionHost 的 peek 据此「不创建」）：内存会话 = 它的 MemoryStorage 还在；
  * 新格式 = `.sqlite` 文件在；旧格式 / 不认识的格式一律 false（SessionHost 从不打开它们）。

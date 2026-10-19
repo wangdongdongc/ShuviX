@@ -48,6 +48,7 @@
     "updateReady": "可以安装更新",
     "deleteSession": "删除会话",
     "exportSession": "导出会话",
+    "forkSession": "分支会话",
     "viewMore": "查看更多",
     "knowledgeGroup": "知识库",
     "knowledgeEmpty": "暂无条目 —— agent 或你都可以往 ~/.shuvix/knowledge/ 里添加",
@@ -210,7 +211,13 @@
     "emptyHint": "发送一条消息开始对话",
     "scrollToBottom": "回到底部",
     "rollbackConfirm": "回退到此处",
-    "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。"
+    "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。",
+    "forkFailedTitle": "无法分支这个会话",
+    "forkBusy": "它还在工作。先停下它或等它做完，再试一次。",
+    "forkNotForkable": "目前只有项目里的会话可以分支。",
+    "forkInvalidTarget": "那条回复已经不在当前对话里了。",
+    "forkNoSession": "这个会话已经不存在了。",
+    "forkFailed": "复制对话时出错，没有建出新会话。"
   },
   "input": {
     "searchModel": "搜索模型...",
@@ -296,6 +303,7 @@
     "showSource": "显示源码",
     "rollback": "回退到此处",
     "regenerate": "重新生成",
+    "fork": "从这里分支",
     "playTts": "朗读",
     "stopTts": "停止朗读",
     "mermaidFailed": "Mermaid 渲染失败",
@@ -988,6 +996,7 @@
   },
   "agent": {
     "defaultTitle": "新对话",
+    "forkTitle": "{{title}} · 分支",
     "toolAborted": "已被用户中止。"
   },
   "tool": {

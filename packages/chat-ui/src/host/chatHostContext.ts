@@ -58,6 +58,11 @@ export interface ChatHostValue {
    * 沙箱的 CSP 随之放行这个基址，模型写的 `shuvix-lib://<name>` 换成它（见 chat-protocol 的 buildSandboxDocument）
    */
   sandboxLibBase?: string
+  /**
+   * 让这个窗口去看另一条会话（对话里建出的新会话 —— 会话 fork —— 建好之后切过去）。不给 = 这个宿主的对话
+   * 视图钉在一条会话上（悬浮窗、md 窗口、Chrome 侧边栏），会把人带去别的会话的入口（「从这里分支」）不画。
+   */
+  openSession?: (sessionId: string) => void
 }
 
 export const ChatHostContext = createContext<ChatHostValue | null>(null)

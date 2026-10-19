@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useChatStore } from '@shuvix/chat-ui'
 import { useSettingsStore } from './stores/settingsStore'
 import { useBrowserStore, CHAT_CONTAINER_ATTR } from './stores/browserStore'
@@ -42,6 +42,11 @@ const nativeContextMenu: ContextMenuRenderer = async (items) =>
 /** 浏览器里的 web 客户端没有原生菜单：交给 ContextMenuProvider 自带的 DOM 菜单（undefined = 用它） */
 const contextMenuRenderer: ContextMenuRenderer | undefined =
   window.api.app.platform === 'web' ? undefined : nativeContextMenu
+
+/** 主窗口里切到一条会话（与侧栏点选同一个入口；刚建出的会话不会是悬浮着的） */
+function openInMainView(sessionId: string): void {
+  useChatStore.getState().setActiveSessionId(sessionId)
+}
 
 /**
  * 应用主入口
@@ -105,8 +110,10 @@ function MainOrSettings(): React.JSX.Element {
   useAppInit()
   usePinChatSync()
 
-  // 把宿主状态（外观 / 模型选择 / 语音）适配成 chat-ui 的注入值
-  const chatHost = useSettingsChatHost()
+  // 把宿主状态（外观 / 模型选择 / 语音）适配成 chat-ui 的注入值。主窗口（连同手机布局）能切去别的会话：
+  // 对话里建出的新会话（从某条回复分支）建好就切过去 —— 悬浮窗 / md 窗口钉在一条会话上，不给这一项
+  const settingsHost = useSettingsChatHost()
+  const chatHost = useMemo(() => ({ ...settingsHost, openSession: openInMainView }), [settingsHost])
 
   // ========== 外观 ==========
 

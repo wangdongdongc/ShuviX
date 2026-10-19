@@ -408,6 +408,44 @@ export class SessionService {
     return session
   }
 
+  /**
+   * 会话 fork 的那一行（services/sessionFork 在存储拷好、收完尾之后调）：一条新会话，放在源会话旁边 ——
+   * 同一个项目、同一个父会话（源会话是子会话时 fork 也挂在那个父会话下，钉着的档案随之有效）。设置里抄
+   * 「这场对话是怎么跑的」：模型、思考档位、扩展能力勾选、知识库、bot 绑定、子会话的档案钉子、路径授权
+   * （授权是用户在这场对话里给的，fork 的历史里就有那几次批准）。不抄的：笔记本 / 标签页 / 工作目录
+   * （fork 只给项目会话，见 chat-protocol 的 sessionFork）、标题来源、锁与运行状态的镜像（新行从空闲起）。
+   * 不广播 —— 调用方在 fork 完全做好之后再广播一次列表变化。
+   */
+  insertForkRow(source: Session, id: string): Session {
+    const from = source.settings
+    const settings: SessionSettings = {}
+    if (from.enabledTools) settings.enabledTools = [...from.enabledTools]
+    if (from.knowledgeBases) settings.knowledgeBases = [...from.knowledgeBases]
+    if (from.bot) settings.bot = from.bot
+    if (from.agentProfile) settings.agentProfile = from.agentProfile
+    if (from.model) settings.model = { ...from.model }
+    if (from.thinkingLevel) settings.thinkingLevel = from.thinkingLevel
+    if (from.allowList?.length) settings.allowList = [...from.allowList]
+    const now = Date.now()
+    const session: Session = {
+      id,
+      // 源会话还是缺省标题（自动标题还没起过）：fork 也留缺省标题，它的第一条消息照样触发自动标题
+      title:
+        source.title === t('agent.defaultTitle')
+          ? source.title
+          : t('agent.forkTitle', { title: source.title }),
+      projectId: source.projectId,
+      parentId: source.parentId,
+      storageKind: CURRENT_SESSION_STORAGE_KIND,
+      settings,
+      createdAt: now,
+      updatedAt: now,
+      lastActiveAt: now
+    }
+    sessionRecords.insert(session, { ephemeral: false })
+    return session
+  }
+
   /** bot 会话判定 —— 绑定了一个 bot。口径在 chat-protocol 的 botSession（两个宿主与三层 UI 共用一份） */
   isBotSession(sessionId: string): boolean {
     return isBotSessionSettings(sessionRecords.pickSettings(sessionId, ['bot']))

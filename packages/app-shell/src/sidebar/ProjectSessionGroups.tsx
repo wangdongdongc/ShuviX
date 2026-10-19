@@ -9,6 +9,7 @@ import {
   type Session
 } from '@shuvix/chat-ui'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
+import { isForkableSessionShape } from '@shuvix/chat-protocol/sessionFork'
 import { SessionGroup } from './SessionGroup'
 import { SessionItem } from './SessionItem'
 import { AnimatedCollapse } from '../common/AnimatedCollapse'
@@ -41,6 +42,11 @@ export interface ProjectSessionGroupsProps {
   onEditProject?: (projectId: string) => void
   /** 会话配置入口（桌面：行菜单里的一项，打开 SessionConfigDialog） */
   onConfigureSession?: (id: string) => void
+  /**
+   * 会话 fork（行菜单里的「分支会话」：复制整段当前对话成一条新会话）。只对形态给的会话出现（项目会话，
+   * chat-protocol 的 isForkableSessionShape），在跑 / 被中断时置灰；宿主不注入则整项不出现
+   */
+  onForkSession?: (id: string) => void
   /** 能力开关 */
   caps?: {
     /** 显示置顶（悬浮）徽标 */
@@ -88,6 +94,7 @@ export function ProjectSessionGroups({
   onDelete,
   onEditProject,
   onConfigureSession,
+  onForkSession,
   caps = {},
   pinnedSessionIds,
   sessionsOverride,
@@ -204,10 +211,16 @@ export function ProjectSessionGroups({
   const hasSessionMenu = (isNotebook: boolean): boolean =>
     !!onConfigureSession || !!onDelete || !isNotebook
   const openSessionMenu = (id: string, e: React.MouseEvent): void => {
-    const isNotebook = !!sessions.find((s) => s.id === id)?.settings.notebookPath
+    const session = sessions.find((s) => s.id === id)
+    const isNotebook = !!session?.settings.notebookPath
     const items: ContextMenuItem[] = []
     if (onConfigureSession) items.push({ id: 'session-config', label: t('sessionConfig.title') })
     if (!isNotebook) items.push({ id: 'export-session', label: t('sidebar.exportSession') })
+    // 拷贝要等它停下：在跑 / 被中断时置灰（后台还有派生 agent 在跑这一种这里看不出来，由宿主拒绝）
+    if (onForkSession && session && isForkableSessionShape(session)) {
+      const idle = !streamingSessions[id] && !interruptedSessions[id]
+      items.push({ id: 'fork-session', label: t('sidebar.forkSession'), enabled: idle })
+    }
     if (onDelete) {
       if (items.length > 0) items.push({ type: 'separator' })
       items.push({ id: 'delete-session', label: t('sidebar.deleteSession') })
@@ -216,6 +229,7 @@ export function ProjectSessionGroups({
     void showContextMenu(e, items, (action) => {
       if (action === 'session-config') onConfigureSession?.(id)
       if (action === 'export-session') void exportSession(id)
+      if (action === 'fork-session') onForkSession?.(id)
       if (action === 'delete-session') onDelete?.(id)
     })
   }

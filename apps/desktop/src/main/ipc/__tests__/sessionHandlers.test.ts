@@ -47,6 +47,7 @@ vi.mock('../../frontend', () => ({
   createClientContext: (_ctx: unknown, sessionId: string) => ({ electron: sessionId })
 }))
 vi.mock('../../services/pinnedChatService', () => ({ isPinned: vi.fn(), unpin: vi.fn() }))
+vi.mock('../../services/sessionFork', () => ({ forkSession: vi.fn() }))
 
 import { registerSessionHandlers } from '../sessionHandlers'
 import { attachIpcAdapter } from '../ipcAdapter'

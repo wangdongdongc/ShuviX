@@ -10,6 +10,7 @@
  *   DO-6 `API_TABLE.network` 恰是五条 invoke（status 0 参、setEnabled / setPort / setLan / setLanInterface 各 1 参）
  *   DO-7 phase D 的三条新通道（fs:listDirectories / fs:locateFolder / widget:exportForDownload）是 1 参的 invoke，
  *        网络客户端能用（不是桌面专属）；桌面专属仍是 22 条
+ *   DO-8 会话 fork 的 `session:fork` 是 1 参的 invoke（`API_TABLE.session.fork`），网络客户端能用（不是桌面专属）
  */
 import { describe, expect, it } from 'vitest'
 import { API_OVERRIDE_CHANNELS, API_TABLE, DESKTOP_ONLY_CHANNELS } from '../apiTable'
@@ -117,5 +118,17 @@ describe('DO-7 phase D 的通道', () => {
       expect(Object.hasOwn(DESKTOP_ONLY_CHANNELS, channel), channel).toBe(false)
     }
     expect(KEYS).toHaveLength(22)
+  })
+})
+
+describe('DO-8 session:fork', () => {
+  it('DO-8 session:fork 是 1 参的 invoke、只出现一次、不是桌面专属', () => {
+    expect(API_TABLE.session.fork).toStrictEqual({
+      kind: 'invoke',
+      channel: 'session:fork',
+      args: 1
+    })
+    expect(tableMembers().filter((m) => m.channel === 'session:fork')).toHaveLength(1)
+    expect(Object.hasOwn(DESKTOP_ONLY_CHANNELS, 'session:fork')).toBe(false)
   })
 })

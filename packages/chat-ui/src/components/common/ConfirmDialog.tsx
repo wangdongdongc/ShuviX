@@ -14,8 +14,8 @@ export interface ConfirmDialogProps {
   description?: React.ReactNode
   /** 确认按钮文案 */
   confirmText: string
-  /** 取消按钮文案 */
-  cancelText: string
+  /** 取消按钮文案；不给 = 只有确认这一颗（纯说明框：确认就是「知道了」） */
+  cancelText?: string
   /** 确认按钮是否为危险操作样式（红色），默认 true */
   danger?: boolean
   /** 确认回调 */
@@ -66,12 +66,14 @@ export function ConfirmDialog({
           </div>
         </div>
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-border-secondary">
-          <button
-            onClick={handleClose}
-            className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
-          >
-            {cancelText}
-          </button>
+          {cancelText !== undefined && (
+            <button
+              onClick={handleClose}
+              className="px-4 py-1.5 rounded-lg text-xs text-text-secondary hover:bg-bg-hover transition-colors"
+            >
+              {cancelText}
+            </button>
+          )}
           <button
             onClick={onConfirm}
             className={`px-4 py-1.5 rounded-lg text-xs text-white transition-colors ${

@@ -1,6 +1,16 @@
 import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Copy, Check, Code, FileText, RefreshCw, Volume2, Square, Loader2 } from 'lucide-react'
+import {
+  Copy,
+  Check,
+  Code,
+  FileText,
+  GitBranch,
+  RefreshCw,
+  Volume2,
+  Square,
+  Loader2
+} from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
@@ -35,6 +45,11 @@ interface AssistantBubbleProps {
   isStreaming?: boolean
   /** 重新生成此消息（以这张卡的代表消息 id 调用；不给 = 不显示按钮）。传稳定的引用，免得 memo 每次都失效 */
   onRegenerate?: (assistantMsgId: string) => void
+  /**
+   * 从这张卡分支出一条新会话（以卡的最后一条消息 id 调用 —— fork 带着到它为止、连同它的工具结果的对话；
+   * 不给 = 不显示按钮）。传稳定的引用
+   */
+  onFork?: (assistantMsgId: string) => void
 }
 
 /**
@@ -49,7 +64,8 @@ interface AssistantBubbleProps {
 export const AssistantBubble = memo(function AssistantBubble({
   msgs,
   isStreaming,
-  onRegenerate
+  onRegenerate,
+  onFork
 }: AssistantBubbleProps): React.JSX.Element {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
@@ -225,7 +241,7 @@ export const AssistantBubble = memo(function AssistantBubble({
         {/* 操作行 —— 收在正文左下角，与用户消息气泡下方那行同形。
             仅在这条消息真有可操作项时渲染：流式期间全部按钮都不满足条件，
             渲染出来只会在每张卡底部留一条空行。 */}
-        {!isStreaming && (displayContent || onRegenerate) && (
+        {!isStreaming && (displayContent || onRegenerate || onFork) && (
           <div className="flex items-center gap-1 mt-1.5 text-text-tertiary">
             {/* 复制 */}
             {displayContent && (
@@ -275,6 +291,17 @@ export const AssistantBubble = memo(function AssistantBubble({
                 title={t('message.regenerate')}
               >
                 <RefreshCw size={12} />
+              </button>
+            )}
+            {/* 从这里分支出新会话 */}
+            {onFork && (
+              <button
+                onClick={() => onFork(anchor.id)}
+                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                title={t('message.fork')}
+                data-fork-reply
+              >
+                <GitBranch size={12} />
               </button>
             )}
           </div>

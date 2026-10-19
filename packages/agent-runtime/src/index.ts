@@ -593,7 +593,16 @@ export {
   type PlacedInfo,
   type WithdrawResult
 } from './durable/durableSession'
-export { type RollbackOptions, type RollbackRefusal, type RollbackResult } from './durable/rollback'
+export {
+  type BranchRefusal,
+  type BranchResult,
+  type IdleWorkResult,
+  type RollbackOptions,
+  type RollbackRefusal,
+  type RollbackResult
+} from './durable/rollback'
+// 会话 fork 的拷贝收尾（新会话的存储第一次打开之前）
+export { resetForkedSessionState } from './durable/sessionFork'
 // 会话在本进程里的记录（option A：锁 = 「agent 在本进程里初始化过」；显式喊停）
 export { type SessionProcessRecord } from './durable/processRecord'
 // 监控快照（P3-13）：`DurableSession.monitorSnapshot()` 的一行（宿主补标题 / 根显示名即 AgentMonitorEntry）

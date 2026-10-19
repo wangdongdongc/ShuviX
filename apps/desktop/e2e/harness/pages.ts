@@ -340,6 +340,16 @@ export interface ChatPane {
    * 编辑（lucide-pencil / lucide-square-pen）各几颗。只在对话滚动区里数 —— 侧栏、顶栏另有同名图标
    */
   historyControls(): Promise<{ rollback: number; regenerate: number; edit: number }>
+  /**
+   * 对话区里「从这里分支」按钮（AssistantBubble 的 `data-fork-reply`）的个数。悬停才浮现（opacity），但在 DOM
+   * 里 —— 给不给入口就看它在不在。只在对话滚动区里数
+   */
+  forkReplyCount(): Promise<number>
+  /**
+   * 点某张助手卡（`data-msg-id` = 卡的最后一条消息）上的「从这里分支」；卡或按钮不在返回 false。
+   * 程序化点击，opacity-0 不碍事
+   */
+  clickForkReply(msgId: string): Promise<boolean>
   /** StreamingFooter 里的重试倒计时行（`data-run-retry`）的文本；不在屏时为 null */
   retryRow(): Promise<string | null>
   /** 对话区里各张卡的「重试 ×N」提示（`data-retried-hint`）文本，DOM 序 */
@@ -799,6 +809,15 @@ export function chatPane(main: CdpClient): ChatPane {
           regenerate: count('.lucide-refresh-cw'),
           edit: count('.lucide-pencil, .lucide-square-pen, .lucide-pen')
         }
+      })()`),
+    forkReplyCount: () =>
+      main.eval<number>(`${SCROLLER}?.querySelectorAll('[data-fork-reply]').length ?? 0`),
+    clickForkReply: (msgId) =>
+      main.eval<boolean>(`(() => {
+        const btn = ${MSG(msgId)}?.querySelector('[data-fork-reply]')
+        if (!btn) return false
+        btn.click()
+        return true
       })()`),
     retryRow: () =>
       main.eval<string | null>(

@@ -31,6 +31,8 @@ export interface SidebarProps {
   onDeleteSession?: (id: string) => void
   /** 会话配置入口（桌面打开 SessionConfigDialog） */
   onConfigureSession?: (id: string) => void
+  /** 会话 fork（行菜单「分支会话」）；不给则菜单里没有这一项 */
+  onForkSession?: (id: string) => void
   /** 编辑项目（宿主经 overlays 自渲染对话框） */
   onEditProject?: (projectId: string) => void
   /** 已悬浮会话集合（caps.pin 时用于徽标 / 选中行为） */
@@ -64,6 +66,7 @@ export function Sidebar({
   onSelectSession,
   onDeleteSession,
   onConfigureSession,
+  onForkSession,
   onEditProject,
   pinnedSessionIds,
   footerActions,
@@ -177,6 +180,7 @@ export function Sidebar({
             onDelete={onDeleteSession}
             onEditProject={onEditProject}
             onConfigureSession={onConfigureSession}
+            onForkSession={onForkSession}
             projectsSection={{
               // 上方有插槽时才画分隔线（没有插槽时线会贴在列表最顶上）
               dividerAbove: !!groupsPrepend,

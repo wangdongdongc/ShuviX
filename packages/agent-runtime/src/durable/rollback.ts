@@ -10,10 +10,18 @@
  *  - **目标与 fork 点**（只读，PIN-19/20/24/25）：目标必须是当前对话里看得见的（fork 感知的历史）
  *    `pi.user` 条目；fork 点 = 目标本身（`keep`），否则当前对话里 id 比它小的最新条目（日期通知、压缩
  *    摘要照样可以是 fork 点）；一条都没有 → 没有前缀（建新对话）。
+ *  - **会话 fork 的分支点**（只读，`branchPoint`）：新会话那份拷贝上「从这条回复分支」—— 目标必须是当前
+ *    对话里看得见的 `pi.assistant`；分支点 = 目标连同紧跟着它的那串 `pi.toolResult`。
  *
  * 不依赖 Node / Electron。
  */
-import { UserEntry, type Conversation, type EntryId } from '@earendil-works/pi-durable'
+import {
+  AssistantEntry,
+  ToolResultEntry,
+  UserEntry,
+  type Conversation,
+  type EntryId
+} from '@earendil-works/pi-durable'
 import { backgroundContext as BG } from './context'
 
 // ─────────────────────────── 公共类型 ───────────────────────────
@@ -133,4 +141,54 @@ export async function rollbackForkPoint(
     BG
   )
   return page.items[0]?.id
+}
+
+// ─────────────────────────── 会话 fork 的分支点（只读） ───────────────────────────
+
+/** 分支点被拒的原因：目标不在当前对话里 / 不是助手消息 */
+export type BranchRefusal = 'not_found' | 'invalid_target'
+
+/** `branchAt` 的结果：成功 = 新的当前对话；被拒从不抛出（拒绝之前什么都没动） */
+export type BranchResult =
+  | { ok: true; conversationId: number }
+  | { ok: false; reason: BranchRefusal | 'closed' }
+
+/** `whileIdle` 的结果：会话在忙（有可续的工作）/ 句柄已关 → 工作没跑 */
+export type IdleWorkResult<T> = { ok: true; value: T } | { ok: false; reason: 'busy' | 'closed' }
+
+/** 往后扫工具结果时一页的条数（一条助手消息的工具调用很少超过这个数，超过就再翻一页） */
+const TOOL_RESULT_PAGE = 32
+
+/**
+ * 会话 fork 的分支点（只读）：目标必须是当前对话的历史（fork 感知）里看得见的 `pi.assistant` 条目 ——
+ * 没有这个 id → `not_found`，有但别的种类 → `invalid_target`。分支点 = 目标，连同紧跟其后、一条不断的
+ * `pi.toolResult`：它们是那条助手消息里工具调用的结果，少了它们 fork 上就留着没有结果的工具调用。
+ * 碰到第一条别的条目（下一条助手消息、用户消息、通知、压缩……）就停。
+ */
+export async function branchPoint(
+  conversation: Conversation,
+  targetEntryId: number
+): Promise<{ at: EntryId } | { refusal: BranchRefusal }> {
+  if (!Number.isSafeInteger(targetEntryId) || targetEntryId <= 0) return { refusal: 'not_found' }
+  const id = targetEntryId as EntryId
+  const page = await conversation.entries({ minEntryId: id, maxEntryId: id }, 1, undefined, BG)
+  const target = page.items[0]
+  if (target === undefined || target.id !== id) return { refusal: 'not_found' }
+  if (target.kind !== AssistantEntry.kind) return { refusal: 'invalid_target' }
+  let at = id
+  let cursor: Parameters<Conversation['entries']>[2]
+  for (;;) {
+    const next = await conversation.entries(
+      { minEntryId: (id + 1) as EntryId, order: 'ascending' },
+      TOOL_RESULT_PAGE,
+      cursor,
+      BG
+    )
+    for (const entry of next.items) {
+      if (entry.kind !== ToolResultEntry.kind) return { at }
+      at = entry.id
+    }
+    if (next.next === undefined) return { at }
+    cursor = next.next
+  }
 }

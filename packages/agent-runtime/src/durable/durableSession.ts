@@ -139,8 +139,11 @@ import { maybeAnnounceDate } from './prompt/dateNotice'
 import { renderSystemPrompt, replaySections, type PromptExtensions } from './prompt/sections'
 import {
   RollbackSection,
+  branchPoint,
   rollbackForkPoint,
   rollbackTargetRefusal,
+  type BranchResult,
+  type IdleWorkResult,
   type RollbackOptions,
   type RollbackResult
 } from './rollback'
@@ -468,6 +471,22 @@ export interface DurableSession {
    * 回退在途时开始的发送等它做完（PIN-22）。
    */
   rollbackTo(targetEntryId: number, options?: RollbackOptions): Promise<RollbackResult>
+  /**
+   * 会话 fork 的取样（在**源**会话上）：回退区段的独占里（受理输入 / 建锁的入口都等着，PIN-22）确认这条会话
+   * 此刻没有可续的工作 —— 与打开时清不清锁同一判据（活着的非辅助任务；压缩与 hook agent 不算）—— 才跑
+   * `work`（拷存储）。这样拷出来的那份打开时不会被当成有活要续：锁清掉、什么都不建、残留的压缩与辅助工作
+   * 打上中止标记。有 → `{ ok: false, reason: 'busy' }`，`work` 不跑；句柄已关 → `'closed'`。`work` 抛错
+   * 照原样抛出。只读：什么都不写、不开启调度器。
+   */
+  whileIdle<T>(work: () => Promise<T>): Promise<IdleWorkResult<T>>
+  /**
+   * 会话 fork 的分支（在新会话那份拷贝上，「从这条回复分支」）：当前对话换成到目标那条助手消息为止、连同
+   * 紧跟着它的工具结果（`branchPoint`）的 fork，与回退同一个提交（fork 空闲、收件箱为空，旧分支留在存储里）。
+   * 目标必须是当前对话里看得见的 `pi.assistant`；不合格 / 句柄已关 → `{ ok: false, reason }`，拒绝之前
+   * 只读、什么都不动。分支点就是当前对话的最新条目时什么都不写，原样答当前对话。在跑的工作照回退那样停下
+   * （拷贝取自空闲的源会话，正常情况下没有）。
+   */
+  branchAt(targetEntryId: number): Promise<BranchResult>
   /**
    * 撤回一条排着的用户输入（P3-11，Mapping #7）→ pi `abortSubmission`。只撤 `view.queue` 会显示的那种
    * （当前对话里、type input、mode steer / followUp、不是通知形状 —— 与投影同一判据，PIN-09）；别的一律
@@ -2383,6 +2402,53 @@ export class DurableSessionImpl implements DurableSession {
           // 停下写的条目（中止的助手消息……）都比目标新，fork 点不受影响
           const at = await rollbackForkPoint(conversation, targetEntryId, keep)
           const forkId = await this.commitRollback(conversation.id, at)
+          await this.deliverAfterRollback(pending)
+          return { ok: true, conversationId: forkId }
+        })
+      )
+    } catch (error) {
+      if (error instanceof SessionClosedError) return { ok: false, reason: 'closed' }
+      throw error
+    }
+  }
+
+  // ─── 会话 fork：取样 / 分支 ───────────────────────
+
+  async whileIdle<T>(work: () => Promise<T>): Promise<IdleWorkResult<T>> {
+    if (this.closedFlag) return { ok: false, reason: 'closed' }
+    try {
+      return await this.op(() =>
+        this.section.exclusive(async (drain): Promise<IdleWorkResult<T>> => {
+          this.assertOpen()
+          // 已经进来的受理（发送 / 建锁）先走完：它起的 run 此刻就在 live 里，下面的判据看得见
+          await drain()
+          if (this.hasResumableWork()) return { ok: false, reason: 'busy' }
+          return { ok: true, value: await work() }
+        })
+      )
+    } catch (error) {
+      if (error instanceof SessionClosedError) return { ok: false, reason: 'closed' }
+      throw error
+    }
+  }
+
+  async branchAt(targetEntryId: number): Promise<BranchResult> {
+    if (this.closedFlag) return { ok: false, reason: 'closed' }
+    try {
+      return await this.op(() =>
+        this.section.exclusive(async (drain): Promise<BranchResult> => {
+          this.assertOpen()
+          // 只读校验：拒绝之前什么都不动（与回退同一条纪律）
+          const conversation = await this.currentConversation()
+          const point = await branchPoint(conversation, targetEntryId)
+          if ('refusal' in point) return { ok: false, reason: point.refusal }
+          const latest = (await conversation.entries({}, 1, undefined, BG)).items[0]
+          if (latest?.id === point.at) return { ok: true, conversationId: conversation.id }
+          // 以下与回退同一套：取消在途的建锁、等已进来的受理、停下、一个提交里建 fork 并移指针
+          await this.agentLock.cancelCreation()
+          await drain()
+          const pending = await this.stopForRollback()
+          const forkId = await this.commitRollback(conversation.id, point.at)
           await this.deliverAfterRollback(pending)
           return { ok: true, conversationId: forkId }
         })

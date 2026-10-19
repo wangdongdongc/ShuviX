@@ -6,6 +6,7 @@ import type { KnowledgeEntry, KnowledgeMentionEntry } from '@shuvix/chat-protoco
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { AgentContinueResult } from '@shuvix/chat-protocol/chatApi'
+import type { SessionForkParams, SessionForkResult } from '@shuvix/chat-protocol/sessionFork'
 import type {
   AgentInitParams,
   AgentInitResult,
@@ -461,6 +462,8 @@ declare global {
         params: SessionUpdateKnowledgeBasesParams
       ) => Promise<{ success: boolean }>
       removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
+      /** 把这条会话复制成一条新会话（整段，或从某条回复分支）；被拒时什么都没建 */
+      fork: (params: SessionForkParams) => Promise<SessionForkResult>
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */
       getById: (id: string) => Promise<SessionInfo | null>

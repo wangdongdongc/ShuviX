@@ -5,6 +5,8 @@ import { sessionService } from '../services/sessionService'
 import { closeWatcherIfWorkingDirectory } from '../services/filesWatcherService'
 import { chatGateway, operationContext, createClientContext } from '../frontend'
 import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
+import { forkSession } from '../services/sessionFork'
+import type { SessionForkParams } from '@shuvix/chat-protocol/sessionFork'
 import type {
   SessionUpdateProjectParams,
   SessionUpdateEnabledToolsParams,
@@ -67,6 +69,12 @@ export function registerSessionHandlers(): void {
     sessionService.removeAllowListEntry(params.id, params.entry)
     return { success: true }
   })
+
+  /**
+   * 会话 fork：把这条会话复制成一条新会话（整段，或从 `messageId` 那条回复分支），放在它旁边。
+   * 被拒（形态不给 / 在忙 / 回复不在）时什么都没建；源会话从不被写
+   */
+  defineHandler('session:fork', (_ctx, params: SessionForkParams) => forkSession(params))
 
   /** 获取单个会话（含 workingDirectory） */
   defineHandler('session:getById', (_ctx, id: string) => {

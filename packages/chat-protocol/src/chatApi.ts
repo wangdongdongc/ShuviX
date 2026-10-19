@@ -35,6 +35,7 @@ import type { InputResponse } from './types/inputRequest'
 import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
 import type { ChromeTabBinding } from './chromeTabSession'
+import type { SessionForkParams, SessionForkResult } from './sessionFork'
 import type { ChatEvent, RuntimeStatus } from './events'
 import type {
   ConfigSharePayload,
@@ -854,6 +855,12 @@ export interface HostApi {
     updateKnowledgeBases: (
       params: SessionUpdateKnowledgeBasesParams
     ) => Promise<{ success: boolean }>
+    /**
+     * 把这条会话复制成一条新会话，放在它旁边（见 `sessionFork.ts`）：缺省带整段当前对话，给了 `messageId`
+     * 就从那条回复分支。被拒（`success: false` + 原因）时什么都没建；源会话从不受影响。可选 —— 不提供的
+     * 宿主界面上就没有 fork 的入口。
+     */
+    fork?: (params: SessionForkParams) => Promise<SessionForkResult>
     delete: (id: string) => Promise<{ success: boolean }>
     // 注：updateModelConfig / updateThinkingLevel 已移除 —— 这两项运行配置的唯一事实源是
     // 会话树，改动统一走 agent.setModel / setThinkingLevel（Agent 未创建时后端直接往树上

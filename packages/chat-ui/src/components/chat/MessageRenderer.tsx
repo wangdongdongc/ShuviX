@@ -43,6 +43,8 @@ interface MessageRendererProps {
   lastAssistantId: string | null
   onRollback?: (messageId: string) => void
   onRegenerate?: (assistantMsgId: string) => void
+  /** 从某张卡分支出新会话（每张定稿的卡都给；不给 = 没有这个按钮） */
+  onFork?: (assistantMsgId: string) => void
 }
 
 function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element {
@@ -111,7 +113,8 @@ function MessageBody({
   item,
   lastAssistantId,
   onRollback,
-  onRegenerate
+  onRegenerate,
+  onFork
 }: MessageRendererProps): React.JSX.Element | null {
   const { msg } = item
 
@@ -150,6 +153,7 @@ function MessageBody({
       // 直接把调用方给的（稳定的）回调交下去，卡以自己的代表消息 id 调用 —— 每次渲染新建一个闭包会让
       // 最后一张卡的 memo 永远失效
       onRegenerate={msg.id === lastAssistantId ? onRegenerate : undefined}
+      onFork={onFork}
     />
   )
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpCircle } from 'lucide-react'
-import { getChatApi, useChatStore } from '@shuvix/chat-ui'
+import { forkRefusalKey, getChatApi, useChatStore, useSessionFork } from '@shuvix/chat-ui'
 import { REGISTRY_NOTE_PROJECT_IDS } from '@shuvix/chat-protocol/registryNotes'
 import { isSkillProjectId } from '@shuvix/chat-protocol/skillNotes'
 import {
@@ -129,6 +129,9 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
     setActiveSessionId(id)
     if (pinnedSessionIds.has(id)) void window.api.pinChat.focus(id)
   }
+
+  /** 会话 fork（行菜单「分支会话」：整段当前对话复制成一条新会话）：建好就选中；被拒在 overlays 里说一声 */
+  const { forkSession, forkError, clearForkError } = useSessionFork(handleSelectSession)
 
   /** bots 能力注入（窄投影）—— 注入即点亮项目分组菜单里的「新建 Bot 会话」入口与 bot 单选 */
   const botsAdapter = useMemo(
@@ -651,6 +654,16 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
         />
       )}
       {deleteDialog}
+      {forkError && (
+        <ConfirmDialog
+          title={t('chat.forkFailedTitle')}
+          description={t(forkRefusalKey(forkError))}
+          confirmText={t('common.close')}
+          danger={false}
+          onConfirm={clearForkError}
+          onCancel={clearForkError}
+        />
+      )}
       {confirmingBotDelete && (
         <ConfirmDialog
           title={t('settings.botDeleteConfirmTitle')}
@@ -759,6 +772,7 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
       onSelectSession={handleSelectSession}
       onDeleteSession={handleDelete}
       onConfigureSession={setConfiguringSessionId}
+      onForkSession={(id) => void forkSession(id)}
       onEditProject={setEditingProjectId}
       footerActions={
         // 设置行右侧：有更新时的提示（点开设置的「关于」页）

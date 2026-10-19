@@ -4,7 +4,8 @@
  *  - FakeDurableSession：可设的 `lock` / busy / interrupted / 挂起询问；submitUser / steer / followUp /
  *    continue / resumeInterrupted 的结果按脚本给（缺省 `{}`），requestState / lastAnswer / drivenRun /
  *    taskLiveness / agentInfo（按对话，`infos`）也按脚本给；`destroyAgent` / `abort` 可挂闸门；
- *    `rollbackTo` 按 `rollbackResult` 给（P3-10a），`withdrawQueued` 按 `withdrawResult` 给（P3-11）；每次调用
+ *    `rollbackTo` 按 `rollbackResult` 给（P3-10a），`withdrawQueued` 按 `withdrawResult` 给（P3-11），会话 fork 的
+ *    `whileIdle` / `branchAt` 按 `idleRefusal` / `branchResult` 给；每次调用
  *    记进 `calls`。
  *    P2-10 的脚本：`submitUser` 带一个脚本里认得的 requestId（'pending' / 'settled'）= 重新挂上 —— 不调
  *    受理回调（P2-09 PIN-02）；`resumeInterrupted` 在被中断时把它变成在跑（interrupted=false, busy=true）；
@@ -40,6 +41,8 @@ import type {
   NotifyOptions,
   PendingInputHooks,
   RequestState,
+  BranchResult,
+  IdleWorkResult,
   RollbackOptions,
   RollbackResult,
   WithdrawResult,
@@ -429,6 +432,26 @@ export class FakeDurableSession implements DurableSession {
     this.calls.push(['rollbackTo', targetEntryId, ...(options === undefined ? [] : [options])])
     if (this.rollbackResult.ok) this.lock = undefined
     return this.rollbackResult
+  }
+
+  /**
+   * 会话 fork 的取样：`idleRefusal` 给了就按它拒绝（`work` 不跑），否则在跑 / 被中断 → busy，其余跑 `work`
+   */
+  idleRefusal: 'busy' | 'closed' | undefined = undefined
+
+  async whileIdle<T>(work: () => Promise<T>): Promise<IdleWorkResult<T>> {
+    this.calls.push(['whileIdle'])
+    if (this.idleRefusal !== undefined) return { ok: false, reason: this.idleRefusal }
+    if (this.busy || this.interrupted) return { ok: false, reason: 'busy' }
+    return { ok: true, value: await work() }
+  }
+
+  /** 会话 fork 分支的结果脚本；缺省 = 一个新对话 2 */
+  branchResult: BranchResult = { ok: true, conversationId: 2 }
+
+  async branchAt(targetEntryId: number): Promise<BranchResult> {
+    this.calls.push(['branchAt', targetEntryId])
+    return this.branchResult
   }
 
   /** `withdrawQueued` 的脚本结果（P3-11） */

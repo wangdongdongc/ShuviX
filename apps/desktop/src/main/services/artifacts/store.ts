@@ -11,7 +11,7 @@
  *    「看得见的图认领不到、认领到的图看不见」。代价是父会话要展示子会话的产物时得沿
  *    会话树找一层，那一步在 `artifact:read` 里做。
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { slugify } from '@shuvix/agent-runtime'
 import { SANDBOX_CSP } from '@shuvix/chat-protocol/utils/interactiveFence'
@@ -175,6 +175,21 @@ export function writeArtifact(params: {
   const content = ext === 'html' ? withStandaloneCsp(params.content) : params.content
   writeFileSync(path, content, 'utf-8')
   return { name, title: titleOf(content, name), path }
+}
+
+/**
+ * 会话 fork：把源会话的 artifacts 整个目录拷给新会话 —— fork 的历史里引用着这些文件（```artifact 按会话
+ * 自己的目录解析），拷过去才看得见、认领得到。源会话没有目录就什么都不做。拷不过去抛错，由调用方收场。
+ */
+export function copySessionArtifacts(fromSessionId: string, toSessionId: string): void {
+  if (!isSafeSessionId(fromSessionId) || !isSafeSessionId(toSessionId)) return
+  const from = getSessionArtifactsDir(fromSessionId)
+  if (!existsSync(from)) return
+  cpSync(from, getSessionArtifactsDir(toSessionId), {
+    recursive: true,
+    force: false,
+    errorOnExist: true
+  })
 }
 
 /** 会话删除时的级联 —— 目录整删（挂在 sessionService.delete 上） */

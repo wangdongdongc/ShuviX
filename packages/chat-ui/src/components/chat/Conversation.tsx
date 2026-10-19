@@ -9,6 +9,7 @@ import {
   selectPendingPrompt
 } from '../../stores/chatStore'
 import { useChatActions } from '../../hooks/useChatActions'
+import { forkRefusalKey, selectSessionForkable, useSessionFork } from '../../hooks/useSessionFork'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { buildVisibleItems, isAssistantMessage } from './conversationItems'
@@ -302,7 +303,8 @@ export function Conversation({
     rootRef.current?.style.setProperty('--chat-scrollbar-w', `${w}px`)
   }, [])
 
-  const focusMode = useChatHost().appearance.focusMode
+  const chatHost = useChatHost()
+  const focusMode = chatHost.appearance.focusMode
   // 有待处理输入（ask / 审批）时不淡化：它们在等用户响应，鼠标没悬浮也必须一眼看见
   const hasPendingInputs = useChatStore((s) => selectPendingInputs(s).length > 0)
   const dim = focusMode && !hasPendingInputs
@@ -319,6 +321,20 @@ export function Conversation({
   // PIN-07：会话不能回退（旧格式只读 / 没有存储）就不给回退与重新生成的入口
   const onRollback = canRollback ? handleRollback : undefined
   const onRegenerate = canRollback ? handleRegenerate : undefined
+  // 从某条回复分支出新会话：宿主能 fork、这个窗口能切去别的会话（悬浮窗 / md 窗口不能）、这条会话的形态给
+  // 且此刻空闲 —— 在跑时不给（拷贝要等它停下，旧卡上的按钮点了也只会被拒）
+  const {
+    available: forkAvailable,
+    forkSession,
+    forkError,
+    clearForkError
+  } = useSessionFork(chatHost.openSession)
+  const forkable = useChatStore((s) => selectSessionForkable(s, sessionId))
+  const handleFork = useCallback(
+    (assistantMsgId: string) => void forkSession(sessionId, assistantMsgId),
+    [forkSession, sessionId]
+  )
+  const onFork = forkAvailable && chatHost.openSession && forkable ? handleFork : undefined
 
   // 预构建可见消息列表，messages 不变时复用缓存。
   // 注：被压缩掉的历史不在其中 —— message.list 走 buildContextEntries，自带压缩过滤，
@@ -352,9 +368,10 @@ export function Conversation({
         lastAssistantId={lastAssistantId}
         onRollback={onRollback}
         onRegenerate={onRegenerate}
+        onFork={onFork}
       />
     ),
-    [lastAssistantId, onRollback, onRegenerate]
+    [lastAssistantId, onRollback, onRegenerate, onFork]
   )
 
   return (
@@ -412,6 +429,18 @@ export function Conversation({
           cancelText={t('common.cancel')}
           onConfirm={confirmRollback}
           onCancel={cancelRollback}
+        />
+      )}
+
+      {/* fork 被拒的说明（fork 不毁任何东西，所以事前不确认，只在没做成时说一声） */}
+      {forkError && (
+        <ConfirmDialog
+          title={t('chat.forkFailedTitle')}
+          description={t(forkRefusalKey(forkError))}
+          confirmText={t('common.close')}
+          danger={false}
+          onConfirm={clearForkError}
+          onCancel={clearForkError}
         />
       )}
     </>

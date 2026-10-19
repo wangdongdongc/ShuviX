@@ -90,7 +90,15 @@ vi.mock('@shuvix/chat-ui', async () => {
       session: { list: async () => rec.state.sessions, create: async () => ({ id: 'created' }) },
       project: { list: async () => [], create: async () => ({ id: 'p' }) },
       app: { openSettings: async () => undefined }
-    })
+    }),
+    // 会话 fork（行菜单「分支会话」）：这里只看三种形态，fork 本身不走
+    useSessionFork: () => ({
+      available: false,
+      forkSession: async () => undefined,
+      forkError: null,
+      clearForkError: () => undefined
+    }),
+    forkRefusalKey: (reason: string) => reason
   }
 })
 

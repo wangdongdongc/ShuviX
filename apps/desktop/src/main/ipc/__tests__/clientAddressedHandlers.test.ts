@@ -84,6 +84,7 @@ vi.mock('../../frontend', () => ({
   createClientContext: vi.fn()
 }))
 vi.mock('../../services/pinnedChatService', () => ({ isPinned: vi.fn(), unpin: vi.fn() }))
+vi.mock('../../services/sessionFork', () => ({ forkSession: vi.fn() }))
 
 import { attachIpcAdapter } from '../ipcAdapter'
 import { registerTtsHandlers } from '../ttsHandlers'
