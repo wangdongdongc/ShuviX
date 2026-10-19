@@ -1013,7 +1013,8 @@ describe('SessionTool — §19 渲染', () => {
     expect(d).toContain('for="user"')
     expect(d).toContain('`<blocked-on-user-approval>`')
     expect(d).toContain('only the user can answer')
-    expect(d).toContain('steer it, wait, or create another')
+    expect(d).toContain('steer it or wait; create another only when the work does not belong to it')
+    expect(d).toMatch(/Give each sub-session a responsibility[\s\S]*name it in the title/)
     expect(d).not.toContain('waits for the USER to approve something')
   })
 

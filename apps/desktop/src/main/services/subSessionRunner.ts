@@ -643,7 +643,7 @@ class SubSessionRunner {
         error:
           `Sub-session "${child.title}" is already running a turn you just started. ` +
           `One sub-session runs one turn at a time — wait for it with "wait-for-sub-sessions", ` +
-          `or create another sub-session to work in parallel.`
+          `or, if this work does not belong to it, create another sub-session for it.`
       }
     }
     const requestId =

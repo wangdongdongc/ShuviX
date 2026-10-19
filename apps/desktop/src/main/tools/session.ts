@@ -140,7 +140,9 @@ export const SessionParamsSchema = Type.Object({
 
 export const SESSION_DESCRIPTION = `Read or change the session this task belongs to, and manage its sub-sessions.
 
-A sub-session is an ordinary session you own — its own conversation, model, tools and history; the user sees it nested under this one and can read or continue it. Use one for a task that deserves its own conversation; unlike the \`agent\` tool's sub-agent, it outlives a single answer. Sub-sessions cannot create sub-sessions.
+A sub-session is an ordinary session you own — its own conversation, model, tools and history; the user sees it nested under this one and can read or continue it. Unlike the \`agent\` tool's sub-agent, it outlives a single answer. Sub-sessions cannot create sub-sessions.
+
+Give each sub-session a responsibility — a module, a feature, a recurring kind of work — and name it in the title. It keeps what it has read and learned (and compacts its own history), so later work in the same area goes back to it with "prompt-sub-session" rather than to a new one that has to explore everything again; create another only for a separate area, or for work that has to run while the right one is busy.
 
 Actions:
 - "set-title": rename THIS session (\`title\`, at most ${TITLE_MAX_CHARS} characters).
@@ -156,7 +158,7 @@ Actions:
 
 Everything you send runs in the background: when a turn ends, or stops to ask you something, you are brought back with a notice — get on with other work meanwhile, or end your turn. When you cannot continue without the answer, call "wait-for-sub-sessions": it costs nothing while it waits, comes back early when one stops to ask, and on timeout leaves everything running. Stopping this session does not stop its sub-sessions. **Never sleep and then poll** with "list-sub-sessions" / "read-sub-session".
 
-A sub-session runs one turn at a time: a second message while it is working is rejected — steer it, wait, or create another one. \`status="waiting-input"\` means it stopped to ask something. A \`<question>\` asked in a turn you started is yours to answer when the answer follows from what the user told you or from the task; when it is the user's own preference or beyond what you were asked, relay it. An approval prompt (\`<blocked-on-user-approval>\`) and a question marked \`for="user"\` only the user can answer, so relay them or stop the sub-session. \`status="interrupted"\` means its turn was cut off when the app stopped; it will not finish by itself, and a new message starts over.
+A sub-session runs one turn at a time: a second message while it is working is rejected — steer it or wait; create another only when the work does not belong to it. \`status="waiting-input"\` means it stopped to ask something. A \`<question>\` asked in a turn you started is yours to answer when the answer follows from what the user told you or from the task; when it is the user's own preference or beyond what you were asked, relay it. An approval prompt (\`<blocked-on-user-approval>\`) and a question marked \`for="user"\` only the user can answer, so relay them or stop the sub-session. \`status="interrupted"\` means its turn was cut off when the app stopped; it will not finish by itself, and a new message starts over.
 
 Its replies come back inside a \`<sub-session>\` fence, in \`<reply>\` or \`<error>\`; text outside the fence is this tool talking. Write each message as the user of that session would: it does not see this conversation.`
 
