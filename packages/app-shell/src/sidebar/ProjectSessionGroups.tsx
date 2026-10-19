@@ -22,8 +22,10 @@ import type { KnowledgeGroupAdapter } from './KnowledgeTreeView'
 
 export const TEMP_GROUP_KEY = '__no_project__'
 
-/** 每组默认渲染的会话数，也是每点一次「查看更多」再多放出的条数；超出部分折在按钮后面 */
-const GROUP_VISIBLE_LIMIT = 20
+/** 每组先给几条（超出的折在「查看更多」后面）—— 侧栏一眼该看得完，旧会话按需再放 */
+const GROUP_VISIBLE_LIMIT = 8
+/** 每点一次「查看更多」再多放出的条数 */
+const GROUP_PAGE_SIZE = 20
 
 export interface ProjectSessionGroupsProps {
   /** 项目骨架（id + 名称）；分组以项目为骨架、会话填入，末尾追加临时对话组 */
@@ -333,17 +335,23 @@ export function ProjectSessionGroups({
             onClick={() =>
               setExtraVisible((prev) => ({
                 ...prev,
-                [groupKey]: (prev[groupKey] ?? 0) + GROUP_VISIBLE_LIMIT
+                [groupKey]: (prev[groupKey] ?? 0) + GROUP_PAGE_SIZE
               }))
             }
             // 与同组会话项一致：活动组内逐项淡化（本行永不是选中项，故恒淡）；
             // 非活动组由 SessionGroup 整组淡化，这里不再叠加，否则 0.3×0.3 几乎不可见
-            className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer text-text-tertiary hover:bg-bg-hover/50 hover:text-text-primary transition-opacity duration-200 ${
+            data-view-more=""
+            className={`sb-row cursor-pointer text-text-tertiary hover:bg-bg-hover/60 hover:text-text-primary transition-opacity duration-200 ${
               dim && activeGroupKey === groupKey ? 'opacity-30 hover:opacity-100' : ''
             }`}
           >
-            <span className="w-[11px] flex-shrink-0" />
-            <span className="text-[13px] truncate">{t('sidebar.viewMore')}</span>
+            <span className="sb-icon" />
+            <span className="truncate">
+              {t('sidebar.viewMore')}
+              <span className="ml-1.5 tabular-nums text-text-tertiary/70">
+                {groupSessions.length - shownSessions.length}
+              </span>
+            </span>
           </div>
         )}
       </SessionGroup>

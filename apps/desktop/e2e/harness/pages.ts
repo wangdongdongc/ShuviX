@@ -2219,8 +2219,13 @@ async function pickFromMenu(
 export function sidebarPane(main: CdpClient): SidebarPane {
   // 「项目知识库」文件夹行（`data-project-knowledge`）同样是「div > div > span.truncate」的形状，
   // 但它不是会话 —— 每个项目组都有一行，不滤掉就会混进 titles() / openSession 里
-  const ROWS = `[...document.querySelectorAll('div[class*="cursor-pointer"]')]
-    .filter((d) => d.querySelector(':scope > div > span.truncate') && !d.hasAttribute('data-project-knowledge'))`
+  // 每组先只放 8 条，更早的折在「查看更多」（`data-view-more`）后面：按标题找行之前先把它们都点开 ——
+  // 点开是下一帧的事，这一次查不到的行由调用方的 until 在下一轮拿到
+  const ROWS = `(() => {
+    for (const more of document.querySelectorAll('[data-view-more]')) more.click()
+    return [...document.querySelectorAll('div[class*="cursor-pointer"]')]
+      .filter((d) => d.querySelector(':scope > div > span.truncate') && !d.hasAttribute('data-project-knowledge'))
+  })()`
   /** 按标题定位会话行（标题在行内那层 span.truncate，与顶栏标题区分） */
   const ROW = (title: string): string =>
     `${ROWS}.find(
@@ -5019,8 +5024,8 @@ export function hooksSidebarPane(main: CdpClient): HooksSidebarPane {
 // 侧栏「技能」分组（SkillGroup）+ 「添加外部技能目录」取名框（SkillDirDialog）
 //
 // 这一组比智能体那组**多一层**：技能是目录，所以目录成行、可折叠（`[data-skill-folder]`），
-// 而默认目录（`~/.shuvix/skills/`）刻意**不画文件夹行**，它的技能平铺在最后（`pl-2.5` 而非
-// `pl-6`）。于是「这一行归谁」不能靠全局选择器回答 —— 平铺行与某个目录下的行长得一样，只差
+// 而默认目录（`~/.shuvix/skills/`）刻意**不画文件夹行**，它的技能平铺在最后（不带 `sb-depth-1`，
+// 不再进一级）。于是「这一行归谁」不能靠全局选择器回答 —— 平铺行与某个目录下的行长得一样，只差
 // 缩进。`rowsUnder(dirName)` 从那行文件夹的 `nextElementSibling`（AnimatedCollapse 那层）里取，
 // `flatRows()` 取分组正文的**直接子元素**里带 `data-skill-row` 的那些，两者合起来才是全集。
 //
@@ -5050,7 +5055,7 @@ export interface SkillRowShot {
   label: string
   /** 变淡：技能自己关了**或**整组关了（两者共用 `data-skill-off`） */
   off: boolean
-  /** 缩进（`pl-6`）= 属于某个目录行；默认目录的平铺行不缩进 */
+  /** 缩进（`sb-depth-1`：再进一级）= 属于某个目录行；默认目录的平铺行不缩进 */
   indented: boolean
   active: boolean
 }
@@ -5125,7 +5130,7 @@ export function skillsSidebarPane(main: CdpClient): SkillsSidebarPane {
     name: r.getAttribute('data-skill-row') ?? '',
     label: (r.querySelector('span.truncate')?.textContent ?? '').trim(),
     off: r.hasAttribute('data-skill-off'),
-    indented: r.className.includes('pl-6'),
+    indented: r.className.includes('sb-depth-1'),
     active: r.className.includes('bg-bg-active')
   }))`
   const FOLDER_SHOT = `((f) => ({

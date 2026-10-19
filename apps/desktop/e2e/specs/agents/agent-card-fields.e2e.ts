@@ -329,8 +329,12 @@ const sessionRow = (title: string): string =>
     .filter((x) => x.row && x.text === ${JSON.stringify(title)})[0]?.row`
 
 async function clickSession(title: string): Promise<void> {
+  // 每组先只放 8 条，更早的折在「查看更多」后面（这里一个项目里有十几个笔记本）：先都点开
   await until(
-    () => app.main.eval<boolean>(`${sessionRow(title)} != null`),
+    () =>
+      app.main.eval<boolean>(
+        `(document.querySelectorAll('[data-view-more]').forEach((b) => b.click()), ${sessionRow(title)} != null)`
+      ),
     `session row "${title}"`
   )
   await app.main.eval(`${sessionRow(title)}.click()`)

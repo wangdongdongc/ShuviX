@@ -751,7 +751,11 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
   // 手机布局的「资料库」页：只有那几组注册表（不画项目 / 会话、不画底部设置栏）
   if (mode === 'library') {
     return (
-      <div className="h-full overflow-y-auto pl-2 pr-1 py-1 bg-bg-secondary/50" data-mobile-list="">
+      <div
+        className="h-full overflow-y-auto px-3 pb-4"
+        data-mobile-list=""
+        data-sidebar-density="touch"
+      >
         {groups}
         {overlays}
       </div>
@@ -763,6 +767,7 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
     <SharedSidebar
       caps={full ? { windowDrag: true, pin: true } : {}}
       hideFooter={!full}
+      density={full ? 'regular' : 'touch'}
       bots={botsAdapter}
       projectKnowledge={knowledgeAdapter}
       projects={projects}
@@ -796,7 +801,17 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
           </button>
         ) : undefined
       }
-      groupsPrepend={full ? groups : undefined}
+      groupsPrepend={
+        full ? (
+          <>
+            {/* 资料库那几组也是一节（与「项目」「临时对话」同一副分节标题）：Finder 侧栏一节一节往下排 */}
+            <div className="sb-section" data-sidebar-section="library">
+              {t('sidebar.library')}
+            </div>
+            {groups}
+          </>
+        ) : undefined
+      }
       overlays={overlays}
     />
   )

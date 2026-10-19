@@ -50,6 +50,7 @@
     "exportSession": "セッションをエクスポート",
     "forkSession": "セッションを分岐",
     "viewMore": "もっと表示",
+    "library": "ライブラリ",
     "knowledgeGroup": "ナレッジベース",
     "knowledgeEmpty": "項目はまだありません — エージェントやあなたが ~/.shuvix/knowledge/ に追加できます",
     "botsGroup": "Bots",
@@ -1489,6 +1490,7 @@
     "newChat": "新しいチャット",
     "newChatIn": "チャットを始める場所",
     "tempChat": "一時チャット",
-    "noTasks": "この会話にはバックグラウンドタスクがありません"
+    "noTasks": "この会話にはバックグラウンドタスクがありません",
+    "fontSizeHint": "この端末の文字サイズだけを変えます。デスクトップや他の端末には影響しません。"
   }
 }

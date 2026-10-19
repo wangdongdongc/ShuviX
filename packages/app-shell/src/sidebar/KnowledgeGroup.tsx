@@ -173,9 +173,7 @@ export function KnowledgeGroup({ adapter }: KnowledgeGroupProps): React.JSX.Elem
           />
           {drafts.draft?.kind === 'base' && renderKnowledgeDraft(drafts, 0)}
           {tree.files.length === 0 && tree.dirs.length === 0 && !drafts.draft && (
-            <div className="px-3 py-2 text-xs text-text-tertiary">
-              {t('sidebar.knowledgeEmpty')}
-            </div>
+            <div className="sb-hint">{t('sidebar.knowledgeEmpty')}</div>
           )}
         </>
       )}

@@ -49,6 +49,11 @@ export interface SidebarProps {
   projectKnowledge?: KnowledgeGroupAdapter
   /** 不画底部的设置栏（web 客户端的手机布局：设置是底部标签栏里单独的一页） */
   hideFooter?: boolean
+  /**
+   * 行的尺寸（base.css 的 .sb-row 那组变量）：`regular`（缺省，桌面 —— Finder 侧栏的 24px 一行）/ `touch`
+   * （手机 —— 同一副排版放大到 40px、16px 字）
+   */
+  density?: 'regular' | 'touch'
 }
 
 /**
@@ -74,7 +79,8 @@ export function Sidebar({
   overlays,
   bots,
   projectKnowledge,
-  hideFooter = false
+  hideFooter = false,
+  density = 'regular'
 }: SidebarProps): React.JSX.Element {
   const { t } = useTranslation()
   const { dim } = useFocusDim()
@@ -149,7 +155,10 @@ export function Sidebar({
   const showHeader = needDragStrip
 
   return (
-    <div className="flex flex-col h-full bg-bg-secondary/50">
+    <div
+      data-sidebar-density={density}
+      className={`flex flex-col h-full ${density === 'touch' ? '' : 'bg-bg-secondary/50'}`}
+    >
       {/* 窗口拖拽带（macOS）；打开文件夹在「项目」分节头的菜单里 */}
       {showHeader && (
         <div
@@ -158,7 +167,10 @@ export function Sidebar({
       )}
 
       {/* 会话列表 */}
-      <div className="flex-1 overflow-y-auto pl-2 pr-1 py-1 no-scrollbar">
+      {/* 左右同宽的边：选中的那一块是内缩的圆角块（Finder），两边要对称 */}
+      <div
+        className={`flex-1 overflow-y-auto no-scrollbar ${density === 'touch' ? 'px-3 pb-4' : 'px-2.5 pb-3'}`}
+      >
         {groupsPrepend}
         {isEmpty ? (
           // 空态提示本身就是那句「打开一个文件夹作为项目」—— 点它即打开文件夹

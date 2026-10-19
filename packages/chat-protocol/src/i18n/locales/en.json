@@ -50,6 +50,7 @@
     "exportSession": "Export Session",
     "forkSession": "Fork Session",
     "viewMore": "View more",
+    "library": "Library",
     "knowledgeGroup": "Knowledge Base",
     "knowledgeEmpty": "No entries yet — agents and you can add notes under ~/.shuvix/knowledge/",
     "botsGroup": "Bots",
@@ -1489,6 +1490,7 @@
     "newChat": "New chat",
     "newChatIn": "Start a chat in",
     "tempChat": "Temporary chat",
-    "noTasks": "No background tasks in this conversation"
+    "noTasks": "No background tasks in this conversation",
+    "fontSizeHint": "Only changes the text size on this device, not on the desktop or other devices."
   }
 }

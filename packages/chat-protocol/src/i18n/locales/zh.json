@@ -50,6 +50,7 @@
     "exportSession": "导出会话",
     "forkSession": "分支会话",
     "viewMore": "查看更多",
+    "library": "资料库",
     "knowledgeGroup": "知识库",
     "knowledgeEmpty": "暂无条目 —— agent 或你都可以往 ~/.shuvix/knowledge/ 里添加",
     "botsGroup": "Bots",
@@ -1489,6 +1490,7 @@
     "newChat": "新会话",
     "newChatIn": "在哪里新建会话",
     "tempChat": "临时会话",
-    "noTasks": "这个会话还没有后台任务"
+    "noTasks": "这个会话还没有后台任务",
+    "fontSizeHint": "只改这台设备上的字号，桌面和别的设备不受影响"
   }
 }

@@ -8,8 +8,8 @@
  * 同一份菜单，见 RowMenuButton）。菜单由容器组装 —— 一行能做什么取决于宿主注入了哪些回调，
  * 那份判断本来就在容器手里（ProjectSessionGroups）。
  *
- * 子会话（`isSub` / `subCount`）借的是**知识库那套文件夹/文件语汇**：缩进用行内
- * paddingLeft（同 KnowledgeGroup 的 `indent(depth)`，不是每行一条竖线），折叠钮就是行首那枚
+ * 子会话（`isSub` / `subCount`）借的是**知识库那套文件夹/文件语汇**：缩进是 .sb-row 的一级
+ * （`sb-depth-1`，同知识库子目录；不是每行一条竖线），折叠钮就是行首那枚
  * 图标（同 KnowledgeGroup 的 FolderClosed/FolderOpen 整行可点），数量是标题后一个暗淡的
  * 小数字而不是一枚药丸。有子会话的行，行首图标外面包一层折叠钮：
  * 普通会话的图标换成 MessagesSquare（两片叠起来的对话框 = 这里不止一场对话），bot / 悬浮
@@ -36,7 +36,7 @@ export interface SessionItemProps {
   isNotebook?: boolean
   /** bot 会话（绑定了 bot）—— 显示 bot 图标；与 isNotebook 互斥（创建时定死） */
   isBot?: boolean
-  /** 子会话行：缩进一级（行内 paddingLeft，同知识库的文件行）。其余与顶层行完全一致 */
+  /** 子会话行：缩进一级（`sb-depth-1`，同知识库的子目录行）。其余与顶层行完全一致 */
   isSub?: boolean
   /** 拥有的子会话数（>0 时行首图标可点折叠 —— 普通会话换成 MessagesSquare；标题后跟一个计数） */
   subCount?: number
@@ -69,24 +69,20 @@ export function SessionItem({
 }: SessionItemProps): React.JSX.Element {
   const { t } = useTranslation()
   const pulse = isStreaming ? 'animate-pulse ' : ''
-  const lit = isStreaming || active ? 'text-accent' : 'text-text-tertiary/40'
+  const lit = isStreaming || active ? 'text-accent' : 'text-text-tertiary'
   // 行首图标说的是「这是哪种会话」；有子会话时它外面再包一层折叠钮（见下）
   const icon = isBot ? (
-    <Bot size={11} className={`flex-shrink-0 ${pulse}${lit}`} />
+    <Bot className={`sb-icon ${pulse}${lit}`} />
   ) : isNotebook ? (
-    <FileText
-      size={11}
-      className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/40'}`}
-    />
+    <FileText className={`sb-icon ${active ? 'text-accent' : 'text-text-tertiary'}`} />
   ) : isPinned ? (
-    <PictureInPicture2 size={11} className={`flex-shrink-0 ${pulse}text-accent`} />
+    <PictureInPicture2 className={`sb-icon ${pulse}text-accent`} />
   ) : subCount > 0 ? (
-    <MessagesSquare size={11} className={`flex-shrink-0 ${pulse}${lit}`} />
+    <MessagesSquare className={`sb-icon ${pulse}${lit}`} />
   ) : (
     <MessageSquare
-      size={11}
       fill={active || isStreaming ? 'currentColor' : 'none'}
-      className={`flex-shrink-0 ${pulse}${lit}`}
+      className={`sb-icon ${pulse}${lit}`}
     />
   )
   return (
@@ -100,16 +96,11 @@ export function SessionItem({
       data-sub={isSub ? '' : undefined}
       data-sub-count={subCount > 0 ? subCount : undefined}
       data-subs={subCount > 0 ? (subCollapsed ? 'collapsed' : 'expanded') : undefined}
-      // 缩进口径与知识库一致：基准 10px（pl-2.5），每层再进 12px
-      style={isSub ? { paddingLeft: 22 } : undefined}
-      className={`group relative flex items-center gap-1.5 ${
-        isSub ? 'pr-1.5' : 'pl-2.5 pr-1.5'
-      } py-0.5 cursor-pointer transition-opacity duration-200 ${
+      // 缩进口径与知识库一致（base.css 的 .sb-row）：子会话再进一级，图标对齐父行的标签
+      className={`group relative sb-row cursor-pointer transition-opacity duration-200 ${isSub ? 'sb-depth-1' : ''} ${
         active
           ? 'bg-bg-active/80 text-text-primary'
-          : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
-              dim ? 'opacity-30 hover:opacity-100' : ''
-            }`
+          : `text-text-primary hover:bg-bg-hover/60 ${dim ? 'opacity-30 hover:opacity-100' : ''}`
       }`}
     >
       {subCount > 0 ? (
@@ -122,19 +113,19 @@ export function SessionItem({
             onToggleSubs?.(session.id)
           }}
           title={t('sidebar.subSessions', { count: subCount })}
-          className="flex-shrink-0 -m-0.5 p-0.5 rounded hover:bg-bg-active"
+          className="flex-shrink-0 -m-1 p-1 rounded hover:bg-bg-active"
         >
           {icon}
         </button>
       ) : (
         icon
       )}
-      <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[13px] group-hover:pr-6">
+      <div className="flex-1 min-w-0 flex items-center gap-1.5 group-hover:pr-6">
         <span className="truncate">{session.title}</span>
         {subCount > 0 && (
           <span
-            className={`shrink-0 text-[10px] tabular-nums ${
-              subCollapsed ? 'text-text-tertiary/60' : 'text-text-tertiary/40'
+            className={`shrink-0 text-[0.8em] tabular-nums ${
+              subCollapsed ? 'text-text-tertiary' : 'text-text-tertiary/60'
             }`}
           >
             {subCount}

@@ -103,8 +103,12 @@ const DRAFT_PLACEHOLDER: Record<DraftKind, string> = {
   entry: 'knowledge.newEntryPlaceholder'
 }
 
-/** 行缩进：基准同 SessionItem 的 pl-2.5（10px），每层再进 12px —— 与侧栏其余各组一致 */
-const indent = (depth: number): number => 10 + depth * 12
+/**
+ * 行缩进：base.css 的 .sb-row（与侧栏其余各组同一套）—— 每层再进一级（一级 = 图标宽 + 间距，子行的图标对齐
+ * 父行的标签）；所在分组的那一级由 .sb-body 垫上
+ */
+const depthStyle = (depth: number): React.CSSProperties =>
+  ({ '--sb-depth': depth }) as React.CSSProperties
 
 /** 活动会话若是知识库笔记本，换算出它打开的条目 id（分组头 / 文件夹高亮 + 命中行选中态） */
 export function useActiveKnowledgeNotePath(): string | null {
@@ -198,7 +202,7 @@ export function renderKnowledgeDraft(drafts: KnowledgeDraftState, depth: number)
     drafts.draft && (
       <KnowledgeDraftRow
         kind={drafts.draft.kind}
-        paddingLeft={indent(depth)}
+        depth={depth}
         busy={drafts.creating}
         error={drafts.error}
         onCommit={(v) => void drafts.commit(v)}
@@ -339,27 +343,20 @@ export function KnowledgeTreeView({
         onClick={() => void adapter.open(e.path, e.title)}
         onContextMenu={(ev) => openRowMenu(e, ev)}
         title={`${e.path}${e.description ? ` — ${e.description}` : ''}`}
-        style={{ paddingLeft: indent(d) }}
-        className={`group relative flex items-center gap-1.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+        style={depthStyle(d)}
+        className={`group relative sb-row cursor-pointer transition-opacity duration-200 ${
           active
             ? 'bg-bg-active/80 text-text-primary'
-            : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
+            : `text-text-primary hover:bg-bg-hover/60 ${
                 dimInactive ? 'opacity-30 hover:opacity-100' : ''
               }`
         }`}
       >
-        <FileText
-          size={11}
-          className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/40'}`}
-        />
+        <FileText className={`sb-icon ${active ? 'text-accent' : 'text-text-tertiary'}`} />
         {/* 标签直接是行的子节点而不包一层 div —— 侧栏 e2e 按「div > div > span.truncate」认
             会话行，别撞上（同 BotGroup 的取舍）。徽标那层空着也占 hover 的 20px，
             正好把标题从 ⋮ 底下让开 */}
-        <span
-          className={`flex-1 min-w-0 text-[13px] truncate ${
-            deprecated ? 'line-through opacity-60' : ''
-          }`}
-        >
+        <span className={`flex-1 min-w-0 truncate ${deprecated ? 'line-through opacity-60' : ''}`}>
           {f.label}
         </span>
         <span className="flex items-center gap-0.5 shrink-0 group-hover:pr-5">
@@ -384,20 +381,10 @@ export function KnowledgeTreeView({
     active: boolean
   ): React.ReactNode => {
     if (node.readonly && d === 0) {
-      return (
-        <BookMarked
-          size={11}
-          className={`flex-shrink-0 ${active ? 'text-accent' : 'text-sky-400/70'}`}
-        />
-      )
+      return <BookMarked className={`sb-icon ${active ? 'text-accent' : 'text-sky-500/80'}`} />
     }
     const Icon = open ? FolderOpen : FolderClosed
-    return (
-      <Icon
-        size={11}
-        className={`flex-shrink-0 ${active ? 'text-accent' : 'text-text-tertiary/40'}`}
-      />
-    )
+    return <Icon className={`sb-icon ${active ? 'text-accent' : 'text-text-tertiary'}`} />
   }
 
   /** 目录是否在活动条目的路径上（条目 id 与目录 id 同命名空间，前缀即祖先） */
@@ -418,17 +405,17 @@ export function KnowledgeTreeView({
           onClick={() => toggleDir(node.path)}
           onContextMenu={(ev) => openDirMenu(node, ev)}
           title={node.path}
-          style={{ paddingLeft: indent(d) }}
-          className={`group relative flex items-center gap-1.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+          style={depthStyle(d)}
+          className={`group relative sb-row cursor-pointer transition-opacity duration-200 ${
             active
               ? 'bg-bg-active/80 text-text-primary'
-              : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
+              : `text-text-primary hover:bg-bg-hover/60 ${
                   dimInactive ? 'opacity-30 hover:opacity-100' : ''
                 }`
           }`}
         >
           {dirIcon(node, d, open, active)}
-          <span className="flex-1 min-w-0 text-[13px] truncate">{label}</span>
+          <span className="flex-1 min-w-0 truncate">{label}</span>
           {/* 只读的内置库：库那一行挂一把锁（里面的层级不重复挂） */}
           {isBuiltinRoot && (
             <span
@@ -469,14 +456,14 @@ export function KnowledgeTreeView({
  */
 function KnowledgeDraftRow({
   kind,
-  paddingLeft,
+  depth,
   busy,
   error,
   onCommit,
   onCancel
 }: {
   kind: DraftKind
-  paddingLeft: number
+  depth: number
   busy: boolean
   error: string | null
   onCommit: (value: string) => void
@@ -487,8 +474,8 @@ function KnowledgeDraftRow({
   const Icon = kind === 'entry' ? FileText : FolderClosed
   return (
     <div data-knowledge-draft={kind}>
-      <div style={{ paddingLeft }} className="flex items-center gap-1.5 pr-1.5 py-0.5">
-        <Icon size={11} className="flex-shrink-0 text-text-tertiary/40" />
+      <div style={depthStyle(depth)} className="sb-row">
+        <Icon className="sb-icon text-text-tertiary" />
         <input
           autoFocus
           value={value}
@@ -504,16 +491,13 @@ function KnowledgeDraftRow({
             if (e.key === 'Enter') onCommit(value)
             if (e.key === 'Escape') onCancel()
           }}
-          className={`flex-1 min-w-0 px-1 py-0 rounded border bg-bg-primary text-[13px] text-text-primary outline-none ${
+          className={`flex-1 min-w-0 px-1 py-0 rounded border bg-bg-primary text-[length:inherit] text-text-primary outline-none ${
             error === null ? 'border-border-primary' : 'border-red-500/60'
           }`}
         />
       </div>
       {error && (
-        <div
-          style={{ paddingLeft: paddingLeft + 17 }}
-          className="pr-1.5 pb-1 text-[11px] text-red-400"
-        >
+        <div style={depthStyle(depth)} className="sb-hint !text-red-400">
           {error}
         </div>
       )}

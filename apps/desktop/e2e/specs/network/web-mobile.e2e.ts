@@ -37,8 +37,8 @@
  *        挪 30px 没有菜单、挪 5px 照样有；关掉菜单之后的下一次轻点照常推入；资料库里内置智能体行按住 →
  *        菜单里有「创建覆盖副本」
  *   M-18 专注模式缺省开着：手机布局里打开再返回，壳里没有 .opacity-30；1280 宽的桌面布局里至少一处
- *   M-19 手机布局里对话输入框 16px；1280 宽时不是 16px。会话行与项目组头、「项目知识库」文件夹行同高（±2px，
- *        不再有 40px 的下限：行 < 30px），且与桌面侧栏里同一条会话行同高（±1px）
+ *   M-19 手机布局里对话输入框 16px；1280 宽时不是 16px。会话行与项目组头、「项目知识库」文件夹行同高（±2px：
+ *        侧栏的行是一套 .sb-row），手机上是触屏那一档（≥ 40px），桌面侧栏里同一条会话行是 Finder 那一档（24px ±1）
  *   M-20 popstate 只在落到不带标记的那一条时收起对话页；重载时留下的那条带标记的历史在挂载时被摘掉
  *   M-21 360 宽的卡片（英文、模型名很长）：空闲时发送键在卡片里、模型名截断；运行中（两个选择器都上了锁）两个
  *        队列出口只剩图标（字那格 display none，aria-label 仍是字）、队列 / 停止 / 用量环都在卡片里、环不缩、
@@ -949,7 +949,7 @@ describe('phone layout: the shell', () => {
     }
   })
 
-  it('M-19 16px composer in the shell (not at 1280); session rows keep the sidebar rhythm', async () => {
+  it('M-19 16px composer in the shell (not at 1280); one row rhythm, touch-sized on the phone, 24px on the desktop', async () => {
     // M-18 重载过：项目组又是收起的，输入框这一半用临时组里的那一条
     await openFromList('MOB-temp')
     await chatPane(page()).ready()
@@ -979,7 +979,7 @@ describe('phone layout: the shell', () => {
     expect(Math.abs(rhythm.header - rhythm.knowledge), JSON.stringify(rhythm)).toBeLessThanOrEqual(
       2
     )
-    expect(rhythm.row).toBeLessThan(30)
+    expect(rhythm.row).toBeGreaterThanOrEqual(40)
     const phoneTemp = await mobile().sessionRowHeight('MOB-temp', 'list')
     expect(phoneTemp).not.toBeNull()
 
@@ -988,12 +988,13 @@ describe('phone layout: the shell', () => {
     const desktopFont = await mobile().composerFontSize()
     expect(desktopFont).not.toBeNull()
     expect(desktopFont).not.toBe('16px')
-    // 桌面侧栏里同一条会话行：与手机上一样高
+    // 桌面侧栏里同一条会话行：同一副排版的桌面那一档（Finder 侧栏的 24px）
     const desktopTemp = await until(
       () => mobile().sessionRowHeight('MOB-temp', 'document'),
       'the MOB-temp row in the desktop sidebar'
     )
-    expect(Math.abs(desktopTemp - phoneTemp!)).toBeLessThanOrEqual(1)
+    expect(phoneTemp!).toBeGreaterThanOrEqual(40)
+    expect(Math.abs(desktopTemp - 24)).toBeLessThanOrEqual(1)
   })
 
   it('M-20 popstate closes the chat only onto an unmarked entry; a mark left behind by a reload is cleared', async () => {

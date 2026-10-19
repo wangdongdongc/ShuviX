@@ -166,13 +166,13 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
     })
   }
 
-  // 行的通用外壳：与 KnowledgeGroup 的条目行同一副排版（10px 基准内缩、13px、选中态 bg-bg-active）。
+  // 行的通用外壳：与 KnowledgeGroup 的条目行同一副排版（base.css 的 .sb-row、选中态 bg-bg-active）。
   // 标签直接是行的子节点而不包一层 div —— 侧栏 e2e 按「div > span.truncate」认会话行，别撞上
   const rowClass = (active: boolean): string =>
-    `group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+    `group relative sb-row cursor-pointer transition-opacity duration-200 ${
       active
         ? 'bg-bg-active/80 text-text-primary'
-        : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
+        : `text-text-primary hover:bg-bg-hover/60 ${
             dim && isNoteActive ? 'opacity-30 hover:opacity-100' : ''
           }`
     }`
@@ -190,7 +190,7 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
     >
       {scanned !== null &&
         (scanned.bots.length === 0 && scanned.invalid.length === 0 ? (
-          <div className="px-3 py-2 text-xs text-text-tertiary">{t('sidebar.botsEmpty')}</div>
+          <div className="sb-hint">{t('sidebar.botsEmpty')}</div>
         ) : (
           <>
             {scanned.bots.map((b) => (
@@ -202,10 +202,10 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
                   title={b.description}
                   className={rowClass(activeFileName === b.fileName)}
                 >
-                  <BotAvatar name={b.name} displayName={b.displayName} size={12} />
-                  <span className="flex-1 min-w-0 text-[13px] truncate group-hover:pr-5">
-                    {b.displayName}
+                  <span className="sb-icon">
+                    <BotAvatar name={b.name} displayName={b.displayName} size={15} />
                   </span>
+                  <span className="flex-1 min-w-0 truncate group-hover:pr-5">{b.displayName}</span>
                   <RowMenuButton
                     className="absolute right-1.5 opacity-0 group-hover:opacity-100"
                     onOpen={(e) => openRowMenu(b, e)}
@@ -223,10 +223,10 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
                       title={t('settings.shadowedByFileHint', { file: s.shadowedBy })}
                       className={rowClass(activeFileName === s.fileName)}
                     >
-                      <span className="flex-shrink-0 opacity-50">
-                        <BotAvatar name={s.name} displayName={s.displayName} size={12} />
+                      <span className="sb-icon opacity-50">
+                        <BotAvatar name={s.name} displayName={s.displayName} size={15} />
                       </span>
-                      <span className="flex-1 min-w-0 text-[13px] truncate line-through opacity-60 group-hover:pr-5">
+                      <span className="flex-1 min-w-0 truncate line-through opacity-60 group-hover:pr-5">
                         {s.displayName}
                       </span>
                       <span className="flex-shrink-0 px-1 rounded text-[9px] bg-bg-secondary text-text-tertiary group-hover:invisible">
@@ -249,8 +249,10 @@ export function BotGroup({ adapter }: BotGroupProps): React.JSX.Element {
                 title={f.error}
                 className={rowClass(activeFileName === f.fileName)}
               >
-                <AlertTriangle size={11} className="flex-shrink-0 text-amber-500" />
-                <span className="flex-1 min-w-0 text-[12px] font-mono truncate group-hover:pr-5">
+                <span className="sb-icon">
+                  <AlertTriangle size={12} className="text-amber-500" />
+                </span>
+                <span className="flex-1 min-w-0 font-mono text-[0.9em] truncate group-hover:pr-5">
                   {f.fileName}
                 </span>
                 <RowMenuButton

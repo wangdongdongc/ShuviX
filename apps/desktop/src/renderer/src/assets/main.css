@@ -49,6 +49,52 @@
   -webkit-touch-callout: none;
 }
 /*
+ * 手机字号（mobile/phoneFontSize.ts）：桌面组件把小字写死成 9–14px，放到手机上比手机上的其它应用小一圈。
+ * 在 [data-mobile-scale] 之内（对话页、小组件、资料库、设置、日历；侧栏的行另有一套尺寸 —— app-shell base.css
+ * 的 .sb-row，手机上是它的 touch 档，这组规则碰不到它的字）按
+ * 「这台设备的字号 ÷ 桌面缺省 14」同比放大：字号 16 时 11px → 12.6px、13px → 14.9px。只改字号，行高
+ * （text-xs / text-sm 带的是比例）跟着走，图标与间距不动。这组规则不在 @layer 里，盖得过 Tailwind 的工具类。
+ */
+[data-mobile-shell] [data-mobile-scale] .text-\[9px\] {
+  font-size: calc(var(--app-font-size, 14px) * 9 / 14);
+}
+[data-mobile-shell] [data-mobile-scale] .text-\[10px\] {
+  font-size: calc(var(--app-font-size, 14px) * 10 / 14);
+}
+[data-mobile-shell] [data-mobile-scale] .text-\[11px\] {
+  font-size: calc(var(--app-font-size, 14px) * 11 / 14);
+}
+[data-mobile-shell] [data-mobile-scale] .text-\[11\.5px\] {
+  font-size: calc(var(--app-font-size, 14px) * 11.5 / 14);
+}
+[data-mobile-shell] [data-mobile-scale] :is(.text-\[12px\], .text-xs) {
+  font-size: calc(var(--app-font-size, 14px) * 12 / 14);
+}
+[data-mobile-shell] [data-mobile-scale] .text-\[12\.5px\] {
+  font-size: calc(var(--app-font-size, 14px) * 12.5 / 14);
+}
+[data-mobile-shell] [data-mobile-scale] .text-\[13px\] {
+  font-size: calc(var(--app-font-size, 14px) * 13 / 14);
+}
+[data-mobile-shell] [data-mobile-scale] .text-\[13\.5px\] {
+  font-size: calc(var(--app-font-size, 14px) * 13.5 / 14);
+}
+[data-mobile-shell] [data-mobile-scale] .text-sm {
+  font-size: var(--app-font-size, 14px);
+}
+/* 长按出来的 DOM 菜单（ContextMenuPopup，portal 在 body 上、不在壳里）：手机布局开着时与侧栏的行同一档，
+   40px 一项、16px 字 —— 桌面应用用原生菜单，碰不到这里 */
+body:has([data-mobile-shell]) [data-context-menu] {
+  min-width: 200px;
+  padding: 6px 0;
+  border-radius: 12px;
+  font-size: 16px;
+}
+body:has([data-mobile-shell]) [data-context-menu] [role='menuitem'] {
+  min-height: 40px;
+  padding: 0 16px;
+}
+/*
  * 设置的叠放布局（手机）：一行放不下「标题 + 控件」时控件换到下一行，标题至少留 9 个字宽 —— 不然像下拉框这类宽控件
  * 会把标题挤成一列单字。只在 [data-settings-stacked] 之内（桌面设置窗口没有它）
  */

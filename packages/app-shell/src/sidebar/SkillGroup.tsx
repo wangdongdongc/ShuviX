@@ -230,10 +230,10 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
 
   // 行的通用外壳：与 Bots / 智能体 / 知识库条目行同一副排版
   const rowClass = (active: boolean, indented: boolean): string =>
-    `group relative flex items-center gap-1.5 ${indented ? 'pl-6' : 'pl-2.5'} pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+    `group relative sb-row ${indented ? 'sb-depth-1' : ''} cursor-pointer transition-opacity duration-200 ${
       active
         ? 'bg-bg-active/80 text-text-primary'
-        : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
+        : `text-text-primary hover:bg-bg-hover/60 ${
             dim && isNoteActive ? 'opacity-30 hover:opacity-100' : ''
           }`
     }`
@@ -251,9 +251,9 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
         title={skill.description}
         className={rowClass(isActiveSkill(folder, skill), !folder.isDefault)}
       >
-        <span className={`flex-shrink-0 w-3 ${off ? 'opacity-40' : ''}`} />
+        <span className={`sb-icon ${off ? 'opacity-40' : ''}`} />
         <span
-          className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${off ? 'line-through opacity-60' : ''}`}
+          className={`flex-1 min-w-0 truncate group-hover:pr-5 ${off ? 'line-through opacity-60' : ''}`}
         >
           {skill.displayName}
         </span>
@@ -278,7 +278,7 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
       {scanned !== null &&
         // 空态 = 连一个可画的目录行都没有，且默认目录也没有技能（外部目录哪怕是空的也占一行）
         (scanned.every((f) => f.isDefault && f.skills.length === 0) ? (
-          <div className="px-3 py-2 text-xs text-text-tertiary">{t('settings.skillEmpty')}</div>
+          <div className="sb-hint">{t('settings.skillEmpty')}</div>
         ) : (
           <>
             {/* 目录（内置置顶 → 共用 → 外部），顺序由宿主给 */}
@@ -300,12 +300,16 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
                       className={rowClass(false, false)}
                     >
                       <span
-                        className={`flex-shrink-0 text-text-tertiary ${folder.isEnabled ? '' : 'opacity-40'}`}
+                        className={`sb-icon text-text-tertiary ${folder.isEnabled ? '' : 'opacity-40'}`}
                       >
-                        {open ? <FolderOpen size={11} /> : <FolderClosed size={11} />}
+                        {open ? (
+                          <FolderOpen className="sb-icon" />
+                        ) : (
+                          <FolderClosed className="sb-icon" />
+                        )}
                       </span>
                       <span
-                        className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${folder.isEnabled ? '' : 'line-through opacity-60'}`}
+                        className={`flex-1 min-w-0 truncate group-hover:pr-5 ${folder.isEnabled ? '' : 'line-through opacity-60'}`}
                       >
                         {folder.isBuiltin
                           ? t('settings.skillDirBuiltin')

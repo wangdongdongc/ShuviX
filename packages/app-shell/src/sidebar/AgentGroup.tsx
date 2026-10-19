@@ -196,13 +196,13 @@ export function AgentGroup({ adapter }: AgentGroupProps): React.JSX.Element {
     })
   }
 
-  // 行的通用外壳：与 Bots / 知识库条目行同一副排版（10px 基准内缩、13px、选中态 bg-bg-active）。
+  // 行的通用外壳：与 Bots / 知识库条目行同一副排版（base.css 的 .sb-row、选中态 bg-bg-active）。
   // 标签直接是行的子节点而不包一层 div —— 侧栏 e2e 按「div > span.truncate」认会话行，别撞上
   const rowClass = (active: boolean): string =>
-    `group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+    `group relative sb-row cursor-pointer transition-opacity duration-200 ${
       active
         ? 'bg-bg-active/80 text-text-primary'
-        : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
+        : `text-text-primary hover:bg-bg-hover/60 ${
             dim && isNoteActive ? 'opacity-30 hover:opacity-100' : ''
           }`
     }`
@@ -252,14 +252,12 @@ export function AgentGroup({ adapter }: AgentGroupProps): React.JSX.Element {
                     宽度照挂，好让两种行的标签落在同一条竖线上 */}
                 <span
                   title={builtin ? t('tool.subAgentBuiltin') : undefined}
-                  className={`flex-shrink-0 w-3 flex items-center justify-center text-text-tertiary ${
-                    a.overridden ? 'opacity-50' : ''
-                  }`}
+                  className={`sb-icon text-text-tertiary ${a.overridden ? 'opacity-50' : ''}`}
                 >
-                  {builtin && <Lock size={10} />}
+                  {builtin && <Lock size={11} />}
                 </span>
                 <span
-                  className={`flex-1 min-w-0 text-[13px] truncate group-hover:pr-5 ${
+                  className={`flex-1 min-w-0 truncate group-hover:pr-5 ${
                     a.overridden ? 'line-through opacity-60' : ''
                   }`}
                 >
@@ -287,10 +285,10 @@ export function AgentGroup({ adapter }: AgentGroupProps): React.JSX.Element {
               title={f.error}
               className={rowClass(isActiveNote(false, f.fileName))}
             >
-              <span className="flex-shrink-0 w-3 flex items-center justify-center">
-                <AlertTriangle size={11} className="text-amber-500" />
+              <span className="sb-icon">
+                <AlertTriangle size={12} className="text-amber-500" />
               </span>
-              <span className="flex-1 min-w-0 text-[12px] font-mono truncate group-hover:pr-5">
+              <span className="flex-1 min-w-0 font-mono text-[0.9em] truncate group-hover:pr-5">
                 {f.fileName}
               </span>
               <RowMenuButton

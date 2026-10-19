@@ -40,6 +40,8 @@ export interface AppearanceTabProps {
   darkTheme: string
   lightTheme: string
   fontSize: number
+  /** 字号那一行的说明（`?` 气泡）；缺省没有 —— 手机布局用它说「只影响这台设备」 */
+  fontSizeHint?: string
   focusMode: boolean
   /** 桌面专属（caps.showNotebookTheme 控制显示） */
   notebookTheme?: string
@@ -141,6 +143,7 @@ export function AppearanceTab(props: AppearanceTabProps): React.JSX.Element {
         )}
         <SettingsRow
           title={t('settings.fontSize')}
+          description={props.fontSizeHint}
           control={
             <InlineSlider
               value={props.fontSize}

@@ -167,26 +167,17 @@ export function ProjectKnowledgeFolder({
         onClick={toggle}
         onContextMenu={openMenu}
         title={t('sidebar.projectKnowledgeHint')}
-        className={`group relative flex items-center gap-1.5 pl-2.5 pr-1.5 py-0.5 cursor-pointer transition-opacity duration-200 ${
+        className={`group relative sb-row cursor-pointer transition-opacity duration-200 ${
           isActive
             ? 'text-text-primary'
-            : `text-text-secondary hover:bg-bg-hover/50 hover:text-text-primary ${
-                dim ? 'opacity-30 hover:opacity-100' : ''
-              }`
+            : `text-text-primary hover:bg-bg-hover/60 ${dim ? 'opacity-30 hover:opacity-100' : ''}`
         }`}
       >
-        <Library
-          size={11}
-          className={`flex-shrink-0 ${isActive ? 'text-accent' : 'text-text-tertiary/50'}`}
-        />
-        {/* 标签按分组标题的字号/字重排（同 SessionGroup 的 header）—— 它是一层可展开的组，
-            不是一条会话；条目行仍用 13px 常规体，两级一眼分得开 */}
-        <div className="flex-1 min-w-0 flex items-center gap-1.5 text-[12px] group-hover:pr-5">
-          <span className="truncate font-medium uppercase tracking-wider">
-            {t('sidebar.projectKnowledge')}
-          </span>
+        <Library className={`sb-icon ${isActive ? 'text-accent' : 'text-text-tertiary'}`} />
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 group-hover:pr-5">
+          <span className="truncate">{t('sidebar.projectKnowledge')}</span>
           {entryCount > 0 && (
-            <span className="ml-auto shrink-0 text-[10px] tabular-nums text-text-tertiary/60">
+            <span className="ml-auto shrink-0 text-[0.8em] tabular-nums text-text-tertiary">
               {entryCount}
             </span>
           )}
@@ -217,9 +208,7 @@ export function ProjectKnowledgeFolder({
               />
             )}
             {entryCount === 0 && !(node && node.dirs.length > 0) && !drafts.draft && (
-              <div className="pl-[34px] pr-1.5 py-0.5 text-[12px] text-text-tertiary">
-                {t('sidebar.projectKnowledgeEmpty')}
-              </div>
+              <div className="sb-hint sb-depth-1">{t('sidebar.projectKnowledgeEmpty')}</div>
             )}
           </>
         )}

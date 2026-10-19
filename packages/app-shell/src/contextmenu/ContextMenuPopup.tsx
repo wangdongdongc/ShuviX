@@ -125,6 +125,7 @@ function MenuPanel({
       <div
         ref={panelRef}
         role="menu"
+        data-context-menu=""
         style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: 1000 }}
         className="min-w-[140px] py-0.5 rounded-md border border-border-secondary bg-bg-primary shadow-lg text-[11px] text-text-primary"
       >

@@ -15,6 +15,8 @@ import { AppearanceTab, ModelDefaultsSettings, type ThemeMode } from '@shuvix/ap
 import type { SelectableThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
 import { NetworkAccessSettings } from './NetworkAccessSettings'
+import { useCompactLayout } from '../../mobile/useCompactLayout'
+import { setPhoneFontSize, usePhoneFontSize } from '../../mobile/phoneFontSize'
 
 type Lang = 'zh' | 'en' | 'ja'
 
@@ -23,7 +25,7 @@ const CLASSIFIER_PROVIDER_KEY = 'general.classifierProvider'
 const CLASSIFIER_MODEL_KEY = 'general.classifierModel'
 
 export function GeneralSettings(): React.JSX.Element {
-  const { i18n: i18nInstance } = useTranslation()
+  const { t, i18n: i18nInstance } = useTranslation()
   const i18nLang = (i18nInstance.language || 'zh') as Lang
   const {
     theme,
@@ -48,6 +50,10 @@ export function GeneralSettings(): React.JSX.Element {
     setActiveModel,
     setDefaultThinkingLevel
   } = useSettingsStore()
+  // 手机布局（web 客户端窄屏）：字号是这台设备自己的（不碰桌面的 general.fontSize）；UI 缩放是桌面窗口的
+  // zoomFactor，浏览器里不起作用，不给
+  const compact = useCompactLayout()
+  const phoneFontSize = usePhoneFontSize()
 
   // 命令分类模型：只在这一页用到，不进全局 store —— 打开设置时现取清单与当前值
   const [classifierModels, setClassifierModels] = useState<AvailableModel[]>([])
@@ -96,11 +102,12 @@ export function GeneralSettings(): React.JSX.Element {
         darkTheme={darkTheme}
         lightTheme={lightTheme}
         notebookTheme={notebookTheme}
-        fontSize={fontSize}
+        fontSize={compact ? phoneFontSize : fontSize}
+        fontSizeHint={compact ? t('mobile.fontSizeHint') : undefined}
         uiZoom={uiZoom}
         focusMode={focusMode}
         language={i18nLang}
-        caps={{ showLanguage: true, showNotebookTheme: true, showUiZoom: true }}
+        caps={{ showLanguage: true, showNotebookTheme: true, showUiZoom: !compact }}
         onThemeChange={(mode: ThemeMode) => {
           setTheme(mode)
           localStorage.setItem('theme', mode)
@@ -121,6 +128,10 @@ export function GeneralSettings(): React.JSX.Element {
           window.api.settings.set({ key: 'appearance.notebookTheme', value: id })
         }}
         onFontSizeChange={(v) => {
+          if (compact) {
+            setPhoneFontSize(v)
+            return
+          }
           setFontSize(v)
           window.api.settings.set({ key: 'general.fontSize', value: String(v) })
         }}

@@ -19,7 +19,7 @@ import {
   Library,
   List,
   MessagesSquare,
-  Plus,
+  SquarePen,
   Settings,
   FolderClosed,
   MessageSquare,
@@ -35,6 +35,7 @@ import { SettingsPanel } from '../components/settings/SettingsPanel'
 import { MobileChatView } from './MobileChatView'
 import { BottomSheet } from './BottomSheet'
 import { installLongPressContextMenu } from './longPress'
+import { usePhoneFontSize } from './phoneFontSize'
 
 type MobileTab = 'sessions' | 'widgets' | 'library' | 'settings'
 
@@ -52,13 +53,15 @@ const headerIcon =
   'h-10 w-10 flex items-center justify-center rounded-full text-text-secondary active:bg-bg-hover'
 
 /**
- * 专注模式在手机布局里关掉：它把没在用的侧栏淡化、鼠标移上去才恢复 —— 手机没有「移上去」，列表会一直是灰的
+ * 专注模式在手机布局里关掉：它把没在用的侧栏淡化、鼠标移上去才恢复 —— 手机没有「移上去」，列表会一直是灰的。
+ * 字号换成这台设备自己的（phoneFontSize.ts）：代码块等读 ChatHost 的 fontSize，正文读外壳上的 --app-font-size
  */
 export function MobileShell(): React.JSX.Element {
   const host = useChatHost()
+  const fontSize = usePhoneFontSize()
   const value = useMemo(
-    () => ({ ...host, appearance: { ...host.appearance, focusMode: false } }),
-    [host]
+    () => ({ ...host, appearance: { ...host.appearance, focusMode: false, fontSize } }),
+    [host, fontSize]
   )
   return (
     <ChatHostProvider value={value}>
@@ -77,6 +80,7 @@ function MobileShellBody(): React.JSX.Element {
   const [calendarMounted, setCalendarMounted] = useState(false)
   const [newChatOpen, setNewChatOpen] = useState(false)
   const { projects } = useProjects()
+  const fontSize = usePhoneFontSize()
 
   // 长按 = 右键（只在手机布局里装）
   useEffect(() => installLongPressContextMenu(document), [])
@@ -143,9 +147,37 @@ function MobileShellBody(): React.JSX.Element {
     }
   }
 
+  const sessionsActions = (
+    <>
+      <button
+        type="button"
+        data-mobile-calendar-toggle=""
+        className={headerIcon}
+        onClick={() => {
+          setCalendar((v) => !v)
+          setCalendarMounted(true)
+        }}
+        aria-label={calendar ? t('mobile.list') : t('mobile.calendar')}
+      >
+        {calendar ? <List size={21} /> : <CalendarDays size={21} />}
+      </button>
+      <button
+        type="button"
+        data-mobile-new-chat=""
+        className={headerIcon}
+        onClick={() => setNewChatOpen(true)}
+        aria-label={t('mobile.newChat')}
+      >
+        <SquarePen size={20} />
+      </button>
+    </>
+  )
+
   const pageTitle = (label: string, actions?: React.ReactNode): React.JSX.Element => (
-    <div className="flex items-center gap-1 pl-4 pr-1 pt-2 pb-1 flex-shrink-0">
-      <h1 className="flex-1 min-w-0 truncate text-xl font-semibold text-text-primary">{label}</h1>
+    <div className="flex items-center gap-1 pl-5 pr-2 pt-3 pb-2 flex-shrink-0">
+      <h1 className="flex-1 min-w-0 truncate text-[28px] leading-9 font-bold tracking-tight text-text-primary">
+        {label}
+      </h1>
       {actions}
     </div>
   )
@@ -154,6 +186,7 @@ function MobileShellBody(): React.JSX.Element {
     <div
       data-mobile-shell=""
       className="relative h-[100dvh] w-full overflow-hidden bg-bg-primary text-text-primary"
+      style={{ '--app-font-size': `${fontSize}px` } as React.CSSProperties}
     >
       {/* 标签页（对话页推入时藏起来但不卸载：回来还在原处） */}
       <div
@@ -168,33 +201,9 @@ function MobileShellBody(): React.JSX.Element {
               className="absolute inset-0 flex flex-col"
               style={tab === 'sessions' ? undefined : { display: 'none' }}
             >
-              {pageTitle(
-                t('mobile.tabSessions'),
-                <>
-                  <button
-                    type="button"
-                    data-mobile-calendar-toggle=""
-                    className={headerIcon}
-                    onClick={() => {
-                      setCalendar((v) => !v)
-                      setCalendarMounted(true)
-                    }}
-                    aria-label={calendar ? t('mobile.list') : t('mobile.calendar')}
-                  >
-                    {calendar ? <List size={20} /> : <CalendarDays size={20} />}
-                  </button>
-                  <button
-                    type="button"
-                    data-mobile-new-chat=""
-                    className={headerIcon}
-                    onClick={() => setNewChatOpen(true)}
-                    aria-label={t('mobile.newChat')}
-                  >
-                    <Plus size={22} />
-                  </button>
-                </>
-              )}
-              {/* 列表与日历都挂着、只切显示：切回列表时项目的展开状态与滚动位置都还在 */}
+              {pageTitle(t('mobile.tabSessions'), sessionsActions)}
+              {/* 列表与日历都挂着、只切显示：切回列表时项目的展开状态与滚动位置都还在。列表就是桌面的侧栏，
+                  只是密度换成手指的那一档（Sidebar mode="sessions" → density touch） */}
               <div className="flex-1 min-h-0 relative" data-mobile-list="">
                 <div
                   className="absolute inset-0"
@@ -205,6 +214,8 @@ function MobileShellBody(): React.JSX.Element {
                 {calendarMounted && (
                   <div
                     className="absolute inset-0"
+                    data-mobile-scale=""
+                    data-sidebar-density="touch"
                     style={calendar ? undefined : { display: 'none' }}
                   >
                     <CalendarPanel onOpenSession={openChat} />
@@ -216,6 +227,7 @@ function MobileShellBody(): React.JSX.Element {
           {visited.has('widgets') && (
             <section
               data-mobile-page="widgets"
+              data-mobile-scale=""
               className="absolute inset-0 flex flex-col"
               style={tab === 'widgets' ? undefined : { display: 'none' }}
             >
@@ -228,6 +240,7 @@ function MobileShellBody(): React.JSX.Element {
           {visited.has('library') && (
             <section
               data-mobile-page="library"
+              data-mobile-scale=""
               className="absolute inset-0 flex flex-col"
               style={tab === 'library' ? undefined : { display: 'none' }}
             >
@@ -240,6 +253,7 @@ function MobileShellBody(): React.JSX.Element {
           {visited.has('settings') && (
             <section
               data-mobile-page="settings"
+              data-mobile-scale=""
               className="absolute inset-0 flex flex-col"
               style={tab === 'settings' ? undefined : { display: 'none' }}
             >
@@ -315,6 +329,7 @@ function MobileShellBody(): React.JSX.Element {
       {chatOpen && (
         <div
           data-mobile-page="chat"
+          data-mobile-scale=""
           className="absolute inset-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] bg-bg-primary"
         >
           <MobileChatView onBack={closeChat} />

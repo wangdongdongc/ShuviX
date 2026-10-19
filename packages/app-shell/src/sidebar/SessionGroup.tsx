@@ -1,7 +1,8 @@
 /**
  * SessionGroup —— 共享会话分组，从桌面 Sidebar.renderGroupedSessions 抽出。
  *
- * 一个分组 = 标题行（可选图标 + 大写标签 + 悬停浮现的 ⋮）+ 正文（通常为 SessionItem 列表）。
+ * 一个分组 = 标题行（可选图标 + 标签 + 悬停浮现的 ⋮）+ 正文（通常为 SessionItem 列表）。排版是 Finder 侧栏的
+ * 那一套（base.css 的 .sb-row / .sb-section）：可折叠的组是一行着色图标的「位置」，摊开的是小号灰字的分节标题。
  * 六种形态：
  *   - `project`（项目，文件夹图标，可折叠）
  *   - `knowledge`（知识库置顶特殊分组，Library 图标，可折叠，正文为作用域目录树 + 条目行）
@@ -61,7 +62,7 @@ export interface SessionGroupProps {
   active?: boolean
   /** 专注模式下整组淡化 */
   dim?: boolean
-  /** 组上方分隔线（桌面临时组排在项目组之后时显示） */
+  /** 与上一节隔开（摊开的分节：上方多留一点白；不再画线） */
   showDividerAbove?: boolean
   /** 组头菜单（右键标题行 / 点 ⋮ 走同一个回调）；缺省即两者都无 */
   onMenu?: (e: React.MouseEvent) => void
@@ -85,13 +86,6 @@ export function SessionGroup({
 }: SessionGroupProps): React.JSX.Element {
   // temp / section 是摊开的纯分节：没有折叠，也就没有折叠图标（见文件头注释）
   const flat = variant === 'temp' || variant === 'section'
-  /*
-   * 摊开的分节不缩进：正文那 8px 是「组内」的语汇。temp 再往左拉 4px，是把 SessionItem
-   * 自带的 10px 基准内缩（pl-2.5）抵到组头的 6px（px-1.5）上 —— 于是图标列、分节标题列、
-   * 项目行的文件夹图标列三者同在一条竖线上。section 的正文是**别的分组**（它们的组头本就
-   * 以 6px 起排），再挪那 4px 只会把整列项目推出竖线。
-   */
-  const bodyShift = variant === 'temp' ? '-ml-1' : ''
   const Icon =
     variant === 'knowledge'
       ? Library
@@ -110,44 +104,59 @@ export function SessionGroup({
                   : FolderOpen
   return (
     <div className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}>
-      {showDividerAbove && <div className="mx-4 my-2 border-t border-border-secondary/30" />}
-      <div className={`mb-0.5 rounded-md ${active ? 'bg-bg-primary/30' : ''}`}>
-        <div
-          data-group={variant}
-          className="relative flex items-center w-full px-1.5 py-0.5 text-[12px] group/header"
-          onContextMenu={onMenu}
-        >
-          {flat ? (
-            /* 纯 header：不可点、无图标 —— 「项目」与「临时对话」共用这一副排版 */
-            <div className="flex items-center flex-1 min-w-0 group-hover/header:pr-6">
-              <span className="truncate text-[13px] font-medium uppercase tracking-wide text-text-tertiary">
-                {label}
-              </span>
-            </div>
-          ) : (
+      {/* 当前会话所在的组：整组垫一层很淡的底（桌面侧栏上看得出「我在哪个项目里」；手机侧栏底色就是 bg-primary，
+          这一层自然看不见） */}
+      <div
+        className={`mb-px rounded-[var(--sb-radius)] ${flat && showDividerAbove ? 'mt-1' : ''} ${
+          active && !flat ? 'bg-bg-primary/30' : ''
+        }`}
+      >
+        {flat ? (
+          /* 分节标题（Finder 侧栏的「个人收藏」「位置」）：小号粗体灰字、不大写，上方留白代替分隔线 ——
+             「项目」与「临时对话」共用这一副排版，不可点、无图标 */
+          <div
+            data-group={variant}
+            className="sb-section relative group/header"
+            onContextMenu={onMenu}
+          >
+            <span className="flex-1 min-w-0 truncate group-hover/header:pr-6">{label}</span>
+            {onMenu && (
+              <RowMenuButton
+                className="absolute right-1.5 opacity-0 group-hover/header:opacity-100"
+                onOpen={onMenu}
+              />
+            )}
+          </div>
+        ) : (
+          /* 可折叠的组（项目、Bots、智能体…）是一行「位置」：着色的图标 + 正常字重的名字，与它里面的行同高 */
+          <div
+            data-group={variant}
+            className={`sb-row group/header cursor-pointer ${
+              active ? 'text-text-primary' : 'text-text-primary hover:bg-bg-hover/60'
+            }`}
+            onContextMenu={onMenu}
+          >
             <button
               onClick={onToggle}
-              className={`flex items-center gap-1.5 flex-1 min-w-0 transition-colors group-hover/header:pr-6 ${
-                active ? 'text-text-primary' : 'text-text-secondary hover:text-text-primary'
-              }`}
+              className="flex items-center gap-[var(--sb-gap)] flex-1 min-w-0 self-stretch text-left group-hover/header:pr-6"
             >
-              <Icon size={12} className="flex-shrink-0" />
-              <span className="truncate font-medium uppercase tracking-wider">{label}</span>
+              <Icon className="sb-icon text-accent" />
+              <span className="truncate">{label}</span>
               {experimental && <ExperimentalTag feature={experimental} />}
             </button>
-          )}
-          {onMenu && (
-            <RowMenuButton
-              className="absolute right-1.5 opacity-0 group-hover/header:opacity-100"
-              onOpen={onMenu}
-            />
-          )}
-        </div>
+            {onMenu && (
+              <RowMenuButton
+                className="absolute right-1.5 opacity-0 group-hover/header:opacity-100"
+                onOpen={onMenu}
+              />
+            )}
+          </div>
+        )}
         {flat ? (
-          <div className={bodyShift}>{children}</div>
+          <div>{children}</div>
         ) : (
           <AnimatedCollapse open={!collapsed}>
-            <div className="ml-1.5 pl-0.5">{children}</div>
+            <div className="sb-body">{children}</div>
           </AnimatedCollapse>
         )}
       </div>
