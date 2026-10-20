@@ -1,5 +1,5 @@
 /**
- * AboutTab —— 共享关于页（应用信息 + 更新 + 项目链接 + 协议），prop 驱动 + 能力开关。
+ * AboutTab —— 共享关于页（应用信息 + 更新 + 协议与源码仓库链接），prop 驱动 + 能力开关。
  *
  * 从桌面 AboutSettings 抽出。版本号 / openExternal 由宿主注入；更新区块通过可选 `update`
  * 注入：桌面传入完整更新 API，扩展不传 → 自动屏蔽更新区块（其余完全一致）。
@@ -11,13 +11,11 @@ import { useTranslation } from 'react-i18next'
 import { copyToClipboard } from '@shuvix/chat-ui'
 import {
   Github,
-  ExternalLink,
   RefreshCw,
   Download,
   RotateCcw,
   AlertCircle,
   CheckCircle,
-  Bug,
   Copy,
   Check
 } from 'lucide-react'
@@ -198,38 +196,21 @@ export function AboutTab(props: AboutTabProps): React.JSX.Element {
         </SettingsSection>
       )}
 
-      {/* 项目链接 */}
-      <SettingsSection title={t('about.projectGroup')}>
+      {/* 开源协议 + 源码仓库链接 */}
+      <div className="flex items-center gap-2 px-1">
+        <p className="flex-1 min-w-0 text-[11px] text-text-tertiary leading-relaxed">
+          {t('about.license')}
+        </p>
         <button
           onClick={() => openExternal(REPO_URL)}
-          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-bg-hover/40 transition-colors"
+          title={t('about.sourceCode')}
+          aria-label={t('about.sourceCode')}
+          className="shrink-0 p-1 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-hover/40 transition-colors"
+          data-about-repo
         >
-          <Github size={14} className="text-text-secondary shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="text-[13px] text-text-primary">{t('about.sourceCode')}</div>
-            <div className="text-[11px] text-text-tertiary mt-0.5 font-mono truncate">
-              {REPO_URL}
-            </div>
-          </div>
-          <ExternalLink size={11} className="text-text-tertiary shrink-0" />
+          <Github size={14} />
         </button>
-        <button
-          onClick={() => openExternal(`${REPO_URL}/issues`)}
-          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-bg-hover/40 transition-colors"
-        >
-          <Bug size={14} className="text-text-secondary shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="text-[13px] text-text-primary">{t('about.reportIssue')}</div>
-            <div className="text-[11px] text-text-tertiary mt-0.5 font-mono truncate">
-              {REPO_URL}/issues
-            </div>
-          </div>
-          <ExternalLink size={11} className="text-text-tertiary shrink-0" />
-        </button>
-      </SettingsSection>
-
-      {/* 开源协议 */}
-      <p className="text-[11px] text-text-tertiary leading-relaxed px-1">{t('about.license')}</p>
+      </div>
     </div>
   )
 }

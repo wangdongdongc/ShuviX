@@ -9,6 +9,7 @@
  *   AB-3 manual {command: null}：说明 = about.updateManualNoCommand；没有命令、没有复制钮、没有 code 元素、没有下载钮
  *   AB-4 没有 manual：有下载钮、点它调 onDownload；没有 manual 区块
  *   AB-5 重新渲染成 up-to-date / null → manual 区块消失
+ *   AB-6 协议那行的 GitHub 图标钮：点它以仓库地址调 openExternal；不再有「项目」区块
  *
  * `@shuvix/chat-ui` 的包入口很重（mermaid 等），这里只给它一个 copyToClipboard 替身。
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
@@ -177,5 +178,21 @@ describe('AboutTab 的手动更新区块', () => {
     await render(null)
     expect(manualBlock()).toBeNull()
     expect(container.querySelector('[data-update-command]')).toBeNull()
+  })
+
+  it('AB-6 协议那行的 GitHub 图标钮打开仓库；没有「项目」区块', async () => {
+    const openExternal = vi.fn<(url: string) => void>()
+    await act(async () => {
+      root.render(createElement(AboutTab, { appVersion: '0.2.12', openExternal }))
+    })
+    const repo = container.querySelector<HTMLButtonElement>('[data-about-repo]')
+    expect(repo).not.toBeNull()
+    expect(repo!.getAttribute('aria-label')).toBe(i18n.t('about.sourceCode'))
+    expect(repo!.parentElement?.textContent).toContain(i18n.t('about.license'))
+    await act(async () => {
+      repo!.click()
+    })
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/wangdongdongc/ShuviX')
+    expect(container.textContent).not.toContain('Project')
   })
 })
