@@ -4,13 +4,15 @@
  * 只负责「头部 + 左侧 tab 导航 + 右侧内容槽」的外观；tab 列表、当前 tab、内容均由宿主注入。
  * 桌面注入全套 tab（general/providers/…），扩展只注入 [外观, 提供商]。
  *
- * 不持有状态、不读 store / window.api；activeTab 受控（宿主用 settingsStore / hash / chrome.storage）。
+ * 不读 store / window.api；activeTab 受控（宿主用 settingsStore / hash / chrome.storage）。唯一的状态是叠放布局的
+ * 第二层（分区里开着的那一项，见 stackedSettings.tsx）—— 它只决定顶栏怎么写。
  */
-import type { ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import type { ExperimentalFeature } from '@shuvix/chat-protocol/experimentalFeatures'
 import { ExperimentalTag } from '../common/ExperimentalTag'
 import { TabButton } from './TabButton'
+import { StackedSettingsProvider, type StackedSubPage } from './stackedSettings'
 
 export interface SettingsTab {
   id: string
@@ -48,6 +50,9 @@ export function SettingsContainer({
   stacked
 }: SettingsContainerProps): React.JSX.Element {
   const active = tabs.find((t) => t.id === activeTab) ?? tabs[0]
+  // 叠放布局的第二层：分区自己开着一项的详情时，顶栏写「‹ <分区名>」+ 这一项（分区经 useStackedSubPage 报上来）
+  const [subPage, setSubPage] = useState<StackedSubPage | null>(null)
+  const stackedValue = useMemo(() => ({ setSubPage }), [])
   if (stacked) {
     return (
       <div className="h-full bg-bg-primary flex flex-col" data-settings-stacked="">
@@ -79,18 +84,26 @@ export function SettingsContainer({
               <button
                 type="button"
                 data-settings-back=""
-                onClick={stacked.onBack}
-                className="flex items-center gap-0.5 h-9 pl-1 pr-2 rounded-md text-text-secondary active:bg-bg-hover"
-                aria-label={title}
+                data-settings-level={subPage ? 'item' : 'section'}
+                onClick={subPage ? subPage.onBack : stacked.onBack}
+                className="flex items-center gap-0.5 h-9 pl-1 pr-2 rounded-md text-text-secondary active:bg-bg-hover max-w-[40%]"
+                aria-label={subPage ? active?.label : title}
               >
-                <ChevronLeft size={20} />
-                <span className="text-[13px]">{title}</span>
+                <ChevronLeft size={20} className="flex-shrink-0" />
+                <span className="text-[13px] truncate">{subPage ? active?.label : title}</span>
               </button>
-              <span className="flex-1 min-w-0 truncate text-center text-[15px] font-medium text-text-primary pr-16">
-                {active?.label}
+              <span
+                data-settings-heading=""
+                className="flex-1 min-w-0 truncate text-center text-[15px] font-medium text-text-primary pr-16"
+              >
+                {subPage ? subPage.title : active?.label}
               </span>
             </div>
-            <div className="flex-1 min-h-0 flex flex-col">{active?.content}</div>
+            <div className="flex-1 min-h-0 flex flex-col">
+              <StackedSettingsProvider value={stackedValue}>
+                {active?.content}
+              </StackedSettingsProvider>
+            </div>
           </>
         )}
       </div>

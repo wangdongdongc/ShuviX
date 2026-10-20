@@ -11223,8 +11223,12 @@ export function widgetWindowPane(client: CdpClient): WidgetWindowPane {
 //     **会话行只在列表那一半里认**（sidebarPane 的行选择器连日历里的行一起认）；
 //   - 对话页顶栏 `data-mobile-back` / `data-mobile-chat-title` / `data-mobile-files` / `data-mobile-tasks`，
 //     底部抽屉 `data-bottom-sheet`（遮罩 `data-bottom-sheet-backdrop`，面板 role=dialog）；
-//   - 设置的叠放布局 `data-settings-stacked`（列表行 `data-settings-tab=<id>`、返回键 `data-settings-back`），
-//     设置行 `data-settings-row`（document 级：#settings 路由的页面里没有 shell 也认得到）。
+//   - 设置的叠放布局 `data-settings-stacked`（列表行 `data-settings-tab=<id>`、返回键 `data-settings-back`
+//     带 `data-settings-level`（`section` 回设置列表 / `item` 回分区自己的列表）、头部名字 `data-settings-heading`），
+//     设置行 `data-settings-row`（document 级：#settings 路由的页面里没有 shell 也认得到）；
+//   - 叠放时往下钻的分区（提供商 / LLM 工具）：列表 `data-stacked-list`（行 `data-stacked-row`，另带
+//     `data-provider-row=<id>` / `data-tool-row=<工具名或追加页 id>`；提供商行上的开关包在
+//     `data-provider-toggle=<id>` 里），点进去是 `data-stacked-detail`。
 //
 // 触摸是真的：`Input.dispatchTouchEvent`（页面要先开着触屏模拟 —— `Emulation.setTouchEmulationEnabled`），
 // 点在元素中心，点之前先滚进视口、并核对中心那一点确实落在这个元素上（落在别处 → 抛，免得悄悄点到邻居）。
@@ -11257,6 +11261,12 @@ export type WebMobileTouchTarget =
   /** 设置分区列表里的一行（tab id） */
   | { settingsTab: string }
   | { settingsBack: true }
+  /** 叠放的「提供商」分区列表里的一行（provider id） */
+  | { settingsProviderRow: string }
+  /** 同一行上的启用开关（provider id） */
+  | { settingsProviderToggle: string }
+  /** 叠放的「LLM 工具」分区列表里的一行（工具名，或宿主追加页的 id） */
+  | { settingsToolRow: string }
   /** 开着的底部抽屉的遮罩 */
   | { sheetBackdrop: true }
 
@@ -11333,6 +11343,23 @@ export interface ThinkingBlockShot {
   scrollWidth: number
   clientWidth: number
   innerText: string
+}
+
+/** 叠放分区（提供商 / LLM 工具）此刻的样子（见 `settingsSubView`） */
+export interface WebMobileSettingsSubView {
+  /** 列表在不在（`data-stacked-list`） */
+  list: boolean
+  /** 列表里的行（DOM 序）：id = `data-provider-row` 或 `data-tool-row`，高 = getBoundingClientRect */
+  rows: Array<{ id: string; height: number }>
+  /** 详情在不在（`data-stacked-detail`） */
+  detail: boolean
+}
+
+/** 叠放分区此刻真正在滚的那一层（见 `settingsSubScroll`） */
+export interface WebMobileSettingsScroll {
+  scrollTop: number
+  /** scrollHeight − clientHeight */
+  maxScrollTop: number
 }
 
 /** 设置分区列表里的一行 */
@@ -11417,10 +11444,19 @@ export interface WebMobilePane {
   settingsTabs(): Promise<WebMobileSettingsTabShot[]>
   /** 叠放布局在不在 */
   settingsStacked(): Promise<boolean>
-  /** 分区视图头部的分区名；不在分区视图（没有返回键）→ null */
+  /** 分区视图头部的名字（`data-settings-heading`：分区名，开着一项时是那一项的名字）；不在分区视图 → null */
   settingsHeader(): Promise<string | null>
-  /** 返回键的文字与 aria-label；没有 → null */
-  settingsBackButton(): Promise<{ text: string; ariaLabel: string } | null>
+  /** 返回键的文字、aria-label 与层级（`data-settings-level`：section / item）；没有 → null */
+  settingsBackButton(): Promise<{ text: string; ariaLabel: string; level: string } | null>
+  /** 叠放分区（提供商 / LLM 工具）的列表 / 详情；不在分区视图 → 列表、详情都 false */
+  settingsSubView(): Promise<WebMobileSettingsSubView>
+  /**
+   * 叠放分区（列表或详情，哪个在就从哪个往上找）此刻真正在滚的那一层 —— 与产品同一条规则：自己或最近的祖先里
+   * overflow-y 是 auto / scroll、而且 scrollHeight > clientHeight + 1 的那个。都没超出（没什么可滚）→ null
+   */
+  settingsSubScroll(): Promise<WebMobileSettingsScroll | null>
+  /** 把叠放分区那一层（同上）滚到底，回滚到的位置；没有可滚的 → null */
+  settingsSubScrollToBottom(): Promise<WebMobileSettingsScroll | null>
   /** 第一行 `data-settings-row` 的 flex-wrap，与它第一个孩子（标题那一栏）的 min-width / font-size */
   settingsRowStyle(): Promise<{
     flexWrap: string
@@ -11484,6 +11520,17 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     )`
   const SHEET = `document.querySelector('[data-bottom-sheet]')`
   const STACKED = `document.querySelector('[data-settings-stacked]')`
+  const STACKED_LIST = `${STACKED}?.querySelector('[data-stacked-list]')`
+  /** 叠放分区里真正在滚的那一层（stackedSettings.tsx 的 scrollerOf 同一条规则）；没有 → null */
+  const SUB_SCROLLER = `(() => {
+    const start = ${STACKED}?.querySelector('[data-stacked-list], [data-stacked-detail]')
+    for (let node = start; node; node = node.parentElement) {
+      const { overflowY } = getComputedStyle(node)
+      if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight + 1) return node
+    }
+    return null
+  })()`
+  const SCROLL_SHOT = `((n) => (n ? { scrollTop: n.scrollTop, maxScrollTop: n.scrollHeight - n.clientHeight } : null))`
   /**
    * 元素的全部文字，连同开着的 shadow root 里的（文件树是 @pierre/trees，行都在 shadow DOM 里，
    * textContent 读不到）；style / script 不算
@@ -11541,6 +11588,12 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     if ('settingsTab' in target)
       return `${STACKED}?.querySelector('[data-settings-tab=${JSON.stringify(target.settingsTab)}]')`
     if ('settingsBack' in target) return `${STACKED}?.querySelector('[data-settings-back]')`
+    if ('settingsProviderRow' in target)
+      return `${STACKED_LIST}?.querySelector('[data-provider-row=${JSON.stringify(target.settingsProviderRow)}]')`
+    if ('settingsProviderToggle' in target)
+      return `${STACKED_LIST}?.querySelector('[data-provider-toggle=${JSON.stringify(target.settingsProviderToggle)}]')`
+    if ('settingsToolRow' in target)
+      return `${STACKED_LIST}?.querySelector('[data-tool-row=${JSON.stringify(target.settingsToolRow)}]')`
     return `${SHEET}?.querySelector('[data-bottom-sheet-backdrop]')`
   }
 
@@ -11792,15 +11845,38 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     settingsStacked: () => client.eval<boolean>(`!!${STACKED}`),
     settingsHeader: () =>
       client.eval<string | null>(`(() => {
-        const back = ${STACKED}?.querySelector('[data-settings-back]')
-        if (!back) return null
-        return (back.nextElementSibling?.textContent ?? '').trim()
+        const heading = ${STACKED}?.querySelector('[data-settings-heading]')
+        return heading ? (heading.textContent ?? '').trim() : null
       })()`),
     settingsBackButton: () =>
-      client.eval<{ text: string; ariaLabel: string } | null>(`(() => {
+      client.eval<{ text: string; ariaLabel: string; level: string } | null>(`(() => {
         const back = ${STACKED}?.querySelector('[data-settings-back]')
         if (!back) return null
-        return { text: (back.textContent ?? '').trim(), ariaLabel: back.getAttribute('aria-label') ?? '' }
+        return {
+          text: (back.textContent ?? '').trim(),
+          ariaLabel: back.getAttribute('aria-label') ?? '',
+          level: back.getAttribute('data-settings-level') ?? ''
+        }
+      })()`),
+    settingsSubView: () =>
+      client.eval<WebMobileSettingsSubView>(`(() => {
+        const list = ${STACKED_LIST}
+        return {
+          list: !!list,
+          rows: [...(list?.querySelectorAll('[data-stacked-row]') ?? [])].map((r) => ({
+            id: r.getAttribute('data-provider-row') ?? r.getAttribute('data-tool-row') ?? '',
+            height: r.getBoundingClientRect().height
+          })),
+          detail: !!${STACKED}?.querySelector('[data-stacked-detail]')
+        }
+      })()`),
+    settingsSubScroll: () =>
+      client.eval<WebMobileSettingsScroll | null>(`${SCROLL_SHOT}(${SUB_SCROLLER})`),
+    settingsSubScrollToBottom: () =>
+      client.eval<WebMobileSettingsScroll | null>(`(() => {
+        const n = ${SUB_SCROLLER}
+        if (n) n.scrollTop = n.scrollHeight
+        return ${SCROLL_SHOT}(n)
       })()`),
     settingsRowStyle: () =>
       client.eval<{

@@ -47,6 +47,10 @@
  *   M-22 很长的多段思考折叠成一行：块高与一句话的思考相同（±1）、到终答正文的间距也相同（±1，回归点：之前外层
  *        按里面整段换行的高度留位，折叠的思考块下面空出一大块）、内容盒 nowrap + ellipsis 且确实溢出；点开 →
  *        高 > 3 倍、文字从第一段开头到最后一段结尾（首尾空行去掉）、段落空行留着；再点 → 回到一行高
+ *   M-23 设置里往下钻的分区：「提供商」先是一整屏列表、什么都不选（每行 ≥ 48px；返回键回设置列表、level section；
+ *        头部是分区名）→ 真点假提供商那一行 → 只剩详情，返回键是分区名（level item）、头部是它的名字 → 返回 = 列表
+ *        → 再返回 = 设置列表；「LLM 工具」里点 read 一样（头部 = read 的标签）。列表滚到底再点最后一行 → 真正在滚的
+ *        那一层回到顶上；返回 → 列表回到离开前的位置（±2px）。行上的开关只切启用（listAll 跟着变）、不进详情
  *
  * 约定同 web-fallbacks.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；会话只经主进程 IPC 带明确标题创建
  * （不跑 titler）；预置回复经主进程的 agent.prompt 跑完一轮。设备模拟走 CDP（`Emulation.setDeviceMetricsOverride`
@@ -119,6 +123,8 @@ let app: E2EApp
 let provider: FakeProvider
 let web: WebClientHandle | undefined
 let P = 0
+/** 假提供商的 id（M-23 认它那一行） */
+let fakeProviderId = ''
 const projects = { main: { id: '', name: 'MobProj' }, other: { id: '', name: 'MobProj2' } }
 const sids = { chat: '', temp: '', doomed: '', narrow: '', think: '' }
 /** 用例里开的浏览器 tab（失败时 afterAll 兜底关） */
@@ -248,6 +254,7 @@ beforeAll(async () => {
     baseUrl: provider.baseUrl,
     modelId: MODEL
   })
+  fakeProviderId = providerId
   await waitRendererReady(app.main)
   // M-21 的长名字模型（带上下文上限，用量环才画）—— 在打开 web 客户端之前加，它载入的模型目录里就有
   await app.main.eval(
@@ -813,7 +820,8 @@ describe('phone layout: the shell', () => {
     )
     expect(await mobile().settingsBackButton()).toEqual({
       text: en.settings.title,
-      ariaLabel: en.settings.title
+      ariaLabel: en.settings.title,
+      level: 'section'
     })
     expect(await mobile().settingsTabs()).toEqual([])
     const row = await until(() => mobile().settingsRowStyle(), 'a settings row in General')
@@ -1194,7 +1202,223 @@ describe('phone layout: the shell', () => {
     }, 'the long thought collapsed again')
     expect(Math.abs(closed.height - short.height)).toBeLessThanOrEqual(1)
   })
+
+  it('M-23 settings: Providers and LLM Tools drill down — a list, one item under a second-level header, back to the list where it was', async () => {
+    const pane = mobile()
+    type ProviderRow = {
+      id: string
+      name: string
+      displayName: string
+      isEnabled: number
+      isBuiltin: number
+    }
+    const listAll = (): Promise<ProviderRow[]> =>
+      app.main.eval<ProviderRow[]>(
+        `window.api.provider.listAll().then((ps) => ps.map((p) => ({ id: p.id, name: p.name, displayName: p.displayName, isEnabled: p.isEnabled, isBuiltin: p.isBuiltin })))`
+      )
+    const providers = await listAll()
+    const fake = providers.find((p) => p.id === fakeProviderId)
+    expect(fake, 'the fake provider in listAll').toBeDefined()
+    const fakeName = fake!.displayName || fake!.name
+    const read = (
+      await app.main.eval<Array<{ name: string; label: string }>>(
+        `window.api.tools.definitions().then((ds) => ds.map((d) => ({ name: d.name, label: d.label })))`
+      )
+    ).find((d) => d.name === 'read')
+    expect(read, 'the read tool in tools.definitions').toBeDefined()
+    const readLabel = read!.label || read!.name
+    /** 步骤 8 切过的那一家（finally 里没切回来就经 IPC 放回去） */
+    let flipped: ProviderRow | undefined
+
+    const sectionList = (): Promise<unknown> =>
+      until(async () => (await pane.settingsTabs()).length === 10, 'the settings section list')
+    const subList = (
+      what: string,
+      id?: string
+    ): Promise<{ rows: Array<{ id: string; height: number }> }> =>
+      until(async () => {
+        const v = await pane.settingsSubView()
+        return v.list && !v.detail && v.rows.length > 0 && (!id || v.rows.some((r) => r.id === id))
+          ? v
+          : null
+      }, what)
+    const subDetail = (what: string): Promise<unknown> =>
+      until(async () => {
+        const v = await pane.settingsSubView()
+        return v.detail && !v.list
+      }, what)
+    /**
+     * 头部落到这一层：分区报上来的「开着一项」走 effect（详情 / 列表先上屏，头部晚一拍），所以等它，不立刻断
+     */
+    const headerIs = async (
+      level: 'section' | 'item',
+      backText: string,
+      heading: string,
+      what: string
+    ): Promise<void> => {
+      const want = { back: { text: backText, ariaLabel: backText, level }, heading }
+      let seen: unknown = null
+      await until(async () => {
+        seen = { back: await pane.settingsBackButton(), heading: await pane.settingsHeader() }
+        return JSON.stringify(seen) === JSON.stringify(want)
+      }, what).catch((e: Error) => {
+        throw new Error(`${e.message}\nlast header seen: ${JSON.stringify(seen)}`)
+      })
+    }
+
+    try {
+      await toTab('settings')
+      await settingsToList()
+
+      // 1 「提供商」：一整屏的列表，什么都不选
+      await pane.tap({ settingsTab: 'providers' })
+      const list = await subList('the provider list', fakeProviderId)
+      expect((await pane.settingsSubView()).detail).toBe(false)
+      for (const row of list.rows) expect(row.height, `row ${row.id}`).toBeGreaterThanOrEqual(48)
+      await headerIs('section', en.settings.title, en.settings.tabProviders, 'the Providers header')
+
+      // 2 点假提供商 → 只剩它的详情，头部到第二层
+      await pane.tap({ settingsProviderRow: fakeProviderId })
+      await subDetail('the fake provider’s detail')
+      await headerIs('item', en.settings.tabProviders, fakeName, 'the fake provider’s header')
+      expect(await pane.settingsSubView()).toEqual({ list: false, rows: [], detail: true })
+
+      // 3 返回 → 列表
+      await pane.tap({ settingsBack: true })
+      await subList('the provider list again', fakeProviderId)
+      await headerIs('section', en.settings.title, en.settings.tabProviders, 'Providers again')
+
+      // 4 再返回 → 设置列表
+      await pane.tap({ settingsBack: true })
+      await sectionList()
+      expect(await pane.settingsHeader()).toBeNull()
+
+      // 5 「LLM 工具」里点 read
+      await pane.tap({ settingsTab: 'tools' })
+      await subList('the tool list', 'read')
+      await pane.tap({ settingsToolRow: 'read' })
+      await subDetail('the read tool’s detail')
+      await headerIs('item', en.settings.tabTools, readLabel, 'the read tool’s header')
+
+      // 6 返回 → 列表；再返回 → 设置列表
+      await pane.tap({ settingsBack: true })
+      await subList('the tool list again', 'read')
+      await headerIs('section', en.settings.title, en.settings.tabTools, 'LLM Tools again')
+      await pane.tap({ settingsBack: true })
+      await sectionList()
+
+      // 7 滚动：列表滚到底，点靠底的一行 → 真正在滚的那一层回到顶上；返回 → 列表回到离开前的位置。
+      //   点的行都在可见区的下半截：点之前把它滚到正中（pointOf）要往下滚，而列表已经到底，所以位置不动
+      await pane.tap({ settingsTab: 'providers' })
+      const long = await subList('the provider list for the scroll walk', fakeProviderId)
+      const bottom = await pane.settingsSubScrollToBottom()
+      expect(bottom, 'the provider list overflows its scroller').not.toBeNull()
+      expect(bottom!.scrollTop).toBeGreaterThan(0)
+      // dsf 2：scrollTop 可以是半像素，scrollHeight / clientHeight 是整数
+      expect(Math.abs(bottom!.scrollTop - bottom!.maxScrollTop)).toBeLessThanOrEqual(1)
+      // 落定：滚完没有谁把它挪回去
+      await sleep(200)
+      expect(await pane.settingsSubScroll()).toEqual(bottom)
+
+      /**
+       * 点进 `id` 的详情（在顶上），再返回（列表回到点之前的位置）。`overflow`：详情超不超出滚动层 ——
+       * 'no' 不管、'eventually' 等它长出来（模型列表是点进去才载的）、'at once' 一上屏就超出
+       */
+      const drillAndBack = async (
+        id: string,
+        overflow: 'no' | 'eventually' | 'at once'
+      ): Promise<void> => {
+        await pane.tap({ settingsProviderRow: id })
+        await subDetail(`the detail of ${id}`)
+        const top =
+          overflow === 'eventually'
+            ? await until(() => pane.settingsSubScroll(), `the detail of ${id} overflows`)
+            : await pane.settingsSubScroll()
+        if (overflow === 'at once')
+          expect(top, `the detail of ${id} overflows at once`).not.toBeNull()
+        // 没有可滚的（详情没超出）= 就在顶上
+        expect(
+          top?.scrollTop ?? 0,
+          `the scroller with ${id} open: ${JSON.stringify(top)}`
+        ).toBeLessThanOrEqual(1)
+        await pane.tap({ settingsBack: true })
+        await subList(`the provider list after the detail of ${id}`, id)
+        const restored = await pane.settingsSubScroll()
+        expect(restored, `the list scroller after back from ${id}`).not.toBeNull()
+        expect(
+          Math.abs(restored!.scrollTop - bottom!.scrollTop),
+          `restored ${JSON.stringify(restored)} vs left at ${JSON.stringify(bottom)}`
+        ).toBeLessThanOrEqual(2)
+      }
+      // 最后一行（它的详情很短：没什么可滚，浏览器自己把位置夹到 0 —— 返回照样回到原处）
+      await drillAndBack(long.rows.at(-1)!.id, 'no')
+      // 最后五行里最靠下的一家模型多的：详情超出，「回到顶上」是真的挪了位置
+      const modelCount = (id: string): Promise<number> =>
+        app.main.eval<number>(
+          `window.api.provider.listModels(${JSON.stringify(id)}).then((ms) => ms.length)`
+        )
+      let longDetail: string | undefined
+      for (const row of long.rows.slice(-5).reverse()) {
+        if ((await modelCount(row.id)) >= 20) {
+          longDetail = row.id
+          break
+        }
+      }
+      expect(longDetail, 'one of the last five providers has a long model list').toBeDefined()
+      // 第一次进去它的模型才载：详情先短后长，短的那一下浏览器已经把位置夹到 0 了
+      await drillAndBack(longDetail!, 'eventually')
+      // 第二次模型已在：详情从第一帧就超出 —— 落在顶上只能是产品挪的，不是浏览器夹的
+      await drillAndBack(longDetail!, 'at once')
+
+      // 8 行上的开关只切启用、不进详情（一家停用的内置提供商，切过去再切回来）
+      const target = providers.find((p) => p.isBuiltin && !p.isEnabled)
+      expect(target, 'a disabled builtin provider').toBeDefined()
+      flipped = target
+      for (const next of [1, 0]) {
+        await pane.tap({ settingsProviderToggle: target!.id })
+        await until(
+          async () => (await listAll()).find((p) => p.id === target!.id)?.isEnabled === next,
+          `${target!.name} isEnabled = ${next}`
+        )
+        const v = await pane.settingsSubView()
+        expect(v.list && !v.detail, `still the list after toggling to ${next}`).toBe(true)
+        expect(await pane.settingsBackButton()).toEqual({
+          text: en.settings.title,
+          ariaLabel: en.settings.title,
+          level: 'section'
+        })
+      }
+      flipped = undefined
+
+      // 9 回设置列表、回会话标签
+      await pane.tap({ settingsBack: true })
+      await sectionList()
+      await toTab('sessions')
+    } finally {
+      if (flipped) {
+        const now = (await listAll()).find((p) => p.id === flipped!.id)
+        if (now && now.isEnabled !== flipped.isEnabled)
+          await app.main.eval(
+            `window.api.provider.toggleEnabled(${JSON.stringify({ id: flipped.id, isEnabled: !!flipped.isEnabled })})`
+          )
+      }
+      if ((await pane.activeTab()) === 'settings') await settingsToList().catch(() => undefined)
+    }
+  })
 })
+
+/** 设置标签停在分区列表上：开着分区（或分区里的一项）就一层层返回 */
+async function settingsToList(): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    const back = await mobile().settingsBackButton()
+    if (!back) return
+    await mobile().tap({ settingsBack: true })
+    await until(
+      async () => JSON.stringify(await mobile().settingsBackButton()) !== JSON.stringify(back),
+      'one settings level back'
+    )
+  }
+}
 
 /** b 整个落在 card 里（±0.5px） */
 function expectInside(b: BoxShot | null, card: BoxShot, what: string): void {

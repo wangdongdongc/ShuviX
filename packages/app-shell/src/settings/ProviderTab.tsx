@@ -37,6 +37,12 @@ import { AddProviderDialog } from './AddProviderDialog'
 import { ModelCapabilitiesDialog } from './ModelCapabilitiesDialog'
 import { ProviderIcon } from './ProviderIcons'
 import {
+  StackedListRow,
+  useDrillDownScroll,
+  useStackedSettings,
+  useStackedSubPage
+} from './stackedSettings'
+import {
   SettingsSection,
   SettingsRow,
   SettingsBlock,
@@ -170,6 +176,8 @@ export function ProviderTab({
   const { t } = useTranslation()
   const providerCrud = caps?.providerCrud ?? true
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
+  // 手机的叠放设置：先是一整屏的提供商列表，点一个才进它的详情（不默认选中第一个）
+  const stacked = useStackedSettings()
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
   const [localEdits, setLocalEdits] = useState<
     Record<
@@ -255,14 +263,18 @@ export function ProviderTab({
       .catch(() => {})
   }, [providers]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** 默认选中第一个 provider */
+  /** 默认选中第一个 provider（叠放时不选：没选中就是在列表上；选中的被删了就回到列表） */
   useEffect(() => {
     if (selectedProviderId) {
       const exists = providers.some((p) => p.id === selectedProviderId)
       if (exists) return
     }
+    if (stacked) {
+      if (selectedProviderId) setSelectedProviderId(null)
+      return
+    }
     setSelectedProviderId(sortedProviders.length > 0 ? sortedProviders[0].id : null)
-  }, [providers, sortedProviders, selectedProviderId])
+  }, [providers, sortedProviders, selectedProviderId, stacked])
 
   const handleSelectProvider = (providerId: string): void => {
     setSelectedProviderId(providerId)
@@ -547,6 +559,176 @@ export function ProviderTab({
 
   const selectedProvider = providers.find((p) => p.id === selectedProviderId) ?? null
 
+  const detail = selectedProvider ? (
+    <ProviderDetail
+      provider={selectedProvider}
+      providerCrud={providerCrud}
+      edits={localEdits[selectedProvider.id] || {}}
+      models={providerModels[selectedProvider.id] || []}
+      modelSearch={modelSearch[selectedProvider.id] || ''}
+      newModelId={newModelId[selectedProvider.id] || ''}
+      syncing={syncingProviderId === selectedProvider.id}
+      syncMessage={syncMessages[selectedProvider.id] ?? null}
+      showKey={!!showKeys[selectedProvider.id]}
+      saved={savedIds.has(selectedProvider.id)}
+      hasEdits={hasEdits(selectedProvider.id)}
+      getCustomHeaders={getCustomHeaders}
+      oauth={
+        oauthApi && oauthStatus[selectedProvider.id]?.supported
+          ? {
+              slug: oauthStatus[selectedProvider.id]?.slug,
+              connected: !!oauthStatus[selectedProvider.id]?.connected,
+              flow: oauthFlow[selectedProvider.id] ?? EMPTY_FLOW,
+              busy: !!oauthBusy[selectedProvider.id] || !!oauthStatus[selectedProvider.id]?.pending,
+              error: oauthError[selectedProvider.id] ?? null,
+              onLogin: () => void handleOAuthLogin(selectedProvider.id),
+              onCancel: () => void handleOAuthCancel(selectedProvider.id),
+              onLogout: () => void handleOAuthLogout(selectedProvider.id),
+              onAnswer: oauthApi.answer
+                ? (promptId: string, value: string) =>
+                    handleOAuthAnswer(selectedProvider.id, promptId, value)
+                : undefined,
+              onOpenVerification: oauthApi.openExternal,
+              remote: caps?.remoteSignIn === true
+            }
+          : null
+      }
+      onToggleShowKey={() =>
+        setShowKeys((prev) => ({
+          ...prev,
+          [selectedProvider.id]: !prev[selectedProvider.id]
+        }))
+      }
+      onUpdateEdit={(field, value) => updateLocalEdit(selectedProvider.id, field, value)}
+      onSave={() =>
+        handleSaveProvider(selectedProvider.id, !selectedProvider.isEnabled || undefined)
+      }
+      onSetModelSearch={(v) => setModelSearch((prev) => ({ ...prev, [selectedProvider.id]: v }))}
+      onSetNewModelId={(v) => setNewModelId((prev) => ({ ...prev, [selectedProvider.id]: v }))}
+      onAddModel={() => handleAddModel(selectedProvider.id)}
+      onSyncModels={() => handleSyncModels(selectedProvider.id)}
+      onToggleModel={(modelId, isEnabled) =>
+        handleToggleModel(modelId, selectedProvider.id, isEnabled)
+      }
+      onDeleteModel={(modelId) => handleDeleteModel(modelId, selectedProvider.id)}
+      onEditModel={(model, modelCaps) =>
+        setEditingModel({
+          id: model.id,
+          providerId: selectedProvider.id,
+          modelId: model.modelId,
+          caps: modelCaps
+        })
+      }
+      onDeleteProvider={() => onRequestDeleteProvider?.(selectedProvider)}
+    />
+  ) : (
+    <div className="h-full flex items-center justify-center text-text-tertiary text-[11px]">
+      {t('settings.providerSectionTitle')}
+    </div>
+  )
+
+  const dialogs = (
+    <>
+      {providerCrud && showAddDialog && (
+        <AddProviderDialog onAdd={handleAddProvider} onClose={() => setShowAddDialog(false)} />
+      )}
+
+      {editingModel && (
+        <ModelCapabilitiesDialog
+          modelId={editingModel.modelId}
+          capabilities={editingModel.caps}
+          onSave={async (newCaps) => {
+            await api.updateModelCapabilities({ id: editingModel.id, capabilities: newCaps })
+            await loadModelsFor(editingModel.providerId)
+          }}
+          onClose={() => setEditingModel(null)}
+        />
+      )}
+    </>
+  )
+
+  const { ref: drillRef, remember: rememberListScroll } = useDrillDownScroll(
+    stacked && !!selectedProvider
+  )
+
+  useStackedSubPage(
+    stacked && selectedProvider
+      ? {
+          title: selectedProvider.displayName || selectedProvider.name,
+          onBack: () => setSelectedProviderId(null)
+        }
+      : null
+  )
+
+  if (stacked) {
+    return (
+      <div className="flex-1 min-h-0 flex flex-col">
+        {selectedProvider ? (
+          <div ref={drillRef} className="flex-1 min-h-0 overflow-y-auto" data-stacked-detail="">
+            {detail}
+          </div>
+        ) : (
+          <div ref={drillRef} className="flex-1 min-h-0 overflow-y-auto" data-stacked-list="">
+            {sortedProviders.map((p) => {
+              const classifierOnly = !!p.isBuiltin && isClassifierOnlyProvider(p.name)
+              const hasModels = providerModels[p.id]
+              const noEnabledModels =
+                !!p.isEnabled && !classifierOnly && hasModels && !hasModels.some((m) => m.isEnabled)
+              return (
+                <StackedListRow
+                  key={p.id}
+                  rowProps={{ 'data-provider-row': p.id }}
+                  icon={<ProviderIcon name={p.name} />}
+                  label={p.displayName || p.name}
+                  tag={classifierOnly ? <ClassifierTag /> : undefined}
+                  dimmed={!p.isEnabled}
+                  onClick={() => {
+                    rememberListScroll()
+                    handleSelectProvider(p.id)
+                  }}
+                  trailing={
+                    <>
+                      {noEnabledModels && (
+                        <TriangleAlert
+                          size={14}
+                          className="text-amber-500 shrink-0"
+                          aria-label={t('settings.noEnabledModels')}
+                        />
+                      )}
+                      <span
+                        data-provider-toggle={p.id}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                        className="shrink-0"
+                      >
+                        <Toggle
+                          on={!!p.isEnabled}
+                          onClick={() => handleToggleProvider(p.id, !p.isEnabled)}
+                        />
+                      </span>
+                    </>
+                  }
+                />
+              )
+            })}
+            {providerCrud && (
+              <button
+                type="button"
+                data-add-provider=""
+                onClick={() => setShowAddDialog(true)}
+                className="w-full flex items-center gap-3 px-4 min-h-[48px] text-[15px] text-accent active:bg-bg-hover"
+              >
+                <Plus size={18} />
+                {t('settings.addProvider')}
+              </button>
+            )}
+          </div>
+        )}
+        {dialogs}
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-1 min-h-0 h-full">
       {/* 左侧：提供商列表 */}
@@ -606,97 +788,9 @@ export function ProviderTab({
       </div>
 
       {/* 右侧：详情面板 */}
-      <div className="flex-1 min-w-0 overflow-y-auto">
-        {selectedProvider ? (
-          <ProviderDetail
-            provider={selectedProvider}
-            providerCrud={providerCrud}
-            edits={localEdits[selectedProvider.id] || {}}
-            models={providerModels[selectedProvider.id] || []}
-            modelSearch={modelSearch[selectedProvider.id] || ''}
-            newModelId={newModelId[selectedProvider.id] || ''}
-            syncing={syncingProviderId === selectedProvider.id}
-            syncMessage={syncMessages[selectedProvider.id] ?? null}
-            showKey={!!showKeys[selectedProvider.id]}
-            saved={savedIds.has(selectedProvider.id)}
-            hasEdits={hasEdits(selectedProvider.id)}
-            getCustomHeaders={getCustomHeaders}
-            oauth={
-              oauthApi && oauthStatus[selectedProvider.id]?.supported
-                ? {
-                    slug: oauthStatus[selectedProvider.id]?.slug,
-                    connected: !!oauthStatus[selectedProvider.id]?.connected,
-                    flow: oauthFlow[selectedProvider.id] ?? EMPTY_FLOW,
-                    busy:
-                      !!oauthBusy[selectedProvider.id] ||
-                      !!oauthStatus[selectedProvider.id]?.pending,
-                    error: oauthError[selectedProvider.id] ?? null,
-                    onLogin: () => void handleOAuthLogin(selectedProvider.id),
-                    onCancel: () => void handleOAuthCancel(selectedProvider.id),
-                    onLogout: () => void handleOAuthLogout(selectedProvider.id),
-                    onAnswer: oauthApi.answer
-                      ? (promptId: string, value: string) =>
-                          handleOAuthAnswer(selectedProvider.id, promptId, value)
-                      : undefined,
-                    onOpenVerification: oauthApi.openExternal,
-                    remote: caps?.remoteSignIn === true
-                  }
-                : null
-            }
-            onToggleShowKey={() =>
-              setShowKeys((prev) => ({
-                ...prev,
-                [selectedProvider.id]: !prev[selectedProvider.id]
-              }))
-            }
-            onUpdateEdit={(field, value) => updateLocalEdit(selectedProvider.id, field, value)}
-            onSave={() =>
-              handleSaveProvider(selectedProvider.id, !selectedProvider.isEnabled || undefined)
-            }
-            onSetModelSearch={(v) =>
-              setModelSearch((prev) => ({ ...prev, [selectedProvider.id]: v }))
-            }
-            onSetNewModelId={(v) =>
-              setNewModelId((prev) => ({ ...prev, [selectedProvider.id]: v }))
-            }
-            onAddModel={() => handleAddModel(selectedProvider.id)}
-            onSyncModels={() => handleSyncModels(selectedProvider.id)}
-            onToggleModel={(modelId, isEnabled) =>
-              handleToggleModel(modelId, selectedProvider.id, isEnabled)
-            }
-            onDeleteModel={(modelId) => handleDeleteModel(modelId, selectedProvider.id)}
-            onEditModel={(model, modelCaps) =>
-              setEditingModel({
-                id: model.id,
-                providerId: selectedProvider.id,
-                modelId: model.modelId,
-                caps: modelCaps
-              })
-            }
-            onDeleteProvider={() => onRequestDeleteProvider?.(selectedProvider)}
-          />
-        ) : (
-          <div className="h-full flex items-center justify-center text-text-tertiary text-[11px]">
-            {t('settings.providerSectionTitle')}
-          </div>
-        )}
-      </div>
+      <div className="flex-1 min-w-0 overflow-y-auto">{detail}</div>
 
-      {providerCrud && showAddDialog && (
-        <AddProviderDialog onAdd={handleAddProvider} onClose={() => setShowAddDialog(false)} />
-      )}
-
-      {editingModel && (
-        <ModelCapabilitiesDialog
-          modelId={editingModel.modelId}
-          capabilities={editingModel.caps}
-          onSave={async (newCaps) => {
-            await api.updateModelCapabilities({ id: editingModel.id, capabilities: newCaps })
-            await loadModelsFor(editingModel.providerId)
-          }}
-          onClose={() => setEditingModel(null)}
-        />
-      )}
+      {dialogs}
     </div>
   )
 }

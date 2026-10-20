@@ -26,6 +26,12 @@ import {
 } from 'lucide-react'
 import type { BuiltinToolDefinition, ToolPlatform } from '@shuvix/chat-protocol/chatApi'
 import { SettingsSection } from './SettingsPrimitives'
+import {
+  StackedListRow,
+  useDrillDownScroll,
+  useStackedSettings,
+  useStackedSubPage
+} from './stackedSettings'
 
 /** 列表末尾追加的宿主特有子页（无对应 LLM 工具，如桌面 Browser 数据/证书设置） */
 export interface BuiltinToolsExtraTab {
@@ -290,18 +296,78 @@ export function BuiltinToolsView({
 }: BuiltinToolsViewProps): React.JSX.Element {
   const [defs, setDefs] = useState<BuiltinToolDefinition[]>([])
   const [subTab, setSubTab] = useState<string>('')
+  // 手机的叠放设置：先是一整屏的工具列表，点一项才进它的详情（不默认选中第一项）
+  const stacked = useStackedSettings()
 
   // 仅在挂载时拉取一次：用 ref 捕获首次传入的 loadDefinitions，避免把它放进 effect 依赖
   const loadRef = useRef(loadDefinitions)
   useEffect(() => {
     loadRef.current().then((list) => {
       setDefs(list)
-      setSubTab((cur) => cur || list[0]?.name || '')
+      if (!stacked) setSubTab((cur) => cur || list[0]?.name || '')
     })
-  }, [])
+  }, [stacked])
 
   const activeExtra = extraTabs.find((tab) => tab.id === subTab)
   const activeDef = defs.find((d) => d.name === subTab)
+  useStackedSubPage(
+    stacked && (activeExtra || activeDef)
+      ? {
+          // 与列表行同一个回落：没有标签的工具用它的名字
+          title: activeExtra?.label || activeDef?.label || activeDef?.name || subTab,
+          onBack: () => setSubTab('')
+        }
+      : null
+  )
+
+  const { ref: drillRef, remember: rememberListScroll } = useDrillDownScroll(
+    stacked && !!(activeExtra || activeDef)
+  )
+
+  const detail = activeExtra ? (
+    activeExtra.content
+  ) : activeDef ? (
+    <div>
+      <ToolMetaCard def={activeDef} />
+      {renderToolExtra?.(activeDef.name)}
+    </div>
+  ) : null
+
+  if (stacked) {
+    return activeExtra || activeDef ? (
+      <div ref={drillRef} className="flex-1 min-h-0 overflow-y-auto" data-stacked-detail="">
+        {detail}
+      </div>
+    ) : (
+      <div ref={drillRef} className="flex-1 min-h-0 overflow-y-auto" data-stacked-list="">
+        {defs.map((d) => (
+          <StackedListRow
+            key={d.name}
+            rowProps={{ 'data-tool-row': d.name }}
+            icon={<ToolTabIcon name={d.icon} />}
+            label={d.label || d.name}
+            tag={<PlatformTag platforms={d.platforms} />}
+            onClick={() => {
+              rememberListScroll()
+              setSubTab(d.name)
+            }}
+          />
+        ))}
+        {extraTabs.map((tab) => (
+          <StackedListRow
+            key={tab.id}
+            rowProps={{ 'data-tool-row': tab.id }}
+            icon={tab.icon ?? <Wrench size={14} className="shrink-0 text-text-tertiary" />}
+            label={tab.label}
+            onClick={() => {
+              rememberListScroll()
+              setSubTab(tab.id)
+            }}
+          />
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-1 min-h-0 h-full">
@@ -331,16 +397,7 @@ export function BuiltinToolsView({
       </div>
 
       {/* 右侧内容区 */}
-      <div className="flex-1 min-w-0 overflow-y-auto">
-        {activeExtra ? (
-          activeExtra.content
-        ) : activeDef ? (
-          <div>
-            <ToolMetaCard def={activeDef} />
-            {renderToolExtra?.(activeDef.name)}
-          </div>
-        ) : null}
-      </div>
+      <div className="flex-1 min-w-0 overflow-y-auto">{detail}</div>
     </div>
   )
 }

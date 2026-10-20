@@ -44,6 +44,28 @@
  *   PT-41 没给 / 给 false → 没有 `[data-oauth-remote]`，文案就是 PT-7 那句
  *   PT-42 设备码流程不受影响：用户码照显示，没有 `[data-oauth-remote]`
  *
+ * 手机的叠放设置（ProviderTab 作为真 SettingsContainer `stacked` 里一个分区的内容；stackedSettings.tsx）：先是一整屏
+ * 的提供商列表（`[data-stacked-list]`，什么都不选），点一行 → 只剩它的详情（`[data-stacked-detail]`），容器头部
+ * 换成第二层（`data-settings-level="item"`：返回键是分区名，`[data-settings-heading]` 是这一家的名字）：
+ *   PS-1  挂上：列表、没有详情；行按排序（启用在前，同组自定义在前）；没有详情标题、没有 220px 的左栏；level
+ *         section、头部是分区名；没选中任何一家 → 不查登录状态
+ *   PS-2  点 OpenAI → 详情（h3 = OpenAI）、列表没了；level item、返回键文字与 aria = 分区名、头部 = OpenAI；
+ *         查它的登录状态；点一家停用的 → 现载它的模型
+ *   PS-3  没有 displayName 的自定义提供商 → 头部是 name，与行上的标签相同
+ *   PS-4  返回 → 列表、level section、返回键回到标题、头部是分区名、容器的 onBack 没调；再返回 → 容器的 onBack 一次
+ *   PS-5  行上的开关（`[data-provider-toggle=<id>] button`，启用的、停用的各点一次）→ toggleEnabled 取反一次 +
+ *         onChanged；不进详情
+ *   PS-6  开关上冒泡的 Enter / 空格不进详情、不 preventDefault
+ *   PS-7  行上的 Enter / 空格进详情
+ *   PS-8  删掉开着的那一家（宿主确认后 providers 里没了它）→ 回到列表，不顺手开别的
+ *   PS-9  `[data-add-provider]` 在列表里（caps 缺省 / providerCrud=true），点它开新增对话框；providerCrud=false
+ *         时没有；详情里从来没有
+ *   PS-10 不叠放（桌面）：照旧默认选中排第一的那家、行都在、没有任何 `[data-stacked-*]`
+ *   PS-11 叠放时 providers 先空后到 → 仍是列表、不选；桌面对照：到了就选中第一家
+ *   PS-12 开着一家时回设置列表、再进来 → 新的列表
+ *   PS-13 TypeSafe 行恰一个分类器标签；启用但没有启用模型 → 行上有警告三角；停用的行 opacity-60
+ *   PS-14 开着的那一家改名（props）→ 头部跟着变，仍在详情
+ *
  * 包入口 `@shuvix/chat-ui` 顶掉：`isImeComposing` 照原实现（组字判定就是它），`useDialogClose` 给两个对话框
  * （本文件不打开它们）。i18n 用 en。文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX。
  */
@@ -63,6 +85,7 @@ vi.mock('@shuvix/chat-ui', () => ({
   useDialogClose: (onClose: () => void) => ({ closing: false, handleClose: onClose })
 }))
 
+import { SettingsContainer } from './SettingsContainer'
 import {
   ProviderTab,
   type ProviderOAuthTabEvent,
@@ -1098,5 +1121,318 @@ describe('remote sign-in (the web client, phase D)', () => {
     expect(containerText()).toContain(S.oauthDeviceHint)
     expect($('[data-oauth-remote]')).toBeNull()
     expect($('[data-oauth-browser]')).toBeNull()
+  })
+})
+
+describe('stacked (the phone settings): a list first, then one provider’s detail', () => {
+  const T = 'Settings'
+  const P = S.tabProviders
+  const CUSTOM_ON = 'row-custom-on'
+  const CUSTOM_OFF = 'row-custom-off'
+  const BUILTIN_OFF = 'row-deepseek'
+  const MY_LLM = 'row-my-llm'
+  const TS = 'typesafe'
+  const RICH: ProviderInfo[] = [
+    provider({ id: BUILTIN_OFF, name: 'deepseek', displayName: 'DeepSeek', isEnabled: 0 }),
+    ...PROVIDERS,
+    provider({
+      id: CUSTOM_OFF,
+      name: 'custom-off',
+      displayName: 'Custom Off',
+      isBuiltin: 0,
+      isEnabled: 0
+    }),
+    provider({ id: CUSTOM_ON, name: 'custom-on', displayName: 'Custom On', isBuiltin: 0 })
+  ]
+  /** RICH 的排序：启用在前；同组里自定义在前；其余保持原序 */
+  const RICH_SORTED = [CUSTOM_ON, XAI, KIMI, OPENAI, ANTHROPIC, CUSTOM_OFF, BUILTIN_OFF]
+  const MY_LLM_ROW = provider({ id: MY_LLM, name: 'my-llm', displayName: '', isBuiltin: 0 })
+
+  let spySection: ReturnType<typeof vi.fn<() => void>>
+  beforeEach(() => {
+    spySection = vi.fn<() => void>()
+  })
+
+  /** ProviderTab 作为真 SettingsContainer（stacked）里「提供商」分区的内容 */
+  async function renderStacked(
+    over: Partial<ProviderTabProps> = {},
+    providers: ProviderInfo[] = RICH,
+    showList = false
+  ): Promise<void> {
+    const props: ProviderTabProps = {
+      providers,
+      api: h.api,
+      onChanged: h.onChanged as unknown as ProviderTabProps['onChanged'],
+      ...over
+    }
+    await settle(() =>
+      root.render(
+        createElement(SettingsContainer, {
+          tabs: [{ id: 'providers', label: P, content: createElement(ProviderTab, props) }],
+          activeTab: 'providers',
+          onTabChange: () => {},
+          title: T,
+          stacked: { showList, onBack: spySection }
+        })
+      )
+    )
+  }
+
+  const listRows = (): string[] =>
+    [...container.querySelectorAll<HTMLElement>('[data-stacked-row][data-provider-row]')].map(
+      (el) => el.dataset.providerRow ?? ''
+    )
+  const level = (): string | null =>
+    $('[data-settings-back]')?.getAttribute('data-settings-level') ?? null
+  const heading = (): string | null => $('[data-settings-heading]')?.textContent ?? null
+  const back = (): { text: string; aria: string | null } => {
+    const b = must('[data-settings-back]')
+    return { text: (b.textContent ?? '').trim(), aria: b.getAttribute('aria-label') }
+  }
+  const detailTitle = (): string | null =>
+    $('[data-stacked-detail] h3')?.textContent?.trim() ?? null
+  const rowLabel = (id: string): string =>
+    (must(`[data-provider-row="${id}"]`).querySelector('span.truncate')?.textContent ?? '').trim()
+  const toggleOf = (id: string): HTMLButtonElement =>
+    must<HTMLButtonElement>(`[data-provider-toggle="${id}"] button`)
+  const goBack = (): Promise<void> => click('[data-settings-back]')
+  /** 新增提供商对话框（它的标题） */
+  const addDialogOpen = (): boolean =>
+    [...container.querySelectorAll('h3')].some((el) => el.textContent?.trim() === S.newProvider)
+  /** 冒泡、可取消的 keydown（返回事件，看 defaultPrevented） */
+  async function keydown(el: HTMLElement, key: string): Promise<KeyboardEvent> {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+    await settle(() => {
+      el.dispatchEvent(event)
+    })
+    return event
+  }
+  function expectList(): void {
+    expect($('[data-stacked-list]')).not.toBeNull()
+    expect($('[data-stacked-detail]')).toBeNull()
+    expect($('h3')).toBeNull()
+    expect(level()).toBe('section')
+    expect(heading()).toBe(P)
+  }
+
+  it('PS-1 mounting shows the full-width list in sorted order with nothing selected', async () => {
+    await renderStacked()
+
+    expect($('[data-stacked-list]')).not.toBeNull()
+    expect($('[data-stacked-detail]')).toBeNull()
+    expect(listRows()).toEqual(RICH_SORTED)
+    expect($('h3')).toBeNull()
+    expect($('.w-\\[220px\\]')).toBeNull()
+    expect(level()).toBe('section')
+    expect(heading()).toBe(P)
+    expect(back()).toEqual({ text: T, aria: T })
+    expect(h.oauth.status).not.toHaveBeenCalled()
+  })
+
+  it('PS-2 tapping OpenAI shows only its detail; the header goes to the second level', async () => {
+    await renderStacked()
+    await select(OPENAI)
+
+    expect($('[data-stacked-detail]')).not.toBeNull()
+    expect(detailTitle()).toBe('OpenAI')
+    expect($('[data-stacked-list]')).toBeNull()
+    expect($('[data-provider-row]')).toBeNull()
+    expect(level()).toBe('item')
+    expect(back()).toEqual({ text: P, aria: P })
+    expect(heading()).toBe('OpenAI')
+    expect(h.oauth.status).toHaveBeenCalledWith(OPENAI)
+    expect(h.api.listModels).toHaveBeenCalledWith(OPENAI)
+
+    // 停用的那一家没有预载过模型：点进去才载
+    await goBack()
+    vi.mocked(h.api.listModels).mockClear()
+    await select(BUILTIN_OFF)
+    expect(detailTitle()).toBe('DeepSeek')
+    expect(h.api.listModels).toHaveBeenCalledWith(BUILTIN_OFF)
+    expect(h.oauth.status).toHaveBeenCalledWith(BUILTIN_OFF)
+  })
+
+  it('PS-3 a custom provider without displayName: the heading is its name, like its row label', async () => {
+    await renderStacked({}, [...RICH, MY_LLM_ROW])
+    expect(rowLabel(MY_LLM)).toBe('my-llm')
+
+    await select(MY_LLM)
+    expect(heading()).toBe('my-llm')
+    expect(detailTitle()).toBe('my-llm')
+  })
+
+  it('PS-4 back from the item lands on the list (not the container’s onBack); back again is the container’s onBack', async () => {
+    await renderStacked()
+    await select(OPENAI)
+    await goBack()
+
+    expectList()
+    expect(listRows()).toEqual(RICH_SORTED)
+    expect(back()).toEqual({ text: T, aria: T })
+    expect(spySection).not.toHaveBeenCalled()
+
+    await goBack()
+    expect(spySection).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['an enabled row', XAI, false],
+    ['a disabled row', BUILTIN_OFF, true]
+  ] as const)(
+    'PS-5 the switch on %s flips the provider and does not open it',
+    async (_what, id, next) => {
+      await renderStacked()
+      await settle(() => toggleOf(id).click())
+
+      expect(h.api.toggleEnabled).toHaveBeenCalledTimes(1)
+      expect(h.api.toggleEnabled).toHaveBeenCalledWith({ id, isEnabled: next })
+      expect(h.onChanged).toHaveBeenCalled()
+      expect($('[data-stacked-detail]')).toBeNull()
+      expect(level()).toBe('section')
+    }
+  )
+
+  it.each(['Enter', ' '])(
+    'PS-6 %j bubbling from the switch neither opens the row nor is prevented',
+    async (key) => {
+      await renderStacked()
+      const event = await keydown(toggleOf(XAI), key)
+
+      expect($('[data-stacked-detail]')).toBeNull()
+      expect(level()).toBe('section')
+      expect(event.defaultPrevented).toBe(false)
+    }
+  )
+
+  it.each(['Enter', ' '])('PS-7 %j on a row opens its detail', async (key) => {
+    await renderStacked()
+    await keydown(must(`[data-provider-row="${KIMI}"]`), key)
+
+    expect(detailTitle()).toBe('Kimi Code')
+    expect(level()).toBe('item')
+    expect(heading()).toBe('Kimi Code')
+  })
+
+  it('PS-8 the open provider deleted by the host → back to the list, nothing else opened', async () => {
+    const onRequestDeleteProvider = vi.fn()
+    await renderStacked({ onRequestDeleteProvider })
+    await select(CUSTOM_ON)
+    await click(`[data-stacked-detail] button[title="${S.deleteProvider}"]`)
+    expect(onRequestDeleteProvider).toHaveBeenCalledTimes(1)
+    expect(onRequestDeleteProvider.mock.calls[0][0]).toMatchObject({ id: CUSTOM_ON })
+
+    await renderStacked(
+      { onRequestDeleteProvider },
+      RICH.filter((p) => p.id !== CUSTOM_ON)
+    )
+    expectList()
+    expect(listRows()).toEqual(RICH_SORTED.filter((id) => id !== CUSTOM_ON))
+  })
+
+  it.each([
+    ['caps omitted', undefined],
+    ['providerCrud true', { providerCrud: true }]
+  ] as const)(
+    'PS-9 %s: the add button sits in the list and opens the dialog',
+    async (_what, caps) => {
+      await renderStacked({ caps })
+      const add = must('[data-stacked-list] [data-add-provider]')
+      expect(add.textContent?.trim()).toBe(S.addProvider)
+      expect(addDialogOpen()).toBe(false)
+      await settle(() => add.click())
+      expect(addDialogOpen()).toBe(true)
+    }
+  )
+
+  it('PS-9 providerCrud false: no add button; a detail never has one', async () => {
+    await renderStacked({ caps: { providerCrud: false } })
+    expect($('[data-add-provider]')).toBeNull()
+
+    await renderStacked()
+    expect($('[data-add-provider]')).not.toBeNull()
+    await select(OPENAI)
+    expect($('[data-stacked-detail]')).not.toBeNull()
+    expect($('[data-add-provider]')).toBeNull()
+  })
+
+  it('PS-10 outside stacked (desktop) nothing changes: the first sorted provider is selected, rows stay, no stacked markers', async () => {
+    await render({}, RICH)
+
+    expect(must('h3').textContent?.trim()).toBe('Custom On')
+    expect(
+      [...container.querySelectorAll<HTMLElement>('[data-provider-row]')].map(
+        (el) => el.dataset.providerRow
+      )
+    ).toEqual(RICH_SORTED)
+    expect($('[data-stacked-list]')).toBeNull()
+    expect($('[data-stacked-detail]')).toBeNull()
+    expect($('[data-stacked-row]')).toBeNull()
+    expect($('[data-provider-toggle]')).toBeNull()
+    expect(h.oauth.status).toHaveBeenCalledWith(CUSTOM_ON)
+  })
+
+  it('PS-11 stacked: providers arriving after an empty first render still leave the list, nothing selected', async () => {
+    await renderStacked({}, [])
+    expect($('[data-stacked-list]')).not.toBeNull()
+    expect(listRows()).toEqual([])
+    expect(level()).toBe('section')
+
+    await renderStacked({}, PROVIDERS)
+    expectList()
+    expect(listRows()).toEqual([XAI, KIMI, OPENAI, ANTHROPIC])
+    expect(h.oauth.status).not.toHaveBeenCalled()
+  })
+
+  it('PS-11 desktop counterpart: the first provider gets selected once the list arrives', async () => {
+    await render({}, [])
+    expect($('h3')).toBeNull()
+
+    await render({}, PROVIDERS)
+    expect(must('h3').textContent?.trim()).toBe('xAI')
+    expect(h.oauth.status).toHaveBeenCalledWith(XAI)
+  })
+
+  it('PS-12 leaving for the settings list with a provider open and coming back gives a fresh list', async () => {
+    await renderStacked()
+    await select(OPENAI)
+    expect(level()).toBe('item')
+
+    await renderStacked({}, RICH, true)
+    expect($('[data-settings-back]')).toBeNull()
+    expect($('[data-stacked-list]')).toBeNull()
+
+    await renderStacked()
+    expectList()
+    expect(back()).toEqual({ text: T, aria: T })
+  })
+
+  it('PS-13 the TypeSafe row has one classifier tag; an enabled row without enabled models warns; disabled rows are dimmed', async () => {
+    const TYPESAFE = provider({ id: TS, name: 'typesafe', displayName: 'TypeSafe', isEnabled: 0 })
+    await renderStacked({}, [...RICH, TYPESAFE])
+
+    const row = (id: string): HTMLElement => must(`[data-provider-row="${id}"]`)
+    expect(row(TS).querySelectorAll('[data-provider-classifier-tag]')).toHaveLength(1)
+    expect(container.querySelectorAll('[data-provider-classifier-tag]')).toHaveLength(1)
+    // listModels 回空：启用的 xAI 没有启用的模型
+    expect(row(XAI).querySelector(`[aria-label="${S.noEnabledModels}"]`)).not.toBeNull()
+    expect(row(BUILTIN_OFF).querySelector(`[aria-label="${S.noEnabledModels}"]`)).toBeNull()
+    for (const id of [BUILTIN_OFF, CUSTOM_OFF, TS])
+      expect(row(id).className, id).toContain('opacity-60')
+    for (const id of [XAI, CUSTOM_ON]) expect(row(id).className, id).not.toContain('opacity-60')
+  })
+
+  it('PS-14 renaming the open provider through the props updates the heading and stays on the detail', async () => {
+    await renderStacked()
+    await select(CUSTOM_ON)
+    expect(heading()).toBe('Custom On')
+
+    await renderStacked(
+      {},
+      RICH.map((p) => (p.id === CUSTOM_ON ? { ...p, displayName: 'Renamed' } : p))
+    )
+    expect(heading()).toBe('Renamed')
+    expect(detailTitle()).toBe('Renamed')
+    expect(level()).toBe('item')
+    expect($('[data-stacked-list]')).toBeNull()
   })
 })
