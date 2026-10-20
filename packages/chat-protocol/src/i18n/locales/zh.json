@@ -215,7 +215,7 @@
     "rollbackWarning": "回退将删除该消息之后的所有对话记录，此操作不可恢复。",
     "forkFailedTitle": "无法分支这个会话",
     "forkBusy": "它还在工作。先停下它或等它做完，再试一次。",
-    "forkNotForkable": "目前只有项目里的会话可以分支。",
+    "forkNotForkable": "笔记本、Chrome 标签页会话和旧的只读会话不能分支。",
     "forkInvalidTarget": "那条回复已经不在当前对话里了。",
     "forkNoSession": "这个会话已经不存在了。",
     "forkFailed": "复制对话时出错，没有建出新会话。"

@@ -10,7 +10,7 @@ import { selectSessionViewOf, useChatStore } from '../stores/chatStore'
 type ChatStoreState = ReturnType<typeof useChatStore.getState>
 
 /**
- * 这条会话此刻能不能 fork（界面给不给入口）：形态给（项目会话，`isForkableSessionShape`）、视图说能回退
+ * 这条会话此刻能不能 fork（界面给不给入口）：形态给（`isForkableSessionShape`）、视图说能回退
  * （新格式存储 —— 旧格式只读）、视图空闲。宿主有没有 `session.fork` 由调用方另看。还没收到视图 → false。
  * 后台还有派生 agent 在跑这一种视图看不出来，交给宿主拒绝（`busy`）。
  */

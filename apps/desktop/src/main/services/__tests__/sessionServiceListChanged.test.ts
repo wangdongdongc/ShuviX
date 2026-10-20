@@ -33,7 +33,10 @@ vi.mock('../../dao/sessionDao', () => ({
     touchActive: vi.fn(),
     // 删除先递归删子会话（本组用例都是无子会话的顶层会话）
     findChildren: () => [],
-    pick: () => undefined
+    pick: () => undefined,
+    // 删除先读它借用的工作目录（会话 fork 共用的临时工作区），再判断临时工作区还有没有人用
+    pickSettings: () => undefined,
+    existsWithWorkingDirectory: () => false
   }
 }))
 vi.mock('../../dao/sessionDayPromptDao', () => ({

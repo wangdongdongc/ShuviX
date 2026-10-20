@@ -10,7 +10,7 @@
  * 永远不会变成「不套沙箱又不问」。
  */
 import { createHash } from 'crypto'
-import { dirname, join, sep } from 'path'
+import { basename, dirname, join, sep } from 'path'
 import { isSafeSessionId } from '../../utils/paths'
 import { MDNS_RESPONDER_SOCKET, SHUVIX_CONTENT_DIRS } from './tables'
 import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from './types'
@@ -43,18 +43,30 @@ function coversHome(root: string, home: string): boolean {
 }
 
 /**
+ * 这个会话可以当自己的那个临时工作区：工作目录**正是**某条会话的临时工作区（`temp_workspace/<id>` 本身 ——
+ * 会话 fork 共用源会话的，`settings.workingDirectory` 只有主进程写）就是那一个，否则是本会话自己的
+ * `temp_workspace/<sid>`。只认文件夹本身、不认它里面的子目录，与删除时认主人的口径（`tempWorkspaceOwnerOf`）
+ * 一致。临时工作区里只有会话自己的文件，没有数据库、配置或转写 —— 放行它不会让命令出沙箱。
+ */
+function ownTempWorkspace(userData: string, sessionId: string, ws: string): string {
+  const base = join(userData, 'temp_workspace')
+  if (dirname(ws) === base && isSafeSessionId(basename(ws))) return ws
+  return join(base, sessionId)
+}
+
+/**
  * 一个可写根（工作目录或写授权）为什么不适合放进沙箱（适合时返回 null）：
  *  - 是 `/` 或覆盖家目录 —— 放行它等于放行整个家目录；
  *  - 落在 ShuviX 自己的配置里（agents / policies / hooks / bots / skills 的 notebook）——
  *    主进程把那里的文件读作规矩；
- *  - 落在应用数据里（本会话的临时工作区除外）—— 数据库、其他会话的转写都在那里；
+ *  - 落在应用数据里（本会话可用的那个临时工作区除外，见 ownTempWorkspace）—— 数据库、其他会话的转写都在那里；
  *  - **包含** ShuviX 的配置或应用数据（如 `~/Library`）—— 数据库里有沙箱开关与「允许并记住」，
  *    命令改得到它们就等于出得了沙箱。
  * 判定只回答一句短语，前缀（「working directory」/「a write grant」）由调用方加。
  */
 function rootUnsuitable(
   paths: Pick<SandboxHostPaths, 'home' | 'shuvixHome' | 'userData'>,
-  sessionId: string,
+  tempWorkspace: string,
   root: string
 ): string | null {
   if (coversHome(root, paths.home)) return 'covers the home folder'
@@ -62,7 +74,6 @@ function rootUnsuitable(
     const content = SHUVIX_CONTENT_DIRS.map((d) => join(paths.shuvixHome, d))
     if (!withinAny(root, content)) return "is ShuviX's own configuration"
   }
-  const tempWorkspace = join(paths.userData, 'temp_workspace', sessionId)
   if (isWithin(root, paths.userData) && !isWithin(root, tempWorkspace)) {
     return "is inside ShuviX's application data"
   }
@@ -78,7 +89,7 @@ export function workingDirectoryUnsuitable(
   sessionId: string,
   ws: string
 ): string | null {
-  const why = rootUnsuitable(paths, sessionId, ws)
+  const why = rootUnsuitable(paths, ownTempWorkspace(paths.userData, sessionId, ws), ws)
   return why ? `working directory ${why}` : null
 }
 
@@ -164,8 +175,13 @@ export function buildSandboxSpec(
   // 写授权也是可写根，过同一套判定：覆盖家目录、碰到 ShuviX 的配置或应用数据的授权，命令拿着它
   // 就能改规矩 / 关沙箱 —— 与其套一个形同虚设的沙箱，不如逐条询问（文件工具照样凭授权写）
   const resolved = { home, shuvixHome: real(paths.shuvixHome), userData: real(paths.userData) }
+  const tempWorkspace = ownTempWorkspace(
+    resolved.userData,
+    input.sessionId,
+    real(input.workingDirectory)
+  )
   for (const g of grantsWrite) {
-    const why = rootUnsuitable(resolved, input.sessionId, g)
+    const why = rootUnsuitable(resolved, tempWorkspace, g)
     if (why) return { ok: false, reason: `a write grant ${why}` }
   }
 

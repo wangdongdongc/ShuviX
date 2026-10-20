@@ -19,7 +19,7 @@ import { providerDao } from '../dao/providerDao'
 import { projectDao } from '../dao/projectDao'
 import { settingsDao } from '../dao/settingsDao'
 import { t } from '../i18n'
-import { getTempWorkspace, getToolResultsBase } from '../utils/paths'
+import { getTempWorkspace, getToolResultsBase, tempWorkspaceOwnerOf } from '../utils/paths'
 import { filterAvailableTools } from './toolAggregator'
 import { mcpService } from './mcpService'
 import { buildAllowEntry } from '../utils/toolUtils/allowList'
@@ -119,6 +119,20 @@ function workingDirectoryOf(
   settings: SessionSettings | undefined
 ): string {
   return projectPath || settings?.workingDirectory || getTempWorkspace(sessionId)
+}
+
+/**
+ * 删掉一个已经没人用的临时工作区（`owner` 那条会话的 `temp_workspace/<id>`）：主人那一行还在，或还有会话的
+ * `settings.workingDirectory` 指着它（会话 fork 共用的），就留着。目录不在就什么都不查。
+ */
+function removeTempWorkspaceIfUnused(dir: string, owner: string): void {
+  if (!existsSync(dir)) return
+  if (sessionRecords.pick(owner, ['id']) || sessionRecords.existsWithWorkingDirectory(dir)) return
+  try {
+    rmSync(dir, { recursive: true, force: true })
+  } catch {
+    /* 删不掉只是留下一个临时目录，不值得让删会话失败 */
+  }
 }
 
 /**
@@ -412,8 +426,11 @@ export class SessionService {
    * 会话 fork 的那一行（services/sessionFork 在存储拷好、收完尾之后调）：一条新会话，放在源会话旁边 ——
    * 同一个项目、同一个父会话（源会话是子会话时 fork 也挂在那个父会话下，钉着的档案随之有效）。设置里抄
    * 「这场对话是怎么跑的」：模型、思考档位、扩展能力勾选、知识库、bot 绑定、子会话的档案钉子、路径授权
-   * （授权是用户在这场对话里给的，fork 的历史里就有那几次批准）。不抄的：笔记本 / 标签页 / 工作目录
-   * （fork 只给项目会话，见 chat-protocol 的 sessionFork）、标题来源、锁与运行状态的镜像（新行从空闲起）。
+   * （授权是用户在这场对话里给的，fork 的历史里就有那几次批准）。**工作目录共用**：项目会话本来就在项目根；
+   * 不属于项目的源会话把它此刻解析出的工作目录（通常是它自己的临时工作区）写进 fork 的 `workingDirectory`
+   * —— 历史里的绝对路径照样对得上，两条会话改的是同一批文件（用户 2026-10-20）；这样的临时工作区直到用它的
+   * 最后一条会话被删才删（见 `delete`）。不抄的：笔记本 / 标签页（fork 不给它们，见 chat-protocol 的
+   * sessionFork）、标题来源、锁与运行状态的镜像（新行从空闲起）。
    * 不广播 —— 调用方在 fork 完全做好之后再广播一次列表变化。
    */
   insertForkRow(source: Session, id: string): Session {
@@ -426,6 +443,9 @@ export class SessionService {
     if (from.model) settings.model = { ...from.model }
     if (from.thinkingLevel) settings.thinkingLevel = from.thinkingLevel
     if (from.allowList?.length) settings.allowList = [...from.allowList]
+    if (!source.projectId) {
+      settings.workingDirectory = workingDirectoryOf(source.id, undefined, from)
+    }
     const now = Date.now()
     const session: Session = {
       id,
@@ -689,16 +709,22 @@ export class SessionService {
     // 未开 PRAGMA foreign_keys，session_day_prompts 的 ON DELETE CASCADE 不会触发
     sessionDayPromptDao.deleteBySessionId(id)
     const ephemeral = sessionRecords.isEphemeral(id)
+    // 删行之前记下它用的工作目录：fork 出来的临时会话用的是源会话的临时工作区（见 insertForkRow）。
+    // 设置是坏 JSON 的一行读不出来（`->` 抛错）—— 那就当它没借用什么，删除照样做完
+    let sharedWorkspace: string | undefined
+    try {
+      sharedWorkspace = sessionRecords.pickSettings(id, ['workingDirectory'])?.workingDirectory
+    } catch (err) {
+      log.warn(`删除会话时读不出设置 session=${id}: ${err}`)
+    }
     sessionRecords.deleteById(id)
     if (!ephemeral) broadcastSessionListChanged()
-    // 清理临时会话工作目录
-    const tempDir = getTempWorkspace(id)
-    if (existsSync(tempDir)) {
-      try {
-        rmSync(tempDir, { recursive: true, force: true })
-      } catch {
-        /* 忽略 */
-      }
+    // 清理临时工作区：它自己的那一个，以及它借用的那一个 —— 都只在已经没有会话用它的时候删
+    // （它的主人还在，或别的 fork 还指着它，就留着）。用户自己的目录（md 窗口）不是临时工作区，从不删
+    removeTempWorkspaceIfUnused(getTempWorkspace(id), id)
+    const borrowedFrom = sharedWorkspace ? tempWorkspaceOwnerOf(sharedWorkspace) : undefined
+    if (sharedWorkspace && borrowedFrom && borrowedFrom !== id) {
+      removeTempWorkspaceIfUnused(sharedWorkspace, borrowedFrom)
     }
     // 清理工具大结果持久化目录
     const toolResultsDir = join(getToolResultsBase(), id)

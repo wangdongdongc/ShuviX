@@ -13,7 +13,9 @@
  *   H-6 宿主没有 session.fork → available false、forkSession 什么都不做
  *   H-7 fork 成功、刷新列表失败 → 不报错，照样打开 fork
  *   H-8 `selectSessionForkable` 真值表（id 为 null、不在 store、形态不给（含旧格式存储 / 缺省存储类型）、
- *       没有视图、capabilities.rollback false、在跑 / 被中断 → false；条件都满足 → true）
+ *       没有视图、capabilities.rollback false、在跑 / 被中断 → false；条件都满足 → true —— 项目会话与
+ *       临时会话（不属于项目）一样：临时会话是笔记本 / Chrome 标签页 / 旧格式存储、或视图在跑 / 被中断 /
+ *       不能回退时同样 false）
  *   H-9 `forkRefusalKey`：五种拒绝原因各对一个 en 资源里真有的 key，且两两不同
  *
  * 宿主经 `setChatApi` 注入一份只有 `session.fork` / `session.list` 的假 HostApi（每条用例一份新的）。
@@ -281,7 +283,6 @@ describe('selectSessionForkable（H-8）', () => {
   })
 
   it.each<[string, Partial<Session> & { storageKind?: string }]>([
-    ['临时会话（不属于项目）', { projectId: null }],
     ['隐藏项目（知识库载体）', { projectId: '__knowledge__' }],
     ['隐藏项目（bot 注册表载体）', { projectId: '__bots__' }],
     ['笔记本会话', { settings: { notebookPath: 'notes/a.md' } }],
@@ -298,6 +299,43 @@ describe('selectSessionForkable（H-8）', () => {
     ['不认识的存储类型', { storageKind: 'future-kind-9' }]
   ])('H-8 形态不给：%s → false', (_label, over) => {
     expect(selectSessionForkable(setup(session(SID, over)), SID)).toBe(false)
+  })
+
+  it('H-8 临时会话（不属于项目）也给 → true', () => {
+    expect(selectSessionForkable(setup(session(SID, { projectId: null })), SID)).toBe(true)
+  })
+
+  it.each<[string, Partial<Session> & { storageKind?: string }]>([
+    ['笔记本会话', { settings: { notebookPath: 'notes/a.md' } }],
+    [
+      'Chrome 标签页会话',
+      {
+        settings: {
+          chromeTab: { installId: 'i', runId: 'r', tabId: 3 }
+        } as unknown as Session['settings']
+      }
+    ],
+    ['旧格式存储', { storageKind: HARNESS_V3_JSONL }],
+    ['缺省存储类型（按旧格式理解）', { storageKind: undefined }]
+  ])('H-8 临时会话形态不给：%s → false', (_label, over) => {
+    expect(selectSessionForkable(setup(session(SID, { projectId: null, ...over })), SID)).toBe(
+      false
+    )
+  })
+
+  it.each<['busy' | 'interrupted']>([['busy'], ['interrupted']])(
+    'H-8 临时会话视图运行状态 %s → false',
+    (state) => {
+      expect(
+        selectSessionForkable(setup(session(SID, { projectId: null }), { run: { state } }), SID)
+      ).toBe(false)
+    }
+  )
+
+  it('H-8 临时会话还没有视图 / 视图说不能回退 → false', () => {
+    expect(selectSessionForkable(setup(session(SID, { projectId: null }), null), SID)).toBe(false)
+    const view = { capabilities: { send: true, rollback: false, continue: true } }
+    expect(selectSessionForkable(setup(session(SID, { projectId: null }), view), SID)).toBe(false)
   })
 
   it('H-8 还没有视图 → false', () => {

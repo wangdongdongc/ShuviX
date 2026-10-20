@@ -15,9 +15,12 @@
  *  - PP-3 cli-token 与家目录里的 ShuviX 程序目录：受限命令读得到（CLI 在沙箱里必须能用），文件工具的读照问；
  *  - PP-4 授权：读授权两面都只放读，写授权两面都放读写；
  *  - PP-5 extras：勾选的知识库两面都可读写；技能目录 / 内置知识库两面都只读（规则 #0 豁免 sessionReadDirs，#1 不）；
- *  - PP-6 不适合的工作目录（含「包含 userData」的 ~/Library）：两面都不把它当会话目录 —— 沙箱不套
- *    （命令逐条询问），文件工具在那里照问；PP-6b 不适合的写授权：沙箱不套，文件工具照样凭授权写；
- *  - PP-7 变量齐全：以上评估没有 fail-safe 告警。
+ *  - PP-6 不适合的工作目录（含「包含 userData」的 ~/Library、`temp_workspace` 本身、别的会话临时工作区里的
+ *    子目录）：两面都不把它当会话目录 —— 沙箱不套（命令逐条询问），文件工具在那里照问；PP-6b 不适合的
+ *    写授权：沙箱不套，文件工具照样凭授权写；
+ *  - PP-8 临时会话的 fork：工作目录正是别的会话的临时工作区（共用源会话的）—— 两面都把它当会话目录，
+ *    本会话自己的与第三个会话的临时工作区两面都拦（PP-0..2 的工作目录表里也有这一行）；
+ *  - PP-7 变量齐全：以上评估没有 fail-safe 告警（放在最后，收齐前面所有用例的告警）。
  *
  * 替身：electron 的 app.getPath（userData）、os.homedir（按布局换家目录）、dao、sessionService、skillService
  * （外部目录与启用的技能根）、knowledge 的 enabledTargets（勾选的知识库）、policyService（内置策略读仓库里
@@ -155,6 +158,7 @@ const WORKSPACES: Record<string, (l: Layout) => string> = {
   '~/proj': (l) => `${l.home}/proj`,
   '~/Documents/a/proj': (l) => `${l.home}/Documents/a/proj`,
   'temp workspace': (l) => `${l.userData}/temp_workspace/${SID}`,
+  "another session's temp workspace (a temp fork's)": (l) => `${l.userData}/temp_workspace/OTHER`,
   'knowledge base ~/.shuvix/knowledge/b': (l) => `${l.shuvix}/knowledge/b`,
   'widget ~/.shuvix/widgets/w': (l) => `${l.shuvix}/widgets/w`,
   '/Volumes/data/proj (outside home)': () => '/Volumes/data/proj'
@@ -255,6 +259,7 @@ function corpus(l: Layout, ws: string): string[] {
     `${u}/tool_results/other/r.txt`,
     `${u}/temp_workspace/${SID}/a.txt`,
     `${u}/temp_workspace/OTHER/a.txt`,
+    `${u}/temp_workspace/THIRD/a.txt`,
     // extras
     `${s}/knowledge/notes/a.md`,
     `${s}/knowledge/other/a.md`,
@@ -543,7 +548,9 @@ describe('PP-6 不适合的工作目录：两面都不把它当会话目录', ()
     '~/.shuvix': (l) => l.shuvix,
     '~/.shuvix/agents': (l) => `${l.shuvix}/agents`,
     userData: (l) => l.userData,
-    "another session's temp workspace": (l) => `${l.userData}/temp_workspace/OTHER`,
+    'temp_workspace itself': (l) => `${l.userData}/temp_workspace`,
+    "a subfolder of another session's temp workspace": (l) =>
+      `${l.userData}/temp_workspace/OTHER/sub`,
     '~/Library (contains userData)': (l) => `${l.home}/Library`,
     '~/Library/Application Support (contains userData)': (l) =>
       `${l.home}/Library/Application Support`
@@ -628,6 +635,58 @@ describe('PP-6b 不合适的写授权：沙箱不套，文件工具照样凭授�
         expect(ctx.evaluate('read', { type: 'path', path: target }).effect, grant).toBe('allow')
         expect(varsFor(ws).sessionDirs).toContain(ws)
         expect(varsFor(ws).sessionDirs).not.toContain(grant)
+      }
+    }
+  )
+})
+
+describe('PP-8 临时会话的 fork：工作目录正是别的会话的临时工作区', () => {
+  const rows = (Object.keys(LAYOUTS) as LayoutName[]).flatMap((layout) =>
+    (['no grants', 'with grants'] as const).map((grants) => [layout, grants] as const)
+  )
+
+  it.each(rows)(
+    'PP-8 %s 布局 · %s：它里面的文件两面都放行；本会话自己的与第三个会话的临时工作区两面都拦（读 #0、写 #1）',
+    (layout, grants) => {
+      const { l, ws, spec, ctx } = arrange(
+        layout,
+        "another session's temp workspace (a temp fork's)",
+        grants
+      )
+      expect(ws).toBe(`${l.userData}/temp_workspace/OTHER`)
+      // 一份清单、两个面：它排在会话目录最前
+      expect(varsFor(ws).sessionDirs).toEqual(spec.sessionDirs)
+      expect(spec.sessionDirs[0]).toBe(ws)
+
+      for (const path of [`${ws}/a.txt`, `${ws}/sub/b.txt`]) {
+        expect(brief(ctx.evaluate('read', { type: 'path', path })), path).toMatchObject({
+          effect: 'allow',
+          matched: []
+        })
+        expect(brief(ctx.evaluate('write', { type: 'path', path })), path).toMatchObject({
+          effect: 'allow',
+          matched: []
+        })
+        expect(isReadBlocked(spec, path), path).toBe(false)
+        expect(isWriteBlocked(spec, path), path).toBe(false)
+      }
+
+      for (const path of [
+        `${l.userData}/temp_workspace/${SID}/a.txt`,
+        `${l.userData}/temp_workspace/THIRD/a.txt`
+      ]) {
+        expect(brief(ctx.evaluate('read', { type: 'path', path })), path).toEqual({
+          effect: 'ask',
+          winning: 'ask-on-external-path#0',
+          matched: ['ask-on-external-path#0']
+        })
+        expect(brief(ctx.evaluate('write', { type: 'path', path })), path).toEqual({
+          effect: 'ask',
+          winning: 'ask-on-external-path#1',
+          matched: ['ask-on-external-path#1']
+        })
+        expect(isReadBlocked(spec, path), path).toBe(true)
+        expect(isWriteBlocked(spec, path), path).toBe(true)
       }
     }
   )

@@ -52,9 +52,11 @@ export interface SessionSettings {
   notebookPath?: string
   /**
    * 不属于任何项目的会话自带的工作目录（绝对路径）。缺省即临时工作区 `temp_workspace/<id>`；
-   * 有项目时不读（工作目录恒为项目根）。只由主进程在创建时写（sessionService.create 的 options）——
-   * 目前唯一的写入方是从系统打开的 md 窗口：工作目录就是那个文件所在的目录。
-   * 删除会话**不会**删它：那是用户自己的目录，删除只清临时工作区。
+   * 有项目时不读（工作目录恒为项目根）。只由主进程在创建时写，写入方有两个：从系统打开的 md 窗口
+   * （sessionService.create 的 options：那个文件所在的目录）与会话 fork（insertForkRow：源会话解析出的工作
+   * 目录，通常是**源会话的临时工作区** —— 两条会话共用）。
+   * 删除会话**不会**删用户自己的目录；指着某条会话临时工作区的，由那个临时工作区的清理规则管：用它的最后
+   * 一条会话（主人或任一 fork）被删时才删。
    */
   workingDirectory?: string
   /**

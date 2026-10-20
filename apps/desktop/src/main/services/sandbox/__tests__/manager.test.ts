@@ -7,7 +7,8 @@
  * 真链接）、logger。模块级缓存（后端、探测结果、realpath 缓存）每个用例 resetModules 后重新导入。
  *
  *  - MG-1 开关的读取；MG-2 后端选择 + 探测缓存 + 交给探测的宿主路径（含 ShuviX 自己的程序目录）；
- *  - MG-3 planFor 不看开关；MG-4 / MG-5 planFor 的正常路径与 null；MG-6 plan.explain；MG-7 cleanupSession；
+ *  - MG-3 planFor 不看开关；MG-4 / MG-5 planFor 的正常路径与 null（工作目录正是别的会话的临时工作区 ——
+ *    临时会话的 fork 共用源会话的 —— 照给计划；真链接按指向判）；MG-6 plan.explain；MG-7 cleanupSession；
  *  - MG-8 whyUnconfined（命令没进沙箱的原因：此刻的；从不探测）；
  *  - MG-9 sessionDirsView（策略的 `vars.sessionDirs` / `vars.sessionReadDirs`）：与开关 / 探测 /
  *    平台都无关，与 planFor 的规格同一份；算不出来给空清单。
@@ -427,6 +428,18 @@ describe('MG-4 planFor 正常路径', () => {
     expect(plan.spec.sessionReadDirs).toEqual([])
   })
 
+  it('MG-4 工作目录是别的会话的临时工作区（临时会话的 fork 共用源会话的）：照给计划，它排在会话目录最前，其余仍是本会话自己的', async () => {
+    const shared = `${USER_DATA}/temp_workspace/other`
+    const m = await load(() => 'true')
+    const plan = m.planFor(request({ workingDirectory: shared }))
+    expect(plan).not.toBeNull()
+    expect(plan!.spec.workingDirectory).toBe(shared)
+    expect(plan!.spec.sessionDirs).toEqual(sessionDirsOf('s1', shared))
+    expect(plan!.spec.writableRoots[0]).toBe(shared)
+    // 与给策略的那一份是同一份
+    expect(m.sessionDirsView('s1', shared).sessionDirs).toEqual(plan!.spec.sessionDirs)
+  })
+
   it('MG-4 工作目录是真的符号链接：规格里是它指向的真实路径', async () => {
     const [link, target] = await realSymlink('sbx-mg4-')
     const m = await load(() => 'true')
@@ -448,8 +461,8 @@ describe('MG-5 planFor → null', () => {
       "ShuviX's own configuration"
     ],
     [
-      '工作目录在 userData 里（不是本会话临时工作区）',
-      { workingDirectory: `${USER_DATA}/temp_workspace/other` },
+      '工作目录在 userData 里（不是任何会话的临时工作区）',
+      { workingDirectory: `${USER_DATA}/data` },
       'application data'
     ],
     [
@@ -492,6 +505,40 @@ describe('MG-5 planFor → null', () => {
     const m = await load(() => 'true')
     expect(m.planFor(request())).toBeNull()
     expect(mocks.log.warn).toHaveBeenCalled()
+  })
+
+  it('MG-5 真的 userData 里，temp_workspace/OTHER 是指向 userData/data 的符号链接：按指向判 —— 没有计划，给策略的清单里也没有它；同处一个真文件夹则照给', async () => {
+    const fs = await vi.importActual<typeof import('fs')>('fs')
+    const os = await vi.importActual<typeof import('os')>('os')
+    const root = fs.mkdtempSync(join(fs.realpathSync(os.tmpdir()), 'sbx-mg5-fork-'))
+    scratch.push(root)
+    const userData = join(root, 'ShuviX')
+    const data = join(userData, 'data')
+    fs.mkdirSync(data, { recursive: true })
+    fs.mkdirSync(join(userData, 'temp_workspace', 'REAL'), { recursive: true })
+    const link = join(userData, 'temp_workspace', 'OTHER')
+    fs.symlinkSync(data, link)
+    mocks.getPath.mockReturnValue(userData)
+
+    const m = await load(() => 'true')
+    expect(m.planFor(request({ workingDirectory: link }))).toBeNull()
+    const logged = mocks.log.info.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(logged).toContain("working directory is inside ShuviX's application data")
+    const view = m.sessionDirsView('s1', link)
+    expect(view.sessionDirs).toEqual([
+      tmpDirOf('s1'),
+      `${SHUVIX}/artifacts/s1`,
+      `${userData}/tool_results/s1`
+    ])
+    expect(view.sessionDirs).not.toContain(link)
+    expect(view.sessionDirs).not.toContain(data)
+
+    // 对照：temp_workspace 下的真文件夹就是某条会话的临时工作区
+    const realDir = join(userData, 'temp_workspace', 'REAL')
+    const plan = m.planFor(request({ workingDirectory: realDir }))
+    expect(plan).not.toBeNull()
+    expect(plan!.spec.sessionDirs[0]).toBe(realDir)
+    expect(m.sessionDirsView('s1', realDir).sessionDirs[0]).toBe(realDir)
   })
 
   it('MG-5 tmp 根权限是 0755：先 chmod 回 0700，再照常给计划', async () => {
@@ -685,7 +732,6 @@ describe('MG-9 sessionDirsView：给策略的会话目录清单（与沙箱开�
     ['覆盖家目录的 /Users', '/Users'],
     ['ShuviX 自己的配置 ~/.shuvix/agents', `${SHUVIX}/agents`],
     ['userData 里的应用数据', `${USER_DATA}/data`],
-    ['userData 里别的会话的临时工作区', `${USER_DATA}/temp_workspace/other`],
     ['包含 userData 的 ~/Library', `${HOME}/Library`],
     ['包含 userData 的 ~/Library/Application Support', `${HOME}/Library/Application Support`]
   ])(
@@ -702,6 +748,7 @@ describe('MG-9 sessionDirsView：给策略的会话目录清单（与沙箱开�
 
   it.each([
     ['本会话的临时工作区', `${USER_DATA}/temp_workspace/s1`],
+    ['别的会话的临时工作区（会话 fork 共用源会话的）', `${USER_DATA}/temp_workspace/other`],
     ['知识库 ~/.shuvix/knowledge/<base>', `${SHUVIX}/knowledge/notes`],
     ['个人资料目录 ~/Documents', `${HOME}/Documents`]
   ])('MG-9d 合适的工作目录（%s）：排在清单最前', async (_label, ws) => {

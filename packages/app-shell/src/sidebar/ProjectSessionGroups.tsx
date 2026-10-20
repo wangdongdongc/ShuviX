@@ -45,8 +45,8 @@ export interface ProjectSessionGroupsProps {
   /** 会话配置入口（桌面：行菜单里的一项，打开 SessionConfigDialog） */
   onConfigureSession?: (id: string) => void
   /**
-   * 会话 fork（行菜单里的「分支会话」：复制整段当前对话成一条新会话）。只对形态给的会话出现（项目会话，
-   * chat-protocol 的 isForkableSessionShape），在跑 / 被中断时置灰；宿主不注入则整项不出现
+   * 会话 fork（行菜单里的「分支会话」：复制整段当前对话成一条新会话）。只对形态给的会话出现（项目会话与
+   * 临时会话，chat-protocol 的 isForkableSessionShape），在跑 / 被中断时置灰；宿主不注入则整项不出现
    */
   onForkSession?: (id: string) => void
   /** 能力开关 */

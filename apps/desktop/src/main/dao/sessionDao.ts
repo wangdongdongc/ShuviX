@@ -209,6 +209,19 @@ export class SessionDao extends BaseDao {
     return rows.map(parseRow)
   }
 
+  /**
+   * 有没有会话的 `settings.workingDirectory` 正是 `dir`（会话 fork 共用源会话的临时工作区：删除时判断它还有没有
+   * 人用）。坏 JSON 的行跳过，理由同 findByStorageKindWithNotebookPath。
+   */
+  existsWithWorkingDirectory(dir: string): boolean {
+    const row = this.stmt(
+      `SELECT 1 FROM sessions
+        WHERE (CASE WHEN json_valid(settings) THEN json_extract(settings, '$.workingDirectory') END) = ?
+        LIMIT 1`
+    ).get(dir)
+    return row !== undefined
+  }
+
   /** 删除会话。日历索引行由 sessionService.delete 显式清（FK CASCADE 未开）。 */
   deleteById(id: string): void {
     this.stmt('DELETE FROM sessions WHERE id = ?').run(id)

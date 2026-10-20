@@ -96,7 +96,9 @@ vi.mock('../../dao/sessionDao', () => ({
     updateProjectId: mocks.daoUpdateProjectId,
     deleteById: mocks.daoDeleteById,
     touch: mocks.daoTouch,
-    touchActive: mocks.daoTouchActive
+    touchActive: mocks.daoTouchActive,
+    // 删除时判断临时工作区还有没有会话指着（会话 fork 共用）—— 这组用例里没有 fork
+    existsWithWorkingDirectory: vi.fn(() => false)
   }
 }))
 vi.mock('../../dao/sessionDayPromptDao', () => ({
@@ -119,11 +121,24 @@ vi.mock('../sessionStorage', () => ({
   recordSessionModel: vi.fn()
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
-vi.mock('../../utils/paths', () => ({
-  getTempWorkspace: (sid: string) => `/nonexistent/shuvix-unit/tmp/${sid}`,
-  getToolResultsBase: () => '/nonexistent/shuvix-unit/tool-results',
-  getSessionArtifactsDir: (sid: string) => `/nonexistent/shuvix-unit/artifacts/${sid}`
-}))
+vi.mock('../../utils/paths', () => {
+  const isSafeSessionId = (id: string): boolean =>
+    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
+  // 假的临时工作区从不建在盘上（删除时的「目录不在就什么都不查」一步就走完）；口径照真的 utils/paths
+  const tempBase = '/nonexistent/shuvix-unit/tmp'
+  return {
+    getTempWorkspaceBase: () => tempBase,
+    getTempWorkspace: (sid: string) => `${tempBase}/${sid}`,
+    tempWorkspaceOwnerOf: (dir: string) => {
+      const slash = dir.lastIndexOf('/')
+      const id = dir.slice(slash + 1)
+      return dir.slice(0, slash) === tempBase && isSafeSessionId(id) ? id : undefined
+    },
+    getToolResultsBase: () => '/nonexistent/shuvix-unit/tool-results',
+    getSessionArtifactsDir: (sid: string) => `/nonexistent/shuvix-unit/artifacts/${sid}`,
+    isSafeSessionId
+  }
+})
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: mocks.closeSession } }))
 vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)

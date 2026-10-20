@@ -1,13 +1,16 @@
 /**
  * sessionService —— 无项目会话**自带的工作目录**（`create(params, { workingDirectory })`）。
  *
- * 契约（从系统打开的 md 窗口是今天唯一的写入方：工作目录就是那个文件所在的目录）：
+ * 契约（经 create 的 options 写进来的只有从系统打开的 md 窗口：工作目录就是那个文件所在的目录。另一个写入方
+ * 是会话 fork 的 insertForkRow —— 临时会话的 fork 指着源会话的临时工作区，那一面在
+ * sessionServiceForkWorkspace.test.ts）：
  *   - 工作目录的口径：项目根 → 无项目会话的 settings.workingDirectory → 临时工作区；
  *     getById、Agent 上下文（initAgent / 建运行时）读的都是同一个答案；
  *   - options.workingDirectory 只给**不属于任何项目的根会话**：有项目时忽略（不存、用项目根）；
  *     子会话不看 options —— 父会话无项目就随父会话的目录，父会话有项目就是项目根；
  *   - 它是主进程内部的选项：混在 params 里的 workingDirectory 不算数；
- *   - 删除会话**不动**这个目录（那是用户自己的），只清临时工作区。
+ *   - 删除会话**不动**用户自己的目录，只清临时工作区（workingDirectory 正好是别的会话临时工作区的 fork 由那个
+ *     临时工作区的去留规则管，见 sessionServiceForkWorkspace.test.ts）。
  *
  * mock 面沿用 sessionServiceEphemeral.test.ts（sessionRecords 是真的、DAO 是内存表上的 spy、
  * `AgentSession.create` 可捕获）；差别是 `getTempWorkspace` 换成一个间谍 —— 「没有退回临时工作区」
@@ -20,7 +23,7 @@
  *   WD-3b 无项目、有自带目录的父会话 → 子会话随父会话的目录，子会话自己给的另一个目录不算；
  *         父会话没有自带目录 → 子会话给的也不算（临时工作区）
  *   WD-4  不给 → 临时工作区（照旧）
- *   WD-5  删除：自带目录与里面的文件原样都在；临时工作区删完不在
+ *   WD-5  删除：自带的用户目录与里面的文件原样都在；临时工作区删完不在
  *   WD-6  params 里混进来的 workingDirectory 不算数
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -96,7 +99,9 @@ vi.mock('../../dao/sessionDao', () => ({
     updateProjectId: mocks.daoUpdateProjectId,
     deleteById: mocks.daoDeleteById,
     touch: vi.fn(),
-    touchActive: vi.fn()
+    touchActive: vi.fn(),
+    // 删除时判断临时工作区还有没有会话指着（会话 fork 共用）—— 这组用例里没有 fork
+    existsWithWorkingDirectory: () => false
   }
 }))
 vi.mock('../../dao/sessionDayPromptDao', () => ({
@@ -123,6 +128,8 @@ vi.mock('../../utils/paths', () => ({
   getTempWorkspace: mocks.getTempWorkspace,
   getToolResultsBase: () => join(mocks.tempRoot.dir, 'tool-results'),
   getSessionArtifactsDir: (sid: string) => join(mocks.tempRoot.dir, 'artifacts', sid),
+  // 这组用例里自带的工作目录都是用户自己的目录，不是任何会话的临时工作区
+  tempWorkspaceOwnerOf: () => undefined,
   isSafeSessionId: (id: string) =>
     !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
@@ -329,7 +336,7 @@ describe('WD-4 ~ WD-6', () => {
   it.each([
     ['持久会话', false],
     ['内存会话', true]
-  ])('WD-5 %s删除：自带目录与文件原样都在；临时工作区删完不在', async (_label, ephemeral) => {
+  ])('WD-5 %s删除：自带的用户目录与文件原样都在；临时工作区删完不在', async (_label, ephemeral) => {
     const s = sessionService.create(
       { notebookPath: USER_FILE },
       { ephemeral, workingDirectory: userDir }

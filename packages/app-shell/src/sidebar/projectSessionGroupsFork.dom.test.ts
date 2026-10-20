@@ -3,15 +3,17 @@
  * 会话行菜单里的「分支会话」（ProjectSessionGroups 的 `onForkSession`，jsdom）。
  *
  * 契约：宿主注入 `onForkSession` 且这条会话的形态给 fork（chat-protocol `isForkableSessionShape`：真实的非隐藏
- * 项目、不是笔记本、不是 Chrome 标签页、新格式存储）时，行菜单里多一项
+ * 项目或不属于任何项目（临时会话）、不是笔记本、不是 Chrome 标签页、新格式存储）时，行菜单里多一项
  * `{id:'fork-session', label: sidebar.forkSession}`，排在 `export-session` 之后、分隔线与 `delete-session`
  * 之前；在跑 / 被中断时这一项还在但置灰（`enabled: false`），空闲时 `enabled: true`。点它 →
  * `onForkSession(<这一行的 id>)`，恰好一次。
  *
- *   S-1 空闲的项目会话：菜单 = 配置、导出、分支（enabled true）、分隔线、删除；不注入配置 / 删除时 = 导出、分支
- *   S-2 在跑 / 被中断：分支在，enabled false（选不中它，onForkSession 不被调）
- *   S-3 临时会话、笔记本、隐藏项目、Chrome 标签页、旧格式存储、缺省存储类型、宿主不注入 onForkSession → 没有这一项
- *   S-4 选中它 → onForkSession(行 id) 一次：顶层行与子会话行都一样
+ *   S-1 空闲的项目会话与临时会话（「临时对话」组里的行）：菜单 = 配置、导出、分支（enabled true）、分隔线、删除；
+ *       不注入配置 / 删除时 = 导出、分支
+ *   S-2 在跑 / 被中断（项目会话与临时会话）：分支在，enabled false（选不中它，onForkSession 不被调）
+ *   S-3 笔记本、隐藏项目、Chrome 标签页、旧格式存储、缺省存储类型（项目会话与临时会话都一样）、宿主不注入
+ *       onForkSession → 没有这一项
+ *   S-4 选中它 → onForkSession(行 id) 一次：顶层行与子会话行都一样，临时组里的也一样
  *
  * 右键菜单走 ContextMenuProvider 的 `render` 注入：记录菜单项、按预设回一个 id（模拟用户点了它）——
  * 预设的 id 不在这份菜单里、或那一项置灰，就回 null（真菜单点不出它）。`@shuvix/chat-ui` 替掉
@@ -148,6 +150,11 @@ async function menuOf(id: string): Promise<ContextMenuItem[]> {
   expect(menus.length).toBe(before + 1)
   return menus[menus.length - 1]
 }
+/** 这一行在不在「临时对话」组里（组头 `[data-group="temp"]` 与组内的行同在一个容器下） */
+function inTempGroup(el: HTMLElement): boolean {
+  const header = container.querySelector<HTMLElement>('[data-group="temp"]')
+  return !!header && header.parentElement!.contains(el)
+}
 /** 菜单项的 id；分隔线记作 'separator' */
 const ids = (items: ContextMenuItem[]): string[] => items.map((item) => item.id ?? item.type ?? '?')
 const forkItem = (items: ContextMenuItem[]): ContextMenuItem | undefined =>
@@ -234,7 +241,6 @@ describe('行菜单里的「分支会话」', () => {
   })
 
   it.each<[string, Partial<StoreSession>]>([
-    ['临时会话（不属于项目）', { projectId: null }],
     ['笔记本会话', { settings: { notebookPath: 'notes/a.md' } }],
     ['隐藏项目里的会话', { projectId: HIDDEN.id }],
     ['Chrome 标签页会话', { settings: { chromeTab: { installId: 'i', runId: 'r', tabId: 4 } } }],
@@ -279,5 +285,96 @@ describe('行菜单里的「分支会话」', () => {
     const items = await menuOf('child')
     expect(forkItem(items)!.enabled).toBe(true)
     expect(onForkSession.mock.calls).toEqual([['child']])
+  })
+})
+
+describe('临时会话（不属于项目）行菜单里的「分支会话」', () => {
+  const temp = (id: string, over: Partial<StoreSession> = {}): StoreSession =>
+    row(id, { projectId: null, ...over })
+
+  it('S-1 空闲的临时会话：配置、导出、分支（enabled true）、分隔线、删除；选中它 → onForkSession(行 id) 一次', async () => {
+    store.sessions = [temp('t1'), temp('t2')]
+    const onForkSession = vi.fn()
+    const onDelete = vi.fn()
+    const onConfigureSession = vi.fn()
+    mount({ onForkSession, onDelete, onConfigureSession })
+    expect(inTempGroup(rowEl('t1'))).toBe(true)
+
+    const items = await menuOf('t1')
+    expect(ids(items)).toEqual([
+      'session-config',
+      'export-session',
+      'fork-session',
+      'separator',
+      'delete-session'
+    ])
+    expect(forkItem(items)).toEqual({
+      id: 'fork-session',
+      label: en.sidebar.forkSession,
+      enabled: true
+    })
+    expect(onForkSession).not.toHaveBeenCalled()
+
+    pick = 'fork-session'
+    await menuOf('t2')
+    expect(onForkSession.mock.calls).toEqual([['t2']])
+    expect(onDelete).not.toHaveBeenCalled()
+    expect(onConfigureSession).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, Partial<typeof store>]>([
+    ['在跑', { streaming: { t1: true } }],
+    ['被中断', { interrupted: { t1: true } }]
+  ])('S-2 临时会话%s：分支还在、置灰；选不中它', async (_label, patch) => {
+    Object.assign(store, patch)
+    store.sessions = [temp('t1'), temp('t2')]
+    const onForkSession = vi.fn()
+    mount({ onForkSession })
+    pick = 'fork-session'
+    const items = await menuOf('t1')
+    expect(ids(items)).toEqual([
+      'session-config',
+      'export-session',
+      'fork-session',
+      'separator',
+      'delete-session'
+    ])
+    expect(forkItem(items)).toEqual({
+      id: 'fork-session',
+      label: en.sidebar.forkSession,
+      enabled: false
+    })
+    expect(onForkSession).not.toHaveBeenCalled()
+    // 同组别的临时会话不受影响
+    const other = await menuOf('t2')
+    expect(forkItem(other)!.enabled).toBe(true)
+    expect(onForkSession.mock.calls).toEqual([['t2']])
+  })
+
+  it.each<[string, Partial<StoreSession>]>([
+    ['Chrome 标签页会话', { settings: { chromeTab: { installId: 'i', runId: 'r', tabId: 4 } } }],
+    ['笔记本会话', { settings: { notebookPath: 'notes/a.md' } }],
+    ['旧格式存储', { storageKind: 'harness-v3-jsonl' }],
+    ['缺省存储类型（按旧格式理解）', { storageKind: undefined }]
+  ])('S-3 临时组里的%s：没有分支这一项', async (_label, over) => {
+    store.sessions = [temp('t1', over)]
+    mount({ onForkSession: vi.fn() })
+    expect(inTempGroup(rowEl('t1'))).toBe(true)
+    const items = await menuOf('t1')
+    expect(forkItem(items)).toBeUndefined()
+    expect(ids(items)).toContain('delete-session')
+  })
+
+  it('S-4 临时父会话下的临时子会话行：onForkSession(子会话 id)', async () => {
+    store.sessions = [temp('tparent'), temp('tchild', { parentId: 'tparent', createdAt: 2 })]
+    const onForkSession = vi.fn()
+    mount({ onForkSession })
+    const childRow = rowEl('tchild')
+    expect(childRow.hasAttribute('data-sub')).toBe(true)
+    expect(inTempGroup(childRow)).toBe(true)
+    pick = 'fork-session'
+    const items = await menuOf('tchild')
+    expect(forkItem(items)!.enabled).toBe(true)
+    expect(onForkSession.mock.calls).toEqual([['tchild']])
   })
 })

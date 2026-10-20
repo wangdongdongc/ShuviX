@@ -3,14 +3,16 @@
  * 对话里的「从这里分支」（`[data-fork-reply]`，jsdom）：真的 Conversation → buildVisibleItems →
  * MessageRenderer → AssistantBubble，加上真的 useSessionFork 与 ConfirmDialog。
  *
- * 契约：按钮只在「宿主有 `session.fork`、ChatHost 给了 `openSession`、这条会话形态给 fork（项目会话、
- * 新格式存储）、视图说能回退、视图空闲」全都成立时出现，每张定稿的助手卡一颗；点它以那张卡的
+ * 契约：按钮只在「宿主有 `session.fork`、ChatHost 给了 `openSession`、这条会话形态给 fork（项目会话或临时会话、
+ * 不是笔记本 / Chrome 标签页、新格式存储）、视图说能回退、视图空闲」全都成立时出现，每张定稿的助手卡一颗；点它以那张卡的
  * **最后一条消息** id 调 `session.fork`；成功 → `openSession(新 id)`，被拒 → 一个只有一颗按钮的说明框
  * （标题 `chat.forkFailedTitle`、正文是原因的文案），Close / Escape / 点遮罩都关掉它。
  *
  *   UI-1 条件都满足：每张定稿的助手卡都有按钮；用户气泡、错误行、压缩摘要行、系统通知行没有
- *   UI-2 任一条件缺了就没有按钮：宿主没有 fork；ChatHost 没有 openSession；形态不给（临时会话 / 旧格式存储 /
- *        笔记本）；视图说不能回退；视图在跑 / 被中断（视图还没到时连列表都不挂 —— 由 H-8 管选择器那一半）
+ *   UI-1t 临时会话（不属于项目）同样：每张定稿的卡一颗，点它 → fork({sessionId, messageId: 卡的最后一条})
+ *   UI-2 任一条件缺了就没有按钮：宿主没有 fork；ChatHost 没有 openSession；形态不给（旧格式存储 /
+ *        笔记本；临时会话里的 Chrome 标签页 / 笔记本 / 旧格式存储）；视图说不能回退；视图在跑 / 被中断
+ *        （视图还没到时连列表都不挂 —— 由 H-8 管选择器那一半）
  *   UI-3 点多条消息的卡 → fork({sessionId, messageId: 卡的最后一条})；没有终答的卡（轮中被打断）同样
  *   UI-4 空闲 → 在跑 → 空闲：按钮消失又回来
  *   UI-5 成功 → openSession(新 id)；被拒 → 说明框（一颗按钮），Close / Escape / 点遮罩关掉
@@ -272,6 +274,22 @@ describe('按钮在哪（UI-1）', () => {
   })
 })
 
+describe('临时会话（UI-1t）', () => {
+  it('UI-1t 不属于项目的会话：三张定稿的卡各一颗；点它以卡的最后一条 id 调 fork', async () => {
+    load(history(), {}, session({ projectId: null }))
+    render()
+    expect(rowsWithFork()).toEqual(['a2', 'a3', 'a4'])
+    for (const id of ['c0', 'u1', 'e1', 'u2', 'n1']) {
+      expect(forkButtons(rowOf(id)), id).toHaveLength(0)
+    }
+    await clickFork('a2')
+    expect(host.fork!.mock.calls).toEqual([[{ sessionId: SID, messageId: 'a2' }]])
+    expect(probe.host.openSession).toHaveBeenCalledWith(NEW_ID)
+    await clickFork('a4')
+    expect(host.fork!.mock.calls[1]).toEqual([{ sessionId: SID, messageId: 'a4' }])
+  })
+})
+
 describe('任一条件缺了就没有按钮（UI-2）', () => {
   it('UI-2 正控制：同样的历史在条件都满足时有按钮', () => {
     load(history())
@@ -296,12 +314,29 @@ describe('任一条件缺了就没有按钮（UI-2）', () => {
   })
 
   it.each<[string, Partial<Session> & { storageKind?: string }]>([
-    ['临时会话（不属于项目）', { projectId: null }],
     ['旧格式存储', { storageKind: HARNESS_V3_JSONL }],
     ['缺省存储类型', { storageKind: undefined }],
     ['笔记本会话', { settings: { notebookPath: 'a.md' } }]
   ])('UI-2 形态不给：%s', (_label, over) => {
     load(history(), {}, session(over))
+    render()
+    expect(rowOf('a2')).toBeTruthy()
+    expect(forkButtons()).toHaveLength(0)
+  })
+
+  it.each<[string, Partial<Session> & { storageKind?: string }]>([
+    [
+      'Chrome 标签页会话',
+      {
+        settings: {
+          chromeTab: { installId: 'i', runId: 'r', tabId: 3 }
+        } as unknown as Session['settings']
+      }
+    ],
+    ['笔记本会话', { settings: { notebookPath: 'a.md' } }],
+    ['旧格式存储', { storageKind: HARNESS_V3_JSONL }]
+  ])('UI-2 形态不给：临时会话里的%s', (_label, over) => {
+    load(history(), {}, session({ projectId: null, ...over }))
     render()
     expect(rowOf('a2')).toBeTruthy()
     expect(forkButtons()).toHaveLength(0)

@@ -11,6 +11,8 @@
  *   SI-4 不拷的：工具大结果目录、日历行、子会话
  *   SI-5 删掉源会话，fork 完好（列表、存储文件、还能发送）
  *   SI-6 两次并发 fork → 两条不同的、各自能用的 fork
+ *   SI-7 临时会话（不属于项目）整段 fork：fork 解析出的工作目录（getById / 运行时的 cwd）就是源会话的临时
+ *        工作区；删掉源会话 → fork 照样能发送、文件夹与里面的文件都在；再删 fork → 文件夹没了
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -23,7 +25,9 @@ const holder = vi.hoisted(() => ({
   db: null as unknown,
   sessionsDir: '',
   toolResults: '',
-  artifacts: ''
+  artifacts: '',
+  /** electron 的 userData：真的 utils/paths 把临时工作区放在 <userData>/temp_workspace/ 下 */
+  userData: ''
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -53,13 +57,19 @@ vi.mock('../../dao/providerDao', () => ({
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: () => undefined } }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
-vi.mock('../../utils/paths', () => ({
+// 临时工作区那几个用真的（userData 指到临时目录）：SI-7 断的是真盘上的共用文件夹
+vi.mock('electron', () => ({
+  app: {
+    getPath: () => holder.userData,
+    getAppPath: () => holder.userData,
+    isPackaged: false
+  }
+}))
+vi.mock('../../utils/paths', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/paths')>()),
   getSessionsDir: () => holder.sessionsDir,
-  getTempWorkspace: (sid: string) => `/nonexistent/shuvix-unit/tmp/${sid}`,
   getToolResultsBase: () => holder.toolResults,
-  getSessionArtifactsDir: (sid: string) => join(holder.artifacts, sid),
-  isSafeSessionId: (id: string) =>
-    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
+  getSessionArtifactsDir: (sid: string) => join(holder.artifacts, sid)
 }))
 vi.mock('../models', () => ({
   getModelRegistry: () => {
@@ -138,6 +148,7 @@ import { sessionRecords } from '../sessionRecords'
 import { clearMemoryStoragesForTests, durableStoragePath } from '../sessionStorage'
 import { getSessionHost, resetSessionHostForTests } from '../sessionHost'
 import { listArtifacts, readArtifact } from '../artifacts/store'
+import { getTempWorkspaceBase } from '../../utils/paths'
 import {
   answer,
   callTool,
@@ -232,6 +243,7 @@ beforeEach(() => {
   holder.sessionsDir = mkdtempSync(join(tmpdir(), 'shuvix-fork-'))
   holder.toolResults = mkdtempSync(join(tmpdir(), 'shuvix-fork-tr-'))
   holder.artifacts = mkdtempSync(join(tmpdir(), 'shuvix-fork-art-'))
+  holder.userData = mkdtempSync(join(tmpdir(), 'shuvix-fork-ud-'))
   sessionRecords.clearEphemeralForTests()
   clearMemoryStoragesForTests()
   mocks.broadcast.mockClear()
@@ -250,6 +262,7 @@ afterEach(async () => {
   rmSync(holder.sessionsDir, { recursive: true, force: true })
   rmSync(holder.toolResults, { recursive: true, force: true })
   rmSync(holder.artifacts, { recursive: true, force: true })
+  rmSync(holder.userData, { recursive: true, force: true })
 })
 
 /** U1 A1 U2 A2，锁着 */
@@ -494,6 +507,44 @@ describe('SI session fork against a real host', () => {
       expect((await listed(a.sessionId)).slice(-2)).toEqual(['user:to FA', 'assistant:FA'])
       expect((await listed(b.sessionId)).slice(-2)).toEqual(['user:to FB', 'assistant:FB'])
       expect(await listed('s')).toEqual(['user:U1', 'assistant:A1', 'user:U2', 'assistant:A2'])
+    },
+    TIMEOUT
+  )
+
+  it(
+    'SI-7 whole fork of a temp source: the fork resolves to the source temp folder; deleting the source keeps it (the fork still prompts); deleting the fork removes it',
+    async () => {
+      insert('s', { projectId: null })
+      kit.queue(answer('A1'))
+      expect(await chatGateway.prompt('s', 'U1')).toEqual({})
+      const sDir = join(getTempWorkspaceBase(), 's')
+      expect(sessionService.getById('s')!.workingDirectory).toBe(sDir)
+      writeFileSync(join(sDir, 'notes.txt'), 'shared')
+
+      const forkId = await fork('s')
+
+      expect(sessionRecords.findById(forkId)).toMatchObject({
+        projectId: null,
+        parentId: null,
+        settings: { workingDirectory: sDir }
+      })
+      expect(sessionService.getById(forkId)!.workingDirectory).toBe(sDir)
+      expect((await sessionService.resolveAgentConfig(forkId)).cwd).toBe(sDir)
+      expect(existsSync(join(getTempWorkspaceBase(), forkId))).toBe(false)
+
+      await sessionService.delete('s')
+      expect(sessionRecords.findById('s')).toBeUndefined()
+      expect(readFileSync(join(sDir, 'notes.txt'), 'utf-8')).toBe('shared')
+
+      kit.queue(answer('F2'))
+      expect(await chatGateway.prompt(forkId, 'U2')).toEqual({})
+      expect(await listed(forkId)).toEqual(['user:U1', 'assistant:A1', 'user:U2', 'assistant:F2'])
+      expect(sessionService.getById(forkId)!.workingDirectory).toBe(sDir)
+      expect(readFileSync(join(sDir, 'notes.txt'), 'utf-8')).toBe('shared')
+
+      await sessionService.delete(forkId)
+      expect(existsSync(sDir)).toBe(false)
+      expect(existsSync(join(getTempWorkspaceBase(), forkId))).toBe(false)
     },
     TIMEOUT
   )

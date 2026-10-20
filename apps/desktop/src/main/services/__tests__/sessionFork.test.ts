@@ -3,7 +3,7 @@
  * （内存 SQLite 跑真迁移）+ 存储拷贝 / 拷贝收尾换成记录型假件。契约在 chat-protocol 的 sessionFork.ts。
  *
  *   SF-1  源会话不存在 → no_session，不 peek、不插行、不广播
- *   SF-2  形态不给（无项目 / 隐藏项目 / 笔记本 / 标签页 / 内存会话 / 旧格式存储）→ not_forkable，不 peek
+ *   SF-2  形态不给（隐藏项目 / 笔记本 / 标签页 / 内存会话 / 旧格式存储）→ not_forkable，不 peek
  *   SF-3  messageId 写法不规范 → invalid_target，在任何 peek 之前
  *   SF-4  messageId 不在源会话视图里 / 是一条用户消息 → invalid_target，whileIdle 不调
  *   SF-5  源会话在忙 / 被中断 / whileIdle 拒绝 busy → busy；不拷、不建文件、不插行、不广播
@@ -12,13 +12,24 @@
  *   SF-8  整段 fork：copy(源, 新)、收尾先于插行、不 branchAt / 不 open、一次广播、新 id ≠ 源
  *   SF-9  从回复分支：open(新) 再 branchAt(条目 id)
  *   SF-10 branchAt 拒绝 not_found / invalid_target → invalid_target，fork 的行 / 存储 / artifacts 都删掉；closed → failed
- *   SF-11 设置抄什么、不抄什么；数组是拷贝
+ *   SF-11 设置抄什么、不抄什么（项目源会话：工作目录不抄，它在项目根）；数组是拷贝
  *   SF-12 标题：en / zh、fork 的 fork、缺省标题留缺省
  *   SF-13 顶层源 → parentId null；子会话源 → 同一父会话、档案钉子保留、父会话的子会话里有 fork
  *   SF-14 行还没进库时出错（拷贝 / 收尾 / 打开存储 / 插行）→ failed，删 fork 的存储，无行、无广播
  *   SF-15 行已进库之后出错（拷 artifacts / open / branchAt 抛错）→ failed，走完整删除
  *   SF-16 whileIdle 答 closed（或 viewSnapshot 抛 SessionClosedError）一次 → 再 peek 一次成功；两次 → failed
  *   SF-17 从不 reject（各处注入失败都回 `{ success: false }`）
+ *   临时会话（不属于任何项目）—— fork 共用源会话的工作目录（`settings.workingDirectory`，见 sessionService 的
+ *   insertForkRow；删除时的去留在 sessionServiceForkWorkspace.test.ts）：
+ *   SF-18 空的 / 整段 / 从回复分支三条路都成功：projectId / parentId null、标题与存储类型照旧、
+ *         workingDirectory = 源会话的临时工作区、恰一次广播
+ *   SF-19 临时会话的不给形态（标签页 / 笔记本 / 内存会话 / 旧格式 / 未知存储）→ not_forkable，不 peek、
+ *         不插行、拒绝不建源会话的文件夹
+ *   SF-20 半成品的收场（branchAt 拒绝、拷 artifacts / open / branchAt 抛错、行进库之前出错）从不碰源会话的
+ *         文件夹与里面的文件；fork 的行没了，也没有 temp_workspace/<fork>
+ *   SF-21 源会话自带 workingDirectory（它本身是 fork / 一个用户目录）→ fork 抄同一个值
+ *   SF-22 临时子会话做源：同一父会话，workingDirectory = 那条子会话自己的 temp_workspace/<子会话>（钉住现状）
+ *   SF-23 临时源会话在忙 → busy，不插行
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -61,13 +72,21 @@ vi.mock('../../dao/providerDao', () => ({
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: () => undefined } }))
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
-vi.mock('../../utils/paths', () => ({
+// 临时工作区那几个（getTempWorkspaceBase / getTempWorkspace / tempWorkspaceOwnerOf）用真的 —— userData 指到
+// 每个用例自己的临时目录（electron 换掉），真的 getTempWorkspace 会把目录建出来，「拒绝时没建出源会话的
+// 文件夹」于是断在真盘上；其余数据目录照旧落在临时目录里
+vi.mock('electron', () => ({
+  app: {
+    getPath: () => join(holder.root, 'userData'),
+    getAppPath: () => join(holder.root, 'userData'),
+    isPackaged: false
+  }
+}))
+vi.mock('../../utils/paths', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/paths')>()),
   getSessionsDir: () => join(holder.root, 'sessions'),
-  getTempWorkspace: (sid: string) => join(holder.root, 'tmp', sid),
   getToolResultsBase: () => join(holder.root, 'tool_results'),
-  getSessionArtifactsDir: (sid: string) => join(holder.root, 'artifacts', sid),
-  isSafeSessionId: (id: string) =>
-    !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
+  getSessionArtifactsDir: (sid: string) => join(holder.root, 'artifacts', sid)
 }))
 // 存储路由留真的（isDurableSession 按行的存储类型判）；拷贝 / 按路径打开 / 删除换成记录型假件
 vi.mock('../sessionStorage', async (importOriginal) => ({
@@ -142,6 +161,7 @@ import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/
 import { migrations } from '../../dao/migrations'
 import type { Session, SessionSettings } from '../../dao/types'
 import { changeLanguage } from '../../i18n'
+import { getTempWorkspace, getTempWorkspaceBase } from '../../utils/paths'
 import { sessionRecords } from '../sessionRecords'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
@@ -295,7 +315,6 @@ describe('SF-1..3 read-only checks before anything is touched', () => {
   })
 
   it.each<[string, Partial<Session>, { ephemeral?: boolean }]>([
-    ['no project', { projectId: null }, {}],
     ['hidden project', { projectId: '__agents__' }, {}],
     ['notebook session', { settings: { notebookPath: 'notes/a.md' } }, {}],
     [
@@ -526,7 +545,7 @@ describe('SF-10 branchAt refused on the fork', () => {
 // ─── SF-11 / SF-12 / SF-13：新行的形状 ─────────────────
 
 describe('SF-11..13 the fork row', () => {
-  it('SF-11 settings: run config, selections, bot, pin and grants are copied; working dir, title origin, lock / run mirrors are not; arrays are copies', async () => {
+  it('SF-11 project source: run config, selections, bot, pin and grants are copied; a stored working dir (a project session works in the project root), title origin, lock / run mirrors are not; arrays are copies', async () => {
     seedRow({
       parentId: null,
       settings: {
@@ -567,7 +586,7 @@ describe('SF-11..13 the fork row', () => {
     expect(settings.knowledgeBases).toEqual([])
   })
 
-  it('SF-11 insertForkRow: notebookPath / chromeTab / workingDirectory never reach the fork, and its arrays / model are copies of the source object', () => {
+  it('SF-11 insertForkRow (project source): notebookPath / chromeTab / workingDirectory never reach the fork, and its arrays / model are copies of the source object', () => {
     const source: Session = {
       id: 'shape',
       title: 'Shape',
@@ -864,5 +883,242 @@ describe('SF-17 forkSession never rejects', () => {
       success: false,
       reason: 'failed'
     })
+  })
+})
+
+// ─── SF-18..23：临时会话（不属于任何项目）—— fork 共用源会话的工作目录 ─────────────────
+
+/** 某条会话的临时工作区（真的 utils/paths：<userData>/temp_workspace/<id>）；只拼路径、不建 */
+const tempOf = (sid: string): string => join(getTempWorkspaceBase(), sid)
+
+/** 源会话的临时工作区建出来，放一个文件 —— 收场的各条路都不许碰它 */
+function seedSourceFolder(): string {
+  const dir = getTempWorkspace(SRC)
+  writeFileSync(join(dir, 'notes.txt'), 'mine', 'utf-8')
+  return dir
+}
+
+function expectSourceFolderIntact(dir: string): void {
+  expect(dir).toBe(tempOf(SRC))
+  expect(readFileSync(join(dir, 'notes.txt'), 'utf-8')).toBe('mine')
+}
+
+describe('SF-18 temp sources fork and share the source working folder', () => {
+  it.each<[string, 'empty' | 'whole' | 'reply']>([
+    ['an empty source (no storage)', 'empty'],
+    ['a whole copy', 'whole'],
+    ['a reply fork', 'reply']
+  ])(
+    'SF-18 %s → success: projectId / parentId null, fork title, current storage kind, workingDirectory = the source temp folder, one broadcast',
+    async (_label, mode) => {
+      seedRow({ projectId: null, settings: { enabledTools: ['mcp:ssh'], thinkingLevel: 'low' } })
+      if (mode !== 'empty') openSource()
+
+      const result = await forkSession(
+        mode === 'reply' ? { sessionId: SRC, messageId: '2' } : { sessionId: SRC }
+      )
+      const forkId = forkIdOf(result)
+
+      expect(sessionRecords.findById(forkId)).toMatchObject({
+        projectId: null,
+        parentId: null,
+        title: 'Plan the trip · fork',
+        storageKind: 'durable-sqlite-1',
+        settings: {
+          enabledTools: ['mcp:ssh'],
+          thinkingLevel: 'low',
+          workingDirectory: tempOf(SRC)
+        }
+      })
+      expect(sessionService.getById(forkId)!.workingDirectory).toBe(tempOf(SRC))
+      expect(sessionService.getById(SRC)!.workingDirectory).toBe(tempOf(SRC))
+      expect(existsSync(tempOf(SRC))).toBe(true)
+      expect(existsSync(tempOf(forkId))).toBe(false)
+      expect(mocks.listChanged).toHaveBeenCalledTimes(1)
+      expect(mocks.copy.mock.calls).toEqual(mode === 'empty' ? [] : [[SRC, forkId]])
+      if (mode === 'reply') {
+        expect(fakeHost.get(forkId)!.callsOf('branchAt')).toEqual([['branchAt', 2]])
+      }
+      // 源会话的行原样（没被写进 workingDirectory）
+      expect(sessionRecords.findById(SRC)!.settings).toEqual({
+        enabledTools: ['mcp:ssh'],
+        thinkingLevel: 'low'
+      })
+    }
+  )
+
+  it('SF-18 a temp source still on the default title → the fork keeps the default title', async () => {
+    seedRow({ projectId: null, title: 'New Chat' })
+    openSource()
+    const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
+    expect(sessionRecords.findById(forkId)!.title).toBe('New Chat')
+    expect(sessionRecords.findById(forkId)!.settings.workingDirectory).toBe(tempOf(SRC))
+  })
+})
+
+describe('SF-19 temp shapes that are not forkable', () => {
+  it.each<[string, Partial<Session>, { ephemeral?: boolean }]>([
+    [
+      'Chrome tab session (no project)',
+      {
+        projectId: null,
+        settings: { chromeTab: { installId: 'i', runId: 'r', tabId: 7 } } as SessionSettings
+      },
+      {}
+    ],
+    ['notebook session (no project)', { projectId: null, settings: { notebookPath: 'a.md' } }, {}],
+    ['in-memory temp session', { projectId: null }, { ephemeral: true }],
+    [
+      'temp session on the legacy storage',
+      { projectId: null, storageKind: 'harness-v3-jsonl' },
+      {}
+    ],
+    [
+      'temp session on an unknown storage kind',
+      { projectId: null, storageKind: 'durable-sqlite-9' as Session['storageKind'] },
+      {}
+    ]
+  ])(
+    'SF-19 %s → not_forkable; no peek, no row, the source folder is not created',
+    async (_label, patch, options) => {
+      seedRow(patch, options)
+      openSource()
+      fakeHost.calls.length = 0
+      for (const params of [{ sessionId: SRC }, { sessionId: SRC, messageId: '2' }]) {
+        expect(await forkSession(params)).toEqual({ success: false, reason: 'not_forkable' })
+      }
+      expect(fakeHost.calls).toEqual([])
+      expect(fakeHost.get(SRC)!.calls).toEqual([])
+      expect(mocks.copy).not.toHaveBeenCalled()
+      expectNothingCreated()
+      expect(existsSync(tempOf(SRC))).toBe(false)
+      expect(existsSync(getTempWorkspaceBase())).toBe(false)
+    }
+  )
+})
+
+describe("SF-20 half-made forks of a temp source never touch the source's folder", () => {
+  it.each<['not_found' | 'invalid_target' | 'closed', 'invalid_target' | 'failed']>([
+    ['not_found', 'invalid_target'],
+    ['invalid_target', 'invalid_target'],
+    ['closed', 'failed']
+  ])('SF-20 branchAt → %s ⇒ %s', async (refusal, reason) => {
+    seedRow({ projectId: null })
+    const folder = seedSourceFolder()
+    openSource()
+    fakeHost.configure = (session) => {
+      if (session.sessionId !== SRC) session.branchResult = { ok: false, reason: refusal }
+    }
+
+    expect(await forkSession({ sessionId: SRC, messageId: '4' })).toEqual({
+      success: false,
+      reason
+    })
+    const forkId = mocks.copy.mock.calls[0]![1]
+    expect(rowIds()).toEqual([SRC])
+    expect(existsSync(tempOf(forkId))).toBe(false)
+    expectSourceFolderIntact(folder)
+  })
+
+  it.each<[string, () => void]>([
+    ['copying the artifacts throws', () => (mocks.artifactsFail = true)],
+    [
+      'host.open(fork) throws',
+      () => vi.spyOn(fakeHost, 'open').mockRejectedValueOnce(new Error('cannot open'))
+    ],
+    [
+      'branchAt throws',
+      () => {
+        fakeHost.configure = (session) => {
+          if (session.sessionId !== SRC) {
+            session.branchAt = async () => {
+              throw new Error('branch blew up')
+            }
+          }
+        }
+      }
+    ],
+    ['the storage copy throws', () => mocks.copy.mockRejectedValueOnce(new Error('disk full'))],
+    ['the reset throws', () => mocks.reset.mockRejectedValueOnce(new Error('corrupt'))],
+    [
+      'opening the copied storage throws',
+      () => mocks.openFile.mockRejectedValueOnce(new Error('cannot open'))
+    ],
+    [
+      'inserting the row throws',
+      () =>
+        vi.spyOn(sessionRecords, 'insert').mockImplementationOnce(() => {
+          throw new Error('constraint')
+        })
+    ]
+  ])(
+    'SF-20 %s → failed; the fork row is gone and the source folder is intact',
+    async (_l, inject) => {
+      seedRow({ projectId: null })
+      const folder = seedSourceFolder()
+      openSource()
+      inject()
+
+      expect(await forkSession({ sessionId: SRC, messageId: '2' })).toEqual({
+        success: false,
+        reason: 'failed'
+      })
+      const forkId = mocks.copy.mock.calls[0]![1]
+      expect(rowIds()).toEqual([SRC])
+      expect(existsSync(tempOf(forkId))).toBe(false)
+      expectSourceFolderIntact(folder)
+    }
+  )
+})
+
+describe('SF-21..23 temp sources: carried working dirs, sub-session sources, busy', () => {
+  it.each<[string, () => string]>([
+    ['itself a fork (points at another session temp folder)', () => tempOf('original-src')],
+    ['a user folder', () => '/Users/me/docs']
+  ])(
+    'SF-21 a source that already carries workingDirectory (%s) → the fork gets the same value',
+    async (_label, carried) => {
+      const dir = carried()
+      seedRow({ projectId: null, settings: { enabledTools: [], workingDirectory: dir } })
+      openSource()
+      const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
+
+      expect(sessionRecords.findById(forkId)!.settings.workingDirectory).toBe(dir)
+      expect(sessionService.getById(forkId)!.workingDirectory).toBe(dir)
+      // 源会话自己的临时工作区没被问出来
+      expect(existsSync(tempOf(SRC))).toBe(false)
+      expect(existsSync(tempOf(forkId))).toBe(false)
+    }
+  )
+
+  it("SF-22 temp sub-session source → same parent; workingDirectory = that child's own temp folder", async () => {
+    sessionRecords.insert({
+      id: 'P',
+      title: 'Parent',
+      projectId: null,
+      parentId: null,
+      storageKind: 'durable-sqlite-1',
+      settings: {},
+      createdAt: 0,
+      updatedAt: 0,
+      lastActiveAt: 0
+    })
+    seedRow({ projectId: null, parentId: 'P' })
+    openSource()
+    const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
+
+    const fork = sessionRecords.findById(forkId)!
+    expect(fork.parentId).toBe('P')
+    expect(fork.projectId).toBeNull()
+    expect(fork.settings.workingDirectory).toBe(tempOf(SRC))
+    expect(fork.settings.workingDirectory).not.toBe(tempOf('P'))
+  })
+
+  it('SF-23 a busy temp source → busy; no row', async () => {
+    seedRow({ projectId: null })
+    openSource({ busy: true })
+    expect(await forkSession({ sessionId: SRC })).toEqual({ success: false, reason: 'busy' })
+    expect(rowIds()).toEqual([SRC])
+    expectNothingCreated()
   })
 })

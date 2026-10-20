@@ -10,9 +10,15 @@
  *       切到 fork，只有那一张卡（工具块带结果）；fork 的下一次请求带着工具结果、没有第二轮；源会话两张卡
  *       都在。IPC 给一个不存在的回复 id → `invalid_target`，会话列表不变
  *   E-3 旧格式（只读，`harness-v3-jsonl`）项目会话：行菜单里没有 fork-session、IPC 回 `not_forkable`、
- *       对话区一颗 [data-fork-reply] 都没有；顺带：不属于任何项目的会话同样不给
+ *       对话区一颗 [data-fork-reply] 都没有
  *   E-4 子会话的 fork 挂在同一个父会话下（侧栏嵌在父行下），钉着的档案（`settings.agentProfile`）随之保留，
  *       fork 里的下一次请求用的还是那份档案的系统提示
+ *   E-5 临时会话（不属于任何项目）的 fork 与源会话**共用工作目录**（源会话的 `temp_workspace/<源 id>`）：
+ *       临时组的行菜单里 fork-session 可点 → fork 落在临时组、成为活动会话，`settings.workingDirectory` 与
+ *       `getById().workingDirectory` 都是源会话的目录；源会话的回复上有分支按钮；fork 里按抄来的历史里的
+ *       绝对路径、按相对路径读那个文件都不问、不报错，相对路径写的文件落在源会话的目录里；沙箱可用时
+ *       受限的 `cat` 也读得到（不问）；fork 的系统提示里写的工作目录就是源会话的目录。删源会话：目录与
+ *       文件都留着，fork 照样读得到；再删 fork：目录没了，也没有 `temp_workspace/<fork id>`
  *
  * 夹具：一个项目、一个假提供商（脚本一律按用户消息认领，自动标题不会来抢 —— 源会话都有非默认标题，
  * fork 的「· fork」标题也不是默认标题）。旧格式会话在**运行中**种（`seedLegacySteps`：会话建了、从没打开过，
@@ -20,7 +26,7 @@
  * 主进程界面语言写成 en（fork 标题按 en 的 `agent.forkTitle` 比）；渲染端语言不随 IPC 设置变，菜单 label
  * 按三语里任一份比。
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import en from '../../../../../packages/chat-protocol/src/i18n/locales/en.json'
@@ -37,13 +43,17 @@ import {
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../harness/pages'
 import {
+  autoAllowed,
   createPinnedChildSession,
   createProject,
+  installAutoAllow,
   listSessionIds,
   newSessionsAfter,
   requestSystemText,
+  sandboxAvailable,
   seedFakeProvider,
   seedLegacySteps,
+  setSandboxEnabled,
   waitRendererReady
 } from '../../harness/seed'
 
@@ -59,7 +69,6 @@ const T = {
   e1: 'E1 fork source',
   e2: 'E2 reply source',
   e3: 'E3 legacy source',
-  e3temp: 'E3 temp session',
   e4parent: 'E4 parent',
   e4child: 'E4 pinned child'
 } as const
@@ -91,7 +100,16 @@ interface ListedMessage {
   role: string
   type: string
   content: string
-  blocks?: Array<{ type: string; toolName?: string; result?: string; isError?: boolean }>
+  blocks?: ListedBlock[]
+}
+
+interface ListedBlock {
+  type: string
+  toolName?: string
+  toolCallId?: string
+  result?: string
+  isError?: boolean
+  details?: { sandbox?: string }
 }
 
 interface ListedSession {
@@ -101,6 +119,8 @@ interface ListedSession {
   parentId: string | null
   storageKind?: string
   settings: Record<string, unknown>
+  /** getById 的计算属性（项目根 → settings.workingDirectory → 临时工作区） */
+  workingDirectory?: string
 }
 
 type ForkResult = { success: true; sessionId: string } | { success: false; reason: string }
@@ -111,11 +131,10 @@ let sidebar: SidebarPane
 let chat: ChatPane
 let projDir = ''
 let projectId = ''
-const sid: Record<'e1' | 'e2' | 'e3' | 'e3temp' | 'e4parent' | 'e4child', string> = {
+const sid: Record<'e1' | 'e2' | 'e3' | 'e4parent' | 'e4child', string> = {
   e1: '',
   e2: '',
   e3: '',
-  e3temp: '',
   e4parent: '',
   e4child: ''
 }
@@ -191,7 +210,6 @@ beforeAll(async () => {
     { kind: 'user', text: 'E3 old question' },
     { kind: 'text', text: 'E3 OLD ANSWER' }
   ])
-  sid.e3temp = await createSession({ title: T.e3temp })
 
   // E-1：两轮纯文本
   sid.e1 = await createSession({ title: T.e1, projectId })
@@ -227,7 +245,7 @@ beforeAll(async () => {
   provider.script({ text: A.e4a, when: byUserText(Q.e4a), usage: { prompt: 80, completion: 5 } })
   await prompt(sid.e4child, Q.e4a)
 
-  for (const title of [T.e1, T.e2, T.e3, T.e3temp, T.e4parent]) await waitRow(title)
+  for (const title of [T.e1, T.e2, T.e3, T.e4parent]) await waitRow(title)
   await sidebar.setGroupExpanded({ project: PROJ }, true)
 }, 180_000)
 
@@ -379,7 +397,7 @@ describe('session fork', () => {
     expect(await sortedIds()).toEqual(before)
   })
 
-  it('E-3 a legacy read-only project session (and a session outside any project) offers no fork and IPC refuses it', async () => {
+  it('E-3 a legacy read-only project session offers no fork and IPC refuses it', async () => {
     const legacy = await getSession(sid.e3)
     expect(legacy?.storageKind).toBe('harness-v3-jsonl')
 
@@ -399,16 +417,6 @@ describe('session fork', () => {
       'legacy transcript painted'
     )
     expect(await chat.forkReplyCount()).toBe(0)
-
-    // 不属于任何项目的会话：形态不给
-    const tempMenu = ((await sidebar.rowMenuShots(T.e3temp)) ?? []).map((i) => i.id ?? 'sep')
-    expect(tempMenu).toContain('export-session')
-    expect(tempMenu).not.toContain('fork-session')
-    expect(await fork({ sessionId: sid.e3temp })).toEqual({
-      success: false,
-      reason: 'not_forkable'
-    })
-    expect(await sortedIds()).toEqual(before)
   })
 
   it('E-4 forking a sub-session nests the fork under the same parent and keeps the pinned profile', async () => {
@@ -450,5 +458,277 @@ describe('session fork', () => {
     expect(requestSystemText(req!)).toBe(requestSystemText(childReq!))
     expect(conversationOf(req!)).toEqual([`user:${Q.e4a}`, `assistant:${A.e4a}`, `user:${Q.e4b}`])
     expect(await listMessages(sid.e4child)).toEqual(childMsgs)
+  })
+
+  describe('E-5 a temp session fork shares the source session working folder', () => {
+    const E5 = {
+      title: 'E5 temp source',
+      shared: 'e5-shared.txt',
+      sharedContent: 'E5-SHARED-CONTENT-7f3a\n',
+      fromFork: 'from-fork.txt',
+      fromForkContent: 'E5-FROM-FORK-91c2\n',
+      q: {
+        write: 'E5 write the shared file',
+        read: 'E5 read it from the fork',
+        writeRel: 'E5 write a file from the fork',
+        bash: 'E5 cat it confined',
+        after: 'E5 read it after the source is gone'
+      },
+      a: {
+        write: 'E5 WRITTEN',
+        read: 'E5 READ',
+        writeRel: 'E5 FORK WROTE',
+        bash: 'E5 CATTED',
+        after: 'E5 STILL THERE'
+      }
+    } as const
+    const USAGE = { prompt: 90, completion: 5 }
+    /** 源会话 S、它的工作目录（`<userData>/temp_workspace/<S>`）、写进去的那个文件的绝对路径、fork F */
+    let sId = ''
+    let sDir = ''
+    let sharedAbs = ''
+    let fId = ''
+
+    const call = (
+      id: string,
+      name: string,
+      args: Record<string, unknown>
+    ): { id: string; name: string; args: string } => ({ id, name, args: JSON.stringify(args) })
+
+    /** 会话里落库的那个工具块（`message.list` 的卡里，按 toolCallId 找） */
+    const blockOf = async (sessionId: string, toolCallId: string): Promise<ListedBlock> => {
+      const block = (await listMessages(sessionId))
+        .flatMap((m) => m.blocks ?? [])
+        .find((b) => b.toolCallId === toolCallId)
+      expect(block, `tool block ${toolCallId} in ${sessionId}`).toBeDefined()
+      return block!
+    }
+
+    /** 一个工具块：成功、结果里有 `text` */
+    const expectToolOk = async (
+      sessionId: string,
+      toolCallId: string,
+      text: string
+    ): Promise<ListedBlock> => {
+      const block = await blockOf(sessionId, toolCallId)
+      expect(block.isError, `${toolCallId} failed: ${block.result}`).not.toBe(true)
+      expect(block.result).toContain(text)
+      return block
+    }
+
+    /** 请求里（抄来的历史）助手发过的某个工具的调用参数，按序 */
+    const historyToolArgs = (req: FakeRequest, name: string): Array<Record<string, unknown>> =>
+      (
+        (req.body.messages ?? []) as Array<{
+          tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>
+        }>
+      )
+        .flatMap((m) => m.tool_calls ?? [])
+        .filter((c) => c.function?.name === name)
+        .map((c) => JSON.parse(c.function?.arguments ?? '{}') as Record<string, unknown>)
+
+    const tempWorkspaceOf = (id: string): string => join(app.userData, 'temp_workspace', id)
+
+    const deleteSession = (id: string): Promise<unknown> =>
+      app.main.eval(`window.api.session.delete(${JSON.stringify(id)})`)
+
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+    beforeAll(async () => {
+      // 沙箱按会话固定（bash 工具建好时定）：在 fork 的运行时建出来之前钉成开（缺省也是开，写明而已）
+      await setSandboxEnabled(app.main, true)
+      // 安全网：这一路本不该问 —— 真冒出一张卡也不会挂到超时，而是在 autoAllowed 里现形
+      await installAutoAllow(app.main)
+
+      sId = await createSession({ title: E5.title })
+      const src = await getSession(sId)
+      sDir = src?.workingDirectory ?? ''
+      sharedAbs = join(sDir, E5.shared)
+      provider.script(
+        {
+          toolCalls: [
+            call('call_e5_write', 'write', { path: sharedAbs, content: E5.sharedContent })
+          ],
+          when: byUserText(E5.q.write),
+          usage: USAGE
+        },
+        { text: E5.a.write, when: byUserText(E5.q.write), usage: USAGE }
+      )
+      await prompt(sId, E5.q.write)
+      await waitRow(E5.title)
+    })
+
+    it('E-5.0 the source is a temp session working in its own temp workspace, with the file on disk', async () => {
+      const src = await getSession(sId)
+      expect(src).toMatchObject({
+        projectId: null,
+        parentId: null,
+        storageKind: 'durable-sqlite-1'
+      })
+      expect(sDir).toBe(tempWorkspaceOf(sId))
+      const write = await blockOf(sId, 'call_e5_write')
+      expect(write.isError, `write failed: ${write.result}`).not.toBe(true)
+      expect(readFileSync(sharedAbs, 'utf8')).toBe(E5.sharedContent)
+      expect(await autoAllowed(app.main)).toEqual([])
+    })
+
+    it('E-5.1 the temp group row menu forks it into an active temp sibling on the same folder', async () => {
+      const item = (await sidebar.rowMenuShots(E5.title))?.find((i) => i.id === 'fork-session')
+      expect(item).toBeDefined()
+      expect(item!.enabled).toBe(true)
+      expect(FORK_LABELS).toContain(item!.label)
+
+      const srcMsgs = await listMessages(sId)
+      const added = await newSessionsAfter(app.main, () =>
+        sidebar.pickRowMenu(E5.title, 'fork-session')
+      )
+      expect(added).toHaveLength(1)
+      fId = added[0]
+      const forkTitle = forkTitleOf(E5.title)
+      const row = await getSession(fId)
+      expect(row).toMatchObject({ title: forkTitle, projectId: null, parentId: null })
+      expect(row?.settings.workingDirectory).toBe(sDir)
+      expect(row?.workingDirectory).toBe(sDir)
+      expect(shapeOf(await listMessages(fId))).toEqual(shapeOf(srcMsgs))
+
+      await waitActive(forkTitle)
+      await until(async () => {
+        const rows = await sidebar.groupRows('temp')
+        return rows.some((r) => r.title === forkTitle && r.active)
+      }, 'the fork is the active row of the temp group')
+      expect(await sidebar.groupRows('temp')).toContainEqual(
+        expect.objectContaining({ title: E5.title, active: false })
+      )
+    })
+
+    it('E-5.2 the temp source shows a fork button on its reply', async () => {
+      expect(await sidebar.openSession(E5.title)).toBe(true)
+      await chat.ready()
+      await until(
+        async () => (await chat.settledItems()).some((i) => i.text.includes(E5.a.write)),
+        'temp source transcript painted'
+      )
+      await until(async () => (await chat.forkReplyCount()) >= 1, 'a fork button on the reply')
+    })
+
+    it('E-5.3 the fork reads the shared file by the absolute path from its history and by a relative path, without asking', async () => {
+      const when = byUserText(E5.q.read)
+      provider.script(
+        {
+          // 绝对路径从 fork 收到的（抄来的）历史里取 —— 源会话那次 write 的参数
+          build: (req) => {
+            const path = historyToolArgs(req, 'write')[0]?.path
+            if (typeof path !== 'string') throw new Error('no write call in the copied history')
+            return { toolCalls: [call('call_e5_read_abs', 'read', { path })] }
+          },
+          when,
+          usage: USAGE
+        },
+        { toolCalls: [call('call_e5_read_rel', 'read', { path: E5.shared })], when, usage: USAGE },
+        { text: E5.a.read, when, usage: USAGE }
+      )
+      const since = provider.requests().length
+      await prompt(fId, E5.q.read)
+
+      const first = provider
+        .requests()
+        .slice(since)
+        .find((r) => r.lastUserText === E5.q.read)
+      expect(first).toBeDefined()
+      expect(first!.buildError).toBeUndefined()
+      expect(historyToolArgs(first!, 'write')[0]?.path).toBe(sharedAbs)
+
+      await expectToolOk(fId, 'call_e5_read_abs', 'E5-SHARED-CONTENT-7f3a')
+      await expectToolOk(fId, 'call_e5_read_rel', 'E5-SHARED-CONTENT-7f3a')
+      expect((await listMessages(fId)).at(-1)?.content).toBe(E5.a.read)
+      expect(await autoAllowed(app.main)).toEqual([])
+    })
+
+    it('E-5.4 a relative write in the fork lands in the source session folder', async () => {
+      const when = byUserText(E5.q.writeRel)
+      provider.script(
+        {
+          toolCalls: [
+            call('call_e5_write_rel', 'write', {
+              path: E5.fromFork,
+              content: E5.fromForkContent
+            })
+          ],
+          when,
+          usage: USAGE
+        },
+        { text: E5.a.writeRel, when, usage: USAGE }
+      )
+      await prompt(fId, E5.q.writeRel)
+      const block = await blockOf(fId, 'call_e5_write_rel')
+      expect(block.isError, `write failed: ${block.result}`).not.toBe(true)
+      expect(readFileSync(join(sDir, E5.fromFork), 'utf8')).toBe(E5.fromForkContent)
+      expect(existsSync(join(tempWorkspaceOf(fId), E5.fromFork))).toBe(false)
+      expect(await autoAllowed(app.main)).toEqual([])
+    })
+
+    it('E-5.5 a confined cat in the fork reads the shared file without asking', async (ctx) => {
+      if (!(await sandboxAvailable(app.main))) ctx.skip()
+      const when = byUserText(E5.q.bash)
+      provider.script(
+        {
+          toolCalls: [
+            call('call_e5_cat', 'bash', {
+              command: `cat ${E5.shared}`,
+              description: 'e2e temp fork cat'
+            })
+          ],
+          when,
+          usage: USAGE
+        },
+        { text: E5.a.bash, when, usage: USAGE }
+      )
+      await prompt(fId, E5.q.bash)
+      const block = await expectToolOk(fId, 'call_e5_cat', 'E5-SHARED-CONTENT-7f3a')
+      expect(block.details?.sandbox).toBe('confined')
+      expect(await autoAllowed(app.main)).toEqual([])
+    })
+
+    it("E-5.6 the fork's system prompt names the source session folder as its working directory", () => {
+      const req = requestFor(E5.q.read, 0)
+      expect(req).toBeDefined()
+      const system = requestSystemText(req!)
+      const labels = ['Working directory', '工作目录', '作業ディレクトリ']
+      expect(labels.some((label) => system.includes(`${label}: ${sDir}`))).toBe(true)
+      expect(system).not.toContain(tempWorkspaceOf(fId))
+    })
+
+    it('E-5.7 deleting the source keeps the shared folder and its files, and the fork still reads them', async () => {
+      await deleteSession(sId)
+      expect(await listSessionIds(app.main)).not.toContain(sId)
+      expect(existsSync(sDir)).toBe(true)
+      expect(readFileSync(sharedAbs, 'utf8')).toBe(E5.sharedContent)
+      expect(readFileSync(join(sDir, E5.fromFork), 'utf8')).toBe(E5.fromForkContent)
+      expect((await getSession(fId))?.workingDirectory).toBe(sDir)
+
+      const when = byUserText(E5.q.after)
+      provider.script(
+        { toolCalls: [call('call_e5_after_rel', 'read', { path: E5.shared })], when, usage: USAGE },
+        { toolCalls: [call('call_e5_after_abs', 'read', { path: sharedAbs })], when, usage: USAGE },
+        { text: E5.a.after, when, usage: USAGE }
+      )
+      await prompt(fId, E5.q.after)
+      await expectToolOk(fId, 'call_e5_after_rel', 'E5-SHARED-CONTENT-7f3a')
+      await expectToolOk(fId, 'call_e5_after_abs', 'E5-SHARED-CONTENT-7f3a')
+      expect(await autoAllowed(app.main)).toEqual([])
+      // 共用的目录在删源会话之后依旧在
+      expect(existsSync(sDir)).toBe(true)
+    })
+
+    it('E-5.8 deleting the fork, the last session on the folder, removes it', async () => {
+      await deleteSession(fId)
+      expect(await listSessionIds(app.main)).not.toContain(fId)
+      expect(existsSync(sDir)).toBe(false)
+      expect(existsSync(tempWorkspaceOf(fId))).toBe(false)
+      // 删完之后没有谁又把它们建回来（迟到的异步收尾）
+      await sleep(1000)
+      expect(existsSync(sDir)).toBe(false)
+      expect(existsSync(tempWorkspaceOf(fId))).toBe(false)
+    })
   })
 })

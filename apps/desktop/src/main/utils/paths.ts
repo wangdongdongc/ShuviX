@@ -2,7 +2,7 @@
  * 路径相关工具函数 — 所有数据目录的统一入口
  */
 
-import { join, resolve, dirname, delimiter } from 'path'
+import { basename, join, resolve, dirname, delimiter } from 'path'
 import { homedir } from 'os'
 import { mkdirSync, existsSync } from 'fs'
 import { app } from 'electron'
@@ -240,9 +240,24 @@ export function getWidgetsDir(): string {
   return ensureDir(join(homedir(), '.shuvix', 'widgets'))
 }
 
+/** 临时工作区的根（不自动创建） */
+export function getTempWorkspaceBase(): string {
+  return join(app.getPath('userData'), 'temp_workspace')
+}
+
 /** 获取临时会话的工作目录 */
 export function getTempWorkspace(sessionId: string): string {
-  return ensureDir(join(app.getPath('userData'), 'temp_workspace', sessionId))
+  return ensureDir(join(getTempWorkspaceBase(), sessionId))
+}
+
+/**
+ * `dir` 是不是某条会话的临时工作区本身（`temp_workspace/<会话 id>`）→ 那条会话的 id；不是 → undefined。
+ * 只比路径，不碰磁盘（会话 fork 共用源会话的临时工作区，删除时据此判断它归谁）。
+ */
+export function tempWorkspaceOwnerOf(dir: string): string | undefined {
+  if (dirname(dir) !== getTempWorkspaceBase()) return undefined
+  const id = basename(dir)
+  return isSafeSessionId(id) ? id : undefined
 }
 
 /** 工具大结果持久化根目录（不自动创建） */

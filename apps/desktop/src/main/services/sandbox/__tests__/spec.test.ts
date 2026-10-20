@@ -5,16 +5,21 @@
  * 没有围栏（git 元数据、~/.shuvix、凭据清单）——这里钉住剩下的全部：
  *
  *  - SP-1 哪些会话不套沙箱：坏会话 id；工作目录与**每个写授权**过同一套判定（覆盖家目录、是 ShuviX
- *    自己的配置、在应用数据里、**包含** ShuviX 的配置或应用数据）；以及原因的先后；
- *  - SP-2 套得上的工作目录与授权（按路径段边界判；读授权不过这套判定）；
+ *    自己的配置、在应用数据里、**包含** ShuviX 的配置或应用数据）；以及原因的先后。应用数据里只有
+ *    「本会话可用的那个临时工作区」例外 —— 工作目录**正是**某条会话的临时工作区（`temp_workspace/<id>`
+ *    文件夹本身：临时会话的 fork 共用源会话的）就是它，否则是本会话自己的；它里面的子目录、
+ *    `temp_workspace` 本身、同前缀的兄弟都不算，写授权也只按这一个判（两种布局都钉）；
+ *  - SP-2 套得上的工作目录与授权（按路径段边界判；读授权不过这套判定）；工作目录正是别的会话的临时
+ *    工作区时套得上，它里面的写授权也套得上；
  *  - SP-3 会话目录清单（sessionDirsFor）：工作目录、本会话临时目录、artifacts、工具结果；
- *    工作目录不适合时它不在清单里；坏 id 没有清单；
+ *    工作目录不适合时它不在清单里；坏 id 没有清单；工作目录是别的会话的临时工作区时其余三项
+ *    仍是本会话自己的，本会话自己的临时工作区与第三个会话的不在清单里；
  *  - SP-3x 会话设置带来的目录（extras，宿主现算：勾选的知识库可读写，技能目录 / 内置知识库只读）：
  *    realpath、去重、空串 / `/` / 覆盖家目录的丢掉，只读的里去掉已在读写清单里的；
  *  - SP-4 规格的各个字段：可读根 = 会话目录 + 只读会话目录 + 写授权 + 读授权 + ShuviX 自己的程序，
  *    可写根 = 会话目录 + 写授权，可读文件只有 cli-token，socket；
  *  - SP-5 上级目录的元数据（metadataPaths）：家目录里可读根 / 可读文件 / CLI socket 的每一级上级，到家目录为止；
- *  - SP-6 `real` 在一切判断之前应用；
+ *  - SP-6 `real` 在一切判断之前应用（认临时工作区归谁也在解析之后：链接按指向、`..` 先规范化）；
  *  - SP-7 isWithin 按路径段边界比。
  *
  * 夹具宿主：home=/Users/u，userData 在 ~/Library/Application Support/ShuviX，工具结果在 userData/tool_results，
@@ -22,6 +27,7 @@
  * e2e 布局把假 HOME 放在 /private/tmp 下。
  */
 import { createHash } from 'crypto'
+import { resolve } from 'path'
 import { describe, expect, it, vi } from 'vitest'
 
 // spec.ts → utils/paths 会连带 import electron（只在调用时才用 app）
@@ -103,9 +109,42 @@ const h = (rel: string, home = HOME): string => `${home}/${rel}`
 const TMP_DIR = `${TMP_ROOT}/${sessionTmpName(SID)}`
 const ARTIFACTS = `${SHUVIX}/artifacts/${SID}`
 const TOOL_RESULTS_SID = `${TOOL_RESULTS}/${SID}`
-const TEMP_WS = `${USER_DATA}/temp_workspace/${SID}`
+const TEMP_BASE = `${USER_DATA}/temp_workspace`
+const TEMP_WS = `${TEMP_BASE}/${SID}`
+/** 别的会话的临时工作区：临时会话的 fork 把源会话的这个文件夹当自己的工作目录 */
+const OTHER_WS = `${TEMP_BASE}/OTHER`
+/** 第三个会话的临时工作区 */
+const THIRD_WS = `${TEMP_BASE}/THIRD`
 /** 正常工作目录下本会话的会话目录（顺序即实现的顺序） */
 const SESSION_DIRS = [WS, TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID]
+const APP_DATA_WS = "working directory is inside ShuviX's application data"
+const APP_DATA_GRANT = "a write grant is inside ShuviX's application data"
+
+/** 两种布局 */
+const LAYOUTS: Array<[string, SandboxHostPaths]> = [
+  ['生产', PATHS],
+  ['e2e', E2E_PATHS]
+]
+
+/** 某个布局下的临时工作区：根、本会话的、别的会话的（fork 的源）、第三个会话的 */
+function tempWorkspacesOf(paths: SandboxHostPaths): {
+  base: string
+  own: string
+  other: string
+  third: string
+} {
+  const base = `${paths.userData}/temp_workspace`
+  return { base, own: `${base}/${SID}`, other: `${base}/OTHER`, third: `${base}/THIRD` }
+}
+
+/** 某个布局下本会话的临时目录、artifacts、工具结果（会话目录清单里工作目录之后的三项） */
+function ownSessionDirsOf(paths: SandboxHostPaths): string[] {
+  return [
+    `${paths.tmpRoot}/${sessionTmpName(SID)}`,
+    `${paths.shuvixHome}/artifacts/${SID}`,
+    `${paths.toolResultsBase}/${SID}`
+  ]
+}
 
 describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () => {
   const COVERS = 'covers the home folder'
@@ -148,11 +187,6 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
     [
       '工作目录是本会话的工具结果（它是会话目录，但当不了工作目录）',
       { workingDirectory: TOOL_RESULTS_SID },
-      `working directory ${APP_DATA}`
-    ],
-    [
-      '工作目录是别的会话的临时工作区',
-      { workingDirectory: `${USER_DATA}/temp_workspace/OTHER` },
       `working directory ${APP_DATA}`
     ],
     [
@@ -210,6 +244,72 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
   ]
   it.each(cases)('SP-1 %s', (_label, over, reason) => {
     const result = build(over)
+    expect(result.ok).toBe(false)
+    expect(!result.ok && result.reason).toBe(reason)
+  })
+
+  /**
+   * 临时会话的 fork 共用源会话的临时工作区：只认 `temp_workspace/<安全的会话 id>` 文件夹本身；
+   * 写授权按本会话实际用的那一个临时工作区判（工作目录是别的会话的，就是那一个，本会话自己的也不算）
+   */
+  function forkCases(p: SandboxHostPaths): Array<[string, Partial<SandboxSessionInput>, string]> {
+    const t = tempWorkspacesOf(p)
+    return [
+      [
+        '工作目录在别的会话的临时工作区里（子目录不算，只认文件夹本身）',
+        { workingDirectory: `${t.other}/sub` },
+        APP_DATA_WS
+      ],
+      ['工作目录是 temp_workspace 本身', { workingDirectory: t.base }, APP_DATA_WS],
+      ['工作目录是 temp_workspace/（带结尾斜杠）', { workingDirectory: `${t.base}/` }, APP_DATA_WS],
+      [
+        '工作目录是 temp_workspace/x..y（文件夹名不是安全的会话 id）',
+        { workingDirectory: `${t.base}/x..y` },
+        APP_DATA_WS
+      ],
+      [
+        '工作目录是 temp_workspaceX/OTHER（同前缀的兄弟里）',
+        { workingDirectory: `${p.userData}/temp_workspaceX/OTHER` },
+        APP_DATA_WS
+      ],
+      [
+        '工作目录是项目目录、写授权是别的会话的临时工作区',
+        { workingDirectory: `${p.home}/proj`, grantedWrite: [t.other] },
+        APP_DATA_GRANT
+      ],
+      [
+        '工作目录是本会话的临时工作区、写授权是别的会话的',
+        { workingDirectory: t.own, grantedWrite: [t.other] },
+        APP_DATA_GRANT
+      ],
+      [
+        '工作目录是别的会话的临时工作区、写授权是第三个会话的',
+        { workingDirectory: t.other, grantedWrite: [t.third] },
+        APP_DATA_GRANT
+      ],
+      [
+        '工作目录是别的会话的临时工作区、写授权是 temp_workspace 本身',
+        { workingDirectory: t.other, grantedWrite: [t.base] },
+        APP_DATA_GRANT
+      ],
+      [
+        '工作目录是别的会话的临时工作区、写授权是 userData/data',
+        { workingDirectory: t.other, grantedWrite: [`${p.userData}/data`] },
+        APP_DATA_GRANT
+      ],
+      [
+        // 钉住现状：只认工作目录用的那一个临时工作区，本会话自己的那个此时也算应用数据
+        '工作目录是别的会话的临时工作区、写授权是本会话自己的临时工作区',
+        { workingDirectory: t.other, grantedWrite: [t.own] },
+        APP_DATA_GRANT
+      ]
+    ]
+  }
+  const forkRows = LAYOUTS.flatMap(([layout, p]) =>
+    forkCases(p).map(([label, over, reason]) => [layout, label, over, reason, p] as const)
+  )
+  it.each(forkRows)('SP-1 %s 布局 · %s', (_layout, _label, over, reason, p) => {
+    const result = build(over, p)
     expect(result.ok).toBe(false)
     expect(!result.ok && result.reason).toBe(reason)
   })
@@ -278,6 +378,24 @@ describe('SP-2 套得上的工作目录与授权（按路径段边界判）', ()
     const result = build(over)
     expect(result.ok, !result.ok ? result.reason : '').toBe(true)
   })
+
+  const forkAccepted = LAYOUTS.flatMap(([layout, p]) => {
+    const t = tempWorkspacesOf(p)
+    return [
+      [layout, '工作目录正是别的会话的临时工作区（临时会话的 fork 共用源会话的）', t.other, [], p],
+      [layout, '同上，再加一个在它里面的写授权', t.other, [`${t.other}/out`], p]
+    ] as Array<[string, string, string, string[], SandboxHostPaths]>
+  })
+  it.each(forkAccepted)(
+    'SP-2 %s 布局 · %s',
+    (_layout, _label, workingDirectory, grantedWrite, p) => {
+      const result = build({ workingDirectory, grantedWrite }, p)
+      expect(result.ok, !result.ok ? result.reason : '').toBe(true)
+      const spec = result.ok ? result.spec : undefined
+      expect(spec?.workingDirectory).toBe(workingDirectory)
+      for (const g of grantedWrite) expect(spec?.writableRoots).toContain(g)
+    }
+  )
 })
 
 describe('SP-3 会话目录清单（sessionDirsFor）', () => {
@@ -342,8 +460,30 @@ describe('SP-3 会话目录清单（sessionDirsFor）', () => {
     expect(session.dirs.some((d) => isWithin(`${USER_DATA}/temp_workspace/OTHER`, d))).toBe(false)
   })
 
+  it.each(LAYOUTS)(
+    'SP-3 %s 布局 · 工作目录是别的会话的临时工作区（临时会话的 fork 共用源会话的）：恰为 [它, 本会话临时目录, 本会话 artifacts, 本会话工具结果]；本会话自己的与第三个会话的临时工作区都不在清单里',
+    (_layout, p) => {
+      const t = tempWorkspacesOf(p)
+      const session = sessionDirsFor(p, input({ workingDirectory: t.other }), identity)!
+      const own = ownSessionDirsOf(p)
+      expect(session).toEqual({
+        dirs: [t.other, ...own],
+        readDirs: [],
+        workspaceUnsuitable: null,
+        tmpDir: own[0]
+      })
+      for (const outside of [t.own, `${t.own}/a.txt`, t.third, `${t.third}/a.txt`, t.base]) {
+        expect(
+          session.dirs.some((d) => isWithin(outside, d)),
+          outside
+        ).toBe(false)
+      }
+      expect(specOf({ workingDirectory: t.other }, p).sessionDirs).toEqual(session.dirs)
+    }
+  )
+
   it('SP-3 规格的 sessionDirs 就是这份清单（同一个函数算的，两面不会漂移）', () => {
-    for (const workingDirectory of [WS, TEMP_WS, h('Documents/proj'), '/Volumes/x']) {
+    for (const workingDirectory of [WS, TEMP_WS, OTHER_WS, h('Documents/proj'), '/Volumes/x']) {
       const spec = specOf({ workingDirectory, grantedWrite: ['/Volumes/w'] })
       expect(spec.sessionDirs).toEqual(
         sessionDirsFor(PATHS, input({ workingDirectory }), identity)!.dirs
@@ -565,6 +705,38 @@ describe('SP-4 规格的各个字段', () => {
     expect(spec.readableRoots).toContain(HOME)
     expect(spec.writableRoots).toEqual(SESSION_DIRS)
   })
+
+  it('SP-4 工作目录是别的会话的临时工作区：规格的 workingDirectory 就是它；它是可读根、可写根、socket 目录；它的上级到家目录为止只放元数据；本会话自己的与第三个会话的临时工作区两样都不给', () => {
+    const spec = specOf({ workingDirectory: OTHER_WS })
+    const dirs = [OTHER_WS, TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID]
+    expect(spec.workingDirectory).toBe(OTHER_WS)
+    expect(spec.sessionDirs).toEqual(dirs)
+    expect(spec.readableRoots).toEqual([...dirs, APP])
+    expect(spec.writableRoots).toEqual(dirs)
+    expect(spec.unixSocketDirs).toEqual([TMP_DIR, OTHER_WS])
+    expect(spec.metadataPaths).toEqual(
+      expect.arrayContaining([
+        TEMP_BASE,
+        USER_DATA,
+        h('Library/Application Support'),
+        h('Library'),
+        HOME
+      ])
+    )
+    // temp_workspace 本身只放元数据，不是可读根
+    expect(spec.readableRoots).not.toContain(TEMP_BASE)
+    for (const outside of [TEMP_WS, THIRD_WS]) {
+      expect(
+        spec.readableRoots.some((r) => isWithin(outside, r)),
+        outside
+      ).toBe(false)
+      expect(
+        spec.writableRoots.some((r) => isWithin(outside, r)),
+        outside
+      ).toBe(false)
+      expect(spec.metadataPaths, outside).not.toContain(outside)
+    }
+  })
 })
 
 describe('SP-5 上级目录的元数据（metadataPaths）', () => {
@@ -605,7 +777,13 @@ describe('SP-5 上级目录的元数据（metadataPaths）', () => {
       {},
       { ...PATHS, appPaths: [h('dev/ShuviX/out/main'), h('dev/ShuviX/resources/cli')] }
     ],
-    ['e2e 布局', { workingDirectory: `${E2E_HOME}/proj` }, E2E_PATHS]
+    ['e2e 布局', { workingDirectory: `${E2E_HOME}/proj` }, E2E_PATHS],
+    ['工作目录是别的会话的临时工作区', { workingDirectory: OTHER_WS }, PATHS],
+    [
+      'e2e 布局 · 工作目录是别的会话的临时工作区',
+      { workingDirectory: tempWorkspacesOf(E2E_PATHS).other },
+      E2E_PATHS
+    ]
   ])(
     'SP-5 性质（%s）：每一项都在家目录里、是某个可读根 / 可读文件 / CLI socket 的严格上级；家目录以外的一项都没有',
     (_label, over, paths) => {
@@ -721,6 +899,36 @@ describe('SP-6 `real` 在一切判断之前应用', () => {
     }
     const result = build({ workingDirectory: `${USER_DATA}/data` }, linked, real)
     expect(!result.ok && result.reason).toContain('application data')
+  })
+
+  it('SP-6 「别的会话的临时工作区」是指向 userData/data 的链接：按指向判 —— 不是会话目录，规格被拒', () => {
+    const toData = (p: string): string =>
+      isWithin(p, OTHER_WS) ? `${USER_DATA}/data${p.slice(OTHER_WS.length)}` : p
+    const session = sessionDirsFor(PATHS, input({ workingDirectory: OTHER_WS }), toData)!
+    expect(session.workspaceUnsuitable).toBe(APP_DATA_WS)
+    expect(session.dirs).toEqual([TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID])
+    const result = build({ workingDirectory: OTHER_WS }, PATHS, toData)
+    expect(!result.ok && result.reason).toBe(APP_DATA_WS)
+  })
+
+  it('SP-6 `..` 先规范化再认归谁：OTHER/../../data 当工作目录被拒；工作目录是 OTHER 时 OTHER/../THIRD 的写授权被拒', () => {
+    const normalizing = (p: string): string => resolve(p)
+    const ws = build({ workingDirectory: `${OTHER_WS}/../../data` }, PATHS, normalizing)
+    expect(!ws.ok && ws.reason).toBe(APP_DATA_WS)
+    const grant = build(
+      { workingDirectory: OTHER_WS, grantedWrite: [`${OTHER_WS}/../THIRD`] },
+      PATHS,
+      normalizing
+    )
+    expect(!grant.ok && grant.reason).toBe(APP_DATA_GRANT)
+    // 对照：规范化之后落回 OTHER 本身 / OTHER 里面的，照样套得上
+    const back = specOf(
+      { workingDirectory: `${OTHER_WS}/sub/..`, grantedWrite: [`${OTHER_WS}/a/../out`] },
+      PATHS,
+      normalizing
+    )
+    expect(back.workingDirectory).toBe(OTHER_WS)
+    expect(back.writableRoots).toContain(`${OTHER_WS}/out`)
   })
 })
 

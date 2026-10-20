@@ -152,10 +152,11 @@ describe('一行只剩一个入口，且 ⋮ 与右键同源', () => {
   })
 
   // RM-03
-  it('普通会话行：配置 / 导出 /（分隔）/ 删除，顺序固定', async () => {
+  it('普通会话行：配置 / 导出 / 分支 /（分隔）/ 删除，顺序固定', async () => {
     expect(idsOf(await sidebar.rowMenuShots(LEAF))).toEqual([
       'session-config',
       'export-session',
+      'fork-session',
       'sep',
       'delete-session'
     ])
@@ -208,6 +209,7 @@ describe('菜单绑定的是「打开它的那一行」', () => {
     expect(idsOf(await sidebar.rowMenuShots(SUB_B))).toEqual([
       'session-config',
       'export-session',
+      'fork-session',
       'sep',
       'delete-session'
     ])

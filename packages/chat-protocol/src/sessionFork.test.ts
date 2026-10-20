@@ -1,8 +1,9 @@
 /**
  * 会话 fork 的形态判定 —— `isForkableSessionShape`（宿主拒绝 `not_forkable` 与界面给不给入口共用这一份）。
  *
- *   CP-1  真值表：属于真实项目、settings 缺省 / 空、存储是新格式 → true；不属于项目、每一个隐藏承载项目、
- *         笔记本会话（空 notebookPath 不算）、Chrome 标签页会话、旧格式 / 缺省 / 不认识的存储类型 → false
+ *   CP-1  真值表：属于真实项目或不属于任何项目（临时会话，`projectId` 为 null / '' / 缺省）、settings 缺省 / 空、
+ *         存储是新格式 → true；每一个隐藏承载项目、笔记本会话（空 notebookPath 不算）、Chrome 标签页会话
+ *         （字段不全的绑定不算）、旧格式 / 缺省 / 不认识的存储类型 → false —— 临时会话同样按这几条拒
  *
  * CP-2（拒绝原因的文案 key 与几条 fork 文案在三种语言里都在）在 chat-ui 的
  * `hooks/__tests__/sessionForkI18n.test.ts` —— `forkRefusalKey` 在 chat-ui，chat-protocol 不往上引。
@@ -42,9 +43,69 @@ describe('isForkableSessionShape (CP-1)', () => {
     expect(isForkableSessionShape({ ...base, settings: { notebookPath: '' } })).toBe(true)
   })
 
-  it('CP-1 a session outside any project is not forkable', () => {
-    expect(isForkableSessionShape({ ...base, projectId: null })).toBe(false)
-    expect(isForkableSessionShape({ ...base, projectId: '' })).toBe(false)
+  it('CP-1 a session outside any project (a temp session) is forkable too', () => {
+    expect(isForkableSessionShape({ ...base, projectId: null })).toBe(true)
+    expect(isForkableSessionShape({ ...base, projectId: '' })).toBe(true)
+  })
+
+  describe('a temp session (projectId null) is judged by the same rules', () => {
+    const temp: ForkableSessionShape = { ...base, projectId: null }
+
+    it('CP-1 empty / missing settings on the current storage kind → forkable', () => {
+      expect(isForkableSessionShape({ ...temp, settings: {} })).toBe(true)
+      expect(isForkableSessionShape({ ...temp, settings: null })).toBe(true)
+      expect(isForkableSessionShape({ ...temp, settings: { notebookPath: '' } })).toBe(true)
+    })
+
+    it('CP-1 a temp notebook session is not forkable', () => {
+      expect(isForkableSessionShape({ ...temp, settings: { notebookPath: 'a.md' } })).toBe(false)
+    })
+
+    it('CP-1 a temp Chrome tab session (valid binding) is not forkable', () => {
+      expect(
+        isForkableSessionShape({
+          ...temp,
+          settings: { chromeTab: { installId: 'i', runId: 'r', tabId: 0 } }
+        })
+      ).toBe(false)
+      expect(
+        isForkableSessionShape({
+          ...temp,
+          settings: { chromeTab: { installId: 'i', runId: 'r', tabId: 3 } }
+        })
+      ).toBe(false)
+    })
+
+    it('CP-1 a temp session on a legacy, missing or unknown storage kind is not forkable', () => {
+      expect(isForkableSessionShape({ ...temp, storageKind: HARNESS_V3_JSONL })).toBe(false)
+      expect(isForkableSessionShape({ ...temp, storageKind: undefined })).toBe(false)
+      expect(isForkableSessionShape({ ...temp, storageKind: null })).toBe(false)
+      const { storageKind: _omit, ...withoutKind } = temp
+      expect(isForkableSessionShape(withoutKind)).toBe(false)
+      expect(isForkableSessionShape({ ...temp, storageKind: 'durable-sqlite-2' })).toBe(false)
+    })
+
+    it('CP-1 a malformed Chrome tab binding (tabId -1 = TAB_ID_NONE) does not make it a tab session', () => {
+      expect(
+        isForkableSessionShape({
+          ...temp,
+          settings: { chromeTab: { installId: 'i', runId: 'r', tabId: -1 } }
+        })
+      ).toBe(true)
+      expect(
+        isForkableSessionShape({
+          ...temp,
+          settings: { chromeTab: { installId: '', runId: 'r', tabId: 3 } }
+        })
+      ).toBe(true)
+    })
+
+    it('CP-1 projectId undefined (a row that never had the column filled) counts as a temp session', () => {
+      const shape = { ...base, projectId: undefined } as unknown as ForkableSessionShape
+      expect(isForkableSessionShape(shape)).toBe(true)
+      const { projectId: _omit, ...withoutProject } = base
+      expect(isForkableSessionShape(withoutProject as unknown as ForkableSessionShape)).toBe(true)
+    })
   })
 
   it.each(HIDDEN_PROJECTS)('CP-1 hidden carrier project %s is not forkable', (projectId) => {
