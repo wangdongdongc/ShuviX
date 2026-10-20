@@ -95,6 +95,10 @@ vi.mock('../../dao/sessionDao', () => ({
 vi.mock('../../dao/sessionDayPromptDao', () => ({
   sessionDayPromptDao: { deleteBySessionId: vi.fn() }
 }))
+vi.mock('../sessionDayPromptService', () => ({
+  recordUserEntry: vi.fn(),
+  recordSessionCreated: vi.fn()
+}))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 vi.mock('../../dao/providerDao', () => ({
   providerDao: {

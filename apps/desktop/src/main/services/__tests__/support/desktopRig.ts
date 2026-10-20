@@ -178,7 +178,8 @@ vi.mock('../../settingsService', () => ({
   settingsService: { get: (key: string) => rig.settings.get(key) }
 }))
 vi.mock('../../sessionDayPromptService', () => ({
-  recordUserEntry: () => undefined
+  recordUserEntry: () => undefined,
+  recordSessionCreated: () => undefined
 }))
 vi.mock('../../toolAggregator', () => ({ filterAvailableTools: (tools: string[]) => tools }))
 vi.mock('../../mcpService', () => ({

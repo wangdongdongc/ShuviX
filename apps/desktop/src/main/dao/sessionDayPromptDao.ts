@@ -35,6 +35,12 @@ export function monthDayRange(year: number, month: number): { start: string; end
   return { start, end }
 }
 
+/**
+ * 会话建成那一行的 entryId：会话建成（新建 / fork）当天就进日历，不等第一条用户消息。每条会话至多一行
+ * （主键冲突忽略）；它不是消息，日历跳转（firstEntryOnDay）不认它。用户条目的 entryId 都是数字串，撞不上
+ */
+export const CREATED_ENTRY_ID = 'created'
+
 export interface SessionDayPromptRow {
   sessionId: string
   entryId: string
@@ -45,7 +51,8 @@ export interface SessionDayPromptRow {
 /**
  * 会话按日开口索引 —— 日历的读源。
  *
- * 一行 = 一条真正落树的用户消息。主键 (sessionId, entryId)，冲突忽略（同一 entry 重播）。
+ * 一行 = 一条真正落树的用户消息，或会话建成（entryId = CREATED_ENTRY_ID）。主键 (sessionId, entryId)，
+ * 冲突忽略（同一 entry 重播）。
  * FK CASCADE 在未开 `PRAGMA foreign_keys` 时不会触发，删除会话必须显式 `deleteBySessionId`。
  */
 export class SessionDayPromptDao extends BaseDao {
@@ -99,11 +106,11 @@ export class SessionDayPromptDao extends BaseDao {
     return rows.map(parseSessionRow)
   }
 
-  /** 当天 timestamp 最小的用户消息 entryId；没有则 undefined */
+  /** 当天 timestamp 最小的用户消息 entryId（建成那行不算）；没有则 undefined */
   firstEntryOnDay(sessionId: string, day: string): string | undefined {
     const row = this.stmt(
-      'SELECT entryId FROM session_day_prompts WHERE sessionId = ? AND day = ? ORDER BY timestamp ASC LIMIT 1'
-    ).get(sessionId, day) as { entryId: string } | undefined
+      'SELECT entryId FROM session_day_prompts WHERE sessionId = ? AND day = ? AND entryId != ? ORDER BY timestamp ASC LIMIT 1'
+    ).get(sessionId, day, CREATED_ENTRY_ID) as { entryId: string } | undefined
     return row?.entryId
   }
 }

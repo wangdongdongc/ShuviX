@@ -6,12 +6,15 @@
  * 就是界面消息 id（`String(entryId)`）—— 日历跳转（`firstEntryOnDay` → `requestScrollToMessage`）靠它
  * 对上。被拒、被撤回、重新挂上的发送都不入账；日期通知等不是用户条目，从不入账。
  * 旧的 `user_message` 旁听（electronEventSink）随 P3-07 删掉（PIN-17）。
+ *
+ * 会话建成（sessionService 的新建与 fork 插行）另记一行 `recordSessionCreated`：建成当天就进日历，
+ * 还没发过消息也一样。
  */
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import type { Session } from '../dao/types'
 import { sessionRecords } from './sessionRecords'
-import { localDayKey, sessionDayPromptDao } from '../dao/sessionDayPromptDao'
+import { CREATED_ENTRY_ID, localDayKey, sessionDayPromptDao } from '../dao/sessionDayPromptDao'
 
 export { localDayKey }
 
@@ -24,11 +27,7 @@ export function recordUserEntry(
   entryId: number | string,
   timestamp: number = Date.now()
 ): void {
-  // 内存会话（只在内存里、宿主一关就没）不记活跃：不进日历，也不动 lastActiveAt。
-  // 删了的也一样 —— 迟到的落下不该给它补一行日历
-  if (sessionRecords.isEphemeral(sessionId) || sessionRecords.wasEphemeral(sessionId)) return
-  // Chrome 标签页会话不进日历：它是某个标签页的临时对话，标签页一关就删
-  if (isChromeTabSessionSettings(sessionRecords.pickSettings(sessionId, ['chromeTab']))) return
+  if (!onCalendar(sessionId)) return
   const inserted = sessionDayPromptDao.insert({
     sessionId,
     entryId: String(entryId),
@@ -36,6 +35,29 @@ export function recordUserEntry(
     timestamp
   })
   if (inserted) sessionRecords.touchActive(sessionId)
+}
+
+/**
+ * 会话建成入账（新建 / fork 插行之后）—— 建成当天就进日历。entryId = CREATED_ENTRY_ID，每条会话一行；
+ * 不 touchActive（建行时 lastActiveAt 已是此刻）。排除项与用户条目相同。
+ */
+export function recordSessionCreated(sessionId: string, timestamp: number = Date.now()): void {
+  if (!onCalendar(sessionId)) return
+  sessionDayPromptDao.insert({
+    sessionId,
+    entryId: CREATED_ENTRY_ID,
+    day: localDayKey(timestamp),
+    timestamp
+  })
+}
+
+/** 这条会话进不进日历 */
+function onCalendar(sessionId: string): boolean {
+  // 内存会话（只在内存里、宿主一关就没）不记活跃：不进日历，也不动 lastActiveAt。
+  // 删了的也一样 —— 迟到的落下不该给它补一行日历
+  if (sessionRecords.isEphemeral(sessionId) || sessionRecords.wasEphemeral(sessionId)) return false
+  // Chrome 标签页会话不进日历：它是某个标签页的临时对话，标签页一关就删
+  return !isChromeTabSessionSettings(sessionRecords.pickSettings(sessionId, ['chromeTab']))
 }
 
 /** 可见月里有过开口的本地日（YYYY-MM-DD[]）。隐藏项目不占圆点。`month` 为 1–12。 */
@@ -52,7 +74,7 @@ export function sessionsOnDay(day: string): Session[] {
   return sessionDayPromptDao.sessionsOnDay(day).filter((s) => !isHiddenProjectId(s.projectId))
 }
 
-/** 当天 timestamp 最小的用户消息 entryId；没有则 null */
+/** 当天 timestamp 最小的用户消息 entryId（建成那行不算）；没有则 null */
 export function firstEntryOnDay(sessionId: string, day: string): string | null {
   return sessionDayPromptDao.firstEntryOnDay(sessionId, day) ?? null
 }

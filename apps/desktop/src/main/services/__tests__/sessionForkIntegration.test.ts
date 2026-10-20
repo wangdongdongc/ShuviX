@@ -8,11 +8,12 @@
  *   SI-2 从一张「工具调用 + 结果 + 最终回答」的卡分支：fork 的视图 = U1 + 那张卡；在 fork 上发送带的是那段前缀 +
  *        新消息；之后两边各走各的。从卡中间那条工具调用分支：紧跟着的工具结果一起带上
  *   SI-3 artifacts 拷给 fork、fork 读得到；删 fork 只删它自己的目录；源会话没有 artifacts 也照样 fork
- *   SI-4 不拷的：工具大结果目录、日历行、子会话
+ *   SI-4 不拷的：工具大结果目录、日历行（fork 只有自己建成的那一行）、子会话
  *   SI-5 删掉源会话，fork 完好（列表、存储文件、还能发送）
  *   SI-6 两次并发 fork → 两条不同的、各自能用的 fork
  *   SI-7 临时会话（不属于项目）整段 fork：fork 解析出的工作目录（getById / 运行时的 cwd）就是源会话的临时
  *        工作区；删掉源会话 → fork 照样能发送、文件夹与里面的文件都在；再删 fork → 文件夹没了
+ *   SI-8 新建的会话与 fork 当天就在日历上（真 SQL）：谁也还没在它们上面发过消息，没有可跳的第一条
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -149,6 +150,8 @@ import { clearMemoryStoragesForTests, durableStoragePath } from '../sessionStora
 import { getSessionHost, resetSessionHostForTests } from '../sessionHost'
 import { listArtifacts, readArtifact } from '../artifacts/store'
 import { getTempWorkspaceBase } from '../../utils/paths'
+import { localDayKey } from '../../dao/sessionDayPromptDao'
+import * as calendar from '../sessionDayPromptService'
 import {
   answer,
   callTool,
@@ -449,7 +452,7 @@ describe('SI session fork against a real host', () => {
       const forkId = await fork('s')
 
       expect(existsSync(join(holder.toolResults, forkId))).toBe(false)
-      expect(dayRowIds(forkId)).toEqual([])
+      expect(dayRowIds(forkId)).toEqual(['created'])
       expect(dayRowIds('s')).toHaveLength(2)
       expect(sessionRecords.findChildren(forkId)).toEqual([])
       expect(sessionRecords.findChildren('s').map((c) => c.id)).toEqual(['child'])
@@ -545,6 +548,33 @@ describe('SI session fork against a real host', () => {
       await sessionService.delete(forkId)
       expect(existsSync(sDir)).toBe(false)
       expect(existsSync(join(getTempWorkspaceBase(), forkId))).toBe(false)
+    },
+    TIMEOUT
+  )
+
+  it(
+    "SI-8 a new session and a fork are on today's calendar before anyone prompts them",
+    async () => {
+      await seedTwoTurns('s')
+      const forkId = await fork('s')
+      const fresh = sessionService.create({ projectId: PROJECT }).id
+      // 源会话今天的开口行删掉：今天的圆点只能来自两条会话的建成行
+      ;(holder.db as DatabaseSync)
+        .prepare('DELETE FROM session_day_prompts WHERE sessionId = ?')
+        .run('s')
+      const today = localDayKey(Date.now())
+      const [year, month] = today.split('-').map(Number)
+
+      expect(dayRowIds(fresh)).toEqual(['created'])
+      expect(
+        calendar
+          .sessionsOnDay(today)
+          .map((s) => s.id)
+          .sort()
+      ).toEqual([forkId, fresh].sort())
+      expect(calendar.daysInMonth(year, month)).toEqual([today])
+      expect(calendar.firstEntryOnDay(forkId, today)).toBeNull()
+      expect(calendar.firstEntryOnDay(fresh, today)).toBeNull()
     },
     TIMEOUT
   )

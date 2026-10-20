@@ -1,5 +1,6 @@
 /**
- * 桌面日历 IPC（session_day_prompts）——
+ * 桌面日历 IPC（session_day_prompts + 建成日）——
+ * 新建会话还没发消息就在当天列表里（firstEntryOnDay 为 null）；
  * prompt 落树后 daysInMonth / sessionsOnDay / firstEntryOnDay 对齐 message.list
  * 第一条 user id；rollback（moveTo）不删索引；delete 后当天列表不含它。
  *
@@ -61,16 +62,20 @@ afterAll(async () => {
 describe('桌面日历 IPC（session_day_prompts）', () => {
   it('CAL-03 promptAndListMessages 后 calendar 对齐第一条 user id', async () => {
     sid = (await createAgentSession(app.main, { title: 'CAL-开口' })).sid
+    const today = localDay()
+    year = today.year
+    month = today.month
+    day = today.day
+    // 建成那天就在日历上：还没发消息，也没有可跳的第一条
+    expect((await sessionsOnDay()).map((s) => s.id)).toContain(sid)
+    expect(await daysInMonth()).toContain(day)
+    expect(await firstEntryOnDay()).toBeNull()
+
     const messages = (await promptAndListMessages(app.main, sid, PROMPT)) as ListedMessage[]
     const firstUser = messages.find((m) => m.role === 'user')
     expect(firstUser, 'the user message landed on the tree').toBeDefined()
     expect(firstUser!.content).toBe(PROMPT)
     userEntryId = firstUser!.id
-
-    const today = localDay()
-    year = today.year
-    month = today.month
-    day = today.day
 
     expect(await daysInMonth()).toContain(day)
     expect((await sessionsOnDay()).map((s) => s.id)).toContain(sid)

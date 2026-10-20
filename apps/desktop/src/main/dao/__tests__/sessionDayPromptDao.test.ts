@@ -1,5 +1,5 @@
 /**
- * session_day_prompts DAO —— insert / 按日列出 / 当天第一条 / 删会话清索引。
+ * session_day_prompts DAO —— insert / 按日列出 / 当天第一条（建成那行不算）/ 删会话清索引。
  *
  * 不用 better-sqlite3（仓库里是给 Electron 编的，Node 单测 NODE_MODULE_VERSION 对不上）。
  * 内存表替身只实现本文件用到的那几条 SQL 形状。
@@ -67,9 +67,9 @@ function execRun(sql: string, args: unknown[]): { changes: number } {
 
 function execGet(sql: string, args: unknown[]): { entryId: string } | undefined {
   if (sql.includes('ORDER BY timestamp ASC LIMIT 1')) {
-    const [sessionId, day] = args as [string, string]
+    const [sessionId, day, excluded] = args as [string, string, string]
     const rows = state.prompts
-      .filter((r) => r.sessionId === sessionId && r.day === day)
+      .filter((r) => r.sessionId === sessionId && r.day === day && r.entryId !== excluded)
       .sort((a, b) => a.timestamp - b.timestamp)
     return rows[0] ? { entryId: rows[0].entryId } : undefined
   }
@@ -102,7 +102,12 @@ function execAll(sql: string, args: unknown[]): unknown[] {
   throw new Error(`unhandled all sql: ${sql}`)
 }
 
-import { sessionDayPromptDao, localDayKey, monthDayRange } from '../sessionDayPromptDao'
+import {
+  CREATED_ENTRY_ID,
+  sessionDayPromptDao,
+  localDayKey,
+  monthDayRange
+} from '../sessionDayPromptDao'
 
 function insertSession(id: string, over: Partial<Session> = {}): void {
   const now = 1_700_000_000_000
@@ -204,6 +209,27 @@ describe('sessionDayPromptDao', () => {
     expect(sessionDayPromptDao.firstEntryOnDay('s1', '2026-09-19')).toBeUndefined()
     // 同一天多条 → sessionsOnDay 按会话去重
     expect(sessionDayPromptDao.sessionsOnDay('2026-09-18').map((s) => s.id)).toEqual(['s1'])
+  })
+
+  it('建成那行：当天列出、占圆点；firstEntryOnDay 不认它，取当天第一条用户消息', () => {
+    insertSession('s1')
+    sessionDayPromptDao.insert({
+      sessionId: 's1',
+      entryId: CREATED_ENTRY_ID,
+      day: '2026-09-18',
+      timestamp: 100
+    })
+    expect(sessionDayPromptDao.sessionsOnDay('2026-09-18').map((s) => s.id)).toEqual(['s1'])
+    expect(sessionDayPromptDao.daysInMonth(2026, 9).map((r) => r.day)).toEqual(['2026-09-18'])
+    expect(sessionDayPromptDao.firstEntryOnDay('s1', '2026-09-18')).toBeUndefined()
+
+    sessionDayPromptDao.insert({
+      sessionId: 's1',
+      entryId: '7',
+      day: '2026-09-18',
+      timestamp: 200
+    })
+    expect(sessionDayPromptDao.firstEntryOnDay('s1', '2026-09-18')).toBe('7')
   })
 
   it('deleteBySessionId 清该会话的索引行，不影响其它会话', () => {

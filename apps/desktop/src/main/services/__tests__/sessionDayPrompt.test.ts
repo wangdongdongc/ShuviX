@@ -10,6 +10,8 @@
  *   DP-T1 内存会话（sessionRecords.isEphemeral）不入账：不 insert、不 touchActive、不查 settings；
  *         时钟往前走之后它的 lastActiveAt 也没动
  *   DP-T2 已删的内存会话（wasEphemeral）同样不入账 —— 迟到的落下不给它补一行日历
+ *   DP-N  会话建成入账（recordSessionCreated）：entryId = CREATED_ENTRY_ID，不 touchActive；
+ *         内存会话、Chrome 标签页会话不入账
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -37,6 +39,7 @@ function localDayKey(ts: number): string {
 }
 
 vi.mock('../../dao/sessionDayPromptDao', () => ({
+  CREATED_ENTRY_ID: 'created',
   localDayKey,
   sessionDayPromptDao: {
     insert: mocks.insert,
@@ -68,6 +71,7 @@ import * as dayPromptService from '../sessionDayPromptService'
 import {
   daysInMonth,
   firstEntryOnDay,
+  recordSessionCreated,
   recordUserEntry,
   sessionsOnDay
 } from '../sessionDayPromptService'
@@ -241,6 +245,43 @@ describe('DP-T 内存会话不入账', () => {
     recordUserEntry('s1', 4, T_NOON)
     expect(mocks.insert).toHaveBeenCalledTimes(1)
     expect(mocks.touchActive).toHaveBeenCalledWith('s1')
+  })
+})
+
+describe('DP-N 会话建成入账', () => {
+  it('DP-N1 一行 entryId = created、按建成时刻落日；不 touchActive（建行时 lastActiveAt 已是此刻）', () => {
+    recordSessionCreated('s1', T_NOON)
+    expect(mocks.insert).toHaveBeenCalledWith({
+      sessionId: 's1',
+      entryId: 'created',
+      day: '2026-09-18',
+      timestamp: T_NOON
+    })
+    expect(mocks.touchActive).not.toHaveBeenCalled()
+  })
+
+  it('DP-N2 Chrome 标签页会话不入账', () => {
+    mocks.pickSettings.mockReturnValue({ chromeTab: { installId: 'i1', runId: 'r1', tabId: 5 } })
+    recordSessionCreated('tab-1', T_NOON)
+    expect(mocks.insert).not.toHaveBeenCalled()
+  })
+
+  it('DP-N3 内存会话不入账', () => {
+    sessionRecords.insert(
+      {
+        id: 'mem-n',
+        title: 'mem-n',
+        projectId: null,
+        parentId: null,
+        settings: {},
+        createdAt: T_NOON,
+        updatedAt: T_NOON,
+        lastActiveAt: T_NOON
+      },
+      { ephemeral: true }
+    )
+    recordSessionCreated('mem-n', T_NOON)
+    expect(mocks.insert).not.toHaveBeenCalled()
   })
 })
 

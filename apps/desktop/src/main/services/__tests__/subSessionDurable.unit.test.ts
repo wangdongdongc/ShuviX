@@ -73,7 +73,8 @@ vi.mock('../sessionHost', async () =>
   (await import('./support/fakeSessionHost')).sessionHostModuleMock()
 )
 vi.mock('../sessionDayPromptService', () => ({
-  recordUserEntry: vi.fn()
+  recordUserEntry: vi.fn(),
+  recordSessionCreated: vi.fn()
 }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: (tools: string[]) => tools }))
 vi.mock('../mcpService', () => ({

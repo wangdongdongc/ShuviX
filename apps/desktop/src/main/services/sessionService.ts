@@ -8,6 +8,7 @@ import { join, basename } from 'path'
 import { rmSync, existsSync } from 'fs'
 import { sessionRecords } from './sessionRecords'
 import { sessionDayPromptDao } from '../dao/sessionDayPromptDao'
+import { recordSessionCreated } from './sessionDayPromptService'
 import {
   readSessionRunConfig,
   recordSessionModel,
@@ -76,6 +77,18 @@ import { deleteSessionArtifacts } from './artifacts/store'
 import { cleanupSession as cleanupSandboxSession } from './sandbox'
 
 const log = createLogger('SessionService')
+
+/**
+ * 新建 / fork 的会话建成当天就进日历（内存会话、Chrome 标签页会话由 recordSessionCreated 自己排除）。
+ * 入账失败只记日志：一行日历不值得让建会话失败 —— fork 插行之后抛出还会留下一条没人删的行
+ */
+function recordCreatedOnCalendar(sessionId: string, timestamp: number): void {
+  try {
+    recordSessionCreated(sessionId, timestamp)
+  } catch (err) {
+    log.warn(`日历入账失败 session=${sessionId}: ${err}`)
+  }
+}
 
 /** 思考档位的合法值（会话设置里写坏的值按缺省处理，PIN-03） */
 const THINKING_LEVELS: readonly string[] = [
@@ -414,6 +427,7 @@ export class SessionService {
       lastActiveAt: now
     }
     sessionRecords.insert(session, { ephemeral })
+    recordCreatedOnCalendar(id, now)
     // 内存会话不在任何列表里，没有列表变化可广播
     if (!ephemeral) broadcastSessionListChanged()
     // 注：指令文件不在创建时注入。改为在用户首次发送 prompt 时按当前配置懒注入
@@ -463,6 +477,7 @@ export class SessionService {
       lastActiveAt: now
     }
     sessionRecords.insert(session, { ephemeral: false })
+    recordCreatedOnCalendar(id, now)
     return session
   }
 
