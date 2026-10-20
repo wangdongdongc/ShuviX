@@ -404,4 +404,16 @@ describe('fallbackToolPresentation —— 宿主表里没有时的呈现', () =>
     expect(leaf(zh, BUILTIN_MCP_PRESENTATIONS.ssh.labelKey)).toBe('SSH')
     expect(leaf(zh, BUILTIN_MCP_PRESENTATIONS.database.labelKey)).toBe('远程数据库')
   })
+
+  it('BMP-12 每台内置 server 都有一行说明（hintKey），三语都非空、彼此不同', () => {
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const hints = Object.values(BUILTIN_MCP_PRESENTATIONS).map((def) => {
+        const text = leaf(bundle, def.hintKey)
+        expect(text, `${lang}:${def.hintKey}`).toBeTypeOf('string')
+        expect(text!.trim(), `${lang}:${def.hintKey}`).not.toBe('')
+        return text
+      })
+      expect(new Set(hints).size, lang).toBe(hints.length)
+    }
+  })
 })

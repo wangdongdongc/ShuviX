@@ -37,6 +37,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
+import { BUILTIN_SKILL_COPY } from '@shuvix/chat-protocol/builtinExtensionCopy'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** `…/apps/desktop/src/main/services/__tests__` 往上六层 */
@@ -476,17 +477,22 @@ describe('BS 内置技能的两条接线', () => {
     expect(statSync(SKILLS_ROOT).isDirectory()).toBe(true)
   })
 
-  it.each(SKILL_NAMES)('BS-9 command.skills.%s 三份 locale 里都有且非空', (name) => {
-    // findEnabledAsCommands 里有一条「内置 skill 用单独维护的多语言短描述覆盖 popover 文案」
-    // 的分支（i18next.exists 才覆盖）—— 缺 key 不报错，只是静默退回 frontmatter 那段塞满
-    // 触发关键词的长描述。
+  it('BS-9 界面文案表（chat-protocol BUILTIN_SKILL_COPY）的键 = 内置技能目录，不多不少', () => {
+    // 漏一个：那个技能在侧边栏、选择器与斜杠命令里只剩标识名和塞满触发关键词的 frontmatter 描述
+    expect(Object.keys(BUILTIN_SKILL_COPY).sort()).toEqual([...SKILL_NAMES].sort())
+  })
+
+  it.each(SKILL_NAMES)('BS-9 %s 的名字与一行说明在三份 locale 里都有且非空', (name) => {
+    const keys = BUILTIN_SKILL_COPY[name]
     for (const { lang, path } of LOCALE_FILES) {
-      const locale = JSON.parse(readFileSync(path, 'utf8')) as {
-        command?: { skills?: Record<string, string> }
+      const locale = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+      for (const key of [keys.labelKey, keys.hintKey]) {
+        const text = key
+          .split('.')
+          .reduce<unknown>((node, part) => (node as Record<string, unknown>)?.[part], locale)
+        expect(text, `${lang}.json 缺 ${key}`).toBeTypeOf('string')
+        expect((text as string).trim(), `${lang}.json 的 ${key} 是空的`).not.toBe('')
       }
-      const text = locale.command?.skills?.[name]
-      expect(text, `${lang}.json 缺 command.skills.${name}`).toBeTypeOf('string')
-      expect(text!.trim(), `${lang}.json 的 command.skills.${name} 是空的`).not.toBe('')
     }
   })
 })

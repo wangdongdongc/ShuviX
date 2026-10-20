@@ -3,6 +3,7 @@ import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Server, BookOpen, WifiOff, Lock, Loader2 } from 'lucide-react'
 import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
+import { builtinMcpCopy, builtinSkillCopy } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import { useChatStore, selectMcpConnecting } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useSessionTools } from '../../hooks/useSessionTools'
@@ -207,8 +208,9 @@ export function ToolPicker(): React.JSX.Element | null {
                           <WifiOff size={10} />
                         </span>
                       )}
+                      {/* 自定义 server 的 label 只是它的名字；内置的有一行本地化说明 */}
                       <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
-                        {tool.label}
+                        {(tool.isBuiltin && builtinMcpCopy(tool.name, t)?.hint) || tool.label}
                       </span>
                     </label>
                   )
@@ -248,7 +250,7 @@ export function ToolPicker(): React.JSX.Element | null {
                         {label}
                       </span>
                       <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
-                        {tool.label}
+                        {builtinSkillCopy(tool.name, t)?.hint ?? tool.label}
                       </span>
                     </label>
                   )

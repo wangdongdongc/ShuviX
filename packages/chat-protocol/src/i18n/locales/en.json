@@ -1022,6 +1022,7 @@
     "grepLabel": "Search Content",
     "globLabel": "Find Files",
     "remoteDbLabel": "Remote Database",
+    "remoteDbHint": "Run SQL on the MySQL and PostgreSQL connections you saved",
     "bashHint": "Run terminal commands like installing packages, running scripts, or Git operations",
     "powershellHint": "Run PowerShell commands like installing packages, running scripts, or Git operations",
     "readHint": "Read file contents or fetch web pages — supports text, PDF, Word, Excel, URLs and more",
@@ -1033,8 +1034,11 @@
     "globHint": "Find files by name pattern (e.g. *.ts)",
     "skillHint": "Load predefined instruction sets to give AI domain-specific capabilities",
     "browserLabel": "Browser",
+    "browserHint": "Open and work with web pages in the app's browser — read, click, fill in forms, take screenshots",
     "chromeLabel": "Chrome",
+    "chromeHint": "Work in your own Chrome through the ShuviX extension — used by Chrome tab sessions",
     "sshLabel": "SSH",
+    "sshHint": "Run commands and copy or sync files on the hosts in your ~/.ssh/config",
     "gitLabel": "Version Control",
     "gitHint": "Local version control — status/diff/stage/commit/branch/checkout, powered by isomorphic-git; no network operations",
     "gitAsk": {
@@ -1355,12 +1359,14 @@
       "loadFailed": "Couldn’t read this site’s data. Try again later."
     }
   },
-  "command": {
-    "skills": {
-      "browser": "Open and interact with web pages — view, click, fill forms, capture screenshots or PDFs",
-      "drawing": "Craft guidance for inline SVG figures — choosing the form, mark specs, and what goes wrong",
-      "pglite": "Analyze data with SQL — query CSVs, build quick tables, summarize results",
-      "widget": "Build, change and debug ShuviX Widgets — the CLI lifecycle, data, local files and the design guide"
+  "builtinSkill": {
+    "drawing": {
+      "label": "Drawing",
+      "hint": "Draw figures in chat — inline SVG or Mermaid: picking the form, the look, and what goes wrong"
+    },
+    "widget": {
+      "label": "Widgets",
+      "hint": "Build, change and debug ShuviX Widgets — small apps you reopen from the Widgets panel"
     }
   },
   "configShare": {

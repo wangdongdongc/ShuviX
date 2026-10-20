@@ -24,6 +24,7 @@ import i18next from 'i18next'
 import { parse as parseYaml } from 'yaml'
 import type { Skill, SkillUpdateParams, SkillDir, SkillGroup } from '../types'
 import type { SlashCommand } from '@shuvix/chat-protocol/types/slashCommand'
+import { builtinSkillCopy } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import log from 'electron-log/main'
 import { getDefaultSkillsDir, getBuiltinSkillsDir, getSharedSkillsDirs } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
@@ -466,8 +467,8 @@ class SkillService {
    *
    * commandId 直接用 skill.name（已经处理过命名空间，比如外部目录的 dirName:name）。
    *
-   * 内置 skill 的 description 会被 i18n key `command.skills.<rawName>` 覆盖（若已配置），
-   * 因为 SKILL.md frontmatter 的 description 通常含大量触发关键词，不适合作 popover 文案。
+   * 内置 skill 的 description 换成它的界面文案（chat-protocol builtinExtensionCopy 的一行说明），
+   * 因为 SKILL.md frontmatter 的 description 是写给模型的触发说明，塞满关键词，不适合作 popover 文案。
    */
   findEnabledAsCommands(projectPath?: string): SlashCommand[] {
     return this.findEnabled(projectPath).map((s) => {
@@ -479,14 +480,9 @@ class SkillService {
         normalizedDir
       )
       // 内置 skill 用单独维护的多语言短描述覆盖（仅显示用，不影响注入正文）
-      let description = s.description
-      if (s.source === 'builtin') {
-        const rawName = s.dirName ? s.name.slice(s.dirName.length + 1) : s.name
-        const key = `command.skills.${rawName}`
-        if (i18next.exists(key)) {
-          description = i18next.t(key)
-        }
-      }
+      const copy =
+        s.source === 'builtin' ? builtinSkillCopy(s.name, (key) => i18next.t(key)) : undefined
+      const description = copy?.hint ?? s.description
       return {
         commandId: s.name,
         name: s.name,

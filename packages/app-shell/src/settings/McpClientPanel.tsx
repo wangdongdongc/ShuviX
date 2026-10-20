@@ -21,6 +21,7 @@ import type {
   McpServerAddParams,
   McpServerUpdateParams
 } from '@shuvix/chat-protocol/types/mcp'
+import { builtinMcpCopy, sameAsIdentifier } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { SettingsSection, Toggle } from './SettingsPrimitives'
 import {
@@ -272,6 +273,8 @@ export function McpClientPanel({
             const expanded = expandedId === s.id
             const showError = s.status === 'error' && !!s.error
             const toggleTitle = s.isEnabled ? t('settings.mcpDisable') : t('settings.mcpEnable')
+            // 内置 server 以本地化名字为主，标识名（工具名前缀、档案里写的那个）并排留着
+            const copy = s.isBuiltin === 1 ? builtinMcpCopy(s.name, t) : undefined
             return (
               <div key={s.id} className="flex flex-col" data-mcp-server={s.name}>
                 <div className="flex items-center gap-3 px-4 py-3">
@@ -284,7 +287,17 @@ export function McpClientPanel({
                   <StatusDot status={s.status} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-[13px] text-text-primary truncate">{s.name}</span>
+                      <span className="text-[13px] text-text-primary truncate">
+                        {copy?.label ?? s.name}
+                      </span>
+                      {copy && !sameAsIdentifier(copy.label, s.name) && (
+                        <span
+                          data-mcp-identifier
+                          className="text-[11px] font-mono text-text-tertiary shrink-0"
+                        >
+                          {s.name}
+                        </span>
+                      )}
                       {s.isBuiltin === 1 && (
                         <span className="text-[9px] font-normal text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded-md shrink-0">
                           {t('settings.mcpBuiltin')}
@@ -294,6 +307,11 @@ export function McpClientPanel({
                         {s.type}
                       </span>
                     </div>
+                    {copy && (
+                      <div data-mcp-hint className="text-[11px] text-text-secondary mt-0.5">
+                        {copy.hint}
+                      </div>
+                    )}
                     <div
                       className={`text-[11px] mt-0.5 ${
                         s.status === 'error' ? 'text-red-400' : 'text-text-tertiary'

@@ -1022,6 +1022,7 @@
     "grepLabel": "搜索内容",
     "globLabel": "查找文件",
     "remoteDbLabel": "远程数据库",
+    "remoteDbHint": "在你保存的 MySQL / PostgreSQL 连接上执行 SQL",
     "bashHint": "在终端中执行命令，如安装依赖、运行脚本、Git 操作等",
     "powershellHint": "在 PowerShell 中执行命令，如安装依赖、运行脚本、Git 操作等",
     "readHint": "读取文件内容或获取网页，支持文本、PDF、Word、Excel、URL 等常见格式",
@@ -1033,8 +1034,11 @@
     "globHint": "按文件名模式（如 *.ts）快速查找文件",
     "skillHint": "加载预定义的指令集，赋予 AI 特定领域的能力",
     "browserLabel": "浏览器",
+    "browserHint": "在应用内的浏览器里打开和操作网页 —— 阅读、点击、填表、截图",
     "chromeLabel": "Chrome",
+    "chromeHint": "经 ShuviX 扩展操作你自己的 Chrome —— 供 Chrome 标签页会话使用",
     "sshLabel": "SSH",
+    "sshHint": "在 ~/.ssh/config 里的主机上执行命令、复制和同步文件",
     "gitLabel": "版本控制",
     "gitHint": "本地版本控制 —— status/diff/暂存/提交/分支/检出，基于 isomorphic-git，不含网络操作",
     "gitAsk": {
@@ -1355,12 +1359,14 @@
       "loadFailed": "读不到这个网站的数据，稍后再试。"
     }
   },
-  "command": {
-    "skills": {
-      "browser": "打开和操作网页——浏览、点击、填写表单、截图或导出 PDF",
-      "drawing": "内联 SVG 作图的手艺 —— 怎么选图型、标记规格，以及常见的画错",
-      "pglite": "用 SQL 分析数据——查询 CSV、临时建表、汇总报表",
-      "widget": "构建、修改与排查 ShuviX 小组件 —— CLI 生命周期、数据、本机文件与设计规范"
+  "builtinSkill": {
+    "drawing": {
+      "label": "绘图",
+      "hint": "在对话里画图 —— 内联 SVG 或 Mermaid：怎么选图型、怎么画好看，以及常见的画错"
+    },
+    "widget": {
+      "label": "小组件",
+      "hint": "构建、修改与排查 ShuviX 小组件 —— 从小组件面板反复打开的小应用"
     }
   },
   "configShare": {

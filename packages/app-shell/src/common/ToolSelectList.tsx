@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { Puzzle, WifiOff, BookOpen, Info, Search, Blocks, Bot, Globe } from 'lucide-react'
+import { builtinMcpCopy, builtinSkillCopy } from '@shuvix/chat-protocol/builtinExtensionCopy'
 
 /** 工具信息 */
 export interface ToolItem {
@@ -296,8 +297,9 @@ export function ToolSelectList({
                         <WifiOff size={10} />
                       </span>
                     )}
+                    {/* 自定义 server 的 label 只是它的名字；内置的有一行本地化说明 */}
                     <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
-                      {tool.label}
+                      {(tool.isBuiltin && builtinMcpCopy(tool.name, t)?.hint) || tool.label}
                     </span>
                   </label>
                 )
@@ -337,7 +339,7 @@ export function ToolSelectList({
                     {skillShortName(tool.name)}
                   </span>
                   <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
-                    {tool.label}
+                    {builtinSkillCopy(tool.name, t)?.hint ?? tool.label}
                   </span>
                 </label>
               ))}

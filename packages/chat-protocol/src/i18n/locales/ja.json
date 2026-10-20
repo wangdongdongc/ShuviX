@@ -1022,6 +1022,7 @@
     "grepLabel": "内容検索",
     "globLabel": "ファイル検索",
     "remoteDbLabel": "リモートデータベース",
+    "remoteDbHint": "保存した MySQL / PostgreSQL 接続で SQL を実行",
     "bashHint": "ターミナルでコマンドを実行（パッケージインストール、スクリプト実行、Git 操作など）",
     "powershellHint": "PowerShell でコマンドを実行（パッケージインストール、スクリプト実行、Git 操作など）",
     "readHint": "ファイルの内容を読み込み、またはWebページを取得（テキスト、PDF、Word、Excel、URL などに対応）",
@@ -1033,8 +1034,11 @@
     "globHint": "ファイル名パターン（例: *.ts）でファイルを検索",
     "skillHint": "定義済みの指示セットを読み込み、AI に特定分野の能力を付与",
     "browserLabel": "ブラウザ",
+    "browserHint": "アプリ内のブラウザで Web ページを開いて操作 —— 閲覧、クリック、フォーム入力、スクリーンショット",
     "chromeLabel": "Chrome",
+    "chromeHint": "ShuviX 拡張機能を通じて自分の Chrome を操作 —— Chrome タブのセッションで使用",
     "sshLabel": "SSH",
+    "sshHint": "~/.ssh/config のホストでコマンドを実行し、ファイルをコピー・同期",
     "gitLabel": "バージョン管理",
     "gitHint": "ローカルバージョン管理 — status/diff/ステージ/コミット/ブランチ/チェックアウト、isomorphic-git ベース、ネットワーク操作なし",
     "gitAsk": {
@@ -1355,12 +1359,14 @@
       "loadFailed": "このサイトのデータを読み込めませんでした。しばらくしてからもう一度お試しください。"
     }
   },
-  "command": {
-    "skills": {
-      "browser": "Web ページを開いて操作——閲覧、クリック、フォーム入力、スクリーンショットや PDF 保存",
-      "drawing": "インライン SVG 図の手わざ —— 図型の選び方、標記の仕様、よくある誤り",
-      "pglite": "SQL でデータを分析——CSV の検索、テーブル作成、結果の集計",
-      "widget": "ShuviX ウィジェットの作成・変更・トラブル対応 —— CLI のライフサイクル、データ、ローカルファイル、デザインガイド"
+  "builtinSkill": {
+    "drawing": {
+      "label": "作図",
+      "hint": "チャット内で図を描く —— インライン SVG や Mermaid、図型の選び方、見た目、よくある誤り"
+    },
+    "widget": {
+      "label": "ウィジェット",
+      "hint": "ShuviX ウィジェットの作成・変更・トラブル対応 —— ウィジェットパネルから何度でも開けるミニアプリ"
     }
   },
   "configShare": {

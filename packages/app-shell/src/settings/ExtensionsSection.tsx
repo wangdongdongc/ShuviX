@@ -13,6 +13,7 @@
 import { useTranslation } from 'react-i18next'
 import { Puzzle, BookOpen, WifiOff, Lock } from 'lucide-react'
 import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
+import { builtinMcpCopy, builtinSkillCopy } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import type { ToolItem } from '../common/ToolSelectList'
 import { SettingsSection } from './SettingsPrimitives'
 
@@ -21,7 +22,7 @@ interface ExtItem {
   key: string
   /** 标签上的展示名（已去掉前缀） */
   display: string
-  /** 悬停提示（skill 的描述） */
+  /** 悬停提示（skill 的描述；内置 MCP / 技能的本地化说明） */
   desc?: string
   builtin?: boolean
   offline?: boolean
@@ -171,11 +172,12 @@ export function ExtensionsSection({
   readonlyHint
 }: ExtensionsSectionProps): React.JSX.Element {
   const { t } = useTranslation()
-  // MCP 的 label 就是 server 名，和展示名重复，不当描述用
+  // MCP 的 label 就是 server 名，和展示名重复，不当描述用；内置 server 有一行本地化说明
   const mcpItems: ExtItem[] = mcpTools
     .map((tool) => ({
       key: tool.name,
       display: tool.name.startsWith('mcp:') ? tool.name.slice(4) : tool.name,
+      desc: tool.isBuiltin ? builtinMcpCopy(tool.name, t)?.hint : undefined,
       builtin: tool.isBuiltin,
       // 惰性启动下「没连上」是常态（用到才连），只有连接失败才标成离线
       offline: tool.serverStatus === 'error',
@@ -189,7 +191,8 @@ export function ExtensionsSection({
       return {
         key: tool.name,
         display: builtin ? short.slice('builtin:'.length) : short,
-        desc: tool.label,
+        // 内置技能用界面文案，别的技能只有 frontmatter 那段描述（宿主截过的）
+        desc: builtinSkillCopy(tool.name, t)?.hint ?? tool.label,
         builtin,
         declaredBy: tool.declaredBy
       }

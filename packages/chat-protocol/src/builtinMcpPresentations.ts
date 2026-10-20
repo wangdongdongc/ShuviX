@@ -21,6 +21,8 @@ import { asStr, fileNameOf } from './toolSummaryHelpers'
 interface BuiltinMcpServerPresentationDef {
   /** i18n label key（各端用自身 t 解析） */
   labelKey: string
+  /** i18n key：一行说明这台 server 做什么（设置 → MCP、工具选择器、扩展能力，见 builtinExtensionCopy） */
+  hintKey: string
   /** 这台内置 server 的全部工具名（不带前缀）—— 不在其中的不认，见文件头 */
   toolNames: readonly string[]
   /** server 级渲染配置（不含 label） */
@@ -103,6 +105,7 @@ function browserSummary(tool: string, args: Record<string, unknown>): string | u
 export const BUILTIN_MCP_PRESENTATIONS: Record<string, BuiltinMcpServerPresentationDef> = {
   browser: {
     labelKey: 'tool.browserLabel',
+    hintKey: 'tool.browserHint',
     toolNames: BROWSER_TOOL_NAMES,
     presentation: BROWSER_ICON,
     summary: browserSummary
@@ -110,12 +113,14 @@ export const BUILTIN_MCP_PRESENTATIONS: Record<string, BuiltinMcpServerPresentat
   // 用户真实的 Chrome（Chrome 标签页会话专用）：同一份工具目录，换一个标签让人一眼分清是在哪个浏览器里
   chrome: {
     labelKey: 'tool.chromeLabel',
+    hintKey: 'tool.chromeHint',
     toolNames: BROWSER_TOOL_NAMES,
     presentation: { icon: 'Globe', iconColor: '#22c55e' },
     summary: browserSummary
   },
   ssh: {
     labelKey: 'tool.sshLabel',
+    hintKey: 'tool.sshHint',
     toolNames: ['list-hosts', 'exec', 'upload', 'download', 'sync', 'disconnect'],
     presentation: { icon: 'SquareTerminal', iconColor: '#38bdf8' },
     // exec 的参数与结果本来就是一次终端交互的两半（与 bash 同形）
@@ -153,6 +158,7 @@ export const BUILTIN_MCP_PRESENTATIONS: Record<string, BuiltinMcpServerPresentat
   },
   database: {
     labelKey: 'tool.remoteDbLabel',
+    hintKey: 'tool.remoteDbHint',
     toolNames: ['list-connections', 'query'],
     presentation: DATABASE_ICON,
     // 「连接名 · 这条查询在做什么」—— 模型没写说明时退到 SQL 的第一行

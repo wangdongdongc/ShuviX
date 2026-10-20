@@ -30,6 +30,7 @@ import {
   skillExternalProjectId,
   skillNotebookPath
 } from '@shuvix/chat-protocol/skillNotes'
+import { builtinSkillCopy, sameAsIdentifier } from '@shuvix/chat-protocol/builtinExtensionCopy'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
 import { RowMenuButton } from './RowMenuButton'
@@ -241,6 +242,10 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
   const skillRow = (folder: SkillGroupFolder, skill: SkillGroupItem): React.JSX.Element => {
     // 整组关掉时组内技能一律失效 —— 行上要看得出来，否则「我明明开着」是个谜
     const off = !skill.isEnabled || !folder.isEnabled
+    // 内置技能以本地化名字为主（与内置智能体那组一致）；标识名是斜杠命令与档案里写的那个，并排留着，
+    // 悬停时让位给 ⋮ 按钮。说明也换成界面文案 —— frontmatter 那段是写给模型的触发说明
+    const copy = folder.isBuiltin ? builtinSkillCopy(skill.name, t) : undefined
+    const showIdentifier = !!copy && !sameAsIdentifier(copy.label, skill.displayName)
     return (
       <div
         key={skill.name}
@@ -248,15 +253,23 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
         {...(off ? { 'data-skill-off': '' } : {})}
         onClick={() => void adapter.open(skill)}
         onContextMenu={(e) => openSkillMenu(folder, skill, e)}
-        title={skill.description}
+        title={copy?.hint ?? skill.description}
         className={rowClass(isActiveSkill(folder, skill), !folder.isDefault)}
       >
         <span className={`sb-icon ${off ? 'opacity-40' : ''}`} />
         <span
-          className={`flex-1 min-w-0 truncate group-hover:pr-5 ${off ? 'line-through opacity-60' : ''}`}
+          className={`flex-1 min-w-0 truncate ${showIdentifier ? '' : 'group-hover:pr-5'} ${off ? 'line-through opacity-60' : ''}`}
         >
-          {skill.displayName}
+          {copy?.label ?? skill.displayName}
         </span>
+        {showIdentifier && (
+          <span
+            data-skill-identifier
+            className="flex-shrink-0 pr-0.5 text-[10px] font-mono text-text-tertiary group-hover:invisible"
+          >
+            {skill.displayName}
+          </span>
+        )}
         <RowMenuButton
           className="absolute right-1.5 opacity-0 group-hover:opacity-100"
           onOpen={(e) => openSkillMenu(folder, skill, e)}
