@@ -71,9 +71,10 @@ const PORT = 7766
 
 /** 第一问之后的所有问题、以及没写文件就停下来时的回答 */
 const FOLLOW_UP: Record<'en' | 'zh' | 'ja', string> = {
-  en: 'Go with what you recommend and write the policy now.',
-  zh: '按你的建议来，直接把策略写好。',
-  ja: 'おすすめのとおりで、ポリシーを書いてください。'
+  // 不提「核对」：探针要看的就是 agent 自己会不会去跑 shuvix policy check
+  en: 'Go with what you recommend and finish setting it up now.',
+  zh: '按你的建议来，直接设置好。',
+  ja: 'おすすめのとおりで、設定を済ませてください。'
 }
 const PHONE = 'PhOnE0000000000000000a'
 const LAPTOP = 'LaPtOp0000000000000000'
@@ -540,12 +541,18 @@ it(
         return { probe, actual, verdict }
       })
       const passed = rows.filter((r) => r.actual === r.probe.expect).length
+      const transcript = await transcriptOf(sid)
+      // agent 自己核对了几次（`shuvix policy check` 的 bash 调用）
+      const checks = transcript
+        .split('\n')
+        .filter((l) => l.startsWith('[TOOL] ') && l.includes('shuvix policy check')).length
 
       const report: string[] = [
         `# Scenario ${scenario.id}`,
         '',
         `model ${modelId} · ${LANG} · ${seconds}s · ask-tool questions ${questions} · ` +
-          `network-admission ${admission ? 'written' : 'MISSING'} · ${passed}/${rows.length} as expected`,
+          `network-admission ${admission ? 'written' : 'MISSING'} · ${passed}/${rows.length} as expected · ` +
+          `policy checks ${checks}`,
         '',
         '## Prompt',
         '',
@@ -573,14 +580,14 @@ it(
         '## Transcript',
         '',
         '```text',
-        await transcriptOf(sid),
+        transcript,
         '```',
         ''
       )
       writeFileSync(join(OUT, `${scenario.id}.md`), redact(report.join('\n')))
       summary.push(
         `- **${scenario.id}**: ${passed}/${rows.length} as expected · policy ${admission ? 'written' : 'MISSING'} · ` +
-          `${questions} ask-tool question(s) · ${seconds}s` +
+          `${questions} ask-tool question(s) · ${checks} policy check(s) · ${seconds}s` +
           (invalid.length > 0 ? ` · parser: ${invalid.length} note(s)` : '')
       )
     }

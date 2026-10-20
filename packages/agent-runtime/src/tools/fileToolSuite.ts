@@ -161,6 +161,11 @@ export interface FileToolDeps {
    * 写入弹卡。
    */
   refuseWrite?: (portPath: string) => string | null
+  /**
+   * 写完一份文件后宿主想附进回执的一句话（模型面英文），没话说回 null。桌面：带 `network` 主体规则的策略文件 →
+   * 「用 `shuvix policy check` 核对」—— 廉价模型写完策略不会自己想到去验，回执是它当场一定会读的地方。
+   */
+  writtenNote?: (portPath: string, text: string) => string | null
 }
 
 /**
@@ -192,12 +197,18 @@ async function reviewWrittenMd(
             ? { rel, actor: knowledge.actor(call), now: now.toISOString() }
             : undefined
       })
-      if (!outcome) return null
-      if (outcome.content !== null) {
+      let extra: string | null = null
+      try {
+        extra = deps.writtenNote?.(portPath, text) ?? null
+      } catch {
+        extra = null
+      }
+      if (outcome?.content != null) {
         await port.writeFile(portPath, outcome.content)
         guards.recordRead(portPath)
       }
-      return outcome.note
+      const notes = [outcome?.note ?? null, extra].filter((n): n is string => !!n)
+      return notes.length > 0 ? notes.join('\n\n') : null
     })
   } catch {
     return null

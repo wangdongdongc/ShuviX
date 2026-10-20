@@ -19,6 +19,9 @@
  * 它在符号链接那一步之后、询问之前判 —— 拒了就是它的原话，门不问、卡不弹、决策日志不记、一个字节都不写；
  * read 从不问它。
  *
+ * 组 12（WN）是宿主的 `writtenNote`：md 写下之后宿主附进回执的一句话（桌面：管网络的策略 → 提一句
+ * `shuvix policy check`）。与解析器的回执并列、空行隔开；宿主答 null 或抛错 = 没话，写入照样成功；非 md 不问它。
+ *
  * 组 11（WFC）是导出的 `writeFileContent`：宿主自己的写入型工具（doc_* 的磁盘回落）走 write 工具同一条
  * 流程 —— 锁内读后被改守卫、带 diff 预览的写前询问（卡上的工具名 / 调用 id / 展示路径都取调用方给的）、
  * 写后处理（回执单独交回，不并进结果文字）、广播变更；不问 refuseWrite、不看符号链接（那是 write 工具对
@@ -112,6 +115,8 @@ interface SuiteOptions {
   review?: SecurityHostProvider['onPermissionRequest']
   /** write / edit 不许碰的路径（宿主答）；不传 = 没有这一道（扩展端口径） */
   refuseWrite?: FileToolDeps['refuseWrite']
+  /** 写完之后宿主附进回执的一句话；不传 = 没有（扩展端口径） */
+  writtenNote?: FileToolDeps['writtenNote']
 }
 
 /** port.readLink 的非 null 答复 */
@@ -267,7 +272,8 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
     descriptions: { read: 'read', write: 'write', edit: 'edit' },
     onFileChange,
     knowledge: opts.knowledge,
-    ...(opts.refuseWrite ? { refuseWrite: opts.refuseWrite } : {})
+    ...(opts.refuseWrite ? { refuseWrite: opts.refuseWrite } : {}),
+    ...(opts.writtenNote ? { writtenNote: opts.writtenNote } : {})
   }
 
   return {
@@ -1605,4 +1611,55 @@ describe('文件工具套件 — writeFileContent', () => {
       expect(h.files.get('/ws/doc.md')).toBe('old\n')
     }
   )
+})
+
+// ─── 组 12：宿主的 writtenNote（写后回执里附一句） ─────────────────────────────
+
+describe('文件工具套件 — 宿主的 writtenNote', () => {
+  const textOf = (res: { content: unknown[] }): string => (res.content[0] as { text: string }).text
+  const INVALID_POLICY = '---\nshuvix: policy v1\nname: p\nrules: []\n---\n'
+
+  it('WN-1 md 写下后附宿主的那句（收 port 路径与全文）；与解析器的回执并列；null / 抛错 = 没话；非 md 不问', async () => {
+    const note = vi.fn((p: string, text: string) =>
+      text.includes('NOTE-ME') ? `HOST NOTE for ${p}` : null
+    )
+    const h = makeSuite({ allowList: [`Write(${ROOT})`], writtenNote: note })
+
+    const res = await executeTool(h.suite.write, 'n1', {
+      path: `${ROOT}/a.md`,
+      content: 'NOTE-ME\n'
+    })
+    expect(textOf(res)).toContain(`HOST NOTE for ${ROOT}/a.md`)
+    expect(note).toHaveBeenCalledWith(`${ROOT}/a.md`, 'NOTE-ME\n')
+
+    const quiet = await executeTool(h.suite.write, 'n2', {
+      path: `${ROOT}/b.md`,
+      content: 'plain\n'
+    })
+    expect(textOf(quiet)).not.toContain('HOST NOTE')
+
+    // 解析器先说（这份策略非法），宿主的话跟在后面、空行隔开
+    const both = await executeTool(h.suite.write, 'n3', {
+      path: `${ROOT}/p.md`,
+      content: `${INVALID_POLICY}NOTE-ME\n`
+    })
+    expect(textOf(both)).toMatch(/INVALID[\s\S]*\n\nHOST NOTE for /)
+
+    note.mockClear()
+    await executeTool(h.suite.write, 'n4', { path: `${ROOT}/c.txt`, content: 'NOTE-ME\n' })
+    expect(note).not.toHaveBeenCalled()
+
+    const throwing = makeSuite({
+      allowList: [`Write(${ROOT})`],
+      writtenNote: () => {
+        throw new Error('boom')
+      }
+    })
+    const ok = await executeTool(throwing.suite.write, 'n5', {
+      path: `${ROOT}/d.md`,
+      content: 'x\n'
+    })
+    expect(throwing.files.get(`${ROOT}/d.md`)).toBe('x\n')
+    expect(textOf(ok)).not.toContain('boom')
+  })
 })

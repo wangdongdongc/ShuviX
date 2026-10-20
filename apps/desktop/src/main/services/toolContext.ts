@@ -36,7 +36,8 @@ import {
   type CallOwner,
   type SecurityContext,
   type SecurityHostProvider,
-  type SecuritySubject
+  type SecuritySubject,
+  type UserPolicyFile
 } from '@shuvix/agent-runtime'
 import type { ProjectEnvVar } from '../types'
 import { withCallAgent, type ToolAgentIdentity } from './toolAgent'
@@ -491,8 +492,17 @@ let networkVars: { at: number; vars: ReturnType<SecurityHostProvider['getVars']>
  * 远程访问的网络主体 SecurityContext（`frontend/network/policyGate.ts` 用，subject.kind = 'network'）。
  * 没有会话：vars 只有宿主事实（home、配置目录、技能目录……），没有会话目录、没有「允许并记住」；只用
  * judgeGate（不能询问的点位：ask 降级为拒绝），所以也不接询问通道与审查。用户策略读统一缓存，与 agent 同一份。
+ *
+ * `trial`（`shuvix policy check`）：用户策略换成给定的一份清单（某份草稿顶替同名文件之后的样子），告警交给
+ * 调用方收集（求值出错的规则要原样报给 agent）。其余 —— 内置、停用开关、变量 —— 与真实检查同一份。
  */
-export function getDesktopNetworkSecurityContext(subject: SecuritySubject): SecurityContext {
+export function getDesktopNetworkSecurityContext(
+  subject: SecuritySubject,
+  trial?: {
+    userPolicies: UserPolicyFile[]
+    logger: NonNullable<SecurityHostProvider['logger']>
+  }
+): SecurityContext {
   const base = makeDesktopSecurityProvider({ sessionId: '' }, () => ({ workingDirectory: '' }))
   const provider: SecurityHostProvider = {
     ...base,
@@ -503,7 +513,8 @@ export function getDesktopNetworkSecurityContext(subject: SecuritySubject): Secu
       }
       return networkVars.vars
     },
-    getSessionGrants: () => ({ allowList: [] })
+    getSessionGrants: () => ({ allowList: [] }),
+    ...(trial ? { getUserPolicies: () => trial.userPolicies, logger: trial.logger } : {})
   }
   return createSecurityContext(subject, { host: 'desktop', platform: process.platform }, provider)
 }

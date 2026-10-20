@@ -74,6 +74,8 @@ function printUsage(): void {
       '  shuvix widget db-init <id> --sql "<DDL>" | --file <path>',
       '  shuvix widget db-query <id> --sql "<SQL>" | --file <path>',
       '  shuvix task stop <pid>        stop a background task this conversation started',
+      '  shuvix policy check [<file>] [--from <ip>] [--device <id>] [--channel <name> | ...]',
+      '                                check a network access policy (shuvix policy check --help)',
       ''
     ].join('\n')
   )
@@ -196,11 +198,66 @@ function parseTask(rest: string[]): ParsedCommand | null {
   return { command: 'task.stop', params: { pid: Number(pid) } }
 }
 
+/**
+ * `policy check [<file>] [--name value | --name=value | --flag] …` —— 只拆参数、读文件；参数的合法性在主进程里判
+ * （一份规则，报错带全部合法参数）。文件由这个进程读：读得到读不到受沙箱 / 策略约束，主进程不替它读。
+ */
+function parsePolicy(rest: string[]): ParsedCommand | null {
+  if (rest[0] !== 'check') {
+    process.stderr.write(
+      `unknown policy action: ${rest[0] ?? '(none)'} (try: shuvix policy check --help)\n`
+    )
+    process.exit(2)
+  }
+  const args = rest.slice(1)
+  const flags: Array<[string, string]> = []
+  let filePath: string | undefined
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    if (arg === '-h') {
+      flags.push(['help', ''])
+    } else if (arg.startsWith('--')) {
+      const eq = arg.indexOf('=')
+      if (eq > 2) {
+        flags.push([arg.slice(2, eq), arg.slice(eq + 1)])
+      } else {
+        const next = args[i + 1]
+        if (next !== undefined && !next.startsWith('--')) {
+          flags.push([arg.slice(2), next])
+          i++
+        } else {
+          flags.push([arg.slice(2), ''])
+        }
+      }
+    } else if (filePath === undefined) {
+      filePath = arg
+    } else {
+      process.stderr.write(
+        `policy check: unexpected argument '${arg}' (one policy file at a time)\n`
+      )
+      process.exit(2)
+    }
+  }
+  let file: { path: string; text: string } | undefined
+  if (filePath !== undefined && !flags.some(([name]) => name === 'help')) {
+    // 相对路径按调用方 shell 的 cwd 归一（主进程的 cwd 与会话无关）
+    const path = resolve(filePath)
+    try {
+      file = { path, text: readFileSync(path, 'utf-8') }
+    } catch (e) {
+      process.stderr.write(`policy check: cannot read ${path}: ${(e as Error).message}\n`)
+      process.exit(2)
+    }
+  }
+  return { command: 'policy.check', params: { ...(file ? { file } : {}), flags } }
+}
+
 function parse(argv: string[]): ParsedCommand | null {
   const group = argv[0]
   const rest = argv.slice(1)
   if (group === 'widget') return parseWidget(rest)
   if (group === 'task') return parseTask(rest)
+  if (group === 'policy') return parsePolicy(rest)
   return null
 }
 
@@ -281,8 +338,8 @@ async function main(): Promise<void> {
   }
 
   if (resp.success) {
-    // db-query 走 stdout/stderr/exitCode 形态，打印原文而非 JSON
-    if (parsed.command === 'widget.db-query') {
+    // db-query / policy check 走 stdout/stderr/exitCode 形态，打印原文而非 JSON
+    if (parsed.command === 'widget.db-query' || parsed.command === 'policy.check') {
       const data = resp.data as ExecResponseData | undefined
       if (data) {
         if (data.stdout) {

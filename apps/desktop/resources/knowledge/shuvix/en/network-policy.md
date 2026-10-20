@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Remote access policy — who can connect and what each device may do'
-description: 'How to write security policies for ShuviX remote access: the network subject and every fact a request carries, the four check points (socket, request, channel, path), `inCidr`, why `ask` refuses, the builtin `network-admission` and how to replace it, recipes for common setups, and what a policy cannot do (no authentication, device IDs, SSH tunnels, agents as a way around).'
+description: 'How to write security policies for ShuviX remote access: the network subject and every fact a request carries, the four check points (socket, request, channel, path), `inCidr`, why `ask` refuses, the builtin `network-admission` and how to replace it, recipes for common setups, checking a draft with `shuvix policy check` before installing it, and what a policy cannot do (no authentication, device IDs, SSH tunnels, agents as a way around).'
 tags: [shuvix, policy, security, network, remote-access]
 status: stable
 sources:
@@ -35,12 +35,26 @@ When the user asks you to set up remote access:
    and how — the same local network, an SSH tunnel, a VPN; what each of them needs to do — only
    look, talk to agents, change settings; and how to recognise each device — by its address, by
    its network, or by its device ID (below). Do not guess addresses.
-2. Write `~/.shuvix/policies/network-admission.md` with the `write` tool — the **same name**
-   replaces the builtin (a `deny` beats every allow, so a second policy cannot loosen it). Put
-   further restrictions in the same file or in other policies. The `write` result says whether
-   the file parsed and lists the parser's warnings; that is the check — no need for shell
-   commands or a YAML library.
-3. Explain each rule in plain words, say what it does **not** protect against (see the last
+2. Write the policy as a **draft in your working directory** first, named as it will be
+   installed — `network-admission.md` (the **same name** replaces the builtin; a `deny` beats
+   every allow, so a second policy cannot loosen it). Put further restrictions in the same file
+   or in other policies. Do not write straight into `~/.shuvix/policies/`: a policy there takes
+   effect within seconds, and a wrong admission policy cuts off the device the user may be
+   talking to you from. The `write` result says whether the file parsed and lists the parser's
+   warnings.
+3. **Check the draft** with `shuvix policy check network-admission.md` (bash). It decides as if
+   the draft were installed and prints a table — this computer, the connected and recently
+   refused devices, an outside address × page / read / write / admin — with the rule that
+   refused each cell. Compare **every row** with what the user asked for. For what the table does
+   not show (a device not seen yet, a specific channel, a file path), check single requests:
+   `shuvix policy check network-admission.md --from 192.168.1.23 --channel session:prompt --expect allow`
+   (`--device <id>` for device rules; `--page`, `--read`, `--write`). Fix the **rule** until
+   every row and every expectation matches; this computer must stay `allow`. `shuvix policy check
+   --help` lists every option.
+4. Install it: write the same content to `~/.shuvix/policies/network-admission.md` (and any
+   further policy files next to it), then run `shuvix policy check` once more without a file to
+   confirm what is now in effect.
+5. Explain each rule in plain words, say what it does **not** protect against (see the last
    sections), and tell the user how to check it (Verify, below).
 
 Never write a password or token into a policy, and never claim the result is "secure": it is
@@ -249,6 +263,10 @@ this very policy:
 
 ## Verify
 
+- `shuvix policy check [<file>]` (see Working with the user): the table of who gets in and what
+  each may do, from the same engine and the same policies as real requests. A cell marked
+  `ERROR` is a rule that fails to evaluate (listed under the table) — it refuses every such
+  request.
 - Settings → General → Network access shows the state of `network-admission`, the connected
   browsers with their device IDs and **Recently refused**: what was refused, from where, by which
   rule — the quickest way to see a policy work.

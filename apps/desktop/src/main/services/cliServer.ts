@@ -32,6 +32,7 @@ import { sessionService } from './sessionService'
 import { resolveProjectConfig, isPathWithinWorkspace } from './toolContext'
 import { resolve as resolvePath } from 'path'
 import { stopBgTaskByAgent } from './bgTaskService'
+import { runPolicyCheck, type PolicyCheckDeps } from './policyCheck'
 
 const log = createLogger('cliServer')
 
@@ -56,6 +57,8 @@ class CliServer {
   private token: string = ''
   private socketPathCache: string | null = null
   private handlers = new Map<string, Handler>()
+  /** `shuvix policy check` 的宿主依赖（主入口注入：策略服务 / 网络状态 / 安全上下文 —— 直接 import 会成环） */
+  private policyCheckDeps: (() => PolicyCheckDeps) | null = null
 
   constructor() {
     this.registerHandlers()
@@ -131,6 +134,10 @@ class CliServer {
         }
       }
     }
+  }
+
+  setPolicyCheckDeps(deps: (() => PolicyCheckDeps) | null): void {
+    this.policyCheckDeps = deps
   }
 
   // ────────────────────── paths ──────────────────────
@@ -251,6 +258,22 @@ class CliServer {
       if (result === 'not-found')
         throw new Error(`no background task with pid ${pid} in this session`)
       return result === 'stopped' ? `stopping background task ${pid}` : `task ${pid} is not running`
+    })
+
+    // 核对一份远程访问策略（policyCheck.ts）：文件由 CLI 进程自己读（受沙箱 / 策略约束），这里只收全文
+    this.handlers.set('policy.check', async (p) => {
+      const deps = this.policyCheckDeps?.()
+      if (!deps) throw new Error('policy check is not available in this ShuviX')
+      const raw = p.file as { path?: unknown; text?: unknown } | undefined
+      const file =
+        raw && typeof raw.path === 'string' && typeof raw.text === 'string'
+          ? { path: raw.path, text: raw.text }
+          : undefined
+      const flags = (Array.isArray(p.flags) ? p.flags : []).filter(
+        (pair): pair is [string, string] =>
+          Array.isArray(pair) && typeof pair[0] === 'string' && typeof pair[1] === 'string'
+      )
+      return runPolicyCheck({ ...(file ? { file } : {}), flags }, deps)
     })
 
     this.handlers.set('widget.init', async (p, sessionId) => {

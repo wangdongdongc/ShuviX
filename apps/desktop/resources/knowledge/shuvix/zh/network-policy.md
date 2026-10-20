@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: '远程访问的策略 —— 谁能连进来、每台设备能做什么'
-description: '怎样给 ShuviX 的远程访问写安全策略：network 主体与请求带来的每一项事实、四个点位（socket、request、channel、path）、`inCidr`、为什么 `ask` 会拒绝、内置的 `network-admission` 与怎样替换它、常见需求的写法，以及策略做不到的事（没有认证、设备 ID、SSH 隧道、经由 agent 绕过）。'
+description: '怎样给 ShuviX 的远程访问写安全策略：network 主体与请求带来的每一项事实、四个点位（socket、request、channel、path）、`inCidr`、为什么 `ask` 会拒绝、内置的 `network-admission` 与怎样替换它、常见需求的写法、装之前用 `shuvix policy check` 核对草稿，以及策略做不到的事（没有认证、设备 ID、SSH 隧道、经由 agent 绕过）。'
 tags: [shuvix, policy, security, network, remote-access]
 status: stable
 sources:
@@ -31,10 +31,19 @@ ShuviX 只出厂一份网络策略 `network-admission`：**只有这台电脑能
 1. 一轮问清你需要的：会有哪些设备连进来（手机、笔记本、一整个网段？）、经什么方式 —— 同一局域网、SSH
    隧道、VPN；每台设备需要做什么 —— 只看、和 agent 对话、改设置；怎样认出每台设备 —— 按地址、按网段，还是按
    设备 ID（见下）。不要猜地址。
-2. 用 `write` 工具写 `~/.shuvix/policies/network-admission.md` —— **同名**才能替换内置那份（`deny` 压过一切
-   allow，另写一份策略放不开它）。更多限制可以写在同一份文件里，也可以写成别的策略。`write` 的结果会说这份
-   文件解析过没过、列出解析器的警告 —— 这就是核对，不需要用 shell 命令或 YAML 库去校验。
-3. 用大白话逐条讲规则，说清它**防不住**什么（见最后两节），告诉用户怎么核对（见「核对」）。
+2. 先在**你的工作目录里写草稿**，文件名就是装进去时的名字 —— `network-admission.md`（**同名**才能替换内置那份；
+   `deny` 压过一切 allow，另写一份策略放不开它）。更多限制可以写在同一份文件里，也可以写成别的策略。不要直接写进
+   `~/.shuvix/policies/`：那里的策略几秒内生效，写错的准入策略会把用户正在和你对话的那台设备当场断开。`write` 的
+   结果会说这份文件解析过没过、列出解析器的警告。
+3. **核对草稿**：`shuvix policy check network-admission.md`（bash）。它按「装进去之后」判，打印一张表 —— 这台电脑、
+   连着的与最近被拒的设备、一个外网地址 × 页面 / 读 / 写 / 管理 —— 拒绝的格子后面标着是哪条规则。拿**每一行**
+   对照用户的要求。表上没有的（还没出现过的设备、某个具体通道、某个文件路径）逐个查：
+   `shuvix policy check network-admission.md --from 192.168.1.23 --channel session:prompt --expect allow`
+   （按设备认的加 `--device <id>`；还有 `--page`、`--read`、`--write`）。改**规则**，直到每一行、每个期望都对上；
+   这台电脑必须一直是 `allow`。`shuvix policy check --help` 列出全部参数。
+4. 装上：把同样的内容写进 `~/.shuvix/policies/network-admission.md`（别的策略文件放在它旁边），再不带文件跑一次
+   `shuvix policy check`，确认此刻生效的就是它。
+5. 用大白话逐条讲规则，说清它**防不住**什么（见最后两节），告诉用户怎么核对（见「核对」）。
 
 绝不要把密码或令牌写进策略，也绝不要说结果「安全」了：这是没有认证的访问控制。
 
@@ -216,6 +225,8 @@ shuvix-policy-rules:
 
 ## 核对
 
+- `shuvix policy check [<文件>]`（见「与用户配合」）：谁进得来、每台能做什么的一张表，与真实请求同一个引擎、
+  同一套策略。标着 `ERROR` 的格子是求值出错的规则（表下列出原因）—— 它会拒掉每一个这样的请求。
 - 设置 → 通用 → 网络访问显示 `network-admission` 的状态、连着的浏览器与它们的设备 ID，以及**最近被拒**：什么被拒、
   从哪来、哪条规则 —— 看策略起没起作用最快的办法。
 - 在那台设备上打开地址：被拒的请求会显示规则的 `prompt`、设备 ID 与地址。

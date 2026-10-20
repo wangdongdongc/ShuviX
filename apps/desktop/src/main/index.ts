@@ -71,6 +71,7 @@ import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-pr
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
 import { policyService } from './services/policyService'
+import { desktopPolicyCheckDeps } from './services/policyCheckWiring'
 import { runLegacySwitchover } from './services/legacySwitchover'
 import { isReviewerIdentity, reviewPermissionRequest } from './services/permissionReview'
 import {
@@ -1000,6 +1001,7 @@ app.whenReady().then(async () => {
   await runLegacySwitchover()
 
   // 启动 CLI IPC 服务 —— 给 shuvix-cli 提供 Unix socket / named pipe
+  cliServer.setPolicyCheckDeps(desktopPolicyCheckDeps)
   step('cliServer.start', () =>
     cliServer.start().catch((err) => {
       log.error(`cliServer.start failed: ${err}`)

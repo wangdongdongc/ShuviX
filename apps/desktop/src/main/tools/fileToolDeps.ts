@@ -26,6 +26,7 @@ import { appEventBus } from '../utils/appEventBus'
 // 纯路径算术，不带扫描 / git / 检索依赖 —— 故直接引子模块而非 services/knowledge 入口
 import { isBuiltinBundle, locateBundle } from '../services/knowledge/knowledgePaths'
 import { t } from '../i18n'
+import { networkPolicyCheckHint } from '../services/policyCheckHint'
 
 export const READ_DESCRIPTION =
   'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
@@ -84,6 +85,8 @@ export function makeDesktopFileToolDeps(ctx: ToolContext, decoders?: ReadDecoder
         return null
       }
     },
+    // 写下一份管远程访问的策略 → 回执里提一句 `shuvix policy check`（policyCheckHint.ts）
+    writtenNote: networkPolicyCheckHint,
     decoders,
     abortError: TOOL_ABORTED,
     labels: { read: t('tool.readLabel'), write: t('tool.writeLabel'), edit: t('tool.editLabel') },
