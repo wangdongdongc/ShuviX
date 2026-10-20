@@ -220,7 +220,9 @@ vi.mock('../../artifacts/store', () => ({ deleteSessionArtifacts: () => undefine
 vi.mock('../../sandbox', () => ({
   cleanupSession: () => undefined,
   sandboxGloballyActive: () => false,
-  sessionDirsView: () => ({ sessionDirs: [], sessionReadDirs: [] }),
+  // 会话权限表的派生行：算不出会话目录 → 一行都不派生（同从前的空会话目录清单）
+  sessionOwnDirsView: () => null,
+  settingDirForAcl: (dir: string) => dir,
   planFor: () => null,
   whyUnconfined: () => 'disabled'
 }))

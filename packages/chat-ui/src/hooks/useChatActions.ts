@@ -35,7 +35,7 @@ export interface UseChatActionsReturn {
   /**
    * 统一的"用户输入响应"入口。
    * 命令询问 / 选择题 / SSH 凭证 / 其它反馈都通过该方法路由。
-   * 副作用(如写入 allowList)由后端工具响应回调根据 response.extra 处理。
+   * 副作用(如记进会话权限表)由后端工具响应回调根据 response.extra 处理。
    */
   handleInputResponse: (requestId: string, response: InputResponse) => Promise<void>
   /** 创建新会话 */
@@ -158,7 +158,7 @@ export function useChatActions(activeSessionId: string | null): UseChatActionsRe
   /**
    * 统一的"用户输入响应"入口。
    * 后端按 response.kind 路由到对应工具的挂起 Promise。
-   * 副作用(如 rememberPath → allowList)走 response.extra,由工具响应回调处理。
+   * 副作用(如 rememberPath → 会话权限表)走 response.extra,由工具响应回调处理。
    */
   const handleInputResponse = useCallback(
     async (requestId: string, response: InputResponse) => {

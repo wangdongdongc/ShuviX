@@ -16,9 +16,9 @@
  *   - builtin  内置策略 md（security/builtinPolicies/，随包内联）
  *   - user     用户策略 md（桌面 ~/.shuvix/policies/<name>.md，同名覆盖内置）
  *   - derived  宿主代码级派生规则（仅限无法 md 化的宿主特例；桌面/扩展当前都不供给）
- * 会话授权（"允许并记住"）不再是独立一层：条目经 buildPolicyVars 变成
- * `vars.grantedRead` / `vars.grantedWrite`，由策略 md 引用（出厂的 ask-on-external-path
- * 把它们排除在询问之外，见 policyVars.ts）。
+ * 会话授权（"允许并记住"）不再是独立一层：宿主把会话权限表经 getVars 交成
+ * `vars.aclRead` / `vars.aclWrite`，由策略 md 引用（出厂的 ask-on-external-path
+ * 在表外询问，见 policyVars.ts）。
  *
  * 结算优先序（tier，见 evaluate.ts）：deny → force-ask → force-allow → ask → static-allow → default。
  */
@@ -259,7 +259,7 @@ export interface SecurityDecision {
   }
   /** effect === 'ask' 时交给执行层的材料 */
   ask?: {
-    /** 询问卡片展示文本（路径类为 allowList 条目字面值，命令类为命令原文） */
+    /** 询问卡片展示文本（路径类为 `Read(...)` / `Write(...)` 条目字面值，命令类为命令原文） */
     command: string
     /**
      * 路径类：请求时的写法，仅当它与真实去处（command 里那条）不同时给出 —— 中间隔着符号链接
@@ -267,9 +267,9 @@ export interface SecurityDecision {
      */
     requestedPath?: string
     /**
-     * 勾选「允许并记住」时写入 allowList 的条目；缺省 = 不可记住。
-     * 当前仅路径类客体给出（allowList 只有 Read/Write 条目形态；命令类没有
-     * 对应的记忆机制 —— 用户想放宽命令可自写 allow 策略，含 matches() 正则）。
+     * 可以「允许并记住」时给出（值是同一条 `Read(...)` / `Write(...)` 条目）；缺省 = 不可记住。勾选后执行层经
+     * provider.persistGrant 把这条路径记进会话权限表。当前仅路径类客体给出（命令类没有对应的记忆机制 ——
+     * 用户想放宽命令可自写 allow 策略，含 matches() 正则）。
      */
     rememberEntry?: string
   }
@@ -350,13 +350,13 @@ export interface ParsedPolicyFile {
 export type UserPolicyFile = ParsedPolicyFile & { fileName?: string }
 
 /**
- * 宿主注入 seam。全部成员按「每次评估现取」设计：桌面的 getSessionGrants 直连 SQLite、
+ * 宿主注入 seam。全部成员按「每次评估现取」设计：桌面的 getVars 现读会话权限表、
  * getUserPolicies 现扫策略目录 —— 刻意不缓存（会话中途「允许并记住」落库后，
  * 复用的 context 必须立即看到新值，否则反复弹询问）。
  */
 export interface SecurityHostProvider {
   host: 'desktop' | 'extension'
-  /** 路径分隔符（Node-free：桌面注入 path.sep，扩展 '/'）—— inDir 与 allowList 匹配绑定 */
+  /** 路径分隔符（Node-free：桌面注入 path.sep，扩展 '/'）—— inDir 的路径段边界匹配绑定 */
   pathSep: string
   /**
    * 一个绝对路径**真正通向**哪里（同步）：符号链接展开、`..` 取物理父目录（先跟链接再退一级，与打开它时
@@ -381,8 +381,6 @@ export interface SecurityHostProvider {
    * 其余情形照 CEL 原语义（缺键报错走 fail-safe）。
    */
   getVars(): Record<string, PolicyVarValue>
-  /** 会话授权（「允许并记住」的 allowList，经 buildPolicyVars 成为 vars.grantedRead / grantedWrite）。每次评估现读，禁缓存。 */
-  getSessionGrants(): { allowList: string[] }
   /**
    * 界面语言（i18next.language 形态，如 'zh' / 'zh-CN'）—— 仅影响内置策略的
    * description/body 人读面（决策日志/检视 UI）；规则本体恒取 en（安全语义

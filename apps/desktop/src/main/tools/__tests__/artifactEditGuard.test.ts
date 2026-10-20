@@ -3,8 +3,8 @@
  * 真实临时目录 + 真实 store/adopt + 真实 fileTime + 真实 edit 内核（安全上下文照
  * writeAskWiring/fileToolDepsKnowledge 的桩，询问通道一律答允许）。
  *
- * AG-8 看的是工具这条路上的询问链：认领下来的那件在本会话自己的 artifacts 目录里 —— 那是会话目录之一，
- * ask-on-external-path 对它不问（`vars.sessionDirs`），别的会话的目录照问。这里的 provider 是桩 ——
+ * AG-8 看的是工具这条路上的询问链：认领下来的那件在本会话自己的 artifacts 目录里 —— 它在会话权限表里，
+ * ask-on-external-path 对它不问（`vars.aclWrite`），别的会话的目录照问。这里的 provider 是桩 ——
  * 真实变量表由 toolContext.test 的 SEC-7 与 realPathPolicy.test 的 RPP-A3 钉。
  *
  * **先纠正一条常被写反的前提**：`fileTools/edit.ts` 只在「本会话读过」时才校验陈旧，
@@ -82,14 +82,14 @@ vi.mock('../../services/toolContext', async () => {
           skillsDirs: [],
           home: joinPath(state.workspace, '.nonexistent-home'),
           sessionArtifactsDir: joinPath(state.root, ctx.sessionId),
-          // 会话目录照生产的形状给：工作目录 + 本会话 artifacts（与 getSessionArtifactsDir 的 mock
-          // 同一个目录）—— ask-on-external-path 在这以外的写才问
-          sessionDirs: [state.workspace, joinPath(state.root, ctx.sessionId)],
-          systemDirs: []
+          systemDirs: [],
+          // 会话权限表照生产的形状给：工作目录 + 本会话 artifacts（与 getSessionArtifactsDir 的 mock
+          // 同一个目录），都可写 —— ask-on-external-path 在这以外的写才问
+          aclRead: [state.workspace, joinPath(state.root, ctx.sessionId)],
+          aclWrite: [state.workspace, joinPath(state.root, ctx.sessionId)]
         }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
         // AG-1…7 验的是陈旧守卫，询问链路在 writeAskWiring.test 里（这里的询问通道一律答允许）
-        getSessionGrants: () => ({ allowList: [] }),
         isDirectory: () => false,
         persistGrant: () => {},
         requestUserInput: async (req: InputRequest): Promise<InputResponse> => {

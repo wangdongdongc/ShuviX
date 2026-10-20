@@ -1,10 +1,10 @@
 /**
- * 会话 → 会话目录清单 → 沙箱规格。纯函数：路径解析由调用方注入（`real`），
+ * 会话 → 会话自己的目录 / 会话权限表 → 沙箱规格。纯函数：路径解析由调用方注入（`real`），
  * 这样单测不碰文件系统，也不依赖 electron。
  *
- * **一份清单、两个面**：{@link sessionDirsFor} 算出的会话目录既是沙箱里命令能读写的范围，
- * 也是文件工具不必询问的范围（外部目录访问策略读 `vars.sessionDirs` / `vars.sessionReadDirs`）。两边各算一份就会漂移，
- * 模型会学会走不问的那条路。
+ * **一份清单、两个面**：会话权限表（services/acl）既是沙箱里命令能读写的范围，
+ * 也是文件工具不必询问的范围（外部目录访问策略读 `vars.aclRead` / `vars.aclWrite`）。两边各算一份就会漂移，
+ * 模型会学会走不问的那条路。会话自己的那几个目录（{@link sessionOwnDirs}）是权限表派生行的来源。
  *
  * 这里同时回答「这个会话能不能套沙箱」。套不了就返回原因，调用方退回「命令逐条询问」——
  * 永远不会变成「不套沙箱又不问」。
@@ -93,25 +93,31 @@ export function workingDirectoryUnsuitable(
   return why ? `working directory ${why}` : null
 }
 
-export interface SessionDirs {
-  /** 本会话的目录：工作目录（适合时）、本会话临时目录、artifacts、工具结果、勾选的知识库 */
-  dirs: string[]
-  /** 本会话只读的目录：技能目录、只读的内置知识库 */
-  readDirs: string[]
-  /** 工作目录不适合当会话目录的原因（不适合时它不在 dirs 里；沙箱也不套） */
+/**
+ * 一个会话自己的目录 —— 会话权限表（services/acl）里 workdir / system 那几行的来源。路径都已 realpath。
+ */
+export interface SessionOwnDirs {
+  /** 工作目录；不适合当会话目录（见 workingDirectoryUnsuitable）时为 null */
+  workdir: string | null
+  /** 工作目录不适合当会话目录的原因（适合时 null；不适合时沙箱也不套） */
   workspaceUnsuitable: string | null
-  tmpDir: string
+  /** 本会话临时目录（命令的 TMPDIR） */
+  tmp: string
+  /** 本会话的 artifacts 目录 */
+  artifacts: string
+  /** 本会话的工具大结果目录（长输出、后台任务日志） */
+  toolResults: string
 }
 
 /**
- * 一个会话的会话目录 —— 沙箱与外部目录访问策略共用的那一份清单。坏会话 id 返回 null
- * （空 id 会把清单放大到所有会话的 artifacts，`..` 会放大到 `~/.shuvix`）。
+ * 一个会话自己的目录。坏会话 id 返回 null（空 id 会把它放大到所有会话的 artifacts，`..` 会放大到
+ * `~/.shuvix`）。
  */
-export function sessionDirsFor(
+export function sessionOwnDirs(
   paths: SandboxHostPaths,
-  input: Pick<SandboxSessionInput, 'sessionId' | 'workingDirectory' | 'extras'>,
+  input: Pick<SandboxSessionInput, 'sessionId' | 'workingDirectory'>,
   real: (p: string) => string
-): SessionDirs | null {
+): SessionOwnDirs | null {
   const { sessionId } = input
   if (!isSafeSessionId(sessionId)) return null
   const resolved = {
@@ -121,24 +127,29 @@ export function sessionDirsFor(
   }
   const ws = real(input.workingDirectory)
   const workspaceUnsuitable = workingDirectoryUnsuitable(resolved, sessionId, ws)
-  const tmpDir = join(paths.tmpRoot, sessionTmpName(sessionId))
-  // 会话设置带来的目录同样不许覆盖家目录（防御：它们都在 ~/.shuvix 或应用包里，正常碰不到）
-  const extra = (list: readonly string[] | undefined): string[] =>
-    (list ?? [])
-      .filter((d) => d !== '')
-      .map(real)
-      .filter((d) => !coversHome(d, resolved.home))
-  const dirs = dedupe([
-    ...(workspaceUnsuitable ? [] : [ws]),
-    tmpDir,
+  return {
+    workdir: workspaceUnsuitable ? null : ws,
+    workspaceUnsuitable,
+    tmp: join(paths.tmpRoot, sessionTmpName(sessionId)),
     // 与 utils/paths 的 getSessionArtifactsDir 同一个位置（那边用 homedir()，这里用注入的 shuvixHome，
     // 好让单测不碰真家目录）—— 改一边要同步另一边
-    join(resolved.shuvixHome, 'artifacts', sessionId),
-    join(real(paths.toolResultsBase), sessionId),
-    ...extra(input.extras?.readWrite)
-  ])
-  const readDirs = dedupe(extra(input.extras?.readOnly)).filter((d) => !dirs.includes(d))
-  return { dirs, readDirs, workspaceUnsuitable, tmpDir }
+    artifacts: join(resolved.shuvixHome, 'artifacts', sessionId),
+    toolResults: join(real(paths.toolResultsBase), sessionId)
+  }
+}
+
+/**
+ * 会话设置带来的目录（勾选的知识库、技能目录）能不能进会话权限表：能 → 它的 realpath，不能（空串、`/`、
+ * 覆盖家目录）→ null。防御：它们都在 ~/.shuvix 或应用包里，正常碰不到
+ */
+export function acceptableSettingDir(
+  paths: Pick<SandboxHostPaths, 'home'>,
+  dir: string,
+  real: (p: string) => string
+): string | null {
+  if (dir === '') return null
+  const resolved = real(dir)
+  return coversHome(resolved, real(paths.home)) ? null : resolved
 }
 
 /** `p` 在 `home` 里面时，从它的上一级到 `home` 本身的每一级（只放元数据用） */
@@ -159,40 +170,37 @@ function ancestorsWithin(p: string, home: string): string[] {
 /**
  * 算出一个会话的沙箱规格。`real` 把路径解析成它真正指向的位置（realpath，不存在的部分按
  * 最近的已存在祖先拼回）—— Seatbelt 按解析后的路径比对，不解析的话 `/tmp/x` 永远对不上。
+ *
+ * 可读可写的范围就是会话权限表（`input.entries`）：派生的行（工作目录、会话自己的目录、知识库、技能）
+ * 宿主已按会话设置算好；授予的写（`granted`）还要过一遍「适不适合当可写根」，不适合就整个不套。
  */
 export function buildSandboxSpec(
   paths: SandboxHostPaths,
   input: SandboxSessionInput,
   real: (p: string) => string
 ): SpecResult {
-  const session = sessionDirsFor(paths, input, real)
-  if (!session) return { ok: false, reason: 'unsafe session id' }
-  if (session.workspaceUnsuitable) return { ok: false, reason: session.workspaceUnsuitable }
+  const own = sessionOwnDirs(paths, input, real)
+  if (!own) return { ok: false, reason: 'unsafe session id' }
+  if (own.workspaceUnsuitable) return { ok: false, reason: own.workspaceUnsuitable }
 
   const home = real(paths.home)
-  const grantsWrite = dedupe(input.grantedWrite.map(real))
-  const grantsRead = dedupe(input.grantedRead.map(real))
-  // 写授权也是可写根，过同一套判定：覆盖家目录、碰到 ShuviX 的配置或应用数据的授权，命令拿着它
-  // 就能改规矩 / 关沙箱 —— 与其套一个形同虚设的沙箱，不如逐条询问（文件工具照样凭授权写）
   const resolved = { home, shuvixHome: real(paths.shuvixHome), userData: real(paths.userData) }
-  const tempWorkspace = ownTempWorkspace(
-    resolved.userData,
-    input.sessionId,
-    real(input.workingDirectory)
-  )
-  for (const g of grantsWrite) {
-    const why = rootUnsuitable(resolved, tempWorkspace, g)
+  const ws = real(input.workingDirectory)
+  const tempWorkspace = ownTempWorkspace(resolved.userData, input.sessionId, ws)
+  const entries = input.entries
+    .filter((e) => e.path !== '')
+    .map((e) => ({ ...e, path: real(e.path) }))
+  // 授予的写也是可写根，过同一套判定：覆盖家目录、碰到 ShuviX 的配置或应用数据的授权，命令拿着它
+  // 就能改规矩 / 关沙箱 —— 与其套一个形同虚设的沙箱，不如逐条询问（文件工具照样凭授权写）
+  for (const e of entries) {
+    if (!e.granted || e.access !== 'write') continue
+    const why = rootUnsuitable(resolved, tempWorkspace, e.path)
     if (why) return { ok: false, reason: `a write grant ${why}` }
   }
+  // 派生的行不许覆盖家目录（防御：宿主算它们时已经滤过 —— 覆盖家目录的根等于沙箱没套）
+  const usable = entries.filter((e) => e.granted || !coversHome(e.path, home))
 
-  const ws = real(input.workingDirectory)
-  const readableRoots = dedupe([
-    ...session.dirs,
-    ...session.readDirs,
-    ...grantsWrite,
-    ...grantsRead,
-    ...paths.appPaths.map(real)
-  ])
+  const readableRoots = dedupe([...usable.map((e) => e.path), own.tmp, ...paths.appPaths.map(real)])
   const readableFiles = [real(paths.cliToken)]
   const cliSocket = real(paths.cliSocket)
   // 家目录里的可读根，它们的上级目录要能 stat（node 的 realpath、shell 的 getcwd 逐级走）；
@@ -201,21 +209,25 @@ export function buildSandboxSpec(
     [...readableRoots, ...readableFiles, cliSocket].flatMap((p) => ancestorsWithin(p, home))
   )
 
+  // 本会话临时目录恒可写：命令的 TMPDIR 指着它
+  const writableRoots = dedupe([
+    ...usable.filter((e) => e.access === 'write').map((e) => e.path),
+    own.tmp
+  ])
   return {
     ok: true,
     spec: {
       sessionId: input.sessionId,
       workingDirectory: ws,
       home,
-      sessionDirs: session.dirs,
-      sessionReadDirs: session.readDirs,
       readableRoots,
       readableFiles,
       metadataPaths,
-      writableRoots: dedupe([...session.dirs, ...grantsWrite]),
+      writableRoots,
       unixSockets: dedupe([cliSocket, MDNS_RESPONDER_SOCKET]),
-      unixSocketDirs: dedupe([session.tmpDir, ws]),
-      tmpDir: session.tmpDir
+      // 工作目录只在它可写时放 socket（只读的工作目录里已有的 socket 也不让连）
+      unixSocketDirs: dedupe([own.tmp, ...(writableRoots.includes(ws) ? [ws] : [])]),
+      tmpDir: own.tmp
     }
   }
 }

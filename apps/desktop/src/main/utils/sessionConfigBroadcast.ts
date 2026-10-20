@@ -4,7 +4,7 @@ import { appEventBus } from './appEventBus'
  * 发布"会话配置已变更"事件（AppEvent 'session.configChanged'）。
  *
  * 触发场景:
- * - 工具允许列表(allowList)变化(命令询问"允许并记住" / 设置面板手动删除)
+ * - 会话权限表的授予行变化(询问卡片「允许并记住」/ 权限表里手动增删改)、扩展能力勾选、知识库
  * - LAN 分享开启/关闭
  * - Telegram 绑定切换
  *

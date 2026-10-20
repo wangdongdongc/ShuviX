@@ -12,8 +12,8 @@
  *   4. 发 JSON 请求 / 收 JSON 响应
  *   5. 把响应格式化打印到 stdout/stderr，按成功失败映射 exit code
  *
- * Session 信息：bash 工具 spawn 时把 SHUVIX_SESSION_ID 注入 env，CLI 透传给主进程，
- *               主进程据此把目标 widget 目录加进 session 的 read/write allowList。
+ * Session 信息：bash 工具 spawn 时把 SHUVIX_SESSION_ID 与配对的 SHUVIX_SESSION_KEY 注入 env，CLI 原样
+ *               透传给主进程核对（对不上就不算任何会话）；主进程据此把目标 widget 目录记进会话权限表等。
  *
  * 另有一个与命令无关的模式：`native-host` —— Chrome 为 ShuviX 扩展拉起的原生消息宿主，
  * 常驻、双向转发，见 nativeHost.ts。
@@ -323,6 +323,7 @@ async function main(): Promise<void> {
 
   const token = readToken()
   const sessionId = process.env.SHUVIX_SESSION_ID || undefined
+  const sessionKey = process.env.SHUVIX_SESSION_KEY || undefined
 
   let resp: CliResponse
   try {
@@ -330,7 +331,8 @@ async function main(): Promise<void> {
       token,
       command: parsed.command,
       params: parsed.params,
-      sessionId
+      sessionId,
+      sessionKey
     })
   } catch (e) {
     process.stderr.write((e as Error).message + '\n')

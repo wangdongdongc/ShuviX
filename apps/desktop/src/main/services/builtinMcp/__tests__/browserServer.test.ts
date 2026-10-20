@@ -108,13 +108,12 @@ vi.mock('../../toolContext', async () => {
               botsDir: '/home/u/.shuvix/bots',
               builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
               systemDirs: [],
-              // 会话目录（生产里由 sandbox.sessionDirsView 算）：工作目录 + 本会话的 tool_results
-              // （还有会话 TMPDIR 与 artifacts，这里用不上）—— ask-on-external-path 在这以外的写才问
-              sessionDirs: [gate.ws, `/tool-results/${ctx.sessionId}`],
-              sessionReadDirs: []
+              // 会话权限表（生产里由 services/acl 的 pathView 给）：工作目录 + 本会话的 tool_results
+              // （还有会话 TMPDIR 与 artifacts，这里用不上），都可写 —— ask-on-external-path 在这以外的写才问
+              aclRead: [gate.ws, `/tool-results/${ctx.sessionId}`],
+              aclWrite: [gate.ws, `/tool-results/${ctx.sessionId}`]
             }),
             readBuiltinPolicyMd,
-            getSessionGrants: () => ({ allowList: [] }),
             getUserPolicies: () => gate.policies as never,
             // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」
             requestUserInput: ctx.requestUserInput,

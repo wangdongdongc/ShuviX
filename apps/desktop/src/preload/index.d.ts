@@ -41,7 +41,10 @@ import type {
   SessionUpdateEnabledToolsParams,
   SessionUpdateKnowledgeBasesParams,
   SessionUpdateProjectParams,
-  SessionAllowListRemoveParams,
+  AclEntry,
+  SessionAclGrantParams,
+  SessionAclRemoveParams,
+  SessionAclSetAccessParams,
   SubAgentCreateParams,
   SubAgentSaveParams,
   SessionUpdateTitleParams,
@@ -140,7 +143,6 @@ declare global {
 
   /** 会话级配置 */
   interface SessionSettings {
-    allowList?: string[]
     /** 扩展能力勾选（mcp:/skill:）；只在创建 Agent 时读一次，运行时存在期间只读 */
     enabledTools?: string[]
     /** 子会话被父级钉下的档案名（session 工具 agent_profile）；根会话的档案由形态推导，不读它 */
@@ -468,7 +470,13 @@ declare global {
       updateKnowledgeBases: (
         params: SessionUpdateKnowledgeBasesParams
       ) => Promise<{ success: boolean }>
-      removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
+      /** 这条会话的权限表（派生行先按此刻的设置对账） */
+      listAcl: (id: string) => Promise<AclEntry[]>
+      grantAcl: (
+        params: SessionAclGrantParams
+      ) => Promise<{ success: boolean; entry: AclEntry | null }>
+      setAclAccess: (params: SessionAclSetAccessParams) => Promise<{ success: boolean }>
+      removeAclEntry: (params: SessionAclRemoveParams) => Promise<{ success: boolean }>
       /** 把这条会话复制成一条新会话（整段，或从某条回复分支）；被拒时什么都没建 */
       fork: (params: SessionForkParams) => Promise<SessionForkResult>
       delete: (id: string) => Promise<{ success: boolean }>

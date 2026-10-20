@@ -90,7 +90,6 @@ vi.mock('../../toolContext', async () => {
               systemDirs: []
             }),
             readBuiltinPolicyMd,
-            getSessionGrants: () => ({ allowList: [] }),
             getUserPolicies: () => gate.policies as never,
             requestUserInput: ctx.requestUserInput,
             ...(gate.recordEvents

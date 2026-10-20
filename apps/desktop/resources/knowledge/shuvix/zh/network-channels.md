@@ -21,6 +21,9 @@ sources:
 - `write` —— 改用户的数据，或让事情发生。
 - `admin` —— 改 ShuviX 本身（安全策略、hooks、agent、设置、模型服务、网络访问、更新），或返回机密。
 
+有一种调用按带的内容而不是按通道定级别：`agent:respondToInput` 是 `write`，但勾了「允许并记住」的回答会往会话
+权限表里加一行，所以按 `admin` 判 —— 与 `session:grantAcl` 同一级。
+
 规则尽量写在 `access` 与 `group` 上：以后版本新加的通道也会带上级别、照样被管住，而一张名字清单会漏掉它。
 只在要开例外时点名通道。清单按这个版本的通道表生成。
 
@@ -49,9 +52,9 @@ sources:
 
 ### `session`
 
-- read: `session:getById`, `session:list`
+- read: `session:getById`, `session:list`, `session:listAcl`
 - write: `session:create`, `session:delete`, `session:fork`, `session:updateEnabledTools`, `session:updateKnowledgeBases`, `session:updateProject`, `session:updateTitle`
-- admin: `session:removeAllowListEntry`
+- admin: `session:grantAcl`, `session:removeAclEntry`, `session:setAclAccess`
 
 ### `calendar`
 

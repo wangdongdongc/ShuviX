@@ -51,8 +51,10 @@ export interface SessionUpdateKnowledgeBasesParams {
   knowledgeBases: string[]
 }
 
-/** IPC: 移除允许列表条目（仅路径条目 `Read(...)`/`Write(...)`） */
-export interface SessionAllowListRemoveParams {
-  id: string
-  entry: string
-}
+/** IPC: 会话权限表（形状与规则见 chat-protocol 的 sessionAcl.ts） */
+export type {
+  AclEntry,
+  SessionAclGrantParams,
+  SessionAclRemoveParams,
+  SessionAclSetAccessParams
+} from '@shuvix/chat-protocol/sessionAcl'

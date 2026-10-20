@@ -8,8 +8,7 @@ import { existsSync, statSync } from 'fs'
 import { homedir } from 'os'
 import { projectDao } from '../dao/projectDao'
 import { sessionRecords } from './sessionRecords'
-import { sessionDirsView, type SessionDirExtras } from './sandbox'
-import { enabledTargets } from './knowledge/sessionBundle'
+import { sessionAcl } from './acl'
 import { sessionService } from './sessionService'
 import {
   getTempWorkspace,
@@ -32,7 +31,6 @@ import { policyService } from './policyService'
 import {
   type CommandRisk,
   createSecurityContext,
-  parseAllowEntry,
   type CallOwner,
   type SecurityContext,
   type SecurityHostProvider,
@@ -84,7 +82,7 @@ export interface ToolContext {
    * - 永不超时:Promise 只能由用户响应或 agent.abort 触发 resolve
    * - 取消:返回 `{kind: 'cancel'}`,工具自行决定 throw 还是 fallback
    * - 副作用:用户响应可携带 `extra` 字段(如 `{rememberPath: true}`),工具根据
-   *   该字段处理副作用(如写入 allowList)
+   *   该字段处理副作用(如写入会话权限表)
    */
   requestUserInput?: (request: InputRequest) => Promise<InputResponse>
   /** 工具运行时单向通知（容器、SSH 连接、预览面板等生命周期事件） */
@@ -221,52 +219,6 @@ function windowsSystemDirs(): string[] {
   return [...new Set([...dirs, ...dirs.map((d) => d.toLowerCase())])]
 }
 
-/**
- * 会话「允许并记住」的路径授权（allowList 的 Write(...) / Read(...)）—— 命令沙箱把写授权当作
- * 可写根、读授权放回可读。与安全模块 buildPolicyVars 同一个解析（历史遗留的 Bash(...) 条目解析为
- * null，不授予任何东西）。
- */
-export function getSessionPathGrants(sessionId: string): {
-  grantedWrite: string[]
-  grantedRead: string[]
-} {
-  const grantedWrite: string[] = []
-  const grantedRead: string[] = []
-  const allowList = sessionRecords.pickSettings(sessionId, ['allowList'])?.allowList ?? []
-  for (const entry of allowList) {
-    const parsed = parseAllowEntry(entry)
-    if (!parsed) continue
-    if (parsed.toolType === 'write') grantedWrite.push(parsed.path)
-    else grantedRead.push(parsed.path)
-  }
-  return { grantedWrite, grantedRead }
-}
-
-/**
- * 会话设置决定的那部分会话目录 —— 策略（`vars.sessionDirs` / `vars.sessionReadDirs`）与命令沙箱
- * （planFor）都从这里取，两面同一个来源：
- *   - 可读写：本会话勾选的知识库（知识库的每次改动都提交进它自己的 git，可以回退）；
- *   - 只读：技能目录（内置 + 用户启用的；技能是 agent 自己要遵守的指令，改它照旧询问）、只读的内置知识库。
- * 跟着会话里勾的东西走，不是要人维护的白名单。读不到（库扫描失败之类）就少给 —— 多问，不放行。
- */
-export function sessionDirExtras(sessionId: string): SessionDirExtras {
-  const readWrite: string[] = []
-  const readOnly: string[] = [getBuiltinSkillsDir()]
-  try {
-    for (const { target } of enabledTargets(sessionId)) {
-      ;(target.readonly ? readOnly : readWrite).push(target.dir)
-    }
-  } catch (err) {
-    securityLog.warn(`knowledge dirs unavailable: ${(err as Error).message}`)
-  }
-  try {
-    readOnly.push(...skillService.enabledSkillRoots())
-  } catch (err) {
-    securityLog.warn(`skill dirs unavailable: ${(err as Error).message}`)
-  }
-  return { readWrite, readOnly }
-}
-
 /** 宿主提供的策略变量里与会话目录无关的那部分（多是留给用户自写策略引用的事实变量） */
 function hostPolicyVars(
   sessionId: string,
@@ -294,7 +246,7 @@ function hostPolicyVars(
     ],
     // 随应用发布的内置知识库目录 —— 事实变量，内置策略已不用它，留给用户自写的策略引用
     builtinKnowledgeDir: getBuiltinKnowledgeDir(),
-    // 本会话自己的 artifacts 目录（事实变量；它也是 vars.sessionDirs 的一项）。按会话 id 取，与 artifact
+    // 本会话自己的 artifacts 目录（事实变量；它也是权限表 vars.aclWrite 的一项）。按会话 id 取，与 artifact
     // 工具落盘用的是同一个 id。坏 id 给空串（inDir 对空串恒不命中）：空 id 会放大到所有会话的
     // artifacts，`..` 会放大到 ~/.shuvix（里面有 policies/）
     sessionArtifactsDir: isSafeSessionId(sessionId) ? getSessionArtifactsDir(sessionId) : '',
@@ -305,19 +257,18 @@ function hostPolicyVars(
 
 /**
  * 桌面 SecurityHostProvider —— 把平台细节注入共享安全模块：
- *   - 变量表：会话目录 sessionDirs（与命令沙箱同一份清单）/ home / workspace 等事实变量
- *     （策略 match/lets 里的 vars.*）
+ *   - 变量表：会话权限表 aclRead / aclWrite（与命令沙箱同一份，见 services/acl）/ home / workspace 等
+ *     事实变量（策略 match/lets 里的 vars.*）
  *   - 真实路径：realPath（符号链接 / `..` / 盘上大小写）—— 安全模块拿它解析路径客体与 inDir 比较的
  *     每个目录，两边都按位置比。变量表因此照写法给即可：工作区、临时工作区（macOS 的
  *     /var → /private/var 这类系统级链接）由 inDir 现解析，不在这里预先 realpath
- *   - 会话授权：SQLite allowList（「允许并记住」）
  *   - 内置策略：随包发布的 `builtin-policies/` 目录现读（policyService.readBuiltinPolicyMd）
  *   - 用户策略：~/.shuvix/policies 现扫（policyService）
- *   - persistGrant 写 allowList、statSync 判目录、前端 requestUserInput 透传
+ *   - persistGrant 写进会话权限表（「允许并记住」）、statSync 判目录、前端 requestUserInput 透传
  *
  * 全部成员每次评估现读 —— 不跨调用缓存。context 实例在建会话时创建一次、整会话复用
- * （buildTools → makeDesktopFileToolDeps），若在此缓存 allowList，则会话中途
- * 「允许并记住」写入 SQLite 后，复用的实例仍持旧快照 → 反复弹询问。
+ * （buildTools → makeDesktopFileToolDeps），若在此缓存权限表，则会话中途
+ * 「允许并记住」写入之后，复用的实例仍持旧快照 → 反复弹询问。
  */
 export function makeDesktopSecurityProvider(
   ctx: Pick<ToolContext, 'sessionId' | 'requestUserInput'>,
@@ -329,16 +280,14 @@ export function makeDesktopSecurityProvider(
     realPath: resolveRealPath,
     getVars: () => {
       const workingDirectory = getConfig().workingDirectory
+      // 会话权限表（外部目录访问策略读 aclRead / aclWrite）：与命令沙箱同一份，所以文件工具在这以外
+      // 询问，恰好就是沙箱里的命令读写不到的地方。不看沙箱开没开 —— 没有沙箱的平台一样只在这以外询问
+      const acl = sessionAcl.pathView(ctx.sessionId)
       return {
         ...hostPolicyVars(ctx.sessionId, workingDirectory),
-        // 会话目录（外部目录访问策略读 sessionDirs / sessionReadDirs）：与命令沙箱同一份清单，所以文件
-        // 工具在这以外询问，恰好就是沙箱里的命令读写不到的地方。不看沙箱开没开 —— 没有沙箱的平台一样只在这以外询问
-        ...sessionDirsView(ctx.sessionId, workingDirectory, sessionDirExtras(ctx.sessionId))
+        aclRead: acl.read,
+        aclWrite: acl.write
       }
-    },
-    getSessionGrants: () => {
-      const s = sessionRecords.pickSettings(ctx.sessionId, ['allowList'])
-      return { allowList: s?.allowList ?? [] }
     },
     // 仅影响内置策略的人读面（description/body/规则 prompt）；规则的判定字段恒取 en
     getLanguage: () => i18next.language,
@@ -354,7 +303,7 @@ export function makeDesktopSecurityProvider(
         return false
       }
     },
-    persistGrant: (mode, p) => sessionService.addAllowListPaths(ctx.sessionId, mode, [p]),
+    persistGrant: (mode, p) => void sessionAcl.grantPath(ctx.sessionId, p, mode),
     requestUserInput: ctx.requestUserInput,
     // 每次调用现取注入的审查者（provider 可整会话复用，注入发生在启动时）
     onPermissionRequest: (event, signal) =>
@@ -513,7 +462,6 @@ export function getDesktopNetworkSecurityContext(
       }
       return networkVars.vars
     },
-    getSessionGrants: () => ({ allowList: [] }),
     ...(trial ? { getUserPolicies: () => trial.userPolicies, logger: trial.logger } : {})
   }
   return createSecurityContext(subject, { host: 'desktop', platform: process.platform }, provider)

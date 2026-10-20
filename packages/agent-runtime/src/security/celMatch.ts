@@ -21,7 +21,7 @@
  *   inCidr(ip, cidrs)  ip 是否落在网段（字符串或列表；`a.b.c.d/n`、`x::/n` 或单个地址）里的任一个；
  *                   IPv4 映射的 IPv6 按 IPv4 比，格式不对的网段永不命中、ip 不是地址为 false（见 cidr.ts）
  *   inDir(p, dirs)  路径段边界的目录包含判定（dirs 接受字符串或字符串列表；
- *                   语义与 allowList 前缀匹配一致，/foo 不命中 /foobar，绑定平台 sep；
+ *                   语义即 allowEntries 的 matchesPathEntry，/foo 不命中 /foobar，绑定平台 sep；
  *                   Windows 下两侧分隔符先归一为 '/'，见 matchesPathEntry；
  *                   空串目录恒不命中 —— '' + sep 会前缀命中一切绝对路径，必须挡掉；
  *                   非字符串条目（含 null）一律忽略）。

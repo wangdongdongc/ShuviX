@@ -132,12 +132,16 @@ function settle(requestId: string): Pending | undefined {
  * 执行一次 doc_* 操作：轮到它时有编辑器显示着这份文档就交给编辑器，否则调 `onDisk`（磁盘回落）。
  * 编辑器没答复 / 中途摘下 / 被中止（signal）都以 Error 结束；操作本身失败（原文对不上等）是
  * `{ ok: false }` 的正常结果，由工具翻译给 agent。
+ *
+ * `beforeLive`：交给编辑器之前先过的门（doc_* 按会话权限表判这次读 / 写；不放行就抛，什么都不发）。
+ * 磁盘回落不经它 —— 那条路自己过门（写入带 diff 预览）。过门期间编辑器被摘下了就落到磁盘回落。
  */
 export function requestLiveDocument(
   sessionId: string,
   op: LiveDocOp,
   signal: AbortSignal | undefined,
-  onDisk: () => Promise<LiveDocResult>
+  onDisk: () => Promise<LiveDocResult>,
+  beforeLive?: () => Promise<void>
 ): Promise<LiveDocResult> {
   // 已中止的 signal 不会再触发 abort 事件：当场了结，不排队、不发、也不走磁盘
   if (signal?.aborted) return Promise.reject(new Error('Aborted.'))
@@ -162,7 +166,12 @@ export function requestLiveDocument(
       try {
         if (done) return
         if (signal?.aborted) throw new Error('Aborted.')
-        const target = currentTarget(sessionId)
+        let target = currentTarget(sessionId)
+        if (target && beforeLive) {
+          await beforeLive()
+          if (signal?.aborted) throw new Error('Aborted.')
+          target = currentTarget(sessionId)
+        }
         const result = target
           ? await sendLiveDocument(sessionId, target, op, signal)
           : await onDisk()

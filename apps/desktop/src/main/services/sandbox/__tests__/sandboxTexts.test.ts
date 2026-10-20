@@ -9,9 +9,11 @@
  *    自己的文件这道围栏）、提已删的策略与变量，或劝模型「别一上来就越界」。
  *  - TX-2 都讲到边界在家目录（参数说明除外：它指回工具描述）；给模型越界出路的几处都说有自动审查、
  *    都劝它一开始就越界，而不是先受限试一次。
- *  - TX-3 与规格对得上：受限命令能写的恰是会话目录（工作目录、$TMPDIR …）；策略正文说两面用同一份
- *    `vars.sessionDirs`；ask-on-command 讲的防越狱入口（open / osascript / launchctl）就是 profile 尾部拒的那几样。
- *  - TX-4 接线：main 只注入开关的读取口；凭据清单的读取口、沙箱视图都随这次删了。
+ *  - TX-3 与规格对得上：受限命令能写的恰是会话权限表里可写的行（工作目录、$TMPDIR …）；策略正文说两面
+ *    用同一张表（`vars.aclRead` / `vars.aclWrite`）；ask-on-command 讲的防越狱入口（open / osascript /
+ *    launchctl）就是 profile 尾部拒的那几样。
+ *  - TX-4 接线：main 只注入开关的读取口；沙箱模块交出会话自己的目录与设置目录的写法（给权限表派生行用），
+ *    旧的会话目录清单、凭据清单的读取口、沙箱视图都删了。
  *
  * 内置说明书（resources/knowledge）由别处守护，这里不读。
  */
@@ -24,12 +26,12 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../toolContext', () => ({
   getDesktopSecurityContext: () => ({ enforceCommand: vi.fn() }),
-  getSessionPathGrants: () => ({ grantedWrite: [], grantedRead: [] }),
-  sessionDirExtras: () => ({ readWrite: [], readOnly: [] }),
   resolveProjectConfig: () => ({ workingDirectory: '/w', envVars: {} }),
   TOOL_ABORTED: 'Aborted'
 }))
 vi.mock('../../../i18n', () => ({ t: (key: string) => key }))
+// bash → shellCommand → 会话权限表（services/acl → dao → 数据库）：这里只读工具的文字，不跑命令
+vi.mock('../../acl', () => ({ sessionAcl: { sandboxEntries: () => [] } }))
 
 import { parsePolicyDefinitionFile } from '@shuvix/agent-runtime'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
@@ -39,8 +41,8 @@ import type { ToolContext } from '../../toolContext'
 /* eslint-enable boundaries/dependencies */
 import { compileSeatbeltProfile } from '../backends/seatbelt/profile'
 import { explainSandboxDenial } from '../classify'
-import { buildSandboxSpec } from '../spec'
-import type { SandboxSpec } from '../types'
+import { buildSandboxSpec, sessionOwnDirs } from '../spec'
+import type { SandboxHostPaths, SandboxSpec } from '../types'
 
 /** src/main/services/sandbox/__tests__ 往上：3 级是 src/main，7 级是仓库根 */
 const MAIN_DIR = join(__dirname, '../../..')
@@ -71,20 +73,37 @@ function localeString(lang: string, path: string): string {
   return value as string
 }
 
+const FIXTURE_PATHS: SandboxHostPaths = {
+  home: '/Users/u',
+  userData: '/Users/u/Library/Application Support/ShuviX',
+  shuvixHome: '/Users/u/.shuvix',
+  toolResultsBase: '/Users/u/Library/Application Support/ShuviX/tool_results',
+  uid: 501,
+  cliSocket: '/Users/u/.shuvix/cli.sock',
+  cliToken: '/Users/u/.shuvix/cli-token',
+  appPaths: [],
+  tmpRoot: '/private/tmp/shuvix-501'
+}
+
+/** 权限表只有派生的那四行（照 acl/derive.ts：工作目录与会话自己的三个目录，都可写） */
+function fixtureRows(): string[] {
+  const own = sessionOwnDirs(
+    FIXTURE_PATHS,
+    { sessionId: 'sess-1', workingDirectory: '/Users/u/proj' },
+    (p) => p
+  )
+  if (!own?.workdir) throw new Error('fixture working directory unsuitable')
+  return [own.workdir, own.tmp, own.artifacts, own.toolResults]
+}
+
 function fixtureSpec(): SandboxSpec {
   const built = buildSandboxSpec(
+    FIXTURE_PATHS,
     {
-      home: '/Users/u',
-      userData: '/Users/u/Library/Application Support/ShuviX',
-      shuvixHome: '/Users/u/.shuvix',
-      toolResultsBase: '/Users/u/Library/Application Support/ShuviX/tool_results',
-      uid: 501,
-      cliSocket: '/Users/u/.shuvix/cli.sock',
-      cliToken: '/Users/u/.shuvix/cli-token',
-      appPaths: [],
-      tmpRoot: '/private/tmp/shuvix-501'
+      sessionId: 'sess-1',
+      workingDirectory: '/Users/u/proj',
+      entries: fixtureRows().map((path) => ({ path, access: 'write', granted: false }))
     },
-    { sessionId: 'sess-1', workingDirectory: '/Users/u/proj', grantedRead: [], grantedWrite: [] },
     (p) => p
   )
   if (!built.ok) throw new Error(built.reason)
@@ -150,8 +169,9 @@ const BANNED: RegExp[] = [
   // 围栏：git hooks、ShuviX 自己的文件
   /git hooks|\.git\/hooks/i,
   /ShuviX's own files|ShuviX 自己的文件|ShuviX 自身のファイル/,
-  // 已删的策略与变量
+  // 已删的策略与变量（会话目录清单换成了会话权限表的 aclRead / aclWrite）
   /ask-on-write|ask-on-read|protect-credentials|session-grants/,
+  /session(Read)?Dirs\b/,
   /sandbox(Active|Writable|WriteDenied|Protected|Read)/,
   /workspace(Writable|WriteDenied|ProtectedPatterns)/,
   // 旧的越界口径：别一上来就越界、改在工作目录里做
@@ -222,11 +242,11 @@ describe('TX-2 边界在家目录；越界有自动审查，而且该一开始�
 })
 
 describe('TX-3 与规格对得上', () => {
-  it('TX-3 「只能读写工作目录与 $TMPDIR」：规格里可写的恰是会话目录（工作目录、$TMPDIR、本会话 artifacts 与工具结果）', () => {
+  it('TX-3 「只能读写工作目录与 $TMPDIR」：规格里可写的恰是权限表里可写的行（工作目录、$TMPDIR、本会话 artifacts 与工具结果）', () => {
     const spec = fixtureSpec()
-    expect(spec.writableRoots).toEqual(spec.sessionDirs)
-    expect(spec.sessionDirs[0]).toBe(spec.workingDirectory)
-    expect(spec.sessionDirs[1]).toBe(spec.tmpDir)
+    expect(spec.writableRoots).toEqual(fixtureRows())
+    expect(spec.writableRoots[0]).toBe(spec.workingDirectory)
+    expect(spec.writableRoots[1]).toBe(spec.tmpDir)
     for (const text of [BASH_DESCRIPTION, denialNote(true)]) {
       expect(text).toContain('working directory and $TMPDIR')
     }
@@ -243,9 +263,11 @@ describe('TX-3 与规格对得上', () => {
   })
 
   it.each(LANGS)(
-    'TX-3 ask-on-external-path（%s）的正文说两面用同一份 vars.sessionDirs；ask-on-command 讲 profile 尾部拒的那几样（open / osascript / launchctl）',
+    'TX-3 ask-on-external-path（%s）的正文说两面用同一张表（vars.aclRead / vars.aclWrite）；ask-on-command 讲 profile 尾部拒的那几样（open / osascript / launchctl）',
     (lang) => {
-      expect(policyText('ask-on-external-path', lang)).toContain('vars.sessionDirs')
+      const external = policyText('ask-on-external-path', lang)
+      expect(external).toContain('vars.aclRead')
+      expect(external).toContain('vars.aclWrite')
       const command = policyText('ask-on-command', lang)
       for (const entry of ['`open`', '`osascript`', '`launchctl`', 'dangerouslyDisableSandbox']) {
         expect(command, entry).toContain(entry)
@@ -266,10 +288,12 @@ describe('TX-4 接线', () => {
     expect(source).not.toContain('sessionCredentialPaths')
   })
 
-  it('TX-4 沙箱模块的出口：会话目录清单还在，凭据读取口与沙箱视图都不在了', async () => {
+  it('TX-4 沙箱模块的出口：会话自己的目录与设置目录的写法在（权限表派生行用），旧的会话目录清单、凭据读取口与沙箱视图都不在了', async () => {
     const actual = await vi.importActual<Record<string, unknown>>('../index')
-    expect(typeof actual.sessionDirsView).toBe('function')
+    expect(typeof actual.sessionOwnDirsView).toBe('function')
+    expect(typeof actual.settingDirForAcl).toBe('function')
     for (const gone of [
+      'sessionDirsView',
       'setSandboxCredentialReader',
       'sessionView',
       'workspaceWriteView',

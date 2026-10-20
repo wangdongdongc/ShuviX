@@ -20,6 +20,8 @@
  *   T3 doc_edit / doc_insert 交给桥的东西与结果排版（等待时长）
  *   T4 交给桥之前就抛的；{ok:false} → 抛；答非所问 → 抛
  *   T5 注册在 general 组；折叠行摘要
+ *   T6 交给编辑器之前过会话权限表（桥的第五个参数）：doc_read 判读、doc_edit / doc_insert 判写，判的是这条会话的文档、
+ *      带着工具名与 toolCallId；门不放行 → 抛出（桥那边就不发）
  *   LD 编辑器里落下的改动不经写盘钩子：工具拿编辑器交回的全文（`text`）做一遍契约 md 的校验，只要诊断
  *      （真的 reviewShuvixMdWrite，`diagnoseOnly`）—— 回执接在结果文字后面，开头说「文档改了」：
  *      LD-1 写坏的 agent md → `\n\n[shuvix agent v1] The document was changed, but it is INVALID …`；没走磁盘回落
@@ -58,15 +60,28 @@ const mocks = vi.hoisted(() => ({
         sessionId: string,
         op: LiveDocOp,
         signal: AbortSignal | undefined,
-        onDisk: () => Promise<LiveDocResult>
+        onDisk: () => Promise<LiveDocResult>,
+        beforeLive?: () => Promise<void>
       ) => Promise<LiveDocResult>
-    >()
+    >(),
+  /** 交给编辑器之前过的会话权限表门（enforcePath）：记下每一次 */
+  gates: [] as Array<{ mode: string; path: string; opts: Record<string, unknown> }>,
+  gateError: null as Error | null
 }))
 
 vi.mock('../../services/liveDocumentBridge', () => ({ requestLiveDocument: mocks.request }))
 // 这里只测交给桥的那一面：磁盘回落那一面不经过（docDiskFallback.test 测它）。会话的文档与它在哪个
 // bundle 里由用例给（缺省没有文档 —— 契约 md 的诊断不出声）；诊断本身是真的 reviewShuvixMdWrite
-vi.mock('../../services/toolContext', () => ({ resolveSessionDocument: () => mocks.doc }))
+vi.mock('../../services/toolContext', () => ({
+  resolveSessionDocument: () => mocks.doc,
+  TOOL_ABORTED: 'Aborted',
+  getDesktopSecurityContext: () => ({
+    enforcePath: async (mode: string, path: string, opts: Record<string, unknown>) => {
+      mocks.gates.push({ mode, path, opts })
+      if (mocks.gateError) throw mocks.gateError
+    }
+  })
+}))
 vi.mock('../fileToolDeps', () => ({
   bundleRelOf: () => mocks.rel,
   makeDesktopFileToolDeps: mocks.makeDeps
@@ -188,6 +203,7 @@ describe('T2 doc_read 的结果', () => {
       SID,
       { kind: 'read' },
       ac.signal,
+      expect.any(Function),
       expect.any(Function)
     ])
   })
@@ -292,6 +308,7 @@ describe('T3 doc_edit / doc_insert 交给桥的东西与结果', () => {
       SID,
       { kind: 'edit', toolCallId: 'tc-1', find: 'old', replace: 'NEW' },
       ac.signal,
+      expect.any(Function),
       expect.any(Function)
     ])
     expect(out).toBe('Replaced at line 5. The text there now:\n4│before\n5│NEW\n6│after')
@@ -529,5 +546,33 @@ describe('LD 编辑器里落下的改动：契约 md 的诊断回执', () => {
     const out = await readWith(readResult(INVALID_AGENT))
     expect(out).not.toContain('[shuvix agent')
     expect(out).not.toContain('The document was changed')
+  })
+})
+
+describe('T6 交给编辑器之前过会话权限表', () => {
+  it('T6 读判读、改判写；判的是这条会话的文档；门不放行就抛', async () => {
+    mocks.doc = '/proj/notes/plan.md'
+    mocks.gates.length = 0
+    mocks.gateError = null
+    mocks.request.mockImplementation(async (_sid, op, _signal, _onDisk, beforeLive) => {
+      await beforeLive?.()
+      return op.kind === 'read'
+        ? readResult('x')
+        : { ok: true, kind: op.kind, line: 1, context: '1│x', waitedMs: 0, text: 'x' }
+    })
+
+    await run(readTool(), {})
+    await run(editTool(), { find: 'old', replace: 'NEW' })
+    expect(mocks.gates.map((g) => [g.mode, g.path, g.opts.toolName])).toEqual([
+      ['read', '/proj/notes/plan.md', 'doc_read'],
+      ['write', '/proj/notes/plan.md', 'doc_edit']
+    ])
+    expect(mocks.gates[1].opts.toolCallId).toBe('tc-1')
+
+    mocks.gateError = new Error('Blocked: this document is read-only for this session')
+    const out = await failure(editTool(), { find: 'old', replace: 'NEW' })
+    expect(out).toContain('read-only for this session')
+    mocks.gateError = null
+    mocks.request.mockReset()
   })
 })

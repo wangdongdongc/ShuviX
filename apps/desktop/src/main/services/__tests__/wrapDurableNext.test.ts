@@ -88,7 +88,6 @@ function makeSecurity(opts: {
         home: '/home/u',
         systemDirs: []
       }),
-      getSessionGrants: () => ({ allowList: [] }),
       readBuiltinPolicyMd: INLINE_POLICY_MD,
       getUserPolicies: () => opts.policies ?? [TOOL_GATE],
       requestUserInput,

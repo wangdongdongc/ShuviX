@@ -23,8 +23,7 @@ import { t } from '../i18n'
 import { getTempWorkspace, getToolResultsBase, tempWorkspaceOwnerOf } from '../utils/paths'
 import { filterAvailableTools } from './toolAggregator'
 import { mcpService } from './mcpService'
-import { buildAllowEntry } from '../utils/toolUtils/allowList'
-import type { AllowToolType } from '../utils/toolUtils/allowList'
+import { sessionAcl } from './acl'
 import type {
   Session,
   SessionInfo,
@@ -414,7 +413,7 @@ export class SessionService {
         ...(!pid && workingDirectory ? { workingDirectory } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
-        // 子会话刻意**不**继承父会话的路径授权（allowList）：那是一条会长大的记账，快照过去只会漂移。
+        // 路径授权不在设置里：会话权限表（services/acl）在下面 insert 之后生成，子会话复制父会话的授予行
         ...(chromeTab ? { chromeTab } : {}),
         // 扩展能力勾选恒写键（见方法注释）
         enabledTools
@@ -427,6 +426,8 @@ export class SessionService {
       lastActiveAt: now
     }
     sessionRecords.insert(session, { ephemeral })
+    // 权限表：派生行按此刻的设置生成；子会话先复制父会话授予的路径（快照，之后各管各的）
+    sessionAcl.initialize(id, parentId ? { sessionId: parentId, fork: false } : undefined)
     recordCreatedOnCalendar(id, now)
     // 内存会话不在任何列表里，没有列表变化可广播
     if (!ephemeral) broadcastSessionListChanged()
@@ -439,8 +440,8 @@ export class SessionService {
   /**
    * 会话 fork 的那一行（services/sessionFork 在存储拷好、收完尾之后调）：一条新会话，放在源会话旁边 ——
    * 同一个项目、同一个父会话（源会话是子会话时 fork 也挂在那个父会话下，钉着的档案随之有效）。设置里抄
-   * 「这场对话是怎么跑的」：模型、思考档位、扩展能力勾选、知识库、bot 绑定、子会话的档案钉子、路径授权
-   * （授权是用户在这场对话里给的，fork 的历史里就有那几次批准）。**工作目录共用**：项目会话本来就在项目根；
+   * 「这场对话是怎么跑的」：模型、思考档位、扩展能力勾选、知识库、bot 绑定、子会话的档案钉子；权限表复制
+   * 源会话授予的路径与工作目录那一行的访问方式（授权是用户在这场对话里给的，fork 的历史里就有那几次批准）。**工作目录共用**：项目会话本来就在项目根；
    * 不属于项目的源会话把它此刻解析出的工作目录（通常是它自己的临时工作区）写进 fork 的 `workingDirectory`
    * —— 历史里的绝对路径照样对得上，两条会话改的是同一批文件（用户 2026-10-20）；这样的临时工作区直到用它的
    * 最后一条会话被删才删（见 `delete`）。不抄的：笔记本 / 标签页（fork 不给它们，见 chat-protocol 的
@@ -456,7 +457,6 @@ export class SessionService {
     if (from.agentProfile) settings.agentProfile = from.agentProfile
     if (from.model) settings.model = { ...from.model }
     if (from.thinkingLevel) settings.thinkingLevel = from.thinkingLevel
-    if (from.allowList?.length) settings.allowList = [...from.allowList]
     if (!source.projectId) {
       settings.workingDirectory = workingDirectoryOf(source.id, undefined, from)
     }
@@ -477,6 +477,7 @@ export class SessionService {
       lastActiveAt: now
     }
     sessionRecords.insert(session, { ephemeral: false })
+    sessionAcl.initialize(id, { sessionId: source.id, fork: true })
     recordCreatedOnCalendar(id, now)
     return session
   }
@@ -662,30 +663,6 @@ export class SessionService {
     return true
   }
 
-  /** 批量添加路径到统一允许列表（按 toolType 自动加 `Read(...)`/`Write(...)` 前缀）
-   *
-   *  仅路径类:命令类工具(bash/ssh)不再有允许列表,逐条询问。
-   */
-  addAllowListPaths(id: string, toolType: AllowToolType, paths: string[]): void {
-    const sess = sessionRecords.pickSettings(id, ['allowList'])
-    const list = sess?.allowList || []
-    const prefixed = paths.map((p) => buildAllowEntry(toolType, p))
-    const newEntries = prefixed.filter((p) => !list.includes(p))
-    if (newEntries.length > 0) {
-      sessionRecords.updateSettings(id, { allowList: [...list, ...newEntries] })
-      log.info(`addAllowListPaths session=${id} ${toolType} +${newEntries.length}`)
-      broadcastSessionConfigChanged(id)
-    }
-  }
-
-  /** 从统一允许列表移除条目 */
-  removeAllowListEntry(id: string, entry: string): void {
-    const sess = sessionRecords.pickSettings(id, ['allowList'])
-    const list = (sess?.allowList || []).filter((e) => e !== entry)
-    sessionRecords.updateSettings(id, { allowList: list })
-    broadcastSessionConfigChanged(id)
-  }
-
   /** 删除会话（同时清理 AgentSession、后台任务、消息、HTTP 日志和临时工作目录） */
   async delete(id: string): Promise<void> {
     // 子会话先走一遍同样的清理（嵌套只有一层，所以不会递归下去第二层）。
@@ -723,6 +700,7 @@ export class SessionService {
     httpLogDao.deleteBySessionId(id)
     // 未开 PRAGMA foreign_keys，session_day_prompts 的 ON DELETE CASCADE 不会触发
     sessionDayPromptDao.deleteBySessionId(id)
+    sessionAcl.deleteSession(id)
     const ephemeral = sessionRecords.isEphemeral(id)
     // 删行之前记下它用的工作目录：fork 出来的临时会话用的是源会话的临时工作区（见 insertForkRow）。
     // 设置是坏 JSON 的一行读不出来（`->` 抛错）—— 那就当它没借用什么，删除照样做完

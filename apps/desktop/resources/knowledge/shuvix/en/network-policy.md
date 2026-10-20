@@ -82,7 +82,7 @@ not known yet (a socket check has no headers yet):
 
 `env.host` is `desktop` (also when headless). `vars` has the host variables of the `policy-md`
 entry that do not belong to a session — `home`, `shuvixConfigDirs`, `botsDir`, `skillsDirs` … —
-and no session directories or grants.
+and no session permission table (`aclRead` / `aclWrite`).
 
 ### The four check points
 

@@ -14,8 +14,6 @@ export interface SessionModelMetadata {
 
 /** 会话级配置（DB 中以 JSON 字符串存储，DAO 层负责序列化/反序列化） */
 export interface SessionSettings {
-  /** 路径允许列表，格式 Read(path) / Write(path)（历史 Bash/SSH 条目不再识别，等同失效） */
-  allowList?: string[]
   /**
    * 扩展能力勾选（`mcp:<server>` / `skill:<name>`，只收这两类）。
    *

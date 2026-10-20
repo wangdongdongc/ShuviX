@@ -1,10 +1,11 @@
 /**
  * executeDecision（PEP 共享内脏）—— 三态处置、询问四分支响应、
  * 「允许并记住」与决策日志。错误文案逐字对齐 enforce.ts 内四个文案函数。
+ * EN-RM：「允许并记住」可以点名所在的文件夹（rememberTargetOf：只认真包含它的上级，不许 `/`、不许覆盖家目录）。
  * 末尾一组是询问点的自动审查（onPermissionRequest 接缝，EN-RV 系列）。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { executeDecision } from '../enforce'
+import { executeDecision, rememberTargetOf } from '../enforce'
 import { clearSessionDecisions, getSessionDecisions } from '../decisionLog'
 import {
   abortSessionReviews,
@@ -69,7 +70,6 @@ function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHo
     host: 'desktop',
     pathSep: '/',
     getVars: () => ({}),
-    getSessionGrants: () => ({ allowList: [] }),
     ...overrides
   }
 }
@@ -2141,5 +2141,76 @@ describe('executeDecision — 询问点的审查', () => {
         notes: []
       })
     }
+  })
+})
+
+describe('executeDecision — 记住所在的文件夹（EN-RM）', () => {
+  const HOME = '/Users/u'
+  const provider = (home: unknown = HOME): Pick<SecurityHostProvider, 'pathSep' | 'getVars'> => ({
+    pathSep: '/',
+    getVars: () => ({ home: home as string })
+  })
+
+  it.each<[string, unknown, string]>([
+    ['true → 问的那条路径', true, '/Users/u/proj/docs/a.md'],
+    ['所在文件夹', '/Users/u/proj/docs', '/Users/u/proj/docs'],
+    ['更上一级也行', '/Users/u/proj', '/Users/u/proj'],
+    ['就是那条路径本身', '/Users/u/proj/docs/a.md', '/Users/u/proj/docs/a.md'],
+    ['不包含它的文件夹 → 退回', '/Users/u/other', '/Users/u/proj/docs/a.md'],
+    ['同前缀的兄弟 → 退回', '/Users/u/proj/do', '/Users/u/proj/docs/a.md'],
+    ['家目录 → 退回', '/Users/u', '/Users/u/proj/docs/a.md'],
+    ['覆盖家目录 → 退回', '/Users', '/Users/u/proj/docs/a.md'],
+    ['根 → 退回', '/', '/Users/u/proj/docs/a.md'],
+    ['空串 → 退回', '', '/Users/u/proj/docs/a.md'],
+    ['不是字符串 → 退回', 42, '/Users/u/proj/docs/a.md']
+  ])('EN-RM1 %s', (_label, requested, expected) => {
+    expect(rememberTargetOf(provider(), '/Users/u/proj/docs/a.md', requested)).toBe(expected)
+  })
+
+  it('EN-RM2 宿主没给家目录 / 读变量抛错 → 只记问的那条（不冒险放大）', () => {
+    expect(rememberTargetOf(provider(''), '/a/b/c/d.md', '/a/b/c')).toBe('/a/b/c/d.md')
+    expect(
+      rememberTargetOf(
+        {
+          pathSep: '/',
+          getVars: () => {
+            throw new Error('boom')
+          }
+        },
+        '/a/b/c/d.md',
+        '/a/b/c'
+      )
+    ).toBe('/a/b/c/d.md')
+  })
+
+  it('EN-RM3 Windows：盘符根 → 退回；分隔符混用照样认上级', () => {
+    const win = { pathSep: '\\', getVars: () => ({ home: 'C:\\Users\\u' }) }
+    expect(rememberTargetOf(win, 'C:\\Users\\u\\proj\\a.md', 'C:\\')).toBe(
+      'C:\\Users\\u\\proj\\a.md'
+    )
+    expect(rememberTargetOf(win, 'C:\\Users\\u\\proj\\a.md', 'C:\\Users\\u\\proj')).toBe(
+      'C:\\Users\\u\\proj'
+    )
+  })
+
+  it('EN-RM4 经 executeDecision：勾「记住」并点名文件夹 → persistGrant 记那个文件夹', async () => {
+    const { provider: p, persistGrant } = askProvider(
+      { kind: 'ask', allowed: true, extra: { rememberPath: '/Users/u/proj/docs' } },
+      { getVars: () => ({ home: '/Users/u' }) }
+    )
+    await executeDecision({
+      provider: p,
+      request: makeRequest({
+        action: 'read',
+        object: { type: 'path', path: '/Users/u/proj/docs/a.md', displayPath: 'a.md' }
+      }),
+      decision: askDecision({
+        command: 'Read(/Users/u/proj/docs/a.md)',
+        rememberEntry: 'Read(/Users/u/proj/docs/a.md)'
+      }),
+      opts: makeOpts(),
+      evaluateMs: 0
+    })
+    expect(persistGrant).toHaveBeenCalledWith('read', '/Users/u/proj/docs')
   })
 })

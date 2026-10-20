@@ -1,17 +1,21 @@
 /**
  * 沙箱管理器（sandbox/index.ts）—— 对外唯一入口：开关、后端选择与探测缓存、宿主路径、
- * 执行计划、给策略的会话目录清单、会话清理。
+ * 执行计划、给会话权限表派生行的会话自己的目录与设置目录的写法、会话清理。
  *
  * 替身：electron 的 app（getPath / isPackaged）、os.homedir、平台后端（假后端，探测 / 包装 / 启动失败
  * 都可控）、fs 里 ensureTmpDir / cleanupSession 用到的几个函数（realpathSync 用真的 —— 符号链接的用例要
  * 真链接）、logger。模块级缓存（后端、探测结果、realpath 缓存）每个用例 resetModules 后重新导入。
  *
  *  - MG-1 开关的读取；MG-2 后端选择 + 探测缓存 + 交给探测的宿主路径（含 ShuviX 自己的程序目录）；
- *  - MG-3 planFor 不看开关；MG-4 / MG-5 planFor 的正常路径与 null（工作目录正是别的会话的临时工作区 ——
- *    临时会话的 fork 共用源会话的 —— 照给计划；真链接按指向判）；MG-6 plan.explain；MG-7 cleanupSession；
+ *  - MG-3 planFor 不看开关；MG-4 / MG-5 planFor 的正常路径与 null（规格的读写范围就是请求里权限表的行；
+ *    工作目录正是别的会话的临时工作区 —— 临时会话的 fork 共用源会话的 —— 照给计划；真链接按指向判）；
+ *    MG-6 plan.explain；MG-7 cleanupSession；
  *  - MG-8 whyUnconfined（命令没进沙箱的原因：此刻的；从不探测）；
- *  - MG-9 sessionDirsView（策略的 `vars.sessionDirs` / `vars.sessionReadDirs`）：与开关 / 探测 /
- *    平台都无关，与 planFor 的规格同一份；算不出来给空清单。
+ *  - MG-9 sessionOwnDirsView（权限表 workdir / system 行的来源）与 settingDirForAcl（knowledge / skill 行的
+ *    写法）：与开关 / 探测 / 平台都无关，照它们拼的行交给 planFor 就是规格的可写根；算不出来给 null
+ *    （一行都不派生 —— 多问，绝不因此放行）。
+ *
+ * 请求里的行照 acl/derive.ts 的写法拼（{@link ownRowsOf} / {@link rowsFrom}）；真权限表要数据库，这里不起。
  */
 import { createHash } from 'crypto'
 import { dirname, join } from 'path'
@@ -84,6 +88,8 @@ import { getShuvixCliEnv } from '../../../utils/paths'
 
 type Manager = typeof import('../index')
 type PlanRequest = import('../index').PlanRequest
+type SandboxPathEntry = import('../index').SandboxPathEntry
+type SessionOwnDirs = import('../index').SessionOwnDirs
 
 const REAL_PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform')!
 function setPlatform(p: NodeJS.Platform): void {
@@ -100,13 +106,32 @@ async function load(reader?: () => string | undefined): Promise<Manager> {
 
 const sha8 = (id: string): string => createHash('sha256').update(id).digest('hex').slice(0, 8)
 const tmpDirOf = (id: string): string => `${TMP_ROOT}/${sha8(id)}`
-/** 正常工作目录下会话 id 的会话目录（与 spec.ts 的顺序一致） */
+/** 正常工作目录下会话 id 派生的四行的路径（与 acl/derive.ts 的顺序一致） */
 const sessionDirsOf = (id: string, ws = WS): string[] => [
   ws,
   tmpDirOf(id),
   `${SHUVIX}/artifacts/${id}`,
   `${USER_DATA}/tool_results/${id}`
 ]
+
+const row = (path: string, access: 'read' | 'write', granted: boolean): SandboxPathEntry => ({
+  path,
+  access,
+  granted
+})
+
+/** 权限表里派生的四行（工作目录与会话自己的三个目录，都可写；夹具路径都不存在，realpath 不改写法） */
+const ownRowsOf = (id: string, ws = WS): SandboxPathEntry[] =>
+  sessionDirsOf(id, ws).map((p) => row(p, 'write', false))
+
+/** 照 acl/derive.ts，从管理器交出的会话自己的目录拼派生行（真链接的用例要按指向）；null → 一行都没有 */
+function rowsFrom(own: SessionOwnDirs | null): SandboxPathEntry[] {
+  if (!own) return []
+  return [
+    ...(own.workdir ? [row(own.workdir, 'write', false)] : []),
+    ...[own.tmp, own.artifacts, own.toolResults].map((p) => row(p, 'write', false))
+  ]
+}
 
 /**
  * 开发态下宿主交给沙箱的「ShuviX 自己的程序」：可执行文件所在的应用包（不在应用包里就取它的目录）、
@@ -138,14 +163,18 @@ function tmpRootStat(
   }
 }
 
-const request = (over: Partial<PlanRequest> = {}): PlanRequest => ({
-  sessionId: 's1',
-  workingDirectory: WS,
-  grantedRead: [],
-  grantedWrite: [],
-  offerEscalation: true,
-  ...over
-})
+/** 一次 planFor 请求：不给 entries 时是这条会话派生的四行 */
+const request = (over: Partial<PlanRequest> = {}): PlanRequest => {
+  const sessionId = over.sessionId ?? 's1'
+  const workingDirectory = over.workingDirectory ?? WS
+  return {
+    sessionId,
+    workingDirectory,
+    entries: ownRowsOf(sessionId, workingDirectory),
+    offerEscalation: true,
+    ...over
+  }
+}
 
 const scratch: string[] = []
 
@@ -398,21 +427,23 @@ describe('MG-4 planFor 正常路径', () => {
     expect(mocks.chmodSync).not.toHaveBeenCalled()
   })
 
-  it('MG-4 规格带上请求里的读写授权与 extras：会话目录、只读会话目录、可读根、可写根、cli-token', async () => {
+  it('MG-4 规格带上请求里权限表的行：派生的（会话自己的目录、知识库可写、技能只读）与授予的（写 / 读）—— 可读根、可写根、cli-token', async () => {
     const m = await load(() => 'true')
     const plan = m.planFor(
       request({
-        grantedWrite: ['/Volumes/data/out'],
-        grantedRead: [`${HOME}/ref`],
-        extras: { readWrite: [KB], readOnly: [SKILLS] }
+        entries: [
+          ...ownRowsOf('s1'),
+          row(KB, 'write', false),
+          row(SKILLS, 'read', false),
+          row('/Volumes/data/out', 'write', true),
+          row(`${HOME}/ref`, 'read', true)
+        ]
       })
     )!
-    const sessionDirs = [...sessionDirsOf('s1'), KB]
-    expect(plan.spec.sessionDirs).toEqual(sessionDirs)
-    expect(plan.spec.sessionReadDirs).toEqual([SKILLS])
-    expect(plan.spec.writableRoots).toEqual([...sessionDirs, '/Volumes/data/out'])
-    expect(plan.spec.readableRoots.slice(0, sessionDirs.length + 3)).toEqual([
-      ...sessionDirs,
+    const writable = [...sessionDirsOf('s1'), KB]
+    expect(plan.spec.writableRoots).toEqual([...writable, '/Volumes/data/out'])
+    expect(plan.spec.readableRoots.slice(0, writable.length + 3)).toEqual([
+      ...writable,
       SKILLS,
       '/Volumes/data/out',
       `${HOME}/ref`
@@ -421,39 +452,53 @@ describe('MG-4 planFor 正常路径', () => {
     expect(plan.spec.home).toBe(HOME)
   })
 
-  it('MG-4 没给 extras：只有基本的四个会话目录，没有只读会话目录', async () => {
+  it('MG-4 只有派生的四行：可写根就是它们；表是空的：只剩本会话临时目录（恒在），工作目录也不可读写 —— 沙箱只认表', async () => {
     const m = await load(() => 'true')
-    const plan = m.planFor(request())!
-    expect(plan.spec.sessionDirs).toEqual(sessionDirsOf('s1'))
-    expect(plan.spec.sessionReadDirs).toEqual([])
+    expect(m.planFor(request())!.spec.writableRoots).toEqual(sessionDirsOf('s1'))
+    const bare = m.planFor(request({ entries: [] }))!
+    expect(bare.spec.writableRoots).toEqual([tmpDirOf('s1')])
+    expect(bare.spec.readableRoots[0]).toBe(tmpDirOf('s1'))
+    expect(bare.spec.readableRoots).not.toContain(WS)
+    expect(bare.spec.workingDirectory).toBe(WS)
   })
 
-  it('MG-4 工作目录是别的会话的临时工作区（临时会话的 fork 共用源会话的）：照给计划，它排在会话目录最前，其余仍是本会话自己的', async () => {
+  it('MG-4 工作目录是别的会话的临时工作区（临时会话的 fork 共用源会话的）：照给计划，它排在可写根最前，其余仍是本会话自己的', async () => {
     const shared = `${USER_DATA}/temp_workspace/other`
     const m = await load(() => 'true')
-    const plan = m.planFor(request({ workingDirectory: shared }))
+    // 派生行的来源（sessionOwnDirsView）认它是这条会话的工作目录
+    const own = m.sessionOwnDirsView('s1', shared)
+    expect(own?.workdir).toBe(shared)
+    const plan = m.planFor(request({ workingDirectory: shared, entries: rowsFrom(own) }))
     expect(plan).not.toBeNull()
     expect(plan!.spec.workingDirectory).toBe(shared)
-    expect(plan!.spec.sessionDirs).toEqual(sessionDirsOf('s1', shared))
-    expect(plan!.spec.writableRoots[0]).toBe(shared)
-    // 与给策略的那一份是同一份
-    expect(m.sessionDirsView('s1', shared).sessionDirs).toEqual(plan!.spec.sessionDirs)
+    expect(plan!.spec.writableRoots).toEqual(sessionDirsOf('s1', shared))
   })
 
-  it('MG-4 工作目录是真的符号链接：规格里是它指向的真实路径', async () => {
+  it('MG-4 工作目录是真的符号链接：规格里是它指向的真实路径（派生行里是，行里照写法存的链接也按指向）', async () => {
     const [link, target] = await realSymlink('sbx-mg4-')
     const m = await load(() => 'true')
-    const plan = m.planFor(request({ workingDirectory: link }))
+    expect(m.sessionOwnDirsView('s1', link)?.workdir).toBe(target)
+    const plan = m.planFor(
+      request({ workingDirectory: link, entries: rowsFrom(m.sessionOwnDirsView('s1', link)) })
+    )
     expect(plan).not.toBeNull()
     expect(plan!.spec.workingDirectory).toBe(target)
-    expect(plan!.spec.sessionDirs[0]).toBe(target)
     expect(plan!.spec.writableRoots[0]).toBe(target)
+    const asWritten = m.planFor(
+      request({ workingDirectory: link, entries: [row(link, 'write', true)] })
+    )
+    expect(asWritten!.spec.writableRoots[0]).toBe(target)
+    expect(JSON.stringify(asWritten!.spec)).not.toContain(link)
   })
 })
 
 describe('MG-5 planFor → null', () => {
   it.each([
-    ['写授权覆盖家目录', { grantedWrite: [HOME] }, 'a write grant covers the home folder'],
+    [
+      '授予的写覆盖家目录',
+      { entries: [...ownRowsOf('s1'), row(HOME, 'write', true)] },
+      'a write grant covers the home folder'
+    ],
     ['工作目录就是家目录', { workingDirectory: HOME }, 'working directory covers the home folder'],
     [
       '工作目录在 ~/.shuvix/agents',
@@ -471,23 +516,26 @@ describe('MG-5 planFor → null', () => {
       "working directory contains ShuviX's own configuration or application data"
     ],
     [
-      '写授权在 ~/.shuvix/policies 里',
-      { grantedWrite: [`${SHUVIX}/policies`] },
+      '授予的写在 ~/.shuvix/policies 里',
+      { entries: [...ownRowsOf('s1'), row(`${SHUVIX}/policies`, 'write', true)] },
       "a write grant is ShuviX's own configuration"
     ],
     [
-      '写授权包含 userData（~/Library）',
-      { grantedWrite: [`${HOME}/Library`] },
+      '授予的写包含 userData（~/Library）',
+      { entries: [...ownRowsOf('s1'), row(`${HOME}/Library`, 'write', true)] },
       "a write grant contains ShuviX's own configuration or application data"
     ],
     ['会话 id 不安全', { sessionId: '../x' }, 'unsafe session id']
-  ] as const)('MG-5 规格被拒（%s）：null，记下原因，不建临时目录', async (_label, over, reason) => {
-    const m = await load(() => 'true')
-    expect(m.planFor(request(over))).toBeNull()
-    const logged = mocks.log.info.mock.calls.map((c) => String(c[0])).join('\n')
-    expect(logged).toContain(reason)
-    expect(mocks.mkdirSync).not.toHaveBeenCalled()
-  })
+  ] as Array<[string, Partial<PlanRequest>, string]>)(
+    'MG-5 规格被拒（%s）：null，记下原因，不建临时目录',
+    async (_label, over, reason) => {
+      const m = await load(() => 'true')
+      expect(m.planFor(request(over))).toBeNull()
+      const logged = mocks.log.info.mock.calls.map((c) => String(c[0])).join('\n')
+      expect(logged).toContain(reason)
+      expect(mocks.mkdirSync).not.toHaveBeenCalled()
+    }
+  )
 
   it.each([
     ['tmp 根是符号链接', () => mocks.lstatSync.mockReturnValue(tmpRootStat({ symlink: true }))],
@@ -507,7 +555,7 @@ describe('MG-5 planFor → null', () => {
     expect(mocks.log.warn).toHaveBeenCalled()
   })
 
-  it('MG-5 真的 userData 里，temp_workspace/OTHER 是指向 userData/data 的符号链接：按指向判 —— 没有计划，给策略的清单里也没有它；同处一个真文件夹则照给', async () => {
+  it('MG-5 真的 userData 里，temp_workspace/OTHER 是指向 userData/data 的符号链接：按指向判 —— 没有计划，权限表也不会有它那一行；同处一个真文件夹则照给', async () => {
     const fs = await vi.importActual<typeof import('fs')>('fs')
     const os = await vi.importActual<typeof import('os')>('os')
     const root = fs.mkdtempSync(join(fs.realpathSync(os.tmpdir()), 'sbx-mg5-fork-'))
@@ -521,24 +569,24 @@ describe('MG-5 planFor → null', () => {
     mocks.getPath.mockReturnValue(userData)
 
     const m = await load(() => 'true')
-    expect(m.planFor(request({ workingDirectory: link }))).toBeNull()
+    const view = m.sessionOwnDirsView('s1', link)!
+    expect(view.workdir).toBeNull()
+    expect(view.workspaceUnsuitable).toBe("working directory is inside ShuviX's application data")
+    const rows = rowsFrom(view).map((e) => e.path)
+    expect(rows).toEqual([tmpDirOf('s1'), `${SHUVIX}/artifacts/s1`, `${userData}/tool_results/s1`])
+    expect(rows).not.toContain(link)
+    expect(rows).not.toContain(data)
+    expect(m.planFor(request({ workingDirectory: link, entries: rowsFrom(view) }))).toBeNull()
     const logged = mocks.log.info.mock.calls.map((c) => String(c[0])).join('\n')
     expect(logged).toContain("working directory is inside ShuviX's application data")
-    const view = m.sessionDirsView('s1', link)
-    expect(view.sessionDirs).toEqual([
-      tmpDirOf('s1'),
-      `${SHUVIX}/artifacts/s1`,
-      `${userData}/tool_results/s1`
-    ])
-    expect(view.sessionDirs).not.toContain(link)
-    expect(view.sessionDirs).not.toContain(data)
 
     // 对照：temp_workspace 下的真文件夹就是某条会话的临时工作区
     const realDir = join(userData, 'temp_workspace', 'REAL')
-    const plan = m.planFor(request({ workingDirectory: realDir }))
+    const realView = m.sessionOwnDirsView('s1', realDir)!
+    expect(realView.workdir).toBe(realDir)
+    const plan = m.planFor(request({ workingDirectory: realDir, entries: rowsFrom(realView) }))
     expect(plan).not.toBeNull()
-    expect(plan!.spec.sessionDirs[0]).toBe(realDir)
-    expect(m.sessionDirsView('s1', realDir).sessionDirs[0]).toBe(realDir)
+    expect(plan!.spec.writableRoots[0]).toBe(realDir)
   })
 
   it('MG-5 tmp 根权限是 0755：先 chmod 回 0700，再照常给计划', async () => {
@@ -665,66 +713,81 @@ describe('MG-8 whyUnconfined：命令没进沙箱的原因（不触发探测）'
   })
 })
 
-describe('MG-9 sessionDirsView：给策略的会话目录清单（与沙箱开没开无关）', () => {
-  const EXTRAS = { readWrite: [KB], readOnly: [SKILLS] }
-  const EXPECTED = { sessionDirs: [...sessionDirsOf('s1'), KB], sessionReadDirs: [SKILLS] }
-  const EMPTY = { sessionDirs: [], sessionReadDirs: [] }
+describe('MG-9 sessionOwnDirsView / settingDirForAcl：权限表派生行的来源（与沙箱开没开无关）', () => {
+  const EXPECTED: SessionOwnDirs = {
+    workdir: WS,
+    workspaceUnsuitable: null,
+    tmp: tmpDirOf('s1'),
+    artifacts: `${SHUVIX}/artifacts/s1`,
+    toolResults: `${USER_DATA}/tool_results/s1`
+  }
 
-  it('MG-9a 正常工作目录：读取口没注入 / 设置关着 / 探测失败 / 沙箱启用 四种情形逐字相同，且就是 planFor 规格里那一份', async () => {
-    const views: Array<[string, ReturnType<Manager['sessionDirsView']>]> = []
+  it('MG-9a 正常工作目录：读取口没注入 / 设置关着 / 探测失败 / 沙箱启用 四种情形逐字相同；照它拼的行交给 planFor，就是规格的可写根', async () => {
+    const views: Array<[string, SessionOwnDirs | null, string | null]> = []
 
     // ① 读取口没注入（= 关闭）：也不探测
     {
       const m = await load()
-      views.push(['读取口没注入', m.sessionDirsView('s1', WS, EXTRAS)])
+      views.push(['读取口没注入', m.sessionOwnDirsView('s1', WS), m.settingDirForAcl(KB)])
       expect(mocks.probe).not.toHaveBeenCalled()
     }
     // ② 设置关着
     {
       const m = await load(() => 'false')
       expect(m.sandboxGloballyActive()).toBe(false)
-      views.push(['设置关着', m.sessionDirsView('s1', WS, EXTRAS)])
+      views.push(['设置关着', m.sessionOwnDirsView('s1', WS), m.settingDirForAcl(KB)])
     }
     // ③ 探测失败：不套
     {
       mocks.probe.mockReturnValue({ available: false, reason: 'nested' })
       const m = await load(() => 'true')
       expect(m.sandboxGloballyActive()).toBe(false)
-      views.push(['探测失败', m.sessionDirsView('s1', WS, EXTRAS)])
+      views.push(['探测失败', m.sessionOwnDirsView('s1', WS), m.settingDirForAcl(KB)])
       mocks.probe.mockReturnValue({ available: true })
     }
-    // ④ 沙箱真的套上：清单就是这条会话的规格里那一份
+    // ④ 沙箱真的套上：派生行就是这条会话的规格里那一份
     {
       const m = await load(() => 'true')
       expect(m.sandboxGloballyActive()).toBe(true)
-      const plan = m.planFor(request({ extras: EXTRAS }))!
-      expect(plan.spec.sessionDirs).toEqual(EXPECTED.sessionDirs)
-      expect(plan.spec.sessionReadDirs).toEqual(EXPECTED.sessionReadDirs)
-      views.push(['沙箱启用', m.sessionDirsView('s1', WS, EXTRAS)])
+      const view = m.sessionOwnDirsView('s1', WS)
+      const kb = m.settingDirForAcl(KB)
+      const plan = m.planFor(request({ entries: [...rowsFrom(view), row(kb!, 'write', false)] }))!
+      expect(plan.spec.writableRoots).toEqual([...sessionDirsOf('s1'), KB])
+      views.push(['沙箱启用', view, kb])
     }
 
-    for (const [label, view] of views) {
-      expect({ label, view }).toEqual({ label, view: EXPECTED })
+    for (const [label, view, kb] of views) {
+      expect({ label, view, kb }).toEqual({ label, view: EXPECTED, kb: KB })
     }
   })
 
   it.each(['linux', 'win32'] as const)(
-    'MG-9b %s（没有沙箱后端）：清单照给 —— 文件工具一样只在会话目录以外询问；不探测',
+    'MG-9b %s（没有沙箱后端）：照给 —— 文件工具一样只在权限表以外询问；不探测',
     async (platform) => {
       setPlatform(platform)
       const m = await load(() => 'true')
-      expect(m.sessionDirsView('s1', WS, EXTRAS)).toEqual(EXPECTED)
+      expect(m.sessionOwnDirsView('s1', WS)).toEqual(EXPECTED)
+      expect(m.settingDirForAcl(SKILLS)).toBe(SKILLS)
       expect(mocks.probe).not.toHaveBeenCalled()
     }
   )
 
-  it('MG-9c 没给 extras：基本的四个会话目录，没有只读会话目录', async () => {
-    const m = await load()
-    expect(m.sessionDirsView('s1', WS)).toEqual({
-      sessionDirs: sessionDirsOf('s1'),
-      sessionReadDirs: []
-    })
-  })
+  it.each([
+    ['勾选的知识库', KB, KB],
+    ['技能目录', SKILLS, SKILLS],
+    ['家目录以外的目录', '/Volumes/x/skills', '/Volumes/x/skills'],
+    ['空串', '', null],
+    ['根目录 /', '/', null],
+    ['家目录本身', HOME, null],
+    ['覆盖家目录的 /Users', '/Users', null]
+  ])(
+    'MG-9c settingDirForAcl（%s %j）→ %j：空串、/、覆盖家目录的不进权限表；不记警告（这是判定，不是失败）',
+    async (_label, dir, expected) => {
+      const m = await load(() => 'true')
+      expect(m.settingDirForAcl(dir)).toBe(expected)
+      expect(mocks.log.warn).not.toHaveBeenCalled()
+    }
+  )
 
   it.each([
     ['根目录 /', '/'],
@@ -735,13 +798,13 @@ describe('MG-9 sessionDirsView：给策略的会话目录清单（与沙箱开�
     ['包含 userData 的 ~/Library', `${HOME}/Library`],
     ['包含 userData 的 ~/Library/Application Support', `${HOME}/Library/Application Support`]
   ])(
-    'MG-9d 不适合的工作目录（%s）：不在清单里，其余会话目录与 extras 照给；不记警告（这是判定，不是失败）',
+    'MG-9d 不适合的工作目录（%s）：workdir 为 null 并说明原因（权限表里没有它那一行），其余三项照给；不记警告（这是判定，不是失败）',
     async (_label, ws) => {
       const m = await load(() => 'true')
-      expect(m.sessionDirsView('s1', ws, EXTRAS)).toEqual({
-        sessionDirs: [...sessionDirsOf('s1').slice(1), KB],
-        sessionReadDirs: [SKILLS]
-      })
+      const view = m.sessionOwnDirsView('s1', ws)!
+      expect(view.workdir).toBeNull()
+      expect(view.workspaceUnsuitable).toMatch(/^working directory /)
+      expect(rowsFrom(view).map((e) => e.path)).toEqual(sessionDirsOf('s1').slice(1))
       expect(mocks.log.warn).not.toHaveBeenCalled()
     }
   )
@@ -751,42 +814,49 @@ describe('MG-9 sessionDirsView：给策略的会话目录清单（与沙箱开�
     ['别的会话的临时工作区（会话 fork 共用源会话的）', `${USER_DATA}/temp_workspace/other`],
     ['知识库 ~/.shuvix/knowledge/<base>', `${SHUVIX}/knowledge/notes`],
     ['个人资料目录 ~/Documents', `${HOME}/Documents`]
-  ])('MG-9d 合适的工作目录（%s）：排在清单最前', async (_label, ws) => {
+  ])('MG-9d 合适的工作目录（%s）：它就是 workdir，排在派生行最前', async (_label, ws) => {
     const m = await load()
-    expect(m.sessionDirsView('s1', ws).sessionDirs).toEqual(sessionDirsOf('s1', ws))
+    const view = m.sessionOwnDirsView('s1', ws)!
+    expect(view.workdir).toBe(ws)
+    expect(view.workspaceUnsuitable).toBeNull()
+    expect(rowsFrom(view).map((e) => e.path)).toEqual(sessionDirsOf('s1', ws))
   })
 
   it.each(['', '../x', '..'])(
-    'MG-9e 会话 id 不安全（%j）：两份都是空清单（多问，绝不因此放行），不记警告',
+    'MG-9e 会话 id 不安全（%j）：null —— 一行都不派生（多问，绝不因此放行），不记警告',
     async (sid) => {
       const m = await load(() => 'true')
-      expect(m.sessionDirsView(sid, WS, EXTRAS)).toEqual(EMPTY)
+      expect(m.sessionOwnDirsView(sid, WS)).toBeNull()
       expect(mocks.log.warn).not.toHaveBeenCalled()
     }
   )
 
-  it('MG-9f 算不出来（app.getPath 抛）：两份空清单、记一行警告、不往外抛', async () => {
+  it('MG-9f 算不出来（app.getPath 抛）：两个都给 null、各记一行警告、不往外抛', async () => {
     mocks.getPath.mockImplementation(() => {
       throw new Error('userData unavailable')
     })
     const m = await load(() => 'true')
-    let view: ReturnType<Manager['sessionDirsView']> | undefined
+    let view: SessionOwnDirs | null | undefined
+    let dir: string | null | undefined
     expect(() => {
-      view = m.sessionDirsView('s1', WS, EXTRAS)
+      view = m.sessionOwnDirsView('s1', WS)
+      dir = m.settingDirForAcl(KB)
     }).not.toThrow()
-    expect(view).toEqual(EMPTY)
-    expect(mocks.log.warn).toHaveBeenCalledTimes(1)
-    expect(String(mocks.log.warn.mock.calls[0][0])).toContain('userData unavailable')
+    expect(view).toBeNull()
+    expect(dir).toBeNull()
+    expect(mocks.log.warn).toHaveBeenCalledTimes(2)
+    for (const call of mocks.log.warn.mock.calls) {
+      expect(String(call[0])).toContain('userData unavailable')
+    }
   })
 
-  it('MG-9g 工作目录与 extras 是符号链接：清单里是它们指向的真实路径', async () => {
+  it('MG-9g 工作目录与知识库是符号链接：交出的是它们指向的真实路径', async () => {
     const [wsLink, wsTarget] = await realSymlink('sbx-mg9-ws-')
     const [kbLink, kbTarget] = await realSymlink('sbx-mg9-kb-')
     const m = await load()
-    const view = m.sessionDirsView('s1', wsLink, { readWrite: [kbLink], readOnly: [] })
-    expect(view.sessionDirs[0]).toBe(wsTarget)
-    expect(view.sessionDirs).toContain(kbTarget)
-    expect(view.sessionDirs).not.toContain(wsLink)
-    expect(view.sessionDirs).not.toContain(kbLink)
+    const view = m.sessionOwnDirsView('s1', wsLink)!
+    expect(view.workdir).toBe(wsTarget)
+    expect(m.settingDirForAcl(kbLink)).toBe(kbTarget)
+    expect(JSON.stringify(view)).not.toContain(wsLink)
   })
 })

@@ -1,22 +1,23 @@
 /**
  * 命令沙箱 —— 真 Seatbelt（[darwin]）：RS-1..RS-8。
  *
- * 2026-10-01 起沙箱只把命令的文件访问收进本会话的目录：家目录里只有会话目录、只读会话目录、授权、
- * ShuviX 自己的程序与 cli-token 可读，可写的只有会话目录与写授权；家目录以外全读、一处都不可写
- * （/private/tmp、包缓存也不行）。git 元数据、~/.shuvix 这些围栏随之删了 —— 写范围收到会话目录以后它们
- * 本来就碰不到。防越狱的尾部（LaunchServices、Apple Events、launchd、只给同一个沙箱发信号）照旧。
+ * 2026-10-01 起沙箱只把命令的文件访问收进本会话的目录：家目录里只有会话权限表的行（派生的工作目录、
+ * 会话自己的目录、知识库、技能目录与授予的读写）、ShuviX 自己的程序与 cli-token 可读，可写的只有权限表里
+ * 可写的行；家目录以外全读、一处都不可写（/private/tmp、包缓存也不行）。git 元数据、~/.shuvix 这些围栏
+ * 随之删了 —— 写范围收到会话自己的目录以后它们本来就碰不到。防越狱的尾部（LaunchServices、Apple Events、
+ * launchd、只给同一个沙箱发信号）照旧。
  *
- *  - RS-1 可写：工作目录、$TMPDIR、本会话 artifacts 与工具结果、临时工作区、写授权、勾选的知识库、
+ *  - RS-1 可写：工作目录、$TMPDIR、本会话 artifacts 与工具结果、临时工作区、授予的写、勾选的知识库、
  *    工作目录里的 git 元数据；
- *  - RS-2 不可写：家目录里会话目录以外的一切、/private/tmp 与 /tmp、别的会话的目录、包缓存、读授权与
- *    只读目录、硬链接 / 符号链接都带不出去；
+ *  - RS-2 不可写：家目录里权限表以外的一切、/private/tmp 与 /tmp、别的会话的目录、包缓存、授予的读与
+ *    只读的行（技能目录、改成只读的工作目录）、硬链接 / 符号链接都带不出去；
  *  - RS-3 读：家目录以外可读；家目录里只有可读根与 cli-token；上级目录只放元数据（stat 得到、列不出）；
  *  - RS-4 git：工作目录里 init / commit / config / hooks 都行；家目录里有 ~/.gitconfig 时受限的 git 起不来，
  *    说明点名它并教模型越界；
  *  - RS-5 网络与 unix socket；RS-6 沙箱外代为执行的入口；RS-7 进程模型与信号；RS-8 沙箱没起来的真实格式。
  *
  * 规格由 buildSandboxSpec 从一套**假家目录**算出（fakeHome 建在 realpath(os.tmpdir()) 下，即
- * /private/var/folders/…），命令经 createSeatbeltBackend().wrap 包进真正的 /usr/bin/sandbox-exec 执行。
+ * /private/var/folders/…；权限表的派生行照 acl/derive.ts 从 sessionOwnDirs 算），命令经 createSeatbeltBackend().wrap 包进真正的 /usr/bin/sandbox-exec 执行。
  * 真 HOME、真 ~/.shuvix、真 userData、真 /private/tmp/shuvix-<uid> 一概不碰：uid 用哨兵 99999，每会话临时目录
  * 的父目录是本文件独占的 /private/tmp/shuvix-sbxtest-<rand>。真家目录不在规格的「家目录」里，所以 node、
  * python 这些在真家目录或系统目录里的程序照常读得到。
@@ -57,10 +58,10 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { buildSandboxSpec } from '../spec'
+import { buildSandboxSpec, sessionOwnDirs } from '../spec'
 import { createSeatbeltBackend, SANDBOX_EXEC } from '../backends/seatbelt'
 import { explainSandboxDenial } from '../classify'
-import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
+import type { SandboxHostPaths, SandboxPathEntry, SandboxSessionInput, SandboxSpec } from '../types'
 
 const SENTINEL_UID = 99999
 const RAND = randomBytes(4).toString('hex')
@@ -122,17 +123,46 @@ function put(path: string, content = 'seed\n'): string {
   return path
 }
 
-function inputOf(over: Partial<SandboxSessionInput> = {}): SandboxSessionInput {
-  return {
-    sessionId: SID,
-    workingDirectory: ws,
-    grantedRead: [],
-    grantedWrite: [],
-    ...over
-  }
+/** 一条会话：工作目录与会话自己的派生行照 acl/derive.ts 自动算；其余的行接在后面 */
+interface Arrange {
+  sessionId?: string
+  workingDirectory?: string
+  /** 工作目录那一行的访问方式（用户可以把它改成只读） */
+  workdirAccess?: 'read' | 'write'
+  /** 勾选的知识库（派生，可写）与技能目录（派生，只读） */
+  knowledge?: string[]
+  skills?: string[]
+  /** 授予的写 / 读（「允许并记住」、手动添加、widget） */
+  grantWrite?: string[]
+  grantRead?: string[]
 }
 
-function specOf(over: Partial<SandboxSessionInput> = {}): SandboxSpec {
+const row = (path: string, access: 'read' | 'write', granted: boolean): SandboxPathEntry => ({
+  path,
+  access,
+  granted
+})
+
+function inputOf(over: Arrange = {}): SandboxSessionInput {
+  const sessionId = over.sessionId ?? SID
+  const workingDirectory = over.workingDirectory ?? ws
+  const own = sessionOwnDirs(paths, { sessionId, workingDirectory }, realLoose)
+  const entries: SandboxPathEntry[] = []
+  if (own) {
+    if (own.workdir) entries.push(row(own.workdir, over.workdirAccess ?? 'write', false))
+    for (const dir of [own.tmp, own.artifacts, own.toolResults])
+      entries.push(row(dir, 'write', false))
+  }
+  entries.push(
+    ...(over.knowledge ?? []).map((p) => row(p, 'write', false)),
+    ...(over.skills ?? []).map((p) => row(p, 'read', false)),
+    ...(over.grantWrite ?? []).map((p) => row(p, 'write', true)),
+    ...(over.grantRead ?? []).map((p) => row(p, 'read', true))
+  )
+  return { sessionId, workingDirectory, entries }
+}
+
+function specOf(over: Arrange = {}): SandboxSpec {
   const built = buildSandboxSpec(paths, inputOf(over), realLoose)
   if (!built.ok) throw new Error(`fixture spec rejected: ${built.reason}`)
   mkdirSync(built.spec.tmpDir, { recursive: true, mode: 0o700 })
@@ -335,7 +365,7 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       const grant = join(fakeHome, 'outside-grant')
       mkdirSync(grant, { recursive: true })
       expectWriteDenied(specOf(), join(grant, 'before'))
-      expectWriteAllowed(specOf({ grantedWrite: [grant] }), join(grant, 'x'))
+      expectWriteAllowed(specOf({ grantWrite: [grant] }), join(grant, 'x'))
     })
 
     it('RS-1 temp-workspace session: writes in its workspace succeed', () => {
@@ -351,7 +381,7 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       const kb = join(shuvixHome, 'knowledge', 'b')
       mkdirSync(kb, { recursive: true })
       expectWriteDenied(specOf(), join(kb, 'before.md'))
-      expectWriteAllowed(specOf({ extras: { readWrite: [kb], readOnly: [] } }), join(kb, 'a.md'))
+      expectWriteAllowed(specOf({ knowledge: [kb] }), join(kb, 'a.md'))
     })
 
     it("RS-1 other tools' config at the working-directory root (.vscode, .claude, .mcp.json …) is writable", () => {
@@ -426,13 +456,24 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       const skills = join(shuvixHome, 'skills')
       for (const d of [ref, skills]) mkdirSync(d, { recursive: true })
       put(join(shuvixHome, 'cli-token'), 'token\n')
-      const spec = specOf({ grantedRead: [ref], extras: { readWrite: [], readOnly: [skills] } })
+      const spec = specOf({ grantRead: [ref], skills: [skills] })
       expectWriteDenied(spec, join(ref, 'x'))
       expectWriteDenied(spec, join(skills, 'x'))
       expectWriteDenied(spec, join(appDir, 'x'))
       const r = confined(spec, `echo x >> ${q(join(shuvixHome, 'cli-token'))}`)
       expect(r.status, r.out).not.toBe(0)
       expect(readFileSync(join(shuvixHome, 'cli-token'), 'utf8')).toBe('token\n')
+    })
+
+    it('RS-2 the working-directory row made read-only: its files stay readable, writes in it are refused, $TMPDIR stays writable', () => {
+      put(join(ws, 'ro.txt'), 'ro\n')
+      const spec = specOf({ workdirAccess: 'read' })
+      expect(spec.writableRoots).not.toContain(ws)
+      expectReadAllowed(spec, 'cat ro.txt', 'ro\n')
+      expectWriteDenied(spec, join(ws, 'ro-new'))
+      const r = confined(spec, 'echo ok > "$TMPDIR/ro-ok"')
+      expect(r.status, r.out).toBe(0)
+      expect(readFileSync(join(spec.tmpDir, 'ro-ok'), 'utf8')).toBe('ok\n')
     })
 
     it('RS-2 a symlink in the working directory does not carry a write outside it', () => {
@@ -521,17 +562,15 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       const ref = join(fakeHome, 'ref')
       const w = join(fakeHome, 'w-grant')
       expectReadDenied(specOf(), `cat ${q(join(ref, 'r.txt'))}`)
-      const spec = specOf({ grantedRead: [ref], grantedWrite: [w] })
+      const spec = specOf({ grantRead: [ref], grantWrite: [w] })
       expectReadAllowed(spec, `cat ${q(join(ref, 'r.txt'))}`, 'ref\n')
       expectReadAllowed(spec, `cat ${q(join(w, 'w.txt'))}`, 'w\n')
     })
 
-    it('RS-3 a read-only session dir (skills) is readable (and not when it is not on the list)', () => {
+    it('RS-3 a read-only row (skills) is readable (and not when it is not in the table)', () => {
       const skill = join(shuvixHome, 'skills', 's', 'SKILL.md')
       expectReadDenied(specOf(), `cat ${q(skill)}`)
-      const spec = specOf({
-        extras: { readWrite: [], readOnly: [join(shuvixHome, 'skills')] }
-      })
+      const spec = specOf({ skills: [join(shuvixHome, 'skills')] })
       expectReadAllowed(spec, `cat ${q(skill)}`, 'skill\n')
     })
 
@@ -634,7 +673,7 @@ describe.skipIf(!SANDBOX_OK)('seatbelt (real sandbox-exec) [darwin]', () => {
       expect(readFileSync(join(spec.tmpDir, 'c', 'f0'), 'utf8')).toBe('zero\n')
     })
 
-    it('RS-4 git init outside the session dirs (/private/tmp) fails', () => {
+    it('RS-4 git init outside the permission table (/private/tmp) fails', () => {
       const repo = join(TMP_ROOT, 'g')
       const r = confined(gitSpec(), `mkdir -p ${repo} && cd ${repo} && git init -q`)
       expect(r.status, r.out).not.toBe(0)

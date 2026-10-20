@@ -246,7 +246,6 @@ export {
   parseAllowEntry,
   buildAllowEntry,
   matchesPathEntry,
-  isPathAllowedUnified,
   compileMatch,
   evaluateMatch,
   evaluateLet,

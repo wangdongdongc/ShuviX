@@ -6,9 +6,8 @@
  *     ⊕ 宿主派生（provider.derivedRules；仅限无法 md 化的特例）
  *
  * 会话授权曾是独立的第四层（allowList 在这里编译成 force-allow 原生谓词），
- * 现已下沉为策略 md：条目经 buildPolicyVars 变成 vars.grantedRead /
- * vars.grantedWrite，逻辑写在策略 md 里（出厂的 ask-on-external-path 把它们排除在询问之外）——
- * 于是它也可覆盖、可移除、在策略页可见。
+ * 现已下沉为数据 + 策略 md：宿主把会话权限表交成 vars.aclRead / vars.aclWrite，逻辑写在策略 md 里
+ * （出厂的 ask-on-external-path 在表外询问）—— 于是它也可覆盖、可移除、在策略页可见。
  *
  * tier 由 md 声明的 effect 唯一决定（TIER_BY_EFFECT）；强度编进 effect 名字（force- 前缀）
  * 而非拆一根正交轴，理由见 types.ts PolicyEffect。结算优先序见 evaluate.ts。
@@ -28,8 +27,8 @@
  * 当「没有这个目录」。不绑的话缺键报错被 fail-safe 当成命中 —— 一条只守一个目录的 force-ask
  * （从前出厂的 protect-bot-files 就是）就成了对每一次写的 force-ask。去重按 logger 而不是按 provider：桌面每次工具
  * 调用都新建一个 provider，logger 才是长命的那一个。allow 两档不绑：它们的 fail-safe 本来就是
- * 「报错即不命中」，缺变量放大不了什么，保持 strict 反而让授权 vars 的接线错误照旧每次告警
- * （assemble.test CV 系列）。其余位置（拼接、比较、has、lets）不绑定，照 CEL 原语义求值。
+ * 「报错即不命中」，缺变量放大不了什么，保持 strict 反而让授权 vars 的接线错误照旧每次告警。
+ * 其余位置（拼接、比较、has、lets）不绑定，照 CEL 原语义求值。
  *
  * 运行时数据（用户路径等）**绝不拼进 CEL 源码**（转义/注入隐患）—— 一律经 vars 以
  * 数据绑定进入求值上下文，md 里的表达式始终是固定文本。

@@ -226,7 +226,7 @@ export function createSecurityContext(
     realPath: ((path: string) => string) | undefined
   ): SecurityDecision => {
     // 一次现取，装配（lets）与求值（match）共用同一份 —— 两处各取一次会给出
-    // 不一致的授权视图，且 vars.granted* 缺席时授权会静默失效（见 policyVars.ts）
+    // 不一致的授权视图（见 policyVars.ts）
     const vars = buildPolicyVars(provider)
     const rules = assembleRules(provider, vars)
     return evaluate(

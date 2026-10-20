@@ -27,7 +27,6 @@ import {
   resolveProjectConfig,
   assertReadAllowed,
   assertWriteAllowed,
-  isPathWithinWorkspace,
   type ToolContext
 } from '../services/toolContext'
 import { registerBuiltinTool } from '../services/toolRegistry'
@@ -79,8 +78,8 @@ function createDesktopGitEnv(sessionId: string): GitEnv {
 }
 
 /**
- * "dir" 参数解析：相对工作目录归一；工作目录内直接放行，
- * 外部路径按该 action 的读/写语义走路径询问（拒绝时 throw，文本回流给模型）。
+ * "dir" 参数解析：相对工作目录归一，再按该 action 的读/写语义过会话权限表（经路径策略）：工作目录那一行
+ * 可写时整个仓库都在表里，照旧不问；用户把工作目录改成只读、或仓库在表外 —— 问（拒绝时 throw，文本回流给模型）。
  */
 function makeDesktopResolveDir(ctx: ToolContext) {
   return async (
@@ -89,10 +88,9 @@ function makeDesktopResolveDir(ctx: ToolContext) {
   ): Promise<string> => {
     const config = resolveProjectConfig(ctx.sessionId)
     const abs = resolve(config.workingDirectory, requested)
-    // git 豁免「工作目录内写入需询问」那条规则：仓库操作不是单文件写入，套不进 diff 预览，
-    // 而 add/commit 这类高频且可逆的操作逐条弹会把询问淹没。真正该拦的按 action 精确处理
-    // （见 GIT_OPS 的 askReason 与下面的 askOp）。目录外仍按读/写语义走路径询问。
-    if (isPathWithinWorkspace(abs, config.workingDirectory)) return abs
+    // 从前这里直接放行工作目录内的一切（不看权限表）—— 工作目录不适合当会话目录（家目录、ShuviX 的配置）
+    // 或被用户改成只读时，git 照样不问就写。现在与文件工具同一条路：在表里就不问。真正该拦的 git 动作
+    // 另按 action 精确处理（见 GIT_OPS 的 askReason 与下面的 askOp）
     const guard = opts.mutates ? assertWriteAllowed : assertReadAllowed
     await guard(ctx, config, opts.toolCallId, GIT_TOOL_NAME, abs, requested, {
       taskId: opts.taskId,

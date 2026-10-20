@@ -97,8 +97,7 @@ no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser`
 `mcp:database` is declared (the user can still tick them on in the session's extensions — that
 is the user's own call). The bot can look but not touch: anything that changes or runs must go
 to a sub-session (programming work → `agent_profile: coding`). `write` and `edit` are there for
-two purposes — recording knowledge-base entries and maintaining its own file. A write under `~/.shuvix/bots/` is an ordinary write outside the
-session's own directories: it asks under the builtin policy **ask-on-external-path**, and with
+two purposes — recording knowledge-base entries and maintaining its own file. A write under `~/.shuvix/bots/` is an ordinary write outside the session's permission table: it asks under the builtin policy **ask-on-external-path**, and with
 the automatic review on the reviewer may answer it (a
 `force-ask` policy on `vars.botsDir` makes every such write reach the user — see `policy-md`).
 Like `notebook`, the base declares project awareness but reads no instruction files (AGENTS.md /

@@ -16,7 +16,8 @@
  * tool 消息；一轮的结束读主窗口录到的 agent_end（主窗口是默认前端，收得到每条会话的事件）。
  *
  *   NC-1 主窗口开着笔记：doc_read 报「The user: cursor on line」；doc_edit 出现在编辑器里、不重挂载、
- *        有 agent 的（非 external）痕迹、自动保存写盘、没有安全决策
+ *        有 agent 的（非 external）痕迹、自动保存写盘、过会话权限表但不问（文档是表里可写的一行：恰一条
+ *        allow 的写决策、没有人的回答）
  *   NC-2 切到「Other」：doc_read 说「没开着」；agent_end 时盘上就是改后的字节；再打开这条笔记读到新内容
  *   NC-3 切回来：又是活的（报用户在哪、非 external 痕迹、不重挂载）
  *   NC-4 write 碰这份文档（绝对 / 相对）→ 拒绝那句话、块是红的、字节不变；写 other.md 照常
@@ -239,7 +240,12 @@ describe('主窗口笔记本的协作编辑', () => {
 
     const edit = await waitToolMessage('nc1_edit')
     expect(edit.startsWith('Replaced at line 3. The text there now:\n')).toBe(true)
-    expect(securityDecisions(app).filter((d) => d.toolCallId === 'nc1_edit')).toEqual([])
+    // 交给编辑器之前过会话权限表：文档那一行可写，放行、不问
+    expect(
+      securityDecisions(app)
+        .filter((d) => d.toolCallId === 'nc1_edit')
+        .map((d) => [d.action, d.effect, d.userResponse ?? null])
+    ).toEqual([['write', 'allow', null]])
     expect(await autoAllowed(app.main)).toEqual([])
   })
 
@@ -312,7 +318,11 @@ describe('主窗口笔记本的协作编辑', () => {
     expect(await editor.text()).toContain('Back paragraph NC.')
     expect(await editor.editorTag()).toBe(tag)
     await until(() => disk().includes('Back paragraph NC.'), 'autosave wrote the edit')
-    expect(securityDecisions(app).filter((d) => d.toolCallId === 'nc3_edit')).toEqual([])
+    expect(
+      securityDecisions(app)
+        .filter((d) => d.toolCallId === 'nc3_edit')
+        .map((d) => [d.action, d.effect, d.userResponse ?? null])
+    ).toEqual([['write', 'allow', null]])
   })
 
   it('NC-4 write 碰这份文档（绝对 / 相对）→ 拒绝并指向 doc_*、块是红的、字节不变；写 other.md 照常', async () => {

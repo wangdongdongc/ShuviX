@@ -13,7 +13,7 @@
  *
  *   DF-1  doc_read 的输出逐字：带行号的全文 + 「没开着」那句，没有「The user:」
  *   DF-2  BOM + CRLF 的文件：读出来没有 \r、没有 BOM
- *   DF-3  doc_edit（写授权覆盖的目录）：落盘字节、输出逐字；不弹卡；files.changed 恰一次
+ *   DF-3  doc_edit（会话权限表里授予了写的目录）：落盘字节、输出逐字；不弹卡；files.changed 恰一次
  *   DF-4  CRLF + BOM 往返：只换那一处，BOM 与 CRLF 原样；find 里带 \r 对不上
  *   DF-5  doc_insert：after / before / 文末，空文件、末尾没有换行的文件
  *   DF-6  定位失败（0 处 / 2 处 / 锚点不在）：planDocChange 的原话；字节与 mtime 不变，不问、不广播、不进变更管线
@@ -59,8 +59,8 @@ const state = vi.hoisted(() => ({
   kb: '',
   /** resolveSessionDocument 的答复（null = 这条会话没有文档） */
   doc: null as string | null,
-  /** 会话授权（缺省：整个临时目录「允许并记住」了写 → 不弹卡） */
-  grants: [] as string[],
+  /** 会话权限表里可写的目录（缺省：整个临时目录「允许并记住」了写 → 不弹卡；空 = 写哪儿都问） */
+  aclWrite: [] as string[],
   requests: [] as InputRequest[],
   respond: (() => ({ kind: 'ask', allowed: true })) as (
     req: InputRequest
@@ -83,12 +83,13 @@ vi.mock('../../services/toolContext', async () => {
           toolResultsBase: joinPath(state.dir, '.nonexistent-tool-results'),
           skillsDirs: [],
           home: joinPath(state.dir, '.nonexistent-home'),
-          // 会话目录刻意给空：写哪儿都问，除非会话授权盖着
-          sessionDirs: [],
-          systemDirs: []
+          systemDirs: [],
+          // 会话权限表只有授予的那几条（工作目录、会话目录刻意不给）：写哪儿都问，除非授权盖着。
+          // 写隐含读，可写的也在可读表里
+          aclRead: state.aclWrite,
+          aclWrite: state.aclWrite
         }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
-        getSessionGrants: () => ({ allowList: state.grants }),
         isDirectory: () => false,
         persistGrant: () => {},
         requestUserInput: async (req: InputRequest) => {
@@ -200,7 +201,7 @@ afterAll(() => rmSync(state.dir, { recursive: true, force: true }))
 beforeEach(() => {
   _resetAll()
   state.doc = null
-  state.grants = [`Write(${state.dir})`]
+  state.aclWrite = [state.dir]
   state.requests = []
   state.respond = () => ({ kind: 'ask', allowed: true })
   state.notify.mockClear()
@@ -310,7 +311,7 @@ describe('doc_edit / doc_insert 的磁盘回落', () => {
     'DF-6 定位失败（%s）→ 原话；字节与 mtime 不变，不问、不广播、不进变更管线',
     async (_label, content, make, params, message) => {
       // 不给授权：要是走到了写入就会弹卡
-      state.grants = []
+      state.aclWrite = []
       const p = seedDoc(content)
       const before = statSync(p).mtimeMs
       expect(await failureText(executeTool(make(), 'df6', params as never))).toBe(message)
@@ -324,7 +325,7 @@ describe('doc_edit / doc_insert 的磁盘回落', () => {
   )
 
   it('DF-7 写前询问：一张带 diff 预览的卡（doc_edit、这次调用的 id）；拒绝 → 不变；允许 → 落盘', async () => {
-    state.grants = []
+    state.aclWrite = []
     const p = seedDoc('# T\n\nbody\n')
     state.respond = () => ({ kind: 'ask', allowed: false })
     expect(
@@ -353,7 +354,7 @@ describe('doc_edit / doc_insert 的磁盘回落', () => {
   })
 
   it('DF-8 询问期间文件被改 → 读后被改守卫拒绝；外部内容留着、不广播', async () => {
-    state.grants = []
+    state.aclWrite = []
     const p = seedDoc('# T\n\nbody\n')
     state.respond = () => {
       writeFileSync(p, '# T\n\nexternal\n')
@@ -444,7 +445,7 @@ describe('doc_edit / doc_insert 的磁盘回落', () => {
   })
 
   it('DF-12 文件不存在 → 「Could not read the document file <doc>:」，什么都没建、不问', async () => {
-    state.grants = []
+    state.aclWrite = []
     const p = join(state.dir, 'notes', 'missing.md')
     state.doc = p
     for (const [tool, params] of [
@@ -493,7 +494,7 @@ describe('doc_edit / doc_insert 的磁盘回落', () => {
   })
 
   it('DF-15 询问挂着时中止 → 文件不变、不广播', async () => {
-    state.grants = []
+    state.aclWrite = []
     const p = seedDoc('# T\n\nbody\n')
     const ac = new AbortController()
     let entered!: () => void
@@ -515,7 +516,7 @@ describe('doc_edit / doc_insert 的磁盘回落', () => {
   })
 
   it('DF-16 已中止的 signal → 什么都没写、不问', async () => {
-    state.grants = []
+    state.aclWrite = []
     const p = seedDoc('# T\n\nbody\n')
     const before = statSync(p).mtimeMs
     const ac = new AbortController()

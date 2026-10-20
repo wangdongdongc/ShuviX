@@ -3,7 +3,8 @@
  *
  *  - 文件工具 = 真 `createFileToolSuite`（read / write / edit）跑在世界级的 MemFs 上；询问走真安全模块
  *    （`createSecurityContext` + 内联的内置策略）—— 桌面口径：工作区 `/ws`、家目录 `/fake-home`、
- *    会话目录刻意给空（`ask-on-external-path` 于是对每一次写都问），工作区在家目录外、读不问；
+ *    会话权限表（`vars.aclRead` / `vars.aclWrite`）刻意给空（`ask-on-external-path` 于是对每一次写都问），
+ *    工作区在家目录外、读不问；
  *  - `ask` = 真 `createAskTool`；
  *  - 两个测试 BaseTool：`dump`（N 行输出，details 声明 truncated / persisted）与 `boom`（抛 `boom`）；
  *  - 全部经 agent-runtime 的 `wrapDurableOutput(tool, { spill: 'auto', sink })` 包好（PIN-2）；
@@ -79,11 +80,11 @@ export function securityFor(
       knowledgeSessionDirs: [],
       home: FAKE_HOME,
       systemDirs: [],
-      sessionDirs: [],
-      sessionReadDirs: []
+      // 会话权限表：空（工作区也不在表里）—— 写都问
+      aclRead: [],
+      aclWrite: []
     }),
     readBuiltinPolicyMd: INLINE_POLICY_MD,
-    getSessionGrants: () => ({ allowList: [] }),
     isDirectory: () => false,
     ...(requestUserInput === undefined ? {} : { requestUserInput }),
     ...(permissionLog === undefined

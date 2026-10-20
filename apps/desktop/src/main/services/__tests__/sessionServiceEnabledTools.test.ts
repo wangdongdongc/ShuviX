@@ -87,7 +87,8 @@ vi.mock('../../utils/paths', () => ({
 }))
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: mocks.filterAvailableTools }))
-vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
+// 会话权限表（services/acl）不在这组用例里：建会话时的生成、删会话时的清理换成空操作
+vi.mock('../acl', () => ({ sessionAcl: { initialize: vi.fn(), deleteSession: vi.fn() } }))
 vi.mock('../agentService', () => ({
   agentService: {
     getProfile: vi.fn((name: string) => ({

@@ -18,6 +18,9 @@
  * 缺 ext 的回执、store 的拒收文案）必须是同一份集合。（用例清单里这一组是 AT-13…16；本文件
  * 那几个号早已占用，顺延为 AT-19…22。）
  *
+ * 落盘过会话权限表（AT-23）：`create` / `adopt` 之前按「写本会话的 artifacts 目录」过 enforcePath，被拒就不落盘；
+ * `list` 不过门。安全上下文换成记下每一次的替身。
+ *
  * `recordRead` 买到的**不是**「让 edit 能用」（edit 只在本会话读过时才校验陈旧，没读过不拦）——
  * 它买到的是**开启陈旧检测**。这里只钉「对返回的那个 path 记了一笔」，拦不拦得住在
  * artifactEditGuard.test.ts。
@@ -32,13 +35,25 @@ import { executeTool, type InvokedToolResult } from '@shuvix/agent-runtime/tools
 const state = vi.hoisted(() => ({
   root: '',
   registered: [] as Array<Record<string, unknown>>,
-  messages: [] as ChatMessage[]
+  messages: [] as ChatMessage[],
+  /** 落盘前过的会话权限表门（enforcePath）：记下每一次，`deny` 为真时拒绝 */
+  gates: [] as Array<{ mode: string; path: string; toolName?: string }>,
+  deny: false
 }))
 
 vi.mock('../../utils/paths', () => ({
   getSessionArtifactsDir: (sessionId: string) => `${state.root}/${sessionId}`,
   isSafeSessionId: (id: string) =>
     !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
+}))
+vi.mock('../../services/toolContext', () => ({
+  TOOL_ABORTED: 'Aborted',
+  getDesktopSecurityContext: () => ({
+    enforcePath: async (mode: string, path: string, opts: { toolName?: string }) => {
+      state.gates.push({ mode, path, toolName: opts.toolName })
+      if (state.deny) throw new Error('Blocked by policy')
+    }
+  })
 }))
 vi.mock('../../services/messageService', () => ({
   messageService: { listBySession: async () => state.messages }
@@ -417,5 +432,30 @@ describe('```interactive —— 认领成 .html、list 按种类判、create 收
     expect(setOf(inMissing, '缺 ext 的回执')).toEqual(EXPECTED)
     expect(setOf(inRejected, 'store 的拒收文案')).toEqual(EXPECTED)
     expect(ARTIFACT_DESCRIPTION).toContain('```interactive')
+  })
+})
+
+describe('AT-23 落盘过会话权限表', () => {
+  it('AT-23 create / adopt 先过「写本会话 artifacts 目录」的门；list 不过；被拒就不落盘', async () => {
+    state.gates.length = 0
+    state.deny = false
+    const gateSid = 'sess-gate'
+    await run({ action: 'list' }, gateSid)
+    expect(state.gates).toEqual([])
+
+    await run({ action: 'create', title: 'Gate', ext: 'md', content: 'x' }, gateSid)
+    expect(state.gates).toEqual([
+      { mode: 'write', path: `${state.root}/${gateSid}`, toolName: 'artifact' }
+    ])
+
+    state.deny = true
+    const denied = await run({ action: 'create', title: 'Nope', ext: 'md', content: 'y' }, gateSid)
+    state.deny = false
+    expect(JSON.stringify(denied)).toContain('Blocked by policy')
+    const names = (await run({ action: 'list' }, gateSid)).content
+      .map((c) => ('text' in c ? c.text : ''))
+      .join('')
+    expect(names).toContain('gate.md')
+    expect(names).not.toContain('nope.md')
   })
 })

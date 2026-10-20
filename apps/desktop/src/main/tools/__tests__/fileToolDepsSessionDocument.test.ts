@@ -54,11 +54,12 @@ vi.mock('../../services/toolContext', async () => {
           knowledgeRoot: '/kb',
           knowledgeSessionDirs: [],
           home: joinPath(state.dir, '.nonexistent-home'),
-          sessionDirs: [],
-          systemDirs: []
+          systemDirs: [],
+          // 会话权限表给空：写哪儿都问
+          aclRead: [],
+          aclWrite: []
         }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
-        getSessionGrants: () => ({ allowList: [] }),
         isDirectory: () => false,
         persistGrant: () => {},
         requestUserInput: async (req: InputRequest) => {

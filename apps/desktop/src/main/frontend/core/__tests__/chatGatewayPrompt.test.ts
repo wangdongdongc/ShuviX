@@ -17,6 +17,10 @@ vi.mock('../../../services/toolRegistry', () => ({
   getBuiltinToolEntries: () => [],
   getPlatformBuiltinToolEntries: () => []
 }))
+// 会话权限表（services/acl）不在这组用例里：空表（真的那份落 SQLite，这里不起库）
+vi.mock('../../../services/acl', () => ({
+  sessionAcl: { pathView: () => ({ read: [], write: [] }), sandboxEntries: () => [] }
+}))
 vi.mock('../../../services/sessionService', () => ({
   sessionService: {
     ensureAgentSession: mocks.ensureAgentSession,

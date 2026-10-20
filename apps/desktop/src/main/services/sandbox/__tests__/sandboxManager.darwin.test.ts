@@ -2,7 +2,10 @@
  * 命令沙箱 —— 管理器 + bgTaskService 端到端，真 Seatbelt（[darwin]）：RS-10（含 FU-7：智能体经宿主
  * 停掉自己那条受限的后台任务 —— 沙箱里的命令自己发不出跨实例的信号）；RS-11：工具卡上「实际执行的
  * 命令」那份记录贴进终端能复现同一条受限命令（同样的 TMPDIR、同样被拦下、同样能写工作区）；
- * RS-12：planFor 收到的读写授权与 extras（勾选的知识库、技能目录）真的到了 Seatbelt。
+ * RS-12：planFor 收到的会话权限表的行（授予的读、勾选的知识库、技能目录）真的到了 Seatbelt。
+ *
+ * 权限表的行照 acl/derive.ts 的写法，用管理器自己交出的 sessionOwnDirsView / settingDirForAcl 拼
+ * （真权限表要数据库，这里不起）。
  *
  * 与 seatbelt.darwin.test.ts 分开放，因为这里要换掉 `os` 与 `electron`：管理器从 `os.homedir()` /
  * `app.getPath('userData')` 现取宿主路径，而家目录必须是假的。fakeHome 建在 realpath(os.tmpdir())
@@ -63,7 +66,10 @@ import {
   planFor,
   sandboxGloballyActive,
   sandboxStatus,
+  sessionOwnDirsView,
   setSandboxSettingReader,
+  settingDirForAcl,
+  type SandboxPathEntry,
   type SandboxPlan
 } from '../index'
 import { sessionTmpName } from '../spec'
@@ -99,6 +105,29 @@ function isAlive(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+const row = (path: string, access: 'read' | 'write', granted: boolean): SandboxPathEntry => ({
+  path,
+  access,
+  granted
+})
+
+/** 照 acl/derive.ts：工作目录（适合时）与会话自己的三个目录，都可写 */
+function ownRows(sessionId: string, workingDirectory: string): SandboxPathEntry[] {
+  const own = sessionOwnDirsView(sessionId, workingDirectory)
+  if (!own) return []
+  return [
+    ...(own.workdir ? [row(own.workdir, 'write', false)] : []),
+    ...[own.tmp, own.artifacts, own.toolResults].map((p) => row(p, 'write', false))
+  ]
+}
+
+/** 会话设置带来的目录进权限表的写法（照 derive.ts：经 settingDirForAcl） */
+function settingRow(dir: string, access: 'read' | 'write'): SandboxPathEntry {
+  const resolved = settingDirForAcl(dir)
+  if (!resolved) throw new Error(`setting dir refused: ${dir}`)
+  return row(resolved, access, false)
 }
 
 async function until(check: () => boolean, ms: number): Promise<boolean> {
@@ -137,16 +166,18 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
     if (!available) ctx.skip()
     expect(existsSync(SESSION_TMP)).toBe(false)
     expect(sandboxGloballyActive()).toBe(true)
-    plan = planFor({
-      sessionId: SID,
-      workingDirectory: ws,
-      grantedRead: [],
-      grantedWrite: [],
-      offerEscalation: true
-    })
+    const entries = ownRows(SID, ws)
+    expect(entries.map((e) => e.path)).toEqual([
+      ws,
+      SESSION_TMP,
+      join(fakeHome, '.shuvix', 'artifacts', SID),
+      join(state.userData, 'tool_results', SID)
+    ])
+    plan = planFor({ sessionId: SID, workingDirectory: ws, entries, offerEscalation: true })
     expect(plan).not.toBeNull()
     expect(plan!.env.TMPDIR).toBe(SESSION_TMP + '/')
     expect(plan!.spec.workingDirectory).toBe(ws)
+    expect(plan!.spec.writableRoots).toEqual(entries.map((e) => e.path))
     expect(existsSync(SESSION_TMP)).toBe(true)
   })
 
@@ -179,7 +210,7 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
     return output.slice(at + 1)
   }
 
-  it('RS-10 a refused write outside the session dirs (/private/tmp) exits 1 and the log ends with a [sandbox] note', async (ctx) => {
+  it('RS-10 a refused write outside the permission table (/private/tmp) exits 1 and the log ends with a [sandbox] note', async (ctx) => {
     if (!available || !plan) ctx.skip()
     const blocked = join(state.tmp, 'x')
     const r = await run(`echo TMP=$TMPDIR; touch "${blocked}"`)
@@ -193,7 +224,7 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
     expect(existsSync(blocked)).toBe(false)
   })
 
-  it('RS-10 a refused read in the home folder outside the session dirs: the note says cannot read', async (ctx) => {
+  it('RS-10 a refused read in the home folder outside the permission table: the note says cannot read', async (ctx) => {
     if (!available || !plan) ctx.skip()
     const secret = join(fakeHome, 'Documents', 'secret.txt')
     mkdirSync(join(fakeHome, 'Documents'), { recursive: true })
@@ -213,7 +244,7 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
     expect(existsSync(join(SESSION_TMP, 'ok'))).toBe(true)
   })
 
-  it('RS-12 grants and extras reach Seatbelt: read grant readable only, knowledge base writable, skills readable only', async (ctx) => {
+  it('RS-12 permission-table rows reach Seatbelt: read grant readable only, knowledge base writable, skills readable only', async (ctx) => {
     if (!available || !plan) ctx.skip()
     const ref = join(fakeHome, 'ref')
     const kb = join(fakeHome, '.shuvix', 'knowledge', 'b')
@@ -238,7 +269,7 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
       write(join(skills, 'b'))
     ].join('; ')
 
-    // 没有授权与 extras：家目录里这三处都读不到、写不了
+    // 表里只有派生的四行：家目录里这三处都读不到、写不了
     const bare = await run(script)
     expect(bare.output.match(/read-(ok|no)|write-(ok|no)/g)).toEqual([
       'read-no',
@@ -252,9 +283,12 @@ describe.skipIf(process.platform !== 'darwin')('sandbox manager + bgTaskService 
     const granted = planFor({
       sessionId: SID,
       workingDirectory: ws,
-      grantedRead: [ref],
-      grantedWrite: [],
-      extras: { readWrite: [kb], readOnly: [skills] },
+      entries: [
+        ...ownRows(SID, ws),
+        settingRow(kb, 'write'),
+        settingRow(skills, 'read'),
+        row(ref, 'read', true)
+      ],
       offerEscalation: true
     })
     expect(granted).not.toBeNull()

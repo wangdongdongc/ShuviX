@@ -17,9 +17,10 @@
  * 约束）。所以零重发不依赖这一笔。它真正买到的是**开启陈旧检测**：有了基线，用户在认领之后
  * 手工改过这张图时，模型的 `edit` 会被 assertNotModifiedSinceRead 拦住，而不是闷头覆盖。
  *
- * **一处裁决过的取舍要写下来**：`securityCheck` 是 no-op、也不过 `enforcePath`，所以这是一条
- * 不经询问的写原语，而 `ask-on-external-path` 对会话目录以外的文件写入都要问。`bot` 基座刻意收窄过的
- * 工具清单里现在有它。之所以接受：落点是**会话自己的目录**、碰不到用户仓库。类型白名单里唯一
+ * **写入过会话权限表**（2026-10-20 起）：`create` / `adopt` 落盘之前按「写本会话的 artifacts 目录」过
+ * `enforcePath('write')`。那个目录是权限表里的一行（system，不能改、不能删），所以平常不问 —— 过这一道
+ * 是为了让它与别的写入同一条路：用户策略管得到它、决策日志里有它。`bot` 基座刻意收窄过的
+ * 工具清单里有它。落点是**会话自己的目录**、碰不到用户仓库。类型白名单里唯一
  * 能执行的是 `html`，而它能做的不超过模型本来就能在回复里写的一块 ```interactive：只在交互图的
  * 沙箱 iframe 里渲染（不透明源、没有网络），落盘时还带一行同样的 CSP，双击用浏览器打开也没有
  * 出口（见 artifacts/store.ts 的 ALLOWED_EXT）。bot「要动就得开子会话」那条不变式针对的是
@@ -32,12 +33,13 @@
 import { Type } from 'typebox'
 import type { TObject, TString } from 'typebox'
 import { BaseTool } from '@shuvix/agent-runtime'
-import type { ToolResult } from '@shuvix/agent-runtime'
+import { callOwnerOf, type ToolCallScope, type ToolResult } from '@shuvix/agent-runtime'
 import { listArtifacts, writeArtifact } from '../services/artifacts/store'
 import { adoptFigure, figureArtifactName, listAdoptableFigures } from '../services/artifacts/adopt'
 import { messageService } from '../services/messageService'
 import { recordRead } from '../utils/toolUtils/fileTime'
-import type { ToolContext } from '../services/toolContext'
+import { getDesktopSecurityContext, TOOL_ABORTED, type ToolContext } from '../services/toolContext'
+import { getSessionArtifactsDir } from '../utils/paths'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import { t } from '../i18n'
 
@@ -102,9 +104,27 @@ export class ArtifactTool extends BaseTool<typeof ArtifactParamsSchema> {
     /* no-op */
   }
 
-  /** 只读/只写本会话自己的目录，不吃模型给的路径 —— 没有确定性的路径准入可设 */
-  protected async securityCheck(): Promise<void> {
-    /* no-op */
+  /**
+   * 只读/只写本会话自己的目录，不吃模型给的路径。会落盘的两个动作按「写本会话的 artifacts 目录」过会话
+   * 权限表（见文件头）；`list` 只读本会话自己的目录与转写，不过门
+   */
+  protected async securityCheck(
+    toolCallId: string,
+    params: { action: string },
+    signal: AbortSignal | undefined,
+    call: ToolCallScope
+  ): Promise<void> {
+    const action = (params.action || '').trim().toLowerCase()
+    if (action !== 'create' && action !== 'adopt') return
+    const dir = getSessionArtifactsDir(this.ctx.sessionId)
+    await getDesktopSecurityContext(this.ctx).enforcePath('write', dir, {
+      toolCallId,
+      ...callOwnerOf(call),
+      toolName: this.name,
+      displayPath: dir,
+      abortError: TOOL_ABORTED,
+      signal
+    })
   }
 
   protected async executeInternal(

@@ -33,6 +33,8 @@
  *   B11 磁盘与编辑器同一条队：前一个磁盘操作挂着时占着队，期间挂上的编辑器要等它了结才收到下一个
  *      （走哪条路轮到时才定）；磁盘操作失败也放行下一个
  *   B12 已中止的 signal、没有编辑器 → 「Aborted.」，磁盘不调
+ *   B13 交给编辑器之前的门（beforeLive，doc_* 拿它判会话权限表）：有编辑器才调、先调完才发；门抛错 → 不发、照原样
+ *       失败；过门期间编辑器摘下 → 走磁盘；过门期间被中止 → Aborted.、不发；没有编辑器 → 不调门、直接磁盘
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WebContents } from 'electron'
@@ -856,5 +858,68 @@ describe('B12 已中止的 signal、没有编辑器', () => {
       DISK_READ
     )
     expect(disk).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('B13 交给编辑器之前的门', () => {
+  it('有编辑器：先过门再发；门抛错 → 不发、原样失败', async () => {
+    const wc = fakeContents()
+    bridge.attachLiveDocument('s1', wc.asWc(), 'a1')
+    let release: () => void = () => {}
+    const gate = vi.fn(() => new Promise<void>((r) => (release = r)))
+    const p = track(bridge.requestLiveDocument('s1', EDIT, undefined, disk, gate))
+    await flush()
+    expect(gate).toHaveBeenCalledTimes(1)
+    expect(wc.send).not.toHaveBeenCalled()
+    release()
+    await flush()
+    expect(wc.requests()).toHaveLength(1)
+    bridge.resolveLiveDocumentResponse(wc.asWc(), wc.requests()[0].requestId, OK_EDIT)
+    await flush()
+    expect(p.value()).toEqual(OK_EDIT)
+
+    const denied = track(
+      bridge.requestLiveDocument('s1', EDIT, undefined, disk, async () => {
+        throw new Error('Blocked by policy')
+      })
+    )
+    await flush()
+    expect(denied.state()).toBe('rejected')
+    expect(denied.error()?.message).toBe('Blocked by policy')
+    expect(wc.requests()).toHaveLength(1)
+    expect(disk).not.toHaveBeenCalled()
+  })
+
+  it('过门期间编辑器摘下 → 走磁盘；过门期间被中止 → Aborted.、不发', async () => {
+    const wc = fakeContents()
+    bridge.attachLiveDocument('s1', wc.asWc(), 'a1')
+    const detached = track(
+      bridge.requestLiveDocument('s1', READ, undefined, disk, async () => {
+        bridge.detachLiveDocument('s1', 'a1', wc.asWc())
+      })
+    )
+    await flush()
+    expect(detached.value()).toEqual(DISK_READ)
+    expect(wc.send).not.toHaveBeenCalled()
+
+    bridge.attachLiveDocument('s1', wc.asWc(), 'a2')
+    const ac = new AbortController()
+    const aborted = track(
+      bridge.requestLiveDocument('s1', EDIT, ac.signal, disk, async () => {
+        ac.abort()
+      })
+    )
+    await flush()
+    expect(aborted.state()).toBe('rejected')
+    expect(aborted.error()?.message).toBe('Aborted.')
+    expect(wc.requests()).toHaveLength(0)
+  })
+
+  it('没有编辑器：不调门，直接磁盘', async () => {
+    const gate = vi.fn(async () => undefined)
+    const p = track(bridge.requestLiveDocument('s1', READ, undefined, disk, gate))
+    await flush()
+    expect(p.value()).toEqual(DISK_READ)
+    expect(gate).not.toHaveBeenCalled()
   })
 })

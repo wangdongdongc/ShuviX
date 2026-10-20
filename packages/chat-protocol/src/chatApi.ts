@@ -36,6 +36,12 @@ import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
 import type { ChromeTabBinding } from './chromeTabSession'
 import type { SessionForkParams, SessionForkResult } from './sessionFork'
+import type {
+  AclEntry,
+  SessionAclGrantParams,
+  SessionAclRemoveParams,
+  SessionAclSetAccessParams
+} from './sessionAcl'
 import type { ChatEvent, RuntimeStatus } from './events'
 import type {
   ConfigSharePayload,
@@ -54,7 +60,6 @@ export interface SessionModelMetadata {
 }
 
 export interface SessionSettings {
-  allowList?: string[]
   /**
    * 这条会话的扩展能力勾选：`mcp:<server>` / `skill:<name>` 在 agent 档案之上加一项，
    * `-mcp:<server>` / `-skill:<name>` 取消档案 `shuvix-tools` 声明的一项（记号与读写见
@@ -460,11 +465,6 @@ export interface SessionUpdateKnowledgeBasesParams {
   knowledgeBases: string[]
 }
 
-export interface SessionAllowListRemoveParams {
-  id: string
-  entry: string
-}
-
 export interface SettingsSetParams {
   key: string
   value: string
@@ -728,6 +728,11 @@ export interface HostApi {
     windowReady: () => void
     onNewChat: (callback: () => void) => () => void
     onNewProject: (callback: () => void) => () => void
+    /**
+     * 选一个文件夹（桌面：原生对话框；浏览器里的 web 客户端：列服务端目录的页面内浏览器）；取消 → null。
+     * 可选：没有的宿主不显示「选择文件夹」入口
+     */
+    openDirectoryDialog?: () => Promise<string | null>
   }
   agent: {
     /**
@@ -840,8 +845,16 @@ export interface HostApi {
     create: (params?: SessionCreateParams) => Promise<Session>
     updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
     updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
-    /** 移除允许列表条目（仅路径条目：命令类工具无允许列表，逐条询问） */
-    removeAllowListEntry: (params: SessionAllowListRemoveParams) => Promise<{ success: boolean }>
+    /** 这条会话的权限表（派生行先按此刻的设置对账；见 `sessionAcl.ts`） */
+    listAcl: (id: string) => Promise<AclEntry[]>
+    /** 手动授予一条路径（来源 user）；会话不在 / 路径不是绝对路径 → success: false */
+    grantAcl: (
+      params: SessionAclGrantParams
+    ) => Promise<{ success: boolean; entry: AclEntry | null }>
+    /** 改一行的访问方式（授予的行与工作目录那一行） */
+    setAclAccess: (params: SessionAclSetAccessParams) => Promise<{ success: boolean }>
+    /** 删一行（只有授予的行） */
+    removeAclEntry: (params: SessionAclRemoveParams) => Promise<{ success: boolean }>
     /**
      * 改扩展能力勾选（`settings.enabledTools`）。只在这条会话**没有** Agent 运行时的时候生效：
      * 运行时已存在 / 正在创建 / 正在关停都返回 `success: false`、什么也不写 —— 勾选只在

@@ -56,9 +56,12 @@ import {
   routeExternalUrl
 } from './services/externalOpen'
 import { widgetServer } from './services/widget'
+import { installWidgetFsKey } from './services/widget/widgetFsKey'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { cliServer } from './services/cliServer'
 import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
+import { setAclSkillRoots } from './services/acl'
+import { skillService } from './services/skillService'
 import { mdMetaStore } from './services/mdMeta'
 import { agentService } from './services/agentService'
 import { chromeBridge } from './services/chromeBridge'
@@ -909,6 +912,12 @@ app.whenReady().then(async () => {
   // 例外是 `openExternal` —— 它不是「页面要用某个能力」，而是页面导航到非网页协议、Electron 在问
   // 要不要把这个地址交给操作系统（准了由它自己交，不经 shell.openExternal）。那一档走同一道闸。
   // 注意：内置浏览器跑在独立 partition（BROWSER_PARTITION），权限策略由 initBrowserSession() 单独管理。
+  // widget 文件路由的密钥：widget 页面（独立窗口、面板里的 iframe 都在默认会话里）读它自己的文件路由时由
+  // 主进程补上，沙箱里的命令 curl 过去拿不到（见 services/widget/widgetFsKey.ts）
+  step('widget files key', () =>
+    installWidgetFsKey(session.defaultSession, () => widgetServer.getStatus().port)
+  )
+
   step('defaultSession permission handler', () =>
     session.defaultSession.setPermissionRequestHandler(
       (webContents, permission, callback, details) => {
@@ -988,6 +997,8 @@ app.whenReady().then(async () => {
   // 命令沙箱读开关的口子：模块本身不碰设置表（它在很多导入链上），由这里注入。
   // 没注入就是关闭 —— 只有真正起来的应用才套沙箱
   setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
+  // 会话权限表的技能目录行（acl 是独立模块，不反向依赖 skillService）
+  setAclSkillRoots(() => skillService.enabledSkillRoots())
   // md 扩展元数据：agent 档案的补缺值（模型 / 思考档位）读自 md_attrs 的内存快照。agentService 不直接依赖
   // 数据库（单测里没有库），由这里注入读口 —— 没注入就没有补缺，档案就是文件本身
   agentService.setMetaFill((objectId) => mdMetaStore.fillFor(objectId, 'agent'))

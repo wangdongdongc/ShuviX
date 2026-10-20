@@ -32,6 +32,7 @@ import type {
   SecurityRequest
 } from './types'
 import { recordDecision } from './decisionLog'
+import { matchesPathEntry } from './allowEntries'
 import { commandRiskOf } from './commandRisk'
 import {
   noteHumanFeedback,
@@ -383,8 +384,39 @@ export async function executeDecision(args: {
 
   const remember = !!response.extra?.rememberPath && !!decision.ask?.rememberEntry
   if (remember && request.object.type === 'path' && typeof request.object.path === 'string') {
-    provider.persistGrant?.(request.action === 'write' ? 'write' : 'read', request.object.path)
+    provider.persistGrant?.(
+      request.action === 'write' ? 'write' : 'read',
+      rememberTargetOf(provider, request.object.path, response.extra?.rememberPath)
+    )
   }
   record(remember ? 'allowed_remember' : 'allowed', true, review)
   return { status: 'allowed' }
+}
+
+/**
+ * 「允许并记住」记下哪条路径：缺省就是这次问的那条；卡片也可以点名它所在的某一级文件夹
+ * （`extra.rememberPath` 给一个字符串）—— 只认真包含这条路径的上级目录，而且不许是 `/`、不许覆盖家目录
+ * （一次点击把整个家目录记进会话权限表太容易点错）；不合格就退回这条路径本身。
+ */
+export function rememberTargetOf(
+  provider: Pick<SecurityHostProvider, 'pathSep' | 'getVars'>,
+  askedPath: string,
+  requested: unknown
+): string {
+  if (typeof requested !== 'string' || requested === '' || requested === askedPath) {
+    return askedPath
+  }
+  const sep = provider.pathSep
+  if (!matchesPathEntry(requested, askedPath, sep)) return askedPath
+  if (requested === '/' || /^[A-Za-z]:[\\/]?$/.test(requested)) return askedPath
+  let home: unknown
+  try {
+    home = provider.getVars().home
+  } catch {
+    return askedPath
+  }
+  if (typeof home !== 'string' || home === '' || matchesPathEntry(requested, home, sep)) {
+    return askedPath
+  }
+  return requested
 }

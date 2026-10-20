@@ -135,7 +135,10 @@ export const API_TABLE = {
     updateProject: invoke('session:updateProject', 1),
     updateEnabledTools: invoke('session:updateEnabledTools', 1),
     updateKnowledgeBases: invoke('session:updateKnowledgeBases', 1),
-    removeAllowListEntry: invoke('session:removeAllowListEntry', 1),
+    listAcl: invoke('session:listAcl', 1),
+    grantAcl: invoke('session:grantAcl', 1),
+    setAclAccess: invoke('session:setAclAccess', 1),
+    removeAclEntry: invoke('session:removeAclEntry', 1),
     fork: invoke('session:fork', 1),
     delete: invoke('session:delete', 1),
     getById: invoke('session:getById', 1)

@@ -2,7 +2,7 @@
  * createFileToolSuite 的询问接线单测 —— 内存 port + 可编程 SecurityHostProvider（requestUserInput 是 spy）。
  *
  * 关注点在「工具壳怎么问」：写类工具把询问推迟到 apply 层（一次调用只弹一张带 diff 预览的卡），
- * 放行短路（家目录外的读 / allowList —— 出厂外部目录门 match 里的豁免，经统一评估）逐层生效，
+ * 放行短路（家目录外的读 / 会话权限表里的授权 —— 出厂外部目录门 match 里的豁免，经统一评估）逐层生效，
  * 以及 InputResponse 判别联合的五个分支。
  *
  * 组 7（SYM）问的是门之前的那一步：路径本身是符号链接（port.readLink 答非 null）就不跟 —— 抛一句
@@ -94,8 +94,11 @@ const allowEntry = (mode: AccessMode, p: string): string =>
 
 interface SuiteOptions {
   files?: Record<string, string>
-  /** 会话 allowList 条目（`Read(...)` / `Write(...)` 字面值；默认空） */
-  allowList?: string[]
+  /**
+   * 会话里「允许并记住」过的路径（默认都空）：宿主把它们并进权限表交给策略 —— 写授权进 aclRead 与
+   * aclWrite（写隐含读），读授权只进 aclRead
+   */
+  grants?: { read?: string[]; write?: string[] }
   /** 不传 = 无询问通道（模拟无前端） */
   respond?: (req: InputRequest) => InputResponse | Promise<InputResponse>
   abortError?: string
@@ -227,9 +230,11 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
       (e: { portPath: string; kind: 'write' | 'edit' }, call: ToolCallScope | undefined) => void
     >()
 
-  // 桌面口径的 provider：workspace={{ROOT}}；会话目录刻意给空 —— 出厂外部目录门（ask-on-external-path）
-  // 于是对每一次写都问（#1），家目录 /fake-home 里的读也问（#0），工作区 /ws 在家目录外、读放行；
-  // allowList 是外部目录门 match 里的豁免
+  // 桌面口径的 provider：workspace={{ROOT}}；权限表里派生的行刻意给空、只有授权 —— 出厂外部目录门
+  // （ask-on-external-path）于是对每一次没授权的写都问（#1），家目录 /fake-home 里的读也问（#0），
+  // 工作区 /ws 在家目录外、读放行；授权是表里的行、外部目录门 match 里的豁免
+  const readGrants = opts.grants?.read ?? []
+  const writeGrants = opts.grants?.write ?? []
   const provider: SecurityHostProvider = {
     host: 'desktop',
     pathSep: '/',
@@ -241,11 +246,10 @@ function makeSuite(opts: SuiteOptions = {}): SuiteHarness {
       knowledgeSessionDirs: opts.knowledgeSessionDirs ?? [],
       home: '/fake-home',
       systemDirs: [],
-      sessionDirs: [],
-      sessionReadDirs: []
+      aclRead: [...readGrants, ...writeGrants],
+      aclWrite: [...writeGrants]
     }),
     readBuiltinPolicyMd: INLINE_POLICY_MD,
-    getSessionGrants: () => ({ allowList: opts.allowList ?? [] }),
     isDirectory: () => false,
     persistGrant,
     requestUserInput,
@@ -374,7 +378,7 @@ describe('文件工具套件 — 放行短路', () => {
   })
 
   it('PERM-3: 会话授权（整个工作目录「允许并记住」过）→ 不弹窗、照常写入、details.diff 仍完整', async () => {
-    const h = makeSuite({ allowList: [`Write(${ROOT})`], respond: allowed })
+    const h = makeSuite({ grants: { write: [ROOT] }, respond: allowed })
     const res = await executeTool(h.suite.write, 'w2', { path: INSIDE, content: 'one\ntwo\n' })
 
     expect(h.requestUserInput).not.toHaveBeenCalled()
@@ -384,16 +388,16 @@ describe('文件工具套件 — 放行短路', () => {
     expect(details.isNewFile).toBe(true)
   })
 
-  it('PERM-4: allowList 命中 Write(abs) → 不弹窗', async () => {
-    const h = makeSuite({ allowList: [`Write(${INSIDE_ABS})`], respond: allowed })
+  it('PERM-4: 权限表里有这个文件的写授权 → 不弹窗', async () => {
+    const h = makeSuite({ grants: { write: [INSIDE_ABS] }, respond: allowed })
     await executeTool(h.suite.write, 'w3', { path: INSIDE, content: 'hi\n' })
 
     expect(h.requestUserInput).not.toHaveBeenCalled()
     expect(h.files.get(INSIDE_ABS)).toBe('hi\n')
   })
 
-  it('PERM-4: 只有 Read(abs) 条目时 write 仍弹窗（读权限不隐含写权限）', async () => {
-    const h = makeSuite({ allowList: [`Read(${INSIDE_ABS})`], respond: allowed })
+  it('PERM-4: 只有这个文件的读授权时 write 仍弹窗（读权限不隐含写权限）', async () => {
+    const h = makeSuite({ grants: { read: [INSIDE_ABS] }, respond: allowed })
     await executeTool(h.suite.write, 'w4', { path: INSIDE, content: 'hi\n' })
 
     expect(h.requestUserInput).toHaveBeenCalledTimes(1)
@@ -544,7 +548,7 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
     const actor = vi.fn(() => 'shuvix-work/m1')
     // 会话授权下无需通道即可写（知识库上已无任何内置策略，写入只有外部目录门一道）
     const h = makeSuite({
-      allowList: ['Write(/kb)', `Write(${ROOT})`],
+      grants: { write: ['/kb', ROOT] },
       knowledgeSessionDirs: ['/kb/sessions'],
       // 宿主答「这份文件属于哪个 bundle、在它里面是什么相对路径」；bundle 外返回 null
       knowledge: { locate: (p) => (p.startsWith('/kb/') ? p.slice('/kb/'.length) : null), actor }
@@ -576,7 +580,7 @@ describe('文件工具套件 — OKF 知识库写钩子（deps.knowledge）', ()
   })
 
   it('FS-2 不注入 deps.knowledge：同一文件只是普通 markdown（不盖章、无回执）', async () => {
-    const h = makeSuite({ allowList: ['Write(/kb)'], knowledgeSessionDirs: ['/kb/sessions'] })
+    const h = makeSuite({ grants: { write: ['/kb'] }, knowledgeSessionDirs: ['/kb/sessions'] })
     const res = await executeTool(h.suite.write, 'k1', {
       path: '/kb/sessions/x.md',
       content: DRAFT
@@ -776,10 +780,10 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     expect(suggestSimilar).toHaveBeenCalledTimes(1)
   })
 
-  it('SYM-7 会话授权跳不过这一条：allowList（链接与 R 的 Read / Write 条目都在，或两头的整个目录都授权过）下 read / write / edit 照样拒，一个字节都不动', async () => {
-    const grantCases: Array<Pick<SuiteOptions, 'allowList'>> = [
-      { allowList: ['Read(/ws/key)', 'Write(/ws/key)', `Read(${KEY_REAL})`, `Write(${KEY_REAL})`] },
-      { allowList: [`Write(${ROOT})`, 'Write(/fake-home)'] }
+  it('SYM-7 会话授权跳不过这一条：权限表里（链接与 R 的读写授权都在，或两头的整个目录都授权过）read / write / edit 照样拒，一个字节都不动', async () => {
+    const grantCases: Array<Pick<SuiteOptions, 'grants'>> = [
+      { grants: { read: ['/ws/key', KEY_REAL], write: ['/ws/key', KEY_REAL] } },
+      { grants: { write: [ROOT, '/fake-home'] } }
     ]
     for (const grants of grantCases) {
       const label = JSON.stringify(grants)
@@ -1253,7 +1257,7 @@ describe('文件工具套件 — 知识库条目的覆盖保护（knowledge.loca
     const actor = vi.fn((_call: ToolCallScope | undefined) => 'shuvix-work/m1')
     const h = makeSuite({
       files: { [KB_FILE]: THEIRS },
-      allowList: ['Write(/kb)', 'Write(/ws)'],
+      grants: { write: ['/kb', '/ws'] },
       respond: allowed,
       knowledge: { locate, actor },
       ...extra
@@ -1303,7 +1307,7 @@ describe('文件工具套件 — 知识库条目的覆盖保护（knowledge.loca
   it('WO-4 回归：库外既有、没读过的文件照旧写入（没有授权时照常一张卡）', async () => {
     const h = kbSuite({
       files: { [KB_FILE]: THEIRS, '/ws/notes.md': 'old\n' },
-      allowList: ['Write(/kb)']
+      grants: { write: ['/kb'] }
     })
     const res = await executeTool(h.suite.write, 'wo4', { path: '/ws/notes.md', content: 'new\n' })
     expect(res.isError).toBeFalsy()
@@ -1312,7 +1316,7 @@ describe('文件工具套件 — 知识库条目的覆盖保护（knowledge.loca
   })
 
   it('WO-5 回归：不注入 deps.knowledge（扩展端）→ /kb 下没读过的既有文件照样覆盖', async () => {
-    const h = makeSuite({ files: { [KB_FILE]: THEIRS }, allowList: ['Write(/kb)'] })
+    const h = makeSuite({ files: { [KB_FILE]: THEIRS }, grants: { write: ['/kb'] } })
     const res = await executeTool(h.suite.write, 'wo5', { path: KB_FILE, content: ENTRY })
     expect(res.isError).toBeFalsy()
     expect(h.files.get(KB_FILE)).toBe(ENTRY)
@@ -1324,7 +1328,7 @@ describe('文件工具套件 — 知识库条目的覆盖保护（knowledge.loca
     )
     const h = makeSuite({
       files: { '/ws/kb2/a.md': THEIRS },
-      allowList: ['Write(/ws)'],
+      grants: { write: ['/ws'] },
       knowledge: { locate: spyLocate, actor: () => 'shuvix-work/m1' }
     })
     const msg = await failureText(
@@ -1339,7 +1343,7 @@ describe('文件工具套件 — 知识库条目的覆盖保护（knowledge.loca
 
   it('WO-7 拒绝发生在询问之前：会被用户拒的那张卡根本没机会弹，报的是覆盖保护那句', async () => {
     const h = kbSuite({
-      allowList: [],
+      grants: {},
       respond: () => ({ kind: 'ask', allowed: false })
     })
     const msg = await failureText(
@@ -1475,7 +1479,7 @@ describe('文件工具套件 — writeFileContent', () => {
   beforeEach(() => clearSessionDecisions(SID))
 
   it('WFC-1 与 write 工具同一结果：同样的字节、同样的 details、`Wrote N bytes to <展示路径>`；回执单独交回（write 工具才把它接在结果文字后面）', async () => {
-    const h = makeSuite({ allowList: [`Write(${ROOT})`] })
+    const h = makeSuite({ grants: { write: [ROOT] } })
     const viaTool = await executeTool(h.suite.write, 'wfc1', { path: 'a.md', content: MEMORY })
     const direct = await writeFileContent(
       h.deps,
@@ -1514,7 +1518,7 @@ describe('文件工具套件 — writeFileContent', () => {
   })
 
   it('WFC-3 onFileChange 恰一次：({portPath, kind: write}, 调用方给的 call)，在写后处理回写之后', async () => {
-    const h = makeSuite({ allowList: [`Write(${ROOT})`] })
+    const h = makeSuite({ grants: { write: [ROOT] } })
     let seen: string | undefined
     h.onFileChange.mockImplementation(({ portPath }) => {
       seen = h.files.get(portPath)
@@ -1531,7 +1535,7 @@ describe('文件工具套件 — writeFileContent', () => {
   it('WFC-4 不问 refuseWrite、不看符号链接（调用方写的是它自己认定的文件）', async () => {
     const refuseWrite = vi.fn((_p: string): string | null => 'refused')
     const h = makeSuite({
-      allowList: [`Write(${ROOT})`],
+      grants: { write: [ROOT] },
       refuseWrite,
       links: { '/ws/doc.md': { target: '/elsewhere.md', resolved: '/elsewhere.md' } }
     })
@@ -1564,7 +1568,7 @@ describe('文件工具套件 — writeFileContent', () => {
     }
     const h = makeSuite({
       files: { [KB]: 'theirs\n' },
-      allowList: ['Write(/kb)'],
+      grants: { write: ['/kb'] },
       knowledge
     })
     await expect(
@@ -1623,7 +1627,7 @@ describe('文件工具套件 — 宿主的 writtenNote', () => {
     const note = vi.fn((p: string, text: string) =>
       text.includes('NOTE-ME') ? `HOST NOTE for ${p}` : null
     )
-    const h = makeSuite({ allowList: [`Write(${ROOT})`], writtenNote: note })
+    const h = makeSuite({ grants: { write: [ROOT] }, writtenNote: note })
 
     const res = await executeTool(h.suite.write, 'n1', {
       path: `${ROOT}/a.md`,
@@ -1650,7 +1654,7 @@ describe('文件工具套件 — 宿主的 writtenNote', () => {
     expect(note).not.toHaveBeenCalled()
 
     const throwing = makeSuite({
-      allowList: [`Write(${ROOT})`],
+      grants: { write: [ROOT] },
       writtenNote: () => {
         throw new Error('boom')
       }

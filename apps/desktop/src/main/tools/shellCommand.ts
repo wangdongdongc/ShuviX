@@ -29,13 +29,13 @@ import type { BashToolDetails, ShellSandboxState } from '@shuvix/chat-protocol/t
 import { collapseProgressOutput, type ShellKind } from '../utils/toolUtils/shell'
 import {
   getDesktopSecurityContext,
-  getSessionPathGrants,
-  sessionDirExtras,
   resolveProjectConfig,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
 import { planFor, whyUnconfined, type SandboxPlan } from '../services/sandbox'
+import { sessionAcl } from '../services/acl'
+import { CLI_SESSION_KEY_ENV, cliSessionKey } from '../services/cliSession'
 import {
   runCommand,
   runningBackgroundTasks,
@@ -206,10 +206,9 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
         ? planFor({
             sessionId: this.ctx.sessionId,
             workingDirectory: config.workingDirectory,
-            // 「允许并记住」的读 / 写授权、会话勾选的知识库与技能目录在沙箱里同样生效
-            // （与外部目录访问策略同一个来源）
-            ...getSessionPathGrants(this.ctx.sessionId),
-            extras: sessionDirExtras(this.ctx.sessionId),
+            // 会话权限表：工作目录、会话目录、勾选的知识库与技能目录、「允许并记住」的授权在沙箱里
+            // 同样生效（与外部目录访问策略同一个来源）
+            entries: sessionAcl.sandboxEntries(this.ctx.sessionId),
             offerEscalation: true
           })
         : null
@@ -259,9 +258,13 @@ export class ShellCommandTool extends BaseTool<ShellCommandParamsSchema> {
       }
     }
 
-    // 注入 SHUVIX_SESSION_ID，让 shuvix-cli 把当前 session id 透传给主进程
-    // （主进程据此把 widget 目录加入 session 的 read/write allowList）
-    const extraEnv = { ...config.envVars, SHUVIX_SESSION_ID: this.ctx.sessionId }
+    // 注入 SHUVIX_SESSION_ID 与配对的 SHUVIX_SESSION_KEY，让 shuvix-cli 把当前会话交给主进程核对
+    // （主进程据此把 widget 目录记进会话权限表、停本会话的后台任务…；只报 id 不算数，见 cliSession.ts）
+    const extraEnv = {
+      ...config.envVars,
+      SHUVIX_SESSION_ID: this.ctx.sessionId,
+      [CLI_SESSION_KEY_ENV]: cliSessionKey(this.ctx.sessionId)
+    }
 
     if (params.run_in_background) {
       return this.runInBackground(

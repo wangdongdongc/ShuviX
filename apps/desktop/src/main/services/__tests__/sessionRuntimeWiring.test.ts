@@ -106,7 +106,12 @@ vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: mocks.broadcast }
 }))
 vi.mock('../artifacts/store', () => ({ deleteSessionArtifacts: vi.fn() }))
-vi.mock('../sandbox', () => ({ cleanupSession: vi.fn() }))
+// 会话权限表（services/acl）的派生行要「会话自己的目录」：这里一个都不派生（表是空的，不在这组用例里）
+vi.mock('../sandbox', () => ({
+  cleanupSession: vi.fn(),
+  sessionOwnDirsView: () => null,
+  settingDirForAcl: () => null
+}))
 vi.mock('../hookService', () => ({
   hookTriggers: { fire: mocks.fire },
   hookService: { abortSessionRuns: mocks.abortSessionRuns }

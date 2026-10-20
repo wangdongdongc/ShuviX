@@ -1,30 +1,37 @@
 /**
- * 沙箱规格（spec.ts）—— 纯函数：会话 → 会话目录清单 → 规格。
+ * 沙箱规格（spec.ts）—— 纯函数：会话自己的目录 + 会话权限表的路径行 → 规格。
  *
  * 2026-10-01 起沙箱只做一件事：把命令的文件访问收进本会话的目录。没有放行清单（包缓存、/tmp）、
- * 没有围栏（git 元数据、~/.shuvix、凭据清单）——这里钉住剩下的全部：
+ * 没有围栏（git 元数据、~/.shuvix、凭据清单）。可读可写的范围就是会话权限表（services/acl）交进来的
+ * 行（`entries`）：派生的（工作目录、会话自己的三个目录、勾选的知识库、技能目录 —— 宿主按会话设置算好）
+ * 与授予的（「允许并记住」、手动添加、widget 目录）。这里钉住剩下的全部：
  *
- *  - SP-1 哪些会话不套沙箱：坏会话 id；工作目录与**每个写授权**过同一套判定（覆盖家目录、是 ShuviX
+ *  - SP-1 哪些会话不套沙箱：坏会话 id；工作目录与**每个授予的写**过同一套判定（覆盖家目录、是 ShuviX
  *    自己的配置、在应用数据里、**包含** ShuviX 的配置或应用数据）；以及原因的先后。应用数据里只有
  *    「本会话可用的那个临时工作区」例外 —— 工作目录**正是**某条会话的临时工作区（`temp_workspace/<id>`
  *    文件夹本身：临时会话的 fork 共用源会话的）就是它，否则是本会话自己的；它里面的子目录、
- *    `temp_workspace` 本身、同前缀的兄弟都不算，写授权也只按这一个判（两种布局都钉）；
- *  - SP-2 套得上的工作目录与授权（按路径段边界判；读授权不过这套判定）；工作目录正是别的会话的临时
- *    工作区时套得上，它里面的写授权也套得上；
- *  - SP-3 会话目录清单（sessionDirsFor）：工作目录、本会话临时目录、artifacts、工具结果；
- *    工作目录不适合时它不在清单里；坏 id 没有清单；工作目录是别的会话的临时工作区时其余三项
- *    仍是本会话自己的，本会话自己的临时工作区与第三个会话的不在清单里；
- *  - SP-3x 会话设置带来的目录（extras，宿主现算：勾选的知识库可读写，技能目录 / 内置知识库只读）：
- *    realpath、去重、空串 / `/` / 覆盖家目录的丢掉，只读的里去掉已在读写清单里的；
- *  - SP-4 规格的各个字段：可读根 = 会话目录 + 只读会话目录 + 写授权 + 读授权 + ShuviX 自己的程序，
- *    可写根 = 会话目录 + 写授权，可读文件只有 cli-token，socket；
+ *    `temp_workspace` 本身、同前缀的兄弟都不算，授予的写也只按这一个判（两种布局都钉）；派生的行不过这套
+ *    判定（本会话的工具结果就在应用数据里）；
+ *  - SP-2 套得上的工作目录与授予的行（按路径段边界判；授予的读不过这套判定）；工作目录正是别的会话的
+ *    临时工作区时套得上，它里面的授予的写也套得上；
+ *  - SP-3 会话自己的目录（sessionOwnDirs，权限表 workdir / system 行的来源）：工作目录（不适合时为 null
+ *    并说明原因）、本会话临时目录、artifacts、工具结果；坏 id 没有（null）；工作目录是别的会话的临时
+ *    工作区时其余三项仍是本会话自己的，本会话自己的临时工作区与第三个会话的不在里面；
+ *  - SP-3x 会话设置带来的目录（acceptableSettingDir，权限表 knowledge / skill 行的写法）：realpath；
+ *    空串、`/`、覆盖家目录的 → null；
+ *  - SP-3e 规格怎么用权限表的行：可读根 = 全部行 + 本会话临时目录 + ShuviX 自己的程序，可写根 = 可写的行
+ *    + 本会话临时目录（恒在）；只读的行（技能、内置知识库、改成只读的工作目录）可读不可写（只读的工作目录也不放
+ *    socket）；不在表里的工作目录不可读写；空路径的行丢掉；覆盖家目录的**派生**行丢掉（防御）；去重（写隐含读）；
+ *  - SP-4 规格的各个字段：可读根 = 派生行 + 授予的写 + 授予的读 + ShuviX 自己的程序，可写根 = 可写的派生行
+ *    + 授予的写，可读文件只有 cli-token，socket；
  *  - SP-5 上级目录的元数据（metadataPaths）：家目录里可读根 / 可读文件 / CLI socket 的每一级上级，到家目录为止；
- *  - SP-6 `real` 在一切判断之前应用（认临时工作区归谁也在解析之后：链接按指向、`..` 先规范化）；
+ *  - SP-6 `real` 在一切判断之前应用（行的路径也是；认临时工作区归谁也在解析之后：链接按指向、`..` 先规范化）；
  *  - SP-7 isWithin 按路径段边界比。
  *
  * 夹具宿主：home=/Users/u，userData 在 ~/Library/Application Support/ShuviX，工具结果在 userData/tool_results，
  * 工作目录 /Users/u/proj，ShuviX 自己的程序在 /Applications/ShuviX.app（打包后的布局，家目录以外）；
- * e2e 布局把假 HOME 放在 /private/tmp 下。
+ * e2e 布局把假 HOME 放在 /private/tmp 下。权限表的派生行照 acl/derive.ts 的写法从 sessionOwnDirs 算
+ * （{@link ownRows}）。
  */
 import { createHash } from 'crypto'
 import { resolve } from 'path'
@@ -33,9 +40,16 @@ import { describe, expect, it, vi } from 'vitest'
 // spec.ts → utils/paths 会连带 import electron（只在调用时才用 app）
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', isPackaged: false } }))
 
-import { buildSandboxSpec, isWithin, sessionDirsFor, sessionTmpName } from '../spec'
+import {
+  acceptableSettingDir,
+  buildSandboxSpec,
+  isWithin,
+  sessionOwnDirs,
+  sessionTmpName,
+  type SessionOwnDirs
+} from '../spec'
 import { MDNS_RESPONDER_SOCKET } from '../tables'
-import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
+import type { SandboxHostPaths, SandboxPathEntry, SandboxSessionInput, SandboxSpec } from '../types'
 
 const HOME = '/Users/u'
 const USER_DATA = '/Users/u/Library/Application Support/ShuviX'
@@ -76,33 +90,96 @@ const E2E_PATHS: SandboxHostPaths = {
 
 const identity = (p: string): string => p
 
-function input(over: Partial<SandboxSessionInput> = {}): SandboxSessionInput {
+/** 权限表的一行：派生的（宿主按会话设置算的）与授予的（「允许并记住」、手动添加、widget） */
+const derivedW = (path: string): SandboxPathEntry => ({ path, access: 'write', granted: false })
+const derivedR = (path: string): SandboxPathEntry => ({ path, access: 'read', granted: false })
+const grantW = (path: string): SandboxPathEntry => ({ path, access: 'write', granted: true })
+const grantR = (path: string): SandboxPathEntry => ({ path, access: 'read', granted: true })
+
+/**
+ * 照 acl/derive.ts 的派生：工作目录（适合时）与会话自己的三个目录，都可写；算不出来（坏 id）一行都没有
+ */
+function ownRows(own: SessionOwnDirs | null): SandboxPathEntry[] {
+  if (!own) return []
+  return [
+    ...(own.workdir ? [derivedW(own.workdir)] : []),
+    derivedW(own.tmp),
+    derivedW(own.artifacts),
+    derivedW(own.toolResults)
+  ]
+}
+
+/** 一条会话的测试写法：工作目录与会话自己的派生行自动算；其余的行按给的顺序接在后面 */
+interface Arrange {
+  sessionId?: string
+  workingDirectory?: string
+  /** 其余派生行（勾选的知识库可写；技能目录、内置知识库只读） */
+  derived?: SandboxPathEntry[]
+  /** 授予的写 / 读（接在派生行后面，写在读前面） */
+  grantWrite?: string[]
+  grantRead?: string[]
+}
+
+function input(
+  over: Arrange = {},
+  paths: SandboxHostPaths = PATHS,
+  real: (p: string) => string = identity
+): SandboxSessionInput {
+  const sessionId = over.sessionId ?? SID
+  const workingDirectory = over.workingDirectory ?? WS
   return {
-    sessionId: SID,
-    workingDirectory: WS,
-    grantedRead: [],
-    grantedWrite: [],
-    ...over
+    sessionId,
+    workingDirectory,
+    entries: [
+      ...ownRows(sessionOwnDirs(paths, { sessionId, workingDirectory }, real)),
+      ...(over.derived ?? []),
+      ...(over.grantWrite ?? []).map(grantW),
+      ...(over.grantRead ?? []).map(grantR)
+    ]
   }
 }
 
 function build(
-  over: Partial<SandboxSessionInput> = {},
+  over: Arrange = {},
   paths: SandboxHostPaths = PATHS,
   real: (p: string) => string = identity
 ): ReturnType<typeof buildSandboxSpec> {
-  return buildSandboxSpec(paths, input(over), real)
+  return buildSandboxSpec(paths, input(over, paths, real), real)
 }
 
 /** 必须套得上的会话：返回规格 */
 function specOf(
-  over: Partial<SandboxSessionInput> = {},
+  over: Arrange = {},
   paths: SandboxHostPaths = PATHS,
   real: (p: string) => string = identity
 ): SandboxSpec {
   const result = build(over, paths, real)
   if (!result.ok) throw new Error(`expected ok, got: ${result.reason}`)
   return result.spec
+}
+
+/** 行原样交进去（不自动派生）：必须套得上 */
+function specOfEntries(
+  entries: SandboxPathEntry[],
+  paths: SandboxHostPaths = PATHS,
+  real: (p: string) => string = identity
+): SandboxSpec {
+  const result = buildSandboxSpec(paths, { sessionId: SID, workingDirectory: WS, entries }, real)
+  if (!result.ok) throw new Error(`expected ok, got: ${result.reason}`)
+  return result.spec
+}
+
+/** 本会话自己的目录（不给的取夹具默认） */
+function ownOf(
+  over: { sessionId?: string; workingDirectory?: string } = {},
+  paths: SandboxHostPaths = PATHS,
+  real: (p: string) => string = identity
+): SessionOwnDirs | null {
+  return sessionOwnDirs(
+    paths,
+    { sessionId: over.sessionId ?? SID, workingDirectory: over.workingDirectory ?? WS },
+    real
+  )
 }
 
 const h = (rel: string, home = HOME): string => `${home}/${rel}`
@@ -115,7 +192,7 @@ const TEMP_WS = `${TEMP_BASE}/${SID}`
 const OTHER_WS = `${TEMP_BASE}/OTHER`
 /** 第三个会话的临时工作区 */
 const THIRD_WS = `${TEMP_BASE}/THIRD`
-/** 正常工作目录下本会话的会话目录（顺序即实现的顺序） */
+/** 正常工作目录下本会话派生的四行（顺序即 derive.ts 的顺序） */
 const SESSION_DIRS = [WS, TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID]
 const APP_DATA_WS = "working directory is inside ShuviX's application data"
 const APP_DATA_GRANT = "a write grant is inside ShuviX's application data"
@@ -137,7 +214,7 @@ function tempWorkspacesOf(paths: SandboxHostPaths): {
   return { base, own: `${base}/${SID}`, other: `${base}/OTHER`, third: `${base}/THIRD` }
 }
 
-/** 某个布局下本会话的临时目录、artifacts、工具结果（会话目录清单里工作目录之后的三项） */
+/** 某个布局下本会话的临时目录、artifacts、工具结果（会话自己的目录里工作目录之外的三项） */
 function ownSessionDirsOf(paths: SandboxHostPaths): string[] {
   return [
     `${paths.tmpRoot}/${sessionTmpName(SID)}`,
@@ -151,7 +228,7 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
   const CONFIG = "is ShuviX's own configuration"
   const APP_DATA = "is inside ShuviX's application data"
   const CONTAINS = "contains ShuviX's own configuration or application data"
-  const cases: Array<[string, Partial<SandboxSessionInput>, string]> = [
+  const cases: Array<[string, Arrange, string]> = [
     ['会话 id 为空', { sessionId: '' }, 'unsafe session id'],
     ['会话 id 是 ..', { sessionId: '..' }, 'unsafe session id'],
     ['会话 id 是 .', { sessionId: '.' }, 'unsafe session id'],
@@ -185,7 +262,7 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
       `working directory ${APP_DATA}`
     ],
     [
-      '工作目录是本会话的工具结果（它是会话目录，但当不了工作目录）',
+      '工作目录是本会话的工具结果（它是会话自己的目录，但当不了工作目录）',
       { workingDirectory: TOOL_RESULTS_SID },
       `working directory ${APP_DATA}`
     ],
@@ -194,7 +271,7 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
       { workingDirectory: `${USER_DATA}/temp_workspace` },
       `working directory ${APP_DATA}`
     ],
-    // 「包含」：数据库里有沙箱开关与「允许并记住」，命令改得到它们就等于出得了沙箱
+    // 「包含」：数据库里有沙箱开关与会话权限表，命令改得到它们就等于出得了沙箱
     [
       '工作目录是 ~/Library（包含 userData）',
       { workingDirectory: h('Library') },
@@ -205,40 +282,45 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
       { workingDirectory: h('Library/Application Support') },
       `working directory ${CONTAINS}`
     ],
-    // 写授权：每一个都过同一套判定
-    ['写授权是 /', { grantedWrite: ['/'] }, `a write grant ${COVERS}`],
-    ['写授权是家目录', { grantedWrite: [HOME] }, `a write grant ${COVERS}`],
-    ['写授权是 /Users', { grantedWrite: ['/Users'] }, `a write grant ${COVERS}`],
-    ['写授权是 ~/.shuvix', { grantedWrite: [SHUVIX] }, `a write grant ${CONFIG}`],
+    // 授予的写：每一个都过同一套判定
+    ['授予的写是 /', { grantWrite: ['/'] }, `a write grant ${COVERS}`],
+    ['授予的写是家目录', { grantWrite: [HOME] }, `a write grant ${COVERS}`],
+    ['授予的写是 /Users', { grantWrite: ['/Users'] }, `a write grant ${COVERS}`],
+    ['授予的写是 ~/.shuvix', { grantWrite: [SHUVIX] }, `a write grant ${CONFIG}`],
     [
-      '写授权在 ~/.shuvix/policies 里',
-      { grantedWrite: [`${SHUVIX}/policies`] },
+      '授予的写在 ~/.shuvix/policies 里',
+      { grantWrite: [`${SHUVIX}/policies`] },
       `a write grant ${CONFIG}`
     ],
     [
-      '写授权是 ~/.shuvix/agents 里的一个文件',
-      { grantedWrite: [`${SHUVIX}/agents/x.md`] },
+      '授予的写是 ~/.shuvix/agents 里的一个文件',
+      { grantWrite: [`${SHUVIX}/agents/x.md`] },
       `a write grant ${CONFIG}`
     ],
-    ['写授权在 userData 里', { grantedWrite: [`${USER_DATA}/data`] }, `a write grant ${APP_DATA}`],
+    ['授予的写在 userData 里', { grantWrite: [`${USER_DATA}/data`] }, `a write grant ${APP_DATA}`],
     [
-      '写授权是别的会话的临时工作区',
-      { grantedWrite: [`${USER_DATA}/temp_workspace/OTHER`] },
+      '授予的写是别的会话的临时工作区',
+      { grantWrite: [`${USER_DATA}/temp_workspace/OTHER`] },
       `a write grant ${APP_DATA}`
     ],
     [
-      '写授权是 ~/Library（包含 userData）',
-      { grantedWrite: [h('Library')] },
+      '授予的写是本会话的工具结果（同一个目录作为派生行就可写，见下一条用例）',
+      { grantWrite: [TOOL_RESULTS_SID] },
+      `a write grant ${APP_DATA}`
+    ],
+    [
+      '授予的写是 ~/Library（包含 userData）',
+      { grantWrite: [h('Library')] },
       `a write grant ${CONTAINS}`
     ],
     [
-      '写授权是 ~/Library/Application Support',
-      { grantedWrite: [h('Library/Application Support')] },
+      '授予的写是 ~/Library/Application Support',
+      { grantWrite: [h('Library/Application Support')] },
       `a write grant ${CONTAINS}`
     ],
     [
-      '几个写授权里只要有一个不合适',
-      { grantedWrite: ['/Volumes/data', `${SHUVIX}/widgets/w`, `${SHUVIX}/hooks`] },
+      '几个授予的写里只要有一个不合适',
+      { grantWrite: ['/Volumes/data', `${SHUVIX}/widgets/w`, `${SHUVIX}/hooks`] },
       `a write grant ${CONFIG}`
     ]
   ]
@@ -248,11 +330,23 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
     expect(!result.ok && result.reason).toBe(reason)
   })
 
+  it('SP-1 派生的行不过这套判定：本会话的工具结果在应用数据里、artifacts 在 ~/.shuvix 里，作为派生行都可写', () => {
+    const spec = specOf()
+    expect(spec.writableRoots).toContain(TOOL_RESULTS_SID)
+    expect(spec.writableRoots).toContain(ARTIFACTS)
+    // 派生的写行在应用数据里也不拒（宿主按会话设置算的，见 types.ts 的 SandboxPathEntry.granted）
+    expect(specOfEntries([derivedW(WS), derivedW(TOOL_RESULTS_SID)]).writableRoots).toEqual([
+      WS,
+      TOOL_RESULTS_SID,
+      TMP_DIR
+    ])
+  })
+
   /**
    * 临时会话的 fork 共用源会话的临时工作区：只认 `temp_workspace/<安全的会话 id>` 文件夹本身；
-   * 写授权按本会话实际用的那一个临时工作区判（工作目录是别的会话的，就是那一个，本会话自己的也不算）
+   * 授予的写按本会话实际用的那一个临时工作区判（工作目录是别的会话的，就是那一个，本会话自己的也不算）
    */
-  function forkCases(p: SandboxHostPaths): Array<[string, Partial<SandboxSessionInput>, string]> {
+  function forkCases(p: SandboxHostPaths): Array<[string, Arrange, string]> {
     const t = tempWorkspacesOf(p)
     return [
       [
@@ -273,34 +367,34 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
         APP_DATA_WS
       ],
       [
-        '工作目录是项目目录、写授权是别的会话的临时工作区',
-        { workingDirectory: `${p.home}/proj`, grantedWrite: [t.other] },
+        '工作目录是项目目录、授予的写是别的会话的临时工作区',
+        { workingDirectory: `${p.home}/proj`, grantWrite: [t.other] },
         APP_DATA_GRANT
       ],
       [
-        '工作目录是本会话的临时工作区、写授权是别的会话的',
-        { workingDirectory: t.own, grantedWrite: [t.other] },
+        '工作目录是本会话的临时工作区、授予的写是别的会话的',
+        { workingDirectory: t.own, grantWrite: [t.other] },
         APP_DATA_GRANT
       ],
       [
-        '工作目录是别的会话的临时工作区、写授权是第三个会话的',
-        { workingDirectory: t.other, grantedWrite: [t.third] },
+        '工作目录是别的会话的临时工作区、授予的写是第三个会话的',
+        { workingDirectory: t.other, grantWrite: [t.third] },
         APP_DATA_GRANT
       ],
       [
-        '工作目录是别的会话的临时工作区、写授权是 temp_workspace 本身',
-        { workingDirectory: t.other, grantedWrite: [t.base] },
+        '工作目录是别的会话的临时工作区、授予的写是 temp_workspace 本身',
+        { workingDirectory: t.other, grantWrite: [t.base] },
         APP_DATA_GRANT
       ],
       [
-        '工作目录是别的会话的临时工作区、写授权是 userData/data',
-        { workingDirectory: t.other, grantedWrite: [`${p.userData}/data`] },
+        '工作目录是别的会话的临时工作区、授予的写是 userData/data',
+        { workingDirectory: t.other, grantWrite: [`${p.userData}/data`] },
         APP_DATA_GRANT
       ],
       [
         // 钉住现状：只认工作目录用的那一个临时工作区，本会话自己的那个此时也算应用数据
-        '工作目录是别的会话的临时工作区、写授权是本会话自己的临时工作区',
-        { workingDirectory: t.other, grantedWrite: [t.own] },
+        '工作目录是别的会话的临时工作区、授予的写是本会话自己的临时工作区',
+        { workingDirectory: t.other, grantWrite: [t.own] },
         APP_DATA_GRANT
       ]
     ]
@@ -323,27 +417,39 @@ describe('SP-1 不套沙箱的会话：一律 {ok:false} 并说明原因', () =>
     }
     const ws = build({ workingDirectory: '/Volumes/cfg' }, moved)
     expect(!ws.ok && ws.reason).toBe(`working directory ${CONTAINS}`)
-    const grant = build({ grantedWrite: ['/Volumes'] }, moved)
+    const grant = build({ grantWrite: ['/Volumes'] }, moved)
     expect(!grant.ok && grant.reason).toBe(`a write grant ${CONTAINS}`)
     // 同一个目录在默认布局里不包含任何东西
     expect(build({ workingDirectory: '/Volumes/cfg' }).ok).toBe(true)
   })
 
-  it('SP-1 原因的先后：坏会话 id 先于工作目录，工作目录先于写授权；覆盖家目录先于「是 / 在里面」先于「包含」', () => {
-    const badIdAndRoot = build({ sessionId: '', workingDirectory: '/', grantedWrite: ['/'] })
+  it('SP-1 原因的先后：坏会话 id 先于工作目录，工作目录先于授予的写；覆盖家目录先于「是 / 在里面」先于「包含」', () => {
+    const badIdAndRoot = build({ sessionId: '', workingDirectory: '/', grantWrite: ['/'] })
     expect(!badIdAndRoot.ok && badIdAndRoot.reason).toBe('unsafe session id')
-    const rootAndGrant = build({ workingDirectory: '/', grantedWrite: [HOME] })
+    const rootAndGrant = build({ workingDirectory: '/', grantWrite: [HOME] })
     expect(!rootAndGrant.ok && rootAndGrant.reason).toBe(`working directory ${COVERS}`)
-    const libraryAndGrant = build({ workingDirectory: h('Library'), grantedWrite: [HOME] })
+    const libraryAndGrant = build({ workingDirectory: h('Library'), grantWrite: [HOME] })
     expect(!libraryAndGrant.ok && libraryAndGrant.reason).toBe(`working directory ${CONTAINS}`)
     // / 覆盖家目录，也包含 ~/.shuvix —— 说的是前者
-    const root = build({ grantedWrite: ['/'] })
+    const root = build({ grantWrite: ['/'] })
     expect(!root.ok && root.reason).toBe(`a write grant ${COVERS}`)
+  })
+
+  it('SP-1 工作目录不适合时，表里有没有它那一行都不套（工作目录本身要判，不只看行）', () => {
+    // 宿主不会派生这一行（derive 跳过不适合的工作目录）；就算有人把它当授予的读 / 派生的写交进来也一样
+    for (const entries of [[], [derivedW(HOME)], [grantR(HOME)]]) {
+      const result = buildSandboxSpec(
+        PATHS,
+        { sessionId: SID, workingDirectory: HOME, entries },
+        identity
+      )
+      expect(!result.ok && result.reason).toBe(`working directory ${COVERS}`)
+    }
   })
 })
 
-describe('SP-2 套得上的工作目录与授权（按路径段边界判）', () => {
-  const accepted: Array<[string, Partial<SandboxSessionInput>]> = [
+describe('SP-2 套得上的工作目录与授予的行（按路径段边界判）', () => {
+  const accepted: Array<[string, Arrange]> = [
     ['~/.shuvix/knowledge 里的库', { workingDirectory: `${SHUVIX}/knowledge/b` }],
     [
       '~/.shuvix/knowledge-shuvix 里的项目库',
@@ -358,21 +464,21 @@ describe('SP-2 套得上的工作目录与授权（按路径段边界判）', ()
     ['~/Library 里不含 ShuviX 东西的目录', { workingDirectory: h('Library/Caches/x') }],
     ['家目录以外：外接卷', { workingDirectory: '/Volumes/x' }],
     ['家目录以外：/private/tmp 里', { workingDirectory: '/private/tmp/x' }],
-    // 凭据不再单列：~/.ssh 在家目录里，平时由「会话目录以外」挡住；用户把它选成工作目录就是他的项目
+    // 凭据不再单列：~/.ssh 在家目录里，平时由「权限表以外」挡住；用户把它选成工作目录就是他的项目
     ['~/.ssh（凭据不再单列）', { workingDirectory: h('.ssh') }],
-    ['写授权在家目录以外', { grantedWrite: ['/Volumes/data/shared'] }],
-    ['写授权在家目录里的普通目录', { grantedWrite: [h('w2')] }],
+    ['授予的写在家目录以外', { grantWrite: ['/Volumes/data/shared'] }],
+    ['授予的写在家目录里的普通目录', { grantWrite: [h('w2')] }],
     [
-      '写授权在 ~/.shuvix 的内容目录里（知识库、widget）',
-      { grantedWrite: [`${SHUVIX}/knowledge/b`, `${SHUVIX}/widgets/w`] }
+      '授予的写在 ~/.shuvix 的内容目录里（知识库、widget）',
+      { grantWrite: [`${SHUVIX}/knowledge/b`, `${SHUVIX}/widgets/w`] }
     ],
-    ['写授权是本会话的临时工作区', { grantedWrite: [TEMP_WS] }],
-    // 读授权不过这套判定：读不到沙箱开关之外的东西，「允许并记住」读哪儿是用户的事
-    ['读授权是 /（读授权覆盖家目录不拒）', { grantedRead: ['/'] }],
-    ['读授权是家目录', { grantedRead: [HOME] }],
-    ['读授权是 ~/Library', { grantedRead: [h('Library')] }],
-    ['读授权在 ~/.shuvix/policies 里', { grantedRead: [`${SHUVIX}/policies`] }],
-    ['读授权在 userData 里', { grantedRead: [`${USER_DATA}/data`] }]
+    ['授予的写是本会话的临时工作区', { grantWrite: [TEMP_WS] }],
+    // 授予的读不过这套判定：读不到沙箱开关之外的东西，「允许并记住」读哪儿是用户的事
+    ['授予的读是 /（授予的读覆盖家目录不拒）', { grantRead: ['/'] }],
+    ['授予的读是家目录', { grantRead: [HOME] }],
+    ['授予的读是 ~/Library', { grantRead: [h('Library')] }],
+    ['授予的读在 ~/.shuvix/policies 里', { grantRead: [`${SHUVIX}/policies`] }],
+    ['授予的读在 userData 里', { grantRead: [`${USER_DATA}/data`] }]
   ]
   it.each(accepted)('SP-2 %s', (_label, over) => {
     const result = build(over)
@@ -383,47 +489,40 @@ describe('SP-2 套得上的工作目录与授权（按路径段边界判）', ()
     const t = tempWorkspacesOf(p)
     return [
       [layout, '工作目录正是别的会话的临时工作区（临时会话的 fork 共用源会话的）', t.other, [], p],
-      [layout, '同上，再加一个在它里面的写授权', t.other, [`${t.other}/out`], p]
+      [layout, '同上，再加一个在它里面的授予的写', t.other, [`${t.other}/out`], p]
     ] as Array<[string, string, string, string[], SandboxHostPaths]>
   })
-  it.each(forkAccepted)(
-    'SP-2 %s 布局 · %s',
-    (_layout, _label, workingDirectory, grantedWrite, p) => {
-      const result = build({ workingDirectory, grantedWrite }, p)
-      expect(result.ok, !result.ok ? result.reason : '').toBe(true)
-      const spec = result.ok ? result.spec : undefined
-      expect(spec?.workingDirectory).toBe(workingDirectory)
-      for (const g of grantedWrite) expect(spec?.writableRoots).toContain(g)
-    }
-  )
+  it.each(forkAccepted)('SP-2 %s 布局 · %s', (_layout, _label, workingDirectory, grantWrite, p) => {
+    const result = build({ workingDirectory, grantWrite }, p)
+    expect(result.ok, !result.ok ? result.reason : '').toBe(true)
+    const spec = result.ok ? result.spec : undefined
+    expect(spec?.workingDirectory).toBe(workingDirectory)
+    for (const g of grantWrite) expect(spec?.writableRoots).toContain(g)
+  })
 })
 
-describe('SP-3 会话目录清单（sessionDirsFor）', () => {
-  it('SP-3 tmpDir = tmpRoot/<sha256(id) 前 8 位>；稳定、不同 id 不同', () => {
+describe('SP-3 会话自己的目录（sessionOwnDirs）', () => {
+  it('SP-3 tmp = tmpRoot/<sha256(id) 前 8 位>；稳定、不同 id 不同', () => {
     const expected = createHash('sha256').update(SID).digest('hex').slice(0, 8)
     expect(sessionTmpName(SID)).toBe(expected)
     expect(sessionTmpName(SID)).toMatch(/^[0-9a-f]{8}$/)
     expect(sessionTmpName(SID)).toBe(sessionTmpName(SID))
     expect(sessionTmpName('sess-2')).not.toBe(sessionTmpName(SID))
-    expect(sessionDirsFor(PATHS, input(), identity)!.tmpDir).toBe(`${TMP_ROOT}/${expected}`)
+    expect(ownOf()!.tmp).toBe(`${TMP_ROOT}/${expected}`)
   })
 
-  it('SP-3 正常工作目录：恰为 [工作目录, 本会话临时目录, 本会话 artifacts, 本会话工具结果]', () => {
-    expect(sessionDirsFor(PATHS, input(), identity)).toEqual({
-      dirs: SESSION_DIRS,
-      readDirs: [],
+  it('SP-3 正常工作目录：恰为 工作目录 + 本会话临时目录 / artifacts / 工具结果，没有不适合的原因', () => {
+    expect(ownOf()).toEqual({
+      workdir: WS,
       workspaceUnsuitable: null,
-      tmpDir: TMP_DIR
+      tmp: TMP_DIR,
+      artifacts: ARTIFACTS,
+      toolResults: TOOL_RESULTS_SID
     })
   })
 
-  it('SP-3 只看会话 id 与工作目录：授权、ShuviX 自己的程序都不是会话目录', () => {
-    const dirs = sessionDirsFor(
-      { ...PATHS, appPaths: [APP, h('dev/shuvix')] },
-      input({ grantedRead: [h('ref')], grantedWrite: ['/Volumes/data'] }),
-      identity
-    )!.dirs
-    expect(dirs).toEqual(SESSION_DIRS)
+  it('SP-3 只看会话 id 与工作目录：ShuviX 自己的程序不是会话自己的目录', () => {
+    expect(ownOf({}, { ...PATHS, appPaths: [APP, h('dev/shuvix')] })).toEqual(ownOf())
   })
 
   it.each([
@@ -433,97 +532,89 @@ describe('SP-3 会话目录清单（sessionDirsFor）', () => {
     [`${USER_DATA}/data`, "ShuviX's application data"],
     [h('Library'), "contains ShuviX's own configuration or application data"]
   ])(
-    'SP-3 工作目录 %s 不适合：不在清单里（其余三项照旧），并说明原因',
+    'SP-3 工作目录 %s 不适合：workdir 为 null（权限表里没有它那一行），其余三项照旧，并说明原因',
     (workingDirectory, reason) => {
-      const session = sessionDirsFor(PATHS, input({ workingDirectory }), identity)!
-      expect(session.dirs).toEqual([TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID])
-      expect(session.workspaceUnsuitable).toContain(reason)
-      expect(session.tmpDir).toBe(TMP_DIR)
+      const own = ownOf({ workingDirectory })!
+      expect(own.workdir).toBeNull()
+      expect(own.workspaceUnsuitable).toContain(reason)
+      expect([own.tmp, own.artifacts, own.toolResults]).toEqual([
+        TMP_DIR,
+        ARTIFACTS,
+        TOOL_RESULTS_SID
+      ])
+      expect(ownRows(own).map((e) => e.path)).toEqual([TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID])
     }
   )
 
   it.each(['', '.', '..', 'a/b', 'a\\b', 'x..y'])(
-    'SP-3 会话 id %j 不安全：没有清单（null），不是空清单',
+    'SP-3 会话 id %j 不安全：没有会话自己的目录（null），不是空的那几项',
     (sessionId) => {
-      expect(sessionDirsFor(PATHS, input({ sessionId }), identity)).toBeNull()
+      expect(ownOf({ sessionId })).toBeNull()
     }
   )
 
-  it('SP-3 去重：工作目录就是本会话 artifacts 时只出现一次（排在最前）', () => {
-    const session = sessionDirsFor(PATHS, input({ workingDirectory: ARTIFACTS }), identity)!
-    expect(session.dirs).toEqual([ARTIFACTS, TMP_DIR, TOOL_RESULTS_SID])
+  it('SP-3 工作目录就是本会话 artifacts：权限表里是两行（来源不同），规格里只出现一次（排在最前）', () => {
+    const own = ownOf({ workingDirectory: ARTIFACTS })!
+    expect(own.workdir).toBe(ARTIFACTS)
+    expect(own.artifacts).toBe(ARTIFACTS)
+    const spec = specOf({ workingDirectory: ARTIFACTS })
+    expect(spec.writableRoots).toEqual([ARTIFACTS, TMP_DIR, TOOL_RESULTS_SID])
+    expect(spec.readableRoots).toEqual([ARTIFACTS, TMP_DIR, TOOL_RESULTS_SID, APP])
   })
 
-  it('SP-3 本会话临时工作区：工作目录在清单里，别的会话的临时工作区不在', () => {
-    const session = sessionDirsFor(PATHS, input({ workingDirectory: TEMP_WS }), identity)!
-    expect(session.dirs).toEqual([TEMP_WS, TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID])
-    expect(session.dirs.some((d) => isWithin(`${USER_DATA}/temp_workspace/OTHER`, d))).toBe(false)
+  it('SP-3 本会话临时工作区：它就是 workdir，别的会话的临时工作区不在会话自己的目录里', () => {
+    const own = ownOf({ workingDirectory: TEMP_WS })!
+    expect(own.workdir).toBe(TEMP_WS)
+    expect(ownRows(own).map((e) => e.path)).toEqual([TEMP_WS, TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID])
+    expect(ownRows(own).some((e) => isWithin(`${USER_DATA}/temp_workspace/OTHER`, e.path))).toBe(
+      false
+    )
   })
 
   it.each(LAYOUTS)(
-    'SP-3 %s 布局 · 工作目录是别的会话的临时工作区（临时会话的 fork 共用源会话的）：恰为 [它, 本会话临时目录, 本会话 artifacts, 本会话工具结果]；本会话自己的与第三个会话的临时工作区都不在清单里',
+    'SP-3 %s 布局 · 工作目录是别的会话的临时工作区（临时会话的 fork 共用源会话的）：workdir 是它，其余三项是本会话自己的；本会话自己的与第三个会话的临时工作区都不在里面',
     (_layout, p) => {
       const t = tempWorkspacesOf(p)
-      const session = sessionDirsFor(p, input({ workingDirectory: t.other }), identity)!
-      const own = ownSessionDirsOf(p)
-      expect(session).toEqual({
-        dirs: [t.other, ...own],
-        readDirs: [],
+      const own = ownOf({ workingDirectory: t.other }, p)!
+      const [tmp, artifacts, toolResults] = ownSessionDirsOf(p)
+      expect(own).toEqual({
+        workdir: t.other,
         workspaceUnsuitable: null,
-        tmpDir: own[0]
+        tmp,
+        artifacts,
+        toolResults
       })
+      const rows = ownRows(own).map((e) => e.path)
       for (const outside of [t.own, `${t.own}/a.txt`, t.third, `${t.third}/a.txt`, t.base]) {
         expect(
-          session.dirs.some((d) => isWithin(outside, d)),
+          rows.some((d) => isWithin(outside, d)),
           outside
         ).toBe(false)
       }
-      expect(specOf({ workingDirectory: t.other }, p).sessionDirs).toEqual(session.dirs)
+      expect(specOf({ workingDirectory: t.other }, p).writableRoots).toEqual(rows)
     }
   )
 
-  it('SP-3 规格的 sessionDirs 就是这份清单（同一个函数算的，两面不会漂移）', () => {
+  it('SP-3 规格的可写根就是派生的那几行加授予的写（派生行出自同一个函数，两面不会漂移）', () => {
     for (const workingDirectory of [WS, TEMP_WS, OTHER_WS, h('Documents/proj'), '/Volumes/x']) {
-      const spec = specOf({ workingDirectory, grantedWrite: ['/Volumes/w'] })
-      expect(spec.sessionDirs).toEqual(
-        sessionDirsFor(PATHS, input({ workingDirectory }), identity)!.dirs
-      )
+      const spec = specOf({ workingDirectory, grantWrite: ['/Volumes/w'] })
+      expect(spec.writableRoots).toEqual([
+        ...ownRows(ownOf({ workingDirectory })).map((e) => e.path),
+        '/Volumes/w'
+      ])
     }
   })
 })
 
-describe('SP-3x 会话设置带来的目录（extras）', () => {
-  /** 可读写：本会话勾选的知识库 */
+describe('SP-3x 会话设置带来的目录（acceptableSettingDir）', () => {
   const KB = `${SHUVIX}/knowledge/notes`
-  const KB_PROJECT = `${SHUVIX}/knowledge-shuvix/projects/p1`
-  /** 只读：技能目录（用户的、外部的、内置的）与只读的内置知识库 */
   const SKILLS = `${SHUVIX}/skills`
-  const SKILLS_EXT = h('my-skills')
   const SKILLS_BUILTIN = `${APP}/Contents/Resources/skills/en`
-  const BUILTIN_KB = `${APP}/Contents/Resources/knowledge/shuvix/en`
-  const EXTRAS = {
-    readWrite: [KB, KB_PROJECT],
-    readOnly: [SKILLS, SKILLS_EXT, SKILLS_BUILTIN, BUILTIN_KB]
-  }
 
-  it('SP-3x 可读写的接在会话目录后面；只读的单独成一份 readDirs（各按给的顺序）', () => {
-    expect(sessionDirsFor(PATHS, input({ extras: EXTRAS }), identity)).toEqual({
-      dirs: [...SESSION_DIRS, KB, KB_PROJECT],
-      readDirs: [SKILLS, SKILLS_EXT, SKILLS_BUILTIN, BUILTIN_KB],
-      workspaceUnsuitable: null,
-      tmpDir: TMP_DIR
-    })
-  })
-
-  it('SP-3x 没有 extras 与两份空清单一样：readDirs 为空', () => {
-    const none = sessionDirsFor(PATHS, input(), identity)
-    const empty = sessionDirsFor(
-      PATHS,
-      input({ extras: { readWrite: [], readOnly: [] } }),
-      identity
-    )
-    expect(empty).toEqual(none)
-    expect(none!.readDirs).toEqual([])
+  it('SP-3x 普通的知识库、技能目录：原样（已 realpath）', () => {
+    for (const dir of [KB, SKILLS, h('my-skills'), SKILLS_BUILTIN, '/Volumes/x/kb']) {
+      expect(acceptableSettingDir(PATHS, dir, identity), dir).toBe(dir)
+    }
   })
 
   it.each([
@@ -531,79 +622,58 @@ describe('SP-3x 会话设置带来的目录（extras）', () => {
     ['/', '/'],
     ['家目录', HOME],
     ['覆盖家目录的 /Users', '/Users']
-  ])('SP-3x %s：两份清单里都丢掉，旁边的照留', (_label, bad) => {
-    const session = sessionDirsFor(
-      PATHS,
-      input({ extras: { readWrite: [bad, KB], readOnly: [bad, SKILLS] } }),
-      identity
-    )!
-    expect(session.dirs).toEqual([...SESSION_DIRS, KB])
-    expect(session.readDirs).toEqual([SKILLS])
+  ])('SP-3x %s：不进权限表（null）', (_label, bad) => {
+    expect(acceptableSettingDir(PATHS, bad, identity)).toBeNull()
   })
 
-  it('SP-3x 去重：可读写里重复的只留一个；只读里与读写清单（含工作目录、artifacts）相同的去掉，重复的只留一个', () => {
-    const session = sessionDirsFor(
-      PATHS,
-      input({
-        extras: {
-          readWrite: [KB, KB, WS],
-          readOnly: [KB, WS, ARTIFACTS, SKILLS, SKILLS]
-        }
-      }),
-      identity
-    )!
-    expect(session.dirs).toEqual([...SESSION_DIRS, KB])
-    expect(session.readDirs).toEqual([SKILLS])
+  it('SP-3x 空串不经 real：不会被解析成进程的当前目录', () => {
+    const real = vi.fn((p: string) => (p === '' ? '/Volumes/cwd' : p))
+    expect(acceptableSettingDir(PATHS, '', real)).toBeNull()
+    expect(real).not.toHaveBeenCalledWith('')
   })
 
-  it('SP-3x 工作目录不适合时 extras 照给（它们与工作目录无关）', () => {
-    const session = sessionDirsFor(
-      PATHS,
-      input({ workingDirectory: HOME, extras: EXTRAS }),
-      identity
-    )!
-    expect(session.workspaceUnsuitable).toContain('covers the home folder')
-    expect(session.dirs).toEqual([TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID, KB, KB_PROJECT])
-    expect(session.readDirs).toEqual(EXTRAS.readOnly)
+  it('SP-3x e2e 布局：家目录在 /private/tmp 里 —— /private/tmp 覆盖家目录，不进权限表', () => {
+    expect(acceptableSettingDir(E2E_PATHS, '/private/tmp', identity)).toBeNull()
+    expect(acceptableSettingDir(E2E_PATHS, `${E2E_HOME}/.shuvix/skills`, identity)).toBe(
+      `${E2E_HOME}/.shuvix/skills`
+    )
   })
 
-  it('SP-3x 坏会话 id：有 extras 也没有清单', () => {
-    expect(sessionDirsFor(PATHS, input({ sessionId: '..', extras: EXTRAS }), identity)).toBeNull()
-  })
-
-  it('SP-3x extras 先过 `real`：链接按指向记；指向家目录的链接丢掉；两项指向同一处只留一个', () => {
+  it('SP-3x 先过 `real`：链接按指向记；指向家目录的链接不进；家目录本身写成链接也按指向判', () => {
     const LINKS = new Map<string, string>([
       ['/Volumes/kb-link', KB],
-      ['/Volumes/kb-link-2', KB],
       ['/Volumes/home-link', HOME],
-      ['/Volumes/skills-link', SKILLS]
+      ['/Users/link', HOME]
     ])
     const real = (p: string): string => LINKS.get(p) ?? p
-    const session = sessionDirsFor(
-      PATHS,
-      input({
-        extras: {
-          readWrite: ['/Volumes/kb-link', '/Volumes/kb-link-2', '/Volumes/home-link'],
-          readOnly: ['/Volumes/skills-link', '/Volumes/home-link', '/Volumes/kb-link']
-        }
-      }),
-      real
-    )!
-    expect(session.dirs).toEqual([...SESSION_DIRS, KB])
-    expect(session.readDirs).toEqual([SKILLS])
+    expect(acceptableSettingDir(PATHS, '/Volumes/kb-link', real)).toBe(KB)
+    expect(acceptableSettingDir(PATHS, '/Volumes/home-link', real)).toBeNull()
+    expect(acceptableSettingDir({ home: '/Users/link' }, HOME, real)).toBeNull()
+    expect(acceptableSettingDir({ home: '/Users/link' }, KB, real)).toBe(KB)
   })
+})
 
-  it('SP-3x 规格：可读写的 extras 进会话目录（可读可写）；只读的进 sessionReadDirs（可读不可写）；可读根的顺序 = 会话目录、只读会话目录、写授权、读授权、程序', () => {
+describe('SP-3e 规格怎么用权限表的行', () => {
+  /** 可写的派生行：本会话勾选的知识库 */
+  const KB = `${SHUVIX}/knowledge/notes`
+  const KB_PROJECT = `${SHUVIX}/knowledge-shuvix/projects/p1`
+  /** 只读的派生行：技能目录（用户的、外部的、内置的）与只读的内置知识库 */
+  const SKILLS = `${SHUVIX}/skills`
+  const SKILLS_EXT = h('my-skills')
+  const SKILLS_BUILTIN = `${APP}/Contents/Resources/skills/en`
+  const BUILTIN_KB = `${APP}/Contents/Resources/knowledge/shuvix/en`
+  const READ_ONLY = [SKILLS, SKILLS_EXT, SKILLS_BUILTIN, BUILTIN_KB]
+  const DERIVED = [derivedW(KB), derivedW(KB_PROJECT), ...READ_ONLY.map(derivedR)]
+
+  it('SP-3e 可读根 = 全部行（按给的顺序）+ 本会话临时目录 + 程序；可写根 = 可写的行 + 临时目录；只读的行可读不可写', () => {
     const GRANT_W = '/Volumes/data/shared'
     const GRANT_R = h('ref')
-    const spec = specOf({ extras: EXTRAS, grantedWrite: [GRANT_W], grantedRead: [GRANT_R, SKILLS] })
-    const sessionDirs = [...SESSION_DIRS, KB, KB_PROJECT]
-    expect(spec.sessionDirs).toEqual(sessionDirs)
-    expect(spec.sessionReadDirs).toEqual(EXTRAS.readOnly)
-    // 与读授权重复的只读目录只出现一次（排在只读会话目录那一段）
-    expect(spec.readableRoots).toEqual([...sessionDirs, ...EXTRAS.readOnly, GRANT_W, GRANT_R, APP])
-    expect(spec.writableRoots).toEqual([...sessionDirs, GRANT_W])
-    for (const ro of EXTRAS.readOnly) {
+    const spec = specOf({ derived: DERIVED, grantWrite: [GRANT_W], grantRead: [GRANT_R, SKILLS] })
+    const writable = [...SESSION_DIRS, KB, KB_PROJECT]
+    // 与授予的读重复的只读行只出现一次（排在派生那一段）
+    expect(spec.readableRoots).toEqual([...writable, ...READ_ONLY, GRANT_W, GRANT_R, APP])
+    expect(spec.writableRoots).toEqual([...writable, GRANT_W])
+    for (const ro of READ_ONLY) {
       expect(
         spec.writableRoots.some((r) => isWithin(ro, r)),
         ro
@@ -611,8 +681,74 @@ describe('SP-3x 会话设置带来的目录（extras）', () => {
     }
   })
 
-  it('SP-3x 规格：家目录里的 extras 也有上级目录的元数据（~/.shuvix/knowledge、~/.shuvix/skills 的上级）', () => {
-    const spec = specOf({ extras: EXTRAS })
+  it('SP-3e 本会话临时目录恒可读可写：表里一行都没有时也是；不在表里的工作目录既不可读也不可写', () => {
+    const spec = specOfEntries([])
+    expect(spec.readableRoots).toEqual([TMP_DIR, APP])
+    expect(spec.writableRoots).toEqual([TMP_DIR])
+    expect(spec.tmpDir).toBe(TMP_DIR)
+    expect(spec.workingDirectory).toBe(WS)
+    expect(spec.readableRoots.some((r) => isWithin(`${WS}/a`, r))).toBe(false)
+    expect(spec.writableRoots.some((r) => isWithin(`${WS}/a`, r))).toBe(false)
+  })
+
+  it('SP-3e 工作目录那一行改成只读：照样套沙箱，工作目录可读不可写，其余照旧', () => {
+    const spec = specOfEntries([
+      derivedR(WS),
+      derivedW(TMP_DIR),
+      derivedW(ARTIFACTS),
+      derivedW(TOOL_RESULTS_SID)
+    ])
+    expect(spec.readableRoots).toEqual([...SESSION_DIRS, APP])
+    expect(spec.writableRoots).toEqual([TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID])
+    // 只读的工作目录里不建也不连 socket：socket 目录只剩本会话临时目录
+    expect(spec.unixSocketDirs).toEqual([TMP_DIR])
+    // 对照：可写的工作目录照旧放 socket
+    expect(specOfEntries([derivedW(WS)]).unixSocketDirs).toEqual([TMP_DIR, WS])
+  })
+
+  it('SP-3e 去重（写隐含读）：重复的行只留一个；同一路径既有读行又有写行 —— 可写，可读根里只出现一次', () => {
+    const spec = specOf({
+      derived: [
+        derivedW(KB),
+        derivedW(KB),
+        derivedW(WS),
+        derivedR(KB),
+        derivedR(WS),
+        derivedR(ARTIFACTS),
+        derivedR(SKILLS),
+        derivedR(SKILLS)
+      ],
+      grantRead: [KB]
+    })
+    expect(spec.readableRoots).toEqual([...SESSION_DIRS, KB, SKILLS, APP])
+    expect(spec.writableRoots).toEqual([...SESSION_DIRS, KB])
+  })
+
+  it('SP-3e 空路径的行一概丢掉，先于 `real`（不会被解析成进程的当前目录），授予的写也不因它不套', () => {
+    const real = vi.fn((p: string) => (p === '' ? HOME : p))
+    const spec = specOf(
+      { derived: [derivedW(''), derivedR('')], grantWrite: [''], grantRead: [''] },
+      PATHS,
+      real
+    )
+    expect(real).not.toHaveBeenCalledWith('')
+    expect(spec.readableRoots).toEqual([...SESSION_DIRS, APP])
+    expect(spec.writableRoots).toEqual(SESSION_DIRS)
+  })
+
+  it('SP-3e 覆盖家目录的派生行丢掉（防御：宿主派生时已经滤过），旁边的照留；授予的读覆盖家目录照留', () => {
+    const spec = specOf({
+      derived: [derivedR('/'), derivedW(HOME), derivedR('/Users'), derivedW(KB), derivedR(SKILLS)]
+    })
+    expect(spec.readableRoots).toEqual([...SESSION_DIRS, KB, SKILLS, APP])
+    expect(spec.writableRoots).toEqual([...SESSION_DIRS, KB])
+    const granted = specOf({ derived: [derivedW(HOME)], grantRead: [HOME] })
+    expect(granted.readableRoots).toContain(HOME)
+    expect(granted.writableRoots).toEqual(SESSION_DIRS)
+  })
+
+  it('SP-3e 家目录里的知识库 / 技能行也有上级目录的元数据（~/.shuvix/knowledge、~/.shuvix/skills 的上级）', () => {
+    const spec = specOf({ derived: DERIVED })
     expect(spec.metadataPaths).toEqual(
       expect.arrayContaining([
         `${SHUVIX}/knowledge`,
@@ -631,14 +767,12 @@ describe('SP-4 规格的各个字段', () => {
   const GRANT_W = '/Volumes/data/shared'
   const GRANT_R = h('ref')
 
-  it('SP-4 一个写授权、一个读授权：每个字段逐一钉住，没有多余的键', () => {
-    const spec = specOf({ grantedWrite: [GRANT_W], grantedRead: [GRANT_R] })
+  it('SP-4 一个授予的写、一个授予的读：每个字段逐一钉住，没有多余的键（不再有 sessionDirs / sessionReadDirs）', () => {
+    const spec = specOf({ grantWrite: [GRANT_W], grantRead: [GRANT_R] })
     expect(spec).toEqual({
       sessionId: SID,
       workingDirectory: WS,
       home: HOME,
-      sessionDirs: SESSION_DIRS,
-      sessionReadDirs: [],
       readableRoots: [...SESSION_DIRS, GRANT_W, GRANT_R, APP],
       readableFiles: [CLI_TOKEN],
       metadataPaths: expect.any(Array),
@@ -647,11 +781,13 @@ describe('SP-4 规格的各个字段', () => {
       unixSocketDirs: [TMP_DIR, WS],
       tmpDir: TMP_DIR
     })
+    expect(Object.keys(spec)).not.toContain('sessionDirs')
+    expect(Object.keys(spec)).not.toContain('sessionReadDirs')
     expect(MDNS_RESPONDER_SOCKET).toBe('/private/var/run/mDNSResponder')
   })
 
-  it('SP-4 读授权只可读、不可写；写授权可读可写；ShuviX 自己的程序只可读', () => {
-    const spec = specOf({ grantedWrite: [GRANT_W], grantedRead: [GRANT_R] })
+  it('SP-4 授予的读只可读、不可写；授予的写可读可写；ShuviX 自己的程序只可读', () => {
+    const spec = specOf({ grantWrite: [GRANT_W], grantRead: [GRANT_R] })
     expect(spec.readableRoots).toContain(GRANT_R)
     expect(spec.writableRoots).not.toContain(GRANT_R)
     expect(spec.readableRoots).toContain(GRANT_W)
@@ -667,23 +803,23 @@ describe('SP-4 规格的各个字段', () => {
     expect(spec.writableRoots.some((r) => isWithin(CLI_TOKEN, r))).toBe(false)
   })
 
-  it('SP-4 去重：等于工作目录的写授权、同时是读授权的写授权、重复的程序目录各只出现一次（写授权排在读授权前）', () => {
+  it('SP-4 去重：等于工作目录的授予的写、同时是授予的读的授予的写、重复的程序目录各只出现一次（写排在读前）', () => {
     const spec = specOf(
-      { grantedWrite: [WS, GRANT_W, GRANT_W], grantedRead: [GRANT_W, GRANT_R, GRANT_R] },
+      { grantWrite: [WS, GRANT_W, GRANT_W], grantRead: [GRANT_W, GRANT_R, GRANT_R] },
       { ...PATHS, appPaths: [APP, APP] }
     )
     expect(spec.readableRoots).toEqual([...SESSION_DIRS, GRANT_W, GRANT_R, APP])
     expect(spec.writableRoots).toEqual([...SESSION_DIRS, GRANT_W])
   })
 
-  it('SP-4 没有授权、没有程序目录：可读根 = 可写根 = 会话目录', () => {
+  it('SP-4 没有授予的行、没有程序目录：可读根 = 可写根 = 派生的四行', () => {
     const spec = specOf({}, { ...PATHS, appPaths: [] })
     expect(spec.readableRoots).toEqual(SESSION_DIRS)
     expect(spec.writableRoots).toEqual(SESSION_DIRS)
   })
 
   it('SP-4 没有放行清单：包缓存、/private/tmp、/tmp 都不是可写根', () => {
-    const spec = specOf({ grantedWrite: [GRANT_W] })
+    const spec = specOf({ grantWrite: [GRANT_W] })
     for (const p of [
       h('.npm'),
       h('.cache'),
@@ -700,8 +836,8 @@ describe('SP-4 规格的各个字段', () => {
     }
   })
 
-  it('SP-4 读授权覆盖家目录：整个家目录可读，但不可写（与「写授权覆盖家目录就不套」不对称）', () => {
-    const spec = specOf({ grantedRead: [HOME] })
+  it('SP-4 授予的读覆盖家目录：整个家目录可读，但不可写（与「授予的写覆盖家目录就不套」不对称）', () => {
+    const spec = specOf({ grantRead: [HOME] })
     expect(spec.readableRoots).toContain(HOME)
     expect(spec.writableRoots).toEqual(SESSION_DIRS)
   })
@@ -710,7 +846,6 @@ describe('SP-4 规格的各个字段', () => {
     const spec = specOf({ workingDirectory: OTHER_WS })
     const dirs = [OTHER_WS, TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID]
     expect(spec.workingDirectory).toBe(OTHER_WS)
-    expect(spec.sessionDirs).toEqual(dirs)
     expect(spec.readableRoots).toEqual([...dirs, APP])
     expect(spec.writableRoots).toEqual(dirs)
     expect(spec.unixSocketDirs).toEqual([TMP_DIR, OTHER_WS])
@@ -756,20 +891,20 @@ describe('SP-5 上级目录的元数据（metadataPaths）', () => {
     ])
   })
 
-  it.each<[string, Partial<SandboxSessionInput>, SandboxHostPaths]>([
+  it.each<[string, Arrange, SandboxHostPaths]>([
     ['默认', {}, PATHS],
     [
-      '嵌套的工作目录 + 家目录里的读写授权',
+      '嵌套的工作目录 + 家目录里的授予的读写',
       {
         workingDirectory: h('Documents/a/proj'),
-        grantedRead: [h('ref/x')],
-        grantedWrite: [h('w/y')]
+        grantRead: [h('ref/x')],
+        grantWrite: [h('w/y')]
       },
       PATHS
     ],
     [
-      '家目录以外的工作目录与授权',
-      { workingDirectory: '/Volumes/p', grantedRead: ['/opt/r'], grantedWrite: ['/Volumes/w'] },
+      '家目录以外的工作目录与授予的行',
+      { workingDirectory: '/Volumes/p', grantRead: ['/opt/r'], grantWrite: ['/Volumes/w'] },
       PATHS
     ],
     [
@@ -818,14 +953,14 @@ describe('SP-5 上级目录的元数据（metadataPaths）', () => {
   })
 
   it('SP-5 家目录以外的东西不产生元数据：/Users、/private/tmp、/Volumes、/Applications 都不在里面', () => {
-    const spec = specOf({ workingDirectory: '/Volumes/p', grantedWrite: ['/Volumes/w'] })
+    const spec = specOf({ workingDirectory: '/Volumes/p', grantWrite: ['/Volumes/w'] })
     for (const p of ['/Users', '/', '/private/tmp', TMP_ROOT, '/Volumes', '/Applications']) {
       expect(spec.metadataPaths).not.toContain(p)
     }
   })
 
-  it('SP-5 读授权就是家目录：它自己不产生元数据（家目录已整个可读）', () => {
-    const withGrant = specOf({ grantedRead: [HOME] })
+  it('SP-5 授予的读就是家目录：它自己不产生元数据（家目录已整个可读）', () => {
+    const withGrant = specOf({ grantRead: [HOME] })
     expect(withGrant.metadataPaths).toEqual(specOf().metadataPaths)
   })
 
@@ -855,25 +990,66 @@ describe('SP-6 `real` 在一切判断之前应用', () => {
     return p
   }
 
-  it('SP-6 工作目录按解析后的路径记（规格、socket 目录都是）', () => {
+  it('SP-6 工作目录按解析后的路径记（规格、它那一行、socket 目录都是）', () => {
     const spec = specOf({ workingDirectory: '/tmp/ws' }, PATHS, real)
     expect(spec.workingDirectory).toBe('/private/tmp/ws')
-    expect(spec.sessionDirs[0]).toBe('/private/tmp/ws')
+    expect(ownOf({ workingDirectory: '/tmp/ws' }, PATHS, real)!.workdir).toBe('/private/tmp/ws')
+    expect(spec.writableRoots[0]).toBe('/private/tmp/ws')
     expect(spec.unixSocketDirs).toEqual([TMP_DIR, '/private/tmp/ws'])
   })
 
-  it('SP-6 解析到家目录的写授权被拒；解析到 ~/.shuvix/agents 的工作目录被拒', () => {
-    const grant = build({ grantedWrite: ['/Users/link'] }, PATHS, real)
+  it('SP-6 行里照写法存的路径（授予的行不预先 realpath）在规格里按解析后的记', () => {
+    const spec = specOfEntries([derivedW(WS), grantW('/tmp/out'), grantR('/g1')], PATHS, real)
+    expect(spec.writableRoots).toEqual([WS, '/private/tmp/out', TMP_DIR])
+    expect(spec.readableRoots).toEqual([
+      WS,
+      '/private/tmp/out',
+      '/Volumes/data/shared',
+      TMP_DIR,
+      APP
+    ])
+  })
+
+  it('SP-6 解析到家目录的授予的写被拒；解析到 ~/.shuvix/agents 的工作目录被拒', () => {
+    const grant = build({ grantWrite: ['/Users/link'] }, PATHS, real)
     expect(!grant.ok && grant.reason).toContain('a write grant covers the home folder')
     const ws = build({ workingDirectory: '/Volumes/agents-link/x' }, PATHS, real)
     expect(!ws.ok && ws.reason).toContain("ShuviX's own configuration")
   })
 
-  it('SP-6 指向同一处的两个写授权合成一个根；读授权同理', () => {
-    const spec = specOf({ grantedWrite: ['/g1', '/g2'], grantedRead: ['/g2'] }, PATHS, real)
+  it('SP-6 指向同一处的两个授予的写合成一个根；授予的读同理', () => {
+    const spec = specOf({ grantWrite: ['/g1', '/g2'], grantRead: ['/g2'] }, PATHS, real)
     expect(spec.writableRoots.filter((r) => r === '/Volumes/data/shared')).toHaveLength(1)
     expect(spec.readableRoots.filter((r) => r === '/Volumes/data/shared')).toHaveLength(1)
     expect(JSON.stringify(spec)).not.toMatch(/"\/g[12]"/)
+  })
+
+  it('SP-6 派生行的路径也先过 `real`：链接按指向记；指向家目录的派生行丢掉；两行指向同一处只留一个', () => {
+    const KB = `${SHUVIX}/knowledge/notes`
+    const SKILLS = `${SHUVIX}/skills`
+    const ROW_LINKS = new Map<string, string>([
+      ['/Volumes/kb-link', KB],
+      ['/Volumes/kb-link-2', KB],
+      ['/Volumes/home-link', HOME],
+      ['/Volumes/skills-link', SKILLS]
+    ])
+    const rowReal = (p: string): string => ROW_LINKS.get(p) ?? p
+    const spec = specOf(
+      {
+        derived: [
+          derivedW('/Volumes/kb-link'),
+          derivedW('/Volumes/kb-link-2'),
+          derivedW('/Volumes/home-link'),
+          derivedR('/Volumes/skills-link'),
+          derivedR('/Volumes/home-link'),
+          derivedR('/Volumes/kb-link')
+        ]
+      },
+      PATHS,
+      rowReal
+    )
+    expect(spec.readableRoots).toEqual([...SESSION_DIRS, KB, SKILLS, APP])
+    expect(spec.writableRoots).toEqual([...SESSION_DIRS, KB])
   })
 
   it('SP-6 宿主路径整份按链接写（家目录是 /Users/link）：规格里只有解析后的家目录，元数据也按它算', () => {
@@ -901,29 +1077,30 @@ describe('SP-6 `real` 在一切判断之前应用', () => {
     expect(!result.ok && result.reason).toContain('application data')
   })
 
-  it('SP-6 「别的会话的临时工作区」是指向 userData/data 的链接：按指向判 —— 不是会话目录，规格被拒', () => {
+  it('SP-6 「别的会话的临时工作区」是指向 userData/data 的链接：按指向判 —— 不是 workdir，规格被拒', () => {
     const toData = (p: string): string =>
       isWithin(p, OTHER_WS) ? `${USER_DATA}/data${p.slice(OTHER_WS.length)}` : p
-    const session = sessionDirsFor(PATHS, input({ workingDirectory: OTHER_WS }), toData)!
-    expect(session.workspaceUnsuitable).toBe(APP_DATA_WS)
-    expect(session.dirs).toEqual([TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID])
+    const own = ownOf({ workingDirectory: OTHER_WS }, PATHS, toData)!
+    expect(own.workspaceUnsuitable).toBe(APP_DATA_WS)
+    expect(own.workdir).toBeNull()
+    expect(ownRows(own).map((e) => e.path)).toEqual([TMP_DIR, ARTIFACTS, TOOL_RESULTS_SID])
     const result = build({ workingDirectory: OTHER_WS }, PATHS, toData)
     expect(!result.ok && result.reason).toBe(APP_DATA_WS)
   })
 
-  it('SP-6 `..` 先规范化再认归谁：OTHER/../../data 当工作目录被拒；工作目录是 OTHER 时 OTHER/../THIRD 的写授权被拒', () => {
+  it('SP-6 `..` 先规范化再认归谁：OTHER/../../data 当工作目录被拒；工作目录是 OTHER 时 OTHER/../THIRD 的授予的写被拒', () => {
     const normalizing = (p: string): string => resolve(p)
     const ws = build({ workingDirectory: `${OTHER_WS}/../../data` }, PATHS, normalizing)
     expect(!ws.ok && ws.reason).toBe(APP_DATA_WS)
     const grant = build(
-      { workingDirectory: OTHER_WS, grantedWrite: [`${OTHER_WS}/../THIRD`] },
+      { workingDirectory: OTHER_WS, grantWrite: [`${OTHER_WS}/../THIRD`] },
       PATHS,
       normalizing
     )
     expect(!grant.ok && grant.reason).toBe(APP_DATA_GRANT)
     // 对照：规范化之后落回 OTHER 本身 / OTHER 里面的，照样套得上
     const back = specOf(
-      { workingDirectory: `${OTHER_WS}/sub/..`, grantedWrite: [`${OTHER_WS}/a/../out`] },
+      { workingDirectory: `${OTHER_WS}/sub/..`, grantWrite: [`${OTHER_WS}/a/../out`] },
       PATHS,
       normalizing
     )

@@ -1,18 +1,20 @@
 /**
  * 路径策略按**真实去处**判 —— 桌面端到端：真临时目录树 + 真符号链接 + 真的桌面 provider
- * （makeDesktopSecurityProvider：realPath = resolveRealPath）+ 真的内置策略 md + 真的会话目录
- * （sandbox.sessionDirsView）+ 真的 isPathWithinWorkspace。
+ * （makeDesktopSecurityProvider：realPath = resolveRealPath）+ 真的内置策略 md + 真的会话权限表
+ * （services/acl：派生行由 acl/derive 按会话行算，会话自己的目录由 sandbox.sessionOwnDirsView 算）+ 真的
+ * isPathWithinWorkspace。
  *
  * mock 照 askPolicy.test.ts：dao / sessionService / skillService / knowledge/sessionBundle / policyService /
  * paths / logger；另把 `os.homedir` 换成本用例的临时家目录 —— ask-on-external-path 的读规则看 vars.home，
  * 会话目录里的 artifacts 也挂在 <家目录>/.shuvix/artifacts 下（getSessionArtifactsDir 的 mock 与生产同形），
  * 家目录得真在盘上，链接才有地方可指。fs / path 不 mock：realPath.ts 读的是 node:fs / node:path，要测的
  * 恰是真文件系统上的解析。electron 的 app.getPath 有替身（<ROOT>/userData）：会话目录的规格要它。
- * sessionService.addAllowListPaths 抄一份实参（RPP-2 / RPP-7 看「允许并记住」记下的是哪个位置），
- * sessionDao.pickSettings 喂会话授权。
+ * 会话行是**内存会话**（sessionRecords 的 ephemeral 行，工作目录 = config.workingDirectory，每次取 context /
+ * 变量表时对齐）—— 权限表随之只在内存里、不碰库；「允许并记住」真的写进这张表（RPP-2 / RPP-7 看记下的是
+ * 哪个位置），用例要的授权也经 sessionAcl.grantPath 喂进去。
  *
- * 会话目录（vars.sessionDirs）在这里是：工作区 <ROOT>/ws、<家目录>/.shuvix/artifacts/<id>、
- * <ROOT>/tool-results/<id> 与会话 TMPDIR。家目录与工作区是 ROOT 下的兄弟：工作区与 outside/ 里的读不问
+ * 权限表（vars.aclRead / vars.aclWrite）在这里是：工作区 <ROOT>/ws、<家目录>/.shuvix/artifacts/<id>、
+ * <ROOT>/tool-results/<id> 与会话 TMPDIR（都可写），加上授予的路径。家目录与工作区是 ROOT 下的兄弟：工作区与 outside/ 里的读不问
  * （家目录外），家目录里会话目录以外的读问（ask-on-external-path#0）；会话目录以外的写问（#1）。
  *
  * macOS 上 tmpdir 在 /var → /private/var 这条系统级链接之下：vars.home 照写法给（/var/folders/…），
@@ -56,11 +58,8 @@ const state = vi.hoisted(() => ({
   home: '',
   /** app.getPath('userData') 的替身（会话目录的规格要它；盘上不存在也行） */
   userData: '/nonexistent-shuvix-rpp-userdata',
-  settings: undefined as { allowList?: string[] } | undefined,
   /** ~/.shuvix/policies 的替身（policyService.getUserPolicies 现扫的结果） */
   userPolicies: [] as UserPolicyFile[],
-  /** sessionService.addAllowListPaths 收到的实参 */
-  granted: [] as Array<{ sessionId: string; mode: string; paths: string[] }>,
   // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
   // src/main/services/__tests__ 往上六级是仓库根
   builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
@@ -72,15 +71,29 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, default: actual, homedir: () => state.home || actual.homedir() }
 })
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
+// 会话行都是内存会话（见 ensureSession）：库里一条都没有
 vi.mock('../../dao/sessionDao', () => ({
-  sessionDao: { pickSettings: () => state.settings }
+  sessionDao: { pick: () => undefined, pickSettings: () => undefined }
 }))
-vi.mock('../sessionService', () => ({
-  sessionService: {
-    getById: () => undefined,
-    addAllowListPaths: (sessionId: string, mode: string, paths: string[]) =>
-      void state.granted.push({ sessionId, mode, paths })
+// 内存会话的权限表不落库：碰到这里就是分流错了
+vi.mock('../../dao/sessionAclDao', () => {
+  const never = (): never => {
+    throw new Error('realPathPolicy.test: in-memory sessions must not reach session_acl')
   }
+  return {
+    sessionAclDao: {
+      findBySession: never,
+      insert: never,
+      updateAccess: never,
+      deleteById: never,
+      deleteBySession: never,
+      transaction: never
+    }
+  }
+})
+vi.mock('../../utils/sessionConfigBroadcast', () => ({ broadcastSessionConfigChanged: () => {} }))
+vi.mock('../sessionService', () => ({
+  sessionService: { getById: () => undefined }
 }))
 // 会话设置带来的那部分会话目录（勾选的知识库、技能目录）与本文件无关：一个都不给
 vi.mock('../skillService', () => ({
@@ -136,7 +149,46 @@ import {
   type ProjectConfig
 } from '../toolContext'
 import { writeArtifact } from '../artifacts/store'
+import { sessionRecords } from '../sessionRecords'
+import { sessionAcl } from '../acl'
+import { clearMemoryAclForTests } from '../acl/store'
+import type { PathAccess } from '@shuvix/chat-protocol/sessionAcl'
 import type { SecurityContext, SecurityDecision } from '@shuvix/agent-runtime'
+
+/** 这条会话的会话行（内存会话）对齐到给定的工作目录：不在就建 */
+function ensureSession(sessionId: string, workingDirectory: string): void {
+  if (!sessionRecords.pick(sessionId, ['id'])) {
+    sessionRecords.insert(
+      {
+        id: sessionId,
+        title: sessionId,
+        projectId: null,
+        parentId: null,
+        settings: { workingDirectory },
+        createdAt: 1,
+        updatedAt: 1,
+        lastActiveAt: 1
+      },
+      { ephemeral: true }
+    )
+  } else {
+    sessionRecords.updateSettings(sessionId, { workingDirectory })
+  }
+}
+
+/** 这条会话授予的路径（权限表里的 user 行）—— 「允许并记住」记下了什么 */
+const userGrants = (sessionId = 's1'): Array<{ access: PathAccess; target: string }> =>
+  sessionAcl
+    .entries(sessionId)
+    .filter((e) => e.source === 'user')
+    .map((e) => ({ access: e.access, target: e.target }))
+
+/** 撤掉这条会话授予的全部路径 */
+function revokeGrants(sessionId = 's1'): void {
+  for (const e of sessionAcl.entries(sessionId)) {
+    if (e.source === 'user') sessionAcl.remove(sessionId, e.id)
+  }
+}
 
 /** 抓住一次拒绝的原话 */
 async function rejectionOf(work: Promise<unknown>): Promise<string> {
@@ -177,8 +229,9 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
   const asks: InputRequest[] = []
   let respond: (req: InputRequest) => InputResponse = () => ({ kind: 'ask', allowed: false })
 
-  const context = (sessionId = 's1'): SecurityContext =>
-    getDesktopSecurityContext(
+  const context = (sessionId = 's1'): SecurityContext => {
+    ensureSession(sessionId, config.workingDirectory)
+    return getDesktopSecurityContext(
       {
         sessionId,
         requestUserInput: async (req) => {
@@ -188,11 +241,22 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       },
       () => config
     )
+  }
   const evaluatePath = (mode: 'read' | 'write', path: string, sessionId = 's1'): SecurityDecision =>
     context(sessionId).evaluate(mode, { type: 'path', path })
-  /** 这一刻的桌面变量表（前提断言用：会话目录是哪一组） */
-  const varsNow = (sessionId = 's1'): Record<string, unknown> =>
-    makeDesktopSecurityProvider({ sessionId }, () => config).getVars() as Record<string, unknown>
+  /** 这一刻的桌面变量表（前提断言用：权限表里是哪一组） */
+  const varsNow = (sessionId = 's1'): Record<string, unknown> => {
+    ensureSession(sessionId, config.workingDirectory)
+    return makeDesktopSecurityProvider({ sessionId }, () => config).getVars() as Record<
+      string,
+      unknown
+    >
+  }
+  /** 授予一条路径（来源 user） */
+  const grant = (path: string, access: PathAccess, sessionId = 's1'): void => {
+    ensureSession(sessionId, config.workingDirectory)
+    expect(sessionAcl.grantPath(sessionId, path, access), path).not.toBeNull()
+  }
 
   /**
    * 目录树（ROOT 下）：
@@ -273,16 +337,18 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
 
   beforeEach(() => {
     state.home = HOME
-    state.settings = undefined
     state.userPolicies = []
-    state.granted = []
+    // 会话行与权限表都是进程级的内存表：每条用例从空表开始
+    sessionRecords.clearEphemeralForTests()
+    clearMemoryAclForTests()
+    sessionAcl.forgetReconciled()
     config.workingDirectory = WS
     asks.length = 0
     respond = () => ({ kind: 'ask', allowed: false })
   })
 
-  it('RPP-0 前提：会话目录是解析过的工作区、<家目录>/.shuvix/artifacts/s1 与 tool-results/s1；工作区与家目录外的读不问，区内写不问', () => {
-    const dirs = varsNow().sessionDirs as string[]
+  it('RPP-0 前提：权限表（可写）里是解析过的工作区、<家目录>/.shuvix/artifacts/s1 与 tool-results/s1；工作区与家目录外的读不问，区内写不问', () => {
+    const dirs = varsNow().aclWrite as string[]
     expect(dirs).toEqual(
       expect.arrayContaining([
         REAL_WS,
@@ -323,7 +389,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     expect((asks[0] as AskInputRequest).policyPrompt?.text).toBeTruthy()
   })
 
-  it('RPP-2 同一条链接写入 → 会话目录外的写：ask-on-external-path#1 问，卡片以私钥领头、注着 key；「允许并记住」记下的是私钥本身', async () => {
+  it('RPP-2 同一条链接写入 → 权限表外的写：ask-on-external-path#1 问，卡片以私钥领头、注着 key；「允许并记住」记进权限表的是私钥本身', async () => {
     const link = join(WS, 'key')
     const target = join(REAL_HOME, '.ssh', 'id_rsa')
 
@@ -349,8 +415,9 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     })
 
     respond = () => ({ kind: 'ask', allowed: true, extra: { rememberPath: true } })
+    expect(userGrants()).toEqual([])
     await context().enforcePath('write', link, { toolCallId: 'w2b', toolName: 'write' })
-    expect(state.granted).toEqual([{ sessionId: 's1', mode: 'write', paths: [target] }])
+    expect(userGrants()).toEqual([{ access: 'write', target }])
   })
 
   it('RPP-3 ~/.ssh 本身是链接（dotfiles 仓库）：真实位置与经 ~/.ssh 的写法都在家目录里 —— 读问 #0、写问 #1（还不存在的新 key 也一样）；装回 protect-credentials：它的 credentialDirs（vars.home + /.ssh，本身是链接）按真实去处展开，真实位置上的私钥同样命中它', () => {
@@ -377,9 +444,9 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     expect(other.matched).not.toContain('protect-credentials#0')
   })
 
-  it('RPP-4 工作区本身经链接打开：会话目录记的是真实工作区 —— 两种写法的读写都放行；反过来（工作区写真实路径、交来经链接的写法）也一样', () => {
+  it('RPP-4 工作区本身经链接打开：权限表记的是真实工作区 —— 两种写法的读写都放行；反过来（工作区写真实路径、交来经链接的写法）也一样', () => {
     config.workingDirectory = WS_LINK
-    const dirs = varsNow().sessionDirs as string[]
+    const dirs = varsNow().aclWrite as string[]
     expect(dirs).toContain(REAL_WS)
     expect(dirs).not.toContain(WS_LINK)
     for (const p of [join(WS, 'notes.txt'), join(WS_LINK, 'notes.txt')]) {
@@ -444,23 +511,22 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     }
   )
 
-  it('RPP-7 「允许并记住」记下的是真实去处（addAllowListPaths 收到的就是它）；落库之后，经链接的写法与真实路径都不再问', async () => {
+  it('RPP-7 「允许并记住」记下的是真实去处（权限表里那一行的目标就是它）；记下之后，经链接的写法与真实路径都不再问', async () => {
     respond = () => ({ kind: 'ask', allowed: true, extra: { rememberPath: true } })
     const link = join(WS, 'wlink')
     const target = join(REAL_ROOT, 'outside', 'target.txt')
 
-    await context().enforcePath('write', link, { toolCallId: 'w7', toolName: 'write' })
-    expect(asks).toHaveLength(1)
-    expect(asks[0]).toMatchObject({ command: `Write(${target})`, requestedPath: link })
-    expect(state.granted).toEqual([{ sessionId: 's1', mode: 'write', paths: [target] }])
-
-    // 落库之前三种写法都问，落库之后都放行 —— 前后只差那一条授权
+    // 记下之前三种写法都问，记下之后都放行 —— 前后只差那一条授权
     const forms = [link, target, join(ROOT, 'outside', 'target.txt')]
     for (const p of forms) {
       expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({ p, write: ASK_WRITE })
     }
-    // 那一条落进会话 allowList 之后（生产里是 SQLite；这里直接喂给 sessionDao）
-    state.settings = { allowList: [`Write(${target})`] }
+
+    await context().enforcePath('write', link, { toolCallId: 'w7', toolName: 'write' })
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({ command: `Write(${target})`, requestedPath: link })
+    expect(userGrants()).toEqual([{ access: 'write', target }])
+
     for (const p of forms) {
       expect({ p, write: verdict(evaluatePath('write', p)) }).toEqual({ p, write: ALLOW })
     }
@@ -470,18 +536,21 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     const link = join(WS, 'hlink')
     expect(verdict(evaluatePath('read', link))).toEqual(ASK_READ)
 
-    for (const entry of [
-      `Read(${join(REAL_HOME, 'docs', 'doc.txt')})`,
-      `Read(${join(HOME, 'docs', 'doc.txt')})`,
-      `Read(${join(REAL_HOME, 'docs')})`,
+    for (const [path, access] of [
+      [join(REAL_HOME, 'docs', 'doc.txt'), 'read'],
+      [join(HOME, 'docs', 'doc.txt'), 'read'],
+      [join(REAL_HOME, 'docs'), 'read'],
       // 写授权覆盖读：信得过 agent 往那里写，读就不是额外的让步
-      `Write(${join(HOME, 'docs')})`
-    ]) {
-      state.settings = { allowList: [entry] }
+      [join(HOME, 'docs'), 'write']
+    ] as const) {
+      revokeGrants()
+      grant(path, access)
+      const entry = `${access}:${path}`
       expect({ entry, read: verdict(evaluatePath('read', link)) }).toEqual({ entry, read: ALLOW })
     }
 
-    state.settings = { allowList: [`Read(${join(REAL_HOME, 'docs')})`] }
+    revokeGrants()
+    grant(join(REAL_HOME, 'docs'), 'read')
     expect(verdict(evaluatePath('write', link))).toEqual(ASK_WRITE)
   })
 
@@ -554,7 +623,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
 
     state.userPolicies = [retiredPolicy('protect-shuvix-config')]
     for (const granted of [false, true]) {
-      state.settings = granted ? { allowList: [`Write(${target})`] } : undefined
+      if (granted) grant(target, 'write')
       const decision = evaluatePath('write', link)
       expect({
         granted,
@@ -571,8 +640,7 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       expect(decision.ask?.requestedPath).toBe(link)
     }
 
-    // 走一遍真的门：卡片上是真实去处，注着链接写法；拒绝的原话用交来的显示名
-    state.settings = { allowList: [`Write(${target})`] }
+    // 走一遍真的门（授权还在）：卡片上是真实去处，注着链接写法；拒绝的原话用交来的显示名
     expect(
       await rejectionOf(
         context().enforcePath('write', link, {
@@ -591,9 +659,9 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
     })
   })
 
-  it('RPP-W1 工作区（会话目录）的豁免按真实去处判：区内链接指向区外 → 问；区外链接指向区内普通文件 → 放行，指向区内 git 的 hooks 同样放行（.git 不再另算）；链接后的 `..` 走出工作区 → 问', () => {
-    // 前提：区内普通文件确实被豁免（会话目录生效，不是整片都在问）
-    expect(varsNow().sessionDirs).toContain(REAL_WS)
+  it('RPP-W1 工作区（权限表里）的豁免按真实去处判：区内链接指向区外 → 问；区外链接指向区内普通文件 → 放行，指向区内 git 的 hooks 同样放行（.git 不再另算）；链接后的 `..` 走出工作区 → 问', () => {
+    // 前提：区内普通文件确实被豁免（权限表生效，不是整片都在问）
+    expect(varsNow().aclWrite).toContain(REAL_WS)
     expect(verdict(evaluatePath('write', join(WS, 'notes.txt')))).toEqual(ALLOW)
 
     // 写法在区内、去处在区外
@@ -618,8 +686,8 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
   // ── 本会话 artifacts 的豁免同样按真实去处判 ─────────────────────────────────────────
 
   it('RPP-A1 本会话目录里的链接按它真正指向哪儿过门：rc → ~/.bashrc、key → ~/.ssh/id_rsa 读写都问（卡片是真实去处、注着写法）；sshlink 下的新 key、悬空的 authorized_keys 的写同样不豁免', async () => {
-    // 前提：本会话的 artifacts 目录确实是会话目录（在家目录里，豁免的是它而不是「家目录外」）
-    expect(varsNow().sessionDirs).toContain(join(REAL_HOME, '.shuvix', 'artifacts', 's1'))
+    // 前提：本会话的 artifacts 目录确实在权限表里（在家目录里，豁免的是它而不是「家目录外」）
+    expect(varsNow().aclWrite).toContain(join(REAL_HOME, '.shuvix', 'artifacts', 's1'))
 
     const rc = join(ART, 's1', 'rc')
     const rcWrite = evaluatePath('write', rc)
@@ -702,8 +770,9 @@ describe.skipIf(process.platform === 'win32')('路径策略按真实去处判（
       context().enforcePath('read', info.path, { toolCallId: 'ra', toolName: 'read' })
     ).resolves.toBeUndefined()
     expect(asks).toEqual([])
-    // 豁免不是「允许并记住」：什么都没记进会话授权
-    expect(state.granted).toEqual([])
+    // 豁免不是「允许并记住」：权限表里一条授予的行都没有
+    expect(userGrants('s1')).toEqual([])
+    expect(userGrants('s2')).toEqual([])
 
     expect(verdict(evaluatePath('write', join(ROOT, 'outside', 'target.txt')))).toEqual(ASK_WRITE)
   })

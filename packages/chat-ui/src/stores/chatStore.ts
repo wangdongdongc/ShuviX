@@ -95,7 +95,6 @@ export interface SessionModelMetadata {
 
 /** 会话级配置 */
 export interface SessionSettings {
-  allowList?: string[]
   /** 扩展能力勾选（mcp:/skill:）；只在创建 Agent 时读一次，运行时存在期间只读（见 useSessionTools） */
   enabledTools?: string[]
   /** 绑定的 bot；有值即为 bot 会话（普通有根会话，根档案 bot）。判定经 chat-protocol 的 isBotSessionSettings */

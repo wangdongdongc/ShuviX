@@ -54,7 +54,6 @@ function judge(text: string, address: string, attrs: Record<string, unknown> = {
     host: 'desktop',
     pathSep: '/',
     getVars: () => ({}),
-    getSessionGrants: () => ({ allowList: [] }),
     readBuiltinPolicyMd: READ_MD,
     getUserPolicies: () => [user]
   }

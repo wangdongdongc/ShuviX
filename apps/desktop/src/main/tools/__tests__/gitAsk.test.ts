@@ -2,7 +2,7 @@
  * 桌面 git 工具的询问接线集成测试 —— 经 registerBuiltinTool 捕获的 factory 拿到真实工具，
  * 真实临时仓库 + mock 掉 toolContext/i18n。
  *
- * 覆盖 makeDesktopAskOp 的五条响应分支、makeDesktopResolveDir 的「工作目录内豁免」，
+ * 覆盖 makeDesktopAskOp 的五条响应分支、makeDesktopResolveDir 一律过路径门（工作目录内也一样 —— 问不问由会话权限表定），
  * 以及三语询问文案键的齐全性。
  *
  * 出厂的 git-safety 已删（2026-10-01：出厂不留硬限制、默认尽可能少问）—— 出厂时 git 工具的
@@ -87,7 +87,6 @@ vi.mock('../../services/toolContext', async () => {
           }),
           readBuiltinPolicyMd: INLINE_POLICY_MD,
           getUserPolicies: () => state.userPolicies,
-          getSessionGrants: () => ({ allowList: [] }),
           requestUserInput: ctx.requestUserInput
         }
       )
@@ -343,7 +342,7 @@ describe('桌面 enforceGitOp 透传', () => {
 })
 
 describe('桌面 makeDesktopResolveDir', () => {
-  it('GIT-10: dir 在工作目录内 + mutates → 不触发路径询问', async () => {
+  it('GIT-10: dir 在工作目录内 + mutates → 照样过路径写门（问不问由会话权限表定：工作目录那一行可写就不问）', async () => {
     const repo = join(state.workingDirectory, 'sub')
     nodeFs.mkdirSync(repo, { recursive: true })
     execSync('git init -b main', { cwd: repo, stdio: 'ignore' })
@@ -357,7 +356,8 @@ describe('桌面 makeDesktopResolveDir', () => {
     expect(execSync('git diff --cached --name-only', { cwd: repo, encoding: 'utf8' })).toContain(
       'a.txt'
     )
-    expect(state.writeGuard).toEqual([])
+    // 从前工作目录内直接放行、不看权限表；现在与文件工具同一条路（显示的是模型写的相对写法）
+    expect(state.writeGuard).toEqual([{ path: repo, displayPath: 'sub' }])
     expect(state.readGuard).toEqual([])
   })
 

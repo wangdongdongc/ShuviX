@@ -10,7 +10,7 @@
  *    原样带过去；没声明平台的工具不带这个键。
  *
  * 注册表是真的（工具模块在加载时自注册），只顶掉让工具模块加载得起来的外围：electron（bgTaskService
- * → utils/paths）、toolContext（会拖进 SQLite）、i18n。`getPowerShellConfig` 桩成固定值 —— 在非
+ * → utils/paths）、toolContext 与会话权限表 services/acl（都会拖进 SQLite）、i18n。`getPowerShellConfig` 桩成固定值 —— 在非
  * Windows 主机上 stub 成 win32 时，真函数会去 spawn `where`。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -23,6 +23,7 @@ vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => ({ enforceCommand: async () => ({ status: 'allowed' }) }),
   TOOL_ABORTED: 'Aborted'
 }))
+vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/toolUtils/shell')>()

@@ -7,10 +7,18 @@
  *   CA-3 每个值都是 read / write / admin 之一
  *   CA-4 `channelAccessOf` 对不认识的通道回 admin（最严）
  *   CA-5 几条钉死的抽查（策略写入是 admin、会话列表是 read、发消息是 write ……）
+ *   CA-6 会话权限表：读是 read，增删改都是 admin
+ *   CA-7 channelCallAccessOf：回答询问卡勾了「允许并记住」→ admin（与 session:grantAcl 同档），别的回答照通道那一档；
+ *        别的通道就算参数长得像也照通道那一档
  */
 import { describe, expect, it } from 'vitest'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
-import { CHANNEL_ACCESS, channelAccessOf, type ChannelAccess } from '../channelAccess'
+import {
+  CHANNEL_ACCESS,
+  channelAccessOf,
+  channelCallAccessOf,
+  type ChannelAccess
+} from '../channelAccess'
 
 /** 通道表 + override 里的请求通道（invoke / send） */
 function requestChannels(): Set<string> {
@@ -108,5 +116,43 @@ describe('CA-5 抽查', () => {
   ])('CA-5 %s → %s', (channel, access) => {
     expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
     expect(channelAccessOf(channel)).toBe(access)
+  })
+})
+
+describe('CA-6 会话权限表', () => {
+  it.each<[string, ChannelAccess]>([
+    ['session:listAcl', 'read'],
+    ['session:grantAcl', 'admin'],
+    ['session:setAclAccess', 'admin'],
+    ['session:removeAclEntry', 'admin']
+  ])('CA-6 %s → %s', (channel, access) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(channelAccessOf(channel)).toBe(access)
+  })
+})
+
+describe('CA-7 channelCallAccessOf', () => {
+  const answer = (extra?: Record<string, unknown>): unknown[] => [
+    {
+      sessionId: 's1',
+      requestId: 'r1',
+      response: { kind: 'ask', allowed: true, ...(extra ? { extra } : {}) }
+    }
+  ]
+  it('CA-7 勾了「允许并记住」→ admin；别的回答 → write', () => {
+    expect(channelCallAccessOf('agent:respondToInput', answer({ rememberPath: true }))).toBe(
+      'admin'
+    )
+    expect(channelCallAccessOf('agent:respondToInput', answer())).toBe('write')
+    expect(channelCallAccessOf('agent:respondToInput', answer({ rememberPath: false }))).toBe(
+      'write'
+    )
+    expect(channelCallAccessOf('agent:respondToInput', [])).toBe('write')
+    expect(channelCallAccessOf('agent:respondToInput', [null])).toBe('write')
+  })
+  it('CA-7 别的通道照通道那一档', () => {
+    expect(channelCallAccessOf('agent:prompt', answer({ rememberPath: true }))).toBe('write')
+    expect(channelCallAccessOf('session:list', [])).toBe('read')
+    expect(channelCallAccessOf('no:such-channel', [])).toBe('admin')
   })
 })

@@ -8,7 +8,8 @@
  * 用户 hook 绑的别的档案同样算审查员。
  *
  * hookService / messageService / settingsService / 前端注册表是替身；toolContext 的 dao / paths / policy /
- * sandbox / skill / knowledge 依赖照 toolContext.test 的做法替身（内置策略读仓库里那一份 md）。
+ * skill / 会话权限表（services/acl：空表 —— 工作区 /rv-ws 在家目录外，读本来就不问，写一律问）依赖照
+ * toolContext.test 的做法替身（内置策略读仓库里那一份 md）。
  *
  * P2-07-53（p2-07-test-design.md，PIN-09）—— 同一个防递归经一台**内置 MCP 服务器**走一遍：真 database
  * server（凭据 DAO 与连接池是替身）隔着真 MCP 协议，scope 带 `agentOf`；调用身份经 `_meta` 进来，
@@ -51,7 +52,10 @@ vi.mock('../sessionRecords', () => ({
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pickSettings: () => undefined } }))
 vi.mock('../sessionService', () => ({
-  sessionService: { getById: () => undefined, addAllowListPaths: () => {} }
+  sessionService: { getById: () => undefined }
+}))
+vi.mock('../acl', () => ({
+  sessionAcl: { pathView: () => ({ read: [], write: [] }), grantPath: () => null }
 }))
 vi.mock('../skillService', () => ({
   skillService: {

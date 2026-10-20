@@ -29,7 +29,7 @@ import {
   type SecuritySubject
 } from '@shuvix/agent-runtime'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../../../shared/apiTable'
-import { channelAccessOf } from '../../../shared/channelAccess'
+import { channelCallAccessOf } from '../../../shared/channelAccess'
 import { NETWORK_WS_PATH } from '../../../shared/networkEnvelope'
 import { NETWORK_WIDGET_PREFIX } from '../../../shared/networkRoutes'
 import type {
@@ -439,7 +439,7 @@ export class NetworkPolicyGate {
       channel: call.channel,
       group: channelGroupOf(call.channel),
       kind: call.kind,
-      access: channelAccessOf(call.channel),
+      access: channelCallAccessOf(call.channel, call.args),
       size: call.size
     }
     Object.defineProperty(object, 'args', { enumerable: false, get: () => call.args })

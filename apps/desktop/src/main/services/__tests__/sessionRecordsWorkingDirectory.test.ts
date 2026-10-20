@@ -74,7 +74,7 @@ describe('RW sessionRecords adds the live in-memory sessions', () => {
     sessionRecords.insert(session('m1', { workingDirectory: `${DIR}/sub` }), { ephemeral: true })
     sessionRecords.insert(session('m2', { workingDirectory: `${DIR}/` }), { ephemeral: true })
     sessionRecords.insert(session('m3', { notebookPath: DIR }), { ephemeral: true })
-    sessionRecords.insert(session('m4', { allowList: [DIR] }), { ephemeral: true })
+    sessionRecords.insert(session('m4', { knowledgeBases: [DIR] }), { ephemeral: true })
     expect(sessionRecords.existsWithWorkingDirectory(DIR)).toBe(false)
     expect(sessionRecords.existsWithWorkingDirectory(`${DIR}/sub`)).toBe(true)
   })

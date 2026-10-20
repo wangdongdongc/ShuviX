@@ -13,7 +13,7 @@
  * 一句「它指向哪里、要操作就直接用那一条」，不弹卡、不记决策、两头一个字节都不动；照提示改用真实路径
  * 重发，那一次照常过门。**中间段**是链接的（链接目录、macOS 的 /var）不在此列，照常过门、按真实去处问。
  * 「门没被问」看决策日志（每次 enforce 都记一条，beforeEach 清空）；应答器缺省放行 —— 没弹卡不是
- * 因为被拒。`state.workspace` 换工作区（R19：工作区本身是链接），`state.grants` 喂会话授权（R15）。
+ * 因为被拒。`state.workspace` 换工作区（R19：工作区本身是链接），`state.grants` 喂会话权限表里授予的路径（R15）。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import {
@@ -56,8 +56,8 @@ const state = vi.hoisted(() => ({
   home: '',
   /** 工作区（resolveProjectConfig 与 vars.workspace 同一个）；空 = TEST_DIR */
   workspace: '',
-  /** 会话授权；缺省 = allowList 空 */
-  grants: undefined as { allowList: string[] } | undefined
+  /** 会话权限表里授予的路径（经 getVars 的 aclRead / aclWrite 交出）；缺省 = 一条都没有 */
+  grants: undefined as { read: string[]; write: string[] } | undefined
 }))
 
 // 可编程 provider：桌面口径（内置 ask-on-external-path；桩给的会话目录是空清单，所以工作目录里
@@ -84,13 +84,13 @@ vi.mock('../../services/toolContext', async () => {
           knowledgeRoot: '/kb',
           knowledgeSessionDirs: [],
           home: state.home || join(TEST_DIR, '.nonexistent-home'),
-          // 会话目录刻意给空：这里测的是询问接线本身，工作目录里的写也要走到卡片上
-          // （会话目录豁免的真实变量表由 askPolicy.test / realPathPolicy.test 钉）
-          sessionDirs: [],
-          systemDirs: []
+          systemDirs: [],
+          // 会话权限表刻意不给工作目录、会话目录：这里测的是询问接线本身，工作目录里的写也要走到
+          // 卡片上（权限表豁免的真实变量表由 askPolicy.test / realPathPolicy.test 钉）；只有用例喂的授予
+          aclRead: state.grants?.read ?? [],
+          aclWrite: state.grants?.write ?? []
         }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
-        getSessionGrants: () => state.grants ?? { allowList: [] },
         isDirectory: () => false,
         persistGrant: (mode: string, path: string) => void state.persisted.push({ mode, path }),
         requestUserInput: async (req: InputRequest) => {
@@ -717,15 +717,14 @@ describe.skipIf(process.platform === 'win32')(
       }
     )
 
-    it('PERM-R15 会话授权跳不过这一条：allowList 里写着链接与真实去处 —— read / write 照样被拒，门不问，私钥与链接都不动', async () => {
+    it('PERM-R15 会话授权跳不过这一条：权限表里授予了链接与真实去处的读写 —— read / write 照样被拒，门不问，私钥与链接都不动', async () => {
       const link = join(TEST_DIR, 'key')
       const target = join(HOME, '.ssh', 'id_rsa')
       const real = realpathSync.native(target)
       const before = footprint(link, target)
 
-      state.grants = {
-        allowList: [`Read(${link})`, `Write(${link})`, `Read(${real})`, `Write(${real})`]
-      }
+      // 读写都授予（写隐含读：可写的也在可读表里）
+      state.grants = { read: [link, real], write: [link, real] }
       expect(await messageOf(executeTool(makeReadTool(ctx), 'pr15a', { path: link }))).toContain(
         `${link} is a symbolic link to ${real}.`
       )

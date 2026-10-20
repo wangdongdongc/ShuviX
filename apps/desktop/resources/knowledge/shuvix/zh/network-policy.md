@@ -67,7 +67,7 @@ ShuviX 只出厂一份网络策略 `network-admission`：**只有这台电脑能
 | `connection`    | string | channel 与文件通道检查时是那条 WebSocket 连接（`ws:7`）；其余为 `''` | 是                                   |
 
 `env.host` 是 `desktop`（无头运行也是）。`vars` 里是 `policy-md` 条目那张表中与会话无关的宿主变量 —— `home`、
-`shuvixConfigDirs`、`botsDir`、`skillsDirs` …… —— 没有会话目录，也没有授权。
+`shuvixConfigDirs`、`botsDir`、`skillsDirs` …… —— 没有会话权限表（`aclRead` / `aclWrite`）。
 
 ### 四个点位
 

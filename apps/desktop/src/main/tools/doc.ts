@@ -23,6 +23,7 @@ import { basename } from 'path'
 import type { ToolCallScope, ToolResult } from '@shuvix/agent-runtime'
 import {
   BaseTool,
+  callOwnerOf,
   detectLineEnding,
   normalizeToLF,
   restoreLineEndings,
@@ -42,7 +43,12 @@ import {
   type LiveDocUserContext
 } from '@shuvix/chat-protocol/liveDocument'
 import { registerBuiltinTool } from '../services/toolRegistry'
-import { resolveSessionDocument, type ToolContext } from '../services/toolContext'
+import {
+  getDesktopSecurityContext,
+  resolveSessionDocument,
+  TOOL_ABORTED,
+  type ToolContext
+} from '../services/toolContext'
 import { requestLiveDocument } from '../services/liveDocumentBridge'
 import { agentActorOf, withCallAgent } from '../services/toolAgent'
 import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
@@ -241,9 +247,30 @@ abstract class DocTool<
 
   protected async securityCheck(): Promise<void> {
     /*
-     * no-op —— 编辑器开着时，改的是用户正看着的这份文档，每次修改都在他眼前落下；磁盘回落的写入在
-     * writeFileContent 里照常过写前询问。要再设门用 L1 全工具门
+     * no-op —— 门按这次走哪条路分开过（见 run）：交给编辑器之前按会话权限表判这次读 / 写；磁盘回落的
+     * 读在 onDisk 里判，写在 writeFileContent 里照常过带 diff 预览的写前询问
      */
+  }
+
+  /**
+   * 这份文档的读 / 写过会话权限表（经安全策略）：笔记本会话的文档是权限表里一行（来源 document，缺省可写，
+   * 用户可改成只读），在表里就不问；改成只读或被用户策略拦下就问 / 拒。
+   */
+  protected gate(
+    mode: 'read' | 'write',
+    toolCallId: string,
+    signal: AbortSignal | undefined,
+    call: ToolCallScope | undefined
+  ): Promise<void> {
+    const doc = sessionDocument(this.ctx)
+    return getDesktopSecurityContext(this.ctx).enforcePath(mode, doc, {
+      toolCallId,
+      ...callOwnerOf(call),
+      toolName: this.name,
+      displayPath: doc,
+      abortError: TOOL_ABORTED,
+      signal
+    })
   }
 
   /**
@@ -252,15 +279,22 @@ abstract class DocTool<
    */
   protected async run(
     op: LiveDocOp,
+    toolCallId: string,
     signal: AbortSignal | undefined,
     call: ToolCallScope | undefined
   ): Promise<{ result: LiveDocResult & { ok: true }; note: string | null }> {
     let diskNote: string | null | undefined
-    const result = await requestLiveDocument(this.ctx.sessionId, op, signal, async () => {
-      const r = await this.onDisk(op, signal, call)
-      diskNote = r.note
-      return r.result
-    })
+    const result = await requestLiveDocument(
+      this.ctx.sessionId,
+      op,
+      signal,
+      async () => {
+        const r = await this.onDisk(op, toolCallId, signal, call)
+        diskNote = r.note
+        return r.result
+      },
+      () => this.gate(op.kind === 'read' ? 'read' : 'write', toolCallId, signal, call)
+    )
     if (!result.ok) throw new Error(result.error)
     if (result.kind === 'read') return { result, note: null }
     const note = diskNote !== undefined ? diskNote : liveDiagnostics(this.ctx, result.text, call)
@@ -270,10 +304,13 @@ abstract class DocTool<
   /** 磁盘回落：同一套定位规则，写入走 write 工具同一条流程 */
   private async onDisk(
     op: LiveDocOp,
+    toolCallId: string,
     signal: AbortSignal | undefined,
     call: ToolCallScope | undefined
   ): Promise<{ result: LiveDocResult; note: string | null }> {
     const doc = sessionDocument(this.ctx)
+    // 读盘也是读：过会话权限表（写入的门在 writeFileContent 里，带 diff 预览）
+    await this.gate('read', toolCallId, signal, call)
     const file = await readDocumentFile(this.ctx, doc)
     if (op.kind === 'read')
       return { result: { ok: true, kind: 'read', text: file.text }, note: null }
@@ -283,7 +320,7 @@ abstract class DocTool<
     if (signal?.aborted) throw new Error('Aborted.')
     const after = file.text.slice(0, plan.from) + plan.insert + file.text.slice(plan.to)
     const { note } = await writeFileContent(makeDesktopFileToolDeps(this.ctx), {
-      toolCallId: op.toolCallId,
+      toolCallId,
       toolName: this.name,
       path: doc,
       portPath: doc,
@@ -306,12 +343,12 @@ export class DocReadTool extends DocTool<typeof DocReadParamsSchema> {
   readonly parameters = DocReadParamsSchema
 
   protected async executeInternal(
-    _toolCallId: string,
+    toolCallId: string,
     _params: Static<typeof DocReadParamsSchema>,
     signal?: AbortSignal,
     call?: ToolCallScope
   ): Promise<ToolResult<undefined>> {
-    const { result } = await this.run({ kind: 'read' }, signal, call)
+    const { result } = await this.run({ kind: 'read' }, toolCallId, signal, call)
     if (result.kind !== 'read') throw new Error('Unexpected answer from the document editor.')
     return { content: [{ type: 'text', text: formatReadResult(result) }], details: undefined }
   }
@@ -333,6 +370,7 @@ export class DocEditTool extends DocTool<typeof DocEditParamsSchema> {
       throw new Error('`find` is empty. To add text without replacing any, use doc_insert.')
     const { result, note } = await this.run(
       { kind: 'edit', toolCallId, find: params.find, replace: params.replace },
+      toolCallId,
       signal,
       call
     )
@@ -371,6 +409,7 @@ export class DocInsertTool extends DocTool<typeof DocInsertParamsSchema> {
         ...(after !== undefined ? { after } : {}),
         ...(before !== undefined ? { before } : {})
       },
+      toolCallId,
       signal,
       call
     )

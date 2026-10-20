@@ -1,11 +1,11 @@
 /**
  * assembleRules —— 三层来源装配：用户策略同名覆盖内置、tier 标定、match 编译透传。
- * 会话授权已不在这里编译（下沉为 buildPolicyVars 产出的 vars.grantedRead / vars.grantedWrite，
- * 出厂由 ask-on-external-path 的 match 当作豁免读），相应用例在本文件的「会话授权（下沉为
- * vars + 策略 md）」一节与端到端断言。
- * 出厂已没有 force-allow：凡是钉「force-allow 怎么压过询问、怎么被 deny 压过、授权变量接线断了时
- * 怎么失效」的用例，改为把退役的 session-grants（及 ask-on-write / protect-credentials）夹具当作
- * 用户策略装上（fixtures/retiredPolicies.ts）。
+ * 会话授权已不在这里编译，也不再由 buildPolicyVars 派生：宿主把会话权限表经 getVars 交成
+ * vars.aclRead / vars.aclWrite（buildPolicyVars 就是 getVars 原样），出厂由 ask-on-external-path 在表外
+ * 询问。相应用例在本文件的「会话权限表（宿主交的 vars + 策略 md）」一节与端到端断言。
+ * 出厂已没有 force-allow：凡是钉「force-allow 怎么压过询问、怎么被 deny 压过、权限表变量接线断了时
+ * 怎么失效」的用例，改为把退役的 session-grants（改读 aclRead / aclWrite，及 ask-on-write /
+ * protect-credentials）夹具当作用户策略装上（fixtures/retiredPolicies.ts）。
  * （lets 求值与 strict fail-safe 的专项用例见 test-designer 清单落地部分）
  * 宿主没供给的目录变量（deny / ask 两档绑定为 null、按 logger 去重告警）见 AS-D 一节；
  * 用户覆盖副本删掉外部目录门的读规则（用户主权）见 AS-A 一节。
@@ -33,6 +33,9 @@ import { retiredPolicy, type RetiredPolicyName } from './fixtures/retiredPolicie
 /** 内置策略 md 的构建期内联读取口（运行时单测的宿主接缝；桌面/扩展各注入自己的） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
 
+/** 权限表里可写的几行（写隐含读：它们同时在 aclRead 里） */
+const ACL_WRITABLE = ['/ws', '/home/u/.shuvix/artifacts/sess-1', '/tool-results/sess-1']
+
 /** 内置策略引用的完整变量表 —— 全供给以免「not provided」告警干扰断言 */
 const BUILTIN_VARS: Record<string, string | string[] | boolean> = {
   workspace: '/ws',
@@ -45,9 +48,10 @@ const BUILTIN_VARS: Record<string, string | string[] | boolean> = {
   botsDir: '/home/u/.shuvix/bots',
   builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
   sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
-  // 会话目录（外部目录门读）：工作目录、本会话的 artifacts 与工具结果；只读的一份是技能目录
-  sessionDirs: ['/ws', '/home/u/.shuvix/artifacts/sess-1', '/tool-results/sess-1'],
-  sessionReadDirs: ['/skills/a', '/skills/b'],
+  // 会话权限表（外部目录门读）：工作目录、本会话的 artifacts 与工具结果可写；技能目录只读（写隐含读：
+  // 可写的几行也在 aclRead 里）
+  aclRead: [...ACL_WRITABLE, '/skills/a', '/skills/b'],
+  aclWrite: ACL_WRITABLE,
   // 宿主照旧供给的事实变量（出厂已没有策略读它们；退役策略的夹具装上时用得到）
   shuvixConfigDirs: [
     '/home/u/.shuvix/policies',
@@ -63,9 +67,25 @@ function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHo
     host: 'desktop',
     pathSep: '/',
     getVars: () => BUILTIN_VARS,
-    getSessionGrants: () => ({ allowList: [] }),
     readBuiltinPolicyMd: INLINE_POLICY_MD,
     ...overrides
+  }
+}
+
+/**
+ * 宿主把「允许并记住」并进权限表之后交出的 vars（桌面 services/acl 的规矩）：写授权同时进 aclRead 与
+ * aclWrite（写隐含读），读授权只进 aclRead
+ */
+function withGrants(
+  grants: { read?: string[]; write?: string[] },
+  base: Record<string, PolicyVarValue> = BUILTIN_VARS
+): Record<string, PolicyVarValue> {
+  const read = grants.read ?? []
+  const write = grants.write ?? []
+  return {
+    ...base,
+    aclRead: [...(base.aclRead as string[]), ...read, ...write],
+    aclWrite: [...(base.aclWrite as string[]), ...write]
   }
 }
 
@@ -92,7 +112,7 @@ function makeCtx(overrides: Partial<MatchContext> = {}): MatchContext {
   }
 }
 
-describe('会话授权（下沉为 vars + 策略 md）', () => {
+describe('会话权限表（宿主交的 vars + 策略 md）', () => {
   /** 端到端判定：与生产路径同款 —— vars 走 buildPolicyVars，装配与求值共用同一份 */
   function decide(
     provider: SecurityHostProvider,
@@ -123,18 +143,15 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
   /** 被豁免（不是被压过）的放行：门根本没命中 */
   const EXEMPT = { effect: 'allow', tier: 'default', winning: 'default:path', matched: [] }
 
-  it('AS-1 allowList → grantedRead/grantedWrite；出厂外部目录门把它们当豁免读：Read 条目只免读，Write 条目读写都免（写授权隐含读）', () => {
-    const provider = makeProvider({
-      getSessionGrants: () => ({
-        allowList: ['Read(/home/u/data/a.txt)', 'Write(/home/u/data/b.txt)']
-      })
-    })
-    expect(buildPolicyVars(provider)).toMatchObject({
-      grantedRead: ['/home/u/data/a.txt'],
-      grantedWrite: ['/home/u/data/b.txt']
-    })
+  it('AS-1 授权就是权限表里的行：buildPolicyVars 原样交出 getVars（不再派生 granted*）；出厂外部目录门在表外才问 —— 读授权（只进 aclRead）只免读，写授权（两张表都进）读写都免', () => {
+    const vars = withGrants({ read: ['/home/u/data/a.txt'], write: ['/home/u/data/b.txt'] })
+    const provider = makeProvider({ getVars: () => vars })
+    const built = buildPolicyVars(provider)
+    expect(built).toEqual(vars)
+    expect(built).not.toHaveProperty('grantedRead')
+    expect(built).not.toHaveProperty('grantedWrite')
 
-    // 对照：没授权时家目录里的读、会话目录外的写都问
+    // 对照：没授权时家目录里的读、表外的写都问
     expect(decide(makeProvider(), 'read', '/home/u/data/a.txt').winning).toBe(
       'ask-on-external-path#0'
     )
@@ -142,21 +159,19 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
       'ask-on-external-path#1'
     )
 
-    // Read 条目：读被豁免（零命中 —— 不是哪条 force-allow 压过了询问），写仍走询问门
+    // 读授权：读被豁免（零命中 —— 不是哪条 force-allow 压过了询问），写仍走询问门
     expect(decide(provider, 'read', '/home/u/data/a.txt')).toMatchObject(EXEMPT)
     expect(decide(provider, 'write', '/home/u/data/a.txt')).toMatchObject({
       effect: 'ask',
       winning: 'ask-on-external-path#1'
     })
-    // Write 条目：读写都豁免
+    // 写授权：读写都豁免
     expect(decide(provider, 'read', '/home/u/data/b.txt')).toMatchObject(EXEMPT)
     expect(decide(provider, 'write', '/home/u/data/b.txt')).toMatchObject(EXEMPT)
   })
 
-  it('AS-1b 授权按路径段边界匹配；非 path 客体不受影响且不告警', () => {
-    const provider = makeProvider({
-      getSessionGrants: () => ({ allowList: ['Read(/home/u/data)'] })
-    })
+  it('AS-1b 表里的行按路径段边界匹配；非 path 客体不受影响且不告警', () => {
+    const provider = makeProvider({ getVars: () => withGrants({ read: ['/home/u/data'] }) })
     expect(decide(provider, 'read', '/home/u/data')).toMatchObject(EXEMPT)
     expect(decide(provider, 'read', '/home/u/data/sub/x.txt')).toMatchObject(EXEMPT)
     // /home/u/data 不得罩住 /home/u/database（inDir 与旧 matchesPathEntry 同一实现）
@@ -191,13 +206,14 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it('AS-2 历史 Bash(...)/SSH(...)/畸形条目 → 不授予任何权限', () => {
+  it('AS-2 表里的行是路径、照 inDir 比，运行时不解析条目：混进表里的条目字面值（Read(...) / Write(...) / Bash(...) / SSH(...)）、乱码与空串什么都不免', () => {
     const provider = makeProvider({
-      getSessionGrants: () => ({
-        allowList: ['Bash(ls -la)', 'SSH(cat /etc/passwd)', 'garbage', 'Read()']
-      })
+      getVars: () =>
+        withGrants({
+          read: ['Read(/home/u/x.txt)', 'Bash(ls -la)', 'garbage', ''],
+          write: ['Write(/outside)', 'SSH(cat /etc/passwd)']
+        })
     })
-    expect(buildPolicyVars(provider)).toMatchObject({ grantedRead: [], grantedWrite: [] })
     expect(decide(provider, 'write', '/outside/x.txt').effect).toBe('ask')
     expect(decide(provider, 'read', '/home/u/x.txt').winning).toBe('ask-on-external-path#0')
   })
@@ -223,21 +239,16 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
   })
 
   it('AS-3b deny 压过 force-allow：「允许并记住」过的目录也拦不住 deny（用户装上退役的 protect-system 与 session-grants 夹具）', () => {
-    const on = withRetired(['protect-system', 'session-grants'], {
-      getVars: () => ({ ...BUILTIN_VARS, systemDirs: ['/sysroot'] }),
-      getSessionGrants: () => ({ allowList: ['Write(/sysroot)'] })
-    })
+    const vars = withGrants({ write: ['/sysroot'] }, { ...BUILTIN_VARS, systemDirs: ['/sysroot'] })
+    const on = withRetired(['protect-system', 'session-grants'], { getVars: () => vars })
     const decision = decide(on, 'write', '/sysroot/x.conf')
     expect(decision.effect).toBe('deny')
     expect(decision.winning).toBe('protect-system#0')
-    // 夹具的 force-allow 授权规则确实命中了（是被 deny 压过，而不是没匹配上）
+    // 夹具的 force-allow 规则确实命中了（是被 deny 压过，而不是没匹配上）
     expect(decision.matched).toContain('session-grants#1')
 
-    // 对照：只有出厂两份时，同一次写被授权豁免（出厂没有 deny，也没有 force-allow）
-    const bare = makeProvider({
-      getVars: () => ({ ...BUILTIN_VARS, systemDirs: ['/sysroot'] }),
-      getSessionGrants: () => ({ allowList: ['Write(/sysroot)'] })
-    })
+    // 对照：只有出厂两份时，同一次写被权限表豁免（出厂没有 deny，也没有 force-allow）
+    const bare = makeProvider({ getVars: () => vars })
     expect(decide(bare, 'write', '/sysroot/x.conf')).toMatchObject(EXEMPT)
   })
 
@@ -262,20 +273,17 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(asked.prompt?.text).toContain('My own words.')
 
     // ② force-allow 档：两份用户策略，按装上的顺序
-    const granting = withRetired(['session-grants'], {
-      getSessionGrants: () => ({ allowList: ['Write(/anywhere)'] })
-    })
     const both = makeProvider({
-      getSessionGrants: () => ({ allowList: ['Write(/anywhere)'] }),
+      getVars: () => withGrants({ write: ['/anywhere'] }),
       getUserPolicies: () => [
-        ...granting.getUserPolicies!(),
+        retiredPolicy('session-grants'),
         userPolicy('trust-anywhere', [
           {
             effect: 'force-allow',
             match: "object.type == 'path' && inDir(object.path, '/anywhere')"
           }
         ]),
-        // 一道不认授权的询问门，好让 force-allow 有东西可压
+        // 一道不认权限表的询问门，好让 force-allow 有东西可压
         userPolicy('ask-everything', [{ effect: 'ask', match: "object.type == 'path'" }])
       ]
     })
@@ -284,35 +292,45 @@ describe('会话授权（下沉为 vars + 策略 md）', () => {
     expect(decision.winning).toBe('session-grants#1')
     expect(decision.matched).toContain('session-grants#1')
     expect(decision.matched).toContain('trust-anywhere#0')
-    // 被压过的 ask 门仍在 matched（门没拆，只是没胜出）；出厂外部目录门被授权豁免，不在其列
+    // 被压过的 ask 门仍在 matched（门没拆，只是没胜出）；出厂外部目录门被权限表豁免，不在其列
     expect(decision.matched).toContain('ask-everything#0')
     expect(decision.matched).not.toContain('ask-on-external-path#1')
   })
 
-  it('AS-3c 宿主 getVars 同名定义劫持不了会话授权', () => {
+  it('AS-3c 退役的变量名是死键：宿主 getVars 里残留 grantedRead / grantedWrite / sessionDirs / sessionReadDirs 也免不了任何询问，内置规则里没有人读它们', () => {
+    const LEGACY = ['grantedRead', 'grantedWrite', 'sessionDirs', 'sessionReadDirs']
     const provider = makeProvider({
       getVars: () => ({
         ...BUILTIN_VARS,
-        grantedRead: ['/everything'],
-        grantedWrite: ['/everything']
-      }),
-      getSessionGrants: () => ({ allowList: [] })
+        ...Object.fromEntries(LEGACY.map((name) => [name, ['/everything', '/home/u/everything']]))
+      })
     })
-    expect(buildPolicyVars(provider)).toMatchObject({ grantedRead: [], grantedWrite: [] })
-    expect(decide(provider, 'write', '/everything/x.txt').effect).toBe('ask')
+    expect(decide(provider, 'write', '/everything/x.txt')).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-external-path#1'
+    })
+    expect(decide(provider, 'read', '/home/u/everything/x.txt')).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-external-path#0'
+    })
+    for (const rule of assembleRules(provider)) {
+      for (const name of LEGACY) {
+        expect(rule.matchExpr ?? '', `${rule.id} 还在读 vars.${name}`).not.toContain(`vars.${name}`)
+      }
+    }
   })
 })
 
 /**
- * 授权变量的失效模式守护 —— 装配（lets）与求值（match）必须共用同一份 buildPolicyVars 产物。
- * 只在一处注入授权变量，另一处就缺键：
- *   - 读它的 force-allow（退役的 session-grants 夹具）strict 报错走 fail-safe：归一后的 effect 是
- *     allow → **视为不命中**，授权静默失效，每次评估都在 evaluate 的 warn 上响（CV-1 / CV-2）；
- *   - 出厂外部目录门把授权写成 ask 规则里只作 inDir 目录参数的 `!inDir(…, vars.granted*)`：缺键被
+ * 权限表变量的失效模式守护 —— 装配（lets）与求值（match）必须共用同一份 buildPolicyVars 产物（一次
+ * getVars）。求值侧拿到的 vars 缺了 aclRead / aclWrite（宿主漏交，或两处各取一次、取到的不是同一张表）：
+ *   - 读它们的 force-allow（退役的 session-grants 夹具）strict 报错走 fail-safe：归一后的 effect 是
+ *     allow → **视为不命中**，权限表静默失效，每次评估都在 evaluate 的 warn 上响（CV-1 / CV-2）；
+ *   - 出厂外部目录门把权限表写成 ask 规则里只作 inDir 目录参数的 `!inDir(…, vars.acl*)`：缺键被
  *     装配绑成 null，豁免没了 —— 照问，在 provider.logger 上按 logger 记一行（CV-1b）。
  * 方向都偏安全（多问一次），但用户会觉得「允许并记住」坏了 —— 这几条就是让它响。
  */
-describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () => {
+describe('assembleRules × evaluate — 权限表 vars 的失效模式守护', () => {
   /** 退役前的出厂三份（按用户策略装上）：凭据读门、写入门与 force-allow 的会话授权 */
   const RETIRED_TRIO: RetiredPolicyName[] = [
     'protect-credentials',
@@ -329,12 +347,16 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
       ...(opts.retired === false
         ? {}
         : { getUserPolicies: () => RETIRED_TRIO.map((name) => retiredPolicy(name)) }),
-      getSessionGrants: () => ({
-        allowList: ['Write(/outside)', 'Write(/data)', 'Read(/home/u/.ssh)']
-      })
+      getVars: () => withGrants({ write: ['/outside', '/data'], read: ['/home/u/.ssh'] })
     })
 
-  /** 装配用完整 vars，求值用「残缺」vars（缺 granted*）—— 待守护的失效形态 */
+  /** 拿掉权限表两个变量（宿主漏交的形态）；其余宿主变量照旧 */
+  const withoutAcl = (vars: Record<string, PolicyVarValue>): Record<string, PolicyVarValue> => {
+    const { aclRead: _aclRead, aclWrite: _aclWrite, ...rest } = vars
+    return rest
+  }
+
+  /** 装配用完整 vars，求值用「残缺」vars（缺 acl*）—— 待守护的失效形态 */
   const decideWithVars = (
     provider: SecurityHostProvider,
     action: string,
@@ -355,18 +377,24 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
 
   /** 授权若真的生效，这三格都会是 allow —— 因此三格全 ask 才算守住 */
   const GRID: Array<[string, string]> = [
-    ['write', '/outside/x.txt'], // Write(/outside) 授权该放行的
-    ['write', '/data/x.txt'], // Write(/data) 授权该放行的
-    ['read', '/home/u/.ssh/x'] // Read(/home/u/.ssh) 授权该放行的
+    ['write', '/outside/x.txt'], // 写授权 /outside 该放行的
+    ['write', '/data/x.txt'], // 写授权 /data 该放行的
+    ['read', '/home/u/.ssh/x'] // 读授权 /home/u/.ssh 该放行的
   ]
 
-  it('CV-1 装着退役前的出厂三份、求值侧拿不到授权变量（provider.getVars() / 完全省略）→ 授权全线失效，任何一格都不得 allow', () => {
+  it('CV-1 装着退役前的出厂三份、求值侧拿不到权限表（vars 缺 aclRead / aclWrite / 完全省略）→ 授权全线失效，任何一格都不得 allow', () => {
     const provider = grantedProvider()
 
-    // 形态①：求值侧传的是 provider.getVars()（宿主静态变量，没有 granted*）
+    // 形态①：求值侧的 vars 缺权限表两个变量（宿主别的变量都在）
     for (const [action, path] of GRID) {
-      const decision = decideWithVars(provider, action, path, provider.getVars(), vi.fn())
-      expect(decision.effect, `getVars() × ${action} ${path}`).toBe('ask')
+      const decision = decideWithVars(
+        provider,
+        action,
+        path,
+        withoutAcl(provider.getVars()),
+        vi.fn()
+      )
+      expect(decision.effect, `缺 acl* × ${action} ${path}`).toBe('ask')
     }
 
     // 形态②：opts.vars 完全省略（空表）—— 同样一格都不能放行
@@ -392,24 +420,30 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
     }
   })
 
-  it('CV-1b 只有出厂两份：求值侧缺授权变量 → 外部目录门的豁免被绑成 null，三格全问、授权两个变量各记一行；整份 vars 都缺时 vars.home 也被绑成 null —— 读规则命中不了、读那一格放行（钉住这个代价），写照问', () => {
+  it('CV-1b 只有出厂两份：求值侧缺权限表 → 外部目录门的豁免被绑成 null，三格全问、aclRead / aclWrite 各记一行；整份 vars 都缺时 vars.home 也被绑成 null —— 读规则命中不了、读那一格放行（钉住这个代价），写照问', () => {
     const lines = (spy: ReturnType<typeof vi.fn>): string[] =>
       spy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('is not provided'))
 
-    // 形态①：provider.getVars() —— 只缺 granted*
+    // 形态①：只缺 acl*
     const warn = vi.fn()
     const evalWarn = vi.fn()
     const provider = grantedProvider({ warn, retired: false })
     for (let round = 0; round < 2; round++) {
       for (const [action, path] of GRID) {
-        const decision = decideWithVars(provider, action, path, provider.getVars(), evalWarn)
-        expect(decision.effect, `getVars() × ${action} ${path}`).toBe('ask')
+        const decision = decideWithVars(
+          provider,
+          action,
+          path,
+          withoutAcl(provider.getVars()),
+          evalWarn
+        )
+        expect(decision.effect, `缺 acl* × ${action} ${path}`).toBe('ask')
       }
     }
     expect(evalWarn).not.toHaveBeenCalled()
     expect(lines(warn).sort()).toEqual([
-      "security policy 'ask-on-external-path': vars.grantedRead is not provided by the host; inDir treats it as no directory",
-      "security policy 'ask-on-external-path': vars.grantedWrite is not provided by the host; inDir treats it as no directory"
+      "security policy 'ask-on-external-path': vars.aclRead is not provided by the host; inDir treats it as no directory",
+      "security policy 'ask-on-external-path': vars.aclWrite is not provided by the host; inDir treats it as no directory"
     ])
 
     // 形态②：opts.vars 完全省略 —— 正向的 inDir(object.path, vars.home) 没有目录可比
@@ -427,9 +461,10 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
   it('CV-2 失效不静默：warn 含规则 id 与 "treating as not matched"，且连续两次评估告警次数递增', () => {
     const warn = vi.fn()
     const provider = grantedProvider()
+    const partial = withoutAcl(provider.getVars())
 
-    decideWithVars(provider, 'write', '/data/x.txt', provider.getVars(), warn)
-    decideWithVars(provider, 'read', '/home/u/.ssh/x', provider.getVars(), warn)
+    decideWithVars(provider, 'write', '/data/x.txt', partial, warn)
+    decideWithVars(provider, 'read', '/home/u/.ssh/x', partial, warn)
     const messages = warn.mock.calls.map((c) => String(c[0]))
     const notMatched = messages.filter((m) => m.includes('treating as not matched'))
     expect(notMatched.length).toBeGreaterThan(0)
@@ -439,15 +474,16 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
 
     // 每次评估现装配现求值：告警不被任何缓存/去重吞掉
     const after1 = warn.mock.calls.length
-    decideWithVars(provider, 'write', '/data/x.txt', provider.getVars(), warn)
+    decideWithVars(provider, 'write', '/data/x.txt', partial, warn)
     expect(warn.mock.calls.length).toBeGreaterThan(after1)
   })
 
-  it('CV-4 assembleRules 省略 vars → 走 buildPolicyVars 而非 provider.getVars：引用 vars.grantedWrite 的 let 求值成功且零告警', () => {
+  it('CV-4 assembleRules 省略 vars → 走 buildPolicyVars（恰一次 getVars）：引用 vars.aclWrite 的 let 惰性求值也用这一份，零告警、不再回头取', () => {
     const warn = vi.fn()
+    const getVars = vi.fn(() => withGrants({ write: ['/data'] }))
     const provider = makeProvider({
       logger: { info: vi.fn(), warn, error: vi.fn() },
-      getSessionGrants: () => ({ allowList: ['Write(/data)'] }),
+      getVars,
       getUserPolicies: () => [
         userPolicy(
           'granted-echo',
@@ -458,17 +494,21 @@ describe('assembleRules × evaluate — 授权 vars 的失效模式守护', () =
               match: 'inDir(object.path, granted)'
             }
           ],
-          { granted: 'vars.grantedWrite' }
+          { granted: 'vars.aclWrite' }
         )
       ]
     })
 
     const rule = assembleRules(provider).find((r) => r.id === 'granted-echo#0')!
+    expect(getVars).toHaveBeenCalledTimes(1)
     expect(rule.matches!(makeCtx({ object: { type: 'path', path: '/data/x.txt' } }))).toBe(true)
+    expect(rule.matches!(makeCtx({ object: { type: 'path', path: '/ws/x.txt' } }))).toBe(true)
     expect(rule.matches!(makeCtx({ object: { type: 'path', path: '/elsewhere/x.txt' } }))).toBe(
       false
     )
-    // let 求值失败会记警告 —— 零告警即证明缺省参数确实注入了会话授权变量
+    // let 是在 match 里第一次求值的（惰性），用的仍是装配时那一份 —— 没有再取一次
+    expect(getVars).toHaveBeenCalledTimes(1)
+    // let 求值失败会记警告 —— 零告警即证明缺省参数确实交来了权限表
     expect(warn).not.toHaveBeenCalled()
   })
 })
@@ -996,10 +1036,8 @@ describe('assembleRules — 派生规则与省略容错', () => {
     expect(() => assembleRules(makeProvider())).not.toThrow()
   })
 
-  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂三份共四条）', () => {
-    const rules = assembleRules(
-      makeProvider({ getSessionGrants: () => ({ allowList: ['Write(/data)'] }) })
-    )
+  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂三份共四条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
+    const rules = assembleRules(makeProvider({ getVars: () => withGrants({ write: ['/data'] }) }))
     expect(rules.map((r) => [r.id, r.source.kind])).toEqual([
       ['ask-on-external-path#0', 'builtin'],
       ['ask-on-external-path#1', 'builtin'],

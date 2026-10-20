@@ -24,11 +24,8 @@ vi.mock('../widget', () => ({
   runWidgetDbQuery: vi.fn()
 }))
 vi.mock('../widgetWindowService', () => ({ open: vi.fn() }))
-vi.mock('../sessionService', () => ({ sessionService: { addAllowListPaths: vi.fn() } }))
-vi.mock('../toolContext', () => ({
-  resolveProjectConfig: vi.fn(),
-  isPathWithinWorkspace: vi.fn()
-}))
+vi.mock('../acl', () => ({ sessionAcl: { grantPath: vi.fn() } }))
+vi.mock('../toolContext', () => ({ getDesktopSecurityContext: vi.fn() }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))

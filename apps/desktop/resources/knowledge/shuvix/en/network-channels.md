@@ -23,6 +23,10 @@ the name, `group` the heading below, `access` the tag on the line.
 - `admin` — changes ShuviX itself (policies, hooks, agents, settings, providers, network
   access, updates) or returns secrets.
 
+One call is tagged by what it carries rather than by its channel: `agent:respondToInput` is
+`write`, but an answer that ticks "allow and remember" adds a row to the session's permission
+table, so it is judged `admin` — the same as `session:grantAcl`.
+
 Prefer rules on `access` and `group`: a channel added in a later version gets a tag and is
 covered, while a list of names misses it. Name channels only to make an exception. The list is
 generated from the channel table of this version.
@@ -52,9 +56,9 @@ generated from the channel table of this version.
 
 ### `session`
 
-- read: `session:getById`, `session:list`
+- read: `session:getById`, `session:list`, `session:listAcl`
 - write: `session:create`, `session:delete`, `session:fork`, `session:updateEnabledTools`, `session:updateKnowledgeBases`, `session:updateProject`, `session:updateTitle`
-- admin: `session:removeAllowListEntry`
+- admin: `session:grantAcl`, `session:removeAclEntry`, `session:setAclAccess`
 
 ### `calendar`
 

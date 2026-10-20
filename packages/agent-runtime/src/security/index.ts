@@ -1,7 +1,7 @@
 /**
  * 智能体安全模块（PDP + PEP 门面）—— 模块导览：
  *   types.ts          核心类型（请求五要素 / 属性文档客体 / 规则 / 决策 / 宿主注入面）
- *   allowEntries.ts   allowList 条目解析与路径段边界匹配（自桌面下沉，Node-free）
+ *   allowEntries.ts   询问卡片上的 Read(...) / Write(...) 条目形态与路径段边界匹配（Node-free）
  *   celMatch.ts       CEL 匹配层（match/lets 编译与求值；唯一的匹配语义）
  *   policyFile.ts     策略 md 解析/序列化（`shuvix: policy v1`；规则 = effect + match）
  *   builtinPolicies/  内置策略（md ?raw 内联；用户可在 ~/.shuvix/policies 同名覆盖）
@@ -22,7 +22,6 @@ export {
   parseAllowEntry,
   buildAllowEntry,
   matchesPathEntry,
-  isPathAllowedUnified,
   type AllowToolType
 } from './allowEntries'
 export {

@@ -769,10 +769,10 @@ describe('evaluate — strict fail-safe（谓词求值错误的处置）', () =>
     expect(warn.mock.calls[0][0]).toContain('treating as not matched')
   })
 
-  it('CF-2 force-allow 的 match 求值为非布尔（vars.grantedRead）→ 不命中，warn 含 must evaluate to a boolean', () => {
+  it('CF-2 force-allow 的 match 求值为非布尔（vars.aclRead）→ 不命中，warn 含 must evaluate to a boolean', () => {
     const warn = vi.fn()
-    const decision = evaluate([ask('a1'), forceAllow('c1', 'vars.grantedRead')], makeRequest(), {
-      vars: { grantedRead: ['/ws'] },
+    const decision = evaluate([ask('a1'), forceAllow('c1', 'vars.aclRead')], makeRequest(), {
+      vars: { aclRead: ['/ws'] },
       warn
     })
     expect(decision.effect).toBe('ask')
@@ -785,9 +785,9 @@ describe('evaluate — strict fail-safe（谓词求值错误的处置）', () =>
   it('CF-3 force-allow 读 object.path 但客体是 command 且无 object.type 守卫 → 不命中（strict 缺键报错走同一兜底）', () => {
     const warn = vi.fn()
     const decision = evaluate(
-      [ask('a1'), forceAllow('c1', 'inDir(object.path, vars.grantedRead)')],
+      [ask('a1'), forceAllow('c1', 'inDir(object.path, vars.aclRead)')],
       makeRequest({ action: 'execute', object: COMMAND_OBJECT }),
-      { vars: { grantedRead: ['/ws'] }, warn }
+      { vars: { aclRead: ['/ws'] }, warn }
     )
     expect(decision.effect).toBe('ask')
     expect(decision.matched).toEqual(['a1'])
@@ -1065,13 +1065,12 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
         botsDir: '/home/u/.shuvix/bots',
         builtinKnowledgeDir: '/opt/shuvix/knowledge',
         sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
-        // 会话目录（外部目录门读）：工作目录与本会话的 artifacts；只读的一份是技能目录
-        sessionDirs: ['/ws', '/home/u/.shuvix/artifacts/sess-1'],
-        sessionReadDirs: ['/skills'],
+        // 会话权限表（外部目录门读）：工作目录与本会话的 artifacts 可写；技能目录只读（写隐含读）
+        aclRead: ['/ws', '/home/u/.shuvix/artifacts/sess-1', '/skills'],
+        aclWrite: ['/ws', '/home/u/.shuvix/artifacts/sess-1'],
         systemDirs: [],
         dotfiles: '/data'
       }),
-      getSessionGrants: () => ({ allowList: [] }),
       readBuiltinPolicyMd: INLINE_POLICY_MD,
       getUserPolicies: () => userPolicies
     }
@@ -1138,7 +1137,7 @@ describe('evaluate — opts.realPath（inDir 按位置比较）', () => {
       winning: 'default:path',
       matched: []
     })
-    // 夹具只管读：会话目录外的写只有出厂外部目录门一道
+    // 夹具只管读：权限表外的写只有出厂外部目录门一道
     expect(
       decideAssembled(pathRequest('/data/ssh/new_key', 'write'), sshIsLinked, credentials)
     ).toMatchObject({

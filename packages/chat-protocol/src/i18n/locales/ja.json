@@ -386,6 +386,8 @@
     "pendingWritePreview": "ファイルを書き込む",
     "pendingCreatePreview": "ファイルを新規作成",
     "allowThisDirectory": "このディレクトリを許可",
+    "rememberFolder": "フォルダごと許可",
+    "rememberOptions": "ほかの記憶のしかた",
     "allow": "許可",
     "deny": "拒否",
     "allowAndRememberPath": "このパスを許可",
@@ -431,8 +433,6 @@
   "sessionConfig": {
     "title": "セッション設定",
     "sessionTitle": "セッションタイトル",
-    "allowListTitle": "許可済みのパス",
-    "commandGroup": "操作確認",
     "extensionsGroup": "拡張機能",
     "extensionsDesc": "エージェント作成時（最初の送信時）に読み込まれ、エージェントが存在する間は読み取り専用です",
     "extensionsLocked": "エージェント作成済みのため読み取り専用です。変更するには上のエージェントチップから削除してください",
@@ -440,6 +440,33 @@
     "knowledgeGroup": "ナレッジベース",
     "knowledgeDesc": "このセッションが追加で検索・追記できるベース（プロジェクト内のセッションには、そのプロジェクトの知識ベースが常に付きます）。変更はすぐに効きます。",
     "knowledgeDefault": "まだ選択されていません — 新しいセッションは既定でどれも有効になりません（プロジェクト内のセッションには、そのプロジェクトの知識ベースが常に付きます）。このセッションで使う知識ベースにチェックを入れてください。変更はすぐ反映されます。"
+  },
+  "sessionAcl": {
+    "title": "ファイルアクセス",
+    "description": "このセッションのエージェントは、ここにあるパスでは確認なしに読み書きできます。それ以外では、ホームフォルダ内のファイルを読むとき、どこかに書くときに確認します。権限表はセッション作成時に作られ、セッションの設定に由来する行は設定に従います。",
+    "source": {
+      "workdir": "作業ディレクトリ",
+      "document": "ノートブックの文書",
+      "user": "あなたが許可したもの",
+      "widget": "ウィジェット {{name}}",
+      "knowledge": "ナレッジベース {{name}}",
+      "skill": "スキルのフォルダ",
+      "tmp": "一時フォルダ",
+      "artifacts": "成果物",
+      "toolResults": "ツール結果"
+    },
+    "managed": "このセッションの設定に従います",
+    "read": "読み取り専用",
+    "write": "読み書き",
+    "remove": "削除",
+    "showAll": "セッションの設定に由来する残り {{count}} 件を表示",
+    "showLess": "折りたたむ",
+    "add": "パスを追加",
+    "addPlaceholder": "ファイルまたはフォルダの絶対パス",
+    "addConfirm": "追加",
+    "browse": "フォルダを選択…",
+    "cancel": "キャンセル",
+    "addFailed": "絶対パス（/ またはドライブ文字で始まるもの）を入力してください。"
   },
   "projectForm": {
     "createTitle": "新規プロジェクト",

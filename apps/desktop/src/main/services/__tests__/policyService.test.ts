@@ -254,7 +254,6 @@ describe('policyService —— 同名的几份：设置页列表与评估是同�
       botsDir: '/home/u/.shuvix/bots',
       systemDirs: []
     }),
-    getSessionGrants: () => ({ allowList: [] }),
     getLanguage: () => i18next.language,
     readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
     getUserPolicies: () => policyService.getUserPolicies()
@@ -544,7 +543,6 @@ describe('policyService —— 对象 id（shuvix-id）', () => {
         botsDir: '/home/u/.shuvix/bots',
         systemDirs: []
       }),
-      getSessionGrants: () => ({ allowList: [] }),
       getLanguage: () => i18next.language,
       readBuiltinPolicyMd: (fileName) => policyService.readBuiltinPolicyMd(fileName),
       getUserPolicies: () => policyService.getUserPolicies()

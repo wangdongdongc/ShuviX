@@ -348,7 +348,8 @@ export async function runCommand(params: RunCommandParams): Promise<CommandOutco
   // 工具卡上「实际执行命令」的那份记录：写出复现需要的变量（沙箱的 TMPDIR 等、会话 id），
   // 项目环境变量只列名字（见 commandInvocation.ts）
   // （与沙箱变量同名的项目变量被沙箱的值盖掉，只按实际生效的那份写一次）
-  const { SHUVIX_SESSION_ID, ...projectEnv } = extraEnv ?? {}
+  // 会话 key（SHUVIX_SESSION_KEY，见 cliSession.ts）是凭据：不写进记录，连名字也不列
+  const { SHUVIX_SESSION_ID, SHUVIX_SESSION_KEY: _sessionKey, ...projectEnv } = extraEnv ?? {}
   const shownEnv: Record<string, string> = {
     ...(params.sandbox?.env ?? {}),
     ...(SHUVIX_SESSION_ID !== undefined ? { SHUVIX_SESSION_ID } : {})

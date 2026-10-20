@@ -64,12 +64,11 @@ vi.mock('../../services/agentRuntimeAdapters', () => ({
 /** L1 门交回 undefined = 这次不设门（本组只看包装的输出那一半） */
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => undefined,
-  getSessionPathGrants: () => ({ grantedWrite: [], grantedRead: [] }),
-  sessionDirExtras: () => ({ readWrite: [], readOnly: [] }),
   resolveProjectConfig: () => ({ workingDirectory: '/w/proj', envVars: {} }),
   TOOL_ABORTED: 'Aborted'
 }))
 vi.mock('../../services/userInputBroker', () => ({ requestUserInputFor: vi.fn() }))
+vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } }))
 vi.mock('../../services/sandbox', () => ({
   sandboxGloballyActive: mocks.sandboxGloballyActive,
   planFor: () => null,

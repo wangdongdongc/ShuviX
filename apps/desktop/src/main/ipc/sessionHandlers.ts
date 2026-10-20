@@ -6,12 +6,16 @@ import { closeWatcherIfWorkingDirectory } from '../services/filesWatcherService'
 import { chatGateway, operationContext, createClientContext } from '../frontend'
 import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
 import { forkSession } from '../services/sessionFork'
+import { sessionAcl } from '../services/acl'
+import { isPathAccess } from '@shuvix/chat-protocol/sessionAcl'
 import type { SessionForkParams } from '@shuvix/chat-protocol/sessionFork'
 import type {
   SessionUpdateProjectParams,
   SessionUpdateEnabledToolsParams,
   SessionUpdateKnowledgeBasesParams,
-  SessionAllowListRemoveParams,
+  SessionAclGrantParams,
+  SessionAclRemoveParams,
+  SessionAclSetAccessParams,
   SessionUpdateTitleParams,
   SessionCreateParams
 } from '../types'
@@ -64,11 +68,27 @@ export function registerSessionHandlers(): void {
     })
   )
 
-  /** 从统一允许列表（仅路径条目）移除条目 */
-  defineHandler('session:removeAllowListEntry', (_ctx, params: SessionAllowListRemoveParams) => {
-    sessionService.removeAllowListEntry(params.id, params.entry)
-    return { success: true }
+  /** 会话权限表（派生行先按此刻的设置对账） */
+  defineHandler('session:listAcl', (_ctx, id: string) => sessionAcl.entries(id))
+
+  /** 手动授予一条路径（来源 user） */
+  defineHandler('session:grantAcl', (_ctx, params: SessionAclGrantParams) => {
+    const entry = isPathAccess(params.access)
+      ? sessionAcl.grantPath(params.id, params.target, params.access)
+      : null
+    return { success: entry !== null, entry }
   })
+
+  /** 改一行的访问方式（授予的行与工作目录那一行） */
+  defineHandler('session:setAclAccess', (_ctx, params: SessionAclSetAccessParams) => ({
+    success:
+      isPathAccess(params.access) && sessionAcl.setAccess(params.id, params.entryId, params.access)
+  }))
+
+  /** 删一行（只有授予的行） */
+  defineHandler('session:removeAclEntry', (_ctx, params: SessionAclRemoveParams) => ({
+    success: sessionAcl.remove(params.id, params.entryId)
+  }))
 
   /**
    * 会话 fork：把这条会话复制成一条新会话（整段，或从 `messageId` 那条回复分支），放在它旁边。

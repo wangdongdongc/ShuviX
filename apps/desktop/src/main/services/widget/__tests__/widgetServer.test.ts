@@ -1,5 +1,5 @@
 /**
- * `services/widget/widgetServer.ts` —— widget 服务的两道门（Host、文件路由不带 CORS 头）与文件路由的接线。
+ * `services/widget/widgetServer.ts` —— widget 服务的门（Host、文件路由不带 CORS 头、文件路由要密钥头）与文件路由的接线。
  * 真的 `WidgetServer`（127.0.0.1 随机端口）；打包服务、widget 数据库、logger 换成空壳。注册的 widget `photo-wall`
  * 的打包产物是 `js` / `css`。请求用 `node:http`（`agent:false`），Host 头显式给出；没有 Host 的 HTTP/1.0 请求走裸 socket。
  *
@@ -16,6 +16,11 @@
  *   WS-C7 unregisterWidget 之后文件路由 → 404 not registered
  *   WS-R1 fs/file png → 200 image/png 字节一致；Range → 206
  *   WS-R2 fs/list → 200 JSON，名字对得上
+ *   WS-K1 文件路由不带密钥头 / 带错的 / 带空的 → 403，正文里没有文件内容（沙箱里的命令 curl 过来就是这样）；
+ *         Host 不对的照旧先 421
+ *   WS-K2 非文件路由不要密钥头（页面、bundle、数据库接口照常）
+ *
+ * 除 WS-K 外，打到文件路由的请求由 http() 自动带上本进程的密钥（widget 页面经主进程补头的样子）。
  */
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -43,6 +48,7 @@ vi.mock('../../../logger', () => ({
 }))
 
 import { WidgetServer } from '../widgetServer'
+import { WIDGET_FS_KEY_HEADER, widgetFsKey } from '../widgetFsKey'
 
 const SECRET = 'top-secret-file-contents-42'
 
@@ -59,8 +65,19 @@ interface HttpResult {
 
 function http(
   path: string,
-  options: { method?: string; host?: string; headers?: Record<string, string>; body?: string } = {}
+  options: {
+    method?: string
+    host?: string
+    headers?: Record<string, string>
+    body?: string
+    /** 不自动带密钥头（文件路由默认带上） */
+    withoutKey?: boolean
+  } = {}
 ): Promise<HttpResult> {
+  const key =
+    /^\/w\/[^/]+\/fs\//.test(path.split('?')[0]) && !options.withoutKey
+      ? { [WIDGET_FS_KEY_HEADER]: widgetFsKey() }
+      : {}
   return new Promise((done, fail) => {
     const req = httpRequest(
       {
@@ -68,7 +85,7 @@ function http(
         port,
         method: options.method ?? 'GET',
         path,
-        headers: { host: options.host ?? `127.0.0.1:${port}`, ...options.headers },
+        headers: { host: options.host ?? `127.0.0.1:${port}`, ...key, ...options.headers },
         agent: false
       },
       (res) => {
@@ -296,5 +313,37 @@ describe('WS-R 文件路由接上了', () => {
     expect(res.headers['content-type']).toBe('application/json; charset=utf-8')
     const body = JSON.parse(res.body.toString()) as { entries: Array<{ name: string }> }
     expect(body.entries.map((e) => e.name)).toEqual(['a.png', 'b.png'])
+  })
+})
+
+describe('WS-K 文件路由的密钥头', () => {
+  it('WS-K1 不带 / 带错 / 带空的密钥 → 403，不出文件；Host 不对的先 421', async () => {
+    const path = `/w/photo-wall/fs/file?path=${q(secretFile)}`
+    const cases: Array<Record<string, string>> = [
+      {},
+      { [WIDGET_FS_KEY_HEADER]: 'guess' },
+      { [WIDGET_FS_KEY_HEADER]: '' },
+      { [WIDGET_FS_KEY_HEADER]: widgetFsKey().slice(1) + 'x' }
+    ]
+    for (const headers of cases) {
+      const res = await http(path, { withoutKey: true, headers })
+      expect(res.status, JSON.stringify(headers)).toBe(403)
+      expect(res.body.toString()).not.toContain(SECRET)
+    }
+    const list = await http(`/w/photo-wall/fs/list?path=${q(tmp)}`, { withoutKey: true })
+    expect(list.status).toBe(403)
+    expect(list.body.toString()).not.toContain('secret.txt')
+
+    const misdirected = await http(path, { withoutKey: true, host: 'evil.example' })
+    expect(misdirected.status).toBe(421)
+  })
+
+  it('WS-K2 非文件路由不要密钥头', async () => {
+    const page = await http('/w/photo-wall/', { withoutKey: true })
+    expect(page.status).toBe(200)
+    const bundle = await http('/w/photo-wall/bundle.js', { withoutKey: true })
+    expect(bundle.status).toBe(200)
+    const db = await http('/w/photo-wall/db/items', { withoutKey: true })
+    expect(db.status).not.toBe(403)
   })
 })

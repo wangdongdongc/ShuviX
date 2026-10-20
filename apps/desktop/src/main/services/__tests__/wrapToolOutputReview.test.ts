@@ -106,7 +106,6 @@ function makeSecurity(opts: { review?: Reviewer; response?: InputResponse; sessi
         home: '/home/u',
         systemDirs: []
       }),
-      getSessionGrants: () => ({ allowList: [] }),
       readBuiltinPolicyMd: INLINE_POLICY_MD,
       getUserPolicies: () => [
         {

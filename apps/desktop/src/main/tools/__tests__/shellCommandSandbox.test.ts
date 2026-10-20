@@ -6,7 +6,7 @@
  *         bash 自己不再 pin）：pin 为真 → 多一个可选的 `dangerouslyDisableSandbox`、
  *         描述 = 基础描述 + 受限范围一段；为假 → 两样都没有；没给 → 按此刻的全局开关给一份占位。
  *         构造之后全局开关再变，已造好的实例不变（照旧要计划）。PowerShell 工具永远没有这个参数；
- *  - SC-2 圈住执行：planFor 的入参（工作区 + 会话授权 + offerEscalation），命令客体带 `sandboxed`、
+ *  - SC-2 圈住执行：planFor 的入参（工作区 + 会话权限表的路径条目 + offerEscalation），命令客体带 `sandboxed`、
  *         询问选项不带 `unsandboxed`，计划前台 / 后台都交给 runCommand；计划为 null → 如实上报
  *         「未圈住」（照常询问，卡片不标完全访问），runCommand 不带沙箱；
  *  - SC-3 申请越界（`dangerouslyDisableSandbox: true`）：不要计划、客体不带 `sandboxed`、询问选项标
@@ -27,7 +27,7 @@
  *           它答的是「这条会话为什么没固定成套」，而这条会话固定成了套。
  *
  * 替身：sandbox 管理器（planFor / sandboxGloballyActive / whyUnconfined 都是 spy）、toolContext
- * （安全门是 spy，含 getSessionPathGrants 与 sessionDirExtras）、bgTaskService 的三个执行入口、i18n。
+ * （安全门是 spy）、会话权限表（sandboxEntries 是 spy）、bgTaskService 的三个执行入口、i18n。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ToolContext } from '../../services/toolContext'
@@ -39,8 +39,7 @@ const mocks = vi.hoisted(() => ({
   enforceCommand: vi.fn(),
   runCommand: vi.fn(),
   runningBackgroundTasks: vi.fn(),
-  getSessionPathGrants: vi.fn(),
-  sessionDirExtras: vi.fn(),
+  sandboxEntries: vi.fn(),
   planFor: vi.fn(),
   sandboxGloballyActive: vi.fn(),
   whyUnconfined: vi.fn()
@@ -51,11 +50,10 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => ({ enforceCommand: mocks.enforceCommand }),
-  getSessionPathGrants: mocks.getSessionPathGrants,
-  sessionDirExtras: mocks.sessionDirExtras,
   resolveProjectConfig: () => ({ workingDirectory: '/w', envVars: {} }),
   TOOL_ABORTED: 'Aborted'
 }))
+vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: mocks.sandboxEntries } }))
 vi.mock('../../services/sandbox', () => ({
   planFor: mocks.planFor,
   sandboxGloballyActive: mocks.sandboxGloballyActive,
@@ -79,9 +77,14 @@ import type { BgTaskInfo } from '../../services/bgTaskService'
 const SID = 'sess-shell-sandbox'
 const CTX = { sessionId: SID } as ToolContext
 
-const GRANTS = { grantedWrite: ['/granted/write'], grantedRead: ['/granted/read'] }
-/** 会话设置带来的那部分会话目录（勾选的知识库可读写；技能目录只读） */
-const EXTRAS = { readWrite: ['/kb/notes'], readOnly: ['/skills/builtin', '/skills/mine'] }
+/** 会话权限表的路径条目（工作目录、勾选的知识库、技能目录、「允许并记住」的读写授权） */
+const ENTRIES = [
+  { path: '/w', access: 'write', granted: false },
+  { path: '/kb/notes', access: 'write', granted: false },
+  { path: '/skills/builtin', access: 'read', granted: false },
+  { path: '/granted/write', access: 'write', granted: true },
+  { path: '/granted/read', access: 'read', granted: true }
+]
 
 /** 一份假计划：工具层只负责把它原样交给 runCommand，不调用它的任何方法 */
 const PLAN = {
@@ -197,10 +200,8 @@ beforeEach(() => {
   mocks.runCommand.mockResolvedValue(settled(0, 'out'))
   mocks.runningBackgroundTasks.mockReset()
   mocks.runningBackgroundTasks.mockReturnValue([])
-  mocks.getSessionPathGrants.mockReset()
-  mocks.getSessionPathGrants.mockReturnValue(GRANTS)
-  mocks.sessionDirExtras.mockReset()
-  mocks.sessionDirExtras.mockReturnValue(EXTRAS)
+  mocks.sandboxEntries.mockReset()
+  mocks.sandboxEntries.mockReturnValue(ENTRIES)
   mocks.planFor.mockReset()
   mocks.planFor.mockReturnValue(PLAN)
   mocks.sandboxGloballyActive.mockReset()
@@ -290,20 +291,18 @@ describe('SC-1 schema 与描述跟着构造时的 pin 走', () => {
 })
 
 describe('SC-2 圈住执行', () => {
-  it('SC-2 前台：planFor 拿到工作区 + 会话的读 / 写授权 + 会话设置带来的目录 + offerEscalation；客体带 sandboxed，不标 unsandboxed；计划交给 runCommand', async () => {
+  it('SC-2 前台：planFor 拿到工作区 + 会话权限表的路径条目 + offerEscalation；客体带 sandboxed，不标 unsandboxed；计划交给 runCommand', async () => {
     const tool = bashWithPin(true)
     await run(tool, params())
 
-    expect(mocks.getSessionPathGrants).toHaveBeenCalledWith(SID)
-    expect(mocks.sessionDirExtras).toHaveBeenCalledWith(SID)
+    expect(mocks.sandboxEntries).toHaveBeenCalledWith(SID)
     expect(mocks.planFor).toHaveBeenCalledTimes(1)
-    // 「允许并记住」的读授权、勾选的知识库与技能目录在沙箱里同样生效 —— 与外部目录访问策略同一个来源
+    // 会话权限表（工作目录、勾选的知识库、技能目录、「允许并记住」的授权）在沙箱里同样生效 —— 与外部目录
+    // 访问策略同一个来源
     expect(mocks.planFor.mock.calls[0][0]).toEqual({
       sessionId: SID,
       workingDirectory: '/w',
-      grantedRead: ['/granted/read'],
-      grantedWrite: ['/granted/write'],
-      extras: EXTRAS,
+      entries: ENTRIES,
       offerEscalation: true
     })
 

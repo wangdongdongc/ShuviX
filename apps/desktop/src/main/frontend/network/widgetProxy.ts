@@ -11,6 +11,8 @@
  *    widget 文档是沙箱里的不透明源，它 `fetch` 同一台服务的 `/w/<id>/fs/list` 就是跨源，没有这个头读不到应答。
  *    这一面（局域网、不认证）的 `/files/media` 本来就不限路径，补这个头不比现状多放出任何东西。转发自己回的
  *    503 / 502 在文件路由上也带它，widget 才看得到 `!res.ok` 而不是一个 fetch 的 TypeError；
+ *  - 文件路由补上 widget 服务要的密钥头（`services/widget/widgetFsKey.ts`），客户端自己带来的同名头一律丢掉 ——
+ *    谁能走到这里由网络策略管，widget 服务那一面只认密钥；
  *  - 浏览器那头断了 → 上游请求随之断开（sse 不会在 widget 服务那头留下一个没人读的客户端）；
  *  - widget 服务没在跑（它是懒启动的：第一次打开 widget 时才监听）→ 503；上游连不上 / 中途出错 → 502。
  *
@@ -24,6 +26,7 @@ import {
   type ServerResponse
 } from 'node:http'
 import { isWidgetFilesPath } from '../../../shared/widgetRoutes'
+import { WIDGET_FS_KEY_HEADER, widgetFsKey } from '../../services/widget/widgetFsKey'
 
 /** widget 服务此刻在哪（没在跑 → undefined） */
 export interface WidgetProxyTarget {
@@ -103,8 +106,9 @@ export function proxyWidgetRequest(
     plain(res, 503, 'The ShuviX widget server is not running. Open the widget again.', filesRoute)
     return
   }
-  const headers = forwardableHeaders(req.headers, ['host'])
+  const headers = forwardableHeaders(req.headers, ['host', WIDGET_FS_KEY_HEADER])
   headers.host = `${target.host}:${target.port}`
+  if (filesRoute) headers[WIDGET_FS_KEY_HEADER] = widgetFsKey()
   let finished = false
   const upstream = request(
     {

@@ -28,7 +28,6 @@ const provider = (users: UserPolicyFile[] = []): SecurityHostProvider => ({
   host: 'desktop',
   pathSep: '/',
   getVars: () => ({}),
-  getSessionGrants: () => ({ allowList: [] }),
   readBuiltinPolicyMd: INLINE_POLICY_MD,
   getUserPolicies: () => users
 })

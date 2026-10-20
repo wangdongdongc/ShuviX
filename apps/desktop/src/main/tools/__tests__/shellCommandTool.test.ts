@@ -55,8 +55,10 @@ vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
   }
 })
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
+vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } }))
 
 import { BashTool } from '../bash'
+import { cliSessionKey } from '../../services/cliSession'
 import { PowerShellTool } from '../powershell'
 import {
   MAX_RUNNING_PER_SESSION,
@@ -194,7 +196,7 @@ describe.each(['bash', 'powershell'] as const)('%s —— 与另一个命令工�
       cwd: '/w',
       background: false,
       timeoutMs: 5000,
-      extraEnv: { SHUVIX_SESSION_ID: SID }
+      extraEnv: { SHUVIX_SESSION_ID: SID, SHUVIX_SESSION_KEY: cliSessionKey(SID) }
     })
   })
 

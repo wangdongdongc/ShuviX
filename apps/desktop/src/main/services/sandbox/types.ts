@@ -7,7 +7,7 @@
  * **沙箱只做一件事：把命令的文件访问收进本会话的目录**（2026-10-01 用户裁定，取代此前「尽量把
  * 功能圈在沙箱里」的方针）。稍复杂的命令 —— 要读家目录里的配置（git 读 ~/.gitconfig）、装依赖、
  * 用缓存 —— 不再靠一张越来越长的放行清单圈进来，而是直接申请到沙箱外执行，交给自动审查。
- * 文件工具的询问（外部目录访问策略）与沙箱用**同一份**会话目录清单（{@link sessionDirsFor}），
+ * 文件工具的询问（外部目录访问策略）与沙箱用**同一份**会话权限表（services/acl），
  * 所以「沙箱拒绝的」恰好就是「文件工具要问的」。
  */
 import type { ShellInvocation } from '../../utils/toolUtils/shell'
@@ -35,27 +35,23 @@ export interface SandboxHostPaths {
   tmpRoot: string
 }
 
-/**
- * 会话设置决定的那部分会话目录（宿主现算：sandbox 模块读不到知识库选择与技能目录）。
- * 不是要人维护的白名单 —— 跟着用户在会话里勾的东西走。
- */
-export interface SessionDirExtras {
-  /** 可读可写：本会话勾选的知识库目录（知识库的改动本来就逐次提交进它自己的 git，可以回退） */
-  readWrite: readonly string[]
-  /** 只读：技能目录（技能是 agent 自己要遵守的指令，改它照旧询问）、只读的内置知识库 */
-  readOnly: readonly string[]
+/** 会话权限表的一行路径条目（沙箱只看路径、访问方式与是不是授予的） */
+export interface SandboxPathEntry {
+  path: string
+  access: 'read' | 'write'
+  /**
+   * 授予的（用户「允许并记住」、手动添加、widget 目录）—— 写的还要过「适不适合当可写根」：不适合就整个
+   * 不套。派生的（工作目录、会话自己的目录、知识库、技能）宿主已按会话设置算好，不再判
+   */
+  granted: boolean
 }
 
 /** 一个会话的输入 */
 export interface SandboxSessionInput {
   sessionId: string
   workingDirectory: string
-  /** 会话设置决定的会话目录（缺省 = 没有） */
-  extras?: SessionDirExtras
-  /** 会话「允许并记住」的读授权（allowList 里的 Read(...)）—— 沙箱放它们可读 */
-  grantedRead: readonly string[]
-  /** 会话「允许并记住」的写授权（allowList 里的 Write(...)）—— 沙箱放它们可读可写 */
-  grantedWrite: readonly string[]
+  /** 会话权限表的路径条目（services/acl） */
+  entries: readonly SandboxPathEntry[]
 }
 
 /**
@@ -71,17 +67,13 @@ export interface SandboxSpec {
   workingDirectory: string
   /** 家目录：它里面默认不可读 */
   home: string
-  /** 本会话的目录（工作目录、本会话临时目录、artifacts、工具结果、勾选的知识库）—— 可读可写 */
-  sessionDirs: string[]
-  /** 本会话只读的目录（技能目录、内置知识库） */
-  sessionReadDirs: string[]
-  /** 可读的根（会话目录 + 只读会话目录 + 读写授权 + ShuviX 自己的程序） */
+  /** 可读的根（会话权限表的全部路径 + 本会话临时目录 + ShuviX 自己的程序） */
   readableRoots: string[]
   /** 可读的单个文件（cli-token） */
   readableFiles: string[]
   /** 可读根里落在家目录内的那些，它们的上级目录（只放行元数据，不能列内容） */
   metadataPaths: string[]
-  /** 可写的根（会话目录 + 写授权） */
+  /** 可写的根（会话权限表里可写的路径 + 本会话临时目录） */
   writableRoots: string[]
   /** 允许连接的具体 socket 文件 */
   unixSockets: string[]

@@ -136,8 +136,9 @@ export function buildMatchContext(
 
 /**
  * ask 决策的询问材料 —— 按客体属性推导（匹配不看 type，材料/展示要看）：
- * path 给 allowList 条目（force-ask 胜出时不给，见下）；其余类型按「主展示属性」回退链
- * （command → sql → 工具名 → type）取原文，无记忆条目（allowList 只有 Read/Write 形态）。
+ * path 给 `Read(...)` / `Write(...)` 形态的条目（卡片上的展示文本，也是「允许并记住」的依据 —— 记下的是会话
+ * 权限表的一行；force-ask 胜出时不给，见下）；其余类型按「主展示属性」回退链（command → sql → 工具名 → type）
+ * 取原文，没有记忆条目（会话权限表今天只有路径）。
  */
 function buildAskMaterials(
   request: SecurityRequest,

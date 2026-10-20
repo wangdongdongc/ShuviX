@@ -63,6 +63,7 @@ vi.mock('../../services/toolContext', () => ({
 }))
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: () => {} }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
+vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } }))
 
 import { runCommand, killAllBgTasks, type CommandOutcome } from '../../services/bgTaskService'
 import { getBashConfig } from '../../utils/toolUtils/shell'

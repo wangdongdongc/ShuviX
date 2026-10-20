@@ -17,8 +17,8 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', isPackaged: false } }))
 
 import { compileSeatbeltProfile } from '../backends/seatbelt/profile'
-import { buildSandboxSpec } from '../spec'
-import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
+import { buildSandboxSpec, sessionOwnDirs } from '../spec'
+import type { SandboxHostPaths, SandboxPathEntry, SandboxSpec } from '../types'
 
 const PATHS: SandboxHostPaths = {
   home: '/Users/u',
@@ -38,21 +38,35 @@ const GRANT_R = '/Users/u/ref'
 const KB = '/Users/u/.shuvix/knowledge/b'
 const SKILLS = '/Users/u/.shuvix/skills'
 
-function specOf(
-  over: Partial<SandboxSessionInput> = {},
-  paths: SandboxHostPaths = PATHS
-): SandboxSpec {
-  const result = buildSandboxSpec(
-    paths,
-    {
-      sessionId: 'sess-1',
-      workingDirectory: WS,
-      grantedRead: [],
-      grantedWrite: [],
-      ...over
-    },
-    (p) => p
-  )
+/** 一条会话：工作目录与会话自己的派生行自动算（照 acl/derive.ts）；其余的行按给的顺序接在后面 */
+interface Arrange {
+  workingDirectory?: string
+  /** 其余派生行（勾选的知识库可写、技能目录只读） */
+  derived?: SandboxPathEntry[]
+  /** 授予的写 / 读（「允许并记住」、手动添加、widget） */
+  grantWrite?: string[]
+  grantRead?: string[]
+}
+
+const row = (path: string, access: 'read' | 'write', granted: boolean): SandboxPathEntry => ({
+  path,
+  access,
+  granted
+})
+
+function specOf(over: Arrange = {}, paths: SandboxHostPaths = PATHS): SandboxSpec {
+  const identity = (p: string): string => p
+  const sessionId = 'sess-1'
+  const workingDirectory = over.workingDirectory ?? WS
+  const own = sessionOwnDirs(paths, { sessionId, workingDirectory }, identity)
+  if (!own?.workdir) throw new Error(`fixture working directory unsuitable: ${workingDirectory}`)
+  const entries = [
+    ...[own.workdir, own.tmp, own.artifacts, own.toolResults].map((p) => row(p, 'write', false)),
+    ...(over.derived ?? []),
+    ...(over.grantWrite ?? []).map((p) => row(p, 'write', true)),
+    ...(over.grantRead ?? []).map((p) => row(p, 'read', true))
+  ]
+  const result = buildSandboxSpec(paths, { sessionId, workingDirectory, entries }, identity)
   if (!result.ok) throw new Error(result.reason)
   return result.spec
 }
@@ -72,12 +86,12 @@ function paramValues(line: string, params: Record<string, string>): string[] {
   return [...line.matchAll(/\(param "(P\d+)"\)/g)].map((m) => params[m[1]])
 }
 
-/** 夹具：一个写授权、一个读授权、勾选的知识库（可读写）、技能目录（只读） */
+/** 夹具：勾选的知识库（可读写）、技能目录（只读）、一个授予的写、一个授予的读 */
 const FIXTURE = (): SandboxSpec =>
   specOf({
-    grantedWrite: [GRANT_W],
-    grantedRead: [GRANT_R],
-    extras: { readWrite: [KB], readOnly: [SKILLS] }
+    derived: [row(KB, 'write', false), row(SKILLS, 'read', false)],
+    grantWrite: [GRANT_W],
+    grantRead: [GRANT_R]
   })
 
 /** 不带过滤器的 allow / deny 行：只允许这一组固定内容 */
@@ -192,13 +206,13 @@ describe('PR-1 golden', () => {
       '临时工作区会话',
       () => specOf({ workingDirectory: `${PATHS.userData}/temp_workspace/sess-1` })
     ],
-    ['没有授权、没有 extras', () => specOf()],
+    ['只有派生的四行（没有知识库、技能、授予的行）', () => specOf()],
     [
-      '好几个授权',
+      '好几个授予的行',
       () =>
         specOf({
-          grantedWrite: [GRANT_W, '/Users/u/w2', '/Users/u/.shuvix/widgets/w'],
-          grantedRead: [GRANT_R, '/opt/r']
+          grantWrite: [GRANT_W, '/Users/u/w2', '/Users/u/.shuvix/widgets/w'],
+          grantRead: [GRANT_R, '/opt/r']
         })
     ]
   ] as const)(
@@ -229,8 +243,8 @@ describe('PR-2 参数纪律 + 敌意路径', () => {
     const hostile = specOf(
       {
         workingDirectory: hostileWs,
-        grantedWrite: [hostileGlob, hostileNewline],
-        grantedRead: [hostileRegex]
+        grantWrite: [hostileGlob, hostileNewline],
+        grantRead: [hostileRegex]
       },
       { ...PATHS, cliToken: hostileToken, appPaths: [hostileApp] }
     )
@@ -238,8 +252,8 @@ describe('PR-2 参数纪律 + 敌意路径', () => {
     const benign = specOf(
       {
         workingDirectory: '/Users/u/p',
-        grantedWrite: ['/Users/u/g/x', '/Users/u/g2'],
-        grantedRead: ['/Users/u/r1']
+        grantWrite: ['/Users/u/g/x', '/Users/u/g2'],
+        grantRead: ['/Users/u/r1']
       },
       { ...PATHS, cliToken: '/Users/u/.shuvix/tok', appPaths: ['/opt/app'] }
     )
@@ -282,8 +296,6 @@ describe('PR-3 空清单不产出不带过滤器的规则', () => {
     sessionId: 's',
     workingDirectory: '/w',
     home: '/h',
-    sessionDirs: [],
-    sessionReadDirs: [],
     readableRoots: [],
     readableFiles: [],
     metadataPaths: [],
@@ -316,7 +328,7 @@ describe('PR-3 空清单不产出不带过滤器的规则', () => {
     expect(ls.filter(WRITE_ALLOW)).toEqual([])
   })
 
-  it('PR-3 只有可读文件、没有可读根：放回那一行只有 literal（生产里会话目录恒非空，走不到这里）', () => {
+  it('PR-3 只有可读文件、没有可读根：放回那一行只有 literal（生产里本会话临时目录恒是可读根，走不到这里）', () => {
     const { profile, params } = compile({ ...EMPTY, readableFiles: ['/h/tok'] })
     // 空的 subpath 段拼出一个多余的空格，SBPL 不在乎
     const allow = lines(profile)
@@ -334,7 +346,7 @@ describe('PR-3 空清单不产出不带过滤器的规则', () => {
 
 describe('PR-4 正则的来源', () => {
   it('PR-4 文本里的 #"…" 只有 /dev/ttys 那一条；没有 require-all', () => {
-    const { profile } = compile(specOf({ grantedWrite: [GRANT_W, '/Volumes/other'] }))
+    const { profile } = compile(specOf({ grantWrite: [GRANT_W, '/Volumes/other'] }))
     const literals = [...profile.matchAll(/#"([^"]*)"/g)].map((m) => m[1])
     expect(literals).toEqual(['^/dev/ttys[0-9]+$'])
     expect(profile).not.toContain('require-all')
@@ -387,7 +399,7 @@ describe('PR-5 读：全读 < 拒读家目录 < 元数据 < 放回', () => {
     expect(ls.filter((l) => l.includes('file-read-data'))).toEqual([])
   })
 
-  it('PR-5 可读根里有只读会话目录与读授权，不止会话目录', () => {
+  it('PR-5 可读根里有只读的派生行（技能）与授予的读写，不止会话自己的目录', () => {
     const spec = FIXTURE()
     const { profile, params } = compile(spec)
     const values = paramValues(lines(profile).find(READ_ALLOW)!, params)

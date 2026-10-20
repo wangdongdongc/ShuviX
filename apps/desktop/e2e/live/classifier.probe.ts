@@ -404,7 +404,7 @@ describe.skipIf(!chosen)('command-risk classifier probe', () => {
               try {
                 decisions[ruleName] = evaluateMatch(
                   rule,
-                  { object, vars: { home: HOME, sessionDirs: [CWD] } },
+                  { object, vars: { home: HOME, aclRead: [CWD], aclWrite: [CWD] } },
                   '/'
                 )
                   ? 'ask'

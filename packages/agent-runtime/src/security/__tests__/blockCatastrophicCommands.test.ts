@@ -61,7 +61,6 @@ function makeProvider(overrides: Partial<SecurityHostProvider> = {}): SecurityHo
     host: 'desktop',
     pathSep: '/',
     getVars: () => DESKTOP_VARS,
-    getSessionGrants: () => ({ allowList: [] }),
     readBuiltinPolicyMd: INLINE_POLICY_MD,
     getUserPolicies: () => [CATASTROPHIC],
     ...overrides

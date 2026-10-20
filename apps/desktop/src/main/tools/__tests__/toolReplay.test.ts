@@ -21,8 +21,6 @@ vi.mock('../../services/toolContext', () => ({
   assertReadAllowed: () => {},
   assertWriteAllowed: () => {},
   getDesktopSecurityContext: () => ({}),
-  getSessionPathGrants: () => ({}),
-  sessionDirExtras: () => [],
   TOOL_ABORTED: 'Aborted'
 }))
 vi.mock('../../services/toolRegistry', () => ({ registerBuiltinTool: () => {} }))
@@ -53,6 +51,7 @@ vi.mock('../../services/artifacts/adopt', () => ({
   listAdoptableFigures: vi.fn()
 }))
 vi.mock('../../services/messageService', () => ({ messageService: {} }))
+vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } }))
 vi.mock('../../services/sandbox', () => ({
   sandboxGloballyActive: () => false,
   planFor: () => null,

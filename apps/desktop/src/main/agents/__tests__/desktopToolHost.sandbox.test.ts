@@ -41,12 +41,11 @@ vi.mock('../../services/agentRuntimeAdapters', () => ({
 }))
 vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: () => ({ enforceCommand: mocks.enforceCommand }),
-  getSessionPathGrants: () => ({ grantedWrite: [], grantedRead: [] }),
-  sessionDirExtras: () => ({ readWrite: [], readOnly: [] }),
   resolveProjectConfig: () => ({ workingDirectory: '/w', envVars: {} }),
   TOOL_ABORTED: 'Aborted'
 }))
 vi.mock('../../services/userInputBroker', () => ({ requestUserInputFor: vi.fn() }))
+vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } }))
 vi.mock('../../services/sandbox', () => ({
   sandboxGloballyActive: mocks.sandboxGloballyActive,
   planFor: mocks.planFor,

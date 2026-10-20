@@ -94,9 +94,10 @@ let formTab = ''
 const fileUrl = (abs: string): string => pathToFileURL(abs).href
 const listTabs = (): Promise<Array<{ id: string; url: string }>> =>
   app.main.eval(`window.api.browserView.listTabs()`)
+/** 会话权限表里用户授予的行（「允许并记住」），写成卡片上的 `Read(…)` / `Write(…)` 形态 */
 const allowList = (): Promise<string[]> =>
   app.main.eval<string[]>(
-    `window.api.session.getById(${JSON.stringify(sid)}).then((s) => (s && s.settings && s.settings.allowList) || [])`
+    `window.api.session.listAcl(${JSON.stringify(sid)}).then((rows) => rows.filter((r) => r.source === 'user').map((r) => (r.access === 'write' ? 'Write(' : 'Read(') + r.target + ')'))`
   )
 const createPolicy = (text: string): Promise<{ success: boolean; error?: string }> =>
   app.main.eval(`window.api.policy.create(${JSON.stringify({ text })})`)
@@ -305,7 +306,7 @@ describe('file:// 导航按读文件过门', () => {
     expect(ask.command).toBe(`Read(${join(outsideDir, 'secret.html')})`)
   }, 120_000)
 
-  it('BRG-6 允许并记住：allowList 多一条 Read(…)；再开同一个文件、read 工具读它都不再问', async () => {
+  it('BRG-6 允许并记住：会话权限表多一行 Read(…)；再开同一个文件、read 工具读它都不再问', async () => {
     const abs = join(outsideDir, 'secret.html')
     const { end } = await askOnce(
       { id: 'brg6_open', tool: 'open_tab', args: { url: fileUrl(abs) } },

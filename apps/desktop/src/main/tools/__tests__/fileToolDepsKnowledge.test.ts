@@ -5,7 +5,7 @@
  * notifyKnowledgeFileChanged（模块按需加载）；不属于任何库的路径（根外、用户根散文件、隐藏目录）一切照旧。
  *
  * 用户库与项目库上**没有任何内置策略**（等整体定型再设计），所以这里对整个临时目录「允许并记住」了写
- * （allowList 的 Write(<临时目录>)）就不该再弹卡 —— 盖章与变更管线跟安全模块是两件事，这条得分开钉住。
+ * （会话权限表里授予的写：vars.aclWrite 里的 <临时目录>）就不该再弹卡 —— 盖章与变更管线跟安全模块是两件事，这条得分开钉住。
  *
  * 第三个根是随应用发布的**内置库**（`<内置根>/<库名>/<语言>/…`，只读）：`knowledge.locate` 对它回 null，
  * 所以不盖章、不回执、不进管线（FD-6..FD-8）。它**没有**拒写策略（随包资源的统一裁决，见
@@ -45,11 +45,12 @@ vi.mock('../../services/toolContext', async () => {
           toolResultsBase: joinPath(state.dir, '.nonexistent-tool-results'),
           skillsDirs: [],
           home: joinPath(state.dir, '.nonexistent-home'),
-          systemDirs: []
+          systemDirs: [],
+          // 整个临时目录「允许并记住」了写（会话权限表，写隐含读）：库上没有策略，所以知识库写也不问
+          aclRead: [state.dir],
+          aclWrite: [state.dir]
         }),
-        // 整个临时目录「允许并记住」了写：库上没有策略，所以知识库写也不问
         readBuiltinPolicyMd: INLINE_POLICY_MD,
-        getSessionGrants: () => ({ allowList: [`Write(${state.dir})`] }),
         isDirectory: () => false,
         persistGrant: () => {},
         requestUserInput: async (req: InputRequest) => {

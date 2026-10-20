@@ -78,7 +78,7 @@ Agent Skills 的跨工具约定位置（Codex、pi 读它，`npx skills add -g` 
 经侧栏「技能」分组改它（行菜单里的启用 / 停用）；这份文件是 ShuviX 的，不是手改的地方。
 
 **读 skill 从不询问，改 skill 要问。** 内置 skill、`~/.shuvix/skills`、每个没被禁用的外部目录以及每个打开了的共用目录，都是
-每条会话的只读目录（`policy-md` 条目里的 `vars.sessionReadDirs`）：文件工具读它们不问，沙箱里的命令也能读。
+每条会话权限表里只读的行（`policy-md` 条目里的 `vars.aclRead`）：文件工具读它们不问，沙箱里的命令也能读。
 往那里写要问 —— skill 是智能体自己要遵守的指令 —— 所以替用户新建或修改全局 / 外部 skill 要经过一次审批。
 项目级 skill 在工作目录里，和项目里的其他文件一样对待。
 

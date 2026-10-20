@@ -67,6 +67,7 @@ vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn(
 vi.mock('../../utils/paths', () => ({
   getSessionsDir: () => holder.sessionsDir,
   getTempWorkspace: (sid: string) => `/nonexistent/shuvix-unit/tmp/${sid}`,
+  getTempWorkspaceBase: () => '/nonexistent/shuvix-unit/tmp',
   getToolResultsBase: () => holder.toolResults,
   getSessionArtifactsDir: (sid: string) => `${holder.artifacts}/${sid}`,
   isSafeSessionId: () => true
@@ -110,7 +111,12 @@ vi.mock('../../utils/sessionConfigBroadcast', () => ({
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: mocks.broadcast }
 }))
-vi.mock('../sandbox', () => ({ cleanupSession: vi.fn() }))
+vi.mock('../sandbox', () => ({
+  cleanupSession: vi.fn(),
+  // 会话权限表的派生行：算不出会话目录 → 一行都不派生（artifact 落盘前过的门照样能判）
+  sessionOwnDirsView: () => null,
+  settingDirForAcl: (dir: string) => dir
+}))
 vi.mock('../hookService', () => ({
   hookTriggers: { fire: vi.fn() },
   hookService: { abortSessionRuns: vi.fn() }
@@ -137,6 +143,11 @@ vi.mock('../builtinMcp/sshServer', () => ({
   sshDisconnectRuntime: () => undefined
 }))
 vi.mock('../skillService', () => ({ skillService: { findEnabled: () => [] } }))
+// artifact 落盘前过会话权限表（enforcePath）—— 本文件测的是读投影，那道门一律放行（门本身见 artifactTool.test）
+vi.mock('../toolContext', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../toolContext')>()),
+  getDesktopSecurityContext: () => ({ enforcePath: async () => undefined })
+}))
 vi.mock('../../i18n', () => ({
   t: (key: string, vars?: Record<string, string>) =>
     vars?.reason !== undefined ? `${key}:${vars.reason}` : key

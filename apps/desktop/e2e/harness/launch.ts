@@ -15,6 +15,7 @@
  * 前置条件：`electron-vite build` 产物已存在（test:e2e 脚本会先构建）。
  */
 import { spawn, type ChildProcess } from 'node:child_process'
+import { createHmac, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
@@ -373,6 +374,17 @@ export const LAUNCHER_PID_ENV = 'SHUVIX_E2E_LAUNCHER_PID'
  * 隔离实例的环境：fake HOME + 重定向的 userData；剔除会让 electron 退化成纯 node 的变量。
  * `extra` 是 spec 追加的变量（`LaunchOptions.env`）—— 排在 HOME / userData / launcher pid 之前，盖不掉。
  */
+/** e2e 实例的 CLI 会话密钥（每个 harness 进程一个；产品自己每次启动随机生成） */
+const E2E_CLI_SESSION_SECRET = randomBytes(16).toString('hex')
+
+/**
+ * 「会话里的命令」带的 SHUVIX_SESSION_KEY —— 产品在 bash 工具里注入的那一个（services/cliSession.ts 的
+ * HMAC），这里按实例同一个密钥算出来
+ */
+export function cliSessionKeyFor(sessionId: string): string {
+  return createHmac('sha256', Buffer.from(E2E_CLI_SESSION_SECRET)).update(sessionId).digest('hex')
+}
+
 export function instanceEnv(home: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -381,7 +393,9 @@ export function instanceEnv(home: string, extra: Record<string, string> = {}): N
     // vitest 被掐断时 track() 的 'exit' 兜底根本来不及跑，孤儿实例曾把磁盘写满
     [LAUNCHER_PID_ENV]: String(process.pid),
     HOME: home,
-    SHUVIX_VERIFY_USERDATA: join(home, 'userdata')
+    SHUVIX_VERIFY_USERDATA: join(home, 'userdata'),
+    // CLI 认会话的密钥（services/cliSession.ts）：runCli 按它替「会话里的命令」算出 SHUVIX_SESSION_KEY
+    SHUVIX_E2E_CLI_SESSION_SECRET: E2E_CLI_SESSION_SECRET
   }
   // 该变量会让 electron 二进制退化为纯 node（不起窗口）—— 必须剔除
   delete env.ELECTRON_RUN_AS_NODE
@@ -965,8 +979,15 @@ export async function runCli(
   args: string[],
   opts: { env?: Record<string, string>; timeoutMs?: number } = {}
 ): Promise<CliResult> {
-  // instanceEnv 剔除了 ELECTRON_RUN_AS_NODE（实例要的是 Electron）；CLI 正好相反，之后补上
-  const env = { ...instanceEnv(app.home, opts.env), ELECTRON_RUN_AS_NODE: '1' }
+  // instanceEnv 剔除了 ELECTRON_RUN_AS_NODE（实例要的是 Electron）；CLI 正好相反，之后补上。
+  // 给了会话 id 没给 key：扮成那条会话里的命令（产品的 bash 工具两样一起注入，见 services/cliSession.ts）；
+  // 要测「只报 id 不算数」就显式给一个 SHUVIX_SESSION_KEY
+  const sid = opts.env?.SHUVIX_SESSION_ID
+  const withKey =
+    sid && opts.env && !('SHUVIX_SESSION_KEY' in opts.env)
+      ? { ...opts.env, SHUVIX_SESSION_KEY: cliSessionKeyFor(sid) }
+      : opts.env
+  const env = { ...instanceEnv(app.home, withKey), ELECTRON_RUN_AS_NODE: '1' }
   const child = spawn(electronBinary(), [join(DESKTOP_ROOT, 'out', 'main', 'cli.js'), ...args], {
     cwd: DESKTOP_ROOT,
     env,

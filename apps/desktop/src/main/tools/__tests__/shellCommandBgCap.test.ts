@@ -36,6 +36,7 @@ vi.mock('../../services/toolContext', async () => {
   }
 })
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
+vi.mock('../../services/acl', () => ({ sessionAcl: { sandboxEntries: () => [] } }))
 
 import { BashTool } from '../bash'
 import { killAllBgTasks, MAX_RUNNING_PER_SESSION } from '../../services/bgTaskService'

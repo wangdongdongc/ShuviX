@@ -386,6 +386,8 @@
     "pendingWritePreview": "Write file",
     "pendingCreatePreview": "Create file",
     "allowThisDirectory": "Allow this directory",
+    "rememberFolder": "Allow the whole folder",
+    "rememberOptions": "Other ways to allow and remember",
     "allow": "Allow",
     "deny": "Deny",
     "allowAndRememberPath": "Allow this path",
@@ -431,8 +433,6 @@
   "sessionConfig": {
     "title": "Session Config",
     "sessionTitle": "Session Title",
-    "allowListTitle": "Allowed paths",
-    "commandGroup": "Ask on Operations",
     "extensionsGroup": "Extensions",
     "extensionsDesc": "Read when the agent is created (on the first message); read-only while it exists",
     "extensionsLocked": "Read-only: the agent has already been created. Remove it from the agent chip above to change extensions",
@@ -440,6 +440,33 @@
     "knowledgeGroup": "Knowledge bases",
     "knowledgeDesc": "Which other bases this session can search and write to (a session in a project always has that project's own base). Changes take effect right away.",
     "knowledgeDefault": "Not picked yet — new sessions start with none (a session in a project always has that project's own base). Tick the bases this session should use; changes take effect right away."
+  },
+  "sessionAcl": {
+    "title": "File access",
+    "description": "The agent in this session reads and writes these paths without asking. Outside them, reading a file in your home folder asks you, and writing anywhere asks you. The table is made when the session is created; rows that come from the session's settings follow those settings.",
+    "source": {
+      "workdir": "Working directory",
+      "document": "Notebook document",
+      "user": "Granted by you",
+      "widget": "Widget {{name}}",
+      "knowledge": "Knowledge base {{name}}",
+      "skill": "Skills",
+      "tmp": "Temporary folder",
+      "artifacts": "Artifacts",
+      "toolResults": "Tool results"
+    },
+    "managed": "Follows this session's settings",
+    "read": "Read only",
+    "write": "Read & write",
+    "remove": "Remove",
+    "showAll": "Show {{count}} more from this session's settings",
+    "showLess": "Show less",
+    "add": "Add a path",
+    "addPlaceholder": "Absolute path to a file or folder",
+    "addConfirm": "Add",
+    "browse": "Choose folder…",
+    "cancel": "Cancel",
+    "addFailed": "Enter an absolute path (starting with / or a drive letter)."
   },
   "projectForm": {
     "createTitle": "New Project",

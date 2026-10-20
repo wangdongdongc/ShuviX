@@ -129,7 +129,6 @@ function deps(
           host: 'desktop',
           pathSep: '/',
           getVars: () => ({ home: HOME }),
-          getSessionGrants: () => ({ allowList: [] }),
           readBuiltinPolicyMd: READ_MD,
           getUserPolicies: () => userPolicies,
           isPolicyDisabled: (policy) => (opts.disabled ?? []).includes(policy.name),

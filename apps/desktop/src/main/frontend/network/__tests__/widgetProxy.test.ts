@@ -27,6 +27,8 @@
  *         d 转发自己回的 503（target 不在）/ 502（上游没在听）：文件路由带，别的路由不带
  *         e 不是文件路由（页面、db、`fsx`、`FS`、`//fs`）且上游不带 → 不补
  *         f 文件路由上 text/html 的应答照样加沙箱 CSP，也带 ACAO
+ *   WP-13 widget 服务的密钥头（services/widget/widgetFsKey.ts）：文件路由补上本进程的密钥，客户端自己带来的
+ *         同名头（任何大小写、任何值）丢掉；别的路由不补、客户端带的照样丢掉
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import {
@@ -46,6 +48,7 @@ import { createNetworkLinkHub } from '../networkLinks'
 import { createNetworkServer, type NetworkServer, type NetworkServerDeps } from '../server'
 import { createNetworkTransport } from '../transport'
 import { WIDGET_DOCUMENT_CSP, forwardableHeaders, type WidgetProxyTarget } from '../widgetProxy'
+import { WIDGET_FS_KEY_HEADER, widgetFsKey } from '../../../services/widget/widgetFsKey'
 
 const NOT_RUNNING = 'The ShuviX widget server is not running. Open the widget again.'
 const NO_ANSWER = 'The ShuviX widget server did not answer.'
@@ -723,5 +726,28 @@ describe('WP-12 widget 文件路由补 ACAO *', () => {
     const res = await http('/w/demo-widget/fs/file?path=%2Fa.html')
     expect(res.headers['content-security-policy']).toBe(WIDGET_DOCUMENT_CSP)
     expect(res.headers['access-control-allow-origin']).toBe('*')
+  })
+})
+
+describe('WP-13 文件路由的密钥头', () => {
+  beforeEach(async () => {
+    await boot()
+    script = (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      res.end('ok')
+    }
+  })
+
+  it('WP-13 文件路由补本进程的密钥、丢掉客户端带的；别的路由不补', async () => {
+    await http('/w/demo-widget/fs/file?path=%2Fa', {
+      headers: { 'X-Shuvix-Widget-Key': 'forged' }
+    })
+    expect(seen.at(-1)!.headers[WIDGET_FS_KEY_HEADER]).toBe(widgetFsKey())
+
+    await http('/w/demo-widget/fs/list?path=%2Ftmp')
+    expect(seen.at(-1)!.headers[WIDGET_FS_KEY_HEADER]).toBe(widgetFsKey())
+
+    await http('/w/demo-widget/bundle.js', { headers: { [WIDGET_FS_KEY_HEADER]: 'forged' } })
+    expect(seen.at(-1)!.headers[WIDGET_FS_KEY_HEADER]).toBeUndefined()
   })
 })

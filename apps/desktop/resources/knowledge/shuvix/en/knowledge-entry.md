@@ -46,12 +46,12 @@ then its project's default; when nobody chose, **no other base is enabled** — 
 The selection is a hard boundary: `bases` lists only the enabled ones, and naming any other is
 refused. The `<knowledge_bases>` fence in the system prompt lists the same names.
 
-The selection also decides what the agent may touch without asking. An enabled base is one of
-the session's own **read-write** directories (`vars.sessionDirs` in the `policy-md` entry):
+The selection also decides what the agent may touch without asking. An enabled base is a
+**read-write** row of the session's permission table (`vars.aclWrite` in the `policy-md` entry):
 reading, creating and editing files in it never asks — in the file tools or in a sandboxed
 command — because every change is committed to the base's own git and can be rolled back.
-`shuvix`, when enabled, is a **read-only** session directory: reading is free, writing asks. A
-base that is not enabled is like any other folder in your home: reading it asks.
+`shuvix`, when enabled, is a **read-only** row (`vars.aclRead` only): reading is free, writing
+asks. A base that is not enabled is like any other folder in your home: reading it asks.
 
 ## Read wide, write strict
 
@@ -140,8 +140,8 @@ directory), `search` (free text; without `base` it covers every enabled base, gr
 separate BM25 indexes, scores not comparable across bases; Chinese and Japanese text is
 word-segmented before indexing), `list` (every note of one base), `submit` (above). Listings
 give absolute paths. The reference base `shuvix` is read-only: `submit` is refused there, and a
-file write into it is not blocked but asks (ask-on-external-path — it is a read-only session
-directory); an app update restores the shipped files anyway.
+file write into it is not blocked but asks (ask-on-external-path — it is a read-only row of the
+session's permission table); an app update restores the shipped files anyway.
 
 ## Validation tiers
 

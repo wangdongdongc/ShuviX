@@ -24,16 +24,24 @@ import { getShuvixCliEnv, getToolResultsBase, isSafeSessionId } from '../../util
 import type { ShellInvocation } from '../../utils/toolUtils/shell'
 import { createSeatbeltBackend } from './backends/seatbelt'
 import { explainSandboxDenial } from './classify'
-import { buildSandboxSpec, sessionDirsFor, sessionTmpName, type SpecResult } from './spec'
+import {
+  acceptableSettingDir,
+  buildSandboxSpec,
+  sessionOwnDirs,
+  sessionTmpName,
+  type SessionOwnDirs,
+  type SpecResult
+} from './spec'
 import type {
   ProbeResult,
   SandboxBackend,
   SandboxHostPaths,
-  SandboxPlan,
-  SessionDirExtras
+  SandboxPathEntry,
+  SandboxPlan
 } from './types'
 
-export type { SandboxPlan, SessionDirExtras } from './types'
+export type { SandboxPathEntry, SandboxPlan } from './types'
+export type { SessionOwnDirs } from './spec'
 
 const log = createLogger('Sandbox')
 
@@ -218,34 +226,35 @@ export function whyUnconfined(): UnpinnedReason {
 function specFor(
   sessionId: string,
   workingDirectory: string,
-  grants: { grantedRead: readonly string[]; grantedWrite: readonly string[] },
-  extras: SessionDirExtras | undefined
+  entries: readonly SandboxPathEntry[]
 ): SpecResult {
-  return buildSandboxSpec(hostPaths(), { sessionId, workingDirectory, extras, ...grants }, real)
-}
-
-export interface SessionDirsView {
-  sessionDirs: string[]
-  sessionReadDirs: string[]
+  return buildSandboxSpec(hostPaths(), { sessionId, workingDirectory, entries }, real)
 }
 
 /**
- * 本会话的会话目录（desktop getVars 交给策略的 `vars.sessionDirs` / `vars.sessionReadDirs`）——
- * 沙箱用的同一份清单，**不看沙箱开没开**：没有沙箱的平台（Windows / Linux）上，文件工具一样只在
- * 会话目录以外询问。工作目录不适合当会话目录（`/`、覆盖家目录、ShuviX 自己的配置或应用数据）时
- * 不在清单里。算不出来（坏会话 id、路径解析失败）就给空清单 —— 多问，绝不因此放行。
+ * 一个会话自己的目录（会话权限表 workdir / system 行的来源，见 services/acl）—— **不看沙箱开没开**：
+ * 没有沙箱的平台（Windows / Linux）上，文件工具一样只在会话权限表以外询问。算不出来（坏会话 id、路径
+ * 解析失败）返回 null —— 权限表里就没有这几行，多问，绝不因此放行。
  */
-export function sessionDirsView(
+export function sessionOwnDirsView(
   sessionId: string,
-  workingDirectory: string,
-  extras?: SessionDirExtras
-): SessionDirsView {
+  workingDirectory: string
+): SessionOwnDirs | null {
   try {
-    const dirs = sessionDirsFor(hostPaths(), { sessionId, workingDirectory, extras }, real)
-    return { sessionDirs: dirs?.dirs ?? [], sessionReadDirs: dirs?.readDirs ?? [] }
+    return sessionOwnDirs(hostPaths(), { sessionId, workingDirectory }, real)
   } catch (err) {
     log.warn(`session dirs unavailable: ${(err as Error).message}`)
-    return { sessionDirs: [], sessionReadDirs: [] }
+    return null
+  }
+}
+
+/** 会话设置带来的目录（知识库、技能）进会话权限表的写法（realpath）；空串、`/`、覆盖家目录 → null */
+export function settingDirForAcl(dir: string): string | null {
+  try {
+    return acceptableSettingDir(hostPaths(), dir, real)
+  } catch (err) {
+    log.warn(`setting dir unavailable: ${(err as Error).message}`)
+    return null
   }
 }
 
@@ -270,11 +279,8 @@ function ensureTmpDir(tmpRoot: string, dir: string, uid: number): boolean {
 export interface PlanRequest {
   sessionId: string
   workingDirectory: string
-  /** 会话「允许并记住」的读 / 写授权路径（调用方从会话设置里解析好交进来） */
-  grantedRead: readonly string[]
-  grantedWrite: readonly string[]
-  /** 会话设置决定的会话目录（知识库、技能目录 —— 与策略那一面同一个来源，见 toolContext） */
-  extras?: SessionDirExtras
+  /** 会话权限表的路径条目（services/acl 的 sandboxEntries —— 与策略那一面同一个来源） */
+  entries: readonly SandboxPathEntry[]
   /** 本工具实例带不带 `dangerouslyDisableSandbox` —— 决定拒绝说明里能不能教模型用它 */
   offerEscalation: boolean
 }
@@ -291,7 +297,7 @@ export function planFor(request: PlanRequest): SandboxPlan | null {
   const { sessionId, workingDirectory, offerEscalation } = request
   const b = getBackend()
   if (!b || !probe().available) return null
-  const built = specFor(sessionId, workingDirectory, request, request.extras)
+  const built = specFor(sessionId, workingDirectory, request.entries)
   if (!built.ok) {
     log.info(`session ${sessionId} runs unconfined: ${built.reason}`)
     return null

@@ -111,7 +111,20 @@ vi.mock('../../utils/sessionConfigBroadcast', () => ({
 vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
   chatFrontendRegistry: { broadcast: mocks.broadcast }
 }))
-vi.mock('../sandbox', () => ({ cleanupSession: vi.fn() }))
+// 会话权限表（services/acl，真的，落在同一个库的 session_acl 上）的派生行：会话自己的目录按 id 拼出
+// 确定的路径、工作目录原样（真的那份要 realpath）；知识库与技能目录一个都没有
+vi.mock('../sandbox', () => ({
+  cleanupSession: vi.fn(),
+  sessionOwnDirsView: (sid: string, workingDirectory: string) => ({
+    workdir: workingDirectory,
+    workspaceUnsuitable: null,
+    tmp: `/sandbox-tmp/${sid}`,
+    artifacts: `/artifacts/${sid}`,
+    toolResults: `/tool-results/${sid}`
+  }),
+  settingDirForAcl: () => null
+}))
+vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: () => [] }))
 vi.mock('../hookService', () => ({
   hookTriggers: { fire: vi.fn() },
   hookService: { abortSessionRuns: vi.fn() }
@@ -134,7 +147,9 @@ vi.mock('../builtinMcp/sshServer', () => ({
   sshRuntimeStatuses: () => ({}),
   sshDisconnectRuntime: () => undefined
 }))
-vi.mock('../skillService', () => ({ skillService: { findEnabled: () => [] } }))
+vi.mock('../skillService', () => ({
+  skillService: { findEnabled: () => [], enabledSkillRoots: () => [] }
+}))
 vi.mock('../../i18n', () => ({
   t: (key: string, vars?: Record<string, string>) =>
     vars?.title !== undefined ? `${vars.title} · fork` : key

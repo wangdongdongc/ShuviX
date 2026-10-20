@@ -2,7 +2,7 @@
  * 桌面文件工具 deps —— 给共享 createFileToolSuite 注入桌面端适配（Node fs / fileTime / 绝对路径 /
  * 桌面 SecurityContext）。read/write/edit 三个工具共用同一份装配；read 额外注入内容解码器。
  *
- * 配置（workingDirectory/allowList）按工具执行时机动态解析（resolveProjectConfig），
+ * 配置（workingDirectory / 会话权限表）按工具执行时机动态解析（resolveProjectConfig、安全上下文的 getVars），
  * 故 resolvePath / security 内部都走惰性 thunk，保证拿到最新值（对齐原 ReadTool/WriteTool 行为）。
  */
 import type { FileToolDeps, ReadDecoders, FileGuards } from '@shuvix/agent-runtime'

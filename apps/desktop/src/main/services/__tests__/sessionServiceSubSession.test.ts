@@ -11,6 +11,9 @@
  *     会话没了它们也没有意义。目录跟着**产出它的那场会话**走、不上溯根会话，所以父子各有
  *     自己的目录 —— 删子会话不该动到父会话那一份（反向保护：哪天改回「一律写根会话目录」，
  *     那条用例会立刻红）。这里的 artifacts 根指到临时目录，别再让它落在真实 home 上。
+ *  4. **会话权限表（services/acl）**：create 在行进库之后生成表 —— 子会话带上父会话 id（复制父会话授予的
+ *     路径，见 acl/__tests__/sessionAcl.test.ts 的 ACL-8），顶层会话不继承；delete 子先于父、各自清表。
+ *     服务本身换成记录型替身，这里只钉接线。
  *
  * mock 面沿用 sessionServiceListChanged.test.ts（import 图全换假件）。
  */
@@ -31,6 +34,8 @@ const mocks = vi.hoisted(() => ({
   messageClear: vi.fn(),
   killBySession: vi.fn(),
   agentRemove: vi.fn(async () => {}),
+  aclInitialize: vi.fn<(id: string, inheritFrom?: { sessionId: string; fork: boolean }) => void>(),
+  aclDeleteSession: vi.fn<(id: string) => void>(),
   /** 会话 Artifacts 根（临时目录）—— 桩在 utils/paths 上，每场会话一个子目录 */
   artifactsRoot: ''
 }))
@@ -82,7 +87,9 @@ vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn() } }))
 vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
-vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
+vi.mock('../acl', () => ({
+  sessionAcl: { initialize: mocks.aclInitialize, deleteSession: mocks.aclDeleteSession }
+}))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
 // 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
 vi.mock('../sessionHost', async () =>
@@ -171,6 +178,22 @@ describe('create —— 子会话的 parentId 与项目继承', () => {
     expect(inserted()).toMatchObject({ parentId: 'gone', projectId: 'p1' })
   })
 
+  it('权限表在行进库之后生成：顶层会话不继承；子会话带上父会话 id（复制父会话授予的路径，不是 fork）', () => {
+    const top = sessionService.create({ projectId: 'p1' })
+    expect(mocks.aclInitialize.mock.calls).toEqual([[top.id, undefined]])
+    expect(mocks.daoInsert.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.aclInitialize.mock.invocationCallOrder[0]
+    )
+
+    vi.clearAllMocks()
+    mocks.daoPick.mockReturnValue({ projectId: 'parent-project' })
+    const child = sessionService.create({ parentId: 'P' })
+    expect(mocks.aclInitialize.mock.calls).toEqual([[child.id, { sessionId: 'P', fork: false }]])
+    expect(mocks.daoInsert.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.aclInitialize.mock.invocationCallOrder[0]
+    )
+  })
+
   it('子会话不落戳，档案随父形态推导（父有项目 work / 父无项目 chat）', () => {
     // 「不落戳 + 随父形态」是 subSessionRunner 不再显式切档案的前提：projectId 恒随父，
     // 于是 resolveAgentProfileName 对父子推导出同一个基座；父级点名档案才由 pinAgentProfile
@@ -215,6 +238,8 @@ describe('delete —— 递归删子会话', () => {
     expect(dayOrder[0]).toBeLessThan(idOrder[0])
     expect(dayOrder[1]).toBeLessThan(idOrder[1])
     expect(dayOrder[2]).toBeLessThan(idOrder[2])
+    // 权限表同样子先于父、各自清
+    expect(mocks.aclDeleteSession.mock.calls.map((c) => c[0])).toEqual(['c1', 'c2', 'P'])
   })
 
   it('删子会话本身不牵连父级（只往下走，不往上走）', async () => {

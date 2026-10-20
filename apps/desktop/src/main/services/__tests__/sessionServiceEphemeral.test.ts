@@ -9,15 +9,18 @@
  *
  * mock 面沿用 sessionServiceBuiltinMcpLifetime.test.ts（import 图全换假件、会话运行时换成假宿主）。差别在于 **sessionRecords 是真的**：只替掉它底下的
  * `dao/sessionDao`，而且 DAO 的每个方法都是 spy、背后是一张内存表 —— 「没碰库」就是
- * 「这张表的 spy 没被调」，而持久会话那一侧照样有行可读。
+ * 「这张表的 spy 没被调」，而持久会话那一侧照样有行可读。会话权限表（services/acl）同样是真的，只替掉它
+ * 底下的 `dao/sessionAclDao`（spy + 内存表）与派生行的来源（acl/derive：每条会话一行固定的 system 行）。
  *
- *   S1  create(p, {ephemeral}) 不落库、不广播；isEphemeral；getById 读得到；list() 不含
- *   S2  对照：create(p) 落库一次 + 广播一次
- *   S3  内存父的子会话恒为内存会话（不传 / false / true），继承父的 enabledTools / projectId
+ *   S1  create(p, {ephemeral}) 不落库、不广播；isEphemeral；getById 读得到；list() 不含；权限表生成在内存里
+ *   S2  对照：create(p) 落库一次 + 广播一次；权限表落进 session_acl
+ *   S3  内存父的子会话恒为内存会话（不传 / false / true），继承父的 enabledTools / projectId，并复制父会话
+ *       授予的路径（内存里，不碰库）
  *   S4  持久父的子会话传 {ephemeral:true} 仍是持久会话
- *   S5  delete(内存)：行没了、不碰库、不广播；清理链（后台任务 / 运行时与存储（宿主 delete）/ 内置 MCP）各跑一次
+ *   S5  delete(内存)：行没了、不碰库、不广播；清理链（后台任务 / 运行时与存储（宿主 delete）/ 内置 MCP）各跑一次；
+ *       权限表跟着没了
  *   S6  delete(内存父) 连带两条内存子会话：子先于父，什么都不剩，不广播
- *   S7  写入口落在内存行上、不写库，getById 看得见
+ *   S7  写入口落在内存行上、不写库，getById 看得见；权限表的授予 / 删除只改内存表
  *   S8  形态推导读内存行：bot → bot，笔记本 → notebook，无项目 → chat（有项目 → work）
  *   S9  params 里混进来的 `ephemeral: true` 不算数 —— 仍是持久会话
  *   S10 父会话是已删的内存会话 → create 抛错，哪儿都不插；对照：父行只是不存在 → 照旧建成持久会话
@@ -28,6 +31,8 @@ import type { Session } from '../../dao/types'
 
 /** 持久会话那一侧的「库」：DAO spy 背后的内存表 */
 const table = vi.hoisted(() => new Map<string, unknown>())
+/** 持久会话的权限表（session_acl）：sessionAclDao spy 背后的内存表，sessionId → 行 */
+const aclTable = vi.hoisted(() => new Map<string, unknown[]>())
 
 const mocks = vi.hoisted(() => {
   const rows = (): Map<string, Record<string, unknown>> =>
@@ -78,6 +83,36 @@ const mocks = vi.hoisted(() => {
     }),
     daoTouch: vi.fn(),
     daoTouchActive: vi.fn(),
+    // dao/sessionAclDao —— 持久会话的权限表（背后是 aclTable）；内存会话一次都不该碰到
+    aclFindBySession: vi.fn((sid: string) =>
+      ((aclTable.get(sid) ?? []) as Array<Record<string, unknown>>).map((r) => clone(r))
+    ),
+    aclInsert: vi.fn((e: Record<string, unknown>) => {
+      const sid = e.sessionId as string
+      aclTable.set(sid, [...((aclTable.get(sid) ?? []) as unknown[]), clone(e)])
+    }),
+    aclUpdateAccess: vi.fn((sid: string, id: string, access: string, at: number) => {
+      const row = ((aclTable.get(sid) ?? []) as Array<Record<string, unknown>>).find(
+        (r) => r.id === id
+      )
+      if (!row) return false
+      row.access = access
+      row.updatedAt = at
+      return true
+    }),
+    aclDeleteById: vi.fn((sid: string, id: string) => {
+      const rows = (aclTable.get(sid) ?? []) as Array<Record<string, unknown>>
+      aclTable.set(
+        sid,
+        rows.filter((r) => r.id !== id)
+      )
+      return rows.some((r) => r.id === id)
+    }),
+    aclDeleteBySession: vi.fn((sid: string) => {
+      const n = ((aclTable.get(sid) ?? []) as unknown[]).length
+      aclTable.delete(sid)
+      return n
+    }),
     broadcastListChanged: vi.fn(),
     broadcastTitleChanged: vi.fn(),
     broadcastConfigChanged: vi.fn(),
@@ -108,6 +143,29 @@ vi.mock('../../dao/sessionDao', () => ({
     // 删除时判断临时工作区还有没有会话指着（会话 fork 共用）—— 这组用例里没有 fork
     existsWithWorkingDirectory: vi.fn(() => false)
   }
+}))
+vi.mock('../../dao/sessionAclDao', () => ({
+  sessionAclDao: {
+    findBySession: mocks.aclFindBySession,
+    insert: mocks.aclInsert,
+    updateAccess: mocks.aclUpdateAccess,
+    deleteById: mocks.aclDeleteById,
+    deleteBySession: mocks.aclDeleteBySession,
+    transaction: <T>(fn: () => T): T => fn()
+  }
+}))
+// 权限表的派生行：每条会话一行自己的 system 行（真的 derive 要会话目录、知识库、技能目录）
+vi.mock('../acl/derive', () => ({
+  derivePathEntries: (sid: string) => [
+    {
+      source: 'system',
+      sourceKey: 'tmp',
+      target: `/nonexistent/shuvix-unit/sandbox-tmp/${sid}`,
+      access: 'write'
+    }
+  ],
+  derivedKey: (e: { source: string; sourceKey: string; target: string }) =>
+    `${e.source}\u0000${e.sourceKey}\u0000${e.target}`
 }))
 vi.mock('../../dao/sessionDayPromptDao', () => ({
   sessionDayPromptDao: { deleteBySessionId: vi.fn() }
@@ -155,9 +213,6 @@ vi.mock('../mcpService', () => ({ mcpService: { closeSession: mocks.closeSession
 vi.mock('../toolAggregator', () => ({
   filterAvailableTools: vi.fn((tools: string[]) => tools)
 }))
-vi.mock('../../utils/toolUtils/allowList', () => ({
-  buildAllowEntry: (type: string, path: string) => `${type}(${path})`
-}))
 vi.mock('../agentService', () => ({
   agentService: { getProfile: vi.fn(), isSessionProfile: vi.fn() }
 }))
@@ -187,6 +242,8 @@ vi.mock('../../logger', () => ({
 }))
 
 import { sessionRecords } from '../sessionRecords'
+import { sessionAcl } from '../acl'
+import { clearMemoryAclForTests } from '../acl/store'
 import { agentSessionSpies, fakeHost, resetFakeHost } from './support/fakeSessionHost'
 
 let sessionService: (typeof import('../sessionService'))['sessionService']
@@ -195,7 +252,11 @@ beforeAll(async () => {
   ;({ sessionService } = await import('../sessionService'))
 })
 
-/** 所有「写库」的 DAO spy —— 内存会话的任何操作都不该碰到其中任何一个 */
+/**
+ * 所有「写库」的 DAO spy —— 内存会话的任何操作都不该碰到其中任何一个。权限表的
+ * `deleteBySession` 不在其中：删会话时两边的表都删（内存会话删掉之后 isEphemeral 就不再认它，见
+ * acl/store 的 deleteAclEverywhere），库那一侧对内存会话是一次删不到任何行的 DELETE
+ */
 const daoWrites = (): Array<ReturnType<typeof vi.fn>> => [
   mocks.daoInsert,
   mocks.daoUpdateSettings,
@@ -203,7 +264,10 @@ const daoWrites = (): Array<ReturnType<typeof vi.fn>> => [
   mocks.daoUpdateProjectId,
   mocks.daoDeleteById,
   mocks.daoTouch,
-  mocks.daoTouchActive
+  mocks.daoTouchActive,
+  mocks.aclInsert,
+  mocks.aclUpdateAccess,
+  mocks.aclDeleteById
 ]
 const expectNoDaoWrites = (): void => {
   for (const spy of daoWrites()) expect(spy).not.toHaveBeenCalled()
@@ -213,8 +277,11 @@ let clock = 1_000_000
 
 beforeEach(() => {
   table.clear()
+  aclTable.clear()
   resetFakeHost()
   sessionRecords.clearEphemeralForTests()
+  clearMemoryAclForTests()
+  sessionAcl.forgetReconciled()
   vi.clearAllMocks()
   // 子会话按 createdAt 排序：每次 create 拨一下时钟，顺序才是确定的
   vi.useFakeTimers({ toFake: ['Date'] })
@@ -258,6 +325,13 @@ describe('S1 / S2 建会话', () => {
       workingDirectory: `/nonexistent/shuvix-unit/tmp/${s.id}`
     })
     expect(sessionService.list().map((x) => x.id)).toEqual([kept.id])
+    // 权限表建好了（派生行），但只在内存里：sessionAclDao 一次都没碰
+    expect(sessionAcl.entries(s.id).map((e) => [e.source, e.target])).toEqual([
+      ['system', `/nonexistent/shuvix-unit/sandbox-tmp/${s.id}`]
+    ])
+    expect(mocks.aclFindBySession).not.toHaveBeenCalled()
+    expect(aclTable.has(s.id)).toBe(false)
+    expectNoDaoWrites()
   })
 
   it('S2 对照：持久会话落库一次、广播一次', () => {
@@ -270,6 +344,12 @@ describe('S1 / S2 建会话', () => {
     )
     expect(sessionRecords.isEphemeral(s.id)).toBe(false)
     expect(sessionService.list().map((x) => x.id)).toEqual([s.id])
+    // 权限表落进 session_acl（行进库之后才生成）
+    expect(mocks.aclInsert).toHaveBeenCalledTimes(1)
+    expect(mocks.aclInsert.mock.calls[0][0]).toMatchObject({ sessionId: s.id, source: 'system' })
+    expect(mocks.daoInsert.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.aclInsert.mock.invocationCallOrder[0]
+    )
   })
 })
 
@@ -278,9 +358,10 @@ describe('S3 / S4 子会话按父会话推定', () => {
     ['不传 options', undefined],
     ['{ ephemeral: false }', { ephemeral: false }],
     ['{ ephemeral: true }', { ephemeral: true }]
-  ])('S3 内存父的子会话（%s）恒为内存会话，继承父的勾选 / 项目', (_label, opt) => {
+  ])('S3 内存父的子会话（%s）恒为内存会话，继承父的勾选 / 项目与授予的路径', (_label, opt) => {
     const parent = create({ projectId: 'p1' }, EPH)
     sessionService.updateEnabledTools(parent.id, ['mcp:ssh', 'skill:x'])
+    sessionAcl.grantPath(parent.id, '/Users/u/notes', 'write')
     vi.clearAllMocks()
 
     const child = create({ parentId: parent.id, projectId: 'elsewhere' }, opt)
@@ -294,6 +375,13 @@ describe('S3 / S4 子会话按父会话推定', () => {
       settings: { enabledTools: ['mcp:ssh', 'skill:x'] }
     })
     expect(sessionRecords.findChildren(parent.id).map((s) => s.id)).toEqual([child.id])
+    // 父会话授予的路径复制进子会话的表（新行）；子会话的派生行是它自己的；全在内存里
+    expect(sessionAcl.entries(child.id).map((e) => [e.source, e.target, e.access])).toEqual([
+      ['user', '/Users/u/notes', 'write'],
+      ['system', `/nonexistent/shuvix-unit/sandbox-tmp/${child.id}`, 'write']
+    ])
+    expect(mocks.aclFindBySession).not.toHaveBeenCalled()
+    expectNoDaoWrites()
   })
 
   it('S4 持久父的子会话传 { ephemeral: true } 仍是持久会话', () => {
@@ -314,8 +402,9 @@ describe('S3 / S4 子会话按父会话推定', () => {
 })
 
 describe('S5 / S6 删除', () => {
-  it('S5 delete(内存)：行没了、不碰库、不广播；清理链各跑一次', async () => {
+  it('S5 delete(内存)：行没了、不碰库、不广播；清理链各跑一次；权限表跟着没了', async () => {
     const s = create({}, EPH)
+    sessionAcl.grantPath(s.id, '/Users/u/notes', 'read')
     // 让它开着：删除要先经宿主关掉并删存储
     await sessionService.ensureAgentSession(s.id)
     expect(fakeHost.get(s.id)).toBeDefined()
@@ -336,6 +425,13 @@ describe('S5 / S6 删除', () => {
     expect(fakeHost.callsOf('delete')).toEqual([s.id])
     expect(fakeHost.get(s.id)).toBeUndefined()
     expect(mocks.closeSession.mock.calls).toEqual([[s.id]])
+
+    // 权限表：删掉的会话读出空表、授予不补行；库那一侧只有一次删不到任何行的清理
+    expect(sessionAcl.entries(s.id)).toEqual([])
+    expect(sessionAcl.grantPath(s.id, '/Users/u/late', 'write')).toBeNull()
+    expect(mocks.aclDeleteBySession.mock.calls).toEqual([[s.id]])
+    expect(mocks.aclFindBySession).not.toHaveBeenCalled()
+    expect(aclTable.has(s.id)).toBe(false)
   })
 
   it('S6 delete(内存父) 连带两条内存子会话：子先于父，什么都不剩，不广播', async () => {
@@ -362,29 +458,45 @@ describe('S5 / S6 删除', () => {
 })
 
 describe('S7 写入口落在内存行上', () => {
-  it('S7 标题 / 扩展能力 / 知识库 / 允许列表：不写库，getById 看得见', () => {
+  it('S7 标题 / 扩展能力 / 知识库 / 权限表：不写库，getById / 权限表看得见', () => {
     const s = create({}, EPH)
     vi.clearAllMocks()
 
     sessionService.updateTitle(s.id, '自动标题', 'auto')
     expect(sessionService.updateEnabledTools(s.id, ['mcp:ssh', 'bash', 'skill:x'])).toBe(true)
     expect(sessionService.updateKnowledgeBases(s.id, [' notes ', 'notes', 'project'])).toBe(true)
-    sessionService.addAllowListPaths(s.id, 'read', ['/a', '/b'])
+    const a = sessionAcl.grantPath(s.id, '/a', 'read')!
+    sessionAcl.grantPath(s.id, '/b', 'read')
 
     expect(sessionService.getById(s.id)).toMatchObject({
       title: '自动标题',
       settings: {
         titleOrigin: 'auto',
         enabledTools: ['mcp:ssh', 'skill:x'],
-        knowledgeBases: ['notes', 'project'],
-        allowList: ['read(/a)', 'read(/b)']
+        knowledgeBases: ['notes', 'project']
       }
     })
+    expect(sessionService.getById(s.id)!.settings).not.toHaveProperty('allowList')
+    const granted = (): string[] =>
+      sessionAcl
+        .entries(s.id)
+        .filter((e) => e.source === 'user')
+        .map((e) => `${e.access}:${e.target}`)
+    expect(granted()).toEqual(['read:/a', 'read:/b'])
 
-    sessionService.removeAllowListEntry(s.id, 'read(/a)')
-    expect(sessionService.getById(s.id)!.settings.allowList).toEqual(['read(/b)'])
+    expect(sessionAcl.remove(s.id, a.id)).toBe(true)
+    expect(granted()).toEqual(['read:/b'])
+    expect(
+      sessionAcl.setAccess(
+        s.id,
+        sessionAcl.entries(s.id).find((e) => e.target === '/b')!.id,
+        'write'
+      )
+    ).toBe(true)
+    expect(sessionAcl.pathView(s.id).write).toContain('/b')
 
     expectNoDaoWrites()
+    expect(mocks.aclFindBySession).not.toHaveBeenCalled()
     // 自动标题照样通知前端（这与会话落不落库无关）
     expect(mocks.broadcastTitleChanged).toHaveBeenCalledWith(s.id, '自动标题')
   })

@@ -456,7 +456,6 @@ function judge(files: UserPolicyFile[], probe: Probe): GateVerdict {
       botsDir: `${home}/.shuvix/bots`,
       shuvixConfigDirs: ['policies', 'agents', 'hooks', 'skills'].map((d) => `${home}/.shuvix/${d}`)
     }),
-    getSessionGrants: () => ({ allowList: [] }),
     readBuiltinPolicyMd: createInlinePolicyMdReader(),
     getUserPolicies: () => files
   }

@@ -181,6 +181,8 @@ vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
 vi.mock('../userInputBroker', () => ({ registerUserInputParticipant: vi.fn() }))
 vi.mock('../artifacts/store', () => ({ deleteSessionArtifacts: vi.fn() }))
 vi.mock('../sandbox', () => ({ cleanupSession: vi.fn() }))
+// 会话权限表（services/acl）不在这组用例里：建会话时的生成、删会话时的清理换成空操作
+vi.mock('../acl', () => ({ sessionAcl: { initialize: vi.fn(), deleteSession: vi.fn() } }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })

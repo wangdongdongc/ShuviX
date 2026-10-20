@@ -216,7 +216,7 @@ describe.each([
           bot: 'scout',
           chromeTab: BINDING,
           enabledTools: ['a', 'b'],
-          allowList: ['Read(/x)']
+          knowledgeBases: ['notes']
         }
       })
     )
@@ -224,7 +224,7 @@ describe.each([
     sessionRecords.updateSettings('s1', {
       chromeTab: { installId: 'i2', runId: 'r2', tabId: 9 },
       enabledTools: ['c'],
-      allowList: undefined,
+      knowledgeBases: undefined,
       titleOrigin: 'auto'
     })
     const row = sessionRecords.findById('s1')!
@@ -236,7 +236,7 @@ describe.each([
       // 数组整值替换（不拼接）
       enabledTools: ['c'],
       // undefined 跳过：原值还在
-      allowList: ['Read(/x)'],
+      knowledgeBases: ['notes'],
       titleOrigin: 'auto'
     })
     expect(row.updatedAt).toBe(LATER)

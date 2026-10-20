@@ -3,8 +3,9 @@
  * 这里逐策略钉死形态与安全不变式（内置绝不静默放行写入；管 agent 的出厂没有硬限制 —— 2026-10-01 用户
  * 裁定「默认尽可能少问」，agent 主体的出厂恰两份、都是普通 ask，不许出现 deny / force-ask / force-allow）。
  *
- * 管 agent 的两份：ask-on-external-path（文件工具在会话目录 `vars.sessionDirs` 与「允许并记住」的路径以外 ——
- * 读家目录里的文件、往任何地方写 —— 询问）与 ask-on-command（没圈进沙箱的命令询问）。
+ * 管 agent 的两份：ask-on-external-path（文件工具在会话权限表 `vars.aclRead` / `vars.aclWrite` 以外 ——
+ * 读家目录里的文件、往任何地方写 —— 询问；表由宿主交，「允许并记住」也是表里的行）与 ask-on-command
+ * （没圈进沙箱的命令询问）。
  * 管远程访问的一份（2026-10-19 用户裁定）：network-admission —— network 主体、发送方不是本机的 HTTP 请求
  * 一律 deny。这是出厂唯一的 deny：网络点位没有人可问（ask 会降级为拒绝），只作用于 network 主体。
  *
@@ -80,7 +81,6 @@ const makeBareProvider = (): SecurityHostProvider => ({
   host: 'desktop',
   pathSep: '/',
   getVars: () => ({}),
-  getSessionGrants: () => ({ allowList: [] }),
   readBuiltinPolicyMd: INLINE_POLICY_MD
 })
 
@@ -139,7 +139,7 @@ describe('buildBuiltinPolicies', () => {
 
   it('BP-2 不变式：内置策略不含静态 allow 规则（无策略即放行，无需内置豁免）', () => {
     // 静态 allow 只会白占一层 static-allow，既压不过询问门，又让"没有策略就是放行"这条默认语义
-    // 多出一个等价的替身。豁免写成询问门 match 里的取反（会话目录、「允许并记住」）；force-allow
+    // 多出一个等价的替身。豁免写成询问门 match 里的取反（会话权限表）；force-allow
     // 出厂同样不用（BP-2d）。
     for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
       for (const rule of policy.rules) {
@@ -176,8 +176,8 @@ describe('buildBuiltinPolicies', () => {
   it('BP-2d 不变式：出厂没有硬限制、也没有越级放行 —— 没有一条内置规则是 deny / force-ask / force-allow（各语言、装配产物的 tier 都算）', () => {
     // 2026-10-01 用户裁定：内置策略默认尽可能少问、不设硬限制。deny 不可按命令豁免，force-ask
     // 连「允许并记住」与自动审查都答不了 —— 想要这种门，用户自己写一份策略（执行点都还在）。
-    // force-allow 也不再用：「允许并记住」从前是 session-grants 的两条 force-allow，如今写成
-    // ask-on-external-path 的 match 里的豁免 —— 出厂整套恰是普通 ask。
+    // force-allow 也不再用：「允许并记住」从前是 session-grants 的两条 force-allow，如今是会话权限表
+    // 里的行、经 ask-on-external-path 的 match 豁免 —— 出厂整套恰是普通 ask。
     // 唯一的例外是 network 主体的 network-admission（2026-10-19）：网络点位没有人可问，ask 会降级为
     // 拒绝，它就直接写 deny —— 只作用于 network 主体（BP-2b），agent 主体的出厂照旧恰是普通 ask。
     for (const language of ['en', 'zh', 'ja']) {
@@ -201,32 +201,26 @@ describe('buildBuiltinPolicies', () => {
     ])
   })
 
-  it('BP-3 ask-on-external-path：两条 ask × path，desktop 限定 —— #0 读家目录里、（只读）会话目录与授权之外的；#1 写会话目录与写授权之外的', () => {
+  it('BP-3 ask-on-external-path：两条 ask × path，desktop 限定 —— #0 读家目录里、权限表可读行之外的；#1 写权限表可写行之外的', () => {
     const policy = byName('ask-on-external-path')
     expect(policy.scope).toEqual({
       'subject.kind': ['agent'],
       'object.type': ['path'],
       'env.host': ['desktop']
     })
-    // 没有 let：凭据清单不再单列（凭据都在家目录里），会话目录由宿主按会话设置算好，经
-    // vars.sessionDirs（可读写）与 vars.sessionReadDirs（只读：技能、内置知识库）给出
+    // 没有 let：凭据清单不再单列（凭据都在家目录里），权限表由宿主按会话设置与授权算好，经
+    // vars.aclRead（可读：写隐含读，可写的行也在里面）与 vars.aclWrite（可写）给出
     expect(policy.lets).toBeUndefined()
     expect(policy.rules.map(withoutPrompt)).toEqual([
       {
         effect: 'ask',
         conditions: { action: ['read'] },
-        // 只读会话目录只免读；写授权隐含读：读规则两份授权清单都认
-        match:
-          'inDir(object.path, vars.home)' +
-          ' && !inDir(object.path, vars.sessionDirs)' +
-          ' && !inDir(object.path, vars.sessionReadDirs)' +
-          ' && !inDir(object.path, vars.grantedRead)' +
-          ' && !inDir(object.path, vars.grantedWrite)'
+        match: 'inDir(object.path, vars.home) && !inDir(object.path, vars.aclRead)'
       },
       {
         effect: 'ask',
         conditions: { action: ['write'] },
-        match: '!inDir(object.path, vars.sessionDirs) && !inDir(object.path, vars.grantedWrite)'
+        match: '!inDir(object.path, vars.aclWrite)'
       }
     ])
     for (const rule of policy.rules) {
@@ -238,14 +232,8 @@ describe('buildBuiltinPolicies', () => {
 
   it('BP-3s ask-on-external-path 读到的每个 vars 都只作 inDir 的目录参数 —— 宿主没给时装配替它绑 null：取反的豁免没了（多问），唯一的正向用法 vars.home 让读规则命中不了（BP-E4 / BP-E5）', () => {
     const [read, write] = byName('ask-on-external-path').rules
-    expect(inDirOnlyVarNames(read.match!)).toEqual([
-      'grantedRead',
-      'grantedWrite',
-      'home',
-      'sessionDirs',
-      'sessionReadDirs'
-    ])
-    expect(inDirOnlyVarNames(write.match!)).toEqual(['grantedWrite', 'sessionDirs'])
+    expect(inDirOnlyVarNames(read.match!)).toEqual(['aclRead', 'home'])
+    expect(inDirOnlyVarNames(write.match!)).toEqual(['aclWrite'])
   })
 
   it('BP-3 ask-on-command：ask × execute × command，只问没被圈进沙箱的命令（无渠道收窄），分类器很有把握判为 read_only 的除外', () => {
@@ -460,17 +448,17 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   const TR = `${USER_DATA}/tool_results/sess-1`
   /** 本会话勾选的一个知识库（改动都提交进它自己的 git，可回退 —— 所以可读写） */
   const KB = `${SHUVIX_HOME}/knowledge/notes`
-  /** 会话目录（可读写）—— 桌面 sessionDirsView 给的那一份（与命令沙箱同一份清单） */
-  const SESSION_DIRS = [WS, TMP, A, TR, KB]
+  /** 权限表里可写的行（写隐含读）—— 桌面 services/acl 按会话设置派生的那几行（与命令沙箱同一张表） */
+  const ACL_WRITABLE = [WS, TMP, A, TR, KB]
   /** 应用包里随包发布的资源（内置技能、内置知识库） */
   const APP_RESOURCES = '/Applications/ShuviX.app/Contents/Resources'
   /** 用户启用的一个技能（在家目录里） */
   const SKILL = `${SHUVIX_HOME}/skills/foo`
   /**
-   * 只读会话目录 —— 技能（内置 + 启用的）与内置知识库：读免问，写照问（技能是 agent 自己要遵守的
-   * 指令）。应用包那两项在家目录外，读本来就不问；在家目录里的启用技能才看得出这份清单的作用
+   * 权限表里只读的行 —— 技能（内置 + 启用的）与内置知识库：读免问，写照问（技能是 agent 自己要遵守的
+   * 指令）。应用包那两项在家目录外，读本来就不问；在家目录里的启用技能才看得出这几行的作用
    */
-  const SESSION_READ_DIRS = [`${APP_RESOURCES}/skills`, `${APP_RESOURCES}/knowledge`, SKILL]
+  const ACL_READ_ONLY = [`${APP_RESOURCES}/skills`, `${APP_RESOURCES}/knowledge`, SKILL]
 
   /** 桌面宿主的完整变量表（会话 sess-1、工作目录 WS、uid 501） */
   const DESKTOP_VARS: Record<string, PolicyVarValue> = {
@@ -489,8 +477,9 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       `${SHUVIX_HOME}/skills`
     ],
     systemDirs: [],
-    sessionDirs: SESSION_DIRS,
-    sessionReadDirs: SESSION_READ_DIRS
+    // 会话权限表：可读的一份含可写的行（写隐含读）
+    aclRead: [...ACL_WRITABLE, ...ACL_READ_ONLY],
+    aclWrite: ACL_WRITABLE
   }
 
   /** 从变量表里拿掉若干键（模拟宿主压根没给） */
@@ -509,17 +498,48 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       host: 'desktop',
       pathSep: '/',
       getVars: () => DESKTOP_VARS,
-      getSessionGrants: () => ({ allowList: [] }),
       readBuiltinPolicyMd: INLINE_POLICY_MD,
       ...overrides
     }
   }
 
-  /** 会话里「允许并记住」过这些条目的 provider（Read(...) / Write(...) 字面值） */
+  /** 会话里「允许并记住」过的路径（宿主 persistGrant(mode, path) 记下的那几行） */
+  interface Grants {
+    read?: string[]
+    write?: string[]
+  }
+
+  /**
+   * 宿主把授权并进权限表之后交出的 vars（桌面 services/acl 的规矩）：写授权同时进 aclRead 与 aclWrite
+   * （写隐含读），读授权只进 aclRead。base 里压根没有的那张表（模拟宿主漏交）照旧没有
+   */
+  const withGrants = (
+    grants: Grants,
+    base: Record<string, PolicyVarValue> = DESKTOP_VARS
+  ): Record<string, PolicyVarValue> => {
+    const extend = (key: 'aclRead' | 'aclWrite', rows: string[]): Record<string, string[]> => {
+      const current = base[key]
+      return Array.isArray(current) ? { [key]: [...current, ...rows] } : {}
+    }
+    return {
+      ...base,
+      ...extend('aclRead', [...(grants.read ?? []), ...(grants.write ?? [])]),
+      ...extend('aclWrite', grants.write ?? [])
+    }
+  }
+
+  /** 会话里「允许并记住」过这些路径的 provider */
   const grantedProvider = (
-    allowList: string[],
+    grants: Grants,
     overrides: Partial<SecurityHostProvider> = {}
-  ): SecurityHostProvider => makeProvider({ getSessionGrants: () => ({ allowList }), ...overrides })
+  ): SecurityHostProvider => makeProvider({ getVars: () => withGrants(grants), ...overrides })
+
+  /** 卡片上的 rememberEntry（`Read(p)` / `Write(p)`）→ 宿主记进权限表的那一行（persistGrant(mode, p) 同款） */
+  const grantOf = (entry: string): Grants => {
+    const m = /^(Read|Write)\((.+)\)$/.exec(entry)
+    if (!m) throw new Error(`not a path entry: ${entry}`)
+    return m[1] === 'Write' ? { write: [m[2]] } : { read: [m[2]] }
+  }
 
   /** 装上若干退役策略夹具（按用户策略）的 provider —— 借它们钉引擎机制 */
   const withRetired = (
@@ -540,9 +560,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   /**
    * 内置策略（+ 装上的夹具）的完整装配 + 统一评估。
    *
-   * vars 必须走 buildPolicyVars（生产路径 context.ts 同款）：直接用 provider.getVars() 会缺
-   * grantedRead/grantedWrite —— 外部目录门的豁免被绑成 null，「允许并记住」过的路径照样问
-   * （assemble.test CV-1b）。
+   * vars 走 buildPolicyVars（生产路径 context.ts 同款：一次 getVars，装配与求值共用）。求值侧的 vars
+   * 若缺了 aclRead / aclWrite，外部目录门的豁免被绑成 null，权限表里的路径照样问（assemble.test CV-1b）。
    */
   function decide(action: string, object: SecurityObject, opts: DecideOpts = {}): SecurityDecision {
     const provider = opts.provider ?? makeProvider()
@@ -631,17 +650,18 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   // block-catastrophic-commands 已退役（2026-10-01）；它的夹具仍是命令解析 / PowerShell 扫描 /
   // commandFacts 投影经 CEL 的端到端覆盖，见 blockCatastrophicCommands.test.ts。
 
-  // ── ask-on-external-path：会话目录以外的读写 ─────────────────────────────────────
+  // ── ask-on-external-path：会话权限表以外的读写 ───────────────────────────────────
   //
-  // 文件工具在会话目录（vars.sessionDirs：工作目录、本会话临时目录、artifacts、工具结果、勾选的知识库
-  // —— 与命令沙箱同一份清单）里自由读写，在只读会话目录（vars.sessionReadDirs：技能、内置知识库）里
+  // 文件工具在权限表的可写行（vars.aclWrite：工作目录、本会话临时目录、artifacts、工具结果、勾选的
+  // 知识库 —— 与命令沙箱同一张表）里自由读写，在只读行（技能、内置知识库；只在 vars.aclRead 里）里
   // 自由读；在那之外，读家目录里的文件问（#0），往任何地方写问（#1）。家目录外的读不问（系统位置、
   // /opt/homebrew、应用包）。凭据（~/.ssh、~/.aws、加密 API key 的密钥……）都在家目录里，不再单列一份
-  // 清单。「允许并记住」过的路径是 match 里的豁免（不是 force-allow）：读授权只免读，写授权读写都免。
+  // 清单。「允许并记住」过的路径是表里的行、经 match 豁免（不是 force-allow）：读授权只进 aclRead、
+  // 只免读，写授权两张表都进、读写都免。
 
-  it('BP-E1 行为表：家目录里、（只读）会话目录外的读 → #0；会话目录或只读会话目录里、或家目录外的读放行；会话目录外的写（家目录内外、只读会话目录里都算）→ #1；会话目录里的写放行 —— 问的都给「允许并记住」，零告警', () => {
+  it('BP-E1 行为表：家目录里、权限表外的读 → #0；表里（含只读行）或家目录外的读放行；可写行外的写（家目录内外、只读行里都算）→ #1；可写行里的写放行 —— 问的都给「允许并记住」，零告警', () => {
     const rows: Array<[string, 'read' | 'write', string, Expect]> = [
-      // 读：家目录里、会话目录外 → 问
+      // 读：家目录里、权限表外 → 问
       ['家目录里的普通文件', 'read', `${HOME}/notes.txt`, '#0'],
       ['家目录本身（列目录）', 'read', HOME, '#0'],
       ['私钥 —— 凭据在家目录里，不必单列', 'read', `${HOME}/.ssh/id_rsa`, '#0'],
@@ -654,14 +674,14 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       ['别的会话的 artifacts', 'read', `${R}/sess-2/x.svg`, '#0'],
       ['没勾的知识库', 'read', `${SHUVIX_HOME}/knowledge/other/a.md`, '#0'],
       ['没启用的技能', 'read', `${SHUVIX_HOME}/skills/bar/SKILL.md`, '#0'],
-      // 读：会话目录里 → 放行
+      // 读：可写行里（写隐含读）→ 放行
       ['工作目录里的源码', 'read', `${WS}/src/a.ts`, 'allow'],
       ['工作目录本身', 'read', WS, 'allow'],
       ['本会话的临时目录', 'read', `${TMP}/x`, 'allow'],
       ['本会话的 artifacts', 'read', `${A}/chart.svg`, 'allow'],
       ['本会话的工具结果', 'read', `${TR}/r.txt`, 'allow'],
       ['本会话勾选的知识库', 'read', `${KB}/a.md`, 'allow'],
-      // 读：只读会话目录里 → 放行
+      // 读：只读行里 → 放行
       ['启用的技能', 'read', `${SKILL}/SKILL.md`, 'allow'],
       ['启用的技能目录本身', 'read', SKILL, 'allow'],
       // 读：家目录外 → 放行
@@ -669,7 +689,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       ['/opt/homebrew', 'read', '/opt/homebrew/bin/node', 'allow'],
       ['应用包里的内置知识库', 'read', `${APP_RESOURCES}/knowledge/shuvix/en/agent-md.md`, 'allow'],
       ['别处的临时目录', 'read', '/private/tmp/other/x', 'allow'],
-      // 写：会话目录外 → 问（家目录内外都一样）
+      // 写：可写行外 → 问（家目录内外都一样）
       ['家目录里的普通文件', 'write', `${HOME}/notes.txt`, '#1'],
       ['~/.ssh', 'write', `${HOME}/.ssh/authorized_keys`, '#1'],
       ['shell 启动文件', 'write', `${HOME}/.zshrc`, '#1'],
@@ -677,13 +697,13 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       ['别的会话的 artifacts', 'write', `${R}/sess-2/x.svg`, '#1'],
       ['系统目录', 'write', '/etc/hosts', '#1'],
       ['别处的临时目录', 'write', '/private/tmp/x', '#1'],
-      // 写：只读会话目录里 → 照问（只读会话目录只免读）
+      // 写：只读行里 → 照问（只读行只免读）
       ['启用的技能', 'write', `${SKILL}/SKILL.md`, '#1'],
       ['内置技能', 'write', `${APP_RESOURCES}/skills/drawing/SKILL.md`, '#1'],
       ['内置知识库', 'write', `${APP_RESOURCES}/knowledge/x.md`, '#1'],
-      // 写：会话目录里 → 放行
+      // 写：可写行里 → 放行
       ['工作目录里的源码', 'write', `${WS}/src/a.ts`, 'allow'],
-      // 工作目录整个都是会话目录：出厂对文件工具不再单独守 git 元数据（命令那一侧的围栏是沙箱的事）
+      // 工作目录整个都是可写行：出厂对文件工具不再单独守 git 元数据（命令那一侧的围栏是沙箱的事）
       ['工作目录里的 git hooks', 'write', `${WS}/.git/hooks/pre-commit`, 'allow'],
       ['本会话的临时目录', 'write', `${TMP}/f`, 'allow'],
       ['本会话的 artifacts', 'write', `${A}/chart.svg`, 'allow'],
@@ -702,40 +722,46 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(sinks.logWarn).not.toHaveBeenCalled()
   })
 
-  it('BP-E2 「允许并记住」是 match 里的豁免：读授权只免读，写授权读写都免；授权按路径段比、可以是一个文件；历史的 Bash(...) 条目什么都不免', () => {
+  it('BP-E2 「允许并记住」是权限表里的行、经 match 豁免：读授权只免读，写授权读写都免；按路径段比、可以是一个文件；混进表里的条目字面值（Read(...) / Bash(...)）什么都不免', () => {
     const DOCS = `${HOME}/docs`
-    const rows: Array<[string, string[], 'read' | 'write', string, Expect]> = [
-      ['读授权 × 读', [`Read(${DOCS})`], 'read', `${DOCS}/a.md`, 'allow'],
-      ['读授权 × 写', [`Read(${DOCS})`], 'write', `${DOCS}/a.md`, '#1'],
-      ['写授权 × 读（写授权含读）', [`Write(${DOCS})`], 'read', `${DOCS}/a.md`, 'allow'],
-      ['写授权 × 写', [`Write(${DOCS})`], 'write', `${DOCS}/sub/a.md`, 'allow'],
-      ['家目录外的写授权 × 写', ['Write(/etc/app)'], 'write', '/etc/app/x.conf', 'allow'],
-      ['家目录外的读授权 × 写', ['Read(/etc/app)'], 'write', '/etc/app/x.conf', '#1'],
+    const rows: Array<[string, Grants, 'read' | 'write', string, Expect]> = [
+      ['读授权 × 读', { read: [DOCS] }, 'read', `${DOCS}/a.md`, 'allow'],
+      ['读授权 × 写', { read: [DOCS] }, 'write', `${DOCS}/a.md`, '#1'],
+      ['写授权 × 读（写授权含读）', { write: [DOCS] }, 'read', `${DOCS}/a.md`, 'allow'],
+      ['写授权 × 写', { write: [DOCS] }, 'write', `${DOCS}/sub/a.md`, 'allow'],
+      ['家目录外的写授权 × 写', { write: ['/etc/app'] }, 'write', '/etc/app/x.conf', 'allow'],
+      ['家目录外的读授权 × 写', { read: ['/etc/app'] }, 'write', '/etc/app/x.conf', '#1'],
       // 路径段边界：同前缀的兄弟不算
-      ['同前缀兄弟 × 读', [`Write(${DOCS})`], 'read', `${HOME}/docs-old/a.md`, '#0'],
-      ['同前缀兄弟 × 写', [`Write(${DOCS})`], 'write', `${HOME}/documents/a.md`, '#1'],
+      ['同前缀兄弟 × 读', { write: [DOCS] }, 'read', `${HOME}/docs-old/a.md`, '#0'],
+      ['同前缀兄弟 × 写', { write: [DOCS] }, 'write', `${HOME}/documents/a.md`, '#1'],
       // 授权一个文件：只免那一个
       [
         '文件授权 × 那个文件',
-        [`Read(${HOME}/.ssh/config)`],
+        { read: [`${HOME}/.ssh/config`] },
         'read',
         `${HOME}/.ssh/config`,
         'allow'
       ],
       [
         '文件授权 × 同目录别的文件',
-        [`Read(${HOME}/.ssh/config)`],
+        { read: [`${HOME}/.ssh/config`] },
         'read',
         `${HOME}/.ssh/id_rsa`,
         '#0'
       ],
-      // 历史条目解析为 null：不授予任何东西
-      ['Bash(...) 条目', [`Bash(cat ${HOME}/notes.txt)`], 'read', `${HOME}/notes.txt`, '#0']
+      // 表里的行是路径：条目字面值（宿主该交路径却交了条目）不授予任何东西
+      [
+        '条目字面值',
+        { read: [`Read(${HOME}/notes.txt)`, `Bash(cat ${HOME}/notes.txt)`] },
+        'read',
+        `${HOME}/notes.txt`,
+        '#0'
+      ]
     ]
     const sinks = warnSinks()
-    for (const [label, allowList, action, path, expected] of rows) {
+    for (const [label, grants, action, path, expected] of rows) {
       const decision = decide(action, at(path), {
-        provider: grantedProvider(allowList, { logger: sinks.logger }),
+        provider: grantedProvider(grants, { logger: sinks.logger }),
         warn: sinks.evalWarn
       })
       // 放行的那几格是 default、零命中：门根本没命中，不是被哪条 force-allow 压过
@@ -745,7 +771,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(sinks.logWarn).not.toHaveBeenCalled()
   })
 
-  it('BP-E3 （只读）会话目录与家目录都按路径段比：同前缀的兄弟、更长的 id、artifacts 根本身都不算会话目录；/Users/uu 不在 /Users/u 里', () => {
+  it('BP-E3 权限表的行与家目录都按路径段比：同前缀的兄弟、更长的 id、artifacts 根本身都不在表里；/Users/uu 不在 /Users/u 里', () => {
     const rows: Array<[string, 'read' | 'write', string, Expect]> = [
       ['工作目录的同前缀兄弟', 'write', `${WS}-evil/x`, '#1'],
       ['工作目录的同前缀兄弟', 'read', `${WS}-evil/x`, '#0'],
@@ -768,43 +794,45 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
 
   it.each<
     [
-      name: 'sessionDirs' | 'sessionReadDirs',
+      name: 'aclWrite' | 'aclRead',
       rows: Array<['read' | 'write', string, Expect]>,
-      grant: string,
-      grantedPath: string
+      granted: ['read' | 'write', string]
     ]
   >([
     [
-      'sessionDirs',
+      'aclWrite',
       [
         ['write', `${WS}/src/a.ts`, '#1'],
         ['write', `${TMP}/f`, '#1'],
-        ['read', `${WS}/src/a.ts`, '#0'],
-        ['read', `${A}/chart.svg`, '#0'],
-        // 另一份清单照常：只读会话目录里的读照旧放行
+        ['write', `${A}/chart.svg`, '#1'],
+        // 另一张表照常：读规则只看 aclRead，可写行里的读、只读行里的读照旧放行
+        ['read', `${WS}/src/a.ts`, 'allow'],
         ['read', `${SKILL}/SKILL.md`, 'allow'],
         ['read', '/etc/hosts', 'allow'],
-        ['read', `${TMP}/f`, 'allow']
+        ['read', `${HOME}/notes.txt`, '#0']
       ],
-      `Write(${WS})`,
-      `${WS}/src/a.ts`
+      // 写授权也进了 aclRead：读那一面照旧免
+      ['read', `${HOME}/docs/a.md`]
     ],
     [
-      'sessionReadDirs',
+      'aclRead',
       [
+        ['read', `${WS}/src/a.ts`, '#0'],
+        ['read', `${A}/chart.svg`, '#0'],
         ['read', `${SKILL}/SKILL.md`, '#0'],
-        ['write', `${SKILL}/SKILL.md`, '#1'],
-        // 另一份清单照常：会话目录里的读写照旧放行
-        ['read', `${WS}/src/a.ts`, 'allow'],
+        // 家目录外的读照旧放行（读规则的正向条件是 vars.home）
+        ['read', '/etc/hosts', 'allow'],
+        ['read', `${TMP}/f`, 'allow'],
+        // 另一张表照常：写规则只看 aclWrite
         ['write', `${WS}/src/a.ts`, 'allow'],
-        ['read', `${APP_RESOURCES}/skills/drawing/SKILL.md`, 'allow']
+        ['write', `${SKILL}/SKILL.md`, '#1']
       ],
-      `Read(${SKILL})`,
-      `${SKILL}/SKILL.md`
+      // 写授权也进了 aclWrite：写那一面照旧免
+      ['write', `${HOME}/docs/a.md`]
     ]
   ])(
-    'BP-E4 宿主没给 vars.%s（缺键 / undefined）→ 只会多问：那份清单里的读（写）都问，家目录外的读照旧放行，授权照旧免；只记一行「not provided」。空清单（宿主算不出时给的）同样多问、不记',
-    (name, rows, grant, grantedPath) => {
+    'BP-E4 宿主没给 vars.%s（缺键 / undefined）→ 只会多问、且只多问它那一条规则：表里的那一面都问，家目录外的读照旧放行，另一张表（连同其中的授权）照旧免；只记一行「not provided」。空清单（宿主算不出时给的）同样多问、不记',
+    (name, rows, [grantedAction, grantedPath]) => {
       const variants: Array<[string, Record<string, PolicyVarValue>, string[]]> = [
         ['缺键', withoutKeys(DESKTOP_VARS, [name]), [notProvided(name)]],
         ['undefined', withUndefined(name), [notProvided(name)]],
@@ -827,13 +855,16 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
             )
           }
         }
-        // 「允许并记住」照旧免 —— 缺清单没有变成一张免不掉的询问
-        const granted = grantedProvider([grant], { getVars: () => vars, logger: sinks.logger })
+        // 写授权在两张表里都有一行：缺的那张表里没有它，另一张照旧免 —— 缺表没有让另一面也问起来
+        const granted = makeProvider({
+          getVars: () => withGrants({ write: [`${HOME}/docs`] }, vars),
+          logger: sinks.logger
+        })
         expectShape(
-          `${label} 授权之后读`,
-          'read',
+          `${label} 授权之后${grantedAction}`,
+          grantedAction,
           grantedPath,
-          decide('read', at(grantedPath), { provider: granted, warn: sinks.evalWarn }),
+          decide(grantedAction, at(grantedPath), { provider: granted, warn: sinks.evalWarn }),
           'allow'
         )
         // 不是 fail-safe 蒙出来的 ask：缺的变量被绑成 null，inDir 当「没有这个目录」
@@ -884,14 +915,14 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     }
   })
 
-  it('BP-E6 宿主把会话目录指错了（家目录、根目录）也只抬得起 ask-on-external-path 自己：用户装回的 deny（系统目录）照拒、force-ask（ShuviX 配置、bot 文件）照问，「允许并记住」过也一样', () => {
+  it('BP-E6 宿主把权限表的工作目录行指错了（家目录、根目录）也只抬得起 ask-on-external-path 自己：用户装回的 deny（系统目录）照拒、force-ask（ShuviX 配置、bot 文件）照问，「允许并记住」过也一样', () => {
     const variants: Array<[string, string]> = [
       ['指到家目录', HOME],
       ['指到根目录', '/']
     ]
-    /** 指错的那一项（或 Write(/) 授权）罩不罩得住这条路径 —— 罩住了，外部目录门就不命中 */
-    const exempted = (dir: string, path: string, allowList: string[]): boolean =>
-      allowList.length > 0 || dir === '/' || path.startsWith(`${dir}/`)
+    /** 指错的那一行（或对 / 的写授权）罩不罩得住这条路径 —— 罩住了，外部目录门就不命中 */
+    const exempted = (dir: string, path: string, grants: Grants): boolean =>
+      (grants.write ?? []).length > 0 || dir === '/' || path.startsWith(`${dir}/`)
     /** 外部目录门之外的门：用户装回的三份退役夹具 */
     const FENCES: RetiredPolicyName[] = [
       'protect-system',
@@ -913,19 +944,24 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     ]
 
     for (const [label, dir] of variants) {
-      const vars: Record<string, PolicyVarValue> = { ...DESKTOP_VARS, sessionDirs: [dir] }
+      // 指错的那一行替掉全部可写行（只读行照旧）
+      const vars: Record<string, PolicyVarValue> = {
+        ...DESKTOP_VARS,
+        aclRead: [dir, ...ACL_READ_ONLY],
+        aclWrite: [dir]
+      }
       const sinks = warnSinks()
-      for (const allowList of [[], ['Write(/)', 'Read(/)']]) {
+      const grantCases: Grants[] = [{}, { read: ['/'], write: ['/'] }]
+      for (const grants of grantCases) {
         const provider = withRetired(FENCES, {
-          getVars: () => vars,
-          logger: sinks.logger,
-          getSessionGrants: () => ({ allowList })
+          getVars: () => withGrants(grants, vars),
+          logger: sinks.logger
         })
         for (const [what, path, effect, tier, winning] of rows) {
           const decision = decide('write', at(path), { provider, warn: sinks.evalWarn })
           expect({
             label,
-            allowList,
+            grants,
             what,
             effect: decision.effect,
             tier: decision.tier,
@@ -933,21 +969,19 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
             matched: decision.matched
           }).toEqual({
             label,
-            allowList,
+            grants,
             what,
             effect,
             tier,
             winning,
             // 外部目录门被罩住时只剩那道门自己命中；没罩住（家目录外的系统目录）时它照样命中，只是没胜出
-            matched: exempted(dir, path, allowList)
-              ? [winning]
-              : [winning, 'ask-on-external-path#1']
+            matched: exempted(dir, path, grants) ? [winning] : [winning, 'ask-on-external-path#1']
           })
         }
       }
 
-      // 指错的后果就是外部目录门这一格：家目录里的读写都不再问（宿主的 sessionDirsView 从不把家目录
-      // 或根目录交出来 —— 覆盖家目录的工作目录不算会话目录）
+      // 指错的后果就是外部目录门这一格：家目录里的读写都不再问（宿主 services/acl 从不派生家目录
+      // 或根目录那一行 —— 覆盖家目录的工作目录不进表）
       const off = makeProvider({ getVars: () => vars, logger: sinks.logger })
       for (const action of ['read', 'write'] as const) {
         expectShape(
@@ -963,7 +997,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     }
   })
 
-  it('BP-E7 「允许并记住」的往返：卡片上的 rememberEntry 记进会话授权后，同一个请求就放行（读 / 写、家目录内外各一格）', () => {
+  it('BP-E7 「允许并记住」的往返：卡片上的 rememberEntry 作为一行记进权限表后，同一个请求就放行（读 / 写、家目录内外各一格）', () => {
     const cases: Array<['read' | 'write', string]> = [
       ['read', `${HOME}/notes.txt`],
       ['read', `${HOME}/.ssh/config`],
@@ -979,7 +1013,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         `${action} ${path} 记住之后`,
         action,
         path,
-        decide(action, at(path), { provider: grantedProvider([entry!]) }),
+        decide(action, at(path), { provider: grantedProvider(grantOf(entry!)) }),
         'allow'
       )
     }
@@ -1013,7 +1047,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     const warn = vi.fn()
     const provider = makeProvider({
       host: 'extension',
-      // 扩展端没有文件系统：变量一律空值，也不给 sessionDirs —— env.host 条件先挡住，缺键无从读起
+      // 扩展端没有文件系统：变量一律空值，也不给权限表（aclRead / aclWrite）—— env.host 条件先挡住，
+      // 缺键无从读起
       getVars: () => ({
         workspace: '',
         toolResultsBase: '',
@@ -1103,7 +1138,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD }).find((p) => p.name === policy)!
       .rules[index].prompt!
 
-  it('BP-P1 外部目录门的两条各带自己那一段：读家目录里的文件 → #0 的话；写会话目录外 → #1 的话；署名都是这份策略的显示名', () => {
+  it('BP-P1 外部目录门的两条各带自己那一段：读家目录里的文件 → #0 的话；写权限表外 → #1 的话；署名都是这份策略的显示名', () => {
     for (const [action, path, index] of [
       ['read', `${HOME}/.ssh/id_rsa`, 0],
       ['write', `${HOME}/notes.txt`, 1]
@@ -1135,25 +1170,25 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   })
 
   it('BP-P3 放行不带话：出厂「允许并记住」过的写是零命中的放行；装回退役的 ask-on-write + session-grants 夹具时，force-allow 压过询问门放行，哪怕它自己写了 prompt 也不带', () => {
-    // 出厂：授权是外部目录门 match 里的豁免 —— 门根本没命中
+    // 出厂：授权是权限表里的行、外部目录门 match 里的豁免 —— 门根本没命中
     const builtin = decide('write', at(`${HOME}/notes.txt`), {
-      provider: grantedProvider([`Write(${HOME})`])
+      provider: grantedProvider({ write: [HOME] })
     })
     expect(builtin).toMatchObject({ effect: 'allow', tier: 'default', matched: [] })
     expect(builtin.prompt).toBeUndefined()
 
-    // 夹具：从前的形状 —— 询问门 + 一层 force-allow 的授权规则
+    // 夹具：从前的形状 —— 询问门 + 一层 force-allow 的授权规则（夹具改读权限表）
     const grants = retiredPolicy('session-grants')
     expect(grants.rules[1].prompt).toBeTruthy()
     const decision = decide('write', at(`${HOME}/notes.txt`), {
       provider: withRetired(['ask-on-write', 'session-grants'], {
-        getSessionGrants: () => ({ allowList: [`Write(${HOME})`] })
+        getVars: () => withGrants({ write: [HOME] })
       })
     })
     expect(decision.effect).toBe('allow')
     expect(decision.tier).toBe('force-allow')
     expect(decision.winning).toBe('session-grants#1')
-    // 夹具的询问门照样命中，只是被压过（外部目录门被授权豁免了，不在其列）
+    // 夹具的询问门照样命中，只是被压过（外部目录门被权限表豁免了，不在其列）
     expect(decision.matched).toEqual(['session-grants#1', 'ask-on-write#0'])
     expect(decision.prompt).toBeUndefined()
   })
@@ -1182,9 +1217,9 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     }
   })
 
-  it('BP-U1 用户自己写的路径询问门不认「允许并记住」，除非它自己引用 vars.granted*：装回 protect-credentials 夹具，Read(~/.ssh) 记住过照样问（卡片仍给 rememberEntry —— 引擎对路径 ask 一律给）', () => {
+  it('BP-U1 用户自己写的路径询问门不认「允许并记住」，除非它自己引用 vars.aclRead / vars.aclWrite：装回 protect-credentials 夹具，~/.ssh 读授权记住过照样问（卡片仍给 rememberEntry —— 引擎对路径 ask 一律给）', () => {
     const remembered = withRetired(['protect-credentials'], {
-      getSessionGrants: () => ({ allowList: [`Read(${HOME}/.ssh)`] })
+      getVars: () => withGrants({ read: [`${HOME}/.ssh`] })
     })
     const decision = decide('read', at(`${HOME}/.ssh/id_rsa`), { provider: remembered })
     expect(decision).toMatchObject({
@@ -1192,14 +1227,14 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       tier: 'ask',
       winning: 'protect-credentials#0'
     })
-    // 外部目录门被授权豁免了，只剩夹具这一条
+    // 外部目录门被权限表豁免了，只剩夹具这一条
     expect(decision.matched).toEqual(['protect-credentials#0'])
     expect(decision.ask?.rememberEntry).toBe(`Read(${HOME}/.ssh/id_rsa)`)
 
     // 对照：没装夹具时同一条授权放行
     expect(
       decide('read', at(`${HOME}/.ssh/id_rsa`), {
-        provider: grantedProvider([`Read(${HOME}/.ssh)`])
+        provider: grantedProvider({ read: [`${HOME}/.ssh`] })
       })
     ).toMatchObject({ effect: 'allow', winning: 'default:path' })
   })
@@ -1207,9 +1242,9 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   // ── 内置知识库：随应用包发布，在家目录外 ──────────────────────────────────────────
   //
   // 随应用包发布的目录刻意不设拒写策略（裁决见 builtinPolicies/index.ts 头注释）：读与别的家目录外
-  // 位置一样不问，写与会话目录外的写同待遇 —— #1，「允许并记住」能免。
+  // 位置一样不问，写与权限表外的写同待遇 —— #1，「允许并记住」能免。
 
-  it('BP-K1 内置知识库：读放行且零命中；写与会话目录外的写同待遇（#1，给记住，「允许并记住」能免）', () => {
+  it('BP-K1 内置知识库：读放行且零命中；写与权限表外的写同待遇（#1，给记住，「允许并记住」能免）', () => {
     const builtinKnowledgeDir = DESKTOP_VARS.builtinKnowledgeDir as string
     const path = `${builtinKnowledgeDir}/shuvix-formats/agent-md.md`
 
@@ -1219,7 +1254,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       '写授权',
       'write',
       path,
-      decide('write', at(path), { provider: grantedProvider([`Write(${builtinKnowledgeDir})`]) }),
+      decide('write', at(path), { provider: grantedProvider({ write: [builtinKnowledgeDir] }) }),
       'allow'
     )
   })
@@ -1282,15 +1317,12 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       const logger = { info: vi.fn(), warn: logWarn, error: vi.fn() }
       const off = withRetired(['protect-bot-files'], { getVars: () => vars, logger })
       const granted = withRetired(['protect-bot-files'], {
-        getVars: () => vars,
-        logger,
-        getSessionGrants: () => ({
-          allowList: [`Write(${HOME}/elsewhere)`, `Write(${SHUVIX_HOME}/bots)`]
-        })
+        getVars: () => withGrants({ write: [`${HOME}/elsewhere`, `${SHUVIX_HOME}/bots`] }, vars),
+        logger
       })
       const ordinaryWrite = at(`${HOME}/elsewhere/f.txt`)
 
-      // 没有授权：会话目录外的普通写落回外部目录门，且照给「允许并记住」（force-ask 没有胜出）
+      // 没有授权：权限表外的普通写落回外部目录门，且照给「允许并记住」（force-ask 没有胜出）
       const asked = decide('write', ordinaryWrite, { provider: off, warn: evalWarn })
       expect(asked.effect, label).toBe('ask')
       expect(asked.winning, label).toBe('ask-on-external-path#1')
@@ -1319,8 +1351,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
 
   // ── ~/.shuvix：出厂不再专门守（protect-shuvix-config / protect-bot-files 已退役） ─────────────────────
   //
-  // 策略 / agent / hook / bot 文件在家目录里、会话目录外：读写都是一张普通的外部目录询问（给「允许并
-  // 记住」，审查答得了它）；启用的技能是只读会话目录，读免问、写照问。想让这些目录「只问人」，用户自己
+  // 策略 / agent / hook / bot 文件在家目录里、权限表外：读写都是一张普通的外部目录询问（给「允许并
+  // 记住」，审查答得了它）；启用的技能是权限表里的只读行，读免问、写照问。想让这些目录「只问人」，用户自己
   // 装回那两份（夹具即原文，force-ask 的形状由 BP-B6 / BP-B11 / BP-E6 与 context.test 的 CT-RV4 钉住）。
 
   it('BP-C0 ~/.shuvix 里的读写只归外部目录门（tier ask，给记住）：policies / agents / hooks / bots / 没勾的知识库 / widgets 读写都问；启用的技能只免读；本会话 artifacts 与勾选的知识库读写都放行', () => {
@@ -1332,7 +1364,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       [`${SHUVIX_HOME}/bots/scout.md`, '#0', '#1'],
       [`${SHUVIX_HOME}/knowledge/other/a.md`, '#0', '#1'],
       [`${SHUVIX_HOME}/widgets/w1/index.html`, '#0', '#1'],
-      // 只读会话目录：技能是 agent 自己要遵守的指令，改它照问
+      // 只读行：技能是 agent 自己要遵守的指令，改它照问
       [`${SKILL}/SKILL.md`, 'allow', '#1'],
       [`${A}/chart.svg`, 'allow', 'allow'],
       [`${KB}/a.md`, 'allow', 'allow']
@@ -1430,9 +1462,9 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it('BP-S8 会话的路径授权（允许并记住）管不到地址：装着 ask-on-new-site 夹具，allowList 里有 Read / Write 条目照样 ask', () => {
+  it('BP-S8 会话的路径授权（允许并记住）管不到地址：装着 ask-on-new-site 夹具，权限表里有读写授权（连根目录都有）照样 ask', () => {
     const provider = withRetired(['ask-on-new-site'], {
-      getSessionGrants: () => ({ allowList: ['Read(/)', `Read(${HOME})`, `Write(${WS})`] })
+      getVars: () => withGrants({ read: ['/', HOME], write: [WS] })
     })
     const decision = decide('navigate', urlObject('https://a.example/'), { provider })
     expect(decision.effect).toBe('ask')
@@ -1444,7 +1476,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
   // ── 命令门：只看宿主上报的沙箱事实 ─────────────────────────────────────────────
   //
   // 命令门只看客体上的 `sandboxed`（宿主**实际**把这次执行圈进了 OS 沙箱）：受限命令本来就只能
-  // 碰会话目录（与外部目录门同一份清单），不再多问一遍；沙箱没套上、或宿主什么都没说，就问 ——
+  // 碰权限表里的路径（与外部目录门同一张表），不再多问一遍；沙箱没套上、或宿主什么都没说，就问 ——
   // 缺信息只会多问，绝不因此放行。
 
   /**
@@ -1698,9 +1730,9 @@ describe('内置策略 × 退役的变量与名字', () => {
       })
     })
 
-  it('BP-RD2 没有哪份内置策略（任何语言）的 match / let / scope 引用宿主已不提供的变量（沙箱视图、工作区写入视图、credentialDirs、autoAllow）或 ask-on-read', () => {
+  it('BP-RD2 没有哪份内置策略（任何语言）的 match / let / scope 引用宿主已不提供的变量（沙箱视图、工作区写入视图、credentialDirs、autoAllow、并进权限表之前的会话目录与授权清单）或 ask-on-read', () => {
     const banned =
-      /sandboxRead|sandboxWrit|sandboxProtectedPatterns|sandboxActive|workspaceWrit|workspaceProtectedPatterns|credentialDirs|autoAllow|ask-on-read/
+      /sandboxRead|sandboxWrit|sandboxProtectedPatterns|sandboxActive|workspaceWrit|workspaceProtectedPatterns|credentialDirs|autoAllow|sessionDirs|sessionReadDirs|grantedRead|grantedWrite|ask-on-read/
     const hits: string[] = []
     for (const { name, language, policy } of parsedAll()) {
       const texts = [

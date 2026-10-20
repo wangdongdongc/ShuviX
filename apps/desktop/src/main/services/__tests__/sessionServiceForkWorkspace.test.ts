@@ -117,13 +117,27 @@ vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
 }))
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn(async () => {}) } }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: (tools: string[]) => tools }))
-vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({
   agentService: { getProfile: (name: string) => ({ name }), isSessionProfile: () => true }
 }))
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
-vi.mock('../sandbox', () => ({ cleanupSession: vi.fn() }))
+// 会话权限表（services/acl）是真的（落在同一个内存库的 session_acl 上）：建会话 / fork 时按会话的工作目录
+// 派生行 —— 读工作目录走的是真的 getTempWorkspace，所以哪些文件夹被建出来也算在它头上。派生行要的
+// 「会话自己的目录」按 id 拼（真的那份要 realpath）；知识库与技能目录一个都没有
+vi.mock('../sandbox', () => ({
+  cleanupSession: vi.fn(),
+  sessionOwnDirsView: (sid: string, workingDirectory: string) => ({
+    workdir: workingDirectory,
+    workspaceUnsuitable: null,
+    tmp: `/sandbox-tmp/${sid}`,
+    artifacts: `/artifacts/${sid}`,
+    toolResults: `/tool-results/${sid}`
+  }),
+  settingDirForAcl: () => null
+}))
+vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: () => [] }))
+vi.mock('../skillService', () => ({ skillService: { enabledSkillRoots: () => [] } }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
@@ -132,6 +146,8 @@ import { migrations } from '../../dao/migrations'
 import type { Session, SessionSettings } from '../../dao/types'
 import { getTempWorkspace, getTempWorkspaceBase } from '../../utils/paths'
 import { sessionRecords } from '../sessionRecords'
+import { sessionAcl } from '../acl'
+import { clearMemoryAclForTests } from '../acl/store'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
@@ -157,6 +173,9 @@ beforeEach(() => {
   holder.rmThrowsUnder = ''
   process.env.HOME = join(root, 'home')
   sessionRecords.clearEphemeralForTests()
+  // 权限表的对账记忆是进程级的：每个用例一个新库，同一个会话 id 得重新对一次
+  sessionAcl.forgetReconciled()
+  clearMemoryAclForTests()
   resetFakeHost()
   mocks.listChanged.mockReset()
 })

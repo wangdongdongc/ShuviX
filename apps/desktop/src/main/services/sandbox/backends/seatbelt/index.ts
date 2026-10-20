@@ -44,7 +44,11 @@ export function createSeatbeltBackend(): SandboxBackend {
       }
       const built = buildSandboxSpec(
         paths,
-        { sessionId: 'probe', workingDirectory: workspace, grantedRead: [], grantedWrite: [] },
+        {
+          sessionId: 'probe',
+          workingDirectory: workspace,
+          entries: [{ path: workspace, access: 'write', granted: false }]
+        },
         (p) => p
       )
       if (!built.ok) return { available: false, reason: `probe spec rejected: ${built.reason}` }

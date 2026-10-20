@@ -93,7 +93,7 @@ export function SessionConfigDialog({
             </div>
           </section>
 
-          <SessionConfigPanel sessionId={sessionId} />
+          <SessionConfigPanel sessionId={sessionId} aclExpanded />
         </div>
 
         <div className="px-4 py-3 border-t border-border-secondary/50 bg-bg-secondary/30 flex items-center justify-between">

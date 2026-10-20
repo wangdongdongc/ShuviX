@@ -386,6 +386,8 @@
     "pendingWritePreview": "写入文件",
     "pendingCreatePreview": "新建文件",
     "allowThisDirectory": "允许此目录",
+    "rememberFolder": "允许整个文件夹",
+    "rememberOptions": "其他记住方式",
     "allow": "允许",
     "deny": "拒绝",
     "allowAndRememberPath": "允许该路径",
@@ -431,8 +433,6 @@
   "sessionConfig": {
     "title": "会话配置",
     "sessionTitle": "会话标题",
-    "allowListTitle": "已允许的路径",
-    "commandGroup": "操作询问",
     "extensionsGroup": "扩展能力",
     "extensionsDesc": "在智能体创建时读取（首次发送消息时创建）；智能体存在期间只读",
     "extensionsLocked": "智能体已创建，扩展能力只读。要改，先在上方的智能体胶囊上移除它",
@@ -440,6 +440,33 @@
     "knowledgeGroup": "知识库",
     "knowledgeDesc": "这条会话还能搜、能写哪几个库（属于项目的会话恒带本项目的库，不用勾）。改完立刻生效，不用新开会话。",
     "knowledgeDefault": "还没选过 —— 新会话缺省一个都不启用（属于项目的会话恒带本项目的库）。勾上这条会话要用的库，改完立即生效。"
+  },
+  "sessionAcl": {
+    "title": "文件访问",
+    "description": "这条会话的智能体在这些位置读写文件不用问你。在这以外：读家目录里的文件要问，往任何地方写都要问。权限表在会话创建时生成；来自会话设置的行跟着设置走。",
+    "source": {
+      "workdir": "工作目录",
+      "document": "笔记本文档",
+      "user": "你授予的",
+      "widget": "Widget {{name}}",
+      "knowledge": "知识库 {{name}}",
+      "skill": "技能目录",
+      "tmp": "临时目录",
+      "artifacts": "产物",
+      "toolResults": "工具结果"
+    },
+    "managed": "跟着这条会话的设置走",
+    "read": "只读",
+    "write": "读写",
+    "remove": "删除",
+    "showAll": "显示来自会话设置的另外 {{count}} 项",
+    "showLess": "收起",
+    "add": "添加路径",
+    "addPlaceholder": "文件或文件夹的绝对路径",
+    "addConfirm": "添加",
+    "browse": "选择文件夹…",
+    "cancel": "取消",
+    "addFailed": "请输入绝对路径（以 / 或盘符开头）。"
   },
   "projectForm": {
     "createTitle": "新建项目",

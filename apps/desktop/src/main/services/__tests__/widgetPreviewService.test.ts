@@ -166,7 +166,9 @@ const fx = vi.hoisted(() => {
   const fakeSession = {
     setPermissionRequestHandler: vi.fn(),
     setPermissionCheckHandler: vi.fn(),
-    on: vi.fn()
+    on: vi.fn(),
+    // widget 文件路由的补头钩子（widget/widgetFsKey.ts）装在预览分区上
+    webRequest: { onBeforeSendHeaders: vi.fn() }
   }
 
   return {

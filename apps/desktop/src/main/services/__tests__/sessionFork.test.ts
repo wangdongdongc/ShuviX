@@ -12,11 +12,13 @@
  *   SF-8  整段 fork：copy(源, 新)、收尾先于插行、不 branchAt / 不 open、一次广播、新 id ≠ 源
  *   SF-9  从回复分支：open(新) 再 branchAt(条目 id)
  *   SF-10 branchAt 拒绝 not_found / invalid_target → invalid_target，fork 的行 / 存储 / artifacts 都删掉；closed → failed
- *   SF-11 设置抄什么、不抄什么（项目源会话：工作目录不抄，它在项目根）；数组是拷贝
+ *   SF-11 设置抄什么、不抄什么（项目源会话：工作目录不抄，它在项目根）；数组是拷贝；权限表（services/acl）
+ *         复制源会话授予的行（user / widget，新 id）与工作目录那一行的访问方式，派生行是 fork 自己的，
+ *         两张表之后各管各的
  *   SF-12 标题：en / zh、fork 的 fork、缺省标题留缺省
  *   SF-13 顶层源 → parentId null；子会话源 → 同一父会话、档案钉子保留、父会话的子会话里有 fork
  *   SF-14 行还没进库时出错（拷贝 / 收尾 / 打开存储 / 插行）→ failed，删 fork 的存储，无行、无广播
- *   SF-15 行已进库之后出错（拷 artifacts / open / branchAt 抛错）→ failed，走完整删除
+ *   SF-15 行已进库之后出错（拷 artifacts / open / branchAt 抛错）→ failed，走完整删除（权限表一并删掉）
  *   SF-16 whileIdle 答 closed（或 viewSnapshot 抛 SessionClosedError）一次 → 再 peek 一次成功；两次 → failed
  *   SF-17 从不 reject（各处注入失败都回 `{ success: false }`）
  *   临时会话（不属于任何项目）—— fork 共用源会话的工作目录（`settings.workingDirectory`，见 sessionService 的
@@ -48,7 +50,9 @@ const mocks = vi.hoisted(() => ({
   reset: vi.fn<(storage: unknown) => Promise<void>>(),
   listChanged: vi.fn<() => void>(),
   artifactCalls: [] as Array<[string, string]>,
-  artifactsFail: false
+  artifactsFail: false,
+  /** projectDao.pick：缺省没有项目行（工作目录回落到会话自带的 / 临时工作区）；SF-11 的权限表用例给项目根 */
+  projectPick: vi.fn((_id: string, _cols: string[]): unknown => undefined)
 }))
 
 vi.mock('../../dao/database', () => {
@@ -70,7 +74,7 @@ vi.mock('../../dao/providerDao', () => ({
   }
 }))
 vi.mock('../../dao/settingsDao', () => ({ settingsDao: { findByKey: () => undefined } }))
-vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: () => undefined } }))
+vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: mocks.projectPick } }))
 vi.mock('../../dao/httpLogDao', () => ({ httpLogDao: { deleteBySessionId: vi.fn() } }))
 // 临时工作区那几个（getTempWorkspaceBase / getTempWorkspace / tempWorkspaceOwnerOf）用真的 —— userData 指到
 // 每个用例自己的临时目录（electron 换掉），真的 getTempWorkspace 会把目录建出来，「拒绝时没建出源会话的
@@ -86,7 +90,9 @@ vi.mock('../../utils/paths', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/paths')>()),
   getSessionsDir: () => join(holder.root, 'sessions'),
   getToolResultsBase: () => join(holder.root, 'tool_results'),
-  getSessionArtifactsDir: (sid: string) => join(holder.root, 'artifacts', sid)
+  getSessionArtifactsDir: (sid: string) => join(holder.root, 'artifacts', sid),
+  // 权限表的技能行（只读）：随包的内置技能目录换成一个固定写法
+  getBuiltinSkillsDir: () => '/app/skills/en'
 }))
 // 存储路由留真的（isDurableSession 按行的存储类型判）；拷贝 / 按路径打开 / 删除换成记录型假件
 vi.mock('../sessionStorage', async (importOriginal) => ({
@@ -144,13 +150,26 @@ vi.mock('../../frontend/core/ChatFrontendRegistry', () => ({
 }))
 vi.mock('../mcpService', () => ({ mcpService: { closeSession: vi.fn(async () => {}) } }))
 vi.mock('../toolAggregator', () => ({ filterAvailableTools: (tools: string[]) => tools }))
-vi.mock('../../utils/toolUtils/allowList', () => ({ buildAllowEntry: vi.fn() }))
 vi.mock('../agentService', () => ({
   agentService: { getProfile: (name: string) => ({ name }), isSessionProfile: () => true }
 }))
 vi.mock('../bgTaskService', () => ({ killBySession: vi.fn(), setBgTaskNotifier: vi.fn() }))
 vi.mock('../../agents/agentHost', () => ({ resolveProfileModelSpec: vi.fn() }))
-vi.mock('../sandbox', () => ({ cleanupSession: vi.fn() }))
+// 会话权限表（services/acl，真的，落在同一个内存库的 session_acl 上）的派生行：会话自己的目录按 id 拼出
+// 确定的路径、工作目录原样（真的那份要 realpath 与 app 路径）；知识库与技能目录这里一个都没有
+vi.mock('../sandbox', () => ({
+  cleanupSession: vi.fn(),
+  sessionOwnDirsView: (sid: string, workingDirectory: string) => ({
+    workdir: workingDirectory,
+    workspaceUnsuitable: null,
+    tmp: `/sandbox-tmp/${sid}`,
+    artifacts: `/artifacts/${sid}`,
+    toolResults: `/tool-results/${sid}`
+  }),
+  settingDirForAcl: (dir: string) => dir || null
+}))
+vi.mock('../knowledge/sessionBundle', () => ({ enabledTargets: () => [] }))
+vi.mock('../skillService', () => ({ skillService: { enabledSkillRoots: () => [] } }))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
@@ -163,6 +182,8 @@ import type { Session, SessionSettings } from '../../dao/types'
 import { changeLanguage } from '../../i18n'
 import { getTempWorkspace, getTempWorkspaceBase } from '../../utils/paths'
 import { sessionRecords } from '../sessionRecords'
+import { sessionAcl } from '../acl'
+import { clearMemoryAclForTests } from '../acl/store'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
@@ -185,8 +206,12 @@ beforeEach(() => {
   holder.db = db
   holder.root = mkdtempSync(join(tmpdir(), 'shuvix-fork-unit-'))
   sessionRecords.clearEphemeralForTests()
+  // 对账记忆是进程级的：每个用例一个新库，同一个会话 id（SRC）得重新对一次
+  sessionAcl.forgetReconciled()
+  clearMemoryAclForTests()
   resetFakeHost()
   vi.clearAllMocks()
+  mocks.projectPick.mockReset()
   mocks.artifactCalls.length = 0
   mocks.artifactsFail = false
   mocks.copy.mockResolvedValue(undefined)
@@ -278,6 +303,14 @@ const rowIds = (): string[] =>
       id: string
     }>
   ).map((r) => r.id)
+
+/** session_acl 里某条会话的行数（直接数库：删掉的会话 entries() 本来就回空表） */
+const aclRowsOf = (sid: string): number =>
+  (
+    (holder.db as DatabaseSync)
+      .prepare('SELECT COUNT(*) AS n FROM session_acl WHERE sessionId = ?')
+      .get(sid) as { n: number }
+  ).n
 
 const forkIdOf = (result: Awaited<ReturnType<typeof forkSession>>): string => {
   if (!result.success) throw new Error(`fork refused: ${result.reason}`)
@@ -545,7 +578,7 @@ describe('SF-10 branchAt refused on the fork', () => {
 // ─── SF-11 / SF-12 / SF-13：新行的形状 ─────────────────
 
 describe('SF-11..13 the fork row', () => {
-  it('SF-11 project source: run config, selections, bot, pin and grants are copied; a stored working dir (a project session works in the project root), title origin, lock / run mirrors are not; arrays are copies', async () => {
+  it('SF-11 project source: run config, selections, bot and pin are copied; a stored working dir (a project session works in the project root), title origin, lock / run mirrors are not; arrays are copies', async () => {
     seedRow({
       parentId: null,
       settings: {
@@ -555,7 +588,6 @@ describe('SF-11..13 the fork row', () => {
         agentProfile: 'coding',
         model: { provider: 'faux', modelId: 'faux-1' },
         thinkingLevel: 'low',
-        allowList: ['Read(/a)', 'Write(/b)'],
         workingDirectory: '/somewhere',
         titleOrigin: 'auto',
         agentLocked: true,
@@ -572,9 +604,63 @@ describe('SF-11..13 the fork row', () => {
       bot: 'alice',
       agentProfile: 'coding',
       model: { provider: 'faux', modelId: 'faux-1' },
-      thinkingLevel: 'low',
-      allowList: ['Read(/a)', 'Write(/b)']
+      thinkingLevel: 'low'
     })
+  })
+
+  it('SF-11 permission table: granted rows (user / widget) are copied with new ids, the working-directory row keeps the source access, derived rows are the fork own; afterwards the two tables are separate', async () => {
+    // 项目会话：两条会话的工作目录都是项目根（权限表的工作目录行指着同一个目录）
+    mocks.projectPick.mockImplementation((id) =>
+      id === PROJECT ? { path: '/proj/root' } : undefined
+    )
+    seedRow()
+    sessionAcl.grantPath(SRC, '/Users/u/notes', 'read')
+    sessionAcl.grantPath(SRC, '/Users/u/out', 'write')
+    sessionAcl.grantPath(SRC, '/Users/u/.shuvix/widgets/w1', 'write', {
+      source: 'widget',
+      sourceKey: 'w1'
+    })
+    const workdirRow = sessionAcl.entries(SRC).find((e) => e.source === 'workdir')!
+    expect(workdirRow.target).toBe('/proj/root')
+    // 用户把源会话的工作目录改成只读
+    expect(sessionAcl.setAccess(SRC, workdirRow.id, 'read')).toBe(true)
+    const sourceBefore = sessionAcl.entries(SRC)
+    openSource()
+
+    const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
+
+    /** 表的可比视图（去掉 id 与时间） */
+    const shape = (sid: string): string[] =>
+      sessionAcl
+        .entries(sid)
+        .map((e) => `${e.source}:${e.sourceKey}:${e.target}:${e.access}`)
+        .sort()
+    expect(shape(forkId)).toEqual(
+      [
+        'workdir::/proj/root:read',
+        `system:tmp:/sandbox-tmp/${forkId}:write`,
+        `system:artifacts:/artifacts/${forkId}:write`,
+        `system:toolResults:/tool-results/${forkId}:write`,
+        'skill:/app/skills/en:/app/skills/en:read',
+        'user::/Users/u/notes:read',
+        'user::/Users/u/out:write',
+        'widget:w1:/Users/u/.shuvix/widgets/w1:write'
+      ].sort()
+    )
+    const forkRows = sessionAcl.entries(forkId)
+    expect(forkRows.every((e) => e.sessionId === forkId)).toBe(true)
+    const sourceIds = new Set(sourceBefore.map((e) => e.id))
+    expect(forkRows.some((e) => sourceIds.has(e.id))).toBe(false)
+    // 源会话的表原样
+    expect(sessionAcl.entries(SRC)).toEqual(sourceBefore)
+    // 设置里没有权限（allowList 已经不在会话设置里）
+    expect(sessionRecords.findById(forkId)!.settings).not.toHaveProperty('allowList')
+
+    // 之后各管各的：fork 上的授予与删除不碰源会话的表
+    sessionAcl.grantPath(forkId, '/Users/u/fork-only', 'write')
+    const forkNotes = sessionAcl.entries(forkId).find((e) => e.target === '/Users/u/notes')!
+    expect(sessionAcl.remove(forkId, forkNotes.id)).toBe(true)
+    expect(sessionAcl.entries(SRC)).toEqual(sourceBefore)
   })
 
   it('SF-11 explicit empty selections stay explicit ([] is not "never chosen")', async () => {
@@ -596,7 +682,6 @@ describe('SF-11..13 the fork row', () => {
       settings: {
         enabledTools: ['mcp:a'],
         knowledgeBases: ['kb'],
-        allowList: ['Read(/x)'],
         model: { provider: 'p', modelId: 'm' },
         notebookPath: 'notes/a.md',
         chromeTab: { installId: 'i', runId: 'r', tabId: 3 },
@@ -610,16 +695,13 @@ describe('SF-11..13 the fork row', () => {
     expect(fork.settings).toEqual({
       enabledTools: ['mcp:a'],
       knowledgeBases: ['kb'],
-      allowList: ['Read(/x)'],
       model: { provider: 'p', modelId: 'm' }
     })
     fork.settings.enabledTools!.push('mcp:b')
     fork.settings.knowledgeBases!.push('kb2')
-    fork.settings.allowList!.push('Write(/y)')
     fork.settings.model!.modelId = 'changed'
     expect(source.settings.enabledTools).toEqual(['mcp:a'])
     expect(source.settings.knowledgeBases).toEqual(['kb'])
-    expect(source.settings.allowList).toEqual(['Read(/x)'])
     expect(source.settings.model).toEqual({ provider: 'p', modelId: 'm' })
     // 落库的那一行同样没有那三样
     const stored = sessionRecords.findById('fork-shape')!.settings
@@ -783,6 +865,8 @@ describe('SF-14/15 failure cleanup', () => {
       expect(fakeHost.storages.has(forkId)).toBe(false)
       expect(existsSync(artifactsDir(forkId))).toBe(false)
       expect(readFileSync(join(artifactsDir(SRC), 'chart.svg'), 'utf-8')).toBe('<svg/>')
+      // 行进库时生成的权限表随完整删除一并删掉
+      expect(aclRowsOf(forkId)).toBe(0)
     }
   )
 })

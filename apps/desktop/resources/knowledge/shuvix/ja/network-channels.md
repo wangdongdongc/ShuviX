@@ -23,6 +23,9 @@ ShuviX をリモートで使うブラウザーは、すべてを**チャネル**
 - `admin` —— ShuviX 自身（セキュリティポリシー、hooks、エージェント、設定、モデルプロバイダー、ネットワークアクセス、
   アップデート）を変える、または秘密を返す。
 
+チャネルではなく中身で区分が決まる呼び出しが一つあります：`agent:respondToInput` は `write` ですが、「許可して記憶」を
+選んだ回答はセッションの権限表に行を加えるので、`admin` として判定されます —— `session:grantAcl` と同じ区分です。
+
 ルールはできるだけ `access` と `group` に書いてください：後のバージョンで増えたチャネルにも区分が付いて対象になりますが、
 名前の一覧ではそれを取りこぼします。チャネル名を挙げるのは例外を作るときだけにします。一覧はこのバージョンのチャネル表から
 生成しています。
@@ -52,9 +55,9 @@ ShuviX をリモートで使うブラウザーは、すべてを**チャネル**
 
 ### `session`
 
-- read: `session:getById`, `session:list`
+- read: `session:getById`, `session:list`, `session:listAcl`
 - write: `session:create`, `session:delete`, `session:fork`, `session:updateEnabledTools`, `session:updateKnowledgeBases`, `session:updateProject`, `session:updateTitle`
-- admin: `session:removeAllowListEntry`
+- admin: `session:grantAcl`, `session:removeAclEntry`, `session:setAclAccess`
 
 ### `calendar`
 

@@ -111,7 +111,6 @@ vi.mock('../../toolContext', async () => {
               systemDirs: []
             }),
             readBuiltinPolicyMd,
-            getSessionGrants: () => ({ allowList: [] }),
             getUserPolicies: () => gate.policies as never,
             // 询问通道由 scope 注入：缺席就是「这条会话没有输入面板」，fail-closed 用例靠它
             requestUserInput: ctx.requestUserInput,

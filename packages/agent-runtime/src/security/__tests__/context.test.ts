@@ -1,6 +1,7 @@
 /**
  * createSecurityContext（PEP 门面）全链 —— evaluateReadOnly 的 force-allow 缺省、
- * enforce 的 action/displayPath 转发、禁缓存红线（grants 变化即生效）、
+ * enforce 的 action/displayPath 转发、禁缓存红线（权限表 / 授权变化即生效；一次评估只取一次 getVars，
+ * lets 与 match 共用 —— CV-3）、
  * L1 全工具门的 allow 即非事件、路径客体经 provider.realPath 换成真实去处（CT-R 系列）、
  * 询问点的自动审查经门面走到接缝（CT-RV / CT-SG / CT-UR 系列）。
  */
@@ -62,8 +63,29 @@ const DATABASE_INPUT = {
   readonly: false
 }
 
+/**
+ * 会话里「允许并记住」过的路径（宿主 persistGrant(mode, path) 记进权限表的行）。可变 —— 禁缓存的用例
+ * 中途往里加、清空，同一 context 下一次评估就要看到
+ */
+interface Grants {
+  read: string[]
+  write: string[]
+}
+
+const noGrants = (): Grants => ({ read: [], write: [] })
+
+/** 权限表里派生的可写行：工作目录、本会话临时目录、artifacts、工具结果（写隐含读） */
+const ACL_WRITABLE = [
+  '/ws',
+  '/private/tmp/shuvix-501/ctx',
+  '/home/u/.shuvix/artifacts/sess-1',
+  '/tool-results/sess-1'
+]
+/** 权限表里派生的只读行：技能目录 */
+const ACL_READ_ONLY = ['/skills']
+
 function makeProvider(
-  grants: { allowList: string[] },
+  grants: Grants,
   overrides: Partial<SecurityHostProvider> = {}
 ): SecurityHostProvider {
   return {
@@ -80,15 +102,11 @@ function makeProvider(
       botsDir: '/home/u/.shuvix/bots',
       builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
       sessionArtifactsDir: '/home/u/.shuvix/artifacts/sess-1',
-      // 会话目录（外部目录门读）：工作目录、本会话临时目录、artifacts、工具结果 —— 这里自由读写，
-      // 家目录 /home/u 里别处的读、会话目录外的写都问；只读的一份是技能目录
-      sessionDirs: [
-        '/ws',
-        '/private/tmp/shuvix-501/ctx',
-        '/home/u/.shuvix/artifacts/sess-1',
-        '/tool-results/sess-1'
-      ],
-      sessionReadDirs: ['/skills'],
+      // 会话权限表（外部目录门读），每次现取：派生的可写行里自由读写、只读行（技能目录）里自由读，
+      // 家目录 /home/u 里别处的读、可写行外的写都问。授权并进表里（宿主 services/acl 的规矩）：
+      // 写授权进两张表（写隐含读），读授权只进 aclRead
+      aclRead: [...ACL_WRITABLE, ...ACL_READ_ONLY, ...grants.read, ...grants.write],
+      aclWrite: [...ACL_WRITABLE, ...grants.write],
       // 宿主照旧供给的事实变量：出厂已没有策略读它们（protect-shuvix-config / protect-bot-files
       // 已退役为测试夹具，见 fixtures/retiredPolicies.ts），装上夹具的用例靠它们
       shuvixConfigDirs: [
@@ -99,7 +117,6 @@ function makeProvider(
       ],
       systemDirs: []
     }),
-    getSessionGrants: () => grants,
     readBuiltinPolicyMd: INLINE_POLICY_MD,
     ...overrides
   }
@@ -115,7 +132,7 @@ describe('createSecurityContext', () => {
       SUBJECT,
       ENVIRONMENT,
       makeProvider(
-        { allowList: ['Read(/data)'] },
+        { read: ['/data'], write: [] },
         {
           getUserPolicies: () => [
             userPolicy('ask-data', [
@@ -135,37 +152,34 @@ describe('createSecurityContext', () => {
     expect(ctx.evaluateReadOnly('read', data, { includeForceAllow: true })).toBe(true)
     expect(typeof ctx.evaluateReadOnly('read', data)).toBe('boolean')
 
-    // 出厂：家目录里的读有外部目录门；「允许并记住」过的 ~/.ssh 是门 match 里的豁免 —— 门根本没命中，
+    // 出厂：家目录里的读有外部目录门；「允许并记住」过的 ~/.ssh 是权限表里的行、门 match 里的豁免 —— 门根本没命中，
     // 所以缺省（不纳入 force-allow）也放行
     const credential: SecurityObject = { type: 'path', path: '/home/u/.ssh/id_rsa' }
-    const bare = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider({ allowList: [] }))
+    const bare = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(noGrants()))
     expect(bare.evaluateReadOnly('read', credential)).toBe(false)
     const remembered = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ allowList: ['Read(/home/u/.ssh)'] })
+      makeProvider({ read: ['/home/u/.ssh'], write: [] })
     )
     expect(remembered.evaluateReadOnly('read', credential)).toBe(true)
 
-    // 家目录外与会话目录里的读都放行
+    // 家目录外与权限表里的读都放行
     expect(bare.evaluateReadOnly('read', { type: 'path', path: '/ws/f.txt' })).toBe(true)
     expect(bare.evaluateReadOnly('read', { type: 'path', path: '/outside/f.txt' })).toBe(true)
   })
 
   it('CT-2 enforcePath 以 mode 为 action、displayPath 进入展示；enforceCommand/enforceGitOp action=execute', async () => {
-    // 询问一律允许：没圈住的命令会问；工作区（会话目录）里的读写与 git（出厂没有 git 策略）放行 ——
+    // 询问一律允许：没圈住的命令会问；工作区（权限表的可写行）里的读写与 git（出厂没有 git 策略）放行 ——
     // 问没问都各落一条日志
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          requestUserInput: vi.fn(
-            async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
-          )
-        }
-      )
+      makeProvider(noGrants(), {
+        requestUserInput: vi.fn(
+          async (_req: InputRequest): Promise<InputResponse> => ({ kind: 'ask', allowed: true })
+        )
+      })
     )
 
     await ctx.enforcePath('read', '/ws/a.txt', { toolCallId: 'tc-1', toolName: 'read' })
@@ -185,7 +199,7 @@ describe('createSecurityContext', () => {
     ])
 
     // displayPath：无询问通道 fail-closed 的文案使用展示路径
-    const strict = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider({ allowList: [] }))
+    const strict = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(noGrants()))
     await expect(
       strict.enforcePath('write', '/outside/b.txt', {
         toolCallId: 'tc-5',
@@ -196,13 +210,13 @@ describe('createSecurityContext', () => {
   })
 
   it('CT-3 禁缓存：同一实例下 grants 变化即生效（加上立即放行、撤掉立即回到询问）', () => {
-    const grants = { allowList: [] as string[] }
+    const grants = noGrants()
     const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, makeProvider(grants))
 
-    // allowList 落库（「允许并记住」）立即可见 —— 用外部目录门的家目录读验证
+    // 授权落进权限表（「允许并记住」）立即可见 —— 用外部目录门的家目录读验证
     const credential: SecurityObject = { type: 'path', path: '/home/u/.ssh/config' }
     expect(ctx.evaluate('read', credential).effect).toBe('ask')
-    grants.allowList.push('Read(/home/u/.ssh/config)')
+    grants.read.push('/home/u/.ssh/config')
     // 授权是门 match 里的豁免：放行时门根本没命中
     expect(ctx.evaluate('read', credential)).toMatchObject({
       effect: 'allow',
@@ -210,18 +224,19 @@ describe('createSecurityContext', () => {
       matched: []
     })
 
-    // 写授权同理（会话目录外的写 ask → 记住后同一实例立即 allow）
+    // 写授权同理（权限表外的写 ask → 记住后同一实例立即 allow）
     const outside: SecurityObject = { type: 'path', path: '/outside/f.txt' }
     expect(ctx.evaluate('write', outside).effect).toBe('ask')
-    grants.allowList.push('Write(/outside)')
+    grants.write.push('/outside')
     expect(ctx.evaluate('write', outside)).toMatchObject({
       effect: 'allow',
       winning: 'default:path',
       matched: []
     })
 
-    // 条目被撤掉（会话配置面板里逐条移除）：同一实例下一次评估就回到询问
-    grants.allowList.length = 0
+    // 行被撤掉（权限表里逐条移除）：同一实例下一次评估就回到询问
+    grants.read.length = 0
+    grants.write.length = 0
     expect(ctx.evaluate('read', credential).effect).toBe('ask')
     expect(ctx.evaluate('write', outside).effect).toBe('ask')
   })
@@ -231,26 +246,23 @@ describe('createSecurityContext', () => {
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          getUserPolicies: () => [
-            {
-              name: 'ask-outside-workspace',
-              displayName: 'ask-outside-workspace',
-              description: '',
-              rules: [
-                {
-                  effect: 'ask' as const,
-                  match:
-                    "action == 'read' && object.type == 'path' && !inDir(object.path, vars.workspace)"
-                }
-              ],
-              body: ''
-            }
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        getUserPolicies: () => [
+          {
+            name: 'ask-outside-workspace',
+            displayName: 'ask-outside-workspace',
+            description: '',
+            rules: [
+              {
+                effect: 'ask' as const,
+                match:
+                  "action == 'read' && object.type == 'path' && !inDir(object.path, vars.workspace)"
+              }
+            ],
+            body: ''
+          }
+        ]
+      })
     )
 
     const inside = ctx.evaluate('read', { type: 'path', path: '/ws/f.txt' })
@@ -266,21 +278,18 @@ describe('createSecurityContext', () => {
   it('CT-W2 provider.logger.warn 收到 fail-safe 告警（含 <policy>#<index> 规则 id）', () => {
     const warn = vi.fn()
     const logger = { info: vi.fn(), warn, error: vi.fn() }
-    const provider = makeProvider(
-      { allowList: [] },
-      {
-        logger,
-        getUserPolicies: () => [
-          {
-            name: 'wp',
-            displayName: 'wp',
-            description: '',
-            rules: [{ effect: 'ask' as const, match: 'vars.nope == "x"' }],
-            body: ''
-          }
-        ]
-      }
-    )
+    const provider = makeProvider(noGrants(), {
+      logger,
+      getUserPolicies: () => [
+        {
+          name: 'wp',
+          displayName: 'wp',
+          description: '',
+          rules: [{ effect: 'ask' as const, match: 'vars.nope == "x"' }],
+          body: ''
+        }
+      ]
+    })
     const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, provider)
 
     const decision = ctx.evaluate('read', { type: 'path', path: '/ws/f.txt' })
@@ -317,10 +326,10 @@ function invocationProvider(
 ): { provider: SecurityHostProvider; requestUserInput: ReturnType<typeof vi.fn> } {
   const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
   return {
-    provider: makeProvider(
-      { allowList: [] },
-      { requestUserInput, getUserPolicies: () => [userPolicy('tool-gate', rules)] }
-    ),
+    provider: makeProvider(noGrants(), {
+      requestUserInput,
+      getUserPolicies: () => [userPolicy('tool-gate', rules)]
+    }),
     requestUserInput
   }
 }
@@ -334,7 +343,7 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ allowList: [] }, { requestUserInput })
+      makeProvider(noGrants(), { requestUserInput })
     )
     await expect(ctx.enforceInvocation({ ...INVOCATION_OPTS })).resolves.toEqual({
       status: 'allowed'
@@ -348,17 +357,14 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          requestUserInput,
-          getUserPolicies: () => [
-            userPolicy('trust-tools', [
-              { effect: 'force-allow', match: "object.type == 'invocation'" }
-            ])
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        requestUserInput,
+        getUserPolicies: () => [
+          userPolicy('trust-tools', [
+            { effect: 'force-allow', match: "object.type == 'invocation'" }
+          ])
+        ]
+      })
     )
     await expect(ctx.enforceInvocation({ ...INVOCATION_OPTS })).resolves.toEqual({
       status: 'allowed'
@@ -466,19 +472,16 @@ describe('createSecurityContext — enforceInvocation（L1 全工具门）', () 
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          getUserPolicies: () => [
-            userPolicy('ask-on-external-path', [
-              {
-                effect: 'deny',
-                match: "action == 'write' && object.type == 'path' && tool.name == 'write'"
-              }
-            ])
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        getUserPolicies: () => [
+          userPolicy('ask-on-external-path', [
+            {
+              effect: 'deny',
+              match: "action == 'write' && object.type == 'path' && tool.name == 'write'"
+            }
+          ])
+        ]
+      })
     )
 
     await expect(
@@ -741,14 +744,11 @@ describe('createSecurityContext — enforceCommand 的 host', () => {
     )
     const warn = vi.fn()
     return {
-      provider: makeProvider(
-        { allowList: [] },
-        {
-          requestUserInput,
-          logger: { info: vi.fn(), warn, error: vi.fn() },
-          getUserPolicies: () => [userPolicy('host-gate', rules)]
-        }
-      ),
+      provider: makeProvider(noGrants(), {
+        requestUserInput,
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        getUserPolicies: () => [userPolicy('host-gate', rules)]
+      }),
       requestUserInput,
       warn
     }
@@ -825,26 +825,23 @@ describe('createSecurityContext — enforceCommand 的 sandboxed 事实与「完
     const warn = vi.fn()
     const objects: Array<MatchContext['object']> = []
     return {
-      provider: makeProvider(
-        { allowList: [] },
-        {
-          requestUserInput,
-          logger: { info: vi.fn(), warn, error: vi.fn() },
-          getUserPolicies: () => userPolicies,
-          derivedRules: () => [
-            {
-              id: 'derived:capture',
-              effect: 'allow' as const,
-              tier: 'static-allow' as const,
-              source: { kind: 'derived' as const },
-              matches: (matchCtx) => {
-                objects.push(matchCtx.object)
-                return false
-              }
+      provider: makeProvider(noGrants(), {
+        requestUserInput,
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        getUserPolicies: () => userPolicies,
+        derivedRules: () => [
+          {
+            id: 'derived:capture',
+            effect: 'allow' as const,
+            tier: 'static-allow' as const,
+            source: { kind: 'derived' as const },
+            matches: (matchCtx) => {
+              objects.push(matchCtx.object)
+              return false
             }
-          ]
-        }
-      ),
+          }
+        ]
+      }),
       requestUserInput,
       warn,
       lastObject: () => objects[objects.length - 1]
@@ -994,10 +991,10 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
   } {
     const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
     return {
-      provider: makeProvider(
-        { allowList: [] },
-        { requestUserInput, getUserPolicies: () => [retiredPolicy('ask-on-database')] }
-      ),
+      provider: makeProvider(noGrants(), {
+        requestUserInput,
+        getUserPolicies: () => [retiredPolicy('ask-on-database')]
+      }),
       requestUserInput
     }
   }
@@ -1007,16 +1004,13 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          getUserPolicies: () => [
-            userPolicy('db-tool-gate', [
-              { effect: 'deny', match: "object.type == 'database' && tool.name == 'database'" }
-            ])
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        getUserPolicies: () => [
+          userPolicy('db-tool-gate', [
+            { effect: 'deny', match: "object.type == 'database' && tool.name == 'database'" }
+          ])
+        ]
+      })
     )
 
     await expect(
@@ -1079,15 +1073,12 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     const denyCtx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          requestUserInput,
-          getUserPolicies: () => [
-            userPolicy('db-block', [{ effect: 'deny', match: "object.type == 'database'" }])
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        requestUserInput,
+        getUserPolicies: () => [
+          userPolicy('db-block', [{ effect: 'deny', match: "object.type == 'database'" }])
+        ]
+      })
     )
     await expect(denyCtx.enforceDatabase(DATABASE_INPUT, { ...DB_OPTS })).rejects.toThrow(
       /Denied by security policy rule/
@@ -1101,7 +1092,7 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider({ allowList: [] }, { requestUserInput, getUserPolicies: () => [askOnDatabase] })
+      makeProvider(noGrants(), { requestUserInput, getUserPolicies: () => [askOnDatabase] })
     )
 
     await expect(
@@ -1124,21 +1115,18 @@ describe('createSecurityContext — enforceDatabase（数据库查询守卫）',
     const trustedCtx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          requestUserInput: rejectingChannel(),
-          getUserPolicies: () => [
-            askOnDatabase,
-            userPolicy('trust-prod', [
-              {
-                effect: 'force-allow',
-                match: "object.type == 'database' && object.credential == 'prod-mysql'"
-              }
-            ])
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        requestUserInput: rejectingChannel(),
+        getUserPolicies: () => [
+          askOnDatabase,
+          userPolicy('trust-prod', [
+            {
+              effect: 'force-allow',
+              match: "object.type == 'database' && object.credential == 'prod-mysql'"
+            }
+          ])
+        ]
+      })
     )
     await expect(trustedCtx.enforceDatabase(DATABASE_INPUT, { ...DB_OPTS })).resolves.toEqual({
       status: 'allowed'
@@ -1157,30 +1145,26 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          logger: { info: vi.fn(), warn, error: vi.fn() },
-          getUserPolicies: () => [
-            userPolicy('attr-probe', [
-              {
-                effect: 'deny',
-                match:
-                  "object.type == 'gitTool' && object.gitAction == 'init' && object.command != '' && !object.force && !object.delete"
-              },
-              {
-                effect: 'deny',
-                match: "object.type == 'path' && object.path != '' && object.displayPath != ''"
-              },
-              {
-                effect: 'deny',
-                match:
-                  "object.type == 'command' && object.command != '' && object.channel == 'bash'"
-              }
-            ])
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        getUserPolicies: () => [
+          userPolicy('attr-probe', [
+            {
+              effect: 'deny',
+              match:
+                "object.type == 'gitTool' && object.gitAction == 'init' && object.command != '' && !object.force && !object.delete"
+            },
+            {
+              effect: 'deny',
+              match: "object.type == 'path' && object.path != '' && object.displayPath != ''"
+            },
+            {
+              effect: 'deny',
+              match: "object.type == 'command' && object.command != '' && object.channel == 'bash'"
+            }
+          ])
+        ]
+      })
     )
 
     await expect(
@@ -1203,21 +1187,18 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          logger: { info: vi.fn(), warn, error: vi.fn() },
-          getUserPolicies: () => [
-            userPolicy('db-attr-probe', [
-              {
-                effect: 'deny',
-                match:
-                  "object.type == 'database' && object.sql != '' && object.credential != '' && object.dbType == 'mysql' && !object.readonly"
-              }
-            ])
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        getUserPolicies: () => [
+          userPolicy('db-attr-probe', [
+            {
+              effect: 'deny',
+              match:
+                "object.type == 'database' && object.sql != '' && object.credential != '' && object.dbType == 'mysql' && !object.readonly"
+            }
+          ])
+        ]
+      })
     )
 
     await expect(
@@ -1242,27 +1223,24 @@ describe('createSecurityContext — PEP 属性齐全性与 lets 禁缓存', () =
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          getVars: () => ({ ...vars }),
-          getUserPolicies: () => [
-            {
-              name: 'blocklist',
-              displayName: 'blocklist',
-              description: '',
-              lets: { dirs: '[vars.blocked]' },
-              rules: [
-                {
-                  effect: 'deny' as const,
-                  match: "object.type == 'path' && inDir(object.path, dirs)"
-                }
-              ],
-              body: ''
-            }
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        getVars: () => ({ ...vars }),
+        getUserPolicies: () => [
+          {
+            name: 'blocklist',
+            displayName: 'blocklist',
+            description: '',
+            lets: { dirs: '[vars.blocked]' },
+            rules: [
+              {
+                effect: 'deny' as const,
+                match: "object.type == 'path' && inDir(object.path, dirs)"
+              }
+            ],
+            body: ''
+          }
+        ]
+      })
     )
 
     // blocked 目录取在工作区内 —— 读取无内置门干扰，deny/allow 对比干净
@@ -1295,19 +1273,16 @@ describe('createSecurityContext — 结构化条件 × 策略级 scope（端到�
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          requestUserInput,
-          getUserPolicies: () => [
-            scopedPolicy(
-              'tool-gate',
-              { 'subject.kind': ['agent'], 'object.type': ['invocation'], 'env.host': ['desktop'] },
-              [{ effect: 'ask', conditions: { 'tool.name': ['ssh'] } }]
-            )
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        requestUserInput,
+        getUserPolicies: () => [
+          scopedPolicy(
+            'tool-gate',
+            { 'subject.kind': ['agent'], 'object.type': ['invocation'], 'env.host': ['desktop'] },
+            [{ effect: 'ask', conditions: { 'tool.name': ['ssh'] } }]
+          )
+        ]
+      })
     )
 
     await expect(
@@ -1345,7 +1320,7 @@ describe('createSecurityContext — 结构化条件 × 策略级 scope（端到�
       agent: ReturnType<typeof createSecurityContext>
       user: ReturnType<typeof createSecurityContext>
     } => {
-      const provider = makeProvider({ allowList: [] }, { getUserPolicies: () => [policy(kind)] })
+      const provider = makeProvider(noGrants(), { getUserPolicies: () => [policy(kind)] })
       return {
         agent: createSecurityContext(SUBJECT, ENVIRONMENT, provider),
         user: createSecurityContext({ kind: 'user', sessionId: SID }, ENVIRONMENT, provider)
@@ -1393,7 +1368,7 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
 
   const contextWith = (
     policies: ParsedPolicyFile[],
-    grants = { allowList: [] as string[] }
+    grants: Grants = noGrants()
   ): ReturnType<typeof createSecurityContext> =>
     createSecurityContext(
       SUBJECT,
@@ -1493,7 +1468,7 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
           }
         ])
       ],
-      { allowList: ['Read(/data/prod)'] }
+      { read: ['/data/prod'], write: [] }
     )
 
     // 用户的 force-allow + 该路径还「允许并记住」过（夹具的 force-allow）—— 两条都命中，仍然 ask
@@ -1535,36 +1510,41 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
     expect(ctx.evaluate('read', target).effect).toBe('allow')
   })
 
-  it('CU-6 同名覆盖 ask-on-external-path、写规则删掉 vars.grantedWrite 那一截 → 已授权路径的写重新 ask（归因用户那份）；读照旧放行（写授权含读那一截没动）', () => {
-    const grants = { allowList: ['Write(/home/u/data)'] }
+  it('CU-6 同名覆盖 ask-on-external-path、写规则不再认权限表（vars.aclWrite 换成只有工作目录）→ 已授权路径的写重新 ask（归因用户那份），工作目录照旧放行；读规则没动，读照旧放行（写授权也在 aclRead 里）', () => {
+    const grants: Grants = { read: [], write: ['/home/u/data'] }
     const target: SecurityObject = { type: 'path', path: '/home/u/data/x.txt' }
 
-    // 覆盖副本 = 出厂 en 文件原样，只把写规则 match 末尾的授权豁免删掉
+    // 覆盖副本 = 出厂 en 文件原样，只把写规则 match 里的权限表换成工作目录
     const builtin = parsePolicyDefinitionFile(
       INLINE_POLICY_MD('ask-on-external-path.md')!,
       'ask-on-external-path'
     )!
     const writeMatch = builtin.rules[1].match!
-    const stripped = writeMatch.replace(/\s*&& !inDir\(object\.path, vars\.grantedWrite\)$/, '')
-    expect(stripped).not.toBe(writeMatch)
+    const narrowed = writeMatch.replace('vars.aclWrite', '[vars.workspace]')
+    expect(narrowed).not.toBe(writeMatch)
     const noWriteGrants: ParsedPolicyFile = {
       ...builtin,
-      rules: [builtin.rules[0], { ...builtin.rules[1], match: stripped }]
+      rules: [builtin.rules[0], { ...builtin.rules[1], match: narrowed }]
     }
 
-    // 对照：内置在位时写授权生效（门 match 里的豁免）
+    // 对照：内置在位时写授权生效（权限表里的行、门 match 里的豁免）
     expect(contextWith([], grants).evaluate('write', target)).toMatchObject({
       effect: 'allow',
       winning: 'default:path'
     })
 
-    // 去掉写那一截：条目还在会话里，但没有规则拿它豁免写了 → 回到询问，归因用户那份
+    // 写规则不认表了：授权还在表里，但没有规则拿它豁免写 → 回到询问，归因用户那份
     const ctx = contextWith([noWriteGrants], grants)
     const write = ctx.evaluate('write', target)
     expect(write).toMatchObject({ effect: 'ask', winning: 'ask-on-external-path#1' })
     expect(write.prompt?.policies).toEqual([builtin.displayName])
+    // 覆盖副本换上的那一项照旧免
+    expect(ctx.evaluate('write', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
+      effect: 'allow',
+      winning: 'default:path'
+    })
 
-    // 读规则原样留着（写授权含读）
+    // 读规则原样留着（写授权也在 aclRead 里）
     expect(ctx.evaluate('read', target)).toMatchObject({
       effect: 'allow',
       winning: 'default:path'
@@ -1572,45 +1552,55 @@ describe('createSecurityContext — 用户策略的 force-allow（端到端）',
   })
 })
 
-describe('createSecurityContext — 授权快照一次性（回归守护）', () => {
-  it('CV-3 一次 evaluate 里 getSessionGrants / getVars 各恰好 1 次，决策取第一次快照', () => {
-    // 每次调用翻转的 stub：若装配与求值各自 buildPolicyVars，两处会看到不同的授权视图
+describe('createSecurityContext — 权限表快照一次性（回归守护）', () => {
+  it('CV-3 一次 evaluate 里 getVars 恰好 1 次，lets（装配）与 match（求值）共用这一份；决策取第一次快照', () => {
+    // 每次调用翻转的 stub：第一次的表里有 /outside 的写授权，之后没有。若装配与求值各自
+    // buildPolicyVars，lets 与 match 会看到两张不同的表
     let call = 0
-    const getSessionGrants = vi.fn(() => ({
-      allowList: call++ === 0 ? ['Write(/outside)'] : ([] as string[])
-    }))
-    const getVars = vi.fn(() => ({
-      workspace: '/ws',
-      toolResultsBase: '/tool-results',
-      skillsDirs: ['/skills'],
-      memoryDirs: [],
-      knowledgeRoot: '/kb',
-      knowledgeSessionDirs: [],
-      home: '/home/u',
-      botsDir: '/home/u/.shuvix/bots',
-      systemDirs: [] as string[],
-      sessionDirs: ['/ws']
-    }))
+    const getVars = vi.fn(() => {
+      const granted = call++ === 0 ? ['/outside'] : []
+      return {
+        workspace: '/ws',
+        toolResultsBase: '/tool-results',
+        skillsDirs: ['/skills'],
+        memoryDirs: [],
+        knowledgeRoot: '/kb',
+        knowledgeSessionDirs: [],
+        home: '/home/u',
+        botsDir: '/home/u/.shuvix/bots',
+        systemDirs: [] as string[],
+        aclRead: ['/ws', ...granted],
+        aclWrite: ['/ws', ...granted]
+      }
+    })
+    // 一份经 let 读权限表的用户询问门：let 在装配那份 vars 上求值、内置门的 match 在求值那份上 ——
+    // 两份不是同一张表时，两道门对 /outside 的结论就分岔了
+    const echo: ParsedPolicyFile = {
+      ...userPolicy('echo-acl', [
+        { effect: 'ask', conditions: { action: ['write'] }, match: '!inDir(object.path, writable)' }
+      ]),
+      scope: { 'subject.kind': ['agent'], 'object.type': ['path'] },
+      lets: { writable: 'vars.aclWrite' }
+    }
 
     const ctx = createSecurityContext(SUBJECT, ENVIRONMENT, {
       host: 'desktop',
       pathSep: '/',
       getVars,
-      getSessionGrants,
+      getUserPolicies: () => [echo],
       readBuiltinPolicyMd: INLINE_POLICY_MD
     })
 
-    // 第一次快照里有 Write(/outside) → 会话目录外的写被「允许并记住」豁免
+    // 第一次快照里有 /outside → 内置门（match 读 vars）与用户门（let 读 vars）都豁免它
     const first = ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })
     expect(first).toMatchObject({ effect: 'allow', winning: 'default:path', matched: [] })
-    // 丢掉 assembleRules 的第二参（各自 buildPolicyVars）时，这两个计数会变成 2
-    expect(getSessionGrants).toHaveBeenCalledTimes(1)
+    // 丢掉 assembleRules 的第二参（各自 buildPolicyVars）时，计数会变成 2、用户门会单独问起来
     expect(getVars).toHaveBeenCalledTimes(1)
 
-    // 第二次评估重新取快照（禁缓存），此时授权已经没了 → 询问门回来
+    // 第二次评估重新取快照（禁缓存），此时授权已经没了 → 两道门一起回来
     const second = ctx.evaluate('write', { type: 'path', path: '/outside/f.txt' })
-    expect(second.effect).toBe('ask')
-    expect(getSessionGrants).toHaveBeenCalledTimes(2)
+    expect(second).toMatchObject({ effect: 'ask', winning: 'ask-on-external-path#1' })
+    expect(second.matched).toEqual(['ask-on-external-path#1', 'echo-acl#0'])
     expect(getVars).toHaveBeenCalledTimes(2)
   })
 })
@@ -1620,20 +1610,17 @@ describe('createSecurityContext — fail-safe 无 logger', () => {
     const ctx = createSecurityContext(
       SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          getUserPolicies: () => [
-            {
-              name: 'wp',
-              displayName: 'wp',
-              description: '',
-              rules: [{ effect: 'ask' as const, match: 'vars.nope == "x"' }],
-              body: ''
-            }
-          ]
-        }
-      )
+      makeProvider(noGrants(), {
+        getUserPolicies: () => [
+          {
+            name: 'wp',
+            displayName: 'wp',
+            description: '',
+            rules: [{ effect: 'ask' as const, match: 'vars.nope == "x"' }],
+            body: ''
+          }
+        ]
+      })
     )
     const decision = ctx.evaluate('read', { type: 'path', path: '/ws/f.txt' })
     expect(decision.effect).toBe('ask')
@@ -1642,14 +1629,14 @@ describe('createSecurityContext — fail-safe 无 logger', () => {
 })
 
 describe('createSecurityContext — 宿主没供给的目录变量', () => {
-  it('CT-W4 缺 botsDir 的桌面宿主经门面反复评估：只记一行「not provided」、零 fail-safe，会话目录外的普通写照常落回外部目录门', () => {
+  it('CT-W4 缺 botsDir 的桌面宿主经门面反复评估：只记一行「not provided」、零 fail-safe，权限表外的普通写照常落回外部目录门', () => {
     // 用户装了一份只守一个目录的 force-ask（退役的 protect-bot-files 夹具）而宿主没给那个目录：
     // assemble 替它把 botsDir 绑成 null。不绑的话每次写都缺键报错、fail-safe 成命中：普通写全变成
     // 免不掉的 force-ask，logger 每次评估刷一行 fail-safe。
     // 门面把两个出口（「not provided」与 evaluate 的 fail-safe）都接到 provider.logger，所以在这里一起数
     const warn = vi.fn()
     const logger = { info: vi.fn(), warn, error: vi.fn() }
-    const grants = { allowList: [] as string[] }
+    const grants = noGrants()
     const { botsDir: _botsDir, ...varsWithoutBotsDir } = makeProvider(grants).getVars()
     const ctx = createSecurityContext(
       SUBJECT,
@@ -1734,18 +1721,15 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     parser: Partial<SecurityHostProvider['shellParser']> & { analyze: Mock },
     overrides: Partial<SecurityHostProvider> = {}
   ): SecurityHostProvider {
-    return makeProvider(
-      { allowList: [] },
-      {
-        shellParser: {
-          ensureReady: parser.ensureReady ?? (async () => {}),
-          analyze: parser.analyze as unknown as (command: string) => ShellFacts
-        },
-        requestUserInput: allowingChannel(),
-        getUserPolicies: () => [CATASTROPHIC],
-        ...overrides
-      }
-    )
+    return makeProvider(noGrants(), {
+      shellParser: {
+        ensureReady: parser.ensureReady ?? (async () => {}),
+        analyze: parser.analyze as unknown as (command: string) => ShellFacts
+      },
+      requestUserInput: allowingChannel(),
+      getUserPolicies: () => [CATASTROPHIC],
+      ...overrides
+    })
   }
 
   it('CT-S1 一次 enforce 只解析一次：五条 deny 规则多次引用 object.commands 也只跑一遍', async () => {
@@ -1971,10 +1955,10 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
     const ctx = createSecurityContext(
       SHELL_SUBJECT,
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        { requestUserInput: allowingChannel(), logger: { info: vi.fn(), warn, error: vi.fn() } }
-      )
+      makeProvider(noGrants(), {
+        requestUserInput: allowingChannel(),
+        logger: { info: vi.fn(), warn, error: vi.fn() }
+      })
     )
     await expect(
       ctx.enforceCommand(
@@ -2274,14 +2258,11 @@ describe('createSecurityContext — enforceCommand 的结构属性接线', () =>
       const ctx = createSecurityContext(
         SHELL_SUBJECT,
         ENVIRONMENT,
-        makeProvider(
-          { allowList: [] },
-          {
-            requestUserInput: rejectingChannel(),
-            logger: quietLogger(warn),
-            getUserPolicies: () => [CATASTROPHIC]
-          }
-        )
+        makeProvider(noGrants(), {
+          requestUserInput: rejectingChannel(),
+          logger: quietLogger(warn),
+          getUserPolicies: () => [CATASTROPHIC]
+        })
       )
       await expect(
         ctx.enforceCommand(
@@ -2549,15 +2530,12 @@ function urlContext(
   const ctx = createSecurityContext(
     SUBJECT,
     ENVIRONMENT,
-    makeProvider(
-      { allowList: [] },
-      {
-        requestUserInput: opts.channel === false ? undefined : requestUserInput,
-        persistGrant,
-        logger: { info: vi.fn(), warn, error: vi.fn() },
-        getUserPolicies: () => policies
-      }
-    )
+    makeProvider(noGrants(), {
+      requestUserInput: opts.channel === false ? undefined : requestUserInput,
+      persistGrant,
+      logger: { info: vi.fn(), warn, error: vi.fn() },
+      getUserPolicies: () => policies
+    })
   )
   return { ctx, requestUserInput, persistGrant, warn }
 }
@@ -2921,7 +2899,7 @@ describe('createSecurityContext — 无返回值的门强制 onOther:throw', () 
       ctx: createSecurityContext(
         SUBJECT,
         ENVIRONMENT,
-        makeProvider({ allowList: [] }, { requestUserInput, getUserPolicies: () => policies })
+        makeProvider(noGrants(), { requestUserInput, getUserPolicies: () => policies })
       ),
       requestUserInput
     }
@@ -2929,7 +2907,7 @@ describe('createSecurityContext — 无返回值的门强制 onOther:throw', () 
 
   it('CT-O1 enforcePath：传了 onOther:return，反馈照样抛成「declined access」', async () => {
     const { ctx, requestUserInput } = feedbackContext()
-    // 会话目录外的写 → 内置 ask-on-external-path 问
+    // 权限表外的写 → 内置 ask-on-external-path 问
     expect(
       await rejectionOf(
         ctx.enforcePath('write', '/outside/f.txt', {
@@ -3008,7 +2986,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
   /** 工作区里的一条链接 → 私钥（这组用例的旗舰形态） */
   const KEY_LINK = '/ws/key'
   const KEY_REAL = '/home/u/.ssh/id_rsa'
-  const NO_GRANTS = (): { allowList: string[] } => ({ allowList: [] })
+  const NO_GRANTS = noGrants
 
   /** 记下每次评估里策略看到的路径客体（derived 规则恒不命中，只当探针） */
   function captureProbe(): {
@@ -3216,7 +3194,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     )
 
     // 一次写评估里客体路径被外部目录门的写规则与上面两条引用（读规则的条件把它挡在外面）；
-    // 目录 /ws 既是会话目录的一项、又被上面两条各引用一次 —— /ws 是会话目录，胜出的是上面那条
+    // 目录 /ws 既是权限表的一行、又被上面两条各引用一次 —— /ws 在表里，胜出的是上面那条
     expect(ctx.evaluate('write', { type: 'path', path: '/ws/f.txt' })).toMatchObject({
       effect: 'ask',
       winning: 'twice#0'
@@ -3278,7 +3256,7 @@ describe('createSecurityContext — 真实路径（provider.realPath）', () => 
     const realPathWarnings = (): string[] =>
       warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('realPath'))
 
-    // 客体路径解析不了：按写法判（会话目录外的写 → 外部目录门），卡片上就是写法本身
+    // 客体路径解析不了：按写法判（权限表外的写 → 外部目录门），卡片上就是写法本身
     const decision = contextFor(failing('/outside/broken')).evaluate('write', {
       type: 'path',
       path: '/outside/broken'
@@ -3433,7 +3411,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
   function reviewedContext(
     opts: {
       review?: ReturnType<typeof vi.fn<Reviewer>>
-      grants?: { allowList: string[] }
+      grants?: Grants
       overrides?: Partial<SecurityHostProvider>
     } = {}
   ): {
@@ -3453,7 +3431,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     const ctx = createSecurityContext(
       { kind: 'agent', sessionId: sid, agentKind: 'root' },
       ENVIRONMENT,
-      makeProvider(opts.grants ?? { allowList: [] }, {
+      makeProvider(opts.grants ?? noGrants(), {
         requestUserInput,
         onPermissionRequest: review,
         logger: { info: vi.fn(), warn, error: vi.fn() },
@@ -3526,12 +3504,12 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
     ])
   })
 
-  it('CT-RV3 allowList 有 Write(/elsewhere)：写 /elsewhere/a 由「允许并记住」放行，接缝 0 次；没授权的地方照旧先问审查', async () => {
-    const h = reviewedContext({ grants: { allowList: ['Write(/elsewhere)'] } })
+  it('CT-RV3 权限表里有 /elsewhere 的写授权：写 /elsewhere/a 由「允许并记住」放行，接缝 0 次；没授权的地方照旧先问审查', async () => {
+    const h = reviewedContext({ grants: { read: [], write: ['/elsewhere'] } })
     await h.ctx.enforcePath('write', '/elsewhere/a', WRITE)
     expect(h.review).not.toHaveBeenCalled()
     expect(h.requestUserInput).not.toHaveBeenCalled()
-    // 授权是外部目录门 match 里的豁免：放行时门根本没命中
+    // 授权是权限表里的行、外部目录门 match 里的豁免：放行时门根本没命中
     expect(getSessionDecisions(h.sid)[0]).toMatchObject({
       effect: 'allow',
       winning: 'default:path'
@@ -3547,14 +3525,14 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
   ])(
     'CT-RV4 %s（退役夹具，force-ask）：接缝 0 次、照样弹卡、卡片没有 review、不给「允许并记住」；「允许并记住」过结果相同',
     async (policy, path, winning) => {
-      for (const allowList of [[], [`Write(${path})`]]) {
+      for (const write of [[], [path]]) {
         const h = reviewedContext({
-          grants: { allowList },
+          grants: { read: [], write },
           overrides: { getUserPolicies: () => [retiredPolicy(policy)] }
         })
         const decision = h.ctx.evaluate('write', { type: 'path', path })
-        expect({ allowList, effect: decision.effect, tier: decision.tier }).toEqual({
-          allowList,
+        expect({ write, effect: decision.effect, tier: decision.tier }).toEqual({
+          write,
           effect: 'ask',
           tier: 'force-ask'
         })
@@ -3890,7 +3868,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
   })
 
   it('CT-W5 装着 protect-shuvix-config 夹具、宿主不提供 shuvixConfigDirs：~/.shuvix/agents 下的写落回外部目录门（ask 档、照常先问审查），不会每次写都 force-ask；「not provided」恰 1 行、零 fail-safe', async () => {
-    const grants = { allowList: [] as string[] }
+    const grants = noGrants()
     const { shuvixConfigDirs: _dirs, ...varsWithoutConfigDirs } = makeProvider(grants).getVars()
     const h = reviewedContext({
       review: vi.fn<Reviewer>(async () => null),
@@ -3934,7 +3912,7 @@ describe('createSecurityContext — 询问点的审查（onPermissionRequest）'
  *    无关），每个至多记一行。钉住这个退化行为。
  */
 describe('createSecurityContext — 用户自己的 ask-on-read', () => {
-  const NO_GRANTS = { allowList: [] as string[] }
+  const NO_GRANTS = noGrants()
 
   /** 退役前的出厂 ask-on-read.md 原样（git show HEAD:…/builtinPolicies/md/ask-on-read.md） */
   const RETIRED_ASK_ON_READ = [
@@ -4227,29 +4205,26 @@ describe('createSecurityContext — 命令风险分类（classifyCommand → obj
     const ctx = createSecurityContext(
       { kind: 'agent', sessionId: sid, agentKind: 'root' },
       ENVIRONMENT,
-      makeProvider(
-        { allowList: [] },
-        {
-          requestUserInput,
-          logger: { info, warn, error: vi.fn() },
-          getUserPolicies: () => opts.policies ?? [],
-          derivedRules: () => [
-            {
-              id: 'derived:capture',
-              effect: 'allow' as const,
-              tier: 'static-allow' as const,
-              source: { kind: 'derived' as const },
-              matches: (matchCtx) => {
-                objects.push(matchCtx.object)
-                return false
-              }
+      makeProvider(noGrants(), {
+        requestUserInput,
+        logger: { info, warn, error: vi.fn() },
+        getUserPolicies: () => opts.policies ?? [],
+        derivedRules: () => [
+          {
+            id: 'derived:capture',
+            effect: 'allow' as const,
+            tier: 'static-allow' as const,
+            source: { kind: 'derived' as const },
+            matches: (matchCtx) => {
+              objects.push(matchCtx.object)
+              return false
             }
-          ],
-          ...(classify ? { classifyCommand: classify } : {}),
-          ...(opts.review ? { onPermissionRequest: opts.review } : {}),
-          ...opts.overrides
-        }
-      )
+          }
+        ],
+        ...(classify ? { classifyCommand: classify } : {}),
+        ...(opts.review ? { onPermissionRequest: opts.review } : {}),
+        ...opts.overrides
+      })
     )
     return {
       ctx,

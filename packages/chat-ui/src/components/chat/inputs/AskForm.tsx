@@ -1,5 +1,13 @@
 import { getHostApi } from '@shuvix/chat-ui'
-import { FileOutput, FilePen, FileText, FolderOpen, Shield, ShieldAlert } from 'lucide-react'
+import {
+  ChevronDown,
+  FileOutput,
+  FilePen,
+  FileText,
+  FolderOpen,
+  Shield,
+  ShieldAlert
+} from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { BackgroundBadge, FullAccessBadge } from '../BgTaskTag'
 import { ReviewOpinion } from '../ReviewTag'
@@ -166,19 +174,22 @@ export function AskForm({
   const presentation = hostPresentation ?? fallbackToolPresentation(toolName, t)
   const diffPreview = preview?.kind === 'diff' ? preview : null
 
-  // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"整条路径。
-  // 命令类(bash/ssh)与简单类(浏览器操作等):不入 allowList —— 命令逐条询问
-  //   (不再有命令模式记忆;会话级「免询问」开关也已删除)。
+  // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"这条路径(或它所在的
+  // 文件夹),记进会话权限表。命令类(bash/ssh)与简单类(浏览器操作等)没有可记住的条目 —— 命令逐条询问。
   const pathAsk: { mode: 'read' | 'write'; path: string } | null = useMemo(() => {
     const m = command.match(/^(Read|Write)\((.+)\)$/)
     if (!m) return null
     return { mode: m[1] === 'Read' ? 'read' : 'write', path: m[2] }
   }, [command])
 
-  // 「记住/始终允许」会持久化 allowList（宿主能力）：仅路径类,且需宿主提供 HostApi
+  // 「允许并记住」写进会话权限表（宿主能力）：仅路径类,且需宿主提供 HostApi
   const canRemember = pathAsk !== null && getHostApi() !== null
+  // 文件还可以记下它所在的文件夹（太浅的不给，见 rememberFolderOf）
+  const rememberFolder =
+    canRemember && pathAsk && !pathIsDirectory ? rememberFolderOf(pathAsk.path) : null
+  const [folderOpen, setFolderOpen] = useState(false)
 
-  /** 单次允许 — 立即提交,不写 allowList */
+  /** 单次允许 — 立即提交,不写权限表 */
   const handleAllow = (): void => {
     onSubmit({ kind: 'ask', allowed: true })
   }
@@ -188,12 +199,12 @@ export function AskForm({
     onSubmit({ kind: 'ask', allowed: false })
   }
 
-  /** 允许并记住 — 立即提交,后端按 extra.rememberPath 写入 allowList */
-  const handleAllowAndRemember = (): void => {
+  /** 允许并记住 — 立即提交,后端按 extra.rememberPath 写进会话权限表（给文件夹就记那个文件夹） */
+  const handleAllowAndRemember = (folder?: string): void => {
     onSubmit({
       kind: 'ask',
       allowed: true,
-      extra: { rememberPath: true }
+      extra: { rememberPath: folder ?? true }
     })
   }
 
@@ -293,14 +304,30 @@ export function AskForm({
           {t('toolCall.deny')}
         </button>
         {canRemember && (
-          <button
-            onClick={handleAllowAndRemember}
-            className="px-2.5 py-1 rounded-lg text-xs font-medium text-text-primary border border-border-secondary/60 hover:bg-bg-hover transition-colors"
-          >
-            {pathIsDirectory
-              ? t('toolCall.allowThisDirectory')
-              : t('toolCall.allowAndRememberPath')}
-          </button>
+          <div className="flex items-stretch rounded-lg border border-border-secondary/60">
+            <button
+              onClick={() => handleAllowAndRemember()}
+              className={`px-2.5 py-1 text-xs font-medium text-text-primary hover:bg-bg-hover transition-colors ${
+                rememberFolder ? 'rounded-l-lg' : 'rounded-lg'
+              }`}
+            >
+              {pathIsDirectory
+                ? t('toolCall.allowThisDirectory')
+                : t('toolCall.allowAndRememberPath')}
+            </button>
+            {rememberFolder && (
+              <button
+                onClick={() => setFolderOpen(!folderOpen)}
+                title={t('toolCall.rememberOptions')}
+                aria-label={t('toolCall.rememberOptions')}
+                aria-expanded={folderOpen}
+                data-remember-options=""
+                className="px-1 rounded-r-lg border-l border-border-secondary/60 text-text-secondary hover:bg-bg-hover transition-colors"
+              >
+                <ChevronDown size={12} />
+              </button>
+            )}
+          </div>
         )}
         {/* 目录路径:只显示"允许此目录" + 拒绝 — 目录授权天然持久,不提供单次放行 */}
         {!(pathAsk && pathIsDirectory) && (
@@ -313,6 +340,23 @@ export function AskForm({
         )}
       </div>
 
+      {/* 记下所在的文件夹：点开下拉才出现，路径整条摆出来 —— 授予的范围比这个文件大，得看得见 */}
+      {rememberFolder && folderOpen && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => handleAllowAndRemember(rememberFolder)}
+            data-remember-folder={rememberFolder}
+            className="flex max-w-full items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-text-primary border border-border-secondary/60 hover:bg-bg-hover transition-colors"
+          >
+            <FolderOpen size={12} className="shrink-0 text-text-tertiary" />
+            <span className="shrink-0 font-medium">{t('toolCall.rememberFolder')}</span>
+            <span className="min-w-0 truncate font-mono text-[11px] text-text-secondary [direction:rtl]">
+              <bdi>{rememberFolder}</bdi>
+            </span>
+          </button>
+        </div>
+      )}
+
       {policyPrompt && policyOpen && (
         <p className="text-[11px] leading-snug text-text-secondary whitespace-pre-wrap break-words px-0.5">
           {policyPrompt.text}
@@ -320,4 +364,16 @@ export function AskForm({
       )}
     </div>
   )
+}
+
+/**
+ * 「允许整个文件夹」记哪个文件夹：这个文件所在的那一级。太浅的不给（`/`、`/Users`、家目录这一层 —— 少于三段，
+ * Windows 不数盘符）：一次点击把整个家目录记进会话权限表太容易点错（安全模块那边也挡，见 rememberTargetOf）
+ */
+export function rememberFolderOf(path: string): string | null {
+  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  if (cut <= 0) return null
+  const parent = path.slice(0, cut)
+  const segments = parent.split(/[\\/]/).filter((s) => s !== '' && !/^[A-Za-z]:$/.test(s))
+  return segments.length >= 3 ? parent : null
 }

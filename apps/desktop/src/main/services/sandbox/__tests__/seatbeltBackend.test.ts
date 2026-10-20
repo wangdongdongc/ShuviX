@@ -5,7 +5,8 @@
  *  - SB-1 wrap：固定的 sandbox-exec 绝对路径、-p profile、-D 参数一一对应、`--` 紧挨着 shell；
  *  - SB-2 startupFailure：只认 65 / 71 且第一行就是 sandbox-exec 自己那一行；
  *  - SB-3 probe：找不到 / spawn 出错 / 成功 / 各种失败的原因，以及它跑的是与真实 profile 同形的规格
- *    （拒读家目录、放回可读根与 cli-token、元数据、可写根 —— 外层若是 allow-default 沙箱，同形才探得出来）。
+ *    （拒读家目录、放回可读根与 cli-token、元数据、可写根 —— 外层若是 allow-default 沙箱，同形才探得出来）；
+ *    探测会话（id "probe"）的权限表只有工作区那一行（可写），加上恒在的本会话临时目录。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -32,8 +33,8 @@ vi.mock('os', async (importOriginal) => {
 
 import { SANDBOX_EXEC, createSeatbeltBackend } from '../backends/seatbelt'
 import { compileSeatbeltProfile } from '../backends/seatbelt/profile'
-import { buildSandboxSpec } from '../spec'
-import type { SandboxHostPaths, SandboxSpec } from '../types'
+import { buildSandboxSpec, sessionTmpName } from '../spec'
+import type { SandboxHostPaths, SandboxPathEntry, SandboxSpec } from '../types'
 
 const PATHS: SandboxHostPaths = {
   home: '/Users/u',
@@ -49,10 +50,15 @@ const PATHS: SandboxHostPaths = {
 const TMPDIR_RAW = '/var/folders/ab/xyz/T'
 const TMPDIR_REAL = '/private/var/folders/ab/xyz/T'
 
-function specOf(ws = '/Users/u/proj', grantedWrite: string[] = []): SandboxSpec {
+/** 权限表：工作目录（派生，可写）+ 授予的写 */
+function specOf(ws = '/Users/u/proj', grantWrite: string[] = []): SandboxSpec {
+  const entries: SandboxPathEntry[] = [
+    { path: ws, access: 'write', granted: false },
+    ...grantWrite.map((path): SandboxPathEntry => ({ path, access: 'write', granted: true }))
+  ]
   const result = buildSandboxSpec(
     PATHS,
-    { sessionId: 'sess-1', workingDirectory: ws, grantedRead: [], grantedWrite },
+    { sessionId: 'sess-1', workingDirectory: ws, entries },
     (p) => p
   )
   if (!result.ok) throw new Error(result.reason)
@@ -211,7 +217,7 @@ describe('SB-3 probe', () => {
     expect(denyReads[0]).toMatch(/^\(deny file-read\* \(subpath \(param "P\d+"\)\)\)$/)
     expect(valuesOf(denyReads[0])).toEqual([PATHS.home])
 
-    // 放回：探测会话的会话目录（工作区 = realpath(tmpdir())）、程序目录、cli-token
+    // 放回：探测会话权限表里的工作区（= realpath(tmpdir())）、它的临时目录、程序目录、cli-token
     const allowBack = lines.filter((l) => /^\(allow file-read\*\s+\(/.test(l))
     expect(allowBack).toHaveLength(1)
     expect(valuesOf(allowBack[0])).toEqual(
@@ -225,12 +231,16 @@ describe('SB-3 probe', () => {
     expect(valuesOf(writes[0])).not.toContain(PATHS.cliToken)
   })
 
-  it('SB-3b 探测用的是一个固定、安全的会话 id（"probe"）：它的临时目录、artifacts、工具结果都在参数里', () => {
+  it('SB-3b 探测用的是一个固定、安全的会话 id（"probe"）：权限表只有工作区那一行，可写根恰是它与 probe 的临时目录', () => {
     createSeatbeltBackend().probe(PATHS)
-    const values = [...probeDefines().values()]
-    expect(values).toContain(`${PATHS.shuvixHome}/artifacts/probe`)
-    expect(values).toContain(`${PATHS.toolResultsBase}/probe`)
-    expect(values.some((v) => v.startsWith(`${PATHS.tmpRoot}/`))).toBe(true)
+    const defines = probeDefines()
+    const probeTmp = `${PATHS.tmpRoot}/${sessionTmpName('probe')}`
+    expect([...defines.values()]).toContain(probeTmp)
+    const [, args] = mocks.spawnSync.mock.calls[0] as [string, string[]]
+    const writes = args[1].split('\n').filter((l) => l.startsWith('(allow file-write* '))
+    expect(writes).toHaveLength(1)
+    const writable = [...writes[0].matchAll(/\(param "(P\d+)"\)/g)].map((m) => defines.get(m[1]))
+    expect(writable).toEqual([TMPDIR_REAL, probeTmp])
   })
 
   it.each([

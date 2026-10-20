@@ -122,8 +122,9 @@ invent one.
 
 It fires only for rules whose effect is `ask`. A `force-ask` rule means "only the user answers",
 a `deny` refuses outright, and a `force-allow` lets the call through — none of those reach a hook
-(no builtin policy uses them; a policy of your own may). A path the user answered "allow and
-remember" for does not ask at all: the builtin path rule leaves it out.
+(no builtin policy uses them; a policy of your own may). A path in the session's permission
+table (its working directory, a path the user answered "allow and remember" for …) does not ask
+at all: the builtin path rule leaves the table out.
 An agent dispatched by a decide hook never asks anyone: an operation of its own that a policy
 would ask about is refused, so a reviewer never reviews itself and never puts a card in front of you.
 
@@ -208,8 +209,9 @@ give `auto-review` a `when`
 (e.g. `event.operation.objectType != 'command'`). To change how operations are judged, override
 the agent instead: `~/.shuvix/agents/permission-reviewer.md`. An agent's write under
 `~/.shuvix/hooks`, `agents`, `policies` and `skills` is an ordinary write that asks
-(ask-on-external-path — none of them is a writable session directory): the reviewer is told to
-refuse rewriting ShuviX's protections, and a sandboxed command cannot write there at all. To have
+(ask-on-external-path — none of them is a writable row of the session's permission table): the
+reviewer is told to refuse rewriting ShuviX's protections, and a sandboxed command cannot write
+there at all. To have
 every such write reach the user, add a `force-ask` policy on `vars.shuvixConfigDirs` (see
 `policy-md`). Same-name copies follow the rule in the `shuvix-files`
 entry.

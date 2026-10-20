@@ -346,7 +346,6 @@ describe('wrapToolOutput — L1 全工具门', () => {
           home: '/home/u',
           systemDirs: []
         }),
-        getSessionGrants: () => ({ allowList: [] }),
         readBuiltinPolicyMd: INLINE_POLICY_MD,
         getUserPolicies: () => [
           {

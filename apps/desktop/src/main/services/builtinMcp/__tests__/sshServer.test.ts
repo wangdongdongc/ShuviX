@@ -74,7 +74,7 @@ const gate = vi.hoisted(() => ({
   calls: [] as Array<{ object: unknown; opts: unknown }>,
   /** enforcePath 收到的实参（传输类工具的本地那一侧走它） */
   pathCalls: [] as Array<{ mode: unknown; path: unknown; opts: unknown }>,
-  /** 「允许并记住」落下来的授权（生产里写进会话 allowList） */
+  /** 「允许并记住」落下来的授权（生产里写进会话权限表） */
   grants: [] as Array<{ mode: unknown; path: unknown }>,
   /** 这条会话的用户策略；空 = 只有内置那套 */
   policies: [] as unknown[],
@@ -121,14 +121,14 @@ vi.mock('../../toolContext', async () => {
               botsDir: '/home/u/.shuvix/bots',
               builtinKnowledgeDir: '/opt/shuvix/Resources/knowledge',
               systemDirs: [],
-              // 会话目录（生产里由 sandbox.sessionDirsView 算）：工作目录 + 本会话的 tool_results
-              // （还有会话 TMPDIR 与 artifacts，这里用不上）—— ask-on-external-path 在这以外的写才问
-              sessionDirs: ['/ws', `/tool-results/${ctx.sessionId}`]
+              // 会话权限表（生产里由 services/acl 的 pathView 给）：工作目录 + 本会话的 tool_results
+              // （还有会话 TMPDIR 与 artifacts，这里用不上），都可写 —— ask-on-external-path 在这以外的写才问
+              aclRead: ['/ws', `/tool-results/${ctx.sessionId}`],
+              aclWrite: ['/ws', `/tool-results/${ctx.sessionId}`]
             }),
             readBuiltinPolicyMd: INLINE_POLICY_MD,
-            getSessionGrants: () => ({ allowList: [] }),
             getUserPolicies: () => gate.policies as never,
-            // 生产里这是 sessionService.addAllowListPaths —— 「允许并记住」的唯一落点。
+            // 生产里这是 sessionAcl.grantPath（会话权限表）—— 「允许并记住」的唯一落点。
             // 抄一份下来，那颗复选框到底记住了**什么形状的条目**才看得见
             persistGrant: (mode: never, p: never) => void gate.grants.push({ mode, path: p }),
             shellParser: { ensureReady: async () => {}, analyze: analyzeShellCommand },
@@ -1664,7 +1664,7 @@ describe('ssh 内置服务器传输类工具的本地路径解析', () => {
     // 放在路径**中间**才看得出分叉（放两头会被 trim 吃掉，它算 JS 的空白）
     await callTool(client, 'upload', xferArgs({ localPath: 're\u00a0port.txt' }))
     expect(gate.pathCalls[1].path).toBe('/ws/re\u00a0port.txt')
-    // 代价很具体：策略与 allowList 比的是字符串，于是「同一个文件」在本地读写
+    // 代价很具体：策略与会话权限表比的是字符串，于是「同一个文件」在本地读写
     // 和 ssh 上传两条路上成了两个不同的 key
     expect(gate.pathCalls[1].path).not.toBe('/ws/re port.txt')
   })
@@ -1920,7 +1920,7 @@ describe('ssh 内置服务器传输类工具的询问应答', () => {
     await callTool(client, 'upload', xferArgs({ localPath: '/home/u/.ssh/config' }))
     await callTool(client, 'download', xferArgs({ localPath: '/outside/out.txt' }))
 
-    // 记住的是**本地读写**那套条目（`Read(<abs>)` / `Write(<abs>)`）：于是这颗复选框
+    // 记住的是**本地读写**的路径授权（卡片上是 `Read(<abs>)` / `Write(<abs>)`，落进会话权限表）：于是这颗复选框
     // 不只放开了这次传输，也放开了之后 read / write 工具对同一路径的访问 —— 今天的行为
     expect(askCards(asks).map((a) => a.command)).toEqual([
       'Read(/home/u/.ssh/config)',

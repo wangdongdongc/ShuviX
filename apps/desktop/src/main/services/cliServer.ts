@@ -9,8 +9,11 @@
  *      CLI 客户端在请求 JSON 里附带 token；不匹配立刻断开。
  *
  * 协议：每条消息一行 JSON
- *   request:  { token, command, params, sessionId? }
+ *   request:  { token, command, params, sessionId?, sessionKey? }
  *   response: { success: true, data } | { success: false, error }
+ *
+ * 会话：命令环境里的 SHUVIX_SESSION_ID 与 SHUVIX_SESSION_KEY 由 CLI 带上，核对见 cliSession.ts ——
+ * 对不上就当这次调用不属于任何会话（不能凭一个自报的 id 去动别的会话）。
  */
 
 import { createServer, type Server, type Socket } from 'net'
@@ -28,8 +31,9 @@ import {
 } from './widget'
 import * as widgetWindowService from './widgetWindowService'
 import { parsePreviewSizes, parsePreviewTheme, previewWidget } from './widgetPreviewService'
-import { sessionService } from './sessionService'
-import { resolveProjectConfig, isPathWithinWorkspace } from './toolContext'
+import { sessionAcl } from './acl'
+import { verifiedCliSession } from './cliSession'
+import { getDesktopSecurityContext } from './toolContext'
 import { resolve as resolvePath } from 'path'
 import { stopBgTaskByAgent } from './bgTaskService'
 import { runPolicyCheck, type PolicyCheckDeps } from './policyCheck'
@@ -42,6 +46,8 @@ interface Request {
   params?: Record<string, unknown>
   /** 可选：调用方所属 ShuviX 会话 id，由 bash 工具通过 env 注入到 CLI */
   sessionId?: string
+  /** 与 sessionId 配对的会话 key（cliSession.ts）；对不上 sessionId 就不算数 */
+  sessionKey?: string
 }
 
 interface Response {
@@ -231,8 +237,15 @@ class CliServer {
       return
     }
 
+    const sessionId = verifiedCliSession(req.sessionId, req.sessionKey)
+    if (req.sessionId && !sessionId) {
+      log.warn(
+        `CLI request claims session ${req.sessionId} without a matching key; treated as no session`
+      )
+    }
+
     try {
-      const data = await handler(req.params || {}, req.sessionId)
+      const data = await handler(req.params || {}, sessionId)
       this.respond(sock, { success: true, data })
     } catch (e) {
       this.respond(sock, { success: false, error: (e as Error).message })
@@ -284,8 +297,10 @@ class CliServer {
       if (!name) throw new Error('name required')
       const result = await widgetService.init({ id, name, description, template: 'blank' })
       if (sessionId) {
-        sessionService.addAllowListPaths(sessionId, 'read', [result.projectDir])
-        sessionService.addAllowListPaths(sessionId, 'write', [result.projectDir])
+        sessionAcl.grantPath(sessionId, result.projectDir, 'write', {
+          source: 'widget',
+          sourceKey: id
+        })
       }
       return result
     })
@@ -298,8 +313,7 @@ class CliServer {
       widgetService.validateId(id)
       const dir = widgetService.getWidgetDir(id)
       if (sessionId) {
-        sessionService.addAllowListPaths(sessionId, 'read', [dir])
-        sessionService.addAllowListPaths(sessionId, 'write', [dir])
+        sessionAcl.grantPath(sessionId, dir, 'write', { source: 'widget', sourceKey: id })
       }
       const message = typeof p.message === 'string' ? p.message : undefined
       return await widgetService.build(id, { message })
@@ -333,13 +347,20 @@ class CliServer {
       if (!targetPath) throw new Error('targetPath required')
       // 先归一化成最终 zip 路径再校验 —— 校验对象必须与真正写入的路径一致
       const zipPath = resolveExportZipPath(id, resolvePath(targetPath))
-      // 准入：导出目标必须落在调用会话的 workingDirectory 内
-      // CLI 路径无交互询问通道，弹不出询问卡，越界只能直接拒绝
-      if (sessionId) {
-        const config = resolveProjectConfig(sessionId)
-        if (!isPathWithinWorkspace(zipPath, config.workingDirectory)) {
-          throw new Error(`target "${zipPath}" is outside the session working directory`)
-        }
+      // 准入：按调用会话的权限表与安全策略判这次写（导出目标须是会话免询问可写的地方）。CLI 没有询问
+      // 通道，弹不出询问卡 —— 要问的一律拒绝；不属于任何会话的调用没有权限表，一律拒绝
+      if (!sessionId) {
+        throw new Error('widget export must run from a ShuviX session command')
+      }
+      const verdict = getDesktopSecurityContext({ sessionId }).judgeGate(
+        'write',
+        { type: 'path', path: zipPath, displayPath: zipPath },
+        { tool: { name: 'shuvix-cli', operation: 'widget.export' } }
+      )
+      if (!verdict.allowed) {
+        throw new Error(
+          `target "${zipPath}" is not writable for this session without asking — export into the working directory or another path in the session's permission table`
+        )
       }
       try {
         return await exportWidget({ id, targetPath: zipPath })

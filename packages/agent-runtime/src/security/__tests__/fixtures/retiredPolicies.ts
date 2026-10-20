@@ -6,6 +6,11 @@
  * 都还在，留给用户自写策略。测试把它们当作「用户自己写的一份策略」装进 provider.getUserPolicies，
  * 继续钉住这些执行点的接线与命令解析的覆盖 —— 也顺带证明：用户照抄这几份，就能把门加回来。
  *
+ * 唯一改过规则的是 session-grants：它读的 vars.grantedRead / vars.grantedWrite 宿主已不再提供
+ * （「允许并记住」并进了会话权限表），原样留着就是一份永不命中的死策略。它改读 vars.aclRead /
+ * vars.aclWrite —— 整张权限表抬到 force-allow 层，借它钉的引擎机制（deny / force-ask 压过 force-allow、
+ * force-allow 压过询问门）不变。
+ *
  * 只给测试用；产品代码不得导入（同 builtinPolicies/inlineSources.ts 的规矩）。
  */
 import { parsePolicyDefinitionFile } from '../../policyFile'

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import Database from 'better-sqlite3'
 import { createLogger } from '../logger'
 
@@ -814,6 +815,68 @@ export const migrations: Migration[] = [
       db.exec(
         'CREATE INDEX IF NOT EXISTS idx_classifier_logs_scene ON classifier_logs(scene, createdAt DESC)'
       )
+    }
+  },
+  {
+    version: 33,
+    description:
+      '会话权限表：session_acl 表（一条会话被授予的访问权一条一行，kind 区分客体种类，今天只有 path）；旧会话设置里的 allowList（Read(...) / Write(...)）搬成 user 行后删掉该键',
+    up: (db) => {
+      // 形状见 chat-protocol 的 sessionAcl.ts。kind / access / source 都是文本：以后的网络权限之类加一个
+      // kind 即可，不改表。唯一索引按 (会话, 种类, 来源, 来源键, 目标) —— 同一来源对同一目标只有一行，
+      // 访问方式就地改；它以 sessionId 打头，按会话列出也走它。派生行（工作目录、会话目录、知识库、技能）
+      // 不在这里生成：宿主第一次用到这条会话的权限表时按当时的设置对账补上
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_acl (
+          id         TEXT    PRIMARY KEY,
+          sessionId  TEXT    NOT NULL,
+          kind       TEXT    NOT NULL,
+          target     TEXT    NOT NULL,
+          access     TEXT    NOT NULL,
+          source     TEXT    NOT NULL,
+          sourceKey  TEXT    NOT NULL DEFAULT '',
+          attrs      TEXT    NOT NULL DEFAULT '{}',
+          createdAt  INTEGER NOT NULL,
+          updatedAt  INTEGER NOT NULL
+        )
+      `)
+      db.exec(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_session_acl_entry ON session_acl(sessionId, kind, source, sourceKey, target)'
+      )
+
+      // 搬 allowList：逐行在 JS 里解析（设置是坏 JSON 的行 SQL 的 json_each 会整条语句报错），条目形态与
+      // 旧的 parseAllowEntry 同一个正则 —— 历史遗留的 Bash(...) / SSH(...) 本来就不授予任何东西，丢掉。
+      // 同一路径既有 Read 又有 Write 的合成一行 write。再跑一遍（user_version 被拨回）时键已删、无事可做
+      const rows = db
+        .prepare(`SELECT id, settings, updatedAt FROM sessions WHERE settings LIKE '%"allowList"%'`)
+        .all() as Array<{ id: string; settings: string; updatedAt: number }>
+      const insert = db.prepare(
+        `INSERT INTO session_acl (id, sessionId, kind, target, access, source, sourceKey, attrs, createdAt, updatedAt)
+         VALUES (?, ?, 'path', ?, ?, 'user', '', '{}', ?, ?)
+         ON CONFLICT (sessionId, kind, source, sourceKey, target)
+         DO UPDATE SET access = CASE WHEN excluded.access = 'write' THEN 'write' ELSE access END`
+      )
+      const dropKey = db.prepare(
+        `UPDATE sessions SET settings = json_remove(settings, '$.allowList') WHERE id = ?`
+      )
+      for (const row of rows) {
+        let settings: unknown
+        try {
+          settings = JSON.parse(row.settings)
+        } catch {
+          continue
+        }
+        if (!settings || typeof settings !== 'object' || !('allowList' in settings)) continue
+        const list = (settings as { allowList?: unknown }).allowList
+        for (const entry of Array.isArray(list) ? list : []) {
+          if (typeof entry !== 'string') continue
+          const m = entry.match(/^(Read|Write)\((.+)\)$/)
+          if (!m) continue
+          const access = m[1] === 'Write' ? 'write' : 'read'
+          insert.run(randomUUID(), row.id, m[2], access, row.updatedAt, row.updatedAt)
+        }
+        dropKey.run(row.id)
+      }
     }
   }
 ]

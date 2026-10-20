@@ -1,31 +1,33 @@
 /**
  * 沙箱拒绝的说明（classify.ts）—— 纯函数：命令失败后，输出里的拒绝能对上沙箱规则才说话。
  *
- * 2026-10-01 起沙箱只把命令的文件访问收进本会话的目录：家目录里只有可读根（会话目录、只读会话目录、
- * 授权、ShuviX 自己的程序）与 cli-token 可读，可写的只有会话目录与写授权。所以：
+ * 2026-10-01 起沙箱只把命令的文件访问收进本会话的目录：家目录里只有可读根（会话权限表的全部行 —— 派生的
+ * 工作目录、会话自己的目录、知识库、技能目录与授予的读写 —— 以及 ShuviX 自己的程序）与 cli-token 可读，
+ * 可写的只有权限表里可写的行。所以：
  *
  *  - CL-1 成功 / 被杀的命令什么都不说；
  *  - CL-2 说明的形状：开头、条目、末尾两句（能 / 不能越界时各一句）；
  *  - CL-3 对得上规则的拒绝：带写入迹象、落在可写根以外的 → cannot write（家目录里外都是）；家目录里
  *    可读根以外、没有写入迹象的 → cannot read（那里既不可读也不可写，看行里的迹象说是哪一样）；
  *    措辞与引号变体、去重与封顶；
- *  - CL-4 对不上规则的 EPERM（会话目录里、授权里、家目录以外的读……）什么都不说；
+ *  - CL-4 对不上规则的 EPERM（会话自己的目录里、授予的行里、家目录以外的读……）什么都不说；
  *  - CL-5 输出里没有路径、但沙箱一定会拦的几类事（签名）；
  *  - CL-6 isWriteBlocked / isReadBlocked 与 profile 同义；
  *  - CL-7 路径抽取的缺口（带空格的路径、相对路径、TCC 拒绝的读）；
  *  - FU-13..FU-20 classify 的几处修正（行首的程序名、setuid、启动应用 / AppleScript、末尾的 /）；
  *  - CL-T 说明末尾那句概括的措辞。
  *
- * 夹具规格：工作目录 /Users/u/proj，写授权 ~/.shuvix/widgets/w，读授权 ~/ref，勾选的知识库 ~/.shuvix/knowledge/b，
- * 只读的技能目录 ~/.shuvix/skills，ShuviX 自己的程序在 ~/dev/ShuviX/out/main（开发态：在家目录里）。
+ * 夹具规格（会话权限表的行）：派生的工作目录 /Users/u/proj 与会话自己的目录（照 acl/derive.ts，都可写）、
+ * 勾选的知识库 ~/.shuvix/knowledge/b（可写）、只读的技能目录 ~/.shuvix/skills；授予的写 ~/.shuvix/widgets/w、
+ * 授予的读 ~/ref；ShuviX 自己的程序在 ~/dev/ShuviX/out/main（开发态：在家目录里）。
  */
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/nonexistent', isPackaged: false } }))
 
 import { explainSandboxDenial, isReadBlocked, isWriteBlocked } from '../classify'
-import { buildSandboxSpec, sessionTmpName } from '../spec'
-import type { SandboxHostPaths, SandboxSessionInput, SandboxSpec } from '../types'
+import { buildSandboxSpec, sessionOwnDirs, sessionTmpName } from '../spec'
+import type { SandboxHostPaths, SandboxPathEntry, SandboxSpec } from '../types'
 
 const HOME = '/Users/u'
 const USER_DATA = '/Users/u/Library/Application Support/ShuviX'
@@ -52,21 +54,30 @@ const PATHS: SandboxHostPaths = {
   tmpRoot: TMP_ROOT
 }
 
+/** 夹具里派生行之后的那几行：勾选的知识库（可写）、技能目录（只读）、授予的写（widget）与授予的读 */
+const FIXTURE_ROWS: SandboxPathEntry[] = [
+  { path: KB, access: 'write', granted: false },
+  { path: SKILLS, access: 'read', granted: false },
+  { path: WIDGET, access: 'write', granted: true },
+  { path: REF, access: 'read', granted: true }
+]
+
 function specOf(
-  over: Partial<SandboxSessionInput> = {},
+  over: { workingDirectory?: string; rows?: SandboxPathEntry[] } = {},
   paths: SandboxHostPaths = PATHS
 ): SandboxSpec {
+  const identity = (p: string): string => p
+  const workingDirectory = over.workingDirectory ?? WS
+  // 照 acl/derive.ts 派生：工作目录与会话自己的三个目录，都可写
+  const own = sessionOwnDirs(paths, { sessionId: SID, workingDirectory }, identity)
+  if (!own?.workdir) throw new Error(`fixture working directory unsuitable: ${workingDirectory}`)
+  const derived = [own.workdir, own.tmp, own.artifacts, own.toolResults].map(
+    (path): SandboxPathEntry => ({ path, access: 'write', granted: false })
+  )
   const result = buildSandboxSpec(
     paths,
-    {
-      sessionId: SID,
-      workingDirectory: WS,
-      grantedWrite: [WIDGET],
-      grantedRead: [REF],
-      extras: { readWrite: [KB], readOnly: [SKILLS] },
-      ...over
-    },
-    (p) => p
+    { sessionId: SID, workingDirectory, entries: [...derived, ...(over.rows ?? FIXTURE_ROWS)] },
+    identity
   )
   if (!result.ok) throw new Error(result.reason)
   return result.spec
@@ -232,9 +243,9 @@ describe('CL-3 对得上规则的拒绝', () => {
       'PermissionError: [Errno 1] Operation not permitted: ‘/Users/u/.aws/credentials’',
       'cannot read: /Users/u/.aws/credentials'
     ],
-    // 家目录里、可读却不可写的：读授权、只读的技能目录、ShuviX 自己的程序、cli-token
+    // 家目录里、可读却不可写的：授予的读、只读的技能目录、ShuviX 自己的程序、cli-token
     [
-      '读授权里的写',
+      '授予的读里的写',
       'touch: /Users/u/ref/x: Operation not permitted',
       'cannot write: /Users/u/ref/x'
     ],
@@ -313,8 +324,8 @@ describe('CL-4 不是沙箱拦的 → null', () => {
     ['本会话工具结果（写）', `touch: ${USER_DATA}/tool_results/${SID}/x: Operation not permitted`],
     ['本会话工具结果（读）', `cat: ${USER_DATA}/tool_results/${SID}/x: Operation not permitted`],
     ['勾选的知识库（写）', `touch: ${KB}/a.md: Operation not permitted`],
-    ['写授权里', `touch: ${WIDGET}/f: Operation not permitted`],
-    ['读授权的读', 'cat: /Users/u/ref/a.txt: Operation not permitted'],
+    ['授予的写里', `touch: ${WIDGET}/f: Operation not permitted`],
+    ['授予的读的读', 'cat: /Users/u/ref/a.txt: Operation not permitted'],
     ['只读技能目录的读', `cat: ${SKILLS}/s/SKILL.md: Operation not permitted`],
     ['ShuviX 程序目录的读', `cat: ${APP_DIR}/cli.js: Operation not permitted`],
     ['cli-token 的读', 'cat: /Users/u/.shuvix/cli-token: Operation not permitted'],
@@ -420,7 +431,7 @@ describe('CL-6 isWriteBlocked / isReadBlocked 与 profile 同义', () => {
     // 上级目录只放行元数据：照旧算拦下（输出里出现它只可能是列内容被拒）
     [HOME, true, true],
     [SHUVIX, true, true],
-    // 家目录以外：读不受限，写只在会话目录与写授权里
+    // 家目录以外：读不受限，写只在权限表里可写的行里
     ['/etc/hosts', true, false],
     ['/private/tmp/x', true, false],
     ['/tmp/x', true, false],
@@ -444,7 +455,7 @@ describe('CL-6 isWriteBlocked / isReadBlocked 与 profile 同义', () => {
   it('CL-6 e2e 布局：家目录在 /private/tmp 里 —— 家目录里的读被拦，/private/tmp 别处的读不拦', () => {
     const e2eHome = '/private/tmp/shuvix-e2e-x'
     const e2e = specOf(
-      { workingDirectory: `${e2eHome}/proj`, grantedWrite: [], grantedRead: [], extras: undefined },
+      { workingDirectory: `${e2eHome}/proj`, rows: [] },
       {
         ...PATHS,
         home: e2eHome,

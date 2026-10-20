@@ -7,6 +7,7 @@
  * 服务端 `.shuvix/cli.sock`，它记下收到的请求行、回一条事先定好的响应。
  *
  *  (a) 请求就是 `{token, command:'task.stop', params:{pid:<数字>}, sessionId}`，成功回话原样打到 stdout、退出 0；
+ *      有 SHUVIX_SESSION_KEY 时原样带上 `sessionKey`（主进程拿它核对会话 id，见 services/cliSession.ts）；
  *  (b) 失败回话 → stderr `Error: <原因>`、退出 1；
  *  (c) 没有 / 空的 SHUVIX_SESSION_ID → 请求里干脆没有 sessionId 这个键；
  *  (d) pid 不是一串数字 → 本地就拒（stderr 一句、退出 1），根本不连 ShuviX；
@@ -120,6 +121,22 @@ describe.skipIf(process.platform === 'win32')(
       ])
       // pid 是 JSON 数字，不是字符串
       expect(typeof (requests[0].params as { pid: unknown }).pid).toBe('number')
+    })
+
+    it('FU-5a2 SHUVIX_SESSION_KEY → 请求里原样带上 sessionKey；空串不带', async () => {
+      await cli(['task', 'stop', '123'], { SHUVIX_SESSION_ID: 'sess-1', SHUVIX_SESSION_KEY: 'k1' })
+      await cli(['task', 'stop', '123'], { SHUVIX_SESSION_ID: 'sess-1', SHUVIX_SESSION_KEY: '' })
+
+      expect(requests).toEqual([
+        {
+          token: TOKEN,
+          command: 'task.stop',
+          params: { pid: 123 },
+          sessionId: 'sess-1',
+          sessionKey: 'k1'
+        },
+        { token: TOKEN, command: 'task.stop', params: { pid: 123 }, sessionId: 'sess-1' }
+      ])
     })
 
     it('FU-5b 失败回话 → stderr「Error: <原因>」，退出 1', async () => {

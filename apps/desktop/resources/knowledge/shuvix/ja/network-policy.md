@@ -73,8 +73,8 @@ ShuviX が同梱するネットワークポリシーは一つ、`network-admissi
 | `connection`    | string | channel とファイルチャネルの判定ではその WebSocket 接続（`ws:7`）；それ以外は `''`   | はい                                         |
 
 `env.host` は `desktop`（ヘッドレスでも）。`vars` には `policy-md` エントリーの表のうちセッションに属さない
-ホスト変数 —— `home`、`shuvixConfigDirs`、`botsDir`、`skillsDirs` …… —— があり、セッションのディレクトリや
-許可はありません。
+ホスト変数 —— `home`、`shuvixConfigDirs`、`botsDir`、`skillsDirs` …… —— があり、セッションの権限表
+（`aclRead` / `aclWrite`）はありません。
 
 ### 四つの判定点
 

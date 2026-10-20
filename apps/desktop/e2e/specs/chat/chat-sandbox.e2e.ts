@@ -141,10 +141,16 @@ const tmpProbe = `/private/tmp/shuvix-e2e-sbx-probe-${process.pid}`
 const decisionsOf = (toolCallId: string): ReturnType<typeof securityDecisions> =>
   securityDecisions(app).filter((d) => d.toolCallId === toolCallId)
 
-/** 会话里「允许并记住」的条目（`Read(…)` / `Write(…)`） */
+/** 会话权限表里用户授予的行（「允许并记住」），写成卡片上的 `Read(…)` / `Write(…)` 形态 */
 const allowList = (sid: string): Promise<string[]> =>
   app.main.eval<string[]>(
-    `window.api.session.getById(${JSON.stringify(sid)}).then((s) => (s && s.settings && s.settings.allowList) || [])`
+    `window.api.session.listAcl(${JSON.stringify(sid)}).then((rows) => rows.filter((r) => r.source === 'user').map((r) => (r.access === 'write' ? 'Write(' : 'Read(') + r.target + ')'))`
+  )
+
+/** 在会话权限表里删掉一条用户授予的行（按路径认） */
+const revokeGrant = (sid: string, target: string): Promise<unknown> =>
+  app.main.eval(
+    `window.api.session.listAcl(${JSON.stringify(sid)}).then((rows) => { const row = rows.find((r) => r.source === 'user' && r.target === ${JSON.stringify(target)}); return row && window.api.session.removeAclEntry({ id: ${JSON.stringify(sid)}, entryId: row.id }) })`
   )
 
 /** 在会话里发一条消息，脚本化「一串工具调用（一步一个）→ 一句收尾」 */
@@ -776,10 +782,8 @@ describe('E2E-9 「允许并记住」两面生效', () => {
     expect(readFileSync(out, 'utf8')).toBe('W1\nW2\n')
     expect(String((await toolResult(sid, 'call_read_aws_2')).result)).toContain('AWS-E2E')
 
-    // ⑤ 在会话配置里撤掉读授权：同一会话，下一条命令又读不到（授权按命令现读）
-    await app.main.eval(
-      `window.api.session.removeAllowListEntry(${JSON.stringify({ id: sid, entry: `Read(${aws})` })})`
-    )
+    // ⑤ 在会话权限表里撤掉读授权：同一会话，下一条命令又读不到（授权按命令现读）
+    await revokeGrant(sid, aws)
     expect(await allowList(sid)).not.toContain(`Read(${aws})`)
     await events.clear()
     await sendTurn('S-grants', bashCall('call_aws_3', 'cat "$HOME/.aws/credentials"'), 'aws 3')

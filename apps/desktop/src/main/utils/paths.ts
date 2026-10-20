@@ -67,7 +67,7 @@ export function getSessionArtifactsDir(rootSessionId: string): string {
  *
  * 今天 id 是 DB 的 uuidv7、不可达；但这个目录有两个用法经不起一个坏 id：
  *  - artifacts/store 对它**递归删除**，而 `artifact:read` 的 sessionId 来自渲染端；
- *  - 它是一个**会话目录**（`vars.sessionDirs`）：外部目录访问策略不问、命令沙箱可读写。
+ *  - 它是会话权限表里的一行（system，`vars.aclWrite`）：外部目录访问策略不问、命令沙箱可读写。
  *    空 id 会把豁免放大到所有会话的 artifacts，`..` 会放大到 `~/.shuvix` —— 那里有 `policies/`，
  *    等于让 agent 不经询问改写自己的安全策略。
  * 两处共用这一个判定，别各写一份。
@@ -245,9 +245,10 @@ export function getTempWorkspaceBase(): string {
   return join(app.getPath('userData'), 'temp_workspace')
 }
 
-/** 获取临时会话的工作目录 */
-export function getTempWorkspace(sessionId: string): string {
-  return ensureDir(join(getTempWorkspaceBase(), sessionId))
+/** 获取临时会话的工作目录（缺省顺手建出来；`create: false` 只算路径 —— 会话权限表对账用它，不替会话建目录） */
+export function getTempWorkspace(sessionId: string, opts?: { create?: boolean }): string {
+  const dir = join(getTempWorkspaceBase(), sessionId)
+  return opts?.create === false ? dir : ensureDir(dir)
 }
 
 /**

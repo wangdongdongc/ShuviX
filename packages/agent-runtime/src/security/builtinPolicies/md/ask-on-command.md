@@ -17,11 +17,11 @@ shuvix-policy-rules:
 
 **What it does**: a command that would run with your full privileges has to
 ask you first. On macOS, with the sandbox on (Settings → LLM tools → bash),
-a command runs confined by default — it can read and write only this
-session's own directories (the working directory, its temporary folder,
-artifacts and tool results, plus the paths you allowed and remembered), read
-system locations outside your home folder, and use the network — so it runs
-without asking. What asks:
+a command runs confined by default — it can read and write only the paths in
+this session's permission table (the working directory, its temporary folder,
+artifacts and tool results, the paths you granted …; read-only rows such as
+the skill folders only for reading), read system locations outside your home
+folder, and use the network — so it runs without asking. What asks:
 
 - a command the agent ran outside the sandbox (`dangerouslyDisableSandbox`).
   The sandbox is meant only for simple work inside the project; git,

@@ -3,23 +3,23 @@ import {
   getSessionChannelApi,
   refreshSessionTools,
   useAppEvent,
-  useChatStore,
   useSessionTools
 } from '@shuvix/chat-ui'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X } from 'lucide-react'
 import type { KnowledgeBaseOptionsResult } from '@shuvix/chat-protocol/chatApi'
 import type { ToolItem } from '../common/ToolSelectList'
 import { ExtensionsSection } from '../settings/ExtensionsSection'
 import { KnowledgeBasesSection } from '../settings/KnowledgeBasesSection'
-import { SettingsSection } from '../settings/SettingsPrimitives'
+import { SessionAclSection } from './SessionAclSection'
 
 /** Skills 分组标识（tools.list 的 group） */
 const SKILLS_GROUP = '__skills__'
 
 export interface SessionConfigPanelProps {
   sessionId: string
+  /** 文件访问一节一开始就把来自会话设置的行也摆出来（会话设置弹窗里是；空会话的欢迎页里收着） */
+  aclExpanded?: boolean
 }
 
 /**
@@ -117,31 +117,22 @@ function SessionKnowledgeBasesSection({
 /**
  * 会话配置面板（除会话标题外的所有配置）。
  *
- * 三节：扩展能力（这条会话的 MCP / Skill 勾选，Agent 创建之前可改）、知识库，以及「允许并记住」过的
- * 路径（有才画）。项目指令文件的
- * 「读哪些」已整体搬进 agent md 的 `shuvix-instruction-files` 清单（那是 agent 的人格设定，
- * 不是每个会话的临时选择），这里不再有对应开关。
+ * 三节：扩展能力（这条会话的 MCP / Skill 勾选，Agent 创建之前可改）、知识库、文件访问（会话权限表，见
+ * SessionAclSection）。项目指令文件的「读哪些」已整体搬进 agent md 的 `shuvix-instruction-files` 清单
+ * （那是 agent 的人格设定，不是每个会话的临时选择），这里不再有对应开关。
  * 既可嵌入到 SessionConfigDialog 弹窗中，也可在空会话时直接居中展示。
  *
  * 视觉：分节标题 + 圆角卡片 + 行式条目（左标题/描述，右控件）。
  *
  * 状态来源：
- * - allowList / enabledTools 从 chatStore 的会话设置派生，
- *   后端通过 `session.configChanged` 事件触发 store 刷新后自动重渲染；
+ * - enabledTools 从 chatStore 的会话设置派生，后端通过 `session.configChanged` 事件触发 store 刷新后自动重渲染；
+ * - 权限表由 SessionAclSection 自己现取，同一个事件时重取；
  * - 扩展能力的只读态来自 `agent_created` / `agent_closing` 事件（见 useSessionTools）。
  */
-export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): React.JSX.Element {
-  const { t } = useTranslation()
-  const session = useChatStore((s) => s.sessions.find((sess) => sess.id === sessionId))
-  const allowList = session?.settings.allowList ?? []
-
-  /** 允许列表仅含路径条目（`Read(...)`/`Write(...)`）：命令类工具逐条询问，无模式记忆 */
-  const handleRemoveAllowEntry = async (entry: string): Promise<void> => {
-    await getChatApi().session.removeAllowListEntry({ id: sessionId, entry })
-    const next = allowList.filter((e) => e !== entry)
-    useChatStore.getState().updateSessionSettings(sessionId, { allowList: next })
-  }
-
+export function SessionConfigPanel({
+  sessionId,
+  aclExpanded = false
+}: SessionConfigPanelProps): React.JSX.Element {
   return (
     <div className="space-y-5">
       {/* 扩展能力 */}
@@ -150,36 +141,8 @@ export function SessionConfigPanel({ sessionId }: SessionConfigPanelProps): Reac
       {/* 知识库（不随 Agent 上锁） */}
       <SessionKnowledgeBasesSection sessionId={sessionId} />
 
-      {/* 操作询问：「允许并记住」过的路径（没有就整节不画 —— 「免询问」开关已删除，
-          这一节只剩这份清单） */}
-      {allowList.length > 0 && (
-        <SettingsSection title={t('sessionConfig.commandGroup')}>
-          <div className="px-4 py-3">
-            <div className="text-[11px] text-text-tertiary mb-1.5">
-              {t('sessionConfig.allowListTitle')}
-            </div>
-            <div className="flex flex-col gap-1">
-              {allowList.map((entry) => (
-                <div
-                  key={entry}
-                  title={entry}
-                  className="group flex items-center gap-1.5 px-2 py-1 rounded bg-bg-tertiary/60"
-                >
-                  <span className="flex-1 truncate text-[11px] font-mono text-text-secondary">
-                    {entry}
-                  </span>
-                  <button
-                    onClick={() => void handleRemoveAllowEntry(entry)}
-                    className="text-text-tertiary hover:text-red-500 transition-colors shrink-0 opacity-0 group-hover:opacity-100"
-                  >
-                    <X size={10} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </SettingsSection>
-      )}
+      {/* 文件访问：会话权限表 */}
+      <SessionAclSection sessionId={sessionId} defaultExpanded={aclExpanded} />
     </div>
   )
 }

@@ -467,7 +467,6 @@ describe('P2-08 C · reviewer dispatch (decide)', () => {
               host: 'desktop',
               pathSep: '/',
               getVars: () => ({}),
-              getSessionGrants: () => ({ allowList: [] }),
               // 人把卡片关掉（取消）：不算「人回答了」，连续拒绝计数不清零
               requestUserInput: async (request: InputRequest): Promise<InputResponse> => {
                 cards.push(request)

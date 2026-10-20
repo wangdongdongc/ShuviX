@@ -53,7 +53,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'agent:getInfo': 'write', // 带 ensure 时会打开会话、创建 agent（锁配置、连 MCP）
   'agentMonitor:list': 'read',
   'agentMonitor:detail': 'read',
-  'agent:respondToInput': 'write', // 回答询问卡 / 输入请求
+  'agent:respondToInput': 'write', // 回答询问卡 / 输入请求（勾了「允许并记住」按 admin，见 channelCallAccessOf）
 
   // ─── provider：提供商与模型（含订阅登录） ───
   'provider:listAll': 'admin', // 返回值带解密后的 apiKey 与自定义请求头
@@ -93,7 +93,11 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'session:updateProject': 'write',
   'session:updateEnabledTools': 'write',
   'session:updateKnowledgeBases': 'write',
-  'session:removeAllowListEntry': 'admin', // 改记住的路径授权（安全状态）
+  'session:listAcl': 'read',
+  // 会话权限表的增、删、改同一级：都是安全状态（谁能免询问地读写哪里）
+  'session:grantAcl': 'admin',
+  'session:setAclAccess': 'admin',
+  'session:removeAclEntry': 'admin',
   'session:fork': 'write',
   'session:delete': 'write',
   'session:getById': 'read',
@@ -387,4 +391,20 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
 /** 不在表里的通道一律按 admin（最严） */
 export function channelAccessOf(channel: string): ChannelAccess {
   return Object.hasOwn(CHANNEL_ACCESS, channel) ? CHANNEL_ACCESS[channel] : 'admin'
+}
+
+/**
+ * 一次请求的访问级别：通常就是通道的那一档。例外：回答询问卡时勾了「允许并记住」
+ * （`agent:respondToInput` 的 `response.extra.rememberPath`）是往会话权限表里写一行，与 `session:grantAcl`
+ * 同一档（admin）—— 否则只许 write 的设备绕过权限表的那一档，答一张卡就给会话加上永久授权。
+ */
+export function channelCallAccessOf(channel: string, args: readonly unknown[]): ChannelAccess {
+  if (channel === 'agent:respondToInput' && remembersPath(args[0])) return 'admin'
+  return channelAccessOf(channel)
+}
+
+function remembersPath(params: unknown): boolean {
+  const response = (params as { response?: unknown } | null)?.response
+  const extra = (response as { extra?: unknown } | null | undefined)?.extra
+  return !!(extra as { rememberPath?: unknown } | null | undefined)?.rememberPath
 }

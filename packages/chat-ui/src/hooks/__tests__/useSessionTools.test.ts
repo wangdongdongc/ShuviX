@@ -47,7 +47,7 @@ const seedSession = (): Session => ({
   title: 'S1',
   projectId: null,
   parentId: null,
-  settings: { allowList: ['Read(/a)'], enabledTools: ['skill:old'] },
+  settings: { agentProfile: 'coding', enabledTools: ['skill:old'] },
   createdAt: 0,
   updatedAt: 0,
   lastActiveAt: 0
@@ -71,8 +71,8 @@ beforeEach(() => {
 describe('useSessionTools 的 store 读写', () => {
   it('EXT-U-19 applySessionToolState：写入「有运行时」与勾选原值，会话的其它设置不被冲掉', () => {
     applySessionToolState(SID, { created: true, enabledTools: ['mcp:a'] })
-    // 整份替换的是 enabledTools 这一个键：allowList 被冲掉的话，打开一条会话就会悄悄丢掉「允许并记住」的路径
-    expect(settingsOf(SID)).toEqual({ allowList: ['Read(/a)'], enabledTools: ['mcp:a'] })
+    // 整份替换的是 enabledTools 这一个键：别的键（这里是子会话钉着的档案）被冲掉的话，打开一条会话就会悄悄丢掉它
+    expect(settingsOf(SID)).toEqual({ agentProfile: 'coding', enabledTools: ['mcp:a'] })
     expect(useChatStore.getState().sessionAgentCreated[SID]).toBe(true)
   })
 
@@ -96,11 +96,11 @@ describe('useSessionTools 的 store 读写', () => {
     expect(mocks.init).toHaveBeenCalledWith({ sessionId: SID })
     expect(useChatStore.getState().sessions).toBe(sessionsBefore)
     expect(useChatStore.getState().sessionAgentCreated).toBe(createdBefore)
-    expect(settingsOf(SID)).toEqual({ allowList: ['Read(/a)'], enabledTools: ['skill:old'] })
+    expect(settingsOf(SID)).toEqual({ agentProfile: 'coding', enabledTools: ['skill:old'] })
 
     mocks.init.mockResolvedValueOnce({ success: true, created: true, enabledTools: ['mcp:ok'] })
     await refreshSessionTools(SID)
-    expect(settingsOf(SID)).toEqual({ allowList: ['Read(/a)'], enabledTools: ['mcp:ok'] })
+    expect(settingsOf(SID)).toEqual({ agentProfile: 'coding', enabledTools: ['mcp:ok'] })
     expect(useChatStore.getState().sessionAgentCreated[SID]).toBe(true)
   })
 })
@@ -162,7 +162,7 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
 
     // 落库还没回：store 已经是新值（乐观），其它设置键不被冲掉
     expect(settingsOf(SID)).toEqual({
-      allowList: ['Read(/a)'],
+      agentProfile: 'coding',
       enabledTools: ['skill:old', 'mcp:now', 'skill:req']
     })
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
@@ -221,7 +221,7 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
     })
     expect(mocks.init).toHaveBeenCalledTimes(1)
     expect(mocks.init).toHaveBeenCalledWith({ sessionId: SID })
-    expect(settingsOf(SID)).toEqual({ allowList: ['Read(/a)'], enabledTools: ['mcp:real'] })
+    expect(settingsOf(SID)).toEqual({ agentProfile: 'coding', enabledTools: ['mcp:real'] })
     expect(useChatStore.getState().sessionAgentCreated[SID]).toBe(true)
   })
 

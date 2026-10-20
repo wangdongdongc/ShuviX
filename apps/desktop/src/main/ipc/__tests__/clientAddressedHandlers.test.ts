@@ -76,6 +76,10 @@ vi.mock('../../services/notificationService', () => ({
   consumePendingOpenSession: vi.fn()
 }))
 // sessionHandlers 的其余依赖（dialog:openDirectory 与它们无关）
+// 会话权限表（services/acl）不在这组用例里：空表（真的那份落 SQLite，这里不起库）
+vi.mock('../../services/acl', () => ({
+  sessionAcl: { pathView: () => ({ read: [], write: [] }), sandboxEntries: () => [] }
+}))
 vi.mock('../../services/sessionService', () => ({ sessionService: {} }))
 vi.mock('../../services/filesWatcherService', () => ({ closeWatcherIfWorkingDirectory: vi.fn() }))
 vi.mock('../../frontend', () => ({

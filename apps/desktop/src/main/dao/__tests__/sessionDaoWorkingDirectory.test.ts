@@ -12,7 +12,7 @@
  *
  *   DW-1  整串相等 → true；没有这样的行 → false
  *   DW-2  不认前缀 / 子目录 / 结尾斜杠 / 大小写不同（两个方向都试）
- *   DW-3  只认 workingDirectory 这个键：同一串写在 notebookPath / allowList / 嵌套对象里 / 非字符串值 → false
+ *   DW-3  只认 workingDirectory 这个键：同一串写在 notebookPath / 数组设置（knowledgeBases、enabledTools）/ 嵌套对象里 / 非字符串值 → false
  *   DW-4  坏 JSON（`{bad`）、`{}`、空串的行跳过、不抛；另有一行真匹配时照样 true
  *   DW-5  没有 LIKE 语义（`_` / `%` 不是通配）；空格、引号、反斜杠、中文与重音字符原样往返
  *   DW-6  唯一指着它的那一行删掉之后 → false
@@ -113,7 +113,10 @@ describe('DW-2 no prefix / descendant / trailing-slash / case match', () => {
 describe('DW-3 only the workingDirectory key counts', () => {
   it.each<[string, SessionSettings]>([
     ['the same string in notebookPath', { notebookPath: DIR }],
-    ['the same string inside allowList', { allowList: [DIR, `Read(${DIR})`] }],
+    [
+      'the same string inside array settings',
+      { knowledgeBases: [DIR], enabledTools: [DIR, `skill:${DIR}`] }
+    ],
     [
       'a nested object carrying a workingDirectory key',
       {

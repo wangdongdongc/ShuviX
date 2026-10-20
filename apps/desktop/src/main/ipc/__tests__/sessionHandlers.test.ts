@@ -13,6 +13,9 @@
  *        （它留在 params 里 —— sessionService.create 不从 params 读它，见 sessionServiceWorkingDirectory 的 WD-6）
  *   SH-4 `runtime:statuses` 是异步的：处理函数交回网关的 Promise（ssh 那一份可能要读用户的 ssh 配置，
  *        不能同步挂住主进程），落定后形状原样（`{ db?, 'ssh:<alias>'… }`），且在这条会话的操作上下文里跑
+ *   SH-5 会话权限表的四个通道（取代 `session:removeAllowListEntry`）接到 services/acl（替身）：listAcl 原样
+ *        交回表；grantAcl 只认 read / write（别的访问方式不碰服务，回 success: false）、按服务的结果回
+ *        success 与那一行；setAclAccess 同样先验访问方式；removeAclEntry 回服务删没删
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -22,7 +25,11 @@ const state = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   create: vi.fn(),
   getRuntimeStatuses: vi.fn(),
-  contexts: [] as unknown[]
+  contexts: [] as unknown[],
+  aclEntries: vi.fn((_id: string): unknown[] => []),
+  aclGrantPath: vi.fn((_id: string, _path: string, _access: string): unknown => null),
+  aclSetAccess: vi.fn((_id: string, _entryId: string, _access: string): boolean => false),
+  aclRemove: vi.fn((_id: string, _entryId: string): boolean => false)
 }))
 
 vi.mock('electron', () => ({
@@ -35,6 +42,14 @@ vi.mock('electron', () => ({
   BrowserWindow: { fromWebContents: vi.fn() }
 }))
 vi.mock('../../services/sessionService', () => ({ sessionService: { create: state.create } }))
+vi.mock('../../services/acl', () => ({
+  sessionAcl: {
+    entries: state.aclEntries,
+    grantPath: state.aclGrantPath,
+    setAccess: state.aclSetAccess,
+    remove: state.aclRemove
+  }
+}))
 vi.mock('../../services/filesWatcherService', () => ({ closeWatcherIfWorkingDirectory: vi.fn() }))
 vi.mock('../../frontend', () => ({
   chatGateway: { getRuntimeStatuses: state.getRuntimeStatuses },
@@ -140,5 +155,90 @@ describe('SH-4 runtime:statuses 是异步的', () => {
     await expect(result).resolves.toEqual(statuses)
     expect(state.getRuntimeStatuses.mock.calls).toEqual([['s1']])
     expect(state.contexts).toEqual([{ electron: 's1' }])
+  })
+})
+
+describe('SH-5 会话权限表的通道', () => {
+  beforeEach(() => {
+    state.aclEntries.mockReset()
+    state.aclGrantPath.mockReset()
+    state.aclSetAccess.mockReset()
+    state.aclRemove.mockReset()
+  })
+
+  const row = {
+    id: 'e1',
+    sessionId: 's1',
+    kind: 'path',
+    target: '/Users/u/notes',
+    access: 'read',
+    source: 'user',
+    sourceKey: '',
+    createdAt: 1,
+    updatedAt: 1
+  }
+
+  it('SH-5 session:listAcl → 服务给的表原样', () => {
+    state.aclEntries.mockReturnValue([row])
+    expect(invoke('session:listAcl', 's1')).toEqual([row])
+    expect(state.aclEntries.mock.calls).toEqual([['s1']])
+  })
+
+  it('SH-5 session:grantAcl：read / write 交给 grantPath（来源由服务记为 user），按结果回 success 与那一行；别的访问方式不碰服务', () => {
+    state.aclGrantPath.mockReturnValueOnce(row)
+    expect(
+      invoke('session:grantAcl', { id: 's1', target: '/Users/u/notes', access: 'read' })
+    ).toEqual({ success: true, entry: row })
+    // 服务拒了（相对路径 / 会话不在）→ success: false
+    expect(invoke('session:grantAcl', { id: 's1', target: 'rel', access: 'write' })).toEqual({
+      success: false,
+      entry: null
+    })
+    expect(state.aclGrantPath.mock.calls).toEqual([
+      ['s1', '/Users/u/notes', 'read'],
+      ['s1', 'rel', 'write']
+    ])
+
+    state.aclGrantPath.mockClear()
+    for (const access of ['admin', 'execute', '', undefined]) {
+      expect(invoke('session:grantAcl', { id: 's1', target: '/x', access })).toEqual({
+        success: false,
+        entry: null
+      })
+    }
+    expect(state.aclGrantPath).not.toHaveBeenCalled()
+  })
+
+  it('SH-5 session:setAclAccess 先验访问方式再交给 setAccess；session:removeAclEntry 回服务删没删', () => {
+    state.aclSetAccess.mockReturnValueOnce(true)
+    expect(invoke('session:setAclAccess', { id: 's1', entryId: 'e1', access: 'write' })).toEqual({
+      success: true
+    })
+    expect(invoke('session:setAclAccess', { id: 's1', entryId: 'e1', access: 'admin' })).toEqual({
+      success: false
+    })
+    expect(state.aclSetAccess.mock.calls).toEqual([['s1', 'e1', 'write']])
+
+    state.aclRemove.mockReturnValueOnce(true).mockReturnValueOnce(false)
+    expect(invoke('session:removeAclEntry', { id: 's1', entryId: 'e1' })).toEqual({ success: true })
+    expect(invoke('session:removeAclEntry', { id: 's1', entryId: 'workdir-row' })).toEqual({
+      success: false
+    })
+    expect(state.aclRemove.mock.calls).toEqual([
+      ['s1', 'e1'],
+      ['s1', 'workdir-row']
+    ])
+  })
+
+  it('SH-5 旧通道 session:removeAllowListEntry 不再注册', () => {
+    expect(state.handlers.has('session:removeAllowListEntry')).toBe(false)
+    for (const channel of [
+      'session:listAcl',
+      'session:grantAcl',
+      'session:setAclAccess',
+      'session:removeAclEntry'
+    ]) {
+      expect(state.handlers.has(channel), channel).toBe(true)
+    }
   })
 })

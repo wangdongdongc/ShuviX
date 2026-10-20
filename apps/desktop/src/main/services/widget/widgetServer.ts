@@ -10,12 +10,14 @@
  *   *   /w/<id>/db/<table>    → widget 数据库的 REST 接口（widgetDb.ts）
  *   GET /w/<id>/fs/file|list  → 读本机文件 / 列目录（widgetFiles.ts，路由表见 shared/widgetRoutes.ts）
  *
- * 两道门（每个请求都过）：
+ * 门（每个请求都过前两道，文件路由再过第三道）：
  *   - **Host** 必须是 `127.0.0.1:<端口>` 或 `localhost:<端口>`，否则 421 —— 挡 DNS 重绑定（恶意网页把自己的域名
  *     解析到 127.0.0.1，就和这里同源了）。网络服务转发时已经把 Host 换成 127.0.0.1:<端口>（widgetProxy.ts）。
  *   - **`fs/` 的应答不带 `Access-Control-Allow-Origin`**：别的路由沿用 `*`（数据库接口一直如此，已知遗留），
  *     但文件路由不限路径，带上 `*` 就是让用户浏览器里任何网页都能读走本机文件。桌面里 widget 是同源请求，
  *     用不着它；远程模式下 widget 是沙箱里的不透明源，由 widgetProxy 在转发时补上（那一面本来就不认证）。
+ *   - **`fs/` 要密钥头**（widgetFsKey.ts）：没有就 403。前两道挡网页，挡不住本机进程 —— 沙箱里的命令能
+ *     直接 `curl` 这里读家目录。密钥只由主进程补给 widget 页面自己的请求与网络服务的转发。
  *
  * 懒启动：首次 registerWidget / rebuild 触发 server 监听
  * 打包复用 esbuild 插件的 BundlerService（共享预置的 React/Router 依赖）
@@ -28,6 +30,7 @@ import { bundlerService, bundlerResourcePath } from '../bundler'
 import { createLogger } from '../../logger'
 import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
 import { serveWidgetFiles } from './widgetFiles'
+import { hasWidgetFsKey, WIDGET_FS_KEY_HEADER } from './widgetFsKey'
 import { isWidgetFilesPath, WIDGET_FILES_SEGMENT } from '../../../shared/widgetRoutes'
 
 const log = createLogger('WidgetServer')
@@ -324,8 +327,13 @@ export class WidgetServer {
       return
     }
 
-    // /fs/file、/fs/list —— 读本机文件
+    // /fs/file、/fs/list —— 读本机文件（只认带着密钥的请求，见 widgetFsKey.ts）
     if (rest.startsWith(WIDGET_FILES_SEGMENT)) {
+      if (!hasWidgetFsKey(req.headers[WIDGET_FS_KEY_HEADER])) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' })
+        res.end('Forbidden')
+        return
+      }
       const qsIdx = url.indexOf('?')
       const search = new URLSearchParams(qsIdx === -1 ? '' : url.slice(qsIdx + 1))
       serveWidgetFiles(rest, req, res, search).catch((err) => {

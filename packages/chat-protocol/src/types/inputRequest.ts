@@ -73,7 +73,7 @@ export interface AskInputRequest extends InputRequestBase {
   /**
    * 路径询问时,提示前端"此路径是目录"。
    * - 前端据此调整 UI:目录不提供单次放行,「允许此目录」按钮固定携带
-   *   `extra.rememberPath: true`(目录授权天然持久),后端走普通"记住"分支写入 allowList
+   *   `extra.rememberPath: true`(目录授权天然持久),后端走普通"记住"分支写进会话权限表
    * - 仅对 read 模式有意义
    */
   pathIsDirectory?: boolean
@@ -129,7 +129,11 @@ export interface ParentSessionRef {
 }
 
 interface InputResponseBase {
-  /** 工具自定义副作用字段(如 {rememberPath: true}),由工具响应回调消费 */
+  /**
+   * 工具自定义副作用字段，由工具响应回调消费。路径询问的「允许并记住」：`{ rememberPath: true }` 记下问的那条
+   * 路径；`{ rememberPath: '<它所在的某一级文件夹>' }` 记下那个文件夹（安全模块只认真包含它的上级目录，且不许
+   * 是 `/`、不许覆盖家目录 —— 不合格就退回问的那条路径，见 enforce.ts rememberTargetOf）
+   */
   extra?: Record<string, unknown>
   /**
    * 答题方不是用户本人时由**宿主**写上（今天只有一种：父会话代答子会话的 ask）。
