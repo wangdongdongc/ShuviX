@@ -1,0 +1,112 @@
+/**
+ * `CHANNEL_ACCESS`（安全策略的事实 `object.access`）—— 每条请求通道的访问级别。表与通道表的一致性在这里核对：
+ * 请求通道 = `API_TABLE` 与 `API_OVERRIDE_CHANNELS` 里种类为 invoke / send 的通道（与网络分发器同一口径）。
+ *
+ *   CA-1 每条请求通道都有一条归类（缺了就列出来，叫人去 channelAccess.ts 里归类）
+ *   CA-2 没有一条归类的不是请求通道（event 通道、已删掉的通道都不该留着）
+ *   CA-3 每个值都是 read / write / admin 之一
+ *   CA-4 `channelAccessOf` 对不认识的通道回 admin（最严）
+ *   CA-5 几条钉死的抽查（策略写入是 admin、会话列表是 read、发消息是 write ……）
+ */
+import { describe, expect, it } from 'vitest'
+import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
+import { CHANNEL_ACCESS, channelAccessOf, type ChannelAccess } from '../channelAccess'
+
+/** 通道表 + override 里的请求通道（invoke / send） */
+function requestChannels(): Set<string> {
+  const channels = new Set<string>()
+  for (const ns of Object.values(API_TABLE)) {
+    for (const member of Object.values(ns)) {
+      if (member.kind === 'invoke' || member.kind === 'send') channels.add(member.channel)
+    }
+  }
+  for (const ns of Object.values(API_OVERRIDE_CHANNELS)) {
+    for (const member of Object.values(ns)) {
+      if (member !== null && (member.kind === 'invoke' || member.kind === 'send')) {
+        channels.add(member.channel)
+      }
+    }
+  }
+  return channels
+}
+
+const REQUEST_CHANNELS = requestChannels()
+const KEYS = Object.keys(CHANNEL_ACCESS)
+
+describe('CA-1 每条请求通道都有归类', () => {
+  it('CA-1 API_TABLE 与 API_OVERRIDE_CHANNELS 的每条 invoke / send 通道都在 CHANNEL_ACCESS 里', () => {
+    const missing = [...REQUEST_CHANNELS].filter((c) => !Object.hasOwn(CHANNEL_ACCESS, c)).sort()
+    expect(
+      missing,
+      `这些请求通道没有访问级别，请在 src/shared/channelAccess.ts 里给它们归类（read / write / admin）：${missing.join(', ')}`
+    ).toEqual([])
+  })
+})
+
+describe('CA-2 没有多余的归类', () => {
+  it('CA-2 CHANNEL_ACCESS 的每个键都是一条请求通道', () => {
+    const stale = KEYS.filter((c) => !REQUEST_CHANNELS.has(c)).sort()
+    expect(
+      stale,
+      `这些条目不是（或已不是）请求通道，请从 src/shared/channelAccess.ts 里删掉：${stale.join(', ')}`
+    ).toEqual([])
+    expect(KEYS.length).toBe(REQUEST_CHANNELS.size)
+  })
+})
+
+describe('CA-3 取值', () => {
+  it('CA-3 每个值都是 read / write / admin 之一', () => {
+    const allowed: ReadonlySet<string> = new Set<ChannelAccess>(['read', 'write', 'admin'])
+    for (const key of KEYS) expect(allowed.has(CHANNEL_ACCESS[key]), key).toBe(true)
+  })
+})
+
+describe('CA-4 不认识的通道', () => {
+  it('CA-4 channelAccessOf 对不在表里的通道回 admin', () => {
+    expect(channelAccessOf('no-such:channel')).toBe('admin')
+    expect(channelAccessOf('')).toBe('admin')
+    // 原型链上的名字不算在表里
+    expect(channelAccessOf('toString')).toBe('admin')
+    expect(channelAccessOf('__proto__')).toBe('admin')
+    // 表里有的照表回
+    for (const key of KEYS) expect(channelAccessOf(key), key).toBe(CHANNEL_ACCESS[key])
+  })
+})
+
+describe('CA-5 抽查', () => {
+  it.each<[string, ChannelAccess]>([
+    // 改安全 / 配置
+    ['policy:create', 'admin'],
+    ['policy:delete', 'admin'],
+    ['hook:create', 'admin'],
+    ['settings:set', 'admin'],
+    ['mdMeta:setEnabled', 'admin'],
+    ['network:setPort', 'admin'],
+    ['provider:updateConfig', 'admin'],
+    ['update:install', 'admin'],
+    // 返回值带机密
+    ['provider:listAll', 'admin'],
+    ['mcp:list', 'admin'],
+    ['browser-data:site-details', 'admin'],
+    // 驱动 agent / 改用户数据
+    ['agent:prompt', 'write'],
+    ['agent:abort', 'write'],
+    ['agent:respondToInput', 'write'],
+    ['session:create', 'write'],
+    ['session:delete', 'write'],
+    ['files:write', 'write'],
+    ['terminal:write', 'write'],
+    ['app:open-external', 'write'],
+    // 只读
+    ['session:list', 'read'],
+    ['session:getById', 'read'],
+    ['message:list', 'read'],
+    ['policy:list', 'read'],
+    ['provider:listAvailableModels', 'read'],
+    ['network:status', 'read'],
+    ['knowledge:baseOptions', 'read']
+  ])('CA-5 %s → %s', (channel, access) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(channelAccessOf(channel)).toBe(access)
+  })
+})

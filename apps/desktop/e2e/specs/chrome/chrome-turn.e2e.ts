@@ -197,7 +197,7 @@ beforeAll(async () => {
   await seedFakeProvider(app.main, { baseUrl: provider.baseUrl, modelId: MODEL })
   await waitRendererReady(app.main)
   // 出厂不再问新站点：把退役的 ask-on-new-site 原样装成用户策略，站点门才有卡可测
-  seedRetiredPolicy(app, 'ask-on-new-site')
+  await seedRetiredPolicy(app, 'ask-on-new-site')
   newSitePolicyName = await app.main.eval<string>(
     `window.api.policy.list().then((l) => l.find((p) => p.name === 'ask-on-new-site' && p.source === 'user').displayName)`
   )
@@ -712,7 +712,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
   }, 180_000)
 
   it('CTN-6b 出厂不问：撤掉那份用户策略，agent 自己要开的新站点直接开；决策是缺省放行', async () => {
-    removeRetiredPolicy(app, 'ask-on-new-site')
+    await removeRetiredPolicy(app, 'ask-on-new-site')
     try {
       const turn = await start(
         chromeA,
@@ -741,7 +741,7 @@ describe('站点门：每条会话第一次用一个站点时问', () => {
         })
       ])
     } finally {
-      seedRetiredPolicy(app, 'ask-on-new-site')
+      await seedRetiredPolicy(app, 'ask-on-new-site')
     }
   }, 180_000)
 })

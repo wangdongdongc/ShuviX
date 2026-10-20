@@ -49,21 +49,25 @@ export function useAppInit(): void {
         i18next.changeLanguage(savedLang)
       }
 
-      // 并行加载：提供商列表 + 可用模型 + 会话列表（仅主窗口）
-      const promises: [
-        Promise<ProviderInfo[]>,
-        Promise<AvailableModel[]>,
-        Promise<Session[] | null>
-      ] = [
+      // 并行加载：提供商列表 + 可用模型 + 会话列表（仅主窗口）。三样**各管各的**：远程访问时安全策略可能拒掉其中
+      // 一样（只读设备拿不到带 API key 的提供商列表 —— `admin` 通道），不能让它连带会话列表与后面的初始化一起落空
+      const [providersResult, modelsResult, sessionsResult] = await Promise.allSettled([
         window.api.provider.listAll(),
         window.api.provider.listAvailableModels(),
         !isSettingsWindow ? window.api.session.list() : Promise.resolve(null)
-      ]
-      const [allProviders, availableModels, sessions] = await Promise.all(promises)
+      ])
       lap('providers + models + sessions (parallel)')
+      const settled = <T>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
+        if (result.status === 'fulfilled') return result.value
+        console.warn(`[init] ${label} failed: ${String(result.reason)}`)
+        return fallback
+      }
 
-      useSettingsStore.getState().setProviders(allProviders)
-      useSettingsStore.getState().setAvailableModels(availableModels)
+      useSettingsStore.getState().setProviders(settled(providersResult, 'provider.listAll', []))
+      useSettingsStore
+        .getState()
+        .setAvailableModels(settled(modelsResult, 'provider.listAvailableModels', []))
+      const sessions = settled(sessionsResult, 'session.list', null)
       if (sessions) {
         useChatStore.getState().setSessions(sessions)
       }

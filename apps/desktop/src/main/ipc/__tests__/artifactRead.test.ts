@@ -48,7 +48,8 @@ vi.mock('../../services/filesWatcherService', () => ({
 }))
 vi.mock('../../services/filePreviewService', () => ({
   previewSessionFile: vi.fn(),
-  writeSessionFile: vi.fn()
+  writeSessionFile: vi.fn(),
+  resolveSessionFilePath: vi.fn()
 }))
 vi.mock('../../services/previewWindowService', () => ({
   openFileInWindow: vi.fn()

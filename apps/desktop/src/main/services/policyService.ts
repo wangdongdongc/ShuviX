@@ -14,8 +14,28 @@
  * 安全语义与 agentService 的关键差异：**非法用户文件不遮蔽内置同名策略** ——
  * parsePolicyDefinitionFile 返回 null 的文件不进候选（记警告），写坏一份 md
  * 不应意外关掉 workspace-boundary 这类内置保护。
+ *
+ * **统一缓存**（2026-10-19，docs/network-policy/design.md §2）：用户策略目录的扫描结果（可解析的 + 不可解析的）
+ * 缓存在这里，agent 会话的每次判定、远程访问的每个网络请求、侧栏列表都读这一份。缓存按**目录签名**认新旧
+ * （每个 .md 的 名字 + size + mtime + ctime + inode；带 ctime 是因为 Finder 拷贝会保留原文件的修改时间），
+ * 三处刷新：
+ *   - 应用内写入（新建、删除、笔记本保存 —— registryNotes）**同步**标脏，下一次读必然重扫；
+ *   - 判定路径（getUserPolicies）距上次核对超过 POLICY_CHECK_INTERVAL_MS 就核一次签名 —— 覆盖 agent 的
+ *     write / edit、bash、Finder、git 这些不经过本服务的写入，闲着时零开销；列表路径（listForSettings /
+ *     listInvalid / getSource / 删除 / 新建）是用户手动触发的低频操作，每次都核；
+ *   - 远程访问开着时网络服务定时调 refresh()：连着但不发请求的客户端照样在收推送，新加的 deny 要能把它断开。
+ * 签名核对发现的变化（即外部写入）重扫后发一次 `policy.changed`；标脏引起的重扫不发（应用内写入各自发过了）。
+ * 会话授权与 vars 不在这里，照旧每次现取（「允许并记住」落库即生效）。
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from 'fs'
 import { join } from 'path'
 import { shell } from 'electron'
 import {
@@ -35,6 +55,50 @@ import { isKnownDisableableBuiltin } from '../utils/builtinDisable'
 import { createLogger } from '../logger'
 
 const log = createLogger('PolicyService')
+
+/** 判定路径上两次目录签名核对之间至少隔多久（毫秒）—— agent 改写策略后至多这么久生效 */
+export const POLICY_CHECK_INTERVAL_MS = 1000
+
+/** 一次扫描的结果 */
+interface PolicyScan {
+  valid: Array<{ policy: ParsedPolicyFile; fileName: string }>
+  invalid: InvalidPolicyFile[]
+}
+
+/** 缓存：哪个目录、什么签名、扫出了什么（userPolicies 是交给装配的那份，带文件名） */
+interface PolicyScanCache {
+  dir: string
+  signature: string
+  scan: PolicyScan
+  userPolicies: UserPolicyFile[]
+}
+
+/**
+ * 目录签名：每个参与扫描的文件（非点开头的 .md）一段 `名字 size mtime ctime inode`。目录不在 → 空串；
+ * 某个文件 stat 失败（刚被删）→ 那一段记成 `名字 ?`，下次核对自然对不上
+ */
+function directorySignature(dir: string): string {
+  if (!existsSync(dir)) return ''
+  let names: string[]
+  try {
+    names = readdirSync(dir)
+      .filter((name) => !name.startsWith('.') && name.toLowerCase().endsWith('.md'))
+      .sort()
+  } catch {
+    return '?'
+  }
+  return names
+    .map((name) => {
+      try {
+        const st = statSync(join(dir, name))
+        if (!st.isFile()) return `${name} -`
+        return `${name} ${st.size} ${st.mtimeMs} ${st.ctimeMs} ${st.ino}`
+      } catch {
+        return `${name} ?`
+      }
+    })
+    .join('\n')
+}
 
 export interface PolicyListItem extends ParsedPolicyFile {
   source: 'builtin' | 'user'
@@ -80,6 +144,68 @@ class PolicyService {
    */
   private disabledReader: ((objectId: string) => boolean) | null = null
 
+  private cache: PolicyScanCache | null = null
+  /** 应用内写入之后：下一次读必然重扫 */
+  private dirty = true
+  /** 上一次核对签名的时刻 */
+  private lastCheckAt = 0
+  private checkIntervalMs = POLICY_CHECK_INTERVAL_MS
+  private now: () => number = Date.now
+
+  /** 单测用：判定路径的核对间隔与时钟（缺省 POLICY_CHECK_INTERVAL_MS / Date.now） */
+  configureCache(opts: { checkIntervalMs?: number; now?: () => number }): void {
+    if (opts.checkIntervalMs !== undefined) this.checkIntervalMs = opts.checkIntervalMs
+    if (opts.now) this.now = opts.now
+  }
+
+  /** 标脏：应用内写了策略目录（新建、删除、笔记本保存），下一次读必然重扫 */
+  invalidate(): void {
+    this.dirty = true
+  }
+
+  /**
+   * 核一次目录签名（不节流）：变了就重扫并发 `policy.changed`。回：这一次是否发现了变化。
+   * 远程访问开着时网络服务定时调它
+   */
+  refresh(): boolean {
+    const before = this.cache
+    const after = this.scanned('fresh')
+    return before !== null && after !== before
+  }
+
+  /**
+   * 拿扫描结果：标脏 / 没有缓存 / 目录换了 → 重扫；否则按 mode 核签名（`fresh` 每次核，`throttled` 距上次
+   * 超过间隔才核），签名变了 → 重扫并发 `policy.changed`
+   */
+  private scanned(mode: 'fresh' | 'throttled'): PolicyScanCache {
+    const dir = getDefaultPoliciesDir()
+    const now = this.now()
+    const cached = this.cache
+    if (cached === null || this.dirty || cached.dir !== dir) {
+      this.dirty = false
+      this.lastCheckAt = now
+      return this.rescan(dir, directorySignature(dir))
+    }
+    if (mode === 'throttled' && now - this.lastCheckAt < this.checkIntervalMs) return cached
+    this.lastCheckAt = now
+    const signature = directorySignature(dir)
+    if (signature === cached.signature) return cached
+    const next = this.rescan(dir, signature)
+    appEventBus.publish({ type: 'policy.changed' })
+    return next
+  }
+
+  private rescan(dir: string, signature: string): PolicyScanCache {
+    const scan = this.scanDir()
+    this.cache = {
+      dir,
+      signature,
+      scan,
+      userPolicies: scan.valid.map(({ policy, fileName }) => ({ ...policy, fileName }))
+    }
+    return this.cache
+  }
+
   /** 注入停用开关的读口（主进程启动时调一次；null = 撤掉） */
   setDisabledReader(reader: ((objectId: string) => boolean) | null): void {
     this.disabledReader = reader
@@ -93,10 +219,11 @@ class PolicyService {
   /**
    * 评估侧的用户策略来源（SecurityHostProvider.getUserPolicies）：**全部**可解析的用户文件，带文件名、
    * 含同名的几份 —— 谁生效由装配时的 resolvePolicyFiles 裁决，与设置页列表同一个函数。
-   * 现扫、无缓存（决策新鲜度优先；目录小，readdir 微秒级）。非法文件不在其中（不遮蔽内置）。
+   * 读统一缓存（判定路径：至多每 POLICY_CHECK_INTERVAL_MS 核一次目录签名，见文件头）；交回的数组与里面的
+   * 对象是缓存本身，调用方不得改动。非法文件不在其中（不遮蔽内置）。
    */
   getUserPolicies(): UserPolicyFile[] {
-    return this.scanDir().valid.map(({ policy, fileName }) => ({ ...policy, fileName }))
+    return this.scanned('throttled').userPolicies
   }
 
   /**
@@ -107,10 +234,7 @@ class PolicyService {
    * 用外部编辑器写坏一份策略后，它既不生效也不出现在任何界面里 —— 用户无从发现、
    * 更无从修复。invalid 一路带着解析器给出的人读原因回到 UI。
    */
-  private scanDir(): {
-    valid: Array<{ policy: ParsedPolicyFile; fileName: string }>
-    invalid: InvalidPolicyFile[]
-  } {
+  private scanDir(): PolicyScan {
     const dir = getDefaultPoliciesDir()
     if (!existsSync(dir)) return { valid: [], invalid: [] }
 
@@ -167,7 +291,7 @@ class PolicyService {
     const dir = getDefaultPoliciesDir()
     return resolvePolicyFiles(
       buildBuiltinPolicies({ language: i18next.language, readMd: this.readBuiltinPolicyMd }),
-      this.getUserPolicies()
+      this.scanned('fresh').userPolicies
     ).map((entry) => {
       const builtinFile =
         entry.sourceKind === 'builtin' ? this.builtinSourceFile(entry.policy.name) : null
@@ -216,7 +340,7 @@ class PolicyService {
 
   /** 目录里无法解析的策略文件（设置页据此显示可点开修复的告警项） */
   listInvalid(): InvalidPolicyFile[] {
-    return this.scanDir().invalid
+    return this.scanned('fresh').scan.invalid
   }
 
   /**
@@ -300,7 +424,7 @@ class PolicyService {
     const name = parsed.policy.name
     const content = ensureObjectId(text, (t) => parsePolicyDefinitionFile(t, 'policy'))
 
-    if (this.scanDir().valid.some((u) => u.policy.name === name)) {
+    if (this.scanned('fresh').scan.valid.some((u) => u.policy.name === name)) {
       return { success: false, error: `Policy "${name}" already exists` }
     }
 
@@ -319,6 +443,7 @@ class PolicyService {
       log.warn(`新建策略 "${name}" 失败:`, e)
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
+    this.invalidate()
     appEventBus.publish({ type: 'policy.changed' })
     return { success: true, name }
   }
@@ -344,6 +469,7 @@ class PolicyService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除策略文件 "${fileName}"`)
+    this.invalidate()
     appEventBus.publish({ type: 'policy.changed' })
     return { success: true }
   }
@@ -359,6 +485,7 @@ class PolicyService {
       return { success: false, error: e instanceof Error ? e.message : String(e) }
     }
     log.info(`已删除策略 "${name}" (${target.basePath})`)
+    this.invalidate()
     appEventBus.publish({ type: 'policy.changed' })
     return { success: true }
   }

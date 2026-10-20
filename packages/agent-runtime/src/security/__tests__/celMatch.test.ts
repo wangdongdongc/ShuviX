@@ -174,11 +174,17 @@ describe('evaluateMatch — inDir', () => {
     expect(evalBool(expression, docAt('/bots/x', { a: null, b: '' }))).toBe(false)
     expect(evalBool(expression, docAt('/x', { a: null, b: '' }))).toBe(false)
 
-    // 为什么守两个目录要写成两个变量：变量与字面量混排的列表字面量是类型错误（cel-js 列表强类型，
-    // dyn 与 string 不同型）—— 哪怕 vars.a 本身是合法字符串
-    expect(() =>
+    // 变量与字面量混排的列表字面量也成立（2026-10-19 起关掉了 cel-js 的 homogeneousAggregateLiterals：
+    // 从前这是类型错误 —— dyn 与 string 不同型 —— deny 规则会在求值期 fail-safe 成命中一切）
+    expect(
       evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/lit/x', { a: '/bots' }))
-    ).toThrow(/List elements must have the same type/)
+    ).toBe(true)
+    expect(
+      evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/bots/x', { a: '/bots' }))
+    ).toBe(true)
+    expect(
+      evalBool("inDir(object.path, [vars.a, '/lit'])", docAt('/other/x', { a: '/bots' }))
+    ).toBe(false)
   })
 
   it('CM-12e CEL 层不宽恕缺失变量：inDir 目录参数里的缺键（含值为 undefined）照样 throw —— 宽恕只在 assemble', () => {

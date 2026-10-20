@@ -44,6 +44,8 @@ export interface WsClient {
   isOpen(): boolean
   /** 等连接关掉（服务端断开 / 自己关），回关闭码 */
   closed(): Promise<number>
+  /** 等连接关掉，回关闭码与原因（服务端以 1008 断开时原因是规则的话，截到 123 字节） */
+  closedWith(): Promise<{ code: number; reason: string }>
   close(): void
 }
 
@@ -54,6 +56,8 @@ export interface WsConnectOptions {
   origin?: string | null
   /** 单次 invoke 的上限（缺省 15s） */
   timeoutMs?: number
+  /** 升级请求额外带的头（`Cookie: shuvix_device=…` 冒充一台有设备 ID 的浏览器、`User-Agent` …） */
+  headers?: Record<string, string>
 }
 
 /** 线上的位置参数：undefined 的位置记进 `u`（与 networkEnvelope.packArgs 同规矩） */
@@ -74,7 +78,7 @@ export function connectWs(port: number, opts: WsConnectOptions = {}): Promise<Ws
   const host = opts.host ?? '127.0.0.1'
   const origin = opts.origin === undefined ? `http://${host}:${port}` : opts.origin
   const timeoutMs = opts.timeoutMs ?? 15_000
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { ...opts.headers }
   if (origin !== null) headers.Origin = origin
   // Node 22 的全局 WebSocket 是 undici 的实现：第二个参数接受 `{ headers }`（非标准扩展，类型里没有）
   const Ctor = WebSocket as unknown as new (url: string, init: unknown) => WebSocket
@@ -86,6 +90,7 @@ export function connectWs(port: number, opts: WsConnectOptions = {}): Promise<Ws
   const pushListeners = new Set<(channel: string, args: unknown[]) => void>()
   let open = false
   let closeCode: number | undefined
+  let closeReason = ''
   const closeWaiters: Array<(code: number) => void> = []
 
   socket.addEventListener('message', (event) => {
@@ -110,6 +115,7 @@ export function connectWs(port: number, opts: WsConnectOptions = {}): Promise<Ws
   socket.addEventListener('close', (event) => {
     open = false
     closeCode = event.code
+    closeReason = event.reason
     for (const resolve of pending.values()) {
       resolve({
         t: 'result',
@@ -166,6 +172,7 @@ export function connectWs(port: number, opts: WsConnectOptions = {}): Promise<Ws
       closeCode !== undefined
         ? Promise.resolve(closeCode)
         : new Promise<number>((resolve) => closeWaiters.push(resolve)),
+    closedWith: async () => ({ code: await client.closed(), reason: closeReason }),
     close() {
       try {
         socket.close()
@@ -177,7 +184,7 @@ export function connectWs(port: number, opts: WsConnectOptions = {}): Promise<Ws
 
   return new Promise<WsClient>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`websocket to 127.0.0.1:${port} did not open within ${timeoutMs}ms`))
+      reject(new Error(`websocket to ${host}:${port} did not open within ${timeoutMs}ms`))
       try {
         socket.close()
       } catch {

@@ -10724,18 +10724,21 @@ export interface NetworkSettingsShot {
   toggle: string | null
   /** 开关的按钮禁用着（没有这个按钮 → null；无头运行时锁住） */
   toggleDisabled: boolean | null
-  /** 局域网开关（`data-network-lan`：on / off） */
-  lan: string | null
-  /** 局域网开关的按钮禁用着（没有 → null；网络访问关着 / 无头运行时锁住） */
-  lanDisabled: boolean | null
   /** 端口输入框禁用着（没有 → null；无头运行时锁住） */
   portDisabled: boolean | null
-  /** 「只有这台电脑能连」那一行（`data-network-local-only`，网络访问开着、局域网关着时才有）的文字；没有 → null */
-  localOnly: string | null
+  /**
+   * 准入策略的引导（`data-network-admission`：builtin / override / disabled；网络访问开着时才有）—— 谁能连由
+   * network-admission 定，引导按它此刻的状态说话；没有 → null
+   */
+  admission: string | null
+  /** 引导那句话的文字；没有引导 → null */
+  admissionText: string | null
+  /** 「让 agent 帮我设置 / 调整」按钮（`data-network-policy-chat`）的文字；没有 → null */
+  policyChat: string | null
+  /** 「复制提示词」（`data-network-policy-copy`）在屏 */
+  policyCopy: boolean
   /** 无头运行的说明（`data-network-headless`）；没有 → null */
   headlessNote: string | null
-  /** 无头运行时局域网开关下的说明（`data-network-headless-lan`）；没有 → null */
-  headlessLanNote: string | null
   /** 无头运行时端口下的说明（`data-network-headless-port`）；没有 → null */
   headlessPortNote: string | null
   /** 风险说明（`data-network-risk`）的文字 */
@@ -10748,6 +10751,10 @@ export interface NetworkSettingsShot {
   clients: string[]
   /** 那些客户端行的标题文字（= 对端地址），与 `clients` 同序 */
   clientTitles: string[]
+  /** 客户端行里的设备 ID（`data-network-client-device` = 完整的设备 ID；没有设备 ID 的行不出现），DOM 序 */
+  clientDevices: string[]
+  /** 「最近拒绝」的行（`data-network-denial` = 点位，文字 = 摘要），DOM 序（新 → 旧） */
+  denials: Array<{ stage: string; summary: string }>
   /** 监听失败那一行（`data-network-error`）的文字；没有 → null */
   error: string | null
 }
@@ -10756,23 +10763,16 @@ export interface NetworkSettingsPane {
   shot(): Promise<NetworkSettingsShot>
   /** 点开关 */
   clickToggle(): Promise<void>
-  /** 点「允许局域网里的其他设备」开关（按钮禁用着也照点 —— 禁用的按钮不派发 click，调用方据此断言什么也没发生） */
-  clickLan(): Promise<void>
   /**
    * 在端口输入框里填 `text` 并提交（输入框的 onBlur 才提交：native value setter + input 事件，再补一个冒泡的
    * focusout —— 窗口没有 OS 焦点时 blur() 可能什么都不派发，而 React 的 onBlur 听的是 focusout）
    */
   commitPort(text: string): Promise<void>
-  /** 「开放给」那一行（局域网开关开着时才有）的 `data-network-lan-scope`：`all` 或存着的网卡名 / 地址；没有这一行 → null */
-  scope(): Promise<string | null>
-  /** 「开放给」的选项（`{value, text}`，按顺序）与此刻选中的值；没有 select（无头运行 / 没有这一行）→ null */
-  scopeOptions(): Promise<{ value: string; options: Array<{ value: string; text: string }> } | null>
-  /** 「只有 … 网段里的设备能连接」那句（`data-network-lan-only`）；没有 → null */
-  scopeOnly(): Promise<string | null>
-  /** 无头运行时「开放给」下的说明（`data-network-headless-scope`）；没有 → null */
-  headlessScopeNote(): Promise<string | null>
-  /** 在「开放给」里选 `value`（`''` = 所有网络）：native value + 冒泡的 change（React 的 select 听 change） */
-  chooseScope(value: string): Promise<void>
+  /**
+   * 点引导里的「让 agent 帮我设置 / 调整」（`data-network-policy-chat`）：新建会话、勾上 shuvix 知识库，把提示词
+   * 交给主窗口的输入框。按钮不在（网络访问关着）或禁用着（上一次还没走完）→ 抛
+   */
+  clickPolicyChat(): Promise<void>
 }
 
 export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
@@ -10790,16 +10790,17 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
           const el = root?.querySelector(sel)
           return el ? el.disabled === true : null
         }
+        const guide = root?.querySelector('[data-network-admission]')
         return {
           present: !!root,
           toggle: root?.querySelector('[data-network-toggle]')?.getAttribute('data-network-toggle') ?? null,
           toggleDisabled: disabled('[data-network-toggle] button'),
-          lan: root?.querySelector('[data-network-lan]')?.getAttribute('data-network-lan') ?? null,
-          lanDisabled: disabled('[data-network-lan] button'),
           portDisabled: disabled('[data-network-port] input'),
-          localOnly: text('[data-network-local-only]'),
+          admission: guide?.getAttribute('data-network-admission') ?? null,
+          admissionText: guide ? (guide.querySelector('span.select-text')?.textContent ?? '').trim() : null,
+          policyChat: text('[data-network-policy-chat]'),
+          policyCopy: !!root?.querySelector('[data-network-policy-copy]'),
           headlessNote: text('[data-network-headless]'),
-          headlessLanNote: text('[data-network-headless-lan]'),
           headlessPortNote: text('[data-network-headless-port]'),
           risk: (risk?.textContent ?? '').trim(),
           riskVisible: !!rect && rect.width > 0 && rect.height > 0,
@@ -10812,6 +10813,13 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
           clientTitles: [...(root?.querySelectorAll('[data-network-client]') ?? [])].map(
             (e) => (e.textContent ?? '').trim()
           ),
+          clientDevices: [...(root?.querySelectorAll('[data-network-client-device]') ?? [])].map(
+            (e) => e.getAttribute('data-network-client-device') ?? ''
+          ),
+          denials: [...(root?.querySelectorAll('[data-network-denial]') ?? [])].map((e) => ({
+            stage: e.getAttribute('data-network-denial') ?? '',
+            summary: (e.textContent ?? '').trim()
+          })),
           error: root?.querySelector('[data-network-error]')?.textContent?.trim() ?? null
         }
       })()`),
@@ -10823,15 +10831,6 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
         return true
       })()`)
       if (!ok) throw new Error('network access toggle not found')
-    },
-    clickLan: async () => {
-      const ok = await settings.eval<boolean>(`(() => {
-        const button = document.querySelector('[data-network-lan] button')
-        if (!button) return false
-        button.click()
-        return true
-      })()`)
-      if (!ok) throw new Error('network LAN toggle not found')
     },
     commitPort: async (text) => {
       // 输入框在状态拉到之前、以及上一次改动（开关 / 端口）还在等主进程回话时是禁用的 —— 机器忙时这一段
@@ -10857,46 +10856,15 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
         input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
       })()`)
     },
-    scope: () =>
-      settings.eval<string | null>(
-        `document.querySelector('[data-network-lan-scope]')?.getAttribute('data-network-lan-scope') ?? null`
-      ),
-    scopeOptions: () =>
-      settings.eval<{
-        value: string
-        options: Array<{ value: string; text: string }>
-      } | null>(`(() => {
-        const select = document.querySelector('[data-network-lan-scope] select')
-        if (!select) return null
-        return {
-          value: select.value,
-          options: [...select.options].map((o) => ({ value: o.value, text: (o.textContent ?? '').trim() }))
-        }
-      })()`),
-    scopeOnly: () =>
-      settings.eval<string | null>(
-        `document.querySelector('[data-network-lan-only]')?.textContent?.trim() ?? null`
-      ),
-    headlessScopeNote: () =>
-      settings.eval<string | null>(
-        `document.querySelector('[data-network-headless-scope]')?.textContent?.trim() ?? null`
-      ),
-    chooseScope: async (value) => {
-      const result = await settings.eval<{ ok: boolean; values: string[] }>(`(() => {
-        const select = document.querySelector('[data-network-lan-scope] select')
-        if (!select) return { ok: false, values: [] }
-        const values = [...select.options].map((o) => o.value)
-        if (!values.includes(${JSON.stringify(value)})) return { ok: false, values }
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
-        setter.call(select, ${JSON.stringify(value)})
-        select.dispatchEvent(new Event('change', { bubbles: true }))
-        return { ok: true, values }
+    clickPolicyChat: async () => {
+      const state = await settings.eval<string>(`(() => {
+        const button = document.querySelector('[data-network-policy-chat]')
+        if (!button) return 'missing'
+        if (button.disabled) return 'disabled'
+        button.click()
+        return 'clicked'
       })()`)
-      if (!result.ok) {
-        throw new Error(
-          `network scope option ${JSON.stringify(value)} not on screen (got: ${result.values.map((v) => JSON.stringify(v)).join(', ') || 'no select'})`
-        )
-      }
+      if (state !== 'clicked') throw new Error(`network policy chat button ${state}`)
     }
   }
 }

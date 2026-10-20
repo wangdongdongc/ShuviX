@@ -5,11 +5,12 @@
  *
  *   DO-1 每个键都是通道表里某个 invoke 成员的通道
  *   DO-2 没有一个键是 event / send 通道（表或 override 里），也不是 override 通道
- *   DO-3 每个值（原因）是非空字符串；共 22 条
- *   DO-4 network:status / setEnabled / setPort / setLan / setLanInterface 都不是桌面专属
- *   DO-6 `API_TABLE.network` 恰是五条 invoke（status 0 参、setEnabled / setPort / setLan / setLanInterface 各 1 参）
+ *   DO-3 每个值（原因）是非空字符串；共 23 条（2026-10-19 加了 app:open-session-draft）
+ *   DO-4 network:status / setEnabled / setPort 都不是桌面专属
+ *   DO-6 `API_TABLE.network` 恰是三条 invoke（status 0 参、setEnabled / setPort 各 1 参；谁能连由安全策略定，
+ *        局域网开关与「开放给」两条 2026-10-19 去掉了）
  *   DO-7 phase D 的三条新通道（fs:listDirectories / fs:locateFolder / widget:exportForDownload）是 1 参的 invoke，
- *        网络客户端能用（不是桌面专属）；桌面专属仍是 22 条
+ *        网络客户端能用（不是桌面专属）；桌面专属是 23 条
  *   DO-8 会话 fork 的 `session:fork` 是 1 参的 invoke（`API_TABLE.session.fork`），网络客户端能用（不是桌面专属）
  */
 import { describe, expect, it } from 'vitest'
@@ -63,9 +64,9 @@ describe('DO-2 不是 event / send / override 通道', () => {
 })
 
 describe('DO-3 原因与条数', () => {
-  it('DO-3 每个原因是非空字符串；共 22 条', () => {
-    expect(KEYS).toHaveLength(22)
-    expect(new Set(KEYS).size).toBe(22)
+  it('DO-3 每个原因是非空字符串；共 23 条', () => {
+    expect(KEYS).toHaveLength(23)
+    expect(new Set(KEYS).size).toBe(23)
     for (const key of KEYS) {
       const reason = DESKTOP_ONLY_CHANNELS[key]
       expect(typeof reason).toBe('string')
@@ -74,34 +75,26 @@ describe('DO-3 原因与条数', () => {
   })
 })
 
-describe('DO-4 网络设置的五条通道不是桌面专属', () => {
-  it('DO-4 network:status / setEnabled / setPort / setLan / setLanInterface', () => {
-    for (const channel of [
-      'network:status',
-      'network:setEnabled',
-      'network:setPort',
-      'network:setLan',
-      'network:setLanInterface'
-    ]) {
+describe('DO-4 网络设置的三条通道不是桌面专属', () => {
+  it('DO-4 network:status / setEnabled / setPort', () => {
+    for (const channel of ['network:status', 'network:setEnabled', 'network:setPort']) {
       expect(Object.hasOwn(DESKTOP_ONLY_CHANNELS, channel), channel).toBe(false)
     }
   })
 })
 
 describe('DO-6 API_TABLE.network', () => {
-  it('DO-6 恰是五条 invoke', () => {
+  it('DO-6 恰是三条 invoke', () => {
     expect(API_TABLE.network).toStrictEqual({
       status: { kind: 'invoke', channel: 'network:status', args: 0 },
       setEnabled: { kind: 'invoke', channel: 'network:setEnabled', args: 1 },
-      setPort: { kind: 'invoke', channel: 'network:setPort', args: 1 },
-      setLan: { kind: 'invoke', channel: 'network:setLan', args: 1 },
-      setLanInterface: { kind: 'invoke', channel: 'network:setLanInterface', args: 1 }
+      setPort: { kind: 'invoke', channel: 'network:setPort', args: 1 }
     })
   })
 })
 
 describe('DO-7 phase D 的通道', () => {
-  it('DO-7 三条新通道是 1 参的 invoke、不是桌面专属；桌面专属仍是 22 条', () => {
+  it('DO-7 三条新通道是 1 参的 invoke、不是桌面专属；桌面专属是 23 条', () => {
     expect(API_TABLE.fs).toStrictEqual({
       listDirectories: { kind: 'invoke', channel: 'fs:listDirectories', args: 1 },
       locateFolder: { kind: 'invoke', channel: 'fs:locateFolder', args: 1 }
@@ -117,7 +110,7 @@ describe('DO-7 phase D 的通道', () => {
       expect(entries[0].kind, channel).toBe('invoke')
       expect(Object.hasOwn(DESKTOP_ONLY_CHANNELS, channel), channel).toBe(false)
     }
-    expect(KEYS).toHaveLength(22)
+    expect(KEYS).toHaveLength(23)
   })
 })
 

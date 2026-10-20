@@ -62,6 +62,7 @@ vi.mock('fs/promises', async (importOriginal) => {
 })
 vi.mock('../../../utils/paths', () => ({ getSandboxLibsDir: () => LIBS_DIR }))
 vi.mock('../../../services/toolContext', () => ({ resolveProjectConfig: vi.fn() }))
+vi.mock('../../../services/sessionService', () => ({ sessionService: { getById: vi.fn() } }))
 vi.mock('../../../utils/toolUtils/pathUtils', () => ({ resolveReadPath: vi.fn() }))
 
 const SECRET = 'TOP-SECRET-FILE-CONTENT'

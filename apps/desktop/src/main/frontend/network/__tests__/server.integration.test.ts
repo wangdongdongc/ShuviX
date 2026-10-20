@@ -454,7 +454,8 @@ describe('NS-10 / NS-11 升级', () => {
       kind: 'network',
       id: expect.stringMatching(/^ws:\d+$/),
       remoteAddress: '127.0.0.1',
-      userAgent: 'ua/1'
+      userAgent: 'ua/1',
+      device: ''
     })
     expect(seenInCallback).toStrictEqual({ same: true, count: 1 })
   })

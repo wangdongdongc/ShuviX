@@ -18,6 +18,8 @@
  * 本模块不碰 Electron（所有主进程层都能引它：`utils/downloadManager` 也要广播 —— eslint 里它归 main-util）。
  */
 
+import type { NetworkCallFacts } from '../../shared/network'
+
 /** 桌面渲染进程窗口（一个 webContents） */
 export type WindowClientRef = {
   readonly kind: 'window'
@@ -39,6 +41,8 @@ export type NetworkClientRef = {
   readonly remoteAddress: string
   /** 浏览器的 User-Agent（没有 → 空串） */
   readonly userAgent: string
+  /** 浏览器的设备 ID（`shuvix_device` cookie，见 frontend/network/policyGate.ts；没有 → 空串 / 缺省） */
+  readonly device?: string
 }
 
 /** 调用方：桌面窗口，或网络客户端 */
@@ -50,6 +54,11 @@ export interface ClientContext {
   readonly client: ClientRef
   /** 经哪条传输来的：`ipc`（桌面窗口）/ `network`（WebSocket） */
   readonly transport: 'ipc' | 'network'
+  /**
+   * 网络客户端这条连接的事实（对端地址、升级时的请求头 …）—— 处理函数要按安全策略判一个路径时用
+   * （`networkPathVerdict`，见 frontend/network）。桌面窗口 → 没有
+   */
+  readonly network?: NetworkCallFacts
 }
 
 /**

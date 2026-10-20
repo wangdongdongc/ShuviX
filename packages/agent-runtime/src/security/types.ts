@@ -93,6 +93,15 @@ export interface SecuritySubject {
   agentKind?: 'root' | 'spawned'
   /** 派发深度（root=0）；未知时省略 */
   depth?: number
+  /**
+   * 主体的**开放属性**（与 object 同一套：键 = match 里 `subject.<键>`，可以是惰性 getter，求值上下文
+   * 照搬属性描述符，没有规则引用就不计算）。固定字段（kind / agentKind / profile / sessionId / depth）
+   * 恒有值，开放属性不能覆盖它们。今天只有网络主体（`kind: 'network'`，远程访问的浏览器）带：
+   * address / port / localAddress / localPort / family / interface / headers / cookies / device /
+   * userAgent / connection —— 每个阶段都给齐全部键（还拿不到的给空值），同一条规则在哪个阶段求值都
+   * 不会因缺键报错。见 desktop frontend/network/policyGate.ts。
+   */
+  attrs?: Record<string, unknown>
 }
 
 /** 环境：在哪里操作（快照仅供规则条件与决策日志） */
@@ -176,7 +185,14 @@ export interface SecurityRequest {
  * （缺失属性访问按 strict 语义报错 → fail-safe）；策略级 lets 以顶层名字额外注入。
  */
 export interface MatchContext {
-  subject: { kind: string; agentKind: string; profile: string; sessionId: string; depth: number }
+  /** 固定字段恒有值；其余是主体的开放属性（SecuritySubject.attrs） */
+  subject: {
+    kind: string
+    agentKind: string
+    profile: string
+    sessionId: string
+    depth: number
+  } & Record<string, unknown>
   action: string
   tool: { name: string; operation: string }
   object: Record<string, AttrValue>
@@ -744,6 +760,33 @@ export interface SecurityContext {
    * 只有 ask/deny 产生记录。
    */
   enforceInvocation(opts: EnforceOpts): Promise<EnforceOutcome>
+  /**
+   * 不能询问的点位用的判定（远程访问的网络点位）：评估（路径客体照样先解析真实去处），
+   * **先按完整优先级结算，再把 ask（含 force-ask）降级为拒绝** —— force-allow 因此照样压得过 ask。
+   * 不弹窗、不送审查、不记日志（拒绝记录由宿主自己记）。includeForceAllow 恒为 true。
+   */
+  judgeGate(action: string, object: SecurityObject, opts?: { tool?: SecurityToolRef }): GateVerdict
+}
+
+/** 判定所经的工具（match 里的 tool 命名空间） */
+export interface SecurityToolRef {
+  name: string
+  operation?: string
+}
+
+/** judgeGate 的结论 */
+export interface GateVerdict {
+  /** 放行（结算为 allow）；ask / deny 都是 false */
+  allowed: boolean
+  /** 结算原样（降级之前） */
+  decision: SecurityDecision
+  /** 结算为询问、按降级拒绝 */
+  downgraded: boolean
+  /**
+   * 拒绝时给对方看的一句话：命中规则的 prompt；没写 prompt 就是 decision.reason（降级的询问没有
+   * reason，给一句固定说明）。放行时省略
+   */
+  message?: string
 }
 
 // ─────────────────────────── 决策日志 ───────────────────────────

@@ -85,6 +85,8 @@ function withoutMintedId(text: string): string {
 
 beforeEach(() => {
   state.dir = mkdtempSync(join(tmpdir(), 'shuvix-policysvc-'))
+  // 这里的用例直接改盘上文件、紧接着就读：判定路径不节流（节流本身见 PU-C 一节）
+  policyService.configureCache({ checkIntervalMs: 0, now: Date.now })
 })
 afterEach(() => {
   rmSync(state.dir, { recursive: true, force: true })
@@ -407,13 +409,13 @@ describe('policyService —— ask-on-read 不再是内置', () => {
     expect(named[0].overridden).toBeFalsy()
     expect(named[0].overriddenBy).toBeUndefined()
     expect(basename(named[0].basePath)).toBe('ask-on-read.md')
-    // 2026-10-01 起出厂只剩这两份
+    // 2026-10-01 起管 agent 的出厂只剩这两份；2026-10-19 加了管远程访问的 network-admission
     expect(
       rows
         .filter((row) => row.source === 'builtin')
         .map((row) => row.name)
         .sort()
-    ).toEqual(['ask-on-command', 'ask-on-external-path'])
+    ).toEqual(['ask-on-command', 'ask-on-external-path', 'network-admission'])
     expect(rows.some((row) => row.source === 'builtin' && row.name === 'ask-on-read')).toBe(false)
     expect(policyService.listInvalid()).toEqual([])
   })
@@ -642,5 +644,95 @@ describe('policyService —— 停用开关', () => {
     const external = rowOf('ask-on-external-path', 'builtin')!
     expect(external.objectId).toBe(EXT_ID)
     expect(policyService.isDisabled(external)).toBe(false)
+  })
+})
+
+describe('policyService 统一缓存（PU-C）', () => {
+  let clock = 0
+  beforeEach(() => {
+    clock = 1_000_000
+    policyService.configureCache({ checkIntervalMs: 1000, now: () => clock })
+  })
+  afterEach(() => {
+    policyService.configureCache({ checkIntervalMs: 0, now: Date.now })
+  })
+
+  const names = (): string[] => policyService.getUserPolicies().map((p) => p.name)
+
+  it('PU-C1 判定路径节流：间隔内的外部写入看不见，过了间隔就看见；同一份缓存原样交回', () => {
+    writeFileSync(join(state.dir, 'a.md'), policyMd('a'))
+    expect(names()).toEqual(['a'])
+    const first = policyService.getUserPolicies()
+    writeFileSync(join(state.dir, 'b.md'), policyMd('b'))
+    clock += 500
+    expect(policyService.getUserPolicies()).toBe(first)
+    clock += 600
+    expect(names()).toEqual(['a', 'b'])
+  })
+
+  it('PU-C2 列表路径每次都核签名：外部写入立即可见', () => {
+    writeFileSync(join(state.dir, 'a.md'), policyMd('a'))
+    expect(names()).toEqual(['a'])
+    writeFileSync(join(state.dir, 'b.md'), policyMd('b'))
+    expect(policyService.listForSettings().some((p) => p.name === 'b')).toBe(true)
+    writeFileSync(join(state.dir, 'bad.md'), INVALID_MD)
+    expect(policyService.listInvalid().map((f) => f.fileName)).toEqual(['bad.md'])
+  })
+
+  it('PU-C3 签名发现的变化发 policy.changed；没变不发；标脏引起的重扫不发', async () => {
+    const { appEventBus } = await import('../../utils/appEventBus')
+    const seen: string[] = []
+    const off = appEventBus.subscribe((event) => seen.push(event.type))
+    try {
+      writeFileSync(join(state.dir, 'a.md'), policyMd('a'))
+      policyService.refresh()
+      seen.length = 0
+      expect(policyService.refresh()).toBe(false)
+      expect(seen).toEqual([])
+      // 改内容（同名同大小也算：mtime / ctime 变了）
+      writeFileSync(join(state.dir, 'a.md'), policyMd('a').replace('effect: ask', 'effect: ask'))
+      writeFileSync(join(state.dir, 'c.md'), policyMd('c'))
+      expect(policyService.refresh()).toBe(true)
+      expect(seen).toEqual(['policy.changed'])
+      seen.length = 0
+      policyService.invalidate()
+      policyService.getUserPolicies()
+      expect(seen).toEqual([])
+    } finally {
+      off()
+    }
+  })
+
+  it('PU-C4 应用内写入同步标脏：新建 / 删除后紧接着的判定就看得见，不等间隔', () => {
+    expect(names()).toEqual([])
+    expect(policyService.createPolicy(policyMd('fresh')).success).toBe(true)
+    expect(names()).toEqual(['fresh'])
+    expect(policyService.deletePolicy('fresh').success).toBe(true)
+    expect(names()).toEqual([])
+  })
+
+  it('PU-C5 换了目录（每个用例一个临时目录）不认旧缓存', () => {
+    writeFileSync(join(state.dir, 'a.md'), policyMd('a'))
+    expect(names()).toEqual(['a'])
+    const other = mkdtempSync(join(tmpdir(), 'shuvix-policysvc-other-'))
+    const before = state.dir
+    try {
+      state.dir = other
+      expect(names()).toEqual([])
+    } finally {
+      state.dir = before
+      rmSync(other, { recursive: true, force: true })
+    }
+  })
+
+  it('PU-C6 签名带 inode：删掉再建一份同名同大小的文件也认得出来', () => {
+    writeFileSync(join(state.dir, 'a.md'), policyMd('a'))
+    expect(names()).toEqual(['a'])
+    rmSync(join(state.dir, 'a.md'))
+    writeFileSync(join(state.dir, 'tmp.md'), policyMd('z'))
+    writeFileSync(join(state.dir, 'a.md'), policyMd('z'))
+    rmSync(join(state.dir, 'tmp.md'))
+    expect(policyService.refresh()).toBe(true)
+    expect(names()).toEqual(['z'])
   })
 })

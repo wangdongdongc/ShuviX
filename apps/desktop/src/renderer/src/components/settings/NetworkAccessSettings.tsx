@@ -1,28 +1,40 @@
 /**
- * 设置 → 通用 → 网络访问（server mode phase B，docs/server/phase-bc-network-and-web.md §B1）。
+ * 设置 → 通用 → 网络访问（server mode phase B，docs/server/phase-bc-network-and-web.md §B1；网络策略
+ * docs/network-policy/design.md §8）。
  *
- * 两个开关 + 端口：「允许从浏览器访问」开着时只监听 127.0.0.1（只有这台电脑能连，别处经 SSH 隧道 —— 关着局域网开关时
- * 有一行说明）；其下「允许局域网里的其他设备」开着才监听 0.0.0.0（网络访问关着时这个开关不可点）。开着时列出能用来
- * 打开的地址（每个可复制）、连着的浏览器（地址、浏览器、连上的时刻，实时）；监听失败（端口被占 …）时一行原因。
- * **风险写在明面上**（不只收进 `?` 气泡，紧挨着局域网开关）：允许其他设备后局域网里的任何人都能通过 ShuviX 完全
- * 控制这台电脑，没有密码。状态跟着 `network.changed` 重拉。
+ * 一个开关 + 端口：「允许从浏览器访问」开着时监听 0.0.0.0，**谁能连由安全策略 network-admission 定**（2026-10-19，
+ * 从前的「允许局域网里的其他设备」开关与「开放给」网卡选项去掉了）。开着时按准入策略的状态给一段引导：
+ *  - `builtin`：内置那份只放这台电脑 —— 一行 SSH 隧道的说明，加「让 agent 帮我设置」与「复制提示词」；
+ *  - `override`：谁能连由用户自己的 network-admission 决定 —— 一行说明，加「让 agent 帮我调整」与「复制提示词」；
+ *  - `disabled`：准入策略被停用，局域网里任何设备都能连 —— 警告，加同样两个按钮。
+ * 「让 agent 帮我设置」新建一条会话（不属于项目、勾上 shuvix 知识库），把提示词（networkPolicyPrompt.ts，带着此刻的
+ * 端口、地址、连着的设备与它们的设备 ID、最近被拒的几条）填进主窗口那条会话的输入框，不自动发送（web：本标签页
+ * 回到聊天）。**风险写在明面上**：远程访问没有密码，策略放进来的设备能完全控制这台电脑。
  *
- * 局域网开关开着时多一行「开放给」：所有网络，或这台电脑的某一块网卡（只在它的地址上监听、只接受那个网段 ——
- * 一台连着几个局域网的电脑只开放给其中一个）。选的网卡不见了 → 选项里留着它（标「找不到」），状态里是
- * `ENOINTERFACE`，一行原因。
+ * 开着时列出能用来打开的地址（每个可复制）、连着的浏览器（地址、浏览器、设备 ID、连上的时刻，实时）、最近被拒的
+ * 请求（哪个阶段、什么、谁、哪条规则、几次）；监听失败（端口被占 …）时一行原因。状态跟着 `network.changed` 重拉。
  *
- * 无头运行（`shuvix --headless`，状态带 `headless: true`）：网络访问开关显示为开、锁住，局域网开关显示启动时的选择
- * （`--lan`）、锁住，端口也锁住，各带一句说明 —— 主进程本来就拒绝关掉、换共享与换端口（关掉等于把唯一的入口关掉；
- * 后两件让这个浏览器当场断开），这些由命令行 / 服务文件定。
+ * 无头运行（`shuvix --headless`，状态带 `headless: true`）：网络访问开关显示为开、锁住，端口也锁住，各带一句说明 ——
+ * 主进程本来就拒绝关掉与换端口，这些由命令行 / 服务文件定。
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, Copy, Globe, Laptop, MonitorSmartphone, Network, TriangleAlert } from 'lucide-react'
-import { copyToClipboard, useAppEvent } from '@shuvix/chat-ui'
+import {
+  Bot,
+  Check,
+  Copy,
+  Globe,
+  Laptop,
+  MonitorSmartphone,
+  ShieldAlert,
+  ShieldCheck,
+  TriangleAlert
+} from 'lucide-react'
+import { copyToClipboard, getChatApi, useAppEvent } from '@shuvix/chat-ui'
 import {
   isValidNetworkPort,
-  NETWORK_ERROR_NO_INTERFACE,
   type NetworkClientInfo,
+  type NetworkDenialInfo,
   type NetworkStatus
 } from '../../../../shared/network'
 import {
@@ -30,9 +42,9 @@ import {
   SettingsRow,
   SettingsBlock,
   Toggle,
-  InlineInput,
-  InlineSelect
+  InlineInput
 } from './SettingsPrimitives'
+import { buildNetworkPolicyPrompt, NETWORK_POLICY_CHAT_KNOWLEDGE } from './networkPolicyPrompt'
 
 /** 监听失败的原因（主进程给的 Node 错误码或消息）→ 人读的一句 */
 function errorText(
@@ -41,15 +53,12 @@ function errorText(
   error: string
 ): string {
   const port = status.port
-  if (error === NETWORK_ERROR_NO_INTERFACE) {
-    return t('settings.networkErrorNoInterface', { name: status.lanInterface ?? '' })
-  }
   if (error === 'EADDRINUSE') return t('settings.networkErrorInUse', { port })
   if (error === 'EACCES') return t('settings.networkErrorAccess', { port })
   return t('settings.networkErrorOther', { port, error })
 }
 
-function CopyButton({ text }: { text: string }): React.JSX.Element {
+function CopyButton({ text, label }: { text: string; label?: string }): React.JSX.Element {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   useEffect(() => {
@@ -66,12 +75,17 @@ function CopyButton({ text }: { text: string }): React.JSX.Element {
         setCopied(true)
       }}
       className="inline-flex items-center gap-1 text-[11px] text-text-tertiary hover:text-text-secondary"
-      title={t('settings.networkCopy')}
+      title={label ?? t('settings.networkCopy')}
     >
       {copied ? <Check size={11} /> : <Copy size={11} />}
-      {copied ? t('settings.networkCopied') : t('settings.networkCopy')}
+      {copied ? t('settings.networkCopied') : (label ?? t('settings.networkCopy'))}
     </button>
   )
+}
+
+/** 设备 ID 的短写（前 8 位）；完整的在 title 与复制按钮里 */
+function shortDevice(device: string): string {
+  return device.length > 8 ? `${device.slice(0, 8)}…` : device
 }
 
 function ClientRow({ client }: { client: NetworkClientInfo }): React.JSX.Element {
@@ -84,10 +98,101 @@ function ClientRow({ client }: { client: NetworkClientInfo }): React.JSX.Element
       subtitle={
         <span className="block max-w-[420px] truncate" title={client.userAgent}>
           {t('settings.networkConnectedSince', { time: since })}
+          {client.device ? (
+            <span data-network-client-device={client.device} title={client.device}>
+              {` · ${t('settings.networkDevice', { id: shortDevice(client.device) })}`}
+            </span>
+          ) : null}
           {client.userAgent ? ` · ${client.userAgent}` : ''}
         </span>
       }
+      control={client.device ? <CopyButton text={client.device} /> : undefined}
     />
+  )
+}
+
+function DenialRow({ denial }: { denial: NetworkDenialInfo }): React.JSX.Element {
+  const { t } = useTranslation()
+  const at = new Date(denial.lastAt).toLocaleTimeString()
+  const who = [
+    denial.address,
+    denial.device ? t('settings.networkDevice', { id: shortDevice(denial.device) }) : ''
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <SettingsRow
+      icon={<ShieldAlert size={11} className="text-text-tertiary shrink-0" />}
+      title={
+        <span data-network-denial={denial.stage} className="font-mono text-[11px] select-text">
+          {denial.summary}
+        </span>
+      }
+      subtitle={
+        <span className="block max-w-[460px] truncate" title={denial.device || undefined}>
+          {`${at} · ${who} · ${denial.policies.length > 0 ? denial.policies.join(', ') : denial.rule}`}
+          {denial.count > 1 ? ` · ×${denial.count}` : ''}
+          {denial.downgraded ? ` · ${t('settings.networkDenialDowngraded')}` : ''}
+        </span>
+      }
+      control={denial.device ? <CopyButton text={denial.device} /> : undefined}
+    />
+  )
+}
+
+/** 准入策略的状态 → 引导（说明 + 两个按钮） */
+function AdmissionGuide({
+  status,
+  onStart,
+  starting
+}: {
+  status: NetworkStatus
+  onStart: () => void
+  starting: boolean
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const admission = status.admission
+  const tone =
+    admission === 'disabled'
+      ? 'text-warning'
+      : admission === 'override'
+        ? 'text-text-secondary'
+        : 'text-text-tertiary'
+  const Icon =
+    admission === 'disabled' ? TriangleAlert : admission === 'override' ? ShieldCheck : Laptop
+  return (
+    <SettingsBlock>
+      <div data-network-admission={admission} className="space-y-2">
+        <div className={`flex items-start gap-2 text-[11px] leading-relaxed ${tone}`}>
+          <Icon size={12} className="mt-[2px] shrink-0" />
+          <span className="select-text">
+            {t(`settings.networkAdmission_${admission}`, { port: status.port })}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 pl-5">
+          <button
+            type="button"
+            data-network-policy-chat
+            disabled={starting}
+            onClick={onStart}
+            className="inline-flex items-center gap-1 rounded-md border border-border-secondary px-2 py-1 text-[11px] text-text-primary hover:bg-bg-hover disabled:opacity-50"
+          >
+            <Bot size={11} />
+            {t(
+              admission === 'override'
+                ? 'settings.networkPolicyAdjust'
+                : 'settings.networkPolicySetUp'
+            )}
+          </button>
+          <span data-network-policy-copy>
+            <CopyButton
+              text={buildNetworkPolicyPrompt(t, status)}
+              label={t('settings.networkPolicyCopyPrompt')}
+            />
+          </span>
+        </div>
+      </div>
+    </SettingsBlock>
   )
 }
 
@@ -95,6 +200,7 @@ export function NetworkAccessSettings(): React.JSX.Element {
   const { t } = useTranslation()
   const [status, setStatus] = useState<NetworkStatus | null>(null)
   const [busy, setBusy] = useState(false)
+  const [starting, setStarting] = useState(false)
   /** 端口输入框的草稿（null = 跟着状态走） */
   const [portDraft, setPortDraft] = useState<string | null>(null)
   const [portInvalid, setPortInvalid] = useState(false)
@@ -110,30 +216,6 @@ export function NetworkAccessSettings(): React.JSX.Element {
     setBusy(true)
     try {
       setStatus(await window.api.network.setEnabled(!status.enabled))
-    } catch {
-      load()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const toggleLan = async (): Promise<void> => {
-    if (!status || busy) return
-    setBusy(true)
-    try {
-      setStatus(await window.api.network.setLan(!status.lan))
-    } catch {
-      load()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const chooseScope = async (spec: string): Promise<void> => {
-    if (!status || busy) return
-    setBusy(true)
-    try {
-      setStatus(await window.api.network.setLanInterface(spec === '' ? null : spec))
     } catch {
       load()
     } finally {
@@ -162,17 +244,35 @@ export function NetworkAccessSettings(): React.JSX.Element {
     }
   }
 
+  /**
+   * 「让 agent 帮我设置」：新建一条会话（不属于项目），勾上 shuvix 知识库，把提示词交给主窗口那条会话的输入框
+   * （不自动发送）
+   */
+  const startPolicyChat = async (): Promise<void> => {
+    if (!status || starting) return
+    setStarting(true)
+    try {
+      const draft = buildNetworkPolicyPrompt(t, status)
+      const api = getChatApi()
+      const session = await api.session.create({
+        projectId: null,
+        title: t('settings.networkPolicyChatTitle')
+      })
+      await api.session.updateKnowledgeBases({
+        id: session.id,
+        knowledgeBases: [...NETWORK_POLICY_CHAT_KNOWLEDGE]
+      })
+      await window.api.app.openSessionWithDraft({ sessionId: session.id, draft })
+    } catch {
+      load()
+    } finally {
+      setStarting(false)
+    }
+  }
+
   const enabled = status?.enabled ?? false
-  const lan = status?.lan ?? false
-  /** 无头运行：两个开关与端口都锁住（主进程拒绝关掉、换共享与换端口） */
+  /** 无头运行：开关与端口都锁住（主进程拒绝关掉与换端口） */
   const headless = status?.headless === true
-  /** 开放给的网络（设置里存的网卡名 / 地址；空 = 所有网络） */
-  const scope = status?.lanInterface ?? ''
-  const candidates = status?.lanCandidates ?? []
-  /** 存的是某块网卡的地址 → 选中那块网卡（选项的值是网卡名） */
-  const scopeMatch = candidates.find((c) => c.interface === scope || c.address === scope)
-  const scopeMissing = scope !== '' && scopeMatch === undefined
-  const scopeValue = scopeMatch?.interface ?? scope
 
   return (
     <div className="px-5 pb-5" data-network-settings>
@@ -198,68 +298,6 @@ export function NetworkAccessSettings(): React.JSX.Element {
             </div>
           </SettingsBlock>
         )}
-        <SettingsRow
-          icon={<Network size={11} className="text-text-tertiary shrink-0" />}
-          title={t('settings.networkLan')}
-          control={
-            <span data-network-lan={lan ? 'on' : 'off'}>
-              <Toggle
-                on={lan}
-                color="amber"
-                disabled={!status || busy || headless || !enabled}
-                onClick={() => void toggleLan()}
-              />
-            </span>
-          }
-        />
-        {headless && (
-          <SettingsBlock>
-            <div data-network-headless-lan className="text-[11px] text-text-tertiary">
-              {t('settings.networkHeadlessLanNote')}
-            </div>
-          </SettingsBlock>
-        )}
-        {lan && status && (
-          <SettingsRow
-            title={t('settings.networkLanScope')}
-            subtitle={
-              headless ? (
-                <span data-network-headless-scope>{t('settings.networkHeadlessScopeNote')}</span>
-              ) : status.lanNetwork ? (
-                <span data-network-lan-only>
-                  {t('settings.networkLanScopeOnly', { cidr: status.lanNetwork.cidr })}
-                </span>
-              ) : undefined
-            }
-            control={
-              <span data-network-lan-scope={scope === '' ? 'all' : scope}>
-                {headless ? (
-                  <span className="font-mono text-[11px] text-text-secondary">
-                    {scope === '' ? t('settings.networkLanScopeAll') : scope}
-                  </span>
-                ) : (
-                  <InlineSelect
-                    value={scopeValue}
-                    onChange={(v) => void chooseScope(v)}
-                    width={240}
-                  >
-                    <option value="">{t('settings.networkLanScopeAll')}</option>
-                    {candidates.map((c) => (
-                      <option key={c.interface} value={c.interface}>
-                        {`${c.interface} · ${c.cidr}`}
-                      </option>
-                    ))}
-                    {scopeMissing && (
-                      <option value={scope}>
-                        {t('settings.networkLanScopeMissing', { name: scope })}
-                      </option>
-                    )}
-                  </InlineSelect>
-                )}
-              </span>
-            }
-          />
-        )}
         <SettingsBlock>
           <div
             data-network-risk
@@ -269,18 +307,12 @@ export function NetworkAccessSettings(): React.JSX.Element {
             <span>{t('settings.networkRisk')}</span>
           </div>
         </SettingsBlock>
-        {enabled && !lan && status && (
-          <SettingsBlock>
-            <div
-              data-network-local-only
-              className="flex items-start gap-2 text-[11px] leading-relaxed text-text-tertiary"
-            >
-              <Laptop size={12} className="mt-[2px] shrink-0" />
-              <span className="select-text">
-                {t('settings.networkLocalOnly', { port: status.port })}
-              </span>
-            </div>
-          </SettingsBlock>
+        {enabled && status && (
+          <AdmissionGuide
+            status={status}
+            starting={starting}
+            onStart={() => void startPolicyChat()}
+          />
         )}
         <SettingsRow
           title={t('settings.networkPort')}
@@ -350,6 +382,20 @@ export function NetworkAccessSettings(): React.JSX.Element {
               status.clients.map((client) => <ClientRow key={client.id} client={client} />)
             )}
           </SettingsSection>
+
+          {status.denials.length > 0 && (
+            <SettingsSection
+              title={t('settings.networkDenials')}
+              description={t('settings.networkDenialsDesc')}
+            >
+              {status.denials.map((denial) => (
+                <DenialRow
+                  key={`${denial.at}-${denial.stage}-${denial.summary}-${denial.address}`}
+                  denial={denial}
+                />
+              ))}
+            </SettingsSection>
+          )}
         </div>
       )}
     </div>

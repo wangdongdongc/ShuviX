@@ -2,19 +2,23 @@
  * 网络访问（server mode phase B / C）的门、静态路由、设置页那一节、监听失败的那一行、跨重启的持久化，以及经通用设置路径
  * 关掉 —— 全部从外面看：原始 HTTP / 升级握手打到服务上，状态经主窗口 IPC 读，设置页经 pages.ts 读。
  *
- * NW-10 缺省启动；关着时风险说明也看得见，局域网开关关着且点不了
- * NW-11 输入校验：不合法的值什么也不改（setLan 非布尔同样）
- * NW-12 在设置页里打开：只监听 127.0.0.1、只列 127.0.0.1、有「只有这台电脑」那一行；再打开局域网开关 → 0.0.0.0，
- *       地址 = 本机私有 IPv4 接口 + 127.0.0.1（phase D：不再列 localhost）
+ * NW-10 缺省启动；关着时风险说明也看得见，没有准入引导
+ * NW-11 输入校验：不合法的值什么也不改；旧的 setLan / setLanInterface 已经不在 window.api 上
+ * NW-12 在设置页里打开：准入是内置那份（只放这台电脑）→ 只列 127.0.0.1，引导是 builtin 那一段（端口代进去）、
+ *       带「让 agent 帮我设置」与「复制提示词」；库里只有 network.enabled / network.port
  * NW-12b 在设置页里提交端口
  * NW-13 静态路由（web.html、资源、不给桌面入口、不出目录、坏请求、方法）
  * NW-14 普通请求的 Host 门
  * NW-15 升级的门（Host / Origin / 路径）；对的升级成功、设置页实时列出
  * NW-16 别的源的真网页开不了 socket；同源页面可以；关掉 tab 客户端就走
- * NW-17 （有私有网卡时）局域网开关开着，从局域网地址也能打开
- * NW-18 端口被占（占的是此刻绑的地址：局域网开着 → 0.0.0.0）：错误那一行，然后恢复
- * NW-19 设置跨重启保留（含局域网开关）
- * NW-20 （最后）通用的设置路径也能切局域网开关、关掉网络访问（都只认字面量 true）
+ * NW-17 （有私有网卡时）一律监听 0.0.0.0：局域网地址连得上，内置准入以 403 拒绝（不是连不上）；设置页的
+ *       「最近拒绝」列出它
+ * NW-18 端口被占（0.0.0.0 上）：错误那一行，然后恢复
+ * NW-19 设置跨重启保留
+ * NW-20 （最后）旧的 network.lan 经通用设置路径写进去什么也不改（迁移只在启动时）；通用的设置路径能关掉网络访问
+ *       （只认字面量 true）
+ *
+ * 谁能连的策略本身（替换 / 停用 network-admission、通道与断开、引导按钮、旧设置的迁移）在 network-policy.e2e.ts。
  *
  * 约定同 web-client.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；HTTP 探测一律连 127.0.0.1、只伪造 Host 头。
  */
@@ -32,8 +36,8 @@ import {
 import { sleep, until, type CdpClient } from '../../harness/cdp'
 import { freePort, launchApp, type E2EApp } from '../../harness/launch'
 import {
+  BUILTIN_ADMISSION_SENTENCE,
   httpProbe,
-  lanCandidatesOf,
   networkStatus,
   openWebClient,
   privateIPv4Addresses,
@@ -141,16 +145,16 @@ describe('network access: guards, routes and settings', () => {
     expect(initial).toStrictEqual({
       enabled: false,
       port: 7766,
-      lan: false,
-      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
-      clients: []
+      clients: [],
+      admission: 'builtin',
+      denials: []
     })
     expect('error' in initial).toBe(false)
     expect(sqliteJson(app.home, "select key from settings where key like 'network.%'")).toEqual([])
 
-    // 状态拉回来之前两个开关都是禁用的 —— 等网络访问的开关可点了再拍
+    // 状态拉回来之前开关是禁用的 —— 等它可点了再拍
     const shot = await shotWhen(
       (s) => s.toggleDisabled === false,
       'network section in the settings window'
@@ -159,18 +163,20 @@ describe('network access: guards, routes and settings', () => {
       present: true,
       toggle: 'off',
       toggleDisabled: false,
-      lan: 'off',
-      lanDisabled: true,
       portDisabled: false,
-      localOnly: null,
+      admission: null,
+      admissionText: null,
+      policyChat: null,
+      policyCopy: false,
       headlessNote: null,
-      headlessLanNote: null,
       headlessPortNote: null,
       risk: en.settings.networkRisk,
       riskVisible: true,
       addresses: [],
       clients: [],
       clientTitles: [],
+      clientDevices: [],
+      denials: [],
       error: null
     })
   })
@@ -183,14 +189,17 @@ describe('network access: guards, routes and settings', () => {
     expect(await rejectionOf(`window.api.network.setEnabled('true')`)).toContain(
       'enabled must be a boolean'
     )
-    expect(await rejectionOf(`window.api.network.setLan('true')`)).toContain(
-      'lan must be a boolean'
-    )
+    // 「允许局域网里的其他设备」与「开放给」去掉了（谁能连由策略定）：通道连同 preload 上的方法一起不在
+    expect(
+      await app.main.eval<string[]>(
+        `['setLan', 'setLanInterface'].map((name) => typeof window.api.network[name])`
+      )
+    ).toEqual(['undefined', 'undefined'])
     expect(await status()).toMatchObject({
       enabled: false,
       port: 7766,
-      lan: false,
-      listening: false
+      listening: false,
+      admission: 'builtin'
     })
     expect(sqliteJson(app.home, "select key from settings where key like 'network.%'")).toEqual([])
   })
@@ -201,49 +210,33 @@ describe('network access: guards, routes and settings', () => {
     await networkSettingsPane(settings!).clickToggle()
     await until(async () => (await status()).listening, 'listening after the toggle')
 
-    // 缺省只给这台电脑：只监听 127.0.0.1、只列 127.0.0.1
+    // 内置准入只放这台电脑：只列 127.0.0.1（局域网地址列出来也打不开）
     const on = await status()
     expect(on).toMatchObject({
       enabled: true,
       port: P,
       clients: [],
-      lan: false,
-      bindAddress: '127.0.0.1'
+      admission: 'builtin',
+      denials: []
     })
     expect('error' in on).toBe(false)
     expect(on.addresses).toStrictEqual([`http://127.0.0.1:${P}`])
 
     const shot = await shotWhen(
-      (s) => s.toggle === 'on' && s.lanDisabled === false,
+      (s) => s.toggle === 'on' && s.admission !== null && s.addresses.length > 0,
       'settings switch is on'
     )
     expect(shot).toMatchObject({
       toggle: 'on',
-      lan: 'off',
+      admission: 'builtin',
+      admissionText: en.settings.networkAdmission_builtin.replaceAll('{{port}}', String(P)),
+      policyChat: en.settings.networkPolicySetUp,
+      policyCopy: true,
       addresses: on.addresses,
       clients: [],
-      localOnly: en.settings.networkLocalOnly.replaceAll('{{port}}', String(P))
+      denials: []
     })
-
-    // 打开局域网开关：改绑 0.0.0.0，地址 = 私有网卡 + 127.0.0.1（最后）
-    await networkSettingsPane(settings!).clickLan()
-    await until(
-      async () => (await status()).bindAddress === '0.0.0.0',
-      'bound to 0.0.0.0 after the LAN switch'
-    )
-    const shared = await status()
-    expect(shared).toMatchObject({ enabled: true, port: P, lan: true, listening: true })
-    expect(shared.addresses.at(-1)).toBe(`http://127.0.0.1:${P}`)
-    expect([...shared.addresses.slice(0, -1)].sort()).toEqual(
-      privateIPv4Addresses()
-        .map((a) => `http://${a}:${P}`)
-        .sort()
-    )
-    const sharedShot = await shotWhen(
-      (s) => s.lan === 'on' && s.localOnly === null,
-      'settings LAN switch is on'
-    )
-    expect(sharedShot.addresses).toStrictEqual(shared.addresses)
+    expect(shot.admissionText).toContain(`ssh -L ${P}:127.0.0.1:${P}`)
 
     expect(
       sqliteJson<{ key: string; value: string }>(
@@ -252,7 +245,6 @@ describe('network access: guards, routes and settings', () => {
       )
     ).toEqual([
       { key: 'network.enabled', value: 'true' },
-      { key: 'network.lan', value: 'true' },
       { key: 'network.port', value: String(P) }
     ])
   })
@@ -458,16 +450,31 @@ describe('network access: guards, routes and settings', () => {
     await shotWhen((s) => s.clients.length === 0, 'settings show no clients after the tab closed')
   })
 
-  it('NW-17 the listed private addresses open the page from the local network', async (ctx) => {
-    const lan = (await status()).addresses
-      .map((a) => /^http:\/\/(\d+\.\d+\.\d+\.\d+):\d+$/.exec(a)?.[1])
-      .filter((ip): ip is string => ip !== undefined)
+  it('NW-17 every interface is listened on: a private address reaches the server and the builtin admission refuses it', async (ctx) => {
+    const lan = privateIPv4Addresses()
     if (lan.length === 0) ctx.skip()
     for (const ip of lan) {
       const page = await httpProbe({ port: P, connectHost: ip, host: `${ip}:${P}` })
-      expect(page.status, ip).toBe(200)
-      expect(page.body?.equals(webHtml), ip).toBe(true)
+      expect(page.status, ip).toBe(403)
+      expect(page.body?.toString('utf8'), ip).toContain(BUILTIN_ADMISSION_SENTENCE)
+      expect(page.body?.toString('utf8'), ip).toContain(`Address: ${ip}`)
     }
+    const refused = await until(async () => {
+      const s = await status()
+      return s.denials.length === lan.length ? s.denials : null
+    }, 'one denial per private address')
+    expect(refused.map((d) => d.address).sort()).toEqual([...lan].sort())
+    for (const denial of refused) {
+      expect(denial).toMatchObject({
+        stage: 'request',
+        summary: 'GET /',
+        rule: 'network-admission#0'
+      })
+    }
+    // 设置页的「最近拒绝」跟着 network.changed 列出来
+    const shot = await shotWhen((s) => s.denials.length === lan.length, 'settings list the denials')
+    expect(shot.denials).toEqual(refused.map((d) => ({ stage: d.stage, summary: d.summary })))
+    expect(shot.addresses).toEqual([`http://127.0.0.1:${P}`])
   })
 
   it('NW-18 a port in use shows the error row, then recovers', async () => {
@@ -478,16 +485,16 @@ describe('network access: guards, routes and settings', () => {
       server.listen(Pb, '0.0.0.0', () => r())
     })
 
-    // 局域网开关此刻开着（NW-12）：实例绑 0.0.0.0，挡它的也得绑 0.0.0.0（macOS 上不同地址不相撞）
-    expect((await status()).bindAddress).toBe('0.0.0.0')
+    // 实例一律绑 0.0.0.0，挡它的也得绑 0.0.0.0（macOS 上不同地址不相撞）
+    const before = await status()
     expect(await setPort(Pb)).toStrictEqual({
       enabled: true,
       port: Pb,
-      lan: true,
-      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
       clients: [],
+      admission: 'builtin',
+      denials: before.denials,
       error: 'EADDRINUSE'
     })
     // 换端口之前旧的服务已经停了
@@ -530,26 +537,30 @@ describe('network access: guards, routes and settings', () => {
       port: P,
       listening: true,
       clients: [],
-      lan: true,
-      bindAddress: '0.0.0.0'
+      admission: 'builtin',
+      // 拒绝记录只在内存里
+      denials: []
     })
+    expect(restored.addresses).toEqual([`http://127.0.0.1:${P}`])
     const root = await httpProbe({ port: P })
     expect(root.status).toBe(200)
     expect(root.body?.equals(webHtml)).toBe(true)
   }, 120_000)
 
-  it('NW-20 the generic settings path switches it off too (only a literal true enables)', async () => {
-    // 局域网开关：'TRUE' 不算开 → 回到 127.0.0.1；字面量 'true' → 0.0.0.0
-    await app.main.eval(`window.api.settings.set({ key: 'network.lan', value: 'TRUE' })`)
-    await until(async () => {
-      const s = await status()
-      return s.bindAddress === '127.0.0.1' && !s.lan
-    }, 'back on 127.0.0.1 via settings.set')
+  it('NW-20 the old network.lan key does nothing at runtime; the generic settings path switches it off (only a literal true enables)', async () => {
+    // 旧的局域网开关只在启动时迁移成策略（network-policy.e2e.ts NP-7 / NP-8）：开着时经通用设置路径写进去什么也不改
     await app.main.eval(`window.api.settings.set({ key: 'network.lan', value: 'true' })`)
-    await until(async () => {
-      const s = await status()
-      return s.bindAddress === '0.0.0.0' && s.lan
-    }, 'on 0.0.0.0 via settings.set')
+    await sleep(500)
+    expect(await status()).toMatchObject({
+      listening: true,
+      admission: 'builtin',
+      addresses: [`http://127.0.0.1:${P}`]
+    })
+    for (const ip of privateIPv4Addresses()) {
+      expect((await httpProbe({ port: P, connectHost: ip, host: `${ip}:${P}` })).status, ip).toBe(
+        403
+      )
+    }
 
     await app.main.eval(`window.api.settings.set({ key: 'network.enabled', value: 'false' })`)
     await until(async () => !(await status()).listening, 'stopped listening via settings.set')

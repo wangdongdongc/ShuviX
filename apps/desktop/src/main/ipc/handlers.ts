@@ -36,6 +36,7 @@ import { registerLiveDocumentHandlers } from './liveDocumentHandlers'
 import { registerChromeExtensionHandlers } from './chromeExtensionHandlers'
 import { registerSyncHandlers } from './syncHandlers'
 import { registerNetworkHandlers } from './networkHandlers'
+import { registerSessionDraftHandlers } from './sessionDraftHandlers'
 import { registerFsHandlers } from './fsHandlers'
 
 /**
@@ -81,5 +82,6 @@ export function registerIpcHandlers(): void {
   registerChromeExtensionHandlers()
   registerSyncHandlers()
   registerNetworkHandlers()
+  registerSessionDraftHandlers()
   registerFsHandlers()
 }

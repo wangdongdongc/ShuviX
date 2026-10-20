@@ -8,7 +8,8 @@
  * 实现选 @marcbachmann/cel-js（零依赖纯 JS，两端可内联）。
  *
  * 求值上下文（请求文档，见 types.ts MatchContext）：
- *   subject   { kind, agentKind, profile, sessionId, depth }
+ *   subject   { kind, agentKind, profile, sessionId, depth } + 主体的开放属性（网络主体的 address /
+ *             headers / device …，见 types.ts SecuritySubject.attrs）
  *   action    'read' | 'write' | 'execute' | …
  *   tool      { name, operation }（非工具路径为空串 —— tool 是固定命名空间，恒可访问）
  *   object    开放属性文档：{ type } + 各 PEP 上报的属性（path / command / gitAction…）
@@ -17,6 +18,8 @@
  *   （策略级 lets 的求值结果以顶层名字额外注入 —— 见 assemble.ts）
  * 注入函数：
  *   hasShortFlags(argv, 'rf')  argv 里是否带齐这些 GNU 短选项（认 `-rf` / `-fr` / `-r -f`）
+ *   inCidr(ip, cidrs)  ip 是否落在网段（字符串或列表；`a.b.c.d/n`、`x::/n` 或单个地址）里的任一个；
+ *                   IPv4 映射的 IPv6 按 IPv4 比，格式不对的网段永不命中、ip 不是地址为 false（见 cidr.ts）
  *   inDir(p, dirs)  路径段边界的目录包含判定（dirs 接受字符串或字符串列表；
  *                   语义与 allowList 前缀匹配一致，/foo 不命中 /foobar，绑定平台 sep；
  *                   Windows 下两侧分隔符先归一为 '/'，见 matchesPathEntry；
@@ -47,6 +50,7 @@
  */
 import { Environment } from '@marcbachmann/cel-js'
 import { matchesPathEntry } from './allowEntries'
+import { ipInCidrs } from './cidr'
 import type { PolicyVarValue } from './types'
 
 interface SepEnvironment {
@@ -86,7 +90,13 @@ function environmentFor(sep: string): SepEnvironment {
   if (!entry) {
     // unlistedVariablesAreDyn：策略级 lets 的名字是动态的，无法预注册 ——
     // 未知名字到求值期才抛（No such key / Unknown variable），由 fail-safe 兜底
-    const env = new Environment({ unlistedVariablesAreDyn: true })
+    // homogeneousAggregateLiterals 关掉：列表字面量可以混着字符串与 let / vars 的值（`['', phoneDevice]`）。cel-js
+    // 缺省要求同类型，而 lets 与 vars 的值在类型检查里一律是 dyn —— 那样一个看着无害的名单在求值期报错，deny 规则
+    // 按 fail-safe 命中，把所有请求一起拒掉（2026-10-19 远程访问策略实测里 flash 模型就这么写过）
+    const env = new Environment({
+      unlistedVariablesAreDyn: true,
+      homogeneousAggregateLiterals: false
+    })
       .registerFunction('inDir(string, dyn): bool', (p: string, dirs: unknown): boolean => {
         const list = Array.isArray(dirs) ? dirs : [dirs]
         const real = activeRealPath
@@ -114,6 +124,11 @@ function environmentFor(sep: string): SepEnvironment {
         )
         return [...want].every((flag) => clusters.some((c) => c.slice(1).includes(flag)))
       })
+      // 两个参数都按 dyn 收：网络主体的地址恒是字符串，但写错成别的类型时应当是「不命中」而不是
+      // 类型错误 —— 后者在 deny 规则上 fail-safe 成命中，一个手误就把所有连接拒掉
+      .registerFunction('inCidr(dyn, dyn): bool', (ip: unknown, cidrs: unknown): boolean =>
+        ipInCidrs(ip, cidrs)
+      )
     entry = { env, cache: new Map() }
     environments.set(sep, entry)
   }
@@ -199,6 +214,38 @@ export function inDirOnlyVarNames(expression: string): readonly string[] {
   const names = [...dirUses].filter((name) => !otherUses.has(name)).sort()
   dirVarNamesCache.set(expression, names)
   return names
+}
+
+/** 请求文档的命名空间：lets 求值时看不到它们（lets 只按 `{vars}` 算，见 assemble.ts） */
+const REQUEST_NAMESPACES: ReadonlySet<string> = new Set([
+  'subject',
+  'action',
+  'tool',
+  'object',
+  'env'
+])
+
+/**
+ * 表达式里用到的请求文档命名空间（`subject` / `action` / `tool` / `object` / `env`，排序去重）。lets 用了它们必然
+ * 求值失败（「Unknown variable」）—— 解析期据此判整份非法，免得引用它的 deny 规则在求值期一律 fail-safe 命中。
+ * 语法错的表达式回空（另有语法校验）
+ */
+export function requestNamespacesIn(expression: string): string[] {
+  let ast: unknown
+  try {
+    ast = (environmentFor('/').env.parse(expression) as unknown as { ast?: unknown }).ast
+  } catch {
+    return []
+  }
+  const found = new Set<string>()
+  const visit = (node: CelNode): void => {
+    if (node.op === 'id' && typeof node.args === 'string' && REQUEST_NAMESPACES.has(node.args)) {
+      found.add(node.args)
+    }
+    childNodes(node).forEach(visit)
+  }
+  if (isCelNode(ast)) visit(ast)
+  return [...found].sort()
 }
 
 /**

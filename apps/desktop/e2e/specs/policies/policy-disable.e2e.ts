@@ -190,7 +190,7 @@ afterAll(async () => {
 describe('内置安全策略的停用开关', () => {
   it('PD-1 内置行带 objectId 与 disableable；内置行菜单有 toggle-enabled；卡片上的开关开着', async () => {
     const builtins = (await listPolicies()).filter((p) => p.source === 'builtin')
-    expect(builtins.map((p) => p.name).sort()).toEqual([COMMAND_GATE, PATH_GATE])
+    expect(builtins.map((p) => p.name).sort()).toEqual([COMMAND_GATE, PATH_GATE, 'network-admission'])
     for (const p of builtins) {
       expect(p, p.name).toMatchObject({ objectId: `policy:builtin:${p.name}`, disableable: true })
       expect(p.disabled, p.name).toBeUndefined()

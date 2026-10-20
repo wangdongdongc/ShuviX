@@ -11,8 +11,9 @@
  * 读法与桌面协议共用 `utils/fileResponse.ts` / `services/fileServing.ts`（MIME 表、Range 解析、路径解析、库白名单），
  * 回文件的那一段（`utils/httpFile.ts`）与 widget 服务的 `/w/<id>/fs/file` 共用。
  * 只认 GET / HEAD；文件不在 / 不是文件 → 404，没权限 → 403；Range 落在文件外 → 416（后缀范围按 RFC 读）。
- * **不限路径**（用户裁决，与那几个协议一样）。
- * 三道门（对端地址、Host）由服务端在进到这里之前就过完了。
+ * 宿主本身**不限路径**（用户裁决）；限不限由安全策略定：media / download / preview 要读的位置过 path 点位
+ * （`judgePath`，`{type:'path'}` × `read`，tool = `files` + 路由名），拒绝 → 403。
+ * 三道门（对端地址、Host）与 request 点位由服务端在进到这里之前就过完了。
  *
  * 不碰 Electron：路径解析与库读取由调用方交进来（单测给假的或真的 fileServing）。
  */
@@ -25,6 +26,7 @@ import {
   NETWORK_PREVIEW_PATH
 } from '../../../shared/networkRoutes'
 import { plainResponse as plain, sendFileResponse as sendFile } from '../../utils/httpFile'
+import type { GateVerdict } from '@shuvix/agent-runtime'
 
 /** 一条文件路由 */
 export type FileRoute = 'media' | 'preview' | 'download' | 'lib'
@@ -34,7 +36,28 @@ export interface FileRouteDeps {
   readonly resolvePreviewPath: (sessionId: string, path: string) => string
   /** 沙箱库的字节：不在白名单 → undefined；读失败可以抛 */
   readonly readSandboxLib: (name: string) => Promise<Buffer | undefined>
+  /** path 点位（服务端按这个请求的事实绑好的；不给 → 不判）。`path` 是要读的绝对路径 */
+  readonly judgePath?: (path: string, route: FileRoute) => GateVerdict
+  /** 拒绝时的 403 正文（缺省：规则的话） */
+  readonly deniedText?: (verdict: GateVerdict) => string
   readonly logger?: { warn(message: string): void }
+}
+
+/** 过 path 点位：放行 → true；拒绝 → 已经回了 403，false */
+function admitPath(
+  res: ServerResponse,
+  deps: FileRouteDeps,
+  path: string,
+  route: FileRoute
+): boolean {
+  const verdict = deps.judgePath?.(path, route)
+  if (!verdict || verdict.allowed) return true
+  plain(
+    res,
+    403,
+    deps.deniedText?.(verdict) ?? `${verdict.message ?? 'Refused by a security policy.'}\n`
+  )
+  return false
 }
 
 /** 路径（不含查询串）→ 文件路由；不是文件路由 → undefined */
@@ -86,11 +109,13 @@ export async function serveFileRoute(
       case 'media': {
         const path = absolutePathParam(url)
         if (path === undefined) return plain(res, 400, 'Bad request.')
+        if (!admitPath(res, deps, path, route)) return
         return await sendFile(req, res, path)
       }
       case 'download': {
         const path = absolutePathParam(url)
         if (path === undefined) return plain(res, 400, 'Bad request.')
+        if (!admitPath(res, deps, path, route)) return
         return await sendFile(req, res, path, {
           'Content-Disposition': attachmentDisposition(basename(path)),
           'Cache-Control': 'no-store'
@@ -108,6 +133,7 @@ export async function serveFileRoute(
         } catch {
           return plain(res, 404, 'Not found.')
         }
+        if (!admitPath(res, deps, path, route)) return
         return await sendFile(req, res, path)
       }
       case 'lib': {

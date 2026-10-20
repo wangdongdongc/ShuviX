@@ -1,17 +1,20 @@
 /**
  * 桌面应用与无头运行共用一份数据（docs/headless/design.md §1 Lifecycle）—— 同一个 HOME 上依次：桌面 → 无头 → 桌面。
- * 桌面开着时要无头的第二个实例说「先退出桌面应用」（退出码 1）、桌面也不弹窗；无头运行取设置里的端口，但不读局域网
- * 开关、不写任何设置；SIGINT 让它好好退出；之后的桌面应用一切照旧。
+ * 桌面开着时要无头的第二个实例说「先退出桌面应用」（退出码 1）、桌面也不弹窗；无头运行取设置里的端口，但不读旧的局域网
+ * 开关（也不迁移它）、不写任何设置；SIGINT 让它好好退出；之后的桌面应用照旧，并在启动时把旧开关迁移成策略。
  *
- * HD-1 桌面启动：状态没有 headless 键、网络访问关着；存一个空闲端口 P（照旧不监听）；关着时也存下局域网开关
+ * HD-1 桌面启动：状态没有 headless 键、网络访问关着；存一个空闲端口 P（照旧不监听）；再像老版本那样留下旧的局域网
+ *      开关（network.lan 'true'，经通用设置路径写 —— 运行中什么也不改，迁移只在启动时）
  * HD-2 关掉主窗口后，`--headless` / SHUVIX_HEADLESS=1 的第二个实例 → 退出码 1、那一行；主窗口没有被带回来
  * HD-3 留着一份过期的 headless.json（pid 已退出；或 pid 活着但不是锁的持有者）→ 照样说桌面在跑、退出码 1；不开窗
  * HD-4 同一个 HOME 上 `--help` → 0 + 用法；不开窗
  * HD-5 对照：不带参数的第二个实例 → 0、没有 `ShuviX headless:` 那种行、主窗口回来
  * HD-6 桌面退出后同一个 HOME 无头启动（环境变量、命令行不带 --port）：就绪那一行只有 127.0.0.1:P；状态端口 P、headless、
- *      lan false、绑 127.0.0.1；设置照旧（network.enabled 不是 'true'、network.port 'P'、network.lan 'true'）
+ *      准入 builtin；设置照旧（network.enabled 不是 'true'、network.port 'P'、network.lan 'true'）；没写 network-admission
+ *      策略（无头只按自己的 --lan / --bind 迁移）
  * HD-7 SIGINT → 进程自己退出；开始退出 / 退出完各恰一行；地址文件删掉
- * HD-8 再以桌面启动：网络访问关着、不监听、端口 P、lan true、没有 headless / bindAddress；没有地址文件
+ * HD-8 再以桌面启动：网络访问关着、不监听、端口 P、没有 headless；旧的局域网开关迁移成 network-admission 用户策略
+ *      （规则为空），两个旧键删掉、准入 override；没有地址文件
  */
 import { spawn } from 'node:child_process'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
@@ -27,7 +30,12 @@ import {
   type E2EAppBase,
   type E2EHeadlessApp
 } from '../../harness/launch'
-import { networkStatus, type NetworkStatus } from '../../harness/networkFixtures'
+import {
+  NETWORK_ADMISSION_FILE,
+  networkStatus,
+  readUserPolicy,
+  type NetworkStatus
+} from '../../harness/networkFixtures'
 import { sqliteJson } from '../../harness/seed'
 import { connectWs } from '../../harness/wsClient'
 
@@ -81,7 +89,7 @@ afterAll(async () => {
 })
 
 describe('headless and the desktop app share one data directory', () => {
-  it('HD-1 desktop launch: not headless, off; a saved free port and the LAN switch', async () => {
+  it('HD-1 desktop launch: not headless, off; a saved free port and the old LAN switch', async () => {
     d = await launchApp()
     home = d.home
     const initial = await networkStatus(d.main)
@@ -90,8 +98,14 @@ describe('headless and the desktop app share one data directory', () => {
     P = await freePort()
     const saved = await d.main.eval<NetworkStatus>(`window.api.network.setPort(${P})`)
     expect(saved).toMatchObject({ enabled: false, port: P, listening: false })
-    const lan = await d.main.eval<NetworkStatus>('window.api.network.setLan(true)')
-    expect(lan).toMatchObject({ enabled: false, lan: true, listening: false })
+    // 老版本留下的「允许局域网里的其他设备」：运行中写进去什么也不改（迁移只在启动时）
+    await d.main.eval(`window.api.settings.set({ key: 'network.lan', value: 'true' })`)
+    expect(await networkStatus(d.main)).toMatchObject({
+      enabled: false,
+      listening: false,
+      admission: 'builtin'
+    })
+    expect(readUserPolicy(home, NETWORK_ADMISSION_FILE)).toBeNull()
     expect(networkSettings()).toEqual([
       { key: 'network.lan', value: 'true' },
       { key: 'network.port', value: String(P) }
@@ -138,9 +152,7 @@ describe('headless and the desktop app share one data directory', () => {
   it('HD-4 --help on the same HOME prints the usage; no window appears', async () => {
     const result = await runToExit({ home, args: ['--help'] })
     expect(result.code, result.output.slice(-1500)).toBe(0)
-    expect(result.stdout).toContain(
-      'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]'
-    )
+    expect(result.stdout).toContain('Usage: shuvix --headless [--port <n>]\n')
     await sleep(1500)
     expect(await hasMainWindow(d!)).toBe(false)
   }, 90_000)
@@ -152,7 +164,7 @@ describe('headless and the desktop app share one data directory', () => {
     await until(() => hasMainWindow(d!), 'the main window comes back', 60_000)
   }, 90_000)
 
-  it('HD-6 headless on the same HOME takes the saved port, not the LAN switch, and writes nothing', async () => {
+  it('HD-6 headless on the same HOME takes the saved port, not the old LAN switch, and writes nothing', async () => {
     await d!.stop({ keepHome: true })
     d = undefined
     h = await launchApp({ home, headless: true, viaEnv: true, networkPort: 'setting' })
@@ -164,8 +176,8 @@ describe('headless and the desktop app share one data directory', () => {
       expect(s).toMatchObject({
         port: P,
         headless: true,
-        lan: false,
-        bindAddress: '127.0.0.1',
+        admission: 'builtin',
+        addresses: [`http://127.0.0.1:${P}`],
         listening: true
       })
     } finally {
@@ -175,6 +187,8 @@ describe('headless and the desktop app share one data directory', () => {
     expect(saved.find((r) => r.key === 'network.enabled')?.value).not.toBe('true')
     expect(saved.find((r) => r.key === 'network.port')?.value).toBe(String(P))
     expect(saved.find((r) => r.key === 'network.lan')?.value).toBe('true')
+    expect(h.stdout()).not.toContain('is deprecated')
+    expect(readUserPolicy(home, NETWORK_ADMISSION_FILE)).toBeNull()
   }, 120_000)
 
   it('HD-7 SIGINT quits it gracefully', async () => {
@@ -189,12 +203,21 @@ describe('headless and the desktop app share one data directory', () => {
     h = undefined
   }, 90_000)
 
-  it('HD-8 the desktop app afterwards: off, the saved port and LAN switch, not headless', async () => {
+  it('HD-8 the desktop app afterwards: off, the saved port, not headless; the old LAN switch became a policy', async () => {
     d2 = await launchApp({ home })
     const s = await networkStatus(d2.main)
-    expect(s).toMatchObject({ enabled: false, listening: false, port: P, lan: true })
+    expect(s).toMatchObject({
+      enabled: false,
+      listening: false,
+      port: P,
+      addresses: [],
+      admission: 'override'
+    })
     expect('headless' in s).toBe(false)
-    expect('bindAddress' in s).toBe(false)
+    const policy = readUserPolicy(home, NETWORK_ADMISSION_FILE)
+    expect(policy).toContain('name: network-admission\n')
+    expect(policy).toContain('shuvix-policy-rules: []\n')
+    expect(networkSettings()).toEqual([{ key: 'network.port', value: String(P) }])
     expect(existsSync(join(d2.userData, 'headless.json'))).toBe(false)
     await d2.stop({ keepHome: true })
     d2 = undefined

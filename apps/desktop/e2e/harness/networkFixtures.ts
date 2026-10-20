@@ -4,16 +4,22 @@
  * 只放原始的网络与 IPC 小工具，不放任何 DOM 选择器（那些在 pages.ts：`webClientPane` / `networkSettingsPane`）：
  *
  *   networkStatus(main)         `window.api.network.status()`（主窗口的 IPC）
- *   privateIPv4Addresses()      spec 进程自己看到的私有 IPv4 网卡地址（服务在局域网共享时列出的应当恰是这些）
- *   lanCandidatesOf()           spec 进程自己算的「开放给」候选：每块非内部网卡的第一个私有 IPv4（网卡名排序，
- *                               `{interface, address, cidr}`）—— 状态里的 `lanCandidates` 应当恰是这一份
+ *   privateIPv4Addresses()      spec 进程自己看到的私有 IPv4 网卡地址（准入策略被替换 / 停用之后列出的应当恰是这些）
+ *   privateIPv4Networks()       每块非内部网卡的第一个私有 IPv4 与它的网段（网卡名排序，`{interface, address, cidr}`）——
+ *                               旧的「开放给」设置 / `--bind` 迁移成策略时写进去的就是这个网段
+ *   writeUserPolicy(home, …)    往隔离实例的 `~/.shuvix/policies` 写一份用户策略（策略目录现扫：远程访问开着时
+ *                               至多 3 秒、判定路径至多 1 秒就生效）；removeUserPolicy / readUserPolicy 同一个目录
+ *   openAdmissionPolicy()       一份替换内置 network-admission 的用户策略原文：规则为空（任何私有地址都能连）
+ *   loopbackOnlyPolicy(prompt)  与内置同形、只换了那句话的 network-admission（只放这台电脑）
+ *   deviceCookieOf(headers)     应答 `Set-Cookie` 里发的设备 ID（`shuvix_device`）与它的属性；没发 → null
+ *   networkDenialLines(app)     主进程日志里的 `network_denial` 行（每个合并窗口一行，比 status 的最近 20 条全）
  *   httpProbe(opts)             一次普通 HTTP 请求：**永远连 127.0.0.1**（或显式给的 `connectHost`），只伪造 `Host` 头 ——
  *                               服务只绑 IPv4，`localhost` 在 macOS 上可能先解析成 ::1
  *   rawHttpProbe(port, text)    原样写一段请求报文（Node 的 http 客户端只会说 HTTP/1.1、总要带 Host）
  *   upgradeProbe(opts)          一次 WebSocket 升级握手（101 → 交出 socket，调用方要尽快 `destroy()`：服务端每 30s
  *                               ping 一次，不回 pong 的连接下一拍被断开）
- *   openWebClient(app, port)    在应用自己的浏览器里开一个 `http://127.0.0.1:<port>/` 的 tab，连上它的 DevTools，
- *                               等到 web 客户端的 `window.api` 真的连通、React 挂上
+ *   openWebClient(app, port)    在应用自己的浏览器里开一个 `http://127.0.0.1:<port>/`（或 `{host}` 给的局域网地址）的
+ *                               tab，连上它的 DevTools，等到 web 客户端的 `window.api` 真的连通、React 挂上
  *   wsInvokeInPage(page, …)     在 web 页面里**另开**一条 WebSocket（浏览器自己带 Origin），发原始的 invoke 帧，
  *                               只收对应 id 的结果帧（推送帧照样会来），然后关掉
  *   shellOpens(app)             实例交给系统文件管理器的路径（bootstrap.cjs 把 `shell.openPath` / `showItemInFolder`
@@ -28,7 +34,7 @@
  * 零依赖：只用 Node 自带的 `node:http` / `node:net` / `node:crypto`。
  */
 import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { request, type IncomingHttpHeaders } from 'node:http'
 import { connect as netConnect, type Socket } from 'node:net'
 import { networkInterfaces } from 'node:os'
@@ -43,11 +49,31 @@ export interface NetworkClientInfo {
   id: string
   remoteAddress: string
   userAgent: string
+  /** 浏览器带来的设备 ID（`shuvix_device` cookie）；没有 → 空串 */
+  device: string
   connectedAt: number
 }
 
-/** 一个可以开放给的网络（`network:status` 的 `lanNetwork` / `lanCandidates`） */
-export interface NetworkLanInfo {
+/** 一条（一分钟内合并的）网络点位上的拒绝（`network:status` 的 `denials`，新 → 旧，至多 20 条） */
+export interface NetworkDenialInfo {
+  at: number
+  lastAt: number
+  count: number
+  /** 哪个点位（策略里的 object.type） */
+  stage: 'socket' | 'request' | 'channel' | 'path'
+  /** `GET /`、`session:create`、`read /…` */
+  summary: string
+  address: string
+  /** 设备 ID（第一次来、刚发了新 ID 的给新 ID；没有 → 空串） */
+  device: string
+  /** 胜出的规则（`network-admission#0`） */
+  rule: string
+  policies: string[]
+  downgraded: boolean
+}
+
+/** 一块网卡上的私有 IPv4 与网段（privateIPv4Networks） */
+export interface PrivateIPv4Network {
   interface: string
   address: string
   /** `192.168.50.10/24` */
@@ -57,19 +83,17 @@ export interface NetworkLanInfo {
 export interface NetworkStatus {
   enabled: boolean
   port: number
-  /** 允许局域网里的其他设备（关 → 只监听 127.0.0.1） */
-  lan: boolean
-  /** 只开放给哪个网络（设置 `network.lanInterface` / 无头的 `--bind`，原样）；所有网络 → 没有 */
-  lanInterface?: string
-  /** 此刻正只开放给的那个网络（指定了网络且真在监听时）；否则没有 */
-  lanNetwork?: NetworkLanInfo
-  /** 能挑的网络（每块非内部网卡的第一个私有 IPv4，网卡名排序） */
-  lanCandidates: NetworkLanInfo[]
-  /** 此刻监听的地址（`127.0.0.1` / `0.0.0.0`）；没在监听 → 没有 */
-  bindAddress?: string
   listening: boolean
+  /**
+   * 能用来打开的地址：内置准入（只放这台电脑）→ 只有 `http://127.0.0.1:<port>`；被替换 / 停用 → 每个私有 IPv4
+   * 网卡一条 + `http://127.0.0.1:<port>`（最后）
+   */
   addresses: string[]
   clients: NetworkClientInfo[]
+  /** network-admission 此刻的状态：内置那份 / 用户的同名策略替换了它 / 生效的那份被停用了 */
+  admission: 'builtin' | 'override' | 'disabled'
+  /** 最近的拒绝（新 → 旧，至多 20 条） */
+  denials: NetworkDenialInfo[]
   error?: string
   /** 无头运行 → true；桌面 → 没有 */
   headless?: true
@@ -115,11 +139,12 @@ function prefixOfNetmask(netmask: string): number | undefined {
 }
 
 /**
- * spec 进程自己算的「开放给」候选：每块非内部网卡上的第一个私有 IPv4（判断同 `privateIPv4Addresses`），按网卡名排序，
- * 网段取 Node 给的 cidr（没有就按掩码算；算不出就不列）。手写，不引产品的 lanScope.ts
+ * 每块非内部网卡上的第一个私有 IPv4（判断同 `privateIPv4Addresses`）与它的网段，按网卡名排序；网段取 Node 给的
+ * cidr（没有就按掩码算；算不出就不列）。旧的「开放给」设置（`network.lanInterface`）与无头的 `--bind <网卡>` 迁移成
+ * network-admission 策略时，写进 `inCidr` 的就是这个网段（产品同样取那块网卡第一个 IPv4 的 cidr）。手写，不引产品代码
  */
-export function lanCandidatesOf(): NetworkLanInfo[] {
-  const out: NetworkLanInfo[] = []
+export function privateIPv4Networks(): PrivateIPv4Network[] {
+  const out: PrivateIPv4Network[] = []
   const all = networkInterfaces()
   for (const name of Object.keys(all).sort()) {
     const entry = (all[name] ?? []).find((e) => {
@@ -138,6 +163,129 @@ export function lanCandidatesOf(): NetworkLanInfo[] {
     const prefix = Number.isInteger(fromCidr) ? fromCidr : prefixOfNetmask(entry.netmask)
     if (prefix === undefined) continue
     out.push({ interface: name, address: entry.address, cidr: `${entry.address}/${prefix}` })
+  }
+  return out
+}
+
+// ─── 网络策略（docs/network-policy/design.md）───────────────────────────
+
+/** 管谁能连的那份策略的文件名（内置一份；用户写同名文件替换它） */
+export const NETWORK_ADMISSION_FILE = 'network-admission.md'
+
+/** 内置 network-admission 拒绝时那句话的第一句（en；e2e 按值钉住） */
+export const BUILTIN_ADMISSION_SENTENCE =
+  'This ShuviX only accepts connections from the computer it runs on.'
+
+/** 隔离实例的用户策略目录（fake HOME 下的 `~/.shuvix/policies`） */
+export function userPoliciesDir(home: string): string {
+  return join(home, '.shuvix', 'policies')
+}
+
+/** 写一份用户策略（目录不在就建）；回文件路径 */
+export function writeUserPolicy(home: string, fileName: string, text: string): string {
+  const dir = userPoliciesDir(home)
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, fileName)
+  writeFileSync(file, text)
+  return file
+}
+
+/** 删一份用户策略（不在也不报错） */
+export function removeUserPolicy(home: string, fileName: string): void {
+  rmSync(join(userPoliciesDir(home), fileName), { force: true })
+}
+
+/** 读一份用户策略的原文；不在 → null */
+export function readUserPolicy(home: string, fileName: string): string | null {
+  const file = join(userPoliciesDir(home), fileName)
+  return existsSync(file) ? readFileSync(file, 'utf8') : null
+}
+
+/** 替换内置 network-admission 的用户策略：规则为空 —— 任何私有地址的设备都能连（写死的私有地址门仍在） */
+export function openAdmissionPolicy(displayName = 'E2E open admission'): string {
+  return [
+    '---',
+    'shuvix: policy v1',
+    'name: network-admission',
+    `shuvix-displayName: ${displayName}`,
+    'shuvix-policy-rules: []',
+    '---',
+    '',
+    'e2e: every device on a private network can connect.',
+    ''
+  ].join('\n')
+}
+
+/**
+ * 只放这台电脑的网络策略（与内置 network-admission 同形，话换成 `prompt`）：对端不是 127/8、::1 的每个 HTTP 请求
+ * （含 WebSocket 升级）都拒绝。`name` 缺省 network-admission（替换内置那份）
+ */
+export function loopbackOnlyPolicy(prompt: string, name = 'network-admission'): string {
+  return [
+    '---',
+    'shuvix: policy v1',
+    `name: ${name}`,
+    'shuvix-policy-scope:',
+    '  subject.kind: [network]',
+    '  object.type: [request]',
+    'shuvix-policy-rules:',
+    '  - effect: deny',
+    '    action: [request]',
+    `    match: "!inCidr(subject.address, ['127.0.0.0/8', '::1'])"`,
+    `    prompt: ${prompt}`,
+    '---',
+    ''
+  ].join('\n')
+}
+
+/** 应答里发的设备 cookie */
+export interface DeviceCookie {
+  /** 设备 ID（16 个随机字节的 base64url，22 个字符） */
+  value: string
+  /** 整条 `Set-Cookie`（属性原样） */
+  header: string
+}
+
+/** 应答 `Set-Cookie` 里的 `shuvix_device`；没发 → null */
+export function deviceCookieOf(headers: IncomingHttpHeaders | undefined): DeviceCookie | null {
+  const raw = headers?.['set-cookie'] ?? []
+  for (const header of Array.isArray(raw) ? raw : [raw]) {
+    const match = /^shuvix_device=([^;]*)/.exec(header)
+    if (match) return { value: match[1], header }
+  }
+  return null
+}
+
+/** 主进程日志里的一行 `network_denial`（NetworkDenialLog 每个合并窗口写一行） */
+export interface NetworkDenialLine {
+  stage: string
+  summary: string
+  address: string
+  /** 设备 ID 的前 8 位；没有 → 空串 */
+  device: string
+  rule: string
+  downgraded: boolean
+}
+
+/**
+ * 主进程日志里的 `network_denial` 行，按出现顺序。行的形状（policyGate.ts，e2e 按值钉住）：
+ * `network_denial <stage> <JSON 摘要> from <地址>[ device <前 8 位>] by <规则>[ (ask treated as deny)]`
+ */
+export function networkDenialLines(app: Pick<E2EAppBase, 'mainLog'>): NetworkDenialLine[] {
+  const out: NetworkDenialLine[] = []
+  const re =
+    /network_denial (\w+) ("(?:[^"\\]|\\.)*") from (\S*)(?: device (\S+))? by (\S+)( \(ask treated as deny\))?/
+  for (const line of app.mainLog().split('\n')) {
+    const m = re.exec(line)
+    if (!m) continue
+    out.push({
+      stage: m[1],
+      summary: JSON.parse(m[2]) as string,
+      address: m[3],
+      device: m[4] ?? '',
+      rule: m[5],
+      downgraded: m[6] !== undefined
+    })
   }
   return out
 }
@@ -331,7 +479,7 @@ export interface WebClientHandle {
   page: CdpClient
   /** 浏览器 tab 的 id（`browserView.closeTab` 用） */
   tabId: string
-  /** 页面地址（`http://127.0.0.1:<port>/`） */
+  /** 页面地址（`http://127.0.0.1:<port>/`，或 `http://<host>:<port>/`） */
   url: string
   /** 断开 DevTools、关掉 tab（不抛） */
   close(): Promise<void>
@@ -340,10 +488,16 @@ export interface WebClientHandle {
 /**
  * 在应用自己的浏览器（没有 preload 的 WebContentsView）里开 web 客户端：
  * 建 tab → 按**完全相等**的地址连上它的 DevTools target → 等 `app.platform === 'web'` → 等一次 invoke 真的回来
- * （第一次连上之前的调用会排着，所以它回来就证明 socket 通了）→ 等 React 挂上
+ * （第一次连上之前的调用会排着，所以它回来就证明 socket 通了）→ 等 React 挂上。
+ * `host`：从这台电脑的局域网地址打开（`http://<host>:<port>/` —— 对端地址就是它，网络策略据此把它当「别的设备」）；
+ * 缺省 127.0.0.1
  */
-export async function openWebClient(app: E2EApp, port: number): Promise<WebClientHandle> {
-  const url = `http://127.0.0.1:${port}/`
+export async function openWebClient(
+  app: E2EApp,
+  port: number,
+  opts: { host?: string } = {}
+): Promise<WebClientHandle> {
+  const url = `http://${opts.host ?? '127.0.0.1'}:${port}/`
   const tabId = await app.main.eval<string>(
     `window.api.browserView.createTab(${JSON.stringify(url)})`
   )

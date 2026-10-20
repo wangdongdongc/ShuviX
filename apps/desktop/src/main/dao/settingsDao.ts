@@ -27,6 +27,11 @@ export class SettingsDao extends BaseDao {
   upsert(key: string, value: string): void {
     this.stmt('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value)
   }
+
+  /** 删掉一个设置（迁移走的旧键用）；不在 → 什么也不做 */
+  remove(key: string): void {
+    this.stmt('DELETE FROM settings WHERE key = ?').run(key)
+  }
 }
 
 export const settingsDao = new SettingsDao()

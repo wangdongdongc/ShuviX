@@ -9,6 +9,9 @@
  *    IPC 通道的处理函数只认桌面窗口。
  *  - **只有桌面窗口能用的通道**（`DESKTOP_ONLY_CHANNELS`：开窗、系统文件管理器、原生对话框）：回 `ok:false`
  *    （`desktop_only`），处理函数不执行 —— 远处的人看不见那扇窗，坐在这台电脑前的人却会被吓一跳。
+ *  - **安全策略**（2026-10-19，docs/network-policy/design.md）：认得的通道在交给处理函数之前过 channel 点位
+ *    （`judge`，见 policyGate.ts）—— 拒绝（含降级的询问）：invoke 回 `ok:false`（`denied`，消息是规则的 prompt），
+ *    处理函数不执行；send 丢掉。不认的通道不必判（本来就不执行）。
  *  - 处理函数回 `undefined` → 结果不带 `value`（编码时省掉，见 `networkEnvelope`）；抛了 / 拒绝了 →
  *    `ok:false`，带它的消息（与 `code`，如果它带了字符串的 code）。listen 的处理函数抛了只记日志。
  */
@@ -19,6 +22,8 @@ import {
   type ServerMessage
 } from '../../../shared/networkEnvelope'
 import type { ChannelDefinition, ClientContext } from '../../ipc/registry'
+import type { GateVerdict } from '@shuvix/agent-runtime'
+import type { ChannelCall } from './policyGate'
 
 /** 网络客户端不经请求分发走的通道（视图同步有自己的消息） */
 export const NETWORK_EXCLUDED_CHANNELS: ReadonlySet<string> = new Set(['sync:frame'])
@@ -61,13 +66,14 @@ export interface DispatcherLogger {
 }
 
 export interface NetworkDispatcher {
-  /** 一条 invoke：回要发回去的结果（从不拒绝） */
+  /** 一条 invoke：回要发回去的结果（从不拒绝）。`size`：这条消息的字节数（策略的 `object.size`） */
   invoke(
     ctx: ClientContext,
-    message: Extract<ClientMessage, { t: 'invoke' }>
+    message: Extract<ClientMessage, { t: 'invoke' }>,
+    size?: number
   ): Promise<ServerMessage>
-  /** 一条 send：交给 listen 定义（不回任何东西；不认的通道丢掉） */
-  send(ctx: ClientContext, message: Extract<ClientMessage, { t: 'send' }>): void
+  /** 一条 send：交给 listen 定义（不回任何东西；不认的通道、策略拒绝的丢掉） */
+  send(ctx: ClientContext, message: Extract<ClientMessage, { t: 'send' }>, size?: number): void
 }
 
 /**
@@ -75,6 +81,8 @@ export interface NetworkDispatcher {
  */
 export function createNetworkDispatcher(deps: {
   definitionOf: (channel: string) => ChannelDefinition | undefined
+  /** channel 点位（缺省：不判 —— 单测）；回 undefined = 放行 */
+  judge?: (ctx: ClientContext, call: ChannelCall) => GateVerdict | undefined
   logger?: DispatcherLogger
 }): NetworkDispatcher {
   const logger = deps.logger ?? { warn: () => {} }
@@ -87,7 +95,7 @@ export function createNetworkDispatcher(deps: {
   })
 
   return {
-    async invoke(ctx, message) {
+    async invoke(ctx, message, size) {
       const { id, channel, args } = message
       const verdict = networkChannelVerdict(channel, 'invoke')
       if (verdict === 'desktop_only') {
@@ -101,6 +109,10 @@ export function createNetworkDispatcher(deps: {
       if (definition === undefined || definition.kind !== 'handle') {
         return failure(id, `No handler registered for "${channel}"`, 'unknown_channel')
       }
+      const gate = deps.judge?.(ctx, { channel, kind: 'invoke', size: size ?? 0, args })
+      if (gate && !gate.allowed) {
+        return failure(id, gate.message ?? 'Refused by a security policy.', 'denied')
+      }
       try {
         const value = await definition.fn(ctx, ...args)
         return value === undefined
@@ -111,11 +123,13 @@ export function createNetworkDispatcher(deps: {
       }
     },
 
-    send(ctx, message) {
+    send(ctx, message, size) {
       const { channel, args } = message
       if (networkChannelVerdict(channel, 'send') !== 'ok') return
       const definition = deps.definitionOf(channel)
       if (definition === undefined || definition.kind !== 'listen') return
+      const gate = deps.judge?.(ctx, { channel, kind: 'send', size: size ?? 0, args })
+      if (gate && !gate.allowed) return
       try {
         definition.fn(ctx, ...args)
       } catch (error) {

@@ -8,7 +8,8 @@
  *
  *   IL-0  syntax: `/bin/bash -n` and PATH `bash -n` clean; `node --check scripts/headless-smoke.mjs`; shellcheck when
  *         installed (skipped otherwise); shebang, `set -euo pipefail`, last code line `main "$@"`
- *   IL-1  `--help` / `-h`: usage on stdout, every option line; `-h --bogus` exits 0, `--bogus -h` exits 2
+ *   IL-1  `--help` / `-h`: usage on stdout, every option line (--lan / --bind marked deprecated), the network-admission
+ *         paragraph; `-h --bogus` exits 0, `--bogus -h` exits 2
  *   IL-2  deb + `--service --port 8123` dry run: download → apt → helper → unit → systemctl → wait → summary → SSH hint
  *   IL-3  deb on aarch64 / arm64 → the arm64 .deb
  *   IL-4  AppImage on x86_64 / amd64 / aarch64 / arm64: extract into ~/.local/share/shuvix, --no-sandbox launcher,
@@ -30,17 +31,20 @@
  *   IL-17 not Linux and no dry run: refused before any command runs
  *   IL-18 a real AppImage install, rerun (upgrade) and uninstall in a temp HOME (stubbed sudo / curl); data and a
  *         launcher without our marker survive the uninstall
- *   IL-19 `--lan`: helper and unit carry --lan, the output ends with the no-password risk line, no SSH hint
- *   IL-20 default (`--service`, no --lan): the output ends with exactly the five SSH-tunnel lines
+ *   IL-19 `--lan` (deprecated, still passed on): helper and unit carry --lan, the output ends with the "policy is
+ *         written on first start" line and the no-password risk line, no SSH hint
+ *   IL-20 default (`--service`, no --lan): the output ends with exactly the five SSH-tunnel lines (the fourth names
+ *         Settings → General → Network access and the policy file); no deprecation note
  *   IL-21 no `--service`: the same five lines after the "rerun with --service" line; `--port` shows in them
- *   IL-22 AppImage + `--lan`: the helper gets --lan, the launcher does not
+ *   IL-22 AppImage + `--lan`: the helper gets --lan, the launcher does not; the same two closing lines as IL-19
  *   IL-23 `--lan=1` is an unknown option; `--uninstall --lan` is the same as `--uninstall`
  *   IL-24 the SSH hint names SHUVIX_INSTALL_USER
  *   IL-25 the headless About page's update command (`headlessUpdateCommand`), run the way it pipes the script in
  *         (`bash -s -- …` with the script on stdin) plus `--dry-run`: installs exactly that version, touches no
  *         service (no unit written, no systemctl enable), runs no command
  *   IL-26 `--bind eth1` (and `--bind=eth1`, and together with `--lan`): helper and unit carry `--bind eth1` and no --lan;
- *         after "Manage it with" exactly the one-network line and its no-password line; no SSH hint, no LAN risk line
+ *         after "Manage it with" exactly the "policy is written on first start" line for that network and its
+ *         no-password line; no SSH hint, no LAN risk line
  *   IL-27 `--bind` values that are refused (whitespace, shell metacharacters, quotes, `/`, `\`, a tab, a newline that
  *         would inject a unit line, 65 characters, empty, a leading `-` including `--lan` itself, `%`, a non-ASCII
  *         letter — also under a UTF-8 locale): exit 2 with one exact message, no stub runs, no unit; 64 characters, an
@@ -49,7 +53,10 @@
  *   IL-29 root + deb + `--service --bind`: --bind before --port, --no-sandbox last; AppImage + `--bind`: the helper gets
  *         it, the launcher does not
  *   IL-30 no `--service`: the two one-network lines follow "rerun this script with --service"; the helper's comment
- *         names `--bind <name>`; `--uninstall --bind eth1` prints the same as `--uninstall`
+ *         names only `--port <n>`; `--uninstall --bind eth1` prints the same as `--uninstall`
+ *   IL-31 the deprecation note: exactly one, right after the dry-run header (before anything is installed), naming
+ *         `--lan` or `--bind <name>` (--bind wins when both are given), the policy and its file; none without them,
+ *         none on stderr; a refused `--bind` value prints no note
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
@@ -103,20 +110,30 @@ const NOTE_NO_SANDBOX =
 const PATH_WARNING =
   'warning: /home/alice/.local/bin is not on your PATH; add it to use the shuvix and shuvix-server commands'
 const HELPER_COMMENT =
-  '| # Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>, --lan, --bind <name>.'
+  '| # Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>.'
 
 /** The two closing lines of a one-network (`--bind`) install (IL-26) */
 const bindHint = (name: string): string[] => [
-  `ShuviX only accepts connections from the network of ${name} (it listens on that address only).`,
+  `On its first start ShuviX writes the network-admission policy from --bind ${name}: only this machine and the network of ${name} can connect (if you have such a policy already, yours decides).`,
   'Network access has no password: anyone on that network who opens the address can fully control this computer through ShuviX.'
 ]
 
-/** The five closing lines of a non-LAN install (IL-20) */
+/** The two closing lines of a `--lan` install (IL-19) */
+const LAN_HINT = [
+  'On its first start ShuviX writes the network-admission policy from --lan: every device on the local network can connect (if you have such a policy already, yours decides).',
+  LAN_RISK
+]
+
+/** The one note a deprecated `--lan` / `--bind <name>` prints before anything is installed (IL-31) */
+const deprecationNote = (option: string): string =>
+  `note: ${option} is deprecated — who can connect is now the security policy network-admission; on its first start ShuviX writes ~/.shuvix/policies/network-admission.md from ${option}, if you have no such policy yet`
+
+/** The five closing lines of a default (no --lan / --bind) install (IL-20) */
 const sshHint = (port: number, user = 'alice'): string[] => [
   'ShuviX only accepts connections from this machine (127.0.0.1). From another computer, open an SSH tunnel:',
   `  ssh -L ${port}:127.0.0.1:${port} ${user}@<this machine's address>`,
-  `and open http://127.0.0.1:${port}/ there. To let every device on the local network connect instead`,
-  '(no password), rerun this script with --lan.',
+  `and open http://127.0.0.1:${port}/ there. To let other devices in, follow Settings → General → Network access`,
+  'in that browser (a prompt sets up the policy network-admission with an agent), or write ~/.shuvix/policies/network-admission.md.',
   `Network access has no password: anyone who can reach port ${port} on this machine (other users on it, or through a tunnel) can fully control it through ShuviX.`
 ]
 
@@ -297,11 +314,17 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
         ).toBe(true)
       }
       expect(trimmed).toContain(
-        '--lan             let other devices on the local network connect (no password!); default: only'
+        '--lan             deprecated: on its first start ShuviX writes a network-admission policy that'
       )
       expect(trimmed).toContain(
-        '--bind <name>     share on one network only: a network interface (e.g. eth1) or an address of'
+        '--bind <name>     deprecated: the same for one network only — a network interface (e.g. eth1) or'
       )
+      expect(result.lines).toContain(
+        "Who can connect is decided by ShuviX's security policy network-admission. By default only this"
+      )
+      expect(result.stdout).toContain('Settings → General → Network access')
+      expect(result.stdout).toContain('~/.shuvix/policies/network-admission.md')
+      expect(result.stdout).not.toContain('listens only there')
       expect(result.stubCalls).toBeNull()
     })
 
@@ -1029,7 +1052,8 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
       expect(lines).toContain(
         '| ExecStart=/opt/ShuviX/shuvix --headless --lan --port 8123 --ozone-platform=headless --disable-gpu'
       )
-      expect(lines[lines.length - 1]).toBe(LAN_RISK)
+      expectEndsWith(lines, LAN_HINT)
+      expect(lines[1]).toBe(deprecationNote('--lan'))
       expect(
         lines.filter((line) => line.startsWith('ShuviX only accepts connections'))
       ).toStrictEqual([])
@@ -1053,6 +1077,7 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
       expect(manage).toBeGreaterThan(0)
       expect(lines.slice(manage + 1)).toStrictEqual(sshHint(8123))
       expect(lines).not.toContain(LAN_RISK)
+      expect(lines.filter((line) => line.includes('deprecated'))).toStrictEqual([])
       for (const line of flagLines(lines)) expect(line).not.toContain('--lan')
     })
 
@@ -1088,7 +1113,7 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
       expect(lines).toContain(
         '| exec "/home/alice/.local/share/shuvix/app/shuvix" --no-sandbox "$@"'
       )
-      expect(lines[lines.length - 1]).toBe(LAN_RISK)
+      expectEndsWith(lines, LAN_HINT)
       expect(lines.filter((line) => line.includes('ssh -L'))).toStrictEqual([])
     })
 
@@ -1152,6 +1177,7 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
         const manage = lines.indexOf(MANAGE)
         expect(manage).toBeGreaterThan(0)
         expect(lines.slice(manage + 1)).toStrictEqual(bindHint('eth1'))
+        expect(lines[1]).toBe(deprecationNote('--bind eth1'))
         expect(lines.filter((line) => line.includes('ssh -L'))).toStrictEqual([])
         expect(lines).not.toContain(LAN_RISK)
         expect(result.stubCalls).toBeNull()
@@ -1285,6 +1311,9 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
       expect(rerun).toBeGreaterThan(0)
       expect(lines.slice(rerun + 1)).toStrictEqual(bindHint('eth1'))
       expect(lines).toContain(HELPER_COMMENT)
+      expect(lines.filter((line) => line.startsWith('| # Runs ShuviX headless'))).toStrictEqual([
+        HELPER_COMMENT
+      ])
       expect(lines.filter((line) => line.includes('ssh -L'))).toStrictEqual([])
     })
 
@@ -1294,6 +1323,63 @@ describe.skipIf(IS_WINDOWS)('scripts/install-linux.sh', () => {
       expect(withBind.code).toBe(0)
       expect(withBind.stdout).toBe(plain.stdout)
       expect(withBind.stderr).toBe(plain.stderr)
+    })
+  })
+
+  // ── IL-31 (the deprecation note for --lan / --bind) ───────────────────────────────────────────────────────────
+
+  describe('IL-31 deprecation note', () => {
+    const notes = (lines: string[]): string[] => lines.filter((line) => line.includes('deprecated'))
+
+    it.each([
+      [['--lan'], '--lan', 'deb'],
+      [['--lan'], '--lan', 'appimage'],
+      [['--bind', 'eth1'], '--bind eth1', 'deb'],
+      [['--bind=192.168.50.10'], '--bind 192.168.50.10', 'deb'],
+      [['--lan', '--bind', 'eth1'], '--bind eth1', 'deb'],
+      [['--bind', 'eth1', '--lan'], '--bind eth1', 'appimage']
+    ])('IL-31 — %j (%s, %s): one note, right after the header', (flags, option, pkg) => {
+      for (const service of [[], ['--service']]) {
+        const result = runInstaller(['--version', 'v0.2.12', ...service, ...flags, '--dry-run'], {
+          env: { SHUVIX_INSTALL_PKG: pkg }
+        })
+        const label = [...service, ...flags].join(' ')
+        expect(result.code, label).toBe(0)
+        expect(result.lines[0], label).toBe(
+          `dry run: nothing is changed (${pkg}, x86_64, user alice)`
+        )
+        expect(result.lines[1], label).toBe(deprecationNote(option))
+        expect(result.lines[2], label).toBe(
+          `ShuviX v0.2.12 (shuvix-0.2.12-${pkg === 'deb' ? 'amd64.deb' : 'x86_64.AppImage'})`
+        )
+        expect(notes(result.lines), label).toStrictEqual([deprecationNote(option)])
+        expect(result.stderr, label).not.toContain('deprecated')
+      }
+    })
+
+    it('IL-31 — as root the note is the same', () => {
+      const result = runInstaller(['--version', 'v0.2.12', '--service', '--lan', '--dry-run'], {
+        env: { SHUVIX_INSTALL_UID: '0', SHUVIX_INSTALL_USER: 'root', HOME: '/root' }
+      })
+      expect(result.code).toBe(0)
+      expect(result.lines[1]).toBe(deprecationNote('--lan'))
+    })
+
+    it('IL-31 — without --lan / --bind: no note', () => {
+      for (const args of [
+        ['--version', 'v0.2.12', '--dry-run'],
+        ['--version', 'v0.2.12', '--service', '--port', '8123', '--dry-run']
+      ]) {
+        const result = runInstaller(args)
+        expect(result.code, args.join(' ')).toBe(0)
+        expect(notes(result.lines), args.join(' ')).toStrictEqual([])
+      }
+    })
+
+    it('IL-31 [W] — a refused --bind value prints no note (the argument error comes first)', () => {
+      const result = runInstaller(['--version', 'v0.2.12', '--bind', 'a b', '--dry-run'])
+      expect(result.code).toBe(2)
+      expect(result.stdout).toBe('')
     })
   })
 

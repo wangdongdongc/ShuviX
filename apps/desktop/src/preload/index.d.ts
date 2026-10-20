@@ -346,6 +346,13 @@ declare global {
       /** 当前运行平台 */
       platform: 'darwin' | 'win32' | 'linux' | 'web'
       openSettings: (tab?: string) => Promise<{ success: boolean }>
+      /** 带草稿打开会话：主窗口切到它，草稿等它来取（web：本标签页回到聊天并带着草稿） */
+      openSessionWithDraft: (params: {
+        sessionId: string
+        draft: string
+      }) => Promise<{ success: boolean }>
+      /** 取走一条会话待填进输入框的草稿（没有 → null） */
+      takeSessionDraft: (sessionId: string) => Promise<string | null>
       /** 用系统默认浏览器打开外部链接 */
       openExternal: (url: string) => Promise<{ success: boolean }>
       /** 用系统文件管理器打开指定文件夹 */
@@ -1121,16 +1128,12 @@ declare global {
     }
     /** 网络访问（局域网里的浏览器用同一套 API；没有认证 —— 设置页把风险写在明面上） */
     network: {
-      /** 开关、端口、是否在监听、能打开的地址、连着的客户端、监听失败的原因 */
+      /** 开关、端口、是否在监听、能打开的地址、连着的客户端、准入策略的状态、最近的拒绝、监听失败的原因 */
       status: () => Promise<import('../shared/network').NetworkStatus>
       /** 开 / 关（关掉 = 停止监听、断开每个客户端）；回改完之后的状态 */
       setEnabled: (enabled: boolean) => Promise<import('../shared/network').NetworkStatus>
       /** 换端口（1024–65535 的整数，否则拒绝）；开着时随即换到新端口重新监听 */
       setPort: (port: number) => Promise<import('../shared/network').NetworkStatus>
-      /** 允许 / 不许局域网里的其他设备（关 → 只监听 127.0.0.1；开 → 0.0.0.0）；开着时随即换绑地址 */
-      setLan: (lan: boolean) => Promise<import('../shared/network').NetworkStatus>
-      /** 局域网开关开着时只开放给哪个网络（网卡名或本机地址；null / 空串 = 所有网络）；开着时随即换绑地址 */
-      setLanInterface: (spec: string | null) => Promise<import('../shared/network').NetworkStatus>
     }
     /** 服务端文件系统（web 客户端的目录浏览器、「在文件管理器中打开」的路径） */
     fs: {

@@ -1,6 +1,9 @@
 import { mkdirSync } from 'fs'
+import { homedir } from 'os'
+import { dirname } from 'path'
 import { defineHandler } from './registry'
-import { listDirectories } from '../services/directoryListing'
+import { listDirectories, resolveListingPath } from '../services/directoryListing'
+import { networkPathVerdict } from '../frontend/network/pathGate'
 import type { ListDirectoriesParams } from '../../shared/serverFs'
 import { entryFilePath, getUserKnowledgeRoot, locateBundle } from '../services/knowledge'
 import {
@@ -32,12 +35,34 @@ const FOLDER_OF: Readonly<Record<string, () => string>> = {
  *    路径显示出来、给一个复制按钮，代替在这台电脑上打开 Finder）。与桌面那几条一样，目录不在就先建好；
  *    `knowledgeEntry` 是条目文件（落不进任何知识库 → `path: null`，与 `knowledge:revealFile` 同口径）。
  *
- * 桌面窗口也能调（没有什么只属于浏览器的）；不限路径（用户裁决）。
+ * 桌面窗口也能调（没有什么只属于浏览器的）；宿主不限路径（用户裁决）—— 网络客户端列的目录另过安全策略的
+ * path 点位（`fs` + `listDirectories`）。
  */
 export function registerFsHandlers(): void {
-  defineHandler('fs:listDirectories', (_ctx, params?: ListDirectoriesParams) =>
-    listDirectories(params)
-  )
+  // 网络客户端列的目录另过安全策略的 path 点位（读；宿主本身不限路径；桌面窗口不判）
+  defineHandler('fs:listDirectories', (ctx, params?: ListDirectoriesParams) => {
+    const verdict = networkPathVerdict(
+      ctx,
+      'read',
+      () => resolveListingPath(params?.path, homedir()),
+      {
+        name: 'fs',
+        operation: 'listDirectories'
+      }
+    )
+    if (verdict && !verdict.allowed) {
+      const path = resolveListingPath(params?.path, homedir())
+      const parent = dirname(path)
+      return {
+        path,
+        parent: parent === path ? null : parent,
+        home: homedir(),
+        entries: [],
+        error: 'EACCES'
+      }
+    }
+    return listDirectories(params)
+  })
 
   defineHandler(
     'fs:locateFolder',

@@ -14,6 +14,7 @@
  *   HL-P9  --help / -h；--help 与错误并存
  *   HL-P10 Chromium 开关、引导脚本、md 文件原样放过；--portable / --ports=1 / --network-ports=2 / --HEADLESS 不认
  *   HL-P11 没有 --headless 时坏端口照样记错误（主入口只在无头时据此退出）
+ *   （--lan / --bind 与两个环境变量已弃用，解析照旧：启动时只用来迁移成 network-admission 策略）
  *   HL-P12 --lan / SHUVIX_LAN；--lan=1 / --LAN / --lan-only 不认；['--port','--lan'] → 缺值且 lan
  *   HL-P13 只有 --lan → {headless:false, lan:true, help:false}
  *   HL-P14 --bind eth1 / --bind=eth1 → bind，隐含 lan（没有 --headless 也照样解析）
@@ -24,13 +25,17 @@
  *          的错不算数）
  *   HL-P18 --bind 给了多次：最后一个合法值；错误只记第一个（与端口错误之间也是先到先记）
  *   HL-P19 --BIND / --bind-to / --binds= 不认；--lan --bind 并存；--help 与 --bind 的错误并存
- *   HL-U1  用法：第一行、提到的开关与环境变量、ssh -L 例子、Chromium 开关、风险那句；只提这几个 --开关；每行 ≤ 80 列
+ *   HL-U1  用法：第一行（不再带 --lan / --bind）、提到的开关与环境变量、ssh -L 例子、network-admission 与策略文件、
+ *          设置页的路径、弃用那段、Chromium 开关、风险那句；只提这几个 --开关；每行 ≤ 80 列
+ *   HL-D1  弃用那一行：没给 --lan / --bind（含 --bind 的值不合法、只给了端口）→ undefined
+ *   HL-D2  --lan / SHUVIX_LAN → 固定措辞（都说 --lan）
+ *   HL-D3  --bind eth1 / --bind=eth1 / SHUVIX_BIND / 与 --lan 并存 → 固定措辞，说 --bind <值>（bind 优先于 lan）
+ *   HL-D4  以前缀开头、没有换行、提到策略名与策略文件
  *   HL-L1  就绪那一行（em dash、每个地址以 / 结尾、已有 / 不重复）
- *   HL-L2  监听失败那一行（EADDRINUSE / EACCES 带解释，其余原样）
- *   HL-L2b ENOINTERFACE：无头运行给了 --bind → 带网卡名；没给 → 不带（不出现两个空格）
+ *   HL-L2  监听失败那一行（EADDRINUSE / EACCES 带解释，其余原样 —— ENOINTERFACE 也不再特别解释）
  *   HL-L3  三句固定的行
  *   HL-L4  已经在跑：有地址 / 还在启动
- *   HL-L5  参数错误那一行；每个构造出来的行都以前缀开头、没有换行
+ *   HL-L5  参数错误那一行；每个构造出来的行（含弃用那一行）都以前缀开头、没有换行
  *   HL-M1  模式开关：缺省桌面；enableHeadlessMode() / {port}；reset 回去
  *   HL-M2  headlessWindowError：Error、code 'headless'、固定措辞
  *   HL-M3  headlessLan：缺省 false；{lan:true} → true；非布尔的 lan 不算
@@ -40,7 +45,8 @@
  *   HL-W3  EAGAIN 两次后成功 → 全部写完
  *   HL-W4  EPIPE → 静默返回，不再写
  *   HL-W5  一直 EAGAIN → 恰 50 次后放弃，不抛
- *   HL-X1  跨文件措辞守卫：install-linux.sh 的 READY_PREFIX 与 case 模式、linux-headless.yml 的 grep / test 字面量、
+ *   HL-X1  跨文件措辞守卫：install-linux.sh 的 READY_PREFIX 与 case 模式、linux-headless.yml 的 grep / test 字面量
+ *          （含 --lan 的弃用那一行；403 正文的 grep 字面量出自内置 network-admission 的 prompt）、
  *          e2e harness 的 HEADLESS_READY_PREFIX
  *   HL-X2  electron-builder.yml 的 AppImage / deb 产物名与包名（安装脚本按它拼下载地址）
  *   HL-X3  RELEASE_REPO 与 electron-builder.yml 的 publish（owner/repo）、install-linux.sh 的缺省 REPO 一致
@@ -66,6 +72,7 @@ import {
   headlessAlreadyRunningLine,
   headlessArgsErrorLine,
   headlessBind,
+  headlessDeprecationLine,
   headlessLan,
   headlessListenErrorLine,
   headlessPortOverride,
@@ -374,26 +381,34 @@ describe('HL-U headlessUsage', () => {
   it('HL-U1 用法的内容与宽度', () => {
     const usage = headlessUsage()
     const lines = usage.split('\n')
-    expect(lines[0]).toBe(
-      'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]'
-    )
+    expect(lines[0]).toBe('Usage: shuvix --headless [--port <n>]')
     for (const needle of [
       '--headless',
       '--port <n>',
       '--network-port',
-      '--lan',
-      '--bind <name>',
       '--help, -h',
       'SHUVIX_HEADLESS=1',
-      'SHUVIX_LAN=1',
-      'SHUVIX_BIND=<name>',
+      'security policy network-admission',
+      'only this computer can (127.0.0.1)',
       'ssh -L 7766:127.0.0.1:7766',
+      'General → Network access',
+      '~/.shuvix/policies/network-admission.md',
+      '--lan and --bind <interface or address> (SHUVIX_LAN / SHUVIX_BIND) are',
+      'deprecated: on start they write that policy once, if you have none.',
       '--ozone-platform=headless --disable-gpu'
     ]) {
       expect(usage, needle).toContain(needle)
     }
+    // 弃用的开关只出现在弃用那一段（那一段之前一次也不提）
+    const deprecatedAt = lines.findIndex((line) => line.startsWith('--lan and --bind'))
+    expect(deprecatedAt).toBeGreaterThan(0)
+    for (const line of lines.slice(0, deprecatedAt)) {
+      expect(line, line).not.toMatch(/--lan|--bind|SHUVIX_LAN|SHUVIX_BIND/)
+    }
     expect(
-      lines.some((line) => line.startsWith('Network access has no password: with --lan or --bind,'))
+      lines.some((line) =>
+        line.startsWith('Network access has no password: once the policy lets a device in,')
+      )
     ).toBe(true)
     const flags = new Set(usage.match(/--[A-Za-z][\w=-]*/g) ?? [])
     expect([...flags].sort()).toStrictEqual(
@@ -409,6 +424,55 @@ describe('HL-U headlessUsage', () => {
       ].sort()
     )
     for (const line of lines) expect(line.length, line).toBeLessThanOrEqual(80)
+  })
+})
+
+describe('HL-D headlessDeprecationLine', () => {
+  const TAIL =
+    ' is deprecated — who can connect is now the security policy network-admission; if you have none yet, it is written from this option once (~/.shuvix/policies/network-admission.md)'
+  const LAN_LINE = `ShuviX headless: --lan${TAIL}`
+  const bindLine = (spec: string): string => `ShuviX headless: --bind ${spec}${TAIL}`
+
+  it('HL-D1 没给 --lan / --bind → undefined', () => {
+    expect(headlessDeprecationLine({ lan: false })).toBeUndefined()
+    expect(headlessDeprecationLine(parse([]))).toBeUndefined()
+    expect(headlessDeprecationLine(parse(['--headless', '--port', '8123']))).toBeUndefined()
+    // 不认的写法、不合法的 --bind 值（没有 bind、lan 仍 false）：没有要迁移的，也就不提
+    expect(headlessDeprecationLine(parse(['--headless', '--lan=1', '--LAN']))).toBeUndefined()
+    expect(headlessDeprecationLine(parse(['--headless', '--bind', 'a b']))).toBeUndefined()
+    expect(headlessDeprecationLine(parse(['--headless'], { SHUVIX_LAN: '0' }))).toBeUndefined()
+  })
+
+  it('HL-D2 --lan / SHUVIX_LAN → 说 --lan', () => {
+    expect(headlessDeprecationLine({ lan: true })).toBe(LAN_LINE)
+    expect(headlessDeprecationLine(parse(['--headless', '--lan']))).toBe(LAN_LINE)
+    expect(headlessDeprecationLine(parse(['--headless'], { SHUVIX_LAN: '1' }))).toBe(LAN_LINE)
+  })
+
+  it('HL-D3 --bind eth1 → 说 --bind eth1（与 --lan 并存时也是）', () => {
+    expect(headlessDeprecationLine({ lan: true, bind: 'eth1' })).toBe(bindLine('eth1'))
+    // 只有 bind（lan 没跟着设）也认
+    expect(headlessDeprecationLine({ lan: false, bind: 'eth1' })).toBe(bindLine('eth1'))
+    expect(headlessDeprecationLine(parse(['--headless', '--bind', 'eth1']))).toBe(bindLine('eth1'))
+    expect(headlessDeprecationLine(parse(['--headless', '--bind=eth1']))).toBe(bindLine('eth1'))
+    expect(headlessDeprecationLine(parse(['--headless', '--lan', '--bind', 'eth1']))).toBe(
+      bindLine('eth1')
+    )
+    expect(headlessDeprecationLine(parse(['--headless'], { SHUVIX_BIND: ' eth2 ' }))).toBe(
+      bindLine('eth2')
+    )
+    expect(headlessDeprecationLine(parse(['--headless', '--bind', '192.168.50.10']))).toBe(
+      bindLine('192.168.50.10')
+    )
+  })
+
+  it('HL-D4 带前缀、没有换行、提到策略与文件', () => {
+    for (const line of [LAN_LINE, bindLine('eth1')]) {
+      expect(line.startsWith(HEADLESS_LINE_PREFIX), line).toBe(true)
+      expect(line.includes('\n'), line).toBe(false)
+      expect(line).toContain('network-admission')
+      expect(line).toContain('~/.shuvix/policies/network-admission.md')
+    }
   })
 })
 
@@ -437,22 +501,6 @@ describe('HL-L stdout 的几行', () => {
     )
   })
 
-  it('HL-L2b ENOINTERFACE：有 --bind 带网卡名，没有不带', () => {
-    expect(headlessListenErrorLine(7766, 'ENOINTERFACE')).toBe(
-      'ShuviX headless: cannot listen on port 7766: ENOINTERFACE (no network interface or local address on this computer)'
-    )
-    enableHeadlessMode({ bind: 'eth9' })
-    expect(headlessListenErrorLine(7766, 'ENOINTERFACE')).toBe(
-      'ShuviX headless: cannot listen on port 7766: ENOINTERFACE (no network interface or local address eth9 on this computer)'
-    )
-    enableHeadlessMode({ port: 8123 })
-    const noBind = headlessListenErrorLine(8123, 'ENOINTERFACE')
-    expect(noBind).toBe(
-      'ShuviX headless: cannot listen on port 8123: ENOINTERFACE (no network interface or local address on this computer)'
-    )
-    expect(noBind).not.toContain('  ')
-  })
-
   it('HL-L3 固定的三句', () => {
     expect(HEADLESS_SHUTTING_DOWN_LINE).toBe('ShuviX headless: shutting down')
     expect(HEADLESS_STOPPED_LINE).toBe('ShuviX headless: stopped')
@@ -475,13 +523,14 @@ describe('HL-L stdout 的几行', () => {
       headlessReadyLine([]),
       headlessListenErrorLine(1, 'EADDRINUSE'),
       headlessListenErrorLine(1, 'X'),
-      headlessListenErrorLine(1, 'ENOINTERFACE'),
       headlessAlreadyRunningLine(['http://a:1']),
       headlessAlreadyRunningLine([]),
       headlessArgsErrorLine('x'),
       HEADLESS_SHUTTING_DOWN_LINE,
       HEADLESS_STOPPED_LINE,
-      HEADLESS_DESKTOP_RUNNING_LINE
+      HEADLESS_DESKTOP_RUNNING_LINE,
+      headlessDeprecationLine({ lan: true })!,
+      headlessDeprecationLine({ lan: true, bind: 'eth1' })!
     ]
     for (const line of lines) {
       expect(line.startsWith(HEADLESS_LINE_PREFIX), line).toBe(true)
@@ -639,14 +688,16 @@ describe('HL-X 跨文件的措辞守卫', () => {
         : []
     })
     const loopback = [`http://127.0.0.1:${N}`]
+    const lanDeprecation = headlessDeprecationLine({ lan: true })!
     const candidates = [
       headlessReadyLine(loopback),
       headlessAlreadyRunningLine(loopback),
       HEADLESS_SHUTTING_DOWN_LINE,
-      HEADLESS_STOPPED_LINE
+      HEADLESS_STOPPED_LINE,
+      lanDeprecation
     ]
-    // 至少有就绪 / 已经在跑 / 开始退出 / 退出完这四种（防止正则什么也没抽到就空过）
-    expect(new Set(greps).size).toBeGreaterThanOrEqual(5)
+    // 至少有就绪 / 已经在跑 / 开始退出 / 退出完 / 弃用这几种（防止正则什么也没抽到就空过）
+    expect(new Set(greps).size).toBeGreaterThanOrEqual(6)
     for (const literal of greps) {
       expect(
         candidates.some((c) => c.startsWith(literal)),
@@ -658,11 +709,25 @@ describe('HL-X 跨文件的措辞守卫', () => {
     expect(greps).toContain(HEADLESS_SHUTTING_DOWN_LINE)
     expect(greps).toContain(HEADLESS_STOPPED_LINE)
     expect(greps).toContain(READY_PREFIX)
+    // 重跑加 --lan 的那一步按弃用那一行认（措辞一变就悄悄失灵）
+    expect(
+      greps.some((l) => l.includes('--lan is deprecated') && lanDeprecation.startsWith(l))
+    ).toBe(true)
 
     const tests = [...workflow.matchAll(/test "\$line" = "([^"]*)"/g)].map((m) =>
       m[1].replaceAll('$PORT', String(N))
     )
     expect(tests).toStrictEqual([headlessReadyLine([`http://127.0.0.1:${N}`])])
+
+    // 只给这台电脑时，局域网地址收到内置 network-admission 的 403：正文按 prompt 里的一句认
+    const policy = read(
+      join(REPO_ROOT, 'packages/agent-runtime/src/security/builtinPolicies/md/network-admission.md')
+    )
+    const prompt = /^\s*prompt: (.*)$/m.exec(policy)
+    expect(prompt, 'prompt: in the builtin network-admission.md').not.toBeNull()
+    const denied = [...workflow.matchAll(/grep -qF '([^']*)' denied\.txt/g)].map((m) => m[1])
+    expect(denied.length).toBeGreaterThanOrEqual(1)
+    for (const literal of denied) expect(prompt![1], literal).toContain(literal)
   })
 
   it('HL-X1c e2e harness 的 HEADLESS_READY_PREFIX', () => {

@@ -7,7 +7,7 @@
  *   WA-2 app:open-external：http / https / mailto 用归一后的 href 在新标签页（noopener,noreferrer）开、回 {success:true}；
  *        javascript / file / data / ftp / 自定义协议 / 不是 URL / 空 / undefined → {success:false}，open 不调
  *   WA-3 webDesktopOnlyChannels：桌面专属表减去本地实现（剩 5 条：悬浮窗两条、内置浏览器窗口与它的设置页、保存框）；
- *        {} → 19；只认自有属性
+ *        {} → 23；只认自有属性
  *   WA-4 本地实现的每个键都是桌面专属键、也是通道表里的 invoke 通道（服务端反正会拒它们）
  *   WA-5 createWebApi：platform 'web'、sync 的成员就是连接 sync 的那几个函数；命名空间 = 表 + events / liveDoc / knowledge / sync；
  *        liveDoc.respond / knowledge.baseOptions 的打包；两次 events.subscribe 只挂一个 app:event 监听
@@ -142,11 +142,11 @@ describe('WA-3 webDesktopOnlyChannels', () => {
     expect(set.has('app:open-external')).toBe(false)
   })
 
-  it('WA-3 {} → 22；只认自有属性', () => {
-    expect(webDesktopOnlyChannels({}).size).toBe(22)
+  it('WA-3 {} → 23；只认自有属性', () => {
+    expect(webDesktopOnlyChannels({}).size).toBe(23)
     const inherited = webDesktopOnlyChannels(Object.create({ 'app:open-folder': () => {} }))
     expect(inherited.has('app:open-folder')).toBe(true)
-    expect(inherited.size).toBe(22)
+    expect(inherited.size).toBe(23)
   })
 })
 
@@ -163,6 +163,7 @@ describe('WA-4 本地实现的通道', () => {
       [
         'app:open-external',
         'app:open-folder',
+        'app:open-session-draft',
         'app:open-settings',
         'app:reveal-path',
         'bot:openFolder',
@@ -562,5 +563,24 @@ describe('WA-11 缺省依赖', () => {
     picks.settleDirectoryPick(request!.id, '/p')
     await expect(picked).resolves.toBe('/p')
     expect(picks.currentDirectoryPick()).toBeNull()
+  })
+})
+
+describe('WA-SD app:open-session-draft（远程访问策略的引导）', () => {
+  it('WA-SD 合法 → 交给 openChatWithDraft、{success:true}；没有会话 → {success:false}、不交；草稿不是字符串 → 空串', () => {
+    const openChatWithDraft = vi.fn()
+    const handlers = webLocalHandlers(fakeWin, { openChatWithDraft })
+    expect(handlers['app:open-session-draft']({ sessionId: 's1', draft: 'hello' })).toEqual({
+      success: true
+    })
+    expect(openChatWithDraft).toHaveBeenLastCalledWith('s1', 'hello')
+    expect(handlers['app:open-session-draft']({ sessionId: 's2', draft: 42 })).toEqual({
+      success: true
+    })
+    expect(openChatWithDraft).toHaveBeenLastCalledWith('s2', '')
+    for (const bad of [undefined, {}, { sessionId: '' }, { sessionId: 7 }]) {
+      expect(handlers['app:open-session-draft'](bad)).toEqual({ success: false })
+    }
+    expect(openChatWithDraft).toHaveBeenCalledTimes(2)
   })
 })

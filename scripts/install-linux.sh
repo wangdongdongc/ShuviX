@@ -7,10 +7,11 @@
 # libraries). Other distributions: extracts the release's AppImage into ~/.local/share/shuvix and adds a
 # ~/.local/bin/shuvix launcher (no FUSE needed). Both also get a `shuvix-server` helper that runs ShuviX
 # headless in the foreground; --service adds a systemd service that runs it headless as you (as root too:
-# then ShuviX runs with --no-sandbox, since Electron does not start as root otherwise). By default
-# ShuviX only accepts connections from the machine itself (127.0.0.1; reach it through an SSH tunnel);
-# --lan lets every device on the local network connect, --bind <interface or address> only the devices
-# on that one network (a machine on several networks shares on one of them).
+# then ShuviX runs with --no-sandbox, since Electron does not start as root otherwise). Who can connect is
+# decided by ShuviX's security policy network-admission: by default only the machine itself (127.0.0.1;
+# reach it through an SSH tunnel). --lan and --bind <interface or address> are deprecated but still
+# accepted and passed on to ShuviX, which turns them into that policy once on its first start (when the
+# user has none yet).
 #
 # Rerunning upgrades in place. Your data (~/.config/shuvix, ~/.shuvix) is never touched, not even by
 # --uninstall. The only prompt is sudo's password.
@@ -30,20 +31,25 @@ Usage: install-linux.sh [options]
   --version <tag>   install a specific release (e.g. v0.2.12-beta.1); default: the latest release
   --service         install and start a systemd service that runs ShuviX headless as you
   --port <n>        port for the service (default 7766)
-  --lan             let other devices on the local network connect (no password!); default: only
-                    this machine (127.0.0.1), reachable from elsewhere through an SSH tunnel
-  --bind <name>     share on one network only: a network interface (e.g. eth1) or an address of
-                    this machine — ShuviX listens only there and accepts only that subnet (no
-                    password!); implies --lan
+  --lan             deprecated: on its first start ShuviX writes a network-admission policy that
+                    lets every device on the local network connect (no password!)
+  --bind <name>     deprecated: the same for one network only — a network interface (e.g. eth1) or
+                    an address of this machine; implies --lan
   --deb <file>      install a local .deb instead of downloading one (CI / offline)
   --uninstall       remove the service, the shuvix-server helper and ShuviX itself (keeps your data)
   --dry-run         print what would be done without changing anything
   -h, --help        print this help
 
+Who can connect is decided by ShuviX's security policy network-admission. By default only this
+machine (127.0.0.1) can, reachable from elsewhere through an SSH tunnel. To let other devices in, open
+ShuviX through the tunnel and follow Settings → General → Network access (a prompt sets up the policy
+with an agent), or write ~/.shuvix/policies/network-admission.md. If you have no such policy yet,
+--lan / --bind write one once, when ShuviX first starts with them.
+
 The service runs ShuviX as the user who runs this script: a normal user with sudo rights, or root on a
 machine of its own (an isolated VM) — as root ShuviX runs with --no-sandbox, so Chromium's process
-sandbox is off. Network access has no password — with --lan (or --bind), anyone on that network who
-opens the address can fully control this computer through ShuviX.
+sandbox is off. Network access has no password — once the policy lets a device in, whoever uses it can
+fully control this computer through ShuviX.
 EOF
 }
 
@@ -358,6 +364,7 @@ exec \"${target}\" --no-sandbox \"\$@\""
 }
 
 # The ShuviX flags for a headless run (the service and the helper): --bind / --lan only when asked for.
+# Both are deprecated in ShuviX too: it still accepts them and turns them into a network-admission policy.
 headless_flags() {
   if [ -n "$BIND" ]; then
     printf '%s' "--headless --bind ${BIND}"
@@ -373,7 +380,7 @@ install_helper() {
     # the deb's helper is shared by every user of the machine: whoever runs it as root needs --no-sandbox
     write_file "$HELPER" 0755 root "#!/bin/sh
 ${MARKER}
-# Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>, --lan, --bind <name>.
+# Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>.
 # Electron does not start as root unless Chromium's sandbox is off.
 if [ \"\$(id -u)\" = 0 ]; then set -- --no-sandbox \"\$@\"; fi
 exec \"${SHUVIX_BIN}\" $(headless_flags) --ozone-platform=headless --disable-gpu \"\$@\""
@@ -381,7 +388,7 @@ exec \"${SHUVIX_BIN}\" $(headless_flags) --ozone-platform=headless --disable-gpu
     # the AppImage launcher already passes --no-sandbox
     write_file "$HELPER" 0755 user "#!/bin/sh
 ${MARKER}
-# Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>, --lan, --bind <name>.
+# Runs ShuviX headless in the foreground (stop it with Ctrl+C). Options: --port <n>.
 exec \"${SHUVIX_BIN}\" $(headless_flags) --ozone-platform=headless --disable-gpu \"\$@\""
   fi
 }
@@ -452,20 +459,28 @@ wait_for_service() {
   die "the ${SERVICE_NAME} service did not start (see: ${SUDO_HINT}journalctl -u ${SERVICE_NAME})"
 }
 
-# How to reach ShuviX: from one network (--bind), from other devices (--lan), or through an SSH tunnel.
+# The deprecated --lan / --bind: what ShuviX does with them now (printed before anything is installed).
+deprecation_note() {
+  local option="--lan"
+  if [ -n "$BIND" ]; then option="--bind ${BIND}"; fi
+  say "note: ${option} is deprecated — who can connect is now the security policy network-admission; on its first start ShuviX writes ~/.shuvix/policies/network-admission.md from ${option}, if you have no such policy yet"
+}
+
+# How to reach ShuviX: the policy written from --bind / --lan, or (by default) through an SSH tunnel.
 access_hint() {
   if [ -n "$BIND" ]; then
     firewall_hint
-    say "ShuviX only accepts connections from the network of ${BIND} (it listens on that address only)."
+    say "On its first start ShuviX writes the network-admission policy from --bind ${BIND}: only this machine and the network of ${BIND} can connect (if you have such a policy already, yours decides)."
     say "Network access has no password: anyone on that network who opens the address can fully control this computer through ShuviX."
   elif [ "$LAN" -eq 1 ]; then
     firewall_hint
+    say "On its first start ShuviX writes the network-admission policy from --lan: every device on the local network can connect (if you have such a policy already, yours decides)."
     say "Network access has no password: anyone on the same network who opens the address can fully control this computer through ShuviX."
   else
     say "ShuviX only accepts connections from this machine (127.0.0.1). From another computer, open an SSH tunnel:"
     say "  ssh -L ${PORT}:127.0.0.1:${PORT} ${USER_NAME}@<this machine's address>"
-    say "and open http://127.0.0.1:${PORT}/ there. To let every device on the local network connect instead"
-    say "(no password), rerun this script with --lan."
+    say "and open http://127.0.0.1:${PORT}/ there. To let other devices in, follow Settings → General → Network access"
+    say "in that browser (a prompt sets up the policy network-admission with an agent), or write ~/.shuvix/policies/network-admission.md."
     say "Network access has no password: anyone who can reach port ${PORT} on this machine (other users on it, or through a tunnel) can fully control it through ShuviX."
   fi
 }
@@ -497,6 +512,7 @@ do_install() {
   if [ "$SERVICE" -eq 1 ] && [ "$DRY_RUN" -eq 0 ] && ! command -v systemctl >/dev/null 2>&1; then
     die "--service needs systemd (systemctl was not found); use shuvix-server instead"
   fi
+  if [ "$LAN" -eq 1 ]; then deprecation_note; fi
   setup_sudo
   resolve_release
   stop_running_service

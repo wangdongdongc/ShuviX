@@ -364,20 +364,35 @@ export type RetiredPolicyName =
  * 用户裁定「出厂不要硬限制、默认尽可能少问」（2026-10-01），这几份不再随包发布；但它们挂靠的
  * 执行点（数据库门、Chrome 的站点门、L1 调用门、git 门 …）都还在，留给用户自写策略。md 原样
  * （去掉 `shuvix-builtin: true`）留在 agent-runtime 的单测夹具里 —— 一条 e2e 要测某个执行点的
- * 询问卡片 / 接线，就装这一份：策略现扫、无缓存，写下即生效（下一次判定就按它走），
- * `removeRetiredPolicy` 删掉即失效。回写下的文件路径。
+ * 询问卡片 / 接线，就装这一份。回写下的文件路径。
+ *
+ * 策略有统一缓存（2026-10-19）：判定路径至多每秒对一次目录，从外面拷进来的文件最多晚一秒生效。
+ * 所以写完 / 删完再调一次 `policy:list` —— 列表路径每次都对目录，刷新的是同一份缓存，回来之后
+ * 下一次判定就按新的走。
  */
-export function seedRetiredPolicy(app: Pick<E2EApp, 'home'>, name: RetiredPolicyName): string {
+export async function seedRetiredPolicy(
+  app: Pick<E2EApp, 'home' | 'main'>,
+  name: RetiredPolicyName
+): Promise<string> {
   const dir = join(app.home, '.shuvix', 'policies')
   mkdirSync(dir, { recursive: true })
   const file = join(dir, `${name}.md`)
   writeFileSync(file, readFileSync(join(RETIRED_POLICIES_DIR, `${name}.md`), 'utf8'))
+  await policiesRescanned(app)
   return file
 }
 
-/** 撤掉 seedRetiredPolicy 装的那一份（文件不在也不报错） */
-export function removeRetiredPolicy(app: Pick<E2EApp, 'home'>, name: RetiredPolicyName): void {
+/** 撤掉 seedRetiredPolicy 装的那一份（文件不在也不报错），同样等缓存认下 */
+export async function removeRetiredPolicy(
+  app: Pick<E2EApp, 'home' | 'main'>,
+  name: RetiredPolicyName
+): Promise<void> {
   rmSync(join(app.home, '.shuvix', 'policies', `${name}.md`), { force: true })
+  await policiesRescanned(app)
+}
+
+async function policiesRescanned(app: Pick<E2EApp, 'main'>): Promise<void> {
+  await app.main.eval<boolean>(`window.api.policy.list().then(() => true)`)
 }
 
 /**

@@ -459,7 +459,7 @@ describe('只问人的门', () => {
     const content = '---\nshuvix: agent v1\nname: e2e-probe\n---\n\nPROBE BODY.\n'
 
     // 出厂不再有 force-ask（2026-10-01 删了 protect-shuvix-config）：把它原样装成用户策略
-    seedRetiredPolicy(app, 'protect-shuvix-config')
+    await seedRetiredPolicy(app, 'protect-shuvix-config')
     try {
       const sid = await newSession('R5-config')
       provider.reset()
@@ -484,7 +484,7 @@ describe('只问人的门', () => {
       expect(decision.review).toBeUndefined()
       expect(decision.userResponse).toBe('denied')
     } finally {
-      removeRetiredPolicy(app, 'protect-shuvix-config')
+      await removeRetiredPolicy(app, 'protect-shuvix-config')
     }
 
     // P1：出厂行为 —— 会话目录之外的一次普通写入，ask-on-external-path 的写规则问，先交给审查员（这里审查员拒）
@@ -672,7 +672,7 @@ describe('子会话', () => {
 
     // ① 父 agent 开子会话：出厂不问（2026-10-01 删了 ask-on-sub-session）—— 把它原样装成用户
     //    策略，开子会话就要问 → 先交给审查员。② 的 prompt-sub-session 不在它的范围里
-    seedRetiredPolicy(app, 'ask-on-sub-session')
+    await seedRetiredPolicy(app, 'ask-on-sub-session')
     onTestFinished(() => removeRetiredPolicy(app, 'ask-on-sub-session'))
     provider.reset()
     await events.clear()

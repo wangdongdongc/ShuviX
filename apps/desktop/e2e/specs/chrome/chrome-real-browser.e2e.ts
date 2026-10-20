@@ -363,7 +363,7 @@ describe.skipIf(!CHROME_BIN)('真实浏览器', () => {
   it('RCB-5 没带上的新站点要问一次：卡片在侧边栏上，点了允许才开页', async () => {
     // 出厂不再问新站点（2026-10-01 删了 ask-on-new-site）：把退役的那份原样装成用户策略 ——
     // 这条测的是真侧边栏上的询问卡片，不是出厂行为
-    seedRetiredPolicy(app, 'ask-on-new-site')
+    await seedRetiredPolicy(app, 'ask-on-new-site')
     onTestFinished(() => removeRetiredPolicy(app, 'ask-on-new-site'))
     // localhost 与 127.0.0.1 是两个站点（站点按 host 算）
     const otherSite = fixture.url('/counter.html').replace('127.0.0.1', 'localhost')

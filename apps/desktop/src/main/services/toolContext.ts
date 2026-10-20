@@ -35,7 +35,8 @@ import {
   parseAllowEntry,
   type CallOwner,
   type SecurityContext,
-  type SecurityHostProvider
+  type SecurityHostProvider,
+  type SecuritySubject
 } from '@shuvix/agent-runtime'
 import type { ProjectEnvVar } from '../types'
 import { withCallAgent, type ToolAgentIdentity } from './toolAgent'
@@ -452,6 +453,7 @@ export function getDesktopSecurityContext(
   return {
     evaluate: (action, object, opts) => base.evaluate(action, object, opts),
     evaluateReadOnly: (action, object, opts) => base.evaluateReadOnly(action, object, opts),
+    judgeGate: (action, object, opts) => base.judgeGate(action, object, opts),
     enforcePath: (mode, resolvedPath, opts) => forCall(opts).enforcePath(mode, resolvedPath, opts),
     enforceCommand: (object, opts) => forCall(opts).enforceCommand(object, opts),
     enforceGitOp: (object, opts) => forCall(opts).enforceGitOp(object, opts),
@@ -479,6 +481,31 @@ function getDesktopUserSecurityContext(getConfig: () => ProjectConfig): Security
     },
     makeDesktopSecurityProvider({ sessionId: '' }, getConfig)
   )
+}
+
+/** 网络主体的宿主事实变量复用多久：与会话无关、几秒内不会变，而每个网络请求都要判一次 */
+const NETWORK_VARS_TTL_MS = 5000
+let networkVars: { at: number; vars: ReturnType<SecurityHostProvider['getVars']> } | null = null
+
+/**
+ * 远程访问的网络主体 SecurityContext（`frontend/network/policyGate.ts` 用，subject.kind = 'network'）。
+ * 没有会话：vars 只有宿主事实（home、配置目录、技能目录……），没有会话目录、没有「允许并记住」；只用
+ * judgeGate（不能询问的点位：ask 降级为拒绝），所以也不接询问通道与审查。用户策略读统一缓存，与 agent 同一份。
+ */
+export function getDesktopNetworkSecurityContext(subject: SecuritySubject): SecurityContext {
+  const base = makeDesktopSecurityProvider({ sessionId: '' }, () => ({ workingDirectory: '' }))
+  const provider: SecurityHostProvider = {
+    ...base,
+    getVars: () => {
+      const now = Date.now()
+      if (networkVars === null || now - networkVars.at > NETWORK_VARS_TTL_MS) {
+        networkVars = { at: now, vars: hostPolicyVars('', '') }
+      }
+      return networkVars.vars
+    },
+    getSessionGrants: () => ({ allowList: [] })
+  }
+  return createSecurityContext(subject, { host: 'desktop', platform: process.platform }, provider)
 }
 
 /** ProjectEnvVar[] → Record<string, string>，过滤空 key */

@@ -73,36 +73,59 @@ export interface EvaluateOpts {
 }
 
 /**
- * SecurityRequest → match 求值文档。subject/tool/env 固定命名空间补空串缺省
+ * 把 source 的自有属性搬进 target：搬运**属性描述符**而不是取值 —— 命令客体的结构属性、网络主体的
+ * cookie / 网卡名都是惰性 getter（见 context.ts 的 buildCommandObject）。Object.entries 会当场读取，把
+ * 「没有策略引用它就不计算」毁掉；而它们又是非枚举的（不让决策日志的序列化拖进整棵树），entries 干脆
+ * 看不到。值为 undefined 的键剔除（与缺键同义，统一走 strict 报错）；`skip` 里的键不搬（固定字段）。
+ */
+function copyAttributes(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+  skip?: ReadonlySet<string>
+): void {
+  for (const key of Object.getOwnPropertyNames(source)) {
+    if (skip?.has(key)) continue
+    const desc = Object.getOwnPropertyDescriptor(source, key)
+    if (!desc) continue
+    if (desc.get) {
+      Object.defineProperty(target, key, { ...desc, configurable: true })
+      continue
+    }
+    if (desc.value !== undefined) target[key] = desc.value
+  }
+}
+
+/** 主体的固定字段：开放属性不能覆盖它们（`subject.kind` 是结构化条件键，覆盖了就是换了主体） */
+const FIXED_SUBJECT_KEYS: ReadonlySet<string> = new Set([
+  'kind',
+  'agentKind',
+  'profile',
+  'sessionId',
+  'depth'
+])
+
+/**
+ * SecurityRequest → match 求值文档。subject 的固定字段与 tool/env 固定命名空间补空串缺省
  * （恒可访问 —— `tool.name == 'ssh'` 对被动 UI 求 false 而非报错）；
- * object 原样透传（undefined 属性剔除 —— CEL 上下文里"值为 undefined 的键"
+ * object 与 subject 的开放属性原样透传（undefined 属性剔除 —— CEL 上下文里"值为 undefined 的键"
  * 与"缺键"应当同义，统一走 strict 报错）。
  */
 export function buildMatchContext(
   request: SecurityRequest,
   vars: Record<string, PolicyVarValue>
 ): MatchContext {
-  // 搬运**属性描述符**而不是取值：命令客体的结构属性是惰性 getter（见 context.ts 的
-  // buildCommandObject）。Object.entries 会当场读取，把「没有策略引用它就不解析」毁掉；
-  // 而它们又是非枚举的（不让决策日志的序列化拖进整棵树），entries 干脆看不到。
   const object: Record<string, AttrValue> = {}
-  for (const key of Object.getOwnPropertyNames(request.object)) {
-    const desc = Object.getOwnPropertyDescriptor(request.object, key)
-    if (!desc) continue
-    if (desc.get) {
-      Object.defineProperty(object, key, desc)
-      continue
-    }
-    if (desc.value !== undefined) object[key] = desc.value as AttrValue
+  copyAttributes(object, request.object)
+  const subject: MatchContext['subject'] = {
+    kind: request.subject.kind,
+    agentKind: request.subject.agentKind ?? '',
+    profile: request.subject.profileName ?? '',
+    sessionId: request.subject.sessionId,
+    depth: request.subject.depth ?? 0
   }
+  if (request.subject.attrs) copyAttributes(subject, request.subject.attrs, FIXED_SUBJECT_KEYS)
   return {
-    subject: {
-      kind: request.subject.kind,
-      agentKind: request.subject.agentKind ?? '',
-      profile: request.subject.profileName ?? '',
-      sessionId: request.subject.sessionId,
-      depth: request.subject.depth ?? 0
-    },
+    subject,
     action: request.action,
     tool: { name: request.tool?.name ?? '', operation: request.tool?.operation ?? '' },
     object,

@@ -5,7 +5,7 @@
  * 同一批文件，见 inlineSources.ts）：侧栏点开一份内置策略时看到的只读笔记本，读的就是
  * 运行时读的那一份。
  *
- * 原则：无策略 = 放行（evaluate 默认 allow）。出厂只留两份，都是询问、没有硬限制
+ * 原则：无策略 = 放行（evaluate 默认 allow）。管 agent 的出厂只留两份，都是询问、没有硬限制
  * （没有 deny，也没有 force-ask）—— 默认尽可能少问，复杂的事交给自动审查（2026-10-01 用户裁定）：
  *   - ask-on-external-path：文件工具在会话目录（`vars.sessionDirs`，与命令沙箱同一份清单）与
  *     「允许并记住」的路径以外 —— 读家目录里的文件、往任何地方写 —— 询问。
@@ -20,7 +20,12 @@
  * 外部目录访问挡住）、ask-on-write（并入 ask-on-external-path）、session-grants（「允许并记住」
  * 并入 ask-on-external-path 的 match）也删了。
  *
- * 全部规则的 subject.kind 恒为 [agent]（守护测试钉死）：防护只作用于智能体，
+ * 另有一份管远程访问的（2026-10-19 用户裁定，上面那条「没有 deny」的唯一例外，只作用于 network 主体）：
+ *   - network-admission：远程访问只允许本机 —— 发送方不是 127.0.0.1 / ::1 的 HTTP 请求一律拒绝。
+ *     网络点位没有人可问（ask 会降级为拒绝），所以它直接写 deny；要让别的设备进来，写一份同名的用户
+ *     策略替换它（deny 压过一切 allow，另写一份放不开）。设置页按它的状态给引导提示。
+ *
+ * agent 主体那两份的 subject.kind 恒为 [agent]、network-admission 的恒为 [network]（守护测试钉死）：
  * 用户主体（UI 亲手操作）不受内置策略约束 —— 多主体模型见 types.ts SecuritySubject。
  *
  * 多语言：与 builtinAgents 同款「一语言一文件、整文件回退」（精确语言 → 基础语言 → en，
@@ -54,7 +59,8 @@ export interface BuiltinPolicySpec {
 // 装配序 = 决策归因优先序（同 tier 多规则命中时 winning 取先装配者）
 export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'ask-on-external-path' },
-  { name: 'ask-on-command' }
+  { name: 'ask-on-command' },
+  { name: 'network-admission' }
 ]
 
 /** 语言 → 解析产物缓存（键为归一化语言码）。readMd 是进程级稳定接缝（桌面 = 随包目录，

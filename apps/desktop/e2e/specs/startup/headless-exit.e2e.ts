@@ -10,16 +10,13 @@
  * HX-5  `--headless --port` → 2；「--port needs a value」那一行
  * HX-6  `--headless --network-port=80` → 2；别名报别名
  * HX-7  SHUVIX_HEADLESS=Yes + `--port 70000` → 2
- * HX-8  127.0.0.1:P 被占（缺省无头绑 127.0.0.1）→ 1；恰一行「cannot listen on port P: EADDRINUSE …」；没有就绪那一行；
- *       之后开始退出 / 退出完各一行；退出后地址文件不在
- * HX-8b 0.0.0.0:P 被占 + `--lan` → 1，同一行
+ * HX-8  0.0.0.0:P 被占（无头一律监听 0.0.0.0，谁能连由策略定）→ 1；恰一行「cannot listen on port P: EADDRINUSE …」；
+ *       没有就绪那一行；之后开始退出 / 退出完各一行；退出后地址文件不在
+ * HX-8b 0.0.0.0:P 被占 + 弃用的 `--lan` → 1，同一行；弃用说明照样先打一行
  * HX-8c 0.0.0.0:P 被占 + SHUVIX_LAN=yes → 1，同一行
- *       （缺省无头 + 0.0.0.0 被占不算失败：macOS 上 127.0.0.1 照样绑得上，不写这一条）
- * HX-9  `--bind shuvix-nope0`（这台电脑上没有的网卡）→ 1；恰一行「cannot listen on port P: ENOINTERFACE (no network
- *       interface or local address shuvix-nope0 on this computer)」；没有就绪那一行；之后开始退出 / 退出完各一行；
- *       没有地址文件
- * HX-9b 同上，经环境变量 SHUVIX_BIND=shuvix-nope0
+ *       （弃用的 `--bind` 不再决定监听在哪：这台电脑上没有的网卡也照常起来，见 headless-legacy-sharing.e2e.ts）
  * HX-10 `--bind 'a;b'` → 2；「invalid --bind value "a;b"」那一行；`--headless --bind`（缺值）→ 2；「--bind needs a value」那一行
+ *       （弃用的参数照旧被校验：服务文件里写错了要看得见）
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
@@ -28,13 +25,14 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { freePort, runToExit, type RunToExitResult } from '../../harness/launch'
 
 const READY_PREFIX = 'ShuviX headless: ready — open one of: '
-const USAGE_FIRST = 'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]'
+const USAGE_FIRST = 'Usage: shuvix --headless [--port <n>]'
 const USAGE_HEADLESS = '  --headless          run without windows (same as SHUVIX_HEADLESS=1)'
 const USAGE_HELP = '  --help, -h          print this help and exit'
 const SHUTTING_DOWN = 'ShuviX headless: shutting down'
-const NO_INTERFACE =
-  'ENOINTERFACE (no network interface or local address shuvix-nope0 on this computer)'
 const STOPPED = 'ShuviX headless: stopped'
+const LAN_DEPRECATED =
+  'ShuviX headless: --lan is deprecated — who can connect is now the security policy network-admission; ' +
+  'if you have none yet, it is written from this option once (~/.shuvix/policies/network-admission.md)'
 
 const homes: string[] = []
 const blockers: Server[] = []
@@ -78,7 +76,7 @@ function expectArgsError(result: RunToExitResult, line: string): void {
   expect(hasReadyLine(result.stdout)).toBe(false)
 }
 
-/** 断言一次「监听不了」的退出（HX-8 / 8b / 8c 端口被占、HX-9 / 9b 网卡找不到共用） */
+/** 断言一次「监听不了」的退出（HX-8 / 8b / 8c 端口被占共用） */
 function expectListenError(
   result: RunToExitResult,
   home: string,
@@ -164,10 +162,10 @@ describe('headless: launches that exit on their own', () => {
     )
   }, 90_000)
 
-  it('HX-8 a port in use on 127.0.0.1 exits 1 with the cannot-listen line', async () => {
+  it('HX-8 a port in use on 0.0.0.0 exits 1 with the cannot-listen line', async () => {
     const home = newHome()
     const port = await freePort()
-    const blocker = await block(port, '127.0.0.1')
+    const blocker = await block(port, '0.0.0.0')
     try {
       const result = await runToExit({
         home,
@@ -191,6 +189,7 @@ describe('headless: launches that exit on their own', () => {
         timeoutMs: 90_000
       })
       expectListenError(result, home, port)
+      expect(countLine(result.stdout, LAN_DEPRECATED), result.stdout).toBe(1)
     } finally {
       await unblock(blocker)
     }
@@ -211,29 +210,6 @@ describe('headless: launches that exit on their own', () => {
     } finally {
       await unblock(blocker)
     }
-  }, 120_000)
-
-  it('HX-9 --bind naming an interface this computer does not have exits 1 with ENOINTERFACE', async () => {
-    const home = newHome()
-    const port = await freePort()
-    const result = await runToExit({
-      home,
-      args: ['--headless', '--port', String(port), '--bind', 'shuvix-nope0'],
-      timeoutMs: 90_000
-    })
-    expectListenError(result, home, port, NO_INTERFACE)
-  }, 120_000)
-
-  it('HX-9b SHUVIX_BIND=shuvix-nope0 does the same', async () => {
-    const home = newHome()
-    const port = await freePort()
-    const result = await runToExit({
-      home,
-      args: ['--headless', '--port', String(port)],
-      env: { SHUVIX_BIND: 'shuvix-nope0' },
-      timeoutMs: 90_000
-    })
-    expectListenError(result, home, port, NO_INTERFACE)
   }, 120_000)
 
   it('HX-10 an invalid or missing --bind value exits 2 with one line', async () => {

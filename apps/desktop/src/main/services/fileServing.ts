@@ -13,11 +13,17 @@ import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { SANDBOX_LIBS } from '@shuvix/chat-protocol/utils/interactiveFence'
 import { resolveProjectConfig } from './toolContext'
+import { sessionService } from './sessionService'
 import { resolveReadPath } from '../utils/toolUtils/pathUtils'
 import { getSandboxLibsDir } from '../utils/paths'
 
-/** 预览资源的路径：相对路径按会话的工作目录解析（会话不在 → 按空工作目录，绝对路径照样能读） */
+/**
+ * 预览资源的路径：相对路径按会话的工作目录解析（会话不在 → 按空工作目录，绝对路径照样能读）。
+ * 会话不在时**不碰** resolveProjectConfig：它会按会话 id 建临时工作区，而这个 id 可能是网络客户端交来的任意串
+ * （`/files/preview?session=../../x`），不能让它在 userData 以外建目录
+ */
 export function resolvePreviewFilePath(sessionId: string, rawPath: string): string {
+  if (!sessionService.getById(sessionId)) return resolveReadPath(rawPath, '')
   const config = resolveProjectConfig(sessionId)
   return resolveReadPath(rawPath, config.workingDirectory)
 }

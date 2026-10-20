@@ -6,6 +6,7 @@
  *   policyFile.ts     策略 md 解析/序列化（`shuvix: policy v1`；规则 = effect + match）
  *   builtinPolicies/  内置策略（md ?raw 内联；用户可在 ~/.shuvix/policies 同名覆盖）
  *   assemble.ts       四层来源装配 + lets 求值 + tier 标定（force-allow 用原生谓词）
+ *   cidr.ts           IP 地址与网段（策略的 inCidr；Node-free）
  *   evaluate.ts       统一评估纯函数（deny → force-ask → force-allow → ask → static-allow → default）
  *   enforce.ts        决策执行（询问挂起 + 四分支响应收敛）+ 决策日志埋点
  *   commandFacts.ts   命令客体的结构属性投影（ShellFacts → CEL 可消费的属性）
@@ -44,7 +45,8 @@ export { assembleRules, mergePolicyFiles, resolvePolicyFiles } from './assemble'
 export { evaluate, buildMatchContext, type EvaluateOpts } from './evaluate'
 export { compileMatch, evaluateMatch, evaluateLet } from './celMatch'
 export { executeDecision } from './enforce'
-export { createSecurityContext } from './context'
+export { createSecurityContext, gateVerdictOf, GATE_DOWNGRADED_MESSAGE } from './context'
+export { ipInCidrs, parseIp, parseCidr, type ParsedIp } from './cidr'
 export { isCommandRisk, commandRiskOf, pickCommandRisk } from './commandRisk'
 export { urlObjectOf } from './urlObject'
 export {

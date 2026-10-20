@@ -25,6 +25,7 @@ import type {
   CommandRisk,
   EnforceOpts,
   EnforceOutcome,
+  GateVerdict,
   SecurityContext,
   SecurityDecision,
   SecurityEnvironment,
@@ -170,6 +171,20 @@ async function classifyCommandSafely(
   }
 }
 
+/** 降级的询问没有 reason，也可能没写 prompt：拒绝时给对方的固定一句 */
+export const GATE_DOWNGRADED_MESSAGE =
+  'A security policy asks before allowing this, and this check cannot ask anyone, so it is refused.'
+
+/** 结算 → 不能询问的点位的结论：ask（含 force-ask）降级为拒绝 */
+export function gateVerdictOf(decision: SecurityDecision): GateVerdict {
+  if (decision.effect === 'allow') return { allowed: true, decision, downgraded: false }
+  const downgraded = decision.effect === 'ask'
+  const message =
+    decision.prompt?.text ??
+    (downgraded ? GATE_DOWNGRADED_MESSAGE : (decision.reason ?? 'Refused by a security policy.'))
+  return { allowed: false, decision, downgraded, message }
+}
+
 export function createSecurityContext(
   subject: SecuritySubject,
   environment: SecurityEnvironment,
@@ -269,6 +284,10 @@ export function createSecurityContext(
     // 被动 UI 判定：includeForceAllow 缺省 false（per-path 授权不放宽 UI 范围），不记日志
     evaluateReadOnly: (action, object, opts) =>
       judge(action, object, opts?.includeForceAllow === true).decision.effect === 'allow',
+
+    // 不能询问的点位：先完整结算，再把 ask 降级为拒绝（见 types.ts SecurityContext.judgeGate）
+    judgeGate: (action, object, opts) =>
+      gateVerdictOf(judge(action, object, true, opts?.tool).decision),
 
     // enforcePath / enforceGitOp / enforceUrl 什么都不返回 —— 用户的「其它」反馈没有地方带回去，
     // 只能抛出。强制 onOther:'throw'：调用方误传 'return' 时，反馈不能被当成放行

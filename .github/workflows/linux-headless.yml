@@ -74,7 +74,7 @@ jobs:
           npx electron-builder --linux deb --${{ matrix.arch }} --publish never
           ls -l dist/*.deb
 
-      # 缺省：只给这台电脑（127.0.0.1）
+      # 缺省：内置策略 network-admission 只放这台电脑（127.0.0.1）—— ShuviX 照样监听 0.0.0.0，别的发送方收到 403
       - name: Install with install-linux.sh (--deb --service, localhost only)
         run: |
           set -- apps/desktop/dist/shuvix-*-${{ matrix.deb_arch }}.deb
@@ -83,7 +83,7 @@ jobs:
           echo "SHUVIX_DEB=$deb" >> "$GITHUB_ENV"
           bash scripts/install-linux.sh --deb "$deb" --service --port "$PORT"
 
-      - name: Localhost only — ready line, 127.0.0.1 serves, the LAN address does not
+      - name: Localhost only — ready line, 127.0.0.1 serves, the LAN address gets the policy's 403
         run: |
           line="$(sudo journalctl -u shuvix --no-pager -o cat | grep -F 'ShuviX headless: ready — open one of: ' | tail -n 1)"
           echo "$line"
@@ -95,13 +95,15 @@ jobs:
           lan_ip="$(hostname -I | awk '{print $1}')"
           test -n "$lan_ip"
           echo "SHUVIX_LAN_IP=$lan_ip" >> "$GITHUB_ENV"
-          set +e
-          curl -sS --max-time 10 "http://$lan_ip:$PORT/" -o /dev/null
-          code=$?
-          set -e
-          echo "curl http://$lan_ip:$PORT/ exited $code"
-          # 7 = could not connect: nothing listens on that address
-          test "$code" -eq 7
+          # ShuviX listens on 0.0.0.0 (a refused connection fails this step); the builtin network-admission
+          # policy answers every sender but this computer with 403 and a sentence that says why
+          code="$(curl -sS --max-time 10 -o denied.txt -w '%{http_code}' "http://$lan_ip:$PORT/")"
+          echo "curl http://$lan_ip:$PORT/ → HTTP $code"
+          cat denied.txt
+          test "$code" = 403
+          grep -qF 'only accepts connections from the computer it runs on' denied.txt
+          # no --lan / --bind: nothing was migrated into a user policy
+          test ! -e "$HOME/.shuvix/policies/network-admission.md"
 
       - name: WebSocket smoke client, localhost only (invoke + view sync)
         run: node scripts/headless-smoke.mjs "http://127.0.0.1:$PORT" --expect-local
@@ -116,12 +118,22 @@ jobs:
           test "$code" -eq 0
           printf '%s\n' "$out" | grep -F "ShuviX headless: already running — open one of: http://127.0.0.1:$PORT/"
 
-      # 重跑安装脚本加 --lan：同一个包（apt 什么也不换），改写服务文件、重启 —— 也就把「重跑 = 升级」那条路走了一遍
-      - name: Rerun with --lan (share on the local network)
-        run: bash scripts/install-linux.sh --deb "$SHUVIX_DEB" --service --port "$PORT" --lan
-
-      - name: LAN — ready line lists the LAN address, every advertised address serves
+      # 重跑安装脚本加弃用的 --lan：同一个包（apt 什么也不换），改写服务文件、重启 —— 也就把「重跑 = 升级」那条路走了一遍。
+      # ShuviX 照旧接受 --lan：还没有同名用户策略，首次启动就按它写一份 network-admission（没有规则：局域网里的设备都能进）
+      - name: Rerun with the deprecated --lan (migrated into a network-admission policy)
         run: |
+          # tee must not hide a failed install
+          set -o pipefail
+          bash scripts/install-linux.sh --deb "$SHUVIX_DEB" --service --port "$PORT" --lan | tee install-lan.log
+          grep -F 'note: --lan is deprecated' install-lan.log
+
+      - name: LAN — deprecation line, the migrated policy, the LAN address advertised and served
+        run: |
+          sudo journalctl -u shuvix --no-pager -o cat | grep -F 'ShuviX headless: --lan is deprecated'
+          policy="$HOME/.shuvix/policies/network-admission.md"
+          test -f "$policy"
+          cat "$policy"
+          grep -qF 'name: network-admission' "$policy"
           line="$(sudo journalctl -u shuvix --no-pager -o cat | grep -F 'ShuviX headless: ready — open one of: ' | tail -n 1)"
           echo "$line"
           echo "Ready line (--lan): \`$line\`" >> "$GITHUB_STEP_SUMMARY"
@@ -205,6 +217,7 @@ jobs:
           sudo journalctl -u shuvix --no-pager -o short-precise > headless-logs/journal-shuvix.txt || true
           cp "$HOME/.config/shuvix/logs/main.log" headless-logs/main.log 2>/dev/null || true
           cp inline-switch.log headless-logs/ 2>/dev/null || true
+          cp "$HOME/.shuvix/policies/network-admission.md" headless-logs/ 2>/dev/null || true
           ls -l headless-logs
 
       - name: Upload logs

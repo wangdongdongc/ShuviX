@@ -3,7 +3,8 @@
  * 打开 `http://127.0.0.1:<端口>/`，经 WebSocket 用与桌面窗口同一张通道表、同一套处理函数。
  *
  * NW-1  缺省不监听；在空闲端口上打开 → 开始监听
- * NW-2  那个页面就是 web 客户端：`window.api` 能用、没有任何 Electron 全局；设置页列出这个客户端
+ * NW-2  那个页面就是 web 客户端：`window.api` 能用、没有任何 Electron 全局；第一次打开时服务端发了设备 cookie，
+ *       之后的 WebSocket 带着它 —— 客户端行带设备 ID；设置页列出这个客户端（含设备 ID）与内置准入的引导
  * NW-3  会话列表在页面里渲染、跟着实时推送走
  * NW-4  页面里发的提示词流式回到页面、落进 message.list
  * NW-5  运行中的询问卡片在页面里答复：工具看见答复，运行继续
@@ -25,8 +26,8 @@ import { listTargets, sleep, until, type CdpClient } from '../../harness/cdp'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 import { freePort, launchApp, type E2EApp } from '../../harness/launch'
 import {
+  deviceCookieOf,
   httpProbe,
-  lanCandidatesOf,
   networkStatus,
   openWebClient,
   shellOpens,
@@ -198,22 +199,22 @@ describe('network access: the web client in a real page', () => {
     expect(initial).toStrictEqual({
       enabled: false,
       port: 7766,
-      lan: false,
-      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
-      clients: []
+      clients: [],
+      admission: 'builtin',
+      denials: []
     })
     expect('error' in initial).toBe(false)
 
     expect(await setPort(P1)).toStrictEqual({
       enabled: false,
       port: P1,
-      lan: false,
-      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
-      clients: []
+      clients: [],
+      admission: 'builtin',
+      denials: []
     })
 
     await mainAppEvents.clear()
@@ -223,11 +224,10 @@ describe('network access: the web client in a real page', () => {
       port: P1,
       listening: true,
       clients: [],
-      lan: false,
-      bindAddress: '127.0.0.1'
+      admission: 'builtin'
     })
     expect('error' in on).toBe(false)
-    // 局域网开关缺省关：只监听 127.0.0.1、只列它（phase D：列 127.0.0.1 而不是 localhost —— localhost 可能先解析成 ::1）
+    // 内置准入只放这台电脑：只列 127.0.0.1（phase D：列 127.0.0.1 而不是 localhost —— localhost 可能先解析成 ::1）
     expect(on.addresses).toStrictEqual([`http://127.0.0.1:${P1}`])
     await until(
       async () => (await mainAppEvents.count('network.changed')) >= 1,
@@ -237,6 +237,20 @@ describe('network access: the web client in a real page', () => {
     const page = await httpProbe({ port: P1, host: `127.0.0.1:${P1}` })
     expect(page.status).toBe(200)
     expect(String(page.headers?.['content-type'])).toMatch(/^text\/html/)
+    // 没带设备 ID 的请求：应答发一个（只给本服务的页面，脚本读不到）
+    const cookie = deviceCookieOf(page.headers)
+    expect(cookie?.value).toMatch(/^[A-Za-z0-9_-]{22}$/)
+    expect(cookie?.header).toBe(
+      `shuvix_device=${cookie?.value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=315360000`
+    )
+    // 带着就不再发
+    const again = await httpProbe({
+      port: P1,
+      host: `127.0.0.1:${P1}`,
+      headers: { Cookie: `shuvix_device=${cookie?.value}` }
+    })
+    expect(again.status).toBe(200)
+    expect(deviceCookieOf(again.headers)).toBeNull()
   })
 
   it('NW-2 the plain page is the web client: working window.api, no Electron globals; Settings lists it', async () => {
@@ -279,6 +293,9 @@ describe('network access: the web client in a real page', () => {
     const client = withClient.clients[0]
     expect(client.id).toMatch(/^ws:\d+$/)
     expect(client.remoteAddress).toBe('127.0.0.1')
+    // 页面第一次加载时拿到的设备 cookie，WebSocket 升级时浏览器自己带上了（HttpOnly：页面脚本看不见它）
+    expect(client.device).toMatch(/^[A-Za-z0-9_-]{22}$/)
+    expect(await webPage().eval<string>('document.cookie')).not.toContain('shuvix_device')
     expect(client.userAgent).toBe(await webPage().eval<string>('navigator.userAgent'))
     expect(client.connectedAt).toBeGreaterThanOrEqual(t0)
     expect(client.connectedAt).toBeLessThanOrEqual(Date.now())
@@ -299,18 +316,20 @@ describe('network access: the web client in a real page', () => {
       present: true,
       toggle: 'on',
       toggleDisabled: false,
-      lan: 'off',
-      lanDisabled: false,
       portDisabled: false,
-      localOnly: en.settings.networkLocalOnly.replaceAll('{{port}}', String(P1)),
+      admission: 'builtin',
+      admissionText: en.settings.networkAdmission_builtin.replaceAll('{{port}}', String(P1)),
+      policyChat: en.settings.networkPolicySetUp,
+      policyCopy: true,
       headlessNote: null,
-      headlessLanNote: null,
       headlessPortNote: null,
       risk: en.settings.networkRisk,
       riskVisible: true,
       addresses: withClient.addresses,
       clients: [clientId1],
       clientTitles: ['127.0.0.1'],
+      clientDevices: [client.device],
+      denials: [],
       error: null
     })
   })
@@ -719,11 +738,11 @@ describe('network access: the web client in a real page', () => {
     expect(off).toStrictEqual({
       enabled: false,
       port: P1,
-      lan: false,
-      lanCandidates: lanCandidatesOf(),
       listening: false,
       addresses: [],
-      clients: []
+      clients: [],
+      admission: 'builtin',
+      denials: []
     })
     expect(sqlite(app.home, "select value from settings where key='network.enabled'").trim()).toBe(
       'false'

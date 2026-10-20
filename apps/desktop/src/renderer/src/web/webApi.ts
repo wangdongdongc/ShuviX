@@ -6,6 +6,7 @@
  * 在浏览器里有本地实现，不走到服务端（phase D，docs/server/phase-d-web-fallbacks.md §D3）：
  *
  *  - `app:open-settings(tab?)` → 新标签页里开 `#settings/<tab>`（同一个页面，按 hash 渲染设置面板）；
+ *  - `app:open-session-draft({sessionId, draft})` → 把本标签页（设置页）带回聊天页，草稿经 sessionStorage 带过去；
  *  - `app:open-external(url)` → 新标签页里开那个地址（只认 http / https / mailto，其余回 `success:false`）；
  *  - `files:open` → 新标签页里开 `#file-preview?…`（只读预览；md 也在那里只读渲染 —— 协作编辑窗口仍只在桌面）；
  *  - `widgetWindow:open` → 新标签页里开 `#widget-window?widgetId=…`（widget 经网络服务的 `/w/` 转发）；
@@ -22,6 +23,7 @@ import { API_TABLE, DESKTOP_ONLY_CHANNELS } from '../../../shared/apiTable'
 import { buildApi, createCommonOverrides, type WebApi } from '../../../shared/buildApi'
 import type { ServerFolderKind } from '../../../shared/serverFs'
 import { filePreviewPageUrl, widgetPageUrl } from '../host/hostUrls'
+import { stashPendingSessionDraft } from '../host/sessionDraftStash'
 import { requestDirectoryPick } from './webDirectoryPick'
 import { showServerPath, type WebPathNotice } from './webPathNotice'
 import type { WsConnection } from './wsConnection'
@@ -40,6 +42,11 @@ export interface WebLocalDeps {
   readonly showPath?: (notice: Omit<WebPathNotice, 'id'>) => void
   /** 页面里选一个服务端目录（缺省：`webDirectoryPick` + `WebDirectoryPicker`）；取消 → null */
   readonly pickDirectory?: () => Promise<string | null>
+  /**
+   * 带草稿回到聊天（`app:open-session-draft`；缺省：存进本标签页的 sessionStorage，把本标签页带回聊天页 ——
+   * 设置页在自己的标签页里）
+   */
+  readonly openChatWithDraft?: (sessionId: string, draft: string) => void
 }
 
 /** 外链只放这几种协议（`javascript:` 之类不碰） */
@@ -85,7 +92,20 @@ export function webLocalHandlers(
       return { success: true }
     }
 
+  const openChatWithDraft =
+    deps.openChatWithDraft ??
+    ((sessionId: string, draft: string): void => {
+      stashPendingSessionDraft({ sessionId, draft })
+      globalThis.location?.assign(`${win.location.origin}${win.location.pathname}`)
+    })
+
   const handlers: Record<string, (...args: unknown[]) => unknown> = {
+    'app:open-session-draft': (params) => {
+      const p = params as { sessionId?: unknown; draft?: unknown } | undefined
+      if (!isNonEmptyString(p?.sessionId)) return { success: false }
+      openChatWithDraft(p.sessionId, typeof p.draft === 'string' ? p.draft : '')
+      return { success: true }
+    },
     'app:open-settings': (tab) => {
       const hash = typeof tab === 'string' && tab.length > 0 ? `#settings/${tab}` : '#settings'
       win.open(`${win.location.origin}${win.location.pathname}${hash}`, '_blank')

@@ -63,7 +63,8 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { SHUVIX_ID_KEY } from '@shuvix/chat-protocol/mdMeta'
 import { splitFrontmatter } from '../markdownFrontmatter'
 import { readObjectIdField } from '../mdObjectId'
-import { compileMatch } from './celMatch'
+import { compileMatch, requestNamespacesIn } from './celMatch'
+import { trialNetworkRule } from './networkTrial'
 import { CONDITION_KEYS, mergeConditions } from './conditions'
 import type { ParsedPolicyFile, PolicyConditions, PolicyEffect, PolicyRuleSpec } from './types'
 
@@ -99,7 +100,16 @@ function stringList(value: unknown): string[] | null | undefined {
  * （let 叫 inDir 会在求值上下文里遮蔽函数，破坏同策略规则里的 inDir(...) 调用）。
  */
 const LET_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
-const RESERVED_NAMES = new Set(['subject', 'action', 'tool', 'object', 'env', 'vars', 'inDir'])
+const RESERVED_NAMES = new Set([
+  'subject',
+  'action',
+  'tool',
+  'object',
+  'env',
+  'vars',
+  'inDir',
+  'inCidr'
+])
 
 /** 规则允许的键 = effect / match / prompt / 五个条件键（其余一律整份非法，防"以为收窄生效"） */
 const RULE_KEYS = new Set<string>(['effect', 'match', 'prompt', ...CONDITION_KEYS])
@@ -179,7 +189,10 @@ function parseRule(value: unknown, warn?: (msg: string) => void): PolicyRuleSpec
   return rule
 }
 
-function parseLets(value: unknown): Record<string, string> | null | undefined {
+function parseLets(
+  value: unknown,
+  warn?: (msg: string) => void
+): Record<string, string> | null | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'object' || Array.isArray(value)) return null
   const out: Record<string, string> = {}
@@ -188,6 +201,15 @@ function parseLets(value: unknown): Record<string, string> | null | undefined {
     if (typeof expr !== 'string' || !expr.trim()) return null
     const trimmed = expr.trim()
     if (compileMatch(trimmed) !== null) return null
+    // lets 只按 `{vars}` 求值：读请求文档的 let 永远算不出来，引用它的 deny / ask 规则会 fail-safe 命中一切
+    const namespaces = requestNamespacesIn(trimmed)
+    if (namespaces.length > 0) {
+      warn?.(
+        `let '${name}' reads ${namespaces.map((n) => `\`${n}\``).join(', ')} — lets are computed from ` +
+          "`vars` only; put conditions on the request in the rule's `match`"
+      )
+      return null
+    }
     out[name] = trimmed
   }
   return Object.keys(out).length > 0 ? out : undefined
@@ -276,7 +298,7 @@ export function parsePolicyDefinitionFile(
     rules.push(rule)
   }
 
-  const lets = parseLets(fields[LETS_KEY])
+  const lets = parseLets(fields[LETS_KEY], (why) => warn?.(`security policy '${name}': ${why}`))
   if (lets === null) return reject(`invalid ${LETS_KEY}`)
   // 显示名（对齐 agent md 的 shuvix-displayName）：人读面，宽容处理 —— 非字符串/空即回退 name
   const displayNameRaw = fields['shuvix-displayName']
@@ -292,6 +314,27 @@ export function parsePolicyDefinitionFile(
         warn(
           `security policy '${name}' rule #${i}: match reads object attributes without an ` +
             `'object.type' condition — cross-type access will fail-safe (deny/ask over-matches)`
+        )
+      }
+      // 只管网络主体的询问：远程访问的点位没有人可问，结算出 ask 一律按拒绝（见 context.ts gateVerdictOf）
+      const kinds = mergeConditions(scope, rule.conditions)?.['subject.kind']
+      if (
+        (rule.effect === 'ask' || rule.effect === 'force-ask') &&
+        kinds !== undefined &&
+        kinds.every((kind) => kind === 'network')
+      ) {
+        warn(
+          `security policy '${name}' rule #${i}: network requests cannot ask anyone — ` +
+            `this '${rule.effect}' rule refuses like 'deny'; write 'deny' to say so`
+        )
+      }
+      // 远程访问的规则拿样例请求试算：求值期出错的 deny / ask 会把这一类请求全部拒掉（见 networkTrial.ts）
+      const trial = trialNetworkRule(rule, scope, lets)
+      if (trial !== null) {
+        warn(
+          `security policy '${name}' rule #${i}: ${trial} — when a rule fails to evaluate, ` +
+            `a deny or ask counts as matched and refuses every such request (this computer included); ` +
+            `guard optional keys with \`'key' in map\``
         )
       }
     })

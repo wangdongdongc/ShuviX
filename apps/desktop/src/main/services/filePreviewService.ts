@@ -22,6 +22,16 @@ import { nodeFileSystemPort } from '../utils/toolUtils/nodeFileSystemPort'
 import type { FileReadResult } from '@shuvix/chat-protocol/types/filePreview'
 
 /**
+ * 一条会话里的文件路径 → 绝对路径（相对路径按会话的工作目录解析）—— 与预览 / 回写自己的解析同一个口径，
+ * 而且**不建任何目录**：远程访问的 path 点位（files:read / files:write）先用它问安全策略，会话 id 是网络客户端
+ * 交来的，不能顺手在 userData 底下按它建临时工作区。会话不在、路径又是相对的 → 原样（读写本来也会失败）
+ */
+export function resolveSessionFilePath(sessionId: string, path: string): string {
+  const workingDirectory = sessionService.getById(sessionId)?.workingDirectory
+  return resolveReadPath(path, workingDirectory ?? '')
+}
+
+/**
  * 读取预览内容 —— **不做工作目录准入判定**：预览只呈现给用户、不进模型上下文，
  * 而用户对本机文件本来就有完全访问权，拦下工作目录外的文件（~/.shuvix 里的
  * widget 产物等）只会挡路。

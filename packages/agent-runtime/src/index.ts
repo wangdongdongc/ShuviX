@@ -206,6 +206,12 @@ export {
 // 请求按 主体/操作/客体/环境 建模；宿主经 SecurityHostProvider 注入平台细节。
 export {
   createSecurityContext,
+  gateVerdictOf,
+  GATE_DOWNGRADED_MESSAGE,
+  ipInCidrs,
+  parseIp,
+  parseCidr,
+  type ParsedIp,
   isCommandRisk,
   COMMAND_RISK_CATEGORIES,
   commandRiskOf,
@@ -276,6 +282,8 @@ export {
   type EnforceOpts,
   type EnforceOutcome,
   type SecurityContext,
+  type GateVerdict,
+  type SecurityToolRef,
   type SecurityDecisionRecord,
   // bash 命令解析层（宿主注入 wasm 字节后同步解析；见 security/shell）
   initShellParser,

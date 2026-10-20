@@ -5,10 +5,15 @@ import {
   watchSessionFile,
   unwatchSessionFile
 } from '../services/filesWatcherService'
-import { previewSessionFile, writeSessionFile } from '../services/filePreviewService'
+import {
+  previewSessionFile,
+  resolveSessionFilePath,
+  writeSessionFile
+} from '../services/filePreviewService'
 import { openFileInWindow, type OpenFileParams } from '../services/previewWindowService'
 import { findArtifact, readArtifact } from '../services/artifacts/store'
 import { sessionRecords } from '../services/sessionRecords'
+import { networkPathVerdict } from '../frontend/network/pathGate'
 
 export function registerFilesHandlers(): void {
   defineHandler('files:scan', (_ctx, params: { sessionId: string }) =>
@@ -25,15 +30,35 @@ export function registerFilesHandlers(): void {
   defineHandler('files:unwatch', (_ctx, params: { sessionId: string; path: string }) => {
     unwatchSessionFile(params.sessionId, params.path)
   })
-  defineHandler('files:read', (_ctx, params: { sessionId: string; path: string }) =>
-    previewSessionFile(params.sessionId, params.path)
-  )
+  // 网络客户端读的位置另过安全策略的 path 点位（宿主本身不限路径；桌面窗口不判）
+  defineHandler('files:read', (ctx, params: { sessionId: string; path: string }) => {
+    const verdict = networkPathVerdict(
+      ctx,
+      'read',
+      () => resolveSessionFilePath(params.sessionId, params.path),
+      { name: 'files', operation: 'read' }
+    )
+    if (verdict && !verdict.allowed) {
+      return { kind: 'not-allowed' as const, path: params.path, reason: verdict.message ?? '' }
+    }
+    return previewSessionFile(params.sessionId, params.path)
+  })
   // 在独立窗口里打开文件（md → 协作编辑窗口；其余可预览的 → 预览窗口；不支持预览的不响应）
   defineHandler('files:open', (_ctx, params: OpenFileParams) => openFileInWindow(params))
   defineHandler(
     'files:write',
-    (_ctx, params: { sessionId: string; path: string; content: string }) =>
-      writeSessionFile(params.sessionId, params.path, params.content)
+    (ctx, params: { sessionId: string; path: string; content: string }) => {
+      const verdict = networkPathVerdict(
+        ctx,
+        'write',
+        () => resolveSessionFilePath(params.sessionId, params.path),
+        { name: 'files', operation: 'write' }
+      )
+      if (verdict && !verdict.allowed) {
+        return { ok: false as const, error: verdict.message ?? 'Refused by a security policy.' }
+      }
+      return writeSessionFile(params.sessionId, params.path, params.content)
+    }
   )
   // 会话 Artifact 按**名字**取内容 —— ```artifact 引用围栏的数据通道。
   // 刻意不走 files:read：那条要绝对路径，而围栏里只该有名字（路径不进转写），

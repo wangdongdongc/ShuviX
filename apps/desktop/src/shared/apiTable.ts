@@ -57,6 +57,10 @@ export const API_TABLE = {
   /** 应用 / 窗口 */
   app: {
     openSettings: invoke('app:open-settings', 1),
+    /** 带草稿打开会话：主窗口切到它、草稿等它来取（桌面专属；web 在本地实现） */
+    openSessionWithDraft: invoke('app:open-session-draft', 1),
+    /** 取走一条会话待填进输入框的草稿（没有 → null） */
+    takeSessionDraft: invoke('app:take-session-draft', 1),
     openExternal: invoke('app:open-external', 1),
     openFolder: invoke('app:open-folder', 1),
     revealPath: invoke('app:reveal-path', 1),
@@ -472,9 +476,7 @@ export const API_TABLE = {
   network: {
     status: invoke('network:status', 0),
     setEnabled: invoke('network:setEnabled', 1),
-    setPort: invoke('network:setPort', 1),
-    setLan: invoke('network:setLan', 1),
-    setLanInterface: invoke('network:setLanInterface', 1)
+    setPort: invoke('network:setPort', 1)
   },
   /** 服务端文件系统（server mode phase D：web 客户端的目录浏览器、「在文件管理器中打开」的路径） */
   fs: {
@@ -494,6 +496,7 @@ export const API_TABLE = {
  */
 export const DESKTOP_ONLY_CHANNELS: Readonly<Record<string, string>> = {
   'app:open-settings': 'opens the settings window on this computer',
+  'app:open-session-draft': 'brings up the main window on this computer',
   'app:open-external': "opens the system browser on this computer, not the caller's",
   'app:open-folder': 'opens the system file manager on this computer',
   'app:reveal-path': 'opens the system file manager on this computer',

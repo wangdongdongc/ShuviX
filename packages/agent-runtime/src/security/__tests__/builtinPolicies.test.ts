@@ -1,10 +1,12 @@
 /**
  * 内置策略守护 —— md 是随包发布的编译期常量，解析失败/形态漂移属开发期错误，
- * 这里逐策略钉死形态与安全不变式（内置绝不静默放行写入；出厂没有硬限制 —— 2026-10-01 用户裁定
- * 「默认尽可能少问」，出厂恰两份、都是普通 ask，内置规则里不许出现 deny / force-ask / force-allow）。
+ * 这里逐策略钉死形态与安全不变式（内置绝不静默放行写入；管 agent 的出厂没有硬限制 —— 2026-10-01 用户
+ * 裁定「默认尽可能少问」，agent 主体的出厂恰两份、都是普通 ask，不许出现 deny / force-ask / force-allow）。
  *
- * 出厂两份：ask-on-external-path（文件工具在会话目录 `vars.sessionDirs` 与「允许并记住」的路径以外 ——
+ * 管 agent 的两份：ask-on-external-path（文件工具在会话目录 `vars.sessionDirs` 与「允许并记住」的路径以外 ——
  * 读家目录里的文件、往任何地方写 —— 询问）与 ask-on-command（没圈进沙箱的命令询问）。
+ * 管远程访问的一份（2026-10-19 用户裁定）：network-admission —— network 主体、发送方不是本机的 HTTP 请求
+ * 一律 deny。这是出厂唯一的 deny：网络点位没有人可问（ask 会降级为拒绝），只作用于 network 主体。
  *
  * 退役的十一份（protect-system、block-catastrophic-commands、protect-bot-files、protect-shuvix-config、
  * git-safety、ask-on-sub-session、ask-on-database、ask-on-new-site，第二轮的 protect-credentials、
@@ -83,16 +85,20 @@ const makeBareProvider = (): SecurityHostProvider => ({
 })
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 2 份、按装配序；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 3 份、按装配序；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(2)
+    expect(policies).toHaveLength(3)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
-    expect(policies.map((p) => p.name)).toEqual(['ask-on-external-path', 'ask-on-command'])
-    expect(new Set(policies.map((p) => p.name)).size).toBe(2)
+    expect(policies.map((p) => p.name)).toEqual([
+      'ask-on-external-path',
+      'ask-on-command',
+      'network-admission'
+    ])
+    expect(new Set(policies.map((p) => p.name)).size).toBe(3)
   })
 
-  it('BP-1c 内联表恰是两份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
+  it('BP-1c 内联表恰是三份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
     const files = [...inlinedPolicyMdFileNames()].sort()
     expect(files).toEqual(
       BUILTIN_POLICY_SPECS.flatMap(({ name }) => [
@@ -142,12 +148,12 @@ describe('buildBuiltinPolicies', () => {
     }
   })
 
-  it('BP-2b 不变式：每条内置规则的有效条件都限定 agent 主体（防护不作用于 user 主体）', () => {
+  it('BP-2b 不变式：每条内置规则的有效条件都恰好限定一种主体 —— network-admission 是 network，其余是 agent（防护不作用于 user 主体）', () => {
     for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
       for (const rule of policy.rules) {
         const effective = mergeConditions(policy.scope, rule.conditions)
-        expect(effective?.['subject.kind'], `${policy.name} 规则未限定 agent 主体`).toEqual([
-          'agent'
+        expect(effective?.['subject.kind'], `${policy.name} 规则的主体不对`).toEqual([
+          policy.name === 'network-admission' ? 'network' : 'agent'
         ])
       }
     }
@@ -172,10 +178,15 @@ describe('buildBuiltinPolicies', () => {
     // 连「允许并记住」与自动审查都答不了 —— 想要这种门，用户自己写一份策略（执行点都还在）。
     // force-allow 也不再用：「允许并记住」从前是 session-grants 的两条 force-allow，如今写成
     // ask-on-external-path 的 match 里的豁免 —— 出厂整套恰是普通 ask。
+    // 唯一的例外是 network 主体的 network-admission（2026-10-19）：网络点位没有人可问，ask 会降级为
+    // 拒绝，它就直接写 deny —— 只作用于 network 主体（BP-2b），agent 主体的出厂照旧恰是普通 ask。
     for (const language of ['en', 'zh', 'ja']) {
       for (const policy of buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD })) {
         for (const [i, rule] of policy.rules.entries()) {
-          expect(rule.effect, `${policy.name}#${i}（${language}）是 ${rule.effect}`).toBe('ask')
+          const kinds = mergeConditions(policy.scope, rule.conditions)?.['subject.kind']
+          expect(rule.effect, `${policy.name}#${i}（${language}）是 ${rule.effect}`).toBe(
+            kinds?.length === 1 && kinds[0] === 'network' ? 'deny' : 'ask'
+          )
         }
       }
     }
@@ -185,7 +196,8 @@ describe('buildBuiltinPolicies', () => {
     expect(tiers).toEqual([
       ['ask-on-external-path#0', 'ask'],
       ['ask-on-external-path#1', 'ask'],
-      ['ask-on-command#0', 'ask']
+      ['ask-on-command#0', 'ask'],
+      ['network-admission#0', 'deny']
     ])
   })
 

@@ -2,8 +2,11 @@
  * 网络服务本体（server mode phase B，docs/server/phase-bc-network-and-web.md §B2）—— 只在用户打开「网络访问」时存在：
  *
  *  - `node:http` 监听 `0.0.0.0:<端口>`：静态路由给 web 客户端（`staticFiles.ts`）；`/ws` 上用 `ws` 升级成 WebSocket；
- *  - **每个请求与每次升级都过三道门**（`guards.ts`）：对端地址必须私有（否则 403）、Host 必须是 IP 字面量或 localhost
- *    带我们的端口（否则 421）、升级的 Origin 必须恰是 `http://<Host>`（否则 403）。这不是认证（这一轮没有）；
+ *  - **每个请求与每次升级都过三道写死的门**（`guards.ts`）：对端地址必须私有（否则 403）、Host 必须是 IP 字面量或
+ *    localhost 带我们的端口（否则 421）、升级的 Origin 必须恰是 `http://<Host>`（否则 403）。这不是认证；
+ *  - **然后问安全策略**（`policyGate.ts`，2026-10-19）：TCP 连接刚建立（socket）、每个 HTTP 请求与升级（request）、
+ *    文件路由真正读的位置（path），以及每条 RPC（channel，在分发器里）。谁能连、能做什么由策略定 —— 内置的
+ *    network-admission 只放这台电脑。每个回应都顺带发设备 cookie（浏览器还没有的话）；
  *  - 一条 WebSocket = 一个网络客户端（`ws:<n>`）：消息按 `networkEnvelope` 解码，`invoke` / `send` 交分发器
  *    （注册表里的同一份定义），`sync` 交视图同步链路表；推送经网络传输（`transport.ts`）回到这条连接；
  *  - 心跳（ping / pong）认出睡死的连接；发送缓冲积压过多的慢客户端直接断开（不让主进程的内存替它攒着）；
@@ -31,6 +34,17 @@ import { fileRouteOf, serveFileRoute, type FileRouteDeps } from './fileRoutes'
 import { proxyWidgetRequest, type WidgetProxyDeps } from './widgetProxy'
 import { NETWORK_WIDGET_PREFIX } from '../../../shared/networkRoutes'
 import type { NetworkConnection, NetworkTransport } from './transport'
+import {
+  deviceCookieHeader,
+  httpFactsOf,
+  newDeviceId,
+  peerFactsOf,
+  requestRouteOf,
+  requestTarget,
+  type NetworkPolicyGate
+} from './policyGate'
+import type { GateVerdict } from '@shuvix/agent-runtime'
+import type { HttpFacts, NetworkCallFacts, PeerFacts } from '../../../shared/network'
 
 /** 一条消息的上限（附图的提示词会有几 MB） */
 export const MAX_NETWORK_MESSAGE_BYTES = 64 * 1024 * 1024
@@ -69,10 +83,8 @@ export interface NetworkServerDeps {
   readonly onConnection?: (connection: NetworkConnection) => void
   /** 一个客户端走了（已经从传输的表里摘掉、链路已结束） */
   readonly onDisconnection?: (connection: NetworkConnection) => void
-  /**
-   * 对端地址的附加一道门（只开放给一个网络时：对端必须在那个网段里；现取）。不给 / 回 true → 只看原有的私有地址那道门
-   */
-  readonly acceptPeer?: (address: string) => boolean
+  /** 安全策略的点位（socket / request / path；channel 在分发器里）。不给 → 不判（单测） */
+  readonly gate?: NetworkPolicyGate
   readonly logger?: NetworkServerLogger
   readonly heartbeatMs?: number
   readonly maxBufferedBytes?: number
@@ -103,28 +115,31 @@ const STATUS_TEXT: Record<number, string> = {
 }
 
 /**
- * 三道门里的前两道（每个请求、每次升级都过）：不过 → 状态码 + 一句话；过了 → undefined。`acceptPeer`：只开放给一个
- * 网络时，对端还得在那个网段里
+ * 三道门里的前两道（每个请求、每次升级都过）：不过 → 状态码 + 一句话；过了 → undefined
  */
 export function requestRejection(
   remoteAddress: string | undefined,
   host: string | undefined,
-  port: number,
-  acceptPeer?: (address: string) => boolean
+  port: number
 ): { status: number; text: string } | undefined {
   if (!isPrivatePeerAddress(remoteAddress)) {
     return { status: 403, text: 'ShuviX only accepts connections from the local network.' }
-  }
-  if (acceptPeer !== undefined && !acceptPeer(displayPeerAddress(remoteAddress))) {
-    return {
-      status: 403,
-      text: 'ShuviX only accepts connections from the network it is shared on.'
-    }
   }
   if (!isAllowedHost(host, port)) {
     return { status: 421, text: 'Use an IP address or localhost with the ShuviX port.' }
   }
   return undefined
+}
+
+/**
+ * 策略拒绝的回应正文：规则的话，再加一行这台设备是谁 —— 用户照着它告诉 agent「放行这一台」。`device`：请求带来的，
+ * 没有就是这次刚发的
+ */
+export function deniedText(verdict: GateVerdict, address: string, device: string): string {
+  const who = [device ? `Device: ${device}` : '', address ? `Address: ${address}` : '']
+    .filter(Boolean)
+    .join(' · ')
+  return `${verdict.message ?? 'Refused by a security policy.'}${who ? `\n\n${who}` : ''}\n`
 }
 
 function plain(res: ServerResponse, status: number, text: string, close = false): void {
@@ -235,20 +250,48 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
     stream.pipe(res)
   }
 
+  /**
+   * 一个 HTTP 请求过 request 点位。浏览器还没有设备 ID → 这次回应发一个（被拒的回应也发：用户要从被拒的那台
+   * 设备上读到它的 ID）。拒绝 → 403（正文是规则的话 + 这台设备是谁），回 undefined；放行 → 回这个请求的事实
+   */
+  function admitRequest(
+    req: IncomingMessage,
+    res: ServerResponse
+  ): { peer: PeerFacts; http: HttpFacts } | undefined {
+    const peer = peerFactsOf(req.socket)
+    const http = httpFactsOf(req)
+    const issued = http.device ? undefined : newDeviceId()
+    if (issued) res.setHeader('Set-Cookie', deviceCookieHeader(issued))
+    const gate = deps.gate
+    if (!gate) return { peer, http }
+    const target = requestTarget(req.url)
+    const verdict = gate.judgeRequest(
+      peer,
+      http,
+      {
+        method: req.method ?? 'GET',
+        path: target.path,
+        query: target.query,
+        route: requestRouteOf(target.path, false)
+      },
+      issued
+    )
+    if (verdict.allowed) return { peer, http }
+    plain(res, 403, deniedText(verdict, peer.address, http.device || issued || ''), true)
+    return undefined
+  }
+
   function onRequest(req: IncomingMessage, res: ServerResponse): void {
     const port = boundPort ?? -1
-    const rejection = requestRejection(
-      req.socket.remoteAddress,
-      req.headers.host,
-      port,
-      deps.acceptPeer
-    )
+    const rejection = requestRejection(req.socket.remoteAddress, req.headers.host, port)
     if (rejection) {
       plain(res, rejection.status, rejection.text, true)
       return
     }
+    const admitted = admitRequest(req, res)
+    if (!admitted) return
     try {
-      if (serveDynamic(req, res)) return
+      if (serveDynamic(req, res, admitted)) return
       serveStatic(req, res)
     } catch (error) {
       logger.warn(`network: static request ${req.url} failed: ${String(error)}`)
@@ -257,9 +300,14 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
   }
 
   /**
-   * phase D 的动态路由：`/w/…` 转给 widget 服务，`/files/…` / `/lib/…` 回文件。认领了 → true（应答由它负责）
+   * phase D 的动态路由：`/w/…` 转给 widget 服务，`/files/…` / `/lib/…` 回文件。认领了 → true（应答由它负责）。
+   * 文件路由真正要读的位置再过一次 path 点位（`facts`：这个请求的事实）
    */
-  function serveDynamic(req: IncomingMessage, res: ServerResponse): boolean {
+  function serveDynamic(
+    req: IncomingMessage,
+    res: ServerResponse,
+    facts: { peer: PeerFacts; http: HttpFacts }
+  ): boolean {
     const raw = typeof req.url === 'string' && req.url.length > 0 ? req.url : '/'
     const pathname = raw.split('?')[0].split('#')[0]
     const widgetProxy = deps.widgetProxy?.()
@@ -277,7 +325,19 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
       plain(res, 400, 'Bad request.')
       return true
     }
-    void serveFileRoute(route, req, res, url, fileRoutes).catch((error) => {
+    const gate = deps.gate
+    const routeDeps: FileRouteDeps = gate
+      ? {
+          ...fileRoutes,
+          judgePath: (path, fileRoute) =>
+            gate.judgePath(facts.peer, facts.http, '', 'read', path, {
+              name: 'files',
+              operation: fileRoute
+            }),
+          deniedText: (verdict) => deniedText(verdict, facts.peer.address, facts.http.device)
+        }
+      : fileRoutes
+    void serveFileRoute(route, req, res, url, routeDeps).catch((error) => {
       logger.warn(`network: file request ${req.url} failed: ${String(error)}`)
       plain(res, 500, 'Internal error.')
     })
@@ -287,12 +347,7 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
   function onUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
     socket.on('error', () => socket.destroy())
     const port = boundPort ?? -1
-    const rejection = requestRejection(
-      req.socket.remoteAddress,
-      req.headers.host,
-      port,
-      deps.acceptPeer
-    )
+    const rejection = requestRejection(req.socket.remoteAddress, req.headers.host, port)
     if (rejection) {
       rejectUpgrade(socket, rejection.status, rejection.text)
       return
@@ -305,6 +360,20 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
     if (!isAllowedOrigin(req.headers.origin, req.headers.host)) {
       rejectUpgrade(socket, 403, 'Cross-origin WebSocket connections are refused.')
       return
+    }
+    const facts: NetworkCallFacts = { peer: peerFactsOf(req.socket), http: httpFactsOf(req) }
+    if (deps.gate) {
+      const target = requestTarget(req.url)
+      const verdict = deps.gate.judgeRequest(facts.peer, facts.http, {
+        method: req.method ?? 'GET',
+        path: target.path,
+        query: target.query,
+        route: 'socket'
+      })
+      if (!verdict.allowed) {
+        rejectUpgrade(socket, 403, deniedText(verdict, facts.peer.address, facts.http.device))
+        return
+      }
     }
     // 握手途中的也算上：几次升级同时到，不该一起越过上限
     if (deps.transport.connections().length + upgrading >= maxClients) {
@@ -326,19 +395,20 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
     socket.once('close', settle)
     server.handleUpgrade(req, socket, head, (ws) => {
       settle()
-      accept(ws, req)
+      accept(ws, req, facts)
     })
   }
 
-  function accept(ws: WebSocket, req: IncomingMessage): void {
+  function accept(ws: WebSocket, req: IncomingMessage, facts: NetworkCallFacts): void {
     const userAgent = req.headers['user-agent']
     const client: NetworkClientRef = {
       kind: 'network',
       id: `ws:${++connectionSeq}`,
       remoteAddress: displayPeerAddress(req.socket.remoteAddress),
-      userAgent: (typeof userAgent === 'string' ? userAgent : '').slice(0, MAX_USER_AGENT_CHARS)
+      userAgent: (typeof userAgent === 'string' ? userAgent : '').slice(0, MAX_USER_AGENT_CHARS),
+      device: facts.http.device
     }
-    const ctx: ClientContext = { client, transport: 'network' }
+    const ctx: ClientContext = { client, transport: 'network', network: facts }
     const closeHandlers = new Set<() => void>()
     let open = true
 
@@ -395,6 +465,7 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
     const connection: NetworkConnection = {
       client,
       connectedAt: Date.now(),
+      facts,
       isOpen,
       send(message) {
         if (!isOpen()) return
@@ -458,12 +529,13 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
         }
         return
       }
+      const size = Buffer.byteLength(text)
       switch (message.t) {
         case 'invoke':
-          void deps.dispatcher.invoke(ctx, message).then((result) => connection.send(result))
+          void deps.dispatcher.invoke(ctx, message, size).then((result) => connection.send(result))
           return
         case 'send':
-          deps.dispatcher.send(ctx, message)
+          deps.dispatcher.send(ctx, message, size)
           return
         case 'sync':
           deps.links.receive(linkConnection, message.link, message.frame)
@@ -515,6 +587,12 @@ export function createNetworkServer(deps: NetworkServerDeps): NetworkServer {
       if (http) throw new Error('network server is already running')
       const server = createServer(onRequest)
       server.on('upgrade', onUpgrade)
+      // socket 点位：TCP 连接刚建立、HTTP 还没解析 —— 拒绝就直接断开（什么也不回）
+      server.on('connection', (socket: Socket) => {
+        const gate = deps.gate
+        if (!gate) return
+        if (!gate.judgeSocket(peerFactsOf(socket)).allowed) socket.destroy()
+      })
       server.on('clientError', (_error, socket) => socket.destroy())
       await new Promise<void>((resolve, reject) => {
         const onError = (error: Error): void => {

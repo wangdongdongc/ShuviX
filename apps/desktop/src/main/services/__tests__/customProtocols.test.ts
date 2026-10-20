@@ -67,6 +67,10 @@ vi.mock('fs/promises', async (importOriginal) => {
   return { ...actual, default: { ...actual, readFile }, readFile }
 })
 vi.mock('../../utils/paths', () => ({ getSandboxLibsDir: () => state.libsDir }))
+// 预览路径的解析只在会话存在时才用工作目录（会话不在不建临时工作区）：这里的会话一律当作存在
+vi.mock('../sessionService', () => ({
+  sessionService: { getById: (id: string) => ({ id }) }
+}))
 vi.mock('../toolContext', () => ({
   resolveProjectConfig: (...args: unknown[]): unknown => state.resolveProjectConfig(...args)
 }))

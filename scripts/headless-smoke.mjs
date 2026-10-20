@@ -6,12 +6,14 @@
  *
  *   node scripts/headless-smoke.mjs [http://127.0.0.1:7766] [--expect-lan | --expect-local]
  *
- * --expect-local: the instance must listen on 127.0.0.1 only (the default, no --lan); --expect-lan: on 0.0.0.0 (--lan).
+ * --expect-local: only this computer may connect — the builtin network-admission policy is in effect and only
+ * 127.0.0.1 is advertised (the default); --expect-lan: other devices may — a user network-admission policy replaced
+ * (or the builtin one was disabled) and at least one other address is advertised (e.g. migrated from --lan).
  *
  * Checks, one line each ("ok …" / "FAIL …"), exit code 0 only when all pass:
  *   1. GET / serves the web client (200, text/html, the React root);
  *   2. the WebSocket at /ws accepts a client that sends the right Origin;
- *   3. invoke network:status → enabled, listening, headless (and the bind address, when asked);
+ *   3. invoke network:status → enabled, listening, headless (and the admission policy state, when asked);
  *   4. invoke session:list → an array; session:create → a session;
  *   5. a view-sync link (chord) subscribes that session's view and receives a snapshot;
  *   6. invoke network:setEnabled(false) is refused (code "headless") and the server keeps listening;
@@ -221,17 +223,28 @@ async function invokeOk(step, channel, ...args) {
     fail(step, `not listening: ${JSON.stringify(status)}`)
   }
   if (status?.headless !== true) fail(step, `not headless: ${JSON.stringify(status)}`)
-  if (expectLan && (status.lan !== true || status.bindAddress !== '0.0.0.0')) {
-    fail(step, `expected to share on the local network (0.0.0.0): ${JSON.stringify(status)}`)
+  if (!Array.isArray(status.addresses)) fail(step, `no address list: ${JSON.stringify(status)}`)
+  const loopback = `http://127.0.0.1:${status.port}`
+  const others = status.addresses.filter((a) => a !== loopback)
+  if (expectLan) {
+    if (status.admission === 'builtin' || typeof status.admission !== 'string') {
+      fail(step, `expected a replaced network-admission policy: ${JSON.stringify(status)}`)
+    }
+    if (others.length === 0)
+      fail(step, `advertises no other address: ${status.addresses.join(' ')}`)
   }
   if (expectLocal) {
-    if (status.lan !== false || status.bindAddress !== '127.0.0.1') {
-      fail(step, `expected this computer only (127.0.0.1): ${JSON.stringify(status)}`)
+    if (status.admission !== 'builtin') {
+      fail(
+        step,
+        `expected the builtin network-admission (this computer only): ${JSON.stringify(status)}`
+      )
     }
-    const others = status.addresses.filter((a) => a !== `http://127.0.0.1:${status.port}`)
-    if (others.length > 0) fail(step, `advertises other addresses: ${others.join(' ')}`)
+    if (status.addresses.length !== 1 || others.length > 0) {
+      fail(step, `expected only ${loopback}, advertises: ${status.addresses.join(' ')}`)
+    }
   }
-  ok(step, `port ${status.port}, bound to ${status.bindAddress}, ${status.addresses.join(' ')}`)
+  ok(step, `port ${status.port}, admission ${status.admission}, ${status.addresses.join(' ')}`)
 }
 
 // 4. sessions

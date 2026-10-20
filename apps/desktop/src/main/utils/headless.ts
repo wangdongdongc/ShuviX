@@ -3,9 +3,10 @@
  * 网络访问强制开着（不写设置），只能从局域网里的浏览器用。
  *
  * 本文件只放**纯**的那一半（不碰 Electron，单测直接引）：
- *  - 命令行解析：`--headless`（或环境变量 `SHUVIX_HEADLESS=1`）、`--port <n>`（别名 `--network-port`）、`--lan`（或
- *    `SHUVIX_LAN=1`：给局域网里的其他设备用；缺省只给这台电脑，监听 127.0.0.1）、`--bind <网卡名或本机地址>`（或
- *    `SHUVIX_BIND`：只开放给那一个网络，隐含 `--lan`）、`--help`；
+ *  - 命令行解析：`--headless`（或环境变量 `SHUVIX_HEADLESS=1`）、`--port <n>`（别名 `--network-port`）、`--help`；
+ *    谁能连由安全策略 network-admission 定（缺省只放这台电脑，docs/network-policy/design.md）。`--lan`（或
+ *    `SHUVIX_LAN=1`）与 `--bind <网卡名或本机地址>`（或 `SHUVIX_BIND`）**已弃用**、照旧接受（已有的服务文件不至于
+ *    起不来）：启动时若还没有同名用户策略，按它们写一份 network-admission（见 frontend/network/admissionMigration.ts）；
  *    同一条命令行上 Chromium 自己的开关（`--ozone-platform=headless`、`--disable-gpu`、`--no-sandbox` …）原样放过；
  *  - 写到 stdout 的几行（措辞固定：脚本与 systemd 日志按它们找）；
  *  - 进程级的模式开关（主入口在一切之前设一次，各窗口入口据此拒绝开窗）；
@@ -15,7 +16,6 @@
  */
 import { writeSync } from 'node:fs'
 import {
-  NETWORK_ERROR_NO_INTERFACE,
   isValidLanInterfaceSpec,
   isValidNetworkPort,
   MAX_NETWORK_PORT,
@@ -25,10 +25,10 @@ import {
 /** 打开无头模式的环境变量（值为 `1` / `true` / `yes`，大小写不敏感） */
 export const HEADLESS_ENV = 'SHUVIX_HEADLESS'
 
-/** 无头运行时给局域网共享的环境变量（同上；缺省只监听 127.0.0.1） */
+/** 弃用：给局域网共享的环境变量（同上）—— 启动时迁移成 network-admission 策略 */
 export const HEADLESS_LAN_ENV = 'SHUVIX_LAN'
 
-/** 无头运行时只开放给一个网络的环境变量（值是网卡名或本机地址；隐含局域网共享） */
+/** 弃用：只开放给一个网络的环境变量（值是网卡名或本机地址）—— 启动时迁移成 network-admission 策略 */
 export const HEADLESS_BIND_ENV = 'SHUVIX_BIND'
 
 /** stdout 每一行的前缀 */
@@ -41,13 +41,13 @@ export interface HeadlessArgs {
   /** `--port` / `--network-port` 给的端口（没给 → 没有这一项） */
   readonly port?: number
   /**
-   * `--lan` 或环境变量：给局域网里的其他设备用（监听 0.0.0.0）。缺省 false = 只给这台电脑（127.0.0.1）——
-   * 无头运行不读设置里的局域网开关，只认启动参数
+   * 弃用的 `--lan` 或环境变量：从前是「给局域网里的其他设备用」。现在只在启动时迁移成一份 network-admission 用户
+   * 策略（还没有同名用户策略时）
    */
   readonly lan: boolean
   /**
-   * `--bind <网卡名或本机地址>` 或环境变量 `SHUVIX_BIND`：只开放给那一个网络（只在它的地址上监听、只接受那个网段
-   * 里的对端）。给了它 `lan` 也就是 true。没给 → 没有这一项
+   * 弃用的 `--bind <网卡名或本机地址>` 或环境变量 `SHUVIX_BIND`：从前是「只开放给那一个网络」。现在同样只在启动时
+   * 迁移成策略（只放这台电脑与那个网段）。给了它 `lan` 也就是 true。没给 → 没有这一项
    */
   readonly bind?: string
   /** `--help` / `-h`：打印用法后退出 */
@@ -163,7 +163,7 @@ export function parseHeadlessArgs(
 /** `--help` 打印的用法（只讲无头模式相关的开关） */
 export function headlessUsage(): string {
   return [
-    'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]',
+    'Usage: shuvix --headless [--port <n>]',
     '',
     'Run ShuviX without any window and use it from a browser.',
     '',
@@ -171,22 +171,37 @@ export function headlessUsage(): string {
     '  --headless          run without windows (same as SHUVIX_HEADLESS=1)',
     '  --port <n>          port for network access (alias: --network-port);',
     '                      default: the port saved in Settings, else 7766',
-    '  --lan               let other devices on the local network connect',
-    '                      (same as SHUVIX_LAN=1); default: only this computer',
-    '                      (127.0.0.1), e.g. through ssh -L 7766:127.0.0.1:7766',
-    '  --bind <name>       share only on one network: a network interface',
-    '                      (e.g. eth1) or an address of this computer; listens',
-    '                      only there and accepts only that subnet (implies --lan;',
-    '                      same as SHUVIX_BIND=<name>)',
     '  --help, -h          print this help and exit',
+    '',
+    'Who can connect is decided by the security policy network-admission. By',
+    'default only this computer can (127.0.0.1), e.g. through',
+    '  ssh -L 7766:127.0.0.1:7766 <user>@<this server>',
+    'To let other devices in, open ShuviX through the tunnel and follow Settings →',
+    'General → Network access, or write ~/.shuvix/policies/network-admission.md.',
+    '',
+    '--lan and --bind <interface or address> (SHUVIX_LAN / SHUVIX_BIND) are',
+    'deprecated: on start they write that policy once, if you have none.',
     '',
     'On a Linux server without a display, also pass the Chromium switches',
     '  --ozone-platform=headless --disable-gpu',
     '(the shuvix-server helper and the systemd service from install-linux.sh do).',
     '',
-    'Network access has no password: with --lan or --bind, anyone on that network',
-    'who opens the address can fully control this computer through ShuviX.'
+    'Network access has no password: once the policy lets a device in, whoever',
+    'uses it can fully control this computer through ShuviX.'
   ].join('\n')
+}
+
+/** 用了弃用的 --lan / --bind 时启动打印的一行（没用 → undefined） */
+export function headlessDeprecationLine(
+  args: Pick<HeadlessArgs, 'lan' | 'bind'>
+): string | undefined {
+  if (!args.lan && args.bind === undefined) return undefined
+  const flag = args.bind !== undefined ? `--bind ${args.bind}` : '--lan'
+  return (
+    `${HEADLESS_LINE_PREFIX} ${flag} is deprecated — who can connect is now the security policy ` +
+    'network-admission; if you have none yet, it is written from this option once ' +
+    '(~/.shuvix/policies/network-admission.md)'
+  )
 }
 
 /** 地址统一以 `/` 结尾（`listenAddresses` 给的是 `http://host:port`） */
@@ -202,10 +217,6 @@ export function headlessReadyLine(urls: readonly string[]): string {
 /** 监听失败的原因（Node 的错误码）→ 码 + 一句解释 */
 function describeListenError(error: string): string {
   if (error === 'EADDRINUSE') return 'EADDRINUSE (the port is already in use)'
-  if (error === NETWORK_ERROR_NO_INTERFACE) {
-    const name = mode?.bind === undefined ? '' : ` ${mode.bind}`
-    return `${NETWORK_ERROR_NO_INTERFACE} (no network interface or local address${name} on this computer)`
-  }
   if (error === 'EACCES') return 'EACCES (permission denied)'
   return error
 }
@@ -243,7 +254,8 @@ export function headlessArgsErrorLine(error: string): string {
 let mode: { readonly port?: number; readonly lan: boolean; readonly bind?: string } | null = null
 
 /**
- * 主入口在一切之前调一次：这个进程无头运行（`port`：`--port` 给的端口；`lan`：`--lan`；`bind`：`--bind`，隐含 `lan`）
+ * 主入口在一切之前调一次：这个进程无头运行（`port`：`--port` 给的端口；`lan` / `bind`：弃用的 `--lan` / `--bind`，
+ * 只用来迁移成 network-admission 策略；`bind` 隐含 `lan`）
  */
 export function enableHeadlessMode(
   options: { port?: number; lan?: boolean; bind?: string } = {}
@@ -266,12 +278,12 @@ export function headlessPortOverride(): number | undefined {
   return mode?.port
 }
 
-/** 无头运行时给不给局域网（`--lan` / `SHUVIX_LAN`；不是无头 → false） */
+/** 弃用的 `--lan` / `SHUVIX_LAN` 给没给（不是无头 → false；只用来迁移成策略） */
 export function headlessLan(): boolean {
   return mode?.lan === true
 }
 
-/** 无头运行时只开放给哪个网络（`--bind` / `SHUVIX_BIND`；没给 / 不是无头 → undefined） */
+/** 弃用的 `--bind` / `SHUVIX_BIND` 给的网络（没给 / 不是无头 → undefined；只用来迁移成策略） */
 export function headlessBind(): string | undefined {
   return mode?.bind
 }

@@ -1,22 +1,23 @@
 /**
- * 无头运行（`shuvix --headless`，docs/headless/design.md §1）—— 一个缺省（不带 --lan）的无头实例，从外面看：stdout 的几行、
+ * 无头运行（`shuvix --headless`，docs/headless/design.md §1）—— 一个缺省（不带弃用的 --lan）的无头实例，从外面看：stdout 的几行、
  * CDP 上没有任何页面、网络访问（Node 侧 WebSocket + 原始 HTTP）、地址文件、第二个实例、CLI、最后退出。用例按顺序跑，
  * 退出在最后。
  *
- * HE-1  就绪那一行恰是 `… open one of: http://127.0.0.1:<P>/`（缺省只给这台电脑），恰出现一次
+ * HE-1  就绪那一行恰是 `… open one of: http://127.0.0.1:<P>/`（内置准入只放这台电脑），恰出现一次；没有弃用说明
  * HE-2  没有窗口：页面 target 一个都没有（启动时的主窗口、命令行上的 md 都没开），过一会儿也没有
  * HE-3  GET / → web 客户端
- * HE-4  network:status：开着、端口 P、lan false、绑 127.0.0.1、在监听、headless、没有 error、地址只有 127.0.0.1、客户端里有
+ * HE-4  network:status：开着、端口 P、准入 builtin、在监听、headless、没有 error、地址只有 127.0.0.1、客户端里有
  *       一个来自 127.0.0.1
- * HE-4b 本机每个私有 IPv4 地址上连不上（ECONNREFUSED）
+ * HE-4b 本机每个私有 IPv4 地址上连得上（监听 0.0.0.0），内置准入以 403 拒绝、正文是那句话 + 地址；没写任何用户策略
  * HE-5  设置没被写：network.enabled / network.port 都读不到
  * HE-6  headless.json 恰是 {pid, port, urls: status.addresses}
  * HE-7  拒绝：关掉（code 'headless'，连接与服务照旧）、开（ok）、同一个端口（ok）、换端口（code 'headless'，新端口上没人）、
  *       不合法的端口（那句话、不是 headless）
- * HE-7e setLan：true → code 'headless'；false → ok；'x' → 'lan must be a boolean'；照旧绑 127.0.0.1
- * HE-8  经 settings:set 写 network.* → 无头实例不理：连接开着、照旧在 P、新端口上没人、照旧 127.0.0.1
+ * HE-7e 旧的 network:setLan / network:setLanInterface 不再是通道（unknown_channel）；连接照旧
+ * HE-8  经 settings:set 写 network.*（含旧的 network.lan）→ 无头实例不理：连接开着、照旧在 P、新端口上没人、照旧只列
+ *       127.0.0.1、准入照旧 builtin
  * HE-9  scripts/headless-smoke.mjs --expect-local 全部通过；之后没有它建的会话，照旧在监听
- * HE-9b smoke --expect-lan 对这个实例 → 退出码 1、那一行 FAIL
+ * HE-9b smoke --expect-lan 对这个实例 → 退出码 1、「expected a replaced network-admission policy」那一行 FAIL
  * HE-11 CLI 的 `shuvix widget open demo` → 退出码 1，说无头不开窗；照旧没有页面
  * HE-12 第二个实例（带 / 不带 --headless、环境变量、另一个 --port、带一个 md）→ 退出码 0、打印这个实例的地址；不开窗、
  *       照旧在监听；另一个端口上没人
@@ -41,7 +42,14 @@ import {
   type E2EHeadlessApp
 } from '../../harness/launch'
 import { userDir, type UserDir } from '../../harness/markdownFixtures'
-import { httpProbe, privateIPv4Addresses, type NetworkStatus } from '../../harness/networkFixtures'
+import {
+  BUILTIN_ADMISSION_SENTENCE,
+  httpProbe,
+  NETWORK_ADMISSION_FILE,
+  privateIPv4Addresses,
+  readUserPolicy,
+  type NetworkStatus
+} from '../../harness/networkFixtures'
 import { connectWs, type WsClient } from '../../harness/wsClient'
 
 const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -121,6 +129,7 @@ describe('headless: a default instance (this computer only)', () => {
     expect(app.readyLine).toBe(`ShuviX headless: ready — open one of: ${url}`)
     expect(app.urls).toStrictEqual([url])
     expect(countLine(app.stdout(), app.readyLine)).toBe(1)
+    expect(app.stdout()).not.toContain('is deprecated')
   })
 
   it('HE-2 no window at all: not at startup, not for the md file on the command line', async () => {
@@ -143,8 +152,7 @@ describe('headless: a default instance (this computer only)', () => {
     expect(s).toMatchObject({
       enabled: true,
       port: P,
-      lan: false,
-      bindAddress: '127.0.0.1',
+      admission: 'builtin',
       listening: true,
       headless: true
     })
@@ -153,14 +161,17 @@ describe('headless: a default instance (this computer only)', () => {
     expect(s.clients.some((c) => c.remoteAddress === '127.0.0.1')).toBe(true)
   })
 
-  it('HE-4b the private addresses of this machine refuse', async (ctx) => {
+  it('HE-4b the private addresses of this machine reach it and are refused by the builtin admission', async (ctx) => {
     const ips = privateIPv4Addresses()
     if (ips.length === 0) ctx.skip()
     for (const ip of ips) {
-      expect(await httpProbe({ port: P, connectHost: ip, host: `${ip}:${P}` }), ip).toMatchObject({
-        error: 'ECONNREFUSED'
-      })
+      const refused = await httpProbe({ port: P, connectHost: ip, host: `${ip}:${P}` })
+      expect(refused.status, ip).toBe(403)
+      expect(refused.body?.toString('utf8'), ip).toContain(BUILTIN_ADMISSION_SENTENCE)
+      expect(refused.body?.toString('utf8'), ip).toContain(`Address: ${ip}`)
     }
+    expect((await status()).denials.map((d) => d.address).sort()).toEqual([...ips].sort())
+    expect(readUserPolicy(app.home, NETWORK_ADMISSION_FILE)).toBeNull()
   })
 
   it('HE-5 the network settings were not written', async () => {
@@ -205,18 +216,17 @@ describe('headless: a default instance (this computer only)', () => {
     expect(ws!.isOpen()).toBe(true)
   })
 
-  it('HE-7e setLan: the other value is refused, the same value passes, a non-boolean is invalid', async () => {
-    const lan = await ws!.invokeRaw('network:setLan', [true])
-    expect(lan.ok).toBe(false)
-    expect(lan.error?.code).toBe('headless')
-    const local = await ws!.invokeRaw('network:setLan', [false])
-    expect(local.ok).toBe(true)
-    expect((local.value as NetworkStatus).lan).toBe(false)
-    const bad = await ws!.invokeRaw('network:setLan', ['x'])
-    expect(bad.ok).toBe(false)
-    expect(bad.error?.message).toBe('lan must be a boolean')
+  it('HE-7e the old LAN channels are gone: setLan / setLanInterface are unknown channels', async () => {
+    for (const [channel, args] of [
+      ['network:setLan', [true]],
+      ['network:setLanInterface', ['eth0']]
+    ] as const) {
+      const frame = await ws!.invokeRaw(channel, [...args])
+      expect(frame.ok, channel).toBe(false)
+      expect(frame.error?.code, channel).toBe('unknown_channel')
+    }
     expect(ws!.isOpen()).toBe(true)
-    expect((await status()).bindAddress).toBe('127.0.0.1')
+    expect(await status()).toMatchObject({ listening: true, admission: 'builtin' })
   })
 
   it('HE-8 writing network.* through settings:set does not move a headless instance', async () => {
@@ -236,9 +246,10 @@ describe('headless: a default instance (this computer only)', () => {
       enabled: true,
       port: P,
       listening: true,
-      lan: false,
-      bindAddress: '127.0.0.1'
+      admission: 'builtin',
+      addresses: [`http://127.0.0.1:${P}`]
     })
+    expect(readUserPolicy(app.home, NETWORK_ADMISSION_FILE)).toBeNull()
     expect((await httpProbe({ port: P })).status).toBe(200)
     expect(await httpProbe({ port: other })).toMatchObject({ error: 'ECONNREFUSED' })
   })
@@ -268,12 +279,12 @@ describe('headless: a default instance (this computer only)', () => {
     expect((await status()).listening).toBe(true)
   }, 150_000)
 
-  it('HE-9b the smoke client expecting --lan fails against this instance', async () => {
+  it('HE-9b the smoke client expecting other devices fails against this instance', async () => {
     const { code, lines } = await runSmoke([`http://127.0.0.1:${P}/`, '--expect-lan'])
     expect(code, lines.join('\n')).toBe(1)
     expect(
       lines.some((l) =>
-        l.startsWith('FAIL network:status: expected to share on the local network (0.0.0.0)')
+        l.startsWith('FAIL network:status: expected a replaced network-admission policy')
       ),
       lines.join('\n')
     ).toBe(true)
@@ -325,9 +336,7 @@ describe('headless: a default instance (this computer only)', () => {
   it('HE-14 --help on the same HOME prints the usage and leaves the instance alone', async () => {
     const result = await runToExit({ home: app.home, args: ['--help'] })
     expect(result.code, result.output.slice(-1500)).toBe(0)
-    expect(result.stdout).toContain(
-      'Usage: shuvix --headless [--port <n>] [--lan | --bind <interface or address>]'
-    )
+    expect(result.stdout).toContain('Usage: shuvix --headless [--port <n>]\n')
     expect(result.stdout).not.toContain('ShuviX headless: already running')
     expect((await httpProbe({ port: P })).status).toBe(200)
     expect((await status()).listening).toBe(true)

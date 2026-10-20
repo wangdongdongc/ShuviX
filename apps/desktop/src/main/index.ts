@@ -65,6 +65,7 @@ import { chromeBridge } from './services/chromeBridge'
 import { installChromeNativeHost } from './services/chromeExtensionService'
 import { registerChromeFrontend } from './frontend/chrome'
 import { networkService } from './frontend/network'
+import { networkAdmissionOf } from './frontend/network/admissionMigration'
 import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
@@ -72,7 +73,11 @@ import { hookService } from './services/hookService'
 import { policyService } from './services/policyService'
 import { runLegacySwitchover } from './services/legacySwitchover'
 import { isReviewerIdentity, reviewPermissionRequest } from './services/permissionReview'
-import { setCommandClassifier, setPermissionReviewer } from './services/toolContext'
+import {
+  getDesktopNetworkSecurityContext,
+  setCommandClassifier,
+  setPermissionReviewer
+} from './services/toolContext'
 import { commandClassifier } from './services/commandClassifier'
 import { installLlmNetwork } from './services/models'
 import { installSessionHostQuitHook, sessionAgentResolver } from './services/sessionHost'
@@ -92,6 +97,7 @@ import {
   HEADLESS_STOPPED_LINE,
   headlessArgsErrorLine,
   headlessBind,
+  headlessDeprecationLine,
   headlessLan,
   headlessListenErrorLine,
   headlessPortOverride,
@@ -107,7 +113,7 @@ import {
   secondInstanceVerdict,
   writeHeadlessAddress
 } from './utils/headlessInstance'
-import { NETWORK_PORT_KEY, parseNetworkPort } from '../shared/network'
+import { NETWORK_ADMISSION_POLICY, NETWORK_PORT_KEY, parseNetworkPort } from '../shared/network'
 const log = createLogger('App')
 mark('main: imports evaluated')
 
@@ -118,8 +124,8 @@ const isMac = process.platform === 'darwin'
 /**
  * 无头运行（docs/headless/design.md §1）：`--headless` 或 `SHUVIX_HEADLESS=1`。一扇窗都不开（启动、Dock 重开、
  * 第二个实例、点通知、从系统打开的 md、菜单快捷键都不开），网络访问强制开着（端口：`--port`，否则设置里的，
- * 否则 7766；缺省只监听 127.0.0.1，`--lan` / `SHUVIX_LAN=1` 才给局域网；都不写设置），stdout 上打印就绪 / 出错 /
- * 退出那几行。`--help` 打印用法后退出。
+ * 否则 7766；不写设置；谁能连由安全策略 network-admission 定，缺省只放这台电脑 —— 弃用的 `--lan` / `--bind`
+ * 只在启动时迁移成那份策略），stdout 上打印就绪 / 出错 / 退出那几行。`--help` 打印用法后退出。
  *
  * 必须在单实例锁之前：`--help` 不该去敲正在跑的那个实例，Linux 的 Ozone 开关也得在 ready 之前加上。
  */
@@ -132,6 +138,8 @@ if (headlessArgs.help) {
   app.exit(2)
 } else if (headlessArgs.headless) {
   enableHeadlessMode({ port: headlessArgs.port, lan: headlessArgs.lan, bind: headlessArgs.bind })
+  const deprecation = headlessDeprecationLine(headlessArgs)
+  if (deprecation) printHeadlessLine(deprecation)
   // macOS：不要 Dock 图标（ready 之后再藏一次，见下）
   if (isMac) app.dock?.hide()
   if (process.platform === 'linux') {
@@ -148,8 +156,8 @@ if (headlessArgs.help) {
     )
   })
   log.info(
-    `无头运行（headless）：端口 ${headlessArgs.port ?? '取设置'}，` +
-      `${headlessArgs.bind !== undefined ? `只开放给一个网络（${headlessArgs.bind}）` : headlessArgs.lan ? '局域网共享（0.0.0.0）' : '只给这台电脑（127.0.0.1）'}，pid ${process.pid}，不开任何窗口`
+    `无头运行（headless）：端口 ${headlessArgs.port ?? '取设置'}，谁能连由策略 network-admission 定` +
+      `${headlessArgs.bind !== undefined ? `（弃用的 --bind ${headlessArgs.bind}）` : headlessArgs.lan ? '（弃用的 --lan）' : ''}，pid ${process.pid}，不开任何窗口`
   )
 }
 
@@ -1022,8 +1030,10 @@ app.whenReady().then(async () => {
   // 网络访问（局域网里的浏览器，server mode phase B）：缺省关，设置里开着才监听。与 CLI / Chrome 桥一样排在
   // 旧格式切换之后（浏览器里的界面同样可能碰到那些会话）；监听失败只记进状态（设置页显示原因），不拦启动。
   // phase D：文件路由（自定义协议的 HTTP 等价物）与 widget 转发的依赖在这里交进去。
-  // 无头运行：强制开着（端口：--port，否则设置里的，否则 7766；只给这台电脑，--lan 才给局域网；不写设置），
-  // 开始监听后打印就绪那一行
+  // 无头运行：强制开着（端口：--port，否则设置里的，否则 7766；不写设置；谁能连由策略 network-admission 定，
+  // 弃用的 --lan / --bind 在 init 时迁移成那份策略），开始监听后打印就绪那一行。
+  // 安全策略那一侧（2026-10-19，docs/network-policy/design.md）：网络主体的 SecurityContext、准入策略的状态、
+  // 定时核策略目录、迁移旧的局域网共享设置都在这里交进去
   if (isHeadless()) {
     networkService.setHeadless({
       port: headlessPortOverride() ?? parseNetworkPort(settingsDao.findByKey(NETWORK_PORT_KEY)),
@@ -1046,6 +1056,16 @@ app.whenReady().then(async () => {
             : undefined
         },
         logger: { warn: (message) => log.warn(message) }
+      },
+      security: {
+        contextFor: getDesktopNetworkSecurityContext,
+        admission: () => networkAdmissionOf(policyService.listForSettings()),
+        refreshPolicies: () => void policyService.refresh(),
+        hasUserAdmission: () =>
+          policyService
+            .listForSettings()
+            .some((row) => row.source === 'user' && row.name === NETWORK_ADMISSION_POLICY),
+        createPolicy: (text) => policyService.createPolicy(text)
       }
     })
   )

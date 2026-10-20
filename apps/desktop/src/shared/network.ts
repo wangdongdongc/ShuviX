@@ -1,17 +1,15 @@
 /**
- * 网络访问（server mode phase B，docs/server/phase-bc-network-and-web.md §B1）—— 主进程的网络服务与设置页
- * 共用的那一点：三个设置键、端口的取值规则、状态的形状。纯数据 + 小函数，preload / 渲染层 / 主进程都能引。
+ * 网络访问（server mode phase B，docs/server/phase-bc-network-and-web.md §B1；网络策略 docs/network-policy/design.md）
+ * —— 主进程的网络服务与设置页共用的那一点：两个设置键、端口的取值规则、状态的形状。纯数据 + 小函数，preload /
+ * 渲染层 / 主进程都能引。
  *
  * 规则（用户裁决）：**缺省关**，只有字面量 `'true'` 才开；端口缺省 7766，必须是 1024–65535 的整数，
  * 读到不合法的值一律按缺省。
  *
- * **两个开关**（用户裁决 2026-10-14）：「网络访问」开着时缺省**只监听 127.0.0.1**（只有这台电脑能连，别处经 SSH
- * 隧道）；另一个开关「允许局域网里的其他设备」（`network.lan`，同样只有字面量 `'true'` 才开）开着才监听 0.0.0.0 ——
- * 那时局域网里的任何人都能完全控制这台电脑（这一轮没有认证），所以设置页把风险写在明面上。
- *
- * **只开放给一个网络**（用户需求 2026-10-15）：局域网开关开着时，`network.lanInterface` 可以指定一块网卡（`eth1`）
- * 或这台电脑上的一个地址（`192.168.50.10`）—— 那时只在那个地址上监听，并且只接受那个网段里的对端；空 = 所有网络。
- * 无头运行由启动参数 `--bind` 定。
+ * **谁能连由安全策略定**（用户裁决 2026-10-19）：开着时一律监听 0.0.0.0，内置策略 `network-admission` 只放这台
+ * 电脑（127.0.0.1 / ::1）。要让别的设备连进来，写一份同名的用户策略替换它 —— 一个或几个网段、指定的设备、只读的
+ * 设备……都由策略表达。从前的「允许局域网里的其他设备」开关（`network.lan`）与「开放给」网卡（`network.lanInterface`）
+ * 已经去掉；旧设置在启动时迁移成一份 network-admission 策略（见 frontend/network/admissionMigration.ts）后删掉。
  */
 
 /** 设置键：网络访问开关（只有 `'true'` 开） */
@@ -20,20 +18,20 @@ export const NETWORK_ENABLED_KEY = 'network.enabled'
 /** 设置键：监听端口 */
 export const NETWORK_PORT_KEY = 'network.port'
 
-/** 设置键：允许局域网里的其他设备（只有 `'true'` 开；关 → 只监听 127.0.0.1） */
-export const NETWORK_LAN_KEY = 'network.lan'
+/** 旧设置键：允许局域网里的其他设备（只为迁移读一次，迁移后删掉） */
+export const LEGACY_NETWORK_LAN_KEY = 'network.lan'
 
-/** 设置键：局域网开关开着时只开放给哪个网络（网卡名或本机地址；缺失 / 空 = 所有网络） */
-export const NETWORK_LAN_INTERFACE_KEY = 'network.lanInterface'
+/** 旧设置键：只开放给哪个网络（网卡名或本机地址；只为迁移读一次，迁移后删掉） */
+export const LEGACY_NETWORK_LAN_INTERFACE_KEY = 'network.lanInterface'
 
-/** 状态里 `error` 的取值：指定的网卡 / 地址在这台电脑上找不到 */
-export const NETWORK_ERROR_NO_INTERFACE = 'ENOINTERFACE'
+/** 监听的地址：所有接口（谁能进由策略定） */
+export const NETWORK_BIND_ADDRESS = '0.0.0.0'
 
-/** 只给这台电脑：监听的地址 */
-export const LOOPBACK_BIND_ADDRESS = '127.0.0.1'
+/** 这台电脑的地址（列出的地址里总有它） */
+export const LOOPBACK_ADDRESS = '127.0.0.1'
 
-/** 局域网共享：监听的地址（所有接口） */
-export const LAN_BIND_ADDRESS = '0.0.0.0'
+/** 管谁能连的那份策略的名字（内置一份，用户写同名文件替换） */
+export const NETWORK_ADMISSION_POLICY = 'network-admission'
 
 /** 缺省端口 */
 export const DEFAULT_NETWORK_PORT = 7766
@@ -49,28 +47,13 @@ export function isNetworkEnabledValue(raw: string | null | undefined): boolean {
   return raw === 'true'
 }
 
-/** 设置里的局域网开关值 → 开不开（只有字面量 `'true'` 开；缺失 / 其余一律关） */
-export function isNetworkLanValue(raw: string | null | undefined): boolean {
-  return raw === 'true'
-}
-
 /**
- * 能不能当「只开放给哪个网络」的值：1–64 个字符，只含网卡名与 IP 字面量会用到的字符（ASCII 字母数字 `_ . : -`），
- * 不以 `-` 开头。这个值会进 systemd 服务文件与命令行，所以不认空白、shell 元字符，也不认 `%`（systemd 的说明符；
- * 带 zone 的链路本地地址本来也用不上 —— 给网卡名）
+ * 旧的「只开放给哪个网络」值（网卡名或本机地址）是否可以迁移：1–64 个字符，只含网卡名与 IP 字面量会用到的
+ * 字符（ASCII 字母数字 `_ . : -`），不以 `-` 开头。迁移把它写进策略的 CEL 字符串字面量里，所以不认引号、空白、
+ * 反斜杠与其余一切
  */
 export function isValidLanInterfaceSpec(spec: unknown): spec is string {
   return typeof spec === 'string' && /^[A-Za-z0-9_.:][A-Za-z0-9_.:-]{0,63}$/.test(spec)
-}
-
-/**
- * 设置里的值 → 指定的网络（缺失 / 空白 → undefined = 所有网络）。**不合法的值原样返回**：它落不到任何网卡上，
- * 网络服务因此不监听（`ENOINTERFACE`）—— 宁可关着，也不退回到所有网络
- */
-export function parseLanInterfaceValue(raw: string | null | undefined): string | undefined {
-  if (typeof raw !== 'string') return undefined
-  const trimmed = raw.trim()
-  return trimmed === '' ? undefined : trimmed
 }
 
 /** 这个数能不能当端口用（1024–65535 的整数） */
@@ -98,19 +81,40 @@ export interface NetworkClientInfo {
   readonly remoteAddress: string
   /** 浏览器的 User-Agent（没有 → 空串） */
   readonly userAgent: string
+  /** 浏览器的设备 ID（`shuvix_device` cookie；没有 → 空串）—— 策略里的 `subject.device` */
+  readonly device: string
   /** 连上的时刻（毫秒时间戳） */
   readonly connectedAt: number
 }
 
-/** 一个可以开放给的网络（设置页的选项、状态里正在开放的那一个） */
-export interface NetworkLanInfo {
-  /** 网卡名 */
-  readonly interface: string
-  /** 这块网卡上的地址 */
+/** 一次（或一分钟内合并的几次）网络点位上的拒绝（设置页「最近拒绝」） */
+export interface NetworkDenialInfo {
+  /** 第一次的时刻 */
+  readonly at: number
+  /** 最近一次的时刻 */
+  lastAt: number
+  /** 合并了几次 */
+  count: number
+  /** 哪个阶段（策略里的 object.type） */
+  readonly stage: 'socket' | 'request' | 'channel' | 'path'
+  /** 对象摘要：`GET /`、`session:prompt`、`read /Users/…` */
+  readonly summary: string
   readonly address: string
-  /** 网段（`192.168.50.10/24`） */
-  readonly cidr: string
+  /** 设备 ID（没有 → 空串） */
+  readonly device: string
+  /** 胜出的规则（`network-admission#0`；判定出错 → `error`） */
+  readonly rule: string
+  /** 带话的策略显示名 */
+  readonly policies: string[]
+  /** 策略说的是「询问」，网络点位没人可问，按拒绝处置 */
+  readonly downgraded: boolean
 }
+
+/**
+ * 管谁能连的那份策略此刻的状态：`builtin` = 生效的是内置那份（只放这台电脑）；`override` = 用户的同名策略
+ * 替换了它；`disabled` = 生效的那份被停用了（局域网里的任何设备都能连）
+ */
+export type NetworkAdmission = 'builtin' | 'override' | 'disabled'
 
 /** `network:status` 的回包 */
 export interface NetworkStatus {
@@ -118,33 +122,48 @@ export interface NetworkStatus {
   readonly enabled: boolean
   /** 设置里的端口（不合法时是缺省） */
   readonly port: number
-  /** 允许局域网里的其他设备（设置 `network.lan`；无头运行时是启动参数 `--lan`） */
-  readonly lan: boolean
-  /**
-   * 局域网开关开着时只开放给哪个网络（设置 `network.lanInterface`；无头运行时是 `--bind`）—— 网卡名或本机地址，
-   * 原样；所有网络 → 没有这一项
-   */
-  readonly lanInterface?: string
-  /** 此刻正只开放给的那个网络（指定了网络且真在监听时）；否则没有这一项 */
-  readonly lanNetwork?: NetworkLanInfo
-  /** 能挑的网络：每块非内部网卡的第一个私有 IPv4 地址（设置页的选项） */
-  readonly lanCandidates: NetworkLanInfo[]
-  /** 此刻真正监听的地址（`127.0.0.1` / `0.0.0.0` / 指定网络的地址）；没在监听 → 没有这一项 */
-  readonly bindAddress?: string
   /** 此刻是否真在监听（开着但端口被占 → false，见 `error`） */
   readonly listening: boolean
   /**
-   * 能用来打开的地址：只给这台电脑 → 只有 `http://127.0.0.1:<port>`；局域网共享 → 每个非内部的私有 IPv4 接口一条，
-   * 外加 `http://127.0.0.1:<port>`；只开放给一个网络 → 只有那个地址；没在监听 → 空
+   * 能用来打开的地址：内置准入（`admission: 'builtin'`）只放这台电脑 → 只有 `http://127.0.0.1:<port>`；替换 / 停用
+   * 之后 → 每个非内部的私有 IPv4 接口一条，外加 `http://127.0.0.1:<port>`（具体哪些设备能进由策略定）；没在监听 → 空
    */
   readonly addresses: string[]
   /** 连着的客户端 */
   readonly clients: NetworkClientInfo[]
-  /** 监听失败的原因（端口被占 …；指定的网络找不到 → `NETWORK_ERROR_NO_INTERFACE`）；没出错 → 没有这一项 */
+  /** network-admission 此刻的状态（设置页据此给引导） */
+  readonly admission: NetworkAdmission
+  /** 最近的拒绝（新 → 旧，至多 20 条） */
+  readonly denials: NetworkDenialInfo[]
+  /** 监听失败的原因（端口被占 …）；没出错 → 没有这一项 */
   readonly error?: string
   /**
-   * 无头运行（`shuvix --headless`，docs/headless/design.md）：网络访问强制开着、端口与局域网共享由命令行定（`--port` /
-   * `--lan`），设置页的开关、端口与局域网开关因此锁住（关掉 / 换端口 / 换共享一律拒绝）。桌面应用 → 没有这一项
+   * 无头运行（`shuvix --headless`，docs/headless/design.md）：网络访问强制开着、端口由命令行定（`--port`），
+   * 设置页的开关与端口因此锁住（关掉 / 换端口一律拒绝）。桌面应用 → 没有这一项
    */
   readonly headless?: true
+}
+
+/** 一条 TCP 连接的事实（来自 socket；可信）—— 网络策略的 `subject.address` / `port` / `localAddress` … */
+export interface PeerFacts {
+  readonly address: string
+  readonly port: number
+  readonly localAddress: string
+  readonly localPort: number
+  readonly family: 'ipv4' | 'ipv6'
+}
+
+/** 一个 HTTP 请求带来的事实（客户端自己说的）—— 网络策略的 `subject.headers` / `device` / `userAgent` */
+export interface HttpFacts {
+  /** 全部请求头，键小写；同名多值以 `, ` 连接 */
+  readonly headers: Readonly<Record<string, string>>
+  /** 浏览器带来的设备 ID；没有 → 空串 */
+  readonly device: string
+  readonly userAgent: string
+}
+
+/** 网络客户端一条 WebSocket 连接的事实（升级那一刻的）：处理函数按策略判路径时用 */
+export interface NetworkCallFacts {
+  readonly peer: PeerFacts
+  readonly http: HttpFacts
 }

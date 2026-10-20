@@ -245,11 +245,14 @@ export interface HeadlessLaunchOptions extends LaunchOptions {
   networkPort?: number | 'setting'
   /** 用环境变量 `SHUVIX_HEADLESS=1` 打开，命令行上不带 `--headless`（端口照样经 `--port`） */
   viaEnv?: boolean
-  /** 给局域网共享（`--lan`，监听 0.0.0.0）；缺省只给这台电脑（127.0.0.1） */
+  /**
+   * 带弃用的 `--lan`（2026-10-19 起谁能连由安全策略 network-admission 定，实例一律监听 0.0.0.0）：启动时若还没有
+   * 同名用户策略，按它写一份「任何私有地址都能连」的 `~/.shuvix/policies/network-admission.md`，stdout 多一行弃用说明
+   */
   lan?: boolean
   /**
-   * 只开放给一个网络（`--bind <网卡名或本机地址>`，隐含 --lan）：实例只在那个地址上监听，127.0.0.1 连不上 —— 所以就绪
-   * 之后 harness 自己（关自动审查那一下）连的是就绪那一行里的地址，而不是 127.0.0.1
+   * 带弃用的 `--bind <网卡名或本机地址>`（隐含 --lan）：同上，写的策略只放这台电脑与那块网卡的网段。这台电脑（127.0.0.1）
+   * 总在放行之列，所以 harness 自己（关自动审查那一下）照旧连 127.0.0.1
    */
   bind?: string
 }
@@ -607,13 +610,9 @@ export async function launchApp(
     }
     if (headless) {
       installTargetForensics(port)
-      // 没有窗口：自动审查的停用开关经网络访问写（与窗口里那条是同一条 IPC 通道）。只开放给一个网络时只有就绪那一行
-      // 里的地址连得上（127.0.0.1 上没有在监听）
-      const readyHost =
-        headlessOpts?.bind !== undefined
-          ? new URL(readyLine.slice(HEADLESS_READY_PREFIX.length).trim().split(/\s+/)[0]).hostname
-          : undefined
-      const ws = await connectWs(networkPort, readyHost === undefined ? {} : { host: readyHost })
+      // 没有窗口：自动审查的停用开关经网络访问写（与窗口里那条是同一条 IPC 通道）。实例监听 0.0.0.0，这台电脑
+      // （127.0.0.1）不论准入策略怎么写都放行（内置的只放它；--lan / --bind 迁移出的也放它）
+      const ws = await connectWs(networkPort)
       try {
         const result = await ws.invoke<{ success: boolean; reason?: string; message?: string }>(
           'mdMeta:setEnabled',

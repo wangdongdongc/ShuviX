@@ -92,7 +92,7 @@ describe('ND-1 networkChannelVerdict', () => {
 
 describe('DO-5 桌面专属表与分发器交叉核对', () => {
   it('DO-5 每个键：invoke → desktop_only，send → unknown', () => {
-    expect(DESKTOP_ONLY_KEYS.length).toBe(22)
+    expect(DESKTOP_ONLY_KEYS.length).toBe(23)
     for (const key of DESKTOP_ONLY_KEYS) {
       expect(networkChannelVerdict(key, 'invoke'), key).toBe('desktop_only')
       expect(networkChannelVerdict(key, 'send'), key).toBe('unknown')
@@ -290,5 +290,61 @@ describe('ND-9 send', () => {
     expect(openFolder).not.toHaveBeenCalled()
     expect(nope).not.toHaveBeenCalled()
     expect(windowReady).not.toHaveBeenCalled()
+  })
+})
+
+describe('ND-G channel 点位（安全策略）', () => {
+  const DENY = {
+    allowed: false,
+    downgraded: false,
+    message: 'Read-only device.',
+    decision: { effect: 'deny' as const, matched: ['p#0'], winning: 'p#0' }
+  }
+
+  it('ND-G1 拒绝 → invoke 回 ok:false denied（消息是规则的话），处理函数不执行；判定收到通道、种类、大小、参数', async () => {
+    const fn = vi.fn(() => 'value')
+    handle('session:list', fn)
+    const judge = vi.fn(() => DENY)
+    const gated = createNetworkDispatcher({ definitionOf, judge, logger })
+    const result = await gated.invoke(ctx, invoke(7, 'session:list', ['a']), 99)
+    expect(result).toEqual({
+      t: 'result',
+      id: 7,
+      ok: false,
+      error: { message: 'Read-only device.', code: 'denied' }
+    })
+    expect(fn).not.toHaveBeenCalled()
+    expect(judge).toHaveBeenCalledWith(ctx, {
+      channel: 'session:list',
+      kind: 'invoke',
+      size: 99,
+      args: ['a']
+    })
+  })
+
+  it('ND-G2 拒绝 → send 丢掉；放行 / 判定回 undefined → 照常执行；不认的通道不判', async () => {
+    const fn = vi.fn()
+    listen('app:window-ready', fn)
+    const judge = vi.fn(() => DENY)
+    createNetworkDispatcher({ definitionOf, judge, logger }).send(ctx, {
+      t: 'send',
+      channel: 'app:window-ready',
+      args: []
+    })
+    expect(fn).not.toHaveBeenCalled()
+    const pass = vi.fn(() => undefined)
+    createNetworkDispatcher({ definitionOf, judge: pass, logger }).send(ctx, {
+      t: 'send',
+      channel: 'app:window-ready',
+      args: []
+    })
+    expect(fn).toHaveBeenCalledTimes(1)
+    const unknown = vi.fn(() => DENY)
+    const res = await createNetworkDispatcher({ definitionOf, judge: unknown, logger }).invoke(
+      ctx,
+      invoke(8, 'nope:nope')
+    )
+    expect(res).toMatchObject({ ok: false, error: { code: 'unknown_channel' } })
+    expect(unknown).not.toHaveBeenCalled()
   })
 })

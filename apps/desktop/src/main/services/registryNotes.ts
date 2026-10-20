@@ -18,6 +18,7 @@ import { projectDao } from '../dao/projectDao'
 import { sessionRecords } from './sessionRecords'
 import { sessionService } from './sessionService'
 import { botService } from './botService'
+import { policyService } from './policyService'
 import {
   getBuiltinAgentsDir,
   getBuiltinHooksDir,
@@ -177,8 +178,9 @@ function noteRegistryWritten(type: 'agent.changed' | 'policy.changed' | 'hook.ch
  *
  * 三个目录要回执，理由不同：
  *   - bots：改名要迁会话绑定，侧栏与身份胶囊要重查（见 botService.noteWriting / noteWritten）；
- *   - agents / policies / hooks：没有服务要观察（每次用到都现扫目录，写完即生效；评估侧每次
- *     现装配，runner 每次 fire 现算注册表），但侧栏那几组把显示名直接摆在屏幕上，而改名就发生在
+ *   - agents / policies / hooks：agents 与 hooks 没有服务要观察（每次用到都现扫目录，写完即生效；runner 每次
+ *     fire 现算注册表）；policies 的扫描结果有统一缓存（policyService），写完同步标脏。侧栏那几组把显示名
+ *     直接摆在屏幕上，而改名就发生在
  *     同一个窗口的笔记本里 —— 没有「切窗口」这一下可以兜底，所以写完各广播一次
  *     `agent.changed` / `policy.changed` / `hook.changed` 让它重扫；
  * 技能的写入回执不在这里 —— 它不是注册表 md，落点也在子目录（`<根>/<技能名>/SKILL.md`），
@@ -203,6 +205,8 @@ export async function observeRegistryWrite<T>(
     try {
       return await write()
     } finally {
+      // 统一策略缓存同步标脏：写完立刻发起的工具调用必须看到新规则（事件是给侧栏的，按合并窗口发）
+      policyService.invalidate()
       noteRegistryWritten('policy.changed')
     }
   }

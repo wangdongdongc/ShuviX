@@ -296,7 +296,7 @@ beforeAll(async () => {
   projectId = (await createProject(app.main, { name: 'DB-Session-Proj', path: projDir })).id
 
   // 出厂不再对数据库发问：把退役的 ask-on-database 原样装成用户策略，可写连接上的语句才有卡可测
-  seedRetiredPolicy(app, 'ask-on-database')
+  await seedRetiredPolicy(app, 'ask-on-database')
   const policies =
     await app.main.eval<Array<{ name: string; displayName: string; source: string }>>(
       `window.api.policy.list()`
@@ -798,7 +798,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
 
   it('DBE-F8 出厂不问：撤掉那份用户策略，可写连接上的语句不问就跑、真写进去，决策是缺省放行', async () => {
     const SQL = "INSERT INTO items (label) VALUES ('delta')"
-    removeRetiredPolicy(app, 'ask-on-database')
+    await removeRetiredPolicy(app, 'ask-on-database')
     try {
       provider.reset()
       const { ends, since } = await driver.run(sid, [q('dbf8_insert', 'e2e-rw', SQL, 'Add delta')])
@@ -816,7 +816,7 @@ describe('主流程（DBE-F：一条勾了 database 的会话，开在界面上�
       })
     } finally {
       // 后面的 DBE-F11 还要一张卡
-      seedRetiredPolicy(app, 'ask-on-database')
+      await seedRetiredPolicy(app, 'ask-on-database')
     }
   }, 120_000)
 

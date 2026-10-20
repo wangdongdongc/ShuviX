@@ -11,6 +11,7 @@
  * 连接（`NetworkConnection`）由服务端（`server.ts`）在 WebSocket 升级成功后建出来、`add` 进来；它关掉时自己从表里
  * 摘掉。本模块不碰 `ws` 与 Node 的网络对象 —— 单测给假的连接。
  */
+import type { NetworkCallFacts } from '../../../shared/network'
 import type { ServerMessage } from '../../../shared/networkEnvelope'
 import type {
   ChannelDefinition,
@@ -24,6 +25,8 @@ export interface NetworkConnection {
   readonly client: NetworkClientRef
   /** 连上的时刻（毫秒时间戳） */
   readonly connectedAt: number
+  /** 升级那一刻的事实（对端地址、请求头 …）：每条 RPC 的策略判定、策略变了之后的重判都按它（单测的假连接可以没有） */
+  readonly facts?: NetworkCallFacts
   /** 还开着吗 */
   isOpen(): boolean
   /** 发一条消息（已经关了 → 什么也不做，从不抛） */
