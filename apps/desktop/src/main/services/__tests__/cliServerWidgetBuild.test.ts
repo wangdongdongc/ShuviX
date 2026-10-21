@@ -14,6 +14,8 @@
  *   HG-4b 不是字符串的 message（数字 / null / 对象）→ `{ message: undefined }`
  *   HG-4c 空字符串 message 原样转（缺省说明由 widgetService 自己补）
  *   HG-4d 非法 id 带着 message 照样在授权与构建之前被拒
+ *   HG-5  结果在 build 的返回之外多一个 `token`：这个 widget 的 cli 范围令牌（智能体在 shell 里 curl db/ 用；
+ *         读不了 fs/，见 widget/widgetToken.ts）—— 有没有会话都给；`widget.init` 同样
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { join } from 'path'
@@ -66,6 +68,7 @@ vi.mock('../../logger', () => ({
 }))
 
 import { cliServer } from '../cliServer'
+import { widgetTokenScope } from '../widget/widgetToken'
 import { widgetService } from '../widget'
 
 type Handler = (params: Record<string, unknown>, sessionId: string | undefined) => Promise<unknown>
@@ -108,7 +111,9 @@ describe('HG-3 widget.build —— 先校验 id，再授权', () => {
   it('HG-3 合法 id + sessionId → 对 getWidgetDir(id) 授写（含读），然后构建并返回构建结果', async () => {
     const dir = join(WIDGETS_DIR, 'json-formatter')
 
-    await expect(buildHandler()({ id: 'json-formatter' }, 'sess-1')).resolves.toEqual(BUILD_RESULT)
+    await expect(buildHandler()({ id: 'json-formatter' }, 'sess-1')).resolves.toMatchObject(
+      BUILD_RESULT
+    )
 
     expect(dirSpy).toHaveBeenCalledWith('json-formatter')
     expect(mocks.grantPath.mock.calls).toEqual([
@@ -122,7 +127,9 @@ describe('HG-3 widget.build —— 先校验 id，再授权', () => {
   })
 
   it('HG-3 合法 id、没有 sessionId（CLI 不在会话里调）→ 不授权，照样构建', async () => {
-    await expect(buildHandler()({ id: 'json-formatter' }, undefined)).resolves.toEqual(BUILD_RESULT)
+    await expect(buildHandler()({ id: 'json-formatter' }, undefined)).resolves.toMatchObject(
+      BUILD_RESULT
+    )
 
     expect(mocks.grantPath).not.toHaveBeenCalled()
     expect(buildSpy.mock.calls).toEqual([['json-formatter', { message: undefined }]])
@@ -136,8 +143,7 @@ describe('HG-4 widget.build 的 message', () => {
 
     const out = await buildHandler()({ id: 'json-formatter', message: 'feat: x' }, 'sess-1')
 
-    expect(out).toBe(withCommit)
-    expect(out).toEqual({ ...BUILD_RESULT, commit: 'abc1234' })
+    expect(out).toMatchObject({ ...BUILD_RESULT, commit: 'abc1234' })
     expect(buildSpy.mock.calls).toEqual([['json-formatter', { message: 'feat: x' }]])
   })
 
@@ -160,5 +166,31 @@ describe('HG-4 widget.build 的 message', () => {
     )
     expect(mocks.grantPath).not.toHaveBeenCalled()
     expect(buildSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('HG-5 结果带 cli 令牌', () => {
+  it('HG-5 build 的返回之外多一个 token：这个 widget 的 cli 范围；有没有会话都给', async () => {
+    for (const sid of ['sess-1', undefined]) {
+      const out = (await buildHandler()({ id: 'json-formatter' }, sid)) as Record<string, unknown>
+      expect(out).toMatchObject(BUILD_RESULT)
+      expect(widgetTokenScope(out.token as string, 'json-formatter')).toBe('cli')
+      expect(widgetTokenScope(out.token as string, 'other-widget')).toBeNull()
+    }
+  })
+
+  it('HG-5 widget.init 同样多一个 cli 令牌', async () => {
+    const INIT = { id: 'json-formatter', projectDir: '/x', url: 'u', files: [], buildSuccess: true }
+    const initSpy = vi.spyOn(widgetService, 'init').mockResolvedValue(INIT as never)
+    const init = (cliServer as unknown as { handlers: Map<string, Handler> }).handlers.get(
+      'widget.init'
+    )!
+    const out = (await init({ id: 'json-formatter', name: 'JSON' }, undefined)) as Record<
+      string,
+      unknown
+    >
+    expect(initSpy).toHaveBeenCalled()
+    expect(out).toMatchObject(INIT)
+    expect(widgetTokenScope(out.token as string, 'json-formatter')).toBe('cli')
   })
 })

@@ -30,7 +30,7 @@ import { join } from 'path'
 import { createLogger } from '../logger'
 import { getToolResultsDir, isSafeSessionId } from '../utils/paths'
 import { widgetServer, widgetService } from './widget'
-import { installWidgetFsKey } from './widget/widgetFsKey'
+import { installWidgetTokens } from './widget/widgetToken'
 
 const log = createLogger('WidgetPreview')
 
@@ -190,8 +190,8 @@ function previewSession(): Electron.Session {
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
     ses.setPermissionCheckHandler(() => false)
     ses.on('will-download', (event) => event.preventDefault())
-    // 预览页面读它自己的文件路由同样要密钥（见 widget/widgetFsKey.ts）
-    installWidgetFsKey(ses, () => widgetServer.getStatus().port)
+    // 预览页面的请求同样要那个 widget 的令牌（见 widget/widgetToken.ts）
+    installWidgetTokens(ses, () => widgetServer.getStatus().port)
   }
   return ses
 }

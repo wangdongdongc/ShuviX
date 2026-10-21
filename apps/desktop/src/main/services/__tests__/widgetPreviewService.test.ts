@@ -167,7 +167,7 @@ const fx = vi.hoisted(() => {
     setPermissionRequestHandler: vi.fn(),
     setPermissionCheckHandler: vi.fn(),
     on: vi.fn(),
-    // widget 文件路由的补头钩子（widget/widgetFsKey.ts）装在预览分区上
+    // widget 路由的补令牌钩子（widget/widgetToken.ts）装在预览分区上
     webRequest: { onBeforeSendHeaders: vi.fn() }
   }
 

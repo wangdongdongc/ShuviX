@@ -28,7 +28,7 @@
 - `fs/file` 404：路径不存在或是目录；403：ShuviX 无权读取。在 macOS 上，桌面（Desktop）、文稿（Documents）和下载（Downloads）需要在 系统设置（System Settings）→ 隐私与安全性（Privacy & Security）→ 文件与文件夹（Files and Folders）里允许 ShuviX；这只能由用户来授权。
 - 在桌面端能用、从浏览器打开就失败：代码用了只在桌面端存在的地址（`shuvix-media://`、`file://`、`http://127.0.0.1:<port>`）。见 `files.md`。
 
-要从你自己的 shell 检查一个端点，就 `curl` `build` 返回的 `url` 加上路由，例如 `curl "<url>db/todos?limit=3"`。
+要从你自己的 shell 检查一个端点，就 `curl` `build` 返回的 `url` 加上路由，并在请求头里带上它的 `token`，例如 `curl -H "x-shuvix-widget-token: <token>" "<url>db/todos?limit=3"`。这里返回 403，说明没带令牌，或者令牌是 ShuviX 重启之前的（再 `build` 一次拿新的）；`fs/` 对 shell 一律返回 403。
 
 ## CLI
 

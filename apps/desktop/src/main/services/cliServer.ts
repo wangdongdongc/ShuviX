@@ -33,6 +33,7 @@ import * as widgetWindowService from './widgetWindowService'
 import { parsePreviewSizes, parsePreviewTheme, previewWidget } from './widgetPreviewService'
 import { sessionAcl } from './acl'
 import { verifiedCliSession } from './cliSession'
+import { issueWidgetToken } from './widget/widgetToken'
 import { getDesktopSecurityContext } from './toolContext'
 import { resolve as resolvePath } from 'path'
 import { stopBgTaskByAgent } from './bgTaskService'
@@ -302,7 +303,8 @@ class CliServer {
           sourceKey: id
         })
       }
-      return result
+      // 智能体在 shell 里检查数据库要的令牌（`cli` 范围：用不了 fs/，见 widget/widgetToken.ts）
+      return { ...result, token: issueWidgetToken(id, 'cli') }
     })
 
     this.handlers.set('widget.build', async (p, sessionId) => {
@@ -316,7 +318,8 @@ class CliServer {
         sessionAcl.grantPath(sessionId, dir, 'write', { source: 'widget', sourceKey: id })
       }
       const message = typeof p.message === 'string' ? p.message : undefined
-      return await widgetService.build(id, { message })
+      const built = await widgetService.build(id, { message })
+      return { ...built, token: issueWidgetToken(id, 'cli') }
     })
 
     // 在 widget 自己的窗口里打开（已开则聚焦）—— 技能只让 agent 在用户要它打开时用。构建 / URL 由窗口内

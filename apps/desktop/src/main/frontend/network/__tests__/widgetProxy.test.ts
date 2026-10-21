@@ -27,8 +27,8 @@
  *         d 转发自己回的 503（target 不在）/ 502（上游没在听）：文件路由带，别的路由不带
  *         e 不是文件路由（页面、db、`fsx`、`FS`、`//fs`）且上游不带 → 不补
  *         f 文件路由上 text/html 的应答照样加沙箱 CSP，也带 ACAO
- *   WP-13 widget 服务的密钥头（services/widget/widgetFsKey.ts）：文件路由补上本进程的密钥，客户端自己带来的
- *         同名头（任何大小写、任何值）丢掉；别的路由不补、客户端带的照样丢掉
+ *   WP-13 widget 的令牌（services/widget/widgetToken.ts）：`/w/<id>/…` 的每个请求（页面、bundle、db、fs）补上那个
+ *         widget 的 ui 令牌，客户端自己带来的同名头（任何大小写、任何值，哪怕是别的 widget 的真令牌）丢掉
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import {
@@ -48,7 +48,11 @@ import { createNetworkLinkHub } from '../networkLinks'
 import { createNetworkServer, type NetworkServer, type NetworkServerDeps } from '../server'
 import { createNetworkTransport } from '../transport'
 import { WIDGET_DOCUMENT_CSP, forwardableHeaders, type WidgetProxyTarget } from '../widgetProxy'
-import { WIDGET_FS_KEY_HEADER, widgetFsKey } from '../../../services/widget/widgetFsKey'
+import {
+  issueWidgetToken,
+  WIDGET_TOKEN_HEADER,
+  widgetTokenScope
+} from '../../../services/widget/widgetToken'
 
 const NOT_RUNNING = 'The ShuviX widget server is not running. Open the widget again.'
 const NO_ANSWER = 'The ShuviX widget server did not answer.'
@@ -729,7 +733,7 @@ describe('WP-12 widget 文件路由补 ACAO *', () => {
   })
 })
 
-describe('WP-13 文件路由的密钥头', () => {
+describe('WP-13 widget 的令牌', () => {
   beforeEach(async () => {
     await boot()
     script = (_req, res) => {
@@ -738,16 +742,24 @@ describe('WP-13 文件路由的密钥头', () => {
     }
   })
 
-  it('WP-13 文件路由补本进程的密钥、丢掉客户端带的；别的路由不补', async () => {
+  it('WP-13 每个 /w/<id>/ 请求补那个 widget 的 ui 令牌、丢掉客户端带的', async () => {
+    const tokenSeen = (): string | string[] | undefined => seen.at(-1)!.headers[WIDGET_TOKEN_HEADER]
+
+    for (const path of [
+      '/w/demo-widget/',
+      '/w/demo-widget/bundle.js',
+      '/w/demo-widget/db/items?limit=1',
+      '/w/demo-widget/fs/file?path=%2Fa'
+    ]) {
+      await http(path)
+      expect(widgetTokenScope(tokenSeen(), 'demo-widget'), path).toBe('ui')
+    }
+
+    // 客户端冒充：别的 widget 的真令牌、乱写的 —— 都换成路径里那个 widget 的
     await http('/w/demo-widget/fs/file?path=%2Fa', {
-      headers: { 'X-Shuvix-Widget-Key': 'forged' }
+      headers: { 'X-Shuvix-Widget-Token': issueWidgetToken('other-widget', 'ui') }
     })
-    expect(seen.at(-1)!.headers[WIDGET_FS_KEY_HEADER]).toBe(widgetFsKey())
-
-    await http('/w/demo-widget/fs/list?path=%2Ftmp')
-    expect(seen.at(-1)!.headers[WIDGET_FS_KEY_HEADER]).toBe(widgetFsKey())
-
-    await http('/w/demo-widget/bundle.js', { headers: { [WIDGET_FS_KEY_HEADER]: 'forged' } })
-    expect(seen.at(-1)!.headers[WIDGET_FS_KEY_HEADER]).toBeUndefined()
+    expect(widgetTokenScope(tokenSeen(), 'demo-widget')).toBe('ui')
+    expect(widgetTokenScope(tokenSeen(), 'other-widget')).toBeNull()
   })
 })

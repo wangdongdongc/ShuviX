@@ -28,7 +28,7 @@ The user sees these too; you see them only if they tell you. Before reporting, m
 - `fs/file` 404: the path does not exist or is a directory; 403: ShuviX may not read it. On macOS, Desktop, Documents and Downloads need ShuviX to be allowed in System Settings → Privacy & Security → Files and Folders; the user has to grant it.
 - Works on the desktop, fails from a browser: the code uses an address that only exists on the desktop (`shuvix-media://`, `file://`, `http://127.0.0.1:<port>`). See `files.md`.
 
-To check an endpoint from your own shell, `curl` the `url` that `build` returned plus the route, e.g. `curl "<url>db/todos?limit=3"`.
+To check an endpoint from your own shell, `curl` the `url` that `build` returned plus the route, with its `token` in the header, e.g. `curl -H "x-shuvix-widget-token: <token>" "<url>db/todos?limit=3"`. A 403 there means the token is missing or from before ShuviX restarted (`build` again for a fresh one); `fs/` always answers 403 to the shell.
 
 ## The CLI
 

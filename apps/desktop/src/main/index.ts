@@ -56,7 +56,7 @@ import {
   routeExternalUrl
 } from './services/externalOpen'
 import { widgetServer } from './services/widget'
-import { installWidgetFsKey } from './services/widget/widgetFsKey'
+import { installWidgetTokens } from './services/widget/widgetToken'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { cliServer } from './services/cliServer'
 import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
@@ -912,10 +912,10 @@ app.whenReady().then(async () => {
   // 例外是 `openExternal` —— 它不是「页面要用某个能力」，而是页面导航到非网页协议、Electron 在问
   // 要不要把这个地址交给操作系统（准了由它自己交，不经 shell.openExternal）。那一档走同一道闸。
   // 注意：内置浏览器跑在独立 partition（BROWSER_PARTITION），权限策略由 initBrowserSession() 单独管理。
-  // widget 文件路由的密钥：widget 页面（独立窗口、面板里的 iframe 都在默认会话里）读它自己的文件路由时由
-  // 主进程补上，沙箱里的命令 curl 过去拿不到（见 services/widget/widgetFsKey.ts）
-  step('widget files key', () =>
-    installWidgetFsKey(session.defaultSession, () => widgetServer.getStatus().port)
+  // widget 路由的令牌：widget 页面（独立窗口、面板里的 iframe 都在默认会话里）的请求由主进程补上那个 widget 的
+  // 令牌，沙箱里的命令 curl 过去拿不到（见 services/widget/widgetToken.ts）
+  step('widget tokens', () =>
+    installWidgetTokens(session.defaultSession, () => widgetServer.getStatus().port)
   )
 
   step('defaultSession permission handler', () =>

@@ -10,14 +10,16 @@
  *   *   /w/<id>/db/<table>    → widget 数据库的 REST 接口（widgetDb.ts）
  *   GET /w/<id>/fs/file|list  → 读本机文件 / 列目录（widgetFiles.ts，路由表见 shared/widgetRoutes.ts）
  *
- * 门（每个请求都过前两道，文件路由再过第三道）：
+ * 门（每个请求都过）：
  *   - **Host** 必须是 `127.0.0.1:<端口>` 或 `localhost:<端口>`，否则 421 —— 挡 DNS 重绑定（恶意网页把自己的域名
  *     解析到 127.0.0.1，就和这里同源了）。网络服务转发时已经把 Host 换成 127.0.0.1:<端口>（widgetProxy.ts）。
  *   - **`fs/` 的应答不带 `Access-Control-Allow-Origin`**：别的路由沿用 `*`（数据库接口一直如此，已知遗留），
  *     但文件路由不限路径，带上 `*` 就是让用户浏览器里任何网页都能读走本机文件。桌面里 widget 是同源请求，
  *     用不着它；远程模式下 widget 是沙箱里的不透明源，由 widgetProxy 在转发时补上（那一面本来就不认证）。
- *   - **`fs/` 要密钥头**（widgetFsKey.ts）：没有就 403。前两道挡网页，挡不住本机进程 —— 沙箱里的命令能
- *     直接 `curl` 这里读家目录。密钥只由主进程补给 widget 页面自己的请求与网络服务的转发。
+ *   - **`/w/<id>/` 下的一切要这个 widget 的令牌**（widgetToken.ts，请求头 `x-shuvix-widget-token`）：没有、签名
+ *     不对、是别的 widget 的 → 403；`cli` 范围的令牌用不了 `fs/`。前两道挡网页，挡不住本机进程 —— 沙箱里的命令
+ *     能直接 `curl` 这里。令牌由宿主补在请求头上（主进程给 widget 页面、网络服务的转发、CLI 交给命令），不进 URL，
+ *     widget 代码不用改。预检（OPTIONS）不要令牌：它什么也不返回。
  *
  * 懒启动：首次 registerWidget / rebuild 触发 server 监听
  * 打包复用 esbuild 插件的 BundlerService（共享预置的 React/Router 依赖）
@@ -30,8 +32,12 @@ import { bundlerService, bundlerResourcePath } from '../bundler'
 import { createLogger } from '../../logger'
 import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
 import { serveWidgetFiles } from './widgetFiles'
-import { hasWidgetFsKey, WIDGET_FS_KEY_HEADER } from './widgetFsKey'
-import { isWidgetFilesPath, WIDGET_FILES_SEGMENT } from '../../../shared/widgetRoutes'
+import { WIDGET_TOKEN_HEADER, widgetTokenScope } from './widgetToken'
+import {
+  isWidgetFilesPath,
+  WIDGET_FILES_SEGMENT,
+  WIDGET_LIST_ROUTE
+} from '../../../shared/widgetRoutes'
 
 const log = createLogger('WidgetServer')
 
@@ -305,6 +311,14 @@ export class WidgetServer {
     }
     const widgetId = match[1]
     const rest = match[2] ?? '/'
+
+    // 这个 widget 的令牌（见 widgetToken.ts）：先于「注册了没有」—— 不带令牌的人连哪些 widget 在都问不出来
+    const scope = widgetTokenScope(req.headers[WIDGET_TOKEN_HEADER], widgetId)
+    if (!scope || (scope === 'cli' && rest.startsWith(WIDGET_FILES_SEGMENT))) {
+      this.refuse(res, rest, scope === 'cli')
+      return
+    }
+
     const entry = this.entries.get(widgetId)
     if (!entry) {
       res.writeHead(404, { 'Content-Type': 'text/plain' })
@@ -327,13 +341,8 @@ export class WidgetServer {
       return
     }
 
-    // /fs/file、/fs/list —— 读本机文件（只认带着密钥的请求，见 widgetFsKey.ts）
+    // /fs/file、/fs/list —— 读本机文件（令牌在上面验过，`cli` 范围到不了这里）
     if (rest.startsWith(WIDGET_FILES_SEGMENT)) {
-      if (!hasWidgetFsKey(req.headers[WIDGET_FS_KEY_HEADER])) {
-        res.writeHead(403, { 'Content-Type': 'text/plain' })
-        res.end('Forbidden')
-        return
-      }
       const qsIdx = url.indexOf('?')
       const search = new URLSearchParams(qsIdx === -1 ? '' : url.slice(qsIdx + 1))
       serveWidgetFiles(rest, req, res, search).catch((err) => {
@@ -460,6 +469,22 @@ export class WidgetServer {
       log.warn(`db request failed widget=${widgetId} table=${table}: ${msg}`)
       this.respondJson(res, 500, { code: 'INTERNAL', message: msg })
     }
+  }
+
+  /**
+   * 令牌不对的 403：`db/` 与 `fs/list` 回 JSON `{ code, message }`（与它们别的错误同形，widget 照样 `res.json()`），
+   * 其余回纯文本。话写给在 shell 里 curl 的智能体看：令牌从哪来、带在哪
+   */
+  private refuse(res: ServerResponse, rest: string, cliOnFiles: boolean): void {
+    const message = cliOnFiles
+      ? 'The token from `shuvix widget build` cannot read files; fs/ works only inside the widget.'
+      : `This widget route needs the widget's token in the ${WIDGET_TOKEN_HEADER} header. Open the widget in ShuviX, or pass the token that \`shuvix widget build\` returned.`
+    if (rest.startsWith('/db/') || rest === WIDGET_LIST_ROUTE) {
+      this.respondJson(res, 403, { code: 'FORBIDDEN', message })
+      return
+    }
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+    res.end(message)
   }
 
   private respondJson(res: ServerResponse, status: number, body: unknown): void {

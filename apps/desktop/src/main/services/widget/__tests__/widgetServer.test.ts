@@ -1,5 +1,5 @@
 /**
- * `services/widget/widgetServer.ts` —— widget 服务的门（Host、文件路由不带 CORS 头、文件路由要密钥头）与文件路由的接线。
+ * `services/widget/widgetServer.ts` —— widget 服务的门（Host、文件路由不带 CORS 头、每个路由要那个 widget 的令牌）与文件路由的接线。
  * 真的 `WidgetServer`（127.0.0.1 随机端口）；打包服务、widget 数据库、logger 换成空壳。注册的 widget `photo-wall`
  * 的打包产物是 `js` / `css`。请求用 `node:http`（`agent:false`），Host 头显式给出；没有 Host 的 HTTP/1.0 请求走裸 socket。
  *
@@ -16,11 +16,15 @@
  *   WS-C7 unregisterWidget 之后文件路由 → 404 not registered
  *   WS-R1 fs/file png → 200 image/png 字节一致；Range → 206
  *   WS-R2 fs/list → 200 JSON，名字对得上
- *   WS-K1 文件路由不带密钥头 / 带错的 / 带空的 → 403，正文里没有文件内容（沙箱里的命令 curl 过来就是这样）；
+ *   WS-K1 每个路由（页面、bundle、tailwind、sse、db、fs/file、fs/list）不带令牌 / 带空的 / 带乱写的 → 403，
+ *         正文里没有文件内容与数据（沙箱里的命令 curl 过来就是这样）；db 与 fs/list 的 403 是 JSON { code, message }；
  *         Host 不对的照旧先 421
- *   WS-K2 非文件路由不要密钥头（页面、bundle、数据库接口照常）
+ *   WS-K2 别的 widget 的令牌 → 403（A 的令牌用不了 B 的任何路由）
+ *   WS-K3 cli 范围的令牌：页面、bundle、db 照常；fs/file、fs/list → 403（说明 shell 里读不了文件）
+ *   WS-K4 没注册的 widget：不带令牌 → 403（不带令牌的人问不出有哪些 widget）；带它的令牌 → 404 not registered
+ *   WS-K5 预检 OPTIONS 不要令牌（它什么也不返回）
  *
- * 除 WS-K 外，打到文件路由的请求由 http() 自动带上本进程的密钥（widget 页面经主进程补头的样子）。
+ * 除 WS-K 外，http() 自动给 `/w/<id>/…` 带上那个 widget 的 ui 令牌（widget 页面经主进程补头的样子）。
  */
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -48,7 +52,7 @@ vi.mock('../../../logger', () => ({
 }))
 
 import { WidgetServer } from '../widgetServer'
-import { WIDGET_FS_KEY_HEADER, widgetFsKey } from '../widgetFsKey'
+import { issueWidgetToken, WIDGET_TOKEN_HEADER } from '../widgetToken'
 
 const SECRET = 'top-secret-file-contents-42'
 
@@ -70,14 +74,18 @@ function http(
     host?: string
     headers?: Record<string, string>
     body?: string
-    /** 不自动带密钥头（文件路由默认带上） */
-    withoutKey?: boolean
+    /** 令牌：缺省 = 路径里那个 widget 的 ui 令牌；null = 不带；字符串 = 带这个 */
+    token?: string | null
   } = {}
 ): Promise<HttpResult> {
-  const key =
-    /^\/w\/[^/]+\/fs\//.test(path.split('?')[0]) && !options.withoutKey
-      ? { [WIDGET_FS_KEY_HEADER]: widgetFsKey() }
-      : {}
+  const widgetId = path.split('?')[0].match(/^\/w\/([^/]+)/)?.[1]
+  const token =
+    options.token === undefined
+      ? widgetId
+        ? issueWidgetToken(widgetId, 'ui')
+        : null
+      : options.token
+  const key = token === null ? {} : { [WIDGET_TOKEN_HEADER]: token }
   return new Promise((done, fail) => {
     const req = httpRequest(
       {
@@ -316,34 +324,78 @@ describe('WS-R 文件路由接上了', () => {
   })
 })
 
-describe('WS-K 文件路由的密钥头', () => {
-  it('WS-K1 不带 / 带错 / 带空的密钥 → 403，不出文件；Host 不对的先 421', async () => {
-    const path = `/w/photo-wall/fs/file?path=${q(secretFile)}`
-    const cases: Array<Record<string, string>> = [
-      {},
-      { [WIDGET_FS_KEY_HEADER]: 'guess' },
-      { [WIDGET_FS_KEY_HEADER]: '' },
-      { [WIDGET_FS_KEY_HEADER]: widgetFsKey().slice(1) + 'x' }
-    ]
-    for (const headers of cases) {
-      const res = await http(path, { withoutKey: true, headers })
-      expect(res.status, JSON.stringify(headers)).toBe(403)
-      expect(res.body.toString()).not.toContain(SECRET)
+describe('WS-K 每个路由要那个 widget 的令牌', () => {
+  const ROUTES = (): string[] => [
+    '/w/photo-wall/',
+    '/w/photo-wall/bundle.js',
+    '/w/photo-wall/bundle.css',
+    '/w/photo-wall/tailwind.js',
+    '/w/photo-wall/db/items',
+    `/w/photo-wall/fs/file?path=${q(secretFile)}`,
+    `/w/photo-wall/fs/list?path=${q(tmp)}`
+  ]
+  const forbidden = (res: HttpResult, path: string): void => {
+    expect(res.status, path).toBe(403)
+    const text = res.body.toString()
+    expect(text, path).not.toContain(SECRET)
+    expect(text, path).not.toContain('secret.txt')
+    if (path.includes('/db/') || path.includes('/fs/list')) {
+      expect(JSON.parse(text).code, path).toBe('FORBIDDEN')
     }
-    const list = await http(`/w/photo-wall/fs/list?path=${q(tmp)}`, { withoutKey: true })
-    expect(list.status).toBe(403)
-    expect(list.body.toString()).not.toContain('secret.txt')
+  }
 
-    const misdirected = await http(path, { withoutKey: true, host: 'evil.example' })
+  it('WS-K1 不带 / 带空的 / 带乱写的令牌 → 403；Host 不对的先 421', async () => {
+    for (const path of ROUTES()) {
+      for (const token of [null, '', 'garbage', 'a.b.c']) {
+        forbidden(await http(path, { token }), `${path} ${token}`)
+      }
+    }
+    // sse 是一条不结束的流：没令牌直接 403，不挂上去
+    forbidden(await http('/w/photo-wall/sse', { token: null }), '/w/photo-wall/sse')
+    expect(mocks.handleRestRequest).not.toHaveBeenCalled()
+
+    const misdirected = await http(ROUTES()[5], { token: null, host: 'evil.example' })
     expect(misdirected.status).toBe(421)
   })
 
-  it('WS-K2 非文件路由不要密钥头', async () => {
-    const page = await http('/w/photo-wall/', { withoutKey: true })
-    expect(page.status).toBe(200)
-    const bundle = await http('/w/photo-wall/bundle.js', { withoutKey: true })
-    expect(bundle.status).toBe(200)
-    const db = await http('/w/photo-wall/db/items', { withoutKey: true })
-    expect(db.status).not.toBe(403)
+  it('WS-K2 别的 widget 的令牌 → 403', async () => {
+    const other = issueWidgetToken('other-widget', 'ui')
+    for (const path of ROUTES()) forbidden(await http(path, { token: other }), path)
+  })
+
+  it('WS-K3 cli 范围：页面、bundle、db 照常；fs/ → 403', async () => {
+    const cli = issueWidgetToken('photo-wall', 'cli')
+    expect((await http('/w/photo-wall/', { token: cli })).status).toBe(200)
+    expect((await http('/w/photo-wall/bundle.js', { token: cli })).status).toBe(200)
+    expect((await http('/w/photo-wall/db/items', { token: cli })).status).not.toBe(403)
+    expect(mocks.handleRestRequest).toHaveBeenCalled()
+
+    const file = await http(`/w/photo-wall/fs/file?path=${q(secretFile)}`, { token: cli })
+    expect(file.status).toBe(403)
+    expect(file.body.toString()).toContain('cannot read files')
+    expect(file.body.toString()).not.toContain(SECRET)
+    forbidden(await http(`/w/photo-wall/fs/list?path=${q(tmp)}`, { token: cli }), 'fs/list')
+
+    // 对照：ui 范围读得到
+    const ui = await http(`/w/photo-wall/fs/file?path=${q(secretFile)}`)
+    expect(ui.status).toBe(200)
+    expect(ui.body.toString()).toBe(SECRET)
+  })
+
+  it('WS-K4 没注册的 widget：不带令牌 403，带它的令牌 404', async () => {
+    expect((await http('/w/nope-x/', { token: null })).status).toBe(403)
+    const withToken = await http('/w/nope-x/')
+    expect(withToken.status).toBe(404)
+    expect(withToken.body.toString()).toBe('Widget nope-x not registered')
+  })
+
+  it('WS-K5 预检 OPTIONS 不要令牌', async () => {
+    const res = await http('/w/photo-wall/db/items', {
+      method: 'OPTIONS',
+      token: null,
+      headers: { Origin: 'null', 'Access-Control-Request-Method': 'POST' }
+    })
+    expect(res.status).toBe(204)
+    expect(res.body.length).toBe(0)
   })
 })
