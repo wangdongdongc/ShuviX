@@ -24,6 +24,7 @@ import {
   PAGE_CRASHED_MESSAGE,
   type BrowserBackend,
   type BrowserCaps,
+  type BrowserMcpServerOptions,
   type BrowserOpOutput,
   type NavKind,
   type PdfPageSize,
@@ -36,6 +37,7 @@ import { getToolResultsDir } from '../../utils/paths'
 import { createLogger } from '../../logger'
 import { browserCdpManager } from './browserCdpService'
 import { fileChooserNote, withAgentGuards } from './agentGuards'
+import { isAgentDevtoolsTool, recordAgentDevtoolsCall } from './agentDevtools'
 import {
   closeTab as closeTabView,
   createTab,
@@ -483,6 +485,21 @@ class DesktopBrowserBackend implements BrowserBackend {
   }): Promise<BrowserOpOutput> {
     const { session } = await this.session(p.tabId)
     return browserCdpOps.eventsOp(session, p)
+  }
+}
+
+/**
+ * 内置 browser server 的旁观钩子（每会话一份）：agent 的 devtool 调用记进那一页的调用记录，停靠区「Agent」
+ * 页签给用户看（agentDevtools.ts）。tabId 换成 UUID；不存在的 tab、内部页面不记（那次调用本来就失败）。
+ */
+export function observeDesktopBrowserCalls(
+  sessionId: string
+): NonNullable<BrowserMcpServerOptions['observe']> {
+  return (call) => {
+    if (!isAgentDevtoolsTool(call.tool) || !call.tabId) return
+    const uuid = shortToUuid.get(call.tabId) ?? call.tabId
+    if (!getTabView(uuid) || isInternalTab(uuid)) return
+    return recordAgentDevtoolsCall(uuid, sessionId, call.tool, call.args)
   }
 }
 

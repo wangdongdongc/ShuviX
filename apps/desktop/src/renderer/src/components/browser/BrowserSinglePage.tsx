@@ -18,8 +18,9 @@ export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
   const dialogOpen = useDialogOverlay()
   const cover = useBrowserTabsStore((s) => s.pageCover)
-  // 对话框、站点信息气泡开着：原生页面让位（它会盖住 DOM 弹层），页面区由截图顶着
-  const overlay = dialogOpen || !!cover
+  const dockResizing = useBrowserTabsStore((s) => s.dockResizing)
+  // 对话框、站点信息气泡开着、正在拖停靠区：原生页面让位（它会盖住 DOM 弹层、吃掉鼠标），页面区由截图顶着
+  const overlay = dialogOpen || !!cover || dockResizing
   const pageRef = useRef<HTMLDivElement | null>(null)
   const rafRef = useRef(0)
 

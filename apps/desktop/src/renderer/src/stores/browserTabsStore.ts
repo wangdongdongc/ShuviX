@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { internalPageOf, type InternalPage } from '../../../shared/browserInternalPages'
+import type { DevtoolsDockPanel, DevtoolsDockState } from '../../../shared/browserAgentDevtools'
 
 /** 浏览器 tab 的镜像信息（真源在主进程 browserViewService，经 useBrowserTabsBridge 事件同步） */
 export interface BrowserTabInfo {
@@ -28,6 +29,10 @@ export interface BrowserTabInfo {
   agentSessionTitle?: string
   /** 最近一次 agent 动作提示到达的时刻（ms）：圆点据此脉动一会儿 */
   agentActiveAt?: number
+  /** 这一页的停靠区（页面下方：原生 DevTools / agent 的 devtool）；关着 = 没有 */
+  devtools?: DevtoolsDockState
+  /** agent 在这一页上记下的 devtool 调用数（提示条上的「查看 agent 的操作」） */
+  agentDevtoolsCalls: number
 }
 
 /** 设置页要跳到哪一节（站点信息气泡里的「网站设置」）；nonce 每次请求加一 */
@@ -53,6 +58,8 @@ export interface PageCover {
 /** 浏览器窗口的两种视图：单页（Chrome 的样子，缺省）与平铺墙（同时看多页） */
 export type BrowserViewMode = 'single' | 'wall'
 export const VIEW_MODE_SETTING = 'browser.viewMode'
+/** 停靠区的高度（CSS px；所有页共用一个，照 Chrome） */
+export const DEVTOOLS_HEIGHT_SETTING = 'browser.devtoolsHeight'
 
 /**
  * 浏览器窗口（#browser-window）的 tab store。
@@ -70,6 +77,11 @@ interface BrowserTabsState {
   omniboxFocusNonce: number
   settingsFocus: SettingsFocus | null
   pageCover: PageCover | null
+  /**
+   * 正在拖停靠区的上沿改高度：原生 view（页面、原生 DevTools）这段时间全部让位 —— 它们画在 DOM 之上、
+   * 会吃掉鼠标，拖过页面时外壳就收不到 mousemove 了。页面区由截图顶着（pageCover）。
+   */
+  dockResizing: boolean
 
   createTab: (url?: string) => void
   closeTab: (id: string) => void
@@ -77,10 +89,14 @@ interface BrowserTabsState {
   activateTab: (id: string) => void
   navigateTab: (id: string, url: string) => void
   zoomTab: (id: string, direction: 'in' | 'out' | 'reset') => void
+  /** 打开这一页的停靠区、停在某个页签（用户的动作） */
+  openDevtools: (id: string, panel: DevtoolsDockPanel) => void
+  closeDevtools: (id: string) => void
   requestOmniboxFocus: () => void
   /** 打开设置页并跳到某一节（站点信息气泡里的「网站设置」） */
   openSettings: (section?: SettingsFocus['section'], search?: string, site?: string) => void
   setPageCover: (cover: PageCover | null) => void
+  setDockResizing: (resizing: boolean) => void
   /** 设置页用掉了跳转请求 */
   clearSettingsFocus: () => void
 }
@@ -95,6 +111,7 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
   omniboxFocusNonce: 0,
   settingsFocus: null,
   pageCover: null,
+  dockResizing: false,
 
   createTab: (url) => {
     void api()?.createTab(url)
@@ -114,6 +131,12 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
   zoomTab: (id, direction) => {
     void api()?.zoom(id, direction)
   },
+  openDevtools: (id, panel) => {
+    void api()?.openDevtools(id, panel)
+  },
+  closeDevtools: (id) => {
+    void api()?.closeDevtools(id)
+  },
   requestOmniboxFocus: () => set((s) => ({ omniboxFocusNonce: s.omniboxFocusNonce + 1 })),
   openSettings: (section, search, site) => {
     void api()?.openInternal('settings')
@@ -129,6 +152,7 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
     }
   },
   setPageCover: (cover) => set({ pageCover: cover }),
+  setDockResizing: (resizing) => set({ dockResizing: resizing }),
   clearSettingsFocus: () => set({ settingsFocus: null })
 }))
 

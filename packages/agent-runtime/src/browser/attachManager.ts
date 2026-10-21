@@ -95,10 +95,26 @@ const CRASH_SAFE_METHODS = new Set([
   'Inspector.disable'
 ])
 
+/** 改动网络 / 控制台缓冲的事件（宿主据此知道「采集到的内容变了」） */
+const CAPTURE_EVENTS = new Set([
+  'Network.requestWillBeSent',
+  'Network.responseReceived',
+  'Network.loadingFinished',
+  'Network.loadingFailed',
+  'Runtime.consoleAPICalled',
+  'Runtime.exceptionThrown'
+])
+
 /** 一个 tab 的 CDP 状态快照（宿主 UI 标识用）：attached=agent 已接入；intercepting=请求拦截生效中 */
 export interface TabCdpState {
   attached: boolean
   intercepting: boolean
+}
+
+/** 网络 / 控制台采集开了没有（agent 第一次调 network / console 才开） */
+export interface CaptureState {
+  network: boolean
+  console: boolean
 }
 
 /** 一个 tab 的自动化会话：controller（UID 映射）+ CDP 命令 + 事件缓冲（网络/控制台摘要 + 通用环形） */
@@ -130,7 +146,9 @@ export class TabCdpSession {
   constructor(
     private transport: CdpTabTransport,
     /** 拦截状态翻转时回调（宿主借 CdpAttachManager 的 onStateChange 推给 UI） */
-    private notifyStateChange?: () => void
+    private notifyStateChange?: () => void,
+    /** 网络 / 控制台采集的内容或开关变了（宿主借 CdpAttachManager 的 onCaptureChange 推给 UI） */
+    private notifyCaptureChange?: () => void
   ) {
     // controller 的命令也走崩溃判断 —— 快照、uid 解析同样会挂在崩溃的页面上
     this.controller = new CdpController({ sendCommand: (m, p) => this.sendRaw(m, p) })
@@ -252,6 +270,7 @@ export class TabCdpSession {
     if (this.networkEnabled) return
     await this.send('Network.enable')
     this.networkEnabled = true
+    this.notifyCaptureChange?.()
   }
 
   getNetworkRequests(): NetworkEntry[] {
@@ -264,10 +283,16 @@ export class TabCdpSession {
     if (this.consoleEnabled) return
     await this.send('Runtime.enable')
     this.consoleEnabled = true
+    this.notifyCaptureChange?.()
   }
 
   getConsoleMessages(): ConsoleEntry[] {
     return this.consoleEntries
+  }
+
+  /** 两种采集各开了没有（agent 经 cdp 自己 Network.enable 的不算：缓冲照样收，只是没经过 network 工具） */
+  get capturing(): CaptureState {
+    return { network: this.networkEnabled, console: this.consoleEnabled }
   }
 
   // ====== 生命周期 ======
@@ -288,6 +313,7 @@ export class TabCdpSession {
     this.eventBuffer = []
     this.eventSeq = 0
     this.dialogEnabled = false
+    this.notifyCaptureChange?.()
   }
 
   /** 主动断开：清理本地状态 + detach transport */
@@ -411,6 +437,8 @@ export class TabCdpSession {
         this.consoleEntries.shift()
       }
     }
+
+    if (CAPTURE_EVENTS.has(method)) this.notifyCaptureChange?.()
   }
 }
 
@@ -421,7 +449,12 @@ export class CdpAttachManager {
   constructor(
     private factory: CdpTabTransportFactory,
     /** 某 tab 的 CDP 状态（attach/detach/拦截翻转）变化时回调；宿主借此推 UI 标识，用 cdpState 取快照 */
-    private onStateChange?: (tabId: string) => void
+    private onStateChange?: (tabId: string) => void,
+    /**
+     * 某 tab 的网络 / 控制台采集变了（新条目、开始采集、会话结束清空）；宿主借此刷新给用户看的采集视图，
+     * 用 peek 取内容。每个事件都会来一次 —— 宿主自己节流
+     */
+    private onCaptureChange?: (tabId: string) => void
   ) {}
 
   /** 懒 attach + 缓存；每 tab 一个 TabCdpSession（并发调用共享同一次 attach） */
@@ -433,7 +466,11 @@ export class CdpAttachManager {
 
     const attaching = (async () => {
       const transport = await this.factory.attach(tabId)
-      const session = new TabCdpSession(transport, () => this.onStateChange?.(tabId))
+      const session = new TabCdpSession(
+        transport,
+        () => this.onStateChange?.(tabId),
+        () => this.onCaptureChange?.(tabId)
+      )
       await session.watchCrashes()
       this.sessions.set(tabId, session)
       this.onStateChange?.(tabId)
@@ -477,6 +514,11 @@ export class CdpAttachManager {
 
   isAttached(tabId: string): boolean {
     return this.sessions.has(tabId)
+  }
+
+  /** 已经接入的那个会话（没接入回 undefined）—— **不 attach**：给用户看 agent 手里有什么，不该替 agent 接上 */
+  peek(tabId: string): TabCdpSession | undefined {
+    return this.sessions.get(tabId)
   }
 
   /** 某 tab 当前的 CDP 状态快照（宿主 UI 标识用） */

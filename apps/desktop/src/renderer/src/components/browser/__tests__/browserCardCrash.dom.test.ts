@@ -41,7 +41,8 @@ function tabWith(loadError: BrowserTabInfo['loadError']): BrowserTabInfo {
     cdpIntercepting: false,
     canGoBack: false,
     canGoForward: false,
-    zoomPercent: 100
+    zoomPercent: 100,
+    agentDevtoolsCalls: 0
   }
 }
 

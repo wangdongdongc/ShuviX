@@ -12,6 +12,7 @@
 import { CdpAttachManager, type CdpTabTransportFactory } from '@shuvix/agent-runtime'
 import { getBrowserHostWindow, getTabView } from './browserViewService'
 import { installAgentGuards, uninstallAgentGuards } from './agentGuards'
+import { noteAgentCaptureChange } from './agentDevtools'
 import { createLogger } from '../../logger'
 
 const log = createLogger('BrowserCDP')
@@ -131,5 +132,10 @@ function broadcastCdpState(tabId: string): void {
   })
 }
 
-/** 应用级单例；tab 关闭 / app 退出时由 browserViewService 调 detach/detachAll */
-export const browserCdpManager = new CdpAttachManager(factory, broadcastCdpState)
+/**
+ * 应用级单例；tab 关闭 / app 退出时由 browserViewService 调 detach/detachAll。
+ * 采集变了（新请求、新控制台消息）告诉停靠区「Agent」页签（agentDevtools.ts）。
+ */
+export const browserCdpManager = new CdpAttachManager(factory, broadcastCdpState, (tabId) =>
+  noteAgentCaptureChange(tabId)
+)

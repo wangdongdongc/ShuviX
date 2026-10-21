@@ -29,6 +29,8 @@ export type BrowserShortcut =
   | { type: 'previousTab' }
   | { type: 'selectTab'; index: number }
   | { type: 'zoom'; direction: 'in' | 'out' | 'reset' }
+  /** 开 / 关选中那页的停靠区（原生 DevTools）：F12、⌥⌘I（macOS）/ Ctrl+Shift+I */
+  | { type: 'toggleDevtools' }
 
 /** before-input-event 交来的按键里用得到的那几项（Electron 的 Input 结构的子集） */
 export interface ShortcutInput {
@@ -43,8 +45,13 @@ export interface ShortcutInput {
   isAutoRepeat?: boolean
 }
 
-/** 一按就开 / 关 / 重开 tab 的动作：按住不放不连发，免得一下子关掉一排 */
-const NO_REPEAT = new Set<BrowserShortcut['type']>(['newTab', 'closeTab', 'reopenClosedTab'])
+/** 一按就开 / 关 / 重开 tab（或停靠区）的动作：按住不放不连发，免得一下子关掉一排、开了又关 */
+const NO_REPEAT = new Set<BrowserShortcut['type']>([
+  'newTab',
+  'closeTab',
+  'reopenClosedTab',
+  'toggleDevtools'
+])
 
 /**
  * 按键 → 动作；不是浏览器快捷键回 null（按键照常交给页面 / 外壳）。
@@ -81,6 +88,7 @@ function match(input: ShortcutInput, mac: boolean): BrowserShortcut | null {
   if (!meta && !control && !shift && !alt) {
     if (code === 'F5') return { type: 'reload', ignoreCache: false }
     if (code === 'F6') return { type: 'focusOmnibox' }
+    if (code === 'F12') return { type: 'toggleDevtools' }
     return null
   }
   if (!mac && alt && !control && !meta && !shift) {
@@ -101,10 +109,11 @@ function match(input: ShortcutInput, mac: boolean): BrowserShortcut | null {
     if (code === 'PageDown') return { type: 'nextTab' }
     if (code === 'PageUp') return { type: 'previousTab' }
   }
-  // macOS：⌘⌥→ / ⌘⌥← 切 tab
+  // macOS：⌘⌥→ / ⌘⌥← 切 tab；⌘⌥I 开关 DevTools（⌥ 让 key 成了别的字符，letterOf 退回物理键位）
   if (mac && meta && alt && !control && !shift) {
     if (code === 'ArrowRight') return { type: 'nextTab' }
     if (code === 'ArrowLeft') return { type: 'previousTab' }
+    if (letter === 'i') return { type: 'toggleDevtools' }
     return null
   }
 
@@ -113,6 +122,7 @@ function match(input: ShortcutInput, mac: boolean): BrowserShortcut | null {
   if (shift) {
     if (letter === 't') return { type: 'reopenClosedTab' }
     if (letter === 'r') return { type: 'reload', ignoreCache: true }
+    if (!mac && letter === 'i') return { type: 'toggleDevtools' }
     // macOS：⌘⇧] / ⌘⇧[ 切 tab
     if (mac && code === 'BracketRight') return { type: 'nextTab' }
     if (mac && code === 'BracketLeft') return { type: 'previousTab' }

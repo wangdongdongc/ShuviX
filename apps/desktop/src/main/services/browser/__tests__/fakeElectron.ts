@@ -25,6 +25,12 @@
  *  - view 的 `webContents.debugger` 是一个真能收发的假 debugger（`createFakeDebugger`）：on / once / off
  *    按 EventEmitter 的语义增删处理函数（都是间谍），`message(method, params)` 以 Electron 的形状
  *    `('message', event, method, params)` 派发一条 CDP 事件，sendCommand 是间谍（缺省回 `{}`）；
+ *  - view 的 `webContents.setDevToolsWebContents / openDevTools / closeDevTools / inspectElement`
+ *    （停靠区的原生 DevTools）与 `cut / copy / paste / selectAll`（页面右键菜单）都是间谍；
+ *  - `Menu.buildFromTemplate` 是间谍，回 `{ items, popup }`（popup 是间谍），建出来的菜单按顺序记进
+ *    `fx.menus`；`clipboard.writeText` 是间谍；
+ *  - `new WebContentsView()` 不带选项（停靠区的 DevTools 前端，用应用自己的 session）时 opts 记成
+ *    `{ webPreferences: {} }`；
  *  - `dialog.showOpenDialog` 是间谍（缺省回「用户取消」）—— 断「没弹原生文件框」用；
  *  - 停放窗口 = 构造选项 `focusable: false` 的那个（`fx.staging()`）；浏览器窗口 = 加载了
  *    `#browser-window` 的那些（`fx.browserWindows()`）；
@@ -157,6 +163,16 @@ export interface FakeViewWebContents {
   capturePage: Mock<(rect?: Rect) => Promise<FakeNativeImage>>
   /** 原生打印（会弹系统打印框）—— 断「没打印」用 */
   print: Mock<(opts: unknown, cb?: (success: boolean, reason: string) => void) => void>
+  /** 停靠区的原生 DevTools：把 DevTools 前端开进哪个 webContents、开 / 关、选中某个位置上的元素 */
+  setDevToolsWebContents: Mock<(frontend: FakeViewWebContents) => void>
+  openDevTools: Mock<(opts?: { mode?: string; activate?: boolean }) => void>
+  closeDevTools: Mock<() => void>
+  inspectElement: Mock<(x: number, y: number) => void>
+  /** 页面右键菜单里的编辑动作 */
+  cut: Mock<() => void>
+  copy: Mock<() => void>
+  paste: Mock<() => void>
+  selectAll: Mock<() => void>
   debugger: FakeDebugger
   on(event: string, fn: Handler): FakeViewWebContents
   /** 触发 on() 收下的处理函数，回各自的返回值 */
@@ -221,6 +237,12 @@ export interface FakeSession {
   setPermissionRequestHandler(fn: Handler): void
 }
 
+/** `Menu.buildFromTemplate` 建出来的假菜单：模板原样留着，popup 是间谍 */
+export interface FakeMenu {
+  items: Array<Record<string, unknown>>
+  popup: Mock<(opts?: { window?: unknown }) => void>
+}
+
 /** 会把窗口弄到用户眼前的那几个动作 */
 export const SURFACING = ['show', 'showInactive', 'focus', 'restore', 'moveTop'] as const
 
@@ -254,6 +276,10 @@ export interface FakeElectron {
     >
   }
   shell: { openExternal: Mock<(url: string) => Promise<void>> }
+  menu: { buildFromTemplate: Mock<(items: Array<Record<string, unknown>>) => FakeMenu> }
+  /** buildFromTemplate 建出来的菜单，按顺序 */
+  menus: FakeMenu[]
+  clipboard: { writeText: Mock<(text: string) => void> }
   fromPartition: Mock<(partition: string) => FakeSession>
   /** vi.mock('electron') 要回的模块 */
   module: Record<string, unknown>
@@ -398,7 +424,7 @@ function create(): FakeElectron {
     setBounds = vi.fn<(bounds: Rect) => void>()
     webContents: FakeViewWebContents
 
-    constructor(opts: { webPreferences: Record<string, unknown> }) {
+    constructor(opts: { webPreferences: Record<string, unknown> } = { webPreferences: {} }) {
       this.opts = opts
       this.label = `v${fx.views.length}`
       const handlers = new Map<string, Handler[]>()
@@ -443,6 +469,14 @@ function create(): FakeElectron {
         }),
         capturePage: vi.fn(async (_rect?: Rect) => fakeImage()),
         print: vi.fn(),
+        setDevToolsWebContents: vi.fn(),
+        openDevTools: vi.fn(),
+        closeDevTools: vi.fn(),
+        inspectElement: vi.fn(),
+        cut: vi.fn(),
+        copy: vi.fn(),
+        paste: vi.fn(),
+        selectAll: vi.fn(),
         debugger: createFakeDebugger(),
         on(event, fn) {
           pushHandler(handlers, event, fn)
@@ -481,10 +515,21 @@ function create(): FakeElectron {
     showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] as string[] }))
   }
   fx.shell = { openExternal: vi.fn(async () => {}) }
+  fx.menus = []
+  fx.menu = {
+    buildFromTemplate: vi.fn((items: Array<Record<string, unknown>>) => {
+      const menu: FakeMenu = { items, popup: vi.fn() }
+      fx.menus.push(menu)
+      return menu
+    })
+  }
+  fx.clipboard = { writeText: vi.fn() }
 
   fx.module = {
     BrowserWindow: FakeBrowserWindow,
     WebContentsView: FakeWebContentsView,
+    Menu: fx.menu,
+    clipboard: fx.clipboard,
     app: fx.app,
     dialog: fx.dialog,
     shell: fx.shell,
@@ -509,6 +554,9 @@ function create(): FakeElectron {
     fx.dialog.showOpenDialog.mockImplementation(async () => ({ canceled: true, filePaths: [] }))
     fx.shell.openExternal.mockReset()
     fx.shell.openExternal.mockImplementation(async () => {})
+    fx.menus.length = 0
+    fx.menu.buildFromTemplate.mockClear()
+    fx.clipboard.writeText.mockClear()
     nextWcId = 7
     nextViewWcId = 100
     winSeq = 0

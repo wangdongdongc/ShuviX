@@ -31,6 +31,9 @@
  *   I1–I5   调用身份（P2-07）：`_meta` 的 taskId / conversationId 原样并进每道门的上下文（三家门、
  *           本地文件、站点门；没带 / 不合法 = 键不出现）；分账只认 agentId；站点放行按实例记、并发首用
  *           带第一个调用方的身份；取消复查不变（I5 在 A / W 两组里）。
+ *   O1–O5   旁观钩子（observe，桌面停靠区的 agent devtool 调用记录）：每次调用开始时来一次（工具、
+ *           tabId、参数原样），落定时收到模型看到的文字与成败；参数错 / 被拦的 cdp / 门拒绝也来；
+ *           不认识的工具名不来；取消 → aborted；旁观者抛错不影响调用。
  */
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -45,7 +48,9 @@ import {
   type BrowserMcpGates,
   type BrowserMcpServerOptions,
   type BrowserSiteGateContext,
-  type BrowserTabQueue
+  type BrowserTabQueue,
+  type BrowserToolCall,
+  type BrowserToolCallOutcome
 } from '../mcpServer'
 import { browserToolsForCaps } from '../mcpTools'
 import { devtoolsRecipes } from '../devtoolsRecipes'
@@ -196,6 +201,8 @@ interface OpenOpts {
   tabQueue?: BrowserTabQueue
   /** `mcp_servers.name`（W1：chrome）；不给 = browser */
   serverName?: string
+  /** 旁观钩子（O 组） */
+  observe?: BrowserMcpServerOptions['observe']
 }
 
 const clients: Client[] = []
@@ -231,7 +238,8 @@ async function open(opts: OpenOpts = {}): Promise<Harness> {
       gates: opts.gates,
       hostNote: opts.hostNote,
       onClose: opts.onClose,
-      tabQueue: opts.tabQueue
+      tabQueue: opts.tabQueue,
+      observe: opts.observe
     },
     serverTransport
   )
@@ -3691,5 +3699,117 @@ describe('I 调用身份：taskId / conversationId 只进门的上下文', () =>
 
     await h.call('read_page', { tabId: 't2' }, metaB)
     expect(gates.site).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('O 旁观钩子（observe）', () => {
+  /** 记下每次 observe 的调用与它收到的结局（按调用顺序） */
+  function recorder(): {
+    observe: NonNullable<BrowserMcpServerOptions['observe']>
+    seen: Array<{ call: BrowserToolCall; outcome?: BrowserToolCallOutcome }>
+  } {
+    const seen: Array<{ call: BrowserToolCall; outcome?: BrowserToolCallOutcome }> = []
+    return {
+      seen,
+      observe: (call) => {
+        const entry: { call: BrowserToolCall; outcome?: BrowserToolCallOutcome } = { call }
+        seen.push(entry)
+        return (outcome) => {
+          entry.outcome = outcome
+        }
+      }
+    }
+  }
+
+  it('O1 开始时来一次（工具、tabId、参数原样），落定时收到模型看到的文字与成败', async () => {
+    const r = recorder()
+    const h = await open({ observe: r.observe })
+    const blocked = deferred()
+    h.backend.evaluate.mockImplementationOnce(() => blocked.promise)
+    const pending = h.call('evaluate', { tabId: 't1', expression: '1+1' })
+    await vi.waitFor(() => expect(h.backend.evaluate).toHaveBeenCalledTimes(1))
+    // 开始就来了，结局还没有
+    expect(r.seen).toEqual([
+      { call: { tool: 'evaluate', tabId: 't1', args: { tabId: 't1', expression: '1+1' } } }
+    ])
+    blocked.resolve({ text: '2' })
+    await pending
+    expect(r.seen[0].outcome).toEqual({ ok: true, text: '2' })
+
+    await h.call('list_tabs')
+    expect(r.seen[1]).toEqual({
+      call: { tool: 'list_tabs', tabId: '', args: {} },
+      outcome: { ok: true, text: 'listTabs ok' }
+    })
+  })
+
+  it('O2 没做成的也来：后端业务失败、被拦的 cdp、缺参数、类型错 —— 结局是模型收到的那句错误', async () => {
+    const r = recorder()
+    const h = await open({ observe: r.observe })
+    h.backend.network.mockResolvedValueOnce({
+      text: 'Error: page crashed',
+      details: { error: true }
+    })
+    await h.call('network', { tabId: 't1' })
+    await h.call('cdp', { tabId: 't1', method: 'Browser.close' })
+    await h.call('evaluate', { tabId: 't1' })
+    await h.call('console', { tabId: 't1', limit: 'many' })
+    expect(r.seen.map((e) => [e.call.tool, e.outcome])).toEqual([
+      ['network', { ok: false, text: 'page crashed' }],
+      [
+        'cdp',
+        {
+          ok: false,
+          text: `CDP method "Browser.close" is blocked: ${blockedCdpReason('Browser.close')}.`
+        }
+      ],
+      ['evaluate', { ok: false, text: 'Missing required parameter "expression".' }],
+      ['console', { ok: false, text: '"limit" must be a number.' }]
+    ])
+  })
+
+  it('O3 门拒绝 → 结局是门的原话；不认识的工具名不来', async () => {
+    const r = recorder()
+    const gates = spyGates()
+    gates.navigate.mockRejectedValueOnce(new Error('User denied opening https://a.test/'))
+    const h = await open({ observe: r.observe, gates })
+    await h.call('open_tab', { url: 'https://a.test/' })
+    await h.call('no_such_tool', { tabId: 't1' })
+    expect(r.seen).toEqual([
+      {
+        call: { tool: 'open_tab', tabId: '', args: { url: 'https://a.test/' } },
+        outcome: { ok: false, text: 'User denied opening https://a.test/' }
+      }
+    ])
+  })
+
+  it('O4 调用方取消 → aborted，模型什么也没收到', async () => {
+    const r = recorder()
+    const h = await open({ observe: r.observe })
+    h.backend.evaluate.mockImplementationOnce(() => new Promise<never>(() => {}))
+    const ac = new AbortController()
+    const stuck = h.call('evaluate', { tabId: 't1', expression: 'x' }, undefined, ac.signal)
+    await vi.waitFor(() => expect(h.backend.evaluate).toHaveBeenCalledTimes(1))
+    ac.abort()
+    await within(expect(stuck).rejects.toThrow(), 500)
+    await vi.waitFor(() => expect(r.seen[0].outcome).toBeDefined())
+    expect(r.seen[0].outcome).toMatchObject({ ok: false, aborted: true })
+  })
+
+  it('O5 旁观者抛错（开始时、落定时）不影响调用', async () => {
+    const h1 = await open({
+      observe: () => {
+        throw new Error('observer broke')
+      }
+    })
+    expect(textOf(await h1.call('scroll', { tabId: 't1' }))).toBe('scroll ok')
+    const h2 = await open({
+      observe: () => () => {
+        throw new Error('observer broke late')
+      }
+    })
+    const res = await h2.call('scroll', { tabId: 't1' })
+    expect(res.isError).toBeFalsy()
+    expect(textOf(res)).toBe('scroll ok')
   })
 })

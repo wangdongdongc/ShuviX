@@ -8,6 +8,8 @@ import { INTERCEPTING_DOT_COLOR, sessionDotColor } from './sessionColor'
  * Chrome 的「正受到自动测试软件的控制」那一条的位置。桌面的 CDP 接入跨轮持久、没有原生横幅，标签上的圆点
  * 之外这是用户看得见「这页在 agent 手里」的地方；开了请求拦截时换成警示的说法（页面内容可能被改写）。
  * 「查看对话」把主窗口拉到前面并切到那个会话 —— 是用户自己点的，不违反「agent 不打扰用户」。
+ * agent 在这页上用过 devtool 时多一个「查看 agent 的操作（n）」：打开停靠区的「Agent」页签。停靠区从不
+ * 自己弹出来（2026-10-21 用户裁定），这里只是给一个看得见的入口。
  */
 export function AgentInfobar(): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -40,6 +42,15 @@ export function AgentInfobar(): React.JSX.Element | null {
     >
       <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: dot }} />
       <span className="flex-1 min-w-0 truncate">{t(key, { session })}</span>
+      {tab.agentDevtoolsCalls > 0 && (
+        <button
+          onClick={() => useBrowserTabsStore.getState().openDevtools(tab.id, 'agent')}
+          className="flex-shrink-0 px-2 py-0.5 rounded-md border border-border-secondary/70 text-text-primary hover:bg-bg-hover/60 transition-colors"
+          data-agent-infobar-devtools
+        >
+          {t('browser.infobar.agentDevtools', { count: tab.agentDevtoolsCalls })}
+        </button>
+      )}
       {tab.agentSessionId && (
         <button
           onClick={() => void window.api.browserView.openSession(tab.agentSessionId!)}

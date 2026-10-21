@@ -34,7 +34,8 @@ export function useBrowserTabsBridge(): void {
             cdpIntercepting: false,
             canGoBack: false,
             canGoForward: false,
-            zoomPercent: 100
+            zoomPercent: 100,
+            agentDevtoolsCalls: 0
           }
           return { tabs: [...s.tabs, tab], ...(active ? { activeTabId: tabId } : {}) }
         })
@@ -68,6 +69,14 @@ export function useBrowserTabsBridge(): void {
       }),
       api.onTabZoom(({ tabId, zoomPercent }) => {
         updateTab(tabId, { zoomPercent })
+      }),
+      // 停靠区开了 / 关了 / 换了页签（只有用户的动作会发它）
+      api.onTabDevtools(({ tabId, devtools }) => {
+        updateTab(tabId, { devtools: devtools ?? undefined })
+      }),
+      // agent 的 devtool 调用记录变了：只同步计数（内容由停靠区自己去取）
+      api.onAgentDevtoolsChanged(({ tabId, callCount }) => {
+        updateTab(tabId, { agentDevtoolsCalls: callCount })
       }),
       // 用户新开空白页 / ⌘L：光标放进地址栏（只有用户的动作会发它 —— agent 开的空白页不会）
       api.onCommand(({ command }) => {
@@ -117,6 +126,8 @@ export function useBrowserTabsBridge(): void {
               canGoBack: t.canGoBack,
               canGoForward: t.canGoForward,
               zoomPercent: t.zoomPercent,
+              agentDevtoolsCalls: t.agentDevtoolsCalls,
+              ...(t.devtools ? { devtools: t.devtools } : {}),
               ...(t.agentSessionId
                 ? { agentSessionId: t.agentSessionId, agentSessionTitle: t.agentSessionTitle }
                 : {})

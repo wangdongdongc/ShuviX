@@ -9,7 +9,11 @@
  *     布局 `setLayout` / `setPanelVisible`；缩放 `zoomTab`；agent 在用哪页 `noteAgentUse`；
  *     浏览器快捷键 `installShortcuts`
  * - `createDesktopBrowserBackend` —— 内置 browser MCP server（@shuvix/agent-runtime）
- *     的桌面 BrowserBackend 实现；`browserCdpManager` 是其 per-tab CDP 会话管理
+ *     的桌面 BrowserBackend 实现；`browserCdpManager` 是其 per-tab CDP 会话管理；
+ *     `observeDesktopBrowserCalls` 把 agent 的 devtool 调用记给用户看
+ * - 停靠区（页面下方：原生 DevTools + agent 的 devtool）—— `openDevtoolsDock` / `closeDevtoolsDock` /
+ *     `setDevtoolsLayout`（devtoolsDock.ts）；`agentDevtoolsSnapshot` / `clearAgentDevtoolsCalls`
+ *     （agentDevtools.ts）
  *
  * 消费方：
  * - src/main/index.ts —— 登记独立窗口服务 / 退出时销毁
@@ -65,4 +69,10 @@ export {
   removeCookie,
   siteOfUrl
 } from './siteData'
-export { createDesktopBrowserBackend, DESKTOP_BROWSER_CAPS } from './browserBackend'
+export {
+  createDesktopBrowserBackend,
+  observeDesktopBrowserCalls,
+  DESKTOP_BROWSER_CAPS
+} from './browserBackend'
+export { openDevtoolsDock, closeDevtoolsDock, setDevtoolsLayout } from './devtoolsDock'
+export { agentDevtoolsSnapshot, clearAgentDevtoolsCalls } from './agentDevtools'

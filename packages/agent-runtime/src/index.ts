@@ -121,7 +121,9 @@ export {
   type BrowserMcpGates,
   type BrowserGateContext,
   type BrowserSiteGateContext,
-  type BrowserMcpServerOptions
+  type BrowserMcpServerOptions,
+  type BrowserToolCall,
+  type BrowserToolCallOutcome
 } from './browser/mcpServer'
 export { browserSiteOf } from './browser/site'
 export {
@@ -137,6 +139,7 @@ export {
   type CdpTabTransport,
   type CdpTabTransportFactory,
   type TabCdpState,
+  type CaptureState,
   type SessionEndReason,
   type NetworkEntry,
   type ConsoleEntry,

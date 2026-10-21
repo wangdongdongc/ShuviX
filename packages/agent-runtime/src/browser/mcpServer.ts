@@ -31,6 +31,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type CallToolRequest,
   type CallToolResult
 } from '@modelcontextprotocol/sdk/types.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
@@ -129,6 +130,23 @@ export function createBrowserTabQueue(): BrowserTabQueue {
   }
 }
 
+/** 一次工具调用（给宿主旁观，见 BrowserMcpServerOptions.observe） */
+export interface BrowserToolCall {
+  tool: BrowserToolName
+  /** 模型传的 tabId（没传 = ''）—— agent 看到的那个 id，宿主自己换成它的 tab */
+  tabId: string
+  /** 模型传的参数，原样（含 tabId） */
+  args: Record<string, unknown>
+}
+
+/** 一次工具调用的结局：模型收到的文字（图片不算在内）、是否没做成（isError） */
+export interface BrowserToolCallOutcome {
+  ok: boolean
+  text: string
+  /** 调用方放弃了这次调用（取消 / 超时）—— 模型什么也没收到 */
+  aborted?: boolean
+}
+
 export interface BrowserMcpServerOptions {
   /**
    * `mcp_servers.name`（缺省 `browser`）—— 客户端给工具名加的前缀，也是询问卡片上的工具名。
@@ -143,6 +161,11 @@ export interface BrowserMcpServerOptions {
   hostNote?: string
   /** 连接关闭（会话结束）时回调 */
   onClose?: () => void
+  /**
+   * 旁观每次工具调用（参数不合法、被门拦下的也在内；不认识的工具名不来）：回一个函数就在调用落定时
+   * 收到结局。只旁观，不影响调用 —— 抛错也吞掉。桌面借它给用户看 agent 怎么用 devtool
+   */
+  observe?: (call: BrowserToolCall) => ((outcome: BrowserToolCallOutcome) => void) | void
 }
 
 type Args = Record<string, unknown>
@@ -157,6 +180,35 @@ function fail(message: string): CallToolResult {
 /** details.error 置位 = 这次没做成（后端的业务失败不抛错） */
 function failed(out: BrowserOpOutput): boolean {
   return !!out.details?.error
+}
+
+/** 开始旁观一次调用；回「落定时调一下」的函数（没有旁观者 / 旁观者抛错 = 空操作） */
+function watchCall(
+  observe: BrowserMcpServerOptions['observe'],
+  call: BrowserToolCall
+): (outcome: BrowserToolCallOutcome) => void {
+  let done: ((outcome: BrowserToolCallOutcome) => void) | void
+  try {
+    done = observe?.(call)
+  } catch {
+    /* 旁观者的错不影响调用 */
+  }
+  return (outcome) => {
+    try {
+      done?.(outcome)
+    } catch {
+      /* 同上 */
+    }
+  }
+}
+
+/** MCP 结果 → 旁观者看到的结局：文字部分拼起来 */
+function outcomeOf(result: CallToolResult): BrowserToolCallOutcome {
+  const text = result.content
+    .map((c) => (c.type === 'text' ? c.text : ''))
+    .filter(Boolean)
+    .join('\n')
+  return { ok: !result.isError, text }
 }
 
 /** 后端输出 → MCP 结果。没做成的标 isError（客户端据此标红、加前缀） */
@@ -347,6 +399,30 @@ export async function connectBrowserMcpServer(
   }))
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    const name = request.params.name
+    const args = request.params.arguments ?? {}
+    // 不认识的工具名不旁观（不是一次「调用」，模型只是写错了名字）
+    if (!opts.observe || !browserToolSpec(name, caps)) return callTool(request, extra)
+    const settle = watchCall(opts.observe, {
+      tool: name as BrowserToolName,
+      tabId: typeof args.tabId === 'string' ? args.tabId : '',
+      args
+    })
+    try {
+      const result = await callTool(request, extra)
+      settle(outcomeOf(result))
+      return result
+    } catch (err) {
+      settle({ ok: false, text: err instanceof Error ? err.message : String(err), aborted: true })
+      throw err
+    }
+  })
+
+  /** 一次工具调用；`extra` 只用到取消信号与请求号 */
+  const callTool = async (
+    request: CallToolRequest,
+    extra: { signal: AbortSignal; requestId: string | number }
+  ): Promise<CallToolResult> => {
     const name = request.params.name
     const args = (request.params.arguments ?? {}) as Args
     const meta = request.params._meta as Record<string, unknown> | undefined
@@ -645,7 +721,7 @@ export async function connectBrowserMcpServer(
       if (extra.signal.aborted) throw err
       return fail(err instanceof Error ? err.message : String(err))
     }
-  })
+  }
 
   // InMemoryTransport 关一端会顺带关另一端、再回调到这里 —— 只收一次
   let closed = false

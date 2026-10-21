@@ -1321,14 +1321,16 @@
       "zoomIn": "Zoom in",
       "zoomOut": "Zoom out",
       "zoomReset": "Reset zoom (now {{pct}}%)",
-      "settings": "Settings"
+      "settings": "Settings",
+      "devtools": "Developer tools"
     },
     "infobar": {
       "using": "“{{session}}” is using this page",
       "usingUnknown": "An agent is using this page",
       "intercepting": "“{{session}}” is using this page and intercepting its network requests — page content may be changed",
       "interceptingUnknown": "An agent is using this page and intercepting its network requests — page content may be changed",
-      "openSession": "View conversation"
+      "openSession": "View conversation",
+      "agentDevtools": "Agent's DevTools activity ({{count}})"
     },
     "internal": {
       "settings": "Settings"
@@ -1411,6 +1413,57 @@
       "total_other": "{{count}} sites, {{size}} in total",
       "openSite": "View this site’s data",
       "loadFailed": "Couldn’t read this site’s data. Try again later."
+    },
+    "pageMenu": {
+      "openLinkInNewTab": "Open link in new tab",
+      "copyLinkAddress": "Copy link address",
+      "cut": "Cut",
+      "copy": "Copy",
+      "paste": "Paste",
+      "selectAll": "Select all",
+      "inspect": "Inspect"
+    },
+    "devtools": {
+      "tabNative": "DevTools",
+      "tabAgent": "Agent",
+      "close": "Close developer tools",
+      "resize": "Drag to resize",
+      "agent": {
+        "calls": "Calls",
+        "network": "Network",
+        "console": "Console",
+        "clear": "Clear call log",
+        "allSessions": "All sessions",
+        "noCalls": "The agent has not used DevTools on this page yet. Every evaluate, network, console, cdp or events call it makes is listed here.",
+        "running": "Running",
+        "failed": "Failed",
+        "aborted": "Cancelled",
+        "params": "Parameters",
+        "noParams": "(no parameters)",
+        "result": "What the agent received",
+        "noResult": "(empty)",
+        "truncated": "… truncated ({{count}} characters in total)",
+        "notAttached": "The agent is not attached to this page right now, so it has nothing captured.",
+        "networkOff": "The agent is not capturing network requests on this page yet — capture starts the first time it calls network.",
+        "consoleOff": "The agent is not capturing the console on this page yet — capture starts the first time it calls console.",
+        "noRequests": "No requests captured yet.",
+        "noMessages": "No console messages captured yet.",
+        "networkNote": "This is exactly what the agent reads with network (up to 200 entries); it passes a requestId to cdp Network.getResponseBody to see a response body.",
+        "consoleNote": "This is exactly what the agent reads with console (up to 200 entries).",
+        "col": {
+          "time": "Time",
+          "session": "Session",
+          "tool": "Tool",
+          "call": "Call",
+          "duration": "Duration",
+          "status": "Status",
+          "method": "Method",
+          "url": "URL",
+          "type": "Type",
+          "size": "Size",
+          "requestId": "requestId"
+        }
+      }
     }
   },
   "builtinSkill": {

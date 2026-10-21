@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import {
+  internalPageOfTab,
   useBrowserTabsStore,
   type BrowserTabInfo,
   type BrowserViewMode
@@ -102,6 +103,13 @@ export async function showMoreMenu(opts: {
       ? { id: 'viewWall', label: t('browser.view.wall') }
       : { id: 'viewSingle', label: t('browser.view.single') },
     SEP,
+    // 照 Chrome「更多工具 → 开发者工具」：开 / 关这一页的停靠区（内部页面画在外壳里，没有可调试的页面）
+    {
+      id: 'devtools',
+      label: t('browser.menu.devtools'),
+      enabled: !!page && !internalPageOfTab(page)
+    },
+    SEP,
     ...(page && isWeb(page) ? [{ id: 'openExternal', label: t('browser.openExternal') }] : []),
     { id: 'settings', label: t('browser.menu.settings') }
   ])
@@ -124,6 +132,11 @@ export async function showMoreMenu(opts: {
       return
     case 'viewSingle':
       onViewMode('single')
+      return
+    case 'devtools':
+      if (!page) return
+      if (page.devtools) store.closeDevtools(page.id)
+      else store.openDevtools(page.id, 'devtools')
       return
     case 'openExternal':
       if (page) openExternal(page)

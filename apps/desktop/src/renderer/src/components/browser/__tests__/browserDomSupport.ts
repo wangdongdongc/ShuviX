@@ -48,6 +48,7 @@ export function tabInfo(over: Partial<BrowserTabInfo> & { id: string }): Browser
     canGoBack: false,
     canGoForward: false,
     zoomPercent: 100,
+    agentDevtoolsCalls: 0,
     ...over
   }
 }
@@ -90,6 +91,8 @@ const ON_METHODS = [
   'onTabCdpState',
   'onTabAgent',
   'onTabZoom',
+  'onTabDevtools',
+  'onAgentDevtoolsChanged',
   'onCommand',
   'onDidStartLoading',
   'onDidNavigate',
@@ -114,7 +117,11 @@ const ACTIONS = [
   'proceedUnsafe',
   'setLayout',
   'setVisible',
-  'capture'
+  'capture',
+  'openDevtools',
+  'closeDevtools',
+  'setDevtoolsLayout',
+  'clearAgentDevtools'
 ] as const
 
 export function installFakeApi(platform = 'darwin'): FakeApi {
@@ -123,6 +130,13 @@ export function installFakeApi(platform = 'darwin'): FakeApi {
   for (const name of ACTIONS) browserView[name] = vi.fn(async () => undefined)
   browserView.capture.mockImplementation(async () => '')
   browserView.listTabs = vi.fn(async () => [])
+  browserView.agentDevtools = vi.fn(async () => ({
+    calls: [],
+    attached: false,
+    capturing: { network: false, console: false },
+    network: [],
+    console: []
+  }))
   for (const name of ON_METHODS) {
     browserView[name] = vi.fn((cb: Callback) => {
       callbacks[name] = cb

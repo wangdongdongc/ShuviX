@@ -6,7 +6,7 @@
  * 导航类通道带 tabId 首参；bounds/visible 是面板级（只作用于激活 tab）。
  */
 
-import { defineHandler, defineListener } from './registry'
+import { defineHandler, defineListener, type ClientContext } from './registry'
 import {
   createTab,
   closeTab,
@@ -26,13 +26,25 @@ import {
   openInternalPage,
   navigateTab,
   proceedPastCertError,
-  tabDisplayUrl
+  tabDisplayUrl,
+  isInternalTab,
+  openDevtoolsDock,
+  closeDevtoolsDock,
+  setDevtoolsLayout,
+  agentDevtoolsSnapshot,
+  clearAgentDevtoolsCalls
 } from '../services/browser'
 import {
   INTERNAL_PAGES,
   internalPageOf,
   type InternalPage
 } from '../../shared/browserInternalPages'
+import type { AgentDevtoolsSnapshot, DevtoolsDockPanel } from '../../shared/browserAgentDevtools'
+
+/** 只认浏览器窗口外壳发来的（别的窗口、网络客户端碰不到停靠区，也读不到 agent 在页面上拿到的东西） */
+function fromHostWindow(ctx: ClientContext): boolean {
+  return ctx.client.kind === 'window' && isHostWebContents(ctx.client.webContentsId)
+}
 
 export function registerBrowserViewHandlers(): void {
   // ====== 浏览器窗口 ======
@@ -173,5 +185,50 @@ export function registerBrowserViewHandlers(): void {
   defineListener('browser-view:set-visible', (ctx, visible: boolean) => {
     if (ctx.client.kind !== 'window' || !isHostWebContents(ctx.client.webContentsId)) return
     setPanelVisible(visible)
+  })
+
+  // ====== 停靠区（页面下方：原生 DevTools + agent 的 devtool） ======
+
+  /**
+   * 打开这一页的停靠区、停在某个页签（⋮ 菜单、提示条、停靠区自己的页签）。内部页面画在外壳里，那张
+   * about:blank 占位没什么可调试的 —— 与快捷键同一个口径，不开
+   */
+  defineHandler('browser-view:devtools-open', (ctx, tabId: string, panel: DevtoolsDockPanel) => {
+    if (!fromHostWindow(ctx) || typeof tabId !== 'string' || isInternalTab(tabId)) return
+    if (panel === 'devtools' || panel === 'agent') openDevtoolsDock(tabId, panel)
+  })
+
+  /** 关掉这一页的停靠区（原生 DevTools 一起关） */
+  defineHandler('browser-view:devtools-close', (ctx, tabId: string) => {
+    if (!fromHostWindow(ctx) || typeof tabId !== 'string') return
+    closeDevtoolsDock(tabId)
+  })
+
+  /** 原生 DevTools 那块矩形（CSS px；停靠区没显示「DevTools」页签时 null） */
+  defineListener(
+    'browser-view:set-devtools-layout',
+    (
+      ctx,
+      slot: {
+        tabId: string
+        bounds: { x: number; y: number; width: number; height: number }
+      } | null
+    ) => {
+      if (!fromHostWindow(ctx)) return
+      setDevtoolsLayout(slot && typeof slot.tabId === 'string' ? slot : null)
+    }
+  )
+
+  /** 停靠区「Agent」页签：agent 在这一页上的 devtool 调用记录 + 它的网络 / 控制台采集 */
+  defineHandler(
+    'browser-view:agent-devtools',
+    (ctx, tabId: string): AgentDevtoolsSnapshot | null =>
+      fromHostWindow(ctx) && typeof tabId === 'string' ? agentDevtoolsSnapshot(tabId) : null
+  )
+
+  /** 清空这一页的调用记录（agent 的采集不动） */
+  defineHandler('browser-view:agent-devtools-clear', (ctx, tabId: string) => {
+    if (!fromHostWindow(ctx) || typeof tabId !== 'string') return
+    clearAgentDevtoolsCalls(tabId)
   })
 }

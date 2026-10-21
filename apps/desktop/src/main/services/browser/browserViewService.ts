@@ -21,9 +21,19 @@
  * 关窗不销毁 tab（保留页面状态），销毁只发生在 closeTab 与 app 退出。
  */
 
-import { WebContentsView, BrowserWindow, session, type WebContents } from 'electron'
+import {
+  WebContentsView,
+  BrowserWindow,
+  Menu,
+  clipboard,
+  session,
+  type ContextMenuParams,
+  type MenuItemConstructorOptions,
+  type WebContents
+} from 'electron'
 import { randomUUID } from 'crypto'
 import { createLogger } from '../../logger'
+import { t } from '../../i18n'
 import { settingsDao } from '../../dao/settingsDao'
 import { browserCdpManager } from './browserCdpService'
 import { clipUrl, externalOpenDecision, routeExternalUrl } from '../externalOpen'
@@ -31,6 +41,21 @@ import { appEventBus } from '../../utils/appEventBus'
 import { destroyStagingWindow, getStagingWindow, STAGING_SIZE } from './stagingWindow'
 import { agentActing, hasAgentGuards, uninstallAgentGuards } from './agentGuards'
 import { browserShortcutFor, nextZoomPercent, type BrowserShortcut } from './shortcuts'
+import {
+  applyDevtoolsLayout,
+  closeDevtoolsDock,
+  destroyAllDevtoolsDocks,
+  devtoolsDockOf,
+  forgetDevtoolsDock,
+  inspectElementAt,
+  noteDevtoolsClosed,
+  resetDevtoolsLayout,
+  routeDevtoolsUrl,
+  setDockHost,
+  toggleDevtoolsDock
+} from './devtoolsDock'
+import { agentDevtoolsCallCount, forgetAgentDevtools, resetAgentDevtools } from './agentDevtools'
+import type { DevtoolsDockState } from '../../../shared/browserAgentDevtools'
 import {
   internalPageOf,
   internalPageUrl,
@@ -213,6 +238,7 @@ export function setHostWindow(win: BrowserWindow | null): void {
   if (hostWindow === win) return
   hostWindow = win
   layout = new Map()
+  resetDevtoolsLayout()
   applyLayout()
 }
 
@@ -230,6 +256,23 @@ function sendToRenderer(channel: string, payload: unknown): void {
   if (!hostWindow || hostWindow.isDestroyed()) return
   hostWindow.webContents.send(channel, payload)
 }
+
+// 停靠区（原生 DevTools 与 agent 的 devtool，见 devtoolsDock.ts）要的那几样
+setDockHost({
+  pageOf: (tabId) => {
+    const view = tabs.get(tabId)
+    return view && !view.webContents.isDestroyed() ? view.webContents : null
+  },
+  hostWindow: () => (hostWindow && !hostWindow.isDestroyed() ? hostWindow : null),
+  panelVisible: () => panelVisible,
+  send: sendToRenderer,
+  // 焦点在 DevTools 里时 ⌘+ / ⌘− 缩放的是 DevTools 自己（照 Chrome），不接
+  installShortcuts: (wc) => installShortcuts(wc, { skip: (a) => a.type === 'zoom' }),
+  // 后台开（照 Chrome 在 DevTools 里点链接）；开满了就算了
+  openUrl: (url) => {
+    if (tabs.size < MAX_TABS) createTab(url)
+  }
+})
 
 /**
  * 导航会把页面缩放打回默认值（zoom 按 origin 记，提交时重置），
@@ -299,6 +342,8 @@ function applyLayout(): void {
     }
     view.setVisible(true)
   }
+  // 停靠区里的原生 DevTools 跟着同一张表、同一道可见性门走
+  applyDevtoolsLayout()
 }
 
 /**
@@ -532,6 +577,14 @@ export function createTab(
     sendToRenderer('browser-view:tab-favicon-updated', { tabId, favicon: favicons[0] })
   })
 
+  // ====== 停靠区里的原生 DevTools ======
+  // DevTools 自己没了（前端崩了之类，不是用户关的）：停靠区跟着收
+  wc.on('devtools-closed', () => noteDevtoolsClosed(tabId))
+  // DevTools 里点的链接：开成新 tab
+  wc.on('devtools-open-url', (_event, url) => routeDevtoolsUrl(url))
+  // 页面的右键菜单（最后一项是「检查」）
+  wc.on('context-menu', (_event, params) => showPageMenu(tabId, wc, params))
+
   // 页面自己 window.close()（登录弹窗授权完成、会话过期页……）：Electron 不问任何人就销毁这个
   // webContents，view 被摘离窗口，之后 `view.webContents` 是 undefined、对旧引用调方法抛
   // "Object has been destroyed"（2026-10-08 实测，Electron 39；历史不止一条也照关）。
@@ -617,6 +670,9 @@ function forgetTab(tabId: string, view: WebContentsView): void {
   // tab 即将销毁：清理其 CDP 会话（本地状态即可，webContents.close 会带走 debugger）与防护
   uninstallAgentGuards(tabId)
   browserCdpManager.handleExternalDetach(tabId, 'tab-closed')
+  // 停靠区与 agent 的调用记录随 tab 一起没了
+  forgetDevtoolsDock(tabId)
+  forgetAgentDevtools(tabId)
 
   const ids = [...tabs.keys()]
   tabs.delete(tabId)
@@ -674,6 +730,10 @@ export interface BrowserTabSnapshot {
   openerSessionId?: string
   /** 内部页面（shuvix://settings …）：url 是它的显示地址 */
   internalPage?: InternalPage
+  /** 这一页的停靠区（开着才有） */
+  devtools?: DevtoolsDockState
+  /** agent 在这一页上记下的 devtool 调用数（停靠区「Agent」页签、提示条的计数） */
+  agentDevtoolsCalls: number
 }
 
 /** tab 列表快照（renderer 水合用），顺序 = tab 条顺序；带 CDP 状态供重载后恢复标识 */
@@ -684,6 +744,7 @@ export function listTabs(): BrowserTabSnapshot[] {
     const use = agentUse.get(id)
     const opener = openerSession.get(id)
     const internal = internalPages.get(id)
+    const devtools = devtoolsDockOf(id)
     return {
       id,
       url: displayUrlOf(id, wc.getURL() || 'about:blank'),
@@ -700,7 +761,9 @@ export function listTabs(): BrowserTabSnapshot[] {
         ? { agentSessionId: use.sessionId, agentSessionTitle: sessionTitleOf(use.sessionId) }
         : {}),
       ...(opener ? { openerSessionId: opener } : {}),
-      ...(internal ? { internalPage: internal } : {})
+      ...(internal ? { internalPage: internal } : {}),
+      ...(devtools ? { devtools } : {}),
+      agentDevtoolsCalls: agentDevtoolsCallCount(id)
     }
   })
 }
@@ -744,6 +807,8 @@ export function navigateTab(tabId: string, url: string): void {
     agentUse.delete(tabId)
     uninstallAgentGuards(tabId)
     void browserCdpManager.detach(tabId).catch(() => undefined)
+    // 内部页面画在外壳里，那张 about:blank 占位没什么可调试的
+    closeDevtoolsDock(tabId)
     sendToRenderer('browser-view:did-navigate', { tabId, url: internalPageUrl(page) })
     void view.webContents.loadURL('about:blank')
     return
@@ -792,6 +857,11 @@ function sessionTitleOf(sessionId: string): string {
   }
 }
 
+/** 会话标题（停靠区「Agent」页签的调用记录用）；查不到回空串 */
+export function agentSessionTitle(sessionId: string): string {
+  return sessionTitleOf(sessionId)
+}
+
 /**
  * agent 在这页上动作了一下（每个带 tabId 的工具调用都会来）：记下是哪个会话，告诉浏览器窗口 ——
  * 标签上的圆点亮起 / 脉动一下，选中这页时提示条写出会话名。**不选中它**（选中只由用户改）。
@@ -836,16 +906,20 @@ export function zoomTab(tabId: string, direction: 'in' | 'out' | 'reset'): void 
 const shortcutTargets = new WeakSet<WebContents>()
 
 /**
- * 把浏览器快捷键接到一个 webContents 上：每个 tab 的页面（createTab 里）和浏览器窗口的外壳
- * （browserWindowService 建窗时）。只认用户真按的键（见 shortcuts.ts 文件头）；停放窗口里的页面
- * 拿不到键盘焦点，所以实际只有挂在浏览器窗口里的那几页会走到这里。
+ * 把浏览器快捷键接到一个 webContents 上：每个 tab 的页面（createTab 里）、浏览器窗口的外壳
+ * （browserWindowService 建窗时）和停靠区里的原生 DevTools。只认用户真按的键（见 shortcuts.ts 文件头）；
+ * 停放窗口里的页面拿不到键盘焦点，所以实际只有挂在浏览器窗口里的那几页会走到这里。
+ * `skip`：这个 webContents 上留给它自己的动作（DevTools 自己的缩放）。
  */
-export function installShortcuts(wc: WebContents): void {
+export function installShortcuts(
+  wc: WebContents,
+  opts?: { skip?: (action: BrowserShortcut) => boolean }
+): void {
   if (shortcutTargets.has(wc)) return
   shortcutTargets.add(wc)
   wc.on('before-input-event', (event, input) => {
     const action = browserShortcutFor(input, process.platform)
-    if (!action) return
+    if (!action || opts?.skip?.(action)) return
     event.preventDefault()
     runShortcut(action)
   })
@@ -930,7 +1004,75 @@ export function runShortcut(action: BrowserShortcut): void {
     case 'zoom':
       if (selected) zoomTab(selected.id, action.direction)
       return
+    case 'toggleDevtools':
+      // 内部页面画在外壳里，没有可调试的页面
+      if (selected && !internalPages.has(selected.id)) toggleDevtoolsDock(selected.id)
+      return
   }
+}
+
+/**
+ * 页面的右键菜单（照 Chrome 的那几项）：链接、可编辑区、选中的文字各有各的项，然后后退 / 前进 / 重新加载，
+ * 最后是「检查」（打开停靠区里的原生 DevTools 并选中那个元素）。
+ *
+ * 只在用户自己右键时弹：浏览器窗口在前台、这页挂在浏览器窗口上、agent 此刻没在这页上动作 —— agent 经 CDP
+ * 发的右键（Input.dispatchMouseEvent）同样会走到 context-menu，那时弹原生菜单就是在打扰用户。
+ */
+function showPageMenu(tabId: string, wc: WebContents, params: ContextMenuParams): void {
+  const win = browserWindowInFront()
+  if (!win || parentOf.get(tabId) !== win || agentActing(tabId) || wc.isDestroyed()) return
+  const sep: MenuItemConstructorOptions = { type: 'separator' }
+  const items: MenuItemConstructorOptions[] = []
+  const link = params.linkURL
+  if (link && /^https?:/i.test(link)) {
+    items.push(
+      {
+        label: t('browser.pageMenu.openLinkInNewTab'),
+        enabled: tabs.size < MAX_TABS,
+        // 照 Chrome 开在后台
+        click: () => {
+          if (tabs.size < MAX_TABS) createTab(link)
+        }
+      },
+      { label: t('browser.pageMenu.copyLinkAddress'), click: () => clipboard.writeText(link) },
+      sep
+    )
+  }
+  if (params.isEditable) {
+    const flags = params.editFlags
+    items.push(
+      { label: t('browser.pageMenu.cut'), enabled: flags.canCut, click: () => wc.cut() },
+      { label: t('browser.pageMenu.copy'), enabled: flags.canCopy, click: () => wc.copy() },
+      { label: t('browser.pageMenu.paste'), enabled: flags.canPaste, click: () => wc.paste() },
+      {
+        label: t('browser.pageMenu.selectAll'),
+        enabled: flags.canSelectAll,
+        click: () => wc.selectAll()
+      },
+      sep
+    )
+  } else if (params.selectionText) {
+    items.push({ label: t('browser.pageMenu.copy'), click: () => wc.copy() }, sep)
+  }
+  items.push(
+    {
+      label: t('browser.back'),
+      enabled: wc.navigationHistory.canGoBack(),
+      click: () => wc.navigationHistory.goBack()
+    },
+    {
+      label: t('browser.forward'),
+      enabled: wc.navigationHistory.canGoForward(),
+      click: () => wc.navigationHistory.goForward()
+    },
+    { label: t('browser.refresh'), click: () => wc.reload() },
+    sep,
+    {
+      label: t('browser.pageMenu.inspect'),
+      click: () => inspectElementAt(tabId, params.x, params.y)
+    }
+  )
+  Menu.buildFromTemplate(items).popup({ window: win })
 }
 
 /**
@@ -978,6 +1120,9 @@ export function setPanelVisible(visible: boolean): void {
 /** 销毁全部 tab（app 退出时） */
 export function destroyAllTabs(): void {
   void browserCdpManager.detachAll()
+  // 停靠区的原生 DevTools 先收（它们挂在页面上），调用记录一起清
+  destroyAllDevtoolsDocks()
+  resetAgentDevtools()
   trustedHosts.clear()
   for (const [tabId, view] of tabs) {
     uninstallAgentGuards(tabId)

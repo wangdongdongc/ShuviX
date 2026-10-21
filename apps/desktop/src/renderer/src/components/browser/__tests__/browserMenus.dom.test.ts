@@ -210,6 +210,8 @@ describe('⋮ 菜单（CB-U47）', () => {
       '---',
       'viewWall',
       '---',
+      'devtools',
+      '---',
       'openExternal',
       'settings'
     ])

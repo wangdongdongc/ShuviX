@@ -8,7 +8,9 @@
  *   CB-U3  macOS 上故意不接的 / 别的平台的键 → null（⌘← ⌘→ 是输入框里的光标键）；
  *   CB-U4  别的平台上不该命中的 → null（Ctrl+[ ]、Meta+T、AltGr 组合、Ctrl+←、Ctrl+F）；
  *   CB-U5  只认 keyDown；按住不放（isAutoRepeat）时开 / 关 / 重开 tab 不连发，其余照发；
- *   CB-U6  Chrome 的缩放档位与 nextZoomPercent 的走法。
+ *   CB-U6  Chrome 的缩放档位与 nextZoomPercent 的走法；
+ *   DD-U20 开关 DevTools 停靠区：F12（各平台）、⌥⌘I（macOS，⌥ 让 key 成了别的字符也认物理键位）、
+ *          Ctrl+Shift+I（Windows / Linux）；别的平台的那一个 → null；按住不放不连发（开了又关）。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -274,5 +276,46 @@ describe('缩放档位（CB-U6）', () => {
     }
     expect(seen).toEqual([...ZOOM_STEPS].reverse())
     expect(z).toBe(25)
+  })
+})
+
+describe('开关 DevTools 停靠区（DD-U20）', () => {
+  const DEVTOOLS: BrowserShortcut = { type: 'toggleDevtools' }
+
+  it.each(['darwin', 'win32', 'linux'] as const)('DD-U20 %s：F12', (platform) => {
+    expect(browserShortcutFor(press('F12'), platform)).toStrictEqual(DEVTOOLS)
+  })
+
+  it('DD-U20 macOS：⌥⌘I —— key 是 ⌥ 打出来的字符（ˆ）、或者就是 i，都认', () => {
+    expect(
+      browserShortcutFor(press('KeyI', { meta: true, alt: true }, { key: 'ˆ' }), 'darwin')
+    ).toStrictEqual(DEVTOOLS)
+    expect(browserShortcutFor(press('KeyI', { meta: true, alt: true }), 'darwin')).toStrictEqual(
+      DEVTOOLS
+    )
+    // Windows / Linux 的那一个在 macOS 上不是
+    expect(
+      browserShortcutFor(press('KeyI', { control: true, shift: true }, { key: 'I' }), 'darwin')
+    ).toBeNull()
+    expect(browserShortcutFor(press('KeyI', { meta: true }), 'darwin')).toBeNull()
+  })
+
+  it.each(['win32', 'linux'] as const)('DD-U20 %s：Ctrl+Shift+I；⌘⌥I 不是', (platform) => {
+    expect(
+      browserShortcutFor(press('KeyI', { control: true, shift: true }, { key: 'I' }), platform)
+    ).toStrictEqual(DEVTOOLS)
+    expect(browserShortcutFor(press('KeyI', { meta: true, alt: true }), platform)).toBeNull()
+    expect(browserShortcutFor(press('KeyI', { control: true }), platform)).toBeNull()
+  })
+
+  it('DD-U20 按住不放不连发（不然开了又关）', () => {
+    const repeat = { isAutoRepeat: true }
+    expect(browserShortcutFor(press('F12', {}, repeat), 'darwin')).toBeNull()
+    expect(
+      browserShortcutFor(press('KeyI', { meta: true, alt: true }, repeat), 'darwin')
+    ).toBeNull()
+    expect(
+      browserShortcutFor(press('KeyI', { control: true, shift: true }, repeat), 'linux')
+    ).toBeNull()
   })
 })

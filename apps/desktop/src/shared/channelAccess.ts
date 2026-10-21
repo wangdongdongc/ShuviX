@@ -271,6 +271,12 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'browser-view:open-internal': 'write',
   'browser-view:proceed-unsafe': 'admin', // 越过证书错误、记下证书例外（安全决定）
   'browser-view:set-visible': 'write',
+  'browser-view:devtools-open': 'write',
+  'browser-view:devtools-close': 'write',
+  'browser-view:set-devtools-layout': 'write',
+  // agent 在页面上的 devtool 调用与它的网络 / 控制台采集：结果里可能有 cookie 值（cdp Network.getCookies）等登录凭据
+  'browser-view:agent-devtools': 'admin',
+  'browser-view:agent-devtools-clear': 'write',
 
   // ─── chromeExtension：Chrome 扩展 ───
   'chromeExtension:status': 'read',

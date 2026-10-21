@@ -69,6 +69,8 @@ const ON_METHODS = [
   'onTabCdpState',
   'onTabAgent',
   'onTabZoom',
+  'onTabDevtools',
+  'onAgentDevtoolsChanged',
   'onCommand',
   'onDidStartLoading',
   'onDidNavigate',

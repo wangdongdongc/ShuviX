@@ -848,6 +848,10 @@ declare global {
           openerSessionId?: string
           /** 内部页面（shuvix://settings …）；url 是它的显示地址 */
           internalPage?: import('../shared/browserInternalPages').InternalPage
+          /** 这一页的停靠区（开着才有） */
+          devtools?: import('../shared/browserAgentDevtools').DevtoolsDockState
+          /** agent 在这一页上记下的 devtool 调用数 */
+          agentDevtoolsCalls: number
         }>
       >
       navigate: (tabId: string, url: string) => Promise<void>
@@ -876,6 +880,26 @@ declare global {
       /** 证书警告页上的「继续前往（不安全）」：放行这个 tab 刚被挡下的站点；回是否放行了 */
       proceedUnsafe: (tabId: string) => Promise<boolean>
       setVisible: (visible: boolean) => void
+      /** 打开这一页的停靠区、停在某个页签（原生 DevTools / agent 的 devtool） */
+      openDevtools: (
+        tabId: string,
+        panel: import('../shared/browserAgentDevtools').DevtoolsDockPanel
+      ) => Promise<void>
+      /** 关掉这一页的停靠区 */
+      closeDevtools: (tabId: string) => Promise<void>
+      /** 原生 DevTools 那块矩形（CSS px）；停靠区没显示「DevTools」页签时传 null */
+      setDevtoolsLayout: (
+        slot: {
+          tabId: string
+          bounds: { x: number; y: number; width: number; height: number }
+        } | null
+      ) => void
+      /** agent 在这一页上的 devtool 调用记录 + 它的网络 / 控制台采集（非浏览器窗口调用回 null） */
+      agentDevtools: (
+        tabId: string
+      ) => Promise<import('../shared/browserAgentDevtools').AgentDevtoolsSnapshot | null>
+      /** 清空这一页的调用记录（agent 的采集不动） */
+      clearAgentDevtools: (tabId: string) => Promise<void>
       onTabCreated: (
         callback: (payload: { tabId: string; url: string; active: boolean }) => void
       ) => () => void
@@ -902,6 +926,17 @@ declare global {
       ) => () => void
       /** 这页的用户缩放变了（百分比） */
       onTabZoom: (callback: (payload: { tabId: string; zoomPercent: number }) => void) => () => void
+      /** 这页的停靠区开了 / 关了 / 换了页签（关了是 null） */
+      onTabDevtools: (
+        callback: (payload: {
+          tabId: string
+          devtools: import('../shared/browserAgentDevtools').DevtoolsDockState | null
+        }) => void
+      ) => () => void
+      /** agent 在这页上的 devtool 调用记录或采集变了（节流过；拿 agentDevtools 去取） */
+      onAgentDevtoolsChanged: (
+        callback: (payload: { tabId: string; callCount: number }) => void
+      ) => () => void
       /** 主进程请外壳做的事（快捷键 ⌘L / ⌘T 之后聚焦地址栏） */
       onCommand: (callback: (payload: { command: 'focusOmnibox' }) => void) => () => void
       onDidStartLoading: (callback: (payload: { tabId: string }) => void) => () => void

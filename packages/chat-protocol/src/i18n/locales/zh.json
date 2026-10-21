@@ -1321,14 +1321,16 @@
       "zoomIn": "放大",
       "zoomOut": "缩小",
       "zoomReset": "恢复默认大小（当前 {{pct}}%）",
-      "settings": "设置"
+      "settings": "设置",
+      "devtools": "开发者工具"
     },
     "infobar": {
       "using": "「{{session}}」正在使用此页面",
       "usingUnknown": "AI 正在使用此页面",
       "intercepting": "「{{session}}」正在使用此页面，并拦截了它的网络请求 —— 页面内容可能被修改",
       "interceptingUnknown": "AI 正在使用此页面，并拦截了它的网络请求 —— 页面内容可能被修改",
-      "openSession": "查看对话"
+      "openSession": "查看对话",
+      "agentDevtools": "查看 agent 的操作（{{count}}）"
     },
     "internal": {
       "settings": "设置"
@@ -1411,6 +1413,57 @@
       "total_other": "共 {{count}} 个网站，占用 {{size}}",
       "openSite": "查看这个网站的数据",
       "loadFailed": "读不到这个网站的数据，稍后再试。"
+    },
+    "pageMenu": {
+      "openLinkInNewTab": "在新标签页中打开链接",
+      "copyLinkAddress": "复制链接地址",
+      "cut": "剪切",
+      "copy": "复制",
+      "paste": "粘贴",
+      "selectAll": "全选",
+      "inspect": "检查"
+    },
+    "devtools": {
+      "tabNative": "DevTools",
+      "tabAgent": "Agent",
+      "close": "关闭开发者工具",
+      "resize": "拖动调整高度",
+      "agent": {
+        "calls": "调用",
+        "network": "网络",
+        "console": "控制台",
+        "clear": "清空调用记录",
+        "allSessions": "全部会话",
+        "noCalls": "agent 还没有在这一页上用过 devtool。它调用 evaluate、network、console、cdp 或 events 时，每次都会记在这里。",
+        "running": "进行中",
+        "failed": "失败",
+        "aborted": "已取消",
+        "params": "参数",
+        "noParams": "（无参数）",
+        "result": "agent 收到的结果",
+        "noResult": "（空）",
+        "truncated": "…… 已截断（共 {{count}} 个字符）",
+        "notAttached": "agent 此刻没有接入这一页，手里没有采集。",
+        "networkOff": "agent 还没有采集这一页的网络请求 —— 它第一次调用 network 时开始采集。",
+        "consoleOff": "agent 还没有采集这一页的控制台 —— 它第一次调用 console 时开始采集。",
+        "noRequests": "还没有采集到请求。",
+        "noMessages": "还没有采集到控制台消息。",
+        "networkNote": "agent 调用 network 读到的就是这一份（最多 200 条）；它拿 requestId 调 cdp Network.getResponseBody 看响应体。",
+        "consoleNote": "agent 调用 console 读到的就是这一份（最多 200 条）。",
+        "col": {
+          "time": "时间",
+          "session": "会话",
+          "tool": "工具",
+          "call": "调用",
+          "duration": "耗时",
+          "status": "状态",
+          "method": "方法",
+          "url": "地址",
+          "type": "类型",
+          "size": "大小",
+          "requestId": "requestId"
+        }
+      }
     }
   },
   "builtinSkill": {

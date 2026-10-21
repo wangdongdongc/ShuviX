@@ -1321,14 +1321,16 @@
       "zoomIn": "拡大",
       "zoomOut": "縮小",
       "zoomReset": "既定のサイズに戻す（現在 {{pct}}%）",
-      "settings": "設定"
+      "settings": "設定",
+      "devtools": "デベロッパー ツール"
     },
     "infobar": {
       "using": "「{{session}}」がこのページを使用しています",
       "usingUnknown": "AI がこのページを使用しています",
       "intercepting": "「{{session}}」がこのページを使用し、ネットワークリクエストを傍受しています — ページの内容が変更される可能性があります",
       "interceptingUnknown": "AI がこのページを使用し、ネットワークリクエストを傍受しています — ページの内容が変更される可能性があります",
-      "openSession": "会話を表示"
+      "openSession": "会話を表示",
+      "agentDevtools": "エージェントの操作を見る（{{count}}）"
     },
     "internal": {
       "settings": "設定"
@@ -1411,6 +1413,57 @@
       "total_other": "{{count}} サイト、合計 {{size}}",
       "openSite": "このサイトのデータを表示",
       "loadFailed": "このサイトのデータを読み込めませんでした。しばらくしてからもう一度お試しください。"
+    },
+    "pageMenu": {
+      "openLinkInNewTab": "リンクを新しいタブで開く",
+      "copyLinkAddress": "リンクのアドレスをコピー",
+      "cut": "切り取り",
+      "copy": "コピー",
+      "paste": "貼り付け",
+      "selectAll": "すべて選択",
+      "inspect": "検証"
+    },
+    "devtools": {
+      "tabNative": "DevTools",
+      "tabAgent": "Agent",
+      "close": "デベロッパー ツールを閉じる",
+      "resize": "ドラッグして高さを変更",
+      "agent": {
+        "calls": "呼び出し",
+        "network": "ネットワーク",
+        "console": "コンソール",
+        "clear": "呼び出し記録をクリア",
+        "allSessions": "すべてのセッション",
+        "noCalls": "エージェントはまだこのページで DevTools を使っていません。evaluate・network・console・cdp・events を呼び出すたびにここに記録されます。",
+        "running": "実行中",
+        "failed": "失敗",
+        "aborted": "キャンセル",
+        "params": "パラメーター",
+        "noParams": "（パラメーターなし）",
+        "result": "エージェントが受け取った結果",
+        "noResult": "（空）",
+        "truncated": "… 省略されました（全 {{count}} 文字）",
+        "notAttached": "エージェントは今このページに接続していないため、収集したものはありません。",
+        "networkOff": "エージェントはまだこのページのネットワーク リクエストを収集していません。最初に network を呼び出したときに収集が始まります。",
+        "consoleOff": "エージェントはまだこのページのコンソールを収集していません。最初に console を呼び出したときに収集が始まります。",
+        "noRequests": "まだリクエストは収集されていません。",
+        "noMessages": "まだコンソール メッセージは収集されていません。",
+        "networkNote": "エージェントが network で読むのはこの内容です（最大 200 件）。requestId を cdp Network.getResponseBody に渡してレスポンス本文を見ます。",
+        "consoleNote": "エージェントが console で読むのはこの内容です（最大 200 件）。",
+        "col": {
+          "time": "時刻",
+          "session": "セッション",
+          "tool": "ツール",
+          "call": "呼び出し",
+          "duration": "所要時間",
+          "status": "ステータス",
+          "method": "メソッド",
+          "url": "URL",
+          "type": "種類",
+          "size": "サイズ",
+          "requestId": "requestId"
+        }
+      }
     }
   },
   "builtinSkill": {

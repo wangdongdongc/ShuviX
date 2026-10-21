@@ -306,6 +306,89 @@ describe('TabCdpSession 网络/控制台缓冲', () => {
   })
 })
 
+describe('采集变化通知与 peek（DT-U1–DT-U3：桌面停靠区给用户看 agent 手里的采集）', () => {
+  it('DT-U1 开始采集、新的网络 / 控制台条目、会话结束清空 → onCaptureChange(tabId)；别的事件不来', async () => {
+    const ft = fakeTransport()
+    const changed = vi.fn()
+    const manager = new CdpAttachManager({ attach: async () => ft.transport }, undefined, changed)
+    const session = await manager.session('t1')
+    expect(session.capturing).toEqual({ network: false, console: false })
+    expect(changed).not.toHaveBeenCalled()
+
+    await session.enableNetworkCapture()
+    await session.enableConsoleCapture()
+    expect(session.capturing).toEqual({ network: true, console: true })
+    expect(changed).toHaveBeenCalledTimes(2)
+    // 再开一次不算变化
+    await session.enableNetworkCapture()
+    expect(changed).toHaveBeenCalledTimes(2)
+
+    ft.emit('Network.requestWillBeSent', {
+      requestId: 'r1',
+      request: { url: 'https://a.com/x', method: 'GET' },
+      timestamp: 1
+    })
+    ft.emit('Network.responseReceived', {
+      requestId: 'r1',
+      response: { status: 200, mimeType: 'text/html' }
+    })
+    ft.emit('Network.loadingFinished', { requestId: 'r1', encodedDataLength: 10 })
+    ft.emit('Runtime.consoleAPICalled', {
+      type: 'log',
+      args: [{ type: 'string', value: 'x' }],
+      timestamp: 1
+    })
+    expect(changed).toHaveBeenCalledTimes(6)
+    // 不碰采集的事件不来
+    ft.emit('Page.frameNavigated', { frame: {} })
+    ft.emit('DOM.documentUpdated', {})
+    expect(changed).toHaveBeenCalledTimes(6)
+    expect(changed.mock.calls.every(([id]) => id === 't1')).toBe(true)
+
+    // 通知到的时候条目已经在缓冲里了
+    changed.mockImplementationOnce(() => {
+      expect(session.getConsoleMessages().map((m) => m.text)).toEqual(['x', 'y'])
+    })
+    ft.emit('Runtime.consoleAPICalled', {
+      type: 'log',
+      args: [{ type: 'string', value: 'y' }],
+      timestamp: 2
+    })
+
+    manager.handleExternalDetach('t1')
+    expect(changed).toHaveBeenCalledTimes(8)
+    expect(session.capturing).toEqual({ network: false, console: false })
+  })
+
+  it('DT-U2 peek 只看不接：没接入回 undefined、不 attach；接入之后回同一个会话；断开之后又是 undefined', async () => {
+    const ft = fakeTransport()
+    const attach = vi.fn(async () => ft.transport)
+    const manager = new CdpAttachManager({ attach })
+    expect(manager.peek('t1')).toBeUndefined()
+    expect(attach).not.toHaveBeenCalled()
+    const session = await manager.session('t1')
+    expect(manager.peek('t1')).toBe(session)
+    expect(manager.peek('t2')).toBeUndefined()
+    await manager.detach('t1')
+    expect(manager.peek('t1')).toBeUndefined()
+    expect(attach).toHaveBeenCalledTimes(1)
+  })
+
+  it('DT-U3 agent 经 cdp 自己 Network.enable：capturing.network 不算开，但条目照样进缓冲', async () => {
+    const ft = fakeTransport()
+    const manager = new CdpAttachManager({ attach: async () => ft.transport })
+    const session = await manager.session('t1')
+    await session.send('Network.enable')
+    ft.emit('Network.requestWillBeSent', {
+      requestId: 'r9',
+      request: { url: 'https://b.com/', method: 'POST' },
+      timestamp: 1
+    })
+    expect(session.capturing.network).toBe(false)
+    expect(session.getNetworkRequests().map((e) => e.id)).toEqual(['r9'])
+  })
+})
+
 describe('通用事件缓冲（events action 支撑）', () => {
   it('所有事件带递增 seq；按方法/ sinceSeq 增量过滤', async () => {
     const ft = fakeTransport()

@@ -27,7 +27,7 @@ import {
   type BuiltinMcpFactory,
   type EnforceOpts
 } from '@shuvix/agent-runtime'
-import { createDesktopBrowserBackend } from '../browser'
+import { createDesktopBrowserBackend, observeDesktopBrowserCalls } from '../browser'
 import { getDesktopSecurityContext, resolveProjectConfig, TOOL_ABORTED } from '../toolContext'
 import type { DesktopBuiltinMcpScope } from './types'
 
@@ -106,6 +106,8 @@ export function createDesktopBrowserMcpServerFactory(): BuiltinMcpFactory<Deskto
     backend: createDesktopBrowserBackend(scope.sessionId),
     gates: desktopGates(scope),
     hostNote: DESKTOP_HOST_NOTE,
-    tabQueue: browserTabQueue
+    tabQueue: browserTabQueue,
+    // agent 的 devtool 调用给用户看（浏览器窗口停靠区的「Agent」页签）
+    observe: observeDesktopBrowserCalls(scope.sessionId)
   }))
 }

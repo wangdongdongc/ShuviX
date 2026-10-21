@@ -186,6 +186,8 @@ const METHODS = [
 ] as const
 
 vi.mock('../../browser', () => ({
+  // 旁观钩子（停靠区「Agent」页签的调用记录）不在这里测：给一个什么也不记的
+  observeDesktopBrowserCalls: () => () => undefined,
   createDesktopBrowserBackend: (sessionId: string) => {
     browser.created.push(sessionId)
     const backend: FakeBackend = {

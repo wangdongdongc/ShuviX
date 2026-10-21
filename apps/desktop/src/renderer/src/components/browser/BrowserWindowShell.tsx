@@ -1,13 +1,19 @@
 import { useEffect, useState } from 'react'
 import i18next from 'i18next'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { VIEW_MODE_SETTING, type BrowserViewMode } from '../../stores/browserTabsStore'
+import {
+  DEVTOOLS_HEIGHT_SETTING,
+  VIEW_MODE_SETTING,
+  type BrowserViewMode
+} from '../../stores/browserTabsStore'
 import { useBrowserTabsBridge } from '../../host/useBrowserTabsBridge'
 import { BrowserTabStrip } from './BrowserTabStrip'
 import { BrowserToolbar } from './BrowserToolbar'
 import { AgentInfobar } from './AgentInfobar'
 import { BrowserSinglePage } from './BrowserSinglePage'
 import { BrowserWall } from './BrowserWall'
+import { BrowserDevtoolsDock } from './BrowserDevtoolsDock'
+import { DOCK_DEFAULT_HEIGHT, clampDockHeight } from './dockHeight'
 import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_SETTING, searchEngineOf } from './omnibox'
 
 /**
@@ -17,6 +23,7 @@ import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_SETTING, searchEngineOf } from './
  *   工具条：后退 / 前进 / 刷新、地址栏、视图切换、⋮
  *   提示条：选中的那页正接着 agent 时才有
  *   页面区：单页视图（缺省，只显示选中的那页）或平铺墙（第二种视图）
+ *   停靠区：选中的那页开着 DevTools 时才有（原生 DevTools / agent 的 devtool，见 BrowserDevtoolsDock）
  *
  * - 最小应用初始化：仅加载设置（主题 / 字号 / 语言 / 搜索引擎 / 视图），不加载会话 / 提供商 —— 与 widget
  *   窗口同款
@@ -30,6 +37,7 @@ export function BrowserWindowShell(): React.JSX.Element {
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
   const [engine, setEngine] = useState(DEFAULT_SEARCH_ENGINE)
   const [viewMode, setViewMode] = useState<BrowserViewMode>('single')
+  const [dockHeight, setDockHeight] = useState(DOCK_DEFAULT_HEIGHT)
 
   useBrowserTabsBridge()
 
@@ -40,6 +48,8 @@ export function BrowserWindowShell(): React.JSX.Element {
       useSettingsStore.getState().loadSettings(settings)
       setEngine(searchEngineOf(settings[SEARCH_ENGINE_SETTING]))
       setViewMode(settings[VIEW_MODE_SETTING] === 'wall' ? 'wall' : 'single')
+      const savedHeight = Number(settings[DEVTOOLS_HEIGHT_SETTING])
+      if (savedHeight > 0) setDockHeight(savedHeight)
       const savedLang = settings['general.language']
       if (savedLang && savedLang !== i18next.language) {
         void i18next.changeLanguage(savedLang)
@@ -78,6 +88,13 @@ export function BrowserWindowShell(): React.JSX.Element {
     }
   }, [theme, darkTheme, lightTheme])
 
+  /** 停靠区改高度：拖动中只改界面，松手记进设置（所有页共用一个高度） */
+  const changeDockHeight = (height: number, commit: boolean): void => {
+    setDockHeight(height)
+    if (commit)
+      void window.api.settings.set({ key: DEVTOOLS_HEIGHT_SETTING, value: String(height) })
+  }
+
   /** 切视图：当场换，并记进设置（下次开窗还是这个视图） */
   const changeViewMode = (mode: BrowserViewMode): void => {
     setViewMode(mode)
@@ -100,6 +117,10 @@ export function BrowserWindowShell(): React.JSX.Element {
           <BrowserSinglePage engine={engine} />
         )}
       </div>
+      <BrowserDevtoolsDock
+        height={clampDockHeight(dockHeight, window.innerHeight)}
+        onHeight={changeDockHeight}
+      />
     </div>
   )
 }
