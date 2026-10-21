@@ -13,6 +13,8 @@ export default defineConfig({
     environment: 'node',
     // 串行：同一 CDP 端口,一次只跑一个实例
     fileParallelism: false,
+    // 每次运行在 ~/.shuvix-e2e/history.jsonl 追加一行（e2e/harness/historyReporter.ts）：留着评估 e2e 在哪个阶段有用
+    reporters: ['default', './e2e/harness/historyReporter.ts'],
     testTimeout: 60_000,
     hookTimeout: 120_000
   }

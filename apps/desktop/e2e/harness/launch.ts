@@ -40,6 +40,8 @@ import {
   type CdpTarget
 } from './cdp'
 import { connectWs } from './wsClient'
+import { expect } from 'vitest'
+import { recordInstanceMemory, watchInstanceTree } from './processTree'
 
 const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 /**
@@ -367,6 +369,15 @@ function electronBinary(): string {
   return createRequire(import.meta.url)('electron') as string
 }
 
+/** 这个实例属于哪个 spec 文件（运行记录按文件记内存峰值）；不在 vitest 的用例里 → undefined */
+function currentTestFile(): string | undefined {
+  try {
+    return expect.getState().testPath
+  } catch {
+    return undefined
+  }
+}
+
 /** launcher（本进程）的 pid 交给实例的环境变量名 —— 与 instanceGuards.cjs 的 LAUNCHER_PID_ENV 一致 */
 export const LAUNCHER_PID_ENV = 'SHUVIX_E2E_LAUNCHER_PID'
 
@@ -518,6 +529,9 @@ export async function launchApp(
     }
   )
   track(child)
+  // 进程树：内存峰值进运行记录；收尾时等全部子进程退干净（见 processTree.ts）
+  const tree = watchInstanceTree(child.pid ?? -1)
+  let treeRecorded = false
   let output = ''
   let stdout = ''
   child.stdout?.on('data', (c: Buffer) => {
@@ -681,7 +695,15 @@ export async function launchApp(
           await waitExit(5000)
         }
       }
-      // 主进程死了，它的 GPU / 网络子进程还要一小会儿才发现父进程没了 —— 期间可能再落一个文件
+      // 主进程死了，它的 GPU / 网络 / 渲染子进程还要一小会儿才发现父进程没了：等它们退干净再往下走 ——
+      // 否则下一个实例起来时两份内存叠在一起，机器吃紧时后面的实例就起不来；期间也可能再往 HOME 里落文件
+      const teardownFrom = Date.now()
+      const killed = await tree.waitGone(10_000)
+      tree.stop()
+      if (!treeRecorded) {
+        treeRecorded = true
+        recordInstanceMemory(currentTestFile(), tree.peakRssMb(), killed, Date.now() - teardownFrom)
+      }
       if (!stopOpts.keepHome) {
         rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
       }

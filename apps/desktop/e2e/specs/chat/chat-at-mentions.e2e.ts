@@ -259,24 +259,26 @@ afterAll(async () => {
 })
 
 describe('A · 合并弹层（裸 @）', () => {
-  it('AT-1 裸 @ 两段分区 + 段头', async () => {
+  it('AT-1 裸 @ 三段分区 + 段头（2026-10-20 起多了「会话」：除这一条以外、侧栏看得见的会话）', async () => {
     await openAndType('AT-1', '@')
     await waitRow(K_TOKEN)
     const rows = await popover.rows()
-    // 文件行与知识行同时在屏
+    // 文件行、知识行、会话行同时在屏（这个实例里种了一批会话，AT-1 自己不在其中）
     expect(rows.some((r) => r.key === 'README.md')).toBe(true)
     expect(rows.some((r) => r.key === K_TOKEN)).toBe(true)
-    // 两个段头（文件在前、知识库在后 = provider 注册序）
-    expect(await popover.sections()).toEqual(['file', 'knowledge'])
+    expect(rows.some((r) => r.key.startsWith('session:'))).toBe(true)
+    expect(rows.some((r) => r.key === `session:${sids['AT-1']}`)).toBe(false)
+    // 三个段头（文件、知识库、会话 = provider 注册序）
+    expect(await popover.sections()).toEqual(['file', 'knowledge', 'session'])
   })
 
-  it('AT-2 未启用任何库（项目库隐式在、但是空的）→ 只出文件段、无段头；IPC 候选为空', async () => {
+  it('AT-2 未启用任何库（项目库隐式在、但是空的）→ 没有知识段（文件段 + 会话段）；IPC 候选为空', async () => {
     await openAndType('AT-2', '@')
     await waitRow('README.md')
     const rows = await popover.rows()
     expect(rows.length).toBeGreaterThan(0)
     expect(rows.every((r) => !r.key.startsWith('knowledge:'))).toBe(true)
-    expect(await popover.sections()).toEqual([])
+    expect(await popover.sections()).toEqual(['file', 'session'])
     expect(await listKnowledgeEntries(sids['AT-2'])).toEqual([])
   })
 
@@ -287,7 +289,7 @@ describe('A · 合并弹层（裸 @）', () => {
     await sleep(400)
     const rows = await popover.rows()
     expect(rows.every((r) => !r.key.startsWith('knowledge:'))).toBe(true)
-    expect(await popover.sections()).toEqual([])
+    expect(await popover.sections()).toEqual(['file', 'session'])
   })
 
   it('AT-4 每源 ≤5（两源各种 7 条同前缀）', async () => {
@@ -311,12 +313,12 @@ describe('A · 合并弹层（裸 @）', () => {
     await openAndType('AT-5', '@')
     await waitRow(K_TOKEN)
     const total = (await popover.rows()).length
-    // 5 文件 + 2 知识 = 7 行；初始选中第 0 行
-    expect(total).toBe(7)
+    // 5 文件 + 2 知识 + 5 会话 = 12 行；初始选中第 0 行
+    expect(total).toBe(12)
     await waitSelected(0)
 
     // 扁平序逐行迁移（跨段不需要任何特殊操作）
-    for (const want of [1, 2, 3, 4, 5, 6]) {
+    for (let want = 1; want < total; want++) {
       await chat.pressKey('ArrowDown')
       await waitSelected(want)
     }
@@ -324,9 +326,13 @@ describe('A · 合并弹层（裸 @）', () => {
     await chat.pressKey('ArrowDown')
     await waitSelected(0)
     await chat.pressKey('ArrowUp')
-    await waitSelected(6)
+    await waitSelected(total - 1)
 
-    // Enter 选当前行（末行 = 知识条目 Token 刷新）：插明文（含尾随空格）并关弹层
+    // 往回走到知识段的最后一行（第 6 行 = 知识条目 Token 刷新），Enter 选它：插明文（含尾随空格）并关弹层
+    for (let want = total - 2; want >= 6; want--) {
+      await chat.pressKey('ArrowUp')
+      await waitSelected(want)
+    }
     await chat.pressKey('Enter')
     await until(
       async () => (await chat.inputValue()) === '@knowledge:Token 刷新 ',
