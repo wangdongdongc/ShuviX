@@ -10,7 +10,8 @@
  *    相邻的已完成步骤折成一行 `#<id>.<i>-<j>`，规则与界面的 StepGroup 同一份（chat-protocol `stepGrouping`）。
  *  - 编号取自条目 id（durable 是数字，旧会话的长 id 取末 8 位，撞了用全长）：开着看与重开看是同一个编号。
  *    块用序号而不是 toolCallId —— 有的中转每轮从 `call_0` 数起，会撞。
- *  - 用户消息标来源：`[you]`（读大纲的父会话发的）/ `[user]`（人打的）/ `[unattributed]`（分不清：升级之前、没有来源
+ *  - 用户消息标来源：`[you]`（读大纲的会话发的）/ `[parent]`（它的父会话发的）/ `[other session]`（别的被授权的
+ *    会话发的）/ `[user]`（人打的）/ `[unattributed]`（分不清：升级之前、没有来源
  *    记录的那些，判法是 `authorsOf`，与自动审查同一份）/ `[notice]`（系统写的）；思考只计数；
  *    工具结果不出现（失败的附错误首行）；进行中 / 待批准 / 待回答的单独一行标状态。
  *
@@ -45,6 +46,8 @@ export interface OutlineReader {
   readerId: string
   /** 用户消息 id → 来源（不是人亲手打的那些；agent-runtime `readInputSources`） */
   sources: ReadonlyMap<string, InputSource>
+  /** 被读的是一条顶层会话（不是子会话）：没有来源记录的用户消息都是人打的（见 `authorsOf`） */
+  topLevel?: boolean
 }
 
 export interface OutlineQuery {
@@ -420,6 +423,7 @@ function userRow(
   } else {
     const source = reader.sources.get(message.id)
     if (source && source.sessionId === reader.readerId) line = `[you] ${oneLine(text, YOU_CLIP)}`
+    else if (source?.kind === 'session') line = `[other session] ${oneLine(text, YOU_CLIP)}`
     else if (source) line = `[parent] ${oneLine(text, YOU_CLIP)}`
     else if (author === 'human') line = `[user] ${oneLine(text, USER_CLIP)}`
     else line = `[unattributed] ${oneLine(text, USER_CLIP)}`
@@ -453,7 +457,9 @@ function buildRows(
   }
   // 用户消息谁写的：与自动审查同一个判法（第一条有来源记录的之后、没有记录的才是人打的）
   const userMessages = messages.filter((m) => m.role === 'user' && !isNotice(m))
-  const authors = authorsOf(userMessages, (m) => reader.sources.has(m.id))
+  const authors = authorsOf(userMessages, (m) => reader.sources.has(m.id), {
+    topLevel: reader.topLevel === true
+  })
   // 「当前这一张卡」= 最后一张助手卡（正在流式的那张，或最后落盘的那张）
   let currentIndex = -1
   messages.forEach((m, i) => m.role === 'assistant' && (currentIndex = i))
@@ -533,8 +539,10 @@ function buildRows(
 // ─────────────────────────── 入口 ───────────────────────────
 
 /** 一行大纲的最终样子（编号 + 正文，过长再截一次 —— 兜底） */
+/** 一行大纲 / 搜索结果：被读那条会话写的字可能带着能撕破外层围栏的闭合标签 —— 与展开同样拆开 */
 function renderRow(row: Row, suffix = ''): string {
-  return `${row.ref} ${clipLine(`${row.line}${suffix}`, LINE_MAX)}`
+  // 先拆再截：拆开多出的空格不该撑过行长上限
+  return `${row.ref} ${clipLine(defuseFences(`${row.line}${suffix}`), LINE_MAX)}`
 }
 
 /**
@@ -553,9 +561,9 @@ function fitBudget<T>(items: readonly T[], render: (item: T) => string, budget: 
   return kept
 }
 
-/** 子会话的原文里可能有能撕破外层围栏的闭合标签（它读过的网页、文件）：展开时把它们拆开 */
+/** 被读那条会话的原文里可能有能撕破外层围栏的闭合标签（它读过的网页、文件）：展开、大纲行、搜索行都拆开 */
 function defuseFences(text: string): string {
-  return text.replace(/<\/(transcript|sub-session)\b/gi, '</ $1')
+  return text.replace(/<\/(transcript|session|sub-session)\b/gi, '</ $1')
 }
 
 /**

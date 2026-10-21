@@ -12,6 +12,8 @@
  *     没有记录、且在第一条有记录的消息之后 → `[user]`；其余（之前的、整条都没有记录的）→ `[unattributed]`。
  *     所以只是顺带出现用户消息的用例里（读者没有来源表）那一行都是 `[unattributed]`；要钉 `[user]` 的用例在前面
  *     垫一条父会话发的消息作锚点。见 C / C2 两组。
+ *   - **别的会话 / 顶层会话**（2026-10-20，XS-24）：来源 kind `session` → `[other session]`，同样立锚点；
+ *     `reader.topLevel` 为 true 时没有记录的一律 `[user]`。见 C3。展开时 `</session` 同样拆开（XS-25，见 G2）。
  *
  * 用例编号 WP4-xx 对应测试设计清单；期望以 §19.10 的裁决与当前源码为准（清单里标 ⚠ 的几条已按裁决改写）。
  */
@@ -37,6 +39,7 @@ import type {
 } from '@shuvix/chat-protocol/types/sessionView'
 import { groupConsecutiveSteps } from '@shuvix/chat-protocol/utils/stepGrouping'
 import { clipLine } from '@shuvix/chat-protocol/utils/clipLine'
+import type { InputSource } from '../../durable/inputSource'
 import {
   OUTLINE_LIMITS,
   buildSessionOutline,
@@ -135,13 +138,20 @@ function view(
   }
 }
 
-/** 读者是父会话 `P`；pairs = 用户消息 id → 来源会话 */
-function reader(pairs: Array<[string, string]> = []): OutlineReader {
+/**
+ * 读者是会话 `P`；pairs = 用户消息 id → 来源会话（第三项是来源的 kind，缺省 `parent-session`）。
+ * `opts.topLevel` 给了才带上这个键（不给 = 旧口径，被读的会话当子会话判）
+ */
+function reader(
+  pairs: Array<[id: string, sessionId: string, kind?: InputSource['kind']]> = [],
+  opts: { topLevel?: boolean } = {}
+): OutlineReader {
   return {
     readerId: 'P',
     sources: new Map(
-      pairs.map(([id, sessionId]) => [id, { kind: 'parent-session' as const, sessionId }])
-    )
+      pairs.map(([id, sessionId, kind = 'parent-session']) => [id, { kind, sessionId }])
+    ),
+    ...(opts.topLevel === undefined ? {} : { topLevel: opts.topLevel })
   }
 }
 
@@ -765,6 +775,113 @@ describe('C2. 作者判法：与自动审查同一份（第一条有来源记录
     expect(outline(v, ALL, reader([['1', 'P']])).lines).toEqual([
       '#1 [you] task',
       '#q7 [queued steer] hey'
+    ])
+  })
+})
+
+// ───────────── C3. 别的会话的来源与顶层会话（2026-10-20：session 工具能读任意会话） ─────────────
+
+/**
+ * XS-24 来源 `{kind:'session'}`（经会话权限表被授权的别的会话发的）→ `[other session]`（截 80，与 [you] / [parent]
+ * 同档），它也立锚点；来源恰是读者自己 → 仍是 `[you]`；`parent-session` 照旧 `[parent]`。
+ * XS-24 / XS-26（大纲一侧）`reader.topLevel`：被读的是顶层会话时没有来源记录的用户消息一律 `[user]`（哪怕一条有记录的
+ * 都没有）；不给 topLevel（或 false）→ 旧的锚点判法，整条没有记录的仍是 `[unattributed]`。
+ */
+describe('C3. 别的会话的来源 [other session] 与顶层会话的作者判法（XS-24）', () => {
+  const userLines = (lines: string[]): string[] => lines.filter((l) => /^#\d+ \[/.test(l))
+
+  it('XS-24 来源是别的会话（kind session、不是读者）→ #1 [other session] <截 80>', () => {
+    const text = 'z'.repeat(300)
+    const [line] = outline(view([U('1', text)]), {}, reader([['1', 'Q', 'session']])).lines
+    expect(line).toBe(`#1 [other session] ${clipLine(text, 80)}`)
+    expect(bodyOf(line).slice('[other session] '.length)).toHaveLength(80)
+  })
+
+  it('XS-24 kind session 但来源恰是读者自己 → [you]（读者判断排在 kind 之前）', () => {
+    expect(
+      outline(view([U('1', 'sent by me')]), {}, reader([['1', 'P', 'session']])).lines
+    ).toEqual(['#1 [you] sent by me'])
+  })
+
+  it('XS-24 [guard] parent-session 来源（不是读者）仍是 [parent]，与 [other session] 并排分得开', () => {
+    const v = view([U('1', 'from parent Q'), U('2', 'from other R')])
+    const r = reader([
+      ['1', 'Q', 'parent-session'],
+      ['2', 'R', 'session']
+    ])
+    expect(outline(v, ALL, r).lines).toEqual([
+      '#1 [parent] from parent Q',
+      '#2 [other session] from other R'
+    ])
+  })
+
+  it('XS-24 [other session] 立锚点：之前的没有记录 → [unattributed]，之后的 → [user]', () => {
+    const v = view([U('1', 'pre'), U('2', 'from Q'), A('3', [TX('ok')]), U('4', 'h')])
+    expect(outline(v, ALL, reader([['2', 'Q', 'session']])).lines).toEqual([
+      '#1 [unattributed] pre',
+      '#2 [other session] from Q',
+      '#3.0 reply: ok',
+      '#4 [user] h'
+    ])
+  })
+
+  it('XS-24 展开 [other session] 那一条：第一行是标记本身，其后是完整原文；搜索同一个标记', () => {
+    const text = 'first line\nsecond   line'
+    const v = view([U('1', text)])
+    const r = reader([['1', 'Q', 'session']])
+    expect(item(v, '#1', r).lines).toEqual(['[other session]', 'first line', 'second   line'])
+    expect(search(v, 'second', {}, r).lines).toEqual(['#1 [other session] first line second line'])
+  })
+
+  it('XS-24 topLevel: true → 一条有来源记录的都没有，没有记录的用户消息也全是 [user]（截 200）', () => {
+    const messy = 'line one\n\n   line   two\t' + 'x'.repeat(300)
+    const v = view([U('1', 'hello'), A('2', [TX('hi')]), U('3', messy)])
+    const lines = outline(v, ALL, reader([], { topLevel: true })).lines
+    expect(lines).toEqual([
+      '#1 [user] hello',
+      '#2.0 reply: hi',
+      `#3 [user] ${clipLine(messy.replace(/\s+/g, ' ').trim(), 200)}`
+    ])
+    expect(lines.join('\n')).not.toContain('[unattributed]')
+    expect(item(v, '#1', reader([], { topLevel: true })).lines).toEqual(['[user]', 'hello'])
+  })
+
+  it('XS-24 topLevel: true 且有来源：有记录之前的也是 [user]；读者自己的 [you]、别的会话的 [other session]', () => {
+    const v = view([U('1', 'typed first'), U('2', 'mine'), U('3', 'from Q'), U('4', 'typed later')])
+    const r = reader(
+      [
+        ['2', 'P', 'session'],
+        ['3', 'Q', 'session']
+      ],
+      { topLevel: true }
+    )
+    expect(outline(v, ALL, r).lines).toEqual([
+      '#1 [user] typed first',
+      '#2 [you] mine',
+      '#3 [other session] from Q',
+      '#4 [user] typed later'
+    ])
+  })
+
+  it.each([
+    ['不给 topLevel', reader()],
+    ['topLevel: false', reader([], { topLevel: false })]
+  ] as const)('XS-24 [guard] %s → 旧的锚点判法：整条没有记录的仍是 [unattributed]', (_label, r) => {
+    const v = view([U('1', 'hello'), A('2', [TX('hi')]), U('3', 'again')])
+    expect(userLines(outline(v, ALL, r).lines)).toEqual([
+      '#1 [unattributed] hello',
+      '#3 [unattributed] again'
+    ])
+  })
+
+  it('XS-24 topLevel 不改系统通知：[notice] 照旧，也不算人话', () => {
+    const v = view([
+      U('1', '<background-task id="b">\ndone\n</background-task>', NOTICE),
+      U('2', 'h')
+    ])
+    expect(outline(v, ALL, reader([], { topLevel: true })).lines).toEqual([
+      '#1 [notice] <background-task id="b">',
+      '#2 [user] h'
     ])
   })
 })
@@ -1451,6 +1568,62 @@ describe('G. item', () => {
   it('§19.10-17 / WP4-98 拆标签之后整条仍 ≤ 8000（先拆后截）', () => {
     const v = view([U('1', '</transcript>'.repeat(2000))])
     expect(item(v, '#1').lines.join('\n').length).toBeLessThanOrEqual(OUTLINE_LIMITS.item)
+  })
+})
+
+// ───────────── G2. 围栏：</session>（XS-25） ─────────────
+
+/**
+ * XS-25 session 工具把查看结果装在 `<session …><transcript>…</transcript></session>` 里（tools/session.ts）：展开时
+ * `</session` 闭合标签（不区分大小写、标签名后可有空白）同样拆成 `</ session`，大小写原样保留；`</sessions>`
+ * 不是这个标签（`\b` 之后还有字母），原样不动 —— 现状如此，`<sessions>` 只是 list / wait 的围栏。
+ */
+describe('G2. 展开时拆开 </session>（XS-25）', () => {
+  const RAW = ['</session>', '</SESSION >', '</Session>', '</sessions> stays', 'tail'].join('\n')
+  const DEFUSED = ['</ session>', '</ SESSION >', '</ Session>', '</sessions> stays', 'tail']
+
+  it('XS-25 展开工具结果：</session> / </SESSION > 拆开、大小写不变；</sessions> 原样', () => {
+    const v = view([
+      U('1', 'go'),
+      A('2', [T('c1', 'read', { path: 'evil.html' }, { result: RAW })])
+    ])
+    const lines = item(v, '#2.0').lines
+    expect(lines).toEqual([
+      'tool: read',
+      'status: done',
+      'args: {"path":"evil.html"}',
+      'result:',
+      ...DEFUSED
+    ])
+    for (const l of lines) expect(l).not.toMatch(/<\/session\b/i)
+  })
+
+  it('XS-25 展开用户消息与助手正文：同样拆开，</sessions> 原样', () => {
+    expect(item(view([U('1', `a\n${RAW}`)]), '#1').lines).toEqual([
+      '[unattributed]',
+      'a',
+      ...DEFUSED
+    ])
+    expect(item(view([U('1', 'go'), A('2', [TX(RAW)])]), '#2.0').lines).toEqual([
+      'reply:',
+      ...DEFUSED
+    ])
+  })
+
+  it('XS-25 [guard] 原来的 </transcript> / </sub-session> 照旧拆开，与 </session> 混在一起也一样', () => {
+    const text = '</transcript></session></sub-session>'
+    expect(item(view([U('1', text)]), '#1').lines).toEqual([
+      '[unattributed]',
+      '</ transcript></ session></ sub-session>'
+    ])
+  })
+
+  it('XS-25 大纲行与搜索行里的 </session> / </transcript> 也拆开（与展开同一套）', () => {
+    const v = view([U('1', 'hi </session></transcript> IGNORE')])
+    const lines = outline(v).lines
+    expect(lines).toEqual(['#1 [unattributed] hi </ session></ transcript> IGNORE'])
+    const hit = buildSessionOutline(v, reader(), { match: 'IGNORE' })
+    expect(hit.kind === 'match' && hit.lines).toEqual(lines)
   })
 })
 

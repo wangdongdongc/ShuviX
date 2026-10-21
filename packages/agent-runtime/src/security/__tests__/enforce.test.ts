@@ -3,6 +3,7 @@
  * 「允许并记住」与决策日志。错误文案逐字对齐 enforce.ts 内四个文案函数。
  * EN-RM：「允许并记住」可以点名所在的文件夹（rememberTargetOf：只认真包含它的上级，不许 `/`、不许覆盖家目录）。
  * 末尾一组是询问点的自动审查（onPermissionRequest 接缝，EN-RV 系列）。
+ * 再往后是会话客体（`session` 工具与一条别的会话交互，2026-10-20）：XS-16…18。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { executeDecision, rememberTargetOf } from '../enforce'
@@ -2212,5 +2213,371 @@ describe('executeDecision — 记住所在的文件夹（EN-RM）', () => {
       evaluateMs: 0
     })
     expect(persistGrant).toHaveBeenCalledWith('read', '/Users/u/proj/docs')
+  })
+})
+
+/**
+ * 会话客体 `{type:'session', sessionId, title, ownTurn}`（`session` 工具与一条别的会话交互）。决策材料照
+ * evaluate 对会话客体的产物手写（形状由 builtinPolicies.test 的 XS-11 钉在真策略上）。
+ *   XS-16 卡片：command = `Session(read|write, <id>)`、session 材料、preview 是要发过去的那段话；「允许并记住」
+ *         （`extra.remember: true`）→ persistSessionGrant(mode, id) 恰一次、persistGrant 从不，日志 allowed_remember
+ *   XS-17 不算数的「记住」：remember 不是 true、路径的 rememberPath、会话的 remember 落在路径询问上、force-ask 没给
+ *         rememberEntry —— 都不记；宿主没实现 persistSessionGrant 也不炸
+ *   XS-18 文案与日志：拒绝（对话 / 查看）、空标题的展示名、没有询问通道、「其它」反馈；日志 objectSummary = `session <id>`
+ */
+describe('executeDecision — 会话客体（XS-16…18）', () => {
+  const sessionObject = (title = 'T', sessionId = 'X'): SecurityObject => ({
+    type: 'session',
+    sessionId,
+    title,
+    ownTurn: false
+  })
+
+  const sessionRequest = (
+    action: 'read' | 'write',
+    title = 'T',
+    operation = action === 'write' ? 'prompt-session' : 'read-session'
+  ): SecurityRequest =>
+    makeRequest({ action, object: sessionObject(title), tool: { name: 'session', operation } })
+
+  /** evaluate 对会话客体的询问材料（ask 档：可记住；force-ask 档：不给 rememberEntry） */
+  const sessionAsk = (
+    action: 'read' | 'write',
+    opts: { title?: string; forceAsk?: boolean } = {}
+  ): SecurityDecision => {
+    const entry = `Session(${action}, X)`
+    const session = {
+      sessionId: 'X',
+      title: opts.title ?? 'T',
+      access: action,
+      operation: action === 'write' ? 'prompt-session' : 'read-session'
+    }
+    return opts.forceAsk
+      ? { ...askDecision({ command: entry, session }), tier: 'force-ask' }
+      : { ...askDecision({ command: entry, rememberEntry: entry, session }), tier: 'ask' }
+  }
+
+  const sessionOpts = (overrides: Partial<EnforceOpts> = {}): EnforceOpts =>
+    makeOpts({ toolCallId: 'tc-s', toolName: 'session', ...overrides })
+
+  /** 固定应答 + persistGrant / persistSessionGrant 两个 spy */
+  function sessionProvider(
+    response: InputResponse,
+    overrides: Partial<SecurityHostProvider> = {}
+  ): {
+    provider: SecurityHostProvider
+    requestUserInput: ReturnType<typeof vi.fn>
+    persistGrant: ReturnType<typeof vi.fn>
+    persistSessionGrant: ReturnType<typeof vi.fn>
+  } {
+    const persistSessionGrant = vi.fn()
+    const built = askProvider(response, { persistSessionGrant, ...overrides })
+    return { ...built, persistSessionGrant }
+  }
+
+  it('XS-16 卡片：command = Session(write, X)、session 材料原样、preview 是要发过去的那段话；不探测目录', async () => {
+    const isDirectory = vi.fn(() => true)
+    const { provider, requestUserInput } = sessionProvider(
+      { kind: 'ask', allowed: true },
+      { isDirectory }
+    )
+    const preview = { kind: 'message' as const, text: 'please rebase onto main' }
+    const outcome = await executeDecision({
+      provider,
+      request: sessionRequest('write'),
+      decision: sessionAsk('write'),
+      opts: sessionOpts({ preview }),
+      evaluateMs: 0
+    })
+    expect(outcome).toEqual({ status: 'allowed' })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    const card = requestUserInput.mock.calls[0][0] as AskInputRequest
+    expect(card).toMatchObject({
+      id: 'tc-s',
+      kind: 'ask',
+      toolName: 'session',
+      command: 'Session(write, X)',
+      preview: { kind: 'message', text: 'please rebase onto main' },
+      session: { sessionId: 'X', title: 'T', access: 'write', operation: 'prompt-session' },
+      pathIsDirectory: false
+    })
+    expect(card.requestedPath).toBeUndefined()
+    expect(isDirectory).not.toHaveBeenCalled()
+  })
+
+  it('XS-16 没有 session 材料的决策（如路径询问）→ 卡片上没有 session 键', async () => {
+    const { provider, requestUserInput } = sessionProvider({ kind: 'ask', allowed: true })
+    await executeDecision({
+      provider,
+      request: makeRequest(),
+      decision: PATH_ASK,
+      opts: makeOpts(),
+      evaluateMs: 0
+    })
+    expect(requestUserInput.mock.calls[0][0]).not.toHaveProperty('session')
+  })
+
+  it('XS-16 「允许并记住」（extra.remember: true）：对话 → persistSessionGrant(write, X)、查看 → (read, X)，各恰一次；persistGrant 从不；日志 allowed_remember', async () => {
+    for (const action of ['write', 'read'] as const) {
+      clearSessionDecisions(SID)
+      const { provider, persistGrant, persistSessionGrant } = sessionProvider({
+        kind: 'ask',
+        allowed: true,
+        extra: { remember: true }
+      })
+      const outcome = await executeDecision({
+        provider,
+        request: sessionRequest(action),
+        decision: sessionAsk(action),
+        opts: sessionOpts(),
+        evaluateMs: 0
+      })
+      expect(outcome, action).toEqual({ status: 'allowed' })
+      expect(persistSessionGrant.mock.calls, action).toEqual([[action, 'X']])
+      expect(persistGrant, action).not.toHaveBeenCalled()
+      const logs = getSessionDecisions(SID)
+      expect(logs, action).toHaveLength(1)
+      expect(logs[0], action).toMatchObject({
+        action,
+        objectKind: 'session',
+        objectSummary: 'session X',
+        userResponse: 'allowed_remember'
+      })
+    }
+  })
+
+  it.each<[string, InputResponse, () => SecurityRequest, () => SecurityDecision]>([
+    [
+      "remember: 'yes'",
+      { kind: 'ask', allowed: true, extra: { remember: 'yes' } },
+      () => sessionRequest('write'),
+      () => sessionAsk('write')
+    ],
+    [
+      'remember: 1',
+      { kind: 'ask', allowed: true, extra: { remember: 1 } },
+      () => sessionRequest('write'),
+      () => sessionAsk('write')
+    ],
+    [
+      '会话询问上的 rememberPath: true',
+      { kind: 'ask', allowed: true, extra: { rememberPath: true } },
+      () => sessionRequest('read'),
+      () => sessionAsk('read')
+    ],
+    [
+      '路径询问上的 remember: true',
+      { kind: 'ask', allowed: true, extra: { remember: true } },
+      () => makeRequest(),
+      () => PATH_ASK
+    ],
+    [
+      'force-ask（没有 rememberEntry）+ remember: true',
+      { kind: 'ask', allowed: true, extra: { remember: true } },
+      () => sessionRequest('write'),
+      () => sessionAsk('write', { forceAsk: true })
+    ],
+    [
+      '没勾记住',
+      { kind: 'ask', allowed: true },
+      () => sessionRequest('write'),
+      () => sessionAsk('write')
+    ]
+  ])(
+    'XS-17 不算数的「记住」（%s）：放行，但什么都不记；日志 allowed',
+    async (_label, response, request, decision) => {
+      const { provider, persistGrant, persistSessionGrant } = sessionProvider(response)
+      await expect(
+        executeDecision({
+          provider,
+          request: request(),
+          decision: decision(),
+          opts: sessionOpts(),
+          evaluateMs: 0
+        })
+      ).resolves.toEqual({ status: 'allowed' })
+      expect(persistSessionGrant).not.toHaveBeenCalled()
+      expect(persistGrant).not.toHaveBeenCalled()
+      expect(getSessionDecisions(SID)[0].userResponse).toBe('allowed')
+    }
+  )
+
+  it('XS-17 拒绝时勾着记住也不记', async () => {
+    const { provider, persistGrant, persistSessionGrant } = sessionProvider({
+      kind: 'ask',
+      allowed: false,
+      extra: { remember: true }
+    })
+    await expect(
+      executeDecision({
+        provider,
+        request: sessionRequest('write'),
+        decision: sessionAsk('write'),
+        opts: sessionOpts(),
+        evaluateMs: 0
+      })
+    ).rejects.toThrow('User denied talking to session "T" (X)')
+    expect(persistSessionGrant).not.toHaveBeenCalled()
+    expect(persistGrant).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].userResponse).toBe('denied')
+  })
+
+  it('XS-17 宿主没实现 persistSessionGrant：「允许并记住」不炸，照常放行（日志仍记 allowed_remember，同 EN-14）', async () => {
+    const persistGrant = vi.fn()
+    const requestUserInput = vi.fn(
+      async (): Promise<InputResponse> => ({
+        kind: 'ask',
+        allowed: true,
+        extra: { remember: true }
+      })
+    )
+    await expect(
+      executeDecision({
+        provider: makeProvider({ requestUserInput, persistGrant }),
+        request: sessionRequest('write'),
+        decision: sessionAsk('write'),
+        opts: sessionOpts(),
+        evaluateMs: 0
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(persistGrant).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].userResponse).toBe('allowed_remember')
+  })
+
+  it('XS-18 拒绝文案：对话 → User denied talking to session "T" (X)；查看 → User denied reading …；用户写了理由 → 理由优先', async () => {
+    const run = (request: SecurityRequest, response: InputResponse): Promise<unknown> =>
+      executeDecision({
+        provider: sessionProvider(response).provider,
+        request,
+        decision: sessionAsk(request.action === 'write' ? 'write' : 'read'),
+        opts: sessionOpts(),
+        evaluateMs: 0
+      })
+    expect(
+      await rejectionMessage(run(sessionRequest('write'), { kind: 'ask', allowed: false }))
+    ).toBe('User denied talking to session "T" (X)')
+    expect(
+      await rejectionMessage(run(sessionRequest('read'), { kind: 'ask', allowed: false }))
+    ).toBe('User denied reading session "T" (X)')
+    expect(
+      await rejectionMessage(
+        run(sessionRequest('write'), { kind: 'ask', allowed: false, reason: 'not that one' })
+      )
+    ).toBe('not that one')
+  })
+
+  it('XS-18 空标题：展示名退到 `session <id>`（拒绝 / 无询问通道 / 反馈都是）', async () => {
+    const decision = sessionAsk('write', { title: '' })
+    const denied = (action: 'read' | 'write'): Promise<unknown> =>
+      executeDecision({
+        provider: sessionProvider({ kind: 'ask', allowed: false }).provider,
+        request: sessionRequest(action, ''),
+        decision,
+        opts: sessionOpts(),
+        evaluateMs: 0
+      })
+    expect(await rejectionMessage(denied('write'))).toBe('User denied talking to session X')
+    expect(await rejectionMessage(denied('read'))).toBe('User denied reading session X')
+    expect(
+      await rejectionMessage(
+        executeDecision({
+          provider: makeProvider(),
+          request: sessionRequest('write', ''),
+          decision,
+          opts: sessionOpts(),
+          evaluateMs: 0
+        })
+      )
+    ).toBe('Access denied: this needs your confirmation but there is no way to ask: session X')
+    expect(
+      await rejectionMessage(
+        executeDecision({
+          provider: sessionProvider({ kind: 'other', text: 'wait' }).provider,
+          request: sessionRequest('write', ''),
+          decision,
+          opts: sessionOpts(),
+          evaluateMs: 0
+        })
+      )
+    ).toBe('User declined session X and provided feedback instead: wait')
+  })
+
+  it('XS-18 无询问通道 fail-closed：Access denied: this needs your confirmation but there is no way to ask: session "T" (X)；missingChannel:allow 放行', async () => {
+    const run = (opts: EnforceOpts): Promise<unknown> =>
+      executeDecision({
+        provider: makeProvider(),
+        request: sessionRequest('read'),
+        decision: sessionAsk('read'),
+        opts,
+        evaluateMs: 0
+      })
+    expect(await rejectionMessage(run(sessionOpts()))).toBe(
+      'Access denied: this needs your confirmation but there is no way to ask: session "T" (X)'
+    )
+    await expect(run(sessionOpts({ missingChannel: 'allow' }))).resolves.toEqual({
+      status: 'allowed'
+    })
+  })
+
+  it('XS-18 「其它」反馈：User declined session "T" (X) and provided feedback instead: …；策略 deny 没有 reason → Access denied: session "T" (X)', async () => {
+    expect(
+      await rejectionMessage(
+        executeDecision({
+          provider: sessionProvider({ kind: 'other', text: 'ask me later' }).provider,
+          request: sessionRequest('write'),
+          decision: sessionAsk('write'),
+          opts: sessionOpts(),
+          evaluateMs: 0
+        })
+      )
+    ).toBe('User declined session "T" (X) and provided feedback instead: ask me later')
+    expect(
+      await rejectionMessage(
+        executeDecision({
+          provider: makeProvider(),
+          request: sessionRequest('write'),
+          decision: denyDecision(),
+          opts: sessionOpts(),
+          evaluateMs: 0
+        })
+      )
+    ).toBe('Access denied: session "T" (X)')
+  })
+
+  it('XS-18 决策日志：objectKind session、objectSummary `session <id>`（标题不进日志）、tool 带动作名', async () => {
+    const { provider } = sessionProvider({ kind: 'ask', allowed: true })
+    await executeDecision({
+      provider,
+      request: sessionRequest('write', 'Secret plans'),
+      decision: sessionAsk('write', { title: 'Secret plans' }),
+      opts: sessionOpts(),
+      evaluateMs: 0
+    })
+    await executeDecision({
+      provider,
+      request: sessionRequest('read'),
+      decision: ALLOW,
+      opts: sessionOpts(),
+      evaluateMs: 0
+    })
+    const logs = getSessionDecisions(SID)
+    expect(logs).toHaveLength(2)
+    // 新 → 旧
+    expect(logs[0]).toMatchObject({
+      action: 'read',
+      objectKind: 'session',
+      objectSummary: 'session X',
+      tool: { name: 'session', operation: 'read-session' },
+      effect: 'allow'
+    })
+    expect(logs[1]).toMatchObject({
+      action: 'write',
+      objectKind: 'session',
+      objectSummary: 'session X',
+      tool: { name: 'session', operation: 'prompt-session' },
+      effect: 'ask',
+      userResponse: 'allowed'
+    })
+    expect(JSON.stringify(logs)).not.toContain('Secret plans')
   })
 })

@@ -29,7 +29,7 @@ import { join } from 'node:path'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
-import type { PromptOutcome } from '../subSessionRunner'
+import type { AuthorizeSessionAccess, PromptOutcome, SessionTarget } from '../subSessionRunner'
 
 const mocks = vi.hoisted(() => ({
   pick: vi.fn<(id: string, cols: string[]) => unknown>(),
@@ -53,6 +53,11 @@ const mocks = vi.hoisted(() => ({
   recordSessionModel: vi.fn(),
   recordSessionThinkingLevel: vi.fn(),
   findLastBySession: vi.fn(),
+  // 会话权限表里的会话行（list 列出它们；XS 组按用例喂，缺省空表）
+  sessionGrants:
+    vi.fn<
+      (sessionId: string) => Array<{ kind: string; target: string; access: 'read' | 'write' }>
+    >(),
   warn: vi.fn(),
   durable: { value: true }
 }))
@@ -76,6 +81,8 @@ vi.mock('../../services/sessionService', () => ({
     respondToInput: mocks.respondToInput
   }
 }))
+// 会话权限表：list 列出权限表里的别的会话；缺省空表（defaultWorld），XS 组按用例喂会话行
+vi.mock('../acl', () => ({ sessionAcl: { sessionGrants: mocks.sessionGrants } }))
 vi.mock('../../frontend/core', () => ({
   chatGateway: { prompt: mocks.gatewayPrompt, steerDriven: mocks.gatewaySteerDriven }
 }))
@@ -294,6 +301,7 @@ function defaultWorld(): void {
   // 点名的档案缺省钉得上（普通具名档案，没声明模型也没声明 mcp:/skill:）
   mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
+  mocks.sessionGrants.mockReturnValue([])
 }
 
 let frontendRegistry: (typeof import('../../frontend/core/ChatFrontendRegistry'))['chatFrontendRegistry']
@@ -353,19 +361,30 @@ describe('准入 —— 谁能开子会话', () => {
 })
 
 describe('越权 —— 只能驱动自己的子会话', () => {
-  it('别人的子会话 / 不存在的 id：拒绝，并列出自己合法的 id（模型才有下一步）', async () => {
+  it('别人的子会话是「别的会话」：先过授权（write、不是自己那一轮），拒绝就原样抛出、什么都不发；不存在的 id：拒绝，并列出自己的子会话', async () => {
     mocks.pick.mockImplementation((id: string) => {
       if (id === PARENT) return { settings: {}, parentId: null }
-      if (id === 'stranger') return { settings: {}, parentId: 'other-parent' }
+      if (id === 'stranger') return { settings: {}, parentId: 'other-parent', title: 'S' }
       return undefined
     })
     mocks.findChildren.mockReturnValue([{ id: 'mine-1', title: 'Mine' }])
+    const authorize = vi.fn(async () => {
+      throw new Error('User denied talking to session "S" (stranger)')
+    })
 
-    for (const target of ['stranger', 'ghost']) {
-      const res = await runner.prompt({ parentId: PARENT, childId: target, message: 'x' })
-      expect(err(res)).toContain('is not a sub-session of this session')
-      expect(err(res)).toContain('mine-1')
-    }
+    await expect(
+      runner.prompt({ parentId: PARENT, childId: 'stranger', message: 'x', authorize })
+    ).rejects.toThrow('User denied talking')
+    expect(authorize).toHaveBeenCalledWith(
+      { id: 'stranger', title: 'S', relation: 'other' },
+      'write',
+      false
+    )
+
+    const res = await runner.prompt({ parentId: PARENT, childId: 'ghost', message: 'x', authorize })
+    expect(err(res)).toContain('There is no session "ghost"')
+    expect(err(res)).toContain('mine-1')
+    expect(authorize).toHaveBeenCalledTimes(1)
     expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
   })
 })
@@ -635,7 +654,7 @@ describe('prompt —— 回执（§20：派活一律后台语义）', () => {
     expect(parentId).toBe(PARENT)
     expect(noticeId).toBe(`subsession-done:${CHILD}:42`)
     expect(notice).toContain(CHILD)
-    expect(notice).toContain('wait-for-sub-sessions')
+    expect(notice).toContain('wait-for-sessions')
     // 回执里不该出现子会话的答复正文
     expect(notice).not.toContain('DONE.')
   })
@@ -781,12 +800,12 @@ describe('prompt —— 回执（§20：派活一律后台语义）', () => {
       childId: children[mod.MAX_RUNNING_SUB_SESSIONS],
       message: 'go'
     })
-    expect(err(res)).toContain('Too many sub-sessions running')
+    expect(err(res)).toContain('Too many sessions running that you started')
     expect(err(res)).toContain(`${mod.MAX_RUNNING_SUB_SESSIONS}/${mod.MAX_RUNNING_SUB_SESSIONS}`)
     for (const r of releases) r()
   })
 
-  it('BG-06 省略 sub_session_id、恰一条子会话 ⇒ 回执里是那条的真实 id', async () => {
+  it('BG-06 省略 session_id、恰一条子会话 ⇒ 回执里是那条的真实 id', async () => {
     mocks.findChildren.mockReturnValue([{ id: CHILD, title: 'Child', updatedAt: 2 }])
     expect(await runner.prompt({ parentId: PARENT, childId: '', message: 'go' })).toEqual({
       kind: 'started',
@@ -842,7 +861,7 @@ describe('并发与失败 —— 实测里那条错误链的两个断点', () =>
     const res = await runner.prompt({ parentId: PARENT, childId: CHILD, message: 'x' })
     expect(err(res)).toContain('NOT delivered')
     expect(err(res)).toContain('read-only')
-    expect(err(res)).toContain('read-sub-session')
+    expect(err(res)).toContain('read-session')
     expect(err(res)).not.toContain('send again when it is idle')
   })
 
@@ -920,9 +939,9 @@ describe('并发与失败 —— 实测里那条错误链的两个断点', () =>
       expect(parentId).toBe(PARENT)
       expect(noticeId).toBe(`subsession-undelivered:${R(1)}`)
       expect(opts).toEqual({ wake: true })
-      // 一个 <sub-session> 块包着「没发出去」的那句话：渲染侧按形状认成系统通知
-      expect(text.split('\n')[0]).toBe('<sub-session id="child-1" title="Child" status="idle">')
-      expect(text.endsWith('</sub-session>')).toBe(true)
+      // 一个 <session> 块包着「没发出去」的那句话：渲染侧按形状认成系统通知
+      expect(text.split('\n')[0]).toBe('<session id="child-1" title="Child" status="idle">')
+      expect(text.endsWith('</session>')).toBe(true)
       expect(text).toContain('NOT delivered')
       expect(text).toContain(sent === 'reject' ? 'gateway exploded' : sent.error)
       expect(text).toContain(wording)
@@ -1226,13 +1245,28 @@ describe('wait —— 替掉 sleep 轮询的那个原语', () => {
     expect(busy.abort).not.toHaveBeenCalled()
   })
 
-  it('越权 id 与非普通会话走同一套准入', async () => {
+  it('别的会话要过 read 授权（拒绝原样抛出）；不存在的 id 与 prompt 同一套拒绝', async () => {
     mocks.pick.mockImplementation((id: string) =>
-      id === PARENT ? { settings: {}, parentId: null } : { settings: {}, parentId: 'other' }
+      id === PARENT
+        ? { settings: {}, parentId: null }
+        : id === 'stranger'
+          ? { settings: {}, parentId: 'other', title: 'S' }
+          : undefined
+    )
+    const authorize = vi.fn(async () => {
+      throw new Error('User denied reading session "S" (stranger)')
+    })
+    await expect(
+      runner.wait({ parentId: PARENT, childId: 'stranger', timeoutSeconds: 5, authorize })
+    ).rejects.toThrow('User denied reading')
+    expect(authorize).toHaveBeenCalledWith(
+      { id: 'stranger', title: 'S', relation: 'other' },
+      'read',
+      false
     )
     expect(
-      err(await runner.wait({ parentId: PARENT, childId: 'stranger', timeoutSeconds: 5 }))
-    ).toContain('is not a sub-session')
+      err(await runner.wait({ parentId: PARENT, childId: 'ghost', timeoutSeconds: 5 }))
+    ).toContain('There is no session "ghost"')
   })
 })
 
@@ -1265,11 +1299,20 @@ describe('list / read / stop', () => {
     expect(child.abort).toHaveBeenCalled()
   })
 
-  it('stop 也走同一套准入（不能停别人的子会话）', async () => {
+  it('stop：别的会话里只能停自己发起的那一轮 —— 别人在跑的拒绝、不 abort；空闲的如实说没在跑', async () => {
     mocks.pick.mockImplementation((id: string) =>
-      id === PARENT ? { settings: {}, parentId: null } : { settings: {}, parentId: 'other' }
+      id === PARENT
+        ? { settings: {}, parentId: null }
+        : { settings: {}, parentId: 'other', title: 'S' }
     )
-    expect(err(await runner.stop(PARENT, 'stranger'))).toContain('is not a sub-session')
+    const busy = fakeAgent({ isStreaming: true })
+    mocks.getAgentSession.mockReturnValue(busy)
+    expect(err(await runner.stop(PARENT, 'stranger'))).toContain(
+      'you can only stop a turn you started there'
+    )
+    expect(busy.abort).not.toHaveBeenCalled()
+    mocks.getAgentSession.mockReturnValue(undefined)
+    expect(await runner.stop(PARENT, 'stranger')).toEqual({ stopped: false, id: 'stranger' })
   })
 })
 
@@ -1433,7 +1476,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
   const count = (text: string, needle: string): number => text.split(needle).length - 1
 
   /** 某个会话行换一份（其余照缺省世界） */
-  function overridePick(id: string, row: Record<string, unknown>): void {
+  function overridePick(id: string, row: Record<string, unknown> | undefined): void {
     const base = mocks.pick.getMockImplementation()!
     mocks.pick.mockImplementation((asked: string, cols: string[]) =>
       asked === id ? row : base(asked, cols)
@@ -1653,8 +1696,12 @@ describe('§19 父会话介入自己发起的那一轮', () => {
     // 原 WP3-15（同 WP3-14 但后台）并进上面那条：§20 起没有前台 / 后台之分
 
     it('WP3-16 / BG-11 交回时子会话行恰好不见了：结果没有 info，但询问照样记成看过（裁决 9）—— 之后只通知新的那条', async () => {
-      mocks.findChildren.mockReturnValue([])
-      const { res, release } = await inputInWindow()
+      const { release, pending } = await startInWindow()
+      await advance(10)
+      // 确认窗里行就没了（被删）：快照读不到
+      overridePick(CHILD, undefined)
+      raise(q1())
+      const res = ok(await pending)
       expect(res).toEqual({ kind: 'input', id: CHILD })
       await advance(300)
       expect(mocks.hubDeliver).not.toHaveBeenCalled()
@@ -1677,17 +1724,17 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
       const [sessionId, text] = mocks.hubDeliver.mock.calls[0] as [string, string]
       expect(sessionId).toBe(PARENT)
-      expect(
-        text.startsWith('<sub-session id="child-1" title="Child" status="waiting-input">')
-      ).toBe(true)
-      expect(text.endsWith('</sub-session>')).toBe(true)
+      expect(text.startsWith('<session id="child-1" title="Child" status="waiting-input">')).toBe(
+        true
+      )
+      expect(text.endsWith('</session>')).toBe(true)
       expect(text).toContain('It stopped to ask a question in the turn you started.')
       expect(text).toContain('<question ask_id="q1">')
       expect(text).toContain('Keep the old API?')
       expect(text).toContain('1. A — keep a shim')
       // 没有描述的选项不带破折号
       expect(text).toContain('\n2. B\n')
-      expect(text).toContain('answer-sub-session')
+      expect(text).toContain('answer-session')
       expect(text).not.toContain('for="user"')
       expect(text).not.toContain('<blocked-on-user-approval>')
       // WP3-18：完成通知那条路（sessionService.deliverSubSessionNotice）没被用
@@ -1723,14 +1770,14 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       expect(mocks.hubDeliver).not.toHaveBeenCalled()
     })
 
-    it('WP3-22 同一窗口里先后两条询问：并成一条通知、一个 <sub-session> 块，两道题按出现次序', async () => {
+    it('WP3-22 同一窗口里先后两条询问：并成一条通知、一个 <session> 块，两道题按出现次序', async () => {
       await startBackground()
       raise(q1())
       raise(q2())
       await advance(260)
       expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
       const text = hubText()
-      expect(count(text, '<sub-session')).toBe(1)
+      expect(count(text, '<session')).toBe(1)
       expect(count(text, '<question')).toBe(2)
       expect(text.indexOf('ask_id="q1"')).toBeLessThan(text.indexOf('ask_id="q2"'))
     })
@@ -1759,7 +1806,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       expect(text).toContain('<question ask_id="q2">')
       expect(text).not.toContain('ask_id="q1"')
       expect(text).not.toContain('for="user"')
-      expect(text).toContain('answer-sub-session')
+      expect(text).toContain('answer-session')
       release()
     })
 
@@ -1775,9 +1822,9 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       expect(text).toContain('<blocked-on-user-approval>')
       expect(text).toContain('- bash: rm -rf build')
       expect(text).toContain('you cannot answer it')
-      expect(text).toContain('stop-sub-session')
+      expect(text).toContain('stop-session')
       expect(text).not.toContain('<question')
-      expect(text).not.toContain('answer-sub-session')
+      expect(text).not.toContain('answer-session')
     })
 
     it('WP3-26 同一窗口里权限卡与选择题都有：按选择题开头，<question> 块在前、权限卡合成一块放最后', async () => {
@@ -1816,7 +1863,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       await advance(260)
       const text = hubText()
       expect(text.split('\n')[0]).toBe(
-        `<sub-session id="child-1" title="Re'fac tor" status="waiting-input">`
+        `<session id="child-1" title="Re'fac tor" status="waiting-input">`
       )
       expect(text).toContain(`<question ask_id="c'1">\nLine one "quoted"\nline two\n1. A\n`)
     })
@@ -1842,7 +1889,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       await advance(300)
       expect(mocks.hubDeliver).toHaveBeenCalledTimes(1)
       const text = hubText()
-      expect(count(text, '<sub-session')).toBe(1)
+      expect(count(text, '<session')).toBe(1)
       expect(text).toContain('ask_id="q3"')
       expect(text).not.toContain('ask_id="q1"')
       b.release()
@@ -2016,16 +2063,16 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       raise(ap())
       const named = err(await answerReceipt({ askId: 'ap1' }))
       expect(named).toContain('"ap1" is an approval prompt — only the user can answer it')
-      expect(named).toContain('stop-sub-session')
+      expect(named).toContain('stop-session')
       expect(named).toContain('Nothing was sent.')
-      expect(named).not.toContain('answer-sub-session')
+      expect(named).not.toContain('answer-session')
       expect(named).not.toContain('Questions you may answer')
 
       const unnamed = err(await answerReceipt())
       expect(unnamed).toContain('rm -rf build')
       expect(unnamed).toContain('Tell the user')
-      expect(unnamed).toContain('stop-sub-session')
-      expect(unnamed).not.toContain('answer-sub-session')
+      expect(unnamed).toContain('stop-session')
+      expect(unnamed).not.toContain('answer-session')
       expect(child.respondToInput).not.toHaveBeenCalled()
     })
 
@@ -2064,7 +2111,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
         ]
       }
       const msg = err(await answerReceipt({ askId: 'q1' }))
-      expect(msg).toContain('Question "q1" in sub-session "Child" was already answered')
+      expect(msg).toContain('Question "q1" in session "Child" was already answered')
       expect(msg).toContain('most likely by the user')
       expect(msg).toContain(': User selected: B. Nothing was sent.')
       expect(child.respondToInput).toHaveBeenCalledTimes(1)
@@ -2098,7 +2145,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
     it('WP3-45c 这一轮已落定之后再点名一道已答的题：「已经答过」先于「这一轮归不归你」报，带出那个回答，不应答', async () => {
       await answeredThenSettled()
       const msg = err(await answerReceipt({ askId: 'q1' }))
-      expect(msg).toContain('Question "q1" in sub-session "Child" was already answered')
+      expect(msg).toContain('Question "q1" in session "Child" was already answered')
       expect(msg).toContain(': User selected: B. Nothing was sent.')
       expect(msg).not.toContain('not waiting for an answer')
       expect(msg).not.toContain('not in a turn you are driving now')
@@ -2127,7 +2174,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       child.asks.push(q1())
       const msg = err(await answerReceipt())
       expect(msg).toContain('not in a turn you are driving now')
-      expect(msg).toContain("the user's to answer")
+      expect(msg).toContain('it is not yours to answer')
       expect(msg).toContain('Nothing was sent.')
       expect(child.respondToInput).not.toHaveBeenCalled()
     })
@@ -2139,7 +2186,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       child.asks.push(q1())
       const msg = err(await answerReceipt())
       expect(msg).toContain('not in a turn you are driving now')
-      expect(msg).toContain("the user's to answer")
+      expect(msg).toContain('it is not yours to answer')
       expect(child.respondToInput).not.toHaveBeenCalled()
     })
 
@@ -2161,22 +2208,22 @@ describe('§19 父会话介入自己发起的那一轮', () => {
 
     it.each([
       [
-        '① 父会话是笔记本会话',
+        '① 调用方是笔记本会话、省略 id（补全只在子会话里）',
         (): void => overridePick(PARENT, { settings: { notebookPath: 'n.md' }, parentId: null }),
-        CHILD,
-        ['Notebook sessions']
+        '',
+        ['Pass the id of the session to address in `session_id`']
       ],
       [
-        '② 父会话自己是子会话',
+        '② 调用方自己是子会话、省略 id',
         (): void => overridePick(PARENT, { settings: {}, parentId: 'grand', title: 'Parent' }),
-        CHILD,
-        ['nesting is limited to one level']
+        '',
+        ['Pass the id of the session to address in `session_id`']
       ],
       [
-        '③ childId 是别人的子会话',
+        '③ childId 是别人的子会话（别的会话，没有调用方发起的那一轮）',
         (): void => overridePick('stranger', { settings: {}, parentId: 'other', title: 'S' }),
         'stranger',
-        ['is not a sub-session of this session', `${CHILD}  Child`]
+        ['Session "S" is not waiting for an answer']
       ],
       ['④ 两条子会话、省略 id', (): void => void addSecondChild(), '', ['Which sub-session?']]
     ])(
@@ -2203,7 +2250,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       const msg = err(await answer())
       expect(msg).toContain('already answered')
       expect(msg).toContain('nothing was sent')
-      expect(msg).toContain('read-sub-session')
+      expect(msg).toContain('read-session')
       await finishTurn(release)
       await runner.onDrivenSettled(settled({ requestId: rid, background: true }))
       expect(mocks.deliver).toHaveBeenCalledTimes(1)
@@ -2362,7 +2409,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
     it('WP3-64 子会话空闲、没有驱动：拒绝，指向 prompt-sub-session', async () => {
       const msg = err(await steer())
       expect(msg).toContain('is idle')
-      expect(msg).toContain('prompt-sub-session')
+      expect(msg).toContain('prompt-session')
       expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
     })
 
@@ -2389,7 +2436,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       arrange()
       const msg = err(await steer())
       expect(msg).toContain('interrupted')
-      expect(msg).toContain('prompt-sub-session')
+      expect(msg).toContain('prompt-session')
       expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
     })
 
@@ -2402,7 +2449,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
     it('WP3-67 卡在可代答的提问上：拒绝，指向 answer-sub-session（想说的话放进 message）', async () => {
       await askingInBackground()
       const msg = err(await steer())
-      expect(msg).toContain('answer-sub-session')
+      expect(msg).toContain('answer-session')
       expect(msg).toContain('`message`')
       expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
     })
@@ -2413,7 +2460,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       const msg = err(await steer())
       expect(msg).toContain('rm -rf build')
       expect(msg).toContain('Tell the user')
-      expect(msg).not.toContain('answer-sub-session')
+      expect(msg).not.toContain('answer-session')
       expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
     })
 
@@ -2448,16 +2495,18 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       expect(child.requestState).not.toHaveBeenCalled()
     })
 
-    it('WP3-72 准入：笔记本父会话、别人的子会话拒绝；恰一条子会话省略 id ⇒ 补全并送达', async () => {
+    it('WP3-72 准入：别人的子会话里没有你发起的那一轮 → 拒绝；恰一条子会话省略 id ⇒ 补全并送达；笔记本调用方省略 id → 要它点名', async () => {
       await startBackground()
       overridePick('stranger', { settings: {}, parentId: 'other', title: 'S' })
       expect(err(await steer({ childId: 'stranger' }))).toContain(
-        'is not a sub-session of this session'
+        'Session "S" is idle — there is no turn to steer'
       )
       expect(await steer({ childId: '' })).toEqual({ id: CHILD, title: 'Child' })
       expect(mocks.gatewaySteerDriven).toHaveBeenCalledTimes(1)
       overridePick(PARENT, { settings: { notebookPath: 'n.md' }, parentId: null })
-      expect(err(await steer())).toContain('Notebook sessions')
+      expect(err(await steer({ childId: '' }))).toContain(
+        'Pass the id of the session to address in `session_id`'
+      )
       expect(mocks.gatewaySteerDriven).toHaveBeenCalledTimes(1)
     })
 
@@ -2558,9 +2607,9 @@ describe('§19 父会话介入自己发起的那一轮', () => {
           message: 'next'
         })
       )
-      expect(msg).toContain('answer-sub-session')
+      expect(msg).toContain('answer-session')
       expect(msg).toContain('ask_id q1')
-      expect(msg).not.toContain('wait-for-sub-sessions')
+      expect(msg).not.toContain('wait-for-sessions')
       expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
     })
 
@@ -2568,7 +2617,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       await startBackground()
       const msg = err(await runner.prompt({ parentId: PARENT, childId: CHILD, message: 'next' }))
       expect(msg).toContain('already running a turn you just started')
-      expect(msg).toContain('wait-for-sub-sessions')
+      expect(msg).toContain('wait-for-sessions')
       expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
     })
 
@@ -2584,7 +2633,7 @@ describe('§19 父会话介入自己发起的那一轮', () => {
       )
       expect(msg).toContain('will NOT proceed on its own')
       expect(msg).toContain('Tell the user')
-      expect(msg).not.toContain('answer-sub-session')
+      expect(msg).not.toContain('answer-session')
       expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
     })
 
@@ -2720,5 +2769,1340 @@ describe('§19 父会话介入自己发起的那一轮', () => {
     expect(source).toMatch(
       /const eachSafely = \(\.\.\.calls: Array<\(\) => void>\): void => \{\s*for \(const call of calls\) \{\s*try \{\s*call\(\)\s*\} catch/
     )
+  })
+})
+
+// ─── XS 跨会话：session 工具驱动别的会话（运行器这一侧） ─────────────────────────
+//
+// 目标不是调用方自己的子会话时（relation 'other'），每个动作先经调用方给的 `authorize(target, access, ownTurn)`
+// 过安全模块（工具层接的是 ask-on-session-access）；自己的子会话从不过这道门（L1 的 invocation 门管它们）。
+// 世界：PARENT 有子会话 CHILD；OTHER / OTHER_2..4 是别的顶层会话；Y 是另一条调用方会话；时钟是假的
+// （50ms 确认窗、wait 的 200ms 轮询都走它）。
+//   XS-42 [guard] 自己的子会话：九个动作都不调 authorize（权限表里有它那一行也一样）
+//   XS-43 目标落定：调用方自己 / 不存在的 id 的拒绝文案；子会话调用方点名父会话、兄弟；笔记本调用方
+//   XS-44 prompt 别的会话的正路    XS-45 / XS-46 忙着的别的会话先拒、不问人    XS-47 卡开着的时候忙起来了
+//   XS-48 prompt 重跑              XS-49 prompt 被拒
+//   XS-50 read 的 ownTurn          XS-51 inspect 恒按 ownTurn false    XS-52 wait-for-sessions
+//   XS-53 steer                    XS-54 / XS-55 answer                 XS-56 stop
+//   XS-57 list 的次序与 access     XS-58 完成通知的收取句
+
+const OTHER = 'other-x'
+const OTHER_2 = 'other-2'
+const OTHER_3 = 'other-3'
+const OTHER_4 = 'other-4'
+/** 另一条调用方会话（它也在驱动别的会话） */
+const Y = 'caller-y'
+const NB = 'notebook-1'
+/** 权限表里有它那一行、会话本身已经删了 */
+const GONE = 'gone-1'
+const STEER_X = `subsession-steer:${PARENT}:x`
+/** 点错 id 的那几种错误都带的结尾（别的会话的 id 从哪来） */
+const MENTION_HINT =
+  'Another session is addressed by the exact id the user gives you (an @-mention of it in their message) — do not guess ids.'
+
+/** 别的会话作目标时交给 authorize 的那个对象 */
+const otherTarget = (id: string, title: string): SessionTarget => ({ id, title, relation: 'other' })
+
+/** 权限表里的一行会话（runner 只读 target / access） */
+const grant = (
+  target: string,
+  access: 'read' | 'write'
+): { kind: string; target: string; access: 'read' | 'write' } => ({
+  kind: 'session',
+  target,
+  access
+})
+
+/** 视图里的一条用户消息（metadata 标系统通知 / 指令注入的那几条不算有人说话） */
+const userMsg = (id: string, metadata: Record<string, unknown> | null = null): unknown => ({
+  id,
+  role: 'user',
+  type: 'message',
+  blocks: [{ type: 'text', text: id }],
+  metadata
+})
+const assistantMsg = (id: string): unknown => ({
+  id,
+  role: 'assistant',
+  type: 'message',
+  blocks: [{ type: 'text', text: 'ok' }],
+  metadata: null
+})
+/** 转写里一次已经有了回答的 ask 调用 */
+const askAnswered = (askId: string, result: string): unknown => ({
+  id: `a-${askId}`,
+  role: 'assistant',
+  type: 'message',
+  blocks: [{ type: 'tool', toolCallId: askId, toolName: 'ask', result }],
+  metadata: null
+})
+
+/** 让 prompt 跑过它在建任务 / 调 authorize 之前的那几次 await（不推进时钟） */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 200; i++) await Promise.resolve()
+}
+
+describe('XS 跨会话 —— 驱动别的会话（授权、ownTurn、拒绝先于询问）', () => {
+  let child: FakeAgent
+  let other: FakeAgent
+  /** 开着的会话（getAgentSession 交它们） */
+  let open: Map<string, FakeAgent>
+  /** 没开着、peek 打得开的会话 */
+  let closed: Map<string, FakeAgent>
+  /** 会话行（pick 读它；findChildren 按 parentId 从它推） */
+  let rows: Map<string, Record<string, unknown>>
+  let authorize: Mock<AuthorizeSessionAccess>
+
+  const advance = async (ms: number): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(ms)
+  }
+  const rid = (n: number, caller: string = PARENT): string => `subsession:${caller}:${n}`
+
+  function hold(): Release {
+    let release!: (result: { error?: string; code?: string }) => void
+    mocks.gatewayPrompt.mockReturnValueOnce(
+      new Promise<{ error?: string; code?: string }>((r) => {
+        release = r
+      })
+    )
+    return (result = {}) => release(result)
+  }
+
+  async function untilTask(id: string): Promise<void> {
+    for (let i = 0; i < 200; i++) {
+      if (registry.taskRegistry.get(id)) return
+      await Promise.resolve()
+    }
+    throw new Error(`任务 ${id} 一直没建出来`)
+  }
+
+  /**
+   * caller 往 target 发一轮（扣在闸门上），过完确认窗拿到 started；target 此刻在跑。`gate` 不给 = 不设门
+   * （摆前置用；要测的那次 authorize 另给）
+   */
+  async function drive(
+    target: FakeAgent,
+    n = 1,
+    caller: string = PARENT,
+    gate?: AuthorizeSessionAccess
+  ): Promise<{ rid: string; release: Release }> {
+    const release = hold()
+    const id = rid(n, caller)
+    const pending = runner.prompt({
+      parentId: caller,
+      childId: target.sessionId,
+      message: 'go',
+      requestId: id,
+      ...(gate ? { authorize: gate } : {})
+    })
+    await untilTask(id)
+    target.isStreaming = true
+    await advance(60)
+    expect(await pending).toEqual({ kind: 'started', id: target.sessionId })
+    return { rid: id, release }
+  }
+
+  /** 这一轮跑完：询问清空、不在跑，放行发送并等 runner 销账 */
+  async function finish(target: FakeAgent, release: Release): Promise<void> {
+    target.asks = []
+    target.isStreaming = false
+    release()
+    await runner.drainForTests()
+  }
+
+  /** 目标弹出一条询问（询问此刻已在挂着的表里，再同步调钩子） */
+  function raise(request: InputRequest, agent: FakeAgent): void {
+    agent.asks.push(request)
+    agent.isStreaming = true
+    runner.onAskRaised(agent.sessionId, request)
+  }
+
+  /** agent 的转写：这些消息；来源 = 消息 id → 发它进来的会话 */
+  function transcript(
+    agent: FakeAgent,
+    messages: unknown[],
+    sources: Record<string, string> = {}
+  ): void {
+    agent.view = {
+      ...emptySessionView(agent.sessionId),
+      messages: messages as SessionView['messages']
+    }
+    agent.inputSources.mockImplementation(
+      async () =>
+        new Map(
+          Object.entries(sources).map(([mid, sid]) => [mid, { kind: 'session', sessionId: sid }])
+        )
+    )
+  }
+
+  /** 开一条会话（行 + 开着的门面） */
+  function addSession(id: string, row: Record<string, unknown>): FakeAgent {
+    rows.set(id, row)
+    const agent = fakeAgent({}, id)
+    open.set(id, agent)
+    return agent
+  }
+
+  /** 把 authorize 的下一次调用扣住（卡片开着）；交回放行它的函数 */
+  function holdAuthorize(): () => void {
+    let allow!: () => void
+    authorize.mockImplementationOnce(
+      () =>
+        new Promise<void>((r) => {
+          allow = r
+        })
+    )
+    return () => allow()
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    rows = new Map<string, Record<string, unknown>>([
+      [PARENT, { settings: {}, parentId: null, title: 'Parent', updatedAt: 1 }],
+      [CHILD, { settings: {}, parentId: PARENT, title: 'Child', updatedAt: 2 }],
+      [OTHER, { settings: {}, parentId: null, title: 'Other', updatedAt: 3 }],
+      [OTHER_2, { settings: {}, parentId: null, title: 'Other 2', updatedAt: 4 }],
+      [OTHER_3, { settings: {}, parentId: null, title: 'Other 3', updatedAt: 5 }],
+      [OTHER_4, { settings: {}, parentId: null, title: 'Other 4', updatedAt: 6 }],
+      [Y, { settings: {}, parentId: null, title: 'Caller Y', updatedAt: 7 }]
+    ])
+    mocks.pick.mockImplementation((id: string) => rows.get(id))
+    mocks.findChildren.mockImplementation((id: string) =>
+      [...rows.entries()]
+        .filter(([, row]) => row.parentId === id)
+        .map(([cid, row]) => ({ id: cid, ...row }))
+    )
+    child = fakeAgent({}, CHILD)
+    other = fakeAgent({}, OTHER)
+    open = new Map([
+      [CHILD, child],
+      [OTHER, other]
+    ])
+    closed = new Map()
+    mocks.getAgentSession.mockImplementation((id: string) => open.get(id))
+    mocks.peekAgentSession.mockImplementation(async (id: string) => open.get(id) ?? closed.get(id))
+    mocks.ensureAgentSession.mockImplementation(
+      async (id: string) => open.get(id) ?? closed.get(id)
+    )
+    authorize = vi.fn<AuthorizeSessionAccess>(async () => {})
+  })
+
+  // ── XS-42 ─────────────────────────────────────────────────────────
+
+  it('XS-42 [guard] 自己的子会话从不过授权：prompt / answer / steer / read / inspect / list / wait（点名与省略）/ stop 都不调 authorize —— 权限表里有它那一行也一样', async () => {
+    mocks.sessionGrants.mockReturnValue([grant(CHILD, 'write')])
+    const { release } = await drive(child, 1, PARENT, authorize)
+    raise(q1(), child)
+    const answering = runner.answer({
+      parentId: PARENT,
+      childId: CHILD,
+      selections: ['A'],
+      authorize
+    })
+    await advance(60)
+    expect(await answering).toEqual({ kind: 'started', id: CHILD })
+    expect(
+      await runner.steer({
+        parentId: PARENT,
+        childId: CHILD,
+        message: 'also',
+        requestId: STEER_X,
+        authorize
+      })
+    ).toEqual({ id: CHILD, title: 'Child' })
+    expect(ok(await runner.read(PARENT, CHILD, authorize)).info.relation).toBe('sub-session')
+    expect(
+      ok(await runner.inspect({ parentId: PARENT, childId: CHILD, query: {}, authorize })).result
+        .kind
+    ).toBe('outline')
+    // 权限表里那一行不让它在 list 里多出一条、也不给它 access
+    const listed = ok(runner.list(PARENT)).subSessions
+    expect(listed.map((s) => [s.id, s.relation])).toEqual([[CHILD, 'sub-session']])
+    expect(listed[0]).not.toHaveProperty('access')
+    // 它在跑：点名与省略两条路都走到 wait 的授权循环，到点交回
+    const named = runner.wait({ parentId: PARENT, childId: CHILD, timeoutSeconds: 1, authorize })
+    const all = runner.wait({ parentId: PARENT, timeoutSeconds: 1, authorize })
+    await advance(1000)
+    expect(ok(await named).kind).toBe('timeout')
+    expect(ok(await all).kind).toBe('timeout')
+    expect(await runner.stop(PARENT, CHILD, authorize)).toEqual({ stopped: true, id: CHILD })
+    expect(authorize).not.toHaveBeenCalled()
+    release()
+  })
+
+  // ── XS-43 ─────────────────────────────────────────────────────────
+
+  describe('XS-43 目标落定', () => {
+    const byAction: Array<[string, (caller: string, id: string) => Promise<unknown>]> = [
+      [
+        'prompt-session',
+        (caller, id) =>
+          runner.prompt({ parentId: caller, childId: id, message: 'x', requestId: R(1), authorize })
+      ],
+      ['read-session', (caller, id) => runner.read(caller, id, authorize)],
+      [
+        'inspect-session',
+        (caller, id) => runner.inspect({ parentId: caller, childId: id, query: {}, authorize })
+      ],
+      [
+        'wait-for-sessions',
+        (caller, id) => runner.wait({ parentId: caller, childId: id, timeoutSeconds: 5, authorize })
+      ],
+      [
+        'answer-session',
+        (caller, id) =>
+          runner.answer({ parentId: caller, childId: id, selections: ['A'], authorize })
+      ],
+      [
+        'steer-session',
+        (caller, id) =>
+          runner.steer({
+            parentId: caller,
+            childId: id,
+            message: 'x',
+            requestId: STEER_X,
+            authorize
+          })
+      ],
+      ['stop-session', (caller, id) => runner.stop(caller, id, authorize)]
+    ]
+
+    /** 什么都没碰：没问人、没发、没插话、没停 */
+    const touchedNothing = (): void => {
+      expect(authorize).not.toHaveBeenCalled()
+      expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+      expect(child.abort).not.toHaveBeenCalled()
+    }
+
+    it.each(byAction)(
+      'XS-43 点名调用方自己（%s）⇒ 「就是这条会话」+ 子会话清单 + @ 提示（与不存在的 id 同一份清单）；什么都不碰',
+      async (_action, act) => {
+        expect(err(await act(PARENT, PARENT))).toBe(
+          `"parent-1" is this session itself. Your sub-sessions:\n  child-1  Child\n${MENTION_HINT}`
+        )
+        touchedNothing()
+      }
+    )
+
+    it.each(byAction)(
+      'XS-43 不存在的 id（%s）⇒ There is no session + 同一份清单；什么都不碰',
+      async (_action, act) => {
+        expect(err(await act(PARENT, 'ghost'))).toBe(
+          `There is no session "ghost". Your sub-sessions:\n  child-1  Child\n${MENTION_HINT}`
+        )
+        touchedNothing()
+      }
+    )
+
+    it('XS-43 没有子会话的调用方（顶层会话 Y / 子会话 CHILD）：清单那一句是 You have no sub-sessions.', async () => {
+      expect(err(await runner.read(Y, Y, authorize))).toBe(
+        `"caller-y" is this session itself. You have no sub-sessions.\n${MENTION_HINT}`
+      )
+      // 子会话调用方：即使有行挂在它名下也不列（它不能有子会话）
+      rows.set('stale-kid', { settings: {}, parentId: CHILD, title: 'Stale', updatedAt: 9 })
+      expect(err(await runner.read(CHILD, 'ghost', authorize))).toBe(
+        `There is no session "ghost". You have no sub-sessions.\n${MENTION_HINT}`
+      )
+      expect(err(await runner.read(CHILD, CHILD, authorize))).toBe(
+        `"child-1" is this session itself. You have no sub-sessions.\n${MENTION_HINT}`
+      )
+      expect(authorize).not.toHaveBeenCalled()
+    })
+
+    it('XS-43 子会话调用方点名自己的父会话、兄弟：都是「别的会话」—— prompt 过 authorize(write, false)，driven 的父是调用方', async () => {
+      rows.set(CHILD2, { settings: {}, parentId: PARENT, title: 'Child 2', updatedAt: 8 })
+      open.set(PARENT, fakeAgent({}, PARENT))
+      open.set(CHILD2, fakeAgent({}, CHILD2))
+      expect(
+        await runner.prompt({
+          parentId: CHILD,
+          childId: PARENT,
+          message: 'hi',
+          requestId: rid(1, CHILD),
+          authorize
+        })
+      ).toEqual({ kind: 'started', id: PARENT })
+      expect(
+        await runner.prompt({
+          parentId: CHILD,
+          childId: CHILD2,
+          message: 'hi',
+          requestId: rid(2, CHILD),
+          authorize
+        })
+      ).toEqual({ kind: 'started', id: CHILD2 })
+      expect(authorize.mock.calls).toEqual([
+        [otherTarget(PARENT, 'Parent'), 'write', false],
+        [otherTarget(CHILD2, 'Child 2'), 'write', false]
+      ])
+      expect(mocks.gatewayPrompt.mock.calls).toEqual([
+        [
+          PARENT,
+          'hi',
+          undefined,
+          undefined,
+          { requestId: rid(1, CHILD), driven: { parentId: CHILD, background: true } }
+        ],
+        [
+          CHILD2,
+          'hi',
+          undefined,
+          undefined,
+          { requestId: rid(2, CHILD), driven: { parentId: CHILD, background: true } }
+        ]
+      ])
+      // 任务记在调用方（子会话）名下，标成别的会话
+      expect(registry.taskRegistry.get(rid(1, CHILD))).toMatchObject({
+        sessionId: CHILD,
+        subject: { kind: 'sub-session', childSessionId: PARENT, other: true }
+      })
+    })
+
+    it('XS-43 笔记本调用方可以对话别的会话（过 authorize、发出去），但开不了子会话', async () => {
+      rows.set(NB, {
+        settings: { notebookPath: 'n.md' },
+        parentId: null,
+        title: 'Notebook',
+        updatedAt: 8
+      })
+      expect(
+        await runner.prompt({
+          parentId: NB,
+          childId: OTHER,
+          message: 'hi',
+          requestId: rid(1, NB),
+          authorize
+        })
+      ).toEqual({ kind: 'started', id: OTHER })
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'write', false]])
+      expect(mocks.gatewayPrompt.mock.calls[0][0]).toBe(OTHER)
+      expect(mocks.gatewayPrompt.mock.calls[0][4]).toEqual({
+        requestId: rid(1, NB),
+        driven: { parentId: NB, background: true }
+      })
+      expect(err(await runner.create(NB, {}))).toBe('Notebook sessions cannot have sub-sessions.')
+      expect(mocks.create).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── XS-44 ─────────────────────────────────────────────────────────
+
+  it('XS-44 对话别的会话：authorize(write, ownTurn=false) 放行之后才调网关（与子会话同一套参数）；任务 subject 带 other:true；回执 {started, id}', async () => {
+    const allow = holdAuthorize()
+    const release = hold()
+    const id = R(1)
+    let res: unknown
+    void runner
+      .prompt({ parentId: PARENT, childId: OTHER, message: '看一下', requestId: id, authorize })
+      .then((r) => (res = r))
+    await flush()
+    expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'write', false]])
+    // 卡还开着：什么都没发、没建任务，也不会到点自己回执
+    await advance(1000)
+    expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
+    expect(registry.taskRegistry.get(id)).toBeUndefined()
+    expect(res).toBeUndefined()
+    allow()
+    await untilTask(id)
+    other.isStreaming = true
+    await advance(60)
+    expect(res).toEqual({ kind: 'started', id: OTHER })
+    expect(mocks.gatewayPrompt.mock.calls).toEqual([
+      [
+        OTHER,
+        '看一下',
+        undefined,
+        undefined,
+        { requestId: id, driven: { parentId: PARENT, background: true } }
+      ]
+    ])
+    expect(registry.taskRegistry.get(id)).toMatchObject({
+      kind: 'sub-session',
+      sessionId: PARENT,
+      title: 'Other'
+    })
+    expect(registry.taskRegistry.get(id)?.subject).toStrictEqual({
+      kind: 'sub-session',
+      childSessionId: OTHER,
+      other: true
+    })
+    release()
+  })
+
+  it('XS-44 [guard] 自己的子会话的任务 subject 没有 other 键', async () => {
+    const { rid: id, release } = await drive(child, 2, PARENT, authorize)
+    expect(registry.taskRegistry.get(id)?.subject).toStrictEqual({
+      kind: 'sub-session',
+      childSessionId: CHILD
+    })
+    expect(registry.taskRegistry.get(id)?.subject).not.toHaveProperty('other')
+    release()
+  })
+
+  // ── XS-45 / XS-46 ─────────────────────────────────────────────────
+
+  describe('XS-45 / XS-46 忙着的别的会话：先拒绝、不问人', () => {
+    const promptOther = (id: string = OTHER, n = 1): Promise<unknown> =>
+      runner.prompt({ parentId: PARENT, childId: id, message: 'x', requestId: R(n), authorize })
+
+    it('XS-45 在跑一轮、不是本进程驱动的（用户或别处）⇒ busy 文案指向带 session_id 的 wait；不问人、不发、不建任务', async () => {
+      other.isStreaming = true
+      expect(err(await promptOther())).toBe(
+        'Session "Other" is busy with a turn you did not start (the user or another session is working ' +
+          'in it). Send again when it is idle — "wait-for-sessions" with its `session_id` waits for that.'
+      )
+      expect(authorize).not.toHaveBeenCalled()
+      expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
+      expect(registry.taskRegistry.get(R(1))).toBeUndefined()
+    })
+
+    it('XS-45 正被另一条会话 Y 驱动着 ⇒ 「另一条会话起的那一轮」；不问人、不发', async () => {
+      await drive(other, 1, Y)
+      expect(err(await promptOther())).toBe(
+        'Session "Other" is running a turn another session started. ' +
+          'A session runs one turn at a time — send again when it is idle.'
+      )
+      expect(authorize).not.toHaveBeenCalled()
+      // 只有 Y 那一次
+      expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
+      expect(registry.taskRegistry.get(R(1))).toBeUndefined()
+    })
+
+    it('XS-45 调用方已驱动着 4 条（2 条子会话 + 2 条别的会话）⇒ 第 5 条（空闲的别的会话）被上限拒绝，不问人', async () => {
+      const child2 = addSession(CHILD2, {
+        settings: {},
+        parentId: PARENT,
+        title: 'Child 2',
+        updatedAt: 8
+      })
+      const other2 = fakeAgent({}, OTHER_2)
+      open.set(OTHER_2, other2)
+      open.set(OTHER_3, fakeAgent({}, OTHER_3))
+      await drive(child, 1)
+      await drive(child2, 2)
+      await drive(other, 3)
+      await drive(other2, 4)
+      expect(err(await promptOther(OTHER_3, 5))).toBe(
+        'Too many sessions running that you started (4/4). Wait for one to finish before starting another.'
+      )
+      expect(authorize).not.toHaveBeenCalled()
+      expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(4)
+      expect(mocks.gatewayPrompt.mock.calls.map((c) => c[0])).not.toContain(OTHER_3)
+    })
+
+    it('XS-45 被中断的别的会话不拒：过 authorize(write, false) 之后照发', async () => {
+      other.isInterrupted = true
+      expect(await promptOther()).toEqual({ kind: 'started', id: OTHER })
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'write', false]])
+      expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
+      expect(mocks.gatewayPrompt.mock.calls[0][0]).toBe(OTHER)
+    })
+
+    it.each([
+      ['选择题', q1],
+      ['权限卡', ap]
+    ])(
+      'XS-46 停在不是调用方发起的那一轮的询问上（%s）⇒ 只说「在等别人起的那一轮的回答」，问的是什么一个字都不带；不问人、不发',
+      async (_label, ask) => {
+        other.isStreaming = true
+        other.asks.push(ask())
+        expect(err(await promptOther())).toBe(
+          'Session "Other" is waiting for an answer in a turn you did not start. Send again when it is idle.'
+        )
+        expect(authorize).not.toHaveBeenCalled()
+        expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
+      }
+    )
+
+    it('XS-46 停在 Y 驱动的那一轮的询问上 ⇒ 占位拒绝先命中（「另一条会话起的那一轮」），同样不带询问', async () => {
+      await drive(other, 1, Y)
+      raise(q1(), other)
+      const msg = err(await promptOther())
+      expect(msg).toBe(
+        'Session "Other" is running a turn another session started. ' +
+          'A session runs one turn at a time — send again when it is idle.'
+      )
+      expect(msg).not.toContain('Keep the old API?')
+      expect(authorize).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── XS-47 ─────────────────────────────────────────────────────────
+
+  it.each([
+    [
+      '用户在里面发了一条',
+      /** 忙起来；交回让它重新空闲的函数 */
+      async (): Promise<() => Promise<void>> => {
+        other.isStreaming = true
+        return async () => {
+          other.isStreaming = false
+        }
+      },
+      'is busy with a turn you did not start'
+    ],
+    [
+      'Y 开始驱动它',
+      async (): Promise<() => Promise<void>> => {
+        const { release } = await drive(other, 1, Y)
+        return () => finish(other, release)
+      },
+      'is running a turn another session started'
+    ]
+  ])(
+    'XS-47 卡开着的时候目标忙起来了（%s）⇒ 放行之后仍拒绝：不发、不建任务、不留记账；占位已释放 —— 空闲后再发不报「你刚发起的那一轮」',
+    async (_label, becomeBusy, expected) => {
+      const allow = holdAuthorize()
+      const pending = runner.prompt({
+        parentId: PARENT,
+        childId: OTHER,
+        message: 'x',
+        requestId: R(1),
+        authorize
+      })
+      await flush()
+      expect(authorize).toHaveBeenCalledTimes(1)
+      const becomeIdle = await becomeBusy()
+      allow()
+      expect(err(await pending)).toContain(expected)
+      // 这一次什么都没发出去（发出去的只可能是 Y 那一次）
+      expect(mocks.gatewayPrompt.mock.calls.map((c) => c[4])).not.toContainEqual(
+        expect.objectContaining({ requestId: R(1) })
+      )
+      expect(registry.taskRegistry.get(R(1))).toBeUndefined()
+      // 没留记账：同一幂等键的落定报来也只写入、不叫醒
+      await runner.onDrivenSettled(settled({ sessionId: OTHER, requestId: R(1) }))
+      expect(mocks.deliver.mock.calls.at(-1)?.[3]).toEqual({ wake: false })
+      // 占位已释放：它空闲之后再发，过了授权就发出去（没释放会报「你刚发起的那一轮」）
+      await becomeIdle()
+      const again = await runner.prompt({
+        parentId: PARENT,
+        childId: OTHER,
+        message: 'x',
+        requestId: R(2),
+        authorize
+      })
+      expect(again).toEqual({ kind: 'started', id: OTHER })
+      expect(authorize).toHaveBeenCalledTimes(2)
+      expect(mocks.gatewayPrompt.mock.calls.at(-1)?.[4]).toEqual({
+        requestId: R(2),
+        driven: { parentId: PARENT, background: true }
+      })
+    }
+  )
+
+  // ── XS-48 ─────────────────────────────────────────────────────────
+
+  describe('XS-48 prompt 别的会话的重跑（同一幂等键）', () => {
+    const replay = (n = 1): Promise<unknown> =>
+      runner.prompt({ parentId: PARENT, childId: OTHER, message: 'x', requestId: R(n), authorize })
+
+    it('XS-48 目标认得这个幂等键、已落定 ⇒ {finished}：不问人、不发、不建任务', async () => {
+      other.requestState.mockImplementation(async (id: string) =>
+        id === R(1) ? 'settled' : 'none'
+      )
+      expect(await replay()).toEqual({ kind: 'finished', id: OTHER })
+      expect(authorize).not.toHaveBeenCalled()
+      expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
+      expect(registry.taskRegistry.get(R(1))).toBeUndefined()
+    })
+
+    it('XS-48 目标认得、还没落定（pending）⇒ 重新挂上那一轮：不问人，网关拿到同一个幂等键与 driven 标记 —— 它此刻在跑也不拒（跑的就是那一轮）', async () => {
+      other.requestState.mockImplementation(async (id: string) =>
+        id === R(1) ? 'pending' : 'none'
+      )
+      other.isStreaming = true
+      const release = hold()
+      const pending = replay()
+      await untilTask(R(1))
+      await advance(60)
+      expect(await pending).toEqual({ kind: 'started', id: OTHER })
+      expect(authorize).not.toHaveBeenCalled()
+      expect(mocks.gatewayPrompt.mock.calls).toEqual([
+        [
+          OTHER,
+          'x',
+          undefined,
+          undefined,
+          { requestId: R(1), driven: { parentId: PARENT, background: true } }
+        ]
+      ])
+      expect(registry.taskRegistry.get(R(1))?.subject).toStrictEqual({
+        kind: 'sub-session',
+        childSessionId: OTHER,
+        other: true
+      })
+      release()
+    })
+
+    it('XS-48 换进程之后重跑、目标不认得这个幂等键（none：上一次没送到）⇒ 当作新的一次，再问一次人', async () => {
+      expect(await replay()).toEqual({ kind: 'started', id: OTHER })
+      expect(authorize).toHaveBeenCalledTimes(1)
+      // 换进程：枢纽与 runner 的记账清空；目标说它从没收到过 R(1)
+      registry.taskRegistry.killAll()
+      runner.resetForTests()
+      other.requestState.mockResolvedValue('none')
+      expect(await replay()).toEqual({ kind: 'started', id: OTHER })
+      expect(authorize.mock.calls).toEqual([
+        [otherTarget(OTHER, 'Other'), 'write', false],
+        [otherTarget(OTHER, 'Other'), 'write', false]
+      ])
+      expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // ── XS-49 ─────────────────────────────────────────────────────────
+
+  it('XS-49 用户拒绝（authorize 抛错）⇒ 错误原样抛出；不建任务、不留记账、不占位 —— 马上再试又走到 authorize', async () => {
+    authorize.mockRejectedValueOnce(new Error('User denied talking to session "Other" (other-x)'))
+    await expect(
+      runner.prompt({ parentId: PARENT, childId: OTHER, message: 'x', requestId: R(1), authorize })
+    ).rejects.toThrow('User denied talking to session "Other" (other-x)')
+    expect(mocks.gatewayPrompt).not.toHaveBeenCalled()
+    expect(registry.taskRegistry.get(R(1))).toBeUndefined()
+    // 没留记账：同一幂等键的落定报来也只写入、不叫醒
+    await runner.onDrivenSettled(settled({ sessionId: OTHER, requestId: R(1) }))
+    expect(mocks.deliver.mock.calls.at(-1)?.[3]).toEqual({ wake: false })
+    // 没占位：马上再试（新的工具调用）不报「你刚发起的那一轮」，又问了一次人、这次放行就发出去
+    expect(
+      await runner.prompt({
+        parentId: PARENT,
+        childId: OTHER,
+        message: 'x',
+        requestId: R(2),
+        authorize
+      })
+    ).toEqual({ kind: 'started', id: OTHER })
+    expect(authorize).toHaveBeenCalledTimes(2)
+    expect(mocks.gatewayPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  // ── XS-50 ─────────────────────────────────────────────────────────
+
+  describe('XS-50 read-session 别的会话：ownTurn 怎么算', () => {
+    it('XS-50 调用方绑定着它此刻这一轮 ⇒ authorize(read, true)', async () => {
+      const { release } = await drive(other)
+      const read = ok(await runner.read(PARENT, OTHER, authorize))
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', true]])
+      expect(read.info).toMatchObject({ id: OTHER, relation: 'other', driven: true })
+      release()
+    })
+
+    it.each<[string, unknown[], Record<string, string>, boolean]>([
+      [
+        '最近一条有人说的用户消息是调用方发的',
+        [userMsg('u1'), assistantMsg('a1')],
+        { u1: PARENT },
+        true
+      ],
+      [
+        '调用方那条之后人又说了一句',
+        [userMsg('u1'), assistantMsg('a1'), userMsg('u2')],
+        { u1: PARENT },
+        false
+      ],
+      [
+        '最近一条是另一条会话 Y 发的',
+        [userMsg('u1'), assistantMsg('a1'), userMsg('u2')],
+        { u1: PARENT, u2: Y },
+        false
+      ],
+      [
+        '调用方那条之后只有系统通知与指令注入（不算有人说话）',
+        [
+          userMsg('u1'),
+          assistantMsg('a1'),
+          userMsg('n1', { isSystemNotice: true }),
+          userMsg('i1', { isInstructionInjection: true })
+        ],
+        { u1: PARENT },
+        true
+      ],
+      ['一条用户消息都没有', [assistantMsg('a1')], {}, false]
+    ])(
+      'XS-50 没有绑定的一轮、durable 会话：%s ⇒ ownTurn %s（来源记在会话里，重启之后也认得）',
+      async (_label, messages, sources, ownTurn) => {
+        transcript(other, messages, sources)
+        ok(await runner.read(PARENT, OTHER, authorize))
+        expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', ownTurn]])
+      }
+    )
+
+    it('XS-50 来源读不出来（inputSources 抛错）⇒ ownTurn false（多问，不是少问），read 照常交回', async () => {
+      transcript(other, [userMsg('u1')], { u1: PARENT })
+      other.inputSources.mockRejectedValue(new Error('session is closing'))
+      expect(ok(await runner.read(PARENT, OTHER, authorize)).info.id).toBe(OTHER)
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', false]])
+      expect(mocks.warn.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
+        'session is closing'
+      )
+    })
+
+    it('XS-50 旧格式（非 durable）会话 ⇒ ownTurn false，不为判它去读视图', async () => {
+      mocks.durable.value = false
+      transcript(other, [userMsg('u1')], { u1: PARENT })
+      ok(await runner.read(PARENT, OTHER, authorize))
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', false]])
+      expect(other.sessionView).not.toHaveBeenCalled()
+      expect(other.inputSources).not.toHaveBeenCalled()
+    })
+
+    it('XS-50 拒绝（绑定着这一轮、目标没开着）⇒ 原样抛出；什么都没读 —— 不 peek、不取 lastAnswer、不读视图', async () => {
+      open.delete(OTHER)
+      closed.set(OTHER, other)
+      const { release } = await drive(other)
+      mocks.peekAgentSession.mockClear()
+      authorize.mockRejectedValueOnce(new Error('User denied reading session "Other" (other-x)'))
+      await expect(runner.read(PARENT, OTHER, authorize)).rejects.toThrow('User denied reading')
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', true]])
+      expect(mocks.peekAgentSession).not.toHaveBeenCalled()
+      expect(other.lastAnswer).not.toHaveBeenCalled()
+      expect(other.sessionView).not.toHaveBeenCalled()
+      expect(other.inputSources).not.toHaveBeenCalled()
+      release()
+    })
+
+    it('XS-50 拒绝（没有绑定的一轮、目标没开着）⇒ 只有算 ownTurn 的那一次 peek（读视图与来源各一次），不取 lastAnswer、不再读', async () => {
+      open.delete(OTHER)
+      closed.set(OTHER, other)
+      transcript(other, [userMsg('u1')], { u1: PARENT })
+      authorize.mockRejectedValueOnce(new Error('User denied reading session "Other" (other-x)'))
+      await expect(runner.read(PARENT, OTHER, authorize)).rejects.toThrow('User denied reading')
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', true]])
+      expect(mocks.peekAgentSession.mock.calls).toEqual([[OTHER]])
+      expect(other.sessionView).toHaveBeenCalledTimes(1)
+      expect(other.inputSources).toHaveBeenCalledTimes(1)
+      expect(other.lastAnswer).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── XS-51 ─────────────────────────────────────────────────────────
+
+  it('XS-51 inspect 别的会话恒按 ownTurn false 授权（大纲翻得到整条对话，不只是自己那一轮）：调用方绑定着这一轮也一样；自己的子会话不过门 [guard]', async () => {
+    const o = await drive(other)
+    const res = ok(await runner.inspect({ parentId: PARENT, childId: OTHER, query: {}, authorize }))
+    expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', false]])
+    expect(res.result.kind).toBe('outline')
+    expect(res.info).toMatchObject({ id: OTHER, relation: 'other', driven: true })
+    const c = await drive(child, 2)
+    ok(await runner.inspect({ parentId: PARENT, childId: CHILD, query: {}, authorize }))
+    expect(authorize).toHaveBeenCalledTimes(1)
+    o.release()
+    c.release()
+  })
+
+  it('XS-51 inspect 被拒 ⇒ 原样抛出，目标的视图一次都没读（ownTurn 是定值，不先算）', async () => {
+    authorize.mockRejectedValueOnce(new Error('User denied reading session "Other" (other-x)'))
+    await expect(
+      runner.inspect({ parentId: PARENT, childId: OTHER, query: {}, authorize })
+    ).rejects.toThrow('User denied reading')
+    expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', false]])
+    expect(other.sessionView).not.toHaveBeenCalled()
+    expect(other.inputSources).not.toHaveBeenCalled()
+  })
+
+  // ── XS-52 ─────────────────────────────────────────────────────────
+
+  describe('XS-52 wait-for-sessions 与别的会话', () => {
+    it('XS-52 点名一条空闲的别的会话、它最近那一轮是调用方发起的 ⇒ authorize(read, true)，结果带它的答复', async () => {
+      transcript(other, [userMsg('u1'), assistantMsg('a1')], { u1: PARENT })
+      other.lastAnswer.mockResolvedValue({ text: 'OTHER DONE.' })
+      const res = ok(
+        await runner.wait({ parentId: PARENT, childId: OTHER, timeoutSeconds: 5, authorize })
+      )
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', true]])
+      expect(res.kind).toBe('settled')
+      expect(res.results).toEqual([
+        expect.objectContaining({
+          id: OTHER,
+          relation: 'other',
+          status: 'idle',
+          answer: 'OTHER DONE.'
+        })
+      ])
+    })
+
+    it('XS-52 省略 id：等在跑的子会话 + 调用方此刻驱动着的别的会话（authorize(read, true)）；没被它驱动的、只在权限表里的都不等 —— 那一轮落定之后，省略 id 的 wait 不再带它', async () => {
+      mocks.sessionGrants.mockReturnValue([grant(OTHER_2, 'write')])
+      // 在跑、在权限表里，但不是调用方驱动的
+      open.set(OTHER_2, fakeAgent({ isStreaming: true }, OTHER_2))
+      // 在跑、不在表里
+      open.set(OTHER_3, fakeAgent({ isStreaming: true }, OTHER_3))
+      const { release } = await drive(other)
+      const onTargets = vi.fn(async (_targets: string[]) => {})
+      const waiting = runner.wait({ parentId: PARENT, timeoutSeconds: 30, authorize, onTargets })
+      await flush()
+      expect(onTargets.mock.calls).toEqual([[[OTHER]]])
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', true]])
+      other.lastAnswer.mockResolvedValue({ text: 'OTHER DONE.' })
+      await finish(other, release)
+      await advance(200)
+      const res = ok(await waiting)
+      expect(res.kind).toBe('settled')
+      expect(res.results.map((r) => [r.id, r.relation, r.answer])).toEqual([
+        [OTHER, 'other', 'OTHER DONE.']
+      ])
+
+      // 落定了：本进程不再驱动它，省略 id 的 wait 只剩子会话（空闲的子会话不等，立刻交回）
+      const again = ok(await runner.wait({ parentId: PARENT, timeoutSeconds: 5, authorize }))
+      expect(again.kind).toBe('settled')
+      expect(again.results.map((r) => r.id)).toEqual([CHILD])
+      expect(authorize).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+      ['点名', OTHER],
+      ['省略 id', undefined]
+    ])(
+      'XS-52 授权被拒（%s）⇒ wait 原样拒绝、没握住它 —— 之后那一轮落定的完成通知照发、叫醒调用方',
+      async (_label, childId) => {
+        const { rid: id, release } = await drive(other)
+        authorize.mockRejectedValueOnce(new Error('User denied reading session "Other" (other-x)'))
+        await expect(
+          runner.wait({ parentId: PARENT, childId, timeoutSeconds: 30, authorize })
+        ).rejects.toThrow('User denied reading')
+        expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', true]])
+        await finish(other, release)
+        await runner.onDrivenSettled(settled({ sessionId: OTHER, requestId: id }))
+        expect(mocks.deliver).toHaveBeenCalledTimes(1)
+        expect(mocks.deliver.mock.calls[0][0]).toBe(PARENT)
+        expect(mocks.deliver.mock.calls[0][3]).toEqual({ wake: true })
+      }
+    )
+  })
+
+  // ── XS-53 ─────────────────────────────────────────────────────────
+
+  describe('XS-53 steer-session 别的会话', () => {
+    const steerOther = (): ReturnType<Runner['steer']> =>
+      runner.steer({
+        parentId: PARENT,
+        childId: OTHER,
+        message: '  also X  ',
+        requestId: STEER_X,
+        authorize
+      })
+
+    it('XS-53 自己发起、正在跑的那一轮：authorize(write, true) 放行之后才 steerDriven', async () => {
+      const { release } = await drive(other)
+      const allow = holdAuthorize()
+      const pending = steerOther()
+      await flush()
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'write', true]])
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+      allow()
+      expect(await pending).toEqual({ id: OTHER, title: 'Other' })
+      expect(mocks.gatewaySteerDriven.mock.calls).toEqual([
+        [OTHER, 'also X', { requestId: STEER_X, parentId: PARENT }]
+      ])
+      release()
+    })
+
+    it('XS-53 authorize 拒绝 ⇒ 原样抛出，没插话', async () => {
+      const { release } = await drive(other)
+      authorize.mockRejectedValueOnce(new Error('User denied'))
+      await expect(steerOther()).rejects.toThrow('User denied')
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+      release()
+    })
+
+    const NOT_YOURS =
+      'The turn running in session "Other" was not started by you (the user or another session is ' +
+      'working in it), so you cannot steer it. Wait for it with "wait-for-sessions", or tell the user.'
+
+    it.each([
+      [
+        '空闲',
+        async (): Promise<void> => {},
+        'Session "Other" is idle — there is no turn to steer. Send it a message with "prompt-session".'
+      ],
+      [
+        '被中断',
+        async (): Promise<void> => {
+          other.isInterrupted = true
+        },
+        'Session "Other" was interrupted when the app stopped; there is no running turn to steer. ' +
+          'A new "prompt-session" starts over.'
+      ],
+      [
+        '用户自己在跑的一轮',
+        async (): Promise<void> => {
+          other.isStreaming = true
+        },
+        NOT_YOURS
+      ],
+      [
+        'Y 驱动着的一轮',
+        async (): Promise<void> => {
+          await drive(other, 1, Y)
+        },
+        NOT_YOURS
+      ],
+      [
+        '用户那一轮停在选择题上（不带出问题）',
+        async (): Promise<void> => {
+          other.isStreaming = true
+          other.asks.push(q1())
+        },
+        NOT_YOURS
+      ],
+      [
+        '自己那一轮停在选择题上',
+        async (): Promise<void> => {
+          await drive(other)
+          raise(q1(), other)
+        },
+        'Session "Other" is waiting for an answer to its question, and a steer would only land after ' +
+          'that. Answer it with "answer-session" and put what you want to tell it in `message`.'
+      ],
+      [
+        '自己那一轮停在权限卡上',
+        async (): Promise<void> => {
+          await drive(other)
+          raise(ap(), other)
+        },
+        'Session "Other" is blocked on a question for the user and will NOT proceed on its own. ' +
+          'It is asking: bash: rm -rf build Tell the user to answer it in that session, or stop it with "stop-session".'
+      ]
+    ])('XS-53 %s ⇒ 拒绝（给出去处），从不问人、不插话', async (_label, arrange, expected) => {
+      await arrange()
+      expect(err(await steerOther())).toBe(expected)
+      expect(authorize).not.toHaveBeenCalled()
+      expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+    })
+
+    it.each(['settled', 'pending'])(
+      'XS-53 重跑：目标认得这个幂等键（%s）⇒ earlier:true，不问人、不插话',
+      async (state) => {
+        await drive(other)
+        other.requestState.mockImplementation(async (id: string) =>
+          id === STEER_X ? state : 'none'
+        )
+        expect(await steerOther()).toEqual({ id: OTHER, title: 'Other', earlier: true })
+        expect(authorize).not.toHaveBeenCalled()
+        expect(mocks.gatewaySteerDriven).not.toHaveBeenCalled()
+      }
+    )
+  })
+
+  // ── XS-54 / XS-55 ─────────────────────────────────────────────────
+
+  describe('XS-54 / XS-55 answer-session 别的会话', () => {
+    const answerOther = (
+      over: Partial<Parameters<Runner['answer']>[0]> = {}
+    ): ReturnType<Runner['answer']> =>
+      runner.answer({ parentId: PARENT, childId: OTHER, selections: ['A'], authorize, ...over })
+
+    /** 调用方驱动着 OTHER 这一轮、停在 q1 上 */
+    async function askingOther(): Promise<{ rid: string; release: Release }> {
+      const turn = await drive(other)
+      raise(q1(), other)
+      return turn
+    }
+
+    it('XS-54 自己那一轮里的选择题：答案先过校验（不过就不问人），才 authorize(write, true)；送进去的答题方是 {kind:"session", 调用方}', async () => {
+      await askingOther()
+      expect(err(await answerOther({ selections: ['Z'] }))).toBe(
+        'Not an option: "Z". Use the exact labels — or answer in your own words with `message`. ' +
+          'Nothing was sent. Options:\n  - A\n  - B'
+      )
+      expect(err(await answerOther({ selections: ['A'], message: 'x' }))).toBe(
+        'Pass either `selections` or `message`, not both. Nothing was sent.'
+      )
+      expect(authorize).not.toHaveBeenCalled()
+      // 点名一道不在挂着的题：要去那一轮的转写里找它得到的回答 —— 那是一次查看，先过 read（自己那一轮）
+      expect(err(await answerOther({ askId: 'nope' }))).toBe(
+        'No question "nope" is waiting in session "Other" — nothing was sent. Waiting questions:\n' +
+          '  q1  Keep the old API?'
+      )
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', true]])
+      authorize.mockClear()
+      expect(other.respondToInput).not.toHaveBeenCalled()
+
+      const pending = answerOther()
+      await advance(60)
+      expect(await pending).toEqual({ kind: 'started', id: OTHER })
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'write', true]])
+      expect(other.respondToInput.mock.calls).toEqual([
+        [
+          'q1',
+          { kind: 'choice', selections: ['A'] },
+          {
+            clientId: 'parent:parent-1',
+            answeredBy: { kind: 'session', sessionId: PARENT, title: 'Parent' }
+          }
+        ]
+      ])
+      expect(authorize.mock.invocationCallOrder[0]).toBeLessThan(
+        other.respondToInput.mock.invocationCallOrder[0]
+      )
+    })
+
+    it('XS-54 authorize 拒绝 ⇒ 原样抛出，没应答，询问还挂着', async () => {
+      await askingOther()
+      authorize.mockRejectedValueOnce(new Error('User denied'))
+      await expect(answerOther()).rejects.toThrow('User denied')
+      expect(other.respondToInput).not.toHaveBeenCalled()
+      expect(other.asks.map((a) => a.id)).toEqual(['q1'])
+    })
+
+    it('XS-54 [guard] 自己的子会话：不过门，答题方是 parent-session', async () => {
+      await drive(child)
+      raise(q1(), child)
+      const pending = runner.answer({
+        parentId: PARENT,
+        childId: CHILD,
+        selections: ['A'],
+        authorize
+      })
+      await advance(60)
+      expect(await pending).toEqual({ kind: 'started', id: CHILD })
+      expect(authorize).not.toHaveBeenCalled()
+      expect(child.respondToInput.mock.calls[0][2]).toEqual({
+        clientId: 'parent:parent-1',
+        answeredBy: { kind: 'parent-session', sessionId: PARENT, title: 'Parent' }
+      })
+    })
+
+    it.each([
+      [
+        '它空闲了',
+        false,
+        'Session "Other" is not waiting for an answer (status: idle). Nothing was sent.'
+      ],
+      [
+        '用户又起了一轮、正问着 q2',
+        true,
+        'The question in session "Other" is not in a turn you are driving now (the user or another session ' +
+          'started that turn, your turn there has already ended, or the app restarted since) — it is not yours to ' +
+          'answer. Nothing was sent. Tell the user, or leave it.'
+      ]
+    ])(
+      'XS-55 最近那一轮不是调用方的（%s）：点名一道调用方那一轮里早已答过的题 ⇒ 先报「不归你」，绝不带出那个回答；不问人',
+      async (_label, userAsking, expected) => {
+        // 调用方先前发起过一轮（u1），其中 q1 被用户答了；之后用户自己说了一句（u2）
+        transcript(
+          other,
+          [userMsg('u1'), askAnswered('q1', 'User selected:\n  B'), userMsg('u2')],
+          { u1: PARENT }
+        )
+        if (userAsking) {
+          other.isStreaming = true
+          other.asks.push(q2())
+        }
+        const msg = err(await answerOther({ askId: 'q1' }))
+        expect(msg).toBe(expected)
+        expect(msg).not.toContain('already answered')
+        expect(msg).not.toContain('User selected')
+        // 转写只被「这一轮归不归你」那一次读过：没去找 q1 的回答
+        expect(other.sessionView).toHaveBeenCalledTimes(1)
+        expect(authorize).not.toHaveBeenCalled()
+        expect(other.respondToInput).not.toHaveBeenCalled()
+      }
+    )
+
+    it('XS-55 对照：最近那一轮是调用方的（来源记录）、已经结束 ⇒ 与子会话一样带出那个回答（那是它自己那一轮）', async () => {
+      transcript(other, [userMsg('u1'), askAnswered('q1', 'User selected:\n  B')], { u1: PARENT })
+      expect(err(await answerOther({ askId: 'q1' }))).toBe(
+        'Question "q1" in session "Other" was already answered (most likely by the user in that session): ' +
+          'User selected: B. Nothing was sent.'
+      )
+      expect(other.respondToInput).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── XS-56 ─────────────────────────────────────────────────────────
+
+  describe('XS-56 stop-session 别的会话', () => {
+    it('XS-56 自己发起的那一轮：authorize(write, true) 之后经枢纽停（by agent）、停下目标；落定不发完成通知', async () => {
+      const { rid: id, release } = await drive(other)
+      const stopSpy = vi.spyOn(registry.taskRegistry, 'stop')
+      try {
+        expect(await runner.stop(PARENT, OTHER, authorize)).toEqual({ stopped: true, id: OTHER })
+        expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'write', true]])
+        expect(stopSpy.mock.calls).toEqual([[id, { by: 'agent' }]])
+        expect(authorize.mock.invocationCallOrder[0]).toBeLessThan(
+          stopSpy.mock.invocationCallOrder[0]
+        )
+        expect(other.abort).toHaveBeenCalledTimes(1)
+      } finally {
+        stopSpy.mockRestore()
+      }
+      other.isStreaming = false
+      release()
+      await runner.drainForTests()
+      await runner.onDrivenSettled(settled({ sessionId: OTHER, requestId: id, reason: 'aborted' }))
+      expect(mocks.deliver).not.toHaveBeenCalled()
+    })
+
+    it('XS-56 authorize 拒绝 ⇒ 原样抛出，什么都没停（任务照跑、没 abort）—— 之后落定照常通知', async () => {
+      const { rid: id, release } = await drive(other)
+      authorize.mockRejectedValueOnce(new Error('User denied'))
+      await expect(runner.stop(PARENT, OTHER, authorize)).rejects.toThrow('User denied')
+      expect(other.abort).not.toHaveBeenCalled()
+      expect(registry.taskRegistry.get(id)).toMatchObject({ status: 'running', endedAt: null })
+      // 没记成「智能体自己停的」
+      await finish(other, release)
+      await runner.onDrivenSettled(settled({ sessionId: OTHER, requestId: id }))
+      expect(mocks.deliver).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+      ['用户自己在跑的一轮', 'user'],
+      ['另一条会话 Y 驱动着的一轮', 'y']
+    ])(
+      'XS-56 在跑的那一轮不是调用方的（%s）⇒ 拒绝；不问人、不碰枢纽、不 abort',
+      async (_label, who) => {
+        let yRid: string | undefined
+        if (who === 'y') yRid = (await drive(other, 1, Y)).rid
+        else other.isStreaming = true
+        const stopSpy = vi.spyOn(registry.taskRegistry, 'stop')
+        try {
+          expect(err(await runner.stop(PARENT, OTHER, authorize))).toBe(
+            'The turn in session "Other" was not started by you (the user or another session is working ' +
+              'in it, or the app restarted since) — you can only stop a turn you started there. Nothing was stopped.'
+          )
+          expect(stopSpy).not.toHaveBeenCalled()
+        } finally {
+          stopSpy.mockRestore()
+        }
+        expect(authorize).not.toHaveBeenCalled()
+        expect(other.abort).not.toHaveBeenCalled()
+        if (yRid) {
+          expect(registry.taskRegistry.get(yRid)).toMatchObject({
+            status: 'running',
+            endedAt: null
+          })
+        }
+      }
+    )
+  })
+
+  // ── XS-57 ─────────────────────────────────────────────────────────
+
+  describe('XS-57 list-sessions', () => {
+    it('XS-57 次序：子会话，然后是调用方驱动着的别的会话，最后是权限表里的会话（带 access）；目标已删的行跳过；驱动着且在表里的保留 access', async () => {
+      addSession(CHILD2, { settings: {}, parentId: PARENT, title: 'Child 2', updatedAt: 8 })
+      const other3 = fakeAgent({}, OTHER_3)
+      open.set(OTHER_3, other3)
+      mocks.sessionGrants.mockImplementation((id: string) =>
+        id === PARENT
+          ? [
+              grant(OTHER_2, 'read'),
+              grant(GONE, 'write'),
+              grant(OTHER, 'write'),
+              grant(OTHER_4, 'write')
+            ]
+          : []
+      )
+      // 驱动着、也在表里
+      await drive(other, 1)
+      // 驱动着、不在表里（只被允许过一次）
+      await drive(other3, 2)
+      const listed = ok(runner.list(PARENT)).subSessions
+      expect(listed.map((s) => [s.id, s.relation, s.access])).toEqual([
+        [CHILD, 'sub-session', undefined],
+        [CHILD2, 'sub-session', undefined],
+        [OTHER, 'other', 'write'],
+        [OTHER_3, 'other', undefined],
+        [OTHER_2, 'other', 'read'],
+        [OTHER_4, 'other', 'write']
+      ])
+      // 没有 access 的就是没有这个键
+      for (const s of listed.filter((x) => x.access === undefined)) {
+        expect(s).not.toHaveProperty('access')
+      }
+      expect(listed.find((s) => s.id === OTHER)).toMatchObject({ driven: true, status: 'running' })
+      expect(listed.find((s) => s.id === OTHER_2)).toMatchObject({
+        title: 'Other 2',
+        updatedAt: 4,
+        driven: false,
+        status: 'idle'
+      })
+      expect(mocks.sessionGrants).toHaveBeenCalledWith(PARENT)
+    })
+
+    it('XS-57 list 不过授权：它的签名里就没有 authorize（只列，不读任何会话的内容）', () => {
+      expectTypeOf<Parameters<Runner['list']>>().toEqualTypeOf<[parentId: string]>()
+      mocks.sessionGrants.mockReturnValue([grant(OTHER, 'read')])
+      ok(runner.list(PARENT))
+      expect(other.sessionView).not.toHaveBeenCalled()
+      expect(other.lastAnswer).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      [
+        '笔记本会话',
+        NB,
+        { settings: { notebookPath: 'n.md' }, parentId: null, title: 'Notebook', updatedAt: 8 }
+      ],
+      ['子会话', CHILD, undefined]
+    ])(
+      'XS-57 调用方是%s：没有子会话可列（即使有行挂在它名下），权限表里的会话照列',
+      async (_label, caller, row) => {
+        if (row) rows.set(caller, row)
+        rows.set('stale-kid', { settings: {}, parentId: caller, title: 'Stale', updatedAt: 9 })
+        mocks.sessionGrants.mockImplementation((id: string) =>
+          id === caller ? [grant(OTHER, 'read'), grant(GONE, 'write')] : []
+        )
+        const listed = ok(runner.list(caller)).subSessions
+        expect(listed.map((s) => [s.id, s.relation, s.access])).toEqual([[OTHER, 'other', 'read']])
+      }
+    )
+  })
+
+  // ── XS-58 ─────────────────────────────────────────────────────────
+
+  it('XS-58 完成通知：别的会话 ⇒ 收取那一句点名 session_id；子会话调用方驱动自己的父会话同样点名；自己的子会话 ⇒ 不点名 [guard]', async () => {
+    const o = await drive(other)
+    await finish(other, o.release)
+    await runner.onDrivenSettled(settled({ sessionId: OTHER, requestId: o.rid }))
+    expect(mocks.deliver.mock.calls[0]).toEqual([
+      PARENT,
+      [
+        '<session id="other-x" title="Other" status="idle">',
+        'The turn you started in the background has finished.',
+        'Collect it with the session tool: action "wait-for-sessions" with session_id "other-x".',
+        '</session>'
+      ].join('\n'),
+      'subsession-done:other-x:42',
+      { wake: true }
+    ])
+
+    const parentAgent = fakeAgent({}, PARENT)
+    open.set(PARENT, parentAgent)
+    const p = await drive(parentAgent, 3, CHILD)
+    await finish(parentAgent, p.release)
+    await runner.onDrivenSettled({
+      ...settled({ sessionId: PARENT, requestId: p.rid }),
+      parentId: CHILD
+    })
+    expect(mocks.deliver.mock.calls[1]).toEqual([
+      CHILD,
+      [
+        '<session id="parent-1" title="Parent" status="idle">',
+        'The turn you started in the background has finished.',
+        'Collect it with the session tool: action "wait-for-sessions" with session_id "parent-1".',
+        '</session>'
+      ].join('\n'),
+      'subsession-done:parent-1:42',
+      { wake: true }
+    ])
+
+    const c = await drive(child, 2)
+    await finish(child, c.release)
+    await runner.onDrivenSettled(settled({ sessionId: CHILD, requestId: c.rid }))
+    expect(mocks.deliver.mock.calls[2]).toEqual([
+      PARENT,
+      [
+        '<session id="child-1" title="Child" status="idle">',
+        'The turn you started in the background has finished.',
+        'Collect it with the session tool: action "wait-for-sessions".',
+        '</session>'
+      ].join('\n'),
+      'subsession-done:child-1:42',
+      { wake: true }
+    ])
   })
 })

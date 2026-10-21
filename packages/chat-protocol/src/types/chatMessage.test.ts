@@ -12,7 +12,7 @@ import {
   type ToolResultDetails,
   type ToolResultImage
 } from './chatMessage'
-import type { InputResponse, ParentSessionRef } from './inputRequest'
+import type { InputResponse, DrivingSessionRef } from './inputRequest'
 
 const IMAGE: ToolResultImage = { path: '/tmp/shot.jpg', width: 800, height: 600, bytes: 4096 }
 
@@ -137,24 +137,24 @@ describe('P3-01 · ChatMessage additions', () => {
   })
 })
 
-/** WP2-79 · 答题方（docs/sub-session-design.md §19.5）：一份 `ParentSessionRef`，ask 详情与每种应答都可带 */
+/** WP2-79 · 答题方（docs/sub-session-design.md §19.5）：一份 `DrivingSessionRef`，ask 详情与每种应答都可带 */
 describe('WP2-79 · answeredBy types', () => {
-  it('WP2-79 AskToolDetails.answeredBy is ParentSessionRef | undefined; every InputResponse member may carry it; kind is exactly parent-session', () => {
-    expectTypeOf<AskToolDetails['answeredBy']>().toEqualTypeOf<ParentSessionRef | undefined>()
-    expectTypeOf<ParentSessionRef['kind']>().toEqualTypeOf<'parent-session'>()
-    expectTypeOf<ParentSessionRef['sessionId']>().toEqualTypeOf<string>()
-    expectTypeOf<ParentSessionRef['title']>().toEqualTypeOf<string | undefined>()
+  it('WP2-79 AskToolDetails.answeredBy is DrivingSessionRef | undefined; every InputResponse member may carry it; kind is exactly parent-session or session (a session granted through the permission table, 2026-10-20)', () => {
+    expectTypeOf<AskToolDetails['answeredBy']>().toEqualTypeOf<DrivingSessionRef | undefined>()
+    expectTypeOf<DrivingSessionRef['kind']>().toEqualTypeOf<'parent-session' | 'session'>()
+    expectTypeOf<DrivingSessionRef['sessionId']>().toEqualTypeOf<string>()
+    expectTypeOf<DrivingSessionRef['title']>().toEqualTypeOf<string | undefined>()
     expectTypeOf<Extract<InputResponse, { kind: 'ask' }>['answeredBy']>().toEqualTypeOf<
-      ParentSessionRef | undefined
+      DrivingSessionRef | undefined
     >()
     expectTypeOf<Extract<InputResponse, { kind: 'choice' }>['answeredBy']>().toEqualTypeOf<
-      ParentSessionRef | undefined
+      DrivingSessionRef | undefined
     >()
     expectTypeOf<Extract<InputResponse, { kind: 'other' }>['answeredBy']>().toEqualTypeOf<
-      ParentSessionRef | undefined
+      DrivingSessionRef | undefined
     >()
     expectTypeOf<Extract<InputResponse, { kind: 'cancel' }>['answeredBy']>().toEqualTypeOf<
-      ParentSessionRef | undefined
+      DrivingSessionRef | undefined
     >()
     // 缺省 = 用户本人：不带这一项的旧形状照样成立
     const human: AskToolDetails = { type: 'ask', question: 'Q?', selections: ['A'] }

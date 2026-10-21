@@ -57,7 +57,7 @@ import {
   type EntryRecord
 } from '@earendil-works/pi-durable'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
-import type { ParentSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
+import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import { resolveInputSources, type InputSource } from './inputSource'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { toolResultText } from '../toolResultText'
@@ -106,7 +106,7 @@ export interface TranscriptAskItem {
    * 不是人答的：父会话代答了子会话的询问（ask 工具结果 `details.answeredBy`，宿主写的，
    * docs/sub-session-design.md §19.5）。缺省 = 人答的。自动审查据此不把它当成人的意思。
    */
-  readonly answeredBy?: ParentSessionRef
+  readonly answeredBy?: DrivingSessionRef
 }
 
 export type TranscriptDigestItem = TranscriptUserItem | TranscriptAssistantItem | TranscriptAskItem
@@ -135,7 +135,7 @@ interface PendingAsk {
   readonly ts: number
   readonly question: string
   answer?: string
-  answeredBy?: ParentSessionRef
+  answeredBy?: DrivingSessionRef
 }
 
 /**
@@ -269,17 +269,24 @@ function settleCall(calls: Map<string, PendingAsk | null>, message: ToolResultMe
 /**
  * ask 工具结果详情里的答题方。**失败闭合**：详情里只要带着一个 `answeredBy` 对象（形状对不对都算），就当作
  * 不是人答的 —— 危险的方向是把别人的话记成人的意思，形状坏了的那一项宁可算「父会话代答」。认不出的字段
- * 补成空串。没有 `answeredBy` → undefined（人答的）。
+ * 补成空串、认不出的 kind 记成 `parent-session`。没有 `answeredBy` → undefined（人答的）。
  */
-function answeredByOf(details: unknown): ParentSessionRef | undefined {
+function answeredByOf(details: unknown): DrivingSessionRef | undefined {
   if (typeof details !== 'object' || details === null) return undefined
   const by = (details as { answeredBy?: unknown }).answeredBy
   if (typeof by !== 'object' || by === null) return undefined
-  const { sessionId, title } = by as { sessionId?: unknown; title?: unknown }
+  const {
+    kind: rawKind,
+    sessionId,
+    title
+  } = by as {
+    kind?: unknown
+    sessionId?: unknown
+    title?: unknown
+  }
+  const kind = rawKind === 'session' ? 'session' : 'parent-session'
   const id = typeof sessionId === 'string' ? sessionId : ''
-  return typeof title === 'string'
-    ? { kind: 'parent-session', sessionId: id, title }
-    : { kind: 'parent-session', sessionId: id }
+  return typeof title === 'string' ? { kind, sessionId: id, title } : { kind, sessionId: id }
 }
 
 // ─────────────────────────── 读会话 ───────────────────────────

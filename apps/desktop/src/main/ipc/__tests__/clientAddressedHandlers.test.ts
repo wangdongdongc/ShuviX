@@ -82,6 +82,7 @@ vi.mock('../../services/acl', () => ({
 }))
 vi.mock('../../services/sessionService', () => ({ sessionService: {} }))
 vi.mock('../../services/filesWatcherService', () => ({ closeWatcherIfWorkingDirectory: vi.fn() }))
+vi.mock('../../services/sessionMentions', () => ({ listSessionMentions: vi.fn(() => []) }))
 vi.mock('../../frontend', () => ({
   chatGateway: {},
   operationContext: { run: (_ctx: unknown, fn: () => unknown) => fn() },

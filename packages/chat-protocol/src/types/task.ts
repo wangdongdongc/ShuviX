@@ -65,6 +65,8 @@ export interface AgentTaskSubject {
 export interface SubSessionTaskSubject {
   kind: 'sub-session'
   childSessionId: string
+  /** 驱动的不是自己的子会话，而是经会话权限表被授权的别的会话（面板上写「会话」而不是「子会话」） */
+  other?: true
 }
 
 export type TaskSubject = BashTaskSubject | AgentTaskSubject | SubSessionTaskSubject

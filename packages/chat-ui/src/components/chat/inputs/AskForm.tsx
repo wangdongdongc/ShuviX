@@ -1,10 +1,12 @@
 import { getHostApi } from '@shuvix/chat-ui'
 import {
   ChevronDown,
+  Eye,
   FileOutput,
   FilePen,
   FileText,
   FolderOpen,
+  MessagesSquare,
   Shield,
   ShieldAlert
 } from 'lucide-react'
@@ -17,7 +19,11 @@ import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
 import powershell from 'highlight.js/lib/languages/powershell'
-import type { AskInputRequest, AskPolicyPrompt } from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  AskInputRequest,
+  AskPolicyPrompt,
+  AskSessionTarget
+} from '@shuvix/chat-protocol/types/inputRequest'
 import { fallbackToolPresentation } from '@shuvix/chat-protocol/builtinMcpPresentations'
 import type { InputFormProps } from './types'
 import type { AskDraft } from './drafts'
@@ -110,6 +116,42 @@ function DiffPreview({
 }
 
 /**
+ * 会话询问预览：要查看 / 对话的那条会话（标题 + id），对话类再摊开要发进去的那段话 —— 用户批准的就是它落进那条会话
+ */
+function SessionPreview({
+  session,
+  message
+}: {
+  session: AskSessionTarget
+  message?: string
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-1" data-ask-session={session.sessionId}>
+      <div className="text-[11px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 min-w-0">
+        <div className="truncate text-text-primary">
+          {session.title || t('toolCall.sessionAskUntitled')}
+        </div>
+        <div className="truncate font-mono text-[10px] text-text-tertiary">{session.sessionId}</div>
+      </div>
+      {message && (
+        <div>
+          <div className="px-0.5 text-[10px] text-text-tertiary">
+            {t('toolCall.sessionAskMessage')}
+          </div>
+          <pre
+            className="text-[11px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 overflow-auto whitespace-pre-wrap break-words !m-0 text-text-primary"
+            style={{ maxHeight: ASK_PREVIEW_MAX_H }}
+          >
+            {message}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
  * 命中策略的提示语 —— 收成操作栏左端的一枚角标：平时只留策略名，点开才铺出整句。
  *
  * 内置策略那几句每次询问都一字不差地重复（「放行后命令以你的完整系统权限运行…」），
@@ -166,24 +208,28 @@ export function AskForm({
     toolName,
     background,
     unsandboxed,
-    review
+    review,
+    session
   } = request
   const hostPresentation = useChatStore((s) => s.toolPresentations[toolName])
   // 内置 MCP 能力服务器发起的询问（browser 打开一个地址、读一个本地文件；ssh 执行一条命令）
   // 也要有工具名与图标 —— 宿主下发的表里没有它们
   const presentation = hostPresentation ?? fallbackToolPresentation(toolName, t)
   const diffPreview = preview?.kind === 'diff' ? preview : null
+  const messagePreview = preview?.kind === 'message' ? preview.text : undefined
 
   // 路径类(read/write/edit/...):command 形如 Read(path)/Write(path),可"允许并记住"这条路径(或它所在的
-  // 文件夹),记进会话权限表。命令类(bash/ssh)与简单类(浏览器操作等)没有可记住的条目 —— 命令逐条询问。
+  // 文件夹),记进会话权限表。会话类(request.session)可"允许并记住"那条会话。命令类(bash/ssh)与简单类(浏览器
+  // 操作等)没有可记住的条目 —— 命令逐条询问。
   const pathAsk: { mode: 'read' | 'write'; path: string } | null = useMemo(() => {
     const m = command.match(/^(Read|Write)\((.+)\)$/)
     if (!m) return null
     return { mode: m[1] === 'Read' ? 'read' : 'write', path: m[2] }
   }, [command])
 
-  // 「允许并记住」写进会话权限表（宿主能力）：仅路径类,且需宿主提供 HostApi
+  // 「允许并记住」写进会话权限表（宿主能力）：路径类与会话类,且需宿主提供 HostApi
   const canRemember = pathAsk !== null && getHostApi() !== null
+  const canRememberSession = !!session && getHostApi() !== null
   // 文件还可以记下它所在的文件夹（太浅的不给，见 rememberFolderOf）
   const rememberFolder =
     canRemember && pathAsk && !pathIsDirectory ? rememberFolderOf(pathAsk.path) : null
@@ -208,47 +254,64 @@ export function AskForm({
     })
   }
 
+  /** 会话询问的「允许并记住」：后端按 extra.remember 把这条会话（查看 / 对话）写进会话权限表 */
+  const handleAllowSessionAndRemember = (): void => {
+    onSubmit({ kind: 'ask', allowed: true, extra: { remember: true } })
+  }
+
   // 标题 = 这次要放行的**动作**。非路径类直接取工具自己的显示名，与上方步骤行共用一套词表 ——
   // 「等待确认」对每条命令都一样，占着唯一的标题位却不说这次要做什么。
   const iconClass = 'text-warning flex-shrink-0'
-  const { icon, title } = diffPreview
-    ? diffPreview.isNewFile
+  const { icon, title } = session
+    ? session.access === 'write'
       ? {
-          icon: <FileOutput size={13} className={iconClass} />,
-          title: t('toolCall.pendingCreatePreview')
+          icon: <MessagesSquare size={13} className={iconClass} />,
+          title: t('toolCall.sessionAskWrite')
         }
-      : toolName === 'edit'
-        ? {
-            icon: <FilePen size={13} className={iconClass} />,
-            title: t('toolCall.pendingEditPreview')
-          }
-        : {
-            icon: <FileOutput size={13} className={iconClass} />,
-            title: t('toolCall.pendingWritePreview')
-          }
-    : pathAsk
-      ? pathAsk.mode === 'write'
+      : {
+          icon: <Eye size={13} className={iconClass} />,
+          title: t('toolCall.sessionAskRead')
+        }
+    : diffPreview
+      ? diffPreview.isNewFile
         ? {
             icon: <FileOutput size={13} className={iconClass} />,
-            title: t('toolCall.pendingPathWrite')
+            title: t('toolCall.pendingCreatePreview')
           }
-        : pathIsDirectory
+        : toolName === 'edit'
           ? {
-              icon: <FolderOpen size={13} className={iconClass} />,
-              title: t('toolCall.pendingPathReadDir')
+              icon: <FilePen size={13} className={iconClass} />,
+              title: t('toolCall.pendingEditPreview')
             }
           : {
-              icon: <FileText size={13} className={iconClass} />,
-              title: t('toolCall.pendingPathRead')
+              icon: <FileOutput size={13} className={iconClass} />,
+              title: t('toolCall.pendingWritePreview')
             }
-      : {
-          icon: presentation ? (
-            <span className={`${iconClass} flex items-center`}>{renderToolIcon(presentation)}</span>
-          ) : (
-            <ShieldAlert size={13} className={iconClass} />
-          ),
-          title: presentation?.label ?? t('toolCall.pendingAsk')
-        }
+      : pathAsk
+        ? pathAsk.mode === 'write'
+          ? {
+              icon: <FileOutput size={13} className={iconClass} />,
+              title: t('toolCall.pendingPathWrite')
+            }
+          : pathIsDirectory
+            ? {
+                icon: <FolderOpen size={13} className={iconClass} />,
+                title: t('toolCall.pendingPathReadDir')
+              }
+            : {
+                icon: <FileText size={13} className={iconClass} />,
+                title: t('toolCall.pendingPathRead')
+              }
+        : {
+            icon: presentation ? (
+              <span className={`${iconClass} flex items-center`}>
+                {renderToolIcon(presentation)}
+              </span>
+            ) : (
+              <ShieldAlert size={13} className={iconClass} />
+            ),
+            title: presentation?.label ?? t('toolCall.pendingAsk')
+          }
 
   return (
     <div className="space-y-2">
@@ -271,7 +334,9 @@ export function AskForm({
       {/* 审查员看过、交给你的：它那句大白话放在原文上方 —— 读懂一条命令要懂 shell，读懂它不用 */}
       {review && <ReviewOpinion review={review} />}
 
-      {diffPreview ? (
+      {session ? (
+        <SessionPreview session={session} message={messagePreview} />
+      ) : diffPreview ? (
         // 平常 diff 头上是模型写的路径；写入被链接带去别处时，改为真实去处领头、原写法注在下面
         <DiffPreview
           path={requestedPath && pathAsk ? pathAsk.path : diffPreview.path}
@@ -303,6 +368,15 @@ export function AskForm({
         >
           {t('toolCall.deny')}
         </button>
+        {canRememberSession && (
+          <button
+            onClick={handleAllowSessionAndRemember}
+            data-remember-session=""
+            className="px-2.5 py-1 rounded-lg border border-border-secondary/60 text-xs font-medium text-text-primary hover:bg-bg-hover transition-colors"
+          >
+            {t('toolCall.allowAndRememberSession')}
+          </button>
+        )}
         {canRemember && (
           <div className="flex items-stretch rounded-lg border border-border-secondary/60">
             <button

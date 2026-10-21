@@ -16,7 +16,7 @@ shuvix-project-awareness: true
 
 ## 交给子会话去做
 
-编程工作交给 `coding` 子会话：已有负责这块代码的，就用 `prompt-sub-session` 把完整需求发给它；没有才用 `create-sub-session` 新开一条（`agent_profile` 指成 `coding`）。你负责的是需求与验收，不是实现——不要在这边把它的活再做一遍。
+编程工作交给 `coding` 子会话：已有负责这块代码的，就用 `prompt-session` 把完整需求发给它；没有才用 `create-sub-session` 新开一条（`agent_profile` 指成 `coding`）。你负责的是需求与验收，不是实现——不要在这边把它的活再做一遍。
 
 - 先把需求敲定：目标、范围、验收标准、涉及哪些文件。含糊的地方用 `ask` 问用户。
 - 对着这些标准验收——读改动过的文件，跑验证。不合格就打回去，而不是自己接手。

@@ -10,6 +10,8 @@
  *   CA-6 会话权限表：读是 read，增删改都是 admin
  *   CA-7 channelCallAccessOf：回答询问卡勾了「允许并记住」→ admin（与 session:grantAcl 同档），别的回答照通道那一档；
  *        别的通道就算参数长得像也照通道那一档
+ *   XS-41 会话询问的「允许并记住」（`extra.remember`）同样往权限表里写一行 → admin；按真值判（与 rememberPath 同口径）；
+ *        输入框 @ 会话的候选（session:mentionEntries）是 read 的请求通道
  */
 import { describe, expect, it } from 'vitest'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
@@ -154,5 +156,50 @@ describe('CA-7 channelCallAccessOf', () => {
     expect(channelCallAccessOf('agent:prompt', answer({ rememberPath: true }))).toBe('write')
     expect(channelCallAccessOf('session:list', [])).toBe('read')
     expect(channelCallAccessOf('no:such-channel', [])).toBe('admin')
+  })
+})
+
+/**
+ * XS-41 会话询问卡上的「允许并记住」：应答带 `extra.remember`（路径询问是 `extra.rememberPath`），宿主据此往会话
+ * 权限表里写一行 `kind: 'session'` —— 与 session:grantAcl 同一档（admin）。判的是真值（`!!remember`），与
+ * rememberPath 同口径：只许 write 的设备送一个 `'yes'` 也得按 admin 拦（安全模块只在 `remember === true` 时记住，
+ * 这里宁可多拦）。
+ */
+describe('XS-41 会话询问的「允许并记住」与 @ 会话候选', () => {
+  const answer = (extra?: Record<string, unknown>): unknown[] => [
+    {
+      sessionId: 's1',
+      requestId: 'r1',
+      response: { kind: 'ask', allowed: true, ...(extra ? { extra } : {}) }
+    }
+  ]
+
+  it.each<[string, Record<string, unknown>, ChannelAccess]>([
+    ['remember: true', { remember: true }, 'admin'],
+    ['remember: false', { remember: false }, 'write'],
+    ["remember: 'yes'（真值）", { remember: 'yes' }, 'admin'],
+    ["remember: ''（假值）", { remember: '' }, 'write'],
+    ['remember: 0（假值）', { remember: 0 }, 'write'],
+    ['remember: true + rememberPath: false', { remember: true, rememberPath: false }, 'admin'],
+    ['remember: false + rememberPath: true', { remember: false, rememberPath: true }, 'admin'],
+    ['别的键', { note: 'x' }, 'write']
+  ])('XS-41 agent:respondToInput %s → %s', (_label, extra, access) => {
+    expect(channelCallAccessOf('agent:respondToInput', answer(extra))).toBe(access)
+  })
+
+  it('XS-41 别的通道带 remember 也照通道那一档', () => {
+    expect(channelCallAccessOf('agent:prompt', answer({ remember: true }))).toBe('write')
+    expect(channelCallAccessOf('session:list', answer({ remember: true }))).toBe('read')
+  })
+
+  it('XS-41 session:mentionEntries 是请求通道、read（API_TABLE.mentions.listSessions）', () => {
+    expect(REQUEST_CHANNELS.has('session:mentionEntries')).toBe(true)
+    expect(API_TABLE.mentions.listSessions).toMatchObject({
+      kind: 'invoke',
+      channel: 'session:mentionEntries'
+    })
+    expect(CHANNEL_ACCESS['session:mentionEntries']).toBe('read')
+    expect(channelAccessOf('session:mentionEntries')).toBe('read')
+    expect(channelCallAccessOf('session:mentionEntries', [{ query: 'x' }])).toBe('read')
   })
 })

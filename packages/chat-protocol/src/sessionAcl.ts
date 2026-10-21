@@ -2,9 +2,13 @@
  * 会话权限表（ACL）—— 一条会话被授予了哪些访问权，一条一行。主进程（`services/acl`）、设置界面与
  * 网络客户端共用这里的形状与判定。
  *
- * 今天只有一种客体：**路径**（`kind: 'path'`，access 为 read / write，写隐含读）。表是按「客体种类 +
- * 目标 + 访问方式」通用设计的 —— 以后的网络权限之类加一个 kind 即可，不改表结构；认不出的 kind 读的
- * 一侧跳过（旧版本读到新版本写下的行不出错）。
+ * 两种客体，access 都是 read / write（写隐含读）：
+ *   - **路径**（`kind: 'path'`，target = 绝对路径）：read = 读，write = 读写；
+ *   - **会话**（`kind: 'session'`，target = 另一条会话的 id）：这条会话的智能体可以经 `session` 工具与它交互 ——
+ *     read = 查看（读它的答复、看它的现场、等它），write = 对话（发消息、插话、代答、停下自己发起的那一轮）。
+ *     只有「允许并记住」与权限表的界面写这种行（来源恒为 user）；自己的子会话不需要行。
+ * 表是按「客体种类 + 目标 + 访问方式」通用设计的 —— 以后的网络权限之类再加一个 kind 即可，不改表结构；
+ * 认不出的 kind 读的一侧跳过（旧版本读到新版本写下的行不出错）。
  *
  * **不在表里 ≠ 拒绝**：表划定的是「这条会话免询问」的范围，表外的访问照旧由安全策略决定
  * （出厂的 ask-on-external-path 询问）。
@@ -18,17 +22,19 @@
  *       knowledge 会话勾选的知识库（sourceKey = 库名；内置库只读）
  *       skill     技能目录（只读；sourceKey = 目录）
  *   - 授予的两种由用户（或用户触发的宿主动作）写下，可以改、可以删：
- *       user      询问卡片上「允许并记住」、或在权限表里手动添加
+ *       user      询问卡片上「允许并记住」、或在权限表里手动添加（会话种类的行只来自前者）
  *       widget    会话里的命令初始化 / 构建 widget 时宿主授予的那个 widget 目录（sourceKey = widget id）
  */
 
-/** 客体种类。只有路径；表结构留着放别的种类 */
-export const ACL_KINDS = ['path'] as const
+/** 客体种类：路径与会话；表结构留着放别的种类 */
+export const ACL_KINDS = ['path', 'session'] as const
 export type AclKind = (typeof ACL_KINDS)[number]
 
-/** 路径的访问方式：write 隐含 read */
+/** 访问方式：write 隐含 read（路径 = 读 / 读写；会话 = 查看 / 对话） */
 export const PATH_ACCESSES = ['read', 'write'] as const
 export type PathAccess = (typeof PATH_ACCESSES)[number]
+/** 会话种类的访问方式：read = 查看，write = 对话（隐含查看）。与路径同一对值 */
+export type SessionAccess = PathAccess
 
 /** 宿主按设置对账的来源 */
 export const DERIVED_ACL_SOURCES = ['workdir', 'document', 'system', 'knowledge', 'skill'] as const
@@ -45,15 +51,21 @@ export interface AclEntry {
   id: string
   sessionId: string
   kind: AclKind
-  /** 客体：路径种类是绝对路径（照写法存，比较时由安全模块与沙箱解析成真实位置） */
+  /**
+   * 客体：路径种类是绝对路径（照写法存，比较时由安全模块与沙箱解析成真实位置）；会话种类是那条会话的 id
+   */
   target: string
-  /** 访问方式：路径种类是 PathAccess */
+  /** 访问方式（写隐含读） */
   access: PathAccess
   source: AclSource
   /** 来源里的哪一个（知识库名、技能目录、system 的槽位、widget id）；user 为 '' */
   sourceKey: string
   createdAt: number
   updatedAt: number
+  /**
+   * 只在交给界面时由宿主填上、不落库：会话种类的行是那条会话此刻的标题（会话已删 → 缺省）。路径种类没有
+   */
+  targetTitle?: string
 }
 
 export function isAclKind(value: unknown): value is AclKind {
@@ -112,6 +124,24 @@ export function pathAclView(entries: readonly Pick<AclEntry, 'kind' | 'target' |
   const write = new Set<string>()
   for (const entry of entries) {
     if (entry.kind !== 'path' || !entry.target) continue
+    read.add(entry.target)
+    if (entry.access === 'write') write.add(entry.target)
+  }
+  return { read: [...read], write: [...write] }
+}
+
+/**
+ * 会话条目归成「可查看」与「可对话」两张 id 表（策略的 `vars.aclSessionRead` / `vars.aclSessionWrite`）。
+ * 对话隐含查看：可对话的也在可查看表里。去重、保持首次出现的顺序。
+ */
+export function sessionAclView(entries: readonly Pick<AclEntry, 'kind' | 'target' | 'access'>[]): {
+  read: string[]
+  write: string[]
+} {
+  const read = new Set<string>()
+  const write = new Set<string>()
+  for (const entry of entries) {
+    if (entry.kind !== 'session' || !entry.target) continue
     read.add(entry.target)
     if (entry.access === 'write') write.add(entry.target)
   }

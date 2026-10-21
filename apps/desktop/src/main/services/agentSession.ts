@@ -147,7 +147,7 @@ export class AgentSession {
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
-      // 被驱动的发送同时记下来源（§19.7）：这条「用户消息」是父会话写的，不是人打的
+      // 被驱动的发送同时记下来源（§19.7）：这条「用户消息」是驱动它的会话（父会话或被授权的别的会话）写的，不是人打的
       ...(drive === undefined
         ? source === undefined
           ? {}
@@ -155,7 +155,7 @@ export class AgentSession {
         : {
             requestId: drive.requestId,
             driven: drive.driven,
-            source: { kind: 'parent-session' as const, sessionId: drive.driven.parentId }
+            source: sessionRecords.drivingSourceOf(this.sessionId, drive.driven.parentId)
           }),
       onAdmitted: (info) => {
         admitted = true

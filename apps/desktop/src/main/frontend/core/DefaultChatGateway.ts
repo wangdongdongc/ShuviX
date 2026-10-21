@@ -127,7 +127,7 @@ export class DefaultChatGateway implements ChatGateway {
     try {
       const result = await session.admitSteer(text, {
         requestId: drive.requestId,
-        source: { kind: 'parent-session', sessionId: drive.parentId }
+        source: sessionRecords.drivingSourceOf(sessionId, drive.parentId)
       })
       return result.error ? { error: result.error, code: result.code } : {}
     } catch (error) {
@@ -302,14 +302,13 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   /**
-   * 回退掉的那条用户消息若是父会话代发的（子会话里、有来源记录），交回它的原文与来源 —— 紧接着原样重发时沿用
-   * （见 `resendSources`）。只看子会话；读不了就当没有（重发照旧当作人发的 —— 与改动之前一样）。
+   * 回退掉的那条用户消息若是别的会话代发的（父会话、或被授权的别的会话，有来源记录），交回它的原文与来源 ——
+   * 紧接着原样重发时沿用（见 `resendSources`）。读不了就当没有（重发照旧当作人发的 —— 与改动之前一样）。
    */
   private async sourceOfMessage(
     sessionId: string,
     messageId: string
   ): Promise<{ text: string; source: InputSource } | undefined> {
-    if (!sessionRecords.pick(sessionId, ['parentId'])?.parentId) return undefined
     try {
       const agent =
         sessionService.getAgentSession(sessionId) ??

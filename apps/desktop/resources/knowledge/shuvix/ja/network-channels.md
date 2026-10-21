@@ -239,7 +239,7 @@ ShuviX をリモートで使うブラウザーは、すべてを**チャネル**
 
 ### `mentions`
 
-- read: `knowledge:mentionEntries`
+- read: `knowledge:mentionEntries`, `session:mentionEntries`
 
 ### `network`
 

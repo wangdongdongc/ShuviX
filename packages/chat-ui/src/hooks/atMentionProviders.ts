@@ -6,11 +6,13 @@
  * 绝不每次击键回后端。useAtMentions 只管触发解析路由与候选合并；注册新源 = 实现接口 +
  * registerAtMentionProvider。
  *
- * 内置两个源：
+ * 内置三个源：
  *   - file      —— 工作区文件（files.scan 建 FileMap，files.changed 重扫；原 useAtMentions
  *                  内联实现收编为 provider 内部状态）
  *   - knowledge —— 启用库知识条目（mentions.listKnowledgeEntries 一次拉全，knowledge.changed
  *                  重扫；session.configChanged 按载荷圈定该会话重拉 —— 启用库勾选不走 knowledge.changed）
+ *   - session   —— 别的会话（mentions.listSessions 一次拉全，会话列表 / 标题变了就重拉）：把它的 id 交给
+ *                  智能体，`session` 工具按 id 找它。宿主没有会话列表（扩展）→ 不就绪，弹层不出该分区
  */
 import {
   buildFileMap,
@@ -19,6 +21,7 @@ import {
   type FileMap
 } from '@shuvix/chat-protocol/utils/fileMap'
 import type { KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
+import type { SessionMentionEntry } from '@shuvix/chat-protocol/sessionMention'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 import type { AtMentionRef } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { getSessionChannelApi } from '../api/chatApi'
@@ -231,6 +234,83 @@ class KnowledgeProvider extends BaseProvider {
   }
 }
 
+// ── session：别的会话 ──
+
+/**
+ * 会话候选的内存内搜索：标题前缀 > 标题子串 > 项目名 / 父会话标题子串；同分按最近活跃在前（再按 id，确定性）。
+ * 空 query 按最近活跃取前 limit 条。
+ */
+export function searchSessionMentions(
+  entries: readonly SessionMentionEntry[],
+  query: string,
+  limit = 12
+): SessionMentionEntry[] {
+  const q = query.trim().toLowerCase()
+  const scored: { entry: SessionMentionEntry; score: number }[] = []
+  for (const entry of entries) {
+    const title = entry.title.toLowerCase()
+    let score: number
+    if (!q) score = 0
+    else if (title.startsWith(q)) score = 3
+    else if (title.includes(q)) score = 2
+    else if (
+      (entry.projectName ?? '').toLowerCase().includes(q) ||
+      (entry.parentTitle ?? '').toLowerCase().includes(q)
+    )
+      score = 1
+    else continue
+    scored.push({ entry, score })
+  }
+  scored.sort(
+    (a, b) =>
+      b.score - a.score ||
+      b.entry.lastActiveAt - a.entry.lastActiveAt ||
+      (a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0)
+  )
+  return scored.slice(0, limit).map(({ entry }) => entry)
+}
+
+class SessionProvider extends BaseProvider {
+  readonly source = 'session'
+  private readonly tables = new Map<string, SessionMentionEntry[]>()
+
+  ready(sessionId: string): boolean {
+    return this.tables.has(sessionId)
+  }
+
+  search(sessionId: string, query: string, limit?: number): AtSuggestionItem[] {
+    const entries = this.tables.get(sessionId)
+    if (!entries) return []
+    return searchSessionMentions(entries, query, limit).map((e) => {
+      const where = e.parentTitle ?? e.projectName
+      return {
+        source: this.source,
+        label: e.title,
+        ...(where ? { detail: where } : {}),
+        displayText: `session:${e.title}`,
+        // 标题天然重名（「新会话」）→ 明文撞车时以项目名 / id 尾巴消歧
+        disambiguator: e.projectName ?? e.id.slice(-6),
+        ref: { kind: 'session', sessionId: e.id, title: e.title }
+      }
+    })
+  }
+
+  protected async fetch(sessionId: string): Promise<void> {
+    const list = getSessionChannelApi().mentions.listSessions
+    if (!list) return
+    this.tables.set(sessionId, await list({ sessionId }))
+    this.notify()
+  }
+
+  protected sessionsToRescan(event: AppEvent): string[] {
+    // 会话增删、改标题：每张表都可能受影响（表里是除自己以外的全部会话）
+    if (event.type === 'session.listChanged' || event.type === 'session.titleChanged') {
+      return [...this.tables.keys()]
+    }
+    return []
+  }
+}
+
 // ── registry ──
 
 const registry: AtMentionProvider[] = []
@@ -253,3 +333,4 @@ export function getAtMentionSourceNames(): string[] {
 
 registerAtMentionProvider(new FileProvider())
 registerAtMentionProvider(new KnowledgeProvider())
+registerAtMentionProvider(new SessionProvider())

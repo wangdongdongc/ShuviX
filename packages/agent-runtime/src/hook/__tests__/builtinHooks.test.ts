@@ -1,6 +1,7 @@
 /**
  * 内置 hook（builtinHooks/）—— auto-title，以及判定型的 auto-review（询问点的自动审查）。auto-review
- * 在这里只钉清单、交付与结构（HB-10…12）；判定型的派发与合并见 hookDecide.test.ts。
+ * 在这里只钉清单、交付与结构（HB-10…12），外加经真 runner 的一格：会话客体不派审查员（XS-20）；判定型的
+ * 派发与合并见 hookDecide.test.ts。
  *
  * md 是唯一事实源（随包发布成文件，运行时经宿主注入的 readMd 现读；本测试注入构建期内联
  * 读取口），所以断言打在**解析后的 hook** 与盘上原文上：结构钉板（agent / 绑定 / 条件）、
@@ -26,7 +27,17 @@ import {
   builtinMdFileNames
 } from '../../subagent/builtinAgents'
 import type { InProcessAgentType } from '../../subagent/types'
-import { PROFILE, entryOf, makeRunner, promptPayload, settle, turnPayload } from './harness'
+import {
+  PROFILE,
+  entryOf,
+  makeRunner,
+  permissionPayload,
+  promptPayload,
+  settle,
+  turnPayload,
+  verdict,
+  verdictResult
+} from './harness'
 
 /** 盘上原文（不经 `?raw`） */
 const onDisk = (file: string): string =>
@@ -282,11 +293,22 @@ describe('auto-review（判定型）结构钉板', () => {
     return parsed!
   }
 
-  it('HB-10 en：派 permission-reviewer、恰一条 permission.request 绑定（没有 when）、显示名与描述、正文点名 next 且无模板语法', () => {
+  it('HB-10 en：派 permission-reviewer、恰一条 permission.request 绑定（when 排除会话客体 —— 会话访问只由人回答）、显示名与描述、正文点名 next 且无模板语法', () => {
     const review = reviewOf('en')
     expect(review.agent).toBe('permission-reviewer')
-    expect(review.bindings).toStrictEqual([{ trigger: 'permission.request' }])
-    expect('when' in review.bindings[0]).toBe(false)
+    expect(review.bindings).toStrictEqual([
+      { trigger: 'permission.request', when: "event.operation.objectType != 'session'" }
+    ])
+    const when = review.bindings[0].when!
+    const env = { host: 'desktop', platform: 'darwin' }
+    const eventOf = (objectType: string): Record<string, unknown> => ({
+      trigger: 'permission.request',
+      operation: { objectType }
+    })
+    expect(evaluateWhen(when, { event: eventOf('session'), env })).toBe(false)
+    for (const objectType of ['path', 'command', 'gitTool', 'database', 'url', 'invocation']) {
+      expect(evaluateWhen(when, { event: eventOf(objectType), env }), objectType).toBe(true)
+    }
     expect(review.displayName).toBe('Automatic Review of Approval Requests')
     expect(review.description).toBe(
       'Before an approval card is shown, the permission reviewer answers it on your behalf — it lets ordinary work through, refuses what is clearly harmful and leaves the rest to you.'
@@ -326,6 +348,71 @@ describe('auto-review（判定型）结构钉板', () => {
     ).toContain(review.agent)
     expect(BASE_PROFILE_NAMES.has(review.agent)).toBe(false)
   })
+})
+
+/**
+ * XS-20 真内置 auto-review 经真 runner 的判定入口：会话访问（`objectType: 'session'`）只由人回答 —— when 为假，
+ * 不派审查员、decide 交回 null（照旧问人）；别的客体（这里是路径）照常派一次。when 求值从不失败。
+ */
+describe('XS-20 auto-review × 会话客体（经真 runner 的 decide）', () => {
+  const reviewer: InProcessAgentType = {
+    ...PROFILE,
+    name: 'permission-reviewer',
+    displayName: 'Permission Reviewer',
+    tools: ['read']
+  }
+
+  const SESSION_OPERATION = {
+    tool: 'session: prompt-session',
+    action: 'write',
+    objectType: 'session',
+    target: 'Session(write, X)',
+    facts: { sessionId: 'X', title: 'T', ownTurn: false, message: 'please rebase' }
+  }
+  const PATH_OPERATION = {
+    tool: 'write',
+    action: 'write',
+    objectType: 'path',
+    target: 'Write(/Users/u/notes.txt)',
+    facts: { path: '/Users/u/notes.txt', workingDirectory: '/ws' }
+  }
+
+  it.each(LANGS)(
+    'XS-20 %s：objectType session → 不派发、返回 null、没有事件；objectType path → 派 permission-reviewer 恰一次、拿到结论；零 when 告警',
+    async (lang) => {
+      const review = build(lang).find((hook) => hook.name === 'auto-review')!
+      const h = makeRunner({
+        entries: [entryOf(review, 'builtin')],
+        resolveAgentProfile: (name) => (name === 'permission-reviewer' ? reviewer : null),
+        runTask: async () => verdictResult(verdict('allow'))
+      })
+
+      expect(
+        await h.runner.decide(
+          'permission.request',
+          permissionPayload({
+            operation: SESSION_OPERATION,
+            policy: { names: ['Ask Before Using Another Session'], prompt: 'p' }
+          })
+        )
+      ).toBeNull()
+      await settle()
+      expect(h.runTask).not.toHaveBeenCalled()
+      expect(h.events).toEqual([])
+
+      expect(
+        await h.runner.decide(
+          'permission.request',
+          permissionPayload({ operation: PATH_OPERATION })
+        )
+      ).toEqual({ result: verdict('allow'), hook: 'auto-review' })
+      expect(h.runTask).toHaveBeenCalledTimes(1)
+      expect(h.call(0).agentType.name).toBe('permission-reviewer')
+
+      expect(h.warns().filter((msg) => msg.includes('when evaluation failed'))).toEqual([])
+      expect(h.warns()).toEqual([])
+    }
+  )
 })
 
 /**

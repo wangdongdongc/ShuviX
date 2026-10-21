@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { BookOpen, FileText } from 'lucide-react'
+import { BookOpen, FileText, MessagesSquare } from 'lucide-react'
 import { mentionRefId } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { AtSuggestion } from '../../hooks/useAtMentions'
 
@@ -14,17 +14,24 @@ interface AtMentionPopoverProps {
 }
 
 /** 源图标（lucide 现有体系） */
-const SOURCE_ICONS = { file: FileText, knowledge: BookOpen } as const
+const SOURCE_ICONS = { file: FileText, knowledge: BookOpen, session: MessagesSquare } as const
 
 /** 段头 i18n 键（input 命名空间） */
 const SECTION_TITLE_KEYS = {
   file: 'input.atSectionFiles',
-  knowledge: 'input.atSectionKnowledge'
+  knowledge: 'input.atSectionKnowledge',
+  session: 'input.atSectionSessions'
 } as const
+
+/** 源图标的颜色 */
+const SOURCE_ICON_COLORS: Record<string, string> = {
+  knowledge: 'text-amber-500',
+  session: 'text-violet-500'
+}
 
 /**
  * `@` 自动补全浮层 —— 复用斜杠命令 / 内置技能选择框的视觉样式。
- * 多源分区渲染：裸 `@` 时「文件」「知识库」两段（段头小字标题，方向键跨段循环）；
+ * 多源分区渲染：裸 `@` 时「文件」「知识库」「会话」各一段（段头小字标题，方向键跨段循环）；
  * `@源:query` 显式路由后只出该源（单段不出段头，与单源时代观感一致）。
  * 锚定在 textarea 上方（与斜杠命令一致，不做光标坐标测量，键位与整体观感统一）。
  */
@@ -81,12 +88,12 @@ export function AtMentionPopover({
             ? 'bg-accent/15 text-text-primary'
             : 'text-text-secondary hover:bg-bg-tertiary'
         }`}
-        // 行锚点：文件=工作区相对路径、知识条目=`knowledge:`+条目 id（e2e harness 按此认行）
+        // 行锚点：文件=工作区相对路径、知识条目=`knowledge:`+条目 id、会话=`session:`+会话 id（e2e harness 按此认行）
         data-at-suggestion={mentionRefId(s.ref)}
       >
         <Icon
           size={12}
-          className={`flex-shrink-0 ${s.source === 'knowledge' ? 'text-amber-500' : 'text-sky-500'}`}
+          className={`flex-shrink-0 ${SOURCE_ICON_COLORS[s.source] ?? 'text-sky-500'}`}
         />
         <span className={`text-accent truncate ${s.source === 'file' ? 'font-mono' : ''}`}>
           {s.label}

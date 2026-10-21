@@ -473,7 +473,8 @@ export const API_TABLE = {
   },
   /** 输入框 @ 引用 */
   mentions: {
-    listKnowledgeEntries: invoke('knowledge:mentionEntries', 1)
+    listKnowledgeEntries: invoke('knowledge:mentionEntries', 1),
+    listSessions: invoke('session:mentionEntries', 1)
   },
   /** 网络访问（server mode phase B：局域网里的浏览器经 WebSocket 用同一张表） */
   network: {

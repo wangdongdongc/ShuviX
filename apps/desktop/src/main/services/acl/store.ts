@@ -68,6 +68,21 @@ export function aclStoreFor(sessionId: string): AclStore {
 }
 
 /**
+ * 删所有表（两边存储）里指向某个目标的某种行 —— 会话种类的目标会话被删时调。交回有行被删的那些会话
+ */
+export function deleteTargetEverywhere(kind: AclEntry['kind'], target: string): string[] {
+  const affected = new Set<string>()
+  for (const [sessionId, rows] of memory) {
+    const kept = rows.filter((r) => !(r.kind === kind && r.target === target))
+    if (kept.length !== rows.length) affected.add(sessionId)
+    memory.set(sessionId, kept)
+  }
+  for (const sessionId of sessionAclDao.findSessionsByTarget(kind, target)) affected.add(sessionId)
+  sessionAclDao.deleteByTarget(kind, target)
+  return [...affected]
+}
+
+/**
  * 删一条会话的整张表，两边都删 —— 内存会话被删之后 isEphemeral 就不再认它（见 sessionRecords），
  * 按「在哪一边」分流会漏掉它的内存表
  */

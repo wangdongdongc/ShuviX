@@ -17,7 +17,8 @@
  *   - PR-3c     「是不是审查员」这一个判断（isReviewerAgent / isReviewerIdentity）：只认「派生 + 档案绑在
  *               permission.request 上」，根 agent 不去扫 hook 目录；
  *   - PR-18     recentOperations 取自真的决策日志，审查员自己的操作先滤掉再取最近 10 条；
- *   - PR-W1     main/index.ts 把审查者与「认审查员」的判断一并注入 toolContext（读源码）。
+ *   - PR-W1     main/index.ts 把审查者与「认审查员」的判断一并注入 toolContext（读源码）；
+ *   - XS-21     会话客体（session 工具与别的会话交互）的 operation / facts：消息预览按 3000 截断，read 没有 message。
  *
  * 替身：hookService / messageService / sessionRecords / logger / frontend/core / sessionHost。
  * **钉的是旧格式（harness-v3-jsonl）路径**：会话行不带 storageKind，转写经 messageService 读冻结投影；
@@ -984,6 +985,142 @@ describe('PR —— payload 的形状', () => {
     const sid = newSession()
     const payload = await buildPermissionRequestPayload(makeEvent(sid, { decision }))
     expect(payload.policy).toStrictEqual({ names, prompt })
+  })
+})
+
+// ─── 会话客体（session 工具与别的会话交互，2026-10-20） ─────────────
+
+/**
+ * XS-21 会话客体 `{type:'session', sessionId, title, ownTurn}` 的 payload：objectType 'session'、tool 带动作、
+ * target 是卡片主文本 `Session(<access>, <id>)`；facts 取 sessionId / title / ownTurn，write 的消息预览按 diff 的
+ * 同一个上限（3000）截断并注明，read 没有预览就没有 message 键。出厂的 auto-review 不审这类客体（见 builtinHooks），
+ * 这里钉的是用户自己的 hook 审它时看到的那份。
+ */
+describe('PR —— 会话客体的 payload（XS-21）', () => {
+  const sessionObject = (
+    over: Partial<{ sessionId: string; title: string; ownTurn: boolean }> = {}
+  ): SecurityObject => ({ type: 'session', sessionId: 'X', title: 'T', ownTurn: false, ...over })
+  /** 出厂的 ask-on-session-access 没写提示语：policy 退回胜出规则所属的策略名 */
+  const SESSION_DECISION: Partial<SecurityDecision> = {
+    matched: ['ask-on-session-access#0'],
+    winning: 'ask-on-session-access#0',
+    prompt: undefined
+  }
+
+  it('XS-21 write（prompt-session）带 3500 字的消息预览：完整 payload；message 截到 3000 并注明 [500 more chars]', async () => {
+    const sid = newSession()
+    const message = 'm'.repeat(3500)
+    const payload = await buildPermissionRequestPayload(
+      makeEvent(sid, {
+        action: 'write',
+        tool: { name: 'session', operation: 'prompt-session' },
+        object: sessionObject(),
+        command: 'Session(write, X)',
+        preview: { kind: 'message', text: message },
+        decision: SESSION_DECISION
+      })
+    )
+    expect(payload).toStrictEqual({
+      sessionId: sid,
+      agent: { profile: 'work', kind: 'root' },
+      operation: {
+        tool: 'session: prompt-session',
+        action: 'write',
+        objectType: 'session',
+        target: 'Session(write, X)',
+        facts: {
+          sessionId: 'X',
+          title: 'T',
+          ownTurn: false,
+          message: `${'m'.repeat(3000)}… [500 more chars]`,
+          ...COMMON_FACTS
+        }
+      },
+      policy: { names: ['ask-on-session-access'], prompt: '' },
+      userMessages: [],
+      delegatedTasks: [],
+      recentOperations: []
+    })
+  })
+
+  it('XS-21 facts 只有这几个键：扩展端环境（没有 platform / workspaceDir）下恰是 sessionId / title / ownTurn / message', async () => {
+    const sid = newSession()
+    const payload = await buildPermissionRequestPayload(
+      makeEvent(sid, {
+        action: 'write',
+        tool: { name: 'session', operation: 'steer-session' },
+        object: sessionObject(),
+        command: 'Session(write, X)',
+        preview: { kind: 'message', text: 'n'.repeat(3500) },
+        environment: { host: 'extension' }
+      })
+    )
+    expect(payload.operation.facts).toStrictEqual({
+      sessionId: 'X',
+      title: 'T',
+      ownTurn: false,
+      message: `${'n'.repeat(3000)}… [500 more chars]`
+    })
+  })
+
+  it('XS-21 恰 3000 字的消息不截；ownTurn 为 true 照实给出', async () => {
+    const sid = newSession()
+    const exact = 'e'.repeat(3000)
+    const payload = await buildPermissionRequestPayload(
+      makeEvent(sid, {
+        action: 'write',
+        tool: { name: 'session', operation: 'answer-session' },
+        object: sessionObject({ ownTurn: true }),
+        command: 'Session(write, X)',
+        preview: { kind: 'message', text: exact }
+      })
+    )
+    expect(payload.operation.facts).toStrictEqual({
+      sessionId: 'X',
+      title: 'T',
+      ownTurn: true,
+      message: exact,
+      ...COMMON_FACTS
+    })
+  })
+
+  it('XS-21 read（inspect-session）没有预览 → 没有 message 键；target 是 Session(read, X)', async () => {
+    const sid = newSession()
+    const payload = await buildPermissionRequestPayload(
+      makeEvent(sid, {
+        action: 'read',
+        tool: { name: 'session', operation: 'inspect-session' },
+        object: sessionObject(),
+        command: 'Session(read, X)',
+        decision: SESSION_DECISION
+      })
+    )
+    expect(payload.operation).toStrictEqual({
+      tool: 'session: inspect-session',
+      action: 'read',
+      objectType: 'session',
+      target: 'Session(read, X)',
+      facts: { sessionId: 'X', title: 'T', ownTurn: false, ...COMMON_FACTS }
+    })
+    expect(payload.operation.facts).not.toHaveProperty('message')
+  })
+
+  it('XS-21 空标题不出现（空串不进 facts）；不是 message 的预览（diff）不当成消息', async () => {
+    const sid = newSession()
+    const payload = await buildPermissionRequestPayload(
+      makeEvent(sid, {
+        action: 'write',
+        tool: { name: 'session', operation: 'prompt-session' },
+        object: sessionObject({ title: '' }),
+        command: 'Session(write, X)',
+        preview: { kind: 'diff', path: 'a.ts', diff: '+x' }
+      })
+    )
+    expect(payload.operation.facts).toStrictEqual({
+      sessionId: 'X',
+      ownTurn: false,
+      ...COMMON_FACTS
+    })
   })
 })
 

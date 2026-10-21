@@ -253,7 +253,8 @@
     "sendFailed": "送信できませんでした：{{error}}",
     "pasteChipLines": "[貼り付けテキスト #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[貼り付けテキスト #{{seq}} · {{chars}} 文字]",
-    "pasteName": "貼り付けテキスト #{{seq}}"
+    "pasteName": "貼り付けテキスト #{{seq}}",
+    "atSectionSessions": "セッション"
   },
   "compact": {
     "summaryLabel": "会話の要約（自動圧縮済み）"
@@ -428,7 +429,15 @@
       "show": "実際に実行したコマンド",
       "loading": "読み込み中…",
       "missing": "このコマンドの実行記録はありません。"
-    }
+    },
+    "answeredBySessionTag": "別のセッションが代理回答",
+    "sessionAskRead": "別のセッションを閲覧",
+    "sessionAskWrite": "別のセッションと対話",
+    "sessionAskMessage": "送信するメッセージ",
+    "sessionAskUntitled": "無題のセッション",
+    "allowAndRememberSession": "許可して記憶",
+    "answeredBySessionHint": "この質問は、別のセッション「{{title}}」が自分で始めたこのターンの中であなたに代わって回答しました。あなた自身の選択ではありません。",
+    "answeredBySessionHintNoTitle": "この質問は、別のセッションが自分で始めたこのターンの中であなたに代わって回答しました。あなた自身の選択ではありません。"
   },
   "sessionConfig": {
     "title": "セッション設定",
@@ -466,7 +475,12 @@
     "addConfirm": "追加",
     "browse": "フォルダを選択…",
     "cancel": "キャンセル",
-    "addFailed": "絶対パス（/ またはドライブ文字で始まるもの）を入力してください。"
+    "addFailed": "絶対パス（/ またはドライブ文字で始まるもの）を入力してください。",
+    "sessionsTitle": "セッションへのアクセス",
+    "sessionsDescription": "このセッションのエージェントは、これらのセッションを確認なしで使えます —— 回答を読む、または対話もする。自分のサブセッションには行は要りません。それ以外のセッションは先に確認し、そのカードで「許可して記憶」するとここに加わります。",
+    "sessionRead": "閲覧",
+    "sessionWrite": "対話",
+    "sessionUntitled": "無題のセッション"
   },
   "projectForm": {
     "createTitle": "新規プロジェクト",
@@ -1240,6 +1254,7 @@
     "tasksKindBash": "Bash",
     "tasksKindAgent": "サブエージェント",
     "tasksKindSubSession": "サブセッション",
+    "tasksKindSession": "セッション",
     "tasksOpen": "開く",
     "tasksAgentGone": "このエージェントは利用できなくなりました",
     "tasksBlockedOn": "回答待ち",

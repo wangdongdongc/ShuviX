@@ -43,7 +43,30 @@ export interface AskDiffPreview {
   isNewFile?: boolean
 }
 
-export type AskPreview = AskDiffPreview
+/**
+ * 「预览询问」的消息载荷 —— 智能体要发进别的会话的那段话（`session` 工具的 prompt / steer / answer）。
+ * 用户批准的就是这段话落进那条会话，所以原文摆在卡片上。
+ */
+export interface AskMessagePreview {
+  kind: 'message'
+  text: string
+}
+
+export type AskPreview = AskDiffPreview | AskMessagePreview
+
+/**
+ * 会话询问（`session` 工具要与一条不是自己子会话的会话交互）：卡片据此摆出目标会话与访问方式，
+ * 「允许并记住」记下的是会话权限表里 `kind: 'session'` 的一行（`extra.remember: true`）。
+ */
+export interface AskSessionTarget {
+  sessionId: string
+  /** 目标会话此刻的标题（只为显示） */
+  title: string
+  /** read = 查看，write = 对话 */
+  access: 'read' | 'write'
+  /** 这次要做什么（`session` 工具的动作名，如 `prompt-session`） */
+  operation: string
+}
 
 /**
  * 命中的安全策略给出的提示语（策略 md 里规则的 `prompt`）。
@@ -77,8 +100,10 @@ export interface AskInputRequest extends InputRequestBase {
    * - 仅对 read 模式有意义
    */
   pathIsDirectory?: boolean
-  /** 预览询问载荷:有则前端渲染预览(如 write/edit 的 diff)而非光秃秃的路径 */
+  /** 预览询问载荷:有则前端渲染预览(如 write/edit 的 diff、要发进别的会话的消息)而非光秃秃的路径 */
   preview?: AskPreview
+  /** 会话询问：要交互的那条会话与访问方式（有则卡片按会话渲染，可「允许并记住」） */
+  session?: AskSessionTarget
   /**
    * 该命令将作为**后台任务**运行（bash 的 run_in_background）。
    * 卡片上标一个标签 —— 用户批准的是一个不会自动结束、要自己去停的进程，
@@ -119,11 +144,12 @@ export type InputRequest = AskInputRequest | ChoiceInputRequest
 // ─── 响应侧 ──────────────────────────────────────────
 
 /**
- * 一条父会话（子会话的驱动方）的引用 —— 代用户回答子会话询问的答题方、代用户发进子会话的那条用户消息的
- * 来源（docs/sub-session-design.md §19.5）。`title` 只为显示（卡片上的「由父会话「X」代答」），可能过期。
+ * 驱动这条会话的另一条会话的引用 —— 代用户回答询问的答题方、代用户发进来的那条用户消息的来源
+ * （docs/sub-session-design.md §19.5）。`kind`：`parent-session` = 它的父会话（子会话的驱动方）；`session` = 别的
+ * 会话（经会话权限表被授权与它交互的那条）。`title` 只为显示（「由父会话「X」代答」/「来自会话「X」」），可能过期。
  */
-export interface ParentSessionRef {
-  kind: 'parent-session'
+export interface DrivingSessionRef {
+  kind: 'parent-session' | 'session'
   sessionId: string
   title?: string
 }
@@ -132,16 +158,17 @@ interface InputResponseBase {
   /**
    * 工具自定义副作用字段，由工具响应回调消费。路径询问的「允许并记住」：`{ rememberPath: true }` 记下问的那条
    * 路径；`{ rememberPath: '<它所在的某一级文件夹>' }` 记下那个文件夹（安全模块只认真包含它的上级目录，且不许
-   * 是 `/`、不许覆盖家目录 —— 不合格就退回问的那条路径，见 enforce.ts rememberTargetOf）
+   * 是 `/`、不许覆盖家目录 —— 不合格就退回问的那条路径，见 enforce.ts rememberTargetOf）。会话询问的
+   * 「允许并记住」：`{ remember: true }` 记下问的那条会话与访问方式
    */
   extra?: Record<string, unknown>
   /**
-   * 答题方不是用户本人时由**宿主**写上（今天只有一种：父会话代答子会话的 ask）。
+   * 答题方不是用户本人时由**宿主**写上（今天只有一种：驱动它的会话 —— 父会话或被授权的别的会话 —— 代答 ask）。
    *
    * ⚠️ 从不信任应答载荷里的这一项：IPC 载荷来自渲染端，挂起的询问在交回之前一律用宿主记下的
    * 答题方覆盖它（没有就删掉）—— 否则一个前端就能把用户自己的回答伪装成父会话代答、或反过来。
    */
-  answeredBy?: ParentSessionRef
+  answeredBy?: DrivingSessionRef
 }
 
 export interface AskResponse extends InputResponseBase {

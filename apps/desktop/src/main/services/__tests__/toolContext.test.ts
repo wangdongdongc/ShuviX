@@ -65,6 +65,13 @@ const tc = vi.hoisted(() => ({
   pathView: vi.fn((_sid: string): { read: string[]; write: string[] } => ({ read: [], write: [] })),
   /** services/acl 的 sessionAcl.grantPath：「允许并记住」写进权限表 */
   grantPath: vi.fn((_sid: string, _path: string, _access: 'read' | 'write'): unknown => null),
+  /** services/acl 的 sessionAcl.sessionView：本会话可查看 / 可对话的别的会话（缺省空表；XS-35 换） */
+  sessionView: vi.fn((_sid: string): { read: string[]; write: string[] } => ({
+    read: [],
+    write: []
+  })),
+  /** services/acl 的 sessionAcl.grantSession：会话询问的「允许并记住」写进权限表（XS-35） */
+  grantSession: vi.fn((_sid: string, _target: string, _access: 'read' | 'write'): unknown => null),
   /** skillService.listExternalDirs / listSharedDirs：变量表 skillsDirs 的后两段（SEC-10 换） */
   externalSkillDirs: [] as Array<{ name: string; path: string }>,
   sharedSkillDirs: [] as Array<{ name: string; path: string }>,
@@ -77,10 +84,21 @@ const tc = vi.hoisted(() => ({
 
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: tc.projectPick } }))
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pickSettings: tc.pickSettings } }))
-// 会话权限表换成替身：getVars 读 pathView、persistGrant 写 grantPath（表本身另有单测）
+// 会话权限表换成替身：getVars 读 pathView / sessionView、persistGrant 写 grantPath（表本身另有单测）
 vi.mock('../acl', () => ({
-  sessionAcl: { pathView: tc.pathView, grantPath: tc.grantPath }
+  sessionAcl: {
+    pathView: tc.pathView,
+    sessionView: tc.sessionView,
+    grantPath: tc.grantPath,
+    grantSession: tc.grantSession
+  }
 }))
+// createSecurityContext 原样透传（其余用例走真实的安全模块）；XS-36 用 mockImplementationOnce 换一次，
+// 看 assertSessionAccess 交给 enforceSession 的参数
+vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shuvix/agent-runtime')>()
+  return { ...actual, createSecurityContext: vi.fn(actual.createSecurityContext) }
+})
 vi.mock('../sessionService', () => ({
   sessionService: { getById: tc.getById }
 }))
@@ -132,6 +150,7 @@ vi.mock('../../logger', () => ({
 
 import {
   agentActorOf,
+  assertSessionAccess,
   getDesktopSecurityContext,
   isPathReadAllowed,
   isSessionDocument,
@@ -141,6 +160,7 @@ import {
   resolveSessionDocument,
   setCommandClassifier,
   setPermissionReviewer,
+  TOOL_ABORTED,
   withCallAgent,
   type ProjectConfig,
   type ToolContext
@@ -150,12 +170,14 @@ import { pathAclView, type AclEntry } from '@shuvix/chat-protocol/sessionAcl'
 import {
   clearReviewState,
   clearSessionDecisions,
+  createSecurityContext,
   getSessionDecisions,
   parsePolicyDefinitionFile,
   type CommandObjectInput,
   type CommandRisk,
   type PermissionRequestEvent,
   type PermissionReviewAnswer,
+  type SecurityContext,
   type SecurityDecision,
   type SecuritySubject,
   type UserPolicyFile
@@ -578,6 +600,255 @@ describe('HG-1 getVars —— aclRead / aclWrite 来自会话权限表', () => {
       ['sess-grant', '/Users/u/elsewhere', 'write'],
       ['sess-grant', '/Users/u/notes', 'read']
     ])
+  })
+})
+
+/**
+ * XS-35 会话种类的行的宿主胶水 —— 与 HG-1 同形的两件事：
+ *   - getVars 的 `aclSessionRead` / `aclSessionWrite`：来自 sessionAcl.sessionView(ctx.sessionId)（出厂的
+ *     ask-on-session-access 在这两张表以外询问）。每次评估现取 —— 会话中途「允许并记住」之后下一次评估就得看见；
+ *   - persistSessionGrant(mode, id)：会话询问卡上的「允许并记住」→ sessionAcl.grantSession(ctx.sessionId, id, mode)。
+ */
+describe('XS-35 getVars —— aclSessionRead / aclSessionWrite 来自会话权限表的会话行', () => {
+  const SESSION = { type: 'session', sessionId: 'B', title: 'Plan', ownTurn: false }
+
+  beforeEach(() => {
+    tc.sessionView.mockReset()
+    tc.grantSession.mockReset()
+    tc.grantPath.mockReset()
+    tc.pathView.mockReset()
+    tc.userPolicies = []
+  })
+
+  it('XS-35 表给什么，aclSessionRead / aclSessionWrite 就是什么；按 ctx.sessionId 去取；每次评估现取；空表 → 两张空清单', () => {
+    const provider = makeDesktopSecurityProvider(
+      { sessionId: 'sess-x', requestUserInput: undefined },
+      () => ({ workingDirectory: '/ws' })
+    )
+    const vars = (): Record<string, unknown> => provider.getVars() as Record<string, unknown>
+
+    tc.sessionView.mockReturnValueOnce({ read: ['B', 'C'], write: ['B'] })
+    const first = vars()
+    expect(first.aclSessionRead).toEqual(['B', 'C'])
+    expect(first.aclSessionWrite).toEqual(['B'])
+
+    // 会话中途授予了一条：同一个 provider，下一次就跟上
+    tc.sessionView.mockReturnValueOnce({ read: ['B', 'C', 'D'], write: ['B', 'D'] })
+    const second = vars()
+    expect(second.aclSessionRead).toEqual(['B', 'C', 'D'])
+    expect(second.aclSessionWrite).toEqual(['B', 'D'])
+
+    const empty = vars()
+    expect(empty.aclSessionRead).toEqual([])
+    expect(empty.aclSessionWrite).toEqual([])
+    expect(tc.sessionView.mock.calls).toEqual([['sess-x'], ['sess-x'], ['sess-x']])
+    // 路径那两张表照旧来自 pathView，两边互不串
+    expect(tc.pathView.mock.calls).toEqual([['sess-x'], ['sess-x'], ['sess-x']])
+    expect(empty.aclRead).toEqual([])
+  })
+
+  it('XS-35 真实评估：表里的会话免询问 —— 对话隐含查看，只有查看时对话照问；表外两样都问', () => {
+    const ctx = getDesktopSecurityContext({ sessionId: 'sess-eval' }, () => ({
+      workingDirectory: '/ws'
+    }))
+    const judged = (mode: 'read' | 'write'): { effect: string; winning: string } => {
+      const d = ctx.evaluate(mode, SESSION)
+      return { effect: d.effect, winning: d.winning }
+    }
+
+    expect(judged('read')).toEqual({ effect: 'ask', winning: 'ask-on-session-access#0' })
+    expect(judged('write')).toEqual({ effect: 'ask', winning: 'ask-on-session-access#1' })
+
+    tc.sessionView.mockReturnValue({ read: ['B'], write: [] })
+    expect(judged('read')).toEqual({ effect: 'allow', winning: 'default:session' })
+    expect(judged('write')).toEqual({ effect: 'ask', winning: 'ask-on-session-access#1' })
+
+    tc.sessionView.mockReturnValue({ read: ['B'], write: ['B'] })
+    expect(judged('read').effect).toBe('allow')
+    expect(judged('write').effect).toBe('allow')
+    // 别的会话不沾光
+    expect(ctx.evaluate('write', { ...SESSION, sessionId: 'C' }).effect).toBe('ask')
+    expect(tc.sessionView).toHaveBeenCalledWith('sess-eval')
+  })
+
+  it('XS-35 persistSessionGrant(mode, id) → sessionAcl.grantSession(ctx.sessionId, id, mode)；路径的 persistGrant 不走它', () => {
+    const provider = makeDesktopSecurityProvider(
+      { sessionId: 'sess-grant', requestUserInput: undefined },
+      () => ({ workingDirectory: '/ws' })
+    )
+    tc.grantSession.mockReturnValueOnce({ id: 'row-1' })
+    // 写进表就完事：交回值不外泄给安全模块
+    expect(provider.persistSessionGrant?.('write', 'B')).toBeUndefined()
+    provider.persistSessionGrant?.('read', 'C')
+    expect(tc.grantSession.mock.calls).toEqual([
+      ['sess-grant', 'B', 'write'],
+      ['sess-grant', 'C', 'read']
+    ])
+    expect(tc.grantPath).not.toHaveBeenCalled()
+
+    provider.persistGrant?.('read', '/Users/u/notes')
+    expect(tc.grantPath.mock.calls).toEqual([['sess-grant', '/Users/u/notes', 'read']])
+    expect(tc.grantSession).toHaveBeenCalledTimes(2)
+  })
+})
+
+/**
+ * XS-36 assertSessionAccess —— `session` 工具指向别的会话的动作都过它。它把调用点给的东西原样交给
+ * enforceSession(access, {sessionId, title, ownTurn}, {toolCallId, ...owner, toolName, operation, signal, preview, abortError})：
+ * 要发进那条会话的话（message，非空白时）摆成卡片的 `{kind: 'message'}` 预览（原文，不 trim）；没给的 signal / owner /
+ * 空白的 message 连键都不带。观察点是 createSecurityContext 交回的那一个 context（换一次成替身）。
+ */
+describe('XS-36 assertSessionAccess —— 交给 enforceSession 的参数', () => {
+  const runtime = vi.mocked(createSecurityContext)
+  const sessions: string[] = []
+
+  /** 下一次 createSecurityContext 交回一个只认 enforceSession 的替身，记下它收到的参数 */
+  function captureEnforceSession(reject?: Error): unknown[][] {
+    const calls: unknown[][] = []
+    runtime.mockImplementationOnce(
+      () =>
+        ({
+          enforceSession: async (...args: unknown[]) => {
+            calls.push(args)
+            if (reject) throw reject
+          }
+        }) as unknown as SecurityContext
+    )
+    return calls
+  }
+
+  beforeEach(() => {
+    tc.sessionView.mockReset()
+    tc.userPolicies = []
+    // 前面用例经透传留下的调用记录
+    runtime.mockClear()
+  })
+
+  afterEach(() => {
+    // 回到透传（vi.fn(impl) 的 mockReset 复原成 impl），顺带清掉没用完的 Once
+    runtime.mockReset()
+    for (const id of sessions.splice(0)) {
+      clearReviewState(id)
+      clearSessionDecisions(id)
+    }
+  })
+
+  it('XS-36 write + message + owner + signal：enforceSession(write, 客体, {toolCallId, taskId, conversationId, toolName, operation, signal, preview, abortError})；主体是这条会话的根 agent', async () => {
+    const calls = captureEnforceSession()
+    const signal = new AbortController().signal
+    await assertSessionAccess(
+      { sessionId: 'caller' },
+      'write',
+      { sessionId: 'B', title: 'Plan the release', ownTurn: false },
+      {
+        toolCallId: 'tc-xs36',
+        toolName: 'session',
+        operation: 'prompt-session',
+        owner: { taskId: 4, conversationId: 2 },
+        signal,
+        message: '  ship it  '
+      }
+    )
+    expect(calls).toHaveLength(1)
+    const [mode, object, opts] = calls[0]
+    expect(mode).toBe('write')
+    expect(object).toStrictEqual({ sessionId: 'B', title: 'Plan the release', ownTurn: false })
+    expect(opts).toStrictEqual({
+      toolCallId: 'tc-xs36',
+      taskId: 4,
+      conversationId: 2,
+      toolName: 'session',
+      operation: 'prompt-session',
+      signal,
+      preview: { kind: 'message', text: '  ship it  ' },
+      abortError: TOOL_ABORTED
+    })
+    expect((opts as { signal: AbortSignal }).signal).toBe(signal)
+    expect(TOOL_ABORTED).toBe('Aborted')
+    expect(runtime).toHaveBeenCalledTimes(1)
+    expect(runtime.mock.calls[0][0]).toStrictEqual({
+      kind: 'agent',
+      sessionId: 'caller',
+      agentKind: 'root'
+    })
+  })
+
+  it.each<[string, string | undefined]>([
+    ['没给 message', undefined],
+    ['空串', ''],
+    ['只有空白', '  \n\t ']
+  ])(
+    'XS-36 %s → 不带 preview 键；没给 signal / owner → 也不带它们的键',
+    async (_label, message) => {
+      const calls = captureEnforceSession()
+      await assertSessionAccess(
+        { sessionId: 'caller' },
+        'read',
+        { sessionId: 'B', title: '', ownTurn: true },
+        {
+          toolCallId: 'tc-xs36-blank',
+          toolName: 'session',
+          operation: 'read-session',
+          ...(message === undefined ? {} : { message })
+        }
+      )
+      expect(calls).toHaveLength(1)
+      const [mode, object, opts] = calls[0]
+      expect(mode).toBe('read')
+      expect(object).toStrictEqual({ sessionId: 'B', title: '', ownTurn: true })
+      expect(opts).toStrictEqual({
+        toolCallId: 'tc-xs36-blank',
+        toolName: 'session',
+        operation: 'read-session',
+        abortError: TOOL_ABORTED
+      })
+      expect(opts).not.toHaveProperty('preview')
+      expect(opts).not.toHaveProperty('signal')
+    }
+  )
+
+  it('XS-36 enforceSession 的拒绝原样抛给调用方', async () => {
+    captureEnforceSession(new Error('User denied talking to session "Plan" (B)'))
+    await expect(
+      assertSessionAccess(
+        { sessionId: 'caller' },
+        'write',
+        { sessionId: 'B', title: 'Plan', ownTurn: false },
+        { toolCallId: 'tc-xs36-deny', toolName: 'session', operation: 'steer-session' }
+      )
+    ).rejects.toThrow('User denied talking to session "Plan" (B)')
+  })
+
+  it('XS-36 真实的安全模块：卡片摆出要发的话（message 预览）与目标会话；答允许 → 放行', async () => {
+    const sessionId = 'xs36-real'
+    sessions.push(sessionId)
+    const asks: InputRequest[] = []
+    await assertSessionAccess(
+      {
+        sessionId,
+        requestUserInput: async (req) => {
+          asks.push(req)
+          return { kind: 'ask', allowed: true }
+        }
+      },
+      'write',
+      { sessionId: 'B', title: 'Plan', ownTurn: false },
+      {
+        toolCallId: 'tc-xs36-real',
+        toolName: 'session',
+        operation: 'prompt-session',
+        message: 'ship it'
+      }
+    )
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({
+      kind: 'ask',
+      id: 'tc-xs36-real',
+      toolName: 'session',
+      command: 'Session(write, B)',
+      preview: { kind: 'message', text: 'ship it' },
+      session: { sessionId: 'B', title: 'Plan', access: 'write', operation: 'prompt-session' }
+    })
   })
 })
 

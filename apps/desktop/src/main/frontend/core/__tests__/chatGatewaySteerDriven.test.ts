@@ -6,6 +6,8 @@
  *   WP2-64 受理 → `admitSteer` 恰一次（requestId + 父会话来源，没有 title），交回 `{}`（不漏 submissionId）
  *   WP2-65 被拒 → 原样交回 `{error, code}`；不向界面广播（被拒只交给父会话 —— 现状，见下）
  *   WP2-66 admitSteer 抛错 / 抛字符串 → `{error}`（没有 code），从不 reject
+ *   XS-59  驱动方不是 target 的父会话（别的会话 / 顶层会话 / 行不在）→ 来源 `{kind:'session', sessionId: <driver>}`；
+ *          父会话驱动照旧 parent-session（[guard]）
  *   WP2-67 IPC 的 steer 照旧：`session.steer(text)`，不经 admitSteer；被拒广播 error
  *   WP2-78 前端拿不到写来源 / 答题方的口子（读源码）：IPC 与 Chrome 通道从不传 drive、从不调 steerDriven /
  *          admitSteer，respondToInput 的附带信息只由 `{clientId: …}` 字面量构成
@@ -55,7 +57,15 @@ vi.mock('../../../services/builtinMcp/dbConnections', () => ({
 vi.mock('../../../services/mcpService', () => ({ mcpService: { getAllToolInfos: () => [] } }))
 vi.mock('../../../services/skillService', () => ({ skillService: { findEnabled: () => [] } }))
 vi.mock('../../../dao/sessionDao', () => ({
-  sessionDao: { findById: vi.fn(), touchActive: vi.fn() }
+  // c1 是 P1 的子会话：插话的来源记成 parent-session（驱动它的不是父会话时记 session，见 sessionRecords.drivingSourceOf）
+  sessionDao: {
+    findById: vi.fn(),
+    touchActive: vi.fn(),
+    // t1 是顶层会话（XS-59）；别的 id 没有行
+    pick: vi.fn((id: string) =>
+      id === 'c1' ? { parentId: 'P1' } : id === 't1' ? { parentId: null } : undefined
+    )
+  }
 }))
 vi.mock('../../../dao/projectDao', () => ({ projectDao: { pick: vi.fn() } }))
 vi.mock('../../../services/agentService', () => ({ agentService: { getProfile: vi.fn() } }))
@@ -139,6 +149,34 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
       })
     }
   )
+
+  // XS-59 驱动方不是 target 的父会话（经会话权限表被授权的别的会话，2026-10-20）→ 来源记成 {kind:'session'}；
+  // 判据是 sessionRecords.drivingSourceOf（target 的直接 parentId），没有 title
+  it.each([
+    ['c1（P1 的子会话）被别的会话 X 插话', 'c1', 'X'],
+    ['顶层会话 t1 被 P1 插话', 't1', 'P1'],
+    ['行已不在的会话被 P1 插话', 'ghost', 'P1']
+  ] as const)(
+    'XS-59 %s → admitSteer 的来源是 {kind: session, sessionId: <driver>}',
+    async (_label, target, driver) => {
+      const session = openSession(async () => ({ submissionId: 4 }))
+      const drive = { requestId: `session-steer:${driver}:1`, parentId: driver }
+      expect(await chatGateway.steerDriven(target, 'm', drive)).toStrictEqual({})
+      expect(session.admitSteer.mock.calls).toStrictEqual([
+        ['m', { requestId: drive.requestId, source: { kind: 'session', sessionId: driver } }]
+      ])
+      expect(mocks.getAgentSession).toHaveBeenCalledWith(target)
+    }
+  )
+
+  it('XS-59 [guard] 同一条 c1 由它的父会话 P1 插话 → 仍是 parent-session（WP2-64 的对照面）', async () => {
+    const session = openSession(async () => ({ submissionId: 5 }))
+    expect(await chatGateway.steerDriven('c1', 'm', DRIVE)).toStrictEqual({})
+    expect(session.admitSteer.mock.calls[0]?.[1]).toStrictEqual({
+      requestId: DRIVE.requestId,
+      source: { kind: 'parent-session', sessionId: 'P1' }
+    })
+  })
 
   it('WP2-67 IPC 的 steer 照旧走 session.steer(text)，不经 admitSteer；被拒广播 error', async () => {
     const session = openSession(async () => ({}))

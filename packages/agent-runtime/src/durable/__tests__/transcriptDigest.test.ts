@@ -19,6 +19,8 @@
  *   P2-14-17 不依赖 Node、从包入口导出
  *   WP2-21..30 ask 的答题方（§19.5）：结果详情带 `answeredBy` 的 ask 项带上答题方（失败闭合：详情里只要有
  *             一个 answeredBy 对象就不算人答的，认不出的字段补成空串）；取消、非 ask 工具、压缩切点之前不交出
+ *   XS-09   答题方是别的会话（`kind: 'session'`，2026-10-20）：原样交出；认不出的 kind 一律记成 `parent-session`
+ *             （失败闭合 —— 仍不算人答的）
  *   RSRC-28 / 31 user 项的来源（§19.7）：纯核心按 `sources` 给项带上 `source`（没有的不带这个键）；会话上手写的
  *             SourceDoc —— 认不出的项照样带来源（失败闭合，sessionId 空串），孤儿 / 没放下的不带
  */
@@ -615,6 +617,62 @@ describe('WP2 · ask 的答题方（§19.5）', () => {
     ])
     expect(JSON.stringify(items)).not.toContain('OLD')
   })
+})
+
+/**
+ * XS-09 答题方的 kind：别的会话代答（`session`）原样带出；其余认不出的 kind（缺、大小写不对、别的词、不是字符串）
+ * 一律记成 `parent-session` —— 失败闭合，仍不算人答的 [guard]。
+ */
+describe('XS-09 · ask 的答题方 × kind session', () => {
+  const askDetails = (answeredBy: JsonValue): JsonValue => ({
+    type: 'ask',
+    question: 'Q?',
+    selections: ['A'],
+    answeredBy
+  })
+
+  async function onlyAsk(answeredBy: JsonValue): Promise<TranscriptDigestItem> {
+    const { session } = await openSession()
+    await appendEntries(session, [
+      assistantDraft([call('ask', { question: 'Q?' }, 'q1')], 1000),
+      resultDraft('q1', 'Selected: A', { details: askDetails(answeredBy) })
+    ])
+    const asks = (await digest(session)).filter((item) => item.kind === 'ask')
+    expect(asks).toHaveLength(1)
+    return asks[0]!
+  }
+
+  it('XS-09 别的会话代答：kind session 原样交出（三键）；额外字段丢掉', async () => {
+    const OTHER = { kind: 'session', sessionId: 'X', title: 'T' } as const
+    expect(await onlyAsk(OTHER)).toStrictEqual(Q(1000, 'Q?', 'Selected: A', OTHER))
+    expect(await onlyAsk({ ...OTHER, evil: 'x' })).toStrictEqual(
+      Q(1000, 'Q?', 'Selected: A', OTHER)
+    )
+  })
+
+  it('XS-09 kind session 的其余字段同一口径：非字符串 title 丢掉、坏的 sessionId 补空串 —— kind 保留', async () => {
+    expect(await onlyAsk({ kind: 'session', sessionId: 'X', title: 5 })).toStrictEqual(
+      Q(1000, 'Q?', 'Selected: A', { kind: 'session', sessionId: 'X' })
+    )
+    expect(await onlyAsk({ kind: 'session', sessionId: 42 })).toStrictEqual(
+      Q(1000, 'Q?', 'Selected: A', { kind: 'session', sessionId: '' })
+    )
+  })
+
+  it.each([
+    ['kind 缺', { sessionId: 'X', title: 'T' }],
+    ['kind Session（大小写）', { kind: 'Session', sessionId: 'X', title: 'T' }],
+    ['kind bot', { kind: 'bot', sessionId: 'X', title: 'T' }],
+    ['kind user', { kind: 'user', sessionId: 'X', title: 'T' }],
+    ['kind 是数字', { kind: 1, sessionId: 'X', title: 'T' }]
+  ] as const)(
+    'XS-09 [guard] 认不出的 kind（%s）→ parent-session（失败闭合），sessionId / title 照常取',
+    async (_label, answeredBy) => {
+      expect(await onlyAsk(answeredBy as JsonValue)).toStrictEqual(
+        Q(1000, 'Q?', 'Selected: A', { kind: 'parent-session', sessionId: 'X', title: 'T' })
+      )
+    }
+  )
 })
 
 describe('RSRC · user 项的来源（§19.7）', () => {

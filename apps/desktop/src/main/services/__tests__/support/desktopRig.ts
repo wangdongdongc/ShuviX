@@ -840,7 +840,7 @@ export function storageIds(): string[] {
 export function noticesIn(entries: string[]): string[] {
   return entries.filter(
     (e) =>
-      (e.startsWith('pi.user:') || e.startsWith('shuvix.notice:')) && e.includes('<sub-session id=')
+      (e.startsWith('pi.user:') || e.startsWith('shuvix.notice:')) && e.includes('<session id=')
   )
 }
 

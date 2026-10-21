@@ -329,7 +329,7 @@ describe('K4 titler and reviewer stay in the owning session and are never resume
         role('chat', 'start'),
         callTool(
           'session',
-          { action: 'prompt-sub-session', sub_session_id: 'C', message: 'C-task' },
+          { action: 'prompt-session', session_id: 'C', message: 'C-task' },
           'call-prompt'
         ),
         pStall.step
@@ -573,7 +573,7 @@ describe('K5 spawned agents through the real desktop ToolHost', () => {
         'coding',
         role('coding'),
         callTool('session', { action: 'create-sub-session', title: 'worker' }, 'call-create'),
-        callTool('session', { action: 'prompt-sub-session', message: 'sub-task' }, 'call-prompt'),
+        callTool('session', { action: 'prompt-session', message: 'sub-task' }, 'call-prompt'),
         answer('dispatched')
       )
       p.router.on('sub', role('chat', 'sub-task'), hold.step)

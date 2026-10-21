@@ -79,22 +79,34 @@ export function FullAccessBadge(): React.JSX.Element {
 }
 
 /**
- * ask 卡上的「父会话代答」标签（docs/sub-session-design.md §19.5）：这个问题不是用户本人答的，是派出这项任务的
- * 会话代答的 —— 转写不得把父会话的话记成用户说的。答题方来自工具结果的 `details.answeredBy`（宿主写的）。
+ * ask 卡上的「父会话代答」/「其他会话代答」标签（docs/sub-session-design.md §19.5）：这个问题不是用户本人答的，
+ * 是派出这项任务的会话代答的 —— 转写不得把别的会话的话记成用户说的。答题方来自工具结果的 `details.answeredBy`
+ * （宿主写的）：`kind: 'session'` = 经会话权限表被授权的别的会话，其余是父会话。
  */
-export function AnsweredByParentBadge({ title }: { title?: string }): React.JSX.Element {
+export function AnsweredByParentBadge({
+  title,
+  kind
+}: {
+  title?: string
+  kind?: 'parent-session' | 'session'
+}): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <span
       className="flex-shrink-0 px-1.5 py-px rounded text-[10px] font-medium bg-accent/15 text-accent"
       title={
-        title
-          ? t('toolCall.answeredByParentHint', { title })
-          : t('toolCall.answeredByParentHintNoTitle')
+        kind === 'session'
+          ? title
+            ? t('toolCall.answeredBySessionHint', { title })
+            : t('toolCall.answeredBySessionHintNoTitle')
+          : title
+            ? t('toolCall.answeredByParentHint', { title })
+            : t('toolCall.answeredByParentHintNoTitle')
       }
       data-answered-by-parent
+      data-answered-by={kind === 'session' ? 'session' : 'parent-session'}
     >
-      {t('toolCall.answeredByParentTag')}
+      {t(kind === 'session' ? 'toolCall.answeredBySessionTag' : 'toolCall.answeredByParentTag')}
     </span>
   )
 }

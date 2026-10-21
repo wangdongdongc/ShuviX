@@ -414,7 +414,12 @@ describe('policyService —— ask-on-read 不再是内置', () => {
         .filter((row) => row.source === 'builtin')
         .map((row) => row.name)
         .sort()
-    ).toEqual(['ask-on-command', 'ask-on-external-path', 'network-admission'])
+    ).toEqual([
+      'ask-on-command',
+      'ask-on-external-path',
+      'ask-on-session-access',
+      'network-admission'
+    ])
     expect(rows.some((row) => row.source === 'builtin' && row.name === 'ask-on-read')).toBe(false)
     expect(policyService.listInvalid()).toEqual([])
   })

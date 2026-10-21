@@ -5,11 +5,14 @@
  * 同一批文件，见 inlineSources.ts）：侧栏点开一份内置策略时看到的只读笔记本，读的就是
  * 运行时读的那一份。
  *
- * 原则：无策略 = 放行（evaluate 默认 allow）。管 agent 的出厂只留两份，都是询问、没有硬限制
- * （没有 deny，也没有 force-ask）—— 默认尽可能少问，复杂的事交给自动审查（2026-10-01 用户裁定）：
+ * 原则：无策略 = 放行（evaluate 默认 allow）。管 agent 的出厂只有询问、没有硬限制（没有 deny，也没有
+ * force-ask）—— 默认尽可能少问，复杂的事交给自动审查（2026-10-01 用户裁定）：
  *   - ask-on-external-path：文件工具在会话权限表（`vars.aclRead` / `vars.aclWrite`，与命令沙箱
  *     同一份）以外 —— 读家目录里的文件、往任何地方写 —— 询问。
  *   - ask-on-command：没被圈进沙箱的命令询问。
+ *   - ask-on-session-access（2026-10-20 用户裁定）：`session` 工具查看 / 对话一条别的会话（不是自己的子会话 —— 子会话
+ *     不过这道门），不是自己发起的那一轮、也不在会话权限表（`vars.aclSessionRead` / `vars.aclSessionWrite`）里时询问。这类询问**只由人回答**
+ *     —— 不是靠 force-ask（那样「允许并记住」就不生效了），而是内置 hook auto-review 的 `when` 把会话客体排除在外。
  * 用户同名覆盖（含空 rules 的"清空"覆盖）即可放宽或移除任何一道门；想要更多防护（系统目录拒写、
  * 灾难命令拒绝、git / 数据库 / 子会话 / 新站点询问……）写成自己的策略即可 —— 各个执行点都还在，
  * 只是出厂不再挂门。被删掉的出厂策略原文留作测试夹具（`__tests__/fixtures/`）。
@@ -25,7 +28,7 @@
  *     网络点位没有人可问（ask 会降级为拒绝），所以它直接写 deny；要让别的设备进来，写一份同名的用户
  *     策略替换它（deny 压过一切 allow，另写一份放不开）。设置页按它的状态给引导提示。
  *
- * agent 主体那两份的 subject.kind 恒为 [agent]、network-admission 的恒为 [network]（守护测试钉死）：
+ * agent 主体那几份的 subject.kind 恒为 [agent]、network-admission 的恒为 [network]（守护测试钉死）：
  * 用户主体（UI 亲手操作）不受内置策略约束 —— 多主体模型见 types.ts SecuritySubject。
  *
  * 多语言：与 builtinAgents 同款「一语言一文件、整文件回退」（精确语言 → 基础语言 → en，
@@ -60,6 +63,7 @@ export interface BuiltinPolicySpec {
 export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'ask-on-external-path' },
   { name: 'ask-on-command' },
+  { name: 'ask-on-session-access' },
   { name: 'network-admission' }
 ]
 

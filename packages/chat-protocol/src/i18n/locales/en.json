@@ -253,7 +253,8 @@
     "sendFailed": "Couldn't send: {{error}}",
     "pasteChipLines": "[Pasted text #{{seq}} · {{lines}} lines]",
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
-    "pasteName": "Pasted text #{{seq}}"
+    "pasteName": "Pasted text #{{seq}}",
+    "atSectionSessions": "Sessions"
   },
   "compact": {
     "summaryLabel": "Conversation Summary (Auto-compacted)"
@@ -428,7 +429,15 @@
       "show": "Command actually run",
       "loading": "Loading…",
       "missing": "No record of how this command was run."
-    }
+    },
+    "answeredBySessionTag": "Answered by another session",
+    "sessionAskRead": "Read another session",
+    "sessionAskWrite": "Talk to another session",
+    "sessionAskMessage": "Message it will send",
+    "sessionAskUntitled": "Untitled session",
+    "allowAndRememberSession": "Allow and remember",
+    "answeredBySessionHint": "Another session, “{{title}}”, answered this question for you in the turn it started here — you did not pick it.",
+    "answeredBySessionHintNoTitle": "Another session answered this question for you in the turn it started here — you did not pick it."
   },
   "sessionConfig": {
     "title": "Session Config",
@@ -466,7 +475,12 @@
     "addConfirm": "Add",
     "browse": "Choose folder…",
     "cancel": "Cancel",
-    "addFailed": "Enter an absolute path (starting with / or a drive letter)."
+    "addFailed": "Enter an absolute path (starting with / or a drive letter).",
+    "sessionsTitle": "Session access",
+    "sessionsDescription": "The agent in this session uses these other sessions without asking — reading their answers, or also talking to them. Its own sub-sessions need no row; any other session asks first, and \"Allow and remember\" on that card adds it here.",
+    "sessionRead": "Read",
+    "sessionWrite": "Talk",
+    "sessionUntitled": "Untitled session"
   },
   "projectForm": {
     "createTitle": "New Project",
@@ -1240,6 +1254,7 @@
     "tasksKindBash": "Bash",
     "tasksKindAgent": "Sub-agent",
     "tasksKindSubSession": "Sub-session",
+    "tasksKindSession": "Session",
     "tasksOpen": "Open",
     "tasksAgentGone": "This agent is no longer available",
     "tasksBlockedOn": "Waiting for you",

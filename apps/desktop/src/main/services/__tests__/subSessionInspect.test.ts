@@ -9,6 +9,8 @@
  *     读不了就当没有。在 read / wait / 完成通知 / inspect 上带，list 与回执（prompt / answer，§20 起一律只回执）不带。
  *     判法与大纲、自动审查同一份（`authorsOf`，§19.7 2026-10-17 裁决第 4 条）：只有最近一条用户消息被判为人打的
  *     （没有记录、且在第一条有记录的消息之后）才是 true；整条都没有记录的分不清，不算（AUTH-I1..4）。
+ *   - **顶层的别的会话**（XS-26，2026-10-20）：被看的会话没有 parentId 时没有来源记录的用户消息一律是人打的 ——
+ *     大纲 `[user]`、`userIntervened` / 完成通知的 `user-intervened` 同一个判法；子会话（自己的、别人的）照旧。
  *
  * mock 手法照 subSessionRunner.test.ts（那一份归另一组用例，这里照抄形状，假子会话补上 `sessionView()` /
  * `inputSources()` / `respondToInput()`）。用例编号 WP4-xx 对应测试设计清单。
@@ -60,6 +62,8 @@ vi.mock('../../services/sessionService', () => ({
     deliverSubSessionNotice: mocks.deliver
   }
 }))
+// 会话权限表：list 列出权限表里的别的会话；这里的用例只管子会话，表是空的
+vi.mock('../acl', () => ({ sessionAcl: { sessionGrants: () => [] } }))
 vi.mock('../../frontend/core', () => ({ chatGateway: { prompt: mocks.gatewayPrompt } }))
 vi.mock('../../services/messageService', () => ({
   messageService: { findLastBySession: mocks.findLastBySession }
@@ -336,7 +340,7 @@ describe('inspect —— 只读地看子会话现场', () => {
     expect((await inspect({ match: '   ' })).result).toEqual(empty)
     for (const item of ['#3', '  #3 ']) {
       expect(await runner.inspect({ parentId: PARENT, childId: CHILD, query: { item } })).toEqual({
-        error: 'No item #3 — nothing has happened in that sub-session yet.'
+        error: 'No item #3 — nothing has happened in that session yet.'
       })
     }
     expect((await inspect({ match: ' x ' })).result).toEqual({
@@ -353,26 +357,35 @@ describe('inspect —— 只读地看子会话现场', () => {
     mocks.durable.value = false
     const msg = err(await runner.inspect({ parentId: PARENT, childId: CHILD, query: {} }))
     expect(msg).toContain('created by an earlier version of ShuviX')
-    expect(msg).toContain('"read-sub-session"')
+    expect(msg).toContain('"read-session"')
     expect(mocks.peekAgentSession).not.toHaveBeenCalled()
     expect(mocks.getAgentSession).not.toHaveBeenCalled()
   })
 
-  it('WP4-108 别人的 / 不存在的子会话 → 与 read 同一套错误（列出合法 id），不碰对方', async () => {
+  it('WP4-108 别人的子会话 = 别的会话：恒过 read 授权（不算自己那一轮），拒绝就抛出、不碰对方；不存在的 → 与 read 同一套错误', async () => {
     mocks.pick.mockImplementation((id: string) => {
       if (id === PARENT) return { settings: {}, parentId: null }
       if (id === 'stranger') return { settings: {}, parentId: 'other-parent', title: 'S' }
       return undefined
     })
     mocks.findChildren.mockReturnValue([{ id: 'mine-1', title: 'Mine', updatedAt: 1 }])
-    for (const target of ['stranger', 'ghost']) {
-      const msg = err(await runner.inspect({ parentId: PARENT, childId: target, query: {} }))
-      expect(msg).toContain('is not a sub-session of this session')
-      expect(msg).toContain('mine-1')
-      const viaRead = err(await runner.read(PARENT, target))
-      expect(msg).toBe(viaRead)
-    }
+    const authorize = vi.fn(async () => {
+      throw new Error('User denied reading session "S" (stranger)')
+    })
+    await expect(
+      runner.inspect({ parentId: PARENT, childId: 'stranger', query: {}, authorize })
+    ).rejects.toThrow('User denied reading')
+    expect(authorize).toHaveBeenCalledWith(
+      { id: 'stranger', title: 'S', relation: 'other' },
+      'read',
+      false
+    )
     expect(mocks.peekAgentSession.mock.calls.map(([id]) => id)).not.toContain('stranger')
+
+    const msg = err(await runner.inspect({ parentId: PARENT, childId: 'ghost', query: {} }))
+    expect(msg).toContain('There is no session "ghost"')
+    expect(msg).toContain('mine-1')
+    expect(msg).toBe(err(await runner.read(PARENT, 'ghost')))
   })
 
   it('WP4-109 省略 id：恰好一条就补全；没有 / 多于一条给出下一步', async () => {
@@ -391,13 +404,13 @@ describe('inspect —— 只读地看子会话现场', () => {
     expect(msg).toContain('child-2')
   })
 
-  it('WP4-110 调用方不是普通会话：笔记本 / 子会话自己 / 没有会话', async () => {
+  it('WP4-110 调用方不是普通会话：笔记本 / 子会话自己省略 id 要它点名；没有会话拒绝', async () => {
     const call = (): ReturnType<Mod['subSessionRunner']['inspect']> =>
-      runner.inspect({ parentId: PARENT, childId: CHILD, query: {} })
+      runner.inspect({ parentId: PARENT, childId: '', query: {} })
     mocks.pick.mockReturnValue({ settings: { notebookPath: 'n.md' }, parentId: null })
-    expect(err(await call())).toBe('Notebook sessions cannot have sub-sessions.')
+    expect(err(await call())).toBe('Pass the id of the session to address in `session_id`.')
     mocks.pick.mockReturnValue({ settings: {}, parentId: 'someone' })
-    expect(err(await call())).toMatch(/already a sub-session/)
+    expect(err(await call())).toBe('Pass the id of the session to address in `session_id`.')
     mocks.pick.mockReturnValue(undefined)
     expect(err(await call())).toMatch(/not attached to a session/)
   })
@@ -439,7 +452,7 @@ describe('inspect —— 只读地看子会话现场', () => {
       const res = await runner.inspect({ parentId: PARENT, childId: CHILD, query: {} })
       expect(res).toEqual({
         error:
-          'Could not read sub-session "Child" right now (it was just closed or is being reopened). Try again.'
+          'Could not read session "Child" right now (it was just closed or is being reopened). Try again.'
       })
       expect(mocks.warn).toHaveBeenCalledTimes(1)
       expect(String(mocks.warn.mock.calls[0][0])).toContain(CHILD)
@@ -553,7 +566,7 @@ describe('userIntervened —— 人在子会话里插过话的那个便宜信号
     ['WP4-120 没有用户消息 → 不带', [A('1', [TX('hello')])], [], false],
     [
       'WP4-120 只有通知 → 不带',
-      [U('1', '<sub-session id="x"/>', NOTICE), A('2', [TX('a')])],
+      [U('1', '<session id="x"/>', NOTICE), A('2', [TX('a')])],
       [],
       false
     ],
@@ -676,9 +689,7 @@ describe('userIntervened —— 人在子会话里插过话的那个便宜信号
       expect(mocks.deliver).toHaveBeenCalledTimes(1)
       const notice = mocks.deliver.mock.calls[0][1] as string
       expect(notice.split('\n')[0]).toMatch(
-        new RegExp(
-          `^<sub-session id="${CHILD}" title="Child" status="idle" user-intervened="true">$`
-        )
+        new RegExp(`^<session id="${CHILD}" title="Child" status="idle" user-intervened="true">$`)
       )
 
       mocks.deliver.mockClear()
@@ -826,5 +837,154 @@ describe('userIntervened —— 人在子会话里插过话的那个便宜信号
       ['c2', true],
       ['c3', false]
     ])
+  })
+})
+
+// ─────────────────────────── 顶层的别的会话（XS-26） ───────────────────────────
+
+/**
+ * XS-26 查看一条**顶层**的别的会话（不是任何会话的子会话）：它没有「升级之前父会话发的消息没有记录」这回事，没有来源
+ * 记录的用户消息一律是人打的 —— 大纲标 `[user]`（不是 `[unattributed]`），`userIntervened` 用同一个判法（最近一条
+ * 用户消息是人打的就是 true）。判据是被看的会话有没有 parentId（`isTopLevel`），不是「是不是调用方的子会话」：
+ * [guard] 自己的子会话、别人的子会话没有来源记录时照旧 `[unattributed]`、不报插话。
+ */
+describe('XS-26 顶层的别的会话：没有来源记录的用户消息是 [user]，userIntervened 同一个判法', () => {
+  const TOP = 'top-other'
+  const STRANGER = 'stranger-child'
+  let top: FakeAgent
+  let stranger: FakeAgent
+
+  beforeEach(() => {
+    top = fakeAgent()
+    stranger = fakeAgent()
+    mocks.pick.mockImplementation((id: string) => {
+      if (id === PARENT) return { settings: {}, parentId: null, title: 'Parent', updatedAt: 1 }
+      if (id === CHILD) return { settings: {}, parentId: PARENT, title: 'Child', updatedAt: 2 }
+      if (id === TOP) return { settings: {}, parentId: null, title: 'Other top', updatedAt: 3 }
+      if (id === STRANGER) {
+        return { settings: {}, parentId: 'other-parent', title: 'Stranger', updatedAt: 4 }
+      }
+      return undefined
+    })
+    const agents = new Map<string, FakeAgent>([
+      [CHILD, closedChild],
+      [TOP, top],
+      [STRANGER, stranger]
+    ])
+    mocks.peekAgentSession.mockImplementation(async (id: string) => agents.get(id))
+  })
+
+  const lines = (res: Inspected): string[] => (res.result as { lines: string[] }).lines
+  /** 看全部轮次（缺省只看最近一轮） */
+  const ALL_TURNS = { turns: 10 }
+  /** 同一段没有任何来源记录的对话：两条人话 + 一条答复，最后一条是用户消息 */
+  const unsourced = (): FakeView =>
+    viewOf([U('1', 'hello'), A('2', [TX('hi')]), U('3', 'typed by the human')])
+
+  it('XS-26 顶层会话、没有来源记录：用户消息都是 [user]；relation other；userIntervened 为 true', async () => {
+    top.view = unsourced()
+    const res = await inspect(ALL_TURNS, TOP)
+    expect(lines(res)).toEqual([
+      '#1 [user] hello',
+      '#2.0 reply: hi',
+      '#3 [user] typed by the human'
+    ])
+    expect(res.info).toMatchObject({ id: TOP, title: 'Other top', relation: 'other' })
+    expect(res.info.userIntervened).toBe(true)
+    // 展开同一个判法
+    expect((await inspect({ item: '#1' }, TOP)).result).toEqual({
+      kind: 'item',
+      ref: '#1',
+      lines: ['[user]', 'hello']
+    })
+  })
+
+  it('XS-26 [guard] 同一段对话在自己的子会话里：照旧 [unattributed]，不报插话', async () => {
+    closedChild.view = unsourced()
+    const res = await inspect(ALL_TURNS, CHILD)
+    expect(lines(res)).toEqual([
+      '#1 [unattributed] hello',
+      '#2.0 reply: hi',
+      '#3 [unattributed] typed by the human'
+    ])
+    expect(res.info.relation).toBe('sub-session')
+    expect(res.info).not.toHaveProperty('userIntervened')
+  })
+
+  it('XS-26 [guard] 别人的子会话（relation other、但有 parentId）不是顶层：照旧 [unattributed]，不报插话', async () => {
+    stranger.view = unsourced()
+    const res = await inspect(ALL_TURNS, STRANGER)
+    expect(res.info.relation).toBe('other')
+    expect(lines(res)).toEqual([
+      '#1 [unattributed] hello',
+      '#2.0 reply: hi',
+      '#3 [unattributed] typed by the human'
+    ])
+    expect(res.info).not.toHaveProperty('userIntervened')
+  })
+
+  it('XS-26 顶层会话有来源记录：读者自己发的 [you]、第三条会话发的 [other session]，没有记录的不论前后都是 [user]', async () => {
+    top.view = viewOf([
+      U('1', 'typed first'),
+      U('2', 'sent by the reader'),
+      A('3', [TX('ok')]),
+      U('4', 'sent by Q'),
+      U('5', 'typed later')
+    ])
+    top.sources = new Map<string, unknown>([
+      ['2', { kind: 'session', sessionId: PARENT }],
+      ['4', { kind: 'session', sessionId: 'Q' }]
+    ])
+    const res = await inspect(ALL_TURNS, TOP)
+    expect(lines(res)).toEqual([
+      '#1 [user] typed first',
+      '#2 [you] sent by the reader',
+      '#3.0 reply: ok',
+      '#4 [other session] sent by Q',
+      '#5 [user] typed later'
+    ])
+    expect(res.info.userIntervened).toBe(true)
+  })
+
+  it('XS-26 顶层会话：最近一条用户消息有来源记录（读者或别的会话发的）→ 不报插话；系统通知不算', async () => {
+    top.view = viewOf([
+      U('1', 'typed by the human'),
+      U('2', 'sent by the reader'),
+      A('3', [TX('ok')]),
+      U('4', '<background-task id="b">done</background-task>', { isSystemNotice: true })
+    ])
+    top.sources = new Map<string, unknown>([['2', { kind: 'session', sessionId: PARENT }]])
+    expect((await inspect(ALL_TURNS, TOP)).info).not.toHaveProperty('userIntervened')
+
+    top.view = viewOf([U('1', 'typed by the human'), U('2', 'sent by Q')])
+    top.sources = new Map<string, unknown>([['2', { kind: 'session', sessionId: 'Q' }]])
+    expect((await inspect(ALL_TURNS, TOP)).info).not.toHaveProperty('userIntervened')
+  })
+
+  it('XS-26 read 与完成通知用同一个判法：顶层会话没有来源记录、最后一条是人话 → userIntervened / user-intervened="true"', async () => {
+    top.view = unsourced()
+    top.lastAnswer.mockResolvedValue({ text: 'DONE.' })
+    const read = await runner.read(PARENT, TOP)
+    if ('error' in read) throw new Error(read.error)
+    expect(read.answer).toBe('DONE.')
+    expect(read.info.userIntervened).toBe(true)
+
+    await runner.onDrivenSettled({
+      ...settled({ requestId: 'session:parent-1:top:1' }),
+      sessionId: TOP,
+      noticeRequestId: `subsession-done:${TOP}:42`
+    })
+    expect(mocks.deliver).toHaveBeenCalledTimes(1)
+    const [to, notice] = mocks.deliver.mock.calls[0] as [string, string]
+    expect(to).toBe(PARENT)
+    expect(notice.split('\n')[0]).toBe(
+      `<session id="${TOP}" title="Other top" status="idle" user-intervened="true">`
+    )
+
+    // [guard] 同样的对话在自己的子会话里：分不清 → 不报
+    closedChild.view = unsourced()
+    const childRead = await runner.read(PARENT, CHILD)
+    if ('error' in childRead) throw new Error(childRead.error)
+    expect(childRead.info).not.toHaveProperty('userIntervened')
   })
 })

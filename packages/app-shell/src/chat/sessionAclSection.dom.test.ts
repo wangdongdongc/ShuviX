@@ -12,6 +12,7 @@
  *   SAS-6 宿主有文件夹选择框才有「选择文件夹」，选了填进路径
  *   SAS-7 这条会话的 session.configChanged → 重取；别的会话的不理
  *   SAS-8 行的标签：system 按槽位、知识库带库名（内置库用它的显示名）、widget 带 id
+ *   XS-68 会话种类的行（kind: 'session'）另起一卡「Session access」（见文件末尾的 describe）
  *
  * `@shuvix/chat-ui` 换成替身（getChatApi / getHostApi / useAppEvent）；i18n 走真 en 资源。文件是 `.ts`，一律 createElement。
  */
@@ -265,5 +266,158 @@ describe('SessionAclSection', () => {
     expect(text).toContain(i18n.t('sessionAcl.source.knowledge', { name: 'notes' }))
     expect(text).toContain(i18n.t('sessionAcl.source.widget', { name: 'clock-face' }))
     expect(text).toContain(en.sessionAcl.source.document)
+  })
+})
+
+/**
+ * 会话种类的行（它免询问查看 / 对话的别的会话）：
+ *
+ *   XS-68 另起一卡「Session access」（[data-session-acl-sessions]），一行摆目标会话的标题（targetTitle）与 id，
+ *         没有标题 →「Untitled session」；Read / Talk 切换反映 access，切换调 setAclAccess({ id, entryId, access })；
+ *         删除调 removeAclEntry、行立刻消失（删光了整卡消失）；没有会话行 → 没有这一卡；
+ *         会话行不进路径列表，也不算进「显示另外 N 项」
+ */
+describe('SessionAclSection 的会话访问（XS-68）', () => {
+  const sessionRow = (target: string, over: Partial<AclEntry> = {}): AclEntry =>
+    row('user', target, { kind: 'session', access: 'read', ...over })
+
+  const sessionsCard = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-session-acl-sessions]')
+  const sessionRows = (): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('[data-acl-kind="session"]')
+  ]
+  const sessionRowOf = (target: string): HTMLElement | null =>
+    container.querySelector<HTMLElement>(`[data-acl-kind="session"][data-acl-target="${target}"]`)
+  /** SegmentedControl 选中的那一个（bg-bg-primary） */
+  const selected = (scope: HTMLElement): string[] =>
+    [...scope.querySelectorAll('button')]
+      .filter((b) => b.className.split(/\s+/).includes('bg-bg-primary'))
+      .map((b) => b.textContent ?? '')
+
+  beforeEach(() => {
+    seq = 0
+    hoisted.entries = [
+      row('workdir', '/Users/u/proj'),
+      sessionRow('sess-target-1', { targetTitle: 'Release notes', access: 'write' }),
+      row('system', '/tmp/s1', { sourceKey: 'tmp' }),
+      sessionRow('sess-target-2'),
+      row('user', '/data', { access: 'read' })
+    ]
+  })
+
+  it('XS-68 另起一卡「Session access」：标题与 id；没有标题 →「Untitled session」', async () => {
+    await render()
+    const card = sessionsCard()!
+    expect(card).not.toBeNull()
+    expect(card.dataset.sessionAclSessions).toBe(SID)
+    const section = card.closest('section')!
+    expect(section.querySelector('h3')!.textContent).toBe(en.sessionAcl.sessionsTitle)
+    expect(section.querySelector('h3')!.textContent).toBe('Session access')
+    // 与「File access」不是同一卡
+    expect(container.querySelector('[data-session-acl]')!.closest('section')).not.toBe(section)
+
+    expect(sessionRows().map((el) => el.dataset.aclTarget)).toEqual([
+      'sess-target-1',
+      'sess-target-2'
+    ])
+    expect(sessionRows().every((el) => card.contains(el))).toBe(true)
+
+    const titled = sessionRowOf('sess-target-1')!
+    const [title, id] = [...titled.querySelectorAll<HTMLElement>('.truncate')]
+    expect(title.textContent).toBe('Release notes')
+    expect(id.textContent).toBe('sess-target-1')
+    expect(id.classList.contains('font-mono')).toBe(true)
+
+    const untitled = sessionRowOf('sess-target-2')!
+    const [title2, id2] = [...untitled.querySelectorAll<HTMLElement>('.truncate')]
+    expect(title2.textContent).toBe(en.sessionAcl.sessionUntitled)
+    expect(title2.textContent).toBe('Untitled session')
+    expect(id2.textContent).toBe('sess-target-2')
+  })
+
+  it('XS-68 Read / Talk 反映 access；切换调 setAclAccess({ id, entryId, access })，界面立刻变', async () => {
+    await render()
+    const talker = sessionRowOf('sess-target-1')!
+    const reader = sessionRowOf('sess-target-2')!
+    expect(talker.dataset.aclAccess).toBe('write')
+    expect(selected(talker)).toEqual([en.sessionAcl.sessionWrite])
+    expect(selected(talker)).toEqual(['Talk'])
+    expect(reader.dataset.aclAccess).toBe('read')
+    expect(selected(reader)).toEqual(['Read'])
+    // 会话行的切换是 Read / Talk，不是路径的「Read only / Read & write」
+    expect(buttonText(talker, en.sessionAcl.read)).toBeUndefined()
+    expect(buttonText(talker, en.sessionAcl.write)).toBeUndefined()
+
+    // 点已选中的那一个：不调
+    await act(async () => buttonText(talker, 'Talk')!.click())
+    expect(hoisted.setAclAccess).not.toHaveBeenCalled()
+
+    await act(async () => buttonText(talker, 'Read')!.click())
+    expect(hoisted.setAclAccess).toHaveBeenCalledTimes(1)
+    expect(hoisted.setAclAccess).toHaveBeenCalledWith({ id: SID, entryId: 'e2', access: 'read' })
+    expect(sessionRowOf('sess-target-1')!.dataset.aclAccess).toBe('read')
+    expect(selected(sessionRowOf('sess-target-1')!)).toEqual(['Read'])
+
+    await act(async () => buttonText(sessionRowOf('sess-target-2')!, 'Talk')!.click())
+    expect(hoisted.setAclAccess).toHaveBeenLastCalledWith({
+      id: SID,
+      entryId: 'e4',
+      access: 'write'
+    })
+    expect(sessionRowOf('sess-target-2')!.dataset.aclAccess).toBe('write')
+  })
+
+  it('XS-68 删除：调 removeAclEntry，行立刻消失；删光了整卡消失', async () => {
+    await render()
+    await act(async () =>
+      sessionRowOf('sess-target-1')!.querySelector<HTMLButtonElement>('[data-acl-remove]')!.click()
+    )
+    expect(hoisted.removeAclEntry).toHaveBeenCalledWith({ id: SID, entryId: 'e2' })
+    expect(sessionRowOf('sess-target-1')).toBeNull()
+    expect(sessionRows().map((el) => el.dataset.aclTarget)).toEqual(['sess-target-2'])
+
+    await act(async () =>
+      sessionRowOf('sess-target-2')!.querySelector<HTMLButtonElement>('[data-acl-remove]')!.click()
+    )
+    expect(hoisted.removeAclEntry).toHaveBeenLastCalledWith({ id: SID, entryId: 'e4' })
+    expect(sessionsCard()).toBeNull()
+    expect(container.textContent).not.toContain(en.sessionAcl.sessionsTitle)
+    // 路径列表不受影响
+    expect(sources()).toEqual(['workdir', 'user'])
+  })
+
+  it('XS-68 没有会话行：没有「Session access」这一卡', async () => {
+    hoisted.entries = [row('workdir', '/Users/u/proj'), row('user', '/data')]
+    await render({ defaultExpanded: true })
+    expect(sessionsCard()).toBeNull()
+    expect(sessionRows()).toHaveLength(0)
+    expect(container.textContent).not.toContain(en.sessionAcl.sessionsTitle)
+    expect(container.querySelectorAll('section')).toHaveLength(1)
+  })
+
+  it('XS-68 会话行不进路径列表，也不算进「显示另外 N 项」', async () => {
+    await render()
+    const pathList = container.querySelector<HTMLElement>('[data-session-acl]')!
+    expect(pathList.querySelector('[data-acl-kind="session"]')).toBeNull()
+    // 会话行的来源也是 user（前排来源）—— 按种类分开，不按来源
+    const pathRows = [...pathList.querySelectorAll<HTMLElement>('[data-acl-entry]')]
+    expect(pathRows.map((el) => el.dataset.aclEntry)).toEqual(['e1', 'e5'])
+    expect(pathRows.map((el) => el.dataset.aclSource)).toEqual(['workdir', 'user'])
+    // 收着的只有 system 那一条路径行
+    const toggle = container.querySelector<HTMLButtonElement>('[data-acl-toggle]')!
+    expect(toggle.textContent).toBe(i18n.t('sessionAcl.showAll', { count: 1 }))
+
+    act(() => toggle.click())
+    const expanded = [...pathList.querySelectorAll<HTMLElement>('[data-acl-entry]')]
+    expect(expanded.map((el) => el.dataset.aclEntry)).toEqual(['e1', 'e5', 'e3'])
+    expect(pathList.querySelector('[data-acl-kind="session"]')).toBeNull()
+
+    // 只有会话行与前排路径行：没有「显示另外 N 项」
+    act(() => root.unmount())
+    root = createRoot(container)
+    hoisted.entries = [row('workdir', '/Users/u/proj'), sessionRow('sess-only')]
+    await render()
+    expect(container.querySelector('[data-acl-toggle]')).toBeNull()
+    expect(sessionRows()).toHaveLength(1)
   })
 })

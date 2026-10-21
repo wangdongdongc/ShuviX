@@ -15,8 +15,8 @@
  *   L-3  没有回退 / 重新生成 / 编辑控件；硬调 `message.rollback` 也回 false
  *   L-4  删除（侧栏 ⋮ → 删除 → 确认）带走行和 `.jsonl`
  *   L-5  清空（`message.clear`）：开着的横幅当场消失，行换成新格式，`.jsonl` 没了，发一条成功
- *   L-6  新格式父会话的旧格式子会话：session 工具 `read-sub-session` 读得到它的末条答复，
- *        `prompt-sub-session` 被干净地拒绝（工具结果是错误、子会话一个字都没动）
+ *   L-6  新格式父会话的旧格式子会话：session 工具 `read-session` 读得到它的末条答复，
+ *        `prompt-session` 被干净地拒绝（工具结果是错误、子会话一个字都没动）
  *   L-7  注册表 / 知识库 / 项目笔记本三种绑着文件的旧格式行重启后是新格式：id 不变、只有 storageKind 与
  *        updatedAt 动了（lastActiveAt 不动 → 侧栏顺序不变）、`.jsonl` 逐字节还在、第一次打开之前没有
  *        `.sqlite`、按 (项目, 文件) 找会话还是这一行、笔记本对话打开是空的且发得出去；它的旧格式子会话
@@ -529,7 +529,7 @@ describe('legacy sessions after the boot switchover', () => {
           {
             id: 'call_l6_read',
             name: 'session',
-            args: JSON.stringify({ action: 'read-sub-session', sub_session_id: ids.child })
+            args: JSON.stringify({ action: 'read-session', session_id: ids.child })
           }
         ],
         when: byUserText(P6)
@@ -540,8 +540,8 @@ describe('legacy sessions after the boot switchover', () => {
             id: 'call_l6_prompt',
             name: 'session',
             args: JSON.stringify({
-              action: 'prompt-sub-session',
-              sub_session_id: ids.child,
+              action: 'prompt-session',
+              session_id: ids.child,
               message: 'L6 try to continue'
             })
           }

@@ -1,11 +1,14 @@
 /**
  * 内置策略守护 —— md 是随包发布的编译期常量，解析失败/形态漂移属开发期错误，
  * 这里逐策略钉死形态与安全不变式（内置绝不静默放行写入；管 agent 的出厂没有硬限制 —— 2026-10-01 用户
- * 裁定「默认尽可能少问」，agent 主体的出厂恰两份、都是普通 ask，不许出现 deny / force-ask / force-allow）。
+ * 裁定「默认尽可能少问」，agent 主体的出厂恰三份、都是普通 ask，不许出现 deny / force-ask / force-allow）。
  *
- * 管 agent 的两份：ask-on-external-path（文件工具在会话权限表 `vars.aclRead` / `vars.aclWrite` 以外 ——
+ * 管 agent 的三份：ask-on-external-path（文件工具在会话权限表 `vars.aclRead` / `vars.aclWrite` 以外 ——
  * 读家目录里的文件、往任何地方写 —— 询问；表由宿主交，「允许并记住」也是表里的行）与 ask-on-command
  * （没圈进沙箱的命令询问）。
+ * 第三份（会话访问，2026-10-20 用户裁定）：ask-on-session-access —— `session` 工具查看（read）/ 对话（write）
+ * 一条别的会话，不是自己发起的那一轮、也不在会话权限表（`vars.aclSessionRead` / `vars.aclSessionWrite`）里时询问
+ * （XS-10 形态；XS-11…15 行为，见「内置策略行为判定」末尾的那一组）。
  * 管远程访问的一份（2026-10-19 用户裁定）：network-admission —— network 主体、发送方不是本机的 HTTP 请求
  * 一律 deny。这是出厂唯一的 deny：网络点位没有人可问（ask 会降级为拒绝），只作用于 network 主体。
  *
@@ -22,6 +25,7 @@
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
 import { builtinObjectId } from '@shuvix/chat-protocol/mdMeta'
+import { sessionAclView, type AclEntry } from '@shuvix/chat-protocol/sessionAcl'
 import { buildBuiltinPolicies, BUILTIN_POLICY_SPECS } from '../builtinPolicies'
 import { parsePolicyDefinitionFile, serializePolicyDefinitionFile } from '../policyFile'
 import { assembleRules } from '../assemble'
@@ -85,20 +89,21 @@ const makeBareProvider = (): SecurityHostProvider => ({
 })
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 3 份、按装配序；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 4 份、按装配序；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(3)
+    expect(policies).toHaveLength(4)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
     expect(policies.map((p) => p.name)).toEqual([
       'ask-on-external-path',
       'ask-on-command',
+      'ask-on-session-access',
       'network-admission'
     ])
-    expect(new Set(policies.map((p) => p.name)).size).toBe(3)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(4)
   })
 
-  it('BP-1c 内联表恰是三份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
+  it('BP-1c 内联表恰是四份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
     const files = [...inlinedPolicyMdFileNames()].sort()
     expect(files).toEqual(
       BUILTIN_POLICY_SPECS.flatMap(({ name }) => [
@@ -197,6 +202,8 @@ describe('buildBuiltinPolicies', () => {
       ['ask-on-external-path#0', 'ask'],
       ['ask-on-external-path#1', 'ask'],
       ['ask-on-command#0', 'ask'],
+      ['ask-on-session-access#0', 'ask'],
+      ['ask-on-session-access#1', 'ask'],
       ['network-admission#0', 'deny']
     ])
   })
@@ -249,6 +256,42 @@ describe('buildBuiltinPolicies', () => {
         "(!has(object.sandboxed) || !object.sandboxed) && !(has(object.risk) && object.risk.category == 'read_only' && object.risk.readOnly >= 0.9)"
     })
     expect(policy.rules[0].prompt).toBeTruthy()
+  })
+
+  it('XS-10 ask-on-session-access：两条 ask × session，desktop 限定 —— #0 查看（read）只看 vars.aclSessionRead，#1 对话（write）只看 vars.aclSessionWrite；两条都先看 !object.ownTurn', () => {
+    const policy = byName('ask-on-session-access')
+    expect(policy.scope).toEqual({
+      'subject.kind': ['agent'],
+      'object.type': ['session'],
+      'env.host': ['desktop']
+    })
+    expect(policy.lets).toBeUndefined()
+    expect(policy.rules.map(withoutPrompt)).toEqual([
+      {
+        effect: 'ask',
+        conditions: { action: ['read'] },
+        match: '!object.ownTurn && !(object.sessionId in vars.aclSessionRead)'
+      },
+      {
+        effect: 'ask',
+        conditions: { action: ['write'] },
+        match: '!object.ownTurn && !(object.sessionId in vars.aclSessionWrite)'
+      }
+    ])
+    // 每条恰读一张表：查看那条不看可对话表，对话那条不看可查看表（「对话隐含查看」靠宿主把可对话的行也放进可查看表）
+    const varsOf = (match: string): string[] =>
+      [...match.matchAll(/vars\.(\w+)/g)].map((m) => m[1]!).sort()
+    const [read, write] = policy.rules
+    expect(varsOf(read.match!)).toEqual(['aclSessionRead'])
+    expect(varsOf(write.match!)).toEqual(['aclSessionWrite'])
+    for (const rule of policy.rules) {
+      expect(rule.match!.startsWith('!object.ownTurn && ')).toBe(true)
+      expect(rule.prompt).toBeTruthy()
+    }
+    // 会话表不是 inDir 的目录参数：宿主漏交时装配不会替它绑 null（走 CEL 的缺键报错，见 XS-14）
+    expect(inDirOnlyVarNames(read.match!)).toEqual([])
+    expect(inDirOnlyVarNames(write.match!)).toEqual([])
+    expect(policy.displayName).toBe('Ask Before Using Another Session')
   })
 
   it('BP-T1 出厂没有调用门：没有一条内置规则的客体是 invocation（或不限客体），L1 对每次工具调用都是非事件快路', () => {
@@ -1704,6 +1747,388 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       matched: ['ask-on-command#0']
     })
     expect(sinks.evalWarn).not.toHaveBeenCalled()
+  })
+
+  // ── ask-on-session-access：session 工具与一条别的会话交互 ─────────────────────────────
+  //
+  // XS-11 行为表：表外的查看 → #0、表外的对话 → #1（只查看的行不免对话），问的都给「允许并记住」与卡片的
+  //       session 材料；表里的、自己发起的那一轮（ownTurn）放行；零告警
+  // XS-12 user 主体 / extension 宿主不受它约束；两种客体的表互不串（路径不进会话表、会话 id 不进路径表）
+  // XS-13 「允许并记住」往返：卡片的 rememberEntry → 一行 `kind: 'session'` → sessionAclView → 放行
+  // XS-14 宿主没交会话表（缺键）：表外的那一侧求值失败 → fail-safe 照问 + 恰一条告警；ownTurn 吸收掉错误
+  // XS-15 用户写的 force-ask 会话门：卡片照样带 session 材料，但不给「允许并记住」，权限表的行免不了它
+  describe('ask-on-session-access（会话访问）', () => {
+    /** R 只能查看、W 能对话（对话隐含查看）—— 宿主 services/acl 从会话权限表交出的两张 id 表 */
+    const SESSION_ROWS: Array<Pick<AclEntry, 'kind' | 'target' | 'access'>> = [
+      { kind: 'session', target: 'R', access: 'read' },
+      { kind: 'session', target: 'W', access: 'write' }
+    ]
+
+    const sessionVars = (
+      rows: ReadonlyArray<Pick<AclEntry, 'kind' | 'target' | 'access'>>,
+      base: Record<string, PolicyVarValue> = DESKTOP_VARS
+    ): Record<string, PolicyVarValue> => {
+      const view = sessionAclView(rows)
+      return { ...base, aclSessionRead: view.read, aclSessionWrite: view.write }
+    }
+
+    const sessionProvider = (
+      rows: ReadonlyArray<Pick<AclEntry, 'kind' | 'target' | 'access'>> = SESSION_ROWS,
+      overrides: Partial<SecurityHostProvider> = {}
+    ): SecurityHostProvider => makeProvider({ getVars: () => sessionVars(rows), ...overrides })
+
+    const sess = (sessionId: string, ownTurn = false, title = 'T'): SecurityObject => ({
+      type: 'session',
+      sessionId,
+      title,
+      ownTurn
+    })
+
+    const SESSION_TOOL = (operation: string): { name: string; operation: string } => ({
+      name: 'session',
+      operation
+    })
+
+    type SessionExpect = 'allow' | '#0' | '#1'
+
+    /** 断言一次会话判决：放行（default:session，零命中）或这份策略的哪一条（带记住与 session 材料） */
+    const expectSession = (
+      label: string,
+      action: 'read' | 'write',
+      object: SecurityObject,
+      decision: SecurityDecision,
+      expected: SessionExpect,
+      operation = ''
+    ): void => {
+      const got = {
+        label,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }
+      if (expected === 'allow') {
+        expect(got).toEqual({
+          label,
+          effect: 'allow',
+          tier: 'default',
+          winning: 'default:session',
+          matched: []
+        })
+        expect(decision.ask, label).toBeUndefined()
+        expect(decision.prompt, label).toBeUndefined()
+        return
+      }
+      const id = `ask-on-session-access${expected}`
+      expect(got).toEqual({ label, effect: 'ask', tier: 'ask', winning: id, matched: [id] })
+      const entry = `Session(${action}, ${String(object.sessionId)})`
+      expect(decision.ask, label).toEqual({
+        command: entry,
+        rememberEntry: entry,
+        session: {
+          sessionId: object.sessionId,
+          title: object.title,
+          access: action,
+          operation
+        }
+      })
+      const policy = byName('ask-on-session-access')
+      expect(decision.prompt, label).toEqual({
+        text: policy.rules[expected === '#0' ? 0 : 1].prompt,
+        rules: [id],
+        policies: ['Ask Before Using Another Session']
+      })
+    }
+
+    it('XS-11 行为表：表外的查看 → #0、对话 → #1（只查看的行不免对话）；表里的、自己发起的那一轮放行 —— 问的都给「允许并记住」与 session 材料，零告警', () => {
+      const rows: Array<[string, 'read' | 'write', SecurityObject, SessionExpect]> = [
+        ['表外的查看', 'read', sess('X'), '#0'],
+        ['表外的对话', 'write', sess('X'), '#1'],
+        ['只查看的行：对话照问', 'write', sess('R'), '#1'],
+        ['只查看的行：查看放行', 'read', sess('R'), 'allow'],
+        ['能对话的行：查看放行（对话隐含查看）', 'read', sess('W'), 'allow'],
+        ['能对话的行：对话放行', 'write', sess('W'), 'allow'],
+        ['自己发起的那一轮：表外的查看也放行', 'read', sess('X', true), 'allow'],
+        ['自己发起的那一轮：表外的对话也放行', 'write', sess('X', true), 'allow'],
+        ['空标题照样问，卡片标题是空串', 'read', sess('X', false, ''), '#0']
+      ]
+      const sinks = warnSinks()
+      const provider = sessionProvider(SESSION_ROWS, { logger: sinks.logger })
+      for (const [label, action, object, expected] of rows) {
+        expectSession(
+          `${action} ${label}`,
+          action,
+          object,
+          decide(action, object, { provider, warn: sinks.evalWarn }),
+          expected
+        )
+      }
+      // 经由 session 工具时，卡片的 operation 是工具的动作名；没有工具维度时是空串（上面那一组）
+      for (const [action, operation, expected] of [
+        ['read', 'read-session', '#0'],
+        ['read', 'inspect-session', '#0'],
+        ['write', 'prompt-session', '#1'],
+        ['write', 'steer-session', '#1']
+      ] as const) {
+        expectSession(
+          `${operation} X`,
+          action,
+          sess('X'),
+          decide(action, sess('X'), {
+            provider,
+            warn: sinks.evalWarn,
+            tool: SESSION_TOOL(operation)
+          }),
+          expected,
+          operation
+        )
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('XS-12 user 主体与 extension 宿主不受它约束（表外的查看 / 对话都放行）；路径与会话两张表互不串', () => {
+      const sinks = warnSinks()
+      const provider = sessionProvider(SESSION_ROWS, { logger: sinks.logger })
+      for (const action of ['read', 'write'] as const) {
+        expectSession(
+          `user ${action}`,
+          action,
+          sess('X'),
+          decide(action, sess('X'), { provider, subjectKind: 'user', warn: sinks.evalWarn }),
+          'allow'
+        )
+        expectSession(
+          `extension ${action}`,
+          action,
+          sess('X'),
+          decide(action, sess('X'), { provider, host: 'extension', warn: sinks.evalWarn }),
+          'allow'
+        )
+      }
+
+      // 一条路径写进会话表：路径门照问（会话表不是路径授权）
+      const notes = `${HOME}/notes.txt`
+      const pathInSessionTable = makeProvider({
+        logger: sinks.logger,
+        getVars: () => ({ ...DESKTOP_VARS, aclSessionRead: [notes], aclSessionWrite: [notes] })
+      })
+      expectShape(
+        '会话表里的路径 · 读',
+        'read',
+        notes,
+        decide('read', at(notes), { provider: pathInSessionTable, warn: sinks.evalWarn }),
+        '#0'
+      )
+      expectShape(
+        '会话表里的路径 · 写',
+        'write',
+        notes,
+        decide('write', at(notes), { provider: pathInSessionTable, warn: sinks.evalWarn }),
+        '#1'
+      )
+
+      // 一个会话 id 写进路径表：会话门照问（路径表不是会话授权）
+      const idInPathTable = makeProvider({
+        logger: sinks.logger,
+        getVars: () => ({
+          ...sessionVars([]),
+          aclRead: [...(DESKTOP_VARS.aclRead as string[]), 'X'],
+          aclWrite: [...(DESKTOP_VARS.aclWrite as string[]), 'X']
+        })
+      })
+      expectSession(
+        '路径表里的会话 id · 查看',
+        'read',
+        sess('X'),
+        decide('read', sess('X'), { provider: idInPathTable, warn: sinks.evalWarn }),
+        '#0'
+      )
+      expectSession(
+        '路径表里的会话 id · 对话',
+        'write',
+        sess('X'),
+        decide('write', sess('X'), { provider: idInPathTable, warn: sinks.evalWarn }),
+        '#1'
+      )
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    /** 卡片上的 rememberEntry（`Session(read|write, <id>)`）→ 宿主 persistSessionGrant(mode, id) 记下的那一行 */
+    const sessionGrantOf = (entry: string): Pick<AclEntry, 'kind' | 'target' | 'access'> => {
+      const m = /^Session\((read|write), (.+)\)$/.exec(entry)
+      if (!m) throw new Error(`not a session entry: ${entry}`)
+      return { kind: 'session', target: m[2]!, access: m[1] as 'read' | 'write' }
+    }
+
+    it('XS-13 「允许并记住」往返：记住的查看只免查看、对话照问；记住的对话两样都免', () => {
+      const empty = sessionProvider([])
+      const readAsk = decide('read', sess('X'), { provider: empty })
+      const writeAsk = decide('write', sess('X'), { provider: empty })
+      expect(readAsk.ask?.rememberEntry).toBe('Session(read, X)')
+      expect(writeAsk.ask?.rememberEntry).toBe('Session(write, X)')
+
+      const afterRead = sessionProvider([sessionGrantOf(readAsk.ask!.rememberEntry!)])
+      expectSession(
+        '记住查看之后 · 查看',
+        'read',
+        sess('X'),
+        decide('read', sess('X'), { provider: afterRead }),
+        'allow'
+      )
+      expectSession(
+        '记住查看之后 · 对话',
+        'write',
+        sess('X'),
+        decide('write', sess('X'), { provider: afterRead }),
+        '#1'
+      )
+
+      const afterWrite = sessionProvider([sessionGrantOf(writeAsk.ask!.rememberEntry!)])
+      for (const action of ['read', 'write'] as const) {
+        expectSession(
+          `记住对话之后 · ${action}`,
+          action,
+          sess('X'),
+          decide(action, sess('X'), { provider: afterWrite }),
+          'allow'
+        )
+      }
+      // 记住的是 X：别的会话照问
+      expectSession(
+        '记住 X 之后 · Y',
+        'read',
+        sess('Y'),
+        decide('read', sess('Y'), { provider: afterWrite }),
+        '#0'
+      )
+    })
+
+    it('XS-14 宿主没交会话表（缺键）：表外的查看 / 对话照问、各恰一条 fail-safe 告警（点名规则）；ownTurn 为真吸收掉错误 —— 放行、零告警', () => {
+      /** fail-safe 那一行：开头点名规则与缺的键，结尾说按命中处置（中间是 CEL 的出错位置示意，不钉） */
+      const expectFailSafe = (message: string, rule: string, missing: string): void => {
+        expect(
+          message.startsWith(
+            `security rule '${rule}': match evaluation failed (No such key: ${missing}`
+          ),
+          message
+        ).toBe(true)
+        expect(message.endsWith('), treating as matched (fail-safe)'), message).toBe(true)
+      }
+      for (const [action, rule, missing] of [
+        ['read', 'ask-on-session-access#0', 'aclSessionRead'],
+        ['write', 'ask-on-session-access#1', 'aclSessionWrite']
+      ] as const) {
+        const sinks = warnSinks()
+        const provider = makeProvider({ logger: sinks.logger })
+        const decision = decide(action, sess('X'), { provider, warn: sinks.evalWarn })
+        expect(decision).toMatchObject({
+          effect: 'ask',
+          tier: 'ask',
+          winning: rule,
+          matched: [rule]
+        })
+        expect(decision.ask?.rememberEntry).toBe(`Session(${action}, X)`)
+        expect(sinks.evalWarn).toHaveBeenCalledTimes(1)
+        expectFailSafe(sinks.evalWarn.mock.calls[0]![0], rule, missing)
+        // 不是 inDir 的目录变量：装配那一侧不记「not provided」
+        expect(sinks.logWarn).not.toHaveBeenCalled()
+
+        const own = warnSinks()
+        expect(
+          decide(action, sess('X', true), {
+            provider: makeProvider({ logger: own.logger }),
+            warn: own.evalWarn
+          })
+        ).toMatchObject({ effect: 'allow', tier: 'default', matched: [] })
+        expect(own.evalWarn).not.toHaveBeenCalled()
+        expect(own.logWarn).not.toHaveBeenCalled()
+      }
+    })
+
+    it('XS-14 客体缺 ownTurn（PEP 违约）：没交会话表 → 照问 + 告警；交了表、id 不在表里 → 照问 + 告警；id 在表里 → && 另一侧为假，放行、不告警', () => {
+      const noOwnTurn: SecurityObject = { type: 'session', sessionId: 'X', title: 'T' }
+      const bare = warnSinks()
+      expect(
+        decide('read', noOwnTurn, { provider: makeProvider(), warn: bare.evalWarn })
+      ).toMatchObject({ effect: 'ask', winning: 'ask-on-session-access#0' })
+      // 两侧都缺：CEL 的 && 两侧都出错时报的是右侧（会话表）那一个
+      expect(bare.evalWarn).toHaveBeenCalledTimes(1)
+      expect(bare.evalWarn.mock.calls[0]![0]).toMatch(
+        /^security rule 'ask-on-session-access#0': match evaluation failed \(No such key: aclSessionRead\b/
+      )
+      expect(bare.evalWarn.mock.calls[0]![0]).toMatch(/\), treating as matched \(fail-safe\)$/)
+
+      const outside = warnSinks()
+      expect(
+        decide('write', noOwnTurn, { provider: sessionProvider(), warn: outside.evalWarn })
+      ).toMatchObject({ effect: 'ask', winning: 'ask-on-session-access#1' })
+      expect(outside.evalWarn).toHaveBeenCalledTimes(1)
+      expect(outside.evalWarn.mock.calls[0]![0]).toMatch(
+        /^security rule 'ask-on-session-access#1': match evaluation failed \(No such key: ownTurn\b[\s\S]*\), treating as matched \(fail-safe\)$/
+      )
+
+      const inside = warnSinks()
+      const granted: SecurityObject = { type: 'session', sessionId: 'W', title: 'T' }
+      expect(
+        decide('write', granted, { provider: sessionProvider(), warn: inside.evalWarn })
+      ).toMatchObject({ effect: 'allow', winning: 'default:session', matched: [] })
+      expect(inside.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it('XS-15 用户的 force-ask 会话门：卡片照样带 session 材料，但没有「允许并记住」；权限表的行免不了它，内置那条照常一起命中', () => {
+      const forceAsk: ParsedPolicyFile = {
+        name: 'always-ask-sessions',
+        displayName: 'Always ask about sessions',
+        description: '',
+        rules: [{ effect: 'force-ask', conditions: { 'object.type': ['session'] } }],
+        body: ''
+      }
+      const sinks = warnSinks()
+      const provider = sessionProvider(SESSION_ROWS, {
+        logger: sinks.logger,
+        getUserPolicies: () => [forceAsk]
+      })
+      const cases: Array<['read' | 'write', string, string[]]> = [
+        // 表里的行：内置那条不命中，force-ask 照问
+        ['write', 'W', ['always-ask-sessions#0']],
+        ['read', 'R', ['always-ask-sessions#0']],
+        // 表外：两条都命中，force-ask 档在前
+        ['write', 'X', ['always-ask-sessions#0', 'ask-on-session-access#1']],
+        ['read', 'X', ['always-ask-sessions#0', 'ask-on-session-access#0']]
+      ]
+      for (const [action, id, matched] of cases) {
+        const decision = decide(action, sess(id), {
+          provider,
+          warn: sinks.evalWarn,
+          tool: SESSION_TOOL(action === 'write' ? 'prompt-session' : 'read-session')
+        })
+        expect(decision, `${action} ${id}`).toMatchObject({
+          effect: 'ask',
+          tier: 'force-ask',
+          winning: 'always-ask-sessions#0',
+          matched
+        })
+        expect(decision.ask, `${action} ${id}`).toStrictEqual({
+          command: `Session(${action}, ${id})`,
+          session: {
+            sessionId: id,
+            title: 'T',
+            access: action,
+            operation: action === 'write' ? 'prompt-session' : 'read-session'
+          }
+        })
+      }
+      // 自己发起的那一轮：内置那条的 ownTurn 豁免管不到用户的门
+      const own = decide('write', sess('W', true), { provider, warn: sinks.evalWarn })
+      expect(own).toMatchObject({
+        tier: 'force-ask',
+        matched: ['always-ask-sessions#0']
+      })
+      expect(own.ask).not.toHaveProperty('rememberEntry')
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
   })
 })
 

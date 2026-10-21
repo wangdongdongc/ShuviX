@@ -64,6 +64,9 @@ function summarizeObject(request: SecurityRequest): string {
     if (!tool) return 'invocation'
     return tool.operation ? `${tool.name}: ${tool.operation}` : tool.name
   }
+  if (object.type === 'session' && typeof object.sessionId === 'string') {
+    return `session ${object.sessionId}`
+  }
   return object.type
 }
 
@@ -96,6 +99,9 @@ function displayName(request: SecurityRequest, opts: EnforceOpts): string {
   if (typeof object.command === 'string') return object.command
   if (typeof object.sql === 'string') return object.sql
   if (typeof object.url === 'string') return object.url
+  if (object.type === 'session' && typeof object.title === 'string' && object.title) {
+    return `session "${object.title}" (${String(object.sessionId)})`
+  }
   return summarizeObject(request)
 }
 
@@ -108,6 +114,10 @@ function deniedMessage(request: SecurityRequest, display: string): string {
       return 'User denied execution of this command'
     case 'url':
       return `User denied opening ${display}`
+    case 'session':
+      return request.action === 'write'
+        ? `User denied talking to ${display}`
+        : `User denied reading ${display}`
     default:
       return `User denied ${display}`
   }
@@ -358,6 +368,7 @@ export async function executeDecision(args: {
           reason: clipReviewText(review.verdict.reason, REVIEW_REASON_MAX_CHARS)
         }
       : undefined,
+    ...(decision.ask?.session ? { session: decision.ask.session } : {}),
     createdAt: Date.now()
   })
 
@@ -382,12 +393,23 @@ export async function executeDecision(args: {
     throw new Error((response.kind === 'ask' && response.reason) || deniedMessage(request, display))
   }
 
-  const remember = !!response.extra?.rememberPath && !!decision.ask?.rememberEntry
-  if (remember && request.object.type === 'path' && typeof request.object.path === 'string') {
+  // 「允许并记住」：路径询问带 `extra.rememberPath`（可以点名所在的文件夹），会话询问带 `extra.remember`
+  const object = request.object
+  const mode = request.action === 'write' ? 'write' : 'read'
+  const rememberPath =
+    !!response.extra?.rememberPath && object.type === 'path' && typeof object.path === 'string'
+  const rememberSession =
+    response.extra?.remember === true &&
+    object.type === 'session' &&
+    typeof object.sessionId === 'string'
+  const remember = (rememberPath || rememberSession) && !!decision.ask?.rememberEntry
+  if (remember && rememberPath) {
     provider.persistGrant?.(
-      request.action === 'write' ? 'write' : 'read',
-      rememberTargetOf(provider, request.object.path, response.extra?.rememberPath)
+      mode,
+      rememberTargetOf(provider, String(object.path), response.extra?.rememberPath)
     )
+  } else if (remember && rememberSession) {
+    provider.persistSessionGrant?.(mode, String(object.sessionId))
   }
   record(remember ? 'allowed_remember' : 'allowed', true, review)
   return { status: 'allowed' }

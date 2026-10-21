@@ -1,7 +1,7 @@
 /**
  * 子会话全链路（设计：docs/sub-session-design.md）——
  * 父会话的模型调 `session` 工具 → 建出一条**普通会话** → 代替用户往里发消息（只回执，§20：派活一律后台）→
- * 子会话自己跑一轮 → 跑完由完成通知把父会话叫回来（空闲则自动续跑），答复经 `wait-for-sub-sessions` 收回。
+ * 子会话自己跑一轮 → 跑完由完成通知把父会话叫回来（空闲则自动续跑），答复经 `wait-for-sessions` 收回。
  *
  * 被测的是那条「不该有第二份」的路径：工具 → subSessionRunner → **chatGateway.prompt**
  * （IPC `agent:prompt` 的同一个函数）→ 子会话运行时。所以这里刻意不 mock 任何一层，
@@ -118,7 +118,7 @@ const byUserText =
 
 /** 被子会话的完成通知叫醒的那一轮：末条用户消息就是那条通知 */
 const wokenByCompletion = (r: { lastUserText: string }): boolean =>
-  r.lastUserText.includes(`<sub-session id="${subSid}"`) && r.lastUserText.includes('has finished')
+  r.lastUserText.includes(`<session id="${subSid}"`) && r.lastUserText.includes('has finished')
 
 /** 等子会话的那一轮挂进 `child` 槽（它收到的用户消息恰为 text） */
 const childHeld = (text: string): Promise<unknown> =>
@@ -231,8 +231,8 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
             id: 'call_prompt',
             name: 'session',
             args: JSON.stringify({
-              action: 'prompt-sub-session',
-              sub_session_id: subSid,
+              action: 'prompt-session',
+              session_id: subSid,
               message: '干活'
             })
           }
@@ -248,7 +248,7 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
           {
             id: 'call_collect',
             name: 'session',
-            args: JSON.stringify({ action: 'wait-for-sub-sessions' })
+            args: JSON.stringify({ action: 'wait-for-sessions' })
           }
         ],
         when: wokenByCompletion
@@ -262,7 +262,7 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
     // 1. 回执：在跑、带后台标签，**不带**答复（子会话这时候也还没答）
     const receipt = await sessionBlock(parentSid, 'call_prompt')
     expect(receipt.isError).toBeFalsy()
-    expect(receipt.result).toContain(`<sub-session id="${subSid}" status="running"/>`)
+    expect(receipt.result).toContain(`<session id="${subSid}" status="running"/>`)
     expect(receipt.result).toContain('Started in the background')
     expect(receipt.result).not.toContain('CHILD DONE.')
     expect(receipt.result).not.toContain('<reply>')
@@ -283,9 +283,9 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
     const parentMsgs = await listMessages(parentSid)
     const notices = systemNotices(parentMsgs)
     expect(notices).toHaveLength(1)
-    expect(notices[0].content).toContain(`<sub-session id="${subSid}"`)
+    expect(notices[0].content).toContain(`<session id="${subSid}"`)
     expect(notices[0].content).toContain('has finished')
-    expect(notices[0].content).toContain('wait-for-sub-sessions')
+    expect(notices[0].content).toContain('wait-for-sessions')
     expect(notices[0].content).not.toContain('CHILD DONE.')
     // 模型以 user 角色看到的就是它
     const woken = provider.requests().filter(wokenByCompletion)
@@ -295,8 +295,8 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
     // 4. 收回来的答复**在围栏里** —— 围栏外的字都是工具在说话
     const collected = await sessionBlock(parentSid, 'call_collect')
     expect(collected.isError).toBeFalsy()
-    expect(collected.result).toContain('<sub-sessions status="settled">')
-    expect(collected.result).toContain(`<sub-session id="${subSid}"`)
+    expect(collected.result).toContain('<sessions status="settled">')
+    expect(collected.result).toContain(`<session id="${subSid}"`)
     expect(collected.result).toContain('<reply>\nCHILD DONE.\n</reply>')
   })
 
@@ -309,8 +309,8 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
             id: 'call_bg',
             name: 'session',
             args: JSON.stringify({
-              action: 'prompt-sub-session',
-              sub_session_id: subSid,
+              action: 'prompt-session',
+              session_id: subSid,
               message: '后台干活'
             })
           }
@@ -325,7 +325,7 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
           {
             id: 'call_wait',
             name: 'session',
-            args: JSON.stringify({ action: 'wait-for-sub-sessions' })
+            args: JSON.stringify({ action: 'wait-for-sessions' })
           }
         ],
         when: byUserText('后台跑')
@@ -351,14 +351,14 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
     expect(receipt).toContain('Started in the background')
     // 回执**明说跑完会把你叫回来**（自动续跑之后那是事实），并给出「要当轮就拿到答复」的收法
     expect(receipt).toContain('brought back')
-    expect(receipt).toContain('wait-for-sub-sessions')
+    expect(receipt).toContain('wait-for-sessions')
     // 回执不带内容：它会永久留在父会话上下文里并被每一步重发
     expect(receipt).not.toContain('BG DONE.')
 
     // wait 一次交回答复：父级不必再 read 一遍；答复同样在围栏里
     const collected = results.find((r) => r.includes('BG DONE.'))
     expect(collected, 'wait 应把子会话的答复一次交回').toBeDefined()
-    expect(collected).toContain('<sub-sessions status="settled">')
+    expect(collected).toContain('<sessions status="settled">')
     expect(collected).toContain('<reply>\nBG DONE.\n</reply>')
 
     // wait 握着的那次落定已经在同一轮里交回：没有新的完成通知（也就没有被它叫醒的一轮）
@@ -410,8 +410,8 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
             id: 'call_bad',
             name: 'session',
             args: JSON.stringify({
-              action: 'prompt-sub-session',
-              sub_session_id: parentSid,
+              action: 'prompt-session',
+              session_id: parentSid,
               message: 'x'
             })
           }
@@ -428,7 +428,7 @@ describe('prompt-sub-session —— 派活只回执，跑完叫回父会话（§
     )
     expect(failed.length).toBeGreaterThan(0)
     const text = failed.map((b) => b.result ?? '').join('\n')
-    expect(text).toContain('is not a sub-session of this session')
+    expect(text).toContain('is this session itself')
     expect(text).toContain(subSid)
   })
 })

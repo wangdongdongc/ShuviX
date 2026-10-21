@@ -1,10 +1,11 @@
 /**
- * 子会话运行器 —— agent 经 `session` 工具自建会话、代替用户往里发消息（设计：docs/sub-session-design.md）。
+ * 子会话运行器 —— agent 经 `session` 工具自建会话、代替用户往里发消息（设计：docs/sub-session-design.md）；
+ * 也驱动**别的会话**：用户在输入框里 @ 一条会话，智能体就能按 id 与它交互，与驱动子会话是同一套机制。
  *
  * 子会话**就是一条普通会话**：产品行为一致，只多一个 `parentId`。因此本文件刻意薄 ——
  * 它只做几件既有机制表达不了的事：
  *
- *  1. **形态准入**：谁能当父（普通会话）、谁能被驱动（必须是调用方自己的子会话）。
+ *  1. **形态准入**：谁能当父（普通会话）、谁能被驱动（调用方自己的子会话；别的会话要先过授权）。
  *     越权在这里落空，工具层只负责把拒绝理由翻译给模型。
  *  2. **派活一律后台**（§20）：`prompt` / `answer` 只等「确认发出去了」的 50ms 就回执；要答复只有 `wait`
  *     （挂住、有一条停下来问就返回、超时什么都不停）。
@@ -28,6 +29,13 @@
  *     枢纽通知父会话（`inputNotice`）；`answer` 代答 ask 工具的选择题（权限卡除外），`steer` 往这一轮里插话。
  *     没有绑定任务（用户自己发起的一轮、这一轮已经结束、重启之后）→ 不通知、不能代答、不能插话。
  *
+ *  8. **别的会话**（2026-10-20 用户裁决）：目标不是自己的子会话时（`relation: 'other'`），每个动作先经调用方给的
+ *     `authorize` 过安全模块（`ask-on-session-access`：不在会话权限表里就问人，只由人回答，「允许并记住」写进表）；
+ *     自己的子会话不过这道门。
+ *     **自己发起的那一轮是自己的**（`ownTurn`）：收它的答复、代答它的提问、插话、停下它 —— 发起它的那次 `write`
+ *     已经过了门。别的会话里只能停自己发起的那一轮；`create` 与省略 id 的补全只对子会话。下文的 parentId 一律是
+ *     **调用方**会话、childId 是**目标**会话（子会话或别的会话）。
+ *
  * **发送必须走 `chatGateway.prompt`**（IPC `agent:prompt` 的同一个函数）。懒创建运行时、
  * 用户消息落树（各前端经会话视图看到）、埋点、auto-title、自动压缩，全部因此照常发生。
  * 任何绕过这道门的实现都会让「子会话表现与普通会话一致」从第一天起就带例外。
@@ -38,6 +46,7 @@
  */
 import { chatGateway } from '../frontend/core'
 import { sessionService } from './sessionService'
+import { sessionAcl } from './acl'
 import { taskRegistry } from './taskRegistry'
 import { messageService } from './messageService'
 import { recordSessionModel, recordSessionThinkingLevel, isDurableSession } from './sessionStorage'
@@ -82,7 +91,7 @@ export const MAX_SUB_SESSIONS = 20
  */
 const SEND_CONFIRM_MS = 50
 
-/** `wait-for-sub-sessions` 的缺省上限（秒）。到点交回，不中止任何子会话 */
+/** `wait-for-sessions` 的缺省上限（秒）。到点交回，不中止任何会话 */
 export const DEFAULT_WAIT_TIMEOUT_SEC = 300
 
 /**
@@ -94,10 +103,36 @@ const NOT_DELIVERED = new Set(['busy', 'no_model', 'closed', 'queued'])
 
 export type SubSessionStatus = 'idle' | 'running' | 'waiting-input' | 'interrupted'
 
+/** 目标会话与调用方的关系：调用方自己的子会话，或别的会话（交互要过授权） */
+export type SessionRelation = 'sub-session' | 'other'
+
+/** 落定的目标会话 */
+export interface SessionTarget {
+  id: string
+  title: string
+  relation: SessionRelation
+}
+
+/**
+ * 与一条别的会话交互的授权 —— 工具层经安全模块（`assertSessionAccess` → 出厂的 ask-on-session-access）判定，必要时
+ * 问人；不放行就抛错（文案原样给模型）。只对 `relation: 'other'` 调：自己的子会话不过这道门（要管子会话，用户策略
+ * 照旧写在 L1 的 invocation 门上，按 tool.operation 点名）。`ownTurn` = 这次只涉及调用方自己发起的那一轮。没给 =
+ * 不设门（单测、宿主自己的调用）
+ */
+export type AuthorizeSessionAccess = (
+  target: SessionTarget,
+  access: 'read' | 'write',
+  ownTurn: boolean
+) => Promise<void>
+
 export interface SubSessionInfo {
   id: string
   title: string
   status: SubSessionStatus
+  /** 与调用方的关系（子会话 / 别的会话） */
+  relation: SessionRelation
+  /** 别的会话在调用方权限表里的那一行（只有 list 给：read = 查看，write = 对话；没有行 = 只被允许过一次） */
+  access?: 'read' | 'write'
   /** 本进程是否正在替父会话驱动它（用户自己在里面发消息时为 false，status 仍是 running；进程内记账，PIN-15） */
   driven: boolean
   updatedAt: number
@@ -117,7 +152,7 @@ export interface SubSessionInfo {
   pendingAsks?: PendingAskInfo[]
   /**
    * 父会话最近一次发进去的消息之后，用户自己在子会话里说过话（§19.7）—— 答复解释不了过程的最常见原因，
-   * 也是 `inspect-sub-session` 值得一看的信号。只在 read / wait / 前台答复这几条路上算（要读一次视图）。
+   * 也是 `inspect-session` 值得一看的信号。只在 read / wait / 前台答复这几条路上算（要读一次视图）。
    */
   userIntervened?: boolean
 }
@@ -180,9 +215,21 @@ interface DriveRecord {
  */
 function intervenedIn(
   messages: ReadonlyArray<{ id: string; role: string; metadata?: unknown }>,
-  sources: ReadonlyMap<string, unknown>
+  sources: ReadonlyMap<string, unknown>,
+  topLevel: boolean
 ): boolean {
-  const users = messages.filter((m) => {
+  const users = spokenMessages(messages)
+  const authors = authorsOf(users, (m) => sources.has(m.id), { topLevel })
+  // 最近的一条用户消息是人打的（父会话发的、或分不清 → 没有）
+  const last = users[users.length - 1]
+  return last !== undefined && authors.get(last) === 'human'
+}
+
+/** 有人「说」的用户消息（人打的、或别的会话代发的）：系统写的通知与指令注入不算 */
+function spokenMessages<T extends { id: string; role: string; metadata?: unknown }>(
+  messages: readonly T[]
+): T[] {
+  return messages.filter((m) => {
     if (m.role !== 'user') return false
     const meta = m.metadata as
       | { isSystemNotice?: boolean; isInstructionInjection?: boolean }
@@ -190,10 +237,6 @@ function intervenedIn(
       | undefined
     return !(meta?.isSystemNotice || meta?.isInstructionInjection)
   })
-  const authors = authorsOf(users, (m) => sources.has(m.id))
-  // 最近的一条用户消息是人打的（父会话发的、或分不清 → 没有）
-  const last = users[users.length - 1]
-  return last !== undefined && authors.get(last) === 'human'
 }
 
 class SubSessionRunner {
@@ -243,6 +286,66 @@ class SubSessionRunner {
     return null
   }
 
+  /**
+   * 调用方要是一条会话（指向别的会话的动作不挑形态：子会话、笔记本会话、bot 会话都可以去查看 / 对话别的会话 ——
+   * 有没有 `session` 工具是档案的事）。返回错误文案（null = 通过）
+   */
+  private rejectIfDetached(sessionId: string): string | null {
+    return sessionRecords.pick(sessionId, ['id'])
+      ? null
+      : 'This task is not attached to a session — the session tool is unavailable here.'
+  }
+
+  /**
+   * 把调用方给的 id 落定到一条会话：自己的子会话（`sub-session`），或别的任何一条会话（`other`，交互前要过授权）。
+   * 省略 id 只在子会话里补全（resolveChild）；不能是调用方自己。
+   */
+  private resolveTarget(parentId: string, rawId: string): SessionTarget | { error: string } {
+    const detached = this.rejectIfDetached(parentId)
+    if (detached) return { error: detached }
+    if (!rawId) {
+      if (this.rejectIfNotNormal(parentId)) {
+        return { error: 'Pass the id of the session to address in `session_id`.' }
+      }
+      const child = this.resolveChild(parentId, '')
+      return 'error' in child ? child : { ...child, relation: 'sub-session' }
+    }
+    if (rawId === parentId) {
+      return {
+        error: `"${rawId}" is this session itself. ${this.childListing(parentId)}`
+      }
+    }
+    const child = this.ownChild(parentId, rawId)
+    if (child) return { ...child, relation: 'sub-session' }
+    const row = sessionRecords.pick(rawId, ['title'])
+    if (!row) return { error: this.unknownChildError(parentId, rawId) }
+    return { id: rawId, title: row.title, relation: 'other' }
+  }
+
+  /**
+   * 这条会话里最近的那一轮是不是调用方发起的：本进程正替它驱动着（绑定的后台任务还活着），或最近一条有人说的
+   * 用户消息就是它发进去的（来源记在会话里，重启之后也认得）。读不了 → false（多问，不是少问）
+   */
+  private async isOwnTurn(parentId: string, childId: string): Promise<boolean> {
+    if (this.boundRun(childId)?.parentId === parentId) return true
+    if (!isDurableSession(childId)) return false
+    try {
+      const agent = await this.peekFacade(childId)
+      if (!agent) return false
+      const [view, sources] = await Promise.all([agent.sessionView(), agent.inputSources()])
+      const last = spokenMessages(view.messages).at(-1)
+      return last !== undefined && sources.get(last.id)?.sessionId === parentId
+    } catch (err) {
+      log.warn(`读会话 ${childId} 的来源失败: ${err instanceof Error ? err.message : err}`)
+      return false
+    }
+  }
+
+  /** 是一条顶层会话（不是任何会话的子会话）：它没有来源记录的用户消息都是人打的（见 agent-runtime `authorsOf`） */
+  private isTopLevel(sessionId: string): boolean {
+    return !sessionRecords.pick(sessionId, ['parentId'])?.parentId
+  }
+
   /** 取调用方名下的子会话（不存在 / 不是它的孩子都返回 null —— 越权在这里落空） */
   private ownChild(parentId: string, childId: string): { id: string; title: string } | null {
     const child = sessionRecords.pick(childId, ['title', 'parentId'])
@@ -275,7 +378,7 @@ class SubSessionRunner {
     }
     return {
       error:
-        'Which sub-session? Pass its id in `sub_session_id`:\n' +
+        'Which sub-session? Pass its id in `session_id`:\n' +
         children.map((s) => `  ${s.id}  ${s.title}`).join('\n')
     }
   }
@@ -315,12 +418,17 @@ class SubSessionRunner {
     )
   }
 
-  private info(row: { id: string; title: string; updatedAt: number }): SubSessionInfo {
-    const pendingAsks = this.pendingAsksOf(row.id)
+  private info(
+    parentId: string,
+    row: { id: string; title: string; updatedAt: number },
+    relation: SessionRelation = 'sub-session'
+  ): SubSessionInfo {
+    const pendingAsks = this.pendingAsksOf(row.id, parentId)
     return {
       id: row.id,
       title: row.title,
       status: this.statusOf(row.id),
+      relation,
       driven: this.runs.has(row.id),
       updatedAt: row.updatedAt,
       blockedOn: this.blockedOn(row.id),
@@ -339,11 +447,15 @@ class SubSessionRunner {
     return task && task.endedAt === null ? run : undefined
   }
 
-  /** 挂着的询问（完整的；只看开着的会话）。选择题能不能代答取决于这一轮是不是父会话发起的 */
-  private pendingAsksOf(childId: string): PendingAskInfo[] | undefined {
+  /**
+   * 挂着的询问（完整的；只看开着的会话）。选择题能不能代答取决于这一轮是不是**调用方**发起的（`parentId`；省略 =
+   * 只要有人驱动着就算 —— 只给不关心能不能代答的记账用）
+   */
+  private pendingAsksOf(childId: string, parentId?: string): PendingAskInfo[] | undefined {
     const pending = sessionService.getAgentSession(childId)?.pendingInputs() ?? []
     if (pending.length === 0) return undefined
-    const answerable = this.boundRun(childId) !== undefined
+    const run = this.boundRun(childId)
+    const answerable = run !== undefined && (parentId === undefined || run.parentId === parentId)
     return pending.map(
       (request): PendingAskInfo =>
         request.kind === 'choice'
@@ -369,21 +481,91 @@ class SubSessionRunner {
     for (const ask of asks) shown.add(ask.id)
   }
 
+  /**
+   * 调用方找得到的会话：它的子会话（只有普通会话才有）、它权限表里的别的会话（带查看 / 对话），以及它此刻正驱动着
+   * 的别的会话（只被允许过一次的那些）。不列别的 —— 别的会话的 id 只从用户那里来（@ 一条会话）
+   */
   list(parentId: string): { error: string } | { subSessions: SubSessionInfo[] } {
-    const rejected = this.rejectIfNotNormal(parentId)
-    if (rejected) return { error: rejected }
-    return { subSessions: sessionRecords.findChildren(parentId).map((s) => this.info(s)) }
+    const detached = this.rejectIfDetached(parentId)
+    if (detached) return { error: detached }
+    const grants = new Map(sessionAcl.sessionGrants(parentId).map((e) => [e.target, e.access]))
+    // 正驱动着的别的会话也可能在权限表里：带上那一行的 access
+    const listed = this.knownTargets(parentId).map((t) => {
+      const info = this.info(parentId, this.rowOf(t), t.relation)
+      const access = t.relation === 'other' ? grants.get(t.id) : undefined
+      return access ? { ...info, access } : info
+    })
+    const seen = new Set(listed.map((s) => s.id))
+    for (const [target, access] of grants) {
+      if (seen.has(target)) continue
+      const row = sessionRecords.pick(target, ['title', 'updatedAt'])
+      if (!row) continue
+      seen.add(target)
+      listed.push({ ...this.info(parentId, { id: target, ...row }, 'other'), access })
+    }
+    return { subSessions: listed }
   }
 
+  /**
+   * 省略 id 时说的「我的那些」：调用方的子会话，加上它此刻正驱动着的别的会话（本进程发起、还没落定的那几轮）
+   */
+  private knownTargets(parentId: string): SessionTarget[] {
+    const children: SessionTarget[] = this.rejectIfNotNormal(parentId)
+      ? []
+      : sessionRecords
+          .findChildren(parentId)
+          .map((s) => ({ id: s.id, title: s.title, relation: 'sub-session' as const }))
+    const seen = new Set(children.map((c) => c.id))
+    const driven: SessionTarget[] = []
+    for (const [id, run] of this.runs) {
+      if (run.parentId !== parentId || seen.has(id)) continue
+      const row = sessionRecords.pick(id, ['title'])
+      if (row) driven.push({ id, title: row.title, relation: 'other' })
+    }
+    return [...children, ...driven]
+  }
+
+  /** 一条已落定的目标（按 id；不在了 / 是调用方自己 → null） */
+  private targetOf(parentId: string, id: string): SessionTarget | null {
+    if (id === parentId) return null
+    const child = this.ownChild(parentId, id)
+    if (child) return { ...child, relation: 'sub-session' }
+    const row = sessionRecords.pick(id, ['title'])
+    return row ? { id, title: row.title, relation: 'other' } : null
+  }
+
+  /** 目标此刻的标题与更新时间（读不到就用落定时的标题） */
+  private rowOf(target: SessionTarget): { id: string; title: string; updatedAt: number } {
+    const row = sessionRecords.pick(target.id, ['title', 'updatedAt'])
+    return { id: target.id, title: row?.title ?? target.title, updatedAt: row?.updatedAt ?? 0 }
+  }
+
+  /**
+   * 别的会话过授权（子会话、没给 authorize = 不设门）。ownTurn 没给就现算（要读一次会话视图，所以只在要设门时才算）
+   */
+  private async authorizeAccess(
+    parentId: string,
+    target: SessionTarget,
+    access: 'read' | 'write',
+    authorize: AuthorizeSessionAccess | undefined,
+    ownTurn?: boolean
+  ): Promise<void> {
+    if (!authorize || target.relation !== 'other') return
+    await authorize(target, access, ownTurn ?? (await this.isOwnTurn(parentId, target.id)))
+  }
+
+  /**
+   * 目标最近一轮的答复。别的会话要过 read 授权 —— 最近一轮是调用方自己发起的就不算新的查看（收自己那一轮的答复）
+   */
   async read(
     parentId: string,
-    rawChildId: string
+    rawChildId: string,
+    authorize?: AuthorizeSessionAccess
   ): Promise<{ error: string } | ({ info: SubSessionInfo } & AnswerFields)> {
-    const rejected = this.rejectIfNotNormal(parentId)
-    if (rejected) return { error: rejected }
-    const resolved = this.resolveChild(parentId, rawChildId)
+    const resolved = this.resolveTarget(parentId, rawChildId)
     if ('error' in resolved) return { error: resolved.error }
     const childId = resolved.id
+    await this.authorizeAccess(parentId, resolved, 'read', authorize)
 
     const [last, intervened] = await Promise.all([
       this.lastAnswer(childId),
@@ -395,11 +577,11 @@ class SubSessionRunner {
     if (run) this.markShown(run.requestId, this.pendingAsksOf(childId))
     return {
       info: {
-        ...this.info({
-          id: childId,
-          title: row?.title ?? resolved.title,
-          updatedAt: row?.updatedAt ?? 0
-        }),
+        ...this.info(
+          parentId,
+          { id: childId, title: row?.title ?? resolved.title, updatedAt: row?.updatedAt ?? 0 },
+          resolved.relation
+        ),
         ...(intervened ? { userIntervened: true } : {})
       },
       ...last
@@ -407,39 +589,40 @@ class SubSessionRunner {
   }
 
   /**
-   * 查看子会话的现场（`inspect-sub-session`，§19.7）：大纲 / 展开一条 / 搜索。只读：开着的会话直接读视图，
-   * 没开的 peek 一次（存储在才打开，从不创建）。父会话可以看自己的任何一条子会话，不受「这一轮是谁发起的」限制。
+   * 查看会话的现场（`inspect-session`，§19.7）：大纲 / 展开一条 / 搜索。只读：开着的会话直接读视图，
+   * 没开的 peek 一次（存储在才打开，从不创建）。父会话可以看自己的任何一条子会话，不受「这一轮是谁发起的」限制；
+   * 别的会话恒要过 read 授权 —— 大纲翻得到整条对话，不只是自己发起的那一轮。
    */
   async inspect(params: {
     parentId: string
     childId: string
     query: OutlineQuery
+    authorize?: AuthorizeSessionAccess
   }): Promise<{ error: string } | { info: SubSessionInfo; result: OutlineResult }> {
     const { parentId, query } = params
-    const rejected = this.rejectIfNotNormal(parentId)
-    if (rejected) return { error: rejected }
-    const resolved = this.resolveChild(parentId, params.childId)
+    const resolved = this.resolveTarget(parentId, params.childId)
     if ('error' in resolved) return { error: resolved.error }
     const childId = resolved.id
+    await this.authorizeAccess(parentId, resolved, 'read', params.authorize, false)
     if (!isDurableSession(childId)) {
       return {
         error:
-          `Sub-session "${resolved.title}" was created by an earlier version of ShuviX; its transcript cannot be ` +
-          `inspected from here. "read-sub-session" still gives its last answer.`
+          `Session "${resolved.title}" was created by an earlier version of ShuviX; its transcript cannot be ` +
+          `inspected from here. "read-session" still gives its last answer.`
       }
     }
     const row = sessionRecords.pick(childId, ['title', 'updatedAt'])
-    const info = this.info({
-      id: childId,
-      title: row?.title ?? resolved.title,
-      updatedAt: row?.updatedAt ?? 0
-    })
+    const info = this.info(
+      parentId,
+      { id: childId, title: row?.title ?? resolved.title, updatedAt: row?.updatedAt ?? 0 },
+      resolved.relation
+    )
     const agent = await this.peekFacade(childId)
     if (!agent) {
       // 还没有存储：什么都没发生过 —— 展开一条就是「没有这一条」，搜索是零命中，大纲是空的
       if (query.item?.trim()) {
         return {
-          error: `No item ${query.item.trim().startsWith('#') ? query.item.trim() : `#${query.item.trim()}`} — nothing has happened in that sub-session yet.`
+          error: `No item ${query.item.trim().startsWith('#') ? query.item.trim() : `#${query.item.trim()}`} — nothing has happened in that session yet.`
         }
       }
       if (query.match?.trim()) {
@@ -467,15 +650,21 @@ class SubSessionRunner {
     try {
       ;[view, sources] = await Promise.all([agent.sessionView(), agent.inputSources()])
     } catch (err) {
-      log.warn(`读子会话 ${childId} 的视图失败: ${err instanceof Error ? err.message : err}`)
+      log.warn(`读会话 ${childId} 的视图失败: ${err instanceof Error ? err.message : err}`)
       return {
-        error: `Could not read sub-session "${info.title}" right now (it was just closed or is being reopened). Try again.`
+        error: `Could not read session "${info.title}" right now (it was just closed or is being reopened). Try again.`
       }
     }
-    const result = buildSessionOutline(view, { readerId: parentId, sources }, query)
+    const result = buildSessionOutline(
+      view,
+      { readerId: parentId, sources, topLevel: this.isTopLevel(childId) },
+      query
+    )
     if (result.kind === 'error') return { error: result.error }
     return {
-      info: intervenedIn(view.messages, sources) ? { ...info, userIntervened: true } : info,
+      info: intervenedIn(view.messages, sources, this.isTopLevel(childId))
+        ? { ...info, userIntervened: true }
+        : info,
       result
     }
   }
@@ -490,7 +679,7 @@ class SubSessionRunner {
       const agent = await this.peekFacade(childId)
       if (!agent) return false
       const [view, sources] = await Promise.all([agent.sessionView(), agent.inputSources()])
-      return intervenedIn(view.messages, sources)
+      return intervenedIn(view.messages, sources, this.isTopLevel(childId))
     } catch (err) {
       log.warn(`读子会话 ${childId} 的来源失败: ${err instanceof Error ? err.message : err}`)
       return false
@@ -620,32 +809,33 @@ class SubSessionRunner {
     childId: string
     message: string
     requestId?: string
+    authorize?: AuthorizeSessionAccess
   }): Promise<{ error: string } | PromptOutcome> {
     const { parentId, message } = params
-    const rejected = this.rejectIfNotNormal(parentId)
-    if (rejected) return { error: rejected }
-    const resolved = this.resolveChild(parentId, params.childId)
+    const resolved = this.resolveTarget(parentId, params.childId)
     if ('error' in resolved) return { error: resolved.error }
     const child = resolved
     const childId = child.id
     if (!message.trim())
       return { error: 'Pass the message text in `message` (a non-empty string).' }
+    // 新起一轮恒是 write、不是「自己的那一轮」。先看发不发得出去 —— 批准了才发现它正忙，那张卡就白问了（下面占位之后
+    // 还会再判一次，这里只为不白问）。崩溃之后的重跑、这条消息早就送到了：上一次已经过了门，不再问
+    if (params.authorize && child.relation === 'other') {
+      const delivered =
+        params.requestId !== undefined &&
+        (await this.requestStateOf(childId, params.requestId)) !== 'none'
+      if (!delivered) {
+        const refusal = this.claimRefusal(parentId, child) ?? this.freshSendRefusal(parentId, child)
+        if (refusal) return { error: refusal }
+        await params.authorize(child, 'write', false)
+      }
+    }
 
     // **同步占位先于异步判定**：两个 prompt 在同一轮里并发进来时，`statusOf` 查的是
     // 运行时，而运行时是懒创建的（第一条还没把它建出来），于是两边都判「空闲」双双放行
     // —— 第二条随后被拒 busy，回到模型眼里成了「已提交、排队中」。这一行让第二条当场拿到拒绝理由。
-    if (this.runs.has(childId) || this.claiming.has(childId)) {
-      // 你发起的那一轮停下来问了：它在等回答，而不是还在跑 —— 给能解开它的那个动作（可代答 → answer）
-      if (this.statusOf(childId) === 'waiting-input') {
-        return { error: this.blockedError(child.title, childId) }
-      }
-      return {
-        error:
-          `Sub-session "${child.title}" is already running a turn you just started. ` +
-          `One sub-session runs one turn at a time — wait for it with "wait-for-sub-sessions", ` +
-          `or, if this work does not belong to it, create another sub-session for it.`
-      }
-    }
+    const claimed = this.claimRefusal(parentId, child)
+    if (claimed) return { error: claimed }
     const requestId =
       params.requestId ?? `subsession:${parentId}:adhoc-${globalThis.crypto.randomUUID()}`
     this.claiming.add(childId)
@@ -679,7 +869,11 @@ class SubSessionRunner {
         kind: 'sub-session',
         sessionId: parentId,
         title: child.title,
-        subject: { kind: 'sub-session', childSessionId: childId },
+        subject: {
+          kind: 'sub-session',
+          childSessionId: childId,
+          ...(child.relation === 'other' ? { other: true } : {})
+        },
         // 不给 formatNotice：子会话的完成通知只走 onDrivenSettled 这一条路（PIN-01）。
         // 跑到一半弹出询问、没人在等它时的通知走枢纽（§19.3）—— 它和这一轮的任务同生共死
         formatInputNotice: (task) => this.inputNotice(task),
@@ -697,7 +891,7 @@ class SubSessionRunner {
             driven: { parentId, background: true }
           })
           .catch((err: unknown): SubmitResult => {
-            log.warn(`子会话 ${childId} 发送失败: ${err}`)
+            log.warn(`会话 ${childId} 发送失败: ${err}`)
             return { error: err instanceof Error ? err.message : String(err) }
           })
       }
@@ -714,13 +908,40 @@ class SubSessionRunner {
   }
 
   /**
+   * 这条会话此刻被一次驱动占着（本进程正驱动着、或正有一次发送在占位）的拒绝文案；没被占着 → null
+   */
+  private claimRefusal(parentId: string, child: SessionTarget): string | null {
+    const childId = child.id
+    if (!this.runs.has(childId) && !this.claiming.has(childId)) return null
+    const driver = this.runs.get(childId)?.parentId
+    // 别的会话正驱动着它：那一轮不是你的，答不了也停不了
+    if (driver !== undefined && driver !== parentId) {
+      return (
+        `Session "${child.title}" is running a turn another session started. ` +
+        `A session runs one turn at a time — send again when it is idle.`
+      )
+    }
+    // 你发起的那一轮停下来问了：它在等回答，而不是还在跑 —— 给能解开它的那个动作（可代答 → answer）
+    if (this.statusOf(childId) === 'waiting-input') {
+      return this.blockedError(parentId, child.title, childId)
+    }
+    return (
+      `Session "${child.title}" is already running a turn you just started. ` +
+      `A session runs one turn at a time — wait for it with "wait-for-sessions"` +
+      (child.relation === 'sub-session'
+        ? `, or, if this work does not belong to it, create another sub-session for it.`
+        : '.')
+    )
+  }
+
+  /**
    * 发出去（`prompt`）/ 答完（`answer`）之后的回执：只等「确认发出去了」的那一小会儿（`SEND_CONFIRM_MS`）——
    * 发送失败（拒 busy）是同步就落定的，正常那一路要跑到轮结束，不在这里等它。确认窗里子会话就停下来问了 → 由这次
    * 交回（否则枢纽见它有人等就不排通知，之后再没人补，§19.3）。不接中止信号：父会话被停不级联（§20）。
    */
   private async confirmSent(p: {
     parentId: string
-    child: { id: string; title: string }
+    child: SessionTarget
     run: DrivenRun
     record: DriveRecord
     /** 'answer'：这一轮早就发出去了 —— 确认窗里它以什么结果收场都不是「没发出去」，只回执 */
@@ -745,11 +966,11 @@ class SubSessionRunner {
       if (outcome.reason === 'input') {
         // 停下来问了：询问由这次调用交回（同一条不再通知），这一轮仍在
         this.markShown(requestId, this.pendingAsksOf(childId))
-        const info = this.infoOf(parentId, childId)
+        const info = this.infoOf(parentId, child)
         log.info(`子会话 ${childId} 停下来询问，确认窗里交回`)
         return { kind: 'input', id: childId, ...(info ? { info } : {}) }
       }
-      log.info(`prompt sub-session ${childId} (background)`)
+      log.info(`prompt session ${childId} (background)`)
       return { kind: 'started', id: childId }
     }
 
@@ -763,7 +984,7 @@ class SubSessionRunner {
       this.dropRecord(requestId, record)
       return { error: this.sendFailedError(childId, child.title, sent) }
     }
-    log.info(`prompt sub-session ${childId} (background, settled at once)`)
+    log.info(`prompt session ${childId} (background, settled at once)`)
     return { kind: 'started', id: childId }
   }
 
@@ -782,21 +1003,32 @@ class SubSessionRunner {
    * 状态，替它排队等于把这个状态藏起来。卡在询问上的给「去让用户回答」的建议。被中断的**不拒**：
    * 新消息按 abort-then-send 先中止被中断的那件事（R5）。返回拒绝文案，null = 放行。
    */
-  private freshSendRefusal(parentId: string, child: { id: string; title: string }): string | null {
+  private freshSendRefusal(parentId: string, child: SessionTarget): string | null {
     const status = this.statusOf(child.id)
-    if (status === 'waiting-input') return this.blockedError(child.title, child.id)
-    if (status === 'running') {
-      return (
-        `Sub-session "${child.title}" is ${status}. ` +
-        `Collect it with action "wait-for-sub-sessions", or stop it with "stop-sub-session".`
-      )
+    if (status === 'waiting-input') {
+      // 别的会话里不是你发起的那一轮：它在等谁、问的是什么不归你看（这时还没过授权）
+      if (child.relation === 'other' && this.boundRun(child.id)?.parentId !== parentId) {
+        return (
+          `Session "${child.title}" is waiting for an answer in a turn you did not start. ` +
+          `Send again when it is idle.`
+        )
+      }
+      return this.blockedError(parentId, child.title, child.id)
     }
+    if (status === 'running') {
+      return child.relation === 'sub-session'
+        ? `Session "${child.title}" is ${status}. ` +
+            `Collect it with action "wait-for-sessions", or stop it with "stop-session".`
+        : `Session "${child.title}" is busy with a turn you did not start (the user or another session is working ` +
+            `in it). Send again when it is idle — "wait-for-sessions" with its \`session_id\` waits for that.`
+    }
+    // 上限数的是调用方驱动着的全部会话（子会话与别的会话一起）
     const running = [...this.runs.entries()]
       .filter(([id, r]) => r.parentId === parentId && this.statusOf(id) !== 'idle')
       .map(([id]) => id)
     if (running.length >= MAX_RUNNING_SUB_SESSIONS) {
       return (
-        `Too many sub-sessions running (${running.length}/${MAX_RUNNING_SUB_SESSIONS}). ` +
+        `Too many sessions running that you started (${running.length}/${MAX_RUNNING_SUB_SESSIONS}). ` +
         `Wait for one to finish before starting another.`
       )
     }
@@ -822,10 +1054,10 @@ class SubSessionRunner {
     return false
   }
 
-  /** 单条子会话的快照（不含答复；lastAnswer 另取） */
-  private infoOf(parentId: string, childId: string): SubSessionInfo | undefined {
-    const row = sessionRecords.findChildren(parentId).find((s) => s.id === childId)
-    return row ? this.info(row) : undefined
+  /** 单条目标会话的快照（不含答复；lastAnswer 另取）。会话不在了 → undefined */
+  private infoOf(parentId: string, target: SessionTarget): SubSessionInfo | undefined {
+    const row = sessionRecords.pick(target.id, ['title', 'updatedAt'])
+    return row ? this.info(parentId, { id: target.id, ...row }, target.relation) : undefined
   }
 
   /**
@@ -835,7 +1067,8 @@ class SubSessionRunner {
    * 而每一轮轮询都是一次完整请求（系统提示词 + 整段历史 + 全部工具定义重发一遍），
    * 换回来的往往是一句「还没好」。这里一次调用挂住,结果一次交齐。
    *
-   * `childId` 省略 = 等本会话**此刻在跑的全部**子会话（被中断的不在其中 —— 它们不会自己好起来）。
+   * `childId` 省略 = 等本会话**此刻在跑的全部**子会话，加上它此刻正驱动着的别的会话（被中断的不在其中 —— 它们
+   * 不会自己好起来）。别的会话要过 read 授权；等的是自己发起的那一轮就不算新的查看。
    * `waiting-input`（卡在 ask 上等人回答）与 `interrupted` 都算落定，结果里如实标出状态让父级去决定。
    * 中止**不**级联杀子会话：等待是只读动作，父级被停不该连累后台在跑的活。
    *
@@ -852,31 +1085,35 @@ class SubSessionRunner {
     rerunTargets?: readonly string[]
     /** 第一次运行：挂住之前交出要等的那几条（工具据此写 memo） */
     onTargets?: (targets: string[]) => Promise<void>
+    authorize?: AuthorizeSessionAccess
   }): Promise<{ error: string } | WaitOutcome> {
     const { parentId, childId, timeoutSeconds, signal } = params
-    const rejected = this.rejectIfNotNormal(parentId)
-    if (rejected) return { error: rejected }
-    if (childId && !this.ownChild(parentId, childId)) {
-      return { error: this.unknownChildError(parentId, childId) }
+    const detached = this.rejectIfDetached(parentId)
+    if (detached) return { error: detached }
+    if (childId) {
+      const resolved = this.resolveTarget(parentId, childId)
+      if ('error' in resolved) return { error: resolved.error }
     }
 
     let blockOn: string[]
     /** 重跑时要先续上的那几条（被中断的） */
     let resume: string[] = []
     if (params.rerunTargets) {
-      blockOn = params.rerunTargets.filter((id) => this.ownChild(parentId, id) !== null)
+      blockOn = params.rerunTargets.filter((id) => this.targetOf(parentId, id) !== null)
       resume = blockOn.filter((id) => this.statusOf(id) === 'interrupted')
     } else {
-      const candidates = childId
-        ? [childId]
-        : sessionRecords.findChildren(parentId).map((s) => s.id)
+      const candidates = childId ? [childId] : this.knownTargets(parentId).map((t) => t.id)
       blockOn = candidates.filter((id) => this.statusOf(id) === 'running')
       await params.onTargets?.(blockOn)
     }
     const targets = childId ? [childId] : blockOn
+    for (const id of targets) {
+      const target = this.targetOf(parentId, id)
+      if (target) await this.authorizeAccess(parentId, target, 'read', params.authorize)
+    }
     if (targets.length === 0) {
       const results = await this.infoWithAnswers(parentId)
-      return { kind: this.stoppedKind(results), results }
+      return { kind: this.stoppedKind(parentId, results), results }
     }
 
     // 先登记成「被 wait 握着」、再续上：先续上的那一条可能在后一条还在打开时就落定了 —— 那次落定要在同一轮里
@@ -915,7 +1152,7 @@ class SubSessionRunner {
       // 要交回去的询问同样趁还握着先记成看过：放手之后合并窗口才到点的那条通知就不会再说一遍
       for (const id of targets) {
         const run = this.boundRun(id)
-        if (run) this.markShown(run.requestId, this.pendingAsksOf(id))
+        if (run?.parentId === parentId) this.markShown(run.requestId, this.pendingAsksOf(id))
       }
     } finally {
       for (const id of targets) {
@@ -926,18 +1163,21 @@ class SubSessionRunner {
     }
     const results = await this.infoWithAnswers(parentId, targets)
     // 落定了但有人停在询问上 —— 那不是「完成」，外层状态必须说清楚
-    return { kind: kind === 'settled' ? this.stoppedKind(results) : kind, results }
+    return { kind: kind === 'settled' ? this.stoppedKind(parentId, results) : kind, results }
   }
 
   /**
    * 都不在跑了：真跑完了（settled）、有人停下来问了父会话能代答的问题（asking）、还是有人卡在只有用户能答的
    * 询问上（blocked）。交回的询问记成「已经给父会话看过」—— 同一条不再通知（§19.3）。
    */
-  private stoppedKind(results: ReadonlyArray<SubSessionInfo>): 'settled' | 'asking' | 'blocked' {
+  private stoppedKind(
+    parentId: string,
+    results: ReadonlyArray<SubSessionInfo>
+  ): 'settled' | 'asking' | 'blocked' {
     const waiting = results.filter((r) => r.status === 'waiting-input')
     for (const r of waiting) {
       const run = this.boundRun(r.id)
-      if (run) this.markShown(run.requestId, r.pendingAsks)
+      if (run?.parentId === parentId) this.markShown(run.requestId, r.pendingAsks)
     }
     if (waiting.length === 0) return 'settled'
     const answerable = waiting.some((r) =>
@@ -952,7 +1192,7 @@ class SubSessionRunner {
       sessionService.getAgentSession(childId) ?? (await sessionService.ensureAgentSession(childId))
     if (!agent) return
     const result = await agent.resumeInterrupted()
-    if (result.error) log.warn(`续上子会话 ${childId} 失败: ${result.error}`)
+    if (result.error) log.warn(`续上会话 ${childId} 失败: ${result.error}`)
   }
 
   /**
@@ -975,19 +1215,27 @@ class SubSessionRunner {
     }
   }
 
-  /** 子会话快照 + 各自这一轮的答复（wait 的返回形状；ids 省略 = 全部子会话） */
+  /**
+   * 目标会话快照 + 各自这一轮的答复（wait 的返回形状；ids 省略 = 全部子会话与正驱动着的别的会话）
+   */
   private async infoWithAnswers(
     parentId: string,
     ids?: string[]
   ): Promise<Array<SubSessionInfo & AnswerFields>> {
-    const children = sessionRecords.findChildren(parentId).filter((s) => !ids || ids.includes(s.id))
+    const targets = ids
+      ? ids.map((id) => this.targetOf(parentId, id)).filter((t): t is SessionTarget => t !== null)
+      : this.knownTargets(parentId)
     return Promise.all(
-      children.map(async (s) => {
+      targets.map(async (t) => {
         const [answer, intervened] = await Promise.all([
-          this.lastAnswer(s.id),
-          this.userIntervened(s.id)
+          this.lastAnswer(t.id),
+          this.userIntervened(t.id)
         ])
-        return { ...this.info(s), ...(intervened ? { userIntervened: true } : {}), ...answer }
+        return {
+          ...this.info(parentId, this.rowOf(t), t.relation),
+          ...(intervened ? { userIntervened: true } : {}),
+          ...answer
+        }
       })
     )
   }
@@ -1017,9 +1265,9 @@ class SubSessionRunner {
   ): Promise<void> {
     const title = sessionRecords.pick(childId, ['title'])?.title ?? childId
     const text = [
-      `<sub-session id="${attrValue(childId)}" title="${attrValue(title)}" status="${this.statusOf(childId)}">`,
+      `<session id="${attrValue(childId)}" title="${attrValue(title)}" status="${this.statusOf(childId)}">`,
       this.sendFailedError(childId, title, sent),
-      '</sub-session>'
+      '</session>'
     ].join('\n')
     try {
       await sessionService.deliverSubSessionNotice(
@@ -1030,7 +1278,7 @@ class SubSessionRunner {
       )
     } catch (err) {
       log.warn(
-        `子会话 ${childId} 没发出去的通知送达失败: ${err instanceof Error ? err.message : err}`
+        `会话 ${childId} 没发出去的通知送达失败: ${err instanceof Error ? err.message : err}`
       )
     }
   }
@@ -1059,7 +1307,7 @@ class SubSessionRunner {
   /**
    * 子会话停下来询问、没人在等它时的通知（枢纽在合并窗口结束时调用）。只说还没给父会话看过的那几条；
    * `wait` 正握着它（它自己会交回）、这一轮已经结束或换了一轮、询问已经被答掉 → 不发。
-   * 文案是模型面向的英文（进上下文的字符串不随界面语言变），整段在一个 `<sub-session>` 块里 —— 渲染侧
+   * 文案是模型面向的英文（进上下文的字符串不随界面语言变），整段在一个 `<session>` 块里 —— 渲染侧
    * 按形状把它认成系统通知，不是用户发言。
    */
   private inputNotice(task: TaskInfo): string | null {
@@ -1074,17 +1322,17 @@ class SubSessionRunner {
     const title = sessionRecords.pick(childId, ['title'])?.title ?? childId
     const asksQuestion = fresh.some((a) => a.kind === 'question')
     return [
-      `<sub-session id="${attrValue(childId)}" title="${attrValue(title)}" status="waiting-input">`,
+      `<session id="${attrValue(childId)}" title="${attrValue(title)}" status="waiting-input">`,
       asksQuestion
         ? 'It stopped to ask a question in the turn you started.'
         : 'It stopped to ask the user for approval in the turn you started and cannot continue until the user answers in that session.',
       ...renderPendingAsks(fresh),
-      '</sub-session>'
+      '</session>'
     ].join('\n')
   }
 
   /**
-   * 代用户回答子会话的选择题（`answer-sub-session`，§19.4）。只答**这个父会话发起、绑定任务还活着的那一轮**
+   * 代用户回答子会话的选择题（`answer-session`，§19.4）。只答**这个父会话发起、绑定任务还活着的那一轮**
    * 里 ask 工具的提问；权限卡一律拒绝（只有用户能批）。应答直接送进这条子会话自己 —— 不经全局的
    * `respondToUserInput`：询问 id 就是 provider 的 toolCallId，会话之间会重复（`call_0`）。
    *
@@ -1098,17 +1346,26 @@ class SubSessionRunner {
     askId?: string
     selections?: readonly string[]
     message?: string
+    authorize?: AuthorizeSessionAccess
   }): Promise<{ error: string } | PromptOutcome> {
     const { parentId } = params
-    const rejected = this.rejectIfNotNormal(parentId)
-    if (rejected) return { error: rejected }
-    const resolved = this.resolveChild(parentId, params.childId)
+    const resolved = this.resolveTarget(parentId, params.childId)
     if ('error' in resolved) return { error: resolved.error }
     const child = resolved
     const childId = child.id
     const agent = sessionService.getAgentSession(childId)
     const pending = agent?.pendingInputs() ?? []
     const askId = params.askId?.trim()
+    // 别的会话里不是你发起的那一轮：里面问过什么、谁答了什么都不归你看（这时还没过授权）—— 先于「已经答过」报。
+    // 是你的那一轮：把那一轮里的回答带出来之前，同 read 一样过一次查看的授权（出厂不问，用户自己的策略照样能管）
+    if (child.relation === 'other') {
+      if (!(await this.isOwnTurn(parentId, childId))) {
+        return { error: this.notYoursToAnswer(child, pending.length > 0) }
+      }
+      if (askId && !pending.some((r) => r.id === askId)) {
+        await this.authorizeAccess(parentId, child, 'read', params.authorize, true)
+      }
+    }
     // 点名的那道题已经不在挂着了：多半是用户先答了 —— 把它得到的回答带出来（从转写里读）。放在「这一轮归不归
     // 你」之前：这一轮跑完之后再点名，同样该知道它早就有了回答
     if (agent && askId && !pending.some((r) => r.id === askId)) {
@@ -1116,7 +1373,7 @@ class SubSessionRunner {
       if (earlier !== undefined) {
         return {
           error:
-            `Question "${askId}" in sub-session "${child.title}" was already answered (most likely by the user ` +
+            `Question "${askId}" in session "${child.title}" was already answered (most likely by the user ` +
             `in that session): ${earlier}. Nothing was sent.`
         }
       }
@@ -1126,28 +1383,26 @@ class SubSessionRunner {
       return { error: this.notYoursToAnswer(child, pending.length > 0) }
     }
 
-    const target = this.pickQuestion(child, pending, askId)
+    const target = this.pickQuestion(parentId, child, pending, askId)
     if ('error' in target) return target
     const response = this.answerResponse(target.question, params.selections, params.message)
     if ('error' in response) return response
+    // 自己发起的那一轮：出厂策略不问，用户自己的策略照样能管
+    await this.authorizeAccess(parentId, child, 'write', params.authorize, true)
 
     const parentTitle = sessionRecords.pick(parentId, ['title'])?.title
     const answered = agent.respondToInput(target.question.id, response.response, {
       clientId: `parent:${parentId}`,
-      answeredBy: {
-        kind: 'parent-session',
-        sessionId: parentId,
-        ...(parentTitle ? { title: parentTitle } : {})
-      }
+      answeredBy: sessionRecords.drivingSourceOf(childId, parentId, parentTitle)
     })
     if (!answered) {
       return {
         error:
-          `The question in sub-session "${child.title}" was already answered (most likely by the user in that session) — ` +
-          `nothing was sent. Check where it stands with "read-sub-session".`
+          `The question in session "${child.title}" was already answered (most likely by the user in that session) — ` +
+          `nothing was sent. Check where it stands with "read-session".`
       }
     }
-    log.info(`父会话 ${parentId} 代答子会话 ${childId} 的询问 ${target.question.id}`)
+    log.info(`会话 ${parentId} 代答会话 ${childId} 的询问 ${target.question.id}`)
 
     let record = this.records.get(run.requestId)
     if (!record) {
@@ -1178,23 +1433,24 @@ class SubSessionRunner {
     return undefined
   }
 
-  /** 这条子会话里不是父会话能代答的（这一轮不是它发起的 / 已经结束 / 根本没在问） */
+  /** 这条会话里不是调用方能代答的（这一轮不是它发起的 / 已经结束 / 根本没在问） */
   private notYoursToAnswer(child: { id: string; title: string }, asking: boolean): string {
     if (!asking) {
       return (
-        `Sub-session "${child.title}" is not waiting for an answer (status: ${this.statusOf(child.id)}). ` +
+        `Session "${child.title}" is not waiting for an answer (status: ${this.statusOf(child.id)}). ` +
         `Nothing was sent.`
       )
     }
     return (
-      `The question in sub-session "${child.title}" is not in a turn you are driving now (the user started that ` +
-      `turn, your turn there has already ended, or the app restarted since) — it is the user's to answer. ` +
-      `Nothing was sent. Tell the user, or leave it.`
+      `The question in session "${child.title}" is not in a turn you are driving now (the user or another session ` +
+      `started that turn, your turn there has already ended, or the app restarted since) — it is not yours to ` +
+      `answer. Nothing was sent. Tell the user, or leave it.`
     )
   }
 
   /** 要答的那一条：给了 id 就按 id 找（权限卡拒绝）；没给就要求恰好一条选择题 */
   private pickQuestion(
+    parentId: string,
     child: { id: string; title: string },
     pending: readonly InputRequest[],
     askId: string | undefined
@@ -1207,15 +1463,15 @@ class SubSessionRunner {
       if (!found) {
         return {
           error: questions.length
-            ? `No question "${askId}" is waiting in sub-session "${child.title}" — nothing was sent. Waiting questions:\n${listing()}`
-            : `No question "${askId}" is waiting in sub-session "${child.title}" — nothing was sent.`
+            ? `No question "${askId}" is waiting in session "${child.title}" — nothing was sent. Waiting questions:\n${listing()}`
+            : `No question "${askId}" is waiting in session "${child.title}" — nothing was sent.`
         }
       }
       if (found.kind !== 'choice') {
         return {
           error:
-            `"${askId}" is an approval prompt — only the user can answer it; tell them, or stop the sub-session ` +
-            `with "stop-sub-session". Nothing was sent.` +
+            `"${askId}" is an approval prompt — only the user can answer it; tell them, or stop that turn ` +
+            `with "stop-session". Nothing was sent.` +
             (questions.length ? ` Questions you may answer:\n${listing()}` : '')
         }
       }
@@ -1226,8 +1482,8 @@ class SubSessionRunner {
       return {
         error:
           pending.length > 0
-            ? this.blockedError(child.title, child.id)
-            : `Sub-session "${child.title}" is not waiting for an answer. Nothing was sent.`
+            ? this.blockedError(parentId, child.title, child.id)
+            : `Session "${child.title}" is not waiting for an answer. Nothing was sent.`
       }
     }
     return { error: `Which question? Pass its id in \`ask_id\`:\n${listing()}` }
@@ -1272,7 +1528,7 @@ class SubSessionRunner {
   }
 
   /**
-   * 往子会话这一轮里插话（`steer-sub-session`，§19.6）。只插**这个父会话发起、绑定任务还活着、正在跑**的那一轮；
+   * 往子会话这一轮里插话（`steer-session`，§19.6）。只插**这个父会话发起、绑定任务还活着、正在跑**的那一轮；
    * 其余一律拒绝而不是排队，并给出去处（空闲 → prompt；卡在可代答的提问上 → answer；批准卡 → 转告用户）。
    * 走网关的 steer（界面用的同一道门），带幂等键（重跑时子会话认得它就不再发）与来源（这条消息是父会话写的）。
    *
@@ -1283,11 +1539,10 @@ class SubSessionRunner {
     childId: string
     message: string
     requestId: string
+    authorize?: AuthorizeSessionAccess
   }): Promise<{ error: string } | { id: string; title: string; earlier?: boolean }> {
     const { parentId, requestId } = params
-    const rejected = this.rejectIfNotNormal(parentId)
-    if (rejected) return { error: rejected }
-    const resolved = this.resolveChild(parentId, params.childId)
+    const resolved = this.resolveTarget(parentId, params.childId)
     if ('error' in resolved) return { error: resolved.error }
     const child = resolved
     const childId = child.id
@@ -1305,42 +1560,44 @@ class SubSessionRunner {
       if (status === 'idle') {
         return {
           error:
-            `Sub-session "${child.title}" is idle — there is no turn to steer. ` +
-            `Send it a message with "prompt-sub-session".`
+            `Session "${child.title}" is idle — there is no turn to steer. ` +
+            `Send it a message with "prompt-session".`
         }
       }
       if (status === 'interrupted') {
         return {
           error:
-            `Sub-session "${child.title}" was interrupted when the app stopped; there is no running turn to steer. ` +
-            `A new "prompt-sub-session" starts over.`
+            `Session "${child.title}" was interrupted when the app stopped; there is no running turn to steer. ` +
+            `A new "prompt-session" starts over.`
         }
       }
       return {
         error:
-          `The turn running in sub-session "${child.title}" was not started by you (the user is working in it), ` +
-          `so you cannot steer it. Wait for it with "wait-for-sub-sessions", or tell the user.`
+          `The turn running in session "${child.title}" was not started by you (the user or another session is ` +
+          `working in it), so you cannot steer it. Wait for it with "wait-for-sessions", or tell the user.`
       }
     }
     if (status === 'waiting-input') {
-      const asks = this.pendingAsksOf(childId)
+      const asks = this.pendingAsksOf(childId, parentId)
       if (asks?.some((a) => a.kind === 'question')) {
         return {
           error:
-            `Sub-session "${child.title}" is waiting for an answer to its question, and a steer would only land ` +
-            `after that. Answer it with "answer-sub-session" and put what you want to tell it in \`message\`.`
+            `Session "${child.title}" is waiting for an answer to its question, and a steer would only land ` +
+            `after that. Answer it with "answer-session" and put what you want to tell it in \`message\`.`
         }
       }
-      return { error: this.blockedError(child.title, childId) }
+      return { error: this.blockedError(parentId, child.title, childId) }
     }
+    // 自己发起的那一轮：出厂策略不问，用户自己的策略照样能管
+    await this.authorizeAccess(parentId, child, 'write', params.authorize, true)
 
     const sent = await chatGateway.steerDriven(childId, message, { requestId, parentId })
     if (sent.error) {
       return {
-        error: `The steer was NOT delivered to sub-session "${child.title}": ${sent.error}. Nothing was queued.`
+        error: `The steer was NOT delivered to session "${child.title}": ${sent.error}. Nothing was queued.`
       }
     }
-    log.info(`父会话 ${parentId} 向子会话 ${childId} 插话 request=${requestId}`)
+    log.info(`会话 ${parentId} 向会话 ${childId} 插话 request=${requestId}`)
     return { id: childId, title: child.title }
   }
 
@@ -1408,7 +1665,8 @@ class SubSessionRunner {
     const asked = this.blockedOn(childId)
     const stopped = event.record.reason === 'aborted'
     return [
-      `<sub-session id="${childId}" title="${title}" status="${status}"${intervened ? ' user-intervened="true"' : ''}>`,
+      // 标题是 LLM 起的：与别的通知一样转义（引号会撕破属性、换行会把一行变两行）
+      `<session id="${attrValue(childId)}" title="${attrValue(title)}" status="${status}"${intervened ? ' user-intervened="true"' : ''}>`,
       status === 'waiting-input'
         ? 'It stopped to ask the user for approval and cannot continue until the user answers in that session.'
         : stopped
@@ -1419,8 +1677,11 @@ class SubSessionRunner {
       asked?.length ? `It is asking: ${asked.join(' | ')}` : '',
       status === 'waiting-input'
         ? 'Tell the user what it is waiting for — you cannot answer it yourself.'
-        : 'Collect it with the session tool: action "wait-for-sub-sessions".',
-      '</sub-session>'
+        : sessionRecords.pick(childId, ['parentId'])?.parentId === event.parentId
+          ? 'Collect it with the session tool: action "wait-for-sessions".'
+          : // 别的会话：那一轮落定之后，省略 id 的 wait 只看子会话 —— 点名它
+            `Collect it with the session tool: action "wait-for-sessions" with session_id "${childId}".`,
+      '</session>'
     ]
       .filter(Boolean)
       .join('\n')
@@ -1428,15 +1689,27 @@ class SubSessionRunner {
 
   // ─── 停止与中止 ────────────────────────────────
 
-  /** 中止子会话当前的 run（等价用户点「停止生成」）；被中断的那一轮同样算 */
+  /**
+   * 中止目标当前的 run（等价用户点「停止生成」）；被中断的那一轮同样算。子会话里什么都能停；别的会话里只能停
+   * **自己发起的那一轮** —— 用户或别的会话在里面做的事不归调用方管。
+   */
   async stop(
     parentId: string,
-    rawChildId: string
+    rawChildId: string,
+    authorize?: AuthorizeSessionAccess
   ): Promise<{ error: string } | { stopped: boolean; id: string }> {
-    const rejected = this.rejectIfNotNormal(parentId)
-    if (rejected) return { error: rejected }
-    const resolved = this.resolveChild(parentId, rawChildId)
+    const resolved = this.resolveTarget(parentId, rawChildId)
     if ('error' in resolved) return { error: resolved.error }
+    const ownTurn = this.boundRun(resolved.id)?.parentId === parentId
+    if (resolved.relation === 'other' && !ownTurn) {
+      if (this.statusOf(resolved.id) === 'idle') return { stopped: false, id: resolved.id }
+      return {
+        error:
+          `The turn in session "${resolved.title}" was not started by you (the user or another session is working ` +
+          `in it, or the app restarted since) — you can only stop a turn you started there. Nothing was stopped.`
+      }
+    }
+    await this.authorizeAccess(parentId, resolved, 'write', authorize, ownTurn)
     return { stopped: await this.stopRun(resolved.id), id: resolved.id }
   }
 
@@ -1509,26 +1782,26 @@ class SubSessionRunner {
 
   /**
    * 卡在询问上：**它不会自己好起来** —— 给的建议必须是能解开它的那个动作：问的是父会话能代答的问题 →
-   * `answer-sub-session`（§19.4）；否则「去让用户回答」或「停掉」。
+   * `answer-session`（§19.4）；否则「去让用户回答」或「停掉」。
    */
-  private blockedError(title: string, childId: string): string {
-    const answerable = (this.pendingAsksOf(childId) ?? []).filter(
+  private blockedError(parentId: string, title: string, childId: string): string {
+    const answerable = (this.pendingAsksOf(childId, parentId) ?? []).filter(
       (a): a is Extract<PendingAskInfo, { kind: 'question' }> =>
         a.kind === 'question' && a.answerable
     )
     if (answerable.length > 0) {
       return [
-        `Sub-session "${title}" stopped to ask a question in the turn you started and will NOT proceed until it is answered.`,
+        `Session "${title}" stopped to ask a question in the turn you started and will NOT proceed until it is answered.`,
         `It is asking: ${answerable.map((a) => `${a.question} (ask_id ${a.id})`).join(' | ')}`,
-        `Answer it with "answer-sub-session", relay it to the user, or stop it with "stop-sub-session".`
+        `Answer it with "answer-session", relay it to the user, or stop it with "stop-session".`
       ].join(' ')
     }
     const agent = sessionService.getAgentSession(childId)
     const asked = agent?.pendingInputSummaries ?? []
     return [
-      `Sub-session "${title}" is blocked on a question for the user and will NOT proceed on its own.`,
+      `Session "${title}" is blocked on a question for the user and will NOT proceed on its own.`,
       asked.length ? `It is asking: ${asked.join(' | ')}` : '',
-      `Tell the user to answer it in that session, or stop it with "stop-sub-session".`
+      `Tell the user to answer it in that session, or stop it with "stop-session".`
     ]
       .filter(Boolean)
       .join(' ')
@@ -1539,30 +1812,39 @@ class SubSessionRunner {
     if (sent.code === 'queued') {
       // 重新挂上的那一条还排在子会话的收件箱里：它没丢，跟着下一条消息出去 —— 再发一遍就重复了
       return (
-        `The message was NOT delivered to sub-session "${title}" yet: ${sent.error}. ` +
+        `The message was NOT delivered to session "${title}" yet: ${sent.error}. ` +
         `It stays queued there and goes out with the next message it receives — do not send it again.`
       )
     }
     if (!isDurableSession(childId) && isLegacySession(childId, { rowRequired: true })) {
       // 旧格式会话只读：再发多少遍都一样，别让模型去等它空闲
       return (
-        `The message was NOT delivered to sub-session "${title}": ${sent.error}. ` +
+        `The message was NOT delivered to session "${title}": ${sent.error}. ` +
         `It was created by an earlier version of ShuviX and is read-only — it can still be read with ` +
-        `"read-sub-session", but it cannot take new messages. Create a new sub-session to continue.`
+        `"read-session", but it cannot take new messages.`
       )
     }
     return (
-      `The message was NOT delivered to sub-session "${title}": ${sent.error}. ` +
-      `Nothing is queued — check its status with "list-sub-sessions" and send again when it is idle.`
+      `The message was NOT delivered to session "${title}": ${sent.error}. ` +
+      `Nothing is queued — check its status with "list-sessions" and send again when it is idle.`
     )
   }
 
+  /** 没有这条会话：列出调用方的子会话，并说清别的会话的 id 从哪来 */
   private unknownChildError(parentId: string, childId: string): string {
-    const children = sessionRecords.findChildren(parentId)
+    return `There is no session "${childId}". ${this.childListing(parentId)}`
+  }
+
+  /** 调用方的子会话（id 与标题），以及别的会话的 id 从哪来 —— 点错了 id 的那几种错误共用 */
+  private childListing(parentId: string): string {
+    const children = this.rejectIfNotNormal(parentId) ? [] : sessionRecords.findChildren(parentId)
     const list = children.length
-      ? children.map((s) => `  ${s.id}  ${s.title}`).join('\n')
-      : '  (none — create one with action "create-sub-session")'
-    return `"${childId}" is not a sub-session of this session. Valid sub-sessions:\n${list}`
+      ? `Your sub-sessions:\n${children.map((s) => `  ${s.id}  ${s.title}`).join('\n')}`
+      : 'You have no sub-sessions.'
+    return (
+      `${list}\n` +
+      'Another session is addressed by the exact id the user gives you (an @-mention of it in their message) — do not guess ids.'
+    )
   }
 
   /** 等本进程还在途的发送全部落定 —— 仅供单测（换「进程」之前，免得上一个进程的收尾落进下一个） */

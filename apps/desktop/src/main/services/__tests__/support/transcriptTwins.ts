@@ -34,7 +34,7 @@ import {
   type SessionHost
 } from '@shuvix/agent-runtime'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import type { ParentSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
+import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import { wrapSummary } from '../../../../../../../packages/agent-runtime/src/durable/__tests__/support/digest'
 import { makeRealHost } from './realHost'
 
@@ -58,7 +58,7 @@ export type TwinStep =
       content: string | (TextContent | ImageContent)[]
       display?: DisplaySidecar
       /** 不是人打的：父会话代用户发的（durable 一侧记进 SourceDoc） */
-      source?: ParentSessionRef
+      source?: DrivingSessionRef
     }
   | {
       type: 'assistant'
@@ -91,7 +91,7 @@ export const user = (
 export const sourcedUser = (
   ts: number,
   content: string | (TextContent | ImageContent)[],
-  source: ParentSessionRef
+  source: DrivingSessionRef
 ): TwinStep => ({ type: 'user', ts, content, source })
 
 export const assistant = (

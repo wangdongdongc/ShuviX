@@ -17,13 +17,14 @@
  *   - user     用户策略 md（桌面 ~/.shuvix/policies/<name>.md，同名覆盖内置）
  *   - derived  宿主代码级派生规则（仅限无法 md 化的宿主特例；桌面/扩展当前都不供给）
  * 会话授权（"允许并记住"）不再是独立一层：宿主把会话权限表经 getVars 交成
- * `vars.aclRead` / `vars.aclWrite`，由策略 md 引用（出厂的 ask-on-external-path
- * 在表外询问，见 policyVars.ts）。
+ * `vars.aclRead` / `vars.aclWrite`（路径）与 `vars.aclSessionRead` / `vars.aclSessionWrite`（会话），由策略 md
+ * 引用（出厂的 ask-on-external-path / ask-on-session-access 在表外询问，见 policyVars.ts）。
  *
  * 结算优先序（tier，见 evaluate.ts）：deny → force-ask → force-allow → ask → static-allow → default。
  */
 import type {
   AskPreview,
+  AskSessionTarget,
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
@@ -267,11 +268,13 @@ export interface SecurityDecision {
      */
     requestedPath?: string
     /**
-     * 可以「允许并记住」时给出（值是同一条 `Read(...)` / `Write(...)` 条目）；缺省 = 不可记住。勾选后执行层经
-     * provider.persistGrant 把这条路径记进会话权限表。当前仅路径类客体给出（命令类没有对应的记忆机制 ——
-     * 用户想放宽命令可自写 allow 策略，含 matches() 正则）。
+     * 可以「允许并记住」时给出（值是同一条 `Read(...)` / `Write(...)` / `Session(...)` 条目）；缺省 = 不可记住。
+     * 勾选后执行层经 provider.persistGrant / persistSessionGrant 把这条路径 / 会话记进会话权限表。只有路径类与
+     * 会话类客体给出（命令类没有对应的记忆机制 —— 用户想放宽命令可自写 allow 策略，含 matches() 正则）。
      */
     rememberEntry?: string
+    /** 会话类：要交互的那条会话与访问方式（卡片按会话渲染） */
+    session?: AskSessionTarget
   }
 }
 
@@ -408,6 +411,8 @@ export interface SecurityHostProvider {
   isDirectory?(path: string): boolean | Promise<boolean>
   /** 询问通过且勾选「记住」时持久化 allow 条目 */
   persistGrant?(mode: AccessMode, path: string): void
+  /** 会话询问通过且勾选「记住」时，把那条会话记进会话权限表（read = 查看，write = 对话） */
+  persistSessionGrant?(mode: AccessMode, sessionId: string): void
   /**
    * bash/ssh 命令的结构解析（见 security/shell）。桌面注入；没有命令类工具的宿主省略。
    *
@@ -705,6 +710,23 @@ export interface UrlObjectInput {
   browser: 'app' | 'chrome'
 }
 
+/**
+ * enforceSession 的入参（对应 {type:'session'} 客体的属性）—— `session` 工具要交互的那条**别的**会话（不是调用方
+ * 自己的子会话 —— 子会话不过这道门，要管它们写在 L1 的 invocation 门上）。
+ * action：`read` = 查看（读它的答复、看它的现场、等它）；`write` = 对话（发消息、插话、代答、停下）。
+ */
+export interface SessionObjectInput {
+  /** 目标会话 id */
+  sessionId: string
+  /** 目标会话此刻的标题（卡片展示用 —— 标题多是 LLM 起的，别拿来做判定） */
+  title: string
+  /**
+   * 这次只涉及调用方**自己发起的那一轮**（收它的答复、代答它的提问、往里插话、停下它）—— 发起那一轮的
+   * `write` 已经过了这道门。新起一轮、看整条对话（inspect）、读别人发起那一轮的答复都不算
+   */
+  ownTurn: boolean
+}
+
 /** PEP 门面 —— 各工具调用点唯一入口（见 context.ts） */
 export interface SecurityContext {
   /** 评估（不执行、不弹窗、不记日志）。includeForceAllow 缺省 true。 */
@@ -750,6 +772,12 @@ export interface SecurityContext {
    * 这道门的意义是让用户能写「某个域名要问 / 禁止」。拒绝 / 取消 / 反馈时抛错，同 enforcePath。
    */
   enforceUrl(object: UrlObjectInput, opts: EnforceOpts): Promise<void>
+  /**
+   * 会话交互守卫（`session` 工具每个指向一条别的会话的动作）：客体 = `{type:'session'}`，action = read / write。
+   * 出厂的 ask-on-session-access 在不是自己发起的那一轮、又不在会话权限表里时询问。
+   * 拒绝 / 取消 / 反馈时抛错，同 enforcePath。
+   */
+  enforceSession(mode: AccessMode, object: SessionObjectInput, opts: EnforceOpts): Promise<void>
   /**
    * L1 全工具门守卫（wrapToolOutput 咽喉）：客体 = `{type:'invocation'}`（调用本身），
    * 工具名/动作走 request.tool 维度（取自 opts.toolName / opts.operation）。

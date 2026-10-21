@@ -1,5 +1,5 @@
 /**
- * 查看现场（`inspect-sub-session`，docs/sub-session-design.md §19.7）与 `userIntervened`（§19.10 第 18 条）的整合用例：
+ * 查看现场（`inspect-session`，docs/sub-session-design.md §19.7）与 `userIntervened`（§19.10 第 18 条）的整合用例：
  * 真 SessionHost + 真 SQLite + 真桌面 ToolHost + 真 SessionTool / 运行器 / 网关（`support/desktopRig.ts`）。
  * 单元层（subSessionInspect / sessionInspect / sessionOutline）用的是假视图与假来源；这里钉的是它们接到真东西上之后：
  *   - 大纲的消息级编号就是子会话 SessionView 里的消息 id（= 界面的 data-msg-id）；
@@ -38,7 +38,7 @@ afterEach(async () => {
 })
 
 const promptChild = (child: string, message: string, id: string): ReturnType<typeof callTool> =>
-  callTool('session', { action: 'prompt-sub-session', sub_session_id: child, message }, id)
+  callTool('session', { action: 'prompt-session', session_id: child, message }, id)
 
 /** 子会话此刻的界面视图（开着的读门面，没开的 peek） */
 async function viewOf(p: Proc, sessionId: string): Promise<{ messages: ChatMessage[] }> {
@@ -68,7 +68,7 @@ async function parentDrivesChild(p: Proc): Promise<void> {
     'P',
     role('chat', 'start'),
     promptChild('C', 'C-task', 'call-prompt'),
-    callTool('session', { action: 'inspect-sub-session', sub_session_id: 'C' }, 'call-inspect'),
+    callTool('session', { action: 'inspect-session', session_id: 'C' }, 'call-inspect'),
     answer('P-final')
   )
   p.router.on(

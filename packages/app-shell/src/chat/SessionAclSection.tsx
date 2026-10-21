@@ -1,6 +1,7 @@
 /**
  * 会话权限表卡（「文件访问」）—— 这条会话的智能体免询问读写哪些路径，一条一行（形状与规则见
- * chat-protocol 的 sessionAcl.ts）。桌面与手机共用同一个组件。
+ * chat-protocol 的 sessionAcl.ts）。桌面与手机共用同一个组件。会话种类的行（它免询问查看 / 对话的别的会话）
+ * 另起一卡「会话访问」，有行才出现 —— 那些行只来自询问卡片上的「允许并记住」，可以在查看与对话之间切换、删掉。
  *
  * 行的排法：工作目录、笔记本文档、你授予的、widget 目录在前，总是摆出来；知识库、技能目录与会话自己的目录
  * （临时目录、产物、工具结果）来自会话设置、用户不用管，收在「显示另外 N 项」后面。
@@ -20,6 +21,7 @@ import {
   KeyRound,
   LayoutGrid,
   Library,
+  MessagesSquare,
   Plus,
   Sparkles,
   X
@@ -147,6 +149,58 @@ function AclRow({
             <X size={12} />
           </button>
         )}
+      </div>
+    </div>
+  )
+}
+
+/** 会话种类的一行：目标会话的标题与 id，查看 / 对话，删除 */
+function SessionAclRow({
+  entry,
+  onAccess,
+  onRemove
+}: {
+  entry: AclEntry
+  onAccess: (access: PathAccess) => void
+  onRemove: () => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  return (
+    <div
+      data-acl-entry={entry.id}
+      data-acl-kind="session"
+      data-acl-target={entry.target}
+      data-acl-access={entry.access}
+      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2"
+    >
+      <div className="flex min-w-0 flex-1 basis-48 items-center gap-2.5">
+        <MessagesSquare size={13} className="shrink-0 text-text-tertiary" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12px] text-text-primary">
+            {entry.targetTitle || t('sessionAcl.sessionUntitled')}
+          </div>
+          <div className="truncate font-mono text-[11px] text-text-tertiary">{entry.target}</div>
+        </div>
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <SegmentedControl<PathAccess>
+          value={entry.access}
+          onChange={(next) => next !== entry.access && onAccess(next)}
+          options={[
+            { value: 'read', label: t('sessionAcl.sessionRead') },
+            { value: 'write', label: t('sessionAcl.sessionWrite') }
+          ]}
+        />
+        <button
+          type="button"
+          onClick={onRemove}
+          title={t('sessionAcl.remove')}
+          aria-label={t('sessionAcl.remove')}
+          data-acl-remove=""
+          className="rounded p-1 text-text-tertiary transition-colors hover:bg-bg-hover hover:text-red-500"
+        >
+          <X size={12} />
+        </button>
       </div>
     </div>
   )
@@ -296,9 +350,11 @@ export function SessionAclSection({
 
   if (!entries) return null
 
-  const prominent = entries.filter((e) => PROMINENT.includes(e.source))
-  const rest = entries.filter((e) => !PROMINENT.includes(e.source))
-  const shown = expanded ? entries : prominent
+  const paths = entries.filter((e) => e.kind === 'path')
+  const sessions = entries.filter((e) => e.kind === 'session')
+  const prominent = paths.filter((e) => PROMINENT.includes(e.source))
+  const rest = paths.filter((e) => !PROMINENT.includes(e.source))
+  const shown = expanded ? paths : prominent
 
   const setAccess = (entry: AclEntry, access: PathAccess): void => {
     // 乐观更新；失败（行已不在、来源不许改）由下一次重取纠正
@@ -320,30 +376,52 @@ export function SessionAclSection({
   }
 
   return (
-    <SettingsSection title={t('sessionAcl.title')} description={t('sessionAcl.description')}>
-      {shown.length > 0 && (
-        <div data-session-acl={sessionId} className="divide-y divide-border-secondary/40">
-          {shown.map((entry) => (
-            <AclRow
-              key={entry.id}
-              entry={entry}
-              onAccess={(access) => setAccess(entry, access)}
-              onRemove={() => remove(entry)}
-            />
-          ))}
-        </div>
-      )}
-      {rest.length > 0 && (
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          data-acl-toggle=""
-          className="w-full px-4 py-1.5 text-left text-[11px] text-text-tertiary transition-colors hover:bg-bg-hover/60 hover:text-text-secondary"
+    <>
+      <SettingsSection title={t('sessionAcl.title')} description={t('sessionAcl.description')}>
+        {shown.length > 0 && (
+          <div data-session-acl={sessionId} className="divide-y divide-border-secondary/40">
+            {shown.map((entry) => (
+              <AclRow
+                key={entry.id}
+                entry={entry}
+                onAccess={(access) => setAccess(entry, access)}
+                onRemove={() => remove(entry)}
+              />
+            ))}
+          </div>
+        )}
+        {rest.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            data-acl-toggle=""
+            className="w-full px-4 py-1.5 text-left text-[11px] text-text-tertiary transition-colors hover:bg-bg-hover/60 hover:text-text-secondary"
+          >
+            {expanded ? t('sessionAcl.showLess') : t('sessionAcl.showAll', { count: rest.length })}
+          </button>
+        )}
+        <AclAddRow sessionId={sessionId} onAdded={load} />
+      </SettingsSection>
+      {sessions.length > 0 && (
+        <SettingsSection
+          title={t('sessionAcl.sessionsTitle')}
+          description={t('sessionAcl.sessionsDescription')}
         >
-          {expanded ? t('sessionAcl.showLess') : t('sessionAcl.showAll', { count: rest.length })}
-        </button>
+          <div
+            data-session-acl-sessions={sessionId}
+            className="divide-y divide-border-secondary/40"
+          >
+            {sessions.map((entry) => (
+              <SessionAclRow
+                key={entry.id}
+                entry={entry}
+                onAccess={(access) => setAccess(entry, access)}
+                onRemove={() => remove(entry)}
+              />
+            ))}
+          </div>
+        </SettingsSection>
       )}
-      <AclAddRow sessionId={sessionId} onAdded={load} />
-    </SettingsSection>
+    </>
   )
 }

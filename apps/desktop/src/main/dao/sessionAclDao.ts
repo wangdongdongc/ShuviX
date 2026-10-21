@@ -77,6 +77,22 @@ export class SessionAclDao extends BaseDao {
     )
   }
 
+  /**
+   * 删所有会话里指向某个目标的某种行（会话种类：目标会话被删时，别的会话里授权它的那些行跟着去）；返回删掉的行数
+   */
+  /** 哪些会话里有指向某个目标的某种行（删之前查，好让那些会话的界面重拉） */
+  findSessionsByTarget(kind: AclEntry['kind'], target: string): string[] {
+    const rows = this.stmt(
+      'SELECT DISTINCT sessionId FROM session_acl WHERE kind = ? AND target = ?'
+    ).all(kind, target) as Array<{ sessionId: string }>
+    return rows.map((r) => r.sessionId)
+  }
+
+  deleteByTarget(kind: AclEntry['kind'], target: string): number {
+    return this.stmt('DELETE FROM session_acl WHERE kind = ? AND target = ?').run(kind, target)
+      .changes
+  }
+
   /** 删一条会话的全部行（删会话时调）；返回删掉的行数 */
   deleteBySession(sessionId: string): number {
     return this.stmt('DELETE FROM session_acl WHERE sessionId = ?').run(sessionId).changes

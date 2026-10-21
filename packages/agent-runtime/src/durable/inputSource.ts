@@ -1,8 +1,9 @@
 /**
  * 用户输入的来源（docs/sub-session-design.md §19.7）—— 一条 `pi.user` 不是人亲手打的时候，它是谁写的。
  *
- * 今天只有一种：父会话代用户发进子会话的消息（`prompt-sub-session` / `answer` 之后的那一轮不算，那是 ask 的
- * 结果）与引导（`steer-sub-session`）。来源在发送时随提交写进 `SourceDoc[requestId]`（`UserSendOptions.source`
+ * 来源是驱动它的那条会话：父会话代用户发进子会话的消息（`kind: 'parent-session'`），或经会话权限表被授权的别的
+ * 会话发进来的消息（`kind: 'session'`）—— `prompt-session` 与 `steer-session` 都算（`answer-session` 之后的那一轮
+ * 不算，那是 ask 的结果）。来源在发送时随提交写进 `SourceDoc[requestId]`（`UserSendOptions.source`
  * / `AdmitOptions.source`），读的时候按 requestId 找 submission、再落到活上下文里的那条条目上 —— 与显示侧车
  * 同一套解析（`projection/display.ts`），因为 pi 的提交只能按 requestId 正查、不能从条目反查。
  *
@@ -13,15 +14,18 @@
  */
 import type { ConversationId, EntryId, EntryRecord, Harness } from '@earendil-works/pi-durable'
 import { UserEntry } from '@earendil-works/pi-durable'
-import type { ParentSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
+import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import { backgroundContext as BG, isClosedError } from './context'
 import { SourceDoc } from './docs'
 import { SessionClosedError, type DurableSession } from './durableSession'
 
-/** 一条输入的来源（今天只有父会话） */
-export type InputSource = ParentSessionRef
+/** 一条输入的来源（驱动它的会话：父会话或被授权的别的会话） */
+export type InputSource = DrivingSessionRef
 
-/** 侧车的形状判别：`{kind:'parent-session', sessionId}`（title 可选）；否则 undefined（解析时按「认不出」处理） */
+/**
+ * 侧车的形状判别：`{kind:'parent-session' | 'session', sessionId}`（title 可选）；否则 undefined（解析时按
+ * 「认不出」处理）
+ */
 export function inputSourceOf(item: unknown): InputSource | undefined {
   if (typeof item !== 'object' || item === null) return undefined
   const { kind, sessionId, title } = item as {
@@ -29,12 +33,9 @@ export function inputSourceOf(item: unknown): InputSource | undefined {
     sessionId?: unknown
     title?: unknown
   }
-  if (kind !== 'parent-session' || typeof sessionId !== 'string' || sessionId === '') {
-    return undefined
-  }
-  return typeof title === 'string'
-    ? { kind: 'parent-session', sessionId, title }
-    : { kind: 'parent-session', sessionId }
+  if (kind !== 'parent-session' && kind !== 'session') return undefined
+  if (typeof sessionId !== 'string' || sessionId === '') return undefined
+  return typeof title === 'string' ? { kind, sessionId, title } : { kind, sessionId }
 }
 
 /**
@@ -112,13 +113,17 @@ export type MessageAuthor = 'parent' | 'human' | 'unknown'
  * 一串用户消息（旧 → 新，系统写的通知不要放进来）各是谁写的（§19.7，2026-10-17 裁决）：有来源记录 → 父会话；
  * 没有记录、且排在**第一条有记录的消息之后** → 人亲手打的；在它之前、或整串都没有记录 → 分不清（升级之前父会话发的
  * 消息同样没有记录）。自动审查把「分不清」当成父会话写的（保守），大纲把它标成 `[unattributed]`。
+ *
+ * `topLevel`：这串消息属于一条**顶层会话** —— 它没有父会话，「升级之前父会话发的消息没有记录」这回事不存在（别的会话
+ * 经会话权限表往里发消息是 2026-10-20 之后的事，恒有记录），所以没有记录的一律是人打的。
  */
 export function authorsOf<T>(
   items: readonly T[],
-  sourced: (item: T) => boolean
+  sourced: (item: T) => boolean,
+  opts: { topLevel?: boolean } = {}
 ): Map<T, MessageAuthor> {
   const authors = new Map<T, MessageAuthor>()
-  let reliable = false
+  let reliable = opts.topLevel === true
   for (const item of items) {
     if (sourced(item)) {
       reliable = true

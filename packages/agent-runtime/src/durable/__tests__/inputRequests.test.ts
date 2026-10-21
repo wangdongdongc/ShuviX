@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest'
 import type {
   InputRequest,
   InputResponse,
-  ParentSessionRef
+  DrivingSessionRef
 } from '@shuvix/chat-protocol/types/inputRequest'
 import { PendingInputRequests } from '../inputRequests'
 
@@ -310,7 +310,7 @@ describe('PendingInputRequests · 答题方（WP2）', () => {
   it('WP2-01 meta.answeredBy is handed to the asker as an own copy (later edits to meta do not leak)', async () => {
     const { inputs } = makeInputs()
     const pending = inputs.request(choice('c1'))
-    const answeredBy: ParentSessionRef = { ...PARENT }
+    const answeredBy: DrivingSessionRef = { ...PARENT }
     expect(
       inputs.respond(
         'c1',

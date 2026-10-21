@@ -13,6 +13,7 @@
  * 截断是 `clipLine` 的语义（超过 max 切到 max-3 补 `...`）。
  */
 import { describe, it, expect } from 'vitest'
+import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 import { summarizeSystemNotice } from '../systemNotice'
 
 const LOG_PATH = '/Users/me/Library/Application Support/shuvix/tool_results/sess-1/call_1.log'
@@ -239,5 +240,111 @@ describe('summarizeSystemNotice —— 合并通知与降级', () => {
     const notice = subNotice({ id: 'child-1', title: 'Fix "auth" tests', status: 'idle' })
     expect(() => summarizeSystemNotice(notice)).not.toThrow()
     expect(summarizeSystemNotice(notice)).toEqual([{ kind: 'sub-session', text: 'Fix  · idle' }])
+  })
+})
+
+/**
+ * 2026-10-20 起驱动别的会话那一轮的通知换成 `<session …>` 标签（`sub-session` 是之前的写法，旧会话里还有）。
+ *   XS-07 `<session>` 摘要与 `<sub-session>` 同形（kind 仍是 'sub-session'：标题 · 状态）；旧标签不变 [guard]；
+ *         与后台任务拼在一条里各出一句、按原顺序；整段只有一个 `<session>` 块 → isSystemNoticeText 为真
+ */
+
+/**
+ * 同 subSessionRunner.completionNotice（apps/desktop/src/main/services/subSessionRunner.ts:1654-1680）：
+ *   `<session id title status [user-intervened]>` / 一句说明 / [It is asking: …] / 一句建议 / 闭合，空项 filter 掉
+ */
+function sessionNotice(opts: {
+  id: string
+  title: string
+  status: string
+  intervened?: boolean
+  asked?: string[]
+  /** 是不是这条会话自己的子会话（不是 → 建议里点名 session_id） */
+  ownChild?: boolean
+}): string {
+  return [
+    `<session id="${opts.id}" title="${opts.title}" status="${opts.status}"${opts.intervened ? ' user-intervened="true"' : ''}>`,
+    opts.status === 'waiting-input'
+      ? 'It stopped to ask the user for approval and cannot continue until the user answers in that session.'
+      : 'The turn you started in the background has finished.',
+    opts.asked?.length ? `It is asking: ${opts.asked.join(' | ')}` : '',
+    opts.status === 'waiting-input'
+      ? 'Tell the user what it is waiting for — you cannot answer it yourself.'
+      : opts.ownChild !== false
+        ? 'Collect it with the session tool: action "wait-for-sessions".'
+        : `Collect it with the session tool: action "wait-for-sessions" with session_id "${opts.id}".`,
+    '</session>'
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+describe('summarizeSystemNotice —— <session> 通知（XS-07）', () => {
+  it('XS-07 <session id="x" title="Fix" status="idle"> → [{kind: sub-session, text: Fix · idle}]；正文行不进摘要', () => {
+    for (const ownChild of [true, false]) {
+      const out = summarizeSystemNotice(
+        sessionNotice({ id: 'x', title: 'Fix', status: 'idle', ownChild })
+      )
+      expect(out).toEqual([{ kind: 'sub-session', text: 'Fix · idle' }])
+      expect(out[0].text).not.toContain('Collect it')
+      expect(out[0].text).not.toContain('session_id')
+    }
+    // 最小形态：一行正文
+    expect(
+      summarizeSystemNotice('<session id="x" title="Fix" status="idle">\nDone.\n</session>')
+    ).toEqual([{ kind: 'sub-session', text: 'Fix · idle' }])
+  })
+
+  it('XS-07 waiting-input、user-intervened 属性：仍是标题 · 状态；缺标题退到 id、再退到正文首行', () => {
+    expect(
+      summarizeSystemNotice(
+        sessionNotice({
+          id: 'x',
+          title: 'Fix',
+          status: 'waiting-input',
+          asked: ['Run `npm test`?'],
+          intervened: true
+        })
+      )
+    ).toEqual([{ kind: 'sub-session', text: 'Fix · waiting-input' }])
+    expect(summarizeSystemNotice('<session id="x">\nThe turn has finished.\n</session>')).toEqual([
+      { kind: 'sub-session', text: 'x' }
+    ])
+    expect(summarizeSystemNotice('<session>\nThe turn has finished.\n</session>')).toEqual([
+      { kind: 'sub-session', text: 'The turn has finished.' }
+    ])
+  })
+
+  it('XS-07 [guard] 旧的 <sub-session> 写法不变：同样的属性得同样的一句', () => {
+    const legacy = subNotice({ id: 'x', title: 'Fix', status: 'idle' })
+    expect(summarizeSystemNotice(legacy)).toEqual([{ kind: 'sub-session', text: 'Fix · idle' }])
+    expect(summarizeSystemNotice(legacy)).toEqual(
+      summarizeSystemNotice(sessionNotice({ id: 'x', title: 'Fix', status: 'idle' }))
+    )
+    expect(isSystemNoticeText(legacy)).toBe(true)
+  })
+
+  it('XS-07 与后台任务、旧写法拼在一条里（合并窗口）→ 各出一句，按原顺序', () => {
+    const merged = [
+      sessionNotice({ id: 'x', title: 'Fix', status: 'idle' }),
+      bgNotice({ command: 'npm test', status: 'exited with code 0', duration: '12s' }),
+      subNotice({ id: 'child-1', title: 'Old child', status: 'waiting-input' })
+    ].join('\n\n')
+    expect(summarizeSystemNotice(merged)).toEqual([
+      { kind: 'sub-session', text: 'Fix · idle' },
+      { kind: 'background-task', text: 'npm test · exited with code 0 · 12s' },
+      { kind: 'sub-session', text: 'Old child · waiting-input' }
+    ])
+    expect(isSystemNoticeText(merged)).toBe(true)
+  })
+
+  it('XS-07 isSystemNoticeText：整段只有一个 <session> 块（可带首尾空白）→ 真；块外多一句人话 / 半截块 → 假', () => {
+    const lone = sessionNotice({ id: 'x', title: 'Fix', status: 'idle' })
+    expect(isSystemNoticeText(lone)).toBe(true)
+    expect(isSystemNoticeText(`\n  ${lone}\n`)).toBe(true)
+    expect(isSystemNoticeText(`${lone}\nplease continue`)).toBe(false)
+    expect(isSystemNoticeText('<session id="x" title="Fix" status="idle">\nDone.')).toBe(false)
+    // 标签名得完整：<sessions> 不是通知块
+    expect(isSystemNoticeText('<sessions id="x">\nDone.\n</sessions>')).toBe(false)
   })
 })

@@ -15,6 +15,8 @@
  *   RSRC-02..25 子会话用户消息按来源记录分配（§19.7 2026-10-17 裁决）：有记录 → delegatedTasks；没有记录、且在第一条
  *            有记录的消息（锚点）之后 → userMessages；锚点之前 / 整条没有锚点 → delegatedTasks。认不出的记录也算有记录
  *            （失败闭合）；顶层会话里带记录的不算人话；压缩、回退、读失败、孤儿记录、侧车的边角
+ *   XS-22 / 23 别的会话（`{kind:'session'}`，2026-10-20）发来的消息与代答：顶层会话与子会话里都进 delegatedTasks，
+ *            代答写「another session」；父会话代答仍写「the parent session」
  *
  * 替身：hookService / messageService（spy）/ sessionRecords（`{parentId, storageKind}`）/ settingsService /
  * logger / frontend/core / sessionHost（`{peek, get, open}`，peek 交出真 MemoryStorage 会话或 undefined）。
@@ -455,14 +457,17 @@ describe('WP2 · 父会话代答不能当成用户授权（§19.5）', () => {
     ])
   })
 
-  it('WP2-70 [guard] a top-level session carrying a parent-answered ask (bad data): kept out of userMessages, delegatedTasks stays [], no throw', async () => {
+  it('WP2-70 [guard] a top-level session carrying an ask answered by another session (a session the user let talk to it, 2026-10-20): kept out of userMessages, listed in delegatedTasks', async () => {
     const top = await durable([
       user(1000, 'top intent'),
       ...askPair(1200, 'p1', 'Delete dist/?', parentText(YES), PARENT)
     ])
     const payload = await buildPermissionRequestPayload(makeEvent(top))
     expect(payload.userMessages).toStrictEqual(['top intent'])
-    expect(payload.delegatedTasks).toStrictEqual([])
+    expect(payload.delegatedTasks).toHaveLength(1)
+    expect(payload.delegatedTasks[0]).toContain(
+      'answered the agent\'s question "Delete dist/?" for the user'
+    )
   })
 
   it('WP2-71 / 72 [guard] end to end with the real ask tool: the host-marked parent answer lands only in delegatedTasks; a forged payload answer without meta still counts as the human’s', async () => {
@@ -868,7 +873,7 @@ describe('RSRC · 子会话用户消息按来源分配（§19.7 2026-10-17 裁�
     expect(payload.delegatedTasks).toStrictEqual([])
   })
 
-  it('RSRC-11b [guard] 顶层会话里带来源记录的用户消息（坏数据）也不算人话：两边都没有它，不抛', async () => {
+  it('RSRC-11b [guard] 顶层会话里带来源记录的用户消息（经会话权限表被授权的别的会话发进来的，2026-10-20）不算人话：进 delegatedTasks', async () => {
     const top = await durable([
       user(1000, 'mine'),
       sourcedUser(1100, 'parent-written', PARENT),
@@ -876,8 +881,7 @@ describe('RSRC · 子会话用户消息按来源分配（§19.7 2026-10-17 裁�
     ])
     const payload = await buildPermissionRequestPayload(makeEvent(top))
     expect(payload.userMessages).toStrictEqual(['mine', 'mine again'])
-    expect(payload.delegatedTasks).toStrictEqual([])
-    expect(JSON.stringify(payload)).not.toContain('parent-written')
+    expect(payload.delegatedTasks).toStrictEqual(['parent-written'])
   })
 
   it('RSRC-12 [guard] 旧格式子会话永远没有来源 → 子会话的用户消息全进 delegatedTasks', async () => {
@@ -1219,4 +1223,106 @@ describe('RSRC · 子会话用户消息按来源分配（§19.7 2026-10-17 裁�
     expect(pb.delegatedTasks).toStrictEqual(['H fresh'])
     expect(pb.userMessages).toStrictEqual(['top intent'])
   }, 20000)
+})
+
+/**
+ * XS-22 / XS-23 别的会话（不是父会话、经会话权限表被授权的那条，2026-10-20）写进来的东西：来源 `{kind:'session'}`
+ * 的用户消息与它代答的 ask 只是「它声称要做什么」，进 delegatedTasks、按会话里的次序排；代答的引述写
+ * 「another session」而不是「the parent session」。顶层会话（XS-22）与子会话（XS-23，驱动它的不是父会话）都一样；
+ * 人在其间亲手打的照旧进 userMessages。
+ */
+describe('XS · 别的会话写进来的东西不算人的意思（XS-22 / XS-23）', () => {
+  const OTHER = { kind: 'session', sessionId: 'X' } as const
+  const OTHER_TITLED = { kind: 'session', sessionId: 'X', title: '整理日志' } as const
+  /** 别的会话代答在 delegatedTasks 里的引述格式 */
+  const byOther = (question: string, answerText: string): string =>
+    `(another session answered the agent's question "${question}" for the user) ${answerText}`
+
+  it('XS-22 顶层会话：人话进 userMessages；别的会话发来的消息与它代答的 ask 按次序进 delegatedTasks，引述写 another session', async () => {
+    const top = await durable([
+      user(1000, 'mine'),
+      sourcedUser(1100, 'do it', OTHER),
+      ...askPair(1200, 's1', 'Q', parentText('go ahead'), OTHER),
+      sourcedUser(1300, 'and then this', OTHER_TITLED),
+      user(1400, 'mine again')
+    ])
+    const payload = await buildPermissionRequestPayload(makeEvent(top))
+    expect(payload.userMessages).toStrictEqual(['mine', 'mine again'])
+    expect(payload.delegatedTasks).toStrictEqual([
+      'do it',
+      `(another session answered the agent's question "Q" for the user) ${parentText('go ahead')}`,
+      'and then this'
+    ])
+    expect(JSON.stringify(payload)).not.toContain('the parent session answered')
+    // 别的会话代答的那句也不算人对 ask 的回答
+    expect(JSON.stringify(payload.userMessages)).not.toContain("answering the agent's question")
+  })
+
+  it('XS-22 顶层会话：只有人话与别的会话的代答（没有它发来的消息）—— 代答照样进 delegatedTasks，人话一条不少', async () => {
+    const top = await durable([
+      user(1000, 'mine'),
+      ...askPair(1100, 's1', 'Delete dist/?', parentText(YES), OTHER)
+    ])
+    const payload = await buildPermissionRequestPayload(makeEvent(top))
+    expect(payload.userMessages).toStrictEqual(['mine'])
+    expect(payload.delegatedTasks).toStrictEqual([byOther('Delete dist/?', parentText(YES))])
+  })
+
+  it('XS-22 [guard] 子会话里父会话代答的 ask 仍写 the parent session', async () => {
+    const top = await durable([user(1000, 'top intent')])
+    const child = await durable(
+      [
+        sourcedUser(1100, 'child task', PARENT),
+        ...askPair(1200, 'p1', 'Q', parentText(YES), PARENT)
+      ],
+      top
+    )
+    const payload = await buildPermissionRequestPayload(makeEvent(child))
+    expect(payload.userMessages).toStrictEqual(['top intent'])
+    expect(payload.delegatedTasks).toStrictEqual(['child task', byParent('Q', parentText(YES))])
+    expect(payload.delegatedTasks[1]).toMatch(/^\(the parent session answered /)
+  })
+
+  it('XS-23 子会话 C 收到非父会话 X 的消息、X 代答了 C 的 ask，之后人在 C 里打字：X 的两样进 delegatedTasks（another session），人话进 userMessages', async () => {
+    const top = await durable([user(1000, 'top intent')])
+    const child = await durable(
+      [
+        sourcedUser(1100, 'message from X', OTHER),
+        assistant(1150, 'on it'),
+        ...askPair(1200, 'x1', 'Proceed?', parentText('yes'), OTHER),
+        user(1400, 'typed by the human in C')
+      ],
+      top
+    )
+    const payload = await buildPermissionRequestPayload(makeEvent(child))
+    expect(payload.userMessages).toStrictEqual(['top intent', 'typed by the human in C'])
+    expect(payload.delegatedTasks).toStrictEqual([
+      'message from X',
+      byOther('Proceed?', parentText('yes'))
+    ])
+    expect(JSON.stringify(payload.userMessages)).not.toContain('message from X')
+    expect(JSON.stringify(payload)).not.toContain('the parent session answered')
+  })
+
+  it('XS-23 同一条子会话里父会话与别的会话都代答过：各写各的答题方，按会话里的次序排', async () => {
+    const top = await durable([user(1000, 'top intent')])
+    const child = await durable(
+      [
+        sourcedUser(1100, 'parent task', PARENT),
+        ...askPair(1200, 'p1', 'From parent?', parentText('a'), PARENT),
+        sourcedUser(1300, 'other task', OTHER_TITLED),
+        ...askPair(1400, 'x1', 'From X?', parentText('b'), OTHER_TITLED),
+        user(1500, 'human line')
+      ],
+      top
+    )
+    const payload = await buildPermissionRequestPayload(makeEvent(child))
+    expect(payload.delegatedTasks).toStrictEqual([
+      'parent task',
+      byParent('From parent?', parentText('a')),
+      'other task',
+      byOther('From X?', parentText('b'))
+    ])
+    expect(payload.userMessages).toStrictEqual(['top intent', 'human line'])
+  })
 })

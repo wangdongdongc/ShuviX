@@ -55,7 +55,11 @@ vi.mock('../sessionService', () => ({
   sessionService: { getById: () => undefined }
 }))
 vi.mock('../acl', () => ({
-  sessionAcl: { pathView: () => ({ read: [], write: [] }), grantPath: () => null }
+  sessionAcl: {
+    pathView: () => ({ read: [], write: [] }),
+    sessionView: () => ({ read: [], write: [] }),
+    grantPath: () => null
+  }
 }))
 vi.mock('../skillService', () => ({
   skillService: {

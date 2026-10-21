@@ -376,20 +376,12 @@ describe('A. requestId plumbing', () => {
     family('c1')
     const c1 = fakeHost.put('c1')
     expect(
-      (
-        await call(
-          { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'a' },
-          { taskId: 7 }
-        )
-      ).isError
+      (await call({ action: 'prompt-session', session_id: 'c1', message: 'a' }, { taskId: 7 }))
+        .isError
     ).toBe(false)
     expect(
-      (
-        await call(
-          { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'b' },
-          { taskId: 8 }
-        )
-      ).isError
+      (await call({ action: 'prompt-session', session_id: 'c1', message: 'b' }, { taskId: 8 }))
+        .isError
     ).toBe(false)
     expect(submitsOf(c1).map((o) => o.requestId)).toEqual([R(7), R(8)])
     expect(taskRegistry.get(R(7))).toBeDefined()
@@ -408,11 +400,11 @@ describe('A. requestId plumbing', () => {
     const d1 = fakeHost.put('d1', { submitGate: gate() })
     const d2 = fakeHost.put('d2', { submitGate: gate() })
     const a = call(
-      { action: 'prompt-sub-session', sub_session_id: 'd1', message: 'x' },
+      { action: 'prompt-session', session_id: 'd1', message: 'x' },
       { taskId: 5, sessionId: 'P1' }
     )
     const b = call(
-      { action: 'prompt-sub-session', sub_session_id: 'd2', message: 'y' },
+      { action: 'prompt-session', session_id: 'd2', message: 'y' },
       { taskId: 5, sessionId: 'P2' }
     )
     await vi.waitFor(() => {
@@ -459,7 +451,7 @@ describe('A. requestId plumbing', () => {
     expect(child!.parentId).toBe('P')
     const c = fakeHost.put(child!.id)
     await call(
-      { action: 'prompt-sub-session', sub_session_id: child!.id, message: 'go' },
+      { action: 'prompt-session', session_id: child!.id, message: 'go' },
       { taskId: 12, conversationId: 3 }
     )
     expect(submitsOf(c)[0]!.requestId).toBe(R(12))
@@ -491,7 +483,7 @@ describe('B. session tool idempotency', () => {
     expect(typeof id).toBe('string')
     expect(order).toEqual(['memo', 'create'])
     expect(sessionRecords.findChildren('P').map((s) => s.id)).toEqual([id])
-    expect(res.text).toContain(`<sub-session id="${id}"`)
+    expect(res.text).toContain(`<session id="${id}"`)
     expect(res.text).toContain('status="created"/>')
   })
 
@@ -540,7 +532,7 @@ describe('B. session tool idempotency', () => {
     c1.requestStates.set(R(9), 'pending')
     mocks.fire.mockClear()
     const res = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { action: 'prompt-session', session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
     expect(res.isError).toBe(false)
@@ -568,7 +560,7 @@ describe('B. session tool idempotency', () => {
     const c1 = fakeHost.put('c1', { busy: true, submitGate: gate(), answer: { text: 'later' } })
     c1.requestStates.set(R(9), 'pending')
     const res = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { action: 'prompt-session', session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
     // 闸门还关着：回执不等这一轮
@@ -592,12 +584,12 @@ describe('B. session tool idempotency', () => {
       void runner.onDrivenSettled(settledEvent({ requestId: R(9) }))
     }
     const res = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { action: 'prompt-session', session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
     expect(res.isError).toBe(false)
     expect(res.text).toBe(
-      '<sub-session id="c1" status="idle"/>\n\nThat turn already finished before the app restarted — nothing was sent again. Read its answer with "read-sub-session".'
+      '<session id="c1" status="idle"/>\n\nThat turn already finished before the app restarted — nothing was sent again. Read its answer with "read-session".'
     )
     expect(res.details).toBeUndefined()
     const c1 = fakeHost.get('c1')!
@@ -607,7 +599,7 @@ describe('B. session tool idempotency', () => {
     await vi.waitFor(() => expect(parent.callsOf('notify')).toHaveLength(1))
     expect(parent.callsOf('writeNotice')).toEqual([])
     // 答复就在子会话里：read 收得到
-    expect((await call({ action: 'read-sub-session', sub_session_id: 'c1' })).text).toContain(
+    expect((await call({ action: 'read-session', session_id: 'c1' })).text).toContain(
       '<reply>\nA\n</reply>'
     )
   })
@@ -616,7 +608,7 @@ describe('B. session tool idempotency', () => {
     family('c1')
     fakeHost.put('c1', { busy: true })
     const res = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { action: 'prompt-session', session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
     expect(res.isError).toBe(true)
@@ -630,13 +622,13 @@ describe('B. session tool idempotency', () => {
     const c1 = fakeHost.put('c1', { busy: true })
     const c2 = fakeHost.put('c2', { busy: true })
     const memo = sharedMemo()
-    const pending = call({ action: 'wait-for-sub-sessions' }, { memo })
+    const pending = call({ action: 'wait-for-sessions' }, { memo })
     await vi.waitFor(() =>
       expect(memo.store.get('session.wait-for-sub-sessions.targets')).toEqual(['c1', 'c2'])
     )
     c1.busy = false
     c2.busy = false
-    expect((await pending).text).toContain('<sub-sessions status="settled">')
+    expect((await pending).text).toContain('<sessions status="settled">')
     expect(c1.callsOf('resumeInterrupted')).toEqual([])
     expect(c2.callsOf('resumeInterrupted')).toEqual([])
   })
@@ -649,7 +641,7 @@ describe('B. session tool idempotency', () => {
     const memo = sharedMemo()
     memo.store.set('session.wait-for-sub-sessions.targets', ['c1', 'c2'])
     let resolved = false
-    const pending = call({ action: 'wait-for-sub-sessions' }, { memo }).then((r) => {
+    const pending = call({ action: 'wait-for-sessions' }, { memo }).then((r) => {
       resolved = true
       return r
     })
@@ -673,7 +665,7 @@ describe('B. session tool idempotency', () => {
     }
     const memo = sharedMemo()
     memo.store.set('session.wait-for-sub-sessions.targets', ['c1'])
-    const pending = call({ action: 'wait-for-sub-sessions' }, { memo })
+    const pending = call({ action: 'wait-for-sessions' }, { memo })
     await vi.waitFor(() => expect(fakeHost.get('c1')?.callsOf('resumeInterrupted')).toHaveLength(1))
     expect(fakeHost.callsOf('open')).toEqual(['c1'])
     fakeHost.get('c1')!.busy = false
@@ -684,19 +676,19 @@ describe('B. session tool idempotency', () => {
     family('c1')
     const c1 = fakeHost.put('c1', { interrupted: true })
     const memo = sharedMemo()
-    const first = await call({ action: 'wait-for-sub-sessions', sub_session_id: 'c1' }, { memo })
-    expect(first.text).toContain('<sub-sessions status="settled">')
+    const first = await call({ action: 'wait-for-sessions', session_id: 'c1' }, { memo })
+    expect(first.text).toContain('<sessions status="settled">')
     expect(first.text).toContain('status="interrupted"')
     expect(c1.callsOf('resumeInterrupted')).toEqual([])
     expect(memo.store.get('session.wait-for-sub-sessions.targets')).toEqual([])
-    const again = await call({ action: 'wait-for-sub-sessions', sub_session_id: 'c1' }, { memo })
+    const again = await call({ action: 'wait-for-sessions', session_id: 'c1' }, { memo })
     expect(again.text).toBe(first.text)
     expect(c1.callsOf('resumeInterrupted')).toEqual([])
   })
 
   it('P2-10-19 stop 重跑：(a) 空闲且没开着 → {stopped:false}，不 open / peek；(b) 被中断（开着 → abort；没开着 → peek 再 abort）→ stopped，之后没有通知', async () => {
     const parent = family('c1', 'c2', 'c3')
-    const a = await call({ action: 'stop-sub-session', sub_session_id: 'c1' })
+    const a = await call({ action: 'stop-session', session_id: 'c1' })
     expect(a.text).toContain('was not running')
     expect(fakeHost.callsOf('open')).toEqual([])
     expect(fakeHost.callsOf('peek')).toEqual([])
@@ -705,9 +697,7 @@ describe('B. session tool idempotency', () => {
       interrupted: true,
       drivenRun: { requestId: R(21), parentId: 'P', background: true, conversationId: 1 as never }
     })
-    expect((await call({ action: 'stop-sub-session', sub_session_id: 'c2' })).text).toContain(
-      'Stopped'
-    )
+    expect((await call({ action: 'stop-session', session_id: 'c2' })).text).toContain('Stopped')
     expect(c2.callsOf('abort')).toHaveLength(1)
 
     sessionRecords.updateSettings('c3', { runState: 'interrupted' })
@@ -722,9 +712,7 @@ describe('B. session tool idempotency', () => {
         conversationId: 1 as never
       }
     }
-    expect((await call({ action: 'stop-sub-session', sub_session_id: 'c3' })).text).toContain(
-      'Stopped'
-    )
+    expect((await call({ action: 'stop-session', session_id: 'c3' })).text).toContain('Stopped')
     expect(fakeHost.callsOf('peek')).toEqual(['c3'])
     expect(fakeHost.get('c3')!.callsOf('abort')).toHaveLength(1)
 
@@ -755,20 +743,20 @@ describe('B. session tool idempotency', () => {
     fakeHost.configure = (session) => {
       if (session.sessionId === 'c1') session.answer = { text: 'R1' }
     }
-    const first = await call({ action: 'read-sub-session', sub_session_id: 'c1' })
-    const again = await call({ action: 'read-sub-session', sub_session_id: 'c1' })
+    const first = await call({ action: 'read-session', session_id: 'c1' })
+    const again = await call({ action: 'read-session', session_id: 'c1' })
     expect(again.text).toBe(first.text)
     expect(first.text).toContain('<reply>\nR1\n</reply>')
     expect(fakeHost.callsOf('peek')).toContain('c1')
     expect(fakeHost.callsOf('open')).toEqual([])
 
-    const none = await call({ action: 'read-sub-session', sub_session_id: 'c2' })
+    const none = await call({ action: 'read-session', session_id: 'c2' })
     expect(none.text).toContain('<note>No reply yet.</note>')
     expect(readdirSync(holder.sessionsDir)).toEqual([])
     expect(fakeHost.callsOf('open')).toEqual([])
 
     const peeks = fakeHost.callsOf('peek').length
-    await call({ action: 'list-sub-sessions' })
+    await call({ action: 'list-sessions' })
     expect(fakeHost.callsOf('peek')).toHaveLength(peeks)
     expect(fakeHost.callsOf('open')).toEqual([])
   })
@@ -781,10 +769,7 @@ describe('D. continue cascade (unit)', () => {
     family('c1')
     fakeHost.put('c1', { submitGate: gate() })
     const memo = sharedMemo()
-    void call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
-      { taskId: 9, memo }
-    )
+    void call({ action: 'prompt-session', session_id: 'c1', message: 'task' }, { taskId: 9, memo })
     await vi.waitFor(() => expect(submitsOf(fakeHost.get('c1')!)).toHaveLength(1))
 
     newProcess()
@@ -793,7 +778,7 @@ describe('D. continue cascade (unit)', () => {
     c1.requestStates.set(R(9), 'pending')
     mocks.fire.mockClear()
     const res = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { action: 'prompt-session', session_id: 'c1', message: 'task' },
       { taskId: 9, memo }
     )
     expect(res.isError).toBe(false)
@@ -813,10 +798,10 @@ describe('D. continue cascade (unit)', () => {
     await runner.onDrivenSettled(settledEvent({ requestId: R(9) }))
     expect(parent.callsOf('writeNotice')).toHaveLength(1)
     const res = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { action: 'prompt-session', session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
-    expect(res.text).toContain('<sub-session id="c1" status="idle"/>')
+    expect(res.text).toContain('<session id="c1" status="idle"/>')
     expect(res.text).toContain('nothing was sent again')
     expect(res.text).not.toContain('Started in the background')
     expect(res.text).not.toContain('C-done')
@@ -832,18 +817,18 @@ describe('E. answers via lastAnswer', () => {
   it('P2-10-30 没有答复 → No reply yet；被中断在半路（上一轮答过 old）→ 不出现 old，围栏 interrupted；wait 的结果逐条取 lastAnswer', async () => {
     family('c1', 'c2', 'c3')
     fakeHost.put('c1')
-    expect((await call({ action: 'read-sub-session', sub_session_id: 'c1' })).text).toContain(
+    expect((await call({ action: 'read-session', session_id: 'c1' })).text).toContain(
       '<note>No reply yet.</note>'
     )
     // PIN-07：这一轮的提问之后没有回答 → lastAnswer 是 undefined，不是上一轮的 old
     fakeHost.put('c2', { interrupted: true, answer: undefined })
-    const interrupted = await call({ action: 'read-sub-session', sub_session_id: 'c2' })
+    const interrupted = await call({ action: 'read-session', session_id: 'c2' })
     expect(interrupted.text).toContain('status="interrupted"')
     expect(interrupted.text).not.toContain('old')
     expect(interrupted.text).not.toContain('<reply>')
 
     fakeHost.put('c3', { answer: { text: 'three' } })
-    const waited = await call({ action: 'wait-for-sub-sessions' })
+    const waited = await call({ action: 'wait-for-sessions' })
     expect(waited.text).toContain('<reply>\nthree\n</reply>')
     expect(fakeHost.get('c3')!.callsOf('lastAnswer').length).toBeGreaterThan(0)
   })
@@ -907,7 +892,7 @@ describe('F. interrupted status in wait', () => {
     fakeHost.put('c1', { interrupted: true })
     const c2 = fakeHost.put('c2', { busy: true })
     const memo = sharedMemo()
-    const pending = call({ action: 'wait-for-sub-sessions' }, { memo })
+    const pending = call({ action: 'wait-for-sessions' }, { memo })
     await vi.waitFor(() =>
       expect(memo.store.get('session.wait-for-sub-sessions.targets')).toEqual(['c2'])
     )
@@ -916,7 +901,7 @@ describe('F. interrupted status in wait', () => {
     expect(res.text).toContain('id="c2"')
     expect(res.text).not.toContain('id="c1"')
 
-    const idle = await call({ action: 'wait-for-sub-sessions' })
+    const idle = await call({ action: 'wait-for-sessions' })
     expect(idle.text).toContain('id="c1"')
     expect(idle.text).toContain('status="interrupted"')
     expect(idle.text).toMatch(/<note>Interrupted when the app stopped/)
@@ -942,7 +927,7 @@ describe('G. completion notices', () => {
     const [, text, options] = notices[0] as [string, string, unknown]
     expect(options).toEqual({ kind: 'sub-session', requestId: 'subsession-done:c1:42' })
     expect(text).toContain('id="c1"')
-    expect(text).toContain('wait-for-sub-sessions')
+    expect(text).toContain('wait-for-sessions')
     expect(text).not.toContain('SECRET ANSWER')
     expect(parent.callsOf('writeNotice')).toEqual([])
   })
@@ -1122,10 +1107,7 @@ describe('G. completion notices', () => {
             conversationId: 1 as never
           }
         })
-        await call(
-          { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'new' },
-          { taskId: 2 }
-        )
+        await call({ action: 'prompt-session', session_id: 'c1', message: 'new' }, { taskId: 2 })
         await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
       },
       0
@@ -1157,7 +1139,7 @@ describe('G. completion notices', () => {
         const c1 = fakeHost.put('c1', { submitGate: gate() })
         const ac = new AbortController()
         const receipt = call(
-          { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'go' },
+          { action: 'prompt-session', session_id: 'c1', message: 'go' },
           { taskId: 1, signal: ac.signal }
         )
         await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1))
@@ -1346,7 +1328,7 @@ describe('G. completion notices', () => {
     const c1 = fakeHost.put('c1', { interrupted: true, submitGate: gate(), answer: { text: 'A' } })
     c1.requestStates.set(R(9), 'pending')
     const receipt = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'task' },
+      { action: 'prompt-session', session_id: 'c1', message: 'task' },
       { taskId: 9 }
     )
     expect(receipt.text).toContain('Started in the background')
@@ -1429,7 +1411,7 @@ describe('H. abort semantics', () => {
     const memo = sharedMemo()
     memo.store.set('session.wait-for-sub-sessions.targets', ['c4'])
     const ac5 = new AbortController()
-    const rerunWait = call({ action: 'wait-for-sub-sessions' }, { memo, signal: ac5.signal })
+    const rerunWait = call({ action: 'wait-for-sessions' }, { memo, signal: ac5.signal })
     await vi.waitFor(() => expect(c4.callsOf('resumeInterrupted')).toHaveLength(1))
     ac5.abort()
     await rerunWait.catch(() => undefined)
@@ -1450,7 +1432,7 @@ describe('H. abort semantics', () => {
     const c1 = fakeHost.put('c1', { submitGate: gate() })
     const ac1 = new AbortController()
     const inWindow = call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'go' },
+      { action: 'prompt-session', session_id: 'c1', message: 'go' },
       { taskId: 1, signal: ac1.signal }
     )
     await vi.waitFor(() => expect(submitsOf(c1)).toHaveLength(1), { interval: 1 })
@@ -1462,7 +1444,7 @@ describe('H. abort semantics', () => {
     expect(
       (
         await call(
-          { action: 'prompt-sub-session', sub_session_id: 'c2', message: 'go' },
+          { action: 'prompt-session', session_id: 'c2', message: 'go' },
           { taskId: 2, signal: ac2.signal }
         )
       ).text
@@ -1496,7 +1478,7 @@ describe('I. fresh prompt into an interrupted child', () => {
     family('c1', 'c2')
     const c1 = fakeHost.put('c1', { interrupted: true })
     const a = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'new' },
+      { action: 'prompt-session', session_id: 'c1', message: 'new' },
       { taskId: 21 }
     )
     expect(a.isError).toBe(false)
@@ -1508,7 +1490,7 @@ describe('I. fresh prompt into an interrupted child', () => {
       if (session.sessionId === 'c2') session.interrupted = true
     }
     const b = await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c2', message: 'new' },
+      { action: 'prompt-session', session_id: 'c2', message: 'new' },
       { taskId: 22 }
     )
     expect(b.isError).toBe(false)
@@ -1522,10 +1504,7 @@ describe('I. fresh prompt into an interrupted child', () => {
       interrupted: true,
       drivenRun: { requestId: R(1), parentId: 'P', background: true, conversationId: 1 as never }
     })
-    await call(
-      { action: 'prompt-sub-session', sub_session_id: 'c1', message: 'new' },
-      { taskId: 2 }
-    )
+    await call({ action: 'prompt-session', session_id: 'c1', message: 'new' }, { taskId: 2 })
     await runner.onDrivenSettled(settledEvent({ requestId: R(1), reason: 'aborted' }))
     expect(noticesTo(parent)).toEqual([])
   })
@@ -1567,8 +1546,8 @@ describe('J. §19 parent intervention through the real facade', () => {
     const c1 = fakeHost.put('c1', { submitGate: gate(), respondResult: true })
     const started = await call(
       {
-        action: 'prompt-sub-session',
-        sub_session_id: 'c1',
+        action: 'prompt-session',
+        session_id: 'c1',
         message: 'go'
       },
       { taskId: 1 }
@@ -1587,7 +1566,7 @@ describe('J. §19 parent intervention through the real facade', () => {
 
   it('WP3-99 代答经真门面只落到这条子会话的 durable：三参调用，附带信息里是 parent:<P> 与答题方；载荷里没有 answeredBy；别的会话一次都没被应答', async () => {
     const { parent, c1 } = await askingChild()
-    const res = await call({ action: 'answer-sub-session', selections: ['A'] }, { taskId: 2 })
+    const res = await call({ action: 'answer-session', selections: ['A'] }, { taskId: 2 })
     expect(res.isError).toBe(false)
     expect(res.text).toContain('Answered; it carries on in the background.')
     expect(c1.respondArgs).toEqual([
@@ -1617,8 +1596,8 @@ describe('J. §19 parent intervention through the real facade', () => {
       (
         await call(
           {
-            action: 'prompt-sub-session',
-            sub_session_id: 'c1',
+            action: 'prompt-session',
+            session_id: 'c1',
             message: 'go'
           },
           { taskId: 1 }
@@ -1627,7 +1606,7 @@ describe('J. §19 parent intervention through the real facade', () => {
     ).toBe(false)
     c1.busy = true
     const memo = sharedMemo()
-    const first = await call({ action: 'steer-sub-session', message: 'm' }, { taskId: 9, memo })
+    const first = await call({ action: 'steer-session', message: 'm' }, { taskId: 9, memo })
     expect(first.isError).toBe(false)
     expect(first.text).toContain('Steer delivered')
     expect(c1.callsOf('steer')).toEqual([['steer', 'm']])
@@ -1638,7 +1617,7 @@ describe('J. §19 parent intervention through the real facade', () => {
 
     // WP3-101：重跑（同一 taskId、同一张 memo 表），子会话已经认得这个键
     c1.requestStates.set('subsession-steer:P:9', 'settled')
-    const rerun = await call({ action: 'steer-sub-session', message: 'm' }, { taskId: 9, memo })
+    const rerun = await call({ action: 'steer-session', message: 'm' }, { taskId: 9, memo })
     expect(rerun.isError).toBe(false)
     expect(rerun.text).toContain('already delivered earlier')
     expect(c1.callsOf('steer')).toHaveLength(1)
@@ -1654,7 +1633,7 @@ describe('J. §19 parent intervention through the real facade', () => {
     expect(notices[0]).toHaveLength(2)
     const text = String(notices[0]![1])
     expect(text).toContain('<question ask_id="q1">')
-    expect(text).toContain('answer-sub-session')
+    expect(text).toContain('answer-session')
     expect(parent.callsOf('writeNotice')).toEqual([])
 
     // 父会话没锁：落成一条通知条目，不起一轮
@@ -1674,7 +1653,7 @@ describe('J. §19 parent intervention through the real facade', () => {
   it('WP3-103 换进程之后重跑同一次代答（子会话的 ask 重跑、同一 id 再挂）：工具失败，新进程里子会话 durable 一次都没被应答', async () => {
     const { c1 } = await askingChild()
     const memo = sharedMemo()
-    const args = { action: 'answer-sub-session', selections: ['A'] }
+    const args = { action: 'answer-session', selections: ['A'] }
     // 第一个进程里答过一次（q1 被受理）
     expect((await call(args, { taskId: 2, memo })).isError).toBe(false)
     expect(c1.callsOf('respondToInput')).toHaveLength(1)

@@ -52,7 +52,13 @@ vi.mock('../sessionTriggerFacts', () => ({
 }))
 vi.mock('../sessionDayPromptService', () => ({ recordUserEntry: mocks.recordUserEntry }))
 vi.mock('../sessionRecords', () => ({
-  sessionRecords: { pick: () => ({ title: 'New chat' }) }
+  sessionRecords: {
+    pick: () => ({ title: 'New chat' }),
+    drivingSourceOf: (_id: string, driverId: string) => ({
+      kind: 'parent-session',
+      sessionId: driverId
+    })
+  }
 }))
 vi.mock('../sessionService', () => ({
   sessionService: { resolveAgentProfileName: mocks.resolveAgentProfileName }

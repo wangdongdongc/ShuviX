@@ -128,6 +128,7 @@ import { nodeFileSystemPort } from '../../utils/toolUtils/nodeFileSystemPort'
 import { appEventBus } from '../../utils/appEventBus'
 import type { ToolContext } from '../../services/toolContext'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import type { AskDiffPreview } from '@shuvix/chat-protocol/types/inputRequest'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -339,7 +340,7 @@ describe('doc_edit / doc_insert 的磁盘回落', () => {
     expect(req.toolName).toBe('doc_edit')
     expect(req.id).toBe('df7-deny')
     expect(req.preview).toMatchObject({ kind: 'diff', path: p })
-    const diff = req.preview?.diff ?? ''
+    const diff = (req.preview as AskDiffPreview | undefined)?.diff ?? ''
     expect(diff.split('\n').filter((l) => l.startsWith('-'))).toEqual(['-3 body'])
     expect(diff.split('\n').filter((l) => l.startsWith('+'))).toEqual(['+3 BODY'])
 

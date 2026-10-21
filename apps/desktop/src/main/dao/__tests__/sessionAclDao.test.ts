@@ -11,6 +11,7 @@
  *   SAD-4  deleteById：删到 → true；会话不对 → false；deleteBySession 只删那一条会话、回删掉的行数
  *   SAD-5  读侧跳过认不出的行（更新版本写的 kind、未知来源、未知访问方式），好行照常
  *   SAD-6  transaction：抛错整批回滚；正常整批落下；嵌套调用不再开事务
+ *   XS-34  deleteByTarget(kind, target)：跨会话删掉种类与目标都对上的行、回删掉的行数（目标会话被删时调）
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -144,5 +145,37 @@ describe('SessionAclDao', () => {
     })
     expect(result).toBe('done')
     expect(sessionAclDao.findBySession('s1').map((e) => e.id)).toEqual(['e1', 'e2'])
+  })
+})
+
+/**
+ * XS-34 deleteByTarget —— 会话种类的目标会话被删时，别的会话里授权与它交互的行跟着去（services/acl deleteSession）。
+ * 只认种类与目标都对上的：同目标的路径行、目标相近 / 大小写不同的会话行、被删会话自己的行都不动。
+ */
+describe('SessionAclDao.deleteByTarget', () => {
+  it("XS-34 deleteByTarget('session', 'B')：回删掉的行数；只删会话种类、目标恰为 B 的行（跨会话）", () => {
+    sessionAclDao.insert(entry({ id: 'a-b', sessionId: 'A', kind: 'session', target: 'B' }))
+    sessionAclDao.insert(
+      entry({ id: 'm-b', sessionId: 'M', kind: 'session', target: 'B', access: 'write' })
+    )
+    sessionAclDao.insert(entry({ id: 'a-c', sessionId: 'A', kind: 'session', target: 'C' }))
+    sessionAclDao.insert(entry({ id: 'a-bb', sessionId: 'A', kind: 'session', target: 'BB' }))
+    sessionAclDao.insert(entry({ id: 'a-lower', sessionId: 'A', kind: 'session', target: 'b' }))
+    sessionAclDao.insert(entry({ id: 'a-path', sessionId: 'A', kind: 'path', target: 'B' }))
+    // 被删会话自己的行（它的表另由 deleteBySession 清）
+    sessionAclDao.insert(entry({ id: 'b-own', sessionId: 'B', kind: 'session', target: 'C' }))
+    const ids = (sessionId: string): string[] =>
+      sessionAclDao.findBySession(sessionId).map((e) => e.id)
+
+    expect(sessionAclDao.deleteByTarget('session', 'B')).toBe(2)
+    expect(ids('A')).toEqual(['a-c', 'a-bb', 'a-lower', 'a-path'])
+    expect(ids('M')).toEqual([])
+    expect(ids('B')).toEqual(['b-own'])
+
+    // 再删一次：没有可删的了
+    expect(sessionAclDao.deleteByTarget('session', 'B')).toBe(0)
+    // 种类参数真的参与匹配：路径种类那一行只在按 path 删时去
+    expect(sessionAclDao.deleteByTarget('path', 'B')).toBe(1)
+    expect(ids('A')).toEqual(['a-c', 'a-bb', 'a-lower'])
   })
 })

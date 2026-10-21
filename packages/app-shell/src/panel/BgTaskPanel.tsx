@@ -84,11 +84,13 @@ function useBlockedTaskIds(tasks: TaskInfo[]): Set<string> {
   return useMemo(() => new Set(key ? key.split('\n') : []), [key])
 }
 
-/** 类别文案 —— 行尾那句「Bash · 运行中 · 4m02s」的第一段 */
-function useKindLabel(kind: TaskInfo['kind']): string {
+/** 类别文案 —— 行尾那句「Bash · 运行中 · 4m02s」的第一段（驱动别的会话的那一轮写「会话」） */
+function useKindLabel(task: TaskInfo): string {
   const { t } = useTranslation()
-  if (kind === 'agent') return t('panel.tasksKindAgent')
-  if (kind === 'sub-session') return t('panel.tasksKindSubSession')
+  if (task.kind === 'agent') return t('panel.tasksKindAgent')
+  if (task.subject.kind === 'sub-session') {
+    return t(task.subject.other ? 'panel.tasksKindSession' : 'panel.tasksKindSubSession')
+  }
   return t('panel.tasksKindBash')
 }
 
@@ -400,7 +402,7 @@ function TaskRow({
 }): React.JSX.Element {
   const { t } = useTranslation()
   const { state, duration } = useBgTaskStatus(task, now)
-  const kindLabel = useKindLabel(task.kind)
+  const kindLabel = useKindLabel(task)
   const finished = isTaskFinished(task)
   // 子会话没有可展开的详情（转写在它自己的会话里），标题行上给一个「打开」直接过去
   const openTarget = task.subject.kind === 'sub-session' ? task.subject.childSessionId : null

@@ -114,10 +114,10 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
       const selections = Array.isArray(args.selections)
         ? args.selections.filter((s): s is string => typeof s === 'string').join(', ')
         : undefined
-      const spoken =
-        action === 'answer-sub-session' || action === 'steer-sub-session'
-          ? firstLine(args.message)
-          : undefined
+      // 2026-10-20 之前的动作名（`answer-sub-session` / `steer-sub-session`）在旧会话的历史里还在
+      const spoken = /^(answer|steer)-(sub-)?session$/.test(action ?? '')
+        ? firstLine(args.message)
+        : undefined
       const detail =
         asStr(args.title) ??
         (selections || undefined) ??

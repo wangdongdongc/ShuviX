@@ -34,6 +34,7 @@ import type {
 import type { InputResponse } from './types/inputRequest'
 import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
+import type { SessionMentionEntry } from './sessionMention'
 import type { ChromeTabBinding } from './chromeTabSession'
 import type { SessionForkParams, SessionForkResult } from './sessionFork'
 import type {
@@ -693,6 +694,11 @@ export interface SessionChannelApi {
   mentions: {
     /** 该会话**启用库**内的知识条目视图（含工具侧库名 + bundle 相对路径指针）；未启用任何库返回空 */
     listKnowledgeEntries: (params: { sessionId: string }) => Promise<KnowledgeMentionEntry[]>
+    /**
+     * 「会话」源：除这一条以外、侧栏看得见的会话（最近活跃的在前）。没有会话列表的宿主（扩展）省略 ——
+     * provider 不就绪，弹层不出该分区
+     */
+    listSessions?: (params: { sessionId: string }) => Promise<SessionMentionEntry[]>
   }
   /** 通用内部事件订阅（后端发布的会话级/全局状态事件）。见 docs/internal-events.md */
   events: {

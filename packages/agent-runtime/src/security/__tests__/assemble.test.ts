@@ -1036,12 +1036,14 @@ describe('assembleRules — 派生规则与省略容错', () => {
     expect(() => assembleRules(makeProvider())).not.toThrow()
   })
 
-  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂三份共四条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
+  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂四份共六条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
     const rules = assembleRules(makeProvider({ getVars: () => withGrants({ write: ['/data'] }) }))
     expect(rules.map((r) => [r.id, r.source.kind])).toEqual([
       ['ask-on-external-path#0', 'builtin'],
       ['ask-on-external-path#1', 'builtin'],
       ['ask-on-command#0', 'builtin'],
+      ['ask-on-session-access#0', 'builtin'],
+      ['ask-on-session-access#1', 'builtin'],
       ['network-admission#0', 'builtin']
     ])
   })
@@ -1771,6 +1773,8 @@ describe('assembleRules — 停用的策略不装配', () => {
     expect(rules.map((r) => r.id)).toEqual([
       'ask-on-external-path#0',
       'ask-on-external-path#1',
+      'ask-on-session-access#0',
+      'ask-on-session-access#1',
       'network-admission#0'
     ])
     expect(decide(provider, 'execute', unconfined)).toMatchObject({ effect: 'allow', matched: [] })
@@ -1815,12 +1819,13 @@ describe('assembleRules — 停用的策略不装配', () => {
     )
     expect(asked.map((p) => p.name)).toEqual([
       'ask-on-external-path',
+      'ask-on-session-access',
       'network-admission',
       'ask-on-command',
       'extra'
     ])
-    expect(asked[2]).toBe(copy)
-    expect(asked[3]).toBe(extra)
+    expect(asked[3]).toBe(copy)
+    expect(asked[4]).toBe(extra)
     expect(asked[0].objectId).toBe(EXT_ID)
     // 内置 ask-on-command（被 copy 遮蔽）不在其中
     expect(asked.filter((p) => p.objectId === CMD_ID)).toEqual([])
@@ -1839,6 +1844,8 @@ describe('assembleRules — 停用的策略不装配', () => {
     expect(rules.map((r) => r.id)).toEqual([
       'ask-on-external-path#0',
       'ask-on-external-path#1',
+      'ask-on-session-access#0',
+      'ask-on-session-access#1',
       'network-admission#0'
     ])
   })
@@ -1864,11 +1871,13 @@ describe('assembleRules — 停用的策略不装配', () => {
     expect(control.filter((r) => r.source.policy === 'p').map((r) => r.effect)).toEqual(['deny'])
   })
 
-  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂三份四条全在', () => {
+  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂四份六条全在', () => {
     expect(assembleRules(makeProvider()).map((r) => r.id)).toEqual([
       'ask-on-external-path#0',
       'ask-on-external-path#1',
       'ask-on-command#0',
+      'ask-on-session-access#0',
+      'ask-on-session-access#1',
       'network-admission#0'
     ])
   })

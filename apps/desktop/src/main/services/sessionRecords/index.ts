@@ -21,6 +21,7 @@
  *
  * 会话树（对话内容）的内存化不在这里：sessionStorage 的树注册表按 isEphemeral / wasEphemeral 分流。
  */
+import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
 import {
   HARNESS_V3_JSONL,
   storageKindOf,
@@ -120,6 +121,15 @@ export class SessionRecords {
       .filter((row) => row.parentId === parentId)
       .sort((a, b) => a.createdAt - b.createdAt)
       .map(parseRow)
+  }
+
+  /**
+   * 驱动这条会话的另一条会话的引用（它发进来的消息的来源、它代答的询问的答题方）：是它的父会话就记
+   * `parent-session`，否则是经会话权限表被授权的别的会话，记 `session`
+   */
+  drivingSourceOf(id: string, driverId: string, title?: string): DrivingSessionRef {
+    const kind = this.pick(id, ['parentId'])?.parentId === driverId ? 'parent-session' : 'session'
+    return title ? { kind, sessionId: driverId, title } : { kind, sessionId: driverId }
   }
 
   /**

@@ -136,9 +136,9 @@ export function buildMatchContext(
 
 /**
  * ask 决策的询问材料 —— 按客体属性推导（匹配不看 type，材料/展示要看）：
- * path 给 `Read(...)` / `Write(...)` 形态的条目（卡片上的展示文本，也是「允许并记住」的依据 —— 记下的是会话
- * 权限表的一行；force-ask 胜出时不给，见下）；其余类型按「主展示属性」回退链（command → sql → 工具名 → type）
- * 取原文，没有记忆条目（会话权限表今天只有路径）。
+ * path 给 `Read(...)` / `Write(...)` 形态的条目、session 给 `Session(read|write, <id>)`（卡片上的展示文本，也是
+ * 「允许并记住」的依据 —— 记下的是会话权限表的一行；force-ask 胜出时不给，见下）；其余类型按「主展示属性」回退链
+ * （command → sql → 工具名 → type）取原文，没有记忆条目（会话权限表只有路径与会话）。
  */
 function buildAskMaterials(
   request: SecurityRequest,
@@ -160,6 +160,21 @@ function buildAskMaterials(
     return tier === 'force-ask'
       ? { command: entry, ...requested }
       : { command: entry, rememberEntry: entry, ...requested }
+  }
+  // 会话：条目 `Session(read|write, <id>)` 是卡片的主文本、决策日志与审查员看到的目标，也是「允许并记住」的依据 ——
+  // 记下的是会话权限表里 `kind: 'session'` 的一行。卡片按 `session` 渲染（标题、查看 / 对话）。force-ask 不给记住，同路径
+  if (object.type === 'session' && typeof object.sessionId === 'string') {
+    const access = request.action === 'write' ? 'write' : 'read'
+    const entry = `Session(${access}, ${object.sessionId})`
+    const session = {
+      sessionId: object.sessionId,
+      title: typeof object.title === 'string' ? object.title : '',
+      access,
+      operation: request.tool?.operation ?? ''
+    } as const
+    return tier === 'force-ask'
+      ? { command: entry, session }
+      : { command: entry, rememberEntry: entry, session }
   }
   // 远端命令把目标机器写进卡片：用户批准一条 `rm -rf` 时，必须看得见它要跑在哪台机器上
   if (typeof object.command === 'string') {

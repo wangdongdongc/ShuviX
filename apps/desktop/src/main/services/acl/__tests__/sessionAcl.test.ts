@@ -19,6 +19,8 @@
  *   ACL-11 deleteSession：整张表与对账记忆清掉；删掉的会话读出空表、授予回 null，不会补出行
  *   ACL-12 坏 id / 不存在的会话：空表，不碰存储
  *   ACL-13 对账失败（库抛错）：保持上一次的表，不记指纹，下一次读再试
+ *
+ * 会话种类的行（XS-27…XS-33）见文件末尾的 describe 块。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -26,7 +28,11 @@ import { DatabaseSync } from 'node:sqlite'
 const holder = vi.hoisted(() => ({
   db: null as unknown,
   derived: new Map<string, Array<Record<string, string>>>(),
-  broadcasts: [] as string[]
+  /** derivePathEntries 被问到的会话（XS-28：sessionGrants 不对账） */
+  deriveCalls: [] as string[],
+  broadcasts: [] as string[],
+  /** logger.warn 收到的文案（XS-33：按目标删失败只记一条 warn） */
+  warns: [] as string[]
 }))
 
 vi.mock('../../../dao/database', () => {
@@ -41,13 +47,20 @@ vi.mock('../../../dao/database', () => {
   return { BaseDao, databaseManager: { getDb: () => holder.db } }
 })
 vi.mock('../../../logger', () => ({
-  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
+  createLogger: () => ({
+    info: () => {},
+    warn: (msg: string) => holder.warns.push(msg),
+    error: () => {}
+  })
 }))
 vi.mock('../../../utils/sessionConfigBroadcast', () => ({
   broadcastSessionConfigChanged: (id: string) => holder.broadcasts.push(id)
 }))
 vi.mock('../derive', () => ({
-  derivePathEntries: (sessionId: string) => holder.derived.get(sessionId) ?? [],
+  derivePathEntries: (sessionId: string) => {
+    holder.deriveCalls.push(sessionId)
+    return holder.derived.get(sessionId) ?? []
+  },
   derivedKey: (e: { source: string; sourceKey: string; target: string }) =>
     `${e.source}\u0000${e.sourceKey}\u0000${e.target}`
 }))
@@ -69,10 +82,13 @@ const rowCount = (sessionId?: string): number =>
       : db().prepare('SELECT COUNT(*) AS n FROM session_acl').get()) as { n: number }
   ).n
 
-function addSession(id: string, opts: { ephemeral?: boolean; parentId?: string } = {}): void {
+function addSession(
+  id: string,
+  opts: { ephemeral?: boolean; parentId?: string; title?: string } = {}
+): void {
   const session: Session = {
     id,
-    title: id,
+    title: opts.title ?? id,
     projectId: null,
     parentId: opts.parentId ?? null,
     settings: {},
@@ -105,7 +121,9 @@ beforeEach(() => {
   for (const m of migrations) m.up(fresh as unknown as Db)
   holder.db = fresh
   holder.derived.clear()
+  holder.deriveCalls.length = 0
   holder.broadcasts.length = 0
+  holder.warns.length = 0
   sessionRecords.clearEphemeralForTests()
   clearMemoryAclForTests()
   sessionAcl.forgetReconciled()
@@ -401,5 +419,418 @@ describe('sessionAcl', () => {
     spy.mockRestore()
 
     expect(shape('s1')).toContain('knowledge:k:/kb:write')
+  })
+})
+
+/**
+ * 会话种类的行（kind: 'session'，target = 另一条会话的 id）—— `session` 工具经「允许并记住」免询问地查看（read）/
+ * 对话（write）一条别的会话。来源恒为 user，没有派生的会话行。
+ *
+ *   XS-27 grantSession：新行 {kind session, target, access, source user, sourceKey ''}，广播调用方一次；对话压过查看
+ *         （同一行、updatedAt 刷新、广播）；查看不降级对话（交回原行，不写库不广播）；自己、目标不在、调用方不在、
+ *         坏 id → null，什么都不写、不广播
+ *   XS-28 sessionView：对话隐含查看；sessionGrants / sessionView 直接读存储、不对账（derive 不调，派生行不动）；
+ *         会话行不进 pathView / sandboxEntries，路径行（哪怕目标字面是一条会话的 id）不进 sessionView；
+ *         不在的会话 → 空（存储里的残留行也不交出）
+ *   XS-29 对账（派生输入变了）不碰会话行：同 id、同访问方式
+ *   XS-30 setAccess：会话行 查看 ↔ 对话（true + 广播）；remove true；sessionView 跟着变
+ *   XS-31 entriesForDisplay：会话行带目标此刻的标题（改名即反映）；路径行没有 targetTitle 键；目标已删 → 没有；
+ *         entries() 从不带
+ *   XS-32 继承：子会话 / fork 复制源会话的会话行（新 id、自己的 sessionId、同目标同访问方式）；之后各管各的；
+ *         别的表里指向源会话的行不复制
+ *   XS-33 deleteSession(B)：库里的 A、内存会话 M 里指向 B 的会话行删掉；指向 C 的、目标字面恰为 'B' 的路径行不动；
+ *         B 自己的表清空；按目标删的语句抛错 → 不抛、记一条 warn、B 自己的表照样清空
+ */
+describe('sessionAcl —— 会话种类的行', () => {
+  /** 原样插一行（绕过服务层：路径行的目标可以不是绝对路径、会话可以不在） */
+  const rawRow = (sessionId: string, kind: string, target: string, access: string): void => {
+    db()
+      .prepare(
+        `INSERT INTO session_acl (id, sessionId, kind, target, access, source, sourceKey, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, 'user', '', 1, 1)`
+      )
+      .run(`raw-${sessionId}-${kind}-${target}`, sessionId, kind, target, access)
+  }
+  /** 库里所有指向 target 的某种行属于哪些会话（排好序） */
+  const holdersOf = (target: string, kind = 'session'): string[] =>
+    (
+      db()
+        .prepare(
+          'SELECT sessionId FROM session_acl WHERE kind = ? AND target = ? ORDER BY sessionId'
+        )
+        .all(kind, target) as Array<{ sessionId: string }>
+    ).map((r) => r.sessionId)
+  /** 一条会话表里的行：`kind:target:access`（排好序） */
+  const kinds = (sessionId: string): string[] =>
+    sessionAcl
+      .entries(sessionId)
+      .map((e) => `${e.kind}:${e.target}:${e.access}`)
+      .sort()
+  /** 记下这期间 prepare 过的写语句 */
+  function recordWrites(): { writes: string[]; restore: () => void } {
+    const prepare = db().prepare.bind(db())
+    const writes: string[] = []
+    const spy = vi.spyOn(db(), 'prepare').mockImplementation((sql: string) => {
+      if (/^\s*(INSERT|UPDATE|DELETE)/i.test(sql)) writes.push(sql)
+      return prepare(sql)
+    })
+    return { writes, restore: () => spy.mockRestore() }
+  }
+
+  it('XS-27 grantSession：新行、广播调用方一次；对话压过查看（同一行、updatedAt 刷新、广播）；查看不降级对话（原行，不写不广播）', () => {
+    addSession('A')
+    addSession('B')
+    sessionAcl.initialize('A')
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    try {
+      const read = sessionAcl.grantSession('A', 'B', 'read')
+      expect(read).toEqual({
+        id: expect.any(String),
+        sessionId: 'A',
+        kind: 'session',
+        target: 'B',
+        access: 'read',
+        source: 'user',
+        sourceKey: '',
+        createdAt: 1_000,
+        updatedAt: 1_000
+      })
+      expect(holder.broadcasts).toEqual(['A'])
+      // 落库的就是交回的那一行；目标会话自己的表不动
+      expect(sessionAcl.entries('A')).toEqual([read])
+      expect(rowCount('B')).toBe(0)
+
+      clock.mockReturnValue(2_000)
+      const widened = sessionAcl.grantSession('A', 'B', 'write')
+      expect(widened).toEqual({ ...read, access: 'write', updatedAt: 2_000 })
+      expect(holder.broadcasts).toEqual(['A', 'A'])
+      expect(sessionAcl.entries('A')).toEqual([widened])
+
+      // 对话之后再授予查看：交回原行，不写库、不广播
+      clock.mockReturnValue(3_000)
+      const rec = recordWrites()
+      let again: AclEntry | null = null
+      try {
+        again = sessionAcl.grantSession('A', 'B', 'read')
+      } finally {
+        rec.restore()
+      }
+      expect(again).toEqual(widened)
+      expect(rec.writes).toEqual([])
+      expect(holder.broadcasts).toEqual(['A', 'A'])
+      expect(sessionAcl.entries('A')).toEqual([widened])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('XS-27 自己、目标不在（含已删）、调用方不在、坏 id（哪怕有那条会话行）→ null；什么都不写、不广播', () => {
+    addSession('A')
+    addSession('B')
+    addSession('gone')
+    sessionRecords.deleteById('gone')
+    // 坏 id 的会话行真的在库里：拦住它的是 id 校验，不是「找不到」
+    addSession('../x')
+    sessionAcl.initialize('A')
+    const cases: Array<[string, string]> = [
+      ['A', 'A'],
+      ['A', 'nobody'],
+      ['A', 'gone'],
+      ['nobody', 'B'],
+      ['gone', 'B'],
+      ['A', '../x'],
+      ['../x', 'B'],
+      ['A', '']
+    ]
+    for (const [caller, target] of cases) {
+      for (const access of ['read', 'write'] as const) {
+        expect(
+          sessionAcl.grantSession(caller, target, access),
+          `${caller}→${target} ${access}`
+        ).toBe(null)
+      }
+    }
+    expect(rowCount()).toBe(0)
+    expect(holder.broadcasts).toEqual([])
+  })
+
+  it('XS-28 sessionView：对话隐含查看；会话行不进 pathView / sandboxEntries，路径行不进 sessionView', () => {
+    addSession('A')
+    addSession('B')
+    addSession('C')
+    addSession('D')
+    baseDerived('A')
+    sessionAcl.initialize('A')
+    sessionAcl.grantSession('A', 'B', 'write')
+    sessionAcl.grantSession('A', 'C', 'read')
+    sessionAcl.grantPath('A', '/data', 'write')
+
+    expect(sessionAcl.sessionView('A')).toEqual({ read: ['B', 'C'], write: ['B'] })
+    expect(sessionAcl.sessionGrants('A').map((e) => `${e.kind}:${e.target}:${e.access}`)).toEqual([
+      'session:B:write',
+      'session:C:read'
+    ])
+
+    const paths = sessionAcl.pathView('A')
+    expect(paths.read.sort()).toEqual([WS, '/data', '/private/tmp/x/A', '/skills'].sort())
+    expect(paths.write.sort()).toEqual([WS, '/data', '/private/tmp/x/A'].sort())
+    expect(
+      sessionAcl
+        .sandboxEntries('A')
+        .map((e) => e.path)
+        .sort()
+    ).toEqual([WS, '/data', '/private/tmp/x/A', '/skills'].sort())
+
+    // 一行路径的目标字面恰是一条会话的 id：照样只是路径，不进 sessionView / sessionGrants
+    rawRow('A', 'path', 'D', 'write')
+    expect(sessionAcl.pathView('A').write).toContain('D')
+    expect(sessionAcl.sessionView('A')).toEqual({ read: ['B', 'C'], write: ['B'] })
+    expect(sessionAcl.sessionGrants('A').every((e) => e.kind === 'session')).toBe(true)
+    expect(sessionAcl.sessionGrants('A')).toHaveLength(2)
+  })
+
+  it('XS-28 sessionGrants / sessionView 直接读存储、不对账：derive 不调，派生行不动；entries 才对账', () => {
+    addSession('A')
+    addSession('B')
+    baseDerived('A')
+    sessionAcl.initialize('A')
+    const granted = sessionAcl.grantSession('A', 'B', 'read')!
+    // 派生输入变了、对账记忆也忘了 —— 任何一次「先对账的读」都会写库
+    baseDerived('A', [{ source: 'knowledge', sourceKey: 'k', target: '/kb', access: 'write' }])
+    sessionAcl.forgetReconciled('A')
+    holder.deriveCalls.length = 0
+    const before = rowCount('A')
+
+    const rec = recordWrites()
+    try {
+      expect(sessionAcl.sessionGrants('A')).toEqual([granted])
+      expect(sessionAcl.sessionView('A')).toEqual({ read: ['B'], write: [] })
+    } finally {
+      rec.restore()
+    }
+    expect(holder.deriveCalls).toEqual([])
+    expect(rec.writes).toEqual([])
+    expect(rowCount('A')).toBe(before)
+    expect(holdersOf('/kb', 'path')).toEqual([])
+
+    // 对照：entries 先对账，派生的知识库行这才补上
+    expect(shape('A')).toContain('knowledge:k:/kb:write')
+    expect(holder.deriveCalls).toEqual(['A'])
+  })
+
+  it('XS-28 不在的会话（没有会话行 / 坏 id）→ 空；存储里的残留行也不交出、不动', () => {
+    rawRow('ghost', 'session', 'B', 'write')
+    for (const id of ['ghost', 'nobody', '', '..', 'a/b']) {
+      expect(sessionAcl.sessionGrants(id), id).toEqual([])
+      expect(sessionAcl.sessionView(id), id).toEqual({ read: [], write: [] })
+    }
+    expect(rowCount('ghost')).toBe(1)
+    expect(holder.deriveCalls).toEqual([])
+  })
+
+  it('XS-29 对账（派生输入变了）不碰会话行：同 id、同访问方式', () => {
+    addSession('A')
+    addSession('B')
+    addSession('C')
+    baseDerived('A')
+    sessionAcl.initialize('A')
+    const b = sessionAcl.grantSession('A', 'B', 'write')!
+    const c = sessionAcl.grantSession('A', 'C', 'read')!
+
+    // 工作目录换了、技能目录没了、勾上一个知识库
+    holder.derived.set('A', [
+      { source: 'workdir', sourceKey: '', target: '/other', access: 'write' },
+      { source: 'system', sourceKey: 'tmp', target: '/private/tmp/x/A', access: 'write' },
+      { source: 'knowledge', sourceKey: 'k', target: '/kb', access: 'read' }
+    ])
+    expect(shape('A')).toEqual([
+      'knowledge:k:/kb:read',
+      'system:tmp:/private/tmp/x/A:write',
+      'user::B:write',
+      'user::C:read',
+      'workdir::/other:write'
+    ])
+    expect(sessionAcl.sessionGrants('A')).toEqual([b, c])
+
+    // 派生行全没了（会话的设置什么都不给）：会话行照旧
+    holder.derived.set('A', [])
+    expect(sessionAcl.entries('A')).toEqual([b, c])
+    // 重启后（对账记忆清空）再对一次：同样
+    sessionAcl.forgetReconciled('A')
+    expect(sessionAcl.entries('A')).toEqual([b, c])
+  })
+
+  it('XS-30 setAccess：会话行查看 ↔ 对话（true + 广播）；remove true；sessionView 跟着变', () => {
+    addSession('A')
+    addSession('B')
+    sessionAcl.initialize('A')
+    const row = sessionAcl.grantSession('A', 'B', 'read')!
+    holder.broadcasts.length = 0
+
+    expect(sessionAcl.setAccess('A', row.id, 'write')).toBe(true)
+    expect(holder.broadcasts).toEqual(['A'])
+    expect(sessionAcl.sessionView('A')).toEqual({ read: ['B'], write: ['B'] })
+    // 没变不写、不广播；别的会话按 id 改不到这一行
+    expect(sessionAcl.setAccess('A', row.id, 'write')).toBe(false)
+    expect(sessionAcl.setAccess('B', row.id, 'read')).toBe(false)
+    expect(sessionAcl.remove('B', row.id)).toBe(false)
+    expect(holder.broadcasts).toEqual(['A'])
+
+    expect(sessionAcl.setAccess('A', row.id, 'read')).toBe(true)
+    expect(holder.broadcasts).toEqual(['A', 'A'])
+    expect(sessionAcl.sessionView('A')).toEqual({ read: ['B'], write: [] })
+
+    expect(sessionAcl.remove('A', row.id)).toBe(true)
+    expect(holder.broadcasts).toEqual(['A', 'A', 'A'])
+    expect(sessionAcl.sessionView('A')).toEqual({ read: [], write: [] })
+    expect(sessionAcl.remove('A', row.id)).toBe(false)
+    expect(rowCount('A')).toBe(0)
+  })
+
+  it('XS-31 entriesForDisplay：会话行带目标此刻的标题（改名即反映）；路径行没有 targetTitle 键；目标已删 → 没有；entries 从不带', () => {
+    addSession('A')
+    addSession('B', { title: 'Plan the release' })
+    addSession('C', { title: 'Soon gone' })
+    baseDerived('A')
+    sessionAcl.initialize('A')
+    sessionAcl.grantSession('A', 'B', 'write')
+    sessionAcl.grantSession('A', 'C', 'read')
+    sessionAcl.grantPath('A', '/data', 'read')
+    const display = (): AclEntry[] => sessionAcl.entriesForDisplay('A')
+    const shown = (target: string): AclEntry => display().find((e) => e.target === target)!
+
+    expect(shown('B')).toMatchObject({ kind: 'session', targetTitle: 'Plan the release' })
+    expect(shown('C')).toMatchObject({ kind: 'session', targetTitle: 'Soon gone' })
+    const pathRows = display().filter((e) => e.kind === 'path')
+    expect(pathRows).toHaveLength(4)
+    for (const e of pathRows) expect(e, e.target).not.toHaveProperty('targetTitle')
+
+    // 改名：下一次读就是新标题（不落库，现查）
+    sessionRecords.updateTitle('B', 'Release v2')
+    expect(shown('B').targetTitle).toBe('Release v2')
+
+    // 目标会话没了（行还在）：没有 targetTitle 键，其余照旧
+    sessionRecords.deleteById('C')
+    expect(shown('C')).toMatchObject({ kind: 'session', target: 'C', access: 'read' })
+    expect(shown('C')).not.toHaveProperty('targetTitle')
+
+    // entries() 从不带；display 除了 targetTitle 与 entries 逐行相同
+    const entries = sessionAcl.entries('A')
+    for (const e of entries) expect(e, e.target).not.toHaveProperty('targetTitle')
+    expect(
+      display().map((e) => {
+        const rest: Partial<AclEntry> = { ...e }
+        delete rest.targetTitle
+        return rest
+      })
+    ).toEqual(entries)
+  })
+
+  it('XS-32 子会话 / fork 复制源会话的会话行（新 id、自己的 sessionId、同目标同访问方式）；之后各管各的；别处指向源会话的行不复制', () => {
+    for (const id of ['P', 'T', 'U', 'X']) addSession(id)
+    sessionAcl.initialize('P')
+    sessionAcl.initialize('X')
+    const pt = sessionAcl.grantSession('P', 'T', 'write')!
+    const pu = sessionAcl.grantSession('P', 'U', 'read')!
+    // 别的会话里授权与 P 交互的那一行
+    sessionAcl.grantSession('X', 'P', 'write')
+
+    addSession('child', { parentId: 'P' })
+    sessionAcl.initialize('child', { sessionId: 'P', fork: false })
+    addSession('fork')
+    sessionAcl.initialize('fork', { sessionId: 'P', fork: true })
+
+    const copiedIds: string[] = []
+    for (const id of ['child', 'fork']) {
+      const rows = sessionAcl.sessionGrants(id)
+      expect(
+        rows.map((e) => [e.sessionId, e.kind, e.target, e.access, e.source, e.sourceKey]),
+        id
+      ).toEqual([
+        [id, 'session', 'T', 'write', 'user', ''],
+        [id, 'session', 'U', 'read', 'user', '']
+      ])
+      copiedIds.push(...rows.map((e) => e.id))
+    }
+    // 每一行都是新 id（与源会话的、彼此的都不同）
+    expect(new Set([pt.id, pu.id, ...copiedIds]).size).toBe(6)
+    // X → P 那一行不被复制成 X → child / X → fork；源会话的行也没有被改指向
+    expect(holdersOf('child')).toEqual([])
+    expect(holdersOf('fork')).toEqual([])
+    expect(holdersOf('P')).toEqual(['X'])
+    expect(sessionAcl.sessionView('X')).toEqual({ read: ['P'], write: ['P'] })
+
+    // 之后各管各的：源会话改 / 删不影响副本，副本删也不影响源会话
+    sessionAcl.setAccess('P', pt.id, 'read')
+    sessionAcl.remove('P', pu.id)
+    const both = { read: ['T', 'U'], write: ['T'] }
+    expect(sessionAcl.sessionView('child')).toEqual(both)
+    expect(sessionAcl.sessionView('fork')).toEqual(both)
+    const childT = sessionAcl.sessionGrants('child').find((e) => e.target === 'T')!
+    sessionAcl.remove('child', childT.id)
+    expect(sessionAcl.sessionView('child')).toEqual({ read: ['U'], write: [] })
+    expect(sessionAcl.sessionView('fork')).toEqual(both)
+    expect(sessionAcl.sessionView('P')).toEqual({ read: ['T'], write: [] })
+  })
+
+  it("XS-33 deleteSession(B)：库里 A 与内存会话 M 里指向 B 的会话行删掉；指向 C 的、目标字面为 'B' 的路径行不动；B 自己的表清空", () => {
+    addSession('A')
+    addSession('B')
+    addSession('C')
+    addSession('M', { ephemeral: true })
+    baseDerived('B')
+    for (const id of ['A', 'B', 'C', 'M']) sessionAcl.initialize(id)
+    sessionAcl.grantSession('A', 'B', 'write')
+    sessionAcl.grantSession('A', 'C', 'read')
+    sessionAcl.grantSession('M', 'B', 'read')
+    sessionAcl.grantSession('M', 'C', 'write')
+    sessionAcl.grantSession('B', 'C', 'write')
+    sessionAcl.grantSession('C', 'B', 'read')
+    rawRow('A', 'path', 'B', 'read')
+    // 前提：B 自己的表有派生行与一行会话行；内存会话 M 的行不在库里
+    expect(rowCount('B')).toBe(4)
+    expect(rowCount('M')).toBe(0)
+    expect(kinds('M')).toEqual(['session:B:read', 'session:C:write'])
+
+    sessionAcl.deleteSession('B')
+    sessionRecords.deleteById('B')
+
+    expect(rowCount('B')).toBe(0)
+    expect(sessionAcl.entries('B')).toEqual([])
+    expect(holdersOf('B')).toEqual([])
+    expect(kinds('A')).toEqual(['path:B:read', 'session:C:read'])
+    expect(kinds('C')).toEqual([])
+    expect(kinds('M')).toEqual(['session:C:write'])
+    expect(sessionAcl.sessionView('M')).toEqual({ read: ['C'], write: ['C'] })
+    expect(holder.warns).toEqual([])
+  })
+
+  it('XS-33 按目标删的语句抛错：deleteSession 不抛、记一条 warn，B 自己的表照样清空', () => {
+    addSession('A')
+    addSession('B')
+    addSession('C')
+    baseDerived('B')
+    sessionAcl.initialize('A')
+    sessionAcl.initialize('B')
+    sessionAcl.grantSession('A', 'B', 'write')
+    sessionAcl.grantSession('B', 'C', 'read')
+    expect(rowCount('B')).toBe(4)
+
+    const prepare = db().prepare.bind(db())
+    const spy = vi.spyOn(db(), 'prepare').mockImplementation((sql: string) => {
+      if (sql.startsWith('DELETE FROM session_acl WHERE kind = ?')) {
+        throw new Error('database is locked')
+      }
+      return prepare(sql)
+    })
+    try {
+      expect(() => sessionAcl.deleteSession('B')).not.toThrow()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(holder.warns).toEqual(['acl forget target failed session=B: database is locked'])
+    expect(rowCount('B')).toBe(0)
+    // 删不掉的那一行只指向一条已不存在的会话（不放出任何权限）：留在 A 的表里
+    expect(holdersOf('B')).toEqual(['A'])
   })
 })

@@ -114,3 +114,75 @@ describe('buildToolSummary — 内置 MCP 工具与退役的 browser 工具', ()
     expect(buildToolSummary(name, { uid: 'e1' })).toBe('click e1')
   })
 })
+
+/**
+ * session 工具卡的折叠摘要 —— 旧会话的历史里还留着 2026-10-20 之前的动作名（`*-sub-session`），
+ * 它们与现在的名字出同一种摘要（只有动作名本身不同）。
+ * XS-63
+ */
+describe('buildToolSummary — session 的旧动作名', () => {
+  const summary = (args: Record<string, unknown>): string | undefined =>
+    buildToolSummary('session', args)
+
+  it('XS-63 answer-sub-session：选项以逗号相连；用自己的话答时取首个非空行', () => {
+    expect(summary({ action: 'answer-sub-session', selections: ['A', 'B'] })).toBe(
+      'answer-sub-session · A, B'
+    )
+    expect(summary({ action: 'answer-sub-session', message: '\n  keep the shim\nmore' })).toBe(
+      'answer-sub-session · keep the shim'
+    )
+  })
+
+  it('XS-63 steer-sub-session：消息首行，超过 48 字截到 47 字加省略号，恰 48 字不截', () => {
+    expect(summary({ action: 'steer-sub-session', message: 'x'.repeat(60) })).toBe(
+      `steer-sub-session · ${'x'.repeat(47)}…`
+    )
+    expect(summary({ action: 'steer-sub-session', message: 'y'.repeat(48) })).toBe(
+      `steer-sub-session · ${'y'.repeat(48)}`
+    )
+    expect(summary({ action: 'steer-sub-session', message: '  use v2\nthen rerun' })).toBe(
+      'steer-sub-session · use v2'
+    )
+  })
+
+  it('XS-63 prompt-sub-session 不显示 message（那是一整段派活）', () => {
+    expect(summary({ action: 'prompt-sub-session', message: 'Refactor the parser' })).toBe(
+      'prompt-sub-session'
+    )
+  })
+
+  it('XS-63 新名 answer-session / steer-session / prompt-session 与旧名逐条同形', () => {
+    expect(summary({ action: 'answer-session', selections: ['A', 'B'] })).toBe(
+      'answer-session · A, B'
+    )
+    expect(summary({ action: 'steer-session', message: 'x'.repeat(60) })).toBe(
+      `steer-session · ${'x'.repeat(47)}…`
+    )
+    expect(summary({ action: 'prompt-session', message: 'Refactor the parser' })).toBe(
+      'prompt-session'
+    )
+
+    const table: Record<string, unknown>[] = [
+      { selections: ['A', 'B'] },
+      { selections: ['A', 3] },
+      { message: '\n  keep the shim\nmore' },
+      { message: 'x'.repeat(60) },
+      { message: 'Refactor the parser' },
+      {}
+    ]
+    for (const [legacy, current] of [
+      ['answer-sub-session', 'answer-session'],
+      ['steer-sub-session', 'steer-session'],
+      ['prompt-sub-session', 'prompt-session']
+    ]) {
+      for (const args of table) {
+        const label = `${legacy} ${JSON.stringify(args)}`
+        const viaCurrent = summary({ ...args, action: current })
+        expect(viaCurrent?.startsWith(current), label).toBe(true)
+        expect(summary({ ...args, action: legacy }), label).toBe(
+          `${legacy}${viaCurrent!.slice(current.length)}`
+        )
+      }
+    }
+  })
+})

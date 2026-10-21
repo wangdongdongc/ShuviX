@@ -7,6 +7,7 @@ import { chatGateway, operationContext, createClientContext } from '../frontend'
 import { isPinned, unpin as unpinPinnedChat } from '../services/pinnedChatService'
 import { forkSession } from '../services/sessionFork'
 import { sessionAcl } from '../services/acl'
+import { listSessionMentions } from '../services/sessionMentions'
 import { isPathAccess } from '@shuvix/chat-protocol/sessionAcl'
 import type { SessionForkParams } from '@shuvix/chat-protocol/sessionFork'
 import type {
@@ -68,8 +69,13 @@ export function registerSessionHandlers(): void {
     })
   )
 
-  /** 会话权限表（派生行先按此刻的设置对账） */
-  defineHandler('session:listAcl', (_ctx, id: string) => sessionAcl.entries(id))
+  /** 输入框 @ 会话的候选（除这一条以外、侧栏看得见的会话） */
+  defineHandler('session:mentionEntries', (_ctx, params: { sessionId: string }) =>
+    listSessionMentions(params.sessionId)
+  )
+
+  /** 会话权限表（派生行先按此刻的设置对账；会话种类的行带上目标会话的标题） */
+  defineHandler('session:listAcl', (_ctx, id: string) => sessionAcl.entriesForDisplay(id))
 
   /** 手动授予一条路径（来源 user） */
   defineHandler('session:grantAcl', (_ctx, params: SessionAclGrantParams) => {

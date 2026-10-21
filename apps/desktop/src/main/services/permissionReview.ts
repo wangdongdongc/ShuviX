@@ -14,6 +14,8 @@
  * echo 打印出来，按开头认就是给注入开门。代价：卡片反馈只活在内存里，重启之后不再出现（少一份输入 =
  * 多问，方向是保守的）。
  *
+ * 别的会话经会话权限表发进顶层会话的消息（有来源记录）同样列作 delegatedTasks，不算人的意思（2026-10-20）。
+ *
  * 子会话里的「用户消息」多半是父 agent 写的：人发的消息取顶层会话；子会话自己的用户消息按**来源记录**分
  * （`SourceDoc`，转写摘要 user 项的 `source`，§19.7，2026-10-17 裁决）—— 有记录的是父会话代发的，列作
  * delegatedTasks（只是声明，不是授权）；没有记录、且在这条对话**第一条有记录的消息之后**的，是人在子会话里亲手
@@ -169,20 +171,33 @@ function humanInputsOf(
  * （§19.5 —— 同样是父 agent 的话，只是声明，不是授权）。
  */
 function delegatedTasksOf(items: readonly TranscriptItem[]): string[] {
-  const tasks: string[] = []
   // 人在子会话里亲手打的不是任务，它们进 userMessages（§19.7）
   const human = childHumanMessages(items)
+  return drivenInputsOf(items, (item) => !human.has(item))
+}
+
+/**
+ * 别的会话写进这条会话的东西（旧 → 新）：`isDelegated` 说算的那些用户消息，以及别的会话代答的 ask。子会话里是
+ * 父 agent 写的任务（与分不清的）；顶层会话里是经会话权限表被授权的别的会话发进来的消息（有来源记录的那些，
+ * 2026-10-20）—— 一样只是「它声称要做什么」，不是人的授权。
+ */
+function drivenInputsOf(
+  items: readonly TranscriptItem[],
+  isDelegated: (item: TranscriptItem) => boolean
+): string[] {
+  const tasks: string[] = []
   for (const item of items) {
     if (item.kind === 'ask' && item.answeredBy) {
+      const by = item.answeredBy.kind === 'session' ? 'another session' : 'the parent session'
       tasks.push(
         clip(
-          `(the parent session answered the agent's question "${item.question}" for the user) ${item.answer}`,
+          `(${by} answered the agent's question "${item.question}" for the user) ${item.answer}`,
           USER_MESSAGE_MAX_CHARS
         )
       )
       continue
     }
-    if (item.kind !== 'user' || item.systemWritten || human.has(item)) continue
+    if (item.kind !== 'user' || item.systemWritten || !isDelegated(item)) continue
     const text = item.text.trim()
     if (text) tasks.push(clip(text, USER_MESSAGE_MAX_CHARS))
   }
@@ -284,6 +299,14 @@ function factsOf(event: PermissionRequestEvent): PermissionRequestPayload['opera
       put('force', object.force)
       put('delete', object.delete)
       break
+    case 'session':
+      // 出厂的 auto-review 不审会话访问（它的 when 排除了这类客体）；用户自己的 hook 审它时看得到这些
+      put('sessionId', object.sessionId)
+      put('title', object.title)
+      put('ownTurn', object.ownTurn)
+      if (event.preview?.kind === 'message')
+        put('message', clip(event.preview.text, DIFF_MAX_CHARS))
+      break
     case 'invocation':
       put('mcpServer', object.mcpServer)
       put('mcpTool', object.mcpTool)
@@ -343,7 +366,11 @@ export async function buildPermissionRequestPayload(
       prompt: decision.prompt?.text ?? ''
     },
     userMessages: humanInputsOf(sessionId, top, topItems, ownItems),
-    delegatedTasks: top === sessionId ? [] : delegatedTasksOf(ownItems),
+    // 顶层会话只算有来源记录的（别的会话发进来的）：没有记录的都是人打的，在 userMessages 里
+    delegatedTasks:
+      top === sessionId
+        ? drivenInputsOf(ownItems, (item) => item.kind === 'user' && !!item.source)
+        : delegatedTasksOf(ownItems),
     recentOperations: recentOperationsOf(sessionId, event.toolCallId)
   }
 }

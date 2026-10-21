@@ -123,6 +123,7 @@ import { _resetAll, getReadTime } from '../../utils/toolUtils/fileTime'
 import type { ToolContext } from '../../services/toolContext'
 import { clearSessionDecisions, getSessionDecisions } from '@shuvix/agent-runtime'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
+import type { AskDiffPreview } from '@shuvix/chat-protocol/types/inputRequest'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -188,7 +189,7 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
     const req = state.requests[0]
     if (req.kind !== 'ask') throw new Error('expected an ask request')
     const details = res.details as { type: 'edit'; diff: string }
-    expect(req.preview?.diff).toBe(details.diff)
+    expect((req.preview as AskDiffPreview | undefined)?.diff).toBe(details.diff)
     // 按 LF 比较，只有一行被标为改动 —— 不是整篇
     expect(details.diff.split('\n').filter((l) => l.startsWith('-'))).toEqual(['-2 b'])
     expect(details.diff.split('\n').filter((l) => l.startsWith('+'))).toEqual(['+2 B'])
@@ -233,7 +234,7 @@ describe('桌面 write/edit — 工作目录内写入的询问接线', () => {
     const req = state.requests[0]
     if (req.kind !== 'ask') throw new Error('expected an ask request')
     const details = res.details as { type: 'edit'; diff: string }
-    expect(req.preview?.diff).toBe(details.diff)
+    expect((req.preview as AskDiffPreview | undefined)?.diff).toBe(details.diff)
     expect(readFileSync(p, 'utf-8')).toBe('alpha\nBETA\ngamma\n')
   })
 
@@ -431,8 +432,8 @@ describe.skipIf(process.platform === 'win32')(
       expect(req.command).toBe(`Write(${real})`)
       expect(req.requestedPath).toBeUndefined()
       expect(req.preview).toMatchObject({ kind: 'diff', path: real, isNewFile: false })
-      expect(req.preview?.diff).toContain('-1 old')
-      expect(req.preview?.diff).toContain('+1 new')
+      expect((req.preview as AskDiffPreview | undefined)?.diff).toContain('-1 old')
+      expect((req.preview as AskDiffPreview | undefined)?.diff).toContain('+1 new')
 
       expect(readFileSync(target, 'utf-8')).toBe('new\n')
       expect(lstatSync(link).isSymbolicLink()).toBe(true)

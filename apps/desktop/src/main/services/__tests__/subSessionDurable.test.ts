@@ -263,8 +263,7 @@ async function transcriptOf(sessionId: string): Promise<string[]> {
 /** 父会话里的子会话通知（steer / 自动续跑的 pi.user，或写入的 shuvix.notice） */
 const noticesIn = (entries: string[]): string[] =>
   entries.filter(
-    (e) =>
-      (e.startsWith('pi.user:') || e.startsWith('shuvix.notice:')) && e.includes('<sub-session')
+    (e) => (e.startsWith('pi.user:') || e.startsWith('shuvix.notice:')) && e.includes('<session')
   )
 
 const userTexts = (entries: string[]): string[] => entries.filter((e) => e.startsWith('pi.user:'))
@@ -320,7 +319,7 @@ async function crashAfterReceipt(options: ProcessOptions = {}): Promise<FauxKit>
   const first = stalled()
   const second = stalled()
   kit.queue(
-    callTool('session', { action: 'prompt-sub-session', sub_session_id: 'C', message: 'do it' }),
+    callTool('session', { action: 'prompt-session', session_id: 'C', message: 'do it' }),
     first.step,
     second.step
   )
@@ -334,9 +333,9 @@ async function crashAfterReceipt(options: ProcessOptions = {}): Promise<FauxKit>
   return newProcess({ sessionTool: true, ...options })
 }
 
-/** P 转写里 session 工具的结果（带 `<sub-session id="C"` 的那几条，不含通知） */
+/** P 转写里 session 工具的结果（带 `<session id="C"` 的那几条，不含通知） */
 const sessionToolResults = (entries: string[]): string[] =>
-  entries.filter((e) => e.includes('<sub-session id="C"') && noticesIn([e]).length === 0)
+  entries.filter((e) => e.includes('<session id="C"') && noticesIn([e]).length === 0)
 
 // ─── S+T：继续的级联 ────────────────────────────────────────────────────────
 
@@ -358,7 +357,7 @@ describe('S+T continue cascade', () => {
     const p = await transcriptOf('P')
     const results = sessionToolResults(p)
     expect(results).toHaveLength(1)
-    expect(results[0]).toContain('<sub-session id="C" status="running"/>')
+    expect(results[0]).toContain('<session id="C" status="running"/>')
     expect(results[0]).toContain('Started in the background')
     expect(results[0]).not.toMatch(/partially/i)
     expect(results[0]).not.toContain('<reply>')
@@ -384,7 +383,7 @@ describe('S+T continue cascade', () => {
     expect(await transcriptOf('C')).toEqual(['pi.user:do it', 'pi.assistant:C-done'])
     expect(aborts).not.toContain('C')
     await waitFor(async () => noticesIn(await transcriptOf('P')).length === 1, 10000, 'notice in P')
-    expect(noticesIn(await transcriptOf('P'))[0]).toMatch(/^shuvix\.notice:<sub-session id="C"/)
+    expect(noticesIn(await transcriptOf('P'))[0]).toMatch(/^shuvix\.notice:<session id="C"/)
     expect(deliver.mock.calls.map((call) => call[3])).toEqual([{ wake: false }])
     await waitFor(() => settingsOf('C').runState === 'idle', 5000, 'C idle')
     await waitFor(
@@ -407,11 +406,11 @@ describe('S+T continue cascade', () => {
     kit.queue(
       callTool(
         'session',
-        { action: 'prompt-sub-session', sub_session_id: 'C', message: 'bg task' },
+        { action: 'prompt-session', session_id: 'C', message: 'bg task' },
         'call-prompt'
       ),
       stall.step,
-      callTool('session', { action: 'wait-for-sub-sessions' }, 'call-wait')
+      callTool('session', { action: 'wait-for-sessions' }, 'call-wait')
     )
     void chatGateway.prompt('P', 'start')
     await withTimeout(stall.reached, 10000, 'C request')
@@ -426,9 +425,9 @@ describe('S+T continue cascade', () => {
 
     expect(await transcriptOf('C')).toEqual(['pi.user:bg task', 'pi.assistant:C-done'])
     const p = await transcriptOf('P')
-    expect(
-      p.some((e) => e.includes('<sub-sessions status="settled">') && e.includes('C-done'))
-    ).toBe(true)
+    expect(p.some((e) => e.includes('<sessions status="settled">') && e.includes('C-done'))).toBe(
+      true
+    )
     await waitFor(
       () => getSessionHost().get('C')?.drivenRun === undefined,
       5000,
@@ -648,7 +647,7 @@ describe('S+T interrupted parent is stopped: no cascade (§20, BG-31)', () => {
     expect(host.get('C')!.isInterrupted()).toBe(true)
     expect(await withTimeout(child!.continue(), 15000, 'C.continue')).toEqual({})
     await waitFor(async () => noticesIn(await transcriptOf('P')).length === 1, 10000, 'notice in P')
-    expect(noticesIn(await transcriptOf('P'))[0]).toMatch(/^shuvix\.notice:<sub-session id="C"/)
+    expect(noticesIn(await transcriptOf('P'))[0]).toMatch(/^shuvix\.notice:<session id="C"/)
     await waitFor(
       () => getSessionHost().get('C')?.drivenRun === undefined,
       5000,
@@ -826,7 +825,7 @@ describe('SW sub-session completion wakes the parent only for drives this proces
     expect(parent.runState).toBe('idle')
     const p = await transcriptOf('P')
     expect(p.slice(0, 2)).toEqual(['pi.user:hi', 'pi.assistant:a0'])
-    expect(p.slice(2)).toEqual([expect.stringMatching(/^shuvix\.notice:<sub-session id="C"/)])
+    expect(p.slice(2)).toEqual([expect.stringMatching(/^shuvix\.notice:<session id="C"/)])
     // P 一次都没被叫醒：只有 P 的 hi 与 C 的那一轮请求过模型
     expect(kit.callCount).toBe(2)
 
@@ -834,7 +833,7 @@ describe('SW sub-session completion wakes the parent only for drives this proces
     kit.queue(answer('seen'))
     expect(await chatGateway.prompt('P', 'next')).toEqual({})
     const lastRequest = JSON.stringify(kit.requests.at(-1)!.messages)
-    expect(lastRequest).toContain('sub-session id=\\"C\\"')
+    expect(lastRequest).toContain('session id=\\"C\\"')
     deliver.mockRestore()
     submit.mockRestore()
   }, 30000)
@@ -852,7 +851,7 @@ describe('SW sub-session completion wakes the parent only for drives this proces
     expect(deliver.mock.calls[0]![3]).toEqual({ wake: true })
     const notices = noticesIn(await transcriptOf('P'))
     expect(notices).toHaveLength(1)
-    expect(notices[0]).toMatch(/^pi\.user:<sub-session id="C"/)
+    expect(notices[0]).toMatch(/^pi\.user:<session id="C"/)
     expect(kit.callCount).toBe(3)
     deliver.mockRestore()
   }, 30000)
@@ -884,7 +883,7 @@ describe('SW sub-session completion wakes the parent only for drives this proces
     )
     expect(deliver.mock.calls.map((call) => call[3])).toEqual([{ wake: true }])
     expect(noticesIn(await transcriptOf('P'))).toEqual([
-      expect.stringMatching(/^pi\.user:<sub-session id="C"/)
+      expect.stringMatching(/^pi\.user:<session id="C"/)
     ])
     deliver.mockRestore()
   }, 30000)

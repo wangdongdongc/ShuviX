@@ -236,7 +236,7 @@ sources:
 
 ### `mentions`
 
-- read: `knowledge:mentionEntries`
+- read: `knowledge:mentionEntries`, `session:mentionEntries`
 
 ### `network`
 

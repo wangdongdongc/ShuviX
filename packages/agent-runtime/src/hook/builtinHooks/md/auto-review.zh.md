@@ -8,6 +8,7 @@ description: 审批卡片弹出之前，由权限审查员替你作答 —— �
 shuvix-hook-agent: permission-reviewer
 shuvix-hook-on:
   - trigger: permission.request
+    when: event.operation.objectType != 'session'
 ---
 
 Review the operation in the event below and answer with `next`: allow ordinary work the user asked for, ask the user about the rest, deny only what is clearly harmful.

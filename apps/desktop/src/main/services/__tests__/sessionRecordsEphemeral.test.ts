@@ -44,6 +44,8 @@
  *   L11 持久会话的列表查询（findAll / 按项目 / 按笔记本路径 / findChildren）读回各自存下的 storageKind
  *   L12 findChildren(内存父) 回的子会话带各自的 storageKind（不给的读成 v3）
  *   L13 [白盒] 库里一个本版本不认识的值（durable-sqlite-9）原样读回，不改写、不兜底
+ *
+ *   XS-59 drivingSourceOf：driver 是 target 的父会话 → parent-session，否则 / 行不在 → session；title 非空才带（两边各跑一遍）
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -641,5 +643,66 @@ describe('A-L 内存会话独有的规矩', () => {
     expect(sessionRecords.findById('keep')).toEqual(session('keep'))
     // 已删记忆清掉后，那个 id 又能用了
     expect(() => sessionRecords.insert(session('gone'), EPH)).not.toThrow()
+  })
+})
+
+// ─── 驱动方的来源引用（2026-10-20：session 工具能驱动任意会话） ─────────────────────────
+
+/**
+ * XS-59 `drivingSourceOf(target, driver, title?)`：driver 正是 target 的父会话 → `parent-session`；否则（target 是顶层
+ * 会话、是别人的子会话、或者行已经不在）→ `session`（经会话权限表被授权的别的会话）。title 只在非空时带上 ——
+ * 不留 `title: undefined` 这种键（它要落进 SourceDoc / 答题方）。两边（落库 / 内存会话）同一个答案。
+ */
+describe.each([
+  ['persisted', undefined],
+  ['ephemeral', { ephemeral: true }]
+] as const)('XS-59 drivingSourceOf（%s）', (_side, opt) => {
+  beforeEach(() => {
+    sessionRecords.insert(session('P'), opt)
+    sessionRecords.insert(session('child', { parentId: 'P' }), opt)
+    sessionRecords.insert(session('top'), opt)
+    sessionRecords.insert(session('stranger', { parentId: 'Q' }), opt)
+  })
+
+  it('XS-59 driver 是 target 的父会话 → parent-session；带非空 title 才有 title 键', () => {
+    expect(sessionRecords.drivingSourceOf('child', 'P')).toStrictEqual({
+      kind: 'parent-session',
+      sessionId: 'P'
+    })
+    expect(sessionRecords.drivingSourceOf('child', 'P', '重构 parser')).toStrictEqual({
+      kind: 'parent-session',
+      sessionId: 'P',
+      title: '重构 parser'
+    })
+    expect(sessionRecords.drivingSourceOf('child', 'P', '')).toStrictEqual({
+      kind: 'parent-session',
+      sessionId: 'P'
+    })
+  })
+
+  it.each([
+    ['target 是顶层会话', 'top'],
+    ['target 是别人的子会话', 'stranger'],
+    ['target 的行不在', 'ghost']
+  ] as const)('XS-59 %s → session', (_label, target) => {
+    expect(sessionRecords.drivingSourceOf(target, 'P')).toStrictEqual({
+      kind: 'session',
+      sessionId: 'P'
+    })
+    expect(sessionRecords.drivingSourceOf(target, 'P', 'Driver')).toStrictEqual({
+      kind: 'session',
+      sessionId: 'P',
+      title: 'Driver'
+    })
+    expect(sessionRecords.drivingSourceOf(target, 'P', '')).toStrictEqual({
+      kind: 'session',
+      sessionId: 'P'
+    })
+  })
+
+  it('XS-59 父会话自己的父不算：孙辈关系不是 parent-session（只看 target 的直接 parentId）', () => {
+    sessionRecords.insert(session('grandchild', { parentId: 'child' }), opt)
+    expect(sessionRecords.drivingSourceOf('grandchild', 'child').kind).toBe('parent-session')
+    expect(sessionRecords.drivingSourceOf('grandchild', 'P').kind).toBe('session')
   })
 })

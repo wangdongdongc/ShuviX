@@ -264,6 +264,7 @@ export {
   type CommandRiskCategory,
   type GitObjectInput,
   type UrlObjectInput,
+  type SessionObjectInput,
   urlObjectOf,
   type SecurityRule,
   type SecurityDecision,

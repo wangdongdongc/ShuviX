@@ -94,10 +94,23 @@ export type AtMentionRef =
       bundlePath: string
       title: string
     }
+  | {
+      kind: 'session'
+      /** 那条会话的 id（智能体经 `session` 工具按它找到那条会话） */
+      sessionId: string
+      /** 选中那一刻的标题（胶囊展示名；之后改了标题也不回写） */
+      title: string
+    }
 
 /** 实体引用的稳定标识（同一目标在一次发送内只构造一个 token） */
 export function mentionRefId(ref: AtMentionRef): string {
-  return ref.kind === 'file' ? ref.rel : `knowledge:${ref.entryPath}`
+  if (ref.kind === 'file') return ref.rel
+  return ref.kind === 'knowledge' ? `knowledge:${ref.entryPath}` : `session:${ref.sessionId}`
+}
+
+/** 会话引用交给智能体的那一段（`session` 工具的说明照这个形状教它认 id） */
+export function sessionMentionPayload(sessionId: string, title: string): string {
+  return `[session: id ${sessionId} — "${title.replace(/[\r\n]+/g, ' ').replace(/"/g, "'")}"]`
 }
 
 /**
@@ -105,6 +118,8 @@ export function mentionRefId(ref: AtMentionRef): string {
  * - 文件：displayText = 文件名（与存量消息逐字一致，零迁移），payload 告知相对路径便于读取；
  * - 知识库条目：displayText = `knowledge:<标题>`（可能带调用方加的消歧后缀），payload 是
  *   指针（base + bundle 相对路径），agent 用 knowledge 工具自读。
+ * - 会话：displayText = `session:<标题>`，payload 带上它的 id 与标题，agent 用 `session` 工具按 id 找它
+ *   （与它交互之前照样要用户批准 —— @ 不是授权）。
  *
  * 与 cmd 类型不同：at token 由 resolveTokensForAgent 就地替换标记、保留周围文本，
  * 故一条消息可含多个 at 引用 + 普通文字。
@@ -119,6 +134,15 @@ export function buildAtToken(ref: AtMentionRef, displayText?: string): InlineTok
       name: ref.base
     }
   }
+  if (ref.kind === 'session') {
+    return {
+      type: 'at',
+      id: `session:${ref.sessionId}`,
+      displayText: displayText ?? `session:${ref.title}`,
+      payload: sessionMentionPayload(ref.sessionId, ref.title),
+      name: ref.title
+    }
+  }
   return {
     type: 'at',
     id: `knowledge:${ref.entryPath}`,
@@ -129,7 +153,7 @@ export function buildAtToken(ref: AtMentionRef, displayText?: string): InlineTok
 }
 
 /**
- * 从持久化的 at token 反推实体引用（草稿回退时重建引用登记表）。知识库 token 以 payload 前缀
+ * 从持久化的 at token 反推实体引用（草稿回退时重建引用登记表）。知识库与会话 token 以 payload 前缀
  * 判别（工作区文件相对路径理论上也可含 `knowledge:` 前缀，靠 id 单判会误判）；其余一律按
  * 存量文件 token 处理（id = 相对路径、displayText = 文件名），与改制前逐字一致。
  */
@@ -145,6 +169,13 @@ export function atTokenRef(token: InlineToken): AtMentionRef {
         bundlePath: parsed.bundlePath,
         title: token.name ?? token.displayText
       }
+    }
+  }
+  if (token.payload.startsWith('[session: id ') && token.id.startsWith('session:')) {
+    return {
+      kind: 'session',
+      sessionId: token.id.slice('session:'.length),
+      title: token.name ?? token.displayText
     }
   }
   return { kind: 'file', rel: token.id, base: token.displayText }

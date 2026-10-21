@@ -11,7 +11,9 @@ import {
   rebuildDraftFromContent,
   resolveTokensForAgent,
   resolveTokensForCopy,
-  segmentContent
+  segmentContent,
+  sessionMentionPayload,
+  type AtMentionRef
 } from './inlineTokens'
 
 const atToken: InlineToken = {
@@ -265,5 +267,101 @@ describe('rebuildDraftFromContent（回退草稿重建）', () => {
     expect(r.pasteTokens).toHaveLength(1)
     expect(r.text).toBe('[粘贴文本 #1 · 3 行] x [粘贴文本 #1 · 3 行] ')
     expect(rebuildDraftFromContent('plain text').text).toBe('plain text')
+  })
+})
+
+/**
+ * `@` 会话引用（2026-10-20）：输入框把另一条会话交给智能体 —— 胶囊显示 `session:<标题>`，交给智能体的是
+ * `[session: id <id> — "<标题>"]`（`session` 工具照这个形状认 id）。
+ *   XS-03 buildAtToken 的会话分支、displayText 覆盖、mentionRefId、resolveTokensForAgent 就地替换
+ *   XS-04 sessionMentionPayload：标题里的换行压成一个空格、双引号换成单引号；空标题照样成形
+ *   XS-05 atTokenRef 往返：会话 token → session ref（标题取 name，缺了退到 displayText）；payload 与 id 前缀
+ *         缺一个都按存量文件 token 处理
+ */
+describe('@ 会话引用（session ref）', () => {
+  const SESSION_REF: AtMentionRef = { kind: 'session', sessionId: 'S1', title: 'Fix tests' }
+  const SESSION_TOKEN: InlineToken = {
+    type: 'at',
+    id: 'session:S1',
+    displayText: 'session:Fix tests',
+    payload: '[session: id S1 — "Fix tests"]',
+    name: 'Fix tests'
+  }
+
+  it('XS-03 buildAtToken：id = session:<id>、displayText = session:<标题>、payload 带 id 与标题、name = 标题', () => {
+    expect(buildAtToken(SESSION_REF)).toStrictEqual(SESSION_TOKEN)
+  })
+
+  it('XS-03 displayText 覆盖（消歧后缀）随 token 存活，其余字段不变', () => {
+    expect(buildAtToken(SESSION_REF, 'session:Fix tests (proj)')).toStrictEqual({
+      ...SESSION_TOKEN,
+      displayText: 'session:Fix tests (proj)'
+    })
+  })
+
+  it('XS-03 mentionRefId = session:<id>：与同名的文件 / 知识条目不撞', () => {
+    expect(mentionRefId(SESSION_REF)).toBe('session:S1')
+    // 标题不进标识：同一条会话改了标题仍是同一个实体
+    expect(mentionRefId({ kind: 'session', sessionId: 'S1', title: 'other' })).toBe('session:S1')
+    expect(mentionRefId({ kind: 'file', rel: 'S1', base: 'S1' })).toBe('S1')
+  })
+
+  it('XS-03 resolveTokensForAgent：会话 token 就地替换成 payload，周围文本与别的 at token 原样', () => {
+    const content = `ask ${makeTokenMarker('s0')} about ${makeTokenMarker('a0')} please`
+    expect(resolveTokensForAgent(content, { s0: SESSION_TOKEN, a0: atToken })).toBe(
+      'ask [session: id S1 — "Fix tests"] about [workspace file: src/foo.ts] please'
+    )
+  })
+
+  it('XS-04 sessionMentionPayload：连续的 \\r / \\n 压成一个空格、双引号换成单引号；空标题 → 空引号', () => {
+    expect(sessionMentionPayload('S1', 'a\r\n\nb "q"')).toBe(`[session: id S1 — "a b 'q'"]`)
+    expect(sessionMentionPayload('S1', '')).toBe('[session: id S1 — ""]')
+    // buildAtToken 用同一个函数拼 payload；胶囊名 / 展示名保留原标题
+    const token = buildAtToken({ kind: 'session', sessionId: 'S1', title: 'a\r\n\nb "q"' })
+    expect(token.payload).toBe(`[session: id S1 — "a b 'q'"]`)
+    expect(token.name).toBe('a\r\n\nb "q"')
+    expect(token.displayText).toBe('session:a\r\n\nb "q"')
+  })
+
+  it('XS-05 atTokenRef 往返：会话 token → session ref；反推的 ref 重建出同一个 token', () => {
+    const back = atTokenRef(SESSION_TOKEN)
+    expect(back).toStrictEqual(SESSION_REF)
+    expect(buildAtToken(back, SESSION_TOKEN.displayText)).toStrictEqual(SESSION_TOKEN)
+  })
+
+  it('XS-05 标题取 name；token 没有 name 时退到 displayText', () => {
+    expect(atTokenRef({ ...SESSION_TOKEN, name: 'Renamed' })).toStrictEqual({
+      kind: 'session',
+      sessionId: 'S1',
+      title: 'Renamed'
+    })
+    const { name: _name, ...withoutName } = SESSION_TOKEN
+    expect(atTokenRef(withoutName)).toStrictEqual({
+      kind: 'session',
+      sessionId: 'S1',
+      title: 'session:Fix tests'
+    })
+  })
+
+  it('XS-05 id 带 session: 前缀、payload 不是会话指针 → 文件 ref；payload 是会话指针、id 没有 session: 前缀 → 文件 ref', () => {
+    const fileLike: InlineToken = {
+      type: 'at',
+      id: 'session:x',
+      displayText: 'session:x',
+      payload: '[workspace file: session:x]'
+    }
+    expect(atTokenRef(fileLike)).toStrictEqual({
+      kind: 'file',
+      rel: 'session:x',
+      base: 'session:x'
+    })
+    const noPrefix: InlineToken = {
+      type: 'at',
+      id: 'S1',
+      displayText: 'Fix tests',
+      payload: '[session: id S1 — "Fix tests"]',
+      name: 'Fix tests'
+    }
+    expect(atTokenRef(noPrefix)).toStrictEqual({ kind: 'file', rel: 'S1', base: 'Fix tests' })
   })
 })

@@ -2721,6 +2721,176 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 会话访问（session 工具与一条不是自己子会话的会话交互，2026-10-20）的两块界面：
+//   - 询问卡片上的会话块（chat-ui AskForm 的 SessionPreview，`[data-ask-session=<目标 id>]`）与
+//     「允许并记住」（`[data-remember-session]`）—— 卡片在输入卡片顶上的待处理面板（rounded-t-2xl）里；
+//   - 会话设置弹窗里的「会话访问」卡（app-shell SessionAclSection，`[data-session-acl-sessions=<会话 id>]`，
+//     一行一个 `[data-acl-kind="session"][data-acl-target=<目标 id>]`，访问方式读 `data-acl-access`）。
+//     只在弹窗面板里找：空会话的聊天区会内联渲染同一张面板。
+
+/** 询问卡片上会话块的快照 */
+export interface SessionAskShot {
+  /** 卡片标题（「查看 / 对话另一条会话」，随界面语言变） */
+  title: string
+  /** `data-ask-session` 的值（目标会话 id） */
+  sessionId: string
+  /** 会话块第一行：目标会话的标题（没有标题时是「未命名会话」） */
+  targetTitle: string
+  /** 会话块第二行：目标会话的 id */
+  targetId: string
+  /** 「将发送的消息」标签与 `<pre>` 里的原文；查看类询问没有这一块 → null */
+  message: { label: string; text: string } | null
+  /** 操作栏左端命中策略的角标文字（策略显示名；没有角标 → ''） */
+  policy: string
+  /** 操作栏右侧动作按钮的文字（DOM 序，不含左端的策略角标） */
+  buttons: string[]
+  /** 有没有会话类的「允许并记住」（`data-remember-session`） */
+  rememberSession: boolean
+  /** 有没有路径类的记住选项（`data-remember-options` / `data-remember-folder`）—— 会话卡上不该有 */
+  pathRemember: boolean
+}
+
+export interface SessionAskPane {
+  /** 待处理面板里那张会话询问卡；没有挂着的会话询问时为 null */
+  shot(): Promise<SessionAskShot | null>
+  /** 点「允许并记住」（会话类）；卡片不在或没有这颗按钮 → 抛 */
+  rememberSession(): Promise<void>
+}
+
+export function sessionAskPane(main: CdpClient): SessionAskPane {
+  const BOX = `document.querySelector('.rounded-t-2xl [data-ask-session]')`
+  return {
+    shot: () =>
+      main.eval<SessionAskShot | null>(`(() => {
+        const box = ${BOX}
+        if (!box) return null
+        const card = box.closest('.space-y-2')
+        const head = box.firstElementChild
+        const pre = box.querySelector('pre')
+        const label = pre?.previousElementSibling
+        // 操作栏 = 卡片里唯一有直接子按钮的那一行（标题行里的 span.flex-1 是说明，不是它）；占位 span.flex-1
+        // 左边是命中策略的角标，右边是动作
+        const bar = [...(card?.children ?? [])].find((c) => c.querySelector(':scope > button'))
+        const items = [...(bar?.children ?? [])]
+        const spacer = items.findIndex((c) => c.tagName === 'SPAN' && c.classList.contains('flex-1'))
+        const textOf = (els) => els.map((el) => (el.textContent ?? '').trim())
+        return {
+          title: (card?.querySelector('p.font-medium.whitespace-nowrap')?.textContent ?? '').trim(),
+          sessionId: box.getAttribute('data-ask-session') ?? '',
+          targetTitle: (head?.children[0]?.textContent ?? '').trim(),
+          targetId: (head?.children[1]?.textContent ?? '').trim(),
+          message: pre ? { label: (label?.textContent ?? '').trim(), text: pre.textContent ?? '' } : null,
+          policy: textOf(items.slice(0, Math.max(spacer, 0))).join(' '),
+          buttons: textOf(
+            items.slice(spacer + 1).flatMap((el) => (el.tagName === 'BUTTON' ? [el] : [...el.querySelectorAll('button')]))
+          ),
+          rememberSession: !!card?.querySelector('[data-remember-session]'),
+          pathRemember: !!card?.querySelector('[data-remember-options], [data-remember-folder]')
+        }
+      })()`),
+    rememberSession: async () => {
+      const ok = await main.eval<boolean>(`(() => {
+        const btn = ${BOX}?.closest('.space-y-2')?.querySelector('[data-remember-session]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error('session ask card: no "Allow and remember" button')
+    }
+  }
+}
+
+/** 「会话访问」卡里的一行 */
+export interface SessionAccessRowShot {
+  /** 行 id（`data-acl-entry`） */
+  entryId: string
+  /** 目标会话 id（`data-acl-target`） */
+  target: string
+  /** 第一行文字：目标会话此刻的标题（没有 → 「未命名会话」） */
+  title: string
+  /** 第二行文字：目标会话 id */
+  idText: string
+  /** `data-acl-access`：read = 查看，write = 对话 */
+  access: string
+  /** 分段控件里选中的那一颗的文字（「查看」/「对话」，随界面语言变） */
+  selectedLabel: string
+}
+
+export interface SessionAccessPane {
+  /** 弹窗里有没有「会话访问」卡（没有会话种类的行就不出现） */
+  present(sessionId: string): Promise<boolean>
+  /** 那张卡的标题（SettingsSection 的标题，随界面语言变）；卡不在 → '' */
+  sectionTitle(sessionId: string): Promise<string>
+  /** 卡里的行（DOM 序）；卡不在 → [] */
+  rows(sessionId: string): Promise<SessionAccessRowShot[]>
+  /** 点某一行分段控件的「查看」（read）/「对话」（write）—— 按位置点（第一颗 = read），不认文案 */
+  setAccess(sessionId: string, target: string, access: 'read' | 'write'): Promise<void>
+  /** 点某一行的删除 */
+  remove(sessionId: string, target: string): Promise<void>
+}
+
+export function sessionAccessPane(main: CdpClient): SessionAccessPane {
+  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
+  // 属性值带引号：uuid 可以数字打头，不带引号的属性选择器会抛
+  const CARD = (sid: string): string =>
+    `${PANEL}?.querySelector(${JSON.stringify(`[data-session-acl-sessions="${sid}"]`)})`
+  const ROW = (sid: string, target: string): string =>
+    `[...(${CARD(sid)}?.querySelectorAll('[data-acl-kind="session"]') ?? [])].find(
+      (r) => r.getAttribute('data-acl-target') === ${JSON.stringify(target)})`
+  const clickIn = async (
+    sid: string,
+    target: string,
+    pick: string,
+    what: string
+  ): Promise<void> => {
+    const ok = await main.eval<boolean>(`(() => {
+      const row = ${ROW(sid, target)}
+      const btn = row ? ${pick} : null
+      if (!btn) return false
+      btn.click()
+      return true
+    })()`)
+    if (!ok) throw new Error(`session access row ${target}: no ${what}`)
+  }
+  return {
+    present: (sid) => main.eval<boolean>(`!!${CARD(sid)}`),
+    // SettingsSection：<section> 里标题行的 <h3>
+    sectionTitle: (sid) =>
+      main.eval<string>(
+        `(${CARD(sid)}?.closest('section')?.querySelector('h3')?.textContent ?? '').trim()`
+      ),
+    rows: (sid) =>
+      main.eval<SessionAccessRowShot[]>(
+        `[...(${CARD(sid)}?.querySelectorAll('[data-acl-kind="session"]') ?? [])].map((r) => {
+          // 行首一块 = 图标 + 两行文字（标题 / id）的那个 div
+          const text = r.firstElementChild?.querySelector(':scope > div')
+          return {
+            entryId: r.getAttribute('data-acl-entry') ?? '',
+            target: r.getAttribute('data-acl-target') ?? '',
+            title: (text?.children[0]?.textContent ?? '').trim(),
+            idText: (text?.children[1]?.textContent ?? '').trim(),
+            access: r.getAttribute('data-acl-access') ?? '',
+            selectedLabel: (
+              [...r.querySelectorAll('.inline-flex button')].find((b) =>
+                b.className.includes('bg-bg-primary')
+              )?.textContent ?? ''
+            ).trim()
+          }
+        })`
+      ),
+    setAccess: (sid, target, access) =>
+      clickIn(
+        sid,
+        target,
+        `row.querySelectorAll('.inline-flex button')[${access === 'read' ? 0 : 1}]`,
+        `${access} segment`
+      ),
+    remove: (sid, target) =>
+      clickIn(sid, target, `row.querySelector('[data-acl-remove]')`, 'remove button')
+  }
+}
+
 export interface ConfirmSnapshot {
   open: boolean
   title: string
@@ -9528,6 +9698,8 @@ export interface TaskRowShot {
   dot: string
   /** 任务 id（`data-task-id`，即发起它的那次调用的幂等键） */
   id: string
+  /** 标题下面那一行（「类别 · 状态 · 时长」，如「Session · Running · 3s」；随界面语言变） */
+  meta: string
 }
 
 export interface TasksPanelPane {
@@ -9585,7 +9757,8 @@ export function tasksPanelPane(main: CdpClient): TasksPanelPane {
           status: r.getAttribute('data-task-status') ?? '',
           title: r.querySelector('.truncate')?.textContent ?? '',
           dot: r.querySelector('[data-task-dot]')?.getAttribute('data-task-dot') ?? '',
-          id: r.getAttribute('data-task-id') ?? ''
+          id: r.getAttribute('data-task-id') ?? '',
+          meta: (r.querySelector('.truncate')?.nextElementSibling?.textContent ?? '').trim()
         }))`
       ),
     hasAgentRow: (profile) => main.eval<boolean>(`!!${AGENT_ROW(profile)}`),

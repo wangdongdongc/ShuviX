@@ -8,6 +8,7 @@
  *   T-*  走字：运行中每秒、只剩已完成的半分钟，换挡时先补一拍
  *   V-*  揭示：独占展开、折在线下的整组展开、header 折起的组打开、挂载前发出的请求挂载时补处理一次、只滚面板自己
  *   A-*  锚点：data-task-row / -status / -id、`.truncate` 是标题、展开互斥、子会话行只有「打开」、停止不展开
+ *   XS-69 驱动别的会话（subject.other）的那一轮读「Session · …」，自己的子会话照旧「Sub-session · …」；「打开」去 childSessionId
  *
  * 宿主面（`getHostApi()` 与 BashDetail 读日志的 `getSessionChannelApi()`）都落到同一个 `setChatApi` 注入的桩上。
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），一律 createElement。
@@ -122,6 +123,21 @@ function sub(
     ...base(taskId, startedAt, endedAt, status),
     kind: 'sub-session',
     subject: { kind: 'sub-session', childSessionId }
+  }
+}
+
+/** 驱动的不是自己的子会话，而是经会话权限表被授权的别的会话（subject.other） */
+function other(
+  taskId: string,
+  childSessionId: string,
+  startedAt: number,
+  endedAt: number | null = null,
+  status?: TaskStatus
+): TaskInfo {
+  return {
+    ...base(taskId, startedAt, endedAt, status),
+    kind: 'sub-session',
+    subject: { kind: 'sub-session', childSessionId, other: true }
   }
 }
 
@@ -1012,6 +1028,59 @@ describe('A anchors and interaction contracts', () => {
     click(rowOf('r1')!.querySelector('button[title="Stop task"]')!)
     expect(bgTaskApi.stop).toHaveBeenCalledTimes(1)
     expect(bgTaskApi.stop).toHaveBeenCalledWith({ toolCallId: 'r1' })
+    expect(expandedIds()).toEqual([])
+  })
+})
+
+// ── 驱动别的会话 ──────────────────────────────────────────────────────────
+
+/**
+ * XS-69 subject.other 的行（`session` 工具驱动一条经会话权限表授权的别的会话）：类别读「Session」，
+ * 自己的子会话照旧「Sub-session」[guard]；行锚点照旧是 sub-session；「打开」去的是 childSessionId
+ */
+describe('XS-69 a task driving another session', () => {
+  it('XS-69 running: "Session · Running · …"; an own sub-session still reads "Sub-session · …" [guard]', () => {
+    upsert(other('os1', 'target-1', at(-65)), sub('ss1', 'c1', at(-30)))
+    render()
+    expect(statusText('os1')).toBe('Session · Running · 1m05s')
+    expect(statusText('os1')).toMatch(/^Session · /)
+    expect(statusText('os1')).toBe(
+      `${en.panel.tasksKindSession} · ${en.panel.tasksStatusRunning} · 1m05s`
+    )
+    expect(statusText('ss1')).toMatch(/^Sub-session · Running · \S+$/)
+    expect(statusText('ss1')).not.toMatch(/^Session · /)
+    // 锚点不变：两种都是 sub-session 行
+    expect(rowOf('os1')!.getAttribute('data-task-row')).toBe('sub-session')
+    expect(rowOf('ss1')!.getAttribute('data-task-row')).toBe('sub-session')
+  })
+
+  it('XS-69 blocked and finished rows keep the "Session" kind', () => {
+    upsert(
+      other('os1', 'target-1', at(-30)),
+      other('os2', 'target-2', at(-200), at(-185), 'done'),
+      sub('ss2', 'c2', at(-200), at(-190), 'done')
+    )
+    setChat({ sessionAskCounts: { 'target-1': 1 } })
+    render()
+    expect(statusText('os1')).toMatch(/^Session · Waiting for you · \S+$/)
+    expect(dotOf('os1')).toBe('blocked')
+    expect(statusText('os2')).toBe('Session · Ended 3m ago · 15s')
+    expect(statusText('ss2')).toBe('Sub-session · Ended 3m ago · 10s')
+  })
+
+  it('XS-69 "Open" goes to the driven session (childSessionId); the row does not expand', () => {
+    upsert(other('os1', 'target-1', at(-30)), other('os2', 'target-2', at(-100), at(-50)))
+    render()
+    expect(titleRow('os1').classList.contains('cursor-pointer')).toBe(false)
+    toggleRow('os1')
+    expect(expandedIds()).toEqual([])
+
+    const open = rowOf('os1')!.querySelector<HTMLElement>('[data-task-open]')!
+    expect(open.textContent).toBe(en.panel.tasksOpen)
+    click(open)
+    expect(useChatStore.getState().activeSessionId).toBe('target-1')
+    click(rowOf('os2')!.querySelector('[data-task-open]')!)
+    expect(useChatStore.getState().activeSessionId).toBe('target-2')
     expect(expandedIds()).toEqual([])
   })
 })

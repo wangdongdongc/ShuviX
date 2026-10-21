@@ -3,12 +3,13 @@
  * enforce 的 action/displayPath 转发、禁缓存红线（权限表 / 授权变化即生效；一次评估只取一次 getVars，
  * lets 与 match 共用 —— CV-3）、
  * L1 全工具门的 allow 即非事件、路径客体经 provider.realPath 换成真实去处（CT-R 系列）、
- * 询问点的自动审查经门面走到接缝（CT-RV / CT-SG / CT-UR 系列）。
+ * 询问点的自动审查经门面走到接缝（CT-RV / CT-SG / CT-UR 系列）、
+ * enforceSession（`session` 工具与一条别的会话交互，XS-19）。
  */
 import { describe, it, expect, afterEach, vi, type Mock } from 'vitest'
 import { createSecurityContext } from '../context'
 import { clearSessionDecisions, getSessionDecisions } from '../decisionLog'
-import { clearReviewState } from '../reviewState'
+import { clearReviewState, humanFeedbackOf } from '../reviewState'
 import type {
   AskInputRequest,
   InputRequest,
@@ -25,6 +26,7 @@ import type {
   SecurityDecisionRecord,
   SecurityHostProvider,
   SecurityObject,
+  SessionObjectInput,
   UrlObjectInput,
   UserPolicyFile
 } from '../types'
@@ -5054,5 +5056,188 @@ describe('createSecurityContext — 命令风险分类（classifyCommand → obj
         expect(probe.warn).not.toHaveBeenCalled()
       }
     )
+  })
+})
+
+// ─── enforceSession（会话交互守卫）────────────────────────────────────────
+//
+// XS-19 门面交给策略的客体恰是 {type:'session', sessionId, title, ownTurn}（入参多出来的键不进客体，type 也
+// 改不了）；tool.name / tool.operation 取自 opts；「其它」反馈即使传了 onOther:'return' 也抛（返回 void 的门），
+// 反馈照样记进 humanFeedbackOf；用户策略能读 object.sessionId / title / ownTurn 与 tool.operation，零告警。
+
+describe('createSecurityContext — enforceSession（XS-19）', () => {
+  type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+
+  const usedSids = new Set<string>()
+  let seq = 0
+  afterEach(() => {
+    for (const sid of usedSids) {
+      clearReviewState(sid)
+      clearSessionDecisions(sid)
+    }
+    usedSids.clear()
+  })
+
+  const TARGET: SessionObjectInput = { sessionId: 'X', title: 'T', ownTurn: false }
+  const READ_OPTS = { toolCallId: 'tc-s', toolName: 'session', operation: 'read-session' }
+  const PROMPT_OPTS = { toolCallId: 'tc-s', toolName: 'session', operation: 'prompt-session' }
+
+  /** 本条用例自己的会话；会话表交了（空表或给定的行），审查接缝回 null（照旧问人），询问通道固定应答 */
+  function sessionContext(
+    opts: {
+      response?: InputResponse
+      policies?: ParsedPolicyFile[]
+      sessionRead?: string[]
+      sessionWrite?: string[]
+    } = {}
+  ): {
+    ctx: SecurityContext
+    sid: string
+    review: Mock<Reviewer>
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+    warn: Mock<(msg: string) => void>
+  } {
+    const sid = `context-session-${++seq}`
+    usedSids.add(sid)
+    const review = vi.fn<Reviewer>(async () => null)
+    const response = opts.response ?? { kind: 'ask', allowed: true }
+    const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
+    const warn = vi.fn<(msg: string) => void>()
+    const base = makeProvider(noGrants())
+    const ctx = createSecurityContext(
+      { kind: 'agent', sessionId: sid, agentKind: 'root' },
+      ENVIRONMENT,
+      makeProvider(noGrants(), {
+        getVars: () => ({
+          ...base.getVars(),
+          aclSessionRead: opts.sessionRead ?? [],
+          aclSessionWrite: opts.sessionWrite ?? []
+        }),
+        requestUserInput,
+        onPermissionRequest: review,
+        getUserPolicies: () => opts.policies ?? [],
+        logger: { info: vi.fn(), warn, error: vi.fn() }
+      })
+    )
+    return { ctx, sid, review, requestUserInput, warn }
+  }
+
+  it('XS-19 交给策略的客体恰是 {type, sessionId, title, ownTurn}：入参多出来的键（连 type / path 在内）不进客体；tool 取自 opts', async () => {
+    const { ctx, review, requestUserInput, warn } = sessionContext()
+    const noisy = {
+      ...TARGET,
+      evil: 'x',
+      type: 'path',
+      path: '/etc/passwd'
+    } as unknown as SessionObjectInput
+    await expect(ctx.enforceSession('read', noisy, READ_OPTS)).resolves.toBeUndefined()
+
+    expect(review).toHaveBeenCalledTimes(1)
+    const event = review.mock.calls[0]![0]
+    expect(event.request.object).toStrictEqual({
+      type: 'session',
+      sessionId: 'X',
+      title: 'T',
+      ownTurn: false
+    })
+    expect(event.request.action).toBe('read')
+    expect(event.request.tool).toEqual({ name: 'session', operation: 'read-session' })
+    expect(event.decision).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'ask-on-session-access#0'
+    })
+    expect(event.command).toBe('Session(read, X)')
+
+    // 审查没有意见 → 照旧问人：卡片带 session 材料，operation 是 opts 里的动作名
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0]![0]).toMatchObject({
+      command: 'Session(read, X)',
+      toolName: 'session',
+      session: { sessionId: 'X', title: 'T', access: 'read', operation: 'read-session' }
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('XS-19 write 的动作与客体同样原样；ownTurn: true → 放行、不审查不弹卡', async () => {
+    const { ctx, review, requestUserInput, warn } = sessionContext()
+    await ctx.enforceSession('write', { ...TARGET, title: 'Fix tests' }, PROMPT_OPTS)
+    expect(review.mock.calls[0]![0].request).toMatchObject({
+      action: 'write',
+      tool: { name: 'session', operation: 'prompt-session' },
+      object: { type: 'session', sessionId: 'X', title: 'Fix tests', ownTurn: false }
+    })
+    expect(review.mock.calls[0]![0].decision.winning).toBe('ask-on-session-access#1')
+
+    review.mockClear()
+    requestUserInput.mockClear()
+    await expect(
+      ctx.enforceSession('write', { ...TARGET, ownTurn: true }, PROMPT_OPTS)
+    ).resolves.toBeUndefined()
+    await expect(
+      ctx.enforceSession('read', { ...TARGET, ownTurn: true }, READ_OPTS)
+    ).resolves.toBeUndefined()
+    expect(review).not.toHaveBeenCalled()
+    expect(requestUserInput).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('XS-19 权限表里的行：查看行免查看、对话照问；对话行两样都免（经门面现取 vars）', async () => {
+    const { ctx, requestUserInput } = sessionContext({ sessionRead: ['X'], sessionWrite: [] })
+    await ctx.enforceSession('read', TARGET, READ_OPTS)
+    expect(requestUserInput).not.toHaveBeenCalled()
+    await ctx.enforceSession('write', TARGET, PROMPT_OPTS)
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+
+    const talk = sessionContext({ sessionRead: ['X'], sessionWrite: ['X'] })
+    await talk.ctx.enforceSession('read', TARGET, READ_OPTS)
+    await talk.ctx.enforceSession('write', TARGET, PROMPT_OPTS)
+    expect(talk.requestUserInput).not.toHaveBeenCalled()
+  })
+
+  it('XS-19 「其它」反馈：传了 onOther:\'return\' 也抛 User declined session "T" (X) and provided feedback instead: …；反馈记进 humanFeedbackOf', async () => {
+    const { ctx, sid } = sessionContext({ response: { kind: 'other', text: 'not this one' } })
+    expect(humanFeedbackOf(sid)).toEqual([])
+    expect(
+      await rejectionOf(ctx.enforceSession('write', TARGET, { ...PROMPT_OPTS, onOther: 'return' }))
+    ).toBe('User declined session "T" (X) and provided feedback instead: not this one')
+    expect(humanFeedbackOf(sid)).toEqual([
+      { ts: expect.any(Number), target: 'Session(write, X)', text: 'not this one' }
+    ])
+    expect(getSessionDecisions(sid)[0]).toMatchObject({
+      objectKind: 'session',
+      objectSummary: 'session X',
+      userResponse: 'feedback'
+    })
+  })
+
+  it('XS-19 用户策略读 object.sessionId / title / ownTurn 与 tool.operation：prompt-session 命中 deny，steer-session 不命中（落到内置 #1），零告警', async () => {
+    const policy = userPolicy('no-prompting-x', [
+      {
+        effect: 'deny',
+        conditions: { 'object.type': ['session'] },
+        match:
+          "object.sessionId == 'X' && object.title == 'T' && !object.ownTurn && tool.operation == 'prompt-session'"
+      }
+    ])
+    const { ctx, sid, requestUserInput, warn } = sessionContext({ policies: [policy] })
+    expect(await rejectionOf(ctx.enforceSession('write', TARGET, PROMPT_OPTS))).toBe(
+      "Denied by security policy rule 'no-prompting-x#0'"
+    )
+    expect(requestUserInput).not.toHaveBeenCalled()
+
+    await expect(
+      ctx.enforceSession('write', TARGET, { ...PROMPT_OPTS, operation: 'steer-session' })
+    ).resolves.toBeUndefined()
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(getSessionDecisions(sid)[0]).toMatchObject({
+      winning: 'ask-on-session-access#1',
+      matched: ['ask-on-session-access#1']
+    })
+    // 自己发起的那一轮：用户那条的 !object.ownTurn 为假，不命中
+    await expect(
+      ctx.enforceSession('write', { ...TARGET, ownTurn: true }, PROMPT_OPTS)
+    ).resolves.toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
   })
 })

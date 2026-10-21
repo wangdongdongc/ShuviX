@@ -1,16 +1,16 @@
 /**
  * 父会话介入子会话（docs/sub-session-design.md §19）—— 跨会话、跨进程才证得出来的那几条链路：
  *
- *   子会话在父会话发起的那一轮里停下来问 → 这一轮的后台任务进「等待输入」→ `wait-for-sub-sessions` 握着就由它交回 /
- *   没人等就经枢纽通知父会话（空闲 → 自动续跑）→ 父会话 `answer-sub-session` 代答（只回执；应答只送进子会话自己，
- *   答题方由宿主记下）→ 子会话接着跑完，答复经完成通知或 wait 交回；权限卡只转告；`steer-sub-session` 落进跑着的
- *   一轮；`inspect-sub-session` 的大纲 / 展开 / 搜索；用户自己发起的一轮不通知、不能代答、不能插话；父会话被停不
+ *   子会话在父会话发起的那一轮里停下来问 → 这一轮的后台任务进「等待输入」→ `wait-for-sessions` 握着就由它交回 /
+ *   没人等就经枢纽通知父会话（空闲 → 自动续跑）→ 父会话 `answer-session` 代答（只回执；应答只送进子会话自己，
+ *   答题方由宿主记下）→ 子会话接着跑完，答复经完成通知或 wait 交回；权限卡只转告；`steer-session` 落进跑着的
+ *   一轮；`inspect-session` 的大纲 / 展开 / 搜索；用户自己发起的一轮不通知、不能代答、不能插话；父会话被停不
  *   级联到子会话（§20）。
  *
  * 模型侧是假提供商，**每个回合都按内容认领**（父会话与子会话的请求交错到达）：
  *  - `isParent` = 请求里有父会话的第一条用户消息（`P_MARK`）—— 它永远在父会话的历史里、子会话的历史里永远没有；
  *  - `isChild`  = 不是父会话 + 最后一条用户消息恰为派进去的任务（`C_MARK`）。**先排除父会话**：父会话的历史里有
- *    `prompt-sub-session` 的参数，裸的 `raw.includes(C_MARK)` 会把它认成子会话。
+ *    `prompt-session` 的参数，裸的 `raw.includes(C_MARK)` 会把它认成子会话。
  *
  * 确定性的四个抓手：
  *  1. 先让父会话空闲、再放子会话出问题：子会话第一轮挂在具名 hold 槽 `child` 里，父会话那一轮落定之后才放；
@@ -244,9 +244,9 @@ const askCall = (
   args: JSON.stringify({ question, options: labels.map((label) => ({ label, description: '' })) })
 })
 
-/** 结果文本里 `<sub-session …>` 的那一行开标签 */
+/** 结果文本里 `<session …>` 的那一行开标签 */
 const openTagOf = (text: string, child: string): string =>
-  text.split('\n').find((line) => line.startsWith(`<sub-session id="${child}"`)) ?? ''
+  text.split('\n').find((line) => line.startsWith(`<session id="${child}"`)) ?? ''
 
 beforeAll(async () => {
   app = await launchApp()
@@ -318,8 +318,8 @@ describe('子会话停下来问：通知、代答、留痕', () => {
         {
           toolCalls: [
             sessionCall('call_a_prompt', {
-              action: 'prompt-sub-session',
-              sub_session_id: pair.child,
+              action: 'prompt-session',
+              session_id: pair.child,
               message: C_MARK
             })
           ],
@@ -335,8 +335,8 @@ describe('子会话停下来问：通知、代答、留痕', () => {
         {
           toolCalls: [
             sessionCall('call_a_steer', {
-              action: 'steer-sub-session',
-              sub_session_id: pair.child,
+              action: 'steer-session',
+              session_id: pair.child,
               message: 'STEER-WHILE-ASKING'
             })
           ],
@@ -344,10 +344,10 @@ describe('子会话停下来问：通知、代答、留痕', () => {
           holdMs: HOLD_MS,
           holdKey: 'parent'
         },
-        // 不给 ask_id、不给 sub_session_id：只有一条可答的询问、一条子会话 —— 补全
+        // 不给 ask_id、不给 session_id：只有一条可答的询问、一条子会话 —— 补全
         {
           toolCalls: [
-            sessionCall('call_a_answer', { action: 'answer-sub-session', selections: [KEEP] })
+            sessionCall('call_a_answer', { action: 'answer-session', selections: [KEEP] })
           ],
           when: parentWoken
         },
@@ -357,7 +357,7 @@ describe('子会话停下来问：通知、代答、留痕', () => {
         { text: 'C1-CHILD-FINAL', when: isChild, holdMs: HOLD_MS, holdKey: 'child2' },
         // 被完成通知叫醒的那一轮：照通知说的，用 wait 收
         {
-          toolCalls: [sessionCall('call_a_collect', { action: 'wait-for-sub-sessions' })],
+          toolCalls: [sessionCall('call_a_collect', { action: 'wait-for-sessions' })],
           when: parentDone
         },
         { text: 'P1-ALL-DONE', when: parentDone },
@@ -421,13 +421,13 @@ describe('子会话停下来问：通知、代答、留痕', () => {
       expect(notice).toContain(QUESTION)
       expect(notice).toContain(`1. ${KEEP}`)
       expect(notice).toContain(`2. ${DROP}`)
-      expect(notice).toContain('answer-sub-session')
+      expect(notice).toContain('answer-session')
       expect(notice).not.toContain('for="user"')
       expect(notice).not.toContain('<blocked-on-user-approval>')
       const finished = notices[1].content
-      expect(finished).toContain(`<sub-session id="${pair.child}"`)
+      expect(finished).toContain(`<session id="${pair.child}"`)
       expect(finished).toContain('has finished')
-      expect(finished).toContain('wait-for-sub-sessions')
+      expect(finished).toContain('wait-for-sessions')
       // 父会话代答不是用户插手
       expect(finished.split('\n')[0]).not.toContain('user-intervened')
 
@@ -438,7 +438,7 @@ describe('子会话停下来问：通知、代答、留痕', () => {
       // 3. 代答的结果只是回执：在跑、带后台标签，不带答复
       const answer = await resultOf(pair.parent, 'call_a_answer')
       expect(answer.isError).toBe(false)
-      expect(answer.result).toContain(`<sub-session id="${pair.child}" status="running"/>`)
+      expect(answer.result).toContain(`<session id="${pair.child}" status="running"/>`)
       expect(answer.result).toContain('Answered; it carries on in the background.')
       expect(answer.result).not.toContain('<reply>')
       expect(answer.result).not.toContain('C1-CHILD-FINAL')
@@ -447,7 +447,7 @@ describe('子会话停下来问：通知、代答、留痕', () => {
       // 4. 答复经 wait 收回，在围栏里；代答不算用户插手
       const collected = await resultOf(pair.parent, 'call_a_collect')
       expect(collected.isError).toBe(false)
-      expect(collected.result).toContain('<sub-sessions status="settled">')
+      expect(collected.result).toContain('<sessions status="settled">')
       expect(collected.result).toContain('<reply>\nC1-CHILD-FINAL\n</reply>')
       expect(openTagOf(collected.result, pair.child)).not.toContain('user-intervened')
       expect(backgroundTagOf(collected)).not.toBe(true)
@@ -479,7 +479,7 @@ describe('子会话停下来问：通知、代答、留痕', () => {
     const steer = await resultOf(pair.parent, 'call_a_steer')
     expect(steer.isError).toBe(true)
     expect(steer.result).toContain('waiting for an answer to its question')
-    expect(steer.result).toContain('answer-sub-session')
+    expect(steer.result).toContain('answer-session')
     expect((await probe.viewOf(pair.child))?.queue).toEqual([])
     const childMsgs = await listMessages(pair.child)
     expect(childMsgs.some((m) => m.content.includes('STEER-WHILE-ASKING'))).toBe(false)
@@ -565,8 +565,8 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
         {
           toolCalls: [
             sessionCall('call_b_prompt', {
-              action: 'prompt-sub-session',
-              sub_session_id: pair.child,
+              action: 'prompt-session',
+              session_id: pair.child,
               message: C_MARK
             })
           ],
@@ -581,8 +581,8 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
         {
           toolCalls: [
             sessionCall('call_b_wait1', {
-              action: 'wait-for-sub-sessions',
-              sub_session_id: pair.child
+              action: 'wait-for-sessions',
+              session_id: pair.child
             })
           ],
           when: isParent
@@ -590,7 +590,7 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
         {
           toolCalls: [
             sessionCall('call_b_wrong', {
-              action: 'answer-sub-session',
+              action: 'answer-session',
               selections: ['OPT-B1-NOPE']
             })
           ],
@@ -599,7 +599,7 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
         {
           toolCalls: [
             sessionCall('call_b_free', {
-              action: 'answer-sub-session',
+              action: 'answer-session',
               ask_id: 'call_b_ask1',
               message: 'FREE-TEXT-B4'
             })
@@ -615,15 +615,15 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
         {
           toolCalls: [
             sessionCall('call_b_wait2', {
-              action: 'wait-for-sub-sessions',
-              sub_session_id: pair.child
+              action: 'wait-for-sessions',
+              session_id: pair.child
             })
           ],
           when: isParent
         },
         {
           toolCalls: [
-            sessionCall('call_b_pick', { action: 'answer-sub-session', selections: ['OPT-B2-A'] })
+            sessionCall('call_b_pick', { action: 'answer-session', selections: ['OPT-B2-A'] })
           ],
           when: isParent
         },
@@ -631,8 +631,8 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
         {
           toolCalls: [
             sessionCall('call_b_wait3', {
-              action: 'wait-for-sub-sessions',
-              sub_session_id: pair.child
+              action: 'wait-for-sessions',
+              session_id: pair.child
             })
           ],
           when: isParent
@@ -656,14 +656,14 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
       // 1. prompt 只回执：在跑、带后台标签，没有询问也没有答复
       const first = await resultOf(pair.parent, 'call_b_prompt')
       expect(first.isError).toBe(false)
-      expect(first.result).toContain(`<sub-session id="${pair.child}" status="running"/>`)
+      expect(first.result).toContain(`<session id="${pair.child}" status="running"/>`)
       expect(first.result).toContain('Started in the background')
       expect(first.result).not.toContain('<question')
       expect(backgroundTagOf(first)).toBe(true)
 
       // 2. wait 报 asking，带那一块询问（可代答），尾注指向 answer；wait 不带后台标签
       const waited = await resultOf(pair.parent, 'call_b_wait1')
-      expect(waited.result).toContain('<sub-sessions status="asking">')
+      expect(waited.result).toContain('<sessions status="asking">')
       expect(waited.result).toContain('status="waiting-input"')
       expect(waited.result).toContain('<question ask_id="call_b_ask1">')
       expect(waited.result).toContain('Q4a-which-path?')
@@ -671,7 +671,7 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
       expect(waited.result).toContain('2. OPT-B1-B')
       expect(waited.result).toContain('You may answer it for the user')
       expect(waited.result).not.toContain('for="user"')
-      expect(waited.result.split('</sub-sessions>')[1] ?? '').toContain('answer-sub-session')
+      expect(waited.result.split('</sessions>')[1] ?? '').toContain('answer-session')
       expect(backgroundTagOf(waited)).not.toBe(true)
 
       // 3. 错选项被拒、什么都没发，列出全部选项
@@ -685,14 +685,14 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
       // 4. message 代答只回执（子会话的下一步挂着，回执恒为在跑）
       const free = await resultOf(pair.parent, 'call_b_free')
       expect(free.isError).toBe(false)
-      expect(free.result).toContain(`<sub-session id="${pair.child}" status="running"/>`)
+      expect(free.result).toContain(`<session id="${pair.child}" status="running"/>`)
       expect(free.result).toContain('Answered; it carries on in the background.')
       expect(free.result).not.toContain('<question')
       expect(backgroundTagOf(free)).toBe(true)
 
       // 5. 下一问由下一次 wait 交回，不再带上一问
       const waited2 = await resultOf(pair.parent, 'call_b_wait2')
-      expect(waited2.result).toContain('<sub-sessions status="asking">')
+      expect(waited2.result).toContain('<sessions status="asking">')
       expect(waited2.result).toContain('<question ask_id="call_b_ask2">')
       expect(waited2.result).toContain('Q4b-which-name?')
       expect(waited2.result).not.toContain('call_b_ask1')
@@ -706,7 +706,7 @@ describe('wait 握着时停下来问：wait 交回、代答只回执、零通知
       expect(backgroundTagOf(pick)).toBe(true)
       const collected = await resultOf(pair.parent, 'call_b_wait3')
       expect(collected.isError).toBe(false)
-      expect(collected.result).toContain('<sub-sessions status="settled">')
+      expect(collected.result).toContain('<sessions status="settled">')
       expect(collected.result).toContain('<reply>\nC4-CHILD-FINAL\n</reply>')
       expect(backgroundTagOf(collected)).not.toBe(true)
 
@@ -762,8 +762,8 @@ describe('用户先在子会话里答了', () => {
         {
           toolCalls: [
             sessionCall('call_c5_prompt', {
-              action: 'prompt-sub-session',
-              sub_session_id: pair.child,
+              action: 'prompt-session',
+              session_id: pair.child,
               message: C_MARK
             })
           ],
@@ -780,7 +780,7 @@ describe('用户先在子会话里答了', () => {
         {
           toolCalls: [
             sessionCall('call_c5_answer', {
-              action: 'answer-sub-session',
+              action: 'answer-session',
               ask_id: ASK_ID,
               selections: ['OPT-C5-A']
             })
@@ -795,7 +795,7 @@ describe('用户先在子会话里答了', () => {
         // 这一轮落定之后（完成通知叫醒父会话）再答一次：不带 ask_id
         {
           toolCalls: [
-            sessionCall('call_c5_late', { action: 'answer-sub-session', selections: ['OPT-C5-A'] })
+            sessionCall('call_c5_late', { action: 'answer-session', selections: ['OPT-C5-A'] })
           ],
           when: parentAfterDone
         },
@@ -826,7 +826,7 @@ describe('用户先在子会话里答了', () => {
       expect(raced.isError).toBe(true)
       expect(raced.result).toMatch(/nothing was sent/i)
       expect(raced.result).toContain(
-        `Question "${ASK_ID}" in sub-session "${pair.childTitle}" was already answered (most likely by the user in that session): User selected: OPT-C5-B. Nothing was sent.`
+        `Question "${ASK_ID}" in session "${pair.childTitle}" was already answered (most likely by the user in that session): User selected: OPT-C5-B. Nothing was sent.`
       )
 
       // 子会话这一轮落定 → 完成通知叫醒父会话 → 再答一次（不带 ask_id）
@@ -836,7 +836,7 @@ describe('用户先在子会话里答了', () => {
       await waitAssistant(pair.parent, 'ok-late')
       expect(late.isError).toBe(true)
       expect(late.result).toContain(
-        `Sub-session "${pair.childTitle}" is not waiting for an answer (status: idle). Nothing was sent.`
+        `Session "${pair.childTitle}" is not waiting for an answer (status: idle). Nothing was sent.`
       )
 
       // 2. 子会话只被答了一次，记成用户答的（伪造的答题方被宿主剥掉）
@@ -877,8 +877,8 @@ describe('子会话卡在权限卡上', () => {
         {
           toolCalls: [
             sessionCall('call_d_prompt', {
-              action: 'prompt-sub-session',
-              sub_session_id: pair.child,
+              action: 'prompt-session',
+              session_id: pair.child,
               message: C_MARK
             })
           ],
@@ -895,15 +895,15 @@ describe('子会话卡在权限卡上', () => {
         },
         {
           toolCalls: [
-            sessionCall('call_d_answer', { action: 'answer-sub-session', selections: ['allow'] })
+            sessionCall('call_d_answer', { action: 'answer-session', selections: ['allow'] })
           ],
           when: parentWoken
         },
         {
           toolCalls: [
             sessionCall('call_d_wait', {
-              action: 'wait-for-sub-sessions',
-              sub_session_id: pair.child
+              action: 'wait-for-sessions',
+              session_id: pair.child
             })
           ],
           when: isParent
@@ -939,8 +939,8 @@ describe('子会话卡在权限卡上', () => {
 
       // 3. wait 报 blocked，尾注说只有用户能答
       const waited = await resultOf(pair.parent, 'call_d_wait')
-      expect(waited.result).toContain('<sub-sessions status="blocked">')
-      expect(waited.result.split('</sub-sessions>')[1] ?? '').toContain('only the user can answer')
+      expect(waited.result).toContain('<sessions status="blocked">')
+      expect(waited.result.split('</sessions>')[1] ?? '').toContain('only the user can answer')
 
       // 4. 卡片原样挂着；任务仍在等输入
       const card = (await probe.viewOf(pair.child))?.asks.find((a) => a.kind === 'ask')
@@ -956,7 +956,7 @@ describe('子会话卡在权限卡上', () => {
       expect(toolTextsOf(childTurn2!).some((t) => t.includes(SECRET))).toBe(true)
       const finished = systemNotices(done).filter((m) => m.content.includes('has finished'))
       expect(finished).toHaveLength(1)
-      expect(finished[0].content).toContain('wait-for-sub-sessions')
+      expect(finished[0].content).toContain('wait-for-sessions')
       await until(
         async () => (await subTasks(pair.parent, pair.child))[0]?.status === 'done' || null,
         'sub-session task done'
@@ -991,8 +991,8 @@ describe('用户在子会话里自己发起的一轮', () => {
         {
           toolCalls: [
             sessionCall('call_e_prompt', {
-              action: 'prompt-sub-session',
-              sub_session_id: pair.child,
+              action: 'prompt-session',
+              session_id: pair.child,
               message: C0
             })
           ],
@@ -1003,8 +1003,8 @@ describe('用户在子会话里自己发起的一轮', () => {
         {
           toolCalls: [
             sessionCall('call_e_wait', {
-              action: 'wait-for-sub-sessions',
-              sub_session_id: pair.child
+              action: 'wait-for-sessions',
+              session_id: pair.child
             })
           ],
           when: parentFirst
@@ -1012,13 +1012,13 @@ describe('用户在子会话里自己发起的一轮', () => {
         { text: 'ok', when: parentFirst },
         { toolCalls: [askCall(ASK_ID, 'Q7-which-db?', ['OPT-E-A', 'OPT-E-B'])], when: childOwn },
         {
-          toolCalls: [sessionCall('call_e_read', { action: 'read-sub-session' })],
+          toolCalls: [sessionCall('call_e_read', { action: 'read-session' })],
           when: parentSecond
         },
         {
           toolCalls: [
             sessionCall('call_e_answer', {
-              action: 'answer-sub-session',
+              action: 'answer-session',
               ask_id: ASK_ID,
               selections: ['OPT-E-A']
             })
@@ -1026,9 +1026,7 @@ describe('用户在子会话里自己发起的一轮', () => {
           when: parentSecond
         },
         {
-          toolCalls: [
-            sessionCall('call_e_steer', { action: 'steer-sub-session', message: 'STEER-E' })
-          ],
+          toolCalls: [sessionCall('call_e_steer', { action: 'steer-session', message: 'STEER-E' })],
           when: parentSecond
         },
         { text: 'P7-DONE', when: parentSecond },
@@ -1077,7 +1075,7 @@ describe('用户在子会话里自己发起的一轮', () => {
       const answer = await resultOf(pair.parent, 'call_e_answer')
       expect(answer.isError).toBe(true)
       expect(answer.result).toContain('is not in a turn you are driving now')
-      expect(answer.result).toContain("it is the user's to answer")
+      expect(answer.result).toContain('it is not yours to answer')
       expect(answer.result).toContain('Nothing was sent')
 
       const steer = await resultOf(pair.parent, 'call_e_steer')
@@ -1138,8 +1136,8 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
         {
           toolCalls: [
             sessionCall('call_f_prompt', {
-              action: 'prompt-sub-session',
-              sub_session_id: pair.child,
+              action: 'prompt-session',
+              session_id: pair.child,
               message: C_MARK
             })
           ],
@@ -1149,8 +1147,8 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
         {
           toolCalls: [
             sessionCall('call_f_steer', {
-              action: 'steer-sub-session',
-              sub_session_id: pair.child,
+              action: 'steer-session',
+              session_id: pair.child,
               message: PARENT_STEER
             })
           ],
@@ -1173,11 +1171,11 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
         },
         { text: 'F8-CHILD-FINAL', when: childSteered },
         {
-          toolCalls: [sessionCall('call_f_read', { action: 'read-sub-session' })],
+          toolCalls: [sessionCall('call_f_read', { action: 'read-session' })],
           when: parentAfterDone
         },
         {
-          toolCalls: [sessionCall('call_f_outline', { action: 'inspect-sub-session' })],
+          toolCalls: [sessionCall('call_f_outline', { action: 'inspect-session' })],
           when: isParent
         },
         {
@@ -1189,19 +1187,17 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
             if (!m) throw new Error(`no failed read line in the outline:\n${outline.slice(0, 600)}`)
             failedRef = m[1]
             return {
-              toolCalls: [sessionCall('call_f_item', { action: 'inspect-sub-session', item: m[1] })]
+              toolCalls: [sessionCall('call_f_item', { action: 'inspect-session', item: m[1] })]
             }
           }
         },
         {
-          toolCalls: [
-            sessionCall('call_f_match', { action: 'inspect-sub-session', match: SEED_FILE })
-          ],
+          toolCalls: [sessionCall('call_f_match', { action: 'inspect-session', match: SEED_FILE })],
           when: isParent
         },
         {
           toolCalls: [
-            sessionCall('call_f_late', { action: 'steer-sub-session', message: 'LATE-STEER' })
+            sessionCall('call_f_late', { action: 'steer-session', message: 'LATE-STEER' })
           ],
           when: isParent
         },
@@ -1263,7 +1259,7 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
       const late = await resultOf(pair.parent, 'call_f_late')
       expect(late.isError).toBe(true)
       expect(late.result).toContain('is idle')
-      expect(late.result).toContain('prompt-sub-session')
+      expect(late.result).toContain('prompt-session')
       await quiet()
       expect((await listMessages(pair.child)).some((m) => m.content.includes('LATE-STEER'))).toBe(
         false
@@ -1299,7 +1295,7 @@ describe('steer 落进跑着的一轮；inspect 的大纲 / 展开 / 搜索', ()
     // ls 的结果不进大纲
     expect(outline).not.toContain(SEED_FILE)
     // 围栏外是用法提示
-    const outside = outline.slice(outline.indexOf('</sub-session>'))
+    const outside = outline.slice(outline.indexOf('</session>'))
     expect(outside).toContain('item')
     expect(outside).toContain('match')
 
@@ -1355,8 +1351,8 @@ describe('父会话被停：派出去的子会话照跑完', () => {
         {
           toolCalls: [
             sessionCall('call_g_prompt', {
-              action: 'prompt-sub-session',
-              sub_session_id: pair.child,
+              action: 'prompt-session',
+              session_id: pair.child,
               message: C_MARK
             })
           ],
@@ -1441,7 +1437,7 @@ describe('父会话被停：派出去的子会话照跑完', () => {
       expect(next).toHaveLength(1)
       const users = userTextsOf(next[0])
       const noticeAt = users.findIndex(
-        (t) => t.includes(`<sub-session id="${pair.child}"`) && t.includes('has finished')
+        (t) => t.includes(`<session id="${pair.child}"`) && t.includes('has finished')
       )
       expect(noticeAt).toBeGreaterThan(-1)
       expect(users.lastIndexOf(P_NEXT)).toBeGreaterThan(noticeAt)

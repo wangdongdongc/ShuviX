@@ -72,7 +72,7 @@ afterEach(async () => {
 
 /** P 的模型派活给子会话（§20：一律回执，没有前台 / 后台之分） */
 const promptChild = (child: string, message: string, id: string): ReturnType<typeof callTool> =>
-  callTool('session', { action: 'prompt-sub-session', sub_session_id: child, message }, id)
+  callTool('session', { action: 'prompt-session', session_id: child, message }, id)
 
 const dispatch = (name: string, prompt: string, id = 'call-agent'): ReturnType<typeof callTool> =>
   callTool('agent', { name, prompt, description: 'look' }, id)
@@ -87,10 +87,10 @@ async function toolTask(sessionId: string, callId: string): Promise<number> {
   return tasks[0]!.id as number
 }
 
-/** P 里的 session 工具结果（带 `<sub-session` 围栏的 pi.tool-result） */
+/** P 里的 session 工具结果（带 `<session` 围栏的 pi.tool-result） */
 async function sessionToolResults(sessionId: string): Promise<string[]> {
   return (await transcriptOf(sessionId)).filter(
-    (e) => e.startsWith('pi.tool-result:') && e.includes('<sub-session')
+    (e) => e.startsWith('pi.tool-result:') && e.includes('<session')
   )
 }
 
@@ -171,7 +171,7 @@ async function userContinuesChild(p: Proc): Promise<void> {
   expect(await withTimeout(child!.continue(), 15000, 'C.continue')).toEqual({})
   await waitFor(async () => noticesIn(await transcriptOf('P')).length === 1, 10000, 'notice in P')
   const [notice] = noticesIn(await transcriptOf('P'))
-  expect(notice).toMatch(/^shuvix\.notice:<sub-session id="C"/)
+  expect(notice).toMatch(/^shuvix\.notice:<session id="C"/)
   expect(deliver.mock.calls.every((call) => (call[3] as { wake: boolean }).wake === false)).toBe(
     true
   )
@@ -296,7 +296,7 @@ describe('K1 continue after a crash: the parent no longer brings the child back 
       expect(p2.router.served).toEqual(['C', 'P'])
       // 推迟的那条在继续的那一轮收尾时落下（P 的下一轮看得见它），没有因它多起一轮
       const p = await transcriptOf('P')
-      expect(p.at(-1)).toMatch(/^shuvix\.notice:<sub-session id="C"/)
+      expect(p.at(-1)).toMatch(/^shuvix\.notice:<session id="C"/)
       expect(p2.router.requests('P')).toHaveLength(1)
       await waitFor(async () => (await markerOf('C')) === undefined, 5000, 'C marker cleared')
     },
@@ -317,7 +317,7 @@ describe('K1 continue after a crash: the parent no longer brings the child back 
         role('chat', 'start'),
         promptChild('C1', 'one-task', 'call-p1'),
         promptChild('C2', 'two-task', 'call-p2'),
-        callTool('session', { action: 'wait-for-sub-sessions' }, 'call-wait')
+        callTool('session', { action: 'wait-for-sessions' }, 'call-wait')
       )
       p1.router.on('C1', role('chat', 'one-task'), s1.step)
       p1.router.on('C2', role('chat', 'two-task'), s2.step)
@@ -337,8 +337,8 @@ describe('K1 continue after a crash: the parent no longer brings the child back 
       expect(p2.router.served.filter((r) => r === 'C2')).toHaveLength(1)
       expect((await transcriptOf('C1')).filter((e) => e.startsWith('pi.user:'))).toHaveLength(1)
       expect((await transcriptOf('C2')).filter((e) => e.startsWith('pi.user:'))).toHaveLength(1)
-      const wait = (await transcriptOf('P')).find((e) => e.includes('<sub-sessions status='))!
-      expect(wait).toContain('<sub-sessions status="settled">')
+      const wait = (await transcriptOf('P')).find((e) => e.includes('<sessions status='))!
+      expect(wait).toContain('<sessions status="settled">')
       expect(wait).toContain(REPLY('one'))
       expect(wait).toContain(REPLY('two'))
       await sleep(200)
@@ -436,7 +436,7 @@ describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => 
         'P',
         role('chat', 'start'),
         promptChild('C', 'new', 'call-prompt'),
-        callTool('session', { action: 'wait-for-sub-sessions' }, 'call-wait'),
+        callTool('session', { action: 'wait-for-sessions' }, 'call-wait'),
         answer('ok')
       )
       p2.router.on('C', role('chat', 'old'), hold.step)
@@ -454,8 +454,8 @@ describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => 
       const results = await sessionToolResults('P')
       expect(results[0]).toContain(RECEIPT)
       expect(results[0]).not.toContain(REPLY('fresh'))
-      const wait = (await transcriptOf('P')).find((e) => e.includes('<sub-sessions status='))!
-      expect(wait).toContain('<sub-sessions status="settled">')
+      const wait = (await transcriptOf('P')).find((e) => e.includes('<sessions status='))!
+      expect(wait).toContain('<sessions status="settled">')
       expect(wait).toContain(REPLY('fresh'))
       await sleep(200)
       expect(noticesIn(await transcriptOf('P'))).toEqual([])
@@ -493,7 +493,7 @@ describe('K2 a fresh prompt into an interrupted child (abort-then-send)', () => 
       )
       const notices = noticesIn(await transcriptOf('P'))
       expect(notices).toHaveLength(1)
-      expect(notices[0]).toMatch(/^pi\.user:<sub-session id="C"/)
+      expect(notices[0]).toMatch(/^pi\.user:<session id="C"/)
       expect(notices[0]).toContain('has finished')
       expect(notices[0]).not.toContain('stopped by the user')
       await waitFor(async () => (await markerOf('C')) === undefined, 5000, 'C marker cleared')
@@ -592,7 +592,7 @@ describe('K3 background completion re-arm across a restart', () => {
       expect(added).toHaveLength(1)
       expect(added[0]).toMatch(/^shuvix\.notice:/)
       expect(added[0]).toContain('id="C"')
-      expect(added[0]).toContain('wait-for-sub-sessions')
+      expect(added[0]).toContain('wait-for-sessions')
       expect(added[0]).not.toContain('done')
       expect(p2.router.requests('P')).toHaveLength(0)
       expect(
@@ -628,15 +628,15 @@ describe('K3 background completion re-arm across a restart', () => {
       expect(await withTimeout(p2.chatGateway.prompt('P', 'hi'), 15000, 'hi')).toEqual({})
       const [first] = p2.router.requests('P')
       const users = userTexts(first!)
-      const noticeAt = users.findIndex((u) => u.includes('<sub-session id="C"'))
-      expect(users.filter((u) => u.includes('<sub-session id="C"'))).toHaveLength(1)
+      const noticeAt = users.findIndex((u) => u.includes('<session id="C"'))
+      expect(users.filter((u) => u.includes('<session id="C"'))).toHaveLength(1)
       expect(noticeAt).toBeGreaterThanOrEqual(0)
       expect(noticeAt).toBeLessThan(users.indexOf('hi'))
       expect(p2.router.requests('P')).toHaveLength(1)
 
       expect(await withTimeout(p2.chatGateway.prompt('P', 'again'), 15000, 'again')).toEqual({})
       const second = p2.router.requests('P')[1]!
-      expect(userTexts(second).filter((u) => u.includes('<sub-session id="C"'))).toHaveLength(1)
+      expect(userTexts(second).filter((u) => u.includes('<session id="C"'))).toHaveLength(1)
     },
     T
   )
@@ -714,7 +714,7 @@ describe('K3 background completion re-arm across a restart', () => {
       const pNotices = (await transcriptOf('P')).filter((e) => e.startsWith('shuvix.notice:'))
       for (const id of noticeIds) {
         const child = id.split(':')[1]
-        expect(pNotices.filter((e) => e.includes(`<sub-session id="${child}"`))).toHaveLength(1)
+        expect(pNotices.filter((e) => e.includes(`<session id="${child}"`))).toHaveLength(1)
         expect(await submissionOf('P', id)).toBeDefined()
       }
       // 两次驱动都是上个进程发起的：P 一轮都不起
@@ -794,7 +794,7 @@ describe('K6 deletion cascades', () => {
         callTools([
           [
             'session',
-            { action: 'prompt-sub-session', sub_session_id: 'C2', message: 'C2-task' },
+            { action: 'prompt-session', session_id: 'C2', message: 'C2-task' },
             'call-prompt'
           ],
           ['agent', { name: 'explore', prompt: 'look', description: 'd' }, 'call-agent']
@@ -879,7 +879,7 @@ describe('K6 deletion cascades', () => {
 
       p.router.push(
         'P',
-        callTool('session', { action: 'read-sub-session', sub_session_id: 'C' }, 'call-read'),
+        callTool('session', { action: 'read-session', session_id: 'C' }, 'call-read'),
         answer('k')
       )
       await withTimeout(p.sessionService.delete('C'), 10000, 'delete C')
@@ -892,7 +892,7 @@ describe('K6 deletion cascades', () => {
       await waitFor(() => p.router.left('P') === 0, 10000, 'P auto-resumed and read')
       await waitFor(() => settingsOf('P').runState === 'idle', 10000, 'P idle')
       const read = (await transcriptOf('P')).filter((e) => e.startsWith('pi.tool-result:')).at(-1)!
-      expect(read).toContain('"C" is not a sub-session of this session')
+      expect(read).toContain('There is no session "C"')
       expect(read).toContain('C9')
       expect(noticesIn(await transcriptOf('P'))).toHaveLength(1)
     },
@@ -941,7 +941,7 @@ describe('K7 the user stops the parent while its sub-session runs (§20: no casc
       p.router.push('P', answer('seen'))
       expect(await withTimeout(p.chatGateway.prompt('P', 'next'), 15000, 'next')).toEqual({})
       const users = userTexts(p.router.requests('P').at(-1)!)
-      expect(users.filter((u) => u.includes('<sub-session id="C"'))).toHaveLength(1)
+      expect(users.filter((u) => u.includes('<session id="C"'))).toHaveLength(1)
       expect(users.at(-1)).toBe('next')
       expect(deliver.mock.calls).toHaveLength(1)
     },

@@ -3,6 +3,7 @@ import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { MdMetaNoteView, MdMetaWriteResult } from '@shuvix/chat-protocol/mdMeta'
 import type { KnowledgeEntry, KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
+import type { SessionMentionEntry } from '@shuvix/chat-protocol/sessionMention'
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { AgentContinueResult } from '@shuvix/chat-protocol/chatApi'
@@ -1133,6 +1134,8 @@ declare global {
     mentions: {
       /** 该会话启用库内的知识条目视图（含 knowledge 工具指针 baseName/bundlePath）；未启用任何库返回空 */
       listKnowledgeEntries: (params: { sessionId: string }) => Promise<KnowledgeMentionEntry[]>
+      /** 「会话」源：除这一条以外、侧栏看得见的会话（最近活跃的在前） */
+      listSessions: (params: { sessionId: string }) => Promise<SessionMentionEntry[]>
     }
     /** 网络访问（局域网里的浏览器用同一套 API；没有认证 —— 设置页把风险写在明面上） */
     network: {

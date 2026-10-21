@@ -34,6 +34,8 @@ export const EMPTY_REPLY_NOTICE_KIND = 'empty-reply'
 /** 通知信封的标签名（不含尖括号） */
 export const SYSTEM_NOTICE_TAGS = [
   'background-task',
+  // 驱动别的会话那一轮的通知（完成 / 停下来问 / 没发出去）；`sub-session` 是 2026-10-20 之前的写法，旧会话里还有
+  'session',
   'sub-session',
   EMPTY_REPLY_NOTICE_KIND
 ] as const

@@ -400,7 +400,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       }
       // 对照组：同一批词在 work 里是必须有的（否则这条用例可能只是在测一份空 body）
       const work = profile(WORK_PROFILE_NAME, language).systemPrompt
-      for (const term of ['`coding`', 'create-sub-session', 'prompt-sub-session']) {
+      for (const term of ['`coding`', 'create-sub-session', 'prompt-session']) {
         expect(work, `work.${language} 需点名 ${term}`).toContain(term)
       }
     }
@@ -456,7 +456,7 @@ describe('work body 与 session 工具的动作枚举', () => {
     //（与该文件既有的「工具注册序硬编码」同一惯例：那边导入链在测试内加载不了）。
     // 2026-10-12 起正文只说路线（编程交 coding 子会话、自己管需求与验收）：后台派发、
     // wait-for-sub-sessions、不要轮询都由 session 工具描述自己教，正文不再重复，也就不再钉
-    const ANCHORS = ['create-sub-session', 'prompt-sub-session', 'agent_profile']
+    const ANCHORS = ['create-sub-session', 'prompt-session', 'agent_profile']
     for (const language of LANGS) {
       const body = profile(WORK_PROFILE_NAME, language).systemPrompt
       for (const anchor of ANCHORS) {
@@ -841,12 +841,7 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
     // 自 2026-10-12 起只由 session 工具描述教，正文不再重复，也就不再钉
     for (const language of LANGS) {
       const body = profile(BOT_PROFILE_NAME, language).systemPrompt
-      for (const anchor of [
-        'create-sub-session',
-        'prompt-sub-session',
-        'agent_profile',
-        '`coding`'
-      ]) {
+      for (const anchor of ['create-sub-session', 'prompt-session', 'agent_profile', '`coding`']) {
         expect(body, `bot.${language} 需点名 ${anchor}`).toContain(anchor)
       }
     }

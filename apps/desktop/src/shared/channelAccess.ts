@@ -374,6 +374,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'knowledge:createEntry': 'write',
   'knowledge:baseOptions': 'read', // override
   'knowledge:mentionEntries': 'read',
+  'session:mentionEntries': 'read',
 
   // ─── network：网络访问 ───
   'network:status': 'read',
@@ -395,16 +396,20 @@ export function channelAccessOf(channel: string): ChannelAccess {
 
 /**
  * 一次请求的访问级别：通常就是通道的那一档。例外：回答询问卡时勾了「允许并记住」
- * （`agent:respondToInput` 的 `response.extra.rememberPath`）是往会话权限表里写一行，与 `session:grantAcl`
- * 同一档（admin）—— 否则只许 write 的设备绕过权限表的那一档，答一张卡就给会话加上永久授权。
+ * （`agent:respondToInput` 的 `response.extra.rememberPath` / 会话询问的 `extra.remember`）是往会话权限表里写
+ * 一行，与 `session:grantAcl` 同一档（admin）—— 否则只许 write 的设备绕过权限表的那一档，答一张卡就给会话加上
+ * 永久授权。
  */
 export function channelCallAccessOf(channel: string, args: readonly unknown[]): ChannelAccess {
-  if (channel === 'agent:respondToInput' && remembersPath(args[0])) return 'admin'
+  if (channel === 'agent:respondToInput' && remembersGrant(args[0])) return 'admin'
   return channelAccessOf(channel)
 }
 
-function remembersPath(params: unknown): boolean {
+function remembersGrant(params: unknown): boolean {
   const response = (params as { response?: unknown } | null)?.response
-  const extra = (response as { extra?: unknown } | null | undefined)?.extra
-  return !!(extra as { rememberPath?: unknown } | null | undefined)?.rememberPath
+  const extra = (response as { extra?: unknown } | null | undefined)?.extra as
+    | { rememberPath?: unknown; remember?: unknown }
+    | null
+    | undefined
+  return !!extra?.rememberPath || !!extra?.remember
 }

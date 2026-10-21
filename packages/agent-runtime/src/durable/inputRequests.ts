@@ -28,7 +28,7 @@ import type {
   CancelReason,
   InputRequest,
   InputResponse,
-  ParentSessionRef
+  DrivingSessionRef
 } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeEventSink, RuntimeLogger } from '../types'
 
@@ -55,7 +55,7 @@ export interface InputResponseMeta {
    * 答题方不是用户本人（父会话代答子会话的 ask，docs/sub-session-design.md §19.5）。它是交给发问工具的
    * 应答里**唯一**的 `answeredBy` 来源：载荷里自带的那一项一律被它覆盖（没有就删掉）。
    */
-  readonly answeredBy?: ParentSessionRef
+  readonly answeredBy?: DrivingSessionRef
 }
 
 function cancelled(reason: CancelReason): InputResponse {

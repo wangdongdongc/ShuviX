@@ -30,6 +30,9 @@
  *
  * DP-A1：本会话自己的 artifacts 目录（~/.shuvix/artifacts/<id>，getSessionArtifactsDir 的 mock 与生产同形）
  * 是会话目录 —— 会话之间互不豁免：父会话在子会话的目录里写照问，读也问（它在家目录里）。
+ *
+ * XS-37…XS-40：`session` 工具与别的会话交互（enforceSession，出厂的 ask-on-session-access）——「允许并记住」
+ * 经真实的 sessionAcl.grantSession 写进权限表的会话行（vars.aclSessionRead / aclSessionWrite），见文件末尾。
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { dirname, join } from 'node:path'
@@ -161,9 +164,14 @@ import {
   type PermissionReviewAnswer,
   type SecurityContext,
   type SecurityDecision,
-  type SecurityEffect
+  type SecurityEffect,
+  type SessionObjectInput
 } from '@shuvix/agent-runtime'
-import type { AskInputRequest, InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
+import type {
+  AskInputRequest,
+  InputRequest,
+  InputResponse
+} from '@shuvix/chat-protocol/types/inputRequest'
 import type { PathAccess } from '@shuvix/chat-protocol/sessionAcl'
 import { sessionRecords } from '../sessionRecords'
 import { sessionAcl, setAclSkillRoots } from '../acl'
@@ -1020,4 +1028,249 @@ describe('桌面安全 provider — 权限审查员的读取不问人（只读�
       expect(rootRows.map((row) => row.carded)).toEqual(reviewerRows.map((row) => !row.passed))
     }
   )
+})
+
+/**
+ * 会话交互（XS-37…XS-40）—— `session` 工具查看（read）/ 对话（write）一条不是自己子会话的会话，走 enforceSession，
+ * 客体 {type: 'session', sessionId, title, ownTurn}。出厂的 ask-on-session-access：不是自己发起的那一轮、又不在本会话
+ * 权限表的会话行里（vars.aclSessionRead / aclSessionWrite）时询问。权限表是真的：卡片上「允许并记住」
+ * （`extra.remember: true`）经 persistSessionGrant → sessionAcl.grantSession 写一行 `kind: 'session'`（来源 user）。
+ * 这里的会话都是内存会话（目标会话也得在 —— grantSession 不给不在的会话写行）。
+ *
+ *   XS-37 对话 B 答「允许并记住」→ 一张卡（带 session 目标）；s1 的表多一行 {session, B, write, user}；之后对话 / 查看
+ *         都不问；s2 → B 照问
+ *   XS-38 允许不记住 → 不写行、下次照问；拒绝 → 抛 User denied talking to / reading …、不写行；记住「查看」→
+ *         查看免问、对话照问
+ *   XS-39 没有询问通道（hook / 后台）→ 抛 no way to ask、不写行；ownTurn（自己发起的那一轮）→ 不问直接过
+ *   XS-40 停用 ask-on-session-access → 不问、放行、零命中，路径门照问；用户写一份同名、规则清空的覆盖 → 同样
+ */
+describe('桌面安全 provider — 会话交互（ask-on-session-access，「允许并记住」写进权限表的会话行）', () => {
+  const TARGET = 'sess-b'
+  const TITLE = 'Plan the release'
+  const sessions: string[] = []
+
+  afterEach(() => {
+    for (const id of sessions.splice(0)) {
+      clearSessionDecisions(id)
+      clearReviewState(id)
+    }
+  })
+
+  /** 目标会话（内存会话，带标题 —— 卡片与拒绝文案摆它） */
+  function ensureTarget(): void {
+    ensureSession(TARGET)
+    sessionRecords.updateTitle(TARGET, TITLE)
+  }
+  const target = (over: Partial<SessionObjectInput> = {}): SessionObjectInput => ({
+    sessionId: TARGET,
+    title: TITLE,
+    ownTurn: false,
+    ...over
+  })
+  const opts = (
+    toolCallId: string,
+    operation = 'prompt-session'
+  ): { toolCallId: string; toolName: string; operation: string } => ({
+    toolCallId,
+    toolName: 'session',
+    operation
+  })
+  /** 一个按 reply() 作答、记下每张卡片的 context */
+  function asking(
+    sessionId: string,
+    reply: () => InputResponse
+  ): { ctx: SecurityContext; asks: AskInputRequest[] } {
+    ensureSession(sessionId)
+    ensureTarget()
+    sessions.push(sessionId)
+    const asks: AskInputRequest[] = []
+    const ctx = getDesktopSecurityContext(
+      {
+        sessionId,
+        requestUserInput: async (req) => {
+          asks.push(req as AskInputRequest)
+          return reply()
+        }
+      },
+      () => config
+    )
+    return { ctx, asks }
+  }
+  /** 这条会话权限表里的会话行（去掉 id 与时间） */
+  const sessionRows = (
+    sessionId: string
+  ): Array<{ kind: string; target: string; access: string; source: string; sourceKey: string }> =>
+    sessionAcl
+      .entries(sessionId)
+      .filter((e) => e.kind === 'session')
+      .map(({ kind, target, access, source, sourceKey }) => ({
+        kind,
+        target,
+        access,
+        source,
+        sourceKey
+      }))
+  const REMEMBER: InputResponse = { kind: 'ask', allowed: true, extra: { remember: true } }
+  const ALLOW_ONCE: InputResponse = { kind: 'ask', allowed: true }
+
+  it('XS-37 对话 B 答「允许并记住」→ 一张卡（带 session 目标）；s1 的表多一行 {session, B, write, user}；之后对话 / 查看都不问；s2 → B 照问', async () => {
+    const { ctx, asks } = asking('s1', () => REMEMBER)
+    await ctx.enforceSession('write', target(), opts('xs37-1'))
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({
+      kind: 'ask',
+      id: 'xs37-1',
+      toolName: 'session',
+      command: `Session(write, ${TARGET})`,
+      session: { sessionId: TARGET, title: TITLE, access: 'write', operation: 'prompt-session' }
+    })
+    expect(asks[0].policyPrompt?.text).toContain('sends a message into another session')
+    expect(sessionRows('s1')).toEqual([
+      { kind: 'session', target: TARGET, access: 'write', source: 'user', sourceKey: '' }
+    ])
+    // 策略看得见的就是这一行（对话隐含查看）
+    const vars = varsAt(WORKSPACE, 's1')
+    expect(vars.aclSessionRead).toEqual([TARGET])
+    expect(vars.aclSessionWrite).toEqual([TARGET])
+
+    // 同一个 context 再对话、再查看：都不问，表不再长
+    await ctx.enforceSession('write', target(), opts('xs37-2', 'steer-session'))
+    await ctx.enforceSession('read', target(), opts('xs37-3', 'read-session'))
+    await ctx.enforceSession('read', target(), opts('xs37-4', 'inspect-session'))
+    expect(asks).toHaveLength(1)
+    expect(sessionRows('s1')).toHaveLength(1)
+
+    // 授权只属于 s1：s2 查看 B 照问
+    const other = asking('s2', () => ALLOW_ONCE)
+    await other.ctx.enforceSession('read', target(), opts('xs37-5', 'read-session'))
+    expect(other.asks).toHaveLength(1)
+    expect(other.asks[0]).toMatchObject({
+      command: `Session(read, ${TARGET})`,
+      session: { sessionId: TARGET, title: TITLE, access: 'read', operation: 'read-session' }
+    })
+    expect(other.asks[0].policyPrompt?.text).toContain("brings another session's conversation")
+    expect(sessionRows('s2')).toEqual([])
+  })
+
+  it('XS-38 允许但不记住 → 不写行、下次照问（remember 只认 true）；拒绝 → 抛 User denied talking to / reading …、不写行', async () => {
+    let reply: InputResponse = ALLOW_ONCE
+    const { ctx, asks } = asking('s1', () => reply)
+
+    await ctx.enforceSession('write', target(), opts('xs38-1'))
+    expect(sessionRows('s1')).toEqual([])
+    await ctx.enforceSession('write', target(), opts('xs38-2'))
+    expect(asks).toHaveLength(2)
+    // 「允许并记住」的标记只认 true：别的真值不记
+    reply = { kind: 'ask', allowed: true, extra: { remember: 'yes' } }
+    await ctx.enforceSession('write', target(), opts('xs38-3'))
+    expect(asks).toHaveLength(3)
+    expect(sessionRows('s1')).toEqual([])
+
+    // 拒绝（哪怕带着 remember）：抛给模型的文案点名那条会话，不写行
+    reply = { kind: 'ask', allowed: false, extra: { remember: true } }
+    await expect(ctx.enforceSession('write', target(), opts('xs38-4'))).rejects.toMatchObject({
+      message: `User denied talking to session "${TITLE}" (${TARGET})`
+    })
+    await expect(
+      ctx.enforceSession('read', target(), opts('xs38-5', 'read-session'))
+    ).rejects.toMatchObject({ message: `User denied reading session "${TITLE}" (${TARGET})` })
+    expect(asks).toHaveLength(5)
+    expect(sessionRows('s1')).toEqual([])
+  })
+
+  it('XS-38 记住「查看」→ 查看免问、对话照问；再记住「对话」→ 同一行放宽成对话', async () => {
+    const { ctx, asks } = asking('s1', () => REMEMBER)
+    await ctx.enforceSession('read', target(), opts('xs38-r1', 'read-session'))
+    expect(asks).toHaveLength(1)
+    expect(sessionRows('s1')).toEqual([
+      { kind: 'session', target: TARGET, access: 'read', source: 'user', sourceKey: '' }
+    ])
+    const readRow = sessionAcl.entries('s1').find((e) => e.kind === 'session')!
+
+    await ctx.enforceSession('read', target(), opts('xs38-r2', 'wait-for-sessions'))
+    expect(asks).toHaveLength(1)
+    expect(verdict(ctx.evaluate('write', { type: 'session', ...target() }))).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-session-access#1'
+    })
+
+    await ctx.enforceSession('write', target(), opts('xs38-r3'))
+    expect(asks).toHaveLength(2)
+    expect(asks[1].session).toMatchObject({ access: 'write' })
+    const rows = sessionAcl.entries('s1').filter((e) => e.kind === 'session')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ id: readRow.id, access: 'write' })
+  })
+
+  it('XS-39 没有询问通道（hook / 后台）→ 抛 no way to ask、不写行；ownTurn（自己发起的那一轮）→ 不问直接过', async () => {
+    ensureSession('s1')
+    ensureTarget()
+    sessions.push('s1')
+    const silent = getDesktopSecurityContext({ sessionId: 's1' }, () => config)
+    const noWay = `Access denied: this needs your confirmation but there is no way to ask: session "${TITLE}" (${TARGET})`
+    await expect(silent.enforceSession('write', target(), opts('xs39-1'))).rejects.toMatchObject({
+      message: noWay
+    })
+    await expect(
+      silent.enforceSession('read', target(), opts('xs39-2', 'read-session'))
+    ).rejects.toMatchObject({ message: noWay })
+    expect(sessionRows('s1')).toEqual([])
+
+    // 自己发起的那一轮：没有通道也过；有通道也不弹卡（答什么都无所谓）
+    await expect(
+      silent.enforceSession('write', target({ ownTurn: true }), opts('xs39-3', 'answer-session'))
+    ).resolves.toBeUndefined()
+    const { ctx, asks } = asking('s1', () => ({ kind: 'ask', allowed: false }))
+    await expect(
+      ctx.enforceSession('write', target({ ownTurn: true }), opts('xs39-4', 'steer-session'))
+    ).resolves.toBeUndefined()
+    await expect(
+      ctx.enforceSession('read', target({ ownTurn: true }), opts('xs39-5', 'read-session'))
+    ).resolves.toBeUndefined()
+    expect(asks).toEqual([])
+    expect(sessionRows('s1')).toEqual([])
+  })
+
+  /** 用户在 ~/.shuvix/policies 里写的同名覆盖：规则清空（= 把这道门拿掉） */
+  const CLEARED: UserPolicyFile = {
+    name: 'ask-on-session-access',
+    displayName: 'ask-on-session-access',
+    description: '',
+    rules: [],
+    body: '',
+    fileName: 'ask-on-session-access.md'
+  }
+
+  it.each<[string, () => void]>([
+    [
+      '停用开关（isPolicyDisabled）',
+      () => state.disabled.add('policy:builtin:ask-on-session-access')
+    ],
+    ['同名覆盖、规则清空', () => (state.userPolicies = [CLEARED])]
+  ])('XS-40 %s → 会话交互不问、放行、零命中；路径门照问', async (_label, switchOff) => {
+    switchOff()
+    const { ctx, asks } = asking('s1', () => ALLOW_ONCE)
+    for (const mode of ['read', 'write'] as const) {
+      const decision = ctx.evaluate(mode, { type: 'session', ...target() })
+      expect({ mode, ...verdict(decision) }).toEqual({
+        mode,
+        effect: 'allow',
+        winning: 'default:session'
+      })
+      expect(decision.matched, mode).toEqual([])
+    }
+    await ctx.enforceSession('write', target(), opts('xs40-1'))
+    await ctx.enforceSession('read', target(), opts('xs40-2', 'read-session'))
+    expect(asks).toEqual([])
+    expect(sessionRows('s1')).toEqual([])
+
+    // 只拿掉了那一道门：会话目录外的写照问
+    await ctx.enforcePath('write', join(OUTSIDE, 'xs40.txt'), {
+      toolCallId: 'xs40-3',
+      toolName: 'write'
+    })
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({ kind: 'ask', id: 'xs40-3', toolName: 'write' })
+    expect(asks[0]).not.toHaveProperty('session')
+  })
 })

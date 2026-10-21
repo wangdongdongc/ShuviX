@@ -2,8 +2,9 @@
  * 会话权限表（ACL）—— 一条会话的文件访问权的**唯一来源**。形状与规则见 chat-protocol 的 sessionAcl.ts。
  *
  * 读它的三方用的是同一份：
- *   - 安全策略：desktop provider 的 getVars 交出 `vars.aclRead` / `vars.aclWrite`，出厂的
- *     ask-on-external-path 在这以外询问；
+ *   - 安全策略：desktop provider 的 getVars 交出 `vars.aclRead` / `vars.aclWrite`（路径，出厂的
+ *     ask-on-external-path 在这以外询问）与 `vars.aclSessionRead` / `vars.aclSessionWrite`（会话，出厂的
+ *     ask-on-session-access 在这以外询问）；
  *   - 命令沙箱：planFor 的可读 / 可写根（sandboxEntries）；
  *   - 设置界面：会话的权限表面板（entries）。
  *
@@ -13,8 +14,9 @@
  * 联动」不需要每个改设置的地方都来通知，全局的技能开关也不必挨个会话去改。新建会话时立即对账一次
  * （「创建时生成权限表」），之后谁先读谁触发。
  *
- * 授予的行（user / widget）只经这里的 grantPath / setAccess / remove 改，每次改都广播
- * `session.configChanged`（界面据此重拉）。
+ * 授予的行（user / widget）只经这里的 grantPath / grantSession / setAccess / remove 改，每次改都广播
+ * `session.configChanged`（界面据此重拉）。会话种类的行指向另一条会话：那条会话被删时，所有表里指向它的行一并
+ * 删掉（deleteSession）。
  *
  * 继承：派生 agent 与 hook agent 的工具上下文用所在会话的 id，天然共用这张表；子会话建成时复制父会话的
  * 授予行（copyGranted），fork 复制授予行与工作目录那一行的访问方式（copyForFork）。之后各管各的。
@@ -27,9 +29,12 @@ import {
   isDerivedAclSource,
   needsSandboxRootCheck,
   pathAclView,
+  sessionAclView,
   widerPathAccess,
   type AclEntry,
-  type PathAccess
+  type AclKind,
+  type PathAccess,
+  type SessionAccess
 } from '@shuvix/chat-protocol/sessionAcl'
 import { createLogger } from '../../logger'
 import { isSafeSessionId } from '../../utils/paths'
@@ -37,7 +42,7 @@ import { broadcastSessionConfigChanged } from '../../utils/sessionConfigBroadcas
 import type { SandboxPathEntry } from '../sandbox'
 import { sessionRecords } from '../sessionRecords'
 import { derivePathEntries, derivedKey, type DerivedPathEntry } from './derive'
-import { aclStoreFor, deleteAclEverywhere, type AclStore } from './store'
+import { aclStoreFor, deleteAclEverywhere, deleteTargetEverywhere, type AclStore } from './store'
 
 export { setAclSkillRoots } from './derive'
 
@@ -114,15 +119,85 @@ function sync(sessionId: string): AclStore | null {
   return store
 }
 
+/**
+ * 授予一行（grantPath / grantSession 共用）：同一来源对同一目标已有一行就合并访问方式（读 + 写 = 写），不另起一行
+ */
+function grant(
+  store: AclStore,
+  sessionId: string,
+  kind: AclKind,
+  target: string,
+  access: PathAccess,
+  source: GrantSource,
+  sourceKey: string
+): AclEntry {
+  const now = Date.now()
+  const existing = store
+    .list(sessionId)
+    .find(
+      (e) =>
+        e.kind === kind && e.source === source && e.sourceKey === sourceKey && e.target === target
+    )
+  if (existing) {
+    const merged = widerPathAccess(existing.access, access)
+    if (merged === existing.access) return existing
+    store.updateAccess(sessionId, existing.id, merged, now)
+    log.info(`grant session=${sessionId} ${kind} ${source} ${merged} (widened)`)
+    broadcastSessionConfigChanged(sessionId)
+    return { ...existing, access: merged, updatedAt: now }
+  }
+  const entry: AclEntry = {
+    id: uuidv7(),
+    sessionId,
+    kind,
+    target,
+    access,
+    source,
+    sourceKey,
+    createdAt: now,
+    updatedAt: now
+  }
+  store.insert(entry)
+  log.info(`grant session=${sessionId} ${kind} ${source} ${access}`)
+  broadcastSessionConfigChanged(sessionId)
+  return entry
+}
+
 export const sessionAcl = {
   /** 一条会话的全部行（先对账）。会话不在 / 坏 id → 空表 */
   entries(sessionId: string): AclEntry[] {
     return sync(sessionId)?.list(sessionId) ?? []
   },
 
+  /**
+   * 交给界面的那一份：会话种类的行带上目标会话此刻的标题（`targetTitle`，不落库；会话已删 → 缺省）
+   */
+  entriesForDisplay(sessionId: string): AclEntry[] {
+    return this.entries(sessionId).map((entry) => {
+      if (entry.kind !== 'session') return entry
+      const title = sessionRecords.pick(entry.target, ['title'])?.title
+      return title === undefined ? entry : { ...entry, targetTitle: title }
+    })
+  },
+
   /** 路径的可读 / 可写目录表（策略的 `vars.aclRead` / `vars.aclWrite`；写隐含读） */
   pathView(sessionId: string): { read: string[]; write: string[] } {
     return pathAclView(this.entries(sessionId))
+  },
+
+  /**
+   * 会话种类的行（这条会话免询问查看 / 对话的别的会话）。它们都是授予的，不用先对账派生行 —— 直接读存储
+   */
+  sessionGrants(sessionId: string): AclEntry[] {
+    if (!exists(sessionId)) return []
+    return aclStoreFor(sessionId)
+      .list(sessionId)
+      .filter((e) => e.kind === 'session')
+  },
+
+  /** 会话的可查看 / 可对话 id 表（策略的 `vars.aclSessionRead` / `vars.aclSessionWrite`；对话隐含查看） */
+  sessionView(sessionId: string): { read: string[]; write: string[] } {
+    return sessionAclView(this.sessionGrants(sessionId))
   },
 
   /** 交给命令沙箱的路径条目（授予的写还要过「适不适合当可写根」，见 sandbox/spec） */
@@ -144,38 +219,26 @@ export const sessionAcl = {
   ): AclEntry | null {
     const store = sync(sessionId)
     if (!store || !isAbsolute(path)) return null
-    const source = opts.source ?? 'user'
-    const sourceKey = opts.sourceKey ?? ''
-    const now = Date.now()
-    const existing = store
-      .list(sessionId)
-      .find(
-        (e) =>
-          e.kind === 'path' && e.source === source && e.sourceKey === sourceKey && e.target === path
-      )
-    if (existing) {
-      const merged = widerPathAccess(existing.access, access)
-      if (merged === existing.access) return existing
-      store.updateAccess(sessionId, existing.id, merged, now)
-      log.info(`grant session=${sessionId} ${source} ${merged} (widened)`)
-      broadcastSessionConfigChanged(sessionId)
-      return { ...existing, access: merged, updatedAt: now }
-    }
-    const entry: AclEntry = {
-      id: uuidv7(),
+    return grant(
+      store,
       sessionId,
-      kind: 'path',
-      target: path,
+      'path',
+      path,
       access,
-      source,
-      sourceKey,
-      createdAt: now,
-      updatedAt: now
-    }
-    store.insert(entry)
-    log.info(`grant session=${sessionId} ${source} ${access}`)
-    broadcastSessionConfigChanged(sessionId)
-    return entry
+      opts.source ?? 'user',
+      opts.sourceKey ?? ''
+    )
+  },
+
+  /**
+   * 授予这条会话与另一条会话交互（询问卡片上的「允许并记住」）：read = 查看，write = 对话。已有一行就合并访问
+   * 方式（查看 + 对话 = 对话）。返回那一行；两条会话有一条不在、或是同一条 → null
+   */
+  grantSession(sessionId: string, targetId: string, access: SessionAccess): AclEntry | null {
+    if (targetId === sessionId || !exists(targetId)) return null
+    const store = sync(sessionId)
+    if (!store) return null
+    return grant(store, sessionId, 'session', targetId, access, 'user', '')
   },
 
   /** 改一行的访问方式（只有授予的行与工作目录那一行能改）。返回是否改了 */
@@ -229,10 +292,21 @@ export const sessionAcl = {
     sync(sessionId)
   },
 
-  /** 删会话时调：整张表（两边存储）与对账记忆都清掉 */
+  /**
+   * 删会话时调：整张表（两边存储）与对账记忆都清掉，别的会话里授权与它交互的行也一并删掉
+   */
   deleteSession(sessionId: string): void {
     reconciled.delete(sessionId)
     deleteAclEverywhere(sessionId)
+    try {
+      // 那些会话的权限表界面（开着的会话设置）跟着重拉
+      for (const affected of deleteTargetEverywhere('session', sessionId)) {
+        if (affected !== sessionId) broadcastSessionConfigChanged(affected)
+      }
+    } catch (err) {
+      // 删不掉的行只是指向一条不存在的会话：授权的目标已经没了，不会放出任何权限
+      log.warn(`acl forget target failed session=${sessionId}: ${(err as Error).message}`)
+    }
   },
 
   /** 忘掉对账记忆（单测；或确知派生输入变了想立即对一次时） */

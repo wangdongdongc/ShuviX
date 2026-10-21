@@ -22,7 +22,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   InputRequest,
   InputResponse,
-  ParentSessionRef
+  DrivingSessionRef
 } from '@shuvix/chat-protocol/types/inputRequest'
 import * as runtime from '../index'
 import { AskParamsSchema, ASK_DESCRIPTION, PARENT_ANSWERED, createAskTool } from '../askTool'
@@ -297,7 +297,7 @@ describe('ASK 答题方（WP2，§19.5）', () => {
   })
 
   it('WP2-19 details.answeredBy 是拷贝：之后改应答里的那一项不影响已交回的结果', async () => {
-    const answeredBy: ParentSessionRef = { ...PARENT }
+    const answeredBy: DrivingSessionRef = { ...PARENT }
     const { requestUserInput } = channel(() => ({
       kind: 'choice',
       selections: ['Terse'],

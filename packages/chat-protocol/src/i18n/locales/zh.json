@@ -253,7 +253,8 @@
     "sendFailed": "发送失败：{{error}}",
     "pasteChipLines": "[粘贴文本 #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[粘贴文本 #{{seq}} · {{chars}} 字符]",
-    "pasteName": "粘贴文本 #{{seq}}"
+    "pasteName": "粘贴文本 #{{seq}}",
+    "atSectionSessions": "会话"
   },
   "compact": {
     "summaryLabel": "对话摘要（自动压缩）"
@@ -428,7 +429,15 @@
       "show": "实际执行的命令",
       "loading": "读取中…",
       "missing": "没有这条命令的执行记录。"
-    }
+    },
+    "answeredBySessionTag": "其他会话代答",
+    "sessionAskRead": "查看另一条会话",
+    "sessionAskWrite": "与另一条会话对话",
+    "sessionAskMessage": "将要发送的消息",
+    "sessionAskUntitled": "未命名会话",
+    "allowAndRememberSession": "允许并记住",
+    "answeredBySessionHint": "这个问题由另一条会话「{{title}}」在它发起的这一轮里代你回答，不是你自己选的。",
+    "answeredBySessionHintNoTitle": "这个问题由另一条会话在它发起的这一轮里代你回答，不是你自己选的。"
   },
   "sessionConfig": {
     "title": "会话配置",
@@ -466,7 +475,12 @@
     "addConfirm": "添加",
     "browse": "选择文件夹…",
     "cancel": "取消",
-    "addFailed": "请输入绝对路径（以 / 或盘符开头）。"
+    "addFailed": "请输入绝对路径（以 / 或盘符开头）。",
+    "sessionsTitle": "会话访问",
+    "sessionsDescription": "这条会话的智能体使用这些会话不用问你 —— 查看它们的答复，或者还能与它们对话。它自己的子会话不需要这一行；别的会话会先问你，在询问卡片上「允许并记住」就会加到这里。",
+    "sessionRead": "查看",
+    "sessionWrite": "对话",
+    "sessionUntitled": "未命名会话"
   },
   "projectForm": {
     "createTitle": "新建项目",
@@ -1240,6 +1254,7 @@
     "tasksKindBash": "Bash",
     "tasksKindAgent": "子代理",
     "tasksKindSubSession": "子会话",
+    "tasksKindSession": "会话",
     "tasksOpen": "打开",
     "tasksAgentGone": "这个子代理已不可用",
     "tasksBlockedOn": "等你回答",

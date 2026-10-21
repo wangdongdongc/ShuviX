@@ -716,7 +716,7 @@ describe('子会话', () => {
     const marker = markerPath('r10')
     const wokenByCompletion = (r: FakeRequest): boolean =>
       notReviewer(r) &&
-      r.lastUserText.includes(`<sub-session id="${childSid}"`) &&
+      r.lastUserText.includes(`<session id="${childSid}"`) &&
       r.lastUserText.includes('has finished')
     provider.reset()
     await events.clear()
@@ -727,8 +727,8 @@ describe('子会话', () => {
             id: 'call_r10_prompt',
             name: 'session',
             args: JSON.stringify({
-              action: 'prompt-sub-session',
-              sub_session_id: childSid,
+              action: 'prompt-session',
+              session_id: childSid,
               message: delegated
             })
           }
@@ -819,8 +819,8 @@ describe('子会话', () => {
             id: 'call_r13_prompt',
             name: 'session',
             args: JSON.stringify({
-              action: 'prompt-sub-session',
-              sub_session_id: childSid,
+              action: 'prompt-session',
+              session_id: childSid,
               message: delegated
             })
           }
@@ -850,7 +850,7 @@ describe('子会话', () => {
           {
             id: 'call_r13_wait1',
             name: 'session',
-            args: JSON.stringify({ action: 'wait-for-sub-sessions', sub_session_id: childSid })
+            args: JSON.stringify({ action: 'wait-for-sessions', session_id: childSid })
           }
         ],
         when: parentTurn
@@ -861,7 +861,7 @@ describe('子会话', () => {
           {
             id: 'call_r13_answer',
             name: 'session',
-            args: JSON.stringify({ action: 'answer-sub-session', selections: [yes] })
+            args: JSON.stringify({ action: 'answer-session', selections: [yes] })
           }
         ],
         when: parentTurn
@@ -879,7 +879,7 @@ describe('子会话', () => {
           {
             id: 'call_r13_wait2',
             name: 'session',
-            args: JSON.stringify({ action: 'wait-for-sub-sessions', sub_session_id: childSid })
+            args: JSON.stringify({ action: 'wait-for-sessions', session_id: childSid })
           }
         ],
         when: parentTurn
@@ -897,7 +897,7 @@ describe('子会话', () => {
 
     // 父会话那一轮里：询问由 wait 交回；代答只回执；子会话的答复由下一次 wait 交回
     const asking = await toolBlock(parentSid, 'call_r13_wait1')
-    expect(asking.result).toContain('<sub-sessions status="asking">')
+    expect(asking.result).toContain('<sessions status="asking">')
     expect(asking.result).toContain('Q-R13 clean the marker?')
     const answered = await toolBlock(parentSid, 'call_r13_answer')
     expect(answered.isError).toBeFalsy()

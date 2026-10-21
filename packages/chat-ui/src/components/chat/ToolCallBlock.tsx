@@ -259,8 +259,8 @@ export function ToolCallBlock({
     badge: isBackground ? (
       <BackgroundBadge />
     ) : details?.type === 'ask' && details.answeredBy ? (
-      // 父会话代答的 ask（§19.5）：一眼看得出这不是用户自己选的
-      <AnsweredByParentBadge title={details.answeredBy.title} />
+      // 别的会话（父会话或被授权的会话）代答的 ask（§19.5）：一眼看得出这不是用户自己选的
+      <AnsweredByParentBadge title={details.answeredBy.title} kind={details.answeredBy.kind} />
     ) : undefined,
     trailing:
       reviewNote || toolCallId ? (

@@ -2,13 +2,14 @@
  * DefaultChatGateway 的 `resendSources`（docs/sub-session-design.md §19.7，2026-10-17 落地时定的第 2 条）：
  * 「重新生成」与「回退后原样重发」沿用原来的来源 —— 回退掉一条**子会话**里有来源记录的用户消息时，网关记下它的
  * 原文与来源；紧接着的那一次（不是被驱动的）`prompt` 原文一字不差、两分钟之内，就把来源交给 `AgentSession.prompt`
- * 的第 5 个参数。不管用没用上都撤掉；改过的文字不沿用；顶层会话不记。否则父会话写的话经一次重发就成了人的话。
+ * 的第 5 个参数。不管用没用上都撤掉；改过的文字不沿用。顶层会话里别的会话代发的那条同样沿用（2026-10-20：会话权限表
+ * 授权的会话也能往顶层会话里发消息）。否则别的会话写的话经一次重发就成了人的话。
  *
  *   RS-01 子会话、回退掉父会话代发的那条 → 原样重发带上它的来源（原样、连 title），其余参数照旧
  *   RS-02 只沿用紧接着的那一次：再发一次同样的话不带
  *   RS-03 改过的文字不沿用，记录照样撤掉（之后再发原文也不带）
  *   RS-04 两分钟窗口：差 1ms 还算，恰好两分钟不算
- *   RS-05 顶层会话不记：不读来源、不读视图，重发不带
+ *   RS-05 顶层会话里别的会话代发的那条同样沿用；人打的不带
  *   RS-06 被回退的那条没有来源（人打的）→ 不记
  *   RS-07 回退被拒（false）→ 不记，也不清 agent 状态
  *   RS-08 紧接着到来的是被驱动的发送 → 不沿用（来源由 drive 给），记录照样撤掉
@@ -180,14 +181,22 @@ describe('DefaultChatGateway.resendSources（§19.7）', () => {
     expect(sourceOf(0)).toStrictEqual(expected)
   })
 
-  it('RS-05 顶层会话不记：不读来源、不读视图，重发不带', async () => {
-    const top = agentWith([{ id: 'u1', role: 'user', content: TASK }], [['u1', PARENT]])
+  it('RS-05 顶层会话里别的会话代发的那条（经会话权限表被授权的会话，2026-10-20）→ 同样沿用；人打的照旧不带', async () => {
+    const OTHER = { kind: 'session', sessionId: 'A1', title: 'Driver' } as const
+    const top = agentWith(
+      [
+        { id: 'u1', role: 'user', content: TASK },
+        { id: 'u2', role: 'user', content: 'typed by a human' }
+      ],
+      [['u1', OTHER]]
+    )
     mocks.getAgentSession.mockImplementation((id: string) => (id === 't1' ? top : undefined))
     expect(await gateway.rollbackMessage('t1', 'u1')).toBe(true)
-    expect(top.inputSources).not.toHaveBeenCalled()
-    expect(top.sessionView).not.toHaveBeenCalled()
     await gateway.prompt('t1', TASK)
-    expect(sourceOf(0)).toBeUndefined()
+    expect(sourceOf(0)).toStrictEqual(OTHER)
+    expect(await gateway.rollbackMessage('t1', 'u2')).toBe(true)
+    await gateway.prompt('t1', 'typed by a human')
+    expect(sourceOf(1)).toBeUndefined()
   })
 
   it('RS-06 被回退的那条没有来源（人打的）→ 不记，重发不带', async () => {

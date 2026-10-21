@@ -1,6 +1,6 @@
 /**
- * 子会话的询问在父会话眼里怎么写（docs/sub-session-design.md §19.4）—— `session` 工具的结果与运行器发给父会话的
- * 通知共用这一份。单独成一个没有依赖的小模块：工具层与运行器都 import 它，测试 mock 掉运行器也不连累排版。
+ * 被驱动的会话（子会话或别的会话）的询问在调用方眼里怎么写（docs/sub-session-design.md §19.4）—— `session` 工具的
+ * 结果与运行器发给调用方的通知共用这一份。单独成一个没有依赖的小模块：工具层与运行器都 import 它，测试 mock 掉运行器也不连累排版。
  *
  * 文案是模型面向的英文（进上下文的字符串不随界面语言变）。问题与选项是子会话的模型写的，原样放进块里（围栏之内）。
  */
@@ -9,12 +9,12 @@ import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 /** 一条挂着的询问在父会话眼里的样子（§19.4） */
 export type PendingAskInfo =
   | {
-      /** 询问 id（= 子会话里那次 ask 调用的 toolCallId），`answer-sub-session` 的 `ask_id` */
+      /** 询问 id（= 那条会话里那次 ask 调用的 toolCallId），`answer-session` 的 `ask_id` */
       id: string
       kind: 'question'
       question: string
       options: Array<{ label: string; description: string }>
-      /** 父会话能代答：这一轮是它发起的、绑定任务还活着（§19.2）。false = 只有用户能答 */
+      /** 调用方能代答：这一轮是它发起的、绑定任务还活着（§19.2）。false = 只有用户能答 */
       answerable: boolean
     }
   | {
@@ -64,7 +64,7 @@ export function renderPendingAsks(asks: readonly PendingAskInfo[] | undefined): 
         ask.question,
         ...options,
         ask.answerable
-          ? 'You may answer it for the user with action "answer-sub-session": `selections` with the exact option labels (one or several), or `message` in your own words. Answer only when the answer follows from what the user already told you or from the task itself; when it is the user\'s own preference or goes beyond what you were asked to do, relay it to the user instead.'
+          ? 'You may answer it for the user with action "answer-session": `selections` with the exact option labels (one or several), or `message` in your own words. Answer only when the answer follows from what the user already told you or from the task itself; when it is the user\'s own preference or goes beyond what you were asked to do, relay it to the user instead.'
           : 'It was asked in a turn the user started in that session, so only the user answers it — tell them, or leave it.',
         '</question>'
       ].join('\n')
@@ -85,9 +85,9 @@ export function blockedOnApproval(asked?: readonly string[]): string {
   return [
     '<blocked-on-user-approval>',
     asked?.length ? asked.map((a) => `- ${a}`).join('\n') : '- (question text unavailable)',
-    'This is an approval prompt shown to the USER inside that sub-session. It stays there until',
+    'This is an approval prompt shown to the USER inside that session. It stays there until',
     'the user answers it — you cannot answer it, and rewording the task will not clear it.',
-    'Tell the user what is waiting for them, or stop the sub-session with "stop-sub-session".',
+    'Tell the user what is waiting for them, or stop that turn with "stop-session".',
     '</blocked-on-user-approval>'
   ].join('\n')
 }

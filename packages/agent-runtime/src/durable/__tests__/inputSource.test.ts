@@ -15,6 +15,7 @@
  *   SRC-21 / 22 (54 / 55) 关掉的句柄；只读（零发布、不建 agent、不送达推迟的通知、被中断的照样停着）
  *   SRC-23 (56)           不依赖 Node、从包入口导出
  *   AUTH-01..07           `authorsOf`：第一条有记录的之前 / 之后，大纲、审查、`user-intervened` 共用的那一份判法
+ *   XS-08                 `kind: 'session'`（经会话权限表被授权的别的会话发进来的，2026-10-20）：形状判别与父会话同一套
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -121,6 +122,39 @@ describe('SRC · inputSourceOf（WP2-33）', () => {
     ['undefined', undefined, undefined]
   ] as const)('SRC-01 WP2-33 %s', (_label, item, expected) => {
     expect(inputSourceOf(item)).toStrictEqual(expected)
+  })
+})
+
+/**
+ * XS-08 别的会话（不是父会话）发进来的消息：来源 `kind: 'session'`。形状判别与 `parent-session` 同一套 ——
+ * 三键原样、非字符串 title 丢掉、空 sessionId 认不出；真发送上记下的就是这三键。
+ */
+describe('XS-08 · inputSourceOf × kind session', () => {
+  const OTHER = { kind: 'session', sessionId: 'X', title: 'T' } as const
+  it.each([
+    ['三键原样', OTHER, OTHER],
+    [
+      '没有 title（两键）',
+      { kind: 'session', sessionId: 'X' },
+      { kind: 'session', sessionId: 'X' }
+    ],
+    ['title 是数字 → 丢掉 title', { ...OTHER, title: 5 }, { kind: 'session', sessionId: 'X' }],
+    ['额外字段 → 只留三键', { ...OTHER, trusted: true }, OTHER],
+    ['sessionId 空串', { kind: 'session', sessionId: '' }, undefined],
+    ['sessionId 不是字符串', { kind: 'session', sessionId: 7 }, undefined],
+    ['kind 大小写不对', { kind: 'Session', sessionId: 'X' }, undefined]
+  ] as const)('XS-08 %s', (_label, item, expected) => {
+    expect(inputSourceOf(item)).toStrictEqual(expected)
+  })
+
+  it('XS-08 真发送：带 kind session 来源的那条落进来源表，原样三键', async () => {
+    const { t, session } = await openSession()
+    t.kit.queue(answer('a1'), answer('a2'))
+    expect(await session.submitUser('typed')).toEqual({})
+    expect(await session.submitUser('from X', { source: OTHER })).toEqual({})
+    expect([...(await sources(session)).entries()]).toStrictEqual([
+      [String((await userEntry(session, 'from X')).id), OTHER]
+    ])
   })
 })
 

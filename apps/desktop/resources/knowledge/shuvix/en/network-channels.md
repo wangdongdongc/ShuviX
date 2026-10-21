@@ -240,7 +240,7 @@ generated from the channel table of this version.
 
 ### `mentions`
 
-- read: `knowledge:mentionEntries`
+- read: `knowledge:mentionEntries`, `session:mentionEntries`
 
 ### `network`
 

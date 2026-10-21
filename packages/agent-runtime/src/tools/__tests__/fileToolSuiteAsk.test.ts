@@ -70,6 +70,7 @@ import {
   type InvokedToolResult
 } from '../testing/invokeTool'
 import type { ToolCallScope } from '../toolCall'
+import type { AskDiffPreview } from '@shuvix/chat-protocol/types/inputRequest'
 
 /** 内置策略 md 的构建期内联读取口（真实装配链要它；测试进程，不进桌面 bundle） */
 const INLINE_POLICY_MD = createInlinePolicyMdReader()
@@ -328,7 +329,7 @@ describe('文件工具套件 — 询问请求的次数与形状', () => {
     expect(req.command).toBe(allowEntry('write', INSIDE_ABS))
     expect(req.preview).toMatchObject({ kind: 'diff', path: INSIDE, isNewFile: true })
     // 卡片里的 diff 就是 tool result 里的那一份
-    expect(req.preview?.diff).toBe(
+    expect((req.preview as AskDiffPreview | undefined)?.diff).toBe(
       (res.details as { type: 'write'; diff: string; isNewFile: boolean }).diff
     )
   })
@@ -342,7 +343,7 @@ describe('文件工具套件 — 询问请求的次数与形状', () => {
     expect(req.toolName).toBe('edit')
     expect(req.command).toBe(allowEntry('write', INSIDE_ABS))
     expect(req.preview).toMatchObject({ kind: 'diff', path: INSIDE })
-    expect(req.preview?.isNewFile).toBeUndefined()
+    expect((req.preview as AskDiffPreview | undefined)?.isNewFile).toBeUndefined()
   })
 
   it('PERM-10: read 的询问请求不带 preview（凭据目录读取门触发）', async () => {
@@ -864,9 +865,11 @@ describe('文件工具套件 — 路径本身是符号链接：不跟（port.rea
     const req = askOf(w.requests[0])
     expect(req.command).toBe(allowEntry('write', OUT))
     expect(req.preview).toMatchObject({ kind: 'diff', path: OUT, isNewFile: false })
-    expect(req.preview?.diff).toBe((res.details as { diff: string }).diff)
-    expect(req.preview?.diff).toContain('-1 old')
-    expect(req.preview?.diff).toContain('+1 new')
+    expect((req.preview as AskDiffPreview | undefined)?.diff).toBe(
+      (res.details as { diff: string }).diff
+    )
+    expect((req.preview as AskDiffPreview | undefined)?.diff).toContain('-1 old')
+    expect((req.preview as AskDiffPreview | undefined)?.diff).toContain('+1 new')
     expect(w.files.get(OUT)).toBe('new\n')
   })
 
@@ -1186,7 +1189,7 @@ describe('文件工具套件 — 询问点的自动审查（provider.onPermissio
     const editCard = askOf(h.requests[1])
     expect(editCard.review).toEqual(opinion)
     expect(editCard.preview).toMatchObject({ kind: 'diff', path: INSIDE })
-    expect(editCard.preview?.diff).toContain('BETA')
+    expect((editCard.preview as AskDiffPreview | undefined)?.diff).toContain('BETA')
     expect(h.files.get(INSIDE_ABS)).toBe('alpha\nBETA\n')
   })
 
@@ -1510,8 +1513,8 @@ describe('文件工具套件 — writeFileContent', () => {
     expect(req.toolName).toBe('doc_edit')
     expect(req.id).toBe('wfc-call')
     expect(req.preview).toMatchObject({ kind: 'diff', path: 'shown/doc.md' })
-    expect(req.preview?.diff).toContain('-2 body')
-    expect(req.preview?.diff).toContain('+2 BODY')
+    expect((req.preview as AskDiffPreview | undefined)?.diff).toContain('-2 body')
+    expect((req.preview as AskDiffPreview | undefined)?.diff).toContain('+2 BODY')
     expect(h.files.get('/ws/doc.md')).toBe('one\nbody\n')
     expect(h.spies.writeFile).not.toHaveBeenCalled()
     expect(h.onFileChange).not.toHaveBeenCalled()

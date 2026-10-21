@@ -35,6 +35,7 @@ import {
   type SecurityContext,
   type SecurityHostProvider,
   type SecuritySubject,
+  type SessionObjectInput,
   type UserPolicyFile
 } from '@shuvix/agent-runtime'
 import type { ProjectEnvVar } from '../types'
@@ -200,6 +201,37 @@ export async function assertWriteAllowed(
   })
 }
 
+/**
+ * 会话交互的 PEP（`session` 工具每个指向一条别的会话 —— 不是自己子会话 —— 的动作都过这里）：read = 查看，write =
+ * 对话。出厂的 ask-on-session-access 在不是自己发起的那一轮、又不在会话权限表里时询问；「允许并记住」记进权限表
+ * （persistSessionGrant）。拒绝 / 取消 / 反馈时抛错，文案给模型。
+ */
+export async function assertSessionAccess(
+  ctx: ToolContext,
+  access: 'read' | 'write',
+  object: SessionObjectInput,
+  opts: {
+    toolCallId: string
+    toolName: string
+    /** `session` 工具的动作名（策略里的 tool.operation） */
+    operation: string
+    owner?: CallOwner
+    signal?: AbortSignal
+    /** 要发进那条会话的话（对话类动作）：卡片原样摆出来 */
+    message?: string
+  }
+): Promise<void> {
+  await getDesktopSecurityContext(ctx).enforceSession(access, object, {
+    toolCallId: opts.toolCallId,
+    ...opts.owner,
+    toolName: opts.toolName,
+    operation: opts.operation,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    ...(opts.message?.trim() ? { preview: { kind: 'message', text: opts.message } } : {}),
+    abortError: TOOL_ABORTED
+  })
+}
+
 const securityLog = createLogger('Security')
 
 /**
@@ -257,14 +289,15 @@ function hostPolicyVars(
 
 /**
  * 桌面 SecurityHostProvider —— 把平台细节注入共享安全模块：
- *   - 变量表：会话权限表 aclRead / aclWrite（与命令沙箱同一份，见 services/acl）/ home / workspace 等
+ *   - 变量表：会话权限表 aclRead / aclWrite（与命令沙箱同一份，见 services/acl）、aclSessionRead /
+ *     aclSessionWrite（可以查看 / 对话的别的会话）/ home / workspace 等
  *     事实变量（策略 match/lets 里的 vars.*）
  *   - 真实路径：realPath（符号链接 / `..` / 盘上大小写）—— 安全模块拿它解析路径客体与 inDir 比较的
  *     每个目录，两边都按位置比。变量表因此照写法给即可：工作区、临时工作区（macOS 的
  *     /var → /private/var 这类系统级链接）由 inDir 现解析，不在这里预先 realpath
  *   - 内置策略：随包发布的 `builtin-policies/` 目录现读（policyService.readBuiltinPolicyMd）
  *   - 用户策略：~/.shuvix/policies 现扫（policyService）
- *   - persistGrant 写进会话权限表（「允许并记住」）、statSync 判目录、前端 requestUserInput 透传
+ *   - persistGrant / persistSessionGrant 写进会话权限表（「允许并记住」）、statSync 判目录、前端 requestUserInput 透传
  *
  * 全部成员每次评估现读 —— 不跨调用缓存。context 实例在建会话时创建一次、整会话复用
  * （buildTools → makeDesktopFileToolDeps），若在此缓存权限表，则会话中途
@@ -283,10 +316,14 @@ export function makeDesktopSecurityProvider(
       // 会话权限表（外部目录访问策略读 aclRead / aclWrite）：与命令沙箱同一份，所以文件工具在这以外
       // 询问，恰好就是沙箱里的命令读写不到的地方。不看沙箱开没开 —— 没有沙箱的平台一样只在这以外询问
       const acl = sessionAcl.pathView(ctx.sessionId)
+      // 会话种类的行（ask-on-session-access 读 aclSessionRead / aclSessionWrite）：这条会话可以查看 / 对话的别的会话
+      const sessions = sessionAcl.sessionView(ctx.sessionId)
       return {
         ...hostPolicyVars(ctx.sessionId, workingDirectory),
         aclRead: acl.read,
-        aclWrite: acl.write
+        aclWrite: acl.write,
+        aclSessionRead: sessions.read,
+        aclSessionWrite: sessions.write
       }
     },
     // 仅影响内置策略的人读面（description/body/规则 prompt）；规则的判定字段恒取 en
@@ -304,6 +341,7 @@ export function makeDesktopSecurityProvider(
       }
     },
     persistGrant: (mode, p) => void sessionAcl.grantPath(ctx.sessionId, p, mode),
+    persistSessionGrant: (mode, id) => void sessionAcl.grantSession(ctx.sessionId, id, mode),
     requestUserInput: ctx.requestUserInput,
     // 每次调用现取注入的审查者（provider 可整会话复用，注入发生在启动时）
     onPermissionRequest: (event, signal) =>
@@ -409,6 +447,7 @@ export function getDesktopSecurityContext(
     enforceGitOp: (object, opts) => forCall(opts).enforceGitOp(object, opts),
     enforceDatabase: (object, opts) => forCall(opts).enforceDatabase(object, opts),
     enforceUrl: (object, opts) => forCall(opts).enforceUrl(object, opts),
+    enforceSession: (mode, object, opts) => forCall(opts).enforceSession(mode, object, opts),
     enforceInvocation: (opts) => forCall(opts).enforceInvocation(opts)
   }
 }

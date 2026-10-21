@@ -45,12 +45,14 @@ vi.mock('../../services/sessionService', () => ({ sessionService: { create: stat
 vi.mock('../../services/acl', () => ({
   sessionAcl: {
     entries: state.aclEntries,
+    entriesForDisplay: state.aclEntries,
     grantPath: state.aclGrantPath,
     setAccess: state.aclSetAccess,
     remove: state.aclRemove
   }
 }))
 vi.mock('../../services/filesWatcherService', () => ({ closeWatcherIfWorkingDirectory: vi.fn() }))
+vi.mock('../../services/sessionMentions', () => ({ listSessionMentions: vi.fn(() => []) }))
 vi.mock('../../frontend', () => ({
   chatGateway: { getRuntimeStatuses: state.getRuntimeStatuses },
   operationContext: {
