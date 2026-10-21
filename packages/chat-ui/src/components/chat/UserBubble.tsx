@@ -6,6 +6,7 @@ import type { UserTextMessage } from '../../stores/chatStore'
 import { segmentContent, resolveTokensForCopy } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
+import { OriginBadge } from './OriginBadge'
 
 interface UserBubbleProps {
   msg: UserTextMessage
@@ -59,7 +60,7 @@ export const UserBubble = memo(function UserBubble({
   // 折叠渐隐用遮罩而非叠加渐变层：气泡有自己的底色，叠 bg-primary 渐变会露馅
   const fadeMask = `linear-gradient(to bottom, #000 calc(100% - ${COLLAPSE_FADE_HEIGHT}px), transparent)`
 
-  const source = msg.metadata?.source
+  const origin = msg.metadata?.origin
 
   return (
     <div
@@ -120,16 +121,8 @@ export const UserBubble = memo(function UserBubble({
             {expanded ? t('message.collapseLines') : t('message.expandLines', { lines: lineCount })}
           </button>
         )}
-        {/* 非 Electron 来源标识 */}
-        {source && (
-          <span className="mr-1 text-[10px]">
-            {source.type === 'webui'
-              ? `WebUI${source.ip ? ` (${source.ip})` : ''}`
-              : source.type === 'telegram'
-                ? `Telegram${source.userId ? ` (${source.userId})` : ''}`
-                : source.type}
-          </span>
-        )}
+        {/* 来源标识（本机窗口打的不标） */}
+        {origin && <OriginBadge origin={origin} />}
         {/* 复制 */}
         {msg.content && (
           <button

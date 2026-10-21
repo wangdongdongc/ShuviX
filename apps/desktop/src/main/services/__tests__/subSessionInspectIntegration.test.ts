@@ -4,7 +4,9 @@
  * 单元层（subSessionInspect / sessionInspect / sessionOutline）用的是假视图与假来源；这里钉的是它们接到真东西上之后：
  *   - 大纲的消息级编号就是子会话 SessionView 里的消息 id（= 界面的 data-msg-id）；
  *   - 父会话发进去的消息（prompt 与 steer）经真 SourceDoc 解析成 `[you]`，用户自己打的是 `[user]`；
- *   - 同一张卡里两次已完成的调用折成一行；没开着的子会话 peek 读、不建运行时、不写条目。
+ *   - 同一张卡里两次已完成的调用折成一行；没开着的子会话 peek 读、不建运行时、不写条目；
+ *   - 输入来源（metadata.origin，2026-10-21）不跟着操作上下文漏进被驱动的发送（WP4-144）：父会话那一轮在网络客户端的
+ *     上下文里跑，它发进子会话的仍记 parent-session；人在子会话里打的按自己的连接记 local。
  * P = 父会话，C = 子会话。用例编号 WP4-14x 对应测试设计清单。
  */
 import {
@@ -21,6 +23,7 @@ import {
 } from './support/desktopRig'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import type { ClientContext } from '../../ipc/registry'
 import { answer, callTool, held, withTimeout } from './support/realHost'
 import { callTools } from '../../../../../../packages/agent-runtime/src/durable/__tests__/support/faux'
 
@@ -162,6 +165,97 @@ describe('inspect-sub-session —— 接到真子会话上', () => {
       }
       expect((await transcriptOf('C')).at(-1)).toBe('pi.assistant:C-final')
 
+      const lines = (await inspectLines(p, { turns: 5 })).lines
+      expect(lines.some((l) => l.endsWith(' [you] second task'))).toBe(true)
+      expect(lines.some((l) => l.endsWith(' [you] parent steer'))).toBe(true)
+      expect(lines.some((l) => l.endsWith(' [user] human words'))).toBe(true)
+      const read2 = await p.runner.read('P', 'C')
+      if ('error' in read2) throw new Error(read2.error)
+      expect(read2.info).not.toHaveProperty('userIntervened')
+    },
+    T
+  )
+
+  it(
+    'WP4-144 来源不漏进被驱动的发送：P 的 start 在网络客户端的上下文里跑，C-task 仍是 parent-session P；人在窗口里打的是 local；[user] / [you] 与 userIntervened 照旧',
+    async () => {
+      const p = proc()
+      // 网关读的那份 AsyncLocalStorage（bootProcess 换过模块图，测试文件静态 import 的不是它）
+      const { operationContext, createClientContext } = p.operationContext
+      const netCtx: ClientContext = {
+        client: { kind: 'network', id: 'ws:4', remoteAddress: '192.168.1.20', userAgent: 'UA' },
+        transport: 'network'
+      }
+      const winCtx: ClientContext = {
+        client: { kind: 'window', id: 'ipc:7', webContentsId: 7 },
+        transport: 'ipc'
+      }
+      const REMOTE = { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20', userAgent: 'UA' }
+      const FROM_P = { kind: 'parent-session', sessionId: 'P' }
+      const originOf = async (sessionId: string, content: string): Promise<unknown> => {
+        const found = (await viewOf(p, sessionId)).messages.filter(
+          (m) => m.role === 'user' && m.content === content
+        )
+        expect(found, `${sessionId}: ${content}`).toHaveLength(1)
+        return (found[0]!.metadata as { origin?: unknown } | null)?.origin
+      }
+
+      // P 的那一轮（连同它经 session 工具发进 C 的 C-task）在网络客户端的上下文里
+      await operationContext.run(createClientContext(netCtx, 'P'), () => parentDrivesChild(p))
+      expect(await originOf('P', 'start')).toStrictEqual(REMOTE)
+      expect(await originOf('C', 'C-task')).toStrictEqual(FROM_P)
+
+      // 人在窗口里往 C 里打一条
+      p.router.push('C', answer('C-human-done'))
+      expect(
+        await operationContext.run(createClientContext(winCtx, 'C'), () =>
+          withTimeout(p.chatGateway.prompt('C', 'human words'), 15000, 'C prompt')
+        )
+      ).toEqual({})
+      expect(await originOf('C', 'human words')).toStrictEqual({ kind: 'local' })
+      const read1 = await p.runner.read('P', 'C')
+      if ('error' in read1) throw new Error(read1.error)
+      expect(read1.info.userIntervened).toBe(true)
+      const afterHuman = (await inspectLines(p, { turns: 5 })).lines
+      expect(afterHuman.some((l) => l.endsWith(' [user] human words'))).toBe(true)
+      expect(afterHuman.some((l) => l.endsWith(' [you] C-task'))).toBe(true)
+
+      // 父会话再派一轮、再 steer 一条 —— 两样都在网络客户端的上下文里发起，照样记 parent-session
+      const gate = held(callTool('probe', {}, 'p3'))
+      p.router.push('C', gate.step, answer('C-final'))
+      const started = await operationContext.run(createClientContext(netCtx, 'P'), () =>
+        p.runner.prompt({
+          parentId: 'P',
+          childId: 'C',
+          message: 'second task',
+          requestId: 'subsession:P:9101'
+        })
+      )
+      expect(started).toEqual({ kind: 'started', id: 'C' })
+      await withTimeout(gate.reached, 10000, 'C request')
+      const steered = await operationContext.run(createClientContext(netCtx, 'P'), () =>
+        p.runner.steer({
+          parentId: 'P',
+          childId: 'C',
+          message: 'parent steer',
+          requestId: 'subsession-steer:P:9102'
+        })
+      )
+      expect(steered).toEqual({ id: 'C', title: 'C' })
+      p.router.push('P', answer('P-ack'))
+      gate.release()
+      const deadline = Date.now() + 15000
+      while (Date.now() < deadline) {
+        const last = (await transcriptOf('C')).at(-1)
+        if (last === 'pi.assistant:C-final') break
+        await new Promise((r) => setTimeout(r, 50))
+      }
+      expect((await transcriptOf('C')).at(-1)).toBe('pi.assistant:C-final')
+
+      expect(await originOf('C', 'second task')).toStrictEqual(FROM_P)
+      expect(await originOf('C', 'parent steer')).toStrictEqual(FROM_P)
+      expect(await originOf('C', 'C-task')).toStrictEqual(FROM_P)
+      expect(await originOf('C', 'human words')).toStrictEqual({ kind: 'local' })
       const lines = (await inspectLines(p, { turns: 5 })).lines
       expect(lines.some((l) => l.endsWith(' [you] second task'))).toBe(true)
       expect(lines.some((l) => l.endsWith(' [you] parent steer'))).toBe(true)

@@ -10,10 +10,10 @@
  *   P2-01）。P1-08 / P1-09 / P2-01 填写；fork 拿到 fork 点时的值。
  * - `DisplayDoc`（每个对话，rewindable + asOf）：内联 Token 等显示侧车，按 submission 的
  *   requestId 索引（第三阶段再解析到 entry）。回退 fork 保留前缀的显示侧车。
- * - `SourceDoc`（每个对话，rewindable + asOf）：用户输入不是人亲手打的时候它的来源（今天只有一种：
- *   父会话代用户发进子会话的消息与引导，docs/sub-session-design.md §19.7），按 submission 的 requestId 索引，
- *   解析方式与显示侧车相同（`inputSource.ts`）。**不补种**：第一次写来源时才建（`tx.doc` 不存在就建），
- *   读的一侧把「没有这份文档」当成「全是人打的」。
+ * - `SourceDoc`（每个对话，rewindable + asOf）：每条用户输入从哪来（`InputOrigin`，宿主按连接盖章：本机窗口、
+ *   远程连接、Chrome、Telegram，或驱动它的会话 —— docs/sub-session-design.md §19.7；2026-10-21 之前只记后者），
+ *   按 submission 的 requestId 索引，解析方式与显示侧车相同（`inputSource.ts`、投影的 `metadata.origin`）。
+ *   **不补种**：第一次写来源时才建（`tx.doc` 不存在就建），读的一侧把「没有这份文档」当成「没有记录」。
  * - `NoticeEntry`（`shuvix.notice`）：系统写给模型的通知（后台任务完成、日期变更……）。
  *   model 是一条 user 角色消息（模型必须看见它），条目种类让投影把它渲染成通知而不是用户发言 ——
  *   **转写不得把系统写的话记成用户说的**。
@@ -156,7 +156,7 @@ export const DisplayDoc = defineDoc<DisplayState>({
 })
 
 export type SourceState = {
-  /** requestId → 这条输入的来源（`InputSource`，JSON） */
+  /** requestId → 这条输入的来源（`InputOrigin`，JSON） */
   items: { [requestId: string]: JsonObject }
 }
 

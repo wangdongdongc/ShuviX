@@ -17,11 +17,16 @@
  *   RS-10 子会话没开着 → peek 读；peek 不到 → 不记
  *   RS-11 记录按会话分开：别的会话的发送不用它、也不撤它
  *   RS-12 带内联 Token 的重发：按标记态原文比对，沿用来源，展开 / 侧车照旧
+ *   RS-13 一切都在网络客户端的操作上下文里（2026-10-21 起网关按连接盖章）：沿用的来源压过连接的章；用不上沿用的
+ *         （紧接着再发一次、改过的文字、被回退的是人打的）→ 连接的章 remote；被驱动的发送 → 不盖章
  *
  * mock 骨架照抄 chatGatewaySteerDriven.test.ts，另替身 sessionRecords（`{parentId}`）与 messageService 的回退。
+ * operationContext 用真的（RS-13）。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
+import type { ClientContext } from '../../../ipc/registry'
+import { createClientContext, operationContext } from '../../../utils/operationContext'
 
 const mocks = vi.hoisted(() => ({
   ensureAgentSession: vi.fn(),
@@ -277,5 +282,69 @@ describe('DefaultChatGateway.resendSources（§19.7）', () => {
     expect(display).toStrictEqual({ content: marked, tokens })
     expect(drive).toBeUndefined()
     expect(source).toStrictEqual(PARENT)
+  })
+})
+
+describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的章，其余按连接盖章', () => {
+  const netCtx: ClientContext = {
+    client: { kind: 'network', id: 'ws:4', remoteAddress: '192.168.1.20', userAgent: 'UA' },
+    transport: 'network'
+  }
+  const REMOTE = {
+    kind: 'remote',
+    clientId: 'ws:4',
+    address: '192.168.1.20',
+    userAgent: 'UA'
+  } as const
+  /** 整段流程都在同一个网络客户端的操作上下文里跑（回退与发送都是它发起的） */
+  const remotely = <T>(fn: () => Promise<T>): Promise<T> =>
+    operationContext.run(createClientContext(netCtx, 'c1'), fn)
+
+  it('RS-13 RS-01 的流程：回退掉父会话代发的那条、原样重发 → 沿用的 PARENT，不是 remote', async () => {
+    await remotely(async () => {
+      expect(await gateway.rollbackMessage('c1', 'u1')).toBe(true)
+      await gateway.prompt('c1', TASK)
+    })
+    expect(prompt.mock.calls).toStrictEqual([[TASK, undefined, undefined, undefined, PARENT]])
+  })
+
+  it('RS-13 紧接着再发一次同样的话 → remote（沿用的只给一次）', async () => {
+    await remotely(async () => {
+      await gateway.rollbackMessage('c1', 'u1')
+      await gateway.prompt('c1', TASK)
+      await gateway.prompt('c1', TASK)
+    })
+    expect(sourceOf(0)).toStrictEqual(PARENT)
+    expect(sourceOf(1)).toStrictEqual(REMOTE)
+  })
+
+  it('RS-13 改过的文字 → remote；之后再发原文也是 remote', async () => {
+    await remotely(async () => {
+      await gateway.rollbackMessage('c1', 'u1')
+      await gateway.prompt('c1', `${TASK}, but keep README`)
+      await gateway.prompt('c1', TASK)
+    })
+    expect(sourceOf(0)).toStrictEqual(REMOTE)
+    expect(sourceOf(1)).toStrictEqual(REMOTE)
+  })
+
+  it('RS-13 RS-06 被回退的是人打的那条 → 重发是 remote', async () => {
+    await remotely(async () => {
+      await gateway.rollbackMessage('c1', 'u2')
+      await gateway.prompt('c1', 'typed by a human')
+    })
+    expect(prompt.mock.calls).toStrictEqual([
+      ['typed by a human', undefined, undefined, undefined, REMOTE]
+    ])
+  })
+
+  it('RS-13 RS-08 紧接着到来的是被驱动的发送 → 第 5 个参数 undefined（不盖连接的章）；记录撤掉，下一次是 remote', async () => {
+    await remotely(async () => {
+      await gateway.rollbackMessage('c1', 'u1')
+      await gateway.prompt('c1', TASK, undefined, undefined, DRIVE)
+      await gateway.prompt('c1', TASK)
+    })
+    expect(prompt.mock.calls[0]).toStrictEqual([TASK, undefined, undefined, DRIVE, undefined])
+    expect(sourceOf(1)).toStrictEqual(REMOTE)
   })
 })

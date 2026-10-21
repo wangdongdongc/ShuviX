@@ -14,6 +14,8 @@
  *   SI-7 临时会话（不属于项目）整段 fork：fork 解析出的工作目录（getById / 运行时的 cwd）就是源会话的临时
  *        工作区；删掉源会话 → fork 照样能发送、文件夹与里面的文件都在；再删 fork → 文件夹没了
  *   SI-8 新建的会话与 fork 当天就在日历上（真 SQL）：谁也还没在它们上面发过消息，没有可跳的第一条
+ *   SI-9 输入来源（metadata.origin，2026-10-21）跟着 fork 走（fork 是同一段对话的副本）：整段 fork 的列表来源一样；
+ *        从 A1 分支保留 U1 的 remote；在 fork 上于 Chrome 的上下文里发的记 chrome，源会话不变
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -21,6 +23,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DurableSession } from '@shuvix/agent-runtime'
+import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 
 const holder = vi.hoisted(() => ({
   db: null as unknown,
@@ -178,6 +181,12 @@ import {
   type FauxKit
 } from './support/realHost'
 import { readTool } from '../../../../../../packages/agent-runtime/src/durable/projection/__tests__/projectorSupport'
+import type { ClientContext } from '../../ipc/registry'
+import {
+  createChromeContext,
+  createClientContext,
+  operationContext
+} from '../../utils/operationContext'
 
 type Db = Parameters<(typeof migrations)[number]['up']>[0]
 
@@ -590,6 +599,82 @@ describe('SI session fork against a real host', () => {
       expect(calendar.daysInMonth(year, month)).toEqual([today])
       expect(calendar.firstEntryOnDay(forkId, today)).toBeNull()
       expect(calendar.firstEntryOnDay(fresh, today)).toBeNull()
+    },
+    TIMEOUT
+  )
+
+  it(
+    'SI-9 input origins travel with a fork: a whole fork lists the same origins; a branch at A1 keeps U1 remote; a chrome-context prompt on the fork is stamped chrome and the source is unchanged',
+    async () => {
+      const netCtx: ClientContext = {
+        client: { kind: 'network', id: 'ws:4', remoteAddress: '192.168.1.20', userAgent: 'UA' },
+        transport: 'network'
+      }
+      const winCtx: ClientContext = {
+        client: { kind: 'window', id: 'ipc:7', webContentsId: 7 },
+        transport: 'ipc'
+      }
+      const REMOTE = { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20', userAgent: 'UA' }
+      const LOCAL = { kind: 'local' }
+      /** 每条消息：`role:content` + 它的来源（没有 = null） */
+      const origins = (messages: ChatMessage[]): Array<[string, unknown]> =>
+        messages.map((m) => [
+          `${m.role}:${m.content}`,
+          (m.metadata as { origin?: unknown } | null)?.origin ?? null
+        ])
+      /** 换掉会话 id 之后逐字比（fork 的消息带的是 fork 自己的 sessionId） */
+      const asSource = (messages: ChatMessage[]): ChatMessage[] =>
+        messages.map((m) => ({ ...m, sessionId: 's' }))
+
+      insert('s')
+      kit.queue(answer('A1'))
+      expect(
+        await operationContext.run(createClientContext(netCtx, 's'), () =>
+          chatGateway.prompt('s', 'U1')
+        )
+      ).toEqual({})
+      kit.queue(answer('A2'))
+      expect(
+        await operationContext.run(createClientContext(winCtx, 's'), () =>
+          chatGateway.prompt('s', 'U2')
+        )
+      ).toEqual({})
+      const source = await messageService.listBySession('s')
+      expect(origins(source)).toStrictEqual([
+        ['user:U1', REMOTE],
+        ['assistant:A1', null],
+        ['user:U2', LOCAL],
+        ['assistant:A2', null]
+      ])
+
+      // 整段 fork：消息、id、来源都一样
+      const whole = await fork('s')
+      const wholeListed = await messageService.listBySession(whole)
+      expect(asSource(wholeListed)).toStrictEqual(source)
+      expect(origins(wholeListed)).toStrictEqual(origins(source))
+
+      // 从 A1 分支：U1 的来源还在
+      const branch = await fork('s', source[1]!.id)
+      expect(origins(await messageService.listBySession(branch))).toStrictEqual([
+        ['user:U1', REMOTE],
+        ['assistant:A1', null]
+      ])
+
+      // 在分支上于 Chrome 的上下文里发一条：记 chrome；源会话不受影响
+      kit.queue(answer('F2'))
+      expect(
+        await operationContext.run(createChromeContext('inst-1', branch), () =>
+          chatGateway.prompt(branch, 'U2 on the fork')
+        )
+      ).toEqual({})
+      expect(origins(await messageService.listBySession(branch))).toStrictEqual([
+        ['user:U1', REMOTE],
+        ['assistant:A1', null],
+        ['user:U2 on the fork', { kind: 'chrome', installId: 'inst-1' }],
+        ['assistant:F2', null]
+      ])
+      expect(await messageService.listBySession('s')).toStrictEqual(source)
+      expect(await messageService.listBySession(whole)).toStrictEqual(wholeListed)
     },
     TIMEOUT
   )

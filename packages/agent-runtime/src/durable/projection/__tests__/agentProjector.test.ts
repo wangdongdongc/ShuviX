@@ -7,6 +7,7 @@
  *      一对里面
  *   43 子 agent 跑到一半崩溃、重开：挂载 = freshMount，run.state interrupted，没有生命周期信号
  *   44 不认识的 agentId → undefined、不挂载；hook agent 可以看（只读，PIN-20）
+ *   62 带来源的面板追问（2026-10-21）：子 agent 视图里这条消息第一次出现就带着来源；根视图的消息不受影响
  *   另：DurableSession 满足视图服务端的 `SyncSession` 接缝（类型层）
  */
 import { fauxAssistantMessage, fauxText } from '@earendil-works/pi-ai'
@@ -146,6 +147,65 @@ describe('P3-03 · spawned AgentProjector', () => {
         await freshAgentMount(session, info.agentId, info.conversationId)
       )
       expect(lc.signals).toEqual([])
+      ha.release()
+      h.release()
+    },
+    TIMEOUT
+  )
+
+  it(
+    'P3-03-62 a panel continue with an origin: the first child revision holding it carries the origin; the root messages never change',
+    async () => {
+      const REMOTE = {
+        kind: 'remote',
+        clientId: 'ws:4',
+        address: '192.168.1.20',
+        userAgent: 'UA'
+      } as const
+      let created: SpawnCreatedInfo | undefined
+      const d = await hostD({ dispatch: { onCreated: (info) => (created = info) } })
+      d.t.kit.queue(callAgent('explore', 'look'), answer('found'), answer('root done'))
+      expect(await d.session.submitUser('go')).toEqual({})
+      const info = created!
+      const proj = await d.session.projector()
+      const h = proj.acquire()
+      const agent = await d.session.agentProjector({
+        agentId: info.agentId,
+        conversationId: info.conversationId
+      })
+      const ha = agent!.acquire()
+      await settleFrames()
+      const rootMessages = h.state.value.messages
+      const childOps = opsOf(ha.state)
+      const rootOps = opsOf(h.state)
+      d.t.kit.queue(answer('more ok'))
+      const outcome = await withTimeout(
+        d.session.agents.continue(info.conversationId, 'more', REMOTE),
+        5000,
+        'continue'
+      )
+      expect(outcome).toMatchObject({ result: 'more ok' })
+      await waitFor(() => ha.state.value.run.state === 'idle', 3000, 'child idle')
+      await settleFrames()
+      const first = childOps.revisions.find((revision) =>
+        revision.value.messages.some((message) => message.content === 'more')
+      )
+      expect(first).toBeDefined()
+      expect(
+        first!.value.messages.find((message) => message.content === 'more')!.metadata
+      ).toStrictEqual({ origin: REMOTE })
+      expect(ha.state.value).toStrictEqual(
+        await freshAgentMount(d.session, info.agentId, info.conversationId)
+      )
+      // 根：追问只发生在子对话里，根的消息一条都不变（运行状态的修订可以有）
+      for (const revision of rootOps.revisions) {
+        expect(revision.value.messages).toStrictEqual(rootMessages)
+      }
+      expect(h.state.value.messages).toStrictEqual(rootMessages)
+      expect(JSON.stringify(h.state.value)).not.toContain('192.168.1.20')
+      childOps.replay()
+      childOps.stop()
+      rootOps.stop()
       ha.release()
       h.release()
     },

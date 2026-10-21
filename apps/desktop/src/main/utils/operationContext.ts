@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { v4 as uuid } from 'uuid'
+import type { HumanOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { ClientContext } from '../ipc/registry'
 
 /** 操作来源 — 判别联合，新增前端只需添加新变体 */
@@ -8,8 +9,8 @@ export type OperationSource =
   | { type: 'telegram'; botId: string; userId: string; chatId: string }
   /** Chrome 扩展的侧边栏（经桥）：哪个浏览器（扩展安装 id） */
   | { type: 'chrome'; installId: string }
-  /** 局域网里的浏览器（server mode phase B，经 WebSocket）：哪条连接、从哪来 */
-  | { type: 'network'; clientId: string; remoteAddress: string }
+  /** 局域网里的浏览器（server mode phase B，经 WebSocket）：哪条连接、从哪来、哪个浏览器（User-Agent，没有就缺省） */
+  | { type: 'network'; clientId: string; remoteAddress: string; userAgent?: string }
 
 /** 操作上下文 — 每次用户操作一个实例 */
 export interface OperationContext {
@@ -44,7 +45,12 @@ export function createClientContext(ctx: ClientContext, sessionId?: string): Ope
     case 'network':
       return {
         requestId: uuid(),
-        source: { type: 'network', clientId: client.id, remoteAddress: client.remoteAddress },
+        source: {
+          type: 'network',
+          clientId: client.id,
+          remoteAddress: client.remoteAddress,
+          ...(client.userAgent ? { userAgent: client.userAgent } : {})
+        },
         sessionId,
         timestamp: Date.now()
       }
@@ -74,4 +80,42 @@ export function createTelegramContext(
     sessionId,
     timestamp: Date.now()
   }
+}
+
+/**
+ * 一次操作的来源 → 它送进会话的输入记下的来源（`InputOrigin`，会话存储的 `SourceDoc`）：宿主按连接盖章，渲染端、
+ * 网络客户端递来的参数碰不到这一项
+ */
+export function humanOriginOf(source: OperationSource): HumanOrigin {
+  switch (source.type) {
+    case 'electron':
+      return { kind: 'local' }
+    case 'network':
+      return {
+        kind: 'remote',
+        clientId: source.clientId,
+        address: source.remoteAddress,
+        ...(source.userAgent ? { userAgent: source.userAgent } : {})
+      }
+    case 'chrome':
+      return source.installId ? { kind: 'chrome', installId: source.installId } : { kind: 'chrome' }
+    case 'telegram':
+      return {
+        kind: 'telegram',
+        botId: source.botId,
+        userId: source.userId,
+        chatId: source.chatId
+      }
+  }
+}
+
+/** 此刻这次操作（`operationContext.run` 之内）送进会话的输入的来源；不在任何操作里（主进程自己发的）→ undefined */
+export function currentInputOrigin(): HumanOrigin | undefined {
+  const ctx = getOperationContext()
+  return ctx === undefined ? undefined : humanOriginOf(ctx.source)
+}
+
+/** 渠道注册表里一次调用（`ipc/registry`）送进会话的输入的来源：不经 AsyncLocalStorage，按调用方直接取 */
+export function inputOriginOfClient(ctx: ClientContext): HumanOrigin {
+  return humanOriginOf(createClientContext(ctx).source)
 }

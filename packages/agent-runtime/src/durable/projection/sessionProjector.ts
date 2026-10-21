@@ -12,7 +12,7 @@
  * 帧里没有、但投影要的东西由一条**同步的旁路**（`subscribeCommits`）先记下：
  *  - `submission` 变化：requestId → 落下的条目（显示侧车按它落到 user 条目上）、submission id → requestId
  *    （排队的内联 Token 输入按它找显示侧车，PIN-17 / PIN-22）；
- *  - `DisplayDoc` 变化（每个对话一份）；
+ *  - `DisplayDoc` 与 `SourceDoc`（输入的来源 → 用户消息的 `metadata.origin`）变化（每个对话各一份）；
  *  - `SessionStateDoc.currentConversation` 变化 → 换挂载（回退 fork 之后，PIN-07：`state.replace`，一条
  *    `["r"]`）；
  *  - 任务的中止标记与每个任务最后一条 assistant 的 stopReason（运行结束的原因，PIN-05）；
@@ -23,8 +23,8 @@
  * （`DurableSession.onRunStateChange`，PIN-23：`markResumed` 那种没有发布的转变也有一次只改
  * `run.state` 的修订）。运行状态在处理时现读。
  *
- * 挂载（PIN-01、P3-03-51）：先挂旁路，再取 watch（它的初值之后的每次发布都会成为一帧），再读 DisplayDoc
- * 与 submission（一个只读提交）—— 三步之间的发布一条都不会丢。全部就绪之后才建状态、`projector()` 才落定，
+ * 挂载（PIN-01、P3-03-51）：先挂旁路，再取 watch（它的初值之后的每次发布都会成为一帧），再读 DisplayDoc、
+ * SourceDoc 与 submission（一个只读提交）—— 三步之间的发布一条都不会丢。全部就绪之后才建状态、`projector()` 才落定，
  * 所以第一份可见的值就是完整的（不会先给一版没有显示侧车的）。挂载只读：不开启调度器、不产生发布。
  *
  * 运行生命周期（PIN-04/05/06）：根对话按相邻两帧之间 `pi.live.run` 的出现 / 消失；派生 agent 的对话按
@@ -57,11 +57,12 @@ import {
   type TaskId,
   type WatchHandle
 } from '@earendil-works/pi-durable'
+import { inputOriginOf, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RunViewState, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { RuntimeLogger } from '../../types'
 import { backgroundContext as BG, errorText } from '../context'
-import { DisplayDoc, SessionStateDoc, type SessionState } from '../docs'
+import { DisplayDoc, SessionStateDoc, SourceDoc, type SessionState } from '../docs'
 import type { PendingInputHooks } from '../inputRequests'
 import { displayItemOf, type DisplayItem } from './display'
 import { ProjectionMemo, projectSessionView } from './project'
@@ -211,6 +212,8 @@ export abstract class ProjectorCore<V extends object> {
   private refreshScheduled = false
   /** 对话 → requestId → 显示侧车（DisplayDoc 的值；旁路与挂载时的快照合起来） */
   private readonly displayDocs = new Map<ConversationId, Map<string, DisplayItem>>()
+  /** 对话 → requestId → 输入的来源（SourceDoc 的值，认得的那些；同上） */
+  private readonly sourceDocs = new Map<ConversationId, Map<string, InputOrigin>>()
   /** 对话 → requestId → 落下的条目（旁路的 submission 变化与挂载时的查询） */
   private readonly requestEntries = new Map<ConversationId, Map<string, EntryId>>()
   /** 还排着队的 submission → requestId（排队输入的显示侧车；落下 / 落定之后删掉） */
@@ -309,13 +312,8 @@ export abstract class ProjectorCore<V extends object> {
     conversationId: ConversationId,
     frame: ConversationView
   ): Promise<V> {
-    const snapshot = await this.host.harness.snapshot(DisplayDoc, conversationId, BG)
-    const display = this.displayOf(conversationId)
-    for (const [requestId, item] of Object.entries(snapshot?.items ?? {})) {
-      const parsed = displayItemOf(item)
-      if (parsed !== undefined) display.set(requestId, parsed)
-    }
-    const ancestorEntries = await this.lookupRequests(conversationId, frame.entries, display)
+    await this.readSidecars(conversationId, true)
+    const ancestorEntries = await this.lookupRequests(conversationId, frame.entries)
     return this.project(
       { conversationId, value: frame, ancestorEntries },
       this.runStateOf(conversationId)
@@ -365,7 +363,7 @@ export abstract class ProjectorCore<V extends object> {
   }
 
   /**
-   * 挂上一个对话：取 watch，再读它的 DisplayDoc 与 submission 落点（一个只读提交），返回挂载（还没开始
+   * 挂上一个对话：取 watch，再读它的 DisplayDoc、SourceDoc 与 submission 落点（一个只读提交），返回挂载（还没开始
    * 收帧）。旁路必须已经挂好。
    */
   protected async attachConversation(conversationId: ConversationId): Promise<ProjectorMount> {
@@ -375,14 +373,9 @@ export abstract class ProjectorCore<V extends object> {
     const watch = await conversation.watch(BG)
     try {
       const value = watch.value
-      const snapshot = await harness.snapshot(DisplayDoc, conversationId, BG)
-      const display = this.displayOf(conversationId)
-      for (const [requestId, item] of Object.entries(snapshot?.items ?? {})) {
-        const parsed = displayItemOf(item)
-        // 旁路记下的更新（挂载途中的写入）优先
-        if (parsed !== undefined && !display.has(requestId)) display.set(requestId, parsed)
-      }
-      const ancestorEntries = await this.lookupRequests(conversationId, value.entries, display)
+      // 旁路记下的更新（挂载途中的写入）优先
+      await this.readSidecars(conversationId, false)
+      const ancestorEntries = await this.lookupRequests(conversationId, value.entries)
       return { conversationId, watch, value, ancestorEntries, stale: false }
     } catch (error) {
       void watch.stop().catch(() => undefined)
@@ -391,14 +384,37 @@ export abstract class ProjectorCore<V extends object> {
   }
 
   /**
-   * 显示侧车的落点（PIN-22）：每份侧车在当前对话、以及活上下文里出现过 `pi.user` 的每个祖先对话里各按
-   * requestId 找一次 submission —— 与 `resolveDisplayItems` 同一判据（祖先里的条目必须在活上下文里）。
+   * 读一个对话的两份侧车快照进表：`overwrite` = 快照覆盖表里已有的（一次性投影）；否则旁路先记下的优先
+   * （挂载途中的写入比快照新）
+   */
+  private async readSidecars(conversationId: ConversationId, overwrite: boolean): Promise<void> {
+    const harness = this.host.harness
+    const displaySnapshot = await harness.snapshot(DisplayDoc, conversationId, BG)
+    const sourceSnapshot = await harness.snapshot(SourceDoc, conversationId, BG)
+    const display = this.displayOf(conversationId)
+    for (const [requestId, item] of Object.entries(displaySnapshot?.items ?? {})) {
+      const parsed = displayItemOf(item)
+      if (parsed !== undefined && (overwrite || !display.has(requestId))) {
+        display.set(requestId, parsed)
+      }
+    }
+    const sources = this.sourcesOf(conversationId)
+    for (const [requestId, item] of Object.entries(sourceSnapshot?.items ?? {})) {
+      const parsed = inputOriginOf(item)
+      if (parsed !== undefined && (overwrite || !sources.has(requestId))) {
+        sources.set(requestId, parsed)
+      }
+    }
+  }
+
+  /**
+   * 侧车的落点（PIN-22）：每份侧车（显示侧车与来源）在当前对话、以及活上下文里出现过 `pi.user` 的每个祖先
+   * 对话里各按 requestId 找一次 submission —— 与 `resolveDisplayItems` 同一判据（祖先里的条目必须在活上下文里）。
    * 当前对话的结果进旁路的表（之后的 submission 变化接着更新），还排着队的记下 submission id。
    */
   private async lookupRequests(
     conversationId: ConversationId,
-    entries: readonly EntryRecord[],
-    display: ReadonlyMap<string, DisplayItem>
+    entries: readonly EntryRecord[]
   ): Promise<Map<string, EntryId>> {
     const ancestors = new Map<ConversationId, Set<EntryId>>()
     for (const entry of entries) {
@@ -411,7 +427,12 @@ export abstract class ProjectorCore<V extends object> {
       ids.add(entry.id)
     }
     const ancestorEntries = new Map<string, EntryId>()
-    const requestIds = [...display.keys()]
+    const requestIds = [
+      ...new Set([
+        ...(this.displayDocs.get(conversationId)?.keys() ?? []),
+        ...(this.sourceDocs.get(conversationId)?.keys() ?? [])
+      ])
+    ]
     if (requestIds.length === 0) return ancestorEntries
     const own = this.requestEntriesOf(conversationId)
     await this.host.harness.commit(async (tx) => {
@@ -618,6 +639,15 @@ export abstract class ProjectorCore<V extends object> {
     return display
   }
 
+  private sourcesOf(conversationId: ConversationId): Map<string, InputOrigin> {
+    let sources = this.sourceDocs.get(conversationId)
+    if (sources === undefined) {
+      sources = new Map()
+      this.sourceDocs.set(conversationId, sources)
+    }
+    return sources
+  }
+
   private requestEntriesOf(conversationId: ConversationId): Map<string, EntryId> {
     let entries = this.requestEntries.get(conversationId)
     if (entries === undefined) {
@@ -636,6 +666,19 @@ export abstract class ProjectorCore<V extends object> {
     for (const [requestId, item] of display) {
       const entry = own?.get(requestId) ?? mount.ancestorEntries.get(requestId)
       if (entry !== undefined) resolved.set(entry, item)
+    }
+    return resolved
+  }
+
+  /** 条目 id → 输入的来源（同 `displayByEntry`） */
+  protected originByEntry(mount: MountFrame): Map<number, InputOrigin> {
+    const resolved = new Map<number, InputOrigin>()
+    const sources = this.sourceDocs.get(mount.conversationId)
+    if (sources === undefined) return resolved
+    const own = this.requestEntries.get(mount.conversationId)
+    for (const [requestId, origin] of sources) {
+      const entry = own?.get(requestId) ?? mount.ancestorEntries.get(requestId)
+      if (entry !== undefined) resolved.set(entry, origin)
     }
     return resolved
   }
@@ -695,6 +738,15 @@ export abstract class ProjectorCore<V extends object> {
               for (const [requestId, item] of Object.entries(items)) {
                 const parsed = displayItemOf(item)
                 if (parsed !== undefined) display.set(requestId, parsed)
+              }
+            }
+          } else if (kind === SourceDoc.definition.kind) {
+            const sources = this.sourcesOf(change.conversationId)
+            const items = isRecord(change.value) ? change.value.items : undefined
+            if (isRecord(items)) {
+              for (const [requestId, item] of Object.entries(items)) {
+                const parsed = inputOriginOf(item)
+                if (parsed !== undefined) sources.set(requestId, parsed)
               }
             }
           } else if (kind === LiveDoc.definition.kind) {
@@ -943,7 +995,8 @@ export class SessionProjectorImpl extends ProjectorCore<SessionView> implements 
       this.host.pendingInputs(),
       runState,
       this.queueDisplay(mount, inbox),
-      this.memo
+      this.memo,
+      this.originByEntry(mount)
     )
   }
 

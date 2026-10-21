@@ -11,7 +11,9 @@
  *
  * WP2（§19.5 / §19.7）的两项只在 durable 一侧有意义：`result` 的 `details`（ask 的答题方在这里；v3 那边
  * 也原样写进 toolResult，旧读者不看它）与 `sourcedUser` 的来源（SourceDoc + 放下的 submission，与显示侧车
- * 同一套写法；v3 没有来源，那边照常是一条 user）。
+ * 同一套写法；v3 没有来源，那边照常是一条 user）。来源是任意一种 `InputOrigin`（2026-10-21 起每条输入都记）：
+ * 别的会话发来的（parent-session / session）、人在某个前端里打的（local / remote / chrome / telegram），或者
+ * 用例有意写坏的形状。
  */
 import { fauxAssistantMessage } from '@earendil-works/pi-ai'
 import type { ImageContent, TextContent, ThinkingContent, ToolCall } from '@earendil-works/pi-ai'
@@ -34,7 +36,7 @@ import {
   type SessionHost
 } from '@shuvix/agent-runtime'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
+import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { wrapSummary } from '../../../../../../../packages/agent-runtime/src/durable/__tests__/support/digest'
 import { makeRealHost } from './realHost'
 
@@ -57,8 +59,8 @@ export type TwinStep =
       ts: number
       content: string | (TextContent | ImageContent)[]
       display?: DisplaySidecar
-      /** 不是人打的：父会话代用户发的（durable 一侧记进 SourceDoc） */
-      source?: DrivingSessionRef
+      /** 这条输入的来源（durable 一侧记进 SourceDoc）：父会话代用户发的、别的会话发来的，或人在哪个前端里打的 */
+      source?: InputOrigin
     }
   | {
       type: 'assistant'
@@ -87,11 +89,11 @@ export const user = (
   display?: DisplaySidecar
 ): TwinStep => ({ type: 'user', ts, content, ...(display ? { display } : {}) })
 
-/** 父会话代用户发进子会话的那条消息（带来源，§19.7） */
+/** 带来源的那条消息（§19.7）：父会话代用户发进子会话的、别的会话发来的，或盖了人的来源（local / remote …）的 */
 export const sourcedUser = (
   ts: number,
   content: string | (TextContent | ImageContent)[],
-  source: DrivingSessionRef
+  source: InputOrigin
 ): TwinStep => ({ type: 'user', ts, content, source })
 
 export const assistant = (

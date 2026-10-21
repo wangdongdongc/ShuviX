@@ -1,18 +1,29 @@
 /**
- * SpawnCoordinator · 面板：软停止 / 销毁 / 追问（P2-03，H 段 42–49）。软停止 = 中止子对话、保留部分结果；
- * 销毁 = 硬中止 + 卸掉扩展（转写、记录、身份都留着，PIN-03）；追问 = 没有 requestId、忙就拒绝（PIN-12），
- * 落定之后照样装着（用完即卸只管 hook agent，见 hosted.unload.test.ts）。
+ * SpawnCoordinator · 面板：软停止 / 销毁 / 追问（P2-03，H 段 42–49、76）。软停止 = 中止子对话、保留部分结果；
+ * 销毁 = 硬中止 + 卸掉扩展（转写、记录、身份都留着，PIN-03）；追问 = 不带来源时没有 requestId、忙就拒绝（PIN-12），
+ * 落定之后照样装着（用完即卸只管 hook agent，见 hosted.unload.test.ts）；带来源（宿主按连接盖的章，2026-10-21）
+ * 的追问按一个新生成的 requestId 记进子对话的 SourceDoc（P2-03-76）。
  */
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { ConversationId, SubmissionRecord } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { spawnedAgentRecordOf } from '../agentRecord'
-import { AgentStateDoc } from '../docs'
+import { AgentStateDoc, SourceDoc } from '../docs'
+import { freshAgentMount } from '../projection/__tests__/projectorSupport'
 import { answer, assistantWith, callTool, held, stalled } from './support/faux'
 import { registerHostCleanup } from './support/host'
 import { extensionTools } from './support/scenario'
-import { callAgent, firstChild, hostD, liveTasks, tasksOf, type HostD } from './support/spawn'
+import {
+  callAgent,
+  firstChild,
+  hostD,
+  liveTasks,
+  submissionByRequest,
+  tasksOf,
+  type HostD
+} from './support/spawn'
+import { allEntries } from './support/transcript'
 import { askingTool } from './support/tools'
 import { transcript } from './support/transcript'
 import { deferred, waitFor, withTimeout } from './support/wait'
@@ -234,6 +245,33 @@ describe('SpawnCoordinator · continue', () => {
     expect(outcome).toMatchObject({ result: 'asked ok' })
     expect('error' in outcome).toBe(false)
     expect(reopened).toBeGreaterThan(reopenedBefore)
+  })
+
+  it('P2-03-76 continue with an origin: exactly one item in the child’s SourceDoc under a fresh requestId that resolves to the new pi.user; the root has none; the agent view shows it on that message only', async () => {
+    const LOCAL = { kind: 'local' } as const
+    const d = await hostD()
+    const C = await headline(d)
+    const root = await d.session.currentConversation()
+    expect(await d.session.harness.snapshot(SourceDoc, C, BG)).toBeUndefined()
+    d.t.kit.queue(answer('more ok'))
+    const outcome = await withTimeout(d.session.agents.continue(C, 'more', LOCAL), 3000, 'continue')
+    expect(outcome).toMatchObject({ result: 'more ok', conversationId: C })
+    expect((await childLines(d, C)).slice(-2)).toEqual(['pi.user:more', 'pi.assistant:more ok'])
+
+    const items = (await d.session.harness.snapshot(SourceDoc, C, BG))!.items
+    expect(Object.values(items)).toStrictEqual([LOCAL])
+    const [key] = Object.keys(items)
+    expect(key).not.toBe('')
+    const conversation = (await d.session.harness.conversation(C, BG))!
+    const users = (await allEntries(conversation)).filter((entry) => entry.kind === 'pi.user')
+    expect((await submissionByRequest(d.session, C, key!))?.entry).toBe(users.at(-1)!.id)
+    expect(await d.session.harness.snapshot(SourceDoc, root.id, BG)).toBeUndefined()
+
+    const view = await freshAgentMount(d.session, d.session.agentIdentity(C)!.callerId!, C)
+    const messages = view.messages.filter((message) => message.role === 'user')
+    expect(messages.map((message) => message.content)).toEqual(['find X', 'more'])
+    expect(messages.map((message) => message.metadata)).toStrictEqual([{}, { origin: LOCAL }])
+    await expectStillLoaded(d, C)
   })
 
   it('P2-03-49 invalid continue targets: root, an ownerless plain conversation, unknown', async () => {

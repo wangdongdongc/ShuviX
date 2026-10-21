@@ -10,6 +10,7 @@ import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
 import type { InputSource } from '@shuvix/agent-runtime'
+import { currentInputOrigin } from '../../utils/operationContext'
 import '../../tools/allTools'
 import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
@@ -81,10 +82,13 @@ export class DefaultChatGateway implements ChatGateway {
     // 两分钟之内 —— 改过的文字是人的话；不管用没用上、这次发送成不成都撤掉（在打开会话之前就取走），免得留给以后的某次发送
     const resend = drive === undefined ? this.resendSources.get(sessionId) : undefined
     this.resendSources.delete(sessionId)
-    const source =
+    const resent =
       resend && resend.text === text && Date.now() - resend.at < RESEND_WINDOW_MS
         ? resend.source
         : undefined
+    // 这条输入从哪来：其余的按这次操作的连接盖章（本机窗口、远程连接……，从不取载荷里的）。被驱动的发送由门面记
+    // 驱动它的会话
+    const source = drive === undefined ? (resent ?? currentInputOrigin()) : undefined
 
     // lastActiveAt 与日历不在这里 bump：门面在用户条目落下时按条目 id 入账（当场落下的在 onAdmitted，
     // 排队之后被放下的在 onPlaced，P3-07）。打不开 / 被拒 / 被撤回的发送不会落进会话，却会误记一天。
@@ -114,7 +118,8 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   steer(sessionId: string, text: string): void {
-    this.enqueue(sessionId, (session) => session.steer(text))
+    const origin = currentInputOrigin()
+    this.enqueue(sessionId, (session) => session.steer(text, origin))
   }
 
   async steerDriven(
@@ -136,7 +141,8 @@ export class DefaultChatGateway implements ChatGateway {
   }
 
   followUp(sessionId: string, text: string): void {
-    this.enqueue(sessionId, (session) => session.followUp(text))
+    const origin = currentInputOrigin()
+    this.enqueue(sessionId, (session) => session.followUp(text, origin))
   }
 
   async withdrawQueued(sessionId: string, submissionId: number): Promise<WithdrawQueuedResult> {

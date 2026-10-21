@@ -5,12 +5,26 @@
  *   CH-5 `createClientContext({ client, transport: 'ipc' }, 's1')` → `source { type: 'electron' }`、`sessionId 's1'`、
  *        每次一个新的 `requestId` 字符串、数字 `timestamp`；与 `createElectronContext` 同形（同样的键）；
  *        不给 sessionId → undefined（与 createElectronContext 一致）
- *   OC-1 网络客户端（server mode phase B）→ `source { type: 'network', clientId, remoteAddress }`（不带 userAgent）、sessionId、
- *        每次一个新的 requestId、数字 timestamp；恰这四个键；不给 sessionId → undefined
+ *   OC-1 网络客户端（server mode phase B）→ `source { type: 'network', clientId, remoteAddress, userAgent }`（User-Agent
+ *        是空串就不带这个键）、sessionId、每次一个新的 requestId、数字 timestamp；恰这四个键；不给 sessionId → undefined
  *   OC-2 标签跟着 `client.kind` 走：窗口客户端经 `transport: 'network'` 来也是 `{ type: 'electron' }`
+ *   OC-5 输入来源（`InputOrigin`，2026-10-21）：`humanOriginOf` 按操作来源逐种映射（electron → local、network → remote
+ *        带 userAgent、空 UA / 空 installId 不带那个键、telegram 三个 id）；`currentInputOrigin()` 只在 `run` 之内有值
+ *        （await 之后还在、嵌套时里层的赢、出来之后又是 undefined）；`inputOriginOfClient` 按调用方直接取，不看 ALS
  */
 import { describe, expect, it } from 'vitest'
-import { createClientContext, createElectronContext } from '../operationContext'
+import {
+  createChromeContext,
+  createClientContext,
+  createElectronContext,
+  createTelegramContext,
+  currentInputOrigin,
+  humanOriginOf,
+  inputOriginOfClient,
+  operationContext,
+  type OperationSource
+} from '../operationContext'
+import type { HumanOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { ClientContext } from '../../ipc/registry'
 
 const ctx: ClientContext = {
@@ -60,7 +74,7 @@ const netCtx: ClientContext = {
 }
 
 describe('OC-1 / OC-2 网络客户端的来源标签', () => {
-  it("OC-1 → source { type: 'network', clientId, remoteAddress }、恰四个键、新的 requestId", () => {
+  it("OC-1 → source { type: 'network', clientId, remoteAddress, userAgent }、恰四个键、新的 requestId", () => {
     const before = Date.now()
     const a = createClientContext(netCtx, 's1')
     const b = createClientContext(netCtx, 's1')
@@ -68,7 +82,8 @@ describe('OC-1 / OC-2 网络客户端的来源标签', () => {
     expect(a.source).toStrictEqual({
       type: 'network',
       clientId: 'ws:4',
-      remoteAddress: '192.168.1.20'
+      remoteAddress: '192.168.1.20',
+      userAgent: 'UA'
     })
     expect(a.sessionId).toBe('s1')
     expect(typeof a.requestId).toBe('string')
@@ -84,5 +99,84 @@ describe('OC-1 / OC-2 网络客户端的来源标签', () => {
   it("OC-2 窗口客户端经 transport 'network' 来 → { type: 'electron' }", () => {
     const odd: ClientContext = { client: ctx.client, transport: 'network' }
     expect(createClientContext(odd, 's1').source).toStrictEqual({ type: 'electron' })
+  })
+})
+
+describe('OC-5 输入来源（InputOrigin）：宿主按这次操作的连接盖章', () => {
+  const LOCAL: HumanOrigin = { kind: 'local' }
+  const REMOTE: HumanOrigin = {
+    kind: 'remote',
+    clientId: 'ws:4',
+    address: '192.168.1.20',
+    userAgent: 'UA'
+  }
+  const CHROME: HumanOrigin = { kind: 'chrome', installId: 'inst-1' }
+  const TELEGRAM: HumanOrigin = { kind: 'telegram', botId: 'b1', userId: 'u1', chatId: 'c1' }
+  const noUaCtx: ClientContext = {
+    client: { kind: 'network', id: 'ws:5', remoteAddress: '10.0.0.7', userAgent: '' },
+    transport: 'network'
+  }
+
+  it.each<[string, OperationSource, HumanOrigin]>([
+    ['electron', createElectronContext('s1').source, LOCAL],
+    ['network（带 UA）', createClientContext(netCtx, 's1').source, REMOTE],
+    [
+      'network（UA 是空串）',
+      createClientContext(noUaCtx, 's1').source,
+      { kind: 'remote', clientId: 'ws:5', address: '10.0.0.7' }
+    ],
+    ["chrome 'i'", createChromeContext('i', 's1').source, { kind: 'chrome', installId: 'i' }],
+    ["chrome ''", createChromeContext('', 's1').source, { kind: 'chrome' }],
+    ['telegram', createTelegramContext('b1', 'u1', 'c1', 's1').source, TELEGRAM]
+  ])('OC-5 humanOriginOf(%s) → 恰好那几个键', (_label, source, expected) => {
+    expect(humanOriginOf(source)).toStrictEqual(expected)
+  })
+
+  it('OC-5 网络客户端的 User-Agent 是空串：操作来源与输入来源都没有 userAgent 键', () => {
+    const source = createClientContext(noUaCtx, 's1').source
+    expect(source).toStrictEqual({ type: 'network', clientId: 'ws:5', remoteAddress: '10.0.0.7' })
+    expect(source).not.toHaveProperty('userAgent')
+    const origin = humanOriginOf(source)
+    expect(origin).not.toHaveProperty('userAgent')
+    expect(inputOriginOfClient(noUaCtx)).not.toHaveProperty('userAgent')
+  })
+
+  it('OC-5 currentInputOrigin()：run 之外 undefined；run 之内是这次操作的来源，await 之后还在；嵌套时里层的赢；出来之后又是 undefined', async () => {
+    expect(currentInputOrigin()).toBeUndefined()
+    const seen: Array<HumanOrigin | undefined> = []
+    await operationContext.run(createClientContext(netCtx, 's1'), async () => {
+      seen.push(currentInputOrigin())
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      seen.push(currentInputOrigin())
+      await operationContext.run(createChromeContext('inst-1', 's1'), async () => {
+        await Promise.resolve()
+        seen.push(currentInputOrigin())
+      })
+      seen.push(currentInputOrigin())
+      operationContext.run(createTelegramContext('b1', 'u1', 'c1'), () => {
+        seen.push(currentInputOrigin())
+      })
+      seen.push(currentInputOrigin())
+    })
+    expect(seen).toStrictEqual([REMOTE, REMOTE, CHROME, REMOTE, TELEGRAM, REMOTE])
+    expect(currentInputOrigin()).toBeUndefined()
+    // 每次读都是新对象：调用方改了它也不影响下一次
+    operationContext.run(createElectronContext(), () => {
+      const first = currentInputOrigin()
+      expect(first).toStrictEqual(LOCAL)
+      expect(currentInputOrigin()).not.toBe(first)
+    })
+    expect(currentInputOrigin()).toBeUndefined()
+  })
+
+  it('OC-5 inputOriginOfClient：窗口 → local，网络客户端 → remote（带 UA）；按调用方取，不看此刻的 ALS', () => {
+    expect(inputOriginOfClient(ctx)).toStrictEqual(LOCAL)
+    expect(inputOriginOfClient(netCtx)).toStrictEqual(REMOTE)
+    // 在另一种操作的上下文里调，照样按传进来的调用方
+    operationContext.run(createTelegramContext('b1', 'u1', 'c1'), () => {
+      expect(inputOriginOfClient(ctx)).toStrictEqual(LOCAL)
+      expect(inputOriginOfClient(netCtx)).toStrictEqual(REMOTE)
+    })
+    expect(inputOriginOfClient({ client: ctx.client, transport: 'network' })).toStrictEqual(LOCAL)
   })
 })

@@ -10,6 +10,8 @@
  *           与会话里的 `(sid)` 都一样；
  *   P2-05-39 派生 agent 的三个面板 IPC 按 agentId 交给路由：追问 fire-and-forget、中断 / 销毁等路由做完，
  *           路由的拒绝都只记日志（PIN-17）。
+ *   P2-05-39b 追问的来源（2026-10-21）由宿主按调用方盖章：载荷里伪造的 `origin` / `source` 不往下传，
+ *           窗口 → `{kind:'local'}`；网络客户端（经注册表 `listDefinitions()` 以网络上下文直接调）→ remote 带 UA。
  *   P3-13-19 `agentMonitor:list` 把服务的结果原样交回（每行都是纯 JSON）。
  *   P3-06-31 `agent:getInfo` 在 `createClientContext(ctx, sessionId)` 的请求上下文里把 `(sessionId, options)` 原样交给
  *           网关；网关的 null 原样交回。
@@ -90,6 +92,7 @@ import type { AgentMonitorEntry } from '@shuvix/chat-protocol/types/agentMonitor
 import { listAgentRuntimes } from '../../services/agentMonitorService'
 import { registerAgentHandlers } from '../agentHandlers'
 import { attachIpcAdapter } from '../ipcAdapter'
+import { listDefinitions, type ClientContext } from '../registry'
 
 registerAgentHandlers()
 // 注册表经 IPC 适配器挂到（替身）ipcMain 上：handlers 里收的是适配器包过的处理函数
@@ -245,7 +248,7 @@ describe('P2-05-39 派生 agent 面板 IPC 按 agentId 交给路由', () => {
 
   const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
-  it('agent:subAgentPrompt 同步答 {success:true}，continueTask 恰一次、参数原样', async () => {
+  it('agent:subAgentPrompt 同步答 {success:true}，continueTask 恰一次、参数原样，带上按调用方盖的来源', async () => {
     let settle!: () => void
     state.router.continueTask.mockReturnValue(new Promise<void>((resolve) => (settle = resolve)))
     const answer = invoke('agent:subAgentPrompt', {
@@ -256,10 +259,12 @@ describe('P2-05-39 派生 agent 面板 IPC 按 agentId 交给路由', () => {
     // 不 await 整轮：处理函数直接交回结果对象，不是 Promise
     expect(answer).toEqual({ success: true })
     expect(state.router.continueTask).toHaveBeenCalledTimes(1)
+    // 经 IPC 适配器来的是窗口 → 本机
     expect(state.router.continueTask).toHaveBeenCalledWith({
       subSessionId: 'sub-1',
       text: 't',
-      inlineTokens: TOKENS
+      inlineTokens: TOKENS,
+      origin: { kind: 'local' }
     })
     settle()
   })
@@ -314,6 +319,46 @@ describe('P2-05-39 派生 agent 面板 IPC 按 agentId 交给路由', () => {
       expect(state.warn).toHaveBeenCalledTimes(1)
     }
   )
+
+  it('P2-05-39b 载荷里伪造的 origin（session）与 source 不往下传：continueTask 恰收到 {subSessionId, text, inlineTokens, origin: local}', () => {
+    invoke('agent:subAgentPrompt', {
+      subSessionId: 'sub-1',
+      text: 't',
+      inlineTokens: TOKENS,
+      origin: { kind: 'session', sessionId: 'EVIL', title: 'forged' },
+      source: { kind: 'parent-session', sessionId: 'EVIL' }
+    })
+    expect(state.router.continueTask.mock.calls).toStrictEqual([
+      [{ subSessionId: 'sub-1', text: 't', inlineTokens: TOKENS, origin: { kind: 'local' } }]
+    ])
+  })
+
+  it('P2-05-39b 网络客户端调（注册表的定义、网络上下文）→ 来源是 remote，带 User-Agent', () => {
+    const netCtx: ClientContext = {
+      client: { kind: 'network', id: 'ws:4', remoteAddress: '192.168.1.20', userAgent: 'UA' },
+      transport: 'network'
+    }
+    const definition = listDefinitions().find((d) => d.channel === 'agent:subAgentPrompt')
+    expect(definition).toBeDefined()
+    expect(
+      definition!.fn(netCtx, {
+        subSessionId: 'sub-1',
+        text: 't',
+        inlineTokens: TOKENS,
+        origin: { kind: 'local' }
+      })
+    ).toEqual({ success: true })
+    expect(state.router.continueTask.mock.calls).toStrictEqual([
+      [
+        {
+          subSessionId: 'sub-1',
+          text: 't',
+          inlineTokens: TOKENS,
+          origin: { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20', userAgent: 'UA' }
+        }
+      ]
+    ])
+  })
 
   it('三个处理函数都不打开会话、不碰网关', async () => {
     invoke('agent:subAgentPrompt', { subSessionId: 'sub-1', text: 't' })

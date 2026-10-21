@@ -8,17 +8,28 @@
  *   WP2-66 admitSteer 抛错 / 抛字符串 → `{error}`（没有 code），从不 reject
  *   XS-59  驱动方不是 target 的父会话（别的会话 / 顶层会话 / 行不在）→ 来源 `{kind:'session', sessionId: <driver>}`；
  *          父会话驱动照旧 parent-session（[guard]）
- *   WP2-67 IPC 的 steer 照旧：`session.steer(text)`，不经 admitSteer；被拒广播 error
+ *   WP2-67 IPC 的 steer 照旧：`session.steer(text, 来源)`，不经 admitSteer（不在任何操作上下文里 → 来源 undefined）；
+ *          被拒广播 error
+ *   WP2-80 steer / followUp 的来源按这次操作的上下文盖章（2026-10-21）：网络客户端 → remote、Chrome → chrome、
+ *          不在上下文里 → undefined；steerDriven 在网络客户端的上下文里照样记驱动它的会话（不被连接的章顶替）
  *   WP2-78 前端拿不到写来源 / 答题方的口子（读源码）：IPC 与 Chrome 通道从不传 drive、从不调 steerDriven /
  *          admitSteer，respondToInput 的附带信息只由 `{clientId: …}` 字面量构成
+ *   WP2-78b 同上，输入来源那一面：`chatGateway.steer` / `followUp` 恰两个参数；每个 `continueTask({…})` 的
+ *          来源是 `origin: inputOriginOfClient(ctx)`（不展开渲染端参数）；源码里没有 params / p 的 origin / source
  *
- * mock 骨架照抄 chatGatewayPrompt.test.ts。
+ * mock 骨架照抄 chatGatewayPrompt.test.ts；operationContext 用真的（WP2-80）。
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import type { ClientContext } from '../../../ipc/registry'
+import {
+  createChromeContext,
+  createClientContext,
+  operationContext
+} from '../../../utils/operationContext'
 
 const mocks = vi.hoisted(() => ({
   ensureAgentSession: vi.fn(),
@@ -86,12 +97,17 @@ beforeEach(() => {
 
 const DRIVE = { requestId: 'subsession-steer:P1:9', parentId: 'P1' }
 
-/** 一条打开着的会话的替身：只有 steer / admitSteer 两样 */
+/** 一条打开着的会话的替身：只有 steer / admitSteer / followUp 三样 */
 function openSession(admitSteer: () => Promise<unknown>): {
   admitSteer: ReturnType<typeof vi.fn>
   steer: ReturnType<typeof vi.fn>
+  followUp: ReturnType<typeof vi.fn>
 } {
-  const session = { admitSteer: vi.fn(admitSteer), steer: vi.fn(async () => {}) }
+  const session = {
+    admitSteer: vi.fn(admitSteer),
+    steer: vi.fn(async () => {}),
+    followUp: vi.fn(async () => {})
+  }
   mocks.getAgentSession.mockReturnValue(session)
   return session
 }
@@ -178,18 +194,67 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
     })
   })
 
-  it('WP2-67 IPC 的 steer 照旧走 session.steer(text)，不经 admitSteer；被拒广播 error', async () => {
+  it('WP2-67 IPC 的 steer 照旧走 session.steer(text, 来源)，不经 admitSteer；被拒广播 error', async () => {
     const session = openSession(async () => ({}))
     session.steer.mockRejectedValueOnce(new Error('The conversation is closed'))
     chatGateway.steer('c1', 'm')
     await flush()
-    expect(session.steer.mock.calls).toStrictEqual([['m']])
+    // 不在任何操作上下文里 → 没有来源
+    expect(session.steer.mock.calls).toStrictEqual([['m', undefined]])
     expect(session.admitSteer).not.toHaveBeenCalled()
     expect(mocks.frontendBroadcast).toHaveBeenCalledWith({
       type: 'error',
       sessionId: 'c1',
       error: 'The conversation is closed'
     })
+  })
+})
+
+describe('WP2-80 steer / followUp 的来源按操作上下文盖章', () => {
+  const netCtx: ClientContext = {
+    client: { kind: 'network', id: 'ws:4', remoteAddress: '192.168.1.20', userAgent: 'UA' },
+    transport: 'network'
+  }
+  const REMOTE = {
+    kind: 'remote',
+    clientId: 'ws:4',
+    address: '192.168.1.20',
+    userAgent: 'UA'
+  } as const
+
+  it('WP2-80 网络客户端的上下文里 steer → session.steer(text, remote)，不经 admitSteer', async () => {
+    const session = openSession(async () => ({}))
+    operationContext.run(createClientContext(netCtx, 'c1'), () => chatGateway.steer('c1', 'm'))
+    await flush()
+    expect(session.steer.mock.calls).toStrictEqual([['m', REMOTE]])
+    expect(session.admitSteer).not.toHaveBeenCalled()
+    expect(session.followUp).not.toHaveBeenCalled()
+  })
+
+  it('WP2-80 Chrome 的上下文里 followUp → session.followUp(text, chrome)；不在上下文里 → 来源 undefined', async () => {
+    const session = openSession(async () => ({}))
+    operationContext.run(createChromeContext('inst-1', 'c1'), () => chatGateway.followUp('c1', 'f'))
+    await flush()
+    expect(session.followUp.mock.calls).toStrictEqual([
+      ['f', { kind: 'chrome', installId: 'inst-1' }]
+    ])
+    session.followUp.mockClear()
+    chatGateway.followUp('c1', 'f')
+    await flush()
+    expect(session.followUp.mock.calls).toStrictEqual([['f', undefined]])
+    expect(session.steer).not.toHaveBeenCalled()
+  })
+
+  it('WP2-80 steerDriven 在网络客户端的上下文里 → admitSteer 的来源仍是驱动它的父会话（不是连接的章）', async () => {
+    const session = openSession(async () => ({ submissionId: 6 }))
+    const result = await operationContext.run(createClientContext(netCtx, 'c1'), () =>
+      chatGateway.steerDriven('c1', 'm', DRIVE)
+    )
+    expect(result).toStrictEqual({})
+    expect(session.admitSteer.mock.calls).toStrictEqual([
+      ['m', { requestId: DRIVE.requestId, source: { kind: 'parent-session', sessionId: 'P1' } }]
+    ])
+    expect(session.steer).not.toHaveBeenCalled()
   })
 })
 
@@ -262,4 +327,47 @@ describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', 
       expect(sourceFile.getText()).not.toMatch(/answeredBy/)
     }
   )
+
+  it.each(FILES)(
+    'WP2-78b %s：chatGateway.steer / followUp 恰两个参数（来源不经参数递进去）',
+    (file) => {
+      const sourceFile = parse(file)
+      const queued = callsIn(sourceFile).filter(
+        (call) =>
+          ['steer', 'followUp'].includes(calleeName(call) ?? '') &&
+          receiverText(call, sourceFile) === 'chatGateway'
+      )
+      expect(queued.map((call) => calleeName(call)).sort()).toEqual(['followUp', 'steer'])
+      for (const call of queued) expect(call.arguments.length, call.getText(sourceFile)).toBe(2)
+    }
+  )
+
+  it('WP2-78b 每个 continueTask({…}) 的来源恰是 origin: inputOriginOfClient(ctx)，字面量里不展开别的东西', () => {
+    let seen = 0
+    for (const file of FILES) {
+      const sourceFile = parse(file)
+      for (const call of callsIn(sourceFile).filter((c) => calleeName(c) === 'continueTask')) {
+        seen++
+        expect(call.arguments).toHaveLength(1)
+        const arg = call.arguments[0]!
+        expect(ts.isObjectLiteralExpression(arg), arg.getText(sourceFile)).toBe(true)
+        const properties = (arg as ts.ObjectLiteralExpression).properties
+        for (const property of properties) expect(ts.isPropertyAssignment(property)).toBe(true)
+        const origin = properties.find((p) => p.name?.getText(sourceFile) === 'origin')
+        expect(origin, `${file}: continueTask without origin`).toBeDefined()
+        expect((origin as ts.PropertyAssignment).initializer.getText(sourceFile)).toBe(
+          'inputOriginOfClient(ctx)'
+        )
+      }
+    }
+    // 不是空跑：agentHandlers 里那一处（agent:subAgentPrompt）确实读到了
+    expect(seen).toBeGreaterThan(0)
+  })
+
+  it.each(FILES)('WP2-78b %s：源码里没有渲染端参数的 origin / source', (file) => {
+    const text = parse(file).getText()
+    for (const forbidden of ['params.origin', 'params.source', 'p.origin', 'p.source']) {
+      expect(text).not.toContain(forbidden)
+    }
+  })
 })

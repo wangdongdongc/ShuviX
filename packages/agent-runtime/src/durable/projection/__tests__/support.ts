@@ -19,6 +19,8 @@ import {
   projectAgentView,
   projectSessionView,
   type DisplayByEntry,
+  type OriginByEntry,
+  type ProjectionMemo,
   type QueueDisplay
 } from '../project'
 
@@ -215,6 +217,10 @@ export interface PInputs {
   asks?: readonly InputRequest[]
   runState?: RunViewState
   queueDisplay?: QueueDisplay
+  /** 结构共享（逐帧传同一份） */
+  memo?: ProjectionMemo
+  /** 条目 id → 输入的来源（`metadata.origin`） */
+  origins?: OriginByEntry
 }
 
 /** 过守卫的输出份数（P3-02-49 断言它不为零） */
@@ -228,7 +234,10 @@ export function expectJsonView<T>(view: T): T {
   return view
 }
 
-/** `projectSessionView(meta, entries, live, inbox, display, asks, runState)`，缺省见设计稿的约定 */
+/**
+ * `projectSessionView(meta, entries, live, inbox, display, asks, runState, queueDisplay, memo, origins)`，缺省见
+ * 设计稿的约定
+ */
 export function P(entries: readonly EntryRecord[], inputs: PInputs = {}): SessionView {
   return expectJsonView(
     projectSessionView(
@@ -239,7 +248,9 @@ export function P(entries: readonly EntryRecord[], inputs: PInputs = {}): Sessio
       inputs.display ?? new Map(),
       inputs.asks ?? [],
       inputs.runState ?? 'idle',
-      inputs.queueDisplay
+      inputs.queueDisplay,
+      inputs.memo,
+      inputs.origins
     )
   )
 }
@@ -254,7 +265,9 @@ export function PA(
       entries,
       inputs.live as LiveState | undefined,
       inputs.display ?? new Map(),
-      inputs.runState ?? 'idle'
+      inputs.runState ?? 'idle',
+      inputs.memo,
+      inputs.origins
     )
   )
 }

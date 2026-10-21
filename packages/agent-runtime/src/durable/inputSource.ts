@@ -1,7 +1,9 @@
 /**
  * 用户输入的来源（docs/sub-session-design.md §19.7）—— 一条 `pi.user` 不是人亲手打的时候，它是谁写的。
  *
- * 来源是驱动它的那条会话：父会话代用户发进子会话的消息（`kind: 'parent-session'`），或经会话权限表被授权的别的
+ * `SourceDoc` 自 2026-10-21 起给**每一条**输入记来源（`InputOrigin`：本机窗口、远程连接、Chrome、Telegram、别的会话，
+ * 见 chat-protocol `inputOrigin.ts`）；这里只读其中「不是人打的」那几种 —— 人在某个前端里打的来源跳过，读者看到的
+ * 与之前一样。驱动它的那条会话：父会话代用户发进子会话的消息（`kind: 'parent-session'`），或经会话权限表被授权的别的
  * 会话发进来的消息（`kind: 'session'`）—— `prompt-session` 与 `steer-session` 都算（`answer-session` 之后的那一轮
  * 不算，那是 ask 的结果）。来源在发送时随提交写进 `SourceDoc[requestId]`（`UserSendOptions.source`
  * / `AdmitOptions.source`），读的时候按 requestId 找 submission、再落到活上下文里的那条条目上 —— 与显示侧车
@@ -15,6 +17,7 @@
 import type { ConversationId, EntryId, EntryRecord, Harness } from '@earendil-works/pi-durable'
 import { UserEntry } from '@earendil-works/pi-durable'
 import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
+import { inputOriginOf, isDrivingOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { backgroundContext as BG, isClosedError } from './context'
 import { SourceDoc } from './docs'
 import { SessionClosedError, type DurableSession } from './durableSession'
@@ -23,19 +26,22 @@ import { SessionClosedError, type DurableSession } from './durableSession'
 export type InputSource = DrivingSessionRef
 
 /**
- * 侧车的形状判别：`{kind:'parent-session' | 'session', sessionId}`（title 可选）；否则 undefined（解析时按
- * 「认不出」处理）
+ * 侧车的一项 → 驱动它的会话：`{kind:'parent-session' | 'session', sessionId}`（title 可选）；人打的来源与认不出的
+ * 形状 → undefined（后者在解析时按「认不出」处理，见 `drivingSourceOfItem`）
  */
 export function inputSourceOf(item: unknown): InputSource | undefined {
-  if (typeof item !== 'object' || item === null) return undefined
-  const { kind, sessionId, title } = item as {
-    kind?: unknown
-    sessionId?: unknown
-    title?: unknown
-  }
-  if (kind !== 'parent-session' && kind !== 'session') return undefined
-  if (typeof sessionId !== 'string' || sessionId === '') return undefined
-  return typeof title === 'string' ? { kind, sessionId, title } : { kind, sessionId }
+  const origin = inputOriginOf(item)
+  return origin !== undefined && isDrivingOrigin(origin) ? origin : undefined
+}
+
+/** 认不出的一项照样算「有记录」（失败闭合）：sessionId 补空串 —— 不是任何一个读者自己 */
+const UNRECOGNIZED: InputSource = { kind: 'parent-session', sessionId: '' }
+
+/** 侧车的一项 → 驱动它的会话；人在某个前端里打的 → undefined（不算有记录）；认不出 → `UNRECOGNIZED` */
+function drivingSourceOfItem(item: unknown): InputSource | undefined {
+  const origin = inputOriginOf(item)
+  if (origin === undefined) return UNRECOGNIZED
+  return isDrivingOrigin(origin) ? origin : undefined
 }
 
 /**
@@ -51,8 +57,8 @@ export async function resolveInputSources(
   const doc = await harness.snapshot(SourceDoc, conversationId, BG)
   const items: [string, InputSource][] = []
   for (const [requestId, item] of Object.entries(doc?.items ?? {})) {
-    // 认不出的一项照样算「有记录」（失败闭合）：sessionId 补空串 —— 不是任何一个读者自己
-    items.push([requestId, inputSourceOf(item) ?? { kind: 'parent-session', sessionId: '' }])
+    const source = drivingSourceOfItem(item)
+    if (source !== undefined) items.push([requestId, source])
   }
   if (items.length === 0) return resolved
   const users = new Map<ConversationId, Set<EntryId>>()

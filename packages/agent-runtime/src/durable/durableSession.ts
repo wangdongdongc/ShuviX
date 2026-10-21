@@ -95,6 +95,7 @@ import {
 } from '@earendil-works/pi-durable'
 import type { HarnessSettings, Registry, ToolRegistration } from '@earendil-works/pi-durable'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
+import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
@@ -124,7 +125,6 @@ import {
   type InputResponseMeta,
   type PendingInputHooks
 } from './inputRequests'
-import type { InputSource } from './inputSource'
 import {
   AGENT_EXTENSION_PREFIX,
   AgentCreationError,
@@ -216,10 +216,10 @@ export interface UserSendOptions {
   /** 显示侧车（内联 Token 等），记在 DisplayDoc[requestId]；没有 requestId 时自动生成一个 */
   display?: JsonObject
   /**
-   * 这条输入不是人亲手打的：它的来源（父会话代用户发的，§19.7），记在 SourceDoc[requestId]；没有 requestId
-   * 时自动生成一个。读的一侧见 `inputSource.ts`。
+   * 这条输入从哪来（宿主按连接盖的章：本机窗口、远程连接……，或驱动它的会话，§19.7），记在 SourceDoc[requestId]；
+   * 没有 requestId 时自动生成一个。读的一侧见 `inputSource.ts` 与投影（`metadata.origin`）。
    */
-  source?: InputSource
+  source?: InputOrigin
   /**
    * 这条输入被受理的那一刻（durable 已接下这次提交，run 还没落定）调用一次。被拒（忙 / 模型被拒 /
    * 会话已关 / 创建被取消）时从不调用；重新挂上也不调用。抛错只记日志，不影响发送本身（桌面：
@@ -243,8 +243,8 @@ export interface AgentRef {
 /** steer / followUp 的选项：幂等键、来源与受理回调（与 `UserSendOptions` 同义，PIN-08） */
 export interface AdmitOptions {
   requestId?: string
-  /** 同 `UserSendOptions.source`（父会话发进子会话的引导，§19.6） */
-  source?: InputSource
+  /** 同 `UserSendOptions.source`（人在某个前端里打的引导 / 追加，或父会话发进子会话的引导，§19.6） */
+  source?: InputOrigin
   onAdmitted?: (info: AdmittedInfo) => void
   onPlaced?: (info: PlacedInfo) => void
 }
@@ -1332,13 +1332,9 @@ export class DurableSessionImpl implements DurableSession {
     this.reopenInputs()
     const conversation = await this.currentConversation()
     let requestId = options.requestId
-    if (options.display !== undefined) {
+    if (options.display !== undefined || options.source !== undefined) {
       requestId ??= randomId()
-      await this.recordDisplay(conversation, requestId, options.display)
-    }
-    if (options.source !== undefined) {
-      requestId ??= randomId()
-      await this.recordSource(conversation, requestId, options.source)
+      await this.recordSidecars(conversation, requestId, options.display, options.source)
     }
     if (whenBusy !== 'reject' || !this.isBusy()) {
       await this.flushDeferred(conversation, 'beforeSend')
@@ -1618,7 +1614,7 @@ export class DurableSessionImpl implements DurableSession {
           const conversation = await this.currentConversation()
           if (options.source !== undefined) {
             requestId ??= randomId()
-            await this.recordSource(conversation, requestId, options.source)
+            await this.recordSidecars(conversation, requestId, undefined, options.source)
           }
           await this.flushDeferred(conversation, 'beforeSend')
           await this.announceDate(conversation)
@@ -2220,25 +2216,22 @@ export class DurableSessionImpl implements DurableSession {
     }, BG)
   }
 
-  private async recordSource(
+  /** 显示侧车与来源记在同一个提交里（每条输入都带来源，别为它多一次提交） */
+  private async recordSidecars(
     conversation: Conversation,
     requestId: string,
-    source: InputSource
+    display: JsonObject | undefined,
+    source: InputOrigin | undefined
   ): Promise<void> {
     await conversation.commit(async (tx) => {
-      const doc = await tx.doc(SourceDoc, conversation.id)
-      doc.items[requestId] = copyJson(source, { omitUndefinedProperties: true }) as JsonObject
-    }, BG)
-  }
-
-  private async recordDisplay(
-    conversation: Conversation,
-    requestId: string,
-    display: JsonObject
-  ): Promise<void> {
-    await conversation.commit(async (tx) => {
-      const doc = await tx.doc(DisplayDoc, conversation.id)
-      doc.items[requestId] = copyJson(display, { omitUndefinedProperties: true }) as JsonObject
+      if (display !== undefined) {
+        const doc = await tx.doc(DisplayDoc, conversation.id)
+        doc.items[requestId] = copyJson(display, { omitUndefinedProperties: true }) as JsonObject
+      }
+      if (source !== undefined) {
+        const doc = await tx.doc(SourceDoc, conversation.id)
+        doc.items[requestId] = copyJson(source, { omitUndefinedProperties: true }) as JsonObject
+      }
     }, BG)
   }
 

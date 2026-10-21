@@ -12,9 +12,12 @@
  *             换进程照旧、界面投影的工具块原样带着；载荷里伪造的那一份从没落盘
  *   RSRC-29 / 32 真发送上的来源（§19.7）：submitUser / steer / followUp 带不带来源，摘要里一一对应（交错着发）；
  *             读摘要不种 SourceDoc、零发布
+ *   RSRC-36   同一串交错的发送、人打的也盖上章（本机 / 远程，2026-10-21）：摘要与 RSRC-29 一模一样（人打的仍没有
+ *             source 键），界面投影里每条用户消息的 `metadata.origin` 恰是它发送时带的（含排过队的 steer / followUp）
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai'
 import type { ConversationId, EntryRecord } from '@earendil-works/pi-durable'
+import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { describe, expect, it } from 'vitest'
 import { PARENT_ANSWERED } from '../../askTool'
 import { backgroundContext as BG } from '../context'
@@ -504,44 +507,107 @@ describe('WP2 · 真 ask 工具上的答题方（§19.5）', () => {
 
 describe('RSRC · 真发送上的来源（§19.7）', () => {
   const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+  const LOCAL = { kind: 'local' } as const
+  const REMOTE = {
+    kind: 'remote',
+    clientId: 'ws:4',
+    address: '192.168.1.20',
+    userAgent: 'UA'
+  } as const
+  /** RSRC-29 那一串交错发送在摘要里的用户项 */
+  const INTERLEAVED = [
+    { kind: 'user', text: 'P1', source: PARENT },
+    { kind: 'user', text: 'H-steer' },
+    { kind: 'user', text: 'P-steer', source: PARENT },
+    { kind: 'user', text: 'H-follow' },
+    { kind: 'user', text: 'P-follow', source: PARENT }
+  ]
+
+  /** 被驱动的 P1 扣在工具上时交错着 steer / followUp；`human` = 人打的那两条带的来源（缺省不带） */
+  async function interleaved(human: { steer?: InputOrigin; follow?: InputOrigin } = {}): Promise<{
+    t: Awaited<ReturnType<typeof makeHost>>
+    session: DurableSession
+  }> {
+    const gate = deferred()
+    const running = deferred()
+    const t = await makeHost({
+      ephemeral: [SID],
+      tools: [holdTool('hold', gate.promise, { onRun: () => running.resolve() })]
+    })
+    const session = await t.open(SID)
+    await primeRoot(session)
+    t.kit.queue(callTool('hold'), answer('a1'), answer('a2'), answer('a3'), answer('a4'))
+    const sending = session.submitUser('P1', {
+      requestId: 'subsession:P1:1',
+      driven: { parentId: 'P1', background: false },
+      source: PARENT
+    })
+    await running.promise
+    const stamp = (origin: InputOrigin | undefined): { source?: InputOrigin } =>
+      origin === undefined ? {} : { source: origin }
+    expect((await session.steer('H-steer', stamp(human.steer))).submissionId).toBeDefined()
+    expect((await session.steer('P-steer', { source: PARENT })).submissionId).toBeDefined()
+    const humanFollow = await session.followUp('H-follow', stamp(human.follow))
+    const parentFollow = await session.followUp('P-follow', { source: PARENT })
+    gate.resolve()
+    expect(await withTimeout(sending, 5000, 'round')).toEqual({})
+    for (const queued of [humanFollow, parentFollow]) {
+      const submission = await session.harness.submission(queued.submissionId!, BG)
+      expect((await withTimeout(submission!.wait(BG), 5000, 'follow-up')).status).toBe('done')
+    }
+    return { t, session }
+  }
 
   it(
     'RSRC-29 submitUser / steer / followUp 带不带来源，摘要里一一对应：被驱动的发送与父会话的 steer / followUp 带 source，人发的没有这个键（交错着发）',
     async () => {
-      const gate = deferred()
-      const running = deferred()
-      const t = await makeHost({
-        ephemeral: [SID],
-        tools: [holdTool('hold', gate.promise, { onRun: () => running.resolve() })]
-      })
-      const session = await t.open(SID)
-      await primeRoot(session)
-      t.kit.queue(callTool('hold'), answer('a1'), answer('a2'), answer('a3'), answer('a4'))
-      const sending = session.submitUser('P1', {
-        requestId: 'subsession:P1:1',
-        driven: { parentId: 'P1', background: false },
-        source: PARENT
-      })
-      await running.promise
-      expect((await session.steer('H-steer')).submissionId).toBeDefined()
-      expect((await session.steer('P-steer', { source: PARENT })).submissionId).toBeDefined()
-      const humanFollow = await session.followUp('H-follow')
-      const parentFollow = await session.followUp('P-follow', { source: PARENT })
-      gate.resolve()
-      expect(await withTimeout(sending, 5000, 'round')).toEqual({})
-      for (const queued of [humanFollow, parentFollow]) {
-        const submission = await session.harness.submission(queued.submissionId!, BG)
-        expect((await withTimeout(submission!.wait(BG), 5000, 'follow-up')).status).toBe('done')
-      }
+      const { session } = await interleaved()
       const users = shape(await digest(session)).filter(
         (item) => (item as { kind: string }).kind === 'user'
       )
-      expect(users).toStrictEqual([
-        { kind: 'user', text: 'P1', source: PARENT },
-        { kind: 'user', text: 'H-steer' },
-        { kind: 'user', text: 'P-steer', source: PARENT },
-        { kind: 'user', text: 'H-follow' },
-        { kind: 'user', text: 'P-follow', source: PARENT }
+      expect(users).toStrictEqual(INTERLEAVED)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'RSRC-36 人打的也盖章（steer 本机、followUp 远程、再来一条本机的 submitUser）：摘要与 RSRC-29 一模一样、人打的没有 source 键；界面投影的 metadata.origin 恰是各自发送时带的',
+    async () => {
+      const { t, session } = await interleaved({ steer: LOCAL, follow: REMOTE })
+      t.kit.queue(answer('a5'))
+      expect(await session.submitUser('H-typed', { source: LOCAL })).toEqual({})
+      const users = shape(await digest(session)).filter(
+        (item) => (item as { kind: string }).kind === 'user'
+      )
+      expect(users).toStrictEqual([...INTERLEAVED, { kind: 'user', text: 'H-typed' }])
+      for (const item of users) {
+        if ((item as { text: string }).text.startsWith('H-'))
+          expect(item).not.toHaveProperty('source')
+      }
+      // 来源都写进了 SourceDoc（人打的也在）
+      const conversation = await session.currentConversation()
+      expect(
+        Object.values((await session.harness.snapshot(SourceDoc, conversation.id, BG))!.items)
+      ).toHaveLength(6)
+
+      const view = await freshMount(session)
+      const typed = view.messages.filter(
+        (message) =>
+          message.role === 'user' &&
+          (message.metadata as { isSystemNotice?: boolean } | null)?.isSystemNotice !== true
+      )
+      expect(
+        typed.map((message) => [
+          message.content,
+          (message.metadata as { origin?: unknown } | null)?.origin
+        ])
+      ).toStrictEqual([
+        ['P1', PARENT],
+        ['H-steer', LOCAL],
+        ['P-steer', PARENT],
+        ['H-follow', REMOTE],
+        ['P-follow', PARENT],
+        ['H-typed', LOCAL]
       ])
     },
     TIMEOUT

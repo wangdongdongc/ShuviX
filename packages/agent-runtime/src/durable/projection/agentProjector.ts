@@ -76,7 +76,8 @@ export class AgentProjectorImpl extends ProjectorCore<AgentView> implements Agen
       docs[LiveDoc.definition.kind] as LiveState | undefined,
       this.displayByEntry(mount),
       runState,
-      this.memo
+      this.memo,
+      this.originByEntry(mount)
     )
   }
 

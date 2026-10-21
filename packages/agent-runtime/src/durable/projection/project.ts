@@ -90,6 +90,7 @@ import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { spillLocatorOf } from '../../toolOutput/spill'
 import { toolResultText } from '../../toolResultText'
 import { NoticeEntry } from '../docs'
+import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { DisplayItem } from './display'
 import { firstMessage, tsOf, unwrapCompactionSummary, userText } from './entryText'
 
@@ -110,6 +111,11 @@ export interface AgentProjectionMeta {
 
 /** 条目 id → 解析到这条 `pi.user` 上的显示侧车（`resolveDisplayItems`） */
 export type DisplayByEntry = ReadonlyMap<number, DisplayItem>
+
+/** 条目 id → 这条 `pi.user` 从哪来（`SourceDoc`，与显示侧车同一套解析；投影成 `metadata.origin`） */
+export type OriginByEntry = ReadonlyMap<number, InputOrigin>
+
+const NO_ORIGINS: OriginByEntry = new Map()
 
 /** submission id → 这条排队输入的显示侧车（PIN-17；P3-03 提供） */
 export type QueueDisplay = ReadonlyMap<number, DisplayItem>
@@ -286,6 +292,7 @@ type Slot =
       readonly kind: 'user'
       readonly entry: EntryRecord
       readonly display: DisplayItem | undefined
+      readonly origin: InputOrigin | undefined
     }
   | { readonly kind: 'notice' | 'compaction'; readonly entry: EntryRecord }
   | {
@@ -319,6 +326,7 @@ interface HistoryInputs {
   readonly entries: readonly EntryRecord[]
   readonly runTask: number | undefined
   readonly display: DisplayByEntry
+  readonly origins: OriginByEntry
 }
 
 /** 最近一次投影的复用情况（测试 / 性能护栏用） */
@@ -434,7 +442,8 @@ export class ProjectionMemo {
       last === undefined ||
       last.inputs.entries !== inputs.entries ||
       last.inputs.runTask !== inputs.runTask ||
-      !sameDisplayMap(last.inputs.display, inputs.display)
+      !sameDisplayMap(last.inputs.display, inputs.display) ||
+      !sameOriginMap(last.inputs.origins, inputs.origins)
     ) {
       return undefined
     }
@@ -448,8 +457,11 @@ export class ProjectionMemo {
     result: HistoryResult,
     counts: { built: number; reused: number }
   ): void {
-    // 显示侧车拷一份：调用方之后改它的 Map 不影响下次比较
-    this.history = { inputs: { ...inputs, display: new Map(inputs.display) }, result }
+    // 显示侧车与来源拷一份：调用方之后改它的 Map 不影响下次比较
+    this.history = {
+      inputs: { ...inputs, display: new Map(inputs.display), origins: new Map(inputs.origins) },
+      result
+    }
     this.lastStats = { historyReused: false, built: counts.built, reused: counts.reused }
   }
 
@@ -526,11 +538,27 @@ function sameDisplayMap(a: DisplayByEntry, b: DisplayByEntry): boolean {
   return true
 }
 
+/** 两份来源相等（同上，旁路每次都解析出新对象） */
+function sameOrigin(a: InputOrigin | undefined, b: InputOrigin | undefined): boolean {
+  return a === b || (a !== undefined && b !== undefined && jsonEqual(a, b))
+}
+
+function sameOriginMap(a: OriginByEntry, b: OriginByEntry): boolean {
+  if (a === b) return true
+  if (a.size !== b.size) return false
+  for (const [entry, origin] of a) {
+    if (!sameOrigin(origin, b.get(entry))) return false
+  }
+  return true
+}
+
 function sameSlot(a: Slot, b: Slot): boolean {
   if (a.entry !== b.entry || a.kind !== b.kind) return false
   switch (b.kind) {
-    case 'user':
-      return sameDisplay((a as typeof b).display, b.display)
+    case 'user': {
+      const before = a as typeof b
+      return sameDisplay(before.display, b.display) && sameOrigin(before.origin, b.origin)
+    }
     case 'notice':
     case 'compaction':
       return true
@@ -570,12 +598,13 @@ function projectCore(
   entries: readonly EntryRecord[],
   live: LiveInput,
   display: DisplayByEntry,
+  origins: OriginByEntry,
   runState: RunViewState,
   memo: ProjectionMemo
 ): ProjectedCore {
   memo.bind(sessionId)
   const runTask = liveTaskOf(live)
-  const history = projectHistory(sessionId, entries, display, runTask, memo)
+  const history = projectHistory(sessionId, entries, display, origins, runTask, memo)
   return {
     messages: history.messages,
     live: memo.liveCard(sessionId, live, runTask, history.liveHint),
@@ -593,10 +622,11 @@ function projectHistory(
   sessionId: string,
   entries: readonly EntryRecord[],
   display: DisplayByEntry,
+  origins: OriginByEntry,
   runTask: number | undefined,
   memo: ProjectionMemo
 ): HistoryResult {
-  const inputs: HistoryInputs = { entries, runTask, display }
+  const inputs: HistoryInputs = { entries, runTask, display, origins }
   const cached = memo.cachedHistory(inputs)
   if (cached !== undefined) return cached
 
@@ -623,7 +653,12 @@ function projectHistory(
     switch (entry.kind) {
       case UserEntry.kind: {
         if (firstMessage(entry, 'user') === undefined) return
-        slots.push({ kind: 'user', entry, display: display.get(entry.id) })
+        slots.push({
+          kind: 'user',
+          entry,
+          display: display.get(entry.id),
+          origin: origins.get(entry.id)
+        })
         return
       }
       case NoticeEntry.kind: {
@@ -740,7 +775,8 @@ function buildMessage(sessionId: string, slot: Slot): ChatMessage {
           ...(images === undefined ? {} : { images }),
           ...(tokens === undefined ? {} : { inlineTokens: tokens }),
           ...(notice ? { isSystemNotice: true } : {}),
-          ...(emptyReply ? { noticeKind: EMPTY_REPLY_NOTICE_KIND } : {})
+          ...(emptyReply ? { noticeKind: EMPTY_REPLY_NOTICE_KIND } : {}),
+          ...(slot.origin === undefined ? {} : { origin: jsonCopy<InputOrigin>(slot.origin) })
         }
       }
     }
@@ -1003,6 +1039,7 @@ function asksOf(asks: readonly InputRequest[]): InputRequest[] {
  * @param runState  会话的运行状态（`DurableSession.runState`）
  * @param queueDisplay submission id → 排队输入的显示侧车（可选，PIN-17）
  * @param memo      结构共享（可选，P4-09b）：长期投影逐帧传同一份，没变的部分交回上一次的对象
+ * @param origins   条目 id → 输入的来源（可选，`SourceDoc`）：用户消息的 `metadata.origin`
  */
 export function projectSessionView(
   meta: SessionProjectionMeta,
@@ -1013,13 +1050,15 @@ export function projectSessionView(
   asks: readonly InputRequest[],
   runState: RunViewState,
   queueDisplay?: QueueDisplay,
-  memo?: ProjectionMemo
+  memo?: ProjectionMemo,
+  origins: OriginByEntry = NO_ORIGINS
 ): SessionView {
   const core = projectCore(
     meta.sessionId,
     entries,
     live,
     display,
+    origins,
     runState,
     memo ?? new ProjectionMemo()
   )
@@ -1049,13 +1088,15 @@ export function projectAgentView(
   live: LiveInput,
   display: DisplayByEntry,
   runState: RunViewState,
-  memo?: ProjectionMemo
+  memo?: ProjectionMemo,
+  origins: OriginByEntry = NO_ORIGINS
 ): AgentView {
   const core = projectCore(
     meta.sessionId,
     entries,
     live,
     display,
+    origins,
     runState,
     memo ?? new ProjectionMemo()
   )

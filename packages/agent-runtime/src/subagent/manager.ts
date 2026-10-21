@@ -38,6 +38,7 @@ import type { Context } from '@earendil-works/chord'
 import type { AgentRuntimeInfo } from '@shuvix/chat-protocol/chatApi'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import type { HumanOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { DurableSession } from '../durable/durableSession'
 import type { SessionHost } from '../durable/sessionHost'
@@ -155,6 +156,8 @@ export interface SubAgentManager {
     subSessionId: string
     text: string
     inlineTokens?: Record<string, InlineToken>
+    /** 这条追问从哪来（宿主按连接盖的章，见 `DurableSession` 的 `source`） */
+    origin?: HumanOrigin
   }) => Promise<void>
   /** 软停止一个在跑的子 agent（保留部分结果、按「已完成」收尾）。不认识 / 空闲 / 会话关着 → 无操作（从不打开会话） */
   interrupt: (agentId: string) => Promise<void>
@@ -528,7 +531,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
     },
 
     async continueTask(params): Promise<void> {
-      const { subSessionId: agentId, text, inlineTokens } = params
+      const { subSessionId: agentId, text, inlineTokens, origin } = params
       const entry = index.get(agentId)
       if (entry === undefined) throw new Error(`Sub-session not found: ${agentId}`)
       if (running.has(agentId)) throw new Error(`Sub-session is busy: ${agentId}`)
@@ -565,7 +568,7 @@ export function createSubAgentManager(deps: SubAgentManagerDeps): SubAgentManage
 
       let verdict: Verdict
       try {
-        const raw = await session.agents.continue(entry.conversationId, promptText)
+        const raw = await session.agents.continue(entry.conversationId, promptText, origin)
         verdict = settleOf(raw, false, soft.has(agentId))
       } catch (error) {
         verdict = {

@@ -47,7 +47,7 @@
  *
  * 协调器不发任何 ChatEvent、不碰任务登记（那是 P2-05 的路由）。
  */
-import type { Context } from '@earendil-works/chord'
+import { copyJson, type Context } from '@earendil-works/chord'
 import type { AssistantMessage, ToolCall } from '@earendil-works/pi-ai'
 import {
   AssistantEntry,
@@ -64,6 +64,7 @@ import {
   type EntryRecord,
   type Extension,
   type Harness,
+  type JsonObject,
   type Registry,
   type SettledSubmissionRecord,
   type Submission,
@@ -73,6 +74,7 @@ import {
   type ToolRegistration,
   type Tx
 } from '@earendil-works/pi-durable'
+import type { HumanOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { ThinkingLevel } from '@shuvix/chat-protocol/types/thinking'
 import type { PromptVars, PromptVarsCtx } from '../agentProfile/promptVars'
 import { resolveLockModel, type LockModel, type ModelSelection } from '../models/lockModel'
@@ -98,7 +100,7 @@ import {
 } from './agentRecord'
 import { normalizeToolNames, resolveThinkingLevel } from './agentSpec'
 import { backgroundContext as BG, errorText, isClosedError } from './context'
-import { AgentStateDoc } from './docs'
+import { AgentStateDoc, SourceDoc } from './docs'
 import {
   SHUVIX_BUILTIN_EXTENSION,
   agentExtension,
@@ -219,8 +221,11 @@ export interface SpawnCoordinator {
   interrupt(conversationId: number): Promise<void>
   /** 硬中止（在跑的话）并卸掉它的按 agent 扩展；转写、记录、身份都留着（之后按需重建） */
   destroy(conversationId: number): Promise<void>
-  /** 面板追问：给子 agent 再发一轮（忙 → `{error}`；不是派生 agent → `{error}`） */
-  continue(conversationId: number, text: string): Promise<SpawnOutcome>
+  /**
+   * 面板追问：给子 agent 再发一轮（忙 → `{error}`；不是派生 agent → `{error}`）。`source` = 这条输入从哪来（宿主按
+   * 连接盖的章），记在子对话的 `SourceDoc` 里（与会话的输入同一份）
+   */
+  continue(conversationId: number, text: string, source?: HumanOrigin): Promise<SpawnOutcome>
   /** 子 agent 的按 agent 扩展没装就按记录重建（不是派生 agent / 记录写坏了 → 抛错） */
   ensureInstalled(conversationId: number): Promise<void>
 }
@@ -1070,7 +1075,11 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
     })
   }
 
-  async continue(conversationId: number, text: string): Promise<SpawnOutcome> {
+  async continue(
+    conversationId: number,
+    text: string,
+    source?: HumanOrigin
+  ): Promise<SpawnOutcome> {
     const child = conversationId as ConversationId
     const record = this.host.directory.record(child)
     if (record === undefined) {
@@ -1088,10 +1097,23 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
           BG
         )
         if (conversation === undefined) throw new Error(`conversation ${child} does not exist`)
+        // 来源按 requestId 记（与会话的输入同一套解析）；没有来源就照旧不带 requestId（PIN-12）
+        const requestId = source === undefined ? undefined : globalThis.crypto.randomUUID()
+        if (requestId !== undefined) {
+          await conversation.commit(async (tx) => {
+            const doc = await tx.doc(SourceDoc, child)
+            doc.items[requestId] = copyJson(source, { omitUndefinedProperties: true }) as JsonObject
+          }, BG)
+        }
         let submission: Submission
         try {
           submission = await conversation.submit(
-            { type: 'input', content: text, whenBusy: 'reject' },
+            {
+              type: 'input',
+              content: text,
+              whenBusy: 'reject',
+              ...(requestId === undefined ? {} : { requestId })
+            },
             BG
           )
         } catch (error) {

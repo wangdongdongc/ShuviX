@@ -386,7 +386,7 @@ describe('router · rebuild at open', () => {
         5000,
         'continue'
       )
-      expect(spy.mock.calls).toEqual([[A.conversationId, 'more']])
+      expect(spy.mock.calls).toEqual([[A.conversationId, 'more', undefined]])
       expect(spawnedRebuilds(r2, A.agentId)).toBe(1)
       expect(r2.task(A.agentId)).toMatchObject({
         title: 'Explorer · look',
@@ -438,7 +438,7 @@ describe('router · rebuild at open', () => {
         5000,
         'continue'
       )
-      expect(spy.mock.calls).toEqual([[A.conversationId, 'more']])
+      expect(spy.mock.calls).toEqual([[A.conversationId, 'more', undefined]])
       const task = r2.task(A.agentId)!
       expect(task).toMatchObject({ title: 'Explorer · look', sessionId: 's1', status: 'done' })
       expect(task.subject).toEqual({ kind: 'agent', profileName: 'explore', depth: 1 })

@@ -16,6 +16,8 @@
  *   WP2-57..62 来源与答题方（docs/sub-session-design.md §19.5 / §19.7）：被驱动的 prompt 记下父会话来源；
  *          人发的消息不带；回退后原样重发沿用的来源走第 5 个参数（WP2-58b）；admitSteer 带幂等键与来源、交回受理
  *          结果而不抛；respondToInput 把 meta 原样转下去
+ *   WP2-81 输入来源（网关盖的章，2026-10-21）：steer / followUp 把它原样放进 durable 的选项（连同受理回调）；
+ *          不是被驱动的 prompt 带着它 → options 只多一个 source；被驱动时来源恒取 drivingSourceOf，章不顶替它
  * （D10-33「门面从不授予已读」在 agentSessionBot.test.ts。）
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -531,5 +533,68 @@ describe('WP2 来源与答题方', () => {
     expect(durable.respondArgs[0]!.arity).toBe(3)
     expect(durable.respondArgs[0]!.meta).toBe(meta)
     expect(durable.respondArgs[1]).toStrictEqual({ arity: 2 })
+  })
+
+  describe('WP2-81 输入来源（网关按连接盖的章）原样交给 durable', () => {
+    const LOCAL = { kind: 'local' } as const
+    const REMOTE = {
+      kind: 'remote',
+      clientId: 'ws:4',
+      address: '192.168.1.20',
+      userAgent: 'UA'
+    } as const
+
+    it('WP2-81 steer(text, LOCAL) → durable.steer 的选项里 source 就是它（同一个对象），受理回调都在', async () => {
+      const { durable, session } = facade()
+      await session.steer('s', LOCAL)
+      expect(durable.callsOf('steer')).toEqual([['steer', 's']])
+      const options = durable.steerOptions[0]!
+      expect(options.source).toBe(LOCAL)
+      expect(options).not.toHaveProperty('requestId')
+      expect(typeof options.onAdmitted).toBe('function')
+      expect(typeof options.onPlaced).toBe('function')
+    })
+
+    it('WP2-81 followUp(text, REMOTE) → durable.followUp 的选项里 source 就是它；不带来源 → 没有 source 键', async () => {
+      const { durable, session } = facade()
+      await session.followUp('f', REMOTE)
+      await session.followUp('g')
+      expect(durable.callsOf('followUp')).toEqual([
+        ['followUp', 'f'],
+        ['followUp', 'g']
+      ])
+      expect(durable.followUpOptions[0]!.source).toBe(REMOTE)
+      expect(typeof durable.followUpOptions[0]!.onAdmitted).toBe('function')
+      expect(typeof durable.followUpOptions[0]!.onPlaced).toBe('function')
+      expect(durable.followUpOptions[1]).not.toHaveProperty('source')
+      expect(durable.callsOf('submitUser')).toEqual([])
+    })
+
+    it('WP2-81 prompt(…, undefined, REMOTE) → options 只多一个 source（REMOTE），没有 requestId / driven', async () => {
+      const { durable, session } = facade()
+      await session.prompt('t', undefined, undefined, undefined, REMOTE)
+      const [, , options] = durable.callsOf('submitUser')[0]!
+      expect((options as { source?: unknown }).source).toStrictEqual(REMOTE)
+      expect(options).not.toHaveProperty('requestId')
+      expect(options).not.toHaveProperty('driven')
+    })
+
+    it('WP2-81 被驱动的 prompt 又带着 REMOTE → 来源取 drivingSourceOf（驱动它的会话），REMOTE 不顶替它', async () => {
+      const { durable, session } = facade()
+      const driven = { parentId: 'P3', background: false }
+      await session.prompt(
+        't',
+        undefined,
+        undefined,
+        { requestId: 'subsession:P3:1', driven },
+        REMOTE
+      )
+      const [, , options] = durable.callsOf('submitUser')[0]!
+      expect(options).toMatchObject({ requestId: 'subsession:P3:1', driven })
+      expect((options as { source?: unknown }).source).toStrictEqual({
+        kind: 'parent-session',
+        sessionId: 'P3'
+      })
+    })
   })
 })

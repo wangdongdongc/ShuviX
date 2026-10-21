@@ -19,6 +19,8 @@
  *   17 被拒（忙）的发送不入账；内联 Token 的发送记的是 `pi.user` 条目 id
  *   19 忙时 steer 在放下时按放下的条目入账；空闲 followUp 在受理时入账
  *   20 隐藏项目的会话照记，但不出现在 sessionsOnDay
+ *   22 输入来源（2026-10-21）：网络客户端的上下文里经网关发的那条 user 带 metadata.origin（remote，连同 inlineTokens），
+ *      窗口的上下文里发的带 local；列表 = freshMount；读者那一面（inputSources）是空的；会话导出不带地址 / UA
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -29,6 +31,7 @@ import type { DurableSession, SessionHostDeps } from '@shuvix/agent-runtime'
 import type { ConversationId, EntryId, ToolRegistration } from '@earendil-works/pi-durable'
 import { fauxText, fauxToolCall } from '@earendil-works/pi-ai'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
+import { transcribeConversation } from '@shuvix/chat-protocol/utils/transcript'
 
 const holder = vi.hoisted(() => ({
   db: null as unknown,
@@ -162,6 +165,8 @@ import { migrations } from '../../dao/migrations'
 import { localDayKey } from '../../dao/sessionDayPromptDao'
 import type { Session } from '../../dao/types'
 import type { ToolContext } from '../toolContext'
+import type { ClientContext } from '../../ipc/registry'
+import { createClientContext, operationContext } from '../../utils/operationContext'
 import { sessionRecords } from '../sessionRecords'
 import { clearMemoryStoragesForTests, readLegacyTranscript } from '../sessionStorage'
 import { getSessionHost, resetSessionHostForTests } from '../sessionHost'
@@ -484,6 +489,81 @@ describe('P3-07 list parity (S)', () => {
       expect(listed.map((m) => m.content)).toEqual(['U1', 'A1'])
       expect(await chatGateway.listMessages('s1')).toStrictEqual(listed)
       expect(await sessionService.getAgentSession('s1')!.listChatMessages()).toStrictEqual(listed)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'P3-07-22 input origin: a K1 prompt in a network context lists with {inlineTokens, origin: remote}, a window prompt with {origin: local}; list = freshMount; inputSources() is empty; the export carries neither the address nor the UA',
+    async () => {
+      const netCtx: ClientContext = {
+        client: {
+          kind: 'network',
+          id: 'ws:4',
+          remoteAddress: '192.168.1.20',
+          userAgent: 'SECRET-UA/1.0'
+        },
+        transport: 'network'
+      }
+      const winCtx: ClientContext = {
+        client: { kind: 'window', id: 'ipc:7', webContentsId: 7 },
+        transport: 'ipc'
+      }
+      const REMOTE = {
+        kind: 'remote',
+        clientId: 'ws:4',
+        address: '192.168.1.20',
+        userAgent: 'SECRET-UA/1.0'
+      }
+      insert('s1')
+      kit.queue(answer('A1'))
+      expect(
+        await operationContext.run(createClientContext(netCtx, 's1'), () =>
+          chatGateway.prompt('s1', D1_TEXT, undefined, K1)
+        )
+      ).toEqual({})
+      kit.queue(answer('A2'))
+      expect(
+        await operationContext.run(createClientContext(winCtx, 's1'), () =>
+          chatGateway.prompt('s1', 'from the window')
+        )
+      ).toEqual({})
+
+      const listed = await messageService.listBySession('s1')
+      expect(listed.map((m) => `${m.role}:${m.content}`)).toEqual([
+        `user:${D1_TEXT}`,
+        'assistant:A1',
+        'user:from the window',
+        'assistant:A2'
+      ])
+      expect(listed[0]!.metadata).toStrictEqual({ inlineTokens: K1, origin: REMOTE })
+      expect(listed[2]!.metadata).toStrictEqual({ origin: { kind: 'local' } })
+      for (const message of listed.filter((m) => m.role === 'assistant')) {
+        expect(message.metadata ?? {}).not.toHaveProperty('origin')
+      }
+      expect(listed).toStrictEqual((await freshMount(openSession('s1'))).messages)
+
+      // 读者（自动审查、大纲）只认别的会话发来的：人的章一条都不算
+      const agent = sessionService.getAgentSession('s1')!
+      const sources = await agent.inputSources()
+      expect(sources).toBeInstanceOf(Map)
+      expect(sources.size).toBe(0)
+
+      const exported = transcribeConversation(listed, {
+        includeThinking: true,
+        includeToolCalls: true,
+        includeToolResults: true,
+        includeStepText: true,
+        includeSystemNotices: true,
+        includeImages: true,
+        includeTimestamps: true,
+        includeUsage: true,
+        expandInlineTokens: true
+      })
+      expect(exported).toContain('from the window')
+      for (const leak of ['192.168.1.20', 'SECRET-UA', 'ws:4']) {
+        expect(exported).not.toContain(leak)
+      }
     },
     TIMEOUT
   )

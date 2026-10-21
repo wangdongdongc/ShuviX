@@ -15,7 +15,8 @@
  *    entryId，`placeQueued()` 时才 `onPlaced`）；steer / followUp 同样调受理回调；`viewSnapshot()` 交 `view`
  *    （缺省空的 durable 视图）。P3-13：`monitorSnapshot()` 交 `monitorRows`（`monitorError` 时拒绝），
  *    `spawnedRecords()` 交 `spawned`。
- *    WP2：`steerOptions` 记下每次 steer 的选项，`respondArgs` 记下 respondToInput 的实参个数与 meta。
+ *    WP2：`steerOptions` / `followUpOptions` 记下每次 steer / followUp 的选项（来源要原样到这里），`respondArgs` 记下
+ *    respondToInput 的实参个数与 meta；`agents.continue` 带了来源才把它记进那一笔调用（没带的调用形状不变）。
  *    WP3：`pendingRequests` 是挂着的询问（`pendingInputs()` 交它、计数随它），应答受理时移除并调 `onResponded`。
  *  - FakeSessionHost：open / peek / get / close / closeAll / reopen / delete；`storages` 是「存储在」的会话集合
  *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
@@ -308,8 +309,12 @@ export class FakeDurableSession implements DurableSession {
     return this.steerResult
   }
 
+  /** 每次 followUp 收到的选项（按顺序；输入来源要原样到这里） */
+  readonly followUpOptions: AdmitOptions[] = []
+
   async followUp(content: UserInput, options: AdmitOptions = {}): Promise<AdmitResult> {
     this.calls.push(['followUp', content])
+    this.followUpOptions.push(options)
     this.use()
     if (this.followUpResult.error === undefined) this.admitWith(options)
     return this.followUpResult
@@ -373,8 +378,13 @@ export class FakeDurableSession implements DurableSession {
     destroy: async (conversationId) => {
       this.calls.push(['agents.destroy', conversationId])
     },
-    continue: async (conversationId, text) => {
-      this.calls.push(['agents.continue', conversationId, text])
+    continue: async (conversationId, text, source) => {
+      this.calls.push([
+        'agents.continue',
+        conversationId,
+        text,
+        ...(source === undefined ? [] : [source])
+      ])
       return this.spawnOutcome
     },
     ensureInstalled: async (conversationId) => {

@@ -1558,12 +1558,12 @@ describe('PR —— 子会话：人写的取顶层，父 agent 写的只进 dele
     expect(payload.delegatedTasks).toStrictEqual(['Migrate the database'])
   })
 
-  it('RSRC-27 [guard] 旧格式消息元数据里的 metadata.source 不被当成来源：转写项没有 source 键、不长出锚点，后面那条仍是任务', async () => {
+  it('RSRC-27 [guard] 消息元数据里的 metadata.origin 不被当成来源（来源只认会话存储）：转写项没有 source 键、不长出锚点，后面那条仍是任务', async () => {
     const top = newSession()
     const sub = newSession(top)
     transcripts.set(top, [userMsg(top, 'top intent', 500)])
     transcripts.set(sub, [
-      userMsg(sub, 'P', 1000, { source: { type: 'parent-session', sessionId: 'P1' } }),
+      userMsg(sub, 'P', 1000, { origin: { kind: 'parent-session', sessionId: 'P1' } }),
       userMsg(sub, 'H', 2000)
     ])
     const items = transcriptItemsOf(await mocks.listBySession(sub))

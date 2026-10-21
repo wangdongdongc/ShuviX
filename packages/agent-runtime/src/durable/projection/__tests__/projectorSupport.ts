@@ -6,7 +6,8 @@
  *    逐条重放（P3-03-54）。
  *  - `attachOracle(session, state)`：身份预言（PIN-10 修订版）—— 在投影**之后**挂一个独立的 watch，每一帧
  *    记下帧值、那一刻的 `runState` / 询问与投影的状态值；`verify()` 事后用纯投影 + `resolveDisplayItems`
- *    （P3-02 的共享解析）+ 独立的排队侧车查询逐帧重算并深比较。投影换挂载（`["r"]`）时预言跟着换。
+ *    （P3-02 的共享解析）+ 独立的排队侧车查询 + 独立的来源查询（`originsOf`）逐帧重算并深比较。投影换挂载
+ *    （`["r"]`）时预言跟着换。
  *  - `freshMount(session)`：一个新建、不共享的投影实例此刻挂载的值（读完拆掉）；`freshAgentMount` 同理。
  *  - `reopenMount(t, id)`：`host.close` → `host.open` → `freshMount`。
  *  - `recordLifecycle(proj, state?)`：运行生命周期信号（连同信号到达那一刻的视图）。
@@ -21,18 +22,20 @@ import {
   defineTool,
   type ConversationId,
   type ConversationView,
+  type EntryRecord,
   type InboxState,
   type LiveState,
   type ToolRegistration,
   type WatchHandle
 } from '@earendil-works/pi-durable'
+import { inputOriginOf, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentView, RunViewState, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { isJsonOnly } from '@shuvix/chat-protocol/utils/jsonOnly'
 import { expect } from 'vitest'
 import { truncationDiagnostic } from '../../../toolOutput/spill'
 import { backgroundContext as BG } from '../../context'
-import { DisplayDoc } from '../../docs'
+import { DisplayDoc, SourceDoc } from '../../docs'
 import type { DurableSession } from '../../durableSession'
 import type { TestHost } from '../../__tests__/support/host'
 import { sleep } from '../../__tests__/support/wait'
@@ -289,7 +292,9 @@ export async function attachOracle(
           display,
           record.asks,
           record.runState,
-          queueDisplay
+          queueDisplay,
+          undefined,
+          await originsOf(session, record.conversationId, entries)
         )
         expect(record.view, `oracle frame ${index}`).toStrictEqual(expected)
         compared++
@@ -321,6 +326,51 @@ export async function queueDisplayOf(
     for (const [requestId, item] of items) {
       const record = await tx.submissionByRequest(conversationId as ConversationId, requestId)
       if (record !== undefined) map.set(record.id, item)
+    }
+  }, BG)
+  return map
+}
+
+/**
+ * 条目 id → 输入的来源（独立查询，与投影同一判据 —— 不经 `resolveInputSources`，那一份只给读者，跳过人打的、
+ * 认不出的失败闭合）：SourceDoc 里认得的每一项（`inputOriginOf`）先按 requestId 在这个对话里找 submission；
+ * 这个对话里没有这次提交 → 再到活上下文里出现过 `pi.user` 的祖先对话里找（那条条目必须在 `entries` 里）
+ */
+export async function originsOf(
+  session: DurableSession,
+  conversationId: number,
+  entries: readonly EntryRecord[]
+): Promise<Map<number, InputOrigin>> {
+  const conversation = conversationId as ConversationId
+  const doc = await session.harness.snapshot(SourceDoc, conversation, BG)
+  const items: [string, InputOrigin][] = []
+  for (const [requestId, item] of Object.entries(doc?.items ?? {})) {
+    const parsed = inputOriginOf(item)
+    if (parsed !== undefined) items.push([requestId, parsed])
+  }
+  const map = new Map<number, InputOrigin>()
+  if (items.length === 0) return map
+  const ancestors = new Map<ConversationId, Set<number>>()
+  for (const entry of entries) {
+    if (entry.kind !== 'pi.user' || entry.conversationId === conversation) continue
+    const ids = ancestors.get(entry.conversationId) ?? new Set<number>()
+    ids.add(entry.id)
+    ancestors.set(entry.conversationId, ids)
+  }
+  await session.harness.commit(async (tx) => {
+    for (const [requestId, origin] of items) {
+      const record = await tx.submissionByRequest(conversation, requestId)
+      if (record !== undefined) {
+        if (record.entry !== undefined) map.set(record.entry, origin)
+        continue
+      }
+      for (const [owner, ids] of ancestors) {
+        const found = await tx.submissionByRequest(owner, requestId)
+        if (found?.entry !== undefined && ids.has(found.entry)) {
+          map.set(found.entry, origin)
+          break
+        }
+      }
     }
   }, BG)
   return map

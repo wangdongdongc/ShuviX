@@ -195,4 +195,70 @@ describe('transcribeConversation', () => {
   it('空对话返回空 markdown', () => {
     expect(transcribeConversation([])).toBe('')
   })
+
+  it('EX-01 会话导出不带输入的来源（metadata.origin）：各种来源、全开 / 缺省选项，输出与去掉来源的同一串逐字节相同', () => {
+    const origins = [
+      { kind: 'local' },
+      { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20', userAgent: 'SECRET-UA' },
+      { kind: 'chrome', installId: 'inst-chrome-9' },
+      { kind: 'telegram', botId: 'bot-5', userId: 'tg-777', chatId: 'chat-31' },
+      { kind: 'parent-session', sessionId: 'P-parent-1', title: 'Driver-Title' },
+      { kind: 'session', sessionId: 'S-other-2', title: 'Driver-Title' }
+    ]
+    const msgs: ChatMessage[] = [
+      ...origins.map((origin, index) =>
+        userText(`message ${index} {{shuvixInlineToken:t0}}`, {
+          metadata: {
+            origin,
+            images: [{ mimeType: 'image/png' }],
+            inlineTokens: {
+              t0: { type: 'at', id: 'f', displayText: '@notes.md', payload: '/tmp/notes.md' }
+            }
+          }
+        })
+      ),
+      userText('<background-task id="t">done</background-task>', {
+        metadata: { isSystemNotice: true, origin: origins[1] }
+      }),
+      assistantText('reply')
+    ]
+    const stripped = msgs.map((msg) => {
+      const copy = structuredClone(msg) as ChatMessage & {
+        metadata: Record<string, unknown> | null
+      }
+      if (copy.metadata !== null) delete copy.metadata.origin
+      return copy as ChatMessage
+    })
+    expect(stripped.some((msg) => JSON.stringify(msg).includes('origin'))).toBe(false)
+    const everything = {
+      includeThinking: true,
+      includeToolCalls: true,
+      includeToolResults: true,
+      includeStepText: true,
+      includeSystemNotices: true,
+      includeImages: true,
+      includeTimestamps: true,
+      includeUsage: true,
+      expandInlineTokens: true,
+      title: 'Export'
+    }
+    const secrets = [
+      '192.168.1.20',
+      'ws:4',
+      'SECRET-UA',
+      'inst-chrome-9',
+      'bot-5',
+      'tg-777',
+      'chat-31',
+      'P-parent-1',
+      'S-other-2',
+      'Driver-Title'
+    ]
+    for (const options of [everything, {}]) {
+      const md = transcribeConversation(msgs, options)
+      expect(md).toBe(transcribeConversation(stripped, options))
+      expect(md).toContain('message 5')
+      for (const secret of secrets) expect(md).not.toContain(secret)
+    }
+  })
 })

@@ -15,6 +15,9 @@
  *   RSRC-02..25 子会话用户消息按来源记录分配（§19.7 2026-10-17 裁决）：有记录 → delegatedTasks；没有记录、且在第一条
  *            有记录的消息（锚点）之后 → userMessages；锚点之前 / 整条没有锚点 → delegatedTasks。认不出的记录也算有记录
  *            （失败闭合）；顶层会话里带记录的不算人话；压缩、回退、读失败、孤儿记录、侧车的边角
+ *   RSRC-37  每条输入都记来源之后（2026-10-21）分配不变：人在某个前端里打的来源（local / remote / chrome / telegram）
+ *            跳过、当没有记录 —— 子会话的载荷与不盖这些章的孪生会话逐字相等；顶层会话全是人的章 → 全进 userMessages；
+ *            形状坏的人的来源（`{kind:'remote'}`）照样算有记录、进 delegatedTasks（失败闭合）
  *   XS-22 / 23 别的会话（`{kind:'session'}`，2026-10-20）发来的消息与代答：顶层会话与子会话里都进 delegatedTasks，
  *            代答写「another session」；父会话代答仍写「the parent session」
  *
@@ -1223,6 +1226,92 @@ describe('RSRC · 子会话用户消息按来源分配（§19.7 2026-10-17 裁�
     expect(pb.delegatedTasks).toStrictEqual(['H fresh'])
     expect(pb.userMessages).toStrictEqual(['top intent'])
   }, 20000)
+
+  describe('RSRC-37 人的来源（local / remote / chrome / telegram）不改变分配', () => {
+    const LOCAL = { kind: 'local' } as const
+    const REMOTE = {
+      kind: 'remote',
+      clientId: 'ws:4',
+      address: '192.168.1.20',
+      userAgent: 'UA'
+    } as const
+    const CHROME = { kind: 'chrome', installId: 'inst-1' } as const
+    const TELEGRAM = { kind: 'telegram', botId: 'b1', userId: 'u1', chatId: 'c1' } as const
+
+    it('(a) [guard] 子会话 [LOCAL pre human, PARENT task, REMOTE post human] 的载荷 = 不盖人的章的孪生会话（有意不变：锚点之前的仍是任务）', async () => {
+      const top = await durable([user(1000, 'top intent')])
+      const stamped = await durable(
+        [
+          sourcedUser(1100, 'pre human', LOCAL),
+          sourcedUser(1200, 'task', PARENT),
+          sourcedUser(1300, 'post human', REMOTE)
+        ],
+        top
+      )
+      const twin = await durable(
+        [user(1100, 'pre human'), sourcedUser(1200, 'task', PARENT), user(1300, 'post human')],
+        top
+      )
+      // 人的章确实落了盘（不是空跑）：SourceDoc 里三项都在
+      expect(
+        Object.values(((await sourceDocOf(stamped)) as { items: Record<string, unknown> }).items)
+      ).toStrictEqual([LOCAL, PARENT, REMOTE])
+
+      const payload = await buildPermissionRequestPayload(makeEvent(stamped))
+      // 除了会话 id（各是各的），整份载荷逐字相等
+      expect({ ...payload, sessionId: twin }).toStrictEqual(
+        await buildPermissionRequestPayload(makeEvent(twin))
+      )
+      expect(payload.delegatedTasks).toStrictEqual(['pre human', 'task'])
+      expect(payload.userMessages).toStrictEqual(['top intent', 'post human'])
+      expectKeptOut(payload, 'pre human')
+    })
+
+    it('(b) 顶层会话每条都盖了人的章 → 全进 userMessages，delegatedTasks 为空', async () => {
+      const top = await durable([
+        sourcedUser(1000, 'from the window', LOCAL),
+        sourcedUser(1100, 'from the phone', REMOTE),
+        sourcedUser(1200, 'from chrome', CHROME),
+        sourcedUser(1300, 'from telegram', TELEGRAM)
+      ])
+      const payload = await buildPermissionRequestPayload(makeEvent(top))
+      expect(payload.userMessages).toStrictEqual([
+        'from the window',
+        'from the phone',
+        'from chrome',
+        'from telegram'
+      ])
+      expect(payload.delegatedTasks).toStrictEqual([])
+    })
+
+    it.each([
+      ['{kind:remote}', { kind: 'remote' }],
+      ['remote 缺 address', { kind: 'remote', clientId: 'ws:4' }],
+      ['telegram 缺 id', { kind: 'telegram', botId: 'b1' }]
+    ] as const)(
+      '(c) [guard] 形状坏的人的来源（%s）算有记录（失败闭合）：顶层会话里进 delegatedTasks，子会话里照样立锚点',
+      async (_l, bad) => {
+        const top = await durable([
+          user(1000, 'mine'),
+          sourcedUser(1100, 'bad-origin text', bad as never),
+          sourcedUser(1200, 'mine again', LOCAL)
+        ])
+        const payload = await buildPermissionRequestPayload(makeEvent(top))
+        expect(payload.userMessages).toStrictEqual(['mine', 'mine again'])
+        expect(payload.delegatedTasks).toStrictEqual(['bad-origin text'])
+        expectKeptOut(payload, 'bad-origin text')
+
+        const parent = await durable([user(1000, 'top intent')])
+        const child = await durable(
+          [sourcedUser(1300, 'bad-origin task', bad as never), sourcedUser(1400, 'H', REMOTE)],
+          parent
+        )
+        const childPayload = await buildPermissionRequestPayload(makeEvent(child))
+        expect(childPayload.delegatedTasks).toStrictEqual(['bad-origin task'])
+        expect(childPayload.userMessages).toStrictEqual(['top intent', 'H'])
+      }
+    )
+  })
 })
 
 /**

@@ -7,7 +7,7 @@
  *   04 挂载只读：零发布、不续跑、宿主不再收到运行状态
  *   05 挂在 fork 指针上：fork 的 id、前缀消息沿用根的 id
  *   50 watch 帧处理器里，这一帧的那次发布的旁路状态（显示侧车 / submission）已经记下
- *   51 与提交赛跑的挂载：发送在挂载之前 / 之后 0、1、2 个微任务开始，结果都 = freshMount
+ *   51 与提交赛跑的挂载：发送在挂载之前 / 之后 0、1、2 个微任务开始，结果都 = freshMount（显示侧车与来源都在）
  */
 import {
   InboxDoc,
@@ -48,6 +48,12 @@ const K1: Tokens = {
   k1: { type: 'cmd', id: 'deploy', displayText: '/deploy', payload: 'PAYLOAD-K1' }
 }
 const D1 = { content: 'run {{shuvixInlineToken:k1}} please', tokens: K1 }
+const REMOTE = {
+  kind: 'remote',
+  clientId: 'ws:4',
+  address: '192.168.1.20',
+  userAgent: 'UA'
+} as const
 
 async function entriesOf(session: DurableSession): Promise<EntryRecord[]> {
   return allEntries(await session.currentConversation())
@@ -242,7 +248,7 @@ describe('P3-03 · mount', () => {
   describe('P3-03-51 a mount that races commits', () => {
     for (const offset of [-2, -1, 0, 1, 2]) {
       it(
-        `the send starts ${offset < 0 ? `${-offset} microtasks before` : `${offset} microtasks after`} projector(): the value equals freshMount, every entry present, the user message carries D`,
+        `the send starts ${offset < 0 ? `${-offset} microtasks before` : `${offset} microtasks after`} projector(): the value equals freshMount, every entry present, the user message carries D and its origin`,
         async () => {
           const t = await makeHost({ ephemeral: ['s1'] })
           const session = await t.open('s1')
@@ -251,7 +257,7 @@ describe('P3-03 · mount', () => {
           t.kit.queue(stall.step)
           let sending: Promise<unknown> | undefined
           const send = (): void => {
-            sending = session.submitUser('run PAYLOAD-K1 please', { display: D1 })
+            sending = session.submitUser('run PAYLOAD-K1 please', { display: D1, source: REMOTE })
           }
           const tick = async (n: number): Promise<void> => {
             for (let index = 0; index < n; index++) await Promise.resolve()
@@ -279,6 +285,7 @@ describe('P3-03 · mount', () => {
           expect(h.state.value).toStrictEqual(await freshMount(session))
           const users = h.state.value.messages.filter((m) => m.role === 'user')
           expect(users.map((m) => m.content)).toEqual([D1.content])
+          expect(users[0]!.metadata).toStrictEqual({ inlineTokens: K1, origin: REMOTE })
           const entries = await entriesOf(session)
           for (const entry of entries.filter((e) => e.kind === 'pi.user')) {
             expect(h.state.value.messages.some((m) => m.id === String(entry.id))).toBe(true)

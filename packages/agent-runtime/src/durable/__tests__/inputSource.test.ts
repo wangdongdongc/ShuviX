@@ -16,6 +16,9 @@
  *   SRC-23 (56)           不依赖 Node、从包入口导出
  *   AUTH-01..07           `authorsOf`：第一条有记录的之前 / 之后，大纲、审查、`user-intervened` 共用的那一份判法
  *   XS-08                 `kind: 'session'`（经会话权限表被授权的别的会话发进来的，2026-10-20）：形状判别与父会话同一套
+ *   SRC-24..27            每条输入都记来源之后（`InputOrigin`，2026-10-21）：人打的来源（本机 / 远程 / Chrome / Telegram）
+ *                         读者一律跳过 —— 与「没有记录」一样；形状不对的人打来源照样失败闭合；真发送上人打的来源写进了
+ *                         SourceDoc，读出来却与不带来源的同一串一模一样；显示侧车与来源同一个提交、同一个 requestId
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -26,11 +29,12 @@ import {
   type EntryRecord,
   type JsonObject
 } from '@earendil-works/pi-durable'
+import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import { describe, expect, it } from 'vitest'
 import * as runtime from '../../index'
 import { backgroundContext as BG } from '../context'
 import { DisplayDoc, SessionStateDoc, SourceDoc, type DeferredNotice } from '../docs'
-import type { DurableSession } from '../durableSession'
+import type { AdmitResult, DurableSession } from '../durableSession'
 import { SessionClosedError } from '../durableSession'
 import {
   authorsOf,
@@ -55,6 +59,16 @@ const TIMEOUT = 15000
 const SID = 'source'
 const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
 const P1 = { kind: 'parent-session', sessionId: 'P1' } as const
+/** 人在某个前端里打的（宿主按连接盖的章，chat-protocol `inputOrigin.ts`） */
+const LOCAL = { kind: 'local' } as const
+const REMOTE = {
+  kind: 'remote',
+  clientId: 'ws:4',
+  address: '192.168.1.20',
+  userAgent: 'UA'
+} as const
+const CHROME = { kind: 'chrome', installId: 'inst-1' } as const
+const TELEGRAM = { kind: 'telegram', botId: 'b1', userId: 'u1', chatId: 'c1' } as const
 
 async function openSession(): Promise<{ t: TestHost; session: DurableSession }> {
   const t = await makeHost({ ephemeral: [SID] })
@@ -123,6 +137,23 @@ describe('SRC · inputSourceOf（WP2-33）', () => {
   ] as const)('SRC-01 WP2-33 %s', (_label, item, expected) => {
     expect(inputSourceOf(item)).toStrictEqual(expected)
   })
+
+  it.each([
+    ['local', LOCAL],
+    ['local 带 sessionId（伪装不成会话）', { kind: 'local', sessionId: 'P1' }],
+    ['remote', REMOTE],
+    ['chrome（光秃秃）', { kind: 'chrome' }],
+    ['chrome 带 installId', CHROME],
+    ['telegram', TELEGRAM],
+    ['形状不对的 remote', { kind: 'remote' }],
+    ['形状不对的 telegram', { kind: 'telegram', botId: 'b' }],
+    ['remote 带 sessionId', { ...REMOTE, sessionId: 'P1', title: 'T' }]
+  ] as const)(
+    'SRC-24 人打的来源（含形状不对的）不是驱动它的会话 → undefined：%s',
+    (_label, item) => {
+      expect(inputSourceOf(item)).toBeUndefined()
+    }
+  )
 })
 
 /**
@@ -188,7 +219,7 @@ describe('SRC · submitUser', () => {
     ])
   })
 
-  it('SRC-04 WP2-36 a session that never recorded a source: empty map, no throw, and no SourceDoc is seeded (not by creating the conversation, not by human sends)', async () => {
+  it('SRC-04 WP2-36 a session that never recorded a source: empty map, no throw, and no SourceDoc is seeded (not by creating the conversation, not by sends without a source)', async () => {
     const { t, session } = await openSession()
     expect(await sources(session)).toEqual(new Map())
     expect(await sourceDoc(session)).toBeUndefined()
@@ -331,6 +362,45 @@ describe('SRC · hand-written sidecars', () => {
       })
     }, BG)
     expect(await sources(session)).toEqual(new Map())
+  })
+
+  it('SRC-25 human origins are skipped like “no record”; a malformed human origin or an unknown kind still fails closed; a parent source keeps its shape', async () => {
+    const t = await makeHost({ ephemeral: [SID] })
+    const session = await t.open(SID)
+    const skipped = {
+      'r-local': LOCAL,
+      'r-remote': REMOTE,
+      'r-chrome': { kind: 'chrome' },
+      'r-telegram': TELEGRAM,
+      'r-local-extra': { kind: 'local', sessionId: 'P1' }
+    }
+    const failClosed = {
+      'r-remote-bare': { kind: 'remote' },
+      'r-telegram-partial': { kind: 'telegram', botId: 'b' },
+      'r-hook': { kind: 'hook', sessionId: 'H1', title: 'from a newer version' }
+    }
+    const byRequest = await writeSourced(
+      session,
+      { ...skipped, ...failClosed, 'r-parent': PARENT },
+      [...Object.keys(skipped), ...Object.keys(failClosed), 'r-parent'].map((requestId) => ({
+        requestId,
+        text: requestId
+      }))
+    )
+    const unknown = { kind: 'parent-session', sessionId: '' }
+    const map = await sources(session)
+    expect(map).toStrictEqual(
+      new Map<string, unknown>([
+        ...Object.keys(failClosed).map((requestId): [string, unknown] => [
+          String(byRequest.get(requestId)!.id),
+          unknown
+        ]),
+        [String(byRequest.get('r-parent')!.id), PARENT]
+      ])
+    )
+    for (const requestId of Object.keys(skipped)) {
+      expect(map.has(String(byRequest.get(requestId)!.id)), requestId).toBe(false)
+    }
   })
 })
 
@@ -611,6 +681,149 @@ describe('SRC · sidecars together, stored shape', () => {
     expect(item).toStrictEqual({ kind: 'user', ts: expect.any(Number), text: 'p', source: P1 })
     expect((item as { source?: object }).source).not.toHaveProperty('title')
   })
+})
+
+describe('SRC · human origins on real sends (2026-10-21)', () => {
+  /** 一条 steer / followUp 的提交跑完 */
+  async function settled(session: DurableSession, admitted: AdmitResult): Promise<void> {
+    expect(admitted.submissionId).toBeDefined()
+    const submission = await session.harness.submission(admitted.submissionId!, BG)
+    expect((await withTimeout(submission!.wait(BG), 5000, 'admitted input')).status).toBe('done')
+  }
+
+  /**
+   * h1 / p1 / h2 用 submitUser，再在空闲时各来一条 steer、一条 followUp（各自起一轮）；`stamp` = 人打的那几条带不带
+   * 宿主盖的章。返回当前对话里用户条目的 id（字符串形，旧 → 新）
+   */
+  async function sendFive(t: TestHost, session: DurableSession, stamp: boolean): Promise<string[]> {
+    const human = (origin: InputOrigin): { source?: InputOrigin } =>
+      stamp ? { source: origin } : {}
+    t.kit.queue(answer('a1'), answer('a2'), answer('a3'), answer('a4'), answer('a5'))
+    expect(await session.submitUser('h1', human(LOCAL))).toEqual({})
+    expect(await session.submitUser('p1', { source: PARENT })).toEqual({})
+    expect(await session.submitUser('h2', human(REMOTE))).toEqual({})
+    await settled(session, await session.steer('s-idle', human(CHROME)))
+    await settled(session, await session.followUp('f-idle', human(TELEGRAM)))
+    const users = (await allEntries(await session.currentConversation())).filter(
+      (entry) => entry.kind === 'pi.user'
+    )
+    expect(users.map((entry) => messageText(entry.model?.[0]))).toStrictEqual([
+      'h1',
+      'p1',
+      'h2',
+      's-idle',
+      'f-idle'
+    ])
+    return users.map((entry) => String(entry.id))
+  }
+
+  it(
+    'SRC-26 human origins are written to SourceDoc yet read exactly like sends without a source: the map is {p1 → PARENT}, authorsOf gives the same answers with and without topLevel, identical to a twin whose human sends carry no source',
+    async () => {
+      const t = await makeHost({ ephemeral: [SID, 'twin'] })
+      const stamped = await t.open(SID)
+      await primeRoot(stamped)
+      const twin = await t.open('twin')
+      await primeRoot(twin)
+      const users = await sendFive(t, stamped, true)
+      const twinUsers = await sendFive(t, twin, false)
+
+      // 人打的来源都写进去了（每条输入都记，2026-10-21），原样
+      expect(Object.values((await sourceDoc(stamped))!.items)).toStrictEqual([
+        LOCAL,
+        PARENT,
+        REMOTE,
+        CHROME,
+        TELEGRAM
+      ])
+      expect(Object.values((await sourceDoc(twin))!.items)).toStrictEqual([PARENT])
+
+      const read = async (
+        session: DurableSession,
+        ids: string[]
+      ): Promise<{
+        map: [number, unknown][]
+        authors: (MessageAuthor | undefined)[]
+        topLevel: (MessageAuthor | undefined)[]
+      }> => {
+        const map = await sources(session)
+        const plain = authorsOf(ids, (id) => map.has(id))
+        const top = authorsOf(ids, (id) => map.has(id), { topLevel: true })
+        return {
+          map: [...map].map(([id, source]): [number, unknown] => [ids.indexOf(id), source]),
+          authors: ids.map((id) => plain.get(id)),
+          topLevel: ids.map((id) => top.get(id))
+        }
+      }
+      const got = await read(stamped, users)
+      expect([...(await sources(stamped))]).toStrictEqual([[users[1], PARENT]])
+      expect(got).toStrictEqual({
+        map: [[1, PARENT]],
+        authors: ['unknown', 'parent', 'human', 'human', 'human'],
+        topLevel: ['human', 'parent', 'human', 'human', 'human']
+      })
+      expect(await read(twin, twinUsers)).toStrictEqual(got)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'SRC-27 the display sidecar and the origin go in one commit under the submission’s requestId; a source-only send touches no DisplayDoc; a steer’s item is keyed by its submission’s requestId',
+    async () => {
+      const { t, session } = await openSession()
+      const conversation = await session.currentConversation()
+      const SOURCE = `shuvix.source#${conversation.id}`
+      const DISPLAY = `shuvix.display#${conversation.id}`
+      const display = {
+        content: 'run {{shuvixInlineToken:k1}}',
+        tokens: { k1: { type: 'cmd', id: 'x', displayText: '/x', payload: 'PAYLOAD' } }
+      }
+      t.kit.queue(answer('a1'), answer('a2'))
+
+      const both = recordPublications(session.harness)
+      expect(await session.submitUser('run PAYLOAD', { display, source: LOCAL })).toEqual({})
+      both.stop()
+      const touching = both.touching(SOURCE)
+      expect(touching).toHaveLength(1)
+      expect(touching[0]!.docs).toContain(DISPLAY)
+      expect(both.touching(DISPLAY)).toStrictEqual(touching)
+      const sourceKeys = Object.keys((await sourceDoc(session))!.items)
+      const displayKeys = Object.keys(
+        (await session.harness.snapshot(DisplayDoc, conversation.id, BG))!.items
+      )
+      expect(sourceKeys).toHaveLength(1)
+      expect(displayKeys).toStrictEqual(sourceKeys)
+      const record = await session.harness.commit(
+        (tx) => tx.submissionByRequest(conversation.id, sourceKeys[0]!),
+        BG
+      )
+      expect(record?.entry).toBe((await userEntry(session, 'run PAYLOAD')).id)
+
+      const sourceOnly = recordPublications(session.harness)
+      expect(await session.submitUser('plain', { source: REMOTE })).toEqual({})
+      sourceOnly.stop()
+      expect(sourceOnly.touching(SOURCE)).toHaveLength(1)
+      expect(sourceOnly.touching(DISPLAY)).toEqual([])
+      expect(Object.keys((await sourceDoc(session))!.items)).toHaveLength(2)
+
+      // 引导（steer）：键 = 这次提交的 requestId
+      const held = await heldRound()
+      const steer = await held.session.steer('x', { source: LOCAL })
+      const steerRecord = await (await held.session.harness.submission(
+        steer.submissionId!,
+        BG
+      ))!.status(BG)
+      expect(typeof steerRecord.requestId).toBe('string')
+      expect(Object.keys((await sourceDoc(held.session))!.items)).toStrictEqual([
+        steerRecord.requestId
+      ])
+      held.release()
+      expect(await withTimeout(held.sending, 5000, 'round')).toEqual({})
+      // 人打的：读者看不见
+      expect(await sources(held.session)).toEqual(new Map())
+    },
+    TIMEOUT
+  )
 })
 
 describe('SRC · closed handles and read-only', () => {

@@ -20,6 +20,7 @@ import {
 } from '@shuvix/agent-runtime'
 import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
+import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
@@ -132,8 +133,11 @@ export class AgentSession {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     display?: InlineTokensSidecar,
     drive?: DriveOptions,
-    /** 不是被驱动的发送、却不是人亲手打的（回退后原样重发一条父会话代发的消息，§19.7）：沿用的来源 */
-    source?: InputSource
+    /**
+     * 不是被驱动的发送时这条输入从哪来：网关按这次操作的连接盖的章（本机窗口、远程连接……），或回退后原样重发一条
+     * 父会话代发的消息时沿用的来源（§19.7）。被驱动的发送不看它，记驱动它的会话
+     */
+    source?: InputOrigin
   ): Promise<SubmitResult> {
     log.info(
       `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
@@ -147,7 +151,7 @@ export class AgentSession {
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
-      // 被驱动的发送同时记下来源（§19.7）：这条「用户消息」是驱动它的会话（父会话或被授权的别的会话）写的，不是人打的
+      // 来源（§19.7）：被驱动的发送记驱动它的会话（父会话或被授权的别的会话）—— 这条「用户消息」不是人打的
       ...(drive === undefined
         ? source === undefined
           ? {}
@@ -172,9 +176,9 @@ export class AgentSession {
     return result
   }
 
-  /** 运行中插话（空闲时起一轮）。被拒 → reject（调用方把文案报给界面） */
-  async steer(text: string): Promise<void> {
-    const result = await this.admitSteer(text)
+  /** 运行中插话（空闲时起一轮）；`source` = 这条输入从哪来（网关盖的章）。被拒 → reject（调用方把文案报给界面） */
+  async steer(text: string, source?: InputOrigin): Promise<void> {
+    const result = await this.admitSteer(text, source === undefined ? {} : { source })
     if (result.error) throw new Error(admissionErrorText(result))
   }
 
@@ -184,15 +188,18 @@ export class AgentSession {
    */
   async admitSteer(
     text: string,
-    options: { requestId?: string; source?: InputSource } = {}
+    options: { requestId?: string; source?: InputOrigin } = {}
   ): Promise<AdmitResult> {
     const result = await this.durable.steer(text, { ...this.dayPromptCallbacks(), ...options })
     return result.error ? { ...result, error: admissionErrorText(result) } : result
   }
 
-  /** 本轮结束后接着说（空闲时起一轮）。被拒 → reject */
-  async followUp(text: string): Promise<void> {
-    const result = await this.durable.followUp(text, this.dayPromptCallbacks())
+  /** 本轮结束后接着说（空闲时起一轮）；`source` 同 `steer`。被拒 → reject */
+  async followUp(text: string, source?: InputOrigin): Promise<void> {
+    const result = await this.durable.followUp(text, {
+      ...this.dayPromptCallbacks(),
+      ...(source === undefined ? {} : { source })
+    })
     if (result.error) throw new Error(admissionErrorText(result))
   }
 

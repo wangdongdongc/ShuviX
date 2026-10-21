@@ -14,7 +14,8 @@
  *         错误行之后被折叠掉（中段消失）、run.retry / compacting / interrupted、空卡、压缩头换前缀、
  *         重新挂载（条目全是新对象）、对话 id / 会话 id 变化、诊断与落盘、toolCallId 重用、图片
  *   SP-02 同一份录像走 AgentView
- *   SP-03 随机步骤（120 个种子 × 40 步），SessionView 与 AgentView 一起
+ *   SP-03 随机步骤（120 个种子 × 40 步），SessionView 与 AgentView 一起；步骤里含输入来源的设 / 清 / 值相等的
+ *         重新解析（`metadata.origin`，2026-10-21）
  */
 import {
   copyJson,
@@ -23,6 +24,7 @@ import {
   type MutableReplicatedState
 } from '@earendil-works/chord'
 import type { EntryRecord, InboxState, LiveState } from '@earendil-works/pi-durable'
+import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
 import type { AgentView, RunViewState, SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { describe, expect, it } from 'vitest'
@@ -69,11 +71,12 @@ interface Frame {
   readonly asks: readonly InputRequest[]
   readonly runState: RunViewState
   readonly queueDisplay: ReadonlyMap<number, DisplayItem> | undefined
+  readonly origins: ReadonlyMap<number, InputOrigin>
 }
 
 type Projector<V> = (frame: Frame, memo?: ProjectionMemo) => V
 
-// 投影每帧都拿一份新的显示侧车 Map（`displayByEntry` 每次新建），这里照做
+// 投影每帧都拿一份新的显示侧车 / 来源 Map（`displayByEntry` / `originByEntry` 每次新建），这里照做
 const sessionOf: Projector<SessionView> = (frame, memo) =>
   projectSessionView(
     frame.meta,
@@ -84,7 +87,8 @@ const sessionOf: Projector<SessionView> = (frame, memo) =>
     frame.asks,
     frame.runState,
     frame.queueDisplay === undefined ? undefined : new Map(frame.queueDisplay),
-    memo
+    memo,
+    new Map(frame.origins)
   )
 
 const agentOf: Projector<AgentView> = (frame, memo) =>
@@ -94,7 +98,8 @@ const agentOf: Projector<AgentView> = (frame, memo) =>
     frame.live as LiveState | undefined,
     new Map(frame.display),
     frame.runState,
-    memo
+    memo,
+    new Map(frame.origins)
   )
 
 /** 视图里没有一个对象（含数组）出现两次 —— chord 接管初值要求无别名 */
@@ -173,6 +178,7 @@ class World {
   asks: readonly InputRequest[] = []
   runState: RunViewState = 'idle'
   queueDisplay: ReadonlyMap<number, DisplayItem> | undefined
+  origins: ReadonlyMap<number, InputOrigin> = new Map()
 
   append(...entries: EntryRecord[]): void {
     this.entries = [...this.entries, ...entries]
@@ -221,6 +227,18 @@ class World {
     this.display = new Map([...this.display].map(([key, item]) => [key, copy(item)]))
   }
 
+  setOrigin(entryId: number, origin: InputOrigin | undefined): void {
+    const next = new Map(this.origins)
+    if (origin === undefined) next.delete(entryId)
+    else next.set(entryId, origin)
+    this.origins = next
+  }
+
+  /** SourceDoc 又变了一次：旁路把每一项都重新解析成新对象（值不变） */
+  reparseOrigins(): void {
+    this.origins = new Map([...this.origins].map(([key, origin]) => [key, copy(origin)]))
+  }
+
   /** 换挂载 / 重开：条目与文档都是新对象，内容不变 */
   remount(): void {
     this.entries = this.entries.map((entry) => structuredClone(entry))
@@ -236,7 +254,8 @@ class World {
       display: this.display,
       asks: this.asks,
       runState: this.runState,
-      queueDisplay: this.queueDisplay
+      queueDisplay: this.queueDisplay,
+      origins: this.origins
     }
   }
 }
@@ -458,6 +477,17 @@ function mulberry32(seed: number): () => number {
   }
 }
 
+/** 随机步骤挑的来源（每种都有；remote 有 / 没有 userAgent 只差一个键） */
+const ORIGINS: readonly InputOrigin[] = [
+  { kind: 'local' },
+  { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20', userAgent: 'UA' },
+  { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20' },
+  { kind: 'chrome', installId: 'inst-1' },
+  { kind: 'telegram', botId: 'b1', userId: 'u1', chatId: 'c1' },
+  { kind: 'parent-session', sessionId: 'P1', title: 'T' },
+  { kind: 'session', sessionId: 'X' }
+]
+
 class RandomWorld extends World {
   private nextId = 1
   private task = 1
@@ -624,6 +654,17 @@ class RandomWorld extends World {
     }
   }
 
+  private originStep(): void {
+    const users = this.entries.filter((entry) => entry.kind === 'pi.user')
+    const roll = this.random()
+    if (roll < 0.3) this.reparseOrigins()
+    else if (users.length > 0 && roll < 0.8) {
+      this.setOrigin(this.pick(users).id, copy(this.pick(ORIGINS)))
+    } else if (users.length > 0) {
+      this.setOrigin(this.pick(users).id, undefined)
+    }
+  }
+
   private queueStep(): void {
     if (this.inbox.items.length > 0 && this.chance(0.4)) {
       this.inbox = { items: this.inbox.items.slice(1) }
@@ -665,6 +706,7 @@ class RandomWorld extends World {
         this.runState = this.pick(['idle', 'busy', 'interrupted'] as const)
       },
       () => this.displayStep(),
+      () => this.originStep(),
       () => {
         this.asks = this.chance(0.5) ? [...this.asks, ask(`r${this.nextId++}`)] : this.asks.slice(1)
       },
@@ -689,6 +731,7 @@ class RandomWorld extends World {
 describe('P4-09b · structural sharing under random steps', () => {
   it('SP-03 120 seeds x 40 steps: SessionView and AgentView stay equal to a fresh projection with legacy ops', () => {
     let frames = 0
+    let withOrigins = 0
     for (let seed = 1; seed <= 120; seed++) {
       const world = new RandomWorld(mulberry32(seed))
       const session = new Pair(sessionOf, world.frame())
@@ -696,6 +739,7 @@ describe('P4-09b · structural sharing under random steps', () => {
       for (let step = 1; step <= 40; step++) {
         world.step()
         const frame = world.frame()
+        if (frame.origins.size > 0) withOrigins++
         session.step(frame, `seed ${seed} step ${step} (session)`)
         agent.step(frame, `seed ${seed} step ${step} (agent)`)
       }
@@ -704,6 +748,8 @@ describe('P4-09b · structural sharing under random steps', () => {
       agent.stop()
     }
     expect(frames).toBe(120 * 40 * 2)
+    // 来源步骤真的走到了（不是一直空着的 Map）
+    expect(withOrigins).toBeGreaterThan(500)
     // 9600 帧的重型属性测试：空闲机器上约 3 秒，满载时会超过默认的 5 秒上限
   }, 60_000)
 })

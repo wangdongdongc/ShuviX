@@ -1,5 +1,6 @@
 import { defineHandler } from './registry'
 import { chatGateway, operationContext, createClientContext } from '../frontend'
+import { inputOriginOfClient } from '../utils/operationContext'
 import { getBuiltinToolPresentations } from '../services/toolRegistry'
 import { getBuiltinToolDefinitions } from '../services/agentToolBuilder'
 import { agentManager } from '../agents/AgentManager'
@@ -43,12 +44,13 @@ export function registerAgentHandlers(): void {
    * 继续与已存在的派生 agent 对话（按 agentId 路由到它的会话与子对话）：追加一轮用户消息
    * （fire-and-forget，不 await 整轮；不认识 / 忙 / 会话没了的拒绝只记日志）
    */
-  defineHandler('agent:subAgentPrompt', (_ctx, params: AgentSubAgentPromptParams) => {
+  defineHandler('agent:subAgentPrompt', (ctx, params: AgentSubAgentPromptParams) => {
     void agentManager
       .continueTask({
         subSessionId: params.subSessionId,
         text: params.text,
-        inlineTokens: params.inlineTokens
+        inlineTokens: params.inlineTokens,
+        origin: inputOriginOfClient(ctx)
       })
       .catch((err: unknown) => {
         log.warn(`派生 agent 追问失败 agent=${params.subSessionId}: ${errorText(err)}`)

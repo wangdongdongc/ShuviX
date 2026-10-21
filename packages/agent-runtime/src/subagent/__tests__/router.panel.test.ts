@@ -1,14 +1,14 @@
 /**
  * 派生 agent 路由 · 面板操作按 agentId（P2-05 E 段，32–38；39 在桌面 agentHandlers.test.ts）：追问空闲的子 agent、
  * 不认识的 id、忙（PIN-08）、中止之后照样能追问（PIN-09）、会话关着用 peek 重开 / 被删就 not found（PIN-11）、
- * 中断与销毁从不打开会话。
+ * 中断与销毁从不打开会话；追问带的来源（宿主按连接盖的章）原样交给 `agents.continue`（P2-05-54）。
  */
 import { existsSync } from 'node:fs'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import { describe, expect, it, vi } from 'vitest'
 import { backgroundContext as BG } from '../../durable/context'
 import { spawnedAgentRecordOf } from '../../durable/agentRecord'
-import { AgentStateDoc } from '../../durable/docs'
+import { AgentStateDoc, SourceDoc } from '../../durable/docs'
 import type { DurableSession } from '../../durable/durableSession'
 import { answer, held, stalled } from '../../durable/__tests__/support/faux'
 import { registerHostCleanup } from '../../durable/__tests__/support/host'
@@ -172,6 +172,30 @@ describe('router · continue', () => {
     expect(existsSync(r.t.file('s1'))).toBe(false)
     expect(r.t.host.openSessionIds()).toEqual([])
     await expect(r.router.destroy(A)).resolves.toBeUndefined()
+  })
+
+  it('P2-05-54 the origin of a continue reaches agents.continue unchanged: one call (C, text, origin); the child’s SourceDoc holds it', async () => {
+    const REMOTE = {
+      kind: 'remote',
+      clientId: 'ws:4',
+      address: '192.168.1.20',
+      userAgent: 'UA'
+    } as const
+    const r = await hostR()
+    const { A, C } = await headline(r)
+    const spy = vi.spyOn(r.session.agents, 'continue')
+    r.t.kit.queue(answer('more ok'))
+    await withTimeout(
+      r.router.continueTask({ subSessionId: A, text: 'more', origin: REMOTE }),
+      3000,
+      'continue'
+    )
+    expect(spy.mock.calls).toStrictEqual([[C, 'more', REMOTE]])
+    expect(spy.mock.calls[0]![2]).toBe(REMOTE)
+    expect(
+      Object.values((await r.session.harness.snapshot(SourceDoc, C, BG))?.items ?? {})
+    ).toStrictEqual([REMOTE])
+    expect((await lines(r.session, C)).slice(-2)).toEqual(['pi.user:more', 'pi.assistant:more ok'])
   })
 })
 

@@ -12,8 +12,9 @@
  *    `registerBuiltinTool` 注册的 `probe`（safe，记下调用方身份）、`askOp`（unsafe，空身体，由策略设门）。
  *  - **进程**（PIN-01）：`bootProcess()` = `vi.resetModules()` + 重新 import 全套模块 —— 进程内的状态
  *    （taskRegistry、运行器的记账、路由的索引、hook runner、审查状态）与真崩溃一样全部消失；DB 与目录在
- *    hoisted 的 holder 里，跨进程活着。`crash()`（PIN-02）= 限时 `closeAll` → 等上一个进程的发送收尾、吞掉它
- *    的 promise → `bootProcess()`。
+ *    hoisted 的 holder 里，跨进程活着。操作上下文（`utils/operationContext` 的 AsyncLocalStorage）也是每个进程
+ *    一份：测试文件静态 import 的那份不是网关读的那份，要用 `Proc.operationContext`。`crash()`（PIN-02）=
+ *    限时 `closeAll` → 等上一个进程的发送收尾、吞掉它的 promise → `bootProcess()`。
  *  - **faux 路由**（PIN-03）：`routedSteps` —— 每条路由一个谓词（系统提示词里的 `ROLE:<档案>`、对话第一条用户
  *    消息）和自己的 FIFO；认不出的请求直接抛（报出它的第一条用户消息）。
  *  - **存储查看**：只用 `host.get` / `peek`，从不 `open`。
@@ -444,6 +445,8 @@ export interface Proc {
   readonly sessionTriggerFacts: typeof import('../../sessionTriggerFacts')
   readonly agentSessionModule: typeof import('../../agentSession')
   readonly transcriptSource: typeof import('../../transcriptSource')
+  /** 这个进程的操作上下文模块（网关读的就是它的 AsyncLocalStorage；`vi.resetModules()` 之后静态 import 的那份不是） */
+  readonly operationContext: typeof import('../../../utils/operationContext')
   /** `spyToolHost` 时真 ToolHost 收到的调用 */
   readonly toolHostCalls: ToolHostCalls
   /** onRunStateChange 的记录（会话 id → 依次报出的状态） */
@@ -500,6 +503,7 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
   const agentSessionModule = await import('../../agentSession')
   const toolContext = await import('../../toolContext')
   const transcriptSource = await import('../../transcriptSource')
+  const operationContext = await import('../../../utils/operationContext')
   const { registerBuiltinTool } = await import('../../toolRegistry')
   const { setBuiltinMcpAgentResolver } = await import('../../mcpService')
   // 真 session 工具 import 即自注册；派发工具的展示项同理（工厂不在内置表里 —— 它按 agent 解析）
@@ -608,6 +612,7 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
     sessionTriggerFacts,
     agentSessionModule,
     transcriptSource,
+    operationContext,
     toolHostCalls,
     states,
     aborts,

@@ -2,6 +2,7 @@
  * 消息相关共享类型 — main / preload / renderer 共用
  * 唯一定义源，消除跨进程类型重复
  */
+import type { InputOrigin } from './inputOrigin'
 import type { DrivingSessionRef } from './inputRequest'
 
 // ---- 基础元数据类型 ----
@@ -75,7 +76,11 @@ export interface MessageMetadata {
 
 /** 用户文本消息元数据 */
 export interface UserTextMeta {
-  source?: { type: string; [k: string]: unknown }
+  /**
+   * 这条输入从哪来（宿主按连接盖的章：本机窗口、远程连接、Chrome、Telegram、别的会话，见 `inputOrigin.ts`）；
+   * 没有 = 2026-10-21 之前的消息，或主进程自己发的。会话导出不带它
+   */
+  origin?: InputOrigin
   images?: ImageMeta[]
   inlineTokens?: Record<string, InlineToken>
   /** 项目指令文件注入消息（AGENTS.md / CLAUDE.md），UI 渲染为 SystemNoticeRow */
