@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { FolderClosed, FolderOpen, Lock } from 'lucide-react'
+import { BookOpen, FolderClosed, FolderOpen, Lock } from 'lucide-react'
 import { useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import {
   SKILL_BUILTIN_PROJECT_ID,
@@ -246,6 +246,7 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
     // 悬停时让位给 ⋮ 按钮。说明也换成界面文案 —— frontmatter 那段是写给模型的触发说明
     const copy = folder.isBuiltin ? builtinSkillCopy(skill.name, t) : undefined
     const showIdentifier = !!copy && !sameAsIdentifier(copy.label, skill.displayName)
+    const active = isActiveSkill(folder, skill)
     return (
       <div
         key={skill.name}
@@ -254,9 +255,12 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
         onClick={() => void adapter.open(skill)}
         onContextMenu={(e) => openSkillMenu(folder, skill, e)}
         title={copy?.hint ?? skill.description}
-        className={rowClass(isActiveSkill(folder, skill), !folder.isDefault)}
+        className={rowClass(active, !folder.isDefault)}
       >
-        <span className={`sb-icon ${off ? 'opacity-40' : ''}`} />
+        {/* 与分组头同一个 BookOpen；着色同知识库条目行（选中 accent，否则淡） */}
+        <BookOpen
+          className={`sb-icon ${active ? 'text-accent' : 'text-text-tertiary'} ${off ? 'opacity-40' : ''}`}
+        />
         <span
           className={`flex-1 min-w-0 truncate ${showIdentifier ? '' : 'group-hover:pr-5'} ${off ? 'line-through opacity-60' : ''}`}
         >
@@ -322,7 +326,7 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
                         )}
                       </span>
                       <span
-                        className={`flex-1 min-w-0 truncate group-hover:pr-5 ${folder.isEnabled ? '' : 'line-through opacity-60'}`}
+                        className={`flex-1 min-w-0 truncate ${folder.isBuiltin ? '' : 'group-hover:pr-5'} ${folder.isEnabled ? '' : 'line-through opacity-60'}`}
                       >
                         {folder.isBuiltin
                           ? t('settings.skillDirBuiltin')
@@ -333,7 +337,8 @@ export function SkillGroup({ adapter }: SkillGroupProps): React.JSX.Element {
                         <span
                           title={t('tool.subAgentBuiltin')}
                           aria-label={t('tool.subAgentBuiltin')}
-                          className="flex shrink-0 pr-1"
+                          // 悬停时往左让出 ⋮ 的位置（让位从名字挪到锁上），否则两颗图标叠在一起
+                          className="flex shrink-0 pr-1 group-hover:pr-5"
                         >
                           <Lock size={9} className="text-text-tertiary/50" />
                         </span>

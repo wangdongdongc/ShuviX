@@ -421,7 +421,8 @@ export function KnowledgeTreeView({
             <span
               title={t('knowledge.builtinBase')}
               aria-label={t('knowledge.builtinBase')}
-              className="flex shrink-0 pr-1"
+              // 悬停时往左让出 ⋮ 的位置，否则锁与 ⋮ 叠在一起
+              className={`flex shrink-0 pr-1 ${dirMenuItems(node).length > 0 ? 'group-hover:pr-5' : ''}`}
             >
               <Lock size={9} className="text-text-tertiary/50" />
             </span>
