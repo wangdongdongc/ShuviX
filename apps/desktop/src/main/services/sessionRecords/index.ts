@@ -133,8 +133,8 @@ export class SessionRecords {
   }
 
   /**
-   * 有没有会话（持久的或活着的内存会话）的 `settings.workingDirectory` 正是 `dir` —— 会话 fork 共用源会话的
-   * 临时工作区，删除一条会话时据此判断那个目录还有没有人用
+   * 有没有会话（持久的或活着的内存会话）的 `settings.workingDirectory` 正是 `dir` —— 会话 fork 与临时会话的子会话
+   * 共用别的会话的临时工作区，删除一条会话时据此判断那个目录还有没有人用
    */
   existsWithWorkingDirectory(dir: string): boolean {
     for (const row of this.ephemeral.values()) {

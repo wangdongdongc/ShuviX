@@ -210,7 +210,7 @@ export class SessionDao extends BaseDao {
   }
 
   /**
-   * 有没有会话的 `settings.workingDirectory` 正是 `dir`（会话 fork 共用源会话的临时工作区：删除时判断它还有没有
+   * 有没有会话的 `settings.workingDirectory` 正是 `dir`（会话 fork 与临时会话的子会话共用别的会话的临时工作区：删除时判断它还有没有
    * 人用）。坏 JSON 的行跳过，理由同 findByStorageKindWithNotebookPath。
    */
   existsWithWorkingDirectory(dir: string): boolean {

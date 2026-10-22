@@ -7,7 +7,8 @@
  * tempWorkspaceOwnerOf，dao 的 existsWithWorkingDirectory）：
  *   - 无项目的源会话：fork 的 `settings.workingDirectory` = 源会话此刻解析出的工作目录（通常是它自己的
  *     `temp_workspace/<源 id>`，源会话自带了就是那一个）；项目会话的 fork 没有这个键；
- *   - fork 的 fork 指着最初那个文件夹；fork 下建的子会话随父会话（同一个文件夹）；
+ *   - fork 的 fork 指着最初那个文件夹；子会话随父会话（同一个文件夹）：临时会话的子会话共用父会话的
+ *     `temp_workspace/<父 id>`，fork 下建的子会话共用 fork 借来的那一个；
  *   - 删一条会话：它自己的 `temp_workspace/<id>`，以及它借用的那一个（`workingDirectory` 正好是别的会话的
  *     `temp_workspace/<id>` 本身）—— 各自只在「主人那一行没了、也没有任何会话（库里的或活着的内存会话）
  *     的 workingDirectory 正是它」时删；用户自己的目录（md 窗口）从不删。
@@ -33,6 +34,9 @@
  *   FW-13 rmSync 抛错不让 delete 失败
  *   FW-14 Promise.all([delete(S), delete(F)]) → 两行都没了，文件夹删掉
  *   FW-15 settings 是坏 JSON 的一行照样删得掉（delete 先读借用的工作目录，读不出来就当没借用）
+ *   FW-16 临时会话 P 的子会话 C：workingDirectory = P 的临时工作区（P 没问过也建出来），不建 temp_workspace/<C>，
+ *         权限表的工作目录行就是它；删 P（级联 C）删掉；单删 C 留着，再删 P 删掉；内存父会话同样；
+ *         项目父会话不写键也不建 temp_workspace/<P>；父指针落空 → 退回 C 自己的临时工作区
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -274,15 +278,17 @@ describe('FW-1..3 the fork row points at the source working folder', () => {
     expect(existsSync(tempOf('F'))).toBe(false)
   })
 
-  it('FW-1 temp sub-session source → parentId copied, and the fork shares that child source folder', () => {
+  it('FW-1 temp sub-session source → parentId copied, and the fork shares the folder the child shares with its parent', () => {
     const P = createTemp('P')
     const C = createTemp('C', { parentId: P })
     forkOf(C, 'F')
     const stored = sessionRecords.findById('F')!
     expect(stored.parentId).toBe(P)
     expect(stored.projectId).toBeNull()
-    expect(stored.settings.workingDirectory).toBe(tempOf(C))
-    expect(sessionService.getById('F')!.workingDirectory).toBe(tempOf(C))
+    expect(stored.settings.workingDirectory).toBe(tempOf(P))
+    expect(sessionService.getById('F')!.workingDirectory).toBe(tempOf(P))
+    expect(existsSync(tempOf(C))).toBe(false)
+    expect(existsSync(tempOf('F'))).toBe(false)
   })
 
   it('FW-2 a fork of a fork points at the original folder, not at the first fork', () => {
@@ -610,5 +616,85 @@ describe('FW-12..15 regressions and corners', () => {
 
     await sessionService.delete('R')
     expect(sessionRecords.findById('R')).toBeUndefined()
+  })
+})
+
+// ─── FW-16：临时会话的子会话共用父会话的临时工作区 ─────────────────
+
+describe("FW-16 a temp session's sub-session shares the parent's temp workspace", () => {
+  it('FW-16 create → settings.workingDirectory = getById(P).workingDirectory; getById(C) the same; the folder exists even if P never asked; no temp_workspace/<C>', () => {
+    const P = createTemp('P')
+    expect(existsSync(tempOf(P))).toBe(false)
+    const C = createTemp('C', { parentId: P })
+
+    expect(sessionRecords.findById(C)!.settings.workingDirectory).toBe(tempOf(P))
+    expect(sessionService.getById(P)!.workingDirectory).toBe(tempOf(P))
+    expect(sessionService.getById(C)!.workingDirectory).toBe(tempOf(P))
+    expect(existsSync(tempOf(P))).toBe(true)
+    expect(existsSync(tempOf(C))).toBe(false)
+  })
+
+  it("FW-16 the child's permission table derives its working-directory row from the shared folder", () => {
+    const P = createTemp('P')
+    const C = createTemp('C', { parentId: P })
+    const row = sessionAcl.entries(C).find((e) => e.source === 'workdir')!
+    expect(row.target).toBe(tempOf(P))
+    expect(row.access).toBe('write')
+  })
+
+  it('FW-16 deleting the parent (cascading the child) removes the folder with what the child wrote', async () => {
+    const P = createTemp('P')
+    const pDir = seedSentinel(P)
+    const C = createTemp('C', { parentId: P })
+    writeFileSync(join(sessionService.getById(C)!.workingDirectory as string, 'child.txt'), C)
+    expect(readFileSync(join(pDir, 'child.txt'), 'utf-8')).toBe(C)
+
+    await sessionService.delete(P)
+    expect(sessionRecords.findById(P)).toBeUndefined()
+    expect(sessionRecords.findById(C)).toBeUndefined()
+    expect(existsSync(pDir)).toBe(false)
+    expect(existsSync(tempOf(C))).toBe(false)
+  })
+
+  it('FW-16 deleting the child alone keeps the folder; then deleting the parent removes it', async () => {
+    const P = createTemp('P')
+    const pDir = seedSentinel(P)
+    const C = createTemp('C', { parentId: P })
+
+    await sessionService.delete(C)
+    expect(sessionRecords.findById(C)).toBeUndefined()
+    expectKept(pDir, P)
+
+    await sessionService.delete(P)
+    expect(existsSync(pDir)).toBe(false)
+  })
+
+  it('FW-16 an in-memory parent: the child is in-memory too and shares the folder; deleting the parent removes it', async () => {
+    const P = sessionService.create({ title: 'P' }, { id: 'P', ephemeral: true }).id
+    const C = createTemp('C', { parentId: P })
+    expect(sessionRecords.isEphemeral(C)).toBe(true)
+    expect(sessionRecords.findById(C)!.settings.workingDirectory).toBe(tempOf(P))
+    const pDir = seedSentinel(P)
+
+    await sessionService.delete(P)
+    expect(sessionRecords.findById(C)).toBeUndefined()
+    expect(existsSync(pDir)).toBe(false)
+    expect(existsSync(tempOf(C))).toBe(false)
+  })
+
+  it("FW-16 a project parent → no workingDirectory key and no temp_workspace/<P>; the child's folder is the project root", () => {
+    const P = sessionService.create({ projectId: 'p1' }, { id: 'P' }).id
+    const C = createTemp('C', { parentId: P })
+    expect(sessionRecords.findById(C)!.settings).not.toHaveProperty('workingDirectory')
+    expect(sessionService.getById(C)!.workingDirectory).toBe(holder.projectRoot)
+    expect(existsSync(tempOf(P))).toBe(false)
+    expect(existsSync(tempOf(C))).toBe(false)
+  })
+
+  it('FW-16 a parent pointer to a missing row → no workingDirectory key; the child falls back to its own temp workspace', () => {
+    const C = createTemp('C', { parentId: 'ghost' })
+    expect(sessionRecords.findById(C)!.settings).not.toHaveProperty('workingDirectory')
+    expect(sessionService.getById(C)!.workingDirectory).toBe(tempOf(C))
+    expect(existsSync(tempOf('ghost'))).toBe(false)
   })
 })

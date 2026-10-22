@@ -21,7 +21,8 @@
  *   WD-2  有项目 + {workingDirectory} → 不存；工作目录是项目根
  *   WD-3  有项目父会话的子会话 + {workingDirectory} → 不存；工作目录是项目根
  *   WD-3b 无项目、有自带目录的父会话 → 子会话随父会话的目录，子会话自己给的另一个目录不算；
- *         父会话没有自带目录 → 子会话给的也不算（临时工作区）
+ *         父会话没有自带目录 → 子会话给的也不算，共用父会话的临时工作区（删除时的去留见
+ *         sessionServiceForkWorkspace.test.ts FW-16）
  *   WD-4  不给 → 临时工作区（照旧）
  *   WD-5  删除：自带的用户目录与里面的文件原样都在；临时工作区删完不在
  *   WD-6  params 里混进来的 workingDirectory 不算数
@@ -281,6 +282,8 @@ describe('WD-2 / WD-3 有项目时忽略', () => {
       initAgent: PROJECT_ROOT,
       runtime: PROJECT_ROOT
     })
+    // 也没替有项目的父会话把临时工作区建出来
+    expect(mocks.getTempWorkspace).not.toHaveBeenCalled()
   })
 })
 
@@ -311,16 +314,18 @@ describe('WD-3b 子会话随父会话', () => {
     }
   )
 
-  it('WD-3b 父会话没有自带目录 → 子会话给的也不算，退回它自己的临时工作区', async () => {
+  it('WD-3b 父会话没有自带目录 → 子会话给的也不算，共用父会话的临时工作区', async () => {
     const parent = sessionService.create({})
     const child = sessionService.create({ parentId: parent.id }, { workingDirectory: userDir })
-    expect(child.settings).not.toHaveProperty('workingDirectory')
+    expect(child.settings.workingDirectory).toBe(tempOf(parent.id))
     const wd = await workingDirectories(child.id)
     expect(wd).toEqual({
-      getById: tempOf(child.id),
-      initAgent: tempOf(child.id),
-      runtime: tempOf(child.id)
+      getById: tempOf(parent.id),
+      initAgent: tempOf(parent.id),
+      runtime: tempOf(parent.id)
     })
+    expect(mocks.getTempWorkspace).not.toHaveBeenCalledWith(child.id)
+    expect(existsSync(tempOf(child.id))).toBe(false)
   })
 })
 

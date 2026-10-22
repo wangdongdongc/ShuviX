@@ -135,7 +135,7 @@ function workingDirectoryOf(
 
 /**
  * 删掉一个已经没人用的临时工作区（`owner` 那条会话的 `temp_workspace/<id>`）：主人那一行还在，或还有会话的
- * `settings.workingDirectory` 指着它（会话 fork 共用的），就留着。目录不在就什么都不查。
+ * `settings.workingDirectory` 指着它（会话 fork、临时会话的子会话共用的），就留着。目录不在就什么都不查。
  */
 function removeTempWorkspaceIfUnused(dir: string, owner: string): void {
   if (!existsSync(dir)) return
@@ -353,7 +353,9 @@ export class SessionService {
    * 同一个理由，父会话是一条已被删掉的内存会话时拒绝创建，而不是建出一条孤儿。
    *
    * `options.workingDirectory`（绝对路径）给**不属于任何项目**的会话指定工作目录，代替临时工作区；
-   * 有项目时忽略。子会话不看 options，随父会话（父会话有就同一个目录）。同样只有主进程能给。
+   * 有项目时忽略。同样只有主进程能给。子会话不看 options，随父会话此刻解析出的工作目录：父会话自带的目录，
+   * 或父会话的临时工作区 —— 与 fork 同一条（`insertForkRow`），子会话和父会话读写的是同一批文件（用户
+   * 2026-10-22：子会话几乎必然要读写父会话的工作区）；借来的临时工作区直到用它的最后一条会话被删才删（见 `delete`）。
    *
    * `options.id` 由调用方定 id（P2-10 PIN-05，子会话 create 动作的重跑幂等）：同一父会话下已有这一行 →
    * 原样交回、什么都不写；这个 id 落在别的父会话（或根上）→ 抛错。同样只有主进程能给。
@@ -388,8 +390,11 @@ export class SessionService {
     }
     const ephemeral = parentId ? sessionRecords.isEphemeral(parentId) : !!options?.ephemeral
     const pid = chromeTab ? null : parent ? parent.projectId : (params?.projectId ?? null)
+    // 有项目的父会话不算：子会话的工作目录恒为项目根，也不该替父会话把临时工作区建出来
     const workingDirectory = parentId
-      ? parent?.settings?.workingDirectory
+      ? parent && !parent.projectId
+        ? workingDirectoryOf(parentId, undefined, parent.settings)
+        : undefined
       : chromeTab
         ? undefined
         : options?.workingDirectory
@@ -409,7 +414,7 @@ export class SessionService {
       settings: {
         ...(notebookPath ? { notebookPath } : {}),
         // 自带工作目录只给无项目会话：有项目时工作目录恒为项目根。子会话随父会话（与 projectId
-        // 同一条理由 —— 工作目录是会话的地基），调用方给的不算
+        // 同一条理由 —— 工作目录是会话的地基；父会话用临时工作区就共用那一个），调用方给的不算
         ...(!pid && workingDirectory ? { workingDirectory } : {}),
         // 只在有值时写键：缺省即无键
         ...(bot ? { bot } : {}),
@@ -702,7 +707,8 @@ export class SessionService {
     sessionDayPromptDao.deleteBySessionId(id)
     sessionAcl.deleteSession(id)
     const ephemeral = sessionRecords.isEphemeral(id)
-    // 删行之前记下它用的工作目录：fork 出来的临时会话用的是源会话的临时工作区（见 insertForkRow）。
+    // 删行之前记下它用的工作目录：fork 出来的临时会话用的是源会话的临时工作区（见 insertForkRow），
+    // 临时会话的子会话用的是父会话的（见 create）。
     // 设置是坏 JSON 的一行读不出来（`->` 抛错）—— 那就当它没借用什么，删除照样做完
     let sharedWorkspace: string | undefined
     try {

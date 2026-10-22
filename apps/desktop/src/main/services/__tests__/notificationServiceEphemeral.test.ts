@@ -116,6 +116,8 @@ vi.mock('../../utils/paths', () => ({
   getTempWorkspace: (sid: string) => `/nonexistent/shuvix-unit/tmp/${sid}`,
   getToolResultsBase: () => '/nonexistent/shuvix-unit/tool-results',
   getSessionArtifactsDir: (sid: string) => `/nonexistent/shuvix-unit/artifacts/${sid}`,
+  // 子会话借用父会话的临时工作区：删它时问一句那个目录归谁（这里的路径都不在盘上，删不删都一样）
+  tempWorkspaceOwnerOf: () => undefined,
   isSafeSessionId: (id: string) =>
     !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))

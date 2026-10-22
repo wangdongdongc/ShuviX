@@ -44,7 +44,7 @@ function coversHome(root: string, home: string): boolean {
 
 /**
  * 这个会话可以当自己的那个临时工作区：工作目录**正是**某条会话的临时工作区（`temp_workspace/<id>` 本身 ——
- * 会话 fork 共用源会话的，`settings.workingDirectory` 只有主进程写）就是那一个，否则是本会话自己的
+ * 会话 fork 共用源会话的、子会话共用父会话的，`settings.workingDirectory` 只有主进程写）就是那一个，否则是本会话自己的
  * `temp_workspace/<sid>`。只认文件夹本身、不认它里面的子目录，与删除时认主人的口径（`tempWorkspaceOwnerOf`）
  * 一致。临时工作区里只有会话自己的文件，没有数据库、配置或转写 —— 放行它不会让命令出沙箱。
  */

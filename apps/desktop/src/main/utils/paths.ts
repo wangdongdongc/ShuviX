@@ -253,7 +253,7 @@ export function getTempWorkspace(sessionId: string, opts?: { create?: boolean })
 
 /**
  * `dir` 是不是某条会话的临时工作区本身（`temp_workspace/<会话 id>`）→ 那条会话的 id；不是 → undefined。
- * 只比路径，不碰磁盘（会话 fork 共用源会话的临时工作区，删除时据此判断它归谁）。
+ * 只比路径，不碰磁盘（会话 fork、临时会话的子会话共用别的会话的临时工作区，删除时据此判断它归谁）。
  */
 export function tempWorkspaceOwnerOf(dir: string): string | undefined {
   if (dirname(dir) !== getTempWorkspaceBase()) return undefined
