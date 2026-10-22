@@ -1615,5 +1615,18 @@
     "tempChat": "Temporary chat",
     "noTasks": "No background tasks in this conversation",
     "fontSizeHint": "Only changes the text size on this device, not on the desktop or other devices."
+  },
+  "daily": {
+    "title": "Daily report · {{day}}",
+    "template": {
+      "done": "Done",
+      "next": "Next",
+      "followUp": "Follow up"
+    },
+    "untitledSession": "Untitled session",
+    "write": "Write a daily report for this day",
+    "open": "Open this day's daily report",
+    "empty": "Nothing written yet",
+    "addSession": "Add to daily report"
   }
 }

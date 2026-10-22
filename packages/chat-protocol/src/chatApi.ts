@@ -845,6 +845,14 @@ export interface HostApi {
     sessionsOnDay: (params: { day: string }) => Promise<Session[]>
     /** 当天 timestamp 最小的用户消息 entryId；没有则 null */
     firstEntryOnDay: (params: { sessionId: string; day: string }) => Promise<string | null>
+    /** 可见月里写了日报的本地日（YYYY-MM-DD[]，见 dailyNotes.ts）。`month` 为 1–12。 */
+    reportDaysInMonth: (params: { year: number; month: number }) => Promise<string[]>
+    /** 那天的日报：没有为 null；有则回摘录（只有模板时为空串） */
+    reportOnDay: (params: { day: string }) => Promise<{ excerpt: string } | null>
+    /** 打开 / 复用那天日报的笔记本会话（还没有就按模板建）；未来的日子被拒绝 */
+    openReport: (params: { day: string }) => Promise<Session>
+    /** 把一条会话的链接写进那天日报的第一段；已经链着它时 `added: false` */
+    addSessionToReport: (params: { day: string; sessionId: string }) => Promise<{ added: boolean }>
   }
   session: {
     list: () => Promise<Session[]>

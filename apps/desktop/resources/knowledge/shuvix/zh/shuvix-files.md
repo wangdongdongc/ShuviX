@@ -34,6 +34,11 @@ ShuviX 靠 **`~/.shuvix/` 下的 markdown 文件**定制。没有要建的数据
 skill 目录）、`widgets/`、`tts/`、`cli-token`。旧的 `memory/`、`wikis/`、`workflows/` 是已退役的格式，
 不再读取。
 
+`daily/` 是用户的**日报**：一天一份 `YYYY-MM-DD.md`（自述行 `shuvix: daily v1`；文件名就是日期，没有自述行
+的同名文件照样算），从日历上那一天打开。它们是用户自己的笔记而不是配置 —— 像普通 markdown 一样改。新的一天
+有 `daily/_template.md` 就照它建，否则是三段（完成 / 接下来 / 待跟进）。链到一条会话的行写作
+`[标题](shuvix://session/<id>#<消息 id>)`。
+
 **内置的东西在应用里，不在磁盘上。** ShuviX 自带内置 agent（`work`、`chat`、`notebook`、`bot`、`tab`、
 `coding`、`explore`、`titler`、`knowledge-writer`、`permission-reviewer`）、内置安全策略、
 两个内置 hook（`auto-title`、`auto-review`）与内置 skill `builtin:drawing`。没有内置 bot。

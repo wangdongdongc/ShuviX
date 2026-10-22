@@ -9,17 +9,19 @@ import {
 } from '@shuvix/chat-ui'
 import {
   CalendarView,
+  DayReportHeader,
   ProjectSessionGroups,
   SessionConfigDialog,
   useProjects,
   useSessionDelete
 } from '@shuvix/app-shell'
+import {
+  DAILY_PROJECT_ID,
+  dailyFileName,
+  localDayKey as dayKey
+} from '@shuvix/chat-protocol/dailyNotes'
 import { useBrowserStore } from '../../stores/browserStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
-
-function dayKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
 
 function daysToDates(days: string[]): Date[] {
   const arr: Date[] = []
@@ -33,6 +35,8 @@ function daysToDates(days: string[]): Date[] {
 /**
  * 日历面板 —— Right panel 的 Calendar tab 内容。月历圆点与当日列表来自
  * session_day_prompts（IPC `calendar.*`），不再按 lastActiveAt 单日落点。
+ * 列表上方是那一天的日报（`~/.shuvix/daily/<日期>.md`，见 main services/dailyNotes）：写了的日子
+ * 在月历上多一个点；点开就是那份日报的笔记本，与当天的会话列表并排对照着写。
  */
 export interface CalendarPanelProps {
   /** 用户从日历里打开了一个会话（同一个再点一次也算）—— 手机布局据此推入对话页；桌面不传 */
@@ -52,6 +56,16 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
   const [month, setMonth] = useState<Date>(() => new Date())
   const [daysWithSessions, setDaysWithSessions] = useState<Date[]>([])
   const [daySessions, setDaySessions] = useState<Session[]>([])
+  const [daysWithReports, setDaysWithReports] = useState<Date[]>([])
+  // 记下查的是哪一天：换了日子、新的还没回来时不显示上一天的日报；同一天重拉期间照旧显示（打字时不闪）
+  const [loadedReport, setLoadedReport] = useState<{
+    day: string
+    report: { excerpt: string } | null
+  } | null>(null)
+  // 日报的重拉单独计数：笔记本自动保存每停手一次就来一个 daily.changed，不该连带重查会话索引
+  const [reportTick, setReportTick] = useState(0)
+  useAppEvent('daily.changed', () => setReportTick((n) => n + 1))
+  const activeSession = useChatStore((s) => s.sessions.find((x) => x.id === s.activeSessionId))
   // 根会话一轮开跑（agent_start，PIN-06：当天那一行在受理 / 落位时就写了，早于生命周期信号）或列表
   // 成员变化后再拉；发消息时的乐观 touchSessionActive 太早。派生 agent 的开跑不算
   const [refreshTick, setRefreshTick] = useState(0)
@@ -83,6 +97,53 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
       cancelled = true
     }
   }, [month, selected, refreshTick])
+
+  useEffect(() => {
+    const api = getHostApi()?.calendar
+    if (!api) return
+    let cancelled = false
+    const day = dayKey(selected)
+    void Promise.all([
+      api.reportDaysInMonth({ year: month.getFullYear(), month: month.getMonth() + 1 }),
+      api.reportOnDay({ day })
+    ]).then(([days, onDay]) => {
+      if (cancelled) return
+      setDaysWithReports(daysToDates(days))
+      setLoadedReport({ day, report: onDay })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [month, selected, reportTick])
+
+  const selectedDay = dayKey(selected)
+  const writable = selectedDay <= dayKey(new Date())
+  const report = loadedReport?.day === selectedDay ? loadedReport.report : undefined
+  const reportActive =
+    activeSession?.projectId === DAILY_PROJECT_ID &&
+    activeSession.settings.notebookPath === dailyFileName(selectedDay)
+
+  const handleOpenReport = async (): Promise<void> => {
+    const api = getHostApi()?.calendar
+    if (!api) return
+    let session: { id: string }
+    try {
+      session = await api.openReport({ day: selectedDay })
+    } catch {
+      return // 跨过午夜后点的「今天」已成了明天之类 —— 主进程拒了就什么都不做，日历下一次重拉会对上
+    }
+    useChatStore.getState().setSessions(await getChatApi().session.list())
+    setActiveSessionId(session.id)
+    onOpenSession?.(session.id)
+  }
+
+  const handleAddToReport = async (sessionId: string): Promise<void> => {
+    try {
+      await getHostApi()?.calendar?.addSessionToReport({ day: selectedDay, sessionId })
+    } catch {
+      // 会话刚被删掉（列表还没重拉）—— 没有可插的，什么都不写
+    }
+  }
 
   const handleSelect = useCallback(
     (id: string): void => {
@@ -123,6 +184,16 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
         <CalendarView
           width={width}
           daysWithSessions={daysWithSessions}
+          daysWithReports={daysWithReports}
+          dayHeader={
+            <DayReportHeader
+              day={selected}
+              report={report}
+              writable={writable}
+              active={reportActive}
+              onOpen={() => void handleOpenReport()}
+            />
+          }
           daySessions={daySessions}
           selected={selected}
           onSelect={setSelected}
@@ -146,6 +217,7 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
               onSelect={handleSelect}
               onDelete={handleDelete}
               onConfigureSession={setConfiguringSessionId}
+              onAddToReport={writable ? (id) => void handleAddToReport(id) : undefined}
               caps={{ pin: true }}
               pinnedSessionIds={pinnedSessionIds}
             />

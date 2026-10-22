@@ -1,8 +1,30 @@
 import { NotebookSession, MediaUrlProvider } from '@shuvix/app-shell'
+import { useChatStore } from '@shuvix/chat-ui'
+import { parseSessionLink } from '@shuvix/chat-protocol/dailyNotes'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { usePinChatStore } from '../../stores/pinChatStore'
 import { hostMediaResolver } from '../../host/hostMedia'
 import { useCoEditing } from './coEdit/useCoEditing'
 import { CoEditIndicator } from './coEdit/CoEditIndicator'
+
+/**
+ * 笔记本里点中的链接：`shuvix://session/<id>[#<entryId>]`（日报里插入的会话）在应用里打开那条会话，
+ * 带 entryId 就跳到那条消息；会话已经不在就什么也不做。别的链接照旧交给系统。
+ */
+function openNotebookLink(url: string): void {
+  const target = parseSessionLink(url)
+  if (!target) {
+    void window.api.app.openExternal(url)
+    return
+  }
+  const store = useChatStore.getState()
+  if (!store.sessions.some((s) => s.id === target.sessionId)) return
+  store.setActiveSessionId(target.sessionId)
+  if (usePinChatStore.getState().pinnedSessionIds.has(target.sessionId)) {
+    void window.api.pinChat.focus(target.sessionId)
+  }
+  if (target.entryId) store.requestScrollToMessage(target.sessionId, target.entryId)
+}
 
 /**
  * 桌面端笔记本会话中间区正文 —— 包一层 @shuvix/app-shell 的 NotebookView，注入桌面能力
@@ -32,7 +54,7 @@ export function NotebookSessionView({
           sessionId={sessionId}
           caps={{
             notebookTheme,
-            openExternal: (url) => void window.api.app.openExternal(url),
+            openExternal: openNotebookLink,
             popupContextMenu: (request) => window.api.contextMenu.popup(request)
           }}
           editorHandleRef={coEdit.editorRef}

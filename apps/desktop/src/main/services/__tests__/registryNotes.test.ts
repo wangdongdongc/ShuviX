@@ -35,7 +35,9 @@ const tmp = vi.hoisted(() => {
     // 内置策略同内置档案：另一个目录，钉「它不是 policies 目录」（只读，不写、不广播）
     policyBuiltin: 'builtin-policies',
     hook: 'hooks',
-    hookBuiltin: 'builtin-hooks'
+    hookBuiltin: 'builtin-hooks',
+    // 日报目录不是注册表，但经笔记本落盘同样要回执（daily.changed，日历跟着更新）
+    daily: 'daily'
   }
   return {
     state,
@@ -50,7 +52,8 @@ vi.mock('../../utils/paths', () => ({
   getDefaultPoliciesDir: () => tmp.dirOf('policy'),
   getBuiltinPoliciesDir: () => tmp.dirOf('policyBuiltin'),
   getDefaultHooksDir: () => tmp.dirOf('hook'),
-  getBuiltinHooksDir: () => tmp.dirOf('hookBuiltin')
+  getBuiltinHooksDir: () => tmp.dirOf('hookBuiltin'),
+  getDefaultDailyDir: () => tmp.dirOf('daily')
 }))
 vi.mock('../../dao/projectDao', () => ({
   projectDao: { findById: vi.fn(), insert: vi.fn(), update: vi.fn() }
@@ -521,6 +524,30 @@ describe('observeRegistryWrite', () => {
 
       vi.advanceTimersByTime(300)
       expect(publish.mock.calls).toEqual([[{ type: 'hook.changed' }]])
+      expect(botService.noteWriting).not.toHaveBeenCalled()
+      expect(botService.noteWritten).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('RN-18 日报目录下的 .md：写完（promise 落定之后）合并窗口内广播一次 daily.changed；不惊动 botService，值照常透传', async () => {
+    // 日历上的点与当天摘录跟着笔记本里打的字走；笔记本每 200ms 防抖落一次盘，合并成一次广播
+    vi.useFakeTimers()
+    try {
+      const value = { ok: true as const }
+      const write = vi.fn(async () => value)
+
+      await expect(
+        observeRegistryWrite(join(tmp.dirOf('daily'), '2026-10-22.md'), write)
+      ).resolves.toBe(value)
+      await expect(
+        observeRegistryWrite(join(tmp.dirOf('daily'), '2026-10-22.md'), write)
+      ).resolves.toBe(value)
+      expect(publish).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(300)
+      expect(publish.mock.calls).toEqual([[{ type: 'daily.changed' }]])
       expect(botService.noteWriting).not.toHaveBeenCalled()
       expect(botService.noteWritten).not.toHaveBeenCalled()
     } finally {

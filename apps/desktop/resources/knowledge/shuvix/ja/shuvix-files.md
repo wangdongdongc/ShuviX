@@ -35,6 +35,12 @@ ShuviX は **`~/.shuvix/` 配下の markdown ファイル**でカスタマイズ
 `skills/.config.json`（無効化した skill と登録した追加 skill ディレクトリ）、`widgets/`、`tts/`、
 `cli-token`。古い `memory/`、`wikis/`、`workflows/` は廃止された形式で、もう読まれません。
 
+`daily/` はユーザーの**日報**です：一日一つの `YYYY-MM-DD.md`（マーカー `shuvix: daily v1`。ファイル名が日付で、
+マーカーのない同名ファイルもその日の日報として扱われます）、カレンダーのその日から開きます。設定ではなくユーザー
+自身のメモなので、普通の markdown として編集します。新しい日は `daily/_template.md` があればそれから、なければ
+三つのセクション（完了 / 次にやること / フォローアップ）から始まります。会話へのリンクは
+`[タイトル](shuvix://session/<id>#<メッセージ id>)` と書きます。
+
 **組み込みはアプリの中にあり、ディスク上にはありません。** ShuviX は組み込みエージェント（`work`、
 `chat`、`notebook`、`bot`、`tab`、`coding`、`explore`、`titler`、`knowledge-writer`、
 `permission-reviewer`）、組み込みセキュリティポリシー、二つの組み込み hook（`auto-title`、`auto-review`）、

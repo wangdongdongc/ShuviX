@@ -1615,5 +1615,18 @@
     "tempChat": "临时会话",
     "noTasks": "这个会话还没有后台任务",
     "fontSizeHint": "只改这台设备上的字号，桌面和别的设备不受影响"
+  },
+  "daily": {
+    "title": "{{day}} 日报",
+    "template": {
+      "done": "完成",
+      "next": "接下来",
+      "followUp": "待跟进"
+    },
+    "untitledSession": "未命名会话",
+    "write": "写这一天的日报",
+    "open": "打开这一天的日报",
+    "empty": "还没写内容",
+    "addSession": "插入到日报"
   }
 }

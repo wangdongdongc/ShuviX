@@ -25,6 +25,7 @@ import {
   getBuiltinPoliciesDir,
   getDefaultAgentsDir,
   getDefaultBotsDir,
+  getDefaultDailyDir,
   getDefaultPoliciesDir,
   getDefaultHooksDir
 } from '../utils/paths'
@@ -161,7 +162,9 @@ const CHANGED_DEBOUNCE_MS = 300
 const changedTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /** 注册表目录写完了：合并窗口内广播一次变更事件（没有服务要观察，只是让侧栏那一组重扫） */
-function noteRegistryWritten(type: 'agent.changed' | 'policy.changed' | 'hook.changed'): void {
+function noteRegistryWritten(
+  type: 'agent.changed' | 'policy.changed' | 'hook.changed' | 'daily.changed'
+): void {
   const existing = changedTimers.get(type)
   if (existing) clearTimeout(existing)
   changedTimers.set(
@@ -183,6 +186,8 @@ function noteRegistryWritten(type: 'agent.changed' | 'policy.changed' | 'hook.ch
  *     直接摆在屏幕上，而改名就发生在
  *     同一个窗口的笔记本里 —— 没有「切窗口」这一下可以兜底，所以写完各广播一次
  *     `agent.changed` / `policy.changed` / `hook.changed` 让它重扫；
+ * 日报目录（dailyNotes）不是注册表，但同样是「一份 md 一个笔记本」：写完广播 `daily.changed`，日历的
+ * 圆点与当天摘录跟着打的字更新。
  * 技能的写入回执不在这里 —— 它不是注册表 md，落点也在子目录（`<根>/<技能名>/SKILL.md`），
  * 归技能自己（skillService.noteFileWritten，由 filePreviewService 一并包住）。
  */
@@ -216,6 +221,14 @@ export async function observeRegistryWrite<T>(
       return await write()
     } finally {
       noteRegistryWritten('hook.changed')
+    }
+  }
+
+  if (dir === resolve(getDefaultDailyDir())) {
+    try {
+      return await write()
+    } finally {
+      noteRegistryWritten('daily.changed')
     }
   }
 

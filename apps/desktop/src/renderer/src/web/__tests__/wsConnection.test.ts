@@ -668,12 +668,14 @@ describe('WC-20 服务端的垃圾', () => {
 })
 
 describe('WC-21 DEFAULT_RESYNC_EVENTS', () => {
-  it('WC-21 12 条、type 不重复、含 network.changed 与 session.listChanged、每条只有 type', () => {
-    expect(DEFAULT_RESYNC_EVENTS).toHaveLength(12)
+  it('WC-21 13 条、type 不重复、含 network.changed / session.listChanged / daily.changed、每条只有 type', () => {
+    expect(DEFAULT_RESYNC_EVENTS).toHaveLength(13)
     const types = DEFAULT_RESYNC_EVENTS.map((e) => e.type)
-    expect(new Set(types).size).toBe(12)
+    expect(new Set(types).size).toBe(13)
     expect(types).toContain('network.changed')
     expect(types).toContain('session.listChanged')
+    // 断线期间写过的日报：重连后日历的点与摘录要跟上
+    expect(types).toContain('daily.changed')
     for (const event of DEFAULT_RESYNC_EVENTS) expect(Object.keys(event)).toStrictEqual(['type'])
   })
 })

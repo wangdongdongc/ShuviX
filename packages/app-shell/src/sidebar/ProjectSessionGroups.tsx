@@ -49,6 +49,8 @@ export interface ProjectSessionGroupsProps {
    * 临时会话，chat-protocol 的 isForkableSessionShape），在跑 / 被中断时置灰；宿主不注入则整项不出现
    */
   onForkSession?: (id: string) => void
+  /** 行菜单里的「插入到日报」（日历按天渲染时传：插进的是选中那一天的日报）；缺省整项不出现 */
+  onAddToReport?: (id: string) => void
   /** 能力开关 */
   caps?: {
     /** 显示置顶（悬浮）徽标 */
@@ -97,6 +99,7 @@ export function ProjectSessionGroups({
   onEditProject,
   onConfigureSession,
   onForkSession,
+  onAddToReport,
   caps = {},
   pinnedSessionIds,
   sessionsOverride,
@@ -207,15 +210,16 @@ export function ProjectSessionGroups({
   const visible = hideEmptyGroups ? groups.filter(([, s]) => s.length > 0) : groups
 
   // 会话行菜单（右键整行 / 点行尾的 ⋮ 是同一份）：
-  // 配置（回调注入）/ 导出（内置能力；笔记本会话不提供）/ 删除（回调注入）
+  // 插入到日报（日历注入）/ 配置（回调注入）/ 导出（内置能力；笔记本会话不提供）/ 删除（回调注入）
   const exportSession = useSessionExport()
   // 空菜单不该长出一颗点了没反应的 ⋮ —— 逐项唯一的变数是「笔记本不提供导出」
   const hasSessionMenu = (isNotebook: boolean): boolean =>
-    !!onConfigureSession || !!onDelete || !isNotebook
+    !!onConfigureSession || !!onDelete || !!onAddToReport || !isNotebook
   const openSessionMenu = (id: string, e: React.MouseEvent): void => {
     const session = sessions.find((s) => s.id === id)
     const isNotebook = !!session?.settings.notebookPath
     const items: ContextMenuItem[] = []
+    if (onAddToReport) items.push({ id: 'add-to-report', label: t('daily.addSession') })
     if (onConfigureSession) items.push({ id: 'session-config', label: t('sessionConfig.title') })
     if (!isNotebook) items.push({ id: 'export-session', label: t('sidebar.exportSession') })
     // 拷贝要等它停下：在跑 / 被中断时置灰（后台还有派生 agent 在跑这一种这里看不出来，由宿主拒绝）
@@ -229,6 +233,7 @@ export function ProjectSessionGroups({
     }
     if (items.length === 0) return
     void showContextMenu(e, items, (action) => {
+      if (action === 'add-to-report') onAddToReport?.(id)
       if (action === 'session-config') onConfigureSession?.(id)
       if (action === 'export-session') void exportSession(id)
       if (action === 'fork-session') onForkSession?.(id)

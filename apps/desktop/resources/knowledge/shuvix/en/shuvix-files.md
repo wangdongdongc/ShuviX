@@ -36,6 +36,12 @@ Other things under `~/.shuvix/` are ShuviX's own and are not meant to be edited 
 directories are registered), `widgets/`, `tts/`, `cli-token`. The old `memory/`, `wikis/` and
 `workflows/` directories are retired formats that are no longer read.
 
+`daily/` holds the user's **daily reports**: one `YYYY-MM-DD.md` per day (marker `shuvix: daily v1`;
+the filename is the day, a dated file without the marker still counts), opened from that day in the
+calendar. They are the user's own notes, not configuration — edit them like any markdown. A new day
+starts from `daily/_template.md` when it exists, otherwise from three sections (done / next / follow
+up). A line linking a conversation uses `[title](shuvix://session/<id>#<message id>)`.
+
 **Builtins live inside the application, not on disk.** ShuviX ships builtin agents (`work`,
 `chat`, `notebook`, `bot`, `tab`, `coding`, `explore`, `titler`,
 `knowledge-writer`, `permission-reviewer`), builtin security policies, two builtin hooks

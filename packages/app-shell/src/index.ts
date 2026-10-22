@@ -53,6 +53,8 @@ export type {
 } from './sidebar/BotSessionDialog'
 export { CalendarView } from './sidebar/CalendarView'
 export type { CalendarViewProps } from './sidebar/CalendarView'
+export { DayReportHeader } from './sidebar/DayReportHeader'
+export type { DayReportHeaderProps } from './sidebar/DayReportHeader'
 export { KnowledgeBasesSection } from './settings/KnowledgeBasesSection'
 export type {
   KnowledgeBaseChoice,

@@ -46,9 +46,29 @@
   background: var(--theme-accent);
 }
 
-.rdp-selected.rdp-has-sessions .rdp-day_button::after {
-  background: var(--theme-bg-primary);
+/* 写了日报：第二个点（绿），与会话点并排 —— 只有一种时居中，两种都有时会话在左、日报在右 */
+.rdp-has-report .rdp-day_button::before {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-success, #22c55e);
 }
+
+.rdp-has-sessions.rdp-has-report .rdp-day_button::after {
+  transform: translateX(calc(-50% - 3px));
+}
+
+.rdp-has-sessions.rdp-has-report .rdp-day_button::before {
+  transform: translateX(calc(-50% + 3px));
+}
+
+/* 选中日只是描一圈强调色的框（底不填色）：两个点照常显示，不另换颜色 ——
+   早先这里把选中日的会话点改成了底色，于是选中的那天（打开日历时就是今天）看不到会话点 */
 
 .rdp-today:not(.rdp-selected) .rdp-day_button {
   color: var(--theme-accent);

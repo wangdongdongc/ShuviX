@@ -15,6 +15,10 @@ export interface CalendarViewProps {
   isResizing?: boolean
   /** 有过会话的日期（圆点）—— 来自 session_day_prompts */
   daysWithSessions: Date[]
+  /** 写了日报的日期（第二个点，与会话点并排）—— 来自 ~/.shuvix/daily；宿主没有日报能力时缺省 */
+  daysWithReports?: Date[]
+  /** 当天列表之上的一块（日期 + 那天的日报，见 DayReportHeader）；缺省不渲染 */
+  dayHeader?: React.ReactNode
   /** 选中日的会话列表 */
   daySessions: Session[]
   selected: Date
@@ -24,7 +28,8 @@ export interface CalendarViewProps {
 }
 
 /**
- * 日历视图 —— 按天浏览会话。月历 + 选中日的会话分组列表。
+ * 日历视图 —— 按天浏览会话。月历 + 选中日的会话分组列表；宿主可在列表上方放一块那天的日报
+ * （dayHeader），月历上写了日报的日子多一个点。
  * 会话数据由宿主注入：桌面走索引表（同一会话可出现在多个开口日）。
  */
 export function CalendarView({
@@ -32,6 +37,8 @@ export function CalendarView({
   width,
   isResizing = false,
   daysWithSessions,
+  daysWithReports = [],
+  dayHeader,
   daySessions,
   selected,
   onSelect,
@@ -112,13 +119,14 @@ export function CalendarView({
             showWeekNumber={showWeekNumber}
             weekStartsOn={1}
             locale={locale}
-            modifiers={{ hasSessions: daysWithSessions }}
-            modifiersClassNames={{ hasSessions: 'rdp-has-sessions' }}
+            modifiers={{ hasSessions: daysWithSessions, hasReport: daysWithReports }}
+            modifiersClassNames={{ hasSessions: 'rdp-has-sessions', hasReport: 'rdp-has-report' }}
             components={{ Nav: CustomNav }}
           />
         )}
       </div>
       <div className="flex-1 overflow-y-auto mt-2 pt-2 border-t border-border-secondary/30 no-scrollbar">
+        {dayHeader}
         {daySessions.length === 0 ? (
           <div className="px-3 py-6 text-center text-text-tertiary text-xs">
             {t('sidebar.noSessionsOnDay')}

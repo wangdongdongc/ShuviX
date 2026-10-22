@@ -147,7 +147,11 @@ export const API_TABLE = {
   calendar: {
     daysInMonth: invoke('calendar:daysInMonth', 1),
     sessionsOnDay: invoke('calendar:sessionsOnDay', 1),
-    firstEntryOnDay: invoke('calendar:firstEntryOnDay', 1)
+    firstEntryOnDay: invoke('calendar:firstEntryOnDay', 1),
+    reportDaysInMonth: invoke('calendar:reportDaysInMonth', 1),
+    reportOnDay: invoke('calendar:reportOnDay', 1),
+    openReport: invoke('calendar:openReport', 1),
+    addSessionToReport: invoke('calendar:addSessionToReport', 1)
   },
   /** 消息 */
   message: {

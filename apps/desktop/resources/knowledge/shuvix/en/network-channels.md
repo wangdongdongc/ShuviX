@@ -62,7 +62,8 @@ generated from the channel table of this version.
 
 ### `calendar`
 
-- read: `calendar:daysInMonth`, `calendar:firstEntryOnDay`, `calendar:sessionsOnDay`
+- read: `calendar:daysInMonth`, `calendar:firstEntryOnDay`, `calendar:reportDaysInMonth`, `calendar:reportOnDay`, `calendar:sessionsOnDay`
+- write: `calendar:addSessionToReport`, `calendar:openReport`
 
 ### `message`
 

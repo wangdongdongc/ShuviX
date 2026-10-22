@@ -33,6 +33,7 @@ import {
   SKILL_BUILTIN_PROJECT_ID,
   SKILL_DEFAULT_PROJECT_ID
 } from './skillNotes'
+import { DAILY_PROJECT_ID, isDailyProjectId } from './dailyNotes'
 
 type MaybeId = string | null | undefined
 
@@ -177,5 +178,29 @@ describe('知识库承载项目 id —— isKnowledgeProjectId', () => {
     ]) {
       expect(isKnowledgeProjectId(id), label(id)).toBe(false)
     }
+  })
+})
+
+describe('日报目录的承载项目 —— isDailyProjectId', () => {
+  it('HP-6 `__daily__` 是隐藏项目（日报以「那一天的日报」出现在日历上，不以会话出现）；形似输入与别的载体一律不算', () => {
+    // 漏认它，打开一份日报就会让一个叫 Daily 的项目冒进项目列表，日报笔记本还会作为会话出现在当天列表里
+    expect(DAILY_PROJECT_ID).toBe('__daily__')
+    expect(isDailyProjectId(DAILY_PROJECT_ID)).toBe(true)
+    expect(isHiddenProjectId(DAILY_PROJECT_ID)).toBe(true)
+    for (const id of [
+      ...REGISTRY_IDS,
+      ...SKILL_IDS,
+      KNOWLEDGE_PROJECT_ID,
+      KNOWLEDGE_USER_PROJECT_ID,
+      ...LOOKALIKES,
+      '__daily',
+      '__DAILY__',
+      ' __daily__'
+    ]) {
+      expect(isDailyProjectId(id), label(id)).toBe(false)
+    }
+    // 日报的载体不是注册表目录也不是知识库：属性卡不该套上它们的兜底
+    expect(isRegistryNoteProjectId(DAILY_PROJECT_ID)).toBe(false)
+    expect(isKnowledgeProjectId(DAILY_PROJECT_ID)).toBe(false)
   })
 })

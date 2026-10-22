@@ -7,7 +7,7 @@
  * 「怎么展示/编辑」，不做合法性判定 —— 校验语义永远归各自解析器
  * （definitionFile.ts / policyFile.ts），后续经宿主校验接缝回传 UI。
  *
- * 覆盖策略：okf / agent / policy / hook / bot 已各有描述符。没有描述符的类型（chart）
+ * 覆盖策略：okf / agent / policy / hook / bot / daily 已各有描述符。没有描述符的类型（chart）
  * 与未列出的键落属性卡的通用 key/value 行 —— 新类型零描述符也有降级展示，补一份
  * 描述符即得完整卡片；嵌套结构（policy 的 rules/lets）按设计只做摘要不做表单，
  * 等专属 summarize 能力时再扩展本类型。
@@ -230,13 +230,21 @@ const SKILL_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   ]
 }
 
+/** 日报（dailyNotes.ts）：只有自述行，没有字段 —— 描述符只为卡片徽章，日期就是文件名 */
+const DAILY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
+  type: 'daily',
+  badge: 'Daily',
+  fields: []
+}
+
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   OKF_DESCRIPTOR,
   AGENT_DESCRIPTOR,
   POLICY_DESCRIPTOR,
   HOOK_DESCRIPTOR,
   BOT_DESCRIPTOR,
-  SKILL_DESCRIPTOR
+  SKILL_DESCRIPTOR,
+  DAILY_DESCRIPTOR
 ]
 
 /** 按标记 type 查描述符；无 → null（属性卡降级为通用 key/value 卡） */

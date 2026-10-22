@@ -217,6 +217,11 @@ export function getDefaultBotsDir(): string {
   return join(homedir(), '.shuvix', 'bots')
 }
 
+/** 日报目录：~/.shuvix/daily/（一天一份 `YYYY-MM-DD.md`；第一次写某天的日报时才创建，见 dailyNotes） */
+export function getDefaultDailyDir(): string {
+  return join(homedir(), '.shuvix', 'daily')
+}
+
 /**
  * 知识库 v2 的两个根（都不自动创建 —— 首次写入或首次打开入口才由 services/knowledge 懒建；
  * 与用户自己的知识库根并存、互不相干）。
