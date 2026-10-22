@@ -10,6 +10,9 @@
  *   OB-02 宿主给了 `openSession`：session / parent-session 是 `<button type=button>`，点一下 `openSession(sessionId)`
  *         恰一次，悬停末尾换行接「Click to open it」；remote / chrome / telegram 仍是 span、点了不切会话；
  *         宿主值里没有 openSession → span
+ *   OB-03 配色：不是本机打的气泡换成来源的浅底（分类色槽位 `--viz-N-tint`，remote 3 / chrome 4 / telegram 2 /
+ *         parent-session 7 / session 5），标签同一个浅底 + 同色深字（`--viz-N-ink`）；本机 / 没有来源 / 认不出的种类
+ *         → 照旧是强调色的气泡（`bg-accent/10`），没有内联底色
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（getHostApi → null）；i18n 走真 en 资源。文件是 .tsx 但不写 JSX，一律 createElement。
  */
@@ -226,5 +229,50 @@ describe('OB-02 宿主能切会话（ChatHostContext 给了 openSession）', () 
     const el = tag()
     expect(el.tagName).toBe('SPAN')
     expect(el.getAttribute('title')).not.toContain(en.message.originOpenHint)
+  })
+})
+
+describe('OB-03 气泡与标签按来源配色', () => {
+  const bubble = (): HTMLElement => {
+    const el = container.querySelector<HTMLElement>('.rounded-lg')
+    expect(el).not.toBeNull()
+    return el!
+  }
+
+  it.each([
+    ['remote', REMOTE, 3],
+    ['chrome', { kind: 'chrome', installId: 'i' }, 4],
+    ['telegram', { kind: 'telegram', botId: 'b', userId: 'u', chatId: 'c' }, 2],
+    ['parent-session', { kind: 'parent-session', sessionId: 'P1', title: 'Parent' }, 7],
+    ['session', { kind: 'session', sessionId: 'S1' }, 5]
+  ] as const)('OB-03 %s → 气泡与标签都是 --viz-%s 的浅底，标签是同色深字', (kind, origin, slot) => {
+    renderBubble(origin)
+    const el = bubble()
+    expect(el.getAttribute('data-origin-tone')).toBe(kind)
+    expect(el.className).not.toContain('bg-accent/10')
+    expect(el.style.backgroundColor).toBe(`var(--viz-${slot}-tint)`)
+    const chip = tag()
+    expect(chip.style.backgroundColor).toBe(`var(--viz-${slot}-tint)`)
+    expect(chip.style.color).toBe(`var(--viz-${slot}-ink)`)
+  })
+
+  it('OB-03 有宿主时 session 的按钮同样配色', () => {
+    renderBubble({ kind: 'session', sessionId: 'S1' }, { openSession: vi.fn() })
+    const chip = tag()
+    expect(chip.tagName).toBe('BUTTON')
+    expect(chip.style.backgroundColor).toBe('var(--viz-5-tint)')
+    expect(chip.style.color).toBe('var(--viz-5-ink)')
+  })
+
+  it.each([
+    ['本机窗口', { kind: 'local' }],
+    ['没有来源', undefined],
+    ['认不出的种类', { kind: 'hook', sessionId: 'H' }]
+  ] as const)('OB-03 %s → 强调色的气泡，没有内联底色、没有配色标记', (_label, origin) => {
+    renderBubble(origin)
+    const el = bubble()
+    expect(el.className).toContain('bg-accent/10')
+    expect(el.getAttribute('style')).toBeNull()
+    expect(el.hasAttribute('data-origin-tone')).toBe(false)
   })
 })

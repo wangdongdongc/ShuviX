@@ -6,7 +6,7 @@ import type { UserTextMessage } from '../../stores/chatStore'
 import { segmentContent, resolveTokensForCopy } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
-import { OriginBadge } from './OriginBadge'
+import { OriginBadge, originTone } from './OriginBadge'
 
 interface UserBubbleProps {
   msg: UserTextMessage
@@ -25,7 +25,7 @@ const COLLAPSE_FADE_HEIGHT = 40
 
 /**
  * 用户消息气泡 — 右对齐浅色气泡（与子智能体面板转写同形）：纯文本 + 内联 Token + 附图，
- * 操作（复制/回退）与来源标识收在气泡下方一行
+ * 操作（复制/回退）与来源标识收在气泡下方一行；不是本机窗口打的（远程、Chrome、别的会话……）气泡换成来源的配色
  * 超长内容（长粘贴无法覆盖的手打长文/渠道来源/历史消息）默认折叠：截断 + 渐隐 + 展开按钮
  */
 export const UserBubble = memo(function UserBubble({
@@ -61,6 +61,7 @@ export const UserBubble = memo(function UserBubble({
   const fadeMask = `linear-gradient(to bottom, #000 calc(100% - ${COLLAPSE_FADE_HEIGHT}px), transparent)`
 
   const origin = msg.metadata?.origin
+  const tone = originTone(origin)
 
   return (
     <div
@@ -85,7 +86,11 @@ export const UserBubble = memo(function UserBubble({
 
       {/* 气泡 */}
       <div className="flex w-full justify-end">
-        <div className="max-w-[85%] rounded-lg bg-accent/10 text-text-primary px-3 py-1.5">
+        <div
+          className={`max-w-[85%] rounded-lg text-text-primary px-3 py-1.5 ${tone ? '' : 'bg-accent/10'}`}
+          style={tone ? { backgroundColor: tone.tint } : undefined}
+          data-origin-tone={origin && tone ? origin.kind : undefined}
+        >
           <div
             className="whitespace-pre-wrap break-words leading-relaxed"
             style={{
