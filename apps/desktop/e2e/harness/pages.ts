@@ -5650,8 +5650,11 @@ export interface KnowledgeDirShot {
   path: string
   /** 行上的名字（内置库是本地化的人读名，其余是目录名） */
   label: string
-  /** 行的内联 padding-left（'10px' = 顶层，每深一层 +12px） */
-  indent: string
+  /**
+   * 行的层级：内联的 `--sb-depth`（0 = 顶层，每深一层 +1）。缩进本身由 base.css 的 .sb-row 按它算，
+   * 所以读层级而不读像素 —— 桌面 / 触屏两档密度的像素不同，层级相同
+   */
+  depth: number
   /** `data-knowledge-readonly`（随应用发布的内置库及其每一层）；普通目录该属性不在 → false */
   readonly: boolean
   /**
@@ -5702,7 +5705,7 @@ export interface KnowledgePane extends NotebookReadOnlyProbes {
   expand(): Promise<void>
   /** 全部目录行（任意层级），DOM 序 */
   dirs(): Promise<KnowledgeDirShot[]>
-  /** 顶层目录行（缩进 10px：内置库与每个用户库），DOM 序 */
+  /** 顶层目录行（层级 0：内置库与每个用户库），DOM 序 */
   topDirs(): Promise<KnowledgeDirShot[]>
   /** 目录是否展开；目录行不存在返回 false */
   dirOpen(path: string): Promise<boolean>
@@ -5790,7 +5793,7 @@ function knowledgeTreeProbes(main: CdpClient, scope: string, what: string): Know
     main.eval<KnowledgeDirShot[]>(`${DIRS}.map((el) => ({
       path: el.getAttribute('data-knowledge-dir') ?? '',
       label: ${LABEL_OF}(el),
-      indent: el.style.paddingLeft,
+      depth: Number(el.style.getPropertyValue('--sb-depth') || 0),
       readonly: el.hasAttribute('data-knowledge-readonly'),
       // 行首图标 = 行里第一枚 svg（名字落在 class 上）；行尾的锁在 span[aria-label] 里，不算它
       icon: (el.querySelector('svg')?.getAttribute('class') ?? '').trim(),
@@ -5971,7 +5974,7 @@ export function knowledgePane(main: CdpClient): KnowledgePane {
     },
 
     ...tree,
-    topDirs: async () => (await tree.dirs()).filter((d) => d.indent === '10px'),
+    topDirs: async () => (await tree.dirs()).filter((d) => d.depth === 0),
 
     groupMenuIds: () => sidebar.groupMenuItems('knowledge'),
     refresh: () => sidebar.pickGroupMenu('knowledge', 'refresh'),
