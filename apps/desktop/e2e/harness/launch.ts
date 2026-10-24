@@ -16,7 +16,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHmac, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -223,6 +223,13 @@ export interface LaunchOptions {
    * `~/.shuvix/hooks` 不再被 harness 写任何文件。
    */
   autoReview?: boolean
+  /**
+   * 随应用提供的 bot（日报 bot，产品第一次启动时写进 `~/.shuvix/bots/daily.md`）。**缺省 false**：启动前在 fake HOME
+   * 的 bots 目录里放一份「已经写过」的记录（`.builtin-seeded`），产品就不写它 —— 既有 bots / 侧栏 spec 按「bots 目录
+   * 里只有 spec 自己放的文件」写；每分钟一次的内置 timer 到了 18:00 也不会替它叫起一条会话、往假提供商发请求。
+   * 测它的 spec 传 `true`。复用的 HOME 上记录已经在了就不动。
+   */
+  builtinBots?: boolean
   /**
    * 追加给实例进程的环境变量（只这一个实例，不动 vitest 进程自己的 `process.env`）—— 例如把 pi 的
    * Kimi 授权地址 `KIMI_CODE_OAUTH_HOST` 指到 spec 起的假服务器。盖不掉 HOME / userData 的隔离。
@@ -497,6 +504,10 @@ export async function launchApp(
   const agentsDir = join(home, '.shuvix', 'agents')
   const botsDir = join(home, '.shuvix', 'bots')
   const hooksDir = join(home, '.shuvix', 'hooks')
+  if (!opts.builtinBots && !existsSync(join(botsDir, '.builtin-seeded'))) {
+    mkdirSync(botsDir, { recursive: true })
+    writeFileSync(join(botsDir, '.builtin-seeded'), 'daily\n')
+  }
   // 主进程日志文件的候选位置（见 E2EApp.mainLog）：macOS 走 ~/Library/Logs/<app.name>，其余平台 userData/logs
   const logFiles = [
     join(home, 'Library', 'Logs', 'Electron', 'main.log'),

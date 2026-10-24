@@ -59,6 +59,7 @@ vi.mock('@shuvix/app-shell', async () => {
       )
     },
     BotGroup: group('Bot'),
+    TrackingGroup: group('Tracking'),
     AgentGroup: group('Agent'),
     PolicyGroup: group('Policy'),
     HookGroup: group('Hook'),
@@ -118,7 +119,7 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const GROUP_ORDER = ['Bot', 'Agent', 'Policy', 'Hook', 'Skill', 'Knowledge']
+const GROUP_ORDER = ['Bot', 'Tracking', 'Agent', 'Policy', 'Hook', 'Skill', 'Knowledge']
 
 const api = {
   bot: {
@@ -174,7 +175,7 @@ afterEach(() => {
 })
 
 describe('desktop Sidebar modes', () => {
-  it('DS-1 full: windowDrag + pin caps, the footer, and the six registry groups in order', () => {
+  it('DS-1 full: windowDrag + pin caps, the footer, and the seven registry groups in order', () => {
     render()
     expect(lastShared().caps).toEqual({ windowDrag: true, pin: true })
     expect(lastShared().hideFooter).toBe(false)
@@ -191,7 +192,7 @@ describe('desktop Sidebar modes', () => {
     expect(rec.groups.size).toBe(0)
   })
 
-  it('DS-3 library: no shared sidebar; the six groups inside [data-mobile-list]', () => {
+  it('DS-3 library: no shared sidebar; the seven groups inside [data-mobile-list]', () => {
     render({ mode: 'library' })
     expect(rec.shared).toHaveLength(0)
     expect(container.querySelector('[data-stub-shared]')).toBeNull()

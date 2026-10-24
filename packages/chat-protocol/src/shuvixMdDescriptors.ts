@@ -7,7 +7,7 @@
  * 「怎么展示/编辑」，不做合法性判定 —— 校验语义永远归各自解析器
  * （definitionFile.ts / policyFile.ts），后续经宿主校验接缝回传 UI。
  *
- * 覆盖策略：okf / agent / policy / hook / bot / daily 已各有描述符。没有描述符的类型（chart）
+ * 覆盖策略：okf / agent / policy / hook / bot / daily / track 已各有描述符。没有描述符的类型（chart）
  * 与未列出的键落属性卡的通用 key/value 行 —— 新类型零描述符也有降级展示，补一份
  * 描述符即得完整卡片；嵌套结构（policy 的 rules/lets）按设计只做摘要不做表单，
  * 等专属 summarize 能力时再扩展本类型。
@@ -163,8 +163,8 @@ const HOOK_DESCRIPTOR: ShuvixMdTypeDescriptor = {
 /**
  * bot 定义文件（`shuvix: bot`，agent-runtime bot/botFile.ts 的键集）。
  *
- * 一个 bot 只声明**自己是谁**（身份三项）：没有管线、没有槽位、没有工具与模型 —— 它怎么干活
- * 由基座档案 `bot` 统一规定，跑在哪条会话上由会话自己说了算。正文（人设与记忆）不是
+ * 一个 bot 声明**自己是谁**（身份三项）与**什么时候被叫起来**（`shuvix-bot-on`，可选）：没有管线、没有槽位、
+ * 没有工具与模型 —— 它怎么干活由基座档案 `bot` 统一规定，跑在哪条会话上由会话自己说了算。正文（人设与记忆）不是
  * frontmatter 字段，所以卡上没有它：那是文档本身。旧格式残留的 `shuvix-bot-pipeline` 块不在
  * 描述符里 —— 它落通用行，解析器另发一条软提示请用户删掉。
  */
@@ -175,6 +175,8 @@ const BOT_DESCRIPTOR: ShuvixMdTypeDescriptor = {
     { key: 'name', labelKey: 'tool.subAgentName', kind: 'mono' },
     { key: 'shuvix-displayName', labelKey: 'tool.subAgentDisplayName', kind: 'text' },
     { key: 'description', labelKey: 'tool.subAgentDescription', kind: 'text' },
+    // 触发绑定（实验，2026-10-24）：与 hook 的 shuvix-hook-on 同一种摘要（埋点徽章 + when · message）
+    { key: 'shuvix-bot-on', labelKey: 'settings.botOn', kind: 'hookBindings' },
     OBJECT_ID_FIELD
   ]
 }
@@ -237,6 +239,16 @@ const DAILY_DESCRIPTOR: ShuvixMdTypeDescriptor = {
   fields: []
 }
 
+/**
+ * 跟踪项（trackingNotes.ts，实验）：自述行 + 对象 id，暂时没有管理字段 —— 标题是正文第一个一级标题，进展与结论
+ * 都在正文里，由 bot 维护
+ */
+const TRACK_DESCRIPTOR: ShuvixMdTypeDescriptor = {
+  type: 'track',
+  badge: 'Tracked item',
+  fields: [OBJECT_ID_FIELD]
+}
+
 export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   OKF_DESCRIPTOR,
   AGENT_DESCRIPTOR,
@@ -244,7 +256,8 @@ export const SHUVIX_MD_DESCRIPTORS: readonly ShuvixMdTypeDescriptor[] = [
   HOOK_DESCRIPTOR,
   BOT_DESCRIPTOR,
   SKILL_DESCRIPTOR,
-  DAILY_DESCRIPTOR
+  DAILY_DESCRIPTOR,
+  TRACK_DESCRIPTOR
 ]
 
 /** 按标记 type 查描述符；无 → null（属性卡降级为通用 key/value 卡） */

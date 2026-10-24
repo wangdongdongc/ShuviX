@@ -128,6 +128,8 @@ vi.mock('../../utils/paths', () => ({
     agents: join(state.root, 'home', '.agents', 'skills')
   }),
   getDefaultBotsDir: () => join(state.root, 'bots'),
+  getDefaultDailyDir: () => join(state.root, 'daily'),
+  getDefaultTrackingDir: () => join(state.root, 'tracking'),
   // getVars 的 shuvixConfigDirs（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => join(state.root, 'policies'),
   getDefaultAgentsDir: () => join(state.root, 'agents'),

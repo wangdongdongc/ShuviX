@@ -93,6 +93,8 @@ vi.mock('../../utils/paths', () => ({
     agents: '/tmp/shuvix-rv-home/.agents/skills'
   }),
   getDefaultBotsDir: () => '/tmp/shuvix-rv-bots',
+  getDefaultDailyDir: () => '/tmp/shuvix-rv-daily',
+  getDefaultTrackingDir: () => '/tmp/shuvix-rv-tracking',
   getDefaultPoliciesDir: () => '/tmp/shuvix-rv-policies',
   getDefaultAgentsDir: () => '/tmp/shuvix-rv-agents',
   getDefaultHooksDir: () => '/tmp/shuvix-rv-hooks',

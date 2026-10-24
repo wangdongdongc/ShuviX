@@ -223,6 +223,13 @@ export function getDefaultDailyDir(): string {
 }
 
 /**
+ * 跟踪项目录：~/.shuvix/tracking/（实验；一项一个 `<名字>.md`，由 bot 维护；第一次写入时才创建，见 trackingNotes）
+ */
+export function getDefaultTrackingDir(): string {
+  return join(homedir(), '.shuvix', 'tracking')
+}
+
+/**
  * 知识库 v2 的两个根（都不自动创建 —— 首次写入或首次打开入口才由 services/knowledge 懒建；
  * 与用户自己的知识库根并存、互不相干）。
  *

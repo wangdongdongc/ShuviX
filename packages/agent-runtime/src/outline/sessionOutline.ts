@@ -11,7 +11,7 @@
  *  - 编号取自条目 id（durable 是数字，旧会话的长 id 取末 8 位，撞了用全长）：开着看与重开看是同一个编号。
  *    块用序号而不是 toolCallId —— 有的中转每轮从 `call_0` 数起，会撞。
  *  - 用户消息标来源：`[you]`（读大纲的会话发的）/ `[parent]`（它的父会话发的）/ `[other session]`（别的被授权的
- *    会话发的）/ `[user]`（人打的）/ `[unattributed]`（分不清：升级之前、没有来源
+ *    会话发的）/ `[trigger]`（触发器替 bot 发的）/ `[user]`（人打的）/ `[unattributed]`（分不清：升级之前、没有来源
  *    记录的那些，判法是 `authorsOf`，与自动审查同一份）/ `[notice]`（系统写的）；思考只计数；
  *    工具结果不出现（失败的附错误首行）；进行中 / 待批准 / 待回答的单独一行标状态。
  *
@@ -422,8 +422,10 @@ function userRow(
     line = `[notice] ${oneLine(firstLine(text), NOTICE_CLIP)}`
   } else {
     const source = reader.sources.get(message.id)
-    if (source && source.sessionId === reader.readerId) line = `[you] ${oneLine(text, YOU_CLIP)}`
-    else if (source?.kind === 'session') line = `[other session] ${oneLine(text, YOU_CLIP)}`
+    if (source?.kind === 'trigger') line = `[trigger] ${oneLine(text, YOU_CLIP)}`
+    else if (source && source.sessionId === reader.readerId) {
+      line = `[you] ${oneLine(text, YOU_CLIP)}`
+    } else if (source?.kind === 'session') line = `[other session] ${oneLine(text, YOU_CLIP)}`
     else if (source) line = `[parent] ${oneLine(text, YOU_CLIP)}`
     else if (author === 'human') line = `[user] ${oneLine(text, USER_CLIP)}`
     else line = `[unattributed] ${oneLine(text, USER_CLIP)}`

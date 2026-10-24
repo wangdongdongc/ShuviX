@@ -8,13 +8,24 @@
  *      00:00:01 放下 → 第二天）；撤回的从不入账；空闲发送就算两个回调都带条目也只一行、一次 touchActive
  *   19 steer / followUp（PIN-16）：忙时 steer 在放下时入账；空闲 followUp 在受理时入账
  *   20 排除项照旧：内存会话（活着 / 已删）与 Chrome 标签页会话经新路径也不入账、不 touchActive
+ *   DPE-O1 行带来源种类（2026-10-24）：prompt 带 trigger / local 来源 → origin 'trigger' / 'local'；被驱动的发送 →
+ *          驱动它的是父会话记 'parent-session'、别的会话记 'session'；没有来源 → 行里没有 origin（落库为 NULL）
+ *   DPE-O2 steer / followUp 带来源：当场落下（受理）与排队后放下两条路都带上种类
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+interface DayRow {
+  sessionId: string
+  entryId: string
+  day: string
+  timestamp: number
+  origin?: string
+}
+
 const mocks = vi.hoisted(() => ({
-  insert: vi.fn<
-    (row: { sessionId: string; entryId: string; day: string; timestamp: number }) => boolean
-  >(() => true),
+  insert: vi.fn<(row: DayRow) => boolean>(() => true),
+  /** sessionDao.pick（DPE-O1：被驱动的发送按它问父会话是谁） */
+  pick: vi.fn<(id: string, keys: string[]) => Record<string, unknown> | undefined>(() => undefined),
   touchActive: vi.fn<(id: string) => void>(),
   pickSettings: vi.fn<(id: string, keys: string[]) => Record<string, unknown> | undefined>(
     () => ({})
@@ -39,7 +50,7 @@ vi.mock('../../dao/sessionDao', () => ({
   sessionDao: {
     touchActive: mocks.touchActive,
     pickSettings: mocks.pickSettings,
-    pick: () => undefined
+    pick: mocks.pick
   }
 }))
 vi.mock('../sessionHost', async () =>
@@ -79,13 +90,13 @@ function facade(patch: Partial<FakeDurableSession> = {}): {
   return { durable, session: AgentSession.of(durable) }
 }
 
-const rows = (): Array<{ sessionId: string; entryId: string; day: string; timestamp: number }> =>
-  mocks.insert.mock.calls.map(([row]) => row)
+const rows = (): DayRow[] => mocks.insert.mock.calls.map(([row]) => row)
 
 beforeEach(() => {
   mocks.insert.mockReset().mockReturnValue(true)
   mocks.touchActive.mockReset()
   mocks.pickSettings.mockReset().mockReturnValue({})
+  mocks.pick.mockReset().mockReturnValue(undefined)
   mocks.fire.mockReset()
   sessionRecords.clearEphemeralForTests()
   resetFakeHost()
@@ -250,5 +261,116 @@ describe('P3-07-20 exclusions are kept on the entry-id path', () => {
     await session.followUp('tab 2')
     expect(mocks.insert).not.toHaveBeenCalled()
     expect(mocks.touchActive).not.toHaveBeenCalled()
+  })
+})
+
+describe('DPE-O1 prompt 的行带来源种类', () => {
+  const TRIGGER = {
+    kind: 'trigger',
+    trigger: 'timer.fired',
+    sourceId: 'timer:builtin:minute',
+    bot: 'daily'
+  } as const
+
+  it.each([
+    ['触发器替 bot 发的', TRIGGER, 'trigger'],
+    ['本机窗口', { kind: 'local' } as const, 'local'],
+    [
+      '远程连接',
+      { kind: 'remote', clientId: 'ws:1', address: '10.0.0.2', userAgent: 'UA' } as const,
+      'remote'
+    ]
+  ])('DPE-O1 %s → origin = %s', async (_label, source, kind) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 24, 18, 0, 3))
+    const { durable, session } = facade({ nextEntryId: 9 })
+    expect(await session.prompt('go', undefined, undefined, undefined, source)).toEqual({})
+    expect(rows()).toEqual([
+      {
+        sessionId: durable.sessionId,
+        entryId: '9',
+        day: '2026-10-24',
+        timestamp: new Date(2026, 9, 24, 18, 0, 3).getTime(),
+        origin: kind
+      }
+    ])
+    expect(mocks.touchActive).toHaveBeenCalledTimes(1)
+  })
+
+  it('DPE-O1 被驱动的子会话发送（驱动方是它的父会话）→ origin = parent-session', async () => {
+    const { durable, session } = facade({ nextEntryId: 4 })
+    mocks.pick.mockImplementation((id, keys) =>
+      id === durable.sessionId && keys.includes('parentId') ? { parentId: 'P' } : undefined
+    )
+    await session.prompt('task', undefined, undefined, {
+      requestId: 'subsession:P:1',
+      driven: { parentId: 'P', background: false }
+    })
+    expect(rows()).toMatchObject([{ entryId: '4', origin: 'parent-session' }])
+  })
+
+  it('DPE-O1 经会话权限表被授权的别的会话驱动 → origin = session', async () => {
+    const { session } = facade({ nextEntryId: 5 })
+    mocks.pick.mockReturnValue({ parentId: null })
+    await session.prompt('task', undefined, undefined, {
+      requestId: 'subsession:Q:1',
+      driven: { parentId: 'Q', background: true }
+    })
+    expect(rows()).toMatchObject([{ entryId: '5', origin: 'session' }])
+  })
+
+  it('DPE-O1 没有来源 → 行里没有 origin 键（落库为 NULL，按旧行算人打的）', async () => {
+    const { session } = facade({ nextEntryId: 2 })
+    await session.prompt('plain')
+    expect(rows()).toHaveLength(1)
+    expect(rows()[0]).not.toHaveProperty('origin')
+    expect(rows()[0]).toMatchObject({ entryId: '2' })
+  })
+
+  it('DPE-O1 排队的 prompt 带来源：放下时那一行带种类', async () => {
+    const { durable, session } = facade({ queueAdmissions: true, nextEntryId: 11 })
+    await session.prompt('later', undefined, undefined, undefined, TRIGGER)
+    expect(mocks.insert).not.toHaveBeenCalled()
+    durable.placeQueued()
+    expect(rows()).toMatchObject([{ entryId: '11', origin: 'trigger' }])
+  })
+})
+
+describe('DPE-O2 steer / followUp 带来源', () => {
+  const LOCAL = { kind: 'local' } as const
+  const TELEGRAM = { kind: 'telegram', botId: 'b1', userId: 'u1', chatId: 'c1' } as const
+
+  it('DPE-O2 空闲时 steer / followUp 当场落下：受理那一刻的行带种类', async () => {
+    const { session } = facade({ nextEntryId: 20 })
+    await session.steer('s', LOCAL)
+    await session.followUp('f', TELEGRAM)
+    expect(rows()).toMatchObject([
+      { entryId: '20', origin: 'local' },
+      { entryId: '21', origin: 'telegram' }
+    ])
+  })
+
+  it('DPE-O2 忙时 steer / followUp 排队：受理时不入账，放下时的行带种类', async () => {
+    const { durable, session } = facade({ busy: true, queueAdmissions: true, nextEntryId: 30 })
+    await session.steer('mid-run', LOCAL)
+    await session.followUp('after', TELEGRAM)
+    expect(mocks.insert).not.toHaveBeenCalled()
+    durable.placeQueued()
+    durable.placeQueued()
+    expect(rows()).toMatchObject([
+      { entryId: '30', origin: 'local' },
+      { entryId: '31', origin: 'telegram' }
+    ])
+  })
+
+  it('DPE-O2 admitSteer 的 options.source（父会话代发的引导）→ 行带它的种类；不带来源 → 没有 origin', async () => {
+    const { session } = facade({ nextEntryId: 40 })
+    await session.admitSteer('steer', {
+      requestId: 'r1',
+      source: { kind: 'parent-session', sessionId: 'P' }
+    })
+    await session.steer('plain')
+    expect(rows()).toMatchObject([{ entryId: '40', origin: 'parent-session' }, { entryId: '41' }])
+    expect(rows()[1]).not.toHaveProperty('origin')
   })
 })

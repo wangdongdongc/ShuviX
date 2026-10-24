@@ -9,7 +9,8 @@
  *   HD-19…22    超时：缺省 60 秒、与观察型的上限互不影响、计时起点、不配合中止的派发拖不住 decide；
  *   HD-23…30    中止：外部 signal（派发中 / 模型解析中 / 结束之后）、监听器不泄漏、abortSession；
  *   HD-31       监控面；
- *   HD-32…35    兜底与类型：绝不 reject、观测回调抛错、编译期收窄、payload 在入口快照。
+ *   HD-32…35    兜底与类型：绝不 reject、观测回调抛错、编译期收窄、payload 在入口快照；
+ *   HD-36       全局埋点（timer.fired）不走 hook 的 fire：类型上拦住，绕过类型也只记一笔不派发。
  *
  * 夹具见 ./harness.ts（permissionPayload / verdict / scriptedRunTask；观测面 = onRun 事件 + logger 行）。
  */
@@ -28,6 +29,7 @@ import {
 } from '../hookRunner'
 import type { ParsedHookFile } from '../hookFile'
 import { renderHookPrompt } from '../hookPrompt'
+import type { TimerFiredPayload } from '../triggerPoints'
 import type { SubAgentModelConfig } from '../../subagent/types'
 import {
   MODEL,
@@ -1207,6 +1209,28 @@ describe('兜底与类型', () => {
     expectTypeOf(
       h.runner.decide('permission.request', permissionPayload())
     ).resolves.toEqualTypeOf<HookDecision<PermissionVerdict> | null>()
+  })
+
+  it('HD-36 类型：fire 收不下全局埋点 timer.fired（它只给 bot 订阅）；会话域观察型照常编译；绕过类型 → 一条 no session context、不派发', async () => {
+    const timerPayload: TimerFiredPayload = {
+      sourceId: 'timer:builtin:minute',
+      firedAt: '2026-10-24T10:00:00.000Z',
+      local: { date: '2026-10-24', time: '18:00', weekday: 6, hour: 18, minute: 0 }
+    }
+    // 注册表里硬塞一份绑 timer.fired 的 hook（解析器本会拒绝它，HF-18）—— 看 runner 自己也不起 run
+    const h = makeRunner({
+      entries: [entryOf(fileOf({ bindings: [{ trigger: 'timer.fired' }] }))]
+    })
+    // @ts-expect-error 全局埋点不属于任何会话，hook 的 run 没有地方挂 —— 类型上就该拦住
+    h.runner.fire('timer.fired', timerPayload)
+    // @ts-expect-error 全局埋点也没有结论契约，不走 decide
+    await h.runner.decide('timer.fired', timerPayload)
+    h.runner.fire('session.prompt-accepted', promptPayload({ promptText: 'still compiles' }))
+    await settle()
+    expect(h.warns().filter((w) => w.includes('hook fire(timer.fired)'))).toEqual([
+      expect.stringContaining('no session context')
+    ])
+    expect(h.runTask).not.toHaveBeenCalled()
   })
 
   it('HD-35 payload 在入口快照：调用之后、模型解析之前整体替换顶层字段、原地改嵌套字段 → prompt 与 when 仍是调用那一刻的值', async () => {

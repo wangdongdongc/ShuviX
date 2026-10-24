@@ -46,7 +46,15 @@ export interface SessionDayPromptRow {
   entryId: string
   day: string
   timestamp: number
+  /**
+   * 这条用户条目是谁发的：InputOrigin 的种类（local / remote / chrome / telegram / parent-session / session / trigger）。
+   * 缺省 = 不知道（v34 之前的行、会话建成那一行、发送时没盖章的）
+   */
+  origin?: string
 }
+
+/** 人在某个前端里打的来源种类（`activeSessionsOnDay` 只数这些，加上不知道来源的旧行） */
+export const HUMAN_ORIGIN_KINDS = ['local', 'remote', 'chrome', 'telegram'] as const
 
 /**
  * 会话按日开口索引 —— 日历的读源。
@@ -62,8 +70,8 @@ export class SessionDayPromptDao extends BaseDao {
    */
   insert(row: SessionDayPromptRow): boolean {
     const result = this.stmt(
-      'INSERT OR IGNORE INTO session_day_prompts (sessionId, entryId, day, timestamp) VALUES (?, ?, ?, ?)'
-    ).run(row.sessionId, row.entryId, row.day, row.timestamp)
+      'INSERT OR IGNORE INTO session_day_prompts (sessionId, entryId, day, timestamp, origin) VALUES (?, ?, ?, ?, ?)'
+    ).run(row.sessionId, row.entryId, row.day, row.timestamp, row.origin ?? null)
     return result.changes > 0
   }
 
@@ -104,6 +112,56 @@ export class SessionDayPromptDao extends BaseDao {
       )
       .all(day) as SessionRow[]
     return rows.map(parseSessionRow)
+  }
+
+  /**
+   * 当天有人写过消息的会话（去重）与各自的项目：只数用户条目（建成那行不算），来源是人打的或不知道（旧行）；
+   * 触发器替 bot 发的、别的会话发进来的不算。隐藏项目过滤在 service 层做。走 day 索引。
+   */
+  humanActiveOnDay(day: string): Array<{ sessionId: string; projectId: string | null }> {
+    const kinds = HUMAN_ORIGIN_KINDS.map(() => '?').join(', ')
+    return this.db
+      .prepare(
+        `SELECT DISTINCT d.sessionId AS sessionId, s.projectId AS projectId
+         FROM session_day_prompts d
+         INNER JOIN sessions s ON s.id = d.sessionId
+         WHERE d.day = ? AND d.entryId != ? AND (d.origin IS NULL OR d.origin IN (${kinds}))`
+      )
+      .all(day, CREATED_ENTRY_ID, ...HUMAN_ORIGIN_KINDS) as Array<{
+      sessionId: string
+      projectId: string | null
+    }>
+  }
+
+  /**
+   * 本地日区间 [startDay, endDay]（含两端）里出现过的会话：每条会话一行，带区间里它的用户条目各是谁发的（去重的来源
+   * 种类，逗号分隔；不知道来源的旧行记作 `unknown`）和区间里最后一条用户条目的时刻（只有建成那一行时用它）。按最后时刻倒序。隐藏项目过滤在 service 层做
+   */
+  activityBetween(
+    startDay: string,
+    endDay: string
+  ): Array<{ session: Session; origins: string[]; lastAt: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT s.*, a.origins AS origins, a.lastAt AS lastAt FROM sessions s
+         INNER JOIN (
+           SELECT sessionId,
+                  GROUP_CONCAT(DISTINCT CASE WHEN entryId = ? THEN NULL ELSE COALESCE(origin, 'unknown') END) AS origins,
+                  COALESCE(MAX(CASE WHEN entryId = ? THEN NULL ELSE timestamp END), MAX(timestamp)) AS lastAt
+           FROM session_day_prompts
+           WHERE day >= ? AND day <= ?
+           GROUP BY sessionId
+         ) a ON s.id = a.sessionId
+         ORDER BY a.lastAt DESC`
+      )
+      .all(CREATED_ENTRY_ID, CREATED_ENTRY_ID, startDay, endDay) as Array<
+      SessionRow & { origins: string | null; lastAt: number }
+    >
+    return rows.map(({ origins, lastAt, ...row }) => ({
+      session: parseSessionRow(row),
+      origins: origins ? origins.split(',').sort() : [],
+      lastAt
+    }))
   }
 
   /** 当天 timestamp 最小的用户消息 entryId（建成那行不算）；没有则 undefined */

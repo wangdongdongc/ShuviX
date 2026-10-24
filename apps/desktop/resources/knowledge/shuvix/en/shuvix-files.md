@@ -42,10 +42,16 @@ calendar. They are the user's own notes, not configuration — edit them like an
 starts from `daily/_template.md` when it exists, otherwise from three sections (done / next / follow
 up). A line linking a conversation uses `[title](shuvix://session/<id>#<message id>)`.
 
+`tracking/` holds the **tracked items** (experimental): one md per matter that needs following up and takes several days
+to settle (marker `shuvix: track v1`, titled by the body's first `# ` heading), collected from the sessions and kept with full
+authority by the daily bot, listed in the sidebar Library's "Tracked items" group. The folder is a git repository: ShuviX
+commits it after each triggered run of the bot, so a wrong edit can be recovered from history. There are no management
+fields such as status or next check yet.
+
 **Builtins live inside the application, not on disk.** ShuviX ships builtin agents (`work`,
 `chat`, `notebook`, `bot`, `tab`, `coding`, `explore`, `titler`,
 `knowledge-writer`, `permission-reviewer`), builtin security policies, two builtin hooks
-(`auto-title`, `auto-review`) and the builtin skill `builtin:drawing`. There are no builtin bots.
+(`auto-title`, `auto-review`) and the builtin skill `builtin:drawing`. Bots are not inside the app: the daily bot that ships with ShuviX is written into `~/.shuvix/bots/daily.md` on first start and is an ordinary bot file from then on (see `bot-md`).
 A builtin cannot be edited, but
 it can be **overridden**: a user file whose `name` equals the builtin's name replaces it
 completely (a builtin row's menu in the sidebar group offers "Create override copy", which

@@ -13,6 +13,9 @@
  *   OB-03 配色：不是本机打的气泡换成来源的浅底（分类色槽位 `--viz-N-tint`，remote 3 / chrome 4 / telegram 2 /
  *         parent-session 7 / session 5），标签同一个浅底 + 同色深字（`--viz-N-ink`）；本机 / 没有来源 / 认不出的种类
  *         → 照旧是强调色的气泡（`bg-accent/10`），没有内联底色
+ *   OB-04 trigger（触发器替 bot 发的，2026-10-24）：`<span data-origin="trigger">`，文字 = 「Trigger」，悬停带 bot 名与
+ *         埋点 id；宿主给了 openSession 也不是按钮、点了不切会话
+ *   OB-05 trigger 的配色 = parent-session 的槽位（viz-7 浅底 + 同色深字）：`originTone` 与气泡、标签一致
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（getHostApi → null）；i18n 走真 en 资源。文件是 .tsx 但不写 JSX，一律 createElement。
  */
@@ -29,6 +32,7 @@ vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 
 import { ChatHostContext, type ChatHostValue } from '../../../host/chatHostContext'
 import { UserBubble } from '../UserBubble'
+import { originTone } from '../OriginBadge'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -274,5 +278,67 @@ describe('OB-03 气泡与标签按来源配色', () => {
     expect(el.className).toContain('bg-accent/10')
     expect(el.getAttribute('style')).toBeNull()
     expect(el.hasAttribute('data-origin-tone')).toBe(false)
+  })
+})
+
+const TRIGGER: InputOrigin = {
+  kind: 'trigger',
+  trigger: 'timer.fired',
+  sourceId: 'timer:builtin:minute',
+  bot: 'ticker'
+}
+
+describe('OB-04 trigger 来源标签', () => {
+  it('OB-04 没有宿主：<span data-origin="trigger">，文字「Trigger」，悬停带 bot 名与埋点 id', () => {
+    renderBubble(TRIGGER)
+    const el = tag()
+    expect(el.tagName).toBe('SPAN')
+    expect(el.getAttribute('data-origin')).toBe('trigger')
+    expect(el.textContent).toBe(en.message.originTrigger)
+    expect(el.textContent).toBe(i18n.t('message.originTrigger'))
+    const title = el.getAttribute('title')!
+    expect(title).toBe(
+      i18n.t('message.originTriggerHint', { bot: 'ticker', trigger: 'timer.fired' })
+    )
+    expect(title).toContain('ticker')
+    expect(title).toContain('timer.fired')
+    expect(title).not.toContain(en.message.originOpenHint)
+  })
+
+  it('OB-04 宿主给了 openSession：仍是 span（不是按钮），点了不切会话', () => {
+    const openSession = vi.fn()
+    renderBubble(TRIGGER, { openSession })
+    const el = tag()
+    expect(el.tagName).toBe('SPAN')
+    expect(container.querySelector('button[data-origin]')).toBeNull()
+    expect(el.getAttribute('title')).not.toContain(en.message.originOpenHint)
+    act(() => el.click())
+    expect(openSession).not.toHaveBeenCalled()
+  })
+
+  it('OB-04 没有 sourceId 的 trigger 照样出标签', () => {
+    renderBubble({ kind: 'trigger', trigger: 'timer.fired', bot: 'daily' })
+    const el = tag()
+    expect(el.getAttribute('data-origin')).toBe('trigger')
+    expect(el.getAttribute('title')).toContain('daily')
+  })
+})
+
+describe('OB-05 trigger 的配色', () => {
+  it('OB-05 originTone(trigger) = parent-session 的 viz-7 浅底 / 深字', () => {
+    const tone = originTone(TRIGGER)
+    expect(tone).toEqual({ tint: 'var(--viz-7-tint)', ink: 'var(--viz-7-ink)' })
+    expect(tone).toEqual(originTone({ kind: 'parent-session', sessionId: 'P1' }))
+  })
+
+  it('OB-05 气泡与标签都用 viz-7', () => {
+    renderBubble(TRIGGER)
+    const el = container.querySelector<HTMLElement>('.rounded-lg')!
+    expect(el.getAttribute('data-origin-tone')).toBe('trigger')
+    expect(el.className).not.toContain('bg-accent/10')
+    expect(el.style.backgroundColor).toBe('var(--viz-7-tint)')
+    const chip = tag()
+    expect(chip.style.backgroundColor).toBe('var(--viz-7-tint)')
+    expect(chip.style.color).toBe('var(--viz-7-ink)')
   })
 })

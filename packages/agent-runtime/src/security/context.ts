@@ -379,7 +379,9 @@ export function createSecurityContext(
           type: 'session',
           sessionId: object.sessionId,
           title: object.title,
-          ownTurn: object.ownTurn
+          ownTurn: object.ownTurn,
+          lastActiveAt: object.lastActiveAt ?? '',
+          bot: object.bot ?? ''
         },
         { ...opts, onOther: 'throw' }
       )

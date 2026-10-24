@@ -115,6 +115,11 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'calendar:openReport': 'write', // 那天还没有就按模板建文件 + 笔记本会话
   'calendar:addSessionToReport': 'write',
 
+  // ─── tracking：跟踪项（实验；用户自己的数据：列出是 read，开笔记本 / 开目录是 write） ───
+  'tracking:list': 'read',
+  'tracking:openNote': 'write',
+  'tracking:openFolder': 'write',
+
   // ─── message：消息 ───
   'message:list': 'read',
   'message:clear': 'write',
@@ -185,6 +190,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'hook:openFolder': 'write',
 
   // ─── bot：Bots（注册表） ───
+  'trigger:status': 'read',
   'bot:list': 'read',
   'bot:openNote': 'admin', // bot 文件的编辑器
   'bot:createNew': 'admin',
@@ -467,6 +473,7 @@ export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
   session: 'sessions',
   message: 'sessions',
   calendar: 'sessions',
+  tracking: 'sessions', // 跟踪项（实验）：与日报同属「用户这些天在做什么」
   runtime: 'sessions',
   bgTask: 'sessions',
   command: 'sessions',
@@ -486,6 +493,7 @@ export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
   knowledge: 'knowledge',
   subAgent: 'agents',
   bot: 'agents',
+  trigger: 'agents', // 触发源（实验）：内置 timer 驱动 bot
   mdMeta: 'agents', // 补缺值只有 agent 的模型与思考档位（MD_FM_FILL_KEYS）
   tools: 'extensions',
   mcp: 'extensions',
@@ -584,6 +592,8 @@ export const SETTING_KEY_FACTS: Readonly<Record<string, CallFacts>> = {
   'general.defaultChatAgent': { scope: 'agents', access: 'admin' },
   'general.defaultProjectAgent': { scope: 'agents', access: 'admin' },
   'session.': { scope: 'sessions', access: 'admin' }, // 重启后续跑中断的会话
+  'triggers.': { scope: 'agents', access: 'admin' }, // 触发源开关：关掉内置 timer 就没有 bot 会被定时叫起来
+  'bots.': { scope: 'agents', access: 'admin' }, // 随应用提供的 bot 的内置 id 认定（daily-bot-access 据此放宽权限）
   'sandbox.': { scope: 'security', access: 'admin' },
   'general.classifierProvider': { scope: 'security', access: 'admin' }, // 命令风险分类器：read_only 的命令跳过审查
   'general.classifierModel': { scope: 'security', access: 'admin' },

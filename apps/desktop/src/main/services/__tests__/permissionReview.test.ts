@@ -19,6 +19,8 @@
  *   - PR-18     recentOperations 取自真的决策日志，审查员自己的操作先滤掉再取最近 10 条；
  *   - PR-W1     main/index.ts 把审查者与「认审查员」的判断一并注入 toolContext（读源码）；
  *   - XS-21     会话客体（session 工具与别的会话交互）的 operation / facts：消息预览按 3000 截断，read 没有 message。
+ *   - PR-T      触发器替 bot 发的消息（来源 trigger）：进 delegatedTasks 并注明是哪个 bot 的触发，不算人写的。
+ *               这几条按会话 id 换上 durable 摘要形状的转写项（digests），其余会话照旧走旧格式读者。
  *
  * 替身：hookService / messageService / sessionRecords / logger / frontend/core / sessionHost。
  * **钉的是旧格式（harness-v3-jsonl）路径**：会话行不带 storageKind，转写经 messageService 读冻结投影；
@@ -95,6 +97,16 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: mocks.warn, error: () => {}, debug: () => {} })
 }))
 vi.mock('../../frontend/core', () => ({ chatFrontendRegistry: { broadcast: mocks.broadcast } }))
+// 带来源记录的转写项只在 durable 会话上有（旧格式没有 SourceDoc，RSRC-27）。PR-T 用例要的是「来源是 trigger 的
+// user 项」怎么分配，与读者无关：按会话 id 换上一份 durable 摘要形状的转写项；不在表里的会话照旧走旧格式读者
+const digests = vi.hoisted(() => new Map<string, TranscriptItem[]>())
+vi.mock('../transcriptSource', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../transcriptSource')>()
+  return {
+    ...actual,
+    readSessionTranscript: async (id: string) => digests.get(id) ?? actual.readSessionTranscript(id)
+  }
+})
 
 import {
   buildPermissionRequestPayload,
@@ -102,7 +114,7 @@ import {
   isReviewerIdentity,
   reviewPermissionRequest
 } from '../permissionReview'
-import { transcriptItemsOf } from '../transcriptSource'
+import { transcriptItemsOf, type TranscriptItem } from '../transcriptSource'
 
 // ─── 夹具 ───────────────────────────────────────────────
 
@@ -325,6 +337,7 @@ afterEach(() => {
   usedSessions.clear()
   parents.clear()
   transcripts.clear()
+  digests.clear()
   vi.useRealTimers()
 })
 
@@ -1573,6 +1586,92 @@ describe('PR —— 子会话：人写的取顶层，父 agent 写的只进 dele
     const payload = await buildPermissionRequestPayload(makeEvent(sub))
     expect(payload.delegatedTasks).toStrictEqual(['P', 'H'])
     expect(payload.userMessages).toStrictEqual(['top intent'])
+  })
+})
+
+// ─── 触发器替 bot 发的消息（来源 trigger，2026-10-24） ─────────
+
+/**
+ * bot 的触发运行：内置 timer 到点 → 新建一条绑定该 bot 的顶层会话，把绑定里的 message 作为来源 `trigger` 的用户消息
+ * 发进去。那句话是事先写在 bot 文件里的，此刻没有人在场：审查员要把它当成委派（声明），不是人的授权 —— 进
+ * delegatedTasks，并注明是触发器替哪个 bot 发的；人之后在这条会话里打的照旧进 userMessages。
+ * 转写项按 durable 摘要的形状给（见文件头 digests 的说明）。
+ */
+describe('PR-T —— 触发器替 bot 发的消息', () => {
+  const TRIGGER = {
+    kind: 'trigger',
+    trigger: 'timer.fired',
+    sourceId: 'timer:builtin:minute',
+    bot: 'daily'
+  } as const
+  const byTrigger = (bot: string, text: string): string =>
+    `(sent by a scheduled trigger on behalf of bot "${bot}", not typed by the user now) ${text}`
+  const fence =
+    '<trigger_event trigger="timer.fired">\nsourceId: timer:builtin:minute\n</trigger_event>'
+
+  it('PR-T1 顶层触发会话：触发消息进 delegatedTasks（逐字前缀 + trim 后的原文），不进 userMessages', async () => {
+    const top = newSession()
+    digests.set(top, [
+      { kind: 'user', ts: 1000, text: `  Write today's report.\n\n${fence}  `, source: TRIGGER }
+    ])
+
+    const payload = await buildPermissionRequestPayload(makeEvent(top))
+    expect(payload.delegatedTasks).toStrictEqual([
+      `(sent by a scheduled trigger on behalf of bot "daily", not typed by the user now) Write today's report.\n\n${fence}`
+    ])
+    expect(payload.userMessages).toStrictEqual([])
+    // 摘要换上之后旧格式读者一次都不该被调
+    expect(mocks.listBySession).not.toHaveBeenCalled()
+  })
+
+  it('PR-T2 人之后在触发会话里打的消息进 userMessages；触发消息仍只在 delegatedTasks', async () => {
+    const top = newSession()
+    digests.set(top, [
+      { kind: 'user', ts: 1000, text: 'Write the report.', source: TRIGGER },
+      { kind: 'assistant', ts: 2000, text: 'Done — 3 sessions today.' },
+      { kind: 'user', ts: 3000, text: '  also add the release notes  ' }
+    ])
+
+    const payload = await buildPermissionRequestPayload(makeEvent(top))
+    expect(payload.userMessages).toStrictEqual(['also add the release notes'])
+    expect(payload.delegatedTasks).toStrictEqual([byTrigger('daily', 'Write the report.')])
+  })
+
+  it('PR-T3 (pin) 前缀算进 1500 字的截断：原文 1450 字（单看不截）加上前缀就截，按拼好的整条注明多出的字数', async () => {
+    const top = newSession()
+    const body = 'x'.repeat(1450)
+    digests.set(top, [{ kind: 'user', ts: 1000, text: body, source: TRIGGER }])
+
+    const [task] = (await buildPermissionRequestPayload(makeEvent(top))).delegatedTasks
+    const whole = byTrigger('daily', body)
+    expect(whole.length).toBeGreaterThan(1500)
+    expect(task).toBe(`${whole.slice(0, 1500)}… [${whole.length - 1500} more chars]`)
+    expect(task.startsWith('(sent by a scheduled trigger on behalf of bot "daily"')).toBe(true)
+  })
+
+  it('PR-T4 触发会话的子会话：父会话代发的任务照旧进 delegatedTasks、不带触发前缀；顶层的触发消息不进子会话的 payload', async () => {
+    const top = newSession()
+    const sub = newSession(top)
+    digests.set(top, [
+      { kind: 'user', ts: 1000, text: 'Write the report.', source: TRIGGER },
+      { kind: 'user', ts: 1500, text: 'typed by the user in the bot session' }
+    ])
+    digests.set(sub, [
+      {
+        kind: 'user',
+        ts: 2000,
+        text: 'Summarise session A',
+        source: { kind: 'parent-session', sessionId: top }
+      }
+    ])
+
+    const payload = await buildPermissionRequestPayload(
+      makeEvent(sub, { subject: { profileName: 'explore', agentKind: 'root' } })
+    )
+    expect(payload.delegatedTasks).toStrictEqual(['Summarise session A'])
+    // 人写的取顶层：只有人打的那条；触发消息哪一边都不在
+    expect(payload.userMessages).toStrictEqual(['typed by the user in the bot session'])
+    expect(JSON.stringify(payload)).not.toContain('scheduled trigger')
   })
 })
 

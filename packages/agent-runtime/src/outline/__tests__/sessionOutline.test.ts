@@ -14,6 +14,8 @@
  *     垫一条父会话发的消息作锚点。见 C / C2 两组。
  *   - **别的会话 / 顶层会话**（2026-10-20，XS-24）：来源 kind `session` → `[other session]`，同样立锚点；
  *     `reader.topLevel` 为 true 时没有记录的一律 `[user]`。见 C3。展开时 `</session` 同样拆开（XS-25，见 G2）。
+ *   - **触发器**（2026-10-24，WP4-101/102）：来源 kind `trigger`（触发器替 bot 发的）→ `[trigger]`，排在读者判断之前，
+ *     同样立锚点。见 C4。
  *
  * 用例编号 WP4-xx 对应测试设计清单；期望以 §19.10 的裁决与当前源码为准（清单里标 ⚠ 的几条已按裁决改写）。
  */
@@ -143,7 +145,9 @@ function view(
  * `opts.topLevel` 给了才带上这个键（不给 = 旧口径，被读的会话当子会话判）
  */
 function reader(
-  pairs: Array<[id: string, sessionId: string, kind?: InputSource['kind']]> = [],
+  pairs: Array<
+    [id: string, sessionId: string, kind?: Exclude<InputSource['kind'], 'trigger'>]
+  > = [],
   opts: { topLevel?: boolean } = {}
 ): OutlineReader {
   return {
@@ -882,6 +886,54 @@ describe('C3. 别的会话的来源 [other session] 与顶层会话的作者判�
     expect(outline(v, ALL, reader([], { topLevel: true })).lines).toEqual([
       '#1 [notice] <background-task id="b">',
       '#2 [user] h'
+    ])
+  })
+})
+
+// ───────────── C4. 触发器替 bot 发的（2026-10-24：bot 的触发绑定） ─────────────
+
+describe('C4. 触发器的来源 [trigger]（WP4-101/102）', () => {
+  /** 触发器来源：没有 sessionId —— 不是任何一条会话发的 */
+  const TRIGGER_SOURCE: InputSource = {
+    kind: 'trigger',
+    trigger: 'timer.fired',
+    sourceId: 'timer:builtin:minute',
+    bot: 'daily'
+  }
+  const triggerReader = (
+    ids: string[],
+    readerId = 'P',
+    opts: { topLevel?: boolean } = {}
+  ): OutlineReader => ({
+    readerId,
+    sources: new Map(ids.map((id) => [id, TRIGGER_SOURCE])),
+    ...(opts.topLevel === undefined ? {} : { topLevel: opts.topLevel })
+  })
+
+  it('WP4-101 触发器发的用户消息 → [trigger] <截 80，同 [you]>；同一会话里之后没有记录的那条 → [user]', () => {
+    const text =
+      'Go through the sessions.\n\n<trigger_event trigger="timer.fired">\n' + 'y'.repeat(300)
+    const v = view([U('1', text), A('2', [TX('done')]), U('3', 'typed later')])
+    const lines = outline(v, ALL, triggerReader(['1'])).lines
+    expect(lines).toEqual([
+      `#1 [trigger] ${clipLine(text.replace(/\s+/g, ' ').trim(), 80)}`,
+      '#2.0 reply: done',
+      '#3 [user] typed later'
+    ])
+    expect(bodyOf(lines[0]).slice('[trigger] '.length)).toHaveLength(80)
+    // 展开：第一行是标记本身，其后是完整原文（按行）
+    expect(item(v, '#1', triggerReader(['1'])).lines).toEqual(['[trigger]', ...text.split('\n')])
+  })
+
+  it.each([
+    ['读者 id 为空串', ''],
+    ['读者 id 什么都对不上', 'nobody'],
+    ['读者 id 是 bot 名', 'daily']
+  ])('WP4-102 %s → 仍是 [trigger]（不落到 [you] / [parent]）', (_label, readerId) => {
+    const v = view([U('1', 'Tick.')])
+    expect(outline(v, ALL, triggerReader(['1'], readerId)).lines).toEqual(['#1 [trigger] Tick.'])
+    expect(outline(v, ALL, triggerReader(['1'], readerId, { topLevel: true })).lines).toEqual([
+      '#1 [trigger] Tick.'
     ])
   })
 })

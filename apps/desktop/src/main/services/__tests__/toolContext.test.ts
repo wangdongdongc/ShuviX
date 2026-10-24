@@ -41,7 +41,17 @@
  * 需要真实评估的用例读仓库里那份内置策略 md（同 askPolicy.test）；用户策略由 tc.userPolicies 喂。
  * reviewState / 决策日志是进程级表：这些用例各用独立 sessionId，afterEach 清掉。
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+  expect,
+  vi,
+  type MockInstance
+} from 'vitest'
 import {
   existsSync,
   mkdirSync,
@@ -79,11 +89,24 @@ const tc = vi.hoisted(() => ({
   userPolicies: [] as UserPolicyFile[],
   // 内置策略的事实源 —— 运行时读随包发布的目录，这里直接读仓库里那一份（同一批文件）。
   // src/main/services/__tests__ 往上六级是仓库根
-  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`
+  builtinDir: `${__dirname}/../../../../../../packages/agent-runtime/src/security/builtinPolicies/md`,
+  /**
+   * sessionDao.pick 的替身数据（会话行，按 id）：botService.identityOf 读 settings.bot、sessionObjectFacts 读
+   * lastActiveAt / createdAt。缺省空表 = 读不到任何会话（TC-BOT / XS-37 / XS-38 按需填）
+   */
+  sessionRows: {} as Record<string, Record<string, unknown>>
 }))
 
 vi.mock('../../dao/projectDao', () => ({ projectDao: { pick: tc.projectPick } }))
-vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pickSettings: tc.pickSettings } }))
+vi.mock('../../dao/sessionDao', () => ({
+  sessionDao: {
+    pickSettings: tc.pickSettings,
+    pick: (id: string, fields: string[]) => {
+      const row = tc.sessionRows[id]
+      return row ? Object.fromEntries(fields.map((f) => [f, row[f]])) : undefined
+    }
+  }
+}))
 // 会话权限表换成替身：getVars 读 pathView / sessionView、persistGrant 写 grantPath（表本身另有单测）
 vi.mock('../acl', () => ({
   sessionAcl: {
@@ -133,6 +156,8 @@ vi.mock('../../utils/paths', () => ({
     agents: '/tmp/shuvix-actor-home/.agents/skills'
   }),
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
+  getDefaultDailyDir: () => '/tmp/shuvix-daily',
+  getDefaultTrackingDir: () => '/tmp/shuvix-tracking',
   // getVars 的 shuvixConfigDirs 的四个目录（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => '/tmp/shuvix-policies',
   getDefaultAgentsDir: () => '/tmp/shuvix-agents',
@@ -151,6 +176,7 @@ vi.mock('../../logger', () => ({
 import {
   agentActorOf,
   assertSessionAccess,
+  getDesktopNetworkSecurityContext,
   getDesktopSecurityContext,
   isPathReadAllowed,
   isSessionDocument,
@@ -158,6 +184,7 @@ import {
   makeDesktopSecurityProvider,
   resolveProjectConfig,
   resolveSessionDocument,
+  sessionObjectFacts,
   setCommandClassifier,
   setPermissionReviewer,
   TOOL_ABORTED,
@@ -166,6 +193,7 @@ import {
   type ToolContext
 } from '../toolContext'
 import type { ToolAgentIdentity } from '../toolAgent'
+import { botService } from '../botService'
 import { pathAclView, type AclEntry } from '@shuvix/chat-protocol/sessionAcl'
 import {
   clearReviewState,
@@ -183,6 +211,13 @@ import {
   type UserPolicyFile
 } from '@shuvix/agent-runtime'
 import type { AskInputRequest, InputRequest } from '@shuvix/chat-protocol/types/inputRequest'
+
+/** 主体去掉开放属性（`attrs`，惰性 getter，如 subject.bot）—— 这些用例只核对固定字段 */
+function coreSubject(subject: SecuritySubject): SecuritySubject {
+  return Object.fromEntries(
+    Object.entries(subject).filter(([key]) => key !== 'attrs')
+  ) as unknown as SecuritySubject
+}
 
 describe('agentActorOf', () => {
   it('TC-1 `shuvix-<profile>/<model>`：模型惰性取；缺元数据回落 shuvix-agent/unknown；取模型抛错或空白 → unknown；档案名空白归一为 -', () => {
@@ -752,7 +787,14 @@ describe('XS-36 assertSessionAccess —— 交给 enforceSession 的参数', () 
     expect(calls).toHaveLength(1)
     const [mode, object, opts] = calls[0]
     expect(mode).toBe('write')
-    expect(object).toStrictEqual({ sessionId: 'B', title: 'Plan the release', ownTurn: false })
+    expect(object).toStrictEqual({
+      sessionId: 'B',
+      title: 'Plan the release',
+      ownTurn: false,
+      // 宿主补的事实：读不到这条会话 → epoch 与空串
+      lastActiveAt: new Date(0).toISOString(),
+      bot: ''
+    })
     expect(opts).toStrictEqual({
       toolCallId: 'tc-xs36',
       taskId: 4,
@@ -766,11 +808,13 @@ describe('XS-36 assertSessionAccess —— 交给 enforceSession 的参数', () 
     expect((opts as { signal: AbortSignal }).signal).toBe(signal)
     expect(TOOL_ABORTED).toBe('Aborted')
     expect(runtime).toHaveBeenCalledTimes(1)
-    expect(runtime.mock.calls[0][0]).toStrictEqual({
+    expect(coreSubject(runtime.mock.calls[0][0] as SecuritySubject)).toStrictEqual({
       kind: 'agent',
       sessionId: 'caller',
       agentKind: 'root'
     })
+    // 开放属性 subject.bot：惰性，不是 bot 会话为空串
+    expect((runtime.mock.calls[0][0] as SecuritySubject).attrs?.bot).toBe('')
   })
 
   it.each<[string, string | undefined]>([
@@ -795,7 +839,13 @@ describe('XS-36 assertSessionAccess —— 交给 enforceSession 的参数', () 
       expect(calls).toHaveLength(1)
       const [mode, object, opts] = calls[0]
       expect(mode).toBe('read')
-      expect(object).toStrictEqual({ sessionId: 'B', title: '', ownTurn: true })
+      expect(object).toStrictEqual({
+        sessionId: 'B',
+        title: '',
+        ownTurn: true,
+        lastActiveAt: new Date(0).toISOString(),
+        bot: ''
+      })
       expect(opts).toStrictEqual({
         toolCallId: 'tc-xs36-blank',
         toolName: 'session',
@@ -849,6 +899,391 @@ describe('XS-36 assertSessionAccess —— 交给 enforceSession 的参数', () 
       preview: { kind: 'message', text: 'ship it' },
       session: { sessionId: 'B', title: 'Plan', access: 'write', operation: 'prompt-session' }
     })
+  })
+})
+
+/**
+ * subject.bot（TC-BOT）、会话客体的宿主事实（XS-37 / XS-38）与时间、目录事实变量（TC-VAR1）。
+ *
+ * botService 用真的（identityOf 的口径：会话行的 settings.bot → 那份 bot 文件的对象 id，文件没有 id 或已不在时退回
+ * 名字，不是 bot 会话为空串），只把 `get` 换成替身 —— 不扫磁盘。identityOf 按 bot 名缓存 2 秒，所以每条用例用
+ * 自己的 bot 名，互不串。会话行由 tc.sessionRows 喂（sessionDao.pick 的替身）。
+ */
+describe('TC-BOT / XS-37 / XS-38 / TC-VAR1 —— subject.bot、会话客体的宿主事实、vars.now 与目录变量', () => {
+  const runtime = vi.mocked(createSecurityContext)
+  const DAILY_ID = 'bot:builtin:daily'
+  /** botService.get 的替身数据：名字 → 对象 id（null = 文件里没有 shuvix-id）；不在表里 = 文件不在 */
+  let bots: Record<string, string | null> = {}
+  const usedSessions = new Set<string>()
+  const sid = (id: string): string => {
+    usedSessions.add(id)
+    return id
+  }
+  const HOUR = 3600_000
+  const iso = (ms: number): string => new Date(ms).toISOString()
+
+  /** 一条会话行：settings.bot（可选）+ 时刻 */
+  function row(
+    id: string,
+    init: { bot?: string; lastActiveAt?: number; createdAt?: number; parentId?: string } = {}
+  ): void {
+    tc.sessionRows[id] = {
+      id,
+      parentId: init.parentId ?? null,
+      settings: init.bot ? { bot: init.bot } : {},
+      ...(init.lastActiveAt === undefined ? {} : { lastActiveAt: init.lastActiveAt }),
+      ...(init.createdAt === undefined ? {} : { createdAt: init.createdAt })
+    }
+  }
+
+  /** 最近一次 createSecurityContext 收到的主体 */
+  const lastSubject = (): SecuritySubject =>
+    runtime.mock.calls[runtime.mock.calls.length - 1][0] as SecuritySubject
+
+  function userPolicy(fileName: string, md: string): UserPolicyFile {
+    const parsed = parsePolicyDefinitionFile(md, fileName.replace(/\.md$/, ''))
+    if (!parsed) throw new Error(`fixture policy ${fileName} does not parse`)
+    return { ...parsed, fileName }
+  }
+
+  /** 一份只有一条规则的用户策略 */
+  function onePolicy(name: string, scope: string[], rule: string[]): UserPolicyFile {
+    return userPolicy(
+      `${name}.md`,
+      [
+        '---',
+        'shuvix: policy v1',
+        `name: ${name}`,
+        'description: Test policy.',
+        'shuvix-policy-scope:',
+        ...scope.map((l) => `  ${l}`),
+        'shuvix-policy-rules:',
+        ...rule.map((l, i) => (i === 0 ? `  - ${l}` : `    ${l}`)),
+        '---',
+        ''
+      ].join('\n')
+    )
+  }
+
+  let getSpy: MockInstance<typeof botService.get>
+  let identitySpy: MockInstance<typeof botService.identityOf>
+
+  beforeEach(() => {
+    tc.sessionRows = {}
+    tc.userPolicies = []
+    tc.pathView.mockReset()
+    tc.sessionView.mockReset()
+    bots = {}
+    runtime.mockClear()
+    getSpy = vi.spyOn(botService, 'get').mockImplementation((name: string) =>
+      name in bots
+        ? ({
+            file: { name, ...(bots[name] === null ? {} : { objectId: bots[name] }) },
+            basePath: `/tmp/shuvix-bots/${name}.md`
+          } as never)
+        : null
+    )
+    identitySpy = vi.spyOn(botService, 'identityOf')
+    // 内置 id 只对 ShuviX 写下的那份文件成立（设置库里的认定表）：替身表里声明了内置 id 的那份就当是它写下的
+    botService.setBuiltinTrustStore({
+      get: () =>
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(bots)
+              .filter(([, id]) => id !== null && id.includes(':builtin:'))
+              .map(([name, id]) => [id, `/tmp/shuvix-bots/${name}.md`])
+          )
+        ),
+      set: () => {}
+    })
+  })
+
+  afterEach(() => {
+    getSpy.mockRestore()
+    identitySpy.mockRestore()
+    botService.setBuiltinTrustStore(null)
+    runtime.mockReset()
+    tc.sessionRows = {}
+    tc.userPolicies = []
+    vi.useRealTimers()
+    for (const id of usedSessions) {
+      clearReviewState(id)
+      clearSessionDecisions(id)
+    }
+    usedSessions.clear()
+  })
+
+  // ─── TC-BOT ───────────────────────────────────────────
+
+  it('TC-BOT1 subject.attrs.bot = botService.identityOf(ctx.sessionId)：有 id → 对象 id；文件没有 id / 文件已删 → 绑定的名字；不是 bot 会话 → 空串；读到 CEL 里就是 subject.bot', () => {
+    bots = { 'tcb1-daily': DAILY_ID, 'tcb1-plain': null }
+    row('tcb1-s-id', { bot: 'tcb1-daily' })
+    row('tcb1-s-noid', { bot: 'tcb1-plain' })
+    row('tcb1-s-gone', { bot: 'tcb1-gone' })
+    row('tcb1-s-none')
+    const cases: Array<[string, string]> = [
+      ['tcb1-s-id', DAILY_ID],
+      ['tcb1-s-noid', 'tcb1-plain'],
+      ['tcb1-s-gone', 'tcb1-gone'],
+      ['tcb1-s-none', ''],
+      // 会话行都不在
+      ['tcb1-s-missing', '']
+    ]
+    for (const [sessionId, expected] of cases) {
+      getDesktopSecurityContext({ sessionId: sid(sessionId) }, () => ({ workingDirectory: '/ws' }))
+      expect({ sessionId, bot: lastSubject().attrs?.bot }).toEqual({ sessionId, bot: expected })
+      expect(identitySpy).toHaveBeenLastCalledWith(sessionId)
+    }
+
+    // 进了 CEL：一条按 subject.bot 写的用户策略只落在日报 bot 的会话上
+    tc.userPolicies = [
+      onePolicy(
+        'no-daily-urls',
+        ['subject.kind: [agent]', 'object.type: [url]'],
+        ['effect: deny', 'action: [navigate]', `match: subject.bot == '${DAILY_ID}'`]
+      )
+    ]
+    const url = { type: 'url', url: 'https://example.com/', scheme: 'https', host: 'example.com' }
+    const effectFor = (sessionId: string): string =>
+      getDesktopSecurityContext({ sessionId }, () => ({ workingDirectory: '/ws' })).evaluate(
+        'navigate',
+        url
+      ).effect
+    expect(effectFor('tcb1-s-id')).toBe('deny')
+    expect(effectFor('tcb1-s-noid')).toBe('allow')
+    expect(effectFor('tcb1-s-gone')).toBe('allow')
+    expect(effectFor('tcb1-s-none')).toBe('allow')
+  })
+
+  it('TC-BOT2 惰性：建 context 不算；没有规则读 subject.bot 的判定（会话写、没有策略的 url）不调 identityOf；有规则读它（内置 daily-bot-access 的路径规则、按 subject.bot 写的用户策略）才调', () => {
+    bots = { 'tcb2-bot': 'bot:tcb2' }
+    row('tcb2-s', { bot: 'tcb2-bot' })
+    const ctx = getDesktopSecurityContext({ sessionId: sid('tcb2-s') }, () => ({
+      workingDirectory: '/ws'
+    }))
+    expect(identitySpy).not.toHaveBeenCalled()
+
+    // 会话写：daily-bot-access 的会话规则只管 read，ask-on-session-access 不读 subject.bot
+    expect(
+      ctx.evaluate('write', { type: 'session', sessionId: 'B', title: '', ownTurn: false }).effect
+    ).toBe('ask')
+    const url = { type: 'url', url: 'https://example.com/', scheme: 'https', host: 'example.com' }
+    expect(ctx.evaluate('navigate', url).effect).toBe('allow')
+    expect(identitySpy).not.toHaveBeenCalled()
+
+    // 路径读：内置 daily-bot-access#1 的 match 读 subject.bot
+    ctx.evaluate('read', { type: 'path', path: '/tmp/shuvix-tc-bot2-outside/a.txt' })
+    expect(identitySpy).toHaveBeenCalled()
+    expect(identitySpy.mock.calls.every(([id]) => id === 'tcb2-s')).toBe(true)
+
+    // url 加上一条读 subject.bot 的用户策略之后，同一个 context 的 url 判定也调它
+    identitySpy.mockClear()
+    tc.userPolicies = [
+      onePolicy(
+        'tcb2-url',
+        ['subject.kind: [agent]', 'object.type: [url]'],
+        ['effect: deny', 'action: [navigate]', "match: subject.bot == 'bot:tcb2'"]
+      )
+    ]
+    expect(ctx.evaluate('navigate', url).effect).toBe('deny')
+    expect(identitySpy).toHaveBeenCalledWith('tcb2-s')
+  })
+
+  it('TC-BOT3 bot 会话下的子会话 subject.bot 为空串（settings.bot 不沿父链继承）：daily-bot-access 的跟踪项目录放行只落在 bot 会话自己的根 agent 上', () => {
+    bots = { 'tcb3-daily': DAILY_ID }
+    row('tcb3-parent', { bot: 'tcb3-daily' })
+    row('tcb3-child', { parentId: 'tcb3-parent' })
+    const cfg = (): ProjectConfig => ({ workingDirectory: '/ws' })
+    const parent = getDesktopSecurityContext({ sessionId: sid('tcb3-parent') }, cfg)
+    expect(lastSubject().attrs?.bot).toBe(DAILY_ID)
+    const child = getDesktopSecurityContext({ sessionId: sid('tcb3-child') }, cfg)
+    expect(lastSubject().attrs?.bot).toBe('')
+
+    const note = { type: 'path', path: '/tmp/shuvix-tracking/release.md' }
+    const parentWrite = parent.evaluate('write', note)
+    expect({ effect: parentWrite.effect, winning: parentWrite.winning }).toEqual({
+      effect: 'allow',
+      winning: 'daily-bot-access#1'
+    })
+    // （只比写：这里的跟踪项目录替身在 /tmp 下，家目录外的读本来就不问）
+    const childWrite = child.evaluate('write', note)
+    expect({ effect: childWrite.effect, winning: childWrite.winning }).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-external-path#1'
+    })
+    // 子会话的 identityOf 只看它自己那一行，从不去问父会话绑的 bot
+    expect(getSpy).not.toHaveBeenCalledWith('tcb3-child')
+    expect(identitySpy.mock.calls.filter(([id]) => id === 'tcb3-child').length).toBeGreaterThan(0)
+  })
+
+  // ─── XS-37 / XS-38 ────────────────────────────────────
+
+  it('XS-37 sessionObjectFacts：有 lastActiveAt → 它的 ISO；没有 → createdAt 的 ISO；会话行不在 → epoch 与空串；bot = identityOf(目标会话)', () => {
+    const T = Date.UTC(2026, 9, 24, 10, 0, 0)
+    bots = { 'xs37-daily': DAILY_ID, 'xs37-plain': null }
+    row('xs37-active', { lastActiveAt: T, createdAt: T - 5 * HOUR, bot: 'xs37-daily' })
+    row('xs37-fresh', { createdAt: T - 2 * HOUR, bot: 'xs37-plain' })
+    row('xs37-human', { lastActiveAt: T - HOUR, createdAt: T - 9 * HOUR })
+
+    expect(sessionObjectFacts('xs37-active')).toStrictEqual({
+      lastActiveAt: '2026-10-24T10:00:00.000Z',
+      bot: DAILY_ID
+    })
+    expect(sessionObjectFacts('xs37-fresh')).toStrictEqual({
+      lastActiveAt: iso(T - 2 * HOUR),
+      bot: 'xs37-plain'
+    })
+    expect(sessionObjectFacts('xs37-human')).toStrictEqual({ lastActiveAt: iso(T - HOUR), bot: '' })
+    expect(sessionObjectFacts('xs37-missing')).toStrictEqual({
+      lastActiveAt: '1970-01-01T00:00:00.000Z',
+      bot: ''
+    })
+    expect(identitySpy.mock.calls.map(([id]) => id)).toEqual([
+      'xs37-active',
+      'xs37-fresh',
+      'xs37-human',
+      'xs37-missing'
+    ])
+  })
+
+  it('XS-38 assertSessionAccess 恒用宿主的事实覆盖调用方给的 lastActiveAt / bot（会话行在与不在两种）', async () => {
+    const T = Date.UTC(2026, 9, 20, 8, 30, 0)
+    bots = { 'xs38-bot': 'bot:xs38' }
+    row('xs38-target', { lastActiveAt: T, createdAt: T - HOUR, bot: 'xs38-bot' })
+    const forged = { lastActiveAt: '2099-01-01T00:00:00.000Z', bot: DAILY_ID }
+
+    for (const [target, expected] of [
+      ['xs38-target', { lastActiveAt: iso(T), bot: 'bot:xs38' }],
+      ['xs38-missing', { lastActiveAt: new Date(0).toISOString(), bot: '' }]
+    ] as const) {
+      const calls: unknown[][] = []
+      runtime.mockImplementationOnce(
+        () =>
+          ({
+            enforceSession: async (...args: unknown[]) => {
+              calls.push(args)
+            }
+          }) as unknown as SecurityContext
+      )
+      await assertSessionAccess(
+        { sessionId: 'xs38-caller' },
+        'read',
+        { sessionId: target, title: 'T', ownTurn: false, ...forged } as never,
+        { toolCallId: 'tc-xs38', toolName: 'session', operation: 'read-session' }
+      )
+      expect(calls).toHaveLength(1)
+      expect(calls[0][1]).toStrictEqual({
+        sessionId: target,
+        title: 'T',
+        ownTurn: false,
+        ...expected
+      })
+    }
+  })
+
+  it('XS-38 真实的安全模块：日报 bot 的根 agent 读一条最近的会话 —— 调用方谎报「很久没动」也照样免询问；读一条 8 天没动的 —— 谎报「刚动过」也照样要问（没有询问通道 → 拒绝）', async () => {
+    const now = Date.now()
+    bots = { 'xs38r-daily': DAILY_ID }
+    row('xs38r-bot', { bot: 'xs38r-daily' })
+    row('xs38r-recent', { lastActiveAt: now - HOUR })
+    row('xs38r-old', { lastActiveAt: now - 200 * HOUR })
+    const ctx = { sessionId: sid('xs38r-bot') }
+    const opts = { toolCallId: 'tc-xs38r', toolName: 'session', operation: 'read-session' }
+
+    await expect(
+      assertSessionAccess(
+        ctx,
+        'read',
+        {
+          sessionId: 'xs38r-recent',
+          title: 'recent',
+          ownTurn: false,
+          lastActiveAt: iso(0)
+        } as never,
+        opts
+      )
+    ).resolves.toBeUndefined()
+    expect(getSessionDecisions('xs38r-bot').map((r) => [r.effect, r.winning])).toEqual([
+      ['allow', 'daily-bot-access#0']
+    ])
+
+    await expect(
+      assertSessionAccess(
+        ctx,
+        'read',
+        { sessionId: 'xs38r-old', title: 'old', ownTurn: false, lastActiveAt: iso(now) } as never,
+        { ...opts, toolCallId: 'tc-xs38r-old' }
+      )
+    ).rejects.toThrow('there is no way to ask: session "old" (xs38r-old)')
+    // 决策日志新 → 旧
+    expect(getSessionDecisions('xs38r-bot').map((r) => [r.effect, r.winning])).toEqual([
+      ['ask', 'ask-on-session-access#0'],
+      ['allow', 'daily-bot-access#0']
+    ])
+  })
+
+  // ─── TC-VAR1 ──────────────────────────────────────────
+
+  it('TC-VAR1 vars.now 是 UTC 的 ISO、每次评估现取；vars.dailyDir / vars.trackingDir = getDefaultDailyDir() / getDefaultTrackingDir()', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const T0 = Date.UTC(2026, 9, 24, 10, 0, 0)
+    vi.setSystemTime(T0)
+    const provider = makeDesktopSecurityProvider(
+      { sessionId: 'tcvar-s', requestUserInput: undefined },
+      () => ({ workingDirectory: '/ws' })
+    )
+    const first = provider.getVars() as Record<string, unknown>
+    expect(first.now).toBe('2026-10-24T10:00:00.000Z')
+    expect(first.dailyDir).toBe('/tmp/shuvix-daily')
+    expect(first.trackingDir).toBe('/tmp/shuvix-tracking')
+    vi.setSystemTime(T0 + 90_000)
+    expect((provider.getVars() as Record<string, unknown>).now).toBe('2026-10-24T10:01:30.000Z')
+
+    // 真实评估：同一个 context、同一个客体，只是时间往后走了 8 天 —— 按 vars.now 比的放行跟着失效
+    vi.setSystemTime(T0)
+    bots = { 'tcvar-daily': DAILY_ID }
+    row('tcvar-bot', { bot: 'tcvar-daily' })
+    const ctx = getDesktopSecurityContext({ sessionId: sid('tcvar-bot') }, () => ({
+      workingDirectory: '/ws'
+    }))
+    const target = {
+      type: 'session',
+      sessionId: 'tcvar-target',
+      title: '',
+      ownTurn: false,
+      lastActiveAt: iso(T0 - HOUR),
+      bot: ''
+    }
+    const judged = (): { effect: string; winning: string } => {
+      const d = ctx.evaluate('read', target)
+      return { effect: d.effect, winning: d.winning }
+    }
+    expect(judged()).toEqual({ effect: 'allow', winning: 'daily-bot-access#0' })
+    vi.setSystemTime(T0 + 8 * 24 * HOUR)
+    expect(judged()).toEqual({ effect: 'ask', winning: 'ask-on-session-access#0' })
+  })
+
+  it('TC-VAR1 (pin) 网络主体的宿主变量里同样有 now / dailyDir / trackingDir', () => {
+    const warnings: string[] = []
+    const policy = onePolicy(
+      'tcvar-net',
+      ['subject.kind: [network]'],
+      [
+        'effect: deny',
+        'action: [read]',
+        "match: >-\n      has(vars.now) && has(vars.dailyDir) && has(vars.trackingDir) && vars.dailyDir == '/tmp/shuvix-daily' && vars.trackingDir == '/tmp/shuvix-tracking' && timestamp(vars.now) > timestamp('2020-01-01T00:00:00Z')"
+      ]
+    )
+    const ctx = getDesktopNetworkSecurityContext(
+      { kind: 'network', sessionId: '', attrs: {} },
+      { userPolicies: [policy], logger: { warn: (m: string) => warnings.push(m) } as never }
+    )
+    const d = ctx.evaluate('read', { type: 'path', path: '/tmp/shuvix-tc-var-net/a.txt' })
+    expect({ effect: d.effect, winning: d.winning }).toEqual({
+      effect: 'deny',
+      winning: 'tcvar-net#0'
+    })
+    expect(warnings).toEqual([])
   })
 })
 
@@ -945,7 +1380,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
       const sessionId = sid(id)
       const seen: SecuritySubject[] = []
       setPermissionReviewer(async (event) => {
-        seen.push(event.request.subject)
+        seen.push(coreSubject(event.request.subject))
         return answer('allow')
       })
 
@@ -1197,7 +1632,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
         const sessionId = sid('h11-53')
         const seen: SecuritySubject[] = []
         setPermissionReviewer(async (event) => {
-          seen.push(event.request.subject)
+          seen.push(coreSubject(event.request.subject))
           return answer('allow')
         })
         let locked = true
@@ -1227,7 +1662,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
       const sessionId = sid('h11-53-l1')
       const seen: SecuritySubject[] = []
       setPermissionReviewer(async (event) => {
-        seen.push(event.request.subject)
+        seen.push(coreSubject(event.request.subject))
         return answer('allow')
       })
       const ctx = getDesktopSecurityContext({ sessionId, agentOf: () => WORK }, cfg)
@@ -1252,7 +1687,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
         const sessionId = sid('p2-06-17')
         const seen: SecuritySubject[] = []
         setPermissionReviewer(async (event) => {
-          seen.push(event.request.subject)
+          seen.push(coreSubject(event.request.subject))
           return answer('allow')
         })
         const agentOf = vi.fn((conversationId: number) => IDENTITIES[conversationId])
@@ -1274,7 +1709,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
       const sessionId = sid('p2-06-17-l1')
       const seen: SecuritySubject[] = []
       setPermissionReviewer(async (event) => {
-        seen.push(event.request.subject)
+        seen.push(coreSubject(event.request.subject))
         return answer('allow')
       })
       const ctx = getDesktopSecurityContext(
@@ -1323,7 +1758,7 @@ describe('TC-SUBJ / TC-RV 桌面主体与审查接缝', () => {
     const WORK: ToolAgentIdentity = { profileName: 'work', kind: 'root' }
     const seen: SecuritySubject[] = []
     const reviewer = vi.fn<Reviewer>(async (event) => {
-      seen.push(event.request.subject)
+      seen.push(coreSubject(event.request.subject))
       return answer('allow')
     })
     setPermissionReviewer(reviewer)

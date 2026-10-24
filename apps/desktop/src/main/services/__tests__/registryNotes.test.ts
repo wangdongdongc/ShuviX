@@ -37,7 +37,9 @@ const tmp = vi.hoisted(() => {
     hook: 'hooks',
     hookBuiltin: 'builtin-hooks',
     // 日报目录不是注册表，但经笔记本落盘同样要回执（daily.changed，日历跟着更新）
-    daily: 'daily'
+    daily: 'daily',
+    // 跟踪项目录（实验）同理（tracking.changed）
+    tracking: 'tracking'
   }
   return {
     state,
@@ -53,7 +55,8 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinPoliciesDir: () => tmp.dirOf('policyBuiltin'),
   getDefaultHooksDir: () => tmp.dirOf('hook'),
   getBuiltinHooksDir: () => tmp.dirOf('hookBuiltin'),
-  getDefaultDailyDir: () => tmp.dirOf('daily')
+  getDefaultDailyDir: () => tmp.dirOf('daily'),
+  getDefaultTrackingDir: () => tmp.dirOf('tracking')
 }))
 vi.mock('../../dao/projectDao', () => ({
   projectDao: { findById: vi.fn(), insert: vi.fn(), update: vi.fn() }
@@ -550,6 +553,60 @@ describe('observeRegistryWrite', () => {
       expect(publish.mock.calls).toEqual([[{ type: 'daily.changed' }]])
       expect(botService.noteWriting).not.toHaveBeenCalled()
       expect(botService.noteWritten).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('RN-19 跟踪项目录下的 .md：值照常透传；连写三笔 → 合并窗口过后只广播一次 tracking.changed；不惊动 botService；写失败也广播（finally）', async () => {
+    // 侧栏「跟踪项」分组的标题跟着笔记本里改的一级标题走（实验）；与日报同一套合并窗口
+    vi.useFakeTimers()
+    try {
+      const path = join(tmp.dirOf('tracking'), 'a.md')
+      const value = { ok: true as const }
+      const write = vi.fn(async () => value)
+
+      for (let i = 0; i < 3; i++) {
+        await expect(observeRegistryWrite(path, write)).resolves.toBe(value)
+      }
+      expect(write).toHaveBeenCalledTimes(3)
+      // 合并窗口未到：一笔都还没广播
+      expect(publish).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(299)
+      expect(publish).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+      expect(publish.mock.calls).toEqual([[{ type: 'tracking.changed' }]])
+      expect(botService.noteWriting).not.toHaveBeenCalled()
+      expect(botService.noteWritten).not.toHaveBeenCalled()
+
+      // 写失败（reject）：拒绝原样抛出，窗口过后照样广播一次
+      publish.mockClear()
+      const boom = new Error('disk full')
+      await expect(
+        observeRegistryWrite(path, async () => {
+          throw boom
+        })
+      ).rejects.toBe(boom)
+      vi.advanceTimersByTime(300)
+      expect(publish.mock.calls).toEqual([[{ type: 'tracking.changed' }]])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('RN-19b [钉现状] 跟踪项目录的子目录里的 .md：不广播 tracking.changed（侧栏只列顶层文件），值照常透传', async () => {
+    vi.useFakeTimers()
+    try {
+      const value = { ok: true as const }
+      const write = vi.fn(async () => value)
+
+      await expect(
+        observeRegistryWrite(join(tmp.dirOf('tracking'), 'sub', 'a.md'), write)
+      ).resolves.toBe(value)
+      expect(write).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(1000)
+      expect(publish).not.toHaveBeenCalled()
+      expect(botService.noteWriting).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }

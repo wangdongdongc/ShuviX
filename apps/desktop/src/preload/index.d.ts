@@ -1,4 +1,6 @@
 import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
+import type { TriggerSourceStatus } from '@shuvix/chat-protocol/triggerSources'
+import type { TrackingItem } from '@shuvix/chat-protocol/trackingNotes'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { MdMetaNoteView, MdMetaWriteResult } from '@shuvix/chat-protocol/mdMeta'
@@ -590,6 +592,16 @@ declare global {
        */
       openBuiltinNote: (params: { name: string; title?: string }) => Promise<SessionInfo>
       openFolder: () => Promise<{ success: boolean }>
+    }
+    /** 跟踪项（实验）：侧栏 Library 的「跟踪项」分组 */
+    tracking: {
+      list: () => Promise<TrackingItem[]>
+      openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
+      openFolder: () => Promise<void>
+    }
+    /** 触发源（实验）：设置 → 触发源页 */
+    trigger: {
+      status: () => Promise<TriggerSourceStatus[]>
     }
     bot: {
       /** 合法 + 非法两拨一次取齐（侧栏一次扫描就够） */

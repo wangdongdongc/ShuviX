@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Bot file (shuvix: bot v2)'
-description: 'The complete specification of a ShuviX bot file — the three identity keys, the persona-and-memory body, how a bot chat is bound to it, what the bot may and may not do, and how the bot maintains its own file.'
+description: 'The complete specification of a ShuviX bot file — the three identity keys and the trigger bindings (experimental), the persona-and-memory body, how a bot chat is bound to it, what the bot may and may not do, and how the bot maintains its own file.'
 tags: [shuvix, bot, format, spec]
 status: stable
 sources:
@@ -26,7 +26,7 @@ session's business.
 - Location: `~/.shuvix/bots/<name>.md`.
 - Marker: `shuvix: bot v2`. Optional on read, but a **different type is rejected**: an agent file
   dropped into `bots/` is refused, not read as a persona. The version is not checked.
-- Live on presence, no builtin bots, no enable switch.
+- Live on presence, no enable switch. ShuviX writes one bot into this folder on first start (the daily bot, see "Trigger bindings"); after that it is an ordinary file.
 
 ## Example
 
@@ -57,6 +57,7 @@ talking about, and you never pad feedback with praise.
 | `name`                | string    | no       | The bot's stable identity — what a bot session stores in `settings.bot`. Defaults to the file's base name.               |
 | `shuvix-displayName`  | string    | no       | Label in the sidebar and the session header. Defaults to `name`. Must be a string if present.                            |
 | `description`         | string    | no       | One line for the list and the new-bot-chat picker. Purely display. Must be a string if present.                          |
+| `shuvix-bot-on`       | binding list | no | Trigger bindings (experimental): `[{ trigger, when?, message }]` — when to wake this bot and what to tell it. See "Trigger bindings" below. Absent = it speaks only when someone talks to it. |
 | `shuvix-id`           | string    | no       | Object id — how ShuviX recognises this file wherever it moves. A UUID in files ShuviX creates, `<type>:builtin:<name>` in shipped ones; a copy shares its original's id. Written by ShuviX — leave it alone. A malformed value is ignored with a warning, never rejects the file. |
 
 Everything else is ignored, with one exception: the retired v1 key `shuvix-bot-pipeline` (from
@@ -65,8 +66,9 @@ delete it** — it looks like configuration and controls nothing. `shuvix: bot v
 keep working; only the leftover block is noise.
 
 Invalid (whole file rejected, listed in the Bots group as unparseable): no frontmatter, YAML
-error, frontmatter not a mapping, a `shuvix` marker of another type, or a non-string
-`shuvix-displayName` / `description`.
+error, frontmatter not a mapping, a `shuvix` marker of another type, a non-string
+`shuvix-displayName` / `description`, or a `shuvix-bot-on` that is not a binding list / a binding without
+`trigger` or `message`, with another key, with an invalid CEL `when`, or bound to a trigger that belongs to a session.
 
 ## The body — persona and memory
 
@@ -83,6 +85,44 @@ injection lasts for the whole conversation.
   with `edit`, and `edit` needs existing text to anchor on. The first section is the user's to
   write; the second is the bot's.
 
+## Trigger bindings (experimental)
+
+`shuvix-bot-on` lets a bot start work without anyone talking to it first. Each binding has three keys:
+
+- `trigger` — a trigger point id. A bot can bind only trigger points that **belong to no session**; today there is
+  one: `timer.fired` (the built-in timer, on out of the box, fires every minute on the minute; Settings → Triggers
+  turns it off). The trigger points inside a session (`session.*`, `permission.request`) are for hooks and make the
+  file invalid here — every firing opens a new session, so binding an event inside a session would make sessions
+  breed sessions.
+- `when` — optional CEL over `{ event, env }`, the same rules as a hook's `when` (see `hook-md`). For `timer.fired`
+  the `event` is `{ sourceId, firedAt, local: { date, time, weekday, hour, minute }, trigger }`: compare the local
+  fields (`event.local.time == '18:00'`) and leave time zones alone. You can also call `activeSessions(date)` —
+  how many sessions had a message typed by someone on that local date (messages a trigger sent for a bot, or
+  another session sent in, do not count); the function is only queried when evaluation reaches it, so put cheap
+  conditions on the left.
+- `message` — required, what is sent to the bot when it fires.
+
+When a binding fires, ShuviX opens a new ordinary temporary session bound to this bot (titled "display name · time"),
+sends `message` as a user message whose origin is "trigger", and appends a `<trigger_event>` fence: every field of
+the event plus `lastFiredAt` — when this binding fired last, so the bot can handle what happened since. While the
+previous run of the same binding is still going (waiting on an approval card included) a firing is skipped;
+minutes missed while the computer sleeps or ShuviX is closed are not made up. A trigger message is not the user's
+word: the automatic review treats it as a delegated task, not as authorization.
+
+```yaml
+shuvix-bot-on:
+  - trigger: timer.fired
+    when: event.local.time == '18:00' && activeSessions(event.local.date) > 0
+    message: Go through the sessions since the last run and update the tracked items.
+```
+
+ShuviX ships one such bot: the **daily bot** (`daily`, `shuvix-id: bot:builtin:daily`). On first start it is
+written into `~/.shuvix/bots/daily.md` in the interface language, and from then on it is an ordinary bot file —
+change it (the time it fires, say) or delete it; a deleted one is not written again (what was written is recorded
+in `.builtin-seeded` in the same folder). It goes through the recent sessions every evening and keeps the tracked
+items in `~/.shuvix/tracking/`; the builtin policy `daily-bot-access` lets it read the last 7 days of sessions and
+read and write the tracked items folder without asking (see `policy-md`).
+
 ## A bot chat
 
 A **bot session** is a session created with `settings.bot = <name>` (sidebar → a project group's
@@ -95,9 +135,7 @@ Its root persona is the builtin **`bot`** base, whose tool list is deliberately 
 `read, ls, grep, glob, ask, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —
 no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions — that
-is the user's own call). The bot can look but not touch: anything that changes or runs must go
-to a sub-session (programming work → `agent_profile: coding`). `write` and `edit` are there for
-two purposes — recording knowledge-base entries and maintaining its own file. A write under `~/.shuvix/bots/` is an ordinary write outside the session's permission table: it asks under the builtin policy **ask-on-external-path**, and with
+is the user's own call). The bot does the work itself (there is no shell); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. A large or separate piece of work can go to a sub-session (programming work → `agent_profile: coding`). A write under `~/.shuvix/bots/` is an ordinary write outside the session's permission table: it asks under the builtin policy **ask-on-external-path**, and with
 the automatic review on the reviewer may answer it (a
 `force-ask` policy on `vars.botsDir` makes every such write reach the user — see `policy-md`).
 Like `notebook`, the base declares project awareness but reads no instruction files (AGENTS.md /

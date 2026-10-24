@@ -2,7 +2,8 @@
  * botService —— bot 注册表（宿主层）。
  *
  * `~/.shuvix/bots/<name>.md` 纯 md 驱动：文件存在且解析得过就是活的 —— 没有启用开关、
- * 没有旁路配置、没有数据库表、也不内置任何 bot。**编辑不经过本服务**（打开一份 bot 就是打开
+ * 没有旁路配置、没有数据库表；随应用提供的 bot（日报 bot）第一次启动时写进目录一次，之后与用户自己的
+ * bot 没有区别。**编辑不经过本服务**（打开一份 bot 就是打开
  * 它的笔记本会话，改名迁移挂在笔记本写入的回执上），于是本文件按剩下的职责分组：
  *
  *   PSv-1…8   **扫描与解析**：目录里有什么、坏文件去哪、一条会话绑的是谁；
@@ -11,6 +12,8 @@
  *   PSv-20…26 **增删与按文件名寻址**：新建的文件名派生、删除的边界、文件名白名单、广播；
  *   PSv-27…40 **改名观察**：笔记本写入的回执（noteWriting / noteWritten）与每一次扫描怎样把
  *              会话绑定从旧名跟到新名、哪些情况必须不迁，以及 `bot.changed` 的合并窗口。
+ *   PSv-ID    **对象 id**：新建铸 id、写坏的 id；identityOf（策略的 subject.bot / object.bot）与它的 2 s 缓存；
+ *   PSv-SEED  **随应用提供的 bot**：seedBuiltinBots 每个只写一次（`.builtin-seeded`），同名 / 同 id 的不覆盖。
  *
  * **fs 是真的** —— 扫描扫的是真目录，换成假 fs 一条也测不到。
  * `readFileSync` / `existsSync` 只是套了一层可数的壳（同
@@ -53,6 +56,8 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({ shell: { openPath: vi.fn(async () => '') } }))
+// 设置库换成内存表：内置 id 的认定（BUILTIN_FILES_KEY）写在这里（经 setBuiltinTrustStore 注入，见 PSv-TRUST）
+const settingsStore = vi.hoisted(() => new Map<string, string>())
 vi.mock('../../utils/paths', () => ({ getDefaultBotsDir: () => dirs.bots }))
 vi.mock('../../dao/sessionDao', () => ({
   sessionDao: {
@@ -79,7 +84,8 @@ vi.mock('fs', async (importOriginal) => {
   }
 })
 
-import { botService } from '../botService'
+import { BUILTIN_BOT_SEEDS } from '@shuvix/agent-runtime'
+import { botService, BUILTIN_FILES_KEY, BUILTIN_SEED_MARKER } from '../botService'
 import { appEventBus } from '../../utils/appEventBus'
 
 /** 一份最小可解析的 bot md */
@@ -924,5 +930,308 @@ describe('PSv-ID —— 对象 id（shuvix-id）', () => {
     const entry = botService.get('scout')
     expect(entry).not.toBeNull()
     expect(entry!.file.objectId).toBeUndefined()
+  })
+})
+
+// ────────────────────── PSv-ID4：一条会话的 bot 身份 ──────────────────────
+
+/**
+ * identityOf —— 安全策略的 `subject.bot` / 会话客体的 `object.bot`：bot 文件的对象 id（改名不变），文件没有 id
+ * 或已不在时退回绑定的名字，不是 bot 会话为空串。同一个名字 2 s 内复用上一次的扫描结果（策略每检查一次文件读写
+ * 都可能读到它）。botService 是进程内单例、缓存跨用例存活 —— 每条用例用自己没用过的 bot 名字。
+ */
+describe('PSv-ID4 —— identityOf', () => {
+  const U1 = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10'
+  const U2 = '0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f11'
+  const withId = (name: string, id: string): string =>
+    md(name).replace('shuvix: bot v2\n', `shuvix: bot v2\nshuvix-id: ${id}\n`)
+  const bindTo = (bot: string | undefined): void => {
+    mocks.pick.mockReturnValue(bot === undefined ? { settings: {} } : { settings: { bot } })
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('PSv-ID4 有 id → id；没有 id → 名字；绑定的文件已删 → 名字；不是 bot 会话 / 会话不在 → 空串', () => {
+    put('id4-ranger', withId('id4-ranger', U1))
+    put('id4-plain', md('id4-plain'))
+
+    bindTo('id4-ranger')
+    expect(botService.identityOf('s1')).toBe(U1)
+    bindTo('id4-plain')
+    expect(botService.identityOf('s1')).toBe('id4-plain')
+    bindTo('id4-ghost')
+    expect(botService.identityOf('s1')).toBe('id4-ghost')
+    bindTo(undefined)
+    expect(botService.identityOf('s1')).toBe('')
+    mocks.pick.mockReturnValue({ settings: { bot: '  ' } })
+    expect(botService.identityOf('s1')).toBe('')
+    mocks.pick.mockReturnValue(undefined)
+    expect(botService.identityOf('gone')).toBe('')
+    // 不记日志（每次策略求值都可能调到）
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it('PSv-ID4b 缓存按 bot 名字 2 s：期间改了 id 仍回旧值、不读盘；满 2 s 才重扫看到新 id；同名的别的会话共用这一份', () => {
+    let now = Date.now() + 10_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const file = put('id4-cachey', withId('id4-cachey', U1))
+    bindTo('id4-cachey')
+    expect(botService.identityOf('s1')).toBe(U1)
+
+    writeFileSync(file, withId('id4-cachey', U2))
+    vi.mocked(readFileSync).mockClear()
+    now += 1999
+    expect(botService.identityOf('s1')).toBe(U1)
+    expect(botService.identityOf('s2')).toBe(U1)
+    expect(vi.mocked(readFileSync)).not.toHaveBeenCalled()
+
+    now += 1
+    expect(botService.identityOf('s1')).toBe(U2)
+    expect(vi.mocked(readFileSync)).toHaveBeenCalled()
+  })
+})
+
+// ────────────────────── PSv-SEED：随应用提供的 bot ──────────────────────
+
+/**
+ * seedBuiltinBots —— 随应用提供的 bot（今天只有日报 bot `daily`）按界面语言写进 bots 目录，每个**只写一次**：
+ * 写过哪些记在 `.builtin-seeded`（一行一个名字）；目录里已有同名或同 id 的 bot 也只记一笔、不覆盖；删了不再补。
+ */
+describe('PSv-SEED —— 随应用提供的 bot 只写一次', () => {
+  const SEED = BUILTIN_BOT_SEEDS[0]
+  const markerPath = (): string => join(dirs.bots, BUILTIN_SEED_MARKER)
+  const dailyPath = (): string => join(dirs.bots, 'daily.md')
+  const marker = (): string => readFileSync(markerPath(), 'utf-8')
+  /** 原子写里写 bot 文件的那几笔（不含记录文件） */
+  const botWrites = (): unknown[][] =>
+    mocks.atomicWrite.mock.calls.filter((c) => String(c[0]) !== markerPath())
+
+  it('PSv-SEED1 全新（bots 目录都没有）：建目录、按语言原子写 daily.md、记录文件 = `daily\\n`、广播一次 bot.changed；get 读回内置 id', async () => {
+    rmSync(dirs.bots, { recursive: true, force: true })
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+
+    expect(SEED.name).toBe('daily')
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(SEED.render('en'))
+    expect(botWrites()).toEqual([[dailyPath(), SEED.render('en')]])
+    expect(mocks.atomicWrite).toHaveBeenCalledWith(markerPath(), 'daily\n')
+    expect(marker()).toBe('daily\n')
+    expect(n).toBe(1)
+    expect(botService.get('daily')!.file.objectId).toBe('bot:builtin:daily')
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it('PSv-SEED1b 写的是给定界面语言那一份', () => {
+    botService.seedBuiltinBots('zh')
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(SEED.render('zh'))
+    expect(SEED.render('zh')).not.toBe(SEED.render('en'))
+  })
+
+  it('PSv-SEED2 记录里已有 daily、文件被删了：什么都不写、不广播（删除是永久的）', async () => {
+    putFile(BUILTIN_SEED_MARKER, 'daily\n')
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+    expect(existsSync(dailyPath())).toBe(false)
+    expect(mocks.atomicWrite).not.toHaveBeenCalled()
+    expect(marker()).toBe('daily\n')
+    expect(n).toBe(0)
+  })
+
+  it('PSv-SEED3 用户自己有一个叫 daily 的 bot（别的 id）：原封不动，只记一笔，不广播', async () => {
+    const mine = md('daily', { body: '我自己的 daily' }).replace(
+      'shuvix: bot v2\n',
+      'shuvix: bot v2\nshuvix-id: 0199d3a2-7b3e-7c4d-9a1f-2e5b8c7d6f10\n'
+    )
+    put('daily', mine)
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(mine)
+    expect(botWrites()).toEqual([])
+    expect(marker()).toBe('daily\n')
+    expect(n).toBe(0)
+  })
+
+  it('PSv-SEED4 带着 `shuvix-id: bot:builtin:daily` 改了名的那份在：不写 daily.md，只记一笔', async () => {
+    const renamed = SEED.render('en').replace(/^name: daily$/m, 'name: my-daily')
+    put('my-daily', renamed)
+    expect(botService.get('my-daily')!.file.objectId).toBe('bot:builtin:daily')
+
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+    expect(existsSync(dailyPath())).toBe(false)
+    expect(botWrites()).toEqual([])
+    expect(marker()).toBe('daily\n')
+    expect(n).toBe(0)
+  })
+
+  it('PSv-SEED5 目录里已有一份解析不过的 daily.md：不覆盖（existsSync 兜底），只记一笔', () => {
+    put('daily', '这根本不是一份 bot md')
+    botService.seedBuiltinBots('en')
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe('这根本不是一份 bot md')
+    expect(botWrites()).toEqual([])
+    expect(marker()).toBe('daily\n')
+  })
+
+  it('PSv-SEED6 名字叫 daily 的两份（文件名都不是 daily.md，一份生效一份被遮蔽）：不写，只记一笔', () => {
+    put('a', md('daily', { body: 'A' }))
+    put('b', md('daily', { body: 'B' }))
+    const { valid, shadowed } = botService.listWithInvalid()
+    expect(valid.map((e) => e.file.name)).toEqual(['daily'])
+    expect(shadowed.map((e) => e.file.name)).toEqual(['daily'])
+
+    botService.seedBuiltinBots('en')
+    expect(existsSync(dailyPath())).toBe(false)
+    expect(botWrites()).toEqual([])
+    expect(marker()).toBe('daily\n')
+  })
+
+  it('PSv-SEED7 写 daily.md 失败：warn、这个名字不记（下次启动重试）；记录文件照写（其余名字保留）；不广播', async () => {
+    putFile(BUILTIN_SEED_MARKER, 'other\n')
+    const realAtomic =
+      await vi.importActual<typeof import('../../utils/atomicWrite')>('../../utils/atomicWrite')
+    mocks.atomicWrite.mockImplementation((path: string, data: string) => {
+      if (path === dailyPath()) throw new Error('EACCES: permission denied')
+      return realAtomic.writeFileAtomic(path, data)
+    })
+    try {
+      const n = await countChanged(() => botService.seedBuiltinBots('en'))
+      expect(n).toBe(0)
+      expect(existsSync(dailyPath())).toBe(false)
+      expect(marker()).toBe('other\n')
+      expect(mocks.warn.mock.calls.flat().join(' ')).toContain('daily')
+    } finally {
+      mocks.atomicWrite.mockImplementation(realAtomic.writeFileAtomic)
+    }
+
+    // 下次启动重试：这回写成了
+    botService.seedBuiltinBots('en')
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(SEED.render('en'))
+    expect(marker()).toBe('daily\nother\n')
+  })
+
+  it('PSv-SEED8 记录文件读不出来（那个路径是个目录）：warn，什么都不写', async () => {
+    mkdirSync(markerPath())
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+    expect(mocks.warn).toHaveBeenCalled()
+    expect(mocks.atomicWrite).not.toHaveBeenCalled()
+    expect(existsSync(dailyPath())).toBe(false)
+    expect(n).toBe(0)
+  })
+
+  it('PSv-SEED9 记录里的空行 / CRLF / 不认识的名字：原样保留、排序，补上 daily', () => {
+    putFile(BUILTIN_SEED_MARKER, 'zeta\r\n\r\n  alpha  \n\n')
+    botService.seedBuiltinBots('en')
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(SEED.render('en'))
+    expect(marker()).toBe('alpha\ndaily\nzeta\n')
+  })
+
+  it('PSv-SEED10 幂等：第二次调零写入、零广播；用户对写进去的那份的修改保留', async () => {
+    botService.seedBuiltinBots('en')
+    const edited = readFileSync(dailyPath(), 'utf-8').replace(
+      /^shuvix-displayName: .*$/m,
+      'shuvix-displayName: 我的日报'
+    )
+    writeFileSync(dailyPath(), edited)
+    mocks.atomicWrite.mockClear()
+
+    const n = await countChanged(() => botService.seedBuiltinBots('zh'))
+    expect(n).toBe(0)
+    expect(mocks.atomicWrite).not.toHaveBeenCalled()
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(edited)
+    expect(botService.get('daily')!.file.displayName).toBe('我的日报')
+  })
+
+  it('PSv-SEED11 `.builtin-seeded` 既不当 bot 列出、也不进 invalid', () => {
+    botService.seedBuiltinBots('en')
+    expect(existsSync(markerPath())).toBe(true)
+    const { valid, shadowed, invalid } = botService.listWithInvalid()
+    expect(valid.map((e) => e.file.name)).toEqual(['daily'])
+    expect(shadowed).toEqual([])
+    expect(invalid).toEqual([])
+  })
+})
+
+// ────────────────────── PSv-TRUST：内置 id 只认 ShuviX 写下的那份 ──────────────────────
+
+/**
+ * `bot:builtin:*` 这样的 id 只对 ShuviX 自己写下的那份文件成立（设置库 `bots.builtinFiles` 记路径）：内置策略
+ * daily-bot-access 按 `subject.bot` 放宽权限，往 bots 目录写一份声明同一个 id 的文件不能冒领；那份文件不在了就撤销，
+ * 同一路径上再出现的文件也不认。identityOf 的缓存按名字 2 s —— 每条用例跳开时钟。
+ */
+describe('PSv-TRUST —— 内置 id 的认定', () => {
+  let now = Date.now() + 50_000_000
+  const tick = (): void => {
+    now += 10_000
+  }
+  const bindTo = (bot: string): void => {
+    mocks.pick.mockReturnValue({ settings: { bot } })
+  }
+  const claim = (name: string): string =>
+    md(name).replace('shuvix: bot v2\n', 'shuvix: bot v2\nshuvix-id: bot:builtin:daily\n')
+
+  beforeEach(() => {
+    settingsStore.clear()
+    botService.setBuiltinTrustStore({
+      get: (key) => settingsStore.get(key),
+      set: (key, value) => void settingsStore.set(key, value)
+    })
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    tick()
+  })
+  afterEach(() => {
+    botService.setBuiltinTrustStore(null)
+    vi.restoreAllMocks()
+  })
+
+  it('PSv-TRUST0 没注入认定表（宿主没接设置库）→ 内置形态的 id 一律按名字算；写 daily.md 照常', () => {
+    botService.setBuiltinTrustStore(null)
+    botService.seedBuiltinBots('en')
+    bindTo('daily')
+    expect(botService.identityOf('s1')).toBe('daily')
+  })
+
+  it('PSv-TRUST1 写下的 daily.md 记进认定表；绑定它的会话 subject.bot = 内置 id', () => {
+    botService.seedBuiltinBots('en')
+    expect(JSON.parse(settingsStore.get(BUILTIN_FILES_KEY)!)).toEqual({
+      'bot:builtin:daily': join(dirs.bots, 'daily.md')
+    })
+    bindTo('daily')
+    expect(botService.identityOf('s1')).toBe('bot:builtin:daily')
+  })
+
+  it('PSv-TRUST2 写下 daily.md 之后，另一份文件也声明 bot:builtin:daily → 它的身份按名字算，daily 照旧是内置 id', () => {
+    botService.seedBuiltinBots('en')
+    put('impostor', claim('impostor'))
+    bindTo('impostor')
+    expect(botService.identityOf('s1')).toBe('impostor')
+    bindTo('daily')
+    expect(botService.identityOf('s1')).toBe('bot:builtin:daily')
+  })
+
+  it('PSv-TRUST3 目录里已有同名 / 同 id 的 bot 时只记一笔、不写 —— 那份也不获得认定', () => {
+    put('daily', claim('daily'))
+    botService.seedBuiltinBots('en')
+    expect(settingsStore.has(BUILTIN_FILES_KEY)).toBe(false)
+    bindTo('daily')
+    expect(botService.identityOf('s1')).toBe('daily')
+  })
+
+  it('PSv-TRUST4 写下的那份被删：下一次扫描撤销认定；同一路径上再建的文件（同 id）不认', () => {
+    botService.seedBuiltinBots('en')
+    const daily = join(dirs.bots, 'daily.md')
+    rmSync(daily)
+    botService.listAll()
+    expect(JSON.parse(settingsStore.get(BUILTIN_FILES_KEY)!)).toEqual({})
+
+    writeFileSync(daily, claim('daily'))
+    tick()
+    bindTo('daily')
+    expect(botService.identityOf('s1')).toBe('daily')
+  })
+
+  it('PSv-TRUST5 认定表写坏了 → 按空表（不认），不抛', () => {
+    botService.seedBuiltinBots('en')
+    settingsStore.set(BUILTIN_FILES_KEY, '{not json')
+    tick()
+    bindTo('daily')
+    expect(botService.identityOf('s1')).toBe('daily')
   })
 })

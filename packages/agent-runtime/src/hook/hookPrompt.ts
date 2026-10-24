@@ -22,8 +22,21 @@ export function renderHookPrompt(
   trigger: string,
   payload: Record<string, unknown>
 ): string {
+  return renderEventPrompt(HOOK_EVENT_TAG, body, trigger, payload)
+}
+
+/**
+ * 「正文 + 事件围栏」的通用形状：hook 的任务文本用 `hook_event`，触发器替 bot 发的消息用 `trigger_event`
+ * （宿主的 bot 触发分发）。同一套 YAML 规则。
+ */
+export function renderEventPrompt(
+  tag: string,
+  body: string,
+  trigger: string,
+  payload: Record<string, unknown>
+): string {
   const yaml = stringifyYaml(payload, { lineWidth: 0 }).trimEnd()
-  const fence = `<${HOOK_EVENT_TAG} trigger="${trigger}">\n${yaml}\n</${HOOK_EVENT_TAG}>`
+  const fence = `<${tag} trigger="${trigger}">\n${yaml}\n</${tag}>`
   const text = body.trim()
   return text ? `${text}\n\n${fence}` : fence
 }

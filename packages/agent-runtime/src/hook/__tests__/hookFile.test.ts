@@ -551,6 +551,64 @@ describe('未知埋点 id —— 惰性绑定 + warn（刻意不拒绝）', () =
   })
 })
 
+describe('全局埋点 —— hook 不能订阅（整份拒绝，不是惰性化）', () => {
+  const GLOBAL_REJECT =
+    "hook 'hook-file': binding 'timer.fired': 'timer.fired' does not belong to any session, so a hook cannot run on it — bind it in a bot's 'shuvix-bot-on' instead; the whole file is rejected"
+
+  it('HF-18 绑 timer.fired（带或不带 when）→ null、恰一条拒绝，点名 shuvix-bot-on', () => {
+    const bare = parse(
+      md(fm('shuvix-hook-agent: titler', 'shuvix-hook-on:', '  - trigger: timer.fired'))
+    )
+    expect(bare.parsed).toBeNull()
+    expect(bare.warns).toEqual([GLOBAL_REJECT])
+
+    const withWhen = parse(
+      md(
+        fm(
+          'shuvix-hook-agent: titler',
+          'shuvix-hook-on:',
+          '  - trigger: timer.fired',
+          `    when: "event.local.time == '18:00'"`
+        )
+      )
+    )
+    expect(withWhen.parsed).toBeNull()
+    expect(withWhen.warns).toEqual([GLOBAL_REJECT])
+  })
+
+  it('HF-19 整份语义：合法的会话域绑定在前、timer.fired 在后 → 仍整份 null（前一条不幸存）', () => {
+    const { parsed, warns } = parse(
+      md(
+        fm(
+          'shuvix-hook-agent: titler',
+          'shuvix-hook-on:',
+          '  - trigger: session.turn-completed',
+          '  - trigger: timer.fired'
+        )
+      )
+    )
+    expect(parsed).toBeNull()
+    expect(warns).toEqual([GLOBAL_REJECT])
+  })
+
+  it('HF-21 hook 的 when 可以调宿主函数 activeSessions（解析期只查语法，不拒宿主函数）', () => {
+    const { parsed, warns } = parse(
+      md(
+        fm(
+          'shuvix-hook-agent: titler',
+          'shuvix-hook-on:',
+          '  - trigger: session.prompt-accepted',
+          '    when: activeSessions(event.title) > 0'
+        )
+      )
+    )
+    expect(warns).toEqual([])
+    expect(parsed?.bindings).toStrictEqual([
+      { trigger: 'session.prompt-accepted', when: 'activeSessions(event.title) > 0' }
+    ])
+  })
+})
+
 describe('正文 → prompt', () => {
   it('HF-15 外层空行 trim，内部空行与缩进保留', () => {
     const { parsed } = parse(md(VALID, ['', '', 'Line 1', '', '  indented', '', '']))

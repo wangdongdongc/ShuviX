@@ -73,6 +73,7 @@ interface SettingsState {
     | 'tools'
     | 'mcp'
     | 'voice'
+    | 'triggers'
     | 'telegramBots'
     | 'monitor'
     | 'about'

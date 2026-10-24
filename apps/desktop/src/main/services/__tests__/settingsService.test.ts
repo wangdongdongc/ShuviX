@@ -9,6 +9,7 @@
  * - KS-1 已下线的默认智能体键不复活
  * - KS-2 已下线的自动审查开关 `security.autoReview` 不复活
  * - KS-3 默认思考等级 `general.defaultThinkingLevel` 在册（标签三语、说明列出可选档并写明缺省）
+ * - KS-4 内置 timer 触发源开关 `triggers.timer.enabled` 在册（标签三语、说明写明 true | false 与缺省开）
  */
 import { describe, it, expect, vi } from 'vitest'
 
@@ -75,5 +76,30 @@ describe('KNOWN_SETTINGS —— 默认思考等级', () => {
     expect(entry.desc.startsWith(SELECTABLE_THINKING_LEVELS.join(' | '))).toBe(true)
     expect(entry.desc).toContain(`default ${DEFAULT_THINKING_LEVEL}`)
     expect(getSettingKeyDescriptions()).toContain('general.defaultThinkingLevel')
+  })
+})
+
+/**
+ * 内置 timer 触发源（实验）的开关 —— 设置 → 触发源页那一个开关，也是 settings 工具能改的键。缺省开（没设过 =
+ * 开着，见 triggerTimer.isBuiltinTimerEnabled）：说明里写错缺省，模型会以为要先写 true 才有定时 bot。
+ */
+describe('KNOWN_SETTINGS —— 内置 timer 触发源开关', () => {
+  const leaf = (bundle: unknown, path: string): unknown =>
+    path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown>)?.[key], bundle)
+
+  it('KS-4 triggers.timer.enabled 在册：labelKey 三语都有非空文案；desc 以 true | false 开头、写明缺省 true；进描述文本', () => {
+    const entry = KNOWN_SETTINGS['triggers.timer.enabled']
+    expect(entry).toBeDefined()
+    expect(entry.labelKey).toBe('settings.triggersTimerEnabled')
+    for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
+      const label = leaf(bundle, entry.labelKey)
+      expect(typeof label === 'string' && label.trim() !== '', `${lang} ${entry.labelKey}`).toBe(
+        true
+      )
+    }
+    expect(entry.desc.startsWith('true | false')).toBe(true)
+    expect(entry.desc).toContain('default true')
+    expect(entry.desc).toContain('timer.fired')
+    expect(getSettingKeyDescriptions()).toContain('triggers.timer.enabled')
   })
 })

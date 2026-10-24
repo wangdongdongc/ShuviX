@@ -12265,3 +12265,227 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       )
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 用户气泡下方的来源标签（chat-ui OriginBadge，`[data-origin=<kind>]`）—— 本机窗口打的不标，其余种类各一枚：
+// 远程 / Chrome / Telegram / 别的会话 / 父会话 / 触发器。`title` 是悬停说明（界面语言的译文，插值里的 bot 名、
+// 埋点 id、会话标题原样）。只在主窗口的对话流里找（`[data-msg-id]` 之内）。
+
+/** 一枚来源标签 */
+export interface OriginBadgeShot {
+  /** 所在消息的 `data-msg-id` */
+  msgId: string
+  /** 所在消息的 `data-msg-role` */
+  role: string
+  /** `data-origin`（来源种类） */
+  origin: string
+  /** 悬停说明 */
+  title: string
+  /** 标签文字 */
+  text: string
+  /** 是不是一颗按钮（别的会话发来的、宿主能切会话时才是） */
+  button: boolean
+}
+
+/** 对话流里全部来源标签（DOM 序） */
+export function chatOriginBadges(main: CdpClient): Promise<OriginBadgeShot[]> {
+  return main.eval<OriginBadgeShot[]>(
+    `[...document.querySelectorAll('[data-msg-id] [data-origin]')].map((el) => {
+      const msg = el.closest('[data-msg-id]')
+      return {
+        msgId: msg?.getAttribute('data-msg-id') ?? '',
+        role: msg?.getAttribute('data-msg-role') ?? '',
+        origin: el.getAttribute('data-origin') ?? '',
+        title: el.getAttribute('title') ?? '',
+        text: (el.textContent ?? '').trim(),
+        button: el.tagName === 'BUTTON'
+      }
+    })`
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 设置窗口「触发源」页（TriggerSettings，实验；openSettings('triggers') 后调用）
+//
+// 锚点：页根 `[data-trigger-settings]`，一个触发源一块 `[data-trigger-source=<id>]`（今天只有内置 timer
+// `timer:builtin:minute`）：块里的 SettingsRow（`[data-settings-row]`）= 标题 + 副标题（上次触发 / 还没触发）+ 行尾
+// Toggle（开 = `bg-accent`，关 = `bg-bg-hover`）；订阅者列表 `[data-trigger-subscribers] li`：显示名
+// （`span.text-text-primary`）+ `code`（when 原文，没写就是「每次都触发」的译文）。状态 30 秒才重拉一次 ——
+// 「上次触发」类断言先走 `window.api.trigger.status()`，DOM 只读打开那一刻拉到的那份。
+// tab 上的「实验」小标签是 `[data-settings-nav] [data-experimental="triggers"]`。
+
+/** 一个触发源块的快照 */
+export interface TriggerSourceShot {
+  /** 行尾开关是开着的 */
+  enabled: boolean
+  /** 副标题（上次触发的时刻，或「还没触发过」的译文） */
+  subtitle: string
+  /** 订阅者（DOM 序）；`when` = code 里的字（没写 when 时是「每次都触发」的译文） */
+  subscribers: Array<{ displayName: string; when: string }>
+  /** 「还没有 bot 订阅它」那句（有订阅者时为 null） */
+  noSubscribers: string | null
+}
+
+export interface TriggerSettingsPane {
+  /** 左栏「触发源」tab 上有没有「实验」小标签 */
+  tabExperimental(): Promise<boolean>
+  /** 等这个触发源的块上屏（status 回来之前页里是空的） */
+  waitSource(id: string): Promise<void>
+  /** 快照；块不在为 null */
+  source(id: string): Promise<TriggerSourceShot | null>
+  /** 点这个触发源的开关 */
+  toggle(id: string): Promise<void>
+}
+
+export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
+  const BLOCK = (id: string): string =>
+    `document.querySelector('[data-trigger-settings] [data-trigger-source=${JSON.stringify(id)}]')`
+  const TOGGLE = (id: string): string =>
+    `${BLOCK(id)}?.querySelector('[data-settings-row] > .shrink-0 button')`
+  return {
+    tabExperimental: () =>
+      settings.eval<boolean>(
+        `!!document.querySelector('[data-settings-nav] [data-experimental="triggers"]')`
+      ),
+    waitSource: async (id) => {
+      await until(() => settings.eval<boolean>(`!!${BLOCK(id)}`), `trigger source block ${id}`)
+    },
+    source: (id) =>
+      settings.eval<TriggerSourceShot | null>(`(() => {
+        const block = ${BLOCK(id)}
+        if (!block) return null
+        const row = block.querySelector('[data-settings-row]')
+        const toggle = row?.querySelector(':scope > .shrink-0 button')
+        const subtitle = row?.querySelector(':scope > div.min-w-0 > div:nth-child(2)')
+        const subs = block.querySelector('[data-trigger-subscribers]')
+        const list = subs?.querySelector('ul')
+        return {
+          enabled: (toggle?.className ?? '').split(/\\s+/).includes('bg-accent'),
+          subtitle: (subtitle?.textContent ?? '').trim(),
+          subscribers: [...(list?.querySelectorAll('li') ?? [])].map((li) => ({
+            displayName: (li.querySelector('span')?.textContent ?? '').trim(),
+            when: (li.querySelector('code')?.textContent ?? '').trim()
+          })),
+          noSubscribers: list ? null : (subs?.lastElementChild?.textContent ?? '').trim()
+        }
+      })()`),
+    toggle: async (id) => {
+      await until(() => settings.eval<boolean>(`!!${TOGGLE(id)}`), `trigger source ${id} toggle`)
+      await settings.eval(`${TOGGLE(id)}.click()`)
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 主窗侧栏「跟踪项」分组（TrackingGroup，实验；`~/.shuvix/tracking/`）
+//
+// 锚点：分组头 `div[class*="group/header"][data-group="tracking"]`（组头按钮里跟着一枚
+// `[data-experimental="tracking"]`），行 `[data-tracking-row=<fileName>]`（行字 = 正文第一个一级标题，没有就是
+// 去掉 .md 的文件名；按修改时间倒序）；空态是正文里那一行 `.sb-hint`。点一行打开 / 复用那份文件的**笔记本会话**
+// （隐藏项目 `__tracking__`），活动行 = 活动会话正是这份文件的笔记本（`bg-bg-active`）。分组**懒扫**：首次展开
+// 才扫，之后展开 / 窗口聚焦 / 组头菜单「刷新」/ `tracking.changed`（笔记本写入、bot 一次触发运行结束）重扫 ——
+// 磁盘外写入不广播，种完文件要 refresh。
+//
+// ⚠️ 组头菜单的 `open-folder` **只许做存在性断言，绝不点**：它开的是 OS 文件管理器，e2e 关不掉。
+
+export interface TrackingPane {
+  /** 组头显示的分组标签 */
+  label(): Promise<string>
+  /** 组头上有没有「实验」小标签 */
+  experimental(): Promise<boolean>
+  /** 分组此刻展开着 */
+  expanded(): Promise<boolean>
+  /** 展开分组并等首次扫描落定（空态文案也算落定） */
+  expand(): Promise<void>
+  /** 行（DOM 序）：文件名 + 行字 */
+  rows(): Promise<Array<{ fileName: string; title: string }>>
+  /** 空态文案（有行 / 没扫过时为 null） */
+  emptyHint(): Promise<string | null>
+  /** 点一行并等它成为活动行（= 这份文件的笔记本成了活动会话） */
+  selectRow(fileName: string): Promise<void>
+  /** 当前活动行的文件名；活动会话不是任何跟踪项的笔记本时为 null */
+  activeRow(): Promise<string | null>
+  /** 组头菜单里的动作 id（开一次 ⋮、不选任何项，分隔符滤掉） */
+  menuIds(): Promise<string[] | null>
+  /** 组头菜单「刷新」—— 磁盘外改动不广播 tracking.changed，需手动重扫 */
+  refresh(): Promise<void>
+}
+
+export function trackingPane(main: CdpClient): TrackingPane {
+  const HEADER_SEL = `div[class*="group/header"][data-group="tracking"]`
+  const HEADER = `document.querySelector('${HEADER_SEL}')`
+  const TOGGLE = `[...(${HEADER}?.querySelectorAll(':scope > button') ?? [])].find((b) => b.querySelector('span.truncate'))`
+  const COLLAPSE = `${HEADER}?.nextElementSibling`
+  const BODY = `${COLLAPSE}?.firstElementChild?.firstElementChild`
+  const ROWS = `[...document.querySelectorAll('[data-tracking-row]')]`
+  const ROW = (fileName: string): string =>
+    `document.querySelector('[data-tracking-row=${JSON.stringify(fileName)}]')`
+  return {
+    label: () =>
+      main.eval<string>(`(${HEADER}?.querySelector('span.truncate')?.textContent ?? '').trim()`),
+    experimental: () =>
+      main.eval<boolean>(`!!${HEADER}?.querySelector('[data-experimental="tracking"]')`),
+    expanded: () => main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`),
+    expand: async () => {
+      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'tracking group header')
+      const open = await main.eval<boolean>(`${COLLAPSE}?.style.gridTemplateRows === '1fr'`)
+      if (!open) await main.eval(`(${TOGGLE})?.click()`)
+      await until(
+        () => main.eval<boolean>(`(${BODY}?.childElementCount ?? 0) > 0`),
+        'tracking group scanned'
+      )
+    },
+    rows: () =>
+      main.eval<Array<{ fileName: string; title: string }>>(
+        `${ROWS}.map((r) => ({
+          fileName: r.getAttribute('data-tracking-row') ?? '',
+          title: (r.querySelector('span.truncate')?.textContent ?? '').trim()
+        }))`
+      ),
+    emptyHint: () =>
+      main.eval<string | null>(`(() => {
+        const hint = ${BODY}?.querySelector(':scope > .sb-hint')
+        return hint ? (hint.textContent ?? '').trim() : null
+      })()`),
+    selectRow: async (fileName) => {
+      await until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
+      await main.eval(`${ROW(fileName)}.click()`)
+      await until(
+        () => main.eval<boolean>(`(${ROW(fileName)}?.className ?? '').includes('bg-bg-active')`),
+        `tracking row ${fileName} active`
+      )
+    },
+    activeRow: () =>
+      main.eval<string | null>(
+        `${ROWS}.find((r) => r.className.includes('bg-bg-active'))?.getAttribute('data-tracking-row') ?? null`
+      ),
+    menuIds: async () => {
+      await until(() => main.eval<boolean>(`${HEADER} !== null`), 'tracking group header')
+      const items = await openMenu(main, HEADER, 'menu-button')
+      return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+    },
+    refresh: async () => {
+      await pickFromMenu(main, HEADER, 'refresh', 'tracking group header')
+      await sleep(200)
+    }
+  }
+}
+
+/** 主区那张属性卡上的一行：`data-key` + 是不是通用 key/value 行（描述符里没有的键才落通用行） */
+export interface FmCardRowKey {
+  key: string
+  generic: boolean
+}
+
+/**
+ * 主区那张属性卡（`.cm-shuvix-fmcard`）上渲染出来的全部字段行（DOM 序）—— 描述符里 `hidden` 的键（对象 id）不渲染，
+ * 也不落通用行；卡不在为空数组
+ */
+export function fmCardRowKeys(main: CdpClient): Promise<FmCardRowKey[]> {
+  return main.eval<FmCardRowKey[]>(
+    `[...(document.querySelector('.cm-shuvix-fmcard')?.querySelectorAll('.cm-shuvix-fmcard-row') ?? [])].map((r) => ({
+      key: r.getAttribute('data-key') ?? '',
+      generic: r.classList.contains('is-generic')
+    }))`
+  )
+}

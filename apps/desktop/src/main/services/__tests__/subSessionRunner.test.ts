@@ -26,6 +26,7 @@
 import { describe, it, expect, expectTypeOf, beforeAll, beforeEach, vi, type Mock } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { emptySessionView, type SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
@@ -59,7 +60,19 @@ const mocks = vi.hoisted(() => ({
       (sessionId: string) => Array<{ kind: string; target: string; access: 'read' | 'write' }>
     >(),
   warn: vi.fn(),
-  durable: { value: true }
+  // 按日历列出会话（listActive）：日历索引的读侧、今天的本地日、bot 身份（LA 组换成真 DAO / 按用例喂）
+  sessionsActiveBetween:
+    vi.fn<
+      (
+        since: string,
+        until: string
+      ) => Array<{ session: Record<string, unknown>; origins: string[]; lastAt: number }>
+    >(),
+  localDayKey: vi.fn<(ts: number) => string>(),
+  identityOf: vi.fn<(sessionId: string) => string>(),
+  durable: { value: true },
+  /** LA 组的真 SQLite（node:sqlite 内存库，跑真迁移）；别的用例不碰它 */
+  db: { value: null as unknown }
 }))
 
 vi.mock('../../dao/sessionDao', () => ({
@@ -83,6 +96,28 @@ vi.mock('../../services/sessionService', () => ({
 }))
 // 会话权限表：list 列出权限表里的别的会话；缺省空表（defaultWorld），XS 组按用例喂会话行
 vi.mock('../acl', () => ({ sessionAcl: { sessionGrants: mocks.sessionGrants } }))
+// 按日历列出会话（listActive）读日历索引与 bot 身份：缺省桩掉（空日历、不是 bot 会话）；LA 组把读侧接回真
+// sessionDayPromptService（经下面的 database 替身落到 node:sqlite），bot 身份按用例喂
+vi.mock('../sessionDayPromptService', () => ({
+  localDayKey: (ts: number) => mocks.localDayKey(ts),
+  sessionsActiveBetween: (since: string, until: string) => mocks.sessionsActiveBetween(since, until)
+}))
+vi.mock('../botService', () => ({
+  botService: { identityOf: (id: string) => mocks.identityOf(id) }
+}))
+// DAO 的基类读 mocks.db（同 desktopRig 的手法）：只有 LA 组接上真库，别的用例不经 DAO
+vi.mock('../../dao/database', () => {
+  type Db = { prepare: (sql: string) => unknown }
+  class BaseDao {
+    protected get db(): Db {
+      return mocks.db.value as Db
+    }
+    protected stmt(sql: string): unknown {
+      return (mocks.db.value as Db).prepare(sql)
+    }
+  }
+  return { BaseDao, databaseManager: { getDb: () => mocks.db.value } }
+})
 vi.mock('../../frontend/core', () => ({
   chatGateway: { prompt: mocks.gatewayPrompt, steerDriven: mocks.gatewaySteerDriven }
 }))
@@ -302,6 +337,9 @@ function defaultWorld(): void {
   mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
   mocks.sessionGrants.mockReturnValue([])
+  mocks.sessionsActiveBetween.mockReturnValue([])
+  mocks.localDayKey.mockReturnValue('2026-10-24')
+  mocks.identityOf.mockReturnValue('')
 }
 
 let frontendRegistry: (typeof import('../../frontend/core/ChatFrontendRegistry'))['chatFrontendRegistry']
@@ -3577,6 +3615,47 @@ describe('XS 跨会话 —— 驱动别的会话（授权、ownTurn、拒绝先�
     })
   })
 
+  // ── SR-9 ──────────────────────────────────────────────────────────
+
+  describe('SR-9 触发器替 bot 发的消息不是调用方的那一轮', () => {
+    /** 来源记录：消息 id → 来源（不只是 session 种类） */
+    function sourced(messages: unknown[], sources: Record<string, Record<string, unknown>>): void {
+      other.view = {
+        ...emptySessionView(other.sessionId),
+        messages: messages as SessionView['messages']
+      }
+      other.inputSources.mockImplementation(async () => new Map(Object.entries(sources)))
+    }
+    const trigger = {
+      kind: 'trigger',
+      trigger: 'timer.fired',
+      sourceId: 'timer:builtin:minute',
+      bot: 'daily'
+    }
+
+    it.each<[string, unknown[], Record<string, Record<string, unknown>>]>([
+      [
+        '最近一条有人说的用户消息是触发器发的',
+        [userMsg('t1'), assistantMsg('a1')],
+        { t1: trigger }
+      ],
+      [
+        '调用方发过一条，之后触发器又发了一条（它也算有人说话）',
+        [userMsg('u1'), assistantMsg('a1'), userMsg('t1')],
+        { u1: { kind: 'session', sessionId: PARENT }, t1: trigger }
+      ],
+      [
+        '触发器来源上（不合规地）带着调用方的 sessionId：按种类认，仍不是调用方的',
+        [userMsg('t1')],
+        { t1: { ...trigger, sessionId: PARENT } }
+      ]
+    ])('SR-9 %s ⇒ read 按 ownTurn false 授权', async (_label, messages, sources) => {
+      sourced(messages, sources)
+      ok(await runner.read(PARENT, OTHER, authorize))
+      expect(authorize.mock.calls).toEqual([[otherTarget(OTHER, 'Other'), 'read', false]])
+    })
+  })
+
   // ── XS-51 ─────────────────────────────────────────────────────────
 
   it('XS-51 inspect 别的会话恒按 ownTurn false 授权（大纲翻得到整条对话，不只是自己那一轮）：调用方绑定着这一轮也一样；自己的子会话不过门 [guard]', async () => {
@@ -4104,5 +4183,302 @@ describe('XS 跨会话 —— 驱动别的会话（授权、ownTurn、拒绝先�
       'subsession-done:child-1:42',
       { wake: true }
     ])
+  })
+})
+
+// ─── LA：按日历列出会话（listActive，session 工具 list-sessions 带 active_since） ─────────────────
+//
+// 读侧接回真的 sessionDayPromptService → sessionDayPromptDao，落在 node:sqlite 内存库上（跑真迁移，到 v34 的
+// origin 列）：区间含两端、区间里最后一条用户条目、来源去重、隐藏项目过滤都是真 SQL 的结果，不是替身的。
+// canRead 由工具按读策略静默判定（这里是 spy）；bot 身份按用例喂。
+//   LA-1 日期校验（真日期：2026-02-30 也拒）   LA-2 until 缺省 = 今天的本地日   LA-3 区间含两端
+//   LA-4 调用方自己 self、不过 canRead           LA-5 直接子会话不过 canRead，孙辈过
+//   LA-6 别的会话：canRead 假 → 只计 hidden       LA-7 次序与 last_active（建成那行只在它是唯一一行时用）
+//   LA-8 inputs                                   LA-9 上限 100 + truncated，读不了的照样计 hidden
+//   LA-10 隐藏项目不列也不计                      LA-11 bot 列 = identityOf
+
+describe('LA 按日历列出会话（listActive）', () => {
+  /** 本地时刻（与 day 同一口径，测试不依赖时区） */
+  const at = (day: string, hh: number, mm = 0): number => {
+    const [y, m, d] = day.split('-').map(Number)
+    return new Date(y, m - 1, d, hh, mm).getTime()
+  }
+  const iso = (day: string, hh: number, mm = 0): string => new Date(at(day, hh, mm)).toISOString()
+
+  let db: DatabaseSync
+  let canRead: Mock<(target: { id: string; title: string }) => boolean>
+
+  function addSession(
+    id: string,
+    over: { title?: string; projectId?: string | null; parentId?: string | null } = {}
+  ): void {
+    db.prepare(
+      'INSERT INTO sessions (id, title, projectId, parentId, settings, createdAt, updatedAt, lastActiveAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(
+      id,
+      over.title ?? id,
+      over.projectId ?? null,
+      over.parentId ?? null,
+      '{}',
+      1,
+      1,
+      // 会话自己的 lastActiveAt 刻意很晚：listActive 的 last_active 不该取它
+      at('2026-12-31', 23)
+    )
+  }
+  /** 一条日历索引行（entryId 'created' = 建成那一行；origin 不给 = NULL，v34 之前的旧行） */
+  function addEntry(
+    sessionId: string,
+    entryId: string,
+    day: string,
+    ts: number,
+    origin: string | null = 'local'
+  ): void {
+    db.prepare(
+      'INSERT INTO session_day_prompts (sessionId, entryId, day, timestamp, origin) VALUES (?, ?, ?, ?, ?)'
+    ).run(sessionId, entryId, day, ts, origin)
+  }
+  const list = (
+    since: string,
+    until?: string,
+    caller: string = PARENT
+  ): ReturnType<Runner['listActive']> => runner.listActive(caller, since, until, canRead)
+  const ids = (res: ReturnType<Runner['listActive']>): string[] => ok(res).rows.map((r) => r.id)
+
+  beforeEach(async () => {
+    const { migrations } = await import('../../dao/migrations')
+    db = new DatabaseSync(':memory:')
+    for (const m of migrations) m.up(db as never)
+    mocks.db.value = db
+    const actual = await vi.importActual<typeof import('../sessionDayPromptService')>(
+      '../sessionDayPromptService'
+    )
+    mocks.sessionsActiveBetween.mockImplementation(
+      (s, e) => actual.sessionsActiveBetween(s, e) as never
+    )
+    mocks.localDayKey.mockImplementation((ts) => actual.localDayKey(ts))
+    canRead = vi.fn<(target: { id: string; title: string }) => boolean>(() => true)
+    addSession(PARENT, { title: 'Parent' })
+  })
+
+  it.each<[string, string, string | undefined, string]>([
+    ['since 为空', '', '2026-10-24', '"" / "2026-10-24"'],
+    ['since 不补零', '2026-1-1', '2026-10-24', '"2026-1-1" / "2026-10-24"'],
+    ['since 是自然语言', 'yesterday', '2026-10-24', '"yesterday" / "2026-10-24"'],
+    [
+      'since 是不存在的日子（真日期校验）',
+      '2026-02-30',
+      '2026-03-02',
+      '"2026-02-30" / "2026-03-02"'
+    ],
+    ['until 月份越界', '2026-10-01', '2026-13-01', '"2026-10-01" / "2026-13-01"'],
+    ['until 是别的写法', '2026-10-01', '10/24/2026', '"2026-10-01" / "10/24/2026"']
+  ])('LA-1 %s ⇒ 错误点名两个参数与收到的值；不读日历、不问 canRead', (_l, since, until, got) => {
+    addEntry(PARENT, '1', '2026-10-01', at('2026-10-01', 9))
+    expect(err(list(since, until))).toBe(
+      `"active_since" / "active_until" must be local dates like 2026-10-24 (got ${got}).`
+    )
+    expect(mocks.sessionsActiveBetween).not.toHaveBeenCalled()
+    expect(canRead).not.toHaveBeenCalled()
+  })
+
+  it('LA-1 since 晚于 until ⇒ 「is after」；前后空白先去掉再校验', () => {
+    expect(err(list('2026-10-25', '2026-10-24'))).toBe(
+      '"active_since" (2026-10-25) is after "active_until" (2026-10-24).'
+    )
+    expect(mocks.sessionsActiveBetween).not.toHaveBeenCalled()
+    const res = ok(list('  2026-10-20 ', ' 2026-10-24\n'))
+    expect([res.since, res.until]).toEqual(['2026-10-20', '2026-10-24'])
+    expect(mocks.sessionsActiveBetween).toHaveBeenCalledWith('2026-10-20', '2026-10-24')
+  })
+
+  it.each<[string, string | undefined]>([
+    ['不给', undefined],
+    ['空串', ''],
+    ['只有空白', '   ']
+  ])('LA-2 until %s ⇒ 今天的本地日', (_l, until) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 9, 24, 0, 5))
+    addEntry(PARENT, '1', '2026-10-24', at('2026-10-24', 0, 1))
+    const res = ok(list('2026-10-20', until))
+    expect(res.until).toBe('2026-10-24')
+    expect(mocks.sessionsActiveBetween).toHaveBeenCalledWith('2026-10-20', '2026-10-24')
+    expect(res.rows.map((r) => r.id)).toEqual([PARENT])
+  })
+
+  it('LA-3 区间含两端：since 当天与 until 当天都在，前一天与后一天不在；since == until 是一天', () => {
+    for (const [id, day] of [
+      ['d19', '2026-10-19'],
+      ['d20', '2026-10-20'],
+      ['d22', '2026-10-22'],
+      ['d24', '2026-10-24'],
+      ['d25', '2026-10-25']
+    ]) {
+      addSession(id)
+      addEntry(id, '1', day, at(day, 12))
+    }
+    expect(ids(list('2026-10-20', '2026-10-24'))).toEqual(['d24', 'd22', 'd20'])
+    expect(ids(list('2026-10-22', '2026-10-22'))).toEqual(['d22'])
+  })
+
+  it('LA-4 调用方自己在区间里 ⇒ 列出、标 self，不带 relation；canRead 不为它调', () => {
+    addEntry(PARENT, '1', '2026-10-23', at('2026-10-23', 9))
+    const res = ok(list('2026-10-23', '2026-10-23'))
+    expect(res.rows).toEqual([
+      {
+        id: PARENT,
+        title: 'Parent',
+        lastActiveAt: iso('2026-10-23', 9),
+        bot: '',
+        inputs: ['local'],
+        self: true
+      }
+    ])
+    expect(canRead).not.toHaveBeenCalled()
+    expect(res.hidden).toBe(0)
+  })
+
+  it('LA-5 直接子会话 ⇒ relation sub-session、不过 canRead；孙辈（子会话的子会话）是别的会话，过 canRead', () => {
+    addSession('kid', { title: 'Kid', parentId: PARENT })
+    addSession('grandkid', { title: 'Grandkid', parentId: 'kid' })
+    addEntry('kid', '1', '2026-10-23', at('2026-10-23', 10), 'parent-session')
+    addEntry('grandkid', '1', '2026-10-23', at('2026-10-23', 9), 'parent-session')
+    const res = ok(list('2026-10-23', '2026-10-23'))
+    expect(res.rows.map((r) => [r.id, r.relation, r.self])).toEqual([
+      ['kid', 'sub-session', undefined],
+      ['grandkid', undefined, undefined]
+    ])
+    expect(res.rows[1]).not.toHaveProperty('relation')
+    expect(canRead.mock.calls).toEqual([[{ id: 'grandkid', title: 'Grandkid' }]])
+  })
+
+  it('LA-6 别的会话：canRead 假 ⇒ 只计入 hidden、不列；真 ⇒ 列出（没有 relation / self）', () => {
+    addSession('mine-ok', { title: 'Readable' })
+    addSession('secret', { title: 'Secret' })
+    addEntry('mine-ok', '1', '2026-10-23', at('2026-10-23', 10))
+    addEntry('secret', '1', '2026-10-23', at('2026-10-23', 11))
+    canRead.mockImplementation((t) => t.id !== 'secret')
+    const res = ok(list('2026-10-23', '2026-10-23'))
+    expect(res.rows.map((r) => r.id)).toEqual(['mine-ok'])
+    expect(res.rows[0]).not.toHaveProperty('relation')
+    expect(res.rows[0]).not.toHaveProperty('self')
+    expect(res.hidden).toBe(1)
+    expect(res.truncated).toBe(0)
+    expect(canRead.mock.calls).toEqual([
+      [{ id: 'secret', title: 'Secret' }],
+      [{ id: 'mine-ok', title: 'Readable' }]
+    ])
+  })
+
+  it('LA-7 按区间里最后一条用户条目倒序；last_active 是区间里的最大值（不是会话自己的 lastActiveAt，也不取区间外更晚的条目）', () => {
+    addSession('a')
+    addSession('b')
+    addEntry('a', '1', '2026-10-21', at('2026-10-21', 8))
+    addEntry('a', '2', '2026-10-22', at('2026-10-22', 15))
+    // 区间外更晚的一条不算
+    addEntry('a', '3', '2026-10-25', at('2026-10-25', 9))
+    addEntry('b', '1', '2026-10-22', at('2026-10-22', 16))
+    addEntry('b', '2', '2026-10-21', at('2026-10-21', 7))
+    const rows = ok(list('2026-10-20', '2026-10-24')).rows
+    expect(rows.map((r) => [r.id, r.lastActiveAt])).toEqual([
+      ['b', iso('2026-10-22', 16)],
+      ['a', iso('2026-10-22', 15)]
+    ])
+  })
+
+  it('LA-7 last_active 取最后一条用户条目、不取建成那一行（哪怕建成更晚，如 fork）；只有建成那一行时才用它', () => {
+    addSession('forked')
+    addSession('fresh')
+    addSession('typed')
+    // fork：带过来的用户条目早于建成那一行
+    addEntry('forked', '7', '2026-10-22', at('2026-10-22', 9))
+    addEntry('forked', 'created', '2026-10-22', at('2026-10-22', 11), null)
+    // 只建了、还没说过话
+    addEntry('fresh', 'created', '2026-10-22', at('2026-10-22', 10), null)
+    addEntry('typed', '1', '2026-10-22', at('2026-10-22', 9, 30))
+    const rows = ok(list('2026-10-22', '2026-10-22')).rows
+    expect(rows.map((r) => [r.id, r.lastActiveAt])).toEqual([
+      ['fresh', iso('2026-10-22', 10)],
+      ['typed', iso('2026-10-22', 9, 30)],
+      ['forked', iso('2026-10-22', 9)]
+    ])
+  })
+
+  it('LA-8 inputs：区间里的来源种类去重排序；旧行（NULL）记 unknown；建成那一行不贡献；只有建成那一行 ⇒ []', () => {
+    addSession('mixed')
+    addSession('legacy')
+    addSession('created-only')
+    addEntry('mixed', 'created', '2026-10-22', at('2026-10-22', 8), null)
+    addEntry('mixed', '1', '2026-10-22', at('2026-10-22', 9), 'trigger')
+    addEntry('mixed', '2', '2026-10-22', at('2026-10-22', 10), 'local')
+    addEntry('mixed', '3', '2026-10-23', at('2026-10-23', 10), 'remote')
+    addEntry('mixed', '4', '2026-10-23', at('2026-10-23', 11), 'local')
+    // 区间外的来源不算
+    addEntry('mixed', '5', '2026-10-25', at('2026-10-25', 11), 'telegram')
+    addEntry('legacy', '1', '2026-10-22', at('2026-10-22', 7), null)
+    addEntry('legacy', '2', '2026-10-22', at('2026-10-22', 7, 30), 'parent-session')
+    addEntry('created-only', 'created', '2026-10-22', at('2026-10-22', 6), null)
+    const rows = ok(list('2026-10-20', '2026-10-24')).rows
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.inputs]))).toEqual({
+      mixed: ['local', 'remote', 'trigger'],
+      legacy: ['parent-session', 'unknown'],
+      'created-only': []
+    })
+  })
+
+  it('LA-9 上限：105 条读得到的 ⇒ 列 100 条 + truncated 5；排在后面的读不了的照样计入 hidden（不算 truncated）', () => {
+    for (let i = 0; i < 108; i++) {
+      const id = `s${String(i).padStart(3, '0')}`
+      addSession(id)
+      // s000 最新：按时刻倒序就是 s000 … s107
+      addEntry(id, '1', '2026-10-22', at('2026-10-22', 12) - i * 60_000)
+    }
+    // 最旧的三条（排在上限之后）读不了
+    canRead.mockImplementation((t) => !['s105', 's106', 's107'].includes(t.id))
+    const res = ok(list('2026-10-22', '2026-10-22'))
+    expect(mod.ACTIVE_LIST_MAX).toBe(100)
+    expect(res.rows).toHaveLength(100)
+    expect(res.rows[0].id).toBe('s000')
+    expect(res.rows[99].id).toBe('s099')
+    expect(res.truncated).toBe(5)
+    expect(res.hidden).toBe(3)
+  })
+
+  it('LA-10 隐藏项目（日报 / 跟踪项 / 知识库 / 注册表载体）的会话不列也不计，canRead 不为它们调', () => {
+    for (const [id, projectId] of [
+      ['daily-nb', '__daily__'],
+      ['track-nb', '__tracking__'],
+      ['kb-nb', '__knowledge__'],
+      ['bots-nb', '__bots__'],
+      ['plain', 'proj-1']
+    ]) {
+      addSession(id, { projectId })
+      addEntry(id, '1', '2026-10-22', at('2026-10-22', 12))
+    }
+    canRead.mockReturnValue(false)
+    const res = ok(list('2026-10-22', '2026-10-22'))
+    expect(res.rows).toEqual([])
+    expect(res.hidden).toBe(1)
+    expect(canRead.mock.calls).toEqual([[{ id: 'plain', title: 'plain' }]])
+  })
+
+  it('LA-11 bot 列 = botService.identityOf(会话)：对象 id / 名字（没有 id）/ 空串（不是 bot 会话）；只为列出的行取', () => {
+    for (const id of ['daily-run', 'scout-run', 'plain', 'secret']) {
+      addSession(id)
+      addEntry(id, '1', '2026-10-22', at('2026-10-22', 12))
+    }
+    mocks.identityOf.mockImplementation((id) =>
+      id === 'daily-run' ? 'bot:builtin:daily' : id === 'scout-run' ? 'scout' : ''
+    )
+    canRead.mockImplementation((t) => t.id !== 'secret')
+    const rows = ok(list('2026-10-22', '2026-10-22')).rows
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.bot]))).toEqual({
+      'daily-run': 'bot:builtin:daily',
+      'scout-run': 'scout',
+      plain: ''
+    })
+    expect(mocks.identityOf.mock.calls.map((c) => c[0]).sort()).toEqual(
+      ['daily-run', 'plain', 'scout-run'].sort()
+    )
   })
 })

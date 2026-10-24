@@ -13,6 +13,8 @@
  *   60 认不出的来源：界面当作没有（不带 origin 键），读者失败闭合（`readInputSources` → 空 sessionId 的父会话）
  *      —— 刻意的不一致；挂载之前、之后写的都一样
  *   61 一次性投影（没有投影挂着时的 `viewSnapshot`）：带来源，= freshMount
+ *   62 触发器替 bot 发的（`kind: 'trigger'`，2026-10-24）：投影成 `metadata.origin = {kind, trigger, sourceId, bot}`；
+ *      缺 bot 的触发器项认不出 → 不带 origin（读者照样失败闭合）
  */
 import type { ConversationId, EntryRecord, JsonObject } from '@earendil-works/pi-durable'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
@@ -51,6 +53,12 @@ const REMOTE = {
 const CHROME = { kind: 'chrome', installId: 'inst-1' } as const
 const TELEGRAM = { kind: 'telegram', botId: 'b1', userId: 'u1', chatId: 'c1' } as const
 const PARENT = { kind: 'parent-session', sessionId: 'P1', title: '重构 parser' } as const
+const TRIGGER = {
+  kind: 'trigger',
+  trigger: 'timer.fired',
+  sourceId: 'timer:builtin:minute',
+  bot: 'daily'
+} as const
 /** 读者对认不出的来源的失败闭合 */
 const UNRECOGNIZED = { kind: 'parent-session', sessionId: '' }
 
@@ -412,6 +420,46 @@ describe('P3-03 · input origins', () => {
         origin: REMOTE
       })
       expect(snapshot).toStrictEqual(await freshMount(session))
+    },
+    TIMEOUT
+  )
+
+  it(
+    'P3-03-62 a trigger source projects to metadata.origin = {kind, trigger, sourceId, bot} on that user message; a trigger item without bot projects no origin (readers fail closed); = freshMount',
+    async () => {
+      const t = await makeHost({ ephemeral: ['s1'] })
+      const session = await t.open('s1')
+      t.kit.queue(answer('A1'), answer('A2'))
+      expect(await session.submitUser('Tick check-in.', { source: TRIGGER })).toEqual({})
+      expect(await session.submitUser('typed', { source: LOCAL })).toEqual({})
+      const broken = await writeSourced(session, [
+        {
+          requestId: 'r-no-bot',
+          text: 'no bot',
+          item: { kind: 'trigger', trigger: 'timer.fired', sourceId: 'timer:builtin:minute' }
+        }
+      ])
+
+      const proj = await session.projector()
+      const h = proj.acquire()
+      expect(userOrigins(h.state.value)).toStrictEqual([
+        ['Tick check-in.', TRIGGER],
+        ['typed', LOCAL],
+        ['no bot', undefined]
+      ])
+      const tick = h.state.value.messages.find((m) => m.content === 'Tick check-in.')!
+      expect(tick.metadata).toStrictEqual({ origin: TRIGGER })
+      const noBot = h.state.value.messages.find((m) => m.content === 'no bot')!
+      expect(noBot.metadata).not.toHaveProperty('origin')
+      expect(h.state.value).toStrictEqual(await freshMount(session))
+
+      expect(await readInputSources(session)).toStrictEqual(
+        new Map<string, unknown>([
+          [String((await userEntry(session, 'Tick check-in.')).id), TRIGGER],
+          [String(broken.get('r-no-bot')!.id), UNRECOGNIZED]
+        ])
+      )
+      h.release()
     },
     TIMEOUT
   )

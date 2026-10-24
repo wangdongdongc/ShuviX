@@ -73,6 +73,13 @@ import { randomBytes } from 'crypto'
 import { chromeBridgeAddressFile, chromeBridgeSocketPath } from '@shuvix/chat-protocol/chromeBridge'
 import { closeAllWatchers } from './services/filesWatcherService'
 import { hookService } from './services/hookService'
+import { setWhenHostFunctions } from '@shuvix/agent-runtime'
+import { activeSessionsOnDay } from './services/sessionDayPromptService'
+import { builtinTimer } from './services/triggerTimer'
+import { botTriggers } from './services/botTriggerService'
+import { botService } from './services/botService'
+import { settingsService } from './services/settingsService'
+import i18next from 'i18next'
 import { policyService } from './services/policyService'
 import { desktopPolicyCheckDeps } from './services/policyCheckWiring'
 import { runLegacySwitchover } from './services/legacySwitchover'
@@ -967,6 +974,17 @@ app.whenReady().then(async () => {
 
   // 装配 hook runner（业务埋点在此之前的 fire 静默丢弃）
   measure('hookService.init', () => hookService.init())
+  // 触发绑定的 CEL `when` 能查日历（hook 与 bot 共用）；内置 timer 每分钟发一次全局埋点 `timer.fired`，
+  // 订阅它的 bot 绑定命中就新开一条会话（实验）。退出一开始就停表，关停中的会话不再被叫起来
+  setWhenHostFunctions({ activeSessions: activeSessionsOnDay })
+  // 随应用提供的 bot（日报 bot）第一次启动时按界面语言写进 ~/.shuvix/bots（每个只写一次，删了不再补）；
+  // 内置 id 的认定记在设置库里（只认 ShuviX 自己写下的那份文件）
+  botService.setBuiltinTrustStore(settingsService)
+  step('botService.seedBuiltinBots', () => botService.seedBuiltinBots(i18next.language || 'en'))
+  step('builtinTimer.start', () =>
+    builtinTimer.start((payload) => botTriggers.fire('timer.fired', payload))
+  )
+  app.on('before-quit', () => builtinTimer.stop())
   // 询问点的自动审查：安全模块的 onPermissionRequest 经判定型 hook 回答（注入而非 import —— 见 toolContext）
   setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity)
   // 命令风险分类：同样注入（它要模型注册表）；每次分类记一行分类器日志

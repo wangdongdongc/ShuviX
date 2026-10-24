@@ -29,7 +29,7 @@
  *   M-14 真点小组件卡片 → 新标签页 #widget-window?widgetId=…，页面里不开面板；真长按卡片 → DOM 菜单恰是
  *        「在独立窗口打开 / 导出 / 归档 / 删除」（运行中多一个「停止」），没有「在面板中打开」
  *   M-14b 真点卡片右上角（桌面上悬浮按钮所在的地方）→ 与点中间一样开新标签页：没有归档、没有删除确认框、没有停掉
- *   M-15 设置：分区列表 general … about + agents（voice / telegramBots 带 Beta）；进「通用」→ 返回键、头部名、
+ *   M-15 设置：分区列表 general … about + agents（voice / triggers / telegramBots 带 Beta）；进「通用」→ 返回键、头部名、
  *        设置行 flex-wrap: wrap 且标题栏 min-width 9em；回列表；「智能体」分区头部是 Agents
  *   M-16 #settings/general 在手机宽度直接进分区、返回是列表；#settings 是列表；1280 宽不是叠放
  *   M-17 真触摸：按住 800ms → DOM 菜单、不推入对话页、页面里的 contextmenu 恰一次（window 捕获阶段数：菜单处理
@@ -102,7 +102,7 @@ const MODEL = 'e2e-model'
 const USAGE = { prompt: 90, completion: 10 }
 const WIDGET_ID = 'mob-widget'
 const BOT = 'mobbot'
-const REGISTRY_GROUPS = ['bots', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
+const REGISTRY_GROUPS = ['bots', 'tracking', 'agents', 'policies', 'hooks', 'skills', 'knowledge']
 const PHONE = { width: 390, height: 844, deviceScaleFactor: 2, mobile: true }
 const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false }
 /** M-21：最窄的常见手机 */
@@ -510,7 +510,7 @@ describe('phone layout: the shell', () => {
     })
   })
 
-  it('M-4 the library page has exactly the six registry groups', async () => {
+  it('M-4 the library page has exactly the seven registry groups', async () => {
     expect(await mobile().groupsIn('library')).toEqual(REGISTRY_GROUPS)
   })
 
@@ -796,6 +796,7 @@ describe('phone layout: the shell', () => {
       'tools',
       'mcp',
       'voice',
+      'triggers',
       'telegramBots',
       'monitor',
       'archived',
@@ -806,10 +807,15 @@ describe('phone layout: the shell', () => {
     expect(Object.fromEntries(list.map((t) => [t.id, t.experimental]))).toMatchObject({
       general: null,
       voice: en.experimental.tag,
+      triggers: en.experimental.tag,
       telegramBots: en.experimental.tag,
       agents: null
     })
-    expect(list.filter((t) => t.experimental).map((t) => t.id)).toEqual(['voice', 'telegramBots'])
+    expect(list.filter((t) => t.experimental).map((t) => t.id)).toEqual([
+      'voice',
+      'triggers',
+      'telegramBots'
+    ])
     expect(list.find((t) => t.id === 'general')?.label).toBe(en.settings.tabGeneral)
     expect(await mobile().settingsBackButton()).toBeNull()
 
@@ -829,14 +835,14 @@ describe('phone layout: the shell', () => {
     expect(parseFloat(row.titleMinWidth)).toBeCloseTo(9 * parseFloat(row.titleFontSize), 1)
 
     await mobile().tap({ settingsBack: true })
-    await until(async () => (await mobile().settingsTabs()).length === 10, 'the list again')
+    await until(async () => (await mobile().settingsTabs()).length === 11, 'the list again')
     expect(await mobile().settingsHeader()).toBeNull()
 
     await mobile().tap({ settingsTab: 'agents' })
     await until(async () => (await mobile().settingsHeader()) === en.panel.agents, 'Agents')
     expect(en.panel.agents).toBe('Agents')
     await mobile().tap({ settingsBack: true })
-    await until(async () => (await mobile().settingsTabs()).length === 10, 'the list again')
+    await until(async () => (await mobile().settingsTabs()).length === 11, 'the list again')
     await mobile().tap({ tab: 'sessions' })
     await until(async () => (await mobile().activeTab()) === 'sessions', 'the sessions tab')
   })
@@ -1231,7 +1237,7 @@ describe('phone layout: the shell', () => {
     let flipped: ProviderRow | undefined
 
     const sectionList = (): Promise<unknown> =>
-      until(async () => (await pane.settingsTabs()).length === 10, 'the settings section list')
+      until(async () => (await pane.settingsTabs()).length === 11, 'the settings section list')
     const subList = (
       what: string,
       id?: string

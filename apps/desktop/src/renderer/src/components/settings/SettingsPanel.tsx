@@ -5,7 +5,18 @@
  */
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Layers, Activity, Info, Puzzle, Wrench, Send, Mic, Archive } from 'lucide-react'
+import {
+  Settings,
+  Layers,
+  Activity,
+  Info,
+  Puzzle,
+  Wrench,
+  Send,
+  Mic,
+  Archive,
+  Timer
+} from 'lucide-react'
 import { SettingsContainer, type SettingsTab } from '@shuvix/app-shell'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { GeneralSettings } from './GeneralSettings'
@@ -17,6 +28,7 @@ import { McpSettings } from './McpSettings'
 import { ToolSettings } from './ToolSettings'
 import { TelegramBotsSettings } from './TelegramBotsSettings'
 import { VoiceSettings } from './VoiceSettings'
+import { TriggerSettings } from './TriggerSettings'
 
 const VALID_TABS = new Set([
   'general',
@@ -25,6 +37,7 @@ const VALID_TABS = new Set([
   'tools',
   'mcp',
   'voice',
+  'triggers',
   'telegramBots',
   'monitor',
   'about'
@@ -118,6 +131,17 @@ export function SettingsPanel({
       content: (
         <Scroll>
           <VoiceSettings />
+        </Scroll>
+      )
+    },
+    {
+      id: 'triggers',
+      label: t('settings.tabTriggers'),
+      experimental: 'triggers',
+      icon: <Timer size={14} />,
+      content: (
+        <Scroll>
+          <TriggerSettings />
         </Scroll>
       )
     },

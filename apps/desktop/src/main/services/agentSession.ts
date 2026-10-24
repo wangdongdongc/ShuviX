@@ -147,24 +147,24 @@ export class AgentSession {
     // 会话信号先就绪（PIN-09）：投影句柄挂上之前开跑的一轮没有 agent_start / agent_end
     await sessionSignalsReady(this.sessionId)
     let admitted = false
-    const dayPrompt = this.dayPromptCallbacks()
+    // 来源（§19.7）：被驱动的发送记驱动它的会话（父会话或被授权的别的会话）—— 这条「用户消息」不是人打的
+    const origin =
+      drive === undefined
+        ? source
+        : sessionRecords.drivingSourceOf(this.sessionId, drive.driven.parentId)
+    const dayPrompt = this.dayPromptCallbacks(origin)
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
-      // 来源（§19.7）：被驱动的发送记驱动它的会话（父会话或被授权的别的会话）—— 这条「用户消息」不是人打的
       ...(drive === undefined
-        ? source === undefined
+        ? origin === undefined
           ? {}
-          : { source }
-        : {
-            requestId: drive.requestId,
-            driven: drive.driven,
-            source: sessionRecords.drivingSourceOf(this.sessionId, drive.driven.parentId)
-          }),
+          : { source: origin }
+        : { requestId: drive.requestId, driven: drive.driven, source: origin }),
       onAdmitted: (info) => {
         admitted = true
         dayPrompt.onAdmitted(info)
-        this.onPromptAdmitted(text)
+        this.onPromptAdmitted(text, origin)
       },
       onPlaced: dayPrompt.onPlaced
     })
@@ -190,14 +190,17 @@ export class AgentSession {
     text: string,
     options: { requestId?: string; source?: InputOrigin } = {}
   ): Promise<AdmitResult> {
-    const result = await this.durable.steer(text, { ...this.dayPromptCallbacks(), ...options })
+    const result = await this.durable.steer(text, {
+      ...this.dayPromptCallbacks(options.source),
+      ...options
+    })
     return result.error ? { ...result, error: admissionErrorText(result) } : result
   }
 
   /** 本轮结束后接着说（空闲时起一轮）；`source` 同 `steer`。被拒 → reject */
   async followUp(text: string, source?: InputOrigin): Promise<void> {
     const result = await this.durable.followUp(text, {
-      ...this.dayPromptCallbacks(),
+      ...this.dayPromptCallbacks(source),
       ...(source === undefined ? {} : { source })
     })
     if (result.error) throw new Error(admissionErrorText(result))
@@ -378,13 +381,16 @@ export class AgentSession {
    * 一次发送的日历入账回调（P3-07 PIN-15/16）：用户条目当场落下（`onAdmitted{entryId}`）或排队之后被放下
    * （`onPlaced`）时按条目 id 入账一次；没落下（排着队、被撤回）不记。同一次发送至多一行。
    */
-  private dayPromptCallbacks(): Required<Pick<AdmitOptions, 'onAdmitted' | 'onPlaced'>> {
+  private dayPromptCallbacks(
+    origin?: InputOrigin
+  ): Required<Pick<AdmitOptions, 'onAdmitted' | 'onPlaced'>> {
     let recorded = false
     const record = (entryId: number | undefined): void => {
       if (entryId === undefined || recorded) return
       recorded = true
       try {
-        recordUserEntry(this.sessionId, entryId)
+        if (origin) recordUserEntry(this.sessionId, entryId, Date.now(), origin.kind)
+        else recordUserEntry(this.sessionId, entryId)
       } catch (err) {
         log.warn(`活跃时间入账失败 session=${this.sessionId}: ${err}`)
       }
@@ -396,14 +402,15 @@ export class AgentSession {
   }
 
   /** 受理那一刻：fire prompt-accepted（fire 绝不抛出） */
-  private onPromptAdmitted(promptText: string): void {
+  private onPromptAdmitted(promptText: string, origin: InputOrigin | undefined): void {
     const title = sessionRecords.pick(this.sessionId, ['title'])?.title ?? ''
     hookTriggers.fire('session.prompt-accepted', {
       sessionId: this.sessionId,
       profileName: this.profileName(),
       title,
       isDefaultTitle: isDefaultTitle(title),
-      promptText
+      promptText,
+      origin: origin?.kind ?? ''
     })
   }
 

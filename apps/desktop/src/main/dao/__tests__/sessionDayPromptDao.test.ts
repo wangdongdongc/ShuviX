@@ -3,8 +3,18 @@
  *
  * 不用 better-sqlite3（仓库里是给 Electron 编的，Node 单测 NODE_MODULE_VERSION 对不上）。
  * 内存表替身只实现本文件用到的那几条 SQL 形状。
+ *
+ * 来源列（v34，SDP-O*）的查询带 CASE / GROUP_CONCAT，替身不重写一遍 SQL：这一组接上 node:sqlite 的真内存库
+ * （跑全部迁移；外键约束关掉，同生产的 better-sqlite3 缺省 —— 会话行没了、索引行还在的情形才造得出来）。
+ *
+ *   SDP-O1 insert 带 origin 就存下；不带 → NULL
+ *   SDP-O2 humanActiveOnDay：当天人打的（local / remote / chrome / telegram）或不知道来源（NULL）的会话，去重；
+ *          trigger / session / parent-session、建成那行、别的日子都不算；（pin）不认识的新种类（webhook）不算
+ *   SDP-O3 activityBetween：含两端的日区间，每会话一行；origins 去重排序、NULL → unknown、建成那行不进 origins；
+ *          lastAt 取区间里最后一条用户条目（只有建成那行时用它）；按 lastAt 倒序；会话行没了的不出现
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
 import type { Session } from '../types'
 
 interface PromptRow {
@@ -16,9 +26,14 @@ interface PromptRow {
 
 const state = vi.hoisted(() => ({
   sessions: [] as Session[],
-  prompts: [] as PromptRow[]
+  prompts: [] as PromptRow[],
+  /** SDP-O* 接上的真库；为 null 时走内存表替身 */
+  realDb: null as unknown
 }))
 
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
+}))
 vi.mock('../database', () => {
   class BaseDao {
     protected get db(): {
@@ -28,6 +43,7 @@ vi.mock('../database', () => {
         run: (...args: unknown[]) => { changes: number }
       }
     } {
+      if (state.realDb) return state.realDb as never
       return {
         prepare: (sql: string) => ({
           all: (...args: unknown[]) => execAll(sql, args),
@@ -108,6 +124,7 @@ import {
   localDayKey,
   monthDayRange
 } from '../sessionDayPromptDao'
+import { migrations } from '../migrations'
 
 function insertSession(id: string, over: Partial<Session> = {}): void {
   const now = 1_700_000_000_000
@@ -250,5 +267,155 @@ describe('sessionDayPromptDao', () => {
     sessionDayPromptDao.deleteBySessionId('s1')
     expect(sessionDayPromptDao.sessionsOnDay('2026-09-18').map((s) => s.id)).toEqual(['s2'])
     expect(sessionDayPromptDao.firstEntryOnDay('s1', '2026-09-18')).toBeUndefined()
+  })
+})
+
+describe('SDP-O 来源列（v34，真内存库）', () => {
+  let db: DatabaseSync
+
+  beforeEach(() => {
+    db = new DatabaseSync(':memory:', { enableForeignKeyConstraints: false })
+    for (const m of migrations) m.up(db as never)
+    state.realDb = db
+  })
+
+  afterEach(() => {
+    state.realDb = null
+    db.close()
+  })
+
+  function addSession(id: string, projectId: string | null = null, lastActiveAt = 1): void {
+    db.prepare(
+      'INSERT INTO sessions (id, title, projectId, parentId, settings, createdAt, updatedAt, lastActiveAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, `title ${id}`, projectId, null, '{}', 1, 1, lastActiveAt)
+  }
+
+  function add(
+    sessionId: string,
+    entryId: string,
+    day: string,
+    timestamp: number,
+    origin?: string
+  ): void {
+    expect(
+      sessionDayPromptDao.insert({
+        sessionId,
+        entryId,
+        day,
+        timestamp,
+        ...(origin ? { origin } : {})
+      })
+    ).toBe(true)
+  }
+
+  const originOf = (sessionId: string, entryId: string): unknown =>
+    (
+      db
+        .prepare('SELECT origin FROM session_day_prompts WHERE sessionId = ? AND entryId = ?')
+        .get(sessionId, entryId) as { origin: unknown }
+    ).origin
+
+  it('SDP-O1 insert 带 origin 就存下；不带 → NULL；重播同一条目不改已存的种类', () => {
+    addSession('s1')
+    add('s1', '1', '2026-10-24', 10, 'trigger')
+    add('s1', '2', '2026-10-24', 20)
+    add('s1', CREATED_ENTRY_ID, '2026-10-24', 5)
+    expect(originOf('s1', '1')).toBe('trigger')
+    expect(originOf('s1', '2')).toBeNull()
+    expect(originOf('s1', CREATED_ENTRY_ID)).toBeNull()
+    expect(
+      sessionDayPromptDao.insert({
+        sessionId: 's1',
+        entryId: '1',
+        day: '2026-10-24',
+        timestamp: 11,
+        origin: 'local'
+      })
+    ).toBe(false)
+    expect(originOf('s1', '1')).toBe('trigger')
+  })
+
+  it('SDP-O2 humanActiveOnDay：只数人打的与不知道来源的用户条目，按会话去重，带 projectId', () => {
+    const day = '2026-10-24'
+    for (const kind of ['local', 'remote', 'chrome', 'telegram']) {
+      addSession(`h-${kind}`, 'p1')
+      add(`h-${kind}`, '1', day, 10, kind)
+    }
+    addSession('legacy', null)
+    add('legacy', '1', day, 10) // 旧行 / 没盖章：按人算
+    for (const kind of ['trigger', 'session', 'parent-session']) {
+      addSession(`m-${kind}`, 'p1')
+      add(`m-${kind}`, '1', day, 10, kind)
+    }
+    addSession('created-only', 'p1')
+    add('created-only', CREATED_ENTRY_ID, day, 10)
+    addSession('other-day', 'p1')
+    add('other-day', '1', '2026-10-23', 10, 'local')
+    addSession('mixed', 'p2')
+    add('mixed', '1', day, 10, 'trigger')
+    add('mixed', '2', day, 20, 'local')
+    add('mixed', '3', day, 30, 'local')
+    addSession('webhook', 'p1')
+    add('webhook', '1', day, 10, 'webhook')
+    // 会话行已经没了（删会话没清干净的索引行）：INNER JOIN 不认
+    add('ghost', '1', day, 10, 'local')
+
+    const rows = sessionDayPromptDao.humanActiveOnDay(day)
+    expect(rows.map((r) => r.sessionId).sort()).toEqual(
+      ['h-chrome', 'h-local', 'h-remote', 'h-telegram', 'legacy', 'mixed'].sort()
+    )
+    expect(rows.find((r) => r.sessionId === 'mixed')).toEqual({
+      sessionId: 'mixed',
+      projectId: 'p2'
+    })
+    expect(rows.find((r) => r.sessionId === 'legacy')).toEqual({
+      sessionId: 'legacy',
+      projectId: null
+    })
+    expect(sessionDayPromptDao.humanActiveOnDay('2026-10-23').map((r) => r.sessionId)).toEqual([
+      'other-day'
+    ])
+    expect(sessionDayPromptDao.humanActiveOnDay('2026-10-25')).toEqual([])
+  })
+
+  it('SDP-O3 activityBetween：含两端；origins 去重排序、NULL → unknown、建成那行不进 origins 但只有它时给 lastAt；按 lastAt 倒序；会话行没了的不出现', () => {
+    addSession('a', 'p1', 9_999) // sessions.lastActiveAt 不参与排序
+    add('a', CREATED_ENTRY_ID, '2026-10-20', 100)
+    add('a', '1', '2026-10-20', 110, 'local')
+    add('a', '2', '2026-10-21', 120, 'trigger')
+    add('a', '3', '2026-10-22', 130, 'local')
+    add('a', '4', '2026-10-23', 999, 'local') // 区间外：不算 origins，也不顶 lastAt
+    addSession('b', null, 1)
+    add('b', '1', '2026-10-22', 200) // 旧行 → unknown
+    add('b', '2', '2026-10-22', 210, 'remote')
+    addSession('c', 'p2', 1)
+    add('c', CREATED_ENTRY_ID, '2026-10-21', 150) // 只有建成那一行
+    addSession('d', null, 1)
+    add('d', '1', '2026-10-19', 50, 'local') // 区间前
+    addSession('e', null, 1)
+    add('e', '1', '2026-10-20', 105, 'trigger')
+    add('e', CREATED_ENTRY_ID, '2026-10-22', 300) // 建成那行更晚（fork）：lastAt 仍取用户条目
+    add('ghost', '1', '2026-10-21', 400, 'local')
+
+    const rows = sessionDayPromptDao.activityBetween('2026-10-20', '2026-10-22')
+    expect(rows.map((r) => [r.session.id, r.origins, r.lastAt])).toEqual([
+      ['b', ['remote', 'unknown'], 210],
+      ['c', [], 150],
+      ['a', ['local', 'trigger'], 130],
+      ['e', ['trigger'], 105]
+    ])
+    // 会话行原样解析（settings 是对象）
+    expect(rows[0]!.session).toMatchObject({
+      id: 'b',
+      title: 'title b',
+      projectId: null,
+      settings: {}
+    })
+
+    // 单日区间（两端相同）
+    expect(
+      sessionDayPromptDao.activityBetween('2026-10-23', '2026-10-23').map((r) => r.session.id)
+    ).toEqual(['a'])
+    expect(sessionDayPromptDao.activityBetween('2026-10-24', '2026-10-30')).toEqual([])
   })
 })

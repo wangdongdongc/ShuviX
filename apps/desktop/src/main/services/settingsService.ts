@@ -85,6 +85,10 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
     labelKey: 'settings.httpLogEnabled',
     desc: 'true | false — record LLM request payloads (default off; payloads are large)'
   },
+  'triggers.timer.enabled': {
+    labelKey: 'settings.triggersTimerEnabled',
+    desc: 'true | false — the built-in timer trigger source (experimental): fires timer.fired every minute so bots can run on a schedule; off = no bot is started by time; default true'
+  },
   'sandbox.enabled': {
     labelKey: 'settings.sandboxEnabled',
     desc: 'true | false — run agent bash commands confined in the macOS sandbox, without asking (default true; takes effect for new conversations)'

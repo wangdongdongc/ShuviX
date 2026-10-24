@@ -16,6 +16,11 @@
  *
  * 保留键：CEL `when` 看到的 event 在 payload 之上附加 `trigger`（埋点 id）—— payload 不得使用这个键名。
  *
+ * **两种作用域**（`scope`）：
+ *  - `session`：发生在某条会话里（payload 带 sessionId）—— hook 订阅它们，run 挂在那条会话下；
+ *  - `global`：不属于任何会话（触发源的事件，如内置 timer 的 `timer.fired`）—— 只有 bot 订阅它们（bot md 的
+ *    `shuvix-bot-on`），命中时宿主新建一条绑定该 bot 的会话。hook 不能订阅：它的 run 必须挂在一条会话下。
+ *
  * **两类埋点**（`kind`）：
  *  - `observe`（观察型）：`fire` 广播，hook 是观察者 —— 不拦截、不等它、结果不读；
  *  - `decide`（判定型）：`decide` 等所有命中的 hook 给出结论并按严格程度合并。结论的形状由
@@ -96,6 +101,29 @@ export interface PermissionRequestPayload {
 }
 
 /**
+ * `timer.fired` 的 payload —— 一个 timer 触发源实例的一次触发（内置的那个每分钟一次，对齐到整分钟）。
+ * 时间同时给 UTC 时刻与本机本地的各个字段：CEL 的 `timestamp(...).getHours()` 不传时区时按 UTC 算，
+ * 条件直接比本地字段（`event.local.time == '18:00'`）就不用碰时区。
+ */
+export interface TimerFiredPayload {
+  /** 触发源实例 id（内置 timer：`timer:builtin:minute`） */
+  sourceId: string
+  /** 这一分钟的起点（ISO 8601，UTC） */
+  firedAt: string
+  /** 本机本地时间 */
+  local: {
+    /** YYYY-MM-DD */
+    date: string
+    /** HH:MM（24 小时制，补零） */
+    time: string
+    /** 0 = 星期日 … 6 = 星期六 */
+    weekday: number
+    hour: number
+    minute: number
+  }
+}
+
+/**
  * 埋点 id → payload 形状的类型目录。emit 侧 `fire('session.turn-completed', {...})`
  * 由此获得编译期校验；hook md 的 CEL `when` 与派发给 agent 的事件围栏读的就是这份数据。
  */
@@ -104,6 +132,11 @@ export interface TriggerPayloadMap {
   'session.prompt-accepted': SessionTriggerBase & {
     /** 本条用户消息的文本 */
     promptText: string
+    /**
+     * 这条消息是谁发的：InputOrigin 的种类 —— 人打的 `local` / `remote` / `chrome` / `telegram`，别的会话发进来的
+     * `parent-session` / `session`，触发器替 bot 发的 `trigger`；没有盖章时为空串。桌面 emit 侧恒给
+     */
+    origin?: string
   }
   /**
    * 一轮 prompt 完整结束之后（含工具调用）。**无论成败恒触发**（abort/出错的轮也算
@@ -125,6 +158,8 @@ export interface TriggerPayloadMap {
    * allow / ask（照旧问人）/ deny；没有 hook 命中或都没给出结论时照旧问人。
    */
   'permission.request': PermissionRequestPayload
+  /** 全局：timer 触发源的一次触发（见 TimerFiredPayload）。只有 bot 订阅 */
+  'timer.fired': TimerFiredPayload
 }
 
 /** 判定型埋点 → 结论形状（即派发时结果契约的形状，见 DECIDE_SPECS） */
@@ -137,6 +172,10 @@ export type TriggerId = keyof TriggerPayloadMap
 export type DecideTriggerId = keyof TriggerResultMap
 /** 观察型埋点：`fire` 广播、结果不读 */
 export type ObserveTriggerId = Exclude<TriggerId, DecideTriggerId>
+/** 全局埋点（`scope: 'global'`）：不属于任何会话，只有 bot 订阅 */
+export type GlobalTriggerId = 'timer.fired'
+/** 会话域的观察型埋点：hook 的 `fire` 只收这些 */
+export type SessionObserveTriggerId = Exclude<ObserveTriggerId, GlobalTriggerId>
 
 /** 判定型埋点的结论契约 */
 export interface DecideSpec<R> {
@@ -168,8 +207,10 @@ export interface TriggerPointDef {
    * parentSessionId（工具绑定/询问路由/LLM 日志归属/面板可见都随之落到该会话）。
    * v1 的 hook 只在会话域埋点上运行：没有归属会话的 run 会让授权为空、询问被拒，
    * 那是静默降级，宁可不跑。
+   * 'global'：不属于任何会话（触发源的事件）—— 只有 bot 订阅，命中时宿主新建一条绑定该 bot 的会话
+   * （见文件头「两种作用域」）。
    */
-  scope?: 'session'
+  scope?: 'session' | 'global'
 }
 
 export const TRIGGER_POINTS: Record<TriggerId, TriggerPointDef> = {
@@ -191,6 +232,13 @@ export const TRIGGER_POINTS: Record<TriggerId, TriggerPointDef> = {
     description:
       'A security policy wants an operation judged; a decide hook may answer before the user is asked',
     scope: 'session'
+  },
+  'timer.fired': {
+    id: 'timer.fired',
+    kind: 'observe',
+    description:
+      'A timer trigger source fired (the built-in one fires every minute, on the minute); only bots subscribe',
+    scope: 'global'
   }
 }
 

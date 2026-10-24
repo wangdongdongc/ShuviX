@@ -19,7 +19,9 @@ const TONES: Record<Exclude<InputOrigin['kind'], 'local'>, OriginTone> = {
   chrome: { tint: 'var(--viz-4-tint)', ink: 'var(--viz-4-ink)' },
   telegram: { tint: 'var(--viz-2-tint)', ink: 'var(--viz-2-ink)' },
   'parent-session': { tint: 'var(--viz-7-tint)', ink: 'var(--viz-7-ink)' },
-  session: { tint: 'var(--viz-5-tint)', ink: 'var(--viz-5-ink)' }
+  session: { tint: 'var(--viz-5-tint)', ink: 'var(--viz-5-ink)' },
+  // 可用的非蓝绿红槽位都已占满：与「来自父会话」共用紫色 —— 同是「替人发话的不是人」，标签文字区分
+  trigger: { tint: 'var(--viz-7-tint)', ink: 'var(--viz-7-ink)' }
 }
 
 /** 这条输入的配色；本机 / 没有记录 / 认不出的种类 → undefined（气泡用缺省的强调色） */
@@ -31,7 +33,7 @@ export function originTone(origin: InputOrigin | undefined): OriginTone | undefi
 /**
  * 用户气泡下方的来源标签（`metadata.origin`，宿主按连接盖的章），与气泡同一种配色：本机窗口打的不标；远程连接标对端
  * 地址（悬停看连接与浏览器标识）；Chrome / Telegram 标渠道；别的会话发来的标「来自其他会话 / 来自父会话」，宿主能切会话时
- * 点它打开那条会话。
+ * 点它打开那条会话；触发器替 bot 发的标「触发器」（悬停看是哪个 bot、哪个埋点）。
  */
 export function OriginBadge({ origin }: { origin: InputOrigin }): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -113,6 +115,17 @@ export function OriginBadge({ origin }: { origin: InputOrigin }): React.JSX.Elem
         </button>
       )
     }
+    case 'trigger':
+      return (
+        <span
+          className={chip}
+          style={style}
+          data-origin="trigger"
+          title={t('message.originTriggerHint', { bot: origin.bot, trigger: origin.trigger })}
+        >
+          {t('message.originTrigger')}
+        </span>
+      )
     default:
       return null
   }

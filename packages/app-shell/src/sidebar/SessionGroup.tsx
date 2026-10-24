@@ -34,6 +34,7 @@ import {
   FolderClosed,
   FolderOpen,
   Library,
+  ListChecks,
   Shield,
   Users,
   Webhook
@@ -54,6 +55,7 @@ export interface SessionGroupProps {
     | 'policies'
     | 'hooks'
     | 'skills'
+    | 'tracking'
     | 'section'
   /** 折叠态 + 切换；`temp` / `section` 形态是摊开的纯分节，两者都不传 */
   collapsed?: boolean
@@ -99,9 +101,11 @@ export function SessionGroup({
               ? Webhook
               : variant === 'skills'
                 ? BookOpen
-                : collapsed
-                  ? FolderClosed
-                  : FolderOpen
+                : variant === 'tracking'
+                  ? ListChecks
+                  : collapsed
+                    ? FolderClosed
+                    : FolderOpen
   return (
     <div className={`transition-opacity duration-200 ${dim ? 'opacity-30 hover:opacity-100' : ''}`}>
       {/* 当前会话所在的组：整组垫一层很淡的底（桌面侧栏上看得出「我在哪个项目里」；手机侧栏底色就是 bg-primary，

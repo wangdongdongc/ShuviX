@@ -45,7 +45,13 @@ const mocks = vi.hoisted(() => ({
   // 跨会话授权的 PEP（XS-62 断言工具交给它的四个参数；判定本身是安全模块的用例）
   assertSessionAccess: vi.fn<
     (ctx: unknown, access: string, object: unknown, opts: Record<string, unknown>) => Promise<void>
-  >(async () => {})
+  >(async () => {}),
+  // list-sessions 带 active_since（LS 组）：runner.listActive + 工具交给它的 canRead（读策略的静默判定）
+  runnerListActive: vi.fn(),
+  getDesktopSecurityContext: vi.fn(),
+  sessionObjectFacts: vi.fn<(sessionId: string) => { lastActiveAt: string; bot: string }>(),
+  evaluate: vi.fn<(action: string, object: Record<string, unknown>) => { effect: string }>(),
+  enforceSession: vi.fn()
 }))
 
 vi.mock('../../dao/sessionDao', () => ({ sessionDao: { pick: mocks.pick } }))
@@ -64,13 +70,16 @@ vi.mock('../../services/subSessionRunner', () => ({
     stop: mocks.runnerStop,
     answer: mocks.runnerAnswer,
     steer: mocks.runnerSteer,
-    inspect: mocks.runnerInspect
+    inspect: mocks.runnerInspect,
+    listActive: mocks.runnerListActive
   }
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
 // 跨会话授权的 PEP：这里只看转调与排版（授权的判定是安全模块与 runner 的用例）
 vi.mock('../../services/toolContext', () => ({
-  assertSessionAccess: mocks.assertSessionAccess
+  assertSessionAccess: mocks.assertSessionAccess,
+  getDesktopSecurityContext: mocks.getDesktopSecurityContext,
+  sessionObjectFacts: mocks.sessionObjectFacts
 }))
 
 type SessionModule = typeof import('../session')
@@ -94,7 +103,12 @@ beforeEach(() => {
     mocks.runnerStop,
     mocks.runnerAnswer,
     mocks.runnerSteer,
-    mocks.runnerInspect
+    mocks.runnerInspect,
+    mocks.runnerListActive,
+    mocks.getDesktopSecurityContext,
+    mocks.sessionObjectFacts,
+    mocks.evaluate,
+    mocks.enforceSession
   ]) {
     fn.mockReset()
   }
@@ -132,7 +146,9 @@ describe('SessionTool — 参数面与目标会话边界', () => {
       'item',
       'match',
       'before',
-      'timeout_seconds'
+      'timeout_seconds',
+      'active_since',
+      'active_until'
     ])
     // 参数面只为新能力加必要的几项（§19：代答的 ask_id / selections，查看现场的 turns / item / match / before）：
     // wait / answer 复用 session_id，steer / answer 复用 message；§20 起没有 run_in_background，
@@ -1501,4 +1517,334 @@ describe('SessionTool — 授权回调转交给 assertSessionAccess 的参数（
       })
     }
   )
+})
+
+// ── 点名本会话自己（XS-70..XS-73） ──────────────────────────────────
+//
+// 「session_id 就是本会话」由 runner 落定目标时拒绝（`"<id>" is this session itself. <子会话清单>`，见
+// subSessionRunner.test XS-43）—— 工具层没有另一道检查：它把 id（trim 过）原样交给 runner，把 runner 的错误原样
+// 抛出，自己不调授权回调。这里钉的就是这条转交。
+
+/** runner 对「点名调用方自己」的拒绝文案（与 runner 的 resolveTarget 同形） */
+const SELF_ERROR = `"s1" is this session itself. You have no sub-sessions.\nAnother session is addressed by the exact id the user gives you (an @-mention of it in their message) — do not guess ids.`
+
+describe('SessionTool — 点名本会话自己（XS-70..XS-73）', () => {
+  /** 指向某条会话的 7 个动作：runner 方法、必带参数、runner 收到的 childId 在哪 */
+  const TARGETING: ReadonlyArray<
+    readonly [action: string, runner: RunnerMock & { mockResolvedValue: (v: unknown) => void }]
+  > = [
+    ['prompt-session', mocks.runnerPrompt],
+    ['wait-for-sessions', mocks.runnerWait],
+    ['read-session', mocks.runnerRead],
+    ['stop-session', mocks.runnerStop],
+    ['answer-session', mocks.runnerAnswer],
+    ['steer-session', mocks.runnerSteer],
+    ['inspect-session', mocks.runnerInspect]
+  ]
+  const EXTRA: Record<string, Record<string, unknown>> = {
+    'prompt-session': { message: 'm' },
+    'steer-session': { message: 'm' },
+    'answer-session': { selections: ['A'] }
+  }
+  const childIdOf = (runner: RunnerMock): unknown => {
+    const args = runner.mock.calls[0]
+    return runner === mocks.runnerRead || runner === mocks.runnerStop
+      ? args[1]
+      : (args[0] as { childId?: string }).childId
+  }
+
+  beforeEach(stubRunners)
+
+  it.each(TARGETING)(
+    'XS-70 %s 点名本会话：本会话 id 原样交给 runner（工具层不拦），runner 的「is this session itself」原样成为工具失败；工具自己不调授权',
+    async (action, runner) => {
+      runner.mockResolvedValue({ error: SELF_ERROR })
+      const failure = await failureText(
+        executeTool(tool, 'tc-1', { action, session_id: 's1', ...EXTRA[action] } as never)
+      )
+      expect(failure).toBe(SELF_ERROR)
+      expect(failure).toContain('is this session itself')
+      expect(runner.mock.calls).toHaveLength(1)
+      expect(childIdOf(runner)).toBe('s1')
+      expect(mocks.assertSessionAccess).not.toHaveBeenCalled()
+    }
+  )
+
+  it('XS-71 旧名 read-sub-session + sub_session_id = 本会话：同一条转交、同一句错误', async () => {
+    mocks.runnerRead.mockResolvedValue({ error: SELF_ERROR })
+    const failure = await failureText(
+      executeTool(tool, 'tc-1', { action: 'read-sub-session', sub_session_id: 's1' } as never)
+    )
+    expect(failure).toBe(SELF_ERROR)
+    expect(mocks.runnerRead.mock.calls[0][1]).toBe('s1')
+    expect(mocks.assertSessionAccess).not.toHaveBeenCalled()
+  })
+
+  it.each(TARGETING)(
+    'XS-72 %s：前后带空白的本会话 id 先 trim 再交给 runner（runner 比的是 trim 过的 id，所以照样认得出是自己）',
+    async (action, runner) => {
+      runner.mockResolvedValue({ error: SELF_ERROR })
+      const failure = await failureText(
+        executeTool(tool, 'tc-1', { action, session_id: '  s1\n', ...EXTRA[action] } as never)
+      )
+      expect(failure).toBe(SELF_ERROR)
+      expect(childIdOf(runner)).toBe('s1')
+    }
+  )
+
+  it('XS-73 不指向会话的动作（list-sessions / create-sub-session / set-title）带着本会话的 session_id 照常工作', async () => {
+    mocks.runnerList.mockReturnValue({ subSessions: [] })
+    const listed = await executeTool(tool, 'tc-1', {
+      action: 'list-sessions',
+      session_id: 's1'
+    } as never)
+    expect(listed.isError).toBeFalsy()
+    expect(mocks.runnerList.mock.calls).toEqual([['s1']])
+
+    mocks.runnerCreate.mockResolvedValue({ id: 'sub-1', title: 'T' })
+    const created = await executeTool(tool, 'tc-1', {
+      action: 'create-sub-session',
+      session_id: 's1'
+    } as never)
+    expect(created.isError).toBeFalsy()
+    expect(mocks.runnerCreate).toHaveBeenCalledTimes(1)
+    expect(textOf(created)).toContain('sub-1')
+
+    const titled = await executeTool(tool, 'tc-1', {
+      action: 'set-title',
+      title: 'Renamed',
+      session_id: 's1'
+    } as never)
+    expect(titled.isError).toBeFalsy()
+    expect(mocks.updateTitle).toHaveBeenCalledWith('s1', 'Renamed', 'auto')
+    expect(mocks.assertSessionAccess).not.toHaveBeenCalled()
+  })
+})
+
+// ── list-sessions 按日历列出（LS-1..LS-7） ─────────────────────────
+//
+// 带 active_since 时转调 runner.listActive（准入、区间、上限都在 runner，见 subSessionRunner.test LA 组）；工具层
+// 交给它一个 canRead —— 读策略的静默判定（evaluate，不是 enforce：不弹卡、不派审查），只有 allow 算读得到 —— 再
+// 把结果排版成 <sessions active_since active_until> 围栏加两句计数说明。
+// LS-8（真策略：权限表里的会话、daily-bot-access 放行近 7 天、8 天前的隐藏）不在这里：本文件把 toolContext
+// 整个换成假件，没有真的安全上下文，那是整合夹具（desktopRig）的事。
+
+describe('SessionTool — list-sessions 按日历列出（LS-1..LS-7）', () => {
+  const ctx = { sessionId: 's1' } as ToolContext
+  let own: InstanceType<SessionModule['SessionTool']>
+
+  const ROWS = [
+    {
+      id: 's1',
+      title: 'Me',
+      lastActiveAt: '2026-10-24T10:00:00.000Z',
+      bot: '',
+      inputs: ['local'],
+      self: true
+    },
+    {
+      id: 'kid',
+      title: 'Kid',
+      lastActiveAt: '2026-10-24T09:00:00.000Z',
+      bot: '',
+      inputs: ['parent-session'],
+      relation: 'sub-session'
+    },
+    {
+      id: 'd1',
+      title: 'Daily · 10-23 18:00',
+      lastActiveAt: '2026-10-23T10:00:00.000Z',
+      bot: 'bot:builtin:daily',
+      inputs: ['local', 'trigger']
+    },
+    { id: 'n1', title: 'New', lastActiveAt: '2026-10-22T10:00:00.000Z', bot: '', inputs: [] }
+  ]
+  const RESULT = {
+    since: '2026-10-20',
+    until: '2026-10-24',
+    rows: ROWS,
+    hidden: 0,
+    truncated: 0
+  }
+  const HEAD = '<sessions active_since="2026-10-20" active_until="2026-10-24">'
+  const TRUNCATED_NOTE =
+    '5 more sessions you may read were active in that range — narrow the dates to see them.'
+  const HIDDEN_NOTE =
+    "3 other sessions were active in that range but need the user's approval to read; they are not listed."
+
+  beforeAll(() => {
+    own = new mod.SessionTool(ctx)
+  })
+  beforeEach(() => {
+    stubRunners()
+    mocks.runnerListActive.mockReturnValue(RESULT)
+    mocks.getDesktopSecurityContext.mockReturnValue({
+      evaluate: mocks.evaluate,
+      enforceSession: mocks.enforceSession
+    })
+    mocks.sessionObjectFacts.mockImplementation((id) => ({
+      lastActiveAt: `facts-of-${id}`,
+      bot: id === 'd1' ? 'bot:builtin:daily' : ''
+    }))
+    mocks.evaluate.mockReturnValue({ effect: 'allow' })
+  })
+
+  it('LS-1 不带 active_since ⇒ 原来的子会话清单（runner.list），listActive 不碰', async () => {
+    await executeTool(tool, 'tc-1', { action: 'list-sessions' })
+    expect(mocks.runnerList.mock.calls).toEqual([['s1']])
+    expect(mocks.runnerListActive).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['日期', '2026-10-24'],
+    ['空串', '']
+  ])(
+    'LS-1 只给 active_until（%s）没有 active_since ⇒ 工具报错让它补上起始日；两个 runner 方法都不碰',
+    async (_l, until) => {
+      const failure = await failureText(
+        executeTool(tool, 'tc-1', { action: 'list-sessions', active_until: until })
+      )
+      expect(failure).toBe(
+        '"active_until" needs "active_since": give the first date of the range as well.'
+      )
+      expect(mocks.runnerList).not.toHaveBeenCalled()
+      expect(mocks.runnerListActive).not.toHaveBeenCalled()
+    }
+  )
+
+  it('LS-2 带 active_since ⇒ listActive(本会话, since, until, canRead)，日期原样（trim 与校验在 runner）；until 不给就传 undefined', async () => {
+    await executeTool(own, 'tc-1', {
+      action: 'list-sessions',
+      active_since: ' 2026-10-20 ',
+      active_until: '2026-10-24'
+    })
+    expect(mocks.runnerListActive).toHaveBeenCalledTimes(1)
+    const [caller, since, until, canRead] = mocks.runnerListActive.mock.calls[0]
+    expect([caller, since, until]).toEqual(['s1', ' 2026-10-20 ', '2026-10-24'])
+    expect(canRead).toEqual(expect.any(Function))
+    expect(mocks.runnerList).not.toHaveBeenCalled()
+
+    await executeTool(own, 'tc-1', { action: 'list-sessions', active_since: '2026-10-20' })
+    expect(mocks.runnerListActive.mock.calls[1].slice(0, 3)).toEqual([
+      's1',
+      '2026-10-20',
+      undefined
+    ])
+  })
+
+  it('LS-2 排版：围栏带区间；每行 id / title / last_active，bot 与 inputs 为空时省掉，relation / self 有才写', async () => {
+    const out = textOf(
+      await executeTool(own, 'tc-1', { action: 'list-sessions', active_since: '2026-10-20' })
+    )
+    expect(out).toBe(
+      [
+        HEAD,
+        '<session id="s1" title="Me" last_active="2026-10-24T10:00:00.000Z" inputs="local" self="true"/>',
+        '<session id="kid" title="Kid" last_active="2026-10-24T09:00:00.000Z" inputs="parent-session" relation="sub-session"/>',
+        '<session id="d1" title="Daily · 10-23 18:00" last_active="2026-10-23T10:00:00.000Z" bot="bot:builtin:daily" inputs="local,trigger"/>',
+        '<session id="n1" title="New" last_active="2026-10-22T10:00:00.000Z"/>',
+        '</sessions>'
+      ].join('\n')
+    )
+  })
+
+  it('LS-3 canRead = 读策略的静默判定：evaluate(read, {session, ownTurn:false, 宿主补的 lastActiveAt / bot})，只有 allow 放行；ask / deny 都不列；不弹卡、不 enforce', async () => {
+    const effects: Record<string, string> = { a: 'allow', q: 'ask', d: 'deny' }
+    mocks.evaluate.mockImplementation((_action, object) => ({
+      effect: effects[object.sessionId as string]
+    }))
+    let verdicts: boolean[] = []
+    mocks.runnerListActive.mockImplementation(
+      (
+        _c: string,
+        _s: string,
+        _u: string,
+        canRead: (t: { id: string; title: string }) => boolean
+      ) => {
+        verdicts = [
+          canRead({ id: 'a', title: 'Allowed' }),
+          canRead({ id: 'q', title: 'Asks' }),
+          canRead({ id: 'd', title: 'Denied' })
+        ]
+        return { ...RESULT, rows: [], hidden: 2 }
+      }
+    )
+    await executeTool(own, 'tc-1', { action: 'list-sessions', active_since: '2026-10-20' })
+    expect(verdicts).toEqual([true, false, false])
+    expect(mocks.getDesktopSecurityContext).toHaveBeenCalledWith(ctx)
+    expect(mocks.getDesktopSecurityContext.mock.calls[0][0]).toBe(ctx)
+    expect(mocks.evaluate.mock.calls).toEqual(
+      [
+        ['a', 'Allowed'],
+        ['q', 'Asks'],
+        ['d', 'Denied']
+      ].map(([id, title]) => [
+        'read',
+        {
+          type: 'session',
+          sessionId: id,
+          title,
+          ownTurn: false,
+          lastActiveAt: `facts-of-${id}`,
+          bot: ''
+        }
+      ])
+    )
+    expect(mocks.sessionObjectFacts.mock.calls).toEqual([['a'], ['q'], ['d']])
+    // 静默：不经 PEP（没有询问卡、没有审查派发）
+    expect(mocks.enforceSession).not.toHaveBeenCalled()
+    expect(mocks.assertSessionAccess).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, number, number, string[]]>([
+    ['都没有', 0, 0, []],
+    ['只有超出上限的', 5, 0, [TRUNCATED_NOTE]],
+    ['只有要问人的', 0, 3, [HIDDEN_NOTE]],
+    ['两样都有（上限那句在前）', 5, 3, [TRUNCATED_NOTE, HIDDEN_NOTE]]
+  ])('LS-4 计数说明：%s', async (_l, truncated, hidden, notes) => {
+    mocks.runnerListActive.mockReturnValue({ ...RESULT, rows: [ROWS[3]], truncated, hidden })
+    const out = textOf(
+      await executeTool(own, 'tc-1', { action: 'list-sessions', active_since: '2026-10-20' })
+    )
+    const block = `${HEAD}\n<session id="n1" title="New" last_active="2026-10-22T10:00:00.000Z"/>\n</sessions>`
+    expect(out).toBe([block, ...notes].join('\n\n'))
+  })
+
+  it('LS-5 runner 的错误（日期不对、起止颠倒）原样成为工具失败', async () => {
+    const error = '"active_since" (2026-10-25) is after "active_until" (2026-10-24).'
+    mocks.runnerListActive.mockReturnValue({ error })
+    expect(
+      await failureText(
+        executeTool(own, 'tc-1', {
+          action: 'list-sessions',
+          active_since: '2026-10-25',
+          active_until: '2026-10-24'
+        })
+      )
+    ).toBe(error)
+  })
+
+  it('LS-6 标题里的引号 / 换行不撕破标签：引号换成单引号、换行压平；< 与 & 原样（与其它 <session> 行同一个 attr）', async () => {
+    mocks.runnerListActive.mockReturnValue({
+      ...RESULT,
+      rows: [{ ...ROWS[3], title: 'Fix "parser" <v2> & co\nsecond line' }]
+    })
+    const out = textOf(
+      await executeTool(own, 'tc-1', { action: 'list-sessions', active_since: '2026-10-20' })
+    )
+    const line = out.split('\n')[1]
+    expect(line).toBe(
+      `<session id="n1" title="Fix 'parser' <v2> & co second line" last_active="2026-10-22T10:00:00.000Z"/>`
+    )
+    expect(out.split('\n')).toHaveLength(3)
+  })
+
+  it('LS-7 区间里一条都没有 ⇒ 空围栏（开闭标签同一行），没有计数说明', async () => {
+    mocks.runnerListActive.mockReturnValue({ ...RESULT, rows: [] })
+    expect(
+      textOf(
+        await executeTool(own, 'tc-1', { action: 'list-sessions', active_since: '2026-10-20' })
+      )
+    ).toBe(`${HEAD}</sessions>`)
+  })
 })

@@ -17,6 +17,9 @@
  * 停用开关（HS-D*）：读口由主进程入口注入（setDisabledReader），这里直接注入一个函数 —— 停用的 hook 照常参与
  * 同名裁决（仍遮蔽同名的几份），只是不触发；列表行带 objectId / disableable / disabled。
  *
+ * 全局埋点（HS-29 / HS-30，2026-10-24）：`timer.fired` 不属于任何会话，hook 绑它整份非法（原因指向 bot 的
+ * `shuvix-bot-on`），从不注册；门面的 fire 在类型上收不下它。
+ *
  * 单例的 runner 跨用例存活，去重键是「hook × 会话」：挂起的 run 必须在用例内收掉（afterEach 兜底中止）。
  * 扫描缓存按「名字:inode:mtime:size」指纹失效，钉 mtime 的用例各用独有文件名，免得跨用例撞指纹。
  */
@@ -693,6 +696,81 @@ describe('hookService — 用户 hook（纯 md 驱动）', () => {
     expect(hookService.listInvalid()).toEqual([
       { fileName: 'multi.md', error: messages.join('\n') }
     ])
+  })
+})
+
+describe('hookService — 全局埋点（timer.fired）不归 hook', () => {
+  beforeEach(() => {
+    hookService.init()
+  })
+
+  /** 内置 timer 一次触发的 payload（18:00 整） */
+  const timerPayload = (): TriggerPayloadMap['timer.fired'] => ({
+    sourceId: 'timer:builtin:minute',
+    firedAt: '2026-10-24T10:00:00.000Z',
+    local: { date: '2026-10-24', time: '18:00', weekday: 6, hour: 18, minute: 0 }
+  })
+
+  it.each([
+    ['不带 when', undefined],
+    ['带 when', "event.local.time == '18:00'"]
+  ])(
+    'HS-29 绑 timer.fired 的 hook md（%s）→ 进 listInvalid，原因指向 shuvix-bot-on；不进列表、从不注册',
+    async (_label, when) => {
+      put('ticker.md', userHook('ticker', { displayName: 'Ticker', trigger: 'timer.fired', when }))
+      const invalid = hookService.listInvalid()
+      expect(invalid).toHaveLength(1)
+      expect(invalid[0].fileName).toBe('ticker.md')
+      expect(invalid[0].error).toContain("binding 'timer.fired'")
+      expect(invalid[0].error).toContain('does not belong to any session')
+      expect(invalid[0].error).toContain("'shuvix-bot-on'")
+      expect(invalid[0].error).toContain('the whole file is rejected')
+      expect(hookService.listForSettings().map((item) => item.name)).toEqual([
+        'auto-review',
+        'auto-title'
+      ])
+
+      // 会话里的埋点照常来：这份文件不跑
+      firePrompt()
+      fireTurn()
+      await settle()
+      expect(mocks.runTask).not.toHaveBeenCalled()
+      expect(hasLog('hook "ticker"')).toBe(false)
+    }
+  )
+
+  it('HS-29 同一份文件里前一条会话绑定合法也不留：整份非法', async () => {
+    put(
+      'mixed.md',
+      userHook('mixed', {
+        trigger: 'session.prompt-accepted',
+        extra: ['  - trigger: timer.fired']
+      })
+    )
+    expect(hookService.listInvalid().map((file) => file.fileName)).toEqual(['mixed.md'])
+    expect(hookService.listForSettings().some((item) => item.name === 'mixed')).toBe(false)
+    firePrompt()
+    await settle()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+  })
+
+  it('HS-30 类型：门面的 fire 收不下全局埋点（误走也没有 hook 订阅它）', async () => {
+    put('ticker.md', userHook('ticker', { trigger: 'timer.fired' }))
+    // @ts-expect-error 全局埋点不属于任何会话 —— 它走 bot 触发分发（botTriggerService），不走 hook
+    hookTriggers.fire('timer.fired', timerPayload())
+    await settle()
+    expect(mocks.runTask).not.toHaveBeenCalled()
+
+    // 对照：会话埋点照常编译、照常走
+    hookTriggers.fire('session.prompt-accepted', {
+      sessionId: 's1',
+      profileName: 'work',
+      title: 'New Chat',
+      isDefaultTitle: false,
+      promptText: 'hello',
+      origin: ''
+    })
+    await settle()
   })
 })
 

@@ -19,6 +19,8 @@
  *   SRC-24..27            每条输入都记来源之后（`InputOrigin`，2026-10-21）：人打的来源（本机 / 远程 / Chrome / Telegram）
  *                         读者一律跳过 —— 与「没有记录」一样；形状不对的人打来源照样失败闭合；真发送上人打的来源写进了
  *                         SourceDoc，读出来却与不带来源的同一串一模一样；显示侧车与来源同一个提交、同一个 requestId
+ *   SRC-28 / 29 · AUTH-08 触发器替 bot 发的话（`kind: 'trigger'`，2026-10-24）：不是人打的 —— 形状判别、真发送落进来源表、
+ *                         顶层会话里它之后没有记录的那条是人打的
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -69,6 +71,13 @@ const REMOTE = {
 } as const
 const CHROME = { kind: 'chrome', installId: 'inst-1' } as const
 const TELEGRAM = { kind: 'telegram', botId: 'b1', userId: 'u1', chatId: 'c1' } as const
+/** 触发器替 bot 发的（宿主的 bot 触发分发盖的章） */
+const TRIGGER = {
+  kind: 'trigger',
+  trigger: 'timer.fired',
+  sourceId: 'timer:builtin:minute',
+  bot: 'daily'
+} as const
 
 async function openSession(): Promise<{ t: TestHost; session: DurableSession }> {
   const t = await makeHost({ ephemeral: [SID] })
@@ -821,6 +830,67 @@ describe('SRC · human origins on real sends (2026-10-21)', () => {
       expect(await withTimeout(held.sending, 5000, 'round')).toEqual({})
       // 人打的：读者看不见
       expect(await sources(held.session)).toEqual(new Map())
+    },
+    TIMEOUT
+  )
+})
+
+describe('SRC · trigger origins (2026-10-24)', () => {
+  it.each([
+    ['四键原样', TRIGGER, TRIGGER],
+    [
+      '没有 sourceId（三键）',
+      { kind: 'trigger', trigger: 'timer.fired', bot: 'daily' },
+      { kind: 'trigger', trigger: 'timer.fired', bot: 'daily' }
+    ],
+    ['多出来的键（sessionId / title）丢掉', { ...TRIGGER, sessionId: 'S1', title: 'T' }, TRIGGER],
+    ['缺 bot', { kind: 'trigger', trigger: 'timer.fired' }, undefined],
+    ['trigger 空串', { ...TRIGGER, trigger: '' }, undefined],
+    ['人打的 local', LOCAL, undefined],
+    ['人打的 telegram', TELEGRAM, undefined]
+  ] as const)('SRC-28 inputSourceOf × kind trigger：%s', (_label, item, expected) => {
+    expect(inputSourceOf(item)).toStrictEqual(expected)
+  })
+
+  it(
+    'SRC-29 真发送：带触发器来源的那条经 resolveInputSources 落到它的 user 条目上，kind trigger、没有 sessionId；人打的那条不在表里',
+    async () => {
+      const { t, session } = await openSession()
+      t.kit.queue(answer('a1'), answer('a2'))
+      expect(await session.submitUser('Tick check-in.', { source: TRIGGER })).toEqual({})
+      expect(await session.submitUser('typed', { source: LOCAL })).toEqual({})
+      expect(Object.values((await sourceDoc(session))!.items)).toStrictEqual([TRIGGER, LOCAL])
+
+      const conversation = await session.currentConversation()
+      const view = await conversation.context(BG)
+      const resolved = await resolveInputSources(session.harness, conversation.id, view.entries)
+      const tick = (await userEntry(session, 'Tick check-in.')).id
+      expect([...resolved]).toStrictEqual([[tick, TRIGGER]])
+      expect('sessionId' in resolved.get(tick)!).toBe(false)
+      expect([...(await sources(session))]).toStrictEqual([[String(tick), TRIGGER]])
+    },
+    TIMEOUT
+  )
+
+  it(
+    'AUTH-08 顶层会话 [触发器发的, 没有记录的] → 第一条有记录（parent 标签）、第二条是人打的（带不带 topLevel 都一样）',
+    async () => {
+      const { t, session } = await openSession()
+      t.kit.queue(answer('a1'), answer('a2'))
+      expect(await session.submitUser('Tick check-in.', { source: TRIGGER })).toEqual({})
+      expect(await session.submitUser('typed later')).toEqual({})
+      const ids = [
+        String((await userEntry(session, 'Tick check-in.')).id),
+        String((await userEntry(session, 'typed later')).id)
+      ]
+      const map = await sources(session)
+      for (const opts of [{ topLevel: true }, {}]) {
+        const authors = authorsOf(ids, (id) => map.has(id), opts)
+        expect(
+          ids.map((id) => authors.get(id)),
+          JSON.stringify(opts)
+        ).toStrictEqual(['parent', 'human'])
+      }
     },
     TIMEOUT
   )

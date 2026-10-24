@@ -240,6 +240,16 @@ export const API_TABLE = {
     deleteByFile: invoke('bot:deleteByFile', 1),
     openFolder: invoke('bot:openFolder', 0)
   },
+  /** 跟踪项（实验）：侧栏 Library 的「跟踪项」分组 */
+  tracking: {
+    list: invoke('tracking:list', 0),
+    openNote: invoke('tracking:openNote', 1),
+    openFolder: invoke('tracking:openFolder', 0)
+  },
+  /** 触发源（实验）：设置 → 触发源页的状态 */
+  trigger: {
+    status: invoke('trigger:status', 0)
+  },
   /** shuvix 契约 md 校验 */
   shuvixMd: {
     validate: invoke('shuvixMd:validate', 1)

@@ -725,6 +725,14 @@ export interface SessionObjectInput {
    * `write` 已经过了这道门。新起一轮、看整条对话（inspect）、读别人发起那一轮的答复都不算
    */
   ownTurn: boolean
+  /**
+   * 目标会话最后一次有用户消息的时刻（ISO 8601，UTC；没有过消息的会话是它建成的时刻）—— 按新旧放行的规则用它：
+   * `timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('168h')`。宿主没给时客体上是空串
+   * （`timestamp('')` 求值出错 → 引用它的规则不命中）
+   */
+  lastActiveAt?: string
+  /** 目标会话绑定的 bot（对象 id，文件没有 id 时是名字）；不是 bot 会话、或宿主没给时为空串 */
+  bot?: string
 }
 
 /** PEP 门面 —— 各工具调用点唯一入口（见 context.ts） */

@@ -70,6 +70,8 @@ export type {
   KnowledgeTreeFile,
   KnowledgeScopeDir
 } from './sidebar/knowledgeTree'
+export { TrackingGroup } from './sidebar/TrackingGroup'
+export type { TrackingGroupProps, TrackingGroupAdapter } from './sidebar/TrackingGroup'
 export { BotGroup } from './sidebar/BotGroup'
 export type {
   BotGroupProps,

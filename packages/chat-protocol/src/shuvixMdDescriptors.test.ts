@@ -81,6 +81,40 @@ describe('agent 描述符 ↔ shuvix-thinking', () => {
   })
 })
 
+describe('bot 描述符 ↔ shuvix-bot-on（触发绑定，实验）', () => {
+  const lookup = (tree: unknown, key: string): unknown =>
+    key
+      .split('.')
+      .reduce<unknown>((node, seg) => (node as Record<string, unknown> | undefined)?.[seg], tree)
+
+  it('SMD-4 有 shuvix-bot-on 一行：kind hookBindings（与 hook 的 shuvix-hook-on 同一种摘要），标签 settings.botOn 三语都有', () => {
+    const row = descriptorForType('bot')?.fields.find((f) => f.key === 'shuvix-bot-on')
+    expect(row).toBeDefined()
+    expect(row!.kind).toBe('hookBindings')
+    expect(row!.labelKey).toBe('settings.botOn')
+    const hookRow = descriptorForType('hook')?.fields.find((f) => f.key === 'shuvix-hook-on')
+    expect(hookRow?.kind).toBe(row!.kind)
+    for (const [lang, tree] of [
+      ['en', en],
+      ['zh', zh],
+      ['ja', ja]
+    ] as const) {
+      const label = lookup(tree, row!.labelKey)
+      expect(typeof label, lang).toBe('string')
+      expect((label as string).trim(), lang).not.toBe('')
+    }
+  })
+})
+
+describe('track 描述符（跟踪项，实验）', () => {
+  it('SMD-5 徽章 Tracked item；字段只有对象 id 一行（hidden）—— 标题与进展都在正文里', () => {
+    const d = descriptorForType('track')
+    expect(d).toBeTruthy()
+    expect(d!.badge).toBe('Tracked item')
+    expect(d!.fields.map((f) => [f.key, f.kind])).toEqual([[SHUVIX_ID_KEY, 'hidden']])
+  })
+})
+
 describe('描述符表本身', () => {
   it('SMD-2 type 两两不重复（descriptorForType 取首个命中，撞名的那张永远选不中）', () => {
     const types = SHUVIX_MD_DESCRIPTORS.map((d) => d.type)

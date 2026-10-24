@@ -21,6 +21,8 @@ import {
   getBuiltinSkillsDir,
   getBuiltinKnowledgeDir,
   getSessionArtifactsDir,
+  getDefaultDailyDir,
+  getDefaultTrackingDir,
   isSafeSessionId
 } from '../utils/paths'
 import { resolveRealPath } from '../utils/toolUtils/realPath'
@@ -28,6 +30,7 @@ import { resolveToCwd } from '../utils/toolUtils/pathUtils'
 import { skillService } from './skillService'
 import { shellParser } from './shellParserService'
 import { policyService } from './policyService'
+import { botService } from './botService'
 import {
   type CommandRisk,
   createSecurityContext,
@@ -206,10 +209,20 @@ export async function assertWriteAllowed(
  * 对话。出厂的 ask-on-session-access 在不是自己发起的那一轮、又不在会话权限表里时询问；「允许并记住」记进权限表
  * （persistSessionGrant）。拒绝 / 取消 / 反馈时抛错，文案给模型。
  */
+/**
+ * 会话客体里宿主补的事实（调用方只给 id / 标题 / ownTurn）：最后一次有用户消息的时刻、绑定的 bot。读不到的会话
+ * （行已经没了）给建成时刻缺省的 epoch 与空串 —— 按时间放行的规则对它恒不命中
+ */
+export function sessionObjectFacts(sessionId: string): { lastActiveAt: string; bot: string } {
+  const row = sessionRecords.pick(sessionId, ['lastActiveAt', 'createdAt'])
+  const at = row?.lastActiveAt ?? row?.createdAt ?? 0
+  return { lastActiveAt: new Date(at).toISOString(), bot: botService.identityOf(sessionId) }
+}
+
 export async function assertSessionAccess(
   ctx: ToolContext,
   access: 'read' | 'write',
-  object: SessionObjectInput,
+  object: Omit<SessionObjectInput, 'lastActiveAt' | 'bot'>,
   opts: {
     toolCallId: string
     toolName: string
@@ -221,15 +234,19 @@ export async function assertSessionAccess(
     message?: string
   }
 ): Promise<void> {
-  await getDesktopSecurityContext(ctx).enforceSession(access, object, {
-    toolCallId: opts.toolCallId,
-    ...opts.owner,
-    toolName: opts.toolName,
-    operation: opts.operation,
-    ...(opts.signal ? { signal: opts.signal } : {}),
-    ...(opts.message?.trim() ? { preview: { kind: 'message', text: opts.message } } : {}),
-    abortError: TOOL_ABORTED
-  })
+  await getDesktopSecurityContext(ctx).enforceSession(
+    access,
+    { ...object, ...sessionObjectFacts(object.sessionId) },
+    {
+      toolCallId: opts.toolCallId,
+      ...opts.owner,
+      toolName: opts.toolName,
+      operation: opts.operation,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.message?.trim() ? { preview: { kind: 'message', text: opts.message } } : {}),
+      abortError: TOOL_ABORTED
+    }
+  )
 }
 
 const securityLog = createLogger('Security')
@@ -283,7 +300,12 @@ function hostPolicyVars(
     // artifacts，`..` 会放大到 ~/.shuvix（里面有 policies/）
     sessionArtifactsDir: isSafeSessionId(sessionId) ? getSessionArtifactsDir(sessionId) : '',
     home: homedir(),
-    systemDirs: windowsSystemDirs()
+    systemDirs: windowsSystemDirs(),
+    // 此刻（ISO 8601，UTC）—— 按时间放行的规则拿它比：`timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('168h')`
+    now: new Date().toISOString(),
+    // 日报与跟踪项目录（事实变量）：给 bot 放行读写它们的策略引用（内置日报 bot 的那份就是）
+    dailyDir: getDefaultDailyDir(),
+    trackingDir: getDefaultTrackingDir()
   }
 }
 
@@ -421,7 +443,15 @@ export function getDesktopSecurityContext(
         kind: 'agent',
         sessionId: ctx.sessionId,
         agentKind: agent?.kind ?? 'root',
-        ...(agent?.profileName ? { profileName: agent.profileName } : {})
+        ...(agent?.profileName ? { profileName: agent.profileName } : {}),
+        // 开放属性（惰性：没有规则引用就不算）。`subject.bot` = 这条会话绑定的 bot（对象 id，没有 id 时是名字；
+        // 不是 bot 会话为空串）—— 写给某个 bot 放行 / 收紧的策略用它认人，不用档案名（任何会话都能把子会话钉成
+        // 同一个档案）
+        attrs: {
+          get bot(): string {
+            return botService.identityOf(ctx.sessionId)
+          }
+        }
       },
       {
         host: 'desktop',

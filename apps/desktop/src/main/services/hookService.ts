@@ -44,7 +44,7 @@ import {
   type HookRunModel,
   type HookRegistryEntry,
   type HookRunner,
-  type ObserveTriggerId,
+  type SessionObserveTriggerId,
   type ParsedHookFile,
   type ShadowResolved,
   type TriggerPayloadMap,
@@ -165,7 +165,7 @@ class HookService {
   }
 
   /** 观察型埋点入口（绝不抛出）。runner 未就绪时静默丢弃。 */
-  fire<K extends ObserveTriggerId>(id: K, payload: TriggerPayloadMap[K]): void {
+  fire<K extends SessionObserveTriggerId>(id: K, payload: TriggerPayloadMap[K]): void {
     this.runner?.fire(id, payload)
   }
 
@@ -530,7 +530,7 @@ export const hookService = new HookService()
  * payload 形状由 TriggerPayloadMap 按 id 收窄（埋点目录见 agent-runtime hook/triggerPoints.ts）。
  */
 export const hookTriggers = {
-  fire: <K extends ObserveTriggerId>(id: K, payload: TriggerPayloadMap[K]): void =>
+  fire: <K extends SessionObserveTriggerId>(id: K, payload: TriggerPayloadMap[K]): void =>
     hookService.fire(id, payload),
   decide: <K extends DecideTriggerId>(
     id: K,

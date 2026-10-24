@@ -19,6 +19,12 @@
  * `shuvix-id` 是对象 id（ShuviX 扩展元数据只认它，见 chat-protocol mdMeta.ts）：写错不判非法，
  * 按「没有 id」读并发一条软提示。
  *
+ * **触发绑定**（`shuvix-bot-on`，可选，2026-10-24）：`[{trigger, when?, message}]` —— 与 hook 的 `shuvix-hook-on`
+ * 同一张埋点表、同一套 CEL `when`（上下文 `{event, env}`），多一个 `message`：命中时宿主新建一条绑定这个 bot 的
+ * 会话，把 `message`（后面附上事件围栏）作为来源为 `trigger` 的用户消息发进去。bot 只订阅**全局**埋点（如
+ * `timer.fired`）：会话域埋点每轮都发，而 bot 的每次触发都新建一条会话 —— 订阅它们等于让会话自己生会话，判非法。
+ * 未知埋点 id 与 hook 同策：绑定惰性化 + 软提示。
+ *
  * `warn` 承载两类话：返回 null 时它们是拒绝理由；返回对象时它们是软提示（管线残留）。调用方
  * 据返回值区分 —— 与 agent / hook 解析器的通道同形。
  */
@@ -27,6 +33,8 @@ import { readShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
 import { SHUVIX_ID_KEY } from '@shuvix/chat-protocol/mdMeta'
 import { splitFrontmatter } from '../markdownFrontmatter'
 import { readObjectIdField } from '../mdObjectId'
+import { getTriggerPoint } from '../hook/triggerPoints'
+import { compileWhen } from '../hook/when'
 
 /** 文件类型标记 —— 写入 `shuvix: bot v2`；读取时不作要求（类型不符则拒绝） */
 export const BOT_FILE_MARKER_KEY = 'shuvix'
@@ -35,6 +43,17 @@ export const BOT_FILE_MARKER = 'bot v2'
 export const BOT_FILE_MARKER_TYPE = 'bot'
 /** v1 的管线绑定块键：读到只发软提示，不参与任何解析 */
 export const BOT_RETIRED_PIPELINE_KEY = 'shuvix-bot-pipeline'
+/** 触发绑定列表的键 */
+export const BOT_ON_KEY = 'shuvix-bot-on'
+
+/** 一条触发绑定：在哪个埋点、满足什么条件时，新建一条会话并对 bot 说这段话 */
+export interface BotBinding {
+  trigger: string
+  /** CEL；缺省 = 每次都命中 */
+  when?: string
+  /** 发给 bot 的话（宿主在后面附上事件围栏） */
+  message: string
+}
 
 /** 解析产物（basePath 由调用方补齐） */
 export interface ParsedBotFile {
@@ -48,6 +67,8 @@ export interface ParsedBotFile {
   description: string
   /** 正文：人设与记忆（已 trim；可为空 —— 新建出来就几乎是空的，由 bot 自己写） */
   body: string
+  /** 触发绑定（`shuvix-bot-on`）；没写这个键 = 省略（读的一侧按空列表） */
+  bindings?: BotBinding[]
 }
 
 function stringField(fields: Record<string, unknown>, key: string): string | undefined {
@@ -115,14 +136,64 @@ export function parseBotDefinitionFile(
     )
   }
 
+  const declared = fields[BOT_ON_KEY] !== undefined && fields[BOT_ON_KEY] !== null
+  const bindings = declared ? parseBindings(fields[BOT_ON_KEY], name, warn) : []
+  if (typeof bindings === 'string') return reject(bindings)
+
   const objectId = readObjectIdField(fields, `bot '${name}'`, warn)
   return {
     name,
     ...(objectId ? { objectId } : {}),
     displayName: stringField(fields, 'shuvix-displayName') ?? name,
     description: stringField(fields, 'description') ?? '',
-    body: split.body.trim()
+    body: split.body.trim(),
+    ...(declared ? { bindings } : {})
   }
+}
+
+/** `shuvix-bot-on` → 绑定列表；结构非法 → 拒绝理由（字符串） */
+function parseBindings(
+  raw: unknown,
+  name: string,
+  warn?: (msg: string) => void
+): BotBinding[] | string {
+  // 写成空列表合法（暂时停掉所有触发的一种写法）；没写 / 写成 `~` 在调用方就按没有绑定处理了
+  if (!Array.isArray(raw)) return `'${BOT_ON_KEY}' must be a list of bindings`
+  const bindings: BotBinding[] = []
+  for (const entry of raw) {
+    if (!isMapping(entry)) return `'${BOT_ON_KEY}' entries must be mappings`
+    const trigger = typeof entry.trigger === 'string' ? entry.trigger.trim() : ''
+    if (!trigger) return `each '${BOT_ON_KEY}' entry needs a 'trigger' id`
+    for (const k of Object.keys(entry)) {
+      if (k !== 'trigger' && k !== 'when' && k !== 'message') {
+        return `binding '${trigger}': unknown key '${k}' — a binding has only trigger, when and message`
+      }
+    }
+    let when: string | undefined
+    if (entry.when !== undefined && entry.when !== null) {
+      if (typeof entry.when !== 'string' || !entry.when.trim()) {
+        return `binding '${trigger}': 'when' must be a CEL expression string`
+      }
+      when = entry.when.trim()
+      const celError = compileWhen(when)
+      if (celError) return `binding '${trigger}': invalid when CEL — ${celError}`
+    }
+    if (typeof entry.message !== 'string' || !entry.message.trim()) {
+      return `binding '${trigger}': 'message' must be the non-empty text sent to the bot`
+    }
+    const point = getTriggerPoint(trigger)
+    if (!point) {
+      warn?.(`bot '${name}': trigger '${trigger}' is not known on this build — binding is inert`)
+    } else if (point.scope !== 'global') {
+      return `binding '${trigger}': '${trigger}' happens inside a session — a bot binding opens a new session each time it fires, so it can bind only triggers that belong to no session (such as timer.fired)`
+    }
+    bindings.push({
+      trigger,
+      ...(when === undefined ? {} : { when }),
+      message: entry.message.trim()
+    })
+  }
+  return bindings
 }
 
 /**

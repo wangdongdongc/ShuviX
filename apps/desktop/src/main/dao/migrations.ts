@@ -878,6 +878,21 @@ export const migrations: Migration[] = [
         dropKey.run(row.id)
       }
     }
+  },
+  {
+    version: 34,
+    description:
+      'session_day_prompts 加 origin 列：一条用户条目是谁发的（InputOrigin 的种类：local / remote / chrome / telegram / parent-session / session / trigger），日历的「当天有人写过消息的会话数」只数人打的',
+    up: (db) => {
+      // 可空：旧行与会话建成那一行（entryId = 'created'）都是 NULL。不回填 —— 旧行几乎都是人打的，
+      // 数「有人写过消息」时按人算（宁可让触发条件多放行一次，不让它漏掉）。再跑一遍（user_version 被拨回）时列已在
+      const columns = db.prepare('PRAGMA table_info(session_day_prompts)').all() as Array<{
+        name: string
+      }>
+      if (!columns.some((c) => c.name === 'origin')) {
+        db.exec('ALTER TABLE session_day_prompts ADD COLUMN origin TEXT')
+      }
+    }
   }
 ]
 

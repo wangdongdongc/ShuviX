@@ -12,7 +12,7 @@
  * 一份误投进 bots 目录的 agent md 会当场变成某人的人设。最要紧的一条放宽在 BX 组：v1 文件
  * （带已拆除的管线块）照常解析，只发一条软提示。
  *
- * 分组：PP 合法形状与缺省 · PR 整份拒绝清单 · PX 宽松侧 · BX v1 残留 · PS 序列化 · PD 属性卡对齐
+ * 分组：PP 合法形状与缺省 · PR 整份拒绝清单 · PX 宽松侧 · BX v1 残留 · PB 触发绑定 · PS 序列化 · PD 属性卡对齐
  *
  * 断言到消息文本一律用子串/正则而非全等：拒绝理由是档案页横幅与 IPC error 的唯一文案
  * 来源，要钉的是「点名了哪个键、给没给期望写法」，不是标点。
@@ -27,6 +27,7 @@ import {
   BOT_FILE_MARKER,
   BOT_FILE_MARKER_KEY,
   BOT_FILE_MARKER_TYPE,
+  BOT_ON_KEY,
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
   type ParsedBotFile
@@ -397,6 +398,262 @@ describe('BX —— v1 文件（带已拆除的管线块）', () => {
   })
 })
 
+// ────────────────────────────── PB：触发绑定 ──────────────────────────────
+
+/**
+ * PB —— `shuvix-bot-on` 触发绑定（2026-10-24）：`[{trigger, when?, message}]`。与 hook 的 `shuvix-hook-on`
+ * 同一张埋点表、同一套 CEL `when`，多一个 `message`。bot 只能绑**全局**埋点（timer.fired）—— 会话域埋点
+ * 每轮都发，而 bot 每次触发都新建一条会话。结构非法整份拒绝；未知埋点 id 惰性化 + 软提示（同 hook）。
+ */
+describe('PB —— shuvix-bot-on 触发绑定', () => {
+  /** 最小 bot + 绑定行（缩进由调用方写好） */
+  const withOn = (...lines: string[]): string => botMd(...lines)
+  /** 一条最小合法绑定 */
+  const TIMER = ['  - trigger: timer.fired', '    message: Tick.']
+
+  it('PB-1 没写这个键 / 写成 ~ → 产物里没有 bindings 键（不是空列表）', () => {
+    for (const raw of [botMd(), withOn(`${BOT_ON_KEY}: ~`)]) {
+      const { result, messages } = parseWithWarn(raw)
+      expect(messages, raw).toEqual([])
+      expect(result, raw).toStrictEqual({
+        name: 'scout',
+        displayName: 'scout',
+        description: '',
+        body: 'body'
+      })
+    }
+  })
+
+  it('PB-2 空列表合法（暂停所有触发的一种写法）→ bindings: []、零告警', () => {
+    const { result, messages } = parseWithWarn(withOn(`${BOT_ON_KEY}: []`))
+    expect(messages).toEqual([])
+    expect(result).toStrictEqual({
+      name: 'scout',
+      displayName: 'scout',
+      description: '',
+      body: 'body',
+      bindings: []
+    })
+  })
+
+  it('PB-3 一条完整绑定三个值都 trim；没写 when / when: ~ 的绑定没有 when 键', () => {
+    const full = parseWithWarn(
+      withOn(
+        `${BOT_ON_KEY}:`,
+        "  - trigger: '  timer.fired  '",
+        `    when: "  event.local.time == '18:00'  "`,
+        "    message: '  Tick check-in.  '"
+      )
+    )
+    expect(full.messages).toEqual([])
+    expect(full.result?.bindings).toStrictEqual([
+      { trigger: 'timer.fired', when: "event.local.time == '18:00'", message: 'Tick check-in.' }
+    ])
+
+    for (const extra of [[], ['    when: ~']]) {
+      const { result, messages } = parseWithWarn(withOn(`${BOT_ON_KEY}:`, ...TIMER, ...extra))
+      expect(messages).toEqual([])
+      expect(result?.bindings).toStrictEqual([{ trigger: 'timer.fired', message: 'Tick.' }])
+      expect('when' in result!.bindings![0]).toBe(false)
+    }
+  })
+
+  it('PB-4 按原序保留；同一埋点的两条绑定都留下', () => {
+    const { result, messages } = parseWithWarn(
+      withOn(
+        `${BOT_ON_KEY}:`,
+        '  - trigger: timer.fired',
+        `    when: "event.local.time == '09:00'"`,
+        '    message: Morning.',
+        '  - trigger: timer.fired',
+        `    when: "event.local.time == '18:00'"`,
+        '    message: Evening.'
+      )
+    )
+    expect(messages).toEqual([])
+    expect(result?.bindings).toStrictEqual([
+      { trigger: 'timer.fired', when: "event.local.time == '09:00'", message: 'Morning.' },
+      { trigger: 'timer.fired', when: "event.local.time == '18:00'", message: 'Evening.' }
+    ])
+  })
+
+  it('PB-5 容器不是列表（映射 / 字符串 / 数字）→ 整份拒绝：must be a list of bindings', () => {
+    for (const lines of [
+      [`${BOT_ON_KEY}:`, '  trigger: timer.fired', '  message: Tick.'],
+      [`${BOT_ON_KEY}: timer.fired`],
+      [`${BOT_ON_KEY}: 42`]
+    ]) {
+      expect(rejectReason(withOn(...lines)), lines.join(' | ')).toContain(
+        "'shuvix-bot-on' must be a list of bindings"
+      )
+    }
+  })
+
+  it('PB-6 条目不是映射（字符串 / 列表）→ 整份拒绝：entries must be mappings', () => {
+    for (const entry of ['  - timer.fired', '  - [timer.fired, Tick.]']) {
+      expect(rejectReason(withOn(`${BOT_ON_KEY}:`, entry)), entry).toContain(
+        "'shuvix-bot-on' entries must be mappings"
+      )
+    }
+  })
+
+  it.each([
+    ['缺 trigger', ['  - message: Tick.']],
+    ['空串', ["  - trigger: ''", '    message: Tick.']],
+    ['纯空白', ["  - trigger: '   '", '    message: Tick.']],
+    ['数字', ['  - trigger: 42', '    message: Tick.']]
+  ])("PB-7 trigger %s → 整份拒绝：needs a 'trigger' id", (_label, lines) => {
+    expect(rejectReason(withOn(`${BOT_ON_KEY}:`, ...lines))).toContain(
+      "each 'shuvix-bot-on' entry needs a 'trigger' id"
+    )
+  })
+
+  it.each(['debounce', 'agent', 'on'])(
+    'PB-8 绑定里的多余键 %s → 整份拒绝，点名那个键与「只有 trigger / when / message」',
+    (key) => {
+      const reason = rejectReason(withOn(`${BOT_ON_KEY}:`, ...TIMER, `    ${key}: x`))
+      expect(reason).toContain(`binding 'timer.fired': unknown key '${key}'`)
+      expect(reason).toContain('only trigger, when and message')
+    }
+  )
+
+  it.each([
+    ['缺 message', []],
+    ['空串', ["    message: ''"]],
+    ['纯空白', ["    message: '   '"]],
+    ['数字', ['    message: 42']]
+  ])('PB-9 message %s → 整份拒绝：必须是发给 bot 的非空文字', (_label, lines) => {
+    expect(rejectReason(withOn(`${BOT_ON_KEY}:`, '  - trigger: timer.fired', ...lines))).toContain(
+      "binding 'timer.fired': 'message' must be the non-empty text sent to the bot"
+    )
+  })
+
+  it('PB-10 when 写成空串 / 数字 / 列表 → must be a CEL expression string；CEL 语法错 → invalid when CEL', () => {
+    for (const when of ["''", '42', '[a, b]']) {
+      expect(rejectReason(withOn(`${BOT_ON_KEY}:`, ...TIMER, `    when: ${when}`)), when).toContain(
+        "binding 'timer.fired': 'when' must be a CEL expression string"
+      )
+    }
+    expect(
+      rejectReason(withOn(`${BOT_ON_KEY}:`, ...TIMER, `    when: "event.local.time =="`))
+    ).toContain("binding 'timer.fired': invalid when CEL")
+  })
+
+  it.each(['session.prompt-accepted', 'session.turn-completed', 'permission.request'])(
+    'PB-11 会话域埋点 %s → 整份拒绝：它发生在会话里，bot 只能绑不属于任何会话的埋点',
+    (trigger) => {
+      const reason = rejectReason(
+        withOn(`${BOT_ON_KEY}:`, `  - trigger: ${trigger}`, '    message: Tick.')
+      )
+      expect(reason).toContain(`binding '${trigger}': '${trigger}' happens inside a session`)
+      expect(reason).toContain(
+        'can bind only triggers that belong to no session (such as timer.fired)'
+      )
+    }
+  )
+
+  it('PB-12 未知埋点 id → 文件照常返回、绑定保留（惰性），恰一条软提示', () => {
+    const { result, messages } = parseWithWarn(
+      withOn(`${BOT_ON_KEY}:`, '  - trigger: webhook.received', '    message: Hook came.')
+    )
+    expect(result?.bindings).toStrictEqual([{ trigger: 'webhook.received', message: 'Hook came.' }])
+    expect(messages).toEqual([
+      "bot 'scout': trigger 'webhook.received' is not known on this build — binding is inert"
+    ])
+  })
+
+  it('PB-13 （钉现状）一条绑定内的检查次序：trigger 缺失 → 多余键 → when → message → 埋点作用域', () => {
+    // 缺 trigger + 多余键 → trigger 那句先
+    expect(rejectReason(withOn(`${BOT_ON_KEY}:`, '  - debounce: 5'))).toContain(
+      "needs a 'trigger' id"
+    )
+    // 多余键 + 坏 when → 多余键先
+    expect(
+      rejectReason(withOn(`${BOT_ON_KEY}:`, ...TIMER, '    debounce: 5', "    when: ''"))
+    ).toContain("unknown key 'debounce'")
+    // 未知埋点 + 坏 when → 按 when 拒绝，没有 inert 软提示（when 先于埋点检查）
+    expect(
+      rejectReason(
+        withOn(
+          `${BOT_ON_KEY}:`,
+          '  - trigger: webhook.received',
+          '    message: Hook came.',
+          `    when: "event.a =="`
+        )
+      )
+    ).toContain("binding 'webhook.received': invalid when CEL")
+    // 坏 when + 缺 message → when 先
+    expect(
+      rejectReason(withOn(`${BOT_ON_KEY}:`, '  - trigger: timer.fired', '    when: 42'))
+    ).toContain("'when' must be a CEL expression string")
+    // 会话域埋点 + 缺 message → 按 message 拒绝
+    expect(rejectReason(withOn(`${BOT_ON_KEY}:`, '  - trigger: session.turn-completed'))).toContain(
+      "'message' must be the non-empty text sent to the bot"
+    )
+
+    // 前一条未知埋点的 inert 软提示已经发出，后一条才被拒：两条诊断（与 hook 解析器同形）
+    const { result, messages } = parseWithWarn(
+      withOn(
+        `${BOT_ON_KEY}:`,
+        '  - trigger: webhook.received',
+        '    message: Hook came.',
+        '  - trigger: session.turn-completed',
+        '    message: Tick.'
+      )
+    )
+    expect(result).toBeNull()
+    expect(messages).toHaveLength(2)
+    expect(messages[0]).toContain("trigger 'webhook.received' is not known on this build")
+    expect(messages[1]).toContain("'session.turn-completed' happens inside a session")
+    expect(messages[1]).toMatch(/; the whole file is rejected$/)
+  })
+
+  it('PB-14 v1 文件（带管线残留）+ 绑定：管线软提示 + 绑定照常解析；（钉现状）绑定被拒时两条诊断', () => {
+    const v1 = (...on: string[]): string =>
+      md(
+        '---',
+        'shuvix: bot v1',
+        'name: scout',
+        'shuvix-bot-pipeline:',
+        '  workflow: bot-chat',
+        ...on,
+        '---',
+        'body'
+      )
+    const ok = parseWithWarn(v1(`${BOT_ON_KEY}:`, ...TIMER))
+    expect(ok.result?.bindings).toStrictEqual([{ trigger: 'timer.fired', message: 'Tick.' }])
+    expect(ok.messages).toHaveLength(1)
+    expect(ok.messages[0]).toContain("'shuvix-bot-pipeline' is no longer used")
+
+    // PR-8 的「恰一条」对 v1 文件不成立：管线软提示先发，绑定的拒绝理由在后
+    const bad = parseWithWarn(v1(`${BOT_ON_KEY}: nope`))
+    expect(bad.result).toBeNull()
+    expect(bad.messages).toHaveLength(2)
+    expect(bad.messages[0]).toContain("'shuvix-bot-pipeline' is no longer used")
+    expect(bad.messages[1]).toContain("'shuvix-bot-on' must be a list of bindings")
+    expect(bad.messages[1]).toMatch(/; the whole file is rejected$/)
+  })
+
+  it('PB-15 日报式 when（含引号与 &&、调宿主函数）在 YAML 里不加引号也能解析', () => {
+    const { result, messages } = parseWithWarn(
+      withOn(
+        `${BOT_ON_KEY}:`,
+        '  - trigger: timer.fired',
+        "    when: event.local.time == '18:00' && activeSessions(event.local.date) > 0",
+        '    message: Go through the sessions.'
+      )
+    )
+    expect(messages).toEqual([])
+    expect(result?.bindings).toStrictEqual([
+      {
+        trigger: 'timer.fired',
+        when: "event.local.time == '18:00' && activeSessions(event.local.date) > 0",
+        message: 'Go through the sessions.'
+      }
+    ])
+  })
+})
+
 // ────────────────────────────── PS：序列化 ──────────────────────────────
 
 describe('PS —— 序列化（与解析互逆）', () => {
@@ -499,11 +756,14 @@ describe('PS —— 序列化（与解析互逆）', () => {
     const service = sources.find((s) => s.path.endsWith('services/botService.ts'))!.text
     // 唯一调用点在「新建 bot」的模板生成里
     expect(service).toMatch(/newBotTemplate\([\s\S]*?serializeBotDefinitionFile\(/)
-    // 而本服务从不改写已有文件：唯一一处写盘是 create 落在新派生路径上的那份原文
-    // （原文只多补一行 shuvix-id —— 单行文本插入，不经序列化器）
-    expect(service.match(/writeFileAtomic\(/g)).toHaveLength(1)
+    // 而本服务从不改写已有文件：写盘只有三处 —— create 落在新派生路径上的那份原文（原文只多补一行
+    // shuvix-id —— 单行文本插入，不经序列化器）、随应用提供的 bot 第一次落地（目标不存在才写）、以及记
+    // 「写过哪些」的点文件（不是 bot 文件）
+    expect(service.match(/writeFileAtomic\(/g)).toHaveLength(3)
     expect(service).toContain('ensureObjectId(text,')
     expect(service).toContain('writeFileAtomic(filePath, content)')
+    expect(service).toContain('writeFileAtomic(target, seed.render(language))')
+    expect(service).toContain('writeFileAtomic(markerPath,')
   })
 })
 
@@ -516,7 +776,13 @@ describe('PD —— 属性卡描述符与解析器的对齐', () => {
     const descriptor = SHUVIX_MD_DESCRIPTORS.find((d) => d.type === BOT_FILE_MARKER_TYPE)!
     const cardKeys = descriptor.fields.map((f) => f.key)
     // 刻意写成字面量而不是引常量：两边都引常量就什么都钉不住
-    expect([...cardKeys].sort()).toEqual(['description', 'name', 'shuvix-displayName', 'shuvix-id'])
+    expect([...cardKeys].sort()).toEqual([
+      'description',
+      'name',
+      'shuvix-bot-on',
+      'shuvix-displayName',
+      'shuvix-id'
+    ])
     expect(cardKeys).not.toContain(SHUVIX_MARKER_KEY)
     // 对象 id 解析器读、卡上不显示（hidden）—— 列进描述符只为不落通用行
     expect(descriptor.fields.find((f) => f.key === 'shuvix-id')?.kind).toBe('hidden')

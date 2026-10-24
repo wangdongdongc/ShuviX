@@ -76,7 +76,10 @@
     "newBotChat": "新建 Bot 会话",
     "botOverridden": "已被覆盖",
     "moreActions": "更多操作",
-    "interrupted": "ShuviX 关闭时被中断——打开即可继续"
+    "interrupted": "ShuviX 关闭时被中断——打开即可继续",
+    "trackingGroup": "跟踪项",
+    "trackingEmpty": "还没有跟踪项。日报 bot 会从你的会话里整理出需要持续跟进的事。",
+    "trackingOpenFolder": "打开跟踪项文件夹"
   },
   "transcript": {
     "untitled": "未命名会话",
@@ -332,6 +335,8 @@
     "originParent": "来自父会话",
     "originParentHint": "由父会话「{{title}}」发来",
     "originParentHintNoTitle": "由父会话发来",
+    "originTrigger": "触发器",
+    "originTriggerHint": "由 bot「{{bot}}」的触发绑定（{{trigger}}）自动发出，不是有人此刻输入的",
     "originOpenHint": "点击打开",
     "cacheRead": "缓存读取",
     "cacheWrite": "缓存写入",
@@ -1036,7 +1041,18 @@
     "toolBrowserMovedTitle": "浏览器设置",
     "toolBrowserMovedRow": "搜索引擎、网站数据、证书",
     "toolBrowserMovedDesc": "这些设置管的是浏览器本身，现在在浏览器窗口的设置页里（⋮ → 设置）。",
-    "toolBrowserMovedOpen": "打开浏览器设置"
+    "toolBrowserMovedOpen": "打开浏览器设置",
+    "tabTriggers": "触发源",
+    "triggersSection": "触发源",
+    "triggersSectionHint": "触发源按自己的节奏产生事件，bot 在自己的文件里用 shuvix-bot-on 订阅：事件满足 when 条件时，ShuviX 新开一条和这个 bot 的会话，替它发出绑定里写的话。",
+    "triggersTimerEnabled": "内置定时器",
+    "triggersTimerHint": "每分钟触发一次 timer.fired（对齐整分钟）。订阅它的 bot 在 when 里比较时间，例如 event.local.time == '18:00'。电脑睡眠或 ShuviX 没开时错过的分钟不补；关掉后不会有 bot 被定时叫起来。",
+    "triggersLastFired": "上次触发：{{time}}",
+    "triggersNotFiredYet": "本次启动后还没触发过",
+    "triggersSubscribers": "订阅的 bot",
+    "triggersNoSubscribers": "还没有 bot 订阅它",
+    "triggersEveryTime": "每次都触发",
+    "botOn": "触发"
   },
   "about": {
     "description": "您的 AI 助手",

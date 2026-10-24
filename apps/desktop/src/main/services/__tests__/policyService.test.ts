@@ -418,6 +418,7 @@ describe('policyService —— ask-on-read 不再是内置', () => {
       'ask-on-command',
       'ask-on-external-path',
       'ask-on-session-access',
+      'daily-bot-access',
       'network-admission'
     ])
     expect(rows.some((row) => row.source === 'builtin' && row.name === 'ask-on-read')).toBe(false)

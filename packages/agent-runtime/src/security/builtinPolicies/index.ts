@@ -28,6 +28,11 @@
  *     网络点位没有人可问（ask 会降级为拒绝），所以它直接写 deny；要让别的设备进来，写一份同名的用户
  *     策略替换它（deny 压过一切 allow，另写一份放不开）。设置页按它的状态给引导提示。
  *
+ * 另有一份配套随应用提供的日报 bot（2026-10-24 用户裁定，「没有硬限制」之外的另一类 —— 它只放宽，不设门）：
+ *   - daily-bot-access：日报 bot（`subject.bot == 'bot:builtin:daily'`）的根 agent 不用问就能读最近 7 天有过
+ *     消息的会话（压过 ask-on-session-access），并读写 `~/.shuvix/tracking`（压过 ask-on-external-path）。它每天
+ *     傍晚被内置 timer 叫起来，那时多半没有人在场回答询问。两条都是 force-allow，时间窗写在 CEL 里可调。
+ *
  * agent 主体那几份的 subject.kind 恒为 [agent]、network-admission 的恒为 [network]（守护测试钉死）：
  * 用户主体（UI 亲手操作）不受内置策略约束 —— 多主体模型见 types.ts SecuritySubject。
  *
@@ -64,7 +69,8 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'ask-on-external-path' },
   { name: 'ask-on-command' },
   { name: 'ask-on-session-access' },
-  { name: 'network-admission' }
+  { name: 'network-admission' },
+  { name: 'daily-bot-access' }
 ]
 
 /** 语言 → 解析产物缓存（键为归一化语言码）。readMd 是进程级稳定接缝（桌面 = 随包目录，

@@ -89,18 +89,19 @@ const makeBareProvider = (): SecurityHostProvider => ({
 })
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 4 份、按装配序；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 5 份、按装配序；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(4)
+    expect(policies).toHaveLength(5)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
     expect(policies.map((p) => p.name)).toEqual([
       'ask-on-external-path',
       'ask-on-command',
       'ask-on-session-access',
-      'network-admission'
+      'network-admission',
+      'daily-bot-access'
     ])
-    expect(new Set(policies.map((p) => p.name)).size).toBe(4)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(5)
   })
 
   it('BP-1c 内联表恰是四份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
@@ -178,20 +179,31 @@ describe('buildBuiltinPolicies', () => {
     }
   })
 
-  it('BP-2d 不变式：出厂没有硬限制、也没有越级放行 —— 没有一条内置规则是 deny / force-ask / force-allow（各语言、装配产物的 tier 都算）', () => {
+  it('BP-2d 不变式：出厂没有硬限制 —— 没有一条管 agent 的内置规则是 deny / force-ask；force-allow 只有日报 bot 的放宽（各语言、装配产物的 tier 都算）', () => {
     // 2026-10-01 用户裁定：内置策略默认尽可能少问、不设硬限制。deny 不可按命令豁免，force-ask
     // 连「允许并记住」与自动审查都答不了 —— 想要这种门，用户自己写一份策略（执行点都还在）。
     // force-allow 也不再用：「允许并记住」从前是 session-grants 的两条 force-allow，如今是会话权限表
     // 里的行、经 ask-on-external-path 的 match 豁免 —— 出厂整套恰是普通 ask。
     // 唯一的例外是 network 主体的 network-admission（2026-10-19）：网络点位没有人可问，ask 会降级为
     // 拒绝，它就直接写 deny —— 只作用于 network 主体（BP-2b），agent 主体的出厂照旧恰是普通 ask。
+    // 另一类是放宽：daily-bot-access（2026-10-24 用户裁定）给随应用提供的日报 bot 的根 agent 免去两道询问 ——
+    // 它傍晚被定时器叫起来时没有人在场回答。它只放宽、不设门：全是 force-allow，且只认 `subject.bot`。
     for (const language of ['en', 'zh', 'ja']) {
       for (const policy of buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD })) {
         for (const [i, rule] of policy.rules.entries()) {
           const kinds = mergeConditions(policy.scope, rule.conditions)?.['subject.kind']
-          expect(rule.effect, `${policy.name}#${i}（${language}）是 ${rule.effect}`).toBe(
-            kinds?.length === 1 && kinds[0] === 'network' ? 'deny' : 'ask'
-          )
+          const expected =
+            kinds?.length === 1 && kinds[0] === 'network'
+              ? 'deny'
+              : policy.name === 'daily-bot-access'
+                ? 'force-allow'
+                : 'ask'
+          expect(rule.effect, `${policy.name}#${i}（${language}）是 ${rule.effect}`).toBe(expected)
+          if (expected === 'force-allow') {
+            expect(rule.match, `${policy.name}#${i} 只认日报 bot`).toContain(
+              "subject.bot == 'bot:builtin:daily'"
+            )
+          }
         }
       }
     }
@@ -204,7 +216,9 @@ describe('buildBuiltinPolicies', () => {
       ['ask-on-command#0', 'ask'],
       ['ask-on-session-access#0', 'ask'],
       ['ask-on-session-access#1', 'ask'],
-      ['network-admission#0', 'deny']
+      ['network-admission#0', 'deny'],
+      ['daily-bot-access#0', 'force-allow'],
+      ['daily-bot-access#1', 'force-allow']
     ])
   })
 
@@ -2127,6 +2141,485 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         matched: ['always-ask-sessions#0']
       })
       expect(own.ask).not.toHaveProperty('rememberEntry')
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── daily-bot-access：随应用提供的日报 bot 的两条放宽（2026-10-24）─────────────────────────
+  //
+  // 日报 bot（`subject.bot == 'bot:builtin:daily'`）的根 agent：读最近 7 天有过消息的会话不问（压过
+  // ask-on-session-access #0），读写 vars.trackingDir 不问（压过 ask-on-external-path）。两条都是 force-allow ——
+  // 它只放宽、不设门；对话（write）照问、派发出的子 agent 照问、别的 bot 照问。
+  describe('daily-bot-access（日报 bot 的放宽）', () => {
+    const DAILY = 'bot:builtin:daily'
+    const NOW = '2026-10-24T10:00:00.000Z'
+    const TRACKING = `${SHUVIX_HOME}/tracking`
+    const HOUR = 3_600_000
+    /** NOW 往前 ms 毫秒的 ISO（宿主 sessionObjectFacts 给的形状） */
+    const before = (ms: number): string => new Date(Date.parse(NOW) - ms).toISOString()
+
+    /** 桌面宿主交的 vars：DESKTOP_VARS + now / dailyDir / trackingDir + 空会话表 */
+    const DAILY_VARS: Record<string, PolicyVarValue> = {
+      ...DESKTOP_VARS,
+      now: NOW,
+      dailyDir: `${SHUVIX_HOME}/daily`,
+      trackingDir: TRACKING,
+      aclSessionRead: [],
+      aclSessionWrite: []
+    }
+
+    const dailyProvider = (overrides: Partial<SecurityHostProvider> = {}): SecurityHostProvider =>
+      makeProvider({ getVars: () => DAILY_VARS, ...overrides })
+
+    interface DailyOpts {
+      /** 主体的开放属性 bot；null = 主体压根没有 attrs */
+      bot?: string | null
+      agentKind?: 'root' | 'spawned'
+      subjectKind?: string
+      host?: 'desktop' | 'extension'
+      provider?: SecurityHostProvider
+      warn?: (msg: string) => void
+    }
+
+    /** 与 decide 同一条装配 + 求值路径，主体带开放属性 bot（桌面 toolContext 的 subject.attrs） */
+    function decideAs(
+      action: string,
+      object: SecurityObject,
+      opts: DailyOpts = {}
+    ): SecurityDecision {
+      const provider = opts.provider ?? dailyProvider()
+      const vars = buildPolicyVars(provider)
+      const bot = opts.bot === undefined ? DAILY : opts.bot
+      return evaluate(
+        assembleRules(provider, vars),
+        {
+          subject: {
+            kind: opts.subjectKind ?? 'agent',
+            sessionId: 's1',
+            agentKind: opts.agentKind ?? 'root',
+            ...(bot === null ? {} : { attrs: { bot } })
+          },
+          action,
+          object,
+          environment: { host: opts.host ?? 'desktop', platform: 'darwin' }
+        },
+        { vars, warn: opts.warn }
+      )
+    }
+
+    /** 会话客体（门面 enforceSession 给齐全部键：lastActiveAt / bot 由宿主按事实填） */
+    const sessionAt = (lastActiveAt: string, sessionId = 'X'): SecurityObject => ({
+      type: 'session',
+      sessionId,
+      title: 'T',
+      ownTurn: false,
+      lastActiveAt,
+      bot: ''
+    })
+
+    /** 放行来自 daily-bot-access 的哪一条（force-allow 压过同时命中的询问门；放行不带话、不给询问材料） */
+    const expectForceAllowed = (
+      label: string,
+      decision: SecurityDecision,
+      index: 0 | 1,
+      alsoMatched: string[]
+    ): void => {
+      const id = `daily-bot-access#${index}`
+      expect({
+        label,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }).toEqual({
+        label,
+        effect: 'allow',
+        tier: 'force-allow',
+        winning: id,
+        matched: [id, ...alsoMatched]
+      })
+      expect(decision.ask, label).toBeUndefined()
+      expect(decision.prompt, label).toBeUndefined()
+    }
+
+    /** 落到 ask-on-session-access 的哪一条（带「允许并记住」与 session 材料） */
+    const expectSessionAsk = (
+      label: string,
+      action: 'read' | 'write',
+      decision: SecurityDecision,
+      index: 0 | 1
+    ): void => {
+      const id = `ask-on-session-access#${index}`
+      expect({
+        label,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }).toEqual({ label, effect: 'ask', tier: 'ask', winning: id, matched: [id] })
+      const entry = `Session(${action}, X)`
+      expect(decision.ask, label).toEqual({
+        command: entry,
+        rememberEntry: entry,
+        session: { sessionId: 'X', title: 'T', access: action, operation: '' }
+      })
+    }
+
+    it('BP-D1 形态：两条 force-allow，限定 agent 主体 × desktop —— #0 session × read（最近 168h），#1 path × read/write（vars.trackingDir）；两条都先 has(subject.bot)、都要求根 agent', () => {
+      const policy = byName('daily-bot-access')
+      expect(policy.scope).toEqual({ 'subject.kind': ['agent'], 'env.host': ['desktop'] })
+      expect(policy.lets).toBeUndefined()
+      expect(policy.objectId).toBe('policy:builtin:daily-bot-access')
+      expect(policy.displayName).toBe('Daily Bot Reads Recent Sessions')
+      const guard = `has(subject.bot) && subject.bot == '${DAILY}' && subject.agentKind == 'root'`
+      expect(policy.rules.map(withoutPrompt)).toEqual([
+        {
+          effect: 'force-allow',
+          conditions: { 'object.type': ['session'], action: ['read'] },
+          match: `${guard} && timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('168h')`
+        },
+        {
+          effect: 'force-allow',
+          conditions: { 'object.type': ['path'], action: ['read', 'write'] },
+          match: `${guard} && inDir(object.path, vars.trackingDir)`
+        }
+      ])
+      for (const rule of policy.rules) {
+        expect(rule.match!.startsWith('has(subject.bot) && ')).toBe(true)
+        expect(rule.prompt).toBeTruthy()
+      }
+      // 出厂唯一带 force-allow 的一份（各语言同）
+      for (const language of ['en', 'zh', 'ja']) {
+        const withForceAllow = buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD })
+          .filter((p) => p.rules.some((r) => r.effect === 'force-allow'))
+          .map((p) => p.name)
+        expect(withForceAllow, language).toEqual(['daily-bot-access'])
+      }
+    })
+
+    it('BP-D2 日报 bot 的根 agent 读最近的会话（1h 前、167h59m 前有过消息）→ force-allow 放行，不问', () => {
+      const sinks = warnSinks()
+      const provider = dailyProvider({ logger: sinks.logger })
+      for (const [label, ms] of [
+        ['1h 前', HOUR],
+        ['167h59m 前', 168 * HOUR - 60_000]
+      ] as const) {
+        expectForceAllowed(
+          label,
+          decideAs('read', sessionAt(before(ms)), { provider, warn: sinks.evalWarn }),
+          0,
+          ['ask-on-session-access#0']
+        )
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D3 时间窗是开区间：恰 168h 前、200h 前 → 不放宽，落回 ask-on-session-access #0（给「允许并记住」）', () => {
+      const sinks = warnSinks()
+      const provider = dailyProvider({ logger: sinks.logger })
+      for (const [label, ms] of [
+        ['恰 168h 前', 168 * HOUR],
+        ['200h 前', 200 * HOUR]
+      ] as const) {
+        expectSessionAsk(
+          label,
+          'read',
+          decideAs('read', sessionAt(before(ms)), { provider, warn: sinks.evalWarn }),
+          0
+        )
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D4 对话（write：prompt / steer / answer / stop）最近的会话 → 照问 #1，不放宽', () => {
+      const sinks = warnSinks()
+      const provider = dailyProvider({ logger: sinks.logger })
+      expectSessionAsk(
+        '最近的会话 · 对话',
+        'write',
+        decideAs('write', sessionAt(before(HOUR)), { provider, warn: sinks.evalWarn }),
+        1
+      )
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D5 日报会话里派发出的子 agent（agentKind: spawned）→ 与普通 agent 同待遇：会话照问、跟踪项目录照问', () => {
+      const sinks = warnSinks()
+      const opts: DailyOpts = {
+        agentKind: 'spawned',
+        provider: dailyProvider({ logger: sinks.logger }),
+        warn: sinks.evalWarn
+      }
+      expectSessionAsk(
+        'spawned · 会话查看',
+        'read',
+        decideAs('read', sessionAt(before(HOUR)), opts),
+        0
+      )
+      const file = `${TRACKING}/a.md`
+      expectShape('spawned · 读跟踪项', 'read', file, decideAs('read', at(file), opts), '#0')
+      expectShape('spawned · 写跟踪项', 'write', file, decideAs('write', at(file), opts), '#1')
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it("BP-D6 别的 bot（'bot:other'、没有 id 的同名 'daily'、空串）→ 不放宽，照问", () => {
+      const sinks = warnSinks()
+      const provider = dailyProvider({ logger: sinks.logger })
+      const file = `${TRACKING}/a.md`
+      for (const bot of ['bot:other', 'daily', '']) {
+        const opts: DailyOpts = { bot, provider, warn: sinks.evalWarn }
+        expectSessionAsk(
+          `${bot} · 会话查看`,
+          'read',
+          decideAs('read', sessionAt(before(HOUR)), opts),
+          0
+        )
+        expectShape(`${bot} · 写跟踪项`, 'write', file, decideAs('write', at(file), opts), '#1')
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D7 主体没有 bot 属性（没有 attrs）→ 规则不命中、零告警（has() 守卫）', () => {
+      const sinks = warnSinks()
+      const opts: DailyOpts = {
+        bot: null,
+        provider: dailyProvider({ logger: sinks.logger }),
+        warn: sinks.evalWarn
+      }
+      const file = `${TRACKING}/a.md`
+      expectSessionAsk(
+        '无 attrs · 会话查看',
+        'read',
+        decideAs('read', sessionAt(before(HOUR)), opts),
+        0
+      )
+      expectShape('无 attrs · 读跟踪项', 'read', file, decideAs('read', at(file), opts), '#0')
+      expectShape('无 attrs · 写跟踪项', 'write', file, decideAs('write', at(file), opts), '#1')
+      expectShape(
+        '无 attrs · 工作目录',
+        'write',
+        `${WS}/a.ts`,
+        decideAs('write', at(`${WS}/a.ts`), opts),
+        'allow'
+      )
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D8 路径那条：跟踪项目录里（含目录本身）的读写放行（压过外部目录门）；按路径段比 —— trackingX、bots/daily.md、policies 照问', () => {
+      const sinks = warnSinks()
+      const opts: DailyOpts = {
+        provider: dailyProvider({ logger: sinks.logger }),
+        warn: sinks.evalWarn
+      }
+      for (const path of [`${TRACKING}/a.md`, TRACKING, `${TRACKING}/sub/b.md`]) {
+        expectForceAllowed(`read ${path}`, decideAs('read', at(path), opts), 1, [
+          'ask-on-external-path#0'
+        ])
+        expectForceAllowed(`write ${path}`, decideAs('write', at(path), opts), 1, [
+          'ask-on-external-path#1'
+        ])
+      }
+      for (const path of [
+        `${SHUVIX_HOME}/trackingX/a.md`,
+        `${SHUVIX_HOME}/bots/daily.md`,
+        `${SHUVIX_HOME}/policies/x.md`
+      ]) {
+        expectShape(`read ${path}`, 'read', path, decideAs('read', at(path), opts), '#0')
+        expectShape(`write ${path}`, 'write', path, decideAs('write', at(path), opts), '#1')
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D9 档位序：用户对 vars.trackingDir 写的 force-ask 照问、deny 照拒 —— 都压过内置的 force-allow', () => {
+      const file = `${TRACKING}/a.md`
+      const userGate = (effect: 'force-ask' | 'deny'): ParsedPolicyFile => ({
+        name: `guard-tracking-${effect}`,
+        displayName: 'Guard tracking',
+        description: '',
+        rules: [
+          {
+            effect,
+            conditions: { 'object.type': ['path'] },
+            match: 'inDir(object.path, vars.trackingDir)'
+          }
+        ],
+        body: ''
+      })
+      const sinks = warnSinks()
+      const forceAsk = decideAs('write', at(file), {
+        provider: dailyProvider({
+          logger: sinks.logger,
+          getUserPolicies: () => [userGate('force-ask')]
+        }),
+        warn: sinks.evalWarn
+      })
+      expect(forceAsk).toMatchObject({
+        effect: 'ask',
+        tier: 'force-ask',
+        winning: 'guard-tracking-force-ask#0',
+        matched: ['guard-tracking-force-ask#0', 'daily-bot-access#1', 'ask-on-external-path#1']
+      })
+      // force-ask 胜出：不给「允许并记住」
+      expect(forceAsk.ask).not.toHaveProperty('rememberEntry')
+
+      const deny = decideAs('read', at(file), {
+        provider: dailyProvider({
+          logger: sinks.logger,
+          getUserPolicies: () => [userGate('deny')]
+        }),
+        warn: sinks.evalWarn
+      })
+      expect(deny).toMatchObject({
+        effect: 'deny',
+        tier: 'deny',
+        winning: 'guard-tracking-deny#0',
+        matched: ['guard-tracking-deny#0', 'daily-bot-access#1', 'ask-on-external-path#0']
+      })
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D10 钉住：宿主没给 vars.trackingDir → 路径那条不命中（force-allow 不替缺的目录变量绑 null，缺键报错按「不命中」处置）：每次求值一条告警，装配那一侧不记', () => {
+      const sinks = warnSinks()
+      const provider = dailyProvider({
+        logger: sinks.logger,
+        getVars: () => withoutKeys(DAILY_VARS, ['trackingDir'])
+      })
+      const file = `${TRACKING}/a.md`
+      expectShape(
+        '缺 trackingDir · 读',
+        'read',
+        file,
+        decideAs('read', at(file), { provider, warn: sinks.evalWarn }),
+        '#0'
+      )
+      expectShape(
+        '缺 trackingDir · 写',
+        'write',
+        file,
+        decideAs('write', at(file), { provider, warn: sinks.evalWarn }),
+        '#1'
+      )
+      expect(sinks.evalWarn).toHaveBeenCalledTimes(2)
+      for (const [message] of sinks.evalWarn.mock.calls) {
+        expect(message).toMatch(
+          /^security rule 'daily-bot-access#1': match evaluation failed \(No such key: trackingDir\b[\s\S]*\), treating as not matched$/
+        )
+      }
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+
+      // 不是日报 bot 的主体：&& 在 has(subject.bot) / subject.bot 那里就短路了，求值走不到 inDir —— 零告警
+      const other = warnSinks()
+      decideAs('write', at(file), {
+        bot: 'bot:other',
+        provider: dailyProvider({
+          logger: other.logger,
+          getVars: () => withoutKeys(DAILY_VARS, ['trackingDir'])
+        }),
+        warn: other.evalWarn
+      })
+      expect(other.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D11 钉住：object.lastActiveAt 是空串（宿主没给）或认不出的值 → timestamp() 求值失败，会话那条不命中（照问 #0）：每次一条告警', () => {
+      for (const lastActiveAt of ['', 'yesterday']) {
+        const sinks = warnSinks()
+        expectSessionAsk(
+          `lastActiveAt=${JSON.stringify(lastActiveAt)}`,
+          'read',
+          decideAs('read', sessionAt(lastActiveAt), {
+            provider: dailyProvider({ logger: sinks.logger }),
+            warn: sinks.evalWarn
+          }),
+          0
+        )
+        expect(sinks.evalWarn).toHaveBeenCalledTimes(1)
+        expect(sinks.evalWarn.mock.calls[0]![0]).toMatch(
+          /^security rule 'daily-bot-access#0': match evaluation failed \([\s\S]*\), treating as not matched$/
+        )
+        expect(sinks.logWarn).not.toHaveBeenCalled()
+      }
+    })
+
+    it('BP-D12 不适用：extension 宿主、user 主体、network 主体 —— daily-bot-access 的两条都不命中', () => {
+      const file = `${TRACKING}/a.md`
+      const cases: Array<[string, DailyOpts]> = [
+        ['extension', { host: 'extension' }],
+        ['user', { subjectKind: 'user' }],
+        ['network', { subjectKind: 'network' }]
+      ]
+      for (const [label, extra] of cases) {
+        const sinks = warnSinks()
+        const opts: DailyOpts = {
+          ...extra,
+          provider: dailyProvider({ logger: sinks.logger }),
+          warn: sinks.evalWarn
+        }
+        const read = decideAs('read', sessionAt(before(HOUR)), opts)
+        const write = decideAs('write', at(file), opts)
+        for (const decision of [read, write]) {
+          expect(
+            decision.matched.filter((id) => id.startsWith('daily-bot-access')),
+            label
+          ).toEqual([])
+          expect(decision.tier, label).not.toBe('force-allow')
+        }
+        expect(sinks.evalWarn, label).not.toHaveBeenCalled()
+      }
+    })
+
+    it('BP-D13 停用 daily-bot-access → 两条都不装配；日报 bot 读最近的会话照问 #0、写跟踪项照问 #1', () => {
+      const ID = builtinObjectId('policy', 'daily-bot-access')
+      const provider = dailyProvider({
+        isPolicyDisabled: (policy) => policy.objectId === ID
+      })
+      const rules = assembleRules(provider, buildPolicyVars(provider))
+      expect(rules.filter((r) => r.source.policy === 'daily-bot-access')).toEqual([])
+      expectSessionAsk(
+        '停用 · 会话查看',
+        'read',
+        decideAs('read', sessionAt(before(HOUR)), { provider }),
+        0
+      )
+      const file = `${TRACKING}/a.md`
+      expectShape('停用 · 写跟踪项', 'write', file, decideAs('write', at(file), { provider }), '#1')
+    })
+
+    it("BP-D14 同名覆盖副本把时间窗改成 duration('336h') → 替换内置：200h 前的会话放行，337h 前的照问", () => {
+      const builtin = byName('daily-bot-access')
+      const override: ParsedPolicyFile = {
+        ...builtin,
+        rules: builtin.rules.map((rule, i) =>
+          i === 0
+            ? { ...rule, match: rule.match!.replace("duration('168h')", "duration('336h')") }
+            : rule
+        )
+      }
+      expect(override.rules[0]!.match).toContain("duration('336h')")
+      const sinks = warnSinks()
+      const provider = dailyProvider({ logger: sinks.logger, getUserPolicies: () => [override] })
+      const rules = assembleRules(provider, buildPolicyVars(provider)).filter(
+        (r) => r.source.policy === 'daily-bot-access'
+      )
+      // 同名裁决：只剩用户那一份
+      expect(rules.map((r) => [r.id, r.source.kind])).toEqual([
+        ['daily-bot-access#0', 'user'],
+        ['daily-bot-access#1', 'user']
+      ])
+      expectForceAllowed(
+        '200h 前',
+        decideAs('read', sessionAt(before(200 * HOUR)), { provider, warn: sinks.evalWarn }),
+        0,
+        ['ask-on-session-access#0']
+      )
+      expectSessionAsk(
+        '337h 前',
+        'read',
+        decideAs('read', sessionAt(before(337 * HOUR)), { provider, warn: sinks.evalWarn }),
+        0
+      )
       expect(sinks.evalWarn).not.toHaveBeenCalled()
     })
   })

@@ -76,7 +76,10 @@
     "newBotChat": "新しい Bot 会話",
     "botOverridden": "上書き済み",
     "moreActions": "その他の操作",
-    "interrupted": "ShuviX の終了時に中断されました。開くと続行できます"
+    "interrupted": "ShuviX の終了時に中断されました。開くと続行できます",
+    "trackingGroup": "追跡項目",
+    "trackingEmpty": "追跡項目はまだありません。デイリーボットがセッションから継続して追うべきことをまとめます。",
+    "trackingOpenFolder": "追跡項目フォルダを開く"
   },
   "transcript": {
     "untitled": "無題のセッション",
@@ -332,6 +335,8 @@
     "originParent": "親セッションから",
     "originParentHint": "親セッション「{{title}}」から送信",
     "originParentHintNoTitle": "親セッションから送信",
+    "originTrigger": "トリガー",
+    "originTriggerHint": "ボット「{{bot}}」のトリガー（{{trigger}}）が自動で送信したもので、誰かがいま入力したものではありません",
     "originOpenHint": "クリックで開く",
     "cacheRead": "キャッシュ読取",
     "cacheWrite": "キャッシュ書込",
@@ -1036,7 +1041,18 @@
     "toolBrowserMovedTitle": "ブラウザの設定",
     "toolBrowserMovedRow": "検索エンジン・サイトのデータ・証明書",
     "toolBrowserMovedDesc": "ブラウザ自体の設定は、ブラウザウィンドウの設定ページに移りました（⋮ → 設定）。",
-    "toolBrowserMovedOpen": "ブラウザの設定を開く"
+    "toolBrowserMovedOpen": "ブラウザの設定を開く",
+    "tabTriggers": "トリガー",
+    "triggersSection": "トリガーソース",
+    "triggersSectionHint": "トリガーソースは独自のタイミングでイベントを出し、ボットは自分のファイルの shuvix-bot-on で購読します。イベントがバインディングの when 条件に合うと、ShuviX はそのボットとの新しいチャットを開き、バインディングに書かれたメッセージを代わりに送ります。",
+    "triggersTimerEnabled": "内蔵タイマー",
+    "triggersTimerHint": "毎分ちょうどに timer.fired を発火します。購読するボットは when で時刻を比べます（例：event.local.time == '18:00'）。スリープ中や ShuviX が閉じている間の分は補いません。オフにすると、時刻でボットが起動されることはありません。",
+    "triggersLastFired": "前回の発火：{{time}}",
+    "triggersNotFiredYet": "起動後まだ発火していません",
+    "triggersSubscribers": "購読しているボット",
+    "triggersNoSubscribers": "まだ購読しているボットはありません",
+    "triggersEveryTime": "毎回",
+    "botOn": "トリガー"
   },
   "about": {
     "description": "あなたのAIアシスタント",

@@ -76,7 +76,10 @@
     "newBotChat": "New bot chat",
     "botOverridden": "Overridden",
     "moreActions": "More actions",
-    "interrupted": "Interrupted when ShuviX closed — open it to continue"
+    "interrupted": "Interrupted when ShuviX closed — open it to continue",
+    "trackingGroup": "Tracked items",
+    "trackingEmpty": "No tracked items yet. The daily bot collects the things to follow up on from your sessions.",
+    "trackingOpenFolder": "Open tracked items folder"
   },
   "transcript": {
     "untitled": "Untitled Session",
@@ -332,6 +335,8 @@
     "originParent": "From the parent session",
     "originParentHint": "Sent by the parent session “{{title}}”",
     "originParentHintNoTitle": "Sent by the parent session",
+    "originTrigger": "Trigger",
+    "originTriggerHint": "Sent automatically by a trigger binding of bot \"{{bot}}\" ({{trigger}}), not typed by anyone just now",
     "originOpenHint": "Click to open it",
     "cacheRead": "cache read",
     "cacheWrite": "cache write",
@@ -1036,7 +1041,18 @@
     "toolBrowserMovedTitle": "Browser settings",
     "toolBrowserMovedRow": "Search engine, site data, certificates",
     "toolBrowserMovedDesc": "These are settings of the browser itself; they now live on the browser window’s settings page (⋮ → Settings).",
-    "toolBrowserMovedOpen": "Open browser settings"
+    "toolBrowserMovedOpen": "Open browser settings",
+    "tabTriggers": "Triggers",
+    "triggersSection": "Trigger sources",
+    "triggersSectionHint": "A trigger source produces events on its own schedule, and a bot subscribes to them in its file with shuvix-bot-on: when an event matches the binding's when condition, ShuviX opens a new chat with that bot and sends the binding's message for it.",
+    "triggersTimerEnabled": "Built-in timer",
+    "triggersTimerHint": "Fires timer.fired every minute, on the minute. Bots that subscribe compare the time in their when condition, for example event.local.time == '18:00'. Minutes missed while the computer sleeps or ShuviX is closed are not made up; turned off, no bot is started by time.",
+    "triggersLastFired": "Last fired: {{time}}",
+    "triggersNotFiredYet": "Not fired since ShuviX started",
+    "triggersSubscribers": "Subscribed bots",
+    "triggersNoSubscribers": "No bot subscribes to it yet",
+    "triggersEveryTime": "every time",
+    "botOn": "Triggers"
   },
   "about": {
     "description": "Your AI Assistant",

@@ -38,7 +38,12 @@ import { BaseTool, OUTLINE_LIMITS, callOwnerOf } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { SessionToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { registerBuiltinTool } from '../services/toolRegistry'
-import { assertSessionAccess, type ToolContext } from '../services/toolContext'
+import {
+  assertSessionAccess,
+  getDesktopSecurityContext,
+  sessionObjectFacts,
+  type ToolContext
+} from '../services/toolContext'
 import { sessionRecords } from '../services/sessionRecords'
 import { sessionService } from '../services/sessionService'
 import { blockedOnApproval, renderPendingAsks } from '../services/subSessionText'
@@ -154,6 +159,18 @@ export const SessionParamsSchema = Type.Object({
     Type.Number({
       description: `For "wait-for-sessions": how long to wait (default ${DEFAULT_WAIT_TIMEOUT_SEC}s). On timeout everything keeps running.`
     })
+  ),
+  active_since: Type.Optional(
+    Type.String({
+      description:
+        'For "list-sessions": instead of your sub-sessions, list the sessions that had messages on or after this local date (YYYY-MM-DD), as on the calendar.'
+    })
+  ),
+  active_until: Type.Optional(
+    Type.String({
+      description:
+        'For "list-sessions" with `active_since`: the last local date to include (YYYY-MM-DD, default today).'
+    })
   )
 })
 
@@ -170,7 +187,7 @@ Actions:
 - "create-sub-session": start an empty sub-session and return its id (optional \`title\` and \`agent_profile\`). It inherits this session's project, model, thinking level, MCP servers and skills.
 - "prompt-session": send \`message\` into \`session_id\` as if the user typed it. It returns a receipt at once and the turn runs in the background. This is also how a new sub-session gets its first task.
 - "wait-for-sessions": block until the turns you started finish (or one stops to ask something) and return all their answers — the only action that waits.
-- "list-sessions": your sub-sessions and the other sessions you may use, with their status (idle / running / waiting-input / interrupted).
+- "list-sessions": your sub-sessions and the other sessions you may use, with their status (idle / running / waiting-input / interrupted). With \`active_since\` (and optionally \`active_until\`): the sessions that had messages in that date range, as on the calendar — only those you may read without asking are listed (each with \`last_active\`, the \`bot\` it is bound to, and \`inputs\`: who wrote its messages in that range — \`local\` / \`remote\` / \`chrome\` / \`telegram\` are the user, \`trigger\` a bot trigger, \`session\` / \`parent-session\` another session); the others are only counted. Your own session is marked \`self="true"\`.
 - "read-session": the latest answer of \`session_id\`.
 - "stop-session": stop what \`session_id\` is doing (in another session, only a turn you started).
 - "answer-session": answer a question it asked in a turn you started (\`ask_id\`, then \`selections\` with exact option labels or \`message\` in your own words); like "prompt-session" it returns at once and the turn carries on in the background.
@@ -198,6 +215,8 @@ interface SessionToolParams {
   match?: string
   before?: string
   timeout_seconds?: number
+  active_since?: string
+  active_until?: string
 }
 
 /**
@@ -398,7 +417,14 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       case 'wait-for-sessions':
         return this.waitForSubSessions(params, call, authorize, signal)
       case 'list-sessions':
-        return this.listSubSessions()
+        if (params.active_until !== undefined && params.active_since === undefined) {
+          throw new Error(
+            '"active_until" needs "active_since": give the first date of the range as well.'
+          )
+        }
+        return params.active_since !== undefined
+          ? this.listActiveSessions(params)
+          : this.listSubSessions()
       case 'read-session':
         return this.readSubSession(params, authorize)
       case 'stop-session':
@@ -666,6 +692,47 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       )
       .join('\n')
     return text(`<sessions>\n${rows}\n</sessions>`)
+  }
+
+  /** 按日历列出一段日子里出现过的会话（`active_since` / `active_until`）：准入在运行器里，这里只排版 */
+  private listActiveSessions(
+    params: SessionToolParams
+  ): ToolResult<SessionToolDetails | undefined> {
+    const security = getDesktopSecurityContext(this.ctx)
+    const res = subSessionRunner.listActive(
+      this.ctx.sessionId,
+      params.active_since ?? '',
+      params.active_until,
+      // 与 read-session 同一道门，只是不问人：放行的才列
+      (target) =>
+        security.evaluate('read', {
+          type: 'session',
+          sessionId: target.id,
+          title: target.title,
+          ownTurn: false,
+          ...sessionObjectFacts(target.id)
+        }).effect === 'allow'
+    )
+    if ('error' in res) throw new Error(res.error)
+    const rows = res.rows.map(
+      (r) =>
+        `<session id="${attr(r.id)}" title="${attr(r.title)}" last_active="${r.lastActiveAt}"` +
+        (r.bot ? ` bot="${attr(r.bot)}"` : '') +
+        (r.inputs.length ? ` inputs="${attr(r.inputs.join(','))}"` : '') +
+        (r.relation ? ` relation="${r.relation}"` : '') +
+        (r.self ? ' self="true"' : '') +
+        '/>'
+    )
+    const head = `<sessions active_since="${attr(res.since)}" active_until="${attr(res.until)}">`
+    return text(
+      rows.length ? `${head}\n${rows.join('\n')}\n</sessions>` : `${head}</sessions>`,
+      res.truncated
+        ? `${res.truncated} more sessions you may read were active in that range — narrow the dates to see them.`
+        : '',
+      res.hidden
+        ? `${res.hidden} other sessions were active in that range but need the user's approval to read; they are not listed.`
+        : ''
+    )
   }
 
   private async readSubSession(

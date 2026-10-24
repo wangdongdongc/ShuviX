@@ -8,13 +8,14 @@
  *   HR-12…16    宿主规则：去重（同步段占坑）、unknown-agent / no-model 跳过、模型透传；
  *   HR-17…20    超时、中止与监控面；
  *   HR-21…27    兜底与边界：观测回调抛错、无 logger、依赖抛错、身份字段、结果不读、outcome.error 判失败；
- *   HR-28       判定型埋点误走 fire（绕过类型）：只记一笔，不派发。
+ *   HR-28       判定型埋点误走 fire（绕过类型）：只记一笔，不派发；
+ *   HR-29       埋点的作用域：timer.fired 是全局观察型，其余三条是会话域；全局埋点没有结论契约。
  *
  * 判定型入口 decide 另见 ./hookDecide.test.ts。夹具见 ./harness.ts（观测面 = onRun 事件 + logger 行）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_HOOK_TIMEOUT_MS, type HookRegistryEntry } from '../hookRunner'
-import { TRIGGER_POINTS, getTriggerPoint } from '../triggerPoints'
+import { DECIDE_SPECS, TRIGGER_POINTS, getTriggerPoint } from '../triggerPoints'
 import { renderHookPrompt } from '../hookPrompt'
 import type { SubAgentModelConfig } from '../../subagent/types'
 import {
@@ -39,23 +40,42 @@ afterEach(() => {
 })
 
 describe('埋点目录', () => {
-  it('HR-1 三条会话域埋点（两条观察型 + 一条判定型），id 与键一致；未知 id 查不到', () => {
+  it('HR-1 三条会话域埋点（两条观察型 + 一条判定型）+ 一条全局埋点（timer.fired），id 与键一致；未知 id 查不到', () => {
     expect(Object.keys(TRIGGER_POINTS)).toEqual([
       'session.prompt-accepted',
       'session.turn-completed',
-      'permission.request'
+      'permission.request',
+      'timer.fired'
     ])
     expect(Object.values(TRIGGER_POINTS).map((def) => def.kind)).toEqual([
       'observe',
       'observe',
-      'decide'
+      'decide',
+      'observe'
     ])
     for (const [key, def] of Object.entries(TRIGGER_POINTS)) {
       expect(def.id).toBe(key)
-      expect(def.scope).toBe('session')
+      expect(def.scope).toBe(key === 'timer.fired' ? 'global' : 'session')
       expect(getTriggerPoint(key)).toBe(def)
     }
     expect(getTriggerPoint('nope')).toBeUndefined()
+  })
+
+  it('HR-29 作用域：timer.fired = 全局观察型（只有 bot 订阅）；三条会话域埋点 scope 都是 session；DECIDE_SPECS 里没有 timer.fired', () => {
+    expect(TRIGGER_POINTS['timer.fired']).toMatchObject({
+      id: 'timer.fired',
+      kind: 'observe',
+      scope: 'global'
+    })
+    expect(getTriggerPoint('timer.fired')).toBe(TRIGGER_POINTS['timer.fired'])
+    for (const id of [
+      'session.prompt-accepted',
+      'session.turn-completed',
+      'permission.request'
+    ] as const) {
+      expect(TRIGGER_POINTS[id].scope, id).toBe('session')
+    }
+    expect(Object.keys(DECIDE_SPECS)).not.toContain('timer.fired')
   })
 })
 

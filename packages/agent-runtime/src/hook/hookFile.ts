@@ -13,7 +13,8 @@
  *  - `shuvix-hook-on`：绑定列表，至少一条，每条 `{trigger, when?}` —— `when` 为 CEL
  *    （上下文 {event, env}，语法错整份非法）；绑定里没有别的键。**未知埋点 id 不判非法**
  *    （绑定惰性化 + warn）——埋点词汇表是逐版本增补的开放集合，两端埋点天然不同，判非法会让
- *    每个新埋点炸掉旧安装上的同一份文件；
+ *    每个新埋点炸掉旧安装上的同一份文件。**全局埋点**（`scope: 'global'`，如 `timer.fired`）判非法：它不属于
+ *    任何会话，hook 的 run 没有地方挂 —— 那是 bot 的 `shuvix-bot-on` 订阅的；
  *  - 正文 = 派发给 agent 的任务文本，纯文字、没有占位符 —— 事件由 runner 以 YAML 附在它后面
  *    （hookPrompt.ts）。正文可以为空：agent md 自己就说清了要做什么的时候，事件本身就是任务。
  *
@@ -162,9 +163,15 @@ export function parseHookDefinitionFile(
       const celError = compileWhen(when)
       if (celError) return reject(`binding '${trigger}': invalid when CEL — ${celError}`)
     }
-    if (!getTriggerPoint(trigger)) {
+    const point = getTriggerPoint(trigger)
+    if (!point) {
       // 未知埋点 id：绑定惰性化（runner 按 id 匹配，未知 id 自然不触发）——见文件头注释
       warn?.(`hook '${name}': trigger '${trigger}' is not known on this build — binding is inert`)
+    } else if (point.scope === 'global') {
+      // 全局埋点不属于任何会话，hook 的 run 没有地方挂 —— 判非法而不是惰性化：写了却永远不跑的绑定会让人误信它生效
+      return reject(
+        `binding '${trigger}': '${trigger}' does not belong to any session, so a hook cannot run on it — bind it in a bot's 'shuvix-bot-on' instead`
+      )
     }
     bindings.push(when === undefined ? { trigger } : { trigger, when })
   }

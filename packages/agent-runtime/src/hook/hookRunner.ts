@@ -49,7 +49,7 @@ import {
   TRIGGER_POINTS,
   type DecideSpec,
   type DecideTriggerId,
-  type ObserveTriggerId,
+  type SessionObserveTriggerId,
   type TriggerPayloadMap,
   type TriggerResultMap
 } from './triggerPoints'
@@ -162,7 +162,7 @@ export interface HookDecision<R> {
 
 export interface HookRunner {
   /** 观察型埋点入口 —— payload 形状按 id 收窄（TriggerPayloadMap）。绝不抛出。 */
-  fire<K extends ObserveTriggerId>(id: K, payload: TriggerPayloadMap[K]): void
+  fire<K extends SessionObserveTriggerId>(id: K, payload: TriggerPayloadMap[K]): void
   /**
    * 判定型埋点入口：等所有命中的 hook 给出结论，返回最严的那个；没有 hook 命中、或都没有意见
    * （超时 / 中止 / 失败 / 没给合格结论）返回 null。`signal` 落下即中止全部在跑的判定并返回 null。

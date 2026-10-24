@@ -34,6 +34,7 @@ import {
   SKILL_DEFAULT_PROJECT_ID
 } from './skillNotes'
 import { DAILY_PROJECT_ID, isDailyProjectId } from './dailyNotes'
+import { isTrackingProjectId, TRACKING_PROJECT_ID } from './trackingNotes'
 
 type MaybeId = string | null | undefined
 
@@ -202,5 +203,20 @@ describe('日报目录的承载项目 —— isDailyProjectId', () => {
     // 日报的载体不是注册表目录也不是知识库：属性卡不该套上它们的兜底
     expect(isRegistryNoteProjectId(DAILY_PROJECT_ID)).toBe(false)
     expect(isKnowledgeProjectId(DAILY_PROJECT_ID)).toBe(false)
+  })
+})
+
+describe('跟踪项目录的承载项目 —— isTrackingProjectId', () => {
+  it('HP-7 `__tracking__` 是隐藏项目（跟踪项在侧栏 Library 的分组里出现，不进项目列表、不点日历圆点）', () => {
+    // 漏认它，点开一份跟踪项就会让一个没人认得的项目冒进项目列表，日历上那天也多一个圆点
+    expect(TRACKING_PROJECT_ID).toBe('__tracking__')
+    expect(isHiddenProjectId(TRACKING_PROJECT_ID)).toBe(true)
+    // 它不是日报 / 注册表 / 知识库的载体：属性卡不该套上它们的兜底
+    expect(isDailyProjectId(TRACKING_PROJECT_ID)).toBe(false)
+    expect(isRegistryNoteProjectId(TRACKING_PROJECT_ID)).toBe(false)
+    expect(isKnowledgeProjectId(TRACKING_PROJECT_ID)).toBe(false)
+    for (const id of [DAILY_PROJECT_ID, ...REGISTRY_IDS, ...SKILL_IDS, ...LOOKALIKES]) {
+      expect(isTrackingProjectId(id), label(id)).toBe(false)
+    }
   })
 })

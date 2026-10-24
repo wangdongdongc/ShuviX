@@ -10,6 +10,8 @@ import {
   type AgentGroupAdapter,
   HookGroup,
   type HookGroupAdapter,
+  TrackingGroup,
+  type TrackingGroupAdapter,
   PolicyGroup,
   type PolicyGroupAdapter,
   BotGroup,
@@ -176,6 +178,28 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
       deleteFile: (fileName) => setConfirmingBotDelete({ fileName })
     }
   }, [setActiveSessionId])
+
+  /**
+   * 跟踪项分组（实验）能力注入 —— 清单是 `~/.shuvix/tracking` 里的 md（bot 维护），点一行打开那份文件的**笔记本
+   * 会话**（main 侧去重，隐藏项目 `__tracking__`）。引用必须稳定（useMemo）：分组以 adapter 为扫描依赖。
+   */
+  const trackingGroupAdapter = useMemo<TrackingGroupAdapter>(
+    () => ({
+      list: () => window.api.tracking.list(),
+      open: async (fileName, title) => {
+        let session: { id: string }
+        try {
+          session = await window.api.tracking.openNote({ fileName, title })
+        } catch {
+          return // 文件已不在（清单过期）—— tracking.changed / 聚焦重扫会把这一行拿掉
+        }
+        useChatStore.getState().setSessions(await getChatApi().session.list())
+        setActiveSessionId(session.id)
+      },
+      openFolder: () => window.api.tracking.openFolder()
+    }),
+    [setActiveSessionId]
+  )
 
   /**
    * 确认删除：删掉的正是主区开着的那份文件的笔记本时顺手离开它 —— 留着接着打字，自动保存会把
@@ -634,6 +658,7 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
   const groups = (
     <>
       <BotGroup adapter={botGroupAdapter} />
+      <TrackingGroup adapter={trackingGroupAdapter} />
       <AgentGroup adapter={agentGroupAdapter} />
       <PolicyGroup adapter={policyGroupAdapter} />
       <HookGroup adapter={hookGroupAdapter} />

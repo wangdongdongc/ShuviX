@@ -3,7 +3,7 @@
  *
  * `SourceDoc` 自 2026-10-21 起给**每一条**输入记来源（`InputOrigin`：本机窗口、远程连接、Chrome、Telegram、别的会话，
  * 见 chat-protocol `inputOrigin.ts`）；这里只读其中「不是人打的」那几种 —— 人在某个前端里打的来源跳过，读者看到的
- * 与之前一样。驱动它的那条会话：父会话代用户发进子会话的消息（`kind: 'parent-session'`），或经会话权限表被授权的别的
+ * 与之前一样。触发器替某个 bot 发出的话（`kind: 'trigger'`，2026-10-24）同样不是人打的。驱动它的那条会话：父会话代用户发进子会话的消息（`kind: 'parent-session'`），或经会话权限表被授权的别的
  * 会话发进来的消息（`kind: 'session'`）—— `prompt-session` 与 `steer-session` 都算（`answer-session` 之后的那一轮
  * 不算，那是 ask 的结果）。来源在发送时随提交写进 `SourceDoc[requestId]`（`UserSendOptions.source`
  * / `AdmitOptions.source`），读的时候按 requestId 找 submission、再落到活上下文里的那条条目上 —— 与显示侧车
@@ -16,22 +16,26 @@
  */
 import type { ConversationId, EntryId, EntryRecord, Harness } from '@earendil-works/pi-durable'
 import { UserEntry } from '@earendil-works/pi-durable'
-import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
-import { inputOriginOf, isDrivingOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
+import {
+  inputOriginOf,
+  isMachineOrigin,
+  type MachineOrigin
+} from '@shuvix/chat-protocol/types/inputOrigin'
 import { backgroundContext as BG, isClosedError } from './context'
 import { SourceDoc } from './docs'
 import { SessionClosedError, type DurableSession } from './durableSession'
 
-/** 一条输入的来源（驱动它的会话：父会话或被授权的别的会话） */
-export type InputSource = DrivingSessionRef
+/** 一条不是人打的输入的来源：驱动它的会话（父会话或被授权的别的会话），或替某个 bot 发话的触发器 */
+export type InputSource = MachineOrigin
 
 /**
- * 侧车的一项 → 驱动它的会话：`{kind:'parent-session' | 'session', sessionId}`（title 可选）；人打的来源与认不出的
- * 形状 → undefined（后者在解析时按「认不出」处理，见 `drivingSourceOfItem`）
+ * 侧车的一项 → 不是人打的来源：驱动它的会话 `{kind:'parent-session' | 'session', sessionId}`（title 可选）或触发器
+ * `{kind:'trigger', trigger, bot}`；人打的来源与认不出的形状 → undefined（后者在解析时按「认不出」处理，见
+ * `drivingSourceOfItem`）
  */
 export function inputSourceOf(item: unknown): InputSource | undefined {
   const origin = inputOriginOf(item)
-  return origin !== undefined && isDrivingOrigin(origin) ? origin : undefined
+  return origin !== undefined && isMachineOrigin(origin) ? origin : undefined
 }
 
 /** 认不出的一项照样算「有记录」（失败闭合）：sessionId 补空串 —— 不是任何一个读者自己 */
@@ -41,7 +45,7 @@ const UNRECOGNIZED: InputSource = { kind: 'parent-session', sessionId: '' }
 function drivingSourceOfItem(item: unknown): InputSource | undefined {
   const origin = inputOriginOf(item)
   if (origin === undefined) return UNRECOGNIZED
-  return isDrivingOrigin(origin) ? origin : undefined
+  return isMachineOrigin(origin) ? origin : undefined
 }
 
 /**

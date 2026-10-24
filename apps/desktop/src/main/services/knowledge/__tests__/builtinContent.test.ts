@@ -30,6 +30,7 @@ import {
   POLICY_LETS_KEY,
   POLICY_SCOPE_KEY,
   BUILTIN_POLICY_SPECS,
+  BUILTIN_BOT_SEEDS,
   BUILTIN_PROFILE_SPECS,
   BUILTIN_HOOK_SPECS,
   type BundleFile,
@@ -385,7 +386,8 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
   const POLICY_COUNT_WORD: Record<number, Record<string, string>> = {
     2: { en: 'Two', zh: '两', ja: '二' },
     3: { en: 'Three', zh: '三', ja: '三' },
-    4: { en: 'Four', zh: '四', ja: '四' }
+    4: { en: 'Four', zh: '四', ja: '四' },
+    5: { en: 'Five', zh: '五', ja: '五' }
   }
 
   /** 从某个标题起、到下一个同级或更高标题为止的那一段 */
@@ -472,7 +474,8 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
       agent: new Set(BUILTIN_PROFILE_SPECS.map((s) => s.name)),
       hook: new Set(BUILTIN_HOOK_SPECS.map((s) => s.name)),
       policy: new Set(BUILTIN_POLICY_SPECS.map((s) => s.name)),
-      bot: new Set<string>()
+      // 随应用提供的 bot（第一次启动时写进用户目录的那几份，今天只有 daily）
+      bot: new Set(BUILTIN_BOT_SEEDS.map((s) => s.name))
     }
     const examples = files.flatMap((f) =>
       [...f.text.matchAll(/`((?:agent|bot|hook|policy):builtin:[^`<][^`]*)`/g)].map((m) => [

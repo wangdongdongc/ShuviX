@@ -14,7 +14,8 @@
  * echo 打印出来，按开头认就是给注入开门。代价：卡片反馈只活在内存里，重启之后不再出现（少一份输入 =
  * 多问，方向是保守的）。
  *
- * 别的会话经会话权限表发进顶层会话的消息（有来源记录）同样列作 delegatedTasks，不算人的意思（2026-10-20）。
+ * 别的会话经会话权限表发进顶层会话的消息（有来源记录）同样列作 delegatedTasks，不算人的意思（2026-10-20）；触发器
+ * 替 bot 发的话（来源 `trigger`，2026-10-24）也一样 —— 它是事先写在 bot 文件里的，不是此刻有人在场。
  *
  * 子会话里的「用户消息」多半是父 agent 写的：人发的消息取顶层会话；子会话自己的用户消息按**来源记录**分
  * （`SourceDoc`，转写摘要 user 项的 `source`，§19.7，2026-10-17 裁决）—— 有记录的是父会话代发的，列作
@@ -199,7 +200,16 @@ function drivenInputsOf(
     }
     if (item.kind !== 'user' || item.systemWritten || !isDelegated(item)) continue
     const text = item.text.trim()
-    if (text) tasks.push(clip(text, USER_MESSAGE_MAX_CHARS))
+    if (!text) continue
+    // 触发器替 bot 发的：话是事先写在 bot 文件里的，此刻没有人在场 —— 说清楚，别让审查员当成上级会话的委派
+    tasks.push(
+      clip(
+        item.source?.kind === 'trigger'
+          ? `(sent by a scheduled trigger on behalf of bot "${item.source.bot}", not typed by the user now) ${text}`
+          : text,
+        USER_MESSAGE_MAX_CHARS
+      )
+    )
   }
   return firstAndTail(tasks)
 }

@@ -137,6 +137,8 @@ vi.mock('../../utils/paths', () => ({
     agents: '/nonexistent/shuvix-ask/.agents/skills'
   }),
   getDefaultBotsDir: () => '/tmp/shuvix-bots',
+  getDefaultDailyDir: () => '/tmp/shuvix-daily',
+  getDefaultTrackingDir: () => '/tmp/shuvix-tracking',
   // vars.shuvixConfigDirs 的四个目录（退役的 protect-shuvix-config 引用它们）
   getDefaultPoliciesDir: () => POLICIES_DIR,
   getDefaultAgentsDir: () => AGENTS_DIR,

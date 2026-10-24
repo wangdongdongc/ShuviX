@@ -20,6 +20,8 @@
  *   CS-4 抽查：页面每次加载都调的读取是 app；会话权限表、停用内置、远程访问是 security ……
  *   CS-5 settingKeyFactsOf：精确 key 优先、其次最长前缀、都不中 → system + admin；非字符串 / 空串同样
  *   CS-6 channelCallFactsOf：settings:set 按 key；勾了「记住」的回答 → security + admin；别的照通道
+ *   CS-7 触发源与跟踪项（实验，2026-10-24）：trigger:status 是 agents 的 read；tracking:list 是 sessions 的 read，
+ *        开笔记本 / 开目录是 write；settings:set 写 triggers.timer.enabled → agents + admin
  */
 import { describe, expect, it } from 'vitest'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
@@ -385,5 +387,31 @@ describe('CS-6 channelCallFactsOf', () => {
       access: 'write'
     })
     expect(channelCallFactsOf('no:such-channel', [])).toEqual({ scope: 'system', access: 'admin' })
+  })
+})
+
+describe('CS-7 触发源与跟踪项（实验）', () => {
+  it.each<[string, ChannelAccess, ChannelScope]>([
+    ['trigger:status', 'read', 'agents'],
+    ['tracking:list', 'read', 'sessions'],
+    ['tracking:openNote', 'write', 'sessions'],
+    ['tracking:openFolder', 'write', 'sessions']
+  ])('CS-7 %s → %s / %s', (channel, access, scope) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(channelAccessOf(channel)).toBe(access)
+    expect(channelScopeOf(channel)).toBe(scope)
+    expect(channelCallFactsOf(channel, [])).toEqual({ scope, access })
+  })
+
+  it('CS-7 settings:set 写内置 timer 开关（triggers.timer.enabled）→ agents + admin（落在 triggers. 前缀上）', () => {
+    expect(settingKeyFactsOf('triggers.timer.enabled')).toEqual({
+      scope: 'agents',
+      access: 'admin',
+      matched: 'triggers.'
+    })
+    expect(
+      channelCallFactsOf('settings:set', [{ key: 'triggers.timer.enabled', value: 'false' }])
+    ).toEqual({ scope: 'agents', access: 'admin' })
+    expect(SETTING_KEY_FACTS['triggers.']).toEqual({ scope: 'agents', access: 'admin' })
   })
 })

@@ -18,6 +18,8 @@
  *          结果而不抛；respondToInput 把 meta 原样转下去
  *   WP2-81 输入来源（网关盖的章，2026-10-21）：steer / followUp 把它原样放进 durable 的选项（连同受理回调）；
  *          不是被驱动的 prompt 带着它 → options 只多一个 source；被驱动时来源恒取 drivingSourceOf，章不顶替它
+ *   WP2-90 session.prompt-accepted 的 payload 带 `origin` = 这次发送的来源种类（local / remote / trigger /
+ *          parent-session），没有来源为 ''；别的键不变（2026-10-24）
  * （D10-33「门面从不授予已读」在 agentSessionBot.test.ts。）
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -159,7 +161,8 @@ describe('D10-26 session.prompt-accepted', () => {
       profileName: 'work',
       title: 'New chat',
       isDefaultTitle: true,
-      promptText: 'hello'
+      promptText: 'hello',
+      origin: ''
     })
     // 受理即按当场落下的用户条目入账（P3-07 PIN-15：onAdmitted 的 entryId，不是随机键）
     expect(mocks.recordUserEntry.mock.calls).toEqual([[SID, 1]])
@@ -188,6 +191,61 @@ describe('D10-26 session.prompt-accepted', () => {
     await flush()
     expect(fired('session.prompt-accepted')).toEqual([])
     expect(mocks.recordUserEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('WP2-90 session.prompt-accepted 带来源种类', () => {
+  const base = {
+    sessionId: SID,
+    profileName: 'chat',
+    title: 'New chat',
+    isDefaultTitle: true,
+    promptText: 'go'
+  }
+
+  it.each([
+    ['本机窗口', { kind: 'local' } as const, 'local'],
+    [
+      '远程连接',
+      { kind: 'remote', clientId: 'ws:4', address: '192.168.1.20', userAgent: 'UA' } as const,
+      'remote'
+    ],
+    [
+      '触发器替 bot 发的',
+      {
+        kind: 'trigger',
+        trigger: 'timer.fired',
+        sourceId: 'timer:builtin:minute',
+        bot: 'daily'
+      } as const,
+      'trigger'
+    ]
+  ])('WP2-90 %s → origin = %o 的 kind；别的键原样', async (_label, source, kind) => {
+    const { session } = facade()
+    await session.prompt('go', undefined, undefined, undefined, source)
+    expect(fired('session.prompt-accepted')).toEqual([{ ...base, origin: kind }])
+  })
+
+  it('WP2-90 被驱动的发送 → origin = parent-session（取驱动它的会话，不看第 5 个参数）', async () => {
+    const { session } = facade()
+    await session.prompt(
+      'go',
+      undefined,
+      undefined,
+      { requestId: 'subsession:P1:1', driven: { parentId: 'P1', background: false } },
+      { kind: 'local' }
+    )
+    expect(fired('session.prompt-accepted')).toEqual([{ ...base, origin: 'parent-session' }])
+  })
+
+  it("WP2-90 没有来源的发送 → origin = ''（键仍在）", async () => {
+    const { session } = facade()
+    await session.prompt('go')
+    const [payload] = fired('session.prompt-accepted')
+    expect(payload).toEqual({ ...base, origin: '' })
+    expect(Object.keys(payload!).sort()).toEqual(
+      ['isDefaultTitle', 'origin', 'profileName', 'promptText', 'sessionId', 'title'].sort()
+    )
   })
 })
 

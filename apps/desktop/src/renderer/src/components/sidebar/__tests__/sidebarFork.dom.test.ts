@@ -47,6 +47,7 @@ vi.mock('@shuvix/app-shell', async () => {
       )
     },
     BotGroup: group(),
+    TrackingGroup: group(),
     AgentGroup: group(),
     PolicyGroup: group(),
     HookGroup: group(),

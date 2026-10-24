@@ -52,6 +52,9 @@ import { messageService } from './messageService'
 import { recordSessionModel, recordSessionThinkingLevel, isDurableSession } from './sessionStorage'
 import { isLegacySession } from './legacySession'
 import { sessionRecords } from './sessionRecords'
+import { localDayKey, sessionsActiveBetween } from './sessionDayPromptService'
+import { isDayKey } from '@shuvix/chat-protocol/dailyNotes'
+import { botService } from './botService'
 import type { AgentSession } from './agentSession'
 import { authorsOf, buildSessionOutline } from '@shuvix/agent-runtime'
 import type {
@@ -85,6 +88,24 @@ const log = createLogger('SubSession')
 export const MAX_RUNNING_SUB_SESSIONS = 4
 /** 一个父会话最多拥有的子会话数（只数未删除的） */
 export const MAX_SUB_SESSIONS = 20
+
+/** 按日历列出会话时最多列多少条（再多就请调用方缩小日期范围） */
+export const ACTIVE_LIST_MAX = 100
+
+/** 按日历列出的一条会话（`listActive`） */
+export interface ActiveSessionRow {
+  id: string
+  title: string
+  /** 区间里最后一条用户条目的时刻（ISO） */
+  lastActiveAt: string
+  /** 绑定的 bot（对象 id，没有 id 时是名字）；不是 bot 会话为空串 */
+  bot: string
+  /** 区间里用户条目各是谁发的（来源种类，去重排序；旧行记作 `unknown`） */
+  inputs: string[]
+  relation?: 'sub-session'
+  /** 就是调用方自己 */
+  self?: boolean
+}
 /**
  * 后台形态回执前的「确认发出去了」窗口。只等这么久 —— 发送失败（拒 busy）是同步就
  * 落定的，而正常发出去的那一路会一直跑到轮结束，不能在这里等它。
@@ -334,7 +355,8 @@ class SubSessionRunner {
       if (!agent) return false
       const [view, sources] = await Promise.all([agent.sessionView(), agent.inputSources()])
       const last = spokenMessages(view.messages).at(-1)
-      return last !== undefined && sources.get(last.id)?.sessionId === parentId
+      const source = last === undefined ? undefined : sources.get(last.id)
+      return source !== undefined && source.kind !== 'trigger' && source.sessionId === parentId
     } catch (err) {
       log.warn(`读会话 ${childId} 的来源失败: ${err instanceof Error ? err.message : err}`)
       return false
@@ -504,6 +526,60 @@ class SubSessionRunner {
       listed.push({ ...this.info(parentId, { id: target, ...row }, 'other'), access })
     }
     return { subSessions: listed }
+  }
+
+  /**
+   * 按日历列出一段本地日子（`since` / `until`，含两端；`until` 缺省今天）里出现过的会话 —— session 工具 `list-sessions`
+   * 带 `active_since` 时。别的会话只列调用方**不用问人就能读**的（`canRead` 由工具按读策略静默判定，与 read-session
+   * 同一道门）；要问人的、拒绝的只报个数，列表没法逐条弹卡片。自己的子会话照列；调用方自己标 `self`。
+   */
+  listActive(
+    callerId: string,
+    since: string,
+    until: string | undefined,
+    canRead: (target: { id: string; title: string }) => boolean
+  ):
+    | { error: string }
+    | {
+        since: string
+        until: string
+        rows: ActiveSessionRow[]
+        hidden: number
+        truncated: number
+      } {
+    const start = since.trim()
+    const end = until?.trim() || localDayKey(Date.now())
+    if (!isDayKey(start) || !isDayKey(end)) {
+      return {
+        error: `"active_since" / "active_until" must be local dates like 2026-10-24 (got "${start}" / "${end}").`
+      }
+    }
+    if (start > end) return { error: `"active_since" (${start}) is after "active_until" (${end}).` }
+    const rows: ActiveSessionRow[] = []
+    let hidden = 0
+    let truncated = 0
+    for (const { session, origins, lastAt } of sessionsActiveBetween(start, end)) {
+      const self = session.id === callerId
+      const child = session.parentId === callerId
+      if (!self && !child && !canRead({ id: session.id, title: session.title })) {
+        hidden++
+        continue
+      }
+      if (rows.length >= ACTIVE_LIST_MAX) {
+        truncated++
+        continue
+      }
+      rows.push({
+        id: session.id,
+        title: session.title,
+        lastActiveAt: new Date(lastAt).toISOString(),
+        bot: botService.identityOf(session.id),
+        inputs: origins,
+        ...(child ? { relation: 'sub-session' as const } : {}),
+        ...(self ? { self: true } : {})
+      })
+    }
+    return { since: start, until: end, rows, hidden, truncated }
   }
 
   /**

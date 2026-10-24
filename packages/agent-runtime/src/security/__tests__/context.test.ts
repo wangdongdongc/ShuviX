@@ -5138,7 +5138,9 @@ describe('createSecurityContext — enforceSession（XS-19）', () => {
       type: 'session',
       sessionId: 'X',
       title: 'T',
-      ownTurn: false
+      ownTurn: false,
+      lastActiveAt: '',
+      bot: ''
     })
     expect(event.request.action).toBe('read')
     expect(event.request.tool).toEqual({ name: 'session', operation: 'read-session' })
@@ -5238,6 +5240,208 @@ describe('createSecurityContext — enforceSession（XS-19）', () => {
     await expect(
       ctx.enforceSession('write', { ...TARGET, ownTurn: true }, PROMPT_OPTS)
     ).resolves.toBeUndefined()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('CX-S1 客体的 lastActiveAt / bot（2026-10-24）：调用方没给 → 空串（键恒在，has() 为真）；给了 → 原样透传；ctx.evaluate 的会话客体同样原样进 CEL', async () => {
+    const LAST = '2026-10-24T09:00:00.000Z'
+    const BOT = 'bot:builtin:daily'
+    const { ctx, review, warn } = sessionContext()
+    await ctx.enforceSession('read', TARGET, READ_OPTS)
+    await ctx.enforceSession('read', { ...TARGET, lastActiveAt: LAST, bot: BOT }, READ_OPTS)
+    expect(review.mock.calls.map((c) => c[0].request.object)).toStrictEqual([
+      { type: 'session', sessionId: 'X', title: 'T', ownTurn: false, lastActiveAt: '', bot: '' },
+      { type: 'session', sessionId: 'X', title: 'T', ownTurn: false, lastActiveAt: LAST, bot: BOT }
+    ])
+    expect(warn).not.toHaveBeenCalled()
+
+    // has() 两种情形都为真：只看键在不在的用户 deny 两次都命中，零告警
+    const hasBoth = userPolicy('session-facts-present', [
+      {
+        effect: 'deny',
+        conditions: { 'object.type': ['session'] },
+        match: 'has(object.bot) && has(object.lastActiveAt)'
+      }
+    ])
+    const present = sessionContext({ policies: [hasBoth] })
+    for (const target of [TARGET, { ...TARGET, lastActiveAt: LAST, bot: BOT }]) {
+      expect(await rejectionOf(present.ctx.enforceSession('read', target, READ_OPTS))).toBe(
+        "Denied by security policy rule 'session-facts-present#0'"
+      )
+    }
+    expect(present.warn).not.toHaveBeenCalled()
+
+    // 值原样透传：比对取值的 deny 只命中给了值的那一次；没给的那次落回内置 #0（照旧问人）
+    const byValue = userPolicy('session-facts-value', [
+      {
+        effect: 'deny',
+        conditions: { 'object.type': ['session'] },
+        match: `object.bot == '${BOT}' && object.lastActiveAt == '${LAST}'`
+      }
+    ])
+    const valued = sessionContext({ policies: [byValue] })
+    expect(
+      await rejectionOf(
+        valued.ctx.enforceSession('read', { ...TARGET, lastActiveAt: LAST, bot: BOT }, READ_OPTS)
+      )
+    ).toBe("Denied by security policy rule 'session-facts-value#0'")
+    await expect(valued.ctx.enforceSession('read', TARGET, READ_OPTS)).resolves.toBeUndefined()
+    expect(valued.requestUserInput).toHaveBeenCalledTimes(1)
+    // ctx.evaluate 不经门面补缺省：调用方给的会话客体原样进 CEL
+    expect(
+      valued.ctx.evaluate('read', {
+        type: 'session',
+        sessionId: 'X',
+        title: 'T',
+        ownTurn: false,
+        lastActiveAt: LAST,
+        bot: BOT
+      })
+    ).toMatchObject({ effect: 'deny', winning: 'session-facts-value#0' })
+    expect(valued.warn).not.toHaveBeenCalled()
+  })
+})
+
+// ─── 主体的开放属性（subject.attrs）────────────────────────────────────────
+//
+// CX-S2 桌面给 agent 主体挂上惰性的 `bot`（toolContext：botService.identityOf，扫一遍 bot 目录）：它作为
+// `subject.bot` 进 CEL；没有规则读它就不调 getter；固定字段（kind / agentKind / sessionId / profile / depth）
+// 开放属性盖不掉。
+
+describe('createSecurityContext — 主体的开放属性（CX-S2）', () => {
+  const BOT = 'bot:builtin:daily'
+  const TRACKING = '/home/u/.shuvix/tracking'
+
+  /** 带惰性 bot 的 agent 主体；getter 是 spy。attrs 就地加 bot（不展开拷贝 —— 展开会当场调用别的 getter） */
+  const lazyBotSubject = (
+    attrs: Record<string, unknown> = {}
+  ): {
+    subject: Parameters<typeof createSecurityContext>[0]
+    getter: Mock<() => string>
+  } => {
+    const getter = vi.fn(() => BOT)
+    Object.defineProperty(attrs, 'bot', { get: getter, enumerable: true })
+    return { subject: { ...SUBJECT, attrs }, getter }
+  }
+
+  /** 内置的 daily-bot-access 读 vars.trackingDir / vars.now：交齐，免得缺键告警混进来 */
+  const dailyVarsProvider = (
+    overrides: Partial<SecurityHostProvider> = {}
+  ): SecurityHostProvider => {
+    const base = makeProvider(noGrants())
+    return makeProvider(noGrants(), {
+      getVars: () => ({
+        ...base.getVars(),
+        trackingDir: TRACKING,
+        now: '2026-10-24T10:00:00.000Z'
+      }),
+      ...overrides
+    })
+  }
+
+  const command: SecurityObject = {
+    type: 'command',
+    command: 'ls',
+    channel: 'bash',
+    sandboxed: false,
+    ...NO_SHELL_FACTS
+  }
+
+  it('CX-S2 attrs 的 getter 作为 subject.bot 进 CEL；没有规则读它时不调用；固定字段盖不掉', () => {
+    // 1) 进 CEL：用户 deny 读 subject.bot
+    const reads = lazyBotSubject()
+    const warn = vi.fn()
+    const readingCtx = createSecurityContext(
+      reads.subject,
+      ENVIRONMENT,
+      dailyVarsProvider({
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        getUserPolicies: () => [
+          userPolicy('bot-gate', [
+            {
+              effect: 'deny',
+              conditions: { 'object.type': ['command'] },
+              match: `subject.bot == '${BOT}'`
+            }
+          ])
+        ]
+      })
+    )
+    expect(readingCtx.evaluate('execute', command)).toMatchObject({
+      effect: 'deny',
+      winning: 'bot-gate#0'
+    })
+    expect(reads.getter).toHaveBeenCalled()
+
+    // 2) 惰性：命令（没有哪条规则读 subject.bot —— daily-bot-access 的条件只放 session / path 进 CEL）→ 零调用
+    const lazy = lazyBotSubject()
+    const lazyCtx = createSecurityContext(
+      lazy.subject,
+      ENVIRONMENT,
+      dailyVarsProvider({ logger: { info: vi.fn(), warn, error: vi.fn() } })
+    )
+    expect(lazyCtx.evaluate('execute', command)).toMatchObject({
+      effect: 'ask',
+      winning: 'ask-on-command#0'
+    })
+    expect(lazy.getter).not.toHaveBeenCalled()
+    // 停用 daily-bot-access 之后连路径读写也没有规则读它
+    const disabled = lazyBotSubject()
+    const disabledCtx = createSecurityContext(
+      disabled.subject,
+      ENVIRONMENT,
+      dailyVarsProvider({
+        isPolicyDisabled: (policy) => policy.objectId === 'policy:builtin:daily-bot-access'
+      })
+    )
+    expect(disabledCtx.evaluate('write', { type: 'path', path: `${TRACKING}/a.md` })).toMatchObject(
+      {
+        effect: 'ask',
+        winning: 'ask-on-external-path#1'
+      }
+    )
+    expect(disabled.getter).not.toHaveBeenCalled()
+    // 内置在：跟踪项目录的写由 daily-bot-access#1 放行 —— 这时才调
+    expect(lazyCtx.evaluate('write', { type: 'path', path: `${TRACKING}/a.md` })).toMatchObject({
+      effect: 'allow',
+      tier: 'force-allow',
+      winning: 'daily-bot-access#1'
+    })
+    expect(lazy.getter).toHaveBeenCalled()
+
+    // 3) 固定字段盖不掉：attrs 里的 kind / agentKind / sessionId / profile / depth 被忽略（其 getter 也不调）
+    const kindGetter = vi.fn(() => 'user')
+    const spoof: Record<string, unknown> = {
+      agentKind: 'spawned',
+      sessionId: 'evil',
+      profile: 'p',
+      depth: 7
+    }
+    Object.defineProperty(spoof, 'kind', { get: kindGetter, enumerable: true })
+    const fixed = lazyBotSubject(spoof)
+    const fixedCtx = createSecurityContext(
+      fixed.subject,
+      ENVIRONMENT,
+      dailyVarsProvider({
+        logger: { info: vi.fn(), warn, error: vi.fn() },
+        getUserPolicies: () => [
+          userPolicy('fixed-keys', [
+            {
+              effect: 'deny',
+              conditions: { 'object.type': ['command'], 'subject.kind': ['agent'] },
+              match: `subject.kind == 'agent' && subject.agentKind == 'root' && subject.sessionId == '${SID}' && subject.profile == '' && subject.depth == 0 && subject.bot == '${BOT}'`
+            }
+          ])
+        ]
+      })
+    )
+    expect(fixedCtx.evaluate('execute', command)).toMatchObject({
+      effect: 'deny',
+      winning: 'fixed-keys#0',
+      // 内置 ask-on-command 只管 agent 主体：照样命中，说明 subject.kind 没被换成 user
+      matched: ['fixed-keys#0', 'ask-on-command#0']
+    })
+    expect(kindGetter).not.toHaveBeenCalled()
     expect(warn).not.toHaveBeenCalled()
   })
 })

@@ -402,6 +402,9 @@ export {
   getTriggerPoint,
   type TriggerId,
   type ObserveTriggerId,
+  type SessionObserveTriggerId,
+  type GlobalTriggerId,
+  type TimerFiredPayload,
   type DecideTriggerId,
   type DecideSpec,
   type TriggerPayloadMap,
@@ -409,7 +412,13 @@ export {
   type TriggerPointDef,
   type PermissionRequestPayload
 } from './hook/triggerPoints'
-export { renderHookPrompt, HOOK_EVENT_TAG } from './hook/hookPrompt'
+export { renderHookPrompt, renderEventPrompt, HOOK_EVENT_TAG } from './hook/hookPrompt'
+export {
+  compileWhen,
+  evaluateWhen,
+  setWhenHostFunctions,
+  type WhenHostFunctions
+} from './hook/when'
 export {
   createHookRunner,
   DEFAULT_HOOK_TIMEOUT_MS,
@@ -438,7 +447,8 @@ export {
   type BuiltinHookSpec
 } from './hook/builtinHooks'
 // Bot：md 格式解析 + 正文围栏。一个 bot = 身份 + 正文（人设与记忆），绑在一条有根会话上；
-// **不内置任何 bot**（bot 会话的基座档案 `bot` 在下面的内置档案里）。
+// 随应用提供的 bot（日报 bot）第一次启动时写进用户目录（BUILTIN_BOT_SEEDS），之后就是普通 bot 文件。
+// bot 会话的基座档案 `bot` 在下面的内置档案里。
 export {
   parseBotDefinitionFile,
   serializeBotDefinitionFile,
@@ -446,9 +456,17 @@ export {
   BOT_FILE_MARKER_KEY,
   BOT_FILE_MARKER_TYPE,
   BOT_RETIRED_PIPELINE_KEY,
-  type ParsedBotFile
+  BOT_ON_KEY,
+  type ParsedBotFile,
+  type BotBinding
 } from './bot/botFile'
 export { renderBotContext, BOT_CONTEXT_TAG, type BotContextInput } from './bot/botContext'
+export {
+  BUILTIN_BOT_SEEDS,
+  DAILY_BOT_ID,
+  DAILY_BOT_NAME,
+  type BuiltinBotSeed
+} from './bot/builtinBots'
 // 内置档案（声明式 spec + 注入 t 的统一构建器；各端 registry 现算组装,用户同名定义可覆盖）
 export {
   buildBuiltinProfile,

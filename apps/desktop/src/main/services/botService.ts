@@ -3,7 +3,8 @@
  *
  * 一个 bot 是 `~/.shuvix/bots/<name>.md`（`shuvix: bot`）：身份三项 + 一篇正文（人设与记忆）。
  * **纯 md 驱动**，与 agent / hook / policy 同一条纪律 —— 文件存在且解析得过就是活的，没有
- * 启用开关、没有旁路配置、没有数据库表，也**不内置任何 bot**。
+ * 启用开关、没有旁路配置、没有数据库表。随应用提供的 bot（日报 bot）第一次启动时写进目录一次
+ * （seedBuiltinBots），之后与用户自己的 bot 没有区别。
  *
  * 本服务**只管文件**：怎么把正文喂给会话是提示词那一侧的事（`renderBotContext` → 系统提示词的
  * bot 段落，`PromptHost.resolveBotContext`，只给根 Agent）。bot 会话是一条普通有根会话，所以这里没有
@@ -21,6 +22,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs
 import { basename, join } from 'path'
 import { shell } from 'electron'
 import {
+  BUILTIN_BOT_SEEDS,
   parseBotDefinitionFile,
   registryFileBase,
   resolveShadowing,
@@ -28,6 +30,7 @@ import {
   type ParsedBotFile
 } from '@shuvix/agent-runtime'
 import { boundBotOf } from '@shuvix/chat-protocol/botSession'
+import { parseObjectId } from '@shuvix/chat-protocol/mdMeta'
 import { getDefaultBotsDir } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
 import { writeFileAtomic } from '../utils/atomicWrite'
@@ -43,6 +46,20 @@ const log = createLogger('BotService')
  * 与各 bot 会话的身份胶囊跟着一直重查。
  */
 const CHANGED_DEBOUNCE_MS = 300
+
+/** identityOf 复用上一次扫描结果的时长 */
+const IDENTITY_CACHE_MS = 2000
+
+/**
+ * 随应用提供的 bot 的内置 id 认定（设置库 —— 写在 bots 目录之外，往那个目录写文件的 agent 改不到它）：
+ * `{ <内置 id>: <ShuviX 写入的那份文件的绝对路径> }`。`bot:builtin:*` 这样的 id 只对记在这里的那份文件成立
+ * （内置策略 daily-bot-access 按 `subject.bot` 放宽权限，不能让随便一份声明了同一个 id 的文件冒领）；那份文件
+ * 不在了就撤销，之后同一路径上再出现的文件也不认。
+ */
+export const BUILTIN_FILES_KEY = 'bots.builtinFiles'
+
+/** bots 目录里记「随应用提供的 bot 已写过哪些」的文件（点开头：目录扫描不当它是 bot） */
+export const BUILTIN_SEED_MARKER = '.builtin-seeded'
 
 /** 目录里无法解析的文件（身份是文件名 —— 它解析不出 name） */
 export interface InvalidBotFile {
@@ -71,6 +88,16 @@ class BotService {
    */
   private readonly namesByPath = new Map<string, string>()
   private changedTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * 内置 id 认定表的存取（设置库，main 启动时经 setBuiltinTrustStore 注入 —— 直接 import 设置服务会把数据库拉进每个
+   * 只想用 botService 的模块）。没注入时是空表：内置形态的 id 一律不认（宁可不认，不可错认）
+   */
+  private trustStore: {
+    get(key: string): string | undefined
+    set(key: string, value: string): void
+  } | null = null
+  /** identityOf 的短时缓存（名字 → 对象 id）：改了 id 的文件最多晚 IDENTITY_CACHE_MS 生效 */
+  private readonly identityCache = new Map<string, { id: string; at: number }>()
 
   private get userDir(): string {
     return getDefaultBotsDir()
@@ -88,6 +115,7 @@ class BotService {
     shadowed: ShadowedBotEntry[]
     invalid: InvalidBotFile[]
   } {
+    this.revokeMissingBuiltinFiles()
     if (!existsSync(this.userDir)) {
       this.namesByPath.clear()
       return { valid: [], shadowed: [], invalid: [] }
@@ -216,6 +244,123 @@ class BotService {
     const entry = this.get(name)
     if (!entry) log.warn(`会话 ${sessionId} 绑定的 bot "${name}" 已不存在`)
     return entry
+  }
+
+  /**
+   * 一条会话绑定的 bot 的身份（安全策略的 `subject.bot` / 会话客体的 `object.bot`）：bot 文件的对象 id（改名不变），
+   * 文件没有 id 或已不在时退回绑定的名字；内置形态的 id（`bot:builtin:*`）只对 ShuviX 写入的那份文件成立，别的
+   * 文件声明它也按名字算；不是 bot 会话 → 空串。不记日志（每次策略求值都可能调到）
+   */
+  identityOf(sessionId: string): string {
+    const settings = sessionRecords.pick(sessionId, ['settings'])?.settings
+    const name = boundBotOf(settings)
+    if (!name) return ''
+    // 策略每检查一次文件读写都可能读到它：同一个名字在一小段时间里复用上一次的扫描结果，不每次都扫目录
+    const now = Date.now()
+    const cached = this.identityCache.get(name)
+    if (cached && now - cached.at < IDENTITY_CACHE_MS) return cached.id
+    const entry = this.get(name)
+    let id = entry?.file.objectId ?? name
+    // 内置 id 只对 ShuviX 写入的那份文件成立（见 BUILTIN_FILES_KEY）：别的文件声明它，身份按名字算
+    if (
+      entry &&
+      parseObjectId(id)?.form === 'builtin' &&
+      this.trustedBuiltinFiles()[id] !== entry.basePath
+    ) {
+      id = name
+    }
+    this.identityCache.set(name, { id, at: now })
+    return id
+  }
+
+  /** main 启动时注入设置库（见 trustStore） */
+  setBuiltinTrustStore(
+    store: { get(key: string): string | undefined; set(key: string, value: string): void } | null
+  ): void {
+    this.trustStore = store
+    this.identityCache.clear()
+  }
+
+  /** 内置 id → ShuviX 写入的那份文件（没注入 / 读坏了按空表：宁可不认，不可错认） */
+  private trustedBuiltinFiles(): Record<string, string> {
+    if (!this.trustStore) return {}
+    try {
+      const parsed: unknown = JSON.parse(this.trustStore.get(BUILTIN_FILES_KEY) ?? '{}')
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+      const out: Record<string, string> = {}
+      for (const [k, v] of Object.entries(parsed)) if (typeof v === 'string') out[k] = v
+      return out
+    } catch {
+      return {}
+    }
+  }
+
+  /** 认定的文件不在了 → 撤销（之后同一路径上再出现的文件不认）；目录扫描时顺带做，代价是几个 existsSync */
+  private revokeMissingBuiltinFiles(): void {
+    const trusted = this.trustedBuiltinFiles()
+    const kept = Object.fromEntries(Object.entries(trusted).filter(([, path]) => existsSync(path)))
+    if (Object.keys(kept).length === Object.keys(trusted).length) return
+    this.trustStore?.set(BUILTIN_FILES_KEY, JSON.stringify(kept))
+    this.identityCache.clear()
+  }
+
+  // ─── 随应用提供的 bot ──────────────────────────────────
+
+  /**
+   * 把随应用提供的 bot（BUILTIN_BOT_SEEDS，今天只有日报 bot）按界面语言写进 bots 目录 —— 每个**只写一次**：
+   * bot 要改自己的文件来记事，随包文件是只读的，所以它落地成一份普通 bot 文件，之后用户可改可删，删了不再补。
+   * 写过哪些记在目录里的 `.builtin-seeded`（一行一个名字，扫描跳过点开头的文件）；目录里已有同名或同 id 的
+   * bot（用户自己建的、从别处拷来的）也只记一笔，不覆盖 —— 那份文件也不获得内置 id 的认定（BUILTIN_FILES_KEY 只记
+   * ShuviX 自己写下的文件）。main 启动时调；失败只记日志。
+   */
+  seedBuiltinBots(language: string): void {
+    const markerPath = join(this.userDir, BUILTIN_SEED_MARKER)
+    let seeded: Set<string>
+    try {
+      seeded = new Set(
+        existsSync(markerPath)
+          ? readFileSync(markerPath, 'utf-8')
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(Boolean)
+          : []
+      )
+    } catch (e) {
+      log.warn('读取内置 bot 的写入记录失败:', e)
+      return
+    }
+    const pending = BUILTIN_BOT_SEEDS.filter((seed) => !seeded.has(seed.name))
+    if (pending.length === 0) return
+    const existing = this.scanDir()
+    const taken = [...existing.valid, ...existing.shadowed]
+    let wrote = false
+    for (const seed of pending) {
+      seeded.add(seed.name)
+      if (taken.some((e) => e.file.name === seed.name || e.file.objectId === seed.objectId))
+        continue
+      const target = join(this.userDir, `${seed.name}.md`)
+      if (existsSync(target)) continue
+      try {
+        mkdirSync(this.userDir, { recursive: true })
+        writeFileAtomic(target, seed.render(language))
+        wrote = true
+        this.trustStore?.set(
+          BUILTIN_FILES_KEY,
+          JSON.stringify({ ...this.trustedBuiltinFiles(), [seed.objectId]: target })
+        )
+        log.info(`写入随应用提供的 bot "${seed.name}" → ${target}`)
+      } catch (e) {
+        log.warn(`写入随应用提供的 bot "${seed.name}" 失败:`, e)
+        seeded.delete(seed.name)
+      }
+    }
+    try {
+      mkdirSync(this.userDir, { recursive: true })
+      writeFileAtomic(markerPath, [...seeded].sort().join('\n') + '\n')
+    } catch (e) {
+      log.warn('记录内置 bot 的写入失败:', e)
+    }
+    if (wrote) appEventBus.publish({ type: 'bot.changed' })
   }
 
   // ─── 笔记本写入的回执 ──────────────────────────────────

@@ -11,6 +11,8 @@
 export const EXPERIMENTAL_FEATURES = {
   voice: 'experimental.hint',
   bots: 'experimental.hint',
+  triggers: 'experimental.hint',
+  tracking: 'experimental.hint',
   telegramBots: 'experimental.hintTelegramBots'
 } as const
 

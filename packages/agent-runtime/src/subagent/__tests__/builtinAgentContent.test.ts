@@ -8,6 +8,10 @@
  * knowledge-writer（2026-10-12 起是 `knowledge` 工具 `submit` 的检查方）：三种语言的段落结构一致（翻译时
  * 漏掉一段，模型在那门语言里就少一条规矩），示例 frontmatter 里每个它该补的键都在 —— 键表只住在这份
  * 提示词里，示例少一个键，写手就少补一个。
+ *
+ * bot（bot 会话的基座档案，2026-10-24 起「自己动手干活」）：三种语言的工具面一字不差、没有 bash / MCP；description
+ * 与正文里不再残留「真正的活都交给子会话、write/edit 不许用来干活」那套旧说法 —— 日报 bot 被定时叫起来时要自己写
+ * 跟踪项，旧措辞会让它拒绝动手。
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -47,4 +51,48 @@ describe.each(localized('knowledge-writer'))('BA knowledge-writer · %s', (file)
     expect(keys).not.toContain('generated')
     expect(keys).not.toContain('verified')
   })
+})
+
+describe('BA bot 基座档案', () => {
+  /** 每种语言：旧措辞（不得残留）与新措辞（必须在）—— 字面量，钉的就是这几句话 */
+  const BOT = {
+    'bot.md': {
+      goneDescription: 'hands every real task to a sub-session',
+      goneBody: ["You don't do the work yourself", 'never for a task'],
+      present: ['## Working', 'You do the work yourself']
+    },
+    'bot.zh.md': {
+      goneDescription: '把真正的活交给子会话',
+      goneBody: ['活不是你自己干的', '绝不用来干活'],
+      present: ['## 干活', '活由你自己用手上的工具干']
+    },
+    'bot.ja.md': {
+      goneDescription: '実作業はすべてサブセッションに渡す',
+      goneBody: ['作業は自分ではしません', '作業には使いません'],
+      present: ['## 作業', '作業は自分のツールで自分で行います']
+    }
+  } as const
+  const TOOLS =
+    'read, ls, grep, glob, ask, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing'
+
+  it.each(Object.keys(BOT) as Array<keyof typeof BOT>)(
+    'BA-3 %s：工具面不变（没有 bash / mcp:*）；description 与正文不再要求把活全交给子会话、不再禁止用 write/edit 干活',
+    (file) => {
+      const text = readFileSync(join(MD_DIR, file), 'utf8')
+      const field = (key: string): string =>
+        new RegExp(`^${key}: (.*)$`, 'm').exec(text)?.[1]?.trim() ?? ''
+      const tools = field('shuvix-tools')
+      expect(tools).toBe(TOOLS)
+      expect(tools.split(',').map((t) => t.trim())).not.toContain('bash')
+      expect(tools).not.toMatch(/mcp:/)
+
+      const description = field('description')
+      expect(description.length).toBeGreaterThan(0)
+      expect(description).not.toContain(BOT[file].goneDescription)
+
+      const body = text.slice(text.indexOf('\n---', 4) + 4)
+      for (const gone of BOT[file].goneBody) expect(body, gone).not.toContain(gone)
+      for (const present of BOT[file].present) expect(body, present).toContain(present)
+    }
+  )
 })

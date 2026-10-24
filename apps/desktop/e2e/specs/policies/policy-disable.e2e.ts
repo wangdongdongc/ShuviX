@@ -194,6 +194,7 @@ describe('内置安全策略的停用开关', () => {
       COMMAND_GATE,
       PATH_GATE,
       'ask-on-session-access',
+      'daily-bot-access',
       'network-admission'
     ])
     for (const p of builtins) {

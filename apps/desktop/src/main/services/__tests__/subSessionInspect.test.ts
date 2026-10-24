@@ -64,6 +64,12 @@ vi.mock('../../services/sessionService', () => ({
 }))
 // 会话权限表：list 列出权限表里的别的会话；这里的用例只管子会话，表是空的
 vi.mock('../acl', () => ({ sessionAcl: { sessionGrants: () => [] } }))
+// 按日历列出会话（listActive）读日历索引与 bot 身份：这里不测它，桩掉免得拉起数据库
+vi.mock('../sessionDayPromptService', () => ({
+  localDayKey: () => '2026-10-24',
+  sessionsActiveBetween: () => []
+}))
+vi.mock('../botService', () => ({ botService: { identityOf: () => '' } }))
 vi.mock('../../frontend/core', () => ({ chatGateway: { prompt: mocks.gatewayPrompt } }))
 vi.mock('../../services/messageService', () => ({
   messageService: { findLastBySession: mocks.findLastBySession }

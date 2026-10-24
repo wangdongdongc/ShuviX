@@ -4,10 +4,12 @@
  * 契约：`<body>\n\n<hook_event trigger="<id>">\n<payload as YAML>\n</hook_event>`，YAML 用
  * `lineWidth: 0`（多行文本走 `|` 块、长行不折）。没有模板语法 —— 所以这里既钉形状，也钉
  * 「payload 原样进 YAML、agent 读回来的就是 emit 侧给的事实」这条往返性质。
+ *
+ * 同一形状的通用版 renderEventPrompt（HP-10/11）：触发器替 bot 发的消息用 `trigger_event` 围栏，规则不变。
  */
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
-import { HOOK_EVENT_TAG, renderHookPrompt } from '../hookPrompt'
+import { HOOK_EVENT_TAG, renderEventPrompt, renderHookPrompt } from '../hookPrompt'
 
 const CLOSE = '</hook_event>'
 
@@ -158,5 +160,57 @@ describe('renderHookPrompt — 往返（agent 读回来的就是 emit 侧的事�
     const crlf = renderHookPrompt('', 't', { recentText: 'User: a\r\nAssistant: b' })
     expect(fenceYaml(crlf, 't')).toBe('recentText: "User: a\\r\\nAssistant: b"')
     expect(parseYaml(fenceYaml(crlf, 't'))).toEqual({ recentText: 'User: a\r\nAssistant: b' })
+  })
+})
+
+describe('renderEventPrompt — 通用围栏（trigger_event）', () => {
+  /** 一次 timer.fired 的事件（lastFiredAt 是带本地偏移的 ISO，见 botTriggerService） */
+  const timerPayload = {
+    sourceId: 'timer:builtin:minute',
+    firedAt: '2026-10-24T10:00:00.000Z',
+    local: { date: '2026-10-24', time: '18:00', weekday: 6, hour: 18, minute: 0 },
+    lastFiredAt: '2026-10-23T18:00:00+08:00'
+  }
+
+  it('HP-10 正文 + 空行 + <trigger_event trigger="timer.fired"> 围栏；嵌套 local 与 lastFiredAt 往返；trigger 不进 YAML；空正文只有围栏', () => {
+    const body = 'Go through the sessions since the last run.'
+    const text = renderEventPrompt('trigger_event', body, 'timer.fired', timerPayload)
+    const open = '<trigger_event trigger="timer.fired">\n'
+    expect(text.startsWith(`${body}\n\n${open}`)).toBe(true)
+    expect(text.endsWith('\n</trigger_event>')).toBe(true)
+    const yaml = text.slice(`${body}\n\n${open}`.length, text.length - '\n</trigger_event>'.length)
+    expect(yaml).toBe(
+      [
+        'sourceId: timer:builtin:minute',
+        'firedAt: 2026-10-24T10:00:00.000Z',
+        'local:',
+        '  date: 2026-10-24',
+        '  time: 18:00',
+        '  weekday: 6',
+        '  hour: 18',
+        '  minute: 0',
+        'lastFiredAt: 2026-10-23T18:00:00+08:00'
+      ].join('\n')
+    )
+    expect(parseYaml(yaml)).toEqual(timerPayload)
+    expect(yaml).not.toMatch(/^trigger:/m)
+
+    expect(renderEventPrompt('trigger_event', '  ', 'timer.fired', { a: 1 })).toBe(
+      '<trigger_event trigger="timer.fired">\na: 1\n</trigger_event>'
+    )
+  })
+
+  it('HP-11 renderHookPrompt(b, t, p) 与 renderEventPrompt(hook_event, b, t, p) 逐字相同（重构守护）', () => {
+    const cases: Array<[string, string, Record<string, unknown>]> = [
+      ['Do it.', 'session.prompt-accepted', { sessionId: 's1', promptText: 'hi' }],
+      ['', 'session.turn-completed', { recentText: 'User: a\nAssistant: b\n' }],
+      ['Body\n\n', 'permission.request', { operation: { target: 'rm -rf build' } }],
+      ['x', 'timer.fired', timerPayload]
+    ]
+    for (const [body, trigger, payload] of cases) {
+      expect(renderHookPrompt(body, trigger, payload)).toBe(
+        renderEventPrompt(HOOK_EVENT_TAG, body, trigger, payload)
+      )
+    }
   })
 })

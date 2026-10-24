@@ -136,6 +136,8 @@ vi.mock('../../../utils/paths', () => ({
     agents: '/nonexistent/shuvix-p212/home/.agents/skills'
   }),
   getDefaultBotsDir: () => '/nonexistent/shuvix-p212/bots',
+  getDefaultDailyDir: () => '/nonexistent/shuvix-p212/daily',
+  getDefaultTrackingDir: () => '/nonexistent/shuvix-p212/tracking',
   getDefaultPoliciesDir: () => '/nonexistent/shuvix-p212/policies',
   getDefaultAgentsDir: () => '/nonexistent/shuvix-p212/agents',
   getBuiltinKnowledgeDir: () => '/nonexistent/shuvix-p212/builtin-knowledge',

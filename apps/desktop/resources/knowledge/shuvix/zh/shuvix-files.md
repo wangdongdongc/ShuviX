@@ -39,9 +39,13 @@ skill 目录）、`widgets/`、`tts/`、`cli-token`。旧的 `memory/`、`wikis/
 有 `daily/_template.md` 就照它建，否则是三段（完成 / 接下来 / 待跟进）。链到一条会话的行写作
 `[标题](shuvix://session/<id>#<消息 id>)`。
 
+`tracking/` 是**跟踪项**（实验）：一件需要持续跟进、跨好几天才有结论的事一份 md（自述行 `shuvix: track v1`，标题是正文第一个
+`# ` 标题），由日报 bot 从会话里整理并全权维护，在侧栏 Library 的「跟踪项」分组里列出。目录是一个 git 仓库：bot 每次
+触发运行结束后 ShuviX 提交一次，写错了可以从历史里找回。暂时没有状态、下次查看之类的管理字段。
+
 **内置的东西在应用里，不在磁盘上。** ShuviX 自带内置 agent（`work`、`chat`、`notebook`、`bot`、`tab`、
 `coding`、`explore`、`titler`、`knowledge-writer`、`permission-reviewer`）、内置安全策略、
-两个内置 hook（`auto-title`、`auto-review`）与内置 skill `builtin:drawing`。没有内置 bot。
+两个内置 hook（`auto-title`、`auto-review`）与内置 skill `builtin:drawing`。bot 不在应用里：随应用提供的日报 bot 第一次启动时写进 `~/.shuvix/bots/daily.md`，之后就是普通 bot 文件（见 `bot-md`）。
 内置的不能编辑，但可以**覆盖**：一份 `name` 与内置同名的用户文件会整个取代它（侧栏分组里内置行的菜单
 提供「创建覆盖副本」，把内置的当前文本写进你的目录作为起点）。
 
