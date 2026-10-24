@@ -8,7 +8,13 @@
  *     传进来的数组不被改动。整卡只读时一次点击也不交出去 —— 组件自己挡，不只靠 disabled（禁用的
  *     勾选框浏览器不派发 click，所以先摘掉 disabled 再点才证明得了）；
  *   - 每组里 ShuviX 自带的项（内置 MCP / 内置技能）排最前，其余保持传入顺序（稳定排序，不按字母）；
- *     排序不改调用方传进来的数组。
+ *     排序不改调用方传进来的数组；
+ *   - 内置项（MCP / 技能 / 知识库）以界面语言的名字为主：「内置」徽标 + 名字，标识名小字并排（只差大小写
+ *     时不重复），悬停是界面语言的说明（builtinExtensionCopy）；别的项就是标识名；
+ *   - 知识库一行（`knowledge`）**不随只读上锁**：整卡只读时 MCP / Skills 压暗挂锁，知识库照样可点、
+ *     不挂锁，点一下交回库名；内置库 `shuvix` 与内置 MCP / 技能同一个画法；没有候选库时这一行与它那段说明
+ *     都不出现；
+ *     它那段说明与卡片说明叠在同一个问号气泡里、排在后面（带 `data-knowledge-hint`）。
  *
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
  * i18n 走真 zh 资源，悬停文案用同一个实例的 `i18n.t` 现算，不抄文案。
@@ -248,5 +254,126 @@ describe('每组里内置项排前，其余保持传入顺序', () => {
     expect(() => render({ mcpTools, skillTools, enabledTools: [] })).not.toThrow()
     expect([mcpTools.map((t) => t.name), skillTools.map((t) => t.name)]).toEqual(before)
     expect(keys()).toHaveLength(MCP_INPUT.length + SKILL_INPUT.length)
+  })
+})
+
+describe('知识库一行：与 MCP / Skills 同卡，但不随只读上锁', () => {
+  const OPTIONS = [
+    { name: 'notes', label: 'notes' },
+    { name: 'shuvix', label: 'ShuviX guide' }
+  ]
+  const kbLabels = (): HTMLLabelElement[] => [
+    ...container.querySelectorAll<HTMLLabelElement>('label[data-knowledge-base]')
+  ]
+  const kbBox = (name: string): HTMLInputElement => {
+    const hit = kbLabels().find((label) => label.getAttribute('data-knowledge-base') === name)
+    if (!hit) throw new Error(`knowledge base ${name} not rendered`)
+    return hit.querySelector('input[type="checkbox"]') as HTMLInputElement
+  }
+  /** 标题旁的问号气泡（悬上去才挂到 body 上） */
+  const hintText = (): string => {
+    const btn = container.querySelector<HTMLElement>('[data-info-hint]')
+    if (!btn) return ''
+    act(() => {
+      btn.dispatchEvent(
+        new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })
+      )
+    })
+    return document.querySelector('[data-info-tip]')?.textContent ?? ''
+  }
+
+  it('ES-7 整卡只读：MCP / Skills 两把锁，知识库可点、不压暗、无 aria-disabled，点一下交回库名、不碰扩展能力勾选', () => {
+    const onToggle = vi.fn<(name: string) => void>()
+    render({
+      readonly: true,
+      readonlyHint: READONLY_HINT,
+      knowledge: { options: OPTIONS, selected: ['shuvix'], onToggle }
+    })
+    expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(2)
+    expect(kbLabels().map((label) => label.getAttribute('data-knowledge-base'))).toEqual([
+      'notes',
+      'shuvix'
+    ])
+    for (const label of kbLabels()) {
+      expect(label.hasAttribute('aria-disabled')).toBe(false)
+      expect(label.className).not.toContain('opacity-40')
+      expect(label.className).toContain('cursor-pointer')
+    }
+    expect(kbBox('notes')).toMatchObject({ checked: false, disabled: false })
+    expect(kbBox('shuvix')).toMatchObject({ checked: true, disabled: false })
+    // 内置库与内置 MCP / 技能同一个画法：徽标 + 界面语言的名字（标识名并排），悬停是界面语言的说明；
+    // 用户库没有徽标，名字就是目录名
+    const [notes, shuvix] = kbLabels()
+    expect(shuvix.querySelector('[data-builtin-badge]')?.textContent).toBe(
+      i18n.t('input.skillBuiltinBadge')
+    )
+    expect(shuvix.querySelector('[data-chip-name]')?.textContent).toBe(
+      i18n.t('knowledge.builtinBaseName')
+    )
+    expect(shuvix.querySelector('[data-chip-identifier]')?.textContent).toBe('shuvix')
+    expect(shuvix.title).toBe(i18n.t('knowledge.builtinBase'))
+    expect(notes.querySelector('[data-builtin-badge]')).toBeNull()
+    expect(notes.querySelector('[data-chip-name]')?.textContent).toBe('notes')
+    expect(notes.querySelector('[data-chip-identifier]')).toBeNull()
+    act(() => {
+      kbBox('notes').click()
+    })
+    expect(onToggle).toHaveBeenCalledExactlyOnceWith('notes')
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('ES-8 说明：卡片那句在前、知识库那段在后（data-knowledge-hint）；没有候选库时这一行和它那段都不出现', () => {
+    render({
+      footer: 'CARD',
+      knowledge: { options: OPTIONS, selected: [], onToggle: vi.fn(), hint: 'KB-HINT' }
+    })
+    expect(hintText()).toBe('CARDKB-HINT')
+    expect(document.querySelector('[data-info-tip] [data-knowledge-hint]')?.textContent).toBe(
+      'KB-HINT'
+    )
+    act(() => root.unmount())
+    document.body.innerHTML = ''
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    render({
+      footer: 'CARD',
+      knowledge: { options: [], selected: [], onToggle: vi.fn(), hint: 'KB-HINT' }
+    })
+    expect(kbLabels()).toHaveLength(0)
+    expect(container.textContent).not.toContain(i18n.t('sessionConfig.knowledgeGroup'))
+    expect(hintText()).toBe('CARD')
+  })
+})
+
+describe('内置 MCP / 技能以界面语言的名字为主', () => {
+  it('ES-9 名字是界面文案、标识名并排（只差大小写时不重复）、悬停是界面文案；别的项是标识名、没有并排的那一份', () => {
+    render({
+      mcpTools: [
+        mcp('ssh', { isBuiltin: true }),
+        mcp('browser', { isBuiltin: true }),
+        mcp('other')
+      ],
+      skillTools: [skill('builtin:drawing'), skill('foo')],
+      enabledTools: []
+    })
+    const nameOf = (key: string): string | null =>
+      item(key).querySelector('[data-chip-name]')?.textContent ?? null
+    const idOf = (key: string): string | null =>
+      item(key).querySelector('[data-chip-identifier]')?.textContent ?? null
+
+    expect(nameOf('mcp:browser')).toBe(i18n.t('tool.browserLabel'))
+    expect(idOf('mcp:browser')).toBe('browser')
+    expect(item('mcp:browser').title).toBe(i18n.t('tool.browserHint'))
+    expect(nameOf('mcp:ssh')).toBe(i18n.t('tool.sshLabel'))
+    expect(idOf('mcp:ssh')).toBeNull()
+    expect(nameOf('skill:builtin:drawing')).toBe(i18n.t('builtinSkill.drawing.label'))
+    expect(idOf('skill:builtin:drawing')).toBe('drawing')
+    expect(item('skill:builtin:drawing').title).toBe(i18n.t('builtinSkill.drawing.hint'))
+    expect(nameOf('mcp:other')).toBe('other')
+    expect(idOf('mcp:other')).toBeNull()
+    expect(nameOf('skill:foo')).toBe('foo')
+    expect(idOf('skill:foo')).toBeNull()
   })
 })

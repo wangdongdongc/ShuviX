@@ -1,12 +1,19 @@
 import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Server, BookOpen, WifiOff, Lock, Loader2 } from 'lucide-react'
+import { Server, BookOpen, Library, WifiOff, Lock, Loader2 } from 'lucide-react'
 import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
-import { builtinMcpCopy, builtinSkillCopy } from '@shuvix/chat-protocol/builtinExtensionCopy'
+import {
+  builtinKnowledgeCopy,
+  builtinMcpCopy,
+  builtinSkillCopy,
+  sameAsIdentifier,
+  type BuiltinExtensionCopy
+} from '@shuvix/chat-protocol/builtinExtensionCopy'
 import { useChatStore, selectMcpConnecting } from '../../stores/chatStore'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useSessionTools } from '../../hooks/useSessionTools'
+import { useSessionKnowledgeBases } from '../../hooks/useSessionKnowledgeBases'
 import type { ToolItem } from '../common/ToolSelectList'
 
 const SKILLS_GROUP = '__skills__'
@@ -34,20 +41,76 @@ function parseSkillDisplay(name: string): { label: string; builtin: boolean } {
 }
 
 /**
- * 工具选择器 — 会话的扩展能力勾选（MCP / Skill），与会话设置里的扩展能力是同一份数据。
+ * 面板里一行的名字。内置项（有界面文案）与设置 → MCP、侧栏技能行同一个画法：界面语言的名字为主；
+ * 别的项就是等宽的标识名。名字先占宽度，太长才截断。
+ */
+function ItemName({
+  identifier,
+  label,
+  colorCls
+}: {
+  identifier: string
+  label?: string
+  colorCls: string
+}): React.JSX.Element {
+  return (
+    <span
+      data-chip-name
+      className={`text-[11px] ${label ? '' : 'font-mono '}${colorCls} truncate min-w-0`}
+    >
+      {label ?? identifier}
+    </span>
+  )
+}
+
+/**
+ * 名字后面那一段淡色小字：内置项的标识名（档案与勾选里写的那个，只差大小写时不重复）打头，再接一行说明。
+ * 两者连成一段一起截断 —— 面板只有 240px，分成两格时窄的那格会被挤成一条切开的字。
+ */
+function ItemDetail({
+  identifier,
+  label,
+  hint
+}: {
+  identifier: string
+  label?: string
+  hint?: string
+}): React.JSX.Element | null {
+  const showIdentifier = !!label && !sameAsIdentifier(label, identifier)
+  if (!showIdentifier && !hint) return null
+  return (
+    <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
+      {showIdentifier && (
+        <span data-chip-identifier className="font-mono mr-1.5">
+          {identifier}
+        </span>
+      )}
+      {hint && <span data-chip-hint>{hint}</span>}
+    </span>
+  )
+}
+
+/**
+ * 工具选择器 — 会话的扩展能力勾选（MCP / Skill / 知识库），与会话设置里的扩展能力卡是同一份数据、
+ * 同样三组。
  *
+ * 内置的 MCP / 技能 / 知识库以界面语言的名字为主，后面淡色小字是标识名与界面语言的一行说明
+ * （ItemName / ItemDetail）；
+ * 悬浮摘要里也写界面语言的名字。
  * 内置工具与 SubAgent 始终启用，不在此处控制。会话的 agent 档案声明的 mcp:/skill: 项（`declaredBy`）
  * 缺省勾上，悬停说是哪个档案带的；取消它写的是勾选里的取消记号（chat-protocol `toolSelection`），
  * 只作用于这条会话 —— 例如改用别的作图技能时取消内置的那份。
- * 勾选只在创建 Agent 时读一次：会话已有运行时就只读（面板照常能打开看：整排条目按禁用态画、
- * 触发钮挂锁，原因只在悬停时说）。
- * 还没有会话（欢迎页）时勾的是草稿（useSessionTools），直接发送新建会话时写进那条会话；
- * 声明项按那条会话将会用的档案画 —— 欢迎页新建的是无项目会话，基座 chat。
+ * MCP / Skill 的勾选只在创建 Agent 时读一次：会话已有运行时就只读（面板照常能打开看：那两组条目按
+ * 禁用态画、触发钮挂锁，原因只在悬停时说）。知识库一组不上锁（useSessionKnowledgeBases）：它是
+ * `knowledge` 工具每次调用时现查的，运行期改了下一次调用就作数。
+ * 还没有会话（欢迎页）时勾的是草稿（useSessionTools / useSessionKnowledgeBases），直接发送新建会话时
+ * 写进那条会话；声明项按那条会话将会用的档案画 —— 欢迎页新建的是无项目会话，基座 chat。
  */
 export function ToolPicker(): React.JSX.Element | null {
   const { t } = useTranslation()
   const activeSessionId = useChatStore((s) => s.activeSessionId)
   const { enabledTools, locked, setEnabledTools } = useSessionTools(activeSessionId)
+  const knowledge = useSessionKnowledgeBases(activeSessionId)
   const mcpConnecting = useChatStore(selectMcpConnecting)
 
   const toolsRef = useRef<HTMLDivElement>(null)
@@ -81,13 +144,24 @@ export function ToolPicker(): React.JSX.Element | null {
   const mcpTools = allTools.filter((t) => t.group?.startsWith('mcp:'))
   const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
 
-  if (mcpTools.length === 0 && skillTools.length === 0) return null
+  const bases = knowledge.options
+  if (mcpTools.length === 0 && skillTools.length === 0 && bases.length === 0) return null
 
   // 档案声明的项缺省开着、被取消才关；其余项勾了才开（记号见 chat-protocol toolSelection）
   const isOn = (tool: ToolItem): boolean =>
     isToolSelected(enabledTools, tool.name, !!tool.declaredBy)
   const enabledMcpTools = mcpTools.filter(isOn)
   const enabledSkillTools = skillTools.filter(isOn)
+  // 只数候选里真有的：选择里可能还留着已经删掉的库名
+  const enabledBases = bases.filter((base) => knowledge.selected.includes(base.name))
+  const anyEnabled =
+    enabledMcpTools.length > 0 || enabledSkillTools.length > 0 || enabledBases.length > 0
+  // 内置项的界面文案（名字 + 说明）；自定义 MCP / 别的技能 / 用户库没有
+  const mcpCopy = (tool: ToolItem): BuiltinExtensionCopy | undefined =>
+    tool.isBuiltin ? builtinMcpCopy(tool.name, t) : undefined
+  const skillCopy = (tool: ToolItem): BuiltinExtensionCopy | undefined =>
+    builtinSkillCopy(tool.name, t)
+  const baseCopy = (name: string): BuiltinExtensionCopy | undefined => builtinKnowledgeCopy(name, t)
 
   const toggle = (tool: ToolItem): void => {
     if (locked) return
@@ -137,10 +211,16 @@ export function ToolPicker(): React.JSX.Element | null {
             <span>{enabledSkillTools.length}</span>
           </span>
         )}
+        {bases.length > 0 && (
+          <span data-knowledge-count className="inline-flex items-center gap-0.5">
+            <Library size={10} />
+            <span>{enabledBases.length}</span>
+          </span>
+        )}
       </button>
 
       {/* 悬浮 tooltip：已启用的工具列表 */}
-      {!open && (enabledMcpTools.length > 0 || enabledSkillTools.length > 0) && (
+      {!open && anyEnabled && (
         <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden min-w-[200px] max-w-[280px] rounded-md border border-border-primary bg-bg-secondary px-2 py-1.5 shadow-xl group-hover:block">
           <div className="text-[10px] text-text-tertiary mb-1">{t('input.tools')}</div>
           <div className="space-y-1 max-h-40 overflow-y-auto">
@@ -148,7 +228,9 @@ export function ToolPicker(): React.JSX.Element | null {
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-text-secondary">[MCP]</span>
                 <span className="text-[11px] text-text-primary truncate">
-                  {enabledMcpTools.map((t) => mcpShortName(t.name)).join(', ')}
+                  {enabledMcpTools
+                    .map((tool) => mcpCopy(tool)?.label ?? mcpShortName(tool.name))
+                    .join(', ')}
                 </span>
               </div>
             )}
@@ -156,7 +238,19 @@ export function ToolPicker(): React.JSX.Element | null {
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] text-text-secondary">[Skills]</span>
                 <span className="text-[11px] text-text-primary truncate">
-                  {enabledSkillTools.map((t) => parseSkillDisplay(t.name).label).join(', ')}
+                  {enabledSkillTools
+                    .map((tool) => skillCopy(tool)?.label ?? parseSkillDisplay(tool.name).label)
+                    .join(', ')}
+                </span>
+              </div>
+            )}
+            {enabledBases.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-text-secondary whitespace-nowrap">
+                  [{t('sessionConfig.knowledgeGroup')}]
+                </span>
+                <span className="text-[11px] text-text-primary truncate">
+                  {enabledBases.map((base) => baseCopy(base.name)?.label ?? base.name).join(', ')}
                 </span>
               </div>
             )}
@@ -173,6 +267,7 @@ export function ToolPicker(): React.JSX.Element | null {
                 {mcpTools.map((tool) => {
                   // 惰性启动下「没连上」是常态（用到才连），只有连接失败才值得标红
                   const failed = tool.serverStatus === 'error'
+                  const copy = mcpCopy(tool)
                   return (
                     <label
                       key={tool.name}
@@ -195,11 +290,11 @@ export function ToolPicker(): React.JSX.Element | null {
                           {t('input.skillBuiltinBadge')}
                         </span>
                       )}
-                      <span
-                        className={`text-[11px] font-mono whitespace-nowrap flex-shrink-0 ${failed ? 'text-red-300/60' : 'text-purple-300'}`}
-                      >
-                        {mcpShortName(tool.name)}
-                      </span>
+                      <ItemName
+                        identifier={mcpShortName(tool.name)}
+                        label={copy?.label}
+                        colorCls={failed ? 'text-red-300/60' : 'text-purple-300'}
+                      />
                       {failed && (
                         <span
                           className="flex items-center gap-0.5 text-[10px] text-red-400"
@@ -209,9 +304,11 @@ export function ToolPicker(): React.JSX.Element | null {
                         </span>
                       )}
                       {/* 自定义 server 的 label 只是它的名字；内置的有一行本地化说明 */}
-                      <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
-                        {(tool.isBuiltin && builtinMcpCopy(tool.name, t)?.hint) || tool.label}
-                      </span>
+                      <ItemDetail
+                        identifier={mcpShortName(tool.name)}
+                        label={copy?.label}
+                        hint={copy?.hint || tool.label}
+                      />
                     </label>
                   )
                 })}
@@ -225,6 +322,7 @@ export function ToolPicker(): React.JSX.Element | null {
                 <div className="px-2 py-1 text-[10px] font-medium text-text-tertiary">SKILL</div>
                 {skillTools.map((tool) => {
                   const { label, builtin } = parseSkillDisplay(tool.name)
+                  const copy = skillCopy(tool)
                   return (
                     <label
                       key={tool.name}
@@ -246,12 +344,60 @@ export function ToolPicker(): React.JSX.Element | null {
                           {t('input.skillBuiltinBadge')}
                         </span>
                       )}
-                      <span className="text-[11px] font-mono text-emerald-300 whitespace-nowrap flex-shrink-0">
-                        {label}
-                      </span>
-                      <span className="text-[10px] text-text-tertiary truncate flex-1 min-w-0">
-                        {builtinSkillCopy(tool.name, t)?.hint ?? tool.label}
-                      </span>
+                      <ItemName
+                        identifier={label}
+                        label={copy?.label}
+                        colorCls="text-emerald-300"
+                      />
+                      <ItemDetail
+                        identifier={label}
+                        label={copy?.label}
+                        hint={copy?.hint ?? tool.label}
+                      />
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            {(mcpTools.length > 0 || skillTools.length > 0) && bases.length > 0 && (
+              <div className="border-t border-border-secondary my-0.5" />
+            )}
+            {bases.length > 0 && (
+              <div className="py-0.5">
+                {/* 组名大写与 MCP / SKILL 同形（中日文不受影响） */}
+                <div className="px-2 py-1 text-[10px] font-medium text-text-tertiary uppercase">
+                  {t('sessionConfig.knowledgeGroup')}
+                </div>
+                {bases.map((base) => {
+                  // 内置库与内置 MCP / 技能同一个画法：徽标 + 界面语言的名字 + 标识名与一行说明
+                  const copy = baseCopy(base.name)
+                  return (
+                    // 不随运行时上锁：没有只读态、没有锁的悬停原因
+                    <label
+                      key={base.name}
+                      data-knowledge-base={base.name}
+                      className="flex items-center gap-1.5 w-full px-2 py-0.5 transition-colors hover:bg-bg-hover cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={knowledge.selected.includes(base.name)}
+                        onChange={() => knowledge.toggle(base.name)}
+                        className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
+                      />
+                      {copy && (
+                        <span
+                          data-builtin-badge
+                          className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0"
+                        >
+                          {t('input.skillBuiltinBadge')}
+                        </span>
+                      )}
+                      <ItemName
+                        identifier={base.name}
+                        label={copy?.label}
+                        colorCls="text-sky-300"
+                      />
+                      <ItemDetail identifier={base.name} label={copy?.label} hint={copy?.hint} />
                     </label>
                   )
                 })}

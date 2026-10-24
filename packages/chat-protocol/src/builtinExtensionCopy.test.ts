@@ -1,11 +1,17 @@
 /**
- * 内置技能 / 内置 MCP 的界面文案查表（BEC）—— 认哪些名字、不认哪些名字。
+ * 内置技能 / 内置 MCP / 内置知识库的界面文案查表（BEC）—— 认哪些名字、不认哪些名字。
  * 文案本身在三语里齐不齐由各自的清单用例钉：技能在桌面的 builtinSkillsResources（BS-9），
  * MCP 在 builtinMcpPresentations.test（BMP-9 / BMP-12）。
  */
 import { describe, expect, it } from 'vitest'
-import { builtinMcpCopy, builtinSkillCopy, sameAsIdentifier } from './builtinExtensionCopy'
+import {
+  builtinKnowledgeCopy,
+  builtinMcpCopy,
+  builtinSkillCopy,
+  sameAsIdentifier
+} from './builtinExtensionCopy'
 import en from './i18n/locales/en.json'
+import ja from './i18n/locales/ja.json'
 import zh from './i18n/locales/zh.json'
 
 /** 只认真实存在的叶子键，缺了就把键原样还回去（i18next 的缺省行为） */
@@ -57,6 +63,21 @@ describe('builtinExtensionCopy', () => {
     expect(builtinMcpCopy('mcp:browser__x', t)).toBeUndefined()
     expect(builtinMcpCopy('toString', t)).toBeUndefined()
     expect(builtinMcpCopy('mcp:hasOwnProperty', t)).toBeUndefined()
+  })
+
+  it('BEC-6 内置知识库只认保留名 shuvix：名字与说明按界面语言给，三语都有；用户库与 project 不给', () => {
+    for (const bundle of [en, zh, ja]) {
+      expect(builtinKnowledgeCopy('shuvix', tOf(bundle))).toEqual({
+        label: bundle.knowledge.builtinBaseName,
+        hint: bundle.knowledge.builtinBase
+      })
+      expect(bundle.knowledge.builtinBaseName).toBeTruthy()
+      expect(bundle.knowledge.builtinBase).toBeTruthy()
+    }
+    const t = tOf(en)
+    expect(builtinKnowledgeCopy('notes', t)).toBeUndefined()
+    expect(builtinKnowledgeCopy('project', t)).toBeUndefined()
+    expect(builtinKnowledgeCopy('Shuvix', t)).toBeUndefined()
   })
 
   it('BEC-5 名字与标识名只差大小写时算同一个（SSH / ssh），不同就不算（Drawing / widget）', () => {

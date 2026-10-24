@@ -40,9 +40,10 @@ committed as `kb(<op>): /path` with `Knowledge-Op` / `Knowledge-Actor` trailers.
 
 **A session in a project always has that project's base**, `project`, listed first — it is
 where what was learned about the project goes, so it is not something to tick (it is not offered
-in the cards). **The other bases are the user's selection** (session config → Knowledge bases;
-project config sets the default for new sessions). Unset, a session follows its parent session,
-then its project's default; when nobody chose, **no other base is enabled** — `shuvix` included.
+in the cards). **The other bases are the user's selection** (the Knowledge bases row under
+session config → Extensions, or the tool picker by the input box; project config sets the default
+for new sessions). Unset, a session follows its parent session, then its project's default; when
+nobody chose, **no other base is enabled** — `shuvix` included.
 The selection is a hard boundary: `bases` lists only the enabled ones, and naming any other is
 refused. The `<knowledge_bases>` fence in the system prompt lists the same names.
 

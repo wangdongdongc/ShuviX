@@ -7,7 +7,8 @@
  *   - 项目库（`project`）**不归选择管**：项目会话里它隐式启用（接替退役的项目记忆），所以它从不是
  *     候选项、配置卡与项目对话框里都没有这个 chip；存量选择里残留的 `project` 读时剔掉（KB-E-10）。
  *   - 扩展能力在运行时存在期间只读；知识库**不上锁** —— 它不进 pi 的工具表，是 `knowledge`
- *     工具每次调用时由宿主现查的。两张卡在同一个弹窗里，KB-E-4 一次断完这个对照。
+ *     工具每次调用时由宿主现查的。两者是同一张扩展能力卡里的不同行，KB-E-4 一次断完这个对照；
+ *     输入框的工具选择器列的是同样几组、同一份数据（KB-E-11）。
  *   - 已接受的边界：工具面改完立刻生效，而 `<knowledge_bases>` 围栏住在系统提示词里、在创建
  *     Agent 那一刻定型 —— 已存在的运行时里那段不变（KB-E-3 钉住现状；围栏内容本身在
  *     agents/context-injection.e2e.ts 的 KBF-E-* 里）。
@@ -29,11 +30,13 @@ import {
   projectEditPane,
   sessionConfigPane,
   sidebarPane,
+  toolPickerPane,
   type ExtItemShot,
   type KnowledgeItemShot,
   type ProjectEditPane,
   type SessionConfigPane,
-  type SidebarPane
+  type SidebarPane,
+  type ToolPickerPane
 } from '../../harness/pages'
 
 /** 用户库（用例之间共享；KB-E-3 / 4 各自再现建一个） */
@@ -53,8 +56,13 @@ const P3_NAME = 'KB-项目三'
 const HINT_DEFAULT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDefault)
 const HINT_EXPLICIT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDesc)
 
-/** 内置库的人读名（同上，三语全收）—— 侧栏行与配置卡 chip 读的是同一个键 */
+/** 内置库的人读名（同上，三语全收）—— 侧栏行、候选项的 label 与配置卡 / 选择器上的名字读的是同一个键 */
 const BUILTIN_NAMES = [en, zh, ja].map((l) => l.knowledge.builtinBaseName)
+/**
+ * 内置库的那行说明（三语全收）—— 配置卡与选择器里它与内置 MCP / 技能同一个画法：徽标 + 界面语言的
+ * 名字（标识名 `shuvix` 小字并排），说明也走界面语言（chat-protocol builtinKnowledgeCopy）
+ */
+const BUILTIN_HINTS = [en, zh, ja].map((l) => l.knowledge.builtinBase)
 
 interface InitResult {
   success: boolean
@@ -71,6 +79,7 @@ let app: E2EApp
 let sidebar: SidebarPane
 let sessionConfig: SessionConfigPane
 let projectEdit: ProjectEditPane
+let picker: ToolPickerPane
 let p1 = ''
 let p2 = ''
 let p3 = ''
@@ -150,6 +159,7 @@ beforeAll(async () => {
   sidebar = sidebarPane(app.main)
   sessionConfig = sessionConfigPane(app.main)
   projectEdit = projectEditPane(app.main)
+  picker = toolPickerPane(app.main)
 
   // 隔离实例默认一个用户库都没有 —— 库就是 ~/.shuvix/knowledge 下的一个目录
   expect(await createBase(BASE_A)).toMatchObject({ success: true })
@@ -263,7 +273,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     const title = 'KB-E4-卡片'
     const live = 'kb-live-dom'
     const sid = await createSession({ title, projectId: p2 })
-    // 先把运行时建出来：这条会话的扩展能力卡因此只读，两张卡的对照就在同一个弹窗里
+    // 先把运行时建出来：这条会话的 MCP / Skills 两行因此只读，与知识库一行的对照就在同一张卡上
     await ensureRuntime(sid)
     expect((await init(sid)).created).toBe(true)
 
@@ -285,7 +295,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     expect(kbItem(items, 'project')).toBeUndefined()
     expect(HINT_DEFAULT).toContain(await sessionConfig.knowledgeHint())
 
-    // 同一个弹窗里的扩展能力卡：有运行时 → 只读（两者的语义差别就在这一屏上）
+    // 同一张卡上的 MCP / Skills 两行：有运行时 → 只读（两者的语义差别就在这一屏上）
     const ext = await until(async () => {
       const shot = await sessionConfig.extItems()
       return shot.length > 0 ? shot : null
@@ -373,7 +383,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     await sessionConfig.close()
   })
 
-  it('KB-E-7 内置库的 chip 显示人读名、data-knowledge-base 仍是 `shuvix`；有运行时也点得动', async () => {
+  it('KB-E-7 内置库的 chip 与内置 MCP / 技能同一个画法（徽标 + 界面语言的名字、标识名 `shuvix` 并排，悬停是界面语言的说明）；有运行时也点得动', async () => {
     const title = 'KB-E7-内置'
     const sid = await createSession({ title, projectId: p1 })
     // 先把运行时建出来 —— 这张卡刻意不随运行时上锁，内置库这一项也不例外
@@ -391,9 +401,12 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     }, 'the builtin base chip is listed')
     const builtin = kbItem(items, 'shuvix')!
 
-    // 存的名字仍是保留名（写回去的就是它）；给人看的是本地化的产品名 —— 与侧栏那一行同一个 i18n 键
-    expect(builtin.name).toBe('shuvix')
+    // 存的名字是保留名（写回去的就是它）；chip 上是「内置」徽标 + 界面语言的名字（与侧栏那一行同一个
+    // 键），保留名小字并排；说明是界面语言的那一句
+    expect(builtin).toMatchObject({ name: 'shuvix', identifier: 'shuvix', builtin: true })
     expect(BUILTIN_NAMES).toContain(builtin.label)
+    expect(BUILTIN_HINTS).toContain(builtin.hint)
+    expect(kbItem(items, BASE_A)).toMatchObject({ label: BASE_A, identifier: '', builtin: false })
     // 可点：只读的是**库的内容**，不是「这条会话用不用它」
     expect(builtin).toMatchObject({ disabled: false })
     // 垫底：它是说明书，不是用户的内容
@@ -495,5 +508,76 @@ describe('会话设置卡与项目对话框（DOM）', () => {
       `the card wrote ${JSON.stringify([BASE_A, BASE_B])}`
     )
     await sessionConfig.close()
+  })
+})
+
+describe('输入框的工具选择器（DOM）', () => {
+  afterEach(async () => {
+    await picker.close()
+    for (let i = 0; i < 3 && (await sessionConfig.isOpen()); i += 1) {
+      await sessionConfig.close()
+    }
+  })
+
+  it('KB-E-11 知识库一组与配置卡同一份数据：有运行时也点得动、立刻落库；别处改了计数跟着变，配置卡看到的是同一份', async () => {
+    const title = 'KB-E11-选择器'
+    const sid = await createSession({ title })
+    // 运行时先建出来：MCP / Skill 行只读，知识库一组照样可点
+    await ensureRuntime(sid)
+    expect((await init(sid)).created).toBe(true)
+
+    await waitRow(title)
+    expect(await sidebar.openSession(title)).toBe(true)
+    await until(
+      async () => (await picker.locked()) && (await picker.knowledgeCount()) === 0,
+      'picker locked, no base ticked'
+    )
+
+    await picker.open()
+    const items = await until(async () => {
+      const shot = await picker.knowledgeItems()
+      return kbItem(shot, BASE_B) ? shot : null
+    }, 'knowledge bases listed in the picker')
+    for (const name of [BASE_A, BASE_B, 'shuvix']) {
+      expect(kbItem(items, name), name).toMatchObject({ checked: false, disabled: false })
+    }
+    expect(kbItem(items, 'shuvix')).toMatchObject({ identifier: 'shuvix', builtin: true })
+    expect(BUILTIN_NAMES).toContain(kbItem(items, 'shuvix')?.label)
+    expect(BUILTIN_HINTS).toContain(kbItem(items, 'shuvix')?.hint)
+    expect(kbItem(items, BASE_A)).toMatchObject({ builtin: false, hint: '' })
+    expect((await picker.items()).every((it) => it.disabled)).toBe(true)
+
+    // 勾一下：立刻落库（没有锁），触发钮上的计数跟着变
+    await picker.toggleKnowledgeBase(BASE_A)
+    await until(
+      async () => sameList(await storedBases(sid), [BASE_A]),
+      'the picker wrote the selection'
+    )
+    await until(async () => (await picker.knowledgeCount()) === 1, 'picker count 1')
+    await picker.close()
+
+    // 别处改了（同一个写入口）→ 选择器重取，计数跟着变
+    expect(await writeBases(sid, [BASE_A, BASE_B])).toEqual({ success: true })
+    await until(
+      async () => (await picker.knowledgeCount()) === 2,
+      'picker followed an outside change'
+    )
+
+    // 配置卡读到的是同一份；在卡上取消一个，选择器也跟着变
+    await sidebar.pickRowMenu(title, 'session-config')
+    await sessionConfig.waitOpen()
+    const card = await until(async () => {
+      const shot = await sessionConfig.knowledgeItems()
+      return kbItem(shot, BASE_B) ? shot : null
+    }, 'knowledge bases listed in the card')
+    expect(kbItem(card, BASE_A)).toMatchObject({ checked: true })
+    expect(kbItem(card, BASE_B)).toMatchObject({ checked: true })
+    await sessionConfig.toggleKnowledgeBase(BASE_B)
+    await until(
+      async () => sameList(await storedBases(sid), [BASE_A]),
+      'the card wrote the selection'
+    )
+    await sessionConfig.close()
+    await until(async () => (await picker.knowledgeCount()) === 1, 'picker followed the card')
   })
 })

@@ -373,7 +373,7 @@ export function InputArea({
    * 再把界面拨回去）。档位同样写显示的那一档，唯一的例外是它还是宿主启动时种的默认档
    * （`thinkingLevelIsDefault`）：那不是用户的选择，不写，由后端按与侧栏新建会话同一条规则回落
    * （模型声明了推理 → 设置里的默认档，否则 off）—— 否则没标推理能力的模型也会被显式写上默认档、
-   * 原样发给上游。扩展能力写欢迎页的草稿，写完清空草稿。
+   * 原样发给上游。扩展能力与知识库写欢迎页的草稿，写完清空草稿。
    */
   const createSessionForSend = async (): Promise<string | null> => {
     const host = getHostApi()
@@ -398,12 +398,20 @@ export function InputArea({
           enabledTools: welcome.welcomeEnabledTools
         })
       }
+      // 知识库没有锁，但系统提示词里的 `<knowledge_bases>` 围栏在创建 Agent 那一刻定型 —— 同样要先落下
+      if (welcome.welcomeKnowledgeBases.length > 0) {
+        await host.session.updateKnowledgeBases({
+          id: sid,
+          knowledgeBases: welcome.welcomeKnowledgeBases
+        })
+      }
     } catch (err) {
       // 配了一半的会话不留：重试会再建一条，留着它只会在侧栏里多出一条没人要的空会话
       await host.session.delete(sid).catch(() => undefined)
       throw err
     }
     welcome.setWelcomeEnabledTools([])
+    welcome.setWelcomeKnowledgeBases([])
     await getSessionChannelApi().agent.init({ sessionId: sid })
     const sessions = await host.session.list()
     const s = useChatStore.getState()

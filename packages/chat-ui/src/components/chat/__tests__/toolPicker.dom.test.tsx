@@ -12,7 +12,11 @@
  *     （与 e2e `toolPickerPane.toggle(…, { force: true })` 同一个办法）才证明得了这一点；
  *   - 欢迎页（没有会话，TP-10..14）：照样渲染，勾的是新会话的草稿（`welcomeEnabledTools`，不走 IPC），
  *     条目按欢迎页新建会话将用的档案列（`tools.list(undefined, {profile:'chat'})`）；别的会话有没有
- *     运行时与它无关；会话一换，晚到的那份条目不上屏。
+ *     运行时与它无关；会话一换，晚到的那份条目不上屏；
+ *   - 知识库一组（TP-K-*，useSessionKnowledgeBases）：与会话设置里扩展能力卡的知识库一行同一份数据；
+ *     **不随运行时上锁**，勾一下立刻 `session.updateKnowledgeBases`；触发钮上多一个计数、悬浮摘要多一行；
+ *     别处改了（`session.configChanged`）、库建了（`knowledge.changed`）都重取；欢迎页勾的是草稿
+ *     `welcomeKnowledgeBases`、不走 IPC；宿主没有 `knowledge`（扩展端）就没有这一组。
  *
  * 数据走真的 `useSessionTools` + 真的 chatStore；包入口 `@shuvix/chat-ui` 整个顶掉（同
  * useSessionTools.test.ts 的做法：入口会带上模块加载期就读 window.location 的 useSessionInit），
@@ -30,12 +34,32 @@ import type { ToolItem } from '../../common/ToolSelectList'
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   updateEnabledTools: vi.fn(),
-  init: vi.fn()
+  init: vi.fn(),
+  baseOptions: vi.fn(),
+  updateKnowledgeBases: vi.fn(),
+  /** 宿主有没有知识库：缺省没有（同扩展端，这一组不画），TP-K-* 自己打开 */
+  knowledge: false,
+  listeners: new Set<(event: { type: string; sessionId?: string }) => void>()
 }))
 
 vi.mock('@shuvix/chat-ui', () => ({
-  getSessionChannelApi: () => ({ tools: { list: mocks.list }, agent: { init: mocks.init } }),
-  getHostApi: () => ({ session: { updateEnabledTools: mocks.updateEnabledTools } })
+  getSessionChannelApi: () => ({
+    tools: { list: mocks.list },
+    agent: { init: mocks.init },
+    events: {
+      subscribe: (cb: (event: { type: string; sessionId?: string }) => void) => {
+        mocks.listeners.add(cb)
+        return () => mocks.listeners.delete(cb)
+      }
+    }
+  }),
+  getHostApi: () => ({
+    session: {
+      updateEnabledTools: mocks.updateEnabledTools,
+      updateKnowledgeBases: mocks.updateKnowledgeBases
+    },
+    ...(mocks.knowledge ? { knowledge: { baseOptions: mocks.baseOptions } } : {})
+  })
 }))
 
 import { useChatStore } from '../../../stores/chatStore'
@@ -177,6 +201,9 @@ function counts(): { mcp: string | null; skill: string | null } {
   return { mcp: countBy('lucide-server'), skill: countBy('lucide-book-open') }
 }
 
+/** 内置作图技能在界面上的名字（摘要与面板都写它，不写标识名 drawing） */
+const drawingName = (): string => i18n.t('builtinSkill.drawing.label')
+
 /** 悬浮摘要（面板收起时才渲染）里某个组标签后面那串名字 */
 function summaryOf(tag: '[MCP]' | '[Skills]'): string | null {
   const label = [...pickerRoot().querySelectorAll('span')].find((span) => span.textContent === tag)
@@ -199,6 +226,11 @@ beforeEach(() => {
   mocks.updateEnabledTools.mockReset()
   mocks.updateEnabledTools.mockResolvedValue({ success: true })
   mocks.init.mockReset()
+  mocks.baseOptions.mockReset()
+  mocks.updateKnowledgeBases.mockReset()
+  mocks.updateKnowledgeBases.mockResolvedValue({ success: true })
+  mocks.knowledge = false
+  mocks.listeners.clear()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -254,7 +286,7 @@ describe('档案声明的条目：缺省勾上、可以取消', () => {
     // 面板收起时：触发钮计数 + 悬浮摘要
     expect(counts()).toEqual({ mcp: '1', skill: '2' })
     expect(summaryOf('[MCP]')).toBe('ctx')
-    expect(summaryOf('[Skills]')).toBe('drawing, foo')
+    expect(summaryOf('[Skills]')).toBe(`${drawingName()}, foo`)
   })
 })
 
@@ -487,7 +519,7 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
     await flush()
     // 会话那份（Work 声明 mcp:ctx、drawing；会话自己勾 bar）上屏，且是只读的
     expect(summaryOf('[MCP]')).toBe('ctx')
-    expect(summaryOf('[Skills]')).toBe('drawing, bar')
+    expect(summaryOf('[Skills]')).toBe(`${drawingName()}, bar`)
     expect(pickerRoot().hasAttribute('data-locked')).toBe(true)
 
     // 欢迎页那份晚到：带一个只属于它的条目 —— 不能上屏
@@ -517,12 +549,12 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
     })
     await flush()
     // 欢迎页：只有声明项开着（草稿为空），不锁
-    expect(summaryOf('[Skills]')).toBe('drawing')
+    expect(summaryOf('[Skills]')).toBe(drawingName())
     expect(pickerRoot().hasAttribute('data-locked')).toBe(false)
 
     resolveSession([...ITEMS, { name: 'skill:late', label: 'late', group: '__skills__' }])
     await flush()
-    expect(summaryOf('[Skills]')).toBe('drawing')
+    expect(summaryOf('[Skills]')).toBe(drawingName())
     // 打开面板会再拉一次（欢迎页那份）；晚到的会话条目始终没上屏
     await openPanel()
     expect(container.querySelector('label[data-tool-item="skill:late"]')).toBeNull()
@@ -579,6 +611,36 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
 
 // ─── 已经取消过的声明项 ─────────────────────────────────────────────────────
 
+describe('内置项以界面语言的名字为主', () => {
+  it('TP-16 内置 MCP / 技能：名字是界面文案、标识名并排（只差大小写时不重复）、说明是界面文案；别的项是标识名', async () => {
+    seedSession([])
+    await renderPicker([
+      ...ITEMS,
+      { name: 'mcp:ssh', label: 'ssh', group: 'mcp:ssh', isBuiltin: true },
+      { name: 'mcp:browser', label: 'browser', group: 'mcp:browser', isBuiltin: true }
+    ])
+    await openPanel()
+    const nameOf = (name: string): string | null =>
+      row(name).querySelector('[data-chip-name]')?.textContent ?? null
+    const idOf = (name: string): string | null =>
+      row(name).querySelector('[data-chip-identifier]')?.textContent ?? null
+
+    expect(nameOf('skill:builtin:drawing')).toBe(drawingName())
+    expect(idOf('skill:builtin:drawing')).toBe('drawing')
+    expect(row('skill:builtin:drawing').textContent).toContain(i18n.t('builtinSkill.drawing.hint'))
+    expect(nameOf('mcp:browser')).toBe(i18n.t('tool.browserLabel'))
+    expect(idOf('mcp:browser')).toBe('browser')
+    // SSH / ssh 只差大小写：标识名不再并排写一遍
+    expect(nameOf('mcp:ssh')).toBe(i18n.t('tool.sshLabel'))
+    expect(idOf('mcp:ssh')).toBeNull()
+    // 没有界面文案的：名字就是标识名，没有并排的那一份
+    expect(nameOf('skill:foo')).toBe('foo')
+    expect(idOf('skill:foo')).toBeNull()
+    expect(nameOf('mcp:other')).toBe('other')
+    expect(idOf('mcp:other')).toBeNull()
+  })
+})
+
 describe('勾选里带着取消记号的会话', () => {
   it('TP-15 [-skill:builtin:drawing, skill:foo]：计数 MCP 1 / Skills 1、摘要只有 foo；drawing 未勾、仍是声明项、可点', async () => {
     seedSession(['-skill:builtin:drawing', 'skill:foo'])
@@ -607,5 +669,141 @@ describe('勾选里带着取消记号的会话', () => {
     await forceClick('skill:builtin:drawing')
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
     expect(storedTools()).toEqual(['-skill:builtin:drawing', 'skill:foo'])
+  })
+})
+
+// ─── 知识库一组 ──────────────────────────────────────────────────────────────
+
+describe('知识库一组：与配置卡同一份数据，不随运行时上锁', () => {
+  const OPTIONS = [
+    { name: 'notes', label: 'notes' },
+    { name: 'shuvix', label: 'ShuviX guide' }
+  ]
+  const kbRows = (): HTMLLabelElement[] => [
+    ...container.querySelectorAll<HTMLLabelElement>('label[data-knowledge-base]')
+  ]
+  const kbBox = (name: string): HTMLInputElement => {
+    const hit = kbRows().find((label) => label.getAttribute('data-knowledge-base') === name)
+    if (!hit) throw new Error(`knowledge row ${name} not rendered`)
+    return hit.querySelector('input[type="checkbox"]') as HTMLInputElement
+  }
+  const kbCount = (): string | null =>
+    trigger().querySelector('[data-knowledge-count] > span')?.textContent ?? null
+  const kbSummary = (): string | null => {
+    const tag = `[${i18n.t('sessionConfig.knowledgeGroup')}]`
+    const label = [...pickerRoot().querySelectorAll('span')].find(
+      (span) => span.textContent === tag
+    )
+    return label?.nextElementSibling?.textContent ?? null
+  }
+  const emit = async (event: { type: string; sessionId?: string }): Promise<void> => {
+    await act(async () => {
+      for (const cb of mocks.listeners) cb(event)
+    })
+    await flush()
+  }
+
+  beforeEach(() => {
+    mocks.knowledge = true
+  })
+
+  it('TP-K1 会话已有运行时：MCP / SKILL 只读，知识库照样可点；勾一下立刻落库，计数与摘要跟着变', async () => {
+    seedSession(['skill:foo'], true)
+    mocks.baseOptions.mockResolvedValue({ options: OPTIONS, selected: ['shuvix'], explicit: true })
+    await renderPicker()
+    expect(mocks.baseOptions).toHaveBeenCalledWith({ sessionId: SID })
+    expect(kbCount()).toBe('1')
+    // 摘要与 MCP / Skills 一样：内置项写界面语言的名字
+    expect(kbSummary()).toBe(i18n.t('knowledge.builtinBaseName'))
+
+    await openPanel()
+    expect(box('skill:foo').disabled).toBe(true)
+    expect(kbRows().map((label) => label.getAttribute('data-knowledge-base'))).toEqual([
+      'notes',
+      'shuvix'
+    ])
+    for (const label of kbRows()) expect(label.hasAttribute('aria-disabled')).toBe(false)
+    // 内置库与内置 MCP / 技能同一个画法：徽标 + 界面语言的名字（标识名并排）+ 说明；用户库只有名字
+    const [notes, shuvix] = kbRows()
+    expect(shuvix.querySelector('[data-builtin-badge]')?.textContent).toBe(
+      i18n.t('input.skillBuiltinBadge')
+    )
+    expect(shuvix.querySelector('[data-chip-name]')?.textContent).toBe(
+      i18n.t('knowledge.builtinBaseName')
+    )
+    expect(shuvix.querySelector('[data-chip-identifier]')?.textContent).toBe('shuvix')
+    expect(notes.querySelector('[data-chip-name]')?.textContent).toBe('notes')
+    expect(notes.querySelector('[data-chip-identifier]')).toBeNull()
+    expect(shuvix.querySelector('[data-chip-hint]')?.textContent).toBe(
+      i18n.t('knowledge.builtinBase')
+    )
+    expect(notes.querySelector('[data-builtin-badge]')).toBeNull()
+    expect(notes.querySelector('[data-chip-hint]')).toBeNull()
+    expect(kbBox('notes')).toMatchObject({ checked: false, disabled: false })
+    expect(kbBox('shuvix').checked).toBe(true)
+
+    await act(async () => {
+      kbBox('notes').click()
+    })
+    await flush()
+    expect(mocks.updateKnowledgeBases).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      knowledgeBases: ['shuvix', 'notes']
+    })
+    expect(kbBox('notes').checked).toBe(true)
+    expect(kbCount()).toBe('2')
+    // 扩展能力的勾选一笔没动
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+  })
+
+  it('TP-K2 别处改了这条会话（session.configChanged）→ 重取；别的会话的事件不理；新建了库（knowledge.changed）→ 候选长出来', async () => {
+    seedSession([])
+    mocks.baseOptions.mockResolvedValue({ options: OPTIONS, selected: [], explicit: false })
+    await renderPicker()
+    expect(kbCount()).toBe('0')
+
+    mocks.baseOptions.mockResolvedValue({ options: OPTIONS, selected: ['notes'], explicit: true })
+    await emit({ type: 'session.configChanged', sessionId: 'someone-else' })
+    expect(kbCount()).toBe('0')
+    await emit({ type: 'session.configChanged', sessionId: SID })
+    expect(kbCount()).toBe('1')
+
+    mocks.baseOptions.mockResolvedValue({
+      options: [...OPTIONS, { name: 'fresh', label: 'fresh' }],
+      selected: ['notes'],
+      explicit: true
+    })
+    await emit({ type: 'knowledge.changed' })
+    await openPanel()
+    expect(kbRows().map((label) => label.getAttribute('data-knowledge-base'))).toContain('fresh')
+    expect(kbBox('fresh').checked).toBe(false)
+  })
+
+  it('TP-K3 欢迎页：候选不带会话 id 去取；勾的是草稿 welcomeKnowledgeBases，不走 IPC', async () => {
+    seedSession([], true)
+    useChatStore.setState({ welcomeKnowledgeBases: [] })
+    useChatStore.getState().setActiveSessionId(null)
+    mocks.baseOptions.mockResolvedValue({ options: OPTIONS, selected: [], explicit: false })
+    await renderPicker()
+    expect(mocks.baseOptions).toHaveBeenCalledWith({})
+    await openPanel()
+    await act(async () => {
+      kbBox('shuvix').click()
+    })
+    await flush()
+    expect(useChatStore.getState().welcomeKnowledgeBases).toEqual(['shuvix'])
+    expect(mocks.updateKnowledgeBases).not.toHaveBeenCalled()
+    expect(kbBox('shuvix').checked).toBe(true)
+    expect(kbCount()).toBe('1')
+  })
+
+  it('TP-K4 宿主没有知识库：没有这一组、没有计数，也不订阅事件', async () => {
+    mocks.knowledge = false
+    seedSession([])
+    await renderPicker()
+    expect(trigger().querySelector('[data-knowledge-count]')).toBeNull()
+    await openPanel()
+    expect(kbRows()).toHaveLength(0)
+    expect(mocks.listeners.size).toBe(0)
   })
 })

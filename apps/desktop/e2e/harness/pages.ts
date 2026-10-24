@@ -2505,13 +2505,13 @@ const EXT_ITEMS = (scope: string): string =>
 /**
  * 分节说明气泡里的文案：从分节里的某个锚点元素出发，找到标题旁那个问号（`data-info-hint`），
  * 悬上去让它展开，读气泡（`data-info-tip`，portal 到 body 上）的文字，再移开收起。没有这张卡、
- * 或这一节没有说明时回空串。
+ * 或这一节没有说明时回空串。给了 `part`（气泡里某一段的选择器）就只读那一段，那一段不在也回空串。
  *
  * 2026-09-17 之前这些说明是铺在页面上的文字（SettingsSection 的 description / footer），
  * 拿「分节的最后一个子节点」就能读到；现在它们只在悬浮 / 聚焦时才存在，所以只能这样读。
  * 气泡是异步上屏的（事件 → setState → 重渲染），这里自带一小段轮询。
  */
-const SECTION_HINT = (anchor: string): string =>
+const SECTION_HINT = (anchor: string, part?: string): string =>
   `(async () => {
     const section = (${anchor})?.closest('section')
     // 只认标题那一行的问号：卡片里的行可能各有各的问号，document 序上都排在它后面
@@ -2533,7 +2533,8 @@ const SECTION_HINT = (anchor: string): string =>
     const tipText = () => {
       const id = btn.getAttribute('aria-describedby')
       const tip = id ? document.getElementById(id) : null
-      return (tip?.textContent ?? '').trim()
+      const el = ${part ? `tip?.querySelector(${JSON.stringify(part)})` : 'tip'}
+      return (el?.textContent ?? '').trim()
     }
     let text = ''
     for (let attempt = 0; attempt < 5 && !text; attempt++) {
@@ -2547,7 +2548,10 @@ const SECTION_HINT = (anchor: string): string =>
     return text
   })()`
 
-/** scope 内扩展能力卡的说明文案（标题旁的问号气泡）。没有这张卡、或没有说明时回空串。 */
+/**
+ * scope 内扩展能力卡的说明文案（标题旁的问号气泡）。没有这张卡、或没有说明时回空串。
+ * 有知识库一行时气泡里还叠着它那一段（见 KNOWLEDGE_HINT），这里读的是整个气泡。
+ */
 const EXT_HINT = (scope: string): string =>
   SECTION_HINT(`${scope}?.querySelector('label[data-ext-item]')`)
 
@@ -2572,9 +2576,10 @@ async function toggleExtIn(
 }
 
 /**
- * 知识库卡（KnowledgeBasesSection：会话设置与项目编辑弹窗共用）里的一个候选库。
+ * 知识库的一个候选库：扩展能力卡（ExtensionsSection：会话设置与项目编辑弹窗共用）里知识库一行的 chip，
+ * 或输入框工具选择器里知识库一组的行 —— 两处同一个锚点 `label[data-knowledge-base]`。
  *
- * 与扩展能力条目**同形但语义相反**：知识库不进 Agent 的工具表，所以这张卡没有「已锁定」
+ * 与扩展能力条目**同形但语义相反**：知识库不进 Agent 的工具表，所以这一行没有「已锁定」
  * 这回事 —— `disabled` 照样读出来，正是为了断「有运行时时它仍然可点」。
  */
 export interface KnowledgeItemShot {
@@ -2584,10 +2589,19 @@ export interface KnowledgeItemShot {
    */
   name: string
   /**
-   * chip 上那行字。用户库就是目录名；内置库 `shuvix` 是 `knowledge.builtinBaseName` —— 与侧栏
-   * 那一行读同一个 i18n 键。
+   * 名字那一段（`data-chip-name`）。用户库是目录名；内置库与内置 MCP / 技能同一个画法，是界面语言的
+   * 名字 `knowledge.builtinBaseName`（与侧栏那一行同一个键）
    */
   label: string
+  /** 名字旁并排的标识名（`data-chip-identifier`）：内置库是 `shuvix`，用户库没有（空串） */
+  identifier: string
+  /** 带「内置」徽标（`data-builtin-badge`）—— 只有内置库 */
+  builtin: boolean
+  /**
+   * 界面语言的那行说明：配置卡在悬停提示（`title`）里，选择器在名字后面的说明列（`data-chip-hint`）。
+   * 内置库是 `knowledge.builtinBase`；用户库在配置卡上是它自己的名字、在选择器里没有
+   */
+  hint: string
   checked: boolean
   disabled: boolean
 }
@@ -2598,7 +2612,10 @@ const KNOWLEDGE_ITEMS = (scope: string): string =>
     const box = label.querySelector('input[type="checkbox"]')
     return {
       name: label.getAttribute('data-knowledge-base') ?? '',
-      label: (label.querySelector('span')?.textContent ?? '').trim(),
+      label: (label.querySelector('[data-chip-name]')?.textContent ?? '').trim(),
+      identifier: (label.querySelector('[data-chip-identifier]')?.textContent ?? '').trim(),
+      builtin: !!label.querySelector('[data-builtin-badge]'),
+      hint: (label.getAttribute('title') || label.querySelector('[data-chip-hint]')?.textContent || '').trim(),
       checked: !!box?.checked,
       disabled: !!box?.disabled
     }
@@ -2622,13 +2639,14 @@ async function toggleKnowledgeIn(
 }
 
 /**
- * scope 内知识库卡的说明文案（标题旁的问号气泡）。没有这张卡、或没有说明时回空串。
+ * scope 内知识库那一段说明：扩展能力卡标题旁的问号气泡里，排在卡片说明之后的那一段
+ * （`data-knowledge-hint`）。没有这张卡、没有知识库一行、或没有这段说明时回空串。
  *
  * 「还没选过（一个都没勾）」与「这条会话自己选过」正是靠它区分的 —— 断言方比对的是文案本身
  * （三语取自 chat-protocol 的语言包），不是这里的结构。
  */
 const KNOWLEDGE_HINT = (scope: string): string =>
-  SECTION_HINT(`${scope}?.querySelector('label[data-knowledge-base]')`)
+  SECTION_HINT(`${scope}?.querySelector('label[data-knowledge-base]')`, '[data-knowledge-hint]')
 
 export interface SessionConfigPane {
   /** 等弹窗上屏 */
@@ -2653,13 +2671,13 @@ export interface SessionConfigPane {
    * 可改时一把都没有。
    */
   lockIndicatorCount(): Promise<number>
-  /** 扩展能力卡的说明文字（标题旁的问号气泡）：它是**恒定**的一句，不随只读态变 */
+  /** 扩展能力卡的说明文字（标题旁的问号气泡，含知识库那一段）：不随只读态变 */
   hintText(): Promise<string>
-  /** 弹窗里知识库卡的候选项（DOM 序；同样只在弹窗面板内找，口径同 extItems） */
+  /** 弹窗里扩展能力卡知识库一行的候选项（DOM 序；同样只在弹窗面板内找，口径同 extItems） */
   knowledgeItems(): Promise<KnowledgeItemShot[]>
-  /** 点弹窗里某个知识库候选项的勾选框（这张卡不随 Agent 上锁，任何时候都点得动） */
+  /** 点弹窗里某个知识库候选项的勾选框（这一行不随 Agent 上锁，任何时候都点得动） */
   toggleKnowledgeBase(name: string): Promise<void>
-  /** 知识库卡的说明文案（「还没选过」与「已明确设过」两句的判据） */
+  /** 气泡里知识库那一段说明（「还没选过」与「已明确设过」两句的判据） */
   knowledgeHint(): Promise<string>
   /** 弹窗遮罩的 z-index —— 说明气泡（portal 到 body）必须压在它上面才看得见 */
   overlayZ(): Promise<number>
@@ -2952,7 +2970,7 @@ export interface ProjectEditPane {
   extItems(): Promise<ExtItemShot[]>
   /** 点某个扩展能力条目的勾选框 —— 只改弹窗里的草稿，保存才落库 */
   toggleExt(key: string): Promise<void>
-  /** 知识库卡的候选项（与会话设置同一个 KnowledgeBasesSection） */
+  /** 扩展能力卡知识库一行的候选项（与会话设置同一个 ExtensionsSection） */
   knowledgeItems(): Promise<KnowledgeItemShot[]>
   /** 点某个知识库候选项 —— 同样只改草稿；「动过没有」决定保存时写不写这个键 */
   toggleKnowledgeBase(name: string): Promise<void>
@@ -3031,7 +3049,9 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 输入框的工具选择器（ToolPicker）—— 会话的扩展能力勾选，与会话设置里的扩展能力卡同一份数据
+// 输入框的工具选择器（ToolPicker）—— 会话的扩展能力勾选（MCP / Skill / 知识库），与会话设置里的
+// 扩展能力卡同一份数据。MCP / Skill 行是 `label[data-tool-item]`；知识库行与配置卡同一个锚点
+// `label[data-knowledge-base]`（不随运行时上锁），触发钮上的知识库计数是 `[data-knowledge-count]`
 
 /** 工具选择器面板里的一行 */
 export interface ToolPickerItem {
@@ -3063,7 +3083,7 @@ export interface ToolPickerItem {
 }
 
 export interface ToolPickerPane {
-  /** 选择器在不在（一个 MCP / skill 条目都没有时不渲染；欢迎页也渲染，勾的是新会话的草稿） */
+  /** 选择器在不在（MCP / skill / 知识库一个都没有时不渲染；欢迎页也渲染，勾的是新会话的草稿） */
   present(): Promise<boolean>
   /** 只读态（根上的 `data-locked`）：会话此刻有 Agent 运行时（含创建中 / 关停中） */
   locked(): Promise<boolean>
@@ -3073,8 +3093,14 @@ export interface ToolPickerPane {
   open(): Promise<void>
   /** 收起面板并等条目离开 DOM（幂等） */
   close(): Promise<void>
-  /** 面板里的条目（DOM 序）；面板没展开时为空 */
+  /** 面板里的 MCP / Skill 条目（DOM 序）；面板没展开时为空 */
   items(): Promise<ToolPickerItem[]>
+  /** 面板里知识库一组的行（DOM 序，口径同 sessionConfigPane.knowledgeItems）；面板没展开时为空 */
+  knowledgeItems(): Promise<KnowledgeItemShot[]>
+  /** 点知识库一组里某个库（先展开面板；等那一行上屏再点）。这一组不上锁，任何时候都点得动 */
+  toggleKnowledgeBase(name: string): Promise<void>
+  /** 触发钮上的知识库计数（勾了几个候选库）；没有知识库一组时为 null */
+  knowledgeCount(): Promise<number | null>
   /**
    * 点某条目的勾选框（先展开面板）；条目不在返回 false。
    *
@@ -3096,7 +3122,11 @@ export interface ToolPickerPane {
 export function toolPickerPane(main: CdpClient): ToolPickerPane {
   const ROOT = `document.querySelector('[data-tool-picker]')`
   const ROWS = `[...(${ROOT}?.querySelectorAll('label[data-tool-item]') ?? [])]`
-  const isOpen = (): Promise<boolean> => main.eval<boolean>(`${ROWS}.length > 0`)
+  // 展开必有条目：MCP / Skill 行或知识库行，哪一种都算
+  const isOpen = (): Promise<boolean> =>
+    main.eval<boolean>(
+      `!!${ROOT}?.querySelector('label[data-tool-item], label[data-knowledge-base]')`
+    )
   /** 根下第一颗按钮 = 开合面板的触发钮 */
   const clickTrigger = (): Promise<unknown> =>
     main.eval(`(() => {
@@ -3149,6 +3179,16 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
         return true
       })()`)
     },
+    knowledgeItems: () => main.eval<KnowledgeItemShot[]>(KNOWLEDGE_ITEMS(ROOT)),
+    toggleKnowledgeBase: async (name) => {
+      await open()
+      await toggleKnowledgeIn(main, ROOT, name, 'tool picker')
+    },
+    knowledgeCount: () =>
+      main.eval<number | null>(`(() => {
+        const text = ${ROOT}?.querySelector('[data-knowledge-count] > span')?.textContent
+        return text == null ? null : Number(text)
+      })()`),
     lockIndicatorVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-tool-lock]')`),
     connectingVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-mcp-connecting]')`)
   }

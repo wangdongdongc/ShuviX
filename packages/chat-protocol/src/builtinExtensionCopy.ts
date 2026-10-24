@@ -1,6 +1,6 @@
 /**
- * 内置技能与内置 MCP 的界面文案 —— 一个本地化的名字（label）和一行说明（hint），给人看的那几处用：
- * 工具选择器、扩展能力、设置 → MCP、侧边栏的技能行、斜杠命令。
+ * 内置技能、内置 MCP 与内置知识库的界面文案 —— 一个本地化的名字（label）和一行说明（hint），给人看的
+ * 那几处用：工具选择器、扩展能力、设置 → MCP、侧边栏的技能行、斜杠命令。
  *
  * 文案住在界面语言文件里（各端用自己的 t 解析，切换语言即时生效），不在 SKILL.md：SKILL.md 的
  * description 是写给模型的触发说明（skill 工具的描述原样带它），塞满关键词，不适合当界面文案；
@@ -11,6 +11,7 @@
  * 两处不会各说各话。
  */
 import { BUILTIN_MCP_PRESENTATIONS } from './builtinMcpPresentations'
+import { KNOWLEDGE_BUILTIN_BASE } from './knowledge'
 
 export interface BuiltinExtensionCopy {
   /** 本地化的名字（「绘图」「浏览器」） */
@@ -63,6 +64,18 @@ export function builtinMcpCopy(
   const server = name.startsWith('mcp:') ? name.slice('mcp:'.length) : name
   const def = ownEntry(BUILTIN_MCP_PRESENTATIONS, server)
   return def && { label: t(def.labelKey), hint: t(def.hintKey) }
+}
+
+/**
+ * 内置知识库（保留名 `shuvix`）的文案。名字与侧栏那一行同一个键，说明与侧栏「只读」徽标的悬停同一个键；
+ * 用户库（目录名，没有界面文案）→ undefined。
+ */
+export function builtinKnowledgeCopy(
+  name: string,
+  t: (key: string) => string
+): BuiltinExtensionCopy | undefined {
+  if (name !== KNOWLEDGE_BUILTIN_BASE) return undefined
+  return { label: t('knowledge.builtinBaseName'), hint: t('knowledge.builtinBase') }
 }
 
 /** 名字与标识名只差大小写（`SSH` / `ssh`）时不必再把标识名并排写一遍 */

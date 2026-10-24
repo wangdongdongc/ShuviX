@@ -7,7 +7,7 @@
  * 草稿。顺序钉成一条时间线：
  *
  *   session.create → agent.setModel → [agent.setThinkingLevel] → session.updateEnabledTools
- *   → agent.init → session.list → agent.prompt
+ *   → [session.updateKnowledgeBases] → agent.init → session.list → agent.prompt
  *
  * 档位那一步只在显示的档位**不是宿主启动时种的默认档**时才有（`thinkingLevelIsDefault`）：
  *
@@ -15,6 +15,9 @@
  *   - WS-D-8 种了默认档、没人动过 → 不写，交给后端按模型能力回落；模型与草稿照写；
  *   - WS-D-9 种了之后在真的选择器面板里点一档（点的就是种下的那一档也算）→ 写点的那一档；
  *   - WS-D-10 种了之后打开过一条会话、真的 useSessionInit 按它同步了档位，再回欢迎页 → 写同步来的那一档。
+ *
+ * 知识库的草稿（`welcomeKnowledgeBases`）同样在 `agent.init` 之前写、写完清空（WS-D-11）：它不上锁，但
+ * 系统提示词里的 `<knowledge_bases>` 围栏在创建 Agent 那一刻定型。
  *
  * 外加斜杠命令的依赖项落到它被发往的那条会话（新会话），以及已有会话 / 没选模型 / 新建失败三条边界。
  *
@@ -121,6 +124,9 @@ function buildApi(): Record<string, unknown> {
           return { success: true }
         }
       ),
+      updateKnowledgeBases: record('session.updateKnowledgeBases', async () => ({
+        success: true
+      })),
       delete: record('session.delete', async (id: string) => {
         rows.delete(id)
         return { success: true }
@@ -282,6 +288,8 @@ async function collectUnhandled(run: () => Promise<void>): Promise<unknown[]> {
  */
 function seedWelcome(opts: {
   draft?: string[]
+  /** 知识库草稿（缺省空） */
+  kbDraft?: string[]
   thinkingLevel?: string
   slashCommands?: ReturnType<typeof store>['slashCommands']
   model?: string
@@ -297,6 +305,7 @@ function seedWelcome(opts: {
     thinkingLevel: opts.thinkingLevel ?? 'low',
     thinkingLevelIsDefault: false,
     welcomeEnabledTools: opts.draft ?? [],
+    welcomeKnowledgeBases: opts.kbDraft ?? [],
     slashCommands: opts.slashCommands ?? [],
     inputText: '',
     pendingImages: []
@@ -401,6 +410,29 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
     expect(store().welcomeEnabledTools).toEqual([])
     expect(store().activeSessionId).toBe(NEW)
     expect(store().sessions.find((s) => s.id === NEW)?.settings.enabledTools).toEqual(['skill:a'])
+  })
+
+  it('WS-D-11 知识库草稿 [notes] → 扩展能力之后、init 之前写进新会话；两份草稿都清空', async () => {
+    seedWelcome({ draft: ['skill:a'], kbDraft: ['notes'] })
+    await mount()
+    await type('hello')
+    await pressEnter()
+
+    expect(steps()).toEqual([
+      'session.create',
+      'agent.setModel',
+      'agent.setThinkingLevel',
+      'session.updateEnabledTools',
+      'session.updateKnowledgeBases',
+      'agent.init',
+      'session.list',
+      'agent.prompt'
+    ])
+    expect(callsOf('session.updateKnowledgeBases')).toEqual([
+      [{ id: NEW, knowledgeBases: ['notes'] }]
+    ])
+    expect(store().welcomeEnabledTools).toEqual([])
+    expect(store().welcomeKnowledgeBases).toEqual([])
   })
 
   it('WS-D-2 草稿为空 → 不调 updateEnabledTools，其余照常', async () => {

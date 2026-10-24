@@ -55,11 +55,6 @@ export { CalendarView } from './sidebar/CalendarView'
 export type { CalendarViewProps } from './sidebar/CalendarView'
 export { DayReportHeader } from './sidebar/DayReportHeader'
 export type { DayReportHeaderProps } from './sidebar/DayReportHeader'
-export { KnowledgeBasesSection } from './settings/KnowledgeBasesSection'
-export type {
-  KnowledgeBaseChoice,
-  KnowledgeBasesSectionProps
-} from './settings/KnowledgeBasesSection'
 export { KnowledgeGroup } from './sidebar/KnowledgeGroup'
 export { ProjectKnowledgeFolder } from './sidebar/ProjectKnowledgeFolder'
 export type { ProjectKnowledgeFolderProps } from './sidebar/ProjectKnowledgeFolder'
@@ -133,9 +128,13 @@ export { SessionConfigPanel } from './chat/SessionConfigPanel'
 export type { SessionConfigPanelProps } from './chat/SessionConfigPanel'
 export { SessionConfigDialog } from './chat/SessionConfigDialog'
 export type { SessionConfigDialogProps } from './chat/SessionConfigDialog'
-// 扩展能力勾选卡（MCP / Skills）—— 项目编辑页与会话设置共用
+// 扩展能力勾选卡（MCP / Skills / 知识库）—— 项目编辑页与会话设置共用
 export { ExtensionsSection } from './settings/ExtensionsSection'
-export type { ExtensionsSectionProps } from './settings/ExtensionsSection'
+export type {
+  ExtensionsSectionProps,
+  ExtensionsKnowledge,
+  KnowledgeBaseChoice
+} from './settings/ExtensionsSection'
 // 会话渠道绑定能力探测（设置页 + 会话设置共用单一来源）
 export { PanelToggleButton } from './chat/PanelToggleButton'
 export type { PanelToggleButtonProps } from './chat/PanelToggleButton'
