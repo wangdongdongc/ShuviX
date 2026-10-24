@@ -2595,7 +2595,7 @@ export interface KnowledgeItemShot {
   label: string
   /** 名字旁并排的标识名（`data-chip-identifier`）：内置库是 `shuvix`，用户库没有（空串） */
   identifier: string
-  /** 带「内置」徽标（`data-builtin-badge`）—— 只有内置库 */
+  /** 带内置记号（`data-builtin-badge`，小包裹图标）—— 只有内置库 */
   builtin: boolean
   /**
    * 界面语言的那行说明：配置卡在悬停提示（`title`）里，选择器在名字后面的说明列（`data-chip-hint`）。

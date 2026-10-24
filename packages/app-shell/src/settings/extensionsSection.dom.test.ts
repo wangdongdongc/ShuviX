@@ -9,7 +9,7 @@
  *     勾选框浏览器不派发 click，所以先摘掉 disabled 再点才证明得了）；
  *   - 每组里 ShuviX 自带的项（内置 MCP / 内置技能）排最前，其余保持传入顺序（稳定排序，不按字母）；
  *     排序不改调用方传进来的数组；
- *   - 内置项（MCP / 技能 / 知识库）以界面语言的名字为主：「内置」徽标 + 名字，标识名小字并排（只差大小写
+ *   - 内置项（MCP / 技能 / 知识库）以界面语言的名字为主：内置记号（小包裹图标，读屏名「内置」）+ 名字，标识名小字并排（只差大小写
  *     时不重复），悬停是界面语言的说明（builtinExtensionCopy）；别的项就是标识名；
  *   - 知识库一行（`knowledge`）**不随只读上锁**：整卡只读时 MCP / Skills 压暗挂锁，知识库照样可点、
  *     不挂锁，点一下交回库名；内置库 `shuvix` 与内置 MCP / 技能同一个画法；没有候选库时这一行与它那段说明
@@ -301,10 +301,10 @@ describe('知识库一行：与 MCP / Skills 同卡，但不随只读上锁', ()
     }
     expect(kbBox('notes')).toMatchObject({ checked: false, disabled: false })
     expect(kbBox('shuvix')).toMatchObject({ checked: true, disabled: false })
-    // 内置库与内置 MCP / 技能同一个画法：徽标 + 界面语言的名字（标识名并排），悬停是界面语言的说明；
-    // 用户库没有徽标，名字就是目录名
+    // 内置库与内置 MCP / 技能同一个画法：内置记号 + 界面语言的名字（标识名并排），悬停是界面语言的说明；
+    // 用户库没有内置记号，名字就是目录名
     const [notes, shuvix] = kbLabels()
-    expect(shuvix.querySelector('[data-builtin-badge]')?.textContent).toBe(
+    expect(shuvix.querySelector('[data-builtin-badge]')?.getAttribute('aria-label')).toBe(
       i18n.t('input.skillBuiltinBadge')
     )
     expect(shuvix.querySelector('[data-chip-name]')?.textContent).toBe(

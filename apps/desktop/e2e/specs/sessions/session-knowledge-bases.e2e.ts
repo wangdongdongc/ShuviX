@@ -59,7 +59,7 @@ const HINT_EXPLICIT = [en, zh, ja].map((l) => l.sessionConfig.knowledgeDesc)
 /** 内置库的人读名（同上，三语全收）—— 侧栏行、候选项的 label 与配置卡 / 选择器上的名字读的是同一个键 */
 const BUILTIN_NAMES = [en, zh, ja].map((l) => l.knowledge.builtinBaseName)
 /**
- * 内置库的那行说明（三语全收）—— 配置卡与选择器里它与内置 MCP / 技能同一个画法：徽标 + 界面语言的
+ * 内置库的那行说明（三语全收）—— 配置卡与选择器里它与内置 MCP / 技能同一个画法：内置记号 + 界面语言的
  * 名字（标识名 `shuvix` 小字并排），说明也走界面语言（chat-protocol builtinKnowledgeCopy）
  */
 const BUILTIN_HINTS = [en, zh, ja].map((l) => l.knowledge.builtinBase)
@@ -383,7 +383,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     await sessionConfig.close()
   })
 
-  it('KB-E-7 内置库的 chip 与内置 MCP / 技能同一个画法（徽标 + 界面语言的名字、标识名 `shuvix` 并排，悬停是界面语言的说明）；有运行时也点得动', async () => {
+  it('KB-E-7 内置库的 chip 与内置 MCP / 技能同一个画法（内置记号 + 界面语言的名字、标识名 `shuvix` 并排，悬停是界面语言的说明）；有运行时也点得动', async () => {
     const title = 'KB-E7-内置'
     const sid = await createSession({ title, projectId: p1 })
     // 先把运行时建出来 —— 这张卡刻意不随运行时上锁，内置库这一项也不例外
@@ -401,7 +401,7 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     }, 'the builtin base chip is listed')
     const builtin = kbItem(items, 'shuvix')!
 
-    // 存的名字是保留名（写回去的就是它）；chip 上是「内置」徽标 + 界面语言的名字（与侧栏那一行同一个
+    // 存的名字是保留名（写回去的就是它）；chip 上是内置记号 + 界面语言的名字（与侧栏那一行同一个
     // 键），保留名小字并排；说明是界面语言的那一句
     expect(builtin).toMatchObject({ name: 'shuvix', identifier: 'shuvix', builtin: true })
     expect(BUILTIN_NAMES).toContain(builtin.label)

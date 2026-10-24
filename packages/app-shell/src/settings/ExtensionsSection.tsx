@@ -10,7 +10,7 @@
  *    （`-<name>`，chat-protocol `toolSelection`），只作用于这条会话 / 这个项目的新会话。
  *    读写都经 `isToolSelected` / `setToolSelected`，调用方拿到的 `onChange` 是整份新勾选。
  *  - 每组里 ShuviX 自带的项（内置 MCP / 内置技能）排在最前，其余保持后端给的顺序。内置项（含内置知识库
- *    `shuvix`）与设置 → MCP、侧栏技能行同一个画法：「内置」徽标 + 界面语言的名字，标识名（档案与勾选里写
+ *    `shuvix`）与设置 → MCP、侧栏技能行同一个画法：内置记号（琥珀色小包裹图标）+ 界面语言的名字，标识名（档案与勾选里写
  *    的那个）用小号等宽字并排留着、只差大小写时不重复，悬停给界面语言的一行说明（chat-protocol
  *    builtinExtensionCopy）。别的项就是标识名。
  *  - 知识库一行**语义刻意不同**：它不进 Agent 的工具表，是 `knowledge` 工具每次调用时由宿主现查的，
@@ -21,7 +21,7 @@
  *  - 三行的组名列按最宽的那个对齐（subgrid）：「スキル」「Knowledge bases」长短不一，标签列照样齐。
  */
 import { useTranslation } from 'react-i18next'
-import { Puzzle, BookOpen, Library, WifiOff, Lock } from 'lucide-react'
+import { Puzzle, BookOpen, Library, WifiOff, Lock, Package } from 'lucide-react'
 import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
 import {
   builtinKnowledgeCopy,
@@ -141,12 +141,16 @@ function ExtChip({
         }}
         className="rounded border-border-primary accent-accent w-3 h-3 shrink-0"
       />
+      {/* 内置记号：琥珀色小包裹（随应用一起来的），悬停与读屏说「内置」—— 不用锁，锁在这张卡上是只读的意思 */}
       {builtin && (
         <span
           data-builtin-badge
-          className="px-1 rounded text-[9px] text-amber-500 bg-amber-500/10 whitespace-nowrap shrink-0"
+          role="img"
+          aria-label={t('input.skillBuiltinBadge')}
+          title={t('input.skillBuiltinBadge')}
+          className="flex shrink-0 text-amber-500"
         >
-          {t('input.skillBuiltinBadge')}
+          <Package size={11} aria-hidden />
         </span>
       )}
       <span

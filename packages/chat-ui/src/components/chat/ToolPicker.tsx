@@ -1,7 +1,7 @@
 import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Server, BookOpen, Library, WifiOff, Lock, Loader2 } from 'lucide-react'
+import { Server, BookOpen, Library, WifiOff, Lock, Loader2, Package } from 'lucide-react'
 import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
 import {
   builtinKnowledgeCopy,
@@ -38,6 +38,26 @@ function parseSkillDisplay(name: string): { label: string; builtin: boolean } {
     return { label: short.slice('builtin:'.length), builtin: true }
   }
   return { label: short, builtin: false }
+}
+
+/**
+ * 内置项的记号：一个琥珀色的小包裹图标（随应用一起来的），悬停与读屏说「内置」。不用侧栏内置档案那把锁 ——
+ * 在这里锁的意思是「智能体已创建，改不了」，内置项本身照样能勾。
+ */
+function BuiltinMark(): React.JSX.Element {
+  const { t } = useTranslation()
+  const label = t('input.skillBuiltinBadge')
+  return (
+    <span
+      data-builtin-badge
+      role="img"
+      aria-label={label}
+      title={label}
+      className="flex flex-shrink-0 text-amber-500"
+    >
+      <Package size={11} aria-hidden />
+    </span>
+  )
 }
 
 /**
@@ -285,11 +305,7 @@ export function ToolPicker(): React.JSX.Element | null {
                         onChange={() => toggle(tool)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />
-                      {tool.isBuiltin && (
-                        <span className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0">
-                          {t('input.skillBuiltinBadge')}
-                        </span>
-                      )}
+                      {tool.isBuiltin && <BuiltinMark />}
                       <ItemName
                         identifier={mcpShortName(tool.name)}
                         label={copy?.label}
@@ -339,11 +355,7 @@ export function ToolPicker(): React.JSX.Element | null {
                         onChange={() => toggle(tool)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />
-                      {builtin && (
-                        <span className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0">
-                          {t('input.skillBuiltinBadge')}
-                        </span>
-                      )}
+                      {builtin && <BuiltinMark />}
                       <ItemName
                         identifier={label}
                         label={copy?.label}
@@ -369,7 +381,7 @@ export function ToolPicker(): React.JSX.Element | null {
                   {t('sessionConfig.knowledgeGroup')}
                 </div>
                 {bases.map((base) => {
-                  // 内置库与内置 MCP / 技能同一个画法：徽标 + 界面语言的名字 + 标识名与一行说明
+                  // 内置库与内置 MCP / 技能同一个画法：内置记号 + 界面语言的名字 + 标识名与一行说明
                   const copy = baseCopy(base.name)
                   return (
                     // 不随运行时上锁：没有只读态、没有锁的悬停原因
@@ -384,14 +396,7 @@ export function ToolPicker(): React.JSX.Element | null {
                         onChange={() => knowledge.toggle(base.name)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />
-                      {copy && (
-                        <span
-                          data-builtin-badge
-                          className="px-1 py-px rounded text-[9px] font-medium text-amber-500 bg-amber-500/10 whitespace-nowrap flex-shrink-0"
-                        >
-                          {t('input.skillBuiltinBadge')}
-                        </span>
-                      )}
+                      {copy && <BuiltinMark />}
                       <ItemName
                         identifier={base.name}
                         label={copy?.label}

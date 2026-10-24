@@ -723,9 +723,9 @@ describe('知识库一组：与配置卡同一份数据，不随运行时上锁'
       'shuvix'
     ])
     for (const label of kbRows()) expect(label.hasAttribute('aria-disabled')).toBe(false)
-    // 内置库与内置 MCP / 技能同一个画法：徽标 + 界面语言的名字（标识名并排）+ 说明；用户库只有名字
+    // 内置库与内置 MCP / 技能同一个画法：内置记号 + 界面语言的名字（标识名并排）+ 说明；用户库只有名字
     const [notes, shuvix] = kbRows()
-    expect(shuvix.querySelector('[data-builtin-badge]')?.textContent).toBe(
+    expect(shuvix.querySelector('[data-builtin-badge]')?.getAttribute('aria-label')).toBe(
       i18n.t('input.skillBuiltinBadge')
     )
     expect(shuvix.querySelector('[data-chip-name]')?.textContent).toBe(
