@@ -12,14 +12,31 @@
  *        别的通道就算参数长得像也照通道那一档
  *   XS-41 会话询问的「允许并记住」（`extra.remember`）同样往权限表里写一行 → admin；按真值判（与 rememberPath 同口径）；
  *        输入框 @ 会话的候选（session:mentionEntries）是 read 的请求通道
+ *
+ * scope（`object.scope`，2026-10-23，docs/network-scope/design.md）：
+ *   CS-1 每条请求通道都有 scope：要么点名在 CHANNEL_SCOPE_OVERRIDES，要么所在分组在 GROUP_SCOPE
+ *   CS-2 没有多余的：GROUP_SCOPE 的每个分组都有请求通道，CHANNEL_SCOPE_OVERRIDES 的每个键都是请求通道
+ *   CS-3 取值都在词表里，词表里每个 scope 都有通道或设置项落进来；不在任何分组里的通道 → system
+ *   CS-4 抽查：页面每次加载都调的读取是 app；会话权限表、停用内置、远程访问是 security ……
+ *   CS-5 settingKeyFactsOf：精确 key 优先、其次最长前缀、都不中 → system + admin；非字符串 / 空串同样
+ *   CS-6 channelCallFactsOf：settings:set 按 key；勾了「记住」的回答 → security + admin；别的照通道
  */
 import { describe, expect, it } from 'vitest'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
 import {
   CHANNEL_ACCESS,
+  CHANNEL_SCOPES,
+  CHANNEL_SCOPE_OVERRIDES,
+  GROUP_SCOPE,
+  SETTING_KEY_FACTS,
   channelAccessOf,
   channelCallAccessOf,
-  type ChannelAccess
+  channelCallFactsOf,
+  channelGroupOf,
+  channelScopeOf,
+  settingKeyFactsOf,
+  type ChannelAccess,
+  type ChannelScope
 } from '../channelAccess'
 
 /** 通道表 + override 里的请求通道（invoke / send） */
@@ -201,5 +218,172 @@ describe('XS-41 会话询问的「允许并记住」与 @ 会话候选', () => {
     expect(CHANNEL_ACCESS['session:mentionEntries']).toBe('read')
     expect(channelAccessOf('session:mentionEntries')).toBe('read')
     expect(channelCallAccessOf('session:mentionEntries', [{ query: 'x' }])).toBe('read')
+  })
+})
+
+describe('CS-1 每条请求通道都有 scope', () => {
+  it('CS-1 点名在 CHANNEL_SCOPE_OVERRIDES，或所在分组在 GROUP_SCOPE', () => {
+    const missing = [...REQUEST_CHANNELS]
+      .filter(
+        (c) =>
+          !Object.hasOwn(CHANNEL_SCOPE_OVERRIDES, c) &&
+          !Object.hasOwn(GROUP_SCOPE, channelGroupOf(c))
+      )
+      .sort()
+    expect(
+      missing,
+      `这些请求通道没有 scope，请在 src/shared/channelAccess.ts 的 GROUP_SCOPE（整个分组）或 CHANNEL_SCOPE_OVERRIDES 里归类：${missing.join(', ')}`
+    ).toEqual([])
+  })
+})
+
+describe('CS-2 没有多余的 scope 归类', () => {
+  it('CS-2 GROUP_SCOPE 的分组都有请求通道；CHANNEL_SCOPE_OVERRIDES 的键都是请求通道', () => {
+    const groups = new Set([...REQUEST_CHANNELS].map((c) => channelGroupOf(c)))
+    expect(Object.keys(GROUP_SCOPE).filter((g) => !groups.has(g))).toEqual([])
+    expect(Object.keys(CHANNEL_SCOPE_OVERRIDES).filter((c) => !REQUEST_CHANNELS.has(c))).toEqual([])
+  })
+})
+
+describe('CS-3 取值', () => {
+  it('CS-3 都在词表里；每个 scope 都用得上；不认识的通道 → system', () => {
+    const vocabulary: ReadonlySet<string> = new Set(CHANNEL_SCOPES)
+    for (const [k, v] of Object.entries(GROUP_SCOPE)) expect(vocabulary.has(v), k).toBe(true)
+    for (const [k, v] of Object.entries(CHANNEL_SCOPE_OVERRIDES))
+      expect(vocabulary.has(v), k).toBe(true)
+    for (const [k, v] of Object.entries(SETTING_KEY_FACTS))
+      expect(vocabulary.has(v.scope), k).toBe(true)
+    const used = new Set<string>([
+      ...[...REQUEST_CHANNELS].map((c) => channelScopeOf(c)),
+      ...Object.values(SETTING_KEY_FACTS).map((f) => f.scope)
+    ])
+    expect(CHANNEL_SCOPES.filter((scope) => !used.has(scope))).toEqual([])
+    expect(CHANNEL_SCOPES).toHaveLength(15)
+    expect(channelScopeOf('no-such:channel')).toBe('system')
+    expect(channelScopeOf('')).toBe('system')
+    expect(channelScopeOf('toString')).toBe('system')
+  })
+})
+
+describe('CS-4 抽查', () => {
+  it.each<[string, ChannelScope]>([
+    // 页面每次加载都调（useAppInit 与外壳）
+    ['settings:getAll', 'app'],
+    ['settings:getKnownKeys', 'app'],
+    ['project:getKnownFields', 'app'],
+    ['tools:presentations', 'app'],
+    ['app:window-ready', 'app'],
+    ['notification:reportActiveSession', 'app'],
+    ['notification:consumePendingOpenSession', 'app'],
+    ['mdMeta:get', 'app'],
+    // 会话
+    ['agent:prompt', 'sessions'],
+    ['agent:respondToInput', 'sessions'],
+    ['session:list', 'sessions'],
+    ['session:delete', 'sessions'],
+    ['session:mentionEntries', 'sessions'],
+    ['calendar:openReport', 'sessions'],
+    ['bgTask:stop', 'sessions'],
+    ['sync:frame', 'sessions'],
+    ['project:list', 'projects'],
+    ['files:read', 'files'],
+    ['files:write', 'files'],
+    ['fs:listDirectories', 'files'],
+    ['liveDoc:attach', 'files'],
+    ['artifact:read', 'files'],
+    ['terminal:write', 'terminal'],
+    ['browser-view:navigate', 'browser'],
+    ['browser-data:site-details', 'browser'],
+    ['widget:open', 'widgets'],
+    ['widgetWindow:open', 'widgets'],
+    ['knowledge:createEntry', 'knowledge'],
+    ['knowledge:mentionEntries', 'knowledge'],
+    ['subAgent:save', 'agents'],
+    ['bot:createNew', 'agents'],
+    ['mdMeta:setFill', 'agents'],
+    ['mcp:add', 'extensions'],
+    ['skill:update', 'extensions'],
+    ['dbCredential:add', 'extensions'],
+    ['chromeExtension:repair', 'extensions'],
+    ['provider:listAll', 'models'],
+    ['provider:oauthLogin', 'models'],
+    // 安全：策略、hooks、会话权限表、停用内置、远程访问
+    ['policy:create', 'security'],
+    ['hook:delete', 'security'],
+    ['session:listAcl', 'security'],
+    ['session:grantAcl', 'security'],
+    ['mdMeta:setEnabled', 'security'],
+    ['network:setEnabled', 'security'],
+    ['tts:speakOnce', 'preferences'],
+    ['tts:setupQwen3', 'preferences'],
+    ['telegram:addBot', 'telegram'],
+    ['update:install', 'system'],
+    ['config:applyImport', 'system'],
+    ['httpLog:list', 'system'],
+    ['classifierLog:list', 'system'],
+    // 没给 key 的 settings:set 按最严
+    ['settings:set', 'system']
+  ])('CS-4 %s → %s', (channel, scope) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(channelScopeOf(channel)).toBe(scope)
+  })
+})
+
+describe('CS-5 settingKeyFactsOf', () => {
+  it.each<[unknown, ChannelScope, ChannelAccess, string]>([
+    ['general.theme', 'preferences', 'write', 'general.theme'],
+    ['general.language', 'preferences', 'write', 'general.language'],
+    ['appearance.focusMode', 'preferences', 'write', 'appearance.'],
+    ['voice.tts.openai.voice', 'preferences', 'write', 'voice.'],
+    ['browser.searchEngine', 'browser', 'write', 'browser.'],
+    // 最长前缀：tool.browser. 不落到 browser.
+    ['tool.browser.ignoreCertificateErrors', 'browser', 'admin', 'tool.browser.'],
+    ['general.defaultModel', 'models', 'admin', 'general.defaultModel'],
+    ['general.defaultChatAgent', 'agents', 'admin', 'general.defaultChatAgent'],
+    ['session.autoResume', 'sessions', 'admin', 'session.'],
+    ['sandbox.enabled', 'security', 'admin', 'sandbox.'],
+    ['general.classifierModel', 'security', 'admin', 'general.classifierModel'],
+    ['network.enabled', 'security', 'admin', 'network.'],
+    ['httpLog.enabled', 'system', 'admin', 'httpLog.'],
+    ['updates.autoCheck', 'system', 'admin', 'updates.'],
+    // 都不中 → 最严；非字符串、空串同样
+    ['general.somethingNew', 'system', 'admin', ''],
+    ['nope', 'system', 'admin', ''],
+    ['', 'system', 'admin', ''],
+    [undefined, 'system', 'admin', ''],
+    [42, 'system', 'admin', '']
+  ])('CS-5 %s → %s / %s', (key, scope, access, matched) => {
+    expect(settingKeyFactsOf(key)).toEqual({ scope, access, matched })
+  })
+})
+
+describe('CS-6 channelCallFactsOf', () => {
+  it('CS-6 settings:set 按 key；参数缺了按最严', () => {
+    expect(channelCallFactsOf('settings:set', [{ key: 'general.theme', value: 'dark' }])).toEqual({
+      scope: 'preferences',
+      access: 'write'
+    })
+    expect(
+      channelCallFactsOf('settings:set', [{ key: 'sandbox.enabled', value: 'false' }])
+    ).toEqual({ scope: 'security', access: 'admin' })
+    expect(channelCallFactsOf('settings:set', [])).toEqual({ scope: 'system', access: 'admin' })
+    expect(channelCallFactsOf('settings:set', [null])).toEqual({ scope: 'system', access: 'admin' })
+    expect(channelCallAccessOf('settings:set', [{ key: 'general.theme' }])).toBe('write')
+  })
+  it('CS-6 勾了「记住」的回答 → security + admin；别的照通道', () => {
+    const remember = [{ response: { kind: 'ask', allowed: true, extra: { remember: true } } }]
+    expect(channelCallFactsOf('agent:respondToInput', remember)).toEqual({
+      scope: 'security',
+      access: 'admin'
+    })
+    expect(channelCallFactsOf('agent:respondToInput', [])).toEqual({
+      scope: 'sessions',
+      access: 'write'
+    })
+    expect(channelCallFactsOf('terminal:write', [{ key: 'sandbox.enabled' }])).toEqual({
+      scope: 'terminal',
+      access: 'write'
+    })
+    expect(channelCallFactsOf('no:such-channel', [])).toEqual({ scope: 'system', access: 'admin' })
   })
 })

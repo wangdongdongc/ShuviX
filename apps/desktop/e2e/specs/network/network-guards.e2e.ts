@@ -473,7 +473,9 @@ describe('network access: guards, routes and settings', () => {
     }
     // 设置页的「最近拒绝」跟着 network.changed 列出来
     const shot = await shotWhen((s) => s.denials.length === lan.length, 'settings list the denials')
-    expect(shot.denials).toEqual(refused.map((d) => ({ stage: d.stage, summary: d.summary })))
+    expect(shot.denials).toEqual(
+      refused.map((d) => ({ stage: d.stage, summary: d.summary, scope: d.scope }))
+    )
     expect(shot.addresses).toEqual([`http://127.0.0.1:${P}`])
   })
 

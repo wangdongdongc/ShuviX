@@ -10969,8 +10969,11 @@ export interface NetworkSettingsShot {
   clientTitles: string[]
   /** 客户端行里的设备 ID（`data-network-client-device` = 完整的设备 ID；没有设备 ID 的行不出现），DOM 序 */
   clientDevices: string[]
-  /** 「最近拒绝」的行（`data-network-denial` = 点位，文字 = 摘要），DOM 序（新 → 旧） */
-  denials: Array<{ stage: string; summary: string }>
+  /**
+   * 「最近拒绝」的行（`data-network-denial` = 点位，文字 = 摘要，`data-network-denial-scope` = scope；没有 scope 的
+   * socket 行为空串），DOM 序（新 → 旧）
+   */
+  denials: Array<{ stage: string; summary: string; scope: string }>
   /** 监听失败那一行（`data-network-error`）的文字；没有 → null */
   error: string | null
 }
@@ -11032,10 +11035,16 @@ export function networkSettingsPane(settings: CdpClient): NetworkSettingsPane {
           clientDevices: [...(root?.querySelectorAll('[data-network-client-device]') ?? [])].map(
             (e) => e.getAttribute('data-network-client-device') ?? ''
           ),
-          denials: [...(root?.querySelectorAll('[data-network-denial]') ?? [])].map((e) => ({
-            stage: e.getAttribute('data-network-denial') ?? '',
-            summary: (e.textContent ?? '').trim()
-          })),
+          denials: [...(root?.querySelectorAll('[data-network-denial]') ?? [])].map((e) => {
+            const scope = e.querySelector('[data-network-denial-scope]')
+            const text = (e.textContent ?? '').trim()
+            const tail = scope?.textContent ?? ''
+            return {
+              stage: e.getAttribute('data-network-denial') ?? '',
+              summary: (tail && text.endsWith(tail.trim()) ? text.slice(0, text.length - tail.trim().length) : text).trim(),
+              scope: scope?.getAttribute('data-network-denial-scope') ?? ''
+            }
+          }),
           error: root?.querySelector('[data-network-error]')?.textContent?.trim() ?? null
         }
       })()`),

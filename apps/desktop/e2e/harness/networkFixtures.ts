@@ -63,6 +63,8 @@ export interface NetworkDenialInfo {
   stage: 'socket' | 'request' | 'channel' | 'path'
   /** `GET /`、`session:create`、`read /…` */
   summary: string
+  /** 这次请求的 scope（策略里的 object.scope；socket 点位没有 → 空串） */
+  scope: string
   address: string
   /** 设备 ID（第一次来、刚发了新 ID 的给新 ID；没有 → 空串） */
   device: string

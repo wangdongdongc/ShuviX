@@ -16,7 +16,7 @@
  *   NAS-9  点「让 agent 帮我设置」：新建会话（不属于项目、标题 networkPolicyChatTitle）→ 勾上 shuvix 知识库 →
  *          openSessionWithDraft({sessionId, draft})，draft 就是 buildNetworkPolicyPrompt 那一段；在途时按钮不可点
  *   NAS-10 「Copy prompt」复制同一段提示词
- *   NAS-11 连着的设备带设备 ID（短写、title 是完整的）；最近被拒：没有就没有这一节，有就逐条（摘要、策略名、×次数、降级说明）
+ *   NAS-11 连着的设备带设备 ID（短写、title 是完整的）；最近被拒：没有就没有这一节，有就逐条（摘要与 scope、策略名、×次数、降级说明）
  *   NAS-12 buildNetworkPolicyPrompt：端口、无头、三种状态、地址、设备行（含设备 ID）、拒绝行；什么都没有 → none
  *   NAS-13 新增的文案在 en/zh/ja 都非空；networkAdmission_builtin 三种语言都含 `{{port}}` 与 `ssh -L`；networkPrompt 三种语言
  *          都含全部占位符、`network-policy` 与 `network-admission.md`；局域网开关那批旧键一个都不剩
@@ -329,6 +329,7 @@ describe('NAS-11 设备与最近被拒', () => {
             count: 3,
             stage: 'request',
             summary: 'GET /',
+            scope: 'app',
             address: '192.168.1.40',
             device: DEVICE,
             rule: 'network-admission#0',
@@ -341,6 +342,7 @@ describe('NAS-11 设备与最近被拒', () => {
             count: 1,
             stage: 'channel',
             summary: 'session:prompt',
+            scope: 'sessions',
             address: '192.168.1.23',
             device: '',
             rule: 'mine#0',
@@ -351,7 +353,13 @@ describe('NAS-11 设备与最近被拒', () => {
       })
     )
     expect(container.textContent).toContain(tr('settings.networkDenials'))
-    expect(textOf('[data-network-denial="request"]')).toBe('GET /')
+    // 摘要后跟着这次请求的 scope（策略里的 object.scope）
+    expect(textOf('[data-network-denial="request"]')).toBe('GET / · app')
+    expect(
+      $('[data-network-denial="channel"] [data-network-denial-scope]')!.getAttribute(
+        'data-network-denial-scope'
+      )
+    ).toBe('sessions')
     const rows = container.textContent!
     expect(rows).toContain('Remote Access From This Computer Only')
     expect(rows).toContain('×3')
@@ -392,6 +400,7 @@ describe('NAS-12 提示词', () => {
             count: 1,
             stage: 'request',
             summary: 'GET /',
+            scope: 'app',
             address: '192.168.1.40',
             device: '',
             rule: 'network-admission#0',
@@ -405,7 +414,9 @@ describe('NAS-12 提示词', () => {
     expect(full).toContain(tr('settings.networkPromptState_override'))
     expect(full).toContain(`http://192.168.1.10:${P}  http://127.0.0.1:${P}`)
     expect(full).toContain(`- 192.168.1.23 (?), device ID ${DEVICE}`)
-    expect(full).toContain('- 192.168.1.40, device ID none: GET / (rule network-admission#0)')
+    expect(full).toContain(
+      '- 192.168.1.40, device ID none: GET / (scope app, rule network-admission#0)'
+    )
     expect(buildNetworkPolicyPrompt(t, statusOf({ admission: 'disabled' }))).toContain(
       tr('settings.networkPromptState_disabled')
     )
@@ -464,6 +475,8 @@ describe('NAS-13 文案', () => {
       expect(prompt, lang).toContain('~/.shuvix/policies/network-admission.md')
       expect(raw(lang, 'networkPromptClient') as string, lang).toContain('{{device}}')
       expect(raw(lang, 'networkPromptDenial') as string, lang).toContain('{{rule}}')
+      expect(raw(lang, 'networkPromptDenial') as string, lang).toContain('{{scope}}')
+      expect(prompt, lang).toContain('--scopes')
     }
   })
 })

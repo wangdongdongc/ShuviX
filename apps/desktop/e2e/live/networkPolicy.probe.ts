@@ -45,7 +45,8 @@ import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import { createInlinePolicyMdReader } from '../../../../packages/agent-runtime/src/security/builtinPolicies/inlineSources'
 import { buildNetworkPolicyPrompt } from '../../src/renderer/src/components/settings/networkPolicyPrompt'
-import { channelAccessOf } from '../../src/shared/channelAccess'
+import { channelCallFactsOf, channelGroupOf } from '../../src/shared/channelAccess'
+import { requestFactsOf, type RequestRoute } from '../../src/main/frontend/network/policyGate'
 import type { NetworkStatus } from '../../src/shared/network'
 import { until } from '../harness/cdp'
 import { launchApp, type E2EApp } from '../harness/launch'
@@ -88,15 +89,50 @@ interface Probe {
   readonly object: SecurityObject
   readonly action: string
   readonly tool?: { name: string; operation: string }
+  /** 放行之后网络服务还会判的下一步（文件路由：request 之后是那个文件的 path 点位）；哪一步拒都算拒 */
+  readonly then?: Pick<Probe, 'object' | 'action' | 'tool'>
   readonly expect: 'allow' | 'deny'
 }
+
+/** 一个 GET 请求的客体（scope 与 access 照网络服务的算法） */
+const getObject = (path: string, route: RequestRoute): SecurityObject => ({
+  type: 'request',
+  method: 'GET',
+  path,
+  query: {},
+  route,
+  ...requestFactsOf(route, 'GET')
+})
 
 const page = (label: string, address: string, expect: Probe['expect'], device?: string): Probe => ({
   label,
   address,
   device,
   action: 'request',
-  object: { type: 'request', method: 'GET', path: '/', query: {}, route: 'page' },
+  object: getObject('/', 'page'),
+  expect
+})
+
+/** 文件路由（`/files/media` 之类）：先过 request 点位（scope files），再过那个文件的 path 点位（tool files/<route>） */
+const fileRoute = (
+  label: string,
+  address: string,
+  route: 'media' | 'preview' | 'download',
+  /** 要的那个文件（绝对路径） */
+  file: string,
+  expect: Probe['expect'],
+  device?: string
+): Probe => ({
+  label,
+  address,
+  device,
+  action: 'request',
+  object: getObject(`/files/${route}`, route),
+  then: {
+    action: 'read',
+    object: { type: 'path', path: file, displayPath: file, scope: 'files', access: 'read' },
+    tool: { name: 'files', operation: route }
+  },
   expect
 })
 
@@ -110,7 +146,7 @@ const upgrade = (
   address,
   device,
   action: 'request',
-  object: { type: 'request', method: 'GET', path: '/ws', query: {}, route: 'socket' },
+  object: getObject('/ws', 'socket'),
   expect
 })
 
@@ -119,22 +155,44 @@ const call = (
   address: string,
   channel: string,
   expect: Probe['expect'],
-  device?: string
-): Probe => ({
-  label,
-  address,
-  device,
-  action: 'invoke',
-  object: {
+  device?: string,
+  args: unknown[] = []
+): Probe => {
+  const object: SecurityObject = {
     type: 'channel',
     channel,
-    group: channel.split(':')[0],
+    group: channelGroupOf(channel),
+    ...channelCallFactsOf(channel, args),
     kind: 'invoke',
-    access: channelAccessOf(channel),
     size: 64
-  },
-  expect
-})
+  }
+  Object.defineProperty(object, 'args', { enumerable: false, get: () => args })
+  return { label, address, device, action: 'invoke', object, expect }
+}
+
+/** 改一项设置（settings:set 按 key 定 scope 与 access） */
+const setting = (
+  label: string,
+  address: string,
+  key: string,
+  expect: Probe['expect'],
+  device?: string
+): Probe => call(label, address, 'settings:set', expect, device, [{ key, value: 'x' }])
+
+/** 回答询问卡时勾了「允许并记住」 */
+const rememberAnswer = (
+  label: string,
+  address: string,
+  expect: Probe['expect'],
+  device?: string
+): Probe =>
+  call(label, address, 'agent:respondToInput', expect, device, [
+    {
+      sessionId: 's1',
+      requestId: 'r1',
+      response: { kind: 'ask', allowed: true, extra: { remember: true } }
+    }
+  ])
 
 const write = (
   label: string,
@@ -147,7 +205,7 @@ const write = (
   address,
   device,
   action: 'write',
-  object: { type: 'path', path, displayPath: path },
+  object: { type: 'path', path, displayPath: path, scope: 'files', access: 'write' },
   tool: { name: 'files', operation: 'write' },
   expect
 })
@@ -246,6 +304,118 @@ const SCENARIOS: Scenario[] = [
       call('home device sends a message to an agent', '192.168.1.23', 'agent:prompt', 'deny'),
       call('home device changes a setting', '192.168.1.23', 'settings:set', 'deny'),
       write('home device writes a file', '192.168.1.23', `${home}/notes/a.md`, 'deny'),
+      page('other network opens the page', '10.0.0.5', 'deny')
+    ]
+  },
+  // ── 按 scope 的细粒度（2026-10-23） ──
+  {
+    id: 'chat-only-phone',
+    answer: {
+      zh: `只有我的手机会连进来，在家里的局域网，地址 192.168.1.23，设备 ID ${PHONE}。它只用来和 agent 聊天：能看会话、发消息、回答 agent 的问题，别的一律不能碰 —— 文件、终端、知识库、设置（包括外观）、模型、安全策略都不行。其他设备都不许连。`,
+      en: `Only my phone will connect, on my home network, address 192.168.1.23, device ID ${PHONE}. It is only for chatting with agents: it may see conversations, send messages and answer the agents' questions, and touch nothing else — no files, terminal, knowledge bases, settings (the appearance included), models or security policies. No other device may connect.`,
+      ja: `接続するのは自宅のネットワークにある私のスマートフォンだけで、アドレスは 192.168.1.23、デバイス ID は ${PHONE} です。エージェントと話すためだけに使います：会話を見る、メッセージを送る、エージェントの質問に答えることはできますが、ほかには一切触れさせません —— ファイル、ターミナル、ナレッジベース、設定（外観も含む）、モデル、セキュリティポリシーはどれも不可。ほかのデバイスは接続させないでください。`
+    },
+    status: {
+      clients: [
+        {
+          id: 'ws:1',
+          remoteAddress: '192.168.1.23',
+          userAgent: 'Mobile Safari',
+          device: PHONE,
+          connectedAt: 1
+        }
+      ]
+    },
+    probes: (home) => [
+      page('this computer opens the page', '127.0.0.1', 'allow'),
+      call('this computer opens a terminal', '127.0.0.1', 'terminal:create', 'allow'),
+      page('phone opens the page', '192.168.1.23', 'allow', PHONE),
+      upgrade('phone connects', '192.168.1.23', 'allow', PHONE),
+      call('phone lists sessions', '192.168.1.23', 'session:list', 'allow', PHONE),
+      call('phone reads messages', '192.168.1.23', 'message:list', 'allow', PHONE),
+      call('phone sends a message to an agent', '192.168.1.23', 'agent:prompt', 'allow', PHONE),
+      call('phone answers a question card', '192.168.1.23', 'agent:respondToInput', 'allow', PHONE),
+      call('phone opens a terminal', '192.168.1.23', 'terminal:create', 'deny', PHONE),
+      call('phone reads a file', '192.168.1.23', 'files:read', 'deny', PHONE),
+      fileRoute(
+        'phone previews a file',
+        '192.168.1.23',
+        'preview',
+        `${home}/notes/a.md`,
+        'deny',
+        PHONE
+      ),
+      call('phone lists knowledge bases', '192.168.1.23', 'knowledge:list', 'deny', PHONE),
+      setting('phone changes the theme', '192.168.1.23', 'general.theme', 'deny', PHONE),
+      call('phone lists providers (API keys)', '192.168.1.23', 'provider:listAll', 'deny', PHONE),
+      call('phone lists security policies', '192.168.1.23', 'policy:list', 'deny', PHONE),
+      page('unknown LAN device opens the page', '192.168.1.50', 'deny')
+    ]
+  },
+  {
+    id: 'tablet-appearance',
+    answer: {
+      zh: '家里的平板会连进来，地址固定是 192.168.1.40。它可以看会话和文件，可以改外观（主题、字号、语言），但不能改别的任何设置 —— 尤其不能改模型、沙箱和安全策略；它也不能和 agent 对话、不能用终端、不能改文件。只有这台电脑能做一切。其他设备都不许连。',
+      en: 'My tablet at home will connect; its address is always 192.168.1.40. It may look at conversations and files and change the appearance (theme, font size, language), but no other setting — above all not the models, the sandbox or the security policies; it may not talk to agents, use the terminal or change files either. Only this computer may do everything. No other device may connect.',
+      ja: '自宅のタブレットが接続します。アドレスは常に 192.168.1.40 です。会話とファイルを見ることと、外観（テーマ、文字サイズ、言語）を変えることはできますが、ほかの設定は一切変えられません —— 特にモデル、サンドボックス、セキュリティポリシーは不可。エージェントと話すこと、ターミナル、ファイルの変更もできません。何でもできるのはこのコンピューターだけです。ほかのデバイスは接続させないでください。'
+    },
+    status: {},
+    probes: (home) => [
+      page('this computer opens the page', '127.0.0.1', 'allow'),
+      setting('this computer turns the sandbox off', '127.0.0.1', 'sandbox.enabled', 'allow'),
+      page('tablet opens the page', '192.168.1.40', 'allow'),
+      upgrade('tablet connects', '192.168.1.40', 'allow'),
+      call('tablet lists sessions', '192.168.1.40', 'session:list', 'allow'),
+      call('tablet reads messages', '192.168.1.40', 'message:list', 'allow'),
+      call('tablet reads a file', '192.168.1.40', 'files:read', 'allow'),
+      fileRoute('tablet previews a file', '192.168.1.40', 'preview', `${home}/notes/a.md`, 'allow'),
+      setting('tablet changes the theme', '192.168.1.40', 'general.theme', 'allow'),
+      setting('tablet changes the font size', '192.168.1.40', 'general.fontSize', 'allow'),
+      setting('tablet changes the language', '192.168.1.40', 'general.language', 'allow'),
+      setting('tablet changes the default model', '192.168.1.40', 'general.defaultModel', 'deny'),
+      setting('tablet turns the sandbox off', '192.168.1.40', 'sandbox.enabled', 'deny'),
+      call('tablet creates a security policy', '192.168.1.40', 'policy:create', 'deny'),
+      call('tablet sends a message to an agent', '192.168.1.40', 'agent:prompt', 'deny'),
+      call('tablet opens a terminal', '192.168.1.40', 'terminal:create', 'deny'),
+      write('tablet writes a file', '192.168.1.40', `${home}/notes/a.md`, 'deny'),
+      page('other LAN device opens the page', '192.168.1.41', 'deny')
+    ]
+  },
+  {
+    id: 'security-local-only',
+    answer: {
+      zh: '家里局域网 192.168.1.0/24 的设备都是我自己的，可以用 ShuviX 做日常的事：会话、和 agent 对话、文件、终端都可以。但安全相关的 —— 安全策略、hooks、会话权限、沙箱、远程访问设置 —— 只有这台电脑能碰，局域网设备连看都不能看；模型服务的 API key 也不能让它们看到或改动，不过它们可以在输入框里选模型。别的网段不许连。',
+      en: "The devices on my home network 192.168.1.0/24 are all mine and may use ShuviX for everyday things: sessions, talking to agents, files and the terminal are all fine. But anything about security — security policies, hooks, session permissions, the sandbox, the remote access settings — only this computer may touch; the LAN devices may not even look at it. They also may not see or change the providers' API keys, though they may pick a model in the input box. No other network may connect.",
+      ja: '自宅のネットワーク 192.168.1.0/24 のデバイスはすべて私のもので、ShuviX を日常の用途に使えます：セッション、エージェントとの対話、ファイル、ターミナルはどれも構いません。ただしセキュリティに関わるもの —— セキュリティポリシー、hooks、セッションの権限、サンドボックス、リモートアクセスの設定 —— に触れられるのはこのコンピューターだけで、ローカルネットワークのデバイスは見ることもできません。プロバイダーの API キーも見たり変えたりさせませんが、入力欄でモデルを選ぶのは構いません。ほかのネットワークは接続不可。'
+    },
+    status: {},
+    probes: (home) => [
+      page('this computer opens the page', '127.0.0.1', 'allow'),
+      call('this computer creates a security policy', '127.0.0.1', 'policy:create', 'allow'),
+      page('home device opens the page', '192.168.1.23', 'allow'),
+      call('home device sends a message to an agent', '192.168.1.23', 'agent:prompt', 'allow'),
+      call('home device opens a terminal', '192.168.1.23', 'terminal:create', 'allow'),
+      write('home device writes a note', '192.168.1.23', `${home}/notes/a.md`, 'allow'),
+      call(
+        'home device lists models for the picker',
+        '192.168.1.23',
+        'provider:listAvailableModels',
+        'allow'
+      ),
+      call('home device lists security policies', '192.168.1.23', 'policy:list', 'deny'),
+      call('home device creates a hook', '192.168.1.23', 'hook:create', 'deny'),
+      call('home device grants a session path', '192.168.1.23', 'session:grantAcl', 'deny'),
+      rememberAnswer('home device answers "allow and remember"', '192.168.1.23', 'deny'),
+      call('home device turns remote access off', '192.168.1.23', 'network:setEnabled', 'deny'),
+      setting('home device turns the sandbox off', '192.168.1.23', 'sandbox.enabled', 'deny'),
+      call('home device lists providers (API keys)', '192.168.1.23', 'provider:listAll', 'deny'),
+      call('home device changes a provider', '192.168.1.23', 'provider:updateConfig', 'deny'),
+      write(
+        'home device writes a policy file',
+        '192.168.1.23',
+        `${home}/.shuvix/policies/x.md`,
+        'deny'
+      ),
       page('other network opens the page', '10.0.0.5', 'deny')
     ]
   }
@@ -535,7 +705,9 @@ it(
       const { files, raw, invalid } = userPolicies()
       const admission = files.find((f) => f.name === 'network-admission')
       const rows = scenario.probes(app.home).map((probe) => {
-        const verdict = judge(files, probe)
+        const first = judge(files, probe)
+        const verdict =
+          first.allowed && probe.then ? judge(files, { ...probe, ...probe.then }) : first
         const actual = verdict.allowed ? 'allow' : 'deny'
         return { probe, actual, verdict }
       })
@@ -594,5 +766,5 @@ it(
     console.log(redact(summary.join('\n')))
     console.log(`report: ${OUT}`)
   },
-  45 * 60 * 1000
+  90 * 60 * 1000
 )

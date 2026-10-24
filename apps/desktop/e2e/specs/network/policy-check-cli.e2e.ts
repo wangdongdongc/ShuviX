@@ -91,7 +91,7 @@ describe('shuvix policy check', () => {
       'allow'
     ])
     expect(ok.code, ok.stdout + ok.stderr).toBe(0)
-    expect(ok.stdout).toContain('invoke session:list (group session, access read)')
+    expect(ok.stdout).toContain('invoke session:list (group session, scope sessions, access read)')
     expect(ok.stdout).toContain('As expected (allow).')
 
     const bad = await runCli(app, [

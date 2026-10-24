@@ -99,6 +99,8 @@ export interface NetworkDenialInfo {
   readonly stage: 'socket' | 'request' | 'channel' | 'path'
   /** 对象摘要：`GET /`、`session:prompt`、`read /Users/…` */
   readonly summary: string
+  /** 这次请求的 scope（策略里的 object.scope；socket 阶段没有 → 空串） */
+  readonly scope: string
   readonly address: string
   /** 设备 ID（没有 → 空串） */
   readonly device: string

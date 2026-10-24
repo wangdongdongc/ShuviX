@@ -7,6 +7,8 @@
  *     列是四种用法（打开页面 / 读 / 写 / 管理），格子是判定。agent 不必知道有哪些属性，对着用户的需求看表即可。
  *   - 带 `--from` / `--device` → **单个请求**：经过的每个点位的判定、胜出规则与它的话、求值出错的规则；
  *     `--expect` 对不上 → 退出码 1。
+ *   - `--scopes` → **scope 矩阵**（2026-10-23）：行是 scope，列是设备，格子是三档各自的结果 —— 那一档的**每一条**
+ *     通道（含按 key 定的设置项与 HTTP 路由）逐条判，全放行是字母、全拒是 `-`、有放有拒是 `~`（表下列出被拒的）。
  *
  * 「按装进去之后算」：给了文件，它顶替 `~/.shuvix/policies/` 里同文件名的那份（没有就是新加一份）—— 草稿
  * 可以先在会话目录里查，查对了再装（装错的准入策略一生效，远程对话的这台设备当场就断了）。判定走真实那条路：
@@ -30,17 +32,32 @@ import {
 import {
   DEVICE_COOKIE,
   NetworkPolicyGate,
-  channelGroupOf,
   httpFactsOf,
+  requestFactsOf,
   requestRouteOf,
   requestTarget,
   type HttpFacts,
   type NetworkSecurityContextFor,
   type PeerFacts
 } from '../frontend/network/policyGate'
-import { CHANNEL_ACCESS, channelAccessOf } from '../../shared/channelAccess'
+import {
+  CHANNEL_ACCESS,
+  CHANNEL_SCOPES,
+  SETTING_KEY_FACTS,
+  channelCallFactsOf,
+  channelGroupOf,
+  type ChannelAccess,
+  type ChannelScope
+} from '../../shared/channelAccess'
 import { NETWORK_ADMISSION_POLICY, type NetworkStatus } from '../../shared/network'
 import { NETWORK_WS_PATH } from '../../shared/networkEnvelope'
+import {
+  NETWORK_DOWNLOAD_PATH,
+  NETWORK_LIB_PREFIX,
+  NETWORK_MEDIA_PATH,
+  NETWORK_PREVIEW_PATH,
+  NETWORK_WIDGET_PREFIX
+} from '../../shared/networkRoutes'
 import { namesNetwork } from './policyCheckHint'
 
 type Interfaces = ReturnType<typeof networkInterfaces>
@@ -89,15 +106,18 @@ export const POLICY_CHECK_FLAGS = [
   'device',
   'page',
   'channel',
+  'setting',
   'read',
   'write',
-  'expect'
+  'expect',
+  'scopes'
 ] as const
 
 export const POLICY_CHECK_USAGE = [
   'Usage: shuvix policy check [<file>] [--from <ip>] [--device <id>]',
-  '                           [--page [<path>] | --channel <name> | --read <path> | --write <path>]',
+  '                           [--page [<path>] | --channel <name> | --setting <key> | --read <path> | --write <path>]',
   '                           [--expect allow|deny]',
+  '       shuvix policy check [<file>] --scopes [--from <ip>] [--device <id>]',
   '',
   '  <file>            a policy .md to check as if it were installed in ~/.shuvix/policies',
   '                    (it replaces the file of the same name there); omit to check what is in effect now',
@@ -107,9 +127,13 @@ export const POLICY_CHECK_USAGE = [
   '  --device <id>     its device ID (Settings → General → Network access)',
   '  --page [<path>]   open a page (default /)',
   '  --channel <name>  call a channel, e.g. session:list (see the network-channels knowledge entry)',
+  '  --setting <key>   change one setting through settings:set, e.g. general.theme (its scope and access',
+  '                    depend on the key)',
   '  --read <path>     read a file through files:read (absolute path)',
   '  --write <path>    write a file through files:write (absolute path)',
-  '  --expect allow|deny   exit 1 when the result differs'
+  '  --expect allow|deny   exit 1 when the result differs',
+  '  --scopes          a matrix: every scope × the same devices as the table (or the one given with',
+  '                    --from / --device), each cell read / write / admin, every call of the scope checked'
 ].join('\n')
 
 /** 默认核对表的列：用法 → 代表通道（page 列只走到 /ws 升级） */
@@ -117,7 +141,7 @@ const COLUMNS: ReadonlyArray<{ label: string; channel?: string }> = [
   { label: 'page' },
   { label: 'read', channel: 'session:list' },
   { label: 'write', channel: 'session:create' },
-  { label: 'admin', channel: 'settings:set' }
+  { label: 'admin', channel: 'policy:create' }
 ]
 
 /** 外网样例（文档保留段）；只给设备时的地址（同解析期试算的样例） */
@@ -133,8 +157,8 @@ const CONNECTION = 'ws:check'
 class UsageError extends Error {}
 
 type Target =
-  | { kind: 'page'; path: string }
-  | { kind: 'channel'; channel: string }
+  | { kind: 'page'; path: string; method?: string }
+  | { kind: 'channel'; channel: string; args?: unknown[]; setting?: string }
   | { kind: 'read' | 'write'; path: string }
 
 interface Step {
@@ -163,7 +187,8 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
     return { stdout: `${POLICY_CHECK_USAGE}\n`, stderr: '', exitCode: 0 }
   }
   const flags = readFlags(params.flags)
-  const request = readRequest(flags)
+  const scopes = flags.has('scopes') ? readScopesRequest(flags) : null
+  const request = scopes ? null : readRequest(flags)
   const out: string[] = []
   const tilde = (p: string): string =>
     deps.home && (p === deps.home || p.startsWith(`${deps.home}/`))
@@ -277,12 +302,13 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
     }
     if (!add(judge('socket', 'connect', () => gate.judgeSocket(peer)))) return steps
     const pagePath = target.kind === 'page' ? target.path : WS_PATH
+    const method = (target.kind === 'page' && target.method) || 'GET'
     const { path, query } = requestTarget(pagePath)
     const route = requestRouteOf(path, pagePath === WS_PATH)
     if (
       !add(
-        judge('request', `GET ${pagePath}`, () =>
-          gate.judgeRequest(peer, http, { method: 'GET', path, query, route })
+        judge('request', `${method} ${pagePath}`, () =>
+          gate.judgeRequest(peer, http, { method, path, query, route })
         )
       )
     ) {
@@ -310,11 +336,16 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
         : target.kind === 'read'
           ? 'files:read'
           : 'files:write'
-    const channelLabel = `invoke ${channel} (group ${channelGroupOf(channel) || '—'}, access ${channelAccessOf(channel)})`
+    const args = target.kind === 'channel' ? (target.args ?? []) : []
+    const callFacts = channelCallFactsOf(channel, args)
+    const setting = target.kind === 'channel' && target.setting ? ` key ${target.setting}` : ''
+    const channelLabel =
+      `invoke ${channel}${setting} (group ${channelGroupOf(channel) || '—'}, ` +
+      `scope ${callFacts.scope}, access ${callFacts.access})`
     if (
       !add(
         judge('channel', channelLabel, () =>
-          gate.judgeChannel(peer, http, CONNECTION, { channel, kind: 'invoke', size: 64, args: [] })
+          gate.judgeChannel(peer, http, CONNECTION, { channel, kind: 'invoke', size: 64, args })
         )
       )
     ) {
@@ -332,6 +363,12 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
       )
     }
     return steps
+  }
+
+  if (scopes) {
+    const rows = scopes.address !== undefined ? [scopes as DeviceRow] : devicesOf(status)
+    out.push(...scopeMatrix(rows, walk, warnings))
+    return { stdout: out.join('\n') + '\n', stderr: '', exitCode: 0 }
   }
 
   if (request) {
@@ -398,10 +435,10 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
   out.push(
     '',
     'page = open the app (GET /, then the /ws connection); read = session:list; write = session:create; ' +
-      'admin = settings:set.',
-    'Compare every row with what the user asked for. Check a specific request with ' +
-      '--from <ip> [--device <id>] --channel <name> | --page <path> | --read <path> | --write <path> ' +
-      '[--expect allow|deny].'
+      'admin = policy:create.',
+    'Compare every row with what the user asked for. See every scope with --scopes. Check a specific ' +
+      'request with --from <ip> [--device <id>] --channel <name> | --setting <key> | --page <path> | ' +
+      '--read <path> | --write <path> [--expect allow|deny].'
   )
   const failures = unique(errors.filter(isEvaluationFailure))
   const others = unique(errors.filter((e) => !isEvaluationFailure(e)))
@@ -414,6 +451,157 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
   }
   if (others.length > 0) out.push('', 'Policy engine warnings:', ...others.map((e) => `- ${e}`))
   return { stdout: out.join('\n') + '\n', stderr: '', exitCode: 0 }
+}
+
+// ─────────────────────────── scope 矩阵 ───────────────────────────
+
+const LEVELS: readonly ChannelAccess[] = ['read', 'write', 'admin']
+
+interface Probe {
+  readonly scope: ChannelScope
+  readonly access: ChannelAccess
+  /** 被拒时列在表下的名字 */
+  readonly name: string
+  readonly target: Target
+}
+
+/**
+ * 每个 scope 每一档要判的调用：每条请求通道（`settings:set` 换成按 key 的各条）、勾了「记住」的回答、各条 HTTP 路由。
+ * 文件路径不在里面（要一个具体位置，`--read` / `--write` 查）
+ */
+function scopeProbes(): Probe[] {
+  const probes: Probe[] = []
+  const add = (name: string, target: Target, facts: Pick<Probe, 'scope' | 'access'>): void => {
+    probes.push({ scope: facts.scope, access: facts.access, name, target })
+  }
+  for (const channel of Object.keys(CHANNEL_ACCESS)) {
+    if (channel !== 'settings:set') {
+      add(channel, { kind: 'channel', channel }, channelCallFactsOf(channel, []))
+    }
+  }
+  for (const [entry, facts] of Object.entries(SETTING_KEY_FACTS)) {
+    const prefix = entry.endsWith('.')
+    const key = prefix ? `${entry}example` : entry
+    add(
+      `settings:set ${prefix ? `${entry}*` : entry}`,
+      { kind: 'channel', channel: 'settings:set', args: [{ key, value: '' }], setting: key },
+      facts
+    )
+  }
+  const remember = [{ response: { kind: 'ask', allowed: true, extra: { remember: true } } }]
+  add(
+    'agent:respondToInput (allow and remember)',
+    { kind: 'channel', channel: 'agent:respondToInput', args: remember },
+    channelCallFactsOf('agent:respondToInput', remember)
+  )
+  const routes: ReadonlyArray<[string, string]> = [
+    ['/', 'GET'],
+    ['/assets/index.js', 'GET'],
+    [`${NETWORK_LIB_PREFIX}chart.js`, 'GET'],
+    [NETWORK_MEDIA_PATH, 'GET'],
+    [NETWORK_PREVIEW_PATH, 'GET'],
+    [NETWORK_DOWNLOAD_PATH, 'GET'],
+    [`${NETWORK_WIDGET_PREFIX}example/`, 'GET'],
+    [`${NETWORK_WIDGET_PREFIX}example/api`, 'POST']
+  ]
+  for (const [path, method] of routes) {
+    add(
+      `${method} ${path}`,
+      { kind: 'page', path, method },
+      requestFactsOf(requestRouteOf(path, false), method)
+    )
+  }
+  return probes
+}
+
+type Walk = (address: string, device: string, userAgent: string, target: Target) => Step[]
+
+/** 行是 scope、列是设备的矩阵，格子是三档各自的结果；表下列出部分被拒的格子与求值出错的规则 */
+function scopeMatrix(rows: DeviceRow[], walk: Walk, warnings: string[]): string[] {
+  const probes = scopeProbes()
+  const out: string[] = []
+  const partial: string[] = []
+  const errors: string[] = []
+  const door: string[] = []
+  const cells = new Map<string, string>()
+  for (const row of rows) {
+    const entry = walk(row.address, row.device, row.userAgent, { kind: 'page', path: '/' })
+    const blocked = entry.find((step) => step.stage !== 'channel' && !step.verdict.allowed)
+    if (blocked)
+      door.push(`${row.label}: refused at the ${blocked.stage} step by ${ruleOf(blocked.verdict)}`)
+    for (const scope of CHANNEL_SCOPES) {
+      let cell = ''
+      for (const level of LEVELS) {
+        const mine = probes.filter((probe) => probe.scope === scope && probe.access === level)
+        if (mine.length === 0) {
+          cell += '.'
+          continue
+        }
+        const refused: Array<{ name: string; rule: string }> = []
+        let errored = false
+        for (const probe of mine) {
+          const steps = walk(row.address, row.device, row.userAgent, probe.target)
+          const final = steps[steps.length - 1]
+          const failed = steps.flatMap((step) => step.errors)
+          errors.push(...failed)
+          if (final.verdict.allowed) continue
+          if (final.verdict.decision.winning === 'error' || failed.some(isEvaluationFailure)) {
+            errored = true
+          }
+          refused.push({ name: probe.name, rule: ruleOf(final.verdict) })
+        }
+        const letter = level[0]
+        cell += errored
+          ? 'E'
+          : refused.length === 0
+            ? letter
+            : refused.length === mine.length
+              ? '-'
+              : '~'
+        if (refused.length > 0 && refused.length < mine.length && !blocked) {
+          const names = refused.map((r) => r.name)
+          const shown =
+            names.slice(0, 6).join(', ') +
+            (names.length > 6 ? `, and ${names.length - 6} more` : '')
+          const rules = unique(refused.map((r) => r.rule)).join(', ')
+          partial.push(
+            `- ${row.label} · ${scope} ${level}: ${refused.length} of ${mine.length} refused (${rules}): ${shown}`
+          )
+        }
+      }
+      cells.set(`${row.label}|${scope}`, cell)
+    }
+  }
+  const table: string[][] = [['', ...rows.map((row) => row.label)]]
+  for (const scope of CHANNEL_SCOPES) {
+    table.push([scope, ...rows.map((row) => cells.get(`${row.label}|${scope}`) ?? '')])
+  }
+  out.push(...formatTable(table))
+  out.push(
+    '',
+    'Each cell is read / write / admin: a letter (r, w, a) = every call of that level in the scope is allowed; ' +
+      '- = every one is refused; ~ = some are refused (listed below); . = the scope has no call at that level; ' +
+      'E = a rule failed to evaluate.',
+    `Devices: ${rows.map((row) => `${row.label} = ${row.address}${row.device ? ` (device ${row.device})` : ''}`).join('; ')}.`
+  )
+  if (door.length > 0) out.push('Refused before any call:', ...door.map((line) => `- ${line}`))
+  if (partial.length > 0) out.push('', 'Partly refused:', ...partial)
+  out.push(
+    '',
+    'File paths are checked separately (--read / --write <path>). Check one call with ' +
+      '--from <ip> [--device <id>] --channel <name> | --setting <key> [--expect allow|deny].'
+  )
+  const failures = unique(errors.filter(isEvaluationFailure))
+  const others = unique([...errors, ...warnings].filter((e) => !isEvaluationFailure(e)))
+  if (failures.length > 0) {
+    out.push(
+      '',
+      'Rules that failed to evaluate (a failing deny counts as matched, so it refuses every such request):',
+      ...failures.map((e) => `- ${e}`)
+    )
+  }
+  if (others.length > 0) out.push('', 'Policy engine warnings:', ...others.map((e) => `- ${e}`))
+  return out
 }
 
 // ─────────────────────────── 参数 ───────────────────────────
@@ -441,19 +629,13 @@ interface CheckRequest {
   expect?: 'allow' | 'deny'
 }
 
-function readRequest(flags: Map<string, string>): CheckRequest | null {
-  const targets = (['page', 'channel', 'read', 'write'] as const).filter((t) => flags.has(t))
+const TARGET_FLAGS = ['page', 'channel', 'setting', 'read', 'write'] as const
+
+/** `--from` / `--device` 校验（两样都没给 → null） */
+function readWho(flags: Map<string, string>): { from?: string; device?: string } | null {
   const from = flags.get('from')
   const device = flags.get('device')
-  const expect = flags.get('expect')
-  if (from === undefined && device === undefined) {
-    if (targets.length > 0 || expect !== undefined) {
-      throw new UsageError(
-        'Say who is asking: --from <ip> (and --device <id> when the policy matches devices).'
-      )
-    }
-    return null
-  }
+  if (from === undefined && device === undefined) return null
   if (from !== undefined && !parseIp(from)) {
     throw new UsageError(`--from must be an IP address such as 192.168.1.23 (got '${from}').`)
   }
@@ -463,9 +645,45 @@ function readRequest(flags: Map<string, string>): CheckRequest | null {
         `Network access (got '${device}').`
     )
   }
+  return { from, device }
+}
+
+/** `--scopes`：可带一个设备（`--from` / `--device`），不带请求与期望 */
+function readScopesRequest(flags: Map<string, string>): Partial<DeviceRow> {
+  const extra = [...TARGET_FLAGS, 'expect'].filter((name) => flags.has(name))
+  if (extra.length > 0) {
+    throw new UsageError(
+      `--scopes checks every call of every scope; it does not take ${extra.map((f) => `--${f}`).join(', ')}. ` +
+        'Check one request without --scopes.'
+    )
+  }
+  const who = readWho(flags)
+  if (!who) return {}
+  const address = who.from ?? DEFAULT_ADDRESS
+  return {
+    label: who.device ? `${address} ${who.device.slice(0, 6)}…` : address,
+    address,
+    device: who.device ?? '',
+    userAgent: ''
+  }
+}
+
+function readRequest(flags: Map<string, string>): CheckRequest | null {
+  const targets = TARGET_FLAGS.filter((t) => flags.has(t))
+  const expect = flags.get('expect')
+  const who = readWho(flags)
+  if (!who) {
+    if (targets.length > 0 || expect !== undefined) {
+      throw new UsageError(
+        'Say who is asking: --from <ip> (and --device <id> when the policy matches devices).'
+      )
+    }
+    return null
+  }
+  const { from, device } = who
   if (targets.length > 1) {
     throw new UsageError(
-      `Give one of --page, --channel, --read, --write (got ${targets.map((t) => `--${t}`).join(', ')}).`
+      `Give one of --page, --channel, --setting, --read, --write (got ${targets.map((t) => `--${t}`).join(', ')}).`
     )
   }
   let target: Target = { kind: 'page', path: '/' }
@@ -486,6 +704,17 @@ function readRequest(flags: Map<string, string>): CheckRequest | null {
       )
     }
     target = { kind: 'channel', channel }
+  } else if (kind === 'setting') {
+    const key = flags.get('setting') ?? ''
+    if (key === '' || /\s/.test(key)) {
+      throw new UsageError(`--setting takes a setting key such as general.theme (got '${key}').`)
+    }
+    target = {
+      kind: 'channel',
+      channel: 'settings:set',
+      args: [{ key, value: '' }],
+      setting: key
+    }
   } else if (kind === 'read' || kind === 'write') {
     const path = flags.get(kind) ?? ''
     if (!isAbsolute(path)) {
@@ -645,7 +874,7 @@ function describeTarget(target: Target): string {
     case 'page':
       return `open ${target.path}`
     case 'channel':
-      return `invoke ${target.channel}`
+      return target.setting ? `change setting ${target.setting}` : `invoke ${target.channel}`
     default:
       return `${target.kind} ${target.path}`
   }

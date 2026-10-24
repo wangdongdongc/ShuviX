@@ -1,13 +1,13 @@
 ---
 shuvix: okf v0.2
 type: Guide
-title: 'リモートアクセスのチャネル —— ブラウザーが呼べるすべての呼び出しとそのアクセス区分'
-description: 'リモートのブラウザーが WebSocket 経由で呼ぶチャネルの一覧。`object.group` ごとにまとめ、それぞれに `object.access`（read / write / admin）を付けたもの —— リモートアクセスのポリシーでチャネルに対するルールを書くときに参照します。'
+title: 'リモートアクセスのチャネル —— scope ごとのすべての呼び出しとそのアクセス区分'
+description: 'リモートのブラウザーが呼べるすべてのチャネルを `object.scope`（ShuviX のどの部分か）ごとの節にまとめ、それぞれに `object.access`（read / write / admin）を付けたもの。各節にはそのグループ、HTTP ルート、キーで決まる設定項目も載せています —— リモートアクセスのポリシーを書くとき、ある呼び出しがどの scope のどの段階に入るかを調べるときに参照します。'
 tags: [shuvix, policy, security, network, remote-access, reference]
 status: stable
 sources:
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/apps/desktop/src/shared/channelAccess.ts
-    title: channelAccess.ts —— 各チャネルのアクセス区分
+    title: channelAccess.ts —— 各チャネルの scope とアクセス区分
   - resource: https://github.com/wangdongdongc/ShuviX/blob/main/apps/desktop/src/shared/apiTable.ts
     title: apiTable.ts —— チャネル表
 ---
@@ -15,244 +15,134 @@ sources:
 # リモートアクセスのチャネル
 
 ShuviX をリモートで使うブラウザーは、すべてを**チャネル** —— WebSocket 上の名前付きの呼び出し —— で行います。
-各呼び出しは `channel` オブジェクトとして判定されます（`network-policy` エントリー参照）：`channel` が名前、`group` が
-下の小見出し、`access` が行頭の区分です。
+各呼び出しは `channel` オブジェクトとして判定されます（`network-policy` エントリー参照）：`channel` が名前、`scope` が
+下の小見出し、`access` が行頭の区分、`group` はチャネル名が属する技術的なグループです。
 
-- `read` —— データを読むだけで、秘密を返さない。
-- `write` —— ユーザーのデータを変える、または何かを起こす。
-- `admin` —— ShuviX 自身（セキュリティポリシー、hooks、エージェント、設定、モデルプロバイダー、ネットワークアクセス、
-  アップデート）を変える、または秘密を返す。
+各節には順に次のものが並びます：
 
-チャネルではなく中身で区分が決まる呼び出しが一つあります：`agent:respondToInput` は `write` ですが、「許可して記憶」を
-選んだ回答はセッションの権限表に行を加えるので、`admin` として判定されます —— `session:grantAcl` と同じ区分です。
+- `group` —— この部分に含まれる技術的なグループ（`object.group`）。グループの一部のチャネルは別の scope に属すことが
+  あります（たとえば `session` グループのうち権限表の四つは `security`）。
+- `route` —— この部分に入る HTTP ルート（`request` 判定点の `object.route`）。
+- `read` / `write` / `admin` —— この部分の段階ごとのチャネル。
+- `settings:set` + 段階 —— これらの設定項目を変える `settings:set` は、この部分・この段階として判定されます（`x.*` は
+  `x.` で始まるすべてのキー）。どの節にもないキーは `system` + `admin` です。
+- `agent:respondToInput` + `remember` —— 「許可して記憶」を選んだ回答は、この部分・この段階として判定されます。
 
-ルールはできるだけ `access` と `group` に書いてください：後のバージョンで増えたチャネルにも区分が付いて対象になりますが、
-名前の一覧ではそれを取りこぼします。チャネル名を挙げるのは例外を作るときだけにします。一覧はこのバージョンのチャネル表から
-生成しています。
+三つの段階：`read` —— 見るだけで、秘密を返さない。`write` —— ユーザーのデータを変える、または何かを起こす。`admin` ——
+ShuviX 自身を変える、または秘密を返す。各 scope が何を扱い、画面のどこにあるかは `network-policy` エントリーの
+「scope と access」を見てください。
+
+ルールはできるだけ `scope` と `access` に書いてください：後のバージョンで増えたチャネルもどこかの部分・どこかの段階に入って
+対象になりますが、名前の一覧ではそれを取りこぼします。チャネル名を挙げるのは例外を作るときだけにします。一覧はこの
+バージョンのチャネル表から生成しています。
 
 <!-- channels:begin -->
 
 ### `app`
 
-- read: `app:version`, `app:window-ready`
-- write: `app:adjust-window-width`, `app:open-external`, `app:open-folder`, `app:open-session-draft`, `app:open-settings`, `app:reveal-path`, `app:set-browser-offset`, `app:take-session-draft`, `dialog:openDirectory`
+- group: `app`, `contextMenu`, `mdMeta`, `notification`, `pinChat`, `project`, `settings`, `shuvixMd`, `tools`
+- route: `page`, `asset`, `lib`, `socket`
+- read: `app:version`, `app:window-ready`, `mdMeta:get`, `notification:consumePendingOpenSession`, `notification:reportActiveSession`, `pinChat:getAlwaysOnTop`, `pinChat:getState`, `project:getKnownFields`, `settings:get`, `settings:getAll`, `settings:getKnownKeys`, `settings:sandboxStatus`, `shuvixMd:validate`, `tools:presentations`
+- write: `app:adjust-window-width`, `app:open-external`, `app:open-folder`, `app:open-session-draft`, `app:open-settings`, `app:reveal-path`, `app:set-browser-offset`, `app:take-session-draft`, `contextMenu:popup`, `dialog:openDirectory`, `pinChat:focus`, `pinChat:pin`, `pinChat:setAlwaysOnTop`, `pinChat:unpin`
 
-### `agent`
+### `sessions`
 
-- read: `agent:init`, `agentMonitor:detail`, `agentMonitor:list`
-- write: `agent:abort`, `agent:continue`, `agent:destroy`, `agent:followUp`, `agent:getInfo`, `agent:prompt`, `agent:respondToInput`, `agent:setModel`, `agent:setThinkingLevel`, `agent:steer`, `agent:subAgentPrompt`, `agent:withdrawQueued`, `subSession:destroy`, `subSession:interrupt`
+- group: `agent`, `bgTask`, `calendar`, `command`, `mentions`, `message`, `runtime`, `session`, `sync`
+- read: `agent:init`, `agentMonitor:detail`, `agentMonitor:list`, `bgTask:list`, `bgTask:readInvocation`, `bgTask:readLog`, `calendar:daysInMonth`, `calendar:firstEntryOnDay`, `calendar:reportDaysInMonth`, `calendar:reportOnDay`, `calendar:sessionsOnDay`, `command:list`, `message:list`, `runtime:statuses`, `session:getById`, `session:list`, `session:mentionEntries`, `sync:frame`
+- write: `agent:abort`, `agent:continue`, `agent:destroy`, `agent:followUp`, `agent:getInfo`, `agent:prompt`, `agent:respondToInput`, `agent:setModel`, `agent:setThinkingLevel`, `agent:steer`, `agent:subAgentPrompt`, `agent:withdrawQueued`, `bgTask:clearDone`, `bgTask:dismiss`, `bgTask:stop`, `calendar:addSessionToReport`, `calendar:openReport`, `message:clear`, `message:rollback`, `runtime:destroy`, `session:create`, `session:delete`, `session:fork`, `session:updateEnabledTools`, `session:updateKnowledgeBases`, `session:updateProject`, `session:updateTitle`, `subSession:destroy`, `subSession:interrupt`
+- `settings:set` admin: `session.*`
 
-### `provider`
+### `projects`
 
-- read: `provider:listAvailableModels`, `provider:listClassifierModels`, `provider:listModels`, `provider:oauthStatus`
-- admin: `provider:add`, `provider:addModel`, `provider:delete`, `provider:deleteModel`, `provider:getById`, `provider:listAll`, `provider:listEnabled`, `provider:oauthAnswer`, `provider:oauthCancel`, `provider:oauthLogin`, `provider:oauthLogout`, `provider:syncModels`, `provider:toggleEnabled`, `provider:toggleModelEnabled`, `provider:updateConfig`, `provider:updateModelCapabilities`
-
-### `project`
-
-- read: `project:getKnownFields`
+- group: `project`
 - write: `project:create`, `project:delete`, `project:update`
 - admin: `project:getById`, `project:list`, `project:listArchived`
 
-### `session`
+### `files`
 
-- read: `session:getById`, `session:list`, `session:listAcl`
-- write: `session:create`, `session:delete`, `session:fork`, `session:updateEnabledTools`, `session:updateKnowledgeBases`, `session:updateProject`, `session:updateTitle`
-- admin: `session:grantAcl`, `session:removeAclEntry`, `session:setAclAccess`
-
-### `calendar`
-
-- read: `calendar:daysInMonth`, `calendar:firstEntryOnDay`, `calendar:reportDaysInMonth`, `calendar:reportOnDay`, `calendar:sessionsOnDay`
-- write: `calendar:addSessionToReport`, `calendar:openReport`
-
-### `message`
-
-- read: `message:list`
-- write: `message:clear`, `message:rollback`
-
-### `settings`
-
-- read: `settings:get`, `settings:getAll`, `settings:getKnownKeys`, `settings:sandboxStatus`
-- admin: `settings:set`
-
-### `httpLog`
-
-- read: `httpLog:get`, `httpLog:list`
-- write: `httpLog:clear`
-
-### `classifierLog`
-
-- read: `classifierLog:get`, `classifierLog:list`, `classifierLog:scenes`
-- write: `classifierLog:clear`
-
-### `runtime`
-
-- read: `runtime:statuses`
-- write: `runtime:destroy`
-
-### `dbCredential`
-
-- admin: `dbCredential:add`, `dbCredential:delete`, `dbCredential:list`, `dbCredential:testConnection`, `dbCredential:update`
-
-### `subAgent`
-
-- read: `subAgent:getSource`, `subAgent:list`, `subAgent:listInvalid`
-- write: `subAgent:openBuiltinNote`, `subAgent:openFolder`
-- admin: `subAgent:create`, `subAgent:createSource`, `subAgent:delete`, `subAgent:deleteByFile`, `subAgent:openNote`, `subAgent:save`
-
-### `policy`
-
-- read: `policy:getSource`, `policy:list`, `policy:listInvalid`
-- write: `policy:openBuiltinNote`, `policy:openFolder`
-- admin: `policy:create`, `policy:delete`, `policy:deleteByFile`, `policy:openNote`
-
-### `hook`
-
-- read: `hook:getSource`, `hook:list`, `hook:listInvalid`
-- write: `hook:openBuiltinNote`, `hook:openFolder`
-- admin: `hook:create`, `hook:delete`, `hook:deleteByFile`, `hook:openNote`
-
-### `bot`
-
-- read: `bot:list`
-- write: `bot:openFolder`
-- admin: `bot:createNew`, `bot:delete`, `bot:deleteByFile`, `bot:openNote`
-
-### `shuvixMd`
-
-- read: `shuvixMd:validate`
-
-### `mdMeta`
-
-- read: `mdMeta:get`
-- admin: `mdMeta:setEnabled`, `mdMeta:setFill`, `mdMeta:unsetFill`
-
-### `tools`
-
-- read: `tools:definitions`, `tools:list`, `tools:presentations`
-
-### `config`
-
-- read: `config:buildExportSnapshot`, `config:parseImportPayload`, `config:planImport`
-- admin: `config:applyImport`, `config:buildExportPayload`
-
-### `mcp`
-
-- read: `mcp:getTools`
-- admin: `mcp:add`, `mcp:connect`, `mcp:delete`, `mcp:disconnect`, `mcp:list`, `mcp:update`
-
-### `telegram`
-
-- read: `telegram:listBots`
-- admin: `telegram:addBot`, `telegram:deleteBot`, `telegram:updateBot`, `telegram:validateToken`
-
-### `command`
-
-- read: `command:list`
-
-### `tts`
-
-- read: `tts:getQwen3Status`, `tts:getQwen3Voices`
-- write: `tts:abort`, `tts:cancelSetupQwen3`, `tts:speakOnce`
-- admin: `tts:setupQwen3`
-
-### `download`
-
-- write: `download:cancel`
-
-### `bgTask`
-
-- read: `bgTask:list`, `bgTask:readInvocation`, `bgTask:readLog`
-- write: `bgTask:clearDone`, `bgTask:dismiss`, `bgTask:stop`
+- group: `artifact`, `download`, `files`, `fs`, `liveDoc`
+- route: `media`, `preview`, `download`
+- read: `artifact:read`, `files:read`, `files:scan`, `files:scanDir`, `files:unwatch`, `files:watch`, `fs:listDirectories`, `fs:locateFolder`
+- write: `download:cancel`, `files:open`, `files:write`, `liveDoc:attach`, `liveDoc:detach`, `liveDoc:respond`
 
 ### `terminal`
 
+- group: `terminal`
 - write: `terminal:create`, `terminal:destroy`, `terminal:resize`, `terminal:write`
 
-### `browserView`
+### `browser`
 
-- read: `browser-view:capture`, `browser-view:get-url`, `browser-view:is-window-open`, `browser-view:list-tabs`
-- write: `browser-view:activate-tab`, `browser-view:agent-devtools-clear`, `browser-view:close-tab`, `browser-view:create-tab`, `browser-view:devtools-close`, `browser-view:devtools-open`, `browser-view:go-back`, `browser-view:go-forward`, `browser-view:navigate`, `browser-view:open-internal`, `browser-view:open-session`, `browser-view:open-settings`, `browser-view:open-window`, `browser-view:reload`, `browser-view:reopen-closed-tab`, `browser-view:set-devtools-layout`, `browser-view:set-layout`, `browser-view:set-visible`, `browser-view:stop`, `browser-view:zoom`
-- admin: `browser-view:agent-devtools`, `browser-view:proceed-unsafe`
+- group: `browserData`, `browserView`
+- read: `browser-data:cert-exceptions`, `browser-data:list-sites`, `browser-data:site-info`, `browser-view:capture`, `browser-view:get-url`, `browser-view:is-window-open`, `browser-view:list-tabs`
+- write: `browser-data:clear-all`, `browser-data:clear-origin`, `browser-data:clear-site`, `browser-data:clear-site-category`, `browser-data:clear-site-data`, `browser-data:remove-cookie`, `browser-view:activate-tab`, `browser-view:agent-devtools-clear`, `browser-view:close-tab`, `browser-view:create-tab`, `browser-view:devtools-close`, `browser-view:devtools-open`, `browser-view:go-back`, `browser-view:go-forward`, `browser-view:navigate`, `browser-view:open-internal`, `browser-view:open-session`, `browser-view:open-settings`, `browser-view:open-window`, `browser-view:reload`, `browser-view:reopen-closed-tab`, `browser-view:set-devtools-layout`, `browser-view:set-layout`, `browser-view:set-visible`, `browser-view:stop`, `browser-view:zoom`
+- admin: `browser-data:site-details`, `browser-view:agent-devtools`, `browser-view:proceed-unsafe`
+- `settings:set` write: `browser.*`
+- `settings:set` admin: `tool.browser.*`
 
-### `chromeExtension`
+### `widgets`
 
-- read: `chromeExtension:status`
-- admin: `chromeExtension:repair`
-
-### `browserData`
-
-- read: `browser-data:cert-exceptions`, `browser-data:list-sites`, `browser-data:site-info`
-- write: `browser-data:clear-all`, `browser-data:clear-origin`, `browser-data:clear-site`, `browser-data:clear-site-category`, `browser-data:clear-site-data`, `browser-data:remove-cookie`
-- admin: `browser-data:site-details`
-
-### `skill`
-
-- read: `skill:getDefaultDir`, `skill:list`, `skill:listExternalDirs`, `skill:listGrouped`, `skill:parseMarkdown`
-- write: `skill:pickExternalDir`
-- admin: `skill:addExternalDir`, `skill:deleteDefault`, `skill:openNote`, `skill:removeExternalDir`, `skill:setGroupEnabled`, `skill:update`
-
-### `update`
-
-- read: `update:getLastEvent`
-- write: `update:check`
-- admin: `update:download`, `update:install`
-
-### `contextMenu`
-
-- write: `contextMenu:popup`
-
-### `widget`
-
-- read: `widget:getServerStatus`, `widget:list`, `widget:listArchived`
-- write: `widget:delete`, `widget:exportAsVite`, `widget:exportForDownload`, `widget:open`, `widget:pickExportTarget`, `widget:rename`, `widget:revealExport`, `widget:setArchived`, `widget:startWidget`, `widget:stopServer`, `widget:stopWidget`
-
-### `widgetWindow`
-
-- read: `widgetWindow:getAlwaysOnTop`, `widgetWindow:status`
-- write: `widgetWindow:close`, `widgetWindow:open`, `widgetWindow:setAlwaysOnTop`, `widgetWindow:setPreferWindow`
-
-### `pinChat`
-
-- read: `pinChat:getAlwaysOnTop`, `pinChat:getState`
-- write: `pinChat:focus`, `pinChat:pin`, `pinChat:setAlwaysOnTop`, `pinChat:unpin`
-
-### `notification`
-
-- read: `notification:consumePendingOpenSession`, `notification:reportActiveSession`
-
-### `liveDoc`
-
-- write: `liveDoc:attach`, `liveDoc:detach`, `liveDoc:respond`
-
-### `artifact`
-
-- read: `artifact:read`
-
-### `files`
-
-- read: `files:read`, `files:scan`, `files:scanDir`, `files:unwatch`, `files:watch`
-- write: `files:open`, `files:write`
+- group: `widget`, `widgetWindow`
+- route: `widget`
+- read: `widget:getServerStatus`, `widget:list`, `widget:listArchived`, `widgetWindow:getAlwaysOnTop`, `widgetWindow:status`
+- write: `widget:delete`, `widget:exportAsVite`, `widget:exportForDownload`, `widget:open`, `widget:pickExportTarget`, `widget:rename`, `widget:revealExport`, `widget:setArchived`, `widget:startWidget`, `widget:stopServer`, `widget:stopWidget`, `widgetWindow:close`, `widgetWindow:open`, `widgetWindow:setAlwaysOnTop`, `widgetWindow:setPreferWindow`
 
 ### `knowledge`
 
-- read: `knowledge:baseOptions`, `knowledge:list`
+- group: `knowledge`, `mentions`
+- read: `knowledge:baseOptions`, `knowledge:list`, `knowledge:mentionEntries`
 - write: `knowledge:createBase`, `knowledge:createEntry`, `knowledge:createFolder`, `knowledge:openFolder`, `knowledge:openNote`, `knowledge:revealFile`
 
-### `mentions`
+### `agents`
 
-- read: `knowledge:mentionEntries`, `session:mentionEntries`
+- group: `bot`, `mdMeta`, `subAgent`
+- read: `bot:list`, `subAgent:getSource`, `subAgent:list`, `subAgent:listInvalid`
+- write: `bot:openFolder`, `subAgent:openBuiltinNote`, `subAgent:openFolder`
+- admin: `bot:createNew`, `bot:delete`, `bot:deleteByFile`, `bot:openNote`, `mdMeta:setFill`, `mdMeta:unsetFill`, `subAgent:create`, `subAgent:createSource`, `subAgent:delete`, `subAgent:deleteByFile`, `subAgent:openNote`, `subAgent:save`
+- `settings:set` admin: `general.defaultChatAgent`, `general.defaultProjectAgent`
 
-### `network`
+### `extensions`
 
-- read: `network:status`
-- admin: `network:setEnabled`, `network:setPort`
+- group: `chromeExtension`, `dbCredential`, `mcp`, `skill`, `tools`
+- read: `chromeExtension:status`, `mcp:getTools`, `skill:getDefaultDir`, `skill:list`, `skill:listExternalDirs`, `skill:listGrouped`, `skill:parseMarkdown`, `tools:definitions`, `tools:list`
+- write: `skill:pickExternalDir`
+- admin: `chromeExtension:repair`, `dbCredential:add`, `dbCredential:delete`, `dbCredential:list`, `dbCredential:testConnection`, `dbCredential:update`, `mcp:add`, `mcp:connect`, `mcp:delete`, `mcp:disconnect`, `mcp:list`, `mcp:update`, `skill:addExternalDir`, `skill:deleteDefault`, `skill:openNote`, `skill:removeExternalDir`, `skill:setGroupEnabled`, `skill:update`
 
-### `fs`
+### `models`
 
-- read: `fs:listDirectories`, `fs:locateFolder`
+- group: `provider`
+- read: `provider:listAvailableModels`, `provider:listClassifierModels`, `provider:listModels`, `provider:oauthStatus`
+- admin: `provider:add`, `provider:addModel`, `provider:delete`, `provider:deleteModel`, `provider:getById`, `provider:listAll`, `provider:listEnabled`, `provider:oauthAnswer`, `provider:oauthCancel`, `provider:oauthLogin`, `provider:oauthLogout`, `provider:syncModels`, `provider:toggleEnabled`, `provider:toggleModelEnabled`, `provider:updateConfig`, `provider:updateModelCapabilities`
+- `settings:set` admin: `general.defaultModel`, `general.defaultProvider`, `general.defaultThinkingLevel`, `provider.*`
 
-### `sync`
+### `security`
 
-- read: `sync:frame`
+- group: `hook`, `mdMeta`, `network`, `policy`, `session`
+- read: `hook:getSource`, `hook:list`, `hook:listInvalid`, `network:status`, `policy:getSource`, `policy:list`, `policy:listInvalid`, `session:listAcl`
+- write: `hook:openBuiltinNote`, `hook:openFolder`, `policy:openBuiltinNote`, `policy:openFolder`
+- admin: `hook:create`, `hook:delete`, `hook:deleteByFile`, `hook:openNote`, `mdMeta:setEnabled`, `network:setEnabled`, `network:setPort`, `policy:create`, `policy:delete`, `policy:deleteByFile`, `policy:openNote`, `session:grantAcl`, `session:removeAclEntry`, `session:setAclAccess`
+- `settings:set` admin: `general.classifierModel`, `general.classifierProvider`, `network.*`, `sandbox.*`
+- `agent:respondToInput` + `remember`: admin
+
+### `preferences`
+
+- group: `tts`
+- read: `tts:getQwen3Status`, `tts:getQwen3Voices`
+- write: `tts:abort`, `tts:cancelSetupQwen3`, `tts:speakOnce`
+- admin: `tts:setupQwen3`
+- `settings:set` write: `appearance.*`, `general.darkTheme`, `general.fontSize`, `general.language`, `general.lightTheme`, `general.theme`, `general.uiZoom`, `notification.*`, `shuvix.figureExport.*`, `shuvix.mobile.*`, `voice.*`, `window.*`
+
+### `telegram`
+
+- group: `telegram`
+- read: `telegram:listBots`
+- admin: `telegram:addBot`, `telegram:deleteBot`, `telegram:updateBot`, `telegram:validateToken`
+
+### `system`
+
+- group: `classifierLog`, `config`, `httpLog`, `settings`, `update`
+- read: `classifierLog:get`, `classifierLog:list`, `classifierLog:scenes`, `config:buildExportSnapshot`, `config:parseImportPayload`, `config:planImport`, `httpLog:get`, `httpLog:list`, `update:getLastEvent`
+- write: `classifierLog:clear`, `httpLog:clear`, `update:check`
+- admin: `config:applyImport`, `config:buildExportPayload`, `settings:set`, `update:download`, `update:install`
+- `settings:set` admin: `httpLog.*`, `updates.*`
 
 <!-- channels:end -->

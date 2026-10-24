@@ -44,6 +44,7 @@ export function buildNetworkPolicyPrompt(t: T, status: NetworkStatus): string {
               address: denial.address,
               device: denial.device || none,
               what: denial.summary,
+              scope: denial.scope || '—',
               rule: denial.rule
             })
           )

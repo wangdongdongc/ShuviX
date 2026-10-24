@@ -126,6 +126,11 @@ function DenialRow({ denial }: { denial: NetworkDenialInfo }): React.JSX.Element
       title={
         <span data-network-denial={denial.stage} className="font-mono text-[11px] select-text">
           {denial.summary}
+          {denial.scope ? (
+            <span data-network-denial-scope={denial.scope} className="text-text-tertiary">
+              {` · ${denial.scope}`}
+            </span>
+          ) : null}
         </span>
       }
       subtitle={

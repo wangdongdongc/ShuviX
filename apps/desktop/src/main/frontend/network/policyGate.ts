@@ -2,12 +2,16 @@
  * 远程访问的策略点位（2026-10-19，docs/network-policy/design.md）—— 网络服务在四个地方问安全策略：
  *
  *  - **socket**：TCP 连接刚建立、HTTP 还没解析 → `{type:'socket'}` × `connect`；拒绝 = 直接断开；
- *  - **request**：每个 HTTP 请求（含 WebSocket 升级）→ `{type:'request', method, path, query, route}` × `request`；
- *    拒绝 = 403，正文是规则的 prompt；
- *  - **channel**：WebSocket 上的每条 RPC → `{type:'channel', channel, group, kind, access, size, args}` × `invoke`；
- *    拒绝 = invoke 回 `ok:false`（`code:'denied'`），send 丢掉；
+ *  - **request**：每个 HTTP 请求（含 WebSocket 升级）→ `{type:'request', method, path, query, route, scope, access}`
+ *    × `request`；拒绝 = 403，正文是规则的 prompt；
+ *  - **channel**：WebSocket 上的每条 RPC → `{type:'channel', channel, group, scope, kind, access, size, args}` ×
+ *    `invoke`；拒绝 = invoke 回 `ok:false`（`code:'denied'`），send 丢掉；
  *  - **path**：文件路由（`/files/*`）与几条文件通道（`files:read` / `files:write` / `fs:listDirectories`）真正
- *    读写的位置 → `{type:'path', path, requestedPath, displayPath}` × `read` / `write`，tool = `files` / `fs`。
+ *    读写的位置 → `{type:'path', path, requestedPath, displayPath, scope, access}` × `read` / `write`，
+ *    tool = `files` / `fs`。
+ *
+ * request / channel / path 三处都带 `scope` 与 `access`（2026-10-23，docs/network-scope/design.md）：同一条
+ * 「scope × 访问级别」的规则在三处意思一致。词表与归类在 shared/channelAccess.ts。
  *
  * 主体恒是 `{kind:'network'}`，开放属性（`subject.<键>`）在每个阶段都给齐（还拿不到的给空值），见 networkSubject。
  * 判定走 judgeGate：**先完整结算，再把 ask 降级为拒绝** —— 网络点位没有人可问。guards.ts 的三道写死的门在这些
@@ -28,8 +32,12 @@ import {
   type SecurityObject,
   type SecuritySubject
 } from '@shuvix/agent-runtime'
-import { API_OVERRIDE_CHANNELS, API_TABLE } from '../../../shared/apiTable'
-import { channelCallAccessOf } from '../../../shared/channelAccess'
+import {
+  channelCallFactsOf,
+  channelGroupOf,
+  type CallFacts,
+  type ChannelScope
+} from '../../../shared/channelAccess'
 import { NETWORK_WS_PATH } from '../../../shared/networkEnvelope'
 import { NETWORK_WIDGET_PREFIX } from '../../../shared/networkRoutes'
 import type {
@@ -206,24 +214,19 @@ export function requestTarget(rawUrl: string | undefined): {
   }
 }
 
-/** 通道 → 它在通道表里的命名空间（`session:list` → `session`）；不在表里 → 空串 */
-const GROUP_OF: ReadonlyMap<string, string> = (() => {
-  const map = new Map<string, string>()
-  for (const [group, members] of Object.entries(API_TABLE)) {
-    for (const member of Object.values(members)) {
-      if (!map.has(member.channel)) map.set(member.channel, group)
-    }
-  }
-  for (const [group, members] of Object.entries(API_OVERRIDE_CHANNELS)) {
-    for (const member of Object.values(members)) {
-      if (member !== null && !map.has(member.channel)) map.set(member.channel, group)
-    }
-  }
-  return map
-})()
-
-export function channelGroupOf(channel: string): string {
-  return GROUP_OF.get(channel) ?? ''
+/**
+ * 一个 HTTP 请求的 scope 与访问级别（`object.scope` / `object.access`，与 channel 点位同一套词）：页面、脚本样式、
+ * 图表库与 /ws 升级是界面本身（app），文件路由是 files，`/w/…` 是 widgets；GET / HEAD / OPTIONS 是读，别的方法是写
+ */
+export function requestFactsOf(route: RequestRoute, method: string): CallFacts {
+  const scope: ChannelScope =
+    route === 'media' || route === 'preview' || route === 'download'
+      ? 'files'
+      : route === 'widget'
+        ? 'widgets'
+        : 'app'
+  const reading = ['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())
+  return { scope, access: reading ? 'read' : 'write' }
 }
 
 // ─────────────────────────── 拒绝记录 ───────────────────────────
@@ -238,6 +241,8 @@ export interface NetworkDenialEntry {
   readonly stage: 'socket' | 'request' | 'channel' | 'path'
   /** 对象摘要：`GET /`、`session:prompt`、文件路径 */
   readonly summary: string
+  /** 这次请求的 scope（socket 阶段没有 → 空串） */
+  readonly scope: string
   readonly address: string
   /** 设备 ID（请求带来的；第一次来、刚发了新 ID 的给新 ID） */
   readonly device: string
@@ -277,6 +282,7 @@ export class NetworkDenialLog {
       count: 1,
       stage: entry.stage,
       summary: entry.summary.slice(0, 300),
+      scope: entry.scope,
       address: entry.address,
       device: entry.device,
       rule,
@@ -395,7 +401,7 @@ export class NetworkPolicyGate {
       networkSubject(peer, undefined, '', this.interfaces),
       'connect',
       { type: 'socket' },
-      { stage: 'socket', summary: `${peer.localAddress}:${peer.localPort}` }
+      { stage: 'socket', summary: `${peer.localAddress}:${peer.localPort}`, scope: '' }
     )
   }
 
@@ -409,6 +415,7 @@ export class NetworkPolicyGate {
     request: { method: string; path: string; query: Record<string, string>; route: RequestRoute },
     issuedDevice?: string
   ): GateVerdict {
+    const facts = requestFactsOf(request.route, request.method)
     return this.judge(
       networkSubject(peer, http, '', this.interfaces),
       'request',
@@ -417,11 +424,14 @@ export class NetworkPolicyGate {
         method: request.method,
         path: request.path,
         query: request.query,
-        route: request.route
+        route: request.route,
+        scope: facts.scope,
+        access: facts.access
       },
       {
         stage: 'request',
         summary: `${request.method} ${request.path}`,
+        scope: facts.scope,
         ...(issuedDevice && !http.device ? { device: issuedDevice } : {})
       }
     )
@@ -434,18 +444,27 @@ export class NetworkPolicyGate {
     connection: string,
     call: ChannelCall
   ): GateVerdict {
+    const facts = channelCallFactsOf(call.channel, call.args)
     const object: SecurityObject = {
       type: 'channel',
       channel: call.channel,
       group: channelGroupOf(call.channel),
+      scope: facts.scope,
       kind: call.kind,
-      access: channelCallAccessOf(call.channel, call.args),
+      access: facts.access,
       size: call.size
     }
     Object.defineProperty(object, 'args', { enumerable: false, get: () => call.args })
+    // settings:set 按 key 定 scope：拒绝记录里带上 key，用户才看得出被拒的是哪一项
+    const key = (call.args[0] as { key?: unknown } | null | undefined)?.key
+    const summary =
+      call.channel === 'settings:set' && typeof key === 'string'
+        ? `${call.channel} ${key}`
+        : call.channel
     return this.judge(networkSubject(peer, http, connection, this.interfaces), 'invoke', object, {
       stage: 'channel',
-      summary: call.channel
+      summary,
+      scope: facts.scope
     })
   }
 
@@ -464,8 +483,8 @@ export class NetworkPolicyGate {
     return this.judge(
       networkSubject(peer, http, connection, this.interfaces),
       mode,
-      { type: 'path', path, displayPath: path },
-      { stage: 'path', summary: `${mode} ${path}` },
+      { type: 'path', path, displayPath: path, scope: 'files', access: mode },
+      { stage: 'path', summary: `${mode} ${path}`, scope: 'files' },
       tool
     )
   }

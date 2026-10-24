@@ -18,6 +18,9 @@
  *       admin 的 provider.listAll 被拒不连带会话列表），打开一条有消息的会话看到消息，web 的设置页打开；页面每次加载都调的
  *       app:window-ready / notification:reportActiveSession / consumePendingOpenSession 是 read、不被拒；每条拒绝都在
  *       channel 点位、规则 lan-read-only#0；被拒的通道打印出来
+ * NP-SC 按 scope 写的策略（「这台电脑以外只给 app / sessions / preferences」，2026-10-23）：局域网的 socket 上建会话、
+ *       和 agent 对话、换字号照常；终端、读文件、看安全策略、关沙箱被拒，话是规则的 prompt，拒绝记录带 scope；文件路由
+ *       （request 点位，scope files）403；从局域网地址打开 web 客户端，这么多 scope 被拒，会话列表与消息照样出来
  * NP-4  一个经局域网地址连着、什么也不发的 WebSocket：写一份拒绝它的 network-admission（不经应用）→ 定时核对接住，
  *       它以 1008 断开、原因是规则的话；127.0.0.1 上的连接照旧
  * NP-5  删掉用户策略回到内置：设置页的引导是 builtin 那一段（端口代进去）、带两个按钮、客户端行带设备 ID、「最近拒绝」
@@ -71,6 +74,8 @@ import { connectWs, type WsClient } from '../../harness/wsClient'
 const MODEL = 'e2e-model'
 const READ_ONLY_FILE = 'lan-read-only.md'
 const READ_ONLY_PROMPT = 'NP-3 devices on the local network may only look.'
+const PHONE_FILE = 'lan-phone.md'
+const PHONE_PROMPT = 'NP-SC this device may only chat.'
 const NP4_PROMPT = 'NP-4 from now on only this computer may connect.'
 /** 一个合法的设备 ID（22 个 base64url 字符）—— 冒充一台早就拿到 cookie 的浏览器 */
 const FIXED_DEVICE = 'NPe2eDeviceAAAAAAAAAAA'
@@ -90,6 +95,22 @@ const READ_ONLY_POLICY = [
   '    action: [invoke]',
   `    match: "!inCidr(subject.address, ['127.0.0.0/8', '::1']) && object.access != 'read'"`,
   `    prompt: ${READ_ONLY_PROMPT}`,
+  '---',
+  ''
+].join('\n')
+
+/** 「这台电脑以外只给 app / sessions / preferences」—— 按 scope 写，三个点位一条规则 */
+const PHONE_POLICY = [
+  '---',
+  'shuvix: policy v1',
+  'name: lan-phone',
+  'shuvix-displayName: NP phone',
+  'shuvix-policy-rules:',
+  '  - effect: deny',
+  '    subject.kind: [network]',
+  '    object.type: [request, channel, path]',
+  `    match: "!inCidr(subject.address, ['127.0.0.0/8', '::1']) && !(object.scope in ['app', 'sessions', 'preferences'])"`,
+  `    prompt: ${PHONE_PROMPT}`,
   '---',
   ''
 ].join('\n')
@@ -431,6 +452,121 @@ describe('network access: who may connect is a security policy', () => {
     )
   }, 150_000)
 
+  it('NP-SC a policy written on scopes: a chat-only device chats and changes its font size; terminal, files, security and the sandbox are refused', async (ctx) => {
+    if (!LAN) ctx.skip(NO_LAN)
+    closeSockets()
+    removeUserPolicy(app.home, READ_ONLY_FILE)
+    writeUserPolicy(app.home, NETWORK_ADMISSION_FILE, openAdmissionPolicy())
+    writeUserPolicy(app.home, PHONE_FILE, PHONE_POLICY)
+    await status()
+    const lan = await connect({ host: LAN, headers: { Cookie: `shuvix_device=${FIXED_DEVICE}` } })
+    const denied = { code: 'denied', message: PHONE_PROMPT }
+
+    // sessions：建会话、和 agent 对话
+    const created = await lan.invoke<{ id: string }>('session:create', { title: 'NP-SC chat' })
+    provider.reset()
+    provider.script({ text: 'NP-SC reply', usage: { prompt: 20, completion: 3 } })
+    await lan.invoke('agent:prompt', { sessionId: created.id, text: 'NP-SC question' })
+    await until(
+      async () =>
+        (
+          await app.main.eval<Array<{ role: string }>>(
+            `window.api.message.list(${JSON.stringify(created.id)})`
+          )
+        ).length === 2,
+      'the LAN device talked to the agent'
+    )
+    expect(await lan.invoke<unknown[]>('session:list')).toBeInstanceOf(Array)
+
+    // settings:set 按 key：字号是 preferences / write，放；沙箱是 security / admin，拒
+    const fontBefore = await app.main.eval<string | undefined>(
+      `window.api.settings.get('general.fontSize')`
+    )
+    expect(
+      (await lan.invokeRaw('settings:set', [{ key: 'general.fontSize', value: '15' }])).ok
+    ).toBe(true)
+    expect(await app.main.eval<string>(`window.api.settings.get('general.fontSize')`)).toBe('15')
+    await app.main.eval(
+      `window.api.settings.set({ key: 'general.fontSize', value: ${JSON.stringify(fontBefore ?? '14')} })`
+    )
+    const sandboxBefore = await app.main.eval<string | undefined>(
+      `window.api.settings.get('sandbox.enabled')`
+    )
+    const sandbox = await lan.invokeRaw('settings:set', [
+      { key: 'sandbox.enabled', value: 'false' }
+    ])
+    expect(sandbox.ok).toBe(false)
+    expect(sandbox.error).toStrictEqual(denied)
+    expect(
+      await app.main.eval<string | undefined>(`window.api.settings.get('sandbox.enabled')`)
+    ).toBe(sandboxBefore)
+
+    // 别的 scope：终端、文件、安全
+    for (const [channel, args] of [
+      ['terminal:create', [{ sessionId: created.id }]],
+      ['files:read', [{ path: '/etc/hosts' }]],
+      ['policy:list', []]
+    ] as Array<[string, unknown[]]>) {
+      const r = await lan.invokeRaw(channel, args)
+      expect(r.ok, channel).toBe(false)
+      expect(r.error, channel).toStrictEqual(denied)
+    }
+    // 文件路由在 request 点位上就是 files
+    const media = await lanProbe({
+      path: '/files/media?path=%2Fetc%2Fhosts',
+      headers: { Cookie: `shuvix_device=${FIXED_DEVICE}` }
+    })
+    expect(media.status).toBe(403)
+    expect(media.body?.toString('utf8')).toContain(PHONE_PROMPT)
+
+    const denials = (await status()).denials
+    const scopeOf = (summary: string): string | undefined =>
+      denials.find((d) => d.address === LAN && d.summary === summary)?.scope
+    expect(scopeOf('terminal:create')).toBe('terminal')
+    expect(scopeOf('files:read')).toBe('files')
+    expect(scopeOf('policy:list')).toBe('security')
+    // settings:set 的拒绝记录带着 key
+    expect(scopeOf('settings:set sandbox.enabled')).toBe('security')
+    expect(scopeOf('GET /files/media')).toBe('files')
+
+    // web 客户端：app 与 sessions 之外全被拒，页面照样出来、会话能打开
+    const logMark = networkDenialLines(app).length
+    const web = await openWebClient(app, P, { host: LAN })
+    try {
+      const sidebar = sidebarPane(web.page)
+      await until(
+        async () => ((await sidebar.titles()).includes('NP-SC chat') ? true : null),
+        'the chat-only page renders the session list'
+      )
+      expect(await sidebar.openSession('NP-SC chat')).toBe(true)
+      const chat = chatPane(web.page)
+      await chat.ready()
+      const items = await until(async () => {
+        const settled = await chat.settledItems()
+        return settled.length === 2 ? settled : null
+      }, 'the opened session shows its messages')
+      expect(items.map(({ role, text }) => ({ role, text }))).toEqual([
+        { role: 'user', text: 'NP-SC question' },
+        { role: 'assistant', text: 'NP-SC reply' }
+      ])
+      await sleep(2000)
+      const refused = [
+        ...new Set(
+          networkDenialLines(app)
+            .slice(logMark)
+            .filter((l) => l.address === LAN && l.stage === 'channel')
+            .map((l) => l.summary)
+        )
+      ]
+      console.log(`[NP-SC] channels the chat-only page was refused: ${JSON.stringify(refused)}`)
+      expect(await sidebar.titles()).toContain('NP-SC chat')
+    } finally {
+      await web.close()
+      await lan.invoke('session:delete', created.id).catch(() => undefined)
+      removeUserPolicy(app.home, PHONE_FILE)
+    }
+  }, 150_000)
+
   it('NP-4 a policy written while a LAN client is connected disconnects it with 1008 on the next refresh', async (ctx) => {
     if (!LAN) ctx.skip(NO_LAN)
     removeUserPolicy(app.home, READ_ONLY_FILE)
@@ -483,7 +619,9 @@ describe('network access: who may connect is a security policy', () => {
       policyCopy: true,
       addresses: [`http://127.0.0.1:${P}`]
     })
-    expect(shot.denials).toEqual(s.denials.map((d) => ({ stage: d.stage, summary: d.summary })))
+    expect(shot.denials).toEqual(
+      s.denials.map((d) => ({ stage: d.stage, summary: d.summary, scope: d.scope }))
+    )
 
     const requestsBefore = provider.requests().length
     const sessionsBefore = await app.main.eval<string[]>(

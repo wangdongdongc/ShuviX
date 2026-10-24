@@ -6,7 +6,8 @@
  *   PG-2 事实：peerFactsOf 拆开 IPv4 映射、给地址族；httpFactsOf 键小写、多值连接、取设备与 UA
  *   PG-3 主体：每个阶段都给齐全部键（socket 阶段 headers {}、device ''）；interface / cookies 惰性（没读不算）、不进 JSON
  *   PG-4 requestRouteOf / requestTarget / channelGroupOf
- *   PG-5 四个点位交给判定的 action / 对象 / tool；channel 的 args 惰性、不进 JSON；access 来自通道表
+ *   PG-5 四个点位交给判定的 action / 对象 / tool；channel 的 args 惰性、不进 JSON；access 来自通道表；request / channel /
+ *        path 都带 scope 与 access（settings:set 按 key、文件路由是 files、/w/ 的写方法是 write）
  *   PG-6 拒绝记录：放行不记；同一（地址、设备、规则、摘要）一分钟内合并、过了窗口另起一条；新 ID 记进 device；
  *        最多 200 条；onChange 只在新条目时调
  *   PG-7 判定抛错 → 拒绝（fail closed）且记一条 rule 'error'；没接上 → 一律放行
@@ -14,8 +15,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { networkInterfaces } from 'node:os'
 import type { GateVerdict, SecurityObject, SecuritySubject } from '@shuvix/agent-runtime'
+import { channelGroupOf } from '../../../../shared/channelAccess'
 import {
-  channelGroupOf,
   deviceCookieHeader,
   deviceOfCookieHeader,
   httpFactsOf,
@@ -29,7 +30,8 @@ import {
   parseCookies,
   peerFactsOf,
   requestRouteOf,
-  requestTarget
+  requestTarget,
+  type RequestRoute
 } from '../policyGate'
 
 const ALLOW: GateVerdict = {
@@ -219,13 +221,16 @@ describe('PG-5 四个点位', () => {
       method: 'GET',
       path: '/',
       query: {},
-      route: 'page'
+      route: 'page',
+      scope: 'app',
+      access: 'read'
     })
     const channel = calls[2].object
     expect(channel).toMatchObject({
       type: 'channel',
       channel: 'session:list',
       group: 'session',
+      scope: 'sessions',
       kind: 'invoke',
       access: 'read',
       size: 42
@@ -233,8 +238,60 @@ describe('PG-5 四个点位', () => {
     expect(channel.args).toBe(args)
     expect('args' in JSON.parse(JSON.stringify(channel))).toBe(false)
     expect(calls[2].subject.attrs?.connection).toBe('ws:1')
-    expect(calls[3].object).toEqual({ type: 'path', path: '/tmp/a.md', displayPath: '/tmp/a.md' })
+    expect(calls[3].object).toEqual({
+      type: 'path',
+      path: '/tmp/a.md',
+      displayPath: '/tmp/a.md',
+      scope: 'files',
+      access: 'write'
+    })
     expect(calls[3].tool).toEqual({ name: 'files', operation: 'write' })
+  })
+
+  it('PG-5 scope 与 access：settings:set 按 key；文件路由与 widget 路由；写方法', () => {
+    const { gate, calls } = recordingGate()
+    const set = (key: unknown): void => {
+      gate.judgeChannel(PEER, HTTP, 'ws:1', {
+        channel: 'settings:set',
+        kind: 'invoke',
+        size: 10,
+        args: [{ key, value: 'x' }]
+      })
+    }
+    set('general.theme')
+    set('sandbox.enabled')
+    set('no.such.key')
+    expect(calls.map((c) => [c.object.scope, c.object.access])).toEqual([
+      ['preferences', 'write'],
+      ['security', 'admin'],
+      ['system', 'admin']
+    ])
+    // 拒绝记录的摘要带着 key（settings:set 按 key 定 scope，光写通道名分不出是哪一项）
+    const denials = new NetworkDenialLog()
+    const { gate: refusing } = recordingGate(() => DENY, denials)
+    refusing.judgeChannel(PEER, HTTP, 'ws:1', {
+      channel: 'settings:set',
+      kind: 'invoke',
+      size: 10,
+      args: [{ key: 'sandbox.enabled', value: 'false' }]
+    })
+    expect(denials.recent()).toMatchObject([
+      { stage: 'channel', summary: 'settings:set sandbox.enabled', scope: 'security' }
+    ])
+    calls.length = 0
+    const request = (method: string, path: string, route: RequestRoute): void => {
+      gate.judgeRequest(PEER, HTTP, { method, path, query: {}, route })
+    }
+    request('GET', '/files/media', 'media')
+    request('GET', '/w/x/', 'widget')
+    request('POST', '/w/x/api', 'widget')
+    request('GET', '/ws', 'socket')
+    expect(calls.map((c) => [c.object.scope, c.object.access])).toEqual([
+      ['files', 'read'],
+      ['widgets', 'read'],
+      ['widgets', 'write'],
+      ['app', 'read']
+    ])
   })
 })
 
@@ -258,6 +315,7 @@ describe('PG-6 拒绝记录', () => {
         count: 2,
         stage: 'request',
         summary: 'GET /',
+        scope: 'app',
         address: '192.168.1.23',
         device: DEVICE,
         rule: 'p#0',

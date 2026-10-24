@@ -19,7 +19,15 @@ const SAMPLES: Record<
 > = {
   socket: { object: { type: 'socket' }, action: 'connect', tool: { name: '', operation: '' } },
   request: {
-    object: { type: 'request', method: 'GET', path: '/', query: {}, route: 'page' },
+    object: {
+      type: 'request',
+      method: 'GET',
+      path: '/',
+      query: {},
+      route: 'page',
+      scope: 'app',
+      access: 'read'
+    },
     action: 'request',
     tool: { name: '', operation: '' }
   },
@@ -28,6 +36,7 @@ const SAMPLES: Record<
       type: 'channel',
       channel: 'session:list',
       group: 'session',
+      scope: 'sessions',
       kind: 'invoke',
       access: 'read',
       size: 64,
@@ -41,7 +50,9 @@ const SAMPLES: Record<
       type: 'path',
       path: '/home/user/notes/a.md',
       requestedPath: '/home/user/notes/a.md',
-      displayPath: '/home/user/notes/a.md'
+      displayPath: '/home/user/notes/a.md',
+      scope: 'files',
+      access: 'read'
     },
     action: 'read',
     tool: { name: 'files', operation: 'read' }

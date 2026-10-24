@@ -18,7 +18,11 @@
  *
  * 表必须恰好覆盖全部请求通道 —— `__tests__/channelAccess.test.ts` 核对：新加的请求通道没在这里归类、或这里留着
  * 已经不是请求通道的条目，测试都会失败。不在表里的通道 `channelAccessOf` 一律按 `admin`（最严）。
+ *
+ * 每条通道另有一个 **scope**（`object.scope`，2026-10-23，docs/network-scope/design.md）：它管的是 ShuviX 的哪一块，
+ * 见文件后半的 CHANNEL_SCOPES。少数调用按这一次带的内容定 scope 与 access（channelCallFactsOf）。
  */
+import { API_OVERRIDE_CHANNELS, API_TABLE } from './apiTable'
 
 export type ChannelAccess = 'read' | 'write' | 'admin'
 
@@ -119,7 +123,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   // ─── settings：设置 ───
   'settings:getAll': 'read', // 设置表里没有机密（凭据都在各自的表里）
   'settings:get': 'read',
-  'settings:set': 'admin',
+  'settings:set': 'admin', // 按 key 定（SETTING_KEY_FACTS）；这一档是 key 缺了 / 不认识时的
   'settings:getKnownKeys': 'read',
   'settings:sandboxStatus': 'read',
 
@@ -404,15 +408,227 @@ export function channelAccessOf(channel: string): ChannelAccess {
   return Object.hasOwn(CHANNEL_ACCESS, channel) ? CHANNEL_ACCESS[channel] : 'admin'
 }
 
+// ─────────────────────────── scope ───────────────────────────
+
 /**
- * 一次请求的访问级别：通常就是通道的那一档。例外：回答询问卡时勾了「允许并记住」
- * （`agent:respondToInput` 的 `response.extra.rememberPath` / 会话询问的 `extra.remember`）是往会话权限表里写
- * 一行，与 `session:grantAcl` 同一档（admin）—— 否则只许 write 的设备绕过权限表的那一档，答一张卡就给会话加上
- * 永久授权。
+ * scope 的词表 —— 安全策略的事实 `object.scope`：这次请求管的是 ShuviX 的哪一块。按**它管的是什么**分，不按它出现在
+ * 哪个 tab（「通用」里同时有外观、默认模型、命令分类器、网络访问）。词表是对用户的契约：知识库 `network-policy` 与
+ * `network-channels` 逐个讲它管什么、界面上在哪，改名就是不兼容 —— 新通道归进已有的 scope，真要加一个是一次显式的
+ * 决定（用户裁决 2026-10-23：15 个，一个人记得住）。
+ *
+ *  - `app`：页面每次加载都要的读取与应用外壳（窗口、右键菜单、通知、悬浮聊天）—— 拒掉它的 read，页面就打不开；
+ *  - `sessions`：会话、和 agent 对话、消息、子会话、后台任务、运行时资源、斜杠命令、日历与日报；
+ *  - `projects`：项目，含项目环境变量；
+ *  - `files`：工作目录文件的列 / 读 / 写 / 预览 / 下载、笔记本协作编辑、Artifacts、服务端目录浏览；
+ *  - `terminal`：终端；
+ *  - `browser`：内置浏览器（标签页、浏览、DevTools、站点数据、证书例外）与它的设置项；
+ *  - `widgets`：Widgets 与它们的独立窗口；
+ *  - `knowledge`：知识库与条目；
+ *  - `agents`：智能体档案、Bot、默认智能体；
+ *  - `extensions`：工具、MCP 服务器、技能、数据库连接、Chrome 扩展；
+ *  - `models`：提供商（含 API key 与订阅登录）、模型、默认模型与思考档位；
+ *  - `security`：安全策略、hooks（自动审查是一个 hook）、会话权限表、命令沙箱、命令分类器、远程访问本身；
+ *  - `preferences`：外观、语言、字号、缩放、通知开关、语音与 TTS；
+ *  - `telegram`：Telegram Bot；
+ *  - `system`：应用更新、配置导入导出、监视器日志（LLM 请求日志、分类器日志）。
  */
+export const CHANNEL_SCOPES = [
+  'app',
+  'sessions',
+  'projects',
+  'files',
+  'terminal',
+  'browser',
+  'widgets',
+  'knowledge',
+  'agents',
+  'extensions',
+  'models',
+  'security',
+  'preferences',
+  'telegram',
+  'system'
+] as const
+
+export type ChannelScope = (typeof CHANNEL_SCOPES)[number]
+
+/**
+ * 通道表的命名空间（`window.api.<group>`，即策略里的 `object.group`）→ scope。一个分组整体落在一个 scope 里，
+ * 个别通道的例外写在 CHANNEL_SCOPE_OVERRIDES。测试核对：每条请求通道所在的分组都在这里。
+ */
+export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
+  app: 'app',
+  contextMenu: 'app',
+  notification: 'app',
+  pinChat: 'app',
+  shuvixMd: 'app',
+  settings: 'app', // 读；settings:set 按 key 定（SETTING_KEY_FACTS）
+  agent: 'sessions',
+  session: 'sessions',
+  message: 'sessions',
+  calendar: 'sessions',
+  runtime: 'sessions',
+  bgTask: 'sessions',
+  command: 'sessions',
+  mentions: 'sessions',
+  sync: 'sessions',
+  project: 'projects',
+  files: 'files',
+  fs: 'files',
+  liveDoc: 'files',
+  download: 'files',
+  artifact: 'files',
+  terminal: 'terminal',
+  browserView: 'browser',
+  browserData: 'browser',
+  widget: 'widgets',
+  widgetWindow: 'widgets',
+  knowledge: 'knowledge',
+  subAgent: 'agents',
+  bot: 'agents',
+  mdMeta: 'agents', // 补缺值只有 agent 的模型与思考档位（MD_FM_FILL_KEYS）
+  tools: 'extensions',
+  mcp: 'extensions',
+  skill: 'extensions',
+  dbCredential: 'extensions',
+  chromeExtension: 'extensions',
+  provider: 'models',
+  policy: 'security',
+  hook: 'security',
+  network: 'security',
+  tts: 'preferences',
+  telegram: 'telegram',
+  update: 'system',
+  config: 'system',
+  httpLog: 'system',
+  classifierLog: 'system'
+}
+
+/** 不随分组走的通道 */
+export const CHANNEL_SCOPE_OVERRIDES: Readonly<Record<string, ChannelScope>> = {
+  // 会话权限表：谁能免询问地读写哪里 —— 安全状态
+  'session:listAcl': 'security',
+  'session:grantAcl': 'security',
+  'session:setAclAccess': 'security',
+  'session:removeAclEntry': 'security',
+  'knowledge:mentionEntries': 'knowledge',
+  // 页面每次加载都调（useAppInit）：拒掉它们整页起不来，所以归 app
+  'project:getKnownFields': 'app',
+  'tools:presentations': 'app',
+  // 属性卡读一份注册表笔记的元数据（agent / bot / hook / policy 都有）
+  'mdMeta:get': 'app',
+  // 停用 / 启用内置的安全策略与 hook（MD_DISABLEABLE_KINDS）—— 关掉内置自动审查走的就是它
+  'mdMeta:setEnabled': 'security',
+  // 按 key 定；这一格是 key 缺了 / 不认识时的
+  'settings:set': 'system'
+}
+
+/** 一条通道的 scope；不在任何分组里的 → system */
+export function channelScopeOf(channel: string): ChannelScope {
+  if (Object.hasOwn(CHANNEL_SCOPE_OVERRIDES, channel)) return CHANNEL_SCOPE_OVERRIDES[channel]
+  const group = channelGroupOf(channel)
+  return group !== '' && Object.hasOwn(GROUP_SCOPE, group) ? GROUP_SCOPE[group] : 'system'
+}
+
+/** 通道 → 它在通道表里的命名空间（`session:list` → `session`）；不在表里 → 空串 */
+const GROUP_OF: ReadonlyMap<string, string> = (() => {
+  const map = new Map<string, string>()
+  for (const [group, members] of Object.entries(API_TABLE)) {
+    for (const member of Object.values(members)) {
+      if (!map.has(member.channel)) map.set(member.channel, group)
+    }
+  }
+  for (const [group, members] of Object.entries(API_OVERRIDE_CHANNELS)) {
+    for (const member of Object.values(members)) {
+      if (member !== null && !map.has(member.channel)) map.set(member.channel, group)
+    }
+  }
+  return map
+})()
+
+export function channelGroupOf(channel: string): string {
+  return GROUP_OF.get(channel) ?? ''
+}
+
+// ─────────────────────────── 设置项 ───────────────────────────
+
+export interface CallFacts {
+  readonly scope: ChannelScope
+  readonly access: ChannelAccess
+}
+
+/**
+ * `settings:set` 按 key 定 scope 与 access（用户裁决 2026-10-23）：**只影响外观与个人习惯的 → write；改变 agent
+ * 能做什么、花谁的钱、连到哪、谁能进来的 → admin**。键以 `.` 结尾的是前缀。精确 key 优先，其次最长的前缀，都不中 →
+ * `system` + `admin`（最严）。测试核对 KNOWN_SETTINGS 与代码里写的每个 key 都落在一条明确的条目上。
+ */
+export const SETTING_KEY_FACTS: Readonly<Record<string, CallFacts>> = {
+  'general.theme': { scope: 'preferences', access: 'write' },
+  'general.darkTheme': { scope: 'preferences', access: 'write' },
+  'general.lightTheme': { scope: 'preferences', access: 'write' },
+  'general.language': { scope: 'preferences', access: 'write' },
+  'general.fontSize': { scope: 'preferences', access: 'write' },
+  'general.uiZoom': { scope: 'preferences', access: 'write' },
+  'appearance.': { scope: 'preferences', access: 'write' },
+  'notification.': { scope: 'preferences', access: 'write' },
+  'voice.': { scope: 'preferences', access: 'write' }, // TTS 的引擎、音色、语速；装 Qwen3 另走 tts:setupQwen3（admin）
+  'window.': { scope: 'preferences', access: 'write' },
+  'shuvix.mobile.': { scope: 'preferences', access: 'write' },
+  'shuvix.figureExport.': { scope: 'preferences', access: 'write' },
+  'browser.': { scope: 'browser', access: 'write' }, // 搜索引擎、视图模式、DevTools 高度
+  'tool.browser.': { scope: 'browser', access: 'admin' }, // 忽略证书错误
+  'general.defaultProvider': { scope: 'models', access: 'admin' },
+  'general.defaultModel': { scope: 'models', access: 'admin' },
+  'general.defaultThinkingLevel': { scope: 'models', access: 'admin' },
+  'provider.': { scope: 'models', access: 'admin' },
+  'general.defaultChatAgent': { scope: 'agents', access: 'admin' },
+  'general.defaultProjectAgent': { scope: 'agents', access: 'admin' },
+  'session.': { scope: 'sessions', access: 'admin' }, // 重启后续跑中断的会话
+  'sandbox.': { scope: 'security', access: 'admin' },
+  'general.classifierProvider': { scope: 'security', access: 'admin' }, // 命令风险分类器：read_only 的命令跳过审查
+  'general.classifierModel': { scope: 'security', access: 'admin' },
+  'network.': { scope: 'security', access: 'admin' },
+  'httpLog.': { scope: 'system', access: 'admin' }, // 把每次 LLM 请求的内容记到磁盘
+  'updates.': { scope: 'system', access: 'admin' }
+}
+
+const UNKNOWN_SETTING: CallFacts = { scope: 'system', access: 'admin' }
+
+/** 一个设置项的 scope 与 access；`matched`：落在哪一条（没有 → 空串，按最严） */
+export function settingKeyFactsOf(key: unknown): CallFacts & { matched: string } {
+  if (typeof key !== 'string' || key === '') return { ...UNKNOWN_SETTING, matched: '' }
+  if (!key.endsWith('.') && Object.hasOwn(SETTING_KEY_FACTS, key)) {
+    return { ...SETTING_KEY_FACTS[key], matched: key }
+  }
+  let best = ''
+  for (const entry of Object.keys(SETTING_KEY_FACTS)) {
+    if (entry.endsWith('.') && key.startsWith(entry) && entry.length > best.length) best = entry
+  }
+  return best ? { ...SETTING_KEY_FACTS[best], matched: best } : { ...UNKNOWN_SETTING, matched: '' }
+}
+
+// ─────────────────────────── 一次调用 ───────────────────────────
+
+/**
+ * 一次请求的 scope 与访问级别：通常就是通道的那一格。例外两处：
+ *  - `settings:set`：按要写的 key（SETTING_KEY_FACTS）；
+ *  - 回答询问卡时勾了「允许并记住」（`agent:respondToInput` 的 `response.extra.rememberPath` / 会话询问的
+ *    `extra.remember`）是往会话权限表里写一行，与 `session:grantAcl` 同一格（security + admin）—— 否则只许 write
+ *    的设备绕过权限表的那一档，答一张卡就给会话加上永久授权。
+ */
+export function channelCallFactsOf(channel: string, args: readonly unknown[]): CallFacts {
+  if (channel === 'settings:set') {
+    const { scope, access } = settingKeyFactsOf((args[0] as { key?: unknown } | null)?.key)
+    return { scope, access }
+  }
+  if (channel === 'agent:respondToInput' && remembersGrant(args[0])) {
+    return { scope: 'security', access: 'admin' }
+  }
+  return { scope: channelScopeOf(channel), access: channelAccessOf(channel) }
+}
+
 export function channelCallAccessOf(channel: string, args: readonly unknown[]): ChannelAccess {
-  if (channel === 'agent:respondToInput' && remembersGrant(args[0])) return 'admin'
-  return channelAccessOf(channel)
+  return channelCallFactsOf(channel, args).access
 }
 
 function remembersGrant(params: unknown): boolean {

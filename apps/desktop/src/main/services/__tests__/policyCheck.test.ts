@@ -17,6 +17,10 @@
  *   PC-12 本机地址按对端网段挑：subject.localAddress / interface 是那块网卡的
  *   PC-13 设备：cookie 带上设备 ID → subject.device；只放某台设备的策略分得开两台
  *   PC-14 写入回执的那一句（policyCheckHint）：管网络的合法策略才有、带路径；agent 主体的、非法的、不是策略的 → null
+ *   PC-15 --scopes：行是 scope、列是设备，格子三档逐条判（全放 = 字母、全拒 = -、部分 = ~ 并列在表下、没有这一档 = .）；
+ *         被准入拒掉的设备整列 -、写明拒在哪一步；--scopes 不带请求参数
+ *   PC-16 --setting：settings:set 按 key 定 scope 与 access（主题 preferences / write，沙箱 security / admin），
+ *         规则按 scope 写就分得开
  */
 import { describe, expect, it } from 'vitest'
 import type { networkInterfaces } from 'node:os'
@@ -68,6 +72,7 @@ function status(
       count: 1,
       stage: 'request' as const,
       summary: 'GET /',
+      scope: 'app',
       address: d.address,
       device: d.device ?? '',
       rule: 'network-admission#0',
@@ -286,7 +291,8 @@ describe('policyCheck', () => {
       ]
     })
     expect(r.exitCode).toBe(0)
-    expect(r.stdout).toContain('invoke settings:set (group settings, access admin)')
+    // 没给 key 的 settings:set 按最严（system + admin）
+    expect(r.stdout).toContain('invoke settings:set (group settings, scope system, access admin)')
 
     const typo = run({
       flags: [
@@ -303,7 +309,7 @@ describe('policyCheck', () => {
     const cases: Array<[Array<[string, string]>, string]> = [
       [
         [['ip', '1.2.3.4']],
-        'Unknown option --ip. Options: --from, --device, --page, --channel, --read, --write, --expect.'
+        'Unknown option --ip. Options: --from, --device, --page, --channel, --setting, --read, --write, --expect, --scopes.'
       ],
       [
         [
@@ -320,7 +326,7 @@ describe('policyCheck', () => {
           ['page', '/'],
           ['channel', 'session:list']
         ],
-        'Give one of --page, --channel, --read, --write'
+        'Give one of --page, --channel, --setting, --read, --write'
       ],
       [
         [
@@ -436,7 +442,9 @@ describe('policyCheck', () => {
     )
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain('Request: 127.0.0.1 → read /Users/u/secret/key.txt')
-    expect(r.stdout).toMatch(/channel\s+allow {2}invoke files:read \(group files, access read\)/)
+    expect(r.stdout).toMatch(
+      /channel\s+allow {2}invoke files:read \(group files, scope files, access read\)/
+    )
     expect(r.stdout).toMatch(
       /path\s+deny {3}read \/Users\/u\/secret\/key\.txt — network-files#0: No secrets\./
     )
@@ -515,6 +523,102 @@ describe('policyCheck', () => {
         deps({ users: [phoneOnly] })
       ).exitCode
     ).toBe(0)
+  })
+
+  /** 局域网的设备只能碰 app / sessions / preferences，且不能删会话 */
+  const scoped = userFile(
+    policyText(
+      'network-admission',
+      [
+        '  - effect: deny',
+        '    object.type: [request]',
+        `    match: "!inCidr(subject.address, ['127.0.0.0/8', '::1', '192.168.1.0/24'])"`,
+        '  - effect: deny',
+        '    object.type: [request, channel]',
+        `    match: "!inCidr(subject.address, ['127.0.0.0/8', '::1']) && !(object.scope in ['app', 'sessions', 'preferences'])"`,
+        '    prompt: Not this part.',
+        '  - effect: deny',
+        '    object.type: [channel]',
+        `    match: "!inCidr(subject.address, ['127.0.0.0/8', '::1']) && object.channel == 'session:delete'"`
+      ].join('\n')
+    ),
+    'network-admission.md'
+  )
+
+  it('PC-15 --scopes: scope × device matrix, every call checked', () => {
+    const r = run({ flags: [['scopes', '']] }, deps({ users: [scoped] }))
+    expect(r.exitCode, r.stderr).toBe(0)
+    const header = r.stdout.split('\n').find((l) => l.includes('this computer'))!
+    expect(header).toContain('outside')
+    // 本机全放；外网被准入拒掉，整列 -
+    expect(row(r.stdout, 'app')).toBe('app rw. --.')
+    expect(row(r.stdout, 'security')).toBe('security rwa ---')
+    expect(r.stdout).toContain('Refused before any call:')
+    expect(r.stdout).toMatch(/- outside: refused at the request step by network-admission#0/)
+
+    const lan = run(
+      {
+        flags: [
+          ['scopes', ''],
+          ['from', '192.168.1.23']
+        ]
+      },
+      deps({ users: [scoped] })
+    )
+    expect(lan.exitCode, lan.stderr).toBe(0)
+    expect(row(lan.stdout, 'app')).toBe('app rw.')
+    // 会话里 write 部分被拒（session:delete），列在表下；admin 是 settings:set session.*
+    expect(row(lan.stdout, 'sessions')).toBe('sessions r~a')
+    expect(lan.stdout).toMatch(
+      /- 192\.168\.1\.23 · sessions write: 1 of \d+ refused \(network-admission#2\): session:delete/
+    )
+    expect(row(lan.stdout, 'preferences')).toBe('preferences rwa')
+    expect(row(lan.stdout, 'security')).toBe('security ---')
+    expect(row(lan.stdout, 'files')).toBe('files --.')
+    expect(row(lan.stdout, 'terminal')).toBe('terminal .-.')
+    expect(lan.stdout).not.toContain('Refused before any call:')
+
+    const bad = run({
+      flags: [
+        ['scopes', ''],
+        ['channel', 'session:list']
+      ]
+    })
+    expect(bad.exitCode).toBe(2)
+    expect(bad.stderr).toContain(
+      '--scopes checks every call of every scope; it does not take --channel.'
+    )
+  })
+
+  it('PC-16 --setting: settings:set takes the scope and access of the key', () => {
+    const theme = run(
+      {
+        flags: [
+          ['from', '192.168.1.23'],
+          ['setting', 'general.theme'],
+          ['expect', 'allow']
+        ]
+      },
+      deps({ users: [scoped] })
+    )
+    expect(theme.exitCode, theme.stdout).toBe(0)
+    expect(theme.stdout).toContain('Request: 192.168.1.23 → change setting general.theme')
+    expect(theme.stdout).toContain(
+      'invoke settings:set key general.theme (group settings, scope preferences, access write)'
+    )
+    const sandbox = run(
+      {
+        flags: [
+          ['from', '192.168.1.23'],
+          ['setting', 'sandbox.enabled'],
+          ['expect', 'deny']
+        ]
+      },
+      deps({ users: [scoped] })
+    )
+    expect(sandbox.exitCode, sandbox.stdout).toBe(0)
+    expect(sandbox.stdout).toContain('scope security, access admin')
+    expect(sandbox.stdout).toContain('network-admission#1: Not this part.')
   })
 
   it('PC-14 the write receipt line: only for a valid policy with network rules, with the path', () => {
