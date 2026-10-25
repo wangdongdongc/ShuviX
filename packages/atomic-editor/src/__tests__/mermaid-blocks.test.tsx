@@ -243,6 +243,7 @@ describe('失败关闭（AM-5 / AM-9）', () => {
       width: 10,
       height: 10,
       type: 'flowchart',
+      mermaidType: 'flowchart-v2',
       links: [],
     });
     const m = await mount(mermaidDoc('graph TD\n  am9a --> am9b'));
@@ -255,6 +256,7 @@ describe('失败关闭（AM-5 / AM-9）', () => {
       width: 10,
       height: 10,
       type: 'flowchart',
+      mermaidType: 'flowchart-v2',
       links: [],
     });
     const bad = await mount(mermaidDoc('graph TD\n  am9c --> am9d'));
@@ -280,7 +282,7 @@ describe('字体（AM-6）', () => {
   const stubContentFont = (fontFamily: string, fontSize: string): void => {
     setGetComputedStyle(((el: Element, pseudo?: string | null) => {
       if (isContentDom(el)) {
-        return { fontFamily, fontSize } as unknown as CSSStyleDeclaration;
+        return { fontFamily, fontSize, getPropertyValue: () => '' } as unknown as CSSStyleDeclaration;
       }
       return realGetComputedStyle.call(window, el, pseudo);
     }) as typeof window.getComputedStyle);

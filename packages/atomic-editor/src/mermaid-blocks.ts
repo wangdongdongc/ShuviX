@@ -34,8 +34,10 @@ import { attachFigureExport, type FigureExportConfig } from './figure-export';
 //     a diagram sits on the editor surface and follows the theme exactly
 //     like an ```svg figure. mermaid.js's `default` theme was light-only,
 //     which is what the white card used to be for.
-//  3. **The authored sanitizer tier.** pele's output carries no <style>,
-//     <foreignObject> or url(), so it passes the strictest tier — the shared
+//  3. **The authored sanitizer tier.** pele's output carries no <style> or
+//     <foreignObject> (the latter only with a `math` resolver returning HTML,
+//     which we don't pass), and its only url() are fragment references (the
+//     sankey link gradients), so it passes the strictest tier — the shared
 //     render-and-sanitize step lives in chat-protocol's `mermaidFence.ts`,
 //     the same one the chat renderer calls.
 //
@@ -60,20 +62,35 @@ function detectMermaidType(code: string): DiagramType | null {
   }
 }
 
-/** Font of the editor's text — pele measures labels with it, so it must be the font that draws them. */
-function editorFont(view: EditorView): { family: string; size: number } {
-  const style = getComputedStyle(view.contentDOM);
-  const size = Math.round(parseFloat(style.fontSize));
-  return { family: style.fontFamily, size: Number.isFinite(size) && size > 0 ? size : 14 };
+/** The fallback stack inline-preview.css gives inline code when `--atomic-editor-font-mono` is unset. */
+const EDITOR_MONO_FALLBACK = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+
+interface EditorFont {
+  family: string;
+  /** Inline code's font, for `<code>` / `<kbd>` in labels. */
+  mono: string;
+  size: number;
 }
 
-function renderMermaid(code: string, font: { family: string; size: number }): MermaidRenderResult {
-  const key = `${font.family}\u0000${font.size}\u0000${code}`;
+/** Fonts of the editor's text — pele measures labels with them, so they must be the fonts that draw them. */
+function editorFont(view: EditorView): EditorFont {
+  const style = getComputedStyle(view.contentDOM);
+  const size = Math.round(parseFloat(style.fontSize));
+  return {
+    family: style.fontFamily,
+    mono: style.getPropertyValue('--atomic-editor-font-mono').trim() || EDITOR_MONO_FALLBACK,
+    size: Number.isFinite(size) && size > 0 ? size : 14,
+  };
+}
+
+function renderMermaid(code: string, font: EditorFont): MermaidRenderResult {
+  const key = `${font.family}\u0000${font.mono}\u0000${font.size}\u0000${code}`;
   const hit = mermaidCache.get(key);
   if (hit) return hit;
   const result = renderMermaidFigure(engine, code, {
     closed: true,
     fontFamily: font.family,
+    fontFamilyMono: font.mono,
     fontSize: font.size,
   }) ?? { error: 'Mermaid render failed' };
   mermaidCache.set(key, result);

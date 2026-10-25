@@ -57,13 +57,28 @@ const SETTLED_CACHE_MAX = 64
 /** 卡片的左右内边距（p-3）：放图那一格比卡片窄这么多 */
 const FIGURE_PADDING_X = 24
 
-function settledFigure(code: string, fontFamily: string): MermaidRenderResult {
-  const key = `${fontFamily}\u0000${code}`
+/** 对话里画字的两种字体：正文是 body 的字体，等宽的与正文里的 `code` 同一份（base.css） */
+interface ChatFonts {
+  fontFamily: string
+  /** 没接上 themes.css 时为空，交给 pele 的缺省 */
+  fontFamilyMono?: string
+}
+
+function chatFonts(): ChatFonts {
+  const style = getComputedStyle(document.body)
+  return {
+    fontFamily: style.fontFamily,
+    fontFamilyMono: style.getPropertyValue('--theme-font-mono').trim() || undefined
+  }
+}
+
+function settledFigure(code: string, fonts: ChatFonts): MermaidRenderResult {
+  const key = `${fonts.fontFamily}\u0000${fonts.fontFamilyMono ?? ''}\u0000${code}`
   const hit = settledCache.get(key)
   if (hit) return hit
   const result = renderMermaidFigure(engine, code, {
     closed: true,
-    fontFamily,
+    ...fonts,
     fontSize: MERMAID_FONT_SIZE
   }) ?? { error: 'Mermaid render failed' }
   settledCache.set(key, result)
@@ -140,13 +155,13 @@ export function MermaidBlock({
   const frameKey = closed ? code : code.slice(0, code.lastIndexOf('\n') + 1)
   const result = useMemo((): MermaidRenderResult | null => {
     if (!typeReady) return null
-    const fontFamily = getComputedStyle(document.body).fontFamily
-    const opts = { fontFamily, fontSize: MERMAID_FONT_SIZE }
+    const fonts = chatFonts()
+    const opts = { ...fonts, fontSize: MERMAID_FONT_SIZE }
     const draw = (fitWidth?: number): MermaidRenderResult | null => {
       if (settled) {
         return fitWidth
           ? renderMermaidFigure(engine, frameKey, { ...opts, closed: true, fitWidth })
-          : settledFigure(frameKey, fontFamily)
+          : settledFigure(frameKey, fonts)
       }
       const r = renderMermaidFigure(engine, frameKey, { ...opts, closed, fitWidth })
       // 围栏已经闭合、消息却还在写，而这段源码画不出来：消息写完之前那还不算失败 ——

@@ -5,8 +5,9 @@
  * 渲染器是 pele（Obsidian 团队的 mermaid → SVG 渲染器，2026-10-17 替换了 mermaid.js）。换它的理由，
  * 也是 mermaid 现在与 ```svg 围栏走同一条路的理由：
  *
- *  - **产物是 token 着色的静态 SVG。** 没有 `<style>` / `<foreignObject>` / `url()`，颜色全是
- *    `var(--pele-*)`。于是它过的是**手写档**净化（sanitizeAuthoredSvg，比 mermaid.js 那档严），
+ *  - **产物是 token 着色的静态 SVG。** 没有 `<style>` 和 `<foreignObject>`（后者只在传了 `math`
+ *    解析器、而它返回 HTML 时才出现，这里不传），`url()` 只有片段引用（1.9 起桑基图的连线渐变，
+ *    因为传了 `idPrefix`），颜色全是 `var(--pele-*)`。于是它过的是**手写档**净化（sanitizeAuthoredSvg，比 mermaid.js 那档严），
  *    颜色由 themes.css 里 `.pele` 那段映射到 ShuviX 的 token —— 切主题不重渲；导出走手写图
  *    同一条烘焙路径（bakeAuthoredSvg），不再按主题另渲一张。
  *  - **同步、亚毫秒级。** 于是流式中能逐帧画（见 mermaidFrameSources），不必等源码写完；
@@ -24,6 +25,7 @@ export const MERMAID_FENCE_LANG = 'mermaid'
 /** 这里会传给渲染器的选项 —— pele `RenderOptions` 的子集 */
 export interface MermaidRenderOptions {
   fontFamily?: string
+  fontFamilyMono?: string
   fontSize?: number
   maxWidth?: number
   directionBreakpoint?: number
@@ -147,6 +149,8 @@ export function* mermaidFrameSources(code: string, closed: boolean): Generator<s
  * 渲染一段 mermaid 源码：按帧挑候选 → 渲染 → 手写档净化。
  *
  * - `closed`：见 mermaidFrameSources。
+ * - `fontFamily` / `fontFamilyMono`：画字的正文字体与等宽字体。pele 按它们量字宽，也把它们写进 SVG
+ *   当字体，所以要传宿主里真正画这些字的那两个（等宽的给标签里的 `<code>` / `<kbd>` 等，1.9 起）。
  * - `fitWidth`：放图的那一格有多宽。图按自然尺寸放得下就用自然尺寸；放不下才按这个宽度重排一次
  *   （pele 会换行、收间距；整张缩进来字就读不清时还会把横向流程图改成竖排，见 MERMAID_REFLOW_SCALE）
  *   —— 只在放不下时传，是为了让宽栏里的图与宽度无关、可以缓存。
@@ -157,11 +161,18 @@ export function* mermaidFrameSources(code: string, closed: boolean): Generator<s
 export function renderMermaidFigure(
   engine: MermaidEngine,
   code: string,
-  opts: { closed: boolean; fontFamily?: string; fontSize: number; fitWidth?: number }
+  opts: {
+    closed: boolean
+    fontFamily?: string
+    fontFamilyMono?: string
+    fontSize: number
+    fitWidth?: number
+  }
 ): MermaidRenderResult | null {
   const options: MermaidRenderOptions = {
     ...MERMAID_RENDER_OPTIONS,
     fontFamily: opts.fontFamily,
+    fontFamilyMono: opts.fontFamilyMono,
     fontSize: opts.fontSize
   }
   let attempts = 0

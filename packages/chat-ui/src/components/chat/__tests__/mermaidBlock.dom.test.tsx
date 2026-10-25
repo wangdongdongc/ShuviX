@@ -192,6 +192,7 @@ const fakeResult = (svg: string, width: number, height: number): ReturnType<type
   width,
   height,
   type: 'flowchart',
+  mermaidType: 'flowchart-v2',
   links: []
 })
 /** 带 maxWidth 的渲染调用 */

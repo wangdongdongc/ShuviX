@@ -21,7 +21,9 @@
  *
  * - `sanitizeRenderedSvg`：**渲染器的产物**（当初是 mermaid.js 把受限语法编译出的 SVG）。作者只能
  *   写 mermaid 源码，标记结构由渲染器决定。**目前没有调用方**：2026-10-17 起 ```mermaid 由 pele
- *   渲染，它的产物不带 <style> / <foreignObject> / url()，走的是下面那一档（见 mermaidFence.ts）。
+ *   渲染，它的产物不带 <style> 和 <foreignObject>（后者只在传了 `math` 解析器、而它返回 HTML 时
+ *   才出现，我们不传；真出现了这一档也会删掉），url() 只有片段引用（桑基图的连线渐变），走的是
+ *   下面那一档（见 mermaidFence.ts）。
  * - `sanitizeAuthoredSvg`：**模型手写的整段 SVG**（聊天里的 ```svg 围栏），以及 pele 画出的
  *   mermaid 图。作者直接控制每一个标签和属性，于是三处在 mermaid.js 那档必须放行的东西在这档必须关掉：
  *
