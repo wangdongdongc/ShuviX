@@ -14,6 +14,8 @@
  *   5. **认领 → 引用**：adopt 写出带 CSP 首行的 `.html`，```artifact 引用它走同一个沙箱（E-5）；
  *   6. **高度一次落定**：经典（占宽度的）滚动条下，按宽度定高的 Chart.js 图不让块高来回振荡 ——
  *      滚动条出没改宽度只在真 Chromium 的布局里发生（E-7）；
+ *   6a. **超出上限在块里滚**：内容高过 720px 时 iframe 停在上限、根元素换成 `overflow-y: scroll`，真滚轮
+ *      滚得动；缩回上限以内也不收回，高度一次落定（E-9 —— 滚不滚得动只有真输入答得出来）；
  *   6b. **观感缺省值在真图里生效**：桥写进 Chart.defaults 的那些值，经真 Chart.js 的选项解析
  *      （作用域、可脚本化、overrides、scale 合并）之后，落到一张真图上是不是那个样子 —— 单测里只有
  *      defaults 与注册表，建不了图（E-8）；
@@ -67,6 +69,7 @@ const SESSIONS = [
   'interactive-E5',
   'interactive-E7',
   'interactive-E8',
+  'interactive-E9',
   'interactive-E6',
   // 一条空会话：E-6 切过去卸下块（切回别的用例的会话，它们的块又会挂上）
   'interactive-idle'
@@ -384,7 +387,8 @@ const E7_BLOCK = block(
   '          width: canvas.width,',
   '          cssHeight: canvas.clientHeight,',
   '          painted: n,',
-  '          scrollbar: scrollbarWidth()',
+  '          scrollbar: scrollbarWidth(),',
+  '          overflowY: getComputedStyle(document.documentElement).overflowY',
   '        }));',
   '      }',
   '    }]',
@@ -460,6 +464,51 @@ const E8_BLOCK = block(
   "    t('growAfter', function () { return legend(grow); });",
   "    shuvix.sendPrompt('LOOK ' + JSON.stringify(r));",
   '  }, 100);',
+  '})();',
+  '</script>'
+)
+
+/**
+ * E-9：一个 1500px 高的块 —— 超出宿主 720px 的上限，得在块里滚。块报三种行：
+ *  - `READY {…}` load 时与每次 iframe 改尺寸时（宿主把它从挂载时的矮占位拉到 720px 是一次 resize）；
+ *  - `SCROLL {…}` 根元素被滚动、停下 250ms 之后（只报第一次往下滚）；
+ *  - `SHRUNK {…}` 报完 SCROLL 再过 300ms 把内容缩到 300px，又过 600ms 报一次（缩回上限以内）。
+ * 状态里的 `scrollbar` 是根元素滚动条占的宽度（innerWidth − clientWidth）：开头那条样式同 E-7，让
+ * Chromium 画占宽度的经典滚动条，于是「缩回来之后宽度没变」看得见。
+ */
+const E9_BLOCK = block(
+  '<title>E9 tall</title>',
+  '<style>::-webkit-scrollbar{width:14px}::-webkit-scrollbar-thumb{background:gray}</style>',
+  '<div id="tall" style="height:1500px">tall</div>',
+  '<script>',
+  '(function () {',
+  '  var de = document.documentElement;',
+  '  function state() {',
+  '    return {',
+  '      scrollTop: de.scrollTop,',
+  '      overflowY: getComputedStyle(de).overflowY,',
+  '      scrollHeight: de.scrollHeight,',
+  '      clientHeight: de.clientHeight,',
+  '      scrollbar: window.innerWidth - de.clientWidth',
+  '    };',
+  '  }',
+  "  function report(tag) { shuvix.sendPrompt(tag + ' ' + JSON.stringify(state())); }",
+  "  window.addEventListener('load', function () { report('READY'); });",
+  "  window.addEventListener('resize', function () { report('READY'); });",
+  '  var quiet = 0;',
+  '  var done = false;',
+  "  window.addEventListener('scroll', function () {",
+  '    clearTimeout(quiet);',
+  '    quiet = setTimeout(function () {',
+  '      if (done || de.scrollTop <= 0) return;',
+  '      done = true;',
+  "      report('SCROLL');",
+  '      setTimeout(function () {',
+  "        document.getElementById('tall').style.height = '300px';",
+  "        setTimeout(function () { report('SHRUNK'); }, 600);",
+  '      }, 300);',
+  '    }, 250);',
+  '  });',
   '})();',
   '</script>'
 )
@@ -825,8 +874,9 @@ describe('对话里的 interactive 交互图', () => {
    * 块刚挂上时 iframe 还矮 → 内容溢出 → 出滚动条 → 页面变窄 → Chart.js 按宽度把图缩矮 → 上报的
    * 高度变了 → 宿主改 iframe 高度 → 不溢出了、滚动条消失 → 页面变宽 → 图又变高……修之前在这个
    * 隔离实例里量到 401px↔394px 变了 29 次、约 0.9s；修之后开始采样时高度就已经落定，只记到一条。
-   * 修法（沙箱基础样式的 `scrollbar-gutter: stable`，见 interactiveFence.ts 的 BASE_STYLE）这里不看，
-   * 只看结果：高度一次落定。
+   * 修法见 interactiveFence.ts 的 BASE_STYLE：根元素 `overflow-y: hidden` + `scrollbar-gutter: stable`
+   * （只有后者时，带触控板的 Mac 用浮层滚动条，块自己给滚动条上了样式照样占宽度，2026-10-25 这条一直振）。
+   * 主要看结果 —— 高度一次落定；另看一眼图落定后根元素真的是 `hidden`（上限以内桥不该改它，E-9 看上限以外）。
    */
   it('E-7 经典滚动条下按宽度定高的 Chart.js 图：块高一次落定，不来回振荡', async () => {
     const TRACE_MS = 3000
@@ -856,11 +906,14 @@ describe('对话里的 interactive 交互图', () => {
       cssHeight: number
       painted: number
       scrollbar: number
+      overflowY: string
     }
     const [line] = await waitComposerLines('CHART ')
     const report = payloadOf<ChartReport>(line, 'CHART ')
     // 前提：这里的滚动条真的占宽度 —— 否则振荡的环搭不起来，上面的断言是空过
     expect(report.scrollbar, line).toBeGreaterThan(0)
+    // 块在上限以内：根元素是基础样式给的 hidden，块根本不出自己的滚动条
+    expect(report.overflowY, line).toBe('hidden')
     // 块里真有一张 Chart.js 画进去的图
     expect(report.chart, line).toBe('function')
     expect(report.attached, line).toBe(true)
@@ -933,6 +986,72 @@ describe('对话里的 interactive 交互图', () => {
     // 图例是每次渲染现算的：加了第二个系列、update() 之后就回来
     expectLegend(look.growBefore, false, 'grow before')
     expectLegend(look.growAfter, true, 'grow after')
+    expect(provider.chatRequestCount()).toBe(1)
+  }, 120_000)
+
+  /**
+   * 内容高过上限：iframe 停在 720px，内容得在块里滚。基础样式给根元素 `overflow-y: hidden`（上限以内块
+   * 不出自己的滚动条，见 E-7），所以超出时桥得把它换成 `scroll` —— 不换，用户的滚轮在块里滚不动
+   * （`hidden` 只挡用户、不挡脚本，所以这里一定用真滚轮）。换了就不收回：缩回上限以内时根元素仍是
+   * `scroll`，滚动条的宽度不变，高度一次落定。
+   */
+  it('E-9 超出上限：iframe 停在 720px、根元素是 scroll、真滚轮滚得动；缩回上限以内不收回、宽度不变、高度一次落定', async () => {
+    const TRACE_MS = 4000
+    const QUIET_MS = 1500
+    await openSession('interactive-E9')
+    provider.reset()
+    provider.script({ text: doc('MARK-E9 a tall block:', fence(E9_BLOCK)), usage: USAGE })
+    await chat.typeAndSend('draw E9')
+    await chat.waitIdle()
+    const card = cardOf('MARK-E9')
+    await card.waitFrame()
+
+    type State = {
+      scrollTop: number
+      overflowY: string
+      scrollHeight: number
+      clientHeight: number
+      scrollbar: number
+    }
+    const statesOf = async (prefix: string): Promise<State[]> =>
+      (await composerLines(prefix)).map((l) => payloadOf<State>(l, prefix))
+
+    // 宿主把 iframe 夹在上限；块里看到的就是那 720px 的视口
+    await until(async () => (await card.shot())?.height === '720px', 'iframe clamped at 720px')
+    const ready = await until(
+      async () => (await statesOf('READY ')).find((s) => s.clientHeight === 720) ?? null,
+      'a READY line from inside the 720px viewport'
+    )
+    const readyDetail = JSON.stringify(ready)
+    expect(ready.overflowY, readyDetail).toBe('scroll')
+    expect(ready.scrollHeight, readyDetail).toBeGreaterThan(ready.clientHeight)
+    expect(ready.scrollTop, readyDetail).toBe(0)
+    // 前提：这里的滚动条占宽度 —— 下面「宽度不变」才有得看
+    expect(ready.scrollbar, readyDetail).toBeGreaterThan(0)
+
+    // 采样从滚轮之前开始：滚 → 缩回 → 落定都落在这一段里
+    const tracing = card.heightTrace(TRACE_MS)
+    const point = await card.wheelOverFrame(400)
+    const [scrollLine] = await waitComposerLines('SCROLL ', 1, 10_000)
+    const scrolled = payloadOf<State>(scrollLine, 'SCROLL ')
+    expect(scrolled.scrollTop, `${scrollLine} wheel at ${JSON.stringify(point)}`).toBeGreaterThan(0)
+    expect(scrolled.overflowY, scrollLine).toBe('scroll')
+
+    const [shrunkLine] = await waitComposerLines('SHRUNK ')
+    const shrunk = payloadOf<State>(shrunkLine, 'SHRUNK ')
+    const trace = await tracing
+    const detail = `${JSON.stringify(trace)} ${shrunkLine}`
+    // 720px → 缩回后的高度，就这一次变化（振荡时这里是几十条）
+    expect(trace[0]?.height, detail).toBe('720px')
+    expect(trace.length, detail).toBeLessThanOrEqual(2)
+    const last = trace[trace.length - 1]
+    expect(parseFloat(last.height), detail).toBeLessThan(720)
+    expect(last.t, detail).toBeLessThanOrEqual(TRACE_MS - QUIET_MS)
+    expect((await card.shot())?.height, detail).toBe(last.height)
+    // 缩回上限以内：根元素仍是 scroll，滚动条的宽度没变，视口就是 iframe 的新高度
+    expect(shrunk.overflowY, detail).toBe('scroll')
+    expect(shrunk.scrollbar, detail).toBe(ready.scrollbar)
+    expect(shrunk.clientHeight, detail).toBe(parseFloat(last.height))
     expect(provider.chatRequestCount()).toBe(1)
   }, 120_000)
 

@@ -158,7 +158,8 @@ const BRIDGE_TAG = '__shuvix'
 /**
  * 沙箱里的桥 —— 排在模型内容之前执行。只做三件事：
  *
- *  - **高度**：ResizeObserver 盯根元素，变了就报给宿主（宿主再限定范围）；
+ *  - **高度**：ResizeObserver 盯根元素，变了就报给宿主（宿主再限定范围）。内容超出宿主的高度上限时，iframe 停在
+ *    上限、内容得在块里滚 —— 这时把根元素改成始终显示滚动条（见 BASE_STYLE 的说明）；
  *  - **`shuvix.color(name)`**：把 token 解析成具体颜色（`rgb(…)`）—— canvas 画不了 `var()`；
  *  - **`shuvix.sendPrompt(text)`**：把一句话交给宿主，宿主填进输入框，由用户决定发不发。
  *
@@ -193,8 +194,14 @@ const BRIDGE_SCRIPT = `(function () {
     return getComputedStyle(probe).color;
   }
   var lastHeight = -1;
+  var scrolling = false;
   function report() {
     var h = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    // 超出上限才在块里滚：始终显示滚动条（宽度从此不变），打开了就不再收回 —— 收回又会让宽度变
+    if (!scrolling && h > ${SANDBOX_MAX_HEIGHT}) {
+      scrolling = true;
+      document.documentElement.style.overflowY = 'scroll';
+    }
     if (h !== lastHeight) { lastHeight = h; post({ type: 'resize', height: h }); }
   }
   try { new ResizeObserver(report).observe(document.documentElement); } catch (e) {}
@@ -356,14 +363,17 @@ const BRIDGE_SCRIPT = `(function () {
  * 其中两条是替模型守规矩的：`strong` / `b` / `th` / 标题一律 500（只用两种字重），
  * `button[aria-pressed=true]` 是分段切换的选中态（选中与否写在语义属性上，不必另写样式）。
  *
- * `scrollbar-gutter: stable` 不是装饰：系统设成「总是显示滚动条」时，滚动条占宽度。块刚挂上时
- * iframe 还矮、内容溢出 → 出滚动条 → 页面变窄 → 按宽度定高的内容（Chart.js 的 responsive 图）
- * 跟着变矮 → 上报的高度变了 → 宿主改 iframe 高度 → 滚动条消失 → 页面变宽 → 又变高……来回振荡
- * 到 Chart.js 自己的节流碰巧停下为止（实测 401↔394px 振了 29 次、约 0.9s）。槽位常驻，宽度就
- * 永远不变，这个环一开始就不成立。浮层滚动条（不占宽度）下它什么也不占。
+ * 根元素的 `overflow-y: hidden` 与 `scrollbar-gutter: stable` 不是装饰，它们断的是同一个环：块刚挂上时 iframe
+ * 还矮、内容溢出 → 出滚动条 → 页面变窄 → 按宽度定高的内容（Chart.js 的 responsive 图）跟着变矮 → 上报的
+ * 高度变了 → 宿主改 iframe 高度 → 滚动条消失 → 页面变宽 → 又变高……（实测 401↔394px 振了 29 次、约 0.9s；
+ * Chart.js 改尺寸慢一步时会一直振下去）。iframe 的高度本来就跟着内容走，上限以内块根本用不着自己的滚动条，
+ * 所以根元素先 `hidden`：在哪种系统设置下宽度都不变。只靠 `scrollbar-gutter: stable` 不够 —— macOS 用浮层
+ * 滚动条（连着触控板时的缺省）时它一点不预留，而块若自己给滚动条加了样式（`::-webkit-scrollbar`），出现时
+ * 照样占宽度（2026-10-25，E-7 在带触控板的 Mac 上一直振）。内容超出上限时由桥改成 `scroll`（见 BRIDGE_SCRIPT）；
+ * gutter 留着，是让常规滚动条下那一刻宽度也不跳：槽位本来就留着，滚动条落进去。
  */
 const BASE_STYLE = `html,body{margin:0;padding:0;background:transparent}
-html{font-family:var(--theme-font-sans);scrollbar-gutter:stable}
+html{font-family:var(--theme-font-sans);scrollbar-gutter:stable;overflow-y:hidden}
 body{color:var(--theme-text-primary);font-size:13px;line-height:1.5;padding:12px 16px;box-sizing:border-box}
 *,*::before,*::after{box-sizing:inherit}
 h1,h2,h3,h4,h5,h6,strong,b,th{font-weight:500}

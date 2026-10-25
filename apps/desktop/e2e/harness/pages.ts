@@ -1689,6 +1689,13 @@ export interface InteractivePane {
    * color-scheme，解析值应当逐字相等
    */
   hostTokenColor(name: string): Promise<string>
+  /**
+   * 在 iframe 露出来的那一截中间滚一下**真滚轮**（CDP `Input.dispatchMouseEvent` 的 `mouseWheel`，可信
+   * 输入，坐标是主窗口视口的 CSS px）：那一截 = iframe 落在对话滚动区以内、浮动输入卡之上的部分。
+   * 回落点；一点都没露出来就抛。脚本里改 `scrollTop` 证明不了「用户滚得动」—— `overflow: hidden`
+   * 的根元素照样能被脚本滚，只有滚轮分得清
+   */
+  wheelOverFrame(deltaY: number): Promise<{ x: number; y: number }>
 }
 
 /** heightTrace 的一条记录：高度在这一刻变成了 `height` */
@@ -1798,7 +1805,34 @@ export function interactivePane(main: CdpClient, marker: string): InteractivePan
         const color = getComputedStyle(probe).color
         probe.remove()
         return color
+      })()`),
+    wheelOverFrame: async (deltaY) => {
+      const point = await main.eval<{ x: number; y: number } | null>(`(() => {
+        const frame = ${FRAME}
+        const scroller = document.querySelector('.conversation-scroller')
+        if (!frame || !scroller) return null
+        const f = frame.getBoundingClientRect()
+        const s = scroller.getBoundingClientRect()
+        const card = document.querySelector('textarea')?.closest('.rounded-2xl') ?? null
+        const top = Math.max(f.top, s.top)
+        const bottom = Math.min(f.bottom, s.bottom, card ? card.getBoundingClientRect().top : Infinity)
+        const left = Math.max(f.left, s.left)
+        const right = Math.min(f.right, s.right)
+        if (bottom - top < 20 || right - left < 20) return null
+        return { x: Math.round((left + right) / 2), y: Math.round((top + bottom) / 2) }
       })()`)
+      if (!point) {
+        throw new Error(`the interactive iframe with ${JSON.stringify(marker)} is not on screen`)
+      }
+      await main.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point })
+      await main.send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        ...point,
+        deltaX: 0,
+        deltaY
+      })
+      return point
+    }
   }
 }
 

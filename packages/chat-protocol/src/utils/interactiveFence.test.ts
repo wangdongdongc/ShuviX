@@ -20,7 +20,8 @@
  *    （含 tint / ink / wash）都得注入（IF-15b）。
  *  - **基础样式**（IF-19…21）：只给裸标签、只用注入的 token、只有 400 / 500 两种字重，控件的缺省
  *    外观守几条关键的形状（不钉具体调出来的像素数）。技能教「写裸标签、别重新设计它们」，前提是
- *    裸标签本身已经像应用。
+ *    裸标签本身已经像应用。根元素 `overflow-y: hidden`（IF-27）：上限以内块不出自己的滚动条，
+ *    宽度在哪种系统设置下都不变；超出上限时由桥写内联的 `scroll`，所以样式表里不能有 `!important`。
  *
  *  - **库基址**（IF-22…26，server mode phase D）：浏览器里的 web 客户端认不得 `shuvix-lib:`，给一个
  *    `<origin>/lib/` 的基址 —— `isSandboxLibBase` 是唯一的闸门（它要原样进 CSP 的源表达式与 `content="…"`，
@@ -487,7 +488,7 @@ describe('契约同源：常量 ↔ 教给模型的写法（IF-14…18）', () =
   })
 })
 
-describe('沙箱的基础样式：只给裸标签、只用注入的 token、只两种字重（IF-19…21）', () => {
+describe('沙箱的基础样式：只给裸标签、只用注入的 token、只两种字重、不出自己的滚动条（IF-19…21、IF-27）', () => {
   /** 宿主拼的基础样式：`:root{…}` 之后、`</style>` 之前那一截 */
   const baseStyleOf = (doc: string): string => {
     const root = /<style>:root\{[^}]*\}\n/.exec(doc)
@@ -587,6 +588,24 @@ describe('沙箱的基础样式：只给裸标签、只用注入的 token、只�
     for (const tag of ['input', 'select', 'textarea']) {
       expect(declOf(tag, 'color'), tag).toBe('var(--theme-text-primary)')
     }
+  })
+
+  it('IF-27 上限以内块不出自己的滚动条：根元素 overflow-y: hidden + scrollbar-gutter: stable；别的规则不碰 overflow；没有 !important（桥写的内联 scroll 得赢）', () => {
+    expect(declOf('html', 'overflow-y')).toBe('hidden')
+    expect(declOf('html', 'scrollbar-gutter')).toBe('stable')
+    // 设 overflow / overflow-* 的恰是 html 上的那一条 overflow-y
+    const overflowDecls = RULES.flatMap((r) =>
+      [...r.decls.keys()]
+        .filter((prop) => /^overflow(-|$)/.test(prop))
+        .map((prop) => `${r.selectors.join(',')} { ${prop} }`)
+    )
+    expect(overflowDecls).toEqual(['html { overflow-y }'])
+    // 整张样式表（含 :root 的 token 块）都没有 !important —— 有一条，桥的内联 scroll 就盖不过它
+    const doc = plainDoc()
+    const style = doc.slice(doc.indexOf('<style>'), doc.indexOf('</style>'))
+    expect(style).not.toMatch(/!\s*important/i)
+    expect(BASE).not.toMatch(/!\s*important/i)
+    expect(style.match(/overflow/g)).toHaveLength(1)
   })
 })
 

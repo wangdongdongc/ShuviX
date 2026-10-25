@@ -26,6 +26,11 @@
  *    会不会冲掉库自己的键、桥里写的路径是不是真库里存在的那一层（错拼一个段，`put` 会就地造出一层
  *    谁也不读的空对象，而且不报错），只有真库答得出来。jsdom 没有 canvas，所以这里只看 defaults
  *    与插件注册表，不建图；真图里解析出来的选项由 e2e 的 chat-interactive E-8 钉。
+ *  - BR-17…20 高度超出宿主上限（`SANDBOX_MAX_HEIGHT`）时，桥把根元素改成 `overflow-y: scroll`：
+ *    阈值恰是「宿主夹出来的高度比上报的矮」那一刻、穿过上限那一次才改、改了就不再收回（收回又会让
+ *    宽度变）、第一次上报就超出也立刻改；上报给宿主的高度照旧不夹。jsdom 没有布局也没有
+ *    ResizeObserver，所以根元素的 getBoundingClientRect 换成桩、派发 `load` 是唯一的触发；
+ *    真滚动条下滚得动、缩回上限以内宽度不跳由 e2e 的 chat-interactive E-9 钉。
  *
  * jsdom 不做级联，`var(--x)` 解析不出颜色：`getComputedStyle` 换成桩，把探针上写的 color 原样
  * 包一层 `C<…>` 交回去 —— 于是「取的是哪个 token」在结果里直接可读。
@@ -36,6 +41,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildSandboxDocument,
+  clampSandboxHeight,
   parseSandboxMessage,
   type SandboxMessage
 } from '@shuvix/chat-protocol/utils/interactiveFence'
@@ -640,5 +646,88 @@ describe('随包的真 Chart.js（BR-16）', () => {
     })
     expect(missing).toEqual([])
     expect(at(clean.overrides, 'line')).toBeTypeOf('object')
+  })
+})
+
+describe('超出高度上限：根元素改成始终显示滚动条（BR-17…20）', () => {
+  /** 宿主那一侧收下的高度（按到达顺序） */
+  const heightsOf = (messages: unknown[]): number[] =>
+    messages.flatMap((m) => {
+      const msg = parsed(m)
+      return msg?.type === 'resize' ? [msg.height] : []
+    })
+
+  /** 等到宿主那一侧收下第 n 条高度 */
+  const waitHeights = async (messages: unknown[], n: number): Promise<number[]> => {
+    await waitFor(messages, () => heightsOf(messages).length >= n)
+    return heightsOf(messages)
+  }
+
+  /** 根元素的高度桩：桥的 report() 读的就是 documentElement.getBoundingClientRect().height */
+  const stubRootHeight = (win: SandboxWindow, height: number): void => {
+    win.document.documentElement.getBoundingClientRect = () => ({ height }) as DOMRect
+  }
+
+  /** 报一次高度：jsdom 没有 ResizeObserver，load 是桥唯一挂着的另一个触发 */
+  const reportHeight = (win: SandboxWindow, height: number): void => {
+    stubRootHeight(win, height)
+    const w = win as unknown as { dispatchEvent(e: Event): boolean; Event: typeof Event }
+    w.dispatchEvent(new w.Event('load'))
+  }
+
+  /** 一个新窗口，等它自己的那次 load 报完（jsdom 的空布局 → 0）再交出去：之后每条高度都是用例自己报的 */
+  const settledWindow = async (): Promise<{ win: SandboxWindow; messages: unknown[] }> => {
+    const booted = boot()
+    expect(await waitHeights(booted.messages, 1)).toEqual([0])
+    expect(booted.win.document.documentElement.style.overflowY).toBe('')
+    return booted
+  }
+
+  const rootOverflow = (win: SandboxWindow): string => win.document.documentElement.style.overflowY
+
+  it('BR-17 阈值：恰在宿主夹出来的高度比上报的矮时改成 scroll（0 / 719.9 / 720 不改，720.01 / 721 改）', async () => {
+    for (const h of [0, 719.9, 720, 720.01, 721]) {
+      const { win } = await settledWindow()
+      reportHeight(win, h)
+      const overflows = Math.ceil(h) > clampSandboxHeight(h)
+      expect(rootOverflow(win), `height=${h}`).toBe(overflows ? 'scroll' : '')
+    }
+  })
+
+  it('BR-18 穿过上限：500 时不动、900 时改成 scroll；900 照旧原样报给宿主（夹是宿主的事）；只改根元素、body 不动', async () => {
+    const { win, messages } = await settledWindow()
+    reportHeight(win, 500)
+    expect(rootOverflow(win)).toBe('')
+    expect(await waitHeights(messages, 2)).toEqual([0, 500])
+
+    reportHeight(win, 900)
+    expect(rootOverflow(win)).toBe('scroll')
+    expect(await waitHeights(messages, 3)).toEqual([0, 500, 900])
+    expect(win.document.body.style.overflowY).toBe('')
+  })
+
+  it('BR-19 改了就不再收回：900 → 300 → 900 一直是 scroll；缩回上限以内的那条高度照样报给宿主', async () => {
+    const { win, messages } = await settledWindow()
+    reportHeight(win, 900)
+    expect(rootOverflow(win)).toBe('scroll')
+    reportHeight(win, 300)
+    expect(rootOverflow(win)).toBe('scroll')
+    expect(await waitHeights(messages, 3)).toEqual([0, 900, 300])
+    reportHeight(win, 900)
+    expect(rootOverflow(win)).toBe('scroll')
+    expect(await waitHeights(messages, 4)).toEqual([0, 900, 300, 900])
+    expect(win.document.body.style.overflowY).toBe('')
+  })
+
+  it('BR-20 第一次上报就超出：立刻是 scroll，不用先报一个上限以内的值', async () => {
+    const { win, messages } = boot()
+    // 窗口自己的 load 是异步派发的：这一下赶在它前面，就是桥的第一次上报
+    reportHeight(win, 2000)
+    expect(rootOverflow(win)).toBe('scroll')
+    const heights = await waitHeights(messages, 1)
+    // 宿主收到的第一条（也是唯一一条 —— 自己的那次 load 与它同值，不重报）就是 2000
+    expect(heights[0]).toBe(2000)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(heightsOf(messages)).toEqual([2000])
   })
 })
