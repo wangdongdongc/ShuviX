@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildFileMap, isContentOnlyFileChange } from './fileMap'
+import { buildFileMap, isContentOnlyFileChange, searchFileMap } from './fileMap'
 
 const ROOT = '/Users/me/project'
 const map = buildFileMap(ROOT, ['docs/Notes.md', 'src/index.ts'])
@@ -80,5 +80,22 @@ describe('isContentOnlyFileChange', () => {
         winKnown
       )
     ).toBe(true)
+  })
+})
+
+describe('searchFileMap', () => {
+  const spaced = buildFileMap(ROOT, ['notes/My Plan.md', 'notes/myplan.ts', 'My Docs/a.md'])
+  const rels = (q: string): string[] => searchFileMap(spaced, q).map((s) => s.rel)
+
+  it('query 按原样比：空格是名字的一部分，尾随空格也算数', () => {
+    expect(rels('my p')).toEqual(['notes/My Plan.md'])
+    expect(rels('my ')).toEqual(['notes/My Plan.md', 'My Docs/a.md'])
+    expect(rels('my docs/')).toEqual(['My Docs/a.md'])
+    expect(rels('my x')).toEqual([])
+  })
+
+  it('不替调用方去首尾空白（`[[ ]]` 补全自己 trim）', () => {
+    expect(rels(' myplan')).toEqual([])
+    expect(rels('myplan')).toEqual(['notes/myplan.ts'])
   })
 })

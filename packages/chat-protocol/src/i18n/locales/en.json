@@ -259,7 +259,8 @@
     "pasteChipLines": "[Pasted text #{{seq}} · {{lines}} lines]",
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
     "pasteName": "Pasted text #{{seq}}",
-    "atSectionSessions": "Sessions"
+    "atSectionSessions": "Sessions",
+    "atRouteOnly": "{{name}} only"
   },
   "compact": {
     "summaryLabel": "Conversation Summary (Auto-compacted)"

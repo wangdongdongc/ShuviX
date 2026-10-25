@@ -183,13 +183,14 @@ class FileProvider extends BaseProvider {
 /**
  * 知识条目的内存内搜索：标题前缀 > 标题子串 > 描述子串；同分按标题短者优先、再按条目 id
  * 字典序（确定性）。空 query 按 id 字典序取前 limit 条（该源没有文件的「层级浅」可言）。
+ * query 按原样比（只忽略大小写）：标题常带空格，`@Token 刷` 里的空格是名字的一部分，尾随空格也算数。
  */
 export function searchKnowledgeEntries(
   entries: readonly KnowledgeMentionEntry[],
   query: string,
   limit = 12
 ): KnowledgeMentionEntry[] {
-  const q = query.trim().toLowerCase()
+  const q = query.toLowerCase()
   // 空 query：没有可排名的信号，按条目 id 字典序取前 limit 条（确定性；该源没有文件的「层级浅」可言）
   if (!q) {
     return [...entries]
@@ -266,14 +267,14 @@ class KnowledgeProvider extends BaseProvider {
 
 /**
  * 会话候选的内存内搜索：标题前缀 > 标题子串 > 项目名 / 父会话标题子串；同分按最近活跃在前（再按 id，确定性）。
- * 空 query 按最近活跃取前 limit 条。
+ * 空 query 按最近活跃取前 limit 条。query 与知识条目同口径按原样比（空格、尾随空格都算数）。
  */
 export function searchSessionMentions(
   entries: readonly SessionMentionEntry[],
   query: string,
   limit = 12
 ): SessionMentionEntry[] {
-  const q = query.trim().toLowerCase()
+  const q = query.toLowerCase()
   const scored: { entry: SessionMentionEntry; score: number }[] = []
   for (const entry of entries) {
     const title = entry.title.toLowerCase()
@@ -340,6 +341,13 @@ class SessionProvider extends BaseProvider {
 }
 
 // ── registry ──
+
+/** 各内置源的界面名（input 命名空间的 i18n 键）：弹层段头，也是 `@文件` 这类收窄补全认的名字 */
+export const AT_SOURCE_TITLE_KEYS: Readonly<Record<string, string>> = {
+  file: 'input.atSectionFiles',
+  knowledge: 'input.atSectionKnowledge',
+  session: 'input.atSectionSessions'
+}
 
 const registry: AtMentionProvider[] = []
 

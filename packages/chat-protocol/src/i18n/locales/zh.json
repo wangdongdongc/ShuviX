@@ -259,7 +259,8 @@
     "pasteChipLines": "[粘贴文本 #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[粘贴文本 #{{seq}} · {{chars}} 字符]",
     "pasteName": "粘贴文本 #{{seq}}",
-    "atSectionSessions": "会话"
+    "atSectionSessions": "会话",
+    "atRouteOnly": "只找{{name}}"
   },
   "compact": {
     "summaryLabel": "对话摘要（自动压缩）"

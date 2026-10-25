@@ -39,10 +39,27 @@ describe('findActiveAt（B1）', () => {
     expect(findActiveAt('a@b', 3)).toBeNull()
   })
 
-  it('@ 与光标间遇空白即中断', () => {
-    // 光标已越过 `@qui ` 的空格 —— 触发早已结束，不得再把后面的词当 query
-    expect(findActiveAt('@qui hello', 10)).toBeNull()
-    expect(findActiveAt('@qui ', 5)).toBeNull()
+  it('@ 之后的空格算进 query（名字带空格的条目接着打）；弹层开不开交给候选', () => {
+    expect(findActiveAt('@qui hello', 10)).toEqual({ at: 0, query: 'qui hello' })
+    // 尾随空格原样保留 —— 「Token 」只该留下名字里真有这个空格的候选
+    expect(findActiveAt('@Token ', 7)).toEqual({ at: 0, query: 'Token ' })
+    expect(findActiveAt('看下 @Token 刷', 11)).toEqual({ at: 3, query: 'Token 刷' })
+  })
+
+  it('@ 紧跟空白不触发（单独的一个 @）', () => {
+    expect(findActiveAt('@ hello', 7)).toBeNull()
+    expect(findActiveAt('在 @ 一下', 6)).toBeNull()
+  })
+
+  it('换行中断：上一行的 @ 不延续到下一行', () => {
+    expect(findActiveAt('@qui\nhello', 10)).toBeNull()
+    expect(findActiveAt('@qui\r\nhi', 8)).toBeNull()
+    // 新的一行里另起的 @ 照常触发
+    expect(findActiveAt('@qui\n@he', 8)).toEqual({ at: 5, query: 'he' })
+  })
+
+  it('越过空格往回找时，碰到词中的 @（email）即停', () => {
+    expect(findActiveAt('mail a@b.com now', 16)).toBeNull()
   })
 })
 
@@ -65,6 +82,15 @@ describe('findActiveAt —— 源前缀路由（B1b）', () => {
       at: 3,
       source: 'file',
       query: 'src/a'
+    })
+  })
+
+  it('源前缀不分大小写（`@File:`），回传规范源名；冒号后的 query 也可以带空格', () => {
+    expect(findActiveAt('@File:a', 7, SOURCES)).toEqual({ at: 0, source: 'file', query: 'a' })
+    expect(findActiveAt('@KNOWLEDGE:Token 刷', 18, SOURCES)).toEqual({
+      at: 0,
+      source: 'knowledge',
+      query: 'Token 刷'
     })
   })
 

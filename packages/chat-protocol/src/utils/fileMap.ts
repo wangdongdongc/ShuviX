@@ -136,11 +136,12 @@ export interface FileSuggestion {
  * 命中子集再排序，20000 条量级下每次击键 < 几毫秒。
  *
  * 打分：文件名前缀 > 文件名子串 > 相对路径子串；同分按路径更短（层级更浅）、再按字典序。
- * 空 query 返回层级最浅的前 limit 条。
+ * 空 query 返回层级最浅的前 limit 条。query 按原样比（只忽略大小写）：`@` 的 query 可以带空格
+ *（`@my n` 找 `My Notes.md`），尾随空格也算数 —— 要去首尾空白的调用方（`[[ ]]` 补全）自己 trim。
  */
 export function searchFileMap(map: FileMap | null, query: string, limit = 12): FileSuggestion[] {
   if (!map) return []
-  const q = query.trim().toLowerCase()
+  const q = query.toLowerCase()
   const scored: { entry: FileEntry; score: number }[] = []
   for (const entry of map.entries) {
     const baseL = entry.base.toLowerCase()

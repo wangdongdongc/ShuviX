@@ -603,7 +603,7 @@ export function LivePreviewEditor({
   const suggestWikiTargets = useCallback(
     async (query: string) => {
       if (!sessionId) return []
-      const results = searchFileMap(await ensureFileMap(), query)
+      const results = searchFileMap(await ensureFileMap(), query.trim())
       return results.map((r, i) => ({
         target: r.token,
         label: r.label,

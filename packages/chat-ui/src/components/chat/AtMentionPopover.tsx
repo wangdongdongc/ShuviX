@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { BookOpen, FileText, MessagesSquare } from 'lucide-react'
 import { mentionRefId } from '@shuvix/chat-protocol/utils/inlineTokens'
-import type { AtSuggestion } from '../../hooks/useAtMentions'
+import { isRouteSuggestion, type AtSuggestion } from '../../hooks/useAtMentions'
+import { AT_SOURCE_TITLE_KEYS } from '../../hooks/atMentionProviders'
 
 interface AtMentionPopoverProps {
   /** 补全候选（已排序；合并模式按源分区、每源 ≤5） */
@@ -16,13 +17,6 @@ interface AtMentionPopoverProps {
 /** 源图标（lucide 现有体系） */
 const SOURCE_ICONS = { file: FileText, knowledge: BookOpen, session: MessagesSquare } as const
 
-/** 段头 i18n 键（input 命名空间） */
-const SECTION_TITLE_KEYS = {
-  file: 'input.atSectionFiles',
-  knowledge: 'input.atSectionKnowledge',
-  session: 'input.atSectionSessions'
-} as const
-
 /** 源图标的颜色 */
 const SOURCE_ICON_COLORS: Record<string, string> = {
   knowledge: 'text-amber-500',
@@ -33,6 +27,7 @@ const SOURCE_ICON_COLORS: Record<string, string> = {
  * `@` 自动补全浮层 —— 复用斜杠命令 / 内置技能选择框的视觉样式。
  * 多源分区渲染：裸 `@` 时「文件」「知识库」「会话」各一段（段头小字标题，方向键跨段循环）；
  * `@源:query` 显式路由后只出该源（单段不出段头，与单源时代观感一致）。
+ * 收窄行（`file:` 「只找文件」）置顶、不出段头，也不算进分段。
  * 锚定在 textarea 上方（与斜杠命令一致，不做光标坐标测量，键位与整体观感统一）。
  */
 export function AtMentionPopover({
@@ -53,13 +48,16 @@ export function AtMentionPopover({
 
   if (suggestions.length === 0) return null
 
-  const sectionCount = new Set(suggestions.map((s) => s.source)).size
+  const sectionCount = new Set(
+    suggestions.filter((s) => !isRouteSuggestion(s)).map((s) => s.source)
+  ).size
 
   const nodes: React.ReactNode[] = []
   let prevSource: string | null = null
   suggestions.forEach((s, idx) => {
-    if (s.source !== prevSource && sectionCount > 1) {
-      const titleKey = SECTION_TITLE_KEYS[s.source as keyof typeof SECTION_TITLE_KEYS]
+    const route = isRouteSuggestion(s)
+    if (!route && s.source !== prevSource && sectionCount > 1) {
+      const titleKey = AT_SOURCE_TITLE_KEYS[s.source]
       nodes.push(
         <div
           key={`section-${s.source}`}
@@ -71,7 +69,7 @@ export function AtMentionPopover({
         </div>
       )
     }
-    prevSource = s.source
+    if (!route) prevSource = s.source
     const Icon = SOURCE_ICONS[s.source as keyof typeof SOURCE_ICONS] ?? FileText
     nodes.push(
       <button
@@ -88,14 +86,15 @@ export function AtMentionPopover({
             ? 'bg-accent/15 text-text-primary'
             : 'text-text-secondary hover:bg-bg-tertiary'
         }`}
-        // 行锚点：文件=工作区相对路径、知识条目=`knowledge:`+条目 id、会话=`session:`+会话 id（e2e harness 按此认行）
-        data-at-suggestion={mentionRefId(s.ref)}
+        // 行锚点：文件=工作区相对路径、知识条目=`knowledge:`+条目 id、会话=`session:`+会话 id、
+        // 收窄行=`route:`+源名（e2e harness 按此认行）
+        data-at-suggestion={route ? `route:${s.source}` : mentionRefId(s.ref)}
       >
         <Icon
           size={12}
           className={`flex-shrink-0 ${SOURCE_ICON_COLORS[s.source] ?? 'text-sky-500'}`}
         />
-        <span className={`text-accent truncate ${s.source === 'file' ? 'font-mono' : ''}`}>
+        <span className={`text-accent truncate ${s.source === 'file' || route ? 'font-mono' : ''}`}>
           {s.label}
         </span>
         {s.detail && (

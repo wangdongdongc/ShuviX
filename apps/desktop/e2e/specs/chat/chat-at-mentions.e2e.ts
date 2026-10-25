@@ -209,7 +209,7 @@ beforeAll(async () => {
 
   // AtProj 的项目库有一条条目（AT-20），它的会话候选里恒多出那一行（项目库隐式启用）；
   // 断「没有知识行 / 候选恰为某几条」的用例（AT-2/3/5/6/14/15）因此放 AtProjB —— 那里项目库是空的。
-  // AtProj 12 条（含切走对照）、AtProjB 14 条，都远低于分组上限
+  // AtProj 14 条（含切走对照）、AtProjB 14 条，都远低于分组上限
   const inP1 = (title: string, kb?: string[]): Promise<string> =>
     createSession(title, kb, project.id)
   const inP2 = (title: string, kb?: string[]): Promise<string> =>
@@ -232,6 +232,8 @@ beforeAll(async () => {
   // 不勾任何库：项目库是隐式启用的，它的条目照样进候选
   sids['AT-20'] = await inP1('AT-20', undefined)
   sids['AT-27'] = await inP1('AT-27', undefined)
+  sids['AT-28'] = await inP1('AT-28', undefined)
+  sids['AT-29'] = await inP1('AT-29', ['kb-a'])
   sids.scratch = await inP1('AT-scratch', undefined)
   sids['AT-17'] = await inP2('AT-17', ['kb-a'])
   sids['AT-21'] = await inP2('AT-21', undefined)
@@ -765,5 +767,59 @@ describe('G · 候选新鲜度', () => {
     await chat.type('')
     await chat.type('@brand')
     await waitRow('later/brand-new.md')
+  })
+})
+
+describe('H · 两段式收窄与带空格的名字', () => {
+  it('AT-28 `@fi` 置顶「file:」收窄行，回车补成 `@file:` 且弹层只出文件；`@File:` 不分大小写；单字母不出收窄行', async () => {
+    await openAndType('AT-28', '@fi')
+    const route = await waitRow('route:file')
+    expect(route.label).toBe('file:')
+    expect((await popover.rows())[0]).toMatchObject({ key: 'route:file', selected: true })
+
+    await chat.pressEnter()
+    expect(await chat.inputValue()).toBe('@file:')
+    // 不用再敲一下：弹层直接切到文件源（README 是空 query 时层级最浅的那行）
+    await waitRow('README.md')
+    const rows = await popover.rows()
+    expect(rows.every((r) => !r.key.includes(':'))).toBe(true)
+
+    await chat.type('@File:alpha')
+    await until(async () => (await popover.rows()).length === 2, 'routed file rows')
+    expect((await popover.rows()).map((r) => r.key).sort()).toEqual([
+      'docs/alpha-guide.md',
+      'docs/alpha-notes.md'
+    ])
+
+    // 单个字母撞上文件名开头的太多 —— 不出收窄行（`@s` 多半是在找 src/）
+    await chat.type('@s')
+    await until(async () => ((await popover.rows()).length > 0 ? true : null), 'rows for @s')
+    expect((await popover.rows()).some((r) => r.key.startsWith('route:'))).toBe(false)
+  })
+
+  it('AT-29 名字带空格：空格后接着打仍在弹层里，对不上就收起；文件名带空格同样能找', async () => {
+    await openAndType('AT-29', '@Token 刷')
+    await waitRow(K_TOKEN)
+    // 「Token x」再没有候选含这段 → 弹层收起（回车会照常发送）
+    await chat.type('@Token x')
+    await until(async () => !(await popover.open()), 'popover closed when nothing matches')
+    // 尾随空格也算数：「Token 刷新」里有「Token 」
+    await chat.type('@Token ')
+    await waitRow(K_TOKEN)
+    await chat.pressEnter()
+    expect(await chat.inputValue()).toBe('@knowledge:Token 刷新 ')
+    // 选中的引用之后再打字：不再把「Token 刷新 说明」当 query 重开弹层
+    await chat.type('@knowledge:Token 刷新 说明')
+    await sleep(300)
+    expect(await popover.open()).toBe(false)
+
+    const spaced = join(app.home, 'proj-at', 'later', 'Release plan.md')
+    mkdirSync(dirname(spaced), { recursive: true })
+    writeFileSync(spaced, '# release plan\n')
+    await sleep(1100)
+    await chat.type('')
+    await chat.type('@release p')
+    const row = await waitRow('later/Release plan.md')
+    expect(row.label).toBe('Release plan.md')
   })
 })

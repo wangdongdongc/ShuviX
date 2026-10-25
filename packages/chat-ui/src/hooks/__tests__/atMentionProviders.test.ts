@@ -95,6 +95,16 @@ describe('searchKnowledgeEntries（B5）', () => {
     ])
   })
 
+  it('标题带空格：query 里的空格是名字的一部分，尾随空格也算数', () => {
+    const spaced = [
+      entry('knowledge/notes/t.md', 'Token 刷新'),
+      entry('knowledge/notes/u.md', 'Tokenizer')
+    ]
+    expect(searchKnowledgeEntries(spaced, 'token 刷').map((h) => h.title)).toEqual(['Token 刷新'])
+    expect(searchKnowledgeEntries(spaced, 'token ').map((h) => h.title)).toEqual(['Token 刷新'])
+    expect(searchKnowledgeEntries(spaced, 'token x')).toEqual([])
+  })
+
   it('大小写不敏感；无命中返回空', () => {
     expect(
       searchKnowledgeEntries([entry('knowledge/notes/x.md', 'Token Refresh')], 'token')
@@ -207,7 +217,7 @@ describe('searchSessionMentions（XS-67）', () => {
     expect(ids(searchSessionMentions(same, 'alpha'))).toEqual(['s-c', 's-a', 's-b'])
   })
 
-  it('XS-67 空 query（含只有空白）按最近活跃取；limit 截断', () => {
+  it('XS-67 空 query 按最近活跃取；limit 截断', () => {
     expect(ids(searchSessionMentions(entries, ''))).toEqual([
       's-miss',
       's-parent',
@@ -215,7 +225,7 @@ describe('searchSessionMentions（XS-67）', () => {
       's-sub',
       's-prefix'
     ])
-    expect(ids(searchSessionMentions(entries, '   ', 2))).toEqual(['s-miss', 's-parent'])
+    expect(ids(searchSessionMentions(entries, '', 2))).toEqual(['s-miss', 's-parent'])
     expect(ids(searchSessionMentions(entries, 'deploy', 1))).toEqual(['s-prefix'])
   })
 
@@ -227,8 +237,15 @@ describe('searchSessionMentions（XS-67）', () => {
     expect(hits[11].id).toBe('m3')
   })
 
-  it('XS-67 大小写不敏感（query 首尾空白不算）；无命中返回空', () => {
-    expect(ids(searchSessionMentions(entries, '  DEPLOY P '))).toEqual(['s-prefix'])
+  it('XS-67 大小写不敏感；空格按原样比（名字里得真有这个空格，尾随的也算）；无命中返回空', () => {
+    expect(ids(searchSessionMentions(entries, 'DEPLOY P'))).toEqual(['s-prefix'])
+    expect(ids(searchSessionMentions(entries, 'deploy '))).toEqual([
+      's-prefix',
+      's-sub',
+      's-parent'
+    ])
+    // 「deploy-tools」里没有「deploy 」；「Deploy pipeline」里也没有「deploy p 」
+    expect(searchSessionMentions(entries, 'deploy p ')).toEqual([])
     expect(ids(searchSessionMentions(entries, 'TOOLS'))).toEqual(['s-project'])
     expect(ids(searchSessionMentions(entries, 'REVIEW'))).toEqual(['s-parent'])
     expect(searchSessionMentions(entries, 'nothing-like-this')).toEqual([])

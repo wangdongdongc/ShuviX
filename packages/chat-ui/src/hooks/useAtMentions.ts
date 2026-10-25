@@ -7,11 +7,15 @@
  * （`at` 类型按 ref 分派展开正文：文件给相对路径、知识条目给 knowledge 工具指针）。
  *
  * 多源：`@query` 走默认合并（各就绪源分区展示），`@源:query` 显式路由单个源（findActiveAt 解析）。
+ * 两段式：合并模式下 query 是某个源名（或其界面名，如「文件」）的开头时，置顶一行「源:」，选中把
+ * `@fi` 补成 `@file:`，弹层随即只出该源。query 可以带空格（名字带空格的条目照样能接着打），
+ * 再没有候选的名字含这段文字时弹层收起。
  * 候选数据由 provider 体系提供（atMentionProviders.ts：内置 file / knowledge 两源，registry 可扩展）；
  * 本 hook 只做触发解析路由、候选合并与明文登记表，选中/退格/prune/matchMentions 这些明文驱动机制
  * 与单源时代一致。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   atTokenRef,
   buildAtToken,
@@ -20,10 +24,17 @@ import {
   type AtMentionRef
 } from '@shuvix/chat-protocol/utils/inlineTokens'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
-import { getAtMentionProviders, type AtSuggestionItem } from './atMentionProviders'
+import {
+  AT_SOURCE_TITLE_KEYS,
+  getAtMentionProviders,
+  type AtSuggestionItem
+} from './atMentionProviders'
 
 /** 合并弹层里每个源最多展示的条数（段头小字标题 + 每源 5 条，方向键跨段循环） */
 const PER_SOURCE_LIMIT = 5
+
+/** 收窄行至少要打这么多字才出：单个字母撞上文件名开头的太多（`@s` 多半是在找 src/） */
+const ROUTE_MIN_QUERY = 2
 
 /** 一条已选中的 @ 引用：text 为写入 textarea 的明文（含前导 @），ref 供构造 token */
 export interface AtMention {
@@ -35,8 +46,23 @@ export interface AtMention {
   ref: AtMentionRef
 }
 
-/** @ 弹层候选（provider 统一形态） */
-export type AtSuggestion = AtSuggestionItem
+/** 收窄行：选中把 `@<query>` 补成 `@<源>:`，弹层随即只出该源（不登记引用、不插胶囊） */
+export interface AtRouteSuggestion {
+  kind: 'route'
+  /** 收窄到的源名 */
+  source: string
+  /** 主文案（`file:`） */
+  label: string
+  /** 次文案（「只找文件」） */
+  detail: string
+}
+
+/** @ 弹层的一行：引用一个实体（provider 统一形态），或把这次 @ 收窄到某个源 */
+export type AtSuggestion = AtSuggestionItem | AtRouteSuggestion
+
+export function isRouteSuggestion(s: AtSuggestion): s is AtRouteSuggestion {
+  return 'kind' in s && s.kind === 'route'
+}
 
 /** textarea 内一处命中的引用区间 [start, end) */
 export interface MentionMatch {
@@ -51,8 +77,10 @@ function escapeRe(s: string): string {
 
 /**
  * 光标左侧最近的有效 `@` 触发；无则返回 null。
- * `@` 到光标之间不允许空白（一遇空白即中断）。`@源:query` 显式路由：文本含 `:` 且前缀命中
- * 已注册源名（sources）→ 回传 source 与冒号后的 query；否则整体作为默认源的 query。
+ * `@` 后紧跟的须是非空白字符；之后的空格算进 query（`@Token 刷` 找「Token 刷新」），弹层开不开
+ * 由候选决定 —— 再没有哪条候选的名字含这段文字（空格在内）就收起，回车照常发送。换行一律中断。
+ * `@源:query` 显式路由：文本含 `:` 且前缀（不分大小写）命中已注册源名（sources）→ 回传 source
+ * 与冒号后的 query；否则整体作为默认源的 query。
  */
 export function findActiveAt(
   text: string,
@@ -66,17 +94,19 @@ export function findActiveAt(
       // @ 须在词边界（行首或空白后），避免 email/代码里的 @ 误触发
       if (prev !== '' && !/\s/.test(prev)) return null
       const raw = text.slice(i + 1, caret)
+      // `@` 紧跟空白：单独的一个 @（「在 @ 一下」），不是引用
+      if (/^\s/.test(raw)) return null
       const colon = raw.indexOf(':')
       if (colon > 0) {
-        const prefix = raw.slice(0, colon)
+        const prefix = raw.slice(0, colon).toLowerCase()
         if (sources.includes(prefix)) {
           return { at: i, source: prefix, query: raw.slice(colon + 1) }
         }
       }
       return { at: i, query: raw }
     }
-    // 触发到光标之间不允许空白（一遇空白即中断）
-    if (/\s/.test(ch)) return null
+    // 引用不跨行
+    if (ch === '\n' || ch === '\r') return null
   }
   return null
 }
@@ -163,6 +193,7 @@ export interface UseAtMentions {
 }
 
 export function useAtMentions(sessionId: string | null): UseAtMentions {
+  const { t } = useTranslation()
   const [mentions, setMentions] = useState<AtMention[]>([])
   const [trigger, setTrigger] = useState<{ at: number; source?: string; query: string } | null>(
     null
@@ -218,34 +249,62 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
       return p && p.ready(sessionId) ? p.search(sessionId, trigger.query, PER_SOURCE_LIMIT) : []
     }
     // 默认合并：各就绪源分区（顺序 = registry 注册序），每源 ≤ PER_SOURCE_LIMIT
-    return providers
-      .filter((p) => p.ready(sessionId))
-      .flatMap((p) => p.search(sessionId, trigger.query, PER_SOURCE_LIMIT))
+    const ready = providers.filter((p) => p.ready(sessionId))
+    const items = ready.flatMap((p) => p.search(sessionId, trigger.query, PER_SOURCE_LIMIT))
+    // 收窄行置顶（回车即补全 `@源:`）：query 是源名或其界面名的开头，且该源此刻有候选
+    const q = trigger.query.toLowerCase()
+    if (q.length < ROUTE_MIN_QUERY || /[\s:]/.test(q)) return items
+    const routes: AtRouteSuggestion[] = []
+    for (const p of ready) {
+      const key = AT_SOURCE_TITLE_KEYS[p.source]
+      const name = key ? t(key) : p.source
+      if (!p.source.startsWith(q) && !name.toLowerCase().startsWith(q)) continue
+      if (p.search(sessionId, '', 1).length === 0) continue
+      routes.push({
+        kind: 'route',
+        source: p.source,
+        label: `${p.source}:`,
+        detail: t('input.atRouteOnly', { name })
+      })
+    }
+    return [...routes, ...items]
     // dataVersion 驱动重算：provider 数据到达/重扫后 trigger 未变也要刷新候选
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trigger, sessionId, providers, dataVersion])
+  }, [trigger, sessionId, providers, dataVersion, t])
 
   const showPopover = trigger !== null && suggestions.length > 0
 
   const refresh = useCallback(
     (text: string, caret: number): void => {
-      const t = findActiveAt(
+      const found = findActiveAt(
         text,
         caret,
         providers.map((p) => p.source)
       )
-      // 光标恰落在一个完整已登记引用之后（无尾随空白）→ 不重开弹层
-      if (t && mentionsRef.current.some((m) => m.text === text.slice(t.at, caret))) {
+      // 这处 @ 是一个完整的已登记引用 → 不重开弹层：光标恰落在它尾部（无尾随空白），或在它之后
+      // 又打了字（query 能带空格了，`@knowledge:Token 刷新 说明一下` 不该再去找「Token 刷新 说明一下」）
+      if (
+        found &&
+        (mentionsRef.current.some((m) => m.text === text.slice(found.at, caret)) ||
+          matchMentions(text, mentionsRef.current).some(
+            (m) => m.start === found.at && m.end <= caret
+          ))
+      ) {
         setTrigger(null)
         return
       }
       setTrigger((prev) => {
-        if (!t) return null
-        if (prev && prev.at === t.at && prev.query === t.query && prev.source === t.source) {
+        if (!found) return null
+        if (
+          prev &&
+          prev.at === found.at &&
+          prev.query === found.query &&
+          prev.source === found.source
+        ) {
           return prev
         }
         setSelectedIndex(0)
-        return t
+        return found
       })
     },
     [providers]
@@ -286,6 +345,14 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
       const at = trigger?.at ?? caret
       const before = text.slice(0, at)
       const after = text.slice(caret)
+      // 收窄行：补成 `@源:`（不加空格），触发态直接切到该源 —— 程序化改写不经 onChange，
+      // 不在这里置触发态的话弹层要等下一次击键才出
+      if (isRouteSuggestion(suggestion)) {
+        const insert = `@${suggestion.source}:`
+        setSelectedIndex(0)
+        setTrigger({ at, source: suggestion.source, query: '' })
+        return { text: before + insert + after, caret: before.length + insert.length }
+      }
       // 写入 textarea 的明文与胶囊逐字一致（镜像层字符须与底层一致）。知识条目标题重名时
       // buildMentionEntry 自动加消歧后缀；唯一标识/展开正文用 ref，同名不同库不串味。
       const entry = buildMentionEntry(suggestion, mentionsRef.current)

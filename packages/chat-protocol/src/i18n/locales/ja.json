@@ -259,7 +259,8 @@
     "pasteChipLines": "[貼り付けテキスト #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[貼り付けテキスト #{{seq}} · {{chars}} 文字]",
     "pasteName": "貼り付けテキスト #{{seq}}",
-    "atSectionSessions": "セッション"
+    "atSectionSessions": "セッション",
+    "atRouteOnly": "{{name}}のみ"
   },
   "compact": {
     "summaryLabel": "会話の要約（自動圧縮済み）"
