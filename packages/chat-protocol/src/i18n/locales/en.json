@@ -344,6 +344,10 @@
     "cacheRead": "cache read",
     "cacheWrite": "cache write",
     "artifactMissing": "Artifact \"{{name}}\" not found in this session",
+    "artifactNewer": "Newer version",
+    "artifactNewerHint": "This is the version from when this reply was written, and the artifact has changed since. Click to see the latest in the Artifacts tab.",
+    "artifactUnpinned": "Current version",
+    "artifactUnpinnedHint": "The version from when this reply was written was not recorded (the reply predates version pinning), so this shows the file as it is now.",
     "interactive": "Interactive",
     "interactiveBuilding": "Building the interactive figure… ({{lines}} lines)",
     "interactiveRerun": "Run again",
@@ -1306,6 +1310,11 @@
     "tasksEndedDaysAgo": "Ended {{count}}d ago",
     "tasksShowOlder": "Show {{count}} older",
     "tasksShowRecent": "Show only the latest {{count}}",
+    "artifacts": "Artifacts",
+    "artifactsSubSession": "Sub-session · {{title}}",
+    "artifactsVersion": "v{{count}}",
+    "artifactsReveal": "Show in folder",
+    "artifactsCopyPath": "Copy path",
     "calendar": "Calendar"
   },
   "externalOpen": {

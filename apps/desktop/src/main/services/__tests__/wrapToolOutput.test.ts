@@ -14,6 +14,9 @@
  * （W-S1..S3）随它搬到 packages/agent-runtime/src/toolOutput/__tests__/wrapDurableOutput.test.ts；
  * 这里不再桩后处理（短文本本来就原样通过），W-T1 不再数后处理的调用次数。新增 W-14：门的评估门面
  * 可以按调用现取。
+ *
+ * W-H1…W-H6：执行前后的旁路钩子（`executionHooks`，桌面用它给会话产物记版本）—— 次序、失败与取消时
+ * after 照跑、钩子出错只吞掉、门没放行时都不跑、after 落定之前结果不交回、「已审查」标记照旧。
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import type { Context } from '@earendil-works/chord'
@@ -28,9 +31,13 @@ import {
 } from '@shuvix/agent-runtime/tools/testing/invokeTool'
 import {
   createSecurityContext,
+  clearReviewState,
   clearSessionDecisions,
   getSessionDecisions
 } from '@shuvix/agent-runtime'
+// 记标记的那一端不从包入口导出（只有安全模块自己调）：直接引源文件 —— 解析到同一个模块实例
+import { noteReviewAllowed } from '../../../../../../packages/agent-runtime/src/security/reviewState'
+import { toolReviewOf } from '@shuvix/chat-protocol/types/toolReview'
 import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 
@@ -42,7 +49,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
 }))
 
-import { wrapDurableTool } from '../wrapToolOutput'
+import { wrapDurableTool, type ToolExecutionCall, type ToolExecutionHooks } from '../wrapToolOutput'
 
 const SID = 'wrap-tool-output-test-session'
 
@@ -463,6 +470,271 @@ describe('wrapToolOutput — control.terminate 原样带出', () => {
       const result = await exec(wrapped, 'tc-t2', {})
       expect('terminate' in (result as object)).toBe(false)
       expect('control' in (result as object)).toBe(false)
+    }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// W-H —— 执行前后的旁路钩子（`executionHooks`）。
+//
+// 桌面在这里给会话的产物目录记版本（before：旧目录补基线；after：变了就提交一版）。钉的是：
+//   W-H1 次序 before → execute → after，两边收到同一份 {toolName, callId, conversationId}
+//   W-H2 after 在 isError 与抛错（取消）时也跑；抛错照旧抛出去
+//   W-H3 钩子 reject / 同步抛错 → 只吞掉，结果原样
+//   W-H4 门拒绝 / 人写反馈 → 工具没执行：before 照跑（它在门之前，回复已经写完），after 不跑
+//   W-H5 after 落定之前结果不交回（下一次调模型时这次调用写下的那一版已经在历史里了）
+//   W-H6 「已审查」标记照旧并进 details
+//   W-H7 before 在门的决定之前：before 挂着时门没被问；门在等询问时 before 已经跑完
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 记下次序的钩子（可选地让某一边按给定的实现走） */
+function makeHooks(
+  log: string[],
+  impl: { before?: () => Promise<void>; after?: () => Promise<void> } = {}
+): {
+  hooks: ToolExecutionHooks
+  before: ReturnType<typeof vi.fn>
+  after: ReturnType<typeof vi.fn>
+} {
+  const before = vi.fn(async (call: ToolExecutionCall) => {
+    log.push(`before:${call.toolName}:${call.callId}`)
+    await impl.before?.()
+  })
+  const after = vi.fn(async (call: ToolExecutionCall) => {
+    log.push(`after:${call.toolName}:${call.callId}`)
+    await impl.after?.()
+  })
+  return { hooks: { before, after }, before, after }
+}
+
+/** execute 先记一笔再按给定实现走的工具 */
+function makeLoggedTool(
+  log: string[],
+  impl: () => Promise<unknown> = async () => ({ output: [{ type: 'text', text: 'ran' }] })
+): { tool: AnyTool; execute: ReturnType<typeof vi.fn> } {
+  const execute = vi.fn(async () => {
+    log.push('execute')
+    return impl()
+  })
+  const tool = {
+    name: 'write',
+    label: 'write',
+    description: 'test tool',
+    parameters: {},
+    replay: 'unsafe' as const,
+    execute
+  }
+  return { tool: tool as unknown as AnyTool, execute }
+}
+
+describe('wrapToolOutput — 执行前后的旁路钩子', () => {
+  it('W-H1 次序 before → execute → after，两边都收到 {toolName, callId, conversationId}', async () => {
+    const log: string[] = []
+    const { tool } = makeLoggedTool(log)
+    const { hooks, before, after } = makeHooks(log)
+    const { security } = makeSecurity()
+    const wrapped = wrapDurableTool(tool, {
+      sessionId: SID,
+      spill: true,
+      security,
+      executionHooks: hooks
+    })
+
+    const result = await exec(wrapped, 'tc-h1', { path: '/x' })
+
+    expect(log).toEqual(['before:write:tc-h1', 'execute', 'after:write:tc-h1'])
+    expect(before).toHaveBeenCalledTimes(1)
+    // conversationId 是发起调用的对话（钉引用版本时按它找发起这次调用的那条回复）
+    const expected = { toolName: 'write', callId: 'tc-h1', conversationId: 1 }
+    expect(before.mock.calls[0][0]).toStrictEqual(expected)
+    expect(after.mock.calls[0][0]).toStrictEqual(expected)
+    expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
+  })
+
+  it('W-H2 after 在 isError、工具抛错与取消时都跑；取消照旧抛出去', async () => {
+    // 工具自己交回的 isError 结果
+    let log: string[] = []
+    let { tool } = makeLoggedTool(log, async () => ({
+      output: [{ type: 'text', text: 'bad input' }],
+      isError: true
+    }))
+    let { hooks } = makeHooks(log)
+    let wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, executionHooks: hooks })
+    expect(await failureText(exec(wrapped, 'tc-h2a', {}))).toBe('bad input')
+    expect(log).toEqual(['before:write:tc-h2a', 'execute', 'after:write:tc-h2a'])
+
+    // 工具抛错（没取消）：内核收成 isError
+    log = []
+    ;({ tool } = makeLoggedTool(log, async () => {
+      throw new Error('disk full')
+    }))
+    ;({ hooks } = makeHooks(log))
+    wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, executionHooks: hooks })
+    expect(await failureText(exec(wrapped, 'tc-h2b', {}))).toContain('disk full')
+    expect(log).toEqual(['before:write:tc-h2b', 'execute', 'after:write:tc-h2b'])
+
+    // 取消：照旧 reject，after 仍然跑过
+    log = []
+    const ac = new AbortController()
+    const err = new Error('Aborted')
+    ;({ tool } = makeLoggedTool(log, async () => {
+      ac.abort()
+      throw err
+    }))
+    ;({ hooks } = makeHooks(log))
+    wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, executionHooks: hooks })
+    await expect(executeTool(wrapped, 'tc-h2c', {} as never, ac.signal)).rejects.toBe(err)
+    expect(log).toEqual(['before:write:tc-h2c', 'execute', 'after:write:tc-h2c'])
+  })
+
+  it('W-H3 钩子 reject 或同步抛错：只吞掉，工具照跑、结果原样', async () => {
+    const variants: Array<[string, ToolExecutionHooks]> = [
+      [
+        'both reject',
+        {
+          before: async () => {
+            throw new Error('before failed')
+          },
+          after: async () => {
+            throw new Error('after failed')
+          }
+        }
+      ],
+      [
+        'both throw synchronously',
+        {
+          before: (() => {
+            throw new Error('before threw')
+          }) as unknown as ToolExecutionHooks['before'],
+          after: (() => {
+            throw new Error('after threw')
+          }) as unknown as ToolExecutionHooks['after']
+        }
+      ]
+    ]
+    for (const [label, executionHooks] of variants) {
+      const log: string[] = []
+      const { tool, execute } = makeLoggedTool(log)
+      const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, executionHooks })
+      const result = await exec(wrapped, `tc-h3-${label}`, {})
+      expect(execute, label).toHaveBeenCalledTimes(1)
+      expect(result, label).toEqual({ content: [{ type: 'text', text: 'ran' }] })
+    }
+  })
+
+  it('W-H4 门拒绝 / 人写反馈：工具没执行；before 在门之前照跑，after 不跑', async () => {
+    const outcomes: Array<() => Promise<EnforceOutcome>> = [
+      async () => {
+        throw new Error("Denied by security policy rule 'tool-gate#0'")
+      },
+      async () => ({ status: 'feedback', text: 'use the other tool' })
+    ]
+    for (const outcome of outcomes) {
+      const log: string[] = []
+      const { tool, execute } = makeLoggedTool(log)
+      const { hooks, before, after } = makeHooks(log)
+      const { security } = makeSecurity(outcome)
+      const wrapped = wrapDurableTool(tool, {
+        sessionId: SID,
+        spill: true,
+        security,
+        executionHooks: hooks
+      })
+      await exec(wrapped, 'tc-h4', {})
+      expect(execute).not.toHaveBeenCalled()
+      // before 在 L1 门之前：发起调用的回复已经写完，被拒的调用也要钉住它引用的版本
+      expect(before).toHaveBeenCalledTimes(1)
+      expect(after).not.toHaveBeenCalled()
+      expect(log).toEqual(['before:write:tc-h4'])
+    }
+  })
+
+  it('W-H5 after 落定之前结果不交回', async () => {
+    const log: string[] = []
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const { tool } = makeLoggedTool(log)
+    const { hooks } = makeHooks(log, { after: () => gate })
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, executionHooks: hooks })
+
+    let settled = false
+    const pending = exec(wrapped, 'tc-h5', {}).then((r) => {
+      settled = true
+      return r
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(log).toEqual(['before:write:tc-h5', 'execute', 'after:write:tc-h5'])
+    expect(settled).toBe(false)
+
+    release()
+    const result = await pending
+    expect(settled).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
+  })
+
+  it('W-H7 before 在门的决定之前：before 没落定时门还没被问；门在等（询问）时 before 已经跑完', async () => {
+    // a) before 挂着：L1 门还没被问到、工具没执行
+    let log: string[] = []
+    let releaseBefore!: () => void
+    const beforeGate = new Promise<void>((resolve) => (releaseBefore = resolve))
+    let { tool, execute } = makeLoggedTool(log)
+    let { hooks } = makeHooks(log, { before: () => beforeGate })
+    let sec = makeSecurity()
+    let wrapped = wrapDurableTool(tool, {
+      sessionId: SID,
+      spill: true,
+      security: sec.security,
+      executionHooks: hooks
+    })
+    let pending = exec(wrapped, 'tc-h7a', {})
+    await new Promise((r) => setTimeout(r, 10))
+    expect(log).toEqual(['before:write:tc-h7a'])
+    expect(sec.enforceInvocation).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+    releaseBefore()
+    await pending
+    expect(sec.enforceInvocation).toHaveBeenCalledTimes(1)
+    expect(log).toEqual(['before:write:tc-h7a', 'execute', 'after:write:tc-h7a'])
+
+    // b) 门在等（一张询问卡还没人答）：before 已经跑完 —— 回复早写完了，等答复的这段时间里文件可能被改
+    log = []
+    let answer!: (o: EnforceOutcome) => void
+    ;({ tool, execute } = makeLoggedTool(log))
+    const made = makeHooks(log)
+    hooks = made.hooks
+    sec = makeSecurity(() => new Promise<EnforceOutcome>((resolve) => (answer = resolve)))
+    wrapped = wrapDurableTool(tool, {
+      sessionId: SID,
+      spill: true,
+      security: sec.security,
+      executionHooks: hooks
+    })
+    pending = exec(wrapped, 'tc-h7b', {})
+    await new Promise((r) => setTimeout(r, 10))
+    expect(sec.enforceInvocation).toHaveBeenCalledTimes(1)
+    expect(made.before).toHaveBeenCalledTimes(1)
+    expect(made.after).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+    expect(log).toEqual(['before:write:tc-h7b'])
+    answer({ status: 'allowed' })
+    const result = await pending
+    expect(log).toEqual(['before:write:tc-h7b', 'execute', 'after:write:tc-h7b'])
+    expect(result.content).toEqual([{ type: 'text', text: 'ran' }])
+  })
+
+  it('W-H6 「已审查」标记照旧并进 details', async () => {
+    const log: string[] = []
+    const { tool } = makeLoggedTool(log)
+    const { hooks } = makeHooks(log)
+    const wrapped = wrapDurableTool(tool, { sessionId: SID, spill: true, executionHooks: hooks })
+    // invokeTool 的缺省 taskId 是 1：标记按 (sessionId, task:1) 认
+    noteReviewAllowed(SID, { toolCallId: 'tc-h6', taskId: 1 }, { risk: 'low', summary: 'ok' })
+    try {
+      const result = await exec(wrapped, 'tc-h6', {})
+      expect(log).toEqual(['before:write:tc-h6', 'execute', 'after:write:tc-h6'])
+      expect(toolReviewOf(result.details)).toStrictEqual({ risk: 'low', summary: 'ok' })
+    } finally {
+      clearReviewState(SID)
     }
   })
 })

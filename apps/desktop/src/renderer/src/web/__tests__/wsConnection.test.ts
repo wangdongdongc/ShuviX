@@ -668,10 +668,10 @@ describe('WC-20 服务端的垃圾', () => {
 })
 
 describe('WC-21 DEFAULT_RESYNC_EVENTS', () => {
-  it('WC-21 15 条、type 不重复、含 network.changed / session.listChanged / daily.changed / tracking.changed / trigger.logged、每条只有 type', () => {
-    expect(DEFAULT_RESYNC_EVENTS).toHaveLength(15)
+  it('WC-21 16 条、type 不重复、含 network.changed / session.listChanged / daily.changed / tracking.changed / trigger.logged / artifacts.changed、每条只有 type', () => {
+    expect(DEFAULT_RESYNC_EVENTS).toHaveLength(16)
     const types = DEFAULT_RESYNC_EVENTS.map((e) => e.type)
-    expect(new Set(types).size).toBe(15)
+    expect(new Set(types).size).toBe(16)
     expect(types).toContain('network.changed')
     expect(types).toContain('session.listChanged')
     // 断线期间写过的日报：重连后日历的点与摘录要跟上
@@ -680,6 +680,8 @@ describe('WC-21 DEFAULT_RESYNC_EVENTS', () => {
     expect(types).toContain('tracking.changed')
     // 断线期间新记的触发日志：重连后设置 → 触发源 一页要跟上
     expect(types).toContain('trigger.logged')
+    // 断线期间记下的产物新版：重连后会话面板的「产物」页要跟上（不带 sessionIds = 开着的都重拉）
+    expect(types).toContain('artifacts.changed')
     for (const event of DEFAULT_RESYNC_EVENTS) expect(Object.keys(event)).toStrictEqual(['type'])
   })
 })

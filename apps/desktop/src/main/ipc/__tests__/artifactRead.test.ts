@@ -10,6 +10,10 @@
  *    嵌套只有一层，所以不递归（IR-6 把「只找一层」钉住）。
  *  - **`name` 拿不到目录之外的文件**：今天 name 是与 readdir 结果比字符串、天然安全，
  *    这条守的是「别有人为省一次 readdir 改成 `join(dir, name)`」。
+ *
+ * 钉版本（services/artifacts/pins.ts）之后多了一路：带上围栏所在回复的 `messageId` 时按需 import 会话宿主
+ * （这里换成只有 `peek` 的桩）取钉下的那一版。IR-8 不带 messageId 仍是同步值；IR-9 带了就是 Promise，
+ * 会话没开 / peek 或宿主抛错都回落当前内容；IR-10 子会话下探照旧；IR-11 真 durable 会话上钉过 → 那一版。
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -21,7 +25,11 @@ type Handler = (event: unknown, ...args: unknown[]) => unknown
 const state = vi.hoisted(() => ({
   root: '',
   handlers: new Map<string, Handler>(),
-  children: new Map<string, Array<{ id: string }>>()
+  children: new Map<string, Array<{ id: string }>>(),
+  /** 会话宿主的 peek（按需加载的那个 sessionHost 上） */
+  peek: vi.fn<(sessionId: string) => unknown>(),
+  /** getSessionHost 本身抛错（宿主还没起来之类） */
+  hostThrows: false
 }))
 
 vi.mock('electron', () => ({
@@ -54,10 +62,29 @@ vi.mock('../../services/filePreviewService', () => ({
 vi.mock('../../services/previewWindowService', () => ({
   openFileInWindow: vi.fn()
 }))
+// 带 messageId 的读按需 import 会话宿主（它带着整套运行时依赖）：换成只有 peek 的桩
+vi.mock('../../services/sessionHost', () => ({
+  getSessionHost: () => {
+    if (state.hostThrows) throw new Error('session host not ready')
+    return { peek: (sessionId: string) => state.peek(sessionId) }
+  }
+}))
 
 import { registerFilesHandlers } from '../filesHandlers'
 import { attachIpcAdapter } from '../ipcAdapter'
 import { writeArtifact } from '../../services/artifacts/store'
+import { pinFinalReply } from '../../services/artifacts/pins'
+import {
+  appendEntries,
+  assistantDraft,
+  userDraft
+} from '../../../../../../packages/agent-runtime/src/durable/__tests__/support/digest'
+import {
+  makeHost,
+  registerHostCleanup
+} from '../../../../../../packages/agent-runtime/src/durable/__tests__/support/host'
+
+registerHostCleanup()
 
 const HOME_ARTIFACTS = join(homedir(), '.shuvix', 'artifacts')
 const homeSnapshot = (): string[] | null => {
@@ -99,7 +126,16 @@ afterAll(() => {
 beforeEach(() => {
   sid = `s${++seq}`
   state.children.clear()
+  state.peek.mockReset()
+  state.hostThrows = false
 })
+
+/** 带 messageId 的那一路：原样交回 handler 的返回值（应当是 Promise） */
+const readAt = (sessionId: string, name: string, messageId: string): unknown => {
+  const handler = state.handlers.get('artifact:read')
+  expect(handler, 'artifact:read 未注册').toBeDefined()
+  return handler!({ sender: { id: 1 } }, { sessionId, name, messageId })
+}
 
 describe('artifact:read', () => {
   it('IR-1 命中 ⇒ name / title / content 三项齐全（渲染端一次就画得出卡片）', () => {
@@ -109,10 +145,14 @@ describe('artifact:read', () => {
       ext: 'svg',
       content: '<svg aria-label="Requests by tier"><rect/></svg>'
     })
+    // 不带 messageId 就是当前内容：pinned false / latest true；sessionId 是产物所在的会话
     expect(read(sid, 'requests-by-tier.svg')).toEqual({
+      sessionId: sid,
       name: 'requests-by-tier.svg',
       title: 'Requests by tier',
-      content: '<svg aria-label="Requests by tier"><rect/></svg>'
+      content: '<svg aria-label="Requests by tier"><rect/></svg>',
+      pinned: false,
+      latest: true
     })
   })
 
@@ -167,9 +207,12 @@ describe('artifact:read', () => {
       content: '<svg aria-label="Drawn by the sub-agent"/>'
     })
     expect(read(sid, 'drawn-by-the-sub-agent.svg')).toEqual({
+      sessionId: child,
       name: 'drawn-by-the-sub-agent.svg',
       title: 'Drawn by the sub-agent',
-      content: '<svg aria-label="Drawn by the sub-agent"/>'
+      content: '<svg aria-label="Drawn by the sub-agent"/>',
+      pinned: false,
+      latest: true
     })
     // 按标题走同一条下探
     expect(read(sid, 'Drawn by the sub-agent')?.name).toBe('drawn-by-the-sub-agent.svg')
@@ -197,5 +240,116 @@ describe('artifact:read', () => {
     expect(read(sid, made.name)?.content).toBe('v1')
     writeFileSync(made.path, 'v2', 'utf-8')
     expect(read(sid, made.name)?.content).toBe('v2')
+  })
+
+  it('IR-8 不带 messageId：同步交回一个值（不是 Promise），带上 sessionId / pinned / latest；不碰会话宿主', () => {
+    writeArtifact({
+      sessionId: sid,
+      title: 'Sync',
+      ext: 'svg',
+      content: '<svg aria-label="Sync"/>'
+    })
+    const handler = state.handlers.get('artifact:read')!
+    const out = handler({ sender: { id: 1 } }, { sessionId: sid, name: 'sync.svg' })
+    expect(out).not.toBeInstanceOf(Promise)
+    expect(typeof (out as { then?: unknown }).then).toBe('undefined')
+    expect(out).toEqual({
+      sessionId: sid,
+      name: 'sync.svg',
+      title: 'Sync',
+      content: '<svg aria-label="Sync"/>',
+      pinned: false,
+      latest: true
+    })
+    // 取不到也是同步的 null
+    expect(handler({ sender: { id: 1 } }, { sessionId: sid, name: 'nope.svg' })).toBeNull()
+    expect(state.peek).not.toHaveBeenCalled()
+  })
+
+  it('IR-9 带 messageId：交回 Promise；会话没开（peek → undefined）/ peek 抛错 / 宿主抛错 → 当前内容', async () => {
+    writeArtifact({ sessionId: sid, title: 'Async', ext: 'svg', content: 'v1' })
+    const current = {
+      sessionId: sid,
+      name: 'async.svg',
+      // 内容里没有标题：回落文件名主干
+      title: 'async',
+      content: 'v1',
+      pinned: false,
+      latest: true
+    }
+
+    state.peek.mockResolvedValue(undefined)
+    const pending = readAt(sid, 'async.svg', '7')
+    expect(pending).toBeInstanceOf(Promise)
+    await expect(pending).resolves.toEqual(current)
+    expect(state.peek).toHaveBeenCalledWith(sid)
+
+    state.peek.mockRejectedValue(new Error('peek failed'))
+    await expect(readAt(sid, 'async.svg', '7')).resolves.toEqual(current)
+    state.peek.mockImplementation(() => {
+      throw new Error('peek threw')
+    })
+    await expect(readAt(sid, 'async.svg', '7')).resolves.toEqual(current)
+
+    state.hostThrows = true
+    await expect(readAt(sid, 'async.svg', '7')).resolves.toEqual(current)
+
+    // 不是十进制数字串的 messageId 也走这一路，照样是当前内容
+    state.hostThrows = false
+    state.peek.mockResolvedValue(undefined)
+    await expect(readAt(sid, 'async.svg', 'abc')).resolves.toEqual(current)
+    await expect(readAt(sid, 'missing.svg', '7')).resolves.toBeNull()
+  })
+
+  it('IR-10 带 messageId、没钉过：子会话的照样往下找一层（sessionId 是子会话）', async () => {
+    const child = `${sid}-coding`
+    state.children.set(sid, [{ id: child }])
+    writeArtifact({
+      sessionId: child,
+      title: 'Kid',
+      ext: 'svg',
+      content: '<svg aria-label="Kid"/>'
+    })
+    state.peek.mockResolvedValue(undefined)
+    await expect(readAt(sid, 'kid.svg', '3')).resolves.toEqual({
+      sessionId: child,
+      name: 'kid.svg',
+      title: 'Kid',
+      content: '<svg aria-label="Kid"/>',
+      pinned: false,
+      latest: true
+    })
+  })
+
+  it('IR-11 带 messageId、会话开着、那条回复钉过：交回钉下的那一版（之后改了 → latest false）', async () => {
+    const made = writeArtifact({
+      sessionId: sid,
+      title: 'Pinned',
+      ext: 'svg',
+      content: '<svg aria-label="Pinned"/>'
+    })
+    const t = await makeHost({ ephemeral: ['ir-pins'] })
+    const session = await t.open('ir-pins')
+    const [, answer] = await appendEntries(session, [
+      userDraft('show', 1),
+      assistantDraft('```artifact\npinned.svg\n```', 2)
+    ])
+    await pinFinalReply(session, sid)
+    state.peek.mockResolvedValue(session)
+    const mid = String(answer!.id)
+
+    const pinned = {
+      sessionId: sid,
+      name: 'pinned.svg',
+      title: 'Pinned',
+      content: '<svg aria-label="Pinned"/>',
+      pinned: true,
+      latest: true
+    }
+    await expect(readAt(sid, 'pinned.svg', mid)).resolves.toEqual(pinned)
+    writeFileSync(made.path, '<svg aria-label="Changed"/>', 'utf-8')
+    await expect(readAt(sid, 'pinned.svg', mid)).resolves.toEqual({ ...pinned, latest: false })
+    // 不带 messageId 就是现在的样子
+    expect(read(sid, 'pinned.svg')?.content).toBe('<svg aria-label="Changed"/>')
   })
 })

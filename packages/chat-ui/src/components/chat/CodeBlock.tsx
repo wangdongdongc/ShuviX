@@ -2,7 +2,7 @@ import { useContext, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, Code, FileText } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
-import { getHostApi } from '../../api/chatApi'
+import { getHostApi, getSessionChannelApi } from '../../api/chatApi'
 import { useChatStore } from '../../stores/chatStore'
 import { sanitizeAuthoredSvg } from '@shuvix/chat-protocol/utils/svgSanitize'
 import {
@@ -11,6 +11,7 @@ import {
   svgFenceIsRenderable
 } from '@shuvix/chat-protocol/utils/svgFence'
 import { MERMAID_FENCE_LANG } from '@shuvix/chat-protocol/utils/mermaidFence'
+import { artifactRefName } from '@shuvix/chat-protocol/utils/artifactFence'
 import {
   INTERACTIVE_FENCE_LANG,
   fenceSourceIsClosed
@@ -18,7 +19,7 @@ import {
 import { ChatHostContext } from '../../host/chatHostContext'
 import { MermaidBlock } from './MermaidBlock'
 import { InteractiveBlock, InteractiveUnsupportedBlock } from './InteractiveBlock'
-import { useMarkdownSource, useMarkdownStreaming } from './markdownStreaming'
+import { useMarkdownMessageId, useMarkdownSource, useMarkdownStreaming } from './markdownStreaming'
 import { FigureExportButton } from '../figure/FigureExportPanel'
 import { authoredFigureSource } from '../figure/figureExport'
 
@@ -27,20 +28,9 @@ const authoredSvgCache = new Map<string, string>()
 /** 手写 SVG 的视图状态：code → showSource（缺省为图，见 AuthoredSvgBlock） */
 const authoredViewState = new Map<string, boolean>()
 
-/**
- * ```artifact 围栏体 → 要展示的那件 artifact 的名字；不是引用围栏、或围栏体是空的就 null。
- *
- * 只取**第一行**：围栏里只该有一个名字（对话里留下的是一行名字，不是几 KB 源码），多出来的
- * 行是模型把说明写进了围栏。空体不渲染引用 —— 流式期间围栏刚开、名字还没写出来时也走这条，
- * 否则会先闪一张「找不到」卡。大小写敏感与 ```svg 那档一致（提示词教的是小写）。
- *
- * 组件本身要 DOM，判定不要 —— 所以和 svgFenceIsRenderable 一样单独导出。
- */
-export function artifactRefName(lang: string, code: string): string | null {
-  if (lang !== 'artifact') return null
-  const first = code.trim().split('\n')[0].trim()
-  return first || null
-}
+// ```artifact 围栏体 → 名字：与宿主钉版本时同一个取法（chat-protocol artifactFence），从这里转出去
+// 是因为单测与调用方一直从 CodeBlock 拿它
+export { artifactRefName }
 
 /**
  * 取到的内容要不要按 SVG 内联（否则落 `<pre>` 源码分支）。
@@ -266,10 +256,12 @@ function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
 }
 
 /**
- * ```artifact 引用围栏 —— 正文里指名一件会话 Artifact，渲染它**当前**的内容。
+ * ```artifact 引用围栏 —— 正文里指名一件会话 Artifact，渲染**它所在那条回复写下时**的那一版。
  *
- * 这是「对话只持有引用」的落点：转写里留下的是一行名字，不是几 KB 源码。图改过之后
- * 再发一条同名引用就展示新版，而修改本身是 `edit` 的一个小 diff —— 不必把整张图重画。
+ * 这是「对话只持有引用」的落点：转写里留下的是一行名字，不是几 KB 源码。图改过之后再发一条同名引用
+ * 就展示新版，而修改本身是 `edit` 的一个小 diff —— 不必把整张图重画。旧回复里的引用不跟着变：宿主在
+ * 每条回复写完时钉住它引用的那一份（桌面 `services/artifacts/pins.ts`），这里带着回复的消息 id 去取。
+ * 没钉过的（功能上线前的回复、流式中）照当前内容显示，并标出「当前版本」。
  *
  * 为什么不走 `<img>` 取内容：SVG 经 `<img>` 加载是一份**独立文档**，`var(--viz-1)` 解析不到，
  * 整套 token 配色当场失效。所以必须取文本内联进宿主 DOM —— 也因此必须过 sanitizeAuthoredSvg，
@@ -278,40 +270,118 @@ function AuthoredSvgBlock({ code }: { code: string }): React.JSX.Element {
  * 只在桌面端成立：扩展没有 artifact 存储，取不到就显示「找不到」而不是空白。
  */
 function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
+  const sessionId = useChatStore((s) => s.activeSessionId)
+  const messageId = useMarkdownMessageId()
+  const streaming = useMarkdownStreaming()
+  return (
+    <ArtifactPreview
+      sessionId={sessionId}
+      name={name}
+      messageId={streaming ? null : messageId}
+      followChanges
+    />
+  )
+}
+
+type ArtifactLoadState =
+  | { kind: 'loading' }
+  | { kind: 'missing' }
+  | {
+      kind: 'ok'
+      /** 产物所在的会话（宿主没说就是所问的那场） */
+      owner: string
+      name: string
+      title: string
+      content: string
+      pinned: boolean
+      latest: boolean
+    }
+
+/**
+ * 一件会话 Artifact 的渲染（引用围栏与会话面板「产物」页共用）：svg 内联、`.html` 进交互图沙箱、
+ * 其余显示源码。`sessionId` 是去哪场会话找（`artifact:read` 还会往下找一层子会话）。
+ *
+ *  - `messageId`：引用所在那条回复 —— 给了就取那条回复钉住的那一版，并在标题栏标出它与当前的关系：
+ *    钉下的那一版之后又被改过 →「已有新版」（点它在会话面板的产物页里亮出这件）；没钉过 →「当前版本」。
+ *  - `followChanges`：`artifacts.changed` 一来就重取（钉住的内容不变，但「已有新版」要跟上；没钉的
+ *    要跟上新内容；回复落定后钉才写下，也靠这一下换成钉住的那一版）。面板那边换 key 重挂，不用它。
+ *  - `hideTitle`：面板那一行已经写着标题，展开的预览里不再重复（svg 的导出按钮、版本标记照留）。
+ */
+export function ArtifactPreview({
+  sessionId,
+  name,
+  messageId = null,
+  followChanges = false,
+  hideTitle = false
+}: {
+  sessionId: string | null
+  name: string
+  messageId?: string | null
+  followChanges?: boolean
+  hideTitle?: boolean
+}): React.JSX.Element {
   const { t } = useTranslation()
   const canRunInteractive = useContext(ChatHostContext)?.interactiveFigures === true
-  const sessionId = useChatStore((s) => s.activeSessionId)
   // 取不到宿主通道（扩展端没有 artifact 存储）就直接按「找不到」呈现 —— **派生出来，不写进
   // state**：在 effect 里同步 setState 会触发级联渲染，react-hooks/set-state-in-effect 拦它
   const reader = getHostApi()?.artifact?.read
   const canLoad = !!sessionId && !!reader
   const figureRef = useRef<HTMLDivElement>(null)
-  const [loaded, setState] = useState<
-    | { kind: 'loading' }
-    | { kind: 'missing' }
-    | { kind: 'ok'; name: string; title: string; content: string }
-  >({ kind: 'loading' })
+  const [loaded, setState] = useState<ArtifactLoadState>({ kind: 'loading' })
   const state = canLoad ? loaded : ({ kind: 'missing' } as const)
+  // 重取的计数：artifacts.changed 一来就加一（effect 依赖它）。只有引用块订阅；宿主没有事件通道
+  // （测试、只读嵌入）就不跟 —— 那里也不会有新版
+  const [revision, setRevision] = useState(0)
+  // 产物所在的会话（取回来才知道）：子会话的产物记了新版，事件点的是子会话
+  const ownerRef = useRef<string | null>(null)
+  useEffect(() => {
+    ownerRef.current = loaded.kind === 'ok' ? loaded.owner : null
+  }, [loaded])
+  useEffect(() => {
+    if (!followChanges) return
+    let off: unknown
+    try {
+      off = getSessionChannelApi().events.subscribe((event) => {
+        if (event.type !== 'artifacts.changed') return
+        // 只认点到自己的：所问的会话，或产物所在的会话（子会话的）；不带会话的（重连）一律重取
+        const ids = event.sessionIds
+        if (!ids || ids.some((id) => id === sessionId || id === ownerRef.current)) {
+          setRevision((r) => r + 1)
+        }
+      })
+    } catch {
+      return
+    }
+    return typeof off === 'function' ? (off as () => void) : undefined
+  }, [followChanges, sessionId])
 
   useEffect(() => {
     let alive = true
     if (!canLoad || !reader) return
-    void reader({ sessionId, name })
+    void reader({ sessionId, name, ...(messageId ? { messageId } : {}) })
       .then((row) => {
         if (!alive) return
         // 围栏里写的可能是标题而不是文件名（artifact:read 两种都认）：按宿主解析出来的真实文件名走，
         // 否则按标题引用的一件 .html 会落进 <pre> 而不是沙箱
-        setState(
-          row
-            ? { kind: 'ok', name: row.name ?? name, title: row.title, content: row.content }
-            : { kind: 'missing' }
-        )
+        const next: ArtifactLoadState = row
+          ? {
+              kind: 'ok',
+              owner: row.sessionId ?? sessionId,
+              name: row.name ?? name,
+              title: row.title,
+              content: row.content,
+              pinned: row.pinned === true,
+              latest: row.latest !== false
+            }
+          : { kind: 'missing' }
+        // 重取回来的一模一样就不换 state：交互图的沙箱不该因为别的产物记了一版就整块重载
+        setState((prev) => (sameLoadState(prev, next) ? prev : next))
       })
       .catch(() => alive && setState({ kind: 'missing' }))
     return () => {
       alive = false
     }
-  }, [canLoad, reader, sessionId, name])
+  }, [canLoad, reader, sessionId, name, messageId, revision])
 
   if (state.kind === 'missing') {
     return (
@@ -321,43 +391,76 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
     )
   }
 
-  // .html 的 artifact 是认领下来的交互图：与 ```interactive 围栏同一个沙箱
+  // 版本标记：只有引用（带着回复的消息 id）才有「当时那一版」可说
+  const versionMark =
+    state.kind === 'ok' && messageId ? (
+      state.pinned && !state.latest ? (
+        <button
+          data-artifact-newer=""
+          onClick={() => useChatStore.getState().revealArtifact(state.owner, state.name)}
+          className="flex-shrink-0 text-[10px] text-accent hover:underline"
+          title={t('message.artifactNewerHint')}
+        >
+          {t('message.artifactNewer')}
+        </button>
+      ) : !state.pinned ? (
+        <span
+          data-artifact-unpinned=""
+          className="flex-shrink-0 text-[10px] text-text-tertiary"
+          title={t('message.artifactUnpinnedHint')}
+        >
+          {t('message.artifactUnpinned')}
+        </span>
+      ) : null
+    ) : null
+
+  // .html 的 artifact 是认领下来的交互图：与 ```interactive 围栏同一个沙箱（它有自己的标题栏，
+  // 版本标记放在它上面一行）
   if (state.kind === 'ok' && artifactRefIsHtml(state.name)) {
-    return canRunInteractive ? (
-      <InteractiveBlock code={state.content} closed title={state.title} />
-    ) : (
-      <InteractiveUnsupportedBlock code={state.content} />
+    return (
+      <>
+        {versionMark && <div className="flex justify-end -mb-1 mt-2">{versionMark}</div>}
+        {canRunInteractive ? (
+          <InteractiveBlock code={state.content} closed title={state.title} />
+        ) : (
+          <InteractiveUnsupportedBlock code={state.content} />
+        )}
+      </>
     )
   }
 
   const svgHtml =
     state.kind === 'ok' && artifactRefIsSvg(state.content) ? sanitizeAuthoredSvg(state.content) : ''
 
+  const showExport = state.kind === 'ok' && !!svgHtml
   return (
     <div
       className="my-2 rounded-lg overflow-hidden"
       style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
     >
-      <div
-        className="flex items-center gap-3 px-4 py-1.5"
-        style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
-      >
-        <span className="text-[10px] text-text-tertiary font-medium truncate mr-auto">
-          {state.kind === 'ok' ? state.title : name}
-        </span>
-        {state.kind === 'ok' && svgHtml && (
-          <FigureExportButton
-            getSource={() =>
-              authoredFigureSource(svgHtml, {
-                // 产物有标题：比图里的 aria-label 更像用户认得的名字
-                name: state.title || null,
-                surface: 'card',
-                inheritFrom: () => figureRef.current
-              })
-            }
-          />
-        )}
-      </div>
+      {(!hideTitle || showExport || versionMark) && (
+        <div
+          className="flex items-center gap-3 px-4 py-1.5"
+          style={{ background: 'color-mix(in srgb, var(--color-bg-tertiary) 60%, transparent)' }}
+        >
+          <span className="text-[10px] text-text-tertiary font-medium truncate mr-auto">
+            {hideTitle ? '' : state.kind === 'ok' ? state.title : name}
+          </span>
+          {versionMark}
+          {showExport && (
+            <FigureExportButton
+              getSource={() =>
+                authoredFigureSource(svgHtml, {
+                  // 产物有标题：比图里的 aria-label 更像用户认得的名字
+                  name: state.title || null,
+                  surface: 'card',
+                  inheritFrom: () => figureRef.current
+                })
+              }
+            />
+          )}
+        </div>
+      )}
       {state.kind === 'loading' ? (
         <div className="p-3 text-[11px] text-text-tertiary">{t('message.rendering')}</div>
       ) : svgHtml ? (
@@ -372,5 +475,18 @@ function ArtifactRefBlock({ name }: { name: string }): React.JSX.Element {
         </pre>
       )}
     </div>
+  )
+}
+
+function sameLoadState(a: ArtifactLoadState, b: ArtifactLoadState): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind !== 'ok' || b.kind !== 'ok') return true
+  return (
+    a.owner === b.owner &&
+    a.name === b.name &&
+    a.title === b.title &&
+    a.content === b.content &&
+    a.pinned === b.pinned &&
+    a.latest === b.latest
   )
 }

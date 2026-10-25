@@ -96,6 +96,7 @@ export const DEFAULT_RESYNC_EVENTS: readonly AppEvent[] = [
   { type: 'daily.changed' },
   { type: 'tracking.changed' },
   { type: 'trigger.logged' },
+  { type: 'artifacts.changed' },
   { type: 'network.changed' }
 ]
 

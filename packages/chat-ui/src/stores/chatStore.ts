@@ -207,6 +207,12 @@ interface ChatState {
    */
   taskRevealRequest: { taskId: string; nonce: number } | null
   /**
+   * 请求在会话面板的「产物」页里亮出某件产物的信号（对话里一个引用块上的「已有新版」被点了）：
+   * 宿主的 useSessionPanelReveal 展开面板并切到产物页，面板据 sessionId + name 独占展开那一行。
+   * `sessionId` 是产物所在的会话（子会话的产物也在父会话的面板里）。含 nonce 以便重复点同一件也能触发。
+   */
+  artifactRevealRequest: { sessionId: string; name: string; nonce: number } | null
+  /**
    * 请求把一条历史用户消息重建为输入框草稿的信号（消息回退触发）。
    * content 含 {{shuvixInlineToken}} 标记、inlineTokens 为其元数据；由 InputArea 消费：
    * 重建可编辑明文并重新登记粘贴芯片/@ 引用，避免裸标记落入输入框导致 token 失效丢信息。
@@ -352,6 +358,7 @@ interface ChatState {
   requestFilePreview: (absPath: string, openedBy?: 'agent' | 'user') => void
   /** 请求在后台任务面板里亮出某条任务（工具卡行尾状态点击触发） */
   revealTask: (taskId: string) => void
+  revealArtifact: (sessionId: string, name: string) => void
   /** 请求把历史用户消息重建为输入框草稿（消息回退触发）；由 InputArea 消费后 clear */
   requestDraftRestore: (content: string, inlineTokens?: Record<string, InlineToken>) => void
   clearDraftRestore: () => void
@@ -729,6 +736,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   ...deriveActive(null),
   filePreviewRequest: null,
   taskRevealRequest: null,
+  artifactRevealRequest: null,
   draftRestoreRequest: null,
   scrollToMessageRequest: null,
   messages: [],
@@ -800,6 +808,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   revealTask: (taskId) =>
     set((state) => ({
       taskRevealRequest: { taskId, nonce: (state.taskRevealRequest?.nonce ?? 0) + 1 }
+    })),
+  revealArtifact: (sessionId, name) =>
+    set((state) => ({
+      artifactRevealRequest: {
+        sessionId,
+        name,
+        nonce: (state.artifactRevealRequest?.nonce ?? 0) + 1
+      }
     })),
   requestDraftRestore: (content, inlineTokens) =>
     set((state) => ({

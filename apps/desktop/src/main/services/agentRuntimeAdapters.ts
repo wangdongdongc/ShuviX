@@ -25,8 +25,22 @@ function tap(name: string, deliver: () => void): void {
 }
 
 /**
- * 事件广播适配器：委托 chatFrontendRegistry，并旁路一份给通知决策器，以及
- * Chrome 标签页会话的调试租约（一轮跑完就释放 Chrome 里的调试横幅 —— 与侧边栏开没开无关）。
+ * 一轮的终答落定（`agent_end`）：钉住它引用的产物版本（发起工具调用的回复在工具执行之前已经钉过，见
+ * agentHost）。派生 agent 的 agent_end 带的是 agentId 而不是会话，宿主认不出 —— 正好只钉根会话的终答。
+ * 会话宿主与钉版本都按需加载：sessionHost 反过来 import 本模块（事件汇），静态引会成环。
+ */
+function pinFinalReplyAfterRun(sessionId: string): void {
+  void Promise.all([import('./sessionHost'), import('./artifacts/pins')])
+    .then(([host, pins]) => pins.pinFinalReply(host.peekSessionHost()?.get(sessionId), sessionId))
+    .catch((error: unknown) => {
+      log.warn(`钉终答引用的版本失败: ${error instanceof Error ? error.message : String(error)}`)
+    })
+}
+
+/**
+ * 事件广播适配器：委托 chatFrontendRegistry，并旁路一份给通知决策器、
+ * Chrome 标签页会话的调试租约（一轮跑完就释放 Chrome 里的调试横幅 —— 与侧边栏开没开无关），
+ * 以及产物引用的版本（一轮的终答落定时钉住它引用的那些）。
  *
  * 通知**不走 ChatFrontend**：为通知造一个声明了输入能力却答不了的假前端，会让
  * `hasUserInputCapability` 在关窗后也返回 true，反过来改变询问的语义 —— 不如在这里明着分一路旁听。
@@ -38,6 +52,8 @@ export const electronEventSink: RuntimeEventSink = {
     tap('registry', () => chatFrontendRegistry.broadcast(event))
     tap('notification', () => notifyOnChatEvent(event))
     tap('chrome-lease', () => observeChromeTabRun(event))
+    if (event.type === 'agent_end')
+      tap('artifact-pins', () => pinFinalReplyAfterRun(event.sessionId))
   },
   hasUserInputCapability: (sessionId) => chatFrontendRegistry.hasCapability(sessionId, 'userInput')
 }

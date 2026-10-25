@@ -376,6 +376,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
 
   // ─── artifact：会话 Artifacts ───
   'artifact:read': 'read',
+  'artifact:list': 'read',
 
   // ─── files：会话工作目录文件 ───
   'files:scan': 'read',

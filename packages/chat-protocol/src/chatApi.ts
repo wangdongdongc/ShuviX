@@ -34,6 +34,7 @@ import type {
 import type { InputResponse } from './types/inputRequest'
 import type { InlineToken } from './types/chatMessage'
 import type { KnowledgeMentionEntry } from './knowledge'
+import type { ArtifactRefContent, SessionArtifact } from './artifacts'
 import type { SessionMentionEntry } from './sessionMention'
 import type { ChromeTabBinding } from './chromeTabSession'
 import type { SessionForkParams, SessionForkResult } from './sessionFork'
@@ -827,13 +828,17 @@ export interface HostApi {
   }
   /**
    * 会话 Artifacts（**桌面独有**）：```artifact 引用围栏按名字（或标题）取一件的当前内容；不存在 → null。
-   * 扩展端没有 artifact 存储，不实现 —— 引用围栏显示「找不到」。
+   * 扩展端没有 artifact 存储，不实现 —— 引用围栏显示「找不到」，会话面板没有「产物」页。
    */
   artifact?: {
     read: (params: {
       sessionId: string
       name: string
-    }) => Promise<{ name: string; title: string; content: string } | null>
+      /** 围栏所在回复的消息 id：给了就取那条回复写下时钉住的那一版（没钉过 = 当前内容） */
+      messageId?: string
+    }) => Promise<ArtifactRefContent | null>
+    /** 会话面板「产物」页：本会话与直接子会话的产物（同一会话内最近改过的在前） */
+    list: (params: { sessionId: string }) => Promise<SessionArtifact[]>
   }
   /**
    * 桌面日历（按 session_day_prompts：同一会话可出现在多个开口日）。

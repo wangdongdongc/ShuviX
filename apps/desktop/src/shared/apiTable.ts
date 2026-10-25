@@ -472,7 +472,8 @@ export const API_TABLE = {
   },
   /** 会话 Artifacts */
   artifact: {
-    read: invoke('artifact:read', 1)
+    read: invoke('artifact:read', 1),
+    list: invoke('artifact:list', 1)
   },
   /** 会话工作目录文件 */
   files: {

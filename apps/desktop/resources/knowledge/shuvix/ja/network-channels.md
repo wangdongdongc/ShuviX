@@ -62,7 +62,7 @@ ShuviX 自身を変える、または秘密を返す。各 scope が何を扱い
 
 - group: `artifact`, `download`, `files`, `fs`, `liveDoc`
 - route: `media`, `preview`, `download`
-- read: `artifact:read`, `files:read`, `files:scan`, `files:scanDir`, `files:unwatch`, `files:watch`, `fs:listDirectories`, `fs:locateFolder`
+- read: `artifact:list`, `artifact:read`, `files:read`, `files:scan`, `files:scanDir`, `files:unwatch`, `files:watch`, `fs:listDirectories`, `fs:locateFolder`
 - write: `download:cancel`, `files:open`, `files:write`, `liveDoc:attach`, `liveDoc:detach`, `liveDoc:respond`
 
 ### `terminal`

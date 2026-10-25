@@ -73,7 +73,9 @@ import { sessionRecords } from '../services/sessionRecords'
 import { projectDao } from '../dao/projectDao'
 import { resolveInstructionContent } from '../services/instruction'
 import { chatFrontendRegistry } from '../frontend/core'
-import { wrapDurableTool } from '../services/wrapToolOutput'
+import { wrapDurableTool, type ToolExecutionHooks } from '../services/wrapToolOutput'
+import { prepareArtifactHistory, recordArtifactChange } from '../services/artifacts/history'
+import { pinCallingReply } from '../services/artifacts/pins'
 import { sandboxGloballyActive } from '../services/sandbox'
 import { requestUserInputFor } from '../services/userInputBroker'
 import {
@@ -106,7 +108,9 @@ function sessionProject(
  * 只用它的 `agentIdentity`。经注入拿（sessionHost.ts import 本模块，反过来 import 会成环）。
  */
 export interface DesktopToolHostDeps {
-  sessionOf: (sessionId: string) => Pick<DurableSession, 'agentIdentity'> | undefined
+  sessionOf: (
+    sessionId: string
+  ) => Pick<DurableSession, 'agentIdentity' | 'harness' | 'currentConversation'> | undefined
 }
 
 /**
@@ -155,12 +159,26 @@ function sessionToolContext(
  * 这个会话的工具包装器：每个工具包一次（**不要**展开包好的工具 —— 元数据经原型链透出）。
  *  - 落盘 `'auto'`：按这次调用的 agent 工具表里有没有 `read` 定（没有 read 的 agent 取不回全文，
  *    就只在内存里截断），一份实例因此服务每个 agent；截断策略 / 上限读工具自己的声明；
- *  - L1 全工具门的主体按这次调用的对话现取（会话级装配的工具被不同 agent 共用）。
+ *  - L1 全工具门的主体按这次调用的对话现取（会话级装配的工具被不同 agent 共用）；
+ *  - 每次执行之前先钉住发起它的那条回复里的产物引用（services/artifacts/pins —— 工具一跑文件就可能变），
+ *    执行前后看一眼本会话的产物目录，变了就记一版（services/artifacts/history）。
  */
-function sessionWrapper(sessionId: string, ctx: ToolContext): (tool: object) => ToolRegistration {
+function sessionWrapper(
+  deps: DesktopToolHostDeps,
+  sessionId: string,
+  ctx: ToolContext
+): (tool: object) => ToolRegistration {
   const security = (api: ToolExecutionApi): ReturnType<typeof getDesktopSecurityContext> =>
     getDesktopSecurityContext(withCallAgent(ctx, api))
-  return (tool) => wrapDurableTool(tool as AnyTool, { sessionId, spill: 'auto', security })
+  const executionHooks: ToolExecutionHooks = {
+    before: async (call) => {
+      await pinCallingReply(deps.sessionOf(sessionId), sessionId, call)
+      await prepareArtifactHistory(sessionId)
+    },
+    after: (call) => recordArtifactChange(sessionId, call)
+  }
+  return (tool) =>
+    wrapDurableTool(tool as AnyTool, { sessionId, spill: 'auto', security, executionHooks })
 }
 
 /**
@@ -296,7 +314,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
       // bash 按此刻的开关给一份占位（这份内置工具在创建 agent 时会按解析结果重装）。纯本地：
       // 不读锁、不连服务器（打开会话时就调它）
       const ctx = sessionToolContext(deps, sessionId, sandboxed)
-      const wrap = sessionWrapper(sessionId, ctx)
+      const wrap = sessionWrapper(deps, sessionId, ctx)
       // 只收当前平台上存在的工具：档案里另一个平台的版本（Windows 上的 bash、macOS 上的
       // powershell）在这里自然缺位 —— 锁按名单拼次序时只收装了的
       const tools: ToolRegistration[] = []
@@ -318,7 +336,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
       if (signal.aborted) throw signal.reason
       // 询问 / 项目配置 / MCP 实例 / 广播 / 输出落盘的归属：root = 自身，派生 = 根会话（从不按 agentId）
       const ctx = sessionToolContext(deps, req.rootSessionId)
-      const wrap = sessionWrapper(req.rootSessionId, ctx)
+      const wrap = sessionWrapper(deps, req.rootSessionId, ctx)
 
       // 派发工具：名单 opt-in；派生 agent 还要 canSpawn（缺省按 false）
       const agent = offersDispatchTool(req) ? wrap(dispatchTool(ctx)) : undefined
@@ -369,7 +387,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
         )
       }
       const ctx = sessionToolContext(deps, sessionId)
-      const wrap = sessionWrapper(sessionId, ctx)
+      const wrap = sessionWrapper(deps, sessionId, ctx)
       const options = mcpOptions(ctx)
       const spawned = spawnedFieldsOf(lock)
       const offersAgent = offersDispatchTool({

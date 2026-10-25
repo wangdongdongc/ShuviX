@@ -1,6 +1,7 @@
 import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
 import type { TriggerLogEntry, TriggerSourceStatus } from '@shuvix/chat-protocol/triggerSources'
 import type { TrackingItem } from '@shuvix/chat-protocol/trackingNotes'
+import type { ArtifactRefContent, SessionArtifact } from '@shuvix/chat-protocol/artifacts'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { MdMetaNoteView, MdMetaWriteResult } from '@shuvix/chat-protocol/mdMeta'
@@ -1117,13 +1118,16 @@ declare global {
       /** 查询独立窗口"始终置顶"状态 */
       getAlwaysOnTop: (id: string) => Promise<{ alwaysOnTop: boolean }>
     }
-    /** 会话 Artifacts —— 目前只有渲染端读内容这一条（```artifact 引用围栏） */
+    /** 会话 Artifacts —— 引用围栏读内容，会话面板「产物」页列清单 */
     artifact: {
-      /** 按名字（或标题）取一件的内容；不存在返回 null */
+      /** 按名字（或标题）取一件的内容（带 messageId = 那条回复钉住的那一版）；不存在返回 null */
       read: (params: {
         sessionId: string
         name: string
-      }) => Promise<{ name: string; title: string; content: string } | null>
+        messageId?: string
+      }) => Promise<ArtifactRefContent | null>
+      /** 本会话与直接子会话的产物，带版本数与最近一版的时刻 */
+      list: (params: { sessionId: string }) => Promise<SessionArtifact[]>
     }
     files: {
       scan: (params: { sessionId: string }) => Promise<{

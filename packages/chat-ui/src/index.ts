@@ -34,7 +34,7 @@ export { ToolCallBlock } from './components/chat/ToolCallBlock'
 export { StepGroupView } from './components/chat/StepGroupView'
 export { groupConsecutiveSteps } from './components/chat/stepGrouping'
 export { buildVisibleItems } from './components/chat/conversationItems'
-export { CodeBlock } from './components/chat/CodeBlock'
+export { CodeBlock, ArtifactPreview } from './components/chat/CodeBlock'
 export {
   markdownComponents,
   markdownRemarkPlugins,

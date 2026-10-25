@@ -11,7 +11,12 @@ import {
   writeSessionFile
 } from '../services/filePreviewService'
 import { openFileInWindow, type OpenFileParams } from '../services/previewWindowService'
-import { findArtifact, readArtifact } from '../services/artifacts/store'
+import { listSessionArtifacts } from '../services/artifacts/listing'
+import {
+  readArtifactForRef,
+  readCurrentArtifact,
+  type PinSession
+} from '../services/artifacts/pins'
 import { sessionRecords } from '../services/sessionRecords'
 import { networkPathVerdict } from '../frontend/network/pathGate'
 
@@ -62,21 +67,32 @@ export function registerFilesHandlers(): void {
   )
   // 会话 Artifact 按**名字**取内容 —— ```artifact 引用围栏的数据通道。
   // 刻意不走 files:read：那条要绝对路径，而围栏里只该有名字（路径不进转写），
-  // 名字→路径的解析是本会话目录的事，归 artifacts 模块。
-  defineHandler('artifact:read', (_ctx, params: { sessionId: string; name: string }) => {
-    // 先本会话，再往下找一层子会话：产物的目录跟着**产出它的那场会话**走（见 artifacts/store
-    // 的说明），而 `work` 基座的分工正是把具体活交给 `coding` 子会话 —— 子代理画的图，
-    // 父会话终答里的引用必须展示得出来。嵌套只有一层，所以不递归。
-    const candidates = [
-      params.sessionId,
-      ...sessionRecords.findChildren(params.sessionId).map((c) => c.id)
-    ]
-    for (const sid of candidates) {
-      const found = findArtifact(sid, params.name)
-      if (!found) continue
-      const content = readArtifact(sid, params.name)
-      if (content !== null) return { name: found.name, title: found.title, content }
+  // 名字→路径的解析是本会话目录的事，归 artifacts 模块。带上围栏所在回复的 `messageId` 时，取的是那条
+  // 回复写下时钉住的那一版（artifacts/pins.ts）；没钉过就是当前内容。会话不在（存储没有）也照样按名字取。
+  defineHandler(
+    'artifact:read',
+    (_ctx, params: { sessionId: string; name: string; messageId?: string }) => {
+      if (params.messageId === undefined) return readCurrentArtifact(params.sessionId, params.name)
+      return (async () => {
+        // 按需加载会话宿主：它带着整套运行时依赖，只按名字取内容的调用不该为它付加载成本
+        let session: PinSession | undefined
+        try {
+          const { getSessionHost } = await import('../services/sessionHost')
+          session = await getSessionHost().peek(params.sessionId)
+        } catch {
+          session = undefined
+        }
+        return readArtifactForRef(session, params.sessionId, params.name, params.messageId)
+      })()
     }
-    return null
-  })
+  )
+  // 会话面板「产物」页的清单：本会话的，再加直接子会话的（与上面读内容同一个往下找一层）
+  defineHandler('artifact:list', (_ctx, params: { sessionId: string }) =>
+    listSessionArtifacts([
+      { sessionId: params.sessionId },
+      ...sessionRecords
+        .findChildren(params.sessionId)
+        .map((c) => ({ sessionId: c.id, subSessionTitle: c.title }))
+    ])
+  )
 }

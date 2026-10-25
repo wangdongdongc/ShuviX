@@ -48,6 +48,8 @@ authority by the daily bot, listed in the sidebar Library's "Tracked items" grou
 commits it after each triggered run of the bot, so a wrong edit can be recovered from history. There are no management
 fields such as status or next check yet.
 
+`artifacts/<session id>/` holds that session's **artifacts**: the files the `artifact` tool creates and `edit` then revises (figures, drafts, tables), deleted together with the session. The folder is a git repository that ShuviX keeps itself: whenever a tool call changes it, ShuviX commits one version (titled with the tool and the files it changed), so a bad edit can be recovered from history. The session panel's Artifacts tab lists every artifact of the session and of its direct sub-sessions, each with the number of versions recorded. Where a reply references an artifact (an ```artifact fence), it shows the version from when that reply was written: once a reply is finished and before its tools run, ShuviX stores the current content of every artifact it references in this repository and records it in the session; if the artifact changes later, the reference is marked "Newer version".
+
 **Builtins live inside the application, not on disk.** ShuviX ships builtin agents (`work`,
 `chat`, `notebook`, `bot`, `tab`, `coding`, `explore`, `titler`,
 `knowledge-writer`, `permission-reviewer`), builtin security policies, two builtin hooks

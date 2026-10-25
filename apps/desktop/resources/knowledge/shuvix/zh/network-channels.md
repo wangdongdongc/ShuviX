@@ -60,7 +60,7 @@ scope 管什么、界面上在哪，见 `network-policy` 条目的「scope 与 a
 
 - group: `artifact`, `download`, `files`, `fs`, `liveDoc`
 - route: `media`, `preview`, `download`
-- read: `artifact:read`, `files:read`, `files:scan`, `files:scanDir`, `files:unwatch`, `files:watch`, `fs:listDirectories`, `fs:locateFolder`
+- read: `artifact:list`, `artifact:read`, `files:read`, `files:scan`, `files:scanDir`, `files:unwatch`, `files:watch`, `fs:listDirectories`, `fs:locateFolder`
 - write: `download:cancel`, `files:open`, `files:write`, `liveDoc:attach`, `liveDoc:detach`, `liveDoc:respond`
 
 ### `terminal`

@@ -344,6 +344,10 @@
     "cacheRead": "キャッシュ読取",
     "cacheWrite": "キャッシュ書込",
     "artifactMissing": "このセッションに成果物「{{name}}」がありません",
+    "artifactNewer": "新しい版があります",
+    "artifactNewerHint": "これはこの返信を書いた時点の版で、その後成果物は変更されています。クリックすると「成果物」タブで最新版を表示します。",
+    "artifactUnpinned": "現在の版",
+    "artifactUnpinnedHint": "この返信を書いた時点の版は記録されていません（版の記録より前の返信です）。ファイルの現在の内容を表示しています。",
     "interactive": "インタラクティブ",
     "interactiveBuilding": "インタラクティブ図を生成中…（{{lines}} 行）",
     "interactiveRerun": "再実行",
@@ -1306,6 +1310,11 @@
     "tasksEndedDaysAgo": "{{count}} 日前に終了",
     "tasksShowOlder": "以前の {{count}} 件を表示",
     "tasksShowRecent": "最新の {{count}} 件のみ表示",
+    "artifacts": "成果物",
+    "artifactsSubSession": "サブセッション · {{title}}",
+    "artifactsVersion": "v{{count}}",
+    "artifactsReveal": "フォルダで表示",
+    "artifactsCopyPath": "パスをコピー",
     "calendar": "カレンダー"
   },
   "externalOpen": {

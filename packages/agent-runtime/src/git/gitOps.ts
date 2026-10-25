@@ -185,6 +185,84 @@ export async function treeNameStatus(
   return results.sort((m, n) => (m.path < n.path ? -1 : 1))
 }
 
+/** 一条提交与它相对首个 parent 改了哪些文件（根提交 = 与空树比，全部 A） */
+export interface CommitChanges {
+  oid: string
+  message: string
+  /** 作者时间（ms；git 只记到秒，所以总是整秒） */
+  timestamp: number
+  changes: Array<{ path: string; status: 'A' | 'M' | 'D'; oid?: string }>
+}
+
+/**
+ * 结构化的 `git log --name-status`，新的在前 —— 宿主读自己提交过的历史用（产物的版本），
+ * 不是 git 工具的 op（那些出的是给模型读的文本）。HEAD 还解析不出（unborn：一个提交都没有；
+ * 分支 ref 文件写坏了也是这一种错，分不开）返回空数组；别的错误（给的 ref 不存在、缺对象）照抛，
+ * 由调用方决定怎么收场。
+ */
+export async function readCommitChanges(
+  env: GitEnv,
+  cache: GitCache,
+  params: { ref?: string; depth?: number } = {}
+): Promise<CommitChanges[]> {
+  const { fs, dir } = env
+  const ref = params.ref ?? 'HEAD'
+  if (ref === 'HEAD') {
+    try {
+      await git.resolveRef({ fs, dir, ref })
+    } catch (e) {
+      if (e instanceof git.Errors.NotFoundError) return []
+      throw e
+    }
+  }
+  const commits = await git.log({ fs, dir, cache, ref, depth: params.depth })
+  const out: CommitChanges[] = []
+  for (const c of commits) {
+    const changes = await treeNameStatus(env, cache, c.commit.parent[0] ?? null, c.oid)
+    out.push({
+      oid: c.oid,
+      message: c.commit.message,
+      timestamp: c.commit.author.timestamp * 1000,
+      changes: changes.map(({ path, status, toOid }) => ({
+        path,
+        status,
+        ...(toOid ? { oid: toOid } : {})
+      }))
+    })
+  }
+  return out
+}
+
+/**
+ * 把一段文本存成 blob（不进任何提交，只进对象库），交回它的哈希 —— 宿主按内容钉住一份文件用（产物引用钉下的
+ * 版本）。同样的内容恒得同一个哈希，重复存是幂等的。
+ */
+export async function writeBlobText(env: GitEnv, text: string): Promise<string> {
+  const { fs, dir } = env
+  return git.writeBlob({ fs, dir, blob: new TextEncoder().encode(text) })
+}
+
+/** 按哈希取回一个 blob 的文本；对象库里没有（或不是 blob）→ null */
+export async function readBlobText(
+  env: GitEnv,
+  cache: GitCache,
+  oid: string
+): Promise<string | null> {
+  const { fs, dir } = env
+  try {
+    const { blob } = await git.readBlob({ fs, dir, oid, cache })
+    return new TextDecoder().decode(blob)
+  } catch {
+    return null
+  }
+}
+
+/** 一段文本作为 blob 的哈希（不写库）—— 与 `writeBlobText` 交回的同一个值 */
+export async function hashBlobText(text: string): Promise<string> {
+  const { oid } = await git.hashBlob({ object: new TextEncoder().encode(text) })
+  return oid
+}
+
 // ---------------------------------------------------------------------------
 // ops
 // ---------------------------------------------------------------------------
@@ -316,7 +394,8 @@ export async function addOp(
     const all = [...toAdd, ...toRemove].sort()
     return {
       text: `Staged ${all.length} file(s):\n${all.join('\n')}`,
-      details: { fileCount: all.length }
+      // paths：宿主自动提交拿它写提交标题（哪几个文件变了），不必再扫一遍 status
+      details: { fileCount: all.length, paths: all }
     }
   })
 }

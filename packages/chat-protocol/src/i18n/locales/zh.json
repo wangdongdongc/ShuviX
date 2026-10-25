@@ -344,6 +344,10 @@
     "cacheRead": "缓存读取",
     "cacheWrite": "缓存写入",
     "artifactMissing": "本会话里找不到产物「{{name}}」",
+    "artifactNewer": "已有新版",
+    "artifactNewerHint": "这是这条回复写下时的版本，之后产物又改过。点开在「产物」页里看最新版。",
+    "artifactUnpinned": "当前版本",
+    "artifactUnpinnedHint": "没有记下这条回复写下时的版本（它早于版本记录），这里显示的是文件现在的内容。",
     "interactive": "交互图",
     "interactiveBuilding": "正在生成交互图…（{{lines}} 行）",
     "interactiveRerun": "重新运行",
@@ -1306,6 +1310,11 @@
     "tasksEndedDaysAgo": "{{count}} 天前结束",
     "tasksShowOlder": "显示更早的 {{count}} 条",
     "tasksShowRecent": "只看最近 {{count}} 条",
+    "artifacts": "产物",
+    "artifactsSubSession": "子会话 · {{title}}",
+    "artifactsVersion": "v{{count}}",
+    "artifactsReveal": "在文件夹中显示",
+    "artifactsCopyPath": "复制路径",
     "calendar": "日历"
   },
   "externalOpen": {

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Folder, Layers, X } from 'lucide-react'
+import { Folder, Layers, Shapes, X } from 'lucide-react'
 import { useChatStore, useBgTaskCount, useBgTaskRunningCount } from '@shuvix/chat-ui'
 import { BgTaskPanel } from './BgTaskPanel'
+import { ArtifactsPanel } from './ArtifactsPanel'
+import { useSessionArtifactCount } from './sessionArtifacts'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
 import { PanelCloseInsetContext } from './panelCloseInset'
 
@@ -10,12 +12,13 @@ import { PanelCloseInsetContext } from './panelCloseInset'
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
  *
  *   - SessionToolbar：顶栏右侧按钮簇里的工具入口组（在窗口控制那一簇左侧、以竖线分隔）。
- *     Files 常驻；任务仅当前会话有后台任务时出现（含数量徽标）。点按展开面板并切到该工具。
+ *     Files 常驻；任务仅当前会话有后台任务时出现（含数量徽标）；产物仅当前会话（或它的子会话）
+ *     有产物时出现。点按展开面板并切到该工具。
  *     （文件预览不在面板里 —— 桌面统一开独立窗口。）
  *   - SessionPanel：正文区右侧的悬浮卡片（四周留白 + 圆角 + 边框 + 投影，布局上与对话并排、
  *     对话收缩让位）。收起按钮悬在卡片右上角、与各工具自己的首行同线（工具切换在顶栏的
  *     tabs），让位机制见 panelCloseInset.ts。
- *     装载 Files / 后台任务，展开期间各工具均保持挂载、visibility 切换
+ *     装载 Files / 后台任务 / 产物，展开期间各工具均保持挂载、visibility 切换
  *     （保住手风琴等临时 UI 态）；收起时整体卸载（避免后台文件扫描）。
  *
  * 注：运行时 Agent 快照（系统提示词 / 已装载工具 / 模型细节）不在这里 —— 它归桌面设置页的
@@ -27,7 +30,8 @@ import { PanelCloseInsetContext } from './panelCloseInset'
  */
 
 /**
- * 展示工具（含兜底）：停在后台任务但任务已清空（任务按钮随之隐藏）→ 回落到 Files。
+ * 展示工具（含兜底）：停在后台任务但任务已清空（任务按钮随之隐藏）→ 回落到 Files；停在产物但
+ * 一件都没有（还没取到，或产物随子会话一起删了）同样回落。
  * 'subagent' 是已并入 tasks 的旧值（按会话记忆的 store 里可能还留着）→ 一并接到 tasks。
  */
 export function useSessionPanelTool(sessionId: string | null): SessionPanelTool | null {
@@ -35,8 +39,10 @@ export function useSessionPanelTool(sessionId: string | null): SessionPanelTool 
     sessionId ? (s.openBySession[sessionId] ?? null) : null
   )
   const taskCount = useBgTaskCount(sessionId)
+  const artifactCount = useSessionArtifactCount(sessionId)
   const tool = openTool === 'subagent' ? 'tasks' : openTool
   if (tool === 'tasks' && taskCount === 0) return 'files'
+  if (tool === 'artifacts' && artifactCount === 0) return 'files'
   return tool
 }
 
@@ -55,6 +61,14 @@ export function useSessionPanelReveal(enabled = true): void {
     const sid = useChatStore.getState().activeSessionId
     if (sid) useSessionPanelStore.getState().show(sid, 'tasks')
   }, [taskRevealRequest, enabled])
+
+  // 产物揭示：对话里一个引用块上的「已有新版」被点了 —— 切到产物页，面板据它展开那一件
+  const artifactRevealRequest = useChatStore((s) => s.artifactRevealRequest)
+  useEffect(() => {
+    if (!enabled || !artifactRevealRequest) return
+    const sid = useChatStore.getState().activeSessionId
+    if (sid) useSessionPanelStore.getState().show(sid, 'artifacts')
+  }, [artifactRevealRequest, enabled])
 }
 
 interface SessionPanelToolItem {
@@ -66,7 +80,8 @@ interface SessionPanelToolItem {
 
 /**
  * 面板工具入口列表（工具栏胶囊与面板头部 tabs 共用同一来源）：Files 常驻；
- * 任务仅在本会话有任务时出现（含运行中数量徽标）。
+ * 任务仅在本会话有任务时出现（含运行中数量徽标）；产物仅在本会话或它的子会话有产物时出现
+ * （不挂数字：件数不是要你去处理的东西）。
  *
  * 原先并列的 Sub-agent 入口已并入任务 —— 派生 agent 是后台任务的一类，
  * 与 bash、子会话同列一张表（见 BgTaskPanel）。
@@ -75,8 +90,13 @@ function useSessionPanelToolItems(sessionId: string | null): SessionPanelToolIte
   const { t } = useTranslation()
   const taskCount = useBgTaskCount(sessionId)
   const runningTaskCount = useBgTaskRunningCount(sessionId)
+  const artifactCount = useSessionArtifactCount(sessionId)
   return [
     { tool: 'files', Icon: Folder, label: t('panel.files') },
+    // Shapes（几样图形）：产物多半是图，也有草稿、表格 —— 不用 Package（内置项的标记）也不用 FileText（太像 Files）
+    ...(artifactCount > 0
+      ? [{ tool: 'artifacts' as const, Icon: Shapes, label: t('panel.artifacts') }]
+      : []),
     // 用 Layers（一摞后台任务）：Terminal 已被 ssh 的运行时指示器占用、Activity 是右侧面板 Agents 页签，同一窗口必须一眼分得开。
     // 徽标取「运行中」数而非总数 —— 全跑完之后 tab 仍在（用户还要看日志），但不该继续挂个数字
     ...(taskCount > 0
@@ -231,6 +251,14 @@ export function SessionPanel({
             >
               {/* 按会话重挂：展开哪条、折叠与否都是那个会话的事，不该带到下一个会话里 */}
               <BgTaskPanel key={sessionId} sessionId={sessionId} />
+            </div>
+            <div
+              className="absolute inset-0"
+              style={
+                tool === 'artifacts' ? undefined : { visibility: 'hidden', pointerEvents: 'none' }
+              }
+            >
+              <ArtifactsPanel key={sessionId} sessionId={sessionId} />
             </div>
           </div>
         </PanelCloseInsetContext.Provider>

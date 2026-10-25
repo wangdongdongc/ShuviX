@@ -59,7 +59,12 @@ const mocks = vi.hoisted(() => ({
   resolveProjectConfig: vi.fn(),
   findAllEnabledModels: vi.fn(),
   forSession: vi.fn(),
-  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  // 产物的执行钩子（services/artifacts/pins、history）：记次序的桩
+  pinCallingReply: vi.fn(),
+  prepareArtifactHistory: vi.fn(),
+  recordArtifactChange: vi.fn(),
+  hookOrder: [] as string[]
 }))
 
 vi.mock('electron', () => ({ app: { getVersion: () => '9.9.9', getPath: () => '/tmp/x' } }))
@@ -129,6 +134,16 @@ vi.mock('../../services/skillTool', () => ({
   }
 }))
 vi.mock('../AgentTool', () => ({ createAgentTool: mocks.createAgentTool }))
+/** 执行钩子背后的两件（真实现要碰产物目录与会话转写）：换成记次序的桩，其余导出照旧 */
+vi.mock('../../services/artifacts/pins', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/artifacts/pins')>()),
+  pinCallingReply: mocks.pinCallingReply
+}))
+vi.mock('../../services/artifacts/history', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/artifacts/history')>()),
+  prepareArtifactHistory: mocks.prepareArtifactHistory,
+  recordArtifactChange: mocks.recordArtifactChange
+}))
 /** Fx-WRAP spy：记下每一次包装（原工具、选项），交回一个叠在原工具上的新对象 */
 vi.mock('../../services/wrapToolOutput', () => ({
   wrapDurableTool: (tool: object, opts: Record<string, unknown>) => {
@@ -576,7 +591,12 @@ describe('resolveAgentTools', () => {
     const wraps = mocks.wrapCalls.filter((c) => c.tool === next)
     expect(wraps).toHaveLength(1)
     expect(resolved.extraTools![0]).toBe(wraps[0].wrapped)
-    expect(Object.keys(wraps[0].opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+    expect(Object.keys(wraps[0].opts).sort()).toEqual([
+      'executionHooks',
+      'security',
+      'sessionId',
+      'spill'
+    ])
     const others = [resolved.agent, resolved.skill, ...(resolved.mcp ?? []).flatMap((m) => m.tools)]
     expect(others.map((t) => t?.name)).not.toContain('next')
   })
@@ -1018,7 +1038,7 @@ describe('rebuildAgentTools', () => {
 // ─── 包装 ──────────────────────────────────────────────────────────────
 
 describe('包装', () => {
-  it('H11-40 每条路上的每个工具恰好包一次；选项恰为 {sessionId s1, spill auto, security 函数}，不带策略 / 上限；交出的是包装器的返回值', async () => {
+  it('H11-40 每条路上的每个工具恰好包一次；选项恰为 {sessionId s1, spill auto, security 函数, 执行钩子}，不带策略 / 上限；交出的是包装器的返回值', async () => {
     const builtin = await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
     const next = stubTool('next')
     const resolved = await host.resolveAgentTools(requestD({ extraTools: [next] }), {
@@ -1039,10 +1059,15 @@ describe('包装', () => {
     expect(new Set(mocks.wrapCalls.map((c) => c.tool)).size).toBe(returned.length)
     for (const tool of returned) {
       const opts = wrapOf(tool)
-      expect(Object.keys(opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+      expect(Object.keys(opts).sort()).toEqual(['executionHooks', 'security', 'sessionId', 'spill'])
       expect(opts.sessionId).toBe('s1')
       expect(opts.spill).toBe('auto')
       expect(opts.security).toBeTypeOf('function')
+      // 产物记版本的执行前后钩子（services/artifacts/history）
+      expect(opts.executionHooks).toEqual({
+        before: expect.any(Function),
+        after: expect.any(Function)
+      })
     }
   })
 
@@ -1612,7 +1637,7 @@ describe('resolveAgentTools (spawned)', () => {
     expect(tools.length).toBeGreaterThan(0)
     for (const tool of tools) {
       const opts = wrapOf(tool)
-      expect(Object.keys(opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+      expect(Object.keys(opts).sort()).toEqual(['executionHooks', 'security', 'sessionId', 'spill'])
       expect(opts).toMatchObject({ sessionId: 's1', spill: 'auto' })
       expect(opts.security).toBeTypeOf('function')
     }
@@ -1776,7 +1801,12 @@ describe('resolveAgentTools (spawned)', () => {
     ;[n1, n2].forEach((raw, i) => {
       const wraps = mocks.wrapCalls.filter((c) => c.tool === raw)
       expect(wraps).toHaveLength(1)
-      expect(Object.keys(wraps[0].opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+      expect(Object.keys(wraps[0].opts).sort()).toEqual([
+        'executionHooks',
+        'security',
+        'sessionId',
+        'spill'
+      ])
       expect(wraps[0].opts.sessionId).toBe('s1')
       expect(resolved.extraTools![i]).toBe(wraps[0].wrapped)
     })
@@ -1940,7 +1970,12 @@ describe('rebuildAgentTools (spawned)', () => {
     const wraps = mocks.wrapCalls.filter((c) => c.tool === raw)
     expect(wraps).toHaveLength(1)
     expect(wraps[0].wrapped).toBe(next)
-    expect(Object.keys(wraps[0].opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+    expect(Object.keys(wraps[0].opts).sort()).toEqual([
+      'executionHooks',
+      'security',
+      'sessionId',
+      'spill'
+    ])
     expect(wraps[0].opts).toMatchObject({ sessionId: 's1', spill: 'auto' })
     expect(wraps[0].opts.security).toBeTypeOf('function')
     expect(Object.prototype.isPrototypeOf.call(raw, next)).toBe(true)
@@ -2004,7 +2039,7 @@ describe('spawned wrapping and the L1 gate', () => {
     expect(result.control).toStrictEqual({ terminate: true })
   })
 
-  it('P2-04-40（H11-40 延伸到派生路径）派生解析 + 派生重建：每个交出的工具恰好包一次，选项恰为 {s1, auto, security}', async () => {
+  it('P2-04-40（H11-40 延伸到派生路径）派生解析 + 派生重建：每个交出的工具恰好包一次，选项恰为 {s1, auto, security, 执行钩子}', async () => {
     const resolved = await host.resolveAgentTools(SR_D({ extraTools: [stubTool('next')] }), {
       signal: signal()
     })
@@ -2017,10 +2052,130 @@ describe('spawned wrapping and the L1 gate', () => {
     expect(new Set(mocks.wrapCalls.map((c) => c.tool)).size).toBe(returned.length)
     for (const tool of returned) {
       const opts = wrapOf(tool)
-      expect(Object.keys(opts).sort()).toEqual(['security', 'sessionId', 'spill'])
+      expect(Object.keys(opts).sort()).toEqual(['executionHooks', 'security', 'sessionId', 'spill'])
       expect(opts.sessionId).toBe('s1')
       expect(opts.spill).toBe('auto')
       expect(opts.security).toBeTypeOf('function')
     }
+  })
+})
+
+// ─── 执行钩子：会话产物钉引用的版本、记版本 ─────────────────────────────────
+//
+//   EH-1 内置工具（会话级装配）：before = pinCallingReply(sessionOf(会话), 会话, call) **然后**
+//        prepareArtifactHistory(会话)；after = recordArtifactChange(会话, call)，不再钉
+//   EH-2 派生 agent 的工具：钩子按**根会话**走（sessionOf(rootSessionId)），call 里的对话 id 是派生 agent 自己的，
+//        原样交给 pinCallingReply（由它判「不在当前对话里」）；会话没开 → session 参数是 undefined
+//   EH-3 真包装器 + 宿主给的钩子：pinCallingReply 抛错也不让工具失败
+
+type ExecutionHooksOf = {
+  before: (call: { toolName: string; callId: string; conversationId: number }) => Promise<void>
+  after: (call: { toolName: string; callId: string; conversationId: number }) => Promise<void>
+}
+
+describe('执行钩子（会话产物）', () => {
+  beforeEach(() => {
+    mocks.hookOrder.length = 0
+    mocks.pinCallingReply.mockReset()
+    mocks.prepareArtifactHistory.mockReset()
+    mocks.recordArtifactChange.mockReset()
+    mocks.pinCallingReply.mockImplementation(async () => {
+      mocks.hookOrder.push('pin')
+    })
+    mocks.prepareArtifactHistory.mockImplementation(async () => {
+      mocks.hookOrder.push('prepare')
+    })
+    mocks.recordArtifactChange.mockImplementation(async () => {
+      mocks.hookOrder.push('record')
+    })
+  })
+
+  it('EH-1 内置工具：before 先钉（会话、call）再补基线；after 记一版、不再钉', async () => {
+    const session = sessionFor('s2')
+    const tools = await host.buildBuiltinTools({ sessionId: 's2', sandboxed: false })
+    const hooks = wrapOf(tools[0]).executionHooks as ExecutionHooksOf
+    const call = { toolName: 'write', callId: 'c-eh1', conversationId: 1 }
+
+    sessionOf.mockClear()
+    await hooks.before(call)
+    expect(mocks.hookOrder).toEqual(['pin', 'prepare'])
+    expect(sessionOf).toHaveBeenCalledWith('s2')
+    expect(mocks.pinCallingReply.mock.calls).toEqual([[session, 's2', call]])
+    expect(mocks.pinCallingReply.mock.calls[0][0]).toBe(session)
+    expect(mocks.prepareArtifactHistory.mock.calls).toEqual([['s2']])
+    expect(mocks.recordArtifactChange).not.toHaveBeenCalled()
+
+    await hooks.after(call)
+    expect(mocks.hookOrder).toEqual(['pin', 'prepare', 'record'])
+    expect(mocks.recordArtifactChange.mock.calls).toEqual([['s2', call]])
+    expect(mocks.pinCallingReply).toHaveBeenCalledTimes(1)
+
+    // 每个工具拿到的是同一套语义（按会话，不按工具）
+    for (const tool of tools) {
+      const opts = wrapOf(tool)
+      expect(opts.executionHooks).toEqual({
+        before: expect.any(Function),
+        after: expect.any(Function)
+      })
+    }
+  })
+
+  it('EH-2 派生 agent：按根会话钉，派生对话的 id 原样交过去；会话没开 → session 为 undefined', async () => {
+    const root = sessionFor('s1')
+    const next = stubTool('next')
+    await host.resolveAgentTools(SR_D({ extraTools: [next] }), { signal: signal() })
+    const wrap = mocks.wrapCalls.find((c) => c.tool === next)!
+    const hooks = wrap.opts.executionHooks as ExecutionHooksOf
+    const call = { toolName: 'next', callId: 'c-eh2', conversationId: 7 }
+
+    sessionOf.mockClear()
+    await hooks.before(call)
+    expect(sessionOf).toHaveBeenCalledWith('s1')
+    expect(mocks.pinCallingReply.mock.calls).toEqual([[root, 's1', call]])
+    expect(mocks.prepareArtifactHistory.mock.calls).toEqual([['s1']])
+    expect(mocks.hookOrder).toEqual(['pin', 'prepare'])
+
+    // 根会话此刻不在打开的表里（sessionOf → undefined）：照样调，由 pinCallingReply 自己判
+    sessionOf.mockReturnValueOnce(undefined)
+    await hooks.before({ ...call, callId: 'c-eh2b' })
+    expect(mocks.pinCallingReply.mock.calls[1]).toEqual([
+      undefined,
+      's1',
+      { ...call, callId: 'c-eh2b' }
+    ])
+  })
+
+  it('EH-3 真包装器：pinCallingReply 抛错 → 工具照常执行、结果原样', async () => {
+    const enforceInvocation = vi.fn(async () => ({ status: 'allowed' as const }))
+    mocks.getDesktopSecurityContext.mockImplementation(() => ({ enforceInvocation }))
+    mocks.pinCallingReply.mockImplementation(async () => {
+      mocks.hookOrder.push('pin')
+      throw new Error('pin blew up')
+    })
+    const execute = vi.fn(async () => ({ output: [{ type: 'text' as const, text: 'wrote it' }] }))
+    const raw = stubTool('next', { execute })
+    sessionFor('s1')
+    await host.resolveAgentTools(SR_D({ names: ['read'], extraTools: [raw] }), {
+      signal: signal()
+    })
+    const wrap = mocks.wrapCalls.find((c) => c.tool === raw)!
+    const actual = await vi.importActual<typeof import('../../services/wrapToolOutput')>(
+      '../../services/wrapToolOutput'
+    )
+    const wrapped = actual.wrapDurableTool(raw as never, wrap.opts as never)
+    const { result } = await invokeTool(wrapped, {} as never, {
+      callId: 'c-eh3',
+      taskId: 3,
+      conversationId: 1
+    })
+    expect(mocks.pinCallingReply).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(enforceInvocation).toHaveBeenCalledTimes(1)
+    expect(result.isError).toBeFalsy()
+    expect(result.content).toEqual([{ type: 'text', text: 'wrote it' }])
+    // after 照跑（工具真的执行了）
+    expect(mocks.recordArtifactChange.mock.calls).toEqual([
+      ['s1', { toolName: 'next', callId: 'c-eh3', conversationId: 1 }]
+    ])
   })
 })

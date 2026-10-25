@@ -10734,6 +10734,204 @@ export function sessionToolKeys(main: CdpClient): Promise<string[]> {
   )
 }
 
+// ─── 会话面板 · 产物页（ArtifactsPanel）────────────────────────────────────────
+//
+// 锚点：工具栏按钮 `[data-session-tool="artifacts"]`（本会话或子会话有产物时才有）；页根 `[data-artifacts-panel]`；
+// 每一行 `[data-artifact-row=<文件名>]` + `[data-artifact-expanded=true|false]`。行根节点的第一个子节点是可点的
+// 那一行（标题 / 「名字 · v3 · 时刻」两行文字在其中的 `.min-w-0` 里），展开时第二个子节点是预览；
+// 预览里的图是一个**不带** `.lucide` 的 `<svg>`（行首图标、导出按钮的图标都是 lucide 的）。
+
+/** 产物页的一行 */
+export interface ArtifactRowShot {
+  /** 文件名（`data-artifact-row`） */
+  name: string
+  /** 第一行：标题 */
+  title: string
+  /** 第二行：「名字 · v3 · 时刻」（时刻随界面语言变） */
+  meta: string
+  expanded: boolean
+  /** 展开的预览里那张图（内联 svg）：aria-label 与其中 `<rect>` 的个数；没展开或不是图 → null */
+  previewSvg: { ariaLabel: string | null; rects: number } | null
+}
+
+export interface ArtifactsPanelPane {
+  /** 打开当前会话面板的产物页（等工具栏出现 artifacts 按钮再点；已在产物页就不动） */
+  open(timeoutMs?: number): Promise<void>
+  /** 产物页里画出来的行（按显示次序，跨组） */
+  rows(): Promise<ArtifactRowShot[]>
+  /** 展开某一行（已展开就不动），等它的预览出现 */
+  expand(name: string, timeoutMs?: number): Promise<void>
+  /** 工具栏按钮簇与面板卡片合起来的矩形（截图用）；面板没开 → null */
+  shotRect(): Promise<{ x: number; y: number; width: number; height: number } | null>
+  /** 产物页此刻看得见（面板展开、停在产物页） */
+  shown(): Promise<boolean>
+  /** 收起会话面板（卡片右上角的 ×；本来就收着就不动），等它卸下 */
+  close(timeoutMs?: number): Promise<void>
+}
+
+export function artifactsPanelPane(main: CdpClient): ArtifactsPanelPane {
+  const SHOWN = `(() => {
+    const pane = document.querySelector('[data-artifacts-panel]')?.parentElement
+    return !!pane && pane.style.visibility !== 'hidden'
+  })()`
+  const TOOL = `document.querySelector('[data-session-tool="artifacts"]')`
+  const ROW = (name: string): string =>
+    `document.querySelector(${JSON.stringify(`[data-artifacts-panel] [data-artifact-row=${JSON.stringify(name)}]`)})`
+  return {
+    open: async (timeoutMs = 15_000) => {
+      await until(() => main.eval<boolean>(`!!${TOOL}`), 'artifacts toolbar button', timeoutMs)
+      await main.eval(`(() => {
+        const btn = ${TOOL}
+        // 已经在产物页（按钮是激活态）就别再点：收起态点它是展开，展开态点它是切页，都不会收起
+        if (btn && !btn.className.includes('text-accent')) btn.click()
+        return true
+      })()`)
+      await until(
+        () =>
+          main.eval<boolean>(`(() => {
+            const pane = document.querySelector('[data-artifacts-panel]')?.parentElement
+            return !!pane && pane.style.visibility !== 'hidden' && !!pane.querySelector('[data-artifact-row]')
+          })()`),
+        'artifacts panel rows',
+        timeoutMs
+      )
+    },
+    rows: () =>
+      main.eval<ArtifactRowShot[]>(
+        `[...document.querySelectorAll('[data-artifacts-panel] [data-artifact-row]')].map((r) => {
+          const lines = r.firstElementChild?.querySelector('.min-w-0')?.children ?? []
+          const preview = r.children[1]
+          const svg = preview?.querySelector('svg:not(.lucide)') ?? null
+          return {
+            name: r.getAttribute('data-artifact-row') ?? '',
+            title: (lines[0]?.textContent ?? '').trim(),
+            meta: (lines[1]?.textContent ?? '').trim(),
+            expanded: r.getAttribute('data-artifact-expanded') === 'true',
+            previewSvg: svg
+              ? { ariaLabel: svg.getAttribute('aria-label'), rects: svg.querySelectorAll('rect').length }
+              : null
+          }
+        })`
+      ),
+    expand: async (name, timeoutMs = 15_000) => {
+      await until(() => main.eval<boolean>(`!!${ROW(name)}`), `artifact row ${name}`, timeoutMs)
+      await main.eval(`(() => {
+        const row = ${ROW(name)}
+        if (row.getAttribute('data-artifact-expanded') !== 'true') row.firstElementChild.click()
+        return true
+      })()`)
+      await until(
+        () =>
+          main.eval<boolean>(
+            `${ROW(name)}?.getAttribute('data-artifact-expanded') === 'true' && !!${ROW(name)}?.children[1]`
+          ),
+        `artifact row ${name} expanded`,
+        timeoutMs
+      )
+    },
+    shotRect: () =>
+      main.eval<{ x: number; y: number; width: number; height: number } | null>(`(() => {
+        const card = document.querySelector('.session-panel-card')
+        const tools = document.querySelector('[data-session-tool]')?.parentElement
+        if (!card || !tools) return null
+        const a = card.getBoundingClientRect()
+        const b = tools.getBoundingClientRect()
+        const x = Math.min(a.left, b.left) - 8
+        const y = Math.min(a.top, b.top) - 8
+        const right = Math.max(a.right, b.right) + 8
+        const bottom = Math.max(a.bottom, b.bottom) + 8
+        return { x: Math.max(0, x), y: Math.max(0, y), width: right - Math.max(0, x), height: bottom - Math.max(0, y) }
+      })()`),
+    shown: () => main.eval<boolean>(SHOWN),
+    close: async (timeoutMs = 10_000) => {
+      // × 是卡片的第一个子按钮（SessionPanel：绝对定位在右上角）
+      await main.eval(`(() => {
+        document.querySelector('.session-panel-card > button')?.click()
+        return true
+      })()`)
+      await until(
+        () => main.eval<boolean>(`!document.querySelector('.session-panel-card')`),
+        'session panel closed',
+        timeoutMs
+      )
+    }
+  }
+}
+
+// ─── 对话里的 ```artifact 引用块（CodeBlock 的 ArtifactPreview，按回复钉版本）────────────────────
+//
+// 锚点：一张助手卡的根节点 `[data-msg-id=<末条消息 id>]`（终答所在那条）；卡里终答正文 `.markdown-body`
+// 里的图是**不带** `.lucide` 的 `<svg>`；标题栏上的版本标记 `[data-artifact-newer]`（按钮「已有新版」）/
+// `[data-artifact-unpinned]`（「当前版本」）。引用块本身没有锚点 —— 这里按「一张卡一处引用」读。
+
+/** 一张助手卡里的引用块 */
+export interface ArtifactRefShot {
+  /** 卡在 DOM 里（Virtuoso 没把它卸掉） */
+  present: boolean
+  /** 正文里的内联图（aria-label 与 `<rect>` 个数），按出现顺序 */
+  svgs: Array<{ ariaLabel: string | null; rects: number }>
+  /** 「已有新版」按钮的文字；没有 → null */
+  newer: string | null
+  /** 「当前版本」的文字；没有 → null */
+  unpinned: string | null
+}
+
+export interface ArtifactRefsPane {
+  /** 某张助手卡（按消息 id）里的引用块 */
+  inMessage(msgId: string): Promise<ArtifactRefShot>
+  /** 点那张卡里的「已有新版」；没有这个按钮 → false */
+  clickNewer(msgId: string): Promise<boolean>
+  /**
+   * 把那张卡里的引用块滚到对话区顶上（截图用；只动 `.conversation-scroller` 自己的滚动，不用 scrollIntoView
+   * —— 那会连带推动窗口布局）。卡或图不在 DOM 里 → false
+   */
+  scrollTo(msgId: string): Promise<boolean>
+}
+
+export function artifactRefsPane(main: CdpClient): ArtifactRefsPane {
+  const CARD = (msgId: string): string =>
+    `document.querySelector(${JSON.stringify(`[data-msg-id=${JSON.stringify(msgId)}]`)})`
+  return {
+    inMessage: (msgId) =>
+      main.eval<ArtifactRefShot>(`(() => {
+        const card = ${CARD(msgId)}
+        if (!card) return { present: false, svgs: [], newer: null, unpinned: null }
+        const svgs = [...card.querySelectorAll('.markdown-body svg:not(.lucide)')].map((s) => ({
+          ariaLabel: s.getAttribute('aria-label'),
+          rects: s.querySelectorAll('rect').length
+        }))
+        const newer = card.querySelector('[data-artifact-newer]')
+        const unpinned = card.querySelector('[data-artifact-unpinned]')
+        return {
+          present: true,
+          svgs,
+          newer: newer ? (newer.textContent ?? '').trim() : null,
+          unpinned: unpinned ? (unpinned.textContent ?? '').trim() : null
+        }
+      })()`),
+    clickNewer: (msgId) =>
+      main.eval<boolean>(`(() => {
+        const btn = ${CARD(msgId)}?.querySelector('[data-artifact-newer]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`),
+    scrollTo: (msgId) =>
+      main.eval<boolean>(`(() => {
+        const scroller = document.querySelector('.conversation-scroller')
+        const svg = ${CARD(msgId)}?.querySelector('.markdown-body svg:not(.lucide)')
+        if (!scroller || !svg) return false
+        // 一轮落定后对话区「贴底跟随」：先像用户滚了一下轮子那样解除，不然下一帧又被贴回底部
+        scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true }))
+        // 引用块是图外面那层圆角卡片（标题栏 + 图）；认不出就按图本身
+        const block = svg.closest('.rounded-lg') ?? svg
+        scroller.scrollTop +=
+          block.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 8
+        return true
+      })()`)
+  }
+}
+
 // ─── 浏览器里的 web 客户端（server mode phase C）────────────────────────────────
 
 /** web 客户端页面的宿主浮层（`client` = 那个浏览器页面的 CDP 客户端） */

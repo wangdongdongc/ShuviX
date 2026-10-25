@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { MarkdownText } from './markdownComponents'
+import { MarkdownMessageIdContext, messageIdOfTextBlock } from './markdownStreaming'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { StepGroup } from './StepGroup'
@@ -41,7 +42,10 @@ function StepGroupViewImpl({
   if (block.type === 'text') {
     return (
       <div className={markdownClassName}>
-        <MarkdownText text={block.text} />
+        {/* 中间文本里的 ```artifact 引用按它所在那条回复取钉住的版本（AssistantBubble 记下的块 → 消息 id） */}
+        <MarkdownMessageIdContext.Provider value={messageIdOfTextBlock(block)}>
+          <MarkdownText text={block.text} />
+        </MarkdownMessageIdContext.Provider>
       </div>
     )
   }

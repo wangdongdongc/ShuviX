@@ -15,7 +15,12 @@ import { copyToClipboard } from '../../utils/clipboard'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
 import { MarkdownText } from './markdownComponents'
-import { MarkdownSourceContext, MarkdownStreamingContext } from './markdownStreaming'
+import {
+  MarkdownMessageIdContext,
+  MarkdownSourceContext,
+  MarkdownStreamingContext,
+  noteTextBlockMessage
+} from './markdownStreaming'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { StepGroupView } from './StepGroupView'
@@ -98,6 +103,8 @@ export const AssistantBubble = memo(function AssistantBubble({
     for (const m of msgs) {
       for (const b of m.blocks) {
         if (isFinal && m === last && b.type === 'text') continue
+        // 中间文本里的 ```artifact 引用要按它所在那条回复取钉住的版本（StepGroupView 按块查回 id）
+        if (b.type === 'text') noteTextBlockMessage(b, m.id)
         process.push(b)
       }
     }
@@ -188,7 +195,10 @@ export const AssistantBubble = memo(function AssistantBubble({
               <MarkdownStreamingContext.Provider value={!!isStreaming}>
                 {/* 交互图要确切知道自己的围栏闭合没有，靠节点位置切回这段源文本 */}
                 <MarkdownSourceContext.Provider value={isStreaming ? displayContent : null}>
-                  <MarkdownText text={displayContent} />
+                  {/* 引用块按这条回复取它写下时钉住的版本；流式中还没有条目 id，照当前内容显示 */}
+                  <MarkdownMessageIdContext.Provider value={isStreaming ? null : anchor.id}>
+                    <MarkdownText text={displayContent} />
+                  </MarkdownMessageIdContext.Provider>
                 </MarkdownSourceContext.Provider>
               </MarkdownStreamingContext.Provider>
               {isStreaming && displayContent && !streamingToolCall && (

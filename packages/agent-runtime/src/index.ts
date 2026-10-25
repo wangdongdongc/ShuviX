@@ -187,7 +187,18 @@ export { buildGitHelp, GIT_HELP_TOPICS, type GitHelpTopic } from './git/help'
 export { resolveAuthor, AUTHOR_MISSING_MESSAGE } from './git/author'
 // 单 op 直用入口 —— 宿主自身的自动提交（如 widget 目录自举）复用同一套实现，不经工具壳，
 // 因而也不经路径询问：调用方必须自己确保目标目录是它有权写的
-export { initOp, addOp, commitOp, statusOp, unstageOp } from './git/gitOps'
+export {
+  initOp,
+  addOp,
+  commitOp,
+  statusOp,
+  unstageOp,
+  readCommitChanges,
+  writeBlobText,
+  readBlobText,
+  hashBlobText,
+  type CommitChanges
+} from './git/gitOps'
 // 工具输出后处理共享内核（截断 + 经注入 SpillSink 落盘）
 export {
   processToolOutput,
@@ -722,6 +733,7 @@ export {
 } from './durable/settings'
 export {
   AgentStateDoc,
+  ArtifactPinsDoc,
   DisplayDoc,
   NoticeEntry,
   SessionStateDoc,
@@ -730,12 +742,23 @@ export {
   seedConversationDocs,
   type AgentStateRecord,
   type DeferredNotice,
+  type ArtifactPinsState,
   type DisplayState,
   type SourceState,
   type DrivenRun,
   type NoticeData,
   type SessionState
 } from './durable/docs'
+// 回复里 ```artifact 引用钉下的版本（读写 ArtifactPinsDoc + 找发起调用 / 终答的那条回复）
+export {
+  findCallingReply,
+  findFinalReply,
+  hasArtifactPins,
+  readArtifactPins,
+  writeArtifactPins,
+  type ArtifactPin,
+  type ArtifactReply
+} from './durable/artifactPins'
 export { backgroundContext, isClosedError } from './durable/context'
 // 转写摘要（P2-14）：当前对话里人写的话 / agent 的正文 / ask 的回答 —— 自动审查与起标题的输入（只读）
 export {

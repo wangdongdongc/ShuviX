@@ -2,10 +2,11 @@
  * 统一工具输出后处理包装器（pi-durable 原生）—— 桌面这一层。
  *
  * 截断 / 落盘 / 诊断 / (no output) / outputLimits 的内核在 @shuvix/agent-runtime 的
- * `wrapDurableOutput`（宿主无关，落盘口注入）。这里只叠桌面自己的三样：
+ * `wrapDurableOutput`（宿主无关，落盘口注入）。这里只叠桌面自己的四样：
  *  - 落盘口：`desktopSpillSink(sessionId)` —— 写 `userData/tool_results/<sessionId>/`；
  *  - 安全模块 **L1 全工具门**：工具执行（含 preExecute）之前；
- *  - 自动审查放行的「已审查」标记：写进成功结果的 details。
+ *  - 自动审查放行的「已审查」标记：写进成功结果的 details；
+ *  - 调用前后的旁路钩子（`executionHooks`）：会话产物在这里钉引用的版本、记版本。
  *
  * 单一调用点 — 仅由 agentHost 的工具装配使用。工具本体不自己截断 / 落盘。
  *
@@ -54,6 +55,38 @@ export interface WrapDurableToolOptions {
   security?: SecurityResolver
   /** 落不落盘（见 SpillMode：`'auto'` = 这次调用的 agent 工具表里有 read 才落） */
   spill: SpillMode
+  /**
+   * 工具调用的前后各等一次：`before` 在 L1 门**之前**（回复已经写完，被拒、被问的调用也算 —— 桌面在这里
+   * 钉住发起它的回复引用的产物版本，等用户回答询问的那段时间里文件可能被别的东西改掉）；`after` 只在真的
+   * 执行了之后（成败、取消都走）—— 桌面在这里给产物目录记一版（services/artifacts/history、pins）。
+   * 钩子抛错只吞掉 —— 它是旁路，不该让工具失败。
+   */
+  executionHooks?: ToolExecutionHooks
+}
+
+/** 一次工具调用的身份（执行钩子收到的） */
+export interface ToolExecutionCall {
+  toolName: string
+  callId: string
+  /** 发起它的对话（根 agent 或派生 agent 的） */
+  conversationId: ToolExecutionApi['conversationId']
+}
+
+export interface ToolExecutionHooks {
+  before?: (call: ToolExecutionCall) => Promise<void>
+  after?: (call: ToolExecutionCall) => Promise<void>
+}
+
+async function runHook(
+  hook: ((call: ToolExecutionCall) => Promise<void>) | undefined,
+  call: ToolExecutionCall
+): Promise<void> {
+  if (!hook) return
+  try {
+    await hook(call)
+  } catch {
+    /* 旁路失败不影响工具 */
+  }
 }
 
 /** 包装器收的工具：durable 注册项 */
@@ -75,7 +108,7 @@ export type WrappableTool = AnyTool
  * 当场丢掉，免得留到上限才被挤掉、或挂到复用 toolCallId 的另一次调用上。
  */
 export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOptions): AnyTool {
-  const { sessionId, security } = opts
+  const { sessionId, security, executionHooks } = opts
   const toolName = tool.name ?? ''
   const core = wrapDurableOutput(tool, {
     strategy: opts.strategy,
@@ -87,6 +120,8 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
 
   const gatedExecute: ToolRegistration['execute'] = async (args, api, context) => {
     const toolCallId = api.callId
+    const call = { toolName, callId: toolCallId, conversationId: api.conversationId }
+    await runHook(executionHooks?.before, call)
     const signal = context.abortSignal
 
     // ── L1 全工具门（安全模块）：execute（含 preExecute）之前 ──
@@ -132,6 +167,9 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
     } catch (err) {
       takeReviewAllowed(sessionId, reviewCall)
       throw err
+    } finally {
+      // 结果交回之前就等它落定：下一次调模型时，这次调用写下的那一版已经在历史里了
+      await runHook(executionHooks?.after, call)
     }
     if (result.isError) {
       takeReviewAllowed(sessionId, reviewCall)

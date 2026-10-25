@@ -294,6 +294,7 @@ describe('CS-4 抽查', () => {
     ['fs:listDirectories', 'files'],
     ['liveDoc:attach', 'files'],
     ['artifact:read', 'files'],
+    ['artifact:list', 'files'],
     ['terminal:write', 'terminal'],
     ['browser-view:navigate', 'browser'],
     ['browser-data:site-details', 'browser'],

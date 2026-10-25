@@ -25,3 +25,29 @@ export const useMarkdownStreaming = (): boolean => useContext(MarkdownStreamingC
 export const MarkdownSourceContext = createContext<string | null>(null)
 
 export const useMarkdownSource = (): string | null => useContext(MarkdownSourceContext)
+
+/**
+ * 这段 markdown 属于哪条消息（消息 id = 会话转写里那条回复的条目 id）。
+ *
+ * ```artifact 引用要显示的是**那条回复写下时**钉住的那一版，而不是文件现在的样子（宿主按回复钉版本，
+ * 见桌面 `services/artifacts/pins.ts`）—— 引用块自己不知道自己在哪条回复里，由渲染回复的那一层告诉它：
+ * 终答正文由 AssistantBubble 提供，过程区的中间文本由 StepGroupView 按块查（`noteTextBlockMessage`）。
+ * 缺省 null = 不在某条回复里（或还在流式中，没有条目 id）：引用照当前内容显示。
+ */
+export const MarkdownMessageIdContext = createContext<string | null>(null)
+
+export const useMarkdownMessageId = (): string | null => useContext(MarkdownMessageIdContext)
+
+/**
+ * 过程区的中间文本块 → 它所在那条回复的 id。块对象落盘后身份不变（分组的 memo 正是靠这一点不重画），
+ * 所以按块对象记一张弱表，不必为了带一个 id 而给每个块造新对象。
+ */
+const textBlockMessage = new WeakMap<object, string>()
+
+export function noteTextBlockMessage(block: object, messageId: string): void {
+  textBlockMessage.set(block, messageId)
+}
+
+export function messageIdOfTextBlock(block: object): string | null {
+  return textBlockMessage.get(block) ?? null
+}

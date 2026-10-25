@@ -169,6 +169,28 @@ export const SourceDoc = defineDoc<SourceState>({
   initial: () => ({ items: {} })
 })
 
+export type ArtifactPinsState = {
+  /** 助手条目 id → 它引用的产物名 → 钉下的版本（`ArtifactPin`，JSON；见 `artifactPins.ts`） */
+  items: { [entryId: string]: { [name: string]: JsonObject } }
+}
+
+/**
+ * 回复里的 ```artifact 引用钉下的版本 —— 一条回复写完、它的工具开始执行之前（或一轮的终答落定时），宿主把
+ * 它引用的每件产物此刻的内容存成一份（按内容寻址），记在这里；之后再看这条回复，显示的就是当时那一版。
+ *
+ * 记在**条目自己的对话**里、按条目 id 查（`artifactPins.ts`），所以回退出来的新分支不必继承：`fork: 'initial'`，
+ * 新对话只记自己的回复。只留最新值（钉一次就不再改，没有可回看的历史）。**不补种**：第一次钉时才建，
+ * 读的一侧把「没有这份文档」当成「没钉过」。
+ */
+export const ArtifactPinsDoc = defineDoc<ArtifactPinsState>({
+  kind: 'shuvix.artifact-pins',
+  version: 1,
+  scope: 'conversation',
+  history: 'latest',
+  fork: 'initial',
+  initial: () => ({ items: {} })
+})
+
 export type NoticeData = { kind: string; [key: string]: JsonValue }
 
 export const NoticeEntry = defineEntry<NoticeData>('shuvix.notice')

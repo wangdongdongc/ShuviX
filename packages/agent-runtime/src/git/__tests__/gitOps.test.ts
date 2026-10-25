@@ -5,10 +5,20 @@
  * - 真实文件系统：os.tmpdir() 下 mkdtempSync 建独立目录，afterEach 递归清理
  * - 系统 git 造 fixture / 验证结果（双向互操作：isomorphic-git 写 ↔ 系统 git 读，反之亦然）
  * - 易碎值（oid/日期）用正则断言格式
+ *
+ * 文件末尾两组给宿主自动提交（会话产物的版本，apps/desktop services/artifacts/history.ts）用的入口：
+ * - addOp 的 `details.paths`：哪几个文件进了索引（排好序、含删除、`.` 展开、干净时为空）—— 提交标题照它写；
+ * - readCommitChanges：结构化的 `git log --name-status`（新的在前、根提交全 A 带 blob oid、作者时间是整秒的
+ *   毫秒、depth 截断、trailer 原样）；unborn HEAD → []，别的错误（坏 ref、缺对象）**照抛**，不吞成 []。
+ *
+ * 再往后是给回复里 ```artifact 引用钉版本用的三个 blob 入口（apps/desktop services/artifacts/pins.ts）：
+ * - GB-1 writeBlobText：oid 与系统 `git hash-object --stdin` 一致、重复写幂等、不进提交、工作区状态不变；
+ * - GB-2 readBlobText：unicode / CRLF / 空串原样往返；没有的 oid、tree / commit 的 oid → null；
+ * - GB-3 hashBlobText：与 writeBlobText 交回的同一个值，且不写对象库。
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import * as nodeFs from 'node:fs'
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -23,7 +33,11 @@ import {
   branchOp,
   checkoutOp,
   restoreOp,
-  initOp
+  initOp,
+  readCommitChanges,
+  writeBlobText,
+  readBlobText,
+  hashBlobText
 } from '../gitOps'
 import { resolveAuthor, AUTHOR_MISSING_MESSAGE } from '../author'
 
@@ -653,5 +667,261 @@ describe('initOp', () => {
     expect(git(d, 'rev-parse --abbrev-ref HEAD').trim()).toBe('main')
     expect(git(d, 'log --format=%s').trim()).toBe('first')
     expect(git(d, 'status --porcelain').trim()).toBe('')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// add —— details.paths（宿主自动提交写标题用）
+// ---------------------------------------------------------------------------
+
+describe('addOp details.paths', () => {
+  it('"." 展开：排好序，含工作区删除的；与 fileCount 一致', async () => {
+    const d = makeRepo()
+    write(d, 'a.txt', 'a1\n')
+    write(d, 'b.txt', 'b1\n')
+    write(d, 'c.txt', 'c1\n')
+    git(d, 'add .')
+    git(d, 'commit -m base')
+    nodeFs.rmSync(join(d, 'a.txt')) // 删除
+    write(d, 'c.txt', 'c2 longer\n') // 修改
+    write(d, 'z.txt', 'z\n') // 新增
+    write(d, 'm.txt', 'm\n') // 新增
+    const out = await addOp(envFor(d), newCache(), { paths: ['.'] })
+    expect(out.details?.paths).toEqual(['a.txt', 'c.txt', 'm.txt', 'z.txt'])
+    expect(out.details?.fileCount).toBe(4)
+  })
+
+  it('显式给的路径也排序（含已删除的 tracked 文件）', async () => {
+    const d = makeRepo()
+    write(d, 'a.txt', 'a\n')
+    write(d, 'b.txt', 'b\n')
+    git(d, 'add .')
+    git(d, 'commit -m base')
+    nodeFs.rmSync(join(d, 'b.txt'))
+    write(d, 'a.txt', 'a2 longer\n')
+    const out = await addOp(envFor(d), newCache(), { paths: ['b.txt', 'a.txt'] })
+    expect(out.details?.paths).toEqual(['a.txt', 'b.txt'])
+  })
+
+  it('干净的工作区："." → paths 为 []', async () => {
+    const d = makeRepo()
+    write(d, 'a.txt', 'a\n')
+    git(d, 'add .')
+    git(d, 'commit -m base')
+    const out = await addOp(envFor(d), newCache(), { paths: ['.'] })
+    expect(out.details?.error).toBeUndefined()
+    expect(out.details?.paths).toEqual([])
+    expect(out.details?.fileCount).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// readCommitChanges —— 结构化的 log --name-status（宿主读自己提交过的历史）
+// ---------------------------------------------------------------------------
+
+/** 三个提交：root（A a/b）→ c2（M a）→ c3（D b）；返回各自的 oid */
+function makeHistoryRepo(): { d: string; c1: string; c2: string; c3: string } {
+  const d = makeRepo()
+  write(d, 'a.txt', 'a1\n')
+  write(d, 'b.txt', 'b1\n')
+  git(d, 'add .')
+  git(d, 'commit -m root')
+  const c1 = git(d, 'rev-parse HEAD').trim()
+  write(d, 'a.txt', 'a2 longer\n')
+  git(d, 'add .')
+  git(d, 'commit -m c2')
+  const c2 = git(d, 'rev-parse HEAD').trim()
+  git(d, 'rm -q b.txt')
+  git(d, 'commit -m c3')
+  const c3 = git(d, 'rev-parse HEAD').trim()
+  return { d, c1, c2, c3 }
+}
+
+describe('readCommitChanges', () => {
+  it('unborn HEAD（init 了、一个提交都没有）→ []', async () => {
+    const d = makeRepo()
+    write(d, 'a.txt', 'a\n')
+    expect(await readCommitChanges(envFor(d), newCache())).toEqual([])
+    // isomorphic-git 自己 init 的仓库同理
+    const d2 = makeDir()
+    await initOp(envFor(d2), newCache(), {})
+    expect(await readCommitChanges(envFor(d2), newCache())).toEqual([])
+  })
+
+  it('根提交：与空树比，全部 A，带 blob oid', async () => {
+    const d = makeRepo()
+    write(d, 'b.txt', 'b\n')
+    write(d, 'a.txt', 'a\n')
+    git(d, 'add .')
+    git(d, 'commit -m root')
+    const out = await readCommitChanges(envFor(d), newCache())
+    expect(out).toHaveLength(1)
+    expect(out[0].oid).toBe(git(d, 'rev-parse HEAD').trim())
+    expect(out[0].changes).toEqual([
+      { path: 'a.txt', status: 'A', oid: git(d, 'rev-parse HEAD:a.txt').trim() },
+      { path: 'b.txt', status: 'A', oid: git(d, 'rev-parse HEAD:b.txt').trim() }
+    ])
+  })
+
+  it('新的在前：D（没有 oid）→ M（新 blob 的 oid）→ 根提交 A；作者时间是整秒的毫秒', async () => {
+    const { d, c1, c2, c3 } = makeHistoryRepo()
+    const out = await readCommitChanges(envFor(d), newCache())
+    expect(out.map((c) => c.oid)).toEqual([c3, c2, c1])
+    expect(out[0].changes).toEqual([{ path: 'b.txt', status: 'D' }])
+    expect(out[1].changes).toEqual([
+      { path: 'a.txt', status: 'M', oid: git(d, `rev-parse ${c2}:a.txt`).trim() }
+    ])
+    expect(out[2].changes.map((c) => `${c.status} ${c.path}`)).toEqual(['A a.txt', 'A b.txt'])
+    const authorSecs = git(d, 'log --format=%at').trim().split('\n').map(Number)
+    out.forEach((c, i) => {
+      expect(c.timestamp % 1000).toBe(0)
+      expect(c.timestamp).toBe(authorSecs[i] * 1000)
+    })
+  })
+
+  it('depth 截断为最近 N 条', async () => {
+    const { d, c2, c3 } = makeHistoryRepo()
+    const out = await readCommitChanges(envFor(d), newCache(), { depth: 2 })
+    expect(out.map((c) => c.oid)).toEqual([c3, c2])
+  })
+
+  it('提交信息原样（多行 + trailer）', async () => {
+    const d = makeRepo()
+    write(d, 'a.svg', '<svg/>\n')
+    git(d, 'add .')
+    const message = [
+      'artifact: a.svg',
+      '',
+      'Tool-Call-Id: call_1',
+      'Recorded-At: 2026-10-24T10:00:00.123Z'
+    ].join('\n')
+    const msgFile = join(makeDir(), 'msg.txt')
+    nodeFs.writeFileSync(msgFile, message)
+    git(d, `commit -q -F ${JSON.stringify(msgFile)}`)
+    const [c] = await readCommitChanges(envFor(d), newCache())
+    expect(c.message.trimEnd()).toBe(message)
+    expect(c.message).toMatch(/^Recorded-At: 2026-10-24T10:00:00\.123Z$/m)
+  })
+
+  it('坏 ref / 缺对象 → 照抛（不吞成 []）', async () => {
+    const { d, c3 } = makeHistoryRepo()
+    // 给的 ref 不存在
+    await expect(
+      readCommitChanges(envFor(d), newCache(), { ref: 'no-such-branch' })
+    ).rejects.toThrow()
+    // HEAD 指着的提交对象没了（仓库坏了）
+    const objectFile = join(d, '.git', 'objects', c3.slice(0, 2), c3.slice(2))
+    nodeFs.chmodSync(objectFile, 0o644)
+    nodeFs.rmSync(objectFile)
+    await expect(readCommitChanges(envFor(d), newCache())).rejects.toThrow()
+  })
+
+  // 钉住现状：分支 ref 文件里是乱码时，isomorphic-git 的 resolveRef 抛的也是 NotFoundError —— 与 unborn
+  // HEAD 分不开，于是当成「一个提交都没有」交回 []（产物面板因此退回「算一版、取 mtime」，不会报错）
+  it('分支 ref 文件被写坏（乱码）→ 与 unborn 一样交回 []', async () => {
+    const { d } = makeHistoryRepo()
+    nodeFs.writeFileSync(join(d, '.git', 'refs', 'heads', 'main'), 'garbage\n')
+    await expect(readCommitChanges(envFor(d), newCache())).resolves.toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// blob —— 按内容寻址存一份文本（宿主给 ```artifact 引用钉版本用）
+// ---------------------------------------------------------------------------
+
+/** 系统 git 算这段文本作为 blob 的哈希（`-w` 时顺带写进对象库） */
+function hashObject(dir: string, text: string, writeIt = false): string {
+  return execFileSync('git', ['hash-object', ...(writeIt ? ['-w'] : []), '--stdin'], {
+    cwd: dir,
+    input: text,
+    encoding: 'utf8'
+  }).trim()
+}
+
+/** 对象库里的松散对象（`ab/cdef…` → `abcdef…`），按名排序 */
+function looseObjects(dir: string): string[] {
+  const root = join(dir, '.git', 'objects')
+  return nodeFs
+    .readdirSync(root)
+    .filter((d) => /^[0-9a-f]{2}$/.test(d))
+    .flatMap((d) => nodeFs.readdirSync(join(root, d)).map((f) => d + f))
+    .sort()
+}
+
+const SAMPLES = [
+  '<svg aria-label="Bar chart"><rect/></svg>',
+  '中文标题 · ünïcødé · 😀\n',
+  'line one\r\nline two\r\n',
+  ''
+]
+
+describe('writeBlobText / readBlobText / hashBlobText', () => {
+  it('GB-1 writeBlobText：oid = git hash-object --stdin；幂等；不进提交、工作区状态不变', async () => {
+    const d = makeRepo()
+    write(d, 'a.txt', 'a\n')
+    git(d, 'add .')
+    git(d, 'commit -m base')
+    write(d, 'a.txt', 'a changed\n') // 工作区里留一处改动：写 blob 不该碰它
+    const head = git(d, 'rev-parse HEAD').trim()
+    const status = git(d, 'status --porcelain')
+    const index = nodeFs.readFileSync(join(d, '.git', 'index'))
+
+    for (const text of SAMPLES) {
+      const oid = await writeBlobText(envFor(d), text)
+      expect(oid, JSON.stringify(text)).toBe(hashObject(d, text))
+      // 系统 git 读得回同一份内容（对象真的进了库）
+      expect(git(d, `cat-file -t ${oid}`).trim()).toBe('blob')
+      expect(execFileSync('git', ['cat-file', 'blob', oid], { cwd: d, encoding: 'utf8' })).toBe(
+        text
+      )
+    }
+    // 同一份内容再写一次：同一个 oid、对象库里不多出东西
+    const before = looseObjects(d)
+    expect(await writeBlobText(envFor(d), SAMPLES[0])).toBe(hashObject(d, SAMPLES[0]))
+    expect(looseObjects(d)).toEqual(before)
+
+    expect(git(d, 'rev-parse HEAD').trim()).toBe(head)
+    expect(git(d, 'rev-list --count HEAD').trim()).toBe('1')
+    expect(git(d, 'status --porcelain')).toBe(status)
+    expect(nodeFs.readFileSync(join(d, '.git', 'index')).equals(index)).toBe(true)
+  })
+
+  it('GB-2 readBlobText：原样往返；没有的 oid、tree / commit 的 oid → null', async () => {
+    const d = makeRepo()
+    for (const text of SAMPLES) {
+      const oid = await writeBlobText(envFor(d), text)
+      expect(await readBlobText(envFor(d), newCache(), oid), JSON.stringify(text)).toBe(text)
+    }
+    // 系统 git 写的 blob 也读得回（双向互操作）
+    const byGit = hashObject(d, 'written by git\r\n', true)
+    expect(await readBlobText(envFor(d), newCache(), byGit)).toBe('written by git\r\n')
+
+    // 没有这个对象
+    expect(await readBlobText(envFor(d), newCache(), 'f'.repeat(40))).toBeNull()
+    expect(await readBlobText(envFor(d), newCache(), hashObject(d, 'never written'))).toBeNull()
+    // 有，但不是 blob
+    write(d, 'a.txt', 'a\n')
+    git(d, 'add .')
+    git(d, 'commit -m base')
+    const commit = git(d, 'rev-parse HEAD').trim()
+    const tree = git(d, 'rev-parse HEAD^{tree}').trim()
+    expect(await readBlobText(envFor(d), newCache(), commit)).toBeNull()
+    expect(await readBlobText(envFor(d), newCache(), tree)).toBeNull()
+    // 根本不是仓库
+    expect(await readBlobText(envFor(makeDir()), newCache(), byGit)).toBeNull()
+  })
+
+  it('GB-3 hashBlobText：与 writeBlobText 同一个 oid，且不写对象库', async () => {
+    const d = makeRepo()
+    for (const text of SAMPLES) {
+      const before = looseObjects(d)
+      const hashed = await hashBlobText(text)
+      expect(looseObjects(d), JSON.stringify(text)).toEqual(before)
+      expect(hashed).toBe(hashObject(d, text))
+      expect(await readBlobText(envFor(d), newCache(), hashed)).toBeNull()
+      expect(await writeBlobText(envFor(d), text)).toBe(hashed)
+    }
+    // 空串的 blob 哈希是 git 的那个常量
+    expect(await hashBlobText('')).toBe('e69de29bb2d1d6434b8b29ae775ad8c2e48c5391')
   })
 })
