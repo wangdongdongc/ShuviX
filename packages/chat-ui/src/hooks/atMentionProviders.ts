@@ -7,8 +7,8 @@
  * registerAtMentionProvider。
  *
  * 内置三个源：
- *   - file      —— 工作区文件（files.scan 建 FileMap，files.changed 重扫；原 useAtMentions
- *                  内联实现收编为 provider 内部状态）
+ *   - file      —— 工作区文件（files.scan 建 FileMap，files.changed 重扫，弹层每次打开再按需重扫；
+ *                  原 useAtMentions 内联实现收编为 provider 内部状态）
  *   - knowledge —— 启用库知识条目（mentions.listKnowledgeEntries 一次拉全，knowledge.changed
  *                  重扫；session.configChanged 按载荷圈定该会话重拉 —— 启用库勾选不走 knowledge.changed）
  *   - session   —— 别的会话（mentions.listSessions 一次拉全，会话列表 / 标题变了就重拉）：把它的 id 交给
@@ -55,6 +55,11 @@ export interface AtMentionProvider {
   ready(sessionId: string): boolean
   /** 确保该会话数据在加载（幂等；完成后经 subscribe 通知） */
   load(sessionId: string): void
+  /**
+   * 弹层打开（新的一次 @ 触发）时调用：变更信号不完整的源在此按需重扫，旧表照常先用、
+   * 新表到了经 subscribe 通知。信号完整的源不实现
+   */
+  revalidate?(sessionId: string): void
   /** 内存内搜索（数据未就绪返回 []） */
   search(sessionId: string, query: string, limit?: number): AtSuggestionItem[]
   /** 订阅数据变化（hook 据此 bump 渲染；事件驱动重扫完成后也会触发） */
@@ -70,6 +75,8 @@ abstract class BaseProvider implements AtMentionProvider {
   protected readonly listeners = new Set<() => void>()
   private subscribed = false
   private rescanTimer: ReturnType<typeof setTimeout> | null = null
+  /** 防抖窗口内各事件圈定的会话合在一起重扫（后一条事件不能挤掉前一条的会话） */
+  private readonly pendingRescan = new Set<string>()
 
   abstract ready(sessionId: string): boolean
   abstract search(sessionId: string, query: string, limit?: number): AtSuggestionItem[]
@@ -100,10 +107,13 @@ abstract class BaseProvider implements AtMentionProvider {
     getSessionChannelApi().events.subscribe((event) => {
       const sids = this.sessionsToRescan(event)
       if (sids.length === 0) return
+      for (const sid of sids) this.pendingRescan.add(sid)
       if (this.rescanTimer) clearTimeout(this.rescanTimer)
       this.rescanTimer = setTimeout(() => {
         this.rescanTimer = null
-        for (const sid of sids) void this.fetch(sid).catch(() => {})
+        const batch = [...this.pendingRescan]
+        this.pendingRescan.clear()
+        for (const sid of batch) void this.fetch(sid).catch(() => {})
       }, RESCAN_DEBOUNCE_MS)
     })
   }
@@ -111,13 +121,28 @@ abstract class BaseProvider implements AtMentionProvider {
 
 // ── file：工作区文件 ──
 
+/** 弹层打开触发的重扫节流：距上一次开扫不足这么久就沿用现表 */
+const REVALIDATE_THROTTLE_MS = 1000
+
 class FileProvider extends BaseProvider {
   readonly source = 'file'
   /** 原 useAtMentions 的模块级 FILE_MAPS 收编于此（按 sessionId 分键） */
   private readonly maps = new Map<string, FileMap>()
+  /** 每个会话最近一次开扫的序号与时刻：晚开的扫描先回来时，早开的那次结果作废 */
+  private readonly scans = new Map<string, { seq: number; at: number }>()
 
   ready(sessionId: string): boolean {
     return this.maps.has(sessionId)
+  }
+
+  /**
+   * 后端不递归监听工作目录（大仓会撑爆 fd），files.changed 只来自 agent 的 write/edit 与
+   * 打开着的文件 —— shell 命令、Finder、别的编辑器新建的文件都没有信号，靠这里在弹层打开时补扫
+   */
+  revalidate(sessionId: string): void {
+    const last = this.scans.get(sessionId)
+    if (last && Date.now() - last.at < REVALIDATE_THROTTLE_MS) return
+    this.load(sessionId)
   }
 
   search(sessionId: string, query: string, limit?: number): AtSuggestionItem[] {
@@ -131,7 +156,10 @@ class FileProvider extends BaseProvider {
   }
 
   protected async fetch(sessionId: string): Promise<void> {
+    const seq = (this.scans.get(sessionId)?.seq ?? 0) + 1
+    this.scans.set(sessionId, { seq, at: Date.now() })
     const r = await getSessionChannelApi().files.scan({ sessionId })
+    if (this.scans.get(sessionId)?.seq !== seq) return
     if (!r.root) return
     this.maps.set(sessionId, buildFileMap(r.root, r.paths))
     this.notify()

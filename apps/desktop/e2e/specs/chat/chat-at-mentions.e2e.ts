@@ -209,7 +209,7 @@ beforeAll(async () => {
 
   // AtProj 的项目库有一条条目（AT-20），它的会话候选里恒多出那一行（项目库隐式启用）；
   // 断「没有知识行 / 候选恰为某几条」的用例（AT-2/3/5/6/14/15）因此放 AtProjB —— 那里项目库是空的。
-  // AtProj 11 条（含切走对照）、AtProjB 14 条，都远低于分组上限
+  // AtProj 12 条（含切走对照）、AtProjB 14 条，都远低于分组上限
   const inP1 = (title: string, kb?: string[]): Promise<string> =>
     createSession(title, kb, project.id)
   const inP2 = (title: string, kb?: string[]): Promise<string> =>
@@ -231,6 +231,7 @@ beforeAll(async () => {
   sids['AT-16'] = await inP1('AT-16', ['kb-a'])
   // 不勾任何库：项目库是隐式启用的，它的条目照样进候选
   sids['AT-20'] = await inP1('AT-20', undefined)
+  sids['AT-27'] = await inP1('AT-27', undefined)
   sids.scratch = await inP1('AT-scratch', undefined)
   sids['AT-17'] = await inP2('AT-17', ['kb-a'])
   sids['AT-21'] = await inP2('AT-21', undefined)
@@ -745,5 +746,24 @@ describe('F · 退格与草稿回退', () => {
     expect(user.metadata?.inlineTokens ?? null).toBeNull()
     expect(user.content).toBe('@knowledge:Token 刷新XY')
     expect(provider.chatRequests()[0].lastUserText).toBe('@knowledge:Token 刷新XY')
+  })
+})
+
+describe('G · 候选新鲜度', () => {
+  it('AT-27 别处新建的文件（shell / Finder，后端不发 files.changed）→ 下一次打开弹层就在候选里', async () => {
+    await openAndType('AT-27', '@alpha')
+    await waitRow('docs/alpha-guide.md')
+    // 测试进程直接落盘：不经 agent 的 write/edit，也不是打开着的文件 —— 没有任何事件。
+    // 放进新目录、名字不撞别的用例的 query，不改动它们数的行
+    const fresh = join(app.home, 'proj-at', 'later', 'brand-new.md')
+    mkdirSync(dirname(fresh), { recursive: true })
+    writeFileSync(fresh, '# brand new\n')
+    // 越过弹层重扫的 1s 节流
+    await sleep(1100)
+
+    // 文本已是 '@alpha'：先清空再敲，才是新的一次 @ 触发
+    await chat.type('')
+    await chat.type('@brand')
+    await waitRow('later/brand-new.md')
   })
 })

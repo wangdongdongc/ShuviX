@@ -7,8 +7,10 @@
  *     session.configChanged（启用库勾选的广播，不产生 knowledge.changed）按载荷圈定、
  *     只重拉该会话已有的表 —— 没拉过的会话不预取，别的会话不无谓重拉。
  *   - 会话源（XS-67）：searchSessionMentions 的排名与 SessionProvider 的就绪 / 候选形态 / 事件订阅。
+ *   - 文件源：弹层打开时按需重扫（shell / Finder 新建的文件没有 files.changed）、节流、
+ *     同一防抖窗口里不同工作目录的事件都重扫、晚回来的旧扫描不覆盖新表。
  *
- * 宿主事件流的替身把每个 provider 的订阅都收下（knowledge 与 session 两个源各订一次），fire 发给全部。
+ * 宿主事件流的替身把每个 provider 的订阅都收下（每个 load 过的源各订一次），fire 发给全部。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
@@ -16,6 +18,7 @@ import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 
 const mocks = vi.hoisted(() => ({
   listKnowledgeEntries: vi.fn(),
+  scan: vi.fn(),
   listSessions: vi.fn(),
   /** 宿主有没有会话列表（mentions.listSessions；扩展没有） */
   hasListSessions: { current: true },
@@ -25,6 +28,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../api/chatApi', () => ({
   getSessionChannelApi: () => ({
+    files: { scan: mocks.scan },
     mentions: {
       listKnowledgeEntries: mocks.listKnowledgeEntries,
       ...(mocks.hasListSessions.current ? { listSessions: mocks.listSessions } : {})
@@ -369,5 +373,105 @@ describe('SessionProvider（XS-67）', () => {
 
     expect(mocks.listSessions.mock.calls.length).toBe(before)
     expect(provider.search('xs-quiet', '').map((s) => s.label)).toEqual(['Stays'])
+  })
+})
+
+// ── 文件源 ──
+
+/**
+ * FileProvider：后端不递归监听工作目录，files.changed 只来自 agent 的 write/edit 与打开着的文件 ——
+ * 别处新建的文件靠弹层打开时的 revalidate 补扫（距上一次开扫不足 1s 沿用现表）
+ */
+describe('FileProvider', () => {
+  const provider = getAtMentionProviders().find((p) => p.source === 'file')!
+  type ScanResult = { root: string; paths: string[]; truncated: boolean }
+  const scanResult = (root: string, paths: string[]): ScanResult => ({
+    root,
+    paths,
+    truncated: false
+  })
+  const labels = (sid: string): string[] => provider.search(sid, '').map((s) => s.label)
+  const loadAndSettle = async (sid: string, root: string, paths: string[]): Promise<void> => {
+    mocks.scan.mockResolvedValue(scanResult(root, paths))
+    provider.load(sid)
+    await vi.waitFor(() => expect(labels(sid)).toEqual(paths))
+  }
+  const scannedSids = (from: number): string[] =>
+    mocks.scan.mock.calls.slice(from).map((c) => (c[0] as { sessionId: string }).sessionId)
+
+  beforeEach(() => {
+    mocks.scan.mockReset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('弹层打开时重扫：没有 files.changed 的新建文件出现在候选', async () => {
+    vi.useFakeTimers()
+    await loadAndSettle('f-new', '/w/new', ['a.md'])
+    await vi.advanceTimersByTimeAsync(1000)
+
+    mocks.scan.mockResolvedValue(scanResult('/w/new', ['a.md', 'b.md']))
+    provider.revalidate!('f-new')
+    await vi.waitFor(() => expect(labels('f-new')).toEqual(['a.md', 'b.md']))
+  })
+
+  it('距上一次开扫不足 1s 不重扫，过了再开就扫', async () => {
+    vi.useFakeTimers()
+    await loadAndSettle('f-throttle', '/w/throttle', ['a.md'])
+    const before = mocks.scan.mock.calls.length
+
+    await vi.advanceTimersByTimeAsync(500)
+    provider.revalidate!('f-throttle')
+    expect(mocks.scan.mock.calls.length).toBe(before)
+
+    await vi.advanceTimersByTimeAsync(500)
+    provider.revalidate!('f-throttle')
+    expect(scannedSids(before)).toEqual(['f-throttle'])
+  })
+
+  it('同一防抖窗口里两个工作目录各来一条新建事件：两个会话都重扫', async () => {
+    await loadAndSettle('f-ev-a', '/w/ev-a', ['a.md'])
+    await loadAndSettle('f-ev-b', '/w/ev-b', ['b.md'])
+    vi.useFakeTimers()
+    const before = mocks.scan.mock.calls.length
+
+    mocks.scan.mockImplementation(async ({ sessionId }: { sessionId: string }) =>
+      sessionId === 'f-ev-a'
+        ? scanResult('/w/ev-a', ['a.md', 'a2.md'])
+        : scanResult('/w/ev-b', ['b.md', 'b2.md'])
+    )
+    fire({ type: 'files.changed', root: '/w/ev-a', paths: ['/w/ev-a/a2.md'], kind: 'write' })
+    await vi.advanceTimersByTimeAsync(100)
+    fire({ type: 'files.changed', root: '/w/ev-b', paths: ['/w/ev-b/b2.md'], kind: 'write' })
+    await vi.advanceTimersByTimeAsync(300)
+
+    expect(scannedSids(before).sort()).toEqual(['f-ev-a', 'f-ev-b'])
+    expect(labels('f-ev-a')).toEqual(['a.md', 'a2.md'])
+    expect(labels('f-ev-b')).toEqual(['b.md', 'b2.md'])
+  })
+
+  it('已在表里的文件被编辑：不重扫', async () => {
+    await loadAndSettle('f-edit', '/w/edit', ['a.md'])
+    vi.useFakeTimers()
+    const before = mocks.scan.mock.calls.length
+    fire({ type: 'files.changed', root: '/w/edit', paths: ['/w/edit/a.md'], kind: 'edit' })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(mocks.scan.mock.calls.length).toBe(before)
+  })
+
+  it('先开的扫描晚回来：结果作废，不盖掉后开那次的表', async () => {
+    await loadAndSettle('f-race', '/w/race', ['a.md'])
+    let resolveOld!: (v: ScanResult) => void
+    mocks.scan.mockImplementationOnce(() => new Promise((r) => (resolveOld = r)))
+    mocks.scan.mockResolvedValueOnce(scanResult('/w/race', ['a.md', 'new.md']))
+
+    provider.load('f-race')
+    provider.load('f-race')
+    await vi.waitFor(() => expect(labels('f-race')).toEqual(['a.md', 'new.md']))
+    resolveOld(scanResult('/w/race', ['a.md']))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(labels('f-race')).toEqual(['a.md', 'new.md'])
   })
 })

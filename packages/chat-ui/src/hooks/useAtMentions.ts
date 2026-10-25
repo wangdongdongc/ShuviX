@@ -195,6 +195,14 @@ export function useAtMentions(sessionId: string | null): UseAtMentions {
     for (const p of providers) p.load(sessionId)
   }, [sessionId, providers])
 
+  // 弹层打开（新的一次 @ 触发；同一处触发里续打 query 不算）→ 请各源按需重扫：
+  // 文件源收不到 shell / Finder 新建文件的信号，只能在用户要选的这一刻补
+  const triggerAt = trigger?.at ?? null
+  useEffect(() => {
+    if (triggerAt === null || !sessionId) return
+    for (const p of providers) p.revalidate?.(sessionId)
+  }, [triggerAt, sessionId, providers])
+
   useEffect(() => {
     const unsubs = providers.map((p) => p.subscribe(() => setDataVersion((v) => v + 1)))
     return () => {
