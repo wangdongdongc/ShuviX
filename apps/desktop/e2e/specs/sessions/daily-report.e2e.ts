@@ -3,11 +3,12 @@
  *
  *   DRE-1 今天还没有日报：当天列表头只有一颗新建图标；月历上今天只有会话点
  *   DRE-2 点新建图标：按模板建出今天的日报，主区开成它的笔记本；列表头多一行日报；月历上两个点并排
- *   DRE-3 会话行菜单「插入到日报」：链接写进日报第一段，日报那一行的摘录跟着变
- *   DRE-4 在日报笔记本里点那条会话链接：主区切到那条会话
+ *   DRE-3 会话行菜单「复制链接」：剪贴板里是指向这条会话今天第一条消息的 Markdown 链接；日报不动
+ *   DRE-4 把它粘进日报笔记本：存盘、摘录跟着变；点那条链接，主区切到那条会话
  *   DRE-5 未来的日子：没有新建图标，openReport 被拒，也不建文件
  *
- * 一次冷启动。fake HOME 下的日报目录用 node fs 直接核对。设了 `DAILY_E2E_SHOTS=<目录>` 时
+ * 一次冷启动。fake HOME 下的日报目录用 node fs 直接核对；剪贴板是页内替身（`navigator.clipboard.writeText`
+ * 记下文字，不碰跑测试那台机器的剪贴板）。设了 `DAILY_E2E_SHOTS=<目录>` 时
  * 每一步存一张截图（日历面板 / 整个窗口），给人看样子用；不设就不截。
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -16,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { createAgentSession, promptAndListMessages } from '../../harness/seed'
-import { rightPanelPane, sidebarPane } from '../../harness/pages'
+import { notebookEditorPane, rightPanelPane, sidebarPane } from '../../harness/pages'
 
 const TITLE = 'DRE 修日历圆点'
 
@@ -77,9 +78,7 @@ describe('日历上的日报', () => {
       () => evalCal<boolean>(`!!${CAL}?.querySelector('[data-daily-write]')`),
       'write icon'
     )
-    expect(await evalCal<string>(`${CAL}.querySelector('[data-daily-write]').textContent`)).toBe(
-      ''
-    )
+    expect(await evalCal<string>(`${CAL}.querySelector('[data-daily-write]').textContent`)).toBe('')
     expect(await evalCal<boolean>(`!!${CAL}.querySelector('[data-daily-report]')`)).toBe(false)
     const cls = await evalCal<string>(`${TODAY_CELL}.className`)
     expect(cls).toContain('rdp-has-sessions')
@@ -155,9 +154,17 @@ describe('日历上的日报', () => {
     await shot('2-window', true)
   })
 
-  it('DRE-3 会话行菜单「插入到日报」：链接写进第一段，摘录跟着变', async () => {
+  let copied = ''
+
+  it('DRE-3 会话行菜单「复制链接」：剪贴板里是指向今天第一条消息的 Markdown 链接；日报不动', async () => {
+    const before = readFileSync(reportFile(), 'utf8')
     await app.main.eval(`(() => {
-      window.__E2E_MENU_PICK = 'add-to-report';
+      Object.defineProperty(navigator.clipboard, 'writeText', {
+        configurable: true,
+        value: async (text) => { window.__E2E_COPIED = text }
+      })
+      window.__E2E_COPIED = null
+      window.__E2E_MENU_PICK = 'copy-link';
       window.__E2E_MENU_ITEMS = null;
       ${ROW(TITLE)}.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
       return true
@@ -169,23 +176,29 @@ describe('日历上的日报', () => {
     const ids = await app.main.eval<string[]>(
       `window.__E2E_MENU_ITEMS.filter((it) => it.id).map((it) => it.id)`
     )
-    expect(ids[0]).toBe('add-to-report')
+    expect(ids[0]).toBe('copy-link')
 
     await until(
-      () => readFileSync(reportFile(), 'utf8').includes(`shuvix://session/${sid}#`),
-      'link written with the first message of today'
+      () => app.main.eval<boolean>(`typeof window.__E2E_COPIED === 'string'`),
+      'link copied'
     )
-    const text = readFileSync(reportFile(), 'utf8')
-    const firstSection = text.split(/^## /m)[1]
-    expect(firstSection).toContain(`- [${TITLE}](shuvix://session/${sid}#`)
-    await until(
-      () => evalCal<boolean>(`${CAL}.querySelector('[data-daily-report]').textContent.includes(${JSON.stringify(TITLE)})`),
-      'excerpt shows the session'
-    )
-    await shot('3-session-added')
+    copied = await app.main.eval<string>(`window.__E2E_COPIED`)
+    expect(copied).toMatch(new RegExp(`^\\[${TITLE}\\]\\(shuvix://session/${sid}#[^)]+\\)$`))
+    expect(readFileSync(reportFile(), 'utf8')).toBe(before)
   })
 
-  it('DRE-4 在日报笔记本里点那条会话链接：主区切到那条会话', async () => {
+  it('DRE-4 粘进日报笔记本：存盘、摘录跟着变；点那条链接，主区切到那条会话', async () => {
+    // 主区还是 DRE-2 打开的那份日报（右键会话行不切会话）
+    await notebookEditorPane(app.main).typeAtEnd(`\n${copied}\n`)
+    await until(() => readFileSync(reportFile(), 'utf8').includes(copied), 'pasted link saved')
+    await until(
+      () =>
+        evalCal<boolean>(
+          `${CAL}.querySelector('[data-daily-report]').textContent.includes(${JSON.stringify(TITLE)})`
+        ),
+      'excerpt shows the session'
+    )
+    await shot('3-link-pasted')
     await until(
       () =>
         app.main.eval<boolean>(

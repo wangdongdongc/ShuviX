@@ -1,17 +1,11 @@
 import { defineHandler } from './registry'
 import { daysInMonth, firstEntryOnDay, sessionsOnDay } from '../services/sessionDayPromptService'
-import {
-  addSessionToReport,
-  deleteReport,
-  openReport,
-  reportDaysInMonth,
-  reportOnDay
-} from '../services/dailyNotes'
+import { deleteReport, openReport, reportDaysInMonth, reportOnDay } from '../services/dailyNotes'
 
 /**
  * 桌面日历 IPC —— 按 session_day_prompts 查开口日 / 当天会话 / 当天第一条用户消息；
  * 外加每天的日报（`~/.shuvix/daily`，见 services/dailyNotes）：哪些天写了、那天的摘录、打开那天、
- * 把一条会话插进那天、删掉那天的日报。扩展没有这张表，不实现对应 ChatApi.calendar。
+ * 删掉那天的日报。扩展没有这张表，不实现对应 ChatApi.calendar。
  */
 export function registerCalendarHandlers(): void {
   defineHandler('calendar:daysInMonth', (_ctx, params: { year: number; month: number }) =>
@@ -28,9 +22,6 @@ export function registerCalendarHandlers(): void {
   )
   defineHandler('calendar:reportOnDay', (_ctx, params: { day: string }) => reportOnDay(params.day))
   defineHandler('calendar:openReport', (_ctx, params: { day: string }) => openReport(params.day))
-  defineHandler('calendar:addSessionToReport', (_ctx, params: { day: string; sessionId: string }) =>
-    addSessionToReport(params.day, params.sessionId)
-  )
   defineHandler('calendar:deleteReport', (_ctx, params: { day: string }) =>
     deleteReport(params.day)
   )

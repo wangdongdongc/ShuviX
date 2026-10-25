@@ -106,14 +106,13 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'session:delete': 'write',
   'session:getById': 'read',
 
-  // ─── calendar：桌面日历（查开口日；日报是用户自己的数据：读是 read，建 / 插入是 write） ───
+  // ─── calendar：桌面日历（查开口日；日报是用户自己的数据：读是 read，建 / 删是 write） ───
   'calendar:daysInMonth': 'read',
   'calendar:sessionsOnDay': 'read',
   'calendar:firstEntryOnDay': 'read',
   'calendar:reportDaysInMonth': 'read',
   'calendar:reportOnDay': 'read',
   'calendar:openReport': 'write', // 那天还没有就按模板建文件 + 笔记本会话
-  'calendar:addSessionToReport': 'write',
   'calendar:deleteReport': 'write', // 删日报文件 + 它的笔记本会话
 
   // ─── tracking：跟踪项（实验；用户自己的数据：列出是 read，开笔记本 / 开目录是 write） ───

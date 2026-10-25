@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
+  copyToClipboard,
   getChatApi,
   getHostApi,
   isSubSession,
@@ -18,7 +20,9 @@ import {
 import {
   DAILY_PROJECT_ID,
   dailyFileName,
-  localDayKey as dayKey
+  linkText,
+  localDayKey as dayKey,
+  sessionLink
 } from '@shuvix/chat-protocol/dailyNotes'
 import { useBrowserStore } from '../../stores/browserStore'
 import { usePinChatStore } from '../../stores/pinChatStore'
@@ -36,7 +40,8 @@ function daysToDates(days: string[]): Date[] {
  * 日历面板 —— Right panel 的 Calendar tab 内容。月历圆点与当日列表来自
  * session_day_prompts（IPC `calendar.*`），不再按 lastActiveAt 单日落点。
  * 列表上方是那一天的日报（`~/.shuvix/daily/<日期>.md`，见 main services/dailyNotes）：写了的日子
- * 在月历上多一个点；点开就是那份日报的笔记本，与当天的会话列表并排对照着写。
+ * 在月历上多一个点；点开就是那份日报的笔记本，与当天的会话列表并排对照着写（会话行菜单的「复制链接」给一条
+ * 指向那天那条会话的链接，贴进去就能点回去）。
  */
 export interface CalendarPanelProps {
   /** 用户从日历里打开了一个会话（同一个再点一次也算）—— 手机布局据此推入对话页；桌面不传 */
@@ -44,6 +49,7 @@ export interface CalendarPanelProps {
 }
 
 export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React.JSX.Element {
+  const { t } = useTranslation()
   const { projects } = useProjects()
   const width = useBrowserStore((s) => s.width)
   const pinnedSessionIds = usePinChatStore((s) => s.pinnedSessionIds)
@@ -150,12 +156,21 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
     }
   }
 
-  const handleAddToReport = async (sessionId: string): Promise<void> => {
+  // 会话行菜单的「复制链接」：指向这条会话的 Markdown 链接，带上它在选中那一天的第一条用户消息（打开就落在那天）
+  // —— 贴进日报、笔记还是别处由用户定。那天的消息查不到（会话刚被删之类）就只链会话本身
+  const handleCopyLink = async (sessionId: string): Promise<void> => {
+    const session =
+      useChatStore.getState().sessions.find((s) => s.id === sessionId) ??
+      daySessions.find((s) => s.id === sessionId)
+    let entryId: string | null = null
     try {
-      await getHostApi()?.calendar?.addSessionToReport({ day: selectedDay, sessionId })
+      entryId =
+        (await getHostApi()?.calendar?.firstEntryOnDay({ sessionId, day: selectedDay })) ?? null
     } catch {
-      // 会话刚被删掉（列表还没重拉）—— 没有可插的，什么都不写
+      // 照样复制，只是不带那一天
     }
+    const title = linkText(session?.title ?? '') || t('sidebar.untitledSession')
+    copyToClipboard(`[${title}](${sessionLink(sessionId, entryId)})`)
   }
 
   const handleSelect = useCallback(
@@ -232,7 +247,7 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
               onSelect={handleSelect}
               onDelete={handleDelete}
               onConfigureSession={setConfiguringSessionId}
-              onAddToReport={writable ? (id) => void handleAddToReport(id) : undefined}
+              onCopyLink={(id) => void handleCopyLink(id)}
               caps={{ pin: true }}
               pinnedSessionIds={pinnedSessionIds}
             />

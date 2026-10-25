@@ -494,10 +494,6 @@ declare global {
       reportDaysInMonth: (params: { year: number; month: number }) => Promise<string[]>
       reportOnDay: (params: { day: string }) => Promise<{ excerpt: string; path: string } | null>
       openReport: (params: { day: string }) => Promise<Session>
-      addSessionToReport: (params: {
-        day: string
-        sessionId: string
-      }) => Promise<{ added: boolean }>
       deleteReport: (params: {
         day: string
       }) => Promise<{ deleted: boolean; sessionId: string | null }>

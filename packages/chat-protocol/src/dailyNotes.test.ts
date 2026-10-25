@@ -1,20 +1,18 @@
 /**
- * 日报的纯函数 —— 文件名规则、模板、摘录、往第一段插一行、会话链接。
+ * 日报的纯函数 —— 文件名规则、模板、摘录、会话链接。
  *
  * 文件名就是身份：认错一个（模板、`.partial` 临时文件、不存在的日子），日历上就会点出一个不该有的点，
  * 或打开一份不是日报的文件。摘录是日历里那一行：模板占位、标题、注释都不该出现在里面，
- * 否则「写了没有」一眼看不出来。插入要落在模板留的空项里，不能把用户写的内容挤乱。
+ * 否则「写了没有」一眼看不出来。
  */
 import { describe, expect, it } from 'vitest'
 import {
   dailyExcerpt,
   dayOfDailyFile,
   defaultDailyTemplate,
-  insertIntoFirstSection,
   isDayKey,
   linkText,
   localDayKey,
-  mentionsSession,
   parseSessionLink,
   sessionLink
 } from './dailyNotes'
@@ -93,40 +91,6 @@ describe('模板与摘录', () => {
   })
 })
 
-describe('insertIntoFirstSection', () => {
-  it('DN-8 第一段有模板留的空项：填进那个空项，不动别的段', () => {
-    const out = insertIntoFirstSection(TEMPLATE, '- [A](shuvix://session/a)')
-    expect(out).toContain('## 完成\n\n- [A](shuvix://session/a)\n\n## 接下来\n\n- [ ] \n')
-    expect(detectShuvixMarker(out)).toEqual({ type: 'daily', version: '1' })
-  })
-
-  it('DN-9 第一段已有内容：接在这一段最后一行之后', () => {
-    const once = insertIntoFirstSection(TEMPLATE, '- [A](shuvix://session/a)')
-    const twice = insertIntoFirstSection(once, '- [B](shuvix://session/b)')
-    expect(twice).toContain(
-      '## 完成\n\n- [A](shuvix://session/a)\n- [B](shuvix://session/b)\n\n## 接下来'
-    )
-  })
-
-  it('DN-10 第一段只有标题：标题后空一行再写', () => {
-    expect(insertIntoFirstSection('## Done\n## Next\n', '- x')).toBe('## Done\n\n- x\n## Next\n')
-  })
-
-  it('DN-11 没有任何标题（白纸模板）：接在文末；frontmatter 原样保留', () => {
-    expect(insertIntoFirstSection('---\nshuvix: daily v1\n---\n随手记\n\n', '- x')).toBe(
-      '---\nshuvix: daily v1\n---\n随手记\n- x\n'
-    )
-    expect(insertIntoFirstSection('', '- x')).toBe('- x\n')
-  })
-
-  it('DN-12 frontmatter 里的内容不会被当成段落', () => {
-    const source = '---\nshuvix: daily v1\ntitle: "# 不是标题"\n---\n## 完成\n- \n'
-    expect(insertIntoFirstSection(source, '- x')).toBe(
-      '---\nshuvix: daily v1\ntitle: "# 不是标题"\n---\n## 完成\n- x\n'
-    )
-  })
-})
-
 describe('会话链接', () => {
   it('DN-13 sessionLink / parseSessionLink 往返；带不带 entryId 都认', () => {
     const id = '01923f6e-5b7a-7c3d-8e9f-0a1b2c3d4e5f'
@@ -147,13 +111,6 @@ describe('会话链接', () => {
     ]) {
       expect(parseSessionLink(url), url).toBeNull()
     }
-  })
-
-  it('DN-15 mentionsSession 按整个 id 查重（前缀相同的另一条会话不算）', () => {
-    const source = '- [A](shuvix://session/abc-1#e)\n'
-    expect(mentionsSession(source, 'abc-1')).toBe(true)
-    expect(mentionsSession(source, 'abc')).toBe(false)
-    expect(mentionsSession('- [A](shuvix://session/abc-12)', 'abc-1')).toBe(false)
   })
 
   it('DN-16 linkText 转义方括号、压掉换行', () => {

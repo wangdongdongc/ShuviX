@@ -851,8 +851,6 @@ export interface HostApi {
     reportOnDay: (params: { day: string }) => Promise<{ excerpt: string; path: string } | null>
     /** 打开 / 复用那天日报的笔记本会话（还没有就按模板建）；未来的日子被拒绝 */
     openReport: (params: { day: string }) => Promise<Session>
-    /** 把一条会话的链接写进那天日报的第一段；已经链着它时 `added: false` */
-    addSessionToReport: (params: { day: string; sessionId: string }) => Promise<{ added: boolean }>
     /**
      * 删掉那天的日报文件（不进废纸篓）连同它的笔记本会话；文件本来就不在时 `deleted: false`。
      * `sessionId` = 删掉的笔记本会话（没有为 null），界面据此把它从列表里拿掉

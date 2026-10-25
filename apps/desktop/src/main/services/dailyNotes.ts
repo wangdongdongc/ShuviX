@@ -3,7 +3,7 @@
  *
  * 与注册表笔记（registryNotes）同一套做法：目录有一个隐藏项目（`__daily__`，path = 目录本身），一份
  * 文件至多一个笔记本会话，重复打开复用；编辑、自动保存、外部改动合并全归笔记本会话。这里只回答
- * 「那一天有没有日报、写了什么」「打开那一天」，外加日历里「插入到日报」那一笔写入与「删除日报」。
+ * 「那一天有没有日报、写了什么」「打开那一天」，外加日历里的「删除日报」。
  *
  * **第一次打开才建文件**：用户的 `_template.md` 在就照它，否则用内置的三段。未来的日子不能写 ——
  * 日报记的是已经发生的事；过去的日子可以补。身份是文件名（日期）：没有 `shuvix: daily v1` 自述行的
@@ -18,12 +18,8 @@ import {
   dailyFileName,
   dayOfDailyFile,
   defaultDailyTemplate,
-  insertIntoFirstSection,
   isDayKey,
-  linkText,
-  localDayKey,
-  mentionsSession,
-  sessionLink
+  localDayKey
 } from '@shuvix/chat-protocol/dailyNotes'
 import { appEventBus } from '../utils/appEventBus'
 import { writeFileAtomic } from '../utils/atomicWrite'
@@ -32,7 +28,6 @@ import { t } from '../i18n'
 import { projectDao } from '../dao/projectDao'
 import { sessionRecords } from './sessionRecords'
 import { sessionService } from './sessionService'
-import { firstEntryOnDay } from './sessionDayPromptService'
 import type { Project, SessionInfo } from '../types'
 
 function isRegularFile(path: string): boolean {
@@ -149,29 +144,6 @@ export function openReport(day: string): SessionInfo {
     })
   if (created) appEventBus.publish({ type: 'daily.changed' })
   return { ...session, workingDirectory: project.path }
-}
-
-/**
- * 日历里「插入到日报」：把一条会话的链接写进那一天日报的第一段（模板里的「完成」）。链接带上这条会话
- * 那天第一条用户消息的 entryId，点开就落在那天。已经链着这条会话就不重复写。日报还没有就先建。
- *
- * 笔记本正开着这份文件时，编辑器经外部改动的三方合并把这一行并进去（files.changed），不丢正在打的字。
- */
-export function addSessionToReport(day: string, sessionId: string): { added: boolean } {
-  assertWritableDay(day)
-  const session = sessionRecords.findById(sessionId)
-  if (!session) throw new Error(`Session not found: ${sessionId}`)
-  const { path, created } = ensureReportFile(day)
-  const source = readFileSync(path, 'utf8')
-  if (mentionsSession(source, sessionId)) {
-    if (created) appEventBus.publish({ type: 'daily.changed' })
-    return { added: false }
-  }
-  const title = linkText(session.title || '') || t('daily.untitledSession')
-  const link = sessionLink(sessionId, firstEntryOnDay(sessionId, day))
-  writeFileAtomic(path, insertIntoFirstSection(source, `- [${title}](${link})`))
-  appEventBus.publish({ type: 'daily.changed' })
-  return { added: true }
 }
 
 /**

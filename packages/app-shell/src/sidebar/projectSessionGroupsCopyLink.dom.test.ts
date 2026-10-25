@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /**
- * 会话行菜单里的「插入到日报」（ProjectSessionGroups 的 `onAddToReport`，jsdom）。只有日历按天渲染时注入
- * （插进的是选中那一天的日报，未来的日子不注入）。
+ * 会话行菜单里的「复制链接」（ProjectSessionGroups 的 `onCopyLink`，jsdom）。只有日历按天渲染时注入
+ * （链接指向这条会话选中的那一天；拼链接、写剪贴板是宿主的事）。
  *
- *   AR-1 注入时排在菜单第一项（其余照旧）；点它 → onAddToReport(这一行的 id) 一次，子会话行也一样
- *   AR-2 不注入 → 没有这一项
- *   AR-3 只注入它（没有配置 / 删除）的笔记本行也长出 ⋮：菜单里就这一项
+ *   CL-1 注入时排在菜单第一项（其余照旧）；点它 → onCopyLink(这一行的 id) 一次，子会话行也一样
+ *   CL-2 不注入 → 没有这一项
+ *   CL-3 只注入它（没有配置 / 删除）的笔记本行也长出 ⋮：菜单里就这一项
  *
  * 脚手架照 projectSessionGroupsFork.dom.test.ts：右键菜单经 ContextMenuProvider 的 `render` 注入，
  * 按预设回一个 id（模拟用户点了它）。
@@ -168,41 +168,41 @@ afterEach(() => {
   container.remove()
 })
 
-describe('行菜单里的「插入到日报」', () => {
-  it('AR-1 注入时排第一项；点它 → onAddToReport(行 id) 一次（子会话行也一样）', async () => {
+describe('行菜单里的「复制链接」', () => {
+  it('CL-1 注入时排第一项；点它 → onCopyLink(行 id) 一次（子会话行也一样）', async () => {
     store.sessions = [row('s1'), row('child', { parentId: 's1' })]
-    const onAddToReport = vi.fn()
-    mount({ onAddToReport })
-    pick = 'add-to-report'
+    const onCopyLink = vi.fn()
+    mount({ onCopyLink })
+    pick = 'copy-link'
     const items = await menuOf('s1')
     expect(ids(items)).toEqual([
-      'add-to-report',
+      'copy-link',
       'session-config',
       'export-session',
       'separator',
       'delete-session'
     ])
-    expect(items[0]).toEqual({ id: 'add-to-report', label: en.daily.addSession })
-    expect(onAddToReport).toHaveBeenCalledTimes(1)
-    expect(onAddToReport).toHaveBeenCalledWith('s1')
+    expect(items[0]).toEqual({ id: 'copy-link', label: en.sidebar.copySessionLink })
+    expect(onCopyLink).toHaveBeenCalledTimes(1)
+    expect(onCopyLink).toHaveBeenCalledWith('s1')
 
     // 子会话默认折叠在父行里：展开再右键它
     await act(async () => {
       rowEl('s1').querySelector<HTMLElement>('[data-subs-toggle]')!.click()
     })
     await menuOf('child')
-    expect(onAddToReport).toHaveBeenLastCalledWith('child')
+    expect(onCopyLink).toHaveBeenLastCalledWith('child')
   })
 
-  it('AR-2 不注入 → 没有这一项', async () => {
+  it('CL-2 不注入 → 没有这一项', async () => {
     store.sessions = [row('s1')]
     mount({})
-    expect(ids(await menuOf('s1'))).not.toContain('add-to-report')
+    expect(ids(await menuOf('s1'))).not.toContain('copy-link')
   })
 
-  it('AR-3 只注入它的笔记本行：⋮ 照样长出来，菜单里就这一项', async () => {
+  it('CL-3 只注入它的笔记本行：⋮ 照样长出来，菜单里就这一项', async () => {
     store.sessions = [row('nb', { settings: { notebookPath: 'a.md' } })]
-    mount({ onAddToReport: vi.fn(), onDelete: undefined, onConfigureSession: undefined })
-    expect(ids(await menuOf('nb'))).toEqual(['add-to-report'])
+    mount({ onCopyLink: vi.fn(), onDelete: undefined, onConfigureSession: undefined })
+    expect(ids(await menuOf('nb'))).toEqual(['copy-link'])
   })
 })
