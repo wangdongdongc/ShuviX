@@ -92,7 +92,7 @@ describe('日历上的日报', () => {
     await until(() => existsSync(reportFile()), 'daily file created')
     const text = readFileSync(reportFile(), 'utf8')
     expect(text.startsWith('---\nshuvix: daily v1\n---\n')).toBe(true)
-    expect(text.match(/^## /gm)?.length).toBe(3)
+    expect(text.match(/^## /gm)?.length).toBe(1)
 
     // 主区是这份日报的笔记本（编辑器里有模板的第一个标题）
     const firstHeading = text.match(/^## (.+)$/m)![1]
