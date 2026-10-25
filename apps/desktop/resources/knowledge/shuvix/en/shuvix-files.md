@@ -39,12 +39,12 @@ directories are registered), `widgets/`, `tts/`, `cli-token`. The old `memory/`,
 `daily/` holds the user's **daily reports**: one `YYYY-MM-DD.md` per day (marker `shuvix: daily v1`;
 the filename is the day, a dated file without the marker still counts), opened from that day in the
 calendar. They are the user's own notes, not configuration — edit them like any markdown. A new day
-starts from `daily/_template.md` when it exists, otherwise from three sections (done / next / follow
-up). A line linking a conversation uses `[title](shuvix://session/<id>#<message id>)`.
+starts from `daily/_template.md` when it exists, otherwise from a single section, "What I did
+today". A line linking a conversation uses `[title](shuvix://session/<id>#<message id>)`.
 
 `tracking/` holds the **tracked items** (experimental): one md per matter that needs following up and takes several days
-to settle (marker `shuvix: track v1`, titled by the body's first `# ` heading), collected from the sessions and kept with full
-authority by the daily bot, listed in the sidebar Library's "Tracked items" group. The folder is a git repository: ShuviX
+to settle (marker `shuvix: track v1`, titled by the body's first `# ` heading), kept by the daily bot following the `builtin:tracking`
+skill (it creates an item directly only on the user's own words and only suggests the rest), listed in the sidebar Library's "Tracked items" group. The folder is a git repository: ShuviX
 commits it after each triggered run of the bot, so a wrong edit can be recovered from history. There are no management
 fields such as status or next check yet.
 

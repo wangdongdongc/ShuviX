@@ -12,6 +12,8 @@ import './read'
 import './write'
 import './edit'
 import './ask'
+// suggest：给用户留几条一键采纳的提议，不等回答（采纳 = 那条的话作为用户回复发进会话）
+import './suggest'
 // browser / database 不在这里：它们是按会话勾选的内置 MCP 能力服务器
 // （services/builtinMcp/browserServer.ts / databaseServer.ts），ssh 同理
 // git 工具（isomorphic-git 跨端实现）：不在内置 default 档案清单 —— 主 Agent 默认无、

@@ -17,7 +17,7 @@
  * （triggerLogService），设置 → 触发源 一页列出 —— 用户靠它看见「哪个事件叫起了哪个 bot」。
  *
  * 会话标题取「bot 显示名 · 触发的本地时间」：触发型会话往往只有一轮，等不到自动起标题。
- * 一次运行结束后，跟踪项目录（实验）由宿主提交一次 git（见 trackingNotes.commitTrackingChanges）。
+ * 一次运行开始前宿主建好跟踪项目录（实验），结束后提交一次 git（见 trackingNotes 的 ensureTrackingDir / commitTrackingChanges）。
  */
 import {
   evaluateWhen,
@@ -31,7 +31,7 @@ import { basename } from 'path'
 import { botService, type BotEntry } from './botService'
 import { sessionService } from './sessionService'
 import { settingsService } from './settingsService'
-import { commitTrackingChanges } from './trackingNotes'
+import { commitTrackingChanges, ensureTrackingDir } from './trackingNotes'
 import { triggerLogService, type TriggerLogInput } from './triggerLogService'
 import { createLogger } from '../logger'
 
@@ -192,6 +192,8 @@ export class BotTriggerService {
       const firedAt =
         typeof payload.firedAt === 'string' ? payload.firedAt : new Date().toISOString()
 
+      // 跟踪项目录先建好：不在时 bot 会去翻上一层找它，撞上一张没人回答的询问（见 ensureTrackingDir）
+      ensureTrackingDir()
       const session = sessionService.create({
         bot: entry.file.name,
         title: `${entry.file.displayName} · ${localStamp(payload)}`

@@ -21,6 +21,9 @@
  *   - XS-21     会话客体（session 工具与别的会话交互）的 operation / facts：消息预览按 3000 截断，read 没有 message。
  *   - PR-T      触发器替 bot 发的消息（来源 trigger）：进 delegatedTasks 并注明是哪个 bot 的触发，不算人写的。
  *               这几条按会话 id 换上 durable 摘要形状的转写项（digests），其余会话照旧走旧格式读者。
+ *   - PR-SG     采纳的提议（`suggest` 工具，转写项 `suggested`，2026-10-25）：仍算人的话、进 userMessages，但逐字前缀
+ *               `(the user accepted this suggestion, which the agent wrote) `；没标的不加；前缀算进 1500 字的截断；
+ *               系统写的照旧不收；空白的照旧不收
  *
  * 替身：hookService / messageService / sessionRecords / logger / frontend/core / sessionHost。
  * **钉的是旧格式（harness-v3-jsonl）路径**：会话行不带 storageKind，转写经 messageService 读冻结投影；
@@ -1672,6 +1675,52 @@ describe('PR-T —— 触发器替 bot 发的消息', () => {
     // 人写的取顶层：只有人打的那条；触发消息哪一边都不在
     expect(payload.userMessages).toStrictEqual(['typed by the user in the bot session'])
     expect(JSON.stringify(payload)).not.toContain('scheduled trigger')
+  })
+})
+
+describe('PR-SG —— 采纳的提议（suggest）', () => {
+  const PREFIX = '(the user accepted this suggestion, which the agent wrote) '
+
+  it('PR-SG1 标了 suggested 的 user 项：进 userMessages，逐字前缀 + trim 后的原文；没标的不加前缀；不进 delegatedTasks', async () => {
+    const top = newSession()
+    digests.set(top, [
+      { kind: 'user', ts: 1000, text: '  fix the login bug  ' },
+      { kind: 'assistant', ts: 2000, text: 'Fixed.' },
+      { kind: 'user', ts: 3000, text: '  Yes, also add tests for the parser  ', suggested: true }
+    ])
+
+    const payload = await buildPermissionRequestPayload(makeEvent(top))
+    expect(payload.userMessages).toStrictEqual([
+      'fix the login bug',
+      `${PREFIX}Yes, also add tests for the parser`
+    ])
+    expect(payload.delegatedTasks).toStrictEqual([])
+    expect(mocks.listBySession).not.toHaveBeenCalled()
+  })
+
+  it('PR-SG2 (pin) 前缀算进 1500 字的截断：原文 1450 字（单看不截）加上前缀就截，按拼好的整条注明多出的字数', async () => {
+    const top = newSession()
+    const body = 'y'.repeat(1450)
+    digests.set(top, [{ kind: 'user', ts: 1000, text: body, suggested: true }])
+
+    const [line] = (await buildPermissionRequestPayload(makeEvent(top))).userMessages
+    const whole = `${PREFIX}${body}`
+    expect(whole.length).toBeGreaterThan(1500)
+    expect(line).toBe(`${whole.slice(0, 1500)}… [${whole.length - 1500} more chars]`)
+    expect(line.startsWith(PREFIX)).toBe(true)
+  })
+
+  it('PR-SG3 系统写的（systemWritten）即便标了 suggested 也不收；空白的不收（连前缀也不留）', async () => {
+    const top = newSession()
+    digests.set(top, [
+      { kind: 'user', ts: 1000, text: 'background done', suggested: true, systemWritten: true },
+      { kind: 'user', ts: 2000, text: '   \n ', suggested: true },
+      { kind: 'user', ts: 3000, text: 'typed' }
+    ])
+
+    const payload = await buildPermissionRequestPayload(makeEvent(top))
+    expect(payload.userMessages).toStrictEqual(['typed'])
+    expect(JSON.stringify(payload)).not.toContain('accepted this suggestion')
   })
 })
 

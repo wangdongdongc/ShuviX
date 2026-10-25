@@ -52,26 +52,17 @@ export function dayOfDailyFile(fileName: string): string | null {
   return m && isDayKey(m[1]) ? m[1] : null
 }
 
-/** 内置模板：完成 / 接下来 / 待跟进 三段，每段留一个空项（`edit` 有处可落） */
-export function defaultDailyTemplate(headings: {
-  done: string
-  next: string
-  followUp: string
-}): string {
+/**
+ * 内置模板：只有「今天做了什么」一段，留一个空项（`edit` 有处可落）。原先的「接下来 / 待跟进」两段于 2026-10-25
+ * 删掉（用户裁决：日记只记今天做了什么）；已经写下的日记不受影响
+ */
+export function defaultDailyTemplate(heading: string): string {
   return [
     '---',
     `shuvix: ${DAILY_MARKER_TYPE} v${DAILY_MARKER_VERSION}`,
     '---',
     '',
-    `## ${headings.done}`,
-    '',
-    '- ',
-    '',
-    `## ${headings.next}`,
-    '',
-    '- [ ] ',
-    '',
-    `## ${headings.followUp}`,
+    `## ${heading}`,
     '',
     '- ',
     ''

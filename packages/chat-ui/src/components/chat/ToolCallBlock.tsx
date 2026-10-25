@@ -31,6 +31,7 @@ import {
   SquareTerminal,
   Eye,
   Archive,
+  Lightbulb,
   type LucideIcon
 } from 'lucide-react'
 import {
@@ -85,7 +86,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Code,
   SquareTerminal,
   Eye,
-  Archive
+  Archive,
+  Lightbulb
 }
 
 /** 根据图标名查找 lucide 组件，找不到时返回 Wrench */

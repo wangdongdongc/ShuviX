@@ -9,7 +9,9 @@
  *    正常结束（prompt 没带 error）后**才往前推；上一次的值以本机时区偏移的 ISO（`localIso`）放进围栏；会话打不开、
  *    prompt 带 error / 抛错都不推；
  *  - `when` 求值出错 = 不命中，同一条绑定同一个错误只记一次 warn；
- *  - 一次运行（会话打开了）结束后提交一次跟踪项目录（commitTrackingChanges）。
+ *  - 一次运行（会话打开了）结束后提交一次跟踪项目录（commitTrackingChanges）；
+ *  - 每次真去建会话之前先建好跟踪项目录（ensureTrackingDir）—— 不在时 bot 会去翻上一层、撞上没人回答的询问：
+ *    BTR-1 每次运行恰一次、在 sessionService.create 之前 · BTR-2 不分是不是日报 bot · BTR-3 跳过的那几种不调。
  *
  * 触发日志（触发源与 bot 解绑，用户 2026-10-24；断言打在 triggerLogService 桩的调用上）：
  *   BTL-1  命中（无 when）：会话建出来之后、打开之前记一条 started（sourceId / trigger / bot / 显示名 / 文件名 /
@@ -42,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   ensure: vi.fn<(id: string) => Promise<unknown>>(),
   prompt: vi.fn<(...args: unknown[]) => Promise<{ error?: string }>>(),
   commit: vi.fn<(message: string) => Promise<void>>(),
+  ensureDir: vi.fn<() => void>(),
   record: vi.fn<(input: Record<string, unknown>) => string | null>(),
   finish: vi.fn<(id: string | null, outcome: string, error?: string) => void>(),
   settings: new Map<string, string>(),
@@ -59,7 +62,10 @@ vi.mock('../settingsService', () => ({
     set: (key: string, value: string) => void mocks.settings.set(key, value)
   }
 }))
-vi.mock('../trackingNotes', () => ({ commitTrackingChanges: mocks.commit }))
+vi.mock('../trackingNotes', () => ({
+  commitTrackingChanges: mocks.commit,
+  ensureTrackingDir: mocks.ensureDir
+}))
 // 触发日志：桩掉免得拉起数据库（服务本身的用例在 triggerLogService.test）；BTL-* 断言桩的调用
 vi.mock('../triggerLogService', () => ({
   triggerLogService: { record: mocks.record, finish: mocks.finish }
@@ -163,6 +169,7 @@ beforeEach(() => {
     mocks.ensure,
     mocks.prompt,
     mocks.commit,
+    mocks.ensureDir,
     mocks.record,
     mocks.finish
   ]) {
@@ -984,5 +991,85 @@ describe('触发日志', () => {
     expect(mocks.finish.mock.calls).toEqual([[null, 'completed']])
     expect(lastFired()).toStrictEqual({ 'bot:x#0#timer.fired': p.firedAt })
     expect(mocks.commit).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('运行前建好跟踪项目录', () => {
+  /** 两个桩被调的先后（vitest 的 invocationCallOrder 是跨 mock 的全局序号，就是一份共用的调用记录） */
+  const order = (): string[] =>
+    [
+      ...mocks.ensureDir.mock.invocationCallOrder.map((n) => [n, 'ensureTrackingDir'] as const),
+      ...mocks.create.mock.invocationCallOrder.map((n) => [n, 'create'] as const)
+    ]
+      .sort((x, y) => x[0] - y[0])
+      .map(([, name]) => name)
+
+  it('BTR-1 每次运行恰调一次 ensureTrackingDir，而且在 sessionService.create 之前', async () => {
+    mocks.listAll.mockReturnValue([
+      bot('daily', [{ ...TICK, when: DAILY_WHEN }], { objectId: 'bot:builtin:daily' })
+    ])
+    setWhenHostFunctions({ activeSessions: () => 1 })
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    svc.fire('timer.fired', minute(18, 0, 25))
+    await settle()
+    expect(mocks.ensureDir).toHaveBeenCalledTimes(2)
+    expect(mocks.ensureDir.mock.calls).toEqual([[], []])
+    expect(order()).toEqual(['ensureTrackingDir', 'create', 'ensureTrackingDir', 'create'])
+  })
+
+  it('BTR-2 不是日报 bot 的绑定也一样：每次运行一次，在建会话之前；同一个 tick 两条绑定 → 两次', async () => {
+    mocks.listAll.mockReturnValue([
+      bot('ticker', [TICK, { trigger: 'timer.fired', message: 'second' }], { objectId: 'bot:x' }),
+      bot('plain', [TICK])
+    ])
+    svc.fire('timer.fired', minute(9, 30))
+    await settle()
+    expect(mocks.create).toHaveBeenCalledTimes(3)
+    expect(order()).toEqual([
+      'ensureTrackingDir',
+      'create',
+      'ensureTrackingDir',
+      'create',
+      'ensureTrackingDir',
+      'create'
+    ])
+  })
+
+  it('BTR-3 跳过的那几种一次都不调：when 为假、上一次还在跑、when 求值出错', async () => {
+    // when 为假
+    mocks.listAll.mockReturnValue([bot('never', [{ ...TICK, when: 'false' }])])
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    expect(mocks.ensureDir).not.toHaveBeenCalled()
+
+    // when 求值出错
+    setWhenHostFunctions({
+      activeSessions: () => {
+        throw new Error('db down')
+      }
+    })
+    mocks.listAll.mockReturnValue([
+      bot('flaky', [{ ...TICK, when: 'activeSessions(event.local.date) > 0' }])
+    ])
+    svc.fire('timer.fired', minute(18, 1))
+    await settle()
+    expect(warnsMatching(/when evaluation failed/)).toHaveLength(1)
+    expect(mocks.ensureDir).not.toHaveBeenCalled()
+
+    // 上一次还在跑：只有第一次那一回调
+    const ticker = bot('ticker', [TICK], { objectId: 'bot:x' })
+    mocks.listAll.mockReturnValue([ticker])
+    const first = deferred<{ error?: string }>()
+    mocks.prompt.mockReturnValueOnce(first.promise)
+    svc.fire('timer.fired', minute(18, 2))
+    await settle()
+    expect(svc.isRunning(bindingKey(ticker, 0, 'timer.fired'))).toBe(true)
+    svc.fire('timer.fired', minute(18, 3))
+    await settle()
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    expect(mocks.ensureDir).toHaveBeenCalledTimes(1)
+    first.resolve({})
+    await settle()
   })
 })

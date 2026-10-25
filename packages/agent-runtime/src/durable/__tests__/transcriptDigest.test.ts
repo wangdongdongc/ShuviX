@@ -23,6 +23,9 @@
  *             （失败闭合 —— 仍不算人答的）
  *   RSRC-28 / 31 user 项的来源（§19.7）：纯核心按 `sources` 给项带上 `source`（没有的不带这个键）；会话上手写的
  *             SourceDoc —— 认不出的项照样带来源（失败闭合，sessionId 空串），孤儿 / 没放下的不带
+ *   TD-1    采纳提议发出的 user 项（`suggest` 工具，2026-10-25）：纯核心按 `suggested` 给项带上 `suggested: true`
+ *             （带不带显示侧车都一样；没有 `source` 键 —— 它仍是人的话）；只落在 user 项上；缺省第四参数 = 都不带；
+ *             会话上手写的 SourceDoc（人的来源 + 合法引用）→ readTranscriptDigest 的项带 `suggested`，坏引用不带
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -769,6 +772,88 @@ describe('RSRC · user 项的来源（§19.7）', () => {
       US(1, 'hook-sourced', UNKNOWN),
       US(2, 'num-sourced', UNKNOWN),
       US(3, 'ok-sourced', PARENT),
+      U(4, 'plain')
+    ])
+  })
+})
+
+describe('TD-1 · 采纳提议发出的 user 项（suggest，2026-10-25）', () => {
+  const REF = { messageId: 'a1', toolCallId: 'call_0', index: 0 }
+
+  it('TD-1 纯核心：suggested 里的 user 项带 suggested: true、没有 source；带显示侧车的那条用侧车原文同样带；缺省第四参数 = 都不带', async () => {
+    const { session } = await openSession()
+    const [plain, picked, shown, reply] = await appendEntries(session, [
+      userDraft('typed', 1000),
+      userDraft('accepted text', 1100),
+      userDraft('run PAYLOAD', 1200),
+      assistantDraft('ok', 1300)
+    ])
+    const view = await (await session.currentConversation()).context(BG)
+    const displays = new Map([[shown!.id, 'run {{shuvixInlineToken:k}}']])
+    const suggested = new Set([picked!.id, shown!.id, reply!.id])
+    const items = digestEntries(view.entries, displays, new Map(), suggested)
+    expect(plain).toBeDefined()
+    expect(items).toStrictEqual([
+      U(1000, 'typed'),
+      { kind: 'user', ts: 1100, text: 'accepted text', suggested: true },
+      { kind: 'user', ts: 1200, text: 'run {{shuvixInlineToken:k}}', suggested: true },
+      A(1300, 'ok')
+    ])
+    for (const item of items) {
+      expect(item).not.toHaveProperty('source')
+      if (item.kind !== 'user') expect(item).not.toHaveProperty('suggested')
+    }
+    // 旧调用形（不给第四参数）：没有一项带 suggested
+    for (const legacyCall of [
+      digestEntries(view.entries, displays, new Map()),
+      digestEntries(view.entries, displays),
+      digestEntries(view.entries)
+    ]) {
+      expect(legacyCall.filter((item) => 'suggested' in item)).toStrictEqual([])
+    }
+  })
+
+  it('TD-1 会话上手写的 SourceDoc：人的来源 + 合法引用 → 项带 suggested（没有 source）；坏引用、普通人话不带', async () => {
+    const { session } = await openSession()
+    const conversation = await session.currentConversation()
+    await conversation.commit(async (tx) => {
+      const doc = await tx.doc(SourceDoc, conversation.id)
+      doc.items['r-ok'] = { kind: 'local', suggestion: REF }
+      doc.items['r-remote'] = {
+        kind: 'remote',
+        clientId: 'ws:4',
+        address: '10.0.0.7',
+        suggestion: { ...REF, index: 2 }
+      }
+      doc.items['r-bad'] = { kind: 'local', suggestion: { ...REF, index: 1.5 } }
+      doc.items['r-plain'] = { kind: 'local' }
+    }, BG)
+    const [ok, remote, bad, plain] = await appendEntries(session, [
+      userDraft('ok', 1),
+      userDraft('remote', 2),
+      userDraft('bad', 3),
+      userDraft('plain', 4)
+    ])
+    await session.harness.commit(async (tx) => {
+      for (const [requestId, entry] of [
+        ['r-ok', ok!],
+        ['r-remote', remote!],
+        ['r-bad', bad!],
+        ['r-plain', plain!]
+      ] as const) {
+        await tx.createSubmission({
+          conversationId: conversation.id,
+          requestId,
+          type: 'input',
+          status: 'placed',
+          entry: entry.id
+        })
+      }
+    }, BG)
+    expect(await digest(session)).toStrictEqual([
+      { kind: 'user', ts: 1, text: 'ok', suggested: true },
+      { kind: 'user', ts: 2, text: 'remote', suggested: true },
+      U(3, 'bad'),
       U(4, 'plain')
     ])
   })

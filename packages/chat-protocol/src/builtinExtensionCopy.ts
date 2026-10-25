@@ -31,7 +31,8 @@ interface BuiltinCopyKeys {
  */
 export const BUILTIN_SKILL_COPY: Record<string, BuiltinCopyKeys> = {
   drawing: { labelKey: 'builtinSkill.drawing.label', hintKey: 'builtinSkill.drawing.hint' },
-  widget: { labelKey: 'builtinSkill.widget.label', hintKey: 'builtinSkill.widget.hint' }
+  widget: { labelKey: 'builtinSkill.widget.label', hintKey: 'builtinSkill.widget.hint' },
+  tracking: { labelKey: 'builtinSkill.tracking.label', hintKey: 'builtinSkill.tracking.hint' }
 }
 
 /** 自有属性才算：`toString` / `constructor` 这类名字不能从原型上捡到一份文案 */

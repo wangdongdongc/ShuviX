@@ -10,6 +10,8 @@ import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SubmitErrorCode } from '@shuvix/agent-runtime'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { DriveOptions } from '../../services/agentSession'
+import type { AcceptSuggestionResult } from '@shuvix/chat-protocol/suggestions'
+import type { SuggestionRef } from '@shuvix/chat-protocol/types/inputOrigin'
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -60,6 +62,12 @@ export interface ChatGateway {
    * 会话没打开、句柄已关 → `not_found`（PIN-14）
    */
   withdrawQueued(sessionId: string, submissionId: number): Promise<WithdrawQueuedResult>
+
+  /**
+   * 采纳一条提议（`suggest` 工具）：核对它此刻还能采纳（取那条的话 —— 从会话里的工具参数取，不信请求），以用户的
+   * 身份发进会话，来源带上提议引用。会话在跑 → steer；空闲 → 起一轮（不等这一轮结束就交回）
+   */
+  acceptSuggestion(sessionId: string, ref: SuggestionRef): Promise<AcceptSuggestionResult>
 
   /** 中止当前生成（部分内容由 harness 自行落成 entry，无需回传消息） */
   abort(sessionId: string): Promise<{ success: boolean }>

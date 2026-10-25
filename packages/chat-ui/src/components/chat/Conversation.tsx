@@ -13,6 +13,8 @@ import { forkRefusalKey, selectSessionForkable, useSessionFork } from '../../hoo
 import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer, type VisibleItem } from './MessageRenderer'
 import { buildVisibleItems, isAssistantMessage } from './conversationItems'
+import { SuggestionContext } from './SuggestionCards'
+import { suggestionStatesOf } from '@shuvix/chat-protocol/suggestions'
 import { StreamingFooter } from './StreamingFooter'
 import { PendingInputsPanel } from './PendingInputsPanel'
 import { InputArea } from './InputArea'
@@ -343,6 +345,11 @@ export function Conversation({
     () => buildVisibleItems(messages, isStreaming, pendingPrompt),
     [messages, isStreaming, pendingPrompt]
   )
+  // 每组提议开着还是关了、采纳的是哪一条：按整条消息列表算（之后用户说了别的话就关），卡片从 context 里取
+  const suggestionContext = useMemo(
+    () => ({ sessionId, states: suggestionStatesOf(messages) }),
+    [sessionId, messages]
+  )
   // 列表等这条会话的视图到了再挂。视图到达之前 messages 是空的，却可能已经有东西要画：运行中的会话
   // 退订时留下「还在跑」的余项（isStreaming，见 releaseSessionView），切回来就是一张孤零零的流式占位卡。
   // 那时挂上列表，初始定位落在这一项上；等真消息到了，初始定位早已用掉，列表就停在会话开头。
@@ -398,14 +405,16 @@ export function Conversation({
           <div className="flex-1 min-h-0" />
         ) : (
           // 按会话重挂：初始定位只在挂载那一刻生效，「在不在底部」的状态也只属于这一份列表
-          <MessageList
-            key={sessionId}
-            items={visibleItems}
-            renderItem={renderItem}
-            running={isStreaming}
-            scrollRequest={scrollRequest}
-            onScrollbarWidthChange={handleScrollbarWidthChange}
-          />
+          <SuggestionContext.Provider value={suggestionContext}>
+            <MessageList
+              key={sessionId}
+              items={visibleItems}
+              renderItem={renderItem}
+              running={isStreaming}
+              scrollRequest={scrollRequest}
+              onScrollbarWidthChange={handleScrollbarWidthChange}
+            />
+          </SuggestionContext.Provider>
         )}
 
         {/* 输入区（悬浮卡片）：待处理用户输入经 accessory 并入卡片顶格，与输入区同一张卡片 */}

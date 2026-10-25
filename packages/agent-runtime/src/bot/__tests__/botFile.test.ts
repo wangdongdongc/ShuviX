@@ -756,10 +756,12 @@ describe('PS —— 序列化（与解析互逆）', () => {
     const service = sources.find((s) => s.path.endsWith('services/botService.ts'))!.text
     // 唯一调用点在「新建 bot」的模板生成里
     expect(service).toMatch(/newBotTemplate\([\s\S]*?serializeBotDefinitionFile\(/)
-    // 而本服务从不改写已有文件：写盘只有三处 —— create 落在新派生路径上的那份原文（原文只多补一行
-    // shuvix-id —— 单行文本插入，不经序列化器）、随应用提供的 bot 第一次落地（目标不存在才写）、以及记
-    // 「写过哪些」的点文件（不是 bot 文件）
-    expect(service.match(/writeFileAtomic\(/g)).toHaveLength(3)
+    // 而本服务不改写已有文件，只有一处例外：写盘共四处 —— create 落在新派生路径上的那份原文（原文只多补一行
+    // shuvix-id —— 单行文本插入，不经序列化器）、随应用提供的 bot 第一次落地（目标不存在才写）、记「写过哪些」的
+    // 点文件（不是 bot 文件），以及例外的那一处：升级 ShuviX 自己种下的那份文件（种子的 `upgrade` 只换一字未改的
+    // 旧节，交回 null 就不写；2026-10-25）
+    expect(service.match(/writeFileAtomic\(/g)).toHaveLength(4)
+    expect(service).toContain('seed.upgrade(readFileSync(path,')
     expect(service).toContain('ensureObjectId(text,')
     expect(service).toContain('writeFileAtomic(filePath, content)')
     expect(service).toContain('writeFileAtomic(target, seed.render(language))')

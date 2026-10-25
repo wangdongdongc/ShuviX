@@ -77,6 +77,12 @@ export {
   type AskTool,
   type CreateAskToolOptions
 } from './askTool'
+export {
+  createSuggestTool,
+  SuggestParamsSchema,
+  SUGGEST_DESCRIPTION,
+  type SuggestTool
+} from './suggestTool'
 // 工具定义枚举共享机制（各端自举内置工具 → 设置页只读展示）
 export { toBuiltinToolDefinitions, type ToolDefinitionEntry } from './tools/toolDefinitions'
 // 文件工具共享内核（端口注入 File API；桌面 Node fs / 扩展 FSA）

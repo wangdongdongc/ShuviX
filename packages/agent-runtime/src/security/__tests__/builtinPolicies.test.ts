@@ -218,7 +218,8 @@ describe('buildBuiltinPolicies', () => {
       ['ask-on-session-access#1', 'ask'],
       ['network-admission#0', 'deny'],
       ['daily-bot-access#0', 'force-allow'],
-      ['daily-bot-access#1', 'force-allow']
+      ['daily-bot-access#1', 'force-allow'],
+      ['daily-bot-access#2', 'force-allow']
     ])
   })
 
@@ -2145,11 +2146,12 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     })
   })
 
-  // ── daily-bot-access：随应用提供的日报 bot 的两条放宽（2026-10-24）─────────────────────────
+  // ── daily-bot-access：随应用提供的日报 bot 的三条放宽（2026-10-24 / 10-25）─────────────────────────
   //
   // 日报 bot（`subject.bot == 'bot:builtin:daily'`）的根 agent：读最近 7 天有过消息的会话不问（压过
-  // ask-on-session-access #0），读写 vars.trackingDir 不问（压过 ask-on-external-path）。两条都是 force-allow ——
-  // 它只放宽、不设门；对话（write）照问、派发出的子 agent 照问、别的 bot 照问。
+  // ask-on-session-access #0），读写 vars.trackingDir 不问（压过 ask-on-external-path）；2026-10-25 起第三条（#2）：
+  // 读 vars.dailyDir（用户的日记）不问，只读。都是 force-allow —— 它只放宽、不设门；对话（write）照问、写日记照问、
+  // 派发出的子 agent 照问、别的 bot 照问。
   describe('daily-bot-access（日报 bot 的放宽）', () => {
     const DAILY = 'bot:builtin:daily'
     const NOW = '2026-10-24T10:00:00.000Z'
@@ -2221,7 +2223,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
     const expectForceAllowed = (
       label: string,
       decision: SecurityDecision,
-      index: 0 | 1,
+      index: 0 | 1 | 2,
       alsoMatched: string[]
     ): void => {
       const id = `daily-bot-access#${index}`
@@ -2265,7 +2267,7 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       })
     }
 
-    it('BP-D1 形态：两条 force-allow，限定 agent 主体 × desktop —— #0 session × read（最近 168h），#1 path × read/write（vars.trackingDir）；两条都先 has(subject.bot)、都要求根 agent', () => {
+    it('BP-D1 形态：三条 force-allow，限定 agent 主体 × desktop —— #0 session × read（最近 168h），#1 path × read/write（vars.trackingDir），#2 path × read（vars.dailyDir）；三条都先 has(subject.bot)、都要求根 agent', () => {
       const policy = byName('daily-bot-access')
       expect(policy.scope).toEqual({ 'subject.kind': ['agent'], 'env.host': ['desktop'] })
       expect(policy.lets).toBeUndefined()
@@ -2282,6 +2284,11 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
           effect: 'force-allow',
           conditions: { 'object.type': ['path'], action: ['read', 'write'] },
           match: `${guard} && inDir(object.path, vars.trackingDir)`
+        },
+        {
+          effect: 'force-allow',
+          conditions: { 'object.type': ['path'], action: ['read'] },
+          match: `${guard} && inDir(object.path, vars.dailyDir)`
         }
       ])
       for (const rule of policy.rules) {
@@ -2606,7 +2613,8 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
       // 同名裁决：只剩用户那一份
       expect(rules.map((r) => [r.id, r.source.kind])).toEqual([
         ['daily-bot-access#0', 'user'],
-        ['daily-bot-access#1', 'user']
+        ['daily-bot-access#1', 'user'],
+        ['daily-bot-access#2', 'user']
       ])
       expectForceAllowed(
         '200h 前',
@@ -2621,6 +2629,136 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         0
       )
       expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+
+    // ── 日记那条（#2，2026-10-25）：日报 bot 的根 agent 读 vars.dailyDir 不问 ─────────────────
+    const DIARY = `${SHUVIX_HOME}/daily`
+    const DIARY_PATHS = [`${DIARY}/2026-10-24.md`, DIARY, `${DIARY}/sub/x`]
+
+    it('BP-D15 日记那条：日报 bot 的根 agent 读日记目录里（含目录本身、子目录）→ #2 放行（压过外部目录门 #0），零告警', () => {
+      const sinks = warnSinks()
+      const opts: DailyOpts = {
+        provider: dailyProvider({ logger: sinks.logger }),
+        warn: sinks.evalWarn
+      }
+      for (const path of DIARY_PATHS) {
+        expectForceAllowed(`read ${path}`, decideAs('read', at(path), opts), 2, [
+          'ask-on-external-path#0'
+        ])
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D16 日记只读：写同样那几处 → 照问 ask-on-external-path#1，#2 不命中', () => {
+      const sinks = warnSinks()
+      const opts: DailyOpts = {
+        provider: dailyProvider({ logger: sinks.logger }),
+        warn: sinks.evalWarn
+      }
+      for (const path of DIARY_PATHS) {
+        const decision = decideAs('write', at(path), opts)
+        expectShape(`write ${path}`, 'write', path, decision, '#1')
+        expect(decision.matched, path).not.toContain('daily-bot-access#2')
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D17 日记那条按路径段比：dailyX/a.md、bots/daily.md 照问 #0', () => {
+      const sinks = warnSinks()
+      const opts: DailyOpts = {
+        provider: dailyProvider({ logger: sinks.logger }),
+        warn: sinks.evalWarn
+      }
+      for (const path of [`${SHUVIX_HOME}/dailyX/a.md`, `${SHUVIX_HOME}/bots/daily.md`]) {
+        expectShape(`read ${path}`, 'read', path, decideAs('read', at(path), opts), '#0')
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D18 日记那条只给日报 bot 的根 agent：派发出的子 agent、别的 bot、没有 attrs 的主体读日记 → 照问 #0，零告警', () => {
+      const sinks = warnSinks()
+      const provider = dailyProvider({ logger: sinks.logger })
+      const file = `${DIARY}/2026-10-24.md`
+      const cases: Array<[string, DailyOpts]> = [
+        ['spawned', { agentKind: 'spawned' }],
+        ['bot:other', { bot: 'bot:other' }],
+        ['同名 daily（没有 id）', { bot: 'daily' }],
+        ['无 attrs', { bot: null }]
+      ]
+      for (const [label, extra] of cases) {
+        expectShape(
+          label,
+          'read',
+          file,
+          decideAs('read', at(file), { ...extra, provider, warn: sinks.evalWarn }),
+          '#0'
+        )
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D19 钉住：宿主没给 vars.dailyDir → 日记的读落回 #0，每次一条点名 daily-bot-access#2 的告警；读跟踪项照样由 #1 放行，但 #2 也求值了一次、告警一条；写跟踪项不求值 #2', () => {
+      const sinks = warnSinks()
+      const provider = dailyProvider({
+        logger: sinks.logger,
+        getVars: () => withoutKeys(DAILY_VARS, ['dailyDir'])
+      })
+      const opts: DailyOpts = { provider, warn: sinks.evalWarn }
+      const file = `${DIARY}/2026-10-24.md`
+      expectShape('缺 dailyDir · 读日记', 'read', file, decideAs('read', at(file), opts), '#0')
+      expectShape(
+        '缺 dailyDir · 读日记目录',
+        'read',
+        DIARY,
+        decideAs('read', at(DIARY), opts),
+        '#0'
+      )
+      expect(sinks.evalWarn).toHaveBeenCalledTimes(2)
+      for (const [message] of sinks.evalWarn.mock.calls) {
+        expect(message).toMatch(
+          /^security rule 'daily-bot-access#2': match evaluation failed \(No such key: dailyDir\b[\s\S]*\), treating as not matched$/
+        )
+      }
+
+      sinks.evalWarn.mockClear()
+      const tracked = `${TRACKING}/a.md`
+      expectForceAllowed('缺 dailyDir · 读跟踪项', decideAs('read', at(tracked), opts), 1, [
+        'ask-on-external-path#0'
+      ])
+      expect(sinks.evalWarn).toHaveBeenCalledTimes(1)
+      expect(sinks.evalWarn.mock.calls[0]![0]).toContain("'daily-bot-access#2'")
+
+      sinks.evalWarn.mockClear()
+      expectForceAllowed('缺 dailyDir · 写跟踪项', decideAs('write', at(tracked), opts), 1, [
+        'ask-on-external-path#1'
+      ])
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('BP-D20 extension 宿主 → #2 不命中；停用 daily-bot-access → 日报 bot 读日记照问 #0', () => {
+      const file = `${DIARY}/2026-10-24.md`
+      const sinks = warnSinks()
+      const ext = decideAs('read', at(file), {
+        host: 'extension',
+        provider: dailyProvider({ logger: sinks.logger }),
+        warn: sinks.evalWarn
+      })
+      expect(ext.matched.filter((id) => id.startsWith('daily-bot-access'))).toEqual([])
+      expect(ext.tier).not.toBe('force-allow')
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+
+      const ID = builtinObjectId('policy', 'daily-bot-access')
+      const disabled = dailyProvider({ isPolicyDisabled: (policy) => policy.objectId === ID })
+      expectShape(
+        '停用 · 读日记',
+        'read',
+        file,
+        decideAs('read', at(file), { provider: disabled }),
+        '#0'
+      )
     })
   })
 })

@@ -1964,6 +1964,86 @@ export function atPopoverPane(main: CdpClient): AtPopoverPane {
   }
 }
 
+// ─── 提议卡片（`suggest` 工具，chat-ui SuggestionCards，2026-10-25） ───
+// 认的全是 data 属性：`[data-suggestions]`（一组，`data-suggestion-state` = open / accepted / closed）、
+// `[data-suggestion-index]`（一张卡，带参数里的下标）、`[data-suggestion-accept]`（采纳按钮）、
+// `[data-suggestion-accepted]`（采纳的那张）、`[data-suggestion-message]`（采纳后发出的那句话），
+// 用户气泡上的 `[data-origin-suggestion]`（「采纳的提议」标签）。压淡没有 data 属性，只能认 `opacity-50`。
+
+/** 一张提议卡 */
+export interface SuggestionCardShot {
+  /** 参数里的下标（坏项不画，所以不一定连续） */
+  index: number
+  /** 采纳后发出的那句话（全文） */
+  message: string
+  /** 这张是被采纳的那张 */
+  accepted: boolean
+  /** 压淡：组关了，或采纳的是别的那张 */
+  dimmed: boolean
+  /** 有采纳按钮且可点 */
+  acceptable: boolean
+}
+
+/** 一组提议（一次 suggest 调用） */
+export interface SuggestionGroupShot {
+  state: string
+  cards: SuggestionCardShot[]
+  /** 采纳失败时卡片底下那句错误；没有 = null */
+  error: string | null
+}
+
+export interface SuggestionsPane {
+  /** 屏上的每一组（DOM 序） */
+  groups(): Promise<SuggestionGroupShot[]>
+  /** 点第 `group` 组里下标为 `index` 的那张卡的采纳按钮；按钮不在 / 禁用 → false */
+  accept(index: number, group?: number): Promise<boolean>
+  /** 带「采纳的提议」标签的用户气泡：消息 id + 正文 */
+  acceptedBubbles(): Promise<Array<{ id: string; text: string }>>
+}
+
+export function suggestionsPane(main: CdpClient): SuggestionsPane {
+  const GROUPS = `[...document.querySelectorAll('[data-suggestions]')]`
+  return {
+    groups: () =>
+      main.eval<SuggestionGroupShot[]>(
+        `${GROUPS}.map((g) => ({
+          state: g.getAttribute('data-suggestion-state') ?? '',
+          cards: [...g.querySelectorAll('[data-suggestion-index]')].map((c) => {
+            const button = c.querySelector('[data-suggestion-accept]')
+            return {
+              index: Number(c.getAttribute('data-suggestion-index')),
+              message: c.querySelector('[data-suggestion-message]')?.textContent ?? '',
+              accepted: c.hasAttribute('data-suggestion-accepted'),
+              dimmed: c.className.split(/\\s+/).includes('opacity-50'),
+              acceptable: !!button && !button.disabled
+            }
+          }),
+          error: g.querySelector('[data-suggestion-error]')?.textContent ?? null
+        }))`
+      ),
+    accept: (index, group = 0) =>
+      main.eval<boolean>(`(() => {
+        const g = ${GROUPS}[${group}]
+        const card = g && [...g.querySelectorAll('[data-suggestion-index]')].find(
+          (c) => c.getAttribute('data-suggestion-index') === ${JSON.stringify(String(index))}
+        )
+        const button = card?.querySelector('[data-suggestion-accept]')
+        if (!button || button.disabled) return false
+        button.click()
+        return true
+      })()`),
+    acceptedBubbles: () =>
+      main.eval<Array<{ id: string; text: string }>>(
+        `[...document.querySelectorAll('[data-msg-role="user"]')]
+          .filter((el) => el.querySelector('[data-origin-suggestion]'))
+          .map((el) => ({
+            id: el.getAttribute('data-msg-id') ?? '',
+            text: (el.querySelector('.whitespace-pre-wrap')?.textContent ?? '').trim()
+          }))`
+      )
+  }
+}
+
 /**
  * 分组头定位目标：项目组按**种子项目名**认（组头 toggle 按钮里的 span.truncate，
  * CSS uppercase 不改 textContent），临时组 / 知识库组 / Bots 组 / 「项目」分节标题按

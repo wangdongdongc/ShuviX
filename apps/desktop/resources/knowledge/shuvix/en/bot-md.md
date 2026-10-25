@@ -119,9 +119,12 @@ shuvix-bot-on:
 ShuviX ships one such bot: the **daily bot** (`daily`, `shuvix-id: bot:builtin:daily`). On first start it is
 written into `~/.shuvix/bots/daily.md` in the interface language, and from then on it is an ordinary bot file —
 change it (the time it fires, say) or delete it; a deleted one is not written again (what was written is recorded
-in `.builtin-seeded` in the same folder). It goes through the recent sessions every evening and keeps the tracked
-items in `~/.shuvix/tracking/`; the builtin policy `daily-bot-access` lets it read the last 7 days of sessions and
-read and write the tracked items folder without asking (see `policy-md`).
+in `.builtin-seeded` in the same folder). It goes through the recent sessions and the diary every evening and keeps
+the tracked items in `~/.shuvix/tracking/`: how is written in the builtin `builtin:tracking` skill (the bot file is
+written once, the rules update with the app); it creates an item directly only when the user's own words say the
+matter is unfinished, and suggests at most three others with `suggest`. The builtin policy `daily-bot-access` lets it
+read the last 7 days of sessions, read the diary folder, and read and write the tracked items folder without asking
+(see `policy-md`).
 
 ## A bot chat
 
@@ -132,7 +135,8 @@ ordinary rooted session: model picker, extensions, compaction, export, sub-sessi
 background auto-resume all work as usual.
 
 Its root persona is the builtin **`bot`** base, whose tool list is deliberately narrow:
-`read, ls, grep, glob, ask, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —
+`read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing,
+skill:builtin:tracking` —
 no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions — that
 is the user's own call). The bot does the work itself (there is no shell); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. A large or separate piece of work can go to a sub-session (programming work → `agent_profile: coding`). A write under `~/.shuvix/bots/` is an ordinary write outside the session's permission table: it asks under the builtin policy **ask-on-external-path**, and with

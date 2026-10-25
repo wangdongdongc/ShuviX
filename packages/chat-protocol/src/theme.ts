@@ -23,6 +23,7 @@ export type LucideIconName =
   | 'FolderTree'
   | 'GitBranch'
   | 'Globe'
+  | 'Lightbulb'
   | 'MessageCircleQuestion'
   | 'Monitor'
   | 'Palette'

@@ -29,3 +29,5 @@ apps/extension/src/runtime/builtinAgents/md
 # 重新捕获就会出一堆纯空白的 diff，掩盖真正的输出变化
 packages/agent-runtime/src/durable/__tests__/fixtures
 apps/desktop/src/main/agents/__tests__/fixtures
+# 日报 bot 的旧版种子原文（升级测试的输入）—— 逐字节就是 v0.2.27 种下的文件，prettier 一改就不再是「当年写下的那份」
+packages/agent-runtime/src/bot/__tests__/fixtures

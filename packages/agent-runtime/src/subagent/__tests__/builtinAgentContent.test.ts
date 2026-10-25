@@ -73,7 +73,7 @@ describe('BA bot 基座档案', () => {
     }
   } as const
   const TOOLS =
-    'read, ls, grep, glob, ask, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing'
+    'read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing, skill:builtin:tracking'
 
   it.each(Object.keys(BOT) as Array<keyof typeof BOT>)(
     'BA-3 %s：工具面不变（没有 bash / mcp:*）；description 与正文不再要求把活全交给子会话、不再禁止用 write/edit 干活',
@@ -93,6 +93,53 @@ describe('BA bot 基座档案', () => {
       const body = text.slice(text.indexOf('\n---', 4) + 4)
       for (const gone of BOT[file].goneBody) expect(body, gone).not.toContain(gone)
       for (const present of BOT[file].present) expect(body, present).toContain(present)
+    }
+  )
+})
+
+/**
+ * 提议（`suggest` 工具，2026-10-25）：三条主路线的基座（work / chat / coding，三种语言）都持有它（bot 的那份在 BA-3）；
+ * 权限审查员三种语言都写着「采纳的提议是 agent 写、人点了采纳的，只授权那句话本身」—— 自动审查给这种话加了前缀，
+ * 审查员得知道前缀是什么意思，否则它照样把 agent 写的一句当成用户的完整授权。
+ */
+describe('BA suggest', () => {
+  const toolsOf = (file: string): string[] => {
+    const text = readFileSync(join(MD_DIR, file), 'utf8')
+    const line = /^shuvix-tools: (.*)$/m.exec(text)?.[1] ?? ''
+    return line.split(',').map((t) => t.trim())
+  }
+
+  it.each(['work', 'chat', 'coding'].flatMap(localized))(
+    'BA-4 %s：shuvix-tools 里有 suggest，紧跟在 ask 之后',
+    (file) => {
+      const tools = toolsOf(file)
+      expect(tools).toContain('suggest')
+      expect(tools.indexOf('suggest')).toBe(tools.indexOf('ask') + 1)
+    }
+  )
+
+  const REVIEWER = {
+    'permission-reviewer.md': [
+      'A line marked as an accepted suggestion was written by the agent and clicked by the human',
+      'it authorizes what that line says and nothing beyond it'
+    ],
+    'permission-reviewer.zh.md': [
+      '标明是采纳的提议的那一句，是 agent 写、人点了采纳的',
+      '它只授权这句话本身说的事，不多于此'
+    ],
+    'permission-reviewer.ja.md': [
+      '採用した提案と明記された一文は、エージェントが書き人が採用をクリックしたものです',
+      'その文が言っていることだけを許可し、それ以上は許可しません'
+    ]
+  } as const
+
+  it.each(Object.keys(REVIEWER) as Array<keyof typeof REVIEWER>)(
+    'BA-5 %s：`userMessages` 那一条里写着采纳的提议只授权那句话本身',
+    (file) => {
+      const text = readFileSync(join(MD_DIR, file), 'utf8')
+      const bullet = text.split('\n').find((line) => line.startsWith('- `userMessages`')) ?? ''
+      expect(bullet.length).toBeGreaterThan(0)
+      for (const phrase of REVIEWER[file]) expect(bullet, phrase).toContain(phrase)
     }
   )
 })

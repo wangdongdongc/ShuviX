@@ -116,8 +116,7 @@ describe('打开那一天', () => {
     const text = readFileSync(fileOf(DAY), 'utf8')
     expect(text.startsWith('---\nshuvix: daily v1\n---\n')).toBe(true)
     expect(text).toContain('## daily.template.done')
-    expect(text).toContain('## daily.template.next')
-    expect(text).toContain('## daily.template.followUp')
+    expect(text.match(/^## /gm)).toHaveLength(1)
 
     expect(vi.mocked(projectDao.insert).mock.calls[0][0]).toMatchObject({
       id: DAILY_PROJECT_ID,

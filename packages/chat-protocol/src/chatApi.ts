@@ -38,6 +38,7 @@ import type { ArtifactRefContent, SessionArtifact } from './artifacts'
 import type { SessionMentionEntry } from './sessionMention'
 import type { ChromeTabBinding } from './chromeTabSession'
 import type { SessionForkParams, SessionForkResult } from './sessionFork'
+import type { AcceptSuggestionResult, SuggestionAcceptParams } from './suggestions'
 import type {
   AclEntry,
   SessionAclGrantParams,
@@ -839,6 +840,13 @@ export interface HostApi {
     }) => Promise<ArtifactRefContent | null>
     /** 会话面板「产物」页：本会话与直接子会话的产物（同一会话内最近改过的在前） */
     list: (params: { sessionId: string }) => Promise<SessionArtifact[]>
+  }
+  /**
+   * 提议（`suggest` 工具）：采纳一条 = 那条的话以用户的身份发进会话（会话在跑就是 steer）。可选：Chrome 侧边栏的
+   * 通道不带它，那里的提议卡只读、没有按钮
+   */
+  suggestion?: {
+    accept: (params: SuggestionAcceptParams) => Promise<AcceptSuggestionResult>
   }
   /**
    * 桌面日历（按 session_day_prompts：同一会话可出现在多个开口日）。

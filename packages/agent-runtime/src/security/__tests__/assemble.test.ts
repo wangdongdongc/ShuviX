@@ -628,13 +628,13 @@ describe('assembleRules — 策略合并与 tier 标定', () => {
     }
   })
 
-  it('CA-3 完整内置装配的 force-allow 层只有 daily-bot-access 的两条（「允许并记住」是外部目录门 match 里的豁免）；装回退役的 session-grants 夹具时，它的两条全在 force-allow 层且 effect 恒 allow', () => {
+  it('CA-3 完整内置装配的 force-allow 层只有 daily-bot-access 的三条（「允许并记住」是外部目录门 match 里的豁免）；装回退役的 session-grants 夹具时，它的两条全在 force-allow 层且 effect 恒 allow', () => {
     // 出厂唯一的 force-allow 是 daily-bot-access（2026-10-24）：只给随应用提供的日报 bot 放宽，见 BP-2d
     expect(
       assembleRules(makeProvider())
         .filter((r) => r.tier === 'force-allow')
         .map((r) => r.id)
-    ).toEqual(['daily-bot-access#0', 'daily-bot-access#1'])
+    ).toEqual(['daily-bot-access#0', 'daily-bot-access#1', 'daily-bot-access#2'])
 
     const rules = assembleRules(
       makeProvider({ getUserPolicies: () => [retiredPolicy('session-grants')] })
@@ -1043,7 +1043,7 @@ describe('assembleRules — 派生规则与省略容错', () => {
     expect(() => assembleRules(makeProvider())).not.toThrow()
   })
 
-  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂五份共八条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
+  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂五份共九条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
     const rules = assembleRules(makeProvider({ getVars: () => withGrants({ write: ['/data'] }) }))
     expect(rules.map((r) => [r.id, r.source.kind])).toEqual([
       ['ask-on-external-path#0', 'builtin'],
@@ -1053,7 +1053,8 @@ describe('assembleRules — 派生规则与省略容错', () => {
       ['ask-on-session-access#1', 'builtin'],
       ['network-admission#0', 'builtin'],
       ['daily-bot-access#0', 'builtin'],
-      ['daily-bot-access#1', 'builtin']
+      ['daily-bot-access#1', 'builtin'],
+      ['daily-bot-access#2', 'builtin']
     ])
   })
 })
@@ -1786,7 +1787,8 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-session-access#1',
       'network-admission#0',
       'daily-bot-access#0',
-      'daily-bot-access#1'
+      'daily-bot-access#1',
+      'daily-bot-access#2'
     ])
     expect(decide(provider, 'execute', unconfined)).toMatchObject({ effect: 'allow', matched: [] })
     // 对照：不停用时同一条命令要问
@@ -1860,7 +1862,8 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-session-access#1',
       'network-admission#0',
       'daily-bot-access#0',
-      'daily-bot-access#1'
+      'daily-bot-access#1',
+      'daily-bot-access#2'
     ])
   })
 
@@ -1885,7 +1888,7 @@ describe('assembleRules — 停用的策略不装配', () => {
     expect(control.filter((r) => r.source.policy === 'p').map((r) => r.effect)).toEqual(['deny'])
   })
 
-  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂五份八条全在', () => {
+  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂五份九条全在', () => {
     expect(assembleRules(makeProvider()).map((r) => r.id)).toEqual([
       'ask-on-external-path#0',
       'ask-on-external-path#1',
@@ -1894,7 +1897,8 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-session-access#1',
       'network-admission#0',
       'daily-bot-access#0',
-      'daily-bot-access#1'
+      'daily-bot-access#1',
+      'daily-bot-access#2'
     ])
   })
 

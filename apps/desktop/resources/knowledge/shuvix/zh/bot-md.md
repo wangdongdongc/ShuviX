@@ -103,8 +103,9 @@ shuvix-bot-on:
 
 ShuviX 自带一个这样的 bot：**日报 bot**（`daily`，`shuvix-id: bot:builtin:daily`）。第一次启动时按界面语言写进
 `~/.shuvix/bots/daily.md`，之后就是一份普通 bot 文件 —— 可以改（比如改触发时间），删了不再补（写过哪些记在同目录的
-`.builtin-seeded` 里）。它每天傍晚翻一遍最近的会话、维护 `~/.shuvix/tracking/` 里的跟踪项；内置策略
-`daily-bot-access` 让它不用问就能读最近 7 天的会话、读写跟踪项目录（见 `policy-md`）。
+`.builtin-seeded` 里）。它每天傍晚翻一遍最近的会话和日记、维护 `~/.shuvix/tracking/` 里的跟踪项：怎么整理写在随应用发布的
+`builtin:tracking` 技能里（bot 文件只写一次，规则随版本更新），用户自己说了还没完的事才直接建，别的至多用 `suggest`
+提议三条；内置策略 `daily-bot-access` 让它不用问就能读最近 7 天的会话、读日记目录、读写跟踪项目录（见 `policy-md`）。
 
 ## Bot 会话
 
@@ -112,8 +113,8 @@ ShuviX 自带一个这样的 bot：**日报 bot**（`daily`，`shuvix-id: bot:bu
 选一个 bot）。绑定在创建那一刻定死、**永不改变** —— 换 bot 就是另开一条会话，因为历史全是那个 bot
 说的话。除此之外它是一条普通有根会话：模型选择、扩展能力、压缩、导出、子会话与后台自动续跑一应照常。
 
-它的根人格是内置的 **`bot`** 基座，工具列表刻意收窄：`read, ls, grep, glob, ask, write, edit, session, agent,
-knowledge, artifact, skill:builtin:drawing` —— 没有 `bash`，也不声明内置能力服务器
+它的根人格是内置的 **`bot`** 基座，工具列表刻意收窄：`read, ls, grep, glob, ask, suggest, write, edit, session,
+agent, knowledge, artifact, skill:builtin:drawing, skill:builtin:tracking` —— 没有 `bash`，也不声明内置能力服务器
 `mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，那是用户自己的选择）。bot 自己动手干活（没有 shell）；人设只管它怎么跟你说话，它写的文件、笔记、代码用平实的写法。大块的、独立的活可以交给子会话（编程活 → `agent_profile: coding`）。
 `~/.shuvix/bots/` 下的写入是一次会话权限表以外的普通写入：按内置策略 **ask-on-external-path** 询问，开着
 自动审查时可能由审查员回答（想让每次这样的写入都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask`

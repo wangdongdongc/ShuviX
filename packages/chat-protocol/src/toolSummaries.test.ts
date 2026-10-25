@@ -68,6 +68,32 @@ describe('buildToolSummary — knowledge', () => {
   })
 })
 
+/** 提议（`suggest`，2026-10-25）：折叠行上摆第一条的标题，多条时带「+N」；卡片本身不在步骤组里 */
+describe('buildToolSummary — suggest', () => {
+  it('TS-SG-1 一条 → 它的标题；多条 → `标题 · +N`；没有可用的标题 → 没有摘要；图标与 labelKey', () => {
+    const item = (title: unknown): Record<string, unknown> => ({ title, message: 'm' })
+    expect(buildToolSummary('suggest', { suggestions: [item('Add tests')] })).toBe('Add tests')
+    expect(buildToolSummary('suggest', { suggestions: [item('Add tests'), item('Docs')] })).toBe(
+      'Add tests · +1'
+    )
+    expect(
+      buildToolSummary('suggest', { suggestions: [item('Add tests'), item('Docs'), item('Ship')] })
+    ).toBe('Add tests · +2')
+    // 后面的项长什么样不影响计数
+    expect(buildToolSummary('suggest', { suggestions: [item('Add tests'), null, 'x'] })).toBe(
+      'Add tests · +2'
+    )
+    expect(buildToolSummary('suggest', { suggestions: [] })).toBeUndefined()
+    expect(buildToolSummary('suggest', {})).toBeUndefined()
+    expect(buildToolSummary('suggest', { suggestions: 'Add tests' })).toBeUndefined()
+    // 第一条没有标题（空白 / 不是对象）→ 没有摘要，哪怕后面还有
+    expect(buildToolSummary('suggest', { suggestions: [item('  '), item('Docs')] })).toBeUndefined()
+    expect(buildToolSummary('suggest', { suggestions: [null, item('Docs')] })).toBeUndefined()
+    expect(BUILTIN_TOOL_PRESENTATIONS.suggest.presentation?.icon).toBe('Lightbulb')
+    expect(BUILTIN_TOOL_PRESENTATIONS.suggest.labelKey).toBe('tool.suggestLabel')
+  })
+})
+
 /**
  * 内置 MCP 能力服务器（`mcp__browser__*` / `mcp__ssh__*`）按前缀认、不逐个登记 —— 表里没有的
  * 名字才去问它；退役的 multiplex `browser` 工具仍按自己的条目给历史会话出摘要。

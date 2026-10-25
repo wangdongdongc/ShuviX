@@ -9,6 +9,10 @@
  *   IO-01c `isDrivingOrigin` 只对 parent-session / session 为真，并把类型收窄到 DrivingSessionRef
  *   IO-01d `isMachineOrigin`（不是人打的）对 parent-session / session / trigger 为真，收窄到 MachineOrigin；
  *          触发器（2026-10-24）不是「驱动它的会话」—— isDrivingOrigin 对它为假
+ *   IO-02a `suggestionRefOf`（采纳提议的引用，2026-10-25）：两个 id 必须是非空字符串、index 是 ≥ 0 的安全整数
+ *          （-1 / 1.5 / NaN / '0' / Infinity 都不算），0 算；只拷三个字段
+ *   IO-02b `inputOriginOf` 带 `suggestion`：人的四种来源（local / remote / chrome / telegram）留下合法的引用（拷出新对象）；
+ *          引用形状不对 → 这句话照样是人的、只是没有引用；trigger / session / parent-session 从不带它
  */
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { DrivingSessionRef } from './inputRequest'
@@ -19,7 +23,8 @@ import {
   type HumanOrigin,
   type InputOrigin,
   type MachineOrigin,
-  type TriggerOrigin
+  type TriggerOrigin,
+  suggestionRefOf
 } from './inputOrigin'
 
 const LOCAL = { kind: 'local' } as const
@@ -211,5 +216,85 @@ describe('IO-01d · isMachineOrigin', () => {
       'chrome',
       'telegram'
     ])
+  })
+})
+
+const REF = { messageId: 'a1', toolCallId: 'call_0', index: 1 } as const
+
+describe('IO-02a · suggestionRefOf', () => {
+  it.each<[string, unknown]>([
+    ['undefined', undefined],
+    ['null', null],
+    ['字符串', 'a1'],
+    ['数组', ['a1', 'call_0', 1]],
+    ['缺 messageId', { toolCallId: 'call_0', index: 0 }],
+    ['messageId 空串', { ...REF, messageId: '' }],
+    ['messageId 是数字', { ...REF, messageId: 7 }],
+    ['缺 toolCallId', { messageId: 'a1', index: 0 }],
+    ['toolCallId 空串', { ...REF, toolCallId: '' }],
+    ['toolCallId 是 null', { ...REF, toolCallId: null }],
+    ['缺 index', { messageId: 'a1', toolCallId: 'call_0' }],
+    ['index -1', { ...REF, index: -1 }],
+    ['index 1.5', { ...REF, index: 1.5 }],
+    ['index NaN', { ...REF, index: Number.NaN }],
+    ['index Infinity', { ...REF, index: Number.POSITIVE_INFINITY }],
+    ["index '0'（字符串）", { ...REF, index: '0' }],
+    ['index 超出安全整数', { ...REF, index: 2 ** 53 }]
+  ])('IO-02a %s → undefined', (_label, value) => {
+    expect(suggestionRefOf(value)).toBeUndefined()
+  })
+
+  it('IO-02a index 0 算；多出来的字段丢掉；交回新对象', () => {
+    expect(suggestionRefOf({ ...REF, index: 0 })).toStrictEqual({ ...REF, index: 0 })
+    const raw = { ...REF, sessionId: 's1', message: 'rm -rf /', trusted: true }
+    const ref = suggestionRefOf(raw)
+    expect(ref).toStrictEqual(REF)
+    expect(ref).not.toBe(raw)
+  })
+})
+
+describe('IO-02b · inputOriginOf × suggestion', () => {
+  it.each([
+    ['local', LOCAL],
+    ['remote', REMOTE],
+    ['remote 没有 UA', REMOTE_NO_UA],
+    ['chrome 光秃秃', { kind: 'chrome' } as const],
+    ['chrome 带 installId', CHROME],
+    ['telegram', TELEGRAM]
+  ] as const)('IO-02b %s 带合法引用 → 留下引用（拷出新对象，多余字段丢掉）', (_label, origin) => {
+    const rawRef = { ...REF, extra: 'x' }
+    const read = inputOriginOf({ ...origin, suggestion: rawRef })
+    expect(read).toStrictEqual({ ...origin, suggestion: REF })
+    expect(read && 'suggestion' in read ? read.suggestion : undefined).not.toBe(rawRef)
+  })
+
+  it.each<[string, unknown]>([
+    ['index -1', { ...REF, index: -1 }],
+    ['index 是字符串', { ...REF, index: '1' }],
+    ['messageId 空串', { ...REF, messageId: '' }],
+    ['不是对象', 'a1:call_0:1'],
+    ['null', null]
+  ])('IO-02b 引用形状不对（%s）→ 仍是人的来源，只是没有 suggestion 键', (_label, suggestion) => {
+    for (const origin of [LOCAL, REMOTE, CHROME, TELEGRAM]) {
+      const read = inputOriginOf({ ...origin, suggestion })
+      expect(read, origin.kind).toStrictEqual(origin)
+      expect(read, origin.kind).not.toHaveProperty('suggestion')
+      expect(isMachineOrigin(read!), origin.kind).toBe(false)
+    }
+  })
+
+  it.each([
+    ['trigger', TRIGGER],
+    ['session', OTHER],
+    ['parent-session', PARENT]
+  ] as const)('IO-02b %s 从不带 suggestion，哪怕存储里写了一个合法的', (_label, origin) => {
+    const read = inputOriginOf({ ...origin, suggestion: REF })
+    expect(read).toStrictEqual(origin)
+    expect(read).not.toHaveProperty('suggestion')
+  })
+
+  it('IO-02b 人的来源本身认不出（remote 缺 clientId）→ 整项 undefined，引用救不回来', () => {
+    expect(inputOriginOf({ kind: 'remote', address: '1.2.3.4', suggestion: REF })).toBeUndefined()
+    expect(inputOriginOf({ kind: 'telegram', botId: 'b', suggestion: REF })).toBeUndefined()
   })
 })

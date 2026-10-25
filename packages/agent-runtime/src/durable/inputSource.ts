@@ -14,7 +14,13 @@
  * 却认不出形状（更新的版本写的新种类、坏数据）→ **当作有记录**（失败闭合，与 ask 的 `answeredBy` 同一方向：
  * 危险的是把别人的话记成人的）。只读：一个只读提交，不开启调度器、不建 agent、不写。不依赖 Node / Electron。
  */
-import type { ConversationId, EntryId, EntryRecord, Harness } from '@earendil-works/pi-durable'
+import type {
+  ConversationId,
+  EntryId,
+  EntryRecord,
+  Harness,
+  JsonObject
+} from '@earendil-works/pi-durable'
 import { UserEntry } from '@earendil-works/pi-durable'
 import {
   inputOriginOf,
@@ -49,20 +55,21 @@ function drivingSourceOfItem(item: unknown): InputSource | undefined {
 }
 
 /**
- * 来源 → 它落到的条目：当前对话的 `SourceDoc` 逐项按 requestId 找 submission（fork 的祖先链里每个出现过
- * `pi.user` 的对话各找一次），`record.entry` 正是活上下文里的那条 user 条目才算数。
+ * `SourceDoc` 里按 requestId 记的项 → 它落到的条目：`pick` 说要哪些项、要成什么；当前对话逐项按 requestId 找
+ * submission（fork 的祖先链里每个出现过 `pi.user` 的对话各找一次），`record.entry` 正是活上下文里的那条 user 条目才算数。
  */
-export async function resolveInputSources(
+async function resolveSourceItems<T>(
   harness: Harness,
   conversationId: ConversationId,
-  entries: readonly EntryRecord[]
-): Promise<Map<EntryId, InputSource>> {
-  const resolved = new Map<EntryId, InputSource>()
+  entries: readonly EntryRecord[],
+  pick: (item: JsonObject) => T | undefined
+): Promise<Map<EntryId, T>> {
+  const resolved = new Map<EntryId, T>()
   const doc = await harness.snapshot(SourceDoc, conversationId, BG)
-  const items: [string, InputSource][] = []
+  const items: [string, T][] = []
   for (const [requestId, item] of Object.entries(doc?.items ?? {})) {
-    const source = drivingSourceOfItem(item)
-    if (source !== undefined) items.push([requestId, source])
+    const picked = pick(item)
+    if (picked !== undefined) items.push([requestId, picked])
   }
   if (items.length === 0) return resolved
   const users = new Map<ConversationId, Set<EntryId>>()
@@ -77,17 +84,44 @@ export async function resolveInputSources(
   }
   if (users.size === 0) return resolved
   await harness.commit(async (tx) => {
-    for (const [requestId, source] of items) {
+    for (const [requestId, picked] of items) {
       for (const [owner, ids] of users) {
         const record = await tx.submissionByRequest(owner, requestId)
         if (record?.entry !== undefined && ids.has(record.entry)) {
-          resolved.set(record.entry, source)
+          resolved.set(record.entry, picked)
           break
         }
       }
     }
   }, BG)
   return resolved
+}
+
+/** 来源 → 它落到的条目：只要不是人打的那些（认不出的形状按「有记录」算，见 `drivingSourceOfItem`） */
+export function resolveInputSources(
+  harness: Harness,
+  conversationId: ConversationId,
+  entries: readonly EntryRecord[]
+): Promise<Map<EntryId, InputSource>> {
+  return resolveSourceItems(harness, conversationId, entries, drivingSourceOfItem)
+}
+
+/**
+ * 采纳提议发出的那些用户条目（`suggest` 工具，2026-10-25）：人的来源上带着 `suggestion` —— 人点的，话是 agent 写的。
+ * 自动审查据此在这句话前注明出处；它仍然是人的话（不进 `resolveInputSources`）
+ */
+export async function resolveSuggestedEntries(
+  harness: Harness,
+  conversationId: ConversationId,
+  entries: readonly EntryRecord[]
+): Promise<Set<EntryId>> {
+  const resolved = await resolveSourceItems(harness, conversationId, entries, (item) => {
+    const origin = inputOriginOf(item)
+    return origin !== undefined && 'suggestion' in origin && origin.suggestion !== undefined
+      ? true
+      : undefined
+  })
+  return new Set(resolved.keys())
 }
 
 /** 读来源要用到的那一点会话面（与转写摘要同一份） */

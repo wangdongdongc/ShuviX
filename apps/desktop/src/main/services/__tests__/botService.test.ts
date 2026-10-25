@@ -14,6 +14,8 @@
  *              会话绑定从旧名跟到新名、哪些情况必须不迁，以及 `bot.changed` 的合并窗口。
  *   PSv-ID    **对象 id**：新建铸 id、写坏的 id；identityOf（策略的 subject.bot / object.bot）与它的 2 s 缓存；
  *   PSv-SEED  **随应用提供的 bot**：seedBuiltinBots 每个只写一次（`.builtin-seeded`），同名 / 同 id 的不覆盖。
+ *   PSv-UPG   **种下之后的升级**：seedBuiltinBots 开头对认定表里那份 ShuviX 写下的文件跑一次种子的 upgrade
+ *              （旧版逐字未改的那一节换成新版）；别的文件一概不碰，失败只记日志、下次启动再试。
  *
  * **fs 是真的** —— 扫描扫的是真目录，换成假 fs 一条也测不到。
  * `readFileSync` / `existsSync` 只是套了一层可数的壳（同
@@ -38,6 +40,7 @@ import {
   writeFileSync
 } from 'fs'
 import { basename, join } from 'path'
+import { fileURLToPath } from 'url'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 
 const dirs = vi.hoisted(() => {
@@ -1233,5 +1236,234 @@ describe('PSv-TRUST —— 内置 id 的认定', () => {
     tick()
     bindTo('daily')
     expect(botService.identityOf('s1')).toBe('daily')
+  })
+})
+
+// ────────────────────── PSv-UPG：已经种下的那份换上新版 ──────────────────────
+
+/**
+ * seedBuiltinBots 每次启动先调 upgradeSeededBots：种子带 `upgrade` 的，只对认定表（`bots.builtinFiles`）记着的那份
+ * ShuviX 自己写下的文件跑一次，交回非 null 才原子写回、广播一次 bot.changed。输入是 agent-runtime 里 v0.2.27 真正种下的
+ * 那三份文件（`packages/agent-runtime/src/bot/__tests__/fixtures/daily-v0.2.27.<lang>.md`，来历见 builtinBots.test.ts）。
+ * 认定表的注入与时钟同 PSv-TRUST（PSv-SEED 那批从不注入认定表，所以升级在那里永远是空操作）。
+ */
+describe('PSv-UPG —— 已经种下的日报 bot 换上新版', () => {
+  const SEED = BUILTIN_BOT_SEEDS[0]
+  const DAILY_ID = 'bot:builtin:daily'
+  /** `…/apps/desktop/src/main/services/__tests__` 往上六层是仓库根 */
+  const FIXTURES = join(
+    fileURLToPath(new URL('.', import.meta.url)),
+    '../../../../../../packages/agent-runtime/src/bot/__tests__/fixtures'
+  )
+  const legacy = (lang: 'zh' | 'en' | 'ja'): string =>
+    readFileSync(join(FIXTURES, `daily-v0.2.27.${lang}.md`), 'utf-8')
+  const dailyPath = (): string => join(dirs.bots, 'daily.md')
+  const markerPath = (): string => join(dirs.bots, BUILTIN_SEED_MARKER)
+  /** 认定表：内置 id → 路径 */
+  const trust = (map: Record<string, string>): void => {
+    settingsStore.set(BUILTIN_FILES_KEY, JSON.stringify(map))
+  }
+  /** 往原子写里写 bot 文件的那几笔（不含记录文件） */
+  const botWrites = (): unknown[][] =>
+    mocks.atomicWrite.mock.calls.filter((c) => String(c[0]) !== markerPath())
+
+  let now = Date.now() + 90_000_000
+  beforeEach(() => {
+    settingsStore.clear()
+    botService.setBuiltinTrustStore({
+      get: (key) => settingsStore.get(key),
+      set: (key, value) => void settingsStore.set(key, value)
+    })
+    now += 10_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+  })
+  afterEach(() => {
+    botService.setBuiltinTrustStore(null)
+    vi.restoreAllMocks()
+  })
+
+  it('PSv-UPG1 记录里有 daily、认定的 daily.md 是 v0.2.27 的 en 原文：界面是 zh 也按文件的语言换 —— 恰一笔写入 [daily.md, en 新版]、一次 bot.changed；记录与认定表不动，身份仍是内置 id', async () => {
+    putFile(BUILTIN_SEED_MARKER, 'daily\n')
+    put('daily', legacy('en'))
+    trust({ [DAILY_ID]: dailyPath() })
+    const trustBefore = settingsStore.get(BUILTIN_FILES_KEY)
+
+    const n = await countChanged(() => botService.seedBuiltinBots('zh'))
+
+    expect(mocks.atomicWrite.mock.calls).toEqual([[dailyPath(), SEED.render('en')]])
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(SEED.render('en'))
+    expect(n).toBe(1)
+    expect(readFileSync(markerPath(), 'utf-8')).toBe('daily\n')
+    expect(settingsStore.get(BUILTIN_FILES_KEY)).toBe(trustBefore)
+    mocks.pick.mockReturnValue({ settings: { bot: 'daily' } })
+    expect(botService.identityOf('s1')).toBe(DAILY_ID)
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it.each(['zh', 'ja'] as const)(
+    'PSv-UPG1b 认定的那份是 v0.2.27 的 %s 原文 → 换成同一语言的新版',
+    (lang) => {
+      putFile(BUILTIN_SEED_MARKER, 'daily\n')
+      put('daily', legacy(lang))
+      trust({ [DAILY_ID]: dailyPath() })
+      botService.seedBuiltinBots('en')
+      expect(botWrites()).toEqual([[dailyPath(), SEED.render(lang)]])
+    }
+  )
+
+  it('PSv-UPG2 认定的那份已经是新版：零写入、零广播；全新种下后再启动一次（换个界面语言）同样零写入、零广播', async () => {
+    putFile(BUILTIN_SEED_MARKER, 'daily\n')
+    put('daily', SEED.render('en'))
+    trust({ [DAILY_ID]: dailyPath() })
+    expect(await countChanged(() => botService.seedBuiltinBots('en'))).toBe(0)
+    expect(mocks.atomicWrite).not.toHaveBeenCalled()
+
+    // 全新：种下（写 daily.md + 记录 + 认定），再启动
+    rmSync(dirs.bots, { recursive: true, force: true })
+    settingsStore.clear()
+    botService.seedBuiltinBots('zh')
+    expect(JSON.parse(settingsStore.get(BUILTIN_FILES_KEY)!)).toEqual({ [DAILY_ID]: dailyPath() })
+    mocks.atomicWrite.mockClear()
+    for (const language of ['zh', 'en']) {
+      expect(await countChanged(() => botService.seedBuiltinBots(language)), language).toBe(0)
+    }
+    expect(mocks.atomicWrite).not.toHaveBeenCalled()
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(SEED.render('zh'))
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      '没注入认定表',
+      (): string[] => {
+        botService.setBuiltinTrustStore(null)
+        return [put('daily', legacy('en'))]
+      }
+    ],
+    [
+      '认定表是空的',
+      (): string[] => {
+        trust({})
+        return [put('daily', legacy('en'))]
+      }
+    ],
+    [
+      '认定表指向一个不存在的路径',
+      (): string[] => {
+        trust({ [DAILY_ID]: join(dirs.bots, 'elsewhere.md') })
+        return [put('daily', legacy('en'))]
+      }
+    ],
+    [
+      '认定表指向另一份（新版的）文件',
+      (): string[] => {
+        const elsewhere = put(
+          'elsewhere',
+          SEED.render('en').replace(/^name: daily$/m, 'name: other')
+        )
+        trust({ [DAILY_ID]: elsewhere })
+        return [put('daily', legacy('en')), elsewhere]
+      }
+    ],
+    [
+      '认定的 daily.md 是新版，旁边的 impostor.md 是旧版原文',
+      (): string[] => {
+        const daily = put('daily', SEED.render('en'))
+        trust({ [DAILY_ID]: daily })
+        return [put('impostor', legacy('en').replace(/^name: daily$/m, 'name: impostor')), daily]
+      }
+    ]
+  ])('PSv-UPG3 旧版原文在不被认定的文件里从不改：%s', async (_label, arrange) => {
+    putFile(BUILTIN_SEED_MARKER, 'daily\n')
+    const paths = arrange()
+    const before = paths.map((p) => readFileSync(p, 'utf-8'))
+
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+
+    expect(n).toBe(0)
+    expect(mocks.atomicWrite).not.toHaveBeenCalled()
+    expect(paths.map((p) => readFileSync(p, 'utf-8'))).toEqual(before)
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it('PSv-UPG4 认定的那份已被删：不写、不告警、不广播，也不重新建出来（删除是永久的）', async () => {
+    putFile(BUILTIN_SEED_MARKER, 'daily\n')
+    trust({ [DAILY_ID]: dailyPath() })
+
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+
+    expect(n).toBe(0)
+    expect(mocks.atomicWrite).not.toHaveBeenCalled()
+    expect(mocks.warn).not.toHaveBeenCalled()
+    expect(existsSync(dailyPath())).toBe(false)
+  })
+
+  it('PSv-UPG5 读不出来（认定的路径是个目录）：一条点名 daily 的 warn、不广播，种下那一步照跑（记录写下）；下次启动换成文件后重试成功', async () => {
+    mkdirSync(dailyPath())
+    trust({ [DAILY_ID]: dailyPath() })
+
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+
+    expect(n).toBe(0)
+    expect(mocks.warn).toHaveBeenCalledTimes(1)
+    expect(mocks.warn.mock.calls.flat().join(' ')).toContain('daily')
+    expect(botWrites()).toEqual([])
+    expect(readFileSync(markerPath(), 'utf-8')).toBe('daily\n')
+
+    // 下次启动：那里换成了一份旧版原文（认定没被撤销 —— 目录还在时扫描不撤）
+    rmSync(dailyPath(), { recursive: true })
+    put('daily', legacy('en'))
+    mocks.atomicWrite.mockClear()
+    mocks.warn.mockClear()
+    const again = await countChanged(() => botService.seedBuiltinBots('en'))
+    expect(botWrites()).toEqual([[dailyPath(), SEED.render('en')]])
+    expect(again).toBe(1)
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it('PSv-UPG5b 写回失败：一条点名 daily 的 warn、文件原样、不广播，种下那一步照跑；下次启动重试成功', async () => {
+    put('daily', legacy('en'))
+    trust({ [DAILY_ID]: dailyPath() })
+    const realAtomic =
+      await vi.importActual<typeof import('../../utils/atomicWrite')>('../../utils/atomicWrite')
+    mocks.atomicWrite.mockImplementation((path: string, data: string) => {
+      if (path === dailyPath()) throw new Error('EACCES: permission denied')
+      return realAtomic.writeFileAtomic(path, data)
+    })
+    try {
+      const n = await countChanged(() => botService.seedBuiltinBots('en'))
+      expect(n).toBe(0)
+      expect(mocks.warn).toHaveBeenCalledTimes(1)
+      expect(mocks.warn.mock.calls.flat().join(' ')).toContain('daily')
+      expect(readFileSync(dailyPath(), 'utf-8')).toBe(legacy('en'))
+      expect(readFileSync(markerPath(), 'utf-8')).toBe('daily\n')
+    } finally {
+      mocks.atomicWrite.mockImplementation(realAtomic.writeFileAtomic)
+    }
+
+    mocks.atomicWrite.mockClear()
+    mocks.warn.mockClear()
+    const again = await countChanged(() => botService.seedBuiltinBots('en'))
+    expect(botWrites()).toEqual([[dailyPath(), SEED.render('en')]])
+    expect(readFileSync(dailyPath(), 'utf-8')).toBe(SEED.render('en'))
+    expect(again).toBe(1)
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it('PSv-UPG6 认定的那份把 frontmatter 改名成 my-daily：照换那一节，名字保留', async () => {
+    putFile(BUILTIN_SEED_MARKER, 'daily\n')
+    const rename = (text: string): string => text.replace(/^name: daily$/m, 'name: my-daily')
+    put('daily', rename(legacy('en')))
+    trust({ [DAILY_ID]: dailyPath() })
+
+    const n = await countChanged(() => botService.seedBuiltinBots('en'))
+
+    expect(botWrites()).toEqual([[dailyPath(), rename(SEED.render('en'))]])
+    expect(n).toBe(1)
+    expect(botService.get('daily')).toBeNull()
+    const entry = botService.get('my-daily')!
+    expect(entry.basePath).toBe(dailyPath())
+    expect(entry.file.objectId).toBe(DAILY_ID)
+    expect(entry.file.body).toContain('`builtin:tracking`')
   })
 })

@@ -10,7 +10,17 @@ import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
 import type { InputSource } from '@shuvix/agent-runtime'
-import { currentInputOrigin } from '../../utils/operationContext'
+import {
+  currentInputOrigin,
+  getOperationContext,
+  operationContext
+} from '../../utils/operationContext'
+import {
+  suggestionGroupKey,
+  suggestionToAccept,
+  type AcceptSuggestionResult
+} from '@shuvix/chat-protocol/suggestions'
+import type { SuggestionRef } from '@shuvix/chat-protocol/types/inputOrigin'
 import '../../tools/allTools'
 import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
@@ -54,6 +64,9 @@ function unavailableSessionError(sessionId: string): string {
 /** 回退之后原样重发、沿用来源的窗口（§19.7） */
 const RESEND_WINDOW_MS = 120_000
 
+/** 刚送出的提议在这段时间里不能再送一次（会话不在跑时；在跑时一直不能，见 sentSuggestions） */
+const SUGGESTION_SEND_GRACE_MS = 10_000
+
 export class DefaultChatGateway implements ChatGateway {
   /**
    * 回退掉一条父会话代发的用户消息之后，紧接着原样重发同一句 ——「重新生成」与「回退后原样发送」—— 沿用它的来源
@@ -64,6 +77,14 @@ export class DefaultChatGateway implements ChatGateway {
     string,
     { text: string; source: InputSource; at: number }
   >()
+
+  /**
+   * 刚送出去的提议（会话 id + 组键 → 送出的时刻）：送出到那条用户消息出现在会话里之间有一段空档（steer 先排队，到下一步
+   * 才落下；空闲时起的一轮也要等受理），这段时间里同一组再点一次不能再发一遍。记号只在**会话还在跑、或送出不到
+   * `SUGGESTION_SEND_GRACE_MS`** 时算数：之后那句话要么已经在会话里（会话记录自己就把这组判成关闭），要么随回退 /
+   * 撤回没了（卡片又开着，就该能再点）。没送出去时立刻撤掉
+   */
+  private readonly sentSuggestions = new Map<string, number>()
 
   // ─── Agent 对话 ──────────────────────────────
 
@@ -80,7 +101,11 @@ export class DefaultChatGateway implements ChatGateway {
   ): Promise<{ error?: string; code?: SubmitErrorCode }> {
     // 「重新生成」/ 回退后原样重发一条父会话代发的消息：沿用它的来源（§19.7）。只认紧接着的那一次、原文一字不差、
     // 两分钟之内 —— 改过的文字是人的话；不管用没用上、这次发送成不成都撤掉（在打开会话之前就取走），免得留给以后的某次发送
-    const resend = drive === undefined ? this.resendSources.get(sessionId) : undefined
+    // 采纳提议发的话不沿用：它的来源就是这次点击（连接 + 提议引用），哪怕碰巧与那条重发的原文相同
+    const resend =
+      drive === undefined && getOperationContext()?.suggestion === undefined
+        ? this.resendSources.get(sessionId)
+        : undefined
     this.resendSources.delete(sessionId)
     const resent =
       resend && resend.text === text && Date.now() - resend.at < RESEND_WINDOW_MS
@@ -143,6 +168,59 @@ export class DefaultChatGateway implements ChatGateway {
   followUp(sessionId: string, text: string): void {
     const origin = currentInputOrigin()
     this.enqueue(sessionId, (session) => session.followUp(text, origin))
+  }
+
+  async acceptSuggestion(sessionId: string, ref: SuggestionRef): Promise<AcceptSuggestionResult> {
+    const key = `${sessionId}\n${suggestionGroupKey(ref.messageId, ref.toolCallId)}`
+    if (this.recentlySent(key, sessionId)) return { success: false, reason: 'closed' }
+    const found = suggestionToAccept(await messageService.listBySession(sessionId), ref)
+    if (!found.ok) return { success: false, reason: found.reason }
+    // 二次核对与送出之间没有 await 让出：同一组的第二次点击在这里就会撞上
+    if (this.recentlySent(key, sessionId)) return { success: false, reason: 'closed' }
+    this.sentSuggestions.set(key, Date.now())
+    const release = (error: string): AcceptSuggestionResult => {
+      this.sentSuggestions.delete(key)
+      return { success: false, reason: 'failed', error }
+    }
+    // 来源 = 这次操作的连接 + 提议引用：在派生的操作上下文里发，网关的 prompt / steer 照常按它盖章
+    const ctx = getOperationContext()
+    const stamped = <T>(work: () => T): T =>
+      ctx === undefined ? work() : operationContext.run({ ...ctx, suggestion: { ...ref } }, work)
+    const live = sessionService.getAgentSession(sessionId)
+    if (live?.isStreaming) {
+      try {
+        await stamped(() => live.steer(found.message, currentInputOrigin()))
+        return { success: true }
+      } catch (error) {
+        return release(error instanceof Error ? error.message : String(error))
+      }
+    }
+    // 空闲：起一轮。prompt 要等整轮结束才交回，所以不等它；出错由门面报给界面。出错就撤掉记号 —— 那句话若其实已经
+    // 落进会话（运行中途才失败），会话里的记录照样把这组提议判成关闭，撤掉记号不会让它被发第二遍
+    void stamped(() => this.prompt(sessionId, found.message))
+      .then((result) => {
+        if (result.error !== undefined) release(result.error)
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        release(message)
+        log.warn(`accept suggestion failed session=${sessionId}: ${message}`)
+      })
+    return { success: true }
+  }
+
+  /** 这组提议刚送出过、记号还算数（见 sentSuggestions）；不算数的顺手清掉 */
+  private recentlySent(key: string, sessionId: string): boolean {
+    const at = this.sentSuggestions.get(key)
+    if (at === undefined) return false
+    if (
+      Date.now() - at < SUGGESTION_SEND_GRACE_MS ||
+      sessionService.getAgentSession(sessionId)?.isStreaming
+    ) {
+      return true
+    }
+    this.sentSuggestions.delete(key)
+    return false
   }
 
   async withdrawQueued(sessionId: string, submissionId: number): Promise<WithdrawQueuedResult> {

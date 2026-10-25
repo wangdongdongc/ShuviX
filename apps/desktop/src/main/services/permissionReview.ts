@@ -112,7 +112,12 @@ function transcriptInputsOf(
     if (item.kind === 'user') {
       if (item.systemWritten || !isHumanMessage(item)) continue
       const text = item.text.trim()
-      if (text) inputs.push({ ts: item.ts, text: clip(text, USER_MESSAGE_MAX_CHARS) })
+      if (!text) continue
+      // 采纳的提议（suggest 工具）：人点了头，但这句话是 agent 写的 —— 说清楚，让审查员只把它当作对这句话本身的同意
+      const said = item.suggested
+        ? `(the user accepted this suggestion, which the agent wrote) ${text}`
+        : text
+      inputs.push({ ts: item.ts, text: clip(said, USER_MESSAGE_MAX_CHARS) })
     } else if (item.kind === 'ask') {
       // 父会话代答的不是人写的（§19.5）：它进 delegatedTasks（声明，不是授权），这里不收 ——
       // 否则父 agent 代答一句「对，删掉它」就成了用户的同意

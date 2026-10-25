@@ -116,9 +116,11 @@ shuvix-bot-on:
 
 ShuviX にはこうした bot が一つ付属しています：**デイリーボット**（`daily`、`shuvix-id: bot:builtin:daily`）。初回起動時に
 UI 言語で `~/.shuvix/bots/daily.md` に書き込まれ、その後は普通の bot ファイルです —— 変更でき（発火の時刻など）、
-削除すると二度と書き込まれません（書き込んだものは同じフォルダの `.builtin-seeded` に記録）。毎日夕方に最近のセッションを
-見直し、`~/.shuvix/tracking/` の追跡項目を管理します。組み込みポリシー `daily-bot-access` により、直近 7 日間の
-セッションを読み、追跡項目フォルダを読み書きするときに確認されません（`policy-md` を参照）。
+削除すると二度と書き込まれません（書き込んだものは同じフォルダの `.builtin-seeded` に記録）。毎日夕方に最近のセッションと日記を
+見直し、`~/.shuvix/tracking/` の追跡項目を管理します。手順はアプリ付属の `builtin:tracking` スキルにあり（bot ファイルは
+一度しか書かれないので、手順はアプリと一緒に更新されます）、ユーザー自身の言葉でまだ終わっていないとわかることだけを直接作り、
+それ以外は `suggest` で多くても三つ提案します。組み込みポリシー `daily-bot-access` により、直近 7 日間のセッションと
+日記フォルダを読み、追跡項目フォルダを読み書きするときに確認されません（`policy-md` を参照）。
 
 ## Bot チャット
 
@@ -129,7 +131,8 @@ UI 言語で `~/.shuvix/bots/daily.md` に書き込まれ、その後は普通�
 バックグラウンドの自動再開はすべて通常どおり動きます。
 
 そのルート人格は組み込みの **`bot`** ベースで、ツールリストは意図的に狭められています：`read, ls,
-grep, glob, ask, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing` —— `bash`
+grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing,
+skill:builtin:tracking` —— `bash`
 はなく、組み込み機能サーバー `mcp:ssh` / `mcp:browser` / `mcp:database` も宣言していません（このセッションの
 拡張機能でユーザーがオンにすることはでき、それはユーザー自身の選択です）。bot は作業を自分で行います（シェルはありません）。人格はあなたとの話し方だけを形づくり、bot が書くファイル・メモ・コードは平易に書かれます。大きな作業や独立した作業はサブセッションに渡せます（プログラミングは `agent_profile: coding`）。`~/.shuvix/bots/` 配下への書き込みはセッションの権限表の外への普通の書き込みで、
 組み込みポリシー **ask-on-external-path** の確認になり、自動レビューがオンならレビュアーが答えることも

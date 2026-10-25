@@ -58,7 +58,7 @@ import {
 } from '@earendil-works/pi-durable'
 import { isSystemNoticeText } from '@shuvix/chat-protocol/systemNoticeContract'
 import type { DrivingSessionRef } from '@shuvix/chat-protocol/types/inputRequest'
-import { resolveInputSources, type InputSource } from './inputSource'
+import { resolveInputSources, resolveSuggestedEntries, type InputSource } from './inputSource'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { toolResultText } from '../toolResultText'
 import { backgroundContext as BG, isClosedError } from './context'
@@ -86,6 +86,11 @@ export interface TranscriptUserItem {
    * 来源记录 —— 读者自己决定怎么算（升级之前的消息也没有记录，所以「没有」不等于「一定是人」）。
    */
   readonly source?: InputSource
+  /**
+   * 这句话是用户采纳 agent 的一条提议发出的（`suggest` 工具）：人点的，文字是 agent 写的。仍然算人的话（不带 `source`）；
+   * 自动审查据此注明出处，免得 agent 写一句话、用户点一下，就成了一份措辞随意的授权
+   */
+  readonly suggested?: true
 }
 
 /** agent 的一条正文（一次 LLM 调用的文本块拼接）；`compaction` = 压缩摘要（剥掉外壳） */
@@ -147,7 +152,8 @@ interface PendingAsk {
 export function digestEntries(
   entries: readonly EntryRecord[],
   displayTexts: ReadonlyMap<EntryId, string> = new Map(),
-  sources: ReadonlyMap<EntryId, InputSource> = new Map()
+  sources: ReadonlyMap<EntryId, InputSource> = new Map(),
+  suggested: ReadonlySet<EntryId> = new Set()
 ): TranscriptDigestItem[] {
   const out: (TranscriptDigestItem | PendingAsk)[] = []
   /** toolCallId → 最近一次还没配上结果的调用（不是 ask 的记 null：它配上结果也不产出） */
@@ -159,7 +165,10 @@ export function digestEntries(
         const message = firstMessage(entry, 'user')
         if (message === undefined) break
         const source = sources.get(entry.id)
-        const sourced = source === undefined ? {} : { source }
+        const sourced = {
+          ...(source === undefined ? {} : { source }),
+          ...(suggested.has(entry.id) ? { suggested: true as const } : {})
+        }
         const display = displayTexts.get(entry.id)
         if (display !== undefined) {
           out.push({ kind: 'user', ts: tsOf(message), text: display, ...sourced })
@@ -301,13 +310,14 @@ export async function readTranscriptDigest(
   try {
     const conversation = await session.currentConversation()
     const view = await conversation.context(BG)
-    const [displays, sources] = await Promise.all([
+    const [displays, sources, suggested] = await Promise.all([
       resolveDisplayItems(session.harness, conversation.id, view.entries),
-      resolveInputSources(session.harness, conversation.id, view.entries)
+      resolveInputSources(session.harness, conversation.id, view.entries),
+      resolveSuggestedEntries(session.harness, conversation.id, view.entries)
     ])
     const displayTexts = new Map<EntryId, string>()
     for (const [entryId, display] of displays) displayTexts.set(entryId, display.content)
-    return { items: digestEntries(view.entries, displayTexts, sources) }
+    return { items: digestEntries(view.entries, displayTexts, sources, suggested) }
   } catch (error) {
     if (isClosedError(error)) throw new SessionClosedError(session.sessionId)
     throw error

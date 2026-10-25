@@ -116,6 +116,19 @@ export function openTrackingNote(fileName: string, title?: string): SessionInfo 
   return { ...session, workingDirectory: project.path }
 }
 
+/**
+ * 跟踪项目录还没有就建出来（bot 的每次触发运行之前调）。目录不在时 bot 的 `ls` 只得到「路径不存在」，模型就会去翻上一层的
+ * `~/.shuvix` —— 那里不在 daily-bot-access 的放行范围里，傍晚没人回答的询问就把这次运行卡住了（2026-10-25）。
+ * 失败只记日志：bot 第一次 `write` 照样会把目录建出来
+ */
+export function ensureTrackingDir(): void {
+  try {
+    nodeFs.mkdirSync(getDefaultTrackingDir(), { recursive: true })
+  } catch (err) {
+    log.warn(`could not create the tracking folder: ${err instanceof Error ? err.message : err}`)
+  }
+}
+
 /** 打开跟踪项目录（OS 文件管理器）；还没有就先建出来，免得打开一个不存在的目录 */
 export async function openTrackingFolder(): Promise<void> {
   const dir = getDefaultTrackingDir()
@@ -129,8 +142,8 @@ function failureOf(out: GitOpOutput): string | undefined {
 }
 
 /**
- * 把跟踪项目录整棵树提交一次（bot 的一次触发运行结束后调）：目录不在 = 这次没写任何跟踪项，什么都不做；
- * 还不是仓库就先 init。「没有可提交的变更」是正常状态。失败只记日志，最后广播 `tracking.changed` 让侧栏重扫。
+ * 把跟踪项目录整棵树提交一次（bot 的一次触发运行结束后调）：目录不在就什么都不做（运行前 `ensureTrackingDir` 建过，
+ * 不在多半是用户刚删了）；还不是仓库就先 init。「没有可提交的变更」是正常状态。失败只记日志，最后广播 `tracking.changed` 让侧栏重扫。
  */
 export async function commitTrackingChanges(message: string): Promise<void> {
   const dir = getDefaultTrackingDir()

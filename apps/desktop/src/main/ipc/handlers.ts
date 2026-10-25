@@ -1,6 +1,7 @@
 import { registerAgentHandlers } from './agentHandlers'
 import { registerSessionHandlers } from './sessionHandlers'
 import { registerCalendarHandlers } from './calendarHandlers'
+import { registerSuggestionHandlers } from './suggestionHandlers'
 import { registerTriggerHandlers } from './triggerHandlers'
 import { registerTrackingHandlers } from './trackingHandlers'
 import { registerProjectHandlers } from './projectHandlers'
@@ -49,6 +50,7 @@ export function registerIpcHandlers(): void {
   registerAgentHandlers()
   registerSessionHandlers()
   registerCalendarHandlers()
+  registerSuggestionHandlers()
   registerTriggerHandlers()
   registerTrackingHandlers()
   registerProjectHandlers()

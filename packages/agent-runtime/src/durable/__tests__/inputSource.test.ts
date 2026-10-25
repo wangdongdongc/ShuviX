@@ -21,6 +21,10 @@
  *                         SourceDoc，读出来却与不带来源的同一串一模一样；显示侧车与来源同一个提交、同一个 requestId
  *   SRC-28 / 29 · AUTH-08 触发器替 bot 发的话（`kind: 'trigger'`，2026-10-24）：不是人打的 —— 形状判别、真发送落进来源表、
  *                         顶层会话里它之后没有记录的那条是人打的
+ *   IS-1                  采纳提议发出的话（人的来源带 `suggestion`，2026-10-25）：`resolveSuggestedEntries` 只收带合法引用的
+ *                         人的来源（本机 / 远程 / Chrome / Telegram）；普通人打的、带着引用的机器来源（触发器 / 父会话）、
+ *                         引用形状不对的都不收；引用形状不对的那条对 `resolveInputSources` 也不是「认不出」（仍是人打的）；
+ *                         真发送带上引用 → 收进来，同时不进来源表
  */
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -43,6 +47,7 @@ import {
   inputSourceOf,
   readInputSources,
   resolveInputSources,
+  resolveSuggestedEntries,
   type MessageAuthor
 } from '../inputSource'
 import { readTranscriptDigest } from '../transcriptDigest'
@@ -411,6 +416,72 @@ describe('SRC · hand-written sidecars', () => {
       expect(map.has(String(byRequest.get(requestId)!.id)), requestId).toBe(false)
     }
   })
+
+  it('IS-1 resolveSuggestedEntries: only human origins carrying a well-formed suggestion ref; plain human, machine origins with a stray ref and malformed refs stay out — and a malformed ref is still human (not UNRECOGNIZED) for resolveInputSources', async () => {
+    const t = await makeHost({ ephemeral: [SID] })
+    const session = await t.open(SID)
+    const REF = { messageId: 'a1', toolCallId: 'call_0', index: 0 }
+    const suggested = {
+      'r-local-ref': { ...LOCAL, suggestion: REF },
+      'r-remote-ref': { ...REMOTE, suggestion: { ...REF, index: 2 } },
+      'r-chrome-ref': { ...CHROME, suggestion: REF },
+      'r-telegram-ref': { ...TELEGRAM, suggestion: REF }
+    }
+    const notSuggested = {
+      'r-local': LOCAL,
+      'r-remote': REMOTE,
+      'r-trigger-ref': { ...TRIGGER, suggestion: REF },
+      'r-parent-ref': { ...PARENT, suggestion: REF },
+      'r-bad-index': { ...LOCAL, suggestion: { ...REF, index: -1 } },
+      'r-bad-id': { ...REMOTE, suggestion: { ...REF, messageId: '' } },
+      'r-bad-shape': { ...LOCAL, suggestion: 'a1:call_0:0' }
+    }
+    const byRequest = await writeSourced(
+      session,
+      { ...suggested, ...notSuggested },
+      [...Object.keys(suggested), ...Object.keys(notSuggested)].map((requestId) => ({
+        requestId,
+        text: requestId
+      }))
+    )
+    const conversation = await session.currentConversation()
+    const view = await conversation.context(BG)
+    const got = await resolveSuggestedEntries(session.harness, conversation.id, view.entries)
+    expect(got).toStrictEqual(
+      new Set(Object.keys(suggested).map((requestId) => byRequest.get(requestId)!.id))
+    )
+    // 来源表（不是人打的那些）：只有触发器与父会话那两条，原样、不带引用；引用坏了的人话不算「认不出」
+    expect(await sources(session)).toStrictEqual(
+      new Map<string, unknown>([
+        [String(byRequest.get('r-trigger-ref')!.id), TRIGGER],
+        [String(byRequest.get('r-parent-ref')!.id), PARENT]
+      ])
+    )
+  })
+
+  it(
+    'IS-1 a real send whose human origin carries a suggestion ref: SourceDoc keeps the ref, resolveSuggestedEntries returns that entry only, and it never shows as a driving source',
+    async () => {
+      const { t, session } = await openSession()
+      const REF = { messageId: 'a1', toolCallId: 'call_0', index: 1 }
+      t.kit.queue(answer('a1'), answer('a2'))
+      expect(await session.submitUser('typed', { source: LOCAL })).toEqual({})
+      expect(
+        await session.submitUser('accepted it', { source: { ...LOCAL, suggestion: REF } })
+      ).toEqual({})
+      expect(Object.values((await sourceDoc(session))!.items)).toStrictEqual([
+        LOCAL,
+        { ...LOCAL, suggestion: REF }
+      ])
+      const conversation = await session.currentConversation()
+      const view = await conversation.context(BG)
+      expect(
+        await resolveSuggestedEntries(session.harness, conversation.id, view.entries)
+      ).toStrictEqual(new Set([(await userEntry(session, 'accepted it')).id]))
+      expect(await sources(session)).toStrictEqual(new Map())
+    },
+    TIMEOUT
+  )
 })
 
 describe('SRC · refused sends', () => {

@@ -101,7 +101,7 @@ export function reportOnDay(day: string): { excerpt: string; path: string } | nu
   }
 }
 
-/** 新建日报的内容：用户模板优先，读不到就用内置三段 */
+/** 新建日报的内容：用户模板优先，读不到就用内置的那一段 */
 function templateSource(): string {
   const custom = join(getDefaultDailyDir(), DAILY_TEMPLATE_FILE)
   if (isRegularFile(custom)) {
@@ -111,11 +111,7 @@ function templateSource(): string {
       // 读不到就当没有
     }
   }
-  return defaultDailyTemplate({
-    done: t('daily.template.done'),
-    next: t('daily.template.next'),
-    followUp: t('daily.template.followUp')
-  })
+  return defaultDailyTemplate(t('daily.template.done'))
 }
 
 /** 那一天的日报文件在就返回路径，不在就按模板建出来（返回值第二项 = 这一次是不是新建的） */

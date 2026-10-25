@@ -204,7 +204,7 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 ## 内置策略
 
 随应用发布五份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）。管 agent 的三份门尽可能少问，都是
-普通的 `ask` 规则；管远程访问的那份是 `deny`，因为那里没有人可问；`daily-bot-access` 不设门、只放宽 —— 两条 `force-allow`，
+普通的 `ask` 规则；管远程访问的那份是 `deny`，因为那里没有人可问；`daily-bot-access` 不设门、只放宽 —— 三条 `force-allow`，
 只给随应用提供的日报 bot 用。除此之外，`deny`、`force-ask` 与 `force-allow` 留给你自己的策略：
 
 | 名字                   | 门                                                                                                                                                                                                                      |
@@ -213,7 +213,7 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `ask-on-command`       | 每条没被圈进沙箱的命令询问（`object.sandboxed` 为 false：沙箱关闭或不可用、申请了完全访问、`ssh`）                                                                                                                      |
 | `ask-on-session-access` | `session` 工具查看或对话一条不是调用方自己子会话的会话之前询问 —— 除非这次只涉及调用方在那里发起的那一轮（`object.ownTurn`），或那条会话在权限表里（`vars.aclSessionRead` / `vars.aclSessionWrite`）；「允许并记住」把它加进表。自动审查不回答这类询问 —— 内置 hook `auto-review` 把 `session` 客体留给你 |
 | `network-admission`    | 远程访问（`subject.kind` 为 `network`）：发送方不是这台电脑（`127.0.0.0/8`、`::1`）的 HTTP 请求一律拒绝。要让其他设备进来，写一份同名的用户策略替换它 —— 写法见 `network-policy` 条目                                   |
-| `daily-bot-access`     | 只放宽：日报 bot（`subject.bot == 'bot:builtin:daily'`）的根 agent 不用问就能读最近 7 天有过消息的会话（压过 `ask-on-session-access`；时间窗写在 `duration('168h')` 里，覆盖副本里改），并读写 `vars.trackingDir`（压过 `ask-on-external-path`）。它每天傍晚被内置定时器叫起来，那时多半没有人在场回答询问。只作用于那条会话的根 agent，不作用于子会话与派出去的 agent |
+| `daily-bot-access`     | 只放宽：日报 bot（`subject.bot == 'bot:builtin:daily'`）的根 agent 不用问就能读最近 7 天有过消息的会话（压过 `ask-on-session-access`；时间窗写在 `duration('168h')` 里，覆盖副本里改），并读写 `vars.trackingDir`、读 `vars.dailyDir`（日记；都压过 `ask-on-external-path`）。它每天傍晚被内置定时器叫起来，那时多半没有人在场回答询问。只作用于那条会话的根 agent，不作用于子会话与派出去的 agent |
 
 管 agent 的两份划的是同一条线：文件工具要问的，恰好就是受限命令碰不到的，所以智能体从 `read` 换成 `cat` 也占不到
 便宜。两边读的是同一张权限表，它跟着会话的设置（工作目录、知识库、启用的技能目录）和用户的授权走，

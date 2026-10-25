@@ -16,6 +16,9 @@
  *   OB-04 trigger（触发器替 bot 发的，2026-10-24）：`<span data-origin="trigger">`，文字 = 「Trigger」，悬停带 bot 名与
  *         埋点 id；宿主给了 openSession 也不是按钮、点了不切会话
  *   OB-05 trigger 的配色 = parent-session 的槽位（viz-7 浅底 + 同色深字）：`originTone` 与气泡、标签一致
+ *   OB-06 采纳提议发出的（来源带 `suggestion`，2026-10-25）：「Accepted suggestion」标签（`data-origin-suggestion`，悬停是
+ *         「AI 写的字」那句）—— 本机窗口发的也有（且没有来源标签、仍是强调色气泡）；远程连接发的标签与来源标签并排；
+ *         不带引用（各种来源）→ 没有这个标签
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（getHostApi → null）；i18n 走真 en 资源。文件是 .tsx 但不写 JSX，一律 createElement。
  */
@@ -340,5 +343,39 @@ describe('OB-05 trigger 的配色', () => {
     const chip = tag()
     expect(chip.style.backgroundColor).toBe('var(--viz-7-tint)')
     expect(chip.style.color).toBe('var(--viz-7-ink)')
+  })
+})
+
+describe('OB-06 采纳提议的标签', () => {
+  const REF = { messageId: 'a1', toolCallId: 'call_0', index: 1 }
+  const suggestionTag = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-origin-suggestion]')
+
+  it('OB-06 本机窗口 + 引用：有「Accepted suggestion」标签、悬停说明；没有来源标签；气泡仍是强调色', () => {
+    renderBubble({ kind: 'local', suggestion: REF })
+    const el = suggestionTag()!
+    expect(el).not.toBeNull()
+    expect(el.textContent).toBe(en.message.originSuggestion)
+    expect(el.getAttribute('title')).toBe(en.message.originSuggestionHint)
+    expect(tags()).toHaveLength(0)
+    expect(container.querySelector('.rounded-lg')!.className).toContain('bg-accent/10')
+  })
+
+  it('OB-06 远程连接 + 引用：来源标签与提议标签都在', () => {
+    renderBubble({ ...REMOTE, suggestion: REF })
+    expect(suggestionTag()).not.toBeNull()
+    expect(tag().getAttribute('data-origin')).toBe('remote')
+    expect(tag().textContent).toBe('Remote · 192.168.1.20')
+  })
+
+  it.each([
+    ['没有来源', undefined],
+    ['本机窗口', { kind: 'local' }],
+    ['远程连接', REMOTE],
+    ['父会话', { kind: 'parent-session', sessionId: 'P1' }],
+    ['trigger', { kind: 'trigger', trigger: 'timer.fired', bot: 'daily' }]
+  ] as const)('OB-06 %s、不带引用 → 没有提议标签', (_label, origin) => {
+    renderBubble(origin)
+    expect(suggestionTag()).toBeNull()
   })
 })

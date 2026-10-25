@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { v4 as uuid } from 'uuid'
-import type { HumanOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
+import type { HumanOrigin, SuggestionRef } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { ClientContext } from '../ipc/registry'
 
 /** 操作来源 — 判别联合，新增前端只需添加新变体 */
@@ -18,6 +18,11 @@ export interface OperationContext {
   source: OperationSource
   sessionId?: string
   timestamp: number
+  /**
+   * 这次操作是采纳一条提议（`suggestion:accept`）：它送进会话的输入在来源上带上提议引用 —— 人点的，文字是 agent 写的。
+   * 只有主进程在核对过那条提议之后才设它（见 DefaultChatGateway.acceptSuggestion），请求载荷碰不到
+   */
+  suggestion?: SuggestionRef
 }
 
 /** 全局 AsyncLocalStorage 实例 */
@@ -112,7 +117,9 @@ export function humanOriginOf(source: OperationSource): HumanOrigin {
 /** 此刻这次操作（`operationContext.run` 之内）送进会话的输入的来源；不在任何操作里（主进程自己发的）→ undefined */
 export function currentInputOrigin(): HumanOrigin | undefined {
   const ctx = getOperationContext()
-  return ctx === undefined ? undefined : humanOriginOf(ctx.source)
+  if (ctx === undefined) return undefined
+  const origin = humanOriginOf(ctx.source)
+  return ctx.suggestion === undefined ? origin : { ...origin, suggestion: { ...ctx.suggestion } }
 }
 
 /** 渠道注册表里一次调用（`ipc/registry`）送进会话的输入的来源：不经 AsyncLocalStorage，按调用方直接取 */

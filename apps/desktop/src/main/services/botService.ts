@@ -314,6 +314,7 @@ class BotService {
    * ShuviX 自己写下的文件）。main 启动时调；失败只记日志。
    */
   seedBuiltinBots(language: string): void {
+    this.upgradeSeededBots()
     const markerPath = join(this.userDir, BUILTIN_SEED_MARKER)
     let seeded: Set<string>
     try {
@@ -359,6 +360,29 @@ class BotService {
       writeFileAtomic(markerPath, [...seeded].sort().join('\n') + '\n')
     } catch (e) {
       log.warn('记录内置 bot 的写入失败:', e)
+    }
+    if (wrote) appEventBus.publish({ type: 'bot.changed' })
+  }
+
+  /**
+   * 已经种下的内置 bot 换上新版（种子的 `upgrade`，只改 ShuviX 当年写下、一字未动的部分）：只碰认定表里那份 ShuviX
+   * 自己写的文件 —— 用户拷来的、同名另写的都不动。每次启动调一次（在 seedBuiltinBots 开头）；失败只记日志
+   */
+  private upgradeSeededBots(): void {
+    const trusted = this.trustedBuiltinFiles()
+    let wrote = false
+    for (const seed of BUILTIN_BOT_SEEDS) {
+      const path = trusted[seed.objectId]
+      if (!seed.upgrade || !path || !existsSync(path)) continue
+      try {
+        const next = seed.upgrade(readFileSync(path, 'utf-8'))
+        if (next === null) continue
+        writeFileAtomic(path, next)
+        wrote = true
+        log.info(`升级随应用提供的 bot "${seed.name}" → ${path}`)
+      } catch (e) {
+        log.warn(`升级随应用提供的 bot "${seed.name}" 失败:`, e)
+      }
     }
     if (wrote) appEventBus.publish({ type: 'bot.changed' })
   }

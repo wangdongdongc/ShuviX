@@ -18,7 +18,7 @@ import {
 } from './dailyNotes'
 import { detectShuvixMarker } from './shuvixMdContract'
 
-const TEMPLATE = defaultDailyTemplate({ done: '完成', next: '接下来', followUp: '待跟进' })
+const TEMPLATE = defaultDailyTemplate('今天做了什么')
 
 describe('日报文件名与日期', () => {
   it('DN-1 isDayKey 只认真实存在的日子', () => {
@@ -51,11 +51,10 @@ describe('日报文件名与日期', () => {
 })
 
 describe('模板与摘录', () => {
-  it('DN-4 内置模板带 `shuvix: daily v1` 自述行与三段，每段留一个空项', () => {
+  it('DN-4 内置模板带 `shuvix: daily v1` 自述行与「今天做了什么」一段，留一个空项', () => {
     expect(detectShuvixMarker(TEMPLATE)).toEqual({ type: 'daily', version: '1' })
-    expect(TEMPLATE).toContain('## 完成\n\n- \n')
-    expect(TEMPLATE).toContain('## 接下来\n\n- [ ] \n')
-    expect(TEMPLATE).toContain('## 待跟进\n\n- \n')
+    expect(TEMPLATE).toContain('## 今天做了什么\n\n- \n')
+    expect(TEMPLATE.match(/^## /gm)).toHaveLength(1)
   })
 
   it('DN-5 只有模板时摘录为空串（日历显示「还没写内容」）', () => {

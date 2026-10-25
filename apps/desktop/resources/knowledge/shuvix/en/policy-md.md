@@ -226,7 +226,7 @@ reads `object.*` without declaring `object.type` is accepted with a warning.
 Five ship with the application (per UI language; **the rules are always taken from the
 English file**, translations only change the text people read). The three gates for agents ask as
 little as possible, so they are plain `ask` rules; the one for remote access is a `deny`, because
-nobody can be asked there; `daily-bot-access` is no gate but a relaxation — two `force-allow` rules
+nobody can be asked there; `daily-bot-access` is no gate but a relaxation — three `force-allow` rules
 for the daily bot that ships with ShuviX. Beyond that, `deny`, `force-ask` and `force-allow` are for
 policies of your own:
 
@@ -236,7 +236,7 @@ policies of your own:
 | `ask-on-command`       | ask on every command that is not confined to the sandbox (`object.sandboxed` false: sandbox off or unavailable, full access requested, `ssh`)                                                                                                                                                                                      |
 | `ask-on-session-access` | the `session` tool asks before reading or talking to a session that is not the caller's own sub-session, unless the action only concerns a turn the caller started there (`object.ownTurn`) or the session is in the permission table (`vars.aclSessionRead` / `vars.aclSessionWrite`); "allow and remember" adds it. The automatic review does not answer these — the builtin hook `auto-review` leaves `session` objects to you |
 | `network-admission`    | remote access (`subject.kind` `network`): refuses every HTTP request whose sender is not this computer (`127.0.0.0/8`, `::1`). Replace it with a user policy of the same name to let other devices in — the `network-policy` entry has recipes                                                                                     |
-| `daily-bot-access`     | relaxation only: the root agent of the daily bot (`subject.bot == 'bot:builtin:daily'`) reads, without asking, the sessions that had a message in the last 7 days (over `ask-on-session-access`; the window is the `duration('168h')`, change it in an override copy) and reads and writes `vars.trackingDir` (over `ask-on-external-path`). A timer wakes it every evening, when nobody is likely to be there to answer. Applies only to that session's root agent, never to its sub-sessions or the agents it dispatches |
+| `daily-bot-access`     | relaxation only: the root agent of the daily bot (`subject.bot == 'bot:builtin:daily'`) reads, without asking, the sessions that had a message in the last 7 days (over `ask-on-session-access`; the window is the `duration('168h')`, change it in an override copy) reads and writes `vars.trackingDir` and reads `vars.dailyDir`, the diary (both over `ask-on-external-path`). A timer wakes it every evening, when nobody is likely to be there to answer. Applies only to that session's root agent, never to its sub-sessions or the agents it dispatches |
 
 The two agent gates draw the same line: what the file tools ask about is exactly what a confined command
 cannot reach, so an agent gains nothing by switching from `read` to `cat`. Both read the same

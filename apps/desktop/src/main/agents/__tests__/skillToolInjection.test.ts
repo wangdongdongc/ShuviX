@@ -225,21 +225,21 @@ describe('STI 名单即全部：宿主不在名单之外另挂工具', () => {
   const unprefixed = (names: readonly string[]): string[] =>
     names.filter((n) => !n.startsWith('mcp:') && !n.startsWith('skill:'))
 
-  it('STI-6 bot 基座的窄名单点了作图技能 → 挂上 skill，SkillTool 只拿到 builtin:drawing；工具表恰为名单的投影', async () => {
+  it('STI-6 bot 基座的窄名单点了作图与跟踪项技能 → 挂上 skill，SkillTool 恰拿到这两本；工具表恰为名单的投影', async () => {
     expect(BOT_TOOLS, 'bot 基座的名单里点了作图技能').toContain(DRAWING)
     expect(BOT_TOOLS, 'bot 基座的名单里本来就不该有 skill 这个工具名').not.toContain('skill')
 
     const names = await offered(BOT_TOOLS)
     expect(names).toContain('skill')
     expect(mocks.skillToolCalls).toHaveLength(1)
-    expect(mocks.skillToolCalls[0].names).toEqual(['builtin:drawing'])
+    expect(mocks.skillToolCalls[0].names).toEqual(['builtin:drawing', 'builtin:tracking'])
     // 名单本身照常生效：白名单外的工具不会因此冒出来，skill 也是名单点名换来的
     expect([...names].sort()).toEqual([...unprefixed(BOT_TOOLS), 'skill'].sort())
   })
 
-  it('STI-6b 同一份 bot 名单去掉作图技能 → 没有 skill，SkillTool 一次都没构造', async () => {
+  it('STI-6b 同一份 bot 名单去掉它点名的技能 → 没有 skill，SkillTool 一次都没构造', async () => {
     // 以前 root 恒挂 SkillTool（不看档案）—— 那个例外已经删了：不点名就没有
-    const withoutDrawing = BOT_TOOLS.filter((n) => n !== DRAWING)
+    const withoutDrawing = BOT_TOOLS.filter((n) => !n.startsWith('skill:'))
     const names = await offered(withoutDrawing)
     expect(names).not.toContain('skill')
     expect(mocks.skillToolCalls).toEqual([])

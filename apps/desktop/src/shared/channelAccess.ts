@@ -115,6 +115,9 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'calendar:openReport': 'write', // 那天还没有就按模板建文件 + 笔记本会话
   'calendar:deleteReport': 'write', // 删日报文件 + 它的笔记本会话
 
+  // ─── suggestion：提议（采纳一条 = 以用户身份往会话里发话，同 agent:prompt） ───
+  'suggestion:accept': 'write',
+
   // ─── tracking：跟踪项（实验；用户自己的数据：列出是 read，开笔记本 / 开目录是 write） ───
   'tracking:list': 'read',
   'tracking:openNote': 'write',
@@ -476,6 +479,7 @@ export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
   session: 'sessions',
   message: 'sessions',
   calendar: 'sessions',
+  suggestion: 'sessions',
   tracking: 'sessions', // 跟踪项（实验）：与日报同属「用户这些天在做什么」
   runtime: 'sessions',
   bgTask: 'sessions',

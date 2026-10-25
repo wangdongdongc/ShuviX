@@ -352,7 +352,9 @@
     "interactiveBuilding": "インタラクティブ図を生成中…（{{lines}} 行）",
     "interactiveRerun": "再実行",
     "interactiveFrameTitle": "インタラクティブ図",
-    "interactiveDesktopOnly": "インタラクティブ図は ShuviX デスクトップアプリでのみ動作します"
+    "interactiveDesktopOnly": "インタラクティブ図は ShuviX デスクトップアプリでのみ動作します",
+    "originSuggestion": "採用した提案",
+    "originSuggestionHint": "AI の提案を採用して送ったメッセージです。文面は AI が書きました"
   },
   "run": {
     "interruptedBanner": "この実行は ShuviX の終了時に中断されました",
@@ -1184,7 +1186,9 @@
     "docInsertLabel": "ドキュメントに挿入",
     "docReadHint": "共有エディタで開いているドキュメントの現在の内容と、ユーザーがどこにいるかを読む",
     "docEditHint": "共有ドキュメントの一節を置き換える —— 生成中にプレビューし、実行時に一度で反映",
-    "docInsertHint": "共有ドキュメントの一節の前後、または末尾に新しいテキストを挿入する"
+    "docInsertHint": "共有ドキュメントの一節の前後、または末尾に新しいテキストを挿入する",
+    "suggestLabel": "提案",
+    "suggestHint": "ワンクリックで採用できる次の一手をいくつか残します。作業は止まりません"
   },
   "widgets": {
     "panelEmptyHint": "ウィジェットはまだありません。チャットで AI に作ってもらってください（例：「JSON フォーマッターのウィジェットを作って」）",
@@ -1513,6 +1517,10 @@
     "widget": {
       "label": "ウィジェット",
       "hint": "ShuviX ウィジェットの作成・変更・トラブル対応 —— ウィジェットパネルから何度でも開けるミニアプリ"
+    },
+    "tracking": {
+      "label": "追跡項目",
+      "hint": "追跡項目を管理します —— 最近のセッションと日記からユーザーがやり残したことを探して進捗を更新し、迷うものは提案だけにします"
     }
   },
   "configShare": {
@@ -1658,9 +1666,7 @@
   "daily": {
     "title": "{{day}} の日報",
     "template": {
-      "done": "完了",
-      "next": "次にやること",
-      "followUp": "フォローアップ"
+      "done": "今日やったこと"
     },
     "write": "この日の日報を書く",
     "open": "この日の日報を開く",
@@ -1670,5 +1676,15 @@
     "delete": "日報を削除",
     "confirmDeleteTitle": "この日報を削除しますか？",
     "confirmDeleteDescription": "{{day}} の日報ファイルが削除されます。元に戻すことはできません。"
+  },
+  "suggestion": {
+    "header": "提案",
+    "accept": "採用",
+    "accepted": "採用済み",
+    "willSend": "採用すると送信",
+    "closed": "会話が進んだため、これらの提案はもう採用できません",
+    "errorClosed": "この提案はもう採用できません",
+    "errorNotFound": "この提案が見つかりません",
+    "errorFailed": "送信できませんでした：{{error}}"
   }
 }

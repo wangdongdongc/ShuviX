@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:coding
 shuvix-builtin: true
 name: coding
 description: 编码智能体——完整的本地工具链（shell、文件、搜索）；由 `work` 会话以 `coding` 子会话的形式启用。
-shuvix-tools: bash, powershell, read, write, edit, ask, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget
+shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget
 shuvix-displayName: 编码
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

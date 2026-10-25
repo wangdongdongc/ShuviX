@@ -97,6 +97,20 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
     presentation: { icon: 'MessageCircleQuestion', iconColor: '#60a5fa' },
     buildSummary: field('question')
   },
+  // 提议：折叠行上摆第一条的标题（卡片本身不在步骤组里，见 chat-ui SuggestionCards）
+  suggest: {
+    labelKey: 'tool.suggestLabel',
+    presentation: { icon: 'Lightbulb', iconColor: '#f59e0b' },
+    buildSummary: (args) => {
+      const list = Array.isArray(args.suggestions) ? args.suggestions : []
+      const first: unknown = list[0]
+      const title =
+        typeof first === 'object' && first !== null
+          ? asStr((first as Record<string, unknown>).title)
+          : undefined
+      return title && list.length > 1 ? `${title} · +${list.length - 1}` : title
+    }
+  },
   artifact: {
     labelKey: 'tool.artifactLabel',
     presentation: { icon: 'Archive', iconColor: '#8b5cf6' },

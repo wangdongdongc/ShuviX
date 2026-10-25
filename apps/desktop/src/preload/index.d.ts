@@ -12,6 +12,10 @@ import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { AgentContinueResult } from '@shuvix/chat-protocol/chatApi'
 import type { SessionForkParams, SessionForkResult } from '@shuvix/chat-protocol/sessionFork'
 import type {
+  AcceptSuggestionResult,
+  SuggestionAcceptParams
+} from '@shuvix/chat-protocol/suggestions'
+import type {
   AgentInitParams,
   AgentInitResult,
   AgentRuntimeInfo,
@@ -486,6 +490,10 @@ declare global {
       delete: (id: string) => Promise<{ success: boolean }>
       /** 获取单个会话（含计算属性） */
       getById: (id: string) => Promise<SessionInfo | null>
+    }
+    /** 提议（suggest 工具）：采纳一条 = 那条的话作为用户回复发进会话（会话在跑就是 steer） */
+    suggestion: {
+      accept: (params: SuggestionAcceptParams) => Promise<AcceptSuggestionResult>
     }
     /** 桌面日历：按 session_day_prompts 开口日查询（扩展无此命名空间） */
     calendar: {

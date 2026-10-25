@@ -91,7 +91,7 @@ style, each with file and line. Never modify files.
 也可以带着它，agent 文件不动。要让每条会话都去掉一项，仍然是覆盖这个 agent。内置工具名取消不了。
 **收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
 `bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, powershell, read, write, edit, ask,
-ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget`），
+suggest, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget`），
 只在正文上有区别。
 
 ### 正文 —— 系统提示词

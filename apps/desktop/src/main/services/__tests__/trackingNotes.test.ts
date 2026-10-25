@@ -20,6 +20,10 @@
  *   TN-12 改过的与删掉的都进提交（删掉的不在 HEAD 树里）；子目录也收
  *   TN-13 已有 .git 不再 init；仓库坏了只记 warn、不抛，照样广播
  *   TN-14 [钉现状] 目录里一个指向目录外的符号链接 x.md 能通过 openTrackingNote（statSync 跟随链接）
+ *   TN-15 ensureTrackingDir：目录不在（父目录也不在）→ 逐级建出来；不 init、不广播
+ *   TN-16 目录已在：里面的文件原样，不记 warn
+ *   TN-17 那个路径是一份普通文件：不抛，记一条 warn，文件原样
+ *   TN-18 建好空目录、bot 什么都没写就提交：不记 warn、没有提交，照样广播一次
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as nodeFs from 'node:fs'
@@ -27,7 +31,10 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
+  readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   utimesSync,
@@ -75,6 +82,7 @@ import { appEventBus } from '../../utils/appEventBus'
 import { sessionService } from '../sessionService'
 import {
   commitTrackingChanges,
+  ensureTrackingDir,
   ensureTrackingProject,
   listTrackingItems,
   openTrackingFolder,
@@ -366,6 +374,49 @@ describe('宿主提交（commitTrackingChanges）', () => {
     await expect(commitTrackingChanges('third')).resolves.toBeUndefined()
     expect(initOp).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalled()
+    expect(trackingChangedCount()).toBe(1)
+  })
+})
+
+describe('运行前建好目录（ensureTrackingDir）', () => {
+  it('TN-15 目录不在（连父目录也不在）：逐级建出来，是空目录；不 init（没有 .git）、不广播、不记 warn', () => {
+    expect(existsSync(tmp.base)).toBe(false)
+    ensureTrackingDir()
+    expect(statSync(trackingDir()).isDirectory()).toBe(true)
+    expect(readdirSync(trackingDir())).toEqual([])
+    expect(existsSync(join(trackingDir(), '.git'))).toBe(false)
+    expect(initOp).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('TN-16 目录已在：里面的文件（含子目录）原样，不记 warn；连调两次也一样', () => {
+    put('a.md', '# Alpha\n')
+    put('notes/b.md', '# Beta\n')
+    ensureTrackingDir()
+    ensureTrackingDir()
+    expect(readdirSync(trackingDir()).sort()).toEqual(['a.md', 'notes'])
+    expect(readFileSync(join(trackingDir(), 'a.md'), 'utf8')).toBe('# Alpha\n')
+    expect(readFileSync(join(trackingDir(), 'notes/b.md'), 'utf8')).toBe('# Beta\n')
+    expect(warn).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('TN-17 那个路径是一份普通文件：不抛，记一条 warn，文件原样', () => {
+    mkdirSync(tmp.base, { recursive: true })
+    writeFileSync(trackingDir(), 'not a folder')
+    expect(() => ensureTrackingDir()).not.toThrow()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(statSync(trackingDir()).isFile()).toBe(true)
+    expect(readFileSync(trackingDir(), 'utf8')).toBe('not a folder')
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('TN-18 建好空目录、这次运行什么都没写就提交：不记 warn、没有提交（HEAD 解析不出），照样广播一次 tracking.changed', async () => {
+    ensureTrackingDir()
+    await commitTrackingChanges('Daily · 10-25 18:00 (session s1)')
+    expect(warn).not.toHaveBeenCalled()
+    await expect(git.resolveRef({ fs: nodeFs, dir: trackingDir(), ref: 'HEAD' })).rejects.toThrow()
     expect(trackingChangedCount()).toBe(1)
   })
 })

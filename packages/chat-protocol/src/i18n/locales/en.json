@@ -352,7 +352,9 @@
     "interactiveBuilding": "Building the interactive figure… ({{lines}} lines)",
     "interactiveRerun": "Run again",
     "interactiveFrameTitle": "Interactive figure",
-    "interactiveDesktopOnly": "Interactive figures run in the ShuviX desktop app"
+    "interactiveDesktopOnly": "Interactive figures run in the ShuviX desktop app",
+    "originSuggestion": "Accepted suggestion",
+    "originSuggestionHint": "Sent when you accepted one of the AI's suggestions; the AI wrote the words"
   },
   "run": {
     "interruptedBanner": "This run was interrupted when ShuviX closed",
@@ -1184,7 +1186,9 @@
     "docInsertLabel": "Insert Into Document",
     "docReadHint": "Read the document open in the shared editor as it is right now, and where the user is in it",
     "docEditHint": "Replace one passage of the shared document — previewed while written, applied in one step",
-    "docInsertHint": "Insert new text into the shared document after or before a passage, or at the end"
+    "docInsertHint": "Insert new text into the shared document after or before a passage, or at the end",
+    "suggestLabel": "Suggest",
+    "suggestHint": "Leaves you a few next steps to accept with one click, without pausing its work"
   },
   "widgets": {
     "panelEmptyHint": "No widgets yet. Ask the AI in chat to build one — e.g. \"make a JSON formatter widget\"",
@@ -1513,6 +1517,10 @@
     "widget": {
       "label": "Widgets",
       "hint": "Build, change and debug ShuviX Widgets — small apps you reopen from the Widgets panel"
+    },
+    "tracking": {
+      "label": "Tracked items",
+      "hint": "Keep the tracked items — find what the user left unfinished in recent sessions and the diary, update progress, and only suggest what is uncertain"
     }
   },
   "configShare": {
@@ -1658,9 +1666,7 @@
   "daily": {
     "title": "Daily report · {{day}}",
     "template": {
-      "done": "Done",
-      "next": "Next",
-      "followUp": "Follow up"
+      "done": "What I did today"
     },
     "write": "Write a daily report for this day",
     "open": "Open this day's daily report",
@@ -1670,5 +1676,15 @@
     "delete": "Delete daily report",
     "confirmDeleteTitle": "Delete this daily report?",
     "confirmDeleteDescription": "The daily report file for {{day}} will be deleted. This can't be undone."
+  },
+  "suggestion": {
+    "header": "Suggestions",
+    "accept": "Accept",
+    "accepted": "Accepted",
+    "willSend": "Sends",
+    "closed": "The conversation moved on; these can no longer be accepted",
+    "errorClosed": "This suggestion can no longer be accepted",
+    "errorNotFound": "This suggestion could not be found",
+    "errorFailed": "Could not send it: {{error}}"
   }
 }

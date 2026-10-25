@@ -25,6 +25,8 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { ToolCallBlock } from './ToolCallBlock'
 import { StepGroupView } from './StepGroupView'
 import { groupConsecutiveSteps } from './stepGrouping'
+import { SuggestionCards } from './SuggestionCards'
+import { isSettledSuggestBlock } from '@shuvix/chat-protocol/suggestions'
 import {
   useChatStore,
   selectStreamingContent,
@@ -96,12 +98,22 @@ export const AssistantBubble = memo(function AssistantBubble({
 
   // 过程区的块 / 终答正文：末条不含工具块 = 本轮终答，它的 text 块下沉为正文；
   // 其余（含中间轮自己的 text）按原序留在过程区
-  const { processBlocks, answerText } = useMemo(() => {
+  // 落定的提议（suggest 调用）不进过程区：它们画在卡片最底下、终答之后 —— 读完回复才轮到它们，也不能被并进
+  // 步骤组折起来（那等于没提）。还在执行 / 出错的调用照普通工具块留在过程区
+  const { processBlocks, answerText, suggestionBlocks } = useMemo(() => {
     const last = msgs[msgs.length - 1]
     const isFinal = !last.blocks.some((b) => b.type === 'tool')
     const process: AssistantBlock[] = []
+    const suggestions: Array<{
+      messageId: string
+      block: Extract<AssistantBlock, { type: 'tool' }>
+    }> = []
     for (const m of msgs) {
       for (const b of m.blocks) {
+        if (b.type === 'tool' && isSettledSuggestBlock(b)) {
+          suggestions.push({ messageId: m.id, block: b })
+          continue
+        }
         if (isFinal && m === last && b.type === 'text') continue
         // 中间文本里的 ```artifact 引用要按它所在那条回复取钉住的版本（StepGroupView 按块查回 id）
         if (b.type === 'text') noteTextBlockMessage(b, m.id)
@@ -114,7 +126,7 @@ export const AssistantBubble = memo(function AssistantBubble({
           .map((b) => b.text)
           .join('')
       : ''
-    return { processBlocks: process, answerText: text }
+    return { processBlocks: process, answerText: text, suggestionBlocks: suggestions }
   }, [msgs])
 
   // 相邻的步骤（思考 / 已完成的工具调用）合并为一行 + 次数；中间文本切段，其余块原样透传
@@ -226,6 +238,15 @@ export const AssistantBubble = memo(function AssistantBubble({
             status="generating"
           />
         )}
+
+        {/* 提议卡片：终答之后、操作行之前 */}
+        {suggestionBlocks.map(({ messageId, block }) => (
+          <SuggestionCards
+            key={`${messageId}:${block.toolCallId}`}
+            messageId={messageId}
+            block={block}
+          />
+        ))}
 
         {/* 图片（持久化 metadata；流式期间实时卡不带图） */}
         {(() => {

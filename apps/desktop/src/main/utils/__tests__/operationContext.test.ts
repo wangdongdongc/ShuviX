@@ -11,6 +11,9 @@
  *   OC-5 输入来源（`InputOrigin`，2026-10-21）：`humanOriginOf` 按操作来源逐种映射（electron → local、network → remote
  *        带 userAgent、空 UA / 空 installId 不带那个键、telegram 三个 id）；`currentInputOrigin()` 只在 `run` 之内有值
  *        （await 之后还在、嵌套时里层的赢、出来之后又是 undefined）；`inputOriginOfClient` 按调用方直接取，不看 ALS
+ *   OC-6 采纳提议（`suggest` 工具，2026-10-25）：上下文带 `suggestion` → `currentInputOrigin()` 是连接的章再加上那份
+ *        引用（local / remote 都是），引用是拷贝（改上下文里的那份不影响已交出的，交出的两次也不是同一个对象）；
+ *        不带 → 与之前一字不差（没有 suggestion 键）；`inputOriginOfClient` 从不带它
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -24,7 +27,7 @@ import {
   operationContext,
   type OperationSource
 } from '../operationContext'
-import type { HumanOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
+import type { HumanOrigin, SuggestionRef } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { ClientContext } from '../../ipc/registry'
 
 const ctx: ClientContext = {
@@ -178,5 +181,53 @@ describe('OC-5 输入来源（InputOrigin）：宿主按这次操作的连接盖
       expect(inputOriginOfClient(netCtx)).toStrictEqual(REMOTE)
     })
     expect(inputOriginOfClient({ client: ctx.client, transport: 'network' })).toStrictEqual(LOCAL)
+  })
+})
+
+describe('OC-6 采纳提议：上下文里的提议引用盖进输入来源', () => {
+  const REF: SuggestionRef = { messageId: 'a1', toolCallId: 'call_0', index: 2 }
+
+  it('OC-6 本机窗口 + suggestion → { kind: local, suggestion }', () => {
+    operationContext.run({ ...createClientContext(ctx, 's1'), suggestion: REF }, () => {
+      expect(currentInputOrigin()).toStrictEqual({ kind: 'local', suggestion: REF })
+    })
+  })
+
+  it('OC-6 网络客户端 + suggestion → remote 的四键再加 suggestion', () => {
+    operationContext.run({ ...createClientContext(netCtx, 's1'), suggestion: REF }, () => {
+      expect(currentInputOrigin()).toStrictEqual({
+        kind: 'remote',
+        clientId: 'ws:4',
+        address: '192.168.1.20',
+        userAgent: 'UA',
+        suggestion: REF
+      })
+    })
+  })
+
+  it('OC-6 引用是拷贝：交出的不是上下文里那个对象，之后改上下文里的那份也不影响已交出的', () => {
+    const ref: SuggestionRef = { ...REF }
+    operationContext.run({ ...createClientContext(ctx, 's1'), suggestion: ref }, () => {
+      const first = currentInputOrigin()
+      const got = first && 'suggestion' in first ? first.suggestion : undefined
+      expect(got).toStrictEqual(REF)
+      expect(got).not.toBe(ref)
+      ref.index = 9
+      expect(got?.index).toBe(2)
+      const second = currentInputOrigin()
+      expect(second && 'suggestion' in second ? second.suggestion : undefined).not.toBe(got)
+    })
+  })
+
+  it('OC-6 不带 suggestion → 与之前一样（没有 suggestion 键）；inputOriginOfClient 从不带它', () => {
+    operationContext.run(createClientContext(ctx, 's1'), () => {
+      const origin = currentInputOrigin()
+      expect(origin).toStrictEqual({ kind: 'local' })
+      expect(origin).not.toHaveProperty('suggestion')
+    })
+    operationContext.run({ ...createClientContext(netCtx, 's1'), suggestion: REF }, () => {
+      expect(inputOriginOfClient(netCtx)).not.toHaveProperty('suggestion')
+    })
+    expect(currentInputOrigin()).toBeUndefined()
   })
 })

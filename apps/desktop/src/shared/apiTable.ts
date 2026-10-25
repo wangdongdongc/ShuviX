@@ -153,6 +153,10 @@ export const API_TABLE = {
     openReport: invoke('calendar:openReport', 1),
     deleteReport: invoke('calendar:deleteReport', 1)
   },
+  /** 提议（suggest 工具）：采纳一条 = 那条的话作为用户回复发进会话 */
+  suggestion: {
+    accept: invoke('suggestion:accept', 1)
+  },
   /** 消息 */
   message: {
     list: invoke('message:list', 1),

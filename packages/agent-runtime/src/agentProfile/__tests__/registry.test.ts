@@ -254,6 +254,7 @@ const SHARED_BASE_TOOLS = [
   'write',
   'edit',
   'ask',
+  'suggest',
   'ls',
   'grep',
   'glob',
@@ -282,6 +283,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'write',
       'edit',
       'ask',
+      'suggest',
       'ls',
       'grep',
       'glob',
@@ -364,6 +366,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'write',
       'edit',
       'ask',
+      'suggest',
       'ls',
       'grep',
       'glob',
@@ -476,6 +479,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'write',
       'edit',
       'ask',
+      'suggest',
       'ls',
       'grep',
       'glob',
@@ -794,13 +798,14 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  * 两处一致（RPer-3）。
  */
 describe('bot 档案钉板（bot 会话的基座）', () => {
-  it('REG-4 三语工具清单恰为十二件（十一个工具 + 作图技能）、不含 bash/ssh/database/browser、不声明模型', () => {
+  it('REG-4 三语工具清单恰为十四件（十二个工具 + 作图与跟踪项两本技能）、不含 bash/ssh/database/browser、不声明模型', () => {
     // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
     // bot md（edit），但没有 shell —— 真要干活只能开子会话，而子会话按自己的档案生成提示词、
     // 拿不到人设围栏。谁想「顺手给它一个 bash」，那条结构保证当场作废（work/chat/coding
     // 三份清单相同的那条惯例在这里刻意不适用）。`write` 自 2026-10-12 起在：知识库条目由 agent
     // 用 write 直接写进库再 submit，没有它 bot 就记不了东西（正文限定它只用来记条目）。
-    // 最后一件是内置作图技能：它只往上下文里注入文本、不引入任何能力，窄清单的实质不变
+    // 最后两件是内置技能（作图、跟踪项）：它们只往上下文里注入文本、不引入任何能力，窄清单的实质不变。
+    // 跟踪项技能自 2026-10-25 起在：日报 bot 怎么整理跟踪项写在随包技能里（种下的 bot 文件只写一次，规则得能随版本更新）
     for (const language of LANGS) {
       const built = profile(BOT_PROFILE_NAME, language)
       expect(built.tools, `bot.${language}`).toEqual([
@@ -809,24 +814,26 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'grep',
         'glob',
         'ask',
+        'suggest',
         'write',
         'edit',
         'session',
         'agent',
         'knowledge',
         'artifact',
-        'skill:builtin:drawing'
+        'skill:builtin:drawing',
+        'skill:builtin:tracking'
       ])
-      expect(built.tools, `bot.${language}`).toHaveLength(12)
+      expect(built.tools, `bot.${language}`).toHaveLength(14)
       for (const forbidden of ['bash', 'database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
-      // 档案声明的 mcp:/skill: 恒生效 —— 清单里唯一的一项扩展能力就是作图技能，
+      // 档案声明的 mcp:/skill: 恒生效 —— 清单里的扩展能力只有两本内置技能，
       // 多出一个 mcp: 就等于给「动不了」的 bot 塞了一台服务器的全部工具
       expect(
         built.tools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:')),
         `bot.${language}`
-      ).toEqual(['skill:builtin:drawing'])
+      ).toEqual(['skill:builtin:drawing', 'skill:builtin:tracking'])
       // 不声明 shuvix-model：模型是**会话**的事（用户在模型选择器里选），不是档案的事
       expect(built.model, `bot.${language}`).toBeUndefined()
     }
@@ -959,6 +966,7 @@ describe('内置档案的能力面：浏览器 / ssh 是按会话勾选的内置
     'glob',
     'grep',
     'ask',
+    'suggest',
     'git',
     'session',
     'knowledge',

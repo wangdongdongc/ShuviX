@@ -352,7 +352,9 @@
     "interactiveBuilding": "正在生成交互图…（{{lines}} 行）",
     "interactiveRerun": "重新运行",
     "interactiveFrameTitle": "交互图",
-    "interactiveDesktopOnly": "交互图只在 ShuviX 桌面端运行"
+    "interactiveDesktopOnly": "交互图只在 ShuviX 桌面端运行",
+    "originSuggestion": "采纳的提议",
+    "originSuggestionHint": "这句话是你采纳 AI 的一条提议时发出的，文字由 AI 写"
   },
   "run": {
     "interruptedBanner": "此次运行在 ShuviX 关闭时被中断",
@@ -1184,7 +1186,9 @@
     "docInsertLabel": "插入文档",
     "docReadHint": "读取共享编辑器里此刻的文档，以及用户正在文档的哪里",
     "docEditHint": "替换共享文档里的一段原文 —— 生成时就有预览，执行时一次落下",
-    "docInsertHint": "在共享文档的某段之前、之后或文末插入新内容"
+    "docInsertHint": "在共享文档的某段之前、之后或文末插入新内容",
+    "suggestLabel": "提议",
+    "suggestHint": "AI 给你留几条可以一键采纳的下一步，不打断它手上的工作"
   },
   "widgets": {
     "panelEmptyHint": "还没有小组件。在对话里告诉 AI，比如\"做一个 JSON 格式化小组件\"",
@@ -1513,6 +1517,10 @@
     "widget": {
       "label": "小组件",
       "hint": "构建、修改与排查 ShuviX 小组件 —— 从小组件面板反复打开的小应用"
+    },
+    "tracking": {
+      "label": "跟踪项",
+      "hint": "维护跟踪项 —— 从最近的会话和日记里找用户还没做完的事，更新进展，拿不准的只提议"
     }
   },
   "configShare": {
@@ -1658,9 +1666,7 @@
   "daily": {
     "title": "{{day}} 日报",
     "template": {
-      "done": "完成",
-      "next": "接下来",
-      "followUp": "待跟进"
+      "done": "今天做了什么"
     },
     "write": "写这一天的日报",
     "open": "打开这一天的日报",
@@ -1670,5 +1676,15 @@
     "delete": "删除日报",
     "confirmDeleteTitle": "删除这份日报？",
     "confirmDeleteDescription": "{{day}} 的日报文件会被删除，且无法恢复。"
+  },
+  "suggestion": {
+    "header": "提议",
+    "accept": "采纳",
+    "accepted": "已采纳",
+    "willSend": "采纳后发送",
+    "closed": "对话已经继续，这些提议不能再采纳",
+    "errorClosed": "这条提议已经不能采纳了",
+    "errorNotFound": "找不到这条提议",
+    "errorFailed": "没能发送：{{error}}"
   }
 }

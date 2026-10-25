@@ -7,6 +7,7 @@ import { segmentContent, resolveTokensForCopy } from '@shuvix/chat-protocol/util
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
 import { OriginBadge, originTone } from './OriginBadge'
+import { SuggestionOriginTag } from './SuggestionCards'
 
 interface UserBubbleProps {
   msg: UserTextMessage
@@ -128,6 +129,8 @@ export const UserBubble = memo(function UserBubble({
         )}
         {/* 来源标识（本机窗口打的不标） */}
         {origin && <OriginBadge origin={origin} />}
+        {/* 采纳提议发出的（文字由 agent 写） */}
+        <SuggestionOriginTag origin={origin} />
         {/* 复制 */}
         {msg.content && (
           <button
