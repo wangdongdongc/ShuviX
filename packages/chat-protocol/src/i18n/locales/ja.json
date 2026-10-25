@@ -81,7 +81,12 @@
     "interrupted": "ShuviX の終了時に中断されました。開くと続行できます",
     "trackingGroup": "追跡項目",
     "trackingEmpty": "追跡項目はまだありません。デイリーボットがセッションから継続して追うべきことをまとめます。",
-    "trackingOpenFolder": "追跡項目フォルダを開く"
+    "trackingOpenFolder": "追跡項目フォルダを開く",
+    "trackingRevealFile": "フォルダで表示",
+    "trackingCopyPath": "パスをコピー",
+    "trackingDelete": "追跡項目を削除",
+    "trackingConfirmDeleteTitle": "この追跡項目を削除しますか？",
+    "trackingConfirmDeleteDescription": "「{{title}}」のファイルが削除されます。削除前の版は追跡項目フォルダの git 履歴に残ります。"
   },
   "transcript": {
     "untitled": "無題のセッション",

@@ -196,7 +196,16 @@ export function Sidebar({ mode = 'full', onOpenSession }: SidebarProps = {}): Re
         useChatStore.getState().setSessions(await getChatApi().session.list())
         setActiveSessionId(session.id)
       },
-      openFolder: () => window.api.tracking.openFolder()
+      openFolder: () => window.api.tracking.openFolder(),
+      revealFile: (path) => void window.api.app.revealPath(path),
+      remove: async (fileName) => {
+        try {
+          const { sessionId } = await window.api.tracking.deleteItem({ fileName })
+          if (sessionId) useChatStore.getState().removeSession(sessionId)
+        } catch {
+          // 删不掉（权限之类）—— 行还在，用户看得见没删成
+        }
+      }
     }),
     [setActiveSessionId]
   )

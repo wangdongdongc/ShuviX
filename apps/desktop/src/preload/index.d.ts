@@ -606,6 +606,10 @@ declare global {
       list: () => Promise<TrackingItem[]>
       openNote: (params: { fileName: string; title?: string }) => Promise<SessionInfo>
       openFolder: () => Promise<void>
+      /** 删掉一项（文件 + 它的笔记本会话）；文件本来就不在时 `deleted: false` */
+      deleteItem: (params: {
+        fileName: string
+      }) => Promise<{ deleted: boolean; sessionId: string | null }>
     }
     /** 触发源（实验）：设置 → 触发源页 */
     trigger: {

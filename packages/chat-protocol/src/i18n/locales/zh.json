@@ -81,7 +81,12 @@
     "interrupted": "ShuviX 关闭时被中断——打开即可继续",
     "trackingGroup": "跟踪项",
     "trackingEmpty": "还没有跟踪项。日报 bot 会从你的会话里整理出需要持续跟进的事。",
-    "trackingOpenFolder": "打开跟踪项文件夹"
+    "trackingOpenFolder": "打开跟踪项文件夹",
+    "trackingRevealFile": "在文件夹中显示",
+    "trackingCopyPath": "复制路径",
+    "trackingDelete": "删除跟踪项",
+    "trackingConfirmDeleteTitle": "删除这个跟踪项？",
+    "trackingConfirmDeleteDescription": "「{{title}}」的文件会被删除。删除前的那一版仍留在跟踪项文件夹的 git 历史里。"
   },
   "transcript": {
     "untitled": "未命名会话",

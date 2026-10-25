@@ -81,7 +81,12 @@
     "interrupted": "Interrupted when ShuviX closed — open it to continue",
     "trackingGroup": "Tracked items",
     "trackingEmpty": "No tracked items yet. The daily bot collects the things to follow up on from your sessions.",
-    "trackingOpenFolder": "Open tracked items folder"
+    "trackingOpenFolder": "Open tracked items folder",
+    "trackingRevealFile": "Show in folder",
+    "trackingCopyPath": "Copy path",
+    "trackingDelete": "Delete tracked item",
+    "trackingConfirmDeleteTitle": "Delete this tracked item?",
+    "trackingConfirmDeleteDescription": "The file for \"{{title}}\" will be deleted. The version before the deletion stays in the tracked items folder's git history."
   },
   "transcript": {
     "untitled": "Untitled Session",

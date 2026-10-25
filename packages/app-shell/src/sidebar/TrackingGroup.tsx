@@ -4,7 +4,8 @@
  *
  * 点一行 = 打开或复用那份 md 的**笔记本会话**（隐藏项目 `__tracking__`），与 Bots、Hooks、知识库条目同一条路：
  * live-preview、自动保存、外部改动合并 —— bot 正改着的时候开着也不丢字。行的文字是正文第一个一级标题，按修改时间
- * 倒序。没有新建入口：让 bot 记，或在目录里自己放一份 md。
+ * 倒序。没有新建入口：让 bot 记，或在目录里自己放一份 md。行菜单（右键整行 / 悬停的 ⋮，手机上长按）与日历里的日报行
+ * 同形：在文件夹中显示 / 复制路径 / 删除跟踪项 —— 删的是文件本身（连同它的笔记本会话），所以总要先确认。
  *
  * prop 驱动、不触宿主 API（同 BotGroup）。扫描是懒的：**首次展开才扫**，之后每次展开 + 窗口聚焦 +
  * `tracking.changed`（笔记本写入、bot 一次触发运行结束）重扫，stale-guard 防乱序回包。
@@ -13,12 +14,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FileText } from 'lucide-react'
-import { useAppEvent, useChatStore } from '@shuvix/chat-ui'
+import { copyToClipboard, useAppEvent, useChatStore } from '@shuvix/chat-ui'
 import { TRACKING_PROJECT_ID, type TrackingItem } from '@shuvix/chat-protocol/trackingNotes'
 import type { ContextMenuItem } from '@shuvix/chat-protocol/types/contextMenu'
 import { SessionGroup } from './SessionGroup'
+import { RowMenuButton } from './RowMenuButton'
 import { useFocusDim } from './useFocusDim'
 import { useContextMenu } from '../contextmenu/ContextMenuProvider'
+import { ConfirmDialog } from '../common/ConfirmDialog'
 
 /** 宿主注入的跟踪项能力（桌面：window.api.tracking 的窄投影） */
 export interface TrackingGroupAdapter {
@@ -28,6 +31,10 @@ export interface TrackingGroupAdapter {
   open: (fileName: string, title?: string) => void | Promise<void>
   /** 打开跟踪项目录（OS 文件管理器） */
   openFolder: () => void | Promise<unknown>
+  /** 在系统文件管理器里定位那份文件（行菜单里的一项）；宿主不注入则整项不出现 */
+  revealFile?: (path: string) => void
+  /** 删掉那份跟踪项（行菜单里的一项，确认框由这里弹，确认后才调）；宿主不注入则整项不出现 */
+  remove?: (fileName: string) => void | Promise<void>
 }
 
 export interface TrackingGroupProps {
@@ -48,6 +55,8 @@ export function TrackingGroup({ adapter }: TrackingGroupProps): React.JSX.Elemen
 
   const [collapsed, setCollapsed] = useState(true)
   const [items, setItems] = useState<TrackingItem[] | null>(null)
+  /** 正在确认删除的那一项 */
+  const [confirmingDelete, setConfirmingDelete] = useState<TrackingItem | null>(null)
   const scannedOnce = useRef(false)
   const scanSeq = useRef(0)
 
@@ -92,6 +101,22 @@ export function TrackingGroup({ adapter }: TrackingGroupProps): React.JSX.Elemen
     })
   }
 
+  const openRowMenu = (item: TrackingItem, e: React.MouseEvent): void => {
+    const menu: ContextMenuItem[] = [
+      ...(adapter.revealFile ? [{ id: 'reveal', label: t('sidebar.trackingRevealFile') }] : []),
+      { id: 'copy-path', label: t('sidebar.trackingCopyPath') }
+    ]
+    if (adapter.remove) {
+      menu.push({ type: 'separator' })
+      menu.push({ id: 'delete', label: t('sidebar.trackingDelete') })
+    }
+    void showContextMenu(e, menu, (action) => {
+      if (action === 'reveal') adapter.revealFile?.(item.path)
+      if (action === 'copy-path') copyToClipboard(item.path)
+      if (action === 'delete') setConfirmingDelete(item)
+    })
+  }
+
   const rowClass = (active: boolean): string =>
     `group relative sb-row cursor-pointer transition-opacity duration-200 ${
       active
@@ -121,16 +146,38 @@ export function TrackingGroup({ adapter }: TrackingGroupProps): React.JSX.Elemen
               key={item.fileName}
               data-tracking-row={item.fileName}
               onClick={() => void adapter.open(item.fileName, item.title)}
+              onContextMenu={(e) => openRowMenu(item, e)}
               title={item.fileName}
               className={rowClass(activeFileName === item.fileName)}
             >
               <span className="sb-icon">
                 <FileText size={12} className="text-text-tertiary" />
               </span>
-              <span className="flex-1 min-w-0 truncate">{item.title}</span>
+              <span className="flex-1 min-w-0 truncate group-hover:pr-5">{item.title}</span>
+              <RowMenuButton
+                className="absolute right-1.5 opacity-0 group-hover:opacity-100"
+                onOpen={(e) => openRowMenu(item, e)}
+              />
             </div>
           ))
         ))}
+      {confirmingDelete && adapter.remove && (
+        <ConfirmDialog
+          title={t('sidebar.trackingConfirmDeleteTitle')}
+          description={t('sidebar.trackingConfirmDeleteDescription', {
+            title: confirmingDelete.title
+          })}
+          confirmText={t('common.delete')}
+          cancelText={t('common.cancel')}
+          onConfirm={() => {
+            const target = confirmingDelete
+            setConfirmingDelete(null)
+            // 删不掉（权限之类）：行还在，用户看得见没删成 —— 失败不该成为一条没人接的 rejection
+            void Promise.resolve(adapter.remove?.(target.fileName)).catch(() => undefined)
+          }}
+          onCancel={() => setConfirmingDelete(null)}
+        />
+      )}
     </SessionGroup>
   )
 }

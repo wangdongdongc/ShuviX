@@ -122,6 +122,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'tracking:list': 'read',
   'tracking:openNote': 'write',
   'tracking:openFolder': 'write',
+  'tracking:deleteItem': 'write', // 删跟踪项文件 + 它的笔记本会话
 
   // ─── message：消息 ───
   'message:list': 'read',

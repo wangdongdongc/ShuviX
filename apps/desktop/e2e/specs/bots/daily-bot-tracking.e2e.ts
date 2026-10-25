@@ -11,17 +11,21 @@
  *         属性卡是「Tracked item」，对象 id 是卡上不渲染的已知键
  *   DT-E7 在笔记本里改一级标题 → 自动保存 → 行字跟着变（`tracking.changed`，不用手动刷新）
  *   DT-E8 `tracking.openNote` 只认目录里真实存在的可见 .md：越界 / 非 md / 隐藏 / 不存在 / 子目录都拒，不建会话
+ *   DT-E9 行菜单删掉一份正开着、改过且从没提交过的跟踪项：菜单 = [reveal, copy-path, delete]，确认框写着它的标题；
+ *         确认后文件没了、跨过自动保存窗口也不被写回，它的笔记本会话删掉、主区离开它，行消失；
+ *         目录成了 git 仓库，历史 = [Deleted …, Before deleting …]，父提交里是删前最后那一版
  *
  * 一个 HOME、两次启动（DT-E3 起换成第二个实例）。`launchApp({ builtinBots: true })`：不放「已经写过」的记录，让产品自己写。
  * 「打开文件夹」不点（它开的是 OS 文件管理器）。
  */
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
-import { until } from '../../harness/cdp'
+import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   appEventRecorder,
@@ -31,6 +35,7 @@ import {
   waitRendererReady
 } from '../../harness/seed'
 import {
+  confirmPane,
   fmCardRowKeys,
   notebookEditorPane,
   registryNotePane,
@@ -297,5 +302,73 @@ describe('侧栏「跟踪项」分组', () => {
     }
     expect(outcomes['missing.md']).toMatch(/^rejected: .*Tracking file not found/)
     expect((await listSessionIds(app.main)).length).toBe(before)
+  })
+
+  it('DT-E9 行菜单删掉一份开着、改过没提交过的跟踪项：文件没了且不被写回，会话删掉、主区离开它，行消失；删掉的那一版在 git 历史里', async () => {
+    const dir = trackingDir()
+    const file = join(dir, 'c.md')
+    writeFileSync(file, '---\nshuvix: track v1\n---\n\n# Gamma to delete')
+    // bot 从没跑过：目录还不是仓库，下面的改动因此从没被提交过
+    expect(existsSync(join(dir, '.git'))).toBe(false)
+
+    const tracking = trackingPane(app.main)
+    await tracking.expand()
+    await tracking.refresh()
+    await until(
+      async () => (await tracking.rows()).some((r) => r.fileName === 'c.md'),
+      'c.md row listed'
+    )
+    await tracking.selectRow('c.md')
+    const note = registryNotePane(app.main)
+    await note.waitBody('Gamma to delete')
+    const session = (await registryNoteSessions(app.main, TRACKING_PROJECT)).find(
+      (n) => n.notebookPath === 'c.md'
+    )
+    expect(session).toBeDefined()
+
+    // 在笔记本里改一笔，等自动保存落盘
+    const before = readFileSync(file, 'utf8')
+    await notebookEditorPane(app.main).typeAtEnd(' edited')
+    expect(await waitFileWritten(file, before)).toMatch(/^# Gamma to delete edited$/m)
+
+    expect(await tracking.rowMenuIds('c.md')).toEqual(['reveal', 'copy-path', 'delete'])
+    await tracking.pickRowMenu('c.md', 'delete')
+    const confirm = confirmPane(app.main)
+    await confirm.waitOpen()
+    // 行字跟着标题走（tracking.changed），确认框里写的可能是改前或改后的标题
+    expect((await confirm.snapshot()).description).toContain('Gamma to delete')
+    // 弹框还没确认：什么都没删
+    expect(existsSync(file)).toBe(true)
+    await confirm.confirm()
+    await confirm.waitClosed()
+
+    await until(() => !existsSync(file), 'c.md deleted')
+    await until(
+      async () => !(await tracking.rows()).some((r) => r.fileName === 'c.md'),
+      'c.md row gone'
+    )
+    await until(async () => (await tracking.activeRow()) === null, 'no active tracking row')
+    expect(await note.bodyText()).not.toContain('Gamma to delete')
+    const remaining = await registryNoteSessions(app.main, TRACKING_PROJECT)
+    expect(remaining.map((n) => n.id)).not.toContain(session!.id)
+    expect(remaining.map((n) => n.notebookPath)).not.toContain('c.md')
+    // 跨过自动保存的防抖窗口（200ms）与卸载 flush：笔记本没把文件写回来
+    await sleep(700)
+    expect(existsSync(file)).toBe(false)
+    // 别的跟踪项还在
+    expect((await tracking.rows()).map((r) => r.fileName)).toEqual(
+      expect.arrayContaining(['a.md', 'b.md'])
+    )
+
+    const gitOut = (...args: string[]): string =>
+      execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' })
+    expect(gitOut('log', '--format=%s').trim().split('\n')).toEqual([
+      'Deleted c.md (by the user)',
+      'Before deleting c.md'
+    ])
+    expect(gitOut('show', 'HEAD~1:c.md')).toMatch(/^# Gamma to delete edited$/m)
+    const headFiles = gitOut('ls-tree', '--name-only', 'HEAD').trim().split('\n')
+    expect(headFiles).not.toContain('c.md')
+    expect(headFiles).toEqual(expect.arrayContaining(['a.md', 'b.md']))
   })
 })

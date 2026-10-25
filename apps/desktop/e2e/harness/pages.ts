@@ -12840,6 +12840,13 @@ export interface TrackingPane {
   menuIds(): Promise<string[] | null>
   /** 组头菜单「刷新」—— 磁盘外改动不广播 tracking.changed，需手动重扫 */
   refresh(): Promise<void>
+  /** 一行的菜单动作 id（开一次那一行的 ⋮、不选任何项，分隔符滤掉）；行或 ⋮ 不在返回 null */
+  rowMenuIds(fileName: string): Promise<string[] | null>
+  /**
+   * 开一行的 ⋮ 并选中一项（随后核对该项真的在菜单里）。只收 delete：reveal 会在跑 e2e 的真实桌面上弹出
+   * 文件管理器，copy-path 会改写真剪贴板。delete 只弹确认框，确认 / 取消走 confirmPane
+   */
+  pickRowMenu(fileName: string, actionId: 'delete'): Promise<void>
 }
 
 export function trackingPane(main: CdpClient): TrackingPane {
@@ -12898,6 +12905,15 @@ export function trackingPane(main: CdpClient): TrackingPane {
     refresh: async () => {
       await pickFromMenu(main, HEADER, 'refresh', 'tracking group header')
       await sleep(200)
+    },
+    rowMenuIds: async (fileName) => {
+      await until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
+      const items = await openMenu(main, ROW(fileName), 'menu-button')
+      return items ? items.filter((it) => it.id).map((it) => it.id as string) : null
+    },
+    pickRowMenu: async (fileName, actionId) => {
+      await until(() => main.eval<boolean>(`${ROW(fileName)} !== null`), `tracking row ${fileName}`)
+      await pickFromMenu(main, ROW(fileName), actionId, `tracking row ${fileName}`)
     }
   }
 }

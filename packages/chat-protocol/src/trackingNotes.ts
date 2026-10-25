@@ -25,6 +25,8 @@ export interface TrackingItem {
   title: string
   /** 文件最后修改时刻（毫秒）—— 列表按它倒序 */
   updatedAt: number
+  /** 文件的绝对路径（行菜单的「在文件夹中显示」「复制路径」） */
+  path: string
 }
 
 /** 是不是一份跟踪项文件：目录里的 `.md`，点开头的隐藏文件不算 */

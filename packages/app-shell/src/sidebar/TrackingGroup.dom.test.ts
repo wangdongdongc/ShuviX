@@ -14,10 +14,19 @@
  *   TG-9 组头菜单 = [open-folder, 分隔线, refresh]；open-folder → openFolder，refresh → 重扫
  *   TG-10 活动会话是 `__tracking__` 里 notebookPath = 某一行的笔记本 → 那一行选中、组高亮，专注模式下别的行变淡、
  *         整组不淡；活动会话在别处 → 整组淡、没有选中行
+ *   TG-11 行菜单（revealFile / remove 都注入）：右键整行与点 ⋮ 各弹一次，都是 [reveal, copy-path, 分隔线, delete]；
+ *         都不触发那一行的 open
+ *   TG-12 都不注入 → 只有 [copy-path]（没有分隔线）；只注入 remove → [copy-path, 分隔线, delete]
+ *   TG-13 reveal → revealFile(item.path)；copy-path → copyToClipboard(item.path)（绝对路径，不是文件名）
+ *   TG-14 delete → 弹 ConfirmDialog（标题 + 描述里写着那一项的标题）；此刻还没调 remove
+ *   TG-15 取消 → 弹窗关、remove 从未调用；确认 → remove('b.md') 恰一次、弹窗关
+ *   TG-16 remove 失败（reject）→ 不抛，那一行还在（组件自己不删行，等宿主的 tracking.changed）；
+ *         组件自己接住那个 rejection，不留未处理的 rejection
  *
  * 右键菜单走 ContextMenuProvider 的 `render` 注入：记录菜单项、按预设回一个 id（模拟用户点了它）。
- * `@shuvix/chat-ui` 替掉 useAppEvent（记下回调，好手动派发）/ useChatStore / useChatHost；chatStore 与专注模式的
- * 状态放在可变的 `store` 里（TG-10 换活动会话）。文件是 `.ts`，一律 createElement。
+ * `@shuvix/chat-ui` 替掉 useAppEvent（记下回调，好手动派发）/ useChatStore / useChatHost / copyToClipboard（记下
+ * 参数）/ useDialogClose（立即关闭，不等退场动画）；chatStore 与专注模式的状态放在可变的 `store` 里（TG-10 换活动会话）。
+ * 文件是 `.ts`，一律 createElement。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, type ComponentProps } from 'react'
@@ -39,6 +48,7 @@ const store = vi.hoisted(() => ({
   focusMode: false
 }))
 const appEvents = vi.hoisted(() => new Map<string, Set<() => void>>())
+const clipboard = vi.hoisted(() => vi.fn<(text: string) => void>())
 
 vi.mock('@shuvix/chat-ui', async () => {
   const { useEffect, useRef } = await import('react')
@@ -57,7 +67,10 @@ vi.mock('@shuvix/chat-ui', async () => {
       }, [type])
     },
     useChatStore: (selector: (s: typeof store) => unknown) => selector(store),
-    useChatHost: () => ({ appearance: { focusMode: store.focusMode } })
+    useChatHost: () => ({ appearance: { focusMode: store.focusMode } }),
+    copyToClipboard: (text: string) => clipboard(text),
+    // ConfirmDialog 用它：立即关闭，不等退场动画
+    useDialogClose: (onClose: () => void) => ({ closing: false, handleClose: onClose })
   }
 })
 
@@ -84,14 +97,19 @@ type Adapter = TrackingGroupAdapter & {
 const item = (fileName: string, title: string, updatedAt = 1): TrackingItem => ({
   fileName,
   title,
-  updatedAt
+  updatedAt,
+  path: `/home/u/.shuvix/tracking/${fileName}`
 })
 
-function makeAdapter(list: TrackingGroupAdapter['list']): Adapter {
+function makeAdapter(
+  list: TrackingGroupAdapter['list'],
+  extra: Pick<TrackingGroupAdapter, 'revealFile' | 'remove'> = {}
+): Adapter {
   return {
     list: vi.fn(list),
     open: vi.fn<TrackingGroupAdapter['open']>(),
-    openFolder: vi.fn<TrackingGroupAdapter['openFolder']>()
+    openFolder: vi.fn<TrackingGroupAdapter['openFolder']>(),
+    ...extra
   }
 }
 
@@ -175,6 +193,44 @@ async function emit(type: string): Promise<void> {
   })
   await flush()
 }
+/** 打开一行的菜单：右键整行，或点它悬停浮现的 ⋮；回这一次弹出的菜单项 */
+async function openRowMenu(
+  fileName: string,
+  via: 'contextmenu' | 'menu-button'
+): Promise<ContextMenuItem[]> {
+  const before = menus.length
+  await act(async () => {
+    const target = row(fileName)
+    if (via === 'contextmenu') {
+      target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    } else {
+      const button = target.querySelector<HTMLButtonElement>(
+        `button[aria-label="${en.sidebar.moreActions}"]`
+      )
+      if (!button) throw new Error(`row ${fileName} has no ⋮ button`)
+      button.click()
+    }
+  })
+  await flush()
+  expect(menus.length).toBe(before + 1)
+  return menus[menus.length - 1]
+}
+/** 菜单项的口径：自定义项取 id，分隔线记作 '---' */
+const shape = (items: ContextMenuItem[]): string[] =>
+  items.map((it) => ('type' in it && it.type === 'separator' ? '---' : (it as { id: string }).id))
+/** 确认弹窗（ConfirmDialog 的面板）；不在为 null */
+const dialog = (): HTMLElement | null => container.querySelector<HTMLElement>('.dialog-panel')
+/** 弹窗页脚的按钮：[0] 取消，[1] 确认 */
+const dialogButton = (index: 0 | 1): HTMLButtonElement => {
+  const buttons = dialog()?.querySelectorAll<HTMLButtonElement>('button') ?? []
+  if (buttons.length !== 2) throw new Error(`confirm dialog has ${buttons.length} buttons`)
+  return buttons[index]
+}
+async function click(el: HTMLElement): Promise<void> {
+  await act(async () => el.click())
+  await flush()
+}
+
 async function openGroupMenu(): Promise<ContextMenuItem[]> {
   const before = menus.length
   await act(async () => {
@@ -196,6 +252,7 @@ beforeAll(async () => {
 beforeEach(() => {
   menus = []
   pick = null
+  clipboard.mockReset()
   store.sessions = []
   store.activeSessionId = null
   store.focusMode = false
@@ -434,5 +491,145 @@ describe('TrackingGroup —— 当前笔记高亮与专注模式', () => {
     }
     expect(groupWrapper().className).not.toContain('bg-bg-primary/30')
     expect(groupOuter().className).toContain('opacity-30')
+  })
+})
+
+describe('TrackingGroup —— 行菜单与删除', () => {
+  const twoItems = async (): Promise<TrackingItem[]> => [
+    item('a.md', 'Alpha'),
+    item('b.md', 'Beta')
+  ]
+
+  it('TG-11 两项都注入：右键整行与点 ⋮ 弹的都是 [reveal, copy-path, 分隔线, delete]；都不打开那一行', async () => {
+    const adapter = makeAdapter(twoItems, { revealFile: vi.fn(), remove: vi.fn() })
+    await mount(adapter)
+    await toggle()
+
+    const byRightClick = await openRowMenu('a.md', 'contextmenu')
+    expect(shape(byRightClick)).toEqual(['reveal', 'copy-path', '---', 'delete'])
+    expect(byRightClick[0]).toMatchObject({ label: en.sidebar.trackingRevealFile })
+    expect(byRightClick[1]).toMatchObject({ label: en.sidebar.trackingCopyPath })
+    expect(byRightClick[3]).toMatchObject({ label: en.sidebar.trackingDelete })
+
+    const byButton = await openRowMenu('a.md', 'menu-button')
+    expect(byButton).toEqual(byRightClick)
+
+    expect(adapter.open).not.toHaveBeenCalled()
+    // 取消（pick = null）什么都不做
+    expect(adapter.revealFile).not.toHaveBeenCalled()
+    expect(adapter.remove).not.toHaveBeenCalled()
+    expect(clipboard).not.toHaveBeenCalled()
+    expect(dialog()).toBeNull()
+  })
+
+  it('TG-12 都不注入 → 只有 [copy-path]，没有分隔线；只注入 remove → [copy-path, 分隔线, delete]', async () => {
+    const bare = makeAdapter(twoItems)
+    await mount(bare)
+    await toggle()
+    expect(shape(await openRowMenu('a.md', 'contextmenu'))).toEqual(['copy-path'])
+    expect(shape(await openRowMenu('b.md', 'menu-button'))).toEqual(['copy-path'])
+    act(() => root.unmount())
+
+    root = createRoot(container)
+    const removeOnly = makeAdapter(twoItems, { remove: vi.fn() })
+    await mount(removeOnly)
+    await toggle()
+    expect(shape(await openRowMenu('a.md', 'contextmenu'))).toEqual(['copy-path', '---', 'delete'])
+    expect(shape(await openRowMenu('a.md', 'menu-button'))).toEqual(['copy-path', '---', 'delete'])
+  })
+
+  it('TG-13 reveal → revealFile(那一项的绝对路径)；copy-path → copyToClipboard(那一项的绝对路径)', async () => {
+    const revealFile = vi.fn()
+    const adapter = makeAdapter(twoItems, { revealFile, remove: vi.fn() })
+    await mount(adapter)
+    await toggle()
+
+    pick = 'reveal'
+    await openRowMenu('b.md', 'contextmenu')
+    expect(revealFile.mock.calls).toEqual([['/home/u/.shuvix/tracking/b.md']])
+    expect(clipboard).not.toHaveBeenCalled()
+
+    pick = 'copy-path'
+    await openRowMenu('a.md', 'menu-button')
+    expect(clipboard.mock.calls).toEqual([['/home/u/.shuvix/tracking/a.md']])
+    expect(revealFile).toHaveBeenCalledTimes(1)
+    expect(adapter.open).not.toHaveBeenCalled()
+    expect(adapter.remove).not.toHaveBeenCalled()
+    expect(dialog()).toBeNull()
+  })
+
+  it('TG-14 delete → 弹确认框，标题与描述（写着那一项的标题）；此刻还没调 remove', async () => {
+    const remove = vi.fn<NonNullable<TrackingGroupAdapter['remove']>>()
+    const adapter = makeAdapter(twoItems, { remove })
+    await mount(adapter)
+    await toggle()
+
+    pick = 'delete'
+    await openRowMenu('b.md', 'contextmenu')
+    const panel = dialog()
+    expect(panel).not.toBeNull()
+    expect(panel!.querySelector('h3')?.textContent).toBe(en.sidebar.trackingConfirmDeleteTitle)
+    expect(panel!.textContent).toContain('"Beta"')
+    expect(panel!.textContent).not.toContain('Alpha')
+    expect(dialogButton(0).textContent).toBe(en.common.cancel)
+    expect(dialogButton(1).textContent).toBe(en.common.delete)
+    expect(remove).not.toHaveBeenCalled()
+    expect(adapter.open).not.toHaveBeenCalled()
+  })
+
+  it('TG-15 取消 → 弹窗关、remove 从未调用；再来一次点确认 → remove("b.md") 恰一次、弹窗关', async () => {
+    const remove = vi.fn<NonNullable<TrackingGroupAdapter['remove']>>(async () => {})
+    const adapter = makeAdapter(twoItems, { remove })
+    await mount(adapter)
+    await toggle()
+
+    pick = 'delete'
+    await openRowMenu('b.md', 'menu-button')
+    expect(dialog()).not.toBeNull()
+    await click(dialogButton(0))
+    expect(dialog()).toBeNull()
+    expect(remove).not.toHaveBeenCalled()
+
+    await openRowMenu('b.md', 'contextmenu')
+    expect(dialog()).not.toBeNull()
+    await click(dialogButton(1))
+    expect(dialog()).toBeNull()
+    expect(remove.mock.calls).toEqual([['b.md']])
+    await flush()
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(adapter.open).not.toHaveBeenCalled()
+  })
+
+  it('TG-16 remove 失败（reject）→ 不抛；那一行还在（组件不自己删行），弹窗已关；rejection 由组件接住', async () => {
+    // 故意不用 vi.fn：它会给返回的 promise 挂 then 记 settledResults，等于替组件把 rejection 接住了
+    const calls: string[] = []
+    const remove = (fileName: string): Promise<void> => {
+      calls.push(fileName)
+      return Promise.reject(new Error('permission denied'))
+    }
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const adapter = makeAdapter(twoItems, { remove })
+      await mount(adapter)
+      await toggle()
+
+      pick = 'delete'
+      await openRowMenu('b.md', 'contextmenu')
+      await expect(click(dialogButton(1))).resolves.toBeUndefined()
+      await flush()
+      // unhandledRejection 在宏任务边界上才报
+      await new Promise((r) => setTimeout(r, 20))
+      expect(calls).toEqual(['b.md'])
+      expect(dialog()).toBeNull()
+      expect(rows().map((r) => r.getAttribute('data-tracking-row'))).toEqual(['a.md', 'b.md'])
+      // 组件自己接住 rejection：不依赖宿主适配器有没有 try/catch
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })

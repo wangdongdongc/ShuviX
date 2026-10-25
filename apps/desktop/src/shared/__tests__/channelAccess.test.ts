@@ -21,7 +21,7 @@
  *   CS-5 settingKeyFactsOf：精确 key 优先、其次最长前缀、都不中 → system + admin；非字符串 / 空串同样
  *   CS-6 channelCallFactsOf：settings:set 按 key；勾了「记住」的回答 → security + admin；别的照通道
  *   CS-7 触发源与跟踪项（实验，2026-10-24）：trigger:status 是 agents 的 read；tracking:list 是 sessions 的 read，
- *        开笔记本 / 开目录是 write；settings:set 写 triggers.timer.enabled → agents + admin；
+ *        开笔记本 / 开目录 / 删一项是 write；settings:set 写 triggers.timer.enabled → agents + admin；
  *        触发日志：trigger:logs 是 agents 的 read，trigger:clearLogs 是 agents 的 write
  */
 import { describe, expect, it } from 'vitest'
@@ -399,7 +399,8 @@ describe('CS-7 触发源与跟踪项（实验）', () => {
     ['trigger:clearLogs', 'write', 'agents'],
     ['tracking:list', 'read', 'sessions'],
     ['tracking:openNote', 'write', 'sessions'],
-    ['tracking:openFolder', 'write', 'sessions']
+    ['tracking:openFolder', 'write', 'sessions'],
+    ['tracking:deleteItem', 'write', 'sessions']
   ])('CS-7 %s → %s / %s', (channel, access, scope) => {
     expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
     expect(channelAccessOf(channel)).toBe(access)
