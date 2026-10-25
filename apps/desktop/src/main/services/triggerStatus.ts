@@ -1,24 +1,12 @@
 /**
- * 触发源一览（设置 → 触发源页，实验）：今天只有内置 timer 一个实例。订阅者是 bot md 里绑定了它的那些
- * `shuvix-bot-on`（按埋点 id 认 —— timer 类触发源的事件都是 `timer.fired`）。
+ * 触发源一览（设置 → 触发源页，实验）：今天只有内置 timer 一个实例。**不列谁会响应** —— 触发源与 bot 解绑
+ * （用户 2026-10-24）：命不命中由各 bot 在事件到来时用自己的 `when` 决定，从条件反推「订阅者」靠不住；实际叫起了谁
+ * 看触发日志（triggerLogService）。这里给的是触发源自身：开关、上一次触发的时刻与原始事件（就是 `when` 里的 `event`）。
  */
-import { getTriggerPoint } from '@shuvix/agent-runtime'
 import type { TriggerSourceStatus } from '@shuvix/chat-protocol/triggerSources'
-import { botService } from './botService'
 import { BUILTIN_TIMER_ID, builtinTimer, isBuiltinTimerEnabled } from './triggerTimer'
 
 export function triggerSourcesStatus(): TriggerSourceStatus[] {
-  const subscribers: TriggerSourceStatus['subscribers'] = []
-  for (const entry of botService.listAll()) {
-    for (const binding of entry.file.bindings ?? []) {
-      if (binding.trigger !== 'timer.fired' || !getTriggerPoint(binding.trigger)) continue
-      subscribers.push({
-        bot: entry.file.name,
-        displayName: entry.file.displayName,
-        ...(binding.when ? { when: binding.when } : {})
-      })
-    }
-  }
   const last = builtinTimer.lastFiredPayload
   return [
     {
@@ -26,8 +14,12 @@ export function triggerSourcesStatus(): TriggerSourceStatus[] {
       kind: 'timer',
       builtin: true,
       enabled: isBuiltinTimerEnabled(),
-      ...(last ? { lastFiredAt: last.firedAt } : {}),
-      subscribers
+      ...(last
+        ? {
+            lastFiredAt: last.firedAt,
+            lastEvent: { ...last, trigger: 'timer.fired' } as unknown as Record<string, unknown>
+          }
+        : {})
     }
   ]
 }

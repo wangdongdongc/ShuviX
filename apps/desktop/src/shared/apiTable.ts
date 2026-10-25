@@ -248,7 +248,9 @@ export const API_TABLE = {
   },
   /** 触发源（实验）：设置 → 触发源页的状态 */
   trigger: {
-    status: invoke('trigger:status', 0)
+    status: invoke('trigger:status', 0),
+    logs: invoke('trigger:logs', 1),
+    clearLogs: invoke('trigger:clearLogs', 0)
   },
   /** shuvix 契约 md 校验 */
   shuvixMd: {

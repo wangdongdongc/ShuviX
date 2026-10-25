@@ -893,6 +893,36 @@ export const migrations: Migration[] = [
         db.exec('ALTER TABLE session_day_prompts ADD COLUMN origin TEXT')
       }
     }
+  },
+  {
+    version: 35,
+    description:
+      '触发日志：trigger_logs 表（触发源的一次事件命中某个 bot 的绑定、或绑定的条件出错时记一行 —— 触发源、bot、绑定、结果、运行会话、原始事件；设置 → 触发源 一页展示）',
+    up: (db) => {
+      // 触发源与 bot 解绑（2026-10-24）：触发源不知道谁会响应，「哪个事件叫起了哪个 bot」靠这张表让用户看见。
+      // 条数有上限（服务层修剪，只留最新的一千条）
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS trigger_logs (
+          id             TEXT    PRIMARY KEY,
+          createdAt      INTEGER NOT NULL,
+          updatedAt      INTEGER NOT NULL,
+          sourceId       TEXT    NOT NULL DEFAULT '',
+          trigger        TEXT    NOT NULL,
+          bot            TEXT    NOT NULL,
+          botDisplayName TEXT    NOT NULL DEFAULT '',
+          botFile        TEXT    NOT NULL DEFAULT '',
+          bindingIndex   INTEGER NOT NULL DEFAULT 0,
+          "when"         TEXT    NOT NULL DEFAULT '',
+          outcome        TEXT    NOT NULL,
+          sessionId      TEXT    NOT NULL DEFAULT '',
+          error          TEXT    NOT NULL DEFAULT '',
+          event          TEXT    NOT NULL DEFAULT '{}'
+        )
+      `)
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_trigger_logs_createdAt ON trigger_logs(createdAt DESC)'
+      )
+    }
   }
 ]
 

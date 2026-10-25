@@ -1,5 +1,5 @@
 import type { ChromeExtensionStatus } from '@shuvix/chat-protocol/chromeBridge'
-import type { TriggerSourceStatus } from '@shuvix/chat-protocol/triggerSources'
+import type { TriggerLogEntry, TriggerSourceStatus } from '@shuvix/chat-protocol/triggerSources'
 import type { TrackingItem } from '@shuvix/chat-protocol/trackingNotes'
 import type { LucideIconName, ThemeColor } from '@shuvix/chat-protocol/theme'
 import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
@@ -602,6 +602,9 @@ declare global {
     /** 触发源（实验）：设置 → 触发源页 */
     trigger: {
       status: () => Promise<TriggerSourceStatus[]>
+      /** 触发日志，按时间倒序（缺省最近 100 条） */
+      logs: (params?: { limit?: number }) => Promise<TriggerLogEntry[]>
+      clearLogs: () => Promise<{ success: boolean }>
     }
     bot: {
       /** 合法 + 非法两拨一次取齐（侧栏一次扫描就够） */

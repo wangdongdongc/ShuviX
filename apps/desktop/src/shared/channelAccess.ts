@@ -191,6 +191,8 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
 
   // ─── bot：Bots（注册表） ───
   'trigger:status': 'read',
+  'trigger:logs': 'read',
+  'trigger:clearLogs': 'write',
   'bot:list': 'read',
   'bot:openNote': 'admin', // bot 文件的编辑器
   'bot:createNew': 'admin',

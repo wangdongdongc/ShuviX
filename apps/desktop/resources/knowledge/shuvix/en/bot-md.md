@@ -107,7 +107,7 @@ sends `message` as a user message whose origin is "trigger", and appends a `<tri
 the event plus `lastFiredAt` — when this binding fired last, so the bot can handle what happened since. While the
 previous run of the same binding is still going (waiting on an approval card included) a firing is skipped;
 minutes missed while the computer sleeps or ShuviX is closed are not made up. A trigger message is not the user's
-word: the automatic review treats it as a delegated task, not as authorization.
+word: the automatic review treats it as a delegated task, not as authorization. The trigger source itself does not know who will respond; every match (the session it opened and how it ended, a skip, a condition error) is recorded in the trigger log under Settings → Triggers, which also shows the last raw event — the `event` a `when` sees.
 
 ```yaml
 shuvix-bot-on:

@@ -11,7 +11,24 @@
  *  - `when` 求值出错 = 不命中，同一条绑定同一个错误只记一次 warn；
  *  - 一次运行（会话打开了）结束后提交一次跟踪项目录（commitTrackingChanges）。
  *
- * mock 面：botService（listAll 给什么就是什么）、sessionService、settingsService（内存表）、trackingNotes、logger。
+ * 触发日志（触发源与 bot 解绑，用户 2026-10-24；断言打在 triggerLogService 桩的调用上）：
+ *   BTL-1  命中（无 when）：会话建出来之后、打开之前记一条 started（sourceId / trigger / bot / 显示名 / 文件名 /
+ *          序号 / when '' / 会话 id / 原始事件）；prompt 交回之前不 finish，交回后 finish(id, 'completed')
+ *   BTL-2  第二条绑定命中：bindingIndex 1、when 原文、botFile 取 basePath 的文件名；没命中的第一条不记
+ *   BTL-3  不命中（when 为假、别的埋点、没有绑定）一条都不记
+ *   BTL-4  会话打不开 → finish(id, 'failed', 'The run session could not be opened')
+ *   BTL-5  prompt 带 error → finish(id, 'failed', error)
+ *   BTL-6  prompt 抛错 → finish(id, 'failed', message)；抛的不是 Error → String()
+ *   BTL-7  会话建不出来 → 记一条 failed（sessionId ''，error = 原因），不 finish；下一次照跑
+ *   BTL-8  上一次还在跑 → 记一条 skipped（sessionId ''、这一次的事件）；跑完之后下一次又是 started
+ *   BTL-9  when 求值出错 → condition-error（CEL 的报错）：同一个错误只记一次；换一个错误再记；出错 → 成功（假）→
+ *          同一个错误又记；成功的求值（真或假）本身不记 condition-error
+ *   BTL-10 记下的 event 是 `when` 看到的那个（载荷 + trigger）：不带围栏里的 lastFiredAt；没有 sourceId → ''
+ *   BTL-11 一次 tick 命中几条绑定就记几条，各带自己的 bot / 序号 / 会话；finish 用各自的 id
+ *   BTL-12 记日志失败（record 交回 null）不挡运行：照样 prompt、finish(null, …)、lastFired 照推
+ *
+ * mock 面：botService（listAll 给什么就是什么）、sessionService、settingsService（内存表）、trackingNotes、
+ * triggerLogService（record / finish 两个桩）、logger。
  * `evaluateWhen` / `renderEventPrompt` / `setWhenHostFunctions` 是真的 —— CEL 的上下文、宿主函数、围栏都按真实走。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -25,6 +42,8 @@ const mocks = vi.hoisted(() => ({
   ensure: vi.fn<(id: string) => Promise<unknown>>(),
   prompt: vi.fn<(...args: unknown[]) => Promise<{ error?: string }>>(),
   commit: vi.fn<(message: string) => Promise<void>>(),
+  record: vi.fn<(input: Record<string, unknown>) => string | null>(),
+  finish: vi.fn<(id: string | null, outcome: string, error?: string) => void>(),
   settings: new Map<string, string>(),
   info: vi.fn(),
   warn: vi.fn()
@@ -41,6 +60,10 @@ vi.mock('../settingsService', () => ({
   }
 }))
 vi.mock('../trackingNotes', () => ({ commitTrackingChanges: mocks.commit }))
+// 触发日志：桩掉免得拉起数据库（服务本身的用例在 triggerLogService.test）；BTL-* 断言桩的调用
+vi.mock('../triggerLogService', () => ({
+  triggerLogService: { record: mocks.record, finish: mocks.finish }
+}))
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: mocks.info, warn: mocks.warn, error: vi.fn(), debug: vi.fn() })
 }))
@@ -128,13 +151,24 @@ function warnsMatching(re: RegExp): string[] {
 
 let svc: BotTriggerService
 let seq = 0
+let logSeq = 0
 
 beforeEach(() => {
   seq = 0
+  logSeq = 0
   mocks.settings.clear()
-  for (const m of [mocks.listAll, mocks.create, mocks.ensure, mocks.prompt, mocks.commit]) {
+  for (const m of [
+    mocks.listAll,
+    mocks.create,
+    mocks.ensure,
+    mocks.prompt,
+    mocks.commit,
+    mocks.record,
+    mocks.finish
+  ]) {
     m.mockReset()
   }
+  mocks.record.mockImplementation(() => `log-${++logSeq}`)
   mocks.info.mockReset()
   mocks.warn.mockReset()
   mocks.create.mockImplementation(() => ({ id: `s-${++seq}` }))
@@ -598,5 +632,357 @@ describe('fire 是同步的', () => {
       trigger: 'timer.fired',
       bot: 'ticker'
     })
+  })
+})
+
+describe('触发日志', () => {
+  /** 第 i 次 record 的入参 */
+  const recordInput = (i: number): Record<string, unknown> =>
+    mocks.record.mock.calls[i][0] as Record<string, unknown>
+  /** outcome 为 o 的那些 record 入参 */
+  const recordsOf = (o: string): Array<Record<string, unknown>> =>
+    mocks.record.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((r) => r.outcome === o)
+  /** when 看到的 event：载荷 + trigger */
+  const eventOf = (p: ReturnType<typeof minute>): Record<string, unknown> => ({
+    ...p,
+    trigger: 'timer.fired'
+  })
+
+  it('BTL-1 命中（无 when）：会话建出来之后、打开之前记 started（字段逐一）；prompt 交回之前不 finish，交回后 completed', async () => {
+    mocks.listAll.mockReturnValue([
+      bot('ticker', [TICK], { displayName: 'Ticker', objectId: 'bot:x' })
+    ])
+    const run = deferred<{ error?: string }>()
+    mocks.prompt.mockReturnValueOnce(run.promise)
+    const p = minute(18, 0)
+    svc.fire('timer.fired', p)
+    await settle()
+
+    expect(mocks.record).toHaveBeenCalledTimes(1)
+    expect(recordInput(0)).toStrictEqual({
+      sourceId: 'timer:builtin:minute',
+      trigger: 'timer.fired',
+      bot: 'ticker',
+      botDisplayName: 'Ticker',
+      botFile: 'ticker.md',
+      bindingIndex: 0,
+      when: '',
+      outcome: 'started',
+      sessionId: 's-1',
+      error: '',
+      event: eventOf(p)
+    })
+    // 会话建出来才记，记完才去打开
+    const [created] = mocks.create.mock.invocationCallOrder
+    const [recorded] = mocks.record.mock.invocationCallOrder
+    const [opened] = mocks.ensure.mock.invocationCallOrder
+    expect(created).toBeLessThan(recorded)
+    expect(recorded).toBeLessThan(opened)
+    // 这一轮还在跑：还是 started
+    expect(mocks.prompt).toHaveBeenCalledTimes(1)
+    expect(mocks.finish).not.toHaveBeenCalled()
+
+    run.resolve({})
+    await settle()
+    expect(mocks.finish.mock.calls).toEqual([['log-1', 'completed']])
+    expect(mocks.record).toHaveBeenCalledTimes(1)
+  })
+
+  it('BTL-2 第二条绑定命中：bindingIndex 1、when 原文、botFile 取 basePath 的文件名；没命中的第一条不记', async () => {
+    const when = "event.local.time == '18:00'"
+    mocks.listAll.mockReturnValue([
+      {
+        ...bot('multi', [
+          { ...TICK, when: 'false' },
+          { trigger: 'timer.fired', when, message: 'second' }
+        ]),
+        basePath: '/home/u/.shuvix/bots/My Bot.md'
+      }
+    ])
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+
+    expect(mocks.record).toHaveBeenCalledTimes(1)
+    expect(recordInput(0)).toMatchObject({
+      bot: 'multi',
+      botDisplayName: 'multi',
+      botFile: 'My Bot.md',
+      bindingIndex: 1,
+      when,
+      outcome: 'started',
+      sessionId: 's-1'
+    })
+    expect(mocks.finish.mock.calls).toEqual([['log-1', 'completed']])
+  })
+
+  it('BTL-3 不命中（when 为假、别的埋点、没有绑定）一条都不记', async () => {
+    mocks.listAll.mockReturnValue([
+      bot('never', [{ ...TICK, when: 'false' }]),
+      bot('late', [{ ...TICK, when: "event.local.time == '23:59'" }]),
+      bot('other', [
+        { trigger: 'webhook.received', message: 'hook' },
+        { trigger: 'session.turn-completed', message: 'turn' }
+      ]),
+      bot('nobindings', undefined)
+    ])
+    for (let mi = 0; mi < 3; mi++) svc.fire('timer.fired', minute(18, mi))
+    await settle()
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.record).not.toHaveBeenCalled()
+    expect(mocks.finish).not.toHaveBeenCalled()
+  })
+
+  it("BTL-4 会话打不开 → finish(id, 'failed', 'The run session could not be opened')", async () => {
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { objectId: 'bot:x' })])
+    mocks.ensure.mockResolvedValueOnce(null)
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    expect(recordsOf('started').map((r) => r.sessionId)).toEqual(['s-1'])
+    expect(mocks.finish.mock.calls).toEqual([
+      ['log-1', 'failed', 'The run session could not be opened']
+    ])
+  })
+
+  it("BTL-5 prompt 带 error → finish(id, 'failed', error)", async () => {
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { objectId: 'bot:x' })])
+    mocks.prompt.mockResolvedValueOnce({ error: 'model refused' })
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    expect(mocks.record).toHaveBeenCalledTimes(1)
+    expect(mocks.finish.mock.calls).toEqual([['log-1', 'failed', 'model refused']])
+  })
+
+  it("BTL-6 prompt 抛错 → finish(id, 'failed', message)；抛的不是 Error → String()", async () => {
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { objectId: 'bot:x' })])
+    mocks.prompt.mockRejectedValueOnce(new Error('socket hang up'))
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    mocks.prompt.mockRejectedValueOnce('plain failure')
+    svc.fire('timer.fired', minute(18, 1))
+    await settle()
+
+    expect(recordsOf('started').map((r) => r.sessionId)).toEqual(['s-1', 's-2'])
+    expect(mocks.record).toHaveBeenCalledTimes(2)
+    expect(mocks.finish.mock.calls).toEqual([
+      ['log-1', 'failed', 'socket hang up'],
+      ['log-2', 'failed', 'plain failure']
+    ])
+  })
+
+  it("BTL-7 会话建不出来 → 一条 failed（sessionId ''，error = 原因），不 finish；下一次照跑", async () => {
+    const ticker = bot('ticker', [TICK], { displayName: 'Ticker', objectId: 'bot:x' })
+    mocks.listAll.mockReturnValue([ticker])
+    mocks.create.mockImplementationOnce(() => {
+      throw new Error('SQLITE_FULL')
+    })
+    const p = minute(18, 0)
+    svc.fire('timer.fired', p)
+    await settle()
+
+    expect(mocks.record).toHaveBeenCalledTimes(1)
+    expect(recordInput(0)).toStrictEqual({
+      sourceId: 'timer:builtin:minute',
+      trigger: 'timer.fired',
+      bot: 'ticker',
+      botDisplayName: 'Ticker',
+      botFile: 'ticker.md',
+      bindingIndex: 0,
+      when: '',
+      outcome: 'failed',
+      sessionId: '',
+      error: 'SQLITE_FULL',
+      event: eventOf(p)
+    })
+    expect(mocks.finish).not.toHaveBeenCalled()
+    expect(mocks.ensure).not.toHaveBeenCalled()
+    expect(svc.isRunning(bindingKey(ticker, 0, 'timer.fired'))).toBe(false)
+
+    svc.fire('timer.fired', minute(18, 1))
+    await settle()
+    expect(recordInput(1)).toMatchObject({ outcome: 'started', sessionId: 's-1' })
+    expect(mocks.finish.mock.calls).toEqual([['log-2', 'completed']])
+  })
+
+  it("BTL-8 上一次还在跑 → skipped（sessionId ''、这一次的事件）；跑完之后下一次又是 started", async () => {
+    mocks.listAll.mockReturnValue([
+      bot('ticker', [TICK], { displayName: 'Ticker', objectId: 'bot:x' })
+    ])
+    const run = deferred<{ error?: string }>()
+    mocks.prompt.mockReturnValueOnce(run.promise)
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    const second = minute(18, 1)
+    svc.fire('timer.fired', second)
+    await settle()
+
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    expect(mocks.record).toHaveBeenCalledTimes(2)
+    expect(recordInput(1)).toStrictEqual({
+      sourceId: 'timer:builtin:minute',
+      trigger: 'timer.fired',
+      bot: 'ticker',
+      botDisplayName: 'Ticker',
+      botFile: 'ticker.md',
+      bindingIndex: 0,
+      when: '',
+      outcome: 'skipped',
+      sessionId: '',
+      error: '',
+      event: eventOf(second)
+    })
+    // 跳过的那条没有结局可等
+    expect(mocks.finish).not.toHaveBeenCalled()
+
+    run.resolve({})
+    await settle()
+    expect(mocks.finish.mock.calls).toEqual([['log-1', 'completed']])
+
+    svc.fire('timer.fired', minute(18, 2))
+    await settle()
+    expect(recordInput(2)).toMatchObject({ outcome: 'started', sessionId: 's-2' })
+    expect(mocks.finish.mock.calls).toEqual([
+      ['log-1', 'completed'],
+      ['log-3', 'completed']
+    ])
+  })
+
+  it('BTL-9 when 求值出错 → condition-error：同一个错误只记一次；换一个再记；出错 → 成功（假）→ 同一个错误又记；成功的求值不记', async () => {
+    let behaviour: string | number = 'error A'
+    setWhenHostFunctions({
+      activeSessions: () => {
+        if (typeof behaviour === 'string') throw new Error(behaviour)
+        return behaviour
+      }
+    })
+    const when = 'activeSessions(event.local.date) > 0'
+    mocks.listAll.mockReturnValue([
+      bot('flaky', [{ ...TICK, when }], { displayName: 'Flaky', objectId: 'bot:f' })
+    ])
+
+    const t0 = minute(18, 0)
+    svc.fire('timer.fired', t0)
+    svc.fire('timer.fired', minute(18, 1))
+    await settle()
+    expect(mocks.record).toHaveBeenCalledTimes(1)
+
+    behaviour = 'error B'
+    const t2 = minute(18, 2)
+    svc.fire('timer.fired', t2)
+    await settle()
+    expect(mocks.record).toHaveBeenCalledTimes(2)
+
+    // 求值成功（假）：不命中、不记，但清掉了「上一次的错误」
+    behaviour = 0
+    svc.fire('timer.fired', minute(18, 3))
+    await settle()
+    expect(mocks.record).toHaveBeenCalledTimes(2)
+
+    behaviour = 'error B'
+    const t4 = minute(18, 4)
+    svc.fire('timer.fired', t4)
+    svc.fire('timer.fired', minute(18, 5))
+    await settle()
+
+    const errors = recordsOf('condition-error')
+    expect(errors).toHaveLength(3)
+    expect(mocks.record).toHaveBeenCalledTimes(3)
+    const expected = [
+      ['error A', t0],
+      ['error B', t2],
+      ['error B', t4]
+    ] as const
+    errors.forEach((r, i) => {
+      const [message, at] = expected[i]
+      expect(r).toMatchObject({
+        sourceId: 'timer:builtin:minute',
+        trigger: 'timer.fired',
+        bot: 'flaky',
+        botDisplayName: 'Flaky',
+        botFile: 'flaky.md',
+        bindingIndex: 0,
+        when,
+        outcome: 'condition-error',
+        sessionId: '',
+        event: eventOf(at)
+      })
+      expect(String(r.error)).toContain(message)
+    })
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.finish).not.toHaveBeenCalled()
+
+    // 求值成功（真）：一条 started，不是 condition-error
+    behaviour = 1
+    svc.fire('timer.fired', minute(18, 6))
+    await settle()
+    expect(mocks.record).toHaveBeenCalledTimes(4)
+    expect(recordInput(3)).toMatchObject({ outcome: 'started', sessionId: 's-1', error: '' })
+  })
+
+  it("BTL-10 记下的 event 是 `when` 看到的那个：不带围栏里的 lastFiredAt；载荷没有 sourceId → sourceId ''", async () => {
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { objectId: 'bot:x' })])
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+    const second = minute(18, 1)
+    svc.fire('timer.fired', second)
+    await settle()
+    // 围栏里有 lastFiredAt，日志里的事件没有
+    expect(fenceOf(promptText(1))).toHaveProperty('lastFiredAt')
+    expect(recordInput(1).event).toStrictEqual(eventOf(second))
+
+    const noSource: Record<string, unknown> = { ...minute(18, 2) }
+    delete noSource.sourceId
+    svc.fire('timer.fired', noSource as unknown as ReturnType<typeof minute>)
+    await settle()
+    expect(recordInput(2)).toMatchObject({
+      sourceId: '',
+      outcome: 'started',
+      event: { ...noSource, trigger: 'timer.fired' }
+    })
+    expect(recordInput(2).event).not.toHaveProperty('sourceId')
+  })
+
+  it('BTL-11 一次 tick 命中几条绑定就记几条，各带自己的 bot / 序号 / 会话；finish 用各自的 id', async () => {
+    const a = bot('a', [TICK, { trigger: 'timer.fired', message: 'second' }], { objectId: 'bot:a' })
+    const b = bot('b', [TICK], { objectId: 'bot:b' })
+    mocks.listAll.mockReturnValue([a, b])
+    mocks.record.mockImplementation((input) => `log:${input.bot}#${input.bindingIndex}`)
+    // s-2（a 的第二条）跑失败，其余跑成
+    mocks.ensure.mockImplementation(async (id: string) => ({
+      prompt: async () => (id === 's-2' ? { error: 'boom' } : {})
+    }))
+    svc.fire('timer.fired', minute(18, 0))
+    await settle()
+
+    expect(
+      mocks.record.mock.calls.map((c) => {
+        const r = c[0] as Record<string, unknown>
+        return [r.bot, r.bindingIndex, r.outcome, r.sessionId]
+      })
+    ).toEqual([
+      ['a', 0, 'started', 's-1'],
+      ['a', 1, 'started', 's-2'],
+      ['b', 0, 'started', 's-3']
+    ])
+    expect(
+      [...mocks.finish.mock.calls].sort((x, y) => String(x[0]).localeCompare(String(y[0])))
+    ).toEqual([
+      ['log:a#0', 'completed'],
+      ['log:a#1', 'failed', 'boom'],
+      ['log:b#0', 'completed']
+    ])
+  })
+
+  it('BTL-12 记日志失败（record 交回 null）不挡运行：照样 prompt、finish(null, …)、lastFired 照推', async () => {
+    mocks.listAll.mockReturnValue([bot('ticker', [TICK], { objectId: 'bot:x' })])
+    mocks.record.mockReturnValue(null)
+    const p = minute(18, 0)
+    svc.fire('timer.fired', p)
+    await settle()
+    expect(mocks.prompt).toHaveBeenCalledTimes(1)
+    expect(mocks.finish.mock.calls).toEqual([[null, 'completed']])
+    expect(lastFired()).toStrictEqual({ 'bot:x#0#timer.fired': p.firedAt })
+    expect(mocks.commit).toHaveBeenCalledTimes(1)
   })
 })

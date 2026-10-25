@@ -13,6 +13,9 @@
  *    运行出错时不往前推，下一次接着从更早的时刻处理，错过与失败都不丢数据；
  *  - `when` 求值出错按「不命中」处置，同一条绑定同一个错误只记一次日志 —— 每分钟都会求值一次。
  *
+ * 触发源不知道谁会响应（与 bot 解绑，用户 2026-10-24）：每次命中、跳过、条件出错与每次运行的结局都记进触发日志
+ * （triggerLogService），设置 → 触发源 一页列出 —— 用户靠它看见「哪个事件叫起了哪个 bot」。
+ *
  * 会话标题取「bot 显示名 · 触发的本地时间」：触发型会话往往只有一轮，等不到自动起标题。
  * 一次运行结束后，跟踪项目录（实验）由宿主提交一次 git（见 trackingNotes.commitTrackingChanges）。
  */
@@ -24,10 +27,12 @@ import {
   type TriggerPayloadMap
 } from '@shuvix/agent-runtime'
 import type { TriggerOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
+import { basename } from 'path'
 import { botService, type BotEntry } from './botService'
 import { sessionService } from './sessionService'
 import { settingsService } from './settingsService'
 import { commitTrackingChanges } from './trackingNotes'
+import { triggerLogService, type TriggerLogInput } from './triggerLogService'
 import { createLogger } from '../logger'
 
 const log = createLogger('BotTriggers')
@@ -101,14 +106,32 @@ export class BotTriggerService {
       ;(entry.file.bindings ?? []).forEach((binding, index) => {
         if (binding.trigger !== id) return
         const key = bindingKey(entry, index, id)
-        if (!this.whenHit(key, entry, binding, event, env)) return
+        const logBase = (): Omit<TriggerLogInput, 'outcome' | 'sessionId' | 'error'> => ({
+          sourceId: typeof event.sourceId === 'string' ? event.sourceId : '',
+          trigger: id,
+          bot: entry.file.name,
+          botDisplayName: entry.file.displayName,
+          botFile: basename(entry.basePath),
+          bindingIndex: index,
+          when: binding.when ?? '',
+          event
+        })
+        if (!this.whenHit(key, entry, binding, event, env, logBase)) return
         if (this.inFlight.has(key)) {
           log.info(
             `bot "${entry.file.name}" binding ${index} (${id}) skipped: previous run still going`
           )
+          triggerLogService.record({ ...logBase(), outcome: 'skipped', sessionId: '', error: '' })
           return
         }
-        void this.launch(entry, binding, key, id, payload as unknown as Record<string, unknown>)
+        void this.launch(
+          entry,
+          binding,
+          key,
+          id,
+          payload as unknown as Record<string, unknown>,
+          logBase()
+        )
       })
     }
   }
@@ -123,7 +146,8 @@ export class BotTriggerService {
     entry: BotEntry,
     binding: BotBinding,
     event: Record<string, unknown>,
-    env: Record<string, unknown>
+    env: Record<string, unknown>,
+    logBase: () => Omit<TriggerLogInput, 'outcome' | 'sessionId' | 'error'>
   ): boolean {
     if (!binding.when) return true
     try {
@@ -132,9 +156,16 @@ export class BotTriggerService {
       return hit
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
+      // 同一条绑定同一个错误只记一次（日志与触发日志同一个节流）—— 每分钟都会求值一次
       if (this.lastWhenError.get(key) !== message) {
         this.lastWhenError.set(key, message)
         log.warn(`bot "${entry.file.name}": when evaluation failed — ${message}`)
+        triggerLogService.record({
+          ...logBase(),
+          outcome: 'condition-error',
+          sessionId: '',
+          error: message
+        })
       }
       return false
     }
@@ -145,10 +176,15 @@ export class BotTriggerService {
     binding: BotBinding,
     key: string,
     trigger: GlobalTriggerId,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    logBase: Omit<TriggerLogInput, 'outcome' | 'sessionId' | 'error'>
   ): Promise<void> {
     this.inFlight.add(key)
     let ran: string | null = null
+    // 触发日志的那一条：会话开出来才记 started（之后改成 completed / failed）；没开出来记一条没有会话的 failed
+    let logId: string | null = null
+    // 开出来的运行会话（日志那一条没写成时，失败的补记照样带上它）
+    let runSessionId = ''
     try {
       const previous = readLastFired()[key]
       const lastFiredAt =
@@ -170,10 +206,18 @@ export class BotTriggerService {
         ...payload,
         ...(lastFiredAt ? { lastFiredAt } : {})
       })
+      runSessionId = session.id
       log.info(`bot "${entry.file.name}" fired by ${trigger} → session ${session.id}`)
+      logId = triggerLogService.record({
+        ...logBase,
+        outcome: 'started',
+        sessionId: session.id,
+        error: ''
+      })
       const agent = await sessionService.ensureAgentSession(session.id)
       if (!agent) {
         log.warn(`bot "${entry.file.name}": session ${session.id} could not be opened`)
+        triggerLogService.finish(logId, 'failed', 'The run session could not be opened')
         return
       }
       // 这一轮结束才交回：这段时间里同一条绑定的后续触发都被跳过
@@ -181,14 +225,23 @@ export class BotTriggerService {
       const result = await agent.prompt(text, undefined, undefined, undefined, origin)
       if (result.error) {
         log.warn(`bot "${entry.file.name}" run in ${session.id} failed: ${result.error}`)
+        triggerLogService.finish(logId, 'failed', result.error)
       } else {
+        triggerLogService.finish(logId, 'completed')
         // 跑成了才往前推（现读一次：别的绑定可能刚写过这张表）
         settingsService.set(LAST_FIRED_KEY, JSON.stringify({ ...readLastFired(), [key]: firedAt }))
       }
     } catch (err) {
-      log.warn(
-        `bot "${entry.file.name}" trigger run failed: ${err instanceof Error ? err.message : err}`
-      )
+      const message = err instanceof Error ? err.message : String(err)
+      log.warn(`bot "${entry.file.name}" trigger run failed: ${message}`)
+      if (logId) triggerLogService.finish(logId, 'failed', message)
+      else
+        triggerLogService.record({
+          ...logBase,
+          outcome: 'failed',
+          sessionId: runSessionId,
+          error: message
+        })
     } finally {
       this.inFlight.delete(key)
       // 跟踪项目录（实验）提交一次：bot 全权改那些文件，回退只能靠历史。没写过任何跟踪项（目录不在）就什么都不做

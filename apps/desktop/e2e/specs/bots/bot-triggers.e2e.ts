@@ -5,9 +5,15 @@
  *   BT-E2 发给模型的就是「绑定里的 message + 空行 + <trigger_event> 围栏」，围栏 YAML 里是这一分钟的事实，第一次没有 lastFiredAt
  *   BT-E3 打开那条会话：用户气泡带「触发器」来源标签（悬停说出 bot 与埋点），脚本回复照常渲染
  *   BT-E4 `when: "false"` 与求值出错（函数名拼错）的绑定都不建会话；出错只记一次日志
- *   BT-E5 设置 → 触发源：tab 带实验标签；开关缺省开（设置项没写）；副标题是上次触发的时刻；三个订阅者各带自己的 when
- *   BT-E6 下一分钟又一条：围栏里的 lastFiredAt = 上一次（跑成了的）firedAt，带本机时区偏移；firedAt 恰好晚 60 秒
+ *   BT-E5 设置 → 触发源：tab 带实验标签；开关缺省开（设置项没写）；副标题是上次触发的时刻；**不列订阅者**（触发源与
+ *         bot 解绑，2026-10-24）；「上一次的事件」块缺省收起、点得开，JSON 就是 `when` 看到的 event（trigger + local.time）
+ *   BT-E8 触发日志：ticker 第一次运行一条 completed（带运行会话；展开是绑定一行 / 「没有条件」/ 无错误 / 事件 = 围栏 +
+ *         trigger）；DOM 与 trigger.logs() 同序，`{limit: 1}` 只给最新一条；「打开对话」把主窗切到那条运行会话
+ *   BT-E9 typo（when 里函数名拼错）恰一条 condition-error（无打开钮；展开是 when 原文与 CEL 的报错）；never 一条都没有
+ *   BT-E6 下一分钟又一条：围栏里的 lastFiredAt = 上一次（跑成了的）firedAt，带本机时区偏移；firedAt 恰好晚 60 秒；
+ *         开着的触发源页随 `trigger.logged` 列出这一次（不用重开）；typo 仍恰一条
  *   BT-E7 关掉开关：设置项写成 'false'，跨过下一个整分钟不再建会话，「上次触发」不动
+ *   BT-E10 清空日志：弹确认；取消什么都不动；确认后是空态、没有「清空」钮，trigger.logs() 为 []
  *
  * 一次冷启动（缺省不带随应用提供的日报 bot）。timer 对齐整分钟，所以整份文件要跨三个分钟边界（约 3 分钟）。
  * 假提供商的脚本按 `<trigger_event` 围栏认领 —— 触发的运行与别的请求（自动标题之类）谁先到不确定，纯 FIFO 会错位。
@@ -32,6 +38,7 @@ import {
 import {
   chatOriginBadges,
   chatPane,
+  confirmPane,
   sidebarPane,
   triggerSettingsPane,
   type TriggerSettingsPane
@@ -47,10 +54,25 @@ const TYPO_WHEN = 'activeSession(event.local.date) > 0'
 const NEXT_FIRE_MS = 80_000
 
 const LOCALES = [en, zh, ja]
-const EVERY_TIME = LOCALES.map((l) => l.settings.triggersEveryTime)
 const NOT_FIRED_YET = LOCALES.map((l) => l.settings.triggersNotFiredYet)
 const LAST_FIRED_PREFIXES = LOCALES.map((l) => l.settings.triggersLastFired.split('{{time}}')[0])
 const ORIGIN_TRIGGER = LOCALES.map((l) => l.message.originTrigger)
+const LAST_EVENT_SUMMARY = LOCALES.map((l) => l.settings.triggersLastEvent)
+const COMPLETED = LOCALES.map((l) => l.settings.triggerLogCompleted)
+const CONDITION_ERROR = LOCALES.map((l) => l.settings.triggerLogConditionError)
+const NO_CONDITION = LOCALES.map((l) => l.settings.triggerLogNoCondition)
+const LOG_EMPTY = LOCALES.map((l) => l.settings.triggerLogEmpty)
+const CLEAR_CONFIRM = LOCALES.map((l) => l.settings.triggerLogClearConfirm)
+/** 展开后绑定那一行（各语言的写法） */
+const bindingLines = (file: string, index: number, trigger: string): string[] =>
+  LOCALES.map((l) =>
+    l.settings.triggerLogBinding
+      .replace('{{file}}', file)
+      .replace('{{index}}', String(index))
+      .replace('{{trigger}}', trigger)
+  )
+/** BT-E8 切走主窗用的对照会话 */
+const CONTROL_TITLE = 'bt-e8-control'
 
 /** 围栏里的 YAML（TimerFiredPayload + 这条绑定上一次跑成的时刻） */
 interface TriggerFence {
@@ -58,6 +80,24 @@ interface TriggerFence {
   firedAt: string
   lastFiredAt?: string
   local: { date: string; time: string; weekday: number; hour: number; minute: number }
+}
+
+/** trigger:logs 的一条（TriggerLogEntry） */
+interface LogEntry {
+  id: string
+  createdAt: number
+  updatedAt: number
+  sourceId: string
+  trigger: string
+  bot: string
+  botDisplayName: string
+  botFile: string
+  bindingIndex: number
+  when: string
+  outcome: string
+  sessionId: string
+  error: string
+  event: Record<string, unknown>
 }
 
 interface TickerSession {
@@ -132,6 +172,13 @@ function tickerSessions(): Promise<TickerSession[]> {
         createdAt: s.createdAt
       }))
       .sort((a, b) => a.createdAt - b.createdAt))`
+  )
+}
+
+/** 触发日志（新的在前）；不给 limit 走缺省 */
+function triggerLogs(limit?: number): Promise<LogEntry[]> {
+  return app.main.eval<LogEntry[]>(
+    `window.api.trigger.logs(${limit === undefined ? '' : JSON.stringify({ limit })})`
   )
 }
 
@@ -267,26 +314,146 @@ describe('timer.fired 叫起 bot', () => {
 })
 
 describe('设置 → 触发源', () => {
-  it('BT-E5 tab 带实验标签；开关缺省开（设置项没写）；副标题是上次触发的时刻；三个订阅者各带自己的 when', async () => {
+  it('BT-E5 tab 带实验标签；开关缺省开；副标题是上次触发的时刻；不列订阅者；「上一次的事件」缺省收起，JSON 是 when 看到的 event', async () => {
     settings = await app.openSettings('triggers')
     triggers = triggerSettingsPane(settings)
     await triggers.waitSource(TIMER_ID)
     expect(await triggers.tabExperimental()).toBe(true)
 
-    const shot = await until(async () => {
-      const s = await triggers.source(TIMER_ID)
-      return s && s.subscribers.length === 3 ? s : null
-    }, 'timer source with three subscribers')
+    const shot = (await triggers.source(TIMER_ID))!
     expect(shot.enabled).toBe(true)
     expect(await timerSetting()).toBeFalsy()
     expect(NOT_FIRED_YET).not.toContain(shot.subtitle)
     expect(LAST_FIRED_PREFIXES.some((p) => shot.subtitle.startsWith(p))).toBe(true)
 
-    const byName = new Map(shot.subscribers.map((s) => [s.displayName, s.when]))
-    expect([...byName.keys()].sort()).toEqual(['Never', 'Ticker', 'Typo'])
-    expect(EVERY_TIME).toContain(byName.get('Ticker'))
-    expect(byName.get('Never')).toBe('false')
-    expect(byName.get('Typo')).toBe(TYPO_WHEN)
+    // 触发源与 bot 解绑：块里没有订阅者列表，三个 bot 的名字与 when 都不在触发源块里
+    expect(shot.subscriberList).toBe(false)
+    expect(await triggers.anySubscriberList()).toBe(false)
+    for (const text of ['Ticker', 'Never', 'Typo', TYPO_WHEN]) expect(shot.text).not.toContain(text)
+
+    // 上一次的原始事件：缺省收起，点 summary 展开
+    const last = await until(() => triggers.lastEvent(TIMER_ID), 'last-event block')
+    expect(last.open).toBe(false)
+    expect(LAST_EVENT_SUMMARY).toContain(last.summary)
+    await triggers.toggleLastEvent(TIMER_ID)
+    expect((await triggers.lastEvent(TIMER_ID))?.open).toBe(true)
+
+    const event = JSON.parse(last.json) as TriggerFence & { trigger: string }
+    expect(Object.keys(event).sort()).toEqual(['firedAt', 'local', 'sourceId', 'trigger'])
+    expect(event.trigger).toBe('timer.fired')
+    expect(event.sourceId).toBe(TIMER_ID)
+    expect(firedAtShape(event.firedAt)).toBe(true)
+    expect(Date.parse(event.firedAt)).toBeGreaterThanOrEqual(Date.parse(firstFence.firedAt))
+    const at = new Date(event.firedAt)
+    expect(event.local.time).toMatch(/^\d{2}:\d{2}$/)
+    expect(event.local).toEqual({
+      date: dayKey(at),
+      time: `${pad(at.getHours())}:${pad(at.getMinutes())}`,
+      weekday: at.getDay(),
+      hour: at.getHours(),
+      minute: at.getMinutes()
+    })
+  })
+
+  it('BT-E8 触发日志列出 ticker 的第一次运行：completed、带会话、展开看绑定 / 没有条件 / 事件；「打开对话」切到那条会话', async () => {
+    // 那一轮跑完才改成 completed（BT-E6 的 lastFiredAt 同样靠它跑成）
+    const entry = await until(
+      async () =>
+        (await triggerLogs()).find((e) => e.sessionId === first.id && e.outcome === 'completed'),
+      'completed log entry of the first run'
+    )
+    expect(entry).toMatchObject({
+      sourceId: TIMER_ID,
+      trigger: 'timer.fired',
+      bot: 'ticker',
+      botDisplayName: 'Ticker',
+      botFile: 'ticker.md',
+      bindingIndex: 0,
+      when: '',
+      error: ''
+    })
+    // 日志里的事件 = 这一分钟的载荷 + trigger（围栏里第一次没有 lastFiredAt，两边一样）
+    expect(entry.event).toEqual({ ...firstFence, trigger: 'timer.fired' })
+    expect((await triggerLogs()).filter((e) => e.sessionId === first.id)).toHaveLength(1)
+
+    const row = await until(
+      async () =>
+        (await triggers.logRows())?.find((r) => r.id === entry.id && r.outcome === 'completed'),
+      'log row of the first run shown as completed'
+    )
+    expect(row.botDisplayName).toBe('Ticker')
+    expect(COMPLETED).toContain(row.outcomeLabel)
+    expect(row.time).not.toBe('')
+    expect(row.canOpen).toBe(true)
+    expect(row.details).toBeNull()
+
+    // 页里的行与 trigger.logs() 同序；{limit: 1} 只给最新一条（此刻至少有 ticker 与 typo 两条）
+    await until(async () => {
+      const api = (await triggerLogs()).map((e) => e.id)
+      const dom = ((await triggers.logRows()) ?? []).map((r) => r.id)
+      return api.length >= 2 && JSON.stringify(api) === JSON.stringify(dom)
+    }, 'log rows in the same order as trigger.logs()')
+    await until(async () => {
+      const one = await triggerLogs(1)
+      const all = await triggerLogs()
+      return one.length === 1 && all.length >= 2 && one[0].id === all[0].id
+    }, 'trigger.logs({limit: 1}) returns only the newest entry')
+
+    await triggers.expandLogRow(entry.id)
+    const open = (await triggers.logRows())!.find((r) => r.id === entry.id)!
+    expect(open.details).not.toBeNull()
+    expect(bindingLines('ticker.md', 1, 'timer.fired')).toContain(open.details!.binding)
+    expect(NO_CONDITION).toContain(open.details!.when)
+    expect(open.details!.error).toBeNull()
+    expect(JSON.parse(open.details!.event)).toEqual(entry.event)
+
+    // 主窗先切到一条对照会话，再点「打开对话」：主窗切回那次运行的会话
+    await app.main.eval(`window.api.session.create({ title: ${JSON.stringify(CONTROL_TITLE)} })`)
+    const sidebar = sidebarPane(app.main)
+    await until(() => sidebar.openSession(CONTROL_TITLE), `sidebar row "${CONTROL_TITLE}"`)
+    expect(await sidebar.activeTitle()).toBe(CONTROL_TITLE)
+    await triggers.openLogSession(entry.id)
+    await until(
+      async () => (await sidebar.activeTitle()) === first.title,
+      'main window switched to the run session'
+    )
+  })
+
+  it('BT-E9 typo 恰一条 condition-error（无打开钮；展开是 when 原文与 CEL 报错）；never 一条都没有', async () => {
+    const logs = await triggerLogs()
+    const typo = logs.filter((e) => e.bot === 'typo')
+    expect(typo).toHaveLength(1)
+    expect(typo[0]).toMatchObject({
+      sourceId: TIMER_ID,
+      trigger: 'timer.fired',
+      botDisplayName: 'Typo',
+      botFile: 'typo.md',
+      bindingIndex: 0,
+      when: TYPO_WHEN,
+      outcome: 'condition-error',
+      sessionId: ''
+    })
+    expect(typo[0].error).toContain('activeSession')
+    expect(typo[0].event).toMatchObject({ trigger: 'timer.fired', sourceId: TIMER_ID })
+    expect(logs.filter((e) => e.bot === 'never')).toEqual([])
+
+    const row = await until(
+      async () => (await triggers.logRows())?.find((r) => r.id === typo[0].id),
+      'condition-error row of typo'
+    )
+    expect(row.outcome).toBe('condition-error')
+    expect(row.botDisplayName).toBe('Typo')
+    expect(CONDITION_ERROR).toContain(row.outcomeLabel)
+    expect(row.canOpen).toBe(false)
+
+    await triggers.expandLogRow(typo[0].id)
+    const open = (await triggers.logRows())!.find((r) => r.id === typo[0].id)!
+    expect(bindingLines('typo.md', 1, 'timer.fired')).toContain(open.details!.binding)
+    expect(open.details!.when).toBe(TYPO_WHEN)
+    expect(open.details!.error).toBe(typo[0].error.trim())
+    expect(JSON.parse(open.details!.event)).toEqual(typo[0].event)
+
+    expect((await triggers.logRows())!.some((r) => r.botDisplayName === 'Never')).toBe(false)
   })
 })
 
@@ -317,6 +484,20 @@ describe('下一分钟', () => {
     expect(fence.lastFiredAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/)
     expect(Date.parse(fence.lastFiredAt!)).toBe(Date.parse(firstFence.firedAt))
     expect(fence.lastFiredAt).toBe(localIso(new Date(firstFence.firedAt)))
+
+    // 开着的触发源页随 trigger.logged 列出这一次（日志不靠 30 秒的状态轮询，也没重开页）
+    const secondRow = await until(async () => {
+      const entry = (await triggerLogs()).find((e) => e.sessionId === second.id)
+      if (!entry) return null
+      return (await triggers.logRows())?.find((r) => r.id === entry.id) ?? null
+    }, 'log row of the second run on the open page')
+    expect(secondRow.botDisplayName).toBe('Ticker')
+    expect(['started', 'completed']).toContain(secondRow.outcome)
+    expect(secondRow.canOpen).toBe(true)
+    // 又求值了一分钟：typo 的同一个错误不再记，never 仍一条都没有
+    const logs = await triggerLogs()
+    expect(logs.filter((e) => e.bot === 'typo')).toHaveLength(1)
+    expect(logs.filter((e) => e.bot === 'never')).toEqual([])
   }, 120_000)
 
   it("BT-E7 关掉开关：设置项写成 'false'，跨过下一个整分钟不再建会话，「上次触发」不动", async () => {
@@ -337,6 +518,38 @@ describe('下一分钟', () => {
     expect(await tickerSessions()).toHaveLength(count)
     expect(await timerLastFiredAt()).toBe(lastFired)
   }, 90_000)
+
+  it('BT-E10 清空日志：弹确认；取消什么都不动；确认后是空态、没有「清空」钮，trigger.logs() 为 []', async () => {
+    // 开关已关：不再有新条目，两次运行也都跑完了
+    const before = await until(async () => {
+      const logs = await triggerLogs()
+      return logs.length > 0 && logs.every((e) => e.outcome !== 'started') ? logs : null
+    }, 'settled trigger log')
+    await until(
+      async () => ((await triggers.logRows()) ?? []).length === before.length,
+      'log rows match trigger.logs()'
+    )
+    expect(await triggers.hasClearButton()).toBe(true)
+
+    const confirm = confirmPane(settings!)
+    await triggers.clickClearLog()
+    await confirm.waitOpen()
+    expect(CLEAR_CONFIRM).toContain((await confirm.snapshot()).title)
+    await confirm.cancel()
+    await confirm.waitClosed()
+    expect((await triggerLogs()).map((e) => e.id)).toEqual(before.map((e) => e.id))
+    expect(((await triggers.logRows()) ?? []).map((r) => r.id)).toEqual(before.map((e) => e.id))
+
+    await triggers.clickClearLog()
+    await confirm.waitOpen()
+    await confirm.confirm()
+    await confirm.waitClosed()
+    const empty = await until(() => triggers.logEmpty(), 'trigger log empty state')
+    expect(LOG_EMPTY).toContain(empty)
+    expect(await triggers.logRows()).toEqual([])
+    expect(await triggers.hasClearButton()).toBe(false)
+    expect(await triggerLogs()).toEqual([])
+  })
 })
 
 /** firedAt：UTC ISO，对齐到整分钟 */

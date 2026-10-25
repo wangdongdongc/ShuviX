@@ -12307,11 +12307,17 @@ export function chatOriginBadges(main: CdpClient): Promise<OriginBadgeShot[]> {
 // ─────────────────────────────────────────────────────────────────────────
 // 设置窗口「触发源」页（TriggerSettings，实验；openSettings('triggers') 后调用）
 //
+// 触发源与 bot 解绑（2026-10-24）：页里**不列订阅者**，给的是触发源自身 + 触发日志。
 // 锚点：页根 `[data-trigger-settings]`，一个触发源一块 `[data-trigger-source=<id>]`（今天只有内置 timer
 // `timer:builtin:minute`）：块里的 SettingsRow（`[data-settings-row]`）= 标题 + 副标题（上次触发 / 还没触发）+ 行尾
-// Toggle（开 = `bg-accent`，关 = `bg-bg-hover`）；订阅者列表 `[data-trigger-subscribers] li`：显示名
-// （`span.text-text-primary`）+ `code`（when 原文，没写就是「每次都触发」的译文）。状态 30 秒才重拉一次 ——
+// Toggle（开 = `bg-accent`，关 = `bg-bg-hover`）；触发过之后跟一块可折叠的 `details[data-trigger-last-event]`
+// （summary + 一行说明 + `pre` 里的 `JSON.stringify(lastEvent, null, 2)`，缺省收起）。状态 30 秒才重拉一次 ——
 // 「上次触发」类断言先走 `window.api.trigger.status()`，DOM 只读打开那一刻拉到的那份。
+// 触发日志 `[data-trigger-log]`：一条一行 `[data-trigger-log-row=<id>][data-outcome=<outcome>]`，行头是展开钮
+// （时刻 / bot 显示名 / 结果译文三个 span）+ 有会话时的「打开对话」`[data-trigger-log-open]`；展开后行下多一块：
+// 绑定一行（文件名、第几条、埋点）、`code`（when 原文或「没有条件」的译文）、有错误时一行错误、`pre`（事件 JSON）。
+// 空表是 `[data-trigger-log-empty]`；有行时段头有「清空」`[data-trigger-log-clear]`（点了弹 ConfirmDialog，
+// 用 confirmPane(settings) 操作）。日志随 `trigger.logged` 重拉（不用重开页）。
 // tab 上的「实验」小标签是 `[data-settings-nav] [data-experimental="triggers"]`。
 
 /** 一个触发源块的快照 */
@@ -12320,10 +12326,46 @@ export interface TriggerSourceShot {
   enabled: boolean
   /** 副标题（上次触发的时刻，或「还没触发过」的译文） */
   subtitle: string
-  /** 订阅者（DOM 序）；`when` = code 里的字（没写 when 时是「每次都触发」的译文） */
-  subscribers: Array<{ displayName: string; when: string }>
-  /** 「还没有 bot 订阅它」那句（有订阅者时为 null） */
-  noSubscribers: string | null
+  /** 块里的全部文字（textContent，含收起着的事件块）—— 断言「不列订阅者」：bot 的显示名 / when 不在这里 */
+  text: string
+  /** 旧版的订阅者列表（`[data-trigger-subscribers]`）在不在块里 */
+  subscriberList: boolean
+}
+
+/** 触发源块里「上一次的原始事件」那块 */
+export interface TriggerLastEventShot {
+  /** details 展开着 */
+  open: boolean
+  /** summary 的字 */
+  summary: string
+  /** pre 里的 JSON 文本（收起着也在 DOM 里） */
+  json: string
+}
+
+/** 触发日志的一行 */
+export interface TriggerLogRowShot {
+  /** 日志条目 id（`data-trigger-log-row`） */
+  id: string
+  /** `data-outcome`：started / completed / failed / skipped / condition-error */
+  outcome: string
+  /** 时刻（本地化的短格式） */
+  time: string
+  botDisplayName: string
+  /** 结果的译文 */
+  outcomeLabel: string
+  /** 有「打开对话」钮（条目带会话） */
+  canOpen: boolean
+  /** 展开着时的详情；收起为 null */
+  details: {
+    /** 绑定那一行（文件名、第几条、埋点） */
+    binding: string
+    /** code 里的字：when 原文，没写就是「没有条件」的译文 */
+    when: string
+    /** 错误那一行；没有为 null */
+    error: string | null
+    /** pre 里的事件 JSON 文本 */
+    event: string
+  } | null
 }
 
 export interface TriggerSettingsPane {
@@ -12335,13 +12377,41 @@ export interface TriggerSettingsPane {
   source(id: string): Promise<TriggerSourceShot | null>
   /** 点这个触发源的开关 */
   toggle(id: string): Promise<void>
+  /** 页里有没有任何旧版订阅者列表（`[data-trigger-subscribers]`，整页查） */
+  anySubscriberList(): Promise<boolean>
+  /** 页根的全部文字（textContent） */
+  pageText(): Promise<string>
+  /** 这个触发源的「上一次的原始事件」块；还没触发过（块不在）为 null */
+  lastEvent(id: string): Promise<TriggerLastEventShot | null>
+  /** 点那块的 summary（展开 / 收起） */
+  toggleLastEvent(id: string): Promise<void>
+  /** 日志的行（DOM 序）；日志区还没上屏为 null */
+  logRows(): Promise<TriggerLogRowShot[] | null>
+  /** 空表文案；有行 / 还没拉到为 null */
+  logEmpty(): Promise<string | null>
+  /** 展开一行并等详情上屏（已展开不动） */
+  expandLogRow(id: string): Promise<void>
+  /** 点一行的「打开对话」（行或钮不在就抛） */
+  openLogSession(id: string): Promise<void>
+  /** 段头有没有「清空」 */
+  hasClearButton(): Promise<boolean>
+  /** 点段头的「清空」（不在就抛）—— 之后用 confirmPane(settings) 确认 / 取消 */
+  clickClearLog(): Promise<void>
 }
 
 export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
+  const ROOT = `document.querySelector('[data-trigger-settings]')`
   const BLOCK = (id: string): string =>
     `document.querySelector('[data-trigger-settings] [data-trigger-source=${JSON.stringify(id)}]')`
   const TOGGLE = (id: string): string =>
     `${BLOCK(id)}?.querySelector('[data-settings-row] > .shrink-0 button')`
+  const LAST_EVENT = (id: string): string =>
+    `${BLOCK(id)}?.querySelector('details[data-trigger-last-event]')`
+  const ROW = (id: string): string =>
+    `document.querySelector('[data-trigger-log] [data-trigger-log-row=${JSON.stringify(id)}]')`
+  const EXPAND_BTN = (id: string): string =>
+    `${ROW(id)}?.firstElementChild?.querySelector(':scope > button:not([data-trigger-log-open])')`
+  const CLEAR = `document.querySelector('[data-trigger-settings] [data-trigger-log-clear]')`
   return {
     tabExperimental: () =>
       settings.eval<boolean>(
@@ -12357,21 +12427,104 @@ export function triggerSettingsPane(settings: CdpClient): TriggerSettingsPane {
         const row = block.querySelector('[data-settings-row]')
         const toggle = row?.querySelector(':scope > .shrink-0 button')
         const subtitle = row?.querySelector(':scope > div.min-w-0 > div:nth-child(2)')
-        const subs = block.querySelector('[data-trigger-subscribers]')
-        const list = subs?.querySelector('ul')
         return {
           enabled: (toggle?.className ?? '').split(/\\s+/).includes('bg-accent'),
           subtitle: (subtitle?.textContent ?? '').trim(),
-          subscribers: [...(list?.querySelectorAll('li') ?? [])].map((li) => ({
-            displayName: (li.querySelector('span')?.textContent ?? '').trim(),
-            when: (li.querySelector('code')?.textContent ?? '').trim()
-          })),
-          noSubscribers: list ? null : (subs?.lastElementChild?.textContent ?? '').trim()
+          text: block.textContent ?? '',
+          subscriberList: !!block.querySelector('[data-trigger-subscribers]')
         }
       })()`),
     toggle: async (id) => {
       await until(() => settings.eval<boolean>(`!!${TOGGLE(id)}`), `trigger source ${id} toggle`)
       await settings.eval(`${TOGGLE(id)}.click()`)
+    },
+    anySubscriberList: () =>
+      settings.eval<boolean>(`!!document.querySelector('[data-trigger-subscribers]')`),
+    pageText: () => settings.eval<string>(`${ROOT}?.textContent ?? ''`),
+    lastEvent: (id) =>
+      settings.eval<TriggerLastEventShot | null>(`(() => {
+        const details = ${LAST_EVENT(id)}
+        if (!details) return null
+        return {
+          open: details.open,
+          summary: (details.querySelector(':scope > summary')?.textContent ?? '').trim(),
+          json: details.querySelector('pre')?.textContent ?? ''
+        }
+      })()`),
+    toggleLastEvent: async (id) => {
+      const before = await settings.eval<boolean | null>(`${LAST_EVENT(id)}?.open ?? null`)
+      if (before === null) throw new Error(`trigger source ${id}: no last-event block`)
+      await settings.eval(`${LAST_EVENT(id)}.querySelector(':scope > summary').click()`)
+      await until(
+        async () =>
+          (await settings.eval<boolean | null>(`${LAST_EVENT(id)}?.open ?? null`)) !== before,
+        `trigger source ${id}: last-event block toggled`
+      )
+    },
+    logRows: () =>
+      settings.eval<TriggerLogRowShot[] | null>(`(() => {
+        const log = document.querySelector('[data-trigger-settings] [data-trigger-log]')
+        if (!log) return null
+        return [...log.querySelectorAll('[data-trigger-log-row]')].map((row) => {
+          const head = row.firstElementChild
+          const expand = head?.querySelector(':scope > button:not([data-trigger-log-open])')
+          const spans = [...(expand?.querySelectorAll(':scope > span') ?? [])]
+          const body = row.children[1] ?? null
+          let details = null
+          if (body) {
+            const kids = [...body.children]
+            const code = kids.find((k) => k.tagName === 'CODE')
+            const pre = kids.find((k) => k.tagName === 'PRE')
+            const between = kids.slice(code ? kids.indexOf(code) + 1 : kids.length, pre ? kids.indexOf(pre) : kids.length)
+            details = {
+              binding: (kids[0]?.textContent ?? '').trim(),
+              when: (code?.textContent ?? '').trim(),
+              error: between.length > 0 ? (between[0].textContent ?? '').trim() : null,
+              event: pre?.textContent ?? ''
+            }
+          }
+          return {
+            id: row.getAttribute('data-trigger-log-row') ?? '',
+            outcome: row.getAttribute('data-outcome') ?? '',
+            time: (spans[0]?.textContent ?? '').trim(),
+            botDisplayName: (spans[1]?.textContent ?? '').trim(),
+            outcomeLabel: (spans[2]?.textContent ?? '').trim(),
+            canOpen: !!head?.querySelector('[data-trigger-log-open]'),
+            details
+          }
+        })
+      })()`),
+    logEmpty: () =>
+      settings.eval<string | null>(`(() => {
+        const empty = document.querySelector('[data-trigger-settings] [data-trigger-log-empty]')
+        return empty ? (empty.textContent ?? '').trim() : null
+      })()`),
+    expandLogRow: async (id) => {
+      const expanded = (): Promise<boolean> =>
+        settings.eval<boolean>(`(${ROW(id)}?.children.length ?? 0) > 1`)
+      if (await expanded()) return
+      await until(() => settings.eval<boolean>(`!!${EXPAND_BTN(id)}`), `trigger log row ${id}`)
+      await settings.eval(`${EXPAND_BTN(id)}.click()`)
+      await until(expanded, `trigger log row ${id} expanded`)
+    },
+    openLogSession: async (id) => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const btn = ${ROW(id)}?.querySelector('[data-trigger-log-open]')
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`trigger log row ${id}: no open-chat button`)
+    },
+    hasClearButton: () => settings.eval<boolean>(`!!${CLEAR}`),
+    clickClearLog: async () => {
+      const ok = await settings.eval<boolean>(`(() => {
+        const btn = ${CLEAR}
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error('trigger log: no clear button')
     }
   }
 }

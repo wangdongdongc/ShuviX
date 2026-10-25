@@ -87,6 +87,8 @@ export type AppEvent =
   | { type: 'daily.changed' }
   /** 跟踪项目录变了（实验）：笔记本写入、bot 一次触发运行结束 —— 侧栏「跟踪项」分组重扫 */
   | { type: 'tracking.changed' }
+  /** 触发日志变了（实验）：新记一条、一条运行有了结局、清空 —— 设置 → 触发源 一页重拉 */
+  | { type: 'trigger.logged' }
   /**
    * 网络访问（局域网里的浏览器）的状态变了：开始 / 停止监听、监听失败、客户端连上 / 断开 —— 信号事件，
    * 设置页重拉 network.status。只有桌面应用有这一项。

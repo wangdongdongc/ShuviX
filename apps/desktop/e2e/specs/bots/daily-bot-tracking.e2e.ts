@@ -2,7 +2,8 @@
  * 随应用提供的日报 bot + 跟踪项（实验）—— 真实例上走一遍：
  *
  *   DT-E1 全新实例：`~/.shuvix/bots/daily.md` 按界面语言写好（`shuvix-id: bot:builtin:daily`），`.builtin-seeded` 记下它，bot.list 认它
- *   DT-E2 设置 → 触发源：日报 bot 是 timer 的订阅者，when 原样列出
+ *   DT-E2 设置 → 触发源：不再列订阅者（触发源与 bot 解绑，2026-10-24）—— 日报 bot 的文件还在、bot.list 认它，
+ *         但页里既没有订阅者列表，也没有它的显示名与 when；全新实例上它没命中过，触发日志是空态
  *   DT-E3 删掉 daily.md、停机、同一个 HOME 再起：不补写，记录不变
  *   DT-E4 侧栏 Library 的「跟踪项」分组：带实验标签、缺省折叠；目录还没有时展开是空态，展开也不建目录
  *   DT-E5 目录里放几样东西 → 组头菜单「刷新」：只列可见的 .md 文件（新的在前），行字是一级标题 / 文件名
@@ -52,6 +53,7 @@ const CONTROL_TITLE = 'dt6-visible-session'
 
 const LOCALES = [en, zh, ja]
 const GROUP_LABELS = LOCALES.map((l) => l.sidebar.trackingGroup)
+const LOG_EMPTY = LOCALES.map((l) => l.settings.triggerLogEmpty)
 const EMPTY_HINTS = LOCALES.map((l) => l.sidebar.trackingEmpty)
 
 let app: E2EApp
@@ -107,16 +109,26 @@ describe('随应用提供的日报 bot', () => {
     expect(list.invalid.map((f) => f.fileName)).not.toContain('daily.md')
   })
 
-  it('DT-E2 设置 → 触发源：日报 bot 订阅 timer，when 原样列出', async () => {
+  it('DT-E2 设置 → 触发源：不列订阅者（日报 bot 的文件还在）；页里没有它的显示名与 when；触发日志是空态', async () => {
+    expect(existsSync(dailyPath())).toBe(true)
+    expect((await botList()).bots.map((b) => b.name)).toContain('daily')
+
     const settings = await app.openSettings('triggers')
     try {
       const triggers = triggerSettingsPane(settings)
       await triggers.waitSource(TIMER_ID)
-      const shot = await until(async () => {
-        const s = await triggers.source(TIMER_ID)
-        return s && s.subscribers.length > 0 ? s : null
-      }, 'timer source with a subscriber')
-      expect(shot.subscribers).toEqual([{ displayName: DAILY_DISPLAY[language], when: DAILY_WHEN }])
+      const shot = (await triggers.source(TIMER_ID))!
+      expect(shot.subscriberList).toBe(false)
+      expect(await triggers.anySubscriberList()).toBe(false)
+
+      // 日志拉到了（全新实例：日报只在 18:00 且当天有人写过消息时命中，此刻一条都没有）
+      const empty = await until(() => triggers.logEmpty(), 'trigger log empty state')
+      expect(LOG_EMPTY).toContain(empty)
+      expect(await triggers.logRows()).toEqual([])
+
+      const page = await triggers.pageText()
+      expect(page).not.toContain(DAILY_DISPLAY[language])
+      expect(page).not.toContain(DAILY_WHEN)
     } finally {
       settings.close()
     }
