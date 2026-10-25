@@ -1654,6 +1654,11 @@
     "write": "Write a daily report for this day",
     "open": "Open this day's daily report",
     "empty": "Nothing written yet",
-    "addSession": "Add to daily report"
+    "addSession": "Add to daily report",
+    "revealFile": "Show in folder",
+    "copyPath": "Copy path",
+    "delete": "Delete daily report",
+    "confirmDeleteTitle": "Delete this daily report?",
+    "confirmDeleteDescription": "The daily report file for {{day}} will be deleted. This can't be undone."
   }
 }

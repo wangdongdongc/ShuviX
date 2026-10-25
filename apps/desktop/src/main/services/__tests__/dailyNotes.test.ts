@@ -113,11 +113,11 @@ describe('哪些天写了 / 那天写了什么', () => {
     expect(reportDaysInMonth(2025, 4)).toEqual(['2025-04-01'])
   })
 
-  it('DS-3 reportOnDay：只有模板时摘录为空串；写了就回摘录；不是日子的入参回 null', () => {
+  it('DS-3 reportOnDay：只有模板时摘录为空串；写了就回摘录；都带文件路径；不是日子的入参回 null', () => {
     put(`${DAY}.md`, '---\nshuvix: daily v1\n---\n\n## 完成\n\n- \n')
-    expect(reportOnDay(DAY)).toEqual({ excerpt: '' })
+    expect(reportOnDay(DAY)).toEqual({ excerpt: '', path: fileOf(DAY) })
     put(`${DAY}.md`, '## 完成\n\n- 修好了圆点\n')
-    expect(reportOnDay(DAY)).toEqual({ excerpt: '修好了圆点' })
+    expect(reportOnDay(DAY)).toEqual({ excerpt: '修好了圆点', path: fileOf(DAY) })
     expect(reportOnDay('../x')).toBeNull()
   })
 })

@@ -3,13 +3,13 @@
  *
  * 与注册表笔记（registryNotes）同一套做法：目录有一个隐藏项目（`__daily__`，path = 目录本身），一份
  * 文件至多一个笔记本会话，重复打开复用；编辑、自动保存、外部改动合并全归笔记本会话。这里只回答
- * 「那一天有没有日报、写了什么」「打开那一天」，外加日历里「插入到日报」那一笔写入。
+ * 「那一天有没有日报、写了什么」「打开那一天」，外加日历里「插入到日报」那一笔写入与「删除日报」。
  *
  * **第一次打开才建文件**：用户的 `_template.md` 在就照它，否则用内置的三段。未来的日子不能写 ——
  * 日报记的是已经发生的事；过去的日子可以补。身份是文件名（日期）：没有 `shuvix: daily v1` 自述行的
  * 同名文件照样算那一天的日报。
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import {
   DAILY_PROJECT_ID,
@@ -94,13 +94,13 @@ export function reportDaysInMonth(year: number, month: number): string[] {
     .sort()
 }
 
-/** 那一天的日报：没有返回 null；有则回摘录（只有模板、什么都没写时是空串） */
-export function reportOnDay(day: string): { excerpt: string } | null {
+/** 那一天的日报：没有返回 null；有则回摘录（只有模板、什么都没写时是空串）与文件的绝对路径（行菜单用） */
+export function reportOnDay(day: string): { excerpt: string; path: string } | null {
   if (!isDayKey(day)) return null
   const path = join(getDefaultDailyDir(), dailyFileName(day))
   if (!isRegularFile(path)) return null
   try {
-    return { excerpt: dailyExcerpt(readFileSync(path, 'utf8')) }
+    return { excerpt: dailyExcerpt(readFileSync(path, 'utf8')), path }
   } catch {
     return null
   }
@@ -172,4 +172,23 @@ export function addSessionToReport(day: string, sessionId: string): { added: boo
   writeFileAtomic(path, insertIntoFirstSection(source, `- [${title}](${link})`))
   appEventBus.publish({ type: 'daily.changed' })
   return { added: true }
+}
+
+/**
+ * 日历里「删除日报」（界面先确认过）：删掉那一天的日报文件，连同它的笔记本会话。会话先删 —— 主区正开着这份
+ * 笔记本时，它的自动保存会把文件写回来；会话没了，之后的写入就被拒了。文件直接删（与 bot / 智能体 md 的删除
+ * 一样），不进废纸篓。未来的日子也能删（用户自己放进目录的文件）。回删掉的笔记本会话 id，界面据此把它从列表里拿掉
+ */
+export async function deleteReport(
+  day: string
+): Promise<{ deleted: boolean; sessionId: string | null }> {
+  if (!isDayKey(day)) throw new Error(`Invalid day: ${day}`)
+  const fileName = dailyFileName(day)
+  const session = sessionRecords.findByProjectAndNotebookPath(DAILY_PROJECT_ID, fileName)
+  if (session) await sessionService.delete(session.id)
+  const path = join(getDefaultDailyDir(), fileName)
+  if (!isRegularFile(path)) return { deleted: false, sessionId: session?.id ?? null }
+  unlinkSync(path)
+  appEventBus.publish({ type: 'daily.changed' })
+  return { deleted: true, sessionId: session?.id ?? null }
 }

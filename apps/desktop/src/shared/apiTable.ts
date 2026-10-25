@@ -151,7 +151,8 @@ export const API_TABLE = {
     reportDaysInMonth: invoke('calendar:reportDaysInMonth', 1),
     reportOnDay: invoke('calendar:reportOnDay', 1),
     openReport: invoke('calendar:openReport', 1),
-    addSessionToReport: invoke('calendar:addSessionToReport', 1)
+    addSessionToReport: invoke('calendar:addSessionToReport', 1),
+    deleteReport: invoke('calendar:deleteReport', 1)
   },
   /** 消息 */
   message: {

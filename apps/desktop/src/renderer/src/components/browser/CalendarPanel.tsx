@@ -60,7 +60,7 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
   // 记下查的是哪一天：换了日子、新的还没回来时不显示上一天的日报；同一天重拉期间照旧显示（打字时不闪）
   const [loadedReport, setLoadedReport] = useState<{
     day: string
-    report: { excerpt: string } | null
+    report: { excerpt: string; path: string } | null
   } | null>(null)
   // 日报的重拉单独计数：笔记本自动保存每停手一次就来一个 daily.changed，不该连带重查会话索引
   const [reportTick, setReportTick] = useState(0)
@@ -137,6 +137,19 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
     onOpenSession?.(session.id)
   }
 
+  // 删日报（确认已在 DayReportHeader 里弹过）：主进程删文件 + 它的笔记本会话；日报行与月历的点随 daily.changed
+  // 重拉。会话那一条得自己从列表里拿掉 —— 主区正开着它时，removeSession 才会把主区清空
+  const handleDeleteReport = async (): Promise<void> => {
+    const api = getHostApi()?.calendar
+    if (!api) return
+    try {
+      const { sessionId } = await api.deleteReport({ day: selectedDay })
+      if (sessionId) useChatStore.getState().removeSession(sessionId)
+    } catch {
+      // 文件删不掉（权限之类）—— 日报行还在，用户看得见没删成
+    }
+  }
+
   const handleAddToReport = async (sessionId: string): Promise<void> => {
     try {
       await getHostApi()?.calendar?.addSessionToReport({ day: selectedDay, sessionId })
@@ -192,6 +205,8 @@ export function CalendarPanel({ onOpenSession }: CalendarPanelProps = {}): React
               writable={writable}
               active={reportActive}
               onOpen={() => void handleOpenReport()}
+              onRevealFile={(path) => void getHostApi()?.app.revealPath(path)}
+              onDelete={() => void handleDeleteReport()}
             />
           }
           daySessions={daySessions}

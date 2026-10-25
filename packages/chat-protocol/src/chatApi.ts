@@ -847,12 +847,19 @@ export interface HostApi {
     firstEntryOnDay: (params: { sessionId: string; day: string }) => Promise<string | null>
     /** 可见月里写了日报的本地日（YYYY-MM-DD[]，见 dailyNotes.ts）。`month` 为 1–12。 */
     reportDaysInMonth: (params: { year: number; month: number }) => Promise<string[]>
-    /** 那天的日报：没有为 null；有则回摘录（只有模板时为空串） */
-    reportOnDay: (params: { day: string }) => Promise<{ excerpt: string } | null>
+    /** 那天的日报：没有为 null；有则回摘录（只有模板时为空串）与文件的绝对路径 */
+    reportOnDay: (params: { day: string }) => Promise<{ excerpt: string; path: string } | null>
     /** 打开 / 复用那天日报的笔记本会话（还没有就按模板建）；未来的日子被拒绝 */
     openReport: (params: { day: string }) => Promise<Session>
     /** 把一条会话的链接写进那天日报的第一段；已经链着它时 `added: false` */
     addSessionToReport: (params: { day: string; sessionId: string }) => Promise<{ added: boolean }>
+    /**
+     * 删掉那天的日报文件（不进废纸篓）连同它的笔记本会话；文件本来就不在时 `deleted: false`。
+     * `sessionId` = 删掉的笔记本会话（没有为 null），界面据此把它从列表里拿掉
+     */
+    deleteReport: (params: {
+      day: string
+    }) => Promise<{ deleted: boolean; sessionId: string | null }>
   }
   session: {
     list: () => Promise<Session[]>

@@ -23,6 +23,7 @@ declare global {
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 const DAY = new Date(2025, 2, 14)
+const PATH = '/home/u/.shuvix/daily/2025-03-14.md'
 
 let container: HTMLDivElement
 let root: Root
@@ -97,7 +98,7 @@ describe('DayReportHeader', () => {
 
   it('DR-4 写了：摘录一行、没有新建图标；点它 / 回车都打开', () => {
     const onOpen = vi.fn()
-    mount({ report: { excerpt: '修好了圆点 · 写测试' }, onOpen })
+    mount({ report: { excerpt: '修好了圆点 · 写测试', path: PATH }, onOpen })
     expect(writeButton()).toBeNull()
     const row = reportRow()!
     expect(row.textContent).toBe('修好了圆点 · 写测试')
@@ -110,14 +111,14 @@ describe('DayReportHeader', () => {
   })
 
   it('DR-5 只有模板：那一行写「还没写内容」', () => {
-    mount({ report: { excerpt: '' } })
+    mount({ report: { excerpt: '', path: PATH } })
     expect(reportRow()!.textContent).toBe(en.daily.empty)
   })
 
   it('DR-6 主区开着的正是这份日报：行按选中态画', () => {
-    mount({ report: { excerpt: 'x' }, active: true })
+    mount({ report: { excerpt: 'x', path: PATH }, active: true })
     expect(reportRow()!.className).toContain('bg-bg-active')
-    mount({ report: { excerpt: 'x' }, active: false })
+    mount({ report: { excerpt: 'x', path: PATH }, active: false })
     expect(reportRow()!.className).not.toContain('bg-bg-active')
   })
 })

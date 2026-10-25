@@ -122,6 +122,17 @@ span.sb-icon {
   align-items: center;
   justify-content: center;
 }
+/* 标签会折行的行（日历里日报那一行的摘录）：顶对齐，图标与标签的第一行同心 —— 只有一行时与普通行同高同位。
+   各自垫上半个「行高 − 自身」：图标 (行高 − 图标) / 2，标签 (行高 − 一行字 1.3em) / 2 */
+.sb-row-wrap {
+  align-items: flex-start;
+}
+.sb-row-wrap > .sb-icon {
+  margin-top: calc((var(--sb-row-h) - var(--sb-icon)) / 2);
+}
+.sb-row-wrap > .sb-label {
+  padding-block: calc((var(--sb-row-h) - 1.3em) / 2);
+}
 .sb-body {
   --sb-base: var(--sb-indent);
 }

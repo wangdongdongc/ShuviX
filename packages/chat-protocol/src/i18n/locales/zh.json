@@ -1654,6 +1654,11 @@
     "write": "写这一天的日报",
     "open": "打开这一天的日报",
     "empty": "还没写内容",
-    "addSession": "插入到日报"
+    "addSession": "插入到日报",
+    "revealFile": "在文件夹中显示",
+    "copyPath": "复制路径",
+    "delete": "删除日报",
+    "confirmDeleteTitle": "删除这份日报？",
+    "confirmDeleteDescription": "{{day}} 的日报文件会被删除，且无法恢复。"
   }
 }

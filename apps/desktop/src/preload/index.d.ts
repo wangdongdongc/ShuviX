@@ -492,12 +492,15 @@ declare global {
       sessionsOnDay: (params: { day: string }) => Promise<Session[]>
       firstEntryOnDay: (params: { sessionId: string; day: string }) => Promise<string | null>
       reportDaysInMonth: (params: { year: number; month: number }) => Promise<string[]>
-      reportOnDay: (params: { day: string }) => Promise<{ excerpt: string } | null>
+      reportOnDay: (params: { day: string }) => Promise<{ excerpt: string; path: string } | null>
       openReport: (params: { day: string }) => Promise<Session>
       addSessionToReport: (params: {
         day: string
         sessionId: string
       }) => Promise<{ added: boolean }>
+      deleteReport: (params: {
+        day: string
+      }) => Promise<{ deleted: boolean; sessionId: string | null }>
     }
     message: {
       list: (sessionId: string) => Promise<ChatMessage[]>

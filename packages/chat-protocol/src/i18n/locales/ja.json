@@ -1654,6 +1654,11 @@
     "write": "この日の日報を書く",
     "open": "この日の日報を開く",
     "empty": "まだ何も書かれていません",
-    "addSession": "日報に追加"
+    "addSession": "日報に追加",
+    "revealFile": "フォルダで表示",
+    "copyPath": "パスをコピー",
+    "delete": "日報を削除",
+    "confirmDeleteTitle": "この日報を削除しますか？",
+    "confirmDeleteDescription": "{{day}} の日報ファイルが削除されます。元に戻すことはできません。"
   }
 }
