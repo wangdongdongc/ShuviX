@@ -58,8 +58,9 @@ function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element
   const retried = msg.metadata?.retried
   return (
     <div className="group relative flex items-center gap-1.5 pl-4 pr-8 mr-4 my-1 text-[11px] text-error/90">
-      <AlertCircle size={12} />
-      <span className="whitespace-pre-wrap break-words">{msg.content}</span>
+      <AlertCircle size={12} className="flex-shrink-0" />
+      {/* min-w-0：错误原文里常有折不开的长串（请求地址、异常链），不让它把这一行撑出对话列 */}
+      <span className="min-w-0 whitespace-pre-wrap break-words">{msg.content}</span>
       {/* 最终失败前折叠掉的重试（Q-P3-06 / PIN-21）：一行错误带上次数 */}
       {retried && retried.count > 0 && (
         <span data-error-retries="" className="shrink-0 text-error/60">

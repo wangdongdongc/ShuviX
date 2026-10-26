@@ -290,7 +290,8 @@ export const AssistantBubble = memo(function AssistantBubble({
                     index: idx + 1,
                     defaultValue: `Generated image ${idx + 1}`
                   })}
-                  className="max-w-[400px] max-h-[400px] rounded-lg border border-border-primary object-contain"
+                  // 不超过对话列：手机上 400px 比整列还宽
+                  className="max-w-[min(400px,100%)] max-h-[400px] rounded-lg border border-border-primary object-contain"
                 />
               ))}
             </div>

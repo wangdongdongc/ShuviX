@@ -16,7 +16,10 @@ interface StepRowProps {
   /** 图标与名称之间的小标记（如 bash 的「后台」标签）—— 属于这次调用的性质，
    *  该跟工具名挨在一起，而不是被摘要挤到行尾 */
   badge?: ReactNode
-  /** 类型标签 */
+  /**
+   * 类型标签 — 放不下时截断：混合段的「每种工具各几次」可以比一屏还长，不收就把整行（连同行尾的
+   * 计数）顶出对话列，手机上整条对话都能左右滑。摘要的基准宽度是 0，所以总是摘要先让到没有，标签才开始收
+   */
   label?: ReactNode
   /** 摘要 — 占满剩余宽度并截断 */
   detail?: ReactNode
@@ -57,7 +60,11 @@ export function StepRow({
     >
       {glyph != null && <span className={ICON_SLOT}>{glyph}</span>}
       {badge}
-      {label && <span className="font-medium text-text-secondary flex-shrink-0">{label}</span>}
+      {label && (
+        <span data-step-label="" className="font-medium text-text-secondary min-w-0 truncate">
+          {label}
+        </span>
+      )}
       <span className="flex-1 min-w-0 truncate">
         {typeof detail === 'string' ? <RedactedText text={detail} /> : detail}
       </span>

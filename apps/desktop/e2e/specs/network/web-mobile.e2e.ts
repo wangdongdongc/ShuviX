@@ -51,6 +51,9 @@
  *        头部是分区名）→ 真点假提供商那一行 → 只剩详情，返回键是分区名（level item）、头部是它的名字 → 返回 = 列表
  *        → 再返回 = 设置列表；「LLM 工具」里点 read 一样（头部 = read 的标签）。列表滚到底再点最后一行 → 真正在滚的
  *        那一层回到顶上；返回 → 列表回到离开前的位置（±2px）。行上的开关只切启用（listAll 跟着变）、不进详情
+ *   M-24 超宽的内容不让对话左右滑（360 宽）：一段六种工具的合并行（标签「每种工具各几次」比一屏还长）、终答里的
+ *        长裸链接 / 长文字链接 / www 链接 / 长行内代码 / GFM 不认的链接与没加反引号的长 token（普通文字）/ 引用与
+ *        列表里的长链接 / 无语言与带语言的长行代码块，加上用户气泡里的长链接 —— 对话滚动区与整页都没有横向溢出；合并行的标签截断、计数徽章在行里；展开合并行之后也一样
  *
  * 约定同 web-fallbacks.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；会话只经主进程 IPC 带明确标题创建
  * （不跑 titler）；预置回复经主进程的 agent.prompt 跑完一轮。设备模拟走 CDP（`Emulation.setDeviceMetricsOverride`
@@ -87,6 +90,7 @@ import {
   widgetPanelPane,
   type BoxShot,
   type ComposerLayoutShot,
+  type ConversationOverflowShot,
   type ThinkingBlockShot,
   type WebMobileTab
 } from '../../harness/pages'
@@ -118,6 +122,38 @@ const THINK_PARAS = [1, 2, 3, 4, 5].map(
     `until paragraph ${n} closes.`
 )
 const THINK_LONG = '\n\n' + THINK_PARAS.join('\n\n') + '\n\n\n'
+/** M-24：一个没有断点的长链接 / 长 token，与带着它们的终答 */
+const WIDE_URL = 'https://example.com/' + 'a'.repeat(160)
+const WIDE_TOKEN = 'k'.repeat(220)
+const WIDE_REPLY = [
+  'MOB-WIDE-REPLY',
+  '',
+  `Bare link: ${WIDE_URL}`,
+  '',
+  `Named link: [${'n'.repeat(120)}](https://example.com/named)`,
+  '',
+  `Autolink: www.example.com/${'w'.repeat(120)}`,
+  '',
+  `Inline code: \`${'c'.repeat(120)}\``,
+  '',
+  // GFM 不认的链接（没有 scheme、没有 www.）与没加反引号的长标识符：都是正文里的普通文字
+  `Plain link: example.com/${'e'.repeat(120)}`,
+  '',
+  `Plain token: ${'p'.repeat(150)}`,
+  '',
+  `> A quote ${WIDE_URL}`,
+  '',
+  '```',
+  WIDE_TOKEN,
+  'a short line',
+  '```',
+  '',
+  '```ts',
+  `const wide = '${WIDE_TOKEN}'`,
+  '```',
+  '',
+  `- a list item ${WIDE_URL}`
+].join('\n')
 
 let app: E2EApp
 let provider: FakeProvider
@@ -126,7 +162,7 @@ let P = 0
 /** 假提供商的 id（M-23 认它那一行） */
 let fakeProviderId = ''
 const projects = { main: { id: '', name: 'MobProj' }, other: { id: '', name: 'MobProj2' } }
-const sids = { chat: '', temp: '', doomed: '', narrow: '', think: '' }
+const sids = { chat: '', temp: '', doomed: '', narrow: '', think: '', wide: '' }
 /** 用例里开的浏览器 tab（失败时 afterAll 兜底关） */
 const openedTabs = new Set<string>()
 
@@ -145,14 +181,19 @@ const sessionsInMain = (): Promise<
     `window.api.session.list().then((ss) => ss.map((s) => ({ id: s.id, title: s.title, projectId: s.projectId ?? null })))`
   )
 
-/** 主进程里跑完一轮（脚本化的回复，可带思考）—— 会话有了消息、有了今天的日历记录、也有了运行时 */
+/**
+ * 主进程里跑完一轮（脚本化的回复，可带思考；给了 `toolCalls` 就先调一轮工具再回复）—— 会话有了消息、有了今天的
+ * 日历记录、也有了运行时
+ */
 async function seedReply(
   sid: string,
   prompt: string,
   reply: string,
-  thinking?: string
+  thinking?: string,
+  toolCalls?: Array<{ id: string; name: string; args: string }>
 ): Promise<void> {
-  provider.script({ text: reply, thinking, usage: USAGE })
+  if (toolCalls) provider.script({ toolCalls, usage: USAGE }, { text: reply, usage: USAGE })
+  else provider.script({ text: reply, thinking, usage: USAGE })
   await app.main.eval(
     `window.api.agent.prompt(${JSON.stringify({ sessionId: sid, text: prompt })}).then(() => true)`
   )
@@ -301,6 +342,24 @@ beforeAll(async () => {
   // M-22：一轮一句话的思考、一轮五段的长思考
   await seedReply(sids.think, 'think briefly', 'MOB-THINK-1', THINK_SHORT)
   await seedReply(sids.think, 'think at length', 'MOB-THINK-2', THINK_LONG)
+  // M-24：六种工具（都在项目目录里，不问人）合并成一行，终答带长链接、长代码；问句里也有一条长链接
+  sids.wide = await create('MOB-wide', projects.main.id)
+  const call = (
+    name: string,
+    args: Record<string, unknown>
+  ): { id: string; name: string; args: string } => ({
+    id: `call_wide_${name}`,
+    name,
+    args: JSON.stringify(args)
+  })
+  await seedReply(sids.wide, `look at ${WIDE_URL}`, WIDE_REPLY, undefined, [
+    call('ls', { path: mainDir }),
+    call('glob', { pattern: '*.txt', path: mainDir }),
+    call('grep', { pattern: 'hello', path: mainDir }),
+    call('read', { path: join(mainDir, 'hello.txt') }),
+    call('knowledge', { action: 'bases' }),
+    call('session', { action: 'list-sessions' })
+  ])
 
   writeBotMd(app, BOT, { displayName: 'Mob Bot' })
 
@@ -1206,6 +1265,72 @@ describe('phone layout: the shell', () => {
       return t && !t.expanded && t.visible ? t : null
     }, 'the long thought collapsed again')
     expect(Math.abs(closed.height - short.height)).toBeLessThanOrEqual(1)
+  })
+
+  it('M-24 wide content (a long mixed step group, long links, long code) does not make the chat scroll sideways', async () => {
+    const chat = chatPane(page())
+    try {
+      await emulate(page(), NARROW, true)
+      await until(
+        async () => (await page().eval<number>('innerWidth')) === NARROW.width,
+        'the page at 360 wide'
+      )
+      // 会话在项目组里：单跑这一条时组还收着（M-2 起整份文件跑的时候已经展开）
+      await toTab('sessions')
+      if ((await mobile().listGroupExpanded(projects.main.name)) === false) {
+        await mobile().tap({ listGroupToggle: projects.main.name })
+        await until(
+          async () => (await mobile().listGroupExpanded(projects.main.name)) === true,
+          'the project group expanded'
+        )
+      }
+      await openFromList('MOB-wide')
+      await chat.ready()
+      await until(async () => {
+        const replies = (await chat.settledItems()).filter((i) => i.role === 'assistant')
+        return replies.some((r) => r.text.startsWith('MOB-WIDE-REPLY'))
+      }, 'the wide reply on the chat page')
+      // 前提：六次调用都成功、并成了一行（失败的调用不并，标签就没这么长）
+      expect(await chat.stepGroups()).toEqual([
+        expect.objectContaining({ state: 'collapsed', size: 6 })
+      ])
+
+      // 连着两次量到同样的数（列表落位、字体载入、代码高亮之后）
+      const settled = async (what: string): Promise<ConversationOverflowShot> => {
+        let prev = ''
+        return until(async () => {
+          const shot = await mobile().conversationOverflow()
+          if (!shot) return null
+          const key = JSON.stringify(shot)
+          if (key !== prev) {
+            prev = key
+            return null
+          }
+          return shot
+        }, what)
+      }
+      const expectNoSideways = (shot: ConversationOverflowShot, what: string): void => {
+        const msg = `${what}: ${JSON.stringify(shot)}`
+        expect(shot.offenders, msg).toEqual([])
+        expect(shot.scrollWidth, msg).toBeLessThanOrEqual(shot.clientWidth)
+        expect(shot.docScrollWidth, msg).toBeLessThanOrEqual(shot.innerWidth)
+      }
+
+      expectNoSideways(await settled('the collapsed card measured'), 'collapsed')
+      const row = await mobile().stepGroupRow()
+      expect(row, 'the step group row').not.toBeNull()
+      expect(row!.labelScrollWidth, JSON.stringify(row)).toBeGreaterThan(row!.labelClientWidth)
+      expect(row!.count.right, JSON.stringify(row)).toBeLessThanOrEqual(row!.row.right + 0.5)
+
+      await chat.expandGroups()
+      await until(
+        async () => (await chat.stepGroups())[0]?.state === 'expanded',
+        'the step group expanded'
+      )
+      expectNoSideways(await settled('the expanded card measured'), 'expanded')
+    } finally {
+      await phone()
+    }
   })
 
   it('M-23 settings: Providers and LLM Tools drill down — a list, one item under a second-level header, back to the list where it was', async () => {

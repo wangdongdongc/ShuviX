@@ -520,6 +520,10 @@ span.sb-icon {
   /* white-space 是继承属性 —— 显式重置，避免在 white-space: pre-wrap 的容器里
      (如 UserBubble) 被继承导致 markdown 中段间换行被渲染为硬换行 */
   white-space: normal;
+  /* 一个放不下的长词就地折开（继承到正文、标题、引用、列表）：GFM 不认的链接（没有 scheme
+     也没有 www.）、没加反引号的长标识符都是普通文字，不折就撑出对话列 —— 手机上整条对话
+     能左右滑。链接也靠这一条；行内代码、代码块、表格另有更强的 anywhere。 */
+  overflow-wrap: break-word;
 }
 
 /* —— 标题 —— */
@@ -598,7 +602,6 @@ span.sb-icon {
 .markdown-body a {
   color: var(--color-accent);
   text-decoration: none;
-  overflow-wrap: break-word;
   transition: text-decoration-color 0.15s;
 }
 

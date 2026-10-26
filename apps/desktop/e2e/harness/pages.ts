@@ -12088,6 +12088,21 @@ export interface ComposerLayoutShot {
   }
 }
 
+/** 对话滚动区的横向溢出（见 `conversationOverflow`） */
+export interface ConversationOverflowShot {
+  /** `.conversation-scroller` 的 scrollWidth / clientWidth（前者大于后者 = 对话能左右滑） */
+  scrollWidth: number
+  clientWidth: number
+  /** 整页：document 的 scrollWidth 与视口宽 */
+  docScrollWidth: number
+  innerWidth: number
+  /**
+   * 右缘伸出滚动区内容区的元素（最里层的那些，自己滚 / 自己裁的容器里面的不算），每个写成
+   * `tag.class1.class2 [data-*] "文字开头" +多出的像素`，最多 12 个 —— 失败信息用
+   */
+  offenders: string[]
+}
+
 /** 一个思考块的几何（见 `thinkingShots`） */
 export interface ThinkingBlockShot {
   /** 同一张卡终答正文的文字（找不到 → ''） */
@@ -12252,6 +12267,18 @@ export interface WebMobilePane {
   thinkingShots(): Promise<ThinkingBlockShot[]>
   /** 程序化点一下终答正文为 `reply` 的那张卡里的思考块（切换展开）；找不到 → 抛 */
   clickThinking(reply: string): Promise<void>
+  /** 对话滚动区此刻有没有横向溢出、是谁伸出去的（滚动区不在 → null） */
+  conversationOverflow(): Promise<ConversationOverflowShot | null>
+  /**
+   * 对话滚动区里第一个步骤合并行（`data-step-group`）的头行：行本身、标签那一格（`data-step-label`）的
+   * scrollWidth / clientWidth（前者大 = 截断了）、计数徽章（`data-group-count`）。没有 → null
+   */
+  stepGroupRow(): Promise<{
+    row: BoxShot
+    labelScrollWidth: number
+    labelClientWidth: number
+    count: BoxShot
+  } | null>
   /** `.opacity-30`（专注模式压暗）的个数：'shell' 只数手机布局里的，'document' 整页 */
   dimmedCount(scope: 'shell' | 'document'): Promise<number>
 
@@ -12775,6 +12802,73 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       })()`)
       if (!clicked) throw new Error(`no thinking block in the card answering ${reply}`)
     },
+    conversationOverflow: () =>
+      client.eval<ConversationOverflowShot | null>(`(() => {
+        const scroller = document.querySelector('.conversation-scroller')
+        if (!scroller) return null
+        const edge = scroller.getBoundingClientRect().left + scroller.clientWidth + 0.5
+        // 自己滚 / 自己裁的容器（代码视图的 .cm-scroller、截断的一格）里面伸出去的不算：滚动区看不到它们
+        const clipped = (el) => {
+          for (let a = el.parentElement; a && a !== scroller; a = a.parentElement) {
+            if (getComputedStyle(a).overflowX !== 'visible') return true
+          }
+          return false
+        }
+        const out = [...scroller.querySelectorAll('*')].filter(
+          (el) => el.getBoundingClientRect().right > edge && !clipped(el)
+        )
+        // 伸出去的也可能只是一段文字（一个折不开的长词撑破了它所在的段落，段落盒子本身没变宽）：按它的父元素记
+        const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT)
+        const range = document.createRange()
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          const parent = n.parentElement
+          if (!parent || out.includes(parent) || clipped(n)) continue
+          range.selectNodeContents(n)
+          if (range.getBoundingClientRect().right > edge) out.push(parent)
+        }
+        const leaves = out.filter((el) => !out.some((o) => o !== el && el.contains(o)))
+        const textRight = (el) => {
+          let right = el.getBoundingClientRect().right
+          for (const c of el.childNodes) {
+            if (c.nodeType !== 3) continue
+            range.selectNodeContents(c)
+            right = Math.max(right, range.getBoundingClientRect().right)
+          }
+          return right
+        }
+        const describe = (el) => {
+          const cls = typeof el.className === 'string' ? el.className.trim().split(/\\s+/).slice(0, 3) : []
+          const data = [...el.attributes].map((a) => a.name).filter((n) => n.startsWith('data-'))
+          const text = (el.textContent ?? '').trim().slice(0, 24)
+          const over = Math.round(textRight(el) - edge)
+          return [el.tagName.toLowerCase() + cls.map((c) => '.' + c).join(''), data.length ? '[' + data.join(' ') + ']' : '', JSON.stringify(text), '+' + over].filter(Boolean).join(' ')
+        }
+        return {
+          scrollWidth: scroller.scrollWidth,
+          clientWidth: scroller.clientWidth,
+          docScrollWidth: document.documentElement.scrollWidth,
+          innerWidth: window.innerWidth,
+          offenders: leaves.slice(0, 12).map(describe)
+        }
+      })()`),
+    stepGroupRow: () =>
+      client.eval(`(() => {
+        const group = document.querySelector('.conversation-scroller [data-step-group]')
+        const row = group?.querySelector('button')
+        const label = row?.querySelector('[data-step-label]')
+        const count = row?.querySelector('[data-group-count]')
+        if (!row || !label || !count) return null
+        const box = (el) => {
+          const r = el.getBoundingClientRect()
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+        }
+        return {
+          row: box(row),
+          labelScrollWidth: label.scrollWidth,
+          labelClientWidth: label.clientWidth,
+          count: box(count)
+        }
+      })()`),
     dimmedCount: (scope) =>
       client.eval<number>(
         `(${scope === 'shell' ? SHELL : 'document'})?.querySelectorAll('.opacity-30').length ?? 0`
