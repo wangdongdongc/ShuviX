@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Auto-redaction — secrets and personal data reach models as placeholders'
-description: 'How ShuviX keeps API keys, passwords, tokens, private keys and personal data away from model providers: placeholders such as `{{API_KEY_k3v7x2mq}}` in the conversation record, real values for tools, the screen showing what the model received, the categories it finds, the two policy levels (`modelRequest` / `send`, `sensitive` / `disclose`) and their dispositions, the builtin `redact-sensitive`, recipes (trust a model, send a category, send test keys, never send private keys, let only the user answer when a restored secret leaves the sandbox), checking a draft with `shuvix policy check --redaction`, working with placeholders as an agent, and the limits.'
+description: 'How ShuviX keeps API keys, passwords, tokens, private keys and personal data away from model providers: placeholders such as `{{REDACTED_API_KEY_k3v7x2mq}}` in the conversation record, real values for tools, the screen showing what the model received, the categories it finds, the two policy levels (`modelRequest` / `send`, `sensitive` / `disclose`) and their dispositions, the builtin `redact-sensitive`, recipes (trust a model, send a category, send test keys, never send private keys, let only the user answer when a restored secret leaves the sandbox), checking a draft with `shuvix policy check --redaction`, working with placeholders as an agent, and the limits.'
 tags: [shuvix, policy, security, redaction, privacy, secrets]
 status: stable
 sources:
@@ -18,12 +18,13 @@ sources:
 
 Before anything is written into a conversation's record — what the user types, what a tool
 returns, a notice, a task handed to another agent — ShuviX looks for secrets and personal data in
-it and stores each one as a **placeholder**: `{{API_KEY_k3v7x2mq}}`, the category and eight
-characters derived from the value. The real value is encrypted into **that conversation's own
-table**, which is deleted with the conversation.
+it and stores each one as a **placeholder**: `{{REDACTED_API_KEY_k3v7x2mq}}` — `REDACTED_`, the
+category and eight characters derived from the value. The real value is encrypted into **that
+conversation's own table**, which is deleted with the conversation. Conversations from v0.2.30 and
+v0.2.31 hold the older form without `REDACTED_` (`{{API_KEY_k3v7x2mq}}`), which works the same.
 
 - **Tools get the real values.** Placeholders in a tool call's arguments are replaced just before
-  the tool runs, so `curl -H "Authorization: Bearer {{API_KEY_k3v7x2mq}}"` sends the real key, and
+  the tool runs, so `curl -H "Authorization: Bearer {{REDACTED_API_KEY_k3v7x2mq}}"` sends the real key, and
   a file written or edited holds the real content.
 - **The screen shows what the model received.** Where the model gets a placeholder you see the
   placeholder, shaded; point at it (or tap it) to see the real value that tools and files use, with
@@ -32,17 +33,18 @@ table**, which is deleted with the conversation.
 - **What a model receives is decided by policy** (below). By default every model gets
   placeholders, except for four categories that are part of almost every coding request.
 
-The record itself never holds the real values, whatever the policy says — nor do the
-conversation's exports and forks.
+Apart from those four categories, the record itself never holds the real values, whatever the
+policy says — nor do the conversation's exports and forks.
 
 ## For agents: working with placeholders
 
 - A placeholder **is** the value as far as you are concerned. Copy it exactly into tool arguments
   — a command, a file's content, an `edit`'s old and new text — and the tool gets the real value.
-  Do not ask the user for the "real" value and do not treat the placeholder as a missing
-  configuration: the file on disk holds the real one.
+  It is not a template variable to fill in, and not a missing configuration: the file on disk
+  holds the real value. Do not guess what it stands for, look for it elsewhere or ask the user
+  for it.
 - You cannot see the value, so you cannot work on it: compute its length, decode it, check its
-  format, split it. If the task needs that, let a command do it (`printf %s "{{API_KEY_…}}" | wc -c`).
+  format, split it. If the task needs that, let a command do it (`printf %s "{{REDACTED_API_KEY_…}}" | wc -c`).
 - A tool that reports a placeholder it could not restore (from another conversation, or a table
   the computer cannot decrypt any more) has not run. Read the source again — it comes back with a
   placeholder this conversation can restore.
@@ -75,8 +77,11 @@ conversation's exports and forks.
 
 The last four are in nearly every coding request (the system prompt already holds the home
 folder) and a model has to copy them exactly, so the builtin policy sends them; a policy of your
-own can keep them as placeholders too. Detection does not depend on the policy: every category is
-always replaced in the record, so turning a category on later protects the history at once.
+own can keep them as placeholders too. The record keeps these four as written: a model that gets
+the real user name writes it back, and replacing it there would also replace a short one such as
+`agent` wherever the word appears. A policy that keeps one of them as a placeholder replaces it in
+every request on the way out, the history included. Every other category is always replaced in the
+record, whatever the policy says, so turning it on later protects the history at once.
 
 UUIDs and long hex ids are never touched (tool call ids would stop matching), and code that only
 _mentions_ a secret is left alone (`secretKey: Uint8Array;`, `process.env.API_KEY`, `${PASS}`,
@@ -107,7 +112,7 @@ The subject is the agent the request is for (`subject.kind: agent`, its `agentKi
 scanned once more for content that was never in the record (instruction files, parts of the
 system prompt, conversations from before this feature) and for those pieces level 2 decides the
 same way. When a model receives a real value and writes it in its reply, the reply is stored with
-the placeholder again.
+the placeholder again (except the four categories the record keeps as written).
 
 The builtin **`redact-sensitive`** is exactly two rules:
 
@@ -182,8 +187,8 @@ with everything **but** private keys, trust it at level 2 instead —
 `force-allow` on `sensitive` with `match: "object.provider == 'home-ai' && object.category != 'PRIVATE_KEY'"`
 — and keep the `deny` above.
 
-Keep user names as placeholders too (and likewise `HOSTNAME`, `IP`, `BUCKET`): an `allow` that
-carries the disposition —
+Keep user names as placeholders too (and likewise `HOSTNAME`, `IP`, `BUCKET`; they are replaced on
+the way out, the record keeps them as written): an `allow` that carries the disposition —
 
 ```yaml
 shuvix-policy-rules:

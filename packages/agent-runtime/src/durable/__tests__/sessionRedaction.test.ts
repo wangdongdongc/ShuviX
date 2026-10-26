@@ -7,6 +7,7 @@
  *   SR-4 还原：参数里的占位符（含写坏的形式）换回真值、报出还原了哪些类别；解不开的报为不可用
  *   SR-5 跨会话：内容流进别的会话时，引用到的表项复制过去
  *   SR-6 同一个值沿用表里已有的占位符；没配脱敏的会话什么都不换
+ *   SR-7 默认照发的几类（USERNAME 等）照原样存，也不挤掉与之相邻的别的类别；表里已有它们的旧占位符也一样
  */
 import { createHmac } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
@@ -78,7 +79,7 @@ describe('会话脱敏', () => {
     await waitFor(() => t.kit.requests.length >= 2)
     const seen = requestTexts(t.kit, 1).join('\n')
     expect(seen).not.toContain(KEY)
-    expect(seen).toMatch(/OPENAI_API_KEY=\{\{API_KEY_[a-z2-7]{8}\}\}/)
+    expect(seen).toMatch(/OPENAI_API_KEY=\{\{REDACTED_API_KEY_[a-z2-7]{8}\}\}/)
     const stored = await storedText(session)
     expect(stored).not.toContain(KEY)
     expect(stored).toContain('PORT=3000')
@@ -103,11 +104,11 @@ describe('会话脱敏', () => {
     const session = await t.open('sr4')
     const redaction = session.redaction!
     const masked = await redaction.maskText(`key ${KEY} and pass DB_PASSWORD=${PASSWORD}`)
-    const keyPlaceholder = masked.match(/\{\{API_KEY_[a-z2-7]{8}\}\}/)![0]
+    const keyPlaceholder = masked.match(/\{\{REDACTED_API_KEY_[a-z2-7]{8}\}\}/)![0]
     const body = keyPlaceholder.slice(2, -2)
     const outcome = await redaction.restoreJson({
       command: `curl -H "Authorization: Bearer ${keyPlaceholder}" x`,
-      nested: [{ v: `{{ ${body} }}` }, body.toLowerCase().replace(/^api_key/, 'api_key')],
+      nested: [{ v: `{{ ${body} }}` }, body.toLowerCase()],
       n: 3
     })
     expect(outcome.value).toEqual({
@@ -162,5 +163,27 @@ describe('会话脱敏', () => {
     plain.kit.queue(answer('ok'))
     await other.submitUser(`DB_PASSWORD=${PASSWORD}`)
     expect(requestTexts(plain.kit, 0).join('\n')).toContain(PASSWORD)
+  })
+
+  it('SR-7 默认照发的几类照原样存，不挤掉别的类别；表里的旧占位符也一样', async () => {
+    const t = await makeHost({ ephemeral: ['sr7'], redaction: host })
+    const session = await t.open('sr7')
+    const redaction = session.redaction!
+    const masked = await redaction.maskText(
+      'open /Users/alexander/proj on root@buildbox, mail bob@acme-corp.cn'
+    )
+    expect(masked).toContain('/Users/alexander/proj on root@buildbox')
+    expect(masked).toMatch(/mail \{\{REDACTED_EMAIL_[a-z2-7]{8}\}\}$/)
+    const table = await redaction.table()
+    expect([...table.entries()].map(([, item]) => item.category)).toEqual(['EMAIL'])
+    // v0.2.30 / v0.2.31 存下的用户名占位符：按已知值也不再换
+    table.put('{{USERNAME_aaaaaaaa}}', {
+      category: 'USERNAME',
+      rule: 'home-path',
+      value: 'alexander'
+    })
+    expect(await redaction.maskText('cd /Users/alexander; whoami → alexander')).toBe(
+      'cd /Users/alexander; whoami → alexander'
+    )
   })
 })

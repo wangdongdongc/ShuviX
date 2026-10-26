@@ -25,7 +25,7 @@ shuvix-policy-rules:
 **What it does**: before anything is written to a conversation, ShuviX finds
 secrets and personal data in it (API keys, tokens, private keys, passwords,
 emails, phone numbers, ID and bank card numbers…) and stores a placeholder such
-as `{{API_KEY_k3v7x2mq}}` instead. The real value is kept, encrypted, in the
+as `{{REDACTED_API_KEY_k3v7x2mq}}` instead. The real value is kept, encrypted, in the
 session's own table. When a tool runs, the placeholders in its arguments become
 the real values again, so commands work and files get the real content; the
 screen shows a mark in their place. What the model receives is decided here:
@@ -37,7 +37,7 @@ screen shows a mark in their place. What the model receives is decided here:
   (`redact`) — except four kinds that nearly every coding request contains and
   that the model must copy exactly: the user name in a home folder (`USERNAME`),
   `user@host` (`HOSTNAME`), public IP addresses (`IP`) and cloud buckets
-  (`BUCKET`). Those are sent as written.
+  (`BUCKET`). Those are sent, and stored in the conversation, as written.
 
 **Objects**: `object.provider` is the provider's name as Settings shows it,
 `object.model` the model id. A value found has `object.category` (the kinds

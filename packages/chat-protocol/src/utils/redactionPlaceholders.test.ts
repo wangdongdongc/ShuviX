@@ -42,7 +42,10 @@ describe('占位符（界面）', () => {
 
   it('RP-2 列出、类别、判断', () => {
     expect(placeholdersIn(`${KEY} ${MAIL} ${KEY}`)).toEqual([KEY, MAIL])
+    expect(categoryOfPlaceholder('{{REDACTED_PRIVATE_KEY_aaaaaaaa}}')).toBe('PRIVATE_KEY')
+    // v0.2.30 / v0.2.31 的旧写法
     expect(categoryOfPlaceholder('{{PRIVATE_KEY_aaaaaaaa}}')).toBe('PRIVATE_KEY')
+    expect(isPlaceholder('{{REDACTED_PRIVATE_KEY_aaaaaaaa}}')).toBe(true)
     expect(isPlaceholder(KEY)).toBe(true)
     expect(isPlaceholder(` ${KEY}`)).toBe(false)
     expect(hasPlaceholder(`x ${KEY}`)).toBe(true)

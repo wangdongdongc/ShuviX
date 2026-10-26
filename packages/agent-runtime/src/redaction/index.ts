@@ -5,6 +5,7 @@
 export {
   SENSITIVE_CATEGORIES,
   CATEGORIES_SENT_BY_DEFAULT,
+  isKeptAsWritten,
   isPersonalCategory,
   type SensitiveCategory
 } from './categories'
@@ -12,9 +13,11 @@ export { detectSensitive, type Finding } from './detect'
 export { KnownValues, MIN_KNOWN, type KnownSpan, type KnownValue } from './known'
 export {
   PLACEHOLDER_PATTERN,
+  PLACEHOLDER_PREFIX,
   categoryOfPlaceholder,
   findPlaceholders,
   makePlaceholder,
+  placeholderFor,
   placeholderSpans,
   type PlaceholderHit,
   type PlaceholderSigner

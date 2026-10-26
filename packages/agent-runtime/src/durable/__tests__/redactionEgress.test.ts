@@ -8,6 +8,8 @@
  *   EG-4 拒发：第一层（不带类别）与第二层（带类别）都抛 EgressBlockedError
  *   EG-5 thinking 块一字不差
  *   EG-6 同一 (类别, 规则, 值) 在一次请求里只问一次策略
+ *   EG-7 记录里照原样存的几类（USERNAME 等）：照发时不记表、回复里不换回（旧版本存下的占位符也是）；策略要它们
+ *        保持占位符时兜底现换、记表
  * 回复的换回（Remasker）：
  *   RM-1 流式：真值被切在两个事件之间时先压住，放出的部分从不含真值、只追加；最终与整段换回一致
  *   RM-2 短值只换整词，流式时结尾那个没写完的词先压住
@@ -192,6 +194,36 @@ describe('出口：请求的改写', () => {
       const sent = out.context.messages[1] as AssistantMessage
       expect(sent.content[0]).toEqual(assistant.content[0])
     }
+  })
+
+  it('EG-7 记录里照原样存的几类：照发时不记表、回复不换回；策略要占位符时兜底现换', () => {
+    // v0.2.31 之前存下的旧写法占位符
+    const OLD_USER = makePlaceholder(signer, 'USERNAME', 'agent').replace('REDACTED_', '')
+    const table = tableWith([OLD_USER, 'USERNAME', 'agent'])
+    const context: Context = {
+      systemPrompt: 'Working directory: /Users/agent/proj',
+      messages: [user(`open /Users/agent/proj/app.ts`), toolResult(`/Users/${OLD_USER}/proj`)]
+    }
+    const sent = prepareEgress(
+      context,
+      table,
+      signer,
+      decision(true, (category) => (category === 'USERNAME' ? 'send' : 'redact'))
+    )
+    expect(sent.context.systemPrompt).toBe('Working directory: /Users/agent/proj')
+    expect(texts(sent.context)).toContain('/Users/agent/proj/app.ts')
+    expect(texts(sent.context)).not.toContain(OLD_USER)
+    expect(sent.entries).toEqual([])
+    // 回复里的 agent 不是用户名：不换
+    expect(sent.remasker).toBeUndefined()
+
+    const redacted = prepareEgress(context, new RedactionTable(), signer, decision(true))
+    const P_USER = makePlaceholder(signer, 'USERNAME', 'agent')
+    expect(P_USER).toMatch(/^\{\{REDACTED_USERNAME_[a-z2-7]{8}\}\}$/)
+    expect(redacted.context.systemPrompt).toBe(`Working directory: /Users/${P_USER}/proj`)
+    expect(redacted.entries).toEqual([
+      { placeholder: P_USER, category: 'USERNAME', rule: expect.any(String), value: 'agent' }
+    ])
   })
 
   it('EG-6 同一 (类别, 规则, 值) 一次请求只问一次', () => {

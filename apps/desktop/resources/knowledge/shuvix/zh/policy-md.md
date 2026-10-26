@@ -126,7 +126,7 @@ env      { host: 'desktop' | 'extension', platform: 'darwin' | 'win32' | 'linux'
 vars     宿主变量表（见下），含本会话的权限表
 ```
 
-`tool.restored` 是 ShuviX 这次往工具参数里换回真值的敏感内容类别（自动脱敏：agent 写的是 `{{API_KEY_…}}`，
+`tool.restored` 是 ShuviX 这次往工具参数里换回真值的敏感内容类别（自动脱敏：agent 写的是 `{{REDACTED_API_KEY_…}}`，
 工具拿到的是真的 key）；没有换回就是空列表。`redaction` 条目里有一条用到它的规则。
 
 工具调用的 `subject.kind` 是 `agent`，界面自己的被动检查是 `user`，远程访问的浏览器发来的请求是 `network` ——

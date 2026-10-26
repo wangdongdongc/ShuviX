@@ -2,7 +2,7 @@
  * 自动脱敏的出口（docs/auto-redaction-design.md §2.4）：发给模型之前，按策略决定请求里每一处是保持占位符、
  * 换回真值、还是拦下整个请求；对话记录之外的内容（指令文件、系统提示词片段、旧会话里的真值）在这里再检测一遍
  * 兜底。模型看到过真值时，它的回复里也可能写出真值 —— 交回之前按这次发出去的真值精确替换回占位符
- * （Remasker）：流式的每个事件里累积的那份回复（pi-durable 每 100 毫秒把它写进存储，中途停止时它就成了正式
+ * （Remasker；记录里本来就照原样存的几类不换，categories.ts isKeptAsWritten）：流式的每个事件里累积的那份回复（pi-durable 每 100 毫秒把它写进存储，中途停止时它就成了正式
  * 记录）与最终结果都要换；结尾正好是某个真值的开头时先压住不放出。
  *
  * **不碰 thinking 块**：带签名的 thinking 发回时必须一字不差，模型写下什么就原样发回、原样存下。
@@ -11,9 +11,10 @@
  * （sensitive / disclose / redact）判。判定结果按 (类别, 规则, 值) 在一次请求里缓存。
  */
 import type { AssistantMessage, Context, Message } from '@earendil-works/pi-ai'
+import { isKeptAsWritten } from '../redaction/categories'
 import { detectSensitive } from '../redaction/detect'
 import { KnownValues } from '../redaction/known'
-import { findPlaceholders, makePlaceholder, type PlaceholderSigner } from '../redaction/placeholder'
+import { findPlaceholders, placeholderFor, type PlaceholderSigner } from '../redaction/placeholder'
 import type { RedactionEntry, RedactionTable } from './redactionTable'
 
 /** 第二层的处置 */
@@ -47,7 +48,7 @@ interface EgressEnv {
   signer: PlaceholderSigner
   decision: EgressDecision
   cache: Map<string, DiscloseAction>
-  /** 这次以真值发出去的：值 → 它的占位符（回复里的真值据此换回） */
+  /** 这次以真值发出去的：值 → 它的占位符（回复里的真值据此换回）；记录里照原样存的几类不在里面 */
   sent: Map<string, string>
   /** 兜底检测新认出的（记进对照表） */
   entries: RedactionEntry[]
@@ -73,10 +74,10 @@ function egressText(s: string, env: EgressEnv): string {
     let out = ''
     let last = 0
     for (const hit of hits) {
-      const value = env.table.valueOf(hit.placeholder)
-      if (value === undefined) continue
-      env.sent.set(value, hit.placeholder)
-      out += s.slice(last, hit.start) + value
+      const item = env.table.get(hit.placeholder)
+      if (item?.value === undefined) continue
+      if (!isKeptAsWritten(item.category)) env.sent.set(item.value, hit.placeholder)
+      out += s.slice(last, hit.start) + item.value
       last = hit.end
     }
     return out + s.slice(last)
@@ -88,20 +89,28 @@ function egressText(s: string, env: EgressEnv): string {
     const action = disclose(env, item.category, item.rule, item.value)
     if (action === 'block') throw new EgressBlockedError(item.category)
     if (action === 'send') {
-      env.sent.set(item.value, hit.placeholder)
+      // 旧版本把这几类也换成了占位符：照发，回复里不再换回
+      if (!isKeptAsWritten(item.category)) env.sent.set(item.value, hit.placeholder)
       edits.push({ start: hit.start, end: hit.end, text: item.value })
     }
   }
-  // 兜底：还没换成占位符的（请求时现拼的内容、旧会话里的真值）
+  // 兜底：还没换成占位符的（请求时现拼的内容、旧会话里的真值、记录里照原样存的几类）
   for (const f of detectSensitive(s, env.table.known)) {
     if (hits.some((h) => f.start < h.end && f.end > h.start)) continue
-    const known = env.table.known.get(f.value)
-    const placeholder = known?.placeholder ?? makePlaceholder(env.signer, f.category, f.value)
-    if (!known && !env.table.has(placeholder)) {
-      env.entries.push({ placeholder, category: f.category, rule: f.rule, value: f.value })
-    }
     const action = disclose(env, f.category, f.rule, f.value)
     if (action === 'block') throw new EgressBlockedError(f.category)
+    // 照发、记录里也照原样存的：不记表，回复里也不换
+    if (action === 'send' && isKeptAsWritten(f.category)) continue
+    const known = env.table.known.get(f.value)
+    const placeholder =
+      known?.placeholder ?? placeholderFor(env.signer, f.category, f.value, (p) => env.table.has(p))
+    if (
+      !known &&
+      !env.table.has(placeholder) &&
+      !env.entries.some((e) => e.placeholder === placeholder)
+    ) {
+      env.entries.push({ placeholder, category: f.category, rule: f.rule, value: f.value })
+    }
     if (action === 'send') env.sent.set(f.value, placeholder)
     else edits.push({ start: f.start, end: f.end, text: placeholder })
   }

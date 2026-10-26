@@ -137,7 +137,7 @@ vars     the host variable table (below), this session's permission table includ
 ```
 
 `tool.restored` lists the categories of sensitive content ShuviX put back into this call's
-arguments (auto-redaction: the agent wrote `{{API_KEY_…}}`, the tool gets the real key) — empty
+arguments (auto-redaction: the agent wrote `{{REDACTED_API_KEY_…}}`, the tool gets the real key) — empty
 when nothing was restored; the `redaction` entry has a rule that uses it.
 
 `subject.kind` is `agent` for tool calls, `user` for the UI's own passive checks and `network` for

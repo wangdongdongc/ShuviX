@@ -1,7 +1,10 @@
 /**
- * 占位符 —— `{{CATEGORY_xxxxxxxx}}`，8 位是 `base32(HMAC-SHA256(key, category + "\0" + value))` 的前 8 个字符
- * （小写）。同一个值永远得到同一个占位符：发给厂商的字节不变，前缀缓存和 thinking 签名都不受影响；
+ * 占位符 —— `{{REDACTED_CATEGORY_xxxxxxxx}}`，8 位是 `base32(HMAC-SHA256(key, category + "\0" + value))` 的前 8 个
+ * 字符（小写）。同一个值永远得到同一个占位符：发给厂商的字节不变，前缀缓存和 thinking 签名都不受影响；
  * 跨会话传递时只复制对照表项、不改写文本。格式与识别移植自 magpie（yetone/magpie v0.1.1548，MIT）。
+ *
+ * `REDACTED_` 让模型在看到它的地方就知道这是脱敏掉的值：magpie 的 `{{CATEGORY_xxxxxxxx}}` 像没填的模板变量，
+ * 模型会去猜它是什么、去别处找它。v0.2.30 / v0.2.31 写下的是没有前缀的旧写法，照样认（会话已有的值沿用它）。
  *
  * HMAC 由宿主注入（PlaceholderSigner）：密钥是宿主的秘密，agent-runtime 不碰 Node 的 crypto。
  */
@@ -29,15 +32,33 @@ function base32Head(digest: Uint8Array): string {
   return out
 }
 
+/** 占位符正文的开头（旧写法没有） */
+export const PLACEHOLDER_PREFIX = 'REDACTED_'
+
 export function makePlaceholder(
   signer: PlaceholderSigner,
   category: string,
   value: string
 ): string {
-  return `{{${category}_${base32Head(signer.sign(`${category}\u0000${value}`))}}}`
+  return `{{${PLACEHOLDER_PREFIX}${category}_${base32Head(signer.sign(`${category}\u0000${value}`))}}}`
 }
 
-/** 占位符的标准写法 */
+/**
+ * 一个新认出的值用哪个占位符：会话里已有它的旧写法（同一类别同一个值，v0.2.30 / v0.2.31 记下的）就沿用 ——
+ * 同一个值在一个会话里只有一个名字。has = 会话对照表里有没有。
+ */
+export function placeholderFor(
+  signer: PlaceholderSigner,
+  category: string,
+  value: string,
+  has: (placeholder: string) => boolean
+): string {
+  const placeholder = makePlaceholder(signer, category, value)
+  const legacy = `{{${placeholder.slice(2 + PLACEHOLDER_PREFIX.length)}`
+  return has(legacy) ? legacy : placeholder
+}
+
+/** 占位符的标准写法（新旧两种都认） */
 export const PLACEHOLDER_PATTERN = String.raw`\{\{[A-Z][A-Z0-9_]*_[a-z2-7]{8}\}\}`
 
 /** 文本里已有的占位符（[起, 止)）—— 检测不会在它们里面再认出东西 */
@@ -49,22 +70,28 @@ export function placeholderSpans(s: string): Array<[number, number]> {
   return out
 }
 
-/** 占位符的类别段（`{{API_KEY_k3v7x2mq}}` → `API_KEY`） */
+/** 占位符的类别段（`{{REDACTED_API_KEY_k3v7x2mq}}`、旧写法 `{{API_KEY_k3v7x2mq}}` → `API_KEY`） */
 export function categoryOfPlaceholder(placeholder: string): string {
-  return placeholder.slice(2, placeholder.length - 2 - 9)
+  const body = placeholder.slice(2, placeholder.length - 2 - 9)
+  return body.startsWith(PLACEHOLDER_PREFIX) ? body.slice(PLACEHOLDER_PREFIX.length) : body
 }
 
 // ─────────────────────────── 识别模型写回来的占位符 ───────────────────────────
 
-/** 去掉括号的占位符正文，模型可能这样写回来：API_KEY_k3v7x2mq、phone_b5puzbfv、PHONE_B5PUZBFV */
+/** 去掉括号的占位符正文，模型可能这样写回来：REDACTED_API_KEY_k3v7x2mq、redacted_phone_b5puzbfv、PHONE_B5PUZBFV */
 const PLACEHOLDER_BODY = /[A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8}/g
 
 const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_]/.test(c)
 
-/** 不管大小写，正文对应的标准占位符 */
-function canonical(body: string): string {
+/** 不管大小写，正文对应的标准占位符；再加上多写或少写了 REDACTED_ 的那个（新旧写法混着出现时模型会写串） */
+function candidates(body: string): [string, string] {
   const cut = body.length - 8
-  return `{{${body.slice(0, cut).toUpperCase()}${body.slice(cut).toLowerCase()}}}`
+  const head = body.slice(0, cut).toUpperCase()
+  const hash = body.slice(cut).toLowerCase()
+  const other = head.startsWith(PLACEHOLDER_PREFIX)
+    ? head.slice(PLACEHOLDER_PREFIX.length)
+    : PLACEHOLDER_PREFIX + head
+  return [`{{${head}${hash}}}`, `{{${other}${hash}}}`]
 }
 
 /**
@@ -99,7 +126,8 @@ export interface PlaceholderHit {
 }
 
 /**
- * 找出文本里的占位符，包括模型写坏的形式（{{ PHONE_b5puzbfv }}、少了括号、改了大小写）。
+ * 找出文本里的占位符，包括模型写坏的形式（{{ REDACTED_PHONE_b5puzbfv }}、少了括号、改了大小写、多写或少写了
+ * REDACTED_）。
  * 只认 known 里有的（类别 + 8 位哈希对得上 —— 随便一段文字碰巧对上几乎不可能）。
  */
 export function findPlaceholders(
@@ -114,8 +142,8 @@ export function findPlaceholders(
     let a = m.index
     let z = a + m[0].length
     if (a < last || isWordChar(s[a - 1]) || isWordChar(s[z])) continue
-    const placeholder = canonical(m[0])
-    if (!known(placeholder)) continue
+    const placeholder = candidates(m[0]).find(known)
+    if (placeholder === undefined) continue
     ;[a, z] = braces(s, a, z)
     if (a < last) continue
     out.push({ start: a, end: z, placeholder })

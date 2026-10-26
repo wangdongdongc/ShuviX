@@ -24,7 +24,7 @@ describe('自动脱敏的钥匙', () => {
   it('RK-1 同一个值同一个占位符；HMAC 密钥加密落盘', () => {
     const a = makePlaceholder(placeholderSigner, 'API_KEY', 'sk-abc')
     expect(makePlaceholder(placeholderSigner, 'API_KEY', 'sk-abc')).toBe(a)
-    expect(a).toMatch(/^\{\{API_KEY_[a-z2-7]{8}\}\}$/)
+    expect(a).toMatch(/^\{\{REDACTED_API_KEY_[a-z2-7]{8}\}\}$/)
     const onDisk = readFileSync(join(dir.path, '.redaction-key'), 'utf8')
     expect(onDisk.startsWith('$SHUVIX_ENC$')).toBe(true)
   })

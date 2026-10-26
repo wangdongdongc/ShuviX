@@ -68,7 +68,7 @@ interface AssistantBubbleProps {
 }
 
 /**
- * 朗读的文本：脱敏的占位符读成它的类别（「API key」），既不念出 `{{API_KEY_…}}`，也不把真值交给朗读服务
+ * 朗读的文本：脱敏的占位符读成它的类别（「API key」），既不念出 `{{REDACTED_API_KEY_…}}`，也不把真值交给朗读服务
  * （它可能在别的机器上）。
  */
 function speakableText(

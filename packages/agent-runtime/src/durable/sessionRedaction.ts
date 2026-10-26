@@ -1,5 +1,6 @@
 /**
- * 一条会话的脱敏（docs/auto-redaction-design.md §2）：写入对话记录之前把认出的内容换成占位符、记进对照表；
+ * 一条会话的脱敏（docs/auto-redaction-design.md §2）：写入对话记录之前把认出的内容换成占位符、记进对照表
+ * （默认照发的几类照原样存，categories.ts isKeptAsWritten）；
  * 工具执行之前把参数里的占位符换回真值。宿主无关：占位符怎么签、真值怎么加密由宿主交进来（RedactionHost）。
  *
  * 出错的处置（§4.4）：替换的任何一步抛错 → 记 error、按原样写入（当作漏检）；还原时表项解不开 → 那个占位符
@@ -17,8 +18,9 @@ import {
   type ToolExecutionResult,
   type UserInput
 } from '@earendil-works/pi-durable'
+import { isKeptAsWritten } from '../redaction/categories'
 import { detectSensitive } from '../redaction/detect'
-import { findPlaceholders, makePlaceholder, type PlaceholderSigner } from '../redaction/placeholder'
+import { findPlaceholders, placeholderFor, type PlaceholderSigner } from '../redaction/placeholder'
 import type { RuntimeLogger } from '../types'
 import { backgroundContext as BG, errorText } from './context'
 import {
@@ -122,7 +124,8 @@ export class SessionRedaction {
 
   private maskOne(text: string, table: RedactionTable, entries: RedactionEntry[]): string {
     if (text.length < 3) return text
-    const findings = detectSensitive(text, table.known)
+    // 默认照发的几类照原样存；策略要它们保持占位符时出口现换
+    const findings = detectSensitive(text, table.known, { except: isKeptAsWritten })
     if (findings.length === 0) return text
     let out = ''
     let last = 0
@@ -130,7 +133,8 @@ export class SessionRedaction {
       // 同一个值沿用表里已有的占位符（哪怕这次是另一条规则认出的、归了别的类）
       const known = table.known.get(f.value)
       const placeholder =
-        known?.placeholder ?? makePlaceholder(this.deps.host.signer, f.category, f.value)
+        known?.placeholder ??
+        placeholderFor(this.deps.host.signer, f.category, f.value, (p) => table.has(p))
       if (!known && !table.has(placeholder)) {
         entries.push({ placeholder, category: f.category, rule: f.rule, value: f.value })
       }

@@ -10,7 +10,13 @@ import { describe, expect, it } from 'vitest'
 import { CATEGORIES_SENT_BY_DEFAULT } from '../categories'
 import { detectSensitive, type Finding } from '../detect'
 import { KnownValues } from '../known'
-import { findPlaceholders, makePlaceholder, placeholderSpans } from '../placeholder'
+import {
+  categoryOfPlaceholder,
+  findPlaceholders,
+  makePlaceholder,
+  placeholderFor,
+  placeholderSpans
+} from '../placeholder'
 import evalFixture from './fixtures/magpie-eval-cases.json'
 
 interface EvalValue {
@@ -192,12 +198,28 @@ describe('占位符', () => {
     sign: (data: string): Uint8Array => createHmac('sha256', 'test-key').update(data).digest()
   }
 
-  it('PH-1 同一个值同一个占位符；格式 {{CATEGORY_xxxxxxxx}}；类别不同则不同', () => {
+  it('PH-1 同一个值同一个占位符；格式 {{REDACTED_CATEGORY_xxxxxxxx}}；类别不同则不同；旧写法照认', () => {
     const a = makePlaceholder(signer, 'API_KEY', 'sk-abc')
-    expect(a).toMatch(/^\{\{API_KEY_[a-z2-7]{8}\}\}$/)
+    expect(a).toMatch(/^\{\{REDACTED_API_KEY_[a-z2-7]{8}\}\}$/)
     expect(makePlaceholder(signer, 'API_KEY', 'sk-abc')).toBe(a)
     expect(makePlaceholder(signer, 'SECRET', 'sk-abc')).not.toBe(a)
     expect(placeholderSpans(`x ${a} y`)).toEqual([[2, 2 + a.length]])
+    expect(categoryOfPlaceholder(a)).toBe('API_KEY')
+    // 旧写法（v0.2.30 / v0.2.31）：认得、类别对；会话里已有旧写法的值沿用它
+    const legacy = a.replace('REDACTED_', '')
+    expect(placeholderSpans(legacy)).toEqual([[0, legacy.length]])
+    expect(categoryOfPlaceholder(legacy)).toBe('API_KEY')
+    expect(placeholderFor(signer, 'API_KEY', 'sk-abc', (p) => p === legacy)).toBe(legacy)
+    expect(placeholderFor(signer, 'API_KEY', 'sk-abc', () => false)).toBe(a)
+  })
+
+  it('PH-1b 模型多写或少写了 REDACTED_：按表里有的那个认', () => {
+    const fresh = '{{REDACTED_EMAIL_b5puzbfv}}'
+    const legacy = '{{PHONE_c4qvzbfa}}'
+    const known = (x: string): boolean => x === fresh || x === legacy
+    expect(findPlaceholders('to {{EMAIL_b5puzbfv}} now', known)[0].placeholder).toBe(fresh)
+    expect(findPlaceholders('call redacted_phone_c4qvzbfa', known)[0].placeholder).toBe(legacy)
+    expect(findPlaceholders('{{REDACTED_SSN_b5puzbfv}}', known)).toEqual([])
   })
 
   it('PH-2 模型写坏的形式也认得：空格、少括号、改大小写；只认表里有的', () => {

@@ -28,7 +28,7 @@ import { chatPane, sidebarPane, type ChatPane, type SidebarPane } from '../../ha
 const MODEL = 'e2e-model'
 const PROVIDER_NAME = 'E2E Fake'
 const KEY = 'sk-proj-' + 'A1b2C3d4E5f6G7h8I9j0K1l2'
-const PLACEHOLDER = /\{\{API_KEY_[a-z2-7]{8}\}\}/
+const PLACEHOLDER = /\{\{REDACTED_API_KEY_[a-z2-7]{8}\}\}/
 
 let app: E2EApp
 let provider: FakeProvider
@@ -204,7 +204,7 @@ describe('自动脱敏', () => {
     expect(provider.requests()[0]!.lastUserText).toBe(`my key is ${KEY}`)
     const stored = await listedText(sids.trust)
     expect(stored).not.toContain(KEY)
-    expect(stored).toMatch(/echo: my key is \{\{API_KEY_[a-z2-7]{8}\}\}/)
+    expect(stored).toMatch(/echo: my key is \{\{REDACTED_API_KEY_[a-z2-7]{8}\}\}/)
     await until(
       async () =>
         ((await chat.settledItems()).find((i) => i.role === 'assistant')?.text ?? '').includes(KEY),

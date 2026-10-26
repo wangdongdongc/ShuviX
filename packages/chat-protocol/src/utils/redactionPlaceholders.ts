@@ -1,10 +1,11 @@
 /**
- * 自动脱敏的占位符在界面这一侧（docs/auto-redaction-design.md §2.3）：对话记录里存的是 `{{API_KEY_k3v7x2mq}}`，
+ * 自动脱敏的占位符在界面这一侧（docs/auto-redaction-design.md §2.3）：对话记录里存的是
+ * `{{REDACTED_API_KEY_k3v7x2mq}}`（v0.2.30 / v0.2.31 记下的是没有 REDACTED_ 的旧写法），
  * 界面把它渲染成标记、显示会话对照表里的真值。这里只认运行时写下的标准写法（与 agent-runtime
  * redaction/placeholder.ts 的 PLACEHOLDER_PATTERN 同一个）；模型写坏的形式只有工具还原那一侧要宽容。
  */
 
-/** 占位符的标准写法：类别 + `_` + 8 位小写 base32 */
+/** 占位符的标准写法：`REDACTED_`（旧写法没有）+ 类别 + `_` + 8 位小写 base32 */
 export const PLACEHOLDER_PATTERN = String.raw`\{\{[A-Z][A-Z0-9_]*_[a-z2-7]{8}\}\}`
 
 /** 界面上一处占位符：类别，与真值（表里有、却解不开的没有真值） */
@@ -24,9 +25,13 @@ export type RedactionSegment = string | { placeholder: string; category: string 
 /** 一次 resolve 最多问多少个（一屏的量；再多分几次问） */
 export const MAX_RESOLVE_PLACEHOLDERS = 200
 
-/** 占位符的类别段（`{{API_KEY_k3v7x2mq}}` → `API_KEY`） */
+/** 占位符正文的开头（旧写法没有） */
+const PLACEHOLDER_PREFIX = 'REDACTED_'
+
+/** 占位符的类别段（`{{REDACTED_API_KEY_k3v7x2mq}}`、旧写法 `{{API_KEY_k3v7x2mq}}` → `API_KEY`） */
 export function categoryOfPlaceholder(placeholder: string): string {
-  return placeholder.slice(2, placeholder.length - 2 - 9)
+  const body = placeholder.slice(2, placeholder.length - 2 - 9)
+  return body.startsWith(PLACEHOLDER_PREFIX) ? body.slice(PLACEHOLDER_PREFIX.length) : body
 }
 
 export function isPlaceholder(text: string): boolean {
@@ -68,7 +73,7 @@ export function restorePlaceholders(
 }
 
 /**
- * 流式文本的结尾还没写完的占位符（`… {{API_KE`、`{{API_KEY_k3v9`）先不显示，写完了再作为标记出现 ——
+ * 流式文本的结尾还没写完的占位符（`… {{REDACTED_API_KE`、`{{REDACTED_API_KEY_k3v9`）先不显示，写完了再作为标记出现 ——
  * 否则那几个字符先以原文闪一下。只截结尾、只截看得出是占位符开头的那一段。
  */
 export function trimPartialPlaceholder(text: string): string {

@@ -37,9 +37,10 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
-const KEY = '{{API_KEY_k3v7x2mq}}'
-const MAIL = '{{EMAIL_b5puzbfv}}'
-const SEALED = '{{SECRET_aaaaaaaa}}'
+const KEY = '{{REDACTED_API_KEY_k3v7x2mq}}'
+const MAIL = '{{REDACTED_EMAIL_b5puzbfv}}'
+const SEALED = '{{REDACTED_SECRET_aaaaaaaa}}'
+// v0.2.30 / v0.2.31 存下的旧写法照样认
 const GONE = '{{TOKEN_bbbbbbbb}}'
 const USER = '{{USERNAME_cccccccc}}'
 
@@ -166,6 +167,10 @@ describe('脱敏占位符的显示', () => {
     hover(marks()[0]!)
     expect(popover()?.textContent).toContain('cannot read its real value')
     expect(popover()?.querySelector('[data-redaction-value]')).toBeNull()
+    // 表里没有的：类别从占位符本身读（新旧写法都是类别名，不带 REDACTED_）
+    hover(marks()[1]!)
+    expect(marks()[1]!.dataset.redaction).toBe('TOKEN')
+    expect(marks()[0]!.dataset.redaction).toBe('SECRET')
     await show(createElement(RedactedText, { text: `${GONE} ${SEALED} !` }))
     expect(calls).toEqual([{ sessionId: 's1', placeholders: [SEALED, GONE] }])
   })

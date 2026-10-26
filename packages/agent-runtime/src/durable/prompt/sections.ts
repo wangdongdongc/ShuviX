@@ -187,13 +187,14 @@ export interface PromptExtensions {
  * 自动脱敏的占位符（docs/auto-redaction-design.md §13）—— 模型自己不可能知道的那一点：占位符背后的值在这台电脑上是真的，
  * 工具执行前换回真值，所以按占位符搜文件、写命令都对；去「看」值本身（打印、逐字节导出、编码）会把它带出去。
  * 演练一（真模型）里没有这一段时，agent 在文件里 grep `EMAIL_` 找不到，转而用 `od -c` 逐字节看，邮箱就这样逐字发了出去。
- * 例子刻意不写成标准形状（`{{API_KEY_…}}`）：一个看着像真占位符的例子会被模型照抄进工具参数，还原时查不到就拦下。
+ * 例子刻意不写成标准形状（`{{REDACTED_API_KEY_…}}`）：一个看着像真占位符的例子会被模型照抄进工具参数，还原时查不到就拦下。
+ * 「不是模板变量、不要猜」：`{{…}}` 像没填的模板变量，用户看到 agent 常花 token 猜它是什么、去别处找它（2026-10-26）。
  */
 export const PLACEHOLDER_NOTE = [
-  'Text such as {{API_KEY_…}} (a category and eight letters or digits) in this conversation is a placeholder: ShuviX hid a secret or a personal value from you.',
-  'On this computer the value is real — in files and in command output — and ShuviX puts it back into your tool arguments before a tool runs.',
-  "Write the placeholder exactly wherever you mean the value: in commands, file contents, edit text and searches (`grep -c '{{EMAIL_…}}' app.log` with the placeholder written out counts the real address).",
-  'Do not try to see the value itself — no printing, byte dumps or encodings of it; when a task needs a fact about it, such as its length, let a command work it out.'
+  'Text such as {{REDACTED_API_KEY_…}} (a category and eight letters or digits) in this conversation is a placeholder for a secret or personal value that ShuviX redacted from you.',
+  'It is not a template variable to fill in and not a fault in a file or an output: on this computer the value is real — in files and in command output — and ShuviX puts it back into your tool arguments before a tool runs.',
+  "Write the placeholder exactly wherever you mean the value: in commands, file contents, edit text and searches (`grep -c '{{REDACTED_EMAIL_…}}' app.log` with the placeholder written out counts the real address).",
+  'Do not guess what it stands for, look for it elsewhere or ask for it, and do not try to see the value itself — no printing, byte dumps or encodings of it; when a task needs a fact about it, such as its length, let a command work it out.'
 ].join(' ')
 
 /** 以宿主 seam 构造段落扩展；`placeholders` = 这个宿主的会话做自动脱敏（占位符那一段才有内容） */
