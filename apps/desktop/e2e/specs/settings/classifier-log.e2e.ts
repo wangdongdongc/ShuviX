@@ -189,7 +189,8 @@ describe('分类器日志：IPC → 页面 → 清空 → 重启', () => {
 
     const pane = await openClassifierPage()
     const ms = await monitorSettingsPane(settings!)
-    expect(await ms.subTabCount()).toBe(2)
+    // LLM 请求 / 分类器 / 应用日志（f2251648 加了第三个）
+    expect(await ms.subTabCount()).toBe(3)
     expect(await ms.activeSubTab()).toBe(1)
     expect(await ms.page()).toBe('classifierLogs')
 

@@ -6719,7 +6719,12 @@ export function infoHintPane(client: CdpClient, scope = 'document'): InfoHintPan
       })()`)
     },
 
-    focus: (titles) => openWith(titles, 'b.focus()', titles.join(' / ')),
+    focus: async (titles) => {
+      // 设置窗口不一定是系统里有焦点的那个：没有焦点的页面里 focus() 只挪 activeElement、不派发 focus 事件，
+      // 气泡就不会开。焦点仿真让页面认为自己有焦点（只在这条 CDP 连接上生效，与 notebookEditorPane.typeAtEnd 同理）
+      await client.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+      return openWith(titles, 'b.focus()', titles.join(' / '))
+    },
     blur: async (titles) => {
       await client.eval(`(() => {
         const b = ${btn(titles)}
