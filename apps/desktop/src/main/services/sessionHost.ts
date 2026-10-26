@@ -56,7 +56,7 @@ import { deleteSessionStorage, openSessionStorage, sessionStorageExists } from '
 import { settingsService } from './settingsService'
 import { taskRegistry } from './taskRegistry'
 import { placeholderSigner, redactionVault } from './redaction/keys'
-import type { desktopRedactionPolicy } from './redactionPolicy'
+import { redactionDecision } from './redactionPolicySeam'
 
 const log = createLogger('SessionHost')
 
@@ -105,16 +105,6 @@ export async function onSubSessionDrivenSettled(event: DrivenSettledEvent): Prom
  */
 export function beforeSessionAbort(sessionId: string): void {
   abortSessionReviews(sessionId)
-}
-
-/**
- * 自动脱敏出口的策略判定（services/redactionPolicy.ts）由 index.ts 注入：它要安全模块，静态 import 会把 toolContext
- * 那一串（导入期就建的技能、知识库单例）拖进每个引用 sessionHost 的模块。没注入（测试）= 一律保持占位符。
- */
-let redactionPolicyImpl: typeof desktopRedactionPolicy | undefined
-
-export function setRedactionPolicy(impl: typeof desktopRedactionPolicy): void {
-  redactionPolicyImpl = impl
 }
 
 const runtimeLog: RuntimeLogger = {
@@ -171,13 +161,12 @@ export function buildSessionHostDeps(
     logger: runtimeLog,
     // 自动脱敏：写入对话记录之前换成占位符，工具执行前换回真值（docs/auto-redaction-design.md）
     redaction: { signer: placeholderSigner, vault: redactionVault },
-    // 出口按安全策略判（第一层 modelRequest、第二层 sensitive），主体按这次请求来自的对话认 agent
+    // 出口按安全策略判（第一层 modelRequest、第二层 sensitive），主体按这次请求来自的对话认 agent；
+    // 判定由 index.ts 注入（redactionPolicySeam.ts）
     redactionPolicy: (request) =>
-      redactionPolicyImpl
-        ? redactionPolicyImpl(request, (sessionId, conversationId) =>
-            sessionOf(sessionId)?.agentIdentity(conversationId)
-          )
-        : { applies: true, disclose: () => 'redact' },
+      redactionDecision(request, (sessionId, conversationId) =>
+        sessionOf(sessionId)?.agentIdentity(conversationId)
+      ),
     ...overrides
   }
 }

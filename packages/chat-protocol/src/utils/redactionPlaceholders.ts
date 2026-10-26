@@ -11,6 +11,11 @@ export const PLACEHOLDER_PATTERN = String.raw`\{\{[A-Z][A-Z0-9_]*_[a-z2-7]{8}\}\
 export interface RedactionMarkInfo {
   category: string
   value?: string
+  /**
+   * 模型收到的是真值（按会话此刻锁住的模型与策略判，与出口同一份判定）：界面就显示真值、不加标记；
+   * 否则显示模型收到的占位符，悬停才揭示真值。缺省 = 收到的是占位符
+   */
+  disclosed?: boolean
 }
 
 /** 一段文本切开之后：原样的文字，或者一处占位符 */

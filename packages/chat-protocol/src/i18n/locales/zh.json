@@ -1714,6 +1714,8 @@
       "IP": "IP 地址",
       "BUCKET": "存储桶"
     },
-    "unavailable": "{{label}}（这台电脑读不出它的值）"
+    "placeholderNote": "模型收到的是这个占位符；工具和文件里用的是真值：",
+    "looking": "正在查真值…",
+    "unavailableNote": "模型收到的是这个占位符。这台电脑读不出它的真值。"
   }
 }

@@ -36,6 +36,7 @@ import { CodeBlock } from './CodeBlock'
 import { useChatStore } from '../../stores/chatStore'
 import { copyToClipboard } from '../../utils/clipboard'
 import { useRestoredText } from '../../hooks/useRedaction'
+import { hasPlaceholder } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { RedactedMark } from './RedactedText'
 
 // ─── 超链接 ────────────────────────────────────────────
@@ -315,9 +316,10 @@ function InlineCode({
 }): React.JSX.Element {
   const isBlock = !!className && /language-|hljs/.test(className)
   // 路径里常有占位符（家目录里的用户名）：按真值认路径、点开的也是真实那个文件
-  const text = useRestoredText(isBlock ? '' : plainTextOf(children))
+  // 只换模型收到的就是真值的那些：还剩占位符（模型看到的是占位符）就不当路径，照样显示占位符
+  const text = useRestoredText(isBlock ? '' : plainTextOf(children), { onlyDisclosed: true })
 
-  if (!isBlock && isPathLike(text.trim())) {
+  if (!isBlock && !hasPlaceholder(text) && isPathLike(text.trim())) {
     return <PathChip path={text.trim()} />
   }
   return (

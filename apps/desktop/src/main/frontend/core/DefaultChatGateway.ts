@@ -1,5 +1,6 @@
 import type { ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
+import { redactionDecision } from '../../services/redactionPolicySeam'
 import {
   MAX_RESOLVE_PLACEHOLDERS,
   isPlaceholder,
@@ -428,15 +429,44 @@ export class DefaultChatGateway implements ChatGateway {
       sessionService.getAgentSession(sessionId) ??
       (await sessionService.peekAgentSession(sessionId))
     const redaction = agent?.durable.redaction
-    if (!redaction) return result
+    if (!agent || !redaction) return result
     const table = await redaction.table()
+    // 模型收到的是不是真值：按会话锁住的模型、根 agent 判，与出口同一份判定。没有锁（还没有 agent）就说不上，
+    // 当作收到的是占位符
+    const locked = agent.durable.lock?.model
+    let decision: ReturnType<typeof redactionDecision> | undefined
+    try {
+      decision = locked
+        ? redactionDecision({ sessionId, provider: locked.provider, model: locked.modelId })
+        : undefined
+    } catch {
+      // 判不出来就当收到的是占位符（显示占位符、悬停揭示真值），不让界面因此拿不到真值
+      decision = undefined
+    }
+    const disclosedOf = (item: { category: string; rule: string; value: string }): boolean => {
+      if (!decision || decision.blocked) return false
+      if (!decision.applies) return true
+      try {
+        return decision.disclose(item) === 'send'
+      } catch {
+        return false
+      }
+    }
     for (const placeholder of wanted) {
       const item = table.get(placeholder)
       if (!item) continue
       result[placeholder] =
         item.value === undefined
           ? { category: item.category }
-          : { category: item.category, value: item.value }
+          : {
+              category: item.category,
+              value: item.value,
+              disclosed: disclosedOf({
+                category: item.category,
+                rule: item.rule,
+                value: item.value
+              })
+            }
     }
     return result
   }

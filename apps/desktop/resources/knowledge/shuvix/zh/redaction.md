@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: '自动脱敏 —— 密钥和个人信息以占位符发给模型'
-description: 'ShuviX 怎样不让 API key、密码、令牌、私钥和个人信息落到模型服务商手里：对话记录里存 `{{API_KEY_k3v7x2mq}}` 这样的占位符，工具和界面上是真值；会认出哪些类别；两层策略（`modelRequest` / `send`、`sensitive` / `disclose`）与它们的处置；内置的 `redact-sensitive`；写法示例（信任某个模型、某一类照发、测试 key 照发、私钥绝不发、还原后的秘密离开沙箱时只由用户回答）；用 `shuvix policy check --redaction` 核对草稿；agent 怎样和占位符打交道；局限。'
+description: 'ShuviX 怎样不让 API key、密码、令牌、私钥和个人信息落到模型服务商手里：对话记录里存 `{{API_KEY_k3v7x2mq}}` 这样的占位符，工具里是真值、界面上显示模型收到的样子；会认出哪些类别；两层策略（`modelRequest` / `send`、`sensitive` / `disclose`）与它们的处置；内置的 `redact-sensitive`；写法示例（信任某个模型、某一类照发、测试 key 照发、私钥绝不发、还原后的秘密离开沙箱时只由用户回答）；用 `shuvix policy check --redaction` 核对草稿；agent 怎样和占位符打交道；局限。'
 tags: [shuvix, policy, security, redaction, privacy, secrets]
 status: stable
 sources:
@@ -22,7 +22,8 @@ sources:
 
 - **工具拿到的是真值。** 工具调用参数里的占位符在工具运行前换回真值，所以
   `curl -H "Authorization: Bearer {{API_KEY_k3v7x2mq}}"` 发出去的是真的 key，写入或编辑的文件里也是真实内容。
-- **界面上显示真值**，记录里是占位符的地方带一个小标记。
+- **界面上显示模型收到的样子。** 模型收到占位符的地方显示占位符（带底色），指到（或点一下）才浮出真值 ——
+  工具和文件里用的那个，可以复制；模型收到真值的地方（策略照发的类别、信任的服务商）直接显示真值。
 - **模型收到什么由策略决定**（见下）。默认所有模型都收到占位符，只有几乎每个编程请求里都有的四类除外。
 
 不管策略怎么写，记录里都没有真值 —— 会话的导出和分叉也没有。

@@ -2,7 +2,7 @@
  * 自动脱敏（docs/auto-redaction-design.md）的整条链路，真应用 + 假模型：
  *
  *   RD-1 缺省（内置 redact-sensitive）：用户消息里的 key 发给模型时是占位符；模型照抄占位符调 write，磁盘上写的是
- *        真值；对话记录（message.list）里只有占位符；界面上用户气泡、助手正文都显示真值并带标记
+ *        真值；对话记录（message.list）里只有占位符；界面显示模型收到的样子（占位符），指到占位符才浮出真值
  *   RD-2 信任这个服务商（用户策略 force-allow modelRequest）：模型收到真值；它在回复里写出的真值存成占位符、界面上
  *        仍显示真值
  *   RD-3 第一层拒发（用户策略 deny modelRequest）：请求不发，这一轮以出错结束
@@ -163,14 +163,26 @@ describe('自动脱敏', () => {
     expect(stored).not.toContain(KEY)
     expect(stored).toMatch(PLACEHOLDER)
 
-    // 界面：用户气泡与助手正文都显示真值，带标记
+    // 界面：显示模型收到的样子 —— 用户气泡与助手正文里是占位符，不是真值
+    const placeholder = PLACEHOLDER.exec(requests[0]!.lastUserText)![0]
     await until(
-      async () => (await marks()).filter((m) => m === `API_KEY:${KEY}`).length >= 2,
-      'marks resolved'
+      async () => (await marks()).filter((m) => m === `API_KEY:${placeholder}`).length >= 2,
+      'placeholders shown'
     )
     const items = await chat.settledItems()
-    expect(items.find((i) => i.role === 'user')?.text).toContain(KEY)
-    expect(items.find((i) => i.role === 'assistant')?.text).toContain(`Saved ${KEY} to .env.`)
+    expect(items.find((i) => i.role === 'user')?.text).toContain(placeholder)
+    expect(items.find((i) => i.role === 'user')?.text).not.toContain(KEY)
+    expect(items.find((i) => i.role === 'assistant')?.text).toContain(
+      `Saved ${placeholder} to .env.`
+    )
+    // 指到占位符才浮出真值（工具和文件里用的那个）
+    const revealed = await app.main.eval<string | null>(`(async () => {
+      const el = document.querySelector('[data-redaction-placeholder]')
+      el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+      await new Promise((r) => setTimeout(r, 50))
+      return document.querySelector('[data-redaction-popover] [data-redaction-value]')?.textContent ?? null
+    })()`)
+    expect(revealed).toBe(KEY)
     rmSync(envPath, { force: true })
   })
 

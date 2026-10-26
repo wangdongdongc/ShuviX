@@ -94,10 +94,10 @@ import { installLlmNetwork } from './services/models'
 import {
   installSessionHostQuitHook,
   peekSessionHost,
-  sessionAgentResolver,
-  setRedactionPolicy
+  sessionAgentResolver
 } from './services/sessionHost'
 import { desktopRedactionPolicy } from './services/redactionPolicy'
+import { setRedactionPolicy } from './services/redactionPolicySeam'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes

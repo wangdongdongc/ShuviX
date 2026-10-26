@@ -1,6 +1,8 @@
 /**
- * 自动脱敏标记的真值缓存（docs/auto-redaction-design.md §2.3）：界面按会话问主进程「这些占位符是什么」，问到的
- * 记下来 —— 一个占位符永远对应同一个值，所以不过期。同一轮渲染里要问的攒成一次请求。
+ * 自动脱敏标记的真值缓存（docs/auto-redaction-design.md §2.3）：界面按会话问主进程「这些占位符是什么、模型收到的是
+ * 不是真值」，问到的记下来。一个占位符永远对应同一个值；「模型收到的是不是真值」（disclosed）随策略、服务商与会话的
+ * 模型变，那几样一变（policy.changed / providers.changed / session.configChanged）就把记下的重问一遍 —— 重问期间照旧
+ * 显示旧的，不闪。同一轮渲染里要问的攒成一次请求。
  *
  * 没问到的（表里还没有：别的会话带过来的、模型自己编的）记下时间，过 RETRY_MS 之后再有渲染才再问 —— 不设定时器：
  * 内容是先记进对照表、再写进记录的，界面看到占位符时表里通常已经有它了，问不到是少数。
@@ -25,6 +27,7 @@ const queued = new Map<string, Set<string>>()
 let flushScheduled = false
 let version = 0
 const listeners = new Set<() => void>()
+let unsubscribeEvents: (() => void) | undefined
 
 const keyOf = (sessionId: string, placeholder: string): string => `${sessionId}\u0000${placeholder}`
 
@@ -40,11 +43,38 @@ export function redactionInfo(
   return known.get(sessionId)?.get(placeholder)
 }
 
-/** 请主进程查这些占位符（已知的、正在问的、刚问过没问到的跳过） */
-export function requestRedactions(sessionId: string, placeholders: Iterable<string>): void {
+/** 策略、服务商、会话配置一变，「模型收到的是不是真值」可能跟着变：把记下的重问一遍 */
+function watchEvents(): void {
+  if (unsubscribeEvents) return
+  try {
+    unsubscribeEvents = getSessionChannelApi().events?.subscribe((event) => {
+      if (event.type === 'policy.changed' || event.type === 'providers.changed') refreshRedactions()
+      else if (event.type === 'session.configChanged') refreshRedactions(event.sessionId)
+    })
+  } catch {
+    // 渠道端没有事件流：只能等下次打开会话
+  }
+}
+
+/** 重问已经记下的占位符（不清掉，重问期间照旧显示）；不给会话 = 全部 */
+export function refreshRedactions(sessionId?: string): void {
+  const sessions = sessionId === undefined ? [...known.keys()] : [sessionId]
+  for (const sid of sessions) {
+    const map = known.get(sid)
+    if (map && map.size > 0) requestRedactions(sid, map.keys(), true)
+  }
+}
+
+/** 请主进程查这些占位符（已知的、正在问的、刚问过没问到的跳过；force = 已知的也重问） */
+export function requestRedactions(
+  sessionId: string,
+  placeholders: Iterable<string>,
+  force = false
+): void {
+  watchEvents()
   const now = Date.now()
   for (const placeholder of placeholders) {
-    if (known.get(sessionId)?.has(placeholder)) continue
+    if (!force && known.get(sessionId)?.has(placeholder)) continue
     const key = keyOf(sessionId, placeholder)
     if (inflight.has(key)) continue
     const missed = missedAt.get(key)
@@ -92,9 +122,14 @@ async function resolveChunk(sessionId: string, placeholders: string[]): Promise<
     inflight.delete(key)
     const info = result[p]
     if (info && typeof info.category === 'string') {
-      map.set(p, info.value === undefined ? { category: info.category } : info)
+      map.set(
+        p,
+        info.value === undefined
+          ? { category: info.category }
+          : { category: info.category, value: info.value, disclosed: info.disclosed === true }
+      )
       missedAt.delete(key)
-    } else {
+    } else if (!map.has(p)) {
       missedAt.set(key, now)
     }
   }
@@ -123,6 +158,8 @@ export function forgetRedactions(sessionId: string): void {
 }
 
 export function resetRedactionCacheForTests(): void {
+  unsubscribeEvents?.()
+  unsubscribeEvents = undefined
   known.clear()
   missedAt.clear()
   inflight.clear()

@@ -30,6 +30,7 @@ import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
 import { loadLanguage } from './languageLoader'
 import { buildCmTheme } from './codeMirrorTheme'
 import { redactionMarks, type RedactionResolver } from './redactionMarks'
+import { revealOf } from '../chat/RedactedText'
 import { useRedactionSessionId } from '../../hooks/useRedaction'
 import {
   redactionInfo,
@@ -73,15 +74,18 @@ export function CodeView({
   const { t } = useTranslation()
   const sessionId = useRedactionSessionId()
   const version = useSyncExternalStore(subscribeRedactions, redactionVersion, redactionVersion)
-  const resolveRef = useRef<RedactionResolver>(() => ({ label: '', category: '' }))
+  const resolveRef = useRef<RedactionResolver | null>(null)
   resolveRef.current = (placeholder) => {
     const info = sessionId ? redactionInfo(sessionId, placeholder) : undefined
-    const category = info?.category ?? categoryOfPlaceholder(placeholder)
-    const label = t(`redaction.category.${category}`, { defaultValue: category })
-    return info?.value === undefined ? { label, category } : { value: info.value, label, category }
+    return {
+      category: info?.category ?? categoryOfPlaceholder(placeholder),
+      disclosed: info?.disclosed === true,
+      ...(info?.value === undefined ? {} : { value: info.value }),
+      reveal: revealOf(t, placeholder, info)
+    }
   }
   const redactionExtension = (): import('@codemirror/state').Extension =>
-    redactionMarks((p) => resolveRef.current(p))
+    redactionMarks((p) => resolveRef.current!(p))
 
   // 构造一组完整的 extensions —— mount 初次 + content/ext 切换重建 doc 时都用
   // 闭包捕获当前 wrap/lineNumbers 状态，所以切换 toggle 时是单独 dispatch 而不是重建

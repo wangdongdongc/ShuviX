@@ -51,7 +51,7 @@ export function useRedactionMark(placeholder: string): RedactionMarkInfo | undef
  * 整段文本换回真值（查到的；没查到的发起查询、先原样留着）—— 给要拿整段真实文本做事的地方（行内代码认路径、
  * 点开那个文件），而不是逐处显示标记的地方。
  */
-export function useRestoredText(text: string): string {
+export function useRestoredText(text: string, opts: { onlyDisclosed?: boolean } = {}): string {
   const sessionId = useRedactionSessionId()
   useSyncExternalStore(subscribeRedactions, redactionVersion, redactionVersion)
   const placeholders = placeholdersIn(text)
@@ -60,7 +60,11 @@ export function useRestoredText(text: string): string {
     if (sessionId && missing.length > 0) requestRedactions(sessionId, missing)
   })
   if (placeholders.length === 0 || sessionId === null) return text
-  return restorePlaceholders(text, (p) => redactionInfo(sessionId, p)?.value)
+  return restorePlaceholders(text, (p) => {
+    const info = redactionInfo(sessionId, p)
+    // onlyDisclosed：只换模型收到的就是真值的那些（得到的是模型看到的样子）
+    return opts.onlyDisclosed === true && info?.disclosed !== true ? undefined : info?.value
+  })
 }
 
 /** 复制用：把文本里查到的占位符换回真值（复制出去的是界面上看到的样子） */

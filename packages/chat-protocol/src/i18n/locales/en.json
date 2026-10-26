@@ -1714,6 +1714,8 @@
       "IP": "IP address",
       "BUCKET": "Storage bucket"
     },
-    "unavailable": "{{label}} (the value cannot be read on this computer)"
+    "placeholderNote": "The model receives this placeholder. Tools and files use the real value:",
+    "looking": "Looking up the real value…",
+    "unavailableNote": "The model receives this placeholder. This computer cannot read its real value."
   }
 }

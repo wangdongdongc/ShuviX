@@ -114,6 +114,7 @@ vi.mock('../../../services/sessionDayPromptService', () => ({
 
 import { buildBuiltinProfiles } from '@shuvix/agent-runtime'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
+import { setRedactionPolicy } from '../../../services/redactionPolicySeam'
 
 let chatGateway: (typeof import('../DefaultChatGateway'))['chatGateway']
 
@@ -429,8 +430,8 @@ describe('自动脱敏：resolveRedactions', () => {
     [KEY]: { category: 'API_KEY', rule: 'sk-key', value: 'sk-real' },
     [SEALED]: { category: 'SECRET', rule: 'secret-field' }
   }
-  const sessionWith = (redaction: unknown): unknown => ({
-    durable: { redaction }
+  const sessionWith = (redaction: unknown, lock?: unknown): unknown => ({
+    durable: { redaction, lock }
   })
   const table = { get: (p: string) => items[p] }
 
@@ -449,7 +450,7 @@ describe('自动脱敏：resolveRedactions', () => {
       42 as unknown as string
     ])
     expect(result).toEqual({
-      [KEY]: { category: 'API_KEY', value: 'sk-real' },
+      [KEY]: { category: 'API_KEY', value: 'sk-real', disclosed: false },
       [SEALED]: { category: 'SECRET' }
     })
     expect(mocks.peekAgentSession).not.toHaveBeenCalled()
@@ -459,7 +460,7 @@ describe('自动脱敏：resolveRedactions', () => {
     mocks.getAgentSession.mockReturnValue(undefined)
     mocks.peekAgentSession.mockResolvedValue(sessionWith({ table: async () => table }))
     expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({
-      [KEY]: { category: 'API_KEY', value: 'sk-real' }
+      [KEY]: { category: 'API_KEY', value: 'sk-real', disclosed: false }
     })
     mocks.peekAgentSession.mockResolvedValue(undefined)
     expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({})
@@ -468,5 +469,35 @@ describe('自动脱敏：resolveRedactions', () => {
     mocks.peekAgentSession.mockClear()
     expect(await chatGateway.resolveRedactions(SID, [])).toEqual({})
     expect(mocks.peekAgentSession).not.toHaveBeenCalled()
+  })
+
+  it('RR-3 模型收到的是不是真值：按会话锁住的模型、与出口同一份判定；没有锁就当占位符', async () => {
+    const seen: unknown[] = []
+    setRedactionPolicy((request) => {
+      seen.push(request)
+      return request.provider === 'home'
+        ? { applies: false, disclose: () => 'redact' }
+        : {
+            applies: true,
+            disclose: ({ category }) => (category === 'API_KEY' ? 'redact' : 'send')
+          }
+    })
+    const withLock = (provider: string): unknown =>
+      sessionWith({ table: async () => table }, { model: { provider, modelId: 'm1' } })
+    mocks.getAgentSession.mockReturnValue(withLock('cloud'))
+    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(false)
+    expect(seen).toEqual([{ sessionId: SID, provider: 'cloud', model: 'm1' }])
+    mocks.getAgentSession.mockReturnValue(withLock('home'))
+    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(true)
+    mocks.getAgentSession.mockReturnValue(sessionWith({ table: async () => table }))
+    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(false)
+    setRedactionPolicy((request) => {
+      throw new Error(`no policy for ${request.sessionId}`)
+    })
+    mocks.getAgentSession.mockReturnValue(withLock('cloud'))
+    // 判定抛错：当作收到的是占位符，真值照样交回
+    expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({
+      [KEY]: { category: 'API_KEY', value: 'sk-real', disclosed: false }
+    })
   })
 })

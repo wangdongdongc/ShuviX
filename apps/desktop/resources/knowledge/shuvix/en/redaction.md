@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Auto-redaction — secrets and personal data reach models as placeholders'
-description: 'How ShuviX keeps API keys, passwords, tokens, private keys and personal data away from model providers: placeholders such as `{{API_KEY_k3v7x2mq}}` in the conversation record, real values for tools and on screen, the categories it finds, the two policy levels (`modelRequest` / `send`, `sensitive` / `disclose`) and their dispositions, the builtin `redact-sensitive`, recipes (trust a model, send a category, send test keys, never send private keys, let only the user answer when a restored secret leaves the sandbox), checking a draft with `shuvix policy check --redaction`, working with placeholders as an agent, and the limits.'
+description: 'How ShuviX keeps API keys, passwords, tokens, private keys and personal data away from model providers: placeholders such as `{{API_KEY_k3v7x2mq}}` in the conversation record, real values for tools, the screen showing what the model received, the categories it finds, the two policy levels (`modelRequest` / `send`, `sensitive` / `disclose`) and their dispositions, the builtin `redact-sensitive`, recipes (trust a model, send a category, send test keys, never send private keys, let only the user answer when a restored secret leaves the sandbox), checking a draft with `shuvix policy check --redaction`, working with placeholders as an agent, and the limits.'
 tags: [shuvix, policy, security, redaction, privacy, secrets]
 status: stable
 sources:
@@ -25,8 +25,10 @@ table**, which is deleted with the conversation.
 - **Tools get the real values.** Placeholders in a tool call's arguments are replaced just before
   the tool runs, so `curl -H "Authorization: Bearer {{API_KEY_k3v7x2mq}}"` sends the real key, and
   a file written or edited holds the real content.
-- **The screen shows the real values**, each with a small mark where the record holds a
-  placeholder.
+- **The screen shows what the model received.** Where the model gets a placeholder you see the
+  placeholder, shaded; point at it (or tap it) to see the real value that tools and files use, with
+  a copy button. Where the model gets the real value (a category the policy sends, a trusted
+  provider) you see the plain value.
 - **What a model receives is decided by policy** (below). By default every model gets
   placeholders, except for four categories that are part of almost every coding request.
 
