@@ -662,12 +662,14 @@ export {
   type AgentConfig,
   type AgentToolSet,
   type AgentToolsRebuildContext,
+  type AgentToolsReconfigureRequest,
   type AgentToolsRequest,
   type BotContextBlocks,
   type BuiltinToolsRequest,
   type InterruptedSendPolicy,
   type ModelCatalog,
   type PromptHost,
+  type ReconfiguredAgentTools,
   type ResolvedAgentTools,
   type RunState,
   type SessionHostDeps,
@@ -688,8 +690,23 @@ export {
   type AgentCreationErrorCode,
   type ComposedAgentTools,
   type CreateAgentOptions,
-  type LockRecord
+  type LockRecord,
+  type ReconfigureOutcome,
+  type ReconfigurePreview
 } from './durable/lock'
+// 重配（2026-10-26）：锁住的 agent 换模型 / 扩展勾选 —— 工具次序与提示词缓存的预判
+export {
+  composeReconfiguredTools,
+  mcpServerOfTool,
+  orderForMinimalDiff,
+  predictCacheImpact,
+  supportsMidConvoSystemMessages,
+  toolChangeSupport,
+  type CacheImpact,
+  type CacheLossReason,
+  type CacheVerdict,
+  type ToolChangeSupport
+} from './durable/reconfigure'
 // 派生 agent 记录与身份（P2-01）：平铺在子对话 AgentStateDoc 里的锁形记录；`DurableSession.agentIdentity`
 export {
   canSpawnAt,

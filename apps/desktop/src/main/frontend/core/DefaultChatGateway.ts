@@ -1,4 +1,4 @@
-import type { ChatGateway } from './ChatGateway'
+import type { AgentPreviewChange, ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import { redactionDecision } from '../../services/redactionPolicySeam'
 import {
@@ -7,6 +7,7 @@ import {
   type RedactionMarkInfo
 } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type {
+  AgentChangePreview,
   AgentInitResult,
   AgentRuntimeInfo,
   ThinkingLevel,
@@ -30,11 +31,7 @@ import type { SuggestionRef } from '@shuvix/chat-protocol/types/inputOrigin'
 import '../../tools/allTools'
 import { getPlatformBuiltinToolEntries } from '../../services/toolRegistry'
 import { messageService } from '../../services/messageService'
-import {
-  recordSessionModel,
-  recordSessionThinkingLevel,
-  storageRefusalOf
-} from '../../services/sessionStorage'
+import { recordSessionThinkingLevel, storageRefusalOf } from '../../services/sessionStorage'
 import { respondToUserInput } from '../../services/userInputBroker'
 import { dbManager } from '../../services/builtinMcp/dbConnections'
 import { sshDisconnectRuntime, sshRuntimeStatuses } from '../../services/builtinMcp/sshServer'
@@ -298,17 +295,21 @@ export class DefaultChatGateway implements ChatGateway {
   /**
    * 以下两个 setter 是模型类运行配置的**唯一写入口**（会话设置 `settings.model` / `.thinkingLevel`）。
    *
-   * 模型只在没有 agent 的时候可改：它与扩展能力勾选一样在创建 agent 那一刻读一次。锁住期间
-   * （打开着看运行时的锁，没开着看锁镜像）一律拒绝、什么也不写 —— 用户要换模型，先在会话横幅的
-   * agent 胶囊上把 agent 销毁（destroyAgent）。
+   * 有 agent 的时候当场重配它（2026-10-26：从下一次请求起用新模型，运行中也是）；那个 agent 用不了这个
+   * 模型 → 拒绝、什么也不写（sessionService.setModel）。会不会打穿提示词缓存由界面先经 previewChange 问。
    *
    * 思考档位不在此列：设置恒写；有 agent 时再现场交给它（下一次请求生效）—— 会话开着直接给，
    * 没开着但锁着就 peek 打开再给（PIN-07），没锁就等下一次创建时读设置。
    */
   async setModel(sessionId: string, provider: string, model: string): Promise<boolean> {
-    if (sessionService.hasAgentRuntime(sessionId)) return false
-    await recordSessionModel(sessionId, provider, model)
-    return true
+    return sessionService.setModel(sessionId, provider, model)
+  }
+
+  async previewAgentChange(
+    sessionId: string,
+    change: AgentPreviewChange
+  ): Promise<AgentChangePreview> {
+    return sessionService.previewAgentChange(sessionId, change)
   }
 
   async destroyAgent(sessionId: string): Promise<void> {

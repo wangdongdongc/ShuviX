@@ -52,6 +52,7 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'agent:abort': 'write',
   'agent:continue': 'write',
   'agent:setModel': 'write',
+  'agent:previewChange': 'read', // 只预判：不连服务器、什么也不写（与 agent:init 一样可能把锁着的会话打开来读）
   'agent:destroy': 'write',
   'agent:setThinkingLevel': 'write',
   'agent:getInfo': 'write', // 带 ensure 时会打开会话、创建 agent（锁配置、连 MCP）

@@ -14,9 +14,10 @@
  *         它是会话里勾的能力，不是谁的默认（档案取真的内置 md，四种形态外加 coding）。
  *
  * 外加会话模型与运行时的写入口（ML-U-2..6）：
- *   ML-U-2/3/4  setModel：没有运行时 → recordSessionModel 写会话设置（恰一次、只三个参数）、答 true；
- *               有运行时（含创建中 / 关停中，即 hasAgentRuntime）→ 什么也不写、不碰运行时、不广播、
- *               答 false；追加失败 → reject；
+ *   ML-U-2/3/4  setModel（2026-10-26 起锁住的 agent 当场重配，RD-7）：整件交给 sessionService.setModel（恰一次、
+ *               只三个参数），它答什么就答什么、等它落定才答、它 reject 就 reject；网关自己既不判运行时
+ *               （hasAgentRuntime）也不写设置（recordSessionModel）；
+ *   RD-7        previewAgentChange：(sessionId, change) 原样交给 sessionService.previewAgentChange，结果原样交回；
  *   ML-U-5      setThinkingLevel：会话设置恒写；会话开着再现场交给它（锁着但没开着 → peek 再给，D10-50）；
  *   ML-U-6      destroyAgent：invalidateAgent 恰一次、等它落定才 resolve；不清消息、不断 db、不广播。
  *
@@ -33,6 +34,8 @@ const mocks = vi.hoisted(() => ({
   resolveAgentProfileName: vi.fn(),
   getProfile: vi.fn(),
   hasAgentRuntime: vi.fn<(sessionId: string) => boolean>(),
+  setModel: vi.fn<(sessionId: string, provider: string, model: string) => Promise<boolean>>(),
+  previewAgentChange: vi.fn<(sessionId: string, change: unknown) => Promise<unknown>>(),
   invalidateAgent: vi.fn<(sessionId: string) => Promise<void>>(),
   getAgentSession: vi.fn(),
   peekAgentSession: vi.fn(),
@@ -69,6 +72,8 @@ vi.mock('../../../services/sessionService', () => ({
     peekAgentSession: mocks.peekAgentSession,
     resolveAgentProfileName: mocks.resolveAgentProfileName,
     hasAgentRuntime: mocks.hasAgentRuntime,
+    setModel: mocks.setModel,
+    previewAgentChange: mocks.previewAgentChange,
     invalidateAgent: mocks.invalidateAgent
   }
 }))
@@ -140,6 +145,8 @@ beforeEach(() => {
     mocks.resolveAgentProfileName,
     mocks.getProfile,
     mocks.hasAgentRuntime,
+    mocks.setModel,
+    mocks.previewAgentChange,
     mocks.invalidateAgent,
     mocks.getAgentSession,
     mocks.recordSessionModel,
@@ -155,6 +162,7 @@ beforeEach(() => {
   mocks.sshDisconnectRuntime.mockReturnValue(undefined)
   mocks.disconnect.mockResolvedValue(undefined)
   mocks.hasAgentRuntime.mockReturnValue(false)
+  mocks.setModel.mockResolvedValue(true)
   mocks.invalidateAgent.mockResolvedValue(undefined)
   mocks.getAgentSession.mockReturnValue(undefined)
   mocks.recordSessionModel.mockResolvedValue(undefined)
@@ -315,20 +323,25 @@ describe('DefaultChatGateway.listTools —— 内置 database server 那一行',
 
 // ─── 会话模型与运行时（ML-U-2..6） ──────────────────────────────────────────
 
-describe('DefaultChatGateway.setModel —— 只在没有运行时的时候写', () => {
-  it('ML-U-2 没有运行时 → recordSessionModel 恰一次（只这三个参数），答 true', async () => {
-    mocks.hasAgentRuntime.mockReturnValue(false)
+describe('DefaultChatGateway.setModel —— 整件交给 sessionService.setModel（RD-7）', () => {
+  it.each<[boolean]>([[true], [false]])(
+    'ML-U-2 sessionService.setModel 恰一次（只这三个参数），它答什么就答什么（%s）；网关自己不判运行时、不写设置、不广播',
+    async (answer) => {
+      mocks.setModel.mockResolvedValue(answer)
 
-    await expect(chatGateway.setModel(SID, 'prov', 'model-b')).resolves.toBe(true)
-    expect(mocks.hasAgentRuntime).toHaveBeenCalledWith(SID)
-    expect(mocks.recordSessionModel).toHaveBeenCalledTimes(1)
-    expect(mocks.recordSessionModel.mock.calls[0]).toEqual([SID, 'prov', 'model-b'])
-    expect(mocks.broadcast).not.toHaveBeenCalled()
-  })
+      await expect(chatGateway.setModel(SID, 'prov', 'model-b')).resolves.toBe(answer)
+      expect(mocks.setModel).toHaveBeenCalledTimes(1)
+      expect(mocks.setModel.mock.calls[0]).toEqual([SID, 'prov', 'model-b'])
+      expect(mocks.hasAgentRuntime).not.toHaveBeenCalled()
+      expect(mocks.recordSessionModel).not.toHaveBeenCalled()
+      expect(mocks.getAgentSession).not.toHaveBeenCalled()
+      expect(mocks.broadcast).not.toHaveBeenCalled()
+    }
+  )
 
-  it('ML-U-2 写入落定之前不答：追加挂着时 setModel 也挂着', async () => {
-    let finish!: () => void
-    mocks.recordSessionModel.mockReturnValue(new Promise<void>((r) => (finish = r)))
+  it('ML-U-2 写入与重配落定之前不答：sessionService.setModel 挂着时 setModel 也挂着', async () => {
+    let finish!: (accepted: boolean) => void
+    mocks.setModel.mockReturnValue(new Promise<boolean>((r) => (finish = r)))
     let settled = false
     const pending = chatGateway.setModel(SID, 'prov', 'model-b').then((v) => {
       settled = true
@@ -337,11 +350,12 @@ describe('DefaultChatGateway.setModel —— 只在没有运行时的时候写',
     await Promise.resolve()
     await Promise.resolve()
     expect(settled).toBe(false)
-    finish()
+    finish(true)
     await expect(pending).resolves.toBe(true)
   })
 
-  it('ML-U-3 有运行时（含创建中 / 关停中）→ 答 false：不写树、不取运行时、不广播', async () => {
+  it('ML-U-3 锁住的 agent 用不了这个模型（sessionService 答 false）→ 答 false：网关不另写、不碰运行时', async () => {
+    mocks.setModel.mockResolvedValue(false)
     mocks.hasAgentRuntime.mockReturnValue(true)
 
     await expect(chatGateway.setModel(SID, 'prov', 'model-b')).resolves.toBe(false)
@@ -351,12 +365,33 @@ describe('DefaultChatGateway.setModel —— 只在没有运行时的时候写',
     expect(mocks.broadcast).not.toHaveBeenCalled()
   })
 
-  it('ML-U-4 recordSessionModel 失败 → setModel reject（错误原样上交，不吞成 false）', async () => {
-    mocks.recordSessionModel.mockRejectedValue(new Error('settings write failed'))
+  it('ML-U-4 sessionService.setModel 失败 → setModel reject（错误原样上交，不吞成 false）', async () => {
+    mocks.setModel.mockRejectedValue(new Error('settings write failed'))
 
     await expect(chatGateway.setModel(SID, 'prov', 'model-b')).rejects.toThrow(
       'settings write failed'
     )
+  })
+})
+
+describe('DefaultChatGateway.previewAgentChange —— 原样交给 sessionService（RD-7）', () => {
+  it('RD-7 (sessionId, change) 原样交出、结果原样交回；只这一次调用，网关不写也不判运行时', async () => {
+    const verdict = { locked: true, cache: 'lost', reasons: ['model'], promptTokens: 4200 }
+    mocks.previewAgentChange.mockResolvedValue(verdict)
+    const change = { enabledTools: ['mcp:a'], provider: 'prov', model: 'model-b' }
+
+    await expect(chatGateway.previewAgentChange(SID, change)).resolves.toBe(verdict)
+    expect(mocks.previewAgentChange.mock.calls).toEqual([[SID, change]])
+    expect(mocks.previewAgentChange.mock.calls[0][1]).toBe(change)
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(mocks.recordSessionModel).not.toHaveBeenCalled()
+    expect(mocks.hasAgentRuntime).not.toHaveBeenCalled()
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+
+  it('RD-7 sessionService.previewAgentChange reject → 原样 reject', async () => {
+    mocks.previewAgentChange.mockRejectedValue(new Error('catalog exploded'))
+    await expect(chatGateway.previewAgentChange(SID, {})).rejects.toThrow('catalog exploded')
   })
 })
 

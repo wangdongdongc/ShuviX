@@ -36,10 +36,13 @@ export function ConfirmDialog({
   const overlayRef = useRef<HTMLDivElement>(null)
   const { closing, handleClose } = useDialogClose(onCancel)
 
-  // ESC 关闭
+  // ESC 关闭 —— 只关这一层：确认框常压在别的弹窗上（会话设置里改扩展能力时的缓存确认），那一层在 window 上听，
+  // 不拦下的话一次 Esc 会把两层一起关掉
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') handleClose()
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      handleClose()
     }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)

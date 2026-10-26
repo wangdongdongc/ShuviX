@@ -17,6 +17,9 @@
  * （Fx-REG：与真注册项同名、同平台的桩工厂）。真包装器 / 真 SkillTool / 真派发工具那几条在
  * desktopToolHost.real.test.ts，沙箱钉子在 desktopToolHost.sandbox.test.ts。
  *
+ * 重配（2026-10-26，HR-xx）：`reconfigureAgentTools` 只解析变了的那几样 —— 新勾的 MCP（真重配与创建同一条
+ * 惰性连接的路，预判不连、只交回已连着的）与按新名单造的技能货架；从不造内置 / 派发工具。
+ *
  * ⚠️ SkillTool 桩自带过滤（`hasSkills` / `skillNames` 都由 findEnabled 决定）：一个空 `class {}` 会让
  * hasSkills 恒为 undefined、工具永不注入，用例全绿却什么都没测（见 skillToolInjection 的 mock 陷阱）。
  */
@@ -196,6 +199,7 @@ import {
   inProcess,
   lockD,
   mcpRegistration,
+  N_W,
   profileOf,
   registerStubBuiltins,
   requestD,
@@ -2199,5 +2203,222 @@ describe('执行钩子（会话产物）', () => {
     expect(mocks.recordArtifactChange.mock.calls).toEqual([
       ['s1', { toolName: 'next', callId: 'c-eh3', conversationId: 1 }]
     ])
+  })
+})
+
+// ─── reconfigureAgentTools（重配，2026-10-26） ────────────────────────────
+
+describe('reconfigureAgentTools（重配：只解析变了的那几样）', () => {
+  /** 重配的请求：s1、归一后的新名单、要新接上的服务器 */
+  const reconfigureRequest = (
+    names: readonly string[],
+    servers: readonly string[] = []
+  ): { sessionId: string; names: readonly string[]; servers: readonly string[] } => ({
+    sessionId: 's1',
+    names,
+    servers
+  })
+  const reconfigure = (
+    names: readonly string[],
+    servers: readonly string[],
+    options: { signal?: AbortSignal; connect: boolean }
+  ): ReturnType<NonNullable<ToolHost['reconfigureAgentTools']>> =>
+    host.reconfigureAgentTools!(reconfigureRequest(names, servers), {
+      signal: options.signal ?? signal(),
+      connect: options.connect
+    })
+  const connectingOf = (server: string): unknown[] =>
+    mocks.broadcast.mock.calls
+      .filter(([e]) => e.type === 'mcp_connecting' && e.server === server)
+      .map(([e]) => e.connecting)
+
+  it('HR-1 signal 已中止：当场以它的 reason 拒绝；不碰 MCP、不造 SkillTool、不包装、不广播', async () => {
+    const controller = new AbortController()
+    const reason = new Error('reconfigure cancelled')
+    controller.abort(reason)
+    await expect(
+      reconfigure(['skill:pdf', 'mcp:ssh'], ['ssh'], { signal: controller.signal, connect: true })
+    ).rejects.toBe(reason)
+    for (const fn of [
+      mocks.statusByName,
+      mocks.ensureServerByName,
+      mocks.declarationsOf,
+      mocks.registrationsFromDeclarations,
+      mocks.broadcast
+    ]) {
+      expect(fn).not.toHaveBeenCalled()
+    }
+    expect(mocks.skillToolCalls).toEqual([])
+    expect(mocks.wrapCalls).toEqual([])
+  })
+
+  it('HR-2 connect:true：逐台 statusByName → ensure（惰性超时 + 本会话）；只有没连着的发 connecting 一对；声明在 ensure 之后取、按它建一次、每个工具包一次；次序 = servers 的次序', async () => {
+    const order: string[] = []
+    mocks.statusByName.mockImplementation((server: string) =>
+      server === 'context7' ? 'connected' : 'disconnected'
+    )
+    mocks.ensureServerByName.mockImplementation(async (server: string) => {
+      order.push(`ensure:${server}`)
+      return { ok: true }
+    })
+    mocks.declarationsOf.mockImplementation((server: string) => {
+      order.push(`declarations:${server}`)
+      return (MCP_DECLS[server] ?? []).map((d) => ({ ...d }))
+    })
+    const result = await reconfigure(['mcp:context7', 'mcp:ssh'], ['ssh', 'context7'], {
+      connect: true
+    })
+    expect(mocks.statusByName.mock.calls).toEqual([
+      ['ssh', 's1'],
+      ['context7', 's1']
+    ])
+    expect(mocks.ensureServerByName.mock.calls).toEqual([
+      ['ssh', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }],
+      ['context7', { timeoutMs: LAZY_CONNECT_TIMEOUT_MS, sessionId: 's1' }]
+    ])
+    expect(order.indexOf('declarations:ssh')).toBeGreaterThan(order.indexOf('ensure:ssh'))
+    expect(order.indexOf('declarations:context7')).toBeGreaterThan(order.indexOf('ensure:context7'))
+    expect(connectingOf('ssh')).toEqual([true, false])
+    expect(connectingOf('context7')).toEqual([])
+    expect(mocks.registrationsFromDeclarations.mock.calls.map(([s, sid]) => [s, sid])).toEqual([
+      ['ssh', 's1'],
+      ['context7', 's1']
+    ])
+    expect(result.mcp.map((entry) => entry.server)).toEqual(['ssh', 'context7'])
+    expect(result.mcp[0].declarations).toEqual(D_SSH)
+    expect(result.mcp[1].declarations).toEqual(D_C7)
+    expect(names(result.mcp[1].tools)).toEqual([
+      'mcp__context7__resolve-library-id',
+      'mcp__context7__get-library-docs'
+    ])
+    // 每个工具都是包装器的返回值，各包一次
+    const tools = result.mcp.flatMap((entry) => entry.tools)
+    expect(tools).toHaveLength(7)
+    for (const tool of tools) {
+      expect(mocks.wrapCalls.filter((c) => c.wrapped === tool)).toHaveLength(1)
+    }
+    expect('pending' in result).toBe(false)
+  })
+
+  it('HR-3 连不上：错误广播点名它，不在 mcp 里，connecting:false 照发；别的服务器照常', async () => {
+    mocks.ensureServerByName.mockImplementation(async (server: string) =>
+      server === 'broken' ? { ok: false, error: 'spawn npx ENOENT' } : { ok: true }
+    )
+    const result = await reconfigure(['mcp:broken', 'mcp:ssh'], ['broken', 'ssh'], {
+      connect: true
+    })
+    expect(result.mcp.map((entry) => entry.server)).toEqual(['ssh'])
+    expect(mocks.broadcast.mock.calls.filter(([e]) => e.type === 'error')).toEqual([
+      [
+        {
+          type: 'error',
+          sessionId: 's1',
+          error: i18next.t('chat.mcpConnectFailed', { name: 'broken', error: 'spawn npx ENOENT' })
+        }
+      ]
+    ])
+    expect(connectingOf('broken')).toEqual([true, false])
+    expect(mocks.declarationsOf.mock.calls.map(([s]) => s)).toEqual(['ssh'])
+  })
+
+  it('HR-4 connect:false（预判）：不 ensure、不发 mcp_connecting；已连着的交回声明 + 工具，其余按次序列进 pending；全都连着时没有 pending 键', async () => {
+    mocks.statusByName.mockImplementation((server: string) =>
+      server === 'context7' ? 'connected' : 'disconnected'
+    )
+    const result = await reconfigure(
+      ['mcp:ssh', 'mcp:context7', 'mcp:broken'],
+      ['ssh', 'context7', 'broken'],
+      { connect: false }
+    )
+    expect(mocks.ensureServerByName).not.toHaveBeenCalled()
+    expect(mocks.broadcast).not.toHaveBeenCalled()
+    expect(result.mcp.map((entry) => entry.server)).toEqual(['context7'])
+    expect(result.mcp[0].declarations).toEqual(D_C7)
+    expect(names(result.mcp[0].tools)).toEqual([
+      'mcp__context7__resolve-library-id',
+      'mcp__context7__get-library-docs'
+    ])
+    expect(result.pending).toEqual(['ssh', 'broken'])
+    expect(mocks.declarationsOf.mock.calls).toEqual([['context7', 's1']])
+
+    mocks.statusByName.mockReturnValue('connected')
+    const all = await reconfigure(['mcp:ssh'], ['ssh'], { connect: false })
+    expect(all.mcp.map((entry) => entry.server)).toEqual(['ssh'])
+    expect('pending' in all).toBe(false)
+    expect(mocks.ensureServerByName).not.toHaveBeenCalled()
+  })
+
+  it('HR-5 技能货架按新名单造一次（名单里的技能名 + 项目路径）；真有技能才给 skill；名单里没有 skill: → 不造 SkillTool', async () => {
+    const result = await reconfigure(
+      ['bash', 'skill:pdf', 'mcp:ssh', 'skill:builtin:drawing'],
+      [],
+      {
+        connect: true
+      }
+    )
+    expect(mocks.skillToolCalls).toHaveLength(1)
+    expect(mocks.skillToolCalls[0].args.slice(0, 2)).toEqual([
+      ['pdf', 'builtin:drawing'],
+      '/w/proj'
+    ])
+    expect(result.skill?.name).toBe('skill')
+    expect(mocks.wrapCalls.filter((c) => c.wrapped === result.skill)).toHaveLength(1)
+    expect(result.skills).toEqual(['builtin:drawing', 'pdf'])
+
+    // 点了名却一个都不启用：照造一次，但不给 skill、skills 为空
+    mocks.skillToolCalls.length = 0
+    const none = await reconfigure(['skill:nope'], [], { connect: true })
+    expect(mocks.skillToolCalls).toHaveLength(1)
+    expect('skill' in none).toBe(false)
+    expect(none.skills).toEqual([])
+
+    // 名单里没有 skill:：SkillTool 都不造
+    mocks.skillToolCalls.length = 0
+    const bare = await reconfigure(['bash', 'mcp:ssh'], [], { connect: false })
+    expect(mocks.skillToolCalls).toEqual([])
+    expect('skill' in bare).toBe(false)
+    expect(bare.skills).toEqual([])
+  })
+
+  it('HR-6 从不造内置工具与派发工具；锁里已有、不在 servers 里的服务器一概不碰', async () => {
+    setLock('s1', lockD({ mcp: { context7: D_C7.map((d) => ({ ...d })) } }))
+    const result = await reconfigure([...N_W], [], { connect: true })
+    expect(factoryCalls).toEqual([])
+    expect(mocks.createAgentTool).not.toHaveBeenCalled()
+    for (const fn of [
+      mocks.statusByName,
+      mocks.ensureServerByName,
+      mocks.declarationsOf,
+      mocks.registrationsFromDeclarations,
+      mocks.getRegistrationsByServerName
+    ]) {
+      expect(fn).not.toHaveBeenCalled()
+    }
+    expect(result.mcp).toEqual([])
+    // 交回的只有技能那一样（运行时按锁比对决定用不用）
+    expect(Object.keys(result).sort()).toEqual(['mcp', 'skill', 'skills'])
+  })
+
+  it('HR-7 连接途中被中止：当场拒绝；最后一条广播是 connecting:false，没有 error；之后连上也不取声明', async () => {
+    const pending = deferred<{ ok: boolean }>()
+    mocks.ensureServerByName.mockReturnValue(pending.promise)
+    const controller = new AbortController()
+    const reconfiguring = reconfigure(['mcp:ssh'], ['ssh'], {
+      signal: controller.signal,
+      connect: true
+    })
+    await flush()
+    controller.abort(new Error('reconfigure cancelled'))
+    await expect(reconfiguring).rejects.toThrow('reconfigure cancelled')
+    expect(mocks.broadcast.mock.calls.at(-1)?.[0]).toEqual({
+      type: 'mcp_connecting',
+      sessionId: 's1',
+      server: 'ssh',
+      connecting: false
+    })
+    expect(mocks.broadcast.mock.calls.filter(([e]) => e.type === 'error')).toEqual([])
+    pending.resolve({ ok: true })
+    await flush(10)
+    expect(mocks.declarationsOf).not.toHaveBeenCalled()
   })
 })

@@ -135,7 +135,9 @@ describe('CA-5 抽查', () => {
     ['policy:list', 'read'],
     ['provider:listAvailableModels', 'read'],
     ['network:status', 'read'],
-    ['knowledge:baseOptions', 'read']
+    ['knowledge:baseOptions', 'read'],
+    // 重配的预判（2026-10-26）：不连服务器、什么也不写
+    ['agent:previewChange', 'read']
   ])('CA-5 %s → %s', (channel, access) => {
     expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
     expect(channelAccessOf(channel)).toBe(access)
@@ -283,6 +285,7 @@ describe('CS-4 抽查', () => {
     // 会话
     ['agent:prompt', 'sessions'],
     ['agent:respondToInput', 'sessions'],
+    ['agent:previewChange', 'sessions'],
     ['session:list', 'sessions'],
     ['session:delete', 'sessions'],
     ['session:mentionEntries', 'sessions'],

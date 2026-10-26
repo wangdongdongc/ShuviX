@@ -12,9 +12,14 @@
  *    缺省不连服务器；上下文带 `connect`（option A 的完整初始化）时把记录里的服务器逐台连上（连不上 →
  *    与解析时同一条 error 广播，工具照旧按快照建）。重建上下文的 `extraTools` 原样放进 `extraTools`
  *    （PIN-03 R）。资源按上下文的 `sessionId` 找（PIN-10）。
+ *  - `reconfigureAgentTools`（重配，2026-10-26）：技能按名单 ∩ 宿主有的造一份（货架空了不给 `skill`）；
+ *    `servers` 逐台：`connect: true`（真重配）= 与解析同一条连接路（连不上广播同一条 error 并跳过，被中止
+ *    就原样抛出），`connect: false`（预判）= 从不连 —— 此刻已连上的交回声明与工具，其余按次序列进
+ *    `pending`；不认识的服务器名跳过。`reconfigure: false` 造一个**没有**这个方法的宿主（`unsupported`）。
  *
  * 旋钮：`sandbox`（解析时报的钉子）、`failResolve` / `failRebuild` / `failRebuildFor`（按 agentId / 'root'）、`omitOnRebuild`（重建时故意漏掉的
- * 工具名，附加工具也算）、`platform`。`rebuildContexts` 记每次重建的上下文。
+ * 工具名，附加工具也算）、`platform`、`failReconfigure` / `beforeReconfigure`（重配的失败 / 闸门）。
+ * `rebuildContexts` 记每次重建的上下文，`reconfigureCalls` 记每次重配的请求与 `connect`。
  */
 import { Type } from '@earendil-works/pi-ai'
 import {
@@ -30,8 +35,10 @@ import {
   offersDispatchTool,
   type AgentToolSet,
   type AgentToolsRebuildContext,
+  type AgentToolsReconfigureRequest,
   type AgentToolsRequest,
   type BuiltinToolsRequest,
+  type ReconfiguredAgentTools,
   type ResolvedAgentTools,
   type ToolHost
 } from '../../seams'
@@ -60,6 +67,14 @@ export interface TestToolHostOptions {
    * 带着会话 id）。给不给照旧按 `offersDispatchTool`（名单含 `agent`，且 root 或 `canSpawn`）
    */
   dispatchTool?: ToolRegistration | ((sessionId: string) => ToolRegistration)
+  /** false = 宿主没有 `reconfigureAgentTools`（重配被拒为 `unsupported`）；缺省有 */
+  reconfigure?: boolean
+}
+
+/** 一次重配调用：请求（拷贝）与这次连不连服务器 */
+export interface TestReconfigureCall {
+  readonly request: AgentToolsReconfigureRequest
+  readonly connect: boolean
 }
 
 export interface TestToolHost extends ToolHost {
@@ -81,6 +96,14 @@ export interface TestToolHost extends ToolHost {
   transformResolved: ((resolved: ResolvedAgentTools) => ResolvedAgentTools) | undefined
   /** 解析开始时调用（可返回一个 promise 卡住解析；观察 signal） */
   beforeResolve: ((signal: AbortSignal) => void | Promise<void>) | undefined
+  /** 每次重配的请求（按次序；预判也算） */
+  readonly reconfigureCalls: TestReconfigureCall[]
+  /** 重配开始时调用（记下调用之后；可返回一个 promise 卡住重配，或抛错；观察 signal） */
+  beforeReconfigure:
+    | ((signal: AbortSignal, call: TestReconfigureCall) => void | Promise<void>)
+    | undefined
+  /** 给了就让重配以它失败（在 beforeReconfigure 之后） */
+  failReconfigure: Error | undefined
   /** 假 MCP 服务器（按名） */
   mcp(name: string): FakeMcpServer
   readonly servers: ReadonlyMap<string, FakeMcpServer>
@@ -200,6 +223,9 @@ export function makeTestToolHost(
     omitOnRebuild: new Set(),
     transformResolved: undefined,
     beforeResolve: undefined,
+    reconfigureCalls: [],
+    beforeReconfigure: undefined,
+    failReconfigure: undefined,
     servers,
     mcp: (name) => {
       const server = servers.get(name)
@@ -310,6 +336,63 @@ export function makeTestToolHost(
         }
         return rebuilt
       })()
+    }
+  }
+  if (options.reconfigure !== false) {
+    host.reconfigureAgentTools = async (
+      request,
+      { signal, connect }
+    ): Promise<ReconfiguredAgentTools> => {
+      const call: TestReconfigureCall = {
+        request: {
+          sessionId: request.sessionId,
+          names: [...request.names],
+          servers: [...request.servers]
+        },
+        connect
+      }
+      host.reconfigureCalls.push(call)
+      await host.beforeReconfigure?.(signal, call)
+      if (host.failReconfigure !== undefined) throw host.failReconfigure
+      const available = new Set(options.skills ?? [])
+      const skills = request.names
+        .filter((name) => name.startsWith('skill:'))
+        .map((name) => name.slice('skill:'.length))
+        .filter((name) => available.has(name))
+      const mcp: ReconfiguredAgentTools['mcp'][number][] = []
+      const pending: string[] = []
+      for (const name of request.servers) {
+        const server = servers.get(name)
+        if (server === undefined) continue
+        if (connect) {
+          try {
+            await server.connect(signal)
+          } catch (error) {
+            if (signal.aborted) throw error
+            broadcast({
+              type: 'error',
+              sessionId: request.sessionId,
+              error: `MCP server ${server.name} failed to connect: ${error instanceof Error ? error.message : String(error)}`
+            })
+            continue
+          }
+        } else if (!server.connected) {
+          pending.push(name)
+          continue
+        }
+        const declarations = server.declarations
+        mcp.push({
+          server: server.name,
+          declarations,
+          tools: declarations.map((decl) => mcpTool(server, decl))
+        })
+      }
+      return {
+        mcp,
+        ...(pending.length > 0 ? { pending } : {}),
+        ...(skills.length > 0 ? { skill: skillTool(skills) } : {}),
+        skills
+      }
     }
   }
   return host

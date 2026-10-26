@@ -18,6 +18,8 @@
  *    WP2：`steerOptions` / `followUpOptions` 记下每次 steer / followUp 的选项（来源要原样到这里），`respondArgs` 记下
  *    respondToInput 的实参个数与 meta；`agents.continue` 带了来源才把它记进那一笔调用（没带的调用形状不变）。
  *    WP3：`pendingRequests` 是挂着的询问（`pendingInputs()` 交它、计数随它），应答受理时移除并调 `onResponded`。
+ *    重配（2026-10-26）：`reconfigureAgent` 可挂闸门（`reconfigureGate`）、按 `reconfigureError` 拒绝；
+ *    `previewAgentChange` 交 `preview`（缺省按有没有锁），`previewError` 时拒绝。
  *  - FakeSessionHost：open / peek / get / close / closeAll / reopen / delete；`storages` 是「存储在」的会话集合
  *    （peek 只打开它们，open 会建）；`delete` 可挂闸门；调用记进 `calls`。
  *
@@ -28,6 +30,7 @@ import { vi } from 'vitest'
 import type {
   AdmitOptions,
   AdmitResult,
+  AgentConfig,
   AgentIdentity,
   AgentMonitorRow,
   AgentProjector,
@@ -41,6 +44,8 @@ import type {
   NoticeResult,
   NotifyOptions,
   PendingInputHooks,
+  ReconfigureOutcome,
+  ReconfigurePreview,
   RequestState,
   BranchResult,
   IdleWorkResult,
@@ -427,6 +432,34 @@ export class FakeDurableSession implements DurableSession {
   spawnedRecords(): SpawnedAgentRecord[] {
     this.calls.push(['spawnedRecords'])
     return this.closed ? [] : this.spawned
+  }
+
+  /** 重配（2026-10-26）的脚本：缺省有锁就算改过、没锁就没改；给了 `reconfigureError` 就以它拒绝 */
+  reconfigureError: unknown
+  /** 重配受理之后、落定之前挂着的闸门（看调用方是不是等它落定才答） */
+  reconfigureGate: Gate | undefined
+  /** 预判的脚本（缺省：有锁 → kept，没锁 → none）；给了 `previewError` 就以它拒绝 */
+  preview: ReconfigurePreview | undefined
+  previewError: unknown
+
+  async reconfigureAgent(): Promise<ReconfigureOutcome> {
+    this.calls.push(['reconfigureAgent'])
+    if (this.reconfigureGate) await this.reconfigureGate.promise
+    if (this.reconfigureError !== undefined) throw this.reconfigureError
+    return this.lock === undefined ? { applied: false } : { applied: true, record: this.lock }
+  }
+
+  async previewAgentChange(config: AgentConfig): Promise<ReconfigurePreview> {
+    this.calls.push(['previewAgentChange', config])
+    if (this.previewError !== undefined) throw this.previewError
+    return (
+      this.preview ?? {
+        locked: this.lock !== undefined,
+        cache: this.lock === undefined ? 'none' : 'kept',
+        reasons: [],
+        promptTokens: 0
+      }
+    )
   }
 
   async destroyAgent(): Promise<void> {

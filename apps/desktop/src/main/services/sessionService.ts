@@ -30,6 +30,7 @@ import type {
   SessionCreateParams,
   SessionModelMetadata,
   AgentInitResult,
+  AgentChangePreview,
   ModelCapabilities
 } from '../types'
 import type { Project, SessionSettings } from '../dao/types'
@@ -41,11 +42,14 @@ import {
   type ThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
 import {
+  AgentCreationError,
   CHAT_PROFILE_NAME,
   NOTEBOOK_PROFILE_NAME,
   BOT_PROFILE_NAME,
+  SessionClosedError,
   TAB_PROFILE_NAME,
   WORK_PROFILE_NAME,
+  resolveLockModel,
   rowForProviderId,
   toInProcessAgentType,
   type AgentConfig,
@@ -60,7 +64,7 @@ import { agentService } from './agentService'
 // 仅在方法体内调用：几个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession, clearAgentScopedState, destroySessionRuntime } from './agentSession'
 import { getSessionHost, peekSessionHost } from './sessionHost'
-import { providerCredentialPort } from './models'
+import { getModelRegistry, providerCredentialPort } from './models'
 import { peekSyncHub } from '../frontend/sync/syncWiring'
 import { effectiveRunState, mirroredAgentLocked } from './sessionMirror'
 import { killBySession, setBgTaskNotifier } from './bgTaskService'
@@ -153,6 +157,13 @@ function removeTempWorkspaceIfUnused(dir: string, owner: string): void {
  */
 function sessionScopedTools(names: readonly string[]): string[] {
   return [...new Set(names.filter(isToolSelectionEntry))]
+}
+
+/** 预判时套在会话配置上的「想改成的样子」（省略的项 = 照会话设置；模型的两项一起给才算） */
+interface SessionConfigOverrides {
+  enabledTools?: readonly string[]
+  provider?: string
+  model?: string
 }
 
 /**
@@ -638,20 +649,99 @@ export class SessionService {
    * 改扩展能力勾选（`settings.enabledTools`，整份替换）—— 输入框的工具选择器与会话设置里的
    * 扩展能力共用的唯一写入口。
    *
-   * **只在这条会话没有 agent 的时候接受**：勾选只在创建 agent 那一刻读一次，锁住期间（含销毁在途）
-   * 改了不会作用到那个 agent，所以一律拒绝、什么也不写，让前端回拉真实状态（判据 hasAgentRuntime：
-   * 打开着的会话看运行时的锁，没开着看 DB 里的锁镜像）。创建在途的那一小段窗口里的写入照样接受
-   * （PIN-12）—— 它不影响正在创建的 agent，下一次创建生效。
+   * 写进会话设置；这条会话此刻有 agent（锁）就当场重配它（2026-10-26：立即生效，运行中也是）—— 新勾的 MCP
+   * 在这里惰性连接，等重配落定才返回（连不上照常落错误提示，勾选留着，与创建同一口径）。创建在途时写的这一份
+   * 也在创建落定后重配上去。重配失败只记日志、照样答 true：设置已经写下，下一次创建按它建（不让 IPC 在写入
+   * 之后拒绝 —— 界面那份乐观状态就是设置）。会话不存在 → false。
    */
-  updateEnabledTools(id: string, enabledTools: readonly string[]): boolean {
+  async updateEnabledTools(id: string, enabledTools: readonly string[]): Promise<boolean> {
     if (!sessionRecords.pick(id, ['id'])) return false
-    if (this.hasAgentRuntime(id)) {
-      log.info(`拒绝修改扩展能力：会话已有运行时 session=${id}`)
-      return false
-    }
     sessionRecords.updateSettings(id, { enabledTools: sessionScopedTools(enabledTools) })
     broadcastSessionConfigChanged(id)
+    try {
+      const result = await this.reconfigureAgent(id)
+      if (!result.ok) log.warn(`重配扩展能力被拒 session=${id}: ${result.error}`)
+    } catch (err) {
+      log.warn(`重配扩展能力失败 session=${id}: ${err instanceof Error ? err.message : err}`)
+    }
     return true
+  }
+
+  /**
+   * 改会话模型（选择器的写入口）。锁住的 agent 会当场换过去 —— 所以先确认那个 agent 用得了它（provider 停用 /
+   * 模型不在了 → false、什么也不写），再写设置、重配。没锁只写设置（下一次创建按它建，用不用得了由创建去判）。
+   * 写下之后重配仍被拒（极少：宿主不支持重配，或检查之后 provider 恰好被停用）→ 设置改回原来那个模型（原来没
+   * 写过就留着新值）、答 false —— agent 仍是原来的模型，界面回拉 `agent.init` 看到的也是它。
+   */
+  async setModel(sessionId: string, provider: string, modelId: string): Promise<boolean> {
+    if (!sessionRecords.pick(sessionId, ['id'])) return false
+    if ((await this.agentSessionFor(sessionId))?.lock) {
+      const resolution = resolveLockModel(getModelRegistry(), providerCredentialPort, {
+        provider,
+        modelId
+      })
+      if (!resolution.ok) {
+        log.info(`拒绝换模型：锁住的 agent 用不了它 session=${sessionId}: ${resolution.message}`)
+        return false
+      }
+    }
+    const previous = sessionRecords.pickSettings(sessionId, ['model'])?.model
+    await recordSessionModel(sessionId, provider, modelId)
+    const result = await this.reconfigureAgent(sessionId)
+    if (!result.ok) {
+      log.warn(`重配模型被拒 session=${sessionId}: ${result.error}`)
+      if (previous) await recordSessionModel(sessionId, previous.provider, previous.modelId)
+      return false
+    }
+    return true
+  }
+
+  /**
+   * 按会话此刻的设置重配它锁住的 agent（模型 / 扩展勾选写下之后调）。会话开着就交给它（创建在途也算：运行时
+   * 等创建落定再重配）；没开着但锁镜像说锁着 → peek 打开；都不是 → 什么都不做（下一次发送按设置创建）。
+   * 重配被取消（销毁 / 回退抢先）或会话关了都算好 —— 设置已经写下，下一次创建按它建。被拒（模型用不了 /
+   * 宿主不支持）→ `{ ok: false }`。其余错误原样抛出。
+   */
+  async reconfigureAgent(sessionId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    const durable = await this.agentSessionFor(sessionId)
+    if (!durable) return { ok: true }
+    try {
+      await durable.reconfigureAgent()
+      return { ok: true }
+    } catch (error) {
+      if (error instanceof SessionClosedError) return { ok: true }
+      if (error instanceof AgentCreationError) {
+        return error.code === 'cancelled' ? { ok: true } : { ok: false, error: error.message }
+      }
+      throw error
+    }
+  }
+
+  /**
+   * 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（`agent.previewChange`）：把想改成的样子套在会话配置上，
+   * 交给锁问。没锁 / 会话不存在 / 读的途中关了 → `locked: false`、`cache: 'none'`。不连服务器、什么也不写。
+   */
+  async previewAgentChange(
+    sessionId: string,
+    change: { enabledTools?: readonly string[]; provider?: string; model?: string }
+  ): Promise<AgentChangePreview> {
+    const none: AgentChangePreview = { locked: false, cache: 'none', reasons: [], promptTokens: 0 }
+    const durable = await this.agentSessionFor(sessionId)
+    if (!durable?.lock) return none
+    try {
+      const config = await this.resolveAgentConfig(sessionId, change)
+      return await durable.previewAgentChange(config)
+    } catch (error) {
+      if (error instanceof SessionClosedError) return none
+      throw error
+    }
+  }
+
+  /** 改模型 / 勾选要作用到的那条会话：开着就是它；没开着但锁镜像说锁着 → peek 打开；否则没有 */
+  private async agentSessionFor(sessionId: string): Promise<DurableSession | undefined> {
+    const open = this.host.get(sessionId)
+    if (open) return open
+    return mirroredAgentLocked(sessionId) ? this.peekDurableSession(sessionId) : undefined
   }
 
   /**
@@ -761,9 +851,7 @@ export class SessionService {
   /**
    * 这条会话此刻有没有 agent（锁）。打开着的会话以运行时的锁为准；没开着就读 DB 里的锁镜像
    * （`settings.agentLocked`，每次打开都对账 —— 上个进程留下的镜像在重启之后可能过时：空闲会话的锁在下一次
-   * 打开时清掉，option A；要准就先打开，initAgent 就是这么做的）。模型与扩展能力勾选都只在创建 agent 那一刻读一次，
-   * 两处写入口（agent.setModel / updateEnabledTools）据这一位拒绝锁住期间的改动。
-   * 创建在途的那一小段窗口里改动照样接受（PIN-12）：它们不影响正在创建的那个 agent。
+   * 打开时清掉，option A；要准就先打开，initAgent 就是这么做的）。
    */
   hasAgentRuntime(sessionId: string): boolean {
     const session = this.host.get(sessionId)
@@ -777,8 +865,11 @@ export class SessionService {
    * 默认 provider / 模型，与界面同一口径；都没有 → 不给，运行时拒绝创建）、思考档位（没设过 / 写坏 →
    * 缺省，PIN-03）、工作目录。会话不存在 → 抛错。
    */
-  async resolveAgentConfig(sessionId: string): Promise<AgentConfig> {
-    const ctx = await this.resolveSessionAgentContext(sessionId)
+  async resolveAgentConfig(
+    sessionId: string,
+    overrides?: SessionConfigOverrides
+  ): Promise<AgentConfig> {
+    const ctx = await this.resolveSessionAgentContext(sessionId, overrides)
     if (!ctx) throw new Error(`Session ${sessionId} does not exist`)
     const profileName = this.resolveAgentProfileName(sessionId)
     const profile = toInProcessAgentType(
@@ -801,7 +892,10 @@ export class SessionService {
 
   /** 解析会话的 Agent 上下文元信息（provider/model/能力/工作目录/启用工具/项目），不创建 AgentSession。
    *  供 initAgent（前端同步）与 ensureAgentSession（懒创建）共用。session 不存在返回 null。 */
-  private async resolveSessionAgentContext(sessionId: string): Promise<{
+  private async resolveSessionAgentContext(
+    sessionId: string,
+    overrides?: SessionConfigOverrides
+  ): Promise<{
     provider: string
     model: string
     capabilities: ModelCapabilities
@@ -815,13 +909,16 @@ export class SessionService {
   } | null> {
     const session = sessionRecords.pick(sessionId, ['projectId', 'settings'])
     if (!session) return null
-    // 扩展能力勾选在会话设置里（创建会话时定下，创建 Agent 时读这一次）
-    const selectedTools = this.sessionEnabledTools(sessionId)
+    // 扩展能力勾选在会话设置里（创建会话时定下；创建 Agent、重配时读）；预判时套上想改成的那一份
+    const selectedTools = overrides?.enabledTools
+      ? sessionScopedTools(overrides.enabledTools)
+      : this.sessionEnabledTools(sessionId)
 
     // 模型类运行配置的唯一事实源是会话设置：settings.model / settings.thinkingLevel
     const tree = await readSessionRunConfig(sessionId)
-    const provider = tree.provider ?? this.getDefaultProvider()
-    const model = tree.model ?? this.getDefaultModel()
+    const pickedModel = overrides?.provider && overrides.model ? overrides : undefined
+    const provider = pickedModel?.provider ?? tree.provider ?? this.getDefaultProvider()
+    const model = pickedModel?.model ?? tree.model ?? this.getDefaultModel()
     const modelRow = providerDao.findModelsByProvider(provider).find((m) => m.modelId === model)
     const capabilities: ModelCapabilities = modelRow?.capabilities
       ? JSON.parse(modelRow.capabilities)
@@ -863,7 +960,7 @@ export class SessionService {
    * agent。
    *
    * **锁着就报锁的配置**（option A）：模型（provider 行 id + 模型 id、能力点）、活的思考档位、工具选择都按
-   * 那个 agent 实际在用的报，不按会话设置 —— 锁住期间设置怎么改都不作用到它。会话开着读运行时的锁；没开着
+   * 那个 agent 实际在用的报，不按会话设置（改设置会当场重配它，两边平常是一样的；重配被拒的那一刻才不同）。会话开着读运行时的锁；没开着
    * 但锁镜像说锁着 → peek 打开它再读（同一进程里 LRU 关掉的照旧重建；上个进程留下的按规则完整初始化或
    * 清锁，于是 `created` 与芯片、运行状态对得上）。没锁照旧报会话设置。
    */
@@ -907,9 +1004,8 @@ export class SessionService {
     }
     return {
       success: true,
-      // created = 此刻有 agent（锁；init 本身不打开会话、不创建）—— 与扩展能力写入口
-      // updateEnabledTools 的拒绝条件（hasAgentRuntime）同一口径，前端的只读态据此打底：
-      // 窗口刷新时相关事件早已错过，只能靠这一位
+      // created = 此刻有 agent（锁；init 本身不打开会话、不创建）—— 前端据此决定改模型 / 扩展能力之前
+      // 要不要先预判提示词缓存：窗口刷新时相关事件早已错过，只能靠这一位
       created: this.hasAgentRuntime(sessionId),
       provider: ctx.provider,
       model: ctx.model,
@@ -925,8 +1021,7 @@ export class SessionService {
   /**
    * 锁住的 agent 实际在用的模型类配置（initAgent 用）：锁里的模型（pi provider id 译回 provider 行 id，行没了
    * 就原样）、那一行上这个模型的能力点、根 agent 活的思考档位（K9）、锁记着的工具选择（创建那一刻的勾选，
-   * 连不上的 MCP 也在其中 —— 界面照旧画成「已勾 + 离线」；这个字段之前建的锁没有它 → 退回会话设置的原值，
-   * 锁住期间那一份本来就改不了）。
+   * 连不上的 MCP 也在其中 —— 界面照旧画成「已勾 + 离线」；这个字段之前建的锁没有它 → 退回会话设置的原值）。
    */
   private async lockedRunConfig(
     durable: DurableSession,

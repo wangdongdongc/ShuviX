@@ -475,6 +475,8 @@ export interface BootOptions {
 export interface ToolHostCalls {
   resolve: unknown[]
   rebuild: Array<{ record: { kind: string; agentId?: string }; context: { sessionId: string } }>
+  /** 重配（2026-10-26）：每次的请求与 connect（真重配 true / 预判 false） */
+  reconfigure: Array<{ request: unknown; connect: boolean }>
 }
 
 let current: Proc | undefined
@@ -536,7 +538,7 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
   )
   setBuiltinMcpAgentResolver(sessionHostModule.sessionAgentResolver())
 
-  const toolHostCalls: ToolHostCalls = { resolve: [], rebuild: [] }
+  const toolHostCalls: ToolHostCalls = { resolve: [], rebuild: [], reconfigure: [] }
   let spied: Partial<SessionHostDeps> = {}
   if (options.spyToolHost) {
     const { createDesktopToolHost } = await import('../../../agents/agentHost')
@@ -556,6 +558,11 @@ export async function bootProcess(options: BootOptions = {}): Promise<Proc> {
             context
           })
           return real.rebuildAgentTools(record, context)
+        },
+        // 真 ToolHost 实现了重配：套记录层时不转发它，锁住的会话改勾选 / 换模型就会被拒成 unsupported
+        reconfigureAgentTools: (request, opts) => {
+          toolHostCalls.reconfigure.push({ request, connect: opts.connect })
+          return real.reconfigureAgentTools!(request, opts)
         }
       }
     }

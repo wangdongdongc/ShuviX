@@ -1,14 +1,16 @@
 // @vitest-environment jsdom
 /**
- * ModelPicker（输入框的模型选择器）DOM 测试（jsdom）—— 会话模型与扩展能力勾选同一条规矩：只在创建
- * Agent 那一刻读一次，所以**会话已有运行时（或正在关停）时锁住**：
+ * ModelPicker（输入框的模型选择器）DOM 测试（jsdom）—— 会话已有 Agent 运行时也能换模型（2026-10-26：
+ * 后端当场重配那个 agent），所以**没有只读态**：
  *
- *   - 锁住时触发钮挂 `data-model-lock`、悬停说原因（input.modelLocked），全名 tooltip 让位；面板照常
- *     能展开（思考档位仍可调），模型行 `disabled` + `aria-disabled` + 同一句原因，选中行不压暗；
- *   - 锁由组件自己挡（绕过 disabled 硬点也不写）；锁态随 store 实时翻转、组件不重挂；
- *   - 没锁时选模型 → `agent.setModel({sessionId, provider, model})`（不再带 baseUrl / apiProtocol），
- *     按新模型能力更新 store；
- *   - 后端拒绝（运行时抢先建起来了）→ 回拉 `agent.init`：显示真实模型、能力点与只读态；init 也失败 →
+ *   - 有没有运行时 / 关停中都一样：触发钮没有锁（没有 `data-model-lock` / `data-model-locked`），全名
+ *     tooltip 照常，模型行可点（RU-14）；锁态的 prop 与文案（modelLocked / input.modelLocked）都已退役；
+ *   - 选一个模型（会话里）→ 先 `agent.previewChange({sessionId, provider, model})` 问主进程会不会打穿提示词
+ *     缓存（不看 sessionAgentCreated —— 有没有 agent 也由它答），预判落定之前界面不换；保得住 / 没 agent →
+ *     `agent.setModel({sessionId, provider, model})`（不再带 baseUrl / apiProtocol），按新模型能力更新
+ *     store；保不住 → 确认框（CacheBreakConfirmHost），取消什么都不改、确认才写；框开着时会话换了 → 确认了
+ *     也不写（RU-15..19）；选的就是当前那一个 → 不预判、不写；改思考档位从不预判（RU-20）；
+ *   - 后端拒绝（锁住的 agent 用不了这个模型）→ 回拉 `agent.init`：显示真实模型、能力点与勾选；init 也失败 →
  *     回到选之前显示的那一个；await 期间当前会话换了 → 既不回拉也不写能力点；
  *   - 欢迎页（没有会话）：不锁，选模型 / 改档位都只改界面，由输入框在新建会话时写进去；宿主启动时种的
  *     默认档（`seedDefaultThinkingLevel`）被点一档就不再算默认档（MP-13，点的就是种下的那一档也算），
@@ -18,17 +20,19 @@
  *
  * 包入口 `@shuvix/chat-ui` 整个顶掉（同 toolPicker.dom.test.tsx）：`getHostApi` 给 agent.setModel /
  * setThinkingLevel / app.openSettings，`getSessionChannelApi` 给 agent.init，`useChatHost().models` 是
- * 一个可变替身（setter 有记录、改了会触发重渲染，触发钮上显示的就是它）。目录走真的
- * modelCatalogStore，渲染真的 ModelSelect；文案用同一个 i18n 实例现算。
+ * 一个可变替身（setter 有记录、改了会触发重渲染，触发钮上显示的就是它）。缓存确认（CacheBreakConfirm）
+ * 不经包入口、从 `api/chatApi` 取 HostApi，所以预判挂在 `window.api.agent.previewChange` 上（缺省答 none：
+ * 照改不问）；要确认框的用例在旁边挂一个真的 CacheBreakConfirmHost。目录走真的 modelCatalogStore，渲染真的
+ * ModelSelect；文案用同一个 i18n 实例现算。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, createElement } from 'react'
+import { act, createElement, Fragment } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import type { AvailableModel, ProviderInfo } from '@shuvix/chat-protocol/types/provider'
-import type { AgentInitResult } from '@shuvix/chat-protocol/chatApi'
+import type { AgentChangePreview, AgentInitResult } from '@shuvix/chat-protocol/chatApi'
 import {
   SELECTABLE_THINKING_LEVELS,
   THINKING_LEVEL_LABEL_KEYS
@@ -54,6 +58,7 @@ const mocks = vi.hoisted(() => {
       notify()
     }),
     setModel: vi.fn(),
+    previewChange: vi.fn<(params: Record<string, unknown>) => Promise<AgentChangePreview>>(),
     setThinkingLevel: vi.fn(),
     openSettings: vi.fn(),
     init: vi.fn()
@@ -97,7 +102,7 @@ import {
 import { emptySessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { ModelPicker } from '../ModelPicker'
-import { ModelSelect } from '../ModelSelect'
+import { CacheBreakConfirmHost } from '../CacheBreakConfirm'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -198,9 +203,19 @@ function seed(opts: {
   mocks.notify()
 }
 
-async function renderPicker(): Promise<void> {
+/** `withConfirmHost`：旁边挂一个真的确认框宿主（输入框里就挂着一个），保不住缓存时才画得出框 */
+async function renderPicker(opts: { withConfirmHost?: boolean } = {}): Promise<void> {
   await act(async () => {
-    root.render(createElement(ModelPicker))
+    root.render(
+      opts.withConfirmHost
+        ? createElement(
+            Fragment,
+            null,
+            createElement(ModelPicker),
+            createElement(CacheBreakConfirmHost)
+          )
+        : createElement(ModelPicker)
+    )
   })
   await flush()
 }
@@ -248,22 +263,32 @@ async function clickEl(el: HTMLElement): Promise<void> {
   await flush()
 }
 
-/** 绕过禁用态硬点（与 toolPicker.dom.test 同一个办法） */
-async function forceClick(el: HTMLButtonElement): Promise<void> {
-  const wasDisabled = el.disabled
-  el.disabled = false
+/** 缓存确认框（portal 到 body；不在为 null） */
+const confirmDialog = (): HTMLElement | null =>
+  document.querySelector<HTMLElement>('[data-cache-break-confirm]')
+async function answerDialog(text: string): Promise<void> {
+  const btn = [...(confirmDialog()?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
+    (b) => b.textContent === text
+  )
+  if (!btn) throw new Error(`dialog button ${text} not rendered`)
+  await clickEl(btn)
+}
+/** 取消走 ConfirmDialog 的退出动画（120ms）之后才落定 */
+async function cancelDialog(): Promise<void> {
+  await answerDialog(i18n.t('common.cancel'))
   await act(async () => {
-    el.click()
+    await new Promise((resolve) => setTimeout(resolve, 200))
   })
-  el.disabled = wasDisabled
   await flush()
 }
-
-const lockedHint = (): string => {
-  const text = i18n.t('input.modelLocked')
-  expect(text).not.toBe('input.modelLocked')
-  return text
-}
+const preview = (over: Partial<AgentChangePreview> = {}): AgentChangePreview => ({
+  locked: true,
+  cache: 'kept',
+  reasons: [],
+  promptTokens: 0,
+  ...over
+})
+const LOST = preview({ cache: 'lost', reasons: ['model'], promptTokens: 4321 })
 const host = (): { provider: string; model: string } => ({
   provider: mocks.models.activeProvider,
   model: mocks.models.activeModel
@@ -304,6 +329,10 @@ beforeEach(() => {
     fn.mockClear()
   }
   mocks.setModel.mockReset().mockResolvedValue({ success: true })
+  mocks.previewChange
+    .mockReset()
+    .mockResolvedValue({ locked: false, cache: 'none', reasons: [], promptTokens: 0 })
+  ;(window as unknown as { api?: unknown }).api = { agent: { previewChange: mocks.previewChange } }
   mocks.setThinkingLevel.mockReset().mockResolvedValue({ success: true })
   mocks.init.mockReset()
   useModelCatalogStore.setState({
@@ -320,10 +349,11 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  delete (window as unknown as { api?: unknown }).api
 })
 
 describe('没有运行时：照常换模型', () => {
-  it('MP-1 无锁；选 B → setModel 恰一次 {sessionId, provider, model}；host 变 B、面板收起、能力点取 B', async () => {
+  it('MP-1 无锁；选 B → 先预判、再 setModel 恰一次 {sessionId, provider, model}；host 变 B、面板收起、能力点取 B', async () => {
     seed({ active: SID })
     await renderPicker()
     expect(container0().hasAttribute('data-model-locked')).toBe(false)
@@ -334,7 +364,15 @@ describe('没有运行时：照常换模型', () => {
     expect(item(B).disabled).toBe(false)
     await clickEl(item(B))
 
+    expect(mocks.previewChange).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
     expect(mocks.setModel).toHaveBeenCalledTimes(1)
+    expect(mocks.previewChange.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.setModel.mock.invocationCallOrder[0]
+    )
     // 只这三个键 —— 热切换的 baseUrl / apiProtocol 覆盖值已随运行期换模型一起退役
     expect(mocks.setModel.mock.calls[0]).toEqual([{ sessionId: SID, provider: P, model: B }])
     expect(Object.keys(mocks.setModel.mock.calls[0][0]).sort()).toEqual([
@@ -352,51 +390,61 @@ describe('没有运行时：照常换模型', () => {
   })
 })
 
-describe('运行时已建：模型只读，思考档位照常', () => {
-  it('MP-2 触发钮挂锁、悬停说原因、全名 tooltip 不渲染；面板可展开，模型行禁用 + 原因，选中行不压暗', async () => {
+describe('运行时已建：照样能换模型（没有只读态）', () => {
+  it('MP-2 RU-14 触发钮没有锁、悬停没有原因、全名 tooltip 照常；面板里模型行都可点、选中行高亮', async () => {
     seed({ active: SID, created: { [SID]: true } })
     await renderPicker()
-    const hint = lockedHint()
-    expect(container0().hasAttribute('data-model-locked')).toBe(true)
-    expect(trigger().querySelector('[data-model-lock]')).not.toBeNull()
-    expect(trigger().title).toBe(hint)
-    expect(nameTooltip()).toBeNull()
+    expect(container0().hasAttribute('data-model-locked')).toBe(false)
+    expect(container.querySelector('[data-model-lock]')).toBeNull()
+    expect(trigger().title).toBe('')
+    expect(nameTooltip()).not.toBeNull()
+    expect(nameTooltip()!.textContent).toBe(A)
 
     await openPanel()
     for (const id of [A, B]) {
       const row = item(id)
-      expect(row.disabled, id).toBe(true)
-      expect(row.getAttribute('aria-disabled'), id).toBe('true')
-      expect(row.title, id).toBe(hint)
-      expect(row.className, id).toContain('cursor-not-allowed')
+      expect(row.disabled, id).toBe(false)
+      expect(row.hasAttribute('aria-disabled'), id).toBe(false)
+      expect(row.title, id).toBe('')
+      expect(row.className, id).not.toContain('cursor-not-allowed')
+      expect(row.className, id).not.toContain('opacity-40')
     }
-    // 选中的那一行（A）就是这条会话正在用的：不压暗；其余压暗
-    expect(item(A).className).not.toContain('opacity-40')
-    expect(item(B).className).toContain('opacity-40')
-    // 思考档位按钮不受锁影响
+    expect(item(A).className).toContain('font-medium')
     expect(thinkingButton('high').disabled).toBe(false)
   })
 
-  it('MP-2 对照：没锁时全名 tooltip 在、触发钮没有原因', async () => {
+  it('MP-2 对照：没有运行时也一样，全名 tooltip 在、触发钮没有原因', async () => {
     seed({ active: SID })
     await renderPicker()
     expect(nameTooltip()).not.toBeNull()
     expect(nameTooltip()!.textContent).toBe(A)
+    expect(trigger().title).toBe('')
   })
 
-  it('MP-3 锁定下硬点未选中行 → setModel 零调用、host 不变、面板不关', async () => {
+  it('MP-3 有运行时，选 B（保得住缓存）→ 预判、再 setModel；host 变 B、面板收起', async () => {
     seed({ active: SID, created: { [SID]: true } })
+    mocks.previewChange.mockResolvedValue(preview())
     await renderPicker()
     await openPanel()
-    await forceClick(item(B))
-    expect(mocks.setModel).not.toHaveBeenCalled()
-    expect(mocks.setActiveProvider).not.toHaveBeenCalled()
-    expect(mocks.setActiveModel).not.toHaveBeenCalled()
-    expect(host()).toEqual({ provider: P, model: A })
-    expect(panel()).not.toBeNull()
+    await clickEl(item(B))
+    expect(mocks.previewChange).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
+    expect(mocks.setModel).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
+    expect(mocks.previewChange.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.setModel.mock.invocationCallOrder[0]
+    )
+    expect(host()).toEqual({ provider: P, model: B })
+    expect(panel()).toBeNull()
   })
 
-  it('MP-4 锁定下点档位 → setThinkingLevel({sessionId, level})，store 的 thinkingLevel 跟着变', async () => {
+  it('MP-4 有运行时点档位 → setThinkingLevel({sessionId, level})，store 的 thinkingLevel 跟着变', async () => {
     seed({ active: SID, created: { [SID]: true } })
     await renderPicker()
     await openPanel()
@@ -407,48 +455,165 @@ describe('运行时已建：模型只读，思考档位照常', () => {
     expect(mocks.setModel).not.toHaveBeenCalled()
   })
 
-  it('MP-5 只有 sessionClosing[sid] 为真（关停中）也锁', async () => {
+  it('MP-5 只有 sessionClosing[sid] 为真（关停中）也不锁：模型行可点，选 B 照常写', async () => {
     seed({ active: SID, closing: { [SID]: true } })
     await renderPicker()
-    expect(container0().hasAttribute('data-model-locked')).toBe(true)
-    expect(trigger().querySelector('[data-model-lock]')).not.toBeNull()
+    expect(container0().hasAttribute('data-model-locked')).toBe(false)
+    expect(container.querySelector('[data-model-lock]')).toBeNull()
     await openPanel()
-    expect(item(B).disabled).toBe(true)
-    await forceClick(item(B))
-    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(item(B).disabled).toBe(false)
+    await clickEl(item(B))
+    expect(mocks.setModel).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
   })
 
-  it('MP-10 锁态随 store 实时翻转，组件不重挂（触发钮是同一个节点）', async () => {
+  it('MP-10 sessionAgentCreated 翻来翻去什么都不变：组件不重挂（触发钮是同一个节点）、一直没有锁', async () => {
     seed({ active: SID })
     await renderPicker()
     const btn = trigger()
     const box = container0()
-    expect(box.hasAttribute('data-model-locked')).toBe(false)
 
-    await act(async () => {
-      store().setAgentCreated(SID, true)
-    })
-    expect(trigger()).toBe(btn)
-    expect(container0()).toBe(box)
-    expect(box.hasAttribute('data-model-locked')).toBe(true)
-    expect(btn.querySelector('[data-model-lock]')).not.toBeNull()
-
-    await act(async () => {
-      store().setAgentCreated(SID, false)
-    })
-    expect(trigger()).toBe(btn)
-    expect(box.hasAttribute('data-model-locked')).toBe(false)
-    expect(btn.querySelector('[data-model-lock]')).toBeNull()
-    expect(btn.title).toBe('')
+    for (const created of [true, false]) {
+      await act(async () => {
+        store().setAgentCreated(SID, created)
+      })
+      expect(trigger()).toBe(btn)
+      expect(container0()).toBe(box)
+      expect(box.hasAttribute('data-model-locked')).toBe(false)
+      expect(btn.querySelector('[data-model-lock]')).toBeNull()
+      expect(btn.title).toBe('')
+    }
   })
 })
 
-describe('欢迎页（没有会话）：不锁，只改界面', () => {
-  it('MP-6 别的会话有运行时也不锁；选模型不调 setModel 只改 host；改档位不调 IPC 只改 store', async () => {
+describe('换模型之前先问缓存（RU-15..21）', () => {
+  it('RU-15 选的就是当前那一个 → 不预判、不 setModel；面板收起', async () => {
+    seed({ active: SID, created: { [SID]: true } })
+    await renderPicker()
+    await openPanel()
+    await clickEl(item(A))
+    expect(mocks.previewChange).not.toHaveBeenCalled()
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(mocks.setActiveModel).not.toHaveBeenCalled()
+    expect(host()).toEqual({ provider: P, model: A })
+  })
+
+  it('RU-16 kept → setModel({sessionId, provider, model})；预判落定之前界面不换', async () => {
+    seed({ active: SID, created: { [SID]: true } })
+    const pending = deferred<AgentChangePreview>()
+    mocks.previewChange.mockReturnValue(pending.promise)
+    await renderPicker()
+    await openPanel()
+    await clickEl(item(B))
+
+    expect(mocks.previewChange).toHaveBeenCalledTimes(1)
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(mocks.setActiveModel).not.toHaveBeenCalled()
+    expect(host()).toEqual({ provider: P, model: A })
+
+    pending.resolve(preview())
+    await flush()
+    expect(mocks.setModel).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
+    expect(host()).toEqual({ provider: P, model: B })
+    expect(trigger().textContent).toContain(B)
+    expect(confirmDialog()).toBeNull()
+  })
+
+  it('RU-17 lost → 确认框；取消 → 不 setModel、界面仍是 A', async () => {
+    seed({ active: SID, created: { [SID]: true } })
+    mocks.previewChange.mockResolvedValue(LOST)
+    await renderPicker({ withConfirmHost: true })
+    await openPanel()
+    await clickEl(item(B))
+
+    expect(confirmDialog()).not.toBeNull()
+    expect(confirmDialog()!.textContent).toContain(i18n.t('cacheBreak.reasonModel'))
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(host()).toEqual({ provider: P, model: A })
+
+    await cancelDialog()
+    expect(confirmDialog()).toBeNull()
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(mocks.setActiveProvider).not.toHaveBeenCalled()
+    expect(mocks.setActiveModel).not.toHaveBeenCalled()
+    expect(host()).toEqual({ provider: P, model: A })
+    expect(trigger().textContent).toContain(A)
+  })
+
+  it('RU-18 lost → 确认框；确认 → setModel、界面换成 B', async () => {
+    seed({ active: SID, created: { [SID]: true } })
+    mocks.previewChange.mockResolvedValue(LOST)
+    await renderPicker({ withConfirmHost: true })
+    await openPanel()
+    await clickEl(item(B))
+    expect(mocks.setModel).not.toHaveBeenCalled()
+
+    await answerDialog(i18n.t('cacheBreak.confirm'))
+    expect(confirmDialog()).toBeNull()
+    expect(mocks.setModel).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
+    expect(host()).toEqual({ provider: P, model: B })
+  })
+
+  it('RU-19 框开着时切到 S2，再确认 → 不 setModel、界面不换', async () => {
+    seed({ active: SID, created: { [SID]: true } })
+    mocks.previewChange.mockResolvedValue(LOST)
+    await renderPicker({ withConfirmHost: true })
+    await openPanel()
+    await clickEl(item(B))
+    expect(confirmDialog()).not.toBeNull()
+
+    await act(async () => {
+      store().setActiveSessionId(S2)
+    })
+    await answerDialog(i18n.t('cacheBreak.confirm'))
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(mocks.setActiveProvider).not.toHaveBeenCalled()
+    expect(mocks.setActiveModel).not.toHaveBeenCalled()
+    expect(host()).toEqual({ provider: P, model: A })
+  })
+
+  it('RU-20 改思考档位从不预判（有运行时也是）', async () => {
+    seed({ active: SID, created: { [SID]: true } })
+    mocks.previewChange.mockResolvedValue(LOST)
+    await renderPicker({ withConfirmHost: true })
+    await openPanel()
+    await clickEl(thinkingButton('high'))
+    expect(mocks.setThinkingLevel).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      level: 'high'
+    })
+    expect(mocks.previewChange).not.toHaveBeenCalled()
+    expect(confirmDialog()).toBeNull()
+  })
+
+  it('RU-21 欢迎页选模型 → 不预判，只改界面', async () => {
+    seed({ active: null, created: { [SID]: true } })
+    mocks.previewChange.mockResolvedValue(LOST)
+    await renderPicker({ withConfirmHost: true })
+    await openPanel()
+    await clickEl(item(B))
+    expect(mocks.previewChange).not.toHaveBeenCalled()
+    expect(confirmDialog()).toBeNull()
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(host()).toEqual({ provider: P, model: B })
+  })
+})
+
+describe('欢迎页（没有会话）：只改界面', () => {
+  it('MP-6 别的会话有运行时也一样；选模型不调 setModel 只改 host；改档位不调 IPC 只改 store', async () => {
     seed({ active: null, created: { [SID]: true }, closing: { [S2]: true } })
     await renderPicker()
-    expect(container0().hasAttribute('data-model-locked')).toBe(false)
-    expect(container.querySelector('[data-model-lock]')).toBeNull()
 
     await openPanel()
     expect(item(B).disabled).toBe(false)
@@ -495,7 +660,7 @@ describe('欢迎页：宿主种的默认档', () => {
 })
 
 describe('后端拒绝：回拉真实状态', () => {
-  it('MP-7 setModel → success:false → 回拉 init：host 回 A、能力点取 init、只读态出现、勾选按 init 写入、用量不重置', async () => {
+  it('MP-7 setModel → success:false → 回拉 init：host 回 A、能力点与勾选取 init、用量不重置；没有锁冒出来', async () => {
     seed({ active: SID })
     mocks.setModel.mockResolvedValue({ success: false })
     mocks.init.mockResolvedValue(initResult())
@@ -515,9 +680,9 @@ describe('后端拒绝：回拉真实状态', () => {
     expect(toolsOf(SID)).toEqual(['mcp:real'])
     // 模型其实没换：上下文用量照旧
     expect(store().usedContextTokens).toBe(1234)
-    // 锁出现
-    expect(container0().hasAttribute('data-model-locked')).toBe(true)
-    expect(trigger().querySelector('[data-model-lock]')).not.toBeNull()
+    // init 说有 agent 也不会冒出只读态（锁的画法已退役）
+    expect(container0().hasAttribute('data-model-locked')).toBe(false)
+    expect(trigger().querySelector('[data-model-lock]')).toBeNull()
   })
 
   it('MP-7 init 带回的能力点照实写（与选的 B 无关）', async () => {
@@ -623,43 +788,6 @@ describe('后端拒绝：回拉真实状态', () => {
     // 失败的回拉不写只读态与勾选
     expect(store().sessionAgentCreated[SID]).toBeUndefined()
     expect(toolsOf(SID)).toEqual(['skill:old'])
-  })
-})
-
-describe('MP-11 回归：ModelSelect 不传 modelLocked 时一切照旧', () => {
-  const baseProps = {
-    availableModels: [modelRow(A, CAPS_A), modelRow(B, CAPS_B)],
-    provider: P,
-    model: A,
-    onChange: vi.fn()
-  }
-
-  it('MP-11 boxed 不传 modelLocked → 没有 data-model-locked、没有锁', async () => {
-    await act(async () => {
-      root.render(createElement(ModelSelect, { ...baseProps, variant: 'boxed' }))
-    })
-    expect(container.querySelector('[data-model-locked]')).toBeNull()
-    expect(container.querySelector('[data-model-lock]')).toBeNull()
-  })
-
-  it.each<[string, boolean]>([
-    ['不传 modelLocked', false],
-    ['modelLocked 为真', true]
-  ])('MP-11 inline readonly（%s）→ 只渲染 span，没有按钮、没有锁', async (_label, locked) => {
-    await act(async () => {
-      root.render(
-        createElement(ModelSelect, {
-          ...baseProps,
-          variant: 'inline',
-          readonly: true,
-          modelLocked: locked,
-          modelLockedHint: 'locked'
-        })
-      )
-    })
-    expect(container.querySelector('button')).toBeNull()
-    expect(container.querySelector('[data-model-lock]')).toBeNull()
-    expect(container.textContent).toContain(A)
   })
 })
 

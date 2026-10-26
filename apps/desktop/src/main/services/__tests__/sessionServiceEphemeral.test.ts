@@ -358,31 +358,34 @@ describe('S3 / S4 子会话按父会话推定', () => {
     ['不传 options', undefined],
     ['{ ephemeral: false }', { ephemeral: false }],
     ['{ ephemeral: true }', { ephemeral: true }]
-  ])('S3 内存父的子会话（%s）恒为内存会话，继承父的勾选 / 项目与授予的路径', (_label, opt) => {
-    const parent = create({ projectId: 'p1' }, EPH)
-    sessionService.updateEnabledTools(parent.id, ['mcp:ssh', 'skill:x'])
-    sessionAcl.grantPath(parent.id, '/Users/u/notes', 'write')
-    vi.clearAllMocks()
+  ])(
+    'S3 内存父的子会话（%s）恒为内存会话，继承父的勾选 / 项目与授予的路径',
+    async (_label, opt) => {
+      const parent = create({ projectId: 'p1' }, EPH)
+      await sessionService.updateEnabledTools(parent.id, ['mcp:ssh', 'skill:x'])
+      sessionAcl.grantPath(parent.id, '/Users/u/notes', 'write')
+      vi.clearAllMocks()
 
-    const child = create({ parentId: parent.id, projectId: 'elsewhere' }, opt)
+      const child = create({ parentId: parent.id, projectId: 'elsewhere' }, opt)
 
-    expect(sessionRecords.isEphemeral(child.id)).toBe(true)
-    expect(mocks.daoInsert).not.toHaveBeenCalled()
-    expect(mocks.broadcastListChanged).not.toHaveBeenCalled()
-    expect(sessionService.getById(child.id)).toMatchObject({
-      parentId: parent.id,
-      projectId: 'p1',
-      settings: { enabledTools: ['mcp:ssh', 'skill:x'] }
-    })
-    expect(sessionRecords.findChildren(parent.id).map((s) => s.id)).toEqual([child.id])
-    // 父会话授予的路径复制进子会话的表（新行）；子会话的派生行是它自己的；全在内存里
-    expect(sessionAcl.entries(child.id).map((e) => [e.source, e.target, e.access])).toEqual([
-      ['user', '/Users/u/notes', 'write'],
-      ['system', `/nonexistent/shuvix-unit/sandbox-tmp/${child.id}`, 'write']
-    ])
-    expect(mocks.aclFindBySession).not.toHaveBeenCalled()
-    expectNoDaoWrites()
-  })
+      expect(sessionRecords.isEphemeral(child.id)).toBe(true)
+      expect(mocks.daoInsert).not.toHaveBeenCalled()
+      expect(mocks.broadcastListChanged).not.toHaveBeenCalled()
+      expect(sessionService.getById(child.id)).toMatchObject({
+        parentId: parent.id,
+        projectId: 'p1',
+        settings: { enabledTools: ['mcp:ssh', 'skill:x'] }
+      })
+      expect(sessionRecords.findChildren(parent.id).map((s) => s.id)).toEqual([child.id])
+      // 父会话授予的路径复制进子会话的表（新行）；子会话的派生行是它自己的；全在内存里
+      expect(sessionAcl.entries(child.id).map((e) => [e.source, e.target, e.access])).toEqual([
+        ['user', '/Users/u/notes', 'write'],
+        ['system', `/nonexistent/shuvix-unit/sandbox-tmp/${child.id}`, 'write']
+      ])
+      expect(mocks.aclFindBySession).not.toHaveBeenCalled()
+      expectNoDaoWrites()
+    }
+  )
 
   it('S4 持久父的子会话传 { ephemeral: true } 仍是持久会话', () => {
     const parent = create({ projectId: 'p1' })
@@ -458,12 +461,14 @@ describe('S5 / S6 删除', () => {
 })
 
 describe('S7 写入口落在内存行上', () => {
-  it('S7 标题 / 扩展能力 / 知识库 / 权限表：不写库，getById / 权限表看得见', () => {
+  it('S7 标题 / 扩展能力 / 知识库 / 权限表：不写库，getById / 权限表看得见；没有 agent 就不重配', async () => {
     const s = create({}, EPH)
     vi.clearAllMocks()
 
     sessionService.updateTitle(s.id, '自动标题', 'auto')
-    expect(sessionService.updateEnabledTools(s.id, ['mcp:ssh', 'bash', 'skill:x'])).toBe(true)
+    expect(await sessionService.updateEnabledTools(s.id, ['mcp:ssh', 'bash', 'skill:x'])).toBe(true)
+    // 会话没开、内存行上没有锁镜像：不 open / peek，没有可重配的 agent
+    expect(fakeHost.calls).toEqual([])
     expect(sessionService.updateKnowledgeBases(s.id, [' notes ', 'notes', 'project'])).toBe(true)
     const a = sessionAcl.grantPath(s.id, '/a', 'read')!
     sessionAcl.grantPath(s.id, '/b', 'read')

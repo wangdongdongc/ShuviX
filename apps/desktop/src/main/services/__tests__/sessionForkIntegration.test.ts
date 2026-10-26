@@ -4,7 +4,8 @@
  * （真 DAO）+ 临时目录里的真 SQLite 会话存储）。mock 面照 rollbackIntegration.test.ts。
  *
  *   SI-1 锁着的源会话 U1 A1 U2 A2 → 整段 fork：消息列表与 id 一样；源会话的行不变；fork 没上锁（init 的
- *        created:false、hasAgentRuntime false）、改扩展能力被接受；源会话照旧锁着
+ *        created:false、hasAgentRuntime false）、改扩展能力被接受；源会话照旧锁着，改它的扩展能力同样被接受、
+ *        当场重配到它的 agent 上（锁记下新的勾选，2026-10-26）
  *   SI-2 从一张「工具调用 + 结果 + 最终回答」的卡分支：fork 的视图 = U1 + 那张卡；在 fork 上发送带的是那段前缀 +
  *        新消息；之后两边各走各的。从卡中间那条工具调用分支：紧跟着的工具结果一起带上
  *   SI-3 artifacts 拷给 fork、fork 读得到；删 fork 只删它自己的目录；源会话没有 artifacts 也照样 fork
@@ -307,7 +308,7 @@ async function seedTwoTurns(sessionId: string): Promise<string[]> {
 
 describe('SI session fork against a real host', () => {
   it(
-    'SI-1 whole fork of a locked U1 A1 U2 A2: same list and ids; source row unchanged; fork unlocked (init created:false) and its extensions editable; source still locked',
+    'SI-1 whole fork of a locked U1 A1 U2 A2: same list and ids; source row unchanged; fork unlocked (init created:false) and its extensions writable; source still locked, and its extensions write reconfigures its agent',
     async () => {
       const ids = await seedTwoTurns('s')
       const sourceBefore = sessionRecords.findById('s')
@@ -325,15 +326,20 @@ describe('SI session fork against a real host', () => {
       expect(mirrorLocked(forkId)).not.toBe(true)
       expect(sessionService.hasAgentRuntime(forkId)).toBe(false)
       expect((await chatGateway.startChat(forkId)).created).toBe(false)
-      expect(sessionService.updateEnabledTools(forkId, ['mcp:browser'])).toBe(true)
+      expect(await sessionService.updateEnabledTools(forkId, ['mcp:browser'])).toBe(true)
       expect(sessionRecords.findById(forkId)!.settings.enabledTools).toEqual(['mcp:browser'])
+      expect(openSession(forkId).lock).toBeUndefined()
 
-      // 源会话照旧锁着、勾选不可改
+      // 源会话照旧锁着；改它的勾选同样被接受，并当场重配到它锁住的 agent 上（锁记下新的勾选；这台 ToolHost
+      // 连不上新服务器，工具不变）
       expect(openSession('s').lock).toBeDefined()
       expect(mirrorLocked('s')).toBe(true)
       expect(sessionService.hasAgentRuntime('s')).toBe(true)
-      expect(sessionService.updateEnabledTools('s', ['mcp:browser'])).toBe(false)
-      expect(sessionRecords.findById('s')!.settings.enabledTools).toEqual([])
+      expect(openSession('s').lock!.selection).toEqual([])
+      expect(await sessionService.updateEnabledTools('s', ['mcp:browser'])).toBe(true)
+      expect(sessionRecords.findById('s')!.settings.enabledTools).toEqual(['mcp:browser'])
+      expect(openSession('s').lock!.selection).toEqual(['mcp:browser'])
+      expect(sessionService.hasAgentRuntime('s')).toBe(true)
     },
     TIMEOUT
   )

@@ -131,7 +131,9 @@ import {
   AgentLock,
   agentExtensionName,
   type CreateAgentOptions,
-  type LockRecord
+  type LockRecord,
+  type ReconfigureOutcome,
+  type ReconfigurePreview
 } from './lock'
 import { collectMonitorRows, totalCost, type AgentMonitorRow } from './monitorSnapshot'
 import { newSessionProcessRecord, type SessionProcessRecord } from './processRecord'
@@ -471,6 +473,17 @@ export interface DurableSession {
    * `shuvix.agent.*`（派生 agent 的记录留着，按需重建）。没锁 = 无操作
    */
   destroyAgent(): Promise<void>
+  /**
+   * 重配（2026-10-26）：会话设置里的模型 / 扩展勾选改了，就把它们作用到锁住的 agent —— 一个提交，从下一次请求
+   * 起生效（运行中也是）。没锁 = `{ applied: false }`（下一次发送按设置创建）。模型被拒 / 被取消 / 宿主不支持 →
+   * 抛 `AgentCreationError`，什么都不写；其余失败原样抛出。从不开启调度器。
+   */
+  reconfigureAgent(): Promise<ReconfigureOutcome>
+  /**
+   * 重配的预判：照 `config` 重配的话，下一次请求还能不能命中提供商的提示词缓存。不连服务器、不写；没锁 →
+   * `locked: false`。
+   */
+  previewAgentChange(config: AgentConfig): Promise<ReconfigurePreview>
   /**
    * 回退 / 截断（P3-10a，Mapping #2）：把当前对话换成一个 fork —— `keep: false`（缺省）= 回到目标那条
    * 用户消息**之前**（它和它之后的都不在了），`keep: true`（截断）= 保留到目标为止。目标必须是当前对话
@@ -2353,6 +2366,14 @@ export class DurableSessionImpl implements DurableSession {
     return this.op(() => this.inSection(() => this.agentLock.ensure(options)))
   }
 
+  async reconfigureAgent(): Promise<ReconfigureOutcome> {
+    return this.op(() => this.inSection(() => this.agentLock.reconfigure()))
+  }
+
+  async previewAgentChange(config: AgentConfig): Promise<ReconfigurePreview> {
+    return this.op(() => this.agentLock.preview(config))
+  }
+
   async destroyAgent(): Promise<void> {
     if (this.closedFlag) return
     try {
@@ -2441,7 +2462,7 @@ export class DurableSessionImpl implements DurableSession {
           const refusal = await rollbackTargetRefusal(conversation, targetEntryId)
           if (refusal !== undefined) return { ok: false, reason: refusal }
           // 在途的建锁会把锁建在旧对话上：先取消（K13），再等已经进来的受理走完（PIN-22）
-          await this.agentLock.cancelCreation()
+          await this.agentLock.cancelPending()
           await drain()
           const pending = await this.stopForRollback()
           // 停下写的条目（中止的助手消息……）都比目标新，fork 点不受影响
@@ -2490,7 +2511,7 @@ export class DurableSessionImpl implements DurableSession {
           const latest = (await conversation.entries({}, 1, undefined, BG)).items[0]
           if (latest?.id === point.at) return { ok: true, conversationId: conversation.id }
           // 以下与回退同一套：取消在途的建锁、等已进来的受理、停下、一个提交里建 fork 并移指针
-          await this.agentLock.cancelCreation()
+          await this.agentLock.cancelPending()
           await drain()
           const pending = await this.stopForRollback()
           const forkId = await this.commitRollback(conversation.id, point.at)

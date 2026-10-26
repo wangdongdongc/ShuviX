@@ -2,11 +2,13 @@
  * sessionService —— lastActiveAt（用户动手）与 updatedAt（账本）拆开。
  *
  * 新建时三者同刻；之后改标题 / 挪项目 / 改会话设置 / 改会话权限表（services/acl 的授予、改访问方式、删除）
- * 都不再 touchActive（日历按 session_day_prompts，lastActiveAt 只在用户消息入账时写）。权限表是真的，
+ * 都不再 touchActive（日历按 session_day_prompts，lastActiveAt 只在用户消息入账时写）—— 改扩展能力时当场重配锁住的
+ * agent（2026-10-26）也一样。权限表是真的，
  * 只替掉它底下的 dao/sessionAclDao（spy）与派生行的来源（acl/derive：一个都不派生）。
  * 补键、自动标题、pinAgentProfile 不在这里 —— 见并列的 Title / EnabledTools / Pin 用例。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { fakeHost, lockRecord, resetFakeHost } from './support/fakeSessionHost'
 
 const mocks = vi.hoisted(() => ({
   daoInsert: vi.fn(),
@@ -112,6 +114,7 @@ beforeEach(() => {
   mocks.daoPick.mockReturnValue({ id: 's1' })
   mocks.daoPickSettings.mockReturnValue({})
   sessionAcl.forgetReconciled()
+  resetFakeHost()
 })
 
 /** s1 的权限表里已有一条授予的读（sessionAclDao 读出来的就是它） */
@@ -163,11 +166,18 @@ describe('lastActiveAt', () => {
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
   })
 
-  it('updateTitle / updateEnabledTools / updateKnowledgeBases 不 touchActive', () => {
+  it('updateTitle / updateEnabledTools / updateKnowledgeBases 不 touchActive', async () => {
     sessionService.updateTitle('s1', 'Renamed')
     expect(mocks.daoUpdateTitle).toHaveBeenCalledWith('s1', 'Renamed')
-    expect(sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(true)
+    expect(await sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(true)
     expect(sessionService.updateKnowledgeBases('s1', ['notes'])).toBe(true)
+    expect(mocks.daoTouchActive).not.toHaveBeenCalled()
+  })
+
+  it('updateEnabledTools 当场重配锁住的 agent：也不 touchActive', async () => {
+    const session = fakeHost.put('s1', { lock: lockRecord() })
+    expect(await sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(true)
+    expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
   })
 })

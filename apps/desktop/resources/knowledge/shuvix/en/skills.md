@@ -111,8 +111,9 @@ other file of the project.
    unused.
    - **Per session**: the Extensions section of the session config (and the input-box tool
      picker) — stored in the session's `settings.enabledTools` as `skill:<name>`; a project's
-     own defaults seed new sessions; the selection is read once when the session's agent is
-     created and is read-only while that agent exists. Entries the session's agent file declares
+     own defaults seed new sessions; the selection is read when the session's agent is
+     created, and a change made while that agent exists applies to it from its next request
+     (ShuviX asks first when the change would invalidate the provider's prompt cache). Entries the session's agent file declares
      are listed there too, ticked by default; unticking one stores `-skill:<name>` and turns it
      off for that session only (or for a project's new sessions, when done in the project's
      settings) — how a session swaps the builtin drawing skill for another one.

@@ -2741,22 +2741,25 @@ export interface ExtItemShot {
   /** 勾选用的工具名（`mcp:<server>` / `skill:<name>`），即 `data-ext-item` */
   key: string
   checked: boolean
-  /** 勾选框被禁用 = 只读（会话已有 Agent 运行时） */
+  /**
+   * 勾选框被禁用。会话设置卡上恒为 false：有 Agent 运行时也能改（2026-10-26 起当场重配那个 agent）；
+   * ExtensionsSection 还留着一个通用的 `readonly`，会话卡与项目弹窗都不用它
+   */
   disabled: boolean
-  /** 这一条是不是被画成了禁用态（`aria-disabled`）：只读时整排压暗，卡片下方不再写只读原因 */
+  /** 这一条是不是被画成了禁用态（`aria-disabled`，ExtensionsSection 的通用只读）—— 同上，恒为 false */
   lockedLook: boolean
   /**
    * 这一条是不是被画成了「离线」（`data-offline`）—— 只有**连接失败**才该这么画。
-   * 只读态同样压暗，所以两种压暗不能按透明度分辨：离线只认这个标记。
+   * 通用只读同样压暗，所以两种压暗不能按透明度分辨：离线只认这个标记。
    */
   offline: boolean
   /**
    * 这一条由会话的 agent 档案声明（`data-declared`）：缺省勾上、可以取消 —— 取消写的是勾选里的
    * 取消记号 `-<name>`（只作用于这条会话 / 这个项目的新会话），没取消时它不在勾选里。它不禁用、
-   * 不挂锁；禁用只来自「运行时已建」的只读。
+   * 不挂锁。
    */
   declared: boolean
-  /** 悬停提示（`title`）：可改时是条目自己的说明，只读时换成「为什么改不了」，声明项说是哪个档案带的 */
+  /** 悬停提示（`title`）：条目自己的说明，声明项说是哪个档案带的 —— 有没有运行时都一样 */
   title: string
 }
 
@@ -2830,7 +2833,8 @@ const EXT_HINT = (scope: string): string =>
 
 /**
  * 等 scope 内某个扩展能力条目上屏（条目随 `tools.list` 异步到），再点它的勾选框。
- * 按属性值比对而不是拼属性选择器 —— key 里带冒号。只读时勾选框是 disabled 的，点了什么也不会发生。
+ * 按属性值比对而不是拼属性选择器 —— key 里带冒号。会话有 Agent 时这一下可能先弹缓存确认框
+ * （cacheBreakPane），落不落库要等用户答。
  */
 async function toggleExtIn(
   main: CdpClient,
@@ -2940,11 +2944,11 @@ export interface SessionConfigPane {
   /** 点弹窗里某个扩展能力条目的勾选框（等条目上屏再点；同样只在弹窗面板内找） */
   toggleExt(key: string): Promise<void>
   /**
-   * 扩展能力卡里组名旁那把锁（`data-ext-lock`）的个数 —— 只读时每组一把（MCP / Skills 各一），
-   * 可改时一把都没有。
+   * 扩展能力卡里组名旁那把锁（`data-ext-lock`，ExtensionsSection 通用只读的标记）的个数 —— 会话卡
+   * 不再有只读态（2026-10-26），恒为 0
    */
   lockIndicatorCount(): Promise<number>
-  /** 扩展能力卡的说明文字（标题旁的问号气泡，含知识库那一段）：不随只读态变 */
+  /** 扩展能力卡的说明文字（标题旁的问号气泡，含知识库那一段）：有没有运行时都一样 */
   hintText(): Promise<string>
   /** 弹窗里扩展能力卡知识库一行的候选项（DOM 序；同样只在弹窗面板内找，口径同 extItems） */
   knowledgeItems(): Promise<KnowledgeItemShot[]>
@@ -3232,6 +3236,90 @@ export function confirmPane(main: CdpClient): ConfirmPane {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 提示词缓存的确认框（chat-ui CacheBreakConfirm，2026-10-26）—— 会话有 Agent 时换模型 / 改扩展能力，
+// 主进程预判（`agent.previewChange`）说缓存保不住就先问一句。它是一个 ConfirmDialog（没有 input），外面
+// 包着 `[data-cache-break-confirm]`，portal 到 body；由最后挂上的那个宿主画（输入框一个、会话设置弹窗的
+// 扩展能力卡一个），所以同一时刻至多一个。页脚两颗按钮：[0] 取消，[1] 仍然更改。
+
+export interface CacheBreakShot {
+  title: string
+  /** 说明整段（原因 + 「约 N tokens」那句）—— 断数字，不断本地化文案 */
+  description: string
+}
+
+export interface CacheBreakPane {
+  /** 屏上有几个缓存确认框（两个宿主同时挂着也只该有一个） */
+  count(): Promise<number>
+  isOpen(): Promise<boolean>
+  waitOpen(): Promise<void>
+  /** 等它离开 DOM（取消走 ConfirmDialog 的 120ms 关闭动画；确认当场卸载） */
+  waitClosed(): Promise<void>
+  /** 标题与说明；不在屏 → null */
+  text(): Promise<CacheBreakShot | null>
+  /** 点「仍然更改」并等它卸载 */
+  confirm(): Promise<void>
+  /** 点「取消」并等它卸载 */
+  cancel(): Promise<void>
+  /**
+   * 两颗页脚按钮的中心点上，最上层的元素都在这个确认框里 —— 它没被压在会话设置弹窗（同样 z-50、
+   * 同样 portal 在 body 上）下面，真点得到。不在屏 → false
+   */
+  topmost(): Promise<boolean>
+}
+
+export function cacheBreakPane(main: CdpClient): CacheBreakPane {
+  const ROOT = `document.querySelector('[data-cache-break-confirm]')`
+  const BUTTONS = `[...(${ROOT}?.querySelector('.dialog-panel')?.querySelectorAll('button') ?? [])]`
+  const count = (): Promise<number> =>
+    main.eval<number>(`document.querySelectorAll('[data-cache-break-confirm]').length`)
+  const isOpen = async (): Promise<boolean> => (await count()) > 0
+  const waitClosed = async (): Promise<void> => {
+    await until(async () => (await count()) === 0, 'cache-break confirm closed')
+  }
+  const clickFooter = async (index: number, what: string): Promise<void> => {
+    await until(isOpen, `cache-break confirm open (to ${what})`)
+    const ok = await main.eval<boolean>(`(() => {
+      const btn = ${BUTTONS}[${index}]
+      if (!btn) return false
+      btn.click()
+      return true
+    })()`)
+    if (!ok) throw new Error(`cache-break confirm: no ${what} button`)
+    await waitClosed()
+  }
+  return {
+    count,
+    isOpen,
+    waitOpen: async () => {
+      await until(isOpen, 'cache-break confirm open')
+    },
+    waitClosed,
+    text: () =>
+      main.eval<CacheBreakShot | null>(`(() => {
+        const panel = ${ROOT}?.querySelector('.dialog-panel')
+        if (!panel) return null
+        return {
+          title: (panel.querySelector('h3')?.textContent ?? '').trim(),
+          description: (panel.querySelector('h3 + div')?.textContent ?? '').trim()
+        }
+      })()`),
+    confirm: () => clickFooter(1, 'confirm'),
+    cancel: () => clickFooter(0, 'cancel'),
+    topmost: () =>
+      main.eval<boolean>(`(() => {
+        const root = ${ROOT}
+        const buttons = ${BUTTONS}
+        if (!root || buttons.length < 2) return false
+        return buttons.every((btn) => {
+          const r = btn.getBoundingClientRect()
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+          return !!hit && root.contains(hit)
+        })
+      })()`)
+  }
+}
+
 export interface ProjectEditPane {
   waitOpen(): Promise<void>
   isOpen(): Promise<boolean>
@@ -3324,42 +3412,36 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
 // ─────────────────────────────────────────────────────────────────────────
 // 输入框的工具选择器（ToolPicker）—— 会话的扩展能力勾选（MCP / Skill / 知识库），与会话设置里的
 // 扩展能力卡同一份数据。MCP / Skill 行是 `label[data-tool-item]`；知识库行与配置卡同一个锚点
-// `label[data-knowledge-base]`（不随运行时上锁），触发钮上的知识库计数是 `[data-knowledge-count]`
+// `label[data-knowledge-base]`，触发钮上的知识库计数是 `[data-knowledge-count]`。没有只读态
+// （2026-10-26）：会话有 Agent 时勾一下当场重配它，会打穿提示词缓存的先弹确认框（cacheBreakPane）
 
 /** 工具选择器面板里的一行 */
 export interface ToolPickerItem {
   /** 工具名（`mcp:<server>` / `skill:<name>`），即 `data-tool-item` */
   name: string
   checked: boolean
-  /** 勾选框被禁用 = 只读 */
+  /** 勾选框被禁用 —— 选择器没有只读态了，恒为 false（「有运行时也点得动」靠它断） */
   disabled: boolean
-  /**
-   * 这一行是不是被画成了「禁用态」（`aria-disabled`）：只读时整排压暗 + 禁用光标，
-   * 面板里不再另起一行文字说明 —— 只读的可见性全靠这个。
-   */
-  lockedLook: boolean
   /**
    * 这一行是不是被画成了「离线」：行上的 `data-offline` 标记，或挂着 WifiOff 徽标。
    *
    * 惰性启动之后只有**连接失败**（serverStatus === 'error'）才该这么画 —— 「还没连」是常态。
    * 两个信号由同一个判断驱动，这里取「任一成立」：少画一个也算没画成离线，
-   * 于是 `offline === false` 这条否定断言最严。（只读态也压暗，所以不再按透明度类名判）
+   * 于是 `offline === false` 这条否定断言最严。
    */
   offline: boolean
   /**
    * 这一行由会话的 agent 档案声明（`data-declared`）：缺省勾上、可以取消（取消写勾选里的
-   * `-<name>` 记号）。它不禁用、不挂锁 —— 禁用只来自「运行时已建」的只读（那时整排压暗、触发钮挂锁）。
+   * `-<name>` 记号）。它不禁用、不挂锁。
    */
   declared: boolean
-  /** 悬停提示（`title`）：只读时是「为什么改不了」，声明项是「哪个档案带的」，其余可改时没有 */
+  /** 悬停提示（`title`）：声明项是「哪个档案带的」，其余没有 —— 有没有运行时都一样 */
   title: string
 }
 
 export interface ToolPickerPane {
   /** 选择器在不在（MCP / skill / 知识库一个都没有时不渲染；欢迎页也渲染，勾的是新会话的草稿） */
   present(): Promise<boolean>
-  /** 只读态（根上的 `data-locked`）：会话此刻有 Agent 运行时（含创建中 / 关停中） */
-  locked(): Promise<boolean>
   /** 面板是否展开（按条目在不在 DOM 里判 —— 选择器只在有条目时才渲染，展开必有条目） */
   isOpen(): Promise<boolean>
   /** 展开面板并等条目上屏（幂等） */
@@ -3370,20 +3452,15 @@ export interface ToolPickerPane {
   items(): Promise<ToolPickerItem[]>
   /** 面板里知识库一组的行（DOM 序，口径同 sessionConfigPane.knowledgeItems）；面板没展开时为空 */
   knowledgeItems(): Promise<KnowledgeItemShot[]>
-  /** 点知识库一组里某个库（先展开面板；等那一行上屏再点）。这一组不上锁，任何时候都点得动 */
+  /** 点知识库一组里某个库（先展开面板；等那一行上屏再点）。任何时候都点得动，从不弹缓存确认框 */
   toggleKnowledgeBase(name: string): Promise<void>
   /** 触发钮上的知识库计数（勾了几个候选库）；没有知识库一组时为 null */
   knowledgeCount(): Promise<number | null>
   /**
-   * 点某条目的勾选框（先展开面板）；条目不在返回 false。
-   *
-   * `force`：先摘掉 disabled、点完再装回 —— 模拟「绕过禁用态」。禁用的勾选框浏览器根本不派发
-   * click，不 force 的话「只读时点了没用」什么也证明不了；force 之后点击真的进了 React 的
-   * onChange，钉的是组件与写入口自己的只读判断。
+   * 点某条目的勾选框（先展开面板）；条目不在返回 false。会话有 Agent 时这一下可能先弹缓存确认框
+   * （cacheBreakPane），落不落库要等用户答。
    */
-  toggle(name: string, opts?: { force?: boolean }): Promise<boolean>
-  /** 触发钮上的锁（`data-tool-lock`）在不在 —— 只读时不用展开面板就看得见 */
-  lockIndicatorVisible(): Promise<boolean>
+  toggle(name: string): Promise<boolean>
   /**
    * 触发钮上的「正在连接 MCP」转圈（`data-mcp-connecting`）在不在。
    * 只在选择器内找 —— 助手占位卡上另有一个同名锚点（见 chatPane.mcpConnectingRow）。
@@ -3413,7 +3490,6 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
   }
   return {
     present: () => main.eval<boolean>(`!!${ROOT}`),
-    locked: () => main.eval<boolean>(`!!${ROOT}?.hasAttribute('data-locked')`),
     isOpen,
     open,
     close: async () => {
@@ -3428,7 +3504,6 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
           name: label.getAttribute('data-tool-item') ?? '',
           checked: !!box?.checked,
           disabled: !!box?.disabled,
-          lockedLook: label.getAttribute('aria-disabled') === 'true',
           offline:
             label.hasAttribute('data-offline') ||
             !!label.querySelector('span.text-red-400 svg'),
@@ -3436,19 +3511,14 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
           title: label.getAttribute('title') ?? ''
         }
       })`),
-    toggle: async (name, opts = {}) => {
+    toggle: async (name) => {
       await open()
-      const force = opts.force === true
       return main.eval<boolean>(`(() => {
         const box = ${ROWS}
           .find((label) => label.getAttribute('data-tool-item') === ${JSON.stringify(name)})
           ?.querySelector('input[type="checkbox"]')
         if (!box) return false
-        const wasDisabled = box.disabled
-        if (${force}) box.disabled = false
         box.click()
-        // 装回原样：React 只在 prop 变化时才碰 disabled，不装回的话之后读到的禁用态就是假的
-        if (${force}) box.disabled = wasDisabled
         return true
       })()`)
     },
@@ -3462,19 +3532,18 @@ export function toolPickerPane(main: CdpClient): ToolPickerPane {
         const text = ${ROOT}?.querySelector('[data-knowledge-count] > span')?.textContent
         return text == null ? null : Number(text)
       })()`),
-    lockIndicatorVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-tool-lock]')`),
     connectingVisible: () => main.eval<boolean>(`!!${ROOT}?.querySelector('[data-mcp-connecting]')`)
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 输入框的模型选择器（ModelPicker → ModelSelect inline）—— 会话模型与扩展能力同一条规矩：只在创建
-// Agent 那一刻读一次，会话有运行时（含创建中 / 关停中）时模型只读，思考档位照常可调。
+// 输入框的模型选择器（ModelPicker → ModelSelect inline）—— 会话模型与扩展能力同一条规矩：会话有
+// Agent 时改了当场重配它（2026-10-26），换模型一定打穿提示词缓存，对话里已有模型回复时先弹确认框
+// （cacheBreakPane）。没有只读态；思考档位照常可调。
 //
 // 锚点：
 //   - 根 = 输入卡工具行选择器簇的第一个子节点（与 chatPane.modelPickerPresent 同一锚定：textarea
-//     容器的下一个兄弟 → 第一个子节点 → 第一个子节点）。ModelSelect 未锁定时根上没有 data 锚点，
-//     只能这样锚；锁定时根上有 `data-model-locked`，触发钮里有 `[data-model-lock]`；
+//     容器的下一个兄弟 → 第一个子节点 → 第一个子节点）。ModelSelect 的根上没有 data 锚点，只能这样锚；
 //   - 触发钮 = 根下的直接子 button（没有提供商时这里是「去配置」按钮，没有 chevron —— 不算在屏）；
 //   - 面板 = `[data-model-panel]`（portal 到 body，同一时刻只有一个）；模型行 =
 //     `[data-model-item="<providerId>/<modelId>"]`；档位按钮 = `[data-thinking-level="<level>"]`
@@ -3486,12 +3555,8 @@ export interface ModelPickerItem {
   /** `data-model-item` 的值（`<providerId>/<modelId>`） */
   key: string
   modelId: string
-  /** 按钮被禁用 = 模型只读 */
+  /** 按钮被禁用 —— 模型没有只读态了，恒为 false（「有运行时也能选」靠它断） */
   disabled: boolean
-  /** 画成禁用态（`aria-disabled`） */
-  lockedLook: boolean
-  /** 悬停提示（只读时是「为什么改不了」） */
-  title: string
 }
 
 /** 模型面板里思考档位一行的一个按钮 */
@@ -3507,12 +3572,6 @@ export interface ModelPickerThinkingLevel {
 export interface ModelPickerPane {
   /** 选择器在屏（有提供商、渲染出带 chevron 的触发钮） */
   present(): Promise<boolean>
-  /** 只读态（根上的 `data-model-locked`） */
-  locked(): Promise<boolean>
-  /** 触发钮上的锁（`data-model-lock`） */
-  lockIndicatorVisible(): Promise<boolean>
-  /** 触发钮的悬停提示（只读时是原因，否则为空串） */
-  triggerTitle(): Promise<string>
   /** 触发钮上显示的模型名（没选时是「选择模型」那句） */
   currentModel(): Promise<string>
   /** 面板是否展开 */
@@ -3525,9 +3584,9 @@ export interface ModelPickerPane {
   items(): Promise<ModelPickerItem[]>
   /**
    * 选一个模型（先展开面板；行不可见就在搜索框里打它的 id 展开所在组）；行不在返回 false。
-   * `force`：先摘掉 disabled、点完再装回 —— 证明「只读时硬点也不写」靠的是组件自己的判断。
+   * 会话有 Agent 且对话里已有模型回复时，这一下先弹缓存确认框（cacheBreakPane），换不换要等用户答。
    */
-  pick(modelId: string, opts?: { force?: boolean }): Promise<boolean>
+  pick(modelId: string): Promise<boolean>
   /** 点一个思考档位（先展开面板；面板不会因此收起） */
   pickThinking(level: string): Promise<void>
   /** 面板里思考档位一行的按钮（DOM 序）；面板没展开时为空 */
@@ -3548,26 +3607,18 @@ export function modelPickerPane(main: CdpClient): ModelPickerPane {
     if (!(await isOpen())) await clickTrigger()
     await until(isOpen, 'model picker panel open')
   }
-  /** 找到并点某一行（force 时摘掉 disabled 再装回）；找不到回 false */
-  const clickItem = (modelId: string, force: boolean): Promise<boolean> =>
+  /** 找到并点某一行；找不到回 false */
+  const clickItem = (modelId: string): Promise<boolean> =>
     main.eval<boolean>(`(() => {
       const btn = ${ITEMS}.find((b) =>
         (b.getAttribute('data-model-item') ?? '').endsWith('/' + ${JSON.stringify(modelId)})
       )
       if (!btn) return false
-      const wasDisabled = btn.disabled
-      if (${force}) btn.disabled = false
       btn.click()
-      // 装回原样：React 只在 prop 变化时才碰 disabled
-      if (${force}) btn.disabled = wasDisabled
       return true
     })()`)
   return {
     present,
-    locked: () => main.eval<boolean>(`!!${ROOT}?.hasAttribute('data-model-locked')`),
-    lockIndicatorVisible: () =>
-      main.eval<boolean>(`!!${TRIGGER}?.querySelector('[data-model-lock]')`),
-    triggerTitle: () => main.eval<string>(`${TRIGGER}?.getAttribute('title') ?? ''`),
     currentModel: () => main.eval<string>(`(${TRIGGER}?.textContent ?? '').trim()`),
     isOpen,
     open,
@@ -3582,15 +3633,12 @@ export function modelPickerPane(main: CdpClient): ModelPickerPane {
         return {
           key,
           modelId: key.slice(key.indexOf('/') + 1),
-          disabled: !!b.disabled,
-          lockedLook: b.getAttribute('aria-disabled') === 'true',
-          title: b.getAttribute('title') ?? ''
+          disabled: !!b.disabled
         }
       })`),
-    pick: async (modelId, opts = {}) => {
+    pick: async (modelId) => {
       await open()
-      const force = opts.force === true
-      if (await clickItem(modelId, force)) return true
+      if (await clickItem(modelId)) return true
       // 行所在的提供商组没展开（欢迎页还没选过模型时一组都不展开）：搜它的 id，命中的组全展开
       await main.eval(`(() => {
         const input = ${PANEL}?.querySelector('input[type="text"]')
@@ -3607,7 +3655,7 @@ export function modelPickerPane(main: CdpClient): ModelPickerPane {
           ),
         `model row ${modelId}`
       ).catch(() => false)
-      return clickItem(modelId, force)
+      return clickItem(modelId)
     },
     pickThinking: async (level) => {
       await open()
@@ -7859,6 +7907,8 @@ export interface StatusBannerChipShot {
   phaseClass: string
   /** 相位灯在闪（animate-pulse）= 非 idle 相位 */
   pulsing: boolean
+  /** X（`[data-agent-chip-destroy]`）的悬停说明（`panel.agentChipDestroy` 的译文） */
+  destroyTitle: string
 }
 
 export interface StatusBannerPane {
@@ -7888,7 +7938,8 @@ export function statusBannerPane(main: CdpClient): StatusBannerPane {
           text: (chip.querySelector('[data-agent-chip-name]')?.textContent ?? '').trim(),
           profile: chip.getAttribute('data-agent-chip') ?? '',
           phaseClass: dot?.className ?? '',
-          pulsing: (dot?.className ?? '').includes('animate-pulse')
+          pulsing: (dot?.className ?? '').includes('animate-pulse'),
+          destroyTitle: chip.querySelector('[data-agent-chip-destroy]')?.getAttribute('title') ?? ''
         }
       })()`),
     clickChip: async () => {
@@ -12011,8 +12062,6 @@ export interface ComposerLayoutShot {
   /** 模型选择器的触发器（显示模型名的那格 span 的父节点：可点时是 button，只读时是 span） */
   modelTrigger: BoxShot | null
   modelName: { box: BoxShot; scrollWidth: number; clientWidth: number } | null
-  /** 两个选择器的锁（运行时在 → 都锁上：模型选择器的 `data-model-lock`、扩展选择器的 `data-locked`） */
-  locks: { model: boolean; tools: boolean }
   /** 运行中的两个队列出口（`data-queue-tier`，DOM 序）；字在按钮里那格 span 上 */
   queue: Array<{
     tier: string
@@ -12659,10 +12708,6 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           toolPicker: box(scope.querySelector('[data-tool-picker]')),
           modelTrigger: box(name?.parentElement ?? null),
           modelName: name ? { box: box(name), scrollWidth: name.scrollWidth, clientWidth: name.clientWidth } : null,
-          locks: {
-            model: !!scope.querySelector('[data-model-lock]'),
-            tools: !!scope.querySelector('[data-tool-picker][data-locked]')
-          },
           queue: [...scope.querySelectorAll('[data-queue-tier]')].map((b) => {
             const label = b.querySelector(':scope > span')
             return {

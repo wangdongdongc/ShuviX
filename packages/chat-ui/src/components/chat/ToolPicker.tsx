@@ -1,7 +1,7 @@
 import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Server, BookOpen, Library, WifiOff, Lock, Loader2, Package } from 'lucide-react'
+import { Server, BookOpen, Library, WifiOff, Loader2, Package } from 'lucide-react'
 import { isToolSelected, setToolSelected } from '@shuvix/chat-protocol/toolSelection'
 import {
   builtinKnowledgeCopy,
@@ -120,16 +120,16 @@ function ItemDetail({
  * 内置工具与 SubAgent 始终启用，不在此处控制。会话的 agent 档案声明的 mcp:/skill: 项（`declaredBy`）
  * 缺省勾上，悬停说是哪个档案带的；取消它写的是勾选里的取消记号（chat-protocol `toolSelection`），
  * 只作用于这条会话 —— 例如改用别的作图技能时取消内置的那份。
- * MCP / Skill 的勾选只在创建 Agent 时读一次：会话已有运行时就只读（面板照常能打开看：那两组条目按
- * 禁用态画、触发钮挂锁，原因只在悬停时说）。知识库一组不上锁（useSessionKnowledgeBases）：它是
- * `knowledge` 工具每次调用时现查的，运行期改了下一次调用就作数。
+ * 会话已有运行时也能改 MCP / Skill（2026-10-26）：后端当场重配那个 agent，会打穿提示词缓存的改动先问一句
+ * （useSessionTools → confirmAgentChange）。知识库一组本来就随时可改（useSessionKnowledgeBases）：它是
+ * `knowledge` 工具每次调用时现查的。
  * 还没有会话（欢迎页）时勾的是草稿（useSessionTools / useSessionKnowledgeBases），直接发送新建会话时
  * 写进那条会话；声明项按那条会话将会用的档案画 —— 欢迎页新建的是无项目会话，基座 chat。
  */
 export function ToolPicker(): React.JSX.Element | null {
   const { t } = useTranslation()
   const activeSessionId = useChatStore((s) => s.activeSessionId)
-  const { enabledTools, locked, setEnabledTools } = useSessionTools(activeSessionId)
+  const { enabledTools, setEnabledTools } = useSessionTools(activeSessionId)
   const knowledge = useSessionKnowledgeBases(activeSessionId)
   const mcpConnecting = useChatStore(selectMcpConnecting)
 
@@ -184,36 +184,20 @@ export function ToolPicker(): React.JSX.Element | null {
   const baseCopy = (name: string): BuiltinExtensionCopy | undefined => builtinKnowledgeCopy(name, t)
 
   const toggle = (tool: ToolItem): void => {
-    if (locked) return
     void setEnabledTools(setToolSelected(enabledTools, tool.name, !!tool.declaredBy, !isOn(tool)))
   }
 
-  // 只读时整排按禁用态画（压暗 + 禁用光标），不响应悬停：一眼看出改不了；原因放在悬停提示里
-  const rowCls = (): string =>
-    `flex items-center gap-1.5 w-full px-2 py-0.5 transition-colors ${
-      locked ? 'cursor-not-allowed opacity-40' : 'hover:bg-bg-hover cursor-pointer'
-    }`
-  const lockedHint = locked ? t('sessionConfig.extensionsLocked') : undefined
+  const rowCls =
+    'flex items-center gap-1.5 w-full px-2 py-0.5 transition-colors hover:bg-bg-hover cursor-pointer'
   const rowHint = (tool: ToolItem): string | undefined =>
-    lockedHint ??
-    (tool.declaredBy
-      ? t('sessionConfig.extensionDeclared', { profile: tool.declaredBy })
-      : undefined)
+    tool.declaredBy ? t('sessionConfig.extensionDeclared', { profile: tool.declaredBy }) : undefined
 
   return (
-    <div
-      ref={toolsRef}
-      data-tool-picker
-      data-locked={locked || undefined}
-      className="relative flex-shrink-0 flex items-center group"
-    >
+    <div ref={toolsRef} data-tool-picker className="relative flex-shrink-0 flex items-center group">
       <button
         onClick={() => setOpen(!open)}
-        title={lockedHint}
         className="inline-flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors border border-transparent hover:border-border-secondary rounded px-1.5 py-0.5"
       >
-        {/* 只读态把锁挂在触发钮上：不用展开面板就知道这条会话的扩展能力已经定了 */}
-        {locked && <Lock size={10} data-tool-lock className="flex-shrink-0" />}
         {mcpTools.length > 0 && (
           <span className="inline-flex items-center gap-0.5">
             {/* 创建运行时期间正在连 MCP：计数旁转个圈 */}
@@ -294,14 +278,12 @@ export function ToolPicker(): React.JSX.Element | null {
                       data-tool-item={tool.name}
                       data-offline={failed || undefined}
                       data-declared={tool.declaredBy ? true : undefined}
-                      aria-disabled={locked || undefined}
                       title={rowHint(tool)}
-                      className={`${rowCls()} ${failed && !locked ? 'opacity-50' : ''}`}
+                      className={`${rowCls} ${failed ? 'opacity-50' : ''}`}
                     >
                       <input
                         type="checkbox"
                         checked={isOn(tool)}
-                        disabled={locked}
                         onChange={() => toggle(tool)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />
@@ -344,14 +326,12 @@ export function ToolPicker(): React.JSX.Element | null {
                       key={tool.name}
                       data-tool-item={tool.name}
                       data-declared={tool.declaredBy ? true : undefined}
-                      aria-disabled={locked || undefined}
                       title={rowHint(tool)}
-                      className={rowCls()}
+                      className={rowCls}
                     >
                       <input
                         type="checkbox"
                         checked={isOn(tool)}
-                        disabled={locked}
                         onChange={() => toggle(tool)}
                         className="rounded border-border-primary accent-accent w-3.5 h-3.5 flex-shrink-0"
                       />

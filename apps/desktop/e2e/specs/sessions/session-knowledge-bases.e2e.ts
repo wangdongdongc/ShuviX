@@ -6,9 +6,10 @@
  *     （会话 → 父会话 → 项目 → **缺省一个都不启用**），写键就等于替用户做了选择。
  *   - 项目库（`project`）**不归选择管**：项目会话里它隐式启用（接替退役的项目记忆），所以它从不是
  *     候选项、配置卡与项目对话框里都没有这个 chip；存量选择里残留的 `project` 读时剔掉（KB-E-10）。
- *   - 扩展能力在运行时存在期间只读；知识库**不上锁** —— 它不进 pi 的工具表，是 `knowledge`
- *     工具每次调用时由宿主现查的。两者是同一张扩展能力卡里的不同行，KB-E-4 一次断完这个对照；
- *     输入框的工具选择器列的是同样几组、同一份数据（KB-E-11）。
+ *   - 扩展能力在运行时存在期间改了要**重配**那个 agent（2026-10-26 起当场生效，此前只读）；知识库
+ *     连重配都不用 —— 它不进 pi 的工具表，是 `knowledge` 工具每次调用时由宿主现查的。两者是同一张
+ *     扩展能力卡里的不同行，有运行时都可点（KB-E-4）；输入框的工具选择器列的是同样几组、同一份数据
+ *     （KB-E-11）。
  *   - 已接受的边界：工具面改完立刻生效，而 `<knowledge_bases>` 围栏住在系统提示词里、在创建
  *     Agent 那一刻定型 —— 已存在的运行时里那段不变（KB-E-3 钉住现状；围栏内容本身在
  *     agents/context-injection.e2e.ts 的 KBF-E-* 里）。
@@ -117,6 +118,12 @@ const writeTools = (sid: string, enabledTools: string[]): Promise<{ success: boo
     `window.api.session.updateEnabledTools(${JSON.stringify({ id: sid, enabledTools })})`
   )
 
+/** 会话设置里的扩展能力勾选原值 */
+const storedTools = (sid: string): Promise<unknown> =>
+  app.main.eval(
+    `window.api.session.getById(${JSON.stringify(sid)}).then((s) => (s && s.settings ? s.settings.enabledTools : undefined))`
+  )
+
 const init = (sid: string): Promise<InitResult> =>
   app.main.eval<InitResult>(`window.api.agent.init({ sessionId: ${JSON.stringify(sid)} })`)
 
@@ -223,7 +230,7 @@ describe('恒不写键、缺省一个都不勾（IPC）', () => {
 })
 
 describe('不上锁（IPC）', () => {
-  it('KB-E-2 运行时存在时知识库照样写得进去，同一时刻扩展能力被拒', async () => {
+  it('KB-E-2 运行时存在时知识库照样写得进去，同一时刻扩展能力也写得进去（后者当场重配运行时）', async () => {
     const sid = await createSession({ title: 'KB-E2', projectId: p1 })
     await ensureRuntime(sid)
     expect((await init(sid)).created).toBe(true)
@@ -231,8 +238,11 @@ describe('不上锁（IPC）', () => {
     // 知识库不进工具表 —— 运行时存在也接受，下一次 knowledge 调用就作数
     expect(await writeBases(sid, [BASE_A])).toEqual({ success: true })
     expect(await storedBases(sid)).toEqual([BASE_A])
-    // 同一时刻的对照：扩展能力烤进了 pi 的工具表，运行期换不了，所以写入口直接拒
-    expect(await writeTools(sid, ['skill:nope'])).toEqual({ success: false })
+    // 同一时刻的对照：扩展能力烤进了 pi 的工具表，写入口当场重配运行时（2026-10-26 起；此前直接拒）。
+    // 查无此技能也照收：勾选是原值，可用性只在解析时过滤
+    expect(await writeTools(sid, ['skill:nope'])).toEqual({ success: true })
+    expect(await storedTools(sid)).toEqual(['skill:nope'])
+    expect((await init(sid)).created).toBe(true)
   })
 })
 
@@ -269,11 +279,11 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     }
   })
 
-  it('KB-E-4 没设过时一个都没勾、说明是缺省那一句；有运行时也点得动（扩展能力卡同时只读）；面板开着新建的库跟着长出来', async () => {
+  it('KB-E-4 没设过时一个都没勾、说明是缺省那一句；有运行时也点得动（扩展能力那两行同样可点）；面板开着新建的库跟着长出来', async () => {
     const title = 'KB-E4-卡片'
     const live = 'kb-live-dom'
     const sid = await createSession({ title, projectId: p2 })
-    // 先把运行时建出来：这条会话的 MCP / Skills 两行因此只读，与知识库一行的对照就在同一张卡上
+    // 先把运行时建出来：知识库一行与 MCP / Skills 两行都在同一张卡上，有运行时都可点
     await ensureRuntime(sid)
     expect((await init(sid)).created).toBe(true)
 
@@ -295,12 +305,12 @@ describe('会话设置卡与项目对话框（DOM）', () => {
     expect(kbItem(items, 'project')).toBeUndefined()
     expect(HINT_DEFAULT).toContain(await sessionConfig.knowledgeHint())
 
-    // 同一张卡上的 MCP / Skills 两行：有运行时 → 只读（两者的语义差别就在这一屏上）
+    // 同一张卡上的 MCP / Skills 两行：有运行时也可点（改了当场重配，2026-10-26 起不再只读）
     const ext = await until(async () => {
       const shot = await sessionConfig.extItems()
       return shot.length > 0 ? shot : null
     }, 'extension items listed')
-    expect(ext.every((it: ExtItemShot) => it.disabled)).toBe(true)
+    expect(ext.every((it: ExtItemShot) => !it.disabled)).toBe(true)
 
     // ② 点一下某个 chip：立刻落库（没有锁、不用等关停），说明换成「已明确设过」那一句。
     // 一个都没勾，所以这一下是**勾上**，写下的就是这一个
@@ -522,16 +532,13 @@ describe('输入框的工具选择器（DOM）', () => {
   it('KB-E-11 知识库一组与配置卡同一份数据：有运行时也点得动、立刻落库；别处改了计数跟着变，配置卡看到的是同一份', async () => {
     const title = 'KB-E11-选择器'
     const sid = await createSession({ title })
-    // 运行时先建出来：MCP / Skill 行只读，知识库一组照样可点
+    // 运行时先建出来：MCP / Skill 行与知识库一组都照样可点
     await ensureRuntime(sid)
     expect((await init(sid)).created).toBe(true)
 
     await waitRow(title)
     expect(await sidebar.openSession(title)).toBe(true)
-    await until(
-      async () => (await picker.locked()) && (await picker.knowledgeCount()) === 0,
-      'picker locked, no base ticked'
-    )
+    await until(async () => (await picker.knowledgeCount()) === 0, 'picker present, no base ticked')
 
     await picker.open()
     const items = await until(async () => {
@@ -545,7 +552,7 @@ describe('输入框的工具选择器（DOM）', () => {
     expect(BUILTIN_NAMES).toContain(kbItem(items, 'shuvix')?.label)
     expect(BUILTIN_HINTS).toContain(kbItem(items, 'shuvix')?.hint)
     expect(kbItem(items, BASE_A)).toMatchObject({ builtin: false, hint: '' })
-    expect((await picker.items()).every((it) => it.disabled)).toBe(true)
+    expect((await picker.items()).every((it) => !it.disabled)).toBe(true)
 
     // 勾一下：立刻落库（没有锁），触发钮上的计数跟着变
     await picker.toggleKnowledgeBase(BASE_A)

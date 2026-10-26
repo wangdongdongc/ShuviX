@@ -1,13 +1,17 @@
 /**
  * 会话的扩展能力勾选（`settings.enabledTools`：mcp:/skill: 加一项，`-mcp:` / `-skill:` 取消档案声明的
- * 一项）—— 新建会话时定下、只在创建根 Agent 时读一次、运行时存在（含创建中 / 关停中）期间只读。
+ * 一项）—— 新建会话时定下、创建根 Agent 时读，**运行时存在期间改了当场重配那个 agent**（2026-10-26，
+ * 取代 2026-10-02 的「运行期只读」）：同一个运行时（没有 agent_created / agent_closing），skill 工具的
+ * 货架、MCP 工具、跟着技能变的人设（作图说明）都从下一次请求起换掉。
  *
  * 链路：sessionService.create（继承）→ agent.init（原值 + created）→ 运行时的锁建出 agent →
- * `agent_created` / `agent_closing` → chat-ui 的 sessionAgentCreated → 输入框工具选择器与会话设置
- * 扩展能力卡的只读态；写入口 `session.updateEnabledTools` 在运行时存在期间拒绝。
+ * 写入口 `session.updateEnabledTools` → `sessionService.reconfigureAgent` → 锁的重配；界面改之前先问
+ * `agent.previewChange`，缓存保不住才弹确认框（cacheBreakPane）。这份 spec 全程没有模型回复，预判恒为
+ * `none`（没有可失去的缓存）—— 所以两处入口有 agent 也一个确认框都不弹；弹框那条路在
+ * session-live-reconfigure.e2e.ts。
  *
- * 断言优先走 IPC：`session.getById` 的原值、`agent.init`、`agent.getInfo` 里 skill 工具的描述（那是
- * 真正发给模型的东西）。DOM 只断两件事：只读态有没有跟上运行时的生灭，两处入口是不是同一份数据。
+ * 断言优先走 IPC：`session.getById` 的原值、`agent.init`、`agent.getInfo` 里 skill 工具的描述与系统提示词
+ * （那是真正发给模型的东西）。DOM 只断两件事：有运行时两处入口照样可点、两处入口是同一份数据。
  *
  * 夹具：两个真实可用的全局 skill（a / b）；P1 从没保存过扩展能力，P2 保存过 [a]。隔离实例里恒有一个
  * 内置、离线的 `mcp:tavily` —— 选择器与扩展能力卡在桌面上因此永远不会因「没有条目」而隐藏，它也是
@@ -18,14 +22,13 @@
  * —— 档案声明的 mcp:/skill: **缺省勾上、可以取消**。三处入口（选择器、会话设置、项目设置）里它画成
  * 已勾、可点、`data-declared`；没取消时它不在勾选里，取消写的是 `-skill:builtin:drawing` 记号，
  * 只作用于这条会话 / 这个项目的新会话，取消了运行时就不带它、提示里也不再指路（EXT-E-6 / 8 / 10）。
- * 禁用只来自「运行时已建」的只读。
  *
  * ⚠️ 不用 `location.reload()`：主进程的 will-navigate 守卫会取消它（见 seed.waitRendererReady）。
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { sleep, until } from '../../harness/cdp'
+import { until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import {
   createProject,
@@ -38,10 +41,12 @@ import {
   type RecordedEvent
 } from '../../harness/seed'
 import {
+  cacheBreakPane,
   projectEditPane,
   sessionConfigPane,
   sidebarPane,
   toolPickerPane,
+  type CacheBreakPane,
   type ExtItemShot,
   type ProjectEditPane,
   type SessionConfigPane,
@@ -52,7 +57,7 @@ import {
 
 const SKILL_A = 'e2e-ext-a'
 const SKILL_B = 'e2e-ext-b'
-/** A 的说明文案 —— 条目悬停提示的判据（只读时它要被「为什么改不了」顶掉） */
+/** A 的说明文案 —— 条目悬停提示的判据（有没有运行时都是它） */
 const SKILL_A_DESC = 'ext-a seeded skill description'
 const A = `skill:${SKILL_A}`
 const B = `skill:${SKILL_B}`
@@ -98,6 +103,7 @@ let sidebar: SidebarPane
 let picker: ToolPickerPane
 let sessionConfig: SessionConfigPane
 let projectEdit: ProjectEditPane
+let cacheBreak: CacheBreakPane
 let p1 = ''
 let p2 = ''
 
@@ -155,7 +161,7 @@ const sameList = (actual: unknown, expected: string[]): boolean =>
 const waitRow = (title: string): Promise<boolean> =>
   until(async () => (await sidebar.titles()).includes(title), `sidebar row "${title}"`)
 
-/** 等本会话在 since 之后的 `agent_closing{closing:false}`（前端据它解除只读） */
+/** 等本会话在 since 之后的 `agent_closing{closing:false}`（运行时关停完毕） */
 async function waitClosed(sid: string, since: number): Promise<void> {
   let ev = await recorder.waitFor<RecordedEvent>('agent_closing', { sessionId: sid, since })
   while (ev.closing !== false) {
@@ -163,11 +169,13 @@ async function waitClosed(sid: string, since: number): Promise<void> {
   }
 }
 
-/** 清空会话（先关停运行时）并等关停完毕的事件到达 */
-async function clearAndWaitClosed(sid: string): Promise<void> {
-  const since = await recorder.mark()
-  await app.main.eval(`window.api.message.clear(${JSON.stringify(sid)})`)
-  await waitClosed(sid, since)
+/** 本会话在 since 之后的运行时生灭事件 —— 重配不该有任何一条 */
+async function lifecycleEventsSince(sid: string, since: number): Promise<string[]> {
+  return (await recorder.allSince<RecordedEvent>(since))
+    .filter(
+      (e) => e.sessionId === sid && (e.type === 'agent_created' || e.type === 'agent_closing')
+    )
+    .map((e) => e.type)
 }
 
 const pickerItem = async (name: string): Promise<ToolPickerItem | undefined> =>
@@ -192,6 +200,7 @@ beforeAll(async () => {
   picker = toolPickerPane(app.main)
   sessionConfig = sessionConfigPane(app.main)
   projectEdit = projectEditPane(app.main)
+  cacheBreak = cacheBreakPane(app.main)
 
   // 真实可用的 skill：勾一个查无此人的名字，skill 工具的描述里是断不到的
   seedSkill(app, SKILL_A, SKILL_A_DESC)
@@ -209,7 +218,7 @@ afterAll(async () => {
   await app?.stop()
 })
 
-describe('勾选从哪来、何时只读（IPC）', () => {
+describe('勾选从哪来、运行期当场生效（IPC）', () => {
   it('EXT-E-1 新建时定下：无项目为 []；项目会话继承项目保存过的那份且是快照；继承不按可用性过滤', async () => {
     const s0 = await createSession({ title: 'EXT-E1-无项目' })
     const stored0 = await storedTools(s0)
@@ -240,8 +249,7 @@ describe('勾选从哪来、何时只读（IPC）', () => {
     expect(await storedTools(s4)).toEqual([TAVILY])
     expect((await init(s4)).enabledTools).toEqual([TAVILY])
   })
-
-  it('EXT-E-2 只在创建运行时读一次：运行时存在期间写入被拒、运行时不变；清空（关停）后可改，下一个运行时读到新值', async () => {
+  it('EXT-E-2 运行时存在期间改勾选：写入照收（等重配落定才答）、同一个运行时当场换成新勾选；没有关停、没有重建', async () => {
     const s = await createSession({ title: 'EXT-E2', projectId: p1 })
     expect((await writeTools(s, [A])).success).toBe(true)
 
@@ -251,27 +259,23 @@ describe('勾选从哪来、何时只读（IPC）', () => {
     expect(skillDescription(first)).not.toContain(`<name>${SKILL_B}</name>`)
     expect((await init(s)).created).toBe(true)
 
-    // ② 运行时存在：写入被拒、什么也没写，运行时手里的工具也没变
-    expect((await writeTools(s, [B])).success).toBe(false)
-    expect(await storedTools(s)).toEqual([A])
-    const still = await runtimeInfo(s)
-    expect(skillDescription(still)).toContain(`<name>${SKILL_A}</name>`)
-    expect(skillDescription(still)).not.toContain(`<name>${SKILL_B}</name>`)
-
-    // ③ 清空 = 关停运行时：关停完毕之后不再有运行时，勾选重新可写
-    await clearAndWaitClosed(s)
-    expect((await init(s)).created).toBe(false)
-    expect((await writeTools(s, [B])).success).toBe(true)
-
-    // ④ 下一个运行时读的是新勾选
-    const second = await ensureRuntime(s)
-    expect(skillDescription(second)).toContain(`<name>${SKILL_B}</name>`)
-    expect(skillDescription(second)).not.toContain(`<name>${SKILL_A}</name>`)
+    // ② 运行时存在：写入照收，答复之前重配已经落定 —— 同一个运行时手里的 skill 工具立刻换成 b
+    const since = await recorder.mark()
+    expect(await writeTools(s, [B])).toEqual({ success: true })
+    expect(await storedTools(s)).toEqual([B])
+    const now = await runtimeInfo(s)
+    expect(skillDescription(now)).toContain(`<name>${SKILL_B}</name>`)
+    expect(skillDescription(now)).not.toContain(`<name>${SKILL_A}</name>`)
+    // init 锁着时报锁里记的勾选：就是刚写的那份
+    const after = await init(s)
+    expect(after.created).toBe(true)
+    expect(after.enabledTools).toEqual([B])
+    expect(await lifecycleEventsSince(s, since)).toEqual([])
   })
 })
 
 describe('输入框工具选择器与会话设置卡（DOM）', () => {
-  it('EXT-E-3 输入框工具选择器：没有运行时可勾；运行时存在期间只读（绕过禁用也写不进去）；清空后解锁', async () => {
+  it('EXT-E-3 输入框工具选择器：有运行时也照样可勾，不弹确认框（还没有模型回复，没有可失去的缓存），勾了就当场重配', async () => {
     const title = 'EXT-E3-选择器'
     const s = await createSession({ title, projectId: p1 })
     await waitRow(title)
@@ -279,38 +283,37 @@ describe('输入框工具选择器与会话设置卡（DOM）', () => {
 
     // ① 没有运行时：可勾，勾了就落库
     await until(() => picker.present(), 'tool picker present')
-    expect(await picker.locked()).toBe(false)
     await picker.open()
     await until(async () => (await pickerItem(A))?.disabled === false, 'skill a listed, editable')
     expect(await picker.toggle(A)).toBe(true)
     await until(async () => sameList(await storedTools(s), [A]), 'picker wrote [a]')
+    await picker.close()
 
-    // ② 运行时建出来（agent_created）→ 只读
+    // ② 运行时建出来：整排照样可点，没有只读态
     await ensureRuntime(s)
-    await until(() => picker.locked(), 'tool picker locked once the runtime exists')
+    expect((await init(s)).created).toBe(true)
+    const since = await recorder.mark()
     await picker.open()
-    // 只读的可见性：触发钮挂锁 + 整排条目画成禁用态（面板里不再有一行文字说明）
-    await until(() => picker.lockIndicatorVisible(), 'lock indicator shown on the trigger')
-    await until(async () => (await pickerItem(B))?.disabled === true, 'items disabled while locked')
-    expect(await pickerItem(A)).toMatchObject({ checked: true, disabled: true, lockedLook: true })
-    expect(await pickerItem(B)).toMatchObject({ checked: false, disabled: true, lockedLook: true })
-    // 绕过禁用态硬点 b：只读不能只靠 disabled 撑着 —— 组件与写入口自己得挡住
-    expect(await picker.toggle(B, { force: true })).toBe(true)
-    await sleep(600)
-    expect(await storedTools(s)).toEqual([A])
-    expect(await pickerItem(B)).toMatchObject({ checked: false })
+    await until(async () => (await pickerItem(B))?.checked === false, 'skill b listed, unticked')
+    expect(await pickerItem(A)).toMatchObject({ checked: true, disabled: false })
+    expect(await pickerItem(B)).toMatchObject({ checked: false, disabled: false })
 
-    // ③ 清空（agent_closing{false}）→ 解锁
-    await clearAndWaitClosed(s)
-    await until(async () => !(await picker.locked()), 'tool picker unlocked after clear')
-    await picker.open()
-    await until(async () => (await pickerItem(B))?.disabled === false, 'items editable again')
-    expect(await picker.lockIndicatorVisible()).toBe(false)
-    expect(await pickerItem(B)).toMatchObject({ lockedLook: false })
+    // ③ 勾 b：落库，同一个运行时当场带上 b；一个确认框都没弹（弹了的话不答就不会落库）
+    expect(await picker.toggle(B)).toBe(true)
+    await until(async () => sameList(await storedTools(s), [A, B]), 'picker wrote [a, b]')
+    await until(
+      async () => skillDescription(await runtimeInfo(s)).includes(`<name>${SKILL_B}</name>`),
+      'the running agent carries b'
+    )
+    expect(skillDescription(await runtimeInfo(s))).toContain(`<name>${SKILL_A}</name>`)
+    expect(await cacheBreak.count()).toBe(0)
+    await until(async () => (await pickerItem(B))?.checked === true, 'picker shows b checked')
+    expect((await init(s)).created).toBe(true)
+    expect(await lifecycleEventsSince(s, since)).toEqual([])
     await picker.close()
   })
 
-  it('EXT-E-4 会话设置弹窗：开在一条有运行时的非当前会话上是只读；当前会话可勾，勾完输入框选择器跟着变', async () => {
+  it('EXT-E-4 会话设置弹窗：开在一条有运行时的非当前会话上也可勾、当场重配那一条；当前会话勾完，输入框选择器跟着变', async () => {
     const ACT = 'EXT-E4-当前'
     const OTH = 'EXT-E4-另一条'
     const sAct = await createSession({ title: ACT, projectId: p2 })
@@ -319,17 +322,31 @@ describe('输入框工具选择器与会话设置卡（DOM）', () => {
     await waitRow(OTH)
     expect(await sidebar.openSession(ACT)).toBe(true)
 
-    // ① 另一条会话有运行时：它的弹窗只读（锁态按 disabled 断，不比本地化文案）
+    // ① 另一条会话有运行时：它的弹窗照样可勾，勾了落库、那一条的运行时当场带上
     await ensureRuntime(sOth)
+    const since = await recorder.mark()
     await sidebar.pickRowMenu(OTH, 'session-config')
     await sessionConfig.waitOpen()
     expect(await sessionConfig.titleValue()).toBe(OTH)
-    const locked = await until(async () => {
+    const other = await until(async () => {
       const items = await sessionConfig.extItems()
-      return extItem(items, A)?.disabled && extItem(items, B)?.disabled ? items : null
-    }, 'other session: extension items read-only')
-    expect(extItem(locked, A)).toMatchObject({ checked: true, disabled: true })
-    expect(extItem(locked, B)).toMatchObject({ checked: false, disabled: true })
+      return extItem(items, A) && extItem(items, B) ? items : null
+    }, 'other session: extension items listed')
+    expect(extItem(other, A)).toMatchObject({ checked: true, disabled: false, lockedLook: false })
+    expect(extItem(other, B)).toMatchObject({ checked: false, disabled: false, lockedLook: false })
+    expect(await sessionConfig.lockIndicatorCount()).toBe(0)
+    await sessionConfig.toggleExt(B)
+    await until(
+      async () => sameList(await storedTools(sOth), [A, B]),
+      'dialog wrote [a, b] for the other session'
+    )
+    await until(
+      async () => skillDescription(await runtimeInfo(sOth)).includes(`<name>${SKILL_B}</name>`),
+      "the other session's running agent carries b"
+    )
+    expect(await cacheBreak.count()).toBe(0)
+    expect((await init(sOth)).created).toBe(true)
+    expect(await lifecycleEventsSince(sOth, since)).toEqual([])
     await sessionConfig.close()
 
     // ② 当前会话没有运行时：可勾
@@ -355,7 +372,7 @@ describe('输入框工具选择器与会话设置卡（DOM）', () => {
     await picker.close()
   })
 
-  it('EXT-E-5 回退同样关停运行时：回退之后选择器解锁、勾选重新可写', async () => {
+  it('EXT-E-5 回退仍会关停运行时：回退之前（有运行时）与之后（没有）勾选都写得进去', async () => {
     const title = 'EXT-E5-回退'
     const s = await createSession({ title, projectId: p1 })
     expect((await writeTools(s, [A])).success).toBe(true)
@@ -371,23 +388,36 @@ describe('输入框工具选择器与会话设置卡（DOM）', () => {
     const firstUser = messages.find((m) => m.role === 'user')
     expect(firstUser, 'the user message landed on the tree').toBeDefined()
     expect((await init(s)).created).toBe(true)
-    await until(() => picker.locked(), 'tool picker locked after the prompt created the runtime')
 
+    // 有运行时：写得进去
+    expect(await writeTools(s, [A, B])).toEqual({ success: true })
+    expect(await storedTools(s)).toEqual([A, B])
+
+    // 回退：运行时照旧关停
     const since = await recorder.mark()
     await app.main.eval(
       `window.api.message.rollback(${JSON.stringify({ sessionId: s, messageId: firstUser!.id })})`
     )
     await waitClosed(s, since)
     await until(async () => !(await init(s)).created, 'no runtime after rollback')
-    await until(async () => !(await picker.locked()), 'tool picker unlocked after rollback')
-    expect((await writeTools(s, [B])).success).toBe(true)
+
+    // 没有运行时：同样写得进去，选择器跟着变、照样可点
+    expect(await writeTools(s, [B])).toEqual({ success: true })
     expect(await storedTools(s)).toEqual([B])
+    await picker.open()
+    await until(
+      async () =>
+        (await pickerItem(B))?.checked === true && (await pickerItem(A))?.checked === false,
+      'picker shows [b] after the rollback'
+    )
+    expect(await pickerItem(A)).toMatchObject({ disabled: false })
+    await picker.close()
   })
 })
 
 describe('项目编辑弹窗的扩展能力（DOM）', () => {
-  it('EXT-E-6 从没保存过就一个都不勾（档案声明的那项除外：缺省勾上、可以取消）、保存过的照原样，全都可改（会话运行时锁不到它）；原样保存写下 []；取消作图技能后保存写下取消记号，新会话照抄', async () => {
-    // 先让 P2 下一条会话的运行时建出来 —— 只读是会话级的，不能漏到项目弹窗上
+  it('EXT-E-6 从没保存过就一个都不勾（档案声明的那项除外：缺省勾上、可以取消）、保存过的照原样，全都可改（会话有没有运行时与它无关）；原样保存写下 []；取消作图技能后保存写下取消记号，新会话照抄', async () => {
+    // 先让 P2 下一条会话的运行时建出来 —— 会话的运行时与项目弹窗无关，它照样全都可改
     const bystander = await createSession({ title: 'EXT-E6-有运行时', projectId: p2 })
     await ensureRuntime(bystander)
     expect((await init(bystander)).created).toBe(true)
@@ -504,7 +534,6 @@ describe('离线的 MCP 不被抹掉（DOM + IPC）', () => {
     expect(await storedTools(s)).toEqual([TAVILY, A, B])
   })
 })
-
 describe('档案声明的作图技能（IPC + DOM）', () => {
   it('EXT-E-8 空勾选的 work 会话：声明项标着 declaredBy、在选择器里缺省勾上且可点；勾选只写会话自己的，运行时带齐两本、提示里指路并教 adopt', async () => {
     const title = 'EXT-E8-档案声明'
@@ -518,11 +547,10 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
     expect(declaredBy!.length).toBeGreaterThan(0)
     expect(rows.find((r) => r.name === A)?.declaredBy).toBeUndefined()
 
-    // ② 选择器：会话没有运行时（不是只读），声明项已勾、可点、带声明标记，悬停说是哪个档案带的
+    // ② 选择器：声明项已勾、可点、带声明标记，悬停说是哪个档案带的
     await waitRow(title)
     expect(await sidebar.openSession(title)).toBe(true)
     await until(() => picker.present(), 'tool picker present')
-    expect(await picker.locked()).toBe(false)
     await picker.open()
     const drawingRow = await until(
       async () => (await pickerItem(DRAWING)) ?? null,
@@ -531,7 +559,6 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
     expect(drawingRow).toMatchObject({
       checked: true,
       disabled: false,
-      lockedLook: false,
       declared: true
     })
     expect(drawingRow.title).toContain(declaredBy!)
@@ -561,7 +588,7 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
       const s = await createSession({ title: 'EXT-E9-停用作图技能', projectId: p1 })
       expect(await storedTools(s)).toEqual([])
 
-      // 档案点了名也救不回一个被停用的技能：列表里不再有它，更谈不上锁
+      // 档案点了名也救不回一个被停用的技能：列表里不再有它
       const rows = await toolsList(s)
       expect(rows.map((r) => r.name)).not.toContain(DRAWING)
 
@@ -579,15 +606,22 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
       await setSkillEnabled('builtin:drawing', true)
     }
   })
-
-  it('EXT-E-10 在选择器里取消作图技能：写下取消记号、两处入口都画成未勾；运行时不带它、提示里不指路不教交互块；清空后勾回来，新运行时又指路', async () => {
+  it('EXT-E-10 有运行时时在选择器里取消作图技能：写下取消记号、两处入口都画成未勾；同一个运行时当场不带它、提示里不指路不教交互块（人设跟着换）；勾回来又都回来', async () => {
     const title = 'EXT-E10-取消作图'
     const s = await createSession({ title, projectId: p1 })
     expect(await storedTools(s)).toEqual([])
+
+    // ① 先把运行时建出来：作图技能在架，提示里指路、教交互块
+    const before = await ensureRuntime(s)
+    expect(before).not.toBeNull()
+    expect(skillDescription(before)).toContain('<name>builtin:drawing</name>')
+    expect(before!.systemPrompt).toContain(DRAWING_POINTER)
+    expect(before!.systemPrompt).toContain(INTERACTIVE)
     await waitRow(title)
     expect(await sidebar.openSession(title)).toBe(true)
+    const since = await recorder.mark()
 
-    // ① 取消：写下的是取消记号，init 回原值；那一行未勾、仍是声明项、仍可点
+    // ② 取消：写下的是取消记号，init 回原值；那一行未勾、仍是声明项、仍可点
     await until(() => picker.present(), 'tool picker present')
     await picker.open()
     await until(
@@ -618,36 +652,23 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
     expect(cardItem).toMatchObject({ checked: false, declared: true })
     await sessionConfig.close()
 
-    // ② 运行时：skill 工具里没有作图技能（只剩 work 点的另一个内置技能 widget），提示里既不指路也不教交互块
-    const info = await ensureRuntime(s)
-    expect(info).not.toBeNull()
+    // ③ 同一个运行时（没清空、没重建）：skill 工具里没有作图技能（只剩 work 点的另一个内置技能 widget），
+    // 人设跟着换 —— 提示里既不指路也不教交互块
+    const info = await until(async () => {
+      const shot = await runtimeInfo(s)
+      return shot && !shot.systemPrompt.includes(DRAWING_POINTER) ? shot : null
+    }, 'the running agent dropped the drawing guide')
     expect(skillDescription(info)).not.toContain('<name>builtin:drawing</name>')
     expect(skillDescription(info)).toContain('<name>builtin:widget</name>')
-    expect(info!.systemPrompt).not.toContain(DRAWING_POINTER)
-    expect(info!.systemPrompt).not.toContain(INTERACTIVE)
+    expect(info.systemPrompt).not.toContain(INTERACTIVE)
+    expect((await init(s)).created).toBe(true)
+    expect(await cacheBreak.count()).toBe(0)
 
-    // 只读期间：仍画成未勾，禁用
-    await until(() => picker.locked(), 'tool picker locked once the runtime exists')
-    await picker.open()
-    await until(
-      async () => (await pickerItem(DRAWING))?.disabled === true,
-      'drawing disabled while locked'
-    )
-    expect(await pickerItem(DRAWING)).toMatchObject({
-      checked: false,
-      disabled: true,
-      lockedLook: true,
-      declared: true
-    })
-    await picker.close()
-
-    // ③ 清空（关停运行时）→ 解锁 → 勾回来：取消记号撤掉，勾选回到 []；新运行时又带它、又指路
-    await clearAndWaitClosed(s)
-    await until(async () => !(await picker.locked()), 'tool picker unlocked after clear')
+    // ④ 勾回来：取消记号撤掉，勾选回到 []；同一个运行时又带它、又指路、又教交互块
     await picker.open()
     await until(
       async () => (await pickerItem(DRAWING))?.disabled === false,
-      'drawing editable again'
+      'drawing editable with the runtime'
     )
     expect(await picker.toggle(DRAWING)).toBe(true)
     await until(async () => sameList(await storedTools(s), []), 'picker wrote [] (re-ticked)')
@@ -656,16 +677,20 @@ describe('档案声明的作图技能（IPC + DOM）', () => {
       'picker shows drawing ticked again'
     )
     await picker.close()
-    const again = await ensureRuntime(s)
-    expect(again).not.toBeNull()
+    const again = await until(async () => {
+      const shot = await runtimeInfo(s)
+      return shot && shot.systemPrompt.includes(DRAWING_POINTER) ? shot : null
+    }, 'the running agent got the drawing guide back')
     expect(skillDescription(again)).toContain('<name>builtin:drawing</name>')
-    expect(again!.systemPrompt).toContain(DRAWING_POINTER)
+    expect(again.systemPrompt).toContain(INTERACTIVE)
+    expect(again.systemPrompt).toBe(before!.systemPrompt)
+    expect(await lifecycleEventsSince(s, since)).toEqual([])
   })
 })
 
-describe('只读态的外观（DOM）', () => {
-  it('UIF-E-1 会话设置扩展能力卡：整排禁用态 + 组名旁挂锁；只读原因只在悬停提示里，说明文字不变', async () => {
-    const title = 'UIF-E1-只读外观'
+describe('有运行时的外观（DOM）', () => {
+  it('UIF-E-1 会话设置扩展能力卡：有没有运行时都整排可改、组名旁没有锁；悬停提示是条目自己的说明，说明文字两态相同', async () => {
+    const title = 'UIF-E1-外观'
     const s = await createSession({ title, projectId: p1 })
     expect((await writeTools(s, [A])).success).toBe(true)
     await waitRow(title)
@@ -677,17 +702,13 @@ describe('只读态的外观（DOM）', () => {
       expect(await sessionConfig.titleValue()).toBe(title)
       return until(async () => {
         const items = await sessionConfig.extItems()
-        return extItem(items, A) && extItem(items, B) ? items : null
+        return extItem(items, A) && extItem(items, B) && extItem(items, DRAWING) ? items : null
       }, what)
     }
 
     // ① 没有运行时：整排可改，组名旁一把锁都没有，悬停提示是 skill 自己的说明；
     // 档案声明的作图技能悬停说是哪个档案带的
-    await openAndRead('extensions listed before the runtime exists')
-    const editable = await until(async () => {
-      const items = await sessionConfig.extItems()
-      return extItem(items, A)?.disabled === false && extItem(items, DRAWING) ? items : null
-    }, 'extension items editable before the runtime exists')
+    const editable = await openAndRead('extensions listed before the runtime exists')
     expect(extItem(editable, A)).toMatchObject({
       checked: true,
       disabled: false,
@@ -711,96 +732,87 @@ describe('只读态的外观（DOM）', () => {
     expect(hint).not.toBe('')
     await sessionConfig.close()
 
-    // ② 运行时建出来：整排按禁用态画，MCP / Skills 两个组名旁各挂一把锁
-    // （弹窗挂载时自己向后端拉一次「有没有运行时」，所以开出来就是只读的）
+    // ② 运行时建出来：外观一模一样 —— 整排可改、没有锁，悬停提示还是条目自己的
     await ensureRuntime(s)
-    await openAndRead('extensions listed once the runtime exists')
-    const locked = await until(async () => {
-      const items = await sessionConfig.extItems()
-      return items.length > 0 && items.every((it) => it.disabled && it.lockedLook) ? items : null
-    }, 'every extension item painted read-only')
-    expect(await sessionConfig.lockIndicatorCount()).toBe(2)
-    // 只读的原因改走悬停提示：不再是 skill 的说明，也不是空
-    const lockedHint = extItem(locked, A)?.title ?? ''
-    expect(lockedHint).not.toBe(SKILL_A_DESC)
-    expect(lockedHint).not.toBe('')
-    // 档案声明的作图技能此刻同样说「为什么改不了」—— 只读的原因盖过「哪个档案带的」
-    expect(extItem(locked, DRAWING)).toMatchObject({
+    expect((await init(s)).created).toBe(true)
+    const withRuntime = await openAndRead('extensions listed once the runtime exists')
+    expect(withRuntime.length).toBeGreaterThan(0)
+    for (const item of withRuntime) {
+      expect(item, item.key).toMatchObject({ disabled: false, lockedLook: false })
+    }
+    expect(await sessionConfig.lockIndicatorCount()).toBe(0)
+    expect(extItem(withRuntime, A)).toMatchObject({ checked: true, title: SKILL_A_DESC })
+    expect(extItem(withRuntime, DRAWING)).toMatchObject({
       checked: true,
       declared: true,
-      title: lockedHint
+      title: declaredHint
     })
-    // 说明气泡里那句话两态完全相同 —— 只读原因从这里搬走了，它不该再随状态变
     expect(await sessionConfig.hintText()).toBe(hint)
-    await sessionConfig.close()
-
-    // ③ 清空（关停运行时）：锁消失，整排（档案声明的作图技能也在内）重新可改
-    await clearAndWaitClosed(s)
-    await openAndRead('extensions listed after the runtime closed')
-    const unlocked = await until(async () => {
-      const items = await sessionConfig.extItems()
-      return items.length > 0 && items.every((it) => !it.disabled && !it.lockedLook) ? items : null
-    }, 'every extension item editable again after the runtime closed')
-    expect(await sessionConfig.lockIndicatorCount()).toBe(0)
-    expect(extItem(unlocked, A)).toMatchObject({ title: SKILL_A_DESC })
-    const drawing = extItem(unlocked, DRAWING)
-    expect(drawing).toMatchObject({ checked: true, disabled: false, declared: true })
-    // 它的悬停说的是哪个档案带的，不是只读原因（运行时已经不在了）
-    expect(drawing?.title).toBe(declaredHint)
-    expect(drawing?.title).not.toBe(lockedHint)
     await sessionConfig.close()
   })
 
-  it('UIF-E-2 只读压暗与「离线」压暗互不掩盖：失败过的 MCP 两个标记同时在', async () => {
-    // 只读态把 `opacity-50` 从失败行拿掉了（整排统一压暗），离线的判据因此改成 `data-offline`
-    // —— 两种压暗若共用同一个判据，「锁住了」会把「这台连不上」整个盖掉
+  it('UIF-E-2 有运行时勾上一台连不上的 MCP：错误行落在会话里，勾选留着、画成离线但不禁用；运行时里没有它的工具', async () => {
     expect(
       await app.main.eval(
         `window.api.mcp.update(${JSON.stringify({ id: 'builtin-mcp-tavily', isEnabled: true })})`
       )
     ).toEqual({ success: true })
 
-    const title = 'UIF-E2-离线且只读'
+    const title = 'UIF-E2-离线'
     const s = await createSession({ title, projectId: p1 })
-    expect((await writeTools(s, [TAVILY, A])).success).toBe(true)
+    expect((await writeTools(s, [A])).success).toBe(true)
     await waitRow(title)
     expect(await sidebar.openSession(title)).toBe(true)
-
-    // 走一次必定失败的创建（缺 env，造 transport 之前就断）：tavily 落到 error 状态
-    const since = await recorder.mark()
     await ensureRuntime(s)
-    await recorder.waitFor<RecordedEvent>('error', { sessionId: s, since })
+    expect((await init(s)).created).toBe(true)
 
-    await until(() => picker.locked(), 'tool picker locked once the runtime exists')
+    // 有运行时勾上 tavily：重配走与创建同一条惰性连接的路 —— 缺 env，造 transport 之前就断，落一条错误
+    const since = await recorder.mark()
+    await picker.open()
+    await until(
+      async () => (await pickerItem(TAVILY))?.checked === false,
+      'tavily listed, unticked'
+    )
+    expect(await picker.toggle(TAVILY)).toBe(true)
+    await recorder.waitFor<RecordedEvent>('error', { sessionId: s, since })
+    await until(async () => sameList(await storedTools(s), [A, TAVILY]), 'picker wrote [a, tavily]')
+    await picker.close()
+
+    // 重开面板（打开时重拉连接状态）：tavily 仍勾着、画成离线，但照样可点；没失败过的那条不离线
     await picker.open()
     await until(
       async () => (await pickerItem(TAVILY))?.offline === true,
-      'the failed server is still painted offline while read-only'
+      'the failed server is painted offline'
     )
     expect(await pickerItem(TAVILY)).toMatchObject({
       checked: true,
-      disabled: true,
-      lockedLook: true,
+      disabled: false,
       offline: true
     })
-    // 同一面板里没失败过的那条：只读但不离线
-    expect(await pickerItem(A)).toMatchObject({ lockedLook: true, offline: false })
+    expect(await pickerItem(A)).toMatchObject({ checked: true, disabled: false, offline: false })
     await picker.close()
 
-    // 会话设置卡里的同一条：两个标记同样并存
+    // 运行时：没有 tavily 的工具（连不上就不交回），勾选原样留着（init 报锁里记的那份）
+    const info = await runtimeInfo(s)
+    expect(info).not.toBeNull()
+    expect(info!.tools.some((t) => t.name.startsWith('mcp__tavily__'))).toBe(false)
+    expect((await init(s)).enabledTools).toEqual([A, TAVILY])
+    expect(await lifecycleEventsSince(s, since)).toEqual([])
+
+    // 会话设置卡里的同一条：同样勾着、离线、可点
     await sidebar.pickRowMenu(title, 'session-config')
     await sessionConfig.waitOpen()
     const items = await until(async () => {
       const shot = await sessionConfig.extItems()
-      return extItem(shot, TAVILY)?.disabled ? shot : null
-    }, 'config dialog read-only')
+      return extItem(shot, TAVILY)?.offline ? shot : null
+    }, 'config dialog paints tavily offline')
     expect(extItem(items, TAVILY)).toMatchObject({
       checked: true,
-      disabled: true,
-      lockedLook: true,
+      disabled: false,
+      lockedLook: false,
       offline: true
     })
-    expect(extItem(items, A)).toMatchObject({ lockedLook: true, offline: false })
+    expect(extItem(items, A)).toMatchObject({ lockedLook: false, offline: false })
     await sessionConfig.close()
   })
 })

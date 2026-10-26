@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../stores/chatStore'
 import { useModelCatalogStore } from '../../stores/modelCatalogStore'
 import { applySessionToolState } from '../../hooks/useSessionTools'
+import { confirmAgentChange } from './CacheBreakConfirm'
 import { ModelSelect } from './ModelSelect'
 import {
   SELECTABLE_THINKING_LEVELS,
@@ -21,18 +22,13 @@ interface ModelPickerProps {
  * 本层只负责会话副作用：选中模型后写会话配置 / 更新能力状态，以及思考深度切换的持久化；
  * 纯 UI 交互全在 ModelSelect。思考深度与能力点解绑——切模型不再重置。
  *
- * 模型与扩展能力勾选同一条规矩：只在创建 Agent 那一刻读一次，**会话已有运行时（或正在关停）
- * 时锁住**（面板照常能展开调思考深度，模型条目按禁用态画）。要换模型先在会话横幅的 agent
- * 胶囊上销毁运行时。没有会话（欢迎页）时选的模型由输入框在新建会话时写进去。
+ * 会话已有 Agent 运行时也能换（2026-10-26）：后端当场重配那个 agent，从下一次请求起用新模型。换模型一定
+ * 打穿提供商的提示词缓存 —— 对话里已经有过模型回复时先问一句（`confirmAgentChange`）。没有会话（欢迎页）
+ * 时选的模型由输入框在新建会话时写进去。
  */
 export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): React.JSX.Element {
   const { t } = useTranslation()
   const { activeSessionId, thinkingLevel, setThinkingLevel } = useChatStore()
-  const modelLocked = useChatStore(
-    (s) =>
-      !!s.activeSessionId &&
-      (!!s.sessionAgentCreated[s.activeSessionId] || !!s.sessionClosing[s.activeSessionId])
-  )
 
   const providers = useModelCatalogStore((s) => s.providers)
   const availableModels = useModelCatalogStore((s) => s.availableModels)
@@ -61,15 +57,20 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
   /** 确认模型：切 provider/model + 会话级持久化 + 按新模型能力更新状态 */
   const handlePickModel = async (providerId: string, modelId: string): Promise<void> => {
     const host = getHostApi()
-    if (!host || modelLocked) return
+    if (!host) return
+    if (providerId === activeProvider && modelId === activeModel) return
+    const sid = activeSessionId
+    // 换过去会不会打穿缓存（有没有 agent 也由它答），先问主进程；保不住就问用户，不答应就什么都不改
+    if (sid) {
+      const confirmed = await confirmAgentChange(sid, { provider: providerId, model: modelId })
+      if (!confirmed || useChatStore.getState().activeSessionId !== sid) return
+    }
     const previous = { provider: activeProvider, model: activeModel }
     setActiveProvider(providerId)
     setActiveModel(modelId)
 
-    // 单一写入口：agent.setModel 往会话树追加 model_change entry。不再另外写会话表 ——
-    // 那份副本已随 v15 删除。后端拒绝 = 运行时抢在这次写入之前建起来了（发送与选模型几乎
-    // 同时）：回拉真实模型，UI 随 agent_created 变成锁定态
-    const sid = activeSessionId
+    // 单一写入口：agent.setModel 写会话设置，有 agent 就当场重配它。后端拒绝 = 锁住的 agent 用不了这个模型
+    // （provider 刚停用之类）：回拉真实模型
     if (sid) {
       const { success } = await host.agent.setModel({
         sessionId: sid,
@@ -118,8 +119,6 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
     <ModelSelect
       variant="inline"
       readonly={isReadonly}
-      modelLocked={modelLocked}
-      modelLockedHint={t('input.modelLocked')}
       availableModels={availableModels}
       providers={enabledProviders.map((p) => ({
         id: p.id,

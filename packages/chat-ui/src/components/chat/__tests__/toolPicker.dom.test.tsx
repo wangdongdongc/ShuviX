@@ -3,13 +3,13 @@
  * ToolPicker（输入框的工具选择器）DOM 测试（jsdom）—— 档案声明的 mcp:/skill: 项（`declaredBy`）：
  *
  *   - **缺省勾上、可以取消**：行上 `data-declared`（没有 `aria-disabled`、没有声明锁），勾选框勾着且可点，
- *     悬停说是哪个档案带的、取消只在这里生效（sessionConfig.extensionDeclared）；不压暗、手型光标 ——
- *     压暗专属「运行时已建、整排只读」；
+ *     悬停说是哪个档案带的、取消只在这里生效（sessionConfig.extensionDeclared）；不压暗、手型光标；
  *   - 取消它写的是勾选里的取消记号 `-<name>`（chat-protocol `toolSelection`），再勾回来撤掉记号；
  *     开着时算进触发钮的计数与悬浮摘要，取消了就不算；没被取消时勾选里不写它的名字；
- *   - 运行时已建（sessionAgentCreated）时整排只读，声明项与其它行一样压暗、换成只读的悬停原因，
- *     组件自己挡住切换 —— 禁用的勾选框浏览器根本不派发 click，所以先摘掉 disabled 再点
- *     （与 e2e `toolPickerPane.toggle(…, { force: true })` 同一个办法）才证明得了这一点；
+ *   - 运行时已建（sessionAgentCreated）或关停中（sessionClosing）时**照样可改**（2026-10-26，RU-13）：
+ *     没有只读态（没有 `aria-disabled` / `data-locked` / `data-tool-lock`、悬停照旧是条目自己的说明）；
+ *     有 agent 时一次勾选先问 `agent.previewChange`（会不会打穿提示词缓存）再 `updateEnabledTools`，
+ *     知识库一组从不预判；
  *   - 欢迎页（没有会话，TP-10..14）：照样渲染，勾的是新会话的草稿（`welcomeEnabledTools`，不走 IPC），
  *     条目按欢迎页新建会话将用的档案列（`tools.list(undefined, {profile:'chat'})`）；别的会话有没有
  *     运行时与它无关；会话一换，晚到的那份条目不上屏；
@@ -21,7 +21,9 @@
  * 数据走真的 `useSessionTools` + 真的 chatStore；包入口 `@shuvix/chat-ui` 整个顶掉（同
  * useSessionTools.test.ts 的做法：入口会带上模块加载期就读 window.location 的 useSessionInit），
  * 只留两个通道：`getSessionChannelApi().tools.list` 供条目，`getHostApi().session.updateEnabledTools`
- * 记下写入。i18n 走真 zh 资源，悬停文案一律用同一个实例的 `i18n.t` 现算，不抄文案。
+ * 记下写入。缓存确认（CacheBreakConfirm）不经包入口、从 `api/chatApi` 取 HostApi，所以预判挂在
+ * `window.api.agent.previewChange` 上（缺省答 kept：照改不问）。i18n 走真 zh 资源，悬停文案一律用同一个
+ * 实例的 `i18n.t` 现算，不抄文案。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
@@ -37,6 +39,8 @@ const mocks = vi.hoisted(() => ({
   init: vi.fn(),
   baseOptions: vi.fn(),
   updateKnowledgeBases: vi.fn(),
+  /** 缓存预判（window.api.agent.previewChange） */
+  previewChange: vi.fn(),
   /** 宿主有没有知识库：缺省没有（同扩展端，这一组不画），TP-K-* 自己打开 */
   knowledge: false,
   listeners: new Set<(event: { type: string; sessionId?: string }) => void>()
@@ -180,18 +184,6 @@ async function click(name: string): Promise<void> {
   await flush()
 }
 
-/** 绕过禁用态硬点：摘掉 disabled、点、再装回（React 只在 prop 变化时才碰 disabled） */
-async function forceClick(name: string): Promise<void> {
-  const input = box(name)
-  const wasDisabled = input.disabled
-  input.disabled = false
-  await act(async () => {
-    input.click()
-  })
-  input.disabled = wasDisabled
-  await flush()
-}
-
 /** 触发钮上两组的计数（按组图标认：MCP = lucide-server，Skills = lucide-book-open） */
 function counts(): { mcp: string | null; skill: string | null } {
   const groups = [...trigger().querySelectorAll(':scope > span')]
@@ -231,6 +223,10 @@ beforeEach(() => {
   mocks.updateKnowledgeBases.mockResolvedValue({ success: true })
   mocks.knowledge = false
   mocks.listeners.clear()
+  mocks.previewChange
+    .mockReset()
+    .mockResolvedValue({ locked: true, cache: 'kept', reasons: [], promptTokens: 0 })
+  ;(window as unknown as { api?: unknown }).api = { agent: { previewChange: mocks.previewChange } }
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -240,6 +236,7 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  delete (window as unknown as { api?: unknown }).api
 })
 
 describe('档案声明的条目：缺省勾上、可以取消', () => {
@@ -259,7 +256,6 @@ describe('档案声明的条目：缺省勾上、可以取消', () => {
       expect(box(name).disabled, name).toBe(false)
       expect(label.querySelector('[data-tool-declared]'), name).toBeNull()
       expect(label.title, name).toBe(declaredHint)
-      // 压暗专属「运行时已建」的只读态
       expect(label.className, name).not.toContain('opacity-40')
       expect(label.className, name).toContain('cursor-pointer')
     }
@@ -367,29 +363,79 @@ describe('勾选写回：取消声明项写取消记号，其余照常', () => {
   })
 })
 
-describe('运行时已建：整排只读，声明项也不例外', () => {
-  it('TP-8 每一行都禁用 + aria-disabled；声明项仍勾着、改挂只读原因并压暗；触发钮挂锁；硬点什么也不写', async () => {
+describe('运行时已建 / 关停中：照样可改（RU-13）', () => {
+  it.each<[string, boolean]>([
+    ['sessionAgentCreated', true],
+    ['sessionClosing', false]
+  ])(
+    'TP-8 %s 为真：每一行可点、没有 aria-disabled / data-locked / data-tool-lock；悬停是条目自己的说明',
+    async (_label, created) => {
+      seedSession(['skill:foo'], created)
+      if (!created) useChatStore.setState({ sessionClosing: { [SID]: true } })
+      await renderPicker()
+      expect(pickerRoot().hasAttribute('data-locked')).toBe(false)
+      expect(pickerRoot().querySelector('[data-tool-lock]')).toBeNull()
+      expect(trigger().title).toBe('')
+      await openPanel()
+      const declaredHint = i18n.t('sessionConfig.extensionDeclared', { profile: PROFILE })
+      for (const name of [...DECLARED, ...UNDECLARED]) {
+        const label = row(name)
+        expect(label.hasAttribute('aria-disabled'), name).toBe(false)
+        expect(box(name).disabled, name).toBe(false)
+        expect(label.className, name).toContain('cursor-pointer')
+        expect(label.className, name).not.toContain('cursor-not-allowed')
+        expect(label.title, name).toBe(DECLARED.includes(name) ? declaredHint : '')
+      }
+      // 没有哪一行被压暗（压暗只给连接出错的 MCP，这里没有）
+      expect(container.querySelector('label[data-tool-item].opacity-40')).toBeNull()
+      expect(container.querySelector('label[data-tool-item].opacity-50')).toBeNull()
+    }
+  )
+
+  it('TP-8 有 agent：勾 bar → 先预判（整份新勾选）再 updateEnabledTools；取消声明项同样先预判', async () => {
     seedSession(['skill:foo'], true)
     await renderPicker()
-    expect(pickerRoot().querySelector('[data-tool-lock]')).not.toBeNull()
     await openPanel()
-    const lockedHint = i18n.t('sessionConfig.extensionsLocked')
-    expect(lockedHint).not.toBe('sessionConfig.extensionsLocked')
-    for (const name of [...DECLARED, ...UNDECLARED]) {
-      expect(row(name).getAttribute('aria-disabled'), name).toBe('true')
-      expect(box(name).disabled, name).toBe(true)
-    }
-    for (const name of DECLARED) {
-      const label = row(name)
-      expect(box(name).checked, name).toBe(true)
-      // 只读的原因盖过「谁声明的」：此刻改不了的理由是运行时已建
-      expect(label.title, name).toBe(lockedHint)
-      expect(label.className, name).toContain('cursor-not-allowed')
-      expect(label.className, name).toContain('opacity-40')
-    }
-    for (const name of [...DECLARED, ...UNDECLARED]) await forceClick(name)
-    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
-    expect(storedTools()).toEqual(['skill:foo'])
+
+    await click('skill:bar')
+    expect(mocks.previewChange).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      enabledTools: ['skill:foo', 'skill:bar']
+    })
+    expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      enabledTools: ['skill:foo', 'skill:bar']
+    })
+    expect(mocks.previewChange.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.updateEnabledTools.mock.invocationCallOrder[0]
+    )
+    expect(storedTools()).toEqual(['skill:foo', 'skill:bar'])
+    expect(box('skill:bar').checked).toBe(true)
+
+    await click('mcp:ctx')
+    expect(mocks.previewChange).toHaveBeenCalledTimes(2)
+    expect(mocks.previewChange).toHaveBeenLastCalledWith({
+      sessionId: SID,
+      enabledTools: ['skill:foo', 'skill:bar', '-mcp:ctx']
+    })
+    expect(mocks.updateEnabledTools).toHaveBeenLastCalledWith({
+      id: SID,
+      enabledTools: ['skill:foo', 'skill:bar', '-mcp:ctx']
+    })
+    expect(box('mcp:ctx').checked).toBe(false)
+  })
+
+  it('TP-8 只关停中（没有 agent）：勾 bar → 不预判，直接 updateEnabledTools', async () => {
+    seedSession(['skill:foo'])
+    useChatStore.setState({ sessionClosing: { [SID]: true } })
+    await renderPicker()
+    await openPanel()
+    await click('skill:bar')
+    expect(mocks.previewChange).not.toHaveBeenCalled()
+    expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      enabledTools: ['skill:foo', 'skill:bar']
+    })
   })
 })
 
@@ -517,17 +563,19 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
       useChatStore.getState().setActiveSessionId(SID)
     })
     await flush()
-    // 会话那份（Work 声明 mcp:ctx、drawing；会话自己勾 bar）上屏，且是只读的
+    // 会话那份（Work 声明 mcp:ctx、drawing；会话自己勾 bar）上屏
     expect(summaryOf('[MCP]')).toBe('ctx')
     expect(summaryOf('[Skills]')).toBe(`${drawingName()}, bar`)
-    expect(pickerRoot().hasAttribute('data-locked')).toBe(true)
 
     // 欢迎页那份晚到：带一个只属于它的条目 —— 不能上屏
     resolveWelcome([...WELCOME_ITEMS, { name: 'skill:late', label: 'late', group: '__skills__' }])
     await flush()
     await openPanel()
     expect(container.querySelector('label[data-tool-item="skill:late"]')).toBeNull()
-    expect(row('mcp:ctx').title).toBe(i18n.t('sessionConfig.extensionsLocked'))
+    // 悬停是会话那份的声明者（Work），不是欢迎页那份的（chat）
+    expect(row('mcp:ctx').title).toBe(
+      i18n.t('sessionConfig.extensionDeclared', { profile: PROFILE })
+    )
   })
 
   it('TP-13 反方向：会话那份挂着时切到欢迎页，欢迎页那份先回并上屏；会话那份晚到被忽略', async () => {
@@ -548,9 +596,8 @@ describe('欢迎页（没有会话）：勾的是新会话的草稿', () => {
       useChatStore.getState().setActiveSessionId(null)
     })
     await flush()
-    // 欢迎页：只有声明项开着（草稿为空），不锁
+    // 欢迎页：只有声明项开着（草稿为空）
     expect(summaryOf('[Skills]')).toBe(drawingName())
-    expect(pickerRoot().hasAttribute('data-locked')).toBe(false)
 
     resolveSession([...ITEMS, { name: 'skill:late', label: 'late', group: '__skills__' }])
     await flush()
@@ -657,24 +704,33 @@ describe('勾选里带着取消记号的会话', () => {
     expect(box('mcp:ctx').checked).toBe(true)
   })
 
-  it('TP-15 运行时已建：取消过的 drawing 仍画成未勾，禁用 + aria-disabled、悬停说只读原因；硬点什么也不写', async () => {
+  it('TP-15 运行时已建：取消过的 drawing 仍画成未勾、可点、悬停说是谁带的；点一下 → 预判后撤掉记号', async () => {
     seedSession(['-skill:builtin:drawing', 'skill:foo'], true)
     await renderPicker()
     await openPanel()
     const label = row('skill:builtin:drawing')
     expect(box('skill:builtin:drawing').checked).toBe(false)
-    expect(box('skill:builtin:drawing').disabled).toBe(true)
-    expect(label.getAttribute('aria-disabled')).toBe('true')
-    expect(label.title).toBe(i18n.t('sessionConfig.extensionsLocked'))
-    await forceClick('skill:builtin:drawing')
-    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
-    expect(storedTools()).toEqual(['-skill:builtin:drawing', 'skill:foo'])
+    expect(box('skill:builtin:drawing').disabled).toBe(false)
+    expect(label.hasAttribute('aria-disabled')).toBe(false)
+    expect(label.title).toBe(i18n.t('sessionConfig.extensionDeclared', { profile: PROFILE }))
+
+    await click('skill:builtin:drawing')
+    expect(mocks.previewChange).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      enabledTools: ['skill:foo']
+    })
+    expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      enabledTools: ['skill:foo']
+    })
+    expect(storedTools()).toEqual(['skill:foo'])
+    expect(box('skill:builtin:drawing').checked).toBe(true)
   })
 })
 
 // ─── 知识库一组 ──────────────────────────────────────────────────────────────
 
-describe('知识库一组：与配置卡同一份数据，不随运行时上锁', () => {
+describe('知识库一组：与配置卡同一份数据，从不预判', () => {
   const OPTIONS = [
     { name: 'notes', label: 'notes' },
     { name: 'shuvix', label: 'ShuviX guide' }
@@ -707,7 +763,7 @@ describe('知识库一组：与配置卡同一份数据，不随运行时上锁'
     mocks.knowledge = true
   })
 
-  it('TP-K1 会话已有运行时：MCP / SKILL 只读，知识库照样可点；勾一下立刻落库，计数与摘要跟着变', async () => {
+  it('TP-K1 会话已有运行时：MCP / SKILL 与知识库都可点、都落库；知识库那一下不预判，计数与摘要跟着变', async () => {
     seedSession(['skill:foo'], true)
     mocks.baseOptions.mockResolvedValue({ options: OPTIONS, selected: ['shuvix'], explicit: true })
     await renderPicker()
@@ -717,7 +773,7 @@ describe('知识库一组：与配置卡同一份数据，不随运行时上锁'
     expect(kbSummary()).toBe(i18n.t('knowledge.builtinBaseName'))
 
     await openPanel()
-    expect(box('skill:foo').disabled).toBe(true)
+    expect(box('skill:foo').disabled).toBe(false)
     expect(kbRows().map((label) => label.getAttribute('data-knowledge-base'))).toEqual([
       'notes',
       'shuvix'
@@ -752,8 +808,18 @@ describe('知识库一组：与配置卡同一份数据，不随运行时上锁'
     })
     expect(kbBox('notes').checked).toBe(true)
     expect(kbCount()).toBe('2')
-    // 扩展能力的勾选一笔没动
+    // 知识库不进工具表：不问缓存，扩展能力的勾选一笔没动
+    expect(mocks.previewChange).not.toHaveBeenCalled()
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+
+    // 同一个面板里的技能行也写得进去（先预判）
+    await click('skill:bar')
+    expect(mocks.previewChange).toHaveBeenCalledTimes(1)
+    expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      enabledTools: ['skill:foo', 'skill:bar']
+    })
+    expect(mocks.updateKnowledgeBases).toHaveBeenCalledTimes(1)
   })
 
   it('TP-K2 别处改了这条会话（session.configChanged）→ 重取；别的会话的事件不理；新建了库（knowledge.changed）→ 候选长出来', async () => {

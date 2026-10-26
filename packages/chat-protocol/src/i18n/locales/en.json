@@ -259,7 +259,6 @@
     "send": "Send",
     "imageOnly": "(image)",
     "selectModel": "Select a model",
-    "modelLocked": "Read-only: the agent has already been created. Remove it from the agent chip above to change the model",
     "sendFailed": "Couldn't send: {{error}}",
     "pasteChipLines": "[Pasted text #{{seq}} · {{lines}} lines]",
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
@@ -478,8 +477,7 @@
     "title": "Session Config",
     "sessionTitle": "Session Title",
     "extensionsGroup": "Extensions",
-    "extensionsDesc": "MCP servers and skills are read when the agent is created (on the first message) and are read-only while it exists",
-    "extensionsLocked": "Read-only: the agent has already been created. Remove it from the agent chip above to change MCP servers and skills",
+    "extensionsDesc": "MCP servers and skills can be changed at any time: a running agent picks them up at once (changes that would invalidate the prompt cache ask first)",
     "extensionDeclared": "The {{profile}} agent includes this by default. Unticking it here applies only here and leaves the agent itself unchanged.",
     "knowledgeGroup": "Knowledge bases",
     "knowledgeDesc": "Which other bases this session can search and write to (a session in a project always has that project's own base). Changes take effect right away.",
@@ -1273,7 +1271,7 @@
     "browser": "Browser",
     "agents": "Agents",
     "agentChipTitle": "Agent: {{name}} ({{profile}}) · Open Agents panel",
-    "agentChipDestroy": "Remove this agent: the conversation stays, and the next message creates a new one with the model and extensions selected then",
+    "agentChipDestroy": "Remove this agent: the conversation stays, and the next message rebuilds it from the settings then (not needed to change the model or extensions)",
     "agentFilterPrefix": "Session: ",
     "agentFilterClear": "Clear session filter",
     "agentFilterEmpty": "Filtering by session — no agent for this session.",
@@ -1747,5 +1745,14 @@
     "placeholderNote": "The model receives this placeholder. Tools and files use the real value:",
     "looking": "Looking up the real value…",
     "unavailableNote": "The model receives this placeholder. This computer cannot read its real value."
+  },
+  "cacheBreak": {
+    "title": "This change will invalidate the prompt cache",
+    "reasonModel": "With a different model, the next request cannot reuse the earlier prompt cache.",
+    "reasonTools": "The current model cannot take this tool change mid-conversation and keep its cache.",
+    "reasonPrompt": "The system prompt changes with it, and the current model cannot take that mid-conversation and keep its cache.",
+    "costTokens": "The whole conversation (about {{tokens}} tokens) will be processed again at the uncached price once.",
+    "cost": "The whole conversation will be processed again at the uncached price once.",
+    "confirm": "Change anyway"
   }
 }

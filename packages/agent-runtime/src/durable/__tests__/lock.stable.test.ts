@@ -1,7 +1,8 @@
 /**
  * 锁 · 锁住期间不变（Mapping #6；K9、K14、K21）：MCP 掉线 / 换工具表、会话配置（勾选 / 模型 /
  * provider 启停）、人设变量、注册表里多出来的东西 —— 都不改变提供给模型的工具与人设。唯一活着的是
- * 思考档位。
+ * 思考档位。会话配置的改动要经重配（`reconfigureAgent`，2026-10-26）才作用到 agent，见
+ * `lock.reconfigure.test.ts`；这里钉的是「不重配就不变」。
  *
  * 「不变」= 第 1 个请求的工具与第 0 个逐项相等，且之后没有任何带工具增减的 pi.system 条目。
  */
@@ -65,7 +66,7 @@ describe('lock · stable while locked', () => {
     expect(t.kit.requests).toHaveLength(3)
   })
 
-  it('LS-03 editing the selection while locked changes nothing; a newly ticked server is not even connected', async () => {
+  it('LS-03 editing the selection while locked changes nothing without a reconfigure; a newly ticked server is not even connected', async () => {
     const config = scenarioConfig()
     const scenario = await scenarioW({ config })
     const { t } = scenario
@@ -79,7 +80,7 @@ describe('lock · stable while locked', () => {
     expect(t.toolHost.mcp('new').connects).toBe(0)
   })
 
-  it('LS-04 editing the model while locked: requests stay on the locked model, and so does the compaction window (K14)', async () => {
+  it('LS-04 editing the model while locked, without a reconfigure: requests stay on the locked model, and so does the compaction window (K14)', async () => {
     const config = scenarioConfig()
     const scenario = await scenarioW({ config })
     const { t } = scenario
@@ -121,7 +122,7 @@ describe('lock · stable while locked', () => {
     await expectUnchanged(scenario, session)
   })
 
-  it('LS-07 the persona is frozen at creation: a later marker or profile change never reaches the prompt (K21)', async () => {
+  it('LS-07 the persona is frozen at creation: a later marker or profile change never reaches the prompt without a reconfigure (K21)', async () => {
     const config = scenarioConfig()
     const scenario = await scenarioW({ config })
     const { t, vars } = scenario

@@ -51,16 +51,18 @@ export function registerSessionHandlers(): void {
   })
 
   /**
-   * 改扩展能力勾选（mcp:/skill:）。会话已有 Agent 运行时（含创建中 / 关停中）时拒绝、
-   * 什么也不写 —— 勾选只在创建 Agent 那一刻读一次。
+   * 改扩展能力勾选（mcp:/skill:）。会话有 Agent 运行时就当场重配它（新勾的 MCP 在这里连上），等重配落定才返回。
    */
-  defineHandler('session:updateEnabledTools', (_ctx, params: SessionUpdateEnabledToolsParams) => ({
-    success: sessionService.updateEnabledTools(params.id, params.enabledTools)
-  }))
+  defineHandler(
+    'session:updateEnabledTools',
+    async (_ctx, params: SessionUpdateEnabledToolsParams) => ({
+      success: await sessionService.updateEnabledTools(params.id, params.enabledTools)
+    })
+  )
 
   /**
-   * 改这条会话启用的知识库。与扩展能力不同：**不看有没有运行时** —— 知识库是工具每次调用
-   * 现查的，改完下一次调用就生效。
+   * 改这条会话启用的知识库。与扩展能力不同：不用重配运行时 —— 知识库是工具每次调用现查的，改完下一次调用
+   * 就生效。
    */
   defineHandler(
     'session:updateKnowledgeBases',

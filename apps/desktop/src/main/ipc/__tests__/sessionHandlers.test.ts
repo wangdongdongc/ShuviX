@@ -16,6 +16,8 @@
  *   SH-5 会话权限表的四个通道（取代 `session:removeAllowListEntry`）接到 services/acl（替身）：listAcl 原样
  *        交回表；grantAcl 只认 read / write（别的访问方式不碰服务，回 success: false）、按服务的结果回
  *        success 与那一行；setAclAccess 同样先验访问方式；removeAclEntry 回服务删没删
+ *   RD-9 `session:updateEnabledTools` 等 sessionService.updateEnabledTools（有 agent 时当场重配，异步）落定，回
+ *        `{ success: <它答的那一位> }` —— 不等的话 success 会是一个 Promise 对象，前端恒以为写进去了
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,6 +26,7 @@ type Handler = (event: unknown, ...args: unknown[]) => unknown
 const state = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   create: vi.fn(),
+  updateEnabledTools: vi.fn<(id: string, enabledTools: string[]) => Promise<boolean>>(),
   getRuntimeStatuses: vi.fn(),
   contexts: [] as unknown[],
   aclEntries: vi.fn((_id: string): unknown[] => []),
@@ -41,7 +44,9 @@ vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn() },
   BrowserWindow: { fromWebContents: vi.fn() }
 }))
-vi.mock('../../services/sessionService', () => ({ sessionService: { create: state.create } }))
+vi.mock('../../services/sessionService', () => ({
+  sessionService: { create: state.create, updateEnabledTools: state.updateEnabledTools }
+}))
 vi.mock('../../services/acl', () => ({
   sessionAcl: {
     entries: state.aclEntries,
@@ -242,5 +247,35 @@ describe('SH-5 会话权限表的通道', () => {
     ]) {
       expect(state.handlers.has(channel), channel).toBe(true)
     }
+  })
+})
+
+describe('RD-9 session:updateEnabledTools 等写入与重配落定', () => {
+  it.each<[boolean]>([[true], [false]])(
+    'RD-9 sessionService 答 %s → { success: 同一位 }；参数原样交出',
+    async (answer) => {
+      state.updateEnabledTools.mockReset().mockResolvedValue(answer)
+      await expect(
+        invoke('session:updateEnabledTools', { id: 's1', enabledTools: ['mcp:a', '-skill:b'] })
+      ).resolves.toEqual({ success: answer })
+      expect(state.updateEnabledTools.mock.calls).toEqual([['s1', ['mcp:a', '-skill:b']]])
+    }
+  )
+
+  it('RD-9 重配挂着时不答；落定才回', async () => {
+    let finish!: (ok: boolean) => void
+    state.updateEnabledTools.mockReset().mockReturnValue(new Promise<boolean>((r) => (finish = r)))
+    let result: unknown = 'pending'
+    const pending = Promise.resolve(
+      invoke('session:updateEnabledTools', { id: 's1', enabledTools: [] })
+    ).then((r) => {
+      result = r
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(result).toBe('pending')
+    finish(true)
+    await pending
+    expect(result).toEqual({ success: true })
   })
 })

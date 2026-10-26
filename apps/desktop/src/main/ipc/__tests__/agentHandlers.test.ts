@@ -5,6 +5,8 @@
  *           baseUrl / apiProtocol（旧前端的热切换覆盖值）不再往下传；网关答 true / false →
  *           `{ success: true / false }`（false = 会话已有运行时，什么也没写）；
  *   ML-U-8b 网关 reject → handler reject（不吞成 success，否则前端永远以为写进去了）；
+ *   RD-8    `agent:previewChange` 把载荷拆成 `(sessionId, change)` 交给网关 —— change 里不再带 sessionId；网关的
+ *           预判原样交回（不包成 `{ success }`）；
  *   ML-U-8c `agent:destroy` 调 `destroyAgent(sid)`，等它落定才回 `{ success: true }`；
  *   ML-U-8d `tools:list` 原样转发 `(sessionId, options)` —— 欢迎页的 `(undefined, {profile:'chat'})`
  *           与会话里的 `(sid)` 都一样；
@@ -32,6 +34,7 @@ const state = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   gateway: {
     setModel: vi.fn<(sessionId: string, ...rest: unknown[]) => Promise<boolean>>(),
+    previewAgentChange: vi.fn<(sessionId: string, change: unknown) => Promise<unknown>>(),
     destroyAgent: vi.fn<(sessionId: string) => Promise<void>>(),
     listTools: vi.fn<(sessionId?: string, options?: { profile?: string }) => unknown[]>(),
     getAgentInfo: vi.fn<(sessionId: string, options?: { ensure?: boolean }) => Promise<unknown>>(),
@@ -141,6 +144,36 @@ describe('ML-U-8a / 8b agent:setModel', () => {
     await expect(
       invoke('agent:setModel', { sessionId: SID, provider: 'prov', model: 'm-b' })
     ).rejects.toThrow('tree write failed')
+  })
+})
+
+describe('RD-8 agent:previewChange', () => {
+  it('RD-8 (sessionId, change) 交给网关：change 不带 sessionId；预判原样交回，不包成 { success }', async () => {
+    const verdict = { locked: true, cache: 'lost', reasons: ['tools'], promptTokens: 900 }
+    state.gateway.previewAgentChange.mockReset().mockResolvedValue(verdict)
+    await expect(
+      invoke('agent:previewChange', {
+        sessionId: SID,
+        enabledTools: ['mcp:a', '-skill:b'],
+        provider: 'prov',
+        model: 'm-b'
+      })
+    ).resolves.toBe(verdict)
+    expect(state.gateway.previewAgentChange.mock.calls).toEqual([
+      [SID, { enabledTools: ['mcp:a', '-skill:b'], provider: 'prov', model: 'm-b' }]
+    ])
+
+    // 只给勾选：change 里也只有它
+    await invoke('agent:previewChange', { sessionId: SID, enabledTools: [] })
+    expect(state.gateway.previewAgentChange.mock.calls[1]).toEqual([SID, { enabledTools: [] }])
+    expect(state.gateway.setModel).not.toHaveBeenCalled()
+  })
+
+  it('RD-8 网关 reject → handler reject', async () => {
+    state.gateway.previewAgentChange.mockReset().mockRejectedValue(new Error('preview failed'))
+    await expect(invoke('agent:previewChange', { sessionId: SID })).rejects.toThrow(
+      'preview failed'
+    )
   })
 })
 

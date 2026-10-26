@@ -44,22 +44,28 @@ export {
 } from '../../../../../../../packages/agent-runtime/src/durable/__tests__/support/wait'
 export { defaultAgentConfig, fauxCatalog, fauxPort, TEST_SETTINGS_OVERRIDES }
 
-/** 没有任何工具的 ToolHost（桌面用例不依赖过渡期的工具表） */
+/**
+ * 没有任何工具的 ToolHost（桌面用例不依赖过渡期的工具表）。重配（2026-10-26）照样支持：新勾的服务器一台都
+ * 连不上、没有技能 —— 锁里只是记下新的勾选与模型（没有它，锁住的会话改勾选 / 换模型会被拒成 `unsupported`）
+ */
 export const emptyToolHost: ToolHost = {
   buildBuiltinTools: () => [],
   resolveAgentTools: async () => ({ sandboxed: false }),
-  rebuildAgentTools: () => ({})
+  rebuildAgentTools: () => ({}),
+  reconfigureAgentTools: async () => ({ mcp: [], skills: [] })
 }
 
 /**
  * 每个 agent 都带上 `make(会话 id)` 给的工具的 ToolHost（S+T 用例：父会话拿到真的 `SessionTool`）。
- * 创建与重开时的重建都现造一份，资源按会话 id 找（与桌面 ToolHost 同一口径）。
+ * 创建与重开时的重建都现造一份，资源按会话 id 找（与桌面 ToolHost 同一口径）。重配与 `emptyToolHost`
+ * 同一口径（新服务器连不上、没有技能；锁里已有的工具运行时原样沿用）。
  */
 export function toolsToolHost(make: (sessionId: string) => readonly ToolRegistration[]): ToolHost {
   return {
     buildBuiltinTools: () => [],
     resolveAgentTools: async (request) => ({ sandboxed: false, tools: make(request.sessionId) }),
-    rebuildAgentTools: (_record, context) => ({ tools: make(context.sessionId) })
+    rebuildAgentTools: (_record, context) => ({ tools: make(context.sessionId) }),
+    reconfigureAgentTools: async () => ({ mcp: [], skills: [] })
   }
 }
 

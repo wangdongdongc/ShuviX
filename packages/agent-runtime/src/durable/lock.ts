@@ -11,8 +11,11 @@
  *    （沙箱钉子）并装上 `shuvix.agent.<对话>` → **一个提交**里写 `pi.agent`（模型、思考档位、显式扩展
  *    清单、显式工具清单、cwd）、冻结人设（AgentStateDoc）、锁记录。提交失败就把装上的扩展撤回 ——
  *    要么全有，要么全无。
- *  - **锁住期间工具不变**：MCP 掉线不卸它的工具（调用时原地重连），list_changed 只在下次创建时生效，
- *    会话配置（勾选 / 模型）怎么改都不影响；思考档位例外，`pi.agent.thinkingLevel` 是活的（K9）。
+ *  - **锁住期间工具只随重配而变**：MCP 掉线不卸它的工具（调用时原地重连），list_changed 只在下次创建时生效；
+ *    思考档位是活的（K9，`pi.agent.thinkingLevel`）。会话的模型与扩展勾选改了 → **重配**（`reconfigure`，
+ *    2026-10-26，规则见 `reconfigure.ts`）：一个提交里改 `pi.agent` 的模型与工具、锁记录（必要时人设），从
+ *    下一次请求起生效（运行中也是）。锁里已有的工具原样沿用、新工具追加，次序按最小差异排；档案、工作目录、
+ *    沙箱钉子不在重配之列（要变就销毁）。重配与创建 / 销毁串行；发送等在途的重配落定再起跑。
  *  - **销毁**（agent 芯片的 X、回退、清空）：忙 / 被中断就先中止（K10），再一个提交删锁、卸掉按 agent
  *    的扩展。`pi.agent` 不清（下一次创建整份覆盖），`shuvix.builtin` 不动（下一次创建重装，K8）。
  *    销毁算一次显式喊停（到下一次用户发送之前不自动续跑）。
@@ -41,6 +44,7 @@
  * 「全部已安装的扩展」）。
  */
 import type { JsonValue } from '@earendil-works/chord'
+import { getCurrentTools, type Message } from '@earendil-works/pi-ai'
 import {
   configure,
   defineExtension,
@@ -60,10 +64,23 @@ import { normalizeToolNames, resolveThinkingLevel } from './agentSpec'
 import { backgroundContext as BG, errorText } from './context'
 import { SessionStateDoc } from './docs'
 import { emptyReplyHook } from './emptyReply'
-import { computeFrozenAgentPrompt, freezePersona } from './prompt/persona'
+import { computeFrozenAgentPrompt, freezePersona, type FrozenAgentPrompt } from './prompt/persona'
 import type { PromptExtensions } from './prompt/sections'
 import type { SessionProcessRecord } from './processRecord'
-import type { AgentConfig, AgentToolSet, ModelCatalog, ToolHost } from './seams'
+import {
+  composeReconfiguredTools,
+  orderForMinimalDiff,
+  predictCacheImpact,
+  type CacheImpact,
+  type SkillToolChange
+} from './reconfigure'
+import type {
+  AgentConfig,
+  AgentToolSet,
+  ModelCatalog,
+  ReconfiguredAgentTools,
+  ToolHost
+} from './seams'
 
 // ─────────────────────────── 名字 ───────────────────────────
 
@@ -99,14 +116,26 @@ export interface CreateAgentOptions {
   extraTools?: readonly ToolRegistration[]
 }
 
-export type AgentCreationErrorCode = 'no_model' | 'cancelled' | 'extra_tools'
+/** 重配的结果：有 agent 并且这次真改了它才 `applied`（没 agent = 下一次发送按设置创建，什么都不用做） */
+export interface ReconfigureOutcome {
+  applied: boolean
+  record?: LockRecord
+}
+
+/** 预判的结果：`locked = false` = 没有 agent（改动在下一次创建时生效，缓存无从谈起） */
+export interface ReconfigurePreview extends CacheImpact {
+  locked: boolean
+}
+
+export type AgentCreationErrorCode = 'no_model' | 'cancelled' | 'extra_tools' | 'unsupported'
 
 /**
  * 创建 agent 失败的那几种「不是意外」的原因：
  *  - `no_model`：模型选择被拒（K4/K5；`refusal` 给出细分），什么都没写；
  *  - `cancelled`：创建途中被中止 / 销毁（K13），什么都没写 —— 发送当作被中止；
- *  - `extra_tools`：root 的锁带了附加工具（K6）。
- * 其余失败（ToolHost / 变量表抛错、提交失败）原样上抛。
+ *  - `extra_tools`：root 的锁带了附加工具（K6）；
+ *  - `unsupported`：宿主没实现重配（`ToolHost.reconfigureAgentTools`），锁照旧。
+ * 创建与重配共用它。其余失败（ToolHost / 变量表抛错、提交失败）原样上抛。
  */
 export class AgentCreationError extends Error {
   constructor(
@@ -215,6 +244,20 @@ export function agentExtension(
   return defineExtension({ name: agentExtensionName(conversationId), tools })
 }
 
+/** 名单里带某个前缀的那几项（去掉前缀，名单序） */
+function prefixed(names: readonly string[], prefix: 'mcp:' | 'skill:'): string[] {
+  return names.filter((name) => name.startsWith(prefix)).map((name) => name.slice(prefix.length))
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((item, index) => item === b[index])
+}
+
+/** 同一把锁（同一次创建）：提交发布会换出新的记录对象，所以不按对象比 */
+function sameLock(a: LockRecord | undefined, b: LockRecord): boolean {
+  return a !== undefined && a.conversationId === b.conversationId && a.createdAt === b.createdAt
+}
+
 // ─────────────────────────── 每会话的锁 ───────────────────────────
 
 export interface AgentLockDeps {
@@ -265,6 +308,12 @@ export class AgentLock {
   private creating: Promise<LockRecord> | undefined
   private creationAbort: AbortController | undefined
   private destroying: Promise<void> | undefined
+  /** 在途的重配与它的中止；在途时又来的请求合流成排在它后面的一次（`reconfigureQueued`） */
+  private reconfiguring: Promise<ReconfigureOutcome> | undefined
+  private reconfigureAbort: AbortController | undefined
+  private reconfigureQueued: Promise<ReconfigureOutcome> | undefined
+  /** 取消纪元：`cancelPending` 加一；排着的重配起跑前看到它变了就作罢 */
+  private reconfigureEpoch = 0
   /** 在途的 `ensureBuiltin`（并发的合流成一次） */
   private installingBuiltin: Promise<void> | undefined
   /** 打开时完整初始化（连 MCP）的中止：会话关停时触发 */
@@ -416,6 +465,12 @@ export class AgentLock {
         await this.destroying.catch(() => undefined)
         continue
       }
+      // 刚改的模型 / 勾选还在重配（连 MCP 最多几秒）：等它落定，这次发送就按改过的跑
+      const reconfiguring = this.reconfigureQueued ?? this.reconfiguring
+      if (reconfiguring !== undefined) {
+        await reconfiguring.catch(() => undefined)
+        continue
+      }
       if (this.record !== undefined) return this.record
       if (this.disposed) throw new AgentCreationError('cancelled', 'The session is closing')
       if (this.creating === undefined) {
@@ -433,7 +488,7 @@ export class AgentLock {
     }
   }
 
-  /** 取消在途的创建并等它落定（K13；中止与销毁都走这里） */
+  /** 取消在途的创建并等它落定（K13；中止、销毁、回退都走这里） */
   async cancelCreation(): Promise<void> {
     const creating = this.creating
     if (creating === undefined) return
@@ -441,10 +496,29 @@ export class AgentLock {
     await creating.catch(() => undefined)
   }
 
-  /** 会话关停：取消在途的创建与打开时的连接，之后不再创建 */
+  /**
+   * 取消在途的创建**与重配**并等它们落定（销毁、回退、分支走这里 —— 它们之后锁不在了 / 换了对话）。被取消的
+   * 重配什么都不写，设置里的改动留着，下一次创建按它建。中止（停下这一轮）只取消创建：用户刚改的模型 / 勾选
+   * 不该因为按了停止就悄悄作废。
+   */
+  async cancelPending(): Promise<void> {
+    const reconfiguring = [this.reconfiguring, this.reconfigureQueued]
+    if (reconfiguring.some((work) => work !== undefined)) {
+      // 排着的那一次见到纪元变了就不起跑
+      this.reconfigureEpoch++
+      this.reconfigureAbort?.abort(
+        new AgentCreationError('cancelled', 'Agent reconfiguration was cancelled')
+      )
+    }
+    await this.cancelCreation()
+    for (const work of reconfiguring) await work?.catch(() => undefined)
+  }
+
+  /** 会话关停：取消在途的创建、重配与打开时的连接，之后不再创建 */
   dispose(): void {
     this.disposed = true
     this.creationAbort?.abort(new AgentCreationError('cancelled', 'The session is closing'))
+    this.reconfigureAbort?.abort(new AgentCreationError('cancelled', 'The session is closing'))
     this.restoreAbort.abort(new AgentCreationError('cancelled', 'The session is closing'))
   }
 
@@ -576,6 +650,268 @@ export class AgentLock {
     return this.record!
   }
 
+  // ─── 重配（2026-10-26） ─────────────────────────
+
+  /**
+   * 按会话此刻的配置重配锁住的 agent（模型、扩展勾选）。在途的创建先等它（它读的可能是改之前的设置）；
+   * 在途的重配之后再来的请求合流成排在后面的一次（读最新的设置）。没锁 → `{ applied: false }`。
+   * 失败抛 `AgentCreationError`（`no_model` / `cancelled` / `unsupported`）或原样的错误 —— 什么都不写，锁照旧。
+   */
+  reconfigure(): Promise<ReconfigureOutcome> {
+    if (this.reconfiguring === undefined) return this.startReconfigure()
+    if (this.reconfigureQueued === undefined) {
+      const epoch = this.reconfigureEpoch
+      const queued: Promise<ReconfigureOutcome> = this.reconfiguring
+        .catch(() => undefined)
+        .then(() => {
+          if (this.reconfigureQueued === queued) this.reconfigureQueued = undefined
+          if (epoch !== this.reconfigureEpoch) {
+            throw new AgentCreationError('cancelled', 'Agent reconfiguration was cancelled')
+          }
+          return this.reconfiguring ?? this.startReconfigure()
+        })
+      this.reconfigureQueued = queued
+    }
+    return this.reconfigureQueued
+  }
+
+  /**
+   * 预判（不连服务器、不写）：照 `config`（调用方把想改成的样子套在会话配置上）重配的话，下一次请求还能不能
+   * 命中缓存。没锁 → `locked: false`、`cache: 'none'`。模型选不出来也按 `none` 答 —— 真改时由重配报错。
+   */
+  async preview(config: AgentConfig): Promise<ReconfigurePreview> {
+    const lock = this.record
+    const none: ReconfigurePreview = {
+      locked: lock !== undefined,
+      cache: 'none',
+      reasons: [],
+      promptTokens: 0
+    }
+    if (lock === undefined || this.deps.toolHost.reconfigureAgentTools === undefined) return none
+    const resolution = resolveLockModel(
+      this.deps.modelCatalog.registry,
+      this.deps.modelCatalog.port,
+      config.model
+    )
+    if (!resolution.ok) return none
+    const plan = await this.planReconfigure(lock, config, resolution.model, {
+      connect: false,
+      signal: new AbortController().signal
+    })
+    const nextModel = resolution.model
+    const impact = predictCacheImpact({
+      messages: plan.messages,
+      nextModel,
+      nextModelInfo: this.deps.modelCatalog.registry.models.getModel(
+        nextModel.provider,
+        nextModel.modelId
+      ),
+      tools: plan.tools,
+      pendingServers: plan.resolved.pending ?? [],
+      sectionsChange: plan.persona !== undefined
+    })
+    return { locked: true, ...impact }
+  }
+
+  private startReconfigure(): Promise<ReconfigureOutcome> {
+    const controller = new AbortController()
+    const run = async (): Promise<ReconfigureOutcome> => {
+      try {
+        return await this.runReconfigure(controller.signal)
+      } catch (error) {
+        // 中止之后宿主抛出的随便什么错（连接被掐断……）都按取消算（与创建同一口径）
+        if (
+          (controller.signal.aborted || this.disposed) &&
+          !(error instanceof AgentCreationError && error.code !== 'cancelled')
+        ) {
+          throw new AgentCreationError('cancelled', 'Agent reconfiguration was cancelled')
+        }
+        throw error
+      }
+    }
+    const tracked: Promise<ReconfigureOutcome> = run().finally(() => {
+      if (this.reconfiguring === tracked) {
+        this.reconfiguring = undefined
+        this.reconfigureAbort = undefined
+      }
+    })
+    this.reconfiguring = tracked
+    this.reconfigureAbort = controller
+    return tracked
+  }
+
+  private async runReconfigure(signal: AbortSignal): Promise<ReconfigureOutcome> {
+    const { sessionId, registry, logger } = this.deps
+    const cancelled = (): void => {
+      if (signal.aborted || this.disposed) {
+        throw new AgentCreationError('cancelled', 'Agent reconfiguration was cancelled')
+      }
+    }
+    if (this.creating !== undefined) await this.creating.catch(() => undefined)
+    // 先看是不是被取消了，再去等销毁：取消我们的正是那次销毁（cancelPending 在等我们落定），反过来等它就是死锁
+    cancelled()
+    if (this.destroying !== undefined) await this.destroying.catch(() => undefined)
+    cancelled()
+    const lock = this.record
+    if (lock === undefined) return { applied: false }
+    if (this.deps.toolHost.reconfigureAgentTools === undefined) {
+      throw new AgentCreationError('unsupported', 'This host cannot change a running agent')
+    }
+    const config = await this.deps.resolveAgentConfig(sessionId)
+    cancelled()
+    const resolution = resolveLockModel(
+      this.deps.modelCatalog.registry,
+      this.deps.modelCatalog.port,
+      config.model
+    )
+    if (!resolution.ok) {
+      throw new AgentCreationError('no_model', resolution.message, resolution.kind)
+    }
+    const plan = await this.planReconfigure(lock, config, resolution.model, {
+      connect: true,
+      signal
+    })
+    cancelled()
+    // 锁在计划期间换了（被销毁 / 重建）：这份计划作废，设置留着给下一次创建
+    if (!sameLock(this.record, lock)) return { applied: false }
+
+    const record: LockRecord = plan.record
+    const unchanged =
+      JSON.stringify(lockRecordJson(record)) === JSON.stringify(lockRecordJson(lock)) &&
+      plan.persona === undefined
+    if (unchanged) return { applied: false, record: lock }
+
+    const name = agentExtensionName(lock.conversationId)
+    const previous = registry.snapshot().extension(name)
+    const builtin = new Set(registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION)?.tools ?? [])
+    const next = agentExtension(
+      lock.conversationId,
+      plan.tools.filter((tool) => !builtin.has(tool))
+    )
+    try {
+      // 先装扩展再提交（与创建同一条纪律）：提交一落定，下一次解析就看得到新工具；提交失败就装回原来那份
+      registry.install(next)
+      cancelled()
+      await this.deps.harness.commit(async (tx) => {
+        await configure(tx, lock.conversationId, { model: record.model, tools: plan.tools })
+        if (plan.persona !== undefined) await freezePersona(tx, lock.conversationId, plan.persona)
+        const state = await tx.doc(SessionStateDoc)
+        state.lock = lockRecordJson(record)
+      }, BG)
+    } catch (error) {
+      if (previous !== undefined) registry.install(previous)
+      else registry.uninstall(next)
+      throw error
+    }
+    this.record ??= parseLockRecord(lockRecordJson(record))
+    logger.info(
+      `session ${sessionId}: the agent was reconfigured (model ${record.model.provider}/${record.model.modelId}, ${record.toolNames.length} tools)`
+    )
+    return { applied: true, record: this.record ?? record }
+  }
+
+  /**
+   * 重配的计划（预判与真重配共用）：新名单 → 宿主解析变了的那几样 → 拼出新的工具（锁里已有的沿用此刻装着
+   * 的注册项，新的追加，按最小差异排）、新锁记录，以及人设要不要换（只在技能那几项变了时才算：人设里只有
+   * 作图说明随名单而变）。
+   */
+  private async planReconfigure(
+    lock: LockRecord,
+    config: AgentConfig,
+    model: LockRecord['model'],
+    options: { connect: boolean; signal: AbortSignal }
+  ): Promise<{
+    tools: ToolRegistration[]
+    record: LockRecord
+    resolved: ReconfiguredAgentTools
+    persona: FrozenAgentPrompt | undefined
+    messages: readonly Message[]
+  }> {
+    const { sessionId, registry, toolHost, logger } = this.deps
+    const { profile } = config
+    const names = normalizeToolNames('root', profile.tools, config.toolOverlay)
+    // 上一次（创建 / 重配）要过的名单；锁里没记勾选（旧锁）就按锁里接上了的那些算
+    const before =
+      lock.selection === undefined
+        ? undefined
+        : normalizeToolNames('root', profile.tools, lock.selection)
+    const lockServers = Object.keys(lock.mcp)
+    const desiredServers = prefixed(names, 'mcp:')
+    const removedServers = new Set(lockServers.filter((server) => !desiredServers.includes(server)))
+    // 只接这一次新要的服务器：上一次就要过、没连上的（不在锁里）不跟着别的改动反复重试、反复报错 —— 想重试就
+    // 取消再勾上，或者销毁 agent（与「锁住期间连不上的下次创建再试」同一口径）
+    const requestedBefore = new Set(before === undefined ? lockServers : prefixed(before, 'mcp:'))
+    const servers = desiredServers.filter(
+      (server) => !lockServers.includes(server) && !requestedBefore.has(server)
+    )
+    const resolved = await toolHost.reconfigureAgentTools!(
+      { sessionId, names, servers },
+      { signal: options.signal, connect: options.connect }
+    )
+
+    const snapshot = registry.snapshot()
+    const installed = new Map<string, ToolRegistration>()
+    for (const extension of [
+      snapshot.extension(SHUVIX_BUILTIN_EXTENSION),
+      snapshot.extension(agentExtensionName(lock.conversationId))
+    ]) {
+      for (const tool of extension?.tools ?? []) installed.set(tool.name, tool)
+    }
+    const current = lock.toolNames
+      .map((name) => installed.get(name))
+      .filter((tool): tool is ToolRegistration => tool !== undefined)
+    const skillsChanged = !sameList(resolved.skills, lock.skills)
+    const skill: SkillToolChange<ToolRegistration> = skillsChanged
+      ? { change: 'replace', tool: resolved.skill }
+      : { change: 'keep' }
+    const unordered = composeReconfiguredTools({
+      current,
+      removedServers,
+      skill,
+      addedMcp: resolved.mcp
+    })
+    const conversation = await this.deps.harness.conversation(lock.conversationId, BG)
+    const messages: readonly Message[] =
+      conversation === undefined ? [] : (await conversation.context(BG)).messages
+    const tools = orderForMinimalDiff(getCurrentTools(messages), unordered)
+
+    const mcp: LockRecord['mcp'] = {}
+    for (const [server, declarations] of Object.entries(lock.mcp)) {
+      if (!removedServers.has(server)) mcp[server] = declarations
+    }
+    for (const entry of resolved.mcp) mcp[entry.server] = [...entry.declarations]
+    const record: LockRecord = {
+      ...lock,
+      model: { ...model },
+      toolNames: tools.map((tool) => tool.name),
+      mcp,
+      skills: skillsChanged ? [...resolved.skills] : [...lock.skills],
+      ...(config.toolOverlay === undefined ? {} : { selection: [...new Set(config.toolOverlay)] })
+    }
+
+    // 人设：技能那几项变了才可能变。新旧名单在此刻的变量表下各渲染一遍，不一样才换（日期之类的环境波动
+    // 两边相同，不会因此重发人设）。锁里没记勾选（旧锁）就不动人设
+    let persona: FrozenAgentPrompt | undefined
+    if (before !== undefined) {
+      if (!sameList(prefixed(before, 'skill:'), prefixed(names, 'skill:'))) {
+        const input = {
+          kind: 'root' as const,
+          sessionId,
+          rootSessionId: sessionId,
+          cwd: config.cwd ?? '',
+          profile
+        }
+        const host = { promptVars: this.deps.promptVars, logger }
+        const [old, fresh] = await Promise.all([
+          computeFrozenAgentPrompt(host, { ...input, toolNames: before }),
+          computeFrozenAgentPrompt(host, { ...input, toolNames: names })
+        ])
+        if (old.persona !== fresh.persona) persona = fresh
+      }
+    }
+    return { tools, record, resolved, persona, messages }
+  }
+
   // ─── 销毁 ───────────────────────────────────────
 
   /**
@@ -593,7 +929,7 @@ export class AgentLock {
   }
 
   private async runDestroy(stop: () => Promise<void>): Promise<void> {
-    await this.cancelCreation()
+    await this.cancelPending()
     const lock = this.record
     if (lock === undefined) return
     const { sessionId } = this.deps

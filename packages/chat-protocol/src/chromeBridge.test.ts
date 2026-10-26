@@ -980,6 +980,8 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
       'app.openExternal',
       'events.subscribe',
       'agent.setModel',
+      // 重配的预判（2026-10-26）：侧边栏改不了模型 / 扩展能力，也就用不着问缓存
+      'agent.previewChange',
       'agent.destroy',
       'session.list',
       'session.create',

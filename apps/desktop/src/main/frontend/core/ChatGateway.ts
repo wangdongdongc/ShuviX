@@ -1,5 +1,7 @@
 import type {
+  AgentChangePreview,
   AgentInitResult,
+  AgentPreviewChangeParams,
   AgentRuntimeInfo,
   ThinkingLevel,
   WithdrawQueuedResult
@@ -13,6 +15,9 @@ import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import type { DriveOptions } from '../../services/agentSession'
 import type { AcceptSuggestionResult } from '@shuvix/chat-protocol/suggestions'
 import type { SuggestionRef } from '@shuvix/chat-protocol/types/inputOrigin'
+
+/** 想把锁住的 agent 改成什么样（`agent.previewChange` 去掉会话 id） */
+export type AgentPreviewChange = Omit<AgentPreviewChangeParams, 'sessionId'>
 
 /**
  * 会话级上行操作接口 — 前端 → 后端通信的统一入口
@@ -98,17 +103,19 @@ export interface ChatGateway {
   // ─── 运行时调整 ────────────────────────────────
 
   /**
-   * 切换模型：写会话设置 `settings.model`（recordSessionModel）。**只在会话没有 Agent 运行时的时候接受** ——
-   * 模型与扩展能力一样只在创建 Agent 那一刻读一次；运行时已存在 / 正在创建 / 正在关停时
-   * 什么也不写、返回 false。想换模型先 `destroyAgent`。
+   * 切换模型：写会话设置 `settings.model`；会话有 Agent 运行时就当场重配它（下一次请求起生效，运行中也是）。
+   * 那个 agent 用不了这个模型 → 什么也不写、返回 false。
    */
   setModel(sessionId: string, provider: string, model: string): Promise<boolean>
+
+  /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（不连服务器、什么也不写） */
+  previewAgentChange(sessionId: string, change: AgentPreviewChange): Promise<AgentChangePreview>
 
   /** 设置思考深度（写会话设置 `settings.thinkingLevel`，recordSessionThinkingLevel） */
   setThinkingLevel(sessionId: string, level: ThinkingLevel): Promise<void>
 
-  // 注：没有 setEnabledTools —— 扩展能力勾选是会话设置，只在 Agent 未创建时可改
-  // （sessionService.updateEnabledTools），运行时没有换工具的入口。
+  // 注：没有 setEnabledTools —— 扩展能力勾选是会话设置，写入口是 sessionService.updateEnabledTools
+  // （有 Agent 运行时就当场重配它）。
 
   /**
    * 销毁会话的根 Agent 运行时（会话、历史与内置能力服务器都留着），下一条消息按那时的模型 /

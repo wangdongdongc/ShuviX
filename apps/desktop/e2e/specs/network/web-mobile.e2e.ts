@@ -1049,23 +1049,22 @@ describe('phone layout: the shell', () => {
       await openFromList('MOB-narrow')
       await chat.ready()
 
-      // 空闲（还没有运行时：两个选择器都没上锁）
+      // 空闲（还没有运行时）
       const idle = await until(async () => {
         const s = await layout()
         return s?.modelName && s.send && s.ring ? s : null
       }, 'the idle composer showing the long model')
-      expect(idle.locks).toEqual({ model: false, tools: false })
       expectInside(idle.send, idle.card, 'send (idle)')
       expectTruncated(idle.modelName, 'the model name (idle)')
 
-      // 运行中：等到两个队列出口、停止键都在，且两个选择器都上了锁（最挤的样子）
+      // 运行中：等到两个队列出口、停止键都在（最挤的样子；2026-10-26 起两个选择器不再上锁）
       provider.script({ text: 'MOB-NARROW-REPLY', holdMs: 20_000, usage: USAGE })
       await chat.typeAndSend('narrow ask')
       const running = await until(async () => {
         if (!(await chat.isBusy())) return null
         const s = await layout()
-        return s && s.queue.length === 2 && s.stop && s.locks.model && s.locks.tools ? s : null
-      }, 'the running composer: two queue tiers, stop, both pickers locked')
+        return s && s.queue.length === 2 && s.stop ? s : null
+      }, 'the running composer: two queue tiers, stop')
       const what = JSON.stringify(widthsOf(running))
       // 工具行窄于 26rem：两个出口只剩图标，字还在 aria-label / title 上
       expect(running.toolbarWidth, what).toBeLessThan(26 * 16)
@@ -1095,13 +1094,13 @@ describe('phone layout: the shell', () => {
       expect(running.page.shellScrollWidth).not.toBeNull()
       expect(running.page.shellScrollWidth!).toBeLessThanOrEqual(running.page.shellClientWidth!)
 
-      // 跑完：发送键回来，仍在卡片里（这时两个锁都在，是更挤的空闲态）
+      // 跑完：发送键回来，仍在卡片里（这时用量环已有数字，比开头的空闲态更挤）
       provider.release()
       await chat.waitIdle()
       const after = await until(async () => {
         const s = await layout()
-        return s?.send && s.locks.model && s.locks.tools ? s : null
-      }, 'the idle composer after the run, both pickers locked')
+        return s?.send ? s : null
+      }, 'the idle composer after the run')
       expectInside(after.send, after.card, 'send (after the run)')
       expectInside(after.ring, after.card, 'the context ring (after the run)')
       expect(after.toolPicker!.right).toBeLessThanOrEqual(

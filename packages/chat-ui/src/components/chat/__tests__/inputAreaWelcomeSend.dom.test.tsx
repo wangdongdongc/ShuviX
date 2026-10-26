@@ -21,6 +21,10 @@
  *
  * 外加斜杠命令的依赖项落到它被发往的那条会话（新会话），以及已有会话 / 没选模型 / 新建失败三条边界。
  *
+ * 缓存确认（RU-22 / RU-23，2026-10-26）：输入框挂着一个 CacheBreakConfirmHost —— 有 agent 的会话里在输入卡
+ * 上换模型、缓存保不住时，确认框由它画（portal 到 body）；欢迎页直接发送那一路从不预判（`agent.previewChange`
+ * 也记进 timeline，所以上面每一条时间线同时钉着这一点）。
+ *
  * 后端整个是假的：`window.api` 一个对象同时充当 HostApi 与 SessionChannelApi（@ 引用的数据源直接读
  * `window.api`），所有调用按到达顺序记进同一条 timeline；`session.list` 的回包反映已经写进去的勾选。
  * 包入口 `@shuvix/chat-ui` 顶掉（同 toolPicker.dom.test.tsx），`useChatHost().models` 是固定的替身。
@@ -84,6 +88,8 @@ let rows: Map<string, Session>
 let createImpl: () => Promise<Session>
 /** agent.setModel 的行为（可换成 reject：新会话配到一半失败） */
 let setModelImpl: () => Promise<{ success: boolean }>
+/** agent.previewChange 的回答（缺省：保得住） */
+let previewImpl: () => Promise<unknown>
 /** agent.init 按会话回的能力点与模型元信息（没有的会话回空对象） */
 let initMeta: Map<
   string,
@@ -134,6 +140,7 @@ function buildApi(): Record<string, unknown> {
     },
     agent: {
       setModel: record('agent.setModel', () => setModelImpl()),
+      previewChange: record('agent.previewChange', () => previewImpl()),
       setThinkingLevel: record('agent.setThinkingLevel', async () => ({ success: true })),
       init: record('agent.init', async (params: { sessionId: string }) => ({
         success: true,
@@ -365,6 +372,7 @@ beforeEach(() => {
     return structuredClone(r)
   }
   setModelImpl = async () => ({ success: true })
+  previewImpl = async () => ({ locked: true, cache: 'kept', reasons: [], promptTokens: 0 })
   initMeta = new Map()
   ;(window as unknown as { api: unknown }).api = buildApi()
   useModelCatalogStore.setState({ loaded: true, providers: [PROVIDER], availableModels: [MODEL] })
@@ -715,5 +723,93 @@ describe('斜杠命令的依赖项落到它被发往的会话', () => {
       'agent.prompt'
     ])
     expect(store().welcomeEnabledTools).toEqual([])
+  })
+})
+
+describe('缓存确认框：输入框挂着宿主（RU-22 / RU-23）', () => {
+  const N = 'model-n'
+  const MODEL_N: AvailableModel = { ...MODEL, id: 'row-n', modelId: N }
+  const confirmDialog = (): HTMLElement | null =>
+    document.querySelector<HTMLElement>('[data-cache-break-confirm]')
+
+  /** 一条已有 agent 的会话，输入卡的模型面板里多一个 N */
+  async function mountExisting(): Promise<void> {
+    seedWelcome({ draft: [] })
+    rows.set('existing', row('existing'))
+    useChatStore.setState({ sessions: [row('existing')], sessionAgentCreated: { existing: true } })
+    store().setActiveSessionId('existing')
+    useModelCatalogStore.setState({ availableModels: [MODEL, MODEL_N] })
+    await mount()
+  }
+
+  async function pickN(): Promise<void> {
+    await openModelPanel()
+    const el = document.querySelector<HTMLButtonElement>(`[data-model-item="${P}/${N}"]`)
+    if (!el) throw new Error('model row N not rendered')
+    await act(async () => {
+      el.click()
+    })
+    await flush()
+  }
+
+  it('RU-22 有 agent 的会话里换模型、缓存保不住 → 输入框的宿主在 body 上画一个确认框；确认 → setModel', async () => {
+    previewImpl = async () => ({
+      locked: true,
+      cache: 'lost',
+      reasons: ['model'],
+      promptTokens: 2048
+    })
+    await mountExisting()
+    await pickN()
+
+    expect(callsOf('agent.previewChange')).toEqual([
+      [{ sessionId: 'existing', provider: P, model: N }]
+    ])
+    const el = confirmDialog()
+    expect(el).not.toBeNull()
+    expect(document.querySelectorAll('[data-cache-break-confirm]')).toHaveLength(1)
+    expect(el!.parentElement).toBe(document.body)
+    expect(container.contains(el)).toBe(false)
+    expect(el!.textContent).toContain(i18n.t('cacheBreak.reasonModel'))
+    expect(callsOf('agent.setModel')).toEqual([])
+
+    const confirm = [...el!.querySelectorAll('button')].find(
+      (b) => b.textContent === i18n.t('cacheBreak.confirm')
+    )!
+    await act(async () => {
+      confirm.click()
+    })
+    await flush()
+    expect(confirmDialog()).toBeNull()
+    expect(callsOf('agent.setModel')).toEqual([[{ sessionId: 'existing', provider: P, model: N }]])
+  })
+
+  it('RU-22 问到一半输入框卸掉（最后一个宿主走了）→ 那一问按取消落定：不 setModel', async () => {
+    previewImpl = async () => ({ locked: true, cache: 'lost', reasons: ['model'], promptTokens: 0 })
+    await mountExisting()
+    await pickN()
+    expect(confirmDialog()).not.toBeNull()
+
+    act(() => root.unmount())
+    await flush()
+    expect(confirmDialog()).toBeNull()
+    expect(callsOf('agent.setModel')).toEqual([])
+    // afterEach 还要再卸一次：换一个空的 root 顶上
+    root = createRoot(container)
+  })
+
+  it('RU-23 欢迎页直接发送（草稿 + 斜杠命令的依赖项）从不预判', async () => {
+    seedWelcome({ draft: ['skill:a'], slashCommands: [CMD] })
+    await mount()
+    await act(async () => {
+      store().setInputText('/cmd do it')
+    })
+    await flush()
+    await pressEnter()
+
+    expect(callsOf('agent.prompt')).toHaveLength(1)
+    expect(callsOf('session.updateEnabledTools').length).toBeGreaterThan(0)
+    expect(callsOf('agent.previewChange')).toEqual([])
+    expect(confirmDialog()).toBeNull()
   })
 })

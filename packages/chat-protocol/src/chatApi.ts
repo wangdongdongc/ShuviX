@@ -71,9 +71,8 @@ export interface SessionSettings {
    *
    * 新建会话时定下来：项目会话继承项目保存过的扩展能力（项目没保存过就是空，与无项目的会话
    * 一致）、子会话抄父会话。
-   * **只在创建 Agent 那一刻读一次** —— 运行时存在期间只读（写入口 `session.updateEnabledTools`
-   * 会拒绝），前端据 `agent_created` / `agent_closing` 切换只读态。缺这个键的是改制前的旧会话，
-   * 首次解析时按同一条继承规则补上。
+   * 创建 Agent 时读；运行时存在期间改了（写入口 `session.updateEnabledTools`）当场重配那个 agent。
+   * 缺这个键的是改制前的旧会话，首次解析时按同一条继承规则补上。
    */
   enabledTools?: string[]
   /**
@@ -246,8 +245,8 @@ export interface AgentInitParams {
 export interface AgentInitResult {
   success: boolean
   /**
-   * 此刻有 Agent 运行时（含正在创建 / 正在关停；init 本身不创建）—— 与 `session.updateEnabledTools`
-   * 和 `agent.setModel` 的拒绝条件同一口径，为真时扩展能力勾选与会话模型都只读
+   * 此刻有 Agent 运行时（锁；init 本身不创建）。为真时改模型 / 扩展能力会当场重配那个 agent，改之前界面先
+   * 用 `agent.previewChange` 问一句会不会打穿提示词缓存
    */
   created: boolean
   provider: string
@@ -345,6 +344,31 @@ export interface AgentSetModelParams {
   sessionId: string
   provider: string
   model: string
+}
+
+/** `agent.previewChange` 的参数：想把锁住的 agent 改成什么样（省略的项 = 不变） */
+export interface AgentPreviewChangeParams {
+  sessionId: string
+  /** 扩展能力勾选（整份，与 `session.updateEnabledTools` 同形） */
+  enabledTools?: string[]
+  /** 模型：provider 行 id 与模型 id 一起给 */
+  provider?: string
+  model?: string
+}
+
+/**
+ * 一次改动会不会让提供商的提示词缓存失效（规则见 agent-runtime `durable/reconfigure.ts`）：
+ *  - `kept`：下一次请求还能命中模型上次留下的缓存；
+ *  - `lost`：不能 —— `reasons` 说为什么（换了模型 / 这个模型不支持在对话中途这样改工具 / 系统提示词变了）；
+ *  - `none`：没什么可失去的（没有 agent，或对话里还没有过模型回复）。
+ */
+export interface AgentChangePreview {
+  /** 这条会话此刻有 agent；没有 = 改动在下一次创建时生效 */
+  locked: boolean
+  cache: 'kept' | 'lost' | 'none'
+  reasons: ('model' | 'tools' | 'prompt')[]
+  /** 上一次请求的提示词规模（token，输入 + 缓存读写），失效时要按未缓存重算的大约就是这么多；不知道 = 0 */
+  promptTokens: number
 }
 
 export interface AgentSetThinkingLevelParams {
@@ -755,15 +779,21 @@ export interface HostApi {
   }
   agent: {
     /**
-     * 改会话模型（往会话树追加 model_change entry）。与扩展能力勾选同一条规矩：模型只在创建
-     * Agent 那一刻读一次，**会话已有运行时（含正在创建 / 正在关停）时返回 `success: false`、
-     * 什么也不写**。要换模型先 `destroy` 掉运行时。
+     * 改会话模型（写会话设置）。会话此刻有 Agent 运行时就当场重配它，从下一次请求起用新模型（运行中也是，
+     * 2026-10-26）。锁住的 agent 用不了这个模型（provider 停用 / 模型不在了）→ `success: false`、什么也不写。
+     * 会不会打穿提示词缓存先问 `previewChange`。
      */
     setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
     /**
-     * 销毁会话的根 Agent 运行时 —— 会话、历史与会话级资源都在，下一条消息按那时的模型与扩展
-     * 能力勾选重建（正在跑的 run 会被中止）。等关停落定才返回，前后经 `agent_closing` 广播，
-     * 前端据此解除模型 / 扩展能力的只读态。没有运行时则无操作（同样回 `success: true`）。
+     * 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（不连服务器、什么也不写）—— 界面据此决定改之前要不要
+     * 先问用户。
+     */
+    previewChange: (params: AgentPreviewChangeParams) => Promise<AgentChangePreview>
+    /**
+     * 销毁会话的根 Agent 运行时 —— 会话、历史与会话级资源都在，下一条消息按那时的设置重建（正在跑的 run
+     * 会被中止）。换模型 / 扩展能力用不着它（那些当场重配）；它是「整个重建」的出口：档案 md 改了、MCP 工具
+     * 列表变了、沙箱开关变了。等关停落定才返回，前后经 `agent_closing` 广播。没有运行时则无操作（同样回
+     * `success: true`）。
      */
     destroy: (sessionId: string) => Promise<{ success: boolean }>
     /** 改思考档位：运行时存在期间照样可改（交给 harness），不存在时直接写树 */
@@ -899,9 +929,9 @@ export interface HostApi {
     /** 删一行（只有授予的行） */
     removeAclEntry: (params: SessionAclRemoveParams) => Promise<{ success: boolean }>
     /**
-     * 改扩展能力勾选（`settings.enabledTools`）。只在这条会话**没有** Agent 运行时的时候生效：
-     * 运行时已存在 / 正在创建 / 正在关停都返回 `success: false`、什么也不写 —— 勾选只在
-     * 创建那一刻读一次，运行期改了也不会生效，不如明确拒绝。
+     * 改扩展能力勾选（`settings.enabledTools`，整份替换）。会话此刻有 Agent 运行时就当场重配它 —— 新勾的
+     * MCP 在这里惰性连接，等重配落定才返回；从下一次请求起生效（运行中也是，2026-10-26）。会不会打穿提示词
+     * 缓存先问 `agent.previewChange`。会话不存在 → `success: false`。
      */
     updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
     /**

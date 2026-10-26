@@ -17,7 +17,9 @@ export type {
   AgentWithdrawQueuedParams,
   WithdrawQueuedResult,
   AgentSetModelParams,
-  AgentSetThinkingLevelParams
+  AgentSetThinkingLevelParams,
+  AgentPreviewChangeParams,
+  AgentChangePreview
 } from '@shuvix/chat-protocol/chatApi'
 
 // 思考深度级别（再导出以兼容既有从本模块直接取 ThinkingLevel 的 main/types 消费方）

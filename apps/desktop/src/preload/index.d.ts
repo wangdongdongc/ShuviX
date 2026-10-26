@@ -27,6 +27,8 @@ import type {
   AgentWithdrawQueuedParams,
   WithdrawQueuedResult,
   AgentSetModelParams,
+  AgentPreviewChangeParams,
+  AgentChangePreview,
   AgentSetThinkingLevelParams,
   HttpLog,
   HttpLogListParams,
@@ -398,8 +400,10 @@ declare global {
       abort: (sessionId: string) => Promise<{ success: boolean }>
       /** 继续被中断的工作（等这一轮落定才回；失败 → success:false + error/code） */
       continue: (sessionId: string) => Promise<AgentContinueResult>
-      /** 切换模型（会话已有 Agent 运行时则拒绝，success: false） */
+      /** 切换模型（有 Agent 运行时就当场重配它；那个 agent 用不了这个模型则拒绝，success: false） */
       setModel: (params: AgentSetModelParams) => Promise<{ success: boolean }>
+      /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（只读） */
+      previewChange: (params: AgentPreviewChangeParams) => Promise<AgentChangePreview>
       /** 销毁会话的根 Agent 运行时（会话与历史都在，下一条消息重建） */
       destroy: (sessionId: string) => Promise<{ success: boolean }>
       setThinkingLevel: (params: AgentSetThinkingLevelParams) => Promise<{ success: boolean }>
@@ -474,7 +478,7 @@ declare global {
       create: (params?: SessionCreateParams) => Promise<Session>
       updateTitle: (params: SessionUpdateTitleParams) => Promise<{ success: boolean }>
       updateProject: (params: SessionUpdateProjectParams) => Promise<{ success: boolean }>
-      /** 改扩展能力勾选；会话已有 Agent 运行时则拒绝（success: false） */
+      /** 改扩展能力勾选；有 Agent 运行时就当场重配它（等重配落定才返回） */
       updateEnabledTools: (params: SessionUpdateEnabledToolsParams) => Promise<{ success: boolean }>
       /** 改这条会话启用的知识库（整份替换）；不锁 —— 改完下一次工具调用就生效 */
       updateKnowledgeBases: (

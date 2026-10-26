@@ -217,8 +217,9 @@ export interface ModelCatalog {
 }
 
 /**
- * 创建 agent 那一刻读一次的会话配置（桌面 P1-10：sessions.settings + 会话形态派生的基座档案）。
- * 锁住之后它怎么变都不影响这个 agent —— 要生效就销毁 agent，下一次发送按那时的配置重建。
+ * 会话配置（桌面 P1-10：sessions.settings + 会话形态派生的基座档案）：创建 agent 那一刻读一次；锁住之后
+ * 模型与扩展勾选的改动经重配（`AgentLock.reconfigure`，2026-10-26）作用到那个 agent，其余（档案、工作目录、
+ * 沙箱）照旧要销毁 agent、下一次发送按那时的配置重建。
  */
 export interface AgentConfig {
   /** 会话的基座档案（form-derived：work / chat / notebook / bot / tab …） */
@@ -349,6 +350,33 @@ export interface ResolvedAgentTools extends AgentToolSet {
 }
 
 /**
+ * 重配（锁住的 root agent 换扩展勾选，2026-10-26）时按新名单解析**变了的那几样**：
+ *  - `servers`：要新接上的 MCP 服务器（新名单里有、锁里没有的，名单序）；
+ *  - 技能工具总按 `names` 造一份（交回真上架的 `skills`；货架空了不给 `skill`），用不用由运行时按锁比对决定。
+ * 锁里已有的服务器、派发工具、内置工具不在这里 —— 运行时原样沿用此刻装着的那一份，没变的工具一个字节都不变。
+ */
+export interface AgentToolsReconfigureRequest {
+  sessionId: string
+  /** 归一后的新名单（档案全量 + 会话勾选） */
+  names: readonly string[]
+  servers: readonly string[]
+}
+
+/** 重配时宿主解析出的那几样 */
+export interface ReconfiguredAgentTools {
+  /** 接上了的服务器：声明快照（记进锁）+ 按它建的注册项 */
+  mcp: readonly {
+    readonly server: string
+    readonly declarations: readonly McpToolDeclaration[]
+    readonly tools: readonly ToolRegistration[]
+  }[]
+  /** 预判（`connect: false`）时还没连上、工具还不知道的服务器 */
+  pending?: readonly string[]
+  skill?: ToolRegistration
+  skills: readonly string[]
+}
+
+/**
  * 工具的宿主 seam（桌面 P1-11：agentHost 改写）。
  *
  *  - `buildBuiltinTools`：平台内置工具（会话级 ToolContext，外面包好输出包装）。惰性：创建 agent 时按
@@ -374,4 +402,14 @@ export interface ToolHost {
     record: LockRecord | SpawnedAgentRecord,
     context: AgentToolsRebuildContext
   ): AgentToolSet | Promise<AgentToolSet>
+  /**
+   * 重配（见 `AgentToolsReconfigureRequest`）。`connect: true`（真重配）= 新服务器与创建同一条惰性连接的路
+   * （同一个超时、`mcp_connecting`、连不上落错误提示、不交回它）；`connect: false`（预判）= 不连，此刻已连上的
+   * 交回声明，其余列进 `pending`。`signal` 在重配被取消（销毁 / 回退 / 关停）时触发。没实现 = 这个宿主不支持
+   * 重配（运行时拒绝，锁照旧）。
+   */
+  reconfigureAgentTools?(
+    request: AgentToolsReconfigureRequest,
+    options: { readonly signal: AbortSignal; readonly connect: boolean }
+  ): Promise<ReconfiguredAgentTools>
 }

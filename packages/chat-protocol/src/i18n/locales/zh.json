@@ -259,7 +259,6 @@
     "send": "发送",
     "imageOnly": "(图片)",
     "selectModel": "选择模型",
-    "modelLocked": "智能体已创建，模型只读。要换模型，先在上方的智能体胶囊上移除它",
     "sendFailed": "发送失败：{{error}}",
     "pasteChipLines": "[粘贴文本 #{{seq}} · {{lines}} 行]",
     "pasteChipChars": "[粘贴文本 #{{seq}} · {{chars}} 字符]",
@@ -478,8 +477,7 @@
     "title": "会话配置",
     "sessionTitle": "会话标题",
     "extensionsGroup": "扩展能力",
-    "extensionsDesc": "MCP 与技能在智能体创建时读取（首次发送消息时创建），智能体存在期间只读",
-    "extensionsLocked": "智能体已创建，MCP 与技能只读。要改，先在上方的智能体胶囊上移除它",
+    "extensionsDesc": "MCP 与技能随时可改：智能体已创建时当场生效（会让提示词缓存失效的改动会先问你）",
     "extensionDeclared": "智能体「{{profile}}」默认带着这一项。在这里取消勾选只在这里生效，不改动这个智能体本身。",
     "knowledgeGroup": "知识库",
     "knowledgeDesc": "这条会话还能搜、能写哪几个库（属于项目的会话恒带本项目的库，不用勾）。改完立刻生效，不用新开会话。",
@@ -1273,7 +1271,7 @@
     "browser": "浏览器",
     "agents": "智能体",
     "agentChipTitle": "智能体：{{name}}（{{profile}}）· 点击查看智能体面板",
-    "agentChipDestroy": "移除这个智能体：对话保留，下一条消息按那时选的模型与扩展能力重新创建",
+    "agentChipDestroy": "移除这个智能体：对话保留，下一条消息按那时的设置整个重建（换模型、改扩展能力用不着它）",
     "agentFilterPrefix": "会话：",
     "agentFilterClear": "清除会话筛选",
     "agentFilterEmpty": "正按会话筛选 —— 这个会话没有智能体。",
@@ -1747,5 +1745,14 @@
     "placeholderNote": "模型收到的是这个占位符；工具和文件里用的是真值：",
     "looking": "正在查真值…",
     "unavailableNote": "模型收到的是这个占位符。这台电脑读不出它的真值。"
+  },
+  "cacheBreak": {
+    "title": "这次改动会让提示词缓存失效",
+    "reasonModel": "换了模型，下一次请求用不上之前的提示词缓存。",
+    "reasonTools": "当前模型不支持在对话中途这样改工具而保留缓存。",
+    "reasonPrompt": "系统提示词会随之改变，当前模型不支持在对话中途更新它而保留缓存。",
+    "costTokens": "整段对话（约 {{tokens}} tokens）要按未缓存的价格重新计算一次。",
+    "cost": "整段对话要按未缓存的价格重新计算一次。",
+    "confirm": "仍然更改"
   }
 }

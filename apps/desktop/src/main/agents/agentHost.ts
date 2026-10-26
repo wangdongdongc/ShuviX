@@ -13,6 +13,8 @@
  *    - `rebuildAgentTools`：重开会话时按锁记录 / 派生 agent 记录重建同一组 —— 不读会话配置；MCP 按声明
  *      快照建，缺省不连服务器，只有完整初始化（`connect`，option A：新进程里打开一条有可续工作的锁着的
  *      会话）才与创建同一条路当场连上；`next` 只来自运行时给的重建上下文（宿主从不自己造）。
+ *    - `reconfigureAgentTools`：锁住的 root agent 换勾选时（重配）只解析变了的那几样 —— 新勾的 MCP
+ *      （与创建同一条惰性连接的路；预判时不连）与按新名单造的技能工具；沿用哪些、怎么排由运行时定。
  *  - `desktopPromptHost` —— `PromptHost`：系统提示词四个活段落（指令文件 / 项目提示词 / 知识库 /
  *    bot 人设）的数据源，每次请求准备时现调。
  *  - `desktopPromptVars` —— 人设冻结时的变量表（`{{shuvix:*}}` 占位符的取值）。
@@ -34,6 +36,7 @@ import {
   renderVisualGuide,
   type AgentToolSet,
   type AgentToolsRebuildContext,
+  type AgentToolsReconfigureRequest,
   type AgentToolsRequest,
   type AnyTool,
   type DurableSession,
@@ -43,6 +46,7 @@ import {
   type PromptHost,
   type PromptVars,
   type PromptVarsCtx,
+  type ReconfiguredAgentTools,
   type ResolvedAgentTools,
   type SpawnedAgentRecord,
   type SubAgentModelConfig,
@@ -379,6 +383,49 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
         // 附加工具（派生 agent 的 next 等）：与其余工具同样包装（L1 门照过；details / control 原样
         // 透出）、原样交回；root 的锁拒收
         ...(req.extraTools?.length ? { extraTools: req.extraTools.map(wrap) } : {})
+      }
+    },
+
+    async reconfigureAgentTools(
+      { sessionId, names, servers }: AgentToolsReconfigureRequest,
+      { signal, connect }
+    ): Promise<ReconfiguredAgentTools> {
+      if (signal.aborted) throw signal.reason
+      const ctx = sessionToolContext(deps, sessionId)
+      const wrap = sessionWrapper(deps, sessionId, ctx)
+      // 技能货架按新名单造一份（与创建同一口径：名单 ∩ 启用着的）；货架没变时运行时沿用装着的那一份
+      const skillNames = skillNamesOf(names)
+      const skillTool =
+        skillNames.length > 0
+          ? new SkillTool(skillNames, sessionProject(sessionId)?.path)
+          : undefined
+      const skills = skillTool?.hasSkills ? skillTool.skillNames : []
+      // 新勾的服务器：真重配与创建同一条惰性连接的路；预判不连，只交回此刻已连上的那几台
+      const mcp: ResolvedMcp[] = []
+      const pending: string[] = []
+      if (connect) {
+        const attempts = await Promise.all(
+          servers.map((server) => connectMcpServer(server, ctx, wrap, signal))
+        )
+        mcp.push(...attempts.filter((entry): entry is ResolvedMcp => entry !== undefined))
+      } else {
+        for (const server of servers) {
+          if (mcpService.statusByName(server, sessionId) !== 'connected') {
+            pending.push(server)
+            continue
+          }
+          const declarations: McpToolDeclaration[] = mcpService.declarationsOf(server, sessionId)
+          const tools = mcpService
+            .registrationsFromDeclarations(server, sessionId, declarations, mcpOptions(ctx))
+            .map(wrap)
+          mcp.push({ server, declarations, tools })
+        }
+      }
+      return {
+        mcp,
+        ...(pending.length > 0 ? { pending } : {}),
+        ...(skillTool !== undefined && skills.length > 0 ? { skill: wrap(skillTool) } : {}),
+        skills
       }
     },
 

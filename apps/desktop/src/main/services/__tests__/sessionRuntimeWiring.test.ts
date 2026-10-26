@@ -30,7 +30,9 @@ const holder = vi.hoisted(() => ({
   db: null as unknown,
   sessionsDir: '',
   toolResults: '',
-  notifier: undefined as undefined | ((sessionId: string, text: string) => void)
+  notifier: undefined as undefined | ((sessionId: string, text: string) => void),
+  /** provider 行（setModel 锁着时按它与注册表判「那个 agent 用得了这个模型吗」，D10-49） */
+  providerRows: [] as unknown[]
 }))
 
 const mocks = vi.hoisted(() => ({
@@ -79,6 +81,20 @@ vi.mock('../../utils/paths', () => ({
 vi.mock('../sessionHost', async () =>
   (await import('./support/fakeSessionHost')).sessionHostModuleMock()
 )
+// 模型注册表与 provider 行：setModel 在锁着时用它们判「那个 agent 用得了这个模型吗」（D10-49）—— 一条内置行 b，
+// 注册表里只有 b/2；模块其余导出照旧
+vi.mock('../models', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../models')>()),
+  getModelRegistry: () => ({
+    models: {
+      getModel: (provider: string, id: string) =>
+        provider === 'b' && id === '2' ? { provider, id } : undefined
+    },
+    modelRefOf: (rowId: string, modelId: string) =>
+      rowId === 'b' ? { provider: 'b', id: modelId } : undefined
+  }),
+  providerCredentialPort: { listProviders: () => holder.providerRows }
+}))
 vi.mock('../sessionDayPromptService', () => ({
   recordUserEntry: mocks.recordUserEntry,
   recordSessionCreated: vi.fn()
@@ -217,6 +233,7 @@ beforeEach(() => {
   for (const m of Object.values(mocks)) if (typeof m === 'function') m.mockClear()
   mocks.calls.length = 0
   mocks.getProfile.mockImplementation((name) => profile(name))
+  holder.providerRows = []
   resetFakeHost()
 })
 
@@ -285,15 +302,18 @@ describe('D10-37 hasAgentRuntime 矩阵', () => {
     insert('s1', {
       settings: { enabledTools: [], ...(mirror === undefined ? {} : { agentLocked: mirror }) }
     })
-    if (open) fakeHost.put('s1', locked ? { lock: lockRecord() } : {})
+    const session = open ? fakeHost.put('s1', locked ? { lock: lockRecord() } : {}) : undefined
     const expected = open ? locked : mirror === true
     expect(sessionService.hasAgentRuntime('s1')).toBe(expected)
     expect((await sessionService.initAgent('s1')).created).toBe(expected)
-    expect(sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(!expected)
-    // initAgent 从不 open；没开而镜像说锁着时 peek 一次读真正的锁（option A；这里存储不在，peek 落空，
-    // 退回镜像）
+    // 写入口（2026-10-26 起）任何时刻都接受；开着就交给那条会话重配（锁没锁都调，没锁时运行时自己答没改）
+    expect(await sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(true)
+    expect(settingsOf('s1').enabledTools).toEqual(['skill:a'])
+    expect(session?.callsOf('reconfigureAgent') ?? []).toHaveLength(open ? 1 : 0)
+    // 从不 open；没开而镜像说锁着时 initAgent 与写入口各 peek 一次读真正的锁（option A；这里存储不在，peek
+    // 落空 —— initAgent 退回镜像，写入口没有可重配的 agent）
     expect(fakeHost.callsOf('open')).toEqual([])
-    expect(fakeHost.callsOf('peek')).toEqual(!open && mirror === true ? ['s1'] : [])
+    expect(fakeHost.callsOf('peek')).toEqual(!open && mirror === true ? ['s1', 's1'] : [])
   })
 
   it('D10-37 没有这一行 → false', () => {
@@ -676,25 +696,66 @@ describe('P3-11-05 网关 withdrawQueued', () => {
 })
 
 describe('D10-49 setModel', () => {
-  it('D10-49 锁着（开着）→ false，settings.model 不动，不 open / peek', async () => {
+  const ROW_B = {
+    id: 'b',
+    name: 'b',
+    displayName: '',
+    isBuiltin: true,
+    isEnabled: true,
+    apiKey: '',
+    baseUrl: '',
+    apiProtocol: '',
+    metadata: ''
+  }
+
+  beforeEach(() => {
+    holder.providerRows = [ROW_B]
+  })
+
+  it('D10-49 锁着（开着）、那个 agent 用不了这个模型 → false：settings.model 不动，不重配，不 open / peek', async () => {
     insert('s1', { settings: { enabledTools: [], model: { provider: 'a', modelId: '1' } } })
-    fakeHost.put('s1', { lock: lockRecord() })
-    expect(await chatGateway.setModel('s1', 'b', '2')).toBe(false)
+    const session = fakeHost.put('s1', { lock: lockRecord() })
+    expect(await chatGateway.setModel('s1', 'b', '9')).toBe(false)
     expect(settingsOf('s1').model).toEqual({ provider: 'a', modelId: '1' })
+    expect(session.callsOf('reconfigureAgent')).toEqual([])
     expect(fakeHost.callsOf('peek')).toEqual([])
+    expect(fakeHost.callsOf('open')).toEqual([])
   })
 
-  it('D10-49 没开但镜像为真 → false', async () => {
-    insert('s1', { settings: { enabledTools: [], agentLocked: true } })
-    expect(await chatGateway.setModel('s1', 'b', '2')).toBe(false)
-    expect(settingsOf('s1').model).toBeUndefined()
-    expect(fakeHost.calls).toEqual([])
-  })
-
-  it('D10-49 没锁 → 写 {provider, modelId}，回 true', async () => {
-    insert('s1')
+  it('D10-49 锁着（开着）、用得了 → 写 {provider, modelId}、交给它重配，回 true', async () => {
+    insert('s1', { settings: { enabledTools: [], model: { provider: 'a', modelId: '1' } } })
+    const session = fakeHost.put('s1', { lock: lockRecord() })
     expect(await chatGateway.setModel('s1', 'b', '2')).toBe(true)
     expect(settingsOf('s1').model).toEqual({ provider: 'b', modelId: '2' })
+    expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
+  })
+
+  it('D10-49 没开但镜像为真、存储在 → peek 打开它（只一次），按它的锁判，写下并重配，回 true', async () => {
+    insert('s1', { settings: { enabledTools: [], agentLocked: true } })
+    fakeHost.storages.add('s1')
+    fakeHost.configure = (reopened) => {
+      reopened.lock = lockRecord()
+    }
+    expect(await chatGateway.setModel('s1', 'b', '2')).toBe(true)
+    expect(fakeHost.callsOf('peek')).toEqual(['s1'])
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(settingsOf('s1').model).toEqual({ provider: 'b', modelId: '2' })
+    expect(fakeHost.get('s1')!.callsOf('reconfigureAgent')).toHaveLength(1)
+  })
+
+  it('D10-49 没开但镜像为真、存储不在 → peek 落空：不判，写下，回 true', async () => {
+    insert('s1', { settings: { enabledTools: [], agentLocked: true } })
+    expect(await chatGateway.setModel('s1', 'b', '9')).toBe(true)
+    expect(settingsOf('s1').model).toEqual({ provider: 'b', modelId: '9' })
+    expect(fakeHost.callsOf('open')).toEqual([])
+    expect(fakeHost.get('s1')).toBeUndefined()
+  })
+
+  it('D10-49 没锁 → 写 {provider, modelId}，回 true（用不用得了由下一次创建去判）', async () => {
+    insert('s1')
+    expect(await chatGateway.setModel('s1', 'b', '9')).toBe(true)
+    expect(settingsOf('s1').model).toEqual({ provider: 'b', modelId: '9' })
+    expect(fakeHost.calls).toEqual([])
   })
 })
 

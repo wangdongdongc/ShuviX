@@ -29,6 +29,7 @@ import { addSessionTools } from '../../hooks/useSessionTools'
 import { SlashCommandPopover } from './SlashCommandPopover'
 import { useSlashCommands } from '../../hooks/useSlashCommands'
 import { AtMentionPopover } from './AtMentionPopover'
+import { CacheBreakConfirmHost } from './CacheBreakConfirm'
 import { MentionHighlighter } from './MentionHighlighter'
 import { useAtMentions, type AtSuggestion } from '../../hooks/useAtMentions'
 import { usePasteChips } from '../../hooks/usePasteChips'
@@ -822,6 +823,8 @@ export function InputArea({
       onDragLeave={isLegacy ? undefined : handleDragLeave}
       onDrop={isLegacy ? undefined : handleDrop}
     >
+      {/* 换模型 / 扩展能力会打穿提示词缓存时的确认框（画在 body 上） */}
+      <CacheBreakConfirmHost />
       <div
         ref={wrapRef}
         className={`relative max-w-3xl mx-auto p-2 ${inline ? '' : 'pointer-events-auto'}`}

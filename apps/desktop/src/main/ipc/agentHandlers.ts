@@ -13,7 +13,8 @@ import type {
   AgentFollowUpParams,
   AgentWithdrawQueuedParams,
   AgentSetModelParams,
-  AgentSetThinkingLevelParams
+  AgentSetThinkingLevelParams,
+  AgentPreviewChangeParams
 } from '../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { createLogger } from '../logger'
@@ -103,10 +104,10 @@ export function registerAgentHandlers(): void {
   )
 
   /**
-   * 切换指定 session 的模型。会话已有运行时（含创建中 / 关停中）时拒绝：`success: false`、
-   * 什么也不写，前端据此回拉真实状态。
+   * 切换指定 session 的模型。会话有 Agent 运行时就当场重配它；那个 agent 用不了这个模型时拒绝：
+   * `success: false`、什么也不写，前端据此回拉真实状态。
    *
-   * 两个 set* 必须 await 网关：运行配置的落点是会话树，不等待就返回的话，调用方 `await`
+   * 两个 set* 必须 await 网关：运行配置的落点是会话设置，不等待就返回的话，调用方 `await`
    * 完再读 `agent.init` 可能还是旧值，网关抛的错也会变成主进程里的 unhandled rejection、
    * 前端恒收到 success。
    */
@@ -114,6 +115,11 @@ export function registerAgentHandlers(): void {
     operationContext.run(createClientContext(ctx, params.sessionId), async () => ({
       success: await chatGateway.setModel(params.sessionId, params.provider, params.model)
     }))
+  )
+
+  /** 预判一次模型 / 扩展能力改动会不会让提示词缓存失效（只读：不连服务器、什么也不写） */
+  defineHandler('agent:previewChange', (_ctx, { sessionId, ...change }: AgentPreviewChangeParams) =>
+    chatGateway.previewAgentChange(sessionId, change)
   )
 
   /**

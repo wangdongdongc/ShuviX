@@ -346,7 +346,7 @@ describe('乐观占位：发送那一刻就上屏', () => {
 })
 
 describe('MCP 连接态：这几秒在等什么', () => {
-  it('UIF-E-5 连接行写明 server 名、触发钮转圈；agent_created 之后都收掉并改挂锁', async () => {
+  it('UIF-E-5 连接行写明 server 名、触发钮转圈；agent_created 之后都收掉', async () => {
     const TEXT = 'UIF 连接态一句话'
     const sid = await seedSession('UIF-E5-连接态', [`mcp:${SLOW_A}`])
     provider.reset()
@@ -358,9 +358,8 @@ describe('MCP 连接态：这几秒在等什么', () => {
     // ① 占位卡上那一行念出在等哪台（只比名字，不比整句本地化文案）
     const row = await until(() => chat.mcpConnectingRow(), 'connecting row on the streaming card')
     expect(row).toContain(SLOW_A)
-    // ② 触发钮上同时转着圈；此刻运行时还没出生，所以还没有锁
+    // ② 触发钮上同时转着圈
     expect(await picker.connectingVisible()).toBe(true)
-    expect(await picker.lockIndicatorVisible()).toBe(false)
 
     // ③ 事件成对且有序：连接开始 → 落定 → 运行时出生
     await recorder.waitFor('agent_created', { sessionId: sid })
@@ -369,10 +368,9 @@ describe('MCP 连接态：这几秒在等什么', () => {
       .map((e) => (e.type === 'mcp_connecting' ? `connecting:${e.connecting}` : e.type))
     expect(marks).toEqual(['connecting:true', 'connecting:false', 'agent_created'])
 
-    // ④ 两处都收掉，只读的锁接上来
+    // ④ 两处都收掉（2026-10-26 起选择器不再因运行时上锁，触发钮上也就没有锁可挂）
     await until(async () => (await chat.mcpConnectingRow()) === null, 'connecting row gone')
     expect(await picker.connectingVisible()).toBe(false)
-    await until(() => picker.lockIndicatorVisible(), 'lock on the trigger once the runtime exists')
 
     // 本轮剩下的时间里不再冒出来
     await waitTurnEnd(sid, 0)

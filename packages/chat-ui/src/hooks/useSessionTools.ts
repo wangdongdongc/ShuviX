@@ -3,12 +3,13 @@ import { useCallback } from 'react'
 import type { AgentInitResult } from '@shuvix/chat-protocol/chatApi'
 import { withToolsSelected } from '@shuvix/chat-protocol/toolSelection'
 import { useChatStore } from '../stores/chatStore'
+import { confirmAgentChange } from '../components/chat/CacheBreakConfirm'
 
 /** 空勾选常量，避免选择器每次返回新引用 */
 const EMPTY_TOOLS: string[] = []
 
 /**
- * 把 `agent.init` 的结果同步进 store：此刻有没有运行时（含创建中 / 关停中）+ 扩展能力勾选原值。
+ * 把 `agent.init` 的结果同步进 store：此刻有没有运行时 + 扩展能力勾选原值。
  *
  * 勾选写回会话设置（`sessions[].settings.enabledTools`）—— 输入框的工具选择器与会话设置里的
  * 扩展能力都从那里读，一处改了另一处跟着变。写的是**原值**（含此刻离线的 MCP）：UI 按原值显示、
@@ -26,7 +27,7 @@ export function applySessionToolState(
 
 /**
  * 向后端重拉一次（`agent.init` 只解析、不创建运行时）。给不经当前会话初始化的地方用 ——
- * 会话设置弹窗可能开在一条非当前会话上；写入被拒之后也靠它回到真实状态。
+ * 会话设置弹窗可能开在一条非当前会话上；写入失败之后也靠它回到真实状态。
  */
 export async function refreshSessionTools(sessionId: string): Promise<void> {
   const result = await getSessionChannelApi().agent.init({ sessionId })
@@ -39,12 +40,7 @@ export interface SessionToolsState {
    * chat-protocol toolSelection）；没有会话时是欢迎页的草稿
    */
   enabledTools: string[]
-  /**
-   * 只读：会话此刻有 Agent 运行时（或正在关停）。勾选只在创建运行时那一刻读一次，
-   * 期间改了也不会生效 —— 后端的写入口同样会拒绝。
-   */
-  locked: boolean
-  /** 整份替换勾选；只读 / 渠道端（无 HostApi）时什么也不做。没有会话时写欢迎页的草稿 */
+  /** 整份替换勾选；渠道端（无 HostApi）时什么也不做。没有会话时写欢迎页的草稿 */
   setEnabledTools: (next: string[]) => Promise<void>
 }
 
@@ -61,8 +57,9 @@ function currentTools(sessionId: string | null): string[] {
 /**
  * 整份替换某会话的扩展能力勾选（null = 欢迎页草稿）。
  *
- * 写入先乐观更新 store 再落库；后端拒绝（运行时抢在这次写入之前创建了）就回拉真实状态，
- * 勾选退回原样、UI 随之变成只读。会话已有运行时 / 渠道端（无 HostApi）时什么也不做。
+ * 会话已有 Agent 运行时也能改（2026-10-26）：后端当场重配那个 agent，从下一次请求起生效。有 agent 时改之前
+ * 先问主进程这次会不会打穿提供商的提示词缓存，保不住就问用户（`confirmAgentChange`），不答应就什么都不写。
+ * 写入先乐观更新 store 再落库；后端失败（含 IPC 拒绝）就回拉真实状态。渠道端（无 HostApi）时什么也不做。
  * 没有会话时只改 store 里的草稿：直接发送新建会话时由输入框写进新会话（InputArea 的
  * `createSessionForSend`），之后清空。
  */
@@ -74,9 +71,18 @@ export async function writeSessionTools(sessionId: string | null, next: string[]
     store.setWelcomeEnabledTools(next)
     return
   }
-  if (store.sessionAgentCreated[sessionId] || store.sessionClosing[sessionId]) return
-  store.updateSessionSettings(sessionId, { enabledTools: next })
-  const { success } = await host.session.updateEnabledTools({ id: sessionId, enabledTools: next })
+  // 只在有 agent 时先问（会不会打穿缓存由主进程答）。没有 agent 就不等任何东西、当场发出写入：欢迎页直接发送
+  // 时斜杠命令的依赖项要赶在 prompt 之前到达主进程，新建的 agent 才带着它们
+  if (store.sessionAgentCreated[sessionId]) {
+    if (!(await confirmAgentChange(sessionId, { enabledTools: next }))) return
+  }
+  useChatStore.getState().updateSessionSettings(sessionId, { enabledTools: next })
+  let success = false
+  try {
+    success = (await host.session.updateEnabledTools({ id: sessionId, enabledTools: next })).success
+  } catch {
+    success = false
+  }
   if (!success) await refreshSessionTools(sessionId)
 }
 
@@ -107,14 +113,10 @@ export function useSessionTools(sessionId: string | null): SessionToolsState {
         ? s.sessions.find((x) => x.id === sessionId)?.settings.enabledTools
         : s.welcomeEnabledTools) ?? EMPTY_TOOLS
   )
-  const locked = useChatStore(
-    (s) => !!sessionId && (!!s.sessionAgentCreated[sessionId] || !!s.sessionClosing[sessionId])
-  )
-
   const setEnabledTools = useCallback(
     (next: string[]): Promise<void> => writeSessionTools(sessionId, next),
     [sessionId]
   )
 
-  return { enabledTools, locked, setEnabledTools }
+  return { enabledTools, setEnabledTools }
 }

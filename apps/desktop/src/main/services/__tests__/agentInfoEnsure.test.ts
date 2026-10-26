@@ -10,7 +10,7 @@
  *   25 旧格式会话 · 26 不认识的会话 / 宿主已封存 · 27 没有可用模型（PIN-01）与意外的创建失败
  *   28 ensure 没有发送的副作用（hook 埋点、日历、日期通知、显示侧车、受理回调）；MCP 只在创建里连一次
  *   29 门面 getRuntimeInfo = 锁所在对话的 agentInfo · 30 不带 ensure、锁着但被 LRU 关掉 → peek（PIN-03）
- *   R2 ensure 之后「有运行时 ⇒ 锁住」· R3 读完之后会话仍可回收
+ *   R2 ensure 之后「有运行时 ⇒ 锁住」（预判看得到锁、改勾选照样接受）· R3 读完之后会话仍可回收
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -541,14 +541,20 @@ describe('P3-06 D · facade and gateway against the real host', () => {
 })
 
 describe('P3-06 regressions', () => {
-  it('P3-06-R2 after an ensure the session counts as locked: setModel false, updateEnabledTools refused, initAgent created', async () => {
+  it('P3-06-R2 after an ensure the session counts as locked: hasAgentRuntime and initAgent created, previewChange answers locked, and an extensions write is accepted and stored', async () => {
     insert('s1')
     expect(sessionService.hasAgentRuntime('s1')).toBe(false)
+    expect((await sessionService.previewAgentChange('s1', {})).locked).toBe(false)
     await chatGateway.getAgentInfo('s1', { ensure: true })
     expect(sessionService.hasAgentRuntime('s1')).toBe(true)
-    expect(await chatGateway.setModel('s1', 'faux', 'faux-1')).toBe(false)
-    expect(sessionService.updateEnabledTools('s1', ['mcp:other'])).toBe(false)
     expect((await sessionService.initAgent('s1')).created).toBe(true)
+    // the UI asks before changing a session that has an agent: the preview sees the lock
+    expect((await sessionService.previewAgentChange('s1', {})).locked).toBe(true)
+    // 2026-10-26: a locked session's selection is no longer refused (this ToolHost cannot
+    // reconfigure, which is logged; the settings stand for the next creation)
+    expect(await sessionService.updateEnabledTools('s1', ['mcp:other'])).toBe(true)
+    expect(settingsOf('s1').enabledTools).toEqual(['mcp:other'])
+    expect(sessionService.hasAgentRuntime('s1')).toBe(true)
   })
 
   it('P3-06-R3 after getInfo / ensure returns, an idle session is still evictable (no leftover call, no pin)', async () => {

@@ -1,11 +1,11 @@
 /**
  * sessionService —— 会话启用哪几个知识库（`settings.knowledgeBases`）。
  *
- * 契约与并排的扩展能力勾选（sessionServiceEnabledTools.test.ts）**刻意相反**，所以这份用例
- * 与它共用同一套夹具：只有把两个写入口放在**同一时刻**对照，「不上锁」才说得清楚。
- *   - 扩展能力烤进 pi 的工具表，运行时存在（含创建中 / 关停中）期间 `updateEnabledTools` 一律拒绝；
+ * 契约与并排的扩展能力勾选（sessionServiceEnabledTools.test.ts）共用同一套夹具，在**同一时刻**对照两个写入口：
+ *   - 扩展能力烤进 pi 的工具表：运行时存在期间 `updateEnabledTools` 照样接受（2026-10-26 起），但要把改动交给
+ *     那个 agent **重配**（会话开着 → 交给它；没开但锁镜像说锁着 → peek）；
  *   - 知识库不进工具表 —— `knowledge` 工具每次调用时由宿主按会话现查，所以
- *     `updateKnowledgeBases` 在**任何时刻**都接受、都落库、都广播，改完下一次调用就作数。
+ *     `updateKnowledgeBases` 在**任何时刻**都接受、都落库、都广播，改完下一次调用就作数，**从不重配**。
  *   - `create` **恒不写键**：知识库是一条活的回落链（会话 → 父会话 → 项目 → 缺省），
  *     写键就等于把缺省冻成快照，以后新建的库再也进不来。扩展能力则相反（恒写键），
  *     两者在同一次 create 里互为对照。
@@ -196,38 +196,47 @@ beforeEach(() => {
 // ─── 写入口不上锁 ───────────────────────────────────────────────────────────
 
 describe('SKB-1 写入口不上锁（与扩展能力同一时刻对照）', () => {
-  it('SKB-1 锁着（会话开着 / 没开但锁镜像为真）/ 销毁在途：知识库都写得进去，扩展能力同一时刻一律被拒', async () => {
+  it('SKB-1 锁着（会话开着 / 没开但锁镜像为真）/ 销毁在途：知识库都写得进去且从不重配；扩展能力同一时刻也写得进去，会话开着时交给 agent 重配', async () => {
     seedSession({ id: SID, settings: { enabledTools: [] } })
 
-    /** 在当前这一刻同时打两个写入口：知识库该过，扩展能力该被拒且零写入 */
-    const bothAt = (moment: string, base: string): void => {
+    /** 在当前这一刻同时打两个写入口：都该过；知识库那一笔不碰运行时 */
+    const bothAt = async (moment: string, base: string, tool: string): Promise<void> => {
+      const reconfiguresBefore = fakeHost.get(SID)?.callsOf('reconfigureAgent').length ?? 0
       expect(sessionService.updateKnowledgeBases(SID, [base]), moment).toBe(true)
       expect(sessions.get(SID)!.settings.knowledgeBases, moment).toEqual([base])
-      expect(sessionService.updateEnabledTools(SID, ['skill:a']), moment).toBe(false)
+      expect(
+        fakeHost.get(SID)?.callsOf('reconfigureAgent').length ?? 0,
+        `${moment}: knowledge bases never reconfigure`
+      ).toBe(reconfiguresBefore)
+      expect(await sessionService.updateEnabledTools(SID, [tool]), moment).toBe(true)
+      expect(sessions.get(SID)!.settings.enabledTools, moment).toEqual([tool])
     }
 
-    // ① 没开着，但锁镜像说有 agent（上一次进程里建的）
+    // ① 没开着，但锁镜像说有 agent（上一次进程里建的）；存储不在 → 扩展能力的 peek 落空，没有可重配的
     sessions.get(SID)!.settings.agentLocked = true
-    bothAt('closed-locked', 'm1')
+    await bothAt('closed-locked', 'm1', 'skill:a')
+    expect(fakeHost.callsOf('peek')).toEqual([SID])
 
-    // ② 开着、锁着（锁以运行时为准）
+    // ② 开着、锁着（锁以运行时为准）：扩展能力那一笔交给它重配
     const session = fakeHost.put(SID, { lock: lockRecord() })
     expect((await sessionService.initAgent(SID)).created).toBe(true)
-    bothAt('alive', 'm2')
+    await bothAt('alive', 'm2', 'skill:b')
+    expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
 
     // ③ 销毁在途（锁还在，直到运行时把它清掉）
     const release = gate()
     session.destroyGate = release
     const r = sessionService.invalidateAgent(SID)
-    bothAt('closing', 'm3')
+    await bothAt('closing', 'm3', 'skill:c')
+    expect(session.callsOf('reconfigureAgent')).toHaveLength(2)
     release.release()
     await r
     expect(session.lock).toBeUndefined()
 
-    // 三次都落库、各广播一次；扩展能力那三次一个字都没写
+    // 三个时刻两个写入口都落库、各广播一次
     expect(writesOf(SID, 'knowledgeBases')).toEqual([['m1'], ['m2'], ['m3']])
-    expect(writesOf(SID, 'enabledTools')).toEqual([])
-    expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID], [SID], [SID]])
+    expect(writesOf(SID, 'enabledTools')).toEqual([['skill:a'], ['skill:b'], ['skill:c']])
+    expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledTimes(6)
   })
 })
 
