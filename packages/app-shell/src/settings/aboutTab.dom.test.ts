@@ -10,6 +10,9 @@
  *   AB-4 没有 manual：有下载钮、点它调 onDownload；没有 manual 区块
  *   AB-5 重新渲染成 up-to-date / null → manual 区块消失
  *   AB-6 协议那行的 GitHub 图标钮：点它以仓库地址调 openExternal；不再有「项目」区块
+ *   AB-7 appLog：日志区块写着路径；「查看」调 onView；复制钮复制路径并显示 about.pathCopied 1500ms；给了 onReveal 才有
+ *        「在文件夹中显示」，点它调 onReveal
+ *   AB-8 不给 appLog（扩展）→ 没有日志区块
  *
  * `@shuvix/chat-ui` 的包入口很重（mermaid 等），这里只给它一个 copyToClipboard 替身。
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
@@ -25,7 +28,7 @@ import type { UpdateEvent } from '@shuvix/chat-protocol/chatApi'
 const mocks = vi.hoisted(() => ({ copyToClipboard: vi.fn<(text: string) => void>() }))
 vi.mock('@shuvix/chat-ui', () => ({ copyToClipboard: mocks.copyToClipboard }))
 
-import { AboutTab, type AboutTabUpdateApi } from './AboutTab'
+import { AboutTab, type AboutTabLogApi, type AboutTabUpdateApi } from './AboutTab'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -194,5 +197,59 @@ describe('AboutTab 的手动更新区块', () => {
     })
     expect(openExternal).toHaveBeenCalledWith('https://github.com/wangdongdongc/ShuviX')
     expect(container.textContent).not.toContain('Project')
+  })
+})
+
+describe('AboutTab 的日志区块', () => {
+  const LOG_PATH = '/Users/someone/Library/Logs/ShuviX/main.log'
+
+  async function renderLog(appLog?: AboutTabLogApi): Promise<void> {
+    await act(async () => {
+      root.render(createElement(AboutTab, { appVersion: '0.2.30', openExternal: vi.fn(), appLog }))
+    })
+  }
+
+  it('AB-7 路径 + 查看 + 复制路径 + 在文件夹中显示', async () => {
+    vi.useFakeTimers()
+    const onView = vi.fn<() => void>()
+    const onReveal = vi.fn<() => void>()
+    await renderLog({ path: LOG_PATH, onView, onReveal })
+    expect(container.textContent).toContain(i18n.t('about.logGroup'))
+    expect(container.querySelector('[data-about-log-path]')?.textContent).toBe(LOG_PATH)
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-about-log-view]')!.click()
+    })
+    expect(onView).toHaveBeenCalledTimes(1)
+
+    const copy = container.querySelector<HTMLButtonElement>('[data-about-log-copy]')!
+    expect(copy.textContent?.trim()).toBe(i18n.t('about.copyPath'))
+    await act(async () => {
+      copy.click()
+    })
+    expect(mocks.copyToClipboard).toHaveBeenCalledExactlyOnceWith(LOG_PATH)
+    expect(copy.textContent?.trim()).toBe(i18n.t('about.pathCopied'))
+    await act(async () => {
+      vi.advanceTimersByTime(1500)
+    })
+    expect(copy.textContent?.trim()).toBe(i18n.t('about.copyPath'))
+
+    const reveal = container.querySelector<HTMLButtonElement>('[data-about-log-reveal]')!
+    expect(reveal.textContent?.trim()).toBe(i18n.t('about.revealLog'))
+    await act(async () => {
+      reveal.click()
+    })
+    expect(onReveal).toHaveBeenCalledTimes(1)
+
+    // web 客户端不给 onReveal → 没有这个钮，别的照旧
+    await renderLog({ path: LOG_PATH, onView })
+    expect(container.querySelector('[data-about-log-reveal]')).toBeNull()
+    expect(container.querySelector('[data-about-log-copy]')).not.toBeNull()
+  })
+
+  it('AB-8 不给 appLog → 没有日志区块', async () => {
+    await renderLog(undefined)
+    expect(container.querySelector('[data-about-log-path]')).toBeNull()
+    expect(container.textContent).not.toContain(i18n.t('about.logGroup'))
   })
 })

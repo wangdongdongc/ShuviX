@@ -140,8 +140,8 @@ ShuviX 自身を変える、または秘密を返す。各 scope が何を扱い
 
 ### `system`
 
-- group: `classifierLog`, `config`, `httpLog`, `settings`, `update`
-- read: `classifierLog:get`, `classifierLog:list`, `classifierLog:scenes`, `config:buildExportSnapshot`, `config:parseImportPayload`, `config:planImport`, `httpLog:get`, `httpLog:list`, `update:getLastEvent`
+- group: `appLog`, `classifierLog`, `config`, `httpLog`, `settings`, `update`
+- read: `appLog:info`, `appLog:tail`, `classifierLog:get`, `classifierLog:list`, `classifierLog:scenes`, `config:buildExportSnapshot`, `config:parseImportPayload`, `config:planImport`, `httpLog:get`, `httpLog:list`, `update:getLastEvent`
 - write: `classifierLog:clear`, `httpLog:clear`, `update:check`
 - admin: `config:applyImport`, `config:buildExportPayload`, `settings:set`, `update:download`, `update:install`
 - `settings:set` admin: `httpLog.*`, `updates.*`

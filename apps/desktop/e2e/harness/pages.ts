@@ -7747,20 +7747,20 @@ export function statusBannerPane(main: CdpClient): StatusBannerPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 设置窗口「监视器」页（MonitorSettings）—— 运行时观测迁去 RightPanel 之后，这里是两个子页：
-// 「LLM 请求」（HttpLogSettings，缺省）与「分类器」（ClassifierLogSettings）；旧的 `monitor/agents`
-// hash 自然回落到缺省的第一个。
+// 设置窗口「监视器」页（MonitorSettings）—— 运行时观测迁去 RightPanel 之后，这里是三个子页：
+// 「LLM 请求」（HttpLogSettings，缺省）、「分类器」（ClassifierLogSettings）与「应用日志」（AppLogSettings，
+// main.log 的尾部）；旧的 `monitor/agents` hash 自然回落到缺省的第一个。
 //
-// 锚点：当前子页的工具栏 —— `[data-monitor-toolbar]`（请求日志）或 `[data-classifier-log-toolbar]`
-// （分类器日志），二者只在当前子页那一个在 DOM 里。子标签条 = 工具栏最近的子页根（.flex.flex-col
+// 锚点：当前子页的工具栏 —— `[data-monitor-toolbar]`（请求日志）、`[data-classifier-log-toolbar]`
+// （分类器日志）或 `[data-app-log-toolbar]`（应用日志），只有当前子页那一个在 DOM 里。子标签条 = 工具栏最近的子页根（.flex.flex-col
 // .h-full.min-h-0）的祖父（MonitorSettings 根）的第一个子节点（PanelTabBar，按钮是直接子节点）；
 // 激活态认按钮里的选中下划线 `span.bg-accent`，哪个 tab 认按钮里的 lucide 图标类（文案是 i18n 产物，
-// 不认）：lucide-file-text = 请求日志，lucide-scan-search = 分类器。顶层 tab 导航沿用
+// 不认）：lucide-file-text = 请求日志，lucide-scan-search = 分类器，lucide-scroll-text = 应用日志。顶层 tab 导航沿用
 // `[data-settings-nav]` 那列（settingsTabsPane 同一锚点），「智能体」tab 已拆除的判据是导航里不再出现
 // 它的图标（lucide-bot）。
 
 export interface MonitorSettingsPane {
-  /** 监视器子标签条的 tab 按钮数（请求日志 + 分类器 = 2） */
+  /** 监视器子标签条的 tab 按钮数（请求日志 + 分类器 + 应用日志 = 3） */
   subTabCount(): Promise<number>
   /** 子标签条上有一个 tab 呈激活态（选中下划线在） */
   subTabActive(): Promise<boolean>
@@ -7769,7 +7769,11 @@ export interface MonitorSettingsPane {
   /** 子 tab 的图标类（DOM 序）—— 认是哪一页用，不认文案 */
   subTabIcons(): Promise<string[]>
   /** 此刻画着的是哪个子页（按工具栏认） */
-  page(): Promise<'httpLogs' | 'classifierLogs' | null>
+  page(): Promise<'httpLogs' | 'classifierLogs' | 'appLog' | null>
+  /** 应用日志页说明行里的路径（`[data-app-log-path]`；不在这一页 → ''） */
+  appLogPath(): Promise<string>
+  /** 应用日志页此刻显示的条数（`[data-app-log-entry]`） */
+  appLogEntryCount(): Promise<number>
   /** 点第 index 个子 tab（DOM 序） */
   clickSubTab(index: number): Promise<void>
   /** 顶层 tab 导航的图标类（DOM 序）—— 「没有智能体 tab」按没有 lucide-bot 断 */
@@ -7778,12 +7782,12 @@ export interface MonitorSettingsPane {
   hash(): Promise<string>
 }
 
-/** 监视器两个子页的工具栏（只在当前子页那一个在 DOM 里） */
-const MONITOR_PAGE_TOOLBAR = `(document.querySelector('[data-monitor-toolbar]') ?? document.querySelector('[data-classifier-log-toolbar]'))`
+/** 监视器三个子页的工具栏（只在当前子页那一个在 DOM 里） */
+const MONITOR_PAGE_TOOLBAR = `(document.querySelector('[data-monitor-toolbar]') ?? document.querySelector('[data-classifier-log-toolbar]') ?? document.querySelector('[data-app-log-toolbar]'))`
 
 /**
- * 设置窗口监视器页（`openSettings('monitor/...')` 之后调用；自带就绪等待：两个子页的工具栏
- * `[data-monitor-toolbar]` / `[data-classifier-log-toolbar]` 任一上屏）
+ * 设置窗口监视器页（`openSettings('monitor/...')` 之后调用；自带就绪等待：三个子页的工具栏
+ * `[data-monitor-toolbar]` / `[data-classifier-log-toolbar]` / `[data-app-log-toolbar]` 任一上屏）
  */
 export async function monitorSettingsPane(settings: CdpClient): Promise<MonitorSettingsPane> {
   const SUB_BAR = `${MONITOR_PAGE_TOOLBAR}?.closest('.flex.flex-col.h-full.min-h-0')?.parentElement?.parentElement?.firstElementChild`
@@ -7806,11 +7810,18 @@ export async function monitorSettingsPane(settings: CdpClient): Promise<MonitorS
       settings.eval<string[]>(`${SUB_BUTTONS}
         .map((b) => [...(b.querySelector('svg')?.classList ?? [])].find((c) => c.startsWith('lucide-') && c !== 'lucide') ?? '')`),
     page: () =>
-      settings.eval<'httpLogs' | 'classifierLogs' | null>(`(() => {
+      settings.eval<'httpLogs' | 'classifierLogs' | 'appLog' | null>(`(() => {
         if (document.querySelector('[data-monitor-toolbar]')) return 'httpLogs'
         if (document.querySelector('[data-classifier-log-toolbar]')) return 'classifierLogs'
+        if (document.querySelector('[data-app-log-toolbar]')) return 'appLog'
         return null
       })()`),
+    appLogPath: () =>
+      settings.eval<string>(
+        `(document.querySelector('[data-app-log-path]')?.textContent ?? '').trim()`
+      ),
+    appLogEntryCount: () =>
+      settings.eval<number>(`document.querySelectorAll('[data-app-log-entry]').length`),
     clickSubTab: async (index) => {
       const ok = await settings.eval<boolean>(`(() => {
         const btn = ${SUB_BUTTONS}[${index}]

@@ -7,7 +7,7 @@
  *
  * 实例复用（减少启动开销，故几组用例收在同一文件）：
  *   - 组一（AM-1/2/10/8/9/9b）：无 provider 的全新实例 —— 空态、tab 存在性、未发消息的
- *     新会话横幅缺席、设置页形态（两个子页）与旧 hash 回落；
+ *     新会话横幅缺席、设置页形态（三个子页）与旧 hash 回落、应用日志子页读到本实例的 main.log；
  *   - 组二（AM-3~7、AM-11~23）：fakeProvider 实例 —— 根 agent 上屏、相位灯、血缘缩进、
  *     删会话连同派生行一起消失、详情手风琴，横幅标记的出现/相位/点击三联动/筛选 chip，缓存命中率的
  *     三态（尚无用量 / 未上报 / 百分数）、按 token 加权的累计、中止不计入而零内容空回复计入（它也是花费，
@@ -233,12 +233,16 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
     )
   }
 
-  it('AM-8 设置窗口监视器页恰两个子页（LLM 请求 / 分类器），monitor/httpLogs 停在第一个；顶层导航无「智能体」项（旧 tab 的 lucide-bot 图标不再出现）', async () => {
+  it('AM-8 设置窗口监视器页恰三个子页（LLM 请求 / 分类器 / 应用日志），monitor/httpLogs 停在第一个；顶层导航无「智能体」项（旧 tab 的 lucide-bot 图标不再出现）', async () => {
     settings = await app.openSettings('monitor/httpLogs')
     // 构造器自带工具栏就绪等待
     const ms = await monitorSettingsPane(settings)
-    expect(await ms.subTabCount()).toBe(2)
-    expect(await ms.subTabIcons()).toEqual(['lucide-file-text', 'lucide-scan-search'])
+    expect(await ms.subTabCount()).toBe(3)
+    expect(await ms.subTabIcons()).toEqual([
+      'lucide-file-text',
+      'lucide-scan-search',
+      'lucide-scroll-text'
+    ])
     expect(await ms.activeSubTab()).toBe(0)
     expect(await ms.page()).toBe('httpLogs')
     expect(await ms.navIcons()).not.toContain('lucide-bot')
@@ -248,7 +252,7 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
     await closeSettings()
     settings = await app.openSettings('monitor/agents')
     const ms = await monitorSettingsPane(settings)
-    expect(await ms.subTabCount()).toBe(2)
+    expect(await ms.subTabCount()).toBe(3)
     expect(await ms.subTabActive()).toBe(true)
     expect(await ms.activeSubTab()).toBe(0)
     expect(await ms.page()).toBe('httpLogs')
@@ -260,7 +264,7 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
     await closeSettings()
     settings = await app.openSettings('monitor/classifierLogs')
     const ms = await monitorSettingsPane(settings)
-    expect(await ms.subTabCount()).toBe(2)
+    expect(await ms.subTabCount()).toBe(3)
     expect(await ms.activeSubTab()).toBe(1)
     expect(await ms.page()).toBe('classifierLogs')
 
@@ -270,6 +274,41 @@ describe('空实例：空态、tab 位置与设置页回落', () => {
       'back on the LLM request page'
     )
     expect(await ms.activeSubTab()).toBe(0)
+  })
+
+  it('AM-9c monitor/appLog 停在第三个子 tab：说明行是本实例 main.log 的路径，条目来自那份文件；关于页写着同一路径，「查看」回到这一页', async () => {
+    await closeSettings()
+    settings = await app.openSettings('monitor/appLog')
+    const ms = await monitorSettingsPane(settings)
+    expect(await ms.activeSubTab()).toBe(2)
+    expect(await ms.page()).toBe('appLog')
+    const path = await until(async () => (await ms.appLogPath()) || null, 'app log path')
+    expect(path.endsWith('main.log')).toBe(true)
+    // 启动时主进程已经写过日志（Perf 里程碑等）：页面读到的是这份文件
+    expect(
+      await until(async () => (await ms.appLogEntryCount()) || null, 'app log entries')
+    ).toBeGreaterThan(0)
+    const lastText = await settings.eval<string>(
+      `[...document.querySelectorAll('[data-app-log-entry]')].pop()?.querySelector('[data-app-log-text]')?.textContent ?? ''`
+    )
+    expect(lastText).not.toBe('')
+    expect(app.mainLog()).toContain(lastText)
+
+    await closeSettings()
+    const about = await app.openSettings('about')
+    settings = about
+    const aboutPath = await until(
+      () =>
+        about.eval<string | null>(
+          `document.querySelector('[data-about-log-path]')?.textContent ?? null`
+        ),
+      'about log path'
+    )
+    expect(aboutPath).toBe(path)
+    await about.eval(`document.querySelector('[data-about-log-view]').click()`)
+    const back = await monitorSettingsPane(about)
+    expect(await back.page()).toBe('appLog')
+    expect(await back.activeSubTab()).toBe(2)
   })
 })
 

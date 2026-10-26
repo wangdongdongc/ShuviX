@@ -147,6 +147,10 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'classifierLog:scenes': 'read',
   'classifierLog:clear': 'write',
 
+  // ─── appLog：应用日志（main.log 的路径与尾部；与请求日志一样只读） ───
+  'appLog:info': 'read',
+  'appLog:tail': 'read',
+
   // ─── runtime：会话的运行时资源（数据库连接、ssh） ───
   'runtime:statuses': 'read',
   'runtime:destroy': 'write',
@@ -446,7 +450,7 @@ export function channelAccessOf(channel: string): ChannelAccess {
  *  - `security`：安全策略、hooks（自动审查是一个 hook）、会话权限表、命令沙箱、命令分类器、远程访问本身；
  *  - `preferences`：外观、语言、字号、缩放、通知开关、语音与 TTS；
  *  - `telegram`：Telegram Bot；
- *  - `system`：应用更新、配置导入导出、监视器日志（LLM 请求日志、分类器日志）。
+ *  - `system`：应用更新、配置导入导出、监视器日志（LLM 请求日志、分类器日志、应用日志）。
  */
 export const CHANNEL_SCOPES = [
   'app',
@@ -521,7 +525,8 @@ export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
   update: 'system',
   config: 'system',
   httpLog: 'system',
-  classifierLog: 'system'
+  classifierLog: 'system',
+  appLog: 'system'
 }
 
 /** 不随分组走的通道 */

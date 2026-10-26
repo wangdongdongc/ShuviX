@@ -18,7 +18,7 @@ export type { SettingsTab, SettingsContainerProps } from './settings/SettingsCon
 export { AppearanceTab, DARK_THEMES, LIGHT_THEMES } from './settings/AppearanceTab'
 export type { AppearanceTabProps, ThemeMode } from './settings/AppearanceTab'
 export { AboutTab } from './settings/AboutTab'
-export type { AboutTabProps, AboutTabUpdateApi } from './settings/AboutTab'
+export type { AboutTabLogApi, AboutTabProps, AboutTabUpdateApi } from './settings/AboutTab'
 export { ProviderTab } from './settings/ProviderTab'
 export type { ProviderTabProps, ProviderTabApi } from './settings/ProviderTab'
 export { ModelDefaultsSettings } from './settings/ModelDefaultsSettings'

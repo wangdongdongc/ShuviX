@@ -986,6 +986,25 @@
     "chromeExtHostInstalled": "Registered with",
     "chromeExtHostNoBrowser": "No Chromium browser found on this computer",
     "monitorSubTabClassifier": "Classifier",
+    "monitorSubTabAppLog": "App log",
+    "appLog": {
+      "hint": "What ShuviX records while it runs: what went wrong and what it did. This shows the end of the file; while following, new lines are read every 2 seconds.",
+      "empty": "The log has no entries yet.",
+      "missing": "The log file doesn't exist yet.",
+      "noMatch": "No entries match the filter.",
+      "levelAll": "All",
+      "levelWarn": "Warnings and up",
+      "levelError": "Errors",
+      "search": "Search the log",
+      "follow": "Follow new entries",
+      "copyShown": "Copy shown entries",
+      "reveal": "Show in folder",
+      "copyPath": "Copy path",
+      "truncated": "Only the last {{size}} of the file was read; earlier entries are in the file.",
+      "limit": "Showing the latest {{count}} entries.",
+      "moreLines": "{{count}} more lines",
+      "readFailed": "Couldn't read the log: {{message}}"
+    },
     "classifierLog": {
       "hint": "Every call to a classifier model is listed here: what it was asked, what was sent, its answer, how long it took. The newest {{max}} are kept.",
       "empty": "No classifications yet. Pick a classifier model in Settings → General and commands get classified before they run.",
@@ -1097,7 +1116,14 @@
     "updateManual": "Update it on the computer running ShuviX by running this there (the service keeps its port and network settings):",
     "updateManualNoCommand": "Install the new version on the computer running ShuviX, then restart ShuviX.",
     "copyCommand": "Copy",
-    "commandCopied": "Copied"
+    "commandCopied": "Copied",
+    "logGroup": "Logs",
+    "appLog": "App log",
+    "appLogDesc": "What ShuviX records while it runs, for tracking down problems",
+    "viewLog": "View",
+    "revealLog": "Show in folder",
+    "copyPath": "Copy path",
+    "pathCopied": "Copied"
   },
   "agent": {
     "defaultTitle": "New Chat",
@@ -1237,7 +1263,9 @@
     "file": "File",
     "edit": "Edit",
     "window": "Window",
-    "dev": "Dev"
+    "dev": "Dev",
+    "help": "Help",
+    "showLogFile": "Show Log File"
   },
   "panel": {
     "browser": "Browser",

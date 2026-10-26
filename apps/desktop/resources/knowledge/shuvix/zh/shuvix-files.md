@@ -45,6 +45,8 @@ skill 目录）、`widgets/`、`tts/`、`cli-token`。旧的 `memory/`、`wikis/
 
 `artifacts/<会话 id>/` 是那场会话的**产物**：`artifact` 工具建下、之后用 `edit` 反复改的文件（图、草稿、表格），会话删除时一起删。目录是一个 git 仓库，ShuviX 自己维护：一次工具调用改了它，就提交一版（标题是工具名与改了的文件），改坏了可以从历史里找回。会话面板的「产物」页列出这场会话与它直接子会话的全部产物，带着各自记下的版本数。对话里引用一件产物的地方（```artifact 围栏），显示的是那条回复写下时的那一版：回复写完、它的工具开始执行之前，ShuviX 把它引用的每件产物当时的内容存进这个仓库、记在会话里；之后又改过，那里会标「已有新版」。
 
+**应用日志**不在 `~/.shuvix/`：ShuviX 自己的运行记录（主进程日志）写在 macOS 的 `~/Library/Logs/ShuviX/main.log`、Windows 的 `%APPDATA%\ShuviX\logs\main.log`、Linux 的 `~/.config/ShuviX/logs/main.log`；满 5 MB 时改名为同目录的 `main.old.log`、另起一份。每行是 `[时间] [级别] (模块) 消息`，堆栈接在下面几行。用户在「设置 → 监视器 → 应用日志」里看最近的部分，在「设置 → 关于」复制路径或在文件夹中显示。排查 ShuviX 自身的问题时读它的末尾。
+
 **内置的东西在应用里，不在磁盘上。** ShuviX 自带内置 agent（`work`、`chat`、`notebook`、`bot`、`tab`、
 `coding`、`explore`、`titler`、`knowledge-writer`、`permission-reviewer`）、内置安全策略、
 两个内置 hook（`auto-title`、`auto-review`）与内置 skill `builtin:drawing`。bot 不在应用里：随应用提供的日报 bot 第一次启动时写进 `~/.shuvix/bots/daily.md`，之后就是普通 bot 文件（见 `bot-md`）。

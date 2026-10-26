@@ -138,7 +138,7 @@ appearance, the default model, the command classifier and network access at once
 | `security` | security policies, hooks (auto-review is a hook), the session permission table, the command sandbox, the command classifier, remote access itself | sidebar policies / Hooks, Settings → General → Network access, LLM tools → bash |
 | `preferences` | appearance, language, font size, zoom, the notification switch, voice and TTS | Settings → General (appearance), Voice |
 | `telegram` | registering, changing and deleting Telegram bots | Settings → Telegram Bot |
-| `system` | app updates, config import / export, the monitor logs (LLM requests, the classifier) | Settings → About, Monitor |
+| `system` | app updates, config import / export, the monitor logs (LLM requests, the classifier, the app log) | Settings → About, Monitor |
 
 The `network-channels` entry lists, scope by scope, every channel, HTTP route and setting.
 

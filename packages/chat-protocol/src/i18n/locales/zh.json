@@ -986,6 +986,25 @@
     "chromeExtHostInstalled": "已登记到",
     "chromeExtHostNoBrowser": "这台电脑上没找到 Chromium 系浏览器",
     "monitorSubTabClassifier": "分类器",
+    "monitorSubTabAppLog": "应用日志",
+    "appLog": {
+      "hint": "ShuviX 运行时的记录：出了什么错、做了什么。这里显示文件的最后一部分；跟随时每 2 秒读一次新增的行。",
+      "empty": "日志里还没有内容。",
+      "missing": "日志文件还不存在。",
+      "noMatch": "没有符合筛选条件的记录。",
+      "levelAll": "全部",
+      "levelWarn": "警告及以上",
+      "levelError": "错误",
+      "search": "搜索日志",
+      "follow": "跟随新日志",
+      "copyShown": "复制显示的记录",
+      "reveal": "在文件夹中显示",
+      "copyPath": "复制路径",
+      "truncated": "只读了文件的最后 {{size}}，更早的内容在文件里。",
+      "limit": "只显示最近的 {{count}} 条。",
+      "moreLines": "另 {{count}} 行",
+      "readFailed": "读不到日志：{{message}}"
+    },
     "classifierLog": {
       "hint": "每次调用分类模型都在这里记一行：问了什么、发了什么、怎么回答、用了多久。最多保留最新的 {{max}} 条。",
       "empty": "还没有分类记录。在「设置 → 通用」里选一个分类模型后，执行命令前会先做分类。",
@@ -1097,7 +1116,14 @@
     "updateManual": "请在运行 ShuviX 的那台电脑上执行下面的命令来更新（服务原有的端口和局域网设置保持不变）：",
     "updateManualNoCommand": "请在运行 ShuviX 的那台电脑上安装新版本，然后重启 ShuviX。",
     "copyCommand": "复制",
-    "commandCopied": "已复制"
+    "commandCopied": "已复制",
+    "logGroup": "日志",
+    "appLog": "应用日志",
+    "appLogDesc": "ShuviX 运行时的记录，出了问题时用来排查",
+    "viewLog": "查看",
+    "revealLog": "在文件夹中显示",
+    "copyPath": "复制路径",
+    "pathCopied": "已复制"
   },
   "agent": {
     "defaultTitle": "新对话",
@@ -1237,7 +1263,9 @@
     "file": "文件",
     "edit": "编辑",
     "window": "窗口",
-    "dev": "开发"
+    "dev": "开发",
+    "help": "帮助",
+    "showLogFile": "显示日志文件"
   },
   "panel": {
     "browser": "浏览器",

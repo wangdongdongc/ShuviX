@@ -170,7 +170,12 @@ export function SettingsPanel({
       icon: <Info size={14} />,
       content: (
         <Scroll>
-          <AboutSettings />
+          <AboutSettings
+            onViewLog={() => {
+              setMonitorSubTab('appLog')
+              setActiveSettingsTab('monitor')
+            }}
+          />
         </Scroll>
       )
     }

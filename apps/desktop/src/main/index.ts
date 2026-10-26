@@ -1,6 +1,15 @@
 // 启动诊断（Perf 时间线 + 主线程卡顿看门狗）必须是第一条 import：它在一切应用模块之前求值
 import './utils/stallWatchdog/boot'
-import { app, session, BrowserWindow, Menu, nativeImage, nativeTheme, screen } from 'electron'
+import {
+  app,
+  session,
+  BrowserWindow,
+  Menu,
+  nativeImage,
+  nativeTheme,
+  screen,
+  shell
+} from 'electron'
 import { join } from 'path'
 import { homedir, userInfo } from 'os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -35,6 +44,7 @@ import { initMarkdownWindowService, openMarkdownFile } from './services/markdown
 import { initPreviewWindowService } from './services/previewWindowService'
 import { markdownFilesFromArgv } from './utils/markdownFiles'
 import { loadRendererPage } from './utils/rendererPage'
+import { appLogPath } from './services/appLogService'
 import {
   initWidgetWindowService,
   closeAll as closeAllWidgetWindows
@@ -439,7 +449,18 @@ function setupApplicationMenu(): void {
             ]
           }
         ]
-      : [])
+      : []),
+    // 帮助菜单：用户被问「日志在哪」时的去处（设置 → 关于 也有同一个入口）
+    {
+      role: 'help',
+      label: t('menu.help'),
+      submenu: [
+        {
+          label: t('menu.showLogFile'),
+          click: () => shell.showItemInFolder(appLogPath())
+        }
+      ]
+    }
   ]
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))

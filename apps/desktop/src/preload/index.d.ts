@@ -75,6 +75,7 @@ import type {
   TelegramBotUpdateParams,
   TelegramBotInfo
 } from '../main/types'
+import type { AppLogCursor, AppLogTail } from '../shared/appLog'
 import type {
   ConfigSharePayload,
   ExportOptions,
@@ -539,6 +540,11 @@ declare global {
       get: (id: string) => Promise<ClassifierLog | undefined>
       scenes: () => Promise<string[]>
       clear: () => Promise<{ success: boolean }>
+    }
+    /** 应用日志（main.log）：路径；尾部（带上次的游标 = 只要新增的行） */
+    appLog: {
+      info: () => Promise<{ path: string }>
+      tail: (cursor?: AppLogCursor | null) => Promise<AppLogTail>
     }
     runtime: {
       statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>

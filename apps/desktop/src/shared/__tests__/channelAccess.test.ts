@@ -23,6 +23,7 @@
  *   CS-7 触发源与跟踪项（实验，2026-10-24）：trigger:status 是 agents 的 read；tracking:list 是 sessions 的 read，
  *        开笔记本 / 开目录 / 删一项是 write；settings:set 写 triggers.timer.enabled → agents + admin；
  *        触发日志：trigger:logs 是 agents 的 read，trigger:clearLogs 是 agents 的 write
+ *   CS-8 应用日志（2026-10-25）：appLog:info / appLog:tail 是 system 的 read（与 LLM 请求日志同级）
  */
 import { describe, expect, it } from 'vitest'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
@@ -418,5 +419,17 @@ describe('CS-7 触发源与跟踪项（实验）', () => {
       channelCallFactsOf('settings:set', [{ key: 'triggers.timer.enabled', value: 'false' }])
     ).toEqual({ scope: 'agents', access: 'admin' })
     expect(SETTING_KEY_FACTS['triggers.']).toEqual({ scope: 'agents', access: 'admin' })
+  })
+})
+
+describe('CS-8 应用日志', () => {
+  it.each<[string, ChannelAccess, ChannelScope]>([
+    ['appLog:info', 'read', 'system'],
+    ['appLog:tail', 'read', 'system']
+  ])('CS-8 %s → %s / %s', (channel, access, scope) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(channelAccessOf(channel)).toBe(access)
+    expect(channelScopeOf(channel)).toBe(scope)
+    expect(channelCallFactsOf(channel, [])).toEqual({ scope, access })
   })
 })

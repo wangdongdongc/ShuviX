@@ -184,6 +184,11 @@ export const API_TABLE = {
     scenes: invoke('classifierLog:scenes', 0),
     clear: invoke('classifierLog:clear', 0)
   },
+  /** 应用日志（main.log）：路径与尾部 */
+  appLog: {
+    info: invoke('appLog:info', 0),
+    tail: invoke('appLog:tail', 1)
+  },
   /** 运行时资源 */
   runtime: {
     statuses: invoke('runtime:statuses', 1),

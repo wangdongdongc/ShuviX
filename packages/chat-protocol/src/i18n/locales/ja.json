@@ -986,6 +986,25 @@
     "chromeExtHostInstalled": "登録先",
     "chromeExtHostNoBrowser": "このコンピューターに Chromium 系ブラウザーが見つからない",
     "monitorSubTabClassifier": "分類器",
+    "monitorSubTabAppLog": "アプリのログ",
+    "appLog": {
+      "hint": "ShuviX の動作記録（何が失敗したか、何をしたか）。ファイルの末尾を表示し、追従中は 2 秒ごとに新しい行を読み込みます。",
+      "empty": "ログはまだ空です。",
+      "missing": "ログファイルはまだありません。",
+      "noMatch": "条件に合う記録はありません。",
+      "levelAll": "すべて",
+      "levelWarn": "警告以上",
+      "levelError": "エラー",
+      "search": "ログを検索",
+      "follow": "新しい記録に追従",
+      "copyShown": "表示中の記録をコピー",
+      "reveal": "フォルダで表示",
+      "copyPath": "パスをコピー",
+      "truncated": "ファイルの末尾 {{size}} だけを読み込みました。それより前の記録はファイルにあります。",
+      "limit": "最新の {{count}} 件を表示しています。",
+      "moreLines": "ほか {{count}} 行",
+      "readFailed": "ログを読めません：{{message}}"
+    },
     "classifierLog": {
       "hint": "分類モデルの呼び出しはすべてここに記録されます：何を尋ね、何を送り、どう答え、どれだけかかったか。最新の {{max}} 件を保持します。",
       "empty": "まだ分類の記録がありません。「設定 → 一般」で分類モデルを選ぶと、コマンドの実行前に分類されます。",
@@ -1097,7 +1116,14 @@
     "updateManual": "ShuviX を実行しているコンピューターで次のコマンドを実行して更新してください（サービスのポートとネットワーク設定はそのまま残ります）：",
     "updateManualNoCommand": "ShuviX を実行しているコンピューターに新しいバージョンをインストールし、ShuviX を再起動してください。",
     "copyCommand": "コピー",
-    "commandCopied": "コピーしました"
+    "commandCopied": "コピーしました",
+    "logGroup": "ログ",
+    "appLog": "アプリのログ",
+    "appLogDesc": "ShuviX の動作記録。問題を調べるときに使います",
+    "viewLog": "表示",
+    "revealLog": "フォルダで表示",
+    "copyPath": "パスをコピー",
+    "pathCopied": "コピーしました"
   },
   "agent": {
     "defaultTitle": "新規チャット",
@@ -1237,7 +1263,9 @@
     "file": "ファイル",
     "edit": "編集",
     "window": "ウィンドウ",
-    "dev": "開発"
+    "dev": "開発",
+    "help": "ヘルプ",
+    "showLogFile": "ログファイルを表示"
   },
   "panel": {
     "browser": "ブラウザ",
