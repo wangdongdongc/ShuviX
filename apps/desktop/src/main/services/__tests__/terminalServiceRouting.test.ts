@@ -60,8 +60,8 @@ vi.mock('node-pty', () => ({
     }
   })
 }))
-vi.mock('electron-log', () => ({
-  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })
 }))
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), on: vi.fn() },

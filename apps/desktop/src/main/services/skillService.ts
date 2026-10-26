@@ -25,9 +25,11 @@ import { parse as parseYaml } from 'yaml'
 import type { Skill, SkillUpdateParams, SkillDir, SkillGroup } from '../types'
 import type { SlashCommand } from '@shuvix/chat-protocol/types/slashCommand'
 import { builtinSkillCopy } from '@shuvix/chat-protocol/builtinExtensionCopy'
-import log from 'electron-log/main'
 import { getDefaultSkillsDir, getBuiltinSkillsDir, getSharedSkillsDirs } from '../utils/paths'
 import { appEventBus } from '../utils/appEventBus'
+import { createLogger } from '../logger'
+
+const log = createLogger('SkillService')
 
 /** 配置文件结构 */
 interface SkillConfig {

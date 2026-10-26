@@ -4,8 +4,10 @@
  */
 
 import * as pty from 'node-pty'
-import log from 'electron-log'
 import { onClientGone, pushTo, type ClientRef } from '../ipc/registry'
+import { createLogger } from '../logger'
+
+const log = createLogger('Terminal')
 
 interface TerminalInstance {
   pty: pty.IPty
@@ -67,10 +69,10 @@ export function createTerminal(params: {
     pushTo(client, 'terminal:exit', { terminalId, exitCode })
     if (terminals.get(terminalId) === instance) terminals.delete(terminalId)
     instance.stopWatching?.()
-    log.info(`[Terminal] ${terminalId} exited with code ${exitCode}`)
+    log.info(`${terminalId} exited with code ${exitCode}`)
   })
 
-  log.info(`[Terminal] Created ${terminalId} (shell=${shell}, cwd=${cwd})`)
+  log.info(`Created ${terminalId} (shell=${shell}, cwd=${cwd})`)
   return { terminalId }
 }
 
@@ -103,7 +105,7 @@ export function destroyTerminal(terminalId: string): void {
     inst.pty.kill()
     terminals.delete(terminalId)
     inst.stopWatching?.()
-    log.info(`[Terminal] Destroyed ${terminalId}`)
+    log.info(`Destroyed ${terminalId}`)
   }
 }
 
@@ -115,7 +117,7 @@ export function destroyTerminalsByWindow(windowId: number): void {
     if (inst.client.kind === 'window' && inst.client.webContentsId === windowId) {
       inst.pty.kill()
       terminals.delete(id)
-      log.info(`[Terminal] Destroyed ${id} (window closed)`)
+      log.info(`Destroyed ${id} (window closed)`)
     }
   }
 }
