@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Settings2 } from 'lucide-react'
-import { getHostApi, useChatStore, isImeComposing } from '@shuvix/chat-ui'
+import { getHostApi, useChatStore, isImeComposing, RedactedText } from '@shuvix/chat-ui'
 import { useFocusDim } from '../sidebar/useFocusDim'
 
 /**
@@ -103,11 +103,11 @@ export function ChatHeader({
               className={`${noDrag} text-xs font-medium text-text-secondary hover:text-text-primary transition-colors px-2 py-0.5 rounded-md hover:bg-bg-hover/50 truncate min-w-0`}
               title={t('common.clickToEdit')}
             >
-              {sessionTitle}
+              <RedactedText text={sessionTitle ?? ''} />
             </button>
           ) : (
             <span className="text-xs font-medium text-text-secondary px-2 py-0.5 truncate min-w-0">
-              {sessionTitle}
+              <RedactedText text={sessionTitle ?? ''} />
             </span>
           ))}
         {sessionTitle && caps.sessionConfig && (

@@ -55,6 +55,7 @@ import {
   type SessionHostDeps
 } from './seams'
 import { createShuviXSettings } from './settings'
+import { withRedactionEgress } from './redactionModels'
 
 const noopLogger: RuntimeLogger = { info: () => {}, warn: () => {}, error: () => {} }
 
@@ -120,7 +121,9 @@ class SessionHostImpl implements SessionHost {
 
   constructor(private readonly deps: SessionHostDeps) {
     this.logger = deps.logger ?? noopLogger
-    this.promptExtensions = createPromptExtensions(deps.promptHost ?? {})
+    this.promptExtensions = createPromptExtensions(deps.promptHost ?? {}, {
+      placeholders: deps.redaction !== undefined
+    })
     const max = deps.maxIdleOpen ?? DEFAULT_MAX_IDLE_OPEN
     this.maxIdleOpen = Number.isFinite(max) && max >= 0 ? Math.floor(max) : DEFAULT_MAX_IDLE_OPEN
     this.manager = new SessionManager<DurableSessionImpl>({
@@ -277,7 +280,16 @@ class SessionHostImpl implements SessionHost {
         harness = await Harness.open(
           storage,
           {
-            models: this.deps.models,
+            // 自动脱敏的出口：这条会话的每个模型调用按策略改写（会话对象出生之后才有对照表）
+            models:
+              this.deps.redaction !== undefined && this.deps.redactionPolicy !== undefined
+                ? withRedactionEgress(this.deps.models, {
+                    sessionId,
+                    redaction: () => lockedSession?.redaction,
+                    policy: this.deps.redactionPolicy,
+                    logger: this.logger
+                  })
+                : this.deps.models,
             registry,
             settings,
             ...(this.deps.env === undefined ? {} : { env: this.deps.env }),
@@ -333,6 +345,7 @@ class SessionHostImpl implements SessionHost {
             ? {}
             : { maxAgentDepth: this.deps.maxAgentDepth }),
           processRecord: this.processRecordOf(sessionId),
+          ...(this.deps.redaction === undefined ? {} : { redaction: this.deps.redaction }),
           settings
         })
         lockedSession = session

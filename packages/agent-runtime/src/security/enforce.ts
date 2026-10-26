@@ -273,6 +273,7 @@ export async function executeDecision(args: {
         effect: decision.effect,
         matched: decision.matched,
         winning: decision.winning,
+        ...(decision.dispositions ? { dispositions: decision.dispositions } : {}),
         userResponse,
         review: review
           ? {
@@ -292,7 +293,10 @@ export async function executeDecision(args: {
 
   if (decision.effect === 'allow') {
     record()
-    return { status: 'allowed' }
+    // 处置已在门面按执行点能力核过（context.ts withDispositionSupport），这里原样交给执行点去做
+    return decision.dispositions
+      ? { status: 'allowed', dispositions: decision.dispositions }
+      : { status: 'allowed' }
   }
 
   const display = displayName(request, opts)

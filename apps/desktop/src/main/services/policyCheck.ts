@@ -58,7 +58,14 @@ import {
   NETWORK_PREVIEW_PATH,
   NETWORK_WIDGET_PREFIX
 } from '../../shared/networkRoutes'
-import { namesNetwork } from './policyCheckHint'
+import { namesNetwork, namesRedaction } from './policyCheckHint'
+import {
+  REDACTION_CHECK_FLAGS,
+  REDACTION_CHECK_USAGE,
+  RedactionUsageError,
+  runRedactionCheck,
+  type RedactionCheckDeps
+} from './policyCheckRedaction'
 
 type Interfaces = ReturnType<typeof networkInterfaces>
 
@@ -85,6 +92,8 @@ export interface PolicyCheckDeps {
   /** 网络状态里用得到的那几项 */
   status(): Pick<NetworkStatus, 'port' | 'clients' | 'denials'>
   interfaces(): Interfaces
+  /** `--redaction`（自动脱敏）用的模型清单与 agent 主体试算；没接 = 不支持这一种核对 */
+  redaction?: RedactionCheckDeps
 }
 
 export interface PolicyCheckParams {
@@ -110,7 +119,8 @@ export const POLICY_CHECK_FLAGS = [
   'read',
   'write',
   'expect',
-  'scopes'
+  'scopes',
+  ...REDACTION_CHECK_FLAGS
 ] as const
 
 export const POLICY_CHECK_USAGE = [
@@ -133,7 +143,8 @@ export const POLICY_CHECK_USAGE = [
   '  --write <path>    write a file through files:write (absolute path)',
   '  --expect allow|deny   exit 1 when the result differs',
   '  --scopes          a matrix: every scope × the same devices as the table (or the one given with',
-  '                    --from / --device), each cell read / write / admin, every call of the scope checked'
+  '                    --from / --device), each cell read / write / admin, every call of the scope checked',
+  REDACTION_CHECK_USAGE
 ].join('\n')
 
 /** 默认核对表的列：用法 → 代表通道（page 列只走到 /ws 升级） */
@@ -175,7 +186,7 @@ export function runPolicyCheck(
   try {
     return check(params, deps)
   } catch (error) {
-    if (error instanceof UsageError) {
+    if (error instanceof UsageError || error instanceof RedactionUsageError) {
       return { stdout: '', stderr: `${error.message}\n\n${POLICY_CHECK_USAGE}\n`, exitCode: 2 }
     }
     throw error
@@ -187,8 +198,21 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
     return { stdout: `${POLICY_CHECK_USAGE}\n`, stderr: '', exitCode: 0 }
   }
   const flags = readFlags(params.flags)
-  const scopes = flags.has('scopes') ? readScopesRequest(flags) : null
-  const request = scopes ? null : readRequest(flags)
+  const redaction = flags.has('redaction')
+  const mode: readonly string[] = REDACTION_CHECK_FLAGS
+  const misplaced = [...flags.keys()].filter((name) =>
+    redaction ? !mode.includes(name) && name !== 'expect' : mode.includes(name)
+  )
+  if (misplaced.length > 0) {
+    throw new UsageError(
+      redaction
+        ? `--redaction checks model requests; it does not take ${misplaced.map((f) => `--${f}`).join(', ')}.`
+        : `${misplaced.map((f) => `--${f}`).join(', ')} only go with --redaction.`
+    )
+  }
+  if (redaction && !deps.redaction) throw new UsageError('--redaction is not available here.')
+  const scopes = !redaction && flags.has('scopes') ? readScopesRequest(flags) : null
+  const request = redaction || scopes ? null : readRequest(flags)
   const out: string[] = []
   const tilde = (p: string): string =>
     deps.home && (p === deps.home || p.startsWith(`${deps.home}/`))
@@ -241,6 +265,23 @@ function check(params: PolicyCheckParams, deps: PolicyCheckDeps): PolicyCheckRes
   const effective = resolvePolicyFiles(deps.builtinPolicies(), users).filter(
     (entry) => !entry.shadowedBy
   )
+  if (redaction) {
+    const named = effective.filter((entry) => namesRedaction(entry.policy))
+    const label = (entry: (typeof effective)[number]): string => {
+      const off = deps.isDisabled(entry.policy) ? ', turned off' : ''
+      return entry.sourceKind === 'builtin'
+        ? `${entry.policy.name} (built-in${off})`
+        : `${entry.policy.name} (your file ${entry.fileName ?? `${entry.policy.name}.md`}${off})`
+    }
+    out.push(
+      named.length > 0
+        ? `Redaction policies: ${named.map(label).join(', ')}`
+        : 'Redaction policies: none — every model gets the real values.',
+      ''
+    )
+    const result = runRedactionCheck(flags, users, deps.redaction!, out, formatTable)
+    return { stdout: `${result.out.join('\n')}\n`, stderr: '', exitCode: result.exitCode }
+  }
   const network = effective.filter((entry) => namesNetwork(entry.policy))
   const describe = (entry: (typeof effective)[number]): string => {
     const off = deps.isDisabled(entry.policy) ? ', turned off' : ''

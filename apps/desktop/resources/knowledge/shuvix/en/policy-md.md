@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Security policy file (shuvix: policy v1)'
-description: 'The complete specification of a ShuviX security policy — the request document a rule sees (subject / action / tool / object / env / vars), the five condition keys, CEL `match`, effects and their precedence, who answers an ask (the automatic review, then you), `lets`, what makes a file invalid, the three builtin policies, and how to loosen a gate or add one of your own. Remote access (the `network` subject) has its own entry, `network-policy`.'
+description: 'The complete specification of a ShuviX security policy — the request document a rule sees (subject / action / tool / object / env / vars), the five condition keys, CEL `match`, effects and their precedence, who answers an ask (the automatic review, then you), `lets`, dispositions (auto-redaction), what makes a file invalid, the builtin policies, and how to loosen a gate or add one of your own. Remote access (the `network` subject) has its own entry, `network-policy`.'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -93,6 +93,7 @@ mean "no rules". Other unprefixed unknown keys are ignored.
 | `effect`                                                         | **required**: `allow`, `force-allow`, `ask`, `force-ask` or `deny`.                                                                                                                                                                                   |
 | `subject.kind`, `action`, `object.type`, `env.host`, `tool.name` | structured conditions: a string or a list of strings (list = OR, keys = AND); `'*'` = any; an empty list or empty string is invalid. **`subject.kind` is required** on the rule or in the scope — use `'*'` deliberately.                             |
 | `match`                                                          | optional CEL expression over the request document (below), AND-ed with the conditions. A syntax error invalidates the file.                                                                                                                           |
+| `disposition`                                                    | optional, only on `allow` / `force-allow`: something extra the host does when this rule decides the request. Two exist, both for auto-redaction (the `redaction` entry): `detect` on `modelRequest` (the request is redacted) and `redact` on `sensitive` (this piece stays a placeholder). A string or a list. On another effect, or on a rule whose `object.type` cannot take it, the file is invalid. |
 | `prompt`                                                         | optional one-liner. On `ask` it is shown on the ask card; on `deny` it is returned to the agent as the refusal reason; on allow rules it is only shown on the policy's property card. Max 1000 characters. The one key that never invalidates a file. |
 
 Any other key in a rule invalidates the file (the old nested `object:` / `subject:` / `when:`
@@ -113,6 +114,9 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  (nothing matched = allo
 - `force-ask` is an ask that even `force-allow` cannot skip, and that only the user answers — its
   card offers no "allow and remember": "this gate accepts neither an exemption nor the reviewer".
 - `deny` beats everything.
+- A `disposition` counts only on the winning tier: a `force-allow` without one beats an `allow`
+  that has one, so writing that `force-allow` switches the disposition off for what it matches.
+  A check point that cannot carry out a disposition refuses the request instead.
 - At remote access checks (`subject.kind` `network`) nobody can be asked: an `ask` or `force-ask`
   result refuses the request — see the `network-policy` entry.
 
@@ -125,12 +129,16 @@ Every check is a five-part request; `match` sees it as:
 
 ```
 subject  { kind: 'agent' | 'user' | 'network', agentKind: 'root' | 'spawned', profile: <agent name>, sessionId, depth }
-action   'read' | 'write' | 'execute'
-tool     { name: <tool name>, operation: <tool-specific op, '' if none> }
+action   'read' | 'write' | 'execute' | …   (each object type below says which)
+tool     { name: <tool name>, operation: <tool-specific op, '' if none>, restored: [<categories>] }
 object   { type: <object type>, ...attributes }        ← an open attribute document
 env      { host: 'desktop' | 'extension', platform: 'darwin' | 'win32' | 'linux' }
 vars     the host variable table (below), this session's permission table included
 ```
+
+`tool.restored` lists the categories of sensitive content ShuviX put back into this call's
+arguments (auto-redaction: the agent wrote `{{API_KEY_…}}`, the tool gets the real key) — empty
+when nothing was restored; the `redaction` entry has a rule that uses it.
 
 `subject.kind` is `agent` for tool calls, `user` for the UI's own passive checks and `network` for
 requests from a browser using remote access — that is why every builtin rule names its subject
@@ -151,6 +159,8 @@ On the desktop the `agent` subject also carries an open attribute `subject.bot`:
 | `url`         | the built-in `browser` / `chrome` servers: every navigation, and in `chrome` the first use of each site                                                              | `navigate`       | `url`, `scheme`, `host` (lower-cased, no trailing dot), `origin`, `browser` (`app` = the browser panel inside ShuviX, `chrome` = your own Chrome); `file://` is not a url object — it is judged as a read of that path                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `session`     | the `session` tool, every action that addresses a session other than the caller's own sub-sessions (reading it, waiting for it, sending it a message, steering, answering, stopping); its own sub-sessions never come here — gate those on `invocation` | `read` / `write` | `sessionId` (the target session), `title` (its title — written by an LLM, do not judge by it), `ownTurn` (bool — the action only concerns the turn the caller itself started there: collecting its answer, answering its question, steering or stopping it). `read` = read its answers, inspect it, wait for it; `write` = send it a message, steer, answer, stop. `tool.operation` names the action (`prompt-session`, `read-session` …) The host adds two facts: `lastActiveAt` (ISO 8601 UTC — when the target last had a user message, or when it was created if it never had one; to allow by age write `timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('168h')`) and `bot` (the bot the target is bound to, written like `subject.bot`; empty when it is not a bot session) |
 | `invocation`  | **every** tool call, before it runs                                                                                                                                  | `execute`        | none — judge it by `tool.name` / `tool.operation` (e.g. `session` / `create-sub-session`). A rule here must name a tool; an untargeted ask on `invocation` would stop every call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `modelRequest` | every request ShuviX sends to a model for an agent: the conversation's own, spawned and hook agents, the automatic reviewer, titles, compaction summaries | `send` | `provider` (the provider's name as Settings shows it — a builtin provider by its slug such as `anthropic` or `openai`, a provider you added by the name you gave it), `model` (the model id). An `allow` with `disposition: detect` redacts the request, an `allow` without it sends the real values, a `deny` — or an `ask`, since nobody can be asked here — does not send it at all |
+| `sensitive`   | each piece of sensitive content in a request being redacted (only when the `modelRequest` rule carried `detect`) | `disclose` | `category` (`API_KEY`, `TOKEN`, `PASSWORD`, `SECRET`, `PRIVATE_KEY`, `EMAIL`, `PHONE`, … — the `redaction` entry lists all of them), `rule` (the detection rule that found it), `provider`, `model` (as on `modelRequest`), `value` (the real value — for `match` only; never logged). An `allow` with `disposition: redact` keeps the placeholder, an `allow` without it sends the real value, a `deny` stops the whole request |
 | `socket`      | remote access: a connection opens, before HTTP is read                                                                                                               | `connect`        | none — judge it by `subject.address` and the other facts of the `network` subject (the `network-policy` entry)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `request`     | remote access: every HTTP request, the WebSocket upgrade included                                                                                                    | `request`        | `method`, `path` (URL path), `query`, `route` (`page`, `asset`, `media`, `preview`, `download`, `lib`, `widget`, `socket`), `scope`, `access` — see Scope and access in the `network-policy` entry                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `channel`     | remote access: every call over the WebSocket                                                                                                                         | `invoke`         | `channel`, `group`, `scope` (which part, one of 15), `kind`, `access` (`read` / `write` / `admin`), `size`, `args` — the `network-channels` entry lists the channels scope by scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -159,6 +169,9 @@ On the desktop the `agent` subject also carries an open attribute `subject.bot`:
 `command`) is an error, and an error **fail-safes by effect** — a `deny` / `ask` rule counts as
 matched (with a warning), an allow rule as not matched. Always guard with the type:
 `object.type == 'path' && inDir(object.path, …)`, or declare `object.type` as a condition.
+Model requests (`modelRequest`, `sensitive`) are judged only by rules that name them: `object.type`
+lists the type, or `action` lists `send` / `disclose`. Any other rule, however broad, never applies
+there — an "ask me about everything" rule written for tools does not stop a bot's model requests.
 
 ### Functions available in `match`
 
@@ -223,11 +236,12 @@ reads `object.*` without declaring `object.type` is accepted with a warning.
 
 ## Builtin policies
 
-Five ship with the application (per UI language; **the rules are always taken from the
+Six ship with the application (per UI language; **the rules are always taken from the
 English file**, translations only change the text people read). The three gates for agents ask as
 little as possible, so they are plain `ask` rules; the one for remote access is a `deny`, because
 nobody can be asked there; `daily-bot-access` is no gate but a relaxation — three `force-allow` rules
-for the daily bot that ships with ShuviX. Beyond that, `deny`, `force-ask` and `force-allow` are for
+for the daily bot that ships with ShuviX; `redact-sensitive` is no gate either — two `allow` rules
+whose dispositions turn on auto-redaction. Beyond that, `deny`, `force-ask` and `force-allow` are for
 policies of your own:
 
 | Name                   | Gate                                                                                                                                                                                                                                                                                                                               |
@@ -236,6 +250,7 @@ policies of your own:
 | `ask-on-command`       | ask on every command that is not confined to the sandbox (`object.sandboxed` false: sandbox off or unavailable, full access requested, `ssh`)                                                                                                                                                                                      |
 | `ask-on-session-access` | the `session` tool asks before reading or talking to a session that is not the caller's own sub-session, unless the action only concerns a turn the caller started there (`object.ownTurn`) or the session is in the permission table (`vars.aclSessionRead` / `vars.aclSessionWrite`); "allow and remember" adds it. The automatic review does not answer these — the builtin hook `auto-review` leaves `session` objects to you |
 | `network-admission`    | remote access (`subject.kind` `network`): refuses every HTTP request whose sender is not this computer (`127.0.0.0/8`, `::1`). Replace it with a user policy of the same name to let other devices in — the `network-policy` entry has recipes                                                                                     |
+| `redact-sensitive`     | auto-redaction (the `redaction` entry): every model request from an agent is redacted (`modelRequest`, `disposition: detect`), and every piece of sensitive content in it reaches the model as a placeholder (`sensitive`, `disposition: redact`) — except `USERNAME`, `HOSTNAME`, `IP` and `BUCKET`, which are sent as they are. Disabling it sends the real values to every model; the conversation record keeps the placeholders either way |
 | `daily-bot-access`     | relaxation only: the root agent of the daily bot (`subject.bot == 'bot:builtin:daily'`) reads, without asking, the sessions that had a message in the last 7 days (over `ask-on-session-access`; the window is the `duration('168h')`, change it in an override copy) reads and writes `vars.trackingDir` and reads `vars.dailyDir`, the diary (both over `ask-on-external-path`). A timer wakes it every evening, when nobody is likely to be there to answer. Applies only to that session's root agent, never to its sub-sessions or the agents it dispatches |
 
 The two agent gates draw the same line: what the file tools ask about is exactly what a confined command
@@ -291,6 +306,9 @@ Agents cannot flip it — only you.
   "always ask me when the agent wants to leave the sandbox", or writes under `vars.botsDir` /
   `vars.shuvixConfigDirs` for "an agent changing a bot file or ShuviX's own configuration always
   asks me".
+- **Auto-redaction**: trust a model, send one category as it is, never send another — a policy of
+  your own with `force-allow` or `deny` on `modelRequest` / `sensitive`. The `redaction` entry
+  has the recipes.
 - Keep rules narrow: a deny cannot be waived per call, so a rule that fires on ordinary work is
   worse than one that misses.
 

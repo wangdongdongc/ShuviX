@@ -10,6 +10,7 @@ import {
   markdownRemarkPlugins,
   markdownRehypePlugins
 } from './markdownComponents'
+import { useRestoreForCopy } from '../../hooks/useRedaction'
 
 /**
  * 折叠态的摘要预览：正文首个非空行，去掉行首的 markdown 记号（标题 # / 列表 - * / 引用 > /
@@ -36,8 +37,9 @@ function previewOf(content: string): string {
 export function CompactionNoticeRow({ msg }: { msg: AssistantMessage }): React.JSX.Element {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
+  const restore = useRestoreForCopy()
   const handleCopy = (): void => {
-    copyToClipboard(msg.content)
+    copyToClipboard(restore(msg.content))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

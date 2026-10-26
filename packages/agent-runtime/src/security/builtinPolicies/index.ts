@@ -70,7 +70,8 @@ export const BUILTIN_POLICY_SPECS: readonly BuiltinPolicySpec[] = [
   { name: 'ask-on-command' },
   { name: 'ask-on-session-access' },
   { name: 'network-admission' },
-  { name: 'daily-bot-access' }
+  { name: 'daily-bot-access' },
+  { name: 'redact-sensitive' }
 ]
 
 /** 语言 → 解析产物缓存（键为归一化语言码）。readMd 是进程级稳定接缝（桌面 = 随包目录，

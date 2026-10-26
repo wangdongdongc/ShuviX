@@ -6,6 +6,7 @@ import type {
 } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
+import type { RedactionMarkInfo } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SubmitErrorCode } from '@shuvix/agent-runtime'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -141,6 +142,15 @@ export interface ChatGateway {
 
   /** 销毁指定运行时资源 */
   destroyRuntime(sessionId: string, runtimeId: string): Promise<{ success: boolean }>
+
+  /**
+   * 自动脱敏：这条会话对照表里这些占位符的类别与真值（界面渲染标记）。会话没开着就打开它（存储在才开）；
+   * 不是标准写法的占位符、表里没有的不出现在结果里；有但解不开的只有类别。
+   */
+  resolveRedactions(
+    sessionId: string,
+    placeholders: string[]
+  ): Promise<Record<string, RedactionMarkInfo>>
 
   // ─── 工具发现 ──────────────────────────────────
 

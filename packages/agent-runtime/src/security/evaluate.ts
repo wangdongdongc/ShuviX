@@ -33,6 +33,7 @@ import { buildAllowEntry } from './allowEntries'
 import { withRealPaths } from './celMatch'
 import type {
   AttrValue,
+  Disposition,
   MatchContext,
   PolicyVarValue,
   SecurityDecision,
@@ -127,7 +128,11 @@ export function buildMatchContext(
   return {
     subject,
     action: request.action,
-    tool: { name: request.tool?.name ?? '', operation: request.tool?.operation ?? '' },
+    tool: {
+      name: request.tool?.name ?? '',
+      operation: request.tool?.operation ?? '',
+      restored: request.tool?.restored ?? []
+    },
     object,
     env: { host: request.environment.host, platform: request.environment.platform ?? '' },
     vars
@@ -223,6 +228,40 @@ function collectPrompt(rules: SecurityRule[]): SecurityDecision['prompt'] {
   return texts.length > 0 ? { text: texts.join('\n\n'), rules: ruleIds, policies } : undefined
 }
 
+/**
+ * 胜出 tier 的处置汇总 —— 取**该 tier 内全部命中规则**的处置，按装配序去重。不只取 winning 的理由同
+ * collectPrompt：内置在前、用户在后，只认 winner 的话用户写的处置永远不生效。想去掉一个处置要升一档
+ * （不带处置的 force-allow 压过 allow + redact），或者覆盖那份策略。
+ */
+function collectDispositions(rules: SecurityRule[]): Disposition[] | undefined {
+  const out: Disposition[] = []
+  for (const rule of rules) {
+    for (const disposition of rule.dispositions ?? []) {
+      if (!out.includes(disposition)) out.push(disposition)
+    }
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/**
+ * 只交给点名了它的规则判的对象类型 → 它的动作（自动脱敏的出口，docs/auto-redaction-design.md §13.3）。每个发给模型的请求、
+ * 请求里的每一处敏感内容都判一次，那里没有人可问；一条既没写 `object.type` 也没写 `action` 的 ask / deny（「这个 bot
+ * 什么都要问我」）本意是管工具，让它碰到模型请求，那个 bot 就一个请求也发不出去了。所以这两种对象只认 `object.type`
+ * 列出了它、或 `action` 列出了它的动作的规则；别的规则再宽也碰不到它们，没有规则点名 = 放行（「无策略 = 放行」）。
+ */
+export const OPT_IN_OBJECT_TYPES: Readonly<Record<string, string>> = {
+  modelRequest: 'send',
+  sensitive: 'disclose'
+}
+
+/** 规则（含策略级 scope）有没有明确点名这种对象：`'*'` 不算点名 */
+function namesObject(rule: SecurityRule, type: string, action: string): boolean {
+  return (
+    rule.conditions?.['object.type']?.includes(type) === true ||
+    rule.conditions?.action?.includes(action) === true
+  )
+}
+
 /** 统一评估：输入装配好的规则集与请求五要素，输出三态决策（含命中回链与询问材料） */
 export function evaluate(
   rules: SecurityRule[],
@@ -233,8 +272,12 @@ export function evaluate(
   const ctx = buildMatchContext(request, opts.vars ?? {})
 
   const matchedByTier = new Map<(typeof TIER_ORDER)[number], SecurityRule[]>()
+  const optInAction = Object.hasOwn(OPT_IN_OBJECT_TYPES, request.object.type)
+    ? OPT_IN_OBJECT_TYPES[request.object.type]
+    : undefined
   for (const rule of rules) {
     if (!includeForceAllow && rule.tier === 'force-allow') continue
+    if (optInAction !== undefined && !namesObject(rule, request.object.type, optInAction)) continue
 
     let matched: boolean
     const matches = rule.matches
@@ -267,6 +310,7 @@ export function evaluate(
     if (!bucket?.length) continue
     const winner = bucket[0]
     const effect = TIER_EFFECT[tier]
+    const dispositions = effect === 'allow' ? collectDispositions(bucket) : undefined
     return {
       effect,
       tier,
@@ -275,6 +319,7 @@ export function evaluate(
       reason: effect === 'deny' ? `Denied by security policy rule '${winner.id}'` : undefined,
       // 放行不带话（allow / force-allow 上的 prompt 只在策略页显示，见 types.ts PolicyRuleSpec）
       prompt: effect === 'allow' ? undefined : collectPrompt(bucket),
+      ...(dispositions ? { dispositions } : {}),
       ask: effect === 'ask' ? buildAskMaterials(request, tier) : undefined
     }
   }

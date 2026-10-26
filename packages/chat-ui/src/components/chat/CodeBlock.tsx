@@ -22,6 +22,7 @@ import { InteractiveBlock, InteractiveUnsupportedBlock } from './InteractiveBloc
 import { useMarkdownMessageId, useMarkdownSource, useMarkdownStreaming } from './markdownStreaming'
 import { FigureExportButton } from '../figure/FigureExportPanel'
 import { authoredFigureSource } from '../figure/figureExport'
+import { useRestoreForCopy } from '../../hooks/useRedaction'
 
 /** 手写 SVG 的净化结果缓存（净化是纯函数，同一段源码恒得同一结果）；'' = 判死 */
 const authoredSvgCache = new Map<string, string>()
@@ -83,6 +84,7 @@ export function CodeBlock({
   [key: string]: unknown
 }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  const restore = useRestoreForCopy()
   const streaming = useMarkdownStreaming()
   const source = useMarkdownSource()
   // 可空地读：markdown 也在没有 ChatHostProvider 的地方渲染，那里当作不能跑交互图
@@ -129,7 +131,8 @@ export function CodeBlock({
   }
 
   const handleCopy = (): void => {
-    copyToClipboard(rawCode)
+    // 复制出去的是界面上看到的样子：脱敏的占位符换回真值
+    copyToClipboard(restore(rawCode))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

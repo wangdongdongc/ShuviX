@@ -3,6 +3,7 @@ import { RotateCw } from 'lucide-react'
 import type { UserTextMessage } from '../../stores/chatStore'
 import { SystemNoticeRow } from './SystemNoticeRow'
 import { STREAM_PRE_CLASS } from './detailViewport'
+import { RedactedText } from './RedactedText'
 
 /**
  * 空回复追问行 —— 工具跑完之后模型的回复既没有正文也没有工具调用，系统追加了一条
@@ -19,7 +20,9 @@ export function EmptyReplyNoticeRow({ msg }: { msg: UserTextMessage }): React.JS
       icon={<RotateCw size={12} className="flex-shrink-0 text-accent/70" />}
       label={t('emptyReplyNotice.title')}
     >
-      <pre className={`${STREAM_PRE_CLASS} my-1`}>{msg.content}</pre>
+      <pre className={`${STREAM_PRE_CLASS} my-1`}>
+        <RedactedText text={msg.content} />
+      </pre>
     </SystemNoticeRow>
   )
 }

@@ -11,7 +11,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronLeft, FolderOpen, Layers } from 'lucide-react'
-import { useBgTasks, useChatStore } from '@shuvix/chat-ui'
+import { RedactedText, useBgTasks, useChatStore } from '@shuvix/chat-ui'
 import {
   BgTaskPanel,
   ChatBody,
@@ -58,7 +58,7 @@ export function MobileChatView({ onBack }: { onBack: () => void }): React.JSX.El
         className="flex-1 min-w-0 truncate px-1 text-[15px] font-medium text-text-primary text-center"
         title={t('sessionConfig.title')}
       >
-        {title}
+        <RedactedText text={title} />
       </button>
       <button
         type="button"

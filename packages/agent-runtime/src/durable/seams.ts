@@ -30,6 +30,8 @@ import type { SpawnedAgentRecord } from './agentRecord'
 import type { DrivenSettledEvent, DurableSession } from './durableSession'
 import type { LockRecord } from './lock'
 import type { ShuviXSettingsOverrides } from './settings'
+import type { RedactionPolicy } from './redactionModels'
+import type { RedactionHost } from './sessionRedaction'
 
 /**
  * 一条会话（一个存储）此刻的运行状态（裁决 R2）：
@@ -55,6 +57,16 @@ export const DEFAULT_MAX_IDLE_OPEN = 8
 export const DEFAULT_NOTICE_COALESCE_MS = 500
 
 export interface SessionHostDeps {
+  /**
+   * 自动脱敏的两把钥匙（占位符签名、对照表加密）：给了，每条会话写入对话记录之前把认出的内容换成占位符，
+   * 工具执行前可经 `session.redaction` 换回真值（docs/auto-redaction-design.md）。缺省 = 不脱敏
+   */
+  redaction?: RedactionHost
+  /**
+   * 出口的策略判定（第一层 modelRequest / 第二层 sensitive，见 durable/redactionModels.ts）：和 `redaction` 一起给了，
+   * 每条会话的模型调用经出口装饰器按它改写。没给 = 不改写请求（对话记录里照样是占位符，原样发出）
+   */
+  redactionPolicy?: RedactionPolicy
   /** pi-ai 模型访问（生成用；压缩窗口也按它查锁定模型的 contextWindow） */
   models: Models
   /**

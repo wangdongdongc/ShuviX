@@ -27,6 +27,8 @@ import { markdownComponents, markdownRemarkPlugins, markdownRehypePlugins } from
 import { MarkdownSourceContext, MarkdownStreamingContext } from '@shuvix/chat-ui'
 import { ToolCallBlock } from '@shuvix/chat-ui'
 import { ThinkingBlock } from '@shuvix/chat-ui'
+import { RedactedText, RedactionSessionProvider } from '@shuvix/chat-ui'
+import { trimPartialPlaceholder } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { StepGroupView, groupConsecutiveSteps, buildVisibleItems } from '@shuvix/chat-ui'
 import { segmentContent, parseSlashCommandInput } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
@@ -65,7 +67,13 @@ function PromptCard({
       : null
   const renderSegments = (): React.ReactNode =>
     segments?.map((seg, i) => {
-      if (seg.type === 'text') return <span key={i}>{seg.text}</span>
+      if (seg.type === 'text') {
+        return (
+          <span key={i}>
+            <RedactedText text={seg.text} />
+          </span>
+        )
+      }
       if (seg.type === 'token') return <TokenBadge key={i} segment={seg} />
       return <InvalidTokenBadge key={i} segment={seg} />
     })
@@ -83,7 +91,7 @@ function PromptCard({
         </span>
         {/* 摘要常显（展开时也保留），便于折叠态/展开态都能一眼看到首行 */}
         <span className="flex-1 min-w-0 truncate text-left text-text-tertiary/55 group-hover:text-text-tertiary/80 transition-colors">
-          {segments ? renderSegments() : content.split('\n')[0]}
+          {segments ? renderSegments() : <RedactedText text={content.split('\n')[0] ?? ''} />}
         </span>
         {expanded ? (
           <ChevronDown size={11} className="flex-shrink-0 text-text-tertiary/40" />
@@ -98,7 +106,7 @@ function PromptCard({
           </div>
         ) : (
           <pre className="px-3 py-2 text-[11px] text-text-secondary whitespace-pre-wrap break-words overflow-auto max-h-[40vh] leading-relaxed bg-bg-secondary/30">
-            {content}
+            <RedactedText text={content} />
           </pre>
         ))}
     </div>
@@ -122,7 +130,13 @@ function UserBubble({
     <div className="flex justify-end">
       <div className="max-w-[85%] rounded-lg bg-accent/10 text-text-primary text-xs px-2 py-1 whitespace-pre-wrap break-words">
         {segments.map((seg, idx) => {
-          if (seg.type === 'text') return <span key={idx}>{seg.text}</span>
+          if (seg.type === 'text') {
+            return (
+              <span key={idx}>
+                <RedactedText text={seg.text} />
+              </span>
+            )
+          }
           if (seg.type === 'token') return <TokenBadge key={idx} segment={seg} />
           return <InvalidTokenBadge key={idx} segment={seg} />
         })}
@@ -176,7 +190,11 @@ const SubMessageBubble = memo(function SubMessageBubble({
     return <UserBubble content={msg.content} inlineTokens={tokens} />
   }
   if (msg.type === 'error_event') {
-    return <div className="text-[11px] text-error/90 break-words">{msg.content}</div>
+    return (
+      <div className="text-[11px] text-error/90 break-words">
+        <RedactedText text={msg.content} />
+      </div>
+    )
   }
   return null
 })
@@ -240,134 +258,141 @@ export const SubSessionStream = memo(function SubSessionStream({
   }, [messages.length, sub.streamingContent, sub.streamingThinking, liveRuns.length])
 
   return (
-    <div
-      ref={scrollerRef}
-      className="max-h-[480px] overflow-y-auto overflow-x-hidden no-scrollbar px-3 py-1.5 space-y-1 text-text-secondary"
-    >
-      {/* System 指令：安静的元信息行（无底色，仅小号弱化色图标），点击展开看全文。
+    // 子 agent 跑在父会话里，占位符查父会话的对照表
+    <RedactionSessionProvider sessionId={sub.parentSessionId}>
+      <div
+        ref={scrollerRef}
+        className="max-h-[480px] overflow-y-auto overflow-x-hidden no-scrollbar px-3 py-1.5 space-y-1 text-text-secondary"
+      >
+        {/* System 指令：安静的元信息行（无底色，仅小号弱化色图标），点击展开看全文。
           -mx-3 -mt-2 边到边、底部细分隔线与转写区隔开。focusLast：非最新输出，淡化、hover 点亮。 */}
-      <div
-        className={`-mx-3 -mt-2 mb-1.5 border-b border-border-secondary/30 ${
-          focusLast ? 'opacity-40 transition-opacity duration-200 hover:opacity-100' : ''
-        }`}
-      >
-        <PromptCard
-          icon={<Settings size={10} className="text-amber-500/70" />}
-          label="System"
-          content={sub.systemPrompt}
-        />
-      </div>
+        <div
+          className={`-mx-3 -mt-2 mb-1.5 border-b border-border-secondary/30 ${
+            focusLast ? 'opacity-40 transition-opacity duration-200 hover:opacity-100' : ''
+          }`}
+        >
+          <PromptCard
+            icon={<Settings size={10} className="text-amber-500/70" />}
+            label="System"
+            content={sub.systemPrompt}
+          />
+        </div>
 
-      {/* 转写区收紧行距（含共享 ToolCallBlock/ThinkingBlock），字号与主对话框一致。
+        {/* 转写区收紧行距（含共享 ToolCallBlock/ThinkingBlock），字号与主对话框一致。
           focusLast（专注模式）：直接子块除最后一块外淡化，最新输出常亮，hover 临时点亮其余。 */}
-      <div
-        className={`space-y-0.5 ${
-          focusLast
-            ? '[&>*]:opacity-40 [&>*]:transition-opacity [&>*]:duration-200 [&>*:last-child]:opacity-100 [&>*:hover]:opacity-100'
-            : ''
-        }`}
-      >
-        {/* 起始 User 指令（注入上下文 + 用户 prompt）：与下方追问同款用户气泡，使转写读起来就是一段对话 */}
-        {sub.contextNote && <UserBubble content={sub.contextNote} />}
-        <UserBubble content={sub.prompt} inlineTokens={sub.promptInlineTokens} />
+        <div
+          className={`space-y-0.5 ${
+            focusLast
+              ? '[&>*]:opacity-40 [&>*]:transition-opacity [&>*]:duration-200 [&>*:last-child]:opacity-100 [&>*:hover]:opacity-100'
+              : ''
+          }`}
+        >
+          {/* 起始 User 指令（注入上下文 + 用户 prompt）：与下方追问同款用户气泡，使转写读起来就是一段对话 */}
+          {sub.contextNote && <UserBubble content={sub.contextNote} />}
+          <UserBubble content={sub.prompt} inlineTokens={sub.promptInlineTokens} />
 
-        {/* 已落盘的消息：连续的 assistant 消息并成一段，按主对话卡的规则合并步骤 */}
-        {items.map((item) => {
-          // 压缩摘要自成一项、不带 msgs（派生 agent 不压缩，这里只是不把它丢掉）
-          const run = item.msgs ?? (item.msg.role === 'assistant' ? [item.msg] : null)
-          return run ? (
-            <SubAssistantRun key={item.key} msgs={run} />
-          ) : (
-            <SubMessageBubble key={item.key} msg={item.msg} />
-          )
-        })}
+          {/* 已落盘的消息：连续的 assistant 消息并成一段，按主对话卡的规则合并步骤 */}
+          {items.map((item) => {
+            // 压缩摘要自成一项、不带 msgs（派生 agent 不压缩，这里只是不把它丢掉）
+            const run = item.msgs ?? (item.msg.role === 'assistant' ? [item.msg] : null)
+            return run ? (
+              <SubAssistantRun key={item.key} msgs={run} />
+            ) : (
+              <SubMessageBubble key={item.key} msg={item.msg} />
+            )
+          })}
 
-        {/* 流式 thinking */}
-        {hasThinkingContent(sub.streamingThinking) && (
-          <ThinkingBlock
-            content={sub.streamingThinking}
-            isGenerating={sub.isStreaming && !sub.streamingContent}
-          />
-        )}
+          {/* 流式 thinking */}
+          {hasThinkingContent(sub.streamingThinking) && (
+            <ThinkingBlock
+              content={sub.streamingThinking}
+              isGenerating={sub.isStreaming && !sub.streamingContent}
+            />
+          )}
 
-        {/* 流式 text */}
-        {sub.streamingContent && (
-          <div className="markdown-body text-xs">
-            {/* 与 AssistantBubble 同一对上下文：没有它们，代码块会以为自己写完了 —— 交互图会在半截时
+          {/* 流式 text */}
+          {sub.streamingContent && (
+            <div className="markdown-body text-xs">
+              {/* 与 AssistantBubble 同一对上下文：没有它们，代码块会以为自己写完了 —— 交互图会在半截时
                 挂上、每来一片就整块重载，mermaid 会把半截源码当成写坏了的图 */}
-            <MarkdownStreamingContext.Provider value={sub.isStreaming}>
-              <MarkdownSourceContext.Provider value={sub.isStreaming ? sub.streamingContent : null}>
-                <ReactMarkdown
-                  remarkPlugins={markdownRemarkPlugins}
-                  rehypePlugins={markdownRehypePlugins}
-                  components={markdownComponents}
+              <MarkdownStreamingContext.Provider value={sub.isStreaming}>
+                <MarkdownSourceContext.Provider
+                  value={sub.isStreaming ? sub.streamingContent : null}
                 >
-                  {sub.streamingContent}
-                </ReactMarkdown>
-              </MarkdownSourceContext.Provider>
-            </MarkdownStreamingContext.Provider>
-            {sub.isStreaming && (
-              <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
-            )}
-          </div>
-        )}
-
-        {/* 实时卡里已经开始执行的工具（落盘之后由上面那张卡接着画，同一个 toolCallId 只有一处） */}
-        {liveRuns.map((run) => (
-          <ToolCallBlock
-            key={run.toolCallId}
-            toolName={run.toolName}
-            toolCallId={run.toolCallId}
-            args={run.args}
-            result={run.result}
-            details={run.details}
-            status={run.status}
-          />
-        ))}
-
-        {/* 生成中的工具调用 */}
-        {sub.streamingToolCall && (
-          <ToolCallBlock
-            toolName={sub.streamingToolCall.toolName}
-            streamingArgsText={sub.streamingToolCall.argsText}
-            status="generating"
-          />
-        )}
-
-        {sub.completedStreamingToolCalls.map((tc, i) => (
-          <ToolCallBlock
-            key={`completed-${i}`}
-            toolName={tc.toolName}
-            args={tc.args}
-            status="pending"
-          />
-        ))}
-
-        {/* 结束态结果（如果无流式消息且已结束，显示 result 作为 fallback） */}
-        {!busy && sub.messages.length === 0 && !sub.streamingContent && sub.result && (
-          /* 实心 tertiary（不带 alpha）：会话面板内 bg-primary/secondary 被对调，
-               半透明 tertiary 叠在卡片上差值会腰斩到 ~5/255 */
-          <pre className="text-[11px] text-text-secondary bg-bg-tertiary rounded px-2 py-1 whitespace-pre-wrap break-words">
-            {sub.result}
-          </pre>
-        )}
-
-        {/* 空状态兜底 */}
-        {messages.length === 0 &&
-          !sub.streamingContent &&
-          !sub.streamingThinking &&
-          !sub.streamingToolCall &&
-          liveRuns.length === 0 &&
-          busy && (
-            <div className="text-[11px] text-text-tertiary italic">
-              {t('panel.subAgentStatusRunning')}…
+                  <ReactMarkdown
+                    remarkPlugins={markdownRemarkPlugins}
+                    rehypePlugins={markdownRehypePlugins}
+                    components={markdownComponents}
+                  >
+                    {sub.isStreaming
+                      ? trimPartialPlaceholder(sub.streamingContent)
+                      : sub.streamingContent}
+                  </ReactMarkdown>
+                </MarkdownSourceContext.Provider>
+              </MarkdownStreamingContext.Provider>
+              {sub.isStreaming && (
+                <span className="inline-block w-2 h-4 ml-0.5 bg-accent/70 animate-pulse rounded-sm" />
+              )}
             </div>
           )}
-      </div>
 
-      {/* 追问输入框置于转写末尾（随内容滚动，非固定贴底）：仅本轮结束后出现，滚到底即可见 */}
-      {!busy && <SubAgentReplyInput subSessionId={sub.subSessionId} />}
-    </div>
+          {/* 实时卡里已经开始执行的工具（落盘之后由上面那张卡接着画，同一个 toolCallId 只有一处） */}
+          {liveRuns.map((run) => (
+            <ToolCallBlock
+              key={run.toolCallId}
+              toolName={run.toolName}
+              toolCallId={run.toolCallId}
+              args={run.args}
+              result={run.result}
+              details={run.details}
+              status={run.status}
+            />
+          ))}
+
+          {/* 生成中的工具调用 */}
+          {sub.streamingToolCall && (
+            <ToolCallBlock
+              toolName={sub.streamingToolCall.toolName}
+              streamingArgsText={sub.streamingToolCall.argsText}
+              status="generating"
+            />
+          )}
+
+          {sub.completedStreamingToolCalls.map((tc, i) => (
+            <ToolCallBlock
+              key={`completed-${i}`}
+              toolName={tc.toolName}
+              args={tc.args}
+              status="pending"
+            />
+          ))}
+
+          {/* 结束态结果（如果无流式消息且已结束，显示 result 作为 fallback） */}
+          {!busy && sub.messages.length === 0 && !sub.streamingContent && sub.result && (
+            /* 实心 tertiary（不带 alpha）：会话面板内 bg-primary/secondary 被对调，
+               半透明 tertiary 叠在卡片上差值会腰斩到 ~5/255 */
+            <pre className="text-[11px] text-text-secondary bg-bg-tertiary rounded px-2 py-1 whitespace-pre-wrap break-words">
+              {sub.result}
+            </pre>
+          )}
+
+          {/* 空状态兜底 */}
+          {messages.length === 0 &&
+            !sub.streamingContent &&
+            !sub.streamingThinking &&
+            !sub.streamingToolCall &&
+            liveRuns.length === 0 &&
+            busy && (
+              <div className="text-[11px] text-text-tertiary italic">
+                {t('panel.subAgentStatusRunning')}…
+              </div>
+            )}
+        </div>
+
+        {/* 追问输入框置于转写末尾（随内容滚动，非固定贴底）：仅本轮结束后出现，滚到底即可见 */}
+        {!busy && <SubAgentReplyInput subSessionId={sub.subSessionId} />}
+      </div>
+    </RedactionSessionProvider>
   )
 })
 

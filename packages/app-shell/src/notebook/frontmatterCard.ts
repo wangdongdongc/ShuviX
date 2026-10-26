@@ -490,9 +490,24 @@ function buildStructuredValue(kind: ShuvixMdFieldKind, value: unknown): HTMLElem
       )
       badge.dataset.effect = effect
       rule.appendChild(badge)
+      // 处置（自动脱敏的 detect / redact）：放行之外宿主还要做的事 —— 紧跟效力、单独一枚小签，不混进条件串
+      const dispositions = (
+        Array.isArray(raw.disposition) ? raw.disposition : [raw.disposition]
+      ).filter((d): d is string => typeof d === 'string' && d.length > 0)
+      if (dispositions.length > 0) {
+        const tag = el(
+          'span',
+          'cm-shuvix-fmcard-disposition shrink-0 px-1.5 py-0.5 rounded text-[9px] tracking-wide bg-warning/15 text-warning',
+          dispositions.join(' · ')
+        )
+        tag.dataset.disposition = dispositions.join(' ')
+        rule.appendChild(tag)
+      }
       // prompt 是给人读的一句话，不是条件 —— 单独一行散排，不混进 mono 的条件串
       const conditions = Object.fromEntries(
-        Object.entries(raw).filter(([k]) => k !== 'effect' && k !== 'match' && k !== 'prompt')
+        Object.entries(raw).filter(
+          ([k]) => k !== 'effect' && k !== 'match' && k !== 'prompt' && k !== 'disposition'
+        )
       )
       const parts: string[] = []
       if (Object.keys(conditions).length > 0) parts.push(conditionsText(conditions))

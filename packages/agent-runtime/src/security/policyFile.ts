@@ -39,6 +39,10 @@
  *                                             对整份请求文档求值，上下文/注入函数/
  *                                             strict 语义见 celMatch.ts；
  *                                             语法错 → 整份文件非法）
+ *       disposition: redact | [detect, …]    （可选；放行时执行点还要做的事，词汇见 types.ts
+ *                                             Disposition。只能写在 allow / force-allow 上；
+ *                                             object.type 写成固定值时，每种处置都必须能落在
+ *                                             其中每一种客体上 —— 否则整份文件非法）
  *     `subject.kind` **必填**（scope 或规则满足其一）—— 它是唯一一个「忘写」会产生
  *     语义事故的维度：漏掉它，一条 deny 会连用户亲手在 UI 里的操作一起拦掉。必填让
  *     「想清楚了要作用于所有主体」（写 `'*'`）与「忘了」变成两件可区分的事。
@@ -65,8 +69,15 @@ import { splitFrontmatter } from '../markdownFrontmatter'
 import { readObjectIdField } from '../mdObjectId'
 import { compileMatch, requestNamespacesIn } from './celMatch'
 import { trialNetworkRule } from './networkTrial'
-import { CONDITION_KEYS, mergeConditions } from './conditions'
-import type { ParsedPolicyFile, PolicyConditions, PolicyEffect, PolicyRuleSpec } from './types'
+import { CONDITION_ANY, CONDITION_KEYS, mergeConditions } from './conditions'
+import { DISPOSITIONS, DISPOSITION_OBJECT_TYPES } from './types'
+import type {
+  Disposition,
+  ParsedPolicyFile,
+  PolicyConditions,
+  PolicyEffect,
+  PolicyRuleSpec
+} from './types'
 
 /** 文件类型标记 —— 序列化时恒写在首位；解析时不作要求 */
 export const POLICY_FILE_MARKER_KEY = 'shuvix'
@@ -111,8 +122,34 @@ const RESERVED_NAMES = new Set([
   'inCidr'
 ])
 
-/** 规则允许的键 = effect / match / prompt / 五个条件键（其余一律整份非法，防"以为收窄生效"） */
-const RULE_KEYS = new Set<string>(['effect', 'match', 'prompt', ...CONDITION_KEYS])
+/** 规则允许的键 = effect / match / prompt / disposition / 五个条件键（其余一律整份非法，防"以为收窄生效"） */
+const RULE_KEYS = new Set<string>(['effect', 'match', 'prompt', 'disposition', ...CONDITION_KEYS])
+
+/** 能带处置的 effect：处置是「放行时还要做的事」，询问 / 拒绝时无事可做 */
+const DISPOSITION_EFFECTS: readonly PolicyEffect[] = ['allow', 'force-allow']
+
+/**
+ * 处置与客体种类对不上：有效条件里 object.type 写成了固定值（不含 `'*'`），其中某一种客体
+ * 落不下某个处置。返回给人看的原因；对得上（或没写死 object.type、留给运行时兜底）返回 null。
+ */
+function dispositionMismatch(
+  dispositions: readonly Disposition[],
+  conditions: PolicyConditions
+): string | null {
+  const types = conditions['object.type']
+  if (!types || types.includes(CONDITION_ANY)) return null
+  for (const disposition of dispositions) {
+    const allowed = DISPOSITION_OBJECT_TYPES[disposition]
+    const wrong = types.filter((type) => !allowed.includes(type))
+    if (wrong.length > 0) {
+      return (
+        `disposition '${disposition}' cannot be carried out on object.type ` +
+        `${wrong.map((t) => `'${t}'`).join(', ')} (only on ${allowed.map((t) => `'${t}'`).join(', ')})`
+      )
+    }
+  }
+  return null
+}
 
 /**
  * prompt 长度上限 —— 超出记警告后截断（不判非法，理由见 parseRule）。
@@ -165,6 +202,28 @@ function parseRule(value: unknown, warn?: (msg: string) => void): PolicyRuleSpec
     const match = raw.match.trim()
     if (compileMatch(match) !== null) return null
     rule.match = match
+  }
+
+  // disposition：放行时执行点还要做的事 —— 写错就整份非法：一条以为在脱敏、其实只是放行的规则，
+  // 比没有这条规则更危险
+  if (raw.disposition !== undefined && raw.disposition !== null) {
+    const list = stringList(raw.disposition)
+    if (!list) {
+      warn?.('invalid disposition (expected a non-empty string or list of non-empty strings)')
+      return null
+    }
+    const unknown = list.filter((d) => !(DISPOSITIONS as readonly string[]).includes(d))
+    if (unknown.length > 0) {
+      warn?.(
+        `unknown disposition ${unknown.map((d) => `'${d}'`).join(', ')} (allowed: ${DISPOSITIONS.join(', ')})`
+      )
+      return null
+    }
+    if (!DISPOSITION_EFFECTS.includes(rule.effect)) {
+      warn?.(`disposition is only allowed on ${DISPOSITION_EFFECTS.join(' / ')} rules`)
+      return null
+    }
+    rule.disposition = [...new Set(list)] as Disposition[]
   }
 
   // prompt：纯人读面，不参与匹配、不影响判决 —— 因此它**没有资格让规则非法**。
@@ -295,6 +354,9 @@ export function parsePolicyDefinitionFile(
         `rule #${i} has no 'subject.kind' (declare it on the rule or in ${SCOPE_KEY}; use '*' for any subject)`
       )
     }
+    // 处置落不到写死的客体种类上：这条规则在那些客体上只会按拒绝结算（见 context.ts），一定是写错了
+    const mismatch = rule.disposition ? dispositionMismatch(rule.disposition, effective) : null
+    if (mismatch) return reject(`rule #${i}: ${mismatch}`)
     rules.push(rule)
   }
 
@@ -357,7 +419,8 @@ export function parsePolicyDefinitionFile(
 /**
  * 序列化为标准格式（未来设置页保存路径）。与 parsePolicyDefinitionFile 互逆：
  * 文件类型标记恒居首；空 description / 无 scope / 无 lets 省略；
- * 规则的结构化条件展平为扁平键（effect → 条件键 → match → prompt，与书写顺序一致）。
+ * 规则的结构化条件展平为扁平键（effect → 条件键 → match → disposition → prompt，与书写顺序一致）；
+ * 只有一个处置时写成标量。
  */
 export function serializePolicyDefinitionFile(data: ParsedPolicyFile): string {
   const fields: Record<string, unknown> = {
@@ -378,6 +441,9 @@ export function serializePolicyDefinitionFile(data: ParsedPolicyFile): string {
       if (list) out[key] = list
     }
     if (rule.match) out.match = rule.match
+    if (rule.disposition?.length) {
+      out.disposition = rule.disposition.length === 1 ? rule.disposition[0] : rule.disposition
+    }
     if (rule.prompt) out.prompt = rule.prompt
     return out
   })

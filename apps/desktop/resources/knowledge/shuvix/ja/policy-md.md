@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'セキュリティポリシーファイル（shuvix: policy v1）'
-description: 'ShuviX セキュリティポリシーの完全な仕様 —— 規則が見るリクエスト文書（subject / action / tool / object / env / vars）、五つの条件キー、CEL `match`、効果とその優先順位、確認に誰が答えるか（まず自動レビュー、次にあなた）、`lets`、ファイルが不正になる条件、三つの組み込みポリシー、そしてゲートの緩め方と自分のゲートの足し方。リモートアクセス（`network` 主体）には別に `network-policy` エントリーがあります。'
+description: 'ShuviX セキュリティポリシーの完全な仕様 —— 規則が見るリクエスト文書（subject / action / tool / object / env / vars）、五つの条件キー、CEL `match`、効果とその優先順位、確認に誰が答えるか（まず自動レビュー、次にあなた）、`lets`、処置（自動マスキング）、ファイルが不正になる条件、組み込みポリシー、そしてゲートの緩め方と自分のゲートの足し方。リモートアクセス（`network` 主体）には別に `network-policy` エントリーがあります。'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -93,6 +93,7 @@ shuvix-policy-rules:
 | `effect`                                                         | **必須**：`allow`、`force-allow`、`ask`、`force-ask`、`deny` のいずれか。                                                                                                                               |
 | `subject.kind`、`action`、`object.type`、`env.host`、`tool.name` | 構造化条件：文字列または文字列のリスト（リスト内は OR、キー間は AND）。`'*'` = 任意。空リストや空文字列は不正。**`subject.kind` は必須** —— 規則上か scope に。「任意の主体」は意図して `'*'` と書く。  |
 | `match`                                                          | 省略可能な CEL 式。リクエスト文書（後述）に対して評価され、条件と AND される。構文エラーはファイルを不正にする。                                                                                        |
+| `disposition`                                                    | 省略可能。`allow` / `force-allow` にだけ書ける：この規則がリクエストを決めたときにホストが追加で行うこと。今は二つあり、どちらも自動マスキング（`redaction` エントリー）のもの：`modelRequest` の `detect`（このリクエストをマスキングする）と `sensitive` の `redact`（この箇所はプレースホルダーのまま）。文字列またはリスト。ほかの効果に書いたり、`object.type` がそれを受け付けない規則に書いたりすると、ファイル全体が不正。 |
 | `prompt`                                                         | 省略可能な一行。`ask` なら確認カードに表示、`deny` なら拒否理由としてエージェントに返り、許可系の規則ではポリシーのプロパティカードに表示されるだけ。最大 1000 文字。ファイルを不正にしない唯一のキー。 |
 
 規則内の他のいかなるキーもファイルを不正にします（古い入れ子の `object:` / `subject:` / `when:`
@@ -113,6 +114,8 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  （何も一致しな�
 - `force-ask` は `force-allow` でさえ飛ばせず、ユーザーだけが答える確認で、カードに「許可して記憶」も
   出ません —— 「このゲートは免除もレビュアーも受け付けない」。
 - `deny` はすべてに勝ちます。
+- `disposition` は勝った段のものだけが数えられます：処置のない `force-allow` は処置のある `allow` に勝つので、
+  そういう `force-allow` を書けば、一致した部分ではその処置が外れます。処置を実行できない判定点は拒否として扱います。
 - リモートアクセスの判定点（`subject.kind` が `network`）では誰にも確認できません：`ask` や `force-ask` に
   決まったリクエストは拒否されます —— `network-policy` エントリーを参照。
 
@@ -125,12 +128,16 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  （何も一致しな�
 
 ```
 subject  { kind: 'agent' | 'user' | 'network', agentKind: 'root' | 'spawned', profile: <エージェント名>, sessionId, depth }
-action   'read' | 'write' | 'execute'
-tool     { name: <ツール名>, operation: <ツール固有の操作。無ければ ''> }
+action   'read' | 'write' | 'execute' | …   （どれを使うかはオブジェクト種別ごとに下の表）
+tool     { name: <ツール名>, operation: <ツール固有の操作。無ければ ''>, restored: [<種類>] }
 object   { type: <オブジェクト種別>, ...属性 }        ← 開かれた属性文書
 env      { host: 'desktop' | 'extension', platform: 'darwin' | 'win32' | 'linux' }
 vars     ホスト変数表（後述）。このセッションの権限表を含む
 ```
+
+`tool.restored` は、ShuviX がこの呼び出しの引数に本物の値を戻した機密情報の種類です（自動マスキング：
+エージェントが書いたのは `{{API_KEY_…}}`、ツールが受け取るのは本物のキー）。何も戻していなければ空のリスト。
+`redaction` エントリーにこれを使う規則があります。
 
 `subject.kind` はツール呼び出しでは `agent`、UI 自身の受動的な検査では `user`、リモートアクセスのブラウザーからの
 リクエストでは `network` です —— だからすべての組み込み規則が主体を名指しています（エージェント向けは `[agent]`、
@@ -150,6 +157,8 @@ vars     ホスト変数表（後述）。このセッションの権限表を�
 | `url`         | 組み込み `browser` / `chrome` サーバー：すべてのナビゲーション、`chrome` ではサイトごとの初回利用も                                                                        | `navigate`       | `url`、`scheme`、`host`（小文字、末尾のドットなし）、`origin`、`browser`（`app` = ShuviX 内のブラウザーパネル、`chrome` = あなた自身の Chrome）。`file://` は url オブジェクトではなく、そのパスの読み取りとして判定                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `session`     | `session` ツールの、別のセッション（呼び出し元自身のサブセッション以外）を指すすべての動作（閲覧する、待つ、メッセージを送る、割り込む、代理回答する、止める）。自分のサブセッションはここに来ない —— それは `invocation` で制御する | `read` / `write` | `sessionId`（対象のセッション）、`title`（そのタイトル —— LLM が付けたものなので判定に使わない）、`ownTurn`（bool —— 呼び出し元がそこで自分で始めたターンだけに関わる動作：その回答を受け取る、その質問に答える、割り込む、止める）。`read` = 回答を読む・中を見る・待つ、`write` = メッセージを送る・割り込む・代理回答する・止める。`tool.operation` が動作名（`prompt-session`、`read-session` …） ホストが補う事実がさらに二つ：`lastActiveAt`（ISO 8601 UTC —— 対象セッションに最後にユーザーメッセージがあった時刻。一度も無ければ作成時刻。新しさで許可するなら `timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('168h')`）と `bot`（対象が紐づくボット。`subject.bot` と同じ書き方で、ボットのセッションでなければ空文字列） |
 | `invocation`  | **すべての**ツール呼び出し、実行前                                                                                                                                         | `execute`        | なし —— `tool.name` / `tool.operation` で判断する（例：`session` / `create-sub-session`）。ここでの規則はツールを名指す必要がある。対象を定めない invocation の確認はすべての呼び出しを止めてしまう。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `modelRequest` | ShuviX がエージェントのためにモデルへ送るすべてのリクエスト：会話自身・派生・フックのエージェント、自動レビュー、タイトル付け、圧縮の要約 | `send` | `provider`（設定に表示されるプロバイダー名：組み込みのプロバイダーは `anthropic` や `openai` のような slug、自分で追加したプロバイダーは付けた名前）、`model`（モデル id）。`disposition: detect` 付きの `allow` はこのリクエストをマスキングし、付いていない `allow` は本物の値を送り、`deny`（と、ここでは誰にも確認できないので `ask`）はリクエスト全体を送らない |
+| `sensitive`   | マスキング中のリクエストに含まれる機密情報の一箇所ずつ（`modelRequest` の規則が `detect` を持っていたときだけ） | `disclose` | `category`（`API_KEY`、`TOKEN`、`PASSWORD`、`SECRET`、`PRIVATE_KEY`、`EMAIL`、`PHONE` など —— 全種類は `redaction` エントリー）、`rule`（それを見つけた検出規則）、`provider`、`model`（`modelRequest` と同じ）、`value`（本物の値そのもの。`match` 用で、記録には残らない）。`disposition: redact` 付きの `allow` はプレースホルダーのまま、付いていない `allow` は本物の値を送り、`deny` はリクエスト全体を送らない |
 | `socket`      | リモートアクセス：接続が開いた直後、HTTP を読む前                                                                                                                          | `connect`        | なし —— `subject.address` など `network` 主体の事実で判断する（`network-policy` エントリー）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `request`     | リモートアクセス：すべての HTTP リクエスト（WebSocket のアップグレードを含む）                                                                                             | `request`        | `method`、`path`（URL パス）、`query`、`route`（`page`、`asset`、`media`、`preview`、`download`、`lib`、`widget`、`socket`）、`scope`、`access` —— `network-policy` エントリーの「scope と access」を参照                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `channel`     | リモートアクセス：WebSocket 上のすべての呼び出し                                                                                                                           | `invoke`         | `channel`、`group`、`scope`（どの部分か、15 個のいずれか）、`kind`、`access`（`read` / `write` / `admin`）、`size`、`args` —— scope ごとのチャネル一覧は `network-channels` エントリー                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -158,6 +167,9 @@ vars     ホスト変数表（後述）。このセッションの権限表を�
 エラーで、エラーは**効果に応じてフェイルセーフ**します —— `deny` / `ask` の規則は一致扱い（警告付き）、
 許可系の規則は不一致扱い。常に種別で守ってください：`object.type == 'path' && inDir(object.path, …)`、
 または `object.type` を条件として宣言します。
+モデルへのリクエスト（`modelRequest`、`sensitive`）は、それを名指しした規則だけで判定されます：`object.type` に
+その種別がある、または `action` に `send` / `disclose` がある規則です。ほかの規則はどれほど広くてもそこには
+当たりません —— ツール向けに書いた「何でも確認して」がボットのモデルへのリクエストを止めることはありません。
 
 ### `match` で使える関数
 
@@ -220,10 +232,11 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 
 ## 組み込みポリシー
 
-アプリケーションに五本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
+アプリケーションに六本同梱（UI 言語ごとに一つ；**規則は常に英語ファイルから取られ**、翻訳は人が読む
 テキストだけを変える）。エージェント向けの三本のゲートはできるだけ確認を減らすので、どれも普通の `ask` の規則です。
 リモートアクセス向けの一本は `deny` です —— そこでは誰にも確認できないからです。`daily-bot-access` はゲートではなく
-緩和で、ShuviX に付属のデイリーボットのための三つの `force-allow` です。それ以外の `deny`、`force-ask`、
+緩和で、ShuviX に付属のデイリーボットのための三つの `force-allow` です。`redact-sensitive` もゲートではなく、
+自動マスキングを有効にする、処置付きの二つの `allow` です。それ以外の `deny`、`force-ask`、
 `force-allow` はあなた自身のポリシーのためにあります：
 
 | 名前                   | ゲート                                                                                                                                                                                                                                                                                                             |
@@ -232,6 +245,7 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
 | `ask-on-command`       | サンドボックスに閉じ込められていないコマンドを確認（`object.sandboxed` が false：サンドボックスがオフ／使えない、フルアクセスの要求、`ssh`）                                                                                                                                                                       |
 | `ask-on-session-access` | `session` ツールが、呼び出し元自身のサブセッションではないセッションを閲覧・対話する前に確認する —— その動作が呼び出し元がそこで始めたターンだけに関わる（`object.ownTurn`）か、そのセッションが権限表にある（`vars.aclSessionRead` / `vars.aclSessionWrite`）場合を除く。「許可して記憶」で表に加わる。自動レビューはこの確認に答えない —— 組み込み hook `auto-review` は `session` オブジェクトをあなたに任せる |
 | `network-admission`    | リモートアクセス（`subject.kind` が `network`）：送信元がこのコンピューター（`127.0.0.0/8`、`::1`）でない HTTP リクエストをすべて拒否。ほかのデバイスを入れるには、同じ名前のユーザーポリシーで置き換える —— 書き方は `network-policy` エントリー                                                                  |
+| `redact-sensitive`     | 自動マスキング（`redaction` エントリー）：エージェントがモデルへ送るリクエストはすべてマスキングされ（`modelRequest`、`disposition: detect`）、その中の機密情報は一箇所ずつプレースホルダーとしてモデルに届く（`sensitive`、`disposition: redact`）—— ただし `USERNAME`、`HOSTNAME`、`IP`、`BUCKET` の四種類はそのまま送る。無効にすると、すべてのモデルに本物の値が送られる。会話の記録はどちらにしてもプレースホルダーのまま |
 | `daily-bot-access`     | 緩和のみ：デイリーボット（`subject.bot == 'bot:builtin:daily'`）のルートエージェントは、直近 7 日間にメッセージのあったセッションを確認なしで読み（`ask-on-session-access` に優先。期間は `duration('168h')` で、上書きコピーで変更）、`vars.trackingDir` を読み書きし、`vars.dailyDir`（日記）を読む（どちらも `ask-on-external-path` に優先）。毎日夕方にタイマーで起こされ、そのとき答える人はたいていいない。そのセッションのルートエージェントだけに適用され、サブセッションや派遣したエージェントには適用されない |
 
 エージェント向けの二つは同じ線を引きます：ファイルツールが確認する場所は、制限付きのコマンドが届かない場所とちょうど
@@ -284,6 +298,8 @@ scope と交差して空になる規則；不正な `lets`（不正な名前、�
   `object.unconfinedReason == 'escalated'` で「エージェントがサンドボックスを出たがるときは必ず私に
   確認する」、`vars.botsDir` / `vars.shuvixConfigDirs` 配下への書き込みで「エージェントが bot ファイルや
   ShuviX 自身の設定を変えるときは必ず私に確認する」。
+- **自動マスキング**：あるモデルを信頼する、ある種類はそのまま送る、ある種類は決して送らない —— 自分の
+  ポリシーで `modelRequest` / `sensitive` に `force-allow` か `deny` を書きます。書き方は `redaction` エントリーに。
 - 規則は狭く：deny は呼び出しごとに免除できないので、日常の作業で発火する規則は、見逃す規則より
   悪い。
 

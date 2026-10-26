@@ -94,6 +94,7 @@ export class FakeDurableSession implements DurableSession {
   readonly sessionId: string
   readonly harness = undefined as never
   readonly effectiveSettings = undefined as never
+  readonly redaction = undefined
   closed = false
   lock: LockRecord | undefined
   runState: RunState = 'idle'

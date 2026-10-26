@@ -241,6 +241,8 @@ export interface AgentLockDeps {
   stopForDestroy: () => Promise<void>
   /** 这条会话在本进程里的记录（`agentInitialized` 在这里记 / 撤） */
   processRecord: SessionProcessRecord
+  /** 内置扩展再带上的 hook（自动脱敏的 afterTool） */
+  extraHooks?: readonly HookRegistration[]
 }
 
 /**
@@ -273,7 +275,8 @@ export class AgentLock {
 
   constructor(private readonly deps: AgentLockDeps) {
     this.hooks = [
-      emptyReplyHook({ harness: deps.harness, sessionId: deps.sessionId, logger: deps.logger })
+      emptyReplyHook({ harness: deps.harness, sessionId: deps.sessionId, logger: deps.logger }),
+      ...(deps.extraHooks ?? [])
     ]
   }
 

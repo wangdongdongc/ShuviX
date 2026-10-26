@@ -20,6 +20,7 @@ import {
   wrapDurableOutput,
   type AnyTool,
   type SecurityContext,
+  type SessionRedaction,
   type McpToolMeta,
   type SpillMode,
   type TruncateStrategy
@@ -31,7 +32,9 @@ import type {
   ToolRegistration
 } from '@earendil-works/pi-durable'
 import { withToolReview } from '@shuvix/chat-protocol/types/toolReview'
+import { createLogger } from '../logger'
 import { desktopSpillSink } from '../utils/toolUtils/processToolOutput'
+import { clearRestoredCategories, setRestoredCategories } from './redaction/restoredCalls'
 import { TOOL_ABORTED } from './toolContext'
 
 /**
@@ -55,6 +58,11 @@ export interface WrapDurableToolOptions {
   security?: SecurityResolver
   /** 落不落盘（见 SpillMode：`'auto'` = 这次调用的 agent 工具表里有 read 才落） */
   spill: SpillMode
+  /**
+   * 这条会话的自动脱敏（现取：会话可能被 LRU 关了再开）。给了，参数里的占位符在 L1 门之前换回真值 ——
+   * 门、工具本体、磁盘上的文件看到的都是真值，durable 存的参数（任务检查点）仍是占位符。
+   */
+  redaction?: () => SessionRedaction | undefined
   /**
    * 工具调用的前后各等一次：`before` 在 L1 门**之前**（回复已经写完，被拒、被问的调用也算 —— 桌面在这里
    * 钉住发起它的回复引用的产物版本，等用户回答询问的那段时间里文件可能被别的东西改掉）；`after` 只在真的
@@ -92,6 +100,43 @@ async function runHook(
 /** 包装器收的工具：durable 注册项 */
 export type WrappableTool = AnyTool
 
+const log = createLogger('Redaction')
+
+/**
+ * 工具参数里的占位符换回真值（docs/auto-redaction-design.md §2.2）。没配脱敏原样交回。
+ * 拦下这次调用（交回给模型的错误结果，工具不执行）的两种情况：
+ *  - 引用了表里有、但真值解不开的占位符（主密钥不在、换了机器）：执行了就会把占位符写进文件；
+ *  - 还原本身抛错（只可能是 bug）：记 error log，同样不执行。
+ */
+async function restoreArguments(
+  redaction: SessionRedaction | undefined,
+  args: unknown,
+  sessionId: string,
+  toolName: string
+): Promise<{ args: unknown; restored: string[] } | { blocked: ToolExecutionResult }> {
+  if (!redaction) return { args, restored: [] }
+  try {
+    const outcome = await redaction.restoreJson(args)
+    if (outcome.unavailable.length > 0) {
+      return {
+        blocked: toolErrorResult(
+          new Error(
+            `This call was not run: it uses ${outcome.unavailable.join(', ')}, whose real value is not ` +
+              'available on this machine (the key that protects it could not be opened). Read the source ' +
+              'again to get a placeholder that can be used.'
+          )
+        )
+      }
+    }
+    return { args: outcome.value, restored: outcome.restored }
+  } catch (err) {
+    log.error(
+      `session ${sessionId}: restoring placeholders in ${toolName} arguments failed; the call is blocked: ${err instanceof Error ? err.message : String(err)}`
+    )
+    return { blocked: toolErrorResult(err) }
+  }
+}
+
 /**
  * 包装一个 durable 工具：内核（截断 / 落盘走 diagnostics / outputLimits …，见 wrapDurableOutput）
  * 之上叠 L1 全工具门与「已审查」标记。
@@ -118,11 +163,16 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
     sink: desktopSpillSink(sessionId)
   })
 
-  const gatedExecute: ToolRegistration['execute'] = async (args, api, context) => {
+  const gatedExecute: ToolRegistration['execute'] = async (rawArgs, api, context) => {
     const toolCallId = api.callId
     const call = { toolName, callId: toolCallId, conversationId: api.conversationId }
     await runHook(executionHooks?.before, call)
     const signal = context.abortSignal
+
+    // ── 自动脱敏：参数里的占位符换回真值（L1 门之前：门要判真实的参数）──
+    const restoredArgs = await restoreArguments(opts.redaction?.(), rawArgs, sessionId, toolName)
+    if ('blocked' in restoredArgs) return restoredArgs.blocked
+    const { args, restored } = restoredArgs
 
     // ── L1 全工具门（安全模块）：execute（含 preExecute）之前 ──
     const gate = typeof security === 'function' ? security(api, context) : security
@@ -138,6 +188,7 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
           // MCP 工具随身带着 server/tool 与（仅内置 server 才可信的）行为提示，
           // 让这道门对它们不再只有「有人要调工具」这一句话可说
           mcp: (tool as Partial<McpToolMeta>).mcpMeta,
+          ...(restored.length > 0 ? { restored } : {}),
           abortError: TOOL_ABORTED,
           onOther: 'return',
           signal
@@ -161,6 +212,8 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
     // 「已审查」标记按这次调用的 durable taskId 认（PIN-10）：toolCallId 会话内可能重复
     const reviewCall = { toolCallId, taskId: api.taskId }
     let result: ToolExecutionResult
+    // 工具本体里的执行点（路径门、命令门……）按 taskId 查到这次调用还原了哪些类别（tool.restored）
+    setRestoredCategories(sessionId, api.taskId, restored)
     try {
       // 内核已按 Q12 收口抛错（只有取消会抛到这里）
       result = await core.execute(args, api, context)
@@ -168,6 +221,7 @@ export function wrapDurableTool(tool: WrappableTool, opts: WrapDurableToolOption
       takeReviewAllowed(sessionId, reviewCall)
       throw err
     } finally {
+      clearRestoredCategories(sessionId, api.taskId)
       // 结果交回之前就等它落定：下一次调模型时，这次调用写下的那一版已经在历史里了
       await runHook(executionHooks?.after, call)
     }

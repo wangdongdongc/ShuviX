@@ -249,6 +249,7 @@ export function assembleRules(
         conditions: Object.keys(conditions).length > 0 ? conditions : undefined,
         matches,
         prompt: spec.prompt,
+        ...(spec.disposition?.length ? { dispositions: spec.disposition } : {}),
         source: {
           kind: sourceKind,
           policy: policy.name,

@@ -91,7 +91,13 @@ import {
 } from './services/toolContext'
 import { commandClassifier } from './services/commandClassifier'
 import { installLlmNetwork } from './services/models'
-import { installSessionHostQuitHook, sessionAgentResolver } from './services/sessionHost'
+import {
+  installSessionHostQuitHook,
+  peekSessionHost,
+  sessionAgentResolver,
+  setRedactionPolicy
+} from './services/sessionHost'
+import { desktopRedactionPolicy } from './services/redactionPolicy'
 import {
   registerCustomProtocolHandlers,
   registerCustomProtocolSchemes
@@ -100,6 +106,8 @@ import { applyNativeThemeSource } from './ipc/settingsHandlers'
 import { createLogger } from './logger'
 import { mark, measure, measureAsync, step } from './perf'
 import { logLaunchTiming } from './utils/stallWatchdog/launchTiming'
+import { installMasterKeyProtector } from './utils/crypto'
+import { safeStorageProtector } from './utils/keyProtector'
 import { simulateStartupStall } from './utils/stallWatchdog/simulate'
 import { liveSingletonLockHolder } from './utils/stallWatchdog/singletonLock'
 import {
@@ -912,6 +920,10 @@ app.whenReady().then(async () => {
   // 运行中的窗口无法与固定（pinned）的快捷方式归为一组，会显示成两个图标
   electronApp.setAppUserModelId('com.shuvix.app')
 
+  // 本地密文的 v2 密钥由系统钥匙环保护（utils/crypto.ts）；safeStorage 要在 ready 之后才能用，
+  // 所以尽早装上 —— 在那之前写入的密文用 v1，同样能解
+  step('master key protector', () => installMasterKeyProtector(safeStorageProtector))
+
   // shuvix-media:// + shuvix-preview://
   step('registerCustomProtocolHandlers', () => registerCustomProtocolHandlers())
 
@@ -988,7 +1000,16 @@ app.whenReady().then(async () => {
   // 询问点的自动审查：安全模块的 onPermissionRequest 经判定型 hook 回答（注入而非 import —— 见 toolContext）
   setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity)
   // 命令风险分类：同样注入（它要模型注册表）；每次分类记一行分类器日志
-  setCommandClassifier((input, opts) => commandClassifier.classify(input, opts))
+  // 自动脱敏出口的策略判定：同样注入（它要安全模块）
+  setRedactionPolicy(desktopRedactionPolicy)
+  // 分类器在会话之外直接调模型：交给它之前，命令里的敏感内容换成占位符（自动脱敏；它判风险用不着真值）
+  setCommandClassifier(async (input, opts) => {
+    const redaction = opts?.sessionId
+      ? peekSessionHost()?.get(opts.sessionId)?.redaction
+      : undefined
+    const command = redaction ? await redaction.maskText(input.command) : input.command
+    return commandClassifier.classify({ ...input, command }, opts)
+  })
   // 内置 MCP 服务器按 `_meta` 里的对话认调用方（安全主体）：同样注入而非 import（见 mcpService）
   step('builtin MCP agent resolver', () => setBuiltinMcpAgentResolver(sessionAgentResolver()))
 

@@ -8,6 +8,7 @@
  * | `shuvix.prompt.project-prompt`  | `project_prompt`       | 项目提示词（现解析）          | 项目感知                        |
  * | `shuvix.prompt.knowledge`       | `knowledge_bases`      | 知识库引导（现解析）          | agent 的工具名单里有 `knowledge` |
  * | `shuvix.prompt.bot`             | `bot_profile`          | bot 人设与记忆（现解析）      | bot 档案上的根 agent            |
+ * | `shuvix.prompt.placeholders`    | `placeholders`         | 自动脱敏的占位符怎么用（固定）| 宿主做自动脱敏                  |
  *
  * 几条规矩：
  *  - **逐字节等于旧系统提示词**：全部 `tag: false`（文本原样，durable 不再包标签），段落之间由 pi-ai
@@ -50,7 +51,8 @@ export const PROMPT_EXTENSION = {
   instructions: 'shuvix.prompt.instructions',
   projectPrompt: 'shuvix.prompt.project-prompt',
   knowledge: 'shuvix.prompt.knowledge',
-  bot: 'shuvix.prompt.bot'
+  bot: 'shuvix.prompt.bot',
+  placeholders: 'shuvix.prompt.placeholders'
 } as const
 
 export type PromptExtensionId = keyof typeof PROMPT_EXTENSION
@@ -62,12 +64,15 @@ export const PROMPT_SECTION_KEY: Record<PromptExtensionId, string> = {
   instructions: 'project_instructions',
   projectPrompt: 'project_prompt',
   knowledge: 'knowledge_bases',
-  bot: 'bot_profile'
+  bot: 'bot_profile',
+  placeholders: 'placeholders'
 }
 
 /** 段落的固定次序（= 旧 createAgent 的拼接次序） */
 export const PROMPT_EXTENSION_ORDER: readonly PromptExtensionName[] = [
   PROMPT_EXTENSION.persona,
+  // 固定文本紧跟冻结的人设：前缀缓存不受后面那几个活段落变化的影响
+  PROMPT_EXTENSION.placeholders,
   PROMPT_EXTENSION.instructions,
   PROMPT_EXTENSION.projectPrompt,
   PROMPT_EXTENSION.knowledge,
@@ -82,6 +87,8 @@ export interface PromptSelectionSpec {
   profile: Pick<InProcessAgentType, 'name' | 'instructionFiles' | 'projectAwareness'>
   /** 归一后的工具名单（档案 + 会话勾选） */
   toolNames: readonly string[]
+  /** 宿主做自动脱敏（对话记录里有占位符）—— 由 createPromptExtensions 按宿主配置填 */
+  placeholders?: boolean
 }
 
 /**
@@ -92,6 +99,7 @@ export interface PromptSelectionSpec {
 export function promptExtensionsFor(spec: PromptSelectionSpec): PromptExtensionName[] {
   const { profile } = spec
   const selected = new Set<PromptExtensionName>([PROMPT_EXTENSION.persona])
+  if (spec.placeholders === true) selected.add(PROMPT_EXTENSION.placeholders)
   if ((profile.instructionFiles?.length ?? 0) > 0) selected.add(PROMPT_EXTENSION.instructions)
   if (profile.projectAwareness) selected.add(PROMPT_EXTENSION.projectPrompt)
   if (spec.toolNames.includes(KNOWLEDGE_TOOL_NAME)) selected.add(PROMPT_EXTENSION.knowledge)
@@ -175,8 +183,24 @@ export interface PromptExtensions {
   select(spec: PromptSelectionSpec): Extension[]
 }
 
-/** 以宿主 seam 构造六个段落扩展 */
-export function createPromptExtensions(host: PromptHost): PromptExtensions {
+/**
+ * 自动脱敏的占位符（docs/auto-redaction-design.md §13）—— 模型自己不可能知道的那一点：占位符背后的值在这台电脑上是真的，
+ * 工具执行前换回真值，所以按占位符搜文件、写命令都对；去「看」值本身（打印、逐字节导出、编码）会把它带出去。
+ * 演练一（真模型）里没有这一段时，agent 在文件里 grep `EMAIL_` 找不到，转而用 `od -c` 逐字节看，邮箱就这样逐字发了出去。
+ * 例子刻意不写成标准形状（`{{API_KEY_…}}`）：一个看着像真占位符的例子会被模型照抄进工具参数，还原时查不到就拦下。
+ */
+export const PLACEHOLDER_NOTE = [
+  'Text such as {{API_KEY_…}} (a category and eight letters or digits) in this conversation is a placeholder: ShuviX hid a secret or a personal value from you.',
+  'On this computer the value is real — in files and in command output — and ShuviX puts it back into your tool arguments before a tool runs.',
+  "Write the placeholder exactly wherever you mean the value: in commands, file contents, edit text and searches (`grep -c '{{EMAIL_…}}' app.log` with the placeholder written out counts the real address).",
+  'Do not try to see the value itself — no printing, byte dumps or encodings of it; when a task needs a fact about it, such as its length, let a command work it out.'
+].join(' ')
+
+/** 以宿主 seam 构造段落扩展；`placeholders` = 这个宿主的会话做自动脱敏（占位符那一段才有内容） */
+export function createPromptExtensions(
+  host: PromptHost,
+  opts: { placeholders?: boolean } = {}
+): PromptExtensions {
   const persona = defineExtension({
     name: PROMPT_EXTENSION.persona,
     sections: [
@@ -257,8 +281,23 @@ export function createPromptExtensions(host: PromptHost): PromptExtensions {
     ]
   })
 
+  const placeholders = defineExtension({
+    name: PROMPT_EXTENSION.placeholders,
+    sections: [
+      section(
+        PROMPT_SECTION_KEY.placeholders,
+        () =>
+          opts.placeholders === true
+            ? `<placeholders>\n${PLACEHOLDER_NOTE}\n</placeholders>`
+            : undefined,
+        { tag: false }
+      )
+    ]
+  })
+
   const byName = new Map<PromptExtensionName, Extension>([
     [PROMPT_EXTENSION.persona, persona],
+    [PROMPT_EXTENSION.placeholders, placeholders],
     [PROMPT_EXTENSION.instructions, instructions],
     [PROMPT_EXTENSION.projectPrompt, projectPrompt],
     [PROMPT_EXTENSION.knowledge, knowledge],
@@ -268,7 +307,8 @@ export function createPromptExtensions(host: PromptHost): PromptExtensions {
   return {
     all: PROMPT_EXTENSION_ORDER.map(get),
     get,
-    select: (spec) => promptExtensionsFor(spec).map(get)
+    select: (spec) =>
+      promptExtensionsFor({ ...spec, placeholders: opts.placeholders === true }).map(get)
   }
 }
 

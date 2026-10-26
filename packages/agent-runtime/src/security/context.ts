@@ -23,6 +23,7 @@ import type {
   AccessMode,
   CommandObjectInput,
   CommandRisk,
+  Disposition,
   EnforceOpts,
   EnforceOutcome,
   GateVerdict,
@@ -31,7 +32,8 @@ import type {
   SecurityEnvironment,
   SecurityHostProvider,
   SecurityObject,
-  SecuritySubject
+  SecuritySubject,
+  SecurityToolRef
 } from './types'
 
 /** 结构属性的惰性挂载键 —— 与 commandFacts.ts 的投影字段一一对应 */
@@ -175,6 +177,27 @@ async function classifyCommandSafely(
 export const GATE_DOWNGRADED_MESSAGE =
   'A security policy asks before allowing this, and this check cannot ask anyone, so it is refused.'
 
+/**
+ * 放行却带着这个点位做不到的处置 → 按拒绝结算（见 EnforceOpts.supportedDispositions）。规则要求脱敏、
+ * 执行点却只会放行，照放就是悄悄拆掉那道保护。做得到（或没有处置）原样返回。
+ */
+export function withDispositionSupport(
+  decision: SecurityDecision,
+  supported: readonly Disposition[]
+): SecurityDecision {
+  if (decision.effect !== 'allow' || !decision.dispositions) return decision
+  const missing = decision.dispositions.filter((d) => !supported.includes(d))
+  if (missing.length === 0) return decision
+  const { dispositions: _dropped, ...rest } = decision
+  return {
+    ...rest,
+    effect: 'deny',
+    reason:
+      `Security policy rule '${decision.winning}' asks for ` +
+      `${missing.map((d) => `'${d}'`).join(', ')}, which this check cannot carry out`
+  }
+}
+
 /** 结算 → 不能询问的点位的结论：ask（含 force-ask）降级为拒绝 */
 export function gateVerdictOf(decision: SecurityDecision): GateVerdict {
   if (decision.effect === 'allow') return { allowed: true, decision, downgraded: false }
@@ -222,7 +245,7 @@ export function createSecurityContext(
     action: string,
     object: SecurityObject,
     includeForceAllow: boolean,
-    tool: { name: string; operation?: string } | undefined,
+    tool: SecurityToolRef | undefined,
     realPath: ((path: string) => string) | undefined
   ): SecurityDecision => {
     // 一次现取，装配（lets）与求值（match）共用同一份 —— 两处各取一次会给出
@@ -243,20 +266,34 @@ export function createSecurityContext(
     )
   }
 
-  /** 评估入口的公共前半段：路径客体解析真实去处，再评估（被动 UI 与 enforce 同一条路） */
+  /**
+   * 评估入口的公共前半段：路径客体解析真实去处，再评估（被动 UI 与 enforce 同一条路），
+   * 最后按这个点位能做的处置把做不到的放行改判为拒绝（缺省一个都做不了）。
+   */
   const judge = (
     action: string,
     object: SecurityObject,
     includeForceAllow: boolean,
-    tool?: { name: string; operation?: string }
+    tool?: SecurityToolRef,
+    supportedDispositions: readonly Disposition[] = []
   ): { object: SecurityObject; decision: SecurityDecision } => {
     const realPath = realPathsForOneEvaluation()
     const resolved = atRealPath(object, realPath)
     return {
       object: resolved,
-      decision: evaluateInternal(action, resolved, includeForceAllow, tool, realPath)
+      decision: withDispositionSupport(
+        evaluateInternal(action, resolved, includeForceAllow, tool, realPath),
+        supportedDispositions
+      )
     }
   }
+
+  /** 工具维度：每个 PEP 都带 opts.toolName（match 里的 tool.name 因此对全客体可用）；还原了才带 restored */
+  const toolOf = (opts: EnforceOpts): SecurityToolRef => ({
+    name: opts.toolName,
+    operation: opts.operation,
+    ...(opts.restored?.length ? { restored: opts.restored } : {})
+  })
 
   const enforce = async (
     action: string,
@@ -264,10 +301,9 @@ export function createSecurityContext(
     opts: EnforceOpts
   ): Promise<EnforceOutcome> => {
     const t0 = Date.now()
-    // 工具维度自动填充：每个 PEP 都带 opts.toolName（match 里的 tool.name 因此对全客体可用）
-    const tool = { name: opts.toolName, operation: opts.operation }
+    const tool = toolOf(opts)
     // 询问卡片、「允许并记住」与决策日志都拿解析后的客体 —— 与策略判的是同一个位置
-    const judged = judge(action, object, true, tool)
+    const judged = judge(action, object, true, tool, opts.supportedDispositions)
     return executeDecision({
       provider,
       request: { subject, action, tool, object: judged.object, environment },
@@ -279,7 +315,13 @@ export function createSecurityContext(
 
   return {
     evaluate: (action, object, opts) =>
-      judge(action, object, opts?.includeForceAllow !== false).decision,
+      judge(
+        action,
+        object,
+        opts?.includeForceAllow !== false,
+        opts?.tool,
+        opts?.supportedDispositions
+      ).decision,
 
     // 被动 UI 判定：includeForceAllow 缺省 false（per-path 授权不放宽 UI 范围），不记日志
     evaluateReadOnly: (action, object, opts) =>
@@ -287,7 +329,7 @@ export function createSecurityContext(
 
     // 不能询问的点位：先完整结算，再把 ask 降级为拒绝（见 types.ts SecurityContext.judgeGate）
     judgeGate: (action, object, opts) =>
-      gateVerdictOf(judge(action, object, true, opts?.tool).decision),
+      gateVerdictOf(judge(action, object, true, opts?.tool, opts?.supportedDispositions).decision),
 
     // enforcePath / enforceGitOp / enforceUrl / enforceSession 什么都不返回 —— 用户的「其它」反馈没有地方带回去，
     // 只能抛出。强制 onOther:'throw'：调用方误传 'return' 时，反馈不能被当成放行
@@ -337,11 +379,18 @@ export function createSecurityContext(
             openWorld: opts.mcp.openWorld
           }
         : { type: 'invocation' }
-      const probe = judge('execute', object, true, {
-        name: opts.toolName,
-        operation: opts.operation
-      }).decision
-      if (probe.effect === 'allow') return { status: 'allowed' }
+      const probe = judge(
+        'execute',
+        object,
+        true,
+        toolOf(opts),
+        opts.supportedDispositions
+      ).decision
+      if (probe.effect === 'allow') {
+        return probe.dispositions
+          ? { status: 'allowed', dispositions: probe.dispositions }
+          : { status: 'allowed' }
+      }
       return enforce('execute', object, opts)
     },
 

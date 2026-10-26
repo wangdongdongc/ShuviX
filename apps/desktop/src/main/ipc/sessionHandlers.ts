@@ -144,6 +144,13 @@ export function registerSessionHandlers(): void {
     )
   )
 
+  /** 自动脱敏：占位符的类别与真值（界面渲染标记） */
+  defineHandler('redaction:resolve', (ctx, params: { sessionId: string; placeholders: string[] }) =>
+    operationContext.run(createClientContext(ctx, params.sessionId), () =>
+      chatGateway.resolveRedactions(params.sessionId, params.placeholders)
+    )
+  )
+
   /** 销毁指定运行时资源 */
   defineHandler('runtime:destroy', (ctx, params: { sessionId: string; runtimeId: string }) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () =>

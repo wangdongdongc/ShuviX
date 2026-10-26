@@ -93,6 +93,10 @@ export interface TestHostOptions {
   onSessionClosed?: SessionHostDeps['onSessionClosed']
   /** 临时会话 id（MemoryStorage） */
   ephemeral?: readonly string[]
+  /** 自动脱敏的钥匙（给了每条会话都在写入时替换、可经 session.redaction 还原） */
+  redaction?: SessionHostDeps['redaction']
+  /** 出口按它判（与 redaction 同时给才包 Models 装饰器） */
+  redactionPolicy?: SessionHostDeps['redactionPolicy']
   /** 整份替换缺省的测试覆盖（关重试 / 关自动压缩） */
   settingsOverrides?: ShuviXSettingsOverrides
   interruptedSendPolicy?: InterruptedSendPolicy
@@ -354,6 +358,8 @@ export async function makeHost(options: TestHostOptions = {}): Promise<TestHost>
       ? {}
       : { resolveProfileModel: options.resolveProfileModel }),
     ...(options.maxAgentDepth === undefined ? {} : { maxAgentDepth: options.maxAgentDepth }),
+    ...(options.redaction === undefined ? {} : { redaction: options.redaction }),
+    ...(options.redactionPolicy === undefined ? {} : { redactionPolicy: options.redactionPolicy }),
     logger: {
       info: () => {},
       warn: (message) => warnings.push(message),

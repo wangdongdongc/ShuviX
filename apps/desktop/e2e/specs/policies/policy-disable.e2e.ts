@@ -195,7 +195,8 @@ describe('内置安全策略的停用开关', () => {
       PATH_GATE,
       'ask-on-session-access',
       'daily-bot-access',
-      'network-admission'
+      'network-admission',
+      'redact-sensitive'
     ])
     for (const p of builtins) {
       expect(p, p.name).toMatchObject({ objectId: `policy:builtin:${p.name}`, disableable: true })

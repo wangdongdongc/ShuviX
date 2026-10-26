@@ -1,4 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react'
+import { RedactedText } from './RedactedText'
 
 /**
  * 图标槽 — 类型图标与状态图标共用同一列。
@@ -57,7 +58,9 @@ export function StepRow({
       {glyph != null && <span className={ICON_SLOT}>{glyph}</span>}
       {badge}
       {label && <span className="font-medium text-text-secondary flex-shrink-0">{label}</span>}
-      <span className="flex-1 min-w-0 truncate">{detail}</span>
+      <span className="flex-1 min-w-0 truncate">
+        {typeof detail === 'string' ? <RedactedText text={detail} /> : detail}
+      </span>
       {trailing}
     </button>
   )

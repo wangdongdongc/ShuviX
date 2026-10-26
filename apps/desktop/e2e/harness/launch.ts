@@ -413,7 +413,10 @@ export function instanceEnv(home: string, extra: Record<string, string> = {}): N
     HOME: home,
     SHUVIX_VERIFY_USERDATA: join(home, 'userdata'),
     // CLI 认会话的密钥（services/cliSession.ts）：runCli 按它替「会话里的命令」算出 SHUVIX_SESSION_KEY
-    SHUVIX_E2E_CLI_SESSION_SECRET: E2E_CLI_SESSION_SECRET
+    SHUVIX_E2E_CLI_SESSION_SECRET: E2E_CLI_SESSION_SECRET,
+    // 本地密文只用 v1（utils/crypto.ts）：钥匙串属于登录用户、不随假 HOME 隔离 —— v2 会读写真实 app 的
+    // 钥匙串条目，还可能被授权框卡住
+    SHUVIX_ENCRYPTION: 'v1'
   }
   // 该变量会让 electron 二进制退化为纯 node（不起窗口）—— 必须剔除
   delete env.ELECTRON_RUN_AS_NODE

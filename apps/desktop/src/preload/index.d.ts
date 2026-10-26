@@ -7,6 +7,7 @@ import type { ShuvixMdValidation } from '@shuvix/chat-protocol/shuvixMdContract'
 import type { MdMetaNoteView, MdMetaWriteResult } from '@shuvix/chat-protocol/mdMeta'
 import type { KnowledgeEntry, KnowledgeMentionEntry } from '@shuvix/chat-protocol/knowledge'
 import type { SessionMentionEntry } from '@shuvix/chat-protocol/sessionMention'
+import type { RedactionMarkInfo } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type { BgTaskLogChunk } from '@shuvix/chat-protocol/types/bgTask'
 import type { TaskInfo } from '@shuvix/chat-protocol/types/task'
 import type { AgentContinueResult } from '@shuvix/chat-protocol/chatApi'
@@ -542,6 +543,12 @@ declare global {
     runtime: {
       statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
       destroy: (params: { sessionId: string; runtimeId: string }) => Promise<{ success: boolean }>
+    }
+    redaction: {
+      resolve: (params: {
+        sessionId: string
+        placeholders: string[]
+      }) => Promise<Record<string, RedactionMarkInfo>>
     }
     dbCredential: {
       list: () => Promise<Omit<DbCredential, 'password'>[]>

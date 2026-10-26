@@ -3,6 +3,8 @@ import { Check, Copy } from 'lucide-react'
 import type { ShellSandboxState } from '@shuvix/chat-protocol/types/chatMessage'
 import { copyToClipboard } from '../../utils/clipboard'
 import { SandboxBadge } from './SandboxTag'
+import { RedactedText } from './RedactedText'
+import { useRestoreForCopy, useRestoredText } from '../../hooks/useRedaction'
 
 /**
  * 提示符里的 cwd：先折 home，再长则只留末两段 —— 终端提示符本来也不显示全路径。
@@ -62,6 +64,7 @@ export function TerminalView({
 }: TerminalViewProps): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const outRef = useRef<HTMLPreElement>(null)
+  const restore = useRestoreForCopy()
   // 是否处于贴底态 —— 只在 stickToBottom 模式下有意义
   const stuckRef = useRef(true)
 
@@ -72,6 +75,8 @@ export function TerminalView({
   }, [output, stickToBottom])
   const failed = typeof exitCode === 'number' && exitCode !== 0
   const location = host || (cwd ? shortCwd(cwd) : '')
+  // 悬停提示是纯文本，显示不了标记：直接换成真值
+  const locationTitle = useRestoredText(host || cwd || '')
 
   return (
     // `data-terminal-view`：终端形态详情的语义锚点（e2e 据此认，不认样式类）
@@ -82,7 +87,7 @@ export function TerminalView({
       {/* 复制命令 —— 悬浮才出，不占提示符行的位置 */}
       <button
         onClick={() => {
-          copyToClipboard(command)
+          copyToClipboard(restore(command))
           setCopied(true)
           setTimeout(() => setCopied(false), 1500)
         }}
@@ -104,14 +109,16 @@ export function TerminalView({
         {location && (
           <span
             className="inline-block max-w-[45%] truncate align-top mr-1.5 text-accent/80"
-            title={host || cwd}
+            title={locationTitle}
           >
-            {location}
+            <RedactedText text={location} />
           </span>
         )}
         {sandbox && <SandboxBadge state={sandbox} />}
         <span className="mr-1.5 text-success/70 select-none">❯</span>
-        <span className="whitespace-pre-wrap text-text-primary">{command}</span>
+        <span className="whitespace-pre-wrap text-text-primary">
+          <RedactedText text={command} />
+        </span>
       </div>
 
       {/* 输出：紧跟命令，无标签无分隔线 —— 终端里本来就是连着的 */}
@@ -128,7 +135,7 @@ export function TerminalView({
           }
           className={`px-2 pt-1 pb-1.5 ${outputMaxHClass} overflow-y-auto overscroll-contain thin-scrollbar whitespace-pre-wrap break-words text-text-secondary`}
         >
-          {output}
+          <RedactedText text={output} />
         </pre>
       ) : running ? (
         <div className="px-2 pt-1 pb-1.5">

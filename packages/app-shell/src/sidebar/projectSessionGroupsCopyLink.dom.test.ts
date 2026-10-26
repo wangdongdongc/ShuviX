@@ -40,6 +40,9 @@ const store = vi.hoisted(() => ({
 }))
 
 vi.mock('@shuvix/chat-ui', () => ({
+  // 自动脱敏的标题标记：这里只看行菜单，原样交回标题
+  RedactedText: ({ text }: { text: string }) => text,
+  RedactionSessionProvider: ({ children }: { children: unknown }) => children,
   useChatStore: Object.assign((selector: (s: typeof store) => unknown) => selector(store), {
     getState: () => store
   }),

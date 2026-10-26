@@ -1691,5 +1691,29 @@
     "errorClosed": "This suggestion can no longer be accepted",
     "errorNotFound": "This suggestion could not be found",
     "errorFailed": "Could not send it: {{error}}"
+  },
+  "redaction": {
+    "category": {
+      "PRIVATE_KEY": "Private key",
+      "API_KEY": "API key",
+      "TOKEN": "Token",
+      "PASSWORD": "Password",
+      "SECRET": "Secret",
+      "EMAIL": "Email address",
+      "ID_CARD": "ID card number",
+      "PHONE": "Phone number",
+      "BANK_CARD": "Card number",
+      "SSN": "Social security number",
+      "PASSPORT": "Passport number",
+      "IBAN": "IBAN",
+      "BIRTHDAY": "Date of birth",
+      "MAC": "MAC address",
+      "SERIAL": "Serial number",
+      "USERNAME": "User name",
+      "HOSTNAME": "Host name",
+      "IP": "IP address",
+      "BUCKET": "Storage bucket"
+    },
+    "unavailable": "{{label}} (the value cannot be read on this computer)"
   }
 }

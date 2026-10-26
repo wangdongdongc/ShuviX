@@ -103,17 +103,19 @@ describe('selection matrix (promptExtensionsFor)', () => {
   })
 
   it('PS-06 everything selected comes out in the fixed order', () => {
-    const all = promptExtensionsFor(
-      spec({
+    const all = promptExtensionsFor({
+      ...spec({
         name: 'bot',
         instructionFiles: ['CLAUDE.md'],
         projectAwareness: true,
         toolNames: ['knowledge']
-      })
-    )
+      }),
+      placeholders: true
+    })
     expect(all).toEqual([...PROMPT_EXTENSION_ORDER])
     expect(PROMPT_EXTENSION_ORDER).toEqual([
       'shuvix.prompt.persona',
+      'shuvix.prompt.placeholders',
       'shuvix.prompt.instructions',
       'shuvix.prompt.project-prompt',
       'shuvix.prompt.knowledge',
@@ -121,7 +123,7 @@ describe('selection matrix (promptExtensionsFor)', () => {
     ])
   })
 
-  it('PS-07 the extension set: five extensions with one untagged section each, select() = names', () => {
+  it('PS-07 the extension set: six extensions with one untagged section each, select() = names', () => {
     const prompt = createPromptExtensions({})
     expect(prompt.all.map((extension) => extension.name)).toEqual([...PROMPT_EXTENSION_ORDER])
     for (const extension of prompt.all) {
@@ -131,6 +133,7 @@ describe('selection matrix (promptExtensionsFor)', () => {
     }
     expect(prompt.all.map((extension) => extension.sections![0]!.key)).toEqual([
       'persona',
+      'placeholders',
       'project_instructions',
       'project_prompt',
       'knowledge_bases',
@@ -138,7 +141,14 @@ describe('selection matrix (promptExtensionsFor)', () => {
     ])
     const s = spec({ projectAwareness: true, toolNames: ['knowledge'] })
     expect(prompt.select(s).map((extension) => extension.name)).toEqual(promptExtensionsFor(s))
-    expect(prompt.get(P.knowledge)).toBe(prompt.all[3])
+    expect(prompt.get(P.knowledge)).toBe(prompt.all[4])
+    // 自动脱敏那一段只在宿主做脱敏时选中
+    expect(prompt.select(s).map((extension) => extension.name)).not.toContain(P.placeholders)
+    expect(
+      createPromptExtensions({}, { placeholders: true })
+        .select(s)
+        .map((extension) => extension.name)
+    ).toEqual([P.persona, P.placeholders, P.projectPrompt, P.knowledge])
   })
 })
 

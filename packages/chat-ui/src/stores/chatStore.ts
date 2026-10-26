@@ -20,6 +20,7 @@
  * 草稿、输入框、各种 UI 信号与之前一样。
  */
 import { create } from 'zustand'
+import { forgetRedactions } from './redactionCache'
 import type { InlineToken, ToolResultDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import type { ToolPresentation } from '@shuvix/chat-protocol/types/toolPresentation'
 import { DEFAULT_THINKING_LEVEL } from '@shuvix/chat-protocol/types/thinking'
@@ -1003,14 +1004,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       sessions.sort((a, b) => (b.lastActiveAt || b.updatedAt) - (a.lastActiveAt || a.updatedAt))
       return { sessions }
     }),
-  removeSession: (id) =>
+  removeSession: (id) => {
+    // 会话删了：它的脱敏真值不再留在界面内存里
+    forgetRedactions(id)
     set((state) => ({
       sessions: state.sessions.filter((s) => s.id !== id),
       // 删除的是当前激活会话才清空 active
       ...(state.active?.type === 'session' && state.active.id === id
         ? { ...deriveActive(null), messages: NO_MESSAGES }
         : {})
-    })),
+    }))
+  },
   setToolPresentations: (presentations) => set({ toolPresentations: presentations }),
   setProjectPath: (path) => set({ projectPath: path }),
   setSlashCommands: (commands) => set({ slashCommands: commands }),

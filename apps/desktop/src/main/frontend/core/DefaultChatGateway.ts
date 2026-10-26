@@ -1,5 +1,10 @@
 import type { ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
+import {
+  MAX_RESOLVE_PLACEHOLDERS,
+  isPlaceholder,
+  type RedactionMarkInfo
+} from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type {
   AgentInitResult,
   AgentRuntimeInfo,
@@ -406,6 +411,34 @@ export class DefaultChatGateway implements ChatGateway {
     } catch {
       return undefined
     }
+  }
+
+  // ─── 自动脱敏 ──────────────────────────────────
+
+  async resolveRedactions(
+    sessionId: string,
+    placeholders: string[]
+  ): Promise<Record<string, RedactionMarkInfo>> {
+    const wanted = (Array.isArray(placeholders) ? placeholders : [])
+      .filter((p): p is string => typeof p === 'string' && isPlaceholder(p))
+      .slice(0, MAX_RESOLVE_PLACEHOLDERS)
+    const result: Record<string, RedactionMarkInfo> = {}
+    if (wanted.length === 0) return result
+    const agent =
+      sessionService.getAgentSession(sessionId) ??
+      (await sessionService.peekAgentSession(sessionId))
+    const redaction = agent?.durable.redaction
+    if (!redaction) return result
+    const table = await redaction.table()
+    for (const placeholder of wanted) {
+      const item = table.get(placeholder)
+      if (!item) continue
+      result[placeholder] =
+        item.value === undefined
+          ? { category: item.category }
+          : { category: item.category, value: item.value }
+    }
+    return result
   }
 
   // ─── 运行时资源 ──────────────────────────────────

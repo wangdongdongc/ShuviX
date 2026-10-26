@@ -12,6 +12,13 @@ import {
   Loader2
 } from 'lucide-react'
 import { copyToClipboard } from '../../utils/clipboard'
+import { useRestoreForCopy } from '../../hooks/useRedaction'
+import {
+  PLACEHOLDER_PATTERN,
+  categoryOfPlaceholder,
+  trimPartialPlaceholder
+} from '@shuvix/chat-protocol/utils/redactionPlaceholders'
+import { RedactedText } from './RedactedText'
 import { hasThinkingContent } from '@shuvix/chat-protocol/utils/thinking'
 import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
 import { MarkdownText } from './markdownComponents'
@@ -57,6 +64,20 @@ interface AssistantBubbleProps {
    * 不给 = 不显示按钮）。传稳定的引用
    */
   onFork?: (assistantMsgId: string) => void
+}
+
+/**
+ * 朗读的文本：脱敏的占位符读成它的类别（「API key」），既不念出 `{{API_KEY_…}}`，也不把真值交给朗读服务
+ * （它可能在别的机器上）。
+ */
+function speakableText(
+  text: string,
+  t: (key: string, opts?: { defaultValue: string }) => string
+): string {
+  return text.replace(new RegExp(PLACEHOLDER_PATTERN, 'g'), (p) => {
+    const category = categoryOfPlaceholder(p)
+    return t(`redaction.category.${category}`, { defaultValue: category })
+  })
 }
 
 /**
@@ -149,9 +170,13 @@ export const AssistantBubble = memo(function AssistantBubble({
   ) {
     setHeld({ msgs, content: storeStreamingContent })
   }
+  // 流式结尾还没写完的占位符先不显示（写完了再作为脱敏标记出现）
   const displayContent = isStreaming
-    ? storeStreamingContent || (held && held.msgs === msgs ? held.content : '')
+    ? trimPartialPlaceholder(
+        storeStreamingContent || (held && held.msgs === msgs ? held.content : '')
+      )
     : answerText
+  const restore = useRestoreForCopy()
   // 落盘后的思考已经是过程区里的块（按原序），这里只补流式期间还在缓冲里的那段
   const liveThinking =
     isStreaming && hasThinkingContent(storeStreamingThinking) ? storeStreamingThinking : null
@@ -162,7 +187,8 @@ export const AssistantBubble = memo(function AssistantBubble({
   ) : null
 
   const handleCopy = (): void => {
-    copyToClipboard(displayContent)
+    // 复制出去的是界面上看到的样子：脱敏的占位符换回真值
+    copyToClipboard(restore(displayContent))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -200,7 +226,9 @@ export const AssistantBubble = memo(function AssistantBubble({
         {/* 终答正文：Markdown / 原始文本双形态 */}
         {displayContent &&
           (showRaw ? (
-            <pre className="code-surface text-sm text-text-primary font-mono">{displayContent}</pre>
+            <pre className="code-surface text-sm text-text-primary font-mono">
+              <RedactedText text={displayContent} />
+            </pre>
           ) : (
             <div className="markdown-body text-sm">
               {/* 代码块自己看不出消息写没写完（mermaid 写完才出错误卡、才能导出），由这一层告诉它 */}
@@ -290,7 +318,7 @@ export const AssistantBubble = memo(function AssistantBubble({
                 onClick={() =>
                   isThisPlaying || isThisLoading
                     ? stop()
-                    : speak(displayContent.slice(0, 4000), anchor.id)
+                    : speak(speakableText(displayContent, t).slice(0, 4000), anchor.id)
                 }
                 className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
                 title={isThisPlaying || isThisLoading ? t('message.stopTts') : t('message.playTts')}

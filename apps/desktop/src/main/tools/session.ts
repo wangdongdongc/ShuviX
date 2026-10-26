@@ -56,6 +56,7 @@ import {
   type SubSessionInfo
 } from '../services/subSessionRunner'
 import { t } from '../i18n'
+import { carryRedactions, carryRedactionsFromAny } from '../services/redactionCarry'
 
 export const SESSION_TOOL_NAME = 'session'
 
@@ -238,6 +239,19 @@ const COLLECT_HINT =
   'You do not have to wait here: when the turn ends, or stops to ask you something, you are brought back with a notice (at the latest, when the user next speaks). Get on with other work, or tell the user what you started. If you need the answer inside this same turn, collect it with action "wait-for-sessions" — one call that blocks until it is done and hands back the answer. Do NOT sleep and poll.'
 
 /** 结果排版：一段文本，行间空行 —— 与其他工具的多段结果同形 */
+/** 像占位符的一段（含模型写坏的形式）—— 没有就不必去别的会话找表项 */
+const PLACEHOLDER_LIKE = /[A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8}/
+
+/** 结果里会带回别的会话说的话的动作（自动脱敏要把那边的对照表项带回来） */
+const CARRY_BACK_ACTIONS: ReadonlySet<string> = new Set([
+  'prompt-session',
+  'wait-for-sessions',
+  'read-session',
+  'answer-session',
+  'steer-session',
+  'inspect-session'
+])
+
 function text(...lines: string[]): ToolResult<SessionToolDetails | undefined> {
   return {
     content: [{ type: 'text' as const, text: lines.filter(Boolean).join('\n\n') }],
@@ -407,6 +421,40 @@ export class SessionTool extends BaseTool<typeof SessionParamsSchema> {
       session_id: rawParams.session_id ?? rawParams.sub_session_id
     }
     const authorize = this.authorizeFor(action, params, toolCallId, call, signal)
+    // 自动脱敏（§5.3）：发进别的会话的回答里有本会话的占位符 —— 先把表项带过去（指令与引导经 AgentSession
+    // 的驱动来源带，这里只剩回答）
+    const target = params.session_id?.trim()
+    if (action === 'answer-session' && target) {
+      await carryRedactions(this.ctx.sessionId, target, [
+        params.message ?? '',
+        ...(params.selections ?? []).map(String)
+      ])
+    }
+    const result = await this.dispatch(action, params, rawParams, call, authorize, signal)
+    // 读回来的结果里有那条（那几条）会话的占位符：把表项带回本会话
+    if (CARRY_BACK_ACTIONS.has(action)) {
+      const texts = result.content.flatMap((block) => (block.type === 'text' ? [block.text] : []))
+      if (texts.some((text) => PLACEHOLDER_LIKE.test(text))) {
+        const listed = target ? undefined : subSessionRunner.list(this.ctx.sessionId)
+        const sources = target
+          ? [target]
+          : listed && !('error' in listed)
+            ? listed.subSessions.map((s) => s.id)
+            : []
+        await carryRedactionsFromAny(sources, this.ctx.sessionId, texts)
+      }
+    }
+    return result
+  }
+
+  private async dispatch(
+    action: SessionAction,
+    params: SessionToolParams,
+    rawParams: SessionToolParams,
+    call: ToolCallScope,
+    authorize: AuthorizeSessionAccess,
+    signal: AbortSignal | undefined
+  ): Promise<ToolResult<SessionToolDetails | undefined>> {
     switch (action) {
       case 'set-title':
         return this.setTitle(params.title)

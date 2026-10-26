@@ -19,6 +19,7 @@
 import { Bot, MessageSquare, MessagesSquare, FileText, PictureInPicture2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { RowMenuButton } from './RowMenuButton'
+import { RedactedText, RedactionSessionProvider } from '@shuvix/chat-ui'
 
 export interface SessionItemProps {
   session: { id: string; title: string }
@@ -121,7 +122,12 @@ export function SessionItem({
         icon
       )}
       <div className="flex-1 min-w-0 flex items-center gap-1.5 group-hover:pr-6">
-        <span className="truncate">{session.title}</span>
+        <span className="truncate">
+          {/* 标题可能带自动脱敏的占位符（起标题的 agent 看到的是占位符）：按这一行的会话显示成标记 */}
+          <RedactionSessionProvider sessionId={session.id}>
+            <RedactedText text={session.title} />
+          </RedactionSessionProvider>
+        </span>
         {subCount > 0 && (
           <span
             className={`shrink-0 text-[0.8em] tabular-nums ${

@@ -191,6 +191,26 @@ export const ArtifactPinsDoc = defineDoc<ArtifactPinsState>({
   initial: () => ({ items: {} })
 })
 
+export type RedactionTableState = {
+  /**
+   * 占位符 → 它代表的那一处：类别、认出它的规则、**加密过的**真值（宿主的 RedactionVault 加密；见
+   * `redactionTable.ts`）。
+   */
+  items: { [placeholder: string]: { category: string; rule: string; value: string } }
+}
+
+/**
+ * 会话的占位符对照表（docs/auto-redaction-design.md §5）：对话记录里存的是占位符，真值只在这里，加密存放。
+ * 整条会话一份（scope session）—— 同一会话里的派生 agent、hook agent 共用；会话 fork 时随存储整拷，删会话时随
+ * 存储删掉，回退不动。只增不改：同一个占位符永远对应同一个值。**不补种**：第一次记时才建。
+ */
+export const RedactionTableDoc = defineDoc<RedactionTableState>({
+  kind: 'shuvix.redaction-table',
+  version: 1,
+  scope: 'session',
+  initial: () => ({ items: {} })
+})
+
 export type NoticeData = { kind: string; [key: string]: JsonValue }
 
 export const NoticeEntry = defineEntry<NoticeData>('shuvix.notice')

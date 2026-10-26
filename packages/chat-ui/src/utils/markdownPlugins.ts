@@ -20,6 +20,7 @@ import rehypeRaw from 'rehype-raw'
 import rehypeKatex from 'rehype-katex'
 import { remarkMathDollarGuard } from './remarkMathDollarGuard'
 import { rehypeSanitizeRawHtml } from './rehypeSanitizeRawHtml'
+import { rehypeRedactionMarks } from './rehypeRedactionMarks'
 
 /**
  * 代码高亮，**全进程只建一次**。react-markdown 10 每次渲染都新建一个 unified 处理器、重新调用每个插件的
@@ -48,10 +49,14 @@ export const markdownRemarkPlugins = [remarkGfm, remarkMath, remarkMathDollarGua
  *
  * rehype-katex 仍在 rehype-raw 之后，理由没变：raw 会把整棵树序列化再解析一遍，KaTeX 吐出
  * 的 MathML 没必要陪着走一趟。
+ *
+ *   5. 自动脱敏的标记 —— 占位符换成 `<redaction-mark>`，同样是可信标记，也必须在闸之后；还要在高亮之后
+ *                      （高亮整个换掉代码块的子节点），理由见 rehypeRedactionMarks 的文件头。
  */
 export const markdownRehypePlugins = [
   rehypeRaw,
   rehypeSanitizeRawHtml,
   rehypeHighlightShared,
-  rehypeKatex
+  rehypeKatex,
+  rehypeRedactionMarks
 ]

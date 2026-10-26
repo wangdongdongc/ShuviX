@@ -51,9 +51,10 @@ exception. The list is generated from the channel table of this version.
 
 ### `sessions`
 
-- group: `agent`, `bgTask`, `calendar`, `command`, `mentions`, `message`, `runtime`, `session`, `suggestion`, `sync`, `tracking`
+- group: `agent`, `bgTask`, `calendar`, `command`, `mentions`, `message`, `redaction`, `runtime`, `session`, `suggestion`, `sync`, `tracking`
 - read: `agent:init`, `agentMonitor:detail`, `agentMonitor:list`, `bgTask:list`, `bgTask:readInvocation`, `bgTask:readLog`, `calendar:daysInMonth`, `calendar:firstEntryOnDay`, `calendar:reportDaysInMonth`, `calendar:reportOnDay`, `calendar:sessionsOnDay`, `command:list`, `message:list`, `runtime:statuses`, `session:getById`, `session:list`, `session:mentionEntries`, `sync:frame`, `tracking:list`
 - write: `agent:abort`, `agent:continue`, `agent:destroy`, `agent:followUp`, `agent:getInfo`, `agent:prompt`, `agent:respondToInput`, `agent:setModel`, `agent:setThinkingLevel`, `agent:steer`, `agent:subAgentPrompt`, `agent:withdrawQueued`, `bgTask:clearDone`, `bgTask:dismiss`, `bgTask:stop`, `calendar:deleteReport`, `calendar:openReport`, `message:clear`, `message:rollback`, `runtime:destroy`, `session:create`, `session:delete`, `session:fork`, `session:updateEnabledTools`, `session:updateKnowledgeBases`, `session:updateProject`, `session:updateTitle`, `subSession:destroy`, `subSession:interrupt`, `suggestion:accept`, `tracking:deleteItem`, `tracking:openFolder`, `tracking:openNote`
+- admin: `redaction:resolve`
 - `settings:set` admin: `session.*`
 
 ### `projects`

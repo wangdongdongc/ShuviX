@@ -59,6 +59,9 @@ import { ReviewedMark, ReviewingIcon } from './ReviewTag'
 import { InvocationView } from './SandboxTag'
 import { toolReviewOf } from '@shuvix/chat-protocol/types/toolReview'
 import { clipLine } from '../../utils/clipLine'
+import { RedactedText } from './RedactedText'
+import { useRestoreForCopy } from '../../hooks/useRedaction'
+import { trimPartialPlaceholder } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 
 /** lucide 图标名 → 组件映射（按需扩展） */
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -298,7 +301,11 @@ export function ToolCallBlock({
         {/* 外层不限高：diff / 代码 / 裸文本各自是自己那块的唯一滚动主（见 detailViewport.ts） */}
         <div className="py-1 space-y-1.5">
           {/* 流式生成中的参数文本 */}
-          {streamingArgsText && <pre className={STREAM_PRE_CLASS}>{streamingArgsText}</pre>}
+          {streamingArgsText && (
+            <pre className={STREAM_PRE_CLASS}>
+              <RedactedText text={trimPartialPlaceholder(streamingArgsText)} />
+            </pre>
+          )}
 
           {/* 写入/编辑成功时展示 DiffViewer */}
           {editDiff && <DiffViewer diff={editDiff} />}
@@ -344,7 +351,9 @@ export function ToolCallBlock({
                       {t('toolCall.params')}
                     </div>
                     <pre className={DETAIL_PRE_CLASS}>
-                      {typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
+                      <RedactedText
+                        text={typeof args === 'string' ? args : JSON.stringify(args, null, 2)}
+                      />
                     </pre>
                   </div>
                 )}
@@ -353,7 +362,9 @@ export function ToolCallBlock({
                     <div className="text-[10px] text-text-tertiary mb-0.5">
                       {t('toolCall.result')}
                     </div>
-                    <pre className={DETAIL_PRE_CLASS}>{result}</pre>
+                    <pre className={DETAIL_PRE_CLASS}>
+                      <RedactedText text={result} />
+                    </pre>
                   </div>
                 )}
               </>
@@ -445,7 +456,9 @@ function ToolFormDetail({
       {result && (
         <div>
           <div className="text-[10px] text-text-tertiary mb-0.5">{t('toolCall.result')}</div>
-          <pre className={DETAIL_PRE_CLASS}>{result}</pre>
+          <pre className={DETAIL_PRE_CLASS}>
+            <RedactedText text={result} />
+          </pre>
         </div>
       )}
     </>
@@ -507,11 +520,12 @@ function CodeFormItem({
   lineNumbers: boolean
 }): React.JSX.Element | null {
   const [copied, setCopied] = useState(false)
+  const restore = useRestoreForCopy()
 
   if (!code) return null
 
   const handleCopy = (): void => {
-    copyToClipboard(code)
+    copyToClipboard(restore(code))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -552,7 +566,9 @@ function TextFormItem({ label, value }: { label?: string; value: unknown }): Rea
   return (
     <div>
       {label && <div className="text-[10px] text-text-tertiary mb-0.5">{label}</div>}
-      <pre className={DETAIL_PRE_CLASS}>{text}</pre>
+      <pre className={DETAIL_PRE_CLASS}>
+        <RedactedText text={text} />
+      </pre>
     </div>
   )
 }

@@ -192,6 +192,7 @@ beforeEach(() => {
     listMessages: mocks.delegate('listMessages', async () => [{ id: 'm1' }]),
     // 网关这一条是异步的（ssh 那一份可能要读用户配置）：替身照真件的形状回 Promise
     getRuntimeStatuses: mocks.delegate('getRuntimeStatuses', async () => [{ id: 'rt1' }]),
+    resolveRedactions: mocks.delegate('resolveRedactions', async () => ({})),
     listTools: mocks.delegate('listTools', () => [{ name: 'mcp:chrome' }]),
     continue: mocks.delegate('continue', async () => ({})),
     withdrawQueued: mocks.delegate('withdrawQueued', async () => 'aborted'),
@@ -286,6 +287,10 @@ const FIXTURES: Record<string, { args: unknown[]; delegate: () => ReturnType<typ
   'session.getById': { args: [OWNED], delegate: () => mocks.getById },
   'message.list': { args: [OWNED], delegate: () => mocks.gateway.listMessages },
   'runtime.statuses': { args: [OWNED], delegate: () => mocks.gateway.getRuntimeStatuses },
+  'redaction.resolve': {
+    args: [{ sessionId: OWNED, placeholders: [] }],
+    delegate: () => mocks.gateway.resolveRedactions
+  },
   'bgTask.list': { args: [{ sessionId: OWNED }], delegate: () => mocks.taskList },
   'tools.list': { args: [OWNED], delegate: () => mocks.gateway.listTools },
   'tools.presentations': { args: [], delegate: () => mocks.presentations },
@@ -330,6 +335,7 @@ const SESSION_PATHS: Array<[string, (sid: unknown) => unknown[]]> = [
   ['session.getById', (sid) => [sid]],
   ['message.list', (sid) => [sid]],
   ['runtime.statuses', (sid) => [sid]],
+  ['redaction.resolve', (sid) => [{ sessionId: sid, placeholders: [] }]],
   ['bgTask.list', (sid) => [{ sessionId: sid }]],
   ['tools.list', (sid) => [sid]]
 ]

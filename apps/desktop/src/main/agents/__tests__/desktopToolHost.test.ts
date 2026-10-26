@@ -594,6 +594,7 @@ describe('resolveAgentTools', () => {
     expect(resolved.extraTools![0]).toBe(wraps[0].wrapped)
     expect(Object.keys(wraps[0].opts).sort()).toEqual([
       'executionHooks',
+      'redaction',
       'security',
       'sessionId',
       'spill'
@@ -1060,7 +1061,13 @@ describe('包装', () => {
     expect(new Set(mocks.wrapCalls.map((c) => c.tool)).size).toBe(returned.length)
     for (const tool of returned) {
       const opts = wrapOf(tool)
-      expect(Object.keys(opts).sort()).toEqual(['executionHooks', 'security', 'sessionId', 'spill'])
+      expect(Object.keys(opts).sort()).toEqual([
+        'executionHooks',
+        'redaction',
+        'security',
+        'sessionId',
+        'spill'
+      ])
       expect(opts.sessionId).toBe('s1')
       expect(opts.spill).toBe('auto')
       expect(opts.security).toBeTypeOf('function')
@@ -1638,7 +1645,13 @@ describe('resolveAgentTools (spawned)', () => {
     expect(tools.length).toBeGreaterThan(0)
     for (const tool of tools) {
       const opts = wrapOf(tool)
-      expect(Object.keys(opts).sort()).toEqual(['executionHooks', 'security', 'sessionId', 'spill'])
+      expect(Object.keys(opts).sort()).toEqual([
+        'executionHooks',
+        'redaction',
+        'security',
+        'sessionId',
+        'spill'
+      ])
       expect(opts).toMatchObject({ sessionId: 's1', spill: 'auto' })
       expect(opts.security).toBeTypeOf('function')
     }
@@ -1804,6 +1817,7 @@ describe('resolveAgentTools (spawned)', () => {
       expect(wraps).toHaveLength(1)
       expect(Object.keys(wraps[0].opts).sort()).toEqual([
         'executionHooks',
+        'redaction',
         'security',
         'sessionId',
         'spill'
@@ -1973,6 +1987,7 @@ describe('rebuildAgentTools (spawned)', () => {
     expect(wraps[0].wrapped).toBe(next)
     expect(Object.keys(wraps[0].opts).sort()).toEqual([
       'executionHooks',
+      'redaction',
       'security',
       'sessionId',
       'spill'
@@ -2053,7 +2068,13 @@ describe('spawned wrapping and the L1 gate', () => {
     expect(new Set(mocks.wrapCalls.map((c) => c.tool)).size).toBe(returned.length)
     for (const tool of returned) {
       const opts = wrapOf(tool)
-      expect(Object.keys(opts).sort()).toEqual(['executionHooks', 'security', 'sessionId', 'spill'])
+      expect(Object.keys(opts).sort()).toEqual([
+        'executionHooks',
+        'redaction',
+        'security',
+        'sessionId',
+        'spill'
+      ])
       expect(opts.sessionId).toBe('s1')
       expect(opts.spill).toBe('auto')
       expect(opts.security).toBeTypeOf('function')

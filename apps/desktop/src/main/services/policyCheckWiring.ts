@@ -9,7 +9,12 @@ import { networkService } from '../frontend/network'
 import { getDefaultPoliciesDir } from '../utils/paths'
 import type { PolicyCheckDeps } from './policyCheck'
 import { policyService } from './policyService'
-import { getDesktopNetworkSecurityContext } from './toolContext'
+import {
+  getDesktopAgentTrialSecurityContext,
+  getDesktopNetworkSecurityContext
+} from './toolContext'
+import { providerCredentialPort } from './models/providerCredentialPort'
+import { policyProviderName } from './redactionPolicy'
 
 export function desktopPolicyCheckDeps(): PolicyCheckDeps {
   return {
@@ -29,6 +34,20 @@ export function desktopPolicyCheckDeps(): PolicyCheckDeps {
     contextFor: (userPolicies, logger) => (subject) =>
       getDesktopNetworkSecurityContext(subject, { userPolicies, logger }),
     status: () => networkService.status(),
-    interfaces: () => networkInterfaces()
+    interfaces: () => networkInterfaces(),
+    redaction: {
+      // 已启用服务商的已启用模型，服务商按策略里的名字（内置 = slug，自定义 = 用户起的名字）
+      models: () => {
+        const rows = providerCredentialPort.listProviders().filter((row) => row.isEnabled)
+        const models = providerCredentialPort.listModels().filter((m) => m.isEnabled)
+        return rows.flatMap((row) =>
+          models
+            .filter((m) => m.providerId === row.id)
+            .map((m) => ({ provider: policyProviderName(row), model: m.modelId }))
+        )
+      },
+      agentContextFor: (userPolicies, logger, subject) =>
+        getDesktopAgentTrialSecurityContext(subject, { userPolicies, logger })
+    }
   }
 }

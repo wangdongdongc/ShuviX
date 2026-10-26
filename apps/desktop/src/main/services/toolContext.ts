@@ -31,10 +31,12 @@ import { skillService } from './skillService'
 import { shellParser } from './shellParserService'
 import { policyService } from './policyService'
 import { botService } from './botService'
+import { restoredCategoriesOf } from './redaction/restoredCalls'
 import {
   type CommandRisk,
   createSecurityContext,
   type CallOwner,
+  type EnforceOpts,
   type SecurityContext,
   type SecurityHostProvider,
   type SecuritySubject,
@@ -463,22 +465,30 @@ export function getDesktopSecurityContext(
       providerFor(agent)
     )
   const base = contextFor(ctx.agent)
-  if (!ctx.agentOf) return base
   const forCall = (opts: { conversationId?: number }): SecurityContext => {
+    if (!ctx.agentOf) return base
     const agent = withCallAgent(ctx, opts).agent
     return agent === ctx.agent ? base : contextFor(agent)
+  }
+  // 自动脱敏：这次工具调用的参数里还原了哪些类别（包装层记下的），补进 tool.restored（§3.5）
+  const withRestored = <T extends EnforceOpts>(opts: T): T => {
+    if (opts.restored !== undefined) return opts
+    const restored = restoredCategoriesOf(ctx.sessionId, opts.taskId)
+    return restored === undefined ? opts : { ...opts, restored }
   }
   return {
     evaluate: (action, object, opts) => base.evaluate(action, object, opts),
     evaluateReadOnly: (action, object, opts) => base.evaluateReadOnly(action, object, opts),
     judgeGate: (action, object, opts) => base.judgeGate(action, object, opts),
-    enforcePath: (mode, resolvedPath, opts) => forCall(opts).enforcePath(mode, resolvedPath, opts),
-    enforceCommand: (object, opts) => forCall(opts).enforceCommand(object, opts),
-    enforceGitOp: (object, opts) => forCall(opts).enforceGitOp(object, opts),
-    enforceDatabase: (object, opts) => forCall(opts).enforceDatabase(object, opts),
-    enforceUrl: (object, opts) => forCall(opts).enforceUrl(object, opts),
-    enforceSession: (mode, object, opts) => forCall(opts).enforceSession(mode, object, opts),
-    enforceInvocation: (opts) => forCall(opts).enforceInvocation(opts)
+    enforcePath: (mode, resolvedPath, opts) =>
+      forCall(opts).enforcePath(mode, resolvedPath, withRestored(opts)),
+    enforceCommand: (object, opts) => forCall(opts).enforceCommand(object, withRestored(opts)),
+    enforceGitOp: (object, opts) => forCall(opts).enforceGitOp(object, withRestored(opts)),
+    enforceDatabase: (object, opts) => forCall(opts).enforceDatabase(object, withRestored(opts)),
+    enforceUrl: (object, opts) => forCall(opts).enforceUrl(object, withRestored(opts)),
+    enforceSession: (mode, object, opts) =>
+      forCall(opts).enforceSession(mode, object, withRestored(opts)),
+    enforceInvocation: (opts) => forCall(opts).enforceInvocation(withRestored(opts))
   }
 }
 
@@ -534,6 +544,39 @@ export function getDesktopNetworkSecurityContext(
     ...(trial ? { getUserPolicies: () => trial.userPolicies, logger: trial.logger } : {})
   }
   return createSecurityContext(subject, { host: 'desktop', platform: process.platform }, provider)
+}
+
+/**
+ * `shuvix policy check --redaction` 的试算：agent 主体（普通会话的根 agent；给了 bot 就是那个 bot 的），按给定的
+ * 用户策略判。不属于任何会话：会话表、权限表都是空的（自动脱敏出口的两层用不到它们），也没有询问通道。
+ */
+export function getDesktopAgentTrialSecurityContext(
+  subject: { bot?: string },
+  trial: {
+    userPolicies: UserPolicyFile[]
+    logger: NonNullable<SecurityHostProvider['logger']>
+  }
+): SecurityContext {
+  const base = makeDesktopSecurityProvider({ sessionId: '' }, () => ({ workingDirectory: '' }))
+  const provider: SecurityHostProvider = {
+    ...base,
+    getVars: () => hostPolicyVars('', ''),
+    getUserPolicies: () => trial.userPolicies,
+    logger: trial.logger,
+    onPermissionRequest: undefined,
+    requestUserInput: undefined
+  }
+  return createSecurityContext(
+    {
+      kind: 'agent',
+      sessionId: '',
+      agentKind: 'root',
+      profileName: 'work',
+      attrs: { bot: subject.bot ?? '' }
+    },
+    { host: 'desktop', platform: process.platform },
+    provider
+  )
 }
 
 /** ProjectEnvVar[] → Record<string, string>，过滤空 key */

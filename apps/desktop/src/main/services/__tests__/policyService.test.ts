@@ -409,6 +409,7 @@ describe('policyService —— ask-on-read 不再是内置', () => {
     expect(named[0].overriddenBy).toBeUndefined()
     expect(basename(named[0].basePath)).toBe('ask-on-read.md')
     // 2026-10-01 起管 agent 的出厂只剩这两份；2026-10-19 加了管远程访问的 network-admission
+    // 2026-10-25 加了自动脱敏的 redact-sensitive
     expect(
       rows
         .filter((row) => row.source === 'builtin')
@@ -419,7 +420,8 @@ describe('policyService —— ask-on-read 不再是内置', () => {
       'ask-on-external-path',
       'ask-on-session-access',
       'daily-bot-access',
-      'network-admission'
+      'network-admission',
+      'redact-sensitive'
     ])
     expect(rows.some((row) => row.source === 'builtin' && row.name === 'ask-on-read')).toBe(false)
     expect(policyService.listInvalid()).toEqual([])

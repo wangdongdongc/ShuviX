@@ -189,6 +189,10 @@ export const API_TABLE = {
     statuses: invoke('runtime:statuses', 1),
     destroy: invoke('runtime:destroy', 1)
   },
+  /** 自动脱敏：占位符的类别与真值（界面渲染标记） */
+  redaction: {
+    resolve: invoke('redaction:resolve', 1)
+  },
   /** 数据库凭据 */
   dbCredential: {
     list: invoke('dbCredential:list', 0),

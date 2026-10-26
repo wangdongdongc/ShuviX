@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { Children, isValidElement, memo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { useTranslation } from 'react-i18next'
 import {
@@ -35,6 +35,8 @@ import 'katex/dist/katex.min.css'
 import { CodeBlock } from './CodeBlock'
 import { useChatStore } from '../../stores/chatStore'
 import { copyToClipboard } from '../../utils/clipboard'
+import { useRestoredText } from '../../hooks/useRedaction'
+import { RedactedMark } from './RedactedText'
 
 // ─── 超链接 ────────────────────────────────────────────
 
@@ -312,7 +314,8 @@ function InlineCode({
   [key: string]: unknown
 }): React.JSX.Element {
   const isBlock = !!className && /language-|hljs/.test(className)
-  const text = typeof children === 'string' ? children : ''
+  // 路径里常有占位符（家目录里的用户名）：按真值认路径、点开的也是真实那个文件
+  const text = useRestoredText(isBlock ? '' : plainTextOf(children))
 
   if (!isBlock && isPathLike(text.trim())) {
     return <PathChip path={text.trim()} />
@@ -324,14 +327,35 @@ function InlineCode({
   )
 }
 
+/** 自动脱敏的标记（rehypeRedactionMarks 产出，唯一的子节点是占位符原文） */
+function RedactionMarkTag({ children }: { children?: React.ReactNode }): React.JSX.Element {
+  return <RedactedMark placeholder={String(children)} />
+}
+
+/** 行内代码的纯文本：字符串原样，标记取回它的占位符（其余元素不算 —— 那就不是路径） */
+function plainTextOf(children: React.ReactNode): string {
+  let out = ''
+  for (const child of Children.toArray(children)) {
+    if (typeof child === 'string' || typeof child === 'number') out += String(child)
+    else if (
+      isValidElement<{ children?: React.ReactNode }>(child) &&
+      child.type === RedactionMarkTag
+    ) {
+      out += String(child.props.children)
+    } else return ''
+  }
+  return out
+}
+
 /**
- * 对话流 markdown 的共用组件表 —— 代码块容器 + 链接 chip + 路径 chip。
+ * 对话流 markdown 的共用组件表 —— 代码块容器 + 链接 chip + 路径 chip + 脱敏标记。
  * 所有渲染 markdown 的地方都用这一份，避免各处样式漂移。
  */
 export const markdownComponents = {
   pre: CodeBlock as never,
   a: LinkChip as never,
-  code: InlineCode as never
+  code: InlineCode as never,
+  'redaction-mark': RedactionMarkTag as never
 }
 
 // ─── 共用插件表 ────────────────────────────────────────

@@ -89,19 +89,20 @@ const makeBareProvider = (): SecurityHostProvider => ({
 })
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 5 份、按装配序；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 6 份、按装配序；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(5)
+    expect(policies).toHaveLength(6)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
     expect(policies.map((p) => p.name)).toEqual([
       'ask-on-external-path',
       'ask-on-command',
       'ask-on-session-access',
       'network-admission',
-      'daily-bot-access'
+      'daily-bot-access',
+      'redact-sensitive'
     ])
-    expect(new Set(policies.map((p) => p.name)).size).toBe(5)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(6)
   })
 
   it('BP-1c 内联表恰是四份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
@@ -143,17 +144,6 @@ describe('buildBuiltinPolicies', () => {
     }
   })
 
-  it('BP-2 不变式：内置策略不含静态 allow 规则（无策略即放行，无需内置豁免）', () => {
-    // 静态 allow 只会白占一层 static-allow，既压不过询问门，又让"没有策略就是放行"这条默认语义
-    // 多出一个等价的替身。豁免写成询问门 match 里的取反（会话权限表）；force-allow
-    // 出厂同样不用（BP-2d）。
-    for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
-      for (const rule of policy.rules) {
-        expect(rule.effect, `${policy.name} 存在内置 allow 规则`).not.toBe('allow')
-      }
-    }
-  })
-
   it('BP-2b 不变式：每条内置规则的有效条件都恰好限定一种主体 —— network-admission 是 network，其余是 agent（防护不作用于 user 主体）', () => {
     for (const policy of buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })) {
       for (const rule of policy.rules) {
@@ -188,6 +178,7 @@ describe('buildBuiltinPolicies', () => {
     // 拒绝，它就直接写 deny —— 只作用于 network 主体（BP-2b），agent 主体的出厂照旧恰是普通 ask。
     // 另一类是放宽：daily-bot-access（2026-10-24 用户裁定）给随应用提供的日报 bot 的根 agent 免去两道询问 ——
     // 它傍晚被定时器叫起来时没有人在场回答。它只放宽、不设门：全是 force-allow，且只认 `subject.bot`。
+    // 还有 redact-sensitive（自动脱敏）：两条带处置的 allow，不拦也不问。
     for (const language of ['en', 'zh', 'ja']) {
       for (const policy of buildBuiltinPolicies({ language, readMd: INLINE_POLICY_MD })) {
         for (const [i, rule] of policy.rules.entries()) {
@@ -197,8 +188,14 @@ describe('buildBuiltinPolicies', () => {
               ? 'deny'
               : policy.name === 'daily-bot-access'
                 ? 'force-allow'
-                : 'ask'
+                : policy.name === 'redact-sensitive'
+                  ? 'allow'
+                  : 'ask'
           expect(rule.effect, `${policy.name}#${i}（${language}）是 ${rule.effect}`).toBe(expected)
+          // 自动脱敏（2026-10-25 用户裁定）：出厂的 allow 只有带处置的 —— 不设门，只是放行时还要做事
+          if (expected === 'allow') {
+            expect(rule.disposition?.length, `${policy.name}#${i} 带处置`).toBeGreaterThan(0)
+          }
           if (expected === 'force-allow') {
             expect(rule.match, `${policy.name}#${i} 只认日报 bot`).toContain(
               "subject.bot == 'bot:builtin:daily'"
@@ -219,7 +216,9 @@ describe('buildBuiltinPolicies', () => {
       ['network-admission#0', 'deny'],
       ['daily-bot-access#0', 'force-allow'],
       ['daily-bot-access#1', 'force-allow'],
-      ['daily-bot-access#2', 'force-allow']
+      ['daily-bot-access#2', 'force-allow'],
+      ['redact-sensitive#0', 'static-allow'],
+      ['redact-sensitive#1', 'static-allow']
     ])
   })
 

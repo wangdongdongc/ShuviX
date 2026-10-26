@@ -1,6 +1,6 @@
 import { v7 as uuidv7 } from 'uuid'
 import { BaseDao } from './database'
-import { encrypt, decrypt } from '../utils/crypto'
+import { encrypt, decryptOrEmpty } from '../utils/crypto'
 import type { DbAuthType, DbCredential, DbCredentialMetadata, DbType } from './types'
 
 /** DB 原始行类型（readonly 为 0/1 整数，metadata 为 JSON 字符串） */
@@ -12,9 +12,9 @@ type DbCredentialRow = Omit<DbCredential, 'readonly' | 'metadata'> & {
 function parseRow(row: DbCredentialRow): DbCredential {
   return {
     ...row,
-    password: decrypt(row.password),
-    token: decrypt(row.token),
-    connStr: decrypt(row.connStr),
+    password: decryptOrEmpty(row.password),
+    token: decryptOrEmpty(row.token),
+    connStr: decryptOrEmpty(row.connStr),
     readonly: row.readonly === 1,
     metadata: JSON.parse(row.metadata || '{}') as DbCredentialMetadata
   }

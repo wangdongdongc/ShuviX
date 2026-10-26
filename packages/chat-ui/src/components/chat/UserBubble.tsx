@@ -8,6 +8,8 @@ import { imageSrc } from '@shuvix/chat-protocol/utils/imageSrc'
 import { TokenBadge, InvalidTokenBadge } from './InlineTokenBadge'
 import { OriginBadge, originTone } from './OriginBadge'
 import { SuggestionOriginTag } from './SuggestionCards'
+import { RedactedText } from './RedactedText'
+import { useRestoreForCopy } from '../../hooks/useRedaction'
 
 interface UserBubbleProps {
   msg: UserTextMessage
@@ -37,10 +39,11 @@ export const UserBubble = memo(function UserBubble({
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const restore = useRestoreForCopy()
 
   const handleCopy = (): void => {
-    // 复制还原用户原文：paste token 展开为完整粘贴内容，cmd/at 用人读 displayText
-    copyToClipboard(resolveTokensForCopy(msg.content, msg.metadata?.inlineTokens))
+    // 复制还原用户原文：paste token 展开为完整粘贴内容，cmd/at 用人读 displayText；脱敏的占位符换回真值
+    copyToClipboard(restore(resolveTokensForCopy(msg.content, msg.metadata?.inlineTokens)))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -107,7 +110,13 @@ export const UserBubble = memo(function UserBubble({
             }}
           >
             {displaySegments.map((seg, idx) => {
-              if (seg.type === 'text') return <span key={idx}>{seg.text}</span>
+              if (seg.type === 'text') {
+                return (
+                  <span key={idx}>
+                    <RedactedText text={seg.text} />
+                  </span>
+                )
+              }
               if (seg.type === 'token') return <TokenBadge key={idx} segment={seg} />
               return <InvalidTokenBadge key={idx} segment={seg} />
             })}

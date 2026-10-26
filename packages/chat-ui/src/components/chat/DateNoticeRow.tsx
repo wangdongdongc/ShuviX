@@ -4,6 +4,7 @@ import { CalendarDays } from 'lucide-react'
 import type { UserTextMessage } from '../../stores/chatStore'
 import { SystemNoticeRow } from './SystemNoticeRow'
 import { STREAM_PRE_CLASS } from './detailViewport'
+import { RedactedText } from './RedactedText'
 
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
 
@@ -43,7 +44,9 @@ export function DateNoticeRow({ msg }: { msg: UserTextMessage }): React.JSX.Elem
       label={t('dateNotice.title')}
       detail={detail}
     >
-      <pre className={`${STREAM_PRE_CLASS} my-1`}>{msg.content}</pre>
+      <pre className={`${STREAM_PRE_CLASS} my-1`}>
+        <RedactedText text={msg.content} />
+      </pre>
     </SystemNoticeRow>
   )
 }

@@ -149,6 +149,12 @@ import {
 } from './rollback'
 import type { AgentConfig, InterruptedSendPolicy, ModelCatalog, RunState, ToolHost } from './seams'
 import { SpawnCoordinatorImpl, type SpawnCoordinator } from './spawn'
+import {
+  redactionRequestHook,
+  redactionToolHook,
+  SessionRedaction,
+  type RedactionHost
+} from './sessionRedaction'
 import type { LockModel, ModelSelection } from '../models/lockModel'
 
 const GENERATION_TASK_KIND = 'pi.generation'
@@ -337,6 +343,11 @@ export interface DurableSession {
    * 运行状态因此保持准确；但绕过本类直接提交会跳过这里的规矩（询问窗口、推迟通知……）。
    */
   readonly harness: Harness
+  /**
+   * 这条会话的自动脱敏（宿主配了钥匙才有）：对照表、工具参数的还原、跨会话复制表项。写入时的替换由会话
+   * 自己在各个入口做，宿主不必再调
+   */
+  readonly redaction: SessionRedaction | undefined
   /** 句柄是否已关停 */
   readonly closed: boolean
   /** 存储级运行状态（R2） */
@@ -776,6 +787,11 @@ export interface DurableSessionDeps {
    * 新的（这个实例之前什么都没发生过 —— 存着的锁按「不是本进程初始化的」处理）。
    */
   processRecord?: SessionProcessRecord
+  /**
+   * 自动脱敏的两把钥匙（docs/auto-redaction-design.md）：给了就在写入对话记录之前把认出的内容换成占位符
+   * （用户输入、通知、派生 agent 的任务、工具结果），工具执行之前由宿主经 `redaction` 换回真值。缺省 = 不脱敏
+   */
+  redaction?: RedactionHost
 }
 
 interface LiveTask {
@@ -796,6 +812,7 @@ interface PendingNotice {
 export class DurableSessionImpl implements DurableSession {
   readonly sessionId: string
   readonly harness: Harness
+  readonly redaction: SessionRedaction | undefined
   private readonly raw: Harness
   private readonly inputs: PendingInputRequests
   /** 此刻活着（非终态）的任务：由提交发布同步维护 */
@@ -862,6 +879,15 @@ export class DurableSessionImpl implements DurableSession {
     this.harness = observeResumes(deps.harness, () => this.markResumed())
     this.inputs = new PendingInputRequests(deps.sessionId, deps.eventSink, {}, deps.logger)
     this.directory = new AgentDirectory({ sessionId: deps.sessionId, logger: deps.logger })
+    this.redaction =
+      deps.redaction === undefined
+        ? undefined
+        : new SessionRedaction({
+            sessionId: deps.sessionId,
+            harness: deps.harness,
+            host: deps.redaction,
+            logger: deps.logger
+          })
     this.agentLock = new AgentLock({
       sessionId: deps.sessionId,
       harness: deps.harness,
@@ -877,7 +903,15 @@ export class DurableSessionImpl implements DurableSession {
       now: deps.now,
       currentConversation: () => this.currentConversation(),
       stopForDestroy: () => this.stopForDestroy(),
-      processRecord: this.processRecord
+      processRecord: this.processRecord,
+      ...(this.redaction === undefined
+        ? {}
+        : {
+            extraHooks: [
+              redactionToolHook(this.redaction, deps.logger),
+              redactionRequestHook(this.redaction)
+            ]
+          })
     })
     this.spawner = new SpawnCoordinatorImpl({
       sessionId: deps.sessionId,
@@ -904,7 +938,10 @@ export class DurableSessionImpl implements DurableSession {
       stopConversation: (conversationId) => this.stopConversation(conversationId),
       reopenInputs: () => this.reopenInputs(),
       ensureBuiltin: () => this.agentLock.ensureBuiltin(),
-      op: (work) => this.op(work)
+      op: (work) => this.op(work),
+      ...(this.redaction === undefined
+        ? {}
+        : { maskInput: (text: string) => this.redaction!.maskText(text) })
     })
   }
 
@@ -1284,6 +1321,7 @@ export class DurableSessionImpl implements DurableSession {
 
   async submitUser(content: UserInput, options: UserSendOptions = {}): Promise<SubmitResult> {
     try {
+      if (this.redaction !== undefined) content = await this.redaction.maskInput(content)
       return await this.op(async () => {
         if (options.driven !== undefined && options.requestId === undefined) {
           return { error: 'A driven send needs a requestId' }
@@ -1604,6 +1642,7 @@ export class DurableSessionImpl implements DurableSession {
   ): Promise<AdmitResult> {
     let requestId = options.requestId
     try {
+      if (this.redaction !== undefined) content = await this.redaction.maskInput(content)
       return await this.op(() =>
         this.inSection(async () => {
           const refused = await this.ensureAgent()
@@ -1905,8 +1944,20 @@ export class DurableSessionImpl implements DurableSession {
 
   // ─── 系统通知 ───────────────────────────────────
 
-  writeNotice(notice: NoticeInput): Promise<NoticeResult> {
-    return this.writeNoticeNow(notice, true)
+  async writeNotice(notice: NoticeInput): Promise<NoticeResult> {
+    // 没配脱敏时不多等一拍：通知与输入的先后次序有用例钉着
+    if (this.redaction === undefined) return this.writeNoticeNow(notice, true)
+    let text: string
+    try {
+      text = await this.redaction.maskText(notice.text)
+    } catch (error) {
+      return {
+        status: 'failed',
+        requestId: notice.requestId ?? randomId(),
+        error: errorText(error)
+      }
+    }
+    return this.writeNoticeNow({ ...notice, text }, true)
   }
 
   /**
@@ -1964,6 +2015,7 @@ export class DurableSessionImpl implements DurableSession {
     if (this.closedFlag) return
     const kind = options.kind ?? 'background'
     try {
+      if (this.redaction !== undefined) text = await this.redaction.maskText(text)
       await this.op(() =>
         this.inSection(async () => {
           // 去重在路由之前（PIN-09）：送过的、待送达的、窗口里的都不再送；竞态由 durable 的去重兜底

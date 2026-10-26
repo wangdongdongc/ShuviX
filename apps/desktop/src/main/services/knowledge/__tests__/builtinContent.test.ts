@@ -387,7 +387,8 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     2: { en: 'Two', zh: '两', ja: '二' },
     3: { en: 'Three', zh: '三', ja: '三' },
     4: { en: 'Four', zh: '四', ja: '四' },
-    5: { en: 'Five', zh: '五', ja: '五' }
+    5: { en: 'Five', zh: '五', ja: '五' },
+    6: { en: 'Six', zh: '六', ja: '六' }
   }
 
   /** 从某个标题起、到下一个同级或更高标题为止的那一段 */

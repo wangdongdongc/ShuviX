@@ -6,6 +6,7 @@ import { SystemNoticeRow } from './SystemNoticeRow'
 import { CountBadge } from './StepRow'
 import { summarizeSystemNotice } from './systemNotice'
 import { STREAM_PRE_CLASS } from './detailViewport'
+import { RedactedText } from './RedactedText'
 
 /**
  * 后台完成通知行 —— **自动续跑**那一轮的输入。
@@ -30,7 +31,9 @@ export function BackgroundNoticeRow({ msg }: { msg: UserTextMessage }): React.JS
       detail={notices.map((n) => n.text).join(' | ')}
       trailing={notices.length > 1 ? <CountBadge count={notices.length} /> : undefined}
     >
-      <pre className={`${STREAM_PRE_CLASS} my-1`}>{msg.content}</pre>
+      <pre className={`${STREAM_PRE_CLASS} my-1`}>
+        <RedactedText text={msg.content} />
+      </pre>
     </SystemNoticeRow>
   )
 }

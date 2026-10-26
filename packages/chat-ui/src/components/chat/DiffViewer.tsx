@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { DETAIL_MAX_H } from './detailViewport'
+import { RedactedText } from './RedactedText'
 
 interface DiffLine {
   type: 'add' | 'remove' | 'context' | 'separator'
@@ -129,7 +130,7 @@ export function DiffViewer({ diff, maxHeight = DETAIL_MAX_H }: DiffViewerProps):
                   </td>
                   <td className={`px-2 whitespace-pre ${textColors[line.type]}`}>
                     <span className="select-none opacity-60">{prefix} </span>
-                    {line.content}
+                    <RedactedText text={line.content} />
                   </td>
                 </tr>
               )

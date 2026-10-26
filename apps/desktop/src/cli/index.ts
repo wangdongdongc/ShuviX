@@ -75,7 +75,7 @@ function printUsage(): void {
       '  shuvix widget db-query <id> --sql "<SQL>" | --file <path>',
       '  shuvix task stop <pid>        stop a background task this conversation started',
       '  shuvix policy check [<file>] [--from <ip>] [--device <id>] [--channel <name> | ...]',
-      '                                check a network access policy (shuvix policy check --help)',
+      '                                check a network access or redaction policy (shuvix policy check --help)',
       ''
     ].join('\n')
   )
@@ -202,6 +202,9 @@ function parseTask(rest: string[]): ParsedCommand | null {
  * `policy check [<file>] [--name value | --name=value | --flag] …` —— 只拆参数、读文件；参数的合法性在主进程里判
  * （一份规则，报错带全部合法参数）。文件由这个进程读：读得到读不到受沙箱 / 策略约束，主进程不替它读。
  */
+/** 不带值的开关：后面跟着的是文件，不是它的值（`--redaction draft.md`） */
+const POLICY_SWITCHES = new Set(['scopes', 'redaction', 'help'])
+
 function parsePolicy(rest: string[]): ParsedCommand | null {
   if (rest[0] !== 'check') {
     process.stderr.write(
@@ -222,7 +225,7 @@ function parsePolicy(rest: string[]): ParsedCommand | null {
         flags.push([arg.slice(2, eq), arg.slice(eq + 1)])
       } else {
         const next = args[i + 1]
-        if (next !== undefined && !next.startsWith('--')) {
+        if (next !== undefined && !next.startsWith('--') && !POLICY_SWITCHES.has(arg.slice(2))) {
           flags.push([arg.slice(2), next])
           i++
         } else {

@@ -17,13 +17,26 @@
  *   - **Ctrl-F / Cmd-F 搜索**：searchKeymap 内置；面板样式在 codeMirrorTheme.ts 主题化。
  */
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
+import {
+  categoryOfPlaceholder,
+  placeholdersIn
+} from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, drawSelection, keymap, lineNumbers as cmLineNumbers } from '@codemirror/view'
 import { defaultKeymap } from '@codemirror/commands'
 import { highlightSelectionMatches, searchKeymap } from '@codemirror/search'
 import { loadLanguage } from './languageLoader'
 import { buildCmTheme } from './codeMirrorTheme'
+import { redactionMarks, type RedactionResolver } from './redactionMarks'
+import { useRedactionSessionId } from '../../hooks/useRedaction'
+import {
+  redactionInfo,
+  redactionVersion,
+  requestRedactions,
+  subscribeRedactions
+} from '../../stores/redactionCache'
 
 interface CodeViewProps {
   content: string
@@ -54,6 +67,21 @@ export function CodeView({
   const wrapC = useMemo(() => new Compartment(), [])
   const gutterC = useMemo(() => new Compartment(), [])
   const languageC = useMemo(() => new Compartment(), [])
+  const redactionC = useMemo(() => new Compartment(), [])
+
+  // 自动脱敏的占位符显示成真值 + 标记；查到新的真值（version 变了）就换一份扩展重画
+  const { t } = useTranslation()
+  const sessionId = useRedactionSessionId()
+  const version = useSyncExternalStore(subscribeRedactions, redactionVersion, redactionVersion)
+  const resolveRef = useRef<RedactionResolver>(() => ({ label: '', category: '' }))
+  resolveRef.current = (placeholder) => {
+    const info = sessionId ? redactionInfo(sessionId, placeholder) : undefined
+    const category = info?.category ?? categoryOfPlaceholder(placeholder)
+    const label = t(`redaction.category.${category}`, { defaultValue: category })
+    return info?.value === undefined ? { label, category } : { value: info.value, label, category }
+  }
+  const redactionExtension = (): import('@codemirror/state').Extension =>
+    redactionMarks((p) => resolveRef.current(p))
 
   // 构造一组完整的 extensions —— mount 初次 + content/ext 切换重建 doc 时都用
   // 闭包捕获当前 wrap/lineNumbers 状态，所以切换 toggle 时是单独 dispatch 而不是重建
@@ -62,6 +90,7 @@ export function CodeView({
     gutterC.of(lineNumbers ? cmLineNumbers() : []),
     wrapC.of(wrap ? EditorView.lineWrapping : []),
     languageC.of([]),
+    redactionC.of(redactionExtension()),
     EditorState.readOnly.of(true),
     EditorView.editable.of(false),
     EditorView.contentAttributes.of({ tabindex: '0' }),
@@ -100,6 +129,16 @@ export function CodeView({
     // 其他 toggle 走专门的 effect 而非重建 doc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, ext])
+
+  // 文档里的占位符：没查到的去查；查到了（version 变）重画标记
+  useEffect(() => {
+    if (!sessionId) return
+    const missing = placeholdersIn(content).filter((p) => !redactionInfo(sessionId, p))
+    if (missing.length > 0) requestRedactions(sessionId, missing)
+  }, [content, sessionId, version])
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: redactionC.reconfigure(redactionExtension()) })
+  }, [version, sessionId, redactionC])
 
   // 切行号：reconfigure gutter compartment
   useEffect(() => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { RedactedText } from './RedactedText'
 
 /**
  * 折叠态的单行内容盒 —— 高度对齐工具行（ToolCallBlock 的 StepRow）的单行：那边是
@@ -66,17 +67,19 @@ export function ThinkingBlock({
       {expanded ? (
         // 首尾的空行去掉：不少模型的思考以几个换行收尾，pre-wrap 下就是展开后一截空白
         <div ref={viewRef} className="whitespace-pre-wrap break-words max-h-96 overflow-y-auto">
-          {content.trim()}
+          <RedactedText text={content.trim()} />
           {caret}
         </div>
       ) : isGenerating ? (
         /* 一行高的定高窗口 + 程序化滚到底：clamp 只会卡在开头，看不出模型在想什么 */
         <div ref={viewRef} className={`${COLLAPSED_LINE} overflow-hidden break-words`}>
-          {flat}
+          <RedactedText text={flat} />
           {caret}
         </div>
       ) : (
-        <div className={`${COLLAPSED_LINE} truncate`}>{flat}</div>
+        <div className={`${COLLAPSED_LINE} truncate`}>
+          <RedactedText text={flat} />
+        </div>
       )}
     </div>
   )

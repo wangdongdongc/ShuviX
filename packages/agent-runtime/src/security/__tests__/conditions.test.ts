@@ -19,7 +19,7 @@ function makeCtx(overrides: Partial<MatchContext> = {}): MatchContext {
   return {
     subject: { kind: 'agent', agentKind: 'root', profile: 'default', sessionId: 's1', depth: 0 },
     action: 'read',
-    tool: { name: 'read', operation: '' },
+    tool: { name: 'read', operation: '', restored: [] },
     object: { type: 'path', path: '/ws/a.txt' },
     env: { host: 'desktop', platform: 'darwin' },
     vars: {},
@@ -62,7 +62,7 @@ describe('结构化条件 — 键集与编译', () => {
       'env.host': ['desktop'],
       'tool.name': ['write', 'edit']
     }
-    const ok = makeCtx({ action: 'write', tool: { name: 'edit', operation: '' } })
+    const ok = makeCtx({ action: 'write', tool: { name: 'edit', operation: '', restored: [] } })
     expect(hits(conditions, ok)).toBe(true)
 
     // 逐键破坏 —— 每一维都真的参与了 AND
@@ -82,7 +82,9 @@ describe('结构化条件 — 键集与编译', () => {
     expect(hits(conditions, makeCtx({ ...ok, env: { host: 'extension', platform: '' } }))).toBe(
       false
     )
-    expect(hits(conditions, makeCtx({ ...ok, tool: { name: 'bash', operation: '' } }))).toBe(false)
+    expect(
+      hits(conditions, makeCtx({ ...ok, tool: { name: 'bash', operation: '', restored: [] } }))
+    ).toBe(false)
   })
 
   it("CD-4 `'*'` = 任意（与省略该键等价；与具体值同列时亦全命中）", () => {
@@ -114,7 +116,7 @@ describe('结构化条件 — 键集与编译', () => {
       action: 'execute',
       object: { type: 'command', command: 'ls' },
       env: { host: 'extension', platform: 'linux' },
-      tool: { name: 'bash', operation: 'exec' }
+      tool: { name: 'bash', operation: 'exec', restored: [] }
     })
     expect(hits({ 'subject.kind': ['user'] }, ctx)).toBe(true)
     expect(hits({ action: ['execute'] }, ctx)).toBe(true)
@@ -137,7 +139,9 @@ describe('结构化条件 — 键集与编译', () => {
     expect(hits({ action: ['Read'] }, makeCtx({ action: 'read' }))).toBe(false)
     expect(hits({ 'object.type': ['pat'] }, makeCtx())).toBe(false)
     expect(hits({ 'object.type': ['path*'] }, makeCtx())).toBe(false)
-    expect(hits({ 'tool.name': [''] }, makeCtx({ tool: { name: '', operation: '' } }))).toBe(true)
+    expect(
+      hits({ 'tool.name': [''] }, makeCtx({ tool: { name: '', operation: '', restored: [] } }))
+    ).toBe(true)
   })
 })
 

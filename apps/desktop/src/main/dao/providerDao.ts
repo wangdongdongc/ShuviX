@@ -1,7 +1,7 @@
 import { v7 as uuidv7 } from 'uuid'
 import { BaseDao } from './database'
 import { buildJsonPatch } from './utils'
-import { encrypt, decrypt } from '../utils/crypto'
+import { encrypt, decrypt, decryptOrEmpty } from '../utils/crypto'
 import type { Provider, ProviderModel } from './types'
 import type { AvailableModel, ModelCapabilities } from '../types'
 
@@ -31,7 +31,7 @@ export type ProviderModelSourceRow = Pick<
 function toProviderView<T extends ProviderRow | undefined>(row: T): Provider | undefined {
   if (!row) return undefined
   const { oauth, ...rest } = row
-  return { ...rest, apiKey: decrypt(rest.apiKey), oauthConnected: oauth ? 1 : 0 }
+  return { ...rest, apiKey: decryptOrEmpty(rest.apiKey), oauthConnected: oauth ? 1 : 0 }
 }
 
 /**
@@ -71,7 +71,7 @@ export class ProviderDao extends BaseDao {
       | undefined
     if (!row) return undefined
     if ('apiKey' in row) {
-      row.apiKey = decrypt(row.apiKey as string)
+      row.apiKey = decryptOrEmpty(row.apiKey as string)
     }
     if ('oauth' in row) {
       row.oauthConnected = row.oauth ? 1 : 0
@@ -134,7 +134,7 @@ export class ProviderDao extends BaseDao {
       | undefined
     if (!row?.oauth) return undefined
     try {
-      return decrypt(row.oauth) || undefined
+      return decryptOrEmpty(row.oauth) || undefined
     } catch {
       // 密钥文件换过 / 手工改坏：当作未登录，用户重新登录即可修复
       return undefined

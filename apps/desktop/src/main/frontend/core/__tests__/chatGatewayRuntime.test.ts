@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   hasAgentRuntime: vi.fn<(sessionId: string) => boolean>(),
   invalidateAgent: vi.fn<(sessionId: string) => Promise<void>>(),
   getAgentSession: vi.fn(),
+  peekAgentSession: vi.fn(),
   recordSessionModel:
     vi.fn<(sessionId: string, provider: string, model: string) => Promise<void>>(),
   recordSessionThinkingLevel: vi.fn<(sessionId: string, level: string) => Promise<void>>(),
@@ -65,6 +66,7 @@ vi.mock('../../../services/sessionService', () => ({
   sessionService: {
     ensureAgentSession: vi.fn(),
     getAgentSession: mocks.getAgentSession,
+    peekAgentSession: mocks.peekAgentSession,
     resolveAgentProfileName: mocks.resolveAgentProfileName,
     hasAgentRuntime: mocks.hasAgentRuntime,
     invalidateAgent: mocks.invalidateAgent
@@ -417,5 +419,54 @@ describe('P3-08-45 DefaultChatGateway.respondToInput —— 没人认领什么�
       ['r2', response, undefined]
     ])
     expect(mocks.broadcast).not.toHaveBeenCalled()
+  })
+})
+
+describe('自动脱敏：resolveRedactions', () => {
+  const KEY = '{{API_KEY_k3v7x2mq}}'
+  const SEALED = '{{SECRET_aaaaaaaa}}'
+  const items: Record<string, { category: string; rule: string; value?: string }> = {
+    [KEY]: { category: 'API_KEY', rule: 'sk-key', value: 'sk-real' },
+    [SEALED]: { category: 'SECRET', rule: 'secret-field' }
+  }
+  const sessionWith = (redaction: unknown): unknown => ({
+    durable: { redaction }
+  })
+  const table = { get: (p: string) => items[p] }
+
+  beforeEach(() => {
+    mocks.getAgentSession.mockReset()
+    mocks.peekAgentSession.mockReset()
+  })
+
+  it('RR-1 打开着的会话：有真值的带真值、解不开的只有类别、表里没有的不出现；不是标准写法的不问', async () => {
+    mocks.getAgentSession.mockReturnValue(sessionWith({ table: async () => table }))
+    const result = await chatGateway.resolveRedactions(SID, [
+      KEY,
+      SEALED,
+      '{{TOKEN_bbbbbbbb}}',
+      '{{ API_KEY_k3v7x2mq }}',
+      42 as unknown as string
+    ])
+    expect(result).toEqual({
+      [KEY]: { category: 'API_KEY', value: 'sk-real' },
+      [SEALED]: { category: 'SECRET' }
+    })
+    expect(mocks.peekAgentSession).not.toHaveBeenCalled()
+  })
+
+  it('RR-2 没开着就 peek；peek 不到 / 会话没有脱敏 / 什么都没问 → 空', async () => {
+    mocks.getAgentSession.mockReturnValue(undefined)
+    mocks.peekAgentSession.mockResolvedValue(sessionWith({ table: async () => table }))
+    expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({
+      [KEY]: { category: 'API_KEY', value: 'sk-real' }
+    })
+    mocks.peekAgentSession.mockResolvedValue(undefined)
+    expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({})
+    mocks.peekAgentSession.mockResolvedValue(sessionWith(undefined))
+    expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({})
+    mocks.peekAgentSession.mockClear()
+    expect(await chatGateway.resolveRedactions(SID, [])).toEqual({})
+    expect(mocks.peekAgentSession).not.toHaveBeenCalled()
   })
 })

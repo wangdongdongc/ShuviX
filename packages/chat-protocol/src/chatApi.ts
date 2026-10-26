@@ -55,6 +55,7 @@ import type {
   ImportSelection
 } from './types/configShare'
 import type { SyncLinkChannel } from './sync'
+import type { RedactionMarkInfo } from './utils/redactionPlaceholders'
 
 // ─────────────────────────── 前端 IPC 视图数据形状 ───────────────────────────
 
@@ -630,6 +631,16 @@ export interface SessionChannelApi {
   }
   runtime: {
     statuses: (sessionId: string) => Promise<Record<string, RuntimeStatus>>
+  }
+  /**
+   * 自动脱敏（docs/auto-redaction-design.md §2.3）：这条会话对照表里这些占位符的类别与真值 —— 界面把占位符渲染成
+   * 标记、显示真值。表里没有的不出现在结果里；有但解不开的只有类别。返回值带机密（远程访问按 admin 判）。
+   */
+  redaction: {
+    resolve: (params: {
+      sessionId: string
+      placeholders: string[]
+    }) => Promise<Record<string, RedactionMarkInfo>>
   }
   /**
    * 后台任务只读面（bash 命令 / 派生 agent / 子会话轮次三类共用）。输出**不经事件总线**

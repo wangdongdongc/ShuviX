@@ -104,7 +104,7 @@ function makeCtx(overrides: Partial<MatchContext> = {}): MatchContext {
   return {
     subject: { kind: 'agent', agentKind: 'root', profile: '', sessionId: 's1', depth: 0 },
     action: 'read',
-    tool: { name: '', operation: '' },
+    tool: { name: '', operation: '', restored: [] },
     object: { type: 'path', path: '/data/a.txt' },
     env: { host: 'desktop', platform: 'darwin' },
     vars: BUILTIN_VARS,
@@ -919,18 +919,22 @@ describe('assembleRules — 结构化条件与策略级 scope', () => {
       'tool.name': ['write', 'edit']
     })
     // 交集生效：scope 允许 read+write，规则收窄到 write
-    expect(rule.matches!(makeCtx({ action: 'read', tool: { name: 'write', operation: '' } }))).toBe(
-      false
-    )
-    expect(rule.matches!(makeCtx({ action: 'write', tool: { name: 'edit', operation: '' } }))).toBe(
-      true
-    )
+    expect(
+      rule.matches!(
+        makeCtx({ action: 'read', tool: { name: 'write', operation: '', restored: [] } })
+      )
+    ).toBe(false)
+    expect(
+      rule.matches!(
+        makeCtx({ action: 'write', tool: { name: 'edit', operation: '', restored: [] } })
+      )
+    ).toBe(true)
     // '*' = 任意主体
     expect(
       rule.matches!(
         makeCtx({
           action: 'write',
-          tool: { name: 'write', operation: '' },
+          tool: { name: 'write', operation: '', restored: [] },
           subject: { kind: 'user', agentKind: '', profile: '', sessionId: 's1', depth: 0 }
         })
       )
@@ -1043,7 +1047,7 @@ describe('assembleRules — 派生规则与省略容错', () => {
     expect(() => assembleRules(makeProvider())).not.toThrow()
   })
 
-  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂五份共九条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
+  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂六份共十一条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
     const rules = assembleRules(makeProvider({ getVars: () => withGrants({ write: ['/data'] }) }))
     expect(rules.map((r) => [r.id, r.source.kind])).toEqual([
       ['ask-on-external-path#0', 'builtin'],
@@ -1054,7 +1058,9 @@ describe('assembleRules — 派生规则与省略容错', () => {
       ['network-admission#0', 'builtin'],
       ['daily-bot-access#0', 'builtin'],
       ['daily-bot-access#1', 'builtin'],
-      ['daily-bot-access#2', 'builtin']
+      ['daily-bot-access#2', 'builtin'],
+      ['redact-sensitive#0', 'builtin'],
+      ['redact-sensitive#1', 'builtin']
     ])
   })
 })
@@ -1788,7 +1794,9 @@ describe('assembleRules — 停用的策略不装配', () => {
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',
-      'daily-bot-access#2'
+      'daily-bot-access#2',
+      'redact-sensitive#0',
+      'redact-sensitive#1'
     ])
     expect(decide(provider, 'execute', unconfined)).toMatchObject({ effect: 'allow', matched: [] })
     // 对照：不停用时同一条命令要问
@@ -1835,11 +1843,12 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-session-access',
       'network-admission',
       'daily-bot-access',
+      'redact-sensitive',
       'ask-on-command',
       'extra'
     ])
-    expect(asked[4]).toBe(copy)
-    expect(asked[5]).toBe(extra)
+    expect(asked[5]).toBe(copy)
+    expect(asked[6]).toBe(extra)
     expect(asked[0].objectId).toBe(EXT_ID)
     // 内置 ask-on-command（被 copy 遮蔽）不在其中
     expect(asked.filter((p) => p.objectId === CMD_ID)).toEqual([])
@@ -1863,7 +1872,9 @@ describe('assembleRules — 停用的策略不装配', () => {
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',
-      'daily-bot-access#2'
+      'daily-bot-access#2',
+      'redact-sensitive#0',
+      'redact-sensitive#1'
     ])
   })
 
@@ -1888,7 +1899,7 @@ describe('assembleRules — 停用的策略不装配', () => {
     expect(control.filter((r) => r.source.policy === 'p').map((r) => r.effect)).toEqual(['deny'])
   })
 
-  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂五份九条全在', () => {
+  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂六份十一条全在', () => {
     expect(assembleRules(makeProvider()).map((r) => r.id)).toEqual([
       'ask-on-external-path#0',
       'ask-on-external-path#1',
@@ -1898,7 +1909,9 @@ describe('assembleRules — 停用的策略不装配', () => {
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',
-      'daily-bot-access#2'
+      'daily-bot-access#2',
+      'redact-sensitive#0',
+      'redact-sensitive#1'
     ])
   })
 

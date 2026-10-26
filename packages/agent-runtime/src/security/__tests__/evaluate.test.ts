@@ -1231,7 +1231,7 @@ describe('buildMatchContext', () => {
       sessionId: '',
       depth: 0
     })
-    expect(ctx.tool).toEqual({ name: '', operation: '' })
+    expect(ctx.tool).toEqual({ name: '', operation: '', restored: [] })
     expect(ctx.env).toEqual({ host: 'desktop', platform: '' })
     expect(ctx.object).toEqual({ type: 'path', path: '/x' })
     expect('displayPath' in ctx.object).toBe(false)

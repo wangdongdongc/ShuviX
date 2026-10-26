@@ -583,6 +583,7 @@ export {
   instructionSectionText,
   PersonaNotFrozenError,
   PROMPT_EXTENSION,
+  PLACEHOLDER_NOTE,
   PROMPT_EXTENSION_ORDER,
   PROMPT_SECTION_KEY,
   promptExtensionsFor,
@@ -742,6 +743,7 @@ export {
   ArtifactPinsDoc,
   DisplayDoc,
   NoticeEntry,
+  RedactionTableDoc,
   SessionStateDoc,
   SourceDoc,
   noticeEntryDraft,
@@ -753,6 +755,7 @@ export {
   type SourceState,
   type DrivenRun,
   type NoticeData,
+  type RedactionTableState,
   type SessionState
 } from './durable/docs'
 // 回复里 ```artifact 引用钉下的版本（读写 ArtifactPinsDoc + 找发起调用 / 终答的那条回复）
@@ -765,6 +768,38 @@ export {
   type ArtifactPin,
   type ArtifactReply
 } from './durable/artifactPins'
+// 自动脱敏（docs/auto-redaction-design.md）：检测、占位符、已知值，与会话的占位符对照表（读写 RedactionTableDoc）
+export * from './redaction'
+export {
+  RedactionTable,
+  entriesReferencedBy,
+  loadRedactionTable,
+  recordRedactions,
+  type RedactionEntry,
+  type RedactionTableItem,
+  type RedactionVault
+} from './durable/redactionTable'
+export {
+  SessionRedaction,
+  redactionRequestHook,
+  redactionToolHook,
+  type RedactionHost,
+  type RestoreOutcome
+} from './durable/sessionRedaction'
+export {
+  EgressBlockedError,
+  Remasker,
+  prepareEgress,
+  type DiscloseAction,
+  type EgressDecision,
+  type PreparedEgress
+} from './durable/redactionEgress'
+export {
+  withRedactionEgress,
+  type RedactionEgressDeps,
+  type RedactionPolicy,
+  type RedactionPolicyRequest
+} from './durable/redactionModels'
 export { backgroundContext, isClosedError } from './durable/context'
 // 转写摘要（P2-14）：当前对话里人写的话 / agent 的正文 / ask 的回答 —— 自动审查与起标题的输入（只读）
 export {

@@ -151,6 +151,9 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'runtime:statuses': 'read',
   'runtime:destroy': 'write',
 
+  // ─── redaction：自动脱敏 ───
+  'redaction:resolve': 'admin', // 回的是占位符背后的真值（密钥、个人信息）
+
   // ─── dbCredential：数据库凭据 ───
   'dbCredential:list': 'admin', // 不含密码，但主机 / 用户名 / 驱动参数都属凭据
   'dbCredential:add': 'admin',
@@ -483,6 +486,7 @@ export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
   suggestion: 'sessions',
   tracking: 'sessions', // 跟踪项（实验）：与日报同属「用户这些天在做什么」
   runtime: 'sessions',
+  redaction: 'sessions',
   bgTask: 'sessions',
   command: 'sessions',
   mentions: 'sessions',

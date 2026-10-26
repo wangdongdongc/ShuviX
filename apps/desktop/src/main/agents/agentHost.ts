@@ -110,7 +110,9 @@ function sessionProject(
 export interface DesktopToolHostDeps {
   sessionOf: (
     sessionId: string
-  ) => Pick<DurableSession, 'agentIdentity' | 'harness' | 'currentConversation'> | undefined
+  ) =>
+    | Pick<DurableSession, 'agentIdentity' | 'harness' | 'currentConversation' | 'redaction'>
+    | undefined
 }
 
 /**
@@ -178,7 +180,14 @@ function sessionWrapper(
     after: (call) => recordArtifactChange(sessionId, call)
   }
   return (tool) =>
-    wrapDurableTool(tool as AnyTool, { sessionId, spill: 'auto', security, executionHooks })
+    wrapDurableTool(tool as AnyTool, {
+      sessionId,
+      spill: 'auto',
+      security,
+      executionHooks,
+      // 参数里的占位符在执行前换回真值（会话的对照表）
+      redaction: () => deps.sessionOf(sessionId)?.redaction
+    })
 }
 
 /**

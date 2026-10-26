@@ -1,11 +1,11 @@
 import { BaseDao } from './database'
-import { encrypt, decrypt } from '../utils/crypto'
+import { encrypt, decryptOrEmpty } from '../utils/crypto'
 import type { TelegramBot } from './types'
 
 /** 解密 token 字段 */
 function decryptBot<T extends TelegramBot | undefined>(b: T): T {
   if (!b) return b
-  return { ...b, token: decrypt(b.token) } as T
+  return { ...b, token: decryptOrEmpty(b.token) } as T
 }
 
 /**
@@ -42,7 +42,7 @@ export class TelegramBotDao extends BaseDao {
       | undefined
     if (!row) return undefined
     if ('token' in row) {
-      row.token = decrypt(row.token as string)
+      row.token = decryptOrEmpty(row.token as string)
     }
     return row as Pick<TelegramBot, K>
   }

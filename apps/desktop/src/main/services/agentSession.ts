@@ -20,7 +20,7 @@ import {
 } from '@shuvix/agent-runtime'
 import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
-import type { InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
+import { isDrivingOrigin, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
@@ -31,6 +31,7 @@ import { clearSession as clearFileTimeSession } from '../utils/toolUtils/fileTim
 import { hookService, hookTriggers } from './hookService'
 import { recordUserEntry } from './sessionDayPromptService'
 import { getSessionHost } from './sessionHost'
+import { carryRedactions } from './redactionCarry'
 import { sessionRecords } from './sessionRecords'
 import { sessionSignalsReady } from './sessionSignalSeams'
 // 仅在方法体内调用：sessionService 也 import 本模块，ESM 活绑定下无初始化环
@@ -153,6 +154,8 @@ export class AgentSession {
         ? source
         : sessionRecords.drivingSourceOf(this.sessionId, drive.driven.parentId)
     const dayPrompt = this.dayPromptCallbacks(origin)
+    // 别的会话发进来的话里有它的占位符：先把对照表项带过来（自动脱敏 §5.3）
+    await carryFromDriver(origin, this.sessionId, text)
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
@@ -190,6 +193,7 @@ export class AgentSession {
     text: string,
     options: { requestId?: string; source?: InputOrigin } = {}
   ): Promise<AdmitResult> {
+    await carryFromDriver(options.source, this.sessionId, text)
     const result = await this.durable.steer(text, {
       ...this.dayPromptCallbacks(options.source),
       ...options
@@ -199,6 +203,7 @@ export class AgentSession {
 
   /** 本轮结束后接着说（空闲时起一轮）；`source` 同 `steer`。被拒 → reject */
   async followUp(text: string, source?: InputOrigin): Promise<void> {
+    await carryFromDriver(source, this.sessionId, text)
     const result = await this.durable.followUp(text, {
       ...this.dayPromptCallbacks(source),
       ...(source === undefined ? {} : { source })
@@ -459,4 +464,15 @@ export async function destroySessionRuntime(sessionId: string): Promise<void> {
   clearSessionDecisions(sessionId)
   clearReviewState(sessionId)
   log.info(`destroy session=${sessionId}`)
+}
+
+/** 别的会话发进来的话：把它引用到的对照表项从那条会话带过来（人打的话、触发器的话没有可带的） */
+async function carryFromDriver(
+  origin: InputOrigin | undefined,
+  sessionId: string,
+  text: string
+): Promise<void> {
+  if (origin !== undefined && isDrivingOrigin(origin)) {
+    await carryRedactions(origin.sessionId, sessionId, [text])
+  }
 }

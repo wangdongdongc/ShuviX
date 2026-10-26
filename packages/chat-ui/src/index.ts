@@ -30,6 +30,14 @@ export type { VisibleItem } from './components/chat/MessageRenderer'
 export { AssistantBubble } from './components/chat/AssistantBubble'
 export { UserBubble } from './components/chat/UserBubble'
 export { ThinkingBlock } from './components/chat/ThinkingBlock'
+export { RedactedMark, RedactedText } from './components/chat/RedactedText'
+export {
+  RedactionSessionProvider,
+  useRedactionSessionId,
+  useRestoreForCopy,
+  useRestoredText
+} from './hooks/useRedaction'
+export { forgetRedactions } from './stores/redactionCache'
 export { ToolCallBlock } from './components/chat/ToolCallBlock'
 export { StepGroupView } from './components/chat/StepGroupView'
 export { groupConsecutiveSteps } from './components/chat/stepGrouping'

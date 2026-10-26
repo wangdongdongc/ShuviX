@@ -35,6 +35,7 @@ import { ConfirmDialog } from '../common/ConfirmDialog'
 import { MessageRenderer } from './MessageRenderer'
 import { StreamingFooter } from './StreamingFooter'
 import { buildVisibleItems } from './Conversation'
+import { RedactedText } from './RedactedText'
 
 /** 助手消息（与 Conversation 同口径） */
 function isAssistantMessage(msg: ChatMessage): msg is AssistantMessage {
@@ -138,7 +139,7 @@ export function ThreadDrawer({ sessionId }: { sessionId: string }): React.JSX.El
                 {t('threadDrawer.running')}
               </span>
             ) : (
-              snippet
+              <RedactedText text={snippet} />
             )}
           </span>
           {open ? <ChevronDown size={12} /> : <ChevronUp size={12} />}

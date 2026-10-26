@@ -403,6 +403,8 @@ export interface SpawnHost {
   ensureBuiltin(): Promise<void>
   /** 一次会话调用（关停后拒绝、计入进行中） */
   op<T>(work: () => Promise<T>): Promise<T>
+  /** 写进子对话之前换成占位符（自动脱敏；缺省原样） */
+  maskInput?: (text: string) => Promise<string>
 }
 
 /** 驱动一次派发要用的那几样（工具派发经工具 API，宿主派发经 Harness） */
@@ -868,10 +870,9 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
       }
       const handle = await access.conversation(child)
       if (handle === undefined) throw new Error(`conversation ${child} does not exist`)
+      const prompt = this.host.maskInput ? await this.host.maskInput(params.prompt) : params.prompt
       const content =
-        contract === undefined
-          ? params.prompt
-          : `${params.prompt}\n\n${buildResultContractNote(contract)}`
+        contract === undefined ? prompt : `${prompt}\n\n${buildResultContractNote(contract)}`
       let settled = await this.submitAndWait(handle, content, requestId, context)
       firstEntry = settled.entry
       if (contract !== undefined) {
@@ -1097,6 +1098,7 @@ export class SpawnCoordinatorImpl implements SpawnCoordinator {
           BG
         )
         if (conversation === undefined) throw new Error(`conversation ${child} does not exist`)
+        if (this.host.maskInput) text = await this.host.maskInput(text)
         // 来源按 requestId 记（与会话的输入同一套解析）；没有来源就照旧不带 requestId（PIN-12）
         const requestId = source === undefined ? undefined : globalThis.crypto.randomUUID()
         if (requestId !== undefined) {

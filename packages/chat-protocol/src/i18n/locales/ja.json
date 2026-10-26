@@ -1691,5 +1691,29 @@
     "errorClosed": "この提案はもう採用できません",
     "errorNotFound": "この提案が見つかりません",
     "errorFailed": "送信できませんでした：{{error}}"
+  },
+  "redaction": {
+    "category": {
+      "PRIVATE_KEY": "秘密鍵",
+      "API_KEY": "API キー",
+      "TOKEN": "トークン",
+      "PASSWORD": "パスワード",
+      "SECRET": "シークレット",
+      "EMAIL": "メールアドレス",
+      "ID_CARD": "身分証番号",
+      "PHONE": "電話番号",
+      "BANK_CARD": "カード番号",
+      "SSN": "社会保障番号",
+      "PASSPORT": "パスポート番号",
+      "IBAN": "IBAN",
+      "BIRTHDAY": "生年月日",
+      "MAC": "MAC アドレス",
+      "SERIAL": "シリアル番号",
+      "USERNAME": "ユーザー名",
+      "HOSTNAME": "ホスト名",
+      "IP": "IP アドレス",
+      "BUCKET": "ストレージのバケット"
+    },
+    "unavailable": "{{label}}（このコンピューターでは値を読めません）"
   }
 }

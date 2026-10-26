@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: '安全策略文件（shuvix: policy v1）'
-description: 'ShuviX 安全策略的完整规范 —— 规则看到的请求文档（subject / action / tool / object / env / vars）、五个条件键、CEL `match`、效力及其优先序、询问由谁回答（先自动审查、再你）、`lets`、什么会让文件非法、五份内置策略，以及怎样放宽一道门或加一道自己的门。远程访问（`network` 主体）另有 `network-policy` 条目。'
+description: 'ShuviX 安全策略的完整规范 —— 规则看到的请求文档（subject / action / tool / object / env / vars）、五个条件键、CEL `match`、效力及其优先序、询问由谁回答（先自动审查、再你）、`lets`、处置（自动脱敏）、什么会让文件非法、内置策略，以及怎样放宽一道门或加一道自己的门。远程访问（`network` 主体）另有 `network-policy` 条目。'
 tags: [shuvix, policy, security, format, spec, cel]
 status: stable
 sources:
@@ -85,6 +85,7 @@ shuvix-policy-rules:
 | `effect`                                                         | **必填**：`allow`、`force-allow`、`ask`、`force-ask` 或 `deny`。                                                                                                            |
 | `subject.kind`、`action`、`object.type`、`env.host`、`tool.name` | 结构化条件：字符串或字符串列表（列表内 OR，键之间 AND）；`'*'` = 任意；空列表或空串非法。**`subject.kind` 必填**，写在规则上或 scope 里 —— 要「任意主体」就有意地写 `'*'`。 |
 | `match`                                                          | 可选的 CEL 表达式，对请求文档（见下）求值，与条件 AND。语法错让文件非法。                                                                                                   |
+| `disposition`                                                    | 可选，只能写在 `allow` / `force-allow` 上：这条规则判定这次请求时，宿主额外做的事。现在有两个，都属于自动脱敏（`redaction` 条目）：`modelRequest` 上的 `detect`（这次请求要脱敏）与 `sensitive` 上的 `redact`（这一处保持占位符）。字符串或列表。写在别的效力上，或写在 `object.type` 接不住它的规则上，整份文件非法。 |
 | `prompt`                                                         | 可选的一句话。`ask` 时显示在询问卡片上；`deny` 时作为拒绝原因回给 agent；放行类规则只在策略的属性卡上显示。最长 1000 字符。唯一永远不会让文件非法的键。                     |
 
 规则里出现任何别的键都让文件非法（包括旧的嵌套 `object:` / `subject:` / `when:` 匹配器）。
@@ -104,6 +105,8 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  （什么都没命中 =
 - `force-ask` 是连 `force-allow` 也跳不过、而且只由用户回答的询问，它的卡片上也没有「允许并记住」——
   「这道门既不接受豁免，也不接受审查员」。
 - `deny` 压过一切。
+- `disposition` 只算胜出那一档的：不带处置的 `force-allow` 压过带处置的 `allow`，所以写一条这样的
+  `force-allow`，它命中的部分就不再有那个处置。做不到某个处置的点位按拒绝结算。
 - 远程访问的点位（`subject.kind` 为 `network`）没有人可问：结算为 `ask` 或 `force-ask` 时直接拒绝该请求 ——
   见 `network-policy` 条目。
 
@@ -116,12 +119,15 @@ deny  >  force-ask  >  force-allow  >  ask  >  allow  >  （什么都没命中 =
 
 ```
 subject  { kind: 'agent' | 'user' | 'network', agentKind: 'root' | 'spawned', profile: <agent 名>, sessionId, depth }
-action   'read' | 'write' | 'execute'
-tool     { name: <工具名>, operation: <工具特定的操作，没有则为 ''> }
+action   'read' | 'write' | 'execute' | …   （每种客体用哪个，见下表）
+tool     { name: <工具名>, operation: <工具特定的操作，没有则为 ''>, restored: [<类别>] }
 object   { type: <客体类型>, ...属性 }        ← 开放的属性文档
 env      { host: 'desktop' | 'extension', platform: 'darwin' | 'win32' | 'linux' }
 vars     宿主变量表（见下），含本会话的权限表
 ```
+
+`tool.restored` 是 ShuviX 这次往工具参数里换回真值的敏感内容类别（自动脱敏：agent 写的是 `{{API_KEY_…}}`，
+工具拿到的是真的 key）；没有换回就是空列表。`redaction` 条目里有一条用到它的规则。
 
 工具调用的 `subject.kind` 是 `agent`，界面自己的被动检查是 `user`，远程访问的浏览器发来的请求是 `network` ——
 所以每条内置规则都点名了主体（管 agent 的写 `[agent]`，`network-admission` 写 `[network]`）。`network` 主体还带着
@@ -140,6 +146,8 @@ vars     宿主变量表（见下），含本会话的权限表
 | `url`         | 内置 `browser` / `chrome` 服务器：每次导航；在 `chrome` 里还有每个站点的第一次使用                                                       | `navigate`       | `url`、`scheme`、`host`（小写、去掉结尾的点）、`origin`、`browser`（`app` = ShuviX 里的浏览器面板，`chrome` = 你自己的 Chrome）；`file://` 不是 url 客体 —— 按读那个路径判定                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `session`     | `session` 工具里每个指向一条别的会话（不是调用方自己的子会话）的动作（查看它、等它、给它发消息、插话、代答、停下）；自己的子会话从不走到这里 —— 要管它们写在 `invocation` 上 | `read` / `write` | `sessionId`（目标会话）、`title`（它的标题 —— 是 LLM 起的，别拿来判）、`ownTurn`（bool —— 这次只涉及调用方自己在那里发起的那一轮：收它的答复、回答它的提问、插话或停下它）。`read` = 查看它的答复、看现场、等它；`write` = 发消息、插话、代答、停下。`tool.operation` 是动作名（`prompt-session`、`read-session`……）。另有宿主补的两项事实：`lastActiveAt`（ISO 8601 UTC 时刻 —— 目标会话最后一次有用户消息的时间，没有过消息就是建成时间；按新旧放行写 `timestamp(object.lastActiveAt) > timestamp(vars.now) - duration('168h')`）与 `bot`（目标会话绑定的 bot，同 `subject.bot` 的写法，不是 bot 会话为空串） |
 | `invocation`  | **每一次**工具调用，执行之前                                                                                                             | `execute`        | 无 —— 按 `tool.name` / `tool.operation` 判（如 `session` / `create-sub-session`）。这里的规则必须点名工具；不指定工具的 invocation 询问会拦住每一次调用。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `modelRequest` | ShuviX 替 agent 发给模型的每个请求：会话自己的、派生的与 hook 的 agent，自动审查，起标题，压缩摘要 | `send` | `provider`（设置里显示的服务商名字：内置服务商是它的 slug，如 `anthropic`、`openai`；你自己加的服务商是你起的名字）、`model`（模型 id）。带 `disposition: detect` 的 `allow` 让这次请求脱敏，不带的 `allow` 发真值，`deny`（以及 `ask`，这里没有人可问）整个请求不发 |
+| `sensitive`   | 一次正在脱敏的请求里的每一处敏感内容（只在 `modelRequest` 那条规则带了 `detect` 时） | `disclose` | `category`（`API_KEY`、`TOKEN`、`PASSWORD`、`SECRET`、`PRIVATE_KEY`、`EMAIL`、`PHONE`……全部类别见 `redaction` 条目）、`rule`（认出它的检测规则）、`provider`、`model`（同 `modelRequest`）、`value`（真值本身，只给 `match` 用，从不记录）。带 `disposition: redact` 的 `allow` 保持占位符，不带的 `allow` 发真值，`deny` 整个请求不发 |
 | `socket`      | 远程访问：连接刚建立、HTTP 还没读                                                                                                        | `connect`        | 无 —— 按 `subject.address` 等 `network` 主体的事实判（见 `network-policy` 条目）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `request`     | 远程访问：每个 HTTP 请求，含 WebSocket 升级                                                                                              | `request`        | `method`、`path`（URL 路径）、`query`、`route`（`page`、`asset`、`media`、`preview`、`download`、`lib`、`widget`、`socket`）、`scope`、`access` —— 见 `network-policy` 条目的「scope 与 access」                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `channel`     | 远程访问：WebSocket 上的每一次调用                                                                                                       | `invoke`         | `channel`、`group`、`scope`（管哪一块，15 个之一）、`kind`、`access`（`read` / `write` / `admin`）、`size`、`args` —— 按 scope 分节的通道清单见 `network-channels` 条目                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -147,6 +155,8 @@ vars     宿主变量表（见下），含本会话的权限表
 **strict 语义**：读取客体没有的属性（如对 `command` 取 `object.path`）是错误，而错误**按效力 fail-safe**
 —— `deny` / `ask` 规则算命中（外加警告），放行类规则算不命中。永远用类型守住：
 `object.type == 'path' && inDir(object.path, …)`，或把 `object.type` 写成条件。
+发给模型的请求（`modelRequest`、`sensitive`）只由点名了它们的规则判：`object.type` 列出了这种类型，或 `action`
+列出了 `send` / `disclose`。别的规则再宽也碰不到它们 —— 一条为工具写的「什么都问我」不会拦下 bot 发给模型的请求。
 
 ### `match` 里可用的函数
 
@@ -203,9 +213,9 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 
 ## 内置策略
 
-随应用发布五份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）。管 agent 的三份门尽可能少问，都是
+随应用发布六份（按界面语言一份；**规则恒取英文文件**，翻译只改人读的文字）。管 agent 的三份门尽可能少问，都是
 普通的 `ask` 规则；管远程访问的那份是 `deny`，因为那里没有人可问；`daily-bot-access` 不设门、只放宽 —— 三条 `force-allow`，
-只给随应用提供的日报 bot 用。除此之外，`deny`、`force-ask` 与 `force-allow` 留给你自己的策略：
+只给随应用提供的日报 bot 用；`redact-sensitive` 也不设门 —— 两条带处置的 `allow`，打开自动脱敏。除此之外，`deny`、`force-ask` 与 `force-allow` 留给你自己的策略：
 
 | 名字                   | 门                                                                                                                                                                                                                      |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -213,6 +223,7 @@ YAML 语法错 / 不是映射；裸的 `rules` / `lets` / `scope` 键；`shuvix-
 | `ask-on-command`       | 每条没被圈进沙箱的命令询问（`object.sandboxed` 为 false：沙箱关闭或不可用、申请了完全访问、`ssh`）                                                                                                                      |
 | `ask-on-session-access` | `session` 工具查看或对话一条不是调用方自己子会话的会话之前询问 —— 除非这次只涉及调用方在那里发起的那一轮（`object.ownTurn`），或那条会话在权限表里（`vars.aclSessionRead` / `vars.aclSessionWrite`）；「允许并记住」把它加进表。自动审查不回答这类询问 —— 内置 hook `auto-review` 把 `session` 客体留给你 |
 | `network-admission`    | 远程访问（`subject.kind` 为 `network`）：发送方不是这台电脑（`127.0.0.0/8`、`::1`）的 HTTP 请求一律拒绝。要让其他设备进来，写一份同名的用户策略替换它 —— 写法见 `network-policy` 条目                                   |
+| `redact-sensitive`     | 自动脱敏（`redaction` 条目）：agent 发给模型的每个请求都脱敏（`modelRequest`，`disposition: detect`），其中每一处敏感内容以占位符发给模型（`sensitive`，`disposition: redact`）—— `USERNAME`、`HOSTNAME`、`IP`、`BUCKET` 四类除外，按原样发出。停用它，发给所有模型的都是真值；对话记录里存的始终是占位符 |
 | `daily-bot-access`     | 只放宽：日报 bot（`subject.bot == 'bot:builtin:daily'`）的根 agent 不用问就能读最近 7 天有过消息的会话（压过 `ask-on-session-access`；时间窗写在 `duration('168h')` 里，覆盖副本里改），并读写 `vars.trackingDir`、读 `vars.dailyDir`（日记；都压过 `ask-on-external-path`）。它每天傍晚被内置定时器叫起来，那时多半没有人在场回答询问。只作用于那条会话的根 agent，不作用于子会话与派出去的 agent |
 
 管 agent 的两份划的是同一条线：文件工具要问的，恰好就是受限命令碰不到的，所以智能体从 `read` 换成 `cat` 也占不到
@@ -253,6 +264,8 @@ ShuviX 里，不写文件；那一行照常列着，变淡并带「已禁用」�
   「agent 想离开沙箱时一律问我」；
   或是 `vars.botsDir` / `vars.shuvixConfigDirs` 下的写入，即「agent 改 bot 文件或 ShuviX 自己的配置时
   一律问我」。
+- **自动脱敏**：信任某个模型、某一类照发、某一类绝不发 —— 自己写一份策略，在 `modelRequest` / `sensitive`
+  上写 `force-allow` 或 `deny`。写法见 `redaction` 条目。
 - 规则要窄：deny 无法按次豁免，所以一条在日常工作里误触发的规则，比一条漏掉的更糟。
 
 例如，可写数据库连接上的每条 SQL 语句都先询问：

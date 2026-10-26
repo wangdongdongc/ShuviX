@@ -61,6 +61,26 @@ export type SecurityEffect = 'allow' | 'ask' | 'deny'
  */
 export type PolicyEffect = SecurityEffect | 'force-allow' | 'force-ask'
 
+/**
+ * 处置 —— 与 effect 正交的第二个维度：规则生效时，执行点除了放行还要做的事（「特殊的 allow」）。
+ * 词汇由宿主定义、有限且固定：md 只声明用哪个，不带用户代码，也不带参数。
+ *   - `detect`：这次模型请求适用脱敏 —— 出口跑检测器兜底，并对其中每一处敏感内容再判一次（第二层）；
+ *   - `redact`：这一处敏感内容保持占位符发出，不换回真值。
+ * 只能写在 allow / force-allow 上（policyFile 校验）；只取胜出那一档的处置（evaluate 的 collectDispositions）。
+ * 执行点声明自己能做哪些（EnforceOpts.supportedDispositions）；决策带了做不到的，按拒绝处理（context.ts）。
+ */
+export const DISPOSITIONS = ['detect', 'redact'] as const
+export type Disposition = (typeof DISPOSITIONS)[number]
+
+/**
+ * 每种处置能落在哪些客体上 —— 规则的 `object.type` 写成固定值时，解析期就按它检查（policyFile），
+ * 写成 `'*'` 或省略时交给运行时兜底（执行点做不到即拒绝）。
+ */
+export const DISPOSITION_OBJECT_TYPES: Readonly<Record<Disposition, readonly string[]>> = {
+  detect: ['modelRequest'],
+  redact: ['sensitive']
+}
+
 /** 访问模式（路径类客体的 action 取值） */
 export type AccessMode = 'read' | 'write'
 
@@ -156,6 +176,14 @@ export type AttrValue =
  *                                                           （action 'navigate'；browser: 'app' = 应用内
  *                                                           浏览器面板，'chrome' = 用户真实的 Chrome；
  *                                                           file:// 不走这里，按读那个路径处理）
+ *   { type:'modelRequest', provider, model }                发给模型的一次请求（action 'send'；provider =
+ *                                                           设置里显示的服务商名字，model = 模型 id）。
+ *                                                           处置 `detect` 落在这里
+ *   { type:'sensitive', category, rule, provider, model, value }
+ *                                                           请求里的一处敏感内容（action 'disclose'；category =
+ *                                                           检测器归的类，rule = 命中的检测规则；value 是真值，
+ *                                                           惰性、非枚举，决策日志序列化不到）。处置 `redact`
+ *                                                           落在这里
  * 未来扩展（url / mcp…）：PEP 上报新 type + 属性即可，引擎零改动。
  */
 export type SecurityObject = { type: string } & Record<string, AttrValue | undefined>
@@ -172,8 +200,9 @@ export interface SecurityRequest {
    * 经由的工具（PEP 已知则填充；operation = 多路复用工具的动作参数，如 ssh 的 action）。
    * 被动 UI 等非工具路径省略 —— match 上下文里恒有 tool 命名空间（空串缺省），
    * `tool.name == 'ssh'` 对非工具路径求 false 而非报错。
+   * restored = 这次调用的参数里从占位符还原出来的敏感内容类别（见 EnforceOpts.restored）。
    */
-  tool?: { name: string; operation?: string }
+  tool?: SecurityToolRef
   object: SecurityObject
   environment: SecurityEnvironment
 }
@@ -195,7 +224,7 @@ export interface MatchContext {
     depth: number
   } & Record<string, unknown>
   action: string
-  tool: { name: string; operation: string }
+  tool: { name: string; operation: string; restored: string[] }
   object: Record<string, AttrValue>
   env: { host: string; platform: string }
   vars: Record<string, PolicyVarValue>
@@ -222,6 +251,8 @@ export interface SecurityRule {
   conditions?: PolicyConditions
   /** 命中时给人看的提示语（md 的 rule.prompt 原样透传）；投递面见 SecurityDecision.prompt */
   prompt?: string
+  /** 规则声明的处置（md 的 rule.disposition，只在 allow 档上）；收集见 SecurityDecision.dispositions */
+  dispositions?: readonly Disposition[]
   /** 规则出处（决策日志与检视 UI 的回链；displayName 供询问卡片署名，按界面语言本地化） */
   source: {
     kind: 'builtin' | 'user' | 'session' | 'derived'
@@ -258,6 +289,11 @@ export interface SecurityDecision {
     /** 贡献文本的策略显示名（去重，按装配序）—— 询问卡片的署名 */
     policies: string[]
   }
+  /**
+   * 放行时执行点还要做的事（见 Disposition）：胜出 tier 内全部命中规则的处置取并集，按装配序去重
+   * （同 prompt 的收集，理由见 evaluate 的 collectDispositions）。只在 effect 为 allow 时出现；没有就省略。
+   */
+  dispositions?: Disposition[]
   /** effect === 'ask' 时交给执行层的材料 */
   ask?: {
     /** 询问卡片展示文本（路径类为 `Read(...)` / `Write(...)` 条目字面值，命令类为命令原文） */
@@ -316,6 +352,11 @@ export interface PolicyRuleSpec {
    *              那里它就是这条规则的说明文字。
    */
   prompt?: string
+  /**
+   * 处置（md 的 `disposition`，单个或列表；见 Disposition）。只能写在 allow / force-allow 上；
+   * 规则的 object.type 写成固定值时，每种处置都必须能落在其中每一种客体上（DISPOSITION_OBJECT_TYPES）。
+   */
+  disposition?: Disposition[]
 }
 
 export interface ParsedPolicyFile {
@@ -526,6 +567,16 @@ export interface EnforceOpts {
   missingChannel?: 'deny' | 'allow'
   /** MCP 工具调用的事实 —— 由 L1 门并进 invocation 客体（见 McpInvocationFacts） */
   mcp?: McpInvocationFacts
+  /**
+   * 这个执行点能做的处置（见 Disposition）。决策带了不在其中的处置 → 按拒绝处理：放行却做不到规则
+   * 要求的事，等于悄悄拆掉一道保护。缺省 = 一个都做不了（今天只有模型请求的出口能做）。
+   */
+  supportedDispositions?: readonly Disposition[]
+  /**
+   * 这次调用的参数里从占位符还原出来的敏感内容类别（去重），进 match 的 `tool.restored`。
+   * 由工具执行前的还原填写；没有还原、或不经工具的检查，留空即可（match 里恒为列表，缺省空）。
+   */
+  restored?: string[]
 }
 
 /**
@@ -560,7 +611,10 @@ export interface McpInvocationFacts {
   openWorld?: boolean
 }
 
-export type EnforceOutcome = { status: 'allowed' } | { status: 'feedback'; text: string }
+/** 放行时带上执行点要做的处置（已确认都在 supportedDispositions 里；没有就省略） */
+export type EnforceOutcome =
+  | { status: 'allowed'; dispositions?: Disposition[] }
+  | { status: 'feedback'; text: string }
 
 /**
  * 命令风险分类的类别（分类器做一道单选题：这条命令属于哪一类，多项符合时选最危险的那一项）。
@@ -742,11 +796,16 @@ export interface SecurityContext {
    * ⚠️ 命令客体请走 enforceCommand：它是唯一会挂上结构属性（parsed/commands/writes）的
    * 构造点。手工构造的 `{type:'command'}` 缺这些属性时，引用它们的规则按 strict 语义
    * 求值报错，deny 规则会 fail-safe 成「命中」—— 即全部拒绝。
+   * supportedDispositions 同 EnforceOpts（缺省一个都做不了）。
    */
   evaluate(
     action: string,
     object: SecurityObject,
-    opts?: { includeForceAllow?: boolean }
+    opts?: {
+      includeForceAllow?: boolean
+      tool?: SecurityToolRef
+      supportedDispositions?: readonly Disposition[]
+    }
   ): SecurityDecision
   /**
    * 同步只读判定 —— 永不弹询问、不记日志，被动 UI（预览面板等）专用。
@@ -798,14 +857,21 @@ export interface SecurityContext {
    * 不能询问的点位用的判定（远程访问的网络点位）：评估（路径客体照样先解析真实去处），
    * **先按完整优先级结算，再把 ask（含 force-ask）降级为拒绝** —— force-allow 因此照样压得过 ask。
    * 不弹窗、不送审查、不记日志（拒绝记录由宿主自己记）。includeForceAllow 恒为 true。
+   * supportedDispositions 同 EnforceOpts：放行带着做不到的处置 → 按拒绝结算。
    */
-  judgeGate(action: string, object: SecurityObject, opts?: { tool?: SecurityToolRef }): GateVerdict
+  judgeGate(
+    action: string,
+    object: SecurityObject,
+    opts?: { tool?: SecurityToolRef; supportedDispositions?: readonly Disposition[] }
+  ): GateVerdict
 }
 
 /** 判定所经的工具（match 里的 tool 命名空间） */
 export interface SecurityToolRef {
   name: string
   operation?: string
+  /** 参数里从占位符还原出来的敏感内容类别（见 EnforceOpts.restored）；match 里缺省为空列表 */
+  restored?: string[]
 }
 
 /** judgeGate 的结论 */
@@ -843,6 +909,8 @@ export interface SecurityDecisionRecord {
   effect: SecurityEffect
   matched: string[]
   winning: string
+  /** 放行时执行点要做的处置（有才记） */
+  dispositions?: Disposition[]
   userResponse?: 'allowed' | 'allowed_remember' | 'denied' | 'feedback' | 'cancel'
   /** 自动审查的判决（ask 经审查接缝回答了才有；转给人时 userResponse 另记人的回答） */
   review?: { decision: PermissionDecision; risk: PermissionRisk; source: string; ms: number }

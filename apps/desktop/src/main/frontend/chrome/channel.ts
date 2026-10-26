@@ -158,6 +158,10 @@ export async function callPanelChannel(
       const sessionId = own(list[0])
       return chatGateway.getRuntimeStatuses(sessionId)
     }
+    case 'redaction.resolve': {
+      const p = params<{ sessionId: string; placeholders: string[] }>()
+      return chatGateway.resolveRedactions(p.sessionId, p.placeholders)
+    }
     case 'bgTask.list':
       return taskRegistry.list(params<{ sessionId: string }>().sessionId)
     case 'tools.list':

@@ -1,0 +1,341 @@
+/**
+ * 自动脱敏的出口（durable/redactionEgress.ts + redactionModels.ts，docs/auto-redaction-design.md §2.4）。
+ *
+ * 请求的改写（prepareEgress，纯函数）：
+ *   EG-1 第一层不适用（信任的目的地）：占位符全部换回真值、不做兜底检测；回复里的真值换回占位符
+ *   EG-2 适用 + 保持占位符：占位符原样；请求里现拼的真值（系统提示词）兜底换掉并交回新表项；已知值沿用旧占位符
+ *   EG-3 第二层判为照发：只换那一类，工具参数里的也换
+ *   EG-4 拒发：第一层（不带类别）与第二层（带类别）都抛 EgressBlockedError
+ *   EG-5 thinking 块一字不差
+ *   EG-6 同一 (类别, 规则, 值) 在一次请求里只问一次策略
+ * 回复的换回（Remasker）：
+ *   RM-1 流式：真值被切在两个事件之间时先压住，放出的部分从不含真值、只追加；最终与整段换回一致
+ *   RM-2 短值只换整词，流式时结尾那个没写完的词先压住
+ *   RM-3 工具参数整段换
+ * 装饰器（真宿主 + faux 模型）：
+ *   ME-1 适用：模型看到占位符；策略收到会话、对话、provider、模型
+ *   ME-2 信任的目的地：模型看到真值，它在回复里写出的真值存成占位符
+ *   ME-3 第一层拒发：请求不发，回合以出错结束，文案说明原因
+ *   ME-4 改写出错（bug）：记 error，按存的样子（占位符）发出
+ */
+import { createHmac } from 'node:crypto'
+import {
+  fauxAssistantMessage,
+  fauxText,
+  fauxThinking,
+  fauxToolCall,
+  type AssistantMessage,
+  type Context,
+  type Message
+} from '@earendil-works/pi-ai'
+import { describe, expect, it } from 'vitest'
+import { makePlaceholder, type PlaceholderSigner } from '../../redaction/placeholder'
+import {
+  EgressBlockedError,
+  prepareEgress,
+  Remasker,
+  type DiscloseAction,
+  type EgressDecision
+} from '../redactionEgress'
+import type { RedactionPolicyRequest } from '../redactionModels'
+import { RedactionTable } from '../redactionTable'
+import type { RedactionHost } from '../sessionRedaction'
+import { makeHost, registerHostCleanup } from './support/host'
+import { allEntries, messageText, requestTexts } from './support/transcript'
+
+registerHostCleanup()
+
+const signer: PlaceholderSigner = {
+  sign: (data) => createHmac('sha256', 'test-key').update(data).digest()
+}
+const host: RedactionHost = {
+  signer,
+  vault: {
+    seal: (v) => `SEALED:${Buffer.from(v).toString('base64')}`,
+    open: (s) => Buffer.from(s.slice(7), 'base64').toString()
+  }
+}
+
+const PASSWORD = 'Tr0ub4dor&3xq'
+const KEY = 'sk-proj-' + 'A1b2C3d4E5f6G7h8I9j0K1l2'
+const PHONE = '13812345678'
+
+const P_PASSWORD = makePlaceholder(signer, 'SECRET', PASSWORD)
+const P_KEY = makePlaceholder(signer, 'API_KEY', KEY)
+
+function tableWith(
+  ...items: Array<[placeholder: string, category: string, value: string]>
+): RedactionTable {
+  const table = new RedactionTable()
+  for (const [placeholder, category, value] of items) {
+    table.put(placeholder, { category, rule: 'test-rule', value })
+  }
+  return table
+}
+
+const decision = (
+  applies: boolean,
+  disclose: (category: string) => DiscloseAction = () => 'redact'
+): EgressDecision => ({ applies, disclose: ({ category }) => disclose(category) })
+
+const user = (text: string): Message => ({ role: 'user', content: text, timestamp: 0 })
+const toolResult = (text: string): Message => ({
+  role: 'toolResult',
+  toolCallId: 'c1',
+  toolName: 'bash',
+  content: [{ type: 'text', text }],
+  isError: false,
+  timestamp: 0
+})
+
+function texts(context: Context): string {
+  return JSON.stringify(context)
+}
+
+describe('出口：请求的改写', () => {
+  it('EG-1 不适用：占位符换回真值、不兜底检测；回复里的真值换回占位符', () => {
+    const table = tableWith([P_PASSWORD, 'SECRET', PASSWORD])
+    const context: Context = {
+      systemPrompt: `the phone is ${PHONE}`,
+      messages: [user(`DB_PASSWORD=${P_PASSWORD}`), toolResult(`ok ${P_PASSWORD}`)]
+    }
+    const out = prepareEgress(context, table, signer, decision(false))
+    expect(texts(out.context)).not.toContain(P_PASSWORD)
+    expect(texts(out.context)).toContain(`DB_PASSWORD=${PASSWORD}`)
+    expect(out.context.systemPrompt).toBe(`the phone is ${PHONE}`)
+    expect(out.entries).toEqual([])
+    expect(out.remasker!.text(`I used ${PASSWORD} to log in`)).toBe(
+      `I used ${P_PASSWORD} to log in`
+    )
+  })
+
+  it('EG-2 适用 + 保持占位符：占位符原样，现拼的真值兜底换掉，已知值沿用旧占位符', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY])
+    const context: Context = {
+      systemPrompt: `call ${PHONE}; the key is ${KEY}`,
+      messages: [user(`use ${P_KEY}`)]
+    }
+    const out = prepareEgress(context, table, signer, decision(true))
+    const P_PHONE = makePlaceholder(signer, 'PHONE', PHONE)
+    expect(out.context.systemPrompt).toBe(`call ${P_PHONE}; the key is ${P_KEY}`)
+    expect(texts(out.context)).toContain(`use ${P_KEY}`)
+    expect(out.entries).toEqual([
+      { placeholder: P_PHONE, category: 'PHONE', rule: 'cn-mobile', value: PHONE }
+    ])
+    expect(out.remasker).toBeUndefined()
+  })
+
+  it('EG-3 第二层判为照发：只换那一类，工具参数里的也换', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY], [P_PASSWORD, 'SECRET', PASSWORD])
+    const assistant = fauxAssistantMessage(
+      [
+        fauxText(`trying ${P_KEY}`),
+        fauxToolCall('bash', { command: `login ${P_KEY} ${P_PASSWORD}` })
+      ],
+      { stopReason: 'toolUse' }
+    )
+    const context: Context = { messages: [user('go'), assistant] }
+    const out = prepareEgress(
+      context,
+      table,
+      signer,
+      decision(true, (category) => (category === 'API_KEY' ? 'send' : 'redact'))
+    )
+    const sent = out.context.messages[1] as AssistantMessage
+    expect(sent.content[0]).toMatchObject({ type: 'text', text: `trying ${KEY}` })
+    expect(sent.content[1]).toMatchObject({ arguments: { command: `login ${KEY} ${P_PASSWORD}` } })
+    expect(out.remasker!.text(`key=${KEY}`)).toBe(`key=${P_KEY}`)
+  })
+
+  it('EG-4 拒发：第一层不带类别、第二层带类别', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY])
+    const context: Context = { messages: [user(`use ${P_KEY}`)] }
+    const blocked = (): unknown =>
+      prepareEgress(context, table, signer, {
+        blocked: true,
+        applies: false,
+        disclose: () => 'redact'
+      })
+    expect(blocked).toThrow(EgressBlockedError)
+    expect(blocked).toThrow(/requests to this model/)
+    const byCategory = (): unknown =>
+      prepareEgress(
+        context,
+        table,
+        signer,
+        decision(true, () => 'block')
+      )
+    expect(byCategory).toThrow(/API_KEY/)
+    // 现拼的真值同样会被拦
+    const raw: Context = { systemPrompt: `phone ${PHONE}`, messages: [user('hi')] }
+    expect(() =>
+      prepareEgress(
+        raw,
+        new RedactionTable(),
+        signer,
+        decision(true, () => 'block')
+      )
+    ).toThrow(/PHONE/)
+  })
+
+  it('EG-5 thinking 块一字不差', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY])
+    const thinking = `the user gave ${P_KEY} and ${PHONE}`
+    const assistant = fauxAssistantMessage([fauxThinking(thinking), fauxText(`ok ${P_KEY}`)])
+    for (const applies of [false, true]) {
+      const out = prepareEgress(
+        { messages: [user('go'), assistant] },
+        table,
+        signer,
+        decision(applies)
+      )
+      const sent = out.context.messages[1] as AssistantMessage
+      expect(sent.content[0]).toEqual(assistant.content[0])
+    }
+  })
+
+  it('EG-6 同一 (类别, 规则, 值) 一次请求只问一次', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY])
+    let asked = 0
+    const counting: EgressDecision = {
+      applies: true,
+      disclose: () => {
+        asked++
+        return 'redact'
+      }
+    }
+    prepareEgress(
+      { messages: [user(`${P_KEY} ${P_KEY}`), toolResult(P_KEY), user(`again ${P_KEY}`)] },
+      table,
+      signer,
+      counting
+    )
+    expect(asked).toBe(1)
+  })
+})
+
+describe('出口：回复的换回', () => {
+  const stream = (remasker: Remasker, chunks: string[]): string[] => {
+    const outs: string[] = []
+    let full = ''
+    for (const chunk of chunks) {
+      full += chunk
+      const partial = remasker.partial(fauxAssistantMessage([fauxText(full)]))
+      outs.push((partial.content[0] as { text: string }).text)
+    }
+    return outs
+  }
+
+  it('RM-1 流式：切开的真值先压住，放出的只追加、从不含真值；最终与整段换回一致', () => {
+    const remasker = new Remasker(new Map([[KEY, P_KEY]]))
+    const text = `here: ${KEY} and again ${KEY}.`
+    const chunks = [text.slice(0, 12), text.slice(12, 20), text.slice(20, 45), text.slice(45)]
+    const outs = stream(remasker, chunks)
+    for (const [i, out] of outs.entries()) {
+      expect(out).not.toContain(KEY.slice(0, 10))
+      if (i > 0) expect(out.startsWith(outs[i - 1]!)).toBe(true)
+    }
+    const final = remasker.message(fauxAssistantMessage([fauxText(text)]))
+    expect((final.content[0] as { text: string }).text).toBe(`here: ${P_KEY} and again ${P_KEY}.`)
+    expect(outs.at(-1)).toBe(`here: ${P_KEY} and again ${P_KEY}.`)
+  })
+
+  it('RM-2 短值只换整词；流式时结尾没写完的词先压住', () => {
+    const P = '{{SECRET_aaaaaaaa}}'
+    const remasker = new Remasker(new Map([['pw1', P]]))
+    expect(remasker.text('use pw1 now, not pw12 or xpw1')).toBe(`use ${P} now, not pw12 or xpw1`)
+    const streaming = new Remasker(new Map([['pw1', P]]))
+    const outs = stream(streaming, ['use pw', '1', ' now'])
+    // 结尾的 now 也还压着：最终结果才放出
+    expect(outs).toEqual(['use ', 'use ', `use ${P} `])
+    const final = streaming.message(fauxAssistantMessage([fauxText('use pw1 now')]))
+    expect((final.content[0] as { text: string }).text).toBe(`use ${P} now`)
+  })
+
+  it('RM-3 工具参数整段换', () => {
+    const remasker = new Remasker(new Map([[KEY, P_KEY]]))
+    const message = fauxAssistantMessage([fauxToolCall('bash', { command: `curl -H "x: ${KEY}"` })])
+    expect(remasker.partial(message).content[0]).toMatchObject({
+      arguments: { command: `curl -H "x: ${P_KEY}"` }
+    })
+  })
+})
+
+describe('出口：装饰器', () => {
+  const policyOf =
+    (
+      make: (request: RedactionPolicyRequest) => EgressDecision,
+      seen: RedactionPolicyRequest[] = []
+    ) =>
+    (request: RedactionPolicyRequest): EgressDecision => {
+      seen.push(request)
+      return make(request)
+    }
+
+  it('ME-1 适用：模型看到占位符；策略收到会话、对话、provider、模型', async () => {
+    const seen: RedactionPolicyRequest[] = []
+    const t = await makeHost({
+      ephemeral: ['me1'],
+      redaction: host,
+      redactionPolicy: policyOf(() => decision(true), seen)
+    })
+    const session = await t.open('me1')
+    t.kit.queue(fauxAssistantMessage([fauxText('ok')]))
+    expect(await session.submitUser(`the key is ${KEY}`)).toEqual({})
+    const request = requestTexts(t.kit, 0).join('\n')
+    expect(request).not.toContain(KEY)
+    expect(request).toContain(P_KEY)
+    expect(seen[0]).toMatchObject({ sessionId: 'me1', provider: 'faux', model: 'faux-1' })
+    expect(typeof seen[0]!.conversationId).toBe('number')
+  })
+
+  it('ME-2 信任的目的地：模型看到真值，回复里写出的真值存成占位符', async () => {
+    const t = await makeHost({
+      ephemeral: ['me2'],
+      redaction: host,
+      redactionPolicy: policyOf(() => decision(false))
+    })
+    const session = await t.open('me2')
+    t.kit.queue((context) => {
+      const last = context.messages.at(-1)
+      const said = messageText(last)
+      return fauxAssistantMessage([fauxText(`you said: ${said}`)])
+    })
+    expect(await session.submitUser(`the key is ${KEY}`)).toEqual({})
+    expect(requestTexts(t.kit, 0).join('\n')).toContain(KEY)
+    const stored = JSON.stringify(await allEntries(await session.currentConversation()))
+    expect(stored).not.toContain(KEY)
+    expect(stored).toContain(`you said: the key is ${P_KEY}`)
+  })
+
+  it('ME-3 第一层拒发：请求不发，回合以出错结束', async () => {
+    const t = await makeHost({
+      ephemeral: ['me3'],
+      redaction: host,
+      redactionPolicy: policyOf(() => ({ blocked: true, applies: false, disclose: () => 'redact' }))
+    })
+    const session = await t.open('me3')
+    t.kit.queue(fauxAssistantMessage([fauxText('should not be asked')]))
+    await session.submitUser('hello')
+    expect(t.kit.requests).toHaveLength(0)
+    const stored = await allEntries(await session.currentConversation())
+    const reply = stored.flatMap((entry) => entry.model ?? []).find((m) => m.role === 'assistant')
+    expect(reply).toMatchObject({ stopReason: 'error' })
+    expect((reply as AssistantMessage).errorMessage).toMatch(/does not allow sending requests/)
+  })
+
+  it('ME-4 改写出错：记 error，按存的样子发出', async () => {
+    const t = await makeHost({
+      ephemeral: ['me4'],
+      redaction: host,
+      redactionPolicy: () => {
+        throw new Error('policy exploded')
+      }
+    })
+    const session = await t.open('me4')
+    t.kit.queue(fauxAssistantMessage([fauxText('ok')]))
+    expect(await session.submitUser(`the key is ${KEY}`)).toEqual({})
+    expect(requestTexts(t.kit, 0).join('\n')).toContain(P_KEY)
+    expect(t.warnings.some((w) => w.includes('policy exploded'))).toBe(true)
+  })
+})

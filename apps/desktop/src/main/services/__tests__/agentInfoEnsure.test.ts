@@ -22,6 +22,7 @@ import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import {
   backgroundContext as BG,
   DisplayDoc,
+  PLACEHOLDER_NOTE,
   SessionStateDoc,
   type DurableSession,
   type SessionHostDeps,
@@ -174,6 +175,8 @@ beforeAll(async () => {
 })
 
 const PERSONA = 'You are the desktop agent'
+/** 桌面的会话做自动脱敏：人设之后跟着占位符那一段 */
+const PROMPT_WITH_NOTE = `${PERSONA}\n\n<placeholders>\n${PLACEHOLDER_NOTE}\n</placeholders>`
 
 const profile = (name: string): Record<string, unknown> => ({
   name,
@@ -313,7 +316,7 @@ describe('P3-06 C · ensure', () => {
     expect(filesOf('s1')).toEqual([])
     const info = await chatGateway.getAgentInfo('s1', { ensure: true })
     expect(info).not.toBeNull()
-    expect(info!.systemPrompt).toBe(PERSONA)
+    expect(info!.systemPrompt).toBe(PROMPT_WITH_NOTE)
     expect(info!.tools.map((tool) => tool.name)).toEqual(['probe'])
     expect(info!.tools[0]!.parameters).toEqual(['target'])
     expect(info!.model.id).toBe('faux-1')
@@ -431,7 +434,7 @@ describe('P3-06 C · ensure', () => {
     const resolves = counters.resolve
     const info = await chatGateway.getAgentInfo('s1', { ensure: true })
     expect(info).not.toBeNull()
-    expect(info!.systemPrompt).toBe(PERSONA)
+    expect(info!.systemPrompt).toBe(PROMPT_WITH_NOTE)
     expect(session.lock).toBeDefined()
     expect(counters.resolve).toBe(resolves + 1)
     expect(eventsOf('agent_created')).toHaveLength(1)

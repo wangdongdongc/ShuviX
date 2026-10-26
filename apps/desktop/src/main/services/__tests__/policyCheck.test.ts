@@ -309,7 +309,8 @@ describe('policyCheck', () => {
     const cases: Array<[Array<[string, string]>, string]> = [
       [
         [['ip', '1.2.3.4']],
-        'Unknown option --ip. Options: --from, --device, --page, --channel, --setting, --read, --write, --expect, --scopes.'
+        'Unknown option --ip. Options: --from, --device, --page, --channel, --setting, --read, --write, --expect, --scopes, ' +
+          '--redaction, --provider, --model, --category, --value, --bot.'
       ],
       [
         [

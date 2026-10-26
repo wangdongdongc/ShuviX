@@ -19,6 +19,7 @@ import { ChevronDown, ChevronUp, CornerDownLeft, Layers, X, Zap } from 'lucide-r
 import type { QueuedInputView } from '@shuvix/chat-protocol/types/sessionView'
 import { getSessionChannelApi } from '@shuvix/chat-ui'
 import { useChatStore, selectSessionQueueItems } from '../../stores/chatStore'
+import { RedactedText } from './RedactedText'
 
 type Tier = QueuedInputView['mode']
 
@@ -127,7 +128,7 @@ export function QueuePanel(): React.JSX.Element | null {
                   {t(`queue.${item.mode}`)}
                 </span>
                 <span className="flex-1 min-w-0 truncate text-[12px] text-text-secondary">
-                  {item.text || t('queue.emptyText')}
+                  {item.text ? <RedactedText text={item.text} /> : t('queue.emptyText')}
                 </span>
                 {item.imageCount > 0 && (
                   <span className="flex-shrink-0 text-[10px] text-text-tertiary tabular-nums">
