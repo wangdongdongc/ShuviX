@@ -4,9 +4,9 @@
  *
  *   DR-1 没有日报、能写：日期行尾一颗「新建」图标（无文字，aria-label / title 是说明）；点它 → onOpen 一次
  *   DR-2 没有日报、未来的日子：没有图标
- *   DR-3 还没查到（undefined）：既没有图标也没有日报行 —— 不先闪一颗图标再变成摘录
- *   DR-4 写了：日期下一行是摘录，没有新建图标；点它 / 回车 → onOpen
- *   DR-5 只有模板（空摘录）：那一行写「还没写内容」
+ *   DR-3 还没查到（undefined）：既没有图标也没有日报行 —— 不先闪一颗图标再变成日报行
+ *   DR-4 写了：日期下一行 = 文件名 + 「日记」小签，单行（不放正文摘录），没有新建图标；点它 / 回车 → onOpen
+ *   DR-5 只有模板、Windows 路径：照样是文件名 + 小签
  *   DR-6 主区开着的正是这份日报：行按选中态画
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -96,12 +96,15 @@ describe('DayReportHeader', () => {
     expect(reportRow()).toBeNull()
   })
 
-  it('DR-4 写了：摘录一行、没有新建图标；点它 / 回车都打开', () => {
+  it('DR-4 写了：一行 = 文件名 + 「日记」小签（不放正文摘录）、没有新建图标；点它 / 回车都打开', () => {
     const onOpen = vi.fn()
     mount({ report: { excerpt: '修好了圆点 · 写测试', path: PATH }, onOpen })
     expect(writeButton()).toBeNull()
     const row = reportRow()!
-    expect(row.textContent).toBe('修好了圆点 · 写测试')
+    expect(row.querySelector('[data-daily-file]')!.textContent).toBe('2025-03-14.md')
+    expect(row.querySelector('[data-daily-tag]')!.textContent).toBe(en.daily.tag)
+    expect(row.textContent).not.toContain('修好了圆点')
+    expect(row.className).not.toContain('sb-row-wrap')
     expect(row.title).toBe(en.daily.open)
     act(() => row.click())
     act(() => {
@@ -110,9 +113,9 @@ describe('DayReportHeader', () => {
     expect(onOpen).toHaveBeenCalledTimes(2)
   })
 
-  it('DR-5 只有模板：那一行写「还没写内容」', () => {
-    mount({ report: { excerpt: '', path: PATH } })
-    expect(reportRow()!.textContent).toBe(en.daily.empty)
+  it('DR-5 只有模板 / Windows 路径：照样是文件名 + 小签', () => {
+    mount({ report: { excerpt: '', path: 'C:\\Users\\u\\.shuvix\\daily\\2025-03-14.md' } })
+    expect(reportRow()!.textContent).toBe(`2025-03-14.md${en.daily.tag}`)
   })
 
   it('DR-6 主区开着的正是这份日报：行按选中态画', () => {

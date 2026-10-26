@@ -1675,12 +1675,12 @@
     },
     "write": "この日の日報を書く",
     "open": "この日の日報を開く",
-    "empty": "まだ何も書かれていません",
     "revealFile": "フォルダで表示",
     "copyPath": "パスをコピー",
     "delete": "日報を削除",
     "confirmDeleteTitle": "この日報を削除しますか？",
-    "confirmDeleteDescription": "{{day}} の日報ファイルが削除されます。元に戻すことはできません。"
+    "confirmDeleteDescription": "{{day}} の日報ファイルが削除されます。元に戻すことはできません。",
+    "tag": "日記"
   },
   "suggestion": {
     "header": "提案",

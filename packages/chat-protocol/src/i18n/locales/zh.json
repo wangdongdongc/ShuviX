@@ -1675,12 +1675,12 @@
     },
     "write": "写这一天的日报",
     "open": "打开这一天的日报",
-    "empty": "还没写内容",
     "revealFile": "在文件夹中显示",
     "copyPath": "复制路径",
     "delete": "删除日报",
     "confirmDeleteTitle": "删除这份日报？",
-    "confirmDeleteDescription": "{{day}} 的日报文件会被删除，且无法恢复。"
+    "confirmDeleteDescription": "{{day}} 的日报文件会被删除，且无法恢复。",
+    "tag": "日记"
   },
   "suggestion": {
     "header": "提议",

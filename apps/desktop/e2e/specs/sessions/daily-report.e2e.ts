@@ -4,7 +4,7 @@
  *   DRE-1 今天还没有日报：当天列表头只有一颗新建图标；月历上今天只有会话点
  *   DRE-2 点新建图标：按模板建出今天的日报，主区开成它的笔记本；列表头多一行日报；月历上两个点并排
  *   DRE-3 会话行菜单「复制链接」：剪贴板里是指向这条会话今天第一条消息的 Markdown 链接；日报不动
- *   DRE-4 把它粘进日报笔记本：存盘、摘录跟着变；点那条链接，主区切到那条会话
+ *   DRE-4 把它粘进日报笔记本：存盘；日报行仍是一行（文件名 + 日记小签）；点那条链接，主区切到那条会话
  *   DRE-5 未来的日子：没有新建图标，openReport 被拒，也不建文件
  *
  * 一次冷启动。fake HOME 下的日报目录用 node fs 直接核对；剪贴板是页内替身（`navigator.clipboard.writeText`
@@ -187,17 +187,16 @@ describe('日历上的日报', () => {
     expect(readFileSync(reportFile(), 'utf8')).toBe(before)
   })
 
-  it('DRE-4 粘进日报笔记本：存盘、摘录跟着变；点那条链接，主区切到那条会话', async () => {
+  it('DRE-4 粘进日报笔记本：存盘；日报行仍是一行文件名；点那条链接，主区切到那条会话', async () => {
     // 主区还是 DRE-2 打开的那份日报（右键会话行不切会话）
     await notebookEditorPane(app.main).typeAtEnd(`\n${copied}\n`)
     await until(() => readFileSync(reportFile(), 'utf8').includes(copied), 'pasted link saved')
-    await until(
-      () =>
-        evalCal<boolean>(
-          `${CAL}.querySelector('[data-daily-report]').textContent.includes(${JSON.stringify(TITLE)})`
-        ),
-      'excerpt shows the session'
-    )
+    // 日报行只是文件名 + 「日记」小签，不随正文变（2026-10-25 起不放摘录）
+    expect(
+      await evalCal<string>(
+        `${CAL}.querySelector('[data-daily-report] [data-daily-file]').textContent`
+      )
+    ).toBe(`${today}.md`)
     await shot('3-link-pasted')
     await until(
       () =>

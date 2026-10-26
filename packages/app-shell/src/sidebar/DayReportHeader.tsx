@@ -10,7 +10,7 @@ import { RowMenuButton } from './RowMenuButton'
 export interface DayReportHeaderProps {
   /** 选中的那一天 */
   day: Date
-  /** 那天的日报：undefined = 还没查到（先不出动作）；null = 没有；有则带摘录（只有模板时为空串）与文件的绝对路径 */
+  /** 那天的日报：undefined = 还没查到（先不出动作）；null = 没有；有则带文件的绝对路径（行上显示它的文件名；摘录不再显示） */
   report: { excerpt: string; path: string } | null | undefined
   /** 那天能不能写：未来的日子不能（日报记的是已经发生的事），过去的可以补 */
   writable: boolean
@@ -24,12 +24,18 @@ export interface DayReportHeaderProps {
   onDelete?: () => void
 }
 
+/** 路径的最后一段（日报文件名，如 `2026-10-25.md`）；Windows 的反斜杠一样认 */
+function fileNameOf(path: string): string {
+  return path.split(/[\\/]/).pop() || path
+}
+
 /**
  * 日历当天列表的头：日期 + 那天的日报。
  *
  * 没有日报时只在日期行尾放一颗「新建」图标（不放文字按钮 —— 日期就是它的说明）；写了就在日期下面多
- * 一行，图标 + 摘录，点开就是那份日报的笔记本。行与侧栏同一套 .sb-row，桌面 / 手机两档密度共用；
- * 摘录至多两行，故是 .sb-row-wrap（图标对齐第一行）。日报行与下面的会话行一样有菜单（右键整行 /
+ * 一行，图标 + 文件名 + 一枚「日记」小签，点开就是那份日报的笔记本。和下面的会话行一样只占一行
+ * （.sb-row，桌面 / 手机两档密度共用）：早先这里放的是正文开头的摘录，两行字挤在会话列表顶上反而难认
+ * （2026-10-25 用户裁定）。日报行与下面的会话行一样有菜单（右键整行 /
  * 悬停的 ⋮ 是同一份）：在文件夹中显示 / 复制路径 / 删除日报 —— 它是一份文件，会话那套配置 / 导出 / 分支
  * 对它没有意义；删的是文件本身（连同它的笔记本会话），所以总要先确认。
  */
@@ -98,21 +104,25 @@ export function DayReportHeader({
             }
           }}
           title={t('daily.open')}
-          className={`group relative sb-row sb-row-wrap cursor-pointer ${
+          className={`group relative sb-row cursor-pointer text-text-primary ${
             active ? 'bg-bg-active/80' : 'hover:bg-bg-hover/60'
           }`}
         >
           <NotebookText className="sb-icon text-success" />
-          <span
-            className={`sb-label flex-1 min-w-0 line-clamp-2 group-hover:pr-6 ${
-              report.excerpt ? 'text-text-secondary' : 'text-text-tertiary'
-            }`}
-          >
-            {report.excerpt || t('daily.empty')}
-          </span>
-          {/* 与第一行同心（RowMenuButton 高 1rem：12px 图标 + 上下各 2px），而不是整行居中 */}
+          <div className="flex-1 min-w-0 flex items-center gap-1.5 group-hover:pr-6">
+            <span data-daily-file="" className="truncate">
+              {fileNameOf(report.path)}
+            </span>
+            {/* 描边小签说的是「这一行是什么」（同 ExperimentalTag），颜色随日报图标 */}
+            <span
+              data-daily-tag=""
+              className="shrink-0 text-[9px] font-medium leading-none px-[3px] py-0.5 rounded border border-success/40 text-success whitespace-nowrap"
+            >
+              {t('daily.tag')}
+            </span>
+          </div>
           <RowMenuButton
-            className="absolute right-1.5 top-[calc((var(--sb-row-h)_-_1rem)/2)] opacity-0 group-hover:opacity-100"
+            className="absolute right-1.5 opacity-0 group-hover:opacity-100"
             onOpen={(e) => openMenu(report.path, e)}
           />
         </div>
