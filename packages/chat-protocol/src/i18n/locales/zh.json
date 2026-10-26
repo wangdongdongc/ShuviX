@@ -322,6 +322,8 @@
     "mermaidFailed": "Mermaid 渲染失败",
     "diagramGenerating": "正在生成图表…（{{lines}} 行）",
     "diagramExpand": "放大查看",
+    "diagramUnfold": "展开",
+    "diagramFold": "收起",
     "svgFailed": "SVG 无法安全渲染",
     "showDiagram": "显示图表",
     "rendering": "渲染中…",

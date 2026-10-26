@@ -2,7 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { Code, FileText, Maximize2, X } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronUp,
+  Code,
+  FileText,
+  FoldVertical,
+  Maximize2,
+  UnfoldVertical,
+  X
+} from 'lucide-react'
 import { detectType, load, registered, render as peleRender, type DiagramType } from 'pele/lazy'
 import {
   renderMermaidFigure,
@@ -18,6 +27,8 @@ import {
   MERMAID_FONT_SIZE,
   MERMAID_MAX_HEIGHT,
   mermaidLayout,
+  mermaidUnfoldable,
+  mermaidUnfoldedLayout,
   type MermaidSize
 } from './mermaidFit'
 
@@ -37,7 +48,10 @@ import {
  *    与卡片同色、节点比卡片凸一级）。切主题不重渲。
  * 4. **限高。** 内联只占一块不超过 MERMAID_MAX_HEIGHT 的地方：宽度先交给 pele 按栏宽重排，
  *    仍然太高时整张缩得进去且字还读得清就整张缩，读不清就按栏宽显示、截在限高处（底部渐隐）——
- *    规则见 mermaidLayout。显示的不是全貌时工具栏多一个「放大查看」，按原尺寸在弹窗里看（可滚动）。
+ *    规则见 mermaidLayout。限高藏住或缩小了图时给「展开 / 收起」（工具栏一个；截断时图底下也有一条，
+ *    展开后底下那条变成「收起」）：就地去掉限高，整张按栏宽摆在对话里，不弹窗。收起时把卡片拉回
+ *    视野 —— 从底下那条收起时，卡片一下子矮了一两千像素，不拉回来视野就落到后面的消息里去了。
+ *    展开了还被栏宽缩着（pele 重排也收不进这一栏）时才再给「放大查看」，按原尺寸在弹窗里看（可滚动）。
  *
  * 图类型按需加载（pele/lazy：每种图一个分包），所以每种图第一次出现时有一小段「渲染中」。
  */
@@ -46,6 +60,12 @@ const engine: MermaidEngine = { render: peleRender }
 
 /** 视图状态：源码 → 是否在看源码（组件频繁重挂载时保持） */
 const mermaidViewState = new Map<string, boolean>()
+
+/**
+ * 展开状态：源码 → 是否展开。同样跨重挂载保持 —— 对话列表是虚拟列表，滚出去再滚回来卡片会重挂，
+ * 展开的图不能因此自己收回去（那一下高度骤变，列表也会跳）
+ */
+const mermaidUnfoldState = new Map<string, boolean>()
 
 /**
  * 写完的图的渲染结果：字体 + 源码 → 结果（含失败）。列表滚动时卡片反复挂载，每次重渲一遍要
@@ -133,16 +153,22 @@ export function MermaidBlock({
   const settled = closed && !streaming
 
   const [showSource, setShowSourceState] = useState(mermaidViewState.get(code) ?? false)
+  const [unfolded, setUnfoldedState] = useState(mermaidUnfoldState.get(code) ?? false)
   const [expanded, setExpanded] = useState(false)
   const [cardWidth, setCardWidth] = useState(0)
   const figureRef = useRef<HTMLDivElement>(null)
+  const cardElRef = useRef<HTMLDivElement | null>(null)
   // 栏宽变了（窗口缩放、侧栏开合）才知道图要不要按窄栏重排、是否被缩小 —— 观察整张卡片（它一直在，
   // 放图那一格在占位阶段还没有）。回调 ref：挂上 / 卸下时自己接上 / 断开观察（React 19 的 ref 清理函数）
   const cardRef = useCallback((el: HTMLDivElement | null) => {
+    cardElRef.current = el
     if (!el || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver((entries) => setCardWidth(entries[0].contentRect.width))
     observer.observe(el)
-    return () => observer.disconnect()
+    return () => {
+      observer.disconnect()
+      cardElRef.current = null
+    }
   }, [])
   const boxWidth = Math.max(0, cardWidth - FIGURE_PADDING_X)
 
@@ -150,6 +176,25 @@ export function MermaidBlock({
     mermaidViewState.set(code, v)
     setShowSourceState(v)
   }
+
+  const setUnfolded = (v: boolean): void => {
+    mermaidUnfoldState.set(code, v)
+    setUnfoldedState(v)
+    // 收起后卡片还在视野里就不动；跑到视野上面去了（从图底下那条收起时就是这样）就拉回来。
+    // 等这一帧布局完再滚：高度要先变。jsdom 没有 scrollIntoView
+    if (!v) requestAnimationFrame(() => cardElRef.current?.scrollIntoView?.({ block: 'nearest' }))
+  }
+
+  // 流式中展开的图：源码每多一片，展开状态跟着搬到新源码名下 —— 写完之后的重挂按最终的源码查，
+  // 留在半截源码名下就等于自己收了回去
+  const unfoldKeyRef = useRef(code)
+  useEffect(() => {
+    const prev = unfoldKeyRef.current
+    unfoldKeyRef.current = code
+    if (prev === code || !unfolded) return
+    mermaidUnfoldState.delete(prev)
+    mermaidUnfoldState.set(code, true)
+  }, [code, unfolded])
 
   // 帧只取决于「到最后一个换行为止」的那一截（最后一行可能写到一半，帧判定会丢掉它）
   const frameKey = closed ? code : code.slice(0, code.lastIndexOf('\n') + 1)
@@ -190,7 +235,17 @@ export function MermaidBlock({
     result && 'figure' in result
       ? { width: result.figure.width, height: result.figure.height }
       : null
-  const layout = size && size.width > 0 && size.height > 0 ? mermaidLayout(size, boxWidth) : null
+  const measurable = size !== null && size.width > 0 && size.height > 0
+  // 限高藏住或缩小了图才有得展开；展开之后就是只受栏宽约束的那一种摆法
+  const unfoldable = measurable && mermaidUnfoldable(size, boxWidth)
+  const showUnfolded = unfoldable && unfolded
+  const layout = measurable
+    ? showUnfolded
+      ? mermaidUnfoldedLayout(size, boxWidth)
+      : mermaidLayout(size, boxWidth)
+    : null
+  // 「放大查看」只在展开了也还被栏宽缩着时给 —— 其余时候展开就是全貌，弹窗不多给什么
+  const zoomable = measurable && mermaidUnfoldedLayout(size, boxWidth).expandable
 
   // 消息写完了还画不出来才是真失败；流式期间画不出来只是还没写完（上面已经退回能画的那一帧）
   if (error && settled) {
@@ -243,7 +298,18 @@ export function MermaidBlock({
             }
           />
         )}
-        {svg && layout?.expandable && !showSource && (
+        {svg && unfoldable && !showSource && (
+          <button
+            onClick={() => setUnfolded(!showUnfolded)}
+            data-mermaid-unfold
+            aria-expanded={showUnfolded}
+            className="flex items-center gap-1 text-[10px] text-text-tertiary hover:text-text-secondary transition-colors"
+          >
+            {showUnfolded ? <FoldVertical size={10} /> : <UnfoldVertical size={10} />}
+            <span>{showUnfolded ? t('message.diagramFold') : t('message.diagramUnfold')}</span>
+          </button>
+        )}
+        {svg && zoomable && !showSource && (
           <button
             onClick={() => setExpanded(true)}
             data-mermaid-expand
@@ -267,20 +333,36 @@ export function MermaidBlock({
           {code}
         </pre>
       ) : svg ? (
-        <div
-          ref={figureRef}
-          data-mermaid-figure={layout?.mode ?? 'natural'}
-          style={figureStyle}
-          className={`flex justify-center overflow-hidden p-3 [&_svg]:h-auto ${
-            layout ? '[&_svg]:w-[min(100%,var(--mermaid-w))]' : '[&_svg]:max-w-full'
-          } ${
-            // 截断时底部渐隐：遮罩作用在内容本身，不必猜卡片底色（它是半透明的）
-            layout?.mode === 'clip'
-              ? 'items-start [mask-image:linear-gradient(to_bottom,black_calc(100%_-_56px),transparent)]'
-              : ''
-          }`}
-          dangerouslySetInnerHTML={figureHtml}
-        />
+        <>
+          <div
+            ref={figureRef}
+            data-mermaid-figure={layout?.mode ?? 'natural'}
+            data-mermaid-unfolded={showUnfolded || undefined}
+            style={figureStyle}
+            className={`flex justify-center overflow-hidden p-3 [&_svg]:h-auto ${
+              layout ? '[&_svg]:w-[min(100%,var(--mermaid-w))]' : '[&_svg]:max-w-full'
+            } ${
+              // 截断时底部渐隐：遮罩作用在内容本身，不必猜卡片底色（它是半透明的）
+              layout?.mode === 'clip'
+                ? 'items-start [mask-image:linear-gradient(to_bottom,black_calc(100%_-_56px),transparent)]'
+                : ''
+            }`}
+            dangerouslySetInnerHTML={figureHtml}
+          />
+          {/* 截断处一条「展开」、展开后图底下一条「收起」：读到图被切掉的地方 / 读到图的末尾，
+            手边就有按钮，不必回到卡片顶上的工具栏 */}
+          {(showUnfolded || layout?.mode === 'clip') && (
+            <button
+              onClick={() => setUnfolded(!showUnfolded)}
+              data-mermaid-unfold-bar
+              aria-expanded={showUnfolded}
+              className="flex w-full items-center justify-center gap-1 py-1.5 text-[10px] text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors"
+            >
+              {showUnfolded ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+              <span>{showUnfolded ? t('message.diagramFold') : t('message.diagramUnfold')}</span>
+            </button>
+          )}
+        </>
       ) : (
         <div data-mermaid-pending className="px-4 py-3 text-[11px] text-text-tertiary">
           {streaming && !closed

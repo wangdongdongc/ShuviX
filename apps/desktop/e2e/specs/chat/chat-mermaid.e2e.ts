@@ -9,9 +9,12 @@
  *      主题 token 上，卡片的 `data-figure-surface="card"` 再告诉它坐在哪层底上 —— 节点面 =
  *      `--theme-bg-primary`（比卡片凸一级）、标签字色 = `--theme-text-primary`、边标签衬底 = 卡片那层
  *      底（`--figure-surface`）；切主题只换色、不重渲（同一个 `<svg>` 元素）。jsdom 不做级联；
- *   3. **真 Chromium 的布局**：长竖图按栏宽截断 —— 框高封顶、图按原宽画（不是整张压扁），放大后
- *      原宽、可滚动（E-4）；自然宽度放不下这一栏的横排图由 pele 按栏宽重排，而不是整张缩小（E-6）。
- *      jsdom 的几何全是 0。
+ *   3. **真 Chromium 的布局与滚动**：长竖图按栏宽截断 —— 框高封顶、图按原宽画（不是整张压扁）、底部
+ *      渐隐；就地「展开」后不限高、整张按原宽摆在对话里（同一个 <svg>），切走会话再回来仍是展开的；
+ *      从图底下那条「收起」时卡片一下子矮了一千多像素，组件把它拉回视野，而不是让视野落进后面的
+ *      内容里（E-4）。展开了还被栏宽缩着的宽图（pele 重排也收不进）才给「Full size」弹窗：按原宽、
+ *      可滚动，关掉后仍是展开的（E-7）。自然宽度放不下这一栏的横排图由 pele 按栏宽重排，而不是整张
+ *      缩小（E-6）。jsdom 的几何全是 0，也不会滚。
  *
  * 模型侧由 `harness/fakeProvider` 脚本化（隔离实例没有 API Key）；流式过程靠它的 chunkDelayMs /
  * holdMs / release() 摆出来。一次 launchApp，**每条用例一个会话**：对话列表是 react-virtuoso，
@@ -22,6 +25,9 @@
  * 用例里这个类型已经注册过，流式第一帧就能同步画。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import en from '@shuvix/chat-protocol/i18n/locales/en.json'
+import ja from '@shuvix/chat-protocol/i18n/locales/ja.json'
+import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import { sleep, until } from '../../harness/cdp'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
@@ -33,6 +39,7 @@ import {
   sidebarPane,
   type ChatPane,
   type MermaidPane,
+  type MermaidUnfoldButton,
   type MermaidWatch,
   type SidebarPane
 } from '../../harness/pages'
@@ -45,9 +52,25 @@ const SESSIONS = [
   'mermaid-E3',
   'mermaid-E4',
   'mermaid-E5',
-  'mermaid-E6'
+  'mermaid-E6',
+  'mermaid-E7'
 ]
 const USAGE = { prompt: 90, completion: 20 }
+
+/** 界面语言跟着系统走：「展开 / 收起」上的字是三语之一（文案本身钉在 chat-protocol 的 locales.test） */
+const LOCALES = [en, ja, zh]
+const UNFOLD_TEXTS = LOCALES.map((l) => l.message.diagramUnfold)
+const FOLD_TEXTS = LOCALES.map((l) => l.message.diagramFold)
+const expectButton = (
+  button: MermaidUnfoldButton | null | undefined,
+  texts: string[],
+  expanded: boolean,
+  what: string
+): void => {
+  expect(button, what).toBeTruthy()
+  expect(texts, `${what}: ${JSON.stringify(button)}`).toContain(button!.text)
+  expect(button!.expanded, what).toBe(expanded)
+}
 
 /** 块之间必须留空行，否则 markdown 把它们并成一段 */
 const doc = (...blocks: string[]): string => blocks.join('\n\n')
@@ -279,15 +302,21 @@ describe('对话里的 mermaid 图', () => {
     expect(card.pending).toBeNull()
   }, 120_000)
 
-  it('E-4 长竖图按栏宽截断（框高封顶、图不压缩）；放大后原宽、可滚动；Esc / 遮罩 / 关闭按钮都能关', async () => {
+  it('E-4 长竖图按栏宽截断（框高封顶、图不压缩、底部渐隐）；就地展开后按原宽整张摆、同一个 <svg>，换会话回来仍展开；从底条收起时卡片被拉回视野', async () => {
     await openSession('mermaid-E4')
     provider.reset()
     const chain = Array.from(
       { length: 19 },
       (_, i) => `  e4n${i + 1}[Step ${i + 1}] --> e4n${i + 2}[Step ${i + 2}]`
     )
+    // 卡片底下要有远超一屏的内容：从底条收起时，视野才有地方「落进后面的内容里」
+    const filler = Array.from(
+      { length: 40 },
+      (_, i) =>
+        `E4 filler paragraph ${i + 1}: ${'the quick brown fox jumps over the lazy dog '.repeat(5).trim()}.`
+    )
     provider.script({
-      text: doc('MARK-E4 a long chain:', fence(['graph TD', ...chain].join('\n'))),
+      text: doc('MARK-E4 a long chain:', fence(['graph TD', ...chain].join('\n')), ...filler),
       usage: USAGE
     })
     await chat.typeAndSend('draw E4')
@@ -295,29 +324,93 @@ describe('对话里的 mermaid 图', () => {
     const mermaid = cardOf('MARK-E4')
     await mermaid.waitFigure()
 
+    // (1) 收起：按栏宽截断 —— 框高封顶、图按原宽画（下半截被框切掉）、底部渐隐
     const geo = await mermaid.geometry()
-    expect(geo.mode, JSON.stringify(geo)).toBe('clip')
-    expect(geo.box.height, JSON.stringify(geo)).toBeLessThanOrEqual(geo.capHeight + 0.5)
-    // 截断不是缩放：图按原宽画，下半截被框切掉
-    expect(Math.abs(geo.svg.width - geo.viewBox.width), JSON.stringify(geo)).toBeLessThanOrEqual(1)
-    expect(geo.svg.height, JSON.stringify(geo)).toBeGreaterThan(geo.box.height)
-    expect((await mermaid.shot())?.expandable).toBe(true)
+    const g = JSON.stringify(geo)
+    expect(geo.mode, g).toBe('clip')
+    expect(geo.box.height, g).toBeLessThanOrEqual(geo.capHeight + 0.5)
+    expect(Math.abs(geo.svg.width - geo.viewBox.width), g).toBeLessThanOrEqual(1)
+    expect(geo.svg.height, g).toBeGreaterThan(geo.box.height)
+    expect(geo.masked, g).toBe(true)
+    expect(geo.unfolded, g).toBe(false)
+    const collapsed = await mermaid.shot()
+    expectButton(collapsed?.unfold, UNFOLD_TEXTS, false, 'collapsed toolbar')
+    expectButton(collapsed?.bar, UNFOLD_TEXTS, false, 'collapsed bar')
+    expect(collapsed?.bar?.text).toBe(collapsed?.unfold?.text)
+    // 竖链比这一栏窄：展开就是全貌，没有 Full size
+    expect(geo.viewBox.width, g).toBeLessThanOrEqual(geo.contentWidth)
+    expect(collapsed?.fullSize).toBe(false)
+    const tag = await mermaid.svgTag()
+    expect(tag).toBeGreaterThan(0)
+    const collapsedCardHeight = (await mermaid.viewport()).card.height
 
-    for (const via of ['escape', 'backdrop', 'button'] as const) {
-      await mermaid.openDialog()
-      const shown = await mermaid.dialog()
-      expect(shown.open).toBe(true)
-      expect(shown.closing).toBe(false)
-      // 原尺寸：按 viewBox 的原宽摆，比窗口高就在弹窗里滚
-      expect(
-        Math.abs(shown.svgWidth - shown.viewBoxWidth),
-        JSON.stringify(shown)
-      ).toBeLessThanOrEqual(1)
-      expect(shown.scrollHeight, JSON.stringify(shown)).toBeGreaterThan(shown.clientHeight)
-      await mermaid.closeDialog(via)
-      expect((await mermaid.dialog()).open, via).toBe(false)
-    }
+    // (2) 卡片上沿在视野里：从工具栏展开不挪动它（往下长）；收起后它仍在视野里
+    await mermaid.revealCard()
+    const atTop = await mermaid.viewport()
+    expect(atTop.card.top, JSON.stringify(atTop)).toBeGreaterThanOrEqual(atTop.view.top - 1)
+    expect(atTop.card.top, JSON.stringify(atTop)).toBeLessThan(atTop.view.bottom)
+    await mermaid.unfold('toolbar')
+    const grown = await mermaid.viewport()
+    expect(Math.abs(grown.card.top - atTop.card.top), JSON.stringify(grown)).toBeLessThanOrEqual(1)
+    expect(grown.card.height).toBeGreaterThan(atTop.card.height)
+    await mermaid.fold('toolbar')
+    const back = await mermaid.viewport()
+    expect(back.card.top, JSON.stringify(back)).toBeGreaterThanOrEqual(back.view.top - 1)
+    expect(back.card.top, JSON.stringify(back)).toBeLessThan(back.view.bottom)
+
+    // (3) 从底条展开：不限高、整张按原宽摆、没有渐隐；同一个 <svg>
+    await mermaid.unfold('bar')
+    const open = await mermaid.geometry()
+    const o = JSON.stringify(open)
+    expect(open.mode, o).toBe('fit')
+    expect(open.unfolded, o).toBe(true)
+    expect(open.masked, o).toBe(false)
+    expect(Math.abs(open.svg.width - open.viewBox.width), o).toBeLessThanOrEqual(1)
+    expect(Math.abs(open.svg.height - open.viewBox.height), o).toBeLessThanOrEqual(1)
+    expect(open.svg.bottom, o).toBeLessThanOrEqual(open.box.bottom + 0.5)
+    expect(open.box.height, o).toBeGreaterThanOrEqual(open.svg.height)
+    expect(open.box.height, o).toBeGreaterThan(open.capHeight)
+    const opened = await mermaid.shot()
+    expectButton(opened?.bar, FOLD_TEXTS, true, 'expanded bar')
+    expectButton(opened?.unfold, FOLD_TEXTS, true, 'expanded toolbar')
+    expect(opened?.fullSize).toBe(false)
+    expect(await mermaid.svgTag()).toBe(tag)
+
+    // (4) 换个会话再回来（卡片重挂）：仍是展开的
+    await openSession('mermaid-E1')
+    await openSession('mermaid-E4')
+    await mermaid.waitFigure()
+    expect((await mermaid.shot())?.unfolded).toBe(true)
+    // 落地后列表跟着底部 3s（Conversation 的 PIN_TO_BOTTOM_MS）：等它放手，下面的滚动才不被拉回去
+    await sleep(3300)
+    const expandedCardHeight = (await mermaid.viewport()).card.height
+
+    // (5) 读到图的末尾：底条在视野中间，卡片上沿早已滚出视野，后面还有两屏多的内容；而且底条离视野
+    // 上沿比卡片要缩掉的高度还近 —— 不拉回来的话，收起后整张卡片都在视野上面
+    await mermaid.revealBar()
+    const reading = await mermaid.viewport()
+    const r = JSON.stringify({ reading, collapsedCardHeight, expandedCardHeight })
+    expect(reading.bar, r).not.toBeNull()
+    expect(reading.card.top, r).toBeLessThan(reading.view.top)
+    expect(reading.belowCard, r).toBeGreaterThan(2 * reading.clientHeight)
+    expect(reading.bar!.bottom - reading.view.top, r).toBeLessThan(
+      expandedCardHeight - collapsedCardHeight
+    )
+
+    // (6) 从底条收起：回到截断，卡片被拉回视野
+    await mermaid.fold('bar')
+    const folded = await mermaid.geometry()
+    const f = JSON.stringify(folded)
+    expect(folded.mode, f).toBe('clip')
+    expect(folded.box.height, f).toBeLessThanOrEqual(folded.capHeight + 0.5)
+    expect(folded.masked, f).toBe(true)
+    expectButton((await mermaid.shot())?.bar, UNFOLD_TEXTS, false, 'bar after folding')
+    await until(async () => {
+      const v = await mermaid.viewport()
+      return v.card.bottom > v.view.top && v.card.top < v.view.bottom ? v : null
+    }, 'the mermaid card scrolled back into view after folding from the bar')
   }, 120_000)
+
   it('E-5 围栏已闭合、消息还在写，而源码画不出来：流式中留着能画的那一部分、不出错；写完之后才出错误卡', async () => {
     await openSession('mermaid-E5')
     provider.reset()
@@ -397,6 +490,67 @@ describe('对话里的 mermaid 图', () => {
       )
     } finally {
       await app.main.send('Emulation.clearDeviceMetricsOverride')
+    }
+  }, 120_000)
+
+  it('E-7 展开了也还被栏宽缩着的宽图：给 Full size；从工具栏展开后按栏宽摆、比限高高；弹窗按原宽、可滚动，Esc / 遮罩 / 关闭按钮都能关，关掉后仍是展开的', async () => {
+    await openSession('mermaid-E7')
+    provider.reset()
+    // 一个 200 个 W 的不断行标签：pele 按栏宽也收不窄，于是展开后也只能按栏宽缩着
+    const chain = Array.from(
+      { length: 28 },
+      (_, i) => `  e7n${i + 1}[Step ${i + 1}] --> e7n${i + 2}[Step ${i + 2}]`
+    )
+    provider.script({
+      text: doc(
+        'MARK-E7 a wide and tall chain:',
+        fence(['graph TD', `  e7n0["${'W'.repeat(200)}"] --> e7n1[Step 1]`, ...chain].join('\n'))
+      ),
+      usage: USAGE
+    })
+    await chat.typeAndSend('draw E7')
+    await chat.waitIdle()
+    const mermaid = cardOf('MARK-E7')
+    await mermaid.waitFigure()
+    await until(
+      async () => ((await mermaid.shot())?.fullSize ? true : null),
+      'full-size button on the E7 figure'
+    )
+
+    // 收起：限高（截断或整张缩，两种都守住 480），有展开
+    const geo = await mermaid.geometry()
+    const g = JSON.stringify(geo)
+    expect(geo.viewBox.width, g).toBeGreaterThan(geo.contentWidth + 1)
+    expectButton((await mermaid.shot())?.unfold, UNFOLD_TEXTS, false, 'collapsed toolbar')
+    if (geo.mode === 'clip') expect(geo.box.height, g).toBeLessThanOrEqual(geo.capHeight + 0.5)
+    else expect(geo.svg.height, g).toBeLessThanOrEqual(480.5)
+
+    // 从工具栏展开：按栏宽整张摆（比原宽窄）、比限高高，Full size 还在
+    await mermaid.unfold('toolbar')
+    const open = await mermaid.geometry()
+    const o = JSON.stringify(open)
+    expect(open.mode, o).toBe('fit')
+    expect(Math.abs(open.svg.width - open.contentWidth), o).toBeLessThanOrEqual(1)
+    expect(open.svg.width, o).toBeLessThan(open.viewBox.width - 1)
+    expect(open.svg.height, o).toBeGreaterThan(480)
+    expect(open.box.height, o).toBeGreaterThanOrEqual(open.svg.height)
+    expect((await mermaid.shot())?.fullSize).toBe(true)
+
+    for (const via of ['escape', 'backdrop', 'button'] as const) {
+      await mermaid.openDialog()
+      const shown = await mermaid.dialog()
+      const d = JSON.stringify(shown)
+      expect(shown.open, d).toBe(true)
+      expect(shown.closing, d).toBe(false)
+      // 原尺寸：按 viewBox 的原宽摆，比窗口高就竖着滚；比窗口宽就横着滚
+      expect(Math.abs(shown.svgWidth - shown.viewBoxWidth), d).toBeLessThanOrEqual(1)
+      expect(shown.scrollHeight, d).toBeGreaterThan(shown.clientHeight)
+      if (shown.viewBoxWidth + 56 > 0.92 * shown.innerWidth) {
+        expect(shown.scrollWidth, d).toBeGreaterThan(shown.clientWidth)
+      }
+      await mermaid.closeDialog(via)
+      expect((await mermaid.dialog()).open, via).toBe(false)
+      expect((await mermaid.shot())?.unfolded, via).toBe(true)
     }
   }, 120_000)
 })

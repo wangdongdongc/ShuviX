@@ -1260,8 +1260,11 @@ export function bubbleWatch(main: CdpClient): BubbleWatch {
 // 对话里的 ```mermaid 图（chat-ui 的 MermaidBlock）
 //
 // 锚点全是组件自己打的 data 属性：`data-mermaid-figure`（放图那一格，值是布局 fit / clip /
-// natural）、`data-mermaid-pending`（占位行）、`data-mermaid-error`（错误卡）、`data-mermaid-expand`
-// （放大按钮）、`data-mermaid-dialog`（放大弹窗的面板；遮罩是它的父节点，面板本身不是遮罩）。
+// natural；展开着时另挂 `data-mermaid-unfolded`）、`data-mermaid-pending`（占位行）、`data-mermaid-error`
+// （错误卡）、`data-mermaid-unfold`（工具栏上的「展开 / 收起」，`aria-expanded` 是它的状态）、
+// `data-mermaid-unfold-bar`（图底下那一条「展开 / 收起」：截断时、展开后才有，也带 `aria-expanded`）、
+// `data-mermaid-expand`（「Full size」弹窗按钮：只在展开了也还被栏宽缩着时有）、`data-mermaid-dialog`
+// （弹窗的面板；遮罩是它的父节点，面板本身不是遮罩）。
 // 图里面是 pele 的产物：节点 `g.pele-node`（形状是它的 rect / path / polygon / circle，标签
 // `text.pele-label`），边上的标签 `g.pele-edge-label`（一块衬底 rect + 一段 text）。卡片外壳挂着
 // `data-figure-surface="card"`（themes.css 由它给出 --figure-surface / --figure-raised）。
@@ -1292,8 +1295,22 @@ export interface MermaidShot {
   error: string | null
   /** 正文里 `<pre>` 的个数（卡片切到源码时会多一个） */
   pres: number
-  /** 「放大查看」按钮在不在 */
-  expandable: boolean
+  /** 「Full size」弹窗按钮（`data-mermaid-expand`）在不在 */
+  fullSize: boolean
+  /** 工具栏上的「展开 / 收起」：文字 + `aria-expanded`；没有这颗 = null */
+  unfold: MermaidUnfoldButton | null
+  /** 图底下那一条「展开 / 收起」；没有 = null */
+  bar: MermaidUnfoldButton | null
+  /** 放图那一格挂着 `data-mermaid-unfolded`（展开着） */
+  unfolded: boolean
+}
+
+/** 一颗「展开 / 收起」按钮的此刻 */
+export interface MermaidUnfoldButton {
+  /** 按钮上的字（图标是 svg，没有文字） */
+  text: string
+  /** `aria-expanded === 'true'` */
+  expanded: boolean
 }
 
 /** 颜色取样 —— 图里读的与令牌解析出来的，**同一次 eval** 里取（中间切了主题也不会错位） */
@@ -1319,10 +1336,14 @@ export interface MermaidGeometry {
   mode: string
   /** 图的原始尺寸（根 `<svg>` 的 viewBox 宽高） */
   viewBox: { width: number; height: number }
-  /** `<svg>` 的渲染矩形 */
-  svg: { width: number; height: number }
-  /** 放图那一格的外框（border-box） */
-  box: { width: number; height: number }
+  /** `<svg>` 的渲染矩形（`bottom` 是视口坐标） */
+  svg: { width: number; height: number; bottom: number }
+  /** 放图那一格的外框（border-box；`bottom` 是视口坐标） */
+  box: { width: number; height: number; bottom: number }
+  /** 放图那一格的 computed mask-image（或 -webkit-mask-image）不是 none —— 截断时的底部渐隐 */
+  masked: boolean
+  /** 放图那一格挂着 `data-mermaid-unfolded` */
+  unfolded: boolean
   /** 放图那一格的内容宽（去掉左右内边距）—— 图能占的最宽处 */
   contentWidth: number
   /** 截断时外框的上限：480 + 上下内边距 1.5rem（按根字号换算） */
@@ -1340,6 +1361,35 @@ export interface MermaidDialogShot {
   /** 弹窗滚动区（图外面那层 overflow-auto） */
   scrollHeight: number
   clientHeight: number
+  scrollWidth: number
+  clientWidth: number
+  /** 窗口的 innerWidth（面板最宽 92vw） */
+  innerWidth: number
+}
+
+/** 视口坐标下的上下沿（CSS px） */
+export interface MermaidVSpan {
+  top: number
+  bottom: number
+  height: number
+}
+
+/** 卡片在对话滚动区里的位置（`.conversation-scroller`；视口坐标，CSS px） */
+export interface MermaidViewport {
+  /** 卡片外壳（`[data-figure-surface="card"]`） */
+  card: MermaidVSpan
+  /** 图底下那一条；没有 = null */
+  bar: MermaidVSpan | null
+  /**
+   * 看得见的那一段：上沿 = 滚动区上沿，下沿 = 滚动区下沿与悬浮输入卡片（`textarea.closest('.rounded-2xl')`）
+   * 上沿取小 —— 输入卡片浮在列表上面，被它盖住的不算看得见
+   */
+  view: { top: number; bottom: number }
+  scrollTop: number
+  scrollHeight: number
+  clientHeight: number
+  /** 卡片底下还有多少内容（滚动内容的末尾 − 卡片下沿） */
+  belowCard: number
 }
 
 /** 绑在「正文里含某个标记」的那条助手消息上（见 assistantBodyWith）；弹窗与主题是全局的 */
@@ -1359,7 +1409,18 @@ export interface MermaidPane {
   theme(): Promise<string>
   /** 直接改根上的 data-theme（MermaidBlock 观察的就是这个属性；不经设置，不落盘） */
   setTheme(id: string): Promise<void>
-  /** 点「放大查看」并等弹窗出现 */
+  /**
+   * 点「展开」（底条或工具栏那颗，`el.click()`，不必在视野里）并等放图那一格挂上 `data-mermaid-unfolded`
+   */
+  unfold(via: 'bar' | 'toolbar'): Promise<void>
+  /** 点「收起」，等 `data-mermaid-unfolded` 撤掉，再等两帧（组件在下一帧把卡片滚回视野） */
+  fold(via: 'bar' | 'toolbar'): Promise<void>
+  /** 把图底下那一条滚到滚动区中间（`scrollIntoView({ block: 'center' })`），等一帧 */
+  revealBar(): Promise<void>
+  /** 把卡片上沿滚到滚动区顶上（`scrollIntoView({ block: 'start' })`），等一帧 */
+  revealCard(): Promise<void>
+  viewport(): Promise<MermaidViewport>
+  /** 点「Full size」并等弹窗出现 */
   openDialog(): Promise<void>
   dialog(): Promise<MermaidDialogShot>
   /** 三种关法之一，并等弹窗卸下（关闭动效 120ms） */
@@ -1375,7 +1436,10 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
     main.eval<MermaidDialogShot>(`(() => {
       const panel = ${PANEL}
       if (!panel) {
-        return { open: false, closing: false, svgWidth: 0, viewBoxWidth: 0, scrollHeight: 0, clientHeight: 0 }
+        return {
+          open: false, closing: false, svgWidth: 0, viewBoxWidth: 0, scrollHeight: 0, clientHeight: 0,
+          scrollWidth: 0, clientWidth: 0, innerWidth
+        }
       }
       const svg = [...panel.querySelectorAll('svg')].find((s) => !s.classList.contains('lucide'))
       const scroller = svg?.closest('.overflow-auto')
@@ -1386,9 +1450,34 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
         svgWidth: svg ? svg.getBoundingClientRect().width : 0,
         viewBoxWidth: vb[2] ?? 0,
         scrollHeight: scroller?.scrollHeight ?? 0,
-        clientHeight: scroller?.clientHeight ?? 0
+        clientHeight: scroller?.clientHeight ?? 0,
+        scrollWidth: scroller?.scrollWidth ?? 0,
+        clientWidth: scroller?.clientWidth ?? 0,
+        innerWidth
       }
     })()`)
+
+  /** 两颗「展开 / 收起」的选择器 */
+  const UNFOLD_BTN = {
+    bar: '[data-mermaid-unfold-bar]',
+    toolbar: '[data-mermaid-unfold]'
+  } as const
+  const clickUnfold = async (via: 'bar' | 'toolbar'): Promise<void> => {
+    await main.eval(`(() => {
+      const btn = (${BODY})?.querySelector(${JSON.stringify(UNFOLD_BTN[via])})
+      if (!btn) throw new Error('no mermaid unfold ${via} on screen')
+      btn.click()
+      return true
+    })()`)
+  }
+  const isUnfolded = (): Promise<boolean> =>
+    main.eval<boolean>(`!!(${FIGURE})?.hasAttribute('data-mermaid-unfolded')`)
+  const frames = (n: number): Promise<unknown> =>
+    main.eval(`new Promise((resolve) => {
+      let left = ${n}
+      const step = () => (--left <= 0 ? resolve(true) : requestAnimationFrame(step))
+      requestAnimationFrame(step)
+    })`)
 
   return {
     shot: () =>
@@ -1398,6 +1487,15 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
         const figure = body.querySelector('[data-mermaid-figure]')
         const pending = body.querySelector('[data-mermaid-pending]')
         const error = body.querySelector('[data-mermaid-error]')
+        const button = (sel) => {
+          const btn = body.querySelector(sel)
+          return btn
+            ? {
+                text: (btn.textContent ?? '').trim(),
+                expanded: btn.getAttribute('aria-expanded') === 'true'
+              }
+            : null
+        }
         if (!figure && !pending && !error && !body.querySelector('[data-mermaid-expand]')) {
           // 切到源码的卡片没有上面任何一个锚点，只剩 <pre> —— 靠工具栏的「Mermaid」字样认
           const card = [...body.querySelectorAll('span')].find((s) => s.textContent === 'Mermaid')
@@ -1408,7 +1506,10 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
           pending: pending ? (pending.textContent ?? '').trim() : null,
           error: error ? (error.querySelector('pre')?.textContent ?? '') : null,
           pres: body.querySelectorAll('pre').length,
-          expandable: !!body.querySelector('[data-mermaid-expand]')
+          fullSize: !!body.querySelector('[data-mermaid-expand]'),
+          unfold: button('[data-mermaid-unfold]'),
+          bar: button('[data-mermaid-unfold-bar]'),
+          unfolded: !!figure?.hasAttribute('data-mermaid-unfolded')
         }
       })()`),
     waitFigure: async (timeoutMs = 25_000) => {
@@ -1461,11 +1562,15 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
         const sr = svg.getBoundingClientRect()
         const fr = figure.getBoundingClientRect()
         const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
+        const fs = getComputedStyle(figure)
+        const mask = [fs.maskImage, fs.webkitMaskImage].find((m) => m && m !== 'none')
         return {
           mode: figure.getAttribute('data-mermaid-figure') ?? '',
           viewBox: { width: vb[2] ?? 0, height: vb[3] ?? 0 },
-          svg: { width: sr.width, height: sr.height },
-          box: { width: fr.width, height: fr.height },
+          svg: { width: sr.width, height: sr.height, bottom: sr.bottom },
+          box: { width: fr.width, height: fr.height, bottom: fr.bottom },
+          masked: !!mask,
+          unfolded: figure.hasAttribute('data-mermaid-unfolded'),
           contentWidth:
             figure.clientWidth -
             parseFloat(getComputedStyle(figure).paddingLeft) -
@@ -1487,10 +1592,64 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
         `document.documentElement.setAttribute('data-theme', ${JSON.stringify(id)}); true`
       )
     },
+    unfold: async (via) => {
+      await clickUnfold(via)
+      await until(isUnfolded, `mermaid figure unfolded via the ${via}`)
+    },
+    fold: async (via) => {
+      await clickUnfold(via)
+      await until(async () => !(await isUnfolded()), `mermaid figure folded via the ${via}`)
+      await frames(2)
+    },
+    revealBar: async () => {
+      await main.eval(`(() => {
+        const bar = (${BODY})?.querySelector('[data-mermaid-unfold-bar]')
+        if (!bar) throw new Error('no mermaid unfold bar on screen')
+        bar.scrollIntoView({ block: 'center' })
+        return true
+      })()`)
+      await frames(1)
+    },
+    revealCard: async () => {
+      await main.eval(`(() => {
+        const card = (${FIGURE})?.closest('[data-figure-surface="card"]')
+        if (!card) throw new Error('no mermaid card on screen')
+        card.scrollIntoView({ block: 'start' })
+        return true
+      })()`)
+      await frames(1)
+    },
+    viewport: () =>
+      main.eval<MermaidViewport>(`(() => {
+        const figure = ${FIGURE}
+        const card = figure?.closest('[data-figure-surface="card"]')
+        const scroller = document.querySelector('.conversation-scroller')
+        if (!card || !scroller) throw new Error('no mermaid card in the conversation')
+        const span = (el) => {
+          const r = el.getBoundingClientRect()
+          return { top: r.top, bottom: r.bottom, height: r.height }
+        }
+        const bar = card.querySelector('[data-mermaid-unfold-bar]')
+        const sr = scroller.getBoundingClientRect()
+        const input = document.querySelector('textarea')?.closest('.rounded-2xl')
+        const cr = card.getBoundingClientRect()
+        return {
+          card: span(card),
+          bar: bar ? span(bar) : null,
+          view: {
+            top: sr.top,
+            bottom: input ? Math.min(sr.bottom, input.getBoundingClientRect().top) : sr.bottom
+          },
+          scrollTop: scroller.scrollTop,
+          scrollHeight: scroller.scrollHeight,
+          clientHeight: scroller.clientHeight,
+          belowCard: scroller.scrollHeight - (scroller.scrollTop + (cr.bottom - sr.top))
+        }
+      })()`),
     openDialog: async () => {
       await main.eval(`(() => {
         const btn = (${BODY})?.querySelector('[data-mermaid-expand]')
-        if (!btn) throw new Error('no mermaid expand button on screen')
+        if (!btn) throw new Error('no mermaid full-size button on screen')
         btn.click()
         return true
       })()`)

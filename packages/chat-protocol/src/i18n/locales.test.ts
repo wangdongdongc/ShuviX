@@ -119,17 +119,30 @@ describe('i18n 语言包', () => {
   })
 
   /**
-   * H-1：mermaid 卡片的两句新文案。`diagramGenerating` 是流式期间那一行占位（「已写多少行」），
+   * H-1：mermaid 卡片上的文案。`diagramGenerating` 是流式期间那一行占位（「已写多少行」），
    * 一门语言漏了 `{{lines}}` 运行期不报错，只是那一行里露出原始占位符 —— 齐平断言只比键，看不见。
-   * `diagramExpand` 是「放大查看」按钮上唯一的字：空串会留下一个只有图标、说不出自己干什么的按钮。
+   * 另外三句是三颗按钮上唯一的字：`diagramUnfold` / `diagramFold` 是就地「展开 / 收起」（工具栏一颗、
+   * 图底下一条，同一个开关的两种状态），`diagramExpand` 是「放大查看」弹窗。空串会留下一个只有图标、
+   * 说不出自己干什么的按钮；两句撞成一样，用户就分不清哪颗是就地展开、哪颗是弹窗 —— 所以每门语言
+   * 里三句两两不同，都不带插值（没有要填的东西）。en 的三句钉死：e2e 与 DOM 单测按 i18n.t 取，
+   * 这里是唯一看得见「Expand 现在是就地展开、弹窗改叫 Full size」的地方。
    */
-  it('H-1 message.diagramGenerating 三语都只插 {{lines}}；message.diagramExpand 三语都非空', () => {
+  it('H-1 message.diagramGenerating 三语都只插 {{lines}}；diagramExpand / diagramUnfold / diagramFold 三语都非空、不含插值、两两不同', () => {
     for (const [lang, bundle] of Object.entries({ en, zh, ja })) {
       const generating = leaf(bundle, 'message.diagramGenerating')
       expect(generating, `${lang} 缺 message.diagramGenerating`).toBeTypeOf('string')
       expect(placeholders(generating!), lang).toEqual(['lines'])
-      expect(leaf(bundle, 'message.diagramExpand')?.trim(), lang).toBeTruthy()
+      const texts = ['diagramExpand', 'diagramUnfold', 'diagramFold'].map((key) => {
+        const text = leaf(bundle, `message.${key}`)
+        expect(text?.trim(), `${lang} message.${key}`).toBeTruthy()
+        expect(placeholders(text ?? ''), `${lang} message.${key}`).toEqual([])
+        return text!.trim()
+      })
+      expect(new Set(texts).size, `${lang}: ${JSON.stringify(texts)}`).toBe(3)
     }
+    expect(leaf(en, 'message.diagramExpand')).toBe('Full size')
+    expect(leaf(en, 'message.diagramUnfold')).toBe('Expand')
+    expect(leaf(en, 'message.diagramFold')).toBe('Collapse')
   })
 
   /**

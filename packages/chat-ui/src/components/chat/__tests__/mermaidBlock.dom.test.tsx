@@ -7,8 +7,13 @@
  *   - **流式期间逐帧画**（ST）：围栏开着时丢掉写到一半的最后一行、补尾巴、往回退 —— 帧只在多写完一行
  *     时重算（ST-5），一帧都画不出时是「正在生成」占位；错误卡只在消息写完后出（ST-6 / CB-2）；
  *   - **配色是 token**（TH）：切主题不重渲、连 DOM 都不换；图卡挂着 `data-figure-surface="card"`；
- *   - **限高 + 按栏宽重排 + 放大查看**（LY / FW / EX）：布局规则本身在 mermaidFit.test.ts、帧与重排
- *     规则在 chat-protocol 的 mermaidFence 测试，这里只钉组件把它们落成了什么；
+ *   - **限高 + 按栏宽重排**（LY / FW）：布局规则本身在 mermaidFit.test.ts、帧与重排规则在 chat-protocol
+ *     的 mermaidFence 测试，这里只钉组件把它们落成了什么；LY-5 是一张接线矩阵 —— 几种图 × 几种栏宽，
+ *     每一格的按钮与摆法都得与 mermaidLayout / mermaidUnfoldable / mermaidUnfoldedLayout 一致；
+ *   - **就地展开 / 收起**（UF）：限高藏住或缩小了图时，工具栏一颗 `[data-mermaid-unfold]`，截断处 / 展开后
+ *     图底下一条 `[data-mermaid-unfold-bar]`；展开 = 不限高、按栏宽摆（同一个 <svg> 节点，不重渲），状态按
+ *     源码跨重挂载记住、流式中跟着源码搬；收起后下一帧把卡片 `scrollIntoView({ block: 'nearest' })`；
+ *   - **放大查看**（EX）：「Full size」弹窗只在展开了也还被栏宽缩着时给（EX-5 / EX-6）；
  *   - 失败关闭（ER）、写完的图的缓存（CA）、图 / 源码切换（SV）、CodeBlock 分发（CB）、导出（EXP）。
  *
  * 桩的形状（为什么这么搭）：
@@ -18,8 +23,11 @@
  *     出现，LD-1 依赖 gantt **永远**加载失败（两次都用 mockRejectedValueOnce 挡在真加载之前）；
  *   - `getComputedStyle` 换成桩：jsdom 不做级联。组件只从 body 读字体；导出面板烘焙时读一份初值记录、
  *     探针颜色读一个固定的 rgb —— 够烘焙跑通（导出本身的烘焙规则在 figure/__tests__ 里测）；
- *   - jsdom 没有画布（pele 退回自己的字宽表，尺寸确定）、没有 ResizeObserver（栏宽恒为 0，走「还没量到」
- *     那一支）。LY-4 / FW 装一个假的，由用例手动报栏宽；
+ *   - jsdom 没有画布（pele 退回自己的字宽表，尺寸确定 —— 但随标签长短变，所以尺寸一律从屏幕上的
+ *     <svg> 读，不写死）、没有 ResizeObserver（栏宽恒为 0，走「还没量到」那一支）。要栏宽的用例装一个
+ *     假的，由用例手动报栏宽；
+ *   - jsdom 没有 `Element.prototype.scrollIntoView`：组件用可选调用，UF-7 / UF-8 临时桩一个记调用、
+ *     用完撤掉；`requestAnimationFrame` 有（真定时器下等一帧用 nextFrame）；
  *   - `SVGSVGElement.viewBox`：jsdom 没有，按属性解析（导出面板的烘焙要它）。
  *
  * ⚠️ 组件的结果缓存 / 视图状态都是**模块级**的，跨用例共享（刻意不 resetModules —— 那正是要测的
@@ -55,7 +63,13 @@ import { MermaidBlock } from '../MermaidBlock'
 import { MarkdownSourceContext, MarkdownStreamingContext } from '../markdownStreaming'
 import { MarkdownText } from '../markdownComponents'
 import { CodeBlock } from '../CodeBlock'
-import { MERMAID_MAX_HEIGHT, mermaidLayout } from '../mermaidFit'
+import {
+  MERMAID_MAX_HEIGHT,
+  mermaidLayout,
+  mermaidUnfoldable,
+  mermaidUnfoldedLayout,
+  type MermaidSize
+} from '../mermaidFit'
 import { authoredFigureSource } from '../../figure/figureExport'
 
 const render = vi.mocked(peleRender)
@@ -169,8 +183,21 @@ const pendingOf = (scope: Element = container): HTMLElement | null =>
   scope.querySelector<HTMLElement>('[data-mermaid-pending]')
 const errorOf = (scope: Element = container): HTMLElement | null =>
   scope.querySelector<HTMLElement>('[data-mermaid-error]')
+/** 「Full size」弹窗按钮 */
 const expandOf = (scope: Element = container): HTMLButtonElement | null =>
   scope.querySelector<HTMLButtonElement>('[data-mermaid-expand]')
+/** 工具栏上的「展开 / 收起」 */
+const unfoldOf = (scope: Element = container): HTMLButtonElement | null =>
+  scope.querySelector<HTMLButtonElement>('[data-mermaid-unfold]')
+/** 图底下那一条「展开 / 收起」 */
+const barOf = (scope: Element = container): HTMLButtonElement | null =>
+  scope.querySelector<HTMLButtonElement>('[data-mermaid-unfold-bar]')
+/** 放图那一格是不是展开着（`data-mermaid-unfolded`） */
+const isUnfolded = (scope: Element = container): boolean =>
+  figureOf(scope)?.hasAttribute('data-mermaid-unfolded') ?? false
+/** 卡片外壳（收起后滚回视野的就是它） */
+const cardOf = (scope: Element = container): HTMLElement | null =>
+  scope.querySelector<HTMLElement>('[data-figure-surface="card"]')
 const exportBtn = (scope: Element = container): HTMLButtonElement | null =>
   scope.querySelector<HTMLButtonElement>('[data-figure-export]')
 /** 图 / 源码切换按钮：工具栏里除「导出」外唯一带 title 的按钮 */
@@ -195,6 +222,11 @@ const fakeResult = (svg: string, width: number, height: number): ReturnType<type
   mermaidType: 'flowchart-v2',
   links: []
 })
+/** 屏幕上那张图的尺寸（MermaidSize 的形状，喂给 mermaidFit 的函数） */
+const shownSize = (): MermaidSize => {
+  const { w, h } = svgSize(figureSvgOf()!)
+  return { width: w, height: h }
+}
 /** 带 maxWidth 的渲染调用 */
 const narrowCalls = (): Array<Parameters<typeof peleRender>> =>
   render.mock.calls.filter((c) => c[1]?.maxWidth !== undefined)
@@ -211,6 +243,41 @@ const tdChain = (prefix: string, n: number): string =>
     'graph TD',
     ...Array.from({ length: n - 1 }, (_, i) => `  ${prefix}${i} --> ${prefix}${i + 1}`)
   ].join('\n')
+/** 一个 120 字符不断行的长标签：pele 按栏宽也收不窄（约 832 × 152，带不带 maxWidth 都一样） */
+const wideLabel = (prefix: string): string =>
+  `graph TD\n  ${prefix}a["${'x'.repeat(120)}"] --> ${prefix}b`
+/** 同一个长标签打头的 20 节点竖链（约 832 × 1808）：又宽又高 */
+const wideTall = (prefix: string): string =>
+  [
+    'graph TD',
+    `  ${prefix}0["${'x'.repeat(120)}"] --> ${prefix}1`,
+    ...Array.from({ length: 18 }, (_, i) => `  ${prefix}${i + 1} --> ${prefix}${i + 2}`)
+  ].join('\n')
+/** 等一帧（真定时器）：组件收起时把滚回视野排在下一帧 */
+const nextFrame = async (): Promise<void> => {
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+  })
+}
+/** 临时桩 `Element.prototype.scrollIntoView`（jsdom 没有），记下每次调用；用完 restore */
+const stubScrollIntoView = (): {
+  calls: Array<{ el: Element; arg: unknown }>
+  restore: () => void
+} => {
+  const calls: Array<{ el: Element; arg: unknown }> = []
+  const proto = Element.prototype as { scrollIntoView?: unknown }
+  const had = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
+  proto.scrollIntoView = function (this: Element, arg?: unknown) {
+    calls.push({ el: this, arg })
+  }
+  return {
+    calls,
+    restore: () => {
+      if (had) Object.defineProperty(Element.prototype, 'scrollIntoView', had)
+      else delete proto.scrollIntoView
+    }
+  }
+}
 /** 一条横向的 6 节点链（自然宽度远超 300） */
 const lrChain = (prefix: string): string =>
   `flowchart LR\n  ${['A', 'B', 'C', 'D', 'E', 'F'].map((x) => `${prefix}${x}`).join('-->')}`
@@ -418,6 +485,8 @@ describe('失败关闭（ER）', () => {
     expect(container.querySelector('svg')).toBeNull()
     expect(exportBtn()).toBeNull()
     expect(expandOf()).toBeNull()
+    expect(unfoldOf()).toBeNull()
+    expect(barOf()).toBeNull()
   })
 
   it('MB-ER-2 渲染产物净化后什么都不剩：按失败处理（SVG sanitization failed），DOM 里没有 <script>', () => {
@@ -477,15 +546,22 @@ describe('写完的图的缓存（CA）', () => {
 })
 
 describe('图 / 源码切换（SV）', () => {
-  it('MB-SV-1 切到源码：只剩源码、没有放大按钮、按钮写「Diagram」；切回来不再渲', () => {
-    const code = tdChain('sv1n', 20) // 高图：有放大按钮，看得出切到源码时它没了
+  it('MB-SV-1 切到源码：只剩源码、展开 / 底条 / 放大三颗按钮都没了、按钮写「Diagram」；切回来三颗都回来，不再渲', () => {
+    // 又宽又高的图在 600 宽的卡里：截断（有展开、有底条），展开了也还被栏宽缩着（有放大）
+    installResizeObserver()
+    const code = wideTall('sv1n')
     show(code)
+    resizeCards(600)
+    expect(unfoldOf()).not.toBeNull()
+    expect(barOf()).not.toBeNull()
     expect(expandOf()).not.toBeNull()
     const calls = render.mock.calls.length
 
     click(toggleOf())
     expect(figureOf()).toBeNull()
     expect(container.querySelector('pre')?.textContent).toBe(code)
+    expect(unfoldOf()).toBeNull()
+    expect(barOf()).toBeNull()
     expect(expandOf()).toBeNull()
     expect(toggleOf().textContent).toBe('Diagram')
 
@@ -493,6 +569,9 @@ describe('图 / 源码切换（SV）', () => {
     expect(figureSvgOf()).not.toBeNull()
     expect(container.querySelector('pre')).toBeNull()
     expect(toggleOf().textContent).toBe('Source')
+    expect(unfoldOf()).not.toBeNull()
+    expect(barOf()).not.toBeNull()
+    expect(expandOf()).not.toBeNull()
     expect(render.mock.calls.length).toBe(calls)
   })
 
@@ -515,7 +594,7 @@ describe('图 / 源码切换（SV）', () => {
 })
 
 describe('限高（LY）—— 布局规则见 mermaidFit.test.ts，这里只看组件把它落成了什么', () => {
-  it('MB-LY-1 小图：fit、--mermaid-w = 图的原宽、不限高、不给放大', () => {
+  it('MB-LY-1 小图：fit、--mermaid-w = 图的原宽、不限高；放大 / 展开 / 底条都不给', () => {
     show('graph TD\n  ly1a --> ly1b')
     const fig = figureOf()!
     expect(fig.getAttribute('data-mermaid-figure')).toBe('fit')
@@ -524,34 +603,96 @@ describe('限高（LY）—— 布局规则见 mermaidFit.test.ts，这里只看
     expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${w}px`)
     expect(fig.style.maxHeight).toBe('')
     expect(expandOf()).toBeNull()
+    expect(unfoldOf()).toBeNull()
+    expect(barOf()).toBeNull()
   })
 
-  it('MB-LY-2 高图（栏宽未知）：整张缩到限高、给放大，没有截断遮罩', () => {
+  it('MB-LY-2 高图（栏宽未知）：整张缩到限高、没有截断遮罩；工具栏给「Expand」（未展开），没有底条、没有放大', () => {
     show(tdChain('ly2n', 20))
     const fig = figureOf()!
     const { w, h } = svgSize(figureSvgOf()!)
     expect(h).toBeGreaterThan(MERMAID_MAX_HEIGHT)
     expect(fig.getAttribute('data-mermaid-figure')).toBe('fit')
     expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${(MERMAID_MAX_HEIGHT * w) / h}px`)
-    expect(expandOf()).not.toBeNull()
     expect(fig.className).not.toContain('mask-image')
     expect(fig.style.maxHeight).toBe('')
+    // 缩小了 → 给展开；整张缩不是截断 → 没有底条；栏宽未知时展开就是原宽全貌 → 没有放大
+    const unfold = unfoldOf()
+    expect(unfold).not.toBeNull()
+    expect(unfold!.textContent).toBe(i18n.t('message.diagramUnfold'))
+    expect(unfold!.getAttribute('aria-expanded')).toBe('false')
+    expect(barOf()).toBeNull()
+    expect(expandOf()).toBeNull()
+    expect(fig.hasAttribute('data-mermaid-unfolded')).toBe(false)
   })
 
-  it('MB-LY-4 量到栏宽 600：模式 / 宽度 / 放大与 mermaidLayout(尺寸, 600 − 24) 一致；截断时限高框 + 底部渐隐', () => {
+  it('MB-LY-4 量到栏宽 600：模式 / 宽度 / 展开 / 放大与 mermaidFit(尺寸, 600 − 24) 一致；截断时限高框 + 底部渐隐 + 图底下一条「Expand」', () => {
     installResizeObserver()
     show(tdChain('ly4n', 20))
     resizeCards(600)
     const fig = figureOf()!
-    const { w, h } = svgSize(figureSvgOf()!)
-    const expected = mermaidLayout({ width: w, height: h }, 600 - 24)
+    const size = shownSize()
+    const expected = mermaidLayout(size, 600 - 24)
     expect(fig.getAttribute('data-mermaid-figure')).toBe(expected.mode)
     expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${expected.width}px`)
-    expect(expandOf() !== null).toBe(expected.expandable)
+    expect(unfoldOf() !== null).toBe(mermaidUnfoldable(size, 576))
+    expect(unfoldOf()).not.toBeNull()
+    // 竖链比栏窄得多：展开后就是原宽全貌，不给放大
+    expect(expandOf() !== null).toBe(mermaidUnfoldedLayout(size, 576).expandable)
+    expect(expandOf()).toBeNull()
     // 一长串竖向链：整张缩读不动，按栏宽截断
     expect(expected.mode).toBe('clip')
     expect(fig.style.maxHeight).toBe(`calc(${MERMAID_MAX_HEIGHT}px + 1.5rem)`)
     expect(fig.className).toContain('mask-image')
+    // 截断处紧跟一条「Expand」
+    const bar = barOf()
+    expect(bar).not.toBeNull()
+    expect(fig.nextElementSibling).toBe(bar)
+    expect(bar!.textContent).toBe(i18n.t('message.diagramUnfold'))
+    expect(bar!.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('MB-LY-5 接线矩阵：几种图 × 栏宽未知 / 40 / 224 / 600 / 2000，按钮与摆法与 mermaidFit 的三个函数逐格一致；能展开的展开后按 mermaidUnfoldedLayout 摆', () => {
+    installResizeObserver()
+    const figures: Array<[string, string]> = [
+      ['小图', 'graph TD\n  ly5sa --> ly5sb'],
+      ['20 节点竖链', tdChain('ly5c', 20)],
+      ['7 节点竖链', tdChain('ly5d', 7)],
+      ['长标签', wideLabel('ly5w')],
+      ['长标签 + 竖链', wideTall('ly5t')]
+    ]
+    const check = (label: string, box: number): void => {
+      const size = shownSize()
+      const what = `${label} in box ${box}: ${JSON.stringify(size)}`
+      const capped = mermaidLayout(size, box)
+      const fig = figureOf()!
+      expect(unfoldOf() !== null, `${what} 展开`).toBe(mermaidUnfoldable(size, box))
+      expect(expandOf() !== null, `${what} 放大`).toBe(mermaidUnfoldedLayout(size, box).expandable)
+      expect(barOf() !== null, `${what} 底条`).toBe(capped.mode === 'clip')
+      expect(fig.getAttribute('data-mermaid-figure'), what).toBe(capped.mode)
+      expect(fig.style.getPropertyValue('--mermaid-w'), what).toBe(`${capped.width}px`)
+      expect(isUnfolded(), what).toBe(false)
+      if (!unfoldOf()) return
+      click(unfoldOf()!)
+      const unfolded = mermaidUnfoldedLayout(size, box)
+      expect(isUnfolded(), `${what} 展开后`).toBe(true)
+      expect(figureOf()!.getAttribute('data-mermaid-figure'), `${what} 展开后`).toBe(unfolded.mode)
+      expect(figureOf()!.style.getPropertyValue('--mermaid-w'), `${what} 展开后`).toBe(
+        `${unfolded.width}px`
+      )
+      expect(barOf()?.textContent, `${what} 展开后`).toBe(i18n.t('message.diagramFold'))
+      click(unfoldOf()!)
+      expect(isUnfolded(), `${what} 收回`).toBe(false)
+    }
+    for (const [label, code] of figures) {
+      show(code)
+      check(label, 0)
+      for (const W of [40, 224, 600, 2000]) {
+        resizeCards(W)
+        check(label, Math.max(0, W - 24))
+      }
+      clear()
+    }
   })
 })
 
@@ -591,16 +732,371 @@ describe('按栏宽重排（FW）—— 规则见 mermaidFence 的 fitWidth', ()
   })
 })
 
-describe('放大查看（EX）', () => {
-  /** 一张会给「放大查看」的高图，出图后返回它的原宽 */
-  const tallFigure = (prefix: string): number => {
-    show(tdChain(prefix, 20))
+describe('就地展开 / 收起（UF）', () => {
+  const CAP = `calc(${MERMAID_MAX_HEIGHT}px + 1.5rem)`
+
+  it('MB-UF-1 截断的图从底条展开：不限高、按原宽整张摆、同一个 <svg>、不重渲；底条变「Collapse」；从底条收起回到截断', async () => {
+    installResizeObserver()
+    show(tdChain('uf1n', 20))
+    resizeCards(600)
+    const size = shownSize()
+    const fig = figureOf()!
+    expect(fig.getAttribute('data-mermaid-figure')).toBe('clip')
+    const svg = figureSvgOf()
+    const calls = render.mock.calls.length
+
+    click(barOf()!)
+    expect(isUnfolded()).toBe(true)
+    expect(fig.getAttribute('data-mermaid-figure')).toBe('fit')
+    expect(fig.style.maxHeight).toBe('')
+    expect(fig.className).not.toContain('mask-image')
+    const unfolded = mermaidUnfoldedLayout(size, 576)
+    expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${unfolded.width}px`)
+    expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${size.width}px`)
+    // 底条还紧跟在图下面，改口「Collapse」；工具栏那颗同步
+    const bar = barOf()
+    expect(bar).not.toBeNull()
+    expect(figureOf()!.nextElementSibling).toBe(bar)
+    expect(bar!.textContent).toBe(i18n.t('message.diagramFold'))
+    expect(bar!.getAttribute('aria-expanded')).toBe('true')
+    expect(unfoldOf()!.textContent).toBe(i18n.t('message.diagramFold'))
+    expect(unfoldOf()!.getAttribute('aria-expanded')).toBe('true')
+    // 展开就是全貌：没有放大
+    expect(expandOf()).toBeNull()
+    // 只是换摆法：不调 pele、不换 <svg> 节点
+    expect(render.mock.calls.length).toBe(calls)
+    expect(figureSvgOf()).toBe(svg)
+
+    click(barOf()!)
+    expect(isUnfolded()).toBe(false)
+    expect(fig.getAttribute('data-mermaid-figure')).toBe('clip')
+    expect(fig.style.maxHeight).toBe(CAP)
+    expect(fig.className).toContain('mask-image')
+    expect(barOf()!.textContent).toBe(i18n.t('message.diagramUnfold'))
+    expect(barOf()!.getAttribute('aria-expanded')).toBe('false')
+    expect(figureSvgOf()).toBe(svg)
+    expect(render.mock.calls.length).toBe(calls)
+    // jsdom 没有 scrollIntoView：下一帧的滚回视野不抛
+    expect((Element.prototype as { scrollIntoView?: unknown }).scrollIntoView).toBeUndefined()
+    await nextFrame()
+    expect(figureOf()).not.toBeNull()
+  })
+
+  it('MB-UF-2 工具栏那颗做同样的事，两颗按钮来回都同步', () => {
+    installResizeObserver()
+    show(tdChain('uf2n', 20))
+    resizeCards(600)
+    const both = (): Array<[string | null, string | null]> =>
+      [unfoldOf(), barOf()].map((b) => [
+        b?.textContent ?? null,
+        b?.getAttribute('aria-expanded') ?? null
+      ])
+    const folded: [string, string] = [i18n.t('message.diagramUnfold'), 'false']
+    const open: [string, string] = [i18n.t('message.diagramFold'), 'true']
+    expect(both()).toEqual([folded, folded])
+
+    click(unfoldOf()!)
+    expect(isUnfolded()).toBe(true)
+    expect(figureOf()!.getAttribute('data-mermaid-figure')).toBe('fit')
+    expect(figureOf()!.style.maxHeight).toBe('')
+    expect(both()).toEqual([open, open])
+
+    click(unfoldOf()!)
+    expect(isUnfolded()).toBe(false)
+    expect(figureOf()!.getAttribute('data-mermaid-figure')).toBe('clip')
+    expect(both()).toEqual([folded, folded])
+
+    // 交叉：底条展开、工具栏收起
+    click(barOf()!)
+    expect(both()).toEqual([open, open])
+    click(unfoldOf()!)
+    expect(both()).toEqual([folded, folded])
+    // 再交叉一次：工具栏展开、底条收起
+    click(unfoldOf()!)
+    expect(both()).toEqual([open, open])
+    click(barOf()!)
+    expect(both()).toEqual([folded, folded])
+    expect(isUnfolded()).toBe(false)
+  })
+
+  it('MB-UF-3 按高度整张缩（字还读得清）的图：收起时只有工具栏那颗、没有底条；展开后原宽、不限高、出现「Collapse」底条；从它收起底条消失', () => {
+    installResizeObserver()
+    show(tdChain('uf3n', 7))
+    resizeCards(600)
+    const size = shownSize()
+    // 前提：比限高高、但缩到限高仍读得清 → fit 而不是 clip
+    expect(size.height).toBeGreaterThan(MERMAID_MAX_HEIGHT)
+    expect(MERMAID_MAX_HEIGHT / size.height).toBeGreaterThanOrEqual(0.6)
+    expect(figureOf()!.getAttribute('data-mermaid-figure')).toBe('fit')
+    expect(unfoldOf()).not.toBeNull()
+    expect(barOf()).toBeNull()
+
+    click(unfoldOf()!)
+    expect(isUnfolded()).toBe(true)
+    expect(figureOf()!.style.getPropertyValue('--mermaid-w')).toBe(`${size.width}px`)
+    expect(figureOf()!.style.maxHeight).toBe('')
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
+    expect(figureOf()!.nextElementSibling).toBe(barOf())
+
+    click(barOf()!)
+    expect(isUnfolded()).toBe(false)
+    expect(barOf()).toBeNull()
+    expect(unfoldOf()!.textContent).toBe(i18n.t('message.diagramUnfold'))
+    expect(figureOf()!.style.getPropertyValue('--mermaid-w')).toBe(
+      `${mermaidLayout(size, 576).width}px`
+    )
+  })
+
+  it('MB-UF-4 只被栏宽缩小的宽图：给「Full size」、不给展开也没有底条', () => {
+    installResizeObserver()
+    show(wideLabel('uf4n'))
+    resizeCards(600)
+    const size = shownSize()
+    expect(mermaidUnfoldable(size, 576)).toBe(false)
+    expect(mermaidUnfoldedLayout(size, 576).expandable).toBe(true)
+    expect(figureOf()!.getAttribute('data-mermaid-figure')).toBe('fit')
+    expect(figureOf()!.style.getPropertyValue('--mermaid-w')).toBe('576px')
+    expect(unfoldOf()).toBeNull()
+    expect(barOf()).toBeNull()
     expect(expandOf()).not.toBeNull()
-    return svgSize(figureSvgOf()!).w
+  })
+
+  it('MB-UF-5 栏宽未知的高图：工具栏展开 → 原宽、不限高、「Collapse」底条，没有放大', () => {
+    show(tdChain('uf5n', 20))
+    const { w } = svgSize(figureSvgOf()!)
+    click(unfoldOf()!)
+    const fig = figureOf()!
+    expect(isUnfolded()).toBe(true)
+    expect(fig.getAttribute('data-mermaid-figure')).toBe('fit')
+    expect(fig.style.getPropertyValue('--mermaid-w')).toBe(`${w}px`)
+    expect(fig.style.maxHeight).toBe('')
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
+    expect(expandOf()).toBeNull()
+  })
+
+  it('MB-UF-6 展开状态按源码跨重挂载记住：卸下再挂第一次提交就是展开的；别的源码照旧收起；收起后再挂也是收起', () => {
+    installResizeObserver()
+    const code = tdChain('uf6n', 20)
+    show(code)
+    resizeCards(600)
+    click(unfoldOf()!)
+    expect(isUnfolded()).toBe(true)
+    clear()
+
+    // 第一次提交（栏宽还没报上来）就是展开的
+    show(code)
+    expect(isUnfolded()).toBe(true)
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
+    expect(unfoldOf()?.getAttribute('aria-expanded')).toBe('true')
+    resizeCards(600)
+    expect(isUnfolded()).toBe(true)
+    expect(figureOf()!.getAttribute('data-mermaid-figure')).toBe('fit')
+    clear()
+
+    show(tdChain('uf6m', 20))
+    resizeCards(600)
+    expect(isUnfolded()).toBe(false)
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramUnfold'))
+    clear()
+
+    show(code)
+    resizeCards(600)
+    click(barOf()!)
+    expect(isUnfolded()).toBe(false)
+    clear()
+    show(code)
+    expect(isUnfolded()).toBe(false)
+    expect(unfoldOf()?.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it("MB-UF-7 收起后下一帧把卡片 scrollIntoView({ block: 'nearest' })：展开不滚；收起当下不滚，下一帧滚一次；两颗按钮都如此", async () => {
+    const stub = stubScrollIntoView()
+    try {
+      installResizeObserver()
+      show(tdChain('uf7n', 20))
+      resizeCards(600)
+
+      click(barOf()!)
+      await nextFrame()
+      expect(stub.calls).toHaveLength(0)
+
+      click(barOf()!)
+      expect(stub.calls).toHaveLength(0)
+      await nextFrame()
+      expect(stub.calls).toHaveLength(1)
+      expect(stub.calls[0].el).toBe(cardOf())
+      expect(stub.calls[0].arg).toEqual({ block: 'nearest' })
+
+      click(unfoldOf()!)
+      await nextFrame()
+      expect(stub.calls).toHaveLength(1)
+      click(unfoldOf()!)
+      await nextFrame()
+      expect(stub.calls).toHaveLength(2)
+      expect(stub.calls[1].el).toBe(cardOf())
+      expect(stub.calls[1].arg).toEqual({ block: 'nearest' })
+    } finally {
+      stub.restore()
+    }
+  })
+
+  it('MB-UF-8 收起后同一拍就卸下卡片：下一帧不滚、不报错（量得到 / 量不到栏宽两种挂法）', async () => {
+    const stub = stubScrollIntoView()
+    const errors: unknown[] = []
+    const onError = (e: ErrorEvent): void => {
+      errors.push(e.error ?? e.message)
+    }
+    window.addEventListener('error', onError)
+    try {
+      for (const withObserver of [true, false]) {
+        if (withObserver) installResizeObserver()
+        else delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver
+        show(tdChain(withObserver ? 'uf8r' : 'uf8n', 20))
+        if (withObserver) resizeCards(600)
+        click(unfoldOf()!)
+        expect(isUnfolded()).toBe(true)
+        click(unfoldOf()!)
+        clear()
+        await nextFrame()
+        expect(stub.calls, `ResizeObserver: ${withObserver}`).toHaveLength(0)
+      }
+      expect(errors).toEqual([])
+    } finally {
+      window.removeEventListener('error', onError)
+      stub.restore()
+    }
+  })
+
+  it('MB-UF-9 展开着切到源码再切回来：仍是展开的，底条写「Collapse」', () => {
+    installResizeObserver()
+    show(tdChain('uf9n', 20))
+    resizeCards(600)
+    click(barOf()!)
+    expect(isUnfolded()).toBe(true)
+
+    click(toggleOf())
+    expect(figureOf()).toBeNull()
+    click(toggleOf())
+    expect(isUnfolded()).toBe(true)
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
+    expect(unfoldOf()?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('MB-UF-10 展开状态只在能展开时生效：栏窄到限高不再是约束时按收起的摆法（没有展开 / 底条，有放大）；栏宽回来不点也重新展开', () => {
+    installResizeObserver()
+    show(wideTall('uf10n'))
+    resizeCards(600)
+    click(unfoldOf()!)
+    expect(isUnfolded()).toBe(true)
+
+    // 栏宽比「缩到限高时的宽」还窄：限高不再约束任何东西
+    const before = shownSize()
+    const box = Math.floor((MERMAID_MAX_HEIGHT * before.width) / before.height) - 20
+    expect(box).toBeGreaterThan(0)
+    resizeCards(box + 24)
+    const size = shownSize()
+    expect(box).toBeLessThan((MERMAID_MAX_HEIGHT * size.width) / size.height)
+    expect(mermaidUnfoldable(size, box)).toBe(false)
+    const capped = mermaidLayout(size, box)
+    expect(unfoldOf()).toBeNull()
+    expect(barOf()).toBeNull()
+    expect(isUnfolded()).toBe(false)
+    expect(figureOf()!.getAttribute('data-mermaid-figure')).toBe(capped.mode)
+    expect(figureOf()!.style.getPropertyValue('--mermaid-w')).toBe(`${capped.width}px`)
+    expect(expandOf()).not.toBeNull()
+
+    resizeCards(600)
+    expect(isUnfolded()).toBe(true)
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
+    expect(figureOf()!.style.getPropertyValue('--mermaid-w')).toBe(
+      `${mermaidUnfoldedLayout(shownSize(), 576).width}px`
+    )
+  })
+
+  it('MB-UF-11 流式中：能展开的帧就给展开；展开后多写完一行（新的一帧），仍是展开的', () => {
+    const open = { closed: false, streaming: true }
+    const base = tdChain('uf11n', 20)
+    showFrame(`${base}\n  uf11p`, open)
+    expect(unfoldOf()).not.toBeNull()
+    click(unfoldOf()!)
+    expect(isUnfolded()).toBe(true)
+
+    showFrame(`${base}\n  uf11n19 --> uf11n20\n  uf11p`, open)
+    expect(nodeIds()).toContain('uf11n20')
+    expect(isUnfolded()).toBe(true)
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
+  })
+
+  // 消息写完的那一刻组件不重挂（AssistantBubble 一直包着 MarkdownStreamingContext.Provider，只是值变
+  // false），所以这里用 showFrame 保持 Provider；`show` 不包 Provider，树形一变就是重挂，量不到「搬」
+  it('MB-UF-11b 流式中展开：状态跟着源码搬到最终源码名下 —— 写完、卸下、再按最终源码挂，仍是展开的', () => {
+    const final = tdChain('uf11b', 21)
+    const partial = `${tdChain('uf11b', 20)}\n  uf11b19 -`
+    showFrame(partial, { closed: false, streaming: true })
+    click(unfoldOf()!)
+    expect(isUnfolded()).toBe(true)
+
+    showFrame(final, { closed: true, streaming: true })
+    showFrame(final, { closed: true, streaming: false })
+    expect(isUnfolded()).toBe(true)
+    clear()
+
+    show(final)
+    expect(isUnfolded()).toBe(true)
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
+  })
+
+  it('MB-UF-12 渲染结果的宽 / 高为 0：natural、不给展开 / 底条 / 放大，也不写 --mermaid-w', () => {
+    render.mockReturnValueOnce(fakeResult('<svg viewBox="0 0 10 10"><rect/></svg>', 0, 10))
+    show('graph TD\n  uf12a --> uf12b')
+    const fig = figureOf()
+    expect(fig).not.toBeNull()
+    expect(fig!.getAttribute('data-mermaid-figure')).toBe('natural')
+    expect(fig!.style.getPropertyValue('--mermaid-w')).toBe('')
+    expect(unfoldOf()).toBeNull()
+    expect(barOf()).toBeNull()
+    expect(expandOf()).toBeNull()
+  })
+
+  it('MB-UF-13 三颗按钮的字：Expand / Collapse / Full size，各不相同', () => {
+    installResizeObserver()
+    show(wideTall('uf13n'))
+    resizeCards(600)
+    const unfold = i18n.t('message.diagramUnfold')
+    const fold = i18n.t('message.diagramFold')
+    const full = i18n.t('message.diagramExpand')
+    expect([unfold, fold, full]).toEqual(['Expand', 'Collapse', 'Full size'])
+    expect(new Set([unfold, fold, full]).size).toBe(3)
+    expect(unfoldOf()!.textContent).toBe(unfold)
+    expect(barOf()!.textContent).toBe(unfold)
+    expect(expandOf()!.textContent).toBe(full)
+    click(unfoldOf()!)
+    expect(unfoldOf()!.textContent).toBe(fold)
+    expect(barOf()!.textContent).toBe(fold)
+    expect(expandOf()!.textContent).toBe(full)
+  })
+})
+
+describe('放大查看（EX）—— 只在展开了也还被栏宽缩着时给', () => {
+  /**
+   * 一张只给「Full size」的宽图：长标签 pele 按栏宽也收不窄，在 600 宽的卡里只能按栏宽缩着
+   * （矮，所以不给展开）。出图后返回它的原宽
+   */
+  const wideFigure = (prefix: string): number => {
+    installResizeObserver()
+    show(wideLabel(prefix))
+    resizeCards(600)
+    expect(narrowCalls().some((c) => c[1]?.maxWidth === 576)).toBe(true)
+    const { w } = svgSize(figureSvgOf()!)
+    expect(w).toBeGreaterThan(576)
+    expect(unfoldOf()).toBeNull()
+    expect(expandOf()).not.toBeNull()
+    return w
   }
 
-  it('MB-EX-1 弹窗挂在 body 上（卡片之外），里面是同一张图，按原宽摆', () => {
-    const w = tallFigure('ex1n')
+  it('MB-EX-1 按钮写「Full size」；弹窗挂在 body 上（卡片之外），里面是同一张图，按原宽摆', () => {
+    const w = wideFigure('ex1n')
+    expect(expandOf()!.textContent).toBe(i18n.t('message.diagramExpand'))
     const markup = figureOf()!.innerHTML
     click(expandOf()!)
     const panel = dialogPanel()
@@ -616,7 +1112,7 @@ describe('放大查看（EX）', () => {
   })
 
   it('MB-EX-2 Esc：立刻进入关闭动效，120ms 后卸下；放大按钮还在，能再打开', async () => {
-    tallFigure('ex2n')
+    wideFigure('ex2n')
     vi.useFakeTimers()
     click(expandOf()!)
     const overlay = dialogPanel()!.parentElement!
@@ -640,7 +1136,7 @@ describe('放大查看（EX）', () => {
   })
 
   it('MB-EX-3 点弹窗里面不关；点外面的遮罩 120ms 后关', () => {
-    tallFigure('ex3n')
+    wideFigure('ex3n')
     vi.useFakeTimers()
     click(expandOf()!)
     const panel = dialogPanel()!
@@ -659,7 +1155,7 @@ describe('放大查看（EX）', () => {
   })
 
   it('MB-EX-4 关闭按钮：120ms 后关', () => {
-    tallFigure('ex4n')
+    wideFigure('ex4n')
     vi.useFakeTimers()
     click(expandOf()!)
     click(dialogPanel()!.querySelector('button[aria-label="Close"]')!)
@@ -667,6 +1163,50 @@ describe('放大查看（EX）', () => {
       vi.advanceTimersByTime(120)
     })
     expect(dialogPanel()).toBeNull()
+  })
+
+  it('MB-EX-5 放大按钮跟着栏宽走：栏宽未知没有；栏比图宽（2000）没有、也不按栏宽重排；600 有；回到 2000 又没了', () => {
+    installResizeObserver()
+    show(wideLabel('ex5n'))
+    expect(expandOf()).toBeNull()
+
+    resizeCards(2000)
+    expect(expandOf()).toBeNull()
+    expect(narrowCalls()).toHaveLength(0)
+
+    resizeCards(600)
+    expect(expandOf()).not.toBeNull()
+
+    resizeCards(2000)
+    expect(expandOf()).toBeNull()
+  })
+
+  it('MB-EX-6 又宽又高的图：收起时截断（展开 + 底条 + 放大）；展开后按栏宽 576 摆、仍比原宽窄，放大还在；从展开状态打开弹窗按原宽，关掉后仍是展开的', () => {
+    installResizeObserver()
+    show(wideTall('ex6n'))
+    resizeCards(600)
+    const { w } = svgSize(figureSvgOf()!)
+    expect(figureOf()!.getAttribute('data-mermaid-figure')).toBe('clip')
+    expect(unfoldOf()).not.toBeNull()
+    expect(barOf()).not.toBeNull()
+    expect(expandOf()).not.toBeNull()
+
+    click(unfoldOf()!)
+    expect(isUnfolded()).toBe(true)
+    expect(figureOf()!.style.getPropertyValue('--mermaid-w')).toBe('576px')
+    expect(576).toBeLessThan(w)
+    expect(expandOf()).not.toBeNull()
+
+    vi.useFakeTimers()
+    click(expandOf()!)
+    expect(dialogPanel()!.style.width).toBe(`${w + 56}px`)
+    click(dialogPanel()!.querySelector('button[aria-label="Close"]')!)
+    act(() => {
+      vi.advanceTimersByTime(120)
+    })
+    expect(dialogPanel()).toBeNull()
+    expect(isUnfolded()).toBe(true)
+    expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
   })
 })
 
