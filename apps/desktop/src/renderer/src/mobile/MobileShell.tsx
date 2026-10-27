@@ -54,13 +54,18 @@ const headerIcon =
 
 /**
  * 专注模式在手机布局里关掉：它把没在用的侧栏淡化、鼠标移上去才恢复 —— 手机没有「移上去」，列表会一直是灰的。
- * 字号换成这台设备自己的（phoneFontSize.ts）：代码块等读 ChatHost 的 fontSize，正文读外壳上的 --app-font-size
+ * 字号换成这台设备自己的（phoneFontSize.ts）：代码块等读 ChatHost 的 fontSize，正文读外壳上的 --app-font-size。
+ * 控件密度是 touch：输入卡片的工具行、模型 / 扩展选择器换成手指的尺寸（选择器从底部抽屉打开）
  */
 export function MobileShell(): React.JSX.Element {
   const host = useChatHost()
   const fontSize = usePhoneFontSize()
   const value = useMemo(
-    () => ({ ...host, appearance: { ...host.appearance, focusMode: false, fontSize } }),
+    () => ({
+      ...host,
+      appearance: { ...host.appearance, focusMode: false, fontSize },
+      density: 'touch' as const
+    }),
     [host, fontSize]
   )
   return (

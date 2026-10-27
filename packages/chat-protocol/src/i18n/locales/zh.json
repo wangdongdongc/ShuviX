@@ -264,7 +264,10 @@
     "pasteChipChars": "[粘贴文本 #{{seq}} · {{chars}} 字符]",
     "pasteName": "粘贴文本 #{{seq}}",
     "atSectionSessions": "会话",
-    "atRouteOnly": "只找{{name}}"
+    "atRouteOnly": "只找{{name}}",
+    "extensions": "扩展",
+    "attach": "添加图片",
+    "placeholderTouch": "给 ShuviX 发消息"
   },
   "compact": {
     "summaryLabel": "对话摘要（自动压缩）"
@@ -401,7 +404,8 @@
     "withdraw": "撤回",
     "withdrawHint": "撤回这条排队的消息",
     "alreadyPlaced": "已经送达，无法撤回",
-    "withdrawFailed": "撤回失败：{{error}}"
+    "withdrawFailed": "撤回失败：{{error}}",
+    "touchSendHint": "立即插入 —— 长按可选别的发法"
   },
   "threadDrawer": {
     "running": "运行中…",

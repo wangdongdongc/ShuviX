@@ -264,7 +264,10 @@
     "pasteChipChars": "[Pasted text #{{seq}} · {{chars}} chars]",
     "pasteName": "Pasted text #{{seq}}",
     "atSectionSessions": "Sessions",
-    "atRouteOnly": "{{name}} only"
+    "atRouteOnly": "{{name}} only",
+    "extensions": "Extensions",
+    "attach": "Add images",
+    "placeholderTouch": "Message ShuviX"
   },
   "compact": {
     "summaryLabel": "Conversation Summary (Auto-compacted)"
@@ -401,7 +404,8 @@
     "withdraw": "Withdraw",
     "withdrawHint": "Withdraw this queued message",
     "alreadyPlaced": "Already delivered — it can no longer be withdrawn",
-    "withdrawFailed": "Couldn't withdraw: {{error}}"
+    "withdrawFailed": "Couldn't withdraw: {{error}}",
+    "touchSendHint": "Send now — hold for more ways to send"
   },
   "threadDrawer": {
     "running": "Running…",

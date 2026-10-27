@@ -40,10 +40,11 @@
  *   M-19 手机布局里对话输入框 16px；1280 宽时不是 16px。会话行与项目组头、「项目知识库」文件夹行同高（±2px：
  *        侧栏的行是一套 .sb-row），手机上是触屏那一档（≥ 40px），桌面侧栏里同一条会话行是 Finder 那一档（24px ±1）
  *   M-20 popstate 只在落到不带标记的那一条时收起对话页；重载时留下的那条带标记的历史在挂载时被摘掉
- *   M-21 360 宽的卡片（英文、模型名很长）：空闲时发送键在卡片里、模型名截断；运行中（两个选择器都上了锁）两个
- *        队列出口只剩图标（字那格 display none，aria-label 仍是字）、队列 / 停止 / 用量环都在卡片里、环不缩、
- *        扩展选择器不压到环上、模型触发器不压到扩展选择器上、模型名 < 120px 且截断、页面与壳没有横向溢出；
- *        跑完发送键又在卡片里。1280 宽：模型名恰 120px（封顶、不缩），运行中队列出口带字
+ *   M-21 360 宽的卡片（英文、模型名很长）：空闲时发送键在卡片里、模型名截断；用发送键发出（触屏的回车是换行）、
+ *        运行中没打字时只有停止；打了字是一颗「立即」（没有字那格，aria-label / title 是字）+ 停止，都 ≥ 36px、
+ *        都在卡片里，用量环在卡片里、不缩，扩展选择器不压到环上、模型触发器不压到扩展选择器上、模型名 < 120px 且
+ *        截断、页面与壳没有横向溢出；长按「立即」→ 菜单里两档带字；清掉字 → 菜单与「立即」都收起。跑完发送键又在
+ *        卡片里。1280 宽：模型名恰 120px（封顶、不缩），运行中两个队列出口带字
  *   M-22 很长的多段思考折叠成一行：块高与一句话的思考相同（±1）、到终答正文的间距也相同（±1，回归点：之前外层
  *        按里面整段换行的高度留位，折叠的思考块下面空出一大块）、内容盒 nowrap + ellipsis 且确实溢出；点开 →
  *        高 > 3 倍、文字从第一段开头到最后一段结尾（首尾空行去掉）、段落空行留着；再点 → 回到一行高
@@ -54,6 +55,19 @@
  *   M-24 超宽的内容不让对话左右滑（360 宽）：一段六种工具的合并行（标签「每种工具各几次」比一屏还长）、终答里的
  *        长裸链接 / 长文字链接 / www 链接 / 长行内代码 / GFM 不认的链接与没加反引号的长 token（普通文字）/ 引用与
  *        列表里的长链接 / 无语言与带语言的长行代码块，加上用户气泡里的长链接 —— 对话滚动区与整页都没有横向溢出；合并行的标签截断、计数徽章在行里；展开合并行之后也一样
+ *   M-25 输入卡片的触屏密度（MOB-composer，模型能看图）：390 与 360 宽时空闲的「+」、模型胶囊、扩展胶囊、发送键都
+ *        ≥ 36px 高（「+」与发送键也 ≥ 36px 宽）、都在卡片里、从左到右「+」< 模型 < 扩展且不重叠；扩展胶囊的字那格
+ *        display none、计数在；file input display none；页面与壳没有横向溢出。真点用量环 → 数字浮层 display block 且
+ *        在视口里，再点 → none。1280 宽：「+」24×24（±1），没有扩展计数，点模型触发器 → fixed 定位的下拉面板、没有抽屉
+ *   M-26 模型抽屉：真点模型胶囊 → 抽屉在视口里（贴底、左右贴边）、高 ≤ 屏高 80%；搜索框 16px、不抢焦点；模型行
+ *        ≥ 44px。真点遮罩离顶 40px 那一点（压在对话标题上）→ 抽屉关、对话页还在、会话设置没开。换成第二个模型 →
+ *        胶囊显示它，再换回来
+ *   M-27 扩展抽屉：真点扩展胶囊 → 抽屉在视口里、标题 Extensions、每个扩展行 ≥ 48px、勾选框 20×20（±1）；真点 mcp:ssh
+ *        那行的勾选框 → 会话的 enabledTools（IPC 读）多了它、抽屉不关、计数 +1；真点遮罩 → 抽屉关、会话设置没开
+ *   M-28 真回车（CDP 可信按键）是换行：「line one」回车「line two」→ 输入框里两行，500ms 内不忙、假提供商没收到请求；
+ *        真点发送 → 用户消息就是那两行。运行中（hold 住）打「hold me」，真按住「立即」800ms → 菜单两档、输入框原样、
+ *        什么都没排上（按住之后那一下 click 被吞）；真点菜单里的「追加」→ 输入框清空、队列面板一条 followUp；
+ *        放行之后它作为下一条用户消息落进会话
  *
  * 约定同 web-fallbacks.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；会话只经主进程 IPC 带明确标题创建
  * （不跑 titler）；预置回复经主进程的 agent.prompt 跑完一轮。设备模拟走 CDP（`Emulation.setDeviceMetricsOverride`
@@ -92,6 +106,7 @@ import {
   type ComposerLayoutShot,
   type ConversationOverflowShot,
   type ThinkingBlockShot,
+  type TouchSheetShot,
   type WebMobileTab
 } from '../../harness/pages'
 import {
@@ -162,7 +177,7 @@ let P = 0
 /** 假提供商的 id（M-23 认它那一行） */
 let fakeProviderId = ''
 const projects = { main: { id: '', name: 'MobProj' }, other: { id: '', name: 'MobProj2' } }
-const sids = { chat: '', temp: '', doomed: '', narrow: '', think: '', wide: '' }
+const sids = { chat: '', temp: '', doomed: '', narrow: '', think: '', wide: '', composer: '' }
 /** 用例里开的浏览器 tab（失败时 afterAll 兜底关） */
 const openedTabs = new Set<string>()
 
@@ -331,12 +346,19 @@ beforeAll(async () => {
   sids.doomed = await create('MOB-doomed', null)
   sids.narrow = await create('MOB-narrow', null)
   sids.think = await create('MOB-think', null)
+  // M-25..M-28：能看图的模型（seedFakeProvider 给 MODEL 带了 vision），还没有运行时
+  sids.composer = await create('MOB-composer', null)
   await seedReply(sids.chat, 'hello phone', 'MOB-REPLY')
   await seedReply(sids.temp, 'hello temp', 'MOB-TEMP-REPLY')
   // M-21：还没有运行时，选模型照常写得进去
   expect(
     await app.main.eval<{ success: boolean }>(
       `window.api.agent.setModel(${JSON.stringify({ sessionId: sids.narrow, provider: providerId, model: LONG })})`
+    )
+  ).toMatchObject({ success: true })
+  expect(
+    await app.main.eval<{ success: boolean }>(
+      `window.api.agent.setModel(${JSON.stringify({ sessionId: sids.composer, provider: providerId, model: MODEL })})`
     )
   ).toMatchObject({ success: true })
   // M-22：一轮一句话的思考、一轮五段的长思考
@@ -497,9 +519,40 @@ describe('phone layout: which windows get it', () => {
  * 一条用例失败在半路时把壳收拾回「会话页、什么都没开」—— 不然它留下的抽屉 / 菜单 / 对话页会把后面每一条都盖住，
  * 失败点离真因很远。每一步都是「开着才收」，用例正常走完时什么都不做
  */
+/** 会话的 settings.enabledTools（主窗口 IPC 读） */
+const enabledToolsOf = (sid: string): Promise<string[] | undefined> =>
+  app.main.eval<string[] | undefined>(
+    `window.api.session.getById(${JSON.stringify(sid)}).then((s) => (s && s.settings ? s.settings.enabledTools : undefined))`
+  )
+
+/** 等触屏选择抽屉上屏、滑入动画走完（连着两次量到同样的数） */
+async function settledTouchSheet(name: 'model' | 'extensions'): Promise<TouchSheetShot> {
+  let prev = ''
+  return until(async () => {
+    const shot = await mobile().touchSheet(name)
+    if (!shot) return null
+    const key = JSON.stringify(shot)
+    if (key !== prev) {
+      prev = key
+      return null
+    }
+    return shot
+  }, `the ${name} sheet settled`)
+}
+
+/** 收起开着的触屏选择抽屉（真点它的遮罩）—— resetShell 只认手机外壳自己的抽屉 */
+async function closeTouchSheets(): Promise<void> {
+  for (const name of await mobile().touchSheetNames()) {
+    if (name !== 'model' && name !== 'extensions') continue
+    await mobile().tap({ touchSheetBackdrop: name })
+    await until(async () => (await mobile().touchSheet(name)) === null, `the ${name} sheet closed`)
+  }
+}
+
 async function resetShell(): Promise<void> {
   if (!(await mobile().shellPresent())) return
   if (await webClientPane(page()).domMenu()) await mobile().pressEscape()
+  await closeTouchSheets()
   const config = sessionConfigPane(page())
   if (await config.isOpen()) await config.close()
   if (await mobile().sheet()) {
@@ -1116,28 +1169,34 @@ describe('phone layout: the shell', () => {
       expectInside(idle.send, idle.card, 'send (idle)')
       expectTruncated(idle.modelName, 'the model name (idle)')
 
-      // 运行中：等到两个队列出口、停止键都在（最挤的样子；2026-10-26 起两个选择器不再上锁）
+      // 运行中（2026-10-26 起两个选择器不再上锁）。触屏的回车是换行：用发送键发
       provider.script({ text: 'MOB-NARROW-REPLY', holdMs: 20_000, usage: USAGE })
-      await chat.typeAndSend('narrow ask')
-      const running = await until(async () => {
+      await chat.type('narrow ask')
+      await chat.clickSend()
+      // 没打字时只有停止（触屏只出一颗「立即」，没字可发就不出）
+      const empty = await until(async () => {
         if (!(await chat.isBusy())) return null
         const s = await layout()
-        return s && s.queue.length === 2 && s.stop ? s : null
-      }, 'the running composer: two queue tiers, stop')
+        return s?.stop ? s : null
+      }, 'the running composer: stop only')
+      expect(empty.queue, JSON.stringify(widthsOf(empty))).toEqual([])
+      expectInside(empty.stop, empty.card, 'stop (nothing typed)')
+      // 打了字：「立即」+ 停止（最挤的样子）
+      await chat.type('narrow steer')
+      const running = await until(async () => {
+        const s = await layout()
+        return s && s.queue.length === 1 && s.stop ? s : null
+      }, 'the running composer: steer, stop')
       const what = JSON.stringify(widthsOf(running))
-      // 工具行窄于 26rem：两个出口只剩图标，字还在 aria-label / title 上
-      expect(running.toolbarWidth, what).toBeLessThan(26 * 16)
-      expect(running.queue.map((q) => q.tier)).toEqual(['steer', 'followUp'])
-      for (const q of running.queue) {
-        const tier = q.tier as 'steer' | 'followUp'
-        expect(q.labelDisplay, `${tier} label`).toBe('none')
-        expect(q.ariaLabel).toBe(en.queue[tier])
-        expect(q.title).toBe(en.queue[`${tier}Hint`])
-        expectInside(q.box, running.card, `queue ${tier}`)
-        expect(q.scrollWidth, `queue ${tier} not clipped`).toBeLessThanOrEqual(q.clientWidth)
-      }
+      const [steer] = running.queue
+      expect(steer.tier).toBe('steer')
+      expect(steer.labelDisplay, 'the touch steer button has no label').toBeNull()
+      expect(steer.ariaLabel).toBe(en.queue.steer)
+      expect(steer.title).toBe(en.queue.touchSendHint)
+      expectInside(steer.box, running.card, 'queue steer')
+      expect(steer.box.width, 'touch-sized steer').toBeGreaterThanOrEqual(36)
       expectInside(running.stop, running.card, 'stop')
-      expect(running.stop!.width).toBeGreaterThanOrEqual(20)
+      expect(running.stop!.width, 'touch-sized stop').toBeGreaterThanOrEqual(36)
       expectInside(running.ring, running.card, 'the context ring')
       expect(running.ring!.width).toBeCloseTo(15, 0)
       // 谁都不压到谁身上：扩展选择器在用量环那一格左边，模型触发器在扩展选择器左边
@@ -1152,6 +1211,22 @@ describe('phone layout: the shell', () => {
       expect(running.page.docScrollWidth).toBeLessThanOrEqual(running.page.innerWidth)
       expect(running.page.shellScrollWidth).not.toBeNull()
       expect(running.page.shellScrollWidth!).toBeLessThanOrEqual(running.page.shellClientWidth!)
+      // 真长按（手机外壳把按住半秒变成 contextmenu）：两档都在菜单里，带字
+      await mobile().longPress({ composer: 'steer' }, 800)
+      const menu = await until(async () => {
+        const s = await layout()
+        return s && s.queue.length === 3 ? s : null
+      }, 'the long-press queue menu')
+      expect(menu.queue.slice(1).map((q) => [q.tier, q.labelText])).toEqual([
+        ['steer', en.queue.steer + en.queue.steerHint],
+        ['followUp', en.queue.followUp + en.queue.followUpHint]
+      ])
+      // 清掉字：菜单与「立即」一起收起，只剩停止
+      await chat.type('')
+      await until(
+        async () => (await layout())?.queue.length === 0,
+        'the queue menu gone with the text'
+      )
 
       // 跑完：发送键回来，仍在卡片里（这时用量环已有数字，比开头的空闲态更挤）
       provider.release()
@@ -1330,6 +1405,316 @@ describe('phone layout: the shell', () => {
       expectNoSideways(await settled('the expanded card measured'), 'expanded')
     } finally {
       await phone()
+    }
+  })
+
+  it('M-25 touch-sized composer controls at 390 and 360; a tap on the ring shows its numbers; 1280 keeps the compact row', async () => {
+    const chat = chatPane(page())
+    const layout = (): Promise<ComposerLayoutShot | null> => mobile().composerLayout(MODEL)
+    try {
+      await openFromList('MOB-composer')
+      await chat.ready()
+      for (const metrics of [PHONE, NARROW]) {
+        if (metrics !== PHONE) {
+          await emulate(page(), metrics, true)
+          await until(
+            async () => (await page().eval<number>('innerWidth')) === metrics.width,
+            `the page at ${metrics.width} wide`
+          )
+          expect(await mobile().shellPresent()).toBe(true)
+        }
+        const idle = await until(async () => {
+          const s = await layout()
+          return s?.attach && s.modelPill && s.extensions?.count && s.send && s.ring ? s : null
+        }, `the idle touch composer at ${metrics.width}`)
+        const what = `${metrics.width}: ${JSON.stringify(idle)}`
+        const controls: Array<[string, BoxShot]> = [
+          ['attach', idle.attach!],
+          ['model pill', idle.modelPill!.box],
+          ['extensions pill', idle.extensions!.box],
+          ['send', idle.send!]
+        ]
+        for (const [name, b] of controls) {
+          expect(b.height, `${name} height ${what}`).toBeGreaterThanOrEqual(36)
+          expectInside(b, idle.card, `${name} at ${metrics.width}`)
+        }
+        expect(idle.attach!.width, `attach width ${what}`).toBeGreaterThanOrEqual(36)
+        expect(idle.send!.width, `send width ${what}`).toBeGreaterThanOrEqual(36)
+        // 从左到右「+」< 模型 < 扩展，互不压
+        expect(idle.attach!.right, what).toBeLessThanOrEqual(idle.modelPill!.box.left + 0.5)
+        expect(idle.modelPill!.box.right, what).toBeLessThanOrEqual(idle.extensions!.box.left + 0.5)
+        // 工具行窄于 28rem：胶囊里只剩拼图 + 计数
+        expect(idle.extensions!.labelDisplay, what).toBe('none')
+        expect(idle.extensions!.count, what).toMatch(/^\d+$/)
+        expect(idle.extensions!.countBox!.width, what).toBeGreaterThan(0)
+        expectInside(
+          idle.extensions!.countBox,
+          idle.card,
+          `the extension count at ${metrics.width}`
+        )
+        expect(idle.attachInputDisplay, what).toBe('none')
+        expect(idle.page.docScrollWidth, what).toBeLessThanOrEqual(idle.page.innerWidth)
+        expect(idle.page.shellScrollWidth, what).not.toBeNull()
+        expect(idle.page.shellScrollWidth!, what).toBeLessThanOrEqual(idle.page.shellClientWidth!)
+
+        // 用量环：手机没有悬停，点一下出数字、再点收起
+        expect(idle.ringTooltip?.display, what).toBe('none')
+        await mobile().tap({ composer: 'ring' })
+        const open = await until(async () => {
+          const s = await layout()
+          return s?.ringTooltip?.display === 'block' ? s : null
+        }, `the ring numbers shown at ${metrics.width}`)
+        const tip = open.ringTooltip!.box
+        const tipWhat = `${metrics.width}: ${JSON.stringify(open.ringTooltip)}`
+        expect(tip.width, tipWhat).toBeGreaterThan(0)
+        expect(tip.left, tipWhat).toBeGreaterThanOrEqual(-0.5)
+        expect(tip.top, tipWhat).toBeGreaterThanOrEqual(-0.5)
+        expect(tip.right, tipWhat).toBeLessThanOrEqual(open.page.innerWidth + 0.5)
+        expect(tip.bottom, tipWhat).toBeLessThanOrEqual(
+          (await page().eval<number>('innerHeight')) + 0.5
+        )
+        await mobile().tap({ composer: 'ring' })
+        await until(
+          async () => (await layout())?.ringTooltip?.display === 'none',
+          `the ring numbers hidden again at ${metrics.width}`
+        )
+      }
+
+      // 1280 宽（桌面布局）：「+」是 24px 的小钮，扩展入口没有计数，模型面板是下拉而不是抽屉
+      await desktopView()
+      await chat.ready()
+      const wide = await until(async () => {
+        const s = await layout()
+        return s?.attach && s.modelPill ? s : null
+      }, 'the desktop composer')
+      const wideWhat = JSON.stringify(wide)
+      expect(Math.abs(wide.attach!.width - 24), wideWhat).toBeLessThanOrEqual(1)
+      expect(Math.abs(wide.attach!.height - 24), wideWhat).toBeLessThanOrEqual(1)
+      expect(wide.extensions?.count ?? null, wideWhat).toBeNull()
+      await mobile().composerClick('model')
+      const panel = await until(() => mobile().modelPanel(), 'the desktop model panel')
+      expect(panel).toEqual({ position: 'fixed', inTouchSheet: false })
+      expect(await mobile().touchSheetNames()).toEqual([])
+      await mobile().composerClick('model')
+      await until(async () => (await mobile().modelPanel()) === null, 'the model panel closed')
+    } finally {
+      await phone()
+    }
+  })
+
+  it('M-26 the model sheet: inside the viewport, 44px rows, a 16px search that does not take focus; its backdrop closes only the sheet', async () => {
+    const config = sessionConfigPane(page())
+    const layout = (): Promise<ComposerLayoutShot | null> => mobile().composerLayout(MODEL)
+    const pillText = async (): Promise<string | null> => (await layout())?.modelPill?.text ?? null
+    const row = (model: string): string => `${fakeProviderId}/${model}`
+    try {
+      await openFromList('MOB-composer')
+      await chatPane(page()).ready()
+      await until(async () => (await pillText()) === MODEL, 'the model pill showing the model')
+
+      await mobile().tap({ composer: 'model' })
+      const sheet = await settledTouchSheet('model')
+      const what = JSON.stringify(sheet)
+      expect(sheet.dialog.top, what).toBeGreaterThanOrEqual(-0.5)
+      expect(Math.abs(sheet.dialog.bottom - sheet.innerHeight), what).toBeLessThanOrEqual(1)
+      expect(Math.abs(sheet.dialog.left), what).toBeLessThanOrEqual(0.5)
+      expect(Math.abs(sheet.dialog.right - sheet.innerWidth), what).toBeLessThanOrEqual(0.5)
+      expect(sheet.dialog.height, what).toBeLessThanOrEqual(0.8 * sheet.innerHeight + 1)
+      expect(sheet.search, what).toEqual({ fontSize: '16px', focused: false })
+      expect(
+        sheet.rows.map((r) => r.id),
+        what
+      ).toContain(row(MODEL))
+      for (const r of sheet.rows) expect(r.height, `${r.id} ${what}`).toBeGreaterThanOrEqual(44)
+
+      // 遮罩离顶 40px 那一点压在对话页的标题上：只关抽屉，不点穿到标题（那会开会话设置）
+      expect(await config.isOpen()).toBe(false)
+      await mobile().tap({ touchSheetBackdrop: 'model' })
+      await until(
+        async () => (await mobile().touchSheet('model')) === null,
+        'the model sheet closed'
+      )
+      await sleep(400)
+      expect(await mobile().chatOpen()).toBe(true)
+      expect(await mobile().chatTitle()).toBe('MOB-composer')
+      expect(await config.isOpen()).toBe(false)
+
+      // 第二个模型（beforeAll 在同一家提供商下加的 LONG）：换过去，胶囊跟着；再换回来
+      expect(
+        sheet.rows.map((r) => r.id),
+        'a second model in the sheet'
+      ).toContain(row(LONG))
+      for (const model of [LONG, MODEL]) {
+        await mobile().tap({ composer: 'model' })
+        await settledTouchSheet('model')
+        await mobile().tap({ touchSheetItem: row(model) })
+        await until(
+          async () => (await mobile().touchSheet('model')) === null,
+          `the sheet closed after picking ${model}`
+        )
+        await until(async () => (await pillText()) === model, `the pill showing ${model}`)
+      }
+    } finally {
+      await closeTouchSheets()
+      if ((await pillText().catch(() => null)) !== MODEL) {
+        await app.main.eval(
+          `window.api.agent.setModel(${JSON.stringify({ sessionId: sids.composer, provider: fakeProviderId, model: MODEL })})`
+        )
+      }
+    }
+  })
+
+  it('M-27 the extensions sheet: 48px rows, 20px checkboxes; a tick writes the session and keeps the sheet open; the backdrop closes it', async () => {
+    const config = sessionConfigPane(page())
+    const layout = (): Promise<ComposerLayoutShot | null> => mobile().composerLayout(MODEL)
+    const before = await enabledToolsOf(sids.composer)
+    try {
+      expect(before ?? [], 'precondition: ssh is not ticked yet').not.toContain('mcp:ssh')
+      await openFromList('MOB-composer')
+      await chatPane(page()).ready()
+      const idle = await until(async () => {
+        const s = await layout()
+        return s?.extensions?.count ? s : null
+      }, 'the extensions pill with its count')
+      const count = Number(idle.extensions!.count)
+
+      await mobile().tap({ composer: 'extensions' })
+      const sheet = await settledTouchSheet('extensions')
+      const what = JSON.stringify(sheet)
+      expect(sheet.title, what).toBe(en.input.extensions)
+      expect(sheet.dialog.top, what).toBeGreaterThanOrEqual(-0.5)
+      expect(Math.abs(sheet.dialog.bottom - sheet.innerHeight), what).toBeLessThanOrEqual(1)
+      expect(Math.abs(sheet.dialog.left), what).toBeLessThanOrEqual(0.5)
+      expect(Math.abs(sheet.dialog.right - sheet.innerWidth), what).toBeLessThanOrEqual(0.5)
+      const toolRows = sheet.rows.filter(
+        (r) => r.id.startsWith('mcp:') || r.id.startsWith('skill:')
+      )
+      expect(
+        toolRows.map((r) => r.id),
+        what
+      ).toContain('mcp:ssh')
+      for (const r of toolRows) expect(r.height, `${r.id} ${what}`).toBeGreaterThanOrEqual(48)
+      expect(sheet.checkboxes.length, what).toBeGreaterThanOrEqual(toolRows.length)
+      for (const c of sheet.checkboxes) {
+        expect(Math.abs(c.box.width - 20), `${c.id} checkbox ${what}`).toBeLessThanOrEqual(1)
+        expect(Math.abs(c.box.height - 20), `${c.id} checkbox ${what}`).toBeLessThanOrEqual(1)
+      }
+
+      await mobile().tap({ touchSheetItem: 'mcp:ssh', checkbox: true })
+      await until(
+        async () => ((await enabledToolsOf(sids.composer)) ?? []).includes('mcp:ssh'),
+        'mcp:ssh ticked in the session'
+      )
+      expect(await mobile().touchSheet('extensions'), 'the sheet stays open').not.toBeNull()
+      await until(
+        async () => (await layout())?.extensions?.count === String(count + 1),
+        `the extension count ${count} → ${count + 1}`
+      )
+
+      await mobile().tap({ touchSheetBackdrop: 'extensions' })
+      await until(
+        async () => (await mobile().touchSheet('extensions')) === null,
+        'the extensions sheet closed'
+      )
+      await sleep(400)
+      expect(await mobile().chatOpen()).toBe(true)
+      expect(await config.isOpen()).toBe(false)
+    } finally {
+      await closeTouchSheets()
+      await app.main.eval(
+        `window.api.session.updateEnabledTools(${JSON.stringify({ id: sids.composer, enabledTools: before ?? [] })})`
+      )
+    }
+  })
+
+  it('M-28 a real Enter is a newline; send sends both lines; a real hold on Now opens the menu and Append queues', async () => {
+    const chat = chatPane(page())
+    const layout = (): Promise<ComposerLayoutShot | null> => mobile().composerLayout(MODEL)
+    const userTexts = async (): Promise<string[]> =>
+      (
+        await app.main.eval<Array<{ role: string; content: string }>>(
+          `window.api.message.list(${JSON.stringify(sids.composer)})`
+        )
+      )
+        .filter((m) => m.role === 'user')
+        .map((m) => m.content)
+    const replied = (reply: string): Promise<boolean> =>
+      app.main
+        .eval<
+          Array<{ role: string; content: string }>
+        >(`window.api.message.list(${JSON.stringify(sids.composer)})`)
+        .then((ms) => ms.some((m) => m.role === 'assistant' && m.content === reply))
+    try {
+      await openFromList('MOB-composer')
+      await chat.ready()
+      await until(async () => !!(await layout())?.send, 'the idle composer')
+
+      // 可信输入：回车不发，浏览器自己换行
+      await mobile().typeTrusted('line one')
+      await mobile().pressEnterTrusted()
+      await mobile().typeTrusted('line two')
+      await until(
+        async () => (await mobile().composerValue()) === 'line one\nline two',
+        'two lines in the composer'
+      )
+      const requests = provider.chatRequestCount()
+      const t0 = Date.now()
+      while (Date.now() - t0 < 500) {
+        expect(await chat.isBusy(), 'Enter must not send').toBe(false)
+        await sleep(50)
+      }
+      expect(provider.chatRequestCount()).toBe(requests)
+
+      provider.script({ text: 'MOB-COMPOSER-REPLY', usage: USAGE })
+      await mobile().tap({ composer: 'send' })
+      await until(
+        async () => (await userTexts()).includes('line one\nline two'),
+        'the two-line user message'
+      )
+      await until(() => replied('MOB-COMPOSER-REPLY'), 'the reply to the two lines')
+      await chat.waitIdle()
+
+      // 运行中（hold 住）：打字 → 一颗「立即」；真按住它 → 菜单，什么都没发
+      provider.script(
+        { text: 'MOB-HOLD-REPLY', holdMs: 20_000, usage: USAGE },
+        { text: 'MOB-FOLLOW-REPLY', usage: USAGE }
+      )
+      await mobile().typeTrusted('hold ask')
+      await mobile().tap({ composer: 'send' })
+      await until(async () => (await chat.isBusy()) && provider.holding(), 'the held run')
+      await mobile().typeTrusted('hold me')
+      await until(async () => {
+        const s = await layout()
+        return (await mobile().composerValue()) === 'hold me' && s?.queue.length === 1
+      }, 'the steer button with the typed text')
+      await mobile().longPress({ composer: 'steer' }, 800)
+      await until(
+        async () => JSON.stringify(await mobile().queueMenu()) === '["steer","followUp"]',
+        'the long-press queue menu'
+      )
+      // 按住之后那一下 click（长按的宽限期 600ms 内）会被吞：等它过去，也给误发留出时间
+      await sleep(700)
+      expect(await mobile().composerValue()).toBe('hold me')
+      expect(await chat.queueRows(), 'nothing queued or steered by the hold').toEqual([])
+      expect(await userTexts()).not.toContain('hold me')
+
+      await mobile().tap({ queueMenuTier: 'followUp' })
+      await until(async () => (await mobile().composerValue()) === '', 'the composer cleared')
+      const rows = await until(async () => {
+        const r = await chat.queueRows()
+        return r.length === 1 ? r : null
+      }, 'one queued Append')
+      expect(rows[0]).toMatchObject({ mode: 'followUp', text: 'hold me' })
+      expect(await mobile().queueMenu()).toBeNull()
+
+      provider.release()
+      await until(() => replied('MOB-FOLLOW-REPLY'), 'the follow-up answered after the release')
+      expect(await userTexts()).toContain('hold me')
+      await chat.waitIdle()
+    } finally {
+      provider.release()
+      await chat.waitIdle().catch(() => undefined)
+      await closeTouchSheets()
     }
   })
 

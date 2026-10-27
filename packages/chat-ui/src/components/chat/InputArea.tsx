@@ -1,7 +1,7 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock } from 'lucide-react'
+import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock, Plus } from 'lucide-react'
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
 import {
@@ -34,6 +34,8 @@ import { MentionHighlighter } from './MentionHighlighter'
 import { useAtMentions, type AtSuggestion } from '../../hooks/useAtMentions'
 import { usePasteChips } from '../../hooks/usePasteChips'
 import { isImeComposing } from '../../utils/ime'
+import { useClickOutside } from '../../hooks/useClickOutside'
+import { useChatDensity } from '../../host/chatHostContext'
 
 /**
  * 运行中的两个发送出口（P3-11 两档），顺序即急迫度从高到低：
@@ -125,12 +127,37 @@ export function InputArea({
   const canEdit = hasHost
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const { isDragging, handleDragOver, handleDragLeave, handleDrop, handlePaste } =
+  const { isDragging, handleDragOver, handleDragLeave, handleDrop, handlePaste, handleImageFiles } =
     useImageUpload(modelSupportsVision)
+  // 「+」背后的文件选择（手机上没有拖放，粘贴图片也少见：这是那里唯一的附图入口）
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 默认模型
   const chatHost = useChatHost()
   const activeModel = chatHost.models.activeModel
+  /**
+   * 触屏密度（手机布局）：工具行的控件放大到 36px、发送 / 停止是圆钮；回车换行（手机键盘没有 Shift+回车，
+   * 回车就发送的话写不了第二行）、只有发送键发送；运行中只出一个「立即」，长按才选「追加」
+   */
+  const touch = useChatDensity() === 'touch'
+  // 运行中长按「立即」弹出的两档发法。记下弹出时的那段文字：文字变了（发掉、被别处改掉）菜单就不算数；
+  // 一敲键（handleInputChange）、运行起停（下面）都直接关掉 —— 改回同样的字、下一轮恰好同样的字，它都不自己冒出来
+  const [queueMenuFor, setQueueMenuFor] = useState<string | null>(null)
+  const [menuRunState, setMenuRunState] = useState(isStreaming)
+  if (menuRunState !== isStreaming) {
+    // 运行起停时收起（渲染期调整状态，React 文档的「prop 变了就调整 state」写法）
+    setMenuRunState(isStreaming)
+    setQueueMenuFor(null)
+  }
+  const queueMenuOpen = queueMenuFor !== null && queueMenuFor === inputText && isStreaming
+  const queueMenuRef = useRef<HTMLDivElement>(null)
+  const closeQueueMenu = useCallback(() => setQueueMenuFor(null), [])
+  useClickOutside(queueMenuRef, closeQueueMenu, queueMenuOpen)
+  // 上下文用量环的数字：悬停之外点一下也出（触屏没有悬停）
+  const [ctxOpen, setCtxOpen] = useState(false)
+  const ctxRef = useRef<HTMLSpanElement>(null)
+  const closeCtx = useCallback(() => setCtxOpen(false), [])
+  useClickOutside(ctxRef, closeCtx, ctxOpen)
 
   // 斜杠命令自动补全
   const slash = useSlashCommands(slashCommands, inputText)
@@ -211,6 +238,7 @@ export function InputArea({
   const handleInputChange = useCallback(
     (value: string, caret: number) => {
       setSendError(null)
+      setQueueMenuFor(null)
       if (!slashChip && value.startsWith('/') && value.includes(' ')) {
         const spaceIdx = value.indexOf(' ')
         const cmdId = value.slice(1, spaceIdx)
@@ -662,7 +690,8 @@ export function InputArea({
       return
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // 触屏：回车就是换行，交给 textarea（发送只走发送键）；接了实体键盘的用 ⌘ / Ctrl + 回车发
+    if (e.key === 'Enter' && !e.shiftKey && (!touch || e.metaKey || e.ctrlKey)) {
       e.preventDefault()
       // streaming 时发送 steer 消息（有待处理请求时除外 —— handleSend 会路由到「其它」反馈）
       if (isStreaming && !activePendingInput) {
@@ -711,31 +740,137 @@ export function InputArea({
   // 窄卡片（手机）里位置不够时选择器先让：模型名继续截短；右侧的用量环与发送 / 停止从不收缩，
   // 不会被挤出卡片
   const pickers = (
-    <div className="min-w-0 flex items-center gap-1.5">
+    <div
+      data-composer-pickers=""
+      className={`min-w-0 flex items-center ${touch ? 'gap-2' : 'gap-1.5'}`}
+    >
       <ModelPicker readonly={!canEdit} />
       {canEdit && <ToolPicker />}
     </div>
   )
 
+  // 「+」：选图片附上（与拖放、粘贴同一条路，只在模型能看图时出现 —— 那两条路也一样只对这种模型开）
+  const attachButton =
+    modelSupportsVision && !sendBlocked ? (
+      <>
+        <button
+          type="button"
+          data-attach-button=""
+          onClick={() => fileInputRef.current?.click()}
+          title={t('input.attach')}
+          aria-label={t('input.attach')}
+          className={
+            touch
+              ? 'flex-shrink-0 h-9 w-9 rounded-full border border-border-secondary/60 flex items-center justify-center text-text-secondary active:bg-bg-hover transition-colors'
+              : 'flex-shrink-0 h-6 w-6 rounded-md flex items-center justify-center text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors'
+          }
+        >
+          <Plus size={touch ? 18 : 15} />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          data-attach-input=""
+          onChange={(e) => {
+            if (e.target.files?.length) void handleImageFiles(e.target.files)
+            // 清空：同一张图再选一次也要触发 change
+            e.target.value = ''
+          }}
+        />
+      </>
+    ) : null
+
   const queueDisabled = !inputText.trim()
+  /** 圆钮（触屏）/ 小方钮（桌面）的外形；颜色由各个按钮自己给 */
+  const roundCls = touch
+    ? 'flex-shrink-0 h-9 w-9 rounded-full flex items-center justify-center transition-colors'
+    : 'flex-shrink-0 p-1.5 rounded-lg transition-colors'
+  const stopButton = (
+    <button
+      onClick={handleAbort}
+      className={
+        touch
+          ? `${roundCls} bg-error/15 text-error active:bg-error/25`
+          : 'p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors'
+      }
+      title={t('input.stopGen')}
+      aria-label={t('input.stopGen')}
+    >
+      <Square size={touch ? 13 : 14} fill="currentColor" />
+    </button>
+  )
+  const touchQueue = (
+    // 触屏运行中：一颗「立即」（回车在这里是换行，没有别的快捷出口），长按出两档的说明与「追加」；
+    // 没打字时整颗不出，只剩停止 —— 和 Claude 的输入框一样
+    <div ref={queueMenuRef} className="relative flex-shrink-0">
+      <button
+        data-queue-tier="steer"
+        onClick={() => handleQueueSend('steer')}
+        onContextMenu={(e) => {
+          // 长按（手机外壳把按住半秒变成 contextmenu）/ 右键：弹出两档
+          e.preventDefault()
+          setQueueMenuFor(inputText)
+        }}
+        title={t('queue.touchSendHint')}
+        aria-label={t('queue.steer')}
+        style={{ WebkitTouchCallout: 'none' }}
+        className={`${roundCls} select-none bg-warning text-white active:bg-warning/80`}
+      >
+        <Zap size={17} />
+      </button>
+      {queueMenuOpen && (
+        <div
+          data-queue-menu=""
+          className="absolute bottom-full right-0 mb-2 z-30 w-64 overflow-hidden rounded-xl border border-border-primary bg-bg-secondary py-1 shadow-xl whitespace-normal"
+        >
+          {QUEUE_TIERS.map(({ tier, Icon }) => (
+            <button
+              key={tier}
+              data-queue-tier={tier}
+              onClick={() => {
+                setQueueMenuFor(null)
+                handleQueueSend(tier)
+              }}
+              className="w-full flex items-start gap-3 px-4 py-2.5 text-left active:bg-bg-hover"
+            >
+              <Icon size={16} className="mt-0.5 flex-shrink-0 text-text-secondary" />
+              <span className="min-w-0">
+                <span className="block text-[15px] text-text-primary">{t(`queue.${tier}`)}</span>
+                <span className="block text-[12px] leading-snug text-text-tertiary">
+                  {t(`queue.${tier}Hint`)}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
   const sendStopButtons = isStreaming ? (
-    <div className="flex-shrink-0 flex items-center gap-1">
+    <div className={`flex-shrink-0 flex items-center ${touch ? 'gap-2' : 'gap-1'}`}>
       {activePendingInput ? (
         // 待处理请求优先：这个按钮投「其它」反馈，不进队列
         <button
           onClick={handleSubmitOther}
           disabled={queueDisabled}
-          className={`p-1.5 rounded-lg transition-colors ${
+          className={`${touch ? roundCls : 'p-1.5 rounded-lg transition-colors'} ${
             queueDisabled
-              ? 'text-text-tertiary cursor-not-allowed'
+              ? touch
+                ? 'bg-bg-tertiary text-text-tertiary'
+                : 'text-text-tertiary cursor-not-allowed'
               : pendingTone === 'accent'
                 ? 'bg-accent text-white hover:bg-accent-hover'
                 : 'bg-warning text-white hover:bg-warning/80'
           }`}
           title={t('pendingInputs.submitOther')}
         >
-          <Send size={14} />
+          <Send size={touch ? 17 : 14} />
         </button>
+      ) : touch ? (
+        !queueDisabled && touchQueue
       ) : (
         // 两个发送出口 = pi 的两条队列。分段成一组：读作「一个发送控件的两个出口」，
         // 而不是两个各自独立的按钮
@@ -759,33 +894,30 @@ export function InputArea({
               }`}
             >
               <Icon size={12} />
-              {/* 窄卡片（手机）里只留图标：带字的两个出口加停止键会占掉整行，把选择器挤到它们底下；
+              {/* 窄卡片里只留图标：带字的两个出口加停止键会占掉整行，把选择器挤到它们底下；
                   按工具行自身的宽度判断（容器查询），桌面的对话栏都比这宽 */}
               <span className="hidden @[26rem]:inline">{t(`queue.${tier}`)}</span>
             </button>
           ))}
         </div>
       )}
-      <button
-        onClick={handleAbort}
-        className="p-1 rounded bg-error/20 text-error hover:bg-error/30 transition-colors"
-        title={t('input.stopGen')}
-      >
-        <Square size={14} fill="currentColor" />
-      </button>
+      {stopButton}
     </div>
   ) : (
     <button
       onClick={handleSend}
       disabled={!canSend}
-      className={`flex-shrink-0 p-1.5 rounded-lg transition-colors ${
+      className={`${roundCls} ${
         canSend
           ? 'bg-accent text-white hover:bg-accent-hover'
-          : 'text-text-tertiary cursor-not-allowed'
+          : touch
+            ? 'bg-bg-tertiary text-text-tertiary'
+            : 'text-text-tertiary cursor-not-allowed'
       }`}
       title={t('input.send')}
+      aria-label={t('input.send')}
     >
-      <Send size={14} />
+      <Send size={touch ? 17 : 14} />
     </button>
   )
 
@@ -993,11 +1125,14 @@ export function InputArea({
                           ? t('pendingInputs.otherPlaceholder')
                           : isStreaming
                             ? t('input.placeholderSteer')
-                            : slashChip
-                              ? t('input.placeholder')
-                              : modelSupportsVision
-                                ? t('input.placeholderVision')
-                                : t('input.placeholder')
+                            : touch
+                              ? // 手机：没有拖放，也没有 Shift+回车（回车本身就是换行）
+                                t('input.placeholderTouch')
+                              : slashChip
+                                ? t('input.placeholder')
+                                : modelSupportsVision
+                                  ? t('input.placeholderVision')
+                                  : t('input.placeholder')
                   }
                   rows={1}
                   style={{
@@ -1009,7 +1144,12 @@ export function InputArea({
               </div>
 
               {/* 底部工具行（统一布局）：选择器居左；右侧为上下文用量环，最右为发送/停止 */}
-              <div className="@container flex items-center gap-1.5 px-2 pb-1.5 pt-0.5 text-text-tertiary whitespace-nowrap">
+              <div
+                className={`@container flex items-center text-text-tertiary whitespace-nowrap ${
+                  touch ? 'gap-2 px-2.5 pb-2.5 pt-1' : 'gap-1.5 px-2 pb-1.5 pt-0.5'
+                }`}
+              >
+                {attachButton}
                 {pickers}
 
                 {/* 弹性空白 → 把右侧按钮簇推到最右 */}
@@ -1019,8 +1159,14 @@ export function InputArea({
                   纯只读指示器 —— 运行时 Agent 快照归设置页的「监视器 → 智能体」，这里不再是入口。 */}
                 {(maxContextTokens > 0 || usedContextTokens !== null) && (
                   <span
+                    ref={ctxRef}
                     aria-label={ctxTooltip}
-                    className="relative group/token flex-shrink-0 p-1 rounded flex items-center"
+                    data-context-ring=""
+                    onClick={() => setCtxOpen((v) => !v)}
+                    className={`relative group/token flex-shrink-0 rounded flex items-center cursor-default ${
+                      // 触屏：点按区 36px，但左右各 8px 伸进两侧的间距里，排版上只占 20px（把宽度留给模型名）
+                      touch ? 'h-9 w-9 -mx-2 justify-center' : 'p-1'
+                    }`}
                   >
                     <svg width="15" height="15" viewBox="0 0 16 16" className="flex-shrink-0">
                       {/* 轨道 */}
@@ -1050,7 +1196,12 @@ export function InputArea({
                       )}
                     </svg>
                     {/* 悬浮 tooltip：精确用量 + 占比 */}
-                    <div className="pointer-events-none absolute right-0 bottom-7 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap text-left">
+                    <div
+                      data-context-tooltip=""
+                      className={`pointer-events-none absolute right-0 bottom-7 z-20 rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover/token:block whitespace-nowrap text-left ${
+                        ctxOpen ? 'block' : 'hidden'
+                      }`}
+                    >
                       <div className="text-[11px] text-text-primary">
                         {ctxTooltip}
                         {ctxFraction !== null ? ` · ${Math.round(ctxFraction * 100)}%` : ''}

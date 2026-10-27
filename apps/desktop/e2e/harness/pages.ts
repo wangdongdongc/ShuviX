@@ -435,7 +435,7 @@ export interface ChatPane {
   /** 模型选择器在屏（输入卡工具行选择器簇内 ModelSelect inline 触发器的 chevron） */
   modelPickerPresent(): Promise<boolean>
   /**
-   * 选择器簇（工具行第一个子节点）的直接子节点数 —— 「少了哪个选择器」的判据。
+   * 选择器簇（工具行里的 `data-composer-pickers`；它前面可能还有附图的「+」）的直接子节点数 —— 「少了哪个选择器」的判据。
    *
    * 普通会话是两个（模型 / 工具；曾经居首的档案选择器随「会话内切换档案」一并下线）。
    * **不按图标认工具选择器**：它的触发钮在没有 MCP / skill 工具时连图标都不渲染，
@@ -1093,8 +1093,13 @@ export function chatPane(main: CdpClient): ChatPane {
 
     ctxRingPresent: () => main.eval<boolean>(`!!${TOOL_ROW}?.querySelector('svg circle[r="6"]')`),
     modelPickerPresent: () =>
-      main.eval<boolean>(`!!${TOOL_ROW}?.firstElementChild?.querySelector('.lucide-chevron-down')`),
-    pickerCount: () => main.eval<number>(`${TOOL_ROW}?.firstElementChild?.childElementCount ?? 0`),
+      main.eval<boolean>(
+        `!!${TOOL_ROW}?.querySelector('[data-composer-pickers]')?.querySelector('.lucide-chevron-down')`
+      ),
+    pickerCount: () =>
+      main.eval<number>(
+        `${TOOL_ROW}?.querySelector('[data-composer-pickers]')?.childElementCount ?? 0`
+      ),
 
     clickRollback: async (msgId) => {
       await main.eval(
@@ -12032,6 +12037,21 @@ export type WebMobileTouchTarget =
   | { settingsToolRow: string }
   /** 开着的底部抽屉的遮罩 */
   | { sheetBackdrop: true }
+  /**
+   * 输入卡片工具行里的控件：附图「+」（`data-attach-button`）、模型胶囊（`data-model-trigger`）、扩展胶囊
+   * （`data-tool-picker` 的按钮）、发送键（`.lucide-send` 那颗）、运行中卡片上的那颗「立即」（`data-queue-tier="steer"`，
+   * 不是长按菜单里的那一行）、用量环（`data-context-ring`）
+   */
+  | { composer: 'attach' | 'model' | 'extensions' | 'send' | 'steer' | 'ring' }
+  /** 触屏密度的选择抽屉（chat-ui TouchSheet，`data-touch-sheet=<name>`）的遮罩 —— 与手机外壳自己的 `sheetBackdrop` 不是一个 */
+  | { touchSheetBackdrop: 'model' | 'extensions' }
+  /**
+   * 开着的选择抽屉里的一行：`data-model-item`（`<providerId>/<modelId>`）/ `data-tool-item`（`mcp:x` / `skill:x`）/
+   * `data-knowledge-base`（库名）；`checkbox: true` = 点那一行的勾选框本身
+   */
+  | { touchSheetItem: string; checkbox?: boolean }
+  /** 长按「立即」弹出的菜单（`data-queue-menu`）里的一档 */
+  | { queueMenuTier: 'steer' | 'followUp' }
 
 /** 手机布局里一个标签按钮 */
 export interface WebMobileTabShot {
@@ -12059,13 +12079,30 @@ export interface ComposerLayoutShot {
   send: BoxShot | null
   /** 停止键（`.lucide-square` 那颗；空闲时没有 → null） */
   stop: BoxShot | null
-  /** 上下文用量环：`svg[width="15"]` 本身，与它所在的那一格（工具行的直接子节点） */
+  /** 上下文用量环：`[data-context-ring]` 里的 svg 本身，与它所在的那一格（工具行的直接子节点） */
   ring: BoxShot | null
   ringItem: BoxShot | null
   /** 扩展选择器（`data-tool-picker`） */
   toolPicker: BoxShot | null
+  /**
+   * 扩展选择器的入口按钮：「扩展」那格字（触屏胶囊里不是计数的那格 span）的计算 display（没有那格 → null）、
+   * 计数 `data-extension-count` 的文字与盒子（桌面入口没有 → null）
+   */
+  extensions: {
+    box: BoxShot
+    labelDisplay: string | null
+    count: string | null
+    countBox: BoxShot | null
+  } | null
+  /** 附图「+」（`data-attach-button`；不在 → null）与它背后 `data-attach-input` 的计算 display（不在 → null） */
+  attach: BoxShot | null
+  attachInputDisplay: string | null
   /** 模型选择器的触发器（显示模型名的那格 span 的父节点：可点时是 button，只读时是 span） */
   modelTrigger: BoxShot | null
+  /** 可点的模型触发器（`data-model-trigger`）与它的文字；只读 / 不在 → null */
+  modelPill: { box: BoxShot; text: string } | null
+  /** 用量环的数字浮层（`data-context-tooltip`）：盒子与计算 display；没有环 → null */
+  ringTooltip: { box: BoxShot; display: string } | null
   modelName: { box: BoxShot; scrollWidth: number; clientWidth: number } | null
   /** 运行中的两个队列出口（`data-queue-tier`，DOM 序）；字在按钮里那格 span 上 */
   queue: Array<{
@@ -12144,6 +12181,22 @@ export interface WebMobileSettingsTabShot {
   label: string
   /** 行里那枚「实验」小标签的文字（没有 → null） */
   experimental: string | null
+}
+
+/** 触屏密度的选择抽屉此刻的样子（见 `touchSheet`） */
+export interface TouchSheetShot {
+  /** 面板本体（`role=dialog`，不含遮罩） */
+  dialog: BoxShot
+  innerWidth: number
+  innerHeight: number
+  /** 标题（把手与正文之间那一格；没有 → ''） */
+  title: string
+  /** 抽屉里的搜索框（模型抽屉才有）：计算字号、是不是焦点所在；没有 → null */
+  search: { fontSize: string; focused: boolean } | null
+  /** 行（DOM 序）：id = `data-model-item` / `data-tool-item` / `data-knowledge-base`，高 = getBoundingClientRect */
+  rows: Array<{ id: string; height: number }>
+  /** 各行的勾选框（扩展抽屉才有），id 同上 */
+  checkboxes: Array<{ id: string; box: BoxShot }>
 }
 
 export interface WebMobilePane {
@@ -12260,6 +12313,27 @@ export interface WebMobilePane {
    * 卡片不在 → null。`modelName` = 模型选择器里显示的模型 id（按文字认那一格 span）
    */
   composerLayout(modelName: string): Promise<ComposerLayoutShot | null>
+  /** 开着的触屏选择抽屉（`data-touch-sheet=<name>`）；不在 → null */
+  touchSheet(name: 'model' | 'extensions'): Promise<TouchSheetShot | null>
+  /** 此刻开着的触屏选择抽屉的名字（DOM 序） */
+  touchSheetNames(): Promise<string[]>
+  /** 开着的模型面板（`data-model-panel`）的计算 position 与它在不在触屏抽屉里；不在 → null */
+  modelPanel(): Promise<{ position: string; inTouchSheet: boolean } | null>
+  /** 长按「立即」弹出的菜单（`data-queue-menu`）里各档（DOM 序）；菜单不在 → null */
+  queueMenu(): Promise<string[] | null>
+  /**
+   * 程序化点一下输入卡片里的控件（同 `{ composer }` 的认法）—— 给没有触屏模拟的桌面布局用；找不到 → 抛
+   */
+  composerClick(part: 'attach' | 'model' | 'extensions' | 'send' | 'steer' | 'ring'): Promise<void>
+  /** 输入框的值（第一个 textarea；不在 → null） */
+  composerValue(): Promise<string | null>
+  /** 把焦点与光标放到输入框文末，经 CDP `Input.insertText` 打进一段文字（可信输入） */
+  typeTrusted(text: string): Promise<void>
+  /**
+   * 可信的回车（CDP `Input.dispatchKeyEvent` keyDown 带 text '\r' + keyUp）：页面不拦的话浏览器自己在
+   * textarea 里换行 —— chatPane.pressEnter 合成的 keydown 永远插不进换行
+   */
+  pressEnterTrusted(): Promise<void>
   /**
    * 对话滚动区里每个思考块（`data-thinking-block`，DOM 序）的几何：块高、到同一张卡终答正文（`.min-w-0 >
    * .markdown-body`）顶边的间距、里面那一格内容盒的排版（white-space / text-overflow / 宽度）与文字
@@ -12337,6 +12411,23 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     if (root) walk(root)
     return text.replace(/\\s+/g, ' ').trim()
   })`
+  /** 输入卡片（第一个 textarea 所在的那张圆角卡片，同 composerLayout） */
+  const COMPOSER_CARD = `document.querySelector('textarea')?.closest('.rounded-2xl')`
+  /** 输入卡片里的一个控件（见 WebMobileTouchTarget 的 `composer`） */
+  const COMPOSER_PART = (
+    part: 'attach' | 'model' | 'extensions' | 'send' | 'steer' | 'ring'
+  ): string =>
+    ({
+      attach: `(${COMPOSER_CARD})?.querySelector('[data-attach-button]')`,
+      model: `(${COMPOSER_CARD})?.querySelector('[data-model-trigger]')`,
+      extensions: `(${COMPOSER_CARD})?.querySelector('[data-tool-picker] > button')`,
+      send: `(${COMPOSER_CARD})?.querySelector('.lucide-send')?.closest('button')`,
+      steer: `[...((${COMPOSER_CARD})?.querySelectorAll('[data-queue-tier="steer"]') ?? [])].find((b) => !b.closest('[data-queue-menu]'))`,
+      ring: `(${COMPOSER_CARD})?.querySelector('[data-context-ring]')`
+    })[part]
+  /** 开着的触屏选择抽屉里的全部行（模型行 / 扩展行 / 知识库行，DOM 序） */
+  const TOUCH_SHEET_ROWS = `[...document.querySelectorAll('[data-touch-sheet] [data-model-item], [data-touch-sheet] label[data-tool-item], [data-touch-sheet] label[data-knowledge-base]')]`
+  const TOUCH_ROW_ID = `((r) => r.getAttribute('data-model-item') ?? r.getAttribute('data-tool-item') ?? r.getAttribute('data-knowledge-base') ?? '')`
 
   const elementOf = (target: WebMobileTouchTarget): string => {
     if ('tab' in target)
@@ -12382,6 +12473,15 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `${STACKED_LIST}?.querySelector('[data-provider-toggle=${JSON.stringify(target.settingsProviderToggle)}]')`
     if ('settingsToolRow' in target)
       return `${STACKED_LIST}?.querySelector('[data-tool-row=${JSON.stringify(target.settingsToolRow)}]')`
+    if ('composer' in target) return COMPOSER_PART(target.composer)
+    if ('touchSheetBackdrop' in target)
+      return `document.querySelector('[data-touch-sheet=${JSON.stringify(target.touchSheetBackdrop)}] [data-touch-sheet-backdrop]')`
+    if ('touchSheetItem' in target) {
+      const row = `${TOUCH_SHEET_ROWS}.find((r) => ${TOUCH_ROW_ID}(r) === ${JSON.stringify(target.touchSheetItem)})`
+      return target.checkbox ? `(${row})?.querySelector('input[type="checkbox"]')` : row
+    }
+    if ('queueMenuTier' in target)
+      return `document.querySelector('[data-queue-menu] [data-queue-tier=${JSON.stringify(target.queueMenuTier)}]')`
     return `${SHEET}?.querySelector('[data-bottom-sheet-backdrop]')`
   }
 
@@ -12414,7 +12514,7 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           const r = el.getBoundingClientRect()
           if (r.width === 0 || r.height === 0) return null
           const x = ${'widgetCardCorner' in target ? `r.right - ${CARD_CORNER_INSET}` : 'r.left + r.width / 2'}
-          const y = ${'sheetBackdrop' in target ? 'r.top + 40' : 'widgetCardCorner' in target ? `r.top + ${CARD_CORNER_INSET}` : 'r.top + r.height / 2'}
+          const y = ${'sheetBackdrop' in target || 'touchSheetBackdrop' in target ? 'r.top + 40' : 'widgetCardCorner' in target ? `r.top + ${CARD_CORNER_INSET}` : 'r.top + r.height / 2'}
           const at = document.elementFromPoint(x, y)
           return {
             x,
@@ -12725,11 +12825,17 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
         // 底部工具行 = textarea 容器的下一个兄弟（同 chatPane 的 TOOL_ROW）
         const toolbar = ta.parentElement?.nextElementSibling ?? null
         const scope = toolbar ?? card
-        const ring = scope.querySelector('svg[width="15"]')
+        const ring = scope.querySelector('[data-context-ring] svg')
         let ringItem = ring
         while (ringItem && ringItem.parentElement && ringItem.parentElement !== toolbar) ringItem = ringItem.parentElement
         const name = [...card.querySelectorAll('span')].find((s) => s.textContent === ${JSON.stringify(modelName)})
         const shell = document.querySelector('[data-mobile-shell]')
+        const extButton = scope.querySelector('[data-tool-picker] > button')
+        const extLabel = extButton?.querySelector(':scope > span:not([data-extension-count])') ?? null
+        const extCount = extButton?.querySelector('[data-extension-count]') ?? null
+        const attachInput = scope.querySelector('[data-attach-input]')
+        const pill = scope.querySelector('[data-model-trigger]')
+        const tooltip = scope.querySelector('[data-context-ring] [data-context-tooltip]')
         return {
           card: box(card),
           toolbarWidth: toolbar ? toolbar.getBoundingClientRect().width : 0,
@@ -12738,6 +12844,18 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           ring: box(ring),
           ringItem: ring && ringItem?.parentElement === toolbar ? box(ringItem) : null,
           toolPicker: box(scope.querySelector('[data-tool-picker]')),
+          extensions: extButton
+            ? {
+                box: box(extButton),
+                labelDisplay: extLabel ? getComputedStyle(extLabel).display : null,
+                count: extCount ? (extCount.textContent ?? '').trim() : null,
+                countBox: box(extCount)
+              }
+            : null,
+          attach: box(scope.querySelector('[data-attach-button]')),
+          attachInputDisplay: attachInput ? getComputedStyle(attachInput).display : null,
+          modelPill: pill ? { box: box(pill), text: (pill.textContent ?? '').trim() } : null,
+          ringTooltip: tooltip ? { box: box(tooltip), display: getComputedStyle(tooltip).display } : null,
           modelTrigger: box(name?.parentElement ?? null),
           modelName: name ? { box: box(name), scrollWidth: name.scrollWidth, clientWidth: name.clientWidth } : null,
           queue: [...scope.querySelectorAll('[data-queue-tier]')].map((b) => {
@@ -12761,6 +12879,86 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
           }
         }
       })()`),
+    touchSheet: (name) =>
+      client.eval<TouchSheetShot | null>(`(() => {
+        const box = (el) => {
+          const r = el.getBoundingClientRect()
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+        }
+        const sheet = document.querySelector('[data-touch-sheet=${JSON.stringify(name)}]')
+        const dialog = sheet?.querySelector('[role="dialog"]')
+        if (!dialog) return null
+        // 面板 = 把手 + 标题（有的话）+ 正文
+        const kids = [...dialog.children]
+        const title = kids.length === 3 ? (kids[1].textContent ?? '').trim() : ''
+        const search = dialog.querySelector('input[type="text"]')
+        const rows = [...dialog.querySelectorAll('[data-model-item], label[data-tool-item], label[data-knowledge-base]')]
+        return {
+          dialog: box(dialog),
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
+          title,
+          search: search ? { fontSize: getComputedStyle(search).fontSize, focused: document.activeElement === search } : null,
+          rows: rows.map((r) => ({ id: ${TOUCH_ROW_ID}(r), height: r.getBoundingClientRect().height })),
+          checkboxes: rows
+            .map((r) => [r, r.querySelector('input[type="checkbox"]')])
+            .filter(([, c]) => !!c)
+            .map(([r, c]) => ({ id: ${TOUCH_ROW_ID}(r), box: box(c) }))
+        }
+      })()`),
+    touchSheetNames: () =>
+      client.eval<string[]>(
+        `[...document.querySelectorAll('[data-touch-sheet]')].map((s) => s.getAttribute('data-touch-sheet') ?? '')`
+      ),
+    modelPanel: () =>
+      client.eval<{ position: string; inTouchSheet: boolean } | null>(`(() => {
+        const panel = document.querySelector('[data-model-panel]')
+        if (!panel) return null
+        return { position: getComputedStyle(panel).position, inTouchSheet: !!panel.closest('[data-touch-sheet]') }
+      })()`),
+    queueMenu: () =>
+      client.eval<string[] | null>(`(() => {
+        const menu = document.querySelector('[data-queue-menu]')
+        if (!menu) return null
+        return [...menu.querySelectorAll('[data-queue-tier]')].map((b) => b.getAttribute('data-queue-tier') ?? '')
+      })()`),
+    composerClick: async (part) => {
+      const clicked = await client.eval<boolean>(`(() => {
+        const el = ${COMPOSER_PART(part)}
+        if (!el) return false
+        el.click()
+        return true
+      })()`)
+      if (!clicked) throw new Error(`no composer ${part} to click`)
+    },
+    composerValue: () =>
+      client.eval<string | null>(`document.querySelector('textarea')?.value ?? null`),
+    typeTrusted: async (text) => {
+      const focused = await client.eval<boolean>(`(() => {
+        const ta = document.querySelector('textarea')
+        if (!ta) return false
+        ta.focus()
+        ta.selectionStart = ta.selectionEnd = ta.value.length
+        return document.activeElement === ta
+      })()`)
+      if (!focused) throw new Error('no composer textarea to type into')
+      await client.send('Input.insertText', { text })
+    },
+    pressEnterTrusted: async () => {
+      const base = {
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13
+      }
+      await client.send('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        ...base,
+        text: '\r',
+        unmodifiedText: '\r'
+      })
+      await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    },
     thinkingShots: () =>
       client.eval<ThinkingBlockShot[]>(`(() => {
         const answerOf = (card) =>

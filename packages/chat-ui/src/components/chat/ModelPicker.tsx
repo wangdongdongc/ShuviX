@@ -1,4 +1,5 @@
 import { getHostApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
+import { useChatDensity } from '../../host/chatHostContext'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../stores/chatStore'
@@ -33,6 +34,7 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
   const providers = useModelCatalogStore((s) => s.providers)
   const availableModels = useModelCatalogStore((s) => s.availableModels)
   const { activeProvider, activeModel, setActiveProvider, setActiveModel } = useChatHost().models
+  const density = useChatDensity()
 
   const enabledProviders = useMemo(() => providers.filter((p) => p.isEnabled), [providers])
 
@@ -118,6 +120,7 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
   return (
     <ModelSelect
       variant="inline"
+      density={density}
       readonly={isReadonly}
       availableModels={availableModels}
       providers={enabledProviders.map((p) => ({

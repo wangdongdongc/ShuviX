@@ -63,9 +63,22 @@ export interface ChatHostValue {
    * 视图钉在一条会话上（悬浮窗、md 窗口、Chrome 侧边栏），会把人带去别的会话的入口（「从这里分支」）不画。
    */
   openSession?: (sessionId: string) => void
+  /**
+   * 控件密度：'touch' = 手指的尺寸（手机布局的 web 客户端，MobileShell 给）；不给 = 'compact'（桌面窗口、
+   * Chrome 侧边栏）。同一套组件两档尺寸，不是另一套手机界面：输入卡片的工具行按它放大到约 36px，模型 / 扩展
+   * 选择器在 touch 下从底部抽屉打开，扩展入口换成带字的胶囊（手机没有悬停提示，三个图标加数字读不出意思）
+   */
+  density?: ChatDensity
 }
 
+export type ChatDensity = 'compact' | 'touch'
+
 export const ChatHostContext = createContext<ChatHostValue | null>(null)
+
+/** 宿主给的控件密度（没有 ChatHostProvider 的地方也能读：当作 compact） */
+export function useChatDensity(): ChatDensity {
+  return useContext(ChatHostContext)?.density ?? 'compact'
+}
 
 /** 对话框组件/hooks 读取宿主注入状态的唯一入口 */
 export function useChatHost(): ChatHostValue {

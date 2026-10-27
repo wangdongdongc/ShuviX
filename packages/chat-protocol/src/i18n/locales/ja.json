@@ -264,7 +264,10 @@
     "pasteChipChars": "[貼り付けテキスト #{{seq}} · {{chars}} 文字]",
     "pasteName": "貼り付けテキスト #{{seq}}",
     "atSectionSessions": "セッション",
-    "atRouteOnly": "{{name}}のみ"
+    "atRouteOnly": "{{name}}のみ",
+    "extensions": "拡張",
+    "attach": "画像を追加",
+    "placeholderTouch": "ShuviX にメッセージ"
   },
   "compact": {
     "summaryLabel": "会話の要約（自動圧縮済み）"
@@ -401,7 +404,8 @@
     "withdraw": "取り消す",
     "withdrawHint": "このキューのメッセージを取り消す",
     "alreadyPlaced": "すでに送信済みのため取り消せません",
-    "withdrawFailed": "取り消しに失敗しました：{{error}}"
+    "withdrawFailed": "取り消しに失敗しました：{{error}}",
+    "touchSendHint": "今すぐ送る — 長押しでほかの送り方を選べます"
   },
   "threadDrawer": {
     "running": "実行中…",

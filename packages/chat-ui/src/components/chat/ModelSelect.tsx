@@ -9,6 +9,9 @@
  * （输入栏用 ModelPicker 包装，设置用 ModelDefaultsSettings 包装）。
  *
  * 下拉面板经 portal 渲染到 body（fixed 定位 + 按空间自动翻转），以逃离容器 overflow 裁剪。
+ * inline 在触屏密度（`density: 'touch'`，手机布局）下：触发器是 36px 高的胶囊，面板换成底部抽屉
+ * （TouchSheet），每行 44px 左右；搜索框不自动聚焦（一打开就弹键盘会把抽屉顶走）、字号 16px（iOS 聚焦小于
+ * 16px 的输入框会放大整页）。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -27,6 +30,8 @@ import {
 } from 'lucide-react'
 import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
 import { ProviderIcon } from '../settings/ProviderIcons'
+import { TouchSheet } from '../common/TouchSheet'
+import type { ChatDensity } from '../../host/chatHostContext'
 
 export interface ModelSelectThinking {
   level: string
@@ -66,6 +71,8 @@ export interface ModelSelectProps {
   configureProvidersLabel?: string
   /** 可选提供商元信息（用于图标 name / 显示名 displayName）；缺省回退 availableModels.providerName */
   providers?: { id: string; name: string; displayName?: string }[]
+  /** inline 的控件密度（见文件头）；缺省 compact */
+  density?: ChatDensity
 }
 
 function parseCaps(json: string): Record<string, unknown> {
@@ -92,7 +99,8 @@ export function ModelSelect({
   thinking,
   onConfigureProviders,
   configureProvidersLabel,
-  providers
+  providers,
+  density = 'compact'
 }: ModelSelectProps): React.JSX.Element {
   const { t } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -101,6 +109,8 @@ export function ModelSelect({
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(provider ? [provider] : []))
   const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null)
+  // 只有输入栏那一格换抽屉：设置里的下拉框（boxed）在哪都是下拉框
+  const touch = variant === 'inline' && density === 'touch'
 
   // 提供商列表：优先用传入的 providers（保留内部 name 作图标键、displayName 作显示名），
   // 否则从 availableModels 派生（此时以 providerName 兼作二者）
@@ -159,17 +169,18 @@ export function ModelSelect({
 
   // 仅挂/卸监听（初始定位在 toggle 里同步测量，避免在 effect 里直接 setState）
   useLayoutEffect(() => {
-    if (!open) return
+    if (!open || touch) return
     window.addEventListener('scroll', reposition, true)
     window.addEventListener('resize', reposition)
     return () => {
       window.removeEventListener('scroll', reposition, true)
       window.removeEventListener('resize', reposition)
     }
-  }, [open, reposition])
+  }, [open, touch, reposition])
 
+  // 抽屉不走这条：点遮罩由遮罩自己关（在 mousedown 就卸掉抽屉，随后那一下 click 会落到抽屉底下的东西上）
   useEffect(() => {
-    if (!open) return
+    if (!open || touch) return
     const onDown = (e: MouseEvent): void => {
       const target = e.target as Node
       if (ref.current?.contains(target) || panelRef.current?.contains(target)) return
@@ -178,18 +189,22 @@ export function ModelSelect({
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
+  }, [open, touch])
+
+  const close = (): void => {
+    setOpen(false)
+    setQuery('')
+  }
 
   const toggle = (): void => {
     if (readonly) return
     if (open) {
-      setOpen(false)
-      setQuery('')
+      close()
       return
     }
     setExpanded(new Set(provider ? [provider] : []))
     setQuery('')
-    reposition()
+    if (!touch) reposition()
     setOpen(true)
   }
 
@@ -228,14 +243,23 @@ export function ModelSelect({
 
   // ── 触发器 ──
   const brain =
-    showThinking && thinking!.level !== 'off' ? <Brain size={10} className="flex-shrink-0" /> : null
+    showThinking && thinking!.level !== 'off' ? (
+      <Brain size={touch ? 14 : 10} className="flex-shrink-0" />
+    ) : null
+  // 触屏：36px 的描边胶囊，模型名占满剩下的宽度、放不下才截（工具行里它是先让的那一格）
+  const inlineTriggerCls = touch
+    ? 'min-w-0 max-w-full inline-flex items-center gap-1.5 h-9 px-3 rounded-full border border-border-secondary/60 text-[13px] transition-colors active:bg-bg-hover'
+    : 'min-w-0 max-w-full inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 transition-colors border border-transparent'
+  const modelNameCls = touch ? 'min-w-0 truncate' : 'min-w-0 max-w-[120px] truncate'
   const trigger =
     variant === 'inline' ? (
       readonly ? (
-        <span className="min-w-0 inline-flex items-center gap-1 text-[11px] text-text-tertiary cursor-default">
+        <span
+          className={`${touch ? 'min-w-0 inline-flex items-center gap-1.5 h-9 px-1 text-[13px]' : 'min-w-0 inline-flex items-center gap-1 text-[11px]'} text-text-tertiary cursor-default`}
+        >
           {hasSelection ? (
             <>
-              <span className="min-w-0 max-w-[120px] truncate">{model}</span>
+              <span className={modelNameCls}>{model}</span>
               {brain}
             </>
           ) : (
@@ -246,21 +270,24 @@ export function ModelSelect({
         <button
           type="button"
           onClick={toggle}
-          className={`min-w-0 max-w-full inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 transition-colors border border-transparent ${
+          data-model-trigger=""
+          className={`${inlineTriggerCls} ${
             hasSelection
-              ? 'text-text-tertiary hover:text-text-secondary hover:border-border-secondary'
+              ? touch
+                ? 'text-text-secondary'
+                : 'text-text-tertiary hover:text-text-secondary hover:border-border-secondary'
               : 'text-amber-500 hover:text-amber-400'
           }`}
         >
           {hasSelection ? (
             <>
-              <span className="min-w-0 max-w-[120px] truncate">{model}</span>
+              <span className={modelNameCls}>{model}</span>
               {brain}
             </>
           ) : (
             <span className="truncate">{t('input.selectModel')}</span>
           )}
-          <ChevronDown size={11} className="flex-shrink-0" />
+          <ChevronDown size={touch ? 15 : 11} className="flex-shrink-0" />
         </button>
       )
     ) : (
@@ -306,6 +333,152 @@ export function ModelSelect({
       </>
     )
 
+  // ── 面板内容（下拉面板与触屏抽屉共用；触屏只是放大行高与字号） ──
+  const panelBody = (
+    <>
+      {/* 搜索框 */}
+      <div
+        className={
+          touch
+            ? 'px-3 pb-2 border-b border-border-secondary'
+            : 'px-2 py-1.5 border-b border-border-secondary'
+        }
+      >
+        <div
+          className={`flex items-center rounded bg-bg-primary border border-border-secondary ${
+            touch ? 'gap-2 h-10 px-3 rounded-lg' : 'gap-1.5 px-2 py-1'
+          }`}
+        >
+          <Search size={touch ? 16 : 11} className="text-text-tertiary" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('input.searchModel') || 'Search models...'}
+            className={`flex-1 min-w-0 bg-transparent text-text-primary outline-none placeholder:text-text-tertiary ${
+              touch ? 'text-[16px]' : 'text-[11px]'
+            }`}
+            autoFocus={!touch}
+          />
+        </div>
+      </div>
+
+      <div
+        className={
+          touch
+            ? 'min-h-0 flex-1 overflow-y-auto overscroll-contain py-1'
+            : 'max-h-64 overflow-y-auto py-1'
+        }
+      >
+        {providerList.map((p) => {
+          const models = providerModels.get(p.id) || []
+          if (query && models.length === 0) return null
+          const isExpanded = expanded.has(p.id) || !!query
+          const isActive = p.id === provider
+          return (
+            <div key={p.id}>
+              <button
+                type="button"
+                onClick={() => toggleProvider(p.id)}
+                className={`w-full flex items-center transition-colors hover:bg-bg-hover ${
+                  touch ? 'gap-2.5 min-h-11 px-4 text-[15px]' : 'gap-1.5 px-2.5 py-1 text-[11px]'
+                } ${isActive ? 'text-text-primary font-medium' : 'text-text-secondary'}`}
+              >
+                <ProviderIcon name={p.iconKey} />
+                <span className="truncate flex-1 text-left">{p.label}</span>
+                <span className="text-text-tertiary shrink-0">
+                  {isExpanded ? (
+                    <ChevronUp size={touch ? 16 : 11} />
+                  ) : (
+                    <ChevronDown size={touch ? 16 : 11} />
+                  )}
+                </span>
+              </button>
+
+              {isExpanded && (
+                <div>
+                  {models.length === 0 ? (
+                    <div
+                      className={`text-text-tertiary italic ${
+                        touch ? 'pl-10 pr-4 py-2 text-[13px]' : 'pl-5 pr-2.5 py-1 text-[10px]'
+                      }`}
+                    >
+                      {t('input.noModels') || 'No models available'}
+                    </div>
+                  ) : (
+                    models.map((m) => {
+                      const caps = parseCaps(m.capabilities)
+                      const isSelected = p.id === provider && m.modelId === model
+                      const capSize = touch ? 14 : 10
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          data-model-item={`${p.id}/${m.modelId}`}
+                          onClick={() => pick(p.id, m.modelId)}
+                          className={`w-full text-left transition-colors flex items-center hover:bg-bg-hover ${
+                            touch ? 'gap-2.5 min-h-11 pl-10 pr-4' : 'gap-1.5 pl-5 pr-2.5 py-1'
+                          } ${
+                            isSelected
+                              ? 'bg-bg-hover text-text-primary font-medium'
+                              : 'text-text-secondary hover:text-text-primary'
+                          }`}
+                        >
+                          <span
+                            className={`truncate flex-1 ${touch ? 'text-[15px]' : 'text-[11px]'}`}
+                          >
+                            {m.modelId}
+                          </span>
+                          <div className="flex items-center gap-1 shrink-0 text-text-tertiary">
+                            {!!caps.vision && <Eye size={capSize} />}
+                            {!!caps.functionCalling && <Wrench size={capSize} />}
+                            {!!caps.reasoning && <Brain size={capSize} />}
+                            {!!caps.imageOutput && <ImageIcon size={capSize} />}
+                            {!!caps.audioInput && <Mic size={capSize} />}
+                          </div>
+                        </button>
+                      )
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* 思考深度（可选，仅当前模型支持 reasoning 时） */}
+      {showThinking && (
+        <div
+          className={`flex items-center border-t border-border-secondary ${
+            touch ? 'gap-2 px-3 py-2' : 'gap-1 px-2 py-1.5'
+          }`}
+        >
+          <Brain size={touch ? 16 : 11} className="text-text-tertiary flex-shrink-0" />
+          <div className={`flex items-center flex-1 ${touch ? 'gap-1' : 'gap-0.5'}`}>
+            {thinking!.levels.map((l) => (
+              <button
+                key={l.value}
+                type="button"
+                data-thinking-level={l.value}
+                onClick={() => thinking!.onChange(l.value)}
+                className={`flex-1 rounded transition-colors ${
+                  touch ? 'h-9 text-[13px] rounded-lg' : 'text-[10px] px-1 py-0.5'
+                } ${
+                  thinking!.level === l.value
+                    ? 'bg-bg-hover text-text-primary font-medium'
+                    : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary'
+                }`}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  )
+
   const containerClass =
     variant === 'inline'
       ? 'relative min-w-0 inline-flex items-center group'
@@ -316,13 +489,21 @@ export function ModelSelect({
       {trigger}
 
       {/* 悬浮 tooltip：inline 且已选、未展开时显示完整模型名 */}
-      {variant === 'inline' && !open && hasSelection && (
+      {variant === 'inline' && !touch && !open && hasSelection && (
         <div className="pointer-events-none absolute left-0 bottom-6 z-20 hidden rounded-md border border-border-primary bg-bg-secondary px-2 py-1 shadow-xl group-hover:block">
           <div className="text-[11px] text-text-primary whitespace-nowrap">{model}</div>
         </div>
       )}
 
+      {open && touch && (
+        <TouchSheet name="model" onClose={close} panelRef={panelRef}>
+          <div data-model-panel className="flex min-h-0 flex-1 flex-col">
+            {panelBody}
+          </div>
+        </TouchSheet>
+      )}
       {open &&
+        !touch &&
         panelStyle &&
         createPortal(
           <div
@@ -331,107 +512,7 @@ export function ModelSelect({
             style={panelStyle}
             className="picker-panel rounded-md border border-border-primary bg-bg-secondary shadow-lg overflow-hidden flex flex-col"
           >
-            {/* 搜索框 */}
-            <div className="px-2 py-1.5 border-b border-border-secondary">
-              <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-bg-primary border border-border-secondary">
-                <Search size={11} className="text-text-tertiary" />
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={t('input.searchModel') || 'Search models...'}
-                  className="flex-1 bg-transparent text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
-                  autoFocus
-                />
-              </div>
-            </div>
-
-            <div className="max-h-64 overflow-y-auto py-1">
-              {providerList.map((p) => {
-                const models = providerModels.get(p.id) || []
-                if (query && models.length === 0) return null
-                const isExpanded = expanded.has(p.id) || !!query
-                const isActive = p.id === provider
-                return (
-                  <div key={p.id}>
-                    <button
-                      type="button"
-                      onClick={() => toggleProvider(p.id)}
-                      className={`w-full flex items-center gap-1.5 px-2.5 py-1 text-[11px] transition-colors hover:bg-bg-hover ${
-                        isActive ? 'text-text-primary font-medium' : 'text-text-secondary'
-                      }`}
-                    >
-                      <ProviderIcon name={p.iconKey} />
-                      <span className="truncate flex-1 text-left">{p.label}</span>
-                      <span className="text-text-tertiary shrink-0">
-                        {isExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-                      </span>
-                    </button>
-
-                    {isExpanded && (
-                      <div>
-                        {models.length === 0 ? (
-                          <div className="pl-5 pr-2.5 py-1 text-[10px] text-text-tertiary italic">
-                            {t('input.noModels') || 'No models available'}
-                          </div>
-                        ) : (
-                          models.map((m) => {
-                            const caps = parseCaps(m.capabilities)
-                            const isSelected = p.id === provider && m.modelId === model
-                            return (
-                              <button
-                                key={m.id}
-                                type="button"
-                                data-model-item={`${p.id}/${m.modelId}`}
-                                onClick={() => pick(p.id, m.modelId)}
-                                className={`w-full text-left pl-5 pr-2.5 py-1 transition-colors flex items-center gap-1.5 hover:bg-bg-hover ${
-                                  isSelected
-                                    ? 'bg-bg-hover text-text-primary font-medium'
-                                    : 'text-text-secondary hover:text-text-primary'
-                                }`}
-                              >
-                                <span className="text-[11px] truncate flex-1">{m.modelId}</span>
-                                <div className="flex items-center gap-1 shrink-0 text-text-tertiary">
-                                  {!!caps.vision && <Eye size={10} />}
-                                  {!!caps.functionCalling && <Wrench size={10} />}
-                                  {!!caps.reasoning && <Brain size={10} />}
-                                  {!!caps.imageOutput && <ImageIcon size={10} />}
-                                  {!!caps.audioInput && <Mic size={10} />}
-                                </div>
-                              </button>
-                            )
-                          })
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* 思考深度（可选，仅当前模型支持 reasoning 时） */}
-            {showThinking && (
-              <div className="flex items-center gap-1 border-t border-border-secondary px-2 py-1.5">
-                <Brain size={11} className="text-text-tertiary flex-shrink-0" />
-                <div className="flex items-center gap-0.5 flex-1">
-                  {thinking!.levels.map((l) => (
-                    <button
-                      key={l.value}
-                      type="button"
-                      data-thinking-level={l.value}
-                      onClick={() => thinking!.onChange(l.value)}
-                      className={`flex-1 text-[10px] px-1 py-0.5 rounded transition-colors ${
-                        thinking!.level === l.value
-                          ? 'bg-bg-hover text-text-primary font-medium'
-                          : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary'
-                      }`}
-                    >
-                      {l.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            {panelBody}
           </div>,
           document.body
         )}

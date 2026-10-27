@@ -68,6 +68,11 @@ vi.mock('@shuvix/chat-ui', () => ({
 
 import { useChatStore } from '../../../stores/chatStore'
 import { ToolPicker } from '../ToolPicker'
+import {
+  ChatHostContext,
+  type ChatDensity,
+  type ChatHostValue
+} from '../../../host/chatHostContext'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -133,10 +138,24 @@ function seedSession(enabledTools: string[], created = false): void {
   useChatStore.getState().setActiveSessionId(SID)
 }
 
-async function renderPicker(items: ToolItem[] = ITEMS): Promise<void> {
+/** `density` 给了就包一层宿主上下文（手机布局给 'touch'）；不给 = 没有 Provider（compact） */
+function pickerElement(density?: ChatDensity): React.ReactElement {
+  return density
+    ? createElement(
+        ChatHostContext.Provider,
+        { value: { density } as ChatHostValue },
+        createElement(ToolPicker)
+      )
+    : createElement(ToolPicker)
+}
+
+async function renderPicker(
+  items: ToolItem[] = ITEMS,
+  opts: { density?: ChatDensity } = {}
+): Promise<void> {
   mocks.list.mockResolvedValue(items)
   await act(async () => {
-    root.render(createElement(ToolPicker))
+    root.render(pickerElement(opts.density))
   })
   await flush()
 }
@@ -148,27 +167,31 @@ const pickerRoot = (): HTMLElement => {
 }
 const trigger = (): HTMLButtonElement => pickerRoot().querySelector('button') as HTMLButtonElement
 
+/*
+ * 面板里的行一律在 document 里找：桌面的下拉面板就在 container 里，触屏的抽屉 portal 到 body（不在
+ * container 里）—— 两种密度共用这几个助手。「抽屉不在 container 里」由 TC-TP-T3 单独断言。
+ */
 async function openPanel(): Promise<void> {
-  if (container.querySelector('label[data-tool-item]')) return
+  if (document.querySelector('label[data-tool-item]')) return
   await act(async () => {
     trigger().click()
   })
   await flush()
-  if (!container.querySelector('label[data-tool-item]')) throw new Error('panel did not open')
+  if (!document.querySelector('label[data-tool-item]')) throw new Error('panel did not open')
 }
 
 /** 收起面板（再点一次触发钮）—— 悬浮摘要只在收起时渲染 */
 async function closePanel(): Promise<void> {
-  if (!container.querySelector('label[data-tool-item]')) return
+  if (!document.querySelector('label[data-tool-item]')) return
   await act(async () => {
     trigger().click()
   })
   await flush()
-  if (container.querySelector('label[data-tool-item]')) throw new Error('panel did not close')
+  if (document.querySelector('label[data-tool-item]')) throw new Error('panel did not close')
 }
 
 const row = (name: string): HTMLLabelElement => {
-  const hit = [...container.querySelectorAll<HTMLLabelElement>('label[data-tool-item]')].find(
+  const hit = [...document.querySelectorAll<HTMLLabelElement>('label[data-tool-item]')].find(
     (label) => label.getAttribute('data-tool-item') === name
   )
   if (!hit) throw new Error(`row ${name} not rendered`)
@@ -872,4 +895,297 @@ describe('知识库一组：与配置卡同一份数据，从不预判', () => {
     expect(kbRows()).toHaveLength(0)
     expect(mocks.listeners.size).toBe(0)
   })
+})
+
+// ─── 触屏密度（手机布局）：胶囊入口 + 底部抽屉 ─────────────────────────────────
+
+describe('触屏密度：「扩展 N」胶囊、底部抽屉', () => {
+  const TOUCH = { density: 'touch' as const }
+  const extensions = (): string => i18n.t('input.extensions')
+  const sheet = (): HTMLElement | null =>
+    document.querySelector<HTMLElement>('[data-touch-sheet="extensions"]')
+  const sheetDialog = (): HTMLElement => {
+    const el = sheet()?.querySelector<HTMLElement>('[role="dialog"]')
+    if (!el) throw new Error('extensions sheet not open')
+    return el
+  }
+  const backdrop = (): HTMLElement => {
+    const el = sheet()?.querySelector<HTMLElement>('[data-touch-sheet-backdrop]')
+    if (!el) throw new Error('extensions sheet backdrop not rendered')
+    return el
+  }
+  const extCount = (): string | null =>
+    trigger().querySelector('[data-extension-count]')?.textContent ?? null
+  const kbBox = (name: string): HTMLInputElement => {
+    const hit = document.querySelector<HTMLLabelElement>(`label[data-knowledge-base="${name}"]`)
+    if (!hit) throw new Error(`knowledge row ${name} not rendered`)
+    return hit.querySelector('input[type="checkbox"]') as HTMLInputElement
+  }
+  const mousedown = async (el: Element): Promise<void> => {
+    await act(async () => {
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    })
+    await flush()
+  }
+  const tapTrigger = async (): Promise<void> => {
+    await act(async () => {
+      trigger().click()
+    })
+    await flush()
+  }
+  const KB_OPTIONS = [
+    { name: 'notes', label: 'notes' },
+    { name: 'shuvix', label: 'ShuviX guide' }
+  ]
+
+  it('TC-TP-T1 入口：aria-label = 扩展、拼图图标 + 「扩展」字、计数 3（ctx + drawing + foo）；没有三个图标计数', async () => {
+    expect(extensions()).not.toBe('input.extensions')
+    seedSession(['skill:foo'])
+    await renderPicker(ITEMS, TOUCH)
+    const btn = trigger()
+    expect(btn.getAttribute('aria-label')).toBe(extensions())
+    expect(btn.querySelector('svg.lucide-puzzle')).not.toBeNull()
+    expect([...btn.querySelectorAll('span')].some((s) => s.textContent === extensions())).toBe(true)
+    // ITEMS：mcp:ctx（声明，开）= 1；drawing（声明，开）+ foo（勾了）= 2；bar 没勾；没有知识库 → 3
+    expect(extCount()).toBe('3')
+    expect(btn.querySelector('svg.lucide-server')).toBeNull()
+    expect(btn.querySelector('svg.lucide-book-open')).toBeNull()
+    expect(btn.querySelector('[data-knowledge-count]')).toBeNull()
+    expect(btn.querySelector('[data-mcp-connecting]')).toBeNull()
+  })
+
+  it.each<[string, string[], string[], string]>([
+    ['知识库勾了 shuvix → 4', ['skill:foo'], ['shuvix'], '4'],
+    ['取消了 drawing → 2', ['-skill:builtin:drawing', 'skill:foo'], [], '2']
+  ])('TC-TP-T1 计数 = MCP + 技能 + 知识库：%s', async (_label, tools, kb, expected) => {
+    mocks.knowledge = true
+    mocks.baseOptions.mockResolvedValue({ options: KB_OPTIONS, selected: kb, explicit: true })
+    seedSession(tools)
+    await renderPicker(ITEMS, TOUCH)
+    expect(extCount()).toBe(expected)
+    expect(trigger().querySelector('[data-knowledge-count]')).toBeNull()
+    expect(trigger().querySelector('svg.lucide-server')).toBeNull()
+  })
+
+  it('TC-TP-T1 正在连 MCP：拼图换成 [data-mcp-connecting]，计数照在', async () => {
+    seedSession(['skill:foo'])
+    useChatStore.setState({ sessionMcpConnecting: { [SID]: ['ctx'] } })
+    await renderPicker(ITEMS, TOUCH)
+    expect(trigger().querySelector('[data-mcp-connecting]')).not.toBeNull()
+    expect(trigger().querySelector('svg.lucide-puzzle')).toBeNull()
+    expect(extCount()).toBe('3')
+  })
+
+  it('TC-TP-T2 触屏没有悬浮摘要', async () => {
+    seedSession(['skill:foo'])
+    await renderPicker(ITEMS, TOUCH)
+    expect(summaryOf('[MCP]')).toBeNull()
+    expect(summaryOf('[Skills]')).toBeNull()
+  })
+
+  it('TC-TP-T3 点一下 → body 上的抽屉（不在 container 里）、标题「扩展」、没有下拉面板；五行都在，drawing 的文案同 TP-16', async () => {
+    mocks.knowledge = true
+    mocks.baseOptions.mockResolvedValue({ options: KB_OPTIONS, selected: [], explicit: true })
+    seedSession(['skill:foo'])
+    await renderPicker(ITEMS, TOUCH)
+    expect(sheet()).toBeNull()
+    await tapTrigger()
+    const el = sheet()
+    expect(el).not.toBeNull()
+    expect(el!.parentElement).toBe(document.body)
+    expect(container.contains(el)).toBe(false)
+    expect(container.querySelector('[data-touch-sheet]')).toBeNull()
+    const kids = [...sheetDialog().children]
+    expect(kids.some((k) => k.textContent === extensions())).toBe(true)
+    expect(document.querySelector('.picker-panel')).toBeNull()
+
+    const names = [...sheetDialog().querySelectorAll('label[data-tool-item]')].map((l) =>
+      l.getAttribute('data-tool-item')
+    )
+    expect(names).toEqual([
+      'mcp:ctx',
+      'mcp:other',
+      'skill:builtin:drawing',
+      'skill:foo',
+      'skill:bar'
+    ])
+    expect(
+      [...sheetDialog().querySelectorAll('label[data-knowledge-base]')].map((l) =>
+        l.getAttribute('data-knowledge-base')
+      )
+    ).toEqual(['notes', 'shuvix'])
+
+    const drawing = row('skill:builtin:drawing')
+    expect(sheetDialog().contains(drawing)).toBe(true)
+    expect(drawing.querySelector('[data-chip-name]')?.textContent).toBe(drawingName())
+    expect(drawing.querySelector('[data-chip-identifier]')?.textContent).toBe('drawing')
+    expect(drawing.textContent).toContain(i18n.t('builtinSkill.drawing.hint'))
+  })
+
+  it('TC-TP-T4 抽屉里勾 bar → 写一次 [foo, bar]、计数 3 → 4、抽屉不关', async () => {
+    seedSession(['skill:foo'])
+    await renderPicker(ITEMS, TOUCH)
+    await openPanel()
+    expect(extCount()).toBe('3')
+    await click('skill:bar')
+    expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      enabledTools: ['skill:foo', 'skill:bar']
+    })
+    expect(box('skill:bar').checked).toBe(true)
+    expect(extCount()).toBe('4')
+    expect(sheet()).not.toBeNull()
+  })
+
+  it('TC-TP-T4 抽屉里取消 drawing → 写取消记号（同 TP-4）、计数 3 → 2、抽屉不关', async () => {
+    seedSession(['skill:foo'])
+    await renderPicker(ITEMS, TOUCH)
+    await openPanel()
+    await click('skill:builtin:drawing')
+    expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      enabledTools: ['skill:foo', '-skill:builtin:drawing']
+    })
+    expect(box('skill:builtin:drawing').checked).toBe(false)
+    expect(extCount()).toBe('2')
+    expect(sheet()).not.toBeNull()
+  })
+
+  it('TC-TP-T4 有 agent：先预判再 updateEnabledTools（同 TP-8）', async () => {
+    seedSession(['skill:foo'], true)
+    await renderPicker(ITEMS, TOUCH)
+    await openPanel()
+    await click('skill:bar')
+    expect(mocks.previewChange).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      enabledTools: ['skill:foo', 'skill:bar']
+    })
+    expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      enabledTools: ['skill:foo', 'skill:bar']
+    })
+    expect(mocks.previewChange.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.updateEnabledTools.mock.invocationCallOrder[0]
+    )
+    expect(sheet()).not.toBeNull()
+  })
+
+  it('TC-TP-T4 知识库一行 → updateKnowledgeBases、不预判（同 TP-K1）', async () => {
+    mocks.knowledge = true
+    mocks.baseOptions.mockResolvedValue({
+      options: KB_OPTIONS,
+      selected: ['shuvix'],
+      explicit: true
+    })
+    seedSession(['skill:foo'], true)
+    await renderPicker(ITEMS, TOUCH)
+    await openPanel()
+    expect(extCount()).toBe('4')
+    await act(async () => {
+      kbBox('notes').click()
+    })
+    await flush()
+    expect(mocks.updateKnowledgeBases).toHaveBeenCalledExactlyOnceWith({
+      id: SID,
+      knowledgeBases: ['shuvix', 'notes']
+    })
+    expect(mocks.previewChange).not.toHaveBeenCalled()
+    expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
+    expect(extCount()).toBe('5')
+    expect(sheet()).not.toBeNull()
+  })
+
+  it('TC-TP-T5 没有「点外面就关」：mousedown 在行上、在 body 上都不关；之后勾选照写；点遮罩关、不多写；再点入口又开', async () => {
+    seedSession(['skill:foo'])
+    await renderPicker(ITEMS, TOUCH)
+    await openPanel()
+    await mousedown(row('skill:bar'))
+    expect(sheet()).not.toBeNull()
+    await mousedown(document.body)
+    expect(sheet()).not.toBeNull()
+
+    await click('skill:bar')
+    expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      backdrop().click()
+    })
+    await flush()
+    expect(sheet()).toBeNull()
+    expect(document.querySelector('label[data-tool-item]')).toBeNull()
+    expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
+
+    await tapTrigger()
+    expect(sheet()).not.toBeNull()
+    expect(box('skill:bar').checked).toBe(true)
+  })
+})
+
+describe('桌面密度（compact）回归', () => {
+  it('TC-TP-C1 没有计数胶囊、没有拼图；三个图标计数照旧；打开是 [data-tool-picker] 里的下拉面板，body 上没有抽屉', async () => {
+    mocks.knowledge = true
+    mocks.baseOptions.mockResolvedValue({
+      options: [{ name: 'notes', label: 'notes' }],
+      selected: ['notes'],
+      explicit: true
+    })
+    seedSession(['skill:foo'])
+    await renderPicker()
+    expect(trigger().querySelector('[data-extension-count]')).toBeNull()
+    expect(trigger().querySelector('svg.lucide-puzzle')).toBeNull()
+    expect(counts()).toEqual({ mcp: '1', skill: '2' })
+    expect(trigger().querySelector('[data-knowledge-count] > span')?.textContent).toBe('1')
+
+    await openPanel()
+    expect(pickerRoot().querySelector('.picker-panel')).not.toBeNull()
+    expect(
+      pickerRoot().querySelector('.picker-panel label[data-tool-item="skill:foo"]')
+    ).not.toBeNull()
+    expect(document.querySelector('[data-touch-sheet]')).toBeNull()
+  })
+
+  it('TC-TP-C2 点外面就关：mousedown 在 body → 收起；再开，mousedown 在面板里的行上 → 不收', async () => {
+    seedSession(['skill:foo'])
+    await renderPicker()
+    await openPanel()
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+    await flush()
+    expect(pickerRoot().querySelector('.picker-panel')).toBeNull()
+
+    await openPanel()
+    await act(async () => {
+      row('skill:bar').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+    await flush()
+    expect(pickerRoot().querySelector('.picker-panel')).not.toBeNull()
+  })
+})
+
+describe('与名字相同的说明不再写一遍', () => {
+  const H_ITEMS: ToolItem[] = [
+    ...ITEMS,
+    { name: 'mcp:tavily', label: 'tavily', group: 'mcp:tavily', serverStatus: 'connected' },
+    { name: 'mcp:exa', label: 'EXA', group: 'mcp:exa', serverStatus: 'connected' },
+    { name: 'skill:baz', label: 'baz', group: '__skills__' }
+  ]
+  const hintOf = (name: string): string | null =>
+    row(name).querySelector('[data-chip-hint]')?.textContent ?? null
+  const occurrences = (text: string, needle: string): number => text.split(needle).length - 1
+
+  it.each<['compact' | 'touch']>([['compact'], ['touch']])(
+    'TC-TP-H1 %s：tavily / EXA / baz 没有说明；bar 的说明照在；drawing 的说明是界面文案',
+    async (density) => {
+      seedSession([])
+      await renderPicker(H_ITEMS, density === 'touch' ? { density } : {})
+      await openPanel()
+      expect(hintOf('mcp:tavily')).toBeNull()
+      expect(occurrences(row('mcp:tavily').textContent ?? '', 'tavily')).toBe(1)
+      expect(hintOf('mcp:exa')).toBeNull()
+      expect(hintOf('skill:baz')).toBeNull()
+      expect(hintOf('skill:bar')).toBe('bar skill')
+      expect(hintOf('skill:builtin:drawing')).toBe(i18n.t('builtinSkill.drawing.hint'))
+    }
+  )
 })

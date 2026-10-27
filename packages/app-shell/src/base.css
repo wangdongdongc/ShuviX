@@ -369,6 +369,19 @@ span.sb-icon {
   animation: picker-in 120ms ease-out;
 }
 
+/* 触屏密度下的选择面板（chat-ui TouchSheet）：从底部升起，与手机外壳的抽屉同一条曲线 */
+@keyframes touch-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.touch-sheet {
+  animation: touch-sheet-in 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
 /* ========== Zen 风格分组容器 ========== */
 
 /* 配置项分组：左线指示（替代灰色圆角边框） */

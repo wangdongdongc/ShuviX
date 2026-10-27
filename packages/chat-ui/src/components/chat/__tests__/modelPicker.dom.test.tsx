@@ -102,7 +102,13 @@ import {
 import { emptySessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { ModelPicker } from '../ModelPicker'
+import { ModelSelect } from '../ModelSelect'
 import { CacheBreakConfirmHost } from '../CacheBreakConfirm'
+import {
+  ChatHostContext,
+  type ChatDensity,
+  type ChatHostValue
+} from '../../../host/chatHostContext'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -203,18 +209,32 @@ function seed(opts: {
   mocks.notify()
 }
 
-/** `withConfirmHost`：旁边挂一个真的确认框宿主（输入框里就挂着一个），保不住缓存时才画得出框 */
-async function renderPicker(opts: { withConfirmHost?: boolean } = {}): Promise<void> {
+/** 包一层宿主上下文给控件密度（手机布局给 'touch'）；不给 = 没有 Provider（compact） */
+function withDensity(el: React.ReactElement, density?: ChatDensity): React.ReactElement {
+  return density
+    ? createElement(ChatHostContext.Provider, { value: { density } as ChatHostValue }, el)
+    : el
+}
+
+/**
+ * `withConfirmHost`：旁边挂一个真的确认框宿主（输入框里就挂着一个），保不住缓存时才画得出框；
+ * `density`：控件密度；`readonly`：ModelPicker 的只读
+ */
+async function renderPicker(
+  opts: { withConfirmHost?: boolean; density?: ChatDensity; readonly?: boolean } = {}
+): Promise<void> {
+  const Picker = ModelPicker as (props: { readonly?: boolean }) => React.JSX.Element
+  const picker = opts.readonly
+    ? createElement(Picker, { readonly: true })
+    : createElement(ModelPicker)
   await act(async () => {
     root.render(
-      opts.withConfirmHost
-        ? createElement(
-            Fragment,
-            null,
-            createElement(ModelPicker),
-            createElement(CacheBreakConfirmHost)
-          )
-        : createElement(ModelPicker)
+      withDensity(
+        opts.withConfirmHost
+          ? createElement(Fragment, null, picker, createElement(CacheBreakConfirmHost))
+          : picker,
+        opts.density
+      )
     )
   })
   await flush()
@@ -806,5 +826,224 @@ describe('MP-12 思考档位一行：共享的档位清单与文案', () => {
     for (const level of SELECTABLE_THINKING_LEVELS) {
       expect(i18n.t(THINKING_LEVEL_LABEL_KEYS[level])).not.toBe(THINKING_LEVEL_LABEL_KEYS[level])
     }
+  })
+})
+
+// ─── 触屏密度（手机布局）：底部抽屉 ─────────────────────────────────────────────
+
+describe('触屏密度：模型选择从底部抽屉打开', () => {
+  const TOUCH = { density: 'touch' as const }
+  const sheet = (): HTMLElement | null =>
+    document.querySelector<HTMLElement>('[data-touch-sheet="model"]')
+  const backdrop = (): HTMLElement => {
+    const el = sheet()?.querySelector<HTMLElement>('[data-touch-sheet-backdrop]')
+    if (!el) throw new Error('model sheet backdrop not rendered')
+    return el
+  }
+  const search = (): HTMLInputElement => {
+    const el = panel()?.querySelector<HTMLInputElement>('input[type="text"]')
+    if (!el) throw new Error('search input not rendered')
+    return el
+  }
+  const rows = (): string[] =>
+    [...document.querySelectorAll('[data-model-item]')].map(
+      (el) => el.getAttribute('data-model-item') ?? ''
+    )
+  async function typeSearch(value: string): Promise<void> {
+    const el = search()
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(el, value)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flush()
+  }
+  async function mousedown(el: Element): Promise<void> {
+    await act(async () => {
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    })
+    await flush()
+  }
+
+  it('TC-MS-T1 触发钮 [data-model-trigger] 显示 A、没有悬浮全名；点一下 → body 上的抽屉，面板不是 fixed 定位，两行模型 + 档位，搜索框不抢焦点', async () => {
+    seed({ active: SID })
+    await renderPicker(TOUCH)
+    const btn = trigger()
+    expect(btn.hasAttribute('data-model-trigger')).toBe(true)
+    expect(btn.textContent).toContain(A)
+    expect(nameTooltip()).toBeNull()
+
+    await openPanel()
+    const el = sheet()
+    expect(el).not.toBeNull()
+    expect(el!.parentElement).toBe(document.body)
+    expect(container.contains(el)).toBe(false)
+    const p = el!.querySelector<HTMLElement>('[data-model-panel]')
+    expect(p).not.toBeNull()
+    expect(p).toBe(panel())
+    expect(p!.style.position).toBe('')
+    expect(rows()).toEqual([`${P}/${A}`, `${P}/${B}`])
+    expect(p!.querySelectorAll('[data-thinking-level]').length).toBeGreaterThan(0)
+    expect(p!.querySelector('[data-thinking-level="high"]')).not.toBeNull()
+    expect(document.activeElement).not.toBe(search())
+  })
+
+  it('TC-MS-T1 只读：没有 [data-model-trigger]；点那段字什么都不开', async () => {
+    seed({ active: SID })
+    await renderPicker({ ...TOUCH, readonly: true })
+    expect(container.querySelector('[data-model-trigger]')).toBeNull()
+    const span = container0().querySelector('span')
+    expect(span?.textContent).toContain(A)
+    await clickEl(span as HTMLElement)
+    expect(sheet()).toBeNull()
+    expect(panel()).toBeNull()
+  })
+
+  it('TC-MS-T2 搜 b、点遮罩 → 抽屉关、什么都不写；再开 → 搜索清空、两行都在', async () => {
+    seed({ active: SID })
+    await renderPicker(TOUCH)
+    await openPanel()
+    await typeSearch('b')
+    expect(rows()).toEqual([`${P}/${B}`])
+    await clickEl(backdrop())
+    expect(sheet()).toBeNull()
+    expect(panel()).toBeNull()
+    expect(mocks.previewChange).not.toHaveBeenCalled()
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    expect(mocks.setActiveModel).not.toHaveBeenCalled()
+    expect(host()).toEqual({ provider: P, model: A })
+
+    await openPanel()
+    expect(search().value).toBe('')
+    expect(rows()).toEqual([`${P}/${A}`, `${P}/${B}`])
+  })
+
+  it('TC-MS-T3 点 B → 先预判、再 setModel 恰一次（同 MP-1）；host 显示 B、抽屉关', async () => {
+    seed({ active: SID })
+    await renderPicker(TOUCH)
+    await openPanel()
+    await clickEl(item(B))
+    expect(mocks.previewChange).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
+    expect(mocks.setModel).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
+    expect(mocks.previewChange.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.setModel.mock.invocationCallOrder[0]
+    )
+    expect(host()).toEqual({ provider: P, model: B })
+    expect(trigger().textContent).toContain(B)
+    expect(sheet()).toBeNull()
+  })
+
+  it('TC-MS-T4 没有「点外面就关」：mousedown 在 body、在 B 行上都不关；随后点 B 照常选中', async () => {
+    seed({ active: SID })
+    await renderPicker(TOUCH)
+    await openPanel()
+    await mousedown(document.body)
+    expect(sheet()).not.toBeNull()
+    await mousedown(item(B))
+    expect(sheet()).not.toBeNull()
+    await clickEl(item(B))
+    expect(mocks.setModel).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      provider: P,
+      model: B
+    })
+    expect(host()).toEqual({ provider: P, model: B })
+  })
+
+  it('TC-MS-T5 点档位 high → setThinkingLevel({sessionId, level:"high"})，抽屉不关', async () => {
+    seed({ active: SID })
+    await renderPicker(TOUCH)
+    await openPanel()
+    await clickEl(thinkingButton('high'))
+    expect(mocks.setThinkingLevel).toHaveBeenCalledExactlyOnceWith({
+      sessionId: SID,
+      level: 'high'
+    })
+    expect(sheet()).not.toBeNull()
+    expect(mocks.setModel).not.toHaveBeenCalled()
+  })
+})
+
+describe('boxed 变体在哪都是下拉框；compact 回归', () => {
+  it.each<[string, boolean]>([
+    ['直接给 density="touch"', false],
+    ['再套一层 touch 宿主', true]
+  ])(
+    'TC-MS-B1 boxed（%s）：面板是 body 的直接子节点、fixed 定位、没有抽屉；搜索框聚焦；mousedown 在 body 上就关',
+    async (_label, underProvider) => {
+      const select = createElement(ModelSelect, {
+        variant: 'boxed',
+        density: 'touch',
+        availableModels: [modelRow(A, CAPS_A), modelRow(B, CAPS_B)],
+        provider: P,
+        model: A,
+        onChange: () => {}
+      })
+      await act(async () => {
+        root.render(underProvider ? withDensity(select, 'touch') : select)
+      })
+      await flush()
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('button')!.click()
+      })
+      await flush()
+      const p = panel()
+      expect(p).not.toBeNull()
+      expect(p!.parentElement).toBe(document.body)
+      expect(p!.style.position).toBe('fixed')
+      expect(document.querySelector('[data-touch-sheet]')).toBeNull()
+      expect(document.activeElement).toBe(p!.querySelector('input[type="text"]'))
+      await act(async () => {
+        document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      })
+      await flush()
+      expect(panel()).toBeNull()
+    }
+  )
+
+  it('TC-MS-C1 compact：触发钮带 data-model-trigger；打开是 portal 的 fixed 面板、没有抽屉、搜索框聚焦；mousedown 在面板里不关，在 body 上关且清掉搜索', async () => {
+    seed({ active: SID })
+    await renderPicker()
+    expect(trigger().hasAttribute('data-model-trigger')).toBe(true)
+    await openPanel()
+    const p = panel()!
+    expect(p.parentElement).toBe(document.body)
+    expect(p.style.position).toBe('fixed')
+    expect(document.querySelector('[data-touch-sheet]')).toBeNull()
+    const input = p.querySelector<HTMLInputElement>('input[type="text"]')!
+    expect(document.activeElement).toBe(input)
+
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(input, 'b')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flush()
+    expect(document.querySelectorAll('[data-model-item]')).toHaveLength(1)
+
+    await act(async () => {
+      item(B).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+    await flush()
+    expect(panel()).not.toBeNull()
+
+    await act(async () => {
+      document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    })
+    await flush()
+    expect(panel()).toBeNull()
+    expect(mocks.setModel).not.toHaveBeenCalled()
+    // 再开：搜索是空的、两行都在（收起与打开都会清掉搜索，这里只看结果）
+    await openPanel()
+    expect(panel()!.querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe('')
+    expect(document.querySelectorAll('[data-model-item]')).toHaveLength(2)
   })
 })
