@@ -12052,6 +12052,13 @@ export type WebMobileTouchTarget =
   | { touchSheetItem: string; checkbox?: boolean }
   /** 长按「立即」弹出的菜单（`data-queue-menu`）里的一档 */
   | { queueMenuTier: 'steer' | 'followUp' }
+  /** 对话流里一条用户消息（按 `data-msg-id`）的气泡 `[data-user-bubble]`：触屏下点它翻出 / 收起复制与回退 */
+  | { userBubble: string }
+  /**
+   * 对话流里一张助手卡（按 `data-msg-id`，卡的最后一条消息）的终答正文（`.min-w-0 > .markdown-body`）——
+   * 桌面上悬停它让卡的操作行显形
+   */
+  | { replyBody: string }
 
 /** 手机布局里一个标签按钮 */
 export interface WebMobileTabShot {
@@ -12187,6 +12194,8 @@ export interface WebMobileSettingsTabShot {
 export interface TouchSheetShot {
   /** 面板本体（`role=dialog`，不含遮罩） */
   dialog: BoxShot
+  /** 面板还在升起（它自己的 CSS 动画没播完）—— 这时的几何是动画中间某一帧，不是落定的位置 */
+  animating: boolean
   innerWidth: number
   innerHeight: number
   /** 标题（把手与正文之间那一格；没有 → ''） */
@@ -12197,6 +12206,28 @@ export interface TouchSheetShot {
   rows: Array<{ id: string; height: number }>
   /** 各行的勾选框（扩展抽屉才有），id 同上 */
   checkboxes: Array<{ id: string; box: BoxShot }>
+}
+
+/** 对话流里一条用户消息的几何与操作（见 `userMessageShot`；视口坐标，CSS px） */
+export interface UserMessageShot {
+  /** 气泡 `[data-user-bubble]` */
+  bubble: BoxShot
+  /** 气泡上方那一行 `[data-user-meta]`（来源 / 采纳的提议）；没有 → null */
+  meta: BoxShot | null
+  /** meta 行里最后一枚标签（来源标签排在提议标签之后）：盒子与 `data-origin`（提议标签没有 → null）；没有 → null */
+  chip: { box: BoxShot; origin: string | null } | null
+  /** `[data-user-actions]` 里带 aria-label 的按钮（复制 / 回退；展开键没有 aria-label），DOM 序，带计算 opacity */
+  actions: Array<{ label: string; box: BoxShot; opacity: string }>
+}
+
+/** 助手卡操作行 `[data-message-actions]` 里的一颗按钮（见 `assistantActionsShot`） */
+export interface AssistantActionShot {
+  title: string
+  box: BoxShot
+  /** 计算 opacity（桌面悬浮才显形：不悬停时 '0'） */
+  opacity: string
+  /** 按钮里那枚图标（svg）的盒子；没有 → null */
+  icon: BoxShot | null
 }
 
 export interface WebMobilePane {
@@ -12355,6 +12386,20 @@ export interface WebMobilePane {
   } | null>
   /** `.opacity-30`（专注模式压暗）的个数：'shell' 只数手机布局里的，'document' 整页 */
   dimmedCount(scope: 'shell' | 'document'): Promise<number>
+  /**
+   * 对话流里一条用户消息（`[data-msg-id=<msgId>]`）的气泡、气泡上方的 meta 行与其最后一枚标签、气泡下方操作行里
+   * 的按钮（复制 / 回退，带计算 opacity）；消息或气泡不在 → null。桌面窗口与手机布局通用
+   */
+  userMessageShot(msgId: string): Promise<UserMessageShot | null>
+  /** 一张助手卡（`[data-msg-id=<msgId>]`）操作行里的按钮（DOM 序）；卡或操作行不在 → [] */
+  assistantActionsShot(msgId: string): Promise<AssistantActionShot[]>
+  /** 那张卡的终答正文（`.min-w-0 > .markdown-body`）的盒子；不在 → null */
+  replyBody(msgId: string): Promise<BoxShot | null>
+  /**
+   * 把鼠标挪到一个目标的中心（同 `tap` 的认法与命中检查；CDP `Input.dispatchMouseEvent` mouseMoved —— 真的悬停，
+   * `:hover` 跟着变）；`null` = 挪到视口左上角 (1, 1)，离开对话流
+   */
+  hover(target: WebMobileTouchTarget | null): Promise<void>
 
   /**
    * 在 window 上挂一个 contextmenu 计数器（并归零）—— **捕获**阶段：菜单的处理函数（showContextMenu）会
@@ -12482,6 +12527,10 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     }
     if ('queueMenuTier' in target)
       return `document.querySelector('[data-queue-menu] [data-queue-tier=${JSON.stringify(target.queueMenuTier)}]')`
+    if ('userBubble' in target)
+      return `document.querySelector('[data-msg-id=${JSON.stringify(target.userBubble)}] [data-user-bubble]')`
+    if ('replyBody' in target)
+      return `document.querySelector('[data-msg-id=${JSON.stringify(target.replyBody)}] .min-w-0 > .markdown-body')`
     return `${SHEET}?.querySelector('[data-bottom-sheet-backdrop]')`
   }
 
@@ -12895,6 +12944,7 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
         const rows = [...dialog.querySelectorAll('[data-model-item], label[data-tool-item], label[data-knowledge-base]')]
         return {
           dialog: box(dialog),
+          animating: dialog.getAnimations().some((a) => a.playState !== 'finished'),
           innerWidth: window.innerWidth,
           innerHeight: window.innerHeight,
           title,
@@ -13071,6 +13121,57 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       client.eval<number>(
         `(${scope === 'shell' ? SHELL : 'document'})?.querySelectorAll('.opacity-30').length ?? 0`
       ),
+    userMessageShot: (msgId) =>
+      client.eval<UserMessageShot | null>(`(() => {
+        const msg = document.querySelector('[data-msg-id=${JSON.stringify(msgId)}]')
+        const bubble = msg?.querySelector('[data-user-bubble]')
+        if (!msg || !bubble) return null
+        const box = (el) => {
+          const r = el.getBoundingClientRect()
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+        }
+        const meta = msg.querySelector('[data-user-meta]')
+        const chip = meta?.lastElementChild ?? null
+        const actions = msg.querySelector('[data-user-actions]')
+        return {
+          bubble: box(bubble),
+          meta: meta ? box(meta) : null,
+          chip: chip ? { box: box(chip), origin: chip.getAttribute('data-origin') } : null,
+          actions: [...(actions?.querySelectorAll('button[aria-label]') ?? [])].map((b) => ({
+            label: b.getAttribute('aria-label') ?? '',
+            box: box(b),
+            opacity: getComputedStyle(b).opacity
+          }))
+        }
+      })()`),
+    assistantActionsShot: (msgId) =>
+      client.eval<AssistantActionShot[]>(`(() => {
+        const msg = document.querySelector('[data-msg-id=${JSON.stringify(msgId)}]')
+        const box = (el) => {
+          const r = el.getBoundingClientRect()
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+        }
+        return [...(msg?.querySelectorAll('[data-message-actions] button') ?? [])].map((b) => {
+          const icon = b.querySelector('svg')
+          return {
+            title: b.getAttribute('title') ?? '',
+            box: box(b),
+            opacity: getComputedStyle(b).opacity,
+            icon: icon ? box(icon) : null
+          }
+        })
+      })()`),
+    replyBody: (msgId) =>
+      client.eval<BoxShot | null>(`(() => {
+        const body = document.querySelector('[data-msg-id=${JSON.stringify(msgId)}] .min-w-0 > .markdown-body')
+        if (!body) return null
+        const r = body.getBoundingClientRect()
+        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+      })()`),
+    hover: async (target) => {
+      const p = target ? await pointOf(target) : { x: 1, y: 1 }
+      await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y })
+    },
 
     installContextMenuCounter: async () => {
       await client.eval(`(() => {

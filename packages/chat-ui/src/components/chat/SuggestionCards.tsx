@@ -166,7 +166,7 @@ export function SuggestionOriginTag({
     <span
       data-origin-suggestion
       title={t('message.originSuggestionHint')}
-      className="mr-1 inline-flex items-center gap-0.5 rounded bg-bg-tertiary px-1.5 py-px text-[10px] font-medium text-text-secondary"
+      className="inline-flex items-center gap-0.5 rounded bg-bg-tertiary px-1.5 py-px text-[10px] font-medium text-text-secondary"
     >
       <Lightbulb size={10} />
       {t('message.originSuggestion')}

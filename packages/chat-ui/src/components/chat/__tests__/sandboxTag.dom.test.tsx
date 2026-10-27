@@ -13,6 +13,9 @@
  *   - UI-7 复制按钮复制的就是那段原文；
  *   - UI-8 缺 toolCallId / 没有当前会话 / 没有 HostApi（渠道端）：没有「实际执行的命令」，标记照在；
  *   - UI-9 TerminalView 不传 sandbox（后台任务面板）：没有标记。
+ *   - UI-10（MA-U16）TerminalView 的复制键：compact 悬浮才显形（opacity-0 group-hover/term:opacity-100）；
+ *          触屏密度（ChatHost density touch，手机）常驻，点了复制命令原文；
+ *   - UI-11（MA-U17）「实际执行的命令」的复制键同理（group-hover/inv）：触屏常驻，点了复制那段原文。
  *
  * HostApi 走 `window.api` 回退（getHostApi 在没注入时读它），每条用例后删掉。i18n 走真 zh 资源。
  * 文件是 .tsx 但不写 JSX，一律 createElement（与同目录其它 DOM 用例一致）。
@@ -32,6 +35,11 @@ vi.mock('@shuvix/chat-ui', () => ({ getHostApi: () => null }))
 vi.mock('../../../utils/clipboard', () => ({ copyToClipboard: clip.copyToClipboard }))
 
 import { useChatStore } from '../../../stores/chatStore'
+import {
+  ChatHostContext,
+  type ChatDensity,
+  type ChatHostValue
+} from '../../../host/chatHostContext'
 import { ToolCallBlock } from '../ToolCallBlock'
 import { TerminalView } from '../TerminalView'
 
@@ -47,9 +55,13 @@ const RECORD = "cd /w/proj && \\\nSHUVIX_SESSION_ID=sess-1 \\\n/bin/bash --norc 
 let container: HTMLDivElement
 let root: Root
 
-function render(element: ReturnType<typeof createElement>): void {
+function render(element: ReturnType<typeof createElement>, density?: ChatDensity): void {
   act(() => {
-    root.render(element)
+    root.render(
+      density
+        ? createElement(ChatHostContext.Provider, { value: { density } as ChatHostValue }, element)
+        : element
+    )
   })
 }
 
@@ -118,6 +130,7 @@ function renderCard(
     toolCallId?: string | null
     sandbox?: ShellSandboxState | null
     details?: ToolResultDetails
+    density?: ChatDensity
   } = {}
 ): void {
   const toolName = over.toolName ?? 'bash'
@@ -139,7 +152,8 @@ function renderCard(
       result: 'total 0',
       details,
       status: 'done'
-    })
+    }),
+    over.density
   )
 }
 
@@ -407,4 +421,65 @@ describe('「实际执行的命令」', () => {
     expect(invocationView()).toBeNull()
     expect(container.textContent).not.toContain(i18n.t('toolCall.invocation.show'))
   })
+})
+
+describe('复制键在两种密度下（UI-10 / UI-11）', () => {
+  const classesOf = (el: Element): string[] => (el.getAttribute('class') ?? '').split(/\s+/)
+  const alwaysVisible = (el: Element): boolean => {
+    const cls = classesOf(el)
+    return !cls.includes('opacity-0') && !cls.some((c) => c.startsWith('group-hover'))
+  }
+
+  it.each(['compact', 'touch'] as const)(
+    'UI-10 (MA-U16) %s：TerminalView 的复制键 —— compact 悬浮才显形，touch 常驻、点了复制命令',
+    (density) => {
+      render(createElement(TerminalView, { command: 'ls -la', cwd: '/w' }), density)
+      const view = container.querySelector<HTMLElement>('[data-terminal-view]')
+      expect(view).not.toBeNull()
+      const copy = view!.querySelector<HTMLButtonElement>('button[title]')
+      expect(copy).not.toBeNull()
+      expect(copy!.title).toBe('Copy')
+      if (density === 'compact') {
+        expect(classesOf(copy!)).toEqual(
+          expect.arrayContaining(['opacity-0', 'group-hover/term:opacity-100'])
+        )
+      } else {
+        expect(alwaysVisible(copy!), copy!.className).toBe(true)
+        act(() => {
+          copy!.click()
+        })
+        expect(clip.copyToClipboard).toHaveBeenCalledTimes(1)
+        expect(clip.copyToClipboard).toHaveBeenCalledWith('ls -la')
+      }
+    }
+  )
+
+  it.each(['compact', 'touch'] as const)(
+    'UI-11 (MA-U17) %s：「实际执行的命令」的复制键 —— compact 悬浮才显形，touch 常驻、点了复制原文',
+    async (density) => {
+      installHost(() => Promise.resolve(RECORD))
+      renderCard({ density })
+      expand()
+      await act(async () => {
+        toggle().click()
+      })
+      expect(invocationText()).toBe(RECORD)
+
+      const copy = invocationView()!.querySelector<HTMLButtonElement>('button[title]')
+      expect(copy).not.toBeNull()
+      expect(copy).not.toBe(toggle())
+      if (density === 'compact') {
+        expect(classesOf(copy!)).toEqual(
+          expect.arrayContaining(['opacity-0', 'group-hover/inv:opacity-100'])
+        )
+      } else {
+        expect(alwaysVisible(copy!), copy!.className).toBe(true)
+        act(() => {
+          copy!.click()
+        })
+        expect(clip.copyToClipboard).toHaveBeenCalledTimes(1)
+        expect(clip.copyToClipboard).toHaveBeenCalledWith(RECORD)
+      }
+    }
+  )
 })

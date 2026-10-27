@@ -68,6 +68,14 @@
  *        真点发送 → 用户消息就是那两行。运行中（hold 住）打「hold me」，真按住「立即」800ms → 菜单两档、输入框原样、
  *        什么都没排上（按住之后那一下 click 被吞）；真点菜单里的「追加」→ 输入框清空、队列面板一条 followUp；
  *        放行之后它作为下一条用户消息落进会话
+ *   M-29 消息的操作（MOB-actions，390 宽，真触摸）：手机发出「Hi」（来源 remote）、脚本回复落定。来源标签在气泡
+ *        右上方 —— meta 行右缘 = 气泡右缘（±1）、在气泡上面、里面是 remote 标签且贴着右缘；没点过时这条消息没有
+ *        复制 / 回退；真点一下气泡 → 两颗都出、opacity 1、在气泡下面、互不重叠、在视口里、都 ≥ 32×32（±1）；
+ *        再点 → 收。回复卡的操作不用碰就在：复制与重新生成都有，每颗 opacity 1、≥ 32×32（±1），第一颗的图标与
+ *        正文左缘对齐（±1.5）；翻出操作之后对话不左右滑
+ *   M-30 桌面主窗口（compact）里同一条会话：remote 的「Hi」那行标签右缘 = 气泡右缘（±1）、在气泡上面（原来的
+ *        bug：短消息的标签歪到气泡左边去）；不悬停时用户消息的复制 / 回退与回复卡的操作都在、opacity 0；
+ *        真悬停气泡 → 那两颗到 1，气泡与 meta 行一动不动（±0.5）；悬停回复正文 → 它的操作到 1
  *
  * 约定同 web-fallbacks.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；会话只经主进程 IPC 带明确标题创建
  * （不跑 titler）；预置回复经主进程的 agent.prompt 跑完一轮。设备模拟走 CDP（`Emulation.setDeviceMetricsOverride`
@@ -95,6 +103,7 @@ import {
 import {
   agentsSidebarPane,
   botsPane,
+  chatOriginBadges,
   chatPane,
   sessionConfigPane,
   sidebarPane,
@@ -107,6 +116,7 @@ import {
   type ConversationOverflowShot,
   type ThinkingBlockShot,
   type TouchSheetShot,
+  type UserMessageShot,
   type WebMobileTab
 } from '../../harness/pages'
 import {
@@ -177,7 +187,19 @@ let P = 0
 /** 假提供商的 id（M-23 认它那一行） */
 let fakeProviderId = ''
 const projects = { main: { id: '', name: 'MobProj' }, other: { id: '', name: 'MobProj2' } }
-const sids = { chat: '', temp: '', doomed: '', narrow: '', think: '', wide: '', composer: '' }
+const sids = {
+  chat: '',
+  temp: '',
+  doomed: '',
+  narrow: '',
+  think: '',
+  wide: '',
+  composer: '',
+  actions: ''
+}
+/** M-29 / M-30：手机发出的那句与脚本回复 */
+const ACTIONS_ASK = 'Hi'
+const ACTIONS_REPLY = 'MOB-ACTIONS-REPLY'
 /** 用例里开的浏览器 tab（失败时 afterAll 兜底关） */
 const openedTabs = new Set<string>()
 
@@ -348,6 +370,8 @@ beforeAll(async () => {
   sids.think = await create('MOB-think', null)
   // M-25..M-28：能看图的模型（seedFakeProvider 给 MODEL 带了 vision），还没有运行时
   sids.composer = await create('MOB-composer', null)
+  // M-29 / M-30：同一个模型，手机在里面发第一句
+  sids.actions = await create('MOB-actions', null)
   await seedReply(sids.chat, 'hello phone', 'MOB-REPLY')
   await seedReply(sids.temp, 'hello temp', 'MOB-TEMP-REPLY')
   // M-21：还没有运行时，选模型照常写得进去
@@ -359,6 +383,11 @@ beforeAll(async () => {
   expect(
     await app.main.eval<{ success: boolean }>(
       `window.api.agent.setModel(${JSON.stringify({ sessionId: sids.composer, provider: providerId, model: MODEL })})`
+    )
+  ).toMatchObject({ success: true })
+  expect(
+    await app.main.eval<{ success: boolean }>(
+      `window.api.agent.setModel(${JSON.stringify({ sessionId: sids.actions, provider: providerId, model: MODEL })})`
     )
   ).toMatchObject({ success: true })
   // M-22：一轮一句话的思考、一轮五段的长思考
@@ -530,7 +559,8 @@ async function settledTouchSheet(name: 'model' | 'extensions'): Promise<TouchShe
   let prev = ''
   return until(async () => {
     const shot = await mobile().touchSheet(name)
-    if (!shot) return null
+    // 升起动画没播完时量到的是中间一帧：动画头几帧位置不变，连着两次相同也不算落定
+    if (!shot || shot.animating) return null
     const key = JSON.stringify(shot)
     if (key !== prev) {
       prev = key
@@ -561,6 +591,79 @@ async function resetShell(): Promise<void> {
   }
   if (await mobile().chatOpen()) await backToList()
   await toTab('sessions')
+}
+
+/**
+ * M-29 / M-30：MOB-actions 里从手机发出「Hi」、等脚本回复落定（已经有那条回复就什么都不做 —— 单跑 M-30 时由它补上）
+ */
+async function sendActionsTurn(): Promise<void> {
+  const replied = (): Promise<boolean> =>
+    app.main
+      .eval<
+        Array<{ role: string; content: string }>
+      >(`window.api.message.list(${JSON.stringify(sids.actions)})`)
+      .then((ms) => ms.some((m) => m.role === 'assistant' && m.content === ACTIONS_REPLY))
+  if (await replied()) return
+  const chat = chatPane(page())
+  if (!(await mobile().chatOpen()) || (await mobile().chatTitle()) !== 'MOB-actions') {
+    await openFromList('MOB-actions')
+    await chat.ready()
+  }
+  await until(async () => !!(await mobile().composerLayout(MODEL))?.send, 'the idle composer')
+  provider.script({ text: ACTIONS_REPLY, usage: USAGE })
+  await mobile().typeTrusted(ACTIONS_ASK)
+  await until(async () => (await mobile().composerValue()) === ACTIONS_ASK, 'Hi in the composer')
+  await mobile().tap({ composer: 'send' })
+  await until(replied, 'the reply to Hi')
+  await chat.waitIdle()
+}
+
+/** 这个窗口里 MOB-actions 那条 remote 的「Hi」与回复卡的 data-msg-id（等它们都上屏） */
+async function actionsIds(client: CdpClient): Promise<{ user: string; reply: string }> {
+  const chat = chatPane(client)
+  const ids = await until(async () => {
+    const items = await chat.settledItems()
+    const hi = items.find((i) => i.role === 'user' && i.text === ACTIONS_ASK)
+    const reply = items.find((i) => i.role === 'assistant' && i.text.startsWith(ACTIONS_REPLY))
+    const badge = (await chatOriginBadges(client)).find(
+      (b) => b.role === 'user' && b.origin === 'remote'
+    )
+    return hi && reply && badge ? { user: hi.id, reply: reply.id, badge: badge.msgId } : null
+  }, 'the Hi bubble (remote) and its reply on screen')
+  expect(ids.badge, 'the remote label belongs to the Hi bubble').toBe(ids.user)
+  return { user: ids.user, reply: ids.reply }
+}
+
+/** 来源标签在气泡右上方：meta 行右缘 = 气泡右缘、在气泡上面，里面最后一枚是 remote 且贴着右缘 */
+function expectLabelAboveRight(shot: UserMessageShot, where: string): void {
+  const what = `${where}: ${JSON.stringify(shot)}`
+  expect(shot.meta, what).not.toBeNull()
+  expect(shot.chip, what).not.toBeNull()
+  expect(Math.abs(shot.meta!.right - shot.bubble.right), what).toBeLessThanOrEqual(1)
+  expect(shot.meta!.bottom, what).toBeLessThanOrEqual(shot.bubble.top + 1)
+  expect(shot.chip!.origin, what).toBe('remote')
+  expect(Math.abs(shot.chip!.box.right - shot.meta!.right), what).toBeLessThanOrEqual(1)
+}
+
+/** 手指的尺寸：≥ 32×32（±1） */
+function expectTouchSized(box: BoxShot, what: string): void {
+  expect(box.width, `${what} width`).toBeGreaterThanOrEqual(31)
+  expect(box.height, `${what} height`).toBeGreaterThanOrEqual(31)
+}
+
+function expectInViewport(box: BoxShot, viewport: { w: number; h: number }, what: string): void {
+  const msg = `${what} inside ${JSON.stringify(viewport)}: ${JSON.stringify(box)}`
+  expect(box.left, msg).toBeGreaterThanOrEqual(-0.5)
+  expect(box.top, msg).toBeGreaterThanOrEqual(-0.5)
+  expect(box.right, msg).toBeLessThanOrEqual(viewport.w + 0.5)
+  expect(box.bottom, msg).toBeLessThanOrEqual(viewport.h + 0.5)
+}
+
+function expectSameBox(a: BoxShot, b: BoxShot, what: string): void {
+  const msg = `${what}: ${JSON.stringify({ hovered: a, rest: b })}`
+  for (const k of ['left', 'top', 'width', 'height'] as const) {
+    expect(Math.abs(a[k] - b[k]), `${msg} (${k})`).toBeLessThanOrEqual(0.5)
+  }
 }
 
 describe('phone layout: the shell', () => {
@@ -1715,6 +1818,136 @@ describe('phone layout: the shell', () => {
       provider.release()
       await chat.waitIdle().catch(() => undefined)
       await closeTouchSheets()
+    }
+  })
+
+  it('M-29 a real tap on a user bubble reveals its actions; the remote label sits above it, right-aligned; reply actions are always there', async () => {
+    const chat = chatPane(page())
+    if ((await page().eval<number>('innerWidth')) !== PHONE.width) await phone()
+    await openFromList('MOB-actions')
+    await chat.ready()
+    await sendActionsTurn()
+    const { user: uid, reply: rid } = await actionsIds(page())
+    const viewport = await page().eval<{ w: number; h: number }>(
+      `({ w: window.innerWidth, h: window.innerHeight })`
+    )
+
+    // 来源标签在气泡右上方
+    const rest = await until(async () => {
+      const s = await mobile().userMessageShot(uid)
+      return s?.meta && s.chip ? s : null
+    }, 'the Hi bubble with its meta row')
+    expectLabelAboveRight(rest, 'phone')
+    expect(rest.actions, 'no actions before a tap').toEqual([])
+
+    // 真点一下气泡：复制与回退出现在气泡下面
+    await mobile().tap({ userBubble: uid })
+    const open = await until(async () => {
+      const s = await mobile().userMessageShot(uid)
+      return s && s.actions.length === 2 ? s : null
+    }, 'the user actions after a tap')
+    const what = JSON.stringify(open)
+    expect(
+      open.actions.map((a) => a.label),
+      what
+    ).toEqual([en.message.copy, en.message.rollback])
+    for (const a of open.actions) {
+      expect(a.opacity, `${a.label} ${what}`).toBe('1')
+      expect(a.box.top, `${a.label} below the bubble ${what}`).toBeGreaterThanOrEqual(
+        open.bubble.bottom - 0.5
+      )
+      expectTouchSized(a.box, a.label)
+      expectInViewport(a.box, viewport, a.label)
+    }
+    expect(open.actions[0]!.box.right, what).toBeLessThanOrEqual(open.actions[1]!.box.left + 0.5)
+    const overflow = await mobile().conversationOverflow()
+    expect(overflow, 'the conversation scroller').not.toBeNull()
+    expect(overflow!.offenders, JSON.stringify(overflow)).toEqual([])
+    expect(overflow!.scrollWidth).toBeLessThanOrEqual(overflow!.clientWidth)
+    expect(overflow!.docScrollWidth).toBeLessThanOrEqual(overflow!.innerWidth)
+
+    // 再点一下：收起
+    await mobile().tap({ userBubble: uid })
+    await until(
+      async () => (await mobile().userMessageShot(uid))?.actions.length === 0,
+      'the user actions hidden by a second tap'
+    )
+
+    // 回复卡的操作不用碰就在
+    const reply = await until(async () => {
+      const b = await mobile().assistantActionsShot(rid)
+      return b.length > 0 ? b : null
+    }, 'the reply actions')
+    const titles = reply.map((b) => b.title)
+    expect(titles).toEqual(expect.arrayContaining([en.message.copy, en.message.regenerate]))
+    for (const b of reply) {
+      expect(b.opacity, `${b.title} ${JSON.stringify(reply)}`).toBe('1')
+      expectTouchSized(b.box, b.title)
+    }
+    const body = await mobile().replyBody(rid)
+    expect(body, 'the reply body').not.toBeNull()
+    expect(reply[0]!.icon, 'the first reply icon').not.toBeNull()
+    expect(
+      Math.abs(reply[0]!.icon!.left - body!.left),
+      JSON.stringify({ reply, body })
+    ).toBeLessThanOrEqual(1.5)
+  })
+
+  it('M-30 the desktop main window: the remote label right-aligned above the bubble; actions show on hover only', async () => {
+    await sendActionsTurn()
+    const desk = webMobilePane(app.main)
+    try {
+      await until(
+        () => sidebarPane(app.main).openSession('MOB-actions'),
+        'MOB-actions in the main window'
+      )
+      await chatPane(app.main).ready()
+      const { user: uid, reply: rid } = await actionsIds(app.main)
+
+      // 不悬停：都在 DOM 里、opacity 0（等过渡走完）
+      await desk.hover(null)
+      const rest = await until(async () => {
+        const s = await desk.userMessageShot(uid)
+        return s?.meta &&
+          s.chip &&
+          s.actions.length === 2 &&
+          s.actions.every((a) => a.opacity === '0')
+          ? s
+          : null
+      }, 'the Hi bubble at rest in the main window')
+      expect(rest.actions.map((a) => a.label)).toEqual([en.message.copy, en.message.rollback])
+      expectLabelAboveRight(rest, 'desktop')
+      const replyRest = await until(async () => {
+        const b = await desk.assistantActionsShot(rid)
+        return b.length > 0 && b.every((x) => x.opacity === '0') ? b : null
+      }, 'the reply actions at rest (opacity 0)')
+      expect(replyRest.map((b) => b.title)).toEqual(
+        expect.arrayContaining([en.message.copy, en.message.regenerate])
+      )
+
+      // 悬停气泡：两颗显形，气泡与 meta 行不动
+      await desk.hover({ userBubble: uid })
+      const hovered = await until(async () => {
+        const s = await desk.userMessageShot(uid)
+        return s && s.actions.length === 2 && s.actions.every((a) => a.opacity === '1') ? s : null
+      }, 'the user actions shown on hover')
+      // 悬停前后量的是同一处（hover 里的滚进视口可能挪了列表）：用悬停后再量一次不悬停的位置比
+      await desk.hover(null)
+      const after = await until(async () => {
+        const s = await desk.userMessageShot(uid)
+        return s && s.actions.every((a) => a.opacity === '0') ? s : null
+      }, 'the user actions hidden again')
+      expectSameBox(hovered.bubble, after.bubble, 'the bubble')
+      expectSameBox(hovered.meta!, after.meta!, 'the meta row')
+
+      // 悬停回复正文：它的操作显形
+      await desk.hover({ replyBody: rid })
+      await until(async () => {
+        const b = await desk.assistantActionsShot(rid)
+        return b.length > 0 && b.every((x) => x.opacity === '1')
+      }, 'the reply actions shown on hover')
+    } finally {
+      await desk.hover(null).catch(() => undefined)
     }
   })
 

@@ -10,6 +10,7 @@
  */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useChatDensity } from '../../host/chatHostContext'
 import { Check, ChevronRight, Copy } from 'lucide-react'
 import type { ShellSandboxState } from '@shuvix/chat-protocol/types/chatMessage'
 import { getHostApi } from '../../api/chatApi'
@@ -58,6 +59,8 @@ export function InvocationView({
 }): React.JSX.Element | null {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  // 触屏密度（手机）没有悬浮：悬浮才显形的按钮常驻
+  const touch = useChatDensity() === 'touch'
   const [loaded, setLoaded] = useState<Loaded>({ status: 'idle' })
   const [copied, setCopied] = useState(false)
   const host = getHostApi()
@@ -104,7 +107,7 @@ export function InvocationView({
                   setCopied(true)
                   setTimeout(() => setCopied(false), 1500)
                 }}
-                className="absolute top-1 right-1 z-10 p-1 rounded opacity-0 group-hover/inv:opacity-100 text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-opacity"
+                className={`absolute top-1 right-1 z-10 p-1 rounded ${touch ? '' : 'opacity-0 group-hover/inv:opacity-100'} text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-opacity`}
                 title={copied ? 'Copied' : 'Copy'}
               >
                 {copied ? <Check size={10} className="text-success" /> : <Copy size={10} />}

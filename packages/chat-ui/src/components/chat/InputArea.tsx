@@ -1038,9 +1038,13 @@ export function InputArea({
                       />
                       <button
                         onClick={() => removePendingImage(idx)}
-                        className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-error text-white flex items-center justify-center opacity-0 group-hover/img:opacity-100 transition-opacity"
+                        aria-label={t('common.delete')}
+                        // 触屏没有悬浮：常驻且放大
+                        className={`absolute -top-1.5 -right-1.5 rounded-full bg-error text-white flex items-center justify-center transition-opacity ${
+                          touch ? 'w-6 h-6' : 'w-4 h-4 opacity-0 group-hover/img:opacity-100'
+                        }`}
                       >
-                        <X size={10} />
+                        <X size={touch ? 13 : 10} />
                       </button>
                     </div>
                   ))}

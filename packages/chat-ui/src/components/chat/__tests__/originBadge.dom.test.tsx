@@ -19,6 +19,11 @@
  *   OB-06 采纳提议发出的（来源带 `suggestion`，2026-10-25）：「Accepted suggestion」标签（`data-origin-suggestion`，悬停是
  *         「AI 写的字」那句）—— 本机窗口发的也有（且没有来源标签、仍是强调色气泡）；远程连接发的标签与来源标签并排；
  *         不带引用（各种来源）→ 没有这个标签
+ *   OB-07 标签的位置（2026-10-26，两种密度都一样）：来源标签与提议标签收在消息块**最上面**一行 `[data-user-meta]`
+ *         （附图、气泡 `[data-user-bubble]` 之前），右对齐（行 justify-end，父列 items-end），提议在前、来源在后，
+ *         两枚都不带 mr-1；只有非本机、认得出配色的来源或采纳的提议才有这一行（本机 / 没有 / 认不出 → 没有）；
+ *         会话来源的标签是按钮、点它 openSession，触屏下点它不翻出气泡的操作（它不在气泡里）
+ *         —— MA-U1 有没有这一行 / MA-U2 在哪 / MA-U3 次序 / MA-U4 会话按钮
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（getHostApi → null）；i18n 走真 en 资源。文件是 .tsx 但不写 JSX，一律 createElement。
  */
@@ -377,5 +382,146 @@ describe('OB-06 采纳提议的标签', () => {
   ] as const)('OB-06 %s、不带引用 → 没有提议标签', (_label, origin) => {
     renderBubble(origin)
     expect(suggestionTag()).toBeNull()
+  })
+})
+
+describe('OB-07 标签在消息块的右上方（两种密度）', () => {
+  const REF = { messageId: 'a1', toolCallId: 'call_0', index: 1 }
+  const DENSITIES = ['compact', 'touch'] as const
+  const KINDS: Array<[string, unknown]> = [
+    ['remote', REMOTE],
+    ['chrome', { kind: 'chrome', installId: 'inst-1' }],
+    ['telegram', { kind: 'telegram', botId: 'b1', userId: 'u', chatId: 'c' }],
+    ['session', { kind: 'session', sessionId: 'S1', title: 'Driver' }],
+    ['parent-session', { kind: 'parent-session', sessionId: 'P1', title: 'Parent' }],
+    ['trigger', TRIGGER]
+  ]
+  const metas = (): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('[data-user-meta]')
+  ]
+  const meta = (): HTMLElement => {
+    const all = metas()
+    expect(all).toHaveLength(1)
+    return all[0]!
+  }
+  const bubbleEl = (): HTMLElement => container.querySelector<HTMLElement>('[data-user-bubble]')!
+  const actionsRow = (): HTMLElement => container.querySelector<HTMLElement>('[data-user-actions]')!
+  /** 渲染一整条消息（可带附图）；宿主值缺省只带密度 */
+  const renderMessage = (msg: UserTextMessage, host: Partial<ChatHostValue>): void => {
+    act(() => {
+      root.render(
+        createElement(
+          ChatHostContext.Provider,
+          { value: host as ChatHostValue },
+          createElement(UserBubble, { msg })
+        )
+      )
+    })
+  }
+  /** 「有 meta 行时至少一个孩子」 —— 每条用例渲染之后都核一遍 */
+  const metaNeverEmpty = (): void => {
+    for (const el of metas()) expect(el.children.length).toBeGreaterThanOrEqual(1)
+  }
+
+  describe.each(DENSITIES)('%s', (density) => {
+    it.each(KINDS)(
+      'MA-U1 %s → 恰一行 meta，里面恰一枚 [data-origin=<种类>]，没有提议标签',
+      (kind, origin) => {
+        renderBubble(origin, { density })
+        const row = meta()
+        const chips = [...row.querySelectorAll<HTMLElement>('[data-origin]')]
+        expect(chips).toHaveLength(1)
+        expect(chips[0]!.getAttribute('data-origin')).toBe(kind)
+        expect(row.querySelector('[data-origin-suggestion]')).toBeNull()
+        // 整条消息里也只有这一枚（没留在气泡下面那行里）
+        expect(tags()).toHaveLength(1)
+        metaNeverEmpty()
+      }
+    )
+
+    it.each([
+      ['本机窗口', { kind: 'local' }],
+      ['没有来源', undefined],
+      ['认不出的种类', { kind: 'hook', sessionId: 'H' }]
+    ] as const)('MA-U1 %s → 没有 meta 行、没有来源标签', (_label, origin) => {
+      renderBubble(origin, { density })
+      expect(metas()).toHaveLength(0)
+      expect(tags()).toHaveLength(0)
+      expect(bubbleEl()).not.toBeNull()
+    })
+
+    it('MA-U1 本机窗口 + 采纳的提议 → meta 行里只有提议标签', () => {
+      renderBubble({ kind: 'local', suggestion: REF }, { density })
+      const row = meta()
+      expect(row.children).toHaveLength(1)
+      expect(row.children[0]!.hasAttribute('data-origin-suggestion')).toBe(true)
+      expect(row.querySelector('[data-origin]')).toBeNull()
+      metaNeverEmpty()
+    })
+
+    it('MA-U2 remote：meta 在气泡之前、与气泡的外层同一个 items-end 父列，行 justify-end；气泡与操作行里没有标签', () => {
+      renderBubble(REMOTE, { density })
+      const row = meta()
+      const bubble = bubbleEl()
+      expect(row.compareDocumentPosition(bubble) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      const wrapper = bubble.parentElement!
+      expect(row.parentElement).toBe(wrapper.parentElement)
+      expect(row.parentElement!.className).toContain('items-end')
+      expect(row.className).toContain('justify-end')
+      for (const scope of [bubble, actionsRow()]) {
+        expect(scope.querySelector('[data-origin]')).toBeNull()
+        expect(scope.querySelector('[data-origin-suggestion]')).toBeNull()
+      }
+    })
+
+    it('MA-U2 remote + 一张附图：meta 也在图之前，是消息块的第一个子元素', () => {
+      const msg: UserTextMessage = {
+        ...message(REMOTE),
+        metadata: {
+          origin: REMOTE,
+          images: [{ data: 'aGVsbG8=', mimeType: 'image/png' }]
+        }
+      }
+      renderMessage(msg, { density })
+      const row = meta()
+      const img = container.querySelector('img')!
+      expect(img).not.toBeNull()
+      expect(row.compareDocumentPosition(img) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(
+        row.compareDocumentPosition(bubbleEl()) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+      expect(row.parentElement!.firstElementChild).toBe(row)
+    })
+
+    it('MA-U3 remote + 采纳的提议：提议在前、来源在后；两枚都不带 mr-1', () => {
+      renderBubble({ ...REMOTE, suggestion: REF }, { density })
+      const row = meta()
+      expect(row.children).toHaveLength(2)
+      const [first, second] = [...row.children] as HTMLElement[]
+      expect(first!.hasAttribute('data-origin-suggestion')).toBe(true)
+      expect(second!.getAttribute('data-origin')).toBe('remote')
+      for (const chip of [first!, second!]) {
+        expect(chip.className.split(/\s+/)).not.toContain('mr-1')
+      }
+      metaNeverEmpty()
+    })
+
+    it('MA-U4 宿主给了 openSession：meta 行里是一颗 session 按钮，点一下 → openSession(S1) 恰一次；触屏下不翻出操作', () => {
+      const openSession = vi.fn()
+      renderBubble({ kind: 'session', sessionId: 'S1', title: 'Driver' }, { openSession, density })
+      const btn = meta().querySelector<HTMLButtonElement>(
+        'button[type="button"][data-origin="session"]'
+      )
+      expect(btn).not.toBeNull()
+      act(() => btn!.click())
+      expect(openSession).toHaveBeenCalledTimes(1)
+      expect(openSession).toHaveBeenCalledWith('S1')
+      if (density === 'touch') {
+        // 标签不在气泡里：点它不是点气泡
+        expect(actionsRow().querySelector('button[title="Copy"]')).toBeNull()
+      } else {
+        expect(actionsRow().querySelector('button[title="Copy"]')).not.toBeNull()
+      }
+    })
   })
 })

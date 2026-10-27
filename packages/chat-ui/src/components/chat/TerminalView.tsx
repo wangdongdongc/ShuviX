@@ -5,6 +5,7 @@ import { copyToClipboard } from '../../utils/clipboard'
 import { SandboxBadge } from './SandboxTag'
 import { RedactedText } from './RedactedText'
 import { useRestoreForCopy, useRestoredText } from '../../hooks/useRedaction'
+import { useChatDensity } from '../../host/chatHostContext'
 
 /**
  * 提示符里的 cwd：先折 home，再长则只留末两段 —— 终端提示符本来也不显示全路径。
@@ -63,6 +64,8 @@ export function TerminalView({
   outputMaxHClass = 'max-h-64'
 }: TerminalViewProps): React.JSX.Element {
   const [copied, setCopied] = useState(false)
+  // 触屏密度（手机）没有悬浮：悬浮才显形的按钮常驻
+  const touch = useChatDensity() === 'touch'
   const outRef = useRef<HTMLPreElement>(null)
   const restore = useRestoreForCopy()
   // 是否处于贴底态 —— 只在 stickToBottom 模式下有意义
@@ -91,7 +94,7 @@ export function TerminalView({
           setCopied(true)
           setTimeout(() => setCopied(false), 1500)
         }}
-        className="absolute top-1 right-1 z-10 p-1 rounded opacity-0 group-hover/term:opacity-100 text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-opacity"
+        className={`absolute top-1 right-1 z-10 p-1 rounded ${touch ? '' : 'opacity-0 group-hover/term:opacity-100'} text-text-tertiary hover:text-text-secondary hover:bg-bg-hover/40 transition-opacity`}
         title={copied ? 'Copied' : 'Copy'}
       >
         {copied ? <Check size={10} className="text-success" /> : <Copy size={10} />}

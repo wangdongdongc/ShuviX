@@ -25,6 +25,9 @@
  *   C1  桌面运行中：右键「立即」不弹菜单、不拦；两个档位照旧带字
  *   R1  用量环（两种密度）：点一下出数字（block）、再点收起；开着时 mousedown 在外面收、在环上不收；
  *       没有上限也没有用量 → 不画环
+ *   T12 （MA-U20）待发附图的 ✕（aria-label common.delete）：触屏常驻、放大（w-6 h-6，图标 13，没有 opacity-0 /
+ *       group-hover/img）；桌面 w-4 h-4、悬浮才显形（opacity-0 group-hover/img:opacity-100，图标 10）；两种密度
+ *       点第一张的 ✕ 都只删第一张
  *
  * 后端是假的 `window.api`（同 inputAreaQueue.dom.test.tsx）；状态只经 `applySessionView` 写。触屏密度经
  * 真的 `ChatHostContext`（InputArea 从 `../../host/chatHostContext` 读 `useChatDensity`）；`useChatHost`
@@ -722,4 +725,51 @@ describe('上下文用量环：点一下出数字', () => {
     expect(store().usedContextTokens).toBeNull()
     expect(ring()).toBeNull()
   })
+})
+
+// ─── 待发附图的删除键 ────────────────────────────────────────────────────────
+
+describe('待发附图的 ✕', () => {
+  const IMAGES = [
+    { data: 'first', mimeType: 'image/png', preview: 'data:image/png;first' },
+    { data: 'second', mimeType: 'image/jpeg', preview: 'data:image/jpeg;second' }
+  ]
+  const removeButtons = (): HTMLButtonElement[] => byAria(en.common.delete)
+  const classesOf = (el: Element): string[] => (el.getAttribute('class') ?? '').split(/\s+/)
+
+  it.each<['compact' | 'touch']>([['compact'], ['touch']])(
+    'TC-IA-T12 %s：两张待发附图各一颗 ✕；尺寸与显形按密度；点第一颗只删第一张',
+    async (density) => {
+      await mountInput(density === 'touch' ? TOUCH : {})
+      act(() => useChatStore.setState({ pendingImages: IMAGES.map((img) => ({ ...img })) }))
+      await flush()
+      const buttons = removeButtons()
+      expect(buttons).toHaveLength(2)
+      for (const btn of buttons) {
+        const cls = classesOf(btn)
+        const svg = btn.querySelector('svg')
+        if (density === 'touch') {
+          expect(cls).toEqual(expect.arrayContaining(['w-6', 'h-6']))
+          expect(cls).not.toContain('w-4')
+          expect(cls).not.toContain('opacity-0')
+          expect(cls.some((c) => c.startsWith('group-hover'))).toBe(false)
+          expect(svg?.getAttribute('width')).toBe('13')
+        } else {
+          expect(cls).toEqual(
+            expect.arrayContaining(['w-4', 'h-4', 'opacity-0', 'group-hover/img:opacity-100'])
+          )
+          expect(cls).not.toContain('w-6')
+          expect(svg?.getAttribute('width')).toBe('10')
+        }
+      }
+
+      await click(buttons[0]!)
+      expect(store().pendingImages).toHaveLength(1)
+      expect(store().pendingImages[0]).toMatchObject({ data: 'second', mimeType: 'image/jpeg' })
+      expect(removeButtons()).toHaveLength(1)
+      expect(container.querySelector('img[src="data:image/jpeg;second"]')).not.toBeNull()
+      expect(container.querySelector('img[src="data:image/png;first"]')).toBeNull()
+      noIpc()
+    }
+  )
 })

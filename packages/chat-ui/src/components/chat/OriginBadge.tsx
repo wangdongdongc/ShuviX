@@ -31,7 +31,7 @@ export function originTone(origin: InputOrigin | undefined): OriginTone | undefi
 }
 
 /**
- * 用户气泡下方的来源标签（`metadata.origin`，宿主按连接盖的章），与气泡同一种配色：本机窗口打的不标；远程连接标对端
+ * 用户气泡右上方的来源标签（`metadata.origin`，宿主按连接盖的章），与气泡同一种配色：本机窗口打的不标；远程连接标对端
  * 地址（悬停看连接与浏览器标识）；Chrome / Telegram 标渠道；别的会话发来的标「来自其他会话 / 来自父会话」，宿主能切会话时
  * 点它打开那条会话；触发器替 bot 发的标「触发器」（悬停看是哪个 bot、哪个埋点）。
  */
@@ -40,7 +40,7 @@ export function OriginBadge({ origin }: { origin: InputOrigin }): React.JSX.Elem
   const openSession = useContext(ChatHostContext)?.openSession
   const tone = originTone(origin)
   if (tone === undefined) return null
-  const chip = 'mr-1 px-1.5 py-px rounded text-[10px] font-medium'
+  const chip = 'px-1.5 py-px rounded text-[10px] font-medium'
   const style = { backgroundColor: tone.tint, color: tone.ink }
 
   switch (origin.kind) {

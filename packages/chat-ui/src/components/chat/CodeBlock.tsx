@@ -89,6 +89,8 @@ export function CodeBlock({
   const source = useMarkdownSource()
   // 可空地读：markdown 也在没有 ChatHostProvider 的地方渲染，那里当作不能跑交互图
   const canRunInteractive = useContext(ChatHostContext)?.interactiveFigures === true
+  // 触屏密度（手机）没有悬浮：复制键常驻
+  const touch = useContext(ChatHostContext)?.density === 'touch'
 
   // 从 hast 节点提取语言名称
   const codeNode = node?.children?.[0] as HastNode | undefined
@@ -146,7 +148,7 @@ export function CodeBlock({
           会停在一个看不见的控件上。 */}
       <button
         onClick={handleCopy}
-        className="absolute top-1.5 right-1.5 z-10 p-0.5 text-text-tertiary opacity-0 hover:text-text-secondary group-hover/code:opacity-100 focus-visible:opacity-100 transition"
+        className={`absolute top-1.5 right-1.5 z-10 p-0.5 text-text-tertiary hover:text-text-secondary transition ${touch ? '' : 'opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100'}`}
         title={copied ? 'Copied' : 'Copy'}
       >
         {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}

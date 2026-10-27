@@ -45,6 +45,7 @@ import {
   type AssistantMessage
 } from '../../stores/chatStore'
 import { useTtsPlayback } from '../../hooks/useTtsPlayback'
+import { useChatDensity } from '../../host/chatHostContext'
 
 /** 已落定的卡不读流式状态时给的常量（引用稳定，不触发重渲染） */
 const NO_TOOL_CALLS: ReturnType<typeof selectCompletedStreamingToolCalls> = []
@@ -186,6 +187,14 @@ export const AssistantBubble = memo(function AssistantBubble({
     <ThinkingBlock content={liveThinking} isGenerating={!displayContent && !streamingToolCall} />
   ) : null
 
+  // 操作行的按钮：桌面悬浮才显形；触屏密度（手机）没有悬浮，常驻、点按区放大（与 Claude 的 App 一样，每条回复下面
+  // 都有一排）
+  const touch = useChatDensity() === 'touch'
+  const actionCls = touch
+    ? 'h-8 w-8 flex items-center justify-center rounded active:bg-bg-hover'
+    : 'opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity'
+  const actionIcon = touch ? 15 : 12
+
   const handleCopy = (): void => {
     // 复制出去的是界面上看到的样子：脱敏的占位符换回真值
     copyToClipboard(restore(displayContent))
@@ -300,17 +309,25 @@ export const AssistantBubble = memo(function AssistantBubble({
 
         {/* 操作行 —— 收在正文左下角，与用户消息气泡下方那行同形。
             仅在这条消息真有可操作项时渲染：流式期间全部按钮都不满足条件，
-            渲染出来只会在每张卡底部留一条空行。 */}
+            渲染出来只会在每张卡底部留一条空行。触屏常驻（-ml 让第一颗图标与正文左缘对齐） */}
         {!isStreaming && (displayContent || onRegenerate || onFork) && (
-          <div className="flex items-center gap-1 mt-1.5 text-text-tertiary">
+          <div
+            data-message-actions=""
+            className={`flex items-center text-text-tertiary ${touch ? 'gap-1 mt-1 -ml-2' : 'gap-1 mt-1.5'}`}
+          >
             {/* 复制 */}
             {displayContent && (
               <button
                 onClick={handleCopy}
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                className={actionCls}
                 title={t('message.copy')}
+                aria-label={t('message.copy')}
               >
-                {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+                {copied ? (
+                  <Check size={actionIcon} className="text-success" />
+                ) : (
+                  <Copy size={actionIcon} />
+                )}
               </button>
             )}
             {/* TTS 朗读 */}
@@ -321,15 +338,18 @@ export const AssistantBubble = memo(function AssistantBubble({
                     ? stop()
                     : speak(speakableText(displayContent, t).slice(0, 4000), anchor.id)
                 }
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                className={actionCls}
                 title={isThisPlaying || isThisLoading ? t('message.stopTts') : t('message.playTts')}
+                aria-label={
+                  isThisPlaying || isThisLoading ? t('message.stopTts') : t('message.playTts')
+                }
               >
                 {isThisLoading ? (
-                  <Loader2 size={12} className="animate-spin" />
+                  <Loader2 size={actionIcon} className="animate-spin" />
                 ) : isThisPlaying ? (
-                  <Square size={12} />
+                  <Square size={actionIcon} />
                 ) : (
-                  <Volume2 size={12} />
+                  <Volume2 size={actionIcon} />
                 )}
               </button>
             )}
@@ -337,31 +357,34 @@ export const AssistantBubble = memo(function AssistantBubble({
             {displayContent && (
               <button
                 onClick={() => setShowRaw(!showRaw)}
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                className={actionCls}
                 title={showRaw ? t('message.showRendered') : t('message.showSource')}
+                aria-label={showRaw ? t('message.showRendered') : t('message.showSource')}
               >
-                {showRaw ? <FileText size={12} /> : <Code size={12} />}
+                {showRaw ? <FileText size={actionIcon} /> : <Code size={actionIcon} />}
               </button>
             )}
             {/* 重新生成 */}
             {onRegenerate && (
               <button
                 onClick={() => onRegenerate(anchor.id)}
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                className={actionCls}
                 title={t('message.regenerate')}
+                aria-label={t('message.regenerate')}
               >
-                <RefreshCw size={12} />
+                <RefreshCw size={actionIcon} />
               </button>
             )}
             {/* 从这里分支出新会话 */}
             {onFork && (
               <button
                 onClick={() => onFork(anchor.id)}
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+                className={actionCls}
                 title={t('message.fork')}
+                aria-label={t('message.fork')}
                 data-fork-reply
               >
-                <GitBranch size={12} />
+                <GitBranch size={actionIcon} />
               </button>
             )}
           </div>

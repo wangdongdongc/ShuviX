@@ -9,6 +9,7 @@ import { DateNoticeRow } from './DateNoticeRow'
 import { EmptyReplyNoticeRow } from './EmptyReplyNoticeRow'
 import { InstructionNoticeRow } from './InstructionNoticeRow'
 import { CompactionNoticeRow } from './CompactionNoticeRow'
+import { useChatDensity } from '../../host/chatHostContext'
 import {
   DATE_NOTICE_KIND,
   EMPTY_REPLY_NOTICE_KIND
@@ -49,6 +50,8 @@ interface MessageRendererProps {
 
 function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element {
   const { t } = useTranslation()
+  // 触屏密度（手机）没有悬浮：悬浮才显形的按钮常驻
+  const touch = useChatDensity() === 'touch'
   const removeMessage = useChatStore((s) => s.removeMessage)
   // 错误块不再是可删除的持久化消息：模型侧错误是 entry 树的一部分（随回退一起消失），
   // 前端侧错误本就只在视图里 —— 关闭按钮统一只做本地移除。
@@ -70,7 +73,7 @@ function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element
       <button
         type="button"
         onClick={handleDelete}
-        className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-error/10 text-error/70 hover:text-error"
+        className={`absolute right-0 top-1/2 -translate-y-1/2 ${touch ? '' : 'opacity-0 group-hover:opacity-100'} transition-opacity p-1 rounded hover:bg-error/10 text-error/70 hover:text-error`}
         title={t('common.delete', '删除')}
         aria-label={t('common.delete', '删除')}
       >

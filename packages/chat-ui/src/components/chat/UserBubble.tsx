@@ -10,6 +10,7 @@ import { OriginBadge, originTone } from './OriginBadge'
 import { SuggestionOriginTag } from './SuggestionCards'
 import { RedactedText } from './RedactedText'
 import { useRestoreForCopy } from '../../hooks/useRedaction'
+import { useChatDensity } from '../../host/chatHostContext'
 
 interface UserBubbleProps {
   msg: UserTextMessage
@@ -28,7 +29,9 @@ const COLLAPSE_FADE_HEIGHT = 40
 
 /**
  * 用户消息气泡 — 右对齐浅色气泡（与子智能体面板转写同形）：纯文本 + 内联 Token + 附图，
- * 操作（复制/回退）与来源标识收在气泡下方一行；不是本机窗口打的（远程、Chrome、别的会话……）气泡换成来源的配色
+ * 不是本机窗口打的（远程、Chrome、别的会话……）气泡换成来源的配色，来源标识与「采纳的提议」标签在气泡右上方
+ * （右缘与气泡对齐 —— 放在下方那行时，后面不可见的操作图标还占着位，短消息的标签就歪到了气泡左边）；
+ * 操作（复制/回退）在气泡下方一行，桌面悬浮才显形，触屏密度（手机）没有悬浮：点一下气泡出现、再点收起。
  * 超长内容（长粘贴无法覆盖的手打长文/渠道来源/历史消息）默认折叠：截断 + 渐隐 + 展开按钮
  */
 export const UserBubble = memo(function UserBubble({
@@ -39,6 +42,9 @@ export const UserBubble = memo(function UserBubble({
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const touch = useChatDensity() === 'touch'
+  // 触屏：操作图标点气泡才出（每条消息下面都常驻一排图标太吵）
+  const [showActions, setShowActions] = useState(false)
   const restore = useRestoreForCopy()
 
   const handleCopy = (): void => {
@@ -66,6 +72,15 @@ export const UserBubble = memo(function UserBubble({
 
   const origin = msg.metadata?.origin
   const tone = originTone(origin)
+  // 右上方那行有没有东西：来源只标非本机的（originTone 认得的种类，同 OriginBadge），提议只标采纳来的
+  const fromSuggestion = !!origin && 'suggestion' in origin && !!origin.suggestion
+  const hasMeta = !!tone || fromSuggestion
+  // 操作图标：桌面常驻占位、悬浮显形（不跳版）；触屏点过气泡才渲染
+  const iconCls = touch
+    ? 'h-8 w-8 flex items-center justify-center rounded active:bg-bg-hover'
+    : 'opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity'
+  const iconSize = touch ? 15 : 12
+  const actionsShown = !touch || showActions
 
   return (
     <div
@@ -74,6 +89,14 @@ export const UserBubble = memo(function UserBubble({
         pending ? 'opacity-60' : ''
       }`}
     >
+      {/* 这条消息的右上方（附图也在它下面）：来源（本机窗口打的不标）与「采纳的提议」（文字由 agent 写） */}
+      {hasMeta && (
+        <div data-user-meta="" className="flex max-w-[85%] items-center justify-end gap-1">
+          <SuggestionOriginTag origin={origin} />
+          {origin && <OriginBadge origin={origin} />}
+        </div>
+      )}
+
       {/* 图片 */}
       {msg.metadata?.images && msg.metadata.images.length > 0 && (
         <div className="flex flex-wrap justify-end gap-2">
@@ -91,6 +114,8 @@ export const UserBubble = memo(function UserBubble({
       {/* 气泡 */}
       <div className="flex w-full justify-end">
         <div
+          data-user-bubble=""
+          onClick={touch ? () => setShowActions((v) => !v) : undefined}
           className={`max-w-[85%] rounded-lg text-text-primary px-3 py-1.5 ${tone ? '' : 'bg-accent/10'}`}
           style={tone ? { backgroundColor: tone.tint } : undefined}
           data-origin-tone={origin && tone ? origin.kind : undefined}
@@ -124,8 +149,8 @@ export const UserBubble = memo(function UserBubble({
         </div>
       </div>
 
-      {/* 气泡下方的操作行：展开/来源常驻，图标按钮悬浮才显形（常驻占位，避免布局跳动） */}
-      <div className="flex items-center gap-1 text-text-tertiary">
+      {/* 气泡下方的操作行：展开常驻；图标按钮桌面悬浮才显形（常驻占位，避免布局跳动），触屏点过气泡才有 */}
+      <div data-user-actions="" className="flex items-center gap-1 text-text-tertiary">
         {isLong && (
           <button
             type="button"
@@ -136,28 +161,26 @@ export const UserBubble = memo(function UserBubble({
             {expanded ? t('message.collapseLines') : t('message.expandLines', { lines: lineCount })}
           </button>
         )}
-        {/* 来源标识（本机窗口打的不标） */}
-        {origin && <OriginBadge origin={origin} />}
-        {/* 采纳提议发出的（文字由 agent 写） */}
-        <SuggestionOriginTag origin={origin} />
         {/* 复制 */}
-        {msg.content && (
+        {actionsShown && msg.content && (
           <button
             onClick={handleCopy}
-            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+            className={iconCls}
             title={t('message.copy')}
+            aria-label={t('message.copy')}
           >
-            {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
+            {copied ? <Check size={iconSize} className="text-success" /> : <Copy size={iconSize} />}
           </button>
         )}
         {/* 回退 */}
-        {onRollback && (
+        {actionsShown && onRollback && (
           <button
             onClick={onRollback}
-            className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:text-text-secondary transition-opacity"
+            className={iconCls}
             title={t('message.rollback')}
+            aria-label={t('message.rollback')}
           >
-            <RotateCcw size={12} />
+            <RotateCcw size={iconSize} />
           </button>
         )}
       </div>

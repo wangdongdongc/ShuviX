@@ -11,6 +11,7 @@ import {
   markdownRehypePlugins
 } from './markdownComponents'
 import { useRestoreForCopy } from '../../hooks/useRedaction'
+import { useChatDensity } from '../../host/chatHostContext'
 
 /**
  * 折叠态的摘要预览：正文首个非空行，去掉行首的 markdown 记号（标题 # / 列表 - * / 引用 > /
@@ -36,6 +37,8 @@ function previewOf(content: string): string {
  */
 export function CompactionNoticeRow({ msg }: { msg: AssistantMessage }): React.JSX.Element {
   const { t } = useTranslation()
+  // 触屏密度（手机）没有悬浮：悬浮才显形的按钮常驻
+  const touch = useChatDensity() === 'touch'
   const [copied, setCopied] = useState(false)
   const restore = useRestoreForCopy()
   const handleCopy = (): void => {
@@ -54,7 +57,7 @@ export function CompactionNoticeRow({ msg }: { msg: AssistantMessage }): React.J
         <button
           type="button"
           onClick={handleCopy}
-          className="absolute right-0 top-1 p-0.5 rounded text-text-tertiary opacity-0 group-hover/notice:opacity-100 hover:text-text-secondary transition-opacity"
+          className={`absolute right-0 top-1 p-0.5 rounded text-text-tertiary ${touch ? '' : 'opacity-0 group-hover/notice:opacity-100'} hover:text-text-secondary transition-opacity`}
           title={t('message.copy')}
         >
           {copied ? <Check size={12} className="text-success" /> : <Copy size={12} />}
