@@ -386,10 +386,12 @@
     "expand": "Expand pending inputs",
     "collapse": "Collapse pending inputs",
     "submitAllFilled": "Submit filled",
-    "otherPlaceholder": "Or just type your thoughts — Enter sends them to the AI...",
     "submitOther": "Send feedback",
     "prev": "Previous",
-    "next": "Next"
+    "next": "Next",
+    "choiceHint": "Pick one or more, then confirm",
+    "otherPlaceholderAsk": "Or tell the AI what to do instead",
+    "otherPlaceholderChoice": "Or type your own answer"
   },
   "queue": {
     "title": "Queue {{count}}",
@@ -424,12 +426,7 @@
     "pendingEditPreview": "Edit file",
     "pendingWritePreview": "Write file",
     "pendingCreatePreview": "Create file",
-    "allowThisDirectory": "Allow this directory",
-    "rememberFolder": "Allow the whole folder",
-    "rememberOptions": "Other ways to allow and remember",
-    "allow": "Allow",
     "deny": "Deny",
-    "allowAndRememberPath": "Allow this path",
     "requestedAs": "requested as",
     "policyPromptFrom": "From security policy: {{policies}}",
     "params": "Parameters",
@@ -473,9 +470,13 @@
     "sessionAskWrite": "Talk to another session",
     "sessionAskMessage": "Message it will send",
     "sessionAskUntitled": "Untitled session",
-    "allowAndRememberSession": "Allow and remember",
     "answeredBySessionHint": "Another session, “{{title}}”, answered this question for you in the turn it started here — you did not pick it.",
-    "answeredBySessionHintNoTitle": "Another session answered this question for you in the turn it started here — you did not pick it."
+    "answeredBySessionHintNoTitle": "Another session answered this question for you in the turn it started here — you did not pick it.",
+    "askAllowOnce": "Allow once",
+    "askRememberFile": "Allow and remember this file",
+    "askRememberDirectory": "Allow and remember this folder",
+    "askRememberFolder": "Allow and remember the folder it is in",
+    "askRememberSession": "Allow and remember this session"
   },
   "sessionConfig": {
     "title": "Session Config",

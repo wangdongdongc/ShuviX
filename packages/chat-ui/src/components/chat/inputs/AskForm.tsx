@@ -1,6 +1,5 @@
 import { getHostApi } from '@shuvix/chat-ui'
 import {
-  ChevronDown,
   Eye,
   FileOutput,
   FilePen,
@@ -12,9 +11,10 @@ import {
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { BackgroundBadge, FullAccessBadge } from '../BgTaskTag'
-import { ReviewOpinion } from '../ReviewTag'
+import { ReviewOpinion, ReviewRiskBadge } from '../ReviewTag'
 import { renderToolIcon } from '../ToolCallBlock'
 import { useChatStore } from '../../../stores/chatStore'
+import { useChatDensity } from '../../../host/chatHostContext'
 import { useTranslation } from 'react-i18next'
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
@@ -29,6 +29,7 @@ import type { InputFormProps } from './types'
 import type { AskDraft } from './drafts'
 import { DiffViewer } from '../DiffViewer'
 import { ASK_PREVIEW_MAX_H } from '../detailViewport'
+import { OptionRow, useOptionHotkeys } from './OptionRows'
 
 hljs.registerLanguage('bash', bash)
 hljs.registerLanguage('powershell', powershell)
@@ -51,7 +52,7 @@ function CommandPreview({
   }, [command, language])
 
   return (
-    <pre className="text-[11px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 overflow-auto max-h-28 whitespace-pre-wrap break-words !m-0">
+    <pre className="text-[12px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 overflow-auto max-h-28 whitespace-pre-wrap break-words !m-0">
       <code
         className={`hljs language-${language}`}
         dangerouslySetInnerHTML={{ __html: highlighted }}
@@ -67,7 +68,7 @@ function CommandPreview({
 function RequestedAs({ path }: { path: string }): React.JSX.Element {
   const { t } = useTranslation()
   return (
-    <div className="mt-0.5 text-[10px] leading-snug break-all font-mono text-text-tertiary">
+    <div className="mt-0.5 text-[11px] leading-snug break-all font-mono text-text-tertiary">
       <span className="font-sans">{t('toolCall.requestedAs')}</span> {path}
     </div>
   )
@@ -82,7 +83,7 @@ function PathPreview({
   requestedPath?: string
 }): React.JSX.Element {
   return (
-    <div className="text-[11px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 break-all font-mono text-text-primary">
+    <div className="text-[12px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 break-all font-mono text-text-primary">
       {path}
       {requestedPath && <RequestedAs path={requestedPath} />}
     </div>
@@ -106,7 +107,7 @@ function DiffPreview({
 }): React.JSX.Element {
   return (
     <div className="space-y-1">
-      <div className="text-[11px] leading-snug break-all font-mono text-text-secondary px-0.5">
+      <div className="text-[12px] leading-snug break-all font-mono text-text-secondary px-0.5">
         {path}
         {requestedPath && <RequestedAs path={requestedPath} />}
       </div>
@@ -128,19 +129,19 @@ function SessionPreview({
   const { t } = useTranslation()
   return (
     <div className="space-y-1" data-ask-session={session.sessionId}>
-      <div className="text-[11px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 min-w-0">
+      <div className="text-[12px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 min-w-0">
         <div className="truncate text-text-primary">
           {session.title || t('toolCall.sessionAskUntitled')}
         </div>
-        <div className="truncate font-mono text-[10px] text-text-tertiary">{session.sessionId}</div>
+        <div className="truncate font-mono text-[11px] text-text-tertiary">{session.sessionId}</div>
       </div>
       {message && (
         <div>
-          <div className="px-0.5 text-[10px] text-text-tertiary">
+          <div className="px-0.5 text-[11px] text-text-tertiary">
             {t('toolCall.sessionAskMessage')}
           </div>
           <pre
-            className="text-[11px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 overflow-auto whitespace-pre-wrap break-words !m-0 text-text-primary"
+            className="text-[12px] leading-snug bg-bg-secondary/70 rounded-lg px-2.5 py-1.5 overflow-auto whitespace-pre-wrap break-words !m-0 text-text-primary"
             style={{ maxHeight: ASK_PREVIEW_MAX_H }}
           >
             {message}
@@ -177,16 +178,30 @@ function PolicyPromptChip({
   const label = prompt.policies.length > 0 ? prompt.policies.join(' · ') : prompt.text
   return (
     <button
+      type="button"
       onClick={onToggle}
+      data-ask-policy=""
       title={attribution ? `${prompt.text}\n${attribution}` : prompt.text}
-      className={`flex items-center gap-1 min-w-0 text-[10px] transition-colors ${
+      className={`flex items-center gap-1 min-w-0 max-w-full text-[11px] transition-colors ${
         open ? 'text-text-secondary' : 'text-text-tertiary hover:text-text-secondary'
       }`}
     >
-      <Shield size={10} className="flex-shrink-0" />
+      <Shield size={11} className="flex-shrink-0" />
       <span className="truncate border-b border-dotted border-current/50">{label}</span>
     </button>
   )
+}
+
+/** 一张审批卡上的一个选项（一行） */
+interface AskOption {
+  /** `data-ask-option` 的值，页面对象与测试按它认行 */
+  id: 'allow' | 'remember-path' | 'remember-folder' | 'remember-session' | 'deny'
+  label: string
+  detail?: string
+  detailIsPath?: boolean
+  primary?: boolean
+  onPick: () => void
+  data?: Record<string, string>
 }
 
 export function AskForm({
@@ -197,6 +212,7 @@ export function AskForm({
   titleAccessory
 }: InputFormProps<AskInputRequest, AskDraft>): React.JSX.Element {
   const { t } = useTranslation()
+  const touch = useChatDensity() === 'touch'
   const [policyOpen, setPolicyOpen] = useState(false)
   const {
     command,
@@ -233,73 +249,95 @@ export function AskForm({
   // 文件还可以记下它所在的文件夹（太浅的不给，见 rememberFolderOf）
   const rememberFolder =
     canRemember && pathAsk && !pathIsDirectory ? rememberFolderOf(pathAsk.path) : null
-  const [folderOpen, setFolderOpen] = useState(false)
 
-  /** 单次允许 — 立即提交,不写权限表 */
-  const handleAllow = (): void => {
-    onSubmit({ kind: 'ask', allowed: true })
-  }
-
-  /** 拒绝 — 立即提交 */
-  const handleDeny = (): void => {
-    onSubmit({ kind: 'ask', allowed: false })
-  }
-
-  /** 允许并记住 — 立即提交,后端按 extra.rememberPath 写进会话权限表（给文件夹就记那个文件夹） */
-  const handleAllowAndRemember = (folder?: string): void => {
-    onSubmit({
-      kind: 'ask',
-      allowed: true,
-      extra: { rememberPath: folder ?? true }
+  // 选项自上而下：允许这一次 → 各种「允许并记住」→ 拒绝。目录路径没有单次放行（目录授权天然持久）；
+  // 记住所在文件夹那一行把文件夹整条摆出来 —— 授予的范围比这个文件大，得看得见
+  const options: AskOption[] = []
+  if (!(pathAsk && pathIsDirectory)) {
+    options.push({
+      id: 'allow',
+      label: t('toolCall.askAllowOnce'),
+      primary: true,
+      onPick: () => onSubmit({ kind: 'ask', allowed: true })
     })
   }
-
-  /** 会话询问的「允许并记住」：后端按 extra.remember 把这条会话（查看 / 对话）写进会话权限表 */
-  const handleAllowSessionAndRemember = (): void => {
-    onSubmit({ kind: 'ask', allowed: true, extra: { remember: true } })
+  if (canRememberSession) {
+    options.push({
+      id: 'remember-session',
+      label: t('toolCall.askRememberSession'),
+      // 后端按 extra.remember 把这条会话（查看 / 对话）写进会话权限表
+      onPick: () => onSubmit({ kind: 'ask', allowed: true, extra: { remember: true } }),
+      data: { 'data-remember-session': '' }
+    })
   }
+  if (canRemember) {
+    options.push({
+      id: 'remember-path',
+      label: pathIsDirectory ? t('toolCall.askRememberDirectory') : t('toolCall.askRememberFile'),
+      primary: !!pathIsDirectory,
+      // 后端按 extra.rememberPath 写进会话权限表
+      onPick: () => onSubmit({ kind: 'ask', allowed: true, extra: { rememberPath: true } })
+    })
+  }
+  if (rememberFolder) {
+    options.push({
+      id: 'remember-folder',
+      label: t('toolCall.askRememberFolder'),
+      detail: rememberFolder,
+      detailIsPath: true,
+      onPick: () =>
+        onSubmit({ kind: 'ask', allowed: true, extra: { rememberPath: rememberFolder } }),
+      data: { 'data-remember-folder': rememberFolder }
+    })
+  }
+  options.push({
+    id: 'deny',
+    label: t('toolCall.deny'),
+    onPick: () => onSubmit({ kind: 'ask', allowed: false })
+  })
+  useOptionHotkeys(options.length, (i) => options[i]?.onPick())
 
-  // 标题 = 这次要放行的**动作**。非路径类直接取工具自己的显示名，与上方步骤行共用一套词表 ——
-  // 「等待确认」对每条命令都一样，占着唯一的标题位却不说这次要做什么。
-  const iconClass = 'text-warning flex-shrink-0'
+  // 顶行的动作名：非路径类直接取工具自己的显示名，与上方步骤行共用一套词表
+  const iconSize = touch ? 14 : 12
+  const iconClass = 'flex-shrink-0'
   const { icon, title } = session
     ? session.access === 'write'
       ? {
-          icon: <MessagesSquare size={13} className={iconClass} />,
+          icon: <MessagesSquare size={iconSize} className={iconClass} />,
           title: t('toolCall.sessionAskWrite')
         }
       : {
-          icon: <Eye size={13} className={iconClass} />,
+          icon: <Eye size={iconSize} className={iconClass} />,
           title: t('toolCall.sessionAskRead')
         }
     : diffPreview
       ? diffPreview.isNewFile
         ? {
-            icon: <FileOutput size={13} className={iconClass} />,
+            icon: <FileOutput size={iconSize} className={iconClass} />,
             title: t('toolCall.pendingCreatePreview')
           }
         : toolName === 'edit'
           ? {
-              icon: <FilePen size={13} className={iconClass} />,
+              icon: <FilePen size={iconSize} className={iconClass} />,
               title: t('toolCall.pendingEditPreview')
             }
           : {
-              icon: <FileOutput size={13} className={iconClass} />,
+              icon: <FileOutput size={iconSize} className={iconClass} />,
               title: t('toolCall.pendingWritePreview')
             }
       : pathAsk
         ? pathAsk.mode === 'write'
           ? {
-              icon: <FileOutput size={13} className={iconClass} />,
+              icon: <FileOutput size={iconSize} className={iconClass} />,
               title: t('toolCall.pendingPathWrite')
             }
           : pathIsDirectory
             ? {
-                icon: <FolderOpen size={13} className={iconClass} />,
+                icon: <FolderOpen size={iconSize} className={iconClass} />,
                 title: t('toolCall.pendingPathReadDir')
               }
             : {
-                icon: <FileText size={13} className={iconClass} />,
+                icon: <FileText size={iconSize} className={iconClass} />,
                 title: t('toolCall.pendingPathRead')
               }
         : {
@@ -308,134 +346,113 @@ export function AskForm({
                 {renderToolIcon(presentation)}
               </span>
             ) : (
-              <ShieldAlert size={13} className={iconClass} />
+              <ShieldAlert size={iconSize} className={iconClass} />
             ),
             title: presentation?.label ?? t('toolCall.pendingAsk')
           }
 
+  // 标题：审查员那句大白话 > 工具自己的说明（agent 写的这一步要做什么）> 动作名本身。
+  // 有审查意见时不再摆说明 —— 审查员只看人写的话与操作本身，说明是 agent 的说法
+  const headline = review ? '' : (description?.trim() ?? '')
+  const titleIsHeadline = !review && !headline
+  const headlineClass = `break-words font-medium text-text-primary leading-snug ${
+    touch ? 'text-sm' : 'text-[13px]'
+  }`
+
   return (
-    <div className="space-y-2">
-      {/* 标题行：动作名 + 工具自己的说明（说明只占一行，摊开的原文在预览块里） */}
-      <div className="flex items-center gap-1.5 min-w-0">
-        {icon}
-        <p className="text-xs text-text-primary font-medium whitespace-nowrap">{title}</p>
-        <span
-          className="flex-1 min-w-0 text-[11px] text-text-secondary truncate"
-          title={description}
+    <div className="flex flex-col min-h-0" data-ask-card="">
+      {/* 上半：顶行 + 标题 + 预览，长了自己滚；下面的选项行始终看得见 */}
+      <div
+        className={`min-h-0 overflow-y-auto thin-scrollbar ${
+          touch ? 'px-4 pt-3.5 pb-3 space-y-2.5' : 'px-3.5 pt-3 pb-2.5 space-y-2'
+        }`}
+      >
+        {/* 顶行：动作名 + 标签，右端风险等级与多条询问的步进器 */}
+        <div
+          className={`flex items-center gap-1.5 min-w-0 ${
+            titleIsHeadline ? 'text-text-primary' : 'text-text-tertiary'
+          }`}
         >
-          {description}
-        </span>
-        {/* 后台任务标签 —— 与「跑完就完的命令」在视觉上分开：这条批准之后进程会一直活着 */}
-        {background && <BackgroundBadge />}
-        {unsandboxed && <FullAccessBadge />}
-        {titleAccessory}
-      </div>
-
-      {/* 审查员看过、交给你的：它那句大白话放在原文上方 —— 读懂一条命令要懂 shell，读懂它不用 */}
-      {review && <ReviewOpinion review={review} />}
-
-      {session ? (
-        <SessionPreview session={session} message={messagePreview} />
-      ) : diffPreview ? (
-        // 平常 diff 头上是模型写的路径；写入被链接带去别处时，改为真实去处领头、原写法注在下面
-        <DiffPreview
-          path={requestedPath && pathAsk ? pathAsk.path : diffPreview.path}
-          requestedPath={pathAsk ? requestedPath : undefined}
-          diff={diffPreview.diff}
-        />
-      ) : pathAsk ? (
-        <PathPreview path={pathAsk.path} requestedPath={requestedPath} />
-      ) : (
-        <CommandPreview
-          command={command}
-          language={toolName === 'powershell' ? 'powershell' : 'bash'}
-        />
-      )}
-
-      {/* 操作栏：左端是命中的策略（角标），动作一律靠右 —— 与输入区的发送键同侧 */}
-      <div className="flex items-center gap-1.5">
-        {policyPrompt && (
-          <PolicyPromptChip
-            prompt={policyPrompt}
-            open={policyOpen}
-            onToggle={() => setPolicyOpen(!policyOpen)}
-          />
-        )}
-        <span className="flex-1" />
-        <button
-          onClick={handleDeny}
-          className="px-2.5 py-1 rounded-lg text-xs font-medium text-text-secondary hover:bg-bg-hover transition-colors"
-        >
-          {t('toolCall.deny')}
-        </button>
-        {canRememberSession && (
-          <button
-            onClick={handleAllowSessionAndRemember}
-            data-remember-session=""
-            className="px-2.5 py-1 rounded-lg border border-border-secondary/60 text-xs font-medium text-text-primary hover:bg-bg-hover transition-colors"
+          {icon}
+          <p
+            className={
+              titleIsHeadline
+                ? `${headlineClass} min-w-0`
+                : `min-w-0 truncate ${touch ? 'text-[12px]' : 'text-[11.5px]'}`
+            }
+            data-ask-title=""
           >
-            {t('toolCall.allowAndRememberSession')}
-          </button>
-        )}
-        {canRemember && (
-          <div className="flex items-stretch rounded-lg border border-border-secondary/60">
-            <button
-              onClick={() => handleAllowAndRemember()}
-              className={`px-2.5 py-1 text-xs font-medium text-text-primary hover:bg-bg-hover transition-colors ${
-                rememberFolder ? 'rounded-l-lg' : 'rounded-lg'
-              }`}
-            >
-              {pathIsDirectory
-                ? t('toolCall.allowThisDirectory')
-                : t('toolCall.allowAndRememberPath')}
-            </button>
-            {rememberFolder && (
-              <button
-                onClick={() => setFolderOpen(!folderOpen)}
-                title={t('toolCall.rememberOptions')}
-                aria-label={t('toolCall.rememberOptions')}
-                aria-expanded={folderOpen}
-                data-remember-options=""
-                className="px-1 rounded-r-lg border-l border-border-secondary/60 text-text-secondary hover:bg-bg-hover transition-colors"
-              >
-                <ChevronDown size={12} />
-              </button>
+            {title}
+          </p>
+          {/* 后台任务标签 —— 与「跑完就完的命令」在视觉上分开：这条批准之后进程会一直活着 */}
+          {background && <BackgroundBadge />}
+          {unsandboxed && <FullAccessBadge />}
+          <span className="flex-1" />
+          {review && <ReviewRiskBadge risk={review.risk} />}
+          {titleAccessory}
+        </div>
+
+        {/* 审查员看过、交给你的：它那句大白话就是标题 —— 读懂一条命令要懂 shell，读懂它不用 */}
+        {review ? (
+          <ReviewOpinion review={review} touch={touch} />
+        ) : headline ? (
+          <p className={headlineClass} data-ask-description="">
+            {headline}
+          </p>
+        ) : null}
+
+        <div data-ask-preview="">
+          {session ? (
+            <SessionPreview session={session} message={messagePreview} />
+          ) : diffPreview ? (
+            // 平常 diff 头上是模型写的路径；写入被链接带去别处时，改为真实去处领头、原写法注在下面
+            <DiffPreview
+              path={requestedPath && pathAsk ? pathAsk.path : diffPreview.path}
+              requestedPath={pathAsk ? requestedPath : undefined}
+              diff={diffPreview.diff}
+            />
+          ) : pathAsk ? (
+            <PathPreview path={pathAsk.path} requestedPath={requestedPath} />
+          ) : (
+            <CommandPreview
+              command={command}
+              language={toolName === 'powershell' ? 'powershell' : 'bash'}
+            />
+          )}
+        </div>
+
+        {/* 命中的策略：一枚角标，点开才铺出整句 */}
+        {policyPrompt && (
+          <div className="space-y-1">
+            <PolicyPromptChip
+              prompt={policyPrompt}
+              open={policyOpen}
+              onToggle={() => setPolicyOpen(!policyOpen)}
+            />
+            {policyOpen && (
+              <p className="text-[11.5px] leading-snug text-text-secondary whitespace-pre-wrap break-words">
+                {policyPrompt.text}
+              </p>
             )}
           </div>
         )}
-        {/* 目录路径:只显示"允许此目录" + 拒绝 — 目录授权天然持久,不提供单次放行 */}
-        {!(pathAsk && pathIsDirectory) && (
-          <button
-            onClick={handleAllow}
-            className="px-3 py-1 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover transition-colors"
-          >
-            {t('toolCall.allow')}
-          </button>
-        )}
       </div>
 
-      {/* 记下所在的文件夹：点开下拉才出现，路径整条摆出来 —— 授予的范围比这个文件大，得看得见 */}
-      {rememberFolder && folderOpen && (
-        <div className="flex justify-end">
-          <button
-            onClick={() => handleAllowAndRemember(rememberFolder)}
-            data-remember-folder={rememberFolder}
-            className="flex max-w-full items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-text-primary border border-border-secondary/60 hover:bg-bg-hover transition-colors"
-          >
-            <FolderOpen size={12} className="shrink-0 text-text-tertiary" />
-            <span className="shrink-0 font-medium">{t('toolCall.rememberFolder')}</span>
-            <span className="min-w-0 truncate font-mono text-[11px] text-text-secondary [direction:rtl]">
-              <bdi>{rememberFolder}</bdi>
-            </span>
-          </button>
-        </div>
-      )}
-
-      {policyPrompt && policyOpen && (
-        <p className="text-[11px] leading-snug text-text-secondary whitespace-pre-wrap break-words px-0.5">
-          {policyPrompt.text}
-        </p>
-      )}
+      {/* 选项行：允许这一次 / 记住… / 拒绝 —— 也可以不选，直接在下面的输入框告诉 AI 换个做法 */}
+      <div className="flex-shrink-0" role="group" aria-label={title}>
+        {options.map((opt, i) => (
+          <OptionRow
+            key={opt.id}
+            index={i}
+            label={opt.label}
+            detail={opt.detail}
+            detailIsPath={opt.detailIsPath}
+            primary={opt.primary}
+            onPick={opt.onPick}
+            data={{ 'data-ask-option': opt.id, ...opt.data }}
+          />
+        ))}
+      </div>
     </div>
   )
 }

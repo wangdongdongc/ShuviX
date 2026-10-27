@@ -8,8 +8,14 @@
  *   T2  选好的文件走粘贴那条路：只收图片（按次序），收完把 input 的值清空（同一张图再选也要触发 change）；
  *       空选择什么都不加
  *   T3  「+」只在模型能看图、且这条会话能发时出现（两种密度都一样）；挂着时模型换成不能看图 → 消失
- *   T4  占位：触屏空闲 = input.placeholderTouch（能不能看图都一样）；运行中 = placeholderSteer；有待答的询问 =
- *       pendingInputs.otherPlaceholder；桌面照旧（placeholderVision / placeholder）
+ *   T4  占位：触屏空闲 = input.placeholderTouch（能不能看图都一样）；运行中 = placeholderSteer；有待答的审批 =
+ *       pendingInputs.otherPlaceholderAsk；桌面照旧（placeholderVision / placeholder）
+ *   T4b （两种密度）待答的是审批 → otherPlaceholderAsk，是选项题 → otherPlaceholderChoice；两条都挂着时跟着选中项
+ *       （setActiveInputId）换，换回来也跟着回来
+ *   K1  （桌面）输入卡片顶上挂着审批卡（accessory = PendingInputsPanel）：焦点在输入框里按 1 → 不拦、不答、卡片
+ *       还在；离开输入框（焦点回 body）再按 1 → 答「允许这一次」
+ *   K2  同样挂着选项题：输入框里按 1 什么都不勾，确认键仍禁用
+ *   K3  触屏、焦点不在输入框：body 上按 1 什么都不做
  *   T5  触屏回车 = 换行：不拦、不发；Shift+回车同样；Ctrl / ⌘ + 回车拦下并发出；发送键照发；运行中、有询问时
  *       回车同样什么都不发
  *   T6  斜杠命令弹层照旧吃回车（选中命令成芯片，不发）
@@ -73,6 +79,7 @@ vi.mock('../../../utils/imageProcessing', () => ({
 import { applySessionView, useChatStore } from '../../../stores/chatStore'
 import { useModelCatalogStore } from '../../../stores/modelCatalogStore'
 import { InputArea, type InputAreaProps } from '../InputArea'
+import { PendingInputsPanel } from '../PendingInputsPanel'
 import { V, resetStore, store } from '../../../__tests__/support/views'
 import {
   ChatHostContext,
@@ -171,6 +178,18 @@ const ASK: InputRequest = {
   createdAt: 0
 }
 
+const CHOICE: InputRequest = {
+  id: 'r2',
+  kind: 'choice',
+  toolName: 'ask',
+  question: 'Which?',
+  options: [
+    { label: 'A', description: '' },
+    { label: 'B', description: '' }
+  ],
+  createdAt: 1
+}
+
 let container: HTMLDivElement
 let root: Root
 
@@ -180,11 +199,16 @@ async function flush(): Promise<void> {
   })
 }
 
-/** 挂输入卡片；`density` 给了就包一层宿主上下文（手机布局给 'touch'），不给 = 没有 Provider（compact） */
-async function mountInput(opts: { density?: ChatDensity } = {}): Promise<void> {
+/**
+ * 挂输入卡片；`density` 给了就包一层宿主上下文（手机布局给 'touch'），不给 = 没有 Provider（compact）；
+ * `accessory` = 卡片顶格（实际产品里是 PendingInputsPanel）
+ */
+async function mountInput(
+  opts: { density?: ChatDensity; accessory?: React.ReactNode } = {}
+): Promise<void> {
   await act(async () => {
     const Area = InputArea as (props: InputAreaProps) => React.JSX.Element
-    const area = createElement(Area, { inline: true })
+    const area = createElement(Area, { inline: true, accessory: opts.accessory })
     root.render(
       opts.density
         ? createElement(
@@ -434,14 +458,14 @@ describe('占位文案', () => {
     }
   )
 
-  it('TC-IA-T4 触屏运行中 → placeholderSteer；有待答的询问 → pendingInputs.otherPlaceholder', async () => {
+  it('TC-IA-T4 触屏运行中 → placeholderSteer；有待答的审批 → pendingInputs.otherPlaceholderAsk', async () => {
     await mountInput(TOUCH)
     busy()
     await flush()
     expect(textarea().placeholder).toBe(en.input.placeholderSteer)
     busy({ asks: [ASK] })
     await flush()
-    expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholder)
+    expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
   })
 
   it.each<[boolean, string]>([
@@ -451,6 +475,109 @@ describe('占位文案', () => {
     useChatStore.setState({ modelSupportsVision: vision })
     await mountInput()
     expect(textarea().placeholder).toBe(expected)
+  })
+
+  it.each<['compact' | 'touch']>([['compact'], ['touch']])(
+    'TC-IA-T4b %s：审批 → otherPlaceholderAsk，选项题 → otherPlaceholderChoice；两条都在时跟着选中项换',
+    async (density) => {
+      await mountInput(density === 'touch' ? TOUCH : {})
+      busy({ asks: [ASK] })
+      await flush()
+      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
+
+      busy({ asks: [CHOICE] })
+      await flush()
+      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderChoice)
+
+      busy({ asks: [ASK, CHOICE] })
+      await flush()
+      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
+      act(() => useChatStore.getState().setActiveInputId('s1', CHOICE.id))
+      await flush()
+      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderChoice)
+      act(() => useChatStore.getState().setActiveInputId('s1', ASK.id))
+      await flush()
+      expect(textarea().placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
+    }
+  )
+})
+
+// ─── 数字键与输入框 ──────────────────────────────────────────────────────────
+
+describe('卡片顶上的选项行：输入框里打的数字不选行', () => {
+  /** 在目标上派发一次 keydown（bubbles + cancelable + composed）；返回 dispatchEvent 的结果：false = 被拦下 */
+  async function pressKey(key: string, target: EventTarget): Promise<boolean> {
+    let result = true
+    await act(async () => {
+      result = target.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, composed: true })
+      )
+    })
+    await flush()
+    return result
+  }
+  const askCard = (): Element | null => container.querySelector('[data-ask-card]')
+  const choiceRows = (): string[] =>
+    [...container.querySelectorAll<HTMLButtonElement>('[data-choice-option]')].map(
+      (r) => r.getAttribute('aria-pressed') ?? ''
+    )
+  const confirmButton = (): HTMLButtonElement => {
+    const el = container.querySelector<HTMLButtonElement>('[data-choice-confirm]')
+    if (!el) throw new Error('confirm button not rendered')
+    return el
+  }
+  async function blurComposer(): Promise<void> {
+    await act(async () => {
+      textarea().blur()
+    })
+    expect(document.activeElement).toBe(document.body)
+  }
+
+  it('TC-IA-K1 桌面：输入框里按 1 不拦、不答、卡片还在；离开输入框再按 1 → 允许这一次', async () => {
+    const onResponse = vi.fn()
+    await mountInput({ accessory: createElement(PendingInputsPanel, { onResponse }) })
+    busy({ asks: [ASK] })
+    await flush()
+    expect(askCard()).not.toBeNull()
+
+    textarea().focus()
+    expect(document.activeElement).toBe(textarea())
+    expect(await pressKey('1', textarea())).toBe(true)
+    expect(onResponse).not.toHaveBeenCalled()
+    expect(agent.respondToInput).not.toHaveBeenCalled()
+    expect(askCard()).not.toBeNull()
+
+    await blurComposer()
+    expect(await pressKey('1', document.body)).toBe(false)
+    expect(onResponse.mock.calls).toEqual([['r1', { kind: 'ask', allowed: true }]])
+  })
+
+  it('TC-IA-K2 桌面、选项题：输入框里按 1 什么都不勾，确认键仍禁用', async () => {
+    const onResponse = vi.fn()
+    await mountInput({ accessory: createElement(PendingInputsPanel, { onResponse }) })
+    busy({ asks: [CHOICE] })
+    await flush()
+    expect(choiceRows()).toEqual(['false', 'false'])
+
+    textarea().focus()
+    expect(await pressKey('1', textarea())).toBe(true)
+    expect(choiceRows()).toEqual(['false', 'false'])
+    expect(confirmButton().disabled).toBe(true)
+    expect(store().sessionInputDrafts.s1?.[CHOICE.id]).toEqual({ selected: [] })
+    expect(onResponse).not.toHaveBeenCalled()
+  })
+
+  it('TC-IA-K3 触屏、焦点不在输入框：body 上按 1 什么都不做', async () => {
+    const onResponse = vi.fn()
+    await mountInput({ ...TOUCH, accessory: createElement(PendingInputsPanel, { onResponse }) })
+    busy({ asks: [ASK] })
+    await flush()
+    expect(askCard()).not.toBeNull()
+    await blurComposer()
+    expect(await pressKey('1', document.body)).toBe(true)
+    expect(onResponse).not.toHaveBeenCalled()
+    expect(agent.respondToInput).not.toHaveBeenCalled()
+    expect(askCard()).not.toBeNull()
   })
 })
 

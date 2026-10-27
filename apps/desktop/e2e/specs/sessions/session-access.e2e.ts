@@ -345,9 +345,9 @@ describe('session access', () => {
         targetTitle: B_TITLE,
         targetId: bSid,
         message: { label: en.toolCall.sessionAskMessage, text: M1 },
-        // 左端的角标是命中的出厂策略（显示名取自它的 md）
+        // 预览下面的角标是命中的出厂策略（显示名取自它的 md）
         policy: POLICY_DISPLAY_NAME,
-        buttons: [en.toolCall.deny, en.toolCall.allowAndRememberSession, en.toolCall.allow],
+        buttons: [en.toolCall.askAllowOnce, en.toolCall.askRememberSession, en.toolCall.deny],
         rememberSession: true,
         pathRemember: false
       })
@@ -527,7 +527,7 @@ describe('session access', () => {
         targetId: bSid,
         message: null,
         policy: POLICY_DISPLAY_NAME,
-        buttons: [en.toolCall.deny, en.toolCall.allowAndRememberSession, en.toolCall.allow],
+        buttons: [en.toolCall.askAllowOnce, en.toolCall.askRememberSession, en.toolCall.deny],
         rememberSession: true,
         pathRemember: false
       })

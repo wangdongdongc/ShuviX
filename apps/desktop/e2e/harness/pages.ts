@@ -367,8 +367,8 @@ export interface ChatPane {
    */
   pendingAskFullAccess(): Promise<boolean>
   /**
-   * 点询问卡片上的「允许」/「拒绝」（与 markdownWindowPane 同一种认法：允许 = 卡片操作栏里唯一的 bg-accent 按钮，
-   * 拒绝 = flex-1 占位之后的第一颗按钮）。没有挂着的询问时抛
+   * 点询问卡片上的「允许这一次」/「拒绝」那一行（`[data-ask-option="allow" | "deny"]`，与 markdownWindowPane
+   * 同一种认法）。没有挂着的询问时抛
    */
   answerPendingAsk(which: 'allow' | 'deny'): Promise<void>
   /**
@@ -877,69 +877,69 @@ export function chatPane(main: CdpClient): ChatPane {
           })
         })()`
       ),
-    // 询问卡片 = 待处理面板（输入卡片顶上的 rounded-t-2xl）里的 AskForm：标题是一个不换行的
-    // font-medium 段落，它所在那一行的第一枚 svg 是标题图标，标题行的下一个兄弟是预览块
+    // 询问卡片 = 待处理面板（`[data-pending-inputs]`，输入卡片的顶格）里的 AskForm（`[data-ask-card]`）：
+    // 顶行的动作名是 `[data-ask-title]`、它那一行的第一枚 svg 是图标；工具自己的说明 `[data-ask-description]`
+    // （有审查意见时不摆）；预览块 `[data-ask-preview]`
     pendingAskShot: () =>
       main.eval<PendingAskShot | null>(`(() => {
-        const title = [...document.querySelectorAll('.rounded-t-2xl p.font-medium.whitespace-nowrap')][0]
-        if (!title) return null
-        const row = title.parentElement
-        const svg = row?.querySelector('svg')
+        const card = document.querySelector('[data-pending-inputs] [data-ask-card]')
+        const title = card?.querySelector('[data-ask-title]')
+        if (!card || !title) return null
+        const svg = title.parentElement?.querySelector('svg')
         return {
           title: (title.textContent ?? '').trim(),
           icon: svg ? ([...svg.classList].find((c) => c.startsWith('lucide-')) ?? '') : '',
-          description: (title.nextElementSibling?.textContent ?? '').trim(),
-          preview: (row?.nextElementSibling?.textContent ?? '').trim()
+          description: (card.querySelector('[data-ask-description]')?.textContent ?? '').trim(),
+          preview: (card.querySelector('[data-ask-preview]')?.textContent ?? '').trim()
         }
       })()`),
     answerPendingAsk: async (which) => {
       const outcome = await main.eval<string>(`(() => {
-        const title = [...document.querySelectorAll('.rounded-t-2xl p.font-medium.whitespace-nowrap')][0]
-        const root = title?.closest('.space-y-2')
-        const allow = root?.querySelector('button.bg-accent')
-        if (!allow) return 'no ask card'
-        if (${JSON.stringify(which)} === 'allow') { allow.click(); return 'ok' }
-        const spacer = allow.parentElement?.querySelector(':scope > span.flex-1')
-        const deny = spacer?.nextElementSibling
-        if (!deny || deny.tagName !== 'BUTTON') return 'no deny button'
-        deny.click()
+        const card = document.querySelector('[data-pending-inputs] [data-ask-card]')
+        if (!card) return 'no ask card'
+        const row = card.querySelector('[data-ask-option="' + ${JSON.stringify(which)} + '"]')
+        if (!row) return 'no ' + ${JSON.stringify(which)} + ' row'
+        row.click()
         return 'ok'
       })()`)
       if (outcome !== 'ok') throw new Error(`ask card ${which}: ${outcome}`)
     },
-    // 标签在询问卡片的标题行里（与后台标签同一个槽），卡片在待处理面板（rounded-t-2xl）里
+    // 标签在询问卡片的顶行里（与后台标签同一个槽）
     pendingAskFullAccess: () =>
-      main.eval<boolean>(`!!document.querySelector('.rounded-t-2xl [data-full-access]')`),
-    // 审查意见块（ReviewOpinion）：第一个子节点是「风险标签 + summary」那一行（两个 span），
-    // 有理由时第二个子节点是 <p>：一个标签 span + 理由正文 —— 正文取标签之后的那些节点
+      main.eval<boolean>(`!!document.querySelector('[data-pending-inputs] [data-full-access]')`),
+    // 审查意见（ReviewOpinion，`[data-ask-review]`）：summary 是卡片标题 `[data-ask-review-summary]`，
+    // 理由那一句 `[data-ask-review-reason]` 前面有一个只给读屏用的标签（.sr-only）—— 正文取它之外的部分；
+    // 风险标签在卡片顶行右端（`[data-ask-review-risk]`）
     pendingAskReview: () =>
       main.eval<AskReviewShot | null>(`(() => {
-        const box = document.querySelector('.rounded-t-2xl [data-ask-review]')
+        const card = document.querySelector('[data-pending-inputs] [data-ask-card]')
+        const box = card?.querySelector('[data-ask-review]')
         if (!box) return null
-        const head = box.firstElementChild
-        const spans = head ? [...head.querySelectorAll(':scope > span')] : []
-        const reasonP = box.querySelector(':scope > p')
-        const reason = reasonP
-          ? [...reasonP.childNodes].slice(1).map((n) => n.textContent ?? '').join('')
+        const reasonEl = box.querySelector('[data-ask-review-reason]')
+        const reason = reasonEl
+          ? [...reasonEl.childNodes]
+              .filter((n) => !(n.nodeType === 1 && n.classList.contains('sr-only')))
+              .map((n) => n.textContent ?? '')
+              .join('')
           : ''
         return {
           risk: box.getAttribute('data-ask-review') ?? '',
-          riskLabel: (spans[0]?.textContent ?? '').trim(),
-          summary: (spans[1]?.textContent ?? '').trim(),
+          riskLabel: (card.querySelector('[data-ask-review-risk]')?.textContent ?? '').trim(),
+          summary: (box.querySelector('[data-ask-review-summary]')?.textContent ?? '').trim(),
           reason: reason.trim(),
           text: (box.textContent ?? '').trim()
         }
       })()`),
     pendingAskRect: () =>
       main.eval<ViewportRect | null>(`(() => {
-        const panel = document.querySelector('.rounded-t-2xl')
+        const panel = document.querySelector('[data-pending-inputs]')
         if (!panel) return null
         const r = panel.getBoundingClientRect()
         return { x: r.left, y: r.top, width: r.width, height: r.height }
       })()`),
     screenshotPendingAsk: async (filePath, pad = 12) => {
       const rect = await main.eval<ViewportRect | null>(`(() => {
-        const panel = document.querySelector('.rounded-t-2xl')
+        const panel = document.querySelector('[data-pending-inputs]')
         if (!panel) return null
         panel.scrollIntoView({ block: 'nearest' })
         const r = panel.getBoundingClientRect()
@@ -1085,7 +1085,7 @@ export function chatPane(main: CdpClient): ChatPane {
 
     pendingPanel: () =>
       main.eval(`(() => {
-        const panel = document.querySelector('.rounded-t-2xl')
+        const panel = document.querySelector('[data-pending-inputs]')
         if (!panel) return { open: false, firstInCard: false }
         // 顶格 = 输入卡片（border rounded-2xl 那层）的第一个子节点
         return { open: true, firstInCard: panel.parentElement?.firstElementChild === panel }
@@ -3024,7 +3024,8 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
 // ─────────────────────────────────────────────────────────────────────────
 // 会话访问（session 工具与一条不是自己子会话的会话交互，2026-10-20）的两块界面：
 //   - 询问卡片上的会话块（chat-ui AskForm 的 SessionPreview，`[data-ask-session=<目标 id>]`）与
-//     「允许并记住」（`[data-remember-session]`）—— 卡片在输入卡片顶上的待处理面板（rounded-t-2xl）里；
+//     「允许，并记住这条会话」那一行（`[data-remember-session]`）—— 卡片在输入卡片顶上的待处理面板
+//     （`[data-pending-inputs]`）里；
 //   - 会话设置弹窗里的「会话访问」卡（app-shell SessionAclSection，`[data-session-acl-sessions=<会话 id>]`，
 //     一行一个 `[data-acl-kind="session"][data-acl-target=<目标 id>]`，访问方式读 `data-acl-access`）。
 //     只在弹窗面板里找：空会话的聊天区会内联渲染同一张面板。
@@ -3041,57 +3042,51 @@ export interface SessionAskShot {
   targetId: string
   /** 「将发送的消息」标签与 `<pre>` 里的原文；查看类询问没有这一块 → null */
   message: { label: string; text: string } | null
-  /** 操作栏左端命中策略的角标文字（策略显示名；没有角标 → ''） */
+  /** 预览下面命中策略的角标文字（策略显示名；没有角标 → ''） */
   policy: string
-  /** 操作栏右侧动作按钮的文字（DOM 序，不含左端的策略角标） */
+  /** 选项行的文字（DOM 序，自上而下；不含行首的序号） */
   buttons: string[]
   /** 有没有会话类的「允许并记住」（`data-remember-session`） */
   rememberSession: boolean
-  /** 有没有路径类的记住选项（`data-remember-options` / `data-remember-folder`）—— 会话卡上不该有 */
+  /** 有没有路径类的记住选项（`data-ask-option="remember-path"` / `data-remember-folder`）—— 会话卡上不该有 */
   pathRemember: boolean
 }
 
 export interface SessionAskPane {
   /** 待处理面板里那张会话询问卡；没有挂着的会话询问时为 null */
   shot(): Promise<SessionAskShot | null>
-  /** 点「允许并记住」（会话类）；卡片不在或没有这颗按钮 → 抛 */
+  /** 点「允许，并记住这条会话」那一行；卡片不在或没有这一行 → 抛 */
   rememberSession(): Promise<void>
 }
 
 export function sessionAskPane(main: CdpClient): SessionAskPane {
-  const BOX = `document.querySelector('.rounded-t-2xl [data-ask-session]')`
+  const BOX = `document.querySelector('[data-pending-inputs] [data-ask-session]')`
   return {
     shot: () =>
       main.eval<SessionAskShot | null>(`(() => {
         const box = ${BOX}
         if (!box) return null
-        const card = box.closest('.space-y-2')
+        const card = box.closest('[data-ask-card]')
         const head = box.firstElementChild
         const pre = box.querySelector('pre')
         const label = pre?.previousElementSibling
-        // 操作栏 = 卡片里唯一有直接子按钮的那一行（标题行里的 span.flex-1 是说明，不是它）；占位 span.flex-1
-        // 左边是命中策略的角标，右边是动作
-        const bar = [...(card?.children ?? [])].find((c) => c.querySelector(':scope > button'))
-        const items = [...(bar?.children ?? [])]
-        const spacer = items.findIndex((c) => c.tagName === 'SPAN' && c.classList.contains('flex-1'))
-        const textOf = (els) => els.map((el) => (el.textContent ?? '').trim())
         return {
-          title: (card?.querySelector('p.font-medium.whitespace-nowrap')?.textContent ?? '').trim(),
+          title: (card?.querySelector('[data-ask-title]')?.textContent ?? '').trim(),
           sessionId: box.getAttribute('data-ask-session') ?? '',
           targetTitle: (head?.children[0]?.textContent ?? '').trim(),
           targetId: (head?.children[1]?.textContent ?? '').trim(),
           message: pre ? { label: (label?.textContent ?? '').trim(), text: pre.textContent ?? '' } : null,
-          policy: textOf(items.slice(0, Math.max(spacer, 0))).join(' '),
-          buttons: textOf(
-            items.slice(spacer + 1).flatMap((el) => (el.tagName === 'BUTTON' ? [el] : [...el.querySelectorAll('button')]))
+          policy: (card?.querySelector('[data-ask-policy]')?.textContent ?? '').trim(),
+          buttons: [...(card?.querySelectorAll('[data-ask-option]') ?? [])].map((row) =>
+            (row.querySelector('[data-option-label]')?.textContent ?? '').trim()
           ),
           rememberSession: !!card?.querySelector('[data-remember-session]'),
-          pathRemember: !!card?.querySelector('[data-remember-options], [data-remember-folder]')
+          pathRemember: !!card?.querySelector('[data-ask-option="remember-path"], [data-remember-folder]')
         }
       })()`),
     rememberSession: async () => {
       const ok = await main.eval<boolean>(`(() => {
-        const btn = ${BOX}?.closest('.space-y-2')?.querySelector('[data-remember-session]')
+        const btn = ${BOX}?.closest('[data-ask-card]')?.querySelector('[data-remember-session]')
         if (!btn) return false
         btn.click()
         return true
@@ -9299,11 +9294,8 @@ export function markdownWindowPane(client: CdpClient): MarkdownWindowPane {
   const INPUT = `[...(${ROOT}?.querySelectorAll('textarea') ?? [])].find((t) => !t.closest('.cm-editor'))`
   // 抽屉细条：带 MessagesSquare 图标的那颗按钮；它的父节点是抽屉根（展开时条目列表是它的兄弟）
   const DRAWER_BTN = `[...(${ROOT}?.querySelectorAll('button') ?? [])].find((b) => b.querySelector('.lucide-messages-square'))`
-  // 询问卡片 = AskForm 根（标题段落 p.font-medium.whitespace-nowrap 所在的 .space-y-2）
-  const ASK_ROOT = `(${ROOT}?.querySelector('p.font-medium.whitespace-nowrap')?.closest('.space-y-2') ?? null)`
-  // 允许 = 操作栏里唯一的 bg-accent 按钮；拒绝 = 操作栏里 flex-1 占位之后的第一颗按钮
-  //（占位之前可能还有命中策略的角标，那也是按钮）
-  const ALLOW_BTN = `${ASK_ROOT}?.querySelector('button.bg-accent')`
+  // 询问卡片 = AskForm 根（`[data-ask-card]`）；允许 / 拒绝 = `[data-ask-option="allow" | "deny"]` 那一行
+  const ASK_ROOT = `(${ROOT}?.querySelector('[data-ask-card]') ?? null)`
 
   const editorText = (): Promise<string> =>
     client.eval<string>(
@@ -9348,27 +9340,24 @@ export function markdownWindowPane(client: CdpClient): MarkdownWindowPane {
   const pendingAsk = (): Promise<PendingAskShot | null> =>
     client.eval<PendingAskShot | null>(`(() => {
       const root = ${ASK_ROOT}
-      if (!root) return null
-      const title = root.querySelector('p.font-medium.whitespace-nowrap')
-      const row = title.parentElement
-      const svg = row?.querySelector('svg')
+      const title = root?.querySelector('[data-ask-title]')
+      if (!root || !title) return null
+      const svg = title.parentElement?.querySelector('svg')
       return {
         title: (title.textContent ?? '').trim(),
         icon: svg ? ([...svg.classList].find((c) => c.startsWith('lucide-')) ?? '') : '',
-        description: (title.nextElementSibling?.textContent ?? '').trim(),
-        preview: (row?.nextElementSibling?.textContent ?? '').trim()
+        description: (root.querySelector('[data-ask-description]')?.textContent ?? '').trim(),
+        preview: (root.querySelector('[data-ask-preview]')?.textContent ?? '').trim()
       }
     })()`)
 
   const clickAsk = async (which: 'allow' | 'deny'): Promise<void> => {
     const outcome = await client.eval<string>(`(() => {
-      const allow = ${ALLOW_BTN}
-      if (!allow) return 'no ask card'
-      if (${JSON.stringify(which)} === 'allow') { allow.click(); return 'ok' }
-      const spacer = allow.parentElement?.querySelector(':scope > span.flex-1')
-      const deny = spacer?.nextElementSibling
-      if (!deny || deny.tagName !== 'BUTTON') return 'no deny button'
-      deny.click()
+      const root = ${ASK_ROOT}
+      if (!root) return 'no ask card'
+      const row = root.querySelector('[data-ask-option="' + ${JSON.stringify(which)} + '"]')
+      if (!row) return 'no ' + ${JSON.stringify(which)} + ' row'
+      row.click()
       return 'ok'
     })()`)
     if (outcome !== 'ok') throw new Error(`ask card ${which}: ${outcome}`)
@@ -12060,6 +12049,8 @@ export type WebMobileTouchTarget =
    * 桌面上悬停它让卡的操作行显形
    */
   | { replyBody: string }
+  /** 输入卡片顶格待处理面板里审批卡的一行（`[data-pending-inputs] [data-ask-option=<id>]`：allow / remember-path / …） */
+  | { pendingOption: string }
 
 /** 手机布局里一个标签按钮 */
 export interface WebMobileTabShot {
@@ -12219,6 +12210,25 @@ export interface UserMessageShot {
   chip: { box: BoxShot; origin: string | null } | null
   /** `[data-user-actions]` 里带 aria-label 的按钮（复制 / 回退；展开键没有 aria-label），DOM 序，带计算 opacity */
   actions: Array<{ label: string; box: BoxShot; opacity: string }>
+}
+
+/** 输入卡片顶格的待处理面板此刻的样子（见 `pendingCard`；视口坐标，CSS px） */
+export interface PendingCardShot {
+  /** 面板的 `data-pending-inputs`（ask / choice） */
+  kind: string
+  /** 面板本体 `[data-pending-inputs]` */
+  panel: BoxShot
+  /**
+   * 审批卡的选项行（`[data-ask-option]`，DOM 序）：id、正文（`[data-option-label]` 的文字）、行的盒子、正文的计算字号
+   */
+  rows: Array<{ id: string; label: string; box: BoxShot; fontSize: string }>
+  /** 「记住所在的文件夹」那一行第二行的路径（`[data-option-detail]`）；没有那一行 → null */
+  folderDetail: BoxShot | null
+  /** 输入框（第一个 textarea）的占位文字 */
+  placeholder: string
+  viewport: { w: number; h: number }
+  /** 横向溢出：document 与手机壳（`data-mobile-shell`，不在 → null）各自的 scrollWidth − clientWidth */
+  overflow: { doc: number; shell: number | null }
 }
 
 /** 助手卡操作行 `[data-message-actions]` 里的一颗按钮（见 `assistantActionsShot`） */
@@ -12401,6 +12411,13 @@ export interface WebMobilePane {
    * `:hover` 跟着变）；`null` = 挪到视口左上角 (1, 1)，离开对话流
    */
   hover(target: WebMobileTouchTarget | null): Promise<void>
+  /** 输入卡片顶格的待处理面板（`[data-pending-inputs]`）与审批卡的选项行；面板不在 → null */
+  pendingCard(): Promise<PendingCardShot | null>
+  /**
+   * 让焦点离开一切（`document.activeElement.blur()`，确认落在 body 上 —— 没落上就抛），再按一下可信的数字键
+   * （CDP `Input.dispatchKeyEvent` keyDown 带 text + keyUp）
+   */
+  pressDigitOnBodyTrusted(digit: string): Promise<void>
 
   /**
    * 在 window 上挂一个 contextmenu 计数器（并归零）—— **捕获**阶段：菜单的处理函数（showContextMenu）会
@@ -12532,6 +12549,8 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
       return `document.querySelector('[data-msg-id=${JSON.stringify(target.userBubble)}] [data-user-bubble]')`
     if ('replyBody' in target)
       return `document.querySelector('[data-msg-id=${JSON.stringify(target.replyBody)}] .min-w-0 > .markdown-body')`
+    if ('pendingOption' in target)
+      return `document.querySelector('[data-pending-inputs] [data-ask-option=${JSON.stringify(target.pendingOption)}]')`
     return `${SHEET}?.querySelector('[data-bottom-sheet-backdrop]')`
   }
 
@@ -13172,6 +13191,54 @@ export function webMobilePane(client: CdpClient): WebMobilePane {
     hover: async (target) => {
       const p = target ? await pointOf(target) : { x: 1, y: 1 }
       await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y })
+    },
+    pendingCard: () =>
+      client.eval<PendingCardShot | null>(`(() => {
+        const panel = document.querySelector('[data-pending-inputs]')
+        if (!panel) return null
+        const box = (el) => {
+          const r = el.getBoundingClientRect()
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+        }
+        const folder = panel.querySelector('[data-ask-option="remember-folder"] [data-option-detail]')
+        const shell = ${SHELL}
+        const doc = document.documentElement
+        return {
+          kind: panel.getAttribute('data-pending-inputs') ?? '',
+          panel: box(panel),
+          rows: [...panel.querySelectorAll('[data-ask-option]')].map((r) => {
+            const label = r.querySelector('[data-option-label]')
+            return {
+              id: r.getAttribute('data-ask-option') ?? '',
+              label: (label?.textContent ?? '').trim(),
+              box: box(r),
+              fontSize: label ? getComputedStyle(label).fontSize : ''
+            }
+          }),
+          folderDetail: folder ? box(folder) : null,
+          placeholder: document.querySelector('textarea')?.getAttribute('placeholder') ?? '',
+          viewport: { w: window.innerWidth, h: window.innerHeight },
+          overflow: {
+            doc: doc.scrollWidth - doc.clientWidth,
+            shell: shell ? shell.scrollWidth - shell.clientWidth : null
+          }
+        }
+      })()`),
+    pressDigitOnBodyTrusted: async (digit) => {
+      if (!/^[0-9]$/.test(digit)) throw new Error(`not a digit key: ${JSON.stringify(digit)}`)
+      const onBody = await client.eval<boolean>(`(() => {
+        document.activeElement?.blur?.()
+        return document.activeElement === document.body
+      })()`)
+      if (!onBody) throw new Error('the focus did not land on body')
+      const base = { key: digit, code: `Digit${digit}`, windowsVirtualKeyCode: digit.charCodeAt(0) }
+      await client.send('Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        ...base,
+        text: digit,
+        unmodifiedText: digit
+      })
+      await client.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
     },
 
     installContextMenuCounter: async () => {

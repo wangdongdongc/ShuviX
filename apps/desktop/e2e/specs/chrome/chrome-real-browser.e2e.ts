@@ -384,7 +384,7 @@ describe.skipIf(!CHROME_BIN)('真实浏览器', () => {
     expect((await queryTabs()).some((t) => t.url.includes('localhost'))).toBe(false)
 
     const clicked = await panel.eval<string>(`(() => {
-      const btn = [...document.querySelectorAll('button')].find((b) => b.className.includes('bg-accent'))
+      const btn = document.querySelector('[data-ask-option="allow"]')
       if (!btn) return 'no allow button'
       btn.click()
       return 'clicked'

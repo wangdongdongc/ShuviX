@@ -37,7 +37,7 @@ export function PendingInputsDrawer({
   const isAsk = activeRequest?.kind === 'ask'
   const Icon = isAsk ? ShieldAlert : MessageCircleQuestion
   return (
-    <div className={isAsk ? 'bg-warning/[0.04]' : 'bg-accent/[0.04]'}>
+    <div>
       {/* 细条：语义色图标 + 计数；点任意处折叠/展开。展开时不带下边线 —— 与下方面板融为一块 */}
       <button
         type="button"

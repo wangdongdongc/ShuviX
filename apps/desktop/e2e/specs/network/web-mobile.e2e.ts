@@ -76,6 +76,12 @@
  *   M-30 桌面主窗口（compact）里同一条会话：remote 的「Hi」那行标签右缘 = 气泡右缘（±1）、在气泡上面（原来的
  *        bug：短消息的标签歪到气泡左边去）；不悬停时用户消息的复制 / 回退与回复卡的操作都在、opacity 0；
  *        真悬停气泡 → 那两颗到 1，气泡与 meta 行一动不动（±0.5）；悬停回复正文 → 它的操作到 1
+ *   M-31 审批卡片（MOB-ask，390 宽，真触摸）：项目会话读家目录里、工作区外的文件（ask-on-external-path #0 问人），
+ *        手机打开它。卡片恰四行 allow / remember-path / remember-folder / deny（en 文案）：每行 ≥ 44px 高（−0.5）、
+ *        左右缘 = 面板的（±1）且在 0…390 之内、自上而下不重叠，第一行顶与最后一行底都在视口里；正文 16px；文件夹
+ *        那一行的路径不伸出行的右缘；页面与壳没有横向溢出；输入框占位是 otherPlaceholderAsk。焦点在 body 上按可信的
+ *        1 → 500ms 后卡片还在、假提供商没收到新请求（触屏没有数字键）。真点「允许这一次」→ 卡片收起、回复
+ *        MOB-ASK-DONE 落定、read 那一块的结果里有 MOB-ASK-FILE 且不是错误
  *
  * 约定同 web-fallbacks.e2e.ts：界面语言先设成 en；从不在缺省端口 7766 上打开；会话只经主进程 IPC 带明确标题创建
  * （不跑 titler）；预置回复经主进程的 agent.prompt 跑完一轮。设备模拟走 CDP（`Emulation.setDeviceMetricsOverride`
@@ -2151,6 +2157,127 @@ describe('phone layout: the shell', () => {
           )
       }
       if ((await pane.activeTab()) === 'settings') await settingsToList().catch(() => undefined)
+    }
+  })
+
+  it('M-31 an approval card on the phone: four 44px option rows across the card, 16px labels, no sideways scroll; no digit keys; a real tap allows', async () => {
+    type ListedMessage = {
+      role: string
+      content: string
+      blocks?: Array<{
+        type: string
+        toolCallId?: string
+        toolName?: string
+        result?: string
+        isError?: boolean
+      }>
+    }
+    const chat = chatPane(page())
+    const dir = join(app.home, 'outside-mob-ask', 'deep')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'note.txt')
+    writeFileSync(file, 'MOB-ASK-FILE')
+    const sid = await app.main.eval<string>(
+      `window.api.session.create(${JSON.stringify({ title: 'MOB-ask', projectId: projects.main.id })}).then((s) => s.id)`
+    )
+    const messages = (): Promise<ListedMessage[]> =>
+      app.main.eval<ListedMessage[]>(`window.api.message.list(${JSON.stringify(sid)})`)
+    provider.script(
+      {
+        toolCalls: [{ id: 'mob-ask-1', name: 'read', args: JSON.stringify({ path: file }) }],
+        usage: USAGE
+      },
+      { text: 'MOB-ASK-DONE', usage: USAGE }
+    )
+    // agent.prompt 等整轮跑完才回，而这一轮停在询问上：只发出去，不等
+    await app.main.eval(
+      `(window.api.agent.prompt(${JSON.stringify({ sessionId: sid, text: 'read the note' })}).catch(() => {}), true)`
+    )
+    let answered = false
+    try {
+      if ((await page().eval<number>('innerWidth')) !== PHONE.width) await phone()
+      await toTab('sessions')
+      // 单跑这一条时 MobProj 是收着的（M-2 才展开它）
+      if ((await mobile().listGroupExpanded(projects.main.name)) === false) {
+        await mobile().tap({ listGroupToggle: projects.main.name })
+        await until(
+          async () => (await mobile().listGroupExpanded(projects.main.name)) === true,
+          'MobProj expanded'
+        )
+      }
+      await until(
+        async () => (await mobile().listRows()).includes('MOB-ask'),
+        'MOB-ask in the phone list'
+      )
+      await openFromList('MOB-ask')
+      await chat.ready()
+
+      const card = await until(async () => {
+        const c = await mobile().pendingCard()
+        return c?.kind === 'ask' && c.rows.length > 0 ? c : null
+      }, 'the approval card on the phone')
+      const what = JSON.stringify(card)
+      expect(
+        card.rows.map((r) => r.id),
+        what
+      ).toEqual(['allow', 'remember-path', 'remember-folder', 'deny'])
+      expect(
+        card.rows.map((r) => r.label),
+        what
+      ).toEqual([
+        en.toolCall.askAllowOnce,
+        en.toolCall.askRememberFile,
+        en.toolCall.askRememberFolder,
+        en.toolCall.deny
+      ])
+      card.rows.forEach((r, i) => {
+        const msg = `${r.id} ${what}`
+        expect(r.box.height, msg).toBeGreaterThanOrEqual(43.5)
+        expect(Math.abs(r.box.left - card.panel.left), msg).toBeLessThanOrEqual(1)
+        expect(Math.abs(r.box.right - card.panel.right), msg).toBeLessThanOrEqual(1)
+        expect(r.box.left, msg).toBeGreaterThanOrEqual(0)
+        expect(r.box.right, msg).toBeLessThanOrEqual(PHONE.width)
+        expect(r.fontSize, msg).toBe('16px')
+        if (i > 0) expect(r.box.top, msg).toBeGreaterThanOrEqual(card.rows[i - 1]!.box.bottom - 0.5)
+      })
+      expect(card.rows[0]!.box.top, what).toBeGreaterThanOrEqual(0)
+      expect(card.rows[card.rows.length - 1]!.box.bottom, what).toBeLessThanOrEqual(card.viewport.h)
+      const folderRow = card.rows.find((r) => r.id === 'remember-folder')!
+      expect(card.folderDetail, what).not.toBeNull()
+      expect(card.folderDetail!.right, what).toBeLessThanOrEqual(folderRow.box.right + 0.5)
+      expect(card.overflow.doc, what).toBeLessThanOrEqual(0)
+      expect(card.overflow.shell, what).not.toBeNull()
+      expect(card.overflow.shell!, what).toBeLessThanOrEqual(0)
+      expect(card.placeholder).toBe(en.pendingInputs.otherPlaceholderAsk)
+
+      // 触屏没有数字键：焦点在 body 上按可信的 1，什么都不答
+      const requests = provider.chatRequestCount()
+      await mobile().pressDigitOnBodyTrusted('1')
+      await sleep(500)
+      expect((await mobile().pendingCard())?.kind, 'the card is still there').toBe('ask')
+      expect(provider.chatRequestCount(), 'nothing answered by the key').toBe(requests)
+
+      // 真点「允许这一次」
+      await mobile().tap({ pendingOption: 'allow' })
+      await until(async () => (await mobile().pendingCard()) === null, 'the card closed')
+      await until(
+        async () =>
+          (await messages()).some((m) => m.role === 'assistant' && m.content === 'MOB-ASK-DONE'),
+        'the reply after the allow'
+      )
+      answered = true
+      const tool = (await messages())
+        .flatMap((m) => m.blocks ?? [])
+        .find((b) => b.type === 'tool' && b.toolCallId === 'mob-ask-1')
+      expect(tool, 'the read tool block').toBeDefined()
+      expect(tool!.toolName).toBe('read')
+      expect(tool!.isError ?? false, JSON.stringify(tool)).toBe(false)
+      expect(tool!.result ?? '').toContain('MOB-ASK-FILE')
+      await chat.waitIdle()
+    } finally {
+      // 半路失败时别把这一轮挂在询问上
+      if (!answered)
+        await app.main.eval(`window.api.agent.abort(${JSON.stringify(sid)})`).catch(() => undefined)
     }
   })
 })

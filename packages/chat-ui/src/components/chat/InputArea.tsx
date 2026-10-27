@@ -1126,7 +1126,10 @@ export function InputArea({
                       : isAgentClosing
                         ? t('input.placeholderClosing')
                         : activePendingInput
-                          ? t('pendingInputs.otherPlaceholder')
+                          ? // 不选上面的行，直接写：审批是「换个做法」，选项题是「自己的回答」
+                            activePendingInput.kind === 'ask'
+                            ? t('pendingInputs.otherPlaceholderAsk')
+                            : t('pendingInputs.otherPlaceholderChoice')
                           : isStreaming
                             ? t('input.placeholderSteer')
                             : touch

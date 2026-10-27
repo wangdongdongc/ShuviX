@@ -7,7 +7,7 @@
  *   - UI-M* 工具卡「已审查」：details 上的 `shuvixReview` 标记（toolReviewOf）在行尾挂一枚盾牌，
  *     颜色随风险、悬停是「hint + 审查员那句话」；实时与重开同一个样子；只有 done 才挂；
  *     步骤合并行折起来时挂段内风险最高的那一枚；
- *   - UI-A* 询问卡片上的审查意见：审查员交给你的那次，它的大白话放在命令原文上方；
+ *   - UI-A* 询问卡片上的审查意见：审查员交给你的那次，它的大白话就是卡片标题（命令原文上方），风险标签在顶行右端；
  *   - UI-K* 一条完整的链（视图驱动）：工具在跑 → 审查中 → 转圈 → 工具做完带标记 → 本轮结束之后仍在。
  *
  * 包入口 `@shuvix/chat-ui` 整个顶掉（AskForm 从入口取 getHostApi）；i18n 走真 zh 资源；期望文案一律用
@@ -458,22 +458,29 @@ describe('AskForm — 审查员交给你的那次，卡片上附它的意见', (
   ]
   const before = (a: Node, b: Node): boolean =>
     !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
-  const button = (text: string): HTMLButtonElement => {
-    const found = [...container.querySelectorAll('button')].find((b) => b.textContent === text)
-    if (!found) throw new Error(`button ${text} not rendered`)
+  const optionRow = (id: string): HTMLButtonElement => {
+    const found = container.querySelector<HTMLButtonElement>(`[data-ask-option="${id}"]`)
+    if (!found) throw new Error(`option row ${id} not rendered`)
     return found
   }
+  const reasonLine = (el: HTMLElement): HTMLElement | null =>
+    el.querySelector<HTMLElement>('[data-ask-review-reason]')
 
-  it('UI-A1 review high：恰一栏 [data-ask-review="high"]，含风险标签、summary 原文与「需注意： reason」一行', () => {
+  it('UI-A1 review high：恰一栏 [data-ask-review="high"]，summary 原文与「需注意： reason」一行（标签只给读屏）；风险标签在顶行', () => {
     render(form(ask({ review: REVIEW })))
     const els = opinion()
     expect(els).toHaveLength(1)
     const el = els[0]
     expect(el.getAttribute('data-ask-review')).toBe('high')
-    expect(el.textContent).toContain(riskLabel('high'))
-    expect(el.textContent).toContain(REVIEW.summary)
-    const reasonLine = el.querySelector('p')
-    expect(reasonLine?.textContent).toBe(`${tr('toolCall.reviewReasonLabel')} ${REVIEW.reason}`)
+    expect(el.querySelector('[data-ask-review-summary]')?.textContent).toBe(REVIEW.summary)
+    expect(reasonLine(el)?.textContent).toBe(`${tr('toolCall.reviewReasonLabel')} ${REVIEW.reason}`)
+    expect(reasonLine(el)?.querySelector('.sr-only')?.textContent?.trim()).toBe(
+      tr('toolCall.reviewReasonLabel')
+    )
+    const badge = container.querySelector('[data-ask-review-risk]')
+    expect(badge?.getAttribute('data-ask-review-risk')).toBe('high')
+    expect(badge?.textContent).toBe(riskLabel('high'))
+    expect(badge?.closest('[data-ask-review]')).toBeNull()
   })
 
   it('UI-A2 这一栏在标题行之后、命令原文 code.hljs 之前', () => {
@@ -513,14 +520,23 @@ describe('AskForm — 审查员交给你的那次，卡片上附它的意见', (
     expect(before(el, preview!)).toBe(true)
   })
 
-  it('UI-A4 同一请求有 / 无 review 各渲染一次：前者去掉 [data-ask-review] 之后 innerHTML 与后者逐字相同', () => {
+  it('UI-A4 同一请求有 / 无 review：审查意见顶替工具说明、多一枚风险标签；预览与选项行逐字相同', () => {
     const withReview = renderApart(form(ask({ review: REVIEW })))
     const withoutReview = renderApart(form(ask()))
     expect(opinion(withReview)).toHaveLength(1)
     expect(opinion(withoutReview)).toHaveLength(0)
-    const clone = withReview.cloneNode(true) as HTMLElement
-    clone.querySelector('[data-ask-review]')!.remove()
-    expect(clone.innerHTML).toBe(withoutReview.innerHTML)
+    expect(withReview.querySelector('[data-ask-review-risk]')).not.toBeNull()
+    expect(withoutReview.querySelector('[data-ask-review-risk]')).toBeNull()
+    expect(withReview.querySelector('[data-ask-description]')).toBeNull()
+    expect(withoutReview.querySelector('[data-ask-description]')?.textContent).toBe(
+      'Clean the build'
+    )
+    const html = (root: HTMLElement, sel: string): string[] =>
+      [...root.querySelectorAll(sel)].map((n) => n.outerHTML)
+    expect(html(withReview, '[data-ask-preview]')).toEqual(
+      html(withoutReview, '[data-ask-preview]')
+    )
+    expect(html(withReview, '[data-ask-option]')).toEqual(html(withoutReview, '[data-ask-option]'))
   })
 
   it.each([
@@ -542,7 +558,7 @@ describe('AskForm — 审查员交给你的那次，卡片上附它的意见', (
   ])('UI-A6 reason 为%s：没有 reason 行', (_label, reason) => {
     render(form(ask({ review: { ...REVIEW, reason } })))
     const [el] = opinion()
-    expect(el.querySelector('p')).toBeNull()
+    expect(reasonLine(el)).toBeNull()
     expect(el.textContent).not.toContain(tr('toolCall.reviewReasonLabel'))
   })
 
@@ -559,20 +575,19 @@ describe('AskForm — 审查员交给你的那次，卡片上附它的意见', (
   it('UI-A8 带 review 时点允许 → {kind:ask, allowed:true}；点拒绝 → allowed:false', () => {
     const onSubmit = vi.fn()
     render(form(ask({ review: REVIEW }), onSubmit))
-    act(() => button(tr('toolCall.allow')).click())
+    act(() => optionRow('allow').click())
     expect(onSubmit).toHaveBeenLastCalledWith({ kind: 'ask', allowed: true })
-    act(() => button(tr('toolCall.deny')).click())
+    act(() => optionRow('deny').click())
     expect(onSubmit).toHaveBeenLastCalledWith({ kind: 'ask', allowed: false })
     expect(onSubmit).toHaveBeenCalledTimes(2)
   })
 
-  it('UI-A9 栏内顺序：风险标签 → summary → reason', () => {
+  it('UI-A9 卡内顺序：风险标签（顶行）→ summary → reason', () => {
     render(form(ask({ review: REVIEW })))
     const [el] = opinion()
-    const spans = [...el.querySelectorAll('span')]
-    const badge = spans.find((s) => s.textContent === riskLabel('high'))!
-    const summary = spans.find((s) => s.textContent === REVIEW.summary)!
-    const reason = el.querySelector('p')!
+    const badge = container.querySelector('[data-ask-review-risk]')!
+    const summary = el.querySelector('[data-ask-review-summary]')!
+    const reason = reasonLine(el)!
     expect(badge).toBeDefined()
     expect(summary).toBeDefined()
     expect(before(badge, summary)).toBe(true)

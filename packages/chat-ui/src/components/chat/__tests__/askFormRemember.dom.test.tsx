@@ -3,10 +3,11 @@
  * 询问卡片的「允许并记住」—— 记进会话权限表：这条路径本身，或（文件）它所在的那一级文件夹。
  *
  *   AR-1  rememberFolderOf：文件所在的文件夹；少于三段的（`/`、`/Users`、家目录这一层）不给；Windows 不数盘符
- *   AR-2  文件路径的读 / 写询问：「允许该路径」旁有下拉；点开才出现「允许整个文件夹 <父目录>」，点它回
- *         `extra.rememberPath = <父目录>`；主按钮照旧回 `rememberPath: true`
- *   AR-3  父目录太浅（家目录里的文件）→ 没有下拉；目录询问（允许此目录）→ 没有下拉
- *   AR-4  没有宿主（getHostApi 为 null）或不是路径询问（命令）→ 没有记住按钮，也没有下拉
+ *   AR-2  文件路径的读 / 写询问：选项行自上而下是「允许这一次 / 记住这个文件 / 记住所在的文件夹 / 拒绝」；
+ *         文件夹那一行直接摆着父目录（`data-remember-folder`、第二行的路径），点它回
+ *         `extra.rememberPath = <父目录>`；「记住这个文件」回 `rememberPath: true`；「允许这一次」不带 extra
+ *   AR-3  父目录太浅（家目录里的文件）→ 没有文件夹那一行；目录询问 → 没有「允许这一次」，只有「记住这个文件夹」与拒绝
+ *   AR-4  没有宿主（getHostApi 为 null）或不是路径询问（命令）→ 没有任何记住的行
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（AskForm 从那里取 getHostApi）；i18n 走真 en 资源。文件是 .tsx 但不写 JSX。
  */
@@ -68,10 +69,15 @@ function render(request: AskInputRequest, onSubmit = vi.fn()): typeof onSubmit {
   return onSubmit
 }
 
-const byText = (text: string): HTMLButtonElement | undefined =>
-  [...container.querySelectorAll('button')].find((b) => b.textContent === text)
-const options = (): HTMLButtonElement | null =>
-  container.querySelector<HTMLButtonElement>('[data-remember-options]')
+/** 选项行（`[data-ask-option]`，DOM 序）的 id 与正文（不含行首序号） */
+const rows = (): HTMLButtonElement[] => [
+  ...container.querySelectorAll<HTMLButtonElement>('[data-ask-option]')
+]
+const rowIds = (): string[] => rows().map((r) => r.dataset.askOption ?? '')
+const labelOf = (r: HTMLElement): string =>
+  r.querySelector('[data-option-label]')?.textContent ?? ''
+const row = (id: string): HTMLButtonElement | null =>
+  container.querySelector<HTMLButtonElement>(`[data-ask-option="${id}"]`)
 const folderButton = (): HTMLButtonElement | null =>
   container.querySelector<HTMLButtonElement>('[data-remember-folder]')
 
@@ -92,13 +98,19 @@ describe('rememberFolderOf', () => {
 })
 
 describe('AskForm 的允许并记住', () => {
-  it('AR-2 文件：下拉点开才有「允许整个文件夹」，回父目录；主按钮回 true', () => {
+  it('AR-2 文件：四行，文件夹那一行摆着父目录、回父目录；「记住这个文件」回 true；「允许这一次」不带 extra', () => {
     const onSubmit = render(ask())
-    expect(folderButton()).toBeNull()
-    act(() => options()!.click())
+    expect(rowIds()).toEqual(['allow', 'remember-path', 'remember-folder', 'deny'])
+    expect(rows().map(labelOf)).toEqual([
+      en.toolCall.askAllowOnce,
+      en.toolCall.askRememberFile,
+      en.toolCall.askRememberFolder,
+      en.toolCall.deny
+    ])
     const folder = folderButton()!
+    expect(folder).toBe(row('remember-folder'))
     expect(folder.dataset.rememberFolder).toBe('/Users/u/proj/docs')
-    expect(folder.textContent).toContain(en.toolCall.rememberFolder)
+    expect(folder.querySelector('[data-option-detail]')?.textContent).toBe('/Users/u/proj/docs')
     act(() => folder.click())
     expect(onSubmit).toHaveBeenLastCalledWith({
       kind: 'ask',
@@ -106,40 +118,41 @@ describe('AskForm 的允许并记住', () => {
       extra: { rememberPath: '/Users/u/proj/docs' }
     })
 
-    act(() => byText(en.toolCall.allowAndRememberPath)!.click())
+    act(() => row('remember-path')!.click())
     expect(onSubmit).toHaveBeenLastCalledWith({
       kind: 'ask',
       allowed: true,
       extra: { rememberPath: true }
     })
+
+    act(() => row('allow')!.click())
+    expect(onSubmit.mock.lastCall).toEqual([{ kind: 'ask', allowed: true }])
   })
 
-  it('AR-2 写询问同样有下拉', () => {
+  it('AR-2 写询问同样有文件夹那一行', () => {
     render(ask({ toolName: 'write', command: 'Write(/Users/u/proj/out/b.txt)' }))
-    act(() => options()!.click())
     expect(folderButton()!.dataset.rememberFolder).toBe('/Users/u/proj/out')
   })
 
-  it('AR-3 家目录里的文件、目录询问：没有下拉', () => {
+  it('AR-3 家目录里的文件：没有文件夹那一行；目录询问：只有「记住这个文件夹」与拒绝', () => {
     render(ask({ command: 'Read(/Users/u/notes.txt)' }))
-    expect(byText(en.toolCall.allowAndRememberPath)).toBeDefined()
-    expect(options()).toBeNull()
+    expect(rowIds()).toEqual(['allow', 'remember-path', 'deny'])
+    expect(folderButton()).toBeNull()
 
     render(ask({ command: 'Read(/Users/u/proj/docs)', pathIsDirectory: true }))
-    expect(byText(en.toolCall.allowThisDirectory)).toBeDefined()
-    expect(options()).toBeNull()
+    expect(rowIds()).toEqual(['remember-path', 'deny'])
+    expect(labelOf(row('remember-path')!)).toBe(en.toolCall.askRememberDirectory)
+    expect(folderButton()).toBeNull()
   })
 
-  it('AR-4 没有宿主 / 命令询问：没有记住按钮与下拉', () => {
+  it('AR-4 没有宿主 / 命令询问：没有记住的行', () => {
     host.api = null
     render(ask())
-    expect(byText(en.toolCall.allowAndRememberPath)).toBeUndefined()
-    expect(options()).toBeNull()
+    expect(rowIds()).toEqual(['allow', 'deny'])
 
     host.api = {}
     render(ask({ toolName: 'bash', command: 'ls -la' }))
-    expect(byText(en.toolCall.allowAndRememberPath)).toBeUndefined()
-    expect(options()).toBeNull()
+    expect(rowIds()).toEqual(['allow', 'deny'])
   })
 })
 
@@ -147,10 +160,11 @@ describe('AskForm 的允许并记住', () => {
  * 会话询问（request.session —— `session` 工具要与一条不是自己子会话的会话交互）：
  *
  *   XS-64 对话（write）询问 + 消息预览：标题「Talk to another session」；[data-ask-session=<id>] 摆标题与 id；
- *         「Message it will send」+ 原文在 <pre> 里；按钮恰为 Deny / [data-remember-session]「Allow and remember」/
- *         Allow，没有路径的记住按钮与下拉；记住 → extra.remember: true；允许 → 不带 extra；拒绝 → allowed: false
+ *         「Message it will send」+ 原文在 <pre> 里；选项行恰为 Allow once / [data-remember-session]「Allow and
+ *         remember this session」/ Deny，没有路径的记住行；记住 → extra.remember: true；允许 → 不带 extra；
+ *         拒绝 → allowed: false
  *   XS-65 查看（read）询问：标题「Read another session」、没有消息块；空标题 →「Untitled session」；
- *         没有宿主（getHostApi 为 null）→ 没有记住按钮，允许 / 拒绝照在
+ *         没有宿主（getHostApi 为 null）→ 没有记住那一行，允许 / 拒绝照在
  */
 describe('AskForm 的会话询问', () => {
   const SESSION_ID = 'sess-0123456789ab'
@@ -176,8 +190,7 @@ describe('AskForm 的会话询问', () => {
   const sessionBox = (): HTMLElement | null =>
     container.querySelector<HTMLElement>('[data-ask-session]')
   const titleText = (): string | null | undefined => container.querySelector('p')?.textContent
-  const buttonTexts = (): string[] =>
-    [...container.querySelectorAll('button')].map((b) => b.textContent ?? '')
+  const buttonTexts = (): string[] => rows().map(labelOf)
   const rememberSession = (): HTMLButtonElement | null =>
     container.querySelector<HTMLButtonElement>('[data-remember-session]')
 
@@ -207,15 +220,14 @@ describe('AskForm 的会话询问', () => {
     expect(container.querySelectorAll('pre')).toHaveLength(1)
 
     expect(buttonTexts()).toEqual([
-      en.toolCall.deny,
-      en.toolCall.allowAndRememberSession,
-      en.toolCall.allow
+      en.toolCall.askAllowOnce,
+      en.toolCall.askRememberSession,
+      en.toolCall.deny
     ])
-    expect(buttonTexts()).toEqual(['Deny', 'Allow and remember', 'Allow'])
-    expect(rememberSession()!.textContent).toBe('Allow and remember')
-    expect(byText(en.toolCall.allowAndRememberPath)).toBeUndefined()
-    expect(byText(en.toolCall.allowThisDirectory)).toBeUndefined()
-    expect(options()).toBeNull()
+    expect(buttonTexts()).toEqual(['Allow once', 'Allow and remember this session', 'Deny'])
+    expect(labelOf(rememberSession()!)).toBe('Allow and remember this session')
+    expect(rememberSession()).toBe(row('remember-session'))
+    expect(row('remember-path')).toBeNull()
     expect(folderButton()).toBeNull()
   })
 
@@ -230,12 +242,12 @@ describe('AskForm 的会话询问', () => {
       extra: { remember: true }
     })
 
-    act(() => byText(en.toolCall.allow)!.click())
+    act(() => row('allow')!.click())
     expect(onSubmit).toHaveBeenCalledTimes(2)
     expect(onSubmit.mock.calls[1]).toEqual([{ kind: 'ask', allowed: true }])
     expect(onSubmit.mock.calls[1][0]).not.toHaveProperty('extra')
 
-    act(() => byText(en.toolCall.deny)!.click())
+    act(() => row('deny')!.click())
     expect(onSubmit).toHaveBeenCalledTimes(3)
     expect(onSubmit.mock.calls[2]).toEqual([{ kind: 'ask', allowed: false }])
   })
@@ -252,7 +264,7 @@ describe('AskForm 的会话询问', () => {
     expect(box.textContent).not.toContain(en.toolCall.sessionAskMessage)
     expect(container.querySelector('pre')).toBeNull()
 
-    expect(buttonTexts()).toEqual(['Deny', 'Allow and remember', 'Allow'])
+    expect(buttonTexts()).toEqual(['Allow once', 'Allow and remember this session', 'Deny'])
     act(() => rememberSession()!.click())
     expect(onSubmit).toHaveBeenLastCalledWith({
       kind: 'ask',
@@ -274,15 +286,14 @@ describe('AskForm 的会话询问', () => {
     const onSubmit = render(sessionAsk({}, { preview: { kind: 'message', text: MESSAGE } }))
 
     expect(rememberSession()).toBeNull()
-    expect(byText(en.toolCall.allowAndRememberSession)).toBeUndefined()
-    expect(buttonTexts()).toEqual(['Deny', 'Allow'])
+    expect(buttonTexts()).toEqual(['Allow once', 'Deny'])
     // 卡片本身照旧：标题、目标会话、要发的话
     expect(titleText()).toBe(en.toolCall.sessionAskWrite)
     expect(sessionBox()!.querySelector('pre')!.textContent).toBe(MESSAGE)
 
-    act(() => byText(en.toolCall.allow)!.click())
+    act(() => row('allow')!.click())
     expect(onSubmit).toHaveBeenLastCalledWith({ kind: 'ask', allowed: true })
-    act(() => byText(en.toolCall.deny)!.click())
+    act(() => row('deny')!.click())
     expect(onSubmit).toHaveBeenLastCalledWith({ kind: 'ask', allowed: false })
   })
 })

@@ -4,7 +4,9 @@
  * 形态:
  * - 不是独立浮窗,而是渲染进输入框卡片内部的第一格(InputArea 的 accessory 插槽),
  *   自身无边框/底色/阴影/圆角,只用一条 border-b 与下方输入区分隔 —— 视觉上是同一张卡片。
- *   语义色由极淡的一层底色 + 图标承担,强提示交给卡片描边(InputArea 按 kind 换色)。
+ *   语义色交给卡片描边(InputArea 按 kind 换色)与图标;这一格不铺底色。
+ * - 审批与选项题同一个形状:问题在上,下面一列占满宽度的选项行(inputs/OptionRows),
+ *   桌面上数字键直接选行;触屏档行高 44px。
  * - 多条 pending 时,标题行右端出现 `‹ n/m ›` 步进器 + [一键提交已填];单条时不占任何额外空间。
  *   选中项存在 chatStore(sessionActiveInputId),与输入框共用 —— 输入框据此知道
  *   「其它」反馈该投给哪条请求。
@@ -20,6 +22,7 @@ import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useChatStore, selectPendingInputs, selectActivePendingInput } from '../../stores/chatStore'
+import { useChatDensity } from '../../host/chatHostContext'
 import type {
   AskInputRequest,
   ChoiceInputRequest,
@@ -63,6 +66,7 @@ export function PendingInputsPanel({
   onResponse
 }: PendingInputsPanelProps): React.JSX.Element | null {
   const { t } = useTranslation()
+  const touch = useChatDensity() === 'touch'
   const pendingInputs = useChatStore(selectPendingInputs)
   const activeRequest = useChatStore(selectActivePendingInput)
   const activeSessionId = useChatStore((s) => s.activeSessionId)
@@ -124,47 +128,63 @@ export function PendingInputsPanel({
   }
 
   // 多条 pending 时的标题行右端：步进器 + 一键提交
+  const stepBtn = `rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors ${
+    touch ? 'p-1.5' : 'p-0.5'
+  }`
   const stepper =
     pendingInputs.length > 1 ? (
-      <div className="flex items-center gap-0.5 flex-shrink-0">
+      <div className="flex items-center gap-0.5 flex-shrink-0" data-pending-stepper="">
         {filledCount > 0 && (
           <button
+            type="button"
             onClick={handleSubmitAllFilled}
-            className="flex items-center gap-1 mr-1 px-2 py-0.5 rounded-lg text-[11px] font-medium text-accent hover:bg-accent/10 transition-colors"
+            className={`flex items-center gap-1 mr-1 rounded-lg font-medium text-accent hover:bg-accent/10 transition-colors ${
+              touch ? 'px-2.5 py-1.5 text-[13px]' : 'px-2 py-0.5 text-[11px]'
+            }`}
           >
-            <Check size={11} />
+            <Check size={touch ? 14 : 11} />
             {t('pendingInputs.submitAllFilled')}
           </button>
         )}
         <button
+          type="button"
           onClick={() => step(-1)}
-          className="p-0.5 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+          className={stepBtn}
           title={t('pendingInputs.prev')}
+          aria-label={t('pendingInputs.prev')}
         >
-          <ChevronLeft size={13} />
+          <ChevronLeft size={touch ? 16 : 13} />
         </button>
-        <span className="text-[11px] text-text-tertiary tabular-nums">
+        <span
+          className={`text-text-tertiary tabular-nums ${touch ? 'text-[13px]' : 'text-[11px]'}`}
+        >
           {activeIndex + 1}/{pendingInputs.length}
         </span>
         <button
+          type="button"
           onClick={() => step(1)}
-          className="p-0.5 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors"
+          className={stepBtn}
           title={t('pendingInputs.next')}
+          aria-label={t('pendingInputs.next')}
         >
-          <ChevronRight size={13} />
+          <ChevronRight size={touch ? 16 : 13} />
         </button>
       </div>
     ) : null
 
   return (
-    // 长选项列表 / 长命令不能把输入区顶出屏幕：上半格自身封顶滚动，下方输入区始终可见
+    // 长选项列表 / 长命令不能把输入区顶出屏幕：上半格自身封顶，表单里只有内容那段滚动 ——
+    // 选项行与确认键钉在底部，始终看得见。语义色只在卡片描边上（InputArea），这一格不再铺底色
     <div
-      className={`rounded-t-2xl border-b border-border-secondary/40 px-3.5 py-2.5 max-h-[40vh] overflow-y-auto thin-scrollbar ${
-        activeRequest.kind === 'ask' ? 'bg-warning/[0.04]' : 'bg-accent/[0.04]'
+      className={`rounded-t-2xl border-b border-border-secondary/40 flex flex-col min-h-0 ${
+        touch ? 'max-h-[60vh]' : 'max-h-[50vh]'
       }`}
+      data-pending-inputs={activeRequest.kind}
     >
+      {/* key = 请求 id：步进到另一条时表单是新的一张（策略角标的展开态等不带过去） */}
       {activeRequest.kind === 'ask' && activeDraft !== undefined && (
         <AskForm
+          key={activeRequest.id}
           request={activeRequest as AskInputRequest}
           draft={activeDraft as AskDraft}
           onDraftChange={handleDraftChange}
@@ -174,6 +194,7 @@ export function PendingInputsPanel({
       )}
       {activeRequest.kind === 'choice' && activeDraft !== undefined && (
         <ChoiceForm
+          key={activeRequest.id}
           request={activeRequest as ChoiceInputRequest}
           draft={activeDraft as ChoiceDraft}
           onDraftChange={handleDraftChange}

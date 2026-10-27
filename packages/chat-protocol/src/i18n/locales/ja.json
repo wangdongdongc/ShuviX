@@ -386,10 +386,12 @@
     "expand": "確認事項を展開",
     "collapse": "確認事項を折りたたむ",
     "submitAllFilled": "入力済みを送信",
-    "otherPlaceholder": "そのまま考えを入力すると、Enter で AI に伝わります...",
     "submitOther": "AI にフィードバック",
     "prev": "前へ",
-    "next": "次へ"
+    "next": "次へ",
+    "choiceHint": "複数選べます。選んだら確定してください",
+    "otherPlaceholderAsk": "または、別のやり方を AI に伝える",
+    "otherPlaceholderChoice": "または、自分の回答を入力"
   },
   "queue": {
     "title": "キュー {{count}}",
@@ -424,12 +426,7 @@
     "pendingEditPreview": "ファイルを編集",
     "pendingWritePreview": "ファイルを書き込む",
     "pendingCreatePreview": "ファイルを新規作成",
-    "allowThisDirectory": "このディレクトリを許可",
-    "rememberFolder": "フォルダごと許可",
-    "rememberOptions": "ほかの記憶のしかた",
-    "allow": "許可",
     "deny": "拒否",
-    "allowAndRememberPath": "このパスを許可",
     "requestedAs": "要求されたパス",
     "policyPromptFrom": "セキュリティポリシー：{{policies}}",
     "params": "パラメータ",
@@ -473,9 +470,13 @@
     "sessionAskWrite": "別のセッションと対話",
     "sessionAskMessage": "送信するメッセージ",
     "sessionAskUntitled": "無題のセッション",
-    "allowAndRememberSession": "許可して記憶",
     "answeredBySessionHint": "この質問は、別のセッション「{{title}}」が自分で始めたこのターンの中であなたに代わって回答しました。あなた自身の選択ではありません。",
-    "answeredBySessionHintNoTitle": "この質問は、別のセッションが自分で始めたこのターンの中であなたに代わって回答しました。あなた自身の選択ではありません。"
+    "answeredBySessionHintNoTitle": "この質問は、別のセッションが自分で始めたこのターンの中であなたに代わって回答しました。あなた自身の選択ではありません。",
+    "askAllowOnce": "今回だけ許可",
+    "askRememberFile": "許可して、このファイルを記憶",
+    "askRememberDirectory": "許可して、このフォルダを記憶",
+    "askRememberFolder": "許可して、含まれるフォルダを記憶",
+    "askRememberSession": "許可して、このセッションを記憶"
   },
   "sessionConfig": {
     "title": "セッション設定",
