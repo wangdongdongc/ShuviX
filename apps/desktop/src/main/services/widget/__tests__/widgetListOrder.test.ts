@@ -31,7 +31,11 @@ const serverMock = vi.hoisted(() => ({
   getUrl: (id: string) => `http://127.0.0.1:1/w/${id}/`
 }))
 
-vi.mock('../../../utils/paths', () => ({ getWidgetsDir: () => state.root }))
+// SQLite 组件的数据根放在临时 widgets 根里（名字不合 widget id 规则，注册表不会把它当 widget 列出来），随根一起删
+vi.mock('../../../utils/paths', () => ({
+  getWidgetsDir: () => state.root,
+  getWidgetsDataDir: () => `${state.root}/.widgets-data`
+}))
 vi.mock('../widgetServer', () => ({ widgetServer: serverMock }))
 vi.mock('../widgetDb', () => ({
   applyWidgetSchema: vi.fn(async () => {}),

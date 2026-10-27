@@ -252,6 +252,16 @@ export function getWidgetsDir(): string {
   return ensureDir(join(homedir(), '.shuvix', 'widgets'))
 }
 
+/**
+ * SQLite 组件的数据根：~/.shuvix/widgets-data/<id>/（不创建）。每个组件一个子目录，放它的 `data.sqlite`
+ * （带 -wal / -shm）和宿主的 API 构建快照；故意在组件目录之外 —— 组件目录是 agent 可写的 git 仓库，
+ * 数据和「只有经过 build 才生效」的快照都不该在那里
+ */
+export function getWidgetsDataDir(): string {
+  // 不顺手创建：「数据目录在不在」本身就是组件存储归属的判据，只看路径不该改磁盘
+  return join(homedir(), '.shuvix', 'widgets-data')
+}
+
 /** 临时工作区的根（不自动创建） */
 export function getTempWorkspaceBase(): string {
   return join(app.getPath('userData'), 'temp_workspace')

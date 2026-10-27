@@ -20,3 +20,11 @@ export { exportWidget, resolveExportZipPath, WidgetExportError } from './widgetE
 export { EXPORTED_VERSIONS } from './exportedVersions'
 export type { ExportedPackageName } from './exportedVersions'
 export { runWidgetDbQuery, WidgetDbError } from './widgetDb'
+export { widgetRuntime } from './api/widgetRuntime'
+export {
+  callWidgetOp,
+  readApiSnapshot,
+  widgetStorageOf,
+  WidgetApiError,
+  type WidgetCallResult
+} from './api/widgetApi'

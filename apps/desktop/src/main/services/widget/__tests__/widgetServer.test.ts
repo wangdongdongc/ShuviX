@@ -36,7 +36,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   build: vi.fn(async () => ({ success: true, outputJS: 'js', outputCSS: 'css' })),
-  handleRestRequest: vi.fn(async () => ({ rows: [] as unknown[] }))
+  handleRestRequest: vi.fn(async () => ({ rows: [] as unknown[] })),
+  tmp: ''
 }))
 
 vi.mock('../../bundler', () => ({
@@ -46,6 +47,10 @@ vi.mock('../../bundler', () => ({
 vi.mock('../widgetDb', () => ({
   handleRestRequest: mocks.handleRestRequest,
   WidgetDbError: class WidgetDbError extends Error {}
+}))
+// 组件 API（api/widgetApi.ts）按数据目录判存储归属：指到每条用例的临时目录里（不存在 = 老组件，`/db` 照旧），不碰真家目录
+vi.mock('../../../utils/paths', () => ({
+  getWidgetsDataDir: () => join(mocks.tmp, 'widgets-data')
 }))
 vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
@@ -116,6 +121,7 @@ beforeEach(async () => {
   mocks.build.mockClear()
   mocks.handleRestRequest.mockClear()
   tmp = mkdtempSync(join(tmpdir(), 'shuvix-widget-server-'))
+  mocks.tmp = tmp
   secretFile = join(tmp, 'secret.txt')
   writeFileSync(secretFile, SECRET)
   writeFileSync(join(tmp, 'index.tsx'), 'export {}')

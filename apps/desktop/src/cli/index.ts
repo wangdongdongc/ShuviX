@@ -73,6 +73,7 @@ function printUsage(): void {
       '  shuvix widget list [--archived]',
       '  shuvix widget db-init <id> --sql "<DDL>" | --file <path>',
       '  shuvix widget db-query <id> --sql "<SQL>" | --file <path>',
+      "  shuvix widget call <id> <operation> [--args '<json>'] [--dry-run]",
       '  shuvix task stop <pid>        stop a background task this conversation started',
       '  shuvix policy check [<file>] [--from <ip>] [--device <id>] [--channel <name> | ...]',
       '                                check a network access or redaction policy (shuvix policy check --help)',
@@ -181,6 +182,25 @@ function parseWidget(rest: string[]): ParsedCommand | null {
         }
       }
       return { command: `widget.${action}`, params: { id, sql } }
+    }
+    case 'call': {
+      const id = args[0]
+      const op = args[1]
+      if (!id || !op || op.startsWith('--')) {
+        process.stderr.write('widget call: <id> and <operation> are required\n')
+        process.exit(1)
+      }
+      // 参数是 JSON 文本，在主进程里解析（一份报错）；--dry-run 让写操作最后回滚
+      const argsJson = flagValue(args, '--args')
+      return {
+        command: 'widget.call',
+        params: {
+          id,
+          op,
+          ...(argsJson !== undefined ? { args: argsJson } : {}),
+          ...(args.includes('--dry-run') ? { dryRun: true } : {})
+        }
+      }
     }
     default:
       process.stderr.write(`unknown widget action: ${action}\n`)
@@ -343,8 +363,12 @@ async function main(): Promise<void> {
   }
 
   if (resp.success) {
-    // db-query / policy check 走 stdout/stderr/exitCode 形态，打印原文而非 JSON
-    if (parsed.command === 'widget.db-query' || parsed.command === 'policy.check') {
+    // db-query / call / policy check 走 stdout/stderr/exitCode 形态，打印原文而非 JSON
+    if (
+      parsed.command === 'widget.db-query' ||
+      parsed.command === 'widget.call' ||
+      parsed.command === 'policy.check'
+    ) {
       const data = resp.data as ExecResponseData | undefined
       if (data) {
         if (data.stdout) {

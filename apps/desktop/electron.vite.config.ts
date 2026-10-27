@@ -44,7 +44,12 @@ export default defineConfig({
           // 知识库（OKF）依赖：okf-minisearch 纯 ESM 必须内联；core-okf 是 agent-runtime 的依赖
           // （工作区 devDependency 的依赖不会被 electron-builder 收进 asar），同样内联
           '@equationalapplications/core-okf',
-          'okf-minisearch'
+          'okf-minisearch',
+          // 组件宿主（widgetHost 入口）的 QuickJS：singlefile 变体把 wasm 内联在 JS 里，整个打进 out/main/widgetHost.js，
+          // 运行时不用再找 .wasm 文件（同样记为 devDependencies，不进 asar）
+          'quickjs-emscripten-core',
+          '@jitl/quickjs-singlefile-cjs-release-sync',
+          '@jitl/quickjs-ffi-types'
         ]
       },
       rollupOptions: {
@@ -64,7 +69,9 @@ export default defineConfig({
           stallWatchdogWorker: resolve(__dirname, 'src/main/utils/stallWatchdog/worker.ts'),
           // CLI 入口：通过 ELECTRON_RUN_AS_NODE=1 在 Electron 内以 node 模式运行；
           // 产物 out/main/cli.js，由 resources/cli/shuvix-cli{,.cmd} shim 触发
-          cli: resolve(__dirname, 'src/cli/index.ts')
+          cli: resolve(__dirname, 'src/cli/index.ts'),
+          // 组件宿主：所有 SQLite 组件的 QuickJS 沙箱与数据库连接所在的子进程（services/widget/api/widgetRuntime.ts 拉起）
+          widgetHost: resolve(__dirname, 'src/main/services/widget/api/widgetHost.ts')
         }
       }
     }

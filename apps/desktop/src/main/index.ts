@@ -65,7 +65,7 @@ import {
   guardAppWindow,
   routeExternalUrl
 } from './services/externalOpen'
-import { widgetServer } from './services/widget'
+import { widgetServer, widgetRuntime } from './services/widget'
 import { installWidgetTokens } from './services/widget/widgetToken'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { cliServer } from './services/cliServer'
@@ -1187,6 +1187,7 @@ const sessionHostQuit = installSessionHostQuitHook(app, {
     killAllBgTasks()
     mcpService.disconnectAll().catch(() => {})
     widgetServer.dispose()
+    widgetRuntime.dispose()
     chromeBridge.stop()
     void networkService.shutdown()
     cliServer.stop()

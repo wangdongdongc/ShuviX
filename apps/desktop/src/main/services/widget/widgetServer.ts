@@ -9,6 +9,10 @@
  *   GET /w/<id>/sse           → Server-Sent Events，推送 reload 事件
  *   *   /w/<id>/db/<table>    → widget 数据库的 REST 接口（widgetDb.ts）
  *   GET /w/<id>/fs/file|list  → 读本机文件 / 列目录（widgetFiles.ts，路由表见 shared/widgetRoutes.ts）
+ *   POST /w/<id>/api/<op>     → 组件自己的 API（api/widgetApi.ts；只有 SQLite 组件有，调用方是用户）
+ *
+ * SQLite 组件没有 `/db/`（读写都走 API，见 docs/widget-tool-design.md D10）；`/sse` 除了 `reload` 还推 `data`
+ * （任何一次提交了写的 API 调用之后，不管调用方是界面还是 agent）。
  *
  * 门（每个请求都过）：
  *   - **Host** 必须是 `127.0.0.1:<端口>` 或 `localhost:<端口>`，否则 421 —— 挡 DNS 重绑定（恶意网页把自己的域名
@@ -33,6 +37,13 @@ import { createLogger } from '../../logger'
 import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
 import { serveWidgetFiles } from './widgetFiles'
 import { WIDGET_TOKEN_HEADER, widgetTokenScope } from './widgetToken'
+import {
+  callWidgetOp,
+  onWidgetDataChanged,
+  WidgetApiError,
+  widgetStorageOf,
+  type WidgetDataChange
+} from './api/widgetApi'
 import {
   isWidgetFilesPath,
   WIDGET_FILES_SEGMENT,
@@ -326,7 +337,28 @@ export class WidgetServer {
       return
     }
 
-    // /db/<table> —— widget DB REST API
+    // /api/<op> —— 组件自己的 API（调用方是用户）
+    if (rest.startsWith('/api/')) {
+      const op = rest.slice(5)
+      this.handleApiRequest(req, res, widgetId, op, scope).catch((err) => {
+        log.warn(`unhandled api error widget=${widgetId} op=${op}:`, err)
+        if (!res.headersSent) {
+          this.respondJson(res, 500, {
+            error: { code: 'internal', message: (err as Error).message ?? String(err) }
+          })
+        }
+      })
+      return
+    }
+
+    // /db/<table> —— widget DB REST API（只有老组件有：SQLite 组件的读写都走 API）
+    if (rest.startsWith('/db/') && widgetStorageOf(widgetId) === 'sqlite') {
+      this.respondJson(res, 404, {
+        code: 'NO_DB_ROUTE',
+        message: `This widget keeps its data in SQLite and has no /db route; call its API at /w/${widgetId}/api/<operation>.`
+      })
+      return
+    }
     if (rest.startsWith('/db/')) {
       const table = rest.slice(4)
       this.handleDbRequest(req, res, widgetId, table, url).catch((err) => {
@@ -411,6 +443,63 @@ export class WidgetServer {
     }
   }
 
+  /** 一次提交了写的 API 调用之后：告诉这个组件所有开着的界面重新取数 */
+  notifyData(change: WidgetDataChange): void {
+    const entry = this.entries.get(change.widgetId)
+    if (!entry) return
+    const payload = JSON.stringify({ op: change.op, source: change.source })
+    for (const c of entry.sseClients) {
+      c.write(`event: data\ndata: ${payload}\n\n`)
+    }
+  }
+
+  // ────── widget API ──────
+
+  private async handleApiRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    widgetId: string,
+    op: string,
+    scope: 'ui' | 'cli'
+  ): Promise<void> {
+    if ((req.method ?? 'GET').toUpperCase() !== 'POST') {
+      this.respondJson(res, 405, {
+        error: { code: 'method_not_allowed', message: 'Call a widget operation with POST.' }
+      })
+      return
+    }
+    let args: unknown
+    try {
+      args = await readJsonBody(req)
+    } catch (e) {
+      this.respondJson(res, 400, { error: { code: 'invalid_json', message: (e as Error).message } })
+      return
+    }
+    try {
+      // `ui` 令牌只在组件自己的页面上（调用方是用户）；`cli` 令牌在 agent 的 shell 里（curl 测试时）
+      const caller =
+        scope === 'cli'
+          ? ({ kind: 'agent', actor: 'cli', label: 'cli' } as const)
+          : ({ kind: 'user', label: 'user' } as const)
+      const { result } = await callWidgetOp(widgetId, op, args ?? {}, caller)
+      if (result.outcome.ok) {
+        this.respondJson(res, 200, { result: result.outcome.value })
+      } else {
+        this.respondJson(res, apiErrorStatus(result.outcome.error.code), {
+          error: result.outcome.error
+        })
+      }
+    } catch (e) {
+      if (e instanceof WidgetApiError) {
+        this.respondJson(res, apiErrorStatus(e.code), {
+          error: { code: e.code, message: e.message }
+        })
+        return
+      }
+      throw e
+    }
+  }
+
   // ────── widget DB REST API ──────
 
   private async handleDbRequest(
@@ -479,7 +568,7 @@ export class WidgetServer {
     const message = cliOnFiles
       ? 'The token from `shuvix widget build` cannot read files; fs/ works only inside the widget.'
       : `This widget route needs the widget's token in the ${WIDGET_TOKEN_HEADER} header. Open the widget in ShuviX, or pass the token that \`shuvix widget build\` returned.`
-    if (rest.startsWith('/db/') || rest === WIDGET_LIST_ROUTE) {
+    if (rest.startsWith('/db/') || rest.startsWith('/api/') || rest === WIDGET_LIST_ROUTE) {
       this.respondJson(res, 403, { code: 'FORBIDDEN', message })
       return
     }
@@ -490,6 +579,31 @@ export class WidgetServer {
   private respondJson(res: ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify(body))
+  }
+}
+
+/** API 调用失败的 HTTP 状态：参数 / 操作不对是 4xx，宿主出事是 5xx，handler 自己的 ctx.fail 是 422 */
+function apiErrorStatus(code: string): number {
+  switch (code) {
+    case 'invalid_args':
+      return 400
+    case 'unknown_op':
+    case 'no_api':
+      return 404
+    case 'timeout':
+      return 504
+    case 'interrupted':
+    case 'host_exited':
+    case 'host_unavailable':
+    case 'host_stopped':
+      return 503
+    case 'internal':
+    case 'bad_output':
+    case 'too_large':
+    case 'out_of_memory':
+      return 500
+    default:
+      return 422
   }
 }
 
@@ -523,3 +637,5 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 }
 
 export const widgetServer = new WidgetServer()
+
+onWidgetDataChanged((change) => widgetServer.notifyData(change))

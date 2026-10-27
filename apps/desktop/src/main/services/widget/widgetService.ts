@@ -22,8 +22,22 @@ import { widgetServer } from './widgetServer'
 import { getWidgetsDir } from '../../utils/paths'
 import { writeFileAtomic } from '../../utils/atomicWrite'
 import { createLogger } from '../../logger'
-import { applyWidgetSchema, dropWidgetSchema, WidgetDbError } from './widgetDb'
+import { applyWidgetSchema, dropWidgetSchema, runWidgetDbQuery, WidgetDbError } from './widgetDb'
 import { ensureRepo, commitHostChange, commitBuild, defaultBuildMessage } from './widgetRepo'
+import {
+  activateWidgetApi,
+  applyWidgetSqliteSchema,
+  changedOps,
+  compileWidgetApi,
+  createWidgetDataDir,
+  queryWidgetSqlite,
+  readApiSnapshot,
+  removeWidgetData,
+  WidgetApiError,
+  widgetStorageOf,
+  type CompileApiResult
+} from './api/widgetApi'
+import type { OpMode } from './api/hostProtocol'
 
 /** 发布 widget 列表 / 服务器状态变更（AppEvent 'widget.changed'，经总线广播到所有窗口） */
 export function broadcastWidgetChanged(): void {
@@ -87,6 +101,10 @@ export interface BuildWidgetResult {
   buildErrors?: string[]
   /** 构建成功后宿主提交的那条提交（短 oid）；没有改动、不是仓库或提交失败时没有 */
   commit?: string
+  /** 生效中的 API 操作（组件有 `api.ts` 且构建成功时） */
+  api?: { op: string; mode: OpMode; agent: boolean }[]
+  /** 不阻止构建的提醒（例如上一个构建里的操作消失了或改了参数） */
+  warnings?: string[]
 }
 
 export interface BuildWidgetOptions {
@@ -134,6 +152,8 @@ class WidgetService {
    * 就会在用户毫不知情时落到活库上。指纹不符时跳过并提示改走 db-init（不动数据是安全的失败方向）。
    */
   private async reapplySavedSchemaIfAny(widget: Widget): Promise<void> {
+    // SQLite 组件的库是持久的文件，不需要自愈重放（重放是为共用 PGlite 被清掉的情形）
+    if (widgetStorageOf(widget.id) === 'sqlite') return
     let saved: string
     try {
       saved = readFileSync(this.schemaPath(widget.id), 'utf-8')
@@ -185,6 +205,8 @@ class WidgetService {
       archivedAt: 0
     }
     widgetRegistry.insert(widget)
+    // 新组件的数据是它自己的 SQLite 文件：数据目录在，就是 SQLite 组件（api/widgetApi.ts 的 widgetStorageOf）
+    createWidgetDataDir(params.id)
     const files = ['widget.json', ...this.scaffold(dir, params)]
 
     // 版本控制自举 —— 干净的 scaffold 就是第一个提交，之后 agent 的首次改动 diff 才可读
@@ -223,6 +245,17 @@ class WidgetService {
     // 先 build 再改，正是为了让基线提交落在它的改动之前。
     await ensureRepo(dir, `chore(${id}): baseline of existing widget`)
 
+    // API 先编译：它失败就整个构建失败，界面也不动（否则界面换成新代码、API 还是旧的）
+    const api: CompileApiResult = await compileWidgetApi(id, dir)
+    if (api.kind === 'error') {
+      return {
+        id,
+        url: widgetServer.getUrl(id) ?? '',
+        buildSuccess: false,
+        buildErrors: api.errors
+      }
+    }
+
     let result: { success: boolean; errors?: string[] }
     if (widgetServer.hasWidget(id)) {
       result = await widgetServer.rebuild(id)
@@ -238,6 +271,21 @@ class WidgetService {
       buildErrors: result.errors
     }
     if (result.success) {
+      // 界面也成了，API 才生效（只有经过 build 的 API 才算数，见 api/widgetApi.ts）
+      const compiled = api.kind === 'ok' ? api.api : null
+      const before = readApiSnapshot(id)
+      if (compiled || before) {
+        const changed = changedOps(before, compiled)
+        if (changed.length > 0) {
+          out.warnings = [
+            `This build ${changed.join(', ')}. Sessions, agents or bots that used the old operation may break.`
+          ]
+        }
+        await activateWidgetApi(id, compiled)
+      }
+      if (compiled) {
+        out.api = compiled.ops.map((o) => ({ op: o.name, mode: o.mode, agent: o.agent }))
+      }
       const message = options.message?.trim() || defaultBuildMessage(id)
       const oid = await commitBuild(dir, message)
       if (oid) out.commit = oid.slice(0, 7)
@@ -326,9 +374,10 @@ class WidgetService {
     if (!widget) throw new Error(`Widget "${id}" not found`)
 
     try {
-      await applyWidgetSchema(id, ddl)
+      if (widgetStorageOf(id) === 'sqlite') await applyWidgetSqliteSchema(id, ddl)
+      else await applyWidgetSchema(id, ddl)
     } catch (e) {
-      if (e instanceof WidgetDbError) {
+      if (e instanceof WidgetDbError || e instanceof WidgetApiError) {
         throw new Error(`[${e.code}] ${e.message}`)
       }
       throw e
@@ -340,6 +389,19 @@ class WidgetService {
     widgetRegistry.setSchemaHash(id, schemaFingerprint(persisted))
     log.info(`db-init succeeded for widget=${id}`)
     return { id, applied: true }
+  }
+
+  /**
+   * 在组件的库上跑一段 SQL（`shuvix widget db-query`）→ 表格文本。SQLite 组件经组件宿主（带 ATTACH / VACUUM /
+   * PRAGMA 的检查，见 api/sqlGuard.ts），老组件照旧走共用 PGlite
+   */
+  async dbQuery(id: string, sql: string): Promise<{ output: string; error?: string }> {
+    if (widgetStorageOf(id) !== 'sqlite') return runWidgetDbQuery(id, sql)
+    try {
+      return { output: await queryWidgetSqlite(id, sql) }
+    } catch (e) {
+      return { output: '', error: (e as Error).message }
+    }
   }
 
   /** 删除 widget：移除服务器注册 + 文件目录 + 宿主账目条目 + 它在共享库里的 schema */
@@ -360,8 +422,9 @@ class WidgetService {
     // 所以宁可留着条目，让状态和事实保持一致。
     if (dirGone) {
       widgetRegistry.deleteById(id)
-      // 顺带清掉共享 pglite 里的 schema，否则复用同一个 id 会静默继承旧数据
-      await dropWidgetSchema(id)
+      // 顺带清掉数据，否则复用同一个 id 会静默继承旧数据：SQLite 组件删它的数据目录，老组件删共享 pglite 里的 schema
+      if (widgetStorageOf(id) === 'sqlite') await removeWidgetData(id)
+      else await dropWidgetSchema(id)
     } else {
       log.warn(`widget ${id} 目录未能删除，保留其账目条目与数据库 schema`)
     }

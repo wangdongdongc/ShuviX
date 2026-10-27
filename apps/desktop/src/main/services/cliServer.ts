@@ -27,7 +27,8 @@ import {
   exportWidget,
   resolveExportZipPath,
   WidgetExportError,
-  runWidgetDbQuery
+  callWidgetOp,
+  WidgetApiError
 } from './widget'
 import * as widgetWindowService from './widgetWindowService'
 import { parsePreviewSizes, parsePreviewTheme, previewWidget } from './widgetPreviewService'
@@ -397,11 +398,53 @@ class CliServer {
       // 校验 widget 存在 —— 否则 query 会落到一个不存在的 widget 的 schema
       const widget = widgetService.getById(id)
       if (!widget) throw new Error(`widget "${id}" not found`)
-      const result = await runWidgetDbQuery(id, sql)
+      const result = await widgetService.dbQuery(id, sql)
       if (result.error) {
         return { stdout: '', stderr: result.error, exitCode: 1 }
       }
       return { stdout: result.output, stderr: '', exitCode: 0 }
+    })
+
+    // 调组件 API 的一个操作（造组件时测试用；调用方是本会话的 agent）。结果以 JSON 打到 stdout，
+    // 操作失败（参数不对、ctx.fail …）退出码 1；--dry-run 让写操作最后回滚
+    this.handlers.set('widget.call', async (p, sessionId) => {
+      const id = String(p.id ?? '')
+      const op = String(p.op ?? '')
+      if (!id || !op) throw new Error('id and operation required')
+      widgetService.validateId(id)
+      if (!widgetService.getById(id)) throw new Error(`widget "${id}" not found`)
+      let args: unknown = {}
+      if (typeof p.args === 'string' && p.args.trim()) {
+        try {
+          args = JSON.parse(p.args)
+        } catch (e) {
+          throw new Error(`--args is not valid JSON: ${(e as Error).message}`)
+        }
+      }
+      const dryRun = p.dryRun === true
+      try {
+        const { mode, result } = await callWidgetOp(
+          id,
+          op,
+          args,
+          { kind: 'agent', ...(sessionId ? { sessionId } : {}), actor: 'cli', label: 'cli' },
+          { dryRun }
+        )
+        const outcome = result.outcome
+        const body = {
+          op,
+          mode,
+          ...(dryRun ? { dryRun: true } : {}),
+          ...(outcome.ok ? { result: outcome.value } : { error: outcome.error }),
+          ...(result.logs.length > 0 ? { logs: result.logs } : {})
+        }
+        return { stdout: JSON.stringify(body, null, 2), stderr: '', exitCode: outcome.ok ? 0 : 1 }
+      } catch (e) {
+        if (e instanceof WidgetApiError) {
+          return { stdout: '', stderr: `[${e.code}] ${e.message}`, exitCode: 1 }
+        }
+        throw e
+      }
     })
 
     // 浏览器自动化不再走 CLI —— agent 统一用内置 `browser` 工具（services/browser 的 backend）。

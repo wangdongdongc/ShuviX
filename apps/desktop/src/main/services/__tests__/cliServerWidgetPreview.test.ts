@@ -36,7 +36,9 @@ vi.mock('../widget', () => ({
   exportWidget: vi.fn(),
   resolveExportZipPath: vi.fn(),
   WidgetExportError: class WidgetExportError extends Error {},
-  runWidgetDbQuery: vi.fn()
+  runWidgetDbQuery: vi.fn(),
+  callWidgetOp: vi.fn(),
+  WidgetApiError: class WidgetApiError extends Error {}
 }))
 vi.mock('../widgetWindowService', () => ({ open: vi.fn() }))
 vi.mock('../acl', () => ({ sessionAcl: { grantPath: vi.fn() } }))

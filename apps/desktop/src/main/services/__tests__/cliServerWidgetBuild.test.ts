@@ -43,7 +43,9 @@ vi.mock('../widget', async () => {
     exportWidget: vi.fn(),
     resolveExportZipPath: vi.fn(),
     WidgetExportError: class WidgetExportError extends Error {},
-    runWidgetDbQuery: vi.fn()
+    runWidgetDbQuery: vi.fn(),
+    callWidgetOp: vi.fn(),
+    WidgetApiError: class WidgetApiError extends Error {}
   }
 })
 // widgetService 的重依赖：打包服务 / pglite / git —— 本文件一个都不碰
