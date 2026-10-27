@@ -453,7 +453,7 @@
       "critical": "重大リスク"
     },
     "reviewNoSummary": "自動レビューがこの判断をあなたに任せました",
-    "reviewReasonLabel": "レビュアー：",
+    "reviewReasonLabel": "注意点：",
     "sandbox": {
       "confined": "サンドボックス",
       "unconfined": "隔離なし",

@@ -37,4 +37,7 @@ Weigh: can it be undone; how far it reaches (the working directory, the rest of 
 
 ## Answering
 
-Call `next` once, with `decision` and `risk`, a `summary` — one sentence in the language the human writes in, saying what this operation does (the user reads it on the approval card) — and a `reason` saying why (the agent reads it when you deny).
+Call `next` once, with `decision`, `risk` and two short texts in the language the human writes in. The user reads both at a glance on the approval card, before the command itself:
+
+- `summary` — one plain sentence saying what this operation does.
+- `reason` — one short clause naming the one thing the user should weigh before approving: what goes beyond their request, what cannot be undone, what leaves the machine. When you deny, the agent reads it, so name what makes it harmful. Do not repeat the summary or the command, quote the policy, or list what is fine; at most about twenty words, and keep your deliberation out of it. For example: "Overwrites existing commits on the remote; you only asked to push."

@@ -453,7 +453,7 @@
       "critical": "Critical risk"
     },
     "reviewNoSummary": "The automatic review passed this one to you",
-    "reviewReasonLabel": "Reviewer:",
+    "reviewReasonLabel": "Concern:",
     "sandbox": {
       "confined": "Sandbox",
       "unconfined": "Not sandboxed",

@@ -453,7 +453,7 @@
       "critical": "严重风险"
     },
     "reviewNoSummary": "自动审查把这一次交给你决定",
-    "reviewReasonLabel": "审查员：",
+    "reviewReasonLabel": "需注意：",
     "sandbox": {
       "confined": "沙箱",
       "unconfined": "未隔离",

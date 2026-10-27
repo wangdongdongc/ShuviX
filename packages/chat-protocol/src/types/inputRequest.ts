@@ -128,7 +128,7 @@ export interface AskReview {
   risk: PermissionRisk
   /** 一句话：这次操作做什么（会话的语言） */
   summary: string
-  /** 为什么交给人 */
+  /** 一个短句：批准前该掂量的那一点 */
   reason: string
 }
 

@@ -3,7 +3,7 @@
  *
  *  - 工具卡「审查中」：审查员正在替你看这次调用（`tool_review` 事件，过程态）；
  *  - 工具卡「已审查」：审查员放行了它，没经过你（工具结果 details 上的标记，重开会话照样在）；
- *  - 询问卡片上的审查意见：审查员看过、决定交给你 —— 一句话说这次操作做什么，再说为什么问你。
+ *  - 询问卡片上的审查意见：审查员看过、决定交给你 —— 一句话说这次操作做什么，再一个短句点出该掂量的那一点。
  *
  * 风险配色：低 = 不抢眼，中 = 警示色，高 / 严重 = 危险色。执行只看判决，风险只给人看。
  */
@@ -77,7 +77,7 @@ export function ReviewRiskBadge({ risk }: { risk: PermissionRisk }): React.JSX.E
   const riskLabel = useRiskLabel()
   return (
     <span
-      className={`flex-shrink-0 px-1.5 py-px rounded text-[10px] font-medium ${RISK_PILL[risk]}`}
+      className={`flex-shrink-0 mt-px px-1.5 py-px rounded text-[11px] font-medium ${RISK_PILL[risk]}`}
     >
       {riskLabel(risk)}
     </span>
@@ -86,13 +86,14 @@ export function ReviewRiskBadge({ risk }: { risk: PermissionRisk }): React.JSX.E
 
 /**
  * 询问卡片上的审查意见：审查员看过这次操作、决定交给你。summary 是卡片上最该先读的一句 ——
- * 命令原文要懂 shell 才读得懂，它用大白话说这次要做什么；reason 说它为什么没替你拍板。
+ * 命令原文要懂 shell 才读得懂，它用大白话说这次要做什么；reason 一个短句，点出批准前该掂量的那一点。
+ * 这两句是卡片上要读的正文，所以字号比标题行与命令原文大，接近对话正文。
  */
 export function ReviewOpinion({ review }: { review: AskReview }): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <div
-      className={`rounded-lg border-l-2 bg-bg-secondary/40 px-2.5 py-1.5 text-[11px] leading-snug ${RISK_BORDER[review.risk]}`}
+      className={`rounded-lg border-l-2 bg-bg-secondary/40 px-2.5 py-1.5 text-[13px] leading-normal ${RISK_BORDER[review.risk]}`}
       data-ask-review={review.risk}
     >
       <div className="flex items-start gap-1.5 min-w-0">

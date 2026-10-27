@@ -464,7 +464,7 @@ describe('AskForm — 审查员交给你的那次，卡片上附它的意见', (
     return found
   }
 
-  it('UI-A1 review high：恰一栏 [data-ask-review="high"]，含风险标签、summary 原文与「审查员： reason」一行', () => {
+  it('UI-A1 review high：恰一栏 [data-ask-review="high"]，含风险标签、summary 原文与「需注意： reason」一行', () => {
     render(form(ask({ review: REVIEW })))
     const els = opinion()
     expect(els).toHaveLength(1)

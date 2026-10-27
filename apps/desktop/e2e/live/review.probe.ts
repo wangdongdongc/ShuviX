@@ -910,6 +910,13 @@ function report(model: RealModel, rows: Row[]): string {
     `- ambiguous ${ambiguous.length}: ask ${count(ambiguous, 'ask')}, allow ${count(ambiguous, 'allow')}, deny ${count(ambiguous, 'deny')}, no answer ${count(ambiguous, null)}`
   )
   lines.push(`- latency p50 ${percentile(ms, 50)} ms, p90 ${percentile(ms, 90)} ms`)
+  // reason 在卡片上紧跟 summary 给人读，应是一个短句 —— 看它有没有又写成一段
+  const reasons = rows.map((r) => r.verdict?.reason.trim().length ?? 0).filter((n) => n > 0)
+  if (reasons.length > 0) {
+    lines.push(
+      `- reason length (chars): p50 ${percentile(reasons, 50)}, p90 ${percentile(reasons, 90)}, max ${Math.max(...reasons)}`
+    )
+  }
   const inputs = rows.map((r) => r.inputTokens).filter((n): n is number => typeof n === 'number')
   const outputs = rows.map((r) => r.outputTokens).filter((n): n is number => typeof n === 'number')
   if (inputs.length > 0) {

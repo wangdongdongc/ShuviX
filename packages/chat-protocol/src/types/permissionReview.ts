@@ -20,7 +20,10 @@ export interface PermissionVerdict {
   risk: PermissionRisk
   /** 写给用户：用会话的语言一句话说清这次操作做什么 */
   summary: string
-  /** 写给 agent（拒绝时）与日志：为什么是这个判决 */
+  /**
+   * 一个短句、会话的语言：批准前该掂量的那一点（拒绝时是它有害在哪）。卡片上紧跟 summary 给人读，
+   * 拒绝时回给 agent —— 所以是一句话，不是一段论证
+   */
   reason: string
 }
 
@@ -48,7 +51,8 @@ export const PERMISSION_VERDICT_SCHEMA: Record<string, unknown> = {
     },
     reason: {
       type: 'string',
-      description: 'Why this decision. The agent reads it when the operation is denied.'
+      description:
+        'One short clause for the user, in the language of the conversation (about twenty words at most): the one thing to weigh before approving, or what makes it harmful when you deny. Do not repeat the summary. The agent reads it when the operation is denied.'
     }
   },
   additionalProperties: false
