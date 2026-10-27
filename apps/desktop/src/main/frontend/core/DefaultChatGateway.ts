@@ -432,13 +432,22 @@ export class DefaultChatGateway implements ChatGateway {
     const redaction = agent?.durable.redaction
     if (!agent || !redaction) return result
     const table = await redaction.table()
-    // 模型收到的是不是真值：按会话锁住的模型、根 agent 判，与出口同一份判定。没有锁（还没有 agent）就说不上，
-    // 当作收到的是占位符
-    const locked = agent.durable.lock?.model
+    // 模型收到的是不是真值：按会话锁住的模型、根 agent 判，与出口同一份判定。没有锁（这次启动后还没跑过 —— 锁只记
+    // 本进程初始化过的 agent）就按会话设定的模型判：下一次请求发给它。连设定的模型都没有，当作收到的是占位符
+    const model =
+      agent.durable.lock?.model ??
+      (await sessionService
+        .resolveRunConfig(sessionId)
+        .then((config) =>
+          config?.model
+            ? { provider: config.model.provider, modelId: config.model.model }
+            : undefined
+        )
+        .catch(() => undefined))
     let decision: ReturnType<typeof redactionDecision> | undefined
     try {
-      decision = locked
-        ? redactionDecision({ sessionId, provider: locked.provider, model: locked.modelId })
+      decision = model
+        ? redactionDecision({ sessionId, provider: model.provider, model: model.modelId })
         : undefined
     } catch {
       // 判不出来就当收到的是占位符（显示占位符、悬停揭示真值），不让界面因此拿不到真值

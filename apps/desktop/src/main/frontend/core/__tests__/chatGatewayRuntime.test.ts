@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   invalidateAgent: vi.fn<(sessionId: string) => Promise<void>>(),
   getAgentSession: vi.fn(),
   peekAgentSession: vi.fn(),
+  resolveRunConfig: vi.fn(),
   recordSessionModel:
     vi.fn<(sessionId: string, provider: string, model: string) => Promise<void>>(),
   recordSessionThinkingLevel: vi.fn<(sessionId: string, level: string) => Promise<void>>(),
@@ -70,6 +71,7 @@ vi.mock('../../../services/sessionService', () => ({
     ensureAgentSession: vi.fn(),
     getAgentSession: mocks.getAgentSession,
     peekAgentSession: mocks.peekAgentSession,
+    resolveRunConfig: mocks.resolveRunConfig,
     resolveAgentProfileName: mocks.resolveAgentProfileName,
     hasAgentRuntime: mocks.hasAgentRuntime,
     setModel: mocks.setModel,
@@ -473,6 +475,8 @@ describe('自动脱敏：resolveRedactions', () => {
   beforeEach(() => {
     mocks.getAgentSession.mockReset()
     mocks.peekAgentSession.mockReset()
+    mocks.resolveRunConfig.mockReset()
+    mocks.resolveRunConfig.mockResolvedValue(null)
   })
 
   it('RR-1 打开着的会话：有真值的带真值、解不开的只有类别、表里没有的不出现；不是标准写法的不问', async () => {
@@ -506,7 +510,7 @@ describe('自动脱敏：resolveRedactions', () => {
     expect(mocks.peekAgentSession).not.toHaveBeenCalled()
   })
 
-  it('RR-3 模型收到的是不是真值：按会话锁住的模型、与出口同一份判定；没有锁就当占位符', async () => {
+  it('RR-3 模型收到的是不是真值：按会话锁住的模型、与出口同一份判定；没有锁按设定的模型，也没有就当占位符', async () => {
     const seen: unknown[] = []
     setRedactionPolicy((request) => {
       seen.push(request)
@@ -524,7 +528,16 @@ describe('自动脱敏：resolveRedactions', () => {
     expect(seen).toEqual([{ sessionId: SID, provider: 'cloud', model: 'm1' }])
     mocks.getAgentSession.mockReturnValue(withLock('home'))
     expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(true)
+    // 没有锁（这次启动后还没跑过）：按会话设定的模型判
     mocks.getAgentSession.mockReturnValue(sessionWith({ table: async () => table }))
+    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(false)
+    mocks.resolveRunConfig.mockResolvedValue({
+      model: { provider: 'home', model: 'm2', capabilities: {} },
+      thinkingLevel: 'off'
+    })
+    expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(true)
+    expect(seen.at(-1)).toEqual({ sessionId: SID, provider: 'home', model: 'm2' })
+    mocks.resolveRunConfig.mockRejectedValue(new Error('gone'))
     expect((await chatGateway.resolveRedactions(SID, [KEY]))[KEY]?.disclosed).toBe(false)
     setRedactionPolicy((request) => {
       throw new Error(`no policy for ${request.sessionId}`)
