@@ -3599,7 +3599,8 @@ export interface ModelPickerPane {
 }
 
 export function modelPickerPane(main: CdpClient): ModelPickerPane {
-  const ROOT = `(document.querySelector('textarea')?.parentElement?.nextElementSibling?.firstElementChild?.firstElementChild ?? null)`
+  // 选择器簇（`data-composer-pickers`）里的第一格是模型选择器；簇前面可能还有附图的「+」，所以不按位置认
+  const ROOT = `(document.querySelector('textarea')?.parentElement?.nextElementSibling?.querySelector('[data-composer-pickers]')?.firstElementChild ?? null)`
   const TRIGGER = `(${ROOT}?.querySelector(':scope > button') ?? null)`
   const PANEL = `document.querySelector('[data-model-panel]')`
   const ITEMS = `[...(${PANEL}?.querySelectorAll('[data-model-item]') ?? [])]`
