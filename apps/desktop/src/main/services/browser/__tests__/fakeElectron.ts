@@ -27,6 +27,8 @@
  *    `('message', event, method, params)` 派发一条 CDP 事件，sendCommand 是间谍（缺省回 `{}`）；
  *  - view 的 `webContents.setDevToolsWebContents / openDevTools / closeDevTools / inspectElement`
  *    （停靠区的原生 DevTools）与 `cut / copy / paste / selectAll`（页面右键菜单）都是间谍；
+ *    `webContents.executeJavaScript` 也是间谍（缺省回 resolved undefined）—— 停靠区往 DevTools 前端
+ *    里调 DevToolsAPI（切到 Console、进「选择元素」）走它；
  *  - `Menu.buildFromTemplate` 是间谍，回 `{ items, popup }`（popup 是间谍），建出来的菜单按顺序记进
  *    `fx.menus`；`clipboard.writeText` 是间谍；
  *  - `new WebContentsView()` 不带选项（停靠区的 DevTools 前端，用应用自己的 session）时 opts 记成
@@ -168,6 +170,8 @@ export interface FakeViewWebContents {
   openDevTools: Mock<(opts?: { mode?: string; activate?: boolean }) => void>
   closeDevTools: Mock<() => void>
   inspectElement: Mock<(x: number, y: number) => void>
+  /** 在这个 webContents 里执行一段脚本（停靠区对 DevTools 前端的 DevToolsAPI 调用） */
+  executeJavaScript: Mock<(code: string) => Promise<unknown>>
   /** 页面右键菜单里的编辑动作 */
   cut: Mock<() => void>
   copy: Mock<() => void>
@@ -473,6 +477,7 @@ function create(): FakeElectron {
         openDevTools: vi.fn(),
         closeDevTools: vi.fn(),
         inspectElement: vi.fn(),
+        executeJavaScript: vi.fn(async (_code: string): Promise<unknown> => undefined),
         cut: vi.fn(),
         copy: vi.fn(),
         paste: vi.fn(),

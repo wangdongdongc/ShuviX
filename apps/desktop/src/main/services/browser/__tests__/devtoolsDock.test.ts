@@ -28,6 +28,16 @@
  *   DD-U14  菜单项：网页链接（新标签页里打开 → 后台 tab；复制链接地址 → clipboard），非网页链接没有这两项；
  *           可编辑区按 editFlags 给剪切 / 复制 / 粘贴 / 全选；只有选中文字给复制；后退 / 前进按能否、刷新；
  *   DD-U15  destroyAllTabs 收掉所有前端。
+ *   DD-U16  Console（⌥⌘J / Ctrl+Shift+J）：关着 → 开在 DevTools 页签，前端加载完（页面的 devtools-opened）才
+ *           executeJavaScript(DevToolsAPI.showPanel("console"))；正显示着 DevTools → 关掉（不调前端）；停在
+ *           「Agent」→ 切回 DevTools（没前端建一个、排队；有已加载的后台前端就用它、当场调）；
+ *   DD-U17  「选择元素」（⌥⌘C / ⌘⇧C / Ctrl+Shift+C）：总是开在 DevTools 页签并调
+ *           DevToolsAPI.enterInspectElementMode()，从不关停靠区、从不碰页面的 inspectElement；
+ *   DD-U18  前端就绪队列：加载完之前的调用按顺序记着、devtools-opened 时一次做完（只做一次）；之后当场做；
+ *           停靠区关了 / 前端换了，旧前端记着的调用作废；按 tab 各管各的；没停靠区 / 没前端的 devtools-opened
+ *           什么也不做；前端已销毁不调；executeJavaScript 失败不成为未处理的 rejection；
+ *   DD-U19  runShortcut 只作用于选中的那页（内部页面、没有 tab 什么也不做）；真按键经页面与前端的
+ *           before-input-event 都走到这里，按住不放不连发。
  *
  * electron 是 ./fakeElectron.ts；agentGuards / browserCdpService 是间谍（agentActing 按用例拨的 tab 集合回答）；
  * browserViewService / devtoolsDock / agentDevtools / browserWindowService / stagingWindow 都是真的。
@@ -886,5 +896,421 @@ describe('退出时全部收掉（DD-U15）', () => {
     expect(bw.children).not.toContain(fa)
     expect(dock.devtoolsDockOf(a.id)).toBeUndefined()
     expect(dock.devtoolsDockOf(b.id)).toBeUndefined()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// Console / 「选择元素」快捷键与前端的就绪队列
+
+const CONSOLE = 'DevToolsAPI.showPanel("console")'
+const INSPECT = 'DevToolsAPI.enterInspectElementMode()'
+
+/** 这一页的 DevTools 前端加载完了（Electron 在页面 webContents 上发 devtools-opened） */
+function frontendLoaded(page: FakeView): void {
+  page.webContents.fire('devtools-opened')
+}
+
+/** 前端收到的 executeJavaScript 调用 */
+const jsCalls = (frontend: FakeView): unknown[][] =>
+  frontend.webContents.executeJavaScript.mock.calls
+
+/** 所有 view 里有没有谁被 executeJavaScript 过 */
+const anyJs = (): boolean => fx.views.some((v) => v.webContents.executeJavaScript.mock.calls.length)
+
+describe('Console（DD-U16）', () => {
+  it('DD-U16 停靠区关着：开在 DevTools 页签；前端加载完才切到 Console', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+
+    dock.toggleDevtoolsConsole(a.id)
+    expect(sent(bw, DOCK)).toEqual([{ tabId: a.id, devtools: { panel: 'devtools' } }])
+    expect(row(a.id)?.devtools).toEqual({ panel: 'devtools' })
+    const frontend = onlyFrontendOf(a.view)
+    expect(a.view.webContents.openDevTools).toHaveBeenCalledTimes(1)
+    expect(frontend.webContents.executeJavaScript).not.toHaveBeenCalled()
+
+    frontendLoaded(a.view)
+    expect(jsCalls(frontend)).toEqual([[CONSOLE]])
+  })
+
+  it('DD-U16 正显示着 DevTools（已加载）：再按一次是关，不调前端', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.openDevtoolsDock(a.id, 'devtools')
+    frontendLoaded(a.view)
+    const frontend = onlyFrontendOf(a.view)
+    frontend.webContents.executeJavaScript.mockClear()
+    bw.webContents.send.mockClear()
+
+    dock.toggleDevtoolsConsole(a.id)
+    expect(a.view.webContents.closeDevTools).toHaveBeenCalledTimes(1)
+    expect(frontend.webContents.close).toHaveBeenCalledTimes(1)
+    expect(sent(bw, DOCK)).toEqual([{ tabId: a.id, devtools: null }])
+    expect(row(a.id)).not.toHaveProperty('devtools')
+    expect(frontend.webContents.executeJavaScript).not.toHaveBeenCalled()
+  })
+
+  it('DD-U16 正显示着 DevTools（还没加载完）：照样关；之后迟到的 devtools-opened 什么也不做', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.openDevtoolsDock(a.id, 'devtools')
+    const frontend = onlyFrontendOf(a.view)
+    bw.webContents.send.mockClear()
+
+    dock.toggleDevtoolsConsole(a.id)
+    expect(a.view.webContents.closeDevTools).toHaveBeenCalledTimes(1)
+    expect(frontend.webContents.close).toHaveBeenCalledTimes(1)
+    expect(sent(bw, DOCK)).toEqual([{ tabId: a.id, devtools: null }])
+    expect(row(a.id)).not.toHaveProperty('devtools')
+
+    frontendLoaded(a.view)
+    expect(anyJs()).toBe(false)
+    expect(row(a.id)).not.toHaveProperty('devtools')
+  })
+
+  it('DD-U16 停在「Agent」、没建过前端：切到 DevTools、建一个前端，Console 排队到加载完', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.openDevtoolsDock(a.id, 'agent')
+    bw.webContents.send.mockClear()
+
+    dock.toggleDevtoolsConsole(a.id)
+    expect(sent(bw, DOCK)).toEqual([{ tabId: a.id, devtools: { panel: 'devtools' } }])
+    const frontend = onlyFrontendOf(a.view)
+    expect(frontend.webContents.executeJavaScript).not.toHaveBeenCalled()
+    frontendLoaded(a.view)
+    expect(jsCalls(frontend)).toEqual([[CONSOLE]])
+  })
+
+  it('DD-U16 停在「Agent」、后台有已加载的前端：切回 DevTools 用同一个前端，当场切到 Console', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.openDevtoolsDock(a.id, 'devtools')
+    frontendLoaded(a.view)
+    dock.openDevtoolsDock(a.id, 'agent')
+    const frontend = onlyFrontendOf(a.view)
+    frontend.webContents.executeJavaScript.mockClear()
+    bw.webContents.send.mockClear()
+
+    dock.toggleDevtoolsConsole(a.id)
+    expect(sent(bw, DOCK)).toEqual([{ tabId: a.id, devtools: { panel: 'devtools' } }])
+    expect(frontendsOf(a.view)).toHaveLength(1)
+    expect(a.view.webContents.openDevTools).toHaveBeenCalledTimes(1)
+    expect(jsCalls(frontend)).toEqual([[CONSOLE]])
+    expect(frontend.webContents.close).not.toHaveBeenCalled()
+  })
+})
+
+describe('「选择元素」（DD-U17）', () => {
+  it('DD-U17 停靠区关着：开在 DevTools 页签，加载完才进选择模式；不碰页面的 inspectElement', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+
+    dock.toggleInspectElementMode(a.id)
+    expect(sent(bw, DOCK)).toEqual([{ tabId: a.id, devtools: { panel: 'devtools' } }])
+    const frontend = onlyFrontendOf(a.view)
+    expect(frontend.webContents.executeJavaScript).not.toHaveBeenCalled()
+    frontendLoaded(a.view)
+    expect(jsCalls(frontend)).toEqual([[INSPECT]])
+    expect(a.view.webContents.inspectElement).not.toHaveBeenCalled()
+  })
+
+  it('DD-U17 开着 DevTools（已加载）按两次：调两次，停靠区不关', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.openDevtoolsDock(a.id, 'devtools')
+    frontendLoaded(a.view)
+    const frontend = onlyFrontendOf(a.view)
+    frontend.webContents.executeJavaScript.mockClear()
+    bw.webContents.send.mockClear()
+
+    dock.toggleInspectElementMode(a.id)
+    dock.toggleInspectElementMode(a.id)
+    expect(jsCalls(frontend)).toEqual([[INSPECT], [INSPECT]])
+    expect(a.view.webContents.closeDevTools).not.toHaveBeenCalled()
+    expect(frontend.webContents.close).not.toHaveBeenCalled()
+    expect(sent(bw, DOCK)).not.toContainEqual({ tabId: a.id, devtools: null })
+    expect(row(a.id)?.devtools).toEqual({ panel: 'devtools' })
+    expect(frontendsOf(a.view)).toHaveLength(1)
+    expect(a.view.webContents.inspectElement).not.toHaveBeenCalled()
+  })
+
+  it('DD-U17 停在「Agent」、后台有已加载的前端：切回 DevTools，同一个前端当场进选择模式', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.openDevtoolsDock(a.id, 'devtools')
+    frontendLoaded(a.view)
+    dock.openDevtoolsDock(a.id, 'agent')
+    const frontend = onlyFrontendOf(a.view)
+    frontend.webContents.executeJavaScript.mockClear()
+    bw.webContents.send.mockClear()
+
+    dock.toggleInspectElementMode(a.id)
+    expect(sent(bw, DOCK)).toEqual([{ tabId: a.id, devtools: { panel: 'devtools' } }])
+    expect(frontendsOf(a.view)).toHaveLength(1)
+    expect(jsCalls(frontend)).toEqual([[INSPECT]])
+  })
+})
+
+describe('前端的就绪队列（DD-U18）', () => {
+  it('DD-U18 加载完之前的两次调用按顺序做；第二次 devtools-opened 不再做', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.toggleDevtoolsConsole(a.id)
+    dock.toggleInspectElementMode(a.id)
+    const frontend = onlyFrontendOf(a.view)
+    expect(frontend.webContents.executeJavaScript).not.toHaveBeenCalled()
+
+    frontendLoaded(a.view)
+    expect(jsCalls(frontend)).toEqual([[CONSOLE], [INSPECT]])
+    frontendLoaded(a.view)
+    expect(jsCalls(frontend)).toEqual([[CONSOLE], [INSPECT]])
+  })
+
+  it('DD-U18 加载完时没有排着的：什么也不调；之后的调用当场做', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.openDevtoolsDock(a.id, 'devtools')
+    frontendLoaded(a.view)
+    const frontend = onlyFrontendOf(a.view)
+    expect(frontend.webContents.executeJavaScript).not.toHaveBeenCalled()
+
+    dock.toggleInspectElementMode(a.id)
+    expect(jsCalls(frontend)).toEqual([[INSPECT]])
+  })
+
+  it('DD-U18 排着的时候停靠区关了：之后的 devtools-opened 不调旧前端、不抛', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.toggleDevtoolsConsole(a.id)
+    const f1 = onlyFrontendOf(a.view)
+    dock.closeDevtoolsDock(a.id)
+
+    expect(() => frontendLoaded(a.view)).not.toThrow()
+    expect(f1.webContents.executeJavaScript).not.toHaveBeenCalled()
+  })
+
+  it('DD-U18 关了再开：新前端只做它自己排的，旧前端排的作废', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.toggleDevtoolsConsole(a.id)
+    dock.closeDevtoolsDock(a.id)
+    dock.toggleInspectElementMode(a.id)
+    const [f1, f2] = frontendsOf(a.view)
+    expect(f2).toBeDefined()
+    expect(f2).not.toBe(f1)
+    expect(f2.webContents.executeJavaScript).not.toHaveBeenCalled()
+
+    frontendLoaded(a.view)
+    expect(jsCalls(f2)).toEqual([[INSPECT]])
+    expect(f1.webContents.executeJavaScript).not.toHaveBeenCalled()
+  })
+
+  it('DD-U18 排着的时候切到「Agent」：前端还在后台，加载完照样做', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.toggleDevtoolsConsole(a.id)
+    const f1 = onlyFrontendOf(a.view)
+    dock.openDevtoolsDock(a.id, 'agent')
+
+    frontendLoaded(a.view)
+    expect(jsCalls(f1)).toEqual([[CONSOLE]])
+    expect(row(a.id)?.devtools).toEqual({ panel: 'agent' })
+  })
+
+  it('DD-U18 排着的时候切到「Agent」、后台前端没了（devtools-closed）：新前端只做新排的', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.toggleDevtoolsConsole(a.id)
+    const f1 = onlyFrontendOf(a.view)
+    dock.openDevtoolsDock(a.id, 'agent')
+    a.view.webContents.fire('devtools-closed')
+    expect(f1.webContents.close).toHaveBeenCalledTimes(1)
+    expect(row(a.id)?.devtools).toEqual({ panel: 'agent' })
+
+    dock.toggleInspectElementMode(a.id)
+    const all = frontendsOf(a.view)
+    expect(all).toHaveLength(2)
+    const f2 = all[1]
+    frontendLoaded(a.view)
+    expect(jsCalls(f2)).toEqual([[INSPECT]])
+    expect(f1.webContents.executeJavaScript).not.toHaveBeenCalled()
+  })
+
+  it('DD-U18 按 tab 各管各的：B 加载完只做 B 排的，A 的等 A 加载完', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    const b = tab('https://b.test/')
+    dock.toggleDevtoolsConsole(a.id)
+    dock.toggleInspectElementMode(b.id)
+    const fa = onlyFrontendOf(a.view)
+    const fb = onlyFrontendOf(b.view)
+
+    frontendLoaded(b.view)
+    expect(jsCalls(fb)).toEqual([[INSPECT]])
+    expect(fa.webContents.executeJavaScript).not.toHaveBeenCalled()
+
+    frontendLoaded(a.view)
+    expect(jsCalls(fa)).toEqual([[CONSOLE]])
+    expect(jsCalls(fb)).toEqual([[INSPECT]])
+  })
+
+  it('DD-U18 没停靠区的页、停在「Agent」没前端的页：devtools-opened 什么也不做', () => {
+    const bw = openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    const b = tab('https://b.test/')
+    dock.openDevtoolsDock(b.id, 'agent')
+    bw.webContents.send.mockClear()
+    const viewsBefore = fx.views.length
+
+    expect(() => frontendLoaded(a.view)).not.toThrow()
+    expect(() => frontendLoaded(b.view)).not.toThrow()
+    expect(sent(bw, DOCK)).toEqual([])
+    expect(anyJs()).toBe(false)
+    expect(fx.views).toHaveLength(viewsBefore)
+    expect(row(a.id)).not.toHaveProperty('devtools')
+    expect(row(b.id)?.devtools).toEqual({ panel: 'agent' })
+  })
+
+  it('DD-U18 前端已经销毁：加载完也不调、不抛', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.toggleDevtoolsConsole(a.id)
+    const f1 = onlyFrontendOf(a.view)
+    f1.webContents.destroyed = true
+
+    expect(() => frontendLoaded(a.view)).not.toThrow()
+    expect(f1.webContents.executeJavaScript).not.toHaveBeenCalled()
+  })
+
+  it('DD-U18 executeJavaScript 失败：不成为未处理的 rejection；之后的调用照常', async () => {
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      openByUser()
+      const a = tab('https://a.test/', { activate: true })
+      dock.toggleDevtoolsConsole(a.id)
+      const f1 = onlyFrontendOf(a.view)
+      f1.webContents.executeJavaScript.mockRejectedValueOnce(new Error('x'))
+
+      expect(() => frontendLoaded(a.view)).not.toThrow()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(unhandled).not.toHaveBeenCalled()
+      expect(jsCalls(f1)).toEqual([[CONSOLE]])
+
+      dock.toggleInspectElementMode(a.id)
+      expect(jsCalls(f1)).toEqual([[CONSOLE], [INSPECT]])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+  })
+})
+
+describe('快捷键作用于选中的那页（DD-U19）', () => {
+  it('DD-U19 runShortcut(devtoolsConsole / inspectElement) 只作用于选中的 A；B 停在「Agent」不动', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    const b = tab('https://b.test/')
+    dock.openDevtoolsDock(b.id, 'agent')
+
+    views.runShortcut({ type: 'devtoolsConsole' })
+    views.runShortcut({ type: 'inspectElement' })
+    expect(row(a.id)?.devtools).toEqual({ panel: 'devtools' })
+    const fa = onlyFrontendOf(a.view)
+    frontendLoaded(a.view)
+    expect(jsCalls(fa)).toEqual([[CONSOLE], [INSPECT]])
+
+    expect(b.view.webContents.setDevToolsWebContents).not.toHaveBeenCalled()
+    expect(row(b.id)?.devtools).toEqual({ panel: 'agent' })
+  })
+
+  it('DD-U19 选中的是内部页面（shuvix://settings）：什么也不做', () => {
+    const bw = openByUser()
+    tab('https://a.test/')
+    const s = views.openInternalPage('settings')
+    expect(selected()).toBe(s)
+    const viewsBefore = fx.views.length
+    bw.webContents.send.mockClear()
+
+    views.runShortcut({ type: 'devtoolsConsole' })
+    views.runShortcut({ type: 'inspectElement' })
+    expect(fx.views).toHaveLength(viewsBefore)
+    expect(sent(bw, DOCK)).toEqual([])
+    expect(row(s)).not.toHaveProperty('devtools')
+    expect(anyJs()).toBe(false)
+  })
+
+  it('DD-U19 没有 tab / 不存在的 tab：不抛，什么也不建、不发', () => {
+    expect(() => views.runShortcut({ type: 'devtoolsConsole' })).not.toThrow()
+    expect(() => views.runShortcut({ type: 'inspectElement' })).not.toThrow()
+
+    const bw = openByUser()
+    const viewsBefore = fx.views.length
+    expect(() => dock.toggleDevtoolsConsole('no-such-tab')).not.toThrow()
+    expect(() => dock.toggleInspectElementMode('no-such-tab')).not.toThrow()
+    expect(fx.views).toHaveLength(viewsBefore)
+    expect(sent(bw, DOCK)).toEqual([])
+    expect(dock.devtoolsDockOf('no-such-tab')).toBeUndefined()
+  })
+
+  const mac = process.platform === 'darwin'
+  const CONSOLE_KEY = mac
+    ? { code: 'KeyJ', key: '∆', meta: true, alt: true }
+    : { code: 'KeyJ', key: 'J', control: true, shift: true }
+  const INSPECT_KEY = mac
+    ? { code: 'KeyC', key: 'C', meta: true, shift: true }
+    : { code: 'KeyC', key: 'C', control: true, shift: true }
+
+  it('DD-U19 真按键（焦点在页面里）：Console 开在 DevTools 页签，排到前端加载完', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    expect(key(a.view, CONSOLE_KEY)).toHaveBeenCalledTimes(1)
+    expect(row(a.id)?.devtools).toEqual({ panel: 'devtools' })
+    const frontend = onlyFrontendOf(a.view)
+    frontendLoaded(a.view)
+    expect(jsCalls(frontend)).toEqual([[CONSOLE]])
+  })
+
+  it('DD-U19 真按键（焦点在页面里）：「选择元素」开在 DevTools 页签，排到前端加载完', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    expect(key(a.view, INSPECT_KEY)).toHaveBeenCalledTimes(1)
+    expect(row(a.id)?.devtools).toEqual({ panel: 'devtools' })
+    const frontend = onlyFrontendOf(a.view)
+    expect(frontend.webContents.executeJavaScript).not.toHaveBeenCalled()
+    frontendLoaded(a.view)
+    expect(jsCalls(frontend)).toEqual([[INSPECT]])
+  })
+
+  it('DD-U19 按住不放的 Console 不拦、不动停靠区', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    expect(key(a.view, CONSOLE_KEY)).toHaveBeenCalledTimes(1)
+    const frontend = onlyFrontendOf(a.view)
+
+    expect(key(a.view, { ...CONSOLE_KEY, isAutoRepeat: true })).not.toHaveBeenCalled()
+    expect(row(a.id)?.devtools).toEqual({ panel: 'devtools' })
+    expect(frontend.webContents.close).not.toHaveBeenCalled()
+    expect(frontendsOf(a.view)).toHaveLength(1)
+  })
+
+  it('DD-U19 焦点在 DevTools 前端里：「选择元素」当场调这个前端、停靠区不动；Console 关掉停靠区', () => {
+    openByUser()
+    const a = tab('https://a.test/', { activate: true })
+    dock.openDevtoolsDock(a.id, 'devtools')
+    frontendLoaded(a.view)
+    const frontend = onlyFrontendOf(a.view)
+
+    expect(key(frontend, INSPECT_KEY)).toHaveBeenCalledTimes(1)
+    expect(jsCalls(frontend)).toEqual([[INSPECT]])
+    expect(row(a.id)?.devtools).toEqual({ panel: 'devtools' })
+    expect(frontend.webContents.close).not.toHaveBeenCalled()
+
+    expect(key(frontend, CONSOLE_KEY)).toHaveBeenCalledTimes(1)
+    expect(row(a.id)).not.toHaveProperty('devtools')
+    expect(frontend.webContents.close).toHaveBeenCalledTimes(1)
+    expect(jsCalls(frontend)).toEqual([[INSPECT]])
   })
 })

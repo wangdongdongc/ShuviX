@@ -18,9 +18,8 @@ export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
   const dialogOpen = useDialogOverlay()
   const cover = useBrowserTabsStore((s) => s.pageCover)
-  const dockResizing = useBrowserTabsStore((s) => s.dockResizing)
-  // 对话框、站点信息气泡开着、正在拖停靠区：原生页面让位（它会盖住 DOM 弹层、吃掉鼠标），页面区由截图顶着
-  const overlay = dialogOpen || !!cover || dockResizing
+  // 对话框、站点信息气泡开着：原生页面让位（它会盖住 DOM 弹层、吃掉鼠标），页面区由截图顶着
+  const overlay = dialogOpen || !!cover
   const pageRef = useRef<HTMLDivElement | null>(null)
   const rafRef = useRef(0)
 
@@ -29,47 +28,51 @@ export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React
   const showsPage = !!tab && !isBlank && !internal && !tab.loadError
   const tabId = tab?.id ?? null
 
+  const syncLayoutNow = useCallback(() => {
+    cancelAnimationFrame(rafRef.current)
+    const api = window.api.browserView
+    if (overlay) {
+      api.setVisible(false)
+      return
+    }
+    const el = pageRef.current
+    const rect = el?.getBoundingClientRect()
+    if (!tabId || !showsPage || !rect || rect.width <= 0 || rect.height <= 0) {
+      api.setLayout([])
+    } else {
+      api.setLayout([
+        {
+          tabId,
+          bounds: {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height)
+          }
+        }
+      ])
+    }
+    api.setVisible(true)
+  }, [overlay, tabId, showsPage])
+
   const syncLayout = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
-    rafRef.current = requestAnimationFrame(() => {
-      const api = window.api.browserView
-      if (overlay) {
-        api.setVisible(false)
-        return
-      }
-      const el = pageRef.current
-      const rect = el?.getBoundingClientRect()
-      if (!tabId || !showsPage || !rect || rect.width <= 0 || rect.height <= 0) {
-        api.setLayout([])
-      } else {
-        api.setLayout([
-          {
-            tabId,
-            bounds: {
-              x: Math.round(rect.x),
-              y: Math.round(rect.y),
-              width: Math.round(rect.width),
-              height: Math.round(rect.height)
-            }
-          }
-        ])
-      }
-      api.setVisible(true)
-    })
-  }, [overlay, tabId, showsPage])
+    rafRef.current = requestAnimationFrame(syncLayoutNow)
+  }, [syncLayoutNow])
 
   useEffect(() => {
     syncLayout()
   }, [syncLayout])
 
-  // 页面区尺寸变化（窗口缩放、提示条出现 / 消失把页面区往下推）
+  // 页面区尺寸变化（窗口缩放、提示条出现 / 消失把页面区往下推、拖停靠区）：当场报 —— 布局刚算完、还没画，
+  // 原生 view 与 DOM 尽量落在同一帧；隔一帧再报，拖停靠区时页面与停靠区之间会错开一帧闪一下
   useEffect(() => {
     const el = pageRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => syncLayout())
+    const ro = new ResizeObserver(() => syncLayoutNow())
     ro.observe(el)
     return () => ro.disconnect()
-  }, [syncLayout, showsPage])
+  }, [syncLayoutNow, showsPage])
 
   // 窗口移动时尺寸没变、ResizeObserver 不触发，但 view 的矩形要跟着走
   useEffect(() => {

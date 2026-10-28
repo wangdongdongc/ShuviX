@@ -6,8 +6,11 @@
  *    contextMenu.popup 回用例钉好的 actionId，app / settings / events / browserData 够组件跑起来）；
  *  - `installRaf`：requestAnimationFrame 换成 setTimeout(0)（jsdom 没有可靠的帧；组件在一帧之后才读
  *    刚挂上的 input / 布局，同步执行的话那一刻节点还没挂上），`flush` 把排着的帧跑完；
- *  - ResizeObserver / scrollIntoView / getBoundingClientRect 的桩（jsdom 没有 / 回全 0）；
- *  - `tabInfo`：一行 BrowserTabInfo；`mountInto` / `typeInto` / `keyDown` / `mouseDown`。
+ *  - ResizeObserver / scrollIntoView / getBoundingClientRect 的桩（jsdom 没有 / 回全 0）：
+ *    `installResizeObserver` 回一个手动触发器（`trigger(el)` 只叫醒还在看着 el 的观察者，observe 时不报），
+ *    `stubRects` 所有元素同一个矩形、`stubRectsBy` 按元素给矩形，`stubInnerHeight` 改 window.innerHeight；
+ *  - `tabInfo`：一行 BrowserTabInfo；`mountInto` / `typeInto` / `keyDown` / `mouseDown`；
+ *  - 拖动：`mouseMove`（document 上，带 buttons）/ `mouseUp`（document 上）/ `windowBlur`。
  *
  * 一律 createElement（桌面 vitest 不带 react 插件）。
  */
@@ -15,7 +18,7 @@ import { act, createElement, type FunctionComponent } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
-import { vi, type Mock } from 'vitest'
+import { vi, type Mock, type MockInstance } from 'vitest'
 import en from '@shuvix/chat-protocol/i18n/locales/en.json'
 import type { BrowserTabInfo } from '../../../stores/browserTabsStore'
 
@@ -219,27 +222,104 @@ export async function flush(rounds = 3): Promise<void> {
   }
 }
 
-/** jsdom 没有 ResizeObserver：一个什么也不报的桩 */
-export function installResizeObserver(): void {
-  class RO {
-    observe(): void {}
-    unobserve(): void {}
-    disconnect(): void {}
-  }
-  ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
+/** ResizeObserver 桩的手动触发器 */
+export interface ResizeObserverControl {
+  /** 叫醒还在看着 el 的观察者（没 disconnect、没 unobserve 它），在 act 里同步跑它们的回调 */
+  trigger(el: Element): void
+  /** 此刻还在看着 el 的观察者个数 */
+  observing(el: Element): number
 }
 
-/** 所有元素的 getBoundingClientRect 都回这个矩形（jsdom 缺省全 0，布局同步会把页面当成没尺寸） */
-export function stubRects(rect: { x: number; y: number; width: number; height: number }): void {
-  const full = {
+/**
+ * jsdom 没有 ResizeObserver：一个自己从不报的桩（observe 时也不报 —— 真的 ResizeObserver 会报一次初始尺寸，
+ * 这里不模拟），用例要它报时用回的 `trigger(el)`。
+ */
+export function installResizeObserver(): ResizeObserverControl {
+  const live = new Set<RO>()
+  class RO {
+    readonly targets = new Set<Element>()
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe(el: Element): void {
+      this.targets.add(el)
+      live.add(this)
+    }
+    unobserve(el: Element): void {
+      this.targets.delete(el)
+    }
+    disconnect(): void {
+      this.targets.clear()
+      live.delete(this)
+    }
+    fire(el: Element): void {
+      const entry = { target: el, contentRect: el.getBoundingClientRect() } as ResizeObserverEntry
+      this.callback([entry], this as unknown as ResizeObserver)
+    }
+  }
+  ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = RO
+  const watching = (el: Element): RO[] => [...live].filter((ro) => ro.targets.has(el))
+  return {
+    trigger(el) {
+      const observers = watching(el)
+      act(() => {
+        for (const ro of observers) ro.fire(el)
+      })
+    },
+    observing: (el) => watching(el).length
+  }
+}
+
+type RectLike = { x: number; y: number; width: number; height: number }
+
+function domRect(rect: RectLike): DOMRect {
+  return {
     ...rect,
     left: rect.x,
     top: rect.y,
     right: rect.x + rect.width,
     bottom: rect.y + rect.height,
     toJSON: () => rect
+  } as DOMRect
+}
+
+/** getBoundingClientRect 的间谍（同一个用例里再桩一次就换实现，不叠第二层） */
+function rectSpy(): MockInstance<(this: HTMLElement) => DOMRect> {
+  const current = HTMLElement.prototype.getBoundingClientRect
+  if (vi.isMockFunction(current)) {
+    return current as unknown as MockInstance<(this: HTMLElement) => DOMRect>
   }
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => full as DOMRect)
+  return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect') as unknown as MockInstance<
+    (this: HTMLElement) => DOMRect
+  >
+}
+
+/** 所有元素的 getBoundingClientRect 都回这个矩形（jsdom 缺省全 0，布局同步会把页面当成没尺寸） */
+export function stubRects(rect: RectLike): void {
+  const full = domRect(rect)
+  rectSpy().mockImplementation(() => full)
+}
+
+/** 按元素给 getBoundingClientRect 的矩形（同一个用例里可以再调一次换掉） */
+export function stubRectsBy(rectOf: (el: HTMLElement) => RectLike): void {
+  rectSpy().mockImplementation(function (this: HTMLElement) {
+    return domRect(rectOf(this))
+  })
+}
+
+let savedInnerHeight: PropertyDescriptor | undefined | null = null
+
+/** window.innerHeight 改成 h（restoreInnerHeight 还原；没改过时还原什么也不做） */
+export function stubInnerHeight(h: number): void {
+  if (savedInnerHeight === null) {
+    savedInnerHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight')
+  }
+  Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: h })
+}
+
+export function restoreInnerHeight(): void {
+  if (savedInnerHeight === null) return
+  if (savedInnerHeight) Object.defineProperty(window, 'innerHeight', savedInnerHeight)
+  else delete (window as unknown as { innerHeight?: number }).innerHeight
+  savedInnerHeight = null
 }
 
 export function stubScrollIntoView(): Mock {
@@ -291,9 +371,41 @@ export function keyDown(el: Element, key: string, init: KeyboardEventInit = {}):
   })
 }
 
-export function mouseDown(el: Element, button = 0): void {
+/** 在 el 上按下鼠标；回派发的事件（`defaultPrevented` 看组件拦没拦） */
+export function mouseDown(el: Element, button = 0, init: MouseEventInit = {}): MouseEvent {
+  const event = new MouseEvent('mousedown', {
+    button,
+    buttons: button === 0 ? 1 : button === 1 ? 4 : button === 2 ? 2 : 0,
+    bubbles: true,
+    cancelable: true,
+    ...init
+  })
   act(() => {
-    el.dispatchEvent(new MouseEvent('mousedown', { button, bubbles: true, cancelable: true }))
+    el.dispatchEvent(event)
+  })
+  return event
+}
+
+/** document 上的一次 mousemove（拖动中的鼠标；buttons 缺省 1 = 左键还按着） */
+export function mouseMove(clientY: number, buttons = 1): void {
+  act(() => {
+    document.dispatchEvent(
+      new MouseEvent('mousemove', { clientY, buttons, bubbles: true, cancelable: true })
+    )
+  })
+}
+
+/** document 上的 mouseup */
+export function mouseUp(): void {
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+  })
+}
+
+/** 窗口失去焦点 */
+export function windowBlur(): void {
+  act(() => {
+    window.dispatchEvent(new FocusEvent('blur'))
   })
 }
 

@@ -11,6 +11,10 @@
  *   CB-U6  Chrome 的缩放档位与 nextZoomPercent 的走法；
  *   DD-U20 开关 DevTools 停靠区：F12（各平台）、⌥⌘I（macOS，⌥ 让 key 成了别的字符也认物理键位）、
  *          Ctrl+Shift+I（Windows / Linux）；别的平台的那一个 → null；按住不放不连发（开了又关）。
+ *   DD-U21 DevTools 开到 Console：⌥⌘J（macOS；key 是 ⌥ 打出来的 ∆、Dead 或 j 都认）、Ctrl+Shift+J
+ *          （Windows / Linux，非拉丁布局退回物理键位）；别的修饰组合 → null；按住不放不连发。
+ *   DD-U22 「选择元素」：⌥⌘C 与 ⌘⇧C（macOS）、Ctrl+Shift+C（Windows / Linux）；⌘C（拷贝）与别的修饰组合
+ *          → null；按住不放不连发；⌥⌘ + 物理 I / J / C 的 key 是 Dead 时各归各的动作，⌥⌘K 不是。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -317,5 +321,127 @@ describe('开关 DevTools 停靠区（DD-U20）', () => {
     expect(
       browserShortcutFor(press('KeyI', { control: true, shift: true }, repeat), 'linux')
     ).toBeNull()
+  })
+})
+
+const CONSOLE: BrowserShortcut = { type: 'devtoolsConsole' }
+const INSPECT: BrowserShortcut = { type: 'inspectElement' }
+
+describe('DevTools 开到 Console（DD-U21）', () => {
+  it.each(['∆', 'Dead', 'j'])('DD-U21 macOS：⌥⌘J，key = %s → devtoolsConsole', (key) => {
+    expect(
+      browserShortcutFor(press('KeyJ', { meta: true, alt: true }, { key }), 'darwin')
+    ).toStrictEqual(CONSOLE)
+  })
+
+  it.each([
+    ['Ctrl+Shift+J', press('KeyJ', { control: true, shift: true }, { key: 'J' })],
+    ['⌘⇧J', press('KeyJ', { meta: true, shift: true }, { key: 'J' })],
+    ['⌘J', press('KeyJ', { meta: true })],
+    ['⌥J', press('KeyJ', { alt: true })],
+    ['⌥⌘⇧J', press('KeyJ', { meta: true, alt: true, shift: true })]
+  ])('DD-U21 macOS：%s → null', (_label, input) => {
+    expect(browserShortcutFor(input, 'darwin')).toBeNull()
+  })
+
+  describe.each(['win32', 'linux'] as const)('%s', (platform) => {
+    it('DD-U21 Ctrl+Shift+J → devtoolsConsole；俄文布局（key о，物理 KeyJ）同样', () => {
+      expect(
+        browserShortcutFor(press('KeyJ', { control: true, shift: true }, { key: 'J' }), platform)
+      ).toStrictEqual(CONSOLE)
+      expect(
+        browserShortcutFor(press('KeyJ', { control: true, shift: true }, { key: 'о' }), platform)
+      ).toStrictEqual(CONSOLE)
+    })
+
+    it.each([
+      ['Ctrl+J', press('KeyJ', { control: true })],
+      ['Meta+Alt+J', press('KeyJ', { meta: true, alt: true })],
+      ['Ctrl+Alt+J', press('KeyJ', { control: true, alt: true })],
+      ['Ctrl+Shift+Alt+J', press('KeyJ', { control: true, shift: true, alt: true })],
+      ['Meta+Shift+J', press('KeyJ', { meta: true, shift: true })]
+    ])('DD-U21 %s → null', (_label, input) => {
+      expect(browserShortcutFor(input, platform)).toBeNull()
+    })
+  })
+
+  it('DD-U21 按住不放不连发（开了又关）；isAutoRepeat:false 照发', () => {
+    const repeat = { isAutoRepeat: true }
+    expect(
+      browserShortcutFor(press('KeyJ', { meta: true, alt: true }, repeat), 'darwin')
+    ).toBeNull()
+    expect(
+      browserShortcutFor(press('KeyJ', { control: true, shift: true }, repeat), 'linux')
+    ).toBeNull()
+    const once = { isAutoRepeat: false }
+    expect(
+      browserShortcutFor(press('KeyJ', { meta: true, alt: true }, once), 'darwin')
+    ).toStrictEqual(CONSOLE)
+    expect(
+      browserShortcutFor(press('KeyJ', { control: true, shift: true }, once), 'linux')
+    ).toStrictEqual(CONSOLE)
+  })
+})
+
+describe('「选择元素」（DD-U22）', () => {
+  it.each([
+    ['⌥⌘C key ç', press('KeyC', { meta: true, alt: true }, { key: 'ç' })],
+    ['⌥⌘C key Dead', press('KeyC', { meta: true, alt: true }, { key: 'Dead' })],
+    ['⌥⌘C key c', press('KeyC', { meta: true, alt: true }, { key: 'c' })],
+    ['⌘⇧C', press('KeyC', { meta: true, shift: true }, { key: 'C' })]
+  ])('DD-U22 macOS：%s → inspectElement', (_label, input) => {
+    expect(browserShortcutFor(input, 'darwin')).toStrictEqual(INSPECT)
+  })
+
+  it.each([
+    ['⌘C (copy)', press('KeyC', { meta: true })],
+    ['Ctrl+Shift+C', press('KeyC', { control: true, shift: true }, { key: 'C' })],
+    ['⌥C', press('KeyC', { alt: true })],
+    ['Ctrl+C', press('KeyC', { control: true })],
+    ['⌥⌘⇧C', press('KeyC', { meta: true, alt: true, shift: true })]
+  ])('DD-U22 macOS：%s → null', (_label, input) => {
+    expect(browserShortcutFor(input, 'darwin')).toBeNull()
+  })
+
+  describe.each(['win32', 'linux'] as const)('%s', (platform) => {
+    it('DD-U22 Ctrl+Shift+C → inspectElement', () => {
+      expect(
+        browserShortcutFor(press('KeyC', { control: true, shift: true }, { key: 'C' }), platform)
+      ).toStrictEqual(INSPECT)
+    })
+
+    it.each([
+      ['Ctrl+C', press('KeyC', { control: true })],
+      ['Meta+Shift+C', press('KeyC', { meta: true, shift: true })],
+      ['Ctrl+Alt+C', press('KeyC', { control: true, alt: true })],
+      ['Ctrl+Shift+Alt+C', press('KeyC', { control: true, shift: true, alt: true })],
+      ['Meta+Alt+C', press('KeyC', { meta: true, alt: true })]
+    ])('DD-U22 %s → null', (_label, input) => {
+      expect(browserShortcutFor(input, platform)).toBeNull()
+    })
+  })
+
+  it('DD-U22 按住不放不连发：⌥⌘C、⌘⇧C（macOS）、Ctrl+Shift+C（Windows）', () => {
+    const repeat = { isAutoRepeat: true }
+    expect(
+      browserShortcutFor(press('KeyC', { meta: true, alt: true }, repeat), 'darwin')
+    ).toBeNull()
+    expect(
+      browserShortcutFor(press('KeyC', { meta: true, shift: true }, repeat), 'darwin')
+    ).toBeNull()
+    expect(
+      browserShortcutFor(press('KeyC', { control: true, shift: true }, repeat), 'win32')
+    ).toBeNull()
+  })
+
+  it.each([
+    ['KeyI', { type: 'toggleDevtools' } as BrowserShortcut],
+    ['KeyJ', CONSOLE],
+    ['KeyC', INSPECT],
+    ['KeyK', null]
+  ] as const)('DD-U22 macOS：⌥⌘ + 物理 %s、key 是 Dead → %j', (code, expected) => {
+    expect(
+      browserShortcutFor(press(code, { meta: true, alt: true }, { key: 'Dead' }), 'darwin')
+    ).toStrictEqual(expected)
   })
 })

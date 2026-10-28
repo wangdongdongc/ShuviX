@@ -49,10 +49,13 @@ import {
   forgetDevtoolsDock,
   inspectElementAt,
   noteDevtoolsClosed,
+  noteDevtoolsOpened,
   resetDevtoolsLayout,
   routeDevtoolsUrl,
   setDockHost,
-  toggleDevtoolsDock
+  toggleDevtoolsConsole,
+  toggleDevtoolsDock,
+  toggleInspectElementMode
 } from './devtoolsDock'
 import { agentDevtoolsCallCount, forgetAgentDevtools, resetAgentDevtools } from './agentDevtools'
 import type { DevtoolsDockState } from '../../../shared/browserAgentDevtools'
@@ -580,6 +583,8 @@ export function createTab(
   // ====== 停靠区里的原生 DevTools ======
   // DevTools 自己没了（前端崩了之类，不是用户关的）：停靠区跟着收
   wc.on('devtools-closed', () => noteDevtoolsClosed(tabId))
+  // 前端加载完了：快捷键要它切到 Console / 进「选择元素」的，这时才做得了
+  wc.on('devtools-opened', () => noteDevtoolsOpened(tabId))
   // DevTools 里点的链接：开成新 tab
   wc.on('devtools-open-url', (_event, url) => routeDevtoolsUrl(url))
   // 页面的右键菜单（最后一项是「检查」）
@@ -1005,9 +1010,15 @@ export function runShortcut(action: BrowserShortcut): void {
       if (selected) zoomTab(selected.id, action.direction)
       return
     case 'toggleDevtools':
+    case 'devtoolsConsole':
+    case 'inspectElement': {
       // 内部页面画在外壳里，没有可调试的页面
-      if (selected && !internalPages.has(selected.id)) toggleDevtoolsDock(selected.id)
+      if (!selected || internalPages.has(selected.id)) return
+      if (action.type === 'devtoolsConsole') toggleDevtoolsConsole(selected.id)
+      else if (action.type === 'inspectElement') toggleInspectElementMode(selected.id)
+      else toggleDevtoolsDock(selected.id)
       return
+    }
   }
 }
 

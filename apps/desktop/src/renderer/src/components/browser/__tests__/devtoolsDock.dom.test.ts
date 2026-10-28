@@ -12,9 +12,15 @@
  *   DD-U33  提示条：这页有 devtool 调用时才多一个「Agent's DevTools activity (n)」，点了 →
  *           openDevtools(tab, 'agent')；
  *   DD-U34  高度夹在 [140, 可用高度 − 120] 之间。
+ *   DD-U35  拖上沿改高度（照 Chrome 实时变）：每次 mousemove → onHeight(按起点高度与起点 Y 算、夹过, false)；
+ *           mouseup / 窗口失焦 / 左键已松开的 mousemove → onHeight(最后的高度, true) 一次，之后什么也不再报；
+ *           只认左键；拖动中光标 row-resize、不可选中文字，结束复原；拖动期间不截图、不 setVisible、不盖
+ *           pageCover、不报 null 矩形；
+ *   DD-U36  原生 DevTools 的占位在 ResizeObserver 回调里**当场**报矩形（零尺寸报 null）；窗口缩放仍排到下一帧
+ *           （同一帧里 ResizeObserver 先报了就只报一次）；卸载之后旧占位的尺寸变化不再报。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act } from 'react'
+import { act, createElement } from 'react'
 import { BrowserDevtoolsDock } from '../BrowserDevtoolsDock'
 import { clampDockHeight } from '../dockHeight'
 import { AgentInfobar } from '../AgentInfobar'
@@ -31,10 +37,17 @@ import {
   installRaf,
   installResizeObserver,
   mountInto,
+  mouseDown,
+  mouseMove,
+  mouseUp,
+  restoreInnerHeight,
+  stubInnerHeight,
   stubRects,
   tabInfo,
+  windowBlur,
   type FakeApi,
-  type Mounted
+  type Mounted,
+  type ResizeObserverControl
 } from './browserDomSupport'
 
 vi.mock('../sessionColor', () => ({
@@ -43,6 +56,7 @@ vi.mock('../sessionColor', () => ({
 }))
 
 let api: FakeApi
+let ro: ResizeObserverControl
 let m: Mounted | null = null
 
 const $ = <T extends Element = HTMLElement>(sel: string): T | null =>
@@ -95,19 +109,23 @@ beforeAll(async () => {
 beforeEach(() => {
   api = installFakeApi()
   installRaf()
-  installResizeObserver()
+  ro = installResizeObserver()
   stubRects({ x: 0, y: 500, width: 1000, height: 260 })
   useBrowserTabsStore.setState({
     tabs: [],
     activeTabId: null,
-    dockResizing: false,
     pageCover: null
   })
 })
 
 afterEach(() => {
+  // 用例中途留着的拖动：先松手（document 上的监听摘掉），光标 / 选中复原
+  mouseUp()
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
   m?.unmount()
   m = null
+  restoreInnerHeight()
   vi.restoreAllMocks()
 })
 
@@ -326,5 +344,222 @@ describe('高度（DD-U34）', () => {
     [300, 200, 140]
   ])('DD-U34 想要 %i、可用 %i → %i', (want, available, got) => {
     expect(clampDockHeight(want, available)).toBe(got)
+  })
+})
+
+describe('拖上沿改高度（DD-U35）', () => {
+  let onHeight: ReturnType<typeof vi.fn<(height: number, commit: boolean) => void>>
+
+  const render = (height: number): void => {
+    act(() => {
+      m!.root.render(createElement(BrowserDevtoolsDock, { height, onHeight }))
+    })
+  }
+
+  const edge = (): HTMLElement => $('[data-devtools-resize]')!
+
+  beforeEach(async () => {
+    onHeight = vi.fn<(height: number, commit: boolean) => void>()
+    stubInnerHeight(900)
+    seed([tabInfo({ id: 'a', devtools: { panel: 'devtools' } })], 'a')
+    m = await mountInto(BrowserDevtoolsDock, { height: 300, onHeight })
+    await flush()
+  })
+
+  it('DD-U35 拖动中按起点算（重新渲染的高度不影响）；松手报一次 commit', () => {
+    mouseDown(edge(), 0, { clientY: 600 })
+    mouseMove(550)
+    mouseMove(500)
+    expect(onHeight.mock.calls).toEqual([
+      [350, false],
+      [400, false]
+    ])
+    render(400)
+    mouseMove(450)
+    expect(onHeight.mock.calls.at(-1)).toEqual([450, false])
+    mouseUp()
+    expect(onHeight.mock.calls).toEqual([
+      [350, false],
+      [400, false],
+      [450, false],
+      [450, true]
+    ])
+  })
+
+  it('DD-U35 夹在 [140, innerHeight − 120] 之间', () => {
+    mouseDown(edge(), 0, { clientY: 600 })
+    mouseMove(-2000)
+    expect(onHeight.mock.calls.at(-1)).toEqual([780, false])
+    mouseMove(5000)
+    expect(onHeight.mock.calls.at(-1)).toEqual([140, false])
+    mouseUp()
+    expect(onHeight.mock.calls.at(-1)).toEqual([140, true])
+  })
+
+  it('DD-U35 按下就松：只报一次 commit，高度不变', () => {
+    mouseDown(edge(), 0, { clientY: 600 })
+    mouseUp()
+    expect(onHeight.mock.calls).toEqual([[300, true]])
+  })
+
+  it('DD-U35 窗口失焦结束拖动（commit 最后的高度）；之后的移动 / 松手 / 失焦不再报', () => {
+    mouseDown(edge(), 0, { clientY: 600 })
+    mouseMove(520)
+    expect(onHeight.mock.calls).toEqual([[380, false]])
+    windowBlur()
+    expect(onHeight.mock.calls).toEqual([
+      [380, false],
+      [380, true]
+    ])
+    mouseMove(400)
+    mouseUp()
+    windowBlur()
+    expect(onHeight).toHaveBeenCalledTimes(2)
+  })
+
+  it('DD-U35 左键已经松开的 mousemove：当作松手；之后的 mouseup 不再报', () => {
+    mouseDown(edge(), 0, { clientY: 600 })
+    mouseMove(550)
+    expect(onHeight.mock.calls).toEqual([[350, false]])
+    mouseMove(500, 0)
+    expect(onHeight.mock.calls).toEqual([
+      [350, false],
+      [350, true]
+    ])
+    mouseUp()
+    mouseMove(450)
+    expect(onHeight).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    [2, 'right'],
+    [1, 'middle']
+  ])('DD-U35 按的是 %i（%s）键：不开始拖动、不拦默认动作', (button) => {
+    const down = mouseDown(edge(), button, { clientY: 600 })
+    expect(down.defaultPrevented).toBe(false)
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+    mouseMove(500)
+    mouseMove(400)
+    mouseUp()
+    expect(onHeight).not.toHaveBeenCalled()
+    expect(document.body.style.cursor).toBe('')
+
+    // 对照：左键按下拦掉默认动作（不选中文字、不拖走元素）
+    expect(mouseDown(edge(), 0, { clientY: 600 }).defaultPrevented).toBe(true)
+  })
+
+  it.each([
+    ['mouseup', (): void => mouseUp()],
+    ['blur', (): void => windowBlur()],
+    ['mousemove without the left button', (): void => mouseMove(500, 0)]
+  ])('DD-U35 拖动中光标 row-resize、不可选中；%s 结束后复原', (_label, end) => {
+    mouseDown(edge(), 0, { clientY: 600 })
+    expect(document.body.style.cursor).toBe('row-resize')
+    expect(document.body.style.userSelect).toBe('none')
+    mouseMove(550)
+    end()
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+  })
+
+  it('DD-U35 第二次拖动从新的高度起算；上一次的监听不再报', () => {
+    mouseDown(edge(), 0, { clientY: 600 })
+    mouseMove(500)
+    mouseUp()
+    render(450)
+    onHeight.mockClear()
+
+    mouseDown(edge(), 0, { clientY: 600 })
+    mouseMove(590)
+    expect(onHeight.mock.calls).toEqual([[460, false]])
+    mouseUp()
+    expect(onHeight.mock.calls).toEqual([
+      [460, false],
+      [460, true]
+    ])
+  })
+
+  it('DD-U35 拖动期间：不截图、不 setVisible、不盖 pageCover、不报 null 矩形', () => {
+    const bv = api.browserView
+    for (const fn of [bv.capture, bv.setVisible, bv.setDevtoolsLayout]) fn.mockClear()
+
+    mouseDown(edge(), 0, { clientY: 600 })
+    expect(useBrowserTabsStore.getState().pageCover).toBeNull()
+    mouseMove(550)
+    mouseMove(500)
+    expect(useBrowserTabsStore.getState().pageCover).toBeNull()
+    mouseUp()
+
+    expect(bv.capture).not.toHaveBeenCalled()
+    expect(bv.setVisible).not.toHaveBeenCalled()
+    expect(useBrowserTabsStore.getState().pageCover).toBeNull()
+    expect(bv.setDevtoolsLayout.mock.calls).not.toContainEqual([null])
+    expect(useBrowserTabsStore.getState()).not.toHaveProperty('dockResizing')
+    expect(useBrowserTabsStore.getState()).not.toHaveProperty('setDockResizing')
+  })
+})
+
+describe('原生 DevTools 的占位当场报矩形（DD-U36）', () => {
+  const native = (): HTMLElement => $('[data-devtools-native]')!
+
+  beforeEach(async () => {
+    seed([tabInfo({ id: 'a', devtools: { panel: 'devtools' } })], 'a')
+    await mountDock()
+    api.browserView.setDevtoolsLayout.mockClear()
+  })
+
+  it('DD-U36 ResizeObserver 一报就当场报新矩形（不等下一帧）', () => {
+    expect(ro.observing(native())).toBe(1)
+    stubRects({ x: 0, y: 450, width: 1000, height: 310 })
+    ro.trigger(native())
+    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([
+      [{ tabId: 'a', bounds: { x: 0, y: 450, width: 1000, height: 310 } }]
+    ])
+  })
+
+  it('DD-U36 零尺寸：当场报 null', () => {
+    stubRects({ x: 0, y: 450, width: 1000, height: 0 })
+    ro.trigger(native())
+    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([[null]])
+  })
+
+  it('DD-U36 窗口缩放：排到下一帧再报当时的矩形', async () => {
+    stubRects({ x: 0, y: 420, width: 1200, height: 280 })
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    expect(api.browserView.setDevtoolsLayout).not.toHaveBeenCalled()
+    await flush()
+    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([
+      [{ tabId: 'a', bounds: { x: 0, y: 420, width: 1200, height: 280 } }]
+    ])
+  })
+
+  it('DD-U36 窗口缩放后、那一帧之前 ResizeObserver 先报了：总共只报一次', async () => {
+    stubRects({ x: 0, y: 420, width: 1200, height: 280 })
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    ro.trigger(native())
+    expect(api.browserView.setDevtoolsLayout).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([
+      [{ tabId: 'a', bounds: { x: 0, y: 420, width: 1200, height: 280 } }]
+    ])
+  })
+
+  it('DD-U36 换到 Agent 页签（报 null）之后，旧占位的尺寸变化不再报', async () => {
+    const old = native()
+    api.browserView.agentDevtools.mockResolvedValue(snapshot())
+    seed([tabInfo({ id: 'a', devtools: { panel: 'agent' } })], 'a')
+    await flush()
+    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([[null]])
+    expect(ro.observing(old)).toBe(0)
+
+    stubRects({ x: 0, y: 450, width: 1000, height: 310 })
+    ro.trigger(old)
+    await flush()
+    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([[null]])
   })
 })

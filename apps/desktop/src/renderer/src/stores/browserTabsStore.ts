@@ -77,11 +77,6 @@ interface BrowserTabsState {
   omniboxFocusNonce: number
   settingsFocus: SettingsFocus | null
   pageCover: PageCover | null
-  /**
-   * 正在拖停靠区的上沿改高度：原生 view（页面、原生 DevTools）这段时间全部让位 —— 它们画在 DOM 之上、
-   * 会吃掉鼠标，拖过页面时外壳就收不到 mousemove 了。页面区由截图顶着（pageCover）。
-   */
-  dockResizing: boolean
 
   createTab: (url?: string) => void
   closeTab: (id: string) => void
@@ -96,7 +91,6 @@ interface BrowserTabsState {
   /** 打开设置页并跳到某一节（站点信息气泡里的「网站设置」） */
   openSettings: (section?: SettingsFocus['section'], search?: string, site?: string) => void
   setPageCover: (cover: PageCover | null) => void
-  setDockResizing: (resizing: boolean) => void
   /** 设置页用掉了跳转请求 */
   clearSettingsFocus: () => void
 }
@@ -111,7 +105,6 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
   omniboxFocusNonce: 0,
   settingsFocus: null,
   pageCover: null,
-  dockResizing: false,
 
   createTab: (url) => {
     void api()?.createTab(url)
@@ -152,7 +145,6 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
     }
   },
   setPageCover: (cover) => set({ pageCover: cover }),
-  setDockResizing: (resizing) => set({ dockResizing: resizing }),
   clearSettingsFocus: () => set({ settingsFocus: null })
 }))
 

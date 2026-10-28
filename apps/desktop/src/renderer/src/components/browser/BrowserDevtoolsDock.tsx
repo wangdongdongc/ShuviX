@@ -60,7 +60,7 @@ export function BrowserDevtoolsDock({
       data-devtools-dock={tab.id}
       data-panel={dock.panel}
     >
-      <DockResizeEdge height={height} onHeight={onHeight} tabId={tab.id} />
+      <DockResizeEdge height={height} onHeight={onHeight} />
       <div
         role="tablist"
         className="flex-shrink-0 flex items-stretch h-8 pl-1 pr-1 bg-bg-secondary border-b border-border-secondary/40"
@@ -91,37 +91,41 @@ export function BrowserDevtoolsDock({
 
 /**
  * 原生 DevTools 的占位：把自己的矩形报给主进程（窗口缩放、停靠区改高度时跟着报），卸载时报 null。
- * 原生 view 什么时候让位（对话框、站点信息气泡、拖停靠区）由主进程那道可见性门统一管，这里不用操心。
+ * 原生 view 什么时候让位（对话框、站点信息气泡）由主进程那道可见性门统一管，这里不用操心。
  */
 function NativeDevtoolsSlot({ tabId }: { tabId: string }): React.JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null)
   const rafRef = useRef(0)
 
-  const report = useCallback(() => {
+  const reportNow = useCallback(() => {
     cancelAnimationFrame(rafRef.current)
-    rafRef.current = requestAnimationFrame(() => {
-      const rect = ref.current?.getBoundingClientRect()
-      const api = window.api.browserView
-      if (!rect || rect.width <= 0 || rect.height <= 0) {
-        api.setDevtoolsLayout(null)
-        return
+    const rect = ref.current?.getBoundingClientRect()
+    const api = window.api.browserView
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      api.setDevtoolsLayout(null)
+      return
+    }
+    api.setDevtoolsLayout({
+      tabId,
+      bounds: {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
       }
-      api.setDevtoolsLayout({
-        tabId,
-        bounds: {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
-        }
-      })
     })
   }, [tabId])
+
+  const report = useCallback(() => {
+    cancelAnimationFrame(rafRef.current)
+    rafRef.current = requestAnimationFrame(reportNow)
+  }, [reportNow])
 
   useEffect(() => {
     report()
     const el = ref.current
-    const ro = el ? new ResizeObserver(() => report()) : null
+    // 尺寸变了当场报（布局刚算完、还没画）：拖停靠区时原生 view 与 DOM 尽量落在同一帧，不错开一帧闪一下
+    const ro = el ? new ResizeObserver(() => reportNow()) : null
     if (el) ro?.observe(el)
     window.addEventListener('resize', report)
     return () => {
@@ -130,60 +134,57 @@ function NativeDevtoolsSlot({ tabId }: { tabId: string }): React.JSX.Element {
       cancelAnimationFrame(rafRef.current)
       window.api.browserView.setDevtoolsLayout(null)
     }
-  }, [report])
+  }, [report, reportNow])
 
   return <div ref={ref} className="h-full w-full" data-devtools-native={tabId} />
 }
 
 /**
- * 停靠区的上沿：拖动改高度。拖动期间原生 view 全部让位（store.dockResizing），页面区换成截图 ——
- * 它们画在 DOM 之上，鼠标一拖过页面，外壳就收不到 mousemove 了。
+ * 停靠区的上沿：拖动改高度，页面与原生 DevTools 跟着实时变（照 Chrome）。
+ *
+ * 原生 view 画在 DOM 之上，但按下落在外壳里，之后的拖动事件系统一直发给外壳 —— 光标拖过页面、拖过
+ * DevTools 也一样（macOS 上收到 mouseDown 的那个 view 收后续的 mouseDragged / mouseUp，Aura 的隐式捕获
+ * 同理；2026-10-28 用注入的 NSEvent 实测，Electron 39）。所以拖动期间什么都不用收起来。早先这里把原生 view
+ * 全部收起、页面区换成截图：截图按 CSS 宽度缩过（Retina 上发虚）、又按 object-cover 铺满（往下拖页面区
+ * 变高，截图就被放大），一按一松还各闪一下。
  */
 function DockResizeEdge({
   height,
-  onHeight,
-  tabId
+  onHeight
 }: {
   height: number
   onHeight: (height: number, commit: boolean) => void
-  tabId: string
 }): React.JSX.Element {
   const { t } = useTranslation()
   const onMouseDown = (e: React.MouseEvent): void => {
+    if (e.button !== 0) return
     e.preventDefault()
-    const store = useBrowserTabsStore.getState()
     const startY = e.clientY
     const startH = height
     let last = startH
-    store.setDockResizing(true)
-    // 页面区先空着，截图到了再顶上（与站点信息气泡同一个做法）
-    store.setPageCover({ tabId, snapshot: '' })
-    void window.api.browserView
-      .capture(tabId, Math.max(480, window.innerWidth))
-      .catch(() => '')
-      .then((snapshot) => {
-        const s = useBrowserTabsStore.getState()
-        if (s.dockResizing && s.pageCover?.tabId === tabId) s.setPageCover({ tabId, snapshot })
-      })
     document.body.style.cursor = 'row-resize'
     document.body.style.userSelect = 'none'
 
     const onMove = (ev: MouseEvent): void => {
+      // 左键已经不在按着（松手没送到这里）：就当松手
+      if ((ev.buttons & 1) === 0) {
+        finish()
+        return
+      }
       last = clampDockHeight(startH + (startY - ev.clientY), window.innerHeight)
       onHeight(last, false)
     }
-    const onUp = (): void => {
+    const finish = (): void => {
       document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
+      document.removeEventListener('mouseup', finish)
+      window.removeEventListener('blur', finish)
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
-      const s = useBrowserTabsStore.getState()
-      s.setDockResizing(false)
-      s.setPageCover(null)
       onHeight(last, true)
     }
     document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
+    document.addEventListener('mouseup', finish)
+    window.addEventListener('blur', finish)
   }
 
   return (

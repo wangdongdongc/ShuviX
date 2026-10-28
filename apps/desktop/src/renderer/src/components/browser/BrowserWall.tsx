@@ -33,8 +33,8 @@ export function BrowserWall({ engine }: { engine: SearchEngineId }): React.JSX.E
   const activateTab = useBrowserTabsStore((s) => s.activateTab)
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
   const dialogOpen = useDialogOverlay()
-  // 站点信息气泡开着、正在拖停靠区时同理：原生页面全部让位，卡片显示各自的快照
-  const covered = useBrowserTabsStore((s) => !!s.pageCover || s.dockResizing)
+  // 站点信息气泡开着时同理：原生页面全部让位，卡片显示各自的快照
+  const covered = useBrowserTabsStore((s) => !!s.pageCover)
   const hasDialogOverlay = dialogOpen || covered
 
   const contentRef = useRef<HTMLDivElement>(null)

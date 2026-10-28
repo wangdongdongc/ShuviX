@@ -18,8 +18,15 @@
  *   BS-U35  平铺墙：pageCover → setVisible(false)；设置页的卡片是紧凑版（没有导航）、从不进布局表；一张卡片的地址
  *           变成 shuvix://settings → 下一次布局表里没有它；
  *   BS-U36  设置页在标签条、墙上卡片头、搜索标签页菜单里都叫 Settings，图标是设置图标（不是地球）。
+ *   DD-U37  BrowserSinglePage 在 ResizeObserver 回调里**当场**报布局（setLayout 再 setVisible(true)，不等下一帧）；
+ *           盖着 pageCover / 对话框时当场 setVisible(false)、不报布局；换了选中页、空白页变成网页之后，新的页面区
+ *           同样当场报；窗口缩放排到下一帧（那一帧之前 ResizeObserver 先报了就只报一次）；
+ *   DD-U38  外壳里拖停靠区上沿：停靠区高度跟着鼠标实时变（夹在 [140, innerHeight − 120]），松手才写进设置
+ *           `browser.devtoolsHeight`；拖动期间页面不让位（不 setVisible(false)、不截图、没有 pageCover）、原生
+ *           DevTools 不报 null；单页视图里页面区与原生 DevTools 的尺寸变化当场报新矩形。
  *
- * jsdom 没有布局：getBoundingClientRect 一律回一个固定矩形、ResizeObserver 是哑桩、rAF 换成 setTimeout(0)。
+ * jsdom 没有布局：getBoundingClientRect 缺省回一个固定矩形（DD-U37/38 按元素给）、ResizeObserver 是手动触发的桩、
+ * rAF 换成 setTimeout(0)。
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
@@ -41,15 +48,22 @@ import {
   lastMenu,
   mountInto,
   mouseDown,
+  mouseMove,
+  mouseUp,
+  restoreInnerHeight,
+  stubInnerHeight,
   stubRects,
+  stubRectsBy,
   stubScrollIntoView,
   tabInfo,
   typeInto,
   type FakeApi,
-  type Mounted
+  type Mounted,
+  type ResizeObserverControl
 } from './browserDomSupport'
 
 let api: FakeApi
+let ro: ResizeObserverControl
 let m: Mounted | null = null
 
 const RECT = { x: 0, y: 76, width: 550, height: 600 }
@@ -84,7 +98,7 @@ beforeAll(async () => {
 beforeEach(() => {
   api = installFakeApi()
   installRaf()
-  installResizeObserver()
+  ro = installResizeObserver()
   stubScrollIntoView()
   stubRects(RECT)
   useBrowserTabsStore.setState({
@@ -97,9 +111,14 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  // 用例中途留着的拖动：先松手，光标 / 选中复原
+  mouseUp()
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
   m?.unmount()
   m = null
   document.querySelectorAll('.dialog-overlay').forEach((el) => el.remove())
+  restoreInnerHeight()
   vi.restoreAllMocks()
 })
 
@@ -511,5 +530,228 @@ describe('设置页的名字与图标（BS-U36）', () => {
       ['a', 'Alpha'],
       ['s', '✓ Settings']
     ])
+  })
+})
+
+describe('单页视图在 ResizeObserver 回调里当场报布局（DD-U37）', () => {
+  const NEW_RECT = { x: 0, y: 76, width: 550, height: 500 }
+  const pageArea = (): HTMLElement => $('[data-page-area]')!
+  const clearLayout = (): void => {
+    api.browserView.setLayout.mockClear()
+    api.browserView.setVisible.mockClear()
+  }
+
+  it('DD-U37 页面区尺寸变了：当场 setLayout(新矩形)，再 setVisible(true)', async () => {
+    seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
+    m = await mountInto(BrowserSinglePage, { engine: 'google' })
+    await flush()
+    clearLayout()
+
+    stubRects(NEW_RECT)
+    ro.trigger(pageArea())
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT }]])
+    expect(visibleCalls()).toEqual([true])
+    expect(api.browserView.setLayout.mock.invocationCallOrder[0]).toBeLessThan(
+      api.browserView.setVisible.mock.invocationCallOrder[0]
+    )
+  })
+
+  it.each([
+    [
+      'pageCover',
+      async (): Promise<void> => {
+        act(() => useBrowserTabsStore.getState().setPageCover({ tabId: 'a', snapshot: '' }))
+      }
+    ],
+    [
+      '.dialog-overlay',
+      async (): Promise<void> => {
+        const overlay = document.createElement('div')
+        overlay.className = 'dialog-overlay'
+        await act(async () => {
+          document.body.appendChild(overlay)
+        })
+      }
+    ]
+  ])('DD-U37 盖着 %s：当场 setVisible(false)，不报布局', async (_label, cover) => {
+    seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
+    m = await mountInto(BrowserSinglePage, { engine: 'google' })
+    await flush()
+    await cover()
+    await flush()
+    expect(visibleCalls().at(-1)).toBe(false)
+    clearLayout()
+
+    stubRects(NEW_RECT)
+    ro.trigger(pageArea())
+    expect(visibleCalls()).toEqual([false])
+    expect(layoutCalls()).toEqual([])
+    await flush()
+    expect(visibleCalls()).not.toContain(true)
+    expect(layoutCalls()).toEqual([])
+  })
+
+  it('DD-U37 换了选中页：页面区的尺寸变化报的是新选中的那页', async () => {
+    seed(
+      [tabInfo({ id: 'a', url: 'https://a.test/' }), tabInfo({ id: 'b', url: 'https://b.test/' })],
+      'a'
+    )
+    m = await mountInto(BrowserSinglePage, { engine: 'google' })
+    await flush()
+    act(() => useBrowserTabsStore.setState({ activeTabId: 'b' }))
+    await flush()
+    clearLayout()
+
+    stubRects(NEW_RECT)
+    ro.trigger(pageArea())
+    expect(layoutCalls()).toEqual([[{ tabId: 'b', bounds: NEW_RECT }]])
+    expect(visibleCalls()).toEqual([true])
+  })
+
+  it('DD-U37 空白页变成网页：新出现的页面区同样当场报', async () => {
+    seed([tabInfo({ id: 'a', url: 'about:blank' })], 'a')
+    m = await mountInto(BrowserSinglePage, { engine: 'google' })
+    await flush()
+    expect($('[data-page-area]')).toBeNull()
+
+    act(() =>
+      useBrowserTabsStore.setState({ tabs: [tabInfo({ id: 'a', url: 'https://a.test/' })] })
+    )
+    await flush()
+    clearLayout()
+
+    stubRects(NEW_RECT)
+    ro.trigger(pageArea())
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT }]])
+    expect(visibleCalls()).toEqual([true])
+  })
+
+  it('DD-U37 窗口缩放后、那一帧之前 ResizeObserver 先报了：总共只报一次', async () => {
+    seed([tabInfo({ id: 'a', url: 'https://a.test/' })], 'a')
+    m = await mountInto(BrowserSinglePage, { engine: 'google' })
+    await flush()
+    clearLayout()
+
+    stubRects(NEW_RECT)
+    act(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+    expect(layoutCalls()).toEqual([])
+    ro.trigger(pageArea())
+    await flush()
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: NEW_RECT }]])
+  })
+})
+
+describe('外壳里拖停靠区（DD-U38）', () => {
+  /** 主进程 listTabs 回的一行：a 是选中的网页，停靠区开在 DevTools 页签 */
+  const MAIN_ROW = {
+    id: 'a',
+    url: 'https://a.test/',
+    title: 'Alpha',
+    active: true,
+    cdpAttached: false,
+    cdpIntercepting: false,
+    crashed: false,
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+    zoomPercent: 100,
+    agentDevtoolsCalls: 0,
+    devtools: { panel: 'devtools' }
+  }
+
+  const dockEl = (): HTMLElement => $('[data-devtools-dock]')!
+  const edge = (): HTMLElement => $('[data-devtools-resize]')!
+
+  const mountShell = async (mode: 'single' | 'wall'): Promise<void> => {
+    stubInnerHeight(768)
+    api.settingsMap = { 'browser.viewMode': mode }
+    api.browserView.listTabs.mockResolvedValue([MAIN_ROW])
+    m = await mountInto(BrowserWindowShell, {})
+    await flush()
+    expect($('[data-browser-window]')?.getAttribute('data-view-mode')).toBe(mode)
+    expect(dockEl().getAttribute('data-devtools-dock')).toBe('a')
+    expect($('[data-devtools-native="a"]')).not.toBeNull()
+    const bv = api.browserView
+    for (const fn of [bv.setVisible, bv.setLayout, bv.setDevtoolsLayout, bv.capture]) {
+      fn.mockClear()
+    }
+    api.settings.set.mockClear()
+  }
+
+  describe.each(['single', 'wall'] as const)('%s', (mode) => {
+    it('DD-U38 高度跟着鼠标实时变，松手才写进设置', async () => {
+      await mountShell(mode)
+      expect(dockEl().style.height).toBe('320px')
+
+      mouseDown(edge(), 0, { clientY: 400 })
+      mouseMove(350)
+      expect(dockEl().style.height).toBe('370px')
+      mouseMove(300)
+      expect(dockEl().style.height).toBe('420px')
+      expect(api.settings.set).not.toHaveBeenCalled()
+
+      mouseUp()
+      expect(api.settings.set.mock.calls).toEqual([
+        [{ key: 'browser.devtoolsHeight', value: '420' }]
+      ])
+      expect(dockEl().style.height).toBe('420px')
+    })
+
+    it('DD-U38 拖过头：夹在 innerHeight − 120，写进设置的也是夹过的', async () => {
+      await mountShell(mode)
+      mouseDown(edge(), 0, { clientY: 400 })
+      mouseMove(-5000)
+      expect(dockEl().style.height).toBe('648px')
+      mouseUp()
+      expect(api.settings.set.mock.calls).toEqual([
+        [{ key: 'browser.devtoolsHeight', value: '648' }]
+      ])
+    })
+
+    it('DD-U38 拖动期间页面不让位：不 setVisible(false)、不截图、没有 pageCover；原生 DevTools 不报 null', async () => {
+      await mountShell(mode)
+      const noCover = (): void => {
+        expect($('[data-page-cover]')).toBeNull()
+        expect(useBrowserTabsStore.getState().pageCover).toBeNull()
+      }
+      mouseDown(edge(), 0, { clientY: 400 })
+      noCover()
+      mouseMove(350)
+      noCover()
+      mouseMove(300)
+      noCover()
+      mouseUp()
+      noCover()
+      await flush()
+
+      const bv = api.browserView
+      expect(visibleCalls()).not.toContain(false)
+      expect(bv.capture).not.toHaveBeenCalled()
+      expect(bv.setDevtoolsLayout.mock.calls).not.toContainEqual([null])
+      noCover()
+    })
+  })
+
+  it('DD-U38 单页视图：拖动中页面区与原生 DevTools 的尺寸变化当场报新矩形', async () => {
+    await mountShell('single')
+    mouseDown(edge(), 0, { clientY: 400 })
+    mouseMove(350)
+
+    const PAGE = { x: 0, y: 76, width: 1000, height: 322 }
+    const SLOT = { x: 0, y: 432, width: 1000, height: 336 }
+    stubRectsBy((el) =>
+      el.hasAttribute('data-page-area')
+        ? PAGE
+        : el.hasAttribute('data-devtools-native')
+          ? SLOT
+          : RECT
+    )
+    ro.trigger($('[data-page-area]')!)
+    ro.trigger($('[data-devtools-native]')!)
+    expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: PAGE }]])
+    expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([[{ tabId: 'a', bounds: SLOT }]])
+    expect(visibleCalls()).toEqual([true])
   })
 })

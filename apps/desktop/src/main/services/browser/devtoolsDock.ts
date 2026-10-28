@@ -39,6 +39,16 @@ interface Dock {
 
 /** tabId → 这一页的停靠区（关着 = 没有这一项） */
 const docks = new Map<string, Dock>()
+
+/**
+ * 前端加载到哪了：页面的 devtools-opened 到来（Electron 在前端报 loadCompleted 时发）之前，前端还收不了
+ * DevToolsAPI 的调用 —— 2026-10-28 实测，did-finish-load 时调 showPanel 会被吞掉。那之前要做的先记着。
+ */
+interface FrontendState {
+  ready: boolean
+  pending: string[]
+}
+const frontendStates = new WeakMap<WebContentsView, FrontendState>()
 /** renderer 上报的原生 DevTools 该铺在哪（CSS px）；停靠区没显示「DevTools」页签时为 null */
 let nativeSlot: { tabId: string; bounds: Rect } | null = null
 /** 正挂在浏览器窗口上的那个 frontend（同一时刻最多一个） */
@@ -87,6 +97,7 @@ function ensureFrontend(tabId: string, dock: Dock): WebContentsView | null {
   const page = host?.pageOf(tabId)
   if (!page || page.isDestroyed()) return null
   const frontend = new WebContentsView()
+  frontendStates.set(frontend, { ready: false, pending: [] })
   host?.installShortcuts(frontend.webContents)
   page.setDevToolsWebContents(frontend.webContents)
   page.openDevTools({ mode: 'detach', activate: false })
@@ -144,6 +155,60 @@ export function closeDevtoolsDock(tabId: string): void {
 export function toggleDevtoolsDock(tabId: string): void {
   if (docks.has(tabId)) closeDevtoolsDock(tabId)
   else openDevtoolsDock(tabId, 'devtools')
+}
+
+/**
+ * ⌥⌘J / Ctrl+Shift+J：原生 DevTools 正显示着就关（照 Chrome：停靠着的 DevTools 再按一次是关）；
+ * 否则打开到「DevTools」页签、切到 Console。
+ */
+export function toggleDevtoolsConsole(tabId: string): void {
+  if (docks.get(tabId)?.panel === 'devtools') {
+    closeDevtoolsDock(tabId)
+    return
+  }
+  openDevtoolsDock(tabId, 'devtools')
+  callFrontend(tabId, 'DevToolsAPI.showPanel("console")')
+}
+
+/**
+ * ⌥⌘C / ⌘⇧C / Ctrl+Shift+C：打开到「DevTools」页签并切换「选择元素」模式 —— 开着再按一次就退出
+ * （enterInspectElementMode 在前端里执行的就是那个切换动作，与 Chrome 同一个入口；2026-10-28 实测）。
+ */
+export function toggleInspectElementMode(tabId: string): void {
+  openDevtoolsDock(tabId, 'devtools')
+  callFrontend(tabId, 'DevToolsAPI.enterInspectElementMode()')
+}
+
+/**
+ * 在这一页的原生 DevTools 前端里调一个 DevToolsAPI 方法（Chrome 的 DevToolsWindow::DoAction 走的同一组
+ * 入口）。前端还没加载完就记下来，等 noteDevtoolsOpened。script 只来自本模块的固定字面量。
+ */
+function callFrontend(tabId: string, script: string): void {
+  const frontend = docks.get(tabId)?.frontend
+  const state = frontend ? frontendStates.get(frontend) : undefined
+  if (!frontend || !state) return
+  if (!state.ready) {
+    state.pending.push(script)
+    return
+  }
+  runInFrontend(frontend, script)
+}
+
+function runInFrontend(frontend: WebContentsView, script: string): void {
+  if (frontend.webContents.isDestroyed()) return
+  frontend.webContents.executeJavaScript(script).catch((err: unknown) => {
+    log.warn(`DevTools frontend call failed: ${script}`, err)
+  })
+}
+
+/** 页面的 devtools-opened：它的前端加载完了，先前记着的调用这时做 */
+export function noteDevtoolsOpened(tabId: string): void {
+  const frontend = docks.get(tabId)?.frontend
+  const state = frontend ? frontendStates.get(frontend) : undefined
+  if (!frontend || !state || state.ready) return
+  state.ready = true
+  const pending = state.pending.splice(0)
+  for (const script of pending) runInFrontend(frontend, script)
 }
 
 /** 页面右键「检查」：打开原生 DevTools 并选中那个位置上的元素（坐标是页面的 CSS px） */

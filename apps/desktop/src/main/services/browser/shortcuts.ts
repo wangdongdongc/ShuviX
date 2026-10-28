@@ -31,6 +31,10 @@ export type BrowserShortcut =
   | { type: 'zoom'; direction: 'in' | 'out' | 'reset' }
   /** 开 / 关选中那页的停靠区（原生 DevTools）：F12、⌥⌘I（macOS）/ Ctrl+Shift+I */
   | { type: 'toggleDevtools' }
+  /** 原生 DevTools 开到 Console（开着就关，照 Chrome）：⌥⌘J（macOS）/ Ctrl+Shift+J */
+  | { type: 'devtoolsConsole' }
+  /** 原生 DevTools 的「选择元素」模式（开 / 退出）：⌥⌘C、⌘⇧C（macOS）/ Ctrl+Shift+C */
+  | { type: 'inspectElement' }
 
 /** before-input-event 交来的按键里用得到的那几项（Electron 的 Input 结构的子集） */
 export interface ShortcutInput {
@@ -50,7 +54,9 @@ const NO_REPEAT = new Set<BrowserShortcut['type']>([
   'newTab',
   'closeTab',
   'reopenClosedTab',
-  'toggleDevtools'
+  'toggleDevtools',
+  'devtoolsConsole',
+  'inspectElement'
 ])
 
 /**
@@ -109,11 +115,14 @@ function match(input: ShortcutInput, mac: boolean): BrowserShortcut | null {
     if (code === 'PageDown') return { type: 'nextTab' }
     if (code === 'PageUp') return { type: 'previousTab' }
   }
-  // macOS：⌘⌥→ / ⌘⌥← 切 tab；⌘⌥I 开关 DevTools（⌥ 让 key 成了别的字符，letterOf 退回物理键位）
+  // macOS：⌘⌥→ / ⌘⌥← 切 tab；⌘⌥I / J / C 是 DevTools 的三个键（⌥ 让 key 成了别的字符 —— ⌥⌘I 实测是
+  // "Dead"，letterOf 退回物理键位）
   if (mac && meta && alt && !control && !shift) {
     if (code === 'ArrowRight') return { type: 'nextTab' }
     if (code === 'ArrowLeft') return { type: 'previousTab' }
     if (letter === 'i') return { type: 'toggleDevtools' }
+    if (letter === 'j') return { type: 'devtoolsConsole' }
+    if (letter === 'c') return { type: 'inspectElement' }
     return null
   }
 
@@ -123,6 +132,9 @@ function match(input: ShortcutInput, mac: boolean): BrowserShortcut | null {
     if (letter === 't') return { type: 'reopenClosedTab' }
     if (letter === 'r') return { type: 'reload', ignoreCache: true }
     if (!mac && letter === 'i') return { type: 'toggleDevtools' }
+    if (!mac && letter === 'j') return { type: 'devtoolsConsole' }
+    // ⌘⇧C 在 macOS 的 Chrome 里也是「选择元素」
+    if (letter === 'c') return { type: 'inspectElement' }
     // macOS：⌘⇧] / ⌘⇧[ 切 tab
     if (mac && code === 'BracketRight') return { type: 'nextTab' }
     if (mac && code === 'BracketLeft') return { type: 'previousTab' }
