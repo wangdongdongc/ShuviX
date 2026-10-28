@@ -2,11 +2,12 @@
  * SQLite 组件与它们的 API（设计稿 docs/widget-tool-design.md §3、§6、§9）：存储归属、API 编译与构建快照、调用。
  *
  * **存储归属看事实，不看标记**：组件的数据目录 `~/.shuvix/widgets-data/<id>/` 在 = SQLite 组件，不在 = 老组件
- * （数据在共用 PGlite 里，界面直接写 `/db`）。`init` 给新组件建这个目录；以后的 `migrate-db` 在搬完数据后建它；删除组件时连目录一起删。
+ * （数据在共用 PGlite 里，界面直接写 `/db`）。`init` 给新组件建这个目录；老组件换存储时由那个入口建它（设计稿 §10）；
+ * 删除组件时连目录一起删。
  * 没有第二个字段要和它保持一致 —— `widget.json` 在 agent 可写的组件仓库里，放在那儿只会被改坏。
  *
- * **只有构建过的 API 才生效**：`shuvix widget build` 编译 `api.ts`、在组件宿主里取清单并校验，界面也构建成功后
- * 才把包和清单写进数据目录（快照）。调用只认快照 —— 没有 CLI 的 agent 改了 `api.ts` 也改变不了行为，
+ * **只有构建过的 API 才生效**：构建（`widget` 工具的 `build`）编译 `api.ts`、在组件宿主里取清单并校验，界面也构建成功后
+ * 才把包和清单写进数据目录（快照）。调用只认快照 —— 没有这个组件读写授权的 agent 改了 `api.ts` 也改变不了行为，
  * 打开组件（会重建界面）也不会顺带重建 API。
  */
 import { createHash } from 'crypto'
@@ -221,6 +222,16 @@ export class WidgetApiError extends Error {
 
 export interface WidgetCallOptions {
   dryRun?: boolean
+  /**
+   * 纯界面的操作（`agent: false`）也调得到：组件自己的界面在调（`/api` 路由，含预览页面），或造组件的 agent 在
+   * dry run 里测它。缺省只有用户调得到
+   */
+  allowUiOnly?: boolean
+  /**
+   * 调用方按这个读 / 写授权的（先读快照判了授权，再来调）：快照里这个操作现在不是它 —— 其间有人重新构建、改了
+   * 它的读写 —— 就拒绝（`changed`），不按旧的授权照跑
+   */
+  expectedMode?: OpMode
 }
 
 export interface WidgetCallResult {
@@ -230,7 +241,7 @@ export interface WidgetCallResult {
 }
 
 /**
- * 调一个操作（界面经 `/w/<id>/api/<op>`、CLI 经 `shuvix widget call`、以后 agent 经 widget 工具，都走这里）。
+ * 调一个操作（界面经 `/w/<id>/api/<op>`、agent 经 `widget` 工具，都走这里）。
  * 抛 WidgetApiError：组件没有 API / 没有这个操作 / 宿主出错。handler 自己的失败（参数不对、ctx.fail …）
  * 在 `result.outcome` 里，不抛
  */
@@ -248,12 +259,12 @@ export async function callWidgetOp(
   if (!snapshot) {
     throw new WidgetApiError(
       'no_api',
-      `Widget "${widgetId}" has no API. Define ${API_SOURCE_FILE} and run \`shuvix widget build\`.`
+      `Widget "${widgetId}" has no API. Define ${API_SOURCE_FILE} and build the widget.`
     )
   }
-  // `agent: false` 的操作只给界面：agent 调不到，也不在清单里提（CLI 例外 —— 那是造组件时测试用的）
+  // `agent: false` 的操作只给界面：agent 调不到，也不在清单里提（组件自己的界面、造组件时的 dry run 例外）
   const visible = (o: OpManifest): boolean =>
-    o.agent !== false || caller.kind === 'user' || caller.actor === 'cli'
+    o.agent !== false || caller.kind === 'user' || options.allowUiOnly === true
   const entry = snapshot.ops.find((o) => o.name === op && visible(o))
   if (!entry) {
     throw new WidgetApiError(
@@ -262,6 +273,12 @@ export async function callWidgetOp(
         .filter(visible)
         .map((o) => o.name)
         .join(', ')}.`
+    )
+  }
+  if (options.expectedMode !== undefined && entry.mode !== options.expectedMode) {
+    throw new WidgetApiError(
+      'changed',
+      `Operation "${op}" of widget "${widgetId}" is now a ${entry.mode} operation (the widget was rebuilt). Look at it again before calling it.`
     )
   }
   try {

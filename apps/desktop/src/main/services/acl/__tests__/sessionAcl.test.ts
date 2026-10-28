@@ -20,7 +20,7 @@
  *   ACL-12 坏 id / 不存在的会话：空表，不碰存储
  *   ACL-13 对账失败（库抛错）：保持上一次的表，不记指纹，下一次读再试
  *
- * 会话种类的行（XS-27…XS-33）见文件末尾的 describe 块。
+ * 会话种类的行（XS-27…XS-33）与组件种类的行（WT4-AC-03…WT4-AC-12）见文件末尾的两个 describe 块。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
@@ -30,6 +30,10 @@ const holder = vi.hoisted(() => ({
   derived: new Map<string, Array<Record<string, string>>>(),
   /** derivePathEntries 被问到的会话（XS-28：sessionGrants 不对账） */
   deriveCalls: [] as string[],
+  /** derivePathEntries 收到的 (会话, 有读写授权的组件) —— 组件源码目录跟着读写授权走（WT4-AC-07/10/11） */
+  deriveWidgets: [] as Array<[string, string[]]>,
+  /** widgetRegistry.findById 的替身数据：组件 id → 记录（WT4-AC-09 的 targetTitle） */
+  widgets: new Map<string, { id: string; name: string; archivedAt: number }>(),
   broadcasts: [] as string[],
   /** logger.warn 收到的文案（XS-33：按目标删失败只记一条 warn） */
   warns: [] as string[]
@@ -57,13 +61,32 @@ vi.mock('../../../utils/sessionConfigBroadcast', () => ({
   broadcastSessionConfigChanged: (id: string) => holder.broadcasts.push(id)
 }))
 vi.mock('../derive', () => ({
-  derivePathEntries: (sessionId: string) => {
+  // 与真实的 derive 同形：有读写授权的组件各派生一行可写的源码目录（widgetDir，sourceKey = 组件 id）
+  derivePathEntries: (sessionId: string, writableWidgets: readonly string[] = []) => {
     holder.deriveCalls.push(sessionId)
-    return holder.derived.get(sessionId) ?? []
+    holder.deriveWidgets.push([sessionId, [...writableWidgets]])
+    return [
+      ...(holder.derived.get(sessionId) ?? []),
+      ...writableWidgets.map((id) => ({
+        source: 'widgetDir',
+        sourceKey: id,
+        target: `/widgets/${id}`,
+        access: 'write'
+      }))
+    ]
   },
   derivedKey: (e: { source: string; sourceKey: string; target: string }) =>
     `${e.source}\u0000${e.sourceKey}\u0000${e.target}`
 }))
+
+// 组件名（entriesForDisplay 的 targetTitle）从注册表现查：换成可控的表；id 规范照用真的
+vi.mock('../../widget/widgetRegistry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../widget/widgetRegistry')>()
+  return {
+    ...actual,
+    widgetRegistry: { findById: (id: string) => holder.widgets.get(id) }
+  }
+})
 
 import type { AclEntry } from '@shuvix/chat-protocol/sessionAcl'
 import { migrations } from '../../../dao/migrations'
@@ -122,6 +145,8 @@ beforeEach(() => {
   holder.db = fresh
   holder.derived.clear()
   holder.deriveCalls.length = 0
+  holder.deriveWidgets.length = 0
+  holder.widgets.clear()
   holder.broadcasts.length = 0
   holder.warns.length = 0
   sessionRecords.clearEphemeralForTests()
@@ -307,7 +332,7 @@ describe('sessionAcl', () => {
     baseDerived('parent', [{ source: 'knowledge', sourceKey: 'k', target: '/kb', access: 'write' }])
     sessionAcl.initialize('parent')
     const parentGrant = sessionAcl.grantPath('parent', '/shared', 'write')!
-    sessionAcl.grantPath('parent', '/w', 'write', { source: 'widget', sourceKey: 'w' })
+    sessionAcl.grantWidget('parent', 'my-widget', 'read', 'widget')
     const parentWorkdir = sessionAcl.entries('parent').find((e) => e.source === 'workdir')!
     sessionAcl.setAccess('parent', parentWorkdir.id, 'read')
 
@@ -321,7 +346,7 @@ describe('sessionAcl', () => {
     expect(shape('child')).toEqual([
       'system:tmp:/private/tmp/x/child:write',
       'user::/shared:write',
-      'widget:w:/w:write',
+      'widget:my-widget:my-widget:read',
       // 工作目录的访问方式不随子会话继承：子会话按自己的派生给默认
       `workdir::${WS}:write`
     ])
@@ -832,5 +857,504 @@ describe('sessionAcl —— 会话种类的行', () => {
     expect(rowCount('B')).toBe(0)
     // 删不掉的那一行只指向一条已不存在的会话（不放出任何权限）：留在 A 的表里
     expect(holdersOf('B')).toEqual(['A'])
+  })
+})
+
+/**
+ * 组件种类的行（kind: 'widget'，target = 组件 id）—— `widget` 工具经「允许并记住」（来源 user）或会话自己
+ * `create` 了它（来源 widget，sourceKey = 组件 id）免询问地只读（read）/ 读写（write）一个组件。读写行派生出它
+ * 源码目录的可写行（widgetDir）：derive 收到的第二个参数就是表里有读写授权的组件（这里的 derive 替身与真的同形，
+ * 每个给一行 `/widgets/<id>`）。
+ *
+ *   WT4-AC-03 grantWidget（来源缺省 user）：新行 {widget, id, read, user, ''}、广播一次；再授予 write → 同一行放宽、
+ *             updatedAt 刷新、广播；再授予 read → 交回读写那一行，不写库、不广播
+ *   WT4-AC-04 create 的授予（来源 widget，sourceKey = 组件 id）与同一组件的 user 只读行并存两行；widgetAccess 取宽的；
+ *             删掉 widget 来源那一行剩 read
+ *   WT4-AC-05 不合规的组件 id、不在的会话、坏会话 id → null；什么都不写、不广播
+ *   WT4-AC-06 widgetGrants / widgetView / widgetAccess：直接读存储、不对账（derive 不调）；组件行不进 pathView /
+ *             sessionView / sandboxEntries，路径 / 会话行不进 widgetView；不在的会话 → 空 / none
+ *   WT4-AC-07 源码目录跟着读写授权：只读授权 derive 收到 []；读写授权之后收到 [B]、widgetDir 行补上；降成只读 / 删掉
+ *             那一行之后又是 []、widgetDir 行删掉
+ *   WT4-AC-08 setAccess / remove：组件行 只读 ↔ 读写（true + 广播）、能删，widgetView 跟着变；widgetDir 行改不了、
+ *             删不掉
+ *   WT4-AC-09 entriesForDisplay：组件行带组件此刻的名字（改名即反映、归档的照样有名字）；认不出的组件没有
+ *             targetTitle 键；路径行没有，会话行照旧带标题；entries() 从不带
+ *   WT4-AC-10 继承：子会话 / fork 复制两种组件行（新 id、自己的 sessionId、同目标同访问方式同来源）；父会话的
+ *             widgetDir 行不复制，子会话自己对账派生出来；之后各管各的
+ *   WT4-AC-11 deleteWidget(B)：库里与内存会话里指向 B 的组件行删掉，每个受影响的会话广播一次；别的组件、目标字面为 B
+ *             的路径行、会话行不动；受影响会话下一次读表时 widgetDir 行随之消失；按目标删抛错 → 不抛、记一条 warn
+ *   WT4-AC-12 旧版本 CLI 写下的组件目录行（kind path、source widget）：会话在本进程里第一次对账就删掉 —— 不再给写权限；
+ *             删组件、同 id 的新组件也继承不到它
+ */
+describe('sessionAcl —— 组件种类的行', () => {
+  /** 原样插一行（绕过服务层） */
+  const rawRow = (
+    sessionId: string,
+    row: { kind: string; target: string; access: string; source?: string; sourceKey?: string }
+  ): void => {
+    db()
+      .prepare(
+        `INSERT INTO session_acl (id, sessionId, kind, target, access, source, sourceKey, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)`
+      )
+      .run(
+        `raw-${sessionId}-${row.kind}-${row.source ?? 'user'}-${row.target}`,
+        sessionId,
+        row.kind,
+        row.target,
+        row.access,
+        row.source ?? 'user',
+        row.sourceKey ?? ''
+      )
+  }
+  /** 一条会话表里的行：`kind:source:sourceKey:target:access`（排好序） */
+  const rowsOf = (sessionId: string): string[] =>
+    sessionAcl
+      .entries(sessionId)
+      .map((e) => `${e.kind}:${e.source}:${e.sourceKey}:${e.target}:${e.access}`)
+      .sort()
+  /** 这条会话表里的 widgetDir 行（先对账） */
+  const widgetDirs = (sessionId: string): string[] =>
+    sessionAcl
+      .entries(sessionId)
+      .filter((e) => e.source === 'widgetDir')
+      .map((e) => `${e.sourceKey}:${e.target}:${e.access}`)
+  /** 记下这期间 prepare 过的写语句 */
+  function recordWrites(): { writes: string[]; restore: () => void } {
+    const prepare = db().prepare.bind(db())
+    const writes: string[] = []
+    const spy = vi.spyOn(db(), 'prepare').mockImplementation((sql: string) => {
+      if (/^\s*(INSERT|UPDATE|DELETE)/i.test(sql)) writes.push(sql)
+      return prepare(sql)
+    })
+    return { writes, restore: () => spy.mockRestore() }
+  }
+
+  it('WT4-AC-03 grantWidget：新行、广播一次；读写压过只读（同一行、updatedAt 刷新、广播）；只读不降级读写（原行，不写不广播）', () => {
+    addSession('s1')
+    sessionAcl.initialize('s1')
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    try {
+      const read = sessionAcl.grantWidget('s1', 'reading-list', 'read')
+      expect(read).toEqual({
+        id: expect.any(String),
+        sessionId: 's1',
+        kind: 'widget',
+        target: 'reading-list',
+        access: 'read',
+        source: 'user',
+        sourceKey: '',
+        createdAt: 1_000,
+        updatedAt: 1_000
+      })
+      expect(holder.broadcasts).toEqual(['s1'])
+      expect(sessionAcl.widgetGrants('s1')).toEqual([read])
+
+      clock.mockReturnValue(2_000)
+      const widened = sessionAcl.grantWidget('s1', 'reading-list', 'write')
+      expect(widened).toEqual({ ...read, access: 'write', updatedAt: 2_000 })
+      expect(holder.broadcasts).toEqual(['s1', 's1'])
+      expect(sessionAcl.widgetGrants('s1')).toEqual([widened])
+
+      // 读写授权派生出源码目录：先让对账把它补上，下面看的只是授予本身写不写库
+      expect(widgetDirs('s1')).toEqual(['reading-list:/widgets/reading-list:write'])
+
+      clock.mockReturnValue(3_000)
+      const rec = recordWrites()
+      let again: AclEntry | null = null
+      try {
+        again = sessionAcl.grantWidget('s1', 'reading-list', 'read')
+      } finally {
+        rec.restore()
+      }
+      expect(again).toEqual(widened)
+      expect(rec.writes).toEqual([])
+      expect(holder.broadcasts).toEqual(['s1', 's1'])
+      expect(sessionAcl.widgetGrants('s1')).toEqual([widened])
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('WT4-AC-04 create 的授予（来源 widget）与 user 只读行并存；widgetAccess 取宽的；删掉 widget 来源那一行剩 read', () => {
+    addSession('s1')
+    sessionAcl.initialize('s1')
+    const created = sessionAcl.grantWidget('s1', 'my-widget', 'write', 'widget')!
+    sessionAcl.grantWidget('s1', 'my-widget', 'read')
+    expect(
+      sessionAcl
+        .widgetGrants('s1')
+        .map((e) => [e.kind, e.target, e.access, e.source, e.sourceKey])
+        .sort()
+    ).toEqual([
+      ['widget', 'my-widget', 'read', 'user', ''],
+      ['widget', 'my-widget', 'write', 'widget', 'my-widget']
+    ])
+    expect(created).toMatchObject({ source: 'widget', sourceKey: 'my-widget', access: 'write' })
+    expect(sessionAcl.widgetAccess('s1', 'my-widget')).toBe('write')
+    expect(sessionAcl.widgetView('s1')).toEqual({ read: ['my-widget'], write: ['my-widget'] })
+
+    expect(sessionAcl.remove('s1', created.id)).toBe(true)
+    expect(sessionAcl.widgetAccess('s1', 'my-widget')).toBe('read')
+    expect(sessionAcl.widgetView('s1')).toEqual({ read: ['my-widget'], write: [] })
+  })
+
+  it('WT4-AC-05 不合规的组件 id、不在的会话、坏会话 id → null；什么都不写、不广播', () => {
+    addSession('s1')
+    // 坏 id 的会话行真的在库里：拦住它的是 id 校验，不是「找不到」
+    addSession('../x')
+    sessionAcl.initialize('s1')
+    const before = rowCount()
+    for (const id of ['nodash', 'A-b', '../x-y', '', 'a-', '-a', 'a b-c']) {
+      for (const access of ['read', 'write'] as const) {
+        expect(sessionAcl.grantWidget('s1', id, access), `${id} ${access}`).toBeNull()
+        expect(sessionAcl.grantWidget('s1', id, access, 'widget'), `${id} ${access}`).toBeNull()
+      }
+    }
+    for (const caller of ['nobody', '../x', '', '..']) {
+      expect(sessionAcl.grantWidget(caller, 'my-widget', 'write'), caller).toBeNull()
+    }
+    expect(rowCount()).toBe(before)
+    expect(sessionAcl.widgetGrants('s1')).toEqual([])
+    expect(holder.broadcasts).toEqual([])
+  })
+
+  it('WT4-AC-06 widgetGrants / widgetView / widgetAccess 直接读存储、不对账；组件行与路径 / 会话行各进各的视图', () => {
+    addSession('s1')
+    addSession('s2')
+    baseDerived('s1')
+    sessionAcl.initialize('s1')
+    sessionAcl.grantWidget('s1', 'w-a', 'read')
+    sessionAcl.grantWidget('s1', 'w-b', 'write')
+    sessionAcl.grantSession('s1', 's2', 'write')
+    sessionAcl.grantPath('s1', '/data', 'write')
+    // 路径行的目标字面恰是一个组件 id：照样只是路径
+    rawRow('s1', { kind: 'path', target: 'w-c', access: 'write' })
+
+    // 派生输入变了、对账记忆也忘了 —— 任何一次「先对账的读」都会调 derive、写库
+    baseDerived('s1', [{ source: 'knowledge', sourceKey: 'k', target: '/kb', access: 'write' }])
+    sessionAcl.forgetReconciled('s1')
+    holder.deriveCalls.length = 0
+    const rec = recordWrites()
+    try {
+      expect(sessionAcl.widgetAccess('s1', 'w-a')).toBe('read')
+      expect(sessionAcl.widgetAccess('s1', 'w-b')).toBe('write')
+      expect(sessionAcl.widgetAccess('s1', 'w-c')).toBe('none')
+      expect(sessionAcl.widgetView('s1')).toEqual({ read: ['w-a', 'w-b'], write: ['w-b'] })
+      expect(sessionAcl.widgetGrants('s1').map((e) => `${e.target}:${e.access}`)).toEqual([
+        'w-a:read',
+        'w-b:write'
+      ])
+    } finally {
+      rec.restore()
+    }
+    expect(holder.deriveCalls).toEqual([])
+    expect(rec.writes).toEqual([])
+
+    // 别的视图不收组件行（先对账的那几个读这才调 derive）
+    const paths = sessionAcl.pathView('s1')
+    expect(paths.read).not.toContain('w-a')
+    expect(paths.read).not.toContain('w-b')
+    expect(paths.write).toContain('w-c')
+    expect(sessionAcl.sessionView('s1')).toEqual({ read: ['s2'], write: ['s2'] })
+    const sandbox = sessionAcl.sandboxEntries('s1').map((e) => e.path)
+    expect(sandbox).not.toContain('w-a')
+    expect(sandbox).not.toContain('w-b')
+    // 读写授权的组件只以它派生的源码目录进路径那一面
+    expect(sandbox).toContain('/widgets/w-b')
+    expect(sandbox).not.toContain('/widgets/w-a')
+
+    // 不在的会话：空 / none
+    for (const id of ['nobody', '', '..']) {
+      expect(sessionAcl.widgetGrants(id), id).toEqual([])
+      expect(sessionAcl.widgetView(id), id).toEqual({ read: [], write: [] })
+      expect(sessionAcl.widgetAccess(id, 'w-b'), id).toBe('none')
+    }
+  })
+
+  it('WT4-AC-07 源码目录跟着读写授权：derive 收到的组件随授权变，widgetDir 行补上又删掉', () => {
+    addSession('s1')
+    baseDerived('s1')
+    sessionAcl.initialize('s1')
+    const argsSince = (from: number): string[][] =>
+      holder.deriveWidgets.slice(from).map(([sid, widgets]) => {
+        expect(sid).toBe('s1')
+        return widgets
+      })
+
+    let mark = holder.deriveWidgets.length
+    sessionAcl.grantWidget('s1', 'w-a', 'read')
+    expect(widgetDirs('s1')).toEqual([])
+    expect(argsSince(mark).every((w) => w.length === 0)).toBe(true)
+
+    mark = holder.deriveWidgets.length
+    const b = sessionAcl.grantWidget('s1', 'w-b', 'write')!
+    expect(widgetDirs('s1')).toEqual(['w-b:/widgets/w-b:write'])
+    // 授予之前那一次对账还是 []；授予之后的读收到 [w-b]
+    expect(argsSince(mark).at(-1)).toEqual(['w-b'])
+    const dirRow = sessionAcl.entries('s1').find((e) => e.source === 'widgetDir')!
+    expect(dirRow).toMatchObject({ kind: 'path', sourceKey: 'w-b', access: 'write' })
+
+    mark = holder.deriveWidgets.length
+    expect(sessionAcl.setAccess('s1', b.id, 'read')).toBe(true)
+    expect(widgetDirs('s1')).toEqual([])
+    expect(argsSince(mark).at(-1)).toEqual([])
+    expect(sessionAcl.entries('s1').some((e) => e.id === dirRow.id)).toBe(false)
+
+    // 再放宽、再删掉那一行：目录行又补上、又删掉
+    expect(sessionAcl.setAccess('s1', b.id, 'write')).toBe(true)
+    expect(widgetDirs('s1')).toEqual(['w-b:/widgets/w-b:write'])
+    mark = holder.deriveWidgets.length
+    expect(sessionAcl.remove('s1', b.id)).toBe(true)
+    expect(widgetDirs('s1')).toEqual([])
+    expect(argsSince(mark).at(-1)).toEqual([])
+    // 只读的 w-a 从头到尾没派生过目录
+    expect(holder.deriveWidgets.some(([, w]) => w.includes('w-a'))).toBe(false)
+  })
+
+  it('WT4-AC-08 setAccess / remove：组件行能改能删、widgetView 跟着变；widgetDir 行改不了、删不掉', () => {
+    addSession('s1')
+    sessionAcl.initialize('s1')
+    const row = sessionAcl.grantWidget('s1', 'w-a', 'read')!
+    holder.broadcasts.length = 0
+
+    expect(sessionAcl.setAccess('s1', row.id, 'write')).toBe(true)
+    expect(holder.broadcasts).toEqual(['s1'])
+    expect(sessionAcl.widgetView('s1')).toEqual({ read: ['w-a'], write: ['w-a'] })
+
+    const dir = sessionAcl.entries('s1').find((e) => e.source === 'widgetDir')!
+    expect(dir).toMatchObject({ sourceKey: 'w-a', access: 'write' })
+    const before = rowsOf('s1')
+    expect(sessionAcl.setAccess('s1', dir.id, 'read')).toBe(false)
+    expect(sessionAcl.remove('s1', dir.id)).toBe(false)
+    expect(rowsOf('s1')).toEqual(before)
+    expect(holder.broadcasts).toEqual(['s1'])
+
+    expect(sessionAcl.setAccess('s1', row.id, 'read')).toBe(true)
+    expect(holder.broadcasts).toEqual(['s1', 's1'])
+    expect(sessionAcl.widgetView('s1')).toEqual({ read: ['w-a'], write: [] })
+
+    expect(sessionAcl.remove('s1', row.id)).toBe(true)
+    expect(holder.broadcasts).toEqual(['s1', 's1', 's1'])
+    expect(sessionAcl.widgetView('s1')).toEqual({ read: [], write: [] })
+    expect(sessionAcl.remove('s1', row.id)).toBe(false)
+    expect(sessionAcl.entries('s1')).toEqual([])
+  })
+
+  it('WT4-AC-09 entriesForDisplay：组件行带组件此刻的名字（改名即反映、归档的照样有名字）；认不出的没有 targetTitle；路径行没有、会话行照旧', () => {
+    addSession('s1')
+    addSession('s2', { title: 'Plan the release' })
+    baseDerived('s1')
+    sessionAcl.initialize('s1')
+    holder.widgets.set('w-a', { id: 'w-a', name: 'Reading list', archivedAt: 0 })
+    holder.widgets.set('w-b', { id: 'w-b', name: 'Expenses', archivedAt: 0 })
+    sessionAcl.grantWidget('s1', 'w-a', 'read')
+    sessionAcl.grantWidget('s1', 'w-b', 'write')
+    sessionAcl.grantWidget('s1', 'w-gone', 'read')
+    sessionAcl.grantSession('s1', 's2', 'read')
+    sessionAcl.grantPath('s1', '/data', 'read')
+    const display = (): AclEntry[] => sessionAcl.entriesForDisplay('s1')
+    const shown = (kind: string, target: string): AclEntry =>
+      display().find((e) => e.kind === kind && e.target === target)!
+
+    expect(shown('widget', 'w-a')).toMatchObject({ targetTitle: 'Reading list', access: 'read' })
+    expect(shown('widget', 'w-b')).toMatchObject({ targetTitle: 'Expenses', access: 'write' })
+    expect(shown('widget', 'w-gone')).not.toHaveProperty('targetTitle')
+    expect(shown('session', 's2')).toMatchObject({ targetTitle: 'Plan the release' })
+    const pathRows = display().filter((e) => e.kind === 'path')
+    // 派生行（含 w-b 的源码目录）与授予的路径：都没有 targetTitle 键
+    expect(pathRows.map((e) => e.target)).toEqual(expect.arrayContaining(['/data', '/widgets/w-b']))
+    for (const e of pathRows) expect(e, e.target).not.toHaveProperty('targetTitle')
+
+    // 改名、归档：下一次读就是现在的名字（不落库，现查；归档的组件照样有名字）
+    holder.widgets.set('w-a', { id: 'w-a', name: 'Books to read', archivedAt: 0 })
+    holder.widgets.set('w-b', { id: 'w-b', name: 'Expenses', archivedAt: 123 })
+    expect(shown('widget', 'w-a').targetTitle).toBe('Books to read')
+    expect(shown('widget', 'w-b').targetTitle).toBe('Expenses')
+
+    // entries() 从不带；display 除了 targetTitle 与 entries 逐行相同
+    const entries = sessionAcl.entries('s1')
+    for (const e of entries) expect(e, e.target).not.toHaveProperty('targetTitle')
+    expect(
+      display().map((e) => {
+        const rest: Partial<AclEntry> = { ...e }
+        delete rest.targetTitle
+        return rest
+      })
+    ).toEqual(entries)
+  })
+
+  it('WT4-AC-10 子会话 / fork 复制两种组件行；父会话的 widgetDir 行不复制、子会话自己派生；之后各管各的', () => {
+    addSession('parent')
+    sessionAcl.initialize('parent')
+    const pa = sessionAcl.grantWidget('parent', 'w-a', 'read')!
+    const pb = sessionAcl.grantWidget('parent', 'w-b', 'write', 'widget')!
+    expect(widgetDirs('parent')).toEqual(['w-b:/widgets/w-b:write'])
+    const parentDir = sessionAcl.entries('parent').find((e) => e.source === 'widgetDir')!
+
+    addSession('child', { parentId: 'parent' })
+    addSession('fork')
+    holder.deriveWidgets.length = 0
+    sessionAcl.initialize('child', { sessionId: 'parent', fork: false })
+    sessionAcl.initialize('fork', { sessionId: 'parent', fork: true })
+
+    const copiedIds: string[] = []
+    for (const id of ['child', 'fork']) {
+      const rows = sessionAcl.widgetGrants(id)
+      expect(
+        rows
+          .map((e) => [e.sessionId, e.kind, e.target, e.access, e.source, e.sourceKey])
+          .sort((a, b) => String(a[2]).localeCompare(String(b[2]))),
+        id
+      ).toEqual([
+        [id, 'widget', 'w-a', 'read', 'user', ''],
+        [id, 'widget', 'w-b', 'write', 'widget', 'w-b']
+      ])
+      copiedIds.push(...rows.map((e) => e.id))
+      // 自己的对账派生出 w-b 的源码目录（父会话那一行不是复制来的）
+      expect(holder.deriveWidgets).toContainEqual([id, ['w-b']])
+      const dirs = sessionAcl.entries(id).filter((e) => e.source === 'widgetDir')
+      expect(
+        dirs.map((e) => `${e.sessionId}:${e.sourceKey}:${e.target}`),
+        id
+      ).toEqual([`${id}:w-b:/widgets/w-b`])
+      expect(dirs[0].id).not.toBe(parentDir.id)
+    }
+    expect(new Set([pa.id, pb.id, parentDir.id, ...copiedIds]).size).toBe(7)
+
+    // 之后各管各的：父会话降级 / 删行不影响副本
+    sessionAcl.setAccess('parent', pb.id, 'read')
+    sessionAcl.remove('parent', pa.id)
+    expect(sessionAcl.widgetView('parent')).toEqual({ read: ['w-b'], write: [] })
+    for (const id of ['child', 'fork']) {
+      expect(sessionAcl.widgetView(id), id).toEqual({ read: ['w-a', 'w-b'], write: ['w-b'] })
+      expect(widgetDirs(id), id).toEqual(['w-b:/widgets/w-b:write'])
+    }
+    expect(widgetDirs('parent')).toEqual([])
+  })
+
+  it('WT4-AC-11 deleteWidget(B)：库里与内存会话里指向 B 的组件行删掉、每个受影响的会话广播一次；别的行不动；目录行随之消失', () => {
+    addSession('A')
+    addSession('C')
+    addSession('M', { ephemeral: true })
+    for (const id of ['A', 'C', 'M']) sessionAcl.initialize(id)
+    sessionAcl.grantWidget('A', 'w-b', 'write')
+    sessionAcl.grantWidget('A', 'w-b', 'read', 'widget')
+    sessionAcl.grantWidget('A', 'w-a', 'write')
+    sessionAcl.grantSession('A', 'C', 'read')
+    rawRow('A', { kind: 'path', target: 'w-b', access: 'read' })
+    sessionAcl.grantWidget('M', 'w-b', 'write')
+    sessionAcl.grantWidget('M', 'w-a', 'read')
+    sessionAcl.grantWidget('C', 'w-a', 'read')
+    // 前提：A 与 M 的表里都有 w-b 的源码目录；M 的行不在库里
+    expect(widgetDirs('A').sort()).toEqual(['w-a:/widgets/w-a:write', 'w-b:/widgets/w-b:write'])
+    expect(widgetDirs('M')).toEqual(['w-b:/widgets/w-b:write'])
+    expect(rowCount('M')).toBe(0)
+    holder.broadcasts.length = 0
+
+    sessionAcl.deleteWidget('w-b')
+
+    expect([...holder.broadcasts].sort()).toEqual(['A', 'M'])
+    expect(
+      (
+        db()
+          .prepare("SELECT COUNT(*) AS n FROM session_acl WHERE kind = 'widget' AND target = ?")
+          .get('w-b') as { n: number }
+      ).n
+    ).toBe(0)
+    expect(sessionAcl.widgetView('A')).toEqual({ read: ['w-a'], write: ['w-a'] })
+    expect(sessionAcl.widgetView('M')).toEqual({ read: ['w-a'], write: [] })
+    expect(sessionAcl.widgetView('C')).toEqual({ read: ['w-a'], write: [] })
+
+    // 受影响的会话下一次读表：derive 不再收到 w-b，它的源码目录行删掉；别的行照旧
+    holder.deriveWidgets.length = 0
+    expect(widgetDirs('A')).toEqual(['w-a:/widgets/w-a:write'])
+    expect(widgetDirs('M')).toEqual([])
+    expect(holder.deriveWidgets).toContainEqual(['A', ['w-a']])
+    expect(holder.deriveWidgets).toContainEqual(['M', []])
+    expect(rowsOf('A')).toEqual([
+      'path:user::w-b:read',
+      'path:widgetDir:w-a:/widgets/w-a:write',
+      'session:user::C:read',
+      'widget:user::w-a:write'
+    ])
+    expect(holder.warns).toEqual([])
+  })
+
+  it('WT4-AC-11 按目标删的语句抛错：deleteWidget 不抛、记一条 warn', () => {
+    addSession('A')
+    sessionAcl.initialize('A')
+    sessionAcl.grantWidget('A', 'w-b', 'write')
+    const prepare = db().prepare.bind(db())
+    const spy = vi.spyOn(db(), 'prepare').mockImplementation((sql: string) => {
+      if (sql.startsWith('DELETE FROM session_acl WHERE kind = ?')) {
+        throw new Error('database is locked')
+      }
+      return prepare(sql)
+    })
+    try {
+      expect(() => sessionAcl.deleteWidget('w-b')).not.toThrow()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(holder.warns).toEqual(['acl forget widget failed widget=w-b: database is locked'])
+    // 删不掉的那一行只指向一个已不存在的组件：留在表里
+    expect(sessionAcl.widgetView('A')).toEqual({ read: ['w-b'], write: ['w-b'] })
+  })
+
+  it('WT4-AC-12 旧版本 CLI 的组件目录行（path + source widget）：本进程第一次对账就删掉，不再给写权限；同 id 的新组件也继承不到', () => {
+    const LEGACY_DIR = '/Users/u/.shuvix/widgets/w-b'
+    addSession('s1')
+    baseDerived('s1')
+    sessionAcl.initialize('s1')
+    // 旧版本写下的行（升级前就在库里）；重启后的第一次读（对账记忆是空的）
+    rawRow('s1', {
+      kind: 'path',
+      target: LEGACY_DIR,
+      access: 'write',
+      source: 'widget',
+      sourceKey: 'w-b'
+    })
+    sessionAcl.forgetReconciled('s1')
+
+    expect(sessionAcl.pathView('s1').write).not.toContain(LEGACY_DIR)
+    expect(sessionAcl.pathView('s1').read).not.toContain(LEGACY_DIR)
+    expect(sessionAcl.entries('s1').some((e) => e.kind === 'path' && e.source === 'widget')).toBe(
+      false
+    )
+    expect(
+      (
+        db().prepare("SELECT COUNT(*) AS n FROM session_acl WHERE source = 'widget'").get() as {
+          n: number
+        }
+      ).n
+    ).toBe(0)
+    // 不是组件授予：widgetView 里也没有它
+    expect(sessionAcl.widgetView('s1')).toEqual({ read: [], write: [] })
+
+    // 删掉组件、同 id 再建一个：这条会话没有任何关于它的授权，源码目录也不派生
+    sessionAcl.deleteWidget('w-b')
+    expect(sessionAcl.widgetAccess('s1', 'w-b')).toBe('none')
+    expect(widgetDirs('s1')).toEqual([])
+    expect(sessionAcl.pathView('s1').write).not.toContain(LEGACY_DIR)
+    // 组件种类、来源 widget 的行（create 的授予）不受这条清理影响
+    sessionAcl.grantWidget('s1', 'w-c', 'write', 'widget')
+    sessionAcl.forgetReconciled('s1')
+    expect(sessionAcl.widgetView('s1')).toEqual({ read: ['w-c'], write: ['w-c'] })
+    expect(widgetDirs('s1')).toEqual(['w-c:/widgets/w-c:write'])
+  })
+
+  it('WT4-AC-12 内存会话里的旧行同样在对账时删掉', () => {
+    addSession('mem', { ephemeral: true })
+    baseDerived('mem')
+    sessionAcl.initialize('mem')
+    // 内存表不能原样插行：经 grantPath 写一行 path + widget 来源（与旧行同形），再让对账跑
+    sessionAcl.grantPath('mem', '/Users/u/.shuvix/widgets/w-b', 'write', {
+      source: 'widget',
+      sourceKey: 'w-b'
+    })
+    sessionAcl.forgetReconciled('mem')
+    expect(sessionAcl.entries('mem').some((e) => e.source === 'widget')).toBe(false)
+    expect(sessionAcl.pathView('mem').write).not.toContain('/Users/u/.shuvix/widgets/w-b')
   })
 })

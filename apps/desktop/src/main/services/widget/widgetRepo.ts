@@ -2,7 +2,7 @@
  * WidgetRepo —— 每个 widget 目录一个独立 git 仓库，仓库的"存在性"由宿主保证。
  *
  * 分工：全归宿主 —— init、scaffold 基线提交、平台自身写文件后的提交（重命名改 manifest），以及
- * **每次构建成功后提交整棵树**（`commitBuild`，`shuvix widget build <id> [--message]`）。改 widget 的 agent
+ * **每次构建成功后提交整棵树**（`commitBuild`，`widget` 工具的 `build`，可带 `message`）。改 widget 的 agent
  * 不碰 git：基础档案刻意不带 git 工具，沙箱里的 bash git 又读不到 `~/.gitconfig`。
  * 这样"这是不是个仓库""要不要 init""脏了怎么办""该不该提交"这类不变量不依赖 LLM 判断。
  *

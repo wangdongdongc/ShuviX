@@ -4,6 +4,7 @@
  * EN-RM：「允许并记住」可以点名所在的文件夹（rememberTargetOf：只认真包含它的上级，不许 `/`、不许覆盖家目录）。
  * 末尾一组是询问点的自动审查（onPermissionRequest 接缝，EN-RV 系列）。
  * 再往后是会话客体（`session` 工具与一条别的会话交互，2026-10-20）：XS-16…18。
+ * 最后是组件客体（`widget` 工具用一个组件）：WT4-SE-09…14。
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { executeDecision, rememberTargetOf } from '../enforce'
@@ -2579,5 +2580,457 @@ describe('executeDecision — 会话客体（XS-16…18）', () => {
       userResponse: 'allowed'
     })
     expect(JSON.stringify(logs)).not.toContain('Secret plans')
+  })
+})
+
+/**
+ * 组件客体 `{type:'widget', widgetId, name, operation}`（`widget` 工具用一个组件）。决策材料照 evaluate 对组件客体的
+ * 产物手写（形状由 builtinPolicies.test 的 WT4-SE-02 钉在真策略上）。
+ *   WT4-SE-09 卡片：command = `Widget(read|write, <id>)`、widget 材料原样、没有 session 键、不探测目录
+ *   WT4-SE-10 「允许并记住」（`extra.remember: true`）→ persistWidgetGrant(mode, id) 恰一次，persistGrant /
+ *             persistSessionGrant 从不，日志 allowed_remember
+ *   WT4-SE-11 `rememberAccess: 'write'` 只放宽、不收窄；别的值不算；没勾记住时 rememberAccess 什么都不记
+ *   WT4-SE-12 不算数的「记住」：remember 不是 true、拒绝、force-ask 没给 rememberEntry；宿主没实现
+ *             persistWidgetGrant 不炸；路径 / 会话询问上的 remember 不落到组件授权
+ *   WT4-SE-13 文案：拒绝（改 / 读）、用户理由、空名字的展示名、没有询问通道、「其它」反馈
+ *   WT4-SE-14 决策日志：objectSummary = `widget <id>`（名字不进日志）、tool 带动作名
+ */
+describe('executeDecision — widget object（WT4-SE-09…14）', () => {
+  const widgetObject = (name = 'Reading list', operation = 'addBook'): SecurityObject => ({
+    type: 'widget',
+    widgetId: 'X',
+    name,
+    operation
+  })
+
+  const widgetRequest = (
+    action: 'read' | 'write',
+    name = 'Reading list',
+    operation = action === 'write' ? 'addBook' : 'listBooks'
+  ): SecurityRequest =>
+    makeRequest({
+      action,
+      object: widgetObject(name, operation),
+      tool: { name: 'widget', operation: 'call' }
+    })
+
+  /** evaluate 对组件客体的询问材料（ask 档：可记住；force-ask 档：不给 rememberEntry） */
+  const widgetAsk = (
+    action: 'read' | 'write',
+    opts: { name?: string; forceAsk?: boolean } = {}
+  ): SecurityDecision => {
+    const entry = `Widget(${action}, X)`
+    const widget = {
+      widgetId: 'X',
+      name: opts.name ?? 'Reading list',
+      access: action,
+      operation: action === 'write' ? 'addBook' : 'listBooks'
+    }
+    return opts.forceAsk
+      ? { ...askDecision({ command: entry, widget }), tier: 'force-ask' }
+      : { ...askDecision({ command: entry, rememberEntry: entry, widget }), tier: 'ask' }
+  }
+
+  const widgetOpts = (overrides: Partial<EnforceOpts> = {}): EnforceOpts =>
+    makeOpts({ toolCallId: 'tc-w', toolName: 'widget', operation: 'call', ...overrides })
+
+  /** 固定应答 + persistGrant / persistSessionGrant / persistWidgetGrant 三个 spy */
+  function widgetProvider(
+    response: InputResponse,
+    overrides: Partial<SecurityHostProvider> = {}
+  ): {
+    provider: SecurityHostProvider
+    requestUserInput: ReturnType<typeof vi.fn>
+    persistGrant: ReturnType<typeof vi.fn>
+    persistSessionGrant: ReturnType<typeof vi.fn>
+    persistWidgetGrant: ReturnType<typeof vi.fn>
+  } {
+    const persistSessionGrant = vi.fn()
+    const persistWidgetGrant = vi.fn()
+    const built = askProvider(response, {
+      persistSessionGrant,
+      persistWidgetGrant,
+      ...overrides
+    })
+    return { ...built, persistSessionGrant, persistWidgetGrant }
+  }
+
+  it('WT4-SE-09 卡片：command = Widget(write, X)、widget 材料原样；没有 session 键；不探测目录', async () => {
+    const isDirectory = vi.fn(() => true)
+    const { provider, requestUserInput } = widgetProvider(
+      { kind: 'ask', allowed: true },
+      { isDirectory }
+    )
+    await expect(
+      executeDecision({
+        provider,
+        request: widgetRequest('write'),
+        decision: widgetAsk('write'),
+        opts: widgetOpts(),
+        evaluateMs: 0
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    const card = requestUserInput.mock.calls[0][0] as AskInputRequest
+    expect(card).toMatchObject({
+      id: 'tc-w',
+      kind: 'ask',
+      toolName: 'widget',
+      command: 'Widget(write, X)',
+      widget: { widgetId: 'X', name: 'Reading list', access: 'write', operation: 'addBook' },
+      pathIsDirectory: false
+    })
+    expect(card.widget).toStrictEqual({
+      widgetId: 'X',
+      name: 'Reading list',
+      access: 'write',
+      operation: 'addBook'
+    })
+    expect(card).not.toHaveProperty('session')
+    expect(card.requestedPath).toBeUndefined()
+    expect(isDirectory).not.toHaveBeenCalled()
+  })
+
+  it('WT4-SE-09 没有 widget 材料的决策（路径询问）→ 卡片上没有 widget 键', async () => {
+    const { provider, requestUserInput } = widgetProvider({ kind: 'ask', allowed: true })
+    await executeDecision({
+      provider,
+      request: makeRequest(),
+      decision: PATH_ASK,
+      opts: makeOpts(),
+      evaluateMs: 0
+    })
+    expect(requestUserInput.mock.calls[0][0]).not.toHaveProperty('widget')
+  })
+
+  it('WT4-SE-10 「允许并记住」（extra.remember: true）：写 → persistWidgetGrant(write, X)、读 → (read, X)，各恰一次；persistGrant / persistSessionGrant 从不；日志 allowed_remember', async () => {
+    for (const action of ['write', 'read'] as const) {
+      clearSessionDecisions(SID)
+      const { provider, persistGrant, persistSessionGrant, persistWidgetGrant } = widgetProvider({
+        kind: 'ask',
+        allowed: true,
+        extra: { remember: true }
+      })
+      await expect(
+        executeDecision({
+          provider,
+          request: widgetRequest(action),
+          decision: widgetAsk(action),
+          opts: widgetOpts(),
+          evaluateMs: 0
+        }),
+        action
+      ).resolves.toEqual({ status: 'allowed' })
+      expect(persistWidgetGrant.mock.calls, action).toEqual([[action, 'X']])
+      expect(persistGrant, action).not.toHaveBeenCalled()
+      expect(persistSessionGrant, action).not.toHaveBeenCalled()
+      const logs = getSessionDecisions(SID)
+      expect(logs, action).toHaveLength(1)
+      expect(logs[0], action).toMatchObject({
+        action,
+        objectKind: 'widget',
+        userResponse: 'allowed_remember'
+      })
+    }
+  })
+
+  it.each<[string, 'read' | 'write', Record<string, unknown>, Array<[string, string]>, string]>([
+    [
+      '读卡片 + rememberAccess: write → 记成读写',
+      'read',
+      { rememberAccess: 'write' },
+      [['write', 'X']],
+      'allowed_remember'
+    ],
+    [
+      '写卡片 + rememberAccess: read → 不收窄，仍记写',
+      'write',
+      { rememberAccess: 'read' },
+      [['write', 'X']],
+      'allowed_remember'
+    ],
+    [
+      "读卡片 + rememberAccess: 'read'",
+      'read',
+      { rememberAccess: 'read' },
+      [['read', 'X']],
+      'allowed_remember'
+    ],
+    [
+      "读卡片 + rememberAccess: 'admin'",
+      'read',
+      { rememberAccess: 'admin' },
+      [['read', 'X']],
+      'allowed_remember'
+    ],
+    [
+      '读卡片 + rememberAccess: true',
+      'read',
+      { rememberAccess: true },
+      [['read', 'X']],
+      'allowed_remember'
+    ]
+  ])('WT4-SE-11 rememberAccess（%s）', async (_label, action, extra, persisted, userResponse) => {
+    const { provider, persistWidgetGrant } = widgetProvider({
+      kind: 'ask',
+      allowed: true,
+      extra: { remember: true, ...extra }
+    })
+    await expect(
+      executeDecision({
+        provider,
+        request: widgetRequest(action),
+        decision: widgetAsk(action),
+        opts: widgetOpts(),
+        evaluateMs: 0
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(persistWidgetGrant.mock.calls).toEqual(persisted)
+    expect(getSessionDecisions(SID)[0].userResponse).toBe(userResponse)
+  })
+
+  it('WT4-SE-11 没勾记住、只带 rememberAccess: write → 什么都不记；日志 allowed', async () => {
+    const { provider, persistWidgetGrant } = widgetProvider({
+      kind: 'ask',
+      allowed: true,
+      extra: { rememberAccess: 'write' }
+    })
+    await expect(
+      executeDecision({
+        provider,
+        request: widgetRequest('read'),
+        decision: widgetAsk('read'),
+        opts: widgetOpts(),
+        evaluateMs: 0
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(persistWidgetGrant).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].userResponse).toBe('allowed')
+  })
+
+  it.each<[string, InputResponse, () => SecurityDecision]>([
+    [
+      "remember: 'yes'",
+      { kind: 'ask', allowed: true, extra: { remember: 'yes' } },
+      () => widgetAsk('write')
+    ],
+    [
+      'remember: 1',
+      { kind: 'ask', allowed: true, extra: { remember: 1 } },
+      () => widgetAsk('write')
+    ],
+    [
+      'force-ask（没有 rememberEntry）+ remember: true',
+      { kind: 'ask', allowed: true, extra: { remember: true } },
+      () => widgetAsk('write', { forceAsk: true })
+    ]
+  ])(
+    'WT4-SE-12 不算数的「记住」（%s）：放行，但什么都不记；日志 allowed',
+    async (_label, response, decision) => {
+      const { provider, persistGrant, persistSessionGrant, persistWidgetGrant } =
+        widgetProvider(response)
+      await expect(
+        executeDecision({
+          provider,
+          request: widgetRequest('write'),
+          decision: decision(),
+          opts: widgetOpts(),
+          evaluateMs: 0
+        })
+      ).resolves.toEqual({ status: 'allowed' })
+      expect(persistWidgetGrant).not.toHaveBeenCalled()
+      expect(persistSessionGrant).not.toHaveBeenCalled()
+      expect(persistGrant).not.toHaveBeenCalled()
+      expect(getSessionDecisions(SID)[0].userResponse).toBe('allowed')
+    }
+  )
+
+  it('WT4-SE-12 拒绝时勾着记住也不记；日志 denied', async () => {
+    const { provider, persistWidgetGrant } = widgetProvider({
+      kind: 'ask',
+      allowed: false,
+      extra: { remember: true }
+    })
+    await expect(
+      executeDecision({
+        provider,
+        request: widgetRequest('write'),
+        decision: widgetAsk('write'),
+        opts: widgetOpts(),
+        evaluateMs: 0
+      })
+    ).rejects.toThrow('User denied changing data in widget "Reading list" (X)')
+    expect(persistWidgetGrant).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].userResponse).toBe('denied')
+  })
+
+  it('WT4-SE-12 宿主没实现 persistWidgetGrant：「允许并记住」不炸，照常放行（日志仍记 allowed_remember，同 XS-17）', async () => {
+    const persistGrant = vi.fn()
+    const persistSessionGrant = vi.fn()
+    const requestUserInput = vi.fn(
+      async (): Promise<InputResponse> => ({
+        kind: 'ask',
+        allowed: true,
+        extra: { remember: true }
+      })
+    )
+    await expect(
+      executeDecision({
+        provider: makeProvider({ requestUserInput, persistGrant, persistSessionGrant }),
+        request: widgetRequest('write'),
+        decision: widgetAsk('write'),
+        opts: widgetOpts(),
+        evaluateMs: 0
+      })
+    ).resolves.toEqual({ status: 'allowed' })
+    expect(persistGrant).not.toHaveBeenCalled()
+    expect(persistSessionGrant).not.toHaveBeenCalled()
+    expect(getSessionDecisions(SID)[0].userResponse).toBe('allowed_remember')
+  })
+
+  it('WT4-SE-12 路径询问上的 remember: true 不落到组件授权；会话询问上的只落到会话授权', async () => {
+    const onPath = widgetProvider({ kind: 'ask', allowed: true, extra: { remember: true } })
+    await executeDecision({
+      provider: onPath.provider,
+      request: makeRequest(),
+      decision: PATH_ASK,
+      opts: makeOpts(),
+      evaluateMs: 0
+    })
+    expect(onPath.persistWidgetGrant).not.toHaveBeenCalled()
+
+    const onSession = widgetProvider({ kind: 'ask', allowed: true, extra: { remember: true } })
+    const entry = 'Session(write, S)'
+    await executeDecision({
+      provider: onSession.provider,
+      request: makeRequest({
+        action: 'write',
+        object: { type: 'session', sessionId: 'S', title: 'T', ownTurn: false },
+        tool: { name: 'session', operation: 'prompt-session' }
+      }),
+      decision: {
+        ...askDecision({
+          command: entry,
+          rememberEntry: entry,
+          session: { sessionId: 'S', title: 'T', access: 'write', operation: 'prompt-session' }
+        }),
+        tier: 'ask'
+      },
+      opts: makeOpts({ toolName: 'session' }),
+      evaluateMs: 0
+    })
+    expect(onSession.persistSessionGrant.mock.calls).toEqual([['write', 'S']])
+    expect(onSession.persistWidgetGrant).not.toHaveBeenCalled()
+    expect(onSession.persistGrant).not.toHaveBeenCalled()
+  })
+
+  it('WT4-SE-13 拒绝文案：写 → User denied changing data in widget "Reading list" (X)；读 → User denied reading …；用户写了理由 → 理由原样', async () => {
+    const run = (request: SecurityRequest, response: InputResponse): Promise<unknown> =>
+      executeDecision({
+        provider: widgetProvider(response).provider,
+        request,
+        decision: widgetAsk(request.action === 'write' ? 'write' : 'read'),
+        opts: widgetOpts(),
+        evaluateMs: 0
+      })
+    expect(
+      await rejectionMessage(run(widgetRequest('write'), { kind: 'ask', allowed: false }))
+    ).toBe('User denied changing data in widget "Reading list" (X)')
+    expect(
+      await rejectionMessage(run(widgetRequest('read'), { kind: 'ask', allowed: false }))
+    ).toBe('User denied reading widget "Reading list" (X)')
+    expect(
+      await rejectionMessage(
+        run(widgetRequest('write'), { kind: 'ask', allowed: false, reason: 'not my budget' })
+      )
+    ).toBe('not my budget')
+  })
+
+  it('WT4-SE-13 空名字：展示名退到 `widget <id>`（拒绝 / 无询问通道 / 反馈都是）', async () => {
+    const decision = widgetAsk('write', { name: '' })
+    const denied = (action: 'read' | 'write'): Promise<unknown> =>
+      executeDecision({
+        provider: widgetProvider({ kind: 'ask', allowed: false }).provider,
+        request: widgetRequest(action, ''),
+        decision,
+        opts: widgetOpts(),
+        evaluateMs: 0
+      })
+    expect(await rejectionMessage(denied('write'))).toBe('User denied changing data in widget X')
+    expect(await rejectionMessage(denied('read'))).toBe('User denied reading widget X')
+    expect(
+      await rejectionMessage(
+        executeDecision({
+          provider: makeProvider(),
+          request: widgetRequest('write', ''),
+          decision,
+          opts: widgetOpts(),
+          evaluateMs: 0
+        })
+      )
+    ).toBe('Access denied: this needs your confirmation but there is no way to ask: widget X')
+    expect(
+      await rejectionMessage(
+        executeDecision({
+          provider: widgetProvider({ kind: 'other', text: 'later' }).provider,
+          request: widgetRequest('write', ''),
+          decision,
+          opts: widgetOpts(),
+          evaluateMs: 0
+        })
+      )
+    ).toBe('User declined widget X and provided feedback instead: later')
+  })
+
+  it('WT4-SE-13 无询问通道 fail-closed：Access denied: … no way to ask: widget "Reading list" (X)；missingChannel:allow 放行；「其它」反馈 User declined widget "Reading list" (X) …', async () => {
+    const run = (opts: EnforceOpts): Promise<unknown> =>
+      executeDecision({
+        provider: makeProvider(),
+        request: widgetRequest('read'),
+        decision: widgetAsk('read'),
+        opts,
+        evaluateMs: 0
+      })
+    expect(await rejectionMessage(run(widgetOpts()))).toBe(
+      'Access denied: this needs your confirmation but there is no way to ask: widget "Reading list" (X)'
+    )
+    await expect(run(widgetOpts({ missingChannel: 'allow' }))).resolves.toEqual({
+      status: 'allowed'
+    })
+    expect(
+      await rejectionMessage(
+        executeDecision({
+          provider: widgetProvider({ kind: 'other', text: 'use the other list' }).provider,
+          request: widgetRequest('write'),
+          decision: widgetAsk('write'),
+          opts: widgetOpts(),
+          evaluateMs: 0
+        })
+      )
+    ).toBe(
+      'User declined widget "Reading list" (X) and provided feedback instead: use the other list'
+    )
+  })
+
+  it('WT4-SE-14 决策日志：objectKind widget、objectSummary `widget <id>`（名字不进日志）、tool 带动作名', async () => {
+    const { provider } = widgetProvider({ kind: 'ask', allowed: true })
+    await executeDecision({
+      provider,
+      request: widgetRequest('write', 'Secret expenses'),
+      decision: widgetAsk('write', { name: 'Secret expenses' }),
+      opts: widgetOpts(),
+      evaluateMs: 0
+    })
+    const logs = getSessionDecisions(SID)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatchObject({
+      action: 'write',
+      objectKind: 'widget',
+      objectSummary: 'widget X',
+      tool: { name: 'widget', operation: 'call' },
+      effect: 'ask',
+      userResponse: 'allowed'
+    })
+    expect(JSON.stringify(logs)).not.toContain('Secret expenses')
   })
 })

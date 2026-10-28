@@ -616,10 +616,9 @@ describe('SF-11..13 the fork row', () => {
     seedRow()
     sessionAcl.grantPath(SRC, '/Users/u/notes', 'read')
     sessionAcl.grantPath(SRC, '/Users/u/out', 'write')
-    sessionAcl.grantPath(SRC, '/Users/u/.shuvix/widgets/w1', 'write', {
-      source: 'widget',
-      sourceKey: 'w1'
-    })
+    // 会话 create 组件时宿主授予的那一行（组件种类、来源 widget）。旧版本 CLI 留下的组件目录路径行对账时删掉，
+    // 不再拿它当「来源 widget 的授予行」
+    sessionAcl.grantWidget(SRC, 'my-widget', 'read', 'widget')
     const workdirRow = sessionAcl.entries(SRC).find((e) => e.source === 'workdir')!
     expect(workdirRow.target).toBe('/proj/root')
     // 用户把源会话的工作目录改成只读
@@ -644,7 +643,7 @@ describe('SF-11..13 the fork row', () => {
         'skill:/app/skills/en:/app/skills/en:read',
         'user::/Users/u/notes:read',
         'user::/Users/u/out:write',
-        'widget:w1:/Users/u/.shuvix/widgets/w1:write'
+        'widget:my-widget:my-widget:read'
       ].sort()
     )
     const forkRows = sessionAcl.entries(forkId)

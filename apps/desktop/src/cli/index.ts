@@ -3,7 +3,8 @@
  *
  * 通过 ELECTRON_RUN_AS_NODE=1 在 Electron 二进制内以 node 模式运行（无新增运行时依赖）。
  * 入口 shell 包装脚本位于 resources/cli/shuvix{,.cmd}，由 bash 工具把 wrapper 所在目录
- * prepend 到 PATH，AI 直接 `shuvix widget …` 即可。
+ * prepend 到 PATH，AI 直接 `shuvix task …` / `shuvix policy …` 即可。组件的命令（`shuvix widget …`）删掉了：
+ * 组件的操作全部经 `widget` 工具（它知道是哪条会话、过会话的授权，见 tools/widget.ts）。
  *
  * 职责：
  *   1. 解析 argv
@@ -13,7 +14,7 @@
  *   5. 把响应格式化打印到 stdout/stderr，按成功失败映射 exit code
  *
  * Session 信息：bash 工具 spawn 时把 SHUVIX_SESSION_ID 与配对的 SHUVIX_SESSION_KEY 注入 env，CLI 原样
- *               透传给主进程核对（对不上就不算任何会话）；主进程据此把目标 widget 目录记进会话权限表等。
+ *               透传给主进程核对（对不上就不算任何会话）；主进程据此认出是哪条会话的命令（停它的后台任务等）。
  *
  * 另有一个与命令无关的模式：`native-host` —— Chrome 为 ShuviX 扩展拉起的原生消息宿主，
  * 常驻、双向转发，见 nativeHost.ts。
@@ -65,15 +66,6 @@ function printUsage(): void {
   process.stderr.write(
     [
       'Usage:',
-      '  shuvix widget init <id> --name "Display Name" [--description "..."]',
-      '  shuvix widget build <id> [--message "<commit subject>"]',
-      '  shuvix widget open <id>',
-      '  shuvix widget preview <id> [--size panel,window,phone] [--theme light|dark]',
-      '  shuvix widget export <id> --to <dir|file.zip>',
-      '  shuvix widget list [--archived]',
-      '  shuvix widget db-init <id> --sql "<DDL>" | --file <path>',
-      '  shuvix widget db-query <id> --sql "<SQL>" | --file <path>',
-      "  shuvix widget call <id> <operation> [--args '<json>'] [--dry-run]",
       '  shuvix task stop <pid>        stop a background task this conversation started',
       '  shuvix policy check [<file>] [--from <ip>] [--device <id>] [--channel <name> | ...]',
       '                                check a network access or redaction policy (shuvix policy check --help)',
@@ -82,130 +74,12 @@ function printUsage(): void {
   )
 }
 
-function flagValue(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag)
-  if (idx === -1 || idx + 1 >= args.length) return undefined
-  return args[idx + 1]
-}
-
-function parseWidget(rest: string[]): ParsedCommand | null {
-  const action = rest[0]
-  if (!action) return null
-  const args = rest.slice(1)
-
-  switch (action) {
-    case 'init': {
-      const id = args[0]
-      if (!id) {
-        process.stderr.write('widget init: <id> is required\n')
-        process.exit(1)
-      }
-      const name = flagValue(args, '--name') ?? ''
-      const description = flagValue(args, '--description') ?? ''
-      if (!name) {
-        process.stderr.write('widget init: --name is required\n')
-        process.exit(1)
-      }
-      return { command: 'widget.init', params: { id, name, description } }
-    }
-    case 'build': {
-      const id = args[0]
-      if (!id) {
-        process.stderr.write('widget build: <id> is required\n')
-        process.exit(1)
-      }
-      // 构建成功后宿主提交整棵树，--message 是那条提交的说明（缺省 `chore(<id>): build`）
-      const message = flagValue(args, '--message')
-      return { command: 'widget.build', params: message ? { id, message } : { id } }
-    }
-    case 'open': {
-      const id = args[0]
-      if (!id) {
-        process.stderr.write('widget open: <id> is required\n')
-        process.exit(1)
-      }
-      return { command: 'widget.open', params: { id } }
-    }
-    case 'preview': {
-      const id = args[0]
-      if (!id) {
-        process.stderr.write('widget preview: <id> is required\n')
-        process.exit(1)
-      }
-      // 尺寸与主题的合法性在主进程里判（一份规则）；这里只原样转交
-      const size = flagValue(args, '--size')
-      const theme = flagValue(args, '--theme')
-      return {
-        command: 'widget.preview',
-        params: { id, ...(size ? { size } : {}), ...(theme ? { theme } : {}) }
-      }
-    }
-    case 'export': {
-      const id = args[0]
-      const targetPath = flagValue(args, '--to')
-      if (!id || !targetPath) {
-        process.stderr.write('widget export: <id> and --to <path> are required\n')
-        process.exit(1)
-      }
-      // 相对路径在客户端归一 —— 这里的 cwd 是调用方 shell（即会话工作目录）；
-      // 交给主进程 resolve 会以 Electron 进程的 cwd 为基准，落到完全无关的地方
-      return { command: 'widget.export', params: { id, targetPath: resolve(targetPath) } }
-    }
-    case 'list': {
-      const archived = args.includes('--archived')
-      return { command: 'widget.list', params: { archived } }
-    }
-    case 'db-init':
-    case 'db-query': {
-      const id = args[0]
-      if (!id) {
-        process.stderr.write(`widget ${action}: <id> is required\n`)
-        process.exit(1)
-      }
-      const sqlFlag = flagValue(args, '--sql')
-      const fileFlag = flagValue(args, '--file')
-      if (sqlFlag === undefined && fileFlag === undefined) {
-        process.stderr.write(`widget ${action}: --sql "<SQL>" or --file <path> is required\n`)
-        process.exit(1)
-      }
-      let sql: string
-      if (sqlFlag !== undefined) {
-        sql = sqlFlag
-      } else {
-        try {
-          sql = readFileSync(fileFlag!, 'utf-8')
-        } catch (e) {
-          process.stderr.write(
-            `widget ${action}: failed to read --file "${fileFlag}": ${(e as Error).message}\n`
-          )
-          process.exit(1)
-        }
-      }
-      return { command: `widget.${action}`, params: { id, sql } }
-    }
-    case 'call': {
-      const id = args[0]
-      const op = args[1]
-      if (!id || !op || op.startsWith('--')) {
-        process.stderr.write('widget call: <id> and <operation> are required\n')
-        process.exit(1)
-      }
-      // 参数是 JSON 文本，在主进程里解析（一份报错）；--dry-run 让写操作最后回滚
-      const argsJson = flagValue(args, '--args')
-      return {
-        command: 'widget.call',
-        params: {
-          id,
-          op,
-          ...(argsJson !== undefined ? { args: argsJson } : {}),
-          ...(args.includes('--dry-run') ? { dryRun: true } : {})
-        }
-      }
-    }
-    default:
-      process.stderr.write(`unknown widget action: ${action}\n`)
-      process.exit(1)
-  }
+/** `shuvix widget …` 删掉了：说清楚该用什么，别让 agent 以为是自己拼错了 */
+function widgetCommandRemoved(): never {
+  process.stderr.write(
+    'shuvix widget was removed: widgets are used and built with the `widget` tool (actions list, describe, call, create, build, preview, sql, export, open).\n'
+  )
+  process.exit(2)
 }
 
 function parseTask(rest: string[]): ParsedCommand | null {
@@ -278,7 +152,7 @@ function parsePolicy(rest: string[]): ParsedCommand | null {
 function parse(argv: string[]): ParsedCommand | null {
   const group = argv[0]
   const rest = argv.slice(1)
-  if (group === 'widget') return parseWidget(rest)
+  if (group === 'widget') widgetCommandRemoved()
   if (group === 'task') return parseTask(rest)
   if (group === 'policy') return parsePolicy(rest)
   return null
@@ -363,12 +237,8 @@ async function main(): Promise<void> {
   }
 
   if (resp.success) {
-    // db-query / call / policy check 走 stdout/stderr/exitCode 形态，打印原文而非 JSON
-    if (
-      parsed.command === 'widget.db-query' ||
-      parsed.command === 'widget.call' ||
-      parsed.command === 'policy.check'
-    ) {
+    // policy check 走 stdout/stderr/exitCode 形态，打印原文而非 JSON
+    if (parsed.command === 'policy.check') {
       const data = resp.data as ExecResponseData | undefined
       if (data) {
         if (data.stdout) {

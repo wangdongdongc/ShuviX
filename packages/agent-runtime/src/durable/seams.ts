@@ -242,6 +242,12 @@ export interface BuiltinToolsRequest {
   sessionId: string
   /** 命令沙箱的钉子（K8）；undefined = 还没有 agent，宿主按当前设置给一份占位 */
   sandboxed?: boolean
+  /**
+   * 根 agent 的技能货架（创建时解析出来的 / 锁里记着的）；undefined = 还没有 agent。内置工具是会话级的、
+   * 被同一会话的每个 agent 共用，宿主想按根 agent 手里有没有某个技能决定一个内置工具怎么写（描述里讲不讲
+   * 只有那个技能才教的动作）时读它。重配改了货架时内置工具不重装 —— 用的地方要在调用时再核对一次
+   */
+  skills?: readonly string[]
 }
 
 /**

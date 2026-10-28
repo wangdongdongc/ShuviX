@@ -135,7 +135,7 @@ ordinary rooted session: model picker, extensions, compaction, export, sub-sessi
 background auto-resume all work as usual.
 
 Its root persona is the builtin **`bot`** base, whose tool list is deliberately narrow:
-`read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing,
+`read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill:builtin:drawing,
 skill:builtin:tracking` —
 no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions — that

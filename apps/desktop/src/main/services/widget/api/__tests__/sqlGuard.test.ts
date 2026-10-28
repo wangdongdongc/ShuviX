@@ -79,7 +79,7 @@ describe('G-1 handler 语句的首关键字白名单', () => {
         'Widget operations can only run SELECT / WITH / INSERT / UPDATE / DELETE / REPLACE / VALUES statements'
       )
       expect(e.message).toContain(`(got ${kw}).`)
-      expect(e.message).toContain('shuvix widget db-init')
+      expect(e.message).toContain("widget tool's `sql` action")
       // 注释挡不住：前面加注释照样拒绝
       expect(() => assertHandlerStatement(`-- c\n${sql}`)).toThrow(WidgetSqlRefused)
     }
@@ -232,7 +232,7 @@ describe('G-6 assertNoForbiddenSql（schema.sql / db-query）', () => {
     )
     const query = refusal(() => assertNoForbiddenSql(sql, 'query'))
     expect(query.message).toBe(
-      'db-query cannot use ATTACH. A widget can only reach its own database file.'
+      'Widget SQL cannot use ATTACH. A widget can only reach its own database file.'
     )
   })
 
@@ -240,7 +240,7 @@ describe('G-6 assertNoForbiddenSql（schema.sql / db-query）', () => {
     const sql = word === 'LOAD_EXTENSION' ? "SELECT load_extension('/x')" : `${word} x`
     const e = refusal(() => assertNoForbiddenSql(sql, 'query'))
     expect(e.message).toBe(
-      `db-query cannot use ${word}. A widget can only reach its own database file.`
+      `Widget SQL cannot use ${word}. A widget can only reach its own database file.`
     )
   })
 

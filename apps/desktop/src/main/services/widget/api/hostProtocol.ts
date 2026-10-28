@@ -28,7 +28,7 @@ export type HostRequestBody =
       mode: OpMode
       args: unknown
       caller: WidgetCaller
-      /** 整个调用放进一个最后回滚的保存点（`shuvix widget call --dry-run`） */
+      /** 整个调用放进一个最后回滚的保存点（`widget` 工具 `call` 的 `dry_run`） */
       dryRun?: boolean
       /** 沙箱里纯计算的上限（QuickJS 中断回调），毫秒 */
       cpuMs: number

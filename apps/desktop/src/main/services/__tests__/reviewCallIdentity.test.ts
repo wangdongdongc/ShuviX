@@ -58,6 +58,7 @@ vi.mock('../acl', () => ({
   sessionAcl: {
     pathView: () => ({ read: [], write: [] }),
     sessionView: () => ({ read: [], write: [] }),
+    widgetView: () => ({ read: [], write: [] }),
     grantPath: () => null
   }
 }))

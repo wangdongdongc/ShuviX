@@ -17,14 +17,16 @@
  *   - user     用户策略 md（桌面 ~/.shuvix/policies/<name>.md，同名覆盖内置）
  *   - derived  宿主代码级派生规则（仅限无法 md 化的宿主特例；桌面/扩展当前都不供给）
  * 会话授权（"允许并记住"）不再是独立一层：宿主把会话权限表经 getVars 交成
- * `vars.aclRead` / `vars.aclWrite`（路径）与 `vars.aclSessionRead` / `vars.aclSessionWrite`（会话），由策略 md
- * 引用（出厂的 ask-on-external-path / ask-on-session-access 在表外询问，见 policyVars.ts）。
+ * `vars.aclRead` / `vars.aclWrite`（路径）、`vars.aclSessionRead` / `vars.aclSessionWrite`（会话）与
+ * `vars.aclWidgetRead` / `vars.aclWidgetWrite`（组件），由策略 md 引用（出厂的 ask-on-external-path /
+ * ask-on-session-access / ask-on-widget-access 在表外询问，见 policyVars.ts）。
  *
  * 结算优先序（tier，见 evaluate.ts）：deny → force-ask → force-allow → ask → static-allow → default。
  */
 import type {
   AskPreview,
   AskSessionTarget,
+  AskWidgetTarget,
   InputRequest,
   InputResponse
 } from '@shuvix/chat-protocol/types/inputRequest'
@@ -304,13 +306,16 @@ export interface SecurityDecision {
      */
     requestedPath?: string
     /**
-     * 可以「允许并记住」时给出（值是同一条 `Read(...)` / `Write(...)` / `Session(...)` 条目）；缺省 = 不可记住。
-     * 勾选后执行层经 provider.persistGrant / persistSessionGrant 把这条路径 / 会话记进会话权限表。只有路径类与
-     * 会话类客体给出（命令类没有对应的记忆机制 —— 用户想放宽命令可自写 allow 策略，含 matches() 正则）。
+     * 可以「允许并记住」时给出（值是同一条 `Read(...)` / `Write(...)` / `Session(...)` / `Widget(...)` 条目）；
+     * 缺省 = 不可记住。勾选后执行层经 provider.persistGrant / persistSessionGrant / persistWidgetGrant 把这条
+     * 路径 / 会话 / 组件记进会话权限表。只有路径、会话与组件类客体给出（命令类没有对应的记忆机制 —— 用户想放宽
+     * 命令可自写 allow 策略，含 matches() 正则）。
      */
     rememberEntry?: string
     /** 会话类：要交互的那条会话与访问方式（卡片按会话渲染） */
     session?: AskSessionTarget
+    /** 组件类：要用的那个组件、操作与访问方式（卡片按组件渲染） */
+    widget?: AskWidgetTarget
   }
 }
 
@@ -454,6 +459,8 @@ export interface SecurityHostProvider {
   persistGrant?(mode: AccessMode, path: string): void
   /** 会话询问通过且勾选「记住」时，把那条会话记进会话权限表（read = 查看，write = 对话） */
   persistSessionGrant?(mode: AccessMode, sessionId: string): void
+  /** 组件询问通过且勾选「记住」时，把那个组件记进会话权限表（read = 只读，write = 读写） */
+  persistWidgetGrant?(mode: AccessMode, widgetId: string): void
   /**
    * bash/ssh 命令的结构解析（见 security/shell）。桌面注入；没有命令类工具的宿主省略。
    *
@@ -789,6 +796,19 @@ export interface SessionObjectInput {
   bot?: string
 }
 
+/**
+ * enforceWidget 的入参（对应 {type:'widget'} 客体的属性）—— `widget` 工具要用的那个组件。
+ * action：`read` = 调读操作、预览；`write` = 调写操作，或改这个组件（构建、跑 SQL、导出）。
+ */
+export interface WidgetObjectInput {
+  /** 组件 id */
+  widgetId: string
+  /** 组件此刻的名字（卡片展示用；名字是 agent 起的，别拿来做判定） */
+  name: string
+  /** 这次要做什么：`call` 时是组件的操作名，其余是 `widget` 工具的动作名（`build`、`sql`、`preview` …） */
+  operation: string
+}
+
 /** PEP 门面 —— 各工具调用点唯一入口（见 context.ts） */
 export interface SecurityContext {
   /** 评估（不执行、不弹窗、不记日志）。includeForceAllow 缺省 true。 */
@@ -845,6 +865,12 @@ export interface SecurityContext {
    * 拒绝 / 取消 / 反馈时抛错，同 enforcePath。
    */
   enforceSession(mode: AccessMode, object: SessionObjectInput, opts: EnforceOpts): Promise<void>
+  /**
+   * 组件使用守卫（`widget` 工具每个要授权的动作）：客体 = `{type:'widget'}`，action = read / write。
+   * 出厂的 ask-on-widget-access 在会话权限表里没有覆盖这次访问的组件行时询问。
+   * 拒绝 / 取消 / 反馈时抛错，同 enforcePath。
+   */
+  enforceWidget(mode: AccessMode, object: WidgetObjectInput, opts: EnforceOpts): Promise<void>
   /**
    * L1 全工具门守卫（wrapToolOutput 咽喉）：客体 = `{type:'invocation'}`（调用本身），
    * 工具名/动作走 request.tool 维度（取自 opts.toolName / opts.operation）。

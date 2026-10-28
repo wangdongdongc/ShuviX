@@ -17,7 +17,7 @@
  *   A-6 activateWidgetApi 先写 api.js 再写 api.json（{hash, builtAt, ops}）；null 删掉两个；两种情况都 forget
  *   A-7 changedOps：之前没有快照 → []；消失 → `removed "x"`；input 的 JSON 变了 → `changed the input of "x"`；
  *       新增、说明 / mode 变了 → 不算；之后为 null → 全部 removed
- *   A-8 `agent: false`：agent 调用方（cli 除外）→ unknown_op、清单里也不提；用户与 cli 调得到
+ *   A-8 `agent: false`：agent 调用方 → unknown_op、清单里也不提；用户，以及带 allowUiOnly 的调用调得到
  */
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -107,7 +107,12 @@ const AGENT: WidgetCaller = {
   actor: 'shuvix-work/m',
   label: 'shuvix-work/m'
 }
-const CLI: WidgetCaller = { kind: 'agent', actor: 'cli', label: 'cli' }
+const BUILDER: WidgetCaller = {
+  kind: 'agent',
+  sessionId: 's1',
+  actor: 'shuvix-coding/m',
+  label: 'shuvix-coding/m'
+}
 
 let tmp = ''
 let projectDir = ''
@@ -252,14 +257,14 @@ describe('A-2 callWidgetOp 的前置检查', () => {
     ['hash 不是字符串', JSON.stringify({ hash: 1, builtAt: 1, ops: [] })],
     ['ops 不是数组', JSON.stringify({ hash: 'h', builtAt: 1, ops: {} })],
     ['null', 'null']
-  ])('A-2 %s → no_api，提示 `shuvix widget build`，不调宿主', async (_label, content) => {
+  ])('A-2 %s → no_api，提示构建它，不调宿主', async (_label, content) => {
     createWidgetDataDir(ID)
     if (content !== null) writeFileSync(join(dataDir(), 'api.json'), content)
 
     expect(readApiSnapshot(ID)).toBeNull()
     const err = await apiError(callWidgetOp(ID, 'listBooks', {}, USER))
     expect(err.code).toBe('no_api')
-    expect(err.message).toContain('Define api.ts and run `shuvix widget build`')
+    expect(err.message).toContain('Define api.ts and build the widget')
     expect(h.runtime.call).not.toHaveBeenCalled()
   })
 
@@ -392,7 +397,7 @@ describe('A-4 写之后的通知', () => {
     listen((c) => got.push(c))
 
     await callWidgetOp(ID, 'listBooks', {}, USER)
-    await callWidgetOp(ID, 'addBook', {}, CLI, { dryRun: true })
+    await callWidgetOp(ID, 'addBook', {}, BUILDER, { dryRun: true })
     h.runtime.call.mockResolvedValue({
       outcome: { ok: false, error: { code: 'not_found', message: 'x' } },
       wrote: false,
@@ -696,7 +701,7 @@ describe('A-7 changedOps', () => {
 
 // ────────────────────────────── A-8 ──────────────────────────────
 
-describe('A-8 agent:false 的操作只给界面（和 CLI）', () => {
+describe('A-8 agent:false 的操作只给界面（和 allowUiOnly）', () => {
   beforeEach(() => {
     seedSnapshot([
       opOf('listBooks'),
@@ -724,11 +729,14 @@ describe('A-8 agent:false 的操作只给界面（和 CLI）', () => {
     )
   })
 
-  it.each<[string, WidgetCaller]>([
-    ['用户', USER],
-    ['CLI', CLI]
-  ])('A-8 %s 调得到 agent:false 的操作', async (_l, caller) => {
-    const out = await callWidgetOp(ID, 'saveLayout', { x: 1 }, caller)
+  it('A-8 用户调得到 agent:false 的操作', async () => {
+    const out = await callWidgetOp(ID, 'saveLayout', { x: 1 }, USER)
+    expect(out.mode).toBe('write')
+    expect(h.runtime.call).toHaveBeenCalledTimes(1)
+  })
+
+  it('A-8 agent 带 allowUiOnly（组件自己的界面 / 造组件时的 dry run）调得到 agent:false 的操作', async () => {
+    const out = await callWidgetOp(ID, 'saveLayout', { x: 1 }, AGENT, { allowUiOnly: true })
     expect(out.mode).toBe('write')
     expect(h.runtime.call).toHaveBeenCalledTimes(1)
   })

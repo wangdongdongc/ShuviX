@@ -8,6 +8,7 @@
  *         `extra.rememberPath = <父目录>`；「记住这个文件」回 `rememberPath: true`；「允许这一次」不带 extra
  *   AR-3  父目录太浅（家目录里的文件）→ 没有文件夹那一行；目录询问 → 没有「允许这一次」，只有「记住这个文件夹」与拒绝
  *   AR-4  没有宿主（getHostApi 为 null）或不是路径询问（命令）→ 没有任何记住的行
+ *   XS-64/65 会话询问、WT4-UI-01..05 组件询问：见文件后面各自的 describe
  *
  * 包入口 `@shuvix/chat-ui` 顶掉（AskForm 从那里取 getHostApi）；i18n 走真 en 资源。文件是 .tsx 但不写 JSX。
  */
@@ -295,5 +296,190 @@ describe('AskForm 的会话询问', () => {
     expect(onSubmit).toHaveBeenLastCalledWith({ kind: 'ask', allowed: true })
     act(() => row('deny')!.click())
     expect(onSubmit).toHaveBeenLastCalledWith({ kind: 'ask', allowed: false })
+  })
+})
+
+/**
+ * 组件询问（request.widget —— `widget` 工具要用一个这条会话还没被授权的组件）：
+ *
+ *   WT4-UI-01 写（write）询问：标题「Change a widget」；[data-ask-widget=<id>] 先摆名字、再摆 id（等宽那一行）；
+ *             「Operation」+ [data-ask-widget-op] = 操作名；选项行恰为 Allow once / 记成可读写 / Deny，记住那一行
+ *             data-ask-option="remember-widget"、data-remember-widget="write"；没有路径 / 文件夹 / 会话的记住行
+ *   WT4-UI-02 读（read）询问：标题「Read a widget」；Allow once / 记成只读 / 记成可读写 / Deny（remember-widget 与
+ *             remember-widget-write，data-remember-widget 依次 read、write）
+ *   WT4-UI-03 读卡片上逐行点：允许 → 不带 extra；记成只读 → extra.remember: true；记成可读写 →
+ *             extra.remember + rememberAccess: 'write'；拒绝 → allowed: false。写卡片的记住行 → 只有 remember: true
+ *   WT4-UI-04 没有宿主（getHostApi 为 null）→ 只有 Allow once / Deny，组件那一栏照旧
+ *   WT4-UI-05 空名字 →「Unnamed widget」，id 照写；空操作名 → 没有「Operation」那一行
+ *             （数字键选行由 askFormCard 的 AC-1 与 optionRows 按选项序统一钉住，这里不重复）
+ */
+describe('AskForm 的组件询问', () => {
+  const WIDGET_ID = 'reading-list'
+
+  const widgetAsk = (
+    widget: Partial<NonNullable<AskInputRequest['widget']>> = {},
+    extra: Partial<AskInputRequest> = {}
+  ): AskInputRequest => {
+    const target = {
+      widgetId: WIDGET_ID,
+      name: 'Reading list',
+      access: 'write' as const,
+      operation: 'addBook',
+      ...widget
+    }
+    return ask({
+      toolName: 'widget',
+      command: `Widget(${target.access}, ${target.widgetId})`,
+      widget: target,
+      ...extra
+    })
+  }
+
+  const widgetBox = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-ask-widget]')
+  const titleText = (): string | null | undefined =>
+    container.querySelector('[data-ask-title]')?.textContent
+  const opLine = (): HTMLElement | null =>
+    container.querySelector<HTMLElement>('[data-ask-widget-op]')
+  const rememberWidgetRows = (): string[] =>
+    [...container.querySelectorAll<HTMLElement>('[data-remember-widget]')].map(
+      (el) => el.dataset.rememberWidget ?? ''
+    )
+
+  it('WT4-UI-01 写询问：标题、组件名与 id、操作名；Allow once / 记成可读写 / Deny', () => {
+    render(widgetAsk())
+
+    expect(titleText()).toBe(en.toolCall.widgetAskWrite)
+    expect(titleText()).toBe('Change a widget')
+
+    const box = widgetBox()!
+    expect(box).not.toBeNull()
+    expect(box.dataset.askWidget).toBe(WIDGET_ID)
+    const [nameLine, idLine] = [...box.querySelectorAll<HTMLElement>('.truncate')]
+    expect(nameLine.textContent).toBe('Reading list')
+    expect(idLine.textContent).toBe(WIDGET_ID)
+    expect(idLine.classList.contains('font-mono')).toBe(true)
+    // 名字在 id 前面
+    expect(nameLine.compareDocumentPosition(idLine) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    expect(box.textContent).toContain(en.toolCall.widgetAskOperation)
+    expect(box.textContent).toContain('Operation')
+    expect(opLine()!.textContent).toBe('addBook')
+    expect(box.contains(opLine())).toBe(true)
+
+    expect(rows().map(labelOf)).toEqual([
+      en.toolCall.askAllowOnce,
+      en.toolCall.askRememberWidgetWrite,
+      en.toolCall.deny
+    ])
+    expect(rows().map(labelOf)).toEqual([
+      'Allow once',
+      'Allow and remember: may read and change this widget',
+      'Deny'
+    ])
+    expect(rowIds()).toEqual(['allow', 'remember-widget', 'deny'])
+    expect(row('remember-widget')!.dataset.rememberWidget).toBe('write')
+    expect(rememberWidgetRows()).toEqual(['write'])
+
+    // 不是路径询问、也不是会话询问：没有那些记住行
+    expect(row('remember-path')).toBeNull()
+    expect(row('remember-folder')).toBeNull()
+    expect(row('remember-session')).toBeNull()
+    expect(folderButton()).toBeNull()
+    expect(container.querySelector('[data-remember-session]')).toBeNull()
+    expect(container.querySelector('[data-ask-session]')).toBeNull()
+  })
+
+  it('WT4-UI-02 读询问：标题「Read a widget」；记成只读与记成可读写两行', () => {
+    render(widgetAsk({ access: 'read', operation: 'listBooks' }))
+
+    expect(titleText()).toBe(en.toolCall.widgetAskRead)
+    expect(titleText()).toBe('Read a widget')
+    expect(opLine()!.textContent).toBe('listBooks')
+
+    expect(rows().map(labelOf)).toEqual([
+      'Allow once',
+      'Allow and remember: may read this widget',
+      'Allow and remember: may read and change this widget',
+      'Deny'
+    ])
+    expect(rows().map(labelOf)).toEqual([
+      en.toolCall.askAllowOnce,
+      en.toolCall.askRememberWidgetRead,
+      en.toolCall.askRememberWidgetWrite,
+      en.toolCall.deny
+    ])
+    expect(rowIds()).toEqual(['allow', 'remember-widget', 'remember-widget-write', 'deny'])
+    expect(rememberWidgetRows()).toEqual(['read', 'write'])
+    expect(row('remember-widget')!.dataset.rememberWidget).toBe('read')
+    expect(row('remember-widget-write')!.dataset.rememberWidget).toBe('write')
+  })
+
+  it('WT4-UI-03 读卡片逐行点；写卡片的记住行不带 rememberAccess', () => {
+    const onSubmit = render(widgetAsk({ access: 'read', operation: 'listBooks' }))
+
+    act(() => row('allow')!.click())
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(onSubmit.mock.calls[0]).toEqual([{ kind: 'ask', allowed: true }])
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('extra')
+
+    act(() => row('remember-widget')!.click())
+    expect(onSubmit).toHaveBeenCalledTimes(2)
+    expect(onSubmit.mock.calls[1]).toEqual([
+      { kind: 'ask', allowed: true, extra: { remember: true } }
+    ])
+
+    act(() => row('remember-widget-write')!.click())
+    expect(onSubmit).toHaveBeenCalledTimes(3)
+    expect(onSubmit.mock.calls[2]).toEqual([
+      { kind: 'ask', allowed: true, extra: { remember: true, rememberAccess: 'write' } }
+    ])
+
+    act(() => row('deny')!.click())
+    expect(onSubmit).toHaveBeenCalledTimes(4)
+    expect(onSubmit.mock.calls[3]).toEqual([{ kind: 'ask', allowed: false }])
+
+    const onWrite = render(widgetAsk(), vi.fn())
+    act(() => row('remember-widget')!.click())
+    expect(onWrite).toHaveBeenCalledTimes(1)
+    expect(onWrite.mock.calls[0]).toEqual([
+      { kind: 'ask', allowed: true, extra: { remember: true } }
+    ])
+    expect(onWrite.mock.calls[0][0].extra).not.toHaveProperty('rememberAccess')
+  })
+
+  it('WT4-UI-04 没有宿主：只有允许这一次与拒绝，组件那一栏照旧', () => {
+    host.api = null
+    render(widgetAsk({ access: 'read', operation: 'listBooks' }))
+    expect(rowIds()).toEqual(['allow', 'deny'])
+    expect(rows().map(labelOf)).toEqual(['Allow once', 'Deny'])
+    expect(rememberWidgetRows()).toEqual([])
+
+    expect(titleText()).toBe('Read a widget')
+    const box = widgetBox()!
+    expect(box.dataset.askWidget).toBe(WIDGET_ID)
+    const [nameLine, idLine] = [...box.querySelectorAll<HTMLElement>('.truncate')]
+    expect(nameLine.textContent).toBe('Reading list')
+    expect(idLine.textContent).toBe(WIDGET_ID)
+    expect(opLine()!.textContent).toBe('listBooks')
+
+    render(widgetAsk())
+    expect(rowIds()).toEqual(['allow', 'deny'])
+    expect(titleText()).toBe('Change a widget')
+  })
+
+  it('WT4-UI-05 空名字 →「Unnamed widget」、id 照写；空操作名 → 没有操作那一行', () => {
+    render(widgetAsk({ name: '' }))
+    const [nameLine, idLine] = [...widgetBox()!.querySelectorAll<HTMLElement>('.truncate')]
+    expect(nameLine.textContent).toBe(en.toolCall.widgetAskUnnamed)
+    expect(nameLine.textContent).toBe('Unnamed widget')
+    expect(idLine.textContent).toBe(WIDGET_ID)
+    expect(opLine()!.textContent).toBe('addBook')
+
+    render(widgetAsk({ operation: '' }))
+    expect(opLine()).toBeNull()
+    expect(widgetBox()!.textContent).not.toContain(en.toolCall.widgetAskOperation)
+    expect(widgetBox()!.textContent).toContain('Reading list')
+    expect(widgetBox()!.textContent).toContain(WIDGET_ID)
   })
 })

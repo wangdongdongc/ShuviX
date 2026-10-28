@@ -1,7 +1,8 @@
 /**
  * 锁 · 工具（P1-09；裁决 K6–K8）：工具次序由锁拼（内置按归一名单 → agent → skill → MCP 逐台逐个），
  * 内置工具在 `shuvix.builtin`、按 agent 的在 `shuvix.agent.<对话>`；MCP 在创建那一刻惰性连接，连不上的
- * 不记；沙箱钉子来自解析结果，创建时据此重装 `shuvix.builtin`。
+ * 不记；沙箱钉子来自解析结果，创建时据此重装 `shuvix.builtin`；技能货架随内置工具的构造请求一起交给宿主
+ * （货架空了也交 `[]`，LT-13 / WT4-DL-01）。
  */
 import { describe, expect, it } from 'vitest'
 import { AgentCreationError, composeAgentTools } from '../lock'
@@ -228,10 +229,31 @@ describe('lock · tools', () => {
     expect(t.registryOf('s1')!.snapshot().extension('shuvix.builtin')).toBeUndefined()
     t.kit.queue(answer('ok'))
     expect(await session.submitUser('hi')).toEqual({})
-    expect(t.toolHost.builtinCalls).toEqual([{ sessionId: 's1', sandboxed: true }])
+    expect(t.toolHost.builtinCalls).toEqual([
+      { sessionId: 's1', sandboxed: true, skills: ['builtin:drawing', 'pdf'] }
+    ])
     expect(session.lock!.sandboxed).toBe(true)
     const bash = requestTools(t.kit, 0).find((tool) => tool.name === 'bash')!
     expect(bash.description).toContain('sandboxed=true')
     expect(await toolDeltaCount(await session.currentConversation())).toBe(1)
+  })
+
+  it('LT-13 (WT4-DL-01) a profile that shelves no skill: creation hands buildBuiltinTools `skills: []` — the key is there, not left out (left out means "no agent yet")', async () => {
+    const config = scenarioConfig()
+    config.profile = {
+      ...config.profile,
+      tools: config.profile.tools.filter((name) => !name.startsWith('skill:'))
+    }
+    config.toolOverlay = ['mcp:ctx']
+    const { t } = await scenarioW({ config })
+    const session = await t.open()
+    await session.createAgent()
+    expect(t.toolHost.builtinCalls).toHaveLength(1)
+    expect(t.toolHost.builtinCalls[0]).toStrictEqual({
+      sessionId: 's1',
+      sandboxed: true,
+      skills: []
+    })
+    expect(session.lock!.skills).toEqual([])
   })
 })

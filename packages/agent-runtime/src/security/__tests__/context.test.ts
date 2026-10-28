@@ -4,7 +4,8 @@
  * lets 与 match 共用 —— CV-3）、
  * L1 全工具门的 allow 即非事件、路径客体经 provider.realPath 换成真实去处（CT-R 系列）、
  * 询问点的自动审查经门面走到接缝（CT-RV / CT-SG / CT-UR 系列）、
- * enforceSession（`session` 工具与一条别的会话交互，XS-19）。
+ * enforceSession（`session` 工具与一条别的会话交互，XS-19）、
+ * enforceWidget（`widget` 工具用一个组件，WT4-SE-15）。
  */
 import { describe, it, expect, afterEach, vi, type Mock } from 'vitest'
 import { createSecurityContext } from '../context'
@@ -5299,6 +5300,158 @@ describe('createSecurityContext — enforceSession（XS-19）', () => {
       })
     ).toMatchObject({ effect: 'deny', winning: 'session-facts-value#0' })
     expect(valued.warn).not.toHaveBeenCalled()
+  })
+})
+
+// ─── enforceWidget（组件使用守卫）────────────────────────────────────────
+//
+// WT4-SE-15 门面交给策略的客体恰是 {type:'widget', widgetId, name, operation}（入参多出来的键不进客体，type 也改
+// 不了）；action 就是 mode 参数；tool.name / tool.operation 取自 opts；「其它」反馈即使传了 onOther:'return' 也抛
+// （返回 void 的门），从不当成放行；权限表里有写行 → 不弹卡直接放行。
+
+describe('createSecurityContext — enforceWidget（WT4-SE-15）', () => {
+  type Reviewer = NonNullable<SecurityHostProvider['onPermissionRequest']>
+
+  const usedSids = new Set<string>()
+  let seq = 0
+  afterEach(() => {
+    for (const sid of usedSids) {
+      clearReviewState(sid)
+      clearSessionDecisions(sid)
+    }
+    usedSids.clear()
+  })
+
+  const CALL_OPTS = { toolCallId: 'tc-w', toolName: 'widget', operation: 'call' }
+
+  /** 本条用例自己的会话；组件表交了（空表或给定的行），审查接缝回 null（照旧问人），询问通道固定应答 */
+  function widgetContext(
+    opts: { response?: InputResponse; widgetRead?: string[]; widgetWrite?: string[] } = {}
+  ): {
+    ctx: SecurityContext
+    sid: string
+    review: Mock<Reviewer>
+    requestUserInput: Mock<(req: InputRequest) => Promise<InputResponse>>
+    warn: Mock<(msg: string) => void>
+  } {
+    const sid = `context-widget-${++seq}`
+    usedSids.add(sid)
+    const review = vi.fn<Reviewer>(async () => null)
+    const response = opts.response ?? { kind: 'ask', allowed: true }
+    const requestUserInput = vi.fn(async (_req: InputRequest): Promise<InputResponse> => response)
+    const warn = vi.fn<(msg: string) => void>()
+    const base = makeProvider(noGrants())
+    const ctx = createSecurityContext(
+      { kind: 'agent', sessionId: sid, agentKind: 'root' },
+      ENVIRONMENT,
+      makeProvider(noGrants(), {
+        getVars: () => ({
+          ...base.getVars(),
+          aclWidgetRead: opts.widgetRead ?? [],
+          aclWidgetWrite: opts.widgetWrite ?? []
+        }),
+        requestUserInput,
+        onPermissionRequest: review,
+        logger: { info: vi.fn(), warn, error: vi.fn() }
+      })
+    )
+    return { ctx, sid, review, requestUserInput, warn }
+  }
+
+  /** 带了一堆不相干（连 type / path 在内）键的入参 */
+  const NOISY = {
+    widgetId: 'X',
+    name: 'N',
+    operation: 'listBooks',
+    type: 'path',
+    path: '/etc',
+    mode: 'write',
+    sessionId: 'S'
+  } as never
+
+  it('WT4-SE-15 交给策略的客体恰是 {type, widgetId, name, operation}：多出来的键不进客体、type 盖不掉；action = mode 参数；tool 取自 opts', async () => {
+    const { ctx, review, requestUserInput, warn } = widgetContext()
+    await expect(ctx.enforceWidget('read', NOISY, CALL_OPTS)).resolves.toBeUndefined()
+
+    expect(review).toHaveBeenCalledTimes(1)
+    const event = review.mock.calls[0]![0]
+    expect(event.request.object).toStrictEqual({
+      type: 'widget',
+      widgetId: 'X',
+      name: 'N',
+      operation: 'listBooks'
+    })
+    expect(event.request.action).toBe('read')
+    expect(event.request.tool).toEqual({ name: 'widget', operation: 'call' })
+    expect(event.decision).toMatchObject({
+      effect: 'ask',
+      tier: 'ask',
+      winning: 'ask-on-widget-access#0'
+    })
+    expect(event.command).toBe('Widget(read, X)')
+    expect(requestUserInput).toHaveBeenCalledTimes(1)
+    expect(requestUserInput.mock.calls[0]![0]).toMatchObject({
+      command: 'Widget(read, X)',
+      toolName: 'widget',
+      widget: { widgetId: 'X', name: 'N', access: 'read', operation: 'listBooks' }
+    })
+
+    review.mockClear()
+    requestUserInput.mockClear()
+    await expect(
+      ctx.enforceWidget('write', NOISY, { ...CALL_OPTS, operation: 'build' })
+    ).resolves.toBeUndefined()
+    const write = review.mock.calls[0]![0]
+    expect(write.request.action).toBe('write')
+    expect(write.request.object).toStrictEqual({
+      type: 'widget',
+      widgetId: 'X',
+      name: 'N',
+      operation: 'listBooks'
+    })
+    expect(write.request.tool).toEqual({ name: 'widget', operation: 'build' })
+    expect(write.decision.winning).toBe('ask-on-widget-access#1')
+    expect(requestUserInput.mock.calls[0]![0]).toMatchObject({
+      command: 'Widget(write, X)',
+      widget: { access: 'write', operation: 'listBooks' }
+    })
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it("WT4-SE-15 「其它」反馈：传了 onOther:'return' 也抛（从不当成放行），反馈记进 humanFeedbackOf", async () => {
+    const { ctx, sid } = widgetContext({ response: { kind: 'other', text: 'not this widget' } })
+    expect(
+      await rejectionOf(
+        ctx.enforceWidget(
+          'write',
+          { widgetId: 'X', name: 'N', operation: 'addBook' },
+          { ...CALL_OPTS, onOther: 'return' }
+        )
+      )
+    ).toBe('User declined widget "N" (X) and provided feedback instead: not this widget')
+    expect(humanFeedbackOf(sid)).toEqual([
+      { ts: expect.any(Number), target: 'Widget(write, X)', text: 'not this widget' }
+    ])
+    expect(getSessionDecisions(sid)[0]).toMatchObject({
+      objectKind: 'widget',
+      objectSummary: 'widget X',
+      userResponse: 'feedback'
+    })
+  })
+
+  it('WT4-SE-15 权限表里的行（经门面现取 vars）：写行 → 读写都不弹卡、不审查；只读行只免读', async () => {
+    const target = { widgetId: 'X', name: 'N', operation: 'addBook' }
+    const writable = widgetContext({ widgetRead: ['X'], widgetWrite: ['X'] })
+    await expect(writable.ctx.enforceWidget('write', target, CALL_OPTS)).resolves.toBeUndefined()
+    await expect(writable.ctx.enforceWidget('read', target, CALL_OPTS)).resolves.toBeUndefined()
+    expect(writable.requestUserInput).not.toHaveBeenCalled()
+    expect(writable.review).not.toHaveBeenCalled()
+
+    const readable = widgetContext({ widgetRead: ['X'], widgetWrite: [] })
+    await readable.ctx.enforceWidget('read', target, CALL_OPTS)
+    expect(readable.requestUserInput).not.toHaveBeenCalled()
+    await readable.ctx.enforceWidget('write', target, CALL_OPTS)
+    expect(readable.requestUserInput).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -3,8 +3,9 @@
  *
  * 读它的三方用的是同一份：
  *   - 安全策略：desktop provider 的 getVars 交出 `vars.aclRead` / `vars.aclWrite`（路径，出厂的
- *     ask-on-external-path 在这以外询问）与 `vars.aclSessionRead` / `vars.aclSessionWrite`（会话，出厂的
- *     ask-on-session-access 在这以外询问）；
+ *     ask-on-external-path 在这以外询问）、`vars.aclSessionRead` / `vars.aclSessionWrite`（会话，出厂的
+ *     ask-on-session-access 在这以外询问）与 `vars.aclWidgetRead` / `vars.aclWidgetWrite`（组件，出厂的
+ *     ask-on-widget-access 在这以外询问）；
  *   - 命令沙箱：planFor 的可读 / 可写根（sandboxEntries）；
  *   - 设置界面：会话的权限表面板（entries）。
  *
@@ -14,9 +15,9 @@
  * 联动」不需要每个改设置的地方都来通知，全局的技能开关也不必挨个会话去改。新建会话时立即对账一次
  * （「创建时生成权限表」），之后谁先读谁触发。
  *
- * 授予的行（user / widget）只经这里的 grantPath / grantSession / setAccess / remove 改，每次改都广播
- * `session.configChanged`（界面据此重拉）。会话种类的行指向另一条会话：那条会话被删时，所有表里指向它的行一并
- * 删掉（deleteSession）。
+ * 授予的行（user / widget）只经这里的 grantPath / grantSession / grantWidget / setAccess / remove 改，每次改都
+ * 广播 `session.configChanged`（界面据此重拉）。会话种类的行指向另一条会话：那条会话被删时，所有表里指向它的行
+ * 一并删掉（deleteSession）；组件种类的行同理（deleteWidget）。组件的读写行派生出它源码目录的可写行（derive.ts）。
  *
  * 继承：派生 agent 与 hook agent 的工具上下文用所在会话的 id，天然共用这张表；子会话建成时复制父会话的
  * 授予行（copyGranted），fork 复制授予行与工作目录那一行的访问方式（copyForFork）。之后各管各的。
@@ -30,17 +31,20 @@ import {
   needsSandboxRootCheck,
   pathAclView,
   sessionAclView,
+  widgetAclView,
   widerPathAccess,
   type AclEntry,
   type AclKind,
   type PathAccess,
-  type SessionAccess
+  type SessionAccess,
+  type WidgetAccess
 } from '@shuvix/chat-protocol/sessionAcl'
 import { createLogger } from '../../logger'
 import { isSafeSessionId } from '../../utils/paths'
 import { broadcastSessionConfigChanged } from '../../utils/sessionConfigBroadcast'
 import type { SandboxPathEntry } from '../sandbox'
 import { sessionRecords } from '../sessionRecords'
+import { widgetRegistry, WIDGET_ID_REGEX } from '../widget/widgetRegistry'
 import { derivePathEntries, derivedKey, type DerivedPathEntry } from './derive'
 import { aclStoreFor, deleteAclEverywhere, deleteTargetEverywhere, type AclStore } from './store'
 
@@ -65,13 +69,21 @@ function fingerprint(derived: readonly DerivedPathEntry[]): string {
 
 /**
  * 派生行对账：表里已有、此刻仍应有的留着（工作目录与笔记本文档那一行保留用户改过的访问方式，其余派生行
- * 的访问方式由来源决定 —— 不一致就改回来）；已有、此刻不该有的删掉；应有、还没有的补上。授予行一概不碰。
+ * 的访问方式由来源决定 —— 不一致就改回来）；已有、此刻不该有的删掉；应有、还没有的补上。授予行一概不碰 ——
+ * 只有旧版本 CLI 留下的组件目录行例外（见循环里）。
  */
 function reconcile(store: AclStore, sessionId: string, derived: readonly DerivedPathEntry[]): void {
   store.transaction(() => {
     const expected = new Map(derived.map((e) => [derivedKey(e), e]))
     const now = Date.now()
     for (const row of store.list(sessionId)) {
+      // 旧版本的 `shuvix widget init / build` 静默授予的组件目录（路径行、来源 widget）：组件目录的写权限现在只从
+      // 组件的读写授权派生（widgetDir）。留着它们，没有组件授权也能改组件的代码，同 id 的新组件还会继承 —— 删掉
+      // （多问一次，不会多放）
+      if (row.kind === 'path' && row.source === 'widget') {
+        store.delete(sessionId, row.id)
+        continue
+      }
       if (!isDerivedAclSource(row.source)) continue
       const key = derivedKey({ source: row.source, sourceKey: row.sourceKey, target: row.target })
       const want = expected.get(key)
@@ -105,7 +117,9 @@ function reconcile(store: AclStore, sessionId: string, derived: readonly Derived
 function sync(sessionId: string): AclStore | null {
   if (!exists(sessionId)) return null
   const store = aclStoreFor(sessionId)
-  const derived = derivePathEntries(sessionId)
+  // 有读写授权的组件派生出它们的源码目录（授予行直接读存储，不需要先对账）
+  const writableWidgets = widgetAclView(store.list(sessionId)).write
+  const derived = derivePathEntries(sessionId, writableWidgets)
   const print = fingerprint(derived)
   if (reconciled.get(sessionId) !== print) {
     try {
@@ -170,12 +184,15 @@ export const sessionAcl = {
   },
 
   /**
-   * 交给界面的那一份：会话种类的行带上目标会话此刻的标题（`targetTitle`，不落库；会话已删 → 缺省）
+   * 交给界面的那一份：会话种类的行带上目标会话此刻的标题、组件种类的行带上组件此刻的名字（`targetTitle`，
+   * 不落库；目标已删 → 缺省）
    */
   entriesForDisplay(sessionId: string): AclEntry[] {
     return this.entries(sessionId).map((entry) => {
-      if (entry.kind !== 'session') return entry
-      const title = sessionRecords.pick(entry.target, ['title'])?.title
+      let title: string | undefined
+      if (entry.kind === 'session') title = sessionRecords.pick(entry.target, ['title'])?.title
+      else if (entry.kind === 'widget') title = widgetRegistry.findById(entry.target)?.name
+      else return entry
       return title === undefined ? entry : { ...entry, targetTitle: title }
     })
   },
@@ -198,6 +215,28 @@ export const sessionAcl = {
   /** 会话的可查看 / 可对话 id 表（策略的 `vars.aclSessionRead` / `vars.aclSessionWrite`；对话隐含查看） */
   sessionView(sessionId: string): { read: string[]; write: string[] } {
     return sessionAclView(this.sessionGrants(sessionId))
+  },
+
+  /**
+   * 组件种类的行（这条会话免询问只读 / 读写的组件）。都是授予的，直接读存储，同 sessionGrants
+   */
+  widgetGrants(sessionId: string): AclEntry[] {
+    if (!exists(sessionId)) return []
+    return aclStoreFor(sessionId)
+      .list(sessionId)
+      .filter((e) => e.kind === 'widget')
+  },
+
+  /** 组件的可读 / 可读写 id 表（策略的 `vars.aclWidgetRead` / `vars.aclWidgetWrite`；读写隐含读） */
+  widgetView(sessionId: string): { read: string[]; write: string[] } {
+    return widgetAclView(this.widgetGrants(sessionId))
+  },
+
+  /** 这条会话对一个组件的授权：none / read / write */
+  widgetAccess(sessionId: string, widgetId: string): 'none' | WidgetAccess {
+    const view = this.widgetView(sessionId)
+    if (view.write.includes(widgetId)) return 'write'
+    return view.read.includes(widgetId) ? 'read' : 'none'
   },
 
   /** 交给命令沙箱的路径条目（授予的写还要过「适不适合当可写根」，见 sandbox/spec） */
@@ -239,6 +278,31 @@ export const sessionAcl = {
     const store = sync(sessionId)
     if (!store) return null
     return grant(store, sessionId, 'session', targetId, access, 'user', '')
+  },
+
+  /**
+   * 授予这条会话用一个组件（询问卡片上的「允许并记住」→ 来源 user；会话自己 `create` 了它 → 来源 widget）：
+   * read = 只读，write = 读写（并派生出它源码目录的可写行）。已有同来源的一行就合并访问方式。返回那一行；
+   * 会话不在、组件 id 不合法 → null
+   */
+  grantWidget(
+    sessionId: string,
+    widgetId: string,
+    access: WidgetAccess,
+    source: GrantSource = 'user'
+  ): AclEntry | null {
+    if (!WIDGET_ID_REGEX.test(widgetId)) return null
+    const store = sync(sessionId)
+    if (!store) return null
+    return grant(
+      store,
+      sessionId,
+      'widget',
+      widgetId,
+      access,
+      source,
+      source === 'widget' ? widgetId : ''
+    )
   },
 
   /** 改一行的访问方式（只有授予的行与工作目录那一行能改）。返回是否改了 */
@@ -306,6 +370,20 @@ export const sessionAcl = {
     } catch (err) {
       // 删不掉的行只是指向一条不存在的会话：授权的目标已经没了，不会放出任何权限
       log.warn(`acl forget target failed session=${sessionId}: ${(err as Error).message}`)
+    }
+  },
+
+  /**
+   * 删组件时调：所有表里指向它的组件行一并删掉（它们派生的源码目录行在各会话下一次读表时随之消失）
+   */
+  deleteWidget(widgetId: string): void {
+    try {
+      for (const affected of deleteTargetEverywhere('widget', widgetId)) {
+        broadcastSessionConfigChanged(affected)
+      }
+    } catch (err) {
+      // 删不掉的行只是指向一个不存在的组件：同 id 的新组件会继承这份授权 —— 记下来，不放大
+      log.warn(`acl forget widget failed widget=${widgetId}: ${(err as Error).message}`)
     }
   },
 

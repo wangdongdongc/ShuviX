@@ -9,6 +9,8 @@
  * 第三份（会话访问，2026-10-20 用户裁定）：ask-on-session-access —— `session` 工具查看（read）/ 对话（write）
  * 一条别的会话，不是自己发起的那一轮、也不在会话权限表（`vars.aclSessionRead` / `vars.aclSessionWrite`）里时询问
  * （XS-10 形态；XS-11…15 行为，见「内置策略行为判定」末尾的那一组）。
+ * 第四份（组件访问）：ask-on-widget-access —— `widget` 工具读（read）/ 改（write）一个组件，不在会话权限表
+ * （`vars.aclWidgetRead` / `vars.aclWidgetWrite`）里时询问（WT4-SE-01 形态；WT4-SE-02…08 行为，紧跟会话那一组）。
  * 管远程访问的一份（2026-10-19 用户裁定）：network-admission —— network 主体、发送方不是本机的 HTTP 请求
  * 一律 deny。这是出厂唯一的 deny：网络点位没有人可问（ask 会降级为拒绝），只作用于 network 主体。
  *
@@ -25,7 +27,7 @@
  */
 import { describe, it, expect, vi, type Mock } from 'vitest'
 import { builtinObjectId } from '@shuvix/chat-protocol/mdMeta'
-import { sessionAclView, type AclEntry } from '@shuvix/chat-protocol/sessionAcl'
+import { sessionAclView, widgetAclView, type AclEntry } from '@shuvix/chat-protocol/sessionAcl'
 import { buildBuiltinPolicies, BUILTIN_POLICY_SPECS } from '../builtinPolicies'
 import { parsePolicyDefinitionFile, serializePolicyDefinitionFile } from '../policyFile'
 import { assembleRules } from '../assemble'
@@ -89,20 +91,21 @@ const makeBareProvider = (): SecurityHostProvider => ({
 })
 
 describe('buildBuiltinPolicies', () => {
-  it('BP-1 不 throw；恰 6 份、按装配序；名字与 SPECS 一致且互异', () => {
+  it('BP-1 不 throw；恰 7 份、按装配序；名字与 SPECS 一致且互异', () => {
     expect(() => buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })).not.toThrow()
     const policies = buildBuiltinPolicies({ readMd: INLINE_POLICY_MD })
-    expect(policies).toHaveLength(6)
+    expect(policies).toHaveLength(7)
     expect(policies.map((p) => p.name)).toEqual(BUILTIN_POLICY_SPECS.map((s) => s.name))
     expect(policies.map((p) => p.name)).toEqual([
       'ask-on-external-path',
       'ask-on-command',
       'ask-on-session-access',
+      'ask-on-widget-access',
       'network-admission',
       'daily-bot-access',
       'redact-sensitive'
     ])
-    expect(new Set(policies.map((p) => p.name)).size).toBe(6)
+    expect(new Set(policies.map((p) => p.name)).size).toBe(7)
   })
 
   it('BP-1c 内联表恰是四份 × en / zh / ja；退役的十一份一个语言文件都不剩', () => {
@@ -213,6 +216,8 @@ describe('buildBuiltinPolicies', () => {
       ['ask-on-command#0', 'ask'],
       ['ask-on-session-access#0', 'ask'],
       ['ask-on-session-access#1', 'ask'],
+      ['ask-on-widget-access#0', 'ask'],
+      ['ask-on-widget-access#1', 'ask'],
       ['network-admission#0', 'deny'],
       ['daily-bot-access#0', 'force-allow'],
       ['daily-bot-access#1', 'force-allow'],
@@ -306,6 +311,39 @@ describe('buildBuiltinPolicies', () => {
     expect(inDirOnlyVarNames(read.match!)).toEqual([])
     expect(inDirOnlyVarNames(write.match!)).toEqual([])
     expect(policy.displayName).toBe('Ask Before Using Another Session')
+  })
+
+  it('WT4-SE-01 ask-on-widget-access：两条 ask × widget，desktop 限定 —— #0 读只看 vars.aclWidgetRead，#1 写只看 vars.aclWidgetWrite；没有 lets、不是 inDir 的目录参数', () => {
+    const policy = byName('ask-on-widget-access')
+    expect(policy.scope).toStrictEqual({
+      'subject.kind': ['agent'],
+      'object.type': ['widget'],
+      'env.host': ['desktop']
+    })
+    expect(policy.lets).toBeUndefined()
+    expect(policy.rules.map(withoutPrompt)).toStrictEqual([
+      {
+        effect: 'ask',
+        conditions: { action: ['read'] },
+        match: '!(object.widgetId in vars.aclWidgetRead)'
+      },
+      {
+        effect: 'ask',
+        conditions: { action: ['write'] },
+        match: '!(object.widgetId in vars.aclWidgetWrite)'
+      }
+    ])
+    // 每条恰读一张表（「读写隐含读」靠宿主把可读写的行也放进可读表，widgetAclView）
+    const varsOf = (match: string): string[] =>
+      [...match.matchAll(/vars\.(\w+)/g)].map((m) => m[1]!).sort()
+    const [read, write] = policy.rules
+    expect(varsOf(read.match!)).toEqual(['aclWidgetRead'])
+    expect(varsOf(write.match!)).toEqual(['aclWidgetWrite'])
+    // 组件表不是 inDir 的目录参数：宿主漏交时装配不替它绑 null（走 CEL 的缺键报错，见 WT4-SE-07）
+    expect(inDirOnlyVarNames(read.match!)).toEqual([])
+    expect(inDirOnlyVarNames(write.match!)).toEqual([])
+    for (const rule of policy.rules) expect(rule.prompt).toBeTruthy()
+    expect(policy.displayName).toBe('Ask Before Using a Widget')
   })
 
   it('BP-T1 出厂没有调用门：没有一条内置规则的客体是 invocation（或不限客体），L1 对每次工具调用都是非事件快路', () => {
@@ -2141,6 +2179,388 @@ describe('内置策略行为判定（assembleRules + evaluate 端到端）', () 
         matched: ['always-ask-sessions#0']
       })
       expect(own.ask).not.toHaveProperty('rememberEntry')
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+    })
+  })
+
+  // ── ask-on-widget-access：`widget` 工具用一个组件 ─────────────────────────────────────
+  //
+  // WT4-SE-02 行为表：表外的读 → #0、表外的写 → #1（只读的行不免写），问的都给「允许并记住」与 widget 材料；
+  //           表里的放行（读写隐含读）；零告警
+  // WT4-SE-03 卡片的 operation 取自客体（不是工具维度，与会话不同）；缺 name / operation → 空串
+  // WT4-SE-04 user 主体 / extension 宿主不受它约束
+  // WT4-SE-05 几张表互不串：路径表、会话表里的组件 id 不免组件门；组件表里的路径 / 会话 id 不免路径门 / 会话门
+  // WT4-SE-06 「允许并记住」往返：卡片的 rememberEntry → 一行 `kind: 'widget'` → widgetAclView → 放行
+  // WT4-SE-07 宿主没交组件表（缺键）：照问 + 恰一条 fail-safe 告警（点名规则），装配不记「not provided」
+  // WT4-SE-08 用户写的 force-ask 组件门：卡片照样带 widget 材料，但不给「允许并记住」，权限表的行免不了它
+  describe('ask-on-widget-access（组件访问）', () => {
+    /** R 只读、W 读写（读写隐含读）—— 宿主 services/acl 从会话权限表交出的两张 id 表 */
+    const WIDGET_ROWS: Array<Pick<AclEntry, 'kind' | 'target' | 'access'>> = [
+      { kind: 'widget', target: 'R', access: 'read' },
+      { kind: 'widget', target: 'W', access: 'write' }
+    ]
+
+    const widgetVars = (
+      rows: ReadonlyArray<Pick<AclEntry, 'kind' | 'target' | 'access'>>,
+      base: Record<string, PolicyVarValue> = DESKTOP_VARS
+    ): Record<string, PolicyVarValue> => {
+      const view = widgetAclView(rows)
+      return { ...base, aclWidgetRead: view.read, aclWidgetWrite: view.write }
+    }
+
+    const widgetProvider = (
+      rows: ReadonlyArray<Pick<AclEntry, 'kind' | 'target' | 'access'>> = WIDGET_ROWS,
+      overrides: Partial<SecurityHostProvider> = {}
+    ): SecurityHostProvider => makeProvider({ getVars: () => widgetVars(rows), ...overrides })
+
+    const widget = (
+      widgetId: string,
+      name = 'Reading list',
+      operation = 'listBooks'
+    ): SecurityObject => ({ type: 'widget', widgetId, name, operation })
+
+    const WIDGET_TOOL = { name: 'widget', operation: 'call' }
+
+    type WidgetExpect = 'allow' | '#0' | '#1'
+
+    /** 断言一次组件判决：放行（default:widget，零命中）或这份策略的哪一条（带记住与 widget 材料） */
+    const expectWidget = (
+      label: string,
+      action: 'read' | 'write',
+      object: SecurityObject,
+      decision: SecurityDecision,
+      expected: WidgetExpect
+    ): void => {
+      const got = {
+        label,
+        effect: decision.effect,
+        tier: decision.tier,
+        winning: decision.winning,
+        matched: decision.matched
+      }
+      if (expected === 'allow') {
+        expect(got).toEqual({
+          label,
+          effect: 'allow',
+          tier: 'default',
+          winning: 'default:widget',
+          matched: []
+        })
+        expect(decision.ask, label).toBeUndefined()
+        expect(decision.prompt, label).toBeUndefined()
+        return
+      }
+      const id = `ask-on-widget-access${expected}`
+      expect(got).toEqual({ label, effect: 'ask', tier: 'ask', winning: id, matched: [id] })
+      const entry = `Widget(${action}, ${String(object.widgetId)})`
+      expect(decision.ask, label).toStrictEqual({
+        command: entry,
+        rememberEntry: entry,
+        widget: {
+          widgetId: object.widgetId,
+          name: object.name,
+          access: action,
+          operation: object.operation
+        }
+      })
+      const policy = byName('ask-on-widget-access')
+      expect(decision.prompt, label).toStrictEqual({
+        text: policy.rules[expected === '#0' ? 0 : 1].prompt,
+        rules: [id],
+        policies: ['Ask Before Using a Widget']
+      })
+    }
+
+    it('WT4-SE-02 行为表：表外的读 → #0、写 → #1（只读的行不免写）；表里的放行（读写隐含读）—— 问的都给「允许并记住」与 widget 材料，零告警', () => {
+      const rows: Array<[string, 'read' | 'write', SecurityObject, WidgetExpect]> = [
+        ['表外的读', 'read', widget('X'), '#0'],
+        ['表外的写', 'write', widget('X', 'Reading list', 'addBook'), '#1'],
+        ['只读的行：读放行', 'read', widget('R'), 'allow'],
+        ['只读的行：写照问', 'write', widget('R', 'Reading list', 'addBook'), '#1'],
+        ['读写的行：读放行（读写隐含读）', 'read', widget('W'), 'allow'],
+        ['读写的行：写放行', 'write', widget('W', 'Reading list', 'addBook'), 'allow']
+      ]
+      const sinks = warnSinks()
+      const provider = widgetProvider(WIDGET_ROWS, { logger: sinks.logger })
+      for (const [label, action, object, expected] of rows) {
+        expectWidget(
+          `${action} ${label}`,
+          action,
+          object,
+          decide(action, object, { provider, warn: sinks.evalWarn, tool: WIDGET_TOOL }),
+          expected
+        )
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('WT4-SE-03 卡片的 operation 取自客体而不是工具维度；客体缺 name / operation → 空串', () => {
+      const provider = widgetProvider([])
+      const viaTool = decide('write', widget('X', 'Reading list', 'addBook'), {
+        provider,
+        tool: { name: 'widget', operation: 'call' }
+      })
+      expect(viaTool.ask?.widget).toStrictEqual({
+        widgetId: 'X',
+        name: 'Reading list',
+        access: 'write',
+        operation: 'addBook'
+      })
+
+      const noName = decide(
+        'read',
+        { type: 'widget', widgetId: 'X', operation: 'listBooks' },
+        { provider, tool: WIDGET_TOOL }
+      )
+      expect(noName.ask?.widget).toStrictEqual({
+        widgetId: 'X',
+        name: '',
+        access: 'read',
+        operation: 'listBooks'
+      })
+
+      const noOperation = decide(
+        'read',
+        { type: 'widget', widgetId: 'X', name: 'Reading list' },
+        { provider, tool: WIDGET_TOOL }
+      )
+      expect(noOperation.ask?.widget).toStrictEqual({
+        widgetId: 'X',
+        name: 'Reading list',
+        access: 'read',
+        operation: ''
+      })
+      expect(noOperation.ask?.command).toBe('Widget(read, X)')
+    })
+
+    it('WT4-SE-04 user 主体与 extension 宿主不受它约束（表外的读 / 写都放行）', () => {
+      const sinks = warnSinks()
+      const provider = widgetProvider([], { logger: sinks.logger })
+      for (const action of ['read', 'write'] as const) {
+        expectWidget(
+          `user ${action}`,
+          action,
+          widget('X'),
+          decide(action, widget('X'), { provider, subjectKind: 'user', warn: sinks.evalWarn }),
+          'allow'
+        )
+        expectWidget(
+          `extension ${action}`,
+          action,
+          widget('X'),
+          decide(action, widget('X'), { provider, host: 'extension', warn: sinks.evalWarn }),
+          'allow'
+        )
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('WT4-SE-05 几张表互不串：路径表 / 会话表里的组件 id 不免组件门；组件表里的路径 / 会话 id 不免路径门 / 会话门', () => {
+      const sinks = warnSinks()
+      // (a) 组件 id 只在路径表里
+      const idInPathTable = makeProvider({
+        logger: sinks.logger,
+        getVars: () => ({
+          ...widgetVars([]),
+          aclRead: [...(DESKTOP_VARS.aclRead as string[]), 'X'],
+          aclWrite: [...(DESKTOP_VARS.aclWrite as string[]), 'X']
+        })
+      })
+      // (b) 组件 id 只在会话表里
+      const idInSessionTable = makeProvider({
+        logger: sinks.logger,
+        getVars: () => ({ ...widgetVars([]), aclSessionRead: ['X'], aclSessionWrite: ['X'] })
+      })
+      for (const [label, provider] of [
+        ['路径表里的组件 id', idInPathTable],
+        ['会话表里的组件 id', idInSessionTable]
+      ] as const) {
+        expectWidget(
+          `${label} · 读`,
+          'read',
+          widget('X'),
+          decide('read', widget('X'), { provider, warn: sinks.evalWarn }),
+          '#0'
+        )
+        expectWidget(
+          `${label} · 写`,
+          'write',
+          widget('X'),
+          decide('write', widget('X'), { provider, warn: sinks.evalWarn }),
+          '#1'
+        )
+      }
+
+      // (c) 一条家目录里的路径写进组件表：路径门照问
+      const notes = `${HOME}/notes.txt`
+      const pathInWidgetTable = makeProvider({
+        logger: sinks.logger,
+        getVars: () => ({ ...DESKTOP_VARS, aclWidgetRead: [notes], aclWidgetWrite: [notes] })
+      })
+      expectShape(
+        '组件表里的路径 · 读',
+        'read',
+        notes,
+        decide('read', at(notes), { provider: pathInWidgetTable, warn: sinks.evalWarn }),
+        '#0'
+      )
+      expectShape(
+        '组件表里的路径 · 写',
+        'write',
+        notes,
+        decide('write', at(notes), { provider: pathInWidgetTable, warn: sinks.evalWarn }),
+        '#1'
+      )
+
+      // (d) 一个会话 id 写进组件表：会话门照问
+      const sessionIdInWidgetTable = makeProvider({
+        logger: sinks.logger,
+        getVars: () => ({
+          ...DESKTOP_VARS,
+          aclSessionRead: [],
+          aclSessionWrite: [],
+          aclWidgetRead: ['S'],
+          aclWidgetWrite: ['S']
+        })
+      })
+      const session: SecurityObject = {
+        type: 'session',
+        sessionId: 'S',
+        title: 'T',
+        ownTurn: false
+      }
+      for (const [action, rule] of [
+        ['read', 'ask-on-session-access#0'],
+        ['write', 'ask-on-session-access#1']
+      ] as const) {
+        expect(
+          decide(action, session, { provider: sessionIdInWidgetTable, warn: sinks.evalWarn }),
+          `组件表里的会话 id · ${action}`
+        ).toMatchObject({ effect: 'ask', tier: 'ask', winning: rule, matched: [rule] })
+      }
+      expect(sinks.evalWarn).not.toHaveBeenCalled()
+      expect(sinks.logWarn).not.toHaveBeenCalled()
+    })
+
+    /** 卡片上的 rememberEntry（`Widget(read|write, <id>)`）→ 宿主 persistWidgetGrant(mode, id) 记下的那一行 */
+    const widgetGrantOf = (entry: string): Pick<AclEntry, 'kind' | 'target' | 'access'> => {
+      const m = /^Widget\((read|write), (.+)\)$/.exec(entry)
+      if (!m) throw new Error(`not a widget entry: ${entry}`)
+      return { kind: 'widget', target: m[2]!, access: m[1] as 'read' | 'write' }
+    }
+
+    it('WT4-SE-06 「允许并记住」往返：记住的读只免读、写照问；记住的写两样都免；别的组件照问', () => {
+      const empty = widgetProvider([])
+      const readAsk = decide('read', widget('X'), { provider: empty })
+      const writeAsk = decide('write', widget('X'), { provider: empty })
+      expect(readAsk.ask?.rememberEntry).toBe('Widget(read, X)')
+      expect(writeAsk.ask?.rememberEntry).toBe('Widget(write, X)')
+
+      const afterRead = widgetProvider([widgetGrantOf(readAsk.ask!.rememberEntry!)])
+      expectWidget(
+        '记住读之后 · 读',
+        'read',
+        widget('X'),
+        decide('read', widget('X'), { provider: afterRead }),
+        'allow'
+      )
+      expectWidget(
+        '记住读之后 · 写',
+        'write',
+        widget('X'),
+        decide('write', widget('X'), { provider: afterRead }),
+        '#1'
+      )
+
+      const afterWrite = widgetProvider([widgetGrantOf(writeAsk.ask!.rememberEntry!)])
+      for (const action of ['read', 'write'] as const) {
+        expectWidget(
+          `记住写之后 · ${action}`,
+          action,
+          widget('X'),
+          decide(action, widget('X'), { provider: afterWrite }),
+          'allow'
+        )
+      }
+      // 记住的是 X：别的组件照问
+      expectWidget(
+        '记住 X 之后 · Y',
+        'read',
+        widget('Y'),
+        decide('read', widget('Y'), { provider: afterWrite }),
+        '#0'
+      )
+    })
+
+    it('WT4-SE-07 宿主没交组件表（缺键）：读 / 写照问、各恰一条 fail-safe 告警（点名规则与缺的键）；装配不记「not provided」', () => {
+      for (const [action, rule, missing] of [
+        ['read', 'ask-on-widget-access#0', 'aclWidgetRead'],
+        ['write', 'ask-on-widget-access#1', 'aclWidgetWrite']
+      ] as const) {
+        const sinks = warnSinks()
+        const provider = makeProvider({ logger: sinks.logger })
+        const decision = decide(action, widget('X'), { provider, warn: sinks.evalWarn })
+        expect(decision).toMatchObject({
+          effect: 'ask',
+          tier: 'ask',
+          winning: rule,
+          matched: [rule]
+        })
+        expect(decision.ask?.rememberEntry).toBe(`Widget(${action}, X)`)
+        expect(sinks.evalWarn).toHaveBeenCalledTimes(1)
+        const message = sinks.evalWarn.mock.calls[0]![0]
+        expect(
+          message.startsWith(
+            `security rule '${rule}': match evaluation failed (No such key: ${missing}`
+          ),
+          message
+        ).toBe(true)
+        expect(message.endsWith('), treating as matched (fail-safe)'), message).toBe(true)
+        expect(sinks.logWarn).not.toHaveBeenCalled()
+      }
+    })
+
+    it('WT4-SE-08 用户的 force-ask 组件门：卡片照样带 widget 材料，但没有「允许并记住」；权限表里的写行免不了它', () => {
+      const forceAsk: ParsedPolicyFile = {
+        name: 'always-ask-widget-writes',
+        displayName: 'Always ask about widget writes',
+        description: '',
+        rules: [
+          { effect: 'force-ask', conditions: { 'object.type': ['widget'], action: ['write'] } }
+        ],
+        body: ''
+      }
+      const sinks = warnSinks()
+      const provider = widgetProvider([{ kind: 'widget', target: 'X', access: 'write' }], {
+        logger: sinks.logger,
+        getUserPolicies: () => [forceAsk]
+      })
+      const decision = decide('write', widget('X', 'Reading list', 'addBook'), {
+        provider,
+        warn: sinks.evalWarn,
+        tool: WIDGET_TOOL
+      })
+      expect(decision).toMatchObject({
+        effect: 'ask',
+        tier: 'force-ask',
+        winning: 'always-ask-widget-writes#0',
+        matched: ['always-ask-widget-writes#0']
+      })
+      expect(decision.ask).toStrictEqual({
+        command: 'Widget(write, X)',
+        widget: { widgetId: 'X', name: 'Reading list', access: 'write', operation: 'addBook' }
+      })
+      expect(decision.ask).not.toHaveProperty('rememberEntry')
+      // 读不在这道门里：表里的行照常放行
+      expectWidget(
+        '只管写的 force-ask · 读',
+        'read',
+        widget('X'),
+        decide('read', widget('X'), { provider, warn: sinks.evalWarn }),
+        'allow'
+      )
       expect(sinks.evalWarn).not.toHaveBeenCalled()
     })
   })

@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:chat
 shuvix-builtin: true
 name: chat
 description: チャットエージェント——どのプロジェクトにも属さないセッションの基盤プロファイル。内蔵ツールを一通り持ち、自分で作業を完了させる。
-shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget
+shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:widget
 shuvix-displayName: チャット
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

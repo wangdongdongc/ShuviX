@@ -377,7 +377,8 @@ export class AgentLock {
     try {
       const builtin = await this.deps.toolHost.buildBuiltinTools({
         sessionId,
-        sandboxed: lock.sandboxed
+        sandboxed: lock.sandboxed,
+        skills: lock.skills
       })
       this.deps.registry.install(builtinExtension(builtin, this.hooks))
     } catch (error) {
@@ -426,7 +427,8 @@ export class AgentLock {
       const tracked: Promise<void> = (async () => {
         const builtin = await toolHost.buildBuiltinTools({
           sessionId,
-          sandboxed: this.record?.sandboxed
+          sandboxed: this.record?.sandboxed,
+          ...(this.record ? { skills: this.record.skills } : {})
         })
         if (registry.snapshot().extension(SHUVIX_BUILTIN_EXTENSION) === undefined) {
           registry.install(builtinExtension(builtin, this.hooks))
@@ -583,7 +585,11 @@ export class AgentLock {
       { kind, sessionId, rootSessionId: sessionId, cwd, toolNames: names, profile }
     )
     cancelled()
-    const builtin = await toolHost.buildBuiltinTools({ sessionId, sandboxed: resolved.sandboxed })
+    const builtin = await toolHost.buildBuiltinTools({
+      sessionId,
+      sandboxed: resolved.sandboxed,
+      skills: resolved.skills
+    })
     cancelled()
 
     const composed = composeAgentTools({ names, builtin, set: resolved })

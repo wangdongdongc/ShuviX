@@ -1,5 +1,6 @@
 /**
- * 会话权限表的派生行（acl/derive.ts）—— 按会话此刻的设置算出应有的 workdir / system / knowledge / skill 行。
+ * 会话权限表的派生行（acl/derive.ts）—— 按会话此刻的设置算出应有的 workdir / system / knowledge / skill /
+ * widgetDir 行。
  * 来源（会话目录、知识库、技能目录）都换成可控的假实现。
  *
  *   DR-1  完整的一份：工作目录（写）、三个会话目录（写）、知识库（写 / 内置库读）、技能目录（读），顺序固定
@@ -10,8 +11,15 @@
  *   DR-6  同一来源的重复行只留一份（技能目录与内置目录重名之类）
  *   DR-7  笔记本会话：多一行 document（可写，紧跟工作目录），路径按工作目录解析相对的 notebookPath、绝对的原样；
  *         settingDirForAcl 拒了就没有这一行
+ *   WT4-AC-13 有读写授权的组件（第二个参数）各派生一行可写的源码目录（widgetDir，sourceKey = 组件 id，目标 =
+ *         settingDirForAcl(~/.shuvix/widgets/<id>)），排在技能之后、按传入顺序；不传 → 没有 widgetDir 行
+ *   WT4-AC-14 不合规的 id 跳过；settingDirForAcl 拒了的那个跳过；取目录抛错 → warn `widget dirs unavailable: …`、
+ *         别的来源照常；重复的 id 只留一行；会话目录算不出 → 一行都没有（组件的也没有）；派生不在家目录里建目录
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 const state = vi.hoisted(() => ({
   own: null as null | {
@@ -26,20 +34,35 @@ const state = vi.hoisted(() => ({
   skillRoots: [] as string[],
   skillsThrow: false,
   rejected: new Set<string>(),
-  notebookPath: null as string | null
+  notebookPath: null as string | null,
+  /** settingDirForAcl 遇到这些目录就抛错（WT4-AC-14） */
+  throwing: new Set<string>(),
+  /** widgetDirPath 的实现（缺省：假家目录下拼；WT4-AC-14 换成抛错的、真的） */
+  widgetDirPath: (id: string): string => `/Users/u/.shuvix/widgets/${id}`,
+  warns: [] as string[]
 }))
 
 vi.mock('../../../logger', () => ({
-  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} })
+  createLogger: () => ({
+    info: () => {},
+    warn: (msg: string) => state.warns.push(msg),
+    error: () => {}
+  })
 }))
-vi.mock('../../../utils/paths', () => ({ getBuiltinSkillsDir: () => '/app/skills/en' }))
+vi.mock('../../../utils/paths', () => ({
+  getBuiltinSkillsDir: () => '/app/skills/en',
+  widgetDirPath: (id: string) => state.widgetDirPath(id)
+}))
 vi.mock('../workdir', () => ({ sessionWorkingDirectory: () => '/Users/u/proj' }))
 vi.mock('../../sessionRecords', () => ({
   sessionRecords: { pickSettings: () => ({ notebookPath: state.notebookPath }) }
 }))
 vi.mock('../../sandbox', () => ({
   sessionOwnDirsView: () => state.own,
-  settingDirForAcl: (dir: string) => (state.rejected.has(dir) ? null : `real:${dir}`)
+  settingDirForAcl: (dir: string) => {
+    if (state.throwing.has(dir)) throw new Error(`cannot resolve ${dir}`)
+    return state.rejected.has(dir) ? null : `real:${dir}`
+  }
 }))
 vi.mock('../../knowledge/sessionBundle', () => ({
   enabledTargets: () => {
@@ -76,6 +99,9 @@ beforeEach(() => {
   state.skillsThrow = false
   state.rejected = new Set()
   state.notebookPath = null
+  state.throwing = new Set()
+  state.widgetDirPath = (id) => `/Users/u/.shuvix/widgets/${id}`
+  state.warns = []
 })
 
 const rows = (): string[] =>
@@ -149,5 +175,85 @@ describe('derivePathEntries', () => {
 
     state.rejected = new Set(['/Users/u/.shuvix/agents/coding.md'])
     expect(rows().some((r) => r.startsWith('document:'))).toBe(false)
+  })
+})
+
+describe('derivePathEntries —— 组件源码目录（widgetDir）', () => {
+  const widgetRows = (widgets?: readonly string[]): string[] =>
+    derivePathEntries('s1', widgets)
+      .filter((e) => e.source === 'widgetDir')
+      .map((e) => `${e.sourceKey}:${e.target}:${e.access}`)
+
+  it('WT4-AC-13 每个有读写授权的组件一行可写的源码目录，排在技能之后、按传入顺序；不传 → 没有', () => {
+    const all = derivePathEntries('s1', ['w-a', 'w-b'])
+    expect(all.slice(-2)).toEqual([
+      {
+        source: 'widgetDir',
+        sourceKey: 'w-a',
+        target: 'real:/Users/u/.shuvix/widgets/w-a',
+        access: 'write'
+      },
+      {
+        source: 'widgetDir',
+        sourceKey: 'w-b',
+        target: 'real:/Users/u/.shuvix/widgets/w-b',
+        access: 'write'
+      }
+    ])
+    // 前面照旧是完整的一份（DR-1）
+    expect(
+      all.slice(0, -2).map((e) => `${e.source}:${e.sourceKey}:${e.target}:${e.access}`)
+    ).toEqual(rows())
+    expect(widgetRows(['w-b', 'w-a'])).toEqual([
+      'w-b:real:/Users/u/.shuvix/widgets/w-b:write',
+      'w-a:real:/Users/u/.shuvix/widgets/w-a:write'
+    ])
+    expect(widgetRows()).toEqual([])
+    expect(widgetRows([])).toEqual([])
+    expect(state.warns).toEqual([])
+  })
+
+  it('WT4-AC-14 不合规的 id 跳过；settingDirForAcl 拒了的跳过；重复的只留一行', () => {
+    state.rejected = new Set(['/Users/u/.shuvix/widgets/w-b'])
+    expect(widgetRows(['nodash', 'w-a', '../x-y', 'A-b', '', 'w-b', 'w-a', 'w-c'])).toEqual([
+      'w-a:real:/Users/u/.shuvix/widgets/w-a:write',
+      'w-c:real:/Users/u/.shuvix/widgets/w-c:write'
+    ])
+    expect(state.warns).toEqual([])
+  })
+
+  it('WT4-AC-14 取目录抛错 → warn、组件那一类没有，别的来源照常', () => {
+    state.throwing = new Set(['/Users/u/.shuvix/widgets/w-a'])
+    const all = derivePathEntries('s1', ['w-a'])
+    expect(all.some((e) => e.source === 'widgetDir')).toBe(false)
+    expect(all.map((e) => `${e.source}:${e.sourceKey}:${e.target}:${e.access}`)).toEqual(rows())
+    expect(state.warns).toEqual([
+      'widget dirs unavailable: cannot resolve /Users/u/.shuvix/widgets/w-a'
+    ])
+
+    state.throwing = new Set()
+    state.warns = []
+    state.widgetDirPath = () => {
+      throw new Error('no home')
+    }
+    expect(widgetRows(['w-a'])).toEqual([])
+    expect(state.warns).toEqual(['widget dirs unavailable: no home'])
+    expect(rows()).toHaveLength(10)
+  })
+
+  it('WT4-AC-14 会话目录算不出：一行都不派生，组件的也没有', () => {
+    state.own = null
+    expect(derivePathEntries('s1', ['w-a', 'w-b'])).toEqual([])
+  })
+
+  it('WT4-AC-14 派生只拼路径：用真的 widgetDirPath，家目录里不建任何目录', async () => {
+    const actual =
+      await vi.importActual<typeof import('../../../utils/paths')>('../../../utils/paths')
+    state.widgetDirPath = actual.widgetDirPath
+    const id = `wt4-derive-${process.pid}-${Date.now()}`
+    const dir = join(homedir(), '.shuvix', 'widgets', id)
+    expect(existsSync(dir)).toBe(false)
+    expect(widgetRows([id])).toEqual([`${id}:real:${dir}:write`])
+    expect(existsSync(dir)).toBe(false)
   })
 })

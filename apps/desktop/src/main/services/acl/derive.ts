@@ -1,12 +1,14 @@
 /**
- * 会话权限表的派生行 —— 按会话**此刻**的设置算出来的那几行（workdir / document / system / knowledge / skill）。
+ * 会话权限表的派生行 —— 按会话**此刻**的设置算出来的那几行（workdir / document / system / knowledge / skill /
+ * widgetDir）。
  * 对账（index.ts 的 sync）拿它与表里已有的派生行比，补上缺的、删掉过时的。
  *
  * 跟着会话里勾的东西走，不是要人维护的白名单。读不到（库扫描失败之类）就少给 —— 多问，不放行。
  */
 import type { DerivedAclSource, PathAccess } from '@shuvix/chat-protocol/sessionAcl'
 import { createLogger } from '../../logger'
-import { getBuiltinSkillsDir } from '../../utils/paths'
+import { WIDGET_ID_REGEX } from '../widget/widgetRegistry'
+import { getBuiltinSkillsDir, widgetDirPath } from '../../utils/paths'
 import { resolveToCwd } from '../../utils/toolUtils/pathUtils'
 import { enabledTargets } from '../knowledge/sessionBundle'
 import { sessionOwnDirsView, settingDirForAcl } from '../sandbox'
@@ -32,8 +34,14 @@ export interface DerivedPathEntry {
   access: PathAccess
 }
 
-/** 一条会话此刻应有的派生行（顺序即界面上的顺序：工作目录、笔记本文档、会话目录、知识库、技能） */
-export function derivePathEntries(sessionId: string): DerivedPathEntry[] {
+/**
+ * 一条会话此刻应有的派生行（顺序即界面上的顺序：工作目录、笔记本文档、会话目录、知识库、技能、组件源码目录）
+ */
+export function derivePathEntries(
+  sessionId: string,
+  /** 这条会话有读写授权的组件（表里授予的组件行，由 index.ts 交进来 —— 本文件不读存储） */
+  writableWidgets: readonly string[] = []
+): DerivedPathEntry[] {
   const workingDirectory = sessionWorkingDirectory(sessionId)
   const own = sessionOwnDirsView(sessionId, workingDirectory)
   // 坏会话 id / 算不出会话目录：一行都不派生（多问）
@@ -82,6 +90,17 @@ export function derivePathEntries(sessionId: string): DerivedPathEntry[] {
     }
   } catch (err) {
     log.warn(`skill dirs unavailable: ${(err as Error).message}`)
+  }
+
+  // 有读写授权的组件：它的源码目录可写（改组件的代码与写它的数据是同一道授权，见 chat-protocol sessionAcl.ts）
+  try {
+    for (const widgetId of writableWidgets) {
+      if (!WIDGET_ID_REGEX.test(widgetId)) continue
+      const dir = settingDirForAcl(widgetDirPath(widgetId))
+      if (dir) out.push({ source: 'widgetDir', sourceKey: widgetId, target: dir, access: 'write' })
+    }
+  } catch (err) {
+    log.warn(`widget dirs unavailable: ${(err as Error).message}`)
   }
 
   // 同一来源的同一行只留一份（唯一索引的口径）

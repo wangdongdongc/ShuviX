@@ -223,6 +223,7 @@ const DARWIN_BUILTINS = [
   'artifact',
   'session',
   'knowledge',
+  'widget',
   'doc_read',
   'doc_edit',
   'doc_insert',
@@ -484,6 +485,28 @@ describe('buildBuiltinTools', () => {
     expect(sessionOf).not.toHaveBeenCalled()
     s2.agentOf!(1)
     expect(sessionOf.mock.calls).toEqual([['s2']])
+  })
+
+  // 根 agent 的技能货架经会话级 ctx 交给每个内置工具：`widget` 据此决定讲不讲造组件的那组动作
+  // （货架 → 描述 / schema 那一半在 tools/__tests__/widgetTool.test.ts 的 WT4-TL-01）
+  it.each([
+    ['有 widget 技能', ['builtin:drawing', 'builtin:widget']],
+    ['只有别的技能', ['builtin:drawing']],
+    ['空货架', []]
+  ])('WT4-TL-28 %s：widget 的工厂拿到的 ctx.rootSkills 就是交来的 skills', async (_l, skills) => {
+    await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false, skills })
+    const widget = factoryCalls.find((c) => c.name === 'widget')
+    expect(widget).toBeDefined()
+    expect(widget!.ctx.rootSkills).toEqual(skills)
+    // 会话级的那一份：每个内置工具看到的是同一个 ctx、同一份货架
+    for (const call of factoryCalls) expect(call.ctx).toBe(widget!.ctx)
+  })
+
+  it('WT4-TL-28 没给 skills（还没有 agent 时的那一份）：ctx 上没有 rootSkills 键', async () => {
+    await host.buildBuiltinTools({ sessionId: 's1', sandboxed: false })
+    const widget = factoryCalls.find((c) => c.name === 'widget')
+    expect(widget).toBeDefined()
+    expect('rootSkills' in widget!.ctx).toBe(false)
   })
 
   it('H11-06 一个工厂抛错：其余照装、没有它，记一条点名它的警告（PIN-05）', async () => {

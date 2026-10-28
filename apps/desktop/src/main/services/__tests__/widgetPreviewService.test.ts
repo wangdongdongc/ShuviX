@@ -15,6 +15,11 @@
  *   U-PV-10…15 某个尺寸失败别的照截、加载超时、收尾、console 与 did-fail-load、错误上限（B11）
  *   U-PV-16…19 导航守卫（B7）、分区、排队、挂载等待
  *   U-PV-20…23 每一步的超时（B3）、弹框（B4）、会话 id（B5）、窗口选项（不打扰用户，SIGSEGV 回归）
+ *   WT4-PV-15 预览分区的补令牌钩子（真的跑 webRequest 监听者）：预览进行中，这个组件自己页面发的请求带 `preview` 令牌、
+ *             载荷是发起预览的会话；别的组件的请求什么都不带；跑完之后（含每个尺寸都失败的那次）谁都不带，页面冒充的
+ *             头去掉；从来不是 ui 令牌
+ *   WT4-PV-16 没有会话的预览：令牌照样是 preview 范围，只是没有会话（绝不退回 ui）
+ *   WT4-PV-17 两个排队的预览：A 在跑时 B 的请求拿不到令牌；轮到 B 时令牌写的是 B 与它的会话
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
@@ -203,7 +208,8 @@ vi.mock('../widget', async () => {
       },
       startWidget: fx.startWidget
     },
-    widgetServer: { lastBuildErrors: fx.lastBuildErrors }
+    // 预览分区的补令牌钩子现取 widget 服务的端口
+    widgetServer: { lastBuildErrors: fx.lastBuildErrors, getStatus: () => ({ port: 4567 }) }
   }
 })
 vi.mock('../../utils/paths', async (importOriginal) => {
@@ -287,6 +293,7 @@ beforeEach(async () => {
   fx.fakeSession.setPermissionRequestHandler.mockClear()
   fx.fakeSession.setPermissionCheckHandler.mockClear()
   fx.fakeSession.on.mockClear()
+  fx.fakeSession.webRequest.onBeforeSendHeaders.mockClear()
   fx.shell.openExternal.mockClear()
   fx.startWidget.mockReset()
   fx.startWidget.mockImplementation(async (id: string) => {
@@ -352,10 +359,14 @@ describe('parsePreviewSizes', () => {
     )
   })
 
-  it.each([42, ['phone'], {}, true])('U-PS-7 non-string %j throws', (raw) => {
+  it.each([42, {}, true, [42]])('U-PS-7 not a string or a list of strings %j throws', (raw) => {
     expect(() => svc.parsePreviewSizes(raw)).toThrow(
-      new Error('size must be a comma-separated list')
+      new Error('sizes must be a list of size names')
     )
+  })
+
+  it('U-PS-8 a list of names (the widget tool passes an array) → those sizes in order', () => {
+    expect(svc.parsePreviewSizes(['Phone', 'panel'])).toEqual(['panel', 'phone'])
   })
 })
 
@@ -432,7 +443,7 @@ describe('previewWidget: before any window', () => {
         id: ID,
         theme: theme ?? 'app',
         images: [],
-        errors: ['the widget does not build: run `shuvix widget build pv-x` and fix buildErrors']
+        errors: ['the widget does not build: build it and fix buildErrors first']
       })
       expect(windows()).toHaveLength(0)
       expect(existsSync(previewDir('sess-1'))).toBe(false)
@@ -448,7 +459,7 @@ describe('previewWidget: before any window', () => {
       id: ID,
       theme: 'app',
       images: [],
-      errors: ['the widget does not build: run `shuvix widget build pv-x` and fix buildErrors']
+      errors: ['the widget does not build: build it and fix buildErrors first']
     })
     expect(fx.lastBuildErrors).toHaveBeenCalledWith(ID)
     expect(windows()).toHaveLength(0)
@@ -1043,5 +1054,131 @@ describe('previewWidget: session id and window options', () => {
         expect(spy, w.size).not.toHaveBeenCalled()
       }
     }
+  })
+})
+
+describe('WT4-PV preview partition tokens', () => {
+  type Headers = Record<string, string>
+  type TokenListener = (
+    details: {
+      url: string
+      referrer: string
+      resourceType?: string
+      frame?: { url: string } | null
+      requestHeaders: Headers
+    },
+    cb: (r: { requestHeaders: Headers }) => void
+  ) => void
+  type TokenModule = typeof import('../widget/widgetToken')
+
+  /** 预览分区上装的那个监听者（每条用例重新导入模块，取最后装的那个） */
+  const listener = (): TokenListener => {
+    const calls = fx.fakeSession.webRequest.onBeforeSendHeaders.mock.calls
+    expect(calls.length).toBeGreaterThan(0)
+    return calls.at(-1)![1] as TokenListener
+  }
+  /** 从 `from` 组件的页面向 `to` 组件的 api 发一个 fetch，回补过头之后的请求头 */
+  const fetchFrom = (from: string, to: string, headers: Headers = {}): Headers => {
+    let out: Headers = {}
+    listener()(
+      {
+        url: `${URL_OF(to)}api/listBooks`,
+        referrer: '',
+        resourceType: 'xhr',
+        frame: { url: URL_OF(from) },
+        requestHeaders: { Accept: '*/*', ...headers }
+      },
+      (r) => (out = r.requestHeaders)
+    )
+    return out
+  }
+  /** 与服务同一份模块实例（密钥是模块级的随机串） */
+  const tokens = (): Promise<TokenModule> => import('../widget/widgetToken')
+
+  it('WT4-PV-15 while capturing: this widget gets a preview token for the session; others and afterwards get nothing', async () => {
+    const t = await tokens()
+    const during: Array<{ own: Headers; other: Headers }> = []
+    fx.hooks.loadURL = (_wc, url) => {
+      if (url.startsWith(URL_OF(ID))) {
+        during.push({ own: fetchFrom(ID, ID), other: fetchFrom('pv-y', 'pv-y') })
+      }
+      return Promise.resolve()
+    }
+
+    await run(svc.previewWidget(ID, { sizes: ['panel'], sessionId: 'sess-1' }))
+
+    expect(during).toHaveLength(1)
+    const own = during[0].own[t.WIDGET_TOKEN_HEADER]
+    expect(t.verifyWidgetToken(own, ID)).toStrictEqual({ scope: 'preview', sessionId: 'sess-1' })
+    expect(t.widgetTokenScope(own, ID)).not.toBe('ui')
+    expect(during[0].other).toEqual({ Accept: '*/*' })
+
+    // 跑完了：谁都不补，页面冒充的头去掉
+    const forged = t.issueWidgetToken(ID, 'ui')
+    expect(fetchFrom(ID, ID, { 'X-Shuvix-Widget-Token': forged })).toEqual({ Accept: '*/*' })
+  })
+
+  it('WT4-PV-15 after a run where every size failed: nothing is injected', async () => {
+    const t = await tokens()
+    let duringScope: unknown = 'unset'
+    fx.hooks.loadURL = (_wc, url) => {
+      if (url.startsWith(URL_OF(ID)) && duringScope === 'unset') {
+        duringScope = t.verifyWidgetToken(fetchFrom(ID, ID)[t.WIDGET_TOKEN_HEADER], ID)
+      }
+      return Promise.resolve()
+    }
+    fx.hooks.capture = (wc) =>
+      Promise.resolve(new fx.FakeImage(wc.spec.width, wc.spec.height, wc.size, true))
+
+    const out = await run(svc.previewWidget(ID, { sessionId: 'sess-1' }))
+
+    expect(out.images).toEqual([])
+    expect(out.errors).toHaveLength(3)
+    expect(duringScope).toStrictEqual({ scope: 'preview', sessionId: 'sess-1' })
+    expect(
+      fetchFrom(ID, ID, { [t.WIDGET_TOKEN_HEADER]: t.issueWidgetToken(ID, 'preview', 'sess-1') })
+    ).toEqual({ Accept: '*/*' })
+  })
+
+  it('WT4-PV-16 no session: still a preview token, just without a session (never ui)', async () => {
+    const t = await tokens()
+    const seen: unknown[] = []
+    fx.hooks.loadURL = (_wc, url) => {
+      if (url.startsWith(URL_OF(ID))) {
+        seen.push(t.verifyWidgetToken(fetchFrom(ID, ID)[t.WIDGET_TOKEN_HEADER], ID))
+      }
+      return Promise.resolve()
+    }
+
+    const out = await run(svc.previewWidget(ID, { sizes: ['panel'] }))
+    madeTmpDirs.push(dirname(out.images[0].path))
+
+    expect(seen).toEqual([{ scope: 'preview' }])
+    expect(seen[0]).toStrictEqual({ scope: 'preview' })
+  })
+
+  it('WT4-PV-17 two queued previews: B gets nothing while A runs; then B and its session', async () => {
+    const t = await tokens()
+    const A = 'pv-a'
+    const B = 'pv-b'
+    const seen: Record<string, { a: unknown; b: unknown }> = {}
+    fx.hooks.loadURL = (_wc, url) => {
+      for (const id of [A, B]) {
+        if (url.startsWith(URL_OF(id)) && !seen[id]) {
+          seen[id] = {
+            a: t.verifyWidgetToken(fetchFrom(A, A)[t.WIDGET_TOKEN_HEADER], A),
+            b: t.verifyWidgetToken(fetchFrom(B, B)[t.WIDGET_TOKEN_HEADER], B)
+          }
+        }
+      }
+      return Promise.resolve()
+    }
+
+    const first = svc.previewWidget(A, { sizes: ['panel'], sessionId: 'sess-1' })
+    const second = svc.previewWidget(B, { sizes: ['phone'], sessionId: 'sess-2' })
+    await run(Promise.all([first, second]))
+
+    expect(seen[A]).toEqual({ a: { scope: 'preview', sessionId: 'sess-1' }, b: null })
+    expect(seen[B]).toEqual({ a: null, b: { scope: 'preview', sessionId: 'sess-2' } })
   })
 })

@@ -1,7 +1,7 @@
 /**
  * widget 路由的令牌（widgetToken.ts）—— 按 widget 签发、由宿主补在请求头上。
  *
- *   WT-1  签发 / 校验：JWT 形状（三段、HS256 头）；对签发它的 widget 回它的范围（ui / cli）；同一 widget 同一范围稳定
+ *   WT-1  签发 / 校验：JWT 形状（三段、HS256 头）；对签发它的 widget 回它的范围（ui / preview）；同一 widget 同一范围稳定
  *   WT-2  校验拒绝：别的 widget 的、改过载荷的、改过签名的、换了头的、段数不对的、不是字符串的、数组、载荷不是 JSON、
  *         范围不认识的 → null
  *   WT-3  widgetIdOf：本机这个端口上 `/w/<id>/…`（含没有尾斜杠的 `/w/<id>`）→ id；别的端口 / 主机 / https / 不是 widget
@@ -12,11 +12,18 @@
  *         父 frame 或 Referer 是**别的** widget 的页面 → 不补；目标不是 widget 路由 → 不补
  *   WT-6  installWidgetTokens：钩在 127.0.0.1 / localhost 上；该补的补上那个 widget 的 ui 令牌（服务端认得出）；页面
  *         冒充的同名头（任何大小写）一律去掉；其余头原样；frame 访问抛错当作没有；端口现取
+ *   WT4-PV-01 preview 令牌带会话：载荷 `{w, s:'preview', sid}`，验出 `{scope:'preview', sessionId}`；ui 验出来没有
+ *         sessionId 键；preview 不带会话 / 会话是空串 / 会话不是字符串（签名照样有效）→ `{scope:'preview'}`；
+ *         widgetTokenScope 照旧只回范围
+ *   WT4-PV-02 签名有效但范围是旧的 `cli` → null；B 的 preview 令牌拿到 A 上 → null
+ *   WT4-PV-03 installWidgetTokens 自带 `issue`：补它交回的那个、只补给那个 widget；交回 null → 不补，页面冒充的头
+ *         照样去掉；不该补的请求根本不问 issue；不给 issue 照旧补 ui
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   installWidgetTokens,
   issueWidgetToken,
+  verifyWidgetToken,
   WIDGET_TOKEN_HEADER,
   widgetIdOf,
   widgetToInject,
@@ -41,7 +48,9 @@ describe('签发与校验', () => {
       s: 'ui'
     })
     expect(widgetTokenScope(ui, 'photo-wall')).toBe('ui')
-    expect(widgetTokenScope(issueWidgetToken('photo-wall', 'cli'), 'photo-wall')).toBe('cli')
+    expect(widgetTokenScope(issueWidgetToken('photo-wall', 'preview', 's1'), 'photo-wall')).toBe(
+      'preview'
+    )
     expect(issueWidgetToken('photo-wall', 'ui')).toBe(ui)
   })
 
@@ -219,5 +228,124 @@ describe('installWidgetTokens', () => {
         requestHeaders: { 'X-Shuvix-Widget-Token': issueWidgetToken('a-b', 'ui'), A: '1' }
       })
     ).toEqual({ A: '1' })
+  })
+})
+
+describe('WT4-PV preview 令牌的范围与会话', () => {
+  const payloadOf = (token: string): unknown =>
+    JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
+
+  it('WT4-PV-01 preview 带会话、ui 不带；没有 / 空 / 不是字符串的会话 → 只有范围', () => {
+    const preview = issueWidgetToken('photo-wall', 'preview', 's1')
+    expect(payloadOf(preview)).toStrictEqual({ w: 'photo-wall', s: 'preview', sid: 's1' })
+    expect(verifyWidgetToken(preview, 'photo-wall')).toStrictEqual({
+      scope: 'preview',
+      sessionId: 's1'
+    })
+
+    const ui = issueWidgetToken('photo-wall', 'ui')
+    expect(verifyWidgetToken(ui, 'photo-wall')).toStrictEqual({ scope: 'ui' })
+    expect('sessionId' in verifyWidgetToken(ui, 'photo-wall')!).toBe(false)
+
+    const noSession = issueWidgetToken('photo-wall', 'preview')
+    expect(payloadOf(noSession)).toStrictEqual({ w: 'photo-wall', s: 'preview' })
+    const emptySession = issueWidgetToken('photo-wall', 'preview', '')
+    expect(payloadOf(emptySession)).toStrictEqual({ w: 'photo-wall', s: 'preview', sid: '' })
+    // 签名有效、会话却不是字符串（只可能是宿主自己签错了）：不当成会话
+    const numericSession = issueWidgetToken('photo-wall', 'preview', 123 as never)
+    expect(payloadOf(numericSession)).toStrictEqual({ w: 'photo-wall', s: 'preview', sid: 123 })
+    for (const token of [noSession, emptySession, numericSession]) {
+      expect(verifyWidgetToken(token, 'photo-wall'), token).toStrictEqual({ scope: 'preview' })
+      expect(widgetTokenScope(token, 'photo-wall'), token).toBe('preview')
+    }
+
+    expect(widgetTokenScope(preview, 'photo-wall')).toBe('preview')
+    expect(widgetTokenScope(ui, 'photo-wall')).toBe('ui')
+  })
+
+  it('WT4-PV-02 旧的 cli 范围（签名有效）→ null；别的 widget 的 preview 令牌 → null', () => {
+    const cli = issueWidgetToken('photo-wall', 'cli' as never)
+    expect(payloadOf(cli)).toStrictEqual({ w: 'photo-wall', s: 'cli' })
+    expect(verifyWidgetToken(cli, 'photo-wall')).toBeNull()
+    expect(widgetTokenScope(cli, 'photo-wall')).toBeNull()
+
+    const ofB = issueWidgetToken('book-shelf', 'preview', 's1')
+    expect(verifyWidgetToken(ofB, 'photo-wall')).toBeNull()
+    expect(widgetTokenScope(ofB, 'photo-wall')).toBeNull()
+    expect(verifyWidgetToken(ofB, 'book-shelf')).toStrictEqual({
+      scope: 'preview',
+      sessionId: 's1'
+    })
+  })
+
+  it('WT4-PV-03 installWidgetTokens 的 issue：补它给的、只给那个 widget；null 不补也去掉冒充的头', () => {
+    type Listener = (
+      d: {
+        url: string
+        referrer: string
+        resourceType?: string
+        frame?: { url: string } | null
+        requestHeaders: Record<string, string>
+      },
+      cb: (r: { requestHeaders: Record<string, string> }) => void
+    ) => void
+    const install = (issue?: (id: string) => string | null): Listener => {
+      let listener: Listener | undefined
+      installWidgetTokens(
+        {
+          webRequest: {
+            onBeforeSendHeaders: (_f: unknown, l: Listener) => {
+              listener = l
+            }
+          }
+        } as never,
+        () => PORT,
+        issue
+      )
+      return listener!
+    }
+    const send = (
+      listener: Listener,
+      id: string,
+      from: string,
+      extra: Record<string, string> = {}
+    ): Record<string, string> => {
+      let out: Record<string, string> = {}
+      listener(
+        {
+          url: `${BASE}/w/${id}/api/listBooks`,
+          referrer: '',
+          resourceType: 'xhr',
+          frame: { url: `${BASE}/w/${from}/` },
+          requestHeaders: { Accept: '*/*', ...extra }
+        },
+        (r) => (out = r.requestHeaders)
+      )
+      return out
+    }
+
+    const issue = vi.fn((id: string) => (id === 'a-b' ? `custom-for-${id}` : null))
+    const listener = install(issue)
+
+    // a-b 的页面打 a-b：补 issue 给的那个
+    expect(send(listener, 'a-b', 'a-b')).toEqual({
+      Accept: '*/*',
+      [WIDGET_TOKEN_HEADER]: 'custom-for-a-b'
+    })
+    expect(issue.mock.calls).toEqual([['a-b']])
+
+    // c-d 的页面打 c-d：issue 交回 null → 不补；页面冒充的头照样去掉
+    expect(
+      send(listener, 'c-d', 'c-d', { 'X-Shuvix-Widget-Token': issueWidgetToken('c-d', 'ui') })
+    ).toEqual({ Accept: '*/*' })
+    expect(issue.mock.calls).toEqual([['a-b'], ['c-d']])
+
+    // c-d 的页面打 a-b（不该补）：根本不问 issue
+    expect(send(listener, 'a-b', 'c-d')).toEqual({ Accept: '*/*' })
+    expect(issue).toHaveBeenCalledTimes(2)
+
+    // 不给 issue：照旧补 ui
+    const fallback = send(install(), 'a-b', 'a-b')
+    expect(verifyWidgetToken(fallback[WIDGET_TOKEN_HEADER], 'a-b')).toStrictEqual({ scope: 'ui' })
   })
 })

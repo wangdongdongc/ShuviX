@@ -2,13 +2,14 @@
  * 锁 · 重开（SQLite，模拟的进程重启；裁决 K8、K11、K12 + option A）：锁 = 「agent 在本进程里初始化过」——
  * 带着被中断的工作重启，锁熬过去：打开时、在任何续跑 / 发送之前按锁记录完整初始化（重建工具、当场连锁
  * 记着的 MCP）—— 不读配置、不解析工具、不写 pi.agent；同一进程里关了再开照旧只重建（不连）；镜像对账；
- * 重建失败或锁写坏了会话照样能打开，锁被清掉。空闲重启清锁见 `lock.processInit.test.ts`。
+ * 重建失败或锁写坏了会话照样能打开，锁被清掉。空闲重启清锁见 `lock.processInit.test.ts`。内置工具按锁里记着的技能
+ * 货架重装（货架空了也交 `[]`，LR-14 / WT4-DL-02）。
  */
 import { AgentDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
 import { backgroundContext as BG } from '../context'
 import { SessionStateDoc } from '../docs'
-import { DECL_DOCS, DECL_RESOLVE, scenarioToolHost } from './support/agentConfig'
+import { DECL_DOCS, DECL_RESOLVE, scenarioConfig, scenarioToolHost } from './support/agentConfig'
 import { answer, callTool, requestTools, stalled } from './support/faux'
 import type { DurableSession } from '../durableSession'
 import { registerHostCleanup } from './support/host'
@@ -69,7 +70,9 @@ describe('lock · reopen', () => {
         'mcp__ctx__docs'
       ])
       expect(toolDescription(t2, 'shuvix.builtin', 'bash')).toContain('sandboxed=true')
-      expect(t2.toolHost.builtinCalls).toEqual([{ sessionId: 's1', sandboxed: true }])
+      expect(t2.toolHost.builtinCalls).toEqual([
+        { sessionId: 's1', sandboxed: true, skills: ['builtin:drawing', 'pdf'] }
+      ])
       expect(t2.toolHost.rebuildCalls).toEqual([lock])
       expect(t2.toolHost.rebuildContexts[0]!.connect).toBeDefined()
       expect(t2.configCalls).toEqual([])
@@ -234,7 +237,9 @@ describe('lock · reopen', () => {
         toolHost: scenarioToolHost({ sandbox: false })
       })
       const reopened = await t2.open()
-      expect(t2.toolHost.builtinCalls).toEqual([{ sessionId: 's1', sandboxed: true }])
+      expect(t2.toolHost.builtinCalls).toEqual([
+        { sessionId: 's1', sandboxed: true, skills: ['builtin:drawing', 'pdf'] }
+      ])
       t2.kit.queue(answer('two'))
       expect(await withTimeout(reopened.continue(), 5000, 'continue')).toEqual({})
       expect(requestTools(t2.kit, 0).find((tool) => tool.name === 'bash')!.description).toContain(
@@ -245,7 +250,11 @@ describe('lock · reopen', () => {
       await reopened.destroyAgent()
       t2.kit.queue(answer('three'))
       expect(await reopened.submitUser('u3')).toEqual({})
-      expect(t2.toolHost.builtinCalls.at(-1)).toEqual({ sessionId: 's1', sandboxed: false })
+      expect(t2.toolHost.builtinCalls.at(-1)).toEqual({
+        sessionId: 's1',
+        sandboxed: false,
+        skills: ['builtin:drawing', 'pdf']
+      })
       expect(reopened.lock!.sandboxed).toBe(false)
       expect(requestTools(t2.kit, 1).find((tool) => tool.name === 'bash')!.description).toContain(
         'sandboxed=false'
@@ -415,6 +424,36 @@ describe('lock · reopen', () => {
       expect(t2.mirror).toEqual([['s1', false]])
       expect(t2.toolHost.rebuildCalls).toEqual([])
       expect(await reopened.harness.snapshot(AgentDoc, ROOT_CONVERSATION_ID, BG)).toEqual({})
+    },
+    REOPEN_TIMEOUT
+  )
+
+  it(
+    'LR-14 (WT4-DL-02) a resumable lock stored with an empty shelf: the reopen hands buildBuiltinTools `skills: []` from the record',
+    async () => {
+      const config = scenarioConfig()
+      config.profile = {
+        ...config.profile,
+        tools: config.profile.tools.filter((name) => !name.startsWith('skill:'))
+      }
+      config.toolOverlay = ['mcp:ctx']
+      const { t } = await scenarioW({ config })
+      const session = await t.open()
+      t.kit.queue(answer('one'))
+      expect(await session.submitUser('u1')).toEqual({})
+      expect(session.lock!.skills).toEqual([])
+
+      const t2 = await stallThenRestart(t, session)
+      const reopened = await t2.open()
+      expect(reopened.isInterrupted()).toBe(true)
+      expect(reopened.lock!.skills).toEqual([])
+      expect(t2.toolHost.builtinCalls).toHaveLength(1)
+      expect(t2.toolHost.builtinCalls[0]).toStrictEqual({
+        sessionId: 's1',
+        sandboxed: true,
+        skills: []
+      })
+      expect(t2.toolHost.resolveCalls).toEqual([])
     },
     REOPEN_TIMEOUT
   )

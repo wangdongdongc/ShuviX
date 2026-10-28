@@ -65,12 +65,17 @@ import {
   guardAppWindow,
   routeExternalUrl
 } from './services/externalOpen'
-import { widgetServer, widgetRuntime } from './services/widget'
+import {
+  setWidgetPreviewJudge,
+  widgetServer,
+  widgetRuntime,
+  widgetService
+} from './services/widget'
 import { installWidgetTokens } from './services/widget/widgetToken'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { cliServer } from './services/cliServer'
 import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
-import { setAclSkillRoots } from './services/acl'
+import { sessionAcl, setAclSkillRoots } from './services/acl'
 import { skillService } from './services/skillService'
 import { mdMetaStore } from './services/mdMeta'
 import { agentService } from './services/agentService'
@@ -96,6 +101,7 @@ import { runLegacySwitchover } from './services/legacySwitchover'
 import { isReviewerIdentity, reviewPermissionRequest } from './services/permissionReview'
 import {
   getDesktopNetworkSecurityContext,
+  getDesktopSecurityContext,
   setCommandClassifier,
   setPermissionReviewer
 } from './services/toolContext'
@@ -1020,6 +1026,24 @@ app.whenReady().then(async () => {
   app.on('before-quit', () => builtinTimer.stop())
   // 询问点的自动审查：安全模块的 onPermissionRequest 经判定型 hook 回答（注入而非 import —— 见 toolContext）
   setPermissionReviewer(reviewPermissionRequest, isReviewerIdentity)
+  // 组件删掉了：各会话权限表里授权用它的行一并删掉（复用同一个 id 的新组件不继承旧授权）
+  widgetService.onDeleted((widgetId) => sessionAcl.deleteWidget(widgetId))
+  // 组件预览页面的请求按发起预览的会话判：只判不问（预览窗口没人看着），同 judgeGate
+  setWidgetPreviewJudge({
+    widget: (sessionId, access, widgetId, operation) =>
+      getDesktopSecurityContext({ sessionId }).judgeGate(access, {
+        type: 'widget',
+        widgetId,
+        name: '',
+        operation
+      }).allowed,
+    readPath: (sessionId, path) =>
+      getDesktopSecurityContext({ sessionId }).judgeGate('read', {
+        type: 'path',
+        path,
+        displayPath: path
+      }).allowed
+  })
   // 命令风险分类：同样注入（它要模型注册表）；每次分类记一行分类器日志
   // 自动脱敏出口的策略判定：同样注入（它要安全模块）
   setRedactionPolicy(desktopRedactionPolicy)

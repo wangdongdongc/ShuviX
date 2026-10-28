@@ -67,6 +67,9 @@ function summarizeObject(request: SecurityRequest): string {
   if (object.type === 'session' && typeof object.sessionId === 'string') {
     return `session ${object.sessionId}`
   }
+  if (object.type === 'widget' && typeof object.widgetId === 'string') {
+    return `widget ${object.widgetId}`
+  }
   return object.type
 }
 
@@ -102,6 +105,9 @@ function displayName(request: SecurityRequest, opts: EnforceOpts): string {
   if (object.type === 'session' && typeof object.title === 'string' && object.title) {
     return `session "${object.title}" (${String(object.sessionId)})`
   }
+  if (object.type === 'widget' && typeof object.name === 'string' && object.name) {
+    return `widget "${object.name}" (${String(object.widgetId)})`
+  }
   return summarizeObject(request)
 }
 
@@ -117,6 +123,10 @@ function deniedMessage(request: SecurityRequest, display: string): string {
     case 'session':
       return request.action === 'write'
         ? `User denied talking to ${display}`
+        : `User denied reading ${display}`
+    case 'widget':
+      return request.action === 'write'
+        ? `User denied changing data in ${display}`
         : `User denied reading ${display}`
     default:
       return `User denied ${display}`
@@ -373,6 +383,7 @@ export async function executeDecision(args: {
         }
       : undefined,
     ...(decision.ask?.session ? { session: decision.ask.session } : {}),
+    ...(decision.ask?.widget ? { widget: decision.ask.widget } : {}),
     createdAt: Date.now()
   })
 
@@ -397,7 +408,7 @@ export async function executeDecision(args: {
     throw new Error((response.kind === 'ask' && response.reason) || deniedMessage(request, display))
   }
 
-  // 「允许并记住」：路径询问带 `extra.rememberPath`（可以点名所在的文件夹），会话询问带 `extra.remember`
+  // 「允许并记住」：路径询问带 `extra.rememberPath`（可以点名所在的文件夹），会话 / 组件询问带 `extra.remember`
   const object = request.object
   const mode = request.action === 'write' ? 'write' : 'read'
   const rememberPath =
@@ -406,7 +417,12 @@ export async function executeDecision(args: {
     response.extra?.remember === true &&
     object.type === 'session' &&
     typeof object.sessionId === 'string'
-  const remember = (rememberPath || rememberSession) && !!decision.ask?.rememberEntry
+  const rememberWidget =
+    response.extra?.remember === true &&
+    object.type === 'widget' &&
+    typeof object.widgetId === 'string'
+  const remember =
+    (rememberPath || rememberSession || rememberWidget) && !!decision.ask?.rememberEntry
   if (remember && rememberPath) {
     provider.persistGrant?.(
       mode,
@@ -414,6 +430,10 @@ export async function executeDecision(args: {
     )
   } else if (remember && rememberSession) {
     provider.persistSessionGrant?.(mode, String(object.sessionId))
+  } else if (remember && rememberWidget) {
+    // 读操作的卡片可以一次记成可读写（`extra.rememberAccess: 'write'`）；只会放宽、不会收窄这次问的访问方式
+    const access = response.extra?.rememberAccess === 'write' ? 'write' : mode
+    provider.persistWidgetGrant?.(access, String(object.widgetId))
   }
   record(remember ? 'allowed_remember' : 'allowed', true, review)
   return { status: 'allowed' }

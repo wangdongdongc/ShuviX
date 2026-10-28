@@ -11,7 +11,8 @@
  *  - RL-15..17：人设只随技能变、在同一变量表下比（日期之类的波动不重发）、旧锁不动人设；
  *  - RL-18..21：运行中（下一次请求起生效、在途请求不受影响、被拿掉的工具 tool_unavailable、发送等重配）；
  *  - RL-22..29：合流、失败、取消（销毁 / 回退 / 关停取消，停下不取消 F3）、与创建 / 销毁串行；
- *  - RL-30..34：关了再开、重启、连续重配的差异形状。
+ *  - RL-30..34：关了再开、重启、连续重配的差异形状；
+ *  - RL-35（WT4-DL-04）：加技能的重配不重装内置工具，重启后按新记录的货架重装。
  */
 import { ROOT_CONVERSATION_ID, type Extension } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
@@ -960,6 +961,38 @@ describe('lock · reconfigure: reopen and restart', () => {
       expect(t2.toolHost.rebuildCalls).toEqual([record])
       expect(t2.toolHost.mcp('new').connects).toBe(1)
       expect(t2.toolHost.mcp('ctx').connects).toBe(1)
+    },
+    TIMEOUT
+  )
+
+  it(
+    'RL-35 (WT4-DL-04) a reconfigure that adds a skill does not rebuild the builtins; a restart with resumable work rebuilds them with the new shelf from the updated record',
+    async () => {
+      const { t, config, session } = await lockedW({
+        toolHost: scenarioToolHost({ skills: ['builtin:drawing', 'pdf', 'builtin:widget'] })
+      })
+      expect(t.toolHost.builtinCalls).toEqual([
+        { sessionId: 's1', sandboxed: true, skills: ['builtin:drawing', 'pdf'] }
+      ])
+      config.toolOverlay = [...OVERLAY, 'skill:builtin:widget']
+      expect((await reconfigure(session)).applied).toBe(true)
+      const record = session.lock!
+      expect(record.skills).toContain('builtin:widget')
+      expect(record.skills).toEqual(expect.arrayContaining(['builtin:drawing', 'pdf']))
+      // 重配不重装内置工具（会话级、按根 agent 的货架定描述的那几个工具到重建时才跟上）
+      expect(t.toolHost.builtinCalls).toHaveLength(1)
+
+      const stall = stalled()
+      t.kit.queue(stall.step)
+      void session.submitUser('stalled')
+      await withTimeout(stall.reached, 5000, 'stalled')
+      const t2 = await t.restart()
+      const reopened = await t2.open()
+      expect(reopened.isInterrupted()).toBe(true)
+      expect(reopened.lock).toEqual(record)
+      expect(t2.toolHost.builtinCalls).toStrictEqual([
+        { sessionId: 's1', sandboxed: true, skills: record.skills }
+      ])
     },
     TIMEOUT
   )

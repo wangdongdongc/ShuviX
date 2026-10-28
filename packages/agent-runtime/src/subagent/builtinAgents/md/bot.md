@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:bot
 shuvix-builtin: true
 name: bot
 description: The bot agent — the base profile of a bot session. It talks to the user in its own voice and does the work itself. Override it with a custom agent named "bot".
-shuvix-tools: read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, skill:builtin:drawing, skill:builtin:tracking
+shuvix-tools: read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:tracking
 shuvix-displayName: Bot
 shuvix-project-awareness: true
 ---

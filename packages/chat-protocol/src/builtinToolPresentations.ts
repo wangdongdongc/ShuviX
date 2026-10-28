@@ -167,6 +167,14 @@ export const BUILTIN_TOOL_PRESENTATIONS: Record<string, BuiltinToolPresentationD
         .filter(Boolean)
         .join(' · ') || undefined
   },
+  widget: {
+    labelKey: 'tool.widgetLabel',
+    presentation: { icon: 'Wrench', iconColor: '#f59e0b' },
+    // action · 组件 · 操作（call）—— 用组件时一眼看出动的是哪个组件的哪个操作
+    buildSummary: (args) =>
+      [asStr(args.action), asStr(args.widget), asStr(args.op)].filter(Boolean).join(' · ') ||
+      undefined
+  },
   agent: {
     labelKey: 'tool.agentLabel',
     presentation: { icon: 'Bot' },

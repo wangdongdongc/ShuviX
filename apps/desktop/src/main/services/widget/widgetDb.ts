@@ -1,13 +1,13 @@
 /**
- * Widget DB —— widget 端 REST API 与 CLI db-* 子命令的共享服务层
+ * Widget DB（老组件的共用 PGlite）—— widget 端 REST API 与 `widget` 工具 `sql` 动作的共享服务层
  *
  * 职责：
  *   1. 懒启动共享 pglite worker（~/.shuvix/widgets-db/data）
  *   2. 把 PostgREST 风格的请求翻译成参数化 SQL，并在 widget 自己的 schema 下跑
- *   3. 暴露 db-init / db-query 两类操作（CLI 调用）
+ *   3. 暴露结构（db-init）与调试 SQL（`sql` 动作的 `legacy`）两类操作
  *
  * 隔离：每个 widget id 自动映射到独占 schema widget_<sanitized-id>。
- *      REST 层强制 schema-qualify，CLI db-query 内部 SET search_path 并对 SQL
+ *      REST 层强制 schema-qualify，调试 SQL 内部 SET search_path 并对 SQL
  *      做"跨 widget 引用"正则前置校验。
  */
 
@@ -143,7 +143,7 @@ async function runQuery(sql: string, params: unknown[]): Promise<RestResult> {
   }
 }
 
-/** 在共享 worker 上跑 psql 文本 SQL（CLI db-query 入口） */
+/** 在共享 worker 上跑 psql 文本 SQL（`widget` 工具 `sql` 的入口） */
 async function runExecute(sql: string): Promise<{ output: string; error?: string }> {
   await ensureWorker()
   const id = genId()
@@ -363,7 +363,7 @@ export async function dropWidgetSchema(widgetId: string): Promise<void> {
   }
 }
 
-// ────────────────────────── 调试 SQL（widget db-query） ──────────────────────────
+// ────────────────────────── 调试 SQL（`widget` 工具的 sql） ──────────────────────────
 
 /**
  * 在 widget schema 下跑裸 SQL（psql 文本输出，复用 execute 路径）。

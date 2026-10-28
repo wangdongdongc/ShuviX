@@ -41,6 +41,7 @@ import {
   type SecurityHostProvider,
   type SecuritySubject,
   type SessionObjectInput,
+  type WidgetObjectInput,
   type UserPolicyFile
 } from '@shuvix/agent-runtime'
 import type { ProjectEnvVar } from '../types'
@@ -108,6 +109,12 @@ export interface ToolContext {
    * 缺省 = 按此刻的全局开关给一份占位（还没有 agent 时的那份内置工具）。
    */
   sandboxed?: boolean
+  /**
+   * 根 agent 的技能货架（会话级装配时由宿主给：创建时解析出来的 / 锁里记着的；还没有 agent 时缺省）。会话级的
+   * 内置工具被同一会话的每个 agent 共用，`widget` 工具据此决定描述里讲不讲造组件的那组动作（调用时再按发起
+   * 调用的 agent 自己的货架核对一次）
+   */
+  rootSkills?: readonly string[]
 }
 
 // 调用方身份的两个纯函数住在 toolAgent.ts（不带任何服务依赖 —— 工具模块与它们的单测直接引那里）
@@ -251,6 +258,34 @@ export async function assertSessionAccess(
   )
 }
 
+/**
+ * 组件使用的 PEP（`widget` 工具每个要授权的动作都过这里）：read = 调读操作、预览；write = 调写操作、改组件
+ * （构建、跑 SQL、导出）。出厂的 ask-on-widget-access 在会话权限表里没有覆盖这次访问的组件行时询问；「允许并
+ * 记住」记进权限表（persistWidgetGrant）。拒绝 / 取消 / 反馈时抛错，文案给模型。
+ */
+export async function assertWidgetAccess(
+  ctx: ToolContext,
+  access: 'read' | 'write',
+  object: WidgetObjectInput,
+  opts: {
+    toolCallId: string
+    toolName: string
+    /** `widget` 工具的动作名（策略里的 tool.operation） */
+    operation: string
+    owner?: CallOwner
+    signal?: AbortSignal
+  }
+): Promise<void> {
+  await getDesktopSecurityContext(ctx).enforceWidget(access, object, {
+    toolCallId: opts.toolCallId,
+    ...opts.owner,
+    toolName: opts.toolName,
+    operation: opts.operation,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+    abortError: TOOL_ABORTED
+  })
+}
+
 const securityLog = createLogger('Security')
 
 /**
@@ -314,14 +349,15 @@ function hostPolicyVars(
 /**
  * 桌面 SecurityHostProvider —— 把平台细节注入共享安全模块：
  *   - 变量表：会话权限表 aclRead / aclWrite（与命令沙箱同一份，见 services/acl）、aclSessionRead /
- *     aclSessionWrite（可以查看 / 对话的别的会话）/ home / workspace 等
+ *     aclSessionWrite（可以查看 / 对话的别的会话）、aclWidgetRead / aclWidgetWrite（可以只读 / 读写的组件）/
+ *     home / workspace 等
  *     事实变量（策略 match/lets 里的 vars.*）
  *   - 真实路径：realPath（符号链接 / `..` / 盘上大小写）—— 安全模块拿它解析路径客体与 inDir 比较的
  *     每个目录，两边都按位置比。变量表因此照写法给即可：工作区、临时工作区（macOS 的
  *     /var → /private/var 这类系统级链接）由 inDir 现解析，不在这里预先 realpath
  *   - 内置策略：随包发布的 `builtin-policies/` 目录现读（policyService.readBuiltinPolicyMd）
  *   - 用户策略：~/.shuvix/policies 现扫（policyService）
- *   - persistGrant / persistSessionGrant 写进会话权限表（「允许并记住」）、statSync 判目录、前端 requestUserInput 透传
+ *   - persistGrant / persistSessionGrant / persistWidgetGrant 写进会话权限表（「允许并记住」）、statSync 判目录、前端 requestUserInput 透传
  *
  * 全部成员每次评估现读 —— 不跨调用缓存。context 实例在建会话时创建一次、整会话复用
  * （buildTools → makeDesktopFileToolDeps），若在此缓存权限表，则会话中途
@@ -342,12 +378,16 @@ export function makeDesktopSecurityProvider(
       const acl = sessionAcl.pathView(ctx.sessionId)
       // 会话种类的行（ask-on-session-access 读 aclSessionRead / aclSessionWrite）：这条会话可以查看 / 对话的别的会话
       const sessions = sessionAcl.sessionView(ctx.sessionId)
+      // 组件种类的行（ask-on-widget-access 读 aclWidgetRead / aclWidgetWrite）：这条会话可以只读 / 读写的组件
+      const widgets = sessionAcl.widgetView(ctx.sessionId)
       return {
         ...hostPolicyVars(ctx.sessionId, workingDirectory),
         aclRead: acl.read,
         aclWrite: acl.write,
         aclSessionRead: sessions.read,
-        aclSessionWrite: sessions.write
+        aclSessionWrite: sessions.write,
+        aclWidgetRead: widgets.read,
+        aclWidgetWrite: widgets.write
       }
     },
     // 仅影响内置策略的人读面（description/body/规则 prompt）；规则的判定字段恒取 en
@@ -366,6 +406,7 @@ export function makeDesktopSecurityProvider(
     },
     persistGrant: (mode, p) => void sessionAcl.grantPath(ctx.sessionId, p, mode),
     persistSessionGrant: (mode, id) => void sessionAcl.grantSession(ctx.sessionId, id, mode),
+    persistWidgetGrant: (mode, id) => void sessionAcl.grantWidget(ctx.sessionId, id, mode),
     requestUserInput: ctx.requestUserInput,
     // 每次调用现取注入的审查者（provider 可整会话复用，注入发生在启动时）
     onPermissionRequest: (event, signal) =>
@@ -488,6 +529,8 @@ export function getDesktopSecurityContext(
     enforceUrl: (object, opts) => forCall(opts).enforceUrl(object, withRestored(opts)),
     enforceSession: (mode, object, opts) =>
       forCall(opts).enforceSession(mode, object, withRestored(opts)),
+    enforceWidget: (mode, object, opts) =>
+      forCall(opts).enforceWidget(mode, object, withRestored(opts)),
     enforceInvocation: (opts) => forCall(opts).enforceInvocation(withRestored(opts))
   }
 }

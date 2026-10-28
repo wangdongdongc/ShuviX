@@ -476,7 +476,13 @@
     "askRememberFile": "允许，并记住这个文件",
     "askRememberDirectory": "允许，并记住这个文件夹",
     "askRememberFolder": "允许，并记住所在的文件夹",
-    "askRememberSession": "允许，并记住这条会话"
+    "askRememberSession": "允许，并记住这条会话",
+    "widgetAskRead": "读组件",
+    "widgetAskWrite": "改组件",
+    "widgetAskOperation": "操作",
+    "widgetAskUnnamed": "未命名组件",
+    "askRememberWidgetRead": "允许，并记住：可以读这个组件",
+    "askRememberWidgetWrite": "允许，并记住：可以读写这个组件"
   },
   "sessionConfig": {
     "title": "会话配置",
@@ -496,6 +502,7 @@
       "document": "笔记本文档",
       "user": "你授予的",
       "widget": "Widget {{name}}",
+      "widgetDir": "组件文件夹 {{name}}",
       "knowledge": "知识库 {{name}}",
       "skill": "技能目录",
       "tmp": "临时目录",
@@ -518,7 +525,12 @@
     "sessionsDescription": "这条会话的智能体使用这些会话不用问你 —— 查看它们的答复，或者还能与它们对话。它自己的子会话不需要这一行；别的会话会先问你，在询问卡片上「允许并记住」就会加到这里。",
     "sessionRead": "查看",
     "sessionWrite": "对话",
-    "sessionUntitled": "未命名会话"
+    "sessionUntitled": "未命名会话",
+    "widgetsTitle": "组件访问",
+    "widgetsDescription": "这条会话的智能体使用这些组件不用问你 —— 调它们的读操作，或者所有操作都能调、还能改组件本身（构建、对它的数据跑 SQL、改它的文件夹）。这条会话自己建的组件一开始就在这里；别的组件会先问你，在询问卡片上「允许并记住」就会加到这里。",
+    "widgetRead": "只读",
+    "widgetWrite": "读写",
+    "widgetUnnamed": "已删除的组件"
   },
   "projectForm": {
     "createTitle": "新建项目",
@@ -1173,6 +1185,8 @@
     },
     "sessionLabel": "会话",
     "sessionHint": "读改本任务所属的会话 —— 重命名，以及创建并驱动子会话",
+    "widgetLabel": "组件",
+    "widgetHint": "经组件自己的操作使用用户的组件，以及造组件",
     "knowledgeLabel": "知识库",
     "knowledgeHint": "检索本会话的知识库，并把条目提交给知识库写手检查",
     "agentLabel": "派发子智能体",

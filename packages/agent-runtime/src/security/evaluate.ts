@@ -141,9 +141,10 @@ export function buildMatchContext(
 
 /**
  * ask 决策的询问材料 —— 按客体属性推导（匹配不看 type，材料/展示要看）：
- * path 给 `Read(...)` / `Write(...)` 形态的条目、session 给 `Session(read|write, <id>)`（卡片上的展示文本，也是
- * 「允许并记住」的依据 —— 记下的是会话权限表的一行；force-ask 胜出时不给，见下）；其余类型按「主展示属性」回退链
- * （command → sql → 工具名 → type）取原文，没有记忆条目（会话权限表只有路径与会话）。
+ * path 给 `Read(...)` / `Write(...)` 形态的条目、session 给 `Session(read|write, <id>)`、widget 给
+ * `Widget(read|write, <id>)`（卡片上的展示文本，也是「允许并记住」的依据 —— 记下的是会话权限表的一行；force-ask
+ * 胜出时不给，见下）；其余类型按「主展示属性」回退链（command → sql → 工具名 → type）取原文，没有记忆条目
+ * （会话权限表只有路径、会话与组件）。
  */
 function buildAskMaterials(
   request: SecurityRequest,
@@ -180,6 +181,21 @@ function buildAskMaterials(
     return tier === 'force-ask'
       ? { command: entry, session }
       : { command: entry, rememberEntry: entry, session }
+  }
+  // 组件：条目 `Widget(read|write, <id>)` 同会话 —— 记下的是会话权限表里 `kind: 'widget'` 的一行；卡片按 `widget`
+  // 渲染（组件名、这次的操作、只读 / 读写）。force-ask 不给记住，同路径
+  if (object.type === 'widget' && typeof object.widgetId === 'string') {
+    const access = request.action === 'write' ? 'write' : 'read'
+    const entry = `Widget(${access}, ${object.widgetId})`
+    const widget = {
+      widgetId: object.widgetId,
+      name: typeof object.name === 'string' ? object.name : '',
+      access,
+      operation: typeof object.operation === 'string' ? object.operation : ''
+    } as const
+    return tier === 'force-ask'
+      ? { command: entry, widget }
+      : { command: entry, rememberEntry: entry, widget }
   }
   // 远端命令把目标机器写进卡片：用户批准一条 `rm -rf` 时，必须看得见它要跑在哪台机器上
   if (typeof object.command === 'string') {

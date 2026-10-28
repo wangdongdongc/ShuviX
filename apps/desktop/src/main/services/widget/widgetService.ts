@@ -112,7 +112,16 @@ export interface BuildWidgetOptions {
   message?: string
 }
 
+/** 组件被删掉之后要知道的人（本模块不反向依赖它们：启动时注册，见 main/index.ts） */
+const deletedListeners = new Set<(widgetId: string) => void>()
+
 class WidgetService {
+  /** 组件删掉之后（目录与账目都删了）调；交回取消注册 */
+  onDeleted(listener: (widgetId: string) => void): () => void {
+    deletedListeners.add(listener)
+    return () => deletedListeners.delete(listener)
+  }
+
   /** 获取某个 widget 在本地文件系统上的根目录 */
   getWidgetDir(id: string): string {
     return join(getWidgetsDir(), id)
@@ -165,7 +174,7 @@ class WidgetService {
     if (!applied) return // 从未经 db-init 应用过：不替用户执行没跑过的 DDL
     if (applied !== schemaFingerprint(saved)) {
       log.warn(
-        `${SCHEMA_FILE} of ${widget.id} differs from the last applied schema — skipping replay; run \`shuvix widget db-init\` to apply it`
+        `${SCHEMA_FILE} of ${widget.id} differs from the last applied schema — skipping replay`
       )
       return
     }
@@ -392,7 +401,7 @@ class WidgetService {
   }
 
   /**
-   * 在组件的库上跑一段 SQL（`shuvix widget db-query`）→ 表格文本。SQLite 组件经组件宿主（带 ATTACH / VACUUM /
+   * 在组件的库上跑一段 SQL（`widget` 工具的 `sql`）→ 表格文本。SQLite 组件经组件宿主（带 ATTACH / VACUUM /
    * PRAGMA 的检查，见 api/sqlGuard.ts），老组件照旧走共用 PGlite
    */
   async dbQuery(id: string, sql: string): Promise<{ output: string; error?: string }> {
@@ -422,6 +431,14 @@ class WidgetService {
     // 所以宁可留着条目，让状态和事实保持一致。
     if (dirGone) {
       widgetRegistry.deleteById(id)
+      // 告诉关心的人（会话权限表删掉授权用它的行 —— 否则复用同一个 id 的新组件会继承旧授权；见 main/index.ts）
+      for (const listener of deletedListeners) {
+        try {
+          listener(id)
+        } catch (err) {
+          log.warn(`widget deleted listener failed widget=${id}: ${(err as Error).message}`)
+        }
+      }
       // 顺带清掉数据，否则复用同一个 id 会静默继承旧数据：SQLite 组件删它的数据目录，老组件删共享 pglite 里的 schema
       if (widgetStorageOf(id) === 'sqlite') await removeWidgetData(id)
       else await dropWidgetSchema(id)

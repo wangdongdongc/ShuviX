@@ -9,11 +9,18 @@
  *   W-3 状态码：invalid_args 400；unknown_op / no_api 404；自定义码与 failed 422；internal / bad_output / too_large /
  *       out_of_memory 500；interrupted / host_* 503；timeout 504；正文 {error:{code,message}}；意外的抛错 → 500 internal，
  *       下一个请求照常
- *   W-4 没有 / 乱写 / 别的组件的令牌 → 403 JSON FORBIDDEN；cli 令牌 → caller {kind:'agent', actor:'cli', label:'cli'}；
+ *   W-4 没有 / 乱写 / 别的组件的令牌 → 403 JSON FORBIDDEN；
  *       没注册的组件 → 404
  *   W-5 SQLite 组件的 /db（任何方法）→ 404 NO_DB_ROUTE，不调 handleRestRequest；PGlite 组件的 /db 照旧
  *   W-6 监听者收到 A 的变化 → A 的 SSE 连接收到 `event: data\ndata: {"op":"addBook","source":"agent"}\n\n`，B 的什么都没有；
  *       不认识的 id 不抛；reload 事件照旧
+ *   WT4-PV-10 preview 令牌（会话 s1）+ 快照里的读操作 + 判定放行 → 200；caller 是那条会话的 agent（actor/label preview），
+ *       选项 {allowUiOnly, expectedMode:'read'}；判定拿到 (s1, read, id, op)
+ *   WT4-PV-11 判定只放行读：写操作 → 403 not_authorized、不调 callWidgetOp；读操作 → 200
+ *   WT4-PV-12 认得的操作 + preview 令牌不带会话 / 没注入判定 → 403 not_authorized；不带会话时判定不问
+ *   WT4-PV-13 快照里没有这个操作 / 根本没有快照 → 判定不问，交给 callWidgetOp（没有 expectedMode），它的 404 原样回
+ *   WT4-PV-14 ui 令牌调写操作、纯界面操作 → caller 用户、选项只有 allowUiOnly，不读快照、不问判定
+ *   WT4-PV-10b 判了授权之后 callWidgetOp 报 changed（其间重新构建改了读写）→ 409 {error:{code:'changed'}}
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import {
@@ -55,6 +62,11 @@ const h = vi.hoisted(() => {
         result: { outcome: { ok: true, value: { id: 1 } }, wrote: true, logs: [] }
       })
     ),
+    /** readApiSnapshot 的返回（预览令牌按它判读 / 写）；null = 没有快照 */
+    snapshot: null as null | {
+      ops: Array<{ name: string; mode: 'read' | 'write'; agent?: boolean }>
+    },
+    readApiSnapshot: vi.fn((_id: string): unknown => null),
     handleRestRequest: vi.fn(async () => ({ rows: [{ a: 1 }] as unknown[] })),
     build: vi.fn(async () => ({ success: true, outputJS: 'js', outputCSS: 'css' }))
   }
@@ -66,6 +78,7 @@ vi.mock('../api/widgetApi', () => ({
     h.listeners.push(fn)
     return () => {}
   },
+  readApiSnapshot: h.readApiSnapshot,
   WidgetApiError: h.WidgetApiError,
   widgetStorageOf: (id: string) => h.storage[id] ?? 'pglite'
 }))
@@ -81,7 +94,7 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
 
-import { widgetServer } from '../widgetServer'
+import { setWidgetPreviewJudge, widgetServer } from '../widgetServer'
 import { issueWidgetToken, WIDGET_TOKEN_HEADER } from '../widgetToken'
 
 const A = 'book-shelf'
@@ -209,6 +222,8 @@ beforeEach(async () => {
   h.storage = { [A]: 'sqlite', [B]: 'sqlite', [OLD]: 'pglite' }
   h.callWidgetOp.mockClear()
   h.handleRestRequest.mockClear()
+  h.snapshot = null
+  h.readApiSnapshot.mockReset().mockImplementation(() => h.snapshot)
   await widgetServer.registerAndBuild(A, tmp, 'index.tsx')
   await widgetServer.registerAndBuild(B, tmp, 'index.tsx')
   await widgetServer.registerAndBuild(OLD, tmp, 'index.tsx')
@@ -217,6 +232,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   widgetServer.dispose()
+  setWidgetPreviewJudge(null)
   rmSync(tmp, { recursive: true, force: true })
 })
 
@@ -230,7 +246,13 @@ describe('W-1 调用一个操作', () => {
     expect(res.headers['content-type']).toBe('application/json; charset=utf-8')
     expect(res.json).toEqual({ result: { id: 1 } })
     expect(h.callWidgetOp.mock.calls).toEqual([
-      [A, 'addBook', { title: 'Dune', n: 2 }, { kind: 'user', label: 'user' }]
+      [
+        A,
+        'addBook',
+        { title: 'Dune', n: 2 },
+        { kind: 'user', label: 'user' },
+        { allowUiOnly: true }
+      ]
     ])
   })
 
@@ -368,24 +390,13 @@ describe('W-4 令牌与注册', () => {
     ['空令牌', ''],
     ['乱写的令牌', 'garbage.token'],
     ['别的组件的令牌', issueWidgetToken(B, 'ui')],
-    ['别的组件的 cli 令牌', issueWidgetToken(B, 'cli')]
+    ['别的组件的预览令牌', issueWidgetToken(B, 'preview', 's1')]
   ])('W-4 %s → 403 JSON FORBIDDEN，不调 callWidgetOp', async (_l, token) => {
     const res = await http(`/w/${A}/api/addBook`, { token, body: '{}' })
     expect(res.status).toBe(403)
     expect((res.json as { code: string }).code).toBe('FORBIDDEN')
     expect(typeof (res.json as { message: unknown }).message).toBe('string')
     expect(h.callWidgetOp).not.toHaveBeenCalled()
-  })
-
-  it('W-4 cli 令牌 → caller {kind:agent, actor:cli, label:cli}', async () => {
-    const res = await http(`/w/${A}/api/addBook`, {
-      token: issueWidgetToken(A, 'cli'),
-      body: '{"a":1}'
-    })
-    expect(res.status).toBe(200)
-    expect(h.callWidgetOp.mock.calls).toEqual([
-      [A, 'addBook', { a: 1 }, { kind: 'agent', actor: 'cli', label: 'cli' }]
-    ])
   })
 
   it('W-4 ui 令牌 → caller {kind:user, label:user}（没有 actor / sessionId）', async () => {
@@ -482,5 +493,155 @@ describe('W-6 SSE 的 data 事件', () => {
     } finally {
       a.close()
     }
+  })
+})
+
+// ────────────────────────────── WT4-PV（预览令牌） ──────────────────────────────
+
+describe('WT4-PV 预览页面调 API：按发起预览的会话判', () => {
+  const SNAPSHOT = {
+    ops: [
+      { name: 'listBooks', mode: 'read' as const, agent: true },
+      { name: 'addBook', mode: 'write' as const, agent: true },
+      { name: 'saveLayout', mode: 'write' as const, agent: false }
+    ]
+  }
+  const preview = (sid?: string): string => issueWidgetToken(A, 'preview', sid)
+  const judge = (
+    allow: (access: 'read' | 'write') => boolean
+  ): { widget: ReturnType<typeof vi.fn>; readPath: ReturnType<typeof vi.fn> } => {
+    const j = {
+      widget: vi.fn((_sid: string, access: 'read' | 'write', _id: string, _op: string) =>
+        allow(access)
+      ),
+      readPath: vi.fn(() => false)
+    }
+    setWidgetPreviewJudge(j)
+    return j
+  }
+  const AGENT = { kind: 'agent', sessionId: 's1', actor: 'preview', label: 'preview' }
+
+  beforeEach(() => {
+    h.snapshot = SNAPSHOT
+  })
+
+  it('WT4-PV-10 读操作 + 放行 → 200；caller 是会话的 agent，选项带 expectedMode', async () => {
+    const j = judge(() => true)
+    h.callWidgetOp.mockResolvedValueOnce({
+      op: 'listBooks',
+      mode: 'read',
+      result: { outcome: { ok: true, value: [{ id: 1 }] }, wrote: false, logs: [] }
+    })
+
+    const res = await http(`/w/${A}/api/listBooks`, {
+      token: preview('s1'),
+      body: JSON.stringify({ status: 'read' })
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.json).toEqual({ result: [{ id: 1 }] })
+    expect(j.widget.mock.calls).toEqual([['s1', 'read', A, 'listBooks']])
+    expect(h.callWidgetOp.mock.calls).toEqual([
+      [A, 'listBooks', { status: 'read' }, AGENT, { allowUiOnly: true, expectedMode: 'read' }]
+    ])
+    expect(h.callWidgetOp.mock.calls[0][3]).toStrictEqual(AGENT)
+  })
+
+  it('WT4-PV-10b 判了授权之后 callWidgetOp 报 changed → 409', async () => {
+    judge(() => true)
+    h.callWidgetOp.mockRejectedValueOnce(
+      new h.WidgetApiError('changed', 'Operation "listBooks" is now a write operation.')
+    )
+    const res = await http(`/w/${A}/api/listBooks`, { token: preview('s1'), body: '{}' })
+    expect(res.status).toBe(409)
+    expect(res.json).toEqual({
+      error: { code: 'changed', message: 'Operation "listBooks" is now a write operation.' }
+    })
+    expect(h.callWidgetOp.mock.calls[0][4]).toEqual({ allowUiOnly: true, expectedMode: 'read' })
+  })
+
+  it('WT4-PV-11 只放行读：写操作 403 not_authorized、不调；读操作 200', async () => {
+    const j = judge((access) => access === 'read')
+
+    const write = await http(`/w/${A}/api/addBook`, { token: preview('s1'), body: '{}' })
+    expect(write.status).toBe(403)
+    expect(write.json).toEqual({
+      error: {
+        code: 'not_authorized',
+        message:
+          "This preview's session may not call write operations of this widget without asking."
+      }
+    })
+    expect(h.callWidgetOp).not.toHaveBeenCalled()
+
+    const read = await http(`/w/${A}/api/listBooks`, { token: preview('s1'), body: '{}' })
+    expect(read.status).toBe(200)
+    expect(h.callWidgetOp).toHaveBeenCalledTimes(1)
+    expect(h.callWidgetOp.mock.calls[0][1]).toBe('listBooks')
+    expect(j.widget.mock.calls).toEqual([
+      ['s1', 'write', A, 'addBook'],
+      ['s1', 'read', A, 'listBooks']
+    ])
+  })
+
+  it('WT4-PV-12 认得的操作 + 不带会话的 preview 令牌 → 403，判定不问', async () => {
+    const j = judge(() => true)
+    for (const token of [preview(), preview('')]) {
+      const res = await http(`/w/${A}/api/listBooks`, { token, body: '{}' })
+      expect(res.status).toBe(403)
+      expect((res.json as { error: { code: string } }).error.code).toBe('not_authorized')
+    }
+    expect(j.widget).not.toHaveBeenCalled()
+    expect(h.callWidgetOp).not.toHaveBeenCalled()
+  })
+
+  it('WT4-PV-12 认得的操作 + 没注入判定 → 403 not_authorized', async () => {
+    setWidgetPreviewJudge(null)
+    for (const op of ['listBooks', 'addBook']) {
+      const res = await http(`/w/${A}/api/${op}`, { token: preview('s1'), body: '{}' })
+      expect(res.status, op).toBe(403)
+      expect((res.json as { error: { code: string } }).error.code, op).toBe('not_authorized')
+    }
+    expect(h.callWidgetOp).not.toHaveBeenCalled()
+  })
+
+  it('WT4-PV-13 快照里没有这个操作 → 判定不问，交给 callWidgetOp（没有 expectedMode），404 原样回', async () => {
+    const j = judge(() => false)
+    h.callWidgetOp.mockRejectedValueOnce(
+      new h.WidgetApiError('unknown_op', 'Widget "book-shelf" has no operation "nope".')
+    )
+    const res = await http(`/w/${A}/api/nope`, { token: preview('s1'), body: '{}' })
+    expect(res.status).toBe(404)
+    expect(res.json).toEqual({
+      error: { code: 'unknown_op', message: 'Widget "book-shelf" has no operation "nope".' }
+    })
+    expect(j.widget).not.toHaveBeenCalled()
+    expect(h.callWidgetOp.mock.calls).toEqual([[A, 'nope', {}, AGENT, { allowUiOnly: true }]])
+  })
+
+  it('WT4-PV-13 根本没有快照 → 判定不问，callWidgetOp 的 no_api 404 原样回', async () => {
+    h.snapshot = null
+    const j = judge(() => false)
+    h.callWidgetOp.mockRejectedValueOnce(new h.WidgetApiError('no_api', 'no api'))
+    const res = await http(`/w/${A}/api/listBooks`, { token: preview('s1'), body: '{}' })
+    expect(res.status).toBe(404)
+    expect(res.json).toEqual({ error: { code: 'no_api', message: 'no api' } })
+    expect(j.widget).not.toHaveBeenCalled()
+    expect(h.callWidgetOp.mock.calls[0][4]).toStrictEqual({ allowUiOnly: true })
+  })
+
+  it('WT4-PV-14 ui 令牌调写操作、纯界面操作 → 用户、只有 allowUiOnly，不读快照、不问判定', async () => {
+    const j = judge(() => false)
+    for (const op of ['addBook', 'saveLayout']) {
+      const res = await http(`/w/${A}/api/${op}`, { body: '{}' })
+      expect(res.status, op).toBe(200)
+    }
+    expect(h.callWidgetOp.mock.calls).toEqual([
+      [A, 'addBook', {}, { kind: 'user', label: 'user' }, { allowUiOnly: true }],
+      [A, 'saveLayout', {}, { kind: 'user', label: 'user' }, { allowUiOnly: true }]
+    ])
+    expect(h.callWidgetOp.mock.calls[0][4]).toStrictEqual({ allowUiOnly: true })
+    expect(j.widget).not.toHaveBeenCalled()
+    expect(h.readApiSnapshot).not.toHaveBeenCalled()
   })
 })

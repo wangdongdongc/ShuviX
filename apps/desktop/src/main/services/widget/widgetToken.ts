@@ -6,11 +6,14 @@
  * 进程 —— 沙箱里的命令被关在会话目录里，却能 `curl` 这台服务（沙箱放行 IP 出站），经 `fs/` 读家目录里的任何
  * 文件、经 `db/` 读写任何一个 widget 的数据。
  *
- * 令牌：JWT（HS256）形状的 `header.payload.signature`，载荷 `{ w: <widgetId>, s: 'ui' | 'cli' }`。密钥是本进程
- * 启动时生成、只在主进程内存里的随机串（不设过期：重启后密钥与端口都会换，旧令牌自然作废）。两种范围：
- *   - `ui`：widget 的界面（面板里的 iframe、独立窗口、预览的离屏窗口、远程 web 客户端），全部路由可用；
- *   - `cli`：`shuvix widget init / build` 交给智能体的那一个，在 shell 里 `curl` 检查数据库用 —— **不能用 `fs/`**，
- *     否则沙箱里的命令拿着它就能读家目录。
+ * 令牌：JWT（HS256）形状的 `header.payload.signature`，载荷 `{ w: <widgetId>, s: 'ui' | 'preview', sid? }`。密钥是
+ * 本进程启动时生成、只在主进程内存里的随机串（不设过期：重启后密钥与端口都会换，旧令牌自然作废）。两种范围：
+ *   - `ui`：widget 的界面（面板里的 iframe、独立窗口、远程 web 客户端），调用方是用户，全部路由可用；
+ *   - `preview`：`widget` 工具的 `preview` 在看不见的窗口里渲染组件时用的那一个，载荷带发起预览的会话（`sid`）。
+ *     页面里调 `/api` 的调用方是那条会话的 agent、按它的授权判；`fs/` 按它的权限表判（只判不问，见 widgetServer）。
+ *     从前预览带 `ui` 令牌：改过界面再预览，就能以用户的身份写数据、经 `fs/` 读家目录的任何文件。
+ * （从前还有 `cli`：`shuvix widget init / build` 交给 agent 在 shell 里 curl 用。CLI 的组件命令删掉了，组件的操作
+ * 全部经 `widget` 工具 —— 它带着会话、过同一道授权；令牌本身不知道是哪条会话。）
  *
  * **令牌由宿主加在请求头上，从不进 URL**：widget 代码写的是绝对路径（`fetch('/w/<id>/db/…')`、
  * `<img src="/w/<id>/fs/file?…">`，见内置 widget 技能），令牌放进路径或 `<base>` 会让现有的 widget 全部失效。
@@ -18,7 +21,7 @@
  *   - 桌面：主进程经 Electron 的 webRequest 给 widget 页面自己的请求补上（{@link installWidgetTokens}），按发起请求
  *     的页面认 widget —— A 的页面打 B 的路由拿不到 B 的令牌；
  *   - 远程：网络服务的转发补上（frontend/network/widgetProxy.ts；谁能用网络服务由网络策略管）；
- *   - CLI：`shuvix widget init / build` 把 `cli` 令牌交给命令，智能体照技能文档带在请求头里。
+ *   - 预览：预览分区装的钩子补 `preview` 令牌（只补给正在预览的那个组件，见 widgetPreviewService）。
  *
  * 已知的边界：同一扇窗里同时开着的几个 widget 同源（都在 127.0.0.1:<端口>），一个能把手伸进另一个的 frame；
  * widget 自己的代码本来就能经 `fs/` 读任意文件（不限路径是裁决过的），令牌不改变这一点；网络服务的转发按路径给
@@ -31,7 +34,14 @@ import type { Session } from 'electron'
 /** 令牌所在的请求头（小写：node:http 的请求头一律小写） */
 export const WIDGET_TOKEN_HEADER = 'x-shuvix-widget-token'
 
-export type WidgetTokenScope = 'ui' | 'cli'
+export type WidgetTokenScope = 'ui' | 'preview'
+
+/** 令牌验出来的身份：范围，`preview` 还有发起预览的会话 */
+export interface WidgetTokenClaims {
+  scope: WidgetTokenScope
+  /** `preview` 令牌里发起预览的会话；`ui` 没有 */
+  sessionId?: string
+}
 
 const secret = randomBytes(32)
 
@@ -44,21 +54,37 @@ function sign(input: string): string {
   return createHmac('sha256', secret).update(input).digest('base64url')
 }
 
-/** 给一个 widget 签发令牌 */
-export function issueWidgetToken(widgetId: string, scope: WidgetTokenScope): string {
-  const payload = base64url(JSON.stringify({ w: widgetId, s: scope }))
+/** 给一个 widget 签发令牌（`preview` 带上发起预览的会话） */
+export function issueWidgetToken(
+  widgetId: string,
+  scope: WidgetTokenScope,
+  sessionId?: string
+): string {
+  const claims =
+    sessionId === undefined ? { w: widgetId, s: scope } : { w: widgetId, s: scope, sid: sessionId }
+  const payload = base64url(JSON.stringify(claims))
   const body = `${JWT_HEADER}.${payload}`
   return `${body}.${sign(body)}`
 }
 
 /**
- * 请求带的令牌对这个 widget 有效吗：有效 → 它的范围；签名不对、格式不对、是别的 widget 的 → null。
- * 签名按常数时间比较
+ * 请求带的令牌对这个 widget 有效吗：有效 → 它的范围；签名不对、格式不对、是别的 widget 的 → null
  */
 export function widgetTokenScope(
   value: string | string[] | undefined,
   widgetId: string
 ): WidgetTokenScope | null {
+  return verifyWidgetToken(value, widgetId)?.scope ?? null
+}
+
+/**
+ * 请求带的令牌对这个 widget 有效吗：有效 → 范围（与 `preview` 的会话）；签名不对、格式不对、是别的 widget 的、
+ * 范围认不得（含旧的 `cli`）→ null。签名按常数时间比较
+ */
+export function verifyWidgetToken(
+  value: string | string[] | undefined,
+  widgetId: string
+): WidgetTokenClaims | null {
   if (typeof value !== 'string') return null
   const parts = value.split('.')
   if (parts.length !== 3 || parts[0] !== JWT_HEADER) return null
@@ -71,9 +97,14 @@ export function widgetTokenScope(
   } catch {
     return null
   }
-  const { w, s } = (claims ?? {}) as { w?: unknown; s?: unknown }
+  const { w, s, sid } = (claims ?? {}) as { w?: unknown; s?: unknown; sid?: unknown }
   if (w !== widgetId) return null
-  return s === 'ui' || s === 'cli' ? s : null
+  if (s === 'ui') return { scope: 'ui' }
+  if (s === 'preview')
+    return typeof sid === 'string' && sid
+      ? { scope: 'preview', sessionId: sid }
+      : { scope: 'preview' }
+  return null
 }
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost'])
@@ -147,10 +178,15 @@ function frameUrls(details: { frame?: { url: string; parent?: { url: string } | 
 
 /**
  * 给一个 Electron 会话装上补头钩子：widget 页面（以及 ShuviX 自己的界面打开 widget 页面）的请求带上那个 widget
- * 的 `ui` 令牌，其余请求里冒充的同名头一律去掉。一个会话的 onBeforeSendHeaders 只能有一个监听者 —— 装在没有
- * 别人用它的会话上（默认会话、预览分区；内置浏览器在自己的分区里，拿不到令牌）。`port` 现取：widget 服务懒启动。
+ * 的令牌（缺省 `ui`；`issue` 给别的 —— 预览分区给 `preview`，交回 null 就不补），其余请求里冒充的同名头一律去掉。
+ * 一个会话的 onBeforeSendHeaders 只能有一个监听者 —— 装在没有别人用它的会话上（默认会话、预览分区；内置浏览器在
+ * 自己的分区里，拿不到令牌）。`port` 现取：widget 服务懒启动。
  */
-export function installWidgetTokens(ses: Pick<Session, 'webRequest'>, port: () => number): void {
+export function installWidgetTokens(
+  ses: Pick<Session, 'webRequest'>,
+  port: () => number,
+  issue: (widgetId: string) => string | null = (id) => issueWidgetToken(id, 'ui')
+): void {
   ses.webRequest.onBeforeSendHeaders(
     { urls: ['http://127.0.0.1/*', 'http://localhost/*'] },
     (details, callback) => {
@@ -167,7 +203,8 @@ export function installWidgetTokens(ses: Pick<Session, 'webRequest'>, port: () =
         },
         port()
       )
-      if (id) headers[WIDGET_TOKEN_HEADER] = issueWidgetToken(id, 'ui')
+      const token = id ? issue(id) : null
+      if (token) headers[WIDGET_TOKEN_HEADER] = token
       callback({ requestHeaders: headers })
     }
   )

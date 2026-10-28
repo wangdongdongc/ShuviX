@@ -5,7 +5,7 @@
  * `VACUUM INTO '<路径>'` 能往任何位置写文件（2026-10-27 探针，都能执行）—— 一条 SQL 就是对整个磁盘的读写原语。
  * 所以三处来源各自设门：
  *   - handler 的语句：首关键字白名单（`prepare` 只收一条语句，首关键字就决定了语句类型）；
- *   - `schema.sql`（db-init）与 CLI 的 `db-query`：去掉注释和字符串字面量后，见到禁用词就拒绝 —— 宁可误报，
+ *   - `widget` 工具的 `sql` 动作（从前 CLI 的 db-init / db-query）：去掉注释和字符串字面量后，见到禁用词就拒绝 —— 宁可误报，
  *     标识符里很少出现这些词；
  *   - 扩展加载由宿主保持关闭（不在这里）。
  *
@@ -114,14 +114,14 @@ export function assertHandlerStatement(sql: string): void {
     throw new WidgetSqlRefused(
       `Widget operations can only run ${HANDLER_STATEMENT_KEYWORDS.join(' / ')} statements` +
         (kw ? ` (got ${kw}).` : '.') +
-        ' Change the database structure in schema.sql with `shuvix widget db-init`.'
+        " Change the database structure with the widget tool's `sql` action."
     )
   }
   const word = findForbiddenSqlWord(sql)
   if (word) {
     throw new WidgetSqlRefused(`Widget operations cannot use ${word}.`)
   }
-  // `pragma_*` 表值函数（pragma_database_list 会给出文件路径）：handler 用不着；db-query 里留着查表结构
+  // `pragma_*` 表值函数（pragma_database_list 会给出文件路径）：handler 用不着；`sql` 动作里留着查表结构
   const pragmaFn = (
     stripSqlNoise(sql)
       .toUpperCase()
@@ -132,7 +132,7 @@ export function assertHandlerStatement(sql: string): void {
   }
 }
 
-/** schema.sql / db-query 的整段 SQL：含禁用词 → 抛 */
+/** 结构（schema）/ `sql` 动作的整段 SQL：含禁用词 → 抛 */
 export function assertNoForbiddenSql(sql: string, where: 'schema' | 'query'): void {
   const word = findForbiddenSqlWord(sql)
   if (!word) return
@@ -141,6 +141,6 @@ export function assertNoForbiddenSql(sql: string, where: 'schema' | 'query'): vo
       ? ' ShuviX sets connection settings (WAL, foreign keys, cache) itself.'
       : ' A widget can only reach its own database file.'
   throw new WidgetSqlRefused(
-    `${where === 'schema' ? 'schema.sql' : 'db-query'} cannot use ${word}.${hint}`
+    `${where === 'schema' ? 'schema.sql' : 'Widget SQL'} cannot use ${word}.${hint}`
   )
 }

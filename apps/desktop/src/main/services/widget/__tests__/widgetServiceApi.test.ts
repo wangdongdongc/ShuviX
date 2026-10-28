@@ -13,6 +13,8 @@
  *       只在成功之后写；dbQuery：SQLite 的错误 → {output:'', error}，PGlite → runWidgetDbQuery；delete：SQLite → removeWidgetData，
  *       PGlite → dropWidgetSchema，目录删不掉就留着数据；open / startWidget / build 从不替 SQLite 组件重放 schema.sql
  *   S-7 老 PGlite 组件带 api.ts → 构建错误、界面不动；不带 api.ts → 照旧构建
+ *   WT4-PV-18 onDeleted：delete 之后每个监听者各收到一次 id（那时账目里已经没有它）；一个监听者抛错 → 一条 warn，后面的照样
+ *       收到、数据照样删；退订之后不再收到；组件目录删不掉 → 谁都不通知
  */
 import {
   chmodSync,
@@ -53,7 +55,9 @@ const h = vi.hoisted(() => {
     /** 调用次序（跨 mock）：看「先编译、后界面、再生效、最后提交」 */
     order: [] as string[],
     WidgetRuntimeError,
-    WidgetDbError
+    WidgetDbError,
+    /** 所有模块共用的 logger.warn（WT4-PV-18 数「监听者抛错」那一条） */
+    warn: vi.fn((..._args: unknown[]) => {})
   }
 })
 
@@ -129,7 +133,7 @@ vi.mock('../api/widgetRuntime', () => ({
 }))
 vi.mock('../../bundler', () => ({ bundlerService: { buildApi } }))
 vi.mock('../../../logger', () => ({
-  createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
+  createLogger: () => ({ info: () => {}, warn: h.warn, error: () => {}, debug: () => {} })
 }))
 
 import { widgetService } from '../widgetService'
@@ -215,6 +219,7 @@ beforeEach(() => {
   repo.ensureRepo.mockClear()
   repo.commitBuild.mockClear()
   buildApi.mockClear()
+  h.warn.mockClear()
   publish = vi.spyOn(appEventBus, 'publish')
 })
 
@@ -597,6 +602,72 @@ describe('S-6 db-init / db-query / delete 按存储归属分流', () => {
       await widgetService[action]('old-widget')
       expect(db.applyWidgetSchema.mock.calls).toEqual([['old-widget', 'CREATE TABLE a (x)\n']])
       expect(runtime.applySchema).not.toHaveBeenCalled()
+    }
+  )
+})
+
+// ────────────────────────────── WT4-PV-18 ──────────────────────────────
+
+describe('WT4-PV-18 onDeleted', () => {
+  const listenerWarns = (): unknown[][] =>
+    h.warn.mock.calls.filter((c) => String(c[0]).startsWith('widget deleted listener failed'))
+
+  it('WT4-PV-18 delete 之后每个监听者各收到一次 id（账目已经没有它）；抛错的只 warn 一条，后面的照样收到、数据照删', async () => {
+    seed()
+    writeFileSync(join(dataOf(), 'data.sqlite'), 'db')
+    const seen: Array<[string, string, boolean]> = []
+    const l1 = vi.fn((id: string) => {
+      seen.push(['l1', id, widgetRegistry.findById(id) === undefined])
+      throw new Error('listener one broke')
+    })
+    const l2 = vi.fn((id: string) => {
+      seen.push(['l2', id, widgetRegistry.findById(id) === undefined])
+    })
+    const off1 = widgetService.onDeleted(l1)
+    const off2 = widgetService.onDeleted(l2)
+    try {
+      await widgetService.delete(ID)
+    } finally {
+      off1()
+    }
+
+    expect(seen).toEqual([
+      ['l1', ID, true],
+      ['l2', ID, true]
+    ])
+    expect(l1).toHaveBeenCalledTimes(1)
+    expect(l2).toHaveBeenCalledTimes(1)
+    expect(listenerWarns()).toEqual([
+      [`widget deleted listener failed widget=${ID}: listener one broke`]
+    ])
+    // 监听者抛错不拦后面的清理
+    expect(existsSync(dataOf())).toBe(false)
+    expect(runtime.forget.mock.calls).toEqual([[ID]])
+
+    // 退订 l2，再删另一个：l2 不再收到
+    off2()
+    seed({ id: 'other-shelf' })
+    await widgetService.delete('other-shelf')
+    expect(l2).toHaveBeenCalledTimes(1)
+    expect(l1).toHaveBeenCalledTimes(1)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'WT4-PV-18 组件目录删不掉 → 谁都不通知',
+    async () => {
+      seed()
+      const listener = vi.fn()
+      const off = widgetService.onDeleted(listener)
+      chmodSync(h.root, 0o555)
+      try {
+        await widgetService.delete(ID)
+      } finally {
+        chmodSync(h.root, 0o755)
+        off()
+      }
+      expect(existsSync(dirOf())).toBe(true)
+      expect(widgetRegistry.findById(ID)).toBeDefined()
+      expect(listener).not.toHaveBeenCalled()
     }
   )
 })

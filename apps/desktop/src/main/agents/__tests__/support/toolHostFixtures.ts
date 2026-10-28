@@ -36,6 +36,7 @@ export const REGISTERED: readonly { name: string; platforms?: readonly ToolPlatf
   { name: 'artifact' },
   { name: 'session' },
   { name: 'knowledge' },
+  { name: 'widget' },
   { name: 'doc_read' },
   { name: 'doc_edit' },
   { name: 'doc_insert' },

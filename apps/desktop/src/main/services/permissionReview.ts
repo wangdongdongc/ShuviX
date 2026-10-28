@@ -322,6 +322,12 @@ function factsOf(event: PermissionRequestEvent): PermissionRequestPayload['opera
       if (event.preview?.kind === 'message')
         put('message', clip(event.preview.text, DIFF_MAX_CHARS))
       break
+    case 'widget':
+      // 出厂的 auto-review 同样不审组件访问；用户自己的 hook 审它时看得到是哪个组件、要做什么
+      put('widgetId', object.widgetId)
+      put('name', object.name)
+      put('operation', object.operation)
+      break
     case 'invocation':
       put('mcpServer', object.mcpServer)
       put('mcpTool', object.mcpTool)

@@ -1047,7 +1047,7 @@ describe('assembleRules — 派生规则与省略容错', () => {
     expect(() => assembleRules(makeProvider())).not.toThrow()
   })
 
-  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂六份共十一条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
+  it('AS-11 省略 getUserPolicies → 仅 builtin 正常装配（出厂七份共十三条）；权限表里有授权也不多出规则（会话授权不是一层）', () => {
     const rules = assembleRules(makeProvider({ getVars: () => withGrants({ write: ['/data'] }) }))
     expect(rules.map((r) => [r.id, r.source.kind])).toEqual([
       ['ask-on-external-path#0', 'builtin'],
@@ -1055,6 +1055,8 @@ describe('assembleRules — 派生规则与省略容错', () => {
       ['ask-on-command#0', 'builtin'],
       ['ask-on-session-access#0', 'builtin'],
       ['ask-on-session-access#1', 'builtin'],
+      ['ask-on-widget-access#0', 'builtin'],
+      ['ask-on-widget-access#1', 'builtin'],
       ['network-admission#0', 'builtin'],
       ['daily-bot-access#0', 'builtin'],
       ['daily-bot-access#1', 'builtin'],
@@ -1791,6 +1793,8 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-external-path#1',
       'ask-on-session-access#0',
       'ask-on-session-access#1',
+      'ask-on-widget-access#0',
+      'ask-on-widget-access#1',
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',
@@ -1841,14 +1845,15 @@ describe('assembleRules — 停用的策略不装配', () => {
     expect(asked.map((p) => p.name)).toEqual([
       'ask-on-external-path',
       'ask-on-session-access',
+      'ask-on-widget-access',
       'network-admission',
       'daily-bot-access',
       'redact-sensitive',
       'ask-on-command',
       'extra'
     ])
-    expect(asked[5]).toBe(copy)
-    expect(asked[6]).toBe(extra)
+    expect(asked[6]).toBe(copy)
+    expect(asked[7]).toBe(extra)
     expect(asked[0].objectId).toBe(EXT_ID)
     // 内置 ask-on-command（被 copy 遮蔽）不在其中
     expect(asked.filter((p) => p.objectId === CMD_ID)).toEqual([])
@@ -1869,6 +1874,8 @@ describe('assembleRules — 停用的策略不装配', () => {
       'ask-on-external-path#1',
       'ask-on-session-access#0',
       'ask-on-session-access#1',
+      'ask-on-widget-access#0',
+      'ask-on-widget-access#1',
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',
@@ -1899,13 +1906,15 @@ describe('assembleRules — 停用的策略不装配', () => {
     expect(control.filter((r) => r.source.policy === 'p').map((r) => r.effect)).toEqual(['deny'])
   })
 
-  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂六份十一条全在', () => {
+  it('AS-DIS6 宿主不实现 isPolicyDisabled → 出厂七份十三条全在', () => {
     expect(assembleRules(makeProvider()).map((r) => r.id)).toEqual([
       'ask-on-external-path#0',
       'ask-on-external-path#1',
       'ask-on-command#0',
       'ask-on-session-access#0',
       'ask-on-session-access#1',
+      'ask-on-widget-access#0',
+      'ask-on-widget-access#1',
       'network-admission#0',
       'daily-bot-access#0',
       'daily-bot-access#1',

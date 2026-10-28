@@ -253,6 +253,14 @@ export function getWidgetsDir(): string {
 }
 
 /**
+ * 一个组件的源码目录（`~/.shuvix/widgets/<id>`），只算路径、不建目录 —— 会话权限表派生它时组件可能还没建，
+ * 读权限表也不该在家目录里留下目录
+ */
+export function widgetDirPath(id: string): string {
+  return join(homedir(), '.shuvix', 'widgets', id)
+}
+
+/**
  * SQLite 组件的数据根：~/.shuvix/widgets-data/<id>/（不创建）。每个组件一个子目录，放它的 `data.sqlite`
  * （带 -wal / -shm）和宿主的 API 构建快照；故意在组件目录之外 —— 组件目录是 agent 可写的 git 仓库，
  * 数据和「只有经过 build 才生效」的快照都不该在那里
@@ -307,7 +315,7 @@ export const mergedPATH = [
  *   - SHUVIX_ELECTRON  当前 Electron 二进制（CLI 用 ELECTRON_RUN_AS_NODE 复用之）
  *   - SHUVIX_CLI_JS    打包后的 cli 入口（out/main/cli.js / Resources/app.asar 内）
  *   - SHUVIX_CLI       wrapper 脚本绝对路径（同时 wrapper 所在目录会被 prepend 到 PATH，
- *                      AI 直接 `shuvix widget …` 即可，不必引用此 env）
+ *                      AI 直接 `shuvix task …` 即可，不必引用此 env）
  */
 export function getShuvixCliEnv(): {
   SHUVIX_ELECTRON: string
@@ -333,7 +341,7 @@ export function getShuvixCliEnv(): {
 /**
  * 构建 spawn 用环境变量：
  *   - PATH 合并系统 PATH + EXTRA_PATHS + shuvix CLI wrapper 所在目录（prepended）
- *     这样 AI 可直接 `shuvix widget …`，不需要引用 $SHUVIX_CLI
+ *     这样 AI 可直接 `shuvix task …`，不需要引用 $SHUVIX_CLI
  *   - 额外注入 SHUVIX_ELECTRON / SHUVIX_CLI_JS / SHUVIX_CLI（debugging / fallback）
  */
 export function buildSpawnEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {

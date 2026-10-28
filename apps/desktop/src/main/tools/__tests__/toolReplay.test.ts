@@ -60,6 +60,27 @@ vi.mock('../../services/sandbox', () => ({
 vi.mock('../../services/skillService', () => ({
   skillService: { findEnabled: () => [], findByName: () => undefined }
 }))
+// widget 工具连着组件服务 / 预览 / 窗口（import 期就会碰到）：全部桩掉
+vi.mock('../../services/widget', () => ({
+  callWidgetOp: vi.fn(),
+  exportWidget: vi.fn(),
+  readApiSnapshot: vi.fn(),
+  resolveExportZipPath: vi.fn(),
+  runWidgetDbQuery: vi.fn(),
+  WidgetApiError: class extends Error {},
+  WidgetExportError: class extends Error {},
+  widgetService: {},
+  widgetStorageOf: vi.fn()
+}))
+vi.mock('../../services/widget/widgetRegistry', () => ({
+  WIDGET_ID_REGEX: /^[a-z0-9]+(-[a-z0-9]+)+$/
+}))
+vi.mock('../../services/widgetWindowService', () => ({ open: vi.fn() }))
+vi.mock('../../services/widgetPreviewService', () => ({
+  parsePreviewSizes: vi.fn(),
+  parsePreviewTheme: vi.fn(),
+  previewWidget: vi.fn()
+}))
 
 import { makeReadTool } from '../read'
 import { makeWriteTool } from '../write'
@@ -73,6 +94,7 @@ import { ArtifactTool } from '../artifact'
 import { BashTool } from '../bash'
 import { PowerShellTool } from '../powershell'
 import { SkillTool } from '../../services/skillTool'
+import { WidgetTool } from '../widget'
 
 const ctx = { sessionId: 'sess-replay' } as ToolContext
 
@@ -103,7 +125,9 @@ describe('RT 桌面内置工具的重跑策略', () => {
     ['artifact', () => new ArtifactTool(ctx)],
     ['bash', () => new BashTool(ctx)],
     ['powershell', () => new PowerShellTool(ctx)],
-    ['skill', () => new SkillTool(['anything'])]
+    ['skill', () => new SkillTool(['anything'])],
+    // WT4-TL-27：一个工具兼管只读的 list / describe 与会写数据、会构建提交的动作 —— 只能取最保守的那个
+    ['widget', () => new WidgetTool(ctx)]
   ])('RT-2 %s → unsafe', (name, make) => {
     const tool = make()
     expect(tool.name).toBe(name)

@@ -19,6 +19,7 @@
  *   - PR-18     recentOperations 取自真的决策日志，审查员自己的操作先滤掉再取最近 10 条；
  *   - PR-W1     main/index.ts 把审查者与「认审查员」的判断一并注入 toolContext（读源码）；
  *   - XS-21     会话客体（session 工具与别的会话交互）的 operation / facts：消息预览按 3000 截断，read 没有 message。
+ *   - WT4-SE-18 组件客体（widget 工具用一个组件）的 operation / policy / facts。
  *   - PR-T      触发器替 bot 发的消息（来源 trigger）：进 delegatedTasks 并注明是哪个 bot 的触发，不算人写的。
  *               这几条按会话 id 换上 durable 摘要形状的转写项（digests），其余会话照旧走旧格式读者。
  *   - PR-SG     采纳的提议（`suggest` 工具，转写项 `suggested`，2026-10-25）：仍算人的话、进 userMessages，但逐字前缀
@@ -753,7 +754,7 @@ const FACT_ROWS: FactsRow[] = [
   },
   {
     label: '没见过的客体类型 —— 只有公共键',
-    init: { object: { type: 'widget', name: 'todo', note: 'anything' }, command: 'widget' },
+    init: { object: { type: 'gadget', name: 'todo', note: 'anything' }, command: 'gadget' },
     facts: { ...COMMON_FACTS }
   },
   {
@@ -1136,6 +1137,57 @@ describe('PR —— 会话客体的 payload（XS-21）', () => {
       sessionId: 'X',
       ownTurn: false,
       ...COMMON_FACTS
+    })
+  })
+})
+
+// ─── 组件客体（widget 工具用一个组件） ─────────────
+
+/**
+ * WT4-SE-18 组件客体 `{type:'widget', widgetId, name, operation}` 的 payload —— 出厂的 auto-review 不审这类客体
+ * （见 builtinHooks 的 WT4-SE-17），这里钉的是用户自己绑在 permission.request 上的 hook 看到的那份：objectType
+ * 'widget'、tool 带动作、target 是卡片主文本 `Widget(<access>, <id>)`、策略名取提示语所属策略。
+ */
+describe('PR —— 组件客体的 payload（WT4-SE-18）', () => {
+  const widgetEvent = (sid: string): PermissionRequestEvent =>
+    makeEvent(sid, {
+      action: 'write',
+      tool: { name: 'widget', operation: 'call' },
+      object: { type: 'widget', widgetId: 'X', name: 'N', operation: 'addBook' },
+      command: 'Widget(write, X)',
+      decision: {
+        matched: ['ask-on-widget-access#1'],
+        winning: 'ask-on-widget-access#1',
+        prompt: {
+          text: 'This lets the agent change the records in this widget.',
+          rules: ['ask-on-widget-access#1'],
+          policies: ['Ask Before Using a Widget']
+        }
+      }
+    })
+
+  it('WT4-SE-18 operation：tool 带动作、objectType widget、target 是 Widget(write, X)；policy 取提示语所属的策略', async () => {
+    const sid = newSession()
+    const payload = await buildPermissionRequestPayload(widgetEvent(sid))
+    expect(payload.operation).toMatchObject({
+      tool: 'widget: call',
+      action: 'write',
+      objectType: 'widget',
+      target: 'Widget(write, X)'
+    })
+    expect(payload.policy).toStrictEqual({
+      names: ['Ask Before Using a Widget'],
+      prompt: 'This lets the agent change the records in this widget.'
+    })
+  })
+
+  it('WT4-SE-18 facts 带 widgetId / name / operation（用户自己的 hook 看得到是哪个组件、要做什么）', async () => {
+    const sid = newSession()
+    const payload = await buildPermissionRequestPayload(widgetEvent(sid))
+    expect(payload.operation.facts).toMatchObject({
+      widgetId: 'X',
+      name: 'N',
+      operation: 'addBook'
     })
   })
 })

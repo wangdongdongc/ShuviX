@@ -68,6 +68,19 @@ describe('buildToolSummary — knowledge', () => {
   })
 })
 
+/** 组件工具（`widget`）：动作 · 组件 · 操作，一眼看出动的是哪个组件的哪个操作 */
+describe('buildToolSummary — widget', () => {
+  it('WT4-TL-30 action · widget · op；只有动作时只有动作；无参数无摘要；图标与 labelKey', () => {
+    expect(
+      buildToolSummary('widget', { action: 'call', widget: 'reading-list', op: 'addBook' })
+    ).toBe('call · reading-list · addBook')
+    expect(buildToolSummary('widget', { action: 'list' })).toBe('list')
+    expect(buildToolSummary('widget', {})).toBeUndefined()
+    expect(BUILTIN_TOOL_PRESENTATIONS.widget.presentation?.icon).toBe('Wrench')
+    expect(BUILTIN_TOOL_PRESENTATIONS.widget.labelKey).toBe('tool.widgetLabel')
+  })
+})
+
 /** 提议（`suggest`，2026-10-25）：折叠行上摆第一条的标题，多条时带「+N」；卡片本身不在步骤组里 */
 describe('buildToolSummary — suggest', () => {
   it('TS-SG-1 一条 → 它的标题；多条 → `标题 · +N`；没有可用的标题 → 没有摘要；图标与 labelKey', () => {

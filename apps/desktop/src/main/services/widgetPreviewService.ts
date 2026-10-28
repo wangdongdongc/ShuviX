@@ -1,5 +1,5 @@
 /**
- * `shuvix widget preview <id>`：在看不见的窗口里按几种尺寸渲染一个小组件、各截一张图，交给 agent 自己看排版 ——
+ * `widget` 工具的 `preview`：在看不见的窗口里按几种尺寸渲染一个小组件、各截一张图，交给 agent 自己看排版 ——
  * 它写界面时看不到效果，只靠规则时做出来的东西在某一端走样也不知道。不弹任何窗口、不抢焦点、不计「打开」。
  *
  * - 尺寸是小组件自己拿到的那一块（不含 ShuviX 的顶栏）：`panel` = 右侧面板（窄，鼠标），`window` = 独立窗口 /
@@ -16,8 +16,10 @@
  * - 弹框与打印：`disableDialogs`，再在每个文档开头把 alert / confirm / prompt / print 换成空操作 —— macOS 上
  *   窗口藏着时 alert 是整个应用的模态框，会弹到用户面前、还把预览挂住。
  * - 截图写进调用会话的 tool_results 目录（会话目录：read 工具与命令沙箱都读得到）下的 `widget-preview/`，同一个
- *   widget 同一个尺寸覆盖上一张。没有会话（在会话之外跑 CLI）就写进系统临时目录里新建的一个目录（每次新建：
- *   固定路径在多用户的机器上能被别人预先占住）。
+ *   widget 同一个尺寸覆盖上一张。没有会话就写进系统临时目录里新建的一个目录（每次新建：固定路径在多用户的机器上
+ *   能被别人预先占住）。
+ * - 页面的请求带 `preview` 令牌（widget/widgetToken.ts），载荷里是发起预览的会话：页面调 `/api`、读 `fs/` 都按那条
+ *   会话的授权判（widgetServer）。只给正在预览的那个组件发令牌 —— 排队保证同一时刻只有一个。
  * - 一次只跑一个预览（排队）；每一步都有超时（页面主线程卡死时 executeJavaScript / capturePage 也会一直不回），
  *   超时即这个尺寸失败、窗口照样销毁，排在后面的预览不受连累；某个尺寸失败只记进 errors，别的照截。
  * - 无头模式（headless）不拒绝：预览的窗口从不显示，不违反「无头不开窗」的本意；截不到图时这个尺寸报失败。
@@ -30,7 +32,7 @@ import { join } from 'path'
 import { createLogger } from '../logger'
 import { getToolResultsDir, isSafeSessionId } from '../utils/paths'
 import { widgetServer, widgetService } from './widget'
-import { installWidgetTokens } from './widget/widgetToken'
+import { installWidgetTokens, issueWidgetToken } from './widget/widgetToken'
 
 const log = createLogger('WidgetPreview')
 
@@ -93,14 +95,17 @@ export interface PreviewOptions {
 }
 
 /**
- * CLI 交来的 `--size`（逗号分隔，大小写不论）→ 尺寸表；空 / 缺省 = 全部。认不得的直接报错（列出可选的），
+ * 交来的尺寸（逗号分隔的字符串或字符串数组，大小写不论）→ 尺寸表；空 / 缺省 = 全部。认不得的直接报错（列出可选的），
  * 免得 agent 以为截了其实没截
  */
 export function parsePreviewSizes(raw: unknown): PreviewSize[] {
   if (raw === undefined || raw === null || raw === '') return [...PREVIEW_SIZE_ORDER]
-  if (typeof raw !== 'string') throw new Error('size must be a comma-separated list')
+  const parts = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : null
+  if (!parts || parts.some((part) => typeof part !== 'string')) {
+    throw new Error('sizes must be a list of size names')
+  }
   const picked = new Set<PreviewSize>()
-  for (const part of raw.split(',')) {
+  for (const part of parts as string[]) {
     const name = part.trim().toLowerCase()
     if (!name) continue
     if (!(PREVIEW_SIZE_ORDER as readonly string[]).includes(name)) {
@@ -121,6 +126,9 @@ export function parsePreviewTheme(raw: unknown): PreviewTheme | undefined {
 }
 
 let chain: Promise<unknown> = Promise.resolve()
+
+/** 正在预览的那一个（排队保证同一时刻至多一个）：预览分区只给它发 `preview` 令牌 */
+let previewing: { widgetId: string; sessionId?: string } | null = null
 
 /** 预览一个小组件（排队，一次一个） */
 export function previewWidget(id: string, options: PreviewOptions = {}): Promise<PreviewResult> {
@@ -144,7 +152,7 @@ async function runPreview(id: string, options: PreviewOptions): Promise<PreviewR
       id,
       theme: theme ?? 'app',
       images: [],
-      errors: [`the widget does not build: run \`shuvix widget build ${id}\` and fix buildErrors`]
+      errors: ['the widget does not build: build it and fix buildErrors first']
     }
   }
   if (!url) throw new Error(`widget "${id}" has no address`)
@@ -159,18 +167,23 @@ async function runPreview(id: string, options: PreviewOptions): Promise<PreviewR
   const failures: string[] = []
   const pageErrors: string[] = []
   const images: PreviewImage[] = []
-  for (const size of sizes) {
-    try {
-      const png = await captureOne(url, size, theme, (message) => {
-        if (!pageErrors.includes(message)) pageErrors.push(message)
-      })
-      const path = join(dir, `${id}-${size}.png`)
-      writeFileSync(path, png.data)
-      images.push({ size, width: png.width, height: png.height, path })
-    } catch (err) {
-      failures.push(`[${size}] preview failed: ${(err as Error).message}`)
-      log.warn(`preview ${id} ${size} failed: ${(err as Error).message}`)
+  previewing = { widgetId: id, ...(options.sessionId ? { sessionId: options.sessionId } : {}) }
+  try {
+    for (const size of sizes) {
+      try {
+        const png = await captureOne(url, size, theme, (message) => {
+          if (!pageErrors.includes(message)) pageErrors.push(message)
+        })
+        const path = join(dir, `${id}-${size}.png`)
+        writeFileSync(path, png.data)
+        images.push({ size, width: png.width, height: png.height, path })
+      } catch (err) {
+        failures.push(`[${size}] preview failed: ${(err as Error).message}`)
+        log.warn(`preview ${id} ${size} failed: ${(err as Error).message}`)
+      }
     }
+  } finally {
+    previewing = null
   }
   return {
     id,
@@ -190,8 +203,16 @@ function previewSession(): Electron.Session {
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
     ses.setPermissionCheckHandler(() => false)
     ses.on('will-download', (event) => event.preventDefault())
-    // 预览页面的请求同样要那个 widget 的令牌（见 widget/widgetToken.ts）
-    installWidgetTokens(ses, () => widgetServer.getStatus().port)
+    // 预览页面的请求要那个 widget 的令牌（见 widget/widgetToken.ts）：`preview` 范围，带发起预览的会话 —— 页面里的
+    // 调用按那条会话的授权判，不是用户的身份。只给正在预览的那一个
+    installWidgetTokens(
+      ses,
+      () => widgetServer.getStatus().port,
+      (widgetId) =>
+        previewing?.widgetId === widgetId
+          ? issueWidgetToken(widgetId, 'preview', previewing.sessionId)
+          : null
+    )
   }
   return ses
 }

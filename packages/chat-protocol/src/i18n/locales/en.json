@@ -476,7 +476,13 @@
     "askRememberFile": "Allow and remember this file",
     "askRememberDirectory": "Allow and remember this folder",
     "askRememberFolder": "Allow and remember the folder it is in",
-    "askRememberSession": "Allow and remember this session"
+    "askRememberSession": "Allow and remember this session",
+    "widgetAskRead": "Read a widget",
+    "widgetAskWrite": "Change a widget",
+    "widgetAskOperation": "Operation",
+    "widgetAskUnnamed": "Unnamed widget",
+    "askRememberWidgetRead": "Allow and remember: may read this widget",
+    "askRememberWidgetWrite": "Allow and remember: may read and change this widget"
   },
   "sessionConfig": {
     "title": "Session Config",
@@ -496,6 +502,7 @@
       "document": "Notebook document",
       "user": "Granted by you",
       "widget": "Widget {{name}}",
+      "widgetDir": "Widget folder {{name}}",
       "knowledge": "Knowledge base {{name}}",
       "skill": "Skills",
       "tmp": "Temporary folder",
@@ -518,7 +525,12 @@
     "sessionsDescription": "The agent in this session uses these other sessions without asking — reading their answers, or also talking to them. Its own sub-sessions need no row; any other session asks first, and \"Allow and remember\" on that card adds it here.",
     "sessionRead": "Read",
     "sessionWrite": "Talk",
-    "sessionUntitled": "Untitled session"
+    "sessionUntitled": "Untitled session",
+    "widgetsTitle": "Widget access",
+    "widgetsDescription": "The agent in this session uses these widgets without asking — calling their read operations, or every operation and changing the widget itself (building it, running SQL on its data, editing its folder). Widgets this session created start here; any other widget asks first, and \"Allow and remember\" on that card adds it here.",
+    "widgetRead": "Read",
+    "widgetWrite": "Read & write",
+    "widgetUnnamed": "Deleted widget"
   },
   "projectForm": {
     "createTitle": "New Project",
@@ -1173,6 +1185,8 @@
     },
     "sessionLabel": "Session",
     "sessionHint": "Read or change the session this task belongs to — rename it, and create and drive sub-sessions",
+    "widgetLabel": "Widget",
+    "widgetHint": "Use the user’s widgets through their own operations, and build widgets",
     "knowledgeLabel": "Knowledge Base",
     "knowledgeHint": "Search the session's knowledge bases and submit entries for the knowledge writer's check",
     "agentLabel": "Dispatch Sub-Agent",

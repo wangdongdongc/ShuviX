@@ -132,7 +132,7 @@ function vmFailure(dumped: unknown): HostFailure {
   return new HostFailure('internal', msg)
 }
 
-/** psql 风格的表格（`shuvix widget db-query` 的输出，与 PGlite 一侧同形） */
+/** psql 风格的表格（`widget` 工具 `sql` 的输出，与 PGlite 一侧同形） */
 export function formatRowsAsTable(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return '(0 rows)'
   const columns = Object.keys(rows[0])

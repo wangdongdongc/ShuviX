@@ -28,6 +28,8 @@
  *     每次评估现取（会话中途「允许并记住」立即可见）；表是空的（会话不在 / 算不出来）→ 两张表都空，
  *     工作区里的写也要问（多问，绝不因此放行）；旧的 sessionDirs / grantedRead 等键不再给。
  *   persistGrant（询问卡片上的「允许并记住」）→ sessionAcl.grantPath(ctx.sessionId, 路径, 读 / 写)。
+ *   组件种类的行（WT4-AC-15…17）：getVars 的 `aclWidgetRead` / `aclWidgetWrite` 来自 sessionAcl.widgetView、每次现取；
+ *     persistWidgetGrant → sessionAcl.grantWidget（来源缺省 user）；assertWidgetAccess 交给 enforceWidget 的参数。
  *
  * 询问点的自动审查带来的桌面接线（设计稿 docs/permission-review-design.md）：
  *   SEC-9 shuvixConfigDirs —— policies / agents / hooks / skills 四个目录（事实变量：引用它的出厂
@@ -80,6 +82,13 @@ const tc = vi.hoisted(() => ({
     read: [],
     write: []
   })),
+  /** services/acl 的 sessionAcl.widgetView：本会话可只读 / 读写的组件（缺省空表） */
+  widgetView: vi.fn((_sid: string): { read: string[]; write: string[] } => ({
+    read: [],
+    write: []
+  })),
+  /** services/acl 的 sessionAcl.grantWidget：组件询问的「允许并记住」写进权限表 */
+  grantWidget: vi.fn((_sid: string, _target: string, _access: 'read' | 'write'): unknown => null),
   /** services/acl 的 sessionAcl.grantSession：会话询问的「允许并记住」写进权限表（XS-35） */
   grantSession: vi.fn((_sid: string, _target: string, _access: 'read' | 'write'): unknown => null),
   /** skillService.listExternalDirs / listSharedDirs：变量表 skillsDirs 的后两段（SEC-10 换） */
@@ -112,8 +121,10 @@ vi.mock('../acl', () => ({
   sessionAcl: {
     pathView: tc.pathView,
     sessionView: tc.sessionView,
+    widgetView: tc.widgetView,
     grantPath: tc.grantPath,
-    grantSession: tc.grantSession
+    grantSession: tc.grantSession,
+    grantWidget: tc.grantWidget
   }
 }))
 // createSecurityContext 原样透传（其余用例走真实的安全模块）；XS-36 用 mockImplementationOnce 换一次，
@@ -176,6 +187,7 @@ vi.mock('../../logger', () => ({
 import {
   agentActorOf,
   assertSessionAccess,
+  assertWidgetAccess,
   getDesktopNetworkSecurityContext,
   getDesktopSecurityContext,
   isPathReadAllowed,
@@ -899,6 +911,202 @@ describe('XS-36 assertSessionAccess —— 交给 enforceSession 的参数', () 
       preview: { kind: 'message', text: 'ship it' },
       session: { sessionId: 'B', title: 'Plan', access: 'write', operation: 'prompt-session' }
     })
+  })
+})
+
+/**
+ * 组件种类的行的宿主胶水（WT4-AC-15…17）—— 与 HG-1 / XS-35 / XS-36 同形：
+ *   WT4-AC-15 getVars 的 `aclWidgetRead` / `aclWidgetWrite` 来自 sessionAcl.widgetView(ctx.sessionId)（出厂的
+ *             ask-on-widget-access 在这两张表以外询问），每次评估现取；真实评估：表里的组件免询问、读写隐含读
+ *   WT4-AC-16 persistWidgetGrant(mode, id) → sessionAcl.grantWidget(ctx.sessionId, id, mode)，不带来源参数（= user）
+ *   WT4-AC-17 assertWidgetAccess 把调用点给的东西原样交给 enforceWidget(access, 客体, {toolCallId, ...owner, toolName,
+ *             operation, signal, abortError})；没给 signal 不带它的键；主体是这次调用的 agent（withCallAgent 按
+ *             owner.conversationId 现取）；enforceWidget 的拒绝原样抛出
+ */
+describe('WT4-AC-15…17 组件种类的行 —— getVars / persistWidgetGrant / assertWidgetAccess', () => {
+  const WIDGET = { type: 'widget', widgetId: 'w-a', name: 'Reading list', operation: 'listBooks' }
+  const runtime = vi.mocked(createSecurityContext)
+
+  beforeEach(() => {
+    tc.widgetView.mockReset()
+    tc.grantWidget.mockReset()
+    tc.grantPath.mockReset()
+    tc.grantSession.mockReset()
+    tc.pathView.mockReset()
+    tc.sessionView.mockReset()
+    tc.userPolicies = []
+    runtime.mockClear()
+  })
+
+  afterEach(() => {
+    // 回到透传（vi.fn(impl) 的 mockReset 复原成 impl）
+    runtime.mockReset()
+  })
+
+  it('WT4-AC-15 表给什么，aclWidgetRead / aclWidgetWrite 就是什么；按 ctx.sessionId 去取；每次评估现取；空表 → 两张空清单', () => {
+    const provider = makeDesktopSecurityProvider(
+      { sessionId: 'sess-w', requestUserInput: undefined },
+      () => ({ workingDirectory: '/ws' })
+    )
+    const vars = (): Record<string, unknown> => provider.getVars() as Record<string, unknown>
+
+    tc.widgetView.mockReturnValueOnce({ read: ['w-a', 'w-b'], write: ['w-b'] })
+    const first = vars()
+    expect(first.aclWidgetRead).toEqual(['w-a', 'w-b'])
+    expect(first.aclWidgetWrite).toEqual(['w-b'])
+
+    // 两次评估之间授予了一条：同一个 provider，下一次就跟上
+    tc.widgetView.mockReturnValueOnce({ read: ['w-a', 'w-b', 'w-c'], write: ['w-b', 'w-c'] })
+    const second = vars()
+    expect(second.aclWidgetRead).toEqual(['w-a', 'w-b', 'w-c'])
+    expect(second.aclWidgetWrite).toEqual(['w-b', 'w-c'])
+
+    const empty = vars()
+    expect(empty.aclWidgetRead).toEqual([])
+    expect(empty.aclWidgetWrite).toEqual([])
+    expect(tc.widgetView.mock.calls).toEqual([['sess-w'], ['sess-w'], ['sess-w']])
+    // 路径 / 会话那几张表照旧来自各自的视图，互不串
+    expect(tc.pathView.mock.calls).toEqual([['sess-w'], ['sess-w'], ['sess-w']])
+    expect(tc.sessionView.mock.calls).toEqual([['sess-w'], ['sess-w'], ['sess-w']])
+    expect(empty.aclSessionRead).toEqual([])
+    expect(empty.aclRead).toEqual([])
+  })
+
+  it('WT4-AC-15 真实评估：表外读写都问；只读行只免读；读写行两样都免；别的组件不沾光', () => {
+    const ctx = getDesktopSecurityContext({ sessionId: 'sess-w-eval' }, () => ({
+      workingDirectory: '/ws'
+    }))
+    const judged = (
+      mode: 'read' | 'write',
+      widgetId = 'w-a'
+    ): { effect: string; winning: string } => {
+      const d = ctx.evaluate(mode, { ...WIDGET, widgetId })
+      return { effect: d.effect, winning: d.winning }
+    }
+
+    expect(judged('read')).toEqual({ effect: 'ask', winning: 'ask-on-widget-access#0' })
+    expect(judged('write')).toEqual({ effect: 'ask', winning: 'ask-on-widget-access#1' })
+
+    tc.widgetView.mockReturnValue({ read: ['w-a'], write: [] })
+    expect(judged('read')).toEqual({ effect: 'allow', winning: 'default:widget' })
+    expect(judged('write')).toEqual({ effect: 'ask', winning: 'ask-on-widget-access#1' })
+
+    tc.widgetView.mockReturnValue({ read: ['w-a'], write: ['w-a'] })
+    expect(judged('read').effect).toBe('allow')
+    expect(judged('write').effect).toBe('allow')
+    expect(judged('read', 'w-b')).toEqual({ effect: 'ask', winning: 'ask-on-widget-access#0' })
+    expect(tc.widgetView).toHaveBeenCalledWith('sess-w-eval')
+  })
+
+  it('WT4-AC-16 persistWidgetGrant(mode, id) → sessionAcl.grantWidget(ctx.sessionId, id, mode)，不带来源（= user）；不走路径 / 会话的授予', () => {
+    const provider = makeDesktopSecurityProvider(
+      { sessionId: 'sess-wg', requestUserInput: undefined },
+      () => ({ workingDirectory: '/ws' })
+    )
+    tc.grantWidget.mockReturnValueOnce({ id: 'row-1' })
+    // 写进表就完事：交回值不外泄给安全模块
+    expect(provider.persistWidgetGrant?.('write', 'w-a')).toBeUndefined()
+    provider.persistWidgetGrant?.('read', 'w-b')
+    expect(tc.grantWidget.mock.calls).toEqual([
+      ['sess-wg', 'w-a', 'write'],
+      ['sess-wg', 'w-b', 'read']
+    ])
+    for (const call of tc.grantWidget.mock.calls) expect(call).toHaveLength(3)
+    expect(tc.grantPath).not.toHaveBeenCalled()
+    expect(tc.grantSession).not.toHaveBeenCalled()
+  })
+
+  /** createSecurityContext 交回只认 enforceWidget 的替身：记下每次的主体与收到的参数 */
+  function captureEnforceWidget(
+    reject?: Error
+  ): Array<{ subject: SecuritySubject; args: unknown[] }> {
+    const calls: Array<{ subject: SecuritySubject; args: unknown[] }> = []
+    runtime.mockImplementation(
+      (subject) =>
+        ({
+          enforceWidget: async (...args: unknown[]) => {
+            calls.push({ subject, args })
+            if (reject) throw reject
+          }
+        }) as unknown as SecurityContext
+    )
+    return calls
+  }
+
+  const OBJECT = { widgetId: 'w-a', name: 'Reading list', operation: 'addBook' }
+  const spawned: ToolAgentIdentity = { profileName: 'coding', kind: 'spawned' }
+
+  it('WT4-AC-17 write + owner + signal：enforceWidget(write, 客体, {toolCallId, taskId, conversationId, toolName, operation, signal, abortError})；主体是这次调用的 agent', async () => {
+    const calls = captureEnforceWidget()
+    const signal = new AbortController().signal
+    const agentOf = vi.fn((cid: number) => (cid === 2 ? spawned : undefined))
+    await assertWidgetAccess({ sessionId: 'caller', agentOf }, 'write', OBJECT, {
+      toolCallId: 'c1',
+      toolName: 'widget',
+      operation: 'call',
+      owner: { taskId: 7, conversationId: 2 },
+      signal
+    })
+    expect(calls).toHaveLength(1)
+    const [mode, object, opts] = calls[0].args
+    expect(mode).toBe('write')
+    expect(object).toStrictEqual(OBJECT)
+    expect(opts).toStrictEqual({
+      toolCallId: 'c1',
+      taskId: 7,
+      conversationId: 2,
+      toolName: 'widget',
+      operation: 'call',
+      signal,
+      abortError: TOOL_ABORTED
+    })
+    expect((opts as { signal: AbortSignal }).signal).toBe(signal)
+    // 主体：conversationId 2 那个派生 agent（不是会话的根）
+    expect(agentOf).toHaveBeenCalledWith(2)
+    expect(coreSubject(calls[0].subject)).toStrictEqual({
+      kind: 'agent',
+      sessionId: 'caller',
+      agentKind: 'spawned',
+      profileName: 'coding'
+    })
+  })
+
+  it('WT4-AC-17 没给 signal / owner → 不带它们的键；主体按 root 上报', async () => {
+    const calls = captureEnforceWidget()
+    await assertWidgetAccess({ sessionId: 'caller' }, 'read', OBJECT, {
+      toolCallId: 'c2',
+      toolName: 'widget',
+      operation: 'preview'
+    })
+    expect(calls).toHaveLength(1)
+    const [mode, object, opts] = calls[0].args
+    expect(mode).toBe('read')
+    expect(object).toStrictEqual(OBJECT)
+    expect(opts).toStrictEqual({
+      toolCallId: 'c2',
+      toolName: 'widget',
+      operation: 'preview',
+      abortError: TOOL_ABORTED
+    })
+    expect(opts).not.toHaveProperty('signal')
+    expect(opts).not.toHaveProperty('taskId')
+    expect(coreSubject(calls[0].subject)).toStrictEqual({
+      kind: 'agent',
+      sessionId: 'caller',
+      agentKind: 'root'
+    })
+  })
+
+  it('WT4-AC-17 enforceWidget 的拒绝原样抛给调用方', async () => {
+    const denial = new Error('User denied changing data in widget "Reading list" (w-a)')
+    captureEnforceWidget(denial)
+    await expect(
+      assertWidgetAccess({ sessionId: 'caller' }, 'write', OBJECT, {
+        toolCallId: 'c3',
+        toolName: 'widget',
+        operation: 'call'
+      })
+    ).rejects.toBe(denial)
   })
 })
 

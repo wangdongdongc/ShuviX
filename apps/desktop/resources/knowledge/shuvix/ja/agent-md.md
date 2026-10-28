@@ -99,7 +99,7 @@ skill を使うとき。外した項目はセッションの選択に `-skill:<n
 します。組み込みツール名は外せません。リストを狭めることは ShuviX で役割を表す方法では
 **ありません**：`grep` の無いエージェントは `bash` で grep するだけです。組み込みの `work`、`chat`、`coding`
 は意図的に一つのリスト（`bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session,
-knowledge, artifact, skill:builtin:drawing, skill:builtin:widget`）を共有し、本文だけが異なります。
+knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:widget`）を共有し、本文だけが異なります。
 
 ### 本文 —— システムプロンプト
 

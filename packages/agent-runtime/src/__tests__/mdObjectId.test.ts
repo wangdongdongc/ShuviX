@@ -255,7 +255,7 @@ describe('OI-9 三族内置 md 的对象 id 总览', () => {
     expect(ids.size).toBe(specCount)
     // 今天的盘点：十份 agent（coedit 已并进 notebook，widget 改成了内置技能）+ 两份 hook + 六份策略
     // （2026-10-19 加了 network-admission，2026-10-20 加了 ask-on-session-access，2026-10-24 加了 daily-bot-access，
-    // 2026-10-25 加了 redact-sensitive）—— 名单变了就该有人看一眼这里
-    expect([files, ids.size]).toEqual([54, 18])
+    // 2026-10-25 加了 redact-sensitive，2026-10-27 加了 ask-on-widget-access）—— 名单变了就该有人看一眼这里
+    expect([files, ids.size]).toEqual([57, 19])
   })
 })

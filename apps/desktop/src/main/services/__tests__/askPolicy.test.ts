@@ -33,6 +33,10 @@
  *
  * XS-37…XS-40：`session` 工具与别的会话交互（enforceSession，出厂的 ask-on-session-access）——「允许并记住」
  * 经真实的 sessionAcl.grantSession 写进权限表的会话行（vars.aclSessionRead / aclSessionWrite），见文件末尾。
+ *
+ * WT4-AC-18…22：`widget` 工具用组件（enforceWidget，出厂的 ask-on-widget-access）——「允许并记住」经真实的
+ * sessionAcl.grantWidget 写进权限表的组件行（vars.aclWidgetRead / aclWidgetWrite）；读写行派生出组件源码目录的
+ * 可写行（真实的 derive，目录 = ~/.shuvix/widgets/<id>）。见文件末尾。
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { dirname, join } from 'node:path'
@@ -146,6 +150,8 @@ vi.mock('../../utils/paths', () => ({
   getBuiltinKnowledgeDir: () => '/tmp/shuvix-builtin-knowledge',
   // 与生产同形：会话目录里的 artifacts 那一项按 os.homedir() 算，两边得是同一处
   getSessionArtifactsDir: (id: string) => join(homedir(), '.shuvix', 'artifacts', id),
+  // 与生产同形：组件源码目录（读写授权派生出它的可写行，WT4-AC-20）
+  widgetDirPath: (id: string) => join(homedir(), '.shuvix', 'widgets', id),
   isSafeSessionId: (id: string) =>
     !!id && !/[/\\]/.test(id) && id !== '.' && id !== '..' && !id.includes('..')
 }))
@@ -167,7 +173,8 @@ import {
   type SecurityContext,
   type SecurityDecision,
   type SecurityEffect,
-  type SessionObjectInput
+  type SessionObjectInput,
+  type WidgetObjectInput
 } from '@shuvix/agent-runtime'
 import type {
   AskInputRequest,
@@ -1274,5 +1281,306 @@ describe('桌面安全 provider — 会话交互（ask-on-session-access，「�
     expect(asks).toHaveLength(1)
     expect(asks[0]).toMatchObject({ kind: 'ask', id: 'xs40-3', toolName: 'write' })
     expect(asks[0]).not.toHaveProperty('session')
+  })
+})
+
+/**
+ * 组件使用（WT4-AC-18…22）—— `widget` 工具调组件的读 / 写操作、改组件，走 enforceWidget，客体
+ * {type: 'widget', widgetId, name, operation}。出厂的 ask-on-widget-access：不在本会话权限表的组件行里
+ * （vars.aclWidgetRead / aclWidgetWrite）时询问。权限表是真的：卡片上「允许并记住」（`extra.remember: true`，
+ * 读卡还可以带 `rememberAccess: 'write'` 一次记成读写）经 persistWidgetGrant → sessionAcl.grantWidget 写一行
+ * `kind: 'widget'`（来源 user）。读写行派生出组件源码目录 ~/.shuvix/widgets/<id> 的可写行（D14：改组件的代码与写
+ * 它的数据同一道授权）。
+ *
+ *   WT4-AC-18 s1 写 X 答「允许并记住」→ 一张卡（Widget(write, X)、widget 素材、写规则的说明）；表多一行
+ *             {widget, X, write, user, ''}；vars 两张表都有 X；之后读写都不问；s2 读 X 照问、不写行
+ *   WT4-AC-19 允许一次 → 不写行、下次照问；拒绝 → User denied changing data in widget "N" (X)、不写行；记住读 →
+ *             读免问、写照问（#1）；读卡记成读写 → 一行读写；没有询问通道 → no way to ask、不写行
+ *   WT4-AC-20 源码目录跟着读写授权：读写行 → 目录里读写都不问；只有读行 → 目录里的写问（ask-on-external-path#1）；
+ *             删掉行 → 又问；别的组件的目录一直问
+ *   WT4-AC-21 停用 ask-on-widget-access / 同名覆盖规则清空 → 组件读写放行（default:widget、零命中、不弹卡）；路径门照问
+ *   WT4-AC-22 judgeGate（预览页面的判定，main/index.ts 注入的那个）：从不弹卡；没有行 → {allowed:false,
+ *             downgraded:true}；读行 → 读放行、写不；读写行 → 都放行
+ */
+describe('桌面安全 provider — 组件使用（ask-on-widget-access，「允许并记住」写进权限表的组件行）', () => {
+  const WIDGET_ID = 'reading-list'
+  const NAME = 'Reading list'
+  const sessions: string[] = []
+
+  afterEach(() => {
+    for (const id of sessions.splice(0)) {
+      clearSessionDecisions(id)
+      clearReviewState(id)
+    }
+  })
+
+  const widget = (over: Partial<WidgetObjectInput> = {}): WidgetObjectInput => ({
+    widgetId: WIDGET_ID,
+    name: NAME,
+    operation: 'addBook',
+    ...over
+  })
+  const opts = (
+    toolCallId: string,
+    operation = 'call'
+  ): { toolCallId: string; toolName: string; operation: string } => ({
+    toolCallId,
+    toolName: 'widget',
+    operation
+  })
+  /** 一个按 reply() 作答、记下每张卡片的 context */
+  function asking(
+    sessionId: string,
+    reply: () => InputResponse
+  ): { ctx: SecurityContext; asks: AskInputRequest[] } {
+    ensureSession(sessionId)
+    sessions.push(sessionId)
+    const asks: AskInputRequest[] = []
+    const ctx = getDesktopSecurityContext(
+      {
+        sessionId,
+        requestUserInput: async (req) => {
+          asks.push(req as AskInputRequest)
+          return reply()
+        }
+      },
+      () => config
+    )
+    return { ctx, asks }
+  }
+  /** 这条会话权限表里的组件行（去掉 id 与时间） */
+  const widgetRows = (
+    sessionId: string
+  ): Array<{ kind: string; target: string; access: string; source: string; sourceKey: string }> =>
+    sessionAcl
+      .entries(sessionId)
+      .filter((e) => e.kind === 'widget')
+      .map(({ kind, target, access, source, sourceKey }) => ({
+        kind,
+        target,
+        access,
+        source,
+        sourceKey
+      }))
+  const REMEMBER: InputResponse = { kind: 'ask', allowed: true, extra: { remember: true } }
+  const ALLOW_ONCE: InputResponse = { kind: 'ask', allowed: true }
+
+  it('WT4-AC-18 写 X 答「允许并记住」→ 一张卡；s1 的表多一行 {widget, X, write, user}；之后读写都不问；s2 读 X 照问', async () => {
+    const { ctx, asks } = asking('s1', () => REMEMBER)
+    await ctx.enforceWidget('write', widget(), opts('wt4-18-1'))
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({
+      kind: 'ask',
+      id: 'wt4-18-1',
+      toolName: 'widget',
+      command: `Widget(write, ${WIDGET_ID})`,
+      widget: { widgetId: WIDGET_ID, name: NAME, access: 'write', operation: 'addBook' }
+    })
+    expect(asks[0]).not.toHaveProperty('session')
+    expect(asks[0].policyPrompt?.text).toContain(
+      'This lets the agent change the records in this widget'
+    )
+    expect(widgetRows('s1')).toEqual([
+      { kind: 'widget', target: WIDGET_ID, access: 'write', source: 'user', sourceKey: '' }
+    ])
+    const vars = varsAt(WORKSPACE, 's1')
+    expect(vars.aclWidgetRead).toEqual([WIDGET_ID])
+    expect(vars.aclWidgetWrite).toEqual([WIDGET_ID])
+
+    // 同一个 context 再写、再读：都不问，表不再长
+    await ctx.enforceWidget('write', widget(), opts('wt4-18-2', 'build'))
+    await ctx.enforceWidget('read', widget({ operation: 'listBooks' }), opts('wt4-18-3'))
+    await ctx.enforceWidget('read', widget({ operation: 'preview' }), opts('wt4-18-4', 'preview'))
+    expect(asks).toHaveLength(1)
+    expect(widgetRows('s1')).toHaveLength(1)
+
+    // 授权只属于 s1：s2 读 X 照问
+    const other = asking('s2', () => ALLOW_ONCE)
+    await other.ctx.enforceWidget('read', widget({ operation: 'listBooks' }), opts('wt4-18-5'))
+    expect(other.asks).toHaveLength(1)
+    expect(other.asks[0]).toMatchObject({
+      command: `Widget(read, ${WIDGET_ID})`,
+      widget: { widgetId: WIDGET_ID, name: NAME, access: 'read', operation: 'listBooks' }
+    })
+    expect(other.asks[0].policyPrompt?.text).toContain('This lets the agent read the records')
+    expect(widgetRows('s2')).toEqual([])
+  })
+
+  it('WT4-AC-19 允许一次 → 不写行、下次照问；拒绝 → User denied changing data in …、不写行', async () => {
+    let reply: InputResponse = ALLOW_ONCE
+    const { ctx, asks } = asking('s1', () => reply)
+
+    await ctx.enforceWidget('write', widget(), opts('wt4-19-1'))
+    expect(widgetRows('s1')).toEqual([])
+    await ctx.enforceWidget('write', widget(), opts('wt4-19-2'))
+    expect(asks).toHaveLength(2)
+
+    // 拒绝（哪怕带着 remember）：抛给模型的文案点名那个组件，不写行
+    reply = { kind: 'ask', allowed: false, extra: { remember: true } }
+    await expect(ctx.enforceWidget('write', widget(), opts('wt4-19-3'))).rejects.toMatchObject({
+      message: `User denied changing data in widget "${NAME}" (${WIDGET_ID})`
+    })
+    await expect(
+      ctx.enforceWidget('read', widget({ operation: 'listBooks' }), opts('wt4-19-4'))
+    ).rejects.toMatchObject({ message: `User denied reading widget "${NAME}" (${WIDGET_ID})` })
+    expect(asks).toHaveLength(4)
+    expect(widgetRows('s1')).toEqual([])
+  })
+
+  it('WT4-AC-19 记住读 → 读免问、写照问（#1）；读卡带 rememberAccess: write → 一行读写', async () => {
+    const { ctx, asks } = asking('s1', () => REMEMBER)
+    await ctx.enforceWidget('read', widget({ operation: 'listBooks' }), opts('wt4-19-r1'))
+    expect(asks).toHaveLength(1)
+    expect(widgetRows('s1')).toEqual([
+      { kind: 'widget', target: WIDGET_ID, access: 'read', source: 'user', sourceKey: '' }
+    ])
+    await ctx.enforceWidget('read', widget({ operation: 'listBooks' }), opts('wt4-19-r2'))
+    expect(asks).toHaveLength(1)
+    expect(verdict(ctx.evaluate('write', { type: 'widget', ...widget() }))).toEqual({
+      effect: 'ask',
+      winning: 'ask-on-widget-access#1'
+    })
+
+    // 另一条会话：读卡上一次记成读写
+    const wide = asking('s3', () => ({
+      kind: 'ask',
+      allowed: true,
+      extra: { remember: true, rememberAccess: 'write' }
+    }))
+    await wide.ctx.enforceWidget('read', widget({ operation: 'listBooks' }), opts('wt4-19-r3'))
+    expect(wide.asks).toHaveLength(1)
+    expect(widgetRows('s3')).toEqual([
+      { kind: 'widget', target: WIDGET_ID, access: 'write', source: 'user', sourceKey: '' }
+    ])
+    await wide.ctx.enforceWidget('write', widget(), opts('wt4-19-r4'))
+    expect(wide.asks).toHaveLength(1)
+  })
+
+  it('WT4-AC-19 没有询问通道（hook / 后台）→ 抛 no way to ask、不写行', async () => {
+    ensureSession('s1')
+    sessions.push('s1')
+    const silent = getDesktopSecurityContext({ sessionId: 's1' }, () => config)
+    const noWay = `Access denied: this needs your confirmation but there is no way to ask: widget "${NAME}" (${WIDGET_ID})`
+    await expect(silent.enforceWidget('write', widget(), opts('wt4-19-n1'))).rejects.toMatchObject({
+      message: noWay
+    })
+    await expect(
+      silent.enforceWidget('read', widget({ operation: 'listBooks' }), opts('wt4-19-n2'))
+    ).rejects.toMatchObject({ message: noWay })
+    expect(widgetRows('s1')).toEqual([])
+  })
+
+  it('WT4-AC-20 源码目录跟着读写授权：读写行 → 目录里读写不问；只有读行 → 写问；删掉 → 又问；别的组件的目录一直问', async () => {
+    const dir = join(homedir(), '.shuvix', 'widgets', WIDGET_ID)
+    const file = join(dir, 'src', 'App.tsx')
+    const otherFile = join(homedir(), '.shuvix', 'widgets', 'expense-log', 'src', 'App.tsx')
+    // 前提：没有授权时目录里的读写都问（家目录里、权限表外）
+    expect(verdict(context().evaluate('read', { type: 'path', path: file }))).toEqual(ASK_READ)
+    expect(verdict(context().evaluate('write', { type: 'path', path: file }))).toEqual(ASK_WRITE)
+
+    const row = sessionAcl.grantWidget('s1', WIDGET_ID, 'write')!
+    expect(verdict(context().evaluate('write', { type: 'path', path: file }))).toEqual(ALLOW)
+    expect(verdict(context().evaluate('read', { type: 'path', path: file }))).toEqual(ALLOW)
+    // 真的过一次写门：没有询问通道也直接过
+    await expect(
+      context().enforcePath('write', file, { toolCallId: 'wt4-20-1', toolName: 'write' })
+    ).resolves.toBeUndefined()
+    expect(verdict(context().evaluate('write', { type: 'path', path: otherFile }))).toEqual(
+      ASK_WRITE
+    )
+
+    // 降成只读：目录的写又问（只读授权不派生目录行）
+    expect(sessionAcl.setAccess('s1', row.id, 'read')).toBe(true)
+    expect(verdict(context().evaluate('write', { type: 'path', path: file }))).toEqual(ASK_WRITE)
+
+    // 再放宽、然后删掉那一行：先不问、再问
+    expect(sessionAcl.setAccess('s1', row.id, 'write')).toBe(true)
+    expect(verdict(context().evaluate('write', { type: 'path', path: file }))).toEqual(ALLOW)
+    expect(sessionAcl.remove('s1', row.id)).toBe(true)
+    expect(verdict(context().evaluate('write', { type: 'path', path: file }))).toEqual(ASK_WRITE)
+    expect(verdict(context().evaluate('read', { type: 'path', path: file }))).toEqual(ASK_READ)
+    expect(verdict(context().evaluate('write', { type: 'path', path: otherFile }))).toEqual(
+      ASK_WRITE
+    )
+  })
+
+  /** 用户在 ~/.shuvix/policies 里写的同名覆盖：规则清空（= 把这道门拿掉） */
+  const CLEARED: UserPolicyFile = {
+    name: 'ask-on-widget-access',
+    displayName: 'ask-on-widget-access',
+    description: '',
+    rules: [],
+    body: '',
+    fileName: 'ask-on-widget-access.md'
+  }
+
+  it.each<[string, () => void]>([
+    [
+      '停用开关（isPolicyDisabled）',
+      () => state.disabled.add('policy:builtin:ask-on-widget-access')
+    ],
+    ['同名覆盖、规则清空', () => (state.userPolicies = [CLEARED])]
+  ])('WT4-AC-21 %s → 组件读写不问、放行、零命中；路径门照问', async (_label, switchOff) => {
+    switchOff()
+    const { ctx, asks } = asking('s1', () => ALLOW_ONCE)
+    for (const mode of ['read', 'write'] as const) {
+      const decision = ctx.evaluate(mode, { type: 'widget', ...widget() })
+      expect({ mode, ...verdict(decision) }).toEqual({
+        mode,
+        effect: 'allow',
+        winning: 'default:widget'
+      })
+      expect(decision.matched, mode).toEqual([])
+    }
+    await ctx.enforceWidget('write', widget(), opts('wt4-21-1'))
+    await ctx.enforceWidget('read', widget({ operation: 'listBooks' }), opts('wt4-21-2'))
+    expect(asks).toEqual([])
+    expect(widgetRows('s1')).toEqual([])
+
+    // 只拿掉了那一道门：会话目录外的写照问
+    await ctx.enforcePath('write', join(OUTSIDE, 'wt4-21.txt'), {
+      toolCallId: 'wt4-21-3',
+      toolName: 'write'
+    })
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({ kind: 'ask', id: 'wt4-21-3', toolName: 'write' })
+    expect(asks[0]).not.toHaveProperty('widget')
+  })
+
+  it('WT4-AC-22 judgeGate（预览页面的判定）：从不弹卡；没有行 → 降级为不放行；读行只放读；读写行都放', () => {
+    const { ctx, asks } = asking('s1', () => ALLOW_ONCE)
+    const gate = (
+      action: 'read' | 'write'
+    ): { allowed: boolean; downgraded: boolean; winning: string } => {
+      const v = ctx.judgeGate(action, {
+        type: 'widget',
+        widgetId: WIDGET_ID,
+        name: '',
+        operation: 'db/items'
+      })
+      return { allowed: v.allowed, downgraded: v.downgraded, winning: v.decision.winning }
+    }
+
+    expect(gate('read')).toEqual({
+      allowed: false,
+      downgraded: true,
+      winning: 'ask-on-widget-access#0'
+    })
+    expect(gate('write')).toEqual({
+      allowed: false,
+      downgraded: true,
+      winning: 'ask-on-widget-access#1'
+    })
+
+    const row = sessionAcl.grantWidget('s1', WIDGET_ID, 'read')!
+    expect(gate('read')).toEqual({ allowed: true, downgraded: false, winning: 'default:widget' })
+    expect(gate('write')).toMatchObject({ allowed: false, downgraded: true })
+
+    sessionAcl.setAccess('s1', row.id, 'write')
+    expect(gate('read').allowed).toBe(true)
+    expect(gate('write').allowed).toBe(true)
+
+    expect(asks).toEqual([])
+    expect(widgetRows('s1')).toHaveLength(1)
   })
 })

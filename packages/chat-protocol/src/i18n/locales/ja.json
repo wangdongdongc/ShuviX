@@ -476,7 +476,13 @@
     "askRememberFile": "許可して、このファイルを記憶",
     "askRememberDirectory": "許可して、このフォルダを記憶",
     "askRememberFolder": "許可して、含まれるフォルダを記憶",
-    "askRememberSession": "許可して、このセッションを記憶"
+    "askRememberSession": "許可して、このセッションを記憶",
+    "widgetAskRead": "ウィジェットを読む",
+    "widgetAskWrite": "ウィジェットを変更",
+    "widgetAskOperation": "操作",
+    "widgetAskUnnamed": "名前のないウィジェット",
+    "askRememberWidgetRead": "許可して記憶：このウィジェットを読める",
+    "askRememberWidgetWrite": "許可して記憶：このウィジェットを読み書きできる"
   },
   "sessionConfig": {
     "title": "セッション設定",
@@ -496,6 +502,7 @@
       "document": "ノートブックの文書",
       "user": "あなたが許可したもの",
       "widget": "ウィジェット {{name}}",
+      "widgetDir": "ウィジェットのフォルダ {{name}}",
       "knowledge": "ナレッジベース {{name}}",
       "skill": "スキルのフォルダ",
       "tmp": "一時フォルダ",
@@ -518,7 +525,12 @@
     "sessionsDescription": "このセッションのエージェントは、これらのセッションを確認なしで使えます —— 回答を読む、または対話もする。自分のサブセッションには行は要りません。それ以外のセッションは先に確認し、そのカードで「許可して記憶」するとここに加わります。",
     "sessionRead": "閲覧",
     "sessionWrite": "対話",
-    "sessionUntitled": "無題のセッション"
+    "sessionUntitled": "無題のセッション",
+    "widgetsTitle": "ウィジェットへのアクセス",
+    "widgetsDescription": "このセッションのエージェントは、これらのウィジェットを確認なしで使えます —— 読み取り操作を呼ぶ、またはすべての操作を呼んでウィジェット自体も変更する（ビルド、データへの SQL、フォルダの編集）。このセッションが作ったウィジェットは最初からここにあります。それ以外のウィジェットは先に確認し、そのカードで「許可して記憶」するとここに加わります。",
+    "widgetRead": "読み取り",
+    "widgetWrite": "読み書き",
+    "widgetUnnamed": "削除されたウィジェット"
   },
   "projectForm": {
     "createTitle": "新規プロジェクト",
@@ -1173,6 +1185,8 @@
     },
     "sessionLabel": "セッション",
     "sessionHint": "このタスクが属するセッションを読み書きする —— 名前の変更と、サブセッションの作成・実行",
+    "widgetLabel": "ウィジェット",
+    "widgetHint": "ウィジェット自身の操作でユーザーのウィジェットを使い、ウィジェットを作る",
     "knowledgeLabel": "ナレッジベース",
     "knowledgeHint": "セッションのナレッジベースを検索し、エントリをナレッジライターの確認に提出する",
     "agentLabel": "サブエージェント派遣",

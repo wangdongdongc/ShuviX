@@ -69,6 +69,21 @@ export interface AskSessionTarget {
 }
 
 /**
+ * 组件询问（`widget` 工具要用一个这条会话还没被授权的组件）：卡片据此摆出组件、这次的操作与访问方式，
+ * 「允许并记住」记下的是会话权限表里 `kind: 'widget'` 的一行（`extra.remember: true`；读操作的询问还可以
+ * 带 `extra.rememberAccess: 'write'`，一次记成可读写）。
+ */
+export interface AskWidgetTarget {
+  widgetId: string
+  /** 组件此刻的名字（只为显示） */
+  name: string
+  /** read = 只读，write = 读写 */
+  access: 'read' | 'write'
+  /** 这次要做什么：组件操作名（`call`），或 `widget` 工具的动作名（`build`、`sql` …） */
+  operation: string
+}
+
+/**
  * 命中的安全策略给出的提示语（策略 md 里规则的 `prompt`）。
  *
  * 与 `description` 刻意分开：description 是**工具自己**的说明（如 git 操作的文案），
@@ -104,6 +119,8 @@ export interface AskInputRequest extends InputRequestBase {
   preview?: AskPreview
   /** 会话询问：要交互的那条会话与访问方式（有则卡片按会话渲染，可「允许并记住」） */
   session?: AskSessionTarget
+  /** 组件询问：要用的那个组件、操作与访问方式（有则卡片按组件渲染，可「允许并记住」） */
+  widget?: AskWidgetTarget
   /**
    * 该命令将作为**后台任务**运行（bash 的 run_in_background）。
    * 卡片上标一个标签 —— 用户批准的是一个不会自动结束、要自己去停的进程，

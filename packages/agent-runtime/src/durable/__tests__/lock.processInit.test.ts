@@ -114,7 +114,9 @@ describe('lock · follows in-process initialization (option A)', () => {
       expect(t2.configCalls).toEqual(['s1'])
       expect(t2.toolHost.resolveCalls).toHaveLength(1)
       expect(t2.toolHost.rebuildCalls).toEqual([])
-      expect(t2.toolHost.builtinCalls).toEqual([{ sessionId: 's1', sandboxed: false }])
+      expect(t2.toolHost.builtinCalls).toEqual([
+        { sessionId: 's1', sandboxed: false, skills: ['builtin:drawing', 'pdf'] }
+      ])
       expect(toolDescription(t2, 'shuvix.builtin', 'bash')).toContain('sandboxed=false')
       expect(t2.broadcastsOf('agent_created')).toHaveLength(1)
       expect(t2.mirror).toEqual([
@@ -151,7 +153,9 @@ describe('lock · follows in-process initialization (option A)', () => {
         { sessionId: 's1', connect: { signal: expect.any(AbortSignal) } }
       ])
       expect(t2.toolHost.mcp('ctx').connects).toBe(1)
-      expect(t2.toolHost.builtinCalls).toEqual([{ sessionId: 's1', sandboxed: true }])
+      expect(t2.toolHost.builtinCalls).toEqual([
+        { sessionId: 's1', sandboxed: true, skills: ['builtin:drawing', 'pdf'] }
+      ])
       expect(extensionTools(t2, 'shuvix.agent.1')).toEqual([
         'agent',
         'skill',
@@ -221,7 +225,11 @@ describe('lock · follows in-process initialization (option A)', () => {
       expect(t.toolHost.rebuildCalls).toEqual([lock])
       expect(t.toolHost.rebuildContexts).toEqual([{ sessionId: 's1' }])
       expect(t.toolHost.mcp('ctx').connects).toBe(1)
-      expect(t.toolHost.builtinCalls.at(-1)).toEqual({ sessionId: 's1', sandboxed: true })
+      expect(t.toolHost.builtinCalls.at(-1)).toEqual({
+        sessionId: 's1',
+        sandboxed: true,
+        skills: ['builtin:drawing', 'pdf']
+      })
       expect(t.configCalls).toEqual(['s1'])
       expect(t.mirror).toEqual([
         ['s1', false],

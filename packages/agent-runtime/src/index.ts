@@ -285,6 +285,7 @@ export {
   type GitObjectInput,
   type UrlObjectInput,
   type SessionObjectInput,
+  type WidgetObjectInput,
   urlObjectOf,
   type SecurityRule,
   type SecurityDecision,

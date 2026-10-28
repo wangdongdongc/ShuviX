@@ -149,7 +149,8 @@ function agentOfSession(
 function sessionToolContext(
   deps: DesktopToolHostDeps,
   sessionId: string,
-  sandboxed?: boolean
+  sandboxed?: boolean,
+  rootSkills?: readonly string[]
 ): ToolContext {
   return {
     sessionId,
@@ -157,7 +158,8 @@ function sessionToolContext(
     requestUserInput: (request) => requestUserInputFor(sessionId, request),
     emitChatEvent: (event) => chatFrontendRegistry.broadcast({ ...event, sessionId } as ChatEvent),
     agentOf: agentOfSession(deps, sessionId),
-    ...(sandboxed === undefined ? {} : { sandboxed })
+    ...(sandboxed === undefined ? {} : { sandboxed }),
+    ...(rootSkills === undefined ? {} : { rootSkills })
   }
 }
 
@@ -322,11 +324,12 @@ async function connectMcpServer(
  */
 export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
   return {
-    buildBuiltinTools({ sessionId, sandboxed }) {
+    buildBuiltinTools({ sessionId, sandboxed, skills }) {
       // 命令沙箱的钉子：有锁（重开）或刚解析出来（创建）就按它定；还没有 agent 时（undefined）
       // bash 按此刻的开关给一份占位（这份内置工具在创建 agent 时会按解析结果重装）。纯本地：
       // 不读锁、不连服务器（打开会话时就调它）
-      const ctx = sessionToolContext(deps, sessionId, sandboxed)
+      // 根 agent 的技能货架：`widget` 工具据此决定讲不讲造组件的动作
+      const ctx = sessionToolContext(deps, sessionId, sandboxed, skills)
       const wrap = sessionWrapper(deps, sessionId, ctx)
       // 只收当前平台上存在的工具：档案里另一个平台的版本（Windows 上的 bash、macOS 上的
       // powershell）在这里自然缺位 —— 锁按名单拼次序时只收装了的

@@ -21,9 +21,11 @@
  *     但文件路由不限路径，带上 `*` 就是让用户浏览器里任何网页都能读走本机文件。桌面里 widget 是同源请求，
  *     用不着它；远程模式下 widget 是沙箱里的不透明源，由 widgetProxy 在转发时补上（那一面本来就不认证）。
  *   - **`/w/<id>/` 下的一切要这个 widget 的令牌**（widgetToken.ts，请求头 `x-shuvix-widget-token`）：没有、签名
- *     不对、是别的 widget 的 → 403；`cli` 范围的令牌用不了 `fs/`。前两道挡网页，挡不住本机进程 —— 沙箱里的命令
- *     能直接 `curl` 这里。令牌由宿主补在请求头上（主进程给 widget 页面、网络服务的转发、CLI 交给命令），不进 URL，
- *     widget 代码不用改。预检（OPTIONS）不要令牌：它什么也不返回。
+ *     不对、是别的 widget 的 → 403。前两道挡网页，挡不住本机进程 —— 沙箱里的命令能直接 `curl` 这里。令牌由宿主
+ *     补在请求头上（主进程给 widget 页面、网络服务的转发），不进 URL，widget 代码不用改。预检（OPTIONS）不要令牌。
+ *   - **`preview` 令牌**（`widget` 工具的预览窗口）：页面在替发起预览的那条会话干活 —— `api/`、`db/` 按那条会话对
+ *     这个组件的授权判，`fs/` 按它的权限表判读（只判不问，判定由宿主注入：setWidgetPreviewJudge；没注入 = 一律
+ *     拒绝）。从前预览带 `ui` 令牌，改过界面再预览就能以用户身份写数据、读家目录的任何文件。
  *
  * 懒启动：首次 registerWidget / rebuild 触发 server 监听
  * 打包复用 esbuild 插件的 BundlerService（共享预置的 React/Router 依赖）
@@ -35,11 +37,12 @@ import { readFileSync } from 'fs'
 import { bundlerService, bundlerResourcePath } from '../bundler'
 import { createLogger } from '../../logger'
 import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
-import { serveWidgetFiles } from './widgetFiles'
-import { WIDGET_TOKEN_HEADER, widgetTokenScope } from './widgetToken'
+import { resolveWidgetFilePath, serveWidgetFiles } from './widgetFiles'
+import { verifyWidgetToken, WIDGET_TOKEN_HEADER, type WidgetTokenClaims } from './widgetToken'
 import {
   callWidgetOp,
   onWidgetDataChanged,
+  readApiSnapshot,
   WidgetApiError,
   widgetStorageOf,
   type WidgetDataChange
@@ -51,6 +54,24 @@ import {
 } from '../../../shared/widgetRoutes'
 
 const log = createLogger('WidgetServer')
+
+/**
+ * 预览页面的请求按发起预览的那条会话判（只判不问 —— 预览窗口没有人看着，弹不出询问）。宿主启动时注入
+ * （main/index.ts：桌面安全模块的 judgeGate），本模块不反向依赖工具层
+ */
+export interface WidgetPreviewJudge {
+  /** 这条会话能不能免询问地以 `access` 用这个组件（`operation` = 操作名或路由，只为记录） */
+  widget(sessionId: string, access: 'read' | 'write', widgetId: string, operation: string): boolean
+  /** 这条会话能不能免询问地读这个文件 */
+  readPath(sessionId: string, path: string): boolean
+}
+
+let previewJudge: WidgetPreviewJudge | null = null
+
+/** 注入预览请求的判定（main/index.ts）；null = 预览页面的 api / db / fs 一律拒绝 */
+export function setWidgetPreviewJudge(judge: WidgetPreviewJudge | null): void {
+  previewJudge = judge
+}
 
 interface WidgetEntry {
   id: string
@@ -324,9 +345,9 @@ export class WidgetServer {
     const rest = match[2] ?? '/'
 
     // 这个 widget 的令牌（见 widgetToken.ts）：先于「注册了没有」—— 不带令牌的人连哪些 widget 在都问不出来
-    const scope = widgetTokenScope(req.headers[WIDGET_TOKEN_HEADER], widgetId)
-    if (!scope || (scope === 'cli' && rest.startsWith(WIDGET_FILES_SEGMENT))) {
-      this.refuse(res, rest, scope === 'cli')
+    const claims = verifyWidgetToken(req.headers[WIDGET_TOKEN_HEADER], widgetId)
+    if (!claims) {
+      this.refuse(res, rest)
       return
     }
 
@@ -340,7 +361,7 @@ export class WidgetServer {
     // /api/<op> —— 组件自己的 API（调用方是用户）
     if (rest.startsWith('/api/')) {
       const op = rest.slice(5)
-      this.handleApiRequest(req, res, widgetId, op, scope).catch((err) => {
+      this.handleApiRequest(req, res, widgetId, op, claims).catch((err) => {
         log.warn(`unhandled api error widget=${widgetId} op=${op}:`, err)
         if (!res.headersSent) {
           this.respondJson(res, 500, {
@@ -361,6 +382,17 @@ export class WidgetServer {
     }
     if (rest.startsWith('/db/')) {
       const table = rest.slice(4)
+      // 预览页面写老组件的表要那条会话的读写授权，读要只读授权
+      const method = (req.method ?? 'GET').toUpperCase()
+      const access = method === 'GET' ? 'read' : 'write'
+      if (!this.previewAllowsWidget(claims, access, widgetId, `db/${table}`)) {
+        this.refusePreview(
+          res,
+          rest,
+          `This preview's session may not ${access === 'read' ? 'read' : 'change'} this widget's data.`
+        )
+        return
+      }
       this.handleDbRequest(req, res, widgetId, table, url).catch((err) => {
         log.warn(`unhandled db error widget=${widgetId} table=${table}:`, err)
         if (!res.headersSent) {
@@ -373,10 +405,23 @@ export class WidgetServer {
       return
     }
 
-    // /fs/file、/fs/list —— 读本机文件（令牌在上面验过，`cli` 范围到不了这里）
+    // /fs/file、/fs/list —— 读本机文件（令牌在上面验过；预览页面按发起预览的会话的权限表判）
     if (rest.startsWith(WIDGET_FILES_SEGMENT)) {
       const qsIdx = url.indexOf('?')
       const search = new URLSearchParams(qsIdx === -1 ? '' : url.slice(qsIdx + 1))
+      if (claims.scope === 'preview') {
+        const path = resolveWidgetFilePath(search.get('path'))
+        const allowed =
+          !!path && !!claims.sessionId && !!previewJudge?.readPath(claims.sessionId, path)
+        if (!allowed && path) {
+          this.refusePreview(
+            res,
+            rest,
+            `This preview's session may not read ${path} without asking.`
+          )
+          return
+        }
+      }
       serveWidgetFiles(rest, req, res, search).catch((err) => {
         log.warn(`unhandled fs error widget=${widgetId} route=${rest}:`, err)
         if (!res.headersSent) {
@@ -455,12 +500,25 @@ export class WidgetServer {
 
   // ────── widget API ──────
 
+  /** `preview` 令牌：那条会话能不能免询问地这样用这个组件。`ui` 令牌恒为真（调用方是用户） */
+  private previewAllowsWidget(
+    claims: WidgetTokenClaims,
+    access: 'read' | 'write',
+    widgetId: string,
+    operation: string
+  ): boolean {
+    if (claims.scope === 'ui') return true
+    return (
+      !!claims.sessionId && !!previewJudge?.widget(claims.sessionId, access, widgetId, operation)
+    )
+  }
+
   private async handleApiRequest(
     req: IncomingMessage,
     res: ServerResponse,
     widgetId: string,
     op: string,
-    scope: 'ui' | 'cli'
+    claims: WidgetTokenClaims
   ): Promise<void> {
     if ((req.method ?? 'GET').toUpperCase() !== 'POST') {
       this.respondJson(res, 405, {
@@ -475,13 +533,38 @@ export class WidgetServer {
       this.respondJson(res, 400, { error: { code: 'invalid_json', message: (e as Error).message } })
       return
     }
+    // 预览页面：调用方是发起预览的那条会话的 agent，按它对这个组件的授权判（操作认不得的交给 callWidgetOp 报）
+    let expectedMode: 'read' | 'write' | undefined
+    if (claims.scope === 'preview') {
+      const entry = readApiSnapshot(widgetId)?.ops.find((o) => o.name === op)
+      expectedMode = entry?.mode
+      if (entry && !this.previewAllowsWidget(claims, entry.mode, widgetId, op)) {
+        this.respondJson(res, 403, {
+          error: {
+            code: 'not_authorized',
+            message: `This preview's session may not call ${entry.mode} operations of this widget without asking.`
+          }
+        })
+        return
+      }
+    }
     try {
-      // `ui` 令牌只在组件自己的页面上（调用方是用户）；`cli` 令牌在 agent 的 shell 里（curl 测试时）
+      // `ui` 令牌只在组件自己的页面上（调用方是用户）；`preview` 令牌是替那条会话的 agent 渲染的页面。两者都是组件
+      // 自己的界面在调，所以纯界面的操作（`agent: false`）照样调得到
       const caller =
-        scope === 'cli'
-          ? ({ kind: 'agent', actor: 'cli', label: 'cli' } as const)
+        claims.scope === 'preview'
+          ? ({
+              kind: 'agent',
+              ...(claims.sessionId ? { sessionId: claims.sessionId } : {}),
+              actor: 'preview',
+              label: 'preview'
+            } as const)
           : ({ kind: 'user', label: 'user' } as const)
-      const { result } = await callWidgetOp(widgetId, op, args ?? {}, caller)
+      // 预览页面按这次读到的读 / 写判的授权：其间重新构建改了它，分发器拒绝（changed）
+      const { result } = await callWidgetOp(widgetId, op, args ?? {}, caller, {
+        allowUiOnly: true,
+        ...(expectedMode ? { expectedMode } : {})
+      })
       if (result.outcome.ok) {
         this.respondJson(res, 200, { result: result.outcome.value })
       } else {
@@ -561,13 +644,19 @@ export class WidgetServer {
   }
 
   /**
-   * 令牌不对的 403：`db/` 与 `fs/list` 回 JSON `{ code, message }`（与它们别的错误同形，widget 照样 `res.json()`），
-   * 其余回纯文本。话写给在 shell 里 curl 的智能体看：令牌从哪来、带在哪
+   * 令牌不对的 403：`db/`、`api/` 与 `fs/list` 回 JSON `{ code, message }`（与它们别的错误同形，widget 照样
+   * `res.json()`），其余回纯文本
    */
-  private refuse(res: ServerResponse, rest: string, cliOnFiles: boolean): void {
-    const message = cliOnFiles
-      ? 'The token from `shuvix widget build` cannot read files; fs/ works only inside the widget.'
-      : `This widget route needs the widget's token in the ${WIDGET_TOKEN_HEADER} header. Open the widget in ShuviX, or pass the token that \`shuvix widget build\` returned.`
+  private refuse(res: ServerResponse, rest: string): void {
+    this.refusePreview(
+      res,
+      rest,
+      `This widget route needs the widget's token in the ${WIDGET_TOKEN_HEADER} header; open the widget in ShuviX.`
+    )
+  }
+
+  /** 403，形状同 refuse（预览页面越过了那条会话的授权也用它） */
+  private refusePreview(res: ServerResponse, rest: string, message: string): void {
     if (rest.startsWith('/db/') || rest.startsWith('/api/') || rest === WIDGET_LIST_ROUTE) {
       this.respondJson(res, 403, { code: 'FORBIDDEN', message })
       return
@@ -590,6 +679,8 @@ function apiErrorStatus(code: string): number {
     case 'unknown_op':
     case 'no_api':
       return 404
+    case 'changed':
+      return 409
     case 'timeout':
       return 504
     case 'interrupted':

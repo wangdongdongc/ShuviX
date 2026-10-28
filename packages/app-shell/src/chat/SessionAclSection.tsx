@@ -2,6 +2,8 @@
  * 会话权限表卡（「文件访问」）—— 这条会话的智能体免询问读写哪些路径，一条一行（形状与规则见
  * chat-protocol 的 sessionAcl.ts）。桌面与手机共用同一个组件。会话种类的行（它免询问查看 / 对话的别的会话）
  * 另起一卡「会话访问」，有行才出现 —— 那些行只来自询问卡片上的「允许并记住」，可以在查看与对话之间切换、删掉。
+ * 组件种类的行（它免询问只读 / 读写的组件）同样另起一卡「组件访问」：来自「允许并记住」或会话自己建了那个组件；
+ * 读写行派生出的组件文件夹（widgetDir）是路径行，摆在「文件访问」里。
  *
  * 行的排法：工作目录、笔记本文档、你授予的、widget 目录在前，总是摆出来；知识库、技能目录与会话自己的目录
  * （临时目录、产物、工具结果）来自会话设置、用户不用管，收在「显示另外 N 项」后面。
@@ -24,6 +26,7 @@ import {
   MessagesSquare,
   Plus,
   Sparkles,
+  Wrench,
   X
 } from 'lucide-react'
 import { getChatApi, getHostApi, useAppEvent } from '@shuvix/chat-ui'
@@ -38,7 +41,7 @@ import {
 import { SegmentedControl, SettingsSection } from '../settings/SettingsPrimitives'
 
 /** 摆在前面、总是可见的来源 */
-const PROMINENT: readonly AclSource[] = ['workdir', 'document', 'user', 'widget']
+const PROMINENT: readonly AclSource[] = ['workdir', 'document', 'user', 'widget', 'widgetDir']
 
 /** 界面上的顺序 */
 const SOURCE_ORDER: readonly AclSource[] = [
@@ -46,6 +49,7 @@ const SOURCE_ORDER: readonly AclSource[] = [
   'document',
   'user',
   'widget',
+  'widgetDir',
   'knowledge',
   'skill',
   'system'
@@ -56,6 +60,7 @@ const SOURCE_ICONS: Record<AclSource, typeof FolderOpen> = {
   document: FileText,
   user: KeyRound,
   widget: LayoutGrid,
+  widgetDir: LayoutGrid,
   knowledge: Library,
   skill: Sparkles,
   system: HardDrive
@@ -92,6 +97,8 @@ function AclRow({
         })
       case 'widget':
         return t('sessionAcl.source.widget', { name: entry.sourceKey })
+      case 'widgetDir':
+        return t('sessionAcl.source.widgetDir', { name: entry.sourceKey })
       default:
         return t(`sessionAcl.source.${entry.source}`)
     }
@@ -154,8 +161,8 @@ function AclRow({
   )
 }
 
-/** 会话种类的一行：目标会话的标题与 id，查看 / 对话，删除 */
-function SessionAclRow({
+/** 会话 / 组件种类的一行：目标的名字与 id，两档访问方式（查看 / 对话；只读 / 读写），删除 */
+function TargetAclRow({
   entry,
   onAccess,
   onRemove
@@ -165,19 +172,22 @@ function SessionAclRow({
   onRemove: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
+  const widget = entry.kind === 'widget'
+  const Icon = widget ? Wrench : MessagesSquare
   return (
     <div
       data-acl-entry={entry.id}
-      data-acl-kind="session"
+      data-acl-kind={entry.kind}
       data-acl-target={entry.target}
       data-acl-access={entry.access}
       className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2"
     >
       <div className="flex min-w-0 flex-1 basis-48 items-center gap-2.5">
-        <MessagesSquare size={13} className="shrink-0 text-text-tertiary" />
+        <Icon size={13} className="shrink-0 text-text-tertiary" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12px] text-text-primary">
-            {entry.targetTitle || t('sessionAcl.sessionUntitled')}
+            {entry.targetTitle ||
+              t(widget ? 'sessionAcl.widgetUnnamed' : 'sessionAcl.sessionUntitled')}
           </div>
           <div className="truncate font-mono text-[11px] text-text-tertiary">{entry.target}</div>
         </div>
@@ -187,8 +197,14 @@ function SessionAclRow({
           value={entry.access}
           onChange={(next) => next !== entry.access && onAccess(next)}
           options={[
-            { value: 'read', label: t('sessionAcl.sessionRead') },
-            { value: 'write', label: t('sessionAcl.sessionWrite') }
+            {
+              value: 'read',
+              label: t(widget ? 'sessionAcl.widgetRead' : 'sessionAcl.sessionRead')
+            },
+            {
+              value: 'write',
+              label: t(widget ? 'sessionAcl.widgetWrite' : 'sessionAcl.sessionWrite')
+            }
           ]}
         />
         <button
@@ -352,6 +368,7 @@ export function SessionAclSection({
 
   const paths = entries.filter((e) => e.kind === 'path')
   const sessions = entries.filter((e) => e.kind === 'session')
+  const widgets = entries.filter((e) => e.kind === 'widget')
   const prominent = paths.filter((e) => PROMINENT.includes(e.source))
   const rest = paths.filter((e) => !PROMINENT.includes(e.source))
   const shown = expanded ? paths : prominent
@@ -412,7 +429,24 @@ export function SessionAclSection({
             className="divide-y divide-border-secondary/40"
           >
             {sessions.map((entry) => (
-              <SessionAclRow
+              <TargetAclRow
+                key={entry.id}
+                entry={entry}
+                onAccess={(access) => setAccess(entry, access)}
+                onRemove={() => remove(entry)}
+              />
+            ))}
+          </div>
+        </SettingsSection>
+      )}
+      {widgets.length > 0 && (
+        <SettingsSection
+          title={t('sessionAcl.widgetsTitle')}
+          description={t('sessionAcl.widgetsDescription')}
+        >
+          <div data-session-acl-widgets={sessionId} className="divide-y divide-border-secondary/40">
+            {widgets.map((entry) => (
+              <TargetAclRow
                 key={entry.id}
                 entry={entry}
                 onAccess={(access) => setAccess(entry, access)}

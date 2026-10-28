@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:coding
 shuvix-builtin: true
 name: coding
 description: The software engineering agent — the full local toolchain (shell, files, search). A `work` session runs it as a `coding` sub-session.
-shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, skill:builtin:drawing, skill:builtin:widget
+shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:widget
 shuvix-displayName: Coding
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

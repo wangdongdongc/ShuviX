@@ -1,6 +1,7 @@
 /**
  * 内置 hook（builtinHooks/）—— auto-title，以及判定型的 auto-review（询问点的自动审查）。auto-review
- * 在这里只钉清单、交付与结构（HB-10…12），外加经真 runner 的一格：会话客体不派审查员（XS-20）；判定型的
+ * 在这里只钉清单、交付与结构（HB-10…12），外加经真 runner 的两格：会话客体（XS-20）与组件客体（WT4-SE-17）
+ * 不派审查员；判定型的
  * 派发与合并见 hookDecide.test.ts。
  *
  * md 是唯一事实源（随包发布成文件，运行时经宿主注入的 readMd 现读；本测试注入构建期内联
@@ -293,11 +294,14 @@ describe('auto-review（判定型）结构钉板', () => {
     return parsed!
   }
 
-  it('HB-10 en：派 permission-reviewer、恰一条 permission.request 绑定（when 排除会话客体 —— 会话访问只由人回答）、显示名与描述、正文点名 next 且无模板语法', () => {
+  it('HB-10 / WT4-SE-16 en：派 permission-reviewer、恰一条 permission.request 绑定（when 排除会话与组件客体 —— 这两类访问只由人回答）、显示名与描述、正文点名 next 且无模板语法', () => {
     const review = reviewOf('en')
     expect(review.agent).toBe('permission-reviewer')
     expect(review.bindings).toStrictEqual([
-      { trigger: 'permission.request', when: "event.operation.objectType != 'session'" }
+      {
+        trigger: 'permission.request',
+        when: "event.operation.objectType != 'session' && event.operation.objectType != 'widget'"
+      }
     ])
     const when = review.bindings[0].when!
     const env = { host: 'desktop', platform: 'darwin' }
@@ -306,6 +310,8 @@ describe('auto-review（判定型）结构钉板', () => {
       operation: { objectType }
     })
     expect(evaluateWhen(when, { event: eventOf('session'), env })).toBe(false)
+    // WT4-SE-16 组件访问同样只由人回答
+    expect(evaluateWhen(when, { event: eventOf('widget'), env })).toBe(false)
     for (const objectType of ['path', 'command', 'gitTool', 'database', 'url', 'invocation']) {
       expect(evaluateWhen(when, { event: eventOf(objectType), env }), objectType).toBe(true)
     }
@@ -393,6 +399,71 @@ describe('XS-20 auto-review × 会话客体（经真 runner 的 decide）', () =
           permissionPayload({
             operation: SESSION_OPERATION,
             policy: { names: ['Ask Before Using Another Session'], prompt: 'p' }
+          })
+        )
+      ).toBeNull()
+      await settle()
+      expect(h.runTask).not.toHaveBeenCalled()
+      expect(h.events).toEqual([])
+
+      expect(
+        await h.runner.decide(
+          'permission.request',
+          permissionPayload({ operation: PATH_OPERATION })
+        )
+      ).toEqual({ result: verdict('allow'), hook: 'auto-review' })
+      expect(h.runTask).toHaveBeenCalledTimes(1)
+      expect(h.call(0).agentType.name).toBe('permission-reviewer')
+
+      expect(h.warns().filter((msg) => msg.includes('when evaluation failed'))).toEqual([])
+      expect(h.warns()).toEqual([])
+    }
+  )
+})
+
+/**
+ * WT4-SE-17 XS-20 的组件版：组件访问（`objectType: 'widget'`）也只由人回答 —— when 为假，不派审查员、decide 交回
+ * null（照旧问人）；同一个 runner 里路径客体照常派一次。when 求值从不失败。
+ */
+describe('WT4-SE-17 auto-review × 组件客体（经真 runner 的 decide）', () => {
+  const reviewer: InProcessAgentType = {
+    ...PROFILE,
+    name: 'permission-reviewer',
+    displayName: 'Permission Reviewer',
+    tools: ['read']
+  }
+
+  const WIDGET_OPERATION = {
+    tool: 'widget: call',
+    action: 'write',
+    objectType: 'widget',
+    target: 'Widget(write, X)',
+    facts: { widgetId: 'X', name: 'N', operation: 'addBook' }
+  }
+  const PATH_OPERATION = {
+    tool: 'write',
+    action: 'write',
+    objectType: 'path',
+    target: 'Write(/Users/u/notes.txt)',
+    facts: { path: '/Users/u/notes.txt', workingDirectory: '/ws' }
+  }
+
+  it.each(LANGS)(
+    'WT4-SE-17 %s：objectType widget → 不派发、返回 null、没有事件；objectType path → 派 permission-reviewer 恰一次；零 when 告警',
+    async (lang) => {
+      const review = build(lang).find((hook) => hook.name === 'auto-review')!
+      const h = makeRunner({
+        entries: [entryOf(review, 'builtin')],
+        resolveAgentProfile: (name) => (name === 'permission-reviewer' ? reviewer : null),
+        runTask: async () => verdictResult(verdict('allow'))
+      })
+
+      expect(
+        await h.runner.decide(
+          'permission.request',
+          permissionPayload({
+            operation: WIDGET_OPERATION,
+            policy: { names: ['Ask Before Using a Widget'], prompt: 'p' }
           })
         )
       ).toBeNull()

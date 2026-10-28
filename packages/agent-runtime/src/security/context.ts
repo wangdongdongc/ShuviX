@@ -331,7 +331,7 @@ export function createSecurityContext(
     judgeGate: (action, object, opts) =>
       gateVerdictOf(judge(action, object, true, opts?.tool, opts?.supportedDispositions).decision),
 
-    // enforcePath / enforceGitOp / enforceUrl / enforceSession 什么都不返回 —— 用户的「其它」反馈没有地方带回去，
+    // enforcePath / enforceGitOp / enforceUrl / enforceSession / enforceWidget 什么都不返回 —— 用户的「其它」反馈没有地方带回去，
     // 只能抛出。强制 onOther:'throw'：调用方误传 'return' 时，反馈不能被当成放行
     async enforcePath(mode: AccessMode, resolvedPath: string, opts: EnforceOpts): Promise<void> {
       await enforce(
@@ -431,6 +431,19 @@ export function createSecurityContext(
           ownTurn: object.ownTurn,
           lastActiveAt: object.lastActiveAt ?? '',
           bot: object.bot ?? ''
+        },
+        { ...opts, onOther: 'throw' }
+      )
+    },
+
+    async enforceWidget(mode, object, opts): Promise<void> {
+      await enforce(
+        mode,
+        {
+          type: 'widget',
+          widgetId: object.widgetId,
+          name: object.name,
+          operation: object.operation
         },
         { ...opts, onOther: 'throw' }
       )
