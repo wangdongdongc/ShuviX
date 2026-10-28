@@ -14,7 +14,11 @@
  *      从图底下那条「收起」时卡片一下子矮了一千多像素，组件把它拉回视野，而不是让视野落进后面的
  *      内容里（E-4）。展开了还被栏宽缩着的宽图（pele 重排也收不进）才给「Full size」弹窗：按原宽、
  *      可滚动，关掉后仍是展开的（E-7）。自然宽度放不下这一栏的横排图由 pele 按栏宽重排，而不是整张
- *      缩小（E-6）。jsdom 的几何全是 0，也不会滚。
+ *      缩小（E-6）。jsdom 的几何全是 0，也不会滚；
+ *   4. **画帧时序**：列表把滚出渲染窗口的卡片卸下、滚回来时重挂。卡片挂上那一刻就量栏宽，所以重挂后
+ *      **画出来的第一帧**就按栏宽排好（展开的仍是展开的）—— 单测里 jsdom 的 `act()` 把提交与 effect 一并
+ *      冲完，分不出「画之前」与「画之后才量到」。E-8 用 `watchPaint` 在每个 rAF 回调（那一帧画之前）里
+ *      采卡片，一路往上滚过两张卸下了的卡。
  *
  * 模型侧由 `harness/fakeProvider` 脚本化（隔离实例没有 API Key）；流式过程靠它的 chunkDelayMs /
  * holdMs / release() 摆出来。一次 launchApp，**每条用例一个会话**：对话列表是 react-virtuoso，
@@ -34,10 +38,13 @@ import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider
 import { createProject, seedFakeProvider, waitRendererReady } from '../../harness/seed'
 import {
   chatPane,
+  conversationScrollPane,
   mermaidPane,
   mermaidWatch,
   sidebarPane,
   type ChatPane,
+  type ConversationScrollPane,
+  type MermaidPaintFrame,
   type MermaidPane,
   type MermaidUnfoldButton,
   type MermaidWatch,
@@ -53,7 +60,8 @@ const SESSIONS = [
   'mermaid-E4',
   'mermaid-E5',
   'mermaid-E6',
-  'mermaid-E7'
+  'mermaid-E7',
+  'mermaid-E8'
 ]
 const USAGE = { prompt: 90, completion: 20 }
 
@@ -81,6 +89,7 @@ let provider: FakeProvider
 let chat: ChatPane
 let sidebar: SidebarPane
 let watch: MermaidWatch
+let scroll: ConversationScrollPane
 /** 每一轮各有一个开头标记；卡片按它认（见 pages.ts 的 assistantBodyWith） */
 const cardOf = (marker: string): MermaidPane => mermaidPane(app.main, marker)
 
@@ -100,6 +109,7 @@ beforeAll(async () => {
 
   chat = chatPane(app.main)
   watch = mermaidWatch(app.main)
+  scroll = conversationScrollPane(app.main)
   sidebar = sidebarPane(app.main)
   // IPC 建的会话没有广播：点一次「新对话」让侧栏拉全量列表
   await sidebar.clickNewChat()
@@ -553,4 +563,129 @@ describe('对话里的 mermaid 图', () => {
       expect((await mermaid.shot())?.unfolded, via).toBe(true)
     }
   }, 120_000)
+
+  it('E-8 往回滚时重挂的卡片，画出来的第一帧就按栏宽排好：展开的仍是展开的（不先闪成一条压扁的、收起的细条），收起的仍按栏宽截断', async () => {
+    await openSession('mermaid-E8')
+    /** 一直滚到真底（虚拟列表的总高边滚边估，滚一次不一定到底） */
+    const scrollToEnd = async (what: string): Promise<void> => {
+      await until(async () => {
+        await scroll.scrollToDistFromBottom(0)
+        const s = await scroll.shot()
+        return s && s.distToBottom <= 2 ? true : null
+      }, what)
+    }
+    /** 横排的 n 节点链：自然尺寸又宽又矮（栏宽未知时不能展开），按栏宽重排成竖链才截断 / 能展开 */
+    const lrChain = (prefix: string, label: string, n: number): string =>
+      [
+        'graph LR',
+        ...Array.from(
+          { length: n - 1 },
+          (_, i) =>
+            `  ${prefix}${i + 1}[${label} ${i + 1}] --> ${prefix}${i + 2}[${label} ${i + 2}]`
+        )
+      ].join('\n')
+
+    // (1) 第一轮：17 节点的宽链，从工具栏展开（只有按栏宽重排过才有得展开）
+    provider.reset()
+    provider.script({
+      text: doc('MARK-E8A a long wide chain:', fence(lrChain('e8a', 'Stage number', 17))),
+      usage: USAGE
+    })
+    await chat.typeAndSend('draw E8A')
+    await chat.waitIdle()
+    await scrollToEnd('conversation scrolled to the E8A reply')
+    const a = cardOf('MARK-E8A')
+    await a.waitFigure()
+    expect((await a.shot())?.unfold, 'E8A has an expand button').toBeTruthy()
+    await a.unfold('toolbar')
+
+    // (2) 第二轮：12 节点的宽链，保持收起 —— 按栏宽重排成竖链、截断
+    provider.reset()
+    provider.script({
+      text: doc('MARK-E8B a second wide chain:', fence(lrChain('e8b', 'Phase number', 12))),
+      usage: USAGE
+    })
+    await chat.typeAndSend('draw E8B')
+    await chat.waitIdle()
+    await scrollToEnd('conversation scrolled to the E8B reply')
+    const b = cardOf('MARK-E8B')
+    await b.waitFigure()
+    const bGeo = await until(async () => {
+      const g = await b.geometry()
+      return g.mode === 'clip' && g.viewBox.height > g.viewBox.width ? g : null
+    }, 'E8B re-laid out to the column (taller than wide) and clipped')
+    expect(bGeo.viewBox.width, JSON.stringify(bGeo)).toBeLessThanOrEqual(bGeo.contentWidth + 1)
+
+    // (3) 第三轮：几屏正文，把两张图都推出渲染窗口
+    const filler = Array.from(
+      { length: 60 },
+      (_, i) =>
+        `E8 filler paragraph ${i + 1}: ${'the quick brown fox jumps over the lazy dog '.repeat(5).trim()}.`
+    )
+    provider.reset()
+    provider.script({ text: doc('MARK-E8F lots of text:', ...filler), usage: USAGE })
+    await chat.typeAndSend('write E8F')
+    await chat.waitIdle()
+
+    // (4) 停在真底：两张卡都已卸下
+    await until(async () => {
+      await scroll.scrollToDistFromBottom(0)
+      return (await a.shot()) === null && (await b.shot()) === null ? true : null
+    }, 'both E8 mermaid cards unmounted at the bottom of the conversation')
+
+    // (5)(6) 逐帧采两张卡，一步 300px 往上滚到顶：每个条目都会经过渲染窗口
+    const watchA = await a.watchPaint()
+    const watchB = await b.watchPaint()
+    for (let step = 0; step < 400; step++) {
+      const s = await scroll.shot()
+      if (!s || s.scrollTop <= 0) break
+      await scroll.scrollTo(Math.max(0, s.scrollTop - 300))
+    }
+    await sleep(300)
+    const paintA = await watchA.stop()
+    const paintB = await watchB.stop()
+
+    const check = (
+      label: string,
+      paint: { ticks: number; frames: MermaidPaintFrame[] },
+      expectFrame: (f: MermaidPaintFrame, what: string) => void
+    ): void => {
+      const dump = `${label}: ${JSON.stringify(paint)}`
+      expect(paint.ticks, dump).toBeGreaterThan(20)
+      expect(paint.frames.length, dump).toBeGreaterThan(0)
+      // 开始采样时卡片不在 DOM 里 —— 下面看到的卡片确实是重挂的
+      expect(paint.frames[0].card, dump).toBe(0)
+      const mounted = paint.frames.filter((f) => f.card !== 0)
+      expect(mounted.length, dump).toBeGreaterThan(0)
+      // 每一次挂上的第一帧：已经有图，而且是按栏宽排的
+      const firsts = new Map<number, MermaidPaintFrame>()
+      for (const f of mounted) if (!firsts.has(f.card)) firsts.set(f.card, f)
+      for (const f of firsts.values()) {
+        const what = `${label} first frame of card ${f.card}: ${JSON.stringify(f)}`
+        expect(f.svg, what).not.toBe(0)
+        expect(f.viewBoxWidth, what).toBeLessThanOrEqual(f.contentWidth + 1)
+        expectFrame(f, what)
+      }
+      // 挂着的每一帧都如此；一次挂载里图只画一次（同一个 <svg>）
+      for (const f of mounted) {
+        const what = `${label} frame ${f.frame}: ${JSON.stringify(f)}`
+        expect(f.svg, what).not.toBe(0)
+        expect(f.viewBoxWidth, what).toBeLessThanOrEqual(f.contentWidth + 1)
+        expectFrame(f, what)
+      }
+      for (const card of firsts.keys()) {
+        const svgs = new Set(mounted.filter((f) => f.card === card).map((f) => f.svg))
+        expect(svgs.size, `${label} card ${card}: ${dump}`).toBe(1)
+      }
+    }
+    check('E8A', paintA, (f, what) => {
+      expect(f.unfolded, what).toBe(true)
+      expect(f.mode, what).toBe('fit')
+      expect(f.boxHeight, what).toBeGreaterThan(480)
+    })
+    check('E8B', paintB, (f, what) => {
+      expect(f.unfolded, what).toBe(false)
+      expect(f.mode, what).toBe('clip')
+    })
+  }, 180_000)
 })

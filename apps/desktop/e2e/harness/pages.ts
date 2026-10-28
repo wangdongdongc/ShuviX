@@ -1397,6 +1397,40 @@ export interface MermaidViewport {
   belowCard: number
 }
 
+/**
+ * 这张卡在某一个动画帧里的样子（`watchPaint` 采的；只留与上一帧不同的，第一帧总留）。在 rAF 回调里采 ——
+ * 它就跑在那一帧画之前，所以采到的是马上要画出来的 DOM
+ */
+export interface MermaidPaintFrame {
+  /** watchPaint() 之后的第几次 rAF（从 1 数） */
+  frame: number
+  /**
+   * 卡片外壳（`[data-figure-surface="card"]`）的页内编号（与 svgTag 同一套 `__e2eSvgTags` 发号）；
+   * 0 = 卡片不在 DOM 里。认卡片经卡片里的 mermaid 锚点（图 / 占位行），所以占位阶段也认得出
+   */
+  card: number
+  /** 放图那一格里根 `<svg>` 的编号；0 = 没有图 */
+  svg: number
+  /** `data-mermaid-figure` 的值；没有图 = null */
+  mode: string | null
+  /** 放图那一格挂着 `data-mermaid-unfolded` */
+  unfolded: boolean
+  /** 根 `<svg>` 的 viewBox 宽 = pele 排出来的布局宽 */
+  viewBoxWidth: number
+  /** 放图那一格的内容宽（clientWidth − 左右内边距，同 geometry().contentWidth） */
+  contentWidth: number
+  /** `<svg>` 的渲染宽 */
+  svgWidth: number
+  /** 放图那一格的外框高（border-box） */
+  boxHeight: number
+}
+
+/** `watchPaint` 的句柄 */
+export interface MermaidPaintWatch {
+  /** 停止采样，回总的 rAF 次数与留下的帧 */
+  stop(): Promise<{ ticks: number; frames: MermaidPaintFrame[] }>
+}
+
 /** 绑在「正文里含某个标记」的那条助手消息上（见 assistantBodyWith）；弹窗与主题是全局的 */
 export interface MermaidPane {
   /** 那条正文里的 mermaid 卡；正文还没上屏、或里面没有 mermaid 卡 = null */
@@ -1430,12 +1464,20 @@ export interface MermaidPane {
   dialog(): Promise<MermaidDialogShot>
   /** 三种关法之一，并等弹窗卸下（关闭动效 120ms） */
   closeDialog(via: 'escape' | 'backdrop' | 'button'): Promise<void>
+  /**
+   * 每个动画帧采一次这张卡，直到 stop()（见 MermaidPaintFrame）—— 「重挂的第一帧画成什么样」是逐帧的
+   * 断言，轮询与 MutationObserver 都看不到哪一版 DOM 真的被画了出来。一个标记一个观察器（页内按标记
+   * 存），同一标记再调一次就停掉旧的、重新开始
+   */
+  watchPaint(): Promise<MermaidPaintWatch>
 }
 
 export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
   const BODY = assistantBodyWith(marker)
   const FIGURE = `(${BODY})?.querySelector('[data-mermaid-figure]')`
   const PANEL = `document.querySelector('[data-mermaid-dialog]')`
+  /** 本标记的 watchPaint 状态（页内） */
+  const PAINT = `(window.__e2eMermaidPaint ??= {})[${JSON.stringify(marker)}]`
 
   const dialog = (): Promise<MermaidDialogShot> =>
     main.eval<MermaidDialogShot>(`(() => {
@@ -1680,6 +1722,66 @@ export function mermaidPane(main: CdpClient, marker: string): MermaidPane {
             : `${PANEL}.querySelector('button[aria-label="Close"]').click()`
       await main.eval(`(() => { ${act}; return true })()`)
       await until(() => main.eval<boolean>(`${PANEL} === null`), `mermaid dialog closed via ${via}`)
+    },
+    watchPaint: async () => {
+      await main.eval(`(() => {
+        const prev = ${PAINT}
+        if (prev) prev.running = false
+        const tags = (window.__e2eSvgTags ??= { map: new WeakMap(), next: 1 })
+        const idOf = (el) => {
+          if (!el) return 0
+          if (!tags.map.has(el)) tags.map.set(el, tags.next++)
+          return tags.map.get(el)
+        }
+        const state = { running: true, ticks: 0, frames: [], last: '' }
+        const sample = () => {
+          const body = ${BODY}
+          // 经卡片里的 mermaid 锚点认卡片：占位阶段（还没有图）也认得出
+          const anchor = body?.querySelector('[data-mermaid-figure],[data-mermaid-pending]')
+          const card = anchor?.closest('[data-figure-surface="card"]') ?? null
+          const figure = card?.querySelector('[data-mermaid-figure]') ?? null
+          const svg = figure?.querySelector(':scope > svg') ?? null
+          const vb = (svg?.getAttribute('viewBox') ?? '').trim().split(/[\\s,]+/).map(Number)
+          const fs = figure ? getComputedStyle(figure) : null
+          return {
+            card: idOf(card),
+            svg: idOf(svg),
+            mode: figure ? figure.getAttribute('data-mermaid-figure') : null,
+            unfolded: !!figure?.hasAttribute('data-mermaid-unfolded'),
+            viewBoxWidth: svg ? (vb[2] ?? 0) : 0,
+            contentWidth: figure
+              ? figure.clientWidth - parseFloat(fs.paddingLeft) - parseFloat(fs.paddingRight)
+              : 0,
+            svgWidth: svg ? svg.getBoundingClientRect().width : 0,
+            boxHeight: figure ? figure.getBoundingClientRect().height : 0
+          }
+        }
+        const tick = () => {
+          if (!state.running) return
+          state.ticks++
+          const snap = sample()
+          const key = JSON.stringify(snap)
+          if (state.frames.length === 0 || key !== state.last) {
+            state.last = key
+            state.frames.push({ frame: state.ticks, ...snap })
+          }
+          requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+        window.__e2eMermaidPaint ??= {}
+        window.__e2eMermaidPaint[${JSON.stringify(marker)}] = state
+        return true
+      })()`)
+      return {
+        stop: () =>
+          main.eval<{ ticks: number; frames: MermaidPaintFrame[] }>(`(() => {
+            const state = ${PAINT}
+            if (!state) return { ticks: 0, frames: [] }
+            state.running = false
+            delete window.__e2eMermaidPaint[${JSON.stringify(marker)}]
+            return { ticks: state.ticks, frames: state.frames }
+          })()`)
+      }
     }
   }
 }

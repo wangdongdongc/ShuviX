@@ -162,7 +162,12 @@ export function MermaidBlock({
   // 放图那一格在占位阶段还没有）。回调 ref：挂上 / 卸下时自己接上 / 断开观察（React 19 的 ref 清理函数）
   const cardRef = useCallback((el: HTMLDivElement | null) => {
     cardElRef.current = el
-    if (!el || typeof ResizeObserver === 'undefined') return
+    if (!el) return
+    // 挂上的这一刻就量一次：ResizeObserver 的第一次回调要到下一帧，在那之前栏宽是 0，图按自然尺寸
+    // 先画一帧 —— 宽图（要按栏宽重排的那种）就以一条压扁的、没展开的样子闪一下，列表里滚回来重挂时
+    // 最明显。提交阶段里的 setState 在浏览器画之前同步重渲
+    setCardWidth(el.getBoundingClientRect().width)
+    if (typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver((entries) => setCardWidth(entries[0].contentRect.width))
     observer.observe(el)
     return () => {

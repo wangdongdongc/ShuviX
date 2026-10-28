@@ -10,6 +10,12 @@
  *   - **限高 + 按栏宽重排**（LY / FW）：布局规则本身在 mermaidFit.test.ts、帧与重排规则在 chat-protocol
  *     的 mermaidFence 测试，这里只钉组件把它们落成了什么；LY-5 是一张接线矩阵 —— 几种图 × 几种栏宽，
  *     每一格的按钮与摆法都得与 mermaidLayout / mermaidUnfoldable / mermaidUnfoldedLayout 一致；
+ *   - **挂上那一刻就量栏宽**（FW-3 / UF-14）：卡片的 ref 回调先 `getBoundingClientRect` 量一次，不等
+ *     ResizeObserver 的第一次回调（真浏览器里那要到下一帧，之前那一帧按自然尺寸画 —— 宽的横排图是一条
+ *     压扁的、不能展开的细条，展开过的图在列表里滚回来重挂时就闪成收起的样子）。这两条把
+ *     `getBoundingClientRect` 桩成给卡片报栏宽、从不 `resizeCards`，看第一次提交（含它同步引起的重渲）
+ *     就已经按栏宽摆。jsdom 的 `act()` 把提交、布局阶段与被动 effect 一并冲完，分不出「画之前量到」与
+ *     「effect 里才量到」—— 真正的画帧时序由 e2e 的 chat-mermaid E-8 逐帧守；
  *   - **就地展开 / 收起**（UF）：限高藏住或缩小了图时，工具栏一颗 `[data-mermaid-unfold]`，截断处 / 展开后
  *     图底下一条 `[data-mermaid-unfold-bar]`；展开 = 不限高、按栏宽摆（同一个 <svg> 节点，不重渲），状态按
  *     源码跨重挂载记住、流式中跟着源码搬；收起后下一帧把卡片 `scrollIntoView({ block: 'nearest' })`；
@@ -281,6 +287,40 @@ const stubScrollIntoView = (): {
 /** 一条横向的 6 节点链（自然宽度远超 300） */
 const lrChain = (prefix: string): string =>
   `flowchart LR\n  ${['A', 'B', 'C', 'D', 'E', 'F'].map((x) => `${prefix}${x}`).join('-->')}`
+/**
+ * 一条横向的 n 节点链，标签「Stage number i」：自然尺寸又宽又矮（10 节点约 1741 × 60 —— 栏宽未知时
+ * 不给展开），按 576 的栏重排成一条竖链（约 152 × 888，截断）
+ */
+const lrLabelChain = (prefix: string, n: number): string =>
+  [
+    'graph LR',
+    ...Array.from(
+      { length: n - 1 },
+      (_, i) => `  ${prefix}${i}[Stage number ${i}] --> ${prefix}${i + 1}[Stage number ${i + 1}]`
+    )
+  ].join('\n')
+/**
+ * 桩 `getBoundingClientRect`：卡片外壳（`[data-figure-surface="card"]`）量出 `width` 宽，别的元素全 0
+ * （jsdom 缺省）。只桩这一个方法、用完 `mockRestore()` —— 不能 `vi.restoreAllMocks()`，那会把 pele 的
+ * 透传 spy 一起撤掉
+ */
+const stubCardRect = (width: number): { mockRestore: () => void } =>
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement
+  ): DOMRect {
+    const w = this.matches('[data-figure-surface="card"]') ? width : 0
+    return {
+      width: w,
+      height: 0,
+      top: 0,
+      left: 0,
+      right: w,
+      bottom: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    } as DOMRect
+  })
 
 beforeAll(async () => {
   await i18n.use(initReactI18next).init({
@@ -730,6 +770,47 @@ describe('按栏宽重排（FW）—— 规则见 mermaidFence 的 fitWidth', ()
     expect(svgSize(figureSvgOf()!).w).toBe(natural)
     expect(plainCalls()).toBe(before)
   })
+
+  it('MB-FW-3 第一次提交就按量到的栏宽摆：挂上时 ref 回调量的卡片宽（300）就让宽图按 276 重排，不等 ResizeObserver；之后观察者报同一个宽度什么都不变；没有 ResizeObserver 时一样', () => {
+    const W = 300
+    const box = W - 24
+    const spy = stubCardRect(W)
+    try {
+      const expectNarrow = (what: string): void => {
+        expect(
+          narrowCalls().some((c) => c[1]?.maxWidth === box),
+          what
+        ).toBe(true)
+        const size = shownSize()
+        expect(size.width, what).toBeLessThanOrEqual(box)
+        expect(figureOf()!.getAttribute('data-mermaid-figure'), what).toBe(
+          mermaidLayout(size, box).mode
+        )
+      }
+
+      // 装了观察者，但从不让它报栏宽：第一次提交里能拿到的栏宽只有 ref 回调量的那一次
+      installResizeObserver()
+      show(lrChain('fw3'))
+      expectNarrow('with ResizeObserver')
+      const calls = render.mock.calls.length
+      const svg = figureSvgOf()
+      expect(svg).not.toBeNull()
+      // 观察者的第一次回调晚到、报的还是同一个宽度：不重渲、不换 <svg>
+      resizeCards(W)
+      expect(render.mock.calls.length).toBe(calls)
+      expect(figureSvgOf()).toBe(svg)
+      clear()
+
+      // 没有 ResizeObserver（老环境 / jsdom 缺省）：挂上时那一次量照样有
+      delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver
+      expect(typeof ResizeObserver).toBe('undefined')
+      render.mockClear()
+      show(lrChain('fw3n'))
+      expectNarrow('without ResizeObserver')
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })
 
 describe('就地展开 / 收起（UF）', () => {
@@ -1074,6 +1155,57 @@ describe('就地展开 / 收起（UF）', () => {
     expect(unfoldOf()!.textContent).toBe(fold)
     expect(barOf()!.textContent).toBe(fold)
     expect(expandOf()!.textContent).toBe(full)
+  })
+
+  it('MB-UF-14 只有按栏宽重排后才能展开的宽图：展开着卸下再挂，第一次提交就是展开的（栏宽在挂上时量到，不等观察者）；观察者随后报同一宽度不重渲', () => {
+    const W = 600
+    const box = W - 24
+    const code = lrLabelChain('uf14', 10)
+    const spy = stubCardRect(W)
+    try {
+      installResizeObserver()
+      // (1) 量到 600 宽的栏：重排成竖链，截断，图底下一条「Expand」
+      show(code)
+      expect(figureOf()!.getAttribute('data-mermaid-figure')).toBe('clip')
+      expect(barOf()).not.toBeNull()
+
+      // (2) 自然尺寸（不带 maxWidth 的那次渲染）又宽又矮：栏宽未知时根本不能展开 —— 与 UF-6 的竖链
+      // 不同，它要不要显示成展开的，完全取决于第一次提交时量没量到栏宽
+      const plain = render.mock.calls.findIndex((c) => c[1]?.maxWidth === undefined)
+      expect(plain).toBeGreaterThanOrEqual(0)
+      const nat = render.mock.results[plain].value as ReturnType<typeof peleRender>
+      const natural: MermaidSize = { width: nat.width, height: nat.height }
+      expect(natural.width).toBeGreaterThan(box)
+      expect(mermaidUnfoldable(natural, 0)).toBe(false)
+
+      // (3) 展开，卸下，再挂
+      click(unfoldOf()!)
+      expect(isUnfolded()).toBe(true)
+      clear()
+      show(code)
+
+      // (4) 这一拍之内（从不 resizeCards）就是展开的、按栏宽摆
+      expect(isUnfolded()).toBe(true)
+      const fig = figureOf()!
+      expect(fig.getAttribute('data-mermaid-figure')).toBe('fit')
+      const size = shownSize()
+      expect(fig.style.getPropertyValue('--mermaid-w')).toBe(
+        `${mermaidUnfoldedLayout(size, box).width}px`
+      )
+      expect(figureSvgOf()!.viewBox.baseVal.width).toBeGreaterThan(0)
+      expect(figureSvgOf()!.viewBox.baseVal.width).toBeLessThanOrEqual(box)
+      expect(barOf()?.textContent).toBe(i18n.t('message.diagramFold'))
+      const calls = render.mock.calls.length
+      const svg = figureSvgOf()
+
+      // (5) 观察者的第一次回调晚到、报同一宽度：仍展开，不重渲、同一个 <svg>
+      resizeCards(W)
+      expect(isUnfolded()).toBe(true)
+      expect(render.mock.calls.length).toBe(calls)
+      expect(figureSvgOf()).toBe(svg)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
 
