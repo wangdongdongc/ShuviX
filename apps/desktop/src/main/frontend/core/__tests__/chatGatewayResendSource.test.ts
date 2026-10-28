@@ -150,7 +150,9 @@ describe('DefaultChatGateway.resendSources（§19.7）', () => {
     expect(mocks.rollbackToMessage).toHaveBeenCalledWith('c1', 'u1')
     expect(mocks.clearAgentScopedState).toHaveBeenCalledWith('c1')
     await gateway.prompt('c1', TASK)
-    expect(prompt.mock.calls).toStrictEqual([[TASK, undefined, undefined, undefined, PARENT]])
+    expect(prompt.mock.calls).toStrictEqual([
+      [TASK, undefined, undefined, undefined, PARENT, undefined]
+    ])
   })
 
   it('RS-02 只沿用紧接着的那一次：再发一次同样的话不带来源', async () => {
@@ -221,7 +223,14 @@ describe('DefaultChatGateway.resendSources（§19.7）', () => {
   it('RS-08 紧接着到来的是被驱动的发送 → 不沿用（来源由 drive 给，第 5 个参数为空），记录照样撤掉', async () => {
     await gateway.rollbackMessage('c1', 'u1')
     await gateway.prompt('c1', TASK, undefined, undefined, DRIVE)
-    expect(prompt.mock.calls[0]).toStrictEqual([TASK, undefined, undefined, DRIVE, undefined])
+    expect(prompt.mock.calls[0]).toStrictEqual([
+      TASK,
+      undefined,
+      undefined,
+      DRIVE,
+      undefined,
+      undefined
+    ])
     await gateway.prompt('c1', TASK)
     expect(sourceOf(1)).toBeUndefined()
   })
@@ -305,7 +314,9 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       expect(await gateway.rollbackMessage('c1', 'u1')).toBe(true)
       await gateway.prompt('c1', TASK)
     })
-    expect(prompt.mock.calls).toStrictEqual([[TASK, undefined, undefined, undefined, PARENT]])
+    expect(prompt.mock.calls).toStrictEqual([
+      [TASK, undefined, undefined, undefined, PARENT, undefined]
+    ])
   })
 
   it('RS-13 紧接着再发一次同样的话 → remote（沿用的只给一次）', async () => {
@@ -334,7 +345,7 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       await gateway.prompt('c1', 'typed by a human')
     })
     expect(prompt.mock.calls).toStrictEqual([
-      ['typed by a human', undefined, undefined, undefined, REMOTE]
+      ['typed by a human', undefined, undefined, undefined, REMOTE, undefined]
     ])
   })
 
@@ -344,7 +355,14 @@ describe('RS-13 网络客户端的上下文里：沿用的来源压过连接的�
       await gateway.prompt('c1', TASK, undefined, undefined, DRIVE)
       await gateway.prompt('c1', TASK)
     })
-    expect(prompt.mock.calls[0]).toStrictEqual([TASK, undefined, undefined, DRIVE, undefined])
+    expect(prompt.mock.calls[0]).toStrictEqual([
+      TASK,
+      undefined,
+      undefined,
+      DRIVE,
+      undefined,
+      undefined
+    ])
     expect(sourceOf(1)).toStrictEqual(REMOTE)
   })
 })

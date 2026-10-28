@@ -243,14 +243,14 @@ function ruleSpans(s: string): Span[] {
 // ─────────────────────────── 入口 ───────────────────────────
 
 /**
- * 认出 s 里的敏感内容。known（可选）：会话对照表里的真值，按原文匹配。except（可选）：不要的类别 —— 在挑
- * 互不重叠的之前就去掉，它们不会挤掉与之重叠的别的类别。
+ * 认出 s 里的敏感内容。known（可选）：会话对照表里的真值，按原文匹配。except（可选）：不要的 —— 按类别（默认照发的
+ * 几类）或值（用户照原样发的）；在挑互不重叠的之前就去掉，它们不会挤掉与之重叠的别的。
  * 已有的占位符里不会再认出东西；返回按位置排好、互不重叠。
  */
 export function detectSensitive(
   s: string,
   known?: KnownValues,
-  opts: { except?: (category: string) => boolean } = {}
+  opts: { except?: (category: string, value: string) => boolean } = {}
 ): Finding[] {
   if (s.length < 3) return []
   let spans = ruleSpans(s)
@@ -258,7 +258,7 @@ export function detectSensitive(
     spans.push({ start: k.start, end: k.end, category: k.category, rule: 'known', by: 'known' })
   }
   const { except } = opts
-  if (except) spans = spans.filter((f) => !except(f.category))
+  if (except) spans = spans.filter((f) => !except(f.category, s.slice(f.start, f.end)))
   let found = noNumbers(s, noIDs(s, spans))
   if (found.length === 0) return []
   const existing = placeholderSpans(s)

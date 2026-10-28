@@ -8,11 +8,18 @@
  *   SR-5 跨会话：内容流进别的会话时，引用到的表项复制过去
  *   SR-6 同一个值沿用表里已有的占位符；没配脱敏的会话什么都不换
  *   SR-7 默认照发的几类（USERNAME 等）照原样存，也不挤掉与之相邻的别的类别；表里已有它们的旧占位符也一样
+ *   SR-8 输入框发来的（§14）：只换用户交来的值（紧贴别的字符也换），其余照原样发、记成照原样发（之后写入时也不再
+ *        换）；显示侧车里的也换；之后工具输出里整词出现的短值也换；steer 同样
+ *   SR-9 没配脱敏的会话：带着要藏的值的发送被拒，空的照发
+ *   SR-10 还原进命令：按引号环境转义，转义后的写法记进已知值（回显时换得回占位符）；别的字段原样换
  */
 import { createHmac } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { asWrittenKey } from '../../redaction/placeholder'
+import { initShellParser } from '../../security/shell'
+import { loadShellParserWasmFromNodeModules } from '../../security/shell/nodeWasm'
 import { backgroundContext as BG } from '../context'
 import { RedactionTableDoc } from '../docs'
 import type { DurableSession } from '../durableSession'
@@ -23,6 +30,10 @@ import { allEntries, requestTexts } from './support/transcript'
 import { waitFor } from './support/wait'
 
 registerHostCleanup()
+
+beforeAll(async () => {
+  await initShellParser(loadShellParserWasmFromNodeModules())
+})
 
 const host: RedactionHost = {
   signer: { sign: (data) => createHmac('sha256', 'test-key').update(data).digest() },
@@ -185,5 +196,91 @@ describe('会话脱敏', () => {
     expect(await redaction.maskText('cd /Users/alexander; whoami → alexander')).toBe(
       'cd /Users/alexander; whoami → alexander'
     )
+  })
+
+  it('SR-8 输入框发来的：只换用户交来的值，其余照原样发、记成照原样发', async () => {
+    const t = await makeHost({ ephemeral: ['sr8'], redaction: host })
+    const session = await t.open('sr8')
+    const SHORT = 'xQ9!z'
+    t.kit.queue(answer('ok'), answer('ok'))
+    expect(
+      await session.submitUser(`mysql -p${SHORT} and DB_PASSWORD=${PASSWORD}`, {
+        composer: { secrets: [{ value: SHORT, category: 'PASSWORD' }] }
+      })
+    ).toEqual({})
+    const seen = requestTexts(t.kit, 0).join('\n')
+    expect(seen).not.toContain(SHORT)
+    expect(seen).toMatch(/mysql -p\{\{REDACTED_PASSWORD_[a-z2-7]{8}\}\} and/)
+    expect(seen).toContain(`DB_PASSWORD=${PASSWORD}`)
+    const table = await session.redaction!.table()
+    expect([...table.entries()].map(([, item]) => [item.category, item.rule, item.value])).toEqual([
+      ['PASSWORD', 'user', SHORT]
+    ])
+    expect(table.asWritten.has(asWrittenKey(host.signer, PASSWORD))).toBe(true)
+    expect(await session.redaction!.isAsWritten(PASSWORD)).toBe(true)
+    expect(await session.redaction!.isAsWritten(SHORT)).toBe(false)
+
+    // 之后的工具输出：五个字符的用户值整词出现也换，嵌在别的词里的不换；照原样发的那个不再换
+    const later = await session.redaction!.maskText(
+      `pass: ${SHORT} end, ab${SHORT}cd, DB_PASSWORD=${PASSWORD}`
+    )
+    expect(later).toMatch(
+      /^pass: \{\{REDACTED_PASSWORD_[a-z2-7]{8}\}\} end, abxQ9!zcd, DB_PASSWORD=Tr0ub4dor&3xq$/
+    )
+
+    // 显示侧车：只换用户交来的值
+    const { display } = await session.redaction!.maskComposerInput(
+      'see chip',
+      [{ value: SHORT, category: 'PASSWORD' }],
+      { content: 'see {{shuvixInlineToken:p1}}', tokens: { p1: { payload: `x ${SHORT} y` } } }
+    )
+    expect(JSON.stringify(display)).not.toContain(SHORT)
+    expect(JSON.stringify(display)).toContain('see {{shuvixInlineToken:p1}}')
+
+    // steer / followUp 同样
+    const STEER = 'Steer-Secret-42'
+    await session.followUp(`also try ${STEER}`, {
+      composer: { secrets: [{ value: STEER, category: 'SECRET' }] }
+    })
+    await waitFor(() => t.kit.requests.length >= 2)
+    expect(requestTexts(t.kit, 1).join('\n')).not.toContain(STEER)
+  })
+
+  it('SR-9 没配脱敏：带着要藏的值的发送被拒，空的照发', async () => {
+    const plain = await makeHost({ ephemeral: ['sr9'] })
+    const session = await plain.open('sr9')
+    const refused = await session.submitUser(`use ${PASSWORD}`, {
+      composer: { secrets: [{ value: PASSWORD, category: 'PASSWORD' }] }
+    })
+    expect(refused.error).toMatch(/not available/)
+    expect(plain.kit.requests).toHaveLength(0)
+    plain.kit.queue(answer('ok'))
+    expect(
+      await session.submitUser(`DB_PASSWORD=${PASSWORD}`, { composer: { secrets: [] } })
+    ).toEqual({})
+    expect(requestTexts(plain.kit, 0).join('\n')).toContain(PASSWORD)
+  })
+
+  it('SR-10 还原进命令：按引号环境转义，转义后的写法记进已知值', async () => {
+    const t = await makeHost({ ephemeral: ['sr10'], redaction: host })
+    const session = await t.open('sr10')
+    const redaction = session.redaction!
+    const VALUE = `it's $HOME-pw`
+    const [text] = await redaction.maskComposerTexts(
+      [`pw ${VALUE}`],
+      [{ value: VALUE, category: 'PASSWORD' }]
+    )
+    const p = text.match(/\{\{REDACTED_PASSWORD_[a-z2-7]{8}\}\}/)![0]
+    const outcome = await redaction.restoreJson(
+      { command: `echo "${p}" '${p}' ${p}`, note: `"${p}"` },
+      { field: 'command', dialect: 'posix' }
+    )
+    expect(outcome.value).toEqual({
+      command: `echo "it's \\$HOME-pw" 'it'\\''s $HOME-pw' 'it'\\''s $HOME-pw'`,
+      note: `"${VALUE}"`
+    })
+    expect(outcome.restored).toEqual(['PASSWORD'])
+    // 命令被回显：转义后的写法也换得回占位符
+    expect(await redaction.maskText(`+ echo it\\$HOME-pw "it's \\$HOME-pw"`)).toContain(p)
   })
 })

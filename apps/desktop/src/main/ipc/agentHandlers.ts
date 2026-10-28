@@ -36,7 +36,14 @@ export function registerAgentHandlers(): void {
   /** 向指定 session 发送消息（支持附带图片） */
   defineHandler('agent:prompt', (ctx, params: AgentPromptParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), async () => {
-      await chatGateway.prompt(params.sessionId, params.text, params.images, params.inlineTokens)
+      await chatGateway.prompt(
+        params.sessionId,
+        params.text,
+        params.images,
+        params.inlineTokens,
+        undefined,
+        params.secrets
+      )
       return { success: true }
     })
   )
@@ -62,7 +69,7 @@ export function registerAgentHandlers(): void {
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
   defineHandler('agent:steer', (ctx, params: AgentSteerParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () => {
-      chatGateway.steer(params.sessionId, params.text)
+      chatGateway.steer(params.sessionId, params.text, params.secrets)
       return { success: true }
     })
   )
@@ -70,7 +77,7 @@ export function registerAgentHandlers(): void {
   /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
   defineHandler('agent:followUp', (ctx, params: AgentFollowUpParams) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () => {
-      chatGateway.followUp(params.sessionId, params.text)
+      chatGateway.followUp(params.sessionId, params.text, params.secrets)
       return { success: true }
     })
   )

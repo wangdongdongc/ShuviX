@@ -58,6 +58,18 @@ export function placeholderFor(
   return has(legacy) ? legacy : placeholder
 }
 
+/**
+ * 用户照原样发的一个值在对照表里的键（docs/auto-redaction-design.md §14.2）：HMAC 的前 16 个字节（十六进制），
+ * 不存真值 —— 只用来认「这个值用户决定让模型看」。与类别无关：同一个值换个规则认出来也是它。
+ */
+export function asWrittenKey(signer: PlaceholderSigner, value: string): string {
+  let out = ''
+  for (const byte of signer.sign(`as-written\u0000${value}`).subarray(0, 16)) {
+    out += byte.toString(16).padStart(2, '0')
+  }
+  return out
+}
+
 /** 占位符的标准写法（新旧两种都认） */
 export const PLACEHOLDER_PATTERN = String.raw`\{\{[A-Z][A-Z0-9_]*_[a-z2-7]{8}\}\}`
 

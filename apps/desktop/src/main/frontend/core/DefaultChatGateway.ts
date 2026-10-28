@@ -2,9 +2,13 @@ import type { AgentPreviewChange, ChatGateway } from './ChatGateway'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
 import { redactionDecision } from '../../services/redactionPolicySeam'
 import {
+  MAX_INSPECT_CHARS,
   MAX_RESOLVE_PLACEHOLDERS,
+  cleanUserSecrets,
   isPlaceholder,
-  type RedactionMarkInfo
+  type RedactionHint,
+  type RedactionMarkInfo,
+  type UserSecret
 } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type {
   AgentChangePreview,
@@ -16,7 +20,7 @@ import type {
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import { sessionService } from '../../services/sessionService'
 import type { AgentSession, DriveOptions } from '../../services/agentSession'
-import type { InputSource } from '@shuvix/agent-runtime'
+import { detectSensitive, type InputSource } from '@shuvix/agent-runtime'
 import {
   currentInputOrigin,
   getOperationContext,
@@ -98,7 +102,8 @@ export class DefaultChatGateway implements ChatGateway {
     text: string,
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>,
-    drive?: DriveOptions
+    drive?: DriveOptions,
+    secrets?: UserSecret[]
   ): Promise<{ error?: string; code?: SubmitErrorCode }> {
     // 「重新生成」/ 回退后原样重发一条父会话代发的消息：沿用它的来源（§19.7）。只认紧接着的那一次、原文一字不差、
     // 两分钟之内 —— 改过的文字是人的话；不管用没用上、这次发送成不成都撤掉（在打开会话之前就取走），免得留给以后的某次发送
@@ -140,12 +145,19 @@ export class DefaultChatGateway implements ChatGateway {
     // 其它前端经会话视图（投影）看到这条用户消息，没有单独的用户消息事件。
     // 发送结果原样上交：子会话的驱动方靠它区分「没发出去」与「发出去了没回话」。
     // `drive` 只有子会话的驱动方（subSessionRunner，主进程内）给：幂等键 + driven-run 标记（P2-10）
-    return await session.prompt(promptText, images, display, drive, source)
+    return await session.prompt(
+      promptText,
+      images,
+      display,
+      drive,
+      source,
+      cleanUserSecrets(secrets)
+    )
   }
 
-  steer(sessionId: string, text: string): void {
+  steer(sessionId: string, text: string, secrets?: UserSecret[]): void {
     const origin = currentInputOrigin()
-    this.enqueue(sessionId, (session) => session.steer(text, origin))
+    this.enqueue(sessionId, (session) => session.steer(text, origin, cleanUserSecrets(secrets)))
   }
 
   async steerDriven(
@@ -166,9 +178,9 @@ export class DefaultChatGateway implements ChatGateway {
     }
   }
 
-  followUp(sessionId: string, text: string): void {
+  followUp(sessionId: string, text: string, secrets?: UserSecret[]): void {
     const origin = currentInputOrigin()
-    this.enqueue(sessionId, (session) => session.followUp(text, origin))
+    this.enqueue(sessionId, (session) => session.followUp(text, origin, cleanUserSecrets(secrets)))
   }
 
   async acceptSuggestion(sessionId: string, ref: SuggestionRef): Promise<AcceptSuggestionResult> {
@@ -285,7 +297,11 @@ export class DefaultChatGateway implements ChatGateway {
     // 无人认领 = 请求早已被取消（会话停了、run 超时了）或别的前端先答了：不再补发「已落定」
     // （P3-08）—— 待答卡片来自视图的 `asks`，询问一落定视图就不再有它，每个前端的卡片自己消失。
     // broker 记一行「没人认领」的日志
-    return respondToUserInput(requestId, response, meta)
+    const answer =
+      response?.kind === 'other' && response.secrets !== undefined
+        ? { ...response, secrets: cleanUserSecrets(response.secrets) ?? [] }
+        : response
+    return respondToUserInput(requestId, answer, meta)
   }
 
   // ─── 运行时调整 ────────────────────────────────
@@ -479,6 +495,73 @@ export class DefaultChatGateway implements ChatGateway {
     return result
   }
 
+  async inspectRedactions(params: {
+    sessionId?: string
+    provider?: string
+    model?: string
+    texts: string[]
+  }): Promise<RedactionHint[][]> {
+    const texts = (Array.isArray(params?.texts) ? params.texts : [])
+      .slice(0, MAX_INSPECT_TEXTS)
+      .map((text) => (typeof text === 'string' ? text.slice(0, MAX_INSPECT_CHARS) : ''))
+    const none = (): RedactionHint[][] => texts.map(() => [])
+    if (texts.every((text) => text.length < 3)) return none()
+    const sessionId =
+      typeof params.sessionId === 'string' && params.sessionId ? params.sessionId : undefined
+    const agent = sessionId
+      ? (sessionService.getAgentSession(sessionId) ??
+        (await sessionService.peekAgentSession(sessionId)))
+      : undefined
+    const redaction = agent?.durable.redaction
+    // 按哪个模型判：会话锁住的、会话设定的（同 resolveRedactions），还没有会话就是输入框选着的
+    const model =
+      agent?.durable.lock?.model ??
+      (sessionId
+        ? await sessionService
+            .resolveRunConfig(sessionId)
+            .then((config) =>
+              config?.model
+                ? { provider: config.model.provider, modelId: config.model.model }
+                : undefined
+            )
+            .catch(() => undefined)
+        : undefined) ??
+      (typeof params.provider === 'string' && typeof params.model === 'string'
+        ? { provider: params.provider, modelId: params.model }
+        : undefined)
+    if (!model) return none()
+    let decision: ReturnType<typeof redactionDecision>
+    try {
+      decision = redactionDecision({
+        sessionId: sessionId ?? '',
+        provider: model.provider,
+        model: model.modelId
+      })
+    } catch {
+      return none()
+    }
+    // 整个请求都拒发、或这个模型不脱敏：提示没有意义
+    if (decision.blocked || !decision.applies) return none()
+    const table = redaction ? await redaction.table() : undefined
+    const hints: RedactionHint[][] = []
+    for (const text of texts) {
+      const out: RedactionHint[] = []
+      for (const f of detectSensitive(text, table?.known)) {
+        let action: string
+        try {
+          action = decision.disclose({ category: f.category, rule: f.rule, value: f.value })
+        } catch {
+          action = 'redact'
+        }
+        if (action === 'send') continue
+        if (redaction && (await redaction.isAsWritten(f.value))) continue
+        out.push({ start: f.start, end: f.end, category: f.category })
+      }
+      hints.push(out)
+    }
+    return hints
+  }
+
   // ─── 运行时资源 ──────────────────────────────────
 
   async getRuntimeStatuses(sessionId: string): Promise<Record<string, RuntimeStatus>> {
@@ -587,3 +670,6 @@ export class DefaultChatGateway implements ChatGateway {
 
 /** 全局单例 */
 export const chatGateway = new DefaultChatGateway()
+
+/** 一次 inspect 最多看几段文本（正文与几块粘贴芯片） */
+const MAX_INSPECT_TEXTS = 20

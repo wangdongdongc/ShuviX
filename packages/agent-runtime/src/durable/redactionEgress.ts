@@ -14,7 +14,12 @@ import type { AssistantMessage, Context, Message } from '@earendil-works/pi-ai'
 import { isKeptAsWritten } from '../redaction/categories'
 import { detectSensitive } from '../redaction/detect'
 import { KnownValues } from '../redaction/known'
-import { findPlaceholders, placeholderFor, type PlaceholderSigner } from '../redaction/placeholder'
+import {
+  asWrittenKey,
+  findPlaceholders,
+  placeholderFor,
+  type PlaceholderSigner
+} from '../redaction/placeholder'
 import type { RedactionEntry, RedactionTable } from './redactionTable'
 
 /** 第二层的处置 */
@@ -64,6 +69,11 @@ function disclose(env: EgressEnv, category: string, rule: string, value: string)
   return action
 }
 
+/** 用户在输入框里照原样发的值（§14.2）：兜底不再换；拒发（block）照旧 */
+function sentAsWritten(env: EgressEnv, value: string): boolean {
+  return env.table.asWritten.size > 0 && env.table.asWritten.has(asWrittenKey(env.signer, value))
+}
+
 /** 一段文本发出去的样子 */
 function egressText(s: string, env: EgressEnv): string {
   if (s.length < 3) return s
@@ -101,6 +111,8 @@ function egressText(s: string, env: EgressEnv): string {
     if (action === 'block') throw new EgressBlockedError(f.category)
     // 照发、记录里也照原样存的：不记表，回复里也不换
     if (action === 'send' && isKeptAsWritten(f.category)) continue
+    // 用户在输入框里决定让模型看的：同上
+    if (sentAsWritten(env, f.value)) continue
     const known = env.table.known.get(f.value)
     const placeholder =
       known?.placeholder ?? placeholderFor(env.signer, f.category, f.value, (p) => env.table.has(p))

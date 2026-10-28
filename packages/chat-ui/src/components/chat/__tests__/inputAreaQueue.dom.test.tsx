@@ -310,7 +310,11 @@ describe('P3-11-12..15 两档输入框', () => {
     expect(textarea().value).not.toContain('line 11')
     await pressEnter()
     expect(agent.steer).toHaveBeenCalledTimes(1)
-    expect(agent.steer.mock.calls[0]![0]).toEqual({ sessionId: 's1', text: `see ${long}` })
+    expect(agent.steer.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: `see ${long}`,
+      secrets: []
+    })
     expect(agent.followUp).not.toHaveBeenCalled()
     expect(agent.prompt).not.toHaveBeenCalled()
     expect(store().inputText).toBe('')
@@ -334,7 +338,7 @@ describe('P3-11-12..15 两档输入框', () => {
     expect(agent.respondToInput.mock.calls[0]![0]).toEqual({
       sessionId: 's1',
       requestId: 'r1',
-      response: { kind: 'other', text: 'do it differently' }
+      response: { kind: 'other', text: 'do it differently', secrets: [] }
     })
     expect(agent.steer).not.toHaveBeenCalled()
 
@@ -356,7 +360,11 @@ describe('P3-11-12..15 两档输入框', () => {
     expect(tierButtons().map((b) => b.disabled)).toEqual([false, false])
     await click(tier('followUp'))
     expect(agent.followUp).toHaveBeenCalledTimes(1)
-    expect(agent.followUp.mock.calls[0]![0]).toEqual({ sessionId: 's1', text: 'later please' })
+    expect(agent.followUp.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: 'later please',
+      secrets: []
+    })
     expect(agent.steer).not.toHaveBeenCalled()
     expect(store().inputText).toBe('')
   })
@@ -377,8 +385,8 @@ describe('P3-11-12..15 两档输入框', () => {
         await flush()
       }
       expect(agent.prompt.mock.calls.map((call) => call[0])).toEqual([
-        { sessionId: 's1', text: 'late idle' },
-        { sessionId: 's1', text: 'late interrupted' }
+        { sessionId: 's1', text: 'late idle', secrets: [] },
+        { sessionId: 's1', text: 'late interrupted', secrets: [] }
       ])
       expect(agent.steer).not.toHaveBeenCalled()
       expect(agent.followUp).not.toHaveBeenCalled()

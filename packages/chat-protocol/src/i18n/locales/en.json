@@ -267,7 +267,22 @@
     "atRouteOnly": "{{name}} only",
     "extensions": "Extensions",
     "attach": "Add images",
-    "placeholderTouch": "Message ShuviX"
+    "placeholderTouch": "Message ShuviX",
+    "plus": "Add",
+    "secretTitle": "Add a sensitive value",
+    "secretKind": "Kind",
+    "secretValue": "Password, key or token",
+    "secretShow": "Show",
+    "secretHide": "Hide",
+    "secretNote": "The model only sees a placeholder. ShuviX puts the real value back when a tool uses it.",
+    "secretAdd": "Add",
+    "secretChip": "[🔒 {{label}} #{{seq}}]",
+    "hintOne": "This may be sensitive ({{label}}):",
+    "hintMany": "{{count}} values look sensitive:",
+    "hintHideOne": "Hide this from the model",
+    "hintHide": "Hide",
+    "hintHideAll": "Hide all",
+    "hintKeep": "Send as written"
   },
   "compact": {
     "summaryLabel": "Conversation Summary (Auto-compacted)"

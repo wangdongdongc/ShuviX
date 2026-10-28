@@ -119,7 +119,7 @@ vi.mock('../../../services/sessionDayPromptService', () => ({
   recordUserEntry: vi.fn()
 }))
 
-import { buildBuiltinProfiles } from '@shuvix/agent-runtime'
+import { buildBuiltinProfiles, KnownValues } from '@shuvix/agent-runtime'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 import { setRedactionPolicy } from '../../../services/redactionPolicySeam'
 
@@ -547,5 +547,82 @@ describe('自动脱敏：resolveRedactions', () => {
     expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({
       [KEY]: { category: 'API_KEY', value: 'sk-real', disclosed: false }
     })
+  })
+})
+
+describe('自动脱敏：inspectRedactions（输入框的提示，§14）', () => {
+  const PASSWORD = 'Tr0ub4dor&3xq'
+  const TEXT = `DB_PASSWORD=${PASSWORD} at /Users/alice/proj`
+  const at = TEXT.indexOf(PASSWORD)
+  const policySeen: unknown[] = []
+  const sessionWith = (
+    opts: { asWritten?: string[]; known?: string[]; lock?: string } = {}
+  ): unknown => {
+    const known = new KnownValues()
+    for (const value of opts.known ?? []) {
+      known.add({ value, placeholder: '{{REDACTED_TOKEN_aaaaaaaa}}', category: 'TOKEN' })
+    }
+    return {
+      durable: {
+        redaction: {
+          table: async () => ({ known }),
+          isAsWritten: async (value: string) => (opts.asWritten ?? []).includes(value)
+        },
+        lock: opts.lock ? { model: { provider: opts.lock, modelId: 'm1' } } : undefined
+      }
+    }
+  }
+
+  beforeEach(() => {
+    policySeen.length = 0
+    mocks.getAgentSession.mockReset()
+    mocks.peekAgentSession.mockReset()
+    mocks.resolveRunConfig.mockReset()
+    mocks.resolveRunConfig.mockResolvedValue(null)
+    // home = 不脱敏的目的地；别的：用户名照发，其余藏
+    setRedactionPolicy((request) => {
+      policySeen.push(request)
+      return request.provider === 'home'
+        ? { applies: false, disclose: () => 'redact' }
+        : {
+            applies: true,
+            disclose: ({ category }) => (category === 'USERNAME' ? 'send' : 'redact')
+          }
+    })
+  })
+
+  it('IR-1 按会话的模型判：只提示会被藏的（用户名照发不提）；每段文本一份', async () => {
+    mocks.getAgentSession.mockReturnValue(sessionWith({ lock: 'cloud' }))
+    expect(
+      await chatGateway.inspectRedactions({ sessionId: SID, texts: [TEXT, 'nothing here'] })
+    ).toEqual([[{ start: at, end: at + PASSWORD.length, category: 'SECRET' }], []])
+    expect(policySeen).toEqual([{ sessionId: SID, provider: 'cloud', model: 'm1' }])
+  })
+
+  it('IR-2 照原样发过的不提；会话已知的值照原文认出来', async () => {
+    mocks.getAgentSession.mockReturnValue(sessionWith({ lock: 'cloud', asWritten: [PASSWORD] }))
+    expect(await chatGateway.inspectRedactions({ sessionId: SID, texts: [TEXT] })).toEqual([[]])
+    mocks.getAgentSession.mockReturnValue(
+      sessionWith({ lock: 'cloud', known: ['plainword-secret-1'] })
+    )
+    expect(
+      await chatGateway.inspectRedactions({ sessionId: SID, texts: ['use plainword-secret-1'] })
+    ).toEqual([[{ start: 4, end: 22, category: 'TOKEN' }]])
+  })
+
+  it('IR-3 不脱敏的目的地、判不出模型 → 不提示；还没有会话 → 按输入框选着的模型', async () => {
+    mocks.getAgentSession.mockReturnValue(sessionWith({ lock: 'home' }))
+    expect(await chatGateway.inspectRedactions({ sessionId: SID, texts: [TEXT] })).toEqual([[]])
+    mocks.getAgentSession.mockReturnValue(sessionWith())
+    expect(await chatGateway.inspectRedactions({ sessionId: SID, texts: [TEXT] })).toEqual([[]])
+    expect(
+      await chatGateway.inspectRedactions({ provider: 'cloud', model: 'm9', texts: [TEXT] })
+    ).toEqual([[{ start: at, end: at + PASSWORD.length, category: 'SECRET' }]])
+    expect(policySeen.at(-1)).toEqual({ sessionId: '', provider: 'cloud', model: 'm9' })
+    expect(mocks.getAgentSession).not.toHaveBeenCalledWith('')
+    // 载荷不是数组 → 什么都不问
+    expect(
+      await chatGateway.inspectRedactions({ sessionId: SID, texts: 'x' as unknown as string[] })
+    ).toEqual([])
   })
 })

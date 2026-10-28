@@ -272,7 +272,7 @@ describe('GA-3 · 空闲：起一轮，不等它', () => {
     expect(await accept()).toStrictEqual({ success: true })
     await flush()
     expect(prompt.mock.calls).toStrictEqual([
-      [TEXT, undefined, undefined, undefined, { ...LOCAL, suggestion: REF }]
+      [TEXT, undefined, undefined, undefined, { ...LOCAL, suggestion: REF }, undefined]
     ])
     expect(mocks.ensureAgentSession).toHaveBeenCalledWith('s1')
     pending.resolve({})

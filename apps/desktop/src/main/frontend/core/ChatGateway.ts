@@ -8,7 +8,11 @@ import type {
 } from '../../types'
 import type { InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
 import type { RuntimeStatus } from '@shuvix/chat-protocol/events'
-import type { RedactionMarkInfo } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
+import type {
+  RedactionHint,
+  RedactionMarkInfo,
+  UserSecret
+} from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import type { SubmitErrorCode } from '@shuvix/agent-runtime'
 import type { InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
@@ -47,11 +51,16 @@ export interface ChatGateway {
     images?: Array<{ type: 'image'; data: string; mimeType: string }>,
     inlineTokens?: Record<string, InlineToken>,
     /** 子会话的驱动方（主进程内）专用：幂等键 + driven-run 标记（P2-10）；IPC 从不带它 */
-    drive?: DriveOptions
+    drive?: DriveOptions,
+    /**
+     * 输入框里要藏的值（docs/auto-redaction-design.md §14）：只把它们换成占位符，其余照原样发。不给 = 自动脱敏
+     * （没有输入框的来源：驱动它的会话、触发器……）
+     */
+    secrets?: UserSecret[]
   ): Promise<{ error?: string; code?: SubmitErrorCode }>
 
   /** 向运行中的 Agent 发送 steer 消息（引导/纠正方向） */
-  steer(sessionId: string, text: string): void
+  steer(sessionId: string, text: string, secrets?: UserSecret[]): void
   /**
    * 父会话往自己驱动着的子会话里插话（§19.6）：与 `steer` 同一道门，但**交回受理结果**（`{error}` = 没送到，
    * 文案给人读），并带上幂等键与来源。只交给打开着的会话 —— 正被驱动的子会话必然开着。主进程内专用，IPC 不走它。
@@ -62,7 +71,7 @@ export interface ChatGateway {
     drive: { requestId: string; parentId: string }
   ): Promise<{ error?: string; code?: SubmitErrorCode }>
   /** 本轮本应结束时续跑同一次运行（pi followUp 队列） */
-  followUp(sessionId: string, text: string): void
+  followUp(sessionId: string, text: string, secrets?: UserSecret[]): void
   /**
    * 撤回一条排着的用户输入（P3-11）：只对打开着的会话（不打开、不 peek）；`submissionId` 不是正的安全整数、
    * 会话没打开、句柄已关 → `not_found`（PIN-14）
@@ -158,6 +167,17 @@ export interface ChatGateway {
     sessionId: string,
     placeholders: string[]
   ): Promise<Record<string, RedactionMarkInfo>>
+
+  /**
+   * 输入框的提示（§14.2）：每段文本里按策略会对这个会话的模型（还没有会话时：输入框选着的模型）藏起来的内容。只用
+   * 检测规则，不用会话已知值（免得成为猜已知值的探针）；用户照原样发过的不提。判不出模型 / 策略 → 不提示。
+   */
+  inspectRedactions(params: {
+    sessionId?: string
+    provider?: string
+    model?: string
+    texts: string[]
+  }): Promise<RedactionHint[][]>
 
   // ─── 工具发现 ──────────────────────────────────
 

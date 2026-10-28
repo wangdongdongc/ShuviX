@@ -12,9 +12,10 @@
  *          被拒广播 error
  *   WP2-80 steer / followUp 的来源按这次操作的上下文盖章（2026-10-21）：网络客户端 → remote、Chrome → chrome、
  *          不在上下文里 → undefined；steerDriven 在网络客户端的上下文里照样记驱动它的会话（不被连接的章顶替）
- *   WP2-78 前端拿不到写来源 / 答题方的口子（读源码）：IPC 与 Chrome 通道从不传 drive、从不调 steerDriven /
- *          admitSteer，respondToInput 的附带信息只由 `{clientId: …}` 字面量构成
- *   WP2-78b 同上，输入来源那一面：`chatGateway.steer` / `followUp` 恰两个参数；每个 `continueTask({…})` 的
+ *   WP2-78 前端拿不到写来源 / 答题方的口子（读源码）：IPC 与 Chrome 通道从不传 drive（第 5 个参数没有、或是字面量
+ *          `undefined`；第 6 个只能是载荷的 secrets，§14）、从不调 steerDriven / admitSteer，respondToInput 的附带信息
+ *          只由 `{clientId: …}` 字面量构成
+ *   WP2-78b 同上，输入来源那一面：`chatGateway.steer` / `followUp` 是 (sessionId, text) 加载荷的 secrets；每个 `continueTask({…})` 的
  *          来源是 `origin: inputOriginOfClient(ctx)`（不展开渲染端参数）；源码里没有 params / p 的 origin / source
  *
  * mock 骨架照抄 chatGatewayPrompt.test.ts；operationContext 用真的（WP2-80）。
@@ -200,7 +201,7 @@ describe('DefaultChatGateway.steerDriven（WP2）', () => {
     chatGateway.steer('c1', 'm')
     await flush()
     // 不在任何操作上下文里 → 没有来源
-    expect(session.steer.mock.calls).toStrictEqual([['m', undefined]])
+    expect(session.steer.mock.calls).toStrictEqual([['m', undefined, undefined]])
     expect(session.admitSteer).not.toHaveBeenCalled()
     expect(mocks.frontendBroadcast).toHaveBeenCalledWith({
       type: 'error',
@@ -226,7 +227,7 @@ describe('WP2-80 steer / followUp 的来源按操作上下文盖章', () => {
     const session = openSession(async () => ({}))
     operationContext.run(createClientContext(netCtx, 'c1'), () => chatGateway.steer('c1', 'm'))
     await flush()
-    expect(session.steer.mock.calls).toStrictEqual([['m', REMOTE]])
+    expect(session.steer.mock.calls).toStrictEqual([['m', REMOTE, undefined]])
     expect(session.admitSteer).not.toHaveBeenCalled()
     expect(session.followUp).not.toHaveBeenCalled()
   })
@@ -236,12 +237,12 @@ describe('WP2-80 steer / followUp 的来源按操作上下文盖章', () => {
     operationContext.run(createChromeContext('inst-1', 'c1'), () => chatGateway.followUp('c1', 'f'))
     await flush()
     expect(session.followUp.mock.calls).toStrictEqual([
-      ['f', { kind: 'chrome', installId: 'inst-1' }]
+      ['f', { kind: 'chrome', installId: 'inst-1' }, undefined]
     ])
     session.followUp.mockClear()
     chatGateway.followUp('c1', 'f')
     await flush()
-    expect(session.followUp.mock.calls).toStrictEqual([['f', undefined]])
+    expect(session.followUp.mock.calls).toStrictEqual([['f', undefined, undefined]])
     expect(session.steer).not.toHaveBeenCalled()
   })
 
@@ -300,7 +301,16 @@ describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', 
         (call) => calleeName(call) === 'prompt' && receiverText(call, sourceFile) === 'chatGateway'
       )
       expect(prompts.length).toBeGreaterThan(0)
-      for (const call of prompts) expect(call.arguments.length).toBeLessThanOrEqual(4)
+      for (const call of prompts) {
+        const text = call.getText(sourceFile)
+        expect(call.arguments.length, text).toBeLessThanOrEqual(6)
+        // 第 5 个（drive）：没有，或是字面量 undefined；第 6 个只能是载荷的 secrets（输入框要藏的值）
+        if (call.arguments.length >= 5)
+          expect(call.arguments[4]!.getText(sourceFile), text).toBe('undefined')
+        if (call.arguments.length === 6) {
+          expect(call.arguments[5]!.getText(sourceFile), text).toMatch(/^(params|p)\.secrets$/)
+        }
+      }
       for (const call of calls) {
         expect(['steerDriven', 'admitSteer']).not.toContain(calleeName(call))
       }
@@ -329,7 +339,7 @@ describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', 
   )
 
   it.each(FILES)(
-    'WP2-78b %s：chatGateway.steer / followUp 恰两个参数（来源不经参数递进去）',
+    'WP2-78b %s：chatGateway.steer / followUp 是 (sessionId, text, 载荷的 secrets)（来源不经参数递进去）',
     (file) => {
       const sourceFile = parse(file)
       const queued = callsIn(sourceFile).filter(
@@ -338,7 +348,10 @@ describe('WP2-78 前端拿不到写来源 / 答题方的口子（读源码）', 
           receiverText(call, sourceFile) === 'chatGateway'
       )
       expect(queued.map((call) => calleeName(call)).sort()).toEqual(['followUp', 'steer'])
-      for (const call of queued) expect(call.arguments.length, call.getText(sourceFile)).toBe(2)
+      for (const call of queued) {
+        expect(call.arguments.length, call.getText(sourceFile)).toBe(3)
+        expect(call.arguments[2]!.getText(sourceFile)).toMatch(/^(params|p)\.secrets$/)
+      }
     }
   )
 

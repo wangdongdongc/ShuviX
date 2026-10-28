@@ -5,6 +5,7 @@ import {
   SessionClosedError,
   type AdmitOptions,
   type AdmitResult,
+  type ComposerInput,
   type DrivenRun,
   type DrivenSendOptions,
   type DurableSession,
@@ -16,12 +17,14 @@ import {
   type RequestState,
   type SubmitResult,
   type TaskLiveness,
+  type UserSecret,
   type WithdrawResult
 } from '@shuvix/agent-runtime'
 import type { JsonObject, UserInput } from '@earendil-works/pi-durable'
 import type { ChatMessage } from '@shuvix/chat-protocol/types/chatMessage'
 import { isDrivingOrigin, type InputOrigin } from '@shuvix/chat-protocol/types/inputOrigin'
 import type { InputRequest, InputResponse } from '@shuvix/chat-protocol/types/inputRequest'
+import { cleanUserSecrets } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type { SessionView } from '@shuvix/chat-protocol/types/sessionView'
 import { chatFrontendRegistry } from '../frontend/core/ChatFrontendRegistry'
 import { t } from '../i18n'
@@ -138,11 +141,12 @@ export class AgentSession {
      * 不是被驱动的发送时这条输入从哪来：网关按这次操作的连接盖的章（本机窗口、远程连接……），或回退后原样重发一条
      * 父会话代发的消息时沿用的来源（§19.7）。被驱动的发送不看它，记驱动它的会话
      */
-    source?: InputOrigin
+    source?: InputOrigin,
+    /** 输入框发来的（docs/auto-redaction-design.md §14）：只把这些换成占位符，其余照原样 */
+    secrets?: UserSecret[]
   ): Promise<SubmitResult> {
-    log.info(
-      `prompt session=${this.sessionId} text=${text.slice(0, 50)}... images=${images?.length || 0}`
-    )
+    // 不记正文：用户可能把密码贴在里面，日志不经脱敏
+    log.info(`prompt session=${this.sessionId} chars=${text.length} images=${images?.length || 0}`)
     const content: UserInput =
       images && images.length > 0 ? [{ type: 'text', text }, ...images] : text
     // 会话信号先就绪（PIN-09）：投影句柄挂上之前开跑的一轮没有 agent_start / agent_end
@@ -156,9 +160,17 @@ export class AgentSession {
     const dayPrompt = this.dayPromptCallbacks(origin)
     // 别的会话发进来的话里有它的占位符：先把对照表项带过来（自动脱敏 §5.3）
     await carryFromDriver(origin, this.sessionId, text)
+    // 受理回调交给 hook 的提示词（起标题的 agent 要发给模型）也得是换过的：输入框交来的值先在这里换一遍，运行时里
+    // 再换同一批是幂等的（§14）
+    const redaction = this.durable.redaction
+    const admittedText =
+      secrets !== undefined && secrets.length > 0 && redaction !== undefined
+        ? (await redaction.maskComposerTexts([text], secrets))[0]
+        : text
     // 重新挂上（已有的 requestId）时运行时不调受理回调（P2-09 PIN-02）：埋点 / 入账都不会重复
     const result = await this.durable.submitUser(content, {
       ...(display === undefined ? {} : { display: display as unknown as JsonObject }),
+      ...(secrets === undefined ? {} : { composer: { secrets } }),
       ...(drive === undefined
         ? origin === undefined
           ? {}
@@ -167,7 +179,7 @@ export class AgentSession {
       onAdmitted: (info) => {
         admitted = true
         dayPrompt.onAdmitted(info)
-        this.onPromptAdmitted(text, origin)
+        this.onPromptAdmitted(admittedText, origin)
       },
       onPlaced: dayPrompt.onPlaced
     })
@@ -180,8 +192,12 @@ export class AgentSession {
   }
 
   /** 运行中插话（空闲时起一轮）；`source` = 这条输入从哪来（网关盖的章）。被拒 → reject（调用方把文案报给界面） */
-  async steer(text: string, source?: InputOrigin): Promise<void> {
-    const result = await this.admitSteer(text, source === undefined ? {} : { source })
+  /** `secrets`：输入框发来的（docs/auto-redaction-design.md §14）—— 只把这些换成占位符，其余照原样 */
+  async steer(text: string, source?: InputOrigin, secrets?: UserSecret[]): Promise<void> {
+    const result = await this.admitSteer(text, {
+      ...(source === undefined ? {} : { source }),
+      ...(secrets === undefined ? {} : { composer: { secrets } })
+    })
     if (result.error) throw new Error(admissionErrorText(result))
   }
 
@@ -191,7 +207,7 @@ export class AgentSession {
    */
   async admitSteer(
     text: string,
-    options: { requestId?: string; source?: InputOrigin } = {}
+    options: { requestId?: string; source?: InputOrigin; composer?: ComposerInput } = {}
   ): Promise<AdmitResult> {
     await carryFromDriver(options.source, this.sessionId, text)
     const result = await this.durable.steer(text, {
@@ -202,11 +218,12 @@ export class AgentSession {
   }
 
   /** 本轮结束后接着说（空闲时起一轮）；`source` 同 `steer`。被拒 → reject */
-  async followUp(text: string, source?: InputOrigin): Promise<void> {
+  async followUp(text: string, source?: InputOrigin, secrets?: UserSecret[]): Promise<void> {
     await carryFromDriver(source, this.sessionId, text)
     const result = await this.durable.followUp(text, {
       ...this.dayPromptCallbacks(source),
-      ...(source === undefined ? {} : { source })
+      ...(source === undefined ? {} : { source }),
+      ...(secrets === undefined ? {} : { composer: { secrets } })
     })
     if (result.error) throw new Error(admissionErrorText(result))
   }
@@ -352,9 +369,58 @@ export class AgentSession {
 
   /** 应答一条挂起的询问（先到者胜）；`meta.clientId` = 答题方，交给运行时供审计（P3-08 PIN-20） */
   respondToInput(requestId: string, response: InputResponse, meta?: InputResponseMeta): boolean {
+    if (response.kind === 'other' && response.secrets !== undefined) {
+      if (!this.durable.pendingInputs().some((request) => request.id === requestId)) return false
+      void this.respondFromComposer(
+        requestId,
+        response,
+        cleanUserSecrets(response.secrets) ?? [],
+        meta
+      )
+      return true
+    }
     return meta === undefined
       ? this.durable.respondToInput(requestId, response)
       : this.durable.respondToInput(requestId, response, meta)
+  }
+
+  /**
+   * 输入框里用「其它」答的话（docs/auto-redaction-design.md §14）：先把用户交来的值换成占位符，再交给工具 —— secrets
+   * 从不往下传。没配脱敏却交来了要藏的值：不答（卡片留着），记 error；换的时候出错同样不答。
+   */
+  private async respondFromComposer(
+    requestId: string,
+    response: InputResponse & { kind: 'other' },
+    secrets: UserSecret[],
+    meta?: InputResponseMeta
+  ): Promise<void> {
+    const { secrets: _secrets, ...rest } = response
+    const redaction = this.durable.redaction
+    let text = rest.text
+    const notDelivered = (reason: string): void => {
+      log.error(
+        `session ${this.sessionId}: an answer with hidden values was not delivered: ${reason}`
+      )
+      chatFrontendRegistry.broadcast({
+        type: 'error',
+        sessionId: this.sessionId,
+        error: `The answer was not sent: ${reason}`
+      })
+    }
+    try {
+      if (redaction !== undefined) {
+        text = (await redaction.maskComposerTexts([text], secrets))[0]
+      } else if (secrets.length > 0) {
+        notDelivered('hiding values from the model is not available in this session')
+        return
+      }
+    } catch (error) {
+      notDelivered(error instanceof Error ? error.message : String(error))
+      return
+    }
+    const answer: InputResponse = { ...rest, text }
+    if (meta === undefined) this.durable.respondToInput(requestId, answer)
+    else this.durable.respondToInput(requestId, answer, meta)
   }
 
   // ─── 生命周期 ──────────────────────────────────

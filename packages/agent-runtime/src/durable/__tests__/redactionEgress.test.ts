@@ -10,6 +10,8 @@
  *   EG-6 同一 (类别, 规则, 值) 在一次请求里只问一次策略
  *   EG-7 记录里照原样存的几类（USERNAME 等）：照发时不记表、回复里不换回（旧版本存下的占位符也是）；策略要它们
  *        保持占位符时兜底现换、记表
+ *   EG-8 用户在输入框里照原样发的值（asWritten）：兜底不换（用户消息、工具结果、系统提示词），也不进回复的换回；
+ *        拒发照旧
  * 回复的换回（Remasker）：
  *   RM-1 流式：真值被切在两个事件之间时先压住，放出的部分从不含真值、只追加；最终与整段换回一致
  *   RM-2 短值只换整词，流式时结尾那个没写完的词先压住
@@ -31,7 +33,7 @@ import {
   type Message
 } from '@earendil-works/pi-ai'
 import { describe, expect, it } from 'vitest'
-import { makePlaceholder, type PlaceholderSigner } from '../../redaction/placeholder'
+import { asWrittenKey, makePlaceholder, type PlaceholderSigner } from '../../redaction/placeholder'
 import {
   EgressBlockedError,
   prepareEgress,
@@ -224,6 +226,34 @@ describe('出口：请求的改写', () => {
     expect(redacted.entries).toEqual([
       { placeholder: P_USER, category: 'USERNAME', rule: expect.any(String), value: 'agent' }
     ])
+  })
+
+  it('EG-8 照原样发的值：哪儿都不兜底换；拒发照旧', () => {
+    const table = new RedactionTable()
+    table.asWritten.add(asWrittenKey(signer, PASSWORD))
+    const context: Context = {
+      systemPrompt: `db password: ${PASSWORD}`,
+      messages: [
+        user(`the db password is DB_PASSWORD=${PASSWORD}`),
+        toolResult(`DB_PASSWORD=${PASSWORD}`)
+      ]
+    }
+    const out = prepareEgress(context, table, signer, decision(true))
+    const sentUser = out.context.messages[0] as { content: string }
+    expect(sentUser.content).toBe(`the db password is DB_PASSWORD=${PASSWORD}`)
+    expect(JSON.stringify(out.context.messages[1])).toContain(`DB_PASSWORD=${PASSWORD}`)
+    expect(out.context.systemPrompt).toBe(`db password: ${PASSWORD}`)
+    expect(out.entries).toEqual([])
+    // 照原样发的值不进回复的换回
+    expect(out.remasker).toBeUndefined()
+    expect(() =>
+      prepareEgress(
+        { messages: [user(`DB_PASSWORD=${PASSWORD}`)] },
+        table,
+        signer,
+        decision(true, () => 'block')
+      )
+    ).toThrow(EgressBlockedError)
   })
 
   it('EG-6 同一 (类别, 规则, 值) 一次请求只问一次', () => {

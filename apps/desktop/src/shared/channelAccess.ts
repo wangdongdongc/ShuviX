@@ -158,6 +158,8 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
 
   // ─── redaction：自动脱敏 ───
   'redaction:resolve': 'admin', // 回的是占位符背后的真值（密钥、个人信息）
+  // 输入框的提示：会用会话的已知值认（发一条不带 secrets 的消息看它被不被换掉也能试出来），与发消息同级
+  'redaction:inspect': 'write',
 
   // ─── dbCredential：数据库凭据 ───
   'dbCredential:list': 'admin', // 不含密码，但主机 / 用户名 / 驱动参数都属凭据

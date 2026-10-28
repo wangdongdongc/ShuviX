@@ -153,6 +153,15 @@ export function registerSessionHandlers(): void {
     )
   )
 
+  /** 自动脱敏：输入框的提示 —— 按策略会对模型藏起来的内容（只提示，用户确认才藏，§14） */
+  defineHandler(
+    'redaction:inspect',
+    (ctx, params: { sessionId?: string; provider?: string; model?: string; texts: string[] }) =>
+      operationContext.run(createClientContext(ctx, params?.sessionId), () =>
+        chatGateway.inspectRedactions(params)
+      )
+  )
+
   /** 销毁指定运行时资源 */
   defineHandler('runtime:destroy', (ctx, params: { sessionId: string; runtimeId: string }) =>
     operationContext.run(createClientContext(ctx, params.sessionId), () =>

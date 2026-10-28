@@ -194,6 +194,7 @@ export const PLACEHOLDER_NOTE = [
   'Text such as {{REDACTED_API_KEY_…}} (a category and eight letters or digits) in this conversation is a placeholder for a secret or personal value that ShuviX redacted from you.',
   'It is not a template variable to fill in and not a fault in a file or an output: on this computer the value is real — in files and in command output — and ShuviX puts it back into your tool arguments before a tool runs.',
   "Write the placeholder exactly wherever you mean the value: in commands, file contents, edit text and searches (`grep -c '{{REDACTED_EMAIL_…}}' app.log` with the placeholder written out counts the real address).",
+  'In bash, PowerShell and ssh commands put it bare or inside quotes, as you would the value: ShuviX escapes the real value for that spot, so do not escape it yourself.',
   'Do not guess what it stands for, look for it elsewhere or ask for it, and do not try to see the value itself — no printing, byte dumps or encodings of it; when a task needs a fact about it, such as its length, let a command work it out.'
 ].join(' ')
 

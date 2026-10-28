@@ -4,6 +4,7 @@
  *   WR-2 引用了解不开的占位符 → 拦下，工具不执行，告诉模型原因
  *   WR-3 还原本身抛错 → 拦下，工具不执行
  *   WR-4 没配脱敏 → 参数原样
+ *   WR-5 shell 命令类工具（bash、mcp__ssh__exec → POSIX；powershell）按引号环境还原 `command`（§14.2）；别的工具原样换
  */
 import { describe, expect, it, vi } from 'vitest'
 import type {
@@ -129,5 +130,27 @@ describe('wrapToolOutput — 自动脱敏的还原', () => {
     })
     await executeTool(wrapped, 'tc-4', { command: 'echo {{API_KEY_aaaaaaaa}}' } as never)
     expect(execute.mock.calls[0][0]).toEqual({ command: 'echo {{API_KEY_aaaaaaaa}}' })
+  })
+
+  it.each([
+    ['bash', { field: 'command', dialect: 'posix' }],
+    ['mcp__ssh__exec', { field: 'command', dialect: 'posix' }],
+    ['powershell', { field: 'command', dialect: 'powershell' }],
+    ['write', undefined]
+  ])('WR-5 %s：还原时交给 restoreJson 的命令选项', async (name, expected) => {
+    const restoreJson = vi.fn(async (value: unknown) => ({ value, restored: [], unavailable: [] }))
+    const { tool } = makeTool()
+    ;(tool as { name: string }).name = name
+    const wrapped = wrapDurableTool(tool, {
+      sessionId: SID,
+      spill: true,
+      security: makeSecurity().security,
+      redaction: () => ({ restoreJson }) as unknown as SessionRedaction
+    })
+    await executeTool(wrapped, 'tc-5', { command: 'echo {{REDACTED_PASSWORD_aaaaaaaa}}' } as never)
+    expect(restoreJson.mock.calls[0]).toEqual([
+      { command: 'echo {{REDACTED_PASSWORD_aaaaaaaa}}' },
+      expected
+    ])
   })
 })

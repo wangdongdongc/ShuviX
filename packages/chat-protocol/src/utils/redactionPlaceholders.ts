@@ -19,6 +19,51 @@ export interface RedactionMarkInfo {
   disclosed?: boolean
 }
 
+/**
+ * 用户在输入框里交来要藏的一项（docs/auto-redaction-design.md §14）：+ 添加的，或确认了提示的。真值随这次发送交给宿主，
+ * 宿主换成占位符；发送带着这一项（哪怕是空数组）= 输入框自己处理过脱敏，其余照原样发。
+ */
+export interface UserSecret {
+  value: string
+  /** PASSWORD / API_KEY / SECRET（+ 添加的由用户选），确认的提示沿用检测出的类别 */
+  category: string
+}
+
+/** 类别会写进占位符（`{{REDACTED_<类别>_…}}`）：只收占位符认得出来的写法 */
+const SECRET_CATEGORY = /^[A-Z][A-Z0-9_]{0,31}$/
+
+/**
+ * 前端交来的要藏的值：载荷不可信，只留形状对的；不是数组 → undefined（= 不是输入框发来的，宿主照旧自动脱敏）。
+ * 空值丢掉；类别不合占位符写法的当 SECRET。
+ */
+export function cleanUserSecrets(secrets: unknown): UserSecret[] | undefined {
+  if (!Array.isArray(secrets)) return undefined
+  const out: UserSecret[] = []
+  for (const item of secrets) {
+    if (item === null || typeof item !== 'object') continue
+    const { value, category } = item as { value?: unknown; category?: unknown }
+    if (typeof value !== 'string' || value.length === 0) continue
+    out.push({
+      value,
+      category: typeof category === 'string' && SECRET_CATEGORY.test(category) ? category : 'SECRET'
+    })
+  }
+  return out
+}
+
+/** + 添加时可选的类别 */
+export const USER_SECRET_CATEGORIES = ['PASSWORD', 'API_KEY', 'SECRET'] as const
+
+/** 输入框里认出的一处可能的敏感内容（只提示，用户确认才藏；§14.2） */
+export interface RedactionHint {
+  start: number
+  end: number
+  category: string
+}
+
+/** 一次 inspect 最多看多少个字符（超出的部分不提示） */
+export const MAX_INSPECT_CHARS = 20_000
+
 /** 一段文本切开之后：原样的文字，或者一处占位符 */
 export type RedactionSegment = string | { placeholder: string; category: string }
 

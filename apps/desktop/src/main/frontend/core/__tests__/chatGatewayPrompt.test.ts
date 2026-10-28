@@ -134,13 +134,21 @@ describe('IO-G1 prompt 的来源按这次操作的上下文盖章', () => {
   ])('IO-G1 在%s的上下文里 → 第 5 个参数是它的来源，其余照旧', async (_label, context, origin) => {
     await operationContext.run(context(), () => chatGateway.prompt('s1', 'hello'))
     expect(prompt.mock.calls).toHaveLength(1)
-    expect(prompt.mock.calls[0]).toStrictEqual(['hello', undefined, undefined, undefined, origin])
+    expect(prompt.mock.calls[0]).toStrictEqual([
+      'hello',
+      undefined,
+      undefined,
+      undefined,
+      origin,
+      undefined
+    ])
   })
 
   it('IO-G1 不在任何操作上下文里（主进程自己发的）→ 第 5 个参数 undefined', async () => {
     await chatGateway.prompt('s1', 'hello')
     expect(prompt.mock.calls[0]).toStrictEqual([
       'hello',
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -152,6 +160,13 @@ describe('IO-G1 prompt 的来源按这次操作的上下文盖章', () => {
     await operationContext.run(createClientContext(netCtx, 's1'), () =>
       chatGateway.prompt('s1', 'task', undefined, undefined, DRIVE)
     )
-    expect(prompt.mock.calls[0]).toStrictEqual(['task', undefined, undefined, DRIVE, undefined])
+    expect(prompt.mock.calls[0]).toStrictEqual([
+      'task',
+      undefined,
+      undefined,
+      DRIVE,
+      undefined,
+      undefined
+    ])
   })
 })

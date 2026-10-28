@@ -55,7 +55,7 @@ import type {
   ImportSelection
 } from './types/configShare'
 import type { SyncLinkChannel } from './sync'
-import type { RedactionMarkInfo } from './utils/redactionPlaceholders'
+import type { RedactionHint, RedactionMarkInfo, UserSecret } from './utils/redactionPlaceholders'
 
 // ─────────────────────────── 前端 IPC 视图数据形状 ───────────────────────────
 
@@ -306,6 +306,11 @@ export interface AgentPromptParams {
   text: string
   images?: ImageContentParam[]
   inlineTokens?: Record<string, InlineToken>
+  /**
+   * 输入框里要藏的值（docs/auto-redaction-design.md §14）：宿主只把它们换成占位符，其余照原样发。带了（哪怕是空数组）
+   * = 输入框自己处理过脱敏；不带 = 宿主自动脱敏（没有输入框的来源）
+   */
+  secrets?: UserSecret[]
 }
 
 /** 继续与已存在子代理对话：向其追加一轮用户消息（复用该子会话的 Agent 与历史） */
@@ -320,6 +325,8 @@ export interface AgentSubAgentPromptParams {
 export interface AgentSteerParams {
   sessionId: string
   text: string
+  /** 同 `AgentPromptParams.secrets` */
+  secrets?: UserSecret[]
 }
 
 /**
@@ -665,6 +672,16 @@ export interface SessionChannelApi {
       sessionId: string
       placeholders: string[]
     }) => Promise<Record<string, RedactionMarkInfo>>
+    /**
+     * 输入框的提示（§14.2）：每段文本里按策略会对这个会话的模型藏起来的内容（只用检测规则，不用会话已知值；用户照原样
+     * 发过的不提）。还没有会话时给 provider / model（输入框选着的那个）。不带机密。
+     */
+    inspect: (params: {
+      sessionId?: string
+      provider?: string
+      model?: string
+      texts: string[]
+    }) => Promise<RedactionHint[][]>
   }
   /**
    * 后台任务只读面（bash 命令 / 派生 agent / 子会话轮次三类共用）。输出**不经事件总线**

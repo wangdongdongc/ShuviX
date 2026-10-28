@@ -1,11 +1,15 @@
 /**
  * 自动脱敏（docs/auto-redaction-design.md）的整条链路，真应用 + 假模型：
  *
- *   RD-1 缺省（内置 redact-sensitive）：用户消息里的 key 发给模型时是占位符；模型照抄占位符调 write，磁盘上写的是
- *        真值；对话记录（message.list）里只有占位符；界面显示模型收到的样子（占位符），指到占位符才浮出真值
- *   RD-2 信任这个服务商（用户策略 force-allow modelRequest）：模型收到真值；它在回复里写出的真值存成占位符、界面上
- *        仍显示真值
+ *   RD-1 缺省（内置 redact-sensitive）：输入框提示那个 key（虚线 + 提示行），点「隐藏」换成胶囊再发 —— 发给模型时是
+ *        占位符；模型照抄占位符调 write，磁盘上写的是真值；对话记录（message.list）里只有占位符；界面显示模型收到的
+ *        样子（占位符），指到占位符才浮出真值
+ *   RD-2 信任这个服务商（用户策略 force-allow modelRequest）：隐藏了的 key 模型收到真值；它在回复里写出的真值存成
+ *        占位符、界面上仍显示真值
  *   RD-3 第一层拒发（用户策略 deny modelRequest）：请求不发，这一轮以出错结束
+ *   RD-4 提示了不理会：照原样发（模型与记录里都是真值，§14 用户说了算）
+ *   RD-5 + → 添加敏感信息（值里有 `$`、`'`、`"`）：模型只见占位符；它在 bash 里把占位符放进双引号、单引号、裸词，
+ *        真 bash 打出来的都是那个值（还原时按引号转义）。沙箱不可用就跳过（受限命令才不问）
  *
  * 前置：会话绑项目，write 的目标在项目目录里（ask-on-external-path 不问）。占位符的 8 位摘要用这个实例自己的密钥，
  * 用例里算不出来 —— 假模型用 `build` 从请求里取。
@@ -19,7 +23,9 @@ import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../ha
 import {
   createProject,
   eventRecorder,
+  sandboxAvailable,
   seedFakeProvider,
+  setSandboxEnabled,
   waitRendererReady,
   type EventRecorder
 } from '../../harness/seed'
@@ -57,6 +63,54 @@ const placeholderIn = (req: FakeRequest): string => {
   const hit = PLACEHOLDER.exec(req.lastUserText)
   if (!hit) throw new Error(`no placeholder in: ${req.lastUserText}`)
   return hit[0]
+}
+
+/** 输入框的提示行里列出的类别（没有提示行 = 空） */
+const hintCategories = (): Promise<string[]> =>
+  app.main.eval<string[]>(
+    `[...document.querySelectorAll('[data-redaction-hints] [data-redaction-hint]')].map((e) => e.dataset.redactionHint)`
+  )
+
+const composerText = (): Promise<string> =>
+  app.main.eval<string>(`document.querySelector('textarea')?.value ?? ''`)
+
+/** 等提示行出现（停笔之后问宿主），交回它列出的类别 */
+const waitHints = async (): Promise<string[]> => {
+  await until(async () => (await hintCategories()).length > 0, 'composer hints shown')
+  return hintCategories()
+}
+
+/** 点提示行的「隐藏」/「全部隐藏」 */
+const hideHinted = async (): Promise<void> => {
+  await app.main.eval(`document.querySelector('[data-redaction-hide-all]').click()`)
+  await until(async () => (await hintCategories()).length === 0, 'hints gone after hiding')
+}
+
+/** + → 添加敏感信息 → 填值、选类别、添加（真的点按钮，React 的受控输入框用原生 setter + input 事件） */
+const addSecret = async (value: string, category: string): Promise<void> => {
+  await app.main.eval(`document.querySelector('[data-attach-button]').click()`)
+  await until(
+    () => app.main.eval<boolean>(`!!document.querySelector('[data-plus-secret]')`),
+    'the + menu'
+  )
+  await app.main.eval(`document.querySelector('[data-plus-secret]').click()`)
+  await until(
+    () => app.main.eval<boolean>(`!!document.querySelector('[data-secret-input]')`),
+    'the secret form'
+  )
+  await app.main.eval(`(() => {
+    const input = document.querySelector('[data-secret-input]')
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    set.call(input, ${JSON.stringify(value)})
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    document.querySelector('[data-secret-category=${JSON.stringify(category)}]').click()
+  })()`)
+  await new Promise((r) => setTimeout(r, 50))
+  await app.main.eval(`document.querySelector('[data-secret-add]').click()`)
+  await until(
+    () => app.main.eval<boolean>(`!document.querySelector('[data-secret-form]')`),
+    'the secret form closed'
+  )
 }
 
 const policyNames = (): Promise<string[]> =>
@@ -101,6 +155,8 @@ beforeAll(async () => {
   sids.mask = await createSession('R-mask', project.id)
   sids.trust = await createSession('R-trust', project.id)
   sids.deny = await createSession('R-deny', project.id)
+  sids.plain = await createSession('R-plain', project.id)
+  sids.quote = await createSession('R-quote', project.id)
 
   chat = chatPane(app.main)
   sidebar = sidebarPane(app.main)
@@ -145,7 +201,17 @@ describe('自动脱敏', () => {
 
     expect(await sidebar.openSession('R-mask')).toBe(true)
     await chat.ready()
-    await chat.typeAndSend(`save my key ${KEY} into .env`)
+    await chat.type(`save my key ${KEY} into .env`)
+    // 只提示：点了「隐藏」才换成胶囊（输入框里是胶囊文字，不是真值）
+    expect(await waitHints()).toEqual(['API_KEY'])
+    expect(
+      await app.main.eval<string>(
+        `document.querySelector('[data-redaction-hint-span]')?.textContent ?? ''`
+      )
+    ).toBe(KEY)
+    await hideHinted()
+    expect(await composerText()).toBe('save my key [🔒 API key #1] into .env')
+    await chat.clickSend()
     await events.waitFor('agent_end', { sessionId: sids.mask })
     await chat.waitIdle()
 
@@ -197,7 +263,13 @@ describe('自动脱敏', () => {
 
     expect(await sidebar.openSession('R-trust')).toBe(true)
     await chat.ready()
-    await chat.typeAndSend(`my key is ${KEY}`)
+    await chat.type(`my key is ${KEY}`)
+    // 信任的目的地不提示（模型会收到真值）：自己从 + 加
+    await new Promise((r) => setTimeout(r, 700))
+    expect(await hintCategories()).toEqual([])
+    await chat.type('my key is ')
+    await addSecret(KEY, 'API_KEY')
+    await chat.clickSend()
     await events.waitFor('agent_end', { sessionId: sids.trust })
     await chat.waitIdle()
 
@@ -232,5 +304,67 @@ describe('自动脱敏', () => {
     await until(async () => (await chat.errorRows()) > 0, 'error row shown')
     expect(await listedText(sids.deny)).toContain('does not allow sending requests')
     await removePolicy('deny-fake')
+  })
+
+  it('RD-4 提示了不理会：照原样发', async () => {
+    provider.reset()
+    await events.clear()
+    provider.script({ build: (req) => ({ text: `got: ${req.lastUserText}` }) })
+
+    expect(await sidebar.openSession('R-plain')).toBe(true)
+    await chat.ready()
+    await chat.type(`use this key ${KEY}`)
+    expect(await waitHints()).toEqual(['API_KEY'])
+    await chat.clickSend()
+    await events.waitFor('agent_end', { sessionId: sids.plain })
+    await chat.waitIdle()
+
+    expect(provider.requests()[0]!.lastUserText).toBe(`use this key ${KEY}`)
+    expect(await listedText(sids.plain)).toContain(`use this key ${KEY}`)
+  })
+
+  it('RD-5 + 添加的值：模型只见占位符，bash 里按引号转义还原', async (ctx) => {
+    if (!(await sandboxAvailable(app.main))) ctx.skip()
+    await setSandboxEnabled(app.main, true)
+    const PASSWORD = `it's $HOME "pw"`
+    const out = join(projDir, 'pw.txt')
+    provider.reset()
+    await events.clear()
+    provider.script(
+      {
+        build: (req) => {
+          const hit = /\{\{REDACTED_PASSWORD_[a-z2-7]{8}\}\}/.exec(req.lastUserText)
+          if (!hit) throw new Error(`no placeholder in: ${req.lastUserText}`)
+          const p = hit[0]
+          return {
+            toolCalls: [
+              {
+                id: 'call_q',
+                name: 'bash',
+                args: JSON.stringify({
+                  command: `printf '%s\\n' "${p}" '${p}' ${p} > pw.txt`,
+                  description: 'e2e quoting probe'
+                })
+              }
+            ]
+          }
+        }
+      },
+      { text: 'done' }
+    )
+
+    expect(await sidebar.openSession('R-quote')).toBe(true)
+    await chat.ready()
+    await chat.type('the password is ')
+    await addSecret(PASSWORD, 'PASSWORD')
+    expect(await composerText()).toBe('the password is [🔒 Password #1]')
+    await chat.clickSend()
+    await events.waitFor('agent_end', { sessionId: sids.quote })
+    await chat.waitIdle()
+
+    for (const req of provider.requests()) expect(req.raw).not.toContain(PASSWORD)
+    expect(readFileSync(out, 'utf-8')).toBe(`${PASSWORD}\n${PASSWORD}\n${PASSWORD}\n`)
+    expect(await listedText(sids.quote)).not.toContain(PASSWORD)
+    rmSync(out, { force: true })
   })
 })

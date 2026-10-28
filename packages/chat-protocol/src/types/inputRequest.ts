@@ -12,6 +12,7 @@
  * 3. 工具调用点 + 前端表单组件加一个分支
  */
 
+import type { UserSecret } from '../utils/redactionPlaceholders'
 import type { PermissionRisk } from './permissionReview'
 
 // ─── 请求侧 ──────────────────────────────────────────
@@ -211,6 +212,8 @@ export interface ChoiceResponse extends InputResponseBase {
 export interface OtherResponse extends InputResponseBase {
   kind: 'other'
   text: string
+  /** 输入框里要藏的值（同 `AgentPromptParams.secrets`）：宿主换成占位符之后才交给工具，这一项本身从不往下传 */
+  secrets?: UserSecret[]
 }
 
 /**

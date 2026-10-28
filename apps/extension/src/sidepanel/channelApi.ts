@@ -90,7 +90,8 @@ export function createPanelChannelApi(link: PanelLink): SessionChannelApi {
       statuses: (sessionId) => call('runtime.statuses', sessionId)
     },
     redaction: {
-      resolve: (params) => call('redaction.resolve', params)
+      resolve: (params) => call('redaction.resolve', params),
+      inspect: (params) => call('redaction.inspect', params)
     },
     bgTask: {
       list: (params) => call('bgTask.list', params),

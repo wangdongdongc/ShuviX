@@ -197,6 +197,11 @@ export type RedactionTableState = {
    * `redactionTable.ts`）。
    */
   items: { [placeholder: string]: { category: string; rule: string; value: string } }
+  /**
+   * 用户在输入框里照原样发的值（没藏、没确认提示的）：`asWrittenKey` → true，不存真值。检测（写入、出口兜底）跳过它们
+   * （§14.2）。v0.2.34 之前的文档没有这一项。
+   */
+  asWritten?: { [key: string]: true }
 }
 
 /**

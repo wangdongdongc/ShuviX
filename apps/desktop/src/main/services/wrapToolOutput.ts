@@ -20,6 +20,7 @@ import {
   wrapDurableOutput,
   type AnyTool,
   type SecurityContext,
+  type RestoreCommandOptions,
   type SessionRedaction,
   type McpToolMeta,
   type SpillMode,
@@ -35,6 +36,7 @@ import { withToolReview } from '@shuvix/chat-protocol/types/toolReview'
 import { createLogger } from '../logger'
 import { desktopSpillSink } from '../utils/toolUtils/processToolOutput'
 import { clearRestoredCategories, setRestoredCategories } from './redaction/restoredCalls'
+import { shellParser } from './shellParserService'
 import { TOOL_ABORTED } from './toolContext'
 
 /**
@@ -103,6 +105,15 @@ export type WrappableTool = AnyTool
 const log = createLogger('Redaction')
 
 /**
+ * 参数里有一段要交给 shell 的命令的工具：真值填进命令时按占位符所在的引号环境转义（§14.2）。ssh 远端按 POSIX shell 算
+ */
+const COMMAND_TOOLS: Readonly<Record<string, RestoreCommandOptions>> = {
+  bash: { field: 'command', dialect: 'posix' },
+  mcp__ssh__exec: { field: 'command', dialect: 'posix' },
+  powershell: { field: 'command', dialect: 'powershell' }
+}
+
+/**
  * 工具参数里的占位符换回真值（docs/auto-redaction-design.md §2.2）。没配脱敏原样交回。
  * 拦下这次调用（交回给模型的错误结果，工具不执行）的两种情况：
  *  - 引用了表里有、但真值解不开的占位符（主密钥不在、换了机器）：执行了就会把占位符写进文件；
@@ -116,7 +127,11 @@ async function restoreArguments(
 ): Promise<{ args: unknown; restored: string[] } | { blocked: ToolExecutionResult }> {
   if (!redaction) return { args, restored: [] }
   try {
-    const outcome = await redaction.restoreJson(args)
+    const command = COMMAND_TOOLS[toolName]
+    // 判引号位置要用 bash 解析器：它在安全模块第一次分析命令时才加载，那在还原之后 —— 先等它就绪（幂等，失败不抛：
+    // 判不出位置就原样替换）
+    if (command?.dialect === 'posix') await shellParser.ensureReady()
+    const outcome = await redaction.restoreJson(args, command)
     if (outcome.unavailable.length > 0) {
       return {
         blocked: toolErrorResult(

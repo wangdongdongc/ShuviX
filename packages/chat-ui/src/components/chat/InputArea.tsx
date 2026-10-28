@@ -1,7 +1,7 @@
 import { getSessionChannelApi, getHostApi, useChatHost } from '@shuvix/chat-ui'
 import { useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock, Plus } from 'lucide-react'
+import { Send, Square, X, Zap, CornerDownLeft, CirclePause, Lock } from 'lucide-react'
 import { TokenChip } from './TokenChip'
 import { QueuePanel } from './QueuePanel'
 import {
@@ -33,6 +33,10 @@ import { CacheBreakConfirmHost } from './CacheBreakConfirm'
 import { MentionHighlighter } from './MentionHighlighter'
 import { useAtMentions, type AtSuggestion } from '../../hooks/useAtMentions'
 import { usePasteChips } from '../../hooks/usePasteChips'
+import { useSecretChips } from '../../hooks/useSecretChips'
+import { useRedactionHints, type RedactionHintItem } from '../../hooks/useRedactionHints'
+import { ComposerPlusMenu, RedactionHintBar } from './ComposerSecrets'
+import type { UserSecret } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { isImeComposing } from '../../utils/ime'
 import { useClickOutside } from '../../hooks/useClickOutside'
 import { useChatDensity } from '../../host/chatHostContext'
@@ -166,6 +170,18 @@ export function InputArea({
   const at = useAtMentions(activeSessionId)
   // 长文粘贴折叠为芯片（占位明文进 textarea，完整内容随 paste 类型 InlineToken 发送）
   const paste = usePasteChips()
+  // 要对模型藏起来的值（docs/auto-redaction-design.md §14）：+ 添加的、确认了提示的。发送时随 secrets 交给宿主
+  const secrets = useSecretChips()
+  // 提示：可能是敏感信息的几处 —— 只提示，点了才藏；不理会的照原样发
+  const hints = useRedactionHints({
+    sessionId: activeSessionId,
+    provider: chatHost.models.activeProvider ?? undefined,
+    model: activeModel ?? undefined,
+    text: inputText,
+    pastes: paste.chips.map((chip) => chip.payload),
+    isHidden: secrets.isHidden,
+    enabled: !sendBlocked
+  })
   // 背景镜像层（画 @ / 粘贴胶囊）—— 与 textarea 同步 scrollTop
   const backdropRef = useRef<HTMLDivElement>(null)
   // 程序化改写文本后待应用的光标位置（select / 整体退格）
@@ -261,9 +277,10 @@ export function InputArea({
       setInputText(value)
       at.prune(value)
       paste.prune(value)
+      secrets.prune(value)
       at.refresh(value, caret)
     },
-    [slashChip, slashCommands, setInputText, at, paste, autoEnableRequiredTools]
+    [slashChip, slashCommands, setInputText, at, paste, secrets, autoEnableRequiredTools]
   )
 
   // 消息回退：把历史消息重建为可编辑草稿——paste/at 重新登记恢复胶囊，cmd 转 /id 明文（发送时重新解析）。
@@ -296,9 +313,10 @@ export function InputArea({
       // 选区替换可能吞掉其他占位/引用 → 同步剪除
       at.prune(res.text)
       paste.prune(res.text)
+      secrets.prune(res.text)
       pendingCaretRef.current = res.caret
     },
-    [handlePaste, paste, at, inputText, setInputText]
+    [handlePaste, paste, at, secrets, inputText, setInputText]
   )
 
   /** @ 引用选中：在光标处替换 @query → @token，登记引用，落回文本并置光标 */
@@ -457,14 +475,22 @@ export function InputArea({
     setSlashChip(null)
     at.reset()
     paste.reset()
+    secrets.reset()
   }
 
   /** 把一条用户消息发给主会话 Agent：清空输入态 → 乐观占位（同时即流式态）→ agent.prompt */
   const sendToMainAgent = async (
     sid: string,
     outgoing: { contentText: string; inlineTokens?: Record<string, InlineToken> },
-    images: typeof pendingImages
+    images: typeof pendingImages,
+    hidden: UserSecret[]
   ): Promise<void> => {
+    // 乐观占位气泡里不出现要藏的真值（换回胶囊文字）：要在清空胶囊之前算
+    const shown = {
+      contentText: secrets.maskForDisplay(outgoing.contentText),
+      inlineTokens:
+        outgoing.inlineTokens && maskTokenPayloads(outgoing.inlineTokens, secrets.maskForDisplay)
+    }
     resetComposer()
     const store = useChatStore.getState()
     // 乐观占位（Q-P3-07）：用户消息要等会话受理才出现在视图里，而创建运行时（含 MCP 惰性连接）
@@ -473,8 +499,8 @@ export function InputArea({
     store.touchSessionActive(sid)
     store.setPendingPrompt(
       sid,
-      pendingPromptMessage(sid, outgoing.contentText, {
-        inlineTokens: outgoing.inlineTokens,
+      pendingPromptMessage(sid, shown.contentText, {
+        inlineTokens: shown.inlineTokens,
         images: images.map((img) => ({ data: img.data, mimeType: img.mimeType }))
       })
     )
@@ -491,7 +517,9 @@ export function InputArea({
                 mimeType: img.mimeType
               }))
             : undefined,
-        inlineTokens: outgoing.inlineTokens
+        inlineTokens: outgoing.inlineTokens,
+        // 带上（哪怕是空的）= 输入框处理过：宿主只换这些，其余照原样发
+        secrets: hidden
       })
     } finally {
       // 占位的兜底收尾。正常路径上视图早就把它换成真的了，这里兜两种它到不了的情况：整轮跑完仍没
@@ -507,16 +535,17 @@ export function InputArea({
    */
   const handleSubmitOther = async (): Promise<void> => {
     if (!activePendingInput || !activeSessionId) return
-    // 该通道不携带 inlineTokens → 粘贴芯片就地展开为完整原文
-    const text = paste.resolveInline(inputText.trim())
+    // 该通道不携带 inlineTokens → 粘贴芯片就地展开为完整原文；要藏的值展开回真值、随 secrets 交出去
+    const { text, secrets: hidden } = secrets.expand(paste.resolveInline(inputText.trim()))
     if (!text) return
     useChatStore.getState().setInputText('')
     at.reset()
     paste.reset()
+    secrets.reset()
     await getSessionChannelApi().agent.respondToInput({
       sessionId: activeSessionId,
       requestId: activePendingInput.id,
-      response: { kind: 'other', text }
+      response: { kind: 'other', text, secrets: hidden }
     })
     // 询问落定后视图里就没有它了 → store 自动移除该 pending
   }
@@ -565,8 +594,9 @@ export function InputArea({
       if (!sid) return
     }
 
-    // ─── 前端斜杠命令展开 + Token 构造 ───
-    const outgoing = buildSlashOutgoing(rawText, sid)
+    // ─── 要藏的值的胶囊展开回真值 + 前端斜杠命令展开 + Token 构造 ───
+    const expanded = secrets.expand(rawText)
+    const outgoing = buildSlashOutgoing(expanded.text, sid)
     await sendToMainAgent(
       sid,
       {
@@ -576,7 +606,8 @@ export function InputArea({
           : outgoing.contentText || t('input.imageOnly'),
         inlineTokens: outgoing.inlineTokens
       },
-      images
+      images,
+      expanded.secrets
     )
   }
 
@@ -594,21 +625,22 @@ export function InputArea({
    * 显示侧车没法紧邻它落盘）→ 粘贴芯片就地展开为完整原文。
    */
   const handleQueueSend = async (tier: 'steer' | 'followUp'): Promise<void> => {
-    const text = paste.resolveInline(inputText.trim())
+    const { text, secrets: hidden } = secrets.expand(paste.resolveInline(inputText.trim()))
     if (!text || !activeSessionId) return
     const store = useChatStore.getState()
     store.setInputText('')
     paste.reset()
+    secrets.reset()
     const api = getSessionChannelApi().agent
     // 竞态保护：点下去的那一刻 run 可能刚好结束（视图已是 idle / interrupted）—— 两档都退回普通 prompt
     // （中断态的发送由运行时先中止再发）；关停中哪儿也不发
     if (useChatStore.getState().sessionClosing[activeSessionId]) return
     const stillStreaming = store.sessionStreams[activeSessionId]?.isStreaming
     if (!stillStreaming) {
-      await api.prompt({ sessionId: activeSessionId, text })
+      await api.prompt({ sessionId: activeSessionId, text, secrets: hidden })
       return
     }
-    await api[tier]({ sessionId: activeSessionId, text })
+    await api[tier]({ sessionId: activeSessionId, text, secrets: hidden })
   }
 
   /** 斜杠命令选中回调：设置芯片，输入框只保留参数；自动启用依赖工具 */
@@ -671,12 +703,14 @@ export function InputArea({
       if (el && el.selectionStart === el.selectionEnd) {
         const res =
           at.backspace(inputText, el.selectionStart) ??
-          paste.backspace(inputText, el.selectionStart)
+          paste.backspace(inputText, el.selectionStart) ??
+          secrets.backspace(inputText, el.selectionStart)
         if (res) {
           e.preventDefault()
           setInputText(res.text)
           at.prune(res.text)
           paste.prune(res.text)
+          secrets.prune(res.text)
           pendingCaretRef.current = res.caret
           return
         }
@@ -749,24 +783,52 @@ export function InputArea({
     </div>
   )
 
-  // 「+」：选图片附上（与拖放、粘贴同一条路，只在模型能看图时出现 —— 那两条路也一样只对这种模型开）
-  const attachButton =
-    modelSupportsVision && !sendBlocked ? (
-      <>
-        <button
-          type="button"
-          data-attach-button=""
-          onClick={() => fileInputRef.current?.click()}
-          title={t('input.attach')}
-          aria-label={t('input.attach')}
-          className={
-            touch
-              ? 'flex-shrink-0 h-9 w-9 rounded-full border border-border-secondary/60 flex items-center justify-center text-text-secondary active:bg-bg-hover transition-colors'
-              : 'flex-shrink-0 h-6 w-6 rounded-md flex items-center justify-center text-text-tertiary hover:text-text-secondary hover:bg-bg-hover transition-colors'
+  /** + 添加的敏感信息：放进选区（打开时选中了那段就替换它）或光标处，成为一个胶囊 */
+  const addSecret = (
+    value: string,
+    category: string,
+    range: { start: number; end: number } | null
+  ): void => {
+    const el = textareaRef.current
+    const caret = el?.selectionStart ?? inputText.length
+    const from = range?.start ?? caret
+    const to = range?.end ?? caret
+    const res = secrets.insert(value, category, inputText, from, to)
+    setInputText(res.text)
+    at.prune(res.text)
+    paste.prune(res.text)
+    pendingCaretRef.current = res.caret
+    setTimeout(() => textareaRef.current?.focus(), 0)
+  }
+
+  /** 确认提示：这些值换成胶囊（文本里没有的 —— 在粘贴芯片里 —— 只记下值） */
+  const hideHinted = (items: RedactionHintItem[]): void => {
+    let text = inputText
+    for (const item of items) text = secrets.hide(item.value, item.category, text)
+    setInputText(text)
+    at.prune(text)
+    paste.prune(text)
+  }
+
+  // 「+」：添加图片（只在模型能看图时出现 —— 拖放、粘贴两条路也一样只对这种模型开）、添加敏感信息
+  const attachButton = !sendBlocked ? (
+    <>
+      <ComposerPlusMenu
+        touch={touch}
+        images={modelSupportsVision}
+        onImages={() => fileInputRef.current?.click()}
+        onSecret={addSecret}
+        selection={() => {
+          const el = textareaRef.current
+          if (!el) return null
+          return {
+            start: el.selectionStart,
+            end: el.selectionEnd,
+            text: inputText.slice(el.selectionStart, el.selectionEnd)
           }
-        >
-          <Plus size={touch ? 18 : 15} />
-        </button>
+        }}
+      />
+      {modelSupportsVision && (
         <input
           ref={fileInputRef}
           type="file"
@@ -780,8 +842,9 @@ export function InputArea({
             e.target.value = ''
           }}
         />
-      </>
-    ) : null
+      )}
+    </>
+  ) : null
 
   const queueDisabled = !inputText.trim()
   /** 圆钮（触屏）/ 小方钮（桌面）的外形；颜色由各个按钮自己给 */
@@ -1057,6 +1120,13 @@ export function InputArea({
                 </div>
               )}
 
+              <RedactionHintBar
+                items={hints.items}
+                touch={touch}
+                onHide={hideHinted}
+                onDismiss={hints.dismiss}
+              />
+
               <div className="relative">
                 {/* 斜杠命令自动补全浮层 */}
                 {slash.showPopover && (
@@ -1101,6 +1171,8 @@ export function InputArea({
                   text={inputText}
                   mentions={at.mentions}
                   pasteChips={paste.chips}
+                  secretChips={secrets.chips}
+                  hintSpans={hints.spans}
                   className="absolute inset-0 z-[2] pointer-events-none select-none overflow-hidden whitespace-pre-wrap break-words text-sm text-transparent px-4 pt-2 pb-2"
                   style={{
                     minHeight: `${MIN_H}px`,
@@ -1224,5 +1296,15 @@ export function InputArea({
         </div>
       </div>
     </div>
+  )
+}
+
+/** 内联 Token 的全文（粘贴芯片）也换一遍：乐观占位气泡里不出现要藏的真值 */
+function maskTokenPayloads(
+  tokens: Record<string, InlineToken>,
+  mask: (text: string) => string
+): Record<string, InlineToken> {
+  return Object.fromEntries(
+    Object.entries(tokens).map(([uid, token]) => [uid, { ...token, payload: mask(token.payload) }])
   )
 }

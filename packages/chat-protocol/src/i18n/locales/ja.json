@@ -267,7 +267,22 @@
     "atRouteOnly": "{{name}}のみ",
     "extensions": "拡張",
     "attach": "画像を追加",
-    "placeholderTouch": "ShuviX にメッセージ"
+    "placeholderTouch": "ShuviX にメッセージ",
+    "plus": "追加",
+    "secretTitle": "機密情報を追加",
+    "secretKind": "種類",
+    "secretValue": "パスワード、キー、トークン",
+    "secretShow": "表示",
+    "secretHide": "隠す",
+    "secretNote": "モデルにはプレースホルダーしか見えません。ツールが使うときに ShuviX が実際の値に戻します。",
+    "secretAdd": "追加",
+    "secretChip": "[🔒 {{label}} #{{seq}}]",
+    "hintOne": "{{label}}のようです：",
+    "hintMany": "機密情報らしきものが {{count}} か所：",
+    "hintHideOne": "モデルから隠す",
+    "hintHide": "隠す",
+    "hintHideAll": "すべて隠す",
+    "hintKeep": "そのまま送信"
   },
   "compact": {
     "summaryLabel": "会話の要約（自動圧縮済み）"

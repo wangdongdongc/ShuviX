@@ -267,7 +267,22 @@
     "atRouteOnly": "只找{{name}}",
     "extensions": "扩展",
     "attach": "添加图片",
-    "placeholderTouch": "给 ShuviX 发消息"
+    "placeholderTouch": "给 ShuviX 发消息",
+    "plus": "添加",
+    "secretTitle": "添加敏感信息",
+    "secretKind": "类别",
+    "secretValue": "密码、密钥或令牌",
+    "secretShow": "显示",
+    "secretHide": "隐藏",
+    "secretNote": "模型只看到一个占位符；工具用到它时，ShuviX 才填回真值。",
+    "secretAdd": "添加",
+    "secretChip": "[🔒 {{label}} #{{seq}}]",
+    "hintOne": "像是{{label}}：",
+    "hintMany": "{{count}} 处像是敏感信息：",
+    "hintHideOne": "对模型隐藏这一处",
+    "hintHide": "隐藏",
+    "hintHideAll": "全部隐藏",
+    "hintKeep": "照原样发"
   },
   "compact": {
     "summaryLabel": "对话摘要（自动压缩）"

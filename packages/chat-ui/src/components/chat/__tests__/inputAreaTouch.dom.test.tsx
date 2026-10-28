@@ -2,12 +2,13 @@
 /**
  * 输入卡片的触屏密度（ChatHost `density: 'touch'`，手机布局的 web 客户端；jsdom）：
  *
- *   T1  触屏 + 能看图：工具行第一个子节点是「+」（`data-attach-button`，aria-label / title = input.attach），
- *       在模型触发器之前；背后一个隐藏的 `<input type=file accept="image/*" multiple data-attach-input>`，
- *       点「+」= 点它一次
+ *   T1  触屏 + 能看图：工具行第一个子节点是「+」（`data-attach-button`，aria-label / title = input.plus），
+ *       在模型触发器之前；背后一个隐藏的 `<input type=file accept="image/*" multiple data-attach-input>`；
+ *       点「+」弹出底部面板（添加图片、添加敏感信息），点「添加图片」= 点它一次
  *   T2  选好的文件走粘贴那条路：只收图片（按次序），收完把 input 的值清空（同一张图再选也要触发 change）；
  *       空选择什么都不加
- *   T3  「+」只在模型能看图、且这条会话能发时出现（两种密度都一样）；挂着时模型换成不能看图 → 消失
+ *   T3  「+」只要这条会话能发就在（两种密度都一样）；图片 input 与菜单里的「添加图片」只在模型能看图时有，
+ *       挂着时模型换成不能看图 → 消失
  *   T4  占位：触屏空闲 = input.placeholderTouch（能不能看图都一样）；运行中 = placeholderSteer；有待答的审批 =
  *       pendingInputs.otherPlaceholderAsk；桌面照旧（placeholderVision / placeholder）
  *   T4b （两种密度）待答的是审批 → otherPlaceholderAsk，是选项题 → otherPlaceholderChoice；两条都挂着时跟着选中项
@@ -366,9 +367,9 @@ describe('附图「+」', () => {
     await mountInput(TOUCH)
     const btn = attachButton()
     expect(btn).not.toBeNull()
-    expect(toolRow().firstElementChild).toBe(btn)
-    expect(btn!.getAttribute('aria-label')).toBe(en.input.attach)
-    expect(btn!.title).toBe(en.input.attach)
+    expect(toolRow().firstElementChild!.contains(btn)).toBe(true)
+    expect(btn!.getAttribute('aria-label')).toBe(en.input.plus)
+    expect(btn!.title).toBe(en.input.plus)
     const trigger = container.querySelector('[data-model-trigger]')
     expect(trigger).not.toBeNull()
     expect(btn!.compareDocumentPosition(trigger!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -382,7 +383,13 @@ describe('附图「+」', () => {
 
     const spy = vi.spyOn(input!, 'click').mockImplementation(() => {})
     await click(btn!)
+    expect(spy).not.toHaveBeenCalled()
+    const sheet = document.body.querySelector('[data-touch-sheet="plus"]')
+    expect(sheet).not.toBeNull()
+    expect(sheet!.querySelector('[data-plus-secret]')!.textContent).toContain(en.input.secretTitle)
+    await click(sheet!.querySelector('[data-plus-images]')!)
     expect(spy).toHaveBeenCalledTimes(1)
+    expect(document.body.querySelector('[data-touch-sheet="plus"]')).toBeNull()
   })
 
   it('TC-IA-T2 选好的文件：只收图片（按次序）、收完清空 input 的值；再选一张 +1；空选择什么都不加', async () => {
@@ -421,10 +428,10 @@ describe('附图「+」', () => {
   })
 
   it.each<['compact' | 'touch']>([['compact'], ['touch']])(
-    'TC-IA-T3 %s：不能看图 → 没有「+」；能看图 → 有；挂着时换成不能看图 → 没了；这条会话不能发（send:false）→ 没有',
+    'TC-IA-T3 %s：「+」总在；图片 input 只在能看图时有，挂着时换成不能看图 → 没了；这条会话不能发（send:false）→ 都没有',
     async (density) => {
       await mountInput(density === 'touch' ? TOUCH : {})
-      expect(attachButton()).toBeNull()
+      expect(attachButton()).not.toBeNull()
       expect(attachInput()).toBeNull()
 
       act(() => useChatStore.setState({ modelSupportsVision: true }))
@@ -434,7 +441,7 @@ describe('附图「+」', () => {
 
       act(() => useChatStore.setState({ modelSupportsVision: false }))
       await flush()
-      expect(attachButton()).toBeNull()
+      expect(attachButton()).not.toBeNull()
       expect(attachInput()).toBeNull()
 
       act(() => useChatStore.setState({ modelSupportsVision: true }))
@@ -680,7 +687,11 @@ describe('触屏运行中：一颗「立即」，长按出两档', () => {
 
     await click(steer)
     expect(agent.steer).toHaveBeenCalledTimes(1)
-    expect(agent.steer.mock.calls[0]![0]).toEqual({ sessionId: 's1', text: 'steer me' })
+    expect(agent.steer.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      text: 'steer me',
+      secrets: []
+    })
     expect(agent.followUp).not.toHaveBeenCalled()
     expect(store().inputText).toBe('')
     expect(steerButton()).toBeNull()
@@ -704,7 +715,11 @@ describe('触屏运行中：一颗「立即」，长按出两档', () => {
       await click(menuRow(name))
       const other = name === 'steer' ? agent.followUp : agent.steer
       expect(agent[name]).toHaveBeenCalledTimes(1)
-      expect(agent[name].mock.calls[0]![0]).toEqual({ sessionId: 's1', text: 'hold me' })
+      expect(agent[name].mock.calls[0]![0]).toEqual({
+        sessionId: 's1',
+        text: 'hold me',
+        secrets: []
+      })
       expect(other).not.toHaveBeenCalled()
       expect(agent.prompt).not.toHaveBeenCalled()
       expect(menu()).toBeNull()

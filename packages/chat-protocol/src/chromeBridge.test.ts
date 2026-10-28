@@ -14,9 +14,9 @@
  *   CB-19      七种消息形状的分片往返（打乱顺序）
  *   CB-20      isBridgeMessage 只认 type
  *   CB-21      chromeBridgeSocketPath：POSIX 与 Windows named pipe
- *   CB-22      CHROME_PANEL_CHANNEL_PATHS 钉死 —— 多一条就是给侧边栏多开一个口子（17 条：P3-09 加了
+ *   CB-22      CHROME_PANEL_CHANNEL_PATHS 钉死 —— 多一条就是给侧边栏多开一个口子（18 条：P3-09 加了
  *              continue / withdrawQueued，没有「下一轮」；pi 1.2 拿掉了 sync.invoke —— 视图同步改走链路；
- *              自动脱敏加了 redaction.resolve —— 侧边栏也把占位符显示成标记）
+ *              自动脱敏加了 redaction.resolve —— 侧边栏也把占位符显示成标记；输入框的提示加了 redaction.inspect）
  *   CB-36      两个方向的 `sync.link`：`{panelId, link, frame}`（pi 1.2，SW 按 panelId 路由）；panelId 的形状
  *   CB-23~32   组装器的三道上限（片数 / 组数 / 总字符数）与额度记账：边界、淘汰顺序、四条丢弃路径
  *              都要把额度退回来、重复片只算一次、几 MB 的正常消息照样过、坏 data 既不抛也不投毒
@@ -944,7 +944,7 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
     }
   })
 
-  it('CB-22 / P3-09-01 CHROME_PANEL_CHANNEL_PATHS 恰是这 17 条（顺序也钉，PIN-22）；文件、斜杠命令、朗读、子会话、设置、改模型、下一轮之类一概不在', () => {
+  it('CB-22 / P3-09-01 CHROME_PANEL_CHANNEL_PATHS 恰是这 18 条（顺序也钉，PIN-22）；文件、斜杠命令、朗读、子会话、设置、改模型、下一轮之类一概不在', () => {
     expect([...CHROME_PANEL_CHANNEL_PATHS]).toEqual([
       'agent.init',
       'agent.prompt',
@@ -958,13 +958,14 @@ describe('Chrome 桥协议：isBridgeMessage / chromeBridgeSocketPath / 侧边�
       'message.list',
       'runtime.statuses',
       'redaction.resolve',
+      'redaction.inspect',
       'bgTask.list',
       'tools.list',
       'tools.presentations',
       'tools.definitions',
       'shuvixMd.validate'
     ])
-    expect(CHROME_PANEL_CHANNEL_PATHS).toHaveLength(17)
+    expect(CHROME_PANEL_CHANNEL_PATHS).toHaveLength(18)
     expect(new Set(CHROME_PANEL_CHANNEL_PATHS).size).toBe(CHROME_PANEL_CHANNEL_PATHS.length)
     // 重开侧边栏仍要读整段历史
     expect(CHROME_PANEL_CHANNEL_PATHS).toContain('message.list')

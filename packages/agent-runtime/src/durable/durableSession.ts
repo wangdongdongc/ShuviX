@@ -155,7 +155,8 @@ import {
   redactionRequestHook,
   redactionToolHook,
   SessionRedaction,
-  type RedactionHost
+  type RedactionHost,
+  type UserSecret
 } from './sessionRedaction'
 import type { LockModel, ModelSelection } from '../models/lockModel'
 
@@ -240,7 +241,22 @@ export interface UserSendOptions {
    * 就落下的不调（`onAdmitted` 已经带着 entryId）；被撤回 / 中止、从没放下的不调。抛错只记日志。
    */
   onPlaced?: (info: PlacedInfo) => void
+  /**
+   * 输入框发来的（docs/auto-redaction-design.md §14）：只把用户交来的 secrets 换成占位符，其余照原样发，不再自动脱敏；
+   * 显示侧车里的 secrets 一并换掉。不给 = 自动脱敏（别的会话、触发器、Telegram 这类没有输入框的来源）。没配脱敏时带着
+   * 非空 secrets 的发送被拒：不能让用户以为藏住了。
+   */
+  composer?: ComposerInput
 }
+
+/** 输入框发来的输入：用户交来要藏的值（§14） */
+export interface ComposerInput {
+  secrets: readonly UserSecret[]
+}
+
+/** 没配脱敏、输入框却交来了要藏的值 */
+const NO_REDACTION_FOR_SECRETS =
+  'Hiding values from the model is not available in this session, so the message was not sent.'
 
 /** 一个派生 agent 的引用（与 SyncHub 的 `SyncAgentRef` 同形；对话 id 可省） */
 export interface AgentRef {
@@ -255,6 +271,8 @@ export interface AdmitOptions {
   source?: InputOrigin
   onAdmitted?: (info: AdmittedInfo) => void
   onPlaced?: (info: PlacedInfo) => void
+  /** 同 `UserSendOptions.composer` */
+  composer?: ComposerInput
 }
 
 /** `onAdmitted` 的参数（PIN-08） */
@@ -1334,7 +1352,21 @@ export class DurableSessionImpl implements DurableSession {
 
   async submitUser(content: UserInput, options: UserSendOptions = {}): Promise<SubmitResult> {
     try {
-      if (this.redaction !== undefined) content = await this.redaction.maskInput(content)
+      if (options.composer !== undefined) {
+        if (this.redaction !== undefined) {
+          const masked = await this.redaction.maskComposerInput(
+            content,
+            options.composer.secrets,
+            options.display
+          )
+          content = masked.content
+          options = { ...options, display: masked.display }
+        } else if (options.composer.secrets.length > 0) {
+          return { error: NO_REDACTION_FOR_SECRETS }
+        }
+      } else if (this.redaction !== undefined) {
+        content = await this.redaction.maskInput(content)
+      }
       return await this.op(async () => {
         if (options.driven !== undefined && options.requestId === undefined) {
           return { error: 'A driven send needs a requestId' }
@@ -1655,7 +1687,16 @@ export class DurableSessionImpl implements DurableSession {
   ): Promise<AdmitResult> {
     let requestId = options.requestId
     try {
-      if (this.redaction !== undefined) content = await this.redaction.maskInput(content)
+      if (options.composer !== undefined) {
+        if (this.redaction !== undefined) {
+          content = (await this.redaction.maskComposerInput(content, options.composer.secrets))
+            .content
+        } else if (options.composer.secrets.length > 0) {
+          return { error: NO_REDACTION_FOR_SECRETS }
+        }
+      } else if (this.redaction !== undefined) {
+        content = await this.redaction.maskInput(content)
+      }
       return await this.op(() =>
         this.inSection(async () => {
           const refused = await this.ensureAgent()

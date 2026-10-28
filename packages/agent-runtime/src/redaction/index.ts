@@ -10,8 +10,15 @@ export {
   type SensitiveCategory
 } from './categories'
 export { detectSensitive, type Finding } from './detect'
-export { KnownValues, MIN_KNOWN, type KnownSpan, type KnownValue } from './known'
+export { KnownValues, MIN_KNOWN, MIN_WHOLE_WORD, type KnownSpan, type KnownValue } from './known'
 export {
+  commandQuoteContexts,
+  quoteValue,
+  type CommandDialect,
+  type QuoteContext
+} from './commandQuote'
+export {
+  asWrittenKey,
   PLACEHOLDER_PATTERN,
   PLACEHOLDER_PREFIX,
   categoryOfPlaceholder,

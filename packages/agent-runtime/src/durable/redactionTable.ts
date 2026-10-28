@@ -11,6 +11,9 @@ import { findPlaceholders } from '../redaction/placeholder'
 import { backgroundContext as BG } from './context'
 import { RedactionTableDoc } from './docs'
 
+/** 用户在输入框里交来的（+ 添加的、确认了提示的）表项的规则名：短值也按整词匹配（known.ts wholeWord） */
+export const USER_RULE = 'user'
+
 /** 宿主的加密：真值进文档前加密、读出来解密；解不开时抛错 */
 export interface RedactionVault {
   seal(value: string): string
@@ -37,6 +40,8 @@ export class RedactionTable {
   private readonly items = new Map<string, RedactionTableItem>()
   /** 解得开的真值，供原文匹配（写入时的已知值、出口把回复里的真值换回占位符） */
   readonly known = new KnownValues()
+  /** 用户照原样发的值（asWrittenKey，§14.2）：检测跳过它们 */
+  readonly asWritten = new Set<string>()
 
   get size(): number {
     return this.items.size
@@ -64,7 +69,12 @@ export class RedactionTable {
     if (this.items.has(placeholder)) return false
     this.items.set(placeholder, item)
     if (item.value !== undefined) {
-      this.known.add({ value: item.value, placeholder, category: item.category })
+      this.known.add({
+        value: item.value,
+        placeholder,
+        category: item.category,
+        wholeWord: item.rule === USER_RULE
+      })
     }
     return true
   }
@@ -114,25 +124,28 @@ export async function loadRedactionTable(
       ...(value === undefined ? {} : { value })
     })
   }
+  for (const key of Object.keys(doc?.asWritten ?? {})) table.asWritten.add(key)
   return table
 }
 
 /**
- * 把新认出的几处记进对照表（文档与内存视图）。已在表里的跳过；返回这次新记了几项。
- * 在一个提交里写，并发的几次记录各自读到对方写下的项，不会互相覆盖。
+ * 把新认出的几处记进对照表（文档与内存视图），连同用户照原样发的值（asWritten：asWrittenKey 的结果）。已在表里的
+ * 跳过；返回这次新记了几项。在一个提交里写，并发的几次记录各自读到对方写下的项，不会互相覆盖。
  */
 export async function recordRedactions(
   harness: Harness,
   table: RedactionTable,
   entries: readonly RedactionEntry[],
-  vault: RedactionVault
+  vault: RedactionVault,
+  asWritten: readonly string[] = []
 ): Promise<number> {
   const fresh = new Map<string, RedactionEntry>()
   for (const entry of entries) {
     if (!table.has(entry.placeholder) && !fresh.has(entry.placeholder))
       fresh.set(entry.placeholder, entry)
   }
-  if (fresh.size === 0) return 0
+  const freshKeys = [...new Set(asWritten)].filter((key) => !table.asWritten.has(key))
+  if (fresh.size === 0 && freshKeys.length === 0) return 0
   const sealed = [...fresh.values()].map((entry) => ({ entry, value: vault.seal(entry.value) }))
   const written = await harness.commit(async (tx) => {
     const doc = await tx.doc(RedactionTableDoc)
@@ -142,10 +155,15 @@ export async function recordRedactions(
       doc.items[entry.placeholder] = { category: entry.category, rule: entry.rule, value }
       n++
     }
+    if (freshKeys.length > 0) {
+      doc.asWritten ??= {}
+      for (const key of freshKeys) doc.asWritten[key] = true
+    }
     return n
   }, BG)
   for (const entry of fresh.values()) {
     table.put(entry.placeholder, { category: entry.category, rule: entry.rule, value: entry.value })
   }
+  for (const key of freshKeys) table.asWritten.add(key)
   return written
 }

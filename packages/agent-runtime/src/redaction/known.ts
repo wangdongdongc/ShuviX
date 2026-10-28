@@ -3,7 +3,8 @@
  *
  * 规则靠前后文认值（DB_PASSWORD=、邮箱两边不能贴着的字符）；同一个值换了说法（用户在消息里光秃秃地
  * 打出那个密码、模型在回复里提到它）就认不出来了。会话见过它一次，之后在哪儿出现都按原文换掉。
- * 短于 MIN_KNOWN 的不按已知值匹配：三个字母的密码到处都是。
+ * 短于 MIN_KNOWN 的不按已知值匹配：三个字母的密码到处都是。用户自己交来的（wholeWord）例外：4 个字符起按整词匹配
+ * —— 用户说了它是秘密，宁可多换几处。
  *
  * 查找是线性的：每个位置先用前 4 个字符的哈希查位图，绝大多数位置一次位运算就跳过；命中再按前 8 个
  * 字符查候选、逐个比对（长的优先）。
@@ -12,10 +13,15 @@
 /** 按已知值匹配的最短长度（同 magpie：赋值规则对值的要求就是 8） */
 export const MIN_KNOWN = 8
 
+/** 按整词匹配的短值（wholeWord）的最短长度 */
+export const MIN_WHOLE_WORD = 4
+
 export interface KnownValue {
   value: string
   placeholder: string
   category: string
+  /** 短于 MIN_KNOWN 时按整词匹配（前后不贴着字母、数字、下划线）；只给用户自己交来的值 */
+  wholeWord?: boolean
 }
 
 /** 一处已知值：位置与它的表项 */
@@ -42,6 +48,8 @@ export class KnownValues {
   private readonly byHead = new Map<string, KnownValue[]>()
   private readonly bits = new Uint32Array((GRAM_MASK + 1) >>> 5)
   private readonly byValue = new Map<string, KnownValue>()
+  /** 按整词匹配的短值 */
+  private readonly short: Array<{ entry: KnownValue; re: RegExp }> = []
 
   get size(): number {
     return this.byValue.size
@@ -49,7 +57,13 @@ export class KnownValues {
 
   /** 加入一个值；同一个值重复加入只留第一次（同一个值的占位符本来就一样） */
   add(entry: KnownValue): void {
-    if (entry.value.length < MIN_KNOWN || this.byValue.has(entry.value)) return
+    if (this.byValue.has(entry.value)) return
+    if (entry.value.length < MIN_KNOWN) {
+      if (!entry.wholeWord || entry.value.length < MIN_WHOLE_WORD) return
+      this.byValue.set(entry.value, entry)
+      this.short.push({ entry, re: wholeWordPattern(entry.value) })
+      return
+    }
     this.byValue.set(entry.value, entry)
     const head = entry.value.slice(0, MIN_KNOWN)
     const list = this.byHead.get(head)
@@ -90,7 +104,26 @@ export class KnownValues {
       out.push({ ...hit, start: i, end: i + hit.value.length })
       i += hit.value.length
     }
-    return out
+    return this.short.length === 0 ? out : this.withShort(s, out)
+  }
+
+  /** 加上整词出现的短值：与长值重叠的不要，彼此重叠的先开始、更长的赢 */
+  private withShort(s: string, long: KnownSpan[]): KnownSpan[] {
+    const found: KnownSpan[] = []
+    for (const { entry, re } of this.short) {
+      re.lastIndex = 0
+      for (let m = re.exec(s); m !== null; m = re.exec(s)) {
+        found.push({ ...entry, start: m.index, end: m.index + entry.value.length })
+      }
+    }
+    if (found.length === 0) return long
+    found.sort((a, b) => a.start - b.start || b.end - a.end)
+    const out = [...long]
+    for (const span of found) {
+      if (out.some((o) => span.start < o.end && span.end > o.start)) continue
+      out.push(span)
+    }
+    return out.sort((a, b) => a.start - b.start)
   }
 
   /**
@@ -113,4 +146,10 @@ export class KnownValues {
     }
     return best
   }
+}
+
+/** 整词出现的 value：前后不贴着字母、数字、下划线 */
+function wholeWordPattern(value: string): RegExp {
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'g')
 }

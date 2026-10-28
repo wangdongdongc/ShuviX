@@ -104,18 +104,18 @@ export async function callPanelChannel(
       // 先记下用户指着的站点，再开跑：agent 的第一步就可能用到它们
       await grantSelectedTabSites(conn, p.sessionId, p.inlineTokens)
       await inContext(p.sessionId, () =>
-        chatGateway.prompt(p.sessionId, p.text, p.images, p.inlineTokens)
+        chatGateway.prompt(p.sessionId, p.text, p.images, p.inlineTokens, undefined, p.secrets)
       )
       return { success: true }
     }
     case 'agent.steer': {
       const p = params<AgentSteerParams>()
-      inContext(p.sessionId, () => chatGateway.steer(p.sessionId, p.text))
+      inContext(p.sessionId, () => chatGateway.steer(p.sessionId, p.text, p.secrets))
       return { success: true }
     }
     case 'agent.followUp': {
       const p = params<AgentFollowUpParams>()
-      inContext(p.sessionId, () => chatGateway.followUp(p.sessionId, p.text))
+      inContext(p.sessionId, () => chatGateway.followUp(p.sessionId, p.text, p.secrets))
       return { success: true }
     }
     case 'agent.abort': {
@@ -161,6 +161,11 @@ export async function callPanelChannel(
     case 'redaction.resolve': {
       const p = params<{ sessionId: string; placeholders: string[] }>()
       return chatGateway.resolveRedactions(p.sessionId, p.placeholders)
+    }
+    case 'redaction.inspect': {
+      // 侧边栏总有会话：只认它自己的，按会话的模型判
+      const p = params<{ sessionId: string; texts: string[] }>()
+      return chatGateway.inspectRedactions({ sessionId: p.sessionId, texts: p.texts })
     }
     case 'bgTask.list':
       return taskRegistry.list(params<{ sessionId: string }>().sessionId)

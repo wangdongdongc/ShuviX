@@ -635,6 +635,7 @@ export {
   type SubmitResult,
   type TaskLiveness,
   type UserSendOptions,
+  type ComposerInput,
   type AdmitOptions,
   type AdmittedInfo,
   type AgentRef,
@@ -793,6 +794,7 @@ export {
   entriesReferencedBy,
   loadRedactionTable,
   recordRedactions,
+  USER_RULE,
   type RedactionEntry,
   type RedactionTableItem,
   type RedactionVault
@@ -802,7 +804,9 @@ export {
   redactionRequestHook,
   redactionToolHook,
   type RedactionHost,
-  type RestoreOutcome
+  type RestoreCommandOptions,
+  type RestoreOutcome,
+  type UserSecret
 } from './durable/sessionRedaction'
 export {
   EgressBlockedError,

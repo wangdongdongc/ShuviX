@@ -193,6 +193,7 @@ beforeEach(() => {
     // 网关这一条是异步的（ssh 那一份可能要读用户配置）：替身照真件的形状回 Promise
     getRuntimeStatuses: mocks.delegate('getRuntimeStatuses', async () => [{ id: 'rt1' }]),
     resolveRedactions: mocks.delegate('resolveRedactions', async () => ({})),
+    inspectRedactions: mocks.delegate('inspectRedactions', async () => []),
     listTools: mocks.delegate('listTools', () => [{ name: 'mcp:chrome' }]),
     continue: mocks.delegate('continue', async () => ({})),
     withdrawQueued: mocks.delegate('withdrawQueued', async () => 'aborted'),
@@ -291,6 +292,10 @@ const FIXTURES: Record<string, { args: unknown[]; delegate: () => ReturnType<typ
     args: [{ sessionId: OWNED, placeholders: [] }],
     delegate: () => mocks.gateway.resolveRedactions
   },
+  'redaction.inspect': {
+    args: [{ sessionId: OWNED, texts: [] }],
+    delegate: () => mocks.gateway.inspectRedactions
+  },
   'bgTask.list': { args: [{ sessionId: OWNED }], delegate: () => mocks.taskList },
   'tools.list': { args: [OWNED], delegate: () => mocks.gateway.listTools },
   'tools.presentations': { args: [], delegate: () => mocks.presentations },
@@ -336,6 +341,7 @@ const SESSION_PATHS: Array<[string, (sid: unknown) => unknown[]]> = [
   ['message.list', (sid) => [sid]],
   ['runtime.statuses', (sid) => [sid]],
   ['redaction.resolve', (sid) => [{ sessionId: sid, placeholders: [] }]],
+  ['redaction.inspect', (sid) => [{ sessionId: sid, texts: [] }]],
   ['bgTask.list', (sid) => [{ sessionId: sid }]],
   ['tools.list', (sid) => [sid]]
 ]
@@ -389,15 +395,27 @@ describe('CH-3 带会话的调用：会话不归这条连接 → 拒绝，什么
 // ─── 过了关的调用 ───────────────────────────────────────────────────────────
 
 describe('CH-4 agent.prompt', () => {
-  it('CH-4 恰以四个参数调网关（多余字段丢掉），在 chrome 来源的上下文里；回 {success:true}', async () => {
+  it('CH-4 以六个参数调网关（drive 恒为 undefined，secrets 原样，多余字段丢掉），在 chrome 来源的上下文里；回 {success:true}', async () => {
     const images = [{ type: 'image' as const, data: 'AAAA', mimeType: 'image/png' }]
     const inlineTokens = { k: { type: 'at', id: 'a', displayText: 'a', payload: 'p' } }
+    const secrets = [{ value: 'pw', category: 'PASSWORD' }]
     const result = await call('agent.prompt', [
-      { sessionId: OWNED, text: 'hello', images, inlineTokens, extra: 'dropped', model: 'x' }
+      {
+        sessionId: OWNED,
+        text: 'hello',
+        images,
+        inlineTokens,
+        secrets,
+        drive: { requestId: 'x' },
+        extra: 'dropped',
+        model: 'x'
+      }
     ])
     expect(result).toStrictEqual({ success: true })
-    expect(mocks.gateway.prompt.mock.calls).toEqual([[OWNED, 'hello', images, inlineTokens]])
-    expect(mocks.gateway.prompt.mock.calls[0]).toHaveLength(4)
+    expect(mocks.gateway.prompt.mock.calls).toEqual([
+      [OWNED, 'hello', images, inlineTokens, undefined, secrets]
+    ])
+    expect(mocks.gateway.prompt.mock.calls[0]).toHaveLength(6)
     expect(mocks.calls.find((c) => c.name === 'prompt')!.ctx).toEqual(CHROME_CTX(OWNED))
   })
 
@@ -435,12 +453,15 @@ describe('CH-5 init / abort / 三条队列 / respondToInput', () => {
   it.each([
     ['agent.steer', 'steer'],
     ['agent.followUp', 'followUp']
-  ])('CH-5 %s 转 (sessionId, text)，回 {success:true}，在上下文里', async (path, method) => {
-    const result = await call(path, [{ sessionId: OWNED, text: 'more', extra: 1 }])
-    expect(result).toStrictEqual({ success: true })
-    expect(mocks.gateway[method].mock.calls).toEqual([[OWNED, 'more']])
-    expect(mocks.calls[0].ctx).toEqual(CHROME_CTX(OWNED))
-  })
+  ])(
+    'CH-5 %s 转 (sessionId, text, secrets)，回 {success:true}，在上下文里',
+    async (path, method) => {
+      const result = await call(path, [{ sessionId: OWNED, text: 'more', extra: 1 }])
+      expect(result).toStrictEqual({ success: true })
+      expect(mocks.gateway[method].mock.calls).toEqual([[OWNED, 'more', undefined]])
+      expect(mocks.calls[0].ctx).toEqual(CHROME_CTX(OWNED))
+    }
+  )
 
   const RESPONSE = { kind: 'ask', allowed: true }
   const respond = (requestId = 'req-1'): Promise<unknown> =>

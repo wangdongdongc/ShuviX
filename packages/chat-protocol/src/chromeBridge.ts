@@ -337,6 +337,7 @@ export const CHROME_PANEL_CHANNEL_PATHS = [
   'message.list',
   'runtime.statuses',
   'redaction.resolve',
+  'redaction.inspect',
   'bgTask.list',
   'tools.list',
   'tools.presentations',

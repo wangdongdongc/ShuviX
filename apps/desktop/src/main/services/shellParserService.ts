@@ -31,10 +31,12 @@ let failed = false
 async function ensureReady(): Promise<void> {
   if (failed) return
   if (!ready) {
-    ready = initShellParser({
-      runtime: new Uint8Array(readFileSync(wasmPath('web-tree-sitter', 'web-tree-sitter.wasm'))),
-      grammar: new Uint8Array(readFileSync(wasmPath('tree-sitter-bash', 'tree-sitter-bash.wasm')))
-    }).catch((err: unknown) => {
+    // 找 wasm、读文件同步抛的错也收进同一个 catch：调用方从不因为这里拿到异常
+    ready = (async () =>
+      initShellParser({
+        runtime: new Uint8Array(readFileSync(wasmPath('web-tree-sitter', 'web-tree-sitter.wasm'))),
+        grammar: new Uint8Array(readFileSync(wasmPath('tree-sitter-bash', 'tree-sitter-bash.wasm')))
+      }))().catch((err: unknown) => {
       failed = true
       log.error(
         'tree-sitter-bash 初始化失败，命令将按未解析处理（结构化安全策略不生效）:',

@@ -197,7 +197,8 @@ export const API_TABLE = {
   },
   /** 自动脱敏：占位符的类别与真值（界面渲染标记） */
   redaction: {
-    resolve: invoke('redaction:resolve', 1)
+    resolve: invoke('redaction:resolve', 1),
+    inspect: invoke('redaction:inspect', 1)
   },
   /** 数据库凭据 */
   dbCredential: {

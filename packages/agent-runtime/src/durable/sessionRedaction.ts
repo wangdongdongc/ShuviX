@@ -1,7 +1,7 @@
 /**
  * 一条会话的脱敏（docs/auto-redaction-design.md §2）：写入对话记录之前把认出的内容换成占位符、记进对照表
- * （默认照发的几类照原样存，categories.ts isKeptAsWritten）；
- * 工具执行之前把参数里的占位符换回真值。宿主无关：占位符怎么签、真值怎么加密由宿主交进来（RedactionHost）。
+ * （默认照发的几类照原样存，categories.ts isKeptAsWritten）；输入框发来的只换用户交来的那几项（§14）；
+ * 工具执行之前把参数里的占位符换回真值（命令按引号环境转义）。宿主无关：占位符怎么签、真值怎么加密由宿主交进来（RedactionHost）。
  *
  * 出错的处置（§4.4）：替换的任何一步抛错 → 记 error、按原样写入（当作漏检）；还原时表项解不开 → 那个占位符
  * 记为「查不到」，由调用方拦下这次工具调用（不会把占位符写进文件）。
@@ -19,8 +19,19 @@ import {
   type UserInput
 } from '@earendil-works/pi-durable'
 import { isKeptAsWritten } from '../redaction/categories'
+import {
+  commandQuoteContexts,
+  quoteValue,
+  type CommandDialect,
+  type QuoteContext
+} from '../redaction/commandQuote'
 import { detectSensitive } from '../redaction/detect'
-import { findPlaceholders, placeholderFor, type PlaceholderSigner } from '../redaction/placeholder'
+import {
+  asWrittenKey,
+  findPlaceholders,
+  placeholderFor,
+  type PlaceholderSigner
+} from '../redaction/placeholder'
 import type { RuntimeLogger } from '../types'
 import { backgroundContext as BG, errorText } from './context'
 import {
@@ -29,7 +40,8 @@ import {
   recordRedactions,
   type RedactionEntry,
   type RedactionTable,
-  type RedactionVault
+  type RedactionVault,
+  USER_RULE
 } from './redactionTable'
 
 /** 宿主交进来的两把钥匙 */
@@ -49,7 +61,24 @@ export interface RestoreOutcome<T> {
   unavailable: string[]
 }
 
+/** 用户在输入框里交来的一项敏感信息：+ 添加的，或确认了提示的（§14） */
+export interface UserSecret {
+  value: string
+  category: string
+}
+
+/** 还原工具参数时，哪一个字段是命令、按什么方言转义 */
+export interface RestoreCommandOptions {
+  /** 参数对象顶层的字段名（bash / powershell / ssh exec 的 `command`） */
+  field: string
+  dialect: CommandDialect
+}
+
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json }
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
 /** 收集一个 JSON 值里的全部字符串（深度优先），再按同样的顺序换回去 */
 function mapStrings(value: unknown, map: (s: string) => string): unknown {
@@ -124,8 +153,13 @@ export class SessionRedaction {
 
   private maskOne(text: string, table: RedactionTable, entries: RedactionEntry[]): string {
     if (text.length < 3) return text
-    // 默认照发的几类照原样存；策略要它们保持占位符时出口现换
-    const findings = detectSensitive(text, table.known, { except: isKeptAsWritten })
+    // 默认照发的几类照原样存；策略要它们保持占位符时出口现换。用户照原样发过的值也不换
+    const signer = this.deps.host.signer
+    const findings = detectSensitive(text, table.known, {
+      except: (category, value) =>
+        isKeptAsWritten(category) ||
+        (table.asWritten.size > 0 && table.asWritten.has(asWrittenKey(signer, value)))
+    })
     if (findings.length === 0) return text
     let out = ''
     let last = 0
@@ -142,6 +176,91 @@ export class SessionRedaction {
       last = f.end
     }
     return out + text.slice(last)
+  }
+
+  // ─────────────────────────── 输入框：用户说了算（§14） ───────────────────────────
+
+  /**
+   * 输入框发来的几段文本：只把用户交来的 secrets 换成占位符 —— 在用户自己的这条消息里按值整串替换，不看词边界（胶囊
+   * 可能紧贴别的字符，`-p` + 密码）；其余照原样，还认得出来的值记成「照原样发」：之后这个会话里写入与出口的检测都放过
+   * 它们 —— 模型已经从用户这里看到了，别处再藏只会让它看到同一个值两种写法。
+   * 与 maskTexts 不同，**出错就抛**：用户明说要藏的值没藏住，这条消息不能发。
+   */
+  async maskComposerTexts(
+    texts: readonly string[],
+    secrets: readonly UserSecret[]
+  ): Promise<string[]> {
+    const table = await this.table()
+    const { entries, replace } = this.secretReplacer(table, secrets)
+    const out = texts.map(replace)
+    // 默认照发的几类不记：它们本来就照原样存，给不给模型由出口按策略判
+    const asWritten: string[] = []
+    for (const text of out) {
+      for (const f of detectSensitive(text, table.known, { except: isKeptAsWritten })) {
+        asWritten.push(asWrittenKey(this.deps.host.signer, f.value))
+      }
+    }
+    await recordRedactions(this.deps.harness, table, entries, this.deps.host.vault, asWritten)
+    return out
+  }
+
+  /** 输入框发来的用户输入（文本块换、图片不动）与它的显示侧车（内联 Token 的原文、粘贴芯片全文：只换 secrets） */
+  async maskComposerInput<D>(
+    content: UserInput,
+    secrets: readonly UserSecret[],
+    display?: D
+  ): Promise<{ content: UserInput; display: D | undefined }> {
+    const texts =
+      typeof content === 'string'
+        ? [content]
+        : content.flatMap((block) => (block.type === 'text' ? [block.text] : []))
+    const masked = await this.maskComposerTexts(texts, secrets)
+    let i = 0
+    const next: UserInput =
+      typeof content === 'string'
+        ? masked[0]
+        : content.map((block) => (block.type === 'text' ? { ...block, text: masked[i++] } : block))
+    if (display === undefined || secrets.length === 0) return { content: next, display }
+    const { replace } = this.secretReplacer(await this.table(), secrets)
+    return { content: next, display: mapStrings(display, replace) as D }
+  }
+
+  /** 用户交来的值 → 占位符（表里已有就沿用）与按值整串替换的函数；entries = 要新记的 */
+  private secretReplacer(
+    table: RedactionTable,
+    secrets: readonly UserSecret[]
+  ): { entries: RedactionEntry[]; replace: (text: string) => string } {
+    const entries: RedactionEntry[] = []
+    const placeholders = new Map<string, string>()
+    for (const { value, category } of secrets) {
+      if (value.length === 0 || placeholders.has(value)) continue
+      const known = table.known.get(value)
+      const placeholder =
+        known?.placeholder ??
+        placeholderFor(this.deps.host.signer, category, value, (p) => table.has(p))
+      if (!known && !table.has(placeholder)) {
+        entries.push({ placeholder, category, rule: USER_RULE, value })
+      }
+      placeholders.set(value, placeholder)
+    }
+    if (placeholders.size === 0) return { entries, replace: (text) => text }
+    // 长的先试：一个值是另一个的一部分时整串换掉长的
+    const pattern = new RegExp(
+      [...placeholders.keys()]
+        .sort((a, b) => b.length - a.length)
+        .map(escapeRegExp)
+        .join('|'),
+      'g'
+    )
+    return { entries, replace: (text) => text.replace(pattern, (m) => placeholders.get(m)!) }
+  }
+
+  /** 这个值是不是用户在输入框里照原样发过的（提示不再提它） */
+  async isAsWritten(value: string): Promise<boolean> {
+    const table = await this.table()
+    return (
+      table.asWritten.size > 0 && table.asWritten.has(asWrittenKey(this.deps.host.signer, value))
+    )
   }
 
   /** 用户输入（字符串，或文本块与图片块）：文本部分换掉，图片不动 */
@@ -184,29 +303,62 @@ export class SessionRedaction {
 
   // ─────────────────────────── 还原：换回真值 ───────────────────────────
 
-  /** 一个 JSON 值（工具参数）里的占位符换回真值；认得模型写坏的形式 */
-  async restoreJson<T>(value: T): Promise<RestoreOutcome<T>> {
+  /**
+   * 一个 JSON 值（工具参数）里的占位符换回真值；认得模型写坏的形式。command（可选）：那个字段是命令，真值按占位符所在
+   * 的引号环境转义（§14.2）；判不出环境就原样换。转义后的写法不是原文：记进已知值（只在内存里），命令被回显时它也
+   * 换得回占位符。
+   */
+  async restoreJson<T>(value: T, command?: RestoreCommandOptions): Promise<RestoreOutcome<T>> {
     const table = await this.table()
     const restored: string[] = []
     const unavailable: string[] = []
-    const restoreOne = (s: string): string => {
+    const restoreOne = (s: string, dialect?: CommandDialect): string => {
       const hits = findPlaceholders(s, (p) => table.has(p))
       if (hits.length === 0) return s
+      const contexts: QuoteContext[] | null =
+        dialect === undefined ? null : commandQuoteContexts(s, hits, dialect)
       let out = ''
       let last = 0
-      for (const hit of hits) {
+      hits.forEach((hit, i) => {
         const item = table.get(hit.placeholder)!
         if (item.value === undefined) {
           if (!unavailable.includes(hit.placeholder)) unavailable.push(hit.placeholder)
-          continue
+          return
         }
         if (!restored.includes(item.category)) restored.push(item.category)
-        out += s.slice(last, hit.start) + item.value
+        let text = item.value
+        if (contexts !== null && dialect !== undefined) {
+          text = quoteValue(item.value, contexts[i], dialect)
+          if (text !== item.value) {
+            table.known.add({
+              value: text,
+              placeholder: hit.placeholder,
+              category: item.category,
+              wholeWord: item.rule === USER_RULE
+            })
+          }
+        }
+        out += s.slice(last, hit.start) + text
         last = hit.end
-      }
+      })
       return out + s.slice(last)
     }
-    return { value: mapStrings(value, restoreOne) as T, restored, unavailable }
+    const field = command?.field
+    const commandText =
+      field !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)[field]
+        : undefined
+    if (typeof commandText !== 'string') {
+      return { value: mapStrings(value, (s) => restoreOne(s)) as T, restored, unavailable }
+    }
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] =
+        k === field
+          ? restoreOne(commandText, command!.dialect)
+          : mapStrings(v, (s) => restoreOne(s))
+    }
+    return { value: out as T, restored, unavailable }
   }
 
   // ─────────────────────────── 出口用 ───────────────────────────
