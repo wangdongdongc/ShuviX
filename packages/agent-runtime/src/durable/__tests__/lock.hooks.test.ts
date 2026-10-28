@@ -150,7 +150,7 @@ describe('lock · the builtin extension carries the empty-reply hook', () => {
           profile: testProfile({
             name: 'work',
             displayName: 'Work',
-            tools: ['agent', 'read', 'skill:pdf']
+            tools: ['agent', 'read', 'skill']
           })
         })
       })

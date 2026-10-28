@@ -6,8 +6,9 @@
  * 抹掉 —— 而它恰恰要在下一步才被连起来，于是「勾了却没有工具」，且因为整份替换写回，勾选还会
  * 永久丢失。这条用例就钉这一点：启用但没连上的仍在，不存在的才剔除。
  *
- * 三个上游全是替身：真 toolRegistry 要靠工具模块自注册（会拖进整个 main 进程），
- * 真 mcpService/skillService 要 SQLite 与文件系统。
+ * 上游全是替身：真 toolRegistry 要靠工具模块自注册（会拖进整个 main 进程），
+ * 真 mcpService 要 SQLite。skillService 也桩着 —— 只为钉住「技能不在可用集里、根本不去问它」：
+ * 技能不按会话勾选（2026-10-28），启用着的全部上带 `skill` 工具的 agent 的货架。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -49,14 +50,14 @@ describe('MCP 可用性按配置算，不按连接状态', () => {
   it('MCPL-U-15: getAllToolNames 收下已启用（未连接）的 MCP', () => {
     const names = getAllToolNames()
     expect(names).toContain('mcp:a')
-    expect(names).toEqual(['bash', 'read', 'edit', 'mcp:a', 'skill:x'])
+    expect(names).toEqual(['bash', 'read', 'edit', 'mcp:a'])
     // 读的是「已启用」而不是「已连接」的那个入口
     expect(mocks.getEnabledToolNames).toHaveBeenCalled()
   })
 
   it('MCPL-U-15: filterAvailableTools 保留已启用但没连上的勾选，只剔除已不存在的，且保持入参序', () => {
-    const kept = filterAvailableTools(['mcp:a', 'mcp:gone', 'skill:x', 'skill:none', 'bash'])
-    expect(kept).toEqual(['mcp:a', 'skill:x', 'bash'])
+    const kept = filterAvailableTools(['mcp:a', 'mcp:gone', 'bash'])
+    expect(kept).toEqual(['mcp:a', 'bash'])
   })
 
   it('MCPL-U-15: 配置里停用（已启用列表为空）才算不可用', () => {
@@ -66,17 +67,17 @@ describe('MCP 可用性按配置算，不按连接状态', () => {
   })
 })
 
-describe('技能的两级开关同样落在这里', () => {
-  it('SSG-16: 整组关掉后，会话里存着的 skill:<name> 被 filterAvailableTools 抹掉', () => {
-    // 技能的可用性入口只有一个：`skillService.findEnabled()`，而它已经把两级开关（单个技能 +
-    // 整个目录）算完了 —— 侧栏把一整个目录关掉，模型的工具表里就不该再有那一族。
-    // 这里**只桩 findEnabled**、不写 `.config.json`：两级开关怎么算是 skillServiceGroups 的活
-    // （SSG-3/5/6），这一条只钉「算完之后工具层跟着变」这半段接缝
-    expect(filterAvailableTools(['skill:x', 'bash'])).toEqual(['skill:x', 'bash'])
-
-    mocks.findEnabled.mockReturnValue([])
+describe('技能不在可用集里', () => {
+  it('SSG-16: 会话里存着的 skill:<name> 一律被 filterAvailableTools 抹掉 —— 不论那个技能此刻启用与否，也不去问 skillService', () => {
+    // 技能不按会话勾选了（2026-10-28）：旧会话里存着的 `skill:` 条目不再是可用的工具名。
+    // 侧栏的两级开关（单个技能 + 整个目录）照样有效，但它作用在货架上（SkillTool / findModelInvocable），
+    // 不在这一层 —— 这里连 findEnabled 都不该调
+    mocks.findEnabled.mockClear()
     expect(filterAvailableTools(['skill:x', 'bash'])).toEqual(['bash'])
     expect(getAllToolNames()).not.toContain('skill:x')
+    mocks.findEnabled.mockReturnValue([])
+    expect(filterAvailableTools(['skill:x', 'bash'])).toEqual(['bash'])
+    expect(mocks.findEnabled).not.toHaveBeenCalled()
   })
 })
 
@@ -96,10 +97,10 @@ describe('内置部分只算这台机器上存在的工具', () => {
 })
 
 describe('取消档案声明项的记号不按可用性滤', () => {
-  it('TA-OPT-1: 「-mcp:/-skill:」原样留着（它说的是「不要」，那一项在不在都一样）；内置名的「-read」不是记号，照常剔除', () => {
-    // 可用：mcp:a、skill:x（外加内置 bash / read / edit）
+  it('TA-OPT-1: 「-mcp:」原样留着（它说的是「不要」，那一台在不在都一样）；内置名的「-read」与旧的「-skill:」不是记号，照常剔除', () => {
+    // 可用：mcp:a（外加内置 bash / read / edit）
     expect(
-      filterAvailableTools(['-skill:gone', 'mcp:a', '-mcp:a', 'skill:none', '-read', '-skill:x'])
-    ).toEqual(['-skill:gone', 'mcp:a', '-mcp:a', '-skill:x'])
+      filterAvailableTools(['-mcp:gone', 'mcp:a', '-mcp:a', 'skill:none', '-read', '-skill:x'])
+    ).toEqual(['-mcp:gone', 'mcp:a', '-mcp:a'])
   })
 })

@@ -8,7 +8,8 @@
  *
  *   SK-1 format.md 的范例：frontmatter 就是 `shuvix: track v1`，侧栏取到的标题（trackingTitle）就是范例里的 `#` 标题；
  *        范例文件名是一个合法的跟踪项文件名
- *   SK-2 技能点名的工具（session / suggest / write / ls）都在 bot 基座三种语言的工具表里（技能本身也在）
+ *   SK-2 技能点名的工具（session / suggest / write / ls）都在 bot 基座三种语言的工具表里；技能工具 `skill` 也在
+ *        （2026-10-28 起档案不再逐个点名技能：带着 `skill`，启用着的 builtin:tracking 就在货架上）
  *   SK-3 技能点名的 suggest 字段（title / detail / message）= suggest 工具 schema 里一条提议的键
  *   SK-4 日记文件名 `YYYY-MM-DD.md` 与 dailyFileName / isDayKey / dayOfDailyFile 一致；技能写的两个目录就是宿主的
  *        getDefaultDailyDir / getDefaultTrackingDir
@@ -96,7 +97,7 @@ describe('SK —— builtin:tracking 技能与真实契约对齐', () => {
   )
 
   it.each(LANGS)(
-    'SK-2 %s：技能点名的工具都在 bot 基座的工具表里（session / suggest / write / ls），技能本身也在',
+    'SK-2 %s：技能点名的工具都在 bot 基座的工具表里（session / suggest / write / ls），技能工具 skill 也在（不再写 skill:builtin:tracking）',
     (lang) => {
       const text = skillMd(lang)
       const tools = botTools(lang)
@@ -107,7 +108,9 @@ describe('SK —— builtin:tracking 技能与真实契约对齐', () => {
         )
         expect(tools, `${lang}: bot 基座缺 ${tool}`).toContain(tool)
       }
-      expect(tools).toContain('skill:builtin:tracking')
+      // 技能不再按档案点名：带着技能工具，启用着的 builtin:tracking 就上货架（技能目录在场由 skillMd 读得到钉）
+      expect(tools).toContain('skill')
+      expect(tools.filter((tool) => tool.startsWith('skill:'))).toEqual([])
     }
   )
 

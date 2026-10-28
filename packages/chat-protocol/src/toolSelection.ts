@@ -1,14 +1,17 @@
 /**
  * 会话的扩展能力勾选（`settings.enabledTools`，项目上的同名键是它新会话的缺省）—— 一份相对于
- * 会话 agent 档案的**增减**：
+ * 会话 agent 档案的**增减**，只管 MCP 服务器：
  *
- *  - `mcp:<server>` / `skill:<name>`：在档案之上加一项；
- *  - `-mcp:<server>` / `-skill:<name>`：取消档案 `shuvix-tools` 声明的一项，只对这条会话（或这个项目的
- *    新会话）。档案声明的项因此是**缺省勾上**，不是锁死 —— 例如一个会话改用别的作图技能时，可以把基座
- *    档案带的 `skill:builtin:drawing` 取消掉，免得两份作图规矩同时在场。
+ *  - `mcp:<server>`：在档案之上加一台；
+ *  - `-mcp:<server>`：取消档案 `shuvix-tools` 声明的一台，只对这条会话（或这个项目的新会话）。档案声明的
+ *    服务器因此是**缺省勾上**，不是锁死。
+ *
+ * 技能不在这里（2026-10-28，用户裁定：skill 是开放标准，按主流用法走）：侧栏里启用着的技能全部上每个带
+ * `skill` 工具的 agent 的货架，没有按会话的勾选。旧会话里存着的 `skill:` / `-skill:` 条目不再被认，
+ * 写入口也不再收它们（不迁移）。
  *
  * 为什么是同一份列表里的记号、而不是另开一个字段：勾选的整套生命周期 —— 项目缺省、子会话抄父会话、
- * 欢迎页草稿、agent 在时只读、锁着时按锁报 —— 对「加」和「减」一模一样，两份列表只会在某一处被漏掉。
+ * 欢迎页草稿、agent 在时实时重配、锁着时按锁报 —— 对「加」和「减」一模一样，两份列表只会在某一处被漏掉。
  * 取消记号只对档案声明了的项有意义；写着一个档案没声明的项的取消记号，什么也不做。
  *
  * 运行时一侧的归一在 agent-runtime 的 `normalizeToolNames`；界面一侧（工具选择器、会话设置、项目设置）
@@ -18,12 +21,12 @@
 /** 取消记号的前缀 */
 export const TOOL_OPT_OUT_PREFIX = '-'
 
-/** 会话能勾选的那两类（MCP 服务器 / 技能）；内置工具名恒由档案决定，不在勾选里 */
+/** 会话能勾选的那一类（MCP 服务器）；内置工具名恒由档案决定，技能恒为全部启用着的，都不在勾选里 */
 export function isSessionScopedToolName(name: string): boolean {
-  return name.startsWith('mcp:') || name.startsWith('skill:')
+  return name.startsWith('mcp:')
 }
 
-/** 这一条是不是取消记号（`-mcp:…` / `-skill:…`） */
+/** 这一条是不是取消记号（`-mcp:…`） */
 export function isToolOptOut(entry: string): boolean {
   return (
     entry.startsWith(TOOL_OPT_OUT_PREFIX) &&

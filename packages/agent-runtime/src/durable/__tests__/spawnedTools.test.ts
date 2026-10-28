@@ -74,7 +74,7 @@ function spawnReq(overrides: Partial<AgentToolsRequest> = {}): AgentToolsRequest
     agentId: 'sub-a1',
     canSpawn: true,
     profile: testProfile({ name: 'explore' }),
-    names: ['read', 'ls', 'grep', 'agent', 'skill:pdf', 'mcp:ctx'],
+    names: ['read', 'ls', 'grep', 'agent', 'skill', 'mcp:ctx'],
     model: { provider: 'faux', modelId: 'faux-2' },
     cwd: '',
     ...overrides
@@ -198,8 +198,9 @@ describe('spawned tools · the canSpawn gate', () => {
       const resolved = await T.resolveAgentTools(request, { signal: signal() })
       if (offered) expect(resolved.agent?.name).toBe('agent')
       else expect('agent' in resolved).toBe(false)
-      expect(resolved.skill?.description).toBe('skill: load a skill (pdf)')
-      expect(resolved.skills).toEqual(['pdf'])
+      // 派生 agent 的货架同样是宿主启用着的全部技能（名单里只有 `skill`，不点名）
+      expect(resolved.skill?.description).toBe('skill: load a skill (builtin:drawing, pdf)')
+      expect(resolved.skills).toEqual(['builtin:drawing', 'pdf'])
       expect(
         (resolved.mcp ?? []).map((entry) => ({
           server: entry.server,

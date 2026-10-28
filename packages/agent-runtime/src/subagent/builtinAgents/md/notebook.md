@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:notebook
 shuvix-builtin: true
 name: notebook
 description: Base profile for notebook sessions — the agent working with the user on one markdown document, whether it is open in the main window, in its own window, or not open at all. Override it with a custom agent named "notebook" to customize it.
-shuvix-tools: doc_read, doc_edit, doc_insert, read, write, ls, grep, glob, ask, skill:builtin:drawing
+shuvix-tools: doc_read, doc_edit, doc_insert, read, write, ls, grep, glob, ask, skill
 shuvix-displayName: Notebook
 shuvix-project-awareness: true
 ---

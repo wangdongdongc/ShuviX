@@ -120,7 +120,7 @@ describe('md 窗口里的一轮对话', () => {
     expect(system).toContain(docs)
     expect(system).toContain('a.md')
     expect(system).toContain('Open document: a.md')
-    // 工具表恰好是 notebook 的那一份（skill:builtin:drawing 落成 skill 工具）
+    // 工具表恰好是 notebook 的那一份（档案写的 `skill` 就是 skill 工具，货架是启用着的全部技能）
     const tools = toolNamesOf(req)
     expect([...tools].sort()).toEqual(
       [

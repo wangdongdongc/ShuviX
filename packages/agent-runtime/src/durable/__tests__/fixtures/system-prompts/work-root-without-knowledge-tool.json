@@ -2,6 +2,7 @@
   "case": "work-root-without-knowledge-tool",
   "description": "work root with `knowledge` removed from the profile tools (user override shape); resolveKnowledgeBases returns text but must not be consulted",
   "capturedFrom": "createAgentFactory(fakeHost).createAgent() on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
+  "amended": "2026-10-28: agent profiles no longer name skills — `shuvix-tools` lists the `skill` tool and the host shelves every enabled skill, and a session's selection carries only mcp: entries. inputs.profile.tools had its `skill:<name>` entry replaced by `skill`, and observed.promptVarsCtx.toolNames was recomputed with normalizeToolNames (a `skill:` entry in the overlay no longer reaches it). Output and parts are unchanged: the persona is rendered from the captured promptVars.",
   "inputs": {
     "kind": "root",
     "sessionId": "sess-golden-root",
@@ -24,7 +25,7 @@
         "agent",
         "session",
         "artifact",
-        "skill:builtin:drawing"
+        "skill"
       ],
       "droppedTools": [
         "knowledge"
@@ -89,7 +90,7 @@
         "agent",
         "session",
         "artifact",
-        "skill:builtin:drawing"
+        "skill"
       ]
     },
     "resolverCalls": {

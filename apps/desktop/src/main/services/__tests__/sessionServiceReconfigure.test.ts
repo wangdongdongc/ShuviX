@@ -246,8 +246,10 @@ describe('RD-1 updateEnabledTools：写下之后把改动交给 agent', () => {
     const session = fakeHost.put(SID, locked ? { lock: lockRecord() } : {})
     const reconfigure = vi.spyOn(session, 'reconfigureAgent')
 
-    expect(await sessionService.updateEnabledTools(SID, ['skill:a', 'bash', 'mcp:b'])).toBe(true)
-    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:a', 'mcp:b'] }]])
+    expect(
+      await sessionService.updateEnabledTools(SID, ['mcp:a', 'bash', 'skill:x', 'mcp:b'])
+    ).toBe(true)
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:a', 'mcp:b'] }]])
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID]])
     expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
     expect(reconfigure.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -266,8 +268,8 @@ describe('RD-1 updateEnabledTools：写下之后把改动交给 agent', () => {
     fakeHost.configure = (reopened) => {
       reopened.lock = lockRecord()
     }
-    expect(await sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(true)
-    expect(settingsOf().enabledTools).toEqual(['skill:a'])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:a'])).toBe(true)
+    expect(settingsOf().enabledTools).toEqual(['mcp:a'])
     expect(fakeHost.callsOf('peek')).toEqual([SID])
     expect(fakeHost.callsOf('open')).toEqual([])
     expect(fakeHost.get(SID)!.callsOf('reconfigureAgent')).toHaveLength(1)
@@ -275,21 +277,21 @@ describe('RD-1 updateEnabledTools：写下之后把改动交给 agent', () => {
 
   it('RD-1 没开、锁镜像说锁着、存储不在 → peek 落空，什么都不重配，写入照样作数', async () => {
     seedSession({ enabledTools: [], agentLocked: true })
-    expect(await sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(true)
-    expect(settingsOf().enabledTools).toEqual(['skill:a'])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:a'])).toBe(true)
+    expect(settingsOf().enabledTools).toEqual(['mcp:a'])
     expect(fakeHost.callsOf('peek')).toEqual([SID])
     expect(fakeHost.get(SID)).toBeUndefined()
   })
 
   it('RD-1 没开、没有锁镜像 → 不 open / peek，不碰运行时', async () => {
     seedSession()
-    expect(await sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(true)
-    expect(settingsOf().enabledTools).toEqual(['skill:a'])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:a'])).toBe(true)
+    expect(settingsOf().enabledTools).toEqual(['mcp:a'])
     expect(fakeHost.calls).toEqual([])
   })
 
   it('RD-1 会话不存在 → false：零写入、零广播、不碰宿主', async () => {
-    expect(await sessionService.updateEnabledTools('no-such-session', ['skill:a'])).toBe(false)
+    expect(await sessionService.updateEnabledTools('no-such-session', ['mcp:a'])).toBe(false)
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
     expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
     expect(fakeHost.calls).toEqual([])
@@ -308,10 +310,10 @@ describe('RD-2 updateEnabledTools 写下之后从不拒绝（F6）', () => {
     ],
     ['别的意外', () => new Error('boom while connecting'), true]
   ])('RD-2 %s → true，设置照样写着（被拒与意外才记 warn）', async (_label, error, warns) => {
-    seedSession({ enabledTools: ['skill:old'] })
+    seedSession({ enabledTools: ['mcp:old'] })
     const session = fakeHost.put(SID, { lock: lockRecord(), reconfigureError: error() })
-    expect(await sessionService.updateEnabledTools(SID, ['skill:new'])).toBe(true)
-    expect(settingsOf().enabledTools).toEqual(['skill:new'])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:new'])).toBe(true)
+    expect(settingsOf().enabledTools).toEqual(['mcp:new'])
     expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
     const message = (session.reconfigureError as Error).message
     expect(warned(message)).toBe(warns)
@@ -511,9 +513,7 @@ describe('RD-5 previewAgentChange', () => {
   it('RD-5 会话不存在 / 没开且没镜像 / 开着没锁 → none 的形状；不问运行时、不 peek', async () => {
     expect(await sessionService.previewAgentChange('no-such-session', {})).toEqual(NONE)
     seedSession()
-    expect(await sessionService.previewAgentChange(SID, { enabledTools: ['skill:a'] })).toEqual(
-      NONE
-    )
+    expect(await sessionService.previewAgentChange(SID, { enabledTools: ['mcp:a'] })).toEqual(NONE)
     expect(fakeHost.calls).toEqual([])
 
     const session = fakeHost.put(SID)
@@ -524,8 +524,8 @@ describe('RD-5 previewAgentChange', () => {
     expect(fakeHost.callsOf('peek')).toEqual([])
   })
 
-  it('RD-5 开着、锁着 → 想改成的样子套在会话配置上交给运行时一次（勾选净化、滤掉 mcp:chrome、按可用性过滤；模型 = 给的那一对），结果原样交回，什么都不写', async () => {
-    seedSession({ enabledTools: ['skill:old'], model: M1 })
+  it('RD-5 开着、锁着 → 想改成的样子套在会话配置上交给运行时一次（勾选净化（技能条目丢掉）、滤掉 mcp:chrome、按可用性过滤；模型 = 给的那一对），结果原样交回，什么都不写', async () => {
+    seedSession({ enabledTools: ['mcp:old'], model: M1 })
     const verdict: AgentChangePreview = {
       locked: true,
       cache: 'lost',
@@ -533,20 +533,20 @@ describe('RD-5 previewAgentChange', () => {
       promptTokens: 1234
     }
     const session = fakeHost.put(SID, { lock: lockRecord(), preview: verdict })
-    mocks.filterAvailableTools.mockImplementation((tools) =>
-      tools.filter((n) => n !== 'skill:gone')
-    )
+    mocks.filterAvailableTools.mockImplementation((tools) => tools.filter((n) => n !== 'mcp:gone'))
 
     const result = await sessionService.previewAgentChange(SID, {
       enabledTools: [
-        'skill:x',
-        'skill:x',
+        'mcp:x',
+        'mcp:x',
         'bash',
-        '-skill:y',
+        '-mcp:y',
+        'skill:s',
+        '-skill:t',
         'mcp:chrome',
         '-mcp:chrome',
         'MCP:z',
-        'skill:gone',
+        'mcp:gone',
         'mcp:a'
       ],
       provider: 'prov',
@@ -556,18 +556,18 @@ describe('RD-5 previewAgentChange', () => {
     const calls = session.callsOf('previewAgentChange')
     expect(calls).toHaveLength(1)
     const config = calls[0][1] as { toolOverlay: string[]; model: unknown }
-    expect(config.toolOverlay).toEqual(['skill:x', '-skill:y', 'mcp:a'])
+    expect(config.toolOverlay).toEqual(['mcp:x', '-mcp:y', 'mcp:a'])
     expect(config.model).toEqual({ provider: 'prov', modelId: 'm-2' })
     // 只预判：设置、广播、模型写入、重配一概没有
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
     expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
     expect(mocks.recordSessionModel).not.toHaveBeenCalled()
     expect(session.callsOf('reconfigureAgent')).toEqual([])
-    expect(settingsOf().enabledTools).toEqual(['skill:old'])
+    expect(settingsOf().enabledTools).toEqual(['mcp:old'])
   })
 
   it('RD-5 只给 provider（模型两项没给全）→ 模型照会话设置；enabledTools [] → 勾选就是空', async () => {
-    seedSession({ enabledTools: ['skill:old'], model: M1 })
+    seedSession({ enabledTools: ['mcp:old'], model: M1 })
     const session = fakeHost.put(SID, { lock: lockRecord() })
     await sessionService.previewAgentChange(SID, { enabledTools: [], provider: 'other' })
     const config = session.callsOf('previewAgentChange')[0][1] as {
@@ -579,7 +579,7 @@ describe('RD-5 previewAgentChange', () => {
   })
 
   it('RD-5 什么都不改 → 交给运行时的就是 resolveAgentConfig(sid) 那一份', async () => {
-    seedSession({ enabledTools: ['skill:old', 'mcp:a'], model: M1 })
+    seedSession({ enabledTools: ['mcp:old', 'mcp:a'], model: M1 })
     const session = fakeHost.put(SID, { lock: lockRecord() })
     await sessionService.previewAgentChange(SID, {})
     expect(session.callsOf('previewAgentChange')[0][1]).toEqual(

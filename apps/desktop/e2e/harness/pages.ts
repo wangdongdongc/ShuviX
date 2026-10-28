@@ -438,7 +438,7 @@ export interface ChatPane {
    * 选择器簇（工具行里的 `data-composer-pickers`；它前面可能还有附图的「+」）的直接子节点数 —— 「少了哪个选择器」的判据。
    *
    * 普通会话是两个（模型 / 工具；曾经居首的档案选择器随「会话内切换档案」一并下线）。
-   * **不按图标认工具选择器**：它的触发钮在没有 MCP / skill 工具时连图标都不渲染，
+   * **不按图标认工具选择器**：它的触发钮在没有 MCP 工具时连图标都不渲染，
    * 隔离实例里恰好就是那个空钮；数子节点是这里唯一不靠运气的判据。
    */
   pickerCount(): Promise<number>
@@ -2743,7 +2743,7 @@ export function sidebarPane(main: CdpClient): SidebarPane {
 
 /** 扩展能力卡（ExtensionsSection：会话设置与项目编辑弹窗共用）里的一个条目 */
 export interface ExtItemShot {
-  /** 勾选用的工具名（`mcp:<server>` / `skill:<name>`），即 `data-ext-item` */
+  /** 勾选用的工具名（`mcp:<server>`；技能不在卡上，2026-10-28），即 `data-ext-item` */
   key: string
   checked: boolean
   /**
@@ -2871,7 +2871,7 @@ export interface KnowledgeItemShot {
    */
   name: string
   /**
-   * 名字那一段（`data-chip-name`）。用户库是目录名；内置库与内置 MCP / 技能同一个画法，是界面语言的
+   * 名字那一段（`data-chip-name`）。用户库是目录名；内置库与内置 MCP 同一个画法，是界面语言的
    * 名字 `knowledge.builtinBaseName`（与侧栏那一行同一个键）
    */
   label: string
@@ -2982,7 +2982,7 @@ export function sessionConfigPane(main: CdpClient): SessionConfigPane {
     waitClosed: async () => {
       await until(async () => !(await isOpen()), 'session config dialog closed')
     },
-    // 标题输入框是这个弹窗里的第一个 input（配置面板排在它下面：开关，以及有 MCP / skill 时的扩展能力勾选框）
+    // 标题输入框是这个弹窗里的第一个 input（配置面板排在它下面：开关，以及有 MCP 时的扩展能力勾选框）
     titleValue: () => main.eval<string>(`${PANEL}?.querySelector('input')?.value ?? ''`),
     close: async () => {
       await main.eval(
@@ -3547,14 +3547,14 @@ export function projectEditPane(main: CdpClient): ProjectEditPane {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 输入框的工具选择器（ToolPicker）—— 会话的扩展能力勾选（MCP / Skill / 知识库），与会话设置里的
-// 扩展能力卡同一份数据。MCP / Skill 行是 `label[data-tool-item]`；知识库行与配置卡同一个锚点
+// 输入框的工具选择器（ToolPicker）—— 会话的扩展能力勾选（MCP / 知识库；技能不按会话勾选，2026-10-28），
+// 与会话设置里的扩展能力卡同一份数据。MCP 行是 `label[data-tool-item]`；知识库行与配置卡同一个锚点
 // `label[data-knowledge-base]`，触发钮上的知识库计数是 `[data-knowledge-count]`。没有只读态
 // （2026-10-26）：会话有 Agent 时勾一下当场重配它，会打穿提示词缓存的先弹确认框（cacheBreakPane）
 
 /** 工具选择器面板里的一行 */
 export interface ToolPickerItem {
-  /** 工具名（`mcp:<server>` / `skill:<name>`），即 `data-tool-item` */
+  /** 工具名（`mcp:<server>`），即 `data-tool-item` */
   name: string
   checked: boolean
   /** 勾选框被禁用 —— 选择器没有只读态了，恒为 false（「有运行时也点得动」靠它断） */
@@ -3577,7 +3577,7 @@ export interface ToolPickerItem {
 }
 
 export interface ToolPickerPane {
-  /** 选择器在不在（MCP / skill / 知识库一个都没有时不渲染；欢迎页也渲染，勾的是新会话的草稿） */
+  /** 选择器在不在（MCP / 知识库一个都没有时不渲染；欢迎页也渲染，勾的是新会话的草稿） */
   present(): Promise<boolean>
   /** 面板是否展开（按条目在不在 DOM 里判 —— 选择器只在有条目时才渲染，展开必有条目） */
   isOpen(): Promise<boolean>
@@ -3585,7 +3585,7 @@ export interface ToolPickerPane {
   open(): Promise<void>
   /** 收起面板并等条目离开 DOM（幂等） */
   close(): Promise<void>
-  /** 面板里的 MCP / Skill 条目（DOM 序）；面板没展开时为空 */
+  /** 面板里的 MCP 条目（DOM 序）；面板没展开时为空 */
   items(): Promise<ToolPickerItem[]>
   /** 面板里知识库一组的行（DOM 序，口径同 sessionConfigPane.knowledgeItems）；面板没展开时为空 */
   knowledgeItems(): Promise<KnowledgeItemShot[]>
@@ -3609,7 +3609,7 @@ export interface ToolPickerPane {
 export function toolPickerPane(main: CdpClient): ToolPickerPane {
   const ROOT = `document.querySelector('[data-tool-picker]')`
   const ROWS = `[...(${ROOT}?.querySelectorAll('label[data-tool-item]') ?? [])]`
-  // 展开必有条目：MCP / Skill 行或知识库行，哪一种都算
+  // 展开必有条目：MCP 行或知识库行，哪一种都算
   const isOpen = (): Promise<boolean> =>
     main.eval<boolean>(
       `!!${ROOT}?.querySelector('label[data-tool-item], label[data-knowledge-base]')`
@@ -4303,7 +4303,7 @@ export interface FmCardPanelGeometry {
 }
 
 export interface FmCardToolItem {
-  /** 列表展示名（mcp:/skill: 条目在此显示短名） */
+  /** 列表展示名（mcp: 条目在此显示短名） */
   name: string
   checked: boolean
 }
@@ -12173,7 +12173,7 @@ export type WebMobileTouchTarget =
   /** 触屏密度的选择抽屉（chat-ui TouchSheet，`data-touch-sheet=<name>`）的遮罩 —— 与手机外壳自己的 `sheetBackdrop` 不是一个 */
   | { touchSheetBackdrop: 'model' | 'extensions' }
   /**
-   * 开着的选择抽屉里的一行：`data-model-item`（`<providerId>/<modelId>`）/ `data-tool-item`（`mcp:x` / `skill:x`）/
+   * 开着的选择抽屉里的一行：`data-model-item`（`<providerId>/<modelId>`）/ `data-tool-item`（`mcp:x`）/
    * `data-knowledge-base`（库名）；`checkbox: true` = 点那一行的勾选框本身
    */
   | { touchSheetItem: string; checkbox?: boolean }

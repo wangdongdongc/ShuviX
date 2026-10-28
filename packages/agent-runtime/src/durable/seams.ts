@@ -224,7 +224,7 @@ export interface ModelCatalog {
 export interface AgentConfig {
   /** 会话的基座档案（form-derived：work / chat / notebook / bot / tab …） */
   profile: InProcessAgentType
-  /** 会话的扩展勾选（`settings.enabledTools`：mcp: / skill: 加一项，`-mcp:` / `-skill:` 取消档案声明的一项） */
+  /** 会话的扩展勾选（`settings.enabledTools`：mcp: 加一台，`-mcp:` 取消档案声明的一台；技能不在勾选里） */
   toolOverlay?: readonly string[]
   /** 会话的模型选择（provider = provider 行 id）；默认模型由宿主先套上，没有就拒绝创建 */
   model?: ModelSelection
@@ -245,7 +245,8 @@ export interface BuiltinToolsRequest {
   /**
    * 根 agent 的技能货架（创建时解析出来的 / 锁里记着的）；undefined = 还没有 agent。内置工具是会话级的、
    * 被同一会话的每个 agent 共用，宿主想按根 agent 手里有没有某个技能决定一个内置工具怎么写（描述里讲不讲
-   * 只有那个技能才教的动作）时读它。重配改了货架时内置工具不重装 —— 用的地方要在调用时再核对一次
+   * 只有那个技能才教的动作）时读它。派生 agent 的货架可能与根不同（创建得晚，侧栏开关在这之间动过）——
+   * 用的地方要在调用时按调用方再核对一次
    */
   skills?: readonly string[]
 }
@@ -356,10 +357,9 @@ export interface ResolvedAgentTools extends AgentToolSet {
 }
 
 /**
- * 重配（锁住的 root agent 换扩展勾选，2026-10-26）时按新名单解析**变了的那几样**：
- *  - `servers`：要新接上的 MCP 服务器（新名单里有、锁里没有的，名单序）；
- *  - 技能工具总按 `names` 造一份（交回真上架的 `skills`；货架空了不给 `skill`），用不用由运行时按锁比对决定。
- * 锁里已有的服务器、派发工具、内置工具不在这里 —— 运行时原样沿用此刻装着的那一份，没变的工具一个字节都不变。
+ * 重配（锁住的 root agent 换扩展勾选，2026-10-26）时按新名单解析**变了的那几样**：`servers` 是要新接上的
+ * MCP 服务器（新名单里有、锁里没有的，名单序）。锁里已有的服务器、派发工具、技能工具、内置工具不在这里 ——
+ * 运行时原样沿用此刻装着的那一份，没变的工具一个字节都不变（技能货架在创建时定下，2026-10-28）。
  */
 export interface AgentToolsReconfigureRequest {
   sessionId: string
@@ -378,8 +378,6 @@ export interface ReconfiguredAgentTools {
   }[]
   /** 预判（`connect: false`）时还没连上、工具还不知道的服务器 */
   pending?: readonly string[]
-  skill?: ToolRegistration
-  skills: readonly string[]
 }
 
 /**

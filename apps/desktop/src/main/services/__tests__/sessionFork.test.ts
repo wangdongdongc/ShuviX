@@ -582,7 +582,7 @@ describe('SF-11..13 the fork row', () => {
     seedRow({
       parentId: null,
       settings: {
-        enabledTools: ['mcp:browser', '-skill:builtin:drawing'],
+        enabledTools: ['mcp:browser', '-mcp:ssh'],
         knowledgeBases: ['notes'],
         bot: 'alice',
         agentProfile: 'coding',
@@ -599,7 +599,7 @@ describe('SF-11..13 the fork row', () => {
     const fork = sessionRecords.findById(forkId)!
 
     expect(fork.settings).toEqual({
-      enabledTools: ['mcp:browser', '-skill:builtin:drawing'],
+      enabledTools: ['mcp:browser', '-mcp:ssh'],
       knowledgeBases: ['notes'],
       bot: 'alice',
       agentProfile: 'coding',
@@ -669,6 +669,21 @@ describe('SF-11..13 the fork row', () => {
     const settings = sessionRecords.findById(forkId)!.settings
     expect(settings.enabledTools).toEqual([])
     expect(settings.knowledgeBases).toEqual([])
+  })
+
+  it('SF-11 legacy skill entries in the source selection (skill: / -skill:) are not carried over; mcp: entries are; the source row keeps them', async () => {
+    // 技能不再按会话勾选（2026-10-28）：旧会话存着的 skill: / -skill: 条目不再被认，分支不必再抄一份
+    seedRow({
+      settings: { enabledTools: ['mcp:browser', '-skill:builtin:drawing', 'skill:x'] }
+    })
+    openSource()
+    const forkId = forkIdOf(await forkSession({ sessionId: SRC }))
+    expect(sessionRecords.findById(forkId)!.settings.enabledTools).toEqual(['mcp:browser'])
+    expect(sessionRecords.findById(SRC)!.settings.enabledTools).toEqual([
+      'mcp:browser',
+      '-skill:builtin:drawing',
+      'skill:x'
+    ])
   })
 
   it('SF-11 insertForkRow (project source): notebookPath / chromeTab / workingDirectory never reach the fork, and its arrays / model are copies of the source object', () => {

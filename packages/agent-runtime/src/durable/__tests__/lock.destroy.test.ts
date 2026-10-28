@@ -180,9 +180,9 @@ describe('lock · destroy', () => {
     expect(closingEvents(t.broadcasts)).toEqual([])
   })
 
-  it('LD-06 recreating picks up the state of that moment: overlay, model, server tool list, persona; a failed server heals', async () => {
+  it('LD-06 recreating picks up the state of that moment: overlay, model, server tool list, skill shelf, persona; a failed server heals', async () => {
     const config = scenarioConfig()
-    config.toolOverlay = ['mcp:ctx', 'skill:pdf', 'mcp:broken']
+    config.toolOverlay = ['mcp:ctx', 'mcp:broken']
     const { t, vars, clock } = await scenarioW({ config })
     t.toolHost.mcp('broken').failConnect()
     const session = await t.open()
@@ -190,10 +190,11 @@ describe('lock · destroy', () => {
     expect(await session.submitUser('u1')).toEqual({})
     expect(Object.keys(session.lock!.mcp)).toEqual(['ctx'])
 
-    config.toolOverlay = ['mcp:ctx', 'skill:pdf', 'mcp:broken', 'mcp:ssh']
+    config.toolOverlay = ['mcp:ctx', 'mcp:broken', 'mcp:ssh']
     config.model = { provider: 'faux', modelId: 'faux-2' }
     t.toolHost.mcp('ctx').setTools([DECL_RESOLVE])
     t.toolHost.mcp('broken').heal()
+    t.toolHost.options.skills = ['pdf', 'builtin:widget']
     vars.state.marker = 'M2'
     clock.now = W_NOW + 1000
     await session.destroyAgent()
@@ -213,7 +214,7 @@ describe('lock · destroy', () => {
       'mcp__broken__noop',
       'mcp__ssh__exec'
     ])
-    expect(lock.skills).toEqual(['builtin:drawing', 'pdf'])
+    expect(lock.skills).toEqual(['pdf', 'builtin:widget'])
     expect(t.kit.requests[1]!.modelId).toBe('faux-2')
     expect(t.kit.requests[1]!.systemPrompt).toBe('You are M2')
     expect(await toolDeltaCount(await session.currentConversation())).toBe(2)

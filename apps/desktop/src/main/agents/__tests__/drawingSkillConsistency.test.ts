@@ -2,17 +2,18 @@
  * DSC —— 「提示里指路」与「货架上真有」是同一个判断。
  *
  * 作图技能在桌面上出现在两处，由两段代码各自决定：
- *  - 变量表（`desktopPromptVars`）：名单点了 `skill:builtin:drawing` 且 findEnabled 里有它 →
+ *  - 变量表（`desktopPromptVars`）：名单里有技能工具 `skill` 且 findModelInvocable 里有 `builtin:drawing` →
  *    visualGuide / visualCraft 带一句「先加载 `builtin:drawing`」的指路；否则两个值都是空串
  *    （2026-09-24 起契约、预算与范例只在技能里，整份作图说明都挂在「技能在架」上）；
- *  - 工具解析（ToolHost 的 `resolveAgentTools` → 真的 `SkillTool`）：名单点了名的 ∩ findEnabled →
- *    技能进货架索引。
+ *  - 工具解析（ToolHost 的 `resolveAgentTools` → 真的 `SkillTool('enabled')`）：名单里有 `skill` →
+ *    findModelInvocable 的全部进货架索引（2026-10-28 起档案不逐个点名技能）。
  * 两边读的是同一份名单（锁先算好名单，冻结人设与解析工具各拿一份）。这一组把两边放在同一组输入下
  * 逐格比对：指路出现的地方技能一定加载得到，加载得到的地方提示一定指了路 —— 任何一边自己改了
  * 判断（例如又给 root 恒挂一个 SkillTool、或变量表按宿主而不是按名单判），矩阵里就会有一格对不上。
  *
  * P1-11 起两边是 agentHost 直接导出的 `desktopPromptVars` 与 `createDesktopToolHost(...).resolveAgentTools`。
- * 这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩 skillService（可控的 findEnabled）、
+ * 这里用**真的 SkillTool** —— 要比的正是它装配出的货架；于是桩 skillService（可控的 findEnabled /
+ * findModelInvocable —— 两边都该只看后者，DSC-4 钉住）、
  * `../../i18n`（顶层 import electron）与 ripgrep（真二进制），注册表桩要带 `registerBuiltinTool`
  * （skillTool.ts 加载即自注册）。派生 agent 的四格（P2-04-35）：工具一侧解析一个派生请求（根会话 SID、
  * agent AGENT_ID、不能再派生、coding），变量表一侧照旧按派生身份查（`varsOf('spawned')`）—— 两边仍是
@@ -27,6 +28,7 @@ import type { Skill } from '../../types/skill'
 
 const mocks = vi.hoisted(() => ({
   findEnabled: vi.fn(),
+  findModelInvocable: vi.fn(),
   findByName: vi.fn(),
   pick: vi.fn(),
   pickSettings: vi.fn(),
@@ -36,6 +38,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../services/skillService', () => ({
   skillService: {
     findEnabled: mocks.findEnabled,
+    findModelInvocable: mocks.findModelInvocable,
     findAll: mocks.findEnabled,
     findByName: mocks.findByName
   }
@@ -97,7 +100,8 @@ import { inProcess, profileOf } from './support/toolHostFixtures'
 
 const SID = 'sess-drawing-consistency'
 const AGENT_ID = 'agent-dsc-1'
-const DRAWING = 'skill:builtin:drawing'
+/** 技能工具在名单里的写法（档案 `shuvix-tools` 写 `skill`，货架是模型可调用的全部） */
+const SKILL = 'skill'
 const POINTER = 'builtin:drawing'
 const EXAMPLE = '```svg\n<svg'
 const INDEX_LINE = '<name>builtin:drawing</name>'
@@ -111,6 +115,21 @@ const BUILTIN: Skill = {
   isEnabled: true,
   source: 'builtin',
   dirName: 'builtin'
+}
+
+const OTHER: Skill = {
+  name: 'pdf',
+  description: 'pdf description',
+  content: 'PDF BODY',
+  basePath: '/fixture/pdf',
+  isEnabled: true,
+  source: 'default'
+}
+
+/** 布置侧栏：启用着的（findEnabled）与其中模型可调用的（findModelInvocable） */
+function arrangeSkills(enabled: Skill[], modelInvocable: Skill[] = enabled): void {
+  mocks.findEnabled.mockReturnValue(enabled)
+  mocks.findModelInvocable.mockReturnValue(modelInvocable)
 }
 
 type Kind = 'root' | 'spawned'
@@ -166,6 +185,7 @@ async function bothSides(
 
 beforeEach(() => {
   mocks.findEnabled.mockReset()
+  mocks.findModelInvocable.mockReset()
   mocks.findByName.mockReset()
   // 缺省：会话不属于任何项目
   mocks.pick.mockReturnValue(undefined)
@@ -183,10 +203,10 @@ describe('DSC 指路与货架同一个判断', () => {
   )
 
   it.each(MATRIX)(
-    'DSC-1 kind=%s 名单点名=%s 技能在架=%s：提示指路 ⇔ 货架索引里有它 ⇔ 点名且在架；不指路时整份作图说明是空串，指路时恰好一次、不带范例',
+    'DSC-1 kind=%s 名单有 skill=%s 技能在架=%s：提示指路 ⇔ 货架索引里有它 ⇔ 有 skill 且在架；不指路时整份作图说明是空串，指路时恰好一次、不带范例',
     async (kind, named, enabled) => {
-      mocks.findEnabled.mockReturnValue(enabled ? [BUILTIN] : [])
-      const names = named ? ['read', DRAWING] : ['read']
+      arrangeSkills(enabled ? [BUILTIN] : [])
+      const names = named ? ['read', SKILL] : ['read']
       const { vars, tools } = await bothSides(kind, names)
 
       // (a) 两个出口都指了路
@@ -195,7 +215,7 @@ describe('DSC 指路与货架同一个判断', () => {
       const shelved = tools.some(
         (tool) => tool.name === 'skill' && (tool.description ?? '').includes(INDEX_LINE)
       )
-      // (c) 期望：名单点了名且没被停用
+      // (c) 期望：名单里有技能工具且作图技能没被停用
       const expected = named && enabled
 
       expect(pointed, '(a) 提示里的指路').toBe(expected)
@@ -219,14 +239,39 @@ describe('DSC 指路与货架同一个判断', () => {
     }
   )
 
-  it('DSC-2 点了名但被停用、名单里又没有别的 skill → 连 skill 工具都不挂（空手的工具是噪音）', async () => {
-    mocks.findEnabled.mockReturnValue([])
-    const { vars, tools } = await bothSides('root', ['read', DRAWING])
+  it('DSC-2 名单有 skill、但作图技能被停用且架上没有别的 → 连 skill 工具都不挂（空手的工具是噪音）', async () => {
+    arrangeSkills([])
+    const { vars, tools } = await bothSides('root', ['read', SKILL])
     expect(tools.map((tool) => tool.name)).not.toContain('skill')
     // 对照：同一次提示里也没有指路；派生 agent 两边同样（P2-04-35：工具一侧也不挂 skill）
     expect(vars.visualGuide).not.toContain(POINTER)
-    const spawned = await bothSides('spawned', ['read', DRAWING])
+    const spawned = await bothSides('spawned', ['read', SKILL])
     expect(spawned.tools.map((tool) => tool.name)).not.toContain('skill')
     expect(spawned.vars.visualGuide).not.toContain(POINTER)
   })
+
+  it.each(['root', 'spawned'] as const)(
+    'DSC-3 kind=%s 架上只有别的技能：skill 工具照挂（索引里没有作图），提示不指路 —— 指路跟作图技能在不在架走，不跟 skill 工具在不在走',
+    async (kind) => {
+      arrangeSkills([OTHER])
+      const { vars, tools } = await bothSides(kind, ['read', SKILL])
+      const skillTool = tools.find((tool) => tool.name === 'skill')
+      expect(skillTool?.description).toContain('<name>pdf</name>')
+      expect(skillTool?.description).not.toContain(INDEX_LINE)
+      expect(vars.visualGuide).toBe('')
+      expect(vars.visualCraft).toBe('')
+    }
+  )
+
+  it.each(['root', 'spawned'] as const)(
+    'DSC-4 kind=%s 作图技能启用着、但只许用户调用（disable-model-invocation）：两边都看 findModelInvocable —— 不在架、不指路',
+    async (kind) => {
+      arrangeSkills([BUILTIN, OTHER], [OTHER])
+      const { vars, tools } = await bothSides(kind, ['read', SKILL])
+      const skillTool = tools.find((tool) => tool.name === 'skill')
+      expect(skillTool?.description).not.toContain(INDEX_LINE)
+      expect(vars.visualGuide).not.toContain(POINTER)
+      expect(vars.visualCraft).not.toContain(POINTER)
+    }
+  )
 })

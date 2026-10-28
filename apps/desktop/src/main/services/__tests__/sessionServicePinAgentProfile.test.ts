@@ -11,10 +11,11 @@
  *     只会得到说不清的组合；
  *   - **成功链顺序**：落库 → invalidateAgent → 种子（模型 / 思考档位）→ 广播。
  *     落库在 invalidate 前、种子在 invalidate 后：钉档案与重建之间不能有一个还在写树的旧运行时；
- *   - **工具不写进勾选**：档案声明的 mcp:/skill: 经名单归一缺省生效，
+ *   - **工具不写进勾选**：档案声明的 mcp: 经名单归一缺省生效，
  *     扩展能力勾选（`settings.enabledTools`）留着 create 时从父会话抄来的那份 —— 连同其中取消
- *     声明项的记号（`-skill:…`）：父会话取消了的，钉上一个声明它的档案也照样取消着；
- *     `applied.tools` 只回传声明的那截（没有取消记号）；
+ *     声明项的记号（`-mcp:…`）：父会话取消了的，钉上一个声明它的档案也照样取消着；
+ *     `applied.tools` 只回传声明的那截 mcp:（没有取消记号；技能工具 `skill` 是内置工具名，不在其中 ——
+ *     技能不按会话勾选，2026-10-28）；
  *   - 模型三态：可解析 → 写种子 + `applied.model`；不可解析 → 不写、`modelUnavailable` 回传原值、
  *     其余照常；未声明 → 不去解析；
  *   - 思考档位（`shuvix-thinking`）两态：声明了 → 写种子 + `applied.thinkingLevel`（档位是枚举值，
@@ -216,21 +217,21 @@ describe('准入 —— 三种拒绝，都零副作用', () => {
 
 describe('成功链', () => {
   it('PIN-5 普通具名档案：落库 → invalidate → 广播，返回 applied（声明的工具不写进勾选）', async () => {
-    mocks.getProfile.mockReturnValue(profile('myprof', { tools: ['read', 'skill:x', 'mcp:y'] }))
+    mocks.getProfile.mockReturnValue(profile('myprof', { tools: ['read', 'skill', 'mcp:y'] }))
     const res = await pin('myprof')
 
-    // 返回值全等：applied.tools 是 mcp:/skill: 那一截；未声明模型 → model 缺省、无 modelUnavailable；
+    // 返回值全等：applied.tools 是 mcp: 那一截（技能工具 `skill` 不在其中）；未声明模型 → model 缺省、无 modelUnavailable；
     // 未声明思考档位 → thinkingLevel 缺省
     expect(res).toEqual({
       success: true,
-      applied: { model: undefined, thinkingLevel: undefined, tools: ['skill:x', 'mcp:y'] },
+      applied: { model: undefined, thinkingLevel: undefined, tools: ['mcp:y'] },
       modelUnavailable: undefined
     })
     // toEqual 不区分「缺省」与「值为 undefined」，思考档位那一格单独钉：没声明就不写种子、不回传 ——
     // 写了（哪怕写的是缺省档）就会盖掉 seedRunConfig 随后补上的父会话档位
     expect(res.applied?.thinkingLevel).toBeUndefined()
     expect(mocks.recordSessionThinkingLevel).not.toHaveBeenCalled()
-    // 只落库一次：钉档案。档案声明的 mcp:/skill: 经名单归一缺省生效，
+    // 只落库一次：钉档案。档案声明的 mcp: 经名单归一缺省生效，
     // 不写进扩展能力勾选 —— 写了只会替换掉从父会话继承来的那份
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'myprof' }]])
     expect(invalidateSpy).toHaveBeenCalledWith(SID)
@@ -266,7 +267,7 @@ describe('成功链', () => {
 
   it('PIN-6b 模型声明但不可解析：不写模型种子、modelUnavailable 回传原始串，success 仍 true，广播照常', async () => {
     mocks.getProfile.mockReturnValue(
-      profile('badmodel', { model: 'openai/nope', tools: ['read', 'skill:x'] })
+      profile('badmodel', { model: 'openai/nope', tools: ['read', 'skill', 'mcp:x'] })
     )
     mocks.resolveProfileModelSpec.mockReturnValue(null)
 
@@ -275,45 +276,46 @@ describe('成功链', () => {
     expect(res.applied?.model).toBeUndefined()
     expect(res.modelUnavailable).toBe('openai/nope')
     expect(mocks.recordSessionModel).not.toHaveBeenCalled()
-    expect(res.applied?.tools).toEqual(['skill:x'])
+    expect(res.applied?.tools).toEqual(['mcp:x'])
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledWith(SID)
     // 档案本身照常生效（落库 + 失效重建）—— 模型不可用不阻断钉档案
     expect(mocks.daoUpdateSettings).toHaveBeenCalledWith(SID, { agentProfile: 'badmodel' })
     expect(invalidateSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('PIN-7 声明的 mcp:/skill: 永不写进勾选：继承来的那份（含取消记号）原样留着，applied.tools 只回传声明的那截', async () => {
+  it('PIN-7 声明的 mcp: 永不写进勾选：继承来的那份（含取消记号）原样留着，applied.tools 只回传声明的那截', async () => {
     // 声明经名单归一缺省生效；写进勾选只剩「替换掉从父会话继承来的」这一个作用 ——
-    // 内置 coding 声明了 skill:builtin:drawing，那样每条 coding 子会话都会丢掉项目的 MCP 与 skill
+    // 那样一个声明了 mcp:browser 的档案会让每条钉了它的子会话丢掉项目的其余 MCP
     mocks.getProfile.mockReturnValue(profile('builtin-only', { tools: ['read', 'bash'] }))
     const res = await pin('builtin-only')
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'builtin-only' }]])
     expect(res.applied?.tools).toEqual([])
 
-    // 只留小写 mcp:/skill: 前缀的（归一在解析侧，这里不再归一）
+    // 只留小写 mcp: 前缀的（归一在解析侧，这里不再归一）；技能工具 `skill`（与旧写法残留的
+    // `skill:a`，解析侧本会归成 `skill`）都不是会话勾选的条目
     mocks.daoUpdateSettings.mockClear()
     mocks.getProfile.mockReturnValue(
-      profile('mixed', { tools: ['MCP:Ctx7', 'skill:a', 'mcp:b', 'read'] })
+      profile('mixed', { tools: ['MCP:Ctx7', 'skill', 'skill:a', 'mcp:b', 'read'] })
     )
     const mixed = await pin('mixed')
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'mixed' }]])
-    expect(mixed.applied?.tools).toEqual(['skill:a', 'mcp:b'])
+    expect(mixed.applied?.tools).toEqual(['mcp:b'])
 
-    // 子会话从父会话抄来的勾选取消了作图技能；钉上一个声明它的档案 —— 取消照旧（决定：子会话抄父会话的
+    // 子会话从父会话抄来的勾选取消了浏览器；钉上一个声明它的档案 —— 取消照旧（决定：子会话抄父会话的
     // 取消记号，即便钉的档案声明了那一项），applied.tools 是声明的那截，不带任何取消记号
     mocks.daoUpdateSettings.mockClear()
-    const stored: Record<string, unknown> = { enabledTools: ['-skill:builtin:drawing', 'skill:i'] }
+    const stored: Record<string, unknown> = { enabledTools: ['-mcp:browser', 'mcp:i'] }
     mocks.daoUpdateSettings.mockImplementation((_id: string, patch: Record<string, unknown>) => {
       Object.assign(stored, patch)
     })
     mocks.getProfile.mockReturnValue(
-      profile('drawer', { tools: ['read', 'skill:builtin:drawing', 'mcp:p', '-skill:z'] })
+      profile('drawer', { tools: ['read', 'skill', 'mcp:browser', 'mcp:p', '-mcp:z'] })
     )
     const drawer = await pin('drawer')
     expect(drawer.success).toBe(true)
     expect(mocks.daoUpdateSettings.mock.calls).toEqual([[SID, { agentProfile: 'drawer' }]])
-    expect(stored.enabledTools).toEqual(['-skill:builtin:drawing', 'skill:i'])
-    expect(drawer.applied?.tools).toEqual(['skill:builtin:drawing', 'mcp:p'])
+    expect(stored.enabledTools).toEqual(['-mcp:browser', 'mcp:i'])
+    expect(drawer.applied?.tools).toEqual(['mcp:browser', 'mcp:p'])
     expect(drawer.applied?.tools.some((name) => name.startsWith('-'))).toBe(false)
   })
 

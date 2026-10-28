@@ -14,12 +14,9 @@ interface ProjectEditDialogProps {
   onClose: () => void
 }
 
-/** Skills 分组标识 */
-const SKILLS_GROUP = '__skills__'
-
 /**
  * 项目编辑弹窗 —— 复用共享 ProjectConfigDialog 外壳 + ProjectInfoForm（名称 + 文件夹 + 项目提示词），
- * 桌面专属的扩展能力（MCP / Skills / 知识库）/环境变量作为 children 并进同一个「配置」tab（单 tab，外壳自动隐藏切换条）。
+ * 桌面专属的扩展能力（MCP / 知识库）/环境变量作为 children 并进同一个「配置」tab（单 tab，外壳自动隐藏切换条）。
  */
 export function ProjectEditDialog({
   projectId,
@@ -68,9 +65,8 @@ export function ProjectEditDialog({
     })
   }, [projectId])
 
-  // MCP / Skills 工具
+  // MCP 服务器（技能不按项目勾选：启用着的全部上货架）
   const mcpTools = allTools.filter((t) => t.group?.startsWith('mcp:'))
-  const skillTools = allTools.filter((t) => t.group === SKILLS_GROUP)
 
   const handleSelectFolder = async (): Promise<void> => {
     const result = await window.api.app.openDirectoryDialog()
@@ -136,7 +132,6 @@ export function ProjectEditDialog({
             title={t('projectForm.wizardStepExtensions')}
             footer={t('projectForm.extensionsDesc')}
             mcpTools={mcpTools}
-            skillTools={skillTools}
             enabledTools={enabledTools}
             onChange={setEnabledTools}
             knowledge={{

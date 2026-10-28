@@ -467,17 +467,17 @@ describe('「框与箭头」预算不常驻（BG）', () => {
 })
 
 /**
- * 「谁点了作图技能的名」与「谁的正文用作图说明」必须是同一批档案：档案点了名却不引用片段，
- * 技能就只是白占货架、而模型永远不会被叫去加载它；引用了片段却不点名，那个占位符就永远是
- * 空串 —— 两边对不上时都不报错。
+ * 「谁带技能工具」与「谁的正文用作图说明」必须是同一批档案：作图技能只能经技能工具加载（2026-10-28 起
+ * 档案不再逐个点名技能，`skill` 就是整个货架），带着技能工具却不引用片段，模型就永远不会被叫去加载
+ * 作图技能；引用了片段却没有技能工具，那个占位符就永远是空串 —— 两边对不上时都不报错。
  */
 describe('作图技能的归属（OWN）', () => {
   it.each(LANGUAGES)(
-    'OWN-1 %s：声明 skill:builtin:drawing 的档案集合 = 引用 visualGuide / visualCraft 的档案集合',
+    'OWN-1 %s：列了 skill 工具的档案集合 = 引用 visualGuide / visualCraft 的档案集合',
     (language) => {
       const profiles = buildBuiltinProfiles({ language, readMd })
       const declaring = profiles
-        .filter((p) => p.tools.includes('skill:builtin:drawing'))
+        .filter((p) => p.tools.includes('skill'))
         .map((p) => p.name)
         .sort()
       const referencing = profiles

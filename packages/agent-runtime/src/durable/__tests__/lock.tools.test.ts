@@ -77,28 +77,40 @@ describe('lock · tools', () => {
     ])
   })
 
-  it('LT-04 the skill tool lists the skills the agent was given and the lock records them; no skills → no skill tool', async () => {
+  it('LT-04 the skill tool lists every skill the host has enabled and the lock records them; no skill in the names or an empty shelf → no skill tool', async () => {
     const { t } = await scenarioW()
     const session = await t.open()
     t.kit.queue(answer('ok'))
     await session.submitUser('hi')
+    // 档案只写 `skill`：货架是宿主启用着的全部技能，没有一本是点名来的
+    expect(t.toolHost.resolveCalls[0]!.names.filter((name) => name.startsWith('skill'))).toEqual([
+      'skill'
+    ])
     const skill = requestTools(t.kit, 0).find((tool) => tool.name === 'skill')!
     expect(skill.description).toContain('builtin:drawing')
     expect(skill.description).toContain('pdf')
     expect(session.lock!.skills).toEqual(['builtin:drawing', 'pdf'])
 
+    // 档案没带 skill：宿主有技能也不上架
     const config = scenarioConfig()
     config.profile = {
       ...config.profile,
-      tools: config.profile.tools.filter((name) => !name.startsWith('skill:'))
+      tools: config.profile.tools.filter((name) => name !== 'skill')
     }
-    config.toolOverlay = ['mcp:ctx']
     const bare = await scenarioW({ config })
     const other = await bare.t.open()
     await other.createAgent()
     expect(other.lock!.skills).toEqual([])
     expect(other.lock!.toolNames).not.toContain('skill')
     expect(extensionTools(bare.t, 'shuvix.agent.1')).not.toContain('skill')
+
+    // 档案带 skill、宿主一本技能都没启用：货架空，也没有技能工具
+    const empty = await scenarioW({ toolHost: scenarioToolHost({ skills: [] }) })
+    const third = await empty.t.open()
+    await third.createAgent()
+    expect(third.lock!.skills).toEqual([])
+    expect(third.lock!.toolNames).not.toContain('skill')
+    expect(extensionTools(empty.t, 'shuvix.agent.1')).not.toContain('skill')
   })
 
   it('LT-05 the dispatch tool is there iff the normalized names contain agent', async () => {
@@ -135,7 +147,7 @@ describe('lock · tools', () => {
 
   it('LT-07 MCP connects lazily at creation; the lock keeps the declarations; two servers are ordered server by server, tool by tool', async () => {
     const config = scenarioConfig()
-    config.toolOverlay = ['mcp:ctx', 'mcp:ssh', 'skill:pdf']
+    config.toolOverlay = ['mcp:ctx', 'mcp:ssh']
     const { t } = await scenarioW({ config })
     const session = await t.open()
     expect(t.toolHost.mcp('ctx').connects).toBe(0)
@@ -242,9 +254,8 @@ describe('lock · tools', () => {
     const config = scenarioConfig()
     config.profile = {
       ...config.profile,
-      tools: config.profile.tools.filter((name) => !name.startsWith('skill:'))
+      tools: config.profile.tools.filter((name) => name !== 'skill')
     }
-    config.toolOverlay = ['mcp:ctx']
     const { t } = await scenarioW({ config })
     const session = await t.open()
     await session.createAgent()

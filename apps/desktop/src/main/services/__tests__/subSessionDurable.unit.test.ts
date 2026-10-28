@@ -418,7 +418,7 @@ describe('A. requestId plumbing', () => {
   })
 
   it('P2-10-05 sessionService.create(params, {id})：幂等（同一行、广播一次、勾选只抄一次）；落在别处 → 抛错；IPC 参数没有 id', () => {
-    insert('P', { settings: { enabledTools: ['skill:a'] } })
+    insert('P', { settings: { enabledTools: ['mcp:a'] } })
     const insertSpy = vi.spyOn(sessionRecords, 'insert')
     const first = sessionService.create({ parentId: 'P' }, { id: 'X' })
     const second = sessionService.create({ parentId: 'P' }, { id: 'X' })
@@ -427,7 +427,7 @@ describe('A. requestId plumbing', () => {
     expect(sessionRecords.findChildren('P').map((s) => s.id)).toEqual(['X'])
     expect(mocks.listChanged).toHaveBeenCalledTimes(1)
     expect(insertSpy).toHaveBeenCalledTimes(1)
-    expect(sessionRecords.findById('X')!.settings.enabledTools).toEqual(['skill:a'])
+    expect(sessionRecords.findById('X')!.settings.enabledTools).toEqual(['mcp:a'])
     insertSpy.mockRestore()
 
     insert('Q')

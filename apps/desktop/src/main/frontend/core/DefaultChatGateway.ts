@@ -36,11 +36,9 @@ import { respondToUserInput } from '../../services/userInputBroker'
 import { dbManager } from '../../services/builtinMcp/dbConnections'
 import { sshDisconnectRuntime, sshRuntimeStatuses } from '../../services/builtinMcp/sshServer'
 import { mcpService } from '../../services/mcpService'
-import { skillService } from '../../services/skillService'
 import type { ChatMessage, InlineToken } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveTokensForAgent } from '@shuvix/chat-protocol/utils/inlineTokens'
 import { sessionRecords } from '../../services/sessionRecords'
-import { projectDao } from '../../dao/projectDao'
 import {
   AgentCreationError,
   SessionClosedError,
@@ -538,13 +536,6 @@ export class DefaultChatGateway implements ChatGateway {
     isBuiltin?: boolean
     declaredBy?: string
   }> {
-    // 解析项目路径（用于发现项目级 skills）
-    let projectPath: string | undefined
-    if (sessionId) {
-      const session = sessionRecords.findById(sessionId)
-      const project = session?.projectId ? projectDao.pick(session.projectId, ['path']) : null
-      projectPath = project?.path
-    }
     // 默认勾选 = 这条会话根 Agent 档案的白名单：档案由会话形态推导（项目 work / 无项目 chat /
     // 笔记本 notebook / bot 会话 bot，子会话可能被父级钉成 coding），含用户 ~/.shuvix/agents/<name>.md
     // 覆盖 —— 覆盖后会话真的按它创建，UI 的默认勾选就该跟着走。没有会话时按调用方说的档案
@@ -554,7 +545,7 @@ export class DefaultChatGateway implements ChatGateway {
       : options?.profile || WORK_PROFILE_NAME
     const profile = agentService.getProfile(profileName)
     const defaultProfileTools = profile?.tools ?? []
-    // 档案声明的 mcp:/skill: 项对这条会话缺省生效（名单归一），选择器据此画成默认勾上、可以取消
+    // 档案声明的 mcp: 项对这条会话缺省生效（名单归一），选择器据此画成默认勾上、可以取消
     //（取消写成勾选里的 `-<name>` 记号，见 chat-protocol toolSelection）；值是档案显示名，悬停时说「谁声明的」
     const declared = new Set(defaultProfileTools)
     const declaredBy = (name: string): string | undefined =>
@@ -589,14 +580,8 @@ export class DefaultChatGateway implements ChatGateway {
         isBuiltin: info.isBuiltin,
         declaredBy: declaredBy(info.name)
       }))
-    /** 已启用 Skill（含项目级 .claude/skills/） */
-    const skillItems = skillService.findEnabled(projectPath).map((s) => ({
-      name: `skill:${s.name}`,
-      label: s.description.length > 60 ? s.description.slice(0, 57) + '...' : s.description,
-      group: '__skills__',
-      declaredBy: declaredBy(`skill:${s.name}`)
-    }))
-    return [...merged, ...mcpTools, ...skillItems]
+    // 技能不在这里：启用着的全部上带 `skill` 工具的 agent 的货架，没有按会话的勾选（2026-10-28）
+    return [...merged, ...mcpTools]
   }
 }
 

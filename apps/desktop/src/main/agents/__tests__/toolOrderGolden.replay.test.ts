@@ -13,7 +13,8 @@
  * （`resultContractTools`，PIN-08），拼的时候显式带上附加工具；再按派生出的记录重建，工具名不变、一次都不连。
  *
  * 只读 fixture 的常驻自检 `toolOrderGolden.test.ts` 照旧（H11-63）；捕获脚本已删（frozen：0.80 的依赖上才
- * 抓得出来）。
+ * 抓得出来）。2026-10-28 技能不再按名字进名单之后，fixture 的名单与 SkillTool 的构造实参手工改过（见各份的
+ * `revised`）：创建时恒为 `('enabled', 项目路径)`，工具名一字未动。
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -23,7 +24,7 @@ import type { ConversationId } from '@earendil-works/pi-durable'
 
 const mocks = vi.hoisted(() => ({
   hasSkills: true,
-  skillToolCalls: [] as Array<{ names: string[]; projectPath?: string }>,
+  skillToolCalls: [] as Array<{ shelf: 'enabled'; projectPath?: string }>,
   mcp: {} as Record<string, { tools?: string[]; fails?: string } | null>,
   ensure: vi.fn(),
   declarationsOf: vi.fn(),
@@ -37,10 +38,15 @@ vi.mock('../../services/skillTool', () => ({
     readonly name = 'skill'
     readonly description = 'skill: stub'
     private readonly names: string[]
-    constructor(names: string[], projectPath?: string, shelf?: string) {
-      this.names = [...names]
-      // 按锁重建（shelf 'known'）的那一次不算进「创建时的构造实参」
-      if (shelf !== 'known') mocks.skillToolCalls.push({ names: [...names], projectPath })
+    constructor(shelf: 'enabled' | { known: readonly string[] }, projectPath?: string) {
+      // 创建时的货架是「启用着的全部」—— 桩替它报两本；按锁重建（{ known }）的那一次照锁、不算进
+      // 「创建时的构造实参」
+      if (shelf === 'enabled') {
+        this.names = ['builtin:drawing', 'pdf']
+        mocks.skillToolCalls.push({ shelf, projectPath })
+      } else {
+        this.names = [...shelf.known]
+      }
     }
     get hasSkills(): boolean {
       return mocks.hasSkills
@@ -61,7 +67,7 @@ vi.mock('../../services/mcpService', () => ({
   }
 }))
 vi.mock('../../services/skillService', () => ({
-  skillService: { findEnabled: () => [], findAll: () => [] }
+  skillService: { findEnabled: () => [], findAll: () => [], findModelInvocable: () => [] }
 }))
 vi.mock('../../services/wrapToolOutput', () => ({ wrapDurableTool: (tool: object) => tool }))
 vi.mock('../AgentTool', () => ({ createAgentTool: () => ({ name: 'agent' }) }))
@@ -147,7 +153,7 @@ interface ToolOrderFixture {
     registeredBuiltins: Array<{ name: string; platforms: string[] | null }>
   }
   observed: {
-    skillToolConstructed: Array<{ names: string[]; projectPath?: string }>
+    skillToolConstructed: Array<{ shelf: 'enabled'; projectPath?: string }>
     mcpEnsureCalls: unknown[][]
     mcpGetToolsCalls: Array<[string, string, { callerId?: string }]>
     broadcasts: Array<{ type: string; sessionId: string }>
@@ -319,7 +325,7 @@ describe('tool-order golden fixtures —— 经新 ToolHost 重放（P1-11）', 
 
       expect(mocks.skillToolCalls).toEqual(
         fixture.observed.skillToolConstructed.map((c) => ({
-          names: c.names,
+          shelf: c.shelf,
           projectPath: c.projectPath ?? undefined
         }))
       )
@@ -374,7 +380,7 @@ describe('tool-order golden fixtures —— 经新 ToolHost 重放（P1-11）', 
       expect('agent' in resolved).toBe(fixture.inputs.canSpawn === true)
       expect(mocks.skillToolCalls).toEqual(
         fixture.observed.skillToolConstructed.map((c) => ({
-          names: c.names,
+          shelf: c.shelf,
           projectPath: c.projectPath ?? undefined
         }))
       )

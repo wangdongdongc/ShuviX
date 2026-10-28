@@ -4,12 +4,12 @@
  * 两组动作：
  *   - 用（有这个工具的 agent 都有）：`list` / `describe` / `call`。`call` 走与组件界面同一个分发器
  *     （api/widgetApi.ts 的 callWidgetOp），效果与用户在组件界面里点一样。
- *   - 造（只在 agent 同时持有 `skill:builtin:widget` 时出现，D13）：`create` / `build` / `preview` / `sql` /
+ *   - 造（只在 agent 的技能货架上有 `builtin:widget` 时出现，D13）：`create` / `build` / `preview` / `sql` /
  *     `export` / `open`，加上 `call` 的 `dry_run`。怎么造写在技能里，不持有技能的 agent 看不到这几个动作。
  *     从前它们是 `shuvix widget …` 这组 CLI 命令；CLI 不知道是哪条会话在用（令牌只认组件），删掉了。
  *
  * 内置工具是会话级的（同一会话的每个 agent 共用一份），描述只能按**根 agent** 的技能货架定（ctx.rootSkills）；
- * 造的那组动作在调用时再按发起调用的 agent 自己的货架核对一次（派生 agent、或重配之后取消了技能）。
+ * 造的那组动作在调用时再按发起调用的 agent 自己的货架核对一次（派生 agent 创建得晚，侧栏的开关可能在这之间动过）。
  *
  * 授权（§7）：`list` / `describe` / `open` 不要授权；`call` 读操作要读、写操作要读写；`build` / `sql` 要读写；
  * `preview` / `export` 要读（`export` 另过目标路径的写门）；`create` 不问，造它的会话自动得到读写（来源 widget）。

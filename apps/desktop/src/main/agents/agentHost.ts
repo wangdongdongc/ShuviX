@@ -14,7 +14,7 @@
  *      快照建，缺省不连服务器，只有完整初始化（`connect`，option A：新进程里打开一条有可续工作的锁着的
  *      会话）才与创建同一条路当场连上；`next` 只来自运行时给的重建上下文（宿主从不自己造）。
  *    - `reconfigureAgentTools`：锁住的 root agent 换勾选时（重配）只解析变了的那几样 —— 新勾的 MCP
- *      （与创建同一条惰性连接的路；预判时不连）与按新名单造的技能工具；沿用哪些、怎么排由运行时定。
+ *      （与创建同一条惰性连接的路；预判时不连）；技能工具不在其中（货架在创建时定下），沿用哪些、怎么排由运行时定。
  *  - `desktopPromptHost` —— `PromptHost`：系统提示词四个活段落（指令文件 / 项目提示词 / 知识库 /
  *    bot 人设）的数据源，每次请求准备时现调。
  *  - `desktopPromptVars` —— 人设冻结时的变量表（`{{shuvix:*}}` 占位符的取值）。
@@ -226,10 +226,8 @@ function spawnedFieldsOf(
   return typeof canSpawn === 'boolean' ? { canSpawn } : {}
 }
 
-/** 名单里点了名的 skill（去掉 `skill:` 前缀，名单序） */
-function skillNamesOf(names: readonly string[]): string[] {
-  return names.filter((name) => name.startsWith('skill:')).map((name) => name.slice(6))
-}
+/** 技能工具在档案 `shuvix-tools` 里的写法（tools/skillTool 注册的名字） */
+const SKILL_TOOL = 'skill'
 
 /** 名单里点了名的 MCP 服务器（去掉 `mcp:` 前缀，名单序） */
 function mcpServersOf(names: readonly string[]): string[] {
@@ -357,15 +355,13 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
       // 派发工具：名单 opt-in；派生 agent 还要 canSpawn（缺省按 false）
       const agent = offersDispatchTool(req) ? wrap(dispatchTool(ctx)) : undefined
 
-      // SkillTool：名单里点了名的 skill 才上架 —— 档案声明的（含内置的 `skill:builtin:drawing`）
-      // 与会话勾选的一视同仁（派生 agent 的名单就是它全部的勾选：不读会话配置）；带根会话项目的
-      // projectPath（项目级 skills 可见）。只有这一次真有 skill 可给时才挂：空手的工具只是噪音。
-      // 记进锁 / 记录的是真上架的那几个（重开时按它重建同一个货架）
-      const skillNames = skillNamesOf(req.names)
-      const skillTool =
-        skillNames.length > 0
-          ? new SkillTool(skillNames, sessionProject(req.rootSessionId)?.path)
-          : undefined
+      // SkillTool：档案写了 `skill` 就挂，货架是此刻侧栏里启用着、模型可调用的全部技能（内置的与用户的
+      // 一视同仁；与 Claude Code / Codex 同一用法，2026-10-28）；带根会话项目的 projectPath（项目级
+      // skills 可见）。只有这一次真有 skill 可给时才挂：空手的工具只是噪音。记进锁 / 记录的是真上架的
+      // 那几个（重开时按它重建同一个货架，侧栏之后的开关不影响这个 agent）
+      const skillTool = req.names.includes(SKILL_TOOL)
+        ? new SkillTool('enabled', sessionProject(req.rootSessionId)?.path)
+        : undefined
       const skills = skillTool?.hasSkills ? skillTool.skillNames : []
 
       // MCP：并发连（实例按根会话：派生 agent 与根 agent 共用一份）；连上的按名单序排
@@ -390,19 +386,12 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
     },
 
     async reconfigureAgentTools(
-      { sessionId, names, servers }: AgentToolsReconfigureRequest,
+      { sessionId, servers }: AgentToolsReconfigureRequest,
       { signal, connect }
     ): Promise<ReconfiguredAgentTools> {
       if (signal.aborted) throw signal.reason
       const ctx = sessionToolContext(deps, sessionId)
       const wrap = sessionWrapper(deps, sessionId, ctx)
-      // 技能货架按新名单造一份（与创建同一口径：名单 ∩ 启用着的）；货架没变时运行时沿用装着的那一份
-      const skillNames = skillNamesOf(names)
-      const skillTool =
-        skillNames.length > 0
-          ? new SkillTool(skillNames, sessionProject(sessionId)?.path)
-          : undefined
-      const skills = skillTool?.hasSkills ? skillTool.skillNames : []
       // 新勾的服务器：真重配与创建同一条惰性连接的路；预判不连，只交回此刻已连上的那几台
       const mcp: ResolvedMcp[] = []
       const pending: string[] = []
@@ -424,12 +413,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
           mcp.push({ server, declarations, tools })
         }
       }
-      return {
-        mcp,
-        ...(pending.length > 0 ? { pending } : {}),
-        ...(skillTool !== undefined && skills.length > 0 ? { skill: wrap(skillTool) } : {}),
-        skills
-      }
+      return { mcp, ...(pending.length > 0 ? { pending } : {}) }
     },
 
     async rebuildAgentTools(
@@ -460,7 +444,7 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
         // 才掉出索引；锁里有技能工具就一直挂着（货架空了照实说「没有」）—— 重开不改工具表
         ...(lock.skills.length > 0
           ? {
-              skill: wrap(new SkillTool([...lock.skills], sessionProject(sessionId)?.path, 'known'))
+              skill: wrap(new SkillTool({ known: lock.skills }, sessionProject(sessionId)?.path))
             }
           : {}),
         // 按声明快照建，不连服务器：第一次调用时经同一条「用到才连」的路原地连上
@@ -479,8 +463,8 @@ export function createDesktopToolHost(deps: DesktopToolHostDeps): ToolHost {
 
 // ─── 创建期变量表（{{shuvix:*}} 占位符取值；原 environment/workspace 段拆解而来） ───
 
-/** 内置作图技能在档案 `shuvix-tools` 里的写法 */
-const DRAWING_SKILL = 'skill:builtin:drawing'
+/** 内置作图技能的全局名 */
+const DRAWING_SKILL = 'builtin:drawing'
 /**
  * artifact 工具的名字（tools/artifact.ts）。这里只拿它比对名单，不为一个字符串去引入工具模块 ——
  * 工具模块加载即自注册。工具名本身就是档案 md 里写的契约，不会悄悄改
@@ -488,19 +472,19 @@ const DRAWING_SKILL = 'skill:builtin:drawing'
 const ARTIFACT_TOOL_NAME = 'artifact'
 
 /**
- * 这个 agent 的货架上真有作图技能：名单点了它的名，且没在侧栏停用。与 SkillTool 上架是同一个
- * 判断（名单 ∩ findEnabled）—— 提示里的「先加载 builtin:drawing」因此只出现在加载得到的地方。
+ * 这个 agent 的货架上真有作图技能：名单里有技能工具，且它没在侧栏停用。与 SkillTool 上架是同一个
+ * 判断（findModelInvocable）—— 提示里的「先加载 builtin:drawing」因此只出现在加载得到的地方。人设在
+ * 创建时冻结，与货架同一刻读侧栏，之后的开关两边都不跟（2026-10-28）。
  *
  * 差一处，写明而不穿线：这里不带项目路径（派生 agent 的变量表 ctx.sessionId 是 agentId，解析不出根会话
  * 的项目），SkillTool 带（按根会话的项目，PIN-09）。两边只在「某个项目级 skill 的 frontmatter 自称 `builtin:drawing`、在那个
  * 项目里顶替了内置那份」时才可能分岔 —— 那是有人故意撞内置命名空间，不值得为它改变量表的入参。
  *
- * 名单里没点名时不去扫技能目录：大多数 agent（titler、explore…）走的是这条短路。
+ * 名单里没有技能工具时不去扫技能目录：titler、explore 这些 agent 走的是这条短路。
  */
 function hasDrawingSkill(names: readonly string[]): boolean {
-  if (!names.includes(DRAWING_SKILL)) return false
-  const name = DRAWING_SKILL.slice('skill:'.length)
-  return skillService.findEnabled().some((s) => s.name === name)
+  if (!names.includes(SKILL_TOOL)) return false
+  return skillService.findModelInvocable().some((s) => s.name === DRAWING_SKILL)
 }
 
 /**

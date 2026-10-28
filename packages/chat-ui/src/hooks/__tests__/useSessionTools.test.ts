@@ -59,7 +59,7 @@ const seedSession = (): Session => ({
   title: 'S1',
   projectId: null,
   parentId: null,
-  settings: { agentProfile: 'coding', enabledTools: ['skill:old'] },
+  settings: { agentProfile: 'coding', enabledTools: ['mcp:old'] },
   createdAt: 0,
   updatedAt: 0,
   lastActiveAt: 0
@@ -109,7 +109,7 @@ describe('useSessionTools 的 store 读写', () => {
     expect(mocks.init).toHaveBeenCalledWith({ sessionId: SID })
     expect(useChatStore.getState().sessions).toBe(sessionsBefore)
     expect(useChatStore.getState().sessionAgentCreated).toBe(createdBefore)
-    expect(settingsOf(SID)).toEqual({ agentProfile: 'coding', enabledTools: ['skill:old'] })
+    expect(settingsOf(SID)).toEqual({ agentProfile: 'coding', enabledTools: ['mcp:old'] })
 
     mocks.init.mockResolvedValueOnce({ success: true, created: true, enabledTools: ['mcp:ok'] })
     await refreshSessionTools(SID)
@@ -124,8 +124,8 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
   it('WS-U-1 writeSessionTools(null, next) 有宿主 → 草稿整份换成 next；零 IPC；会话不动', async () => {
     mocks.hasHost = true
     const sessionsBefore = useChatStore.getState().sessions
-    await writeSessionTools(null, ['skill:a', 'mcp:b'])
-    expect(welcome()).toEqual(['skill:a', 'mcp:b'])
+    await writeSessionTools(null, ['mcp:a', 'mcp:b'])
+    expect(welcome()).toEqual(['mcp:a', 'mcp:b'])
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
     expect(mocks.init).not.toHaveBeenCalled()
     expect(useChatStore.getState().sessions).toBe(sessionsBefore)
@@ -136,10 +136,10 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
   })
 
   it('WS-U-2 没有宿主（渠道端）→ 草稿与会话都不变', async () => {
-    useChatStore.setState({ welcomeEnabledTools: ['skill:keep'] })
+    useChatStore.setState({ welcomeEnabledTools: ['mcp:keep'] })
     const before = useChatStore.getState()
-    await writeSessionTools(null, ['skill:a'])
-    await writeSessionTools(SID, ['skill:a'])
+    await writeSessionTools(null, ['mcp:a'])
+    await writeSessionTools(SID, ['mcp:a'])
     expect(welcome()).toBe(before.welcomeEnabledTools)
     expect(useChatStore.getState().sessions).toBe(before.sessions)
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
@@ -147,18 +147,18 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
 
   it('WS-U-3 addSessionTools(null, names)：只补缺项、原有的在前保序；零 IPC', async () => {
     mocks.hasHost = true
-    useChatStore.setState({ welcomeEnabledTools: ['skill:a', 'mcp:x'] })
-    await addSessionTools(null, ['mcp:x', 'skill:new', 'skill:a', 'mcp:y'])
+    useChatStore.setState({ welcomeEnabledTools: ['mcp:a', 'mcp:x'] })
+    await addSessionTools(null, ['mcp:x', 'mcp:new', 'mcp:a', 'mcp:y'])
     // 已有的不再追加第二份（去重），缺的按 names 的顺序接在后面
-    expect(welcome()).toEqual(['skill:a', 'mcp:x', 'skill:new', 'mcp:y'])
+    expect(welcome()).toEqual(['mcp:a', 'mcp:x', 'mcp:new', 'mcp:y'])
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
   })
 
   it('WS-U-3 addSessionTools(null, names) 全都有了 → 不写（草稿引用不变）', async () => {
     mocks.hasHost = true
-    useChatStore.setState({ welcomeEnabledTools: ['skill:a', 'mcp:x'] })
+    useChatStore.setState({ welcomeEnabledTools: ['mcp:a', 'mcp:x'] })
     const before = welcome()
-    await addSessionTools(null, ['mcp:x', 'skill:a'])
+    await addSessionTools(null, ['mcp:x', 'mcp:a'])
     expect(welcome()).toBe(before)
     await addSessionTools(null, [])
     expect(welcome()).toBe(before)
@@ -169,19 +169,19 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
     let finish!: (v: { success: boolean }) => void
     mocks.updateEnabledTools.mockReturnValue(new Promise((r) => (finish = r)))
 
-    // 渲染时的勾选是 skill:old；调用前一刻 store 已变成 skill:old + mcp:now —— 读的是此刻那份
-    useChatStore.getState().updateSessionSettings(SID, { enabledTools: ['skill:old', 'mcp:now'] })
-    const pending = addSessionTools(SID, ['skill:req', 'mcp:now'])
+    // 渲染时的勾选是 mcp:old；调用前一刻 store 已变成 mcp:old + mcp:now —— 读的是此刻那份
+    useChatStore.getState().updateSessionSettings(SID, { enabledTools: ['mcp:old', 'mcp:now'] })
+    const pending = addSessionTools(SID, ['mcp:req', 'mcp:now'])
 
     // 同步就发生了（中间没有任何 await）：store 已经是新值（乐观），其它设置键不被冲掉；IPC 已发出
     expect(settingsOf(SID)).toEqual({
       agentProfile: 'coding',
-      enabledTools: ['skill:old', 'mcp:now', 'skill:req']
+      enabledTools: ['mcp:old', 'mcp:now', 'mcp:req']
     })
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
     expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
       id: SID,
-      enabledTools: ['skill:old', 'mcp:now', 'skill:req']
+      enabledTools: ['mcp:old', 'mcp:now', 'mcp:req']
     })
     expect(mocks.confirm).not.toHaveBeenCalled()
     finish({ success: true })
@@ -199,12 +199,12 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
     let finish!: (v: { success: boolean }) => void
     mocks.updateEnabledTools.mockReturnValue(new Promise((r) => (finish = r)))
 
-    const pending = addSessionTools(SID, ['skill:req'])
+    const pending = addSessionTools(SID, ['mcp:req'])
     // 预判还没答：store 不动、不落库
     expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith(SID, {
-      enabledTools: ['skill:old', 'skill:req']
+      enabledTools: ['mcp:old', 'mcp:req']
     })
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:old'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:old'])
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
 
     answer(true)
@@ -212,11 +212,11 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
     // 落库还没回：store 已经是新值（乐观）
     expect(settingsOf(SID)).toEqual({
       agentProfile: 'coding',
-      enabledTools: ['skill:old', 'skill:req']
+      enabledTools: ['mcp:old', 'mcp:req']
     })
     expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
       id: SID,
-      enabledTools: ['skill:old', 'skill:req']
+      enabledTools: ['mcp:old', 'mcp:req']
     })
     finish({ success: true })
     await pending
@@ -226,7 +226,7 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
   it('WS-U-4 addSessionTools(sid, names) 全都有了 → 零 IPC、store 引用不变', async () => {
     mocks.hasHost = true
     const before = useChatStore.getState().sessions
-    await addSessionTools(SID, ['skill:old'])
+    await addSessionTools(SID, ['mcp:old'])
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
     expect(useChatStore.getState().sessions).toBe(before)
   })
@@ -234,19 +234,19 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
   it('WS-U-5 sessionAgentCreated[sid] 为真 → 先预判、答应后恰一次 IPC、store 写成新值（write 与 add 都是）', async () => {
     mocks.hasHost = true
     useChatStore.setState({ sessionAgentCreated: { [SID]: true } })
-    await writeSessionTools(SID, ['skill:x'])
-    expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith(SID, { enabledTools: ['skill:x'] })
+    await writeSessionTools(SID, ['mcp:x'])
+    expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith(SID, { enabledTools: ['mcp:x'] })
     expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
       id: SID,
-      enabledTools: ['skill:x']
+      enabledTools: ['mcp:x']
     })
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:x'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:x'])
 
-    await addSessionTools(SID, ['skill:y'])
+    await addSessionTools(SID, ['mcp:y'])
     expect(mocks.confirm).toHaveBeenCalledTimes(2)
-    expect(mocks.confirm).toHaveBeenLastCalledWith(SID, { enabledTools: ['skill:x', 'skill:y'] })
+    expect(mocks.confirm).toHaveBeenLastCalledWith(SID, { enabledTools: ['mcp:x', 'mcp:y'] })
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(2)
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:x', 'skill:y'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:x', 'mcp:y'])
     // 预判在前、落库在后
     expect(mocks.confirm.mock.invocationCallOrder[1]).toBeLessThan(
       mocks.updateEnabledTools.mock.invocationCallOrder[1]
@@ -256,14 +256,14 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
   it('WS-U-5 只有 sessionClosing[sid] 为真（关停中）→ 不挡写入：不预判、恰一次 IPC、store 写成新值', async () => {
     mocks.hasHost = true
     useChatStore.setState({ sessionClosing: { [SID]: true } })
-    await writeSessionTools(SID, ['skill:x'])
-    await addSessionTools(SID, ['skill:y'])
+    await writeSessionTools(SID, ['mcp:x'])
+    await addSessionTools(SID, ['mcp:y'])
     expect(mocks.confirm).not.toHaveBeenCalled()
     expect(mocks.updateEnabledTools.mock.calls).toEqual([
-      [{ id: SID, enabledTools: ['skill:x'] }],
-      [{ id: SID, enabledTools: ['skill:x', 'skill:y'] }]
+      [{ id: SID, enabledTools: ['mcp:x'] }],
+      [{ id: SID, enabledTools: ['mcp:x', 'mcp:y'] }]
     ])
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:x', 'skill:y'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:x', 'mcp:y'])
   })
 
   it('WS-U-5 别的会话只读不影响这一条：照常写入', async () => {
@@ -272,7 +272,7 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
       sessionAgentCreated: { other: true },
       sessionClosing: { other2: true }
     })
-    await addSessionTools(SID, ['skill:x'])
+    await addSessionTools(SID, ['mcp:x'])
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
   })
 
@@ -281,10 +281,10 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
     mocks.updateEnabledTools.mockResolvedValue({ success: false })
     mocks.init.mockResolvedValue({ success: true, created: true, enabledTools: ['mcp:real'] })
 
-    await addSessionTools(SID, ['skill:x'])
+    await addSessionTools(SID, ['mcp:x'])
     expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
       id: SID,
-      enabledTools: ['skill:old', 'skill:x']
+      enabledTools: ['mcp:old', 'mcp:x']
     })
     expect(mocks.init).toHaveBeenCalledTimes(1)
     expect(mocks.init).toHaveBeenCalledWith({ sessionId: SID })
@@ -294,11 +294,11 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
 
   it('WS-U-7 会话不在 store 里 → 此刻的勾选按 [] 算，缺项全数写入', async () => {
     mocks.hasHost = true
-    await addSessionTools('ghost', ['skill:a', 'mcp:b'])
+    await addSessionTools('ghost', ['mcp:a', 'mcp:b'])
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
     expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
       id: 'ghost',
-      enabledTools: ['skill:a', 'mcp:b']
+      enabledTools: ['mcp:a', 'mcp:b']
     })
     // store 里也不凭空长出这条会话
     expect(useChatStore.getState().sessions.map((x) => x.id)).toEqual([SID])
@@ -308,20 +308,20 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
     mocks.hasHost = true
     useChatStore
       .getState()
-      .updateSessionSettings(SID, { enabledTools: ['-skill:builtin:drawing', 'skill:a', '-mcp:z'] })
+      .updateSessionSettings(SID, { enabledTools: ['-mcp:browser', 'mcp:a', '-mcp:z'] })
 
-    await addSessionTools(SID, ['skill:builtin:drawing'])
+    await addSessionTools(SID, ['mcp:browser'])
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
     expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
       id: SID,
-      enabledTools: ['skill:a', '-mcp:z', 'skill:builtin:drawing']
+      enabledTools: ['mcp:a', '-mcp:z', 'mcp:browser']
     })
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:a', '-mcp:z', 'skill:builtin:drawing'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:a', '-mcp:z', 'mcp:browser'])
 
     // 已经勾着：列表不变 → 不写
     const before = useChatStore.getState().sessions
-    await addSessionTools(SID, ['skill:builtin:drawing'])
-    await addSessionTools(SID, ['skill:a'])
+    await addSessionTools(SID, ['mcp:browser'])
+    await addSessionTools(SID, ['mcp:a'])
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
     expect(useChatStore.getState().sessions).toBe(before)
   })
@@ -329,48 +329,46 @@ describe('WS-U 欢迎页草稿与补缺项的写入口', () => {
   it('WS-U-9 比的是列表而不是生效状态：声明项缺省开着、勾选里没有它的名字 → 照样补上名字（写一次）', async () => {
     mocks.hasHost = true
     useChatStore.getState().updateSessionSettings(SID, { enabledTools: [] })
-    await addSessionTools(SID, ['skill:builtin:drawing'])
+    await addSessionTools(SID, ['mcp:browser'])
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
     expect(mocks.updateEnabledTools).toHaveBeenCalledWith({
       id: SID,
-      enabledTools: ['skill:builtin:drawing']
+      enabledTools: ['mcp:browser']
     })
   })
 
   it('WS-U-9 addSessionTools(null) 欢迎页草稿同理：撤掉取消记号、补名字；零 IPC；已勾着 → 草稿引用不变', async () => {
     mocks.hasHost = true
-    useChatStore.setState({ welcomeEnabledTools: ['-skill:builtin:drawing', 'skill:a', '-mcp:z'] })
-    await addSessionTools(null, ['skill:builtin:drawing'])
-    expect(welcome()).toEqual(['skill:a', '-mcp:z', 'skill:builtin:drawing'])
+    useChatStore.setState({ welcomeEnabledTools: ['-mcp:browser', 'mcp:a', '-mcp:z'] })
+    await addSessionTools(null, ['mcp:browser'])
+    expect(welcome()).toEqual(['mcp:a', '-mcp:z', 'mcp:browser'])
 
     const before = welcome()
-    await addSessionTools(null, ['skill:builtin:drawing'])
+    await addSessionTools(null, ['mcp:browser'])
     expect(welcome()).toBe(before)
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
   })
 
   it('WS-U-9 有运行时也撤：先预判，答应后撤掉取消记号、补上名字并落库', async () => {
     mocks.hasHost = true
-    useChatStore
-      .getState()
-      .updateSessionSettings(SID, { enabledTools: ['-skill:builtin:drawing', 'skill:a'] })
+    useChatStore.getState().updateSessionSettings(SID, { enabledTools: ['-mcp:browser', 'mcp:a'] })
     useChatStore.setState({ sessionAgentCreated: { [SID]: true } })
-    await addSessionTools(SID, ['skill:builtin:drawing'])
+    await addSessionTools(SID, ['mcp:browser'])
     expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith(SID, {
-      enabledTools: ['skill:a', 'skill:builtin:drawing']
+      enabledTools: ['mcp:a', 'mcp:browser']
     })
     expect(mocks.updateEnabledTools).toHaveBeenCalledExactlyOnceWith({
       id: SID,
-      enabledTools: ['skill:a', 'skill:builtin:drawing']
+      enabledTools: ['mcp:a', 'mcp:browser']
     })
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:a', 'skill:builtin:drawing'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:a', 'mcp:browser'])
   })
 
   it('WS-U-8 welcomeEnabledTools 初始为 []；setWelcomeEnabledTools 整份替换', () => {
     expect(useChatStore.getInitialState().welcomeEnabledTools).toEqual([])
     const { setWelcomeEnabledTools } = useChatStore.getState()
-    setWelcomeEnabledTools(['skill:a', 'mcp:b'])
-    expect(welcome()).toEqual(['skill:a', 'mcp:b'])
+    setWelcomeEnabledTools(['mcp:a', 'mcp:b'])
+    expect(welcome()).toEqual(['mcp:a', 'mcp:b'])
     setWelcomeEnabledTools(['mcp:c'])
     expect(welcome()).toEqual(['mcp:c'])
     setWelcomeEnabledTools([])
@@ -392,16 +390,16 @@ describe('RU 有 agent 时的写入：先过缓存确认', () => {
     })
 
     useChatStore.setState({ sessionAgentCreated: { [SID]: true } })
-    await writeSessionTools(SID, ['skill:a'])
+    await writeSessionTools(SID, ['mcp:a'])
     // 预判那一刻 store 还是旧值；IPC 那一刻已经是新值
-    expect(order).toEqual(['confirm:skill:old', 'ipc:skill:a'])
+    expect(order).toEqual(['confirm:mcp:old', 'ipc:mcp:a'])
 
     order.length = 0
     useChatStore.setState({ sessionAgentCreated: {} })
-    const pending = writeSessionTools(SID, ['skill:b'])
+    const pending = writeSessionTools(SID, ['mcp:b'])
     // 没有 agent：调用一返回（还没有任何 await 落定）store 与 IPC 就都到了
-    expect(order).toEqual(['ipc:skill:b'])
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:b'])
+    expect(order).toEqual(['ipc:mcp:b'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:b'])
     await pending
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
   })
@@ -411,38 +409,38 @@ describe('RU 有 agent 时的写入：先过缓存确认', () => {
     useChatStore.setState({ sessionAgentCreated: { [SID]: true } })
     mocks.confirm.mockResolvedValue(false)
     const before = useChatStore.getState().sessions
-    await writeSessionTools(SID, ['skill:x'])
-    await addSessionTools(SID, ['skill:y'])
+    await writeSessionTools(SID, ['mcp:x'])
+    await addSessionTools(SID, ['mcp:y'])
     expect(mocks.confirm).toHaveBeenCalledTimes(2)
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
     expect(mocks.init).not.toHaveBeenCalled()
     expect(useChatStore.getState().sessions).toBe(before)
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:old'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:old'])
   })
 
   it('RU-12 欢迎页（null）→ 不预判、只改草稿；没有宿主 → 什么都不做（也不预判）', async () => {
     mocks.hasHost = true
     useChatStore.setState({ sessionAgentCreated: { [SID]: true } })
-    await writeSessionTools(null, ['skill:a'])
-    await addSessionTools(null, ['skill:b'])
-    expect(useChatStore.getState().welcomeEnabledTools).toEqual(['skill:a', 'skill:b'])
+    await writeSessionTools(null, ['mcp:a'])
+    await addSessionTools(null, ['mcp:b'])
+    expect(useChatStore.getState().welcomeEnabledTools).toEqual(['mcp:a', 'mcp:b'])
     expect(mocks.confirm).not.toHaveBeenCalled()
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
 
     mocks.hasHost = false
-    await writeSessionTools(SID, ['skill:x'])
-    await writeSessionTools(null, ['skill:x'])
+    await writeSessionTools(SID, ['mcp:x'])
+    await writeSessionTools(null, ['mcp:x'])
     expect(mocks.confirm).not.toHaveBeenCalled()
     expect(mocks.updateEnabledTools).not.toHaveBeenCalled()
-    expect(settingsOf(SID)?.enabledTools).toEqual(['skill:old'])
-    expect(useChatStore.getState().welcomeEnabledTools).toEqual(['skill:a', 'skill:b'])
+    expect(settingsOf(SID)?.enabledTools).toEqual(['mcp:old'])
+    expect(useChatStore.getState().welcomeEnabledTools).toEqual(['mcp:a', 'mcp:b'])
   })
 
   it('RU-12 IPC 抛错 → 不冒成未处理的 rejection，回拉 init 回到真实状态', async () => {
     mocks.hasHost = true
     mocks.updateEnabledTools.mockRejectedValue(new Error('ipc down'))
     mocks.init.mockResolvedValue({ success: true, created: false, enabledTools: ['mcp:real'] })
-    await expect(writeSessionTools(SID, ['skill:x'])).resolves.toBeUndefined()
+    await expect(writeSessionTools(SID, ['mcp:x'])).resolves.toBeUndefined()
     expect(mocks.updateEnabledTools).toHaveBeenCalledTimes(1)
     expect(mocks.init).toHaveBeenCalledExactlyOnceWith({ sessionId: SID })
     expect(settingsOf(SID)).toEqual({ agentProfile: 'coding', enabledTools: ['mcp:real'] })

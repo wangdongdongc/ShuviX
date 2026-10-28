@@ -3,7 +3,7 @@
  * tool_results/<sid>/）、真 SkillTool、真派发工具、真 BashTool。替身只到它们的外部依赖为止
  * （mcpService 是 Fx-MCP 的 spy，skillService 给可控的技能表，agentService / AgentManager / sandbox 是桩）。
  *
- *  - H11-17 技能工具的描述恰好列出这一次上架的技能；
+ *  - H11-17 技能工具的描述恰好列出这一次上架的技能（模型可调用的全部，2026-10-28 起不按名单点名）；
  *  - H11-35 创建与重建交出同一组按 agent 的工具（名字、描述、参数、replay、MCP 次序）；
  *  - H11-37 重开时的技能漂移（PIN-13 裁决：锁赢 —— 停用的照列，磁盘上没了的掉出去，工具一直在）；
  *  - H11-41 元数据经原型链透出（从不展开包好的工具）；
@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   declarationsOf: vi.fn(),
   registrationsFromDeclarations: vi.fn(),
   findEnabled: vi.fn(),
+  findModelInvocable: vi.fn(),
   findAll: vi.fn(),
   pick: vi.fn(),
   sandboxGloballyActive: vi.fn()
@@ -91,7 +92,11 @@ vi.mock('../../services/mcpService', () => ({
   }
 }))
 vi.mock('../../services/skillService', () => ({
-  skillService: { findEnabled: mocks.findEnabled, findAll: mocks.findAll }
+  skillService: {
+    findEnabled: mocks.findEnabled,
+    findModelInvocable: mocks.findModelInvocable,
+    findAll: mocks.findAll
+  }
 }))
 vi.mock('../../services/agentService', () => ({
   agentService: { listAll: () => [], getProfile: () => undefined, loadAgentFromRef: vi.fn() }
@@ -198,9 +203,11 @@ beforeEach(() => {
     .mockImplementation((server: string, _sid: string, decls: readonly McpToolDeclaration[]) =>
       decls.map((d) => mcpRegistration(server, d))
     )
-  const shelf = [skill('builtin:drawing'), skill('pdf'), skill('other')]
-  mocks.findEnabled.mockReset().mockReturnValue(shelf)
-  mocks.findAll.mockReset().mockReturnValue(shelf)
+  // 启用着的三本里 other 只许用户调用（disable-model-invocation）：不上货架
+  const enabled = [skill('builtin:drawing'), skill('pdf'), skill('other')]
+  mocks.findEnabled.mockReset().mockReturnValue(enabled)
+  mocks.findModelInvocable.mockReset().mockReturnValue([skill('builtin:drawing'), skill('pdf')])
+  mocks.findAll.mockReset().mockReturnValue(enabled)
   mocks.pick.mockReset().mockReturnValue({ projectId: 'p1' })
   mocks.sandboxGloballyActive.mockReset().mockReturnValue(false)
   host = createDesktopToolHost({ sessionOf: () => undefined })
@@ -230,16 +237,15 @@ async function lockFrom(names: readonly string[]): Promise<{
 }
 
 describe('技能工具', () => {
-  it('H11-17 描述恰好列出这一次上架的技能（名单 ∩ 在架，在架次序）：没有 other、没有 ghost；skills 同序', async () => {
-    const resolved = await host.resolveAgentTools(
-      requestD({ names: ['skill:builtin:drawing', 'skill:pdf', 'skill:ghost'] }),
-      { signal: new AbortController().signal }
-    )
+  it('H11-17 描述恰好列出这一次上架的技能（名单里有 `skill` → 模型可调用的全部，池序）：只许用户调用的 other 不在；skills 同序', async () => {
+    const resolved = await host.resolveAgentTools(requestD({ names: ['read', 'skill'] }), {
+      signal: new AbortController().signal
+    })
     const description = resolved.skill!.description
     expect(description).toContain('<name>builtin:drawing</name>')
     expect(description).toContain('<name>pdf</name>')
     expect(description).not.toContain('other')
-    expect(description).not.toContain('ghost')
+    expect(mocks.findModelInvocable).toHaveBeenCalledWith('/w/proj')
     const listed = [...description.matchAll(/<name>([^<]+)<\/name>/g)].map((m) => m[1])
     expect(resolved.skills).toEqual(listed)
   })
@@ -247,8 +253,9 @@ describe('技能工具', () => {
   it('H11-37 重开时的漂移（PIN-13：锁赢）：停用了的照列；磁盘上没了的掉出去；技能工具一直在，空了照实说没有', async () => {
     const lock = lockD({ skills: ['builtin:drawing', 'pdf'] })
 
-    // 停用：pdf 不在 findEnabled 里了，但还在磁盘上（findAll）—— 锁住的 agent 照旧带着它
+    // 停用：pdf 不在 findEnabled / findModelInvocable 里了，但还在磁盘上（findAll）—— 锁住的 agent 照旧带着它
     mocks.findEnabled.mockReturnValue([skill('builtin:drawing')])
+    mocks.findModelInvocable.mockReturnValue([skill('builtin:drawing')])
     const disabled = (await host.rebuildAgentTools(lock, { sessionId: 's1' })).skill!
     expect(disabled.description).toContain('<name>builtin:drawing</name>')
     expect(disabled.description).toContain('<name>pdf</name>')
@@ -554,6 +561,7 @@ describe('派生 agent：创建与重建', () => {
     const record = SP_D({ skills: ['builtin:drawing', 'pdf'] })
 
     mocks.findEnabled.mockReturnValue([skill('builtin:drawing')])
+    mocks.findModelInvocable.mockReturnValue([skill('builtin:drawing')])
     const disabled = (await host.rebuildAgentTools(record, rctx(record))).skill!
     expect(disabled.description).toContain('<name>builtin:drawing</name>')
     expect(disabled.description).toContain('<name>pdf</name>')

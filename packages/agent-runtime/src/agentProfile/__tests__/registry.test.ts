@@ -244,8 +244,8 @@ describe('knowledge-writer 档案钉板（条目提交检查的执行侧）', ()
 /**
  * work / chat / coding 三份基座共用的那一份工具清单（REG-1..3 逐字比对的对象）。
  *
- * 末尾的 `skill:builtin:drawing` 是作图手艺的**内置技能**：档案声明的 mcp:/skill: 项恒生效（会话
- * 勾选只能在其上叠加），而内置技能也要档案点了名才上架 —— 画内联图的档案因此自己点它的名。
+ * 末尾的 `skill` 是技能工具：档案不再逐个点名技能（2026-10-28，按主流用法），带 `skill` 的 agent
+ * 拿到的货架是创建那一刻侧栏里启用着的全部技能（作图、小组件这些内置技能也在其中），由宿主定下。
  */
 const SHARED_BASE_TOOLS = [
   'bash',
@@ -263,20 +263,19 @@ const SHARED_BASE_TOOLS = [
   'knowledge',
   'artifact',
   'widget',
-  'skill:builtin:drawing',
-  'skill:builtin:widget'
+  'skill'
 ]
 
 describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事实源)', () => {
-  it('REG-1 tools 按桌面注册序列出 + Agent/session 居末、作图技能收尾;git 不进任何基座', () => {
+  it('REG-1 tools 按桌面注册序列出 + Agent/session 居末、技能工具收尾;git 不进任何基座', () => {
     // 顺序与 apps/desktop/src/main/tools/allTools.ts 的注册序一致(bash→read→write→edit→ask→
     // ls→grep→glob)——LLM 所见工具序列的稳定性依赖它;浏览器、ssh 与数据库已是按会话勾选的
     // 内置 MCP 能力服务器(mcp:browser / mcp:ssh / mcp:database),不在任何基座的名单上;
     // 工具注册表导入链含 electron/native 模块无法在测试内加载,故硬编码钉住,改动需同步两侧。
     const built = profile(WORK_PROFILE_NAME)
     // session 在末尾：它是「管自己这条会话」的工具（改标题 / 开子会话并驱动它），
-    // 与前面那些「对外干活」的工具不同类，所以列在 agent 之后；内置技能不是工具表里的一项
-    // 而是 skill 工具货架上的一本，排在所有工具名之后
+    // 与前面那些「对外干活」的工具不同类，所以列在 agent 之后；技能工具 skill 收尾 —— 档案不点
+    // 技能的名，货架由宿主按侧栏启用着的技能定
     expect(built.tools).toEqual([
       'bash',
       'powershell',
@@ -293,8 +292,7 @@ describe('work 档案钉板(项目会话基座：工具集/环境段的唯一事
       'knowledge',
       'artifact',
       'widget',
-      'skill:builtin:drawing',
-      'skill:builtin:widget'
+      'skill'
     ])
     expect(built.tools).toEqual(SHARED_BASE_TOOLS)
     // git 不进任何基座（见 allTools.ts 的注释：主 Agent 默认无，用户可覆盖
@@ -377,8 +375,7 @@ describe('chat 档案钉板(不归属项目的会话的创建基座)', () => {
       'knowledge',
       'artifact',
       'widget',
-      'skill:builtin:drawing',
-      'skill:builtin:widget'
+      'skill'
     ])
     expect(profile(CHAT_PROFILE_NAME).tools).toEqual(SHARED_BASE_TOOLS)
     // 这是裁决过的形态：两个基座工具面完全相同，「自己干活 / 把活交给 coding 子会话」
@@ -491,8 +488,7 @@ describe('coding 档案钉板(从 work 拆出的工程人格)', () => {
       'knowledge',
       'artifact',
       'widget',
-      'skill:builtin:drawing',
-      'skill:builtin:widget'
+      'skill'
     ])
     expect(built.tools).toEqual(SHARED_BASE_TOOLS)
     // 拆分之初 coding 的卖点之一是「基座让出的 ssh/database 在这里」，那条理由已经
@@ -748,12 +744,16 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
     expect(BASE_PROFILE_NAMES.has(WORK_PROFILE_NAME)).toBe(true)
   })
 
-  it('REG-5 三语工具清单都点了作图技能的名 —— 笔记里的 ```svg 围栏同样要手艺', () => {
-    // notebook 引用的是 visualCraft（只要手艺不要载体）；技能在它货架上，那一档才会换成指路
+  it('REG-5 三语工具清单都带技能工具 —— 笔记里的 ```svg 围栏同样要手艺，作图技能只能经它加载', () => {
+    // notebook 引用的是 visualCraft（只要手艺不要载体）；作图技能在它货架上，那一档才会换成指路 ——
+    // 货架由宿主按启用着的技能定，档案要做的只是带上 skill 工具
     for (const language of LANGS) {
-      expect(profile(NOTEBOOK_PROFILE_NAME, language).tools, `notebook.${language}`).toContain(
-        'skill:builtin:drawing'
-      )
+      const tools = profile(NOTEBOOK_PROFILE_NAME, language).tools
+      expect(tools, `notebook.${language}`).toContain('skill')
+      expect(
+        tools.filter((n) => n.startsWith('skill:')),
+        `notebook.${language}`
+      ).toEqual([])
     }
   })
 
@@ -773,7 +773,7 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
     }
   })
 
-  it('NB-2 三语工具清单逐字相同：doc_* + 读 + 写（别的文件）+ 查找 + ask + 作图技能，没有 edit / 命令 / 浏览器 / 派发', () => {
+  it('NB-2 三语工具清单逐字相同：doc_* + 读 + 写（别的文件）+ 查找 + ask + 技能工具，没有 edit / 命令 / 浏览器 / 派发', () => {
     // 文档只经 doc_* 改（编辑器开着在编辑器里改，没开着改磁盘）；write 只用来写别的文件。
     // 浏览器是按会话勾选的内置 MCP（mcp:browser）—— 笔记本会话需要时自己勾，档案不声明
     for (const language of LANGS) {
@@ -787,7 +787,7 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
         'grep',
         'glob',
         'ask',
-        'skill:builtin:drawing'
+        'skill'
       ])
     }
   })
@@ -802,14 +802,14 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
  * 两处一致（RPer-3）。
  */
 describe('bot 档案钉板（bot 会话的基座）', () => {
-  it('REG-4 三语工具清单恰为十五件（十三个工具 + 作图与跟踪项两本技能）、不含 bash/ssh/database/browser、不声明模型', () => {
+  it('REG-4 三语工具清单恰为十四件（十三个工具 + 技能工具）、不含 bash/ssh/database/browser、不声明模型', () => {
     // 这份窄清单**就是**「看得见、动不了」那半个保证：它能读能查能问、能改自己那份
     // bot md（edit），但没有 shell —— 真要干活只能开子会话，而子会话按自己的档案生成提示词、
     // 拿不到人设围栏。谁想「顺手给它一个 bash」，那条结构保证当场作废（work/chat/coding
     // 三份清单相同的那条惯例在这里刻意不适用）。`write` 自 2026-10-12 起在：知识库条目由 agent
     // 用 write 直接写进库再 submit，没有它 bot 就记不了东西（正文限定它只用来记条目）。
-    // 最后两件是内置技能（作图、跟踪项）：它们只往上下文里注入文本、不引入任何能力，窄清单的实质不变。
-    // 跟踪项技能自 2026-10-25 起在：日报 bot 怎么整理跟踪项写在随包技能里（种下的 bot 文件只写一次，规则得能随版本更新）
+    // 最后一件是技能工具：技能只往上下文里注入文本、不引入任何能力，窄清单的实质不变。货架不由档案
+    // 点名（2026-10-28），是侧栏启用着的全部技能 —— 日报 bot 要的跟踪项技能、作图技能都在其中
     for (const language of LANGS) {
       const built = profile(BOT_PROFILE_NAME, language)
       expect(built.tools, `bot.${language}`).toEqual([
@@ -826,19 +826,18 @@ describe('bot 档案钉板（bot 会话的基座）', () => {
         'knowledge',
         'artifact',
         'widget',
-        'skill:builtin:drawing',
-        'skill:builtin:tracking'
+        'skill'
       ])
-      expect(built.tools, `bot.${language}`).toHaveLength(15)
+      expect(built.tools, `bot.${language}`).toHaveLength(14)
       for (const forbidden of ['bash', 'database', 'mcp:database', 'mcp:browser', 'git']) {
         expect(built.tools, `bot.${language} 不得持有 ${forbidden}`).not.toContain(forbidden)
       }
-      // 档案声明的 mcp:/skill: 恒生效 —— 清单里的扩展能力只有两本内置技能，
-      // 多出一个 mcp: 就等于给「动不了」的 bot 塞了一台服务器的全部工具
+      // 档案声明的 mcp: 缺省勾上 —— 清单里一台服务器也没有，多出一个 mcp: 就等于给「动不了」的
+      // bot 塞了一台服务器的全部工具；也不再有逐个点名的 skill: 条目
       expect(
         built.tools.filter((n) => n.startsWith('mcp:') || n.startsWith('skill:')),
         `bot.${language}`
-      ).toEqual(['skill:builtin:drawing', 'skill:builtin:tracking'])
+      ).toEqual([])
       // 不声明 shuvix-model：模型是**会话**的事（用户在模型选择器里选），不是档案的事
       expect(built.model, `bot.${language}`).toBeUndefined()
     }

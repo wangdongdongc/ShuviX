@@ -4,7 +4,8 @@
  *  - `buildBuiltinTools`：内置工具集（缺省为空；`scenario: 'w'` = 场景 W 的那套，darwin 有 bash、
  *    win32 有 powershell）。bash 的描述带 `sandboxed=<钉子>`，好在请求里看出沙箱钉子。
  *  - `resolveAgentTools`：派发工具按 `offersDispatchTool`（名单含 `agent`，且 root 或 `canSpawn`）；
- *    点了名且宿主有的技能 → 一个技能工具（描述列出技能）；`mcp:<s>` → 连假服务器（连不上就广播一条
+ *    名单含 `skill` → 货架是宿主此刻有的全部技能（`options.skills`，现读；档案不点技能的名，2026-10-28），
+ *    非空才给一个技能工具（描述列出技能）；`mcp:<s>` → 连假服务器（连不上就广播一条
  *    error 并跳过，K7），工具名 `mcp__<s>__<t>`，replay unsafe，调用经 `fake.call`（掉线原地重连）。
  *    外加 `agentTools`（总在）与附加工具：请求的 `extraTools` 在前、选项的 `extraTools` 在后（PIN-12），
  *    原样（同一对象）交回。
@@ -12,9 +13,9 @@
  *    缺省不连服务器；上下文带 `connect`（option A 的完整初始化）时把记录里的服务器逐台连上（连不上 →
  *    与解析时同一条 error 广播，工具照旧按快照建）。重建上下文的 `extraTools` 原样放进 `extraTools`
  *    （PIN-03 R）。资源按上下文的 `sessionId` 找（PIN-10）。
- *  - `reconfigureAgentTools`（重配，2026-10-26）：技能按名单 ∩ 宿主有的造一份（货架空了不给 `skill`）；
- *    `servers` 逐台：`connect: true`（真重配）= 与解析同一条连接路（连不上广播同一条 error 并跳过，被中止
- *    就原样抛出），`connect: false`（预判）= 从不连 —— 此刻已连上的交回声明与工具，其余按次序列进
+ *  - `reconfigureAgentTools`（重配，2026-10-26）：只管 `servers`（技能货架在创建时定下，重配不碰它），
+ *    逐台：`connect: true`（真重配）= 与解析同一条连接路（连不上广播同一条 error 并跳过，被中止就原样
+ *    抛出），`connect: false`（预判）= 从不连 —— 此刻已连上的交回声明与工具，其余按次序列进
  *    `pending`；不认识的服务器名跳过。`reconfigure: false` 造一个**没有**这个方法的宿主（`unsupported`）。
  *
  * 旋钮：`sandbox`（解析时报的钉子）、`failResolve` / `failRebuild` / `failRebuildFor`（按 agentId / 'root'）、`omitOnRebuild`（重建时故意漏掉的
@@ -50,7 +51,7 @@ export interface TestToolHostOptions {
   /** 内置工具集：缺省没有；'w' = 场景 W */
   scenario?: 'w'
   platform?: TestPlatform
-  /** 宿主上可用的技能 */
+  /** 宿主上启用着的技能（名单含 `skill` 的 agent 创建时全部上架；可改，下一次创建读到新值） */
   skills?: readonly string[]
   /** 假 MCP 服务器：名字 → 工具声明 */
   mcp?: Readonly<Record<string, readonly McpToolDeclaration[]>>
@@ -240,11 +241,8 @@ export function makeTestToolHost(
       host.resolveCalls.push(request)
       await host.beforeResolve?.(signal)
       if (host.failResolve !== undefined) throw host.failResolve
-      const available = new Set(options.skills ?? [])
-      const skills = request.names
-        .filter((name) => name.startsWith('skill:'))
-        .map((name) => name.slice('skill:'.length))
-        .filter((name) => available.has(name))
+      // 技能不按名字进名单：带 `skill` 的 agent 拿到宿主此刻启用着的全部技能
+      const skills = request.names.includes('skill') ? [...(options.skills ?? [])] : []
       const mcp: NonNullable<ResolvedAgentTools['mcp']>[number][] = []
       for (const name of request.names) {
         if (!name.startsWith('mcp:')) continue
@@ -354,11 +352,6 @@ export function makeTestToolHost(
       host.reconfigureCalls.push(call)
       await host.beforeReconfigure?.(signal, call)
       if (host.failReconfigure !== undefined) throw host.failReconfigure
-      const available = new Set(options.skills ?? [])
-      const skills = request.names
-        .filter((name) => name.startsWith('skill:'))
-        .map((name) => name.slice('skill:'.length))
-        .filter((name) => available.has(name))
       const mcp: ReconfiguredAgentTools['mcp'][number][] = []
       const pending: string[] = []
       for (const name of request.servers) {
@@ -389,9 +382,7 @@ export function makeTestToolHost(
       }
       return {
         mcp,
-        ...(pending.length > 0 ? { pending } : {}),
-        ...(skills.length > 0 ? { skill: skillTool(skills) } : {}),
-        skills
+        ...(pending.length > 0 ? { pending } : {})
       }
     }
   }

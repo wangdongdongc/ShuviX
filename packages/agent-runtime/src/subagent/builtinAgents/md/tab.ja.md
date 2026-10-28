@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:tab
 shuvix-builtin: true
 name: tab
 description: タブエージェント —— Chrome タブセッション（ユーザー自身の Chrome の ShuviX サイドパネル）のベースプロファイル。ログイン済みのブラウザーでユーザーが開いているページを手伝う。
-shuvix-tools: mcp:chrome, ask, skill:builtin:drawing
+shuvix-tools: mcp:chrome, ask, skill
 shuvix-displayName: Chrome タブ
 shuvix-project-awareness: true
 ---

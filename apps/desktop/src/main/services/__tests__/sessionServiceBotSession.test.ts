@@ -141,13 +141,13 @@ describe('BSess-1 / 2 / 3 —— create 写了什么', () => {
     // 而那条会话恰恰是用来干活的（另一半守卫在 agentSessionBot.test.ts 的 AG-5）
     mocks.daoPick.mockReturnValue({
       projectId: 'p1',
-      settings: { bot: 'scout', enabledTools: ['skill:from-parent'] }
+      settings: { bot: 'scout', enabledTools: ['mcp:from-parent'] }
     })
     sessionService.create({ parentId: 'P' })
     const settings = inserted().settings
     expect('bot' in settings).toBe(false)
     // 对照组：该继承的那一项确实继承了（否则这条用例可能只是在测一个空 settings）
-    expect(settings.enabledTools).toEqual(['skill:from-parent'])
+    expect(settings.enabledTools).toEqual(['mcp:from-parent'])
     expect(inserted().projectId).toBe('p1')
   })
 })

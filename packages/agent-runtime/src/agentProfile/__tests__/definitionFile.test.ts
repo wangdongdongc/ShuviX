@@ -34,13 +34,13 @@ describe('parseAgentDefinitionFile', () => {
     expect(parsed!.projectAwareness).toBe(false)
   })
 
-  it('解析 shuvix- 前缀字段与 mcp:/skill:/agent 工具语法', () => {
+  it('解析 shuvix- 前缀字段与 mcp:/skill/agent 工具语法', () => {
     const md = [
       '---',
       'name: helper',
       'shuvix-displayName: 小助手',
       'description: does things',
-      'shuvix-tools: read, mcp:Context7, skill:my-skill, Agent',
+      'shuvix-tools: read, mcp:Context7, Skill, Agent',
       'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
       'shuvix-project-awareness: true',
       '---',
@@ -49,10 +49,23 @@ describe('parseAgentDefinitionFile', () => {
 
     const parsed = parseAgentDefinitionFile(md, 'helper')!
     expect(parsed.displayName).toBe('小助手')
-    // mcp:/skill: 前缀归小写、余部大小写保留；其余全小写（旧文件的 `Agent` 归一为 agent）
-    expect(parsed.tools).toEqual(['read', 'mcp:Context7', 'skill:my-skill', 'agent'])
+    // mcp: 前缀归小写、余部大小写保留；其余全小写（`Skill` → skill，旧文件的 `Agent` 归一为 agent）
+    expect(parsed.tools).toEqual(['read', 'mcp:Context7', 'skill', 'agent'])
     expect(parsed.instructionFiles).toEqual(['AGENTS.md', 'CLAUDE.md'])
     expect(parsed.projectAwareness).toBe(true)
+  })
+
+  it('旧写法 skill:<name> 读作 skill（技能不再按档案点名）：前缀大小写不论，多个与 skill 并存都去重成一个、占第一次出现的位置', () => {
+    const md = [
+      '---',
+      'name: legacy',
+      'shuvix-tools: read, skill:builtin:drawing, mcp:ctx, SKILL:my-skill, skill, grep',
+      '---',
+      'body'
+    ].join('\n')
+    const parsed = parseAgentDefinitionFile(md, 'legacy')!
+    expect(parsed.tools).toEqual(['read', 'skill', 'mcp:ctx', 'grep'])
+    expect(parsed.tools.some((tool) => tool.startsWith('skill:'))).toBe(false)
   })
 
   it('shuvix-model 原样存取（本层不拆前缀、不对模型目录解析）', () => {
@@ -265,7 +278,7 @@ describe('serializeAgentDefinitionFile', () => {
       displayName: '审查助手',
       description: 'Expert reviewer: use after writing code. Handles edge-cases, too.',
       systemPrompt: 'You are a reviewer.\n\n- be thorough\n- cite lines',
-      tools: ['read', 'grep', 'mcp:Context7', 'skill:pdf', 'agent'],
+      tools: ['read', 'grep', 'mcp:Context7', 'skill', 'agent'],
       instructionFiles: ['AGENTS.md', 'docs/house-rules.md'],
       projectAwareness: true
     }
@@ -422,6 +435,51 @@ describe('serializeAgentDefinitionFile', () => {
     expect(parsed).not.toBeNull()
     expect(parsed!.description).toBe(description)
     expect(parsed!.systemPrompt).toBe('')
+  })
+})
+
+/**
+ * SKN —— 技能工具条目的归一（2026-10-28 起按 Claude Code / Codex 的用法）：`skill` 给这个 agent 技能工具，
+ * 货架是侧栏里启用着的全部技能，档案不再逐个点名 —— 旧写法 `skill:<名>`（前缀大小写不论、名字可以是空的）
+ * 一律读作 `skill`，去重后一份档案至多一个。前缀之外的词不算：`skills` 只是一个（不存在的）普通工具名。
+ * mcp: 前缀不受牵连 —— 前缀归小写、server 名大小写保留。
+ */
+describe('SKN —— skill 条目归一', () => {
+  /** 只写一行 shuvix-tools 的档案读出来的工具名单 */
+  const toolsOf = (line: string): string[] =>
+    parseAgentDefinitionFile(`---\nname: n\nshuvix-tools: ${line}\n---\nbody`, 'n')!.tools
+
+  it.each<[string, string[]]>([
+    ['skill:a, skill:b', ['skill']],
+    ['Skill:X', ['skill']],
+    // 行末的裸 `skill:` 在 YAML 里是嵌套映射（整份非法）—— 空名字只能出现在行中或引号里
+    ['skill:, read', ['skill', 'read']],
+    ['"skill:"', ['skill']],
+    ['skills', ['skills']],
+    ['MCP:Ctx', ['mcp:Ctx']]
+  ])('SKN-1 shuvix-tools: %s → %j', (line, expected) => {
+    expect(toolsOf(line)).toEqual(expected)
+  })
+
+  it('SKN-2 旧写法的档案经 parse → serialize 写回：shuvix-tools 一行恰一个 skill、没有 skill:；再读一遍不变', () => {
+    const legacy = [
+      '---',
+      'name: legacy',
+      'shuvix-tools: read, skill:x, mcp:ctx, skill:y',
+      '---',
+      'body'
+    ].join('\n')
+    const out = serializeAgentDefinitionFile(parseAgentDefinitionFile(legacy, 'legacy')!)
+    const line = out.split('\n').find((l) => l.startsWith('shuvix-tools:'))
+    expect(line).toBeDefined()
+    const entries = line!
+      .slice('shuvix-tools:'.length)
+      .split(',')
+      .map((t) => t.trim())
+    expect(entries).toEqual(['read', 'skill', 'mcp:ctx'])
+    expect(entries.filter((t) => t === 'skill')).toHaveLength(1)
+    expect(out).not.toContain('skill:')
+    expect(parseAgentDefinitionFile(out, 'legacy')!.tools).toEqual(['read', 'skill', 'mcp:ctx'])
   })
 })
 

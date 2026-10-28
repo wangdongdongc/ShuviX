@@ -11,6 +11,10 @@
  *
  * `skillService` 是模块级单例、构造时就建默认目录 —— paths 必须打桩到夹具根（同 SSG / SSS）。
  * 解析本身是纯函数，只有 SFM-10 / SFM-12 走一遍 findAll / 命令池，确认解析结果真的流到了那里。
+ *
+ * SFM-13..17 是两个调用开关（`disable-model-invocation` / `user-invocable`）：取值矩阵按纯解析钉，
+ * SFM-15..17 再经 findModelInvocable（货架）/ findEnabledAsCommands（命令池）与侧栏开关、项目级、
+ * 共用目录、内置目录各走一遍。
  */
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -211,5 +215,171 @@ describe('SFM 文件层面的细节', () => {
     expect(command.description).toBe(FOLDED)
     // 正文仍是剥过 frontmatter 的那一段
     expect(command.template).toBe(`Base directory for this skill: ${dir}\n\nPDF body.`)
+  })
+})
+
+/**
+ * 两个调用开关（2026-10-28，Claude Code 定的字段）：`disable-model-invocation: true` → 不上 agent 的货架
+ * （`findModelInvocable`），仍是 `/名字` 命令；`user-invocable: false` → 不进命令池（`findEnabledAsCommands`），
+ * 仍在货架上。按行读：剥一层引号、首尾空白（CRLF 的 `\r` 随之去掉）之后不分大小写地比；别的写法一律是缺省，
+ * 解析结果里干脆没有这个键。
+ */
+describe('SFM 调用开关（disable-model-invocation / user-invocable）', () => {
+  /** 一份带一行开关的 SKILL.md（line 为 null = 不写这一行） */
+  const flagged = (line: string | null, crlf = false): string => {
+    const text = md(['name: flag', 'description: d', ...(line === null ? [] : [line])])
+    return crlf ? text.replace(/\n/g, '\r\n') : text
+  }
+
+  /** 在 dir 下写一个技能目录（frontmatter 的 name = 目录名） */
+  const writeSkill = (dir: string, name: string, extra: string[] = []): string => {
+    const base = join(dir, name)
+    mkdirSync(base, { recursive: true })
+    writeFileSync(
+      join(base, 'SKILL.md'),
+      md([`name: ${name}`, `description: ${name} skill`, ...extra], `${name.toUpperCase()} BODY`),
+      'utf8'
+    )
+    return base
+  }
+  const writeConfig = (config: Record<string, unknown>): void =>
+    writeFileSync(join(DIRS.user, '.config.json'), JSON.stringify(config), 'utf8')
+  const namesOf = (skills: { name: string }[]): string[] => skills.map((s) => s.name).sort()
+  const commandIds = (projectPath?: string): string[] =>
+    skillService
+      .findEnabledAsCommands(projectPath)
+      .map((c) => c.commandId)
+      .sort()
+
+  const DMI = 'disable-model-invocation'
+  const UI = 'user-invocable'
+
+  it.each<[string, string]>([
+    ['true', flagged(`${DMI}: true`)],
+    ['True', flagged(`${DMI}: True`)],
+    ['TRUE', flagged(`${DMI}: TRUE`)],
+    ['"true"', flagged(`${DMI}: "true"`)],
+    ["'true'", flagged(`${DMI}: 'true'`)],
+    ['"True"', flagged(`${DMI}: "True"`)],
+    ['true（CRLF）', flagged(`${DMI}: true`, true)]
+  ])('SFM-13 `disable-model-invocation: %s` → disableModelInvocation: true', (_label, text) => {
+    const parsed = parse(text)!
+    expect(parsed).not.toBeNull()
+    expect(parsed.name).toBe('flag')
+    expect(parsed.disableModelInvocation).toBe(true)
+    // 另一个开关不受牵连
+    expect('userInvocable' in parsed).toBe(false)
+  })
+
+  it.each<[string, string]>([
+    ['不写', flagged(null)],
+    ['false', flagged(`${DMI}: false`)],
+    ['"false"', flagged(`${DMI}: "false"`)],
+    ['yes', flagged(`${DMI}: yes`)],
+    ['1', flagged(`${DMI}: 1`)],
+    ['on', flagged(`${DMI}: on`)],
+    ['空值', flagged(`${DMI}:`)],
+    ['truee', flagged(`${DMI}: truee`)]
+  ])('SFM-13 `disable-model-invocation` 写成 %s → 缺省（结果里没有这个键）', (_label, text) => {
+    const parsed = parse(text)!
+    expect(parsed).not.toBeNull()
+    expect('disableModelInvocation' in parsed).toBe(false)
+    expect('userInvocable' in parsed).toBe(false)
+    expect(parsed).toEqual({ name: 'flag', description: 'd', content: 'Body text.' })
+  })
+
+  it.each<[string, string]>([
+    ['false', flagged(`${UI}: false`)],
+    ['False', flagged(`${UI}: False`)],
+    ['"false"', flagged(`${UI}: "false"`)],
+    ["'FALSE'", flagged(`${UI}: 'FALSE'`)],
+    ['false（CRLF）', flagged(`${UI}: false`, true)]
+  ])('SFM-14 `user-invocable: %s` → userInvocable: false', (_label, text) => {
+    const parsed = parse(text)!
+    expect(parsed).not.toBeNull()
+    expect(parsed.name).toBe('flag')
+    expect(parsed.userInvocable).toBe(false)
+    expect('disableModelInvocation' in parsed).toBe(false)
+  })
+
+  it.each<[string, string]>([
+    ['不写', flagged(null)],
+    ['true', flagged(`${UI}: true`)],
+    ['no', flagged(`${UI}: no`)],
+    ['0', flagged(`${UI}: 0`)],
+    ['off', flagged(`${UI}: off`)],
+    ['空值', flagged(`${UI}:`)]
+  ])('SFM-14 `user-invocable` 写成 %s → 缺省（结果里没有这个键）', (_label, text) => {
+    const parsed = parse(text)!
+    expect(parsed).not.toBeNull()
+    expect('userInvocable' in parsed).toBe(false)
+    expect('disableModelInvocation' in parsed).toBe(false)
+    expect(parsed).toEqual({ name: 'flag', description: 'd', content: 'Body text.' })
+  })
+
+  it('SFM-15 四本启用着的默认技能：货架去掉只许用户调用的，命令池去掉只许模型调用的；findEnabled / findAll 四本都在', () => {
+    writeSkill(DIRS.user, 'plain')
+    writeSkill(DIRS.user, 'uonly', [`${DMI}: true`])
+    writeSkill(DIRS.user, 'monly', [`${UI}: false`])
+    writeSkill(DIRS.user, 'both', [`${DMI}: true`, `${UI}: false`])
+
+    expect(namesOf(skillService.findModelInvocable())).toEqual(['monly', 'plain'])
+    expect(commandIds()).toEqual(['plain', 'uonly'])
+    // 两个开关都不是「停用」：四本照样启用着、照样列得出来
+    expect(namesOf(skillService.findEnabled())).toEqual(['both', 'monly', 'plain', 'uonly'])
+    expect(namesOf(skillService.findAll())).toEqual(['both', 'monly', 'plain', 'uonly'])
+
+    // 解析结果流到了 Skill 上：只在写了非缺省值时有这两个键
+    const byName = new Map(skillService.findAll().map((s) => [s.name, s]))
+    expect(byName.get('both')).toMatchObject({ disableModelInvocation: true, userInvocable: false })
+    expect(byName.get('uonly')!.disableModelInvocation).toBe(true)
+    expect('userInvocable' in byName.get('uonly')!).toBe(false)
+    expect(byName.get('monly')!.userInvocable).toBe(false)
+    expect('disableModelInvocation' in byName.get('monly')!).toBe(false)
+    expect('disableModelInvocation' in byName.get('plain')!).toBe(false)
+    expect('userInvocable' in byName.get('plain')!).toBe(false)
+  })
+
+  it('SFM-16a 侧栏停用压过开关：只许用户调用的 uonly 一停用就不是命令了（货架上本来就没有它）', () => {
+    writeSkill(DIRS.user, 'plain')
+    writeSkill(DIRS.user, 'uonly', [`${DMI}: true`])
+    expect(commandIds()).toEqual(['plain', 'uonly'])
+
+    writeConfig({ disabled: ['uonly'] })
+    expect(commandIds()).toEqual(['plain'])
+    expect(namesOf(skillService.findModelInvocable())).toEqual(['plain'])
+  })
+
+  it('SFM-16b 项目级技能（恒启用）写了 disable-model-invocation：带 projectPath 时是命令、不在货架上', () => {
+    const project = join(DIRS.root, 'proj')
+    writeSkill(join(project, '.claude', 'skills'), 'deploy', [`${DMI}: true`])
+
+    expect(namesOf(skillService.findEnabled(project))).toContain('deploy')
+    expect(commandIds(project)).toContain('deploy')
+    expect(namesOf(skillService.findModelInvocable(project))).not.toContain('deploy')
+    // 不带项目路径时项目级技能根本不在场
+    expect(commandIds()).not.toContain('deploy')
+  })
+
+  it('SFM-16c 共用目录（~/.claude/skills）里 user-invocable: false 的技能：整组没打开时哪边都没有；打开后只在货架上', () => {
+    writeSkill(join(DIRS.root, 'home', '.claude', 'skills'), 'helper', [`${UI}: false`])
+
+    // 列得出来（找得到），但这一组缺省关着
+    expect(namesOf(skillService.findAll())).toContain('claude:helper')
+    expect(namesOf(skillService.findModelInvocable())).not.toContain('claude:helper')
+    expect(commandIds()).not.toContain('claude:helper')
+
+    writeConfig({ enabledDirs: ['claude'] })
+    expect(namesOf(skillService.findModelInvocable())).toContain('claude:helper')
+    expect(commandIds()).not.toContain('claude:helper')
+  })
+
+  it('SFM-17 内置技能写了 disable-model-invocation：builtin:<名> 启用着、仍是命令，但不在货架上', () => {
+    writeSkill(DIRS.builtin, 'secret', [`${DMI}: true`])
+    writeSkill(DIRS.builtin, 'open')
+
+    expect(namesOf(skillService.findEnabled())).toEqual(['builtin:open', 'builtin:secret'])
+    expect(namesOf(skillService.findModelInvocable())).toEqual(['builtin:open'])
+    expect(commandIds()).toEqual(['builtin:open', 'builtin:secret'])
   })
 })

@@ -34,12 +34,15 @@ const makeSkillParams = (hint: string): TObject<{ name: TString }> =>
 type SkillParams = ReturnType<typeof makeSkillParams>
 
 /**
- * 名单在哪一池里找：
- *  - `'enabled'`（创建 agent 时）：只收没被停用的 —— 侧栏关掉的技能不上新 agent 的货架；
- *  - `'known'`（重开会话、按锁重建时）：锁记着的照收，停用与否不论 —— 锁住的 agent 工具不变（与 MCP
- *    同一条规则：要生效就销毁 agent）；只有磁盘上已经没了的才从索引里掉出去。
+ * 货架从哪儿来：
+ *  - `'enabled'`（创建 agent 时）：侧栏里启用着的**全部**技能（含根会话项目的 `.claude/skills`），去掉
+ *    SKILL.md 写了 `disable-model-invocation: true` 的 —— 那种只能由用户 `/名字` 调用。与 Claude Code /
+ *    Codex 同一用法：档案不逐个点名，会话也不勾选（2026-10-28）；
+ *  - `{ known }`（重开会话、按锁重建时）：锁记着的照收，停用与否不论 —— 锁住的 agent 工具不变（与 MCP
+ *    同一条规则：侧栏的开关只作用于之后新建的 agent，要现在生效就销毁 agent）；只有磁盘上已经没了的才从
+ *    索引里掉出去。
  */
-export type SkillShelf = 'enabled' | 'known'
+export type SkillShelf = 'enabled' | { readonly known: readonly string[] }
 
 /** skill 工具 */
 export class SkillTool extends BaseTool<SkillParams> {
@@ -60,26 +63,22 @@ export class SkillTool extends BaseTool<SkillParams> {
     return this.skills.map((s) => s.name)
   }
 
-  constructor(skillNames: string[], projectPath?: string, shelf?: SkillShelf) {
+  constructor(shelf: SkillShelf, projectPath?: string) {
     super()
 
-    // 上架的只有名单点了名的 skill：档案 `shuvix-tools` 声明的（内置的写作 `skill:builtin:<name>`）
-    // 加上会话勾选的。内置 skill 没有「不点名也在架」的特例 —— 哪个 agent 带它，由它的档案 md
-    // 说了算（用户不必为了让图画得好先知道有这么个技能再去勾它：基座档案已经替他点了名，界面上
-    // 画成已勾、锁住）。
-    //
-    // 关闭仍然有效：findEnabled 已经把 .config.json 的 disabled / disabledDirs 过滤掉了。
+    // 内置技能与用户的一视同仁：启用着就上架（用户自带一份作图技能、不想要内置那份时，在侧栏把内置的
+    // 关掉）。关闭仍然有效：findEnabled 已经把 .config.json 的 disabled / disabledDirs 过滤掉了。
     //
     // **同名用户 skill 不覆盖内置** —— 与 agent/policy/hook/bot 那套 md 家族**不同**，别照那个
     // 直觉读这里：内置恒带 `dirName='builtin'`，globalName 因此恒为 `builtin:<name>`，而用户
     // 全局目录的就是 `<name>`，两者永远不同名，于是并存、各占索引一行。要让内置那份失效，
     // 路径是 .config.json 的 disabled（或整组 disabledDirs），不是放一个同名文件。
-    //
-    // 按锁重建（shelf 'known'）时停用不再算数：锁住的 agent 带着它上锁时的货架，见 SkillShelf。
-    const wanted = new Set(skillNames)
-    const pool =
-      shelf === 'known' ? skillService.findAll(projectPath) : skillService.findEnabled(projectPath)
-    this.skills = pool.filter((s) => wanted.has(s.name))
+    if (shelf === 'enabled') {
+      this.skills = skillService.findModelInvocable(projectPath)
+    } else {
+      const wanted = new Set(shelf.known)
+      this.skills = skillService.findAll(projectPath).filter((s) => wanted.has(s.name))
+    }
 
     // hint 无条件参与本实例的 schema 构造：空架子就得到空 hint，不会留着别处的示例名
     const examples = this.skills
@@ -183,10 +182,11 @@ export class SkillTool extends BaseTool<SkillParams> {
 }
 
 import { registerBuiltinTool } from './toolRegistry'
+// 不再 hidden：档案 `shuvix-tools` 写 `skill` 才带技能工具（2026-10-28），agent md 属性卡的工具选择器
+// 得列出它。没有 factory —— 它按 agent 装（agentHost），不是会话级的内置工具
 registerBuiltinTool({
   name: 'skill',
   group: 'general',
-  hidden: true,
   getLabel: () => t('tool.skillLabel'),
   getHint: () => t('tool.skillHint'),
   presentation: {

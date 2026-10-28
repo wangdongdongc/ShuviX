@@ -152,8 +152,9 @@ function removeTempWorkspaceIfUnused(dir: string, owner: string): void {
 }
 
 /**
- * 只留勾选里该有的条目并去重保序：会话级工具名（mcp:/skill:）与取消档案声明项的记号
- * （`-mcp:` / `-skill:`，见 chat-protocol `toolSelection.ts`）—— 扩展能力勾选里不该有别的东西
+ * 只留勾选里该有的条目并去重保序：会话级工具名（mcp:）与取消档案声明项的记号
+ * （`-mcp:`，见 chat-protocol `toolSelection.ts`）—— 扩展能力勾选里不该有别的东西。旧会话里存着的
+ * `skill:` / `-skill:` 条目在这里被滤掉：技能不再按会话勾选（2026-10-28）
  */
 function sessionScopedTools(names: readonly string[]): string[] {
   return [...new Set(names.filter(isToolSelectionEntry))]
@@ -286,8 +287,8 @@ export class SessionService {
   }
 
   /**
-   * 新会话从项目继承的扩展能力勾选（mcp:/skill:）：
-   *  - 项目在编辑页保存过扩展能力 → 那一份（只做 mcp:/skill: 净化与去重）；
+   * 新会话从项目继承的扩展能力勾选（mcp:）：
+   *  - 项目在编辑页保存过扩展能力 → 那一份（只做 mcp: 净化与去重）；
    *  - 项目从没保存过、不属于任何项目（或项目已删）→ 空。
    * 没有「默认全开」：不管在不在项目里，没人勾过就一个都不勾，要用什么由用户自己勾。
    *
@@ -317,7 +318,8 @@ export class SessionService {
   }
 
   /**
-   * 会话的扩展能力勾选（`settings.enabledTools`）原值。
+   * 会话的扩展能力勾选（`settings.enabledTools`）原值 —— 只滤掉不该在勾选里的条目（旧会话里存着的
+   * `skill:` / `-skill:`，见 sessionScopedTools），不按可用性滤：已经没了的服务器照样当作勾着交出去。
    *
    * 缺这个键的只有改制前建的旧会话：按新建会话同一条规则（inheritedSelection —— 子会话抄父会话，
    * 其余按项目继承）算一次**并落库** —— 之后它和新会话一样是一份快照，不跟着项目配置的后续修改
@@ -327,7 +329,7 @@ export class SessionService {
     const row = sessionRecords.pick(sessionId, ['projectId', 'parentId', 'settings'])
     if (!row) return []
     const stored = row.settings?.enabledTools
-    if (Array.isArray(stored)) return stored
+    if (Array.isArray(stored)) return sessionScopedTools(stored)
     const inherited = this.inheritedSelection(row.parentId, row.projectId)
     sessionRecords.updateSettings(sessionId, { enabledTools: inherited })
     log.info(`补齐旧会话的扩展能力勾选 session=${sessionId} tools=[${inherited.join(',')}]`)
@@ -467,7 +469,8 @@ export class SessionService {
   insertForkRow(source: Session, id: string): Session {
     const from = source.settings
     const settings: SessionSettings = {}
-    if (from.enabledTools) settings.enabledTools = [...from.enabledTools]
+    // 扩展能力勾选只带 mcp: 条目过去：旧会话里存着的 skill: 条目不再被认，分支不必再抄一份
+    if (from.enabledTools) settings.enabledTools = sessionScopedTools(from.enabledTools)
     if (from.knowledgeBases) settings.knowledgeBases = [...from.knowledgeBases]
     if (from.bot) settings.bot = from.bot
     if (from.agentProfile) settings.agentProfile = from.agentProfile
@@ -555,12 +558,11 @@ export class SessionService {
    * 日志之外调用方也该看得见）。档案声明的思考档位（`shuvix-thinking`）同样作为种子写进树，
    * 经 `applied.thinkingLevel` 回传 —— 之后 seedRunConfig 只补档案没声明的那几项。
    *
-   * 工具（`shuvix-tools` 里的 mcp:/skill:）**不写进勾选**：档案声明的每一项经 createAgent 的名单
-   * 归一对这条会话恒生效（选择器里画成已勾、锁住），会话勾选只在其上叠加。于是 create 时从父会话
+   * 工具（`shuvix-tools` 里的 mcp:）**不写进勾选**：档案声明的每一项经 createAgent 的名单
+   * 归一对这条会话缺省生效（选择器里画成默认勾上），会话勾选只在其上增减。于是 create 时从父会话
    * 抄来的勾选原样留着 —— 从前「声明了就替换勾选」是让声明生效的唯一办法，如今它只剩一个作用：
-   * 把父会话的 MCP 与 skill 摘掉。内置 coding 声明了 `skill:builtin:drawing` 之后，那等于每条
-   * coding 子会话都丢掉继承。
-   * `applied.tools` 回传档案声明的那截（恒生效的部分，可能为空），不代表写了什么。
+   * 把父会话的 MCP 摘掉。技能不在其中：档案写了 `skill` 就带上全部启用着的技能。
+   * `applied.tools` 回传档案声明的那截（缺省生效的部分，可能为空），不代表写了什么。
    */
   async pinAgentProfile(
     sessionId: string,
@@ -620,7 +622,7 @@ export class SessionService {
       log.info(`pinAgentProfile 应用档案思考档位 ${thinkingLevel}`)
     }
 
-    // 档案声明的 mcp:/skill: 由名单归一缺省带上，不写进勾选：继承来的那份（含取消记号）原样留着
+    // 档案声明的 mcp: 由名单归一缺省带上，不写进勾选：继承来的那份（含取消记号）原样留着
     const tools = [...new Set(profile.tools.filter(isSessionScopedToolName))]
 
     broadcastSessionConfigChanged(sessionId)
@@ -902,7 +904,7 @@ export class SessionService {
     workingDirectory: string
     /** 会话设置里的扩展能力勾选原值（旧会话在这里补键）—— 前端展示与整份替换写入的基准 */
     selectedTools: string[]
-    /** 创建 Agent 用的勾选：原值滤掉此刻不可用的 MCP / skill */
+    /** 创建 Agent 用的勾选：原值滤掉此刻不可用的 MCP */
     enabledTools: string[]
     project: Pick<Project, 'path' | 'settings'> | undefined
     modelMetadata: SessionModelMetadata
@@ -932,15 +934,14 @@ export class SessionService {
       ? projectDao.pick(session.projectId, ['path', 'settings'])
       : undefined
     const workingDirectory = workingDirectoryOf(sessionId, project?.path, session.settings)
-    // 滤掉已不可用的 MCP（配置里已停用 / 已删）与 skill（已删 / 已停用）；设置里的原值不动。
+    // 滤掉已不可用的 MCP（配置里已停用 / 已删）；设置里的原值不动。
     // 可用性**不看连接状态** —— MCP 惰性启动，没连上的那台正要在下一步（装配工具）被连起来。
     // `mcp:chrome`（用户真实的 Chrome）不接受会话勾选，加或取消都不收：只由 Chrome 标签页会话的
     // 基座档案声明，那是 tab 基座唯一的浏览能力 —— 经 IPC 写进去的取消记号也不能把它摘掉
     const enabledTools = filterAvailableTools(
       selectedTools.filter(
         (name) => name !== CHROME_TOOL_NAME && name !== toolOptOut(CHROME_TOOL_NAME)
-      ),
-      project?.path
+      )
     )
     return {
       provider,

@@ -92,30 +92,33 @@ describe('lock · follows in-process initialization (option A)', () => {
   )
 
   it(
-    'LA-02 after the clear, createAgent / the next send creates a fresh agent from the current config (model, selection, sandbox pin): one config read, one resolution, builtins built pinned, agent_created once',
+    'LA-02 after the clear, createAgent / the next send creates a fresh agent from the current config (model, selection, sandbox pin, skill shelf): one config read, one resolution, builtins built pinned, agent_created once',
     async () => {
       const { t, config } = await scenarioW()
       const session = await t.open()
       t.kit.queue(answer('one'))
       expect(await session.submitUser('u1')).toEqual({})
       expect(session.lock).toEqual(lockW())
-      // 换进程之间改了会话配置与宿主的沙箱开关：锁住时它们不作数，清锁之后下一次创建按它们来
+      // 换进程之间改了会话配置、宿主的沙箱开关与启用着的技能：锁住时它们不作数，清锁之后下一次创建按它们来
       config.model = { provider: 'faux', modelId: 'faux-2' }
-      config.toolOverlay = ['skill:pdf']
-      const t2 = await t.restart({ toolHost: scenarioToolHost({ sandbox: false }) })
+      config.toolOverlay = []
+      const t2 = await t.restart({
+        toolHost: scenarioToolHost({ sandbox: false, skills: ['pdf'] })
+      })
       const reopened = await t2.open()
       expect(reopened.lock).toBeUndefined()
 
       const created = await reopened.createAgent()
       expect(created.model).toEqual({ provider: 'faux', modelId: 'faux-2' })
       expect(created.sandboxed).toBe(false)
+      expect(created.skills).toEqual(['pdf'])
       expect(created.mcp).toEqual({})
       expect(created.toolNames).not.toContain('mcp__ctx__resolve')
       expect(t2.configCalls).toEqual(['s1'])
       expect(t2.toolHost.resolveCalls).toHaveLength(1)
       expect(t2.toolHost.rebuildCalls).toEqual([])
       expect(t2.toolHost.builtinCalls).toEqual([
-        { sessionId: 's1', sandboxed: false, skills: ['builtin:drawing', 'pdf'] }
+        { sessionId: 's1', sandboxed: false, skills: ['pdf'] }
       ])
       expect(toolDescription(t2, 'shuvix.builtin', 'bash')).toContain('sandboxed=false')
       expect(t2.broadcastsOf('agent_created')).toHaveLength(1)
@@ -409,15 +412,15 @@ describe('lock · follows in-process initialization (option A)', () => {
     'LA-11 the lock records the selection it was created from (agent.init reports it while locked): a server that failed to connect stays in it, profile-declared tools do not; a malformed selection read back is dropped, not the whole lock',
     async () => {
       const { t, config } = await scenarioW()
-      config.toolOverlay = ['mcp:ctx', 'skill:pdf', 'mcp:broken', 'mcp:ctx']
+      config.toolOverlay = ['mcp:ctx', 'mcp:broken', 'mcp:ctx']
       t.toolHost.mcp('broken').failConnect()
       const session = await t.open()
       const lock = await session.createAgent()
-      expect(lock.selection).toEqual(['mcp:ctx', 'skill:pdf', 'mcp:broken'])
+      expect(lock.selection).toEqual(['mcp:ctx', 'mcp:broken'])
       expect(Object.keys(lock.mcp)).toEqual(['ctx'])
       expect(lock.skills).toEqual(['builtin:drawing', 'pdf'])
       expect((await storedLock(session)) as { selection?: unknown }).toMatchObject({
-        selection: ['mcp:ctx', 'skill:pdf', 'mcp:broken']
+        selection: ['mcp:ctx', 'mcp:broken']
       })
       const { selection: _selection, ...rest } = lock
       expect(parseLockRecord({ ...lockRecordJson(lock), selection: 'mcp:ctx' })).toEqual(rest)

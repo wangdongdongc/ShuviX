@@ -83,15 +83,20 @@ export function registerStubBuiltins(
       }
     })
   }
-  for (const name of ['skill', 'agent']) {
-    registerBuiltinTool({
-      name,
-      group: 'agent',
-      hidden: true,
-      getLabel: () => name,
-      getHint: () => name
-    })
-  }
+  // 与真注册项同形：`skill` 不再 hidden（agent md 的工具选择器要列出它，2026-10-28），`agent` 仍 hidden
+  registerBuiltinTool({
+    name: 'skill',
+    group: 'general',
+    getLabel: () => 'skill',
+    getHint: () => 'skill'
+  })
+  registerBuiltinTool({
+    name: 'agent',
+    group: 'agent',
+    hidden: true,
+    getLabel: () => 'agent',
+    getHint: () => 'agent'
+  })
   return () => {
     for (const r of REGISTERED) unregisterBuiltinTool(r.name)
     unregisterBuiltinTool('skill')
@@ -184,7 +189,7 @@ export function mcpRegistration(server: string, d: McpToolDeclaration): ToolRegi
 
 // ─── N_W / R_D / L_D ──────────────────────────────────────────────────
 
-/** work-root-darwin 那份 fixture 的归一名单 */
+/** work-root-darwin 那份 fixture 的归一名单（技能工具写作 `skill`：货架是启用着的全部，名单不点名） */
 export const N_W: readonly string[] = [
   'bash',
   'powershell',
@@ -199,10 +204,9 @@ export const N_W: readonly string[] = [
   'session',
   'knowledge',
   'artifact',
-  'skill:builtin:drawing',
+  'skill',
   'mcp:context7',
-  'mcp:ssh',
-  'skill:pdf'
+  'mcp:ssh'
 ]
 
 export const MODEL = { provider: 'anthropic', modelId: 'claude-sonnet-4-5' } as const
@@ -290,7 +294,7 @@ export function SR_D(over: Partial<AgentToolsRequest> = {}): AgentToolsRequest {
     agentId: 'sub-a1',
     canSpawn: true,
     profile: inProcess(profileOf('coding')),
-    names: ['read', 'ls', 'grep', 'agent', 'skill:builtin:drawing', 'skill:pdf', 'mcp:context7'],
+    names: ['read', 'ls', 'grep', 'agent', 'skill', 'mcp:context7'],
     model: { ...HAIKU },
     thinkingLevel: 'off',
     cwd: '',

@@ -66,7 +66,7 @@ vi.mock('../../services/mcpService', () => ({
   }
 }))
 vi.mock('../../services/skillService', () => ({
-  skillService: { findEnabled: () => [], findAll: () => [] }
+  skillService: { findEnabled: () => [], findAll: () => [], findModelInvocable: () => [] }
 }))
 vi.mock('../AgentTool', () => ({ createAgentTool: () => ({ name: 'agent' }) }))
 vi.mock('../../services/wrapToolOutput', () => ({ wrapDurableTool: (tool: object) => tool }))
@@ -161,6 +161,6 @@ describe('沙箱钉子的规则（真管理器）', () => {
 
   it('H11-12 与名单无关：tab 的名单（没有 bash）在沙箱可用时照样报 true（PIN-06）', async () => {
     const { host } = await load('darwin')
-    expect(await resolveSandboxed(host, ['mcp:chrome', 'ask', 'skill:builtin:drawing'])).toBe(true)
+    expect(await resolveSandboxed(host, ['mcp:chrome', 'ask', 'skill'])).toBe(true)
   })
 })

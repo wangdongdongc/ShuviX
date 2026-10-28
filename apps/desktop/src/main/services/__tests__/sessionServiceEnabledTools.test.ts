@@ -1,6 +1,7 @@
 /**
- * sessionService —— 会话的扩展能力勾选（`settings.enabledTools`，只收 mcp:/skill: 与取消档案声明项的
- * 记号 `-mcp:` / `-skill:`，见 chat-protocol `toolSelection.ts`）。
+ * sessionService —— 会话的扩展能力勾选（`settings.enabledTools`，只收 mcp: 与取消档案声明项的
+ * 记号 `-mcp:`，见 chat-protocol `toolSelection.ts`）。技能不在勾选里（2026-10-28：启用着的全部上带
+ * `skill` 工具的 agent 的货架）—— 继承、抄父会话、写入口都把旧的 `skill:` / `-skill:` 条目滤掉。
  *
  * 契约：
  *   - `create` **恒写键**（空数组也写）：项目会话继承项目**保存过**的勾选，项目没保存过 /
@@ -255,21 +256,23 @@ describe('EXT-U-6 / 7 / 8 create 恒写键，项目会话继承项目保存过�
     ['普通会话', {}],
     ['bot 会话', { bot: 'scout' }],
     ['笔记本会话', { notebookPath: 'n.md' }]
-  ])('EXT-U-7 %s：继承项目保存过的勾选', (_label, extra) => {
-    seedProject('p1', { enabledTools: ['mcp:a', 'skill:b'] })
+  ])('EXT-U-7 %s：继承项目保存过的勾选（项目里存着的旧 skill: 条目不继承）', (_label, extra) => {
+    seedProject('p1', { enabledTools: ['mcp:a', 'skill:b', 'mcp:c'] })
     sessionService.create({ projectId: 'p1', ...extra })
-    expect(insertedSettings().enabledTools).toEqual(['mcp:a', 'skill:b'])
+    expect(insertedSettings().enabledTools).toEqual(['mcp:a', 'mcp:c'])
   })
 
-  it('EXT-U-8 继承只留 mcp:/skill:（大小写敏感、去重保序），且不按此刻可用性过滤', () => {
-    seedProject('p1', { enabledTools: ['bash', 'skill:b', 'MCP:Up', 'mcp:a', 'skill:b'] })
+  it('EXT-U-8 继承只留 mcp:（大小写敏感、去重保序；skill: 丢掉），且不按此刻可用性过滤', () => {
+    seedProject('p1', {
+      enabledTools: ['bash', 'mcp:b', 'skill:b', 'MCP:Up', 'mcp:a', 'mcp:b', 'skill:b']
+    })
     sessionService.create({ projectId: 'p1' })
-    expect(insertedSettings().enabledTools).toEqual(['skill:b', 'mcp:a'])
+    expect(insertedSettings().enabledTools).toEqual(['mcp:b', 'mcp:a'])
 
     // MCP 的「可用」= 此刻已连接：刚启动还没连上的服务器若在这里被滤掉，落库就是永久丢项
     mocks.filterAvailableTools.mockImplementation((tools) => tools.filter((n) => n !== 'mcp:a'))
     sessionService.create({ projectId: 'p1' })
-    expect(insertedSettings().enabledTools).toEqual(['skill:b', 'mcp:a'])
+    expect(insertedSettings().enabledTools).toEqual(['mcp:b', 'mcp:a'])
   })
 
   it.each([
@@ -279,19 +282,22 @@ describe('EXT-U-6 / 7 / 8 create 恒写键，项目会话继承项目保存过�
   ])(
     'EXT-U-8b %s：项目里取消档案声明项的记号原样继承（净化只丢内置名与畸形记号、去重保序）',
     (_label, extra) => {
-      // 项目上取消了作图技能 → 这个项目里每一条新会话都不带它（bot / 笔记本会话也一样）
+      // 项目上取消了档案声明的浏览器 → 这个项目里每一条新会话都不带它（bot / 笔记本会话也一样）；
+      // 旧的技能取消记号 `-skill:…` 不再是记号，与内置名一起丢掉
       seedProject('p1', {
         enabledTools: [
-          '-skill:builtin:drawing',
+          '-mcp:browser',
           'bash',
           '-read',
-          'skill:b',
+          'mcp:b',
+          '-mcp:browser',
+          '--mcp:z',
           '-skill:builtin:drawing',
-          '--skill:z'
+          'skill:b'
         ]
       })
       sessionService.create({ projectId: 'p1', ...extra })
-      expect(insertedSettings().enabledTools).toEqual(['-skill:builtin:drawing', 'skill:b'])
+      expect(insertedSettings().enabledTools).toEqual(['-mcp:browser', 'mcp:b'])
     }
   )
 })
@@ -304,10 +310,10 @@ describe('EXT-U-9 / 10 子会话抄父会话的勾选', () => {
     seedSession({
       id: PARENT,
       projectId: 'p1',
-      settings: { enabledTools: ['skill:p', 'read', 'skill:p'] }
+      settings: { enabledTools: ['mcp:p', 'read', 'skill:p', 'mcp:p'] }
     })
     sessionService.create({ parentId: PARENT })
-    expect(insertedSettings().enabledTools).toEqual(['skill:p'])
+    expect(insertedSettings().enabledTools).toEqual(['mcp:p'])
   })
 
   it('EXT-U-9 (b) 父会话勾的是空 → 子会话也是空，不回落项目那份', () => {
@@ -320,16 +326,20 @@ describe('EXT-U-9 / 10 子会话抄父会话的勾选', () => {
 
   it('EXT-U-9c 父会话的取消记号一并抄过去（不回落项目那份）', () => {
     seedProject('p1', { enabledTools: ['mcp:proj'] })
-    seedSession({ id: PARENT, projectId: 'p1', settings: { enabledTools: ['-mcp:x', 'skill:p'] } })
+    seedSession({
+      id: PARENT,
+      projectId: 'p1',
+      settings: { enabledTools: ['-mcp:x', 'mcp:p', '-skill:y'] }
+    })
     sessionService.create({ parentId: PARENT })
-    expect(insertedSettings().enabledTools).toEqual(['-mcp:x', 'skill:p'])
+    expect(insertedSettings().enabledTools).toEqual(['-mcp:x', 'mcp:p'])
   })
 
   it('EXT-U-10 父会话是缺键旧行 → 按父会话的项目继承；create 不替父会话落库', () => {
-    seedProject('p1', { enabledTools: ['skill:x'] })
+    seedProject('p1', { enabledTools: ['mcp:x', 'skill:x'] })
     seedSession({ id: PARENT, projectId: 'p1', settings: {} })
     sessionService.create({ parentId: PARENT })
-    expect(insertedSettings().enabledTools).toEqual(['skill:x'])
+    expect(insertedSettings().enabledTools).toEqual(['mcp:x'])
     // 父会话的补键归它自己的首次解析；create 顺手替它写，会绕开「只补一次」的那条路
     expect(writesTo(PARENT)).toEqual([])
     expect('enabledTools' in sessions.get(PARENT)!.settings).toBe(false)
@@ -340,12 +350,13 @@ describe('EXT-U-9 / 10 子会话抄父会话的勾选', () => {
 
 describe('EXT-U-11 缺键的旧根会话：首次解析按同一条规则补一次并落库', () => {
   it('EXT-U-11 首次 initAgent 补项目那份并恰好写一次；之后项目改了也不漂移', async () => {
-    seedProject('p1', { enabledTools: ['skill:x'] })
+    // 补键与继承同一条净化：项目里存着的旧 skill: 条目补不进来
+    seedProject('p1', { enabledTools: ['mcp:x', 'skill:legacy'] })
     seedSession({ id: SID, projectId: 'p1', parentId: null, settings: {} })
 
     const first = await sessionService.initAgent(SID)
-    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:x'] }]])
-    expect(first.enabledTools).toEqual(['skill:x'])
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:x'] }]])
+    expect(first.enabledTools).toEqual(['mcp:x'])
     // 补键 bump updatedAt（DAO updateSettings），不算用户动手
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
 
@@ -353,7 +364,7 @@ describe('EXT-U-11 缺键的旧根会话：首次解析按同一条规则补一�
     projects.get('p1')!.settings = { enabledTools: ['mcp:y'] }
     const second = await sessionService.initAgent(SID)
     expect(writesTo(SID)).toHaveLength(1)
-    expect(second.enabledTools).toEqual(['skill:x'])
+    expect(second.enabledTools).toEqual(['mcp:x'])
   })
 
   it('EXT-U-11 无项目的旧会话补的是 []，键确实被写入', async () => {
@@ -364,36 +375,36 @@ describe('EXT-U-11 缺键的旧根会话：首次解析按同一条规则补一�
   })
 
   it('EXT-U-11 首次解析走 resolveAgentConfig（创建 agent 时）同样补键，toolOverlay 就是补上的值', async () => {
-    seedProject('p1', { enabledTools: ['skill:x'] })
+    seedProject('p1', { enabledTools: ['mcp:x'] })
     seedSession({ id: SID, projectId: 'p1', settings: {} })
 
     const config = await sessionService.resolveAgentConfig(SID)
-    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:x'] }]])
-    expect(config.toolOverlay).toEqual(['skill:x'])
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:x'] }]])
+    expect(config.toolOverlay).toEqual(['mcp:x'])
   })
 
   it('EXT-U-11 补键同样不按可用性过滤：此刻离线的 MCP 照样补进去', async () => {
-    seedProject('p1', { enabledTools: ['skill:x', 'mcp:offline'] })
+    seedProject('p1', { enabledTools: ['mcp:x', 'mcp:offline'] })
     seedSession({ id: SID, projectId: 'p1', settings: {} })
     mocks.filterAvailableTools.mockImplementation((tools) =>
       tools.filter((n) => n !== 'mcp:offline')
     )
 
     const init = await sessionService.initAgent(SID)
-    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:x', 'mcp:offline'] }]])
-    expect(init.enabledTools).toEqual(['skill:x', 'mcp:offline'])
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:x', 'mcp:offline'] }]])
+    expect(init.enabledTools).toEqual(['mcp:x', 'mcp:offline'])
   })
 })
 
 describe('EXT-U-11b 缺键的旧子会话：补键抄父会话，不替父会话落库', () => {
   it('EXT-U-11b 父会话有勾选 → 子会话补父会话那份；父行 0 写入', async () => {
     seedProject('p1', { enabledTools: ['mcp:proj'] })
-    seedSession({ id: 'P', projectId: 'p1', settings: { enabledTools: ['skill:p'] } })
+    seedSession({ id: 'P', projectId: 'p1', settings: { enabledTools: ['mcp:p', 'skill:p'] } })
     seedSession({ id: SID, projectId: 'p1', parentId: 'P', settings: {} })
 
     const init = await sessionService.initAgent(SID)
-    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:p'] }]])
-    expect(init.enabledTools).toEqual(['skill:p'])
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:p'] }]])
+    expect(init.enabledTools).toEqual(['mcp:p'])
     expect(writesTo('P')).toEqual([])
   })
 
@@ -401,7 +412,7 @@ describe('EXT-U-11b 缺键的旧子会话：补键抄父会话，不替父会话
     // 子行的 projectId 故意与父行不同（正常数据里二者恒相同）：钉的是「按父会话的项目」——
     // 与父会话下次自己解析出来的是同一份 —— 而不是碰巧落在同一个项目上
     seedProject('p1', { enabledTools: ['mcp:proj'] })
-    seedProject('p-child', { enabledTools: ['skill:child-proj'] })
+    seedProject('p-child', { enabledTools: ['mcp:child-proj'] })
     seedSession({ id: 'P', projectId: 'p1', settings: {} })
     seedSession({ id: SID, projectId: 'p-child', parentId: 'P', settings: {} })
 
@@ -421,26 +432,26 @@ describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用
     seedSession({
       id: SID,
       projectId: 'p1',
-      settings: { enabledTools: ['skill:ok', 'mcp:offline'] }
+      settings: { enabledTools: ['mcp:ok', 'mcp:offline'] }
     })
     mocks.filterAvailableTools.mockImplementation((tools) =>
       tools.filter((n) => n !== 'mcp:offline')
     )
 
     // UI 要的是原值：离线的 MCP 显示为已勾，整份替换写入时才不会被抹掉
-    expect((await sessionService.initAgent(SID)).enabledTools).toEqual(['skill:ok', 'mcp:offline'])
+    expect((await sessionService.initAgent(SID)).enabledTools).toEqual(['mcp:ok', 'mcp:offline'])
 
-    expect((await sessionService.resolveAgentConfig(SID)).toolOverlay).toEqual(['skill:ok'])
+    expect((await sessionService.resolveAgentConfig(SID)).toolOverlay).toEqual(['mcp:ok'])
     // 过滤只作用于这一次创建：设置里的原值不动（服务器下次连上、重建 agent 就又回来了）
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['skill:ok', 'mcp:offline'])
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:ok', 'mcp:offline'])
 
     // 只打开会话不读配置（创建 agent 才读，锁住之后运行时不再读 —— 见运行时的 LS-03）
     await sessionService.ensureAgentSession(SID)
     expect(fakeHost.callsOf('open')).toEqual([SID])
     // 下一次创建现读：库里改了就是改了的那份
-    sessions.get(SID)!.settings.enabledTools = ['skill:changed']
-    expect((await sessionService.resolveAgentConfig(SID)).toolOverlay).toEqual(['skill:changed'])
+    sessions.get(SID)!.settings.enabledTools = ['mcp:changed']
+    expect((await sessionService.resolveAgentConfig(SID)).toolOverlay).toEqual(['mcp:changed'])
   })
 
   it('EXT-U-12c 勾选里的 mcp:chrome 与 -mcp:chrome 都不作数：过滤与创建都见不到它们；init 回原值；不写库', async () => {
@@ -451,26 +462,26 @@ describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用
     seedSession({
       id: SID,
       projectId: 'p1',
-      settings: { enabledTools: ['mcp:chrome', '-mcp:chrome', 'mcp:ssh', 'skill:x'] }
+      settings: { enabledTools: ['mcp:chrome', '-mcp:chrome', 'mcp:ssh', 'mcp:x'] }
     })
 
     expect((await sessionService.initAgent(SID)).enabledTools).toEqual([
       'mcp:chrome',
       '-mcp:chrome',
       'mcp:ssh',
-      'skill:x'
+      'mcp:x'
     ])
     const config = await sessionService.resolveAgentConfig(SID)
     const filtered = mocks.filterAvailableTools.mock.calls.map(([tools]) => tools)
     expect(filtered.length).toBeGreaterThan(0)
-    for (const tools of filtered) expect(tools).toEqual(['mcp:ssh', 'skill:x'])
-    expect(config.toolOverlay).toEqual(['mcp:ssh', 'skill:x'])
+    for (const tools of filtered) expect(tools).toEqual(['mcp:ssh', 'mcp:x'])
+    expect(config.toolOverlay).toEqual(['mcp:ssh', 'mcp:x'])
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
     expect(sessions.get(SID)!.settings.enabledTools).toEqual([
       'mcp:chrome',
       '-mcp:chrome',
       'mcp:ssh',
-      'skill:x'
+      'mcp:x'
     ])
   })
 
@@ -479,44 +490,65 @@ describe('EXT-U-12 勾选只在创建根 Agent 时读一次，此刻才按可用
     seedSession({
       id: SID,
       projectId: 'p1',
-      settings: { enabledTools: ['-skill:builtin:drawing', 'skill:x'] }
+      settings: { enabledTools: ['-mcp:browser', 'mcp:x'] }
     })
 
-    expect((await sessionService.initAgent(SID)).enabledTools).toEqual([
-      '-skill:builtin:drawing',
-      'skill:x'
-    ])
+    expect((await sessionService.initAgent(SID)).enabledTools).toEqual(['-mcp:browser', 'mcp:x'])
     const config = await sessionService.resolveAgentConfig(SID)
     const filtered = mocks.filterAvailableTools.mock.calls.map(([tools]) => tools)
     expect(filtered.length).toBeGreaterThan(0)
-    for (const tools of filtered) expect(tools).toEqual(['-skill:builtin:drawing', 'skill:x'])
-    expect(config.toolOverlay).toContain('-skill:builtin:drawing')
-    expect(config.toolOverlay).toEqual(['-skill:builtin:drawing', 'skill:x'])
+    for (const tools of filtered) expect(tools).toEqual(['-mcp:browser', 'mcp:x'])
+    expect(config.toolOverlay).toContain('-mcp:browser')
+    expect(config.toolOverlay).toEqual(['-mcp:browser', 'mcp:x'])
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+  })
+
+  it('EXT-U-12e 会话自己存着旧的 skill: / -skill: 条目：读的时候就滤掉 —— init 回的、过滤收到的、toolOverlay 都只有 mcp:；库里那行不改写', async () => {
+    seedProject('p1')
+    seedSession({
+      id: SID,
+      projectId: 'p1',
+      settings: { enabledTools: ['mcp:a', 'skill:x', '-skill:builtin:drawing'] }
+    })
+
+    expect((await sessionService.initAgent(SID)).enabledTools).toEqual(['mcp:a'])
+    const config = await sessionService.resolveAgentConfig(SID)
+    const filtered = mocks.filterAvailableTools.mock.calls.map(([tools]) => tools)
+    expect(filtered.length).toBeGreaterThan(0)
+    for (const tools of filtered) expect(tools).toEqual(['mcp:a'])
+    expect(config.toolOverlay).toEqual(['mcp:a'])
+    // 读侧滤，不回写：那几条旧条目留在库里也什么都不做（下一次整份写入时自然被替换掉）
+    expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual([
+      'mcp:a',
+      'skill:x',
+      '-skill:builtin:drawing'
+    ])
   })
 })
 
 // ─── 写入口 ────────────────────────────────────────────────────────────────
 
 describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
-  it('EXT-U-13 没有运行时：整份替换、只收 mcp:/skill:（去重保序、大小写敏感），不按可用性过滤；每次广播一次；没开、没镜像 → 不碰运行时', async () => {
-    seedSession({ id: SID, settings: { enabledTools: ['skill:old'] } })
-    // skill:unknown 此刻不可用 —— 照样落库（可用性只在创建 Agent 时过滤）
+  it('EXT-U-13 没有运行时：整份替换、只收 mcp:（去重保序、大小写敏感；skill: 丢掉），不按可用性过滤；每次广播一次；没开、没镜像 → 不碰运行时', async () => {
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:old'] } })
+    // mcp:unknown 此刻不可用 —— 照样落库（可用性只在创建 Agent 时过滤）
     mocks.filterAvailableTools.mockImplementation((tools) =>
-      tools.filter((n) => n !== 'skill:unknown')
+      tools.filter((n) => n !== 'mcp:unknown')
     )
 
     expect(
       await sessionService.updateEnabledTools(SID, [
-        'skill:a',
+        'mcp:a',
         'bash',
-        'mcp:b',
         'skill:a',
+        'mcp:b',
+        'mcp:a',
         'MCP:c',
-        'skill:unknown'
+        'mcp:unknown'
       ])
     ).toBe(true)
-    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:a', 'mcp:b', 'skill:unknown'] }]])
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:a', 'mcp:b', 'mcp:unknown'] }]])
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID]])
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
 
@@ -529,28 +561,29 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     expect(fakeHost.calls).toEqual([])
   })
 
-  it('EXT-U-13b 取消记号照收（去重保序）；内置名的 -read、双减号、大写前缀不是记号，丢掉；锁着照样接受并交给 agent 重配', async () => {
+  it('EXT-U-13b 取消记号照收（去重保序）；内置名的 -read、双减号、大写前缀、旧的 -skill: 不是记号，丢掉；锁着照样接受并交给 agent 重配', async () => {
     seedSession({ id: SID, settings: { enabledTools: [] } })
     expect(
       await sessionService.updateEnabledTools(SID, [
-        '-skill:a',
-        'skill:a',
+        '-mcp:a',
+        'mcp:a',
         '-read',
         '--mcp:b',
         '-MCP:c',
-        '-skill:a',
+        '-mcp:a',
+        '-skill:x',
         '-mcp:d'
       ])
     ).toBe(true)
-    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['-skill:a', 'skill:a', '-mcp:d'] }]])
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['-mcp:a', 'mcp:a', '-mcp:d'] }]])
     expect(mocks.broadcastSessionConfigChanged.mock.calls).toEqual([[SID]])
 
     // 锁着（开着）：取消一项同样是改勾选 —— 写下、广播，再交给锁住的 agent 重配恰一次（在写入之后）
     const session = fakeHost.put(SID, { lock: lockRecord() })
     const reconfigure = vi.spyOn(session, 'reconfigureAgent')
-    expect(await sessionService.updateEnabledTools(SID, ['-skill:builtin:drawing'])).toBe(true)
+    expect(await sessionService.updateEnabledTools(SID, ['-mcp:browser'])).toBe(true)
     expect(writesTo(SID)).toHaveLength(2)
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['-skill:builtin:drawing'])
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['-mcp:browser'])
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledTimes(2)
     expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
     expect(reconfigure.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -563,8 +596,8 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
 
     // ① 没开着、锁镜像说有 agent（上一次进程里建的），存储不在：写下；peek 落空，不重配
     sessions.get(SID)!.settings.agentLocked = true
-    expect(await sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(true)
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['skill:a'])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:a'])).toBe(true)
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:a'])
     expect(fakeHost.callsOf('peek')).toEqual([SID])
     expect((await sessionService.initAgent(SID)).created).toBe(true)
 
@@ -573,14 +606,14 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     fakeHost.configure = (reopened) => {
       reopened.lock = lockRecord()
     }
-    expect(await sessionService.updateEnabledTools(SID, ['skill:b'])).toBe(true)
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['skill:b'])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:b'])).toBe(true)
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:b'])
     const session = fakeHost.get(SID)!
     expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
     fakeHost.configure = undefined
 
     // ② 开着、锁着：以运行时的锁为准 —— 写下、重配
-    expect(await sessionService.updateEnabledTools(SID, ['skill:c'])).toBe(true)
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:c'])).toBe(true)
     expect(session.callsOf('reconfigureAgent')).toHaveLength(2)
     expect((await sessionService.initAgent(SID)).created).toBe(true)
 
@@ -588,16 +621,16 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     const release = gate()
     session.destroyGate = release
     const r = sessionService.invalidateAgent(SID)
-    expect(await sessionService.updateEnabledTools(SID, ['skill:d'])).toBe(true)
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['skill:d'])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:d'])).toBe(true)
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:d'])
     expect(session.callsOf('reconfigureAgent')).toHaveLength(3)
     // 销毁可能卡很久：窗口刷新时事件早已错过，前端的 created 只能靠这一位打底
     expect((await sessionService.initAgent(SID)).created).toBe(true)
     expect(writesTo(SID).map(([, patch]) => patch)).toEqual([
-      { enabledTools: ['skill:a'] },
-      { enabledTools: ['skill:b'] },
-      { enabledTools: ['skill:c'] },
-      { enabledTools: ['skill:d'] }
+      { enabledTools: ['mcp:a'] },
+      { enabledTools: ['mcp:b'] },
+      { enabledTools: ['mcp:c'] },
+      { enabledTools: ['mcp:d'] }
     ])
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledTimes(4)
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
@@ -606,12 +639,12 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     release.release()
     await r
     expect((await sessionService.initAgent(SID)).created).toBe(false)
-    expect(await sessionService.updateEnabledTools(SID, ['skill:e'])).toBe(true)
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['skill:e'])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:e'])).toBe(true)
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:e'])
   })
 
   it('EXT-U-15 (a) 会话不存在 → false，零写入零广播', async () => {
-    expect(await sessionService.updateEnabledTools('no-such-session', ['skill:a'])).toBe(false)
+    expect(await sessionService.updateEnabledTools('no-such-session', ['mcp:a'])).toBe(false)
     expect(mocks.daoUpdateSettings).not.toHaveBeenCalled()
     expect(mocks.broadcastSessionConfigChanged).not.toHaveBeenCalled()
   })
@@ -624,8 +657,8 @@ describe('EXT-U-13 / 14 / 15 写入口 updateEnabledTools', () => {
     await session.submitUser('hi')
     expect(session.lock).toBeUndefined()
 
-    expect(await sessionService.updateEnabledTools(SID, ['skill:a'])).toBe(true)
-    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['skill:a'] }]])
+    expect(await sessionService.updateEnabledTools(SID, ['mcp:a'])).toBe(true)
+    expect(writesTo(SID)).toEqual([[SID, { enabledTools: ['mcp:a'] }]])
     expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
     expect(session.lock).toBeUndefined()
   })
@@ -642,14 +675,14 @@ describe('ML-U-1 hasAgentRuntime 与 initAgent().created 同一口径；updateEn
   async function snapshot(): Promise<{ runtime: boolean; created: boolean; writable: boolean }> {
     const runtime = sessionService.hasAgentRuntime(SID)
     const created = (await sessionService.initAgent(SID)).created
-    const writable = await sessionService.updateEnabledTools(SID, ['skill:a'])
+    const writable = await sessionService.updateEnabledTools(SID, ['mcp:a'])
     return { runtime, created, writable }
   }
   const LOCKED = { runtime: true, created: true, writable: true }
   const FREE = { runtime: false, created: false, writable: true }
 
   it('ML-U-1 没开 / 开着没锁 / 锁着 / 销毁中 / 销毁完 / 没开但镜像为真（initAgent peek 打开它读真正的锁，option A）：每个时刻两面一致、写入都接受', async () => {
-    seedSession({ id: SID, settings: { enabledTools: ['skill:a'] } })
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:a'] } })
 
     // ① 没开、没有镜像
     expect(await snapshot()).toEqual(FREE)
@@ -700,7 +733,7 @@ describe('ML-U-1 hasAgentRuntime 与 initAgent().created 同一口径；updateEn
   })
 
   it('ML-U-1 开着但没锁、镜像过时说有 → 以运行时为准：没有 agent', async () => {
-    seedSession({ id: SID, settings: { enabledTools: ['skill:a'], agentLocked: true } })
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:a'], agentLocked: true } })
     fakeHost.put(SID)
     expect(await snapshot()).toEqual(FREE)
   })
@@ -731,7 +764,7 @@ describe('LA-D initAgent reports the locked agent, not the session settings (opt
   })
 
   it('LA-D1 open and locked: the locked model (pi id → provider row id) with its capabilities, the live thinking level and the selection the lock was created from — none of it from the settings', async () => {
-    seedSession({ id: SID, settings: { enabledTools: ['mcp:settings-only', 'skill:a'] } })
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:settings-only', 'mcp:a'] } })
     fakeHost.put(SID, {
       lock: lockRecord({
         model: { provider: 'anthropic', modelId: 'claude-x' },
@@ -739,7 +772,7 @@ describe('LA-D initAgent reports the locked agent, not the session settings (opt
         mcp: { ssh: [] },
         skills: ['pdf', 'builtin:drawing'],
         // 连不上的 tavily 也在创建时的勾选里（界面照旧画成「已勾 + 离线」）
-        selection: ['skill:pdf', 'mcp:ssh', 'mcp:tavily']
+        selection: ['mcp:ssh', 'mcp:tavily']
       }),
       thinkingLevel: 'high'
     })
@@ -752,27 +785,27 @@ describe('LA-D initAgent reports the locked agent, not the session settings (opt
       capabilities: { reasoning: true, vision: true },
       modelMetadata: { thinkingLevel: 'high' },
       workingDirectory: expect.any(String),
-      enabledTools: ['skill:pdf', 'mcp:ssh', 'mcp:tavily']
+      enabledTools: ['mcp:ssh', 'mcp:tavily']
     })
     // 会话开着：不 peek
     expect(fakeHost.callsOf('peek')).toEqual([])
     // 会话设置一个字都没动
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:settings-only', 'skill:a'])
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:settings-only', 'mcp:a'])
   })
 
   it("EXT-U-12d (locked, as LA-D1) the lock's selection carries the opt-out it was created from, not the settings", async () => {
-    seedSession({ id: SID, settings: { enabledTools: ['skill:a'] } })
+    seedSession({ id: SID, settings: { enabledTools: ['mcp:a'] } })
     fakeHost.put(SID, {
       lock: lockRecord({
         model: { provider: 'anthropic', modelId: 'claude-x' },
-        selection: ['-skill:builtin:drawing', 'skill:x']
+        selection: ['-mcp:browser', 'mcp:x']
       })
     })
     expect(await sessionService.initAgent(SID)).toMatchObject({
       created: true,
-      enabledTools: ['-skill:builtin:drawing', 'skill:x']
+      enabledTools: ['-mcp:browser', 'mcp:x']
     })
-    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['skill:a'])
+    expect(sessions.get(SID)!.settings.enabledTools).toEqual(['mcp:a'])
   })
 
   it('LA-D2 a custom provider keeps its row id; a provider row that is gone leaves the pi id as it is (no capabilities)', async () => {

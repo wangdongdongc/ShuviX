@@ -307,8 +307,8 @@ describe('D10-37 hasAgentRuntime 矩阵', () => {
     expect(sessionService.hasAgentRuntime('s1')).toBe(expected)
     expect((await sessionService.initAgent('s1')).created).toBe(expected)
     // 写入口（2026-10-26 起）任何时刻都接受；开着就交给那条会话重配（锁没锁都调，没锁时运行时自己答没改）
-    expect(await sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(true)
-    expect(settingsOf('s1').enabledTools).toEqual(['skill:a'])
+    expect(await sessionService.updateEnabledTools('s1', ['mcp:a'])).toBe(true)
+    expect(settingsOf('s1').enabledTools).toEqual(['mcp:a'])
     expect(session?.callsOf('reconfigureAgent') ?? []).toHaveLength(open ? 1 : 0)
     // 从不 open；没开而镜像说锁着时 initAgent 与写入口各 peek 一次读真正的锁（option A；这里存储不在，peek
     // 落空 —— initAgent 退回镜像，写入口没有可重配的 agent）

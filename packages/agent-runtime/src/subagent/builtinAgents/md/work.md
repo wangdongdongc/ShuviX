@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:work
 shuvix-builtin: true
 name: work
 description: The work agent — the base profile of every project session. It settles the requirement, hands concrete work to a `coding` sub-session, and accepts the result. Override it with a custom agent named "work".
-shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:widget
+shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill
 shuvix-displayName: Work
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

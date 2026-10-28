@@ -7,14 +7,16 @@
  *     取消记号 `-<name>`（chat-protocol `toolSelection`），交回调用方的 `onChange(next)` 是整份新勾选；
  *     传进来的数组不被改动。整卡只读时一次点击也不交出去 —— 组件自己挡，不只靠 disabled（禁用的
  *     勾选框浏览器不派发 click，所以先摘掉 disabled 再点才证明得了）；
- *   - 每组里 ShuviX 自带的项（内置 MCP / 内置技能）排最前，其余保持传入顺序（稳定排序，不按字母）；
+ *   - MCP 一行里 ShuviX 自带的项（内置 MCP）排最前，其余保持传入顺序（稳定排序，不按字母）；
  *     排序不改调用方传进来的数组；
- *   - 内置项（MCP / 技能 / 知识库）以界面语言的名字为主：内置记号（小包裹图标，读屏名「内置」）+ 名字，标识名小字并排（只差大小写
+ *   - 内置项（MCP / 知识库）以界面语言的名字为主：内置记号（小包裹图标，读屏名「内置」）+ 名字，标识名小字并排（只差大小写
  *     时不重复），悬停是界面语言的说明（builtinExtensionCopy）；别的项就是标识名；
- *   - 知识库一行（`knowledge`）**不随只读上锁**：整卡只读时 MCP / Skills 压暗挂锁，知识库照样可点、
- *     不挂锁，点一下交回库名；内置库 `shuvix` 与内置 MCP / 技能同一个画法；没有候选库时这一行与它那段说明
+ *   - 知识库一行（`knowledge`）**不随只读上锁**：整卡只读时 MCP 压暗挂锁，知识库照样可点、
+ *     不挂锁，点一下交回库名；内置库 `shuvix` 与内置 MCP 同一个画法；没有候选库时这一行与它那段说明
  *     都不出现；
- *     它那段说明与卡片说明叠在同一个问号气泡里、排在后面（带 `data-knowledge-hint`）。
+ *     它那段说明与卡片说明叠在同一个问号气泡里、排在后面（带 `data-knowledge-hint`）；
+ *   - 技能不在这张卡上（2026-10-28：侧栏里启用着的全部上货架，没有按会话 / 按项目的勾选）：卡上只有 MCP 与
+ *     知识库两行，没有 Skills 一行、没有 `skill:` 条目（ES-10）。
  *
  * 文件是 `.ts`（app-shell 的单测只收 `*.test.ts`），所以不写 JSX，一律 createElement。
  * i18n 走真 zh 资源，悬停文案用同一个实例的 `i18n.t` 现算，不抄文案。
@@ -42,16 +44,15 @@ const mcp = (name: string, extra: Partial<ToolItem> = {}): ToolItem => ({
   group: `mcp:${name}`,
   ...extra
 })
-const skill = (name: string, extra: Partial<ToolItem> = {}): ToolItem => ({
-  name: `skill:${name}`,
-  label: `${name} description`,
-  group: '__skills__',
-  ...extra
-})
 
-/** 一张有声明项的卡：MCP 里 ctx 被声明，Skills 里内置 drawing 被声明 */
-const MCP_TOOLS = [mcp('ctx', { declaredBy: PROFILE }), mcp('other')]
-const SKILL_TOOLS = [skill('builtin:drawing', { declaredBy: PROFILE }), skill('foo'), skill('bar')]
+/** 一张有声明项的卡：MCP 里 ctx 与 docs 被声明，other / foo / bar 没有 */
+const MCP_TOOLS = [
+  mcp('ctx', { declaredBy: PROFILE }),
+  mcp('other'),
+  mcp('docs', { declaredBy: PROFILE }),
+  mcp('foo'),
+  mcp('bar')
+]
 
 let container: HTMLDivElement
 let root: Root
@@ -63,8 +64,7 @@ function render(props: Partial<ExtensionsSectionProps> = {}): void {
       createElement(ExtensionsSection, {
         title: 'Extensions',
         mcpTools: MCP_TOOLS,
-        skillTools: SKILL_TOOLS,
-        enabledTools: ['skill:foo'],
+        enabledTools: ['mcp:foo'],
         onChange,
         ...props
       })
@@ -128,7 +128,7 @@ describe('档案声明的项：缺省勾上、可以取消', () => {
     const declaredHint = i18n.t('sessionConfig.extensionDeclared', { profile: PROFILE })
     expect(declaredHint).not.toBe('sessionConfig.extensionDeclared')
     expect(declaredHint).toContain(PROFILE)
-    for (const key of ['mcp:ctx', 'skill:builtin:drawing']) {
+    for (const key of ['mcp:ctx', 'mcp:docs']) {
       const label = item(key)
       expect(box(key).checked, key).toBe(true)
       expect(box(key).disabled, key).toBe(false)
@@ -142,8 +142,8 @@ describe('档案声明的项：缺省勾上、可以取消', () => {
       expect(label.className, key).not.toContain('cursor-not-allowed')
     }
     // 对照：没被声明的照常 —— 勾没勾看勾选，可点，没有声明标记
-    for (const key of ['mcp:other', 'skill:foo', 'skill:bar']) {
-      expect(box(key).checked, key).toBe(key === 'skill:foo')
+    for (const key of ['mcp:other', 'mcp:foo', 'mcp:bar']) {
+      expect(box(key).checked, key).toBe(key === 'mcp:foo')
       expect(box(key).disabled, key).toBe(false)
       expect(item(key).hasAttribute('data-declared'), key).toBe(false)
       expect(item(key).hasAttribute('aria-disabled'), key).toBe(false)
@@ -154,50 +154,50 @@ describe('档案声明的项：缺省勾上、可以取消', () => {
   })
 
   it('ES-2 点声明项 → onChange 交回带取消记号的整份勾选；再点被取消的 → 撤掉记号；普通项照常增删；传入数组不被改动', () => {
-    const enabled = Object.freeze(['skill:foo']) as string[]
+    const enabled = Object.freeze(['mcp:foo']) as string[]
     render({ enabledTools: enabled })
 
     click('mcp:ctx')
     expect(onChange).toHaveBeenCalledTimes(1)
-    expect(onChange).toHaveBeenLastCalledWith(['skill:foo', '-mcp:ctx'])
+    expect(onChange).toHaveBeenLastCalledWith(['mcp:foo', '-mcp:ctx'])
 
-    click('skill:bar')
-    expect(onChange).toHaveBeenLastCalledWith(['skill:foo', 'skill:bar'])
-    click('skill:foo')
+    click('mcp:bar')
+    expect(onChange).toHaveBeenLastCalledWith(['mcp:foo', 'mcp:bar'])
+    click('mcp:foo')
     expect(onChange).toHaveBeenLastCalledWith([])
     expect(onChange).toHaveBeenCalledTimes(3)
-    expect(enabled).toEqual(['skill:foo'])
+    expect(enabled).toEqual(['mcp:foo'])
 
-    // 取消过作图技能的勾选：那一行画成未勾，但仍是声明项、仍可点
-    const optedOut = Object.freeze(['-skill:builtin:drawing']) as string[]
+    // 取消过 docs 的勾选：那一行画成未勾，但仍是声明项、仍可点
+    const optedOut = Object.freeze(['-mcp:docs']) as string[]
     render({ enabledTools: optedOut })
-    expect(box('skill:builtin:drawing').checked).toBe(false)
-    expect(box('skill:builtin:drawing').disabled).toBe(false)
-    expect(item('skill:builtin:drawing').hasAttribute('data-declared')).toBe(true)
-    expect(item('skill:builtin:drawing').hasAttribute('aria-disabled')).toBe(false)
+    expect(box('mcp:docs').checked).toBe(false)
+    expect(box('mcp:docs').disabled).toBe(false)
+    expect(item('mcp:docs').hasAttribute('data-declared')).toBe(true)
+    expect(item('mcp:docs').hasAttribute('aria-disabled')).toBe(false)
     // 另一个声明项不受这条记号影响
     expect(box('mcp:ctx').checked).toBe(true)
 
-    click('skill:builtin:drawing')
+    click('mcp:docs')
     expect(onChange).toHaveBeenCalledTimes(4)
     expect(onChange).toHaveBeenLastCalledWith([])
-    expect(optedOut).toEqual(['-skill:builtin:drawing'])
+    expect(optedOut).toEqual(['-mcp:docs'])
   })
 
   it('ES-6 没被声明的项：勾 + 取消两个记号同时在时算没勾；点它 → 只留名字', () => {
-    render({ enabledTools: ['-skill:bar', 'skill:bar'] })
-    expect(box('skill:bar').checked).toBe(false)
-    expect(item('skill:bar').hasAttribute('data-declared')).toBe(false)
-    click('skill:bar')
+    render({ enabledTools: ['-mcp:bar', 'mcp:bar'] })
+    expect(box('mcp:bar').checked).toBe(false)
+    expect(item('mcp:bar').hasAttribute('data-declared')).toBe(false)
+    click('mcp:bar')
     expect(onChange).toHaveBeenCalledTimes(1)
-    expect(onChange).toHaveBeenCalledWith(['skill:bar'])
+    expect(onChange).toHaveBeenCalledWith(['mcp:bar'])
   })
 })
 
 describe('整卡只读（会话已有 Agent 运行时）', () => {
-  it('ES-3 只读压过声明：声明项的悬停换成只读原因、压暗 + 禁用光标、仍勾着且禁用；两组各挂一把锁；硬点哪一行都没用', () => {
+  it('ES-3 只读压过声明：声明项的悬停换成只读原因、压暗 + 禁用光标、仍勾着且禁用；MCP 一行挂一把锁；硬点哪一行都没用', () => {
     render({ readonly: true, readonlyHint: READONLY_HINT })
-    for (const key of ['mcp:ctx', 'skill:builtin:drawing']) {
+    for (const key of ['mcp:ctx', 'mcp:docs']) {
       const label = item(key)
       expect(label.title, key).toBe(READONLY_HINT)
       expect(label.className, key).toContain('cursor-not-allowed')
@@ -206,7 +206,7 @@ describe('整卡只读（会话已有 Agent 运行时）', () => {
       expect(box(key).checked, key).toBe(true)
       expect(box(key).disabled, key).toBe(true)
     }
-    expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(2)
+    expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(1)
     // 用户那一侧：禁用的勾选框点了没有任何反应
     for (const key of keys()) click(key)
     // 绕过禁用态硬点每一行（声明项与普通项都算）：组件自己挡，一次也不交出去
@@ -215,49 +215,32 @@ describe('整卡只读（会话已有 Agent 运行时）', () => {
   })
 })
 
-describe('每组里内置项排前，其余保持传入顺序', () => {
+describe('MCP 一行里内置项排前，其余保持传入顺序', () => {
   const MCP_INPUT: ToolItem[] = [
     mcp('user-a'),
     mcp('ssh', { isBuiltin: true }),
     mcp('user-b', { declaredBy: PROFILE }),
     mcp('tavily', { isBuiltin: true })
   ]
-  const SKILL_INPUT: ToolItem[] = [
-    skill('foo'),
-    skill('builtin:zeta'),
-    skill('bar', { declaredBy: PROFILE }),
-    skill('builtin:alpha')
-  ]
 
-  it('ES-4 MCP → ssh, tavily, user-a, user-b；Skills → zeta, alpha, foo, bar（稳定排序，不按字母；声明与否不挪位置）', () => {
-    render({ mcpTools: MCP_INPUT, skillTools: SKILL_INPUT, enabledTools: [] })
-    expect(keys()).toEqual([
-      'mcp:ssh',
-      'mcp:tavily',
-      'mcp:user-a',
-      'mcp:user-b',
-      'skill:builtin:zeta',
-      'skill:builtin:alpha',
-      'skill:foo',
-      'skill:bar'
-    ])
-    // 被声明的 user-b / bar 仍在同组非内置项里的原位（没有因为「缺省勾上」被提到前面）
+  it('ES-4 MCP → ssh, tavily, user-a, user-b（稳定排序，不按字母；声明与否不挪位置）', () => {
+    render({ mcpTools: MCP_INPUT, enabledTools: [] })
+    expect(keys()).toEqual(['mcp:ssh', 'mcp:tavily', 'mcp:user-a', 'mcp:user-b'])
+    // 被声明的 user-b 仍在非内置项里的原位（没有因为「缺省勾上」被提到前面）
     expect(item('mcp:user-b').hasAttribute('data-declared')).toBe(true)
-    expect(item('skill:bar').hasAttribute('data-declared')).toBe(true)
   })
 
-  it('ES-5 排序不改调用方的数组：传进来的 mcpTools / skillTools 原样不动', () => {
+  it('ES-5 排序不改调用方的数组：传进来的 mcpTools 原样不动', () => {
     const mcpTools = Object.freeze([...MCP_INPUT]) as ToolItem[]
-    const skillTools = Object.freeze([...SKILL_INPUT]) as ToolItem[]
-    const before = [mcpTools.map((t) => t.name), skillTools.map((t) => t.name)]
+    const before = mcpTools.map((t) => t.name)
     // 冻结的数组上原地 sort 会直接抛错 —— 渲染得出来本身就说明没有原地排
-    expect(() => render({ mcpTools, skillTools, enabledTools: [] })).not.toThrow()
-    expect([mcpTools.map((t) => t.name), skillTools.map((t) => t.name)]).toEqual(before)
-    expect(keys()).toHaveLength(MCP_INPUT.length + SKILL_INPUT.length)
+    expect(() => render({ mcpTools, enabledTools: [] })).not.toThrow()
+    expect(mcpTools.map((t) => t.name)).toEqual(before)
+    expect(keys()).toHaveLength(MCP_INPUT.length)
   })
 })
 
-describe('知识库一行：与 MCP / Skills 同卡，但不随只读上锁', () => {
+describe('知识库一行：与 MCP 同卡，但不随只读上锁', () => {
   const OPTIONS = [
     { name: 'notes', label: 'notes' },
     { name: 'shuvix', label: 'ShuviX guide' }
@@ -282,14 +265,14 @@ describe('知识库一行：与 MCP / Skills 同卡，但不随只读上锁', ()
     return document.querySelector('[data-info-tip]')?.textContent ?? ''
   }
 
-  it('ES-7 整卡只读：MCP / Skills 两把锁，知识库可点、不压暗、无 aria-disabled，点一下交回库名、不碰扩展能力勾选', () => {
+  it('ES-7 整卡只读：MCP 一把锁，知识库可点、不压暗、无 aria-disabled，点一下交回库名、不碰扩展能力勾选', () => {
     const onToggle = vi.fn<(name: string) => void>()
     render({
       readonly: true,
       readonlyHint: READONLY_HINT,
       knowledge: { options: OPTIONS, selected: ['shuvix'], onToggle }
     })
-    expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(2)
+    expect(container.querySelectorAll('[data-ext-lock]')).toHaveLength(1)
     expect(kbLabels().map((label) => label.getAttribute('data-knowledge-base'))).toEqual([
       'notes',
       'shuvix'
@@ -301,7 +284,7 @@ describe('知识库一行：与 MCP / Skills 同卡，但不随只读上锁', ()
     }
     expect(kbBox('notes')).toMatchObject({ checked: false, disabled: false })
     expect(kbBox('shuvix')).toMatchObject({ checked: true, disabled: false })
-    // 内置库与内置 MCP / 技能同一个画法：内置记号 + 界面语言的名字（标识名并排），悬停是界面语言的说明；
+    // 内置库与内置 MCP 同一个画法：内置记号 + 界面语言的名字（标识名并排），悬停是界面语言的说明；
     // 用户库没有内置记号，名字就是目录名
     const [notes, shuvix] = kbLabels()
     expect(shuvix.querySelector('[data-builtin-badge]')?.getAttribute('aria-label')).toBe(
@@ -347,7 +330,7 @@ describe('知识库一行：与 MCP / Skills 同卡，但不随只读上锁', ()
   })
 })
 
-describe('内置 MCP / 技能以界面语言的名字为主', () => {
+describe('内置 MCP 以界面语言的名字为主', () => {
   it('ES-9 名字是界面文案、标识名并排（只差大小写时不重复）、悬停是界面文案；别的项是标识名、没有并排的那一份', () => {
     render({
       mcpTools: [
@@ -355,7 +338,6 @@ describe('内置 MCP / 技能以界面语言的名字为主', () => {
         mcp('browser', { isBuiltin: true }),
         mcp('other')
       ],
-      skillTools: [skill('builtin:drawing'), skill('foo')],
       enabledTools: []
     })
     const nameOf = (key: string): string | null =>
@@ -368,12 +350,31 @@ describe('内置 MCP / 技能以界面语言的名字为主', () => {
     expect(item('mcp:browser').title).toBe(i18n.t('tool.browserHint'))
     expect(nameOf('mcp:ssh')).toBe(i18n.t('tool.sshLabel'))
     expect(idOf('mcp:ssh')).toBeNull()
-    expect(nameOf('skill:builtin:drawing')).toBe(i18n.t('builtinSkill.drawing.label'))
-    expect(idOf('skill:builtin:drawing')).toBe('drawing')
-    expect(item('skill:builtin:drawing').title).toBe(i18n.t('builtinSkill.drawing.hint'))
     expect(nameOf('mcp:other')).toBe('other')
     expect(idOf('mcp:other')).toBeNull()
-    expect(nameOf('skill:foo')).toBe('foo')
-    expect(idOf('skill:foo')).toBeNull()
+  })
+})
+
+describe('技能不在这张卡上（2026-10-28）', () => {
+  it('ES-10 只有 MCP 与知识库两行：没有 Skills 组名、没有 skill: 条目；旧勾选里残留的 skill: / -skill: 条目原样交回、不画成任何东西', () => {
+    const skillsGroup = i18n.t('projectForm.skillsGroup')
+    expect(skillsGroup).not.toBe('projectForm.skillsGroup')
+    render({
+      enabledTools: ['skill:old', '-skill:builtin:drawing', 'mcp:foo'],
+      knowledge: { options: [{ name: 'notes' }], selected: [], onToggle: vi.fn() }
+    })
+    expect(container.textContent).toContain('MCP')
+    expect(container.textContent).toContain(i18n.t('sessionConfig.knowledgeGroup'))
+    expect(container.textContent).not.toContain(skillsGroup)
+    expect(container.querySelectorAll('[data-ext-item^="skill:"]')).toHaveLength(0)
+    expect(keys()).toEqual(MCP_TOOLS.map((tool) => tool.name))
+    // 残留条目不是勾选里的东西：卡不认它们，但也不替调用方抹掉（写入口在宿主那一侧过滤）
+    click('mcp:bar')
+    expect(onChange).toHaveBeenCalledExactlyOnceWith([
+      'skill:old',
+      '-skill:builtin:drawing',
+      'mcp:foo',
+      'mcp:bar'
+    ])
   })
 })

@@ -31,7 +31,7 @@ shuvix: agent v1
 name: reviewer
 description: Reads a change set and reports risks without editing anything.
 shuvix-displayName: Code reviewer
-shuvix-tools: read, ls, grep, glob, bash, skill:conventional-comments
+shuvix-tools: read, ls, grep, glob, bash, skill
 shuvix-model: anthropic/claude-sonnet-4-5
 shuvix-thinking: low
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
@@ -76,8 +76,10 @@ style, each with file and line. Never modify files.
   `mcp:ssh`（你 `~/.ssh/config` 里的主机）与 `mcp:database`（在 ShuviX 设置里保存的数据库连接）。
   内置 agent 都不声明它们 —— 会话需要时自己勾 —— 所以一个应当始终能用浏览器的 agent 要在列表里写上
   `mcp:browser`；
-- `skill:<name>` —— 那个 skill（带命名空间的 skill 写成 `skill:<dir>:<name>`；ShuviX 自带的技能写成
-  `skill:builtin:<name>`）。
+- `skill` —— `skill` 工具。它的货架是侧栏「技能」里**开着的全部技能**（ShuviX 自带的也在内），加上会话
+  所在项目的 `.claude/skills`，去掉 `SKILL.md` 写了 `disable-model-invocation: true` 的；任务对得上某个
+  技能的描述时，模型自己加载它。agent 文件不逐个挑技能，会话也不挑 —— 与 Claude Code、Codex 一样。
+  旧文件里的 `skill:<name>` 条目读作 `skill`。
 
 **平台特定工具**只在部分平台上存在：`bash` 在 macOS 和 Linux 上，`powershell` 在 Windows 上
 （设置 → LLM 工具里会在它们后面标出平台）。把每个平台的版本都列上 —— 内置 agent 把 `bash` 和
@@ -85,13 +87,14 @@ style, each with file and line. Never modify files.
 的 agent 在 Windows 上就没有命令工具。
 
 条目按顺序去重。本机上不存在的名字静默丢弃 —— agent 照常创建，只是没有它。**列表里写了的都恒生效**，
-无论这个 agent 以哪种方式被用上。它做会话的根时，其中的 `mcp:` / `skill:` 项在这条会话的扩展能力
-选择器里显示为默认勾上（悬停会说是哪个 agent 声明的）。会话可以再勾别的，也可以只为自己取消声明的某一项
-—— 比如改用别的作图技能、不要 `builtin:drawing`；取消在会话的勾选里记成 `-skill:<name>`，项目的缺省
-也可以带着它，agent 文件不动。要让每条会话都去掉一项，仍然是覆盖这个 agent。内置工具名取消不了。
+无论这个 agent 以哪种方式被用上。它做会话的根时，其中的 `mcp:` 项在这条会话的扩展能力选择器里显示为
+默认勾上（悬停会说是哪个 agent 声明的）。会话可以再勾别的服务器，也可以只为自己取消声明的某一台；取消在
+会话的勾选里记成 `-mcp:<server>`，项目的缺省也可以带着它，agent 文件不动。要让每条会话都去掉一项，仍然是
+覆盖这个 agent。内置工具名取消不了。技能根本不在选择器里：不想让模型用某个技能，就在侧栏把它关掉 ——
+对之后新建的 agent 生效；正在运行的 agent 保持它创建时的那批技能，直到你重建它（agent 标签上的 X）。
 **收窄工具列表不是 ShuviX 表达角色的方式**：一个没有 `grep` 的 agent 只会拿
 `bash` 去 grep。内置的 `work`、`chat`、`coding` 三者刻意共用一份列表（`bash, powershell, read, write, edit, ask,
-suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:widget`），
+suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill`），
 只在正文上有区别。
 
 ### 正文 —— 系统提示词
@@ -161,8 +164,8 @@ agent `coding`、`explore`、`titler`，以及两个只由 ShuviX 派发的 agen
    （`shuvix-model` / `shuvix-thinking` 声明了的以声明为准），拿到同样的指令文件 / 项目注入（按根会话的项目解析），最后把最终文本
    返回。这个工具**不会**向模型列举可用的 agent —— 名字得来自提示词或用户。
 2. **作为子会话的人格** —— `session` 工具的 `agent_profile`（任何不是基座的 agent）。子会话保留从
-   父会话抄来的扩展能力；该 agent `shuvix-tools` 里的 `mcp:` / `skill:` 条目和列表里的其余各项一样
-   生效，叠加在上面 —— 抄来的勾选里取消了的除外。
+   父会话抄来的 MCP 服务器；该 agent `shuvix-tools` 里的 `mcp:` 条目和列表里的其余各项一样生效，叠加在
+   上面 —— 抄来的勾选里取消了的除外。
 3. **作为 hook 的 agent**（`shuvix-hook-agent` —— 见 `hook-md` 条目）。
 4. **作为基座覆盖**（见上）。
 

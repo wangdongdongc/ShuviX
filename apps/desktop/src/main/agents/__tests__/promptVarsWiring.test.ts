@@ -7,9 +7,10 @@
  *     提示词少一整节，模型只是"不会画图了"。
  *  2. 作图说明（visualGuide / visualCraft）的两个开关按**这一个 agent 的归一工具名单**
  *     （`PromptVarsCtx.toolNames`，与 resolveTools 收到的是同一份）判：
- *      - `drawingSkill`：名单点了 `skill:builtin:drawing` **且** skillService.findEnabled() 里有它
- *        （没在侧栏停用）→ 才有这份说明（载体 + 「本会话第一张图之前先加载技能」）；否则两个值都是
- *        空串，引用处整块收敛消失。2026-09-24 起 svg 契约、框箭头预算与范例图只在技能里
+ *      - `drawingSkill`：名单里有技能工具 `skill` **且** skillService.findModelInvocable() 里有
+ *        `builtin:drawing`（没在侧栏停用、也没写 `disable-model-invocation`）→ 才有这份说明（载体 +
+ *        「本会话第一张图之前先加载技能」）；否则两个值都是空串，引用处整块收敛消失。2026-10-28 起档案
+ *        不再逐个点名技能（`skill` 的货架是模型可调用的全部），会话勾选也不再有 `skill:` / `-skill:`。2026-09-24 起 svg 契约、框箭头预算与范例图只在技能里
  *        （用户裁决）：指一个拿不到的技能是死路，而契约不再有常驻的第二份；
  *      - `artifact`：名单里有 `artifact` → guide 教「改图走 adopt」（craft 没有载体，永远不教）。
  *     说明里提到的每样东西都得真在它手里 —— 派发出来的、覆盖了档案的、停用了技能的都一样。
@@ -27,7 +28,7 @@
  *
  * P1-11 起变量表是 agentHost 直接导出的 `desktopPromptVars`（会话核心在冻结人设时调它），这里直接
  * 调它（旧的创建工厂已由 P2-13 删掉）。其余 mock 只为让模块能加载（dao 会开 SQLite，
- * electron / mcp 在 node 下起不来）；skillService 必须桩成可控的 findEnabled —— 真服务的构造函数会去碰
+ * electron / mcp 在 node 下起不来）；skillService 必须桩成可控的 findModelInvocable —— 真服务的构造函数会去碰
  * 真实 HOME 下的 `~/.shuvix/skills`。
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest'
@@ -39,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   pickSettings: vi.fn(),
   projectPick: vi.fn(),
   findEnabled: vi.fn(),
+  findModelInvocable: vi.fn(),
   /** Windows 上解析出的 PowerShell 版本（PVW-S*）；null = 用真的 getPowerShellConfig */
   psConfig: null as null | { exe: string; edition: 'pwsh' | 'windows-powershell' }
 }))
@@ -55,7 +57,7 @@ vi.mock('../../services/toolRegistry', () => ({
 }))
 vi.mock('../../services/skillTool', () => ({ SkillTool: class {} }))
 vi.mock('../../services/skillService', () => ({
-  skillService: { findEnabled: mocks.findEnabled }
+  skillService: { findEnabled: mocks.findEnabled, findModelInvocable: mocks.findModelInvocable }
 }))
 vi.mock('../../services/mcpService', () => ({ mcpService: {} }))
 vi.mock('../../services/instruction', () => ({ resolveInstructionContent: vi.fn() }))
@@ -95,7 +97,8 @@ import { desktopPromptVars } from '../agentHost'
 const LANGUAGES = ['en', 'zh', 'ja']
 const SID = 'sess-desktop-1'
 
-const DRAWING = 'skill:builtin:drawing'
+/** 技能工具在名单里的写法（档案 `shuvix-tools` 写 `skill`） */
+const SKILL = 'skill'
 const POINTER = 'builtin:drawing'
 const EXAMPLE = '```svg\n<svg'
 const ADOPT = 'adopt'
@@ -165,8 +168,10 @@ beforeEach(() => {
   mocks.pickSettings.mockReturnValue({ notebookPath: 'notes/a.md' })
   mocks.projectPick.mockReturnValue({ name: 'Proj', path: '/w/proj' })
   mocks.findEnabled.mockReset()
-  // 缺省：内置作图技能随包在架、没被停用
+  mocks.findModelInvocable.mockReset()
+  // 缺省：内置作图技能随包在架、没被停用、模型可调用
   mocks.findEnabled.mockReturnValue([BUILTIN])
+  mocks.findModelInvocable.mockReturnValue([BUILTIN])
 })
 
 describe('desktopPromptVars —— 占位符覆盖', () => {
@@ -193,12 +198,12 @@ describe('desktopPromptVars —— 占位符覆盖', () => {
 })
 
 describe('desktopPromptVars —— 作图说明按这个 agent 的名单开关', () => {
-  const LISTS: string[][] = [[], [DRAWING], ['artifact'], [DRAWING, 'artifact']]
+  const LISTS: string[][] = [[], [SKILL], ['artifact'], [SKILL, 'artifact']]
 
   it('PVW-3 四种名单：技能在架时 visualGuide 是自含块（自带小标题）、visualCraft 恰好一段，都已 trim；技能不在名单上时两个都是空串', async () => {
     for (const toolNames of LISTS) {
       const vars = await varsFor({ toolNames })
-      const skill = toolNames.includes(DRAWING)
+      const skill = toolNames.includes(SKILL)
       for (const name of FRAGMENT_VARS) {
         const what = `${name} ${JSON.stringify(toolNames)}`
         expect(vars[name], what).toBe(vars[name].trim())
@@ -216,9 +221,9 @@ describe('desktopPromptVars —— 作图说明按这个 agent 的名单开关',
     }
   })
 
-  it('PVW-4 名单点了作图技能且在架 → 两个值都恰好一句指路，范例图不在提示里', async () => {
+  it('PVW-4 名单有技能工具且作图技能在架 → 两个值都恰好一句指路，范例图不在提示里', async () => {
     // 缺省 ctx 是桌面根会话 → visualGuide 连交互段一起给；交互段也指向技能，但不重复点名
-    const vars = await varsFor({ toolNames: [DRAWING] })
+    const vars = await varsFor({ toolNames: [SKILL] })
     expect(vars.visualGuide).toContain('```interactive')
     for (const name of FRAGMENT_VARS) {
       expect(countOf(vars[name], POINTER), name).toBe(1)
@@ -226,32 +231,39 @@ describe('desktopPromptVars —— 作图说明按这个 agent 的名单开关',
     }
   })
 
-  it('PVW-5 点了名但在侧栏停用（findEnabled 没有它）→ 两个值都是空串（连 `builtin:` 都不提），手里有 artifact 也一样', async () => {
+  it('PVW-5 名单有 skill 但作图技能在侧栏停用，或启用着却只许用户调用（findModelInvocable 都没有它）→ 两个值都是空串（连 `builtin:` 都不提），手里有 artifact 也一样', async () => {
     mocks.findEnabled.mockReturnValue([])
-    const vars = await varsFor({ toolNames: [DRAWING, 'artifact'] })
-    for (const name of FRAGMENT_VARS) expect(vars[name], name).toBe('')
+    mocks.findModelInvocable.mockReturnValue([])
+    const disabled = await varsFor({ toolNames: [SKILL, 'artifact'] })
+    for (const name of FRAGMENT_VARS) expect(disabled[name], name).toBe('')
+
+    // disable-model-invocation：findEnabled 里有它，货架上（findModelInvocable）没有 —— 按货架判
+    mocks.findEnabled.mockReturnValue([BUILTIN])
+    const userOnly = await varsFor({ toolNames: [SKILL, 'artifact'] })
+    for (const name of FRAGMENT_VARS) expect(userOnly[name], name).toBe('')
   })
 
-  it('PVW-6 名单没点它（技能照样在架）→ 两个值都是空串；而且根本不去扫技能目录', async () => {
+  it('PVW-6 名单里没有技能工具（作图技能照样在架）→ 两个值都是空串；而且根本不去扫技能目录', async () => {
     const vars = await varsFor({ toolNames: [] })
     for (const name of FRAGMENT_VARS) expect(vars[name], name).toBe('')
-    // 大多数 agent（titler、explore…）走这条短路：名单里没有就不碰文件系统
+    // titler、explore 这些 agent 走这条短路：名单里没有就不碰文件系统
     expect(mocks.findEnabled).not.toHaveBeenCalled()
+    expect(mocks.findModelInvocable).not.toHaveBeenCalled()
   })
 
-  it('PVW-7 按全局名精确匹配：用户的 `drawing` 顶替不了 `builtin:drawing`，点 `skill:drawing` 也不算点了内置', async () => {
-    mocks.findEnabled.mockReturnValue([USER_DRAWING])
-    const shadowed = await varsFor({ toolNames: [DRAWING] })
+  it('PVW-7 按全局名精确匹配：架上只有用户的 `drawing` 顶替不了 `builtin:drawing`；名单里只有旧写法 `skill:builtin:drawing`（没有 `skill`）也不算', async () => {
+    mocks.findModelInvocable.mockReturnValue([USER_DRAWING])
+    const shadowed = await varsFor({ toolNames: [SKILL] })
     for (const name of FRAGMENT_VARS) expect(shadowed[name], name).toBe('')
 
-    mocks.findEnabled.mockReturnValue([BUILTIN])
-    const wrongName = await varsFor({ toolNames: ['skill:drawing'] })
-    for (const name of FRAGMENT_VARS) expect(wrongName[name], name).toBe('')
+    mocks.findModelInvocable.mockReturnValue([BUILTIN])
+    const legacy = await varsFor({ toolNames: ['skill:builtin:drawing'] })
+    for (const name of FRAGMENT_VARS) expect(legacy[name], name).toBe('')
   })
 
   it('PVW-8 技能在架且手里有 artifact 才教 adopt（只在 visualGuide 里）；visualCraft 无论名单如何都不教', async () => {
-    expect((await varsFor({ toolNames: [DRAWING, 'artifact'] })).visualGuide).toContain(ADOPT)
-    expect((await varsFor({ toolNames: [DRAWING] })).visualGuide).not.toContain(ADOPT)
+    expect((await varsFor({ toolNames: [SKILL, 'artifact'] })).visualGuide).toContain(ADOPT)
+    expect((await varsFor({ toolNames: [SKILL] })).visualGuide).not.toContain(ADOPT)
     // 只有 artifact、没有技能：整份说明都不出，adopt 不会单独冒出来
     expect((await varsFor({ toolNames: ['artifact'] })).visualGuide).toBe('')
     for (const toolNames of LISTS) {
@@ -264,7 +276,7 @@ describe('desktopPromptVars —— 作图说明按这个 agent 的名单开关',
     // 若哪天有人把作图说明塞进 ctx.kind === 'root' 分支（notebookPath 就在紧邻两行），
     // 或只按 root 判开关，派发出来的 coding 会拿到一份与它工具表对不上的说明
     const coding = builtins('en').find((p) => p.name === 'coding')!
-    expect(coding.tools).toContain(DRAWING)
+    expect(coding.tools).toContain(SKILL)
     const vars = await varsFor({
       kind: 'spawned',
       sessionId: 'agent-1',
@@ -277,7 +289,7 @@ describe('desktopPromptVars —— 作图说明按这个 agent 的名单开关',
 })
 
 describe('desktopPromptVars —— 按档案自己的名单组装出的系统提示', () => {
-  it('PVW-10 每个内置档案 × 三语言：引用处真被替换；指路恰在点了技能的档案里，adopt 恰在 work/chat/coding/bot', async () => {
+  it('PVW-10 每个内置档案 × 三语言：引用处真被替换；指路恰在带技能工具的档案里，adopt 恰在 work/chat/coding/bot', async () => {
     let checked = 0
     let referencing = 0
     /** 自检：三种界面语言下供的片段各不相同 —— 否则「× 三语言」只是把英文那份查了三遍 */
@@ -295,7 +307,7 @@ describe('desktopPromptVars —— 按档案自己的名单组装出的系统提
             expect(out, `${what}.${name}`).toContain(vars[name])
             referencing++
           }
-          expect(out.includes(POINTER), `${what} 的指路`).toBe(profile.tools.includes(DRAWING))
+          expect(out.includes(POINTER), `${what} 的指路`).toBe(profile.tools.includes(SKILL))
           expect(out.includes(ADOPT), `${what} 的 adopt`).toBe(
             ADOPT_PROFILES.includes(profile.name)
           )
@@ -347,7 +359,7 @@ describe('desktopPromptVars —— 交互块按回复落在哪儿给（PVW-12…
   const INTERACTIVE_PROFILES = ['bot', 'chat', 'coding', 'work']
 
   it('PVW-12 桌面会话的根 agent：作图技能在架才教交互块（契约在技能里、不常驻），visualCraft 从不教', async () => {
-    const withSkill = await varsFor({ kind: 'root', toolNames: [DRAWING, 'artifact'] })
+    const withSkill = await varsFor({ kind: 'root', toolNames: [SKILL, 'artifact'] })
     expect(withSkill.visualGuide).toContain(INTERACTIVE)
     expect(withSkill.visualGuide).toContain('references/interactive.md')
     expect(withSkill.visualGuide).not.toContain('shuvix-lib://')
@@ -362,15 +374,13 @@ describe('desktopPromptVars —— 交互块按回复落在哪儿给（PVW-12…
 
   it('PVW-13 Chrome 标签页会话的根：不教交互块（侧栏的 CSP 跑不了它），svg 载体照旧在', async () => {
     mocks.pickSettings.mockReturnValue(CHROME_TAB)
-    const vars = await varsFor({ kind: 'root', toolNames: [DRAWING] })
+    const vars = await varsFor({ kind: 'root', toolNames: [SKILL] })
     expect(vars.visualGuide).not.toContain(INTERACTIVE)
     expect(vars.visualGuide).not.toContain('shuvix-lib://')
     expect(vars.visualGuide).toContain(CARRIER)
     // 反证：同一份 ctx 换成普通会话就教 —— 上面的「不教」确实是 chromeTab 带来的
     mocks.pickSettings.mockReturnValue({})
-    expect((await varsFor({ kind: 'root', toolNames: [DRAWING] })).visualGuide).toContain(
-      INTERACTIVE
-    )
+    expect((await varsFor({ kind: 'root', toolNames: [SKILL] })).visualGuide).toContain(INTERACTIVE)
   })
 
   it('PVW-14 派生 agent（coding 的名单）：不教交互块，但指路与 adopt 照旧按名单给', async () => {
@@ -429,7 +439,7 @@ describe('desktopPromptVars —— 契约只在技能里（PVW-16 / PVW-17）', 
       (FRAGMENT_VARS as readonly string[]).includes(n)
     )
 
-  it('PVW-16 每个引用作图片段的内置档案 × 三语言：名单去掉作图技能 → 两个值都是空串，引用处收敛干净', async () => {
+  it('PVW-16 每个引用作图片段的内置档案 × 三语言：名单去掉技能工具 → 两个值都是空串，引用处收敛干净', async () => {
     let checked = 0
     for (const language of LANGUAGES) {
       await inLanguage(language, async () => {
@@ -440,13 +450,13 @@ describe('desktopPromptVars —— 契约只在技能里（PVW-16 / PVW-17）', 
           const withSkill = await varsFor({ kind: 'root', toolNames: profile.tools })
           const without = await varsFor({
             kind: 'root',
-            toolNames: profile.tools.filter((n) => n !== DRAWING)
+            toolNames: profile.tools.filter((n) => n !== SKILL)
           })
           const promptWith = renderProfileSystemPrompt(profile, withSkill)
           const out = renderProfileSystemPrompt(profile, without)
           for (const name of used) {
             expect(without[name], `${what}.${name}`).toBe('')
-            // 正控制组：点了名时确实有内容、而且确实替换进了提示 —— 下面的「不在」才有意义
+            // 正控制组：带着技能工具时确实有内容、而且确实替换进了提示 —— 下面的「不在」才有意义
             expect(withSkill[name].length, `${what}.${name}`).toBeGreaterThan(0)
             expect(promptWith, `${what}.${name}`).toContain(withSkill[name])
             expect(out, `${what}.${name}`).not.toContain(withSkill[name])
@@ -584,11 +594,12 @@ describe('desktopPromptVars —— shell / shellTool 按平台给（PVW-S1…S5�
  * 都照旧。
  */
 describe('desktopPromptVars —— 锁的名单形态（H11-62）', () => {
-  it('H11-62 work 名单 + 勾选 [mcp:ssh, skill:pdf]：指路恰一次、教 adopt、根会话教交互块；notebookPath 按会话给，派生不给', async () => {
+  it('H11-62 work 名单 + 勾选 [mcp:ssh, skill:pdf]：skill:pdf 不进名单（技能不按会话勾选），名单有 skill；指路恰一次、教 adopt、根会话教交互块；notebookPath 按会话给，派生不给', async () => {
     const work = builtins('en').find((p) => p.name === 'work')!
     const toolNames = normalizeToolNames('root', work.tools, ['mcp:ssh', 'skill:pdf'])
     expect(toolNames).toContain('mcp:ssh')
-    expect(toolNames).toContain(DRAWING)
+    expect(toolNames).toContain(SKILL)
+    expect(toolNames).not.toContain('skill:pdf')
 
     mocks.pickSettings.mockReturnValue({})
     const root = await varsFor({ kind: 'root', toolNames })
@@ -604,25 +615,24 @@ describe('desktopPromptVars —— 锁的名单形态（H11-62）', () => {
     expect('notebookPath' in spawned).toBe(false)
   })
 
-  it('H11-62b 会话取消了档案声明的作图技能（勾选 [-skill:builtin:drawing]）：技能照样在架，visualGuide 整段为空 —— 不指路、不教 adopt、不教交互块；不取消时指路恰一次', async () => {
+  it('H11-62b 会话勾选里旧的取消记号 [-skill:builtin:drawing] 不再起作用：名单照样有 skill、指路恰一次；作图说明只跟侧栏走 —— 内置作图技能停用了才整段为空', async () => {
     const work = builtins('en').find((p) => p.name === 'work')!
-    expect(work.tools).toContain(DRAWING)
+    expect(work.tools).toContain(SKILL)
     const toolNames = normalizeToolNames('root', work.tools, ['-skill:builtin:drawing'])
-    expect(toolNames).not.toContain(DRAWING)
-    // 技能没被停用：变量表按名单判，不按「在不在架」判
-    mocks.findEnabled.mockReturnValue([BUILTIN])
+    expect(toolNames).toContain(SKILL)
+    expect(toolNames).toEqual(normalizeToolNames('root', work.tools, []))
     mocks.pickSettings.mockReturnValue({})
 
-    const optedOut = await varsFor({ kind: 'root', toolNames })
-    expect(optedOut.visualGuide).toBe('')
-    expect(optedOut.visualGuide).not.toContain(POINTER)
-    expect(optedOut.visualGuide).not.toContain(ADOPT)
-    expect(optedOut.visualGuide).not.toContain('```interactive')
+    const stale = await varsFor({ kind: 'root', toolNames })
+    expect(countOf(stale.visualGuide, POINTER)).toBe(1)
 
-    const control = await varsFor({
-      kind: 'root',
-      toolNames: normalizeToolNames('root', work.tools, [])
-    })
-    expect(countOf(control.visualGuide, POINTER)).toBe(1)
+    // 拿掉作图说明的路径是侧栏：内置作图技能停用（findModelInvocable 不再给它）
+    mocks.findEnabled.mockReturnValue([])
+    mocks.findModelInvocable.mockReturnValue([])
+    const disabled = await varsFor({ kind: 'root', toolNames })
+    expect(disabled.visualGuide).toBe('')
+    expect(disabled.visualGuide).not.toContain(POINTER)
+    expect(disabled.visualGuide).not.toContain(ADOPT)
+    expect(disabled.visualGuide).not.toContain('```interactive')
   })
 })

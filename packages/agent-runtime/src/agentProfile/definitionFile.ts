@@ -10,7 +10,9 @@
  *     刻意不用通用的 `tools` key：ShuviX 工具名与其他 app 不兼容，带前缀可避免
  *     agent md 迁移到其他应用时被误读。省略 = 空白名单（无工具）；
  *     条目大小写不敏感（内置工具名归一为小写注册名），`agent` 为嵌套派发 opt-in，
- *     `mcp:<server>` / `skill:<name>` 前缀语法为 ShuviX 扩展（余部大小写保留）；
+ *     `mcp:<server>` 前缀语法为 ShuviX 扩展（余部大小写保留）；`skill` 给这个 agent 技能工具 ——
+ *     货架是侧栏里启用着的全部技能，档案不再逐个点名（2026-10-28，按主流用法）：旧写法
+ *     `skill:<name>` 读作 `skill`；
  *   - ShuviX 自有字段带 `shuvix-` 前缀：`shuvix-displayName`、模型 `shuvix-model`，
  *     与两个上下文注入声明：
  *     `shuvix-instruction-files`（**逗号分隔的文件清单**，如
@@ -109,15 +111,18 @@ export interface ParsedAgentFile {
 
 /**
  * 单个工具条目归一：
- *   - `mcp:` / `skill:` 前缀 → 前缀归小写，余部保留（server / skill 名大小写敏感）；
+ *   - `mcp:` 前缀 → 前缀归小写，余部保留（server 名大小写敏感）；
+ *   - `skill:<name>` → `skill`：技能不再按档案点名，点过名的档案要的是技能工具，货架是全部启用着的
+ *     （与 Claude Code / Codex 同一用法；去重之后一份档案至多一个 `skill`）；
  *   - 其余 → 小写（对齐内置工具注册名，使 Claude Code 风格的 `Read, Grep` 直接可用；
  *     派发工具 `agent` 同为小写内置名，旧文件里的 `Agent` 由此自动归一）。
  */
 function normalizeToolName(raw: string): string {
   const entry = raw.trim()
   if (!entry) return ''
-  const prefixed = /^(mcp|skill):(.*)$/i.exec(entry)
-  if (prefixed) return `${prefixed[1].toLowerCase()}:${prefixed[2].trim()}`
+  if (/^skill:/i.test(entry)) return 'skill'
+  const prefixed = /^mcp:(.*)$/i.exec(entry)
+  if (prefixed) return `mcp:${prefixed[1].trim()}`
   return entry.toLowerCase()
 }
 

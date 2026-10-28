@@ -2,7 +2,7 @@
  * 侧栏「新建智能体」的初值（newAgentTemplate）—— 它落盘前要过 agent md 解析器（非法一律拒绝），
  * 所以钉的是「解析出来是什么」，不是模板的逐字文本：
  *
- *   G4 工具名单成对点名两个命令工具（`read, bash, powershell`）—— 宿主只装配这台机器上存在的那个，
+ *   G4 工具名单成对点名两个命令工具，外加技能工具（`read, bash, powershell, skill`）—— 宿主只装配这台机器上存在的那个，
  *      一份在 macOS 上新建的 agent 拷到 Windows 上照样有命令工具；
  *   G4b 三种界面语言的描述 / 正文代进去都是一份合法的 agent md（描述里的标点不会弄坏 YAML）。
  */
@@ -27,7 +27,7 @@ const translator =
   }
 
 describe('newAgentTemplate', () => {
-  it('G4 — 解析出的工具名单恰为 read, bash, powershell；名字就是传进来的那个', () => {
+  it('G4 — 解析出的工具名单恰为 read, bash, powershell, skill；名字就是传进来的那个', () => {
     const warnings: string[] = []
     const parsed = parseAgentDefinitionFile(
       newAgentTemplate((k) => k, 'my-agent'),
@@ -37,7 +37,7 @@ describe('newAgentTemplate', () => {
     expect(warnings).toEqual([])
     expect(parsed).not.toBeNull()
     expect(parsed!.name).toBe('my-agent')
-    expect(parsed!.tools).toEqual(['read', 'bash', 'powershell'])
+    expect(parsed!.tools).toEqual(['read', 'bash', 'powershell', 'skill'])
     // 新建的 agent 默认与内置档案同一套上下文注入
     expect(parsed!.instructionFiles).toEqual(['AGENTS.md', 'CLAUDE.md'])
     expect(parsed!.projectAwareness).toBe(true)
@@ -59,6 +59,6 @@ describe('newAgentTemplate', () => {
     expect(parsed).not.toBeNull()
     expect(parsed!.description).toBe(description)
     expect(parsed!.systemPrompt).toBe(body)
-    expect(parsed!.tools).toEqual(['read', 'bash', 'powershell'])
+    expect(parsed!.tools).toEqual(['read', 'bash', 'powershell', 'skill'])
   })
 })

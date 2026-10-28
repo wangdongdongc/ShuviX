@@ -7,7 +7,7 @@
  * | 项        | root                                    | spawned                             |
  * |-----------|-----------------------------------------|-------------------------------------|
  * | 思考档位   | 传入值（会话设置）                       | 档案 shuvix-thinking 优先，否则继承  |
- * | 工具名单   | 档案全量 ± 会话勾选（只收 mcp:/skill:）  | 档案全量 + overlay                  |
+ * | 工具名单   | 档案全量 ± 会话勾选（只收 mcp:）         | 档案全量 + overlay                  |
  *
  * 初始模型那一行不在这里：root 以会话设置为准（锁），spawned 的 `shuvix-model` 由协调器经
  * `SessionHostDeps.resolveProfileModel` 解析（`spawn.ts`）。系统提示词也不在这里拼：人设在创建 agent 时冻结
@@ -21,18 +21,19 @@ import type { AgentKind } from '../agentProfile/promptVars'
 /**
  * 名单归一：档案白名单 ± 会话勾选 overlay，去重保序。
  *
- * 档案的 `shuvix-tools` 对内置 / mcp / skill 三类是**一并声明**的 —— root 与 spawned 同一条规则：
- * 档案写了什么，这个 agent 就带什么。root 的会话勾选（记号见 chat-protocol `toolSelection.ts`）在其上增减：
+ * 档案的 `shuvix-tools` 对内置 / mcp 两类是**一并声明**的 —— root 与 spawned 同一条规则：档案写了什么，
+ * 这个 agent 就带什么。技能不按名字进名单：档案写 `skill` 就带技能工具，货架是此刻启用着的全部技能，由宿主
+ * 在创建时定下、记进锁（2026-10-28，按主流用法）。root 的会话勾选（记号见 chat-protocol `toolSelection.ts`）
+ * 在其上增减：
  *  - 内置工具名恒由档案决定（选择器里本就看不到它们，取消记号也取消不了它们）；
- *  - mcp: / skill: 档案声明的那截是**缺省勾上**：会话勾选能加别的，也能用 `-mcp:…` / `-skill:…` 把
- *    声明的某一项取消（选择器与会话设置把声明项画成默认勾上、可以取消，`tools.list` 的 `declaredBy`）。
- *    同一项既被勾又被取消时取消赢；取消一个档案没声明的项什么也不做。
- *  - root 的 overlay **只收** mcp: / skill:：勾选里混进一个内置名（手改的设置、被新会话继承的
- *    项目配置）不能借 overlay 越过档案 —— bot 基座的窄名单因此是结构保证。
+ *  - mcp: 档案声明的那截是**缺省勾上**：会话勾选能加别的，也能用 `-mcp:…` 把声明的某一台取消（选择器
+ *    与会话设置把声明项画成默认勾上、可以取消，`tools.list` 的 `declaredBy`）。同一项既被勾又被取消时
+ *    取消赢；取消一个档案没声明的项什么也不做。
+ *  - root 的 overlay **只收** mcp:：勾选里混进一个内置名（手改的设置、被新会话继承的项目配置）不能借
+ *    overlay 越过档案 —— bot 基座的窄名单因此是结构保证；旧会话里存着的 `skill:` 条目同样被挡在外面。
  *  - spawned 没有选择器也没有会话设置，档案即全部（overlay 恒为空）。
  *
- * 于是 `shuvix-tools` 加上会话勾选就是 agent 工具表的完整列举：宿主不在这份名单之外另挂工具
- * （内置技能也要档案点名 `skill:builtin:<name>` 才上架）。
+ * 于是 `shuvix-tools` 加上会话勾选就是 agent 工具表的完整列举：宿主不在这份名单之外另挂工具。
  */
 export function normalizeToolNames(
   kind: AgentKind,

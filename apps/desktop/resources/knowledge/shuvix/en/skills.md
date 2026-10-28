@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Skills (SKILL.md) as ShuviX reads them'
-description: 'How ShuviX discovers, parses, enables and delivers skills — the SKILL.md frontmatter it actually reads, the skill sources (global, project, shared, external directories), `.config.json`, the slash-command expansion, the `skill` tool, and the `skill:<name>` entries in agent files and session extensions.'
+description: 'How ShuviX discovers, parses, enables and delivers skills — the SKILL.md frontmatter it actually reads, the skill sources (global, project, shared, external directories), `.config.json`, the slash-command expansion, the `skill` tool, and which agents get it.'
 tags: [shuvix, skills, format, spec]
 status: stable
 sources:
@@ -33,12 +33,14 @@ Prefix every review comment with a label…
 Scripts for this skill live in ${CLAUDE_SKILL_DIR}/scripts.
 ```
 
-ShuviX reads exactly two frontmatter keys, with a **line-based** reader (YAML only helps with a multi-line `description`, below):
+ShuviX reads four frontmatter keys, with a **line-based** reader (YAML only helps with a multi-line `description`, below):
 
 | Key           | Required | Meaning                                                                                                                                                                                                                   |
 | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`        | **yes**  | The skill's name — the slash command and the value used in `skill:<name>`. Single line; surrounding quotes are stripped. Keep it a simple identifier (letters, digits, `-`).                                               |
+| `name`        | **yes**  | The skill's name — the slash command and the name the `skill` tool lists. Single line; surrounding quotes are stripped. Keep it a simple identifier (letters, digits, `-`).                                               |
 | `description` | no       | Preferably one line (a YAML `>` block is read too). It is what the `skill` tool shows the model and what the slash-command popover shows the user — write it as *when to use this skill*, with the words a user or model would search for. |
+| `disable-model-invocation` | no | `true` keeps the skill off the `skill` tool: only the user can run it, as `/<name>`. Same key as in Claude Code. |
+| `user-invocable` | no | `false` keeps the skill out of the `/` menu: only the model can load it. Same key as in Claude Code. |
 
 Rules of the parser: the file must start with `---`; the frontmatter ends at the next `---`; each
 line is split on its first `:`. A `description` written over several lines — a YAML `>` or `|`
@@ -72,10 +74,12 @@ as a skill, so a skill that `npx skills add` linked into `~/.claude/skills` appe
 `agents`. If the same folder was already added as an external directory, that entry keeps it.
 
 The directory name and `name` may differ; ShuviX matches by `name`. Builtin skills come with the
-application (one directory per UI language) and cannot be edited; today there are two:
-`builtin:drawing` — the craft for inline SVG figures — which the `work`, `chat`, `coding`, `bot`,
-`notebook` and `tab` agents name in their `shuvix-tools`, and `builtin:widget` — building and
-maintaining widgets — which `work`, `chat` and `coding` name.
+application (one directory per UI language) and cannot be edited; among them are
+`builtin:drawing` — the craft for inline SVG figures — and `builtin:widget` — building and
+maintaining widgets. They are on the shelf of every agent that has the `skill` tool, like any
+other enabled skill: the `work`, `chat`, `coding`, `bot`, `notebook` and `tab` agents list it in
+their `shuvix-tools`. Switching `builtin:drawing` off also drops the drawing section from the
+system prompt of agents created afterwards.
 Enable state lives in `~/.shuvix/skills/.config.json`:
 
 ```json
@@ -103,24 +107,22 @@ other file of the project.
    `Base directory for this skill: <abs dir>` followed by the body, with `${CLAUDE_SKILL_DIR}`
    replaced by the skill's directory and `${CLAUDE_SESSION_ID}` by the current session id. The
    whole body enters the conversation as the user's text.
-2. **The `skill` tool** — when a session (or an agent file) enables `skill:<name>` entries, the
-   agent gets a `skill` tool whose description lists the enabled skills as
-   `<name> / <description> / file://<dir>`; the model calls `skill` with a `name` to receive the
+2. **The `skill` tool** — an agent whose `shuvix-tools` lists `skill` gets a `skill` tool whose
+   description lists **every enabled skill** (minus those with `disable-model-invocation: true`)
+   as `<name> / <description> / file://<dir>`; the model calls `skill` with a `name` to receive the
    full `SKILL.md` body plus a sample of the companion files, then reads what it needs. This is
-   lazy: nothing is injected until the model asks for it, so a long skill costs nothing while
-   unused.
-   - **Per session**: the Extensions section of the session config (and the input-box tool
-     picker) — stored in the session's `settings.enabledTools` as `skill:<name>`; a project's
-     own defaults seed new sessions; the selection is read when the session's agent is
-     created, and a change made while that agent exists applies to it from its next request
-     (ShuviX asks first when the change would invalidate the provider's prompt cache). Entries the session's agent file declares
-     are listed there too, ticked by default; unticking one stores `-skill:<name>` and turns it
-     off for that session only (or for a project's new sessions, when done in the project's
-     settings) — how a session swaps the builtin drawing skill for another one.
-   - **Per agent file**: `shuvix-tools: …, skill:<name>` in an agent md — that agent always has
-     the skill by default; a session rooted on it can untick it for itself (above).
-   - Project-level skills are visible to the `skill` tool of any root agent working in that
-     project.
+   lazy: only names and descriptions are listed until the model asks for one, so a long skill
+   costs little while unused. It works the way Claude Code and Codex do:
+   - **No per-session or per-project choice**: there is no skill list in the session config, the
+     input-box picker or the project settings. To keep a skill from the model, switch it (or its
+     directory) off in the sidebar.
+   - **Fixed when the agent is created**: the shelf is read when a session's agent is created and
+     kept with it. Switching a skill on or off affects agents created from then on; a running
+     agent keeps its shelf until it is rebuilt (the X on the agent chip), so its prompt cache
+     is not broken.
+   - **Per agent file**: listing `skill` gives the agent the whole shelf; an agent file cannot
+     pick individual skills (an older `skill:<name>` entry is read as `skill`).
+   - Project-level skills are on the shelf of agents working in that project.
 3. **As a file to read** — nothing stops an agent from reading `SKILL.md` directly; the two
    mechanisms above just save it the path lookup.
 

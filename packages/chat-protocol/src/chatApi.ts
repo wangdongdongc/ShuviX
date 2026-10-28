@@ -65,9 +65,9 @@ export interface SessionModelMetadata {
 
 export interface SessionSettings {
   /**
-   * 这条会话的扩展能力勾选：`mcp:<server>` / `skill:<name>` 在 agent 档案之上加一项，
-   * `-mcp:<server>` / `-skill:<name>` 取消档案 `shuvix-tools` 声明的一项（记号与读写见
-   * `toolSelection.ts`）。只收这几种条目。
+   * 这条会话的扩展能力勾选：`mcp:<server>` 在 agent 档案之上加一台，`-mcp:<server>` 取消档案
+   * `shuvix-tools` 声明的一台（记号与读写见 `toolSelection.ts`）。只收这两种条目；技能不在勾选里
+   * （启用着的全部上货架），旧会话里存着的 `skill:` 条目不再被认。
    *
    * 新建会话时定下来：项目会话继承项目保存过的扩展能力（项目没保存过就是空，与无项目的会话
    * 一致）、子会话抄父会话。
@@ -474,7 +474,7 @@ export interface SessionUpdateProjectParams {
 
 export interface SessionUpdateEnabledToolsParams {
   id: string
-  /** 完整勾选（整份替换，不是增量）；只收 mcp:/skill: 条目与它们的取消记号（`-mcp:` / `-skill:`），其余被丢弃 */
+  /** 完整勾选（整份替换，不是增量）；只收 mcp: 条目与它们的取消记号（`-mcp:`），其余被丢弃 */
   enabledTools: string[]
 }
 
@@ -518,9 +518,9 @@ export interface ToolInfo {
   serverStatus?: 'connected' | 'disconnected' | 'connecting' | 'error'
   isEnabled?: boolean
   /**
-   * 这条 mcp:/skill: 项由会话的 agent 档案在 `shuvix-tools` 里声明 —— 值是那个档案的显示名。
-   * 档案声明的项对这个档案的每条会话都恒生效，会话勾选只能在其上叠加；选择器因此把它画成
-   * 已勾、锁住，悬停时说是谁声明的。要去掉它，路径是覆盖那份档案 md。
+   * 这条 mcp: 项由会话的 agent 档案在 `shuvix-tools` 里声明 —— 值是那个档案的显示名。
+   * 档案声明的项缺省勾上，会话可以取消（勾选里写 `-mcp:<server>`）；选择器因此把它画成默认勾上，
+   * 悬停时说是谁声明的。
    */
   declaredBy?: string
 }

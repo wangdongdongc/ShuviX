@@ -96,7 +96,7 @@ export interface SessionModelMetadata {
 
 /** 会话级配置 */
 export interface SessionSettings {
-  /** 扩展能力勾选（mcp:/skill:）；只在创建 Agent 时读一次，运行时存在期间只读（见 useSessionTools） */
+  /** 扩展能力勾选（mcp:）；创建 Agent 时读，运行时存在期间改了当场重配（见 useSessionTools） */
   enabledTools?: string[]
   /** 绑定的 bot；有值即为 bot 会话（普通有根会话，根档案 bot）。判定经 chat-protocol 的 isBotSessionSettings */
   bot?: string
@@ -260,7 +260,7 @@ interface ChatState {
    */
   sessionAgentCreated: Record<string, boolean>
   /**
-   * 欢迎页（还没有会话）上勾的扩展能力（mcp:/skill:）—— 直接发送新建会话时写进那条会话的
+   * 欢迎页（还没有会话）上勾的扩展能力（mcp:）—— 直接发送新建会话时写进那条会话的
    * `settings.enabledTools`，随后清空。没有会话就没有可写的地方，所以先记在这里。
    */
   welcomeEnabledTools: string[]

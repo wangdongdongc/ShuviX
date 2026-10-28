@@ -2,6 +2,7 @@
   "case": "work-root-darwin",
   "description": "work root on macOS with two MCP servers and a user skill ticked (the drawing skill in the overlay dedupes against the profile)",
   "capturedFrom": "apps/desktop agentHost resolveTools (resolveDesktopTools) on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
+  "revised": "2026-10-28: skills are no longer named by the profile or the session — the profile lists the tool `skill` (legacy `skill:<name>` entries read as `skill`), skill: entries in a stored selection are ignored, and SkillTool is built once with the shelf 'enabled' (every enabled, model-invocable skill). names / profileTools / observed.skillToolConstructed were revised by hand; output.toolNames is unchanged.",
   "inputs": {
     "platform": "darwin",
     "kind": "root",
@@ -23,7 +24,7 @@
       "session",
       "knowledge",
       "artifact",
-      "skill:builtin:drawing"
+      "skill"
     ],
     "toolOverlay": [
       "mcp:context7",
@@ -45,10 +46,9 @@
       "session",
       "knowledge",
       "artifact",
-      "skill:builtin:drawing",
+      "skill",
       "mcp:context7",
-      "mcp:ssh",
-      "skill:pdf"
+      "mcp:ssh"
     ],
     "extraTools": [],
     "projectPath": "/Users/golden/projects/acme",
@@ -145,10 +145,7 @@
   "observed": {
     "skillToolConstructed": [
       {
-        "names": [
-          "builtin:drawing",
-          "pdf"
-        ],
+        "shelf": "enabled",
         "projectPath": "/Users/golden/projects/acme"
       }
     ],

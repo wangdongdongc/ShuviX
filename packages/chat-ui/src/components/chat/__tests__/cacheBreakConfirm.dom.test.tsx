@@ -71,7 +71,7 @@ async function mountHost(): Promise<{ container: HTMLDivElement; unmount: () => 
 
 /** 发起一问，并让预判与随后的渲染落定 */
 async function ask(
-  change: Parameters<typeof confirmAgentChange>[1] = { enabledTools: ['skill:x'] }
+  change: Parameters<typeof confirmAgentChange>[1] = { enabledTools: ['mcp:x'] }
 ): Promise<{ result: Promise<boolean>; settled: () => boolean | undefined }> {
   let value: boolean | undefined
   let result!: Promise<boolean>
@@ -172,10 +172,10 @@ describe('confirmAgentChange：什么时候不问', () => {
 
   it('RU-7 previewChange 收到的恰是 {sessionId, ...change}', async () => {
     previewChange.mockResolvedValue(preview({ cache: 'kept', reasons: [] }))
-    await ask({ enabledTools: ['mcp:a', '-skill:b'] })
+    await ask({ enabledTools: ['mcp:a', '-mcp:b'] })
     await ask({ provider: 'prov-1', model: 'model-b' })
     expect(previewChange.mock.calls).toEqual([
-      [{ sessionId: SID, enabledTools: ['mcp:a', '-skill:b'] }],
+      [{ sessionId: SID, enabledTools: ['mcp:a', '-mcp:b'] }],
       [{ sessionId: SID, provider: 'prov-1', model: 'model-b' }]
     ])
   })

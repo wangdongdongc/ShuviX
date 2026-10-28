@@ -452,7 +452,7 @@ describe('LA-R1 agent_closing re-pulls the session tool state', () => {
             id: 's1',
             title: 's1',
             projectId: null,
-            settings: { enabledTools: ['skill:pdf', 'mcp:ssh'] }
+            settings: { enabledTools: ['mcp:pdf', 'mcp:ssh'] }
           } as unknown as ReturnType<typeof store>['sessions'][number]
         ],
         sessionAgentCreated: { s1: true }

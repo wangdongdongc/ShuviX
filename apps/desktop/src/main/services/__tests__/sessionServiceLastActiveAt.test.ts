@@ -169,14 +169,14 @@ describe('lastActiveAt', () => {
   it('updateTitle / updateEnabledTools / updateKnowledgeBases 不 touchActive', async () => {
     sessionService.updateTitle('s1', 'Renamed')
     expect(mocks.daoUpdateTitle).toHaveBeenCalledWith('s1', 'Renamed')
-    expect(await sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(true)
+    expect(await sessionService.updateEnabledTools('s1', ['mcp:a'])).toBe(true)
     expect(sessionService.updateKnowledgeBases('s1', ['notes'])).toBe(true)
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
   })
 
   it('updateEnabledTools 当场重配锁住的 agent：也不 touchActive', async () => {
     const session = fakeHost.put('s1', { lock: lockRecord() })
-    expect(await sessionService.updateEnabledTools('s1', ['skill:a'])).toBe(true)
+    expect(await sessionService.updateEnabledTools('s1', ['mcp:a'])).toBe(true)
     expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
     expect(mocks.daoTouchActive).not.toHaveBeenCalled()
   })

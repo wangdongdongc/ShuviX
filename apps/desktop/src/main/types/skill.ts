@@ -17,6 +17,13 @@ export interface Skill {
   source: 'default' | 'project' | 'external' | 'builtin' | 'shared'
   /** 外部目录名称（external 用用户取名；builtin 固定为 'builtin'；shared 为 'claude' / 'agents'） */
   dirName?: string
+  /**
+   * SKILL.md 写了 `disable-model-invocation: true`：不上 agent 的货架，只能由用户 `/名字` 调用
+   * （Claude Code 定的字段，Cursor / VS Code 也认）。省略 = 模型可调用
+   */
+  disableModelInvocation?: true
+  /** SKILL.md 写了 `user-invocable: false`：不进 `/` 菜单，只能由模型调用。省略 = 用户可调用 */
+  userInvocable?: false
 }
 
 /** 外部 skill 目录 */

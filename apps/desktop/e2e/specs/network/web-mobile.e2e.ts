@@ -1695,9 +1695,12 @@ describe('phone layout: the shell', () => {
       expect(Math.abs(sheet.dialog.bottom - sheet.innerHeight), what).toBeLessThanOrEqual(1)
       expect(Math.abs(sheet.dialog.left), what).toBeLessThanOrEqual(0.5)
       expect(Math.abs(sheet.dialog.right - sheet.innerWidth), what).toBeLessThanOrEqual(0.5)
-      const toolRows = sheet.rows.filter(
-        (r) => r.id.startsWith('mcp:') || r.id.startsWith('skill:')
-      )
+      const toolRows = sheet.rows.filter((r) => r.id.startsWith('mcp:'))
+      // 技能不在抽屉里（2026-10-28 起不按会话勾选）
+      expect(
+        sheet.rows.filter((r) => r.id.startsWith('skill')),
+        what
+      ).toEqual([])
       expect(
         toolRows.map((r) => r.id),
         what

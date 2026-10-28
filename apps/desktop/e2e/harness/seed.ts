@@ -132,9 +132,9 @@ export function seedCustomProvider(
 /**
  * 写一个全局 skill（`~/.shuvix/skills/<name>/SKILL.md`），返回文件路径。
  *
- * 全局 skill 缺省即启用（`.config.json` 的 disabled 列表里没有就是启用）。种它是为了让
- * `skill:<name>` 成为**真实可用**的工具名 —— 会话工具集在读取时会经 filterAvailableTools
- * 剔除不存在的条目，光往会话设置里写一个查无此人的名字是断言不到的。
+ * 全局 skill 缺省即启用（`.config.json` 的 disabled 列表里没有就是启用）。启用着的 skill 就在每个
+ * 带 `skill` 工具的 agent 的货架上（2026-10-28 起不按会话勾选），种它是为了断言「它真的上了架」
+ * —— skill 工具描述里的 `<name>…</name>`。
  */
 export function seedSkill(app: E2EApp, name: string, description = 'e2e seeded skill'): string {
   return seedSkillIn(join(app.home, '.shuvix', 'skills'), name, { description })
@@ -1353,7 +1353,7 @@ export async function stampAgentProfile(app: E2EApp, sid: string, name: string):
  * 建一条**带戳的子会话**：经 IPC `session.create({ parentId })` 直建（projectId 恒随父），
  * 再 sqlite 直写 `settings.agentProfile`。等价于 session 工具 `create-sub-session` 带
  * `agent_profile` 落库之后的形态，但**不经 pinAgentProfile** —— 准入与种子（模型 /
- * mcp:/skill: 替换）那半截只能在 sessions/ 区用假提供商脚本化的工具调用打；这里只要一条
+ * mcp: 替换）那半截只能在 sessions/ 区用假提供商脚本化的工具调用打；这里只要一条
  * 「带戳的子会话」给运行时去推导（systemPrompt / 内置工具白名单随戳走）。
  *
  * 返回子会话 id。**不 ensure**：调用方决定何时建运行时（戳已在 create 之后落下）。

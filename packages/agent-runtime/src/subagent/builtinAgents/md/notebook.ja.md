@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:notebook
 shuvix-builtin: true
 name: notebook
 description: ノートブックセッションのベースプロファイル —— ユーザーと一緒に一つの markdown ドキュメントに取り組むエージェントです。メインウィンドウで開いていても、専用ウィンドウでも、開いていなくても同じです。"notebook" という名前のカスタムエージェントで上書きしてカスタマイズできます。
-shuvix-tools: doc_read, doc_edit, doc_insert, read, write, ls, grep, glob, ask, skill:builtin:drawing
+shuvix-tools: doc_read, doc_edit, doc_insert, read, write, ls, grep, glob, ask, skill
 shuvix-displayName: ノートブック
 shuvix-project-awareness: true
 ---

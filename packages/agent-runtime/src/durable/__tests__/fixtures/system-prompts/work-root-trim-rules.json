@@ -2,7 +2,7 @@
   "case": "work-root-trim-rules",
   "description": "work root; instruction content surrounded by whitespace is trimmed inside the fence (P1-08 — see `amended`; createAgent did not trim it, the desktop resolver always did), the project prompt is trimmed, a whitespace-only knowledge guide is skipped",
   "capturedFrom": "createAgentFactory(fakeHost).createAgent() on the pi 0.80.10 AgentHarness runtime (P1-00, before the pi-durable cutover)",
-  "amended": "P1-08: instruction-file content is now trimmed like every other live section (prompt/sections.ts). The capture kept createAgent's untrimmed fence (<project_instructions file=\"AGENTS.md\">\\n\\n  # AGENTS.md\\n\\nUse pnpm.\\n\\n\\n</project_instructions>); the desktop resolver already trims before returning, so production output is unchanged. Only output and the instructionFile part were amended; inputs and observed are as captured.",
+  "amended": "P1-08: instruction-file content is now trimmed like every other live section (prompt/sections.ts). The capture kept createAgent's untrimmed fence (<project_instructions file=\"AGENTS.md\">\\n\\n  # AGENTS.md\\n\\nUse pnpm.\\n\\n\\n</project_instructions>); the desktop resolver already trims before returning, so production output is unchanged. Only output and the instructionFile part were amended; inputs and observed are as captured. 2026-10-28: agent profiles no longer name skills — `shuvix-tools` lists the `skill` tool and the host shelves every enabled skill, and a session's selection carries only mcp: entries. inputs.profile.tools had its `skill:<name>` entry replaced by `skill`, and observed.promptVarsCtx.toolNames was recomputed with normalizeToolNames (a `skill:` entry in the overlay no longer reaches it). Output and parts are unchanged: the persona is rendered from the captured promptVars.",
   "inputs": {
     "kind": "root",
     "sessionId": "sess-golden-root",
@@ -26,7 +26,7 @@
         "session",
         "knowledge",
         "artifact",
-        "skill:builtin:drawing"
+        "skill"
       ],
       "droppedTools": [],
       "instructionFiles": [
@@ -90,7 +90,7 @@
         "session",
         "knowledge",
         "artifact",
-        "skill:builtin:drawing"
+        "skill"
       ]
     },
     "resolverCalls": {

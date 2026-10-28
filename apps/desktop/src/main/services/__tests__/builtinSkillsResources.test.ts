@@ -55,7 +55,10 @@ const LOCALE_FILES = ['en', 'zh', 'ja'].map((lang) => ({
   lang,
   path: join(REPO_ROOT, 'packages/chat-protocol/src/i18n/locales', `${lang}.json`)
 }))
-/** 内置 agent 档案 md（三语全集）：`shuvix-tools` 里的 `skill:builtin:<name>` 写在这里（见 BS-10） */
+/**
+ * 内置 agent 档案 md（三语全集）：`shuvix-tools` 里的技能工具 `skill` 与正文里引入作图说明的占位符写在这里
+ * （见 BS-10）。2026-10-28 之前档案逐个点名 `skill:builtin:<name>`，如今写 `skill` 就带上全部启用着的技能
+ */
 const BUILTIN_AGENTS_MD_DIR = join(
   REPO_ROOT,
   'packages/agent-runtime/src/subagent/builtinAgents/md'
@@ -262,21 +265,33 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
     expect(referenced).toBeGreaterThan(0)
   })
 
-  it('BS-10 内置 agent 档案点名的每个 `skill:builtin:<name>` 都是真实存在的技能（三语全集）', () => {
-    // 与 BS-6 同一类死链，另一个出口：档案在 packages/agent-runtime、技能在 apps/desktop/resources。
-    // 档案点了一个不存在的内置技能名不报错 —— 解析时静默丢掉，agent 就少了那本手艺，而它的提示
-    // 照样以为自己有（变量表按名单判「点没点」，货架按 findEnabled 判「有没有」，两边于是对不上）
+  it('BS-10 内置 agent 档案不再逐个点名技能（`shuvix-tools` 里没有 `skill:<name>`）；正文引入作图说明的档案都带技能工具 `skill`（三语全集）', () => {
+    // 2026-10-28：技能按主流用法走 —— 档案写 `skill` 就带上侧栏里启用着的全部技能（内置的在其中），
+    // 不再写 `skill:builtin:<name>`。与 BS-6 同一类死链换了个出口：作图说明（`{{shuvix:visualGuide}}` /
+    // `{{shuvix:visualCraft}}`）叫模型先加载 builtin:drawing，而宿主只在 agent 带着技能工具、货架上真有它时
+    // 才渲染那一段（agentHost 的 hasDrawingSkill）—— 档案引入了作图说明却没带 `skill`，那一段就静默消失，
+    // agent 少了那本手艺。技能本身在不在场由 BS-6（片段的指路）与上面的三语齐全钉
     const files = readdirSync(BUILTIN_AGENTS_MD_DIR).filter((f) => f.endsWith('.md'))
     expect(files.length, `档案目录是空的：${BUILTIN_AGENTS_MD_DIR}`).toBeGreaterThan(0)
-    let referenced = 0
+    expect(SKILL_NAMES).toContain('drawing')
+    let relying = 0
     for (const file of files) {
       const text = readFileSync(join(BUILTIN_AGENTS_MD_DIR, file), 'utf8')
-      for (const [, name] of text.matchAll(/skill:builtin:([A-Za-z0-9._-]+)/g)) {
-        expect(SKILL_NAMES, `${file} 点名了不存在的技能 builtin:${name}`).toContain(name)
-        referenced++
+      const fm = /^---\n([\s\S]*?)\n---\n/.exec(text)
+      expect(fm, `${file}: 没有 frontmatter`).not.toBeNull()
+      const declared = (parseYaml(fm![1]) as Record<string, unknown>)['shuvix-tools']
+      const tools =
+        typeof declared === 'string' ? declared.split(',').map((tool) => tool.trim()) : []
+      expect(
+        tools.filter((tool) => /^skill:/i.test(tool)),
+        `${file} 还在用旧写法 skill:<name>`
+      ).toEqual([])
+      if (/\{\{shuvix:visual(?:Guide|Craft)\}\}/.test(text)) {
+        expect(tools, `${file} 引入了作图说明却没带技能工具 skill`).toContain('skill')
+        relying++
       }
     }
-    expect(referenced, '没有任何档案点名内置技能 —— 这条守护在空转').toBeGreaterThan(0)
+    expect(relying, '没有任何档案引入作图说明 —— 这条守护在空转').toBeGreaterThan(0)
   })
 
   it.each(MATRIX)(

@@ -333,7 +333,7 @@ function defaultWorld(): void {
   mocks.gatewaySteerDriven.mockResolvedValue({})
   mocks.findLastBySession.mockResolvedValue(undefined)
   mocks.resolveRunConfig.mockResolvedValue({ model: null, thinkingLevel: 'medium' })
-  // 点名的档案缺省钉得上（普通具名档案，没声明模型也没声明 mcp:/skill:）
+  // 点名的档案缺省钉得上（普通具名档案，没声明模型也没声明 mcp:）
   mocks.pinAgentProfile.mockResolvedValue({ success: true, applied: { tools: [] } })
   mocks.create.mockReturnValue({ id: CHILD, title: 'Child' })
   mocks.sessionGrants.mockReturnValue([])
@@ -472,7 +472,7 @@ describe('create —— 继承与上限', () => {
     await runner.create(PARENT, { agentProfile: '  coding ' })
     expect(mocks.pinAgentProfile).toHaveBeenCalledTimes(1)
     expect(mocks.pinAgentProfile).toHaveBeenCalledWith(CHILD, 'coding')
-    // 钉在种子之前：档案的种子（pin 内部写的 mcp:/skill: 替换）必须先落，seedRunConfig
+    // 钉在种子之前：档案的种子（pin 内部写的模型 / 思考档位）必须先落，seedRunConfig
     // 才知道「档案有没有意见」；建会话又必须在钉之前 —— 钉的是一条已经存在的子会话
     const order = [mocks.create, mocks.pinAgentProfile, mocks.resolveRunConfig].map(
       (m) => m.mock.invocationCallOrder[0]
@@ -484,7 +484,7 @@ describe('create —— 继承与上限', () => {
     parentConfig()
     mocks.pinAgentProfile.mockResolvedValue({
       success: true,
-      applied: { model: { provider: 'p', model: 'declared', capabilities: {} }, tools: ['skill:x'] }
+      applied: { model: { provider: 'p', model: 'declared', capabilities: {} }, tools: ['mcp:x'] }
     })
     await runner.create(PARENT, { agentProfile: 'declared-prof' })
     expect(mocks.recordSessionModel).not.toHaveBeenCalled()

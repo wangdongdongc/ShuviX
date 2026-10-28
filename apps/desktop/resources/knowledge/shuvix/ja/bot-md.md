@@ -131,8 +131,7 @@ UI 言語で `~/.shuvix/bots/daily.md` に書き込まれ、その後は普通�
 バックグラウンドの自動再開はすべて通常どおり動きます。
 
 そのルート人格は組み込みの **`bot`** ベースで、ツールリストは意図的に狭められています：`read, ls,
-grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill:builtin:drawing,
-skill:builtin:tracking` —— `bash`
+grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill` —— `bash`
 はなく、組み込み機能サーバー `mcp:ssh` / `mcp:browser` / `mcp:database` も宣言していません（このセッションの
 拡張機能でユーザーがオンにすることはでき、それはユーザー自身の選択です）。bot は作業を自分で行います（シェルはありません）。人格はあなたとの話し方だけを形づくり、bot が書くファイル・メモ・コードは平易に書かれます。大きな作業や独立した作業はサブセッションに渡せます（プログラミングは `agent_profile: coding`）。`~/.shuvix/bots/` 配下への書き込みはセッションの権限表の外への普通の書き込みで、
 組み込みポリシー **ask-on-external-path** の確認になり、自動レビューがオンならレビュアーが答えることも

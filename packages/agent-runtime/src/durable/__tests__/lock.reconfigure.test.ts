@@ -1,18 +1,20 @@
 /**
- * 锁 · 重配（2026-10-26，规则见 `durable/reconfigure.ts`）：锁住的 root agent 换模型 / 扩展勾选（MCP、技能）
- * 当场生效 —— 一个提交改 `pi.agent` 的模型与工具、锁记录（技能那几项改了人设才可能跟着换），从下一次请求起
- * 生效，运行中也是。
+ * 锁 · 重配（2026-10-26，规则见 `durable/reconfigure.ts`）：锁住的 root agent 换模型 / MCP 勾选当场生效 ——
+ * 一个提交改 `pi.agent` 的模型与工具、锁记录，从下一次请求起生效，运行中也是。技能不在其中（2026-10-28）：
+ * 货架在创建时定下、记进锁，侧栏的开关只作用于之后新建的 agent，重配既不换技能工具也不换人设。
  *
- * 场景 W（`support/scenario.ts`）：勾选 ['mcp:ctx','skill:pdf']、假服务器 ctx / new / ssh / other、模型
- * faux-1 / faux-2。缺省「锁住并答完一轮」（请求 0），改动 = 改配置对象再 `session.reconfigureAgent()`。
+ * 场景 W（`support/scenario.ts`）：勾选 ['mcp:ctx']、宿主启用的技能 builtin:drawing / pdf、假服务器
+ * ctx / new / ssh / other、模型 faux-1 / faux-2。缺省「锁住并答完一轮」（请求 0），改动 = 改配置对象再
+ * `session.reconfigureAgent()`。
  *
- *  - RL-1..9：改了什么、怎么提交、下一次请求看到的差异（最小差异：留下的原样、新的追加）；
+ *  - RL-1..9：改了什么、怎么提交、下一次请求看到的差异（最小差异：留下的原样、新的追加）；技能工具与
+ *    货架原样（RL-5）；
  *  - RL-10..14：没锁 / 宿主不支持 / 模型用不了 / 宿主抛错 / MCP 连不上（只连这一次新要的服务器，F5）；
- *  - RL-15..17：人设只随技能变、在同一变量表下比（日期之类的波动不重发）、旧锁不动人设；
+ *  - RL-15..17：重配从不动人设、不调变量表（日期之类的波动不重发）、旧锁照样不动人设；
  *  - RL-18..21：运行中（下一次请求起生效、在途请求不受影响、被拿掉的工具 tool_unavailable、发送等重配）；
  *  - RL-22..29：合流、失败、取消（销毁 / 回退 / 关停取消，停下不取消 F3）、与创建 / 销毁串行；
  *  - RL-30..34：关了再开、重启、连续重配的差异形状；
- *  - RL-35（WT4-DL-04）：加技能的重配不重装内置工具，重启后按新记录的货架重装。
+ *  - RL-35（WT4-DL-04）：宿主启用了别的技能之后的重配不重装内置工具、不改记录的货架，重启后按锁记着的货架重装。
  */
 import { ROOT_CONVERSATION_ID, type Extension } from '@earendil-works/pi-durable'
 import { describe, expect, it } from 'vitest'
@@ -55,7 +57,7 @@ import { aborted, deferred, sleep, waitFor, withTimeout } from './support/wait'
 registerHostCleanup()
 
 const TIMEOUT = 20000
-const OVERLAY = ['mcp:ctx', 'skill:pdf']
+const OVERLAY = ['mcp:ctx']
 const NEW_DECL = mcpDecl('fresh')
 
 const names = (tools: readonly { name: string }[]): string[] => tools.map((tool) => tool.name)
@@ -96,21 +98,6 @@ async function lastDelta(session: DurableSession): Promise<SystemDelta> {
 
 function agentExtension(t: TestHost): Extension | undefined {
   return t.registryOf('s1')!.snapshot().extension('shuvix.agent.1')
-}
-
-/** 人设随 skill:pdf 在不在名单里而变的变量表 */
-function pdfAwareVars(): {
-  calls: (readonly string[])[]
-  promptVars: (ctx: { toolNames: readonly string[] }) => Record<string, string>
-} {
-  const calls: (readonly string[])[] = []
-  return {
-    calls,
-    promptVars: (ctx: { toolNames: readonly string[] }) => {
-      calls.push(ctx.toolNames)
-      return { marker: ctx.toolNames.includes('skill:pdf') ? 'PDF' : 'PLAIN' }
-    }
-  }
 }
 
 describe('lock · reconfigure: what changes and how it is committed', () => {
@@ -198,7 +185,7 @@ describe('lock · reconfigure: what changes and how it is committed', () => {
     const { t, config, session } = await lockedW()
     const ctx = t.toolHost.mcp('ctx')
     const connects = ctx.connects
-    config.toolOverlay = ['skill:pdf']
+    config.toolOverlay = []
     expect((await reconfigure(session)).applied).toBe(true)
     expect(session.lock!.mcp).toEqual({})
     expect(session.lock!.toolNames).toEqual(E_W.filter((name) => !name.startsWith('mcp__ctx__')))
@@ -230,7 +217,7 @@ describe('lock · reconfigure: what changes and how it is committed', () => {
   it('RL-4 a server removed and later re-added is connected again and picks up its current list', async () => {
     const { t, config, session } = await lockedW()
     const ctx = t.toolHost.mcp('ctx')
-    config.toolOverlay = ['skill:pdf']
+    config.toolOverlay = []
     expect((await reconfigure(session)).applied).toBe(true)
     const extra = mcpDecl('extra')
     ctx.setTools([DECL_RESOLVE, extra])
@@ -244,69 +231,83 @@ describe('lock · reconfigure: what changes and how it is committed', () => {
     expect(session.lock!.toolNames).not.toContain('mcp__ctx__docs')
   })
 
-  it('RL-5 a skill change redeclares the skill tool: its description lists the new shelf, it moves last, and the next delta removes and re-adds only `skill`', async () => {
+  it('RL-5 skills are fixed at creation: after the host enabled other skills, a reconfigure (here adding a server) keeps the installed skill tool object, its place and lock.skills; the next delta adds only the server tool', async () => {
     const { t, config, session } = await lockedW()
-    config.toolOverlay = ['mcp:ctx']
+    const skillTool = agentExtension(t)!.tools!.find((tool) => tool.name === 'skill')
+    expect(skillTool).toBeDefined()
+    t.toolHost.options.skills = ['pdf', 'builtin:widget']
+    config.toolOverlay = [...OVERLAY, 'mcp:new']
     expect((await reconfigure(session)).applied).toBe(true)
     const lock = session.lock!
-    expect(lock.skills).toEqual(['builtin:drawing'])
+    expect(lock.skills).toEqual(['builtin:drawing', 'pdf'])
+    expect(lock.toolNames).toEqual([...E_W, 'mcp__new__fresh'])
+    expect(agentExtension(t)!.tools!.find((tool) => tool.name === 'skill')).toBe(skillTool)
     expect(toolDescription(t, 'shuvix.agent.1', 'skill')).toBe(
-      'skill: load a skill (builtin:drawing)'
+      'skill: load a skill (builtin:drawing, pdf)'
     )
-    expect(lock.toolNames).toEqual([...E_W.filter((name) => name !== 'skill'), 'skill'])
-    expect(t.toolHost.reconfigureCalls[0]!.request.servers).toEqual([])
 
     await sendNext(t, session)
     expect(offered(t, 1)).toEqual(lock.toolNames)
     expect(await lastDelta(session)).toEqual({
       sections: [],
-      toolsAdded: ['skill'],
-      toolsRemoved: ['skill']
+      toolsAdded: ['mcp__new__fresh'],
+      toolsRemoved: []
     })
   })
 
-  it('RL-5 variant: opting out of the last skill too removes the skill tool altogether', async () => {
-    const { t, config, session } = await lockedW()
-    config.toolOverlay = ['mcp:ctx', '-skill:builtin:drawing']
+  it.each([
+    ['an opt-out of a skill', ['-skill:builtin:drawing']],
+    ['a tick of a skill', ['skill:other']]
+  ])(
+    'RL-5 variant: a legacy skill entry in the selection (%s) changes neither the skill tool nor lock.skills; only the recorded selection follows; no tool delta',
+    async (_label, legacy) => {
+      const { t, config, session } = await lockedW()
+      const before = session.lock!
+      const skillTool = agentExtension(t)!.tools!.find((tool) => tool.name === 'skill')
+      config.toolOverlay = [...OVERLAY, ...legacy]
+      // 记录的勾选变了（锁照原样记它），所以算一次提交；工具一个不变
+      expect((await reconfigure(session)).applied).toBe(true)
+      const lock = session.lock!
+      expect(lock.selection).toEqual([...OVERLAY, ...legacy])
+      expect(lock.toolNames).toEqual(before.toolNames)
+      expect(lock.skills).toEqual(before.skills)
+      expect(lock.mcp).toEqual(before.mcp)
+      expect(agentExtension(t)!.tools!.find((tool) => tool.name === 'skill')).toBe(skillTool)
+      expect(t.toolHost.reconfigureCalls[0]!.request.names).toEqual(
+        normalizeToolNames('root', W_PROFILE_TOOLS, OVERLAY)
+      )
+      await sendNext(t, session)
+      expect(offered(t, 1)).toEqual(E_W)
+      expect(await toolDeltaCount(await session.currentConversation())).toBe(1)
+    }
+  )
+
+  it('RL-5 variant: an agent created with an empty shelf stays without the skill tool after the host enabled a skill; only a recreated agent gets it', async () => {
+    const { t, config, session } = await lockedW({ toolHost: scenarioToolHost({ skills: [] }) })
+    expect(session.lock!.toolNames).not.toContain('skill')
+    t.toolHost.options.skills = ['pdf']
+    config.toolOverlay = [...OVERLAY, 'mcp:new']
     expect((await reconfigure(session)).applied).toBe(true)
     expect(session.lock!.skills).toEqual([])
     expect(session.lock!.toolNames).not.toContain('skill')
     expect(extensionTools(t, 'shuvix.agent.1')).not.toContain('skill')
-    await sendNext(t, session)
-    expect(await lastDelta(session)).toEqual({
-      sections: [],
-      toolsAdded: [],
-      toolsRemoved: ['skill']
-    })
-  })
 
-  it('RL-5 variant: adding a skill to an agent that had none appends the skill tool', async () => {
-    const config = { ...scenarioConfig(), toolOverlay: ['mcp:ctx', '-skill:builtin:drawing'] }
-    const { t, session } = await lockedW({ config })
-    expect(session.lock!.toolNames).not.toContain('skill')
-    config.toolOverlay = ['mcp:ctx', '-skill:builtin:drawing', 'skill:pdf']
-    expect((await reconfigure(session)).applied).toBe(true)
+    await session.destroyAgent()
+    await session.createAgent()
     expect(session.lock!.skills).toEqual(['pdf'])
-    expect(session.lock!.toolNames.at(-1)).toBe('skill')
     expect(toolDescription(t, 'shuvix.agent.1', 'skill')).toBe('skill: load a skill (pdf)')
-    await sendNext(t, session)
-    expect(await lastDelta(session)).toEqual({
-      sections: [],
-      toolsAdded: ['skill'],
-      toolsRemoved: []
-    })
   })
 
   it('RL-6 opting out of an entry the profile declares is a removal like any other', async () => {
     const config = scenarioConfig()
     config.profile = { ...config.profile, tools: [...W_PROFILE_TOOLS, 'mcp:ctx'] }
-    config.toolOverlay = ['skill:pdf']
+    config.toolOverlay = []
     const { t, session } = await lockedW({ config })
     expect(session.lock!.mcp).toHaveProperty('ctx')
-    config.toolOverlay = ['skill:pdf', '-mcp:ctx']
+    config.toolOverlay = ['-mcp:ctx']
     expect((await reconfigure(session)).applied).toBe(true)
     expect(session.lock!.mcp).toEqual({})
-    expect(session.lock!.selection).toEqual(['skill:pdf', '-mcp:ctx'])
+    expect(session.lock!.selection).toEqual(['-mcp:ctx'])
     await sendNext(t, session)
     expect(await lastDelta(session)).toEqual({
       sections: [],
@@ -482,63 +483,62 @@ describe('lock · reconfigure: refusals and failures', () => {
 })
 
 describe('lock · reconfigure: the persona', () => {
-  it('RL-15 a skill change that changes what the persona says refreshes the frozen persona in the same commit; the next delta carries only the persona section besides the skill tool', async () => {
-    const vars = pdfAwareVars()
-    const { t, config, session } = await lockedW({ promptVars: vars.promptVars })
-    expect(t.kit.requests[0]!.systemPrompt).toBe('You are PDF')
+  it('RL-15 a reconfigure never touches the persona: even with a changed shelf on the host and a legacy skill entry in the selection, the commit carries pi.agent and the lock only, the frozen persona stays and the next delta has no persona section', async () => {
+    const { t, config, session } = await lockedW()
+    expect(t.kit.requests[0]!.systemPrompt).toBe('You are M1')
+    t.toolHost.options.skills = ['pdf']
     const recorder = recordPublications(session.harness)
-    config.toolOverlay = ['mcp:ctx']
+    config.toolOverlay = [...OVERLAY, '-skill:builtin:drawing', 'mcp:new']
     expect((await reconfigure(session)).applied).toBe(true)
     recorder.stop()
     expect(recorder.publications).toHaveLength(1)
     expect(recorder.publications[0]!.docs).toEqual(
-      expect.arrayContaining(['pi.agent#1', 'shuvix.agent-state#1', 'shuvix.session-state'])
+      expect.arrayContaining(['pi.agent#1', 'shuvix.session-state'])
     )
-    expect(((await agentState(session)) as { persona: string }).persona).toBe('You are PLAIN')
+    expect(recorder.touching('shuvix.agent-state#1')).toEqual([])
+    expect(((await agentState(session)) as { persona: string }).persona).toBe('You are M1')
 
     await sendNext(t, session)
-    expect(t.kit.requests[1]!.systemPrompt).toBe('You are PLAIN')
-    const delta = await lastDelta(session)
-    expect(delta.sections).toEqual(['persona'])
-    expect(delta.toolsAdded).toEqual(['skill'])
-    expect(delta.toolsRemoved).toEqual(['skill'])
+    expect(t.kit.requests[1]!.systemPrompt).toBe('You are M1')
+    expect(await lastDelta(session)).toEqual({
+      sections: [],
+      toolsAdded: ['mcp__new__fresh'],
+      toolsRemoved: []
+    })
   })
 
-  it('RL-16 environment drift (a var that changed since creation) is never resent: both renders use the current vars; a non-skill change does not even call the vars', async () => {
+  it('RL-16 environment drift (a var that changed since creation) is never resent: a reconfigure does not even call the vars', async () => {
     const { t, config, session, scenario } = await lockedW()
     const { vars } = scenario
     expect(vars.state.calls).toBe(1)
     vars.state.marker = 'M2'
-    config.toolOverlay = ['mcp:ctx']
+    config.toolOverlay = []
     expect((await reconfigure(session)).applied).toBe(true)
-    // 新旧名单各渲染一遍
-    expect(vars.state.calls).toBe(3)
+    expect(vars.state.calls).toBe(1)
     expect(((await agentState(session)) as { persona: string }).persona).toBe('You are M1')
     await sendNext(t, session)
     expect(t.kit.requests[1]!.systemPrompt).toBe('You are M1')
     const deltas = await systemDeltas(await session.currentConversation())
     expect(deltas.slice(1).some((delta) => delta.sections.includes('persona'))).toBe(false)
 
-    // 不碰技能的改动：变量表不调
     config.toolOverlay = ['mcp:ctx', 'mcp:new']
     expect((await reconfigure(session)).applied).toBe(true)
-    expect(vars.state.calls).toBe(3)
+    expect(vars.state.calls).toBe(1)
   })
 
   it('RL-17 a lock created without a selection (old lock): the persona is left alone; the record gains the selection', async () => {
-    const vars = pdfAwareVars()
     const config = { ...scenarioConfig() }
     delete config.toolOverlay
-    const { t, session } = await lockedW({ config, promptVars: vars.promptVars })
+    const { t, session, scenario } = await lockedW({ config })
     expect(session.lock!.selection).toBeUndefined()
-    expect(t.kit.requests[0]!.systemPrompt).toBe('You are PLAIN')
-    const calls = vars.calls.length
-    config.toolOverlay = ['skill:pdf']
+    expect(t.kit.requests[0]!.systemPrompt).toBe('You are M1')
+    const calls = scenario.vars.state.calls
+    config.toolOverlay = ['mcp:new']
     expect((await reconfigure(session)).applied).toBe(true)
-    expect(session.lock!.selection).toEqual(['skill:pdf'])
+    expect(session.lock!.selection).toEqual(['mcp:new'])
     expect(session.lock!.skills).toEqual(['builtin:drawing', 'pdf'])
-    expect(vars.calls).toHaveLength(calls)
-    expect(((await agentState(session)) as { persona: string }).persona).toBe('You are PLAIN')
+    expect(scenario.vars.state.calls).toBe(calls)
+    expect(((await agentState(session)) as { persona: string }).persona).toBe('You are M1')
   })
 })
 
@@ -612,7 +612,7 @@ describe('lock · reconfigure: while a run is going', () => {
       t.kit.queue(call.step, answer('carried on'))
       const sending = session.submitUser('u2')
       await withTimeout(call.reached, 5000, 'request 1 reached')
-      config.toolOverlay = ['skill:pdf']
+      config.toolOverlay = []
       expect((await reconfigure(session)).applied).toBe(true)
       call.release()
       expect(await withTimeout(sending, 5000, 'send')).toEqual({})
@@ -966,20 +966,18 @@ describe('lock · reconfigure: reopen and restart', () => {
   )
 
   it(
-    'RL-35 (WT4-DL-04) a reconfigure that adds a skill does not rebuild the builtins; a restart with resumable work rebuilds them with the new shelf from the updated record',
+    'RL-35 (WT4-DL-04) after the host enabled another skill, a reconfigure neither rebuilds the builtins nor changes the recorded shelf; a restart with resumable work rebuilds them with the shelf the lock recorded at creation',
     async () => {
-      const { t, config, session } = await lockedW({
-        toolHost: scenarioToolHost({ skills: ['builtin:drawing', 'pdf', 'builtin:widget'] })
-      })
+      const { t, config, session } = await lockedW()
       expect(t.toolHost.builtinCalls).toEqual([
         { sessionId: 's1', sandboxed: true, skills: ['builtin:drawing', 'pdf'] }
       ])
-      config.toolOverlay = [...OVERLAY, 'skill:builtin:widget']
+      t.toolHost.options.skills = ['builtin:drawing', 'pdf', 'builtin:widget']
+      config.toolOverlay = [...OVERLAY, 'mcp:new']
       expect((await reconfigure(session)).applied).toBe(true)
       const record = session.lock!
-      expect(record.skills).toContain('builtin:widget')
-      expect(record.skills).toEqual(expect.arrayContaining(['builtin:drawing', 'pdf']))
-      // 重配不重装内置工具（会话级、按根 agent 的货架定描述的那几个工具到重建时才跟上）
+      expect(record.skills).toEqual(['builtin:drawing', 'pdf'])
+      // 重配不重装内置工具（会话级、按根 agent 的货架定描述的那几个工具只在创建 / 重建时定）
       expect(t.toolHost.builtinCalls).toHaveLength(1)
 
       const stall = stalled()
@@ -991,7 +989,7 @@ describe('lock · reconfigure: reopen and restart', () => {
       expect(reopened.isInterrupted()).toBe(true)
       expect(reopened.lock).toEqual(record)
       expect(t2.toolHost.builtinCalls).toStrictEqual([
-        { sessionId: 's1', sandboxed: true, skills: record.skills }
+        { sessionId: 's1', sandboxed: true, skills: ['builtin:drawing', 'pdf'] }
       ])
     },
     TIMEOUT
@@ -1022,10 +1020,10 @@ describe('lock · reconfigure: reopen and restart', () => {
       const { t, config, session } = await lockedW()
       const steps: (() => void)[] = [
         () => (config.toolOverlay = [...OVERLAY, 'mcp:new']),
-        () => (config.toolOverlay = ['skill:pdf', 'mcp:new']),
         () => (config.toolOverlay = ['mcp:new']),
-        () => (config.toolOverlay = ['mcp:new', 'mcp:ssh', 'skill:pdf']),
-        () => (config.toolOverlay = ['mcp:ctx', 'mcp:new', 'mcp:ssh', '-skill:builtin:drawing']),
+        () => (config.toolOverlay = ['mcp:new', 'mcp:ssh']),
+        () => (config.toolOverlay = ['mcp:ctx', 'mcp:new', 'mcp:ssh']),
+        () => (config.toolOverlay = ['mcp:ctx', 'mcp:ssh']),
         () => (config.model = { provider: 'faux', modelId: 'faux-2' })
       ]
       let previous = requestTools(t.kit, 0)

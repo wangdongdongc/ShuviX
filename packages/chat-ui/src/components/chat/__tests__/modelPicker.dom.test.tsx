@@ -186,7 +186,7 @@ function seed(opts: {
   hostModel?: string
 }): void {
   useChatStore.setState({
-    sessions: [sessionRow(SID, ['skill:old']), sessionRow(S2)],
+    sessions: [sessionRow(SID, ['mcp:old']), sessionRow(S2)],
     sessionAgentCreated: opts.created ?? {},
     sessionClosing: opts.closing ?? {},
     // 不是宿主种子（store 是模块级单例，前一个用例的种子会串过来）；要默认档的用例自己再种
@@ -742,7 +742,7 @@ describe('后端拒绝：回拉真实状态', () => {
     expect(mocks.init).not.toHaveBeenCalled()
     expect(mocks.setActiveModel.mock.calls.length).toBe(setterCalls)
     expect(store().sessionAgentCreated[SID]).toBeUndefined()
-    expect(toolsOf(SID)).toEqual(['skill:old'])
+    expect(toolsOf(SID)).toEqual(['mcp:old'])
   })
 
   it('MP-8 被拒后 init 返回之前切到 S2 → init 的结果不落：host、能力点、S1 的只读态与勾选都不动', async () => {
@@ -772,7 +772,7 @@ describe('后端拒绝：回拉真实状态', () => {
     expect(store().maxContextTokens).toBe(before.max)
     expect(store().modelSupportsVision).toBe(before.vision)
     expect(store().sessionAgentCreated[SID]).toBeUndefined()
-    expect(toolsOf(SID)).toEqual(['skill:old'])
+    expect(toolsOf(SID)).toEqual(['mcp:old'])
   })
 
   it('MP-8 接受路径：setModel 挂着时切到 S2，随后答 true → 不写能力点、不清用量', async () => {
@@ -807,7 +807,7 @@ describe('后端拒绝：回拉真实状态', () => {
     expect(trigger().textContent).toContain(A)
     // 失败的回拉不写只读态与勾选
     expect(store().sessionAgentCreated[SID]).toBeUndefined()
-    expect(toolsOf(SID)).toEqual(['skill:old'])
+    expect(toolsOf(SID)).toEqual(['mcp:old'])
   })
 })
 

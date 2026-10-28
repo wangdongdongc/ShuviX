@@ -6,27 +6,25 @@
 import { isToolOptOut } from '@shuvix/chat-protocol/toolSelection'
 import { getPlatformBuiltinToolEntries } from './toolRegistry'
 import { mcpService } from './mcpService'
-import { skillService } from './skillService'
 export type { ToolName } from '../types/tools'
 
 /**
- * 获取所有可用工具名（内置 + 已启用 MCP + 已启用 Skill）。
+ * 获取所有可用工具名（内置 + 已启用 MCP）。技能不在其中：它们不按会话勾选，启用着的全部上货架。
  *
  * MCP 按「配置里启用了」算可用，不看连接状态 —— 服务器是惰性启动的，创建 Agent 时才连，
  * 这里若按连接状态过滤就会把还没连的那台在前一刻抹掉。
  */
-export function getAllToolNames(projectPath?: string): string[] {
+export function getAllToolNames(): string[] {
   const builtinNames = getPlatformBuiltinToolEntries().map((e) => e.name)
-  const skillNames = skillService.findEnabled(projectPath).map((s) => `skill:${s.name}`)
-  return [...builtinNames, ...mcpService.getEnabledToolNames(), ...skillNames]
+  return [...builtinNames, ...mcpService.getEnabledToolNames()]
 }
 
 /**
  * 过滤已保存的扩展能力勾选，移除已不存在的工具（继承项目配置、创建 Agent 时调用）。
- * 取消档案声明项的记号（`-skill:…`）原样留着：它说的是「不要」，那一项此刻在不在都不影响它的意思
+ * 取消档案声明项的记号（`-mcp:…`）原样留着：它说的是「不要」，那一项此刻在不在都不影响它的意思
  */
-export function filterAvailableTools(enabledTools: string[], projectPath?: string): string[] {
-  const available = new Set(getAllToolNames(projectPath))
+export function filterAvailableTools(enabledTools: string[]): string[] {
+  const available = new Set(getAllToolNames())
   const result = enabledTools.filter((name) => isToolOptOut(name) || available.has(name))
   return result
 }

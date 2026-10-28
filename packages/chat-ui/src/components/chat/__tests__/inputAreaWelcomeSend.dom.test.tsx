@@ -158,8 +158,8 @@ function buildApi(): Record<string, unknown> {
     },
     tools: {
       list: record('tools.list', async () => [
-        { name: 'skill:a', label: 'a', group: '__skills__' },
-        { name: 'skill:req', label: 'req', group: '__skills__' }
+        { name: 'mcp:a', label: 'a', group: 'mcp:a' },
+        { name: 'mcp:req', label: 'req', group: 'mcp:req' }
       ])
     },
     // @ 引用的数据源（会话出现后才去拉）
@@ -350,7 +350,7 @@ const CMD = {
   name: 'Cmd',
   description: 'a command',
   template: 'Run: $ARGUMENTS',
-  requiredTools: ['skill:req', 'skill:a']
+  requiredTools: ['mcp:req', 'mcp:a']
 }
 
 beforeAll(async () => {
@@ -388,8 +388,8 @@ afterEach(() => {
 })
 
 describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', () => {
-  it('WS-D-1 显示 P/M、档位 low、草稿 [skill:a] → create → setModel → setThinkingLevel → updateEnabledTools → init → list → prompt；草稿清空、切到新会话', async () => {
-    seedWelcome({ draft: ['skill:a'], thinkingLevel: 'low' })
+  it('WS-D-1 显示 P/M、档位 low、草稿 [mcp:a] → create → setModel → setThinkingLevel → updateEnabledTools → init → list → prompt；草稿清空、切到新会话', async () => {
+    seedWelcome({ draft: ['mcp:a'], thinkingLevel: 'low' })
     // 前提：没有宿主种子 —— 显示的档位不算默认档
     expect(store().thinkingLevelIsDefault).toBe(false)
     await mount()
@@ -407,9 +407,7 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
     ])
     expect(callsOf('agent.setModel')).toEqual([[{ sessionId: NEW, provider: P, model: M }]])
     expect(callsOf('agent.setThinkingLevel')).toEqual([[{ sessionId: NEW, level: 'low' }]])
-    expect(callsOf('session.updateEnabledTools')).toEqual([
-      [{ id: NEW, enabledTools: ['skill:a'] }]
-    ])
+    expect(callsOf('session.updateEnabledTools')).toEqual([[{ id: NEW, enabledTools: ['mcp:a'] }]])
     expect(callsOf('agent.init')).toEqual([[{ sessionId: NEW }]])
     const [prompt] = callsOf('agent.prompt')[0] as [{ sessionId: string; text: string }]
     expect(prompt.sessionId).toBe(NEW)
@@ -417,11 +415,11 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
 
     expect(store().welcomeEnabledTools).toEqual([])
     expect(store().activeSessionId).toBe(NEW)
-    expect(store().sessions.find((s) => s.id === NEW)?.settings.enabledTools).toEqual(['skill:a'])
+    expect(store().sessions.find((s) => s.id === NEW)?.settings.enabledTools).toEqual(['mcp:a'])
   })
 
   it('WS-D-11 知识库草稿 [notes] → 扩展能力之后、init 之前写进新会话；两份草稿都清空', async () => {
-    seedWelcome({ draft: ['skill:a'], kbDraft: ['notes'] })
+    seedWelcome({ draft: ['mcp:a'], kbDraft: ['notes'] })
     await mount()
     await type('hello')
     await pressEnter()
@@ -461,22 +459,22 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
   })
 
   it('WS-D-3 没显示模型 → 回车不建会话；草稿与输入文本都保留', async () => {
-    seedWelcome({ draft: ['skill:a'], model: '' })
+    seedWelcome({ draft: ['mcp:a'], model: '' })
     await mount()
     await type('hello')
     await pressEnter()
 
     expect(steps()).toEqual([])
-    expect(store().welcomeEnabledTools).toEqual(['skill:a'])
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a'])
     expect(store().inputText).toBe('hello')
     expect(textarea().value).toBe('hello')
     expect(store().activeSessionId).toBeNull()
   })
 
   it('WS-D-6 已有当前会话 → 不 create / setModel / setThinkingLevel；草稿非空也不动', async () => {
-    seedWelcome({ draft: ['skill:a'] })
-    rows.set('existing', row('existing', ['skill:x']))
-    useChatStore.setState({ sessions: [row('existing', ['skill:x'])] })
+    seedWelcome({ draft: ['mcp:a'] })
+    rows.set('existing', row('existing', ['mcp:x']))
+    useChatStore.setState({ sessions: [row('existing', ['mcp:x'])] })
     store().setActiveSessionId('existing')
     await mount()
     await type('hello')
@@ -485,12 +483,12 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
     expect(steps()).toEqual(['agent.prompt'])
     const [prompt] = callsOf('agent.prompt')[0] as [{ sessionId: string }]
     expect(prompt.sessionId).toBe('existing')
-    expect(store().welcomeEnabledTools).toEqual(['skill:a'])
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a'])
     expect(store().activeSessionId).toBe('existing')
   })
 
   it('WS-D-7 session.create reject → 卡片里写明失败原因、没有未处理的 rejection；草稿与输入文本都在、不调 prompt；再敲字提示消失', async () => {
-    seedWelcome({ draft: ['skill:a'] })
+    seedWelcome({ draft: ['mcp:a'] })
     createImpl = () => Promise.reject(new Error('create failed'))
     await mount()
     await type('hello')
@@ -502,7 +500,7 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
 
     expect(unhandled).toEqual([])
     expect(steps()).toEqual(['session.create'])
-    expect(store().welcomeEnabledTools).toEqual(['skill:a'])
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a'])
     expect(store().activeSessionId).toBeNull()
     expect(store().inputText).toBe('hello')
     expect(sendErrorText()).toBe(i18n.t('input.sendFailed', { error: 'create failed' }))
@@ -512,7 +510,7 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
   })
 
   it('WS-D-7b 新会话配到一半失败（setModel reject）→ 删掉这条半成品会话；不 init、不 prompt；草稿与输入都在，失败原因写在卡片里', async () => {
-    seedWelcome({ draft: ['skill:a'] })
+    seedWelcome({ draft: ['mcp:a'] })
     setModelImpl = () => Promise.reject(new Error('set model failed'))
     await mount()
     await type('hello')
@@ -526,7 +524,7 @@ describe('欢迎页直接发送：选择在 agent.init 之前落进新会话', (
     expect(steps()).toEqual(['session.create', 'agent.setModel', 'session.delete'])
     expect(callsOf('session.delete')).toEqual([[NEW]])
     expect(rows.has(NEW)).toBe(false)
-    expect(store().welcomeEnabledTools).toEqual(['skill:a'])
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a'])
     expect(store().activeSessionId).toBeNull()
     expect(store().inputText).toBe('hello')
     expect(sendErrorText()).toBe(i18n.t('input.sendFailed', { error: 'set model failed' }))
@@ -546,7 +544,7 @@ describe('欢迎页的档位：宿主种的默认档不写，有人定过才写'
   ]
 
   it('WS-D-8 种了默认档 xhigh、没人动过 → 不调 setThinkingLevel；模型与草稿照写、草稿清空、切到新会话', async () => {
-    seedWelcome({ draft: ['skill:a'] })
+    seedWelcome({ draft: ['mcp:a'] })
     store().seedDefaultThinkingLevel('xhigh')
     await mount()
     await type('hello')
@@ -555,9 +553,7 @@ describe('欢迎页的档位：宿主种的默认档不写，有人定过才写'
     expect(steps()).toEqual(welcomeTimeline(false))
     expect(callsOf('agent.setThinkingLevel')).toEqual([])
     expect(callsOf('agent.setModel')).toEqual([[{ sessionId: NEW, provider: P, model: M }]])
-    expect(callsOf('session.updateEnabledTools')).toEqual([
-      [{ id: NEW, enabledTools: ['skill:a'] }]
-    ])
+    expect(callsOf('session.updateEnabledTools')).toEqual([[{ id: NEW, enabledTools: ['mcp:a'] }]])
     const [prompt] = callsOf('agent.prompt')[0] as [{ sessionId: string; text: string }]
     expect(prompt.sessionId).toBe(NEW)
     expect(prompt.text).toBe('hello')
@@ -568,7 +564,7 @@ describe('欢迎页的档位：宿主种的默认档不写，有人定过才写'
   it.each(['high', 'xhigh'])(
     'WS-D-9 种了 xhigh、在真的面板里点 %s（点的时候零 IPC）→ 发送时写点的那一档，排在 setModel 与 updateEnabledTools 之间',
     async (level) => {
-      seedWelcome({ draft: ['skill:a'] })
+      seedWelcome({ draft: ['mcp:a'] })
       store().seedDefaultThinkingLevel('xhigh')
       await mount()
 
@@ -589,7 +585,7 @@ describe('欢迎页的档位：宿主种的默认档不写，有人定过才写'
       expect(callsOf('agent.setThinkingLevel')).toEqual([[{ sessionId: NEW, level }]])
       expect(callsOf('agent.setModel')).toEqual([[{ sessionId: NEW, provider: P, model: M }]])
       expect(callsOf('session.updateEnabledTools')).toEqual([
-        [{ id: NEW, enabledTools: ['skill:a'] }]
+        [{ id: NEW, enabledTools: ['mcp:a'] }]
       ])
     }
   )
@@ -627,7 +623,7 @@ describe('欢迎页的档位：宿主种的默认档不写，有人定过才写'
 
 describe('斜杠命令的依赖项落到它被发往的会话', () => {
   it('WS-D-4 键入 /cmd do it（没转成芯片的那条路，同回退恢复的草稿）→ 依赖项第二次写进新会话、排在 prompt 之前；草稿保持 []', async () => {
-    seedWelcome({ draft: ['skill:a'], slashCommands: [CMD] })
+    seedWelcome({ draft: ['mcp:a'], slashCommands: [CMD] })
     await mount()
     // 绕过 handleInputChange 的「带空格即转芯片」：与消息回退恢复的草稿同一条路 —— 发送时才解析命令
     await act(async () => {
@@ -638,8 +634,8 @@ describe('斜杠命令的依赖项落到它被发往的会话', () => {
 
     const writes = callsOf('session.updateEnabledTools')
     expect(writes).toEqual([
-      [{ id: NEW, enabledTools: ['skill:a'] }],
-      [{ id: NEW, enabledTools: ['skill:a', 'skill:req'] }]
+      [{ id: NEW, enabledTools: ['mcp:a'] }],
+      [{ id: NEW, enabledTools: ['mcp:a', 'mcp:req'] }]
     ])
     const order = steps()
     expect(order.lastIndexOf('session.updateEnabledTools')).toBeLessThan(
@@ -651,26 +647,26 @@ describe('斜杠命令的依赖项落到它被发往的会话', () => {
     // 依赖项进的是新会话，不是（已清空的）草稿
     expect(store().welcomeEnabledTools).toEqual([])
     expect(store().sessions.find((s) => s.id === NEW)?.settings.enabledTools).toEqual([
-      'skill:a',
-      'skill:req'
+      'mcp:a',
+      'mcp:req'
     ])
     const [prompt] = callsOf('agent.prompt')[0] as [{ sessionId: string }]
     expect(prompt.sessionId).toBe(NEW)
   })
 
   it('WS-D-4b 欢迎页键入 /cmd 加空格（转成芯片）→ 依赖项立即进草稿、零 IPC；发送后经第一次 updateEnabledTools 落进新会话', async () => {
-    seedWelcome({ draft: ['skill:a'], slashCommands: [CMD] })
+    seedWelcome({ draft: ['mcp:a'], slashCommands: [CMD] })
     await mount()
     await type('/cmd ')
 
-    expect(store().welcomeEnabledTools).toEqual(['skill:a', 'skill:req'])
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a', 'mcp:req'])
     expect(steps()).toEqual([])
 
     await type('do it')
     await pressEnter()
 
     expect(callsOf('session.updateEnabledTools')).toEqual([
-      [{ id: NEW, enabledTools: ['skill:a', 'skill:req'] }]
+      [{ id: NEW, enabledTools: ['mcp:a', 'mcp:req'] }]
     ])
     expect(store().welcomeEnabledTools).toEqual([])
     const [prompt] = callsOf('agent.prompt')[0] as [{ sessionId: string; text: string }]
@@ -678,21 +674,21 @@ describe('斜杠命令的依赖项落到它被发往的会话', () => {
   })
 
   it('WS-D-4c 已有会话（还没有 Agent）里键入 /cmd 加空格 → 立即写进这条会话的勾选，草稿不动', async () => {
-    seedWelcome({ draft: ['skill:x'], slashCommands: [CMD] })
-    rows.set('existing', row('existing', ['skill:a']))
-    useChatStore.setState({ sessions: [row('existing', ['skill:a'])] })
+    seedWelcome({ draft: ['mcp:x'], slashCommands: [CMD] })
+    rows.set('existing', row('existing', ['mcp:a']))
+    useChatStore.setState({ sessions: [row('existing', ['mcp:a'])] })
     store().setActiveSessionId('existing')
     await mount()
     await type('/cmd ')
 
     expect(callsOf('session.updateEnabledTools')).toEqual([
-      [{ id: 'existing', enabledTools: ['skill:a', 'skill:req'] }]
+      [{ id: 'existing', enabledTools: ['mcp:a', 'mcp:req'] }]
     ])
-    expect(store().welcomeEnabledTools).toEqual(['skill:x'])
+    expect(store().welcomeEnabledTools).toEqual(['mcp:x'])
   })
 
   it('WS-D-5 欢迎页弹层选命令（芯片）→ 依赖项立即进草稿、零 IPC；发送后经第一次 updateEnabledTools 落进新会话、草稿清空', async () => {
-    seedWelcome({ draft: ['skill:a'], slashCommands: [CMD] })
+    seedWelcome({ draft: ['mcp:a'], slashCommands: [CMD] })
     await mount()
     await type('/')
     const item = [...container.querySelectorAll('button')].find((b) =>
@@ -704,14 +700,14 @@ describe('斜杠命令的依赖项落到它被发往的会话', () => {
     })
     await flush()
 
-    expect(store().welcomeEnabledTools).toEqual(['skill:a', 'skill:req'])
+    expect(store().welcomeEnabledTools).toEqual(['mcp:a', 'mcp:req'])
     expect(steps()).toEqual([])
 
     await type('do it')
     await pressEnter()
 
     expect(callsOf('session.updateEnabledTools')).toEqual([
-      [{ id: NEW, enabledTools: ['skill:a', 'skill:req'] }]
+      [{ id: NEW, enabledTools: ['mcp:a', 'mcp:req'] }]
     ])
     expect(steps()).toEqual([
       'session.create',
@@ -799,7 +795,7 @@ describe('缓存确认框：输入框挂着宿主（RU-22 / RU-23）', () => {
   })
 
   it('RU-23 欢迎页直接发送（草稿 + 斜杠命令的依赖项）从不预判', async () => {
-    seedWelcome({ draft: ['skill:a'], slashCommands: [CMD] })
+    seedWelcome({ draft: ['mcp:a'], slashCommands: [CMD] })
     await mount()
     await act(async () => {
       store().setInputText('/cmd do it')

@@ -362,7 +362,7 @@ describe('S3 / S4 子会话按父会话推定', () => {
     'S3 内存父的子会话（%s）恒为内存会话，继承父的勾选 / 项目与授予的路径',
     async (_label, opt) => {
       const parent = create({ projectId: 'p1' }, EPH)
-      await sessionService.updateEnabledTools(parent.id, ['mcp:ssh', 'skill:x'])
+      await sessionService.updateEnabledTools(parent.id, ['mcp:ssh', 'mcp:x'])
       sessionAcl.grantPath(parent.id, '/Users/u/notes', 'write')
       vi.clearAllMocks()
 
@@ -374,7 +374,7 @@ describe('S3 / S4 子会话按父会话推定', () => {
       expect(sessionService.getById(child.id)).toMatchObject({
         parentId: parent.id,
         projectId: 'p1',
-        settings: { enabledTools: ['mcp:ssh', 'skill:x'] }
+        settings: { enabledTools: ['mcp:ssh', 'mcp:x'] }
       })
       expect(sessionRecords.findChildren(parent.id).map((s) => s.id)).toEqual([child.id])
       // 父会话授予的路径复制进子会话的表（新行）；子会话的派生行是它自己的；全在内存里
@@ -466,7 +466,9 @@ describe('S7 写入口落在内存行上', () => {
     vi.clearAllMocks()
 
     sessionService.updateTitle(s.id, '自动标题', 'auto')
-    expect(await sessionService.updateEnabledTools(s.id, ['mcp:ssh', 'bash', 'skill:x'])).toBe(true)
+    expect(
+      await sessionService.updateEnabledTools(s.id, ['mcp:ssh', 'bash', 'skill:x', 'mcp:x'])
+    ).toBe(true)
     // 会话没开、内存行上没有锁镜像：不 open / peek，没有可重配的 agent
     expect(fakeHost.calls).toEqual([])
     expect(sessionService.updateKnowledgeBases(s.id, [' notes ', 'notes', 'project'])).toBe(true)
@@ -477,7 +479,7 @@ describe('S7 写入口落在内存行上', () => {
       title: '自动标题',
       settings: {
         titleOrigin: 'auto',
-        enabledTools: ['mcp:ssh', 'skill:x'],
+        enabledTools: ['mcp:ssh', 'mcp:x'],
         knowledgeBases: ['notes', 'project']
       }
     })

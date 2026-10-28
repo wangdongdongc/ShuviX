@@ -345,11 +345,10 @@ describe('composeReconfiguredTools', () => {
     t('mcp__xy__t')
   ]
 
-  it('RP-13 skill kept and nothing removed or added → the same tools in the same order', () => {
+  it('RP-13 nothing removed or added → the same tools in the same order', () => {
     const out = composeReconfiguredTools({
       current: CURRENT,
       removedServers: new Set(),
-      skill: { change: 'keep' },
       addedMcp: []
     })
     expect(out).toEqual(CURRENT)
@@ -360,49 +359,25 @@ describe('composeReconfiguredTools', () => {
     const out = composeReconfiguredTools({
       current: CURRENT,
       removedServers: new Set(['ctx', 'x']),
-      skill: { change: 'keep' },
       addedMcp: []
     })
     expect(names(out)).toEqual(['bash', 'agent', 'skill', 'mcp_x__y', 'mcp__xy__t'])
   })
 
-  it('RP-15 a replaced skill tool: the old one is dropped and the new one appended before the added MCP tools', () => {
-    const fresh = t('skill', 'new')
+  it('RP-15 the skill tool is never touched: it keeps its place and identity when servers are added', () => {
     const out = composeReconfiguredTools({
       current: CURRENT,
       removedServers: new Set(),
-      skill: { change: 'replace', tool: fresh },
       addedMcp: [{ server: 'new', tools: [t('mcp__new__fresh')] }]
     })
-    expect(names(out)).toEqual([
-      'bash',
-      'agent',
-      'mcp__ctx__resolve',
-      'mcp__ctx__docs',
-      'mcp_x__y',
-      'mcp__xy__t',
-      'skill',
-      'mcp__new__fresh'
-    ])
-    expect(out[6]).toBe(fresh)
-  })
-
-  it('RP-16 replacing the skill tool with undefined removes it', () => {
-    const out = composeReconfiguredTools({
-      current: CURRENT,
-      removedServers: new Set(),
-      skill: { change: 'replace', tool: undefined },
-      addedMcp: []
-    })
-    expect(names(out)).not.toContain('skill')
-    expect(out).toHaveLength(CURRENT.length - 1)
+    expect(names(out)).toEqual([...names(CURRENT), 'mcp__new__fresh'])
+    expect(out[2]).toBe(CURRENT[2])
   })
 
   it('RP-17 added MCP tools follow the entry order, then the tool order within each entry', () => {
     const out = composeReconfiguredTools({
       current: [t('bash')],
       removedServers: new Set(),
-      skill: { change: 'keep' },
       addedMcp: [
         { server: 'zeta', tools: [t('mcp__zeta__b'), t('mcp__zeta__a')] },
         { server: 'alpha', tools: [t('mcp__alpha__x')] }
@@ -415,7 +390,6 @@ describe('composeReconfiguredTools', () => {
     const clash = composeReconfiguredTools({
       current: [t('bash', 'builtin'), t('mcp__ctx__resolve', 'old')],
       removedServers: new Set(),
-      skill: { change: 'keep' },
       addedMcp: [{ server: 'other', tools: [t('bash', 'dup'), t('mcp__ctx__resolve', 'dup')] }]
     })
     expect(clash).toEqual([t('bash', 'builtin'), t('mcp__ctx__resolve', 'old')])
@@ -423,7 +397,6 @@ describe('composeReconfiguredTools', () => {
     const readded = composeReconfiguredTools({
       current: [t('bash'), t('mcp__ctx__resolve', 'old'), t('mcp__ctx__docs', 'old'), t('read')],
       removedServers: new Set(['ctx']),
-      skill: { change: 'keep' },
       addedMcp: [{ server: 'ctx', tools: [t('mcp__ctx__resolve', 'new')] }]
     })
     expect(readded).toEqual([t('bash'), t('read'), t('mcp__ctx__resolve', 'new')])

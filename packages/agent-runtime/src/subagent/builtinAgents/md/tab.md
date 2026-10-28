@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:tab
 shuvix-builtin: true
 name: tab
 description: The tab agent — the base profile of a Chrome tab session, the ShuviX side panel in the user's own Chrome. It helps with the page the user has open, in their signed-in browser.
-shuvix-tools: mcp:chrome, ask, skill:builtin:drawing
+shuvix-tools: mcp:chrome, ask, skill
 shuvix-displayName: Chrome Tab
 shuvix-project-awareness: true
 ---

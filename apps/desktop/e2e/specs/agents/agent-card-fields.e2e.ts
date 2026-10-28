@@ -366,9 +366,8 @@ const waitWritten = (file: string, before: string): Promise<string> =>
 const expectUnchanged = (file: string, expected: string, waitMs?: number): Promise<void> =>
   expectFileUnchanged(filePath(file), expected, waitMs)
 
-/** 弹层里 mcp:/skill: 条目显示的是短名（ToolSelectList 的展示规则） */
-const shortToolName = (name: string): string =>
-  name.startsWith('mcp:') ? name.slice(4) : name.startsWith('skill:') ? name.slice(6) : name
+/** 弹层里 mcp: 条目显示的是短名（ToolSelectList 的展示规则）；tools.list 里已没有 skill: 条目（2026-10-28） */
+const shortToolName = (name: string): string => (name.startsWith('mcp:') ? name.slice(4) : name)
 
 interface ProviderRow {
   id: string
@@ -535,12 +534,16 @@ describe('B 组 · 工具字段（弹层 / 候选项 / 写回）', () => {
     const ipcTools = await app.main.eval<Array<{ name: string }>>(`window.api.tools.list()`)
     // 派发工具是 hidden 的，不在聊天工具清单里 —— 但它是 shuvix-tools 的合法条目
     expect(ipcTools.some((t) => t.name === 'agent')).toBe(false)
+    // 技能工具不再 hidden（2026-10-28：档案写 `skill` 才带技能，卡片得列出它）；逐个技能的 skill: 条目没有了
+    expect(ipcTools.some((t) => t.name === 'skill')).toBe(true)
+    expect(ipcTools.some((t) => t.name.startsWith('skill:'))).toBe(false)
 
     await card.openTools()
     const names = (await card.toolItems()).map((i) => i.name)
     expect(new Set(names)).toEqual(
       new Set([...ipcTools.map((t) => shortToolName(t.name)), 'agent'])
     )
+    expect(names).toContain('skill')
     // 当前白名单在弹层里是勾上的
     expect(
       (await card.toolItems())

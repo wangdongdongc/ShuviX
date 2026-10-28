@@ -9,18 +9,23 @@
  * 与一台最小的 Server 看 `_meta` 的组成（PIN-07）。
  *
  * P2-04（docs/pi-durable/p2-04-test-design.md，P2-04-xx）：派生 agent 的解析与重建（SR_D / SP_D）——
- * 资源一律按根会话、技能只看派生名单、canSpawn 门、附加工具（next）包装与 L1 门；H11-20 / 39 / 67 改写为
- * P2-04-01 / 14 / 38。
+ * 资源一律按根会话、技能工具看派生名单里有没有 `skill`、canSpawn 门、附加工具（next）包装与 L1 门；
+ * H11-20 / 39 / 67 改写为 P2-04-01 / 14 / 38。
  *
- * 本文件是「替身模式」：包装器换成记账的恒等桩（Fx-WRAP spy），SkillTool 换成按 findEnabled /
- * findAll 过滤名单的桩（构造实参可查），派发工具换成桩，mcpService 是 Fx-MCP 的 spy；注册表是**真的**
- * （Fx-REG：与真注册项同名、同平台的桩工厂）。真包装器 / 真 SkillTool / 真派发工具那几条在
+ * 技能（2026-10-28 起按 Claude Code / Codex 的用法）：名单里有技能工具 `skill` 就构造一次
+ * `SkillTool('enabled', 项目路径)`，货架是启用着、模型可调用的全部技能（`findModelInvocable`）；档案不点名，
+ * 会话勾选里的 `skill:` 条目不进名单。按锁重建是 `SkillTool({ known: 锁里的技能 }, 项目路径)`。
+ *
+ * 本文件是「替身模式」：包装器换成记账的恒等桩（Fx-WRAP spy），SkillTool 换成照真货架取池的桩（'enabled' →
+ * findModelInvocable，{ known } → findAll ∩ 锁；构造实参可查），派发工具换成桩，mcpService 是 Fx-MCP 的 spy；
+ * 注册表是**真的**（Fx-REG：与真注册项同名、同平台的桩工厂）。真包装器 / 真 SkillTool / 真派发工具那几条在
  * desktopToolHost.real.test.ts，沙箱钉子在 desktopToolHost.sandbox.test.ts。
  *
  * 重配（2026-10-26，HR-xx）：`reconfigureAgentTools` 只解析变了的那几样 —— 新勾的 MCP（真重配与创建同一条
- * 惰性连接的路，预判不连、只交回已连着的）与按新名单造的技能货架；从不造内置 / 派发工具。
+ * 惰性连接的路，预判不连、只交回已连着的）；从不造内置 / 派发工具，2026-10-28 起也不造技能工具（货架在创建时
+ * 定下，重配不动它）。
  *
- * ⚠️ SkillTool 桩自带过滤（`hasSkills` / `skillNames` 都由 findEnabled 决定）：一个空 `class {}` 会让
+ * ⚠️ SkillTool 桩自带货架（`hasSkills` / `skillNames` 都由桩取到的池决定）：一个空 `class {}` 会让
  * hasSkills 恒为 undefined、工具永不注入，用例全绿却什么都没测（见 skillToolInjection 的 mock 陷阱）。
  */
 import {
@@ -50,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   registrationsFromDeclarations: vi.fn(),
   getRegistrationsByServerName: vi.fn(),
   findEnabled: vi.fn(),
+  findModelInvocable: vi.fn(),
   findAll: vi.fn(),
   skillToolCalls: [] as SkillToolCall[],
   createAgentTool: vi.fn(),
@@ -109,9 +115,16 @@ vi.mock('../../services/mcpService', () => ({
   }
 }))
 vi.mock('../../services/skillService', () => ({
-  skillService: { findEnabled: mocks.findEnabled, findAll: mocks.findAll }
+  skillService: {
+    findEnabled: mocks.findEnabled,
+    findModelInvocable: mocks.findModelInvocable,
+    findAll: mocks.findAll
+  }
 }))
-/** SkillTool 桩：照真 SkillTool 的过滤（名单 ∩ 池，池 = findEnabled，或按锁重建时的 findAll） */
+/**
+ * SkillTool 桩：照真 SkillTool 的货架 —— `'enabled'` = findModelInvocable 的全部，`{ known }` = findAll ∩
+ * 锁里的名字（池序）
+ */
 vi.mock('../../services/skillTool', () => ({
   SkillTool: class {
     readonly name = 'skill'
@@ -121,11 +134,14 @@ vi.mock('../../services/skillTool', () => ({
     private readonly offered: string[]
     constructor(...args: unknown[]) {
       mocks.skillToolCalls.push({ args })
-      const names = args[0] as string[]
-      const pool = (args[2] === 'known' ? mocks.findAll() : mocks.findEnabled()) as {
-        name: string
-      }[]
-      this.offered = pool.map((s) => s.name).filter((n) => names.includes(n))
+      const shelf = args[0] as 'enabled' | { known: readonly string[] }
+      const projectPath = args[1] as string | undefined
+      this.offered =
+        shelf === 'enabled'
+          ? (mocks.findModelInvocable(projectPath) as { name: string }[]).map((s) => s.name)
+          : (mocks.findAll(projectPath) as { name: string }[])
+              .map((s) => s.name)
+              .filter((n) => shelf.known.includes(n))
       this.description = `skill: ${this.offered.join(', ')}`
     }
     get hasSkills(): boolean {
@@ -361,6 +377,7 @@ beforeEach(() => {
     mocks.registrationsFromDeclarations,
     mocks.getRegistrationsByServerName,
     mocks.findEnabled,
+    mocks.findModelInvocable,
     mocks.findAll,
     mocks.createAgentTool,
     mocks.sandboxGloballyActive,
@@ -384,7 +401,9 @@ beforeEach(() => {
     (server: string, _sid: string, decls: readonly McpToolDeclaration[]) =>
       decls.map((d) => mcpRegistration(server, d))
   )
+  // 启用着的三本里 `other` 只许用户调用（disable-model-invocation）：不上货架
   mocks.findEnabled.mockReturnValue([skill('builtin:drawing'), skill('pdf'), skill('other')])
+  mocks.findModelInvocable.mockReturnValue([skill('builtin:drawing'), skill('pdf')])
   mocks.findAll.mockReturnValue([skill('builtin:drawing'), skill('pdf'), skill('other')])
   mocks.createAgentTool.mockImplementation(() => stubTool('agent'))
   mocks.sandboxGloballyActive.mockReturnValue(false)
@@ -461,6 +480,8 @@ describe('buildBuiltinTools', () => {
       mocks.registrationsFromDeclarations,
       mocks.getRegistrationsByServerName,
       mocks.findEnabled,
+      mocks.findModelInvocable,
+      mocks.findAll,
       mocks.broadcast
     ]) {
       expect(fn).not.toHaveBeenCalled()
@@ -571,24 +592,21 @@ describe('resolveAgentTools', () => {
     expect(mocks.requestUserInputFor).toHaveBeenCalledWith('s1', question)
 
     mocks.createAgentTool.mockClear()
-    const without = await host.resolveAgentTools(requestD({ names: ['read', 'skill:pdf'] }), {
+    const without = await host.resolveAgentTools(requestD({ names: ['read', 'skill'] }), {
       signal: signal()
     })
     expect(without.agent).toBeUndefined()
     expect(mocks.createAgentTool).not.toHaveBeenCalled()
   })
 
-  it('H11-16 SkillTool 的实参：恰好（名单去前缀、项目路径）两个；无项目第二个是 undefined；名单没有 skill: 就不造', async () => {
-    await host.resolveAgentTools(
-      requestD({ names: ['read', 'skill:builtin:drawing', 'skill:pdf'] }),
-      { signal: signal() }
-    )
-    expect(mocks.skillToolCalls).toEqual([{ args: [['builtin:drawing', 'pdf'], '/w/proj'] }])
+  it("H11-16 SkillTool 的实参：恰好（'enabled'、项目路径）两个；无项目第二个是 undefined；名单没有 `skill` 就不造 —— 旧写法 `skill:<name>` 不算", async () => {
+    await host.resolveAgentTools(requestD({ names: ['read', 'skill'] }), { signal: signal() })
+    expect(mocks.skillToolCalls).toEqual([{ args: ['enabled', '/w/proj'] }])
 
     mocks.skillToolCalls.length = 0
     mocks.pick.mockReturnValue(undefined)
-    await host.resolveAgentTools(requestD({ names: ['skill:pdf'] }), { signal: signal() })
-    expect(mocks.skillToolCalls).toEqual([{ args: [['pdf'], undefined] }])
+    await host.resolveAgentTools(requestD({ names: ['skill'] }), { signal: signal() })
+    expect(mocks.skillToolCalls).toEqual([{ args: ['enabled', undefined] }])
 
     mocks.skillToolCalls.length = 0
     const none = await host.resolveAgentTools(requestD({ names: ['read', 'agent'] }), {
@@ -597,17 +615,38 @@ describe('resolveAgentTools', () => {
     expect(mocks.skillToolCalls).toEqual([])
     expect(none.skill).toBeUndefined()
     expect(none.skills ?? []).toEqual([])
-  })
 
-  it('H11-18 点了名但这一次一个都不在架：构造一次，不挂 skill，skills 为空', async () => {
-    mocks.findEnabled.mockReturnValue([])
-    const resolved = await host.resolveAgentTools(
-      requestD({ names: ['read', 'skill:builtin:drawing'] }),
+    // 归一名单里不会再有 `skill:` 条目（档案把它读作 `skill`、会话勾选不收它）；万一混进来也不点名任何技能
+    const legacy = await host.resolveAgentTools(
+      requestD({ names: ['read', 'skill:builtin:drawing', 'skill:pdf'] }),
       { signal: signal() }
     )
+    expect(mocks.skillToolCalls).toEqual([])
+    expect(legacy.skill).toBeUndefined()
+    expect(legacy.skills ?? []).toEqual([])
+  })
+
+  it('H11-18 名单有 `skill`、但这一次一个模型可调用的都没有：构造一次，不挂 skill，skills 为空', async () => {
+    mocks.findModelInvocable.mockReturnValue([])
+    const resolved = await host.resolveAgentTools(requestD({ names: ['read', 'skill'] }), {
+      signal: signal()
+    })
     expect(mocks.skillToolCalls).toHaveLength(1)
     expect(resolved.skill).toBeUndefined()
     expect(resolved.skills).toEqual([])
+  })
+
+  it('H11-18b 货架是模型可调用的全部、不看名单点名：findModelInvocable 给几本就上几本（池序），按根会话的项目问', async () => {
+    mocks.findModelInvocable.mockReturnValue([
+      skill('zeta'),
+      skill('builtin:drawing'),
+      skill('alpha')
+    ])
+    const resolved = await host.resolveAgentTools(requestD(), { signal: signal() })
+    expect(resolved.skills).toEqual(['zeta', 'builtin:drawing', 'alpha'])
+    expect(mocks.findModelInvocable.mock.calls).toEqual([['/w/proj']])
+    // 按锁重建才用的 findAll 在创建时一眼不看
+    expect(mocks.findAll).not.toHaveBeenCalled()
   })
 
   it('H11-19 extraTools 原样交回：一条 next，包一次（H11-40 的选项），不混进 agent / skill / mcp', async () => {
@@ -969,12 +1008,12 @@ describe('rebuildAgentTools', () => {
     for (const [, fields] of mocks.pick.mock.calls) expect(fields).not.toContain('settings')
   })
 
-  it('H11-33 / P2-06-29 这一组出自锁：agent 在；SkillTool 按（锁里的技能、项目路径、known）造；MCP 按锁里的声明建、callerIdOf(1) = s1；没有 tools / extras', async () => {
+  it('H11-33 / P2-06-29 这一组出自锁：agent 在；SkillTool 按（{ known: 锁里的技能 }、项目路径）造；MCP 按锁里的声明建、callerIdOf(1) = s1；没有 tools / extras', async () => {
     setLock('s1', lockD())
     const lock = lockD()
     const set = await host.rebuildAgentTools(lock, { sessionId: 's1' })
     expect(set.agent?.name).toBe('agent')
-    expect(mocks.skillToolCalls).toEqual([{ args: [lock.skills, '/w/proj', 'known'] }])
+    expect(mocks.skillToolCalls).toEqual([{ args: [{ known: lock.skills }, '/w/proj'] }])
     expect(set.mcp?.map((m) => m.server)).toEqual(['context7'])
     expect(mocks.registrationsFromDeclarations).toHaveBeenCalledTimes(1)
     const [server, sid, decls] = mocks.registrationsFromDeclarations.mock.calls[0]
@@ -986,6 +1025,13 @@ describe('rebuildAgentTools', () => {
     expect(callerIdOfCall(0)(1)).toBe('s1')
     expect(set.tools ?? []).toEqual([])
     expect((set as ResolvedAgentTools).extraTools).toBeUndefined()
+  })
+
+  it('H11-33b 重建的货架照锁、不看侧栏此刻的开关：模型可调用的一本都没有了，锁里的两本照样在架；findModelInvocable 一眼不看', async () => {
+    mocks.findModelInvocable.mockReturnValue([])
+    const set = await host.rebuildAgentTools(lockD(), { sessionId: 's1' })
+    expect(set.skill?.description).toBe('skill: builtin:drawing, pdf')
+    expect(mocks.findModelInvocable).not.toHaveBeenCalled()
   })
 
   it('H11-34 锁赢过此刻的状态：(a) 锁没有 agent → 没有；(b) 反过来 → 有；(c) 锁没技能 → 不造 SkillTool；(d) 锁没 MCP → 不建、不连', async () => {
@@ -1058,7 +1104,7 @@ describe('rebuildAgentTools', () => {
     expect(set.agent).toBeUndefined()
     expect(mocks.createAgentTool).not.toHaveBeenCalled()
     expect(set.skill?.name).toBe('skill')
-    expect(mocks.skillToolCalls).toEqual([{ args: [lock.skills, '/w/proj', 'known'] }])
+    expect(mocks.skillToolCalls).toEqual([{ args: [{ known: lock.skills }, '/w/proj'] }])
     expect(set.mcp?.map((m) => m.server)).toEqual(['context7'])
     expect('extraTools' in set).toBe(false)
   })
@@ -1655,7 +1701,7 @@ describe('resolveAgentTools (spawned)', () => {
   it('P2-04-02 每样资源都按根会话找：状态 / 连接 / 声明 / 注册 / SkillTool 的项目 / 包装 / 派发工具的 ctx（P2-05-52）；没有一处收到 sub-a1；解析不问会话宿主', async () => {
     keyedProjectLookup()
     const resolved = await host.resolveAgentTools(
-      SR_D({ names: ['read', 'agent', 'skill:pdf', 'mcp:ssh'] }),
+      SR_D({ names: ['read', 'agent', 'skill', 'mcp:ssh'] }),
       { signal: signal() }
     )
     expect(mocks.statusByName.mock.calls).toEqual([['ssh', 's1']])
@@ -1664,7 +1710,8 @@ describe('resolveAgentTools (spawned)', () => {
     ])
     expect(mocks.declarationsOf.mock.calls).toEqual([['ssh', 's1']])
     expect(mocks.registrationsFromDeclarations.mock.calls[0].slice(0, 2)).toEqual(['ssh', 's1'])
-    expect(mocks.skillToolCalls).toEqual([{ args: [['pdf'], '/w/proj'] }])
+    expect(mocks.skillToolCalls).toEqual([{ args: ['enabled', '/w/proj'] }])
+    expect(mocks.findModelInvocable.mock.calls).toEqual([['/w/proj']])
     expect(mocks.pick.mock.calls.length).toBeGreaterThan(0)
     for (const [id] of mocks.pick.mock.calls) expect(id).toBe('s1')
 
@@ -1701,32 +1748,30 @@ describe('resolveAgentTools (spawned)', () => {
     expect(sessionOf).not.toHaveBeenCalled()
   })
 
-  it('P2-04-03 技能只看派生名单：会话勾选（pickSettings）一眼不看；coding 归一名单 → SkillTool 一次、只拿它点名的 builtin:drawing / builtin:widget；没有 MCP', async () => {
+  it("P2-04-03 派生 agent 的技能货架同根：会话勾选（pickSettings，连同里面的 `skill:other`）一眼不看；coding 归一名单写了 `skill` → SkillTool 一次（'enabled'），货架是模型可调用的全部；没有 MCP", async () => {
     mocks.pickSettings.mockReturnValue({ enabledTools: ['skill:other', 'mcp:ssh'] })
     const names = normalizeToolNames('spawned', profileOf('coding').tools, undefined)
+    expect(names).toContain('skill')
+    expect(names.filter((n) => n.startsWith('skill:'))).toEqual([])
     const resolved = await host.resolveAgentTools(SR_D({ names }), { signal: signal() })
     expect(mocks.skillToolCalls).toHaveLength(1)
-    expect(mocks.skillToolCalls[0].args[0]).toEqual(['builtin:drawing', 'builtin:widget'])
-    // 架上（findEnabled 的假数据）只有 builtin:drawing —— 点了名但不在架的 widget 不挂
-    expect(resolved.skills).toEqual(['builtin:drawing'])
+    expect(mocks.skillToolCalls[0].args[0]).toBe('enabled')
+    // 架上 = findModelInvocable 的假数据（只许用户调用的 other 不在其中）
+    expect(resolved.skills).toEqual(['builtin:drawing', 'pdf'])
     expect(resolved.mcp).toEqual([])
     expect(mocks.ensureServerByName).not.toHaveBeenCalled()
     expect(mocks.pickSettings).not.toHaveBeenCalled()
   })
 
-  it('P2-04-04 点了名的技能上架规则同根：名单 ∩ findEnabled（两个实参、不按 known、不查 findAll）；一个都不在架 → 构造一次、不挂、skills 为空', async () => {
-    const names = ['skill:builtin:drawing', 'skill:pdf', 'skill:ghost']
-    mocks.findEnabled.mockReturnValue([skill('builtin:drawing'), skill('other')])
-    mocks.findAll.mockReturnValue([skill('builtin:drawing'), skill('pdf'), skill('other')])
+  it("P2-04-04 派生的上架规则同根：恰好（'enabled'、根会话项目）两个实参、不查 findAll（不按锁）；一个都不在架 → 构造一次、不挂、skills 为空", async () => {
+    const names = ['read', 'skill']
     const resolved = await host.resolveAgentTools(SR_D({ names }), { signal: signal() })
-    expect(resolved.skills).toEqual(['builtin:drawing'])
-    expect(mocks.skillToolCalls).toHaveLength(1)
-    expect(mocks.skillToolCalls[0].args).toHaveLength(2)
-    expect(mocks.skillToolCalls[0].args).not.toContain('known')
+    expect(resolved.skills).toEqual(['builtin:drawing', 'pdf'])
+    expect(mocks.skillToolCalls).toEqual([{ args: ['enabled', '/w/proj'] }])
     expect(mocks.findAll).not.toHaveBeenCalled()
 
     mocks.skillToolCalls.length = 0
-    mocks.findEnabled.mockReturnValue([])
+    mocks.findModelInvocable.mockReturnValue([])
     const none = await host.resolveAgentTools(SR_D({ names }), { signal: signal() })
     expect(mocks.skillToolCalls).toHaveLength(1)
     expect('skill' in none).toBe(false)
@@ -1985,11 +2030,11 @@ describe('rebuildAgentTools (spawned)', () => {
     }
   )
 
-  it('P2-04-17 重建的技能：按（记录的技能、根会话项目、known）造，描述出自 findAll；没有技能 → 不造、没有 skill；项目只按 s1 查', async () => {
+  it('P2-04-17 重建的技能：按（{ known: 记录的技能 }、根会话项目）造，描述出自 findAll；没有技能 → 不造、没有 skill；项目只按 s1 查', async () => {
     keyedProjectLookup()
     const set = await host.rebuildAgentTools(SP_D(), rctx(SP_D()))
     expect(mocks.skillToolCalls).toEqual([
-      { args: [['builtin:drawing', 'pdf'], '/w/proj', 'known'] }
+      { args: [{ known: ['builtin:drawing', 'pdf'] }, '/w/proj'] }
     ])
     expect(set.skill?.description).toBe('skill: builtin:drawing, pdf')
 
@@ -2260,7 +2305,7 @@ describe('reconfigureAgentTools（重配：只解析变了的那几样）', () =
     const reason = new Error('reconfigure cancelled')
     controller.abort(reason)
     await expect(
-      reconfigure(['skill:pdf', 'mcp:ssh'], ['ssh'], { signal: controller.signal, connect: true })
+      reconfigure(['skill', 'mcp:ssh'], ['ssh'], { signal: controller.signal, connect: true })
     ).rejects.toBe(reason)
     for (const fn of [
       mocks.statusByName,
@@ -2371,36 +2416,21 @@ describe('reconfigureAgentTools（重配：只解析变了的那几样）', () =
     expect(mocks.ensureServerByName).not.toHaveBeenCalled()
   })
 
-  it('HR-5 技能货架按新名单造一次（名单里的技能名 + 项目路径）；真有技能才给 skill；名单里没有 skill: → 不造 SkillTool', async () => {
-    const result = await reconfigure(
-      ['bash', 'skill:pdf', 'mcp:ssh', 'skill:builtin:drawing'],
-      [],
-      {
-        connect: true
-      }
-    )
-    expect(mocks.skillToolCalls).toHaveLength(1)
-    expect(mocks.skillToolCalls[0].args.slice(0, 2)).toEqual([
-      ['pdf', 'builtin:drawing'],
-      '/w/proj'
-    ])
-    expect(result.skill?.name).toBe('skill')
-    expect(mocks.wrapCalls.filter((c) => c.wrapped === result.skill)).toHaveLength(1)
-    expect(result.skills).toEqual(['builtin:drawing', 'pdf'])
-
-    // 点了名却一个都不启用：照造一次，但不给 skill、skills 为空
-    mocks.skillToolCalls.length = 0
-    const none = await reconfigure(['skill:nope'], [], { connect: true })
-    expect(mocks.skillToolCalls).toHaveLength(1)
-    expect('skill' in none).toBe(false)
-    expect(none.skills).toEqual([])
-
-    // 名单里没有 skill:：SkillTool 都不造
-    mocks.skillToolCalls.length = 0
-    const bare = await reconfigure(['bash', 'mcp:ssh'], [], { connect: false })
-    expect(mocks.skillToolCalls).toEqual([])
-    expect('skill' in bare).toBe(false)
-    expect(bare.skills).toEqual([])
+  it('HR-5 重配从不造技能工具（货架在创建时定下）：名单里有 `skill` 也一次都不构造 SkillTool，结果里没有 skill / skills；侧栏的技能池一眼不看', async () => {
+    for (const [names, connect] of [
+      [['bash', 'skill', 'mcp:ssh'], true],
+      [['skill'], false],
+      [['bash', 'mcp:ssh'], true]
+    ] as const) {
+      const result = await reconfigure(names, [], { connect })
+      expect(mocks.skillToolCalls).toEqual([])
+      expect('skill' in result).toBe(false)
+      expect('skills' in result).toBe(false)
+    }
+    expect(mocks.findModelInvocable).not.toHaveBeenCalled()
+    expect(mocks.findEnabled).not.toHaveBeenCalled()
+    expect(mocks.findAll).not.toHaveBeenCalled()
+    expect(mocks.wrapCalls).toEqual([])
   })
 
   it('HR-6 从不造内置工具与派发工具；锁里已有、不在 servers 里的服务器一概不碰', async () => {
@@ -2418,8 +2448,9 @@ describe('reconfigureAgentTools（重配：只解析变了的那几样）', () =
       expect(fn).not.toHaveBeenCalled()
     }
     expect(result.mcp).toEqual([])
-    // 交回的只有技能那一样（运行时按锁比对决定用不用）
-    expect(Object.keys(result).sort()).toEqual(['mcp', 'skill', 'skills'])
+    // 没有新服务器时交回的只有一份空的 mcp（技能工具不在重配里，2026-10-28）
+    expect(Object.keys(result).sort()).toEqual(['mcp'])
+    expect(mocks.skillToolCalls).toEqual([])
   })
 
   it('HR-7 连接途中被中止：当场拒绝；最后一条广播是 connecting:false，没有 error；之后连上也不取声明', async () => {

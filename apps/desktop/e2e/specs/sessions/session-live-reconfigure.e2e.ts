@@ -3,7 +3,8 @@
  *
  *   - 欢迎页（还没有会话）上的模型 / 思考档位 / 扩展能力是**新会话的草稿**：直接发送时
  *     `createSessionForSend` 在 `agent.init` 之前把它们写进新会话，第一轮就跑在选的模型上；
- *     欢迎页的工具选择器按新会话将用的档案（无项目 → chat）画声明项（RE-1）；
+ *     欢迎页的工具选择器按新会话将用的档案（无项目 → chat）列条目 —— 只有 MCP（与知识库），技能不按会话
+ *     勾选（2026-10-28：启用着的全部上货架，不用勾就在新会话的 skill 工具里，RE-1）；
  *   - 会话有 Agent 时两个选择器照常可改：`agent.setModel` / `session.updateEnabledTools` 写设置并当场
  *     重配那个 agent（同一个运行时，没有 agent_created / agent_closing），从下一次请求起生效 —— 运行中
  *     也是（RE-2 / RE-3 / RE-4）；
@@ -18,7 +19,9 @@
  * cacheBreakPane / sessionConfigPane / statusBannerPane）。请求按 `lastUserText` 认领：自动标题的 titler
  * 也会打到假提供商上，按下标取会取错。
  *
- * 夹具：假提供商的模型 A（种成默认）与 B（之后加进同一个提供商，同样 200k 上下文）；全局 skill X、Y。
+ * 夹具：假提供商的模型 A（种成默认）与 B（之后加进同一个提供商，同样 200k 上下文）；勾选的样本是两台进程内的
+ * 内置 MCP X（`mcp:database`）、Y（`mcp:browser`）—— 配置里启用着、用到时在进程内连上，工具是
+ * `mcp__<server>__*`。
  * 提供商是在实例启动之后才种的，欢迎页起初显示「选择模型」—— 用例在界面里显式选一次。
  * 五个用例共用一个实例、按顺序接力：RE-1 从欢迎页建出会话，之后的接着用它。
  */
@@ -32,7 +35,6 @@ import { startFakeProvider, type FakeProvider, type FakeRequest } from '../../ha
 import {
   eventRecorder,
   seedFakeProvider,
-  seedSkill,
   waitRendererReady,
   type EventRecorder,
   type RecordedEvent
@@ -56,12 +58,11 @@ import {
 
 const MODEL_A = 'e2e-model-a'
 const MODEL_B = 'e2e-model-b'
-const SKILL_X = 'e2e-lr-x'
-const SKILL_Y = 'e2e-lr-y'
-const X = `skill:${SKILL_X}`
-const Y = `skill:${SKILL_Y}`
-/** 内置作图技能：chat 与 work 的 shuvix-tools 都声明了它（恒生效，不写进会话勾选） */
-const DRAWING = 'skill:builtin:drawing'
+/** 勾选的样本：两台进程内的内置 MCP */
+const X = 'mcp:database'
+const Y = 'mcp:browser'
+/** 内置作图技能的全局名：启用着就在 chat / work 的货架上（不按会话勾选，2026-10-28） */
+const DRAWING_SKILL = 'builtin:drawing'
 /** RE-1 那一轮报的用量：预判里的 promptTokens 就是它（openai-completions：prompt 含缓存部分） */
 const E1_PROMPT_TOKENS = 1234
 
@@ -103,11 +104,6 @@ interface StoredSettings {
 interface ListedTool {
   name: string
   declaredBy?: string
-}
-
-interface AgentRow {
-  name: string
-  displayName: string
 }
 
 interface ListedMessage {
@@ -175,24 +171,22 @@ const toolsList = (id?: string, options?: { profile: string }): Promise<ListedTo
 const listMessages = (id: string): Promise<ListedMessage[]> =>
   app.main.eval<ListedMessage[]>(`window.api.message.list(${JSON.stringify(id)})`)
 
-const displayNameOf = async (name: string): Promise<string> => {
-  const rows = await app.main.eval<AgentRow[]>('window.api.subAgent.list()')
-  const row = rows.find((r) => r.name === name)
-  expect(row, `builtin profile ${name}`).toBeDefined()
-  return row!.displayName
-}
-
 /** skill 工具发给模型的描述 —— 其中的 `<name>…</name>` 就是这个 agent 此刻带着的 skill */
 const skillDescription = (info: RuntimeInfo | null): string =>
   info?.tools.find((t) => t.name === 'skill')?.description ?? ''
 
-/** 一次请求里 skill 工具的描述（OpenAI 形状：`{ type: 'function', function: { name, description } }`） */
-const requestSkillDescription = (req: FakeRequest): string => {
-  const tool = (req.body.tools ?? []).find(
-    (t) => (t as { function?: { name?: string } }).function?.name === 'skill'
-  ) as { function?: { description?: string } } | undefined
-  return tool?.function?.description ?? ''
-}
+/** `mcp:<server>` 在工具表里的名字前缀（`mcp__<server>__`） */
+const mcpPrefix = (key: string): string => `mcp__${key.slice('mcp:'.length)}__`
+
+/** 运行时此刻有没有某台 MCP 的工具 */
+const carries = (info: RuntimeInfo | null, key: string): boolean =>
+  (info?.tools ?? []).some((t) => t.name.startsWith(mcpPrefix(key)))
+
+/** 一次请求有没有提供某台 MCP 的工具（OpenAI 形状：`{ type: 'function', function: { name } }`） */
+const requestCarries = (req: FakeRequest, key: string): boolean =>
+  (req.body.tools ?? []).some((t) =>
+    ((t as { function?: { name?: string } }).function?.name ?? '').startsWith(mcpPrefix(key))
+  )
 
 /**
  * 最后一条用户消息之后有没有工具结果 —— 同一轮的后续请求 lastUserText 不变，靠它区分这一轮的第一次请求
@@ -274,8 +268,6 @@ beforeAll(async () => {
     })
     return true
   })()`)
-  seedSkill(app, SKILL_X, 'lr-x seeded skill')
-  seedSkill(app, SKILL_Y, 'lr-y seeded skill')
 }, 120_000)
 
 afterAll(async () => {
@@ -284,29 +276,24 @@ afterAll(async () => {
 })
 
 describe('会话模型与扩展能力：欢迎页草稿 → 运行期当场重配 → 缓存确认 → 销毁', () => {
-  it('RE-1 欢迎页选 B / low / 勾 X 再发送：新会话第一轮就跑在 B 上，勾选与档位都落进去；有了 agent 两个选择器照常可改', async () => {
+  it('RE-1 欢迎页选 B / low / 勾 X 再发送：新会话第一轮就跑在 B 上，勾选与档位都落进去；欢迎页没有技能条目、技能不用勾就在架；有了 agent 两个选择器照常可改', async () => {
     // ── 前置：停在欢迎页，一条会话都没有；两个选择器都在 ──
     expect(await sessionIds()).toEqual([])
     await chat.ready()
     await until(models.present, 'model picker shows the seeded provider')
     await until(tools.present, 'tool picker on the welcome page')
 
-    // ── 欢迎页的声明项按 chat 画（直接发送新建的是无项目会话），与项目编辑页（work）不同 ──
-    const chatName = await displayNameOf('chat')
-    const workName = await displayNameOf('work')
-    expect(chatName).not.toBe(workName)
+    // ── 欢迎页按 chat 列（直接发送新建的是无项目会话）：数据源与选择器里都只有 MCP，没有技能条目 ──
     const welcomeList = await toolsList(undefined, { profile: 'chat' })
-    expect(welcomeList.find((t) => t.name === DRAWING)?.declaredBy).toBe(chatName)
-    expect((await toolsList()).find((t) => t.name === DRAWING)?.declaredBy).toBe(workName)
+    expect(welcomeList.some((t) => t.name === X)).toBe(true)
+    expect(welcomeList.filter((t) => t.name.startsWith('skill:'))).toEqual([])
 
     await tools.open()
-    const drawingRow = await until(
-      async () => (await tools.items()).find((it) => it.name === DRAWING) ?? null,
-      'drawing row in the welcome tool picker'
+    await until(
+      async () => (await tools.items()).some((it) => it.name === X) || null,
+      'X row in the welcome tool picker'
     )
-    expect(drawingRow.declared).toBe(true)
-    expect(drawingRow.checked).toBe(true)
-    expect(drawingRow.title).toContain(chatName)
+    expect((await tools.items()).filter((it) => !it.name.startsWith('mcp:'))).toEqual([])
 
     // ── 界面里选 B、档位 low、勾 X：都只是草稿，一条会话也没建，也没有确认框 ──
     expect(await tools.toggle(X)).toBe(true)
@@ -346,11 +333,14 @@ describe('会话模型与扩展能力：欢迎页草稿 → 运行期当场重�
     expect(afterSend.provider).toBe(providerId)
     expect(afterSend.modelMetadata.thinkingLevel).toBe('low')
     expect(afterSend.created).toBe(true)
-    expect((await requestFor(E1_TEXT)).body.model).toBe(MODEL_B)
+    const firstReq = await requestFor(E1_TEXT)
+    expect(firstReq.body.model).toBe(MODEL_B)
+    expect(requestCarries(firstReq, X)).toBe(true)
     const info = await runtimeInfo(sid)
     expect(info?.model.id).toBe(MODEL_B)
-    expect(skillDescription(info)).toContain(`<name>${SKILL_X}</name>`)
-    expect(skillDescription(info)).toContain('<name>builtin:drawing</name>')
+    expect(carries(info, X)).toBe(true)
+    // 作图技能没人勾也在架（启用着的全部上带 skill 工具的 agent 的货架）
+    expect(skillDescription(info)).toContain(`<name>${DRAWING_SKILL}</name>`)
 
     // ── 界面：胶囊属 chat；两个选择器有了 agent 也照常可改（没有只读态） ──
     const chip = await until(banner.chip, 'agent chip on the session banner')
@@ -520,7 +510,7 @@ describe('会话模型与扩展能力：欢迎页草稿 → 运行期当场重�
         (await sessionConfig.extItems()).find((it) => it.key === Y)?.checked === false || null,
       'Y still unticked after cancel'
     )
-    expect(skillDescription(await runtimeInfo(sid))).not.toContain(`<name>${SKILL_Y}</name>`)
+    expect(carries(await runtimeInfo(sid), Y)).toBe(false)
 
     // ── 再勾、确认：落库，运行中的 agent 当场带上 Y（不销毁、不重建） ──
     await sessionConfig.toggleExt(Y)
@@ -531,22 +521,19 @@ describe('会话模型与扩展能力：欢迎页草稿 → 运行期当场重�
         JSON.stringify((await storedSettings(sid)).enabledTools) === JSON.stringify([X, Y]),
       'the dialog wrote [X, Y]'
     )
-    await until(
-      async () => skillDescription(await runtimeInfo(sid)).includes(`<name>${SKILL_Y}</name>`),
-      'the running agent carries Y'
-    )
-    expect(skillDescription(await runtimeInfo(sid))).toContain(`<name>${SKILL_X}</name>`)
+    await until(async () => carries(await runtimeInfo(sid), Y), 'the running agent carries Y')
+    expect(carries(await runtimeInfo(sid), X)).toBe(true)
     expect((await init(sid)).enabledTools).toEqual([X, Y])
     expect(await lifecycleEventsSince(sid, since)).toEqual([])
     expect(await banner.chip()).not.toBeNull()
     await sessionConfig.close()
     expect(await cacheBreak.count()).toBe(0)
 
-    // ── 下一条请求提供给模型的 skill 工具里就有 Y ──
+    // ── 下一条请求提供给模型的工具里就有 Y ──
     await sendAndWait(sid, E4_TEXT)
     const req = await requestFor(E4_TEXT)
-    expect(requestSkillDescription(req)).toContain(`<name>${SKILL_Y}</name>`)
-    expect(requestSkillDescription(req)).toContain(`<name>${SKILL_X}</name>`)
+    expect(requestCarries(req, Y)).toBe(true)
+    expect(requestCarries(req, X)).toBe(true)
     expect(req.body.model).toBe(MODEL_B)
     expect(await lifecycleEventsSince(sid, since)).toEqual([])
   })

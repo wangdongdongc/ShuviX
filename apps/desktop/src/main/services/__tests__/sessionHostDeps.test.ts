@@ -66,7 +66,7 @@ const mocks = vi.hoisted(() => ({
   findEnabled: vi.fn<() => Array<{ id: string }>>(),
   findEnabledModels: vi.fn<(providerId: string) => Array<{ modelId: string }>>(),
   getProfile: vi.fn<(name: string) => unknown>(),
-  filterAvailableTools: vi.fn<(tools: string[], projectPath?: string) => string[]>(),
+  filterAvailableTools: vi.fn<(tools: string[]) => string[]>(),
   settingsGet: vi.fn<(key: string) => string | undefined>(),
   registry: { models: { tag: 'models' }, modelRefOf: () => undefined, tag: 'registry' },
   port: { tag: 'port', listProviders: () => [] },
@@ -492,28 +492,28 @@ describe('D10-14 resolveAgentConfig 的档案矩阵', () => {
 })
 
 describe('D10-15 toolOverlay', () => {
-  it('D10-15 = filterAvailableTools(勾选去掉 mcp:chrome, 项目路径)；库里的原值不动', async () => {
+  it('D10-15 = filterAvailableTools(勾选去掉 mcp:chrome)（不再带项目路径：技能不在可用集里，项目级 skills 与勾选无关）；库里的原值不动', async () => {
     holder.projects.set('p1', { path: '/proj', settings: {} })
     sessionRecords.insert(
       row('s', {
         projectId: 'p1',
-        settings: { enabledTools: ['mcp:chrome', 'mcp:ssh', 'skill:x'] }
+        settings: { enabledTools: ['mcp:chrome', 'mcp:ssh', 'mcp:gone'] }
       })
     )
-    mocks.filterAvailableTools.mockImplementation((tools) => tools.filter((t) => t !== 'skill:x'))
+    mocks.filterAvailableTools.mockImplementation((tools) => tools.filter((t) => t !== 'mcp:gone'))
     const config = await deps.resolveAgentConfig('s')
-    expect(mocks.filterAvailableTools).toHaveBeenCalledWith(['mcp:ssh', 'skill:x'], '/proj')
+    expect(mocks.filterAvailableTools.mock.calls).toEqual([[['mcp:ssh', 'mcp:gone']]])
     expect(config.toolOverlay).toEqual(['mcp:ssh'])
-    expect(tableRow('s')?.settings.enabledTools).toEqual(['mcp:chrome', 'mcp:ssh', 'skill:x'])
+    expect(tableRow('s')?.settings.enabledTools).toEqual(['mcp:chrome', 'mcp:ssh', 'mcp:gone'])
   })
 
-  it('D10-15 缺键的旧行：补一次（按项目继承）并用补上的值', async () => {
-    holder.projects.set('p1', { path: '/proj', settings: { enabledTools: ['skill:y'] } })
+  it('D10-15 缺键的旧行：补一次（按项目继承，项目里存着的旧 skill: 条目不补）并用补上的值', async () => {
+    holder.projects.set('p1', { path: '/proj', settings: { enabledTools: ['mcp:y', 'skill:z'] } })
     sessionRecords.insert(row('s', { projectId: 'p1', settings: {} }))
-    expect((await deps.resolveAgentConfig('s')).toolOverlay).toEqual(['skill:y'])
-    expect(tableRow('s')?.settings.enabledTools).toEqual(['skill:y'])
+    expect((await deps.resolveAgentConfig('s')).toolOverlay).toEqual(['mcp:y'])
+    expect(tableRow('s')?.settings.enabledTools).toEqual(['mcp:y'])
     const updated = tableRow('s')!.updatedAt
-    expect((await deps.resolveAgentConfig('s')).toolOverlay).toEqual(['skill:y'])
+    expect((await deps.resolveAgentConfig('s')).toolOverlay).toEqual(['mcp:y'])
     expect(tableRow('s')!.updatedAt).toBe(updated)
   })
 })
@@ -688,16 +688,16 @@ describe('D10-19 现读与不存在的会话', () => {
 
 describe('D10-20 onLockChange → settings.agentLocked', () => {
   it('D10-20 true / false 落进设置，别的键不动', () => {
-    sessionRecords.insert(row('s', { settings: { enabledTools: ['skill:a'], bot: 'x' } }))
+    sessionRecords.insert(row('s', { settings: { enabledTools: ['mcp:a'], bot: 'x' } }))
     deps.onLockChange?.('s', true)
     expect(tableRow('s')?.settings).toEqual({
-      enabledTools: ['skill:a'],
+      enabledTools: ['mcp:a'],
       bot: 'x',
       agentLocked: true
     })
     deps.onLockChange?.('s', false)
     expect(tableRow('s')?.settings.agentLocked).toBe(false)
-    expect(tableRow('s')?.settings.enabledTools).toEqual(['skill:a'])
+    expect(tableRow('s')?.settings.enabledTools).toEqual(['mcp:a'])
   })
 
   it('D10-20 内存会话：写在内存行上，表里没有它', () => {

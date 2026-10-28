@@ -2,7 +2,7 @@
 shuvix: okf v0.2
 type: Guide
 title: 'Skill（SKILL.md）在 ShuviX 里怎么被读取'
-description: 'ShuviX 怎样发现、解析、启用与投递 skill —— 它真正读取的 SKILL.md frontmatter、各个 skill 来源（全局、项目、共用、外部目录）、`.config.json`、斜杠命令展开、`skill` 工具，以及 agent 文件与会话扩展能力里的 `skill:<name>`。'
+description: 'ShuviX 怎样发现、解析、启用与投递 skill —— 它真正读取的 SKILL.md frontmatter、各个 skill 来源（全局、项目、共用、外部目录）、`.config.json`、斜杠命令展开、`skill` 工具，以及哪些 agent 带着它。'
 tags: [shuvix, skills, format, spec]
 status: stable
 sources:
@@ -32,12 +32,14 @@ Prefix every review comment with a label…
 Scripts for this skill live in ${CLAUDE_SKILL_DIR}/scripts.
 ```
 
-ShuviX 恰好读两个 frontmatter 键，用的是**按行**的解析器（YAML 只帮多行的 `description`，见下）：
+ShuviX 读四个 frontmatter 键，用的是**按行**的解析器（YAML 只帮多行的 `description`，见下）：
 
 | 键            | 必填   | 含义                                                                                                                                                            |
 | ------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`        | **是** | skill 的名字 —— 斜杠命令，以及 `skill:<name>` 里用的值。单行；外层引号会被剥掉。保持简单的标识符（字母、数字、`-`）。                                              |
+| `name`        | **是** | skill 的名字 —— 斜杠命令，以及 `skill` 工具列出的名字。单行；外层引号会被剥掉。保持简单的标识符（字母、数字、`-`）。                                              |
 | `description` | 否     | 最好一行（YAML 的 `>` 多行块也读得到）。`skill` 工具给模型看的、斜杠命令弹层给用户看的都是它 —— 写成*什么时候该用这个 skill*，用用户或模型会去搜的词。 |
+| `disable-model-invocation` | 否 | 写 `true` 就不上 `skill` 工具：只有用户能用 `/<name>` 调它。与 Claude Code 同一个键。 |
+| `user-invocable` | 否 | 写 `false` 就不进 `/` 菜单：只有模型能加载它。与 Claude Code 同一个键。 |
 
 解析器的规则：文件必须以 `---` 开头；frontmatter 到下一个 `---` 结束；每行按第一个 `:` 切分。写成多行的
 `description` —— YAML 的 `>` / `|` 块，或者一句话折到下一行缩进接着写 —— 在 frontmatter 是合法 YAML 时
@@ -65,9 +67,12 @@ Agent Skills 的跨工具约定位置（Codex、pi 读它，`npx skills add -g` 
 外部目录的，归那一条。
 
 目录名与 `name` 可以不同；ShuviX 按 `name` 匹配。内置 skill 随应用发布（按界面语言一个目录），不能编辑；
-目前有两个：`builtin:drawing` —— 内联 SVG 作图的手艺 —— `work`、`chat`、`coding`、`bot`、`notebook`、
-`tab` 几个 agent 在 `shuvix-tools` 里点了它的名；`builtin:widget` —— 构建与维护小组件 —— `work`、`chat`、
-`coding` 点了它的名。启用状态存在 `~/.shuvix/skills/.config.json`：
+其中有 `builtin:drawing` —— 内联 SVG 作图的手艺 —— 与 `builtin:widget` —— 构建与维护小组件。它们和别的
+启用着的 skill 一样，在每个带 `skill` 工具的 agent 的货架上：`work`、`chat`、`coding`、`bot`、`notebook`、
+`tab` 几个 agent 在 `shuvix-tools` 里写了它。关掉 `builtin:drawing`，之后新建的 agent 的系统提示里也就没有
+作图那一段。
+
+启用状态存在 `~/.shuvix/skills/.config.json`：
 
 ```json
 { "disabled": ["<name>", "<dirName>:<name>"], "disabledDirs": ["<dirName>"], "enabledDirs": ["agents"], "dirs": [{ "name": "<dirName>", "path": "/abs/path" }] }
@@ -87,17 +92,17 @@ Agent Skills 的跨工具约定位置（Codex、pi 读它，`npx skills add -g` 
 1. **斜杠命令** —— 在输入框输入 `/<name>`，skill 作为消息插入：`Base directory for this skill: <abs dir>`
    一行后跟正文，`${CLAUDE_SKILL_DIR}` 替换成 skill 目录、`${CLAUDE_SESSION_ID}` 替换成当前会话 id。
    整段正文以用户文本的身份进入对话。
-2. **`skill` 工具** —— 会话（或 agent 文件）启用了 `skill:<name>` 条目时，agent 得到一个 `skill` 工具，
-   其描述把启用的 skill 列成 `<name> / <description> / file://<dir>`；模型带 `name` 调用 `skill`，收到
-   完整的 `SKILL.md` 正文加伴随文件的抽样清单，再自行读需要的。这是惰性的：模型不要就什么都不注入，
-   长 skill 没用到时零成本。
-   - **按会话**：会话配置的扩展能力一节（以及输入框的工具选择器）—— 存在会话的 `settings.enabledTools`
-     里，形如 `skill:<name>`；项目自己的缺省会种进新会话；这份选择在会话的 agent 创建时读入，agent
-     存在期间改了就从它的下一次请求起生效（会让提供商的提示词缓存失效时先问你）。会话的 agent 文件声明的条目也列在那里，默认勾上；取消一项记成 `-skill:<name>`，
-     只对这条会话关掉它（在项目设置里取消，则对这个项目的新会话）—— 会话改用别的作图技能、不要内置的那份就是这么做。
-   - **按 agent 文件**：agent md 里 `shuvix-tools: …, skill:<name>` —— 那个 agent 默认带着这个
-     skill；以它为根的会话可以只为自己取消（见上）。
-   - 项目级 skill 对在该项目里工作的任何根 agent 的 `skill` 工具都可见。
+2. **`skill` 工具** —— `shuvix-tools` 里写了 `skill` 的 agent 得到一个 `skill` 工具，其描述把**每个启用着的
+   skill**（去掉写了 `disable-model-invocation: true` 的）列成 `<name> / <description> / file://<dir>`；模型带
+   `name` 调用 `skill`，收到完整的 `SKILL.md` 正文加伴随文件的抽样清单，再自行读需要的。这是惰性的：模型
+   要之前只列名字和描述，长 skill 没用到时几乎不占成本。用法与 Claude Code、Codex 相同：
+   - **没有按会话、按项目的选择**：会话配置、输入框的工具选择器和项目设置里都没有技能一栏。不想让模型用某个
+     skill，就在侧栏把它（或它所在的目录）关掉。
+   - **在 agent 创建时定下**：货架在会话的 agent 创建时读入，跟着这个 agent 走。开关某个 skill 对之后新建的
+     agent 生效；正在运行的 agent 保持原来的货架，直到它被重建（agent 标签上的 X），提示词缓存因此不会断。
+   - **按 agent 文件**：写了 `skill` 就带上整个货架；agent 文件不能挑单个 skill（旧写法 `skill:<name>` 读作
+     `skill`）。
+   - 项目级 skill 在该项目里工作的 agent 的货架上。
 3. **当作文件读** —— 没有什么拦着 agent 直接读 `SKILL.md`；上面两条机制只是省掉找路径这一步。
 
 ## 给 ShuviX 写一份好 skill

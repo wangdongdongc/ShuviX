@@ -8,7 +8,9 @@
  *  - 每个段落逐个等于 fixture 的 `parts`（多块 systemContext 在新形态里是同一个 bot 段落，块间空一行）；
  *  - 变量表的调用上下文、各 seam 的调用参数与 fixture 捕获时观察到的一致（未选中的段落不调 seam）。
  *
- * 唯一有意的偏离已写进 fixture 本身：`work-root-trim-rules` 的指令文件内容现在也修剪（见其 `amended`）。
+ * 有意的偏离都写进了 fixture 本身（见各自的 `amended`）：`work-root-trim-rules` 的指令文件内容现在也修剪；
+ * 2026-10-28 起档案不再点技能的名，各 fixture 档案里的 `skill:<名>` 改成了 `skill`、变量表看到的名单随之
+ * 重算（勾选里的 `skill:` 条目不再进名单），输出不变。
  * `coding-spawned-system-context-blocks` 是派生 agent 带调用方上下文块 —— 新形态里只有 bot 段落承载
  * 这类块，而 `promptExtensionsFor` 只给 bot 档案上的根 agent 选它；这里为这份 fixture 显式补选，
  * 以对照「每块修剪、空白块跳过」的口径（今天没有任何调用方给派生 agent 传上下文块）。

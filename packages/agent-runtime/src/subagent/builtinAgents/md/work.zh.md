@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:work
 shuvix-builtin: true
 name: work
 description: 工作智能体——所有项目会话的基座档案。它负责把需求敲定、把具体的活儿交给 `coding` 子会话、再验收结果；创建名为 "work" 的自定义智能体即可覆盖定制。
-shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:widget
+shuvix-tools: bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill
 shuvix-displayName: 工作
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
 shuvix-project-awareness: true

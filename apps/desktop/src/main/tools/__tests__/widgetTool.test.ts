@@ -18,11 +18,13 @@
  *               不问有没有旧数据
  *   WC-S44     造组件的 list：已换成 SQLite、还留着旧数据的组件标 old-data="legacy-postgres"（不是 storage）
  *   WT4-TL-26   派生 agent 调：门的主体与调用方的 actor 都是它，不是根 agent
+ *   WT4-TL-30..31 调用方的货架是它创建时（或锁里）的那份：根货架有、派生 agent 创建时 widget 技能已停用 → 照拒，
+ *               用的那组照用；锁里记着、此刻停用了 → 按锁放行
  *   WT4-TL-29   注册元数据：设置页「LLM 工具」看到的是全量描述与 schema（与哪个会话无关）
  *
  * 组件服务 / 授权表 / 门 / 窗口 / 预览全部替身（门在 toolContext.assertWidgetAccess，这里只看工具怎么调它）；
- * 预览的两个参数解析器（parsePreviewSizes / parsePreviewTheme）用真的。真 SkillTool 只在 TL-04 用（skillService
- * 替身给货架）。调用经 invokeTool（假 durable api）：`api.agent()` 交回的工具表决定发起调用的 agent 能不能造组件。
+ * 预览的两个参数解析器（parsePreviewSizes / parsePreviewTheme）用真的。真 SkillTool 只在 TL-04 / TL-30 / TL-31 用
+ * （skillService 替身给货架）。调用经 invokeTool（假 durable api）：`api.agent()` 交回的工具表决定发起调用的 agent 能不能造组件。
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -62,7 +64,8 @@ const state = vi.hoisted(() => ({
   resolveProjectConfig: vi.fn(),
   windowOpen: vi.fn(),
   previewWidget: vi.fn(),
-  findEnabled: vi.fn()
+  findEnabled: vi.fn(),
+  findAll: vi.fn()
 }))
 
 /** 两个错误类：工具按 `instanceof` 认它们，替身与用例得是同一个类 */
@@ -134,8 +137,13 @@ vi.mock('../../services/widgetPreviewService', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/widgetPreviewService')>()),
   previewWidget: state.previewWidget
 }))
+// findAll 单列一个：按锁重建的货架（{ known }）读它，停用着的技能在那里仍看得见（TL-31）；缺省同 findEnabled
 vi.mock('../../services/skillService', () => ({
-  skillService: { findEnabled: state.findEnabled, findAll: state.findEnabled }
+  skillService: {
+    findEnabled: state.findEnabled,
+    findModelInvocable: state.findEnabled,
+    findAll: state.findAll
+  }
 }))
 
 import { wrapDurableOutput } from '@shuvix/agent-runtime'
@@ -342,6 +350,7 @@ beforeEach(() => {
   state.widgets.clear()
   state.storage.clear()
   state.snapshots.clear()
+  state.findAll.mockImplementation((projectPath?: string) => state.findEnabled(projectPath))
   state.getById.mockImplementation((id: string) => state.widgets.get(id))
   state.listActive.mockImplementation(() =>
     [...state.widgets.values()].filter((w) => w.archivedAt === 0)
@@ -483,7 +492,8 @@ describe('WT4-TL-02..06 造的动作按发起调用的 agent 自己的货架核�
     state.findEnabled.mockReturnValue([
       { name: 'builtin:widget', description: 'Build widgets.', basePath: '/skills/widget' }
     ])
-    const real = new SkillTool(['builtin:widget'])
+    // 创建 agent 时的货架（'enabled'）：模型可调用的全部 —— 这里就是 builtin:widget 这一本
+    const real = new SkillTool('enabled')
     expect(real.skillNames).toEqual(['builtin:widget'])
     // 桌面的两层包装都是 Object.create（输出内核 + 门），元数据经原型链透出
     const wrapped = Object.create(wrapDurableOutput(real, { spill: false })) as object
@@ -1540,6 +1550,99 @@ describe('WT4-TL-26 派生 agent 调用', () => {
       label: 'shuvix-explore/claude-haiku-4-5'
     })
     expect(agentOf).toHaveBeenCalledWith(2)
+  })
+})
+
+// ─── 侧栏开关与锁 ──────────────────────────────────────────────────────────
+
+/**
+ * 货架在 agent 创建时定下（`'enabled'`），按锁重建时照锁（`{ known }`）：侧栏的开关只作用于之后新建的 agent。
+ * 于是根 agent 的货架（会话级描述）与发起调用的 agent 的货架可以不一样 —— 造的动作按后者核对。
+ */
+describe('WT4-TL-30..31 调用方的货架是它创建时（或锁里）的那份', () => {
+  /** 桌面那两层包装（输出内核 + 门）都是 Object.create：skillNames 经原型链透出（同 TL-04） */
+  const wrap = (real: SkillTool): object =>
+    Object.create(wrapDurableOutput(real, { spill: false })) as object
+
+  const WIDGET_SKILL_ROW = {
+    name: 'builtin:widget',
+    description: 'Build widgets.',
+    basePath: '/skills/widget'
+  }
+  const DRAWING_SKILL_ROW = {
+    name: 'builtin:drawing',
+    description: 'Draw figures.',
+    basePath: '/skills/drawing'
+  }
+
+  it('WT4-TL-30 根货架有 builtin:widget（描述给全量），派生 agent 创建时 widget 技能已停用：build 照拒；list / describe / call 照用', async () => {
+    // 派生 agent 创建时侧栏里只剩作图技能：它的真 SkillTool 货架上没有 widget 技能
+    state.findEnabled.mockReturnValue([DRAWING_SKILL_ROW])
+    const real = new SkillTool('enabled')
+    expect(real.skillNames).toEqual(['builtin:drawing'])
+    const caller = [wrap(real)]
+
+    const spawned = identity('explore', 'claude-haiku-4-5', 'spawned')
+    const sessionCtx: ToolContext = {
+      sessionId: 's1',
+      agentOf: (c: number) => (c === 2 ? spawned : identity('work', 'gpt-5')),
+      rootSkills: ['builtin:drawing', 'builtin:widget']
+    }
+    const tool = new WidgetTool(sessionCtx)
+    // 会话级描述按根 agent 的货架：造的动作都在
+    expect(tool.description).toBe(WIDGET_DESCRIPTION)
+
+    const refused = await run(tool, BUILD_ARGS.build, { caller, conversationId: 2 })
+    expect(errorOf(refused)).toBe(refusal('build'))
+    expectNothingTouched()
+
+    // 用的那组照常：list 按不造组件的口径（没有目录、没有 API 的不列），describe 不列纯界面操作
+    const list = textOf(await run(tool, { action: 'list' }, { caller, conversationId: 2 }))
+    expect(list).toContain('<widget id="reading-list" name="Reading list" access="none">')
+    expect(list).not.toContain('dir=')
+    expect(list).not.toContain('photo-wall')
+
+    const described = JSON.parse(
+      textOf(
+        await run(
+          tool,
+          { action: 'describe', widget: 'reading-list' },
+          { caller, conversationId: 2 }
+        )
+      )
+    ) as { operations: { name: string }[] }
+    expect(described.operations.map((o) => o.name)).toEqual(['listBooks', 'addBook'])
+
+    opReturns({ ok: true, value: [{ title: 'Dune' }] })
+    const called = await run(
+      tool,
+      { action: 'call', widget: 'reading-list', op: 'listBooks' },
+      { caller, conversationId: 2 }
+    )
+    expect(textOf(called)).toBe(JSON.stringify([{ title: 'Dune' }], null, 2))
+    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
+    expect(state.callWidgetOp).toHaveBeenCalledTimes(1)
+    expect(state.callWidgetOp.mock.calls[0][3]).toMatchObject({
+      actor: 'shuvix-explore/claude-haiku-4-5'
+    })
+  })
+
+  it('WT4-TL-31 锁里记着 builtin:widget、它此刻在侧栏里停用了：按锁重建的货架（{ known }）照样有它 → build 放行（锁赢）', async () => {
+    // 此刻：启用着的 / 模型可调用的里没有 widget 技能，findAll 仍看得见它（停用 ≠ 删除）
+    state.findEnabled.mockReturnValue([DRAWING_SKILL_ROW])
+    state.findAll.mockReturnValue([DRAWING_SKILL_ROW, { ...WIDGET_SKILL_ROW, isEnabled: false }])
+
+    const locked = new SkillTool({ known: ['builtin:widget'] })
+    expect(locked.skillNames).toEqual(['builtin:widget'])
+    // 对照：此刻新建一个 agent 的货架上就没有它了
+    expect(new SkillTool('enabled').skillNames).toEqual(['builtin:drawing'])
+
+    state.build.mockResolvedValue({ id: 'reading-list', url: '', buildSuccess: true })
+    const inv = await run(new WidgetTool(ctx), BUILD_ARGS.build, { caller: [wrap(locked)] })
+    expect(textOf(inv)).toBe('Built "reading-list".')
+    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
+    expect(state.assertWidgetAccess.mock.calls[0][1]).toBe('write')
+    expect(state.build).toHaveBeenCalledWith('reading-list', {})
   })
 })
 

@@ -165,7 +165,7 @@ describe.each([
       session('s1', {
         settings: loose({
           chromeTab: BINDING,
-          enabledTools: ['mcp:ssh', 'skill:x'],
+          enabledTools: ['mcp:ssh', 'mcp:x'],
           bot: 'scout',
           count: 42,
           coEdit: true,
@@ -179,7 +179,7 @@ describe.each([
     ) as Record<string, unknown>
     expect(picked).toEqual({
       chromeTab: BINDING,
-      enabledTools: ['mcp:ssh', 'skill:x'],
+      enabledTools: ['mcp:ssh', 'mcp:x'],
       bot: 'scout',
       count: 42,
       coEdit: true,

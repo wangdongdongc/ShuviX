@@ -64,15 +64,14 @@ import { normalizeToolNames, resolveThinkingLevel } from './agentSpec'
 import { backgroundContext as BG, errorText } from './context'
 import { SessionStateDoc } from './docs'
 import { emptyReplyHook } from './emptyReply'
-import { computeFrozenAgentPrompt, freezePersona, type FrozenAgentPrompt } from './prompt/persona'
+import { computeFrozenAgentPrompt, freezePersona } from './prompt/persona'
 import type { PromptExtensions } from './prompt/sections'
 import type { SessionProcessRecord } from './processRecord'
 import {
   composeReconfiguredTools,
   orderForMinimalDiff,
   predictCacheImpact,
-  type CacheImpact,
-  type SkillToolChange
+  type CacheImpact
 } from './reconfigure'
 import type {
   AgentConfig,
@@ -245,12 +244,8 @@ export function agentExtension(
 }
 
 /** 名单里带某个前缀的那几项（去掉前缀，名单序） */
-function prefixed(names: readonly string[], prefix: 'mcp:' | 'skill:'): string[] {
+function prefixed(names: readonly string[], prefix: 'mcp:'): string[] {
   return names.filter((name) => name.startsWith(prefix)).map((name) => name.slice(prefix.length))
-}
-
-function sameList(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((item, index) => item === b[index])
 }
 
 /** 同一把锁（同一次创建）：提交发布会换出新的记录对象，所以不按对象比 */
@@ -714,7 +709,7 @@ export class AgentLock {
       ),
       tools: plan.tools,
       pendingServers: plan.resolved.pending ?? [],
-      sectionsChange: plan.persona !== undefined
+      sectionsChange: false
     })
     return { locked: true, ...impact }
   }
@@ -783,8 +778,7 @@ export class AgentLock {
 
     const record: LockRecord = plan.record
     const unchanged =
-      JSON.stringify(lockRecordJson(record)) === JSON.stringify(lockRecordJson(lock)) &&
-      plan.persona === undefined
+      JSON.stringify(lockRecordJson(record)) === JSON.stringify(lockRecordJson(lock))
     if (unchanged) return { applied: false, record: lock }
 
     const name = agentExtensionName(lock.conversationId)
@@ -800,7 +794,6 @@ export class AgentLock {
       cancelled()
       await this.deps.harness.commit(async (tx) => {
         await configure(tx, lock.conversationId, { model: record.model, tools: plan.tools })
-        if (plan.persona !== undefined) await freezePersona(tx, lock.conversationId, plan.persona)
         const state = await tx.doc(SessionStateDoc)
         state.lock = lockRecordJson(record)
       }, BG)
@@ -817,9 +810,9 @@ export class AgentLock {
   }
 
   /**
-   * 重配的计划（预判与真重配共用）：新名单 → 宿主解析变了的那几样 → 拼出新的工具（锁里已有的沿用此刻装着
-   * 的注册项，新的追加，按最小差异排）、新锁记录，以及人设要不要换（只在技能那几项变了时才算：人设里只有
-   * 作图说明随名单而变）。
+   * 重配的计划（预判与真重配共用）：新名单 → 宿主解析新要的服务器 → 拼出新的工具（锁里已有的沿用此刻装着
+   * 的注册项，新的追加，按最小差异排）与新锁记录。技能货架与人设不在其中：货架在创建时定下、记进锁，侧栏的
+   * 开关只作用于之后新建的 agent（2026-10-28）；人设里随名单变的只有作图说明，它跟着货架走，所以也不变。
    */
   private async planReconfigure(
     lock: LockRecord,
@@ -830,10 +823,9 @@ export class AgentLock {
     tools: ToolRegistration[]
     record: LockRecord
     resolved: ReconfiguredAgentTools
-    persona: FrozenAgentPrompt | undefined
     messages: readonly Message[]
   }> {
-    const { sessionId, registry, toolHost, logger } = this.deps
+    const { sessionId, registry, toolHost } = this.deps
     const { profile } = config
     const names = normalizeToolNames('root', profile.tools, config.toolOverlay)
     // 上一次（创建 / 重配）要过的名单；锁里没记勾选（旧锁）就按锁里接上了的那些算
@@ -866,14 +858,9 @@ export class AgentLock {
     const current = lock.toolNames
       .map((name) => installed.get(name))
       .filter((tool): tool is ToolRegistration => tool !== undefined)
-    const skillsChanged = !sameList(resolved.skills, lock.skills)
-    const skill: SkillToolChange<ToolRegistration> = skillsChanged
-      ? { change: 'replace', tool: resolved.skill }
-      : { change: 'keep' }
     const unordered = composeReconfiguredTools({
       current,
       removedServers,
-      skill,
       addedMcp: resolved.mcp
     })
     const conversation = await this.deps.harness.conversation(lock.conversationId, BG)
@@ -891,31 +878,10 @@ export class AgentLock {
       model: { ...model },
       toolNames: tools.map((tool) => tool.name),
       mcp,
-      skills: skillsChanged ? [...resolved.skills] : [...lock.skills],
       ...(config.toolOverlay === undefined ? {} : { selection: [...new Set(config.toolOverlay)] })
     }
 
-    // 人设：技能那几项变了才可能变。新旧名单在此刻的变量表下各渲染一遍，不一样才换（日期之类的环境波动
-    // 两边相同，不会因此重发人设）。锁里没记勾选（旧锁）就不动人设
-    let persona: FrozenAgentPrompt | undefined
-    if (before !== undefined) {
-      if (!sameList(prefixed(before, 'skill:'), prefixed(names, 'skill:'))) {
-        const input = {
-          kind: 'root' as const,
-          sessionId,
-          rootSessionId: sessionId,
-          cwd: config.cwd ?? '',
-          profile
-        }
-        const host = { promptVars: this.deps.promptVars, logger }
-        const [old, fresh] = await Promise.all([
-          computeFrozenAgentPrompt(host, { ...input, toolNames: before }),
-          computeFrozenAgentPrompt(host, { ...input, toolNames: names })
-        ])
-        if (old.persona !== fresh.persona) persona = fresh
-      }
-    }
-    return { tools, record, resolved, persona, messages }
+    return { tools, record, resolved, messages }
   }
 
   // ─── 销毁 ───────────────────────────────────────

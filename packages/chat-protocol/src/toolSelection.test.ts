@@ -1,10 +1,11 @@
 /**
  * 扩展能力勾选的记号 —— `toolSelection.ts`。
  *
- * 勾选（`settings.enabledTools`，项目上同名键是新会话的缺省）是相对于会话 agent 档案的**增减**：
- * `mcp:<server>` / `skill:<name>` 加一项，`-mcp:<server>` / `-skill:<name>` 取消档案 `shuvix-tools`
- * 声明的一项。界面（工具选择器 / 会话设置 / 项目设置）与写入口都按这里的函数说话，运行时一侧的
- * `normalizeToolNames` 与它同一口径（两个记号同时在时取消赢）。
+ * 勾选（`settings.enabledTools`，项目上同名键是新会话的缺省）是相对于会话 agent 档案的**增减**，只管
+ * MCP 服务器：`mcp:<server>` 加一台，`-mcp:<server>` 取消档案 `shuvix-tools` 声明的一台。技能不在勾选里
+ * （2026-10-28：启用着的全部上货架），`skill:` / `-skill:` 不再是勾选条目。界面（工具选择器 / 会话设置 /
+ * 项目设置）与写入口都按这里的函数说话，运行时一侧的 `normalizeToolNames` 与它同一口径（两个记号同时在时
+ * 取消赢）。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -19,33 +20,57 @@ import {
 
 describe('记号分类', () => {
   it('TS-1 isToolOptOut / isToolSelectionEntry / toolOptOut', () => {
-    // 取消记号只对会话级的两类成立：内置名（-read / -agent）不是记号，双减号、空记号、大小写不对都不算
-    for (const entry of ['-mcp:a', '-skill:x:y']) {
+    // 取消记号只对 MCP 服务器成立：内置名（-read / -agent）、技能（-skill:…，2026-10-28 起不再按会话勾选）
+    // 都不是记号，双减号、空记号、大小写不对也不算
+    for (const entry of ['-mcp:a', '-mcp:x:y']) {
       expect(isToolOptOut(entry), entry).toBe(true)
     }
-    for (const entry of ['mcp:a', '-read', '-agent', '--skill:x', '-', '-MCP:a', 'bash']) {
+    for (const entry of [
+      'mcp:a',
+      '-read',
+      '-agent',
+      '-skill:x',
+      '-skill:builtin:drawing',
+      '--mcp:x',
+      '-',
+      '-MCP:a',
+      'bash'
+    ]) {
       expect(isToolOptOut(entry), entry).toBe(false)
     }
 
-    for (const entry of ['mcp:a', 'skill:x', '-mcp:a', '-skill:x']) {
+    for (const entry of ['mcp:a', '-mcp:a']) {
       expect(isToolSelectionEntry(entry), entry).toBe(true)
     }
-    for (const entry of ['read', 'bash', '-read', '-agent', '--skill:x', '-', '-MCP:a', 'MCP:a']) {
+    for (const entry of [
+      'read',
+      'bash',
+      'skill',
+      'skill:x',
+      'skill:builtin:drawing',
+      '-skill:x',
+      '-read',
+      '-agent',
+      '--mcp:x',
+      '-',
+      '-MCP:a',
+      'MCP:a'
+    ]) {
       expect(isToolSelectionEntry(entry), entry).toBe(false)
     }
 
-    expect(toolOptOut('skill:x')).toBe('-skill:x')
+    expect(toolOptOut('mcp:x')).toBe('-mcp:x')
   })
 
-  it('TS-2 optedOutTools：只收合法取消记号、去掉前缀、去重', () => {
+  it('TS-2 optedOutTools：只收合法取消记号、去掉前缀、去重；-skill: 不算', () => {
     expect(
-      optedOutTools(['skill:a', '-skill:b', '-mcp:c', '-read', '-skill:b', '--skill:d'])
-    ).toEqual(new Set(['skill:b', 'mcp:c']))
+      optedOutTools(['mcp:a', '-mcp:b', '-mcp:c', '-read', '-mcp:b', '--mcp:d', '-skill:e'])
+    ).toEqual(new Set(['mcp:b', 'mcp:c']))
   })
 })
 
 describe('isToolSelected —— 某一项此刻开没开', () => {
-  const NAME = 'skill:n'
+  const NAME = 'mcp:n'
 
   it.each<[string, string[], boolean, boolean]>([
     ['声明 · 缺省（没有任何记号）', [], true, true],
@@ -63,33 +88,31 @@ describe('isToolSelected —— 某一项此刻开没开', () => {
   })
 
   it('TS-3 别的项的取消记号对这一项没有影响', () => {
-    expect(isToolSelected(['-skill:other', '-mcp:n'], NAME, true)).toBe(true)
-    expect(isToolSelected(['-skill:other', NAME], NAME, false)).toBe(true)
+    // 旧会话里残留的 -skill:n 也不是这一台的取消记号
+    expect(isToolSelected(['-mcp:other', '-mcp:nn', '-skill:n'], NAME, true)).toBe(true)
+    expect(isToolSelected(['-mcp:other', NAME], NAME, false)).toBe(true)
   })
 })
 
 describe('setToolSelected —— 设成开 / 关，返回整份新勾选', () => {
-  const NAME = 'skill:n'
-  const OPT = '-skill:n'
+  const NAME = 'mcp:n'
+  const OPT = '-mcp:n'
 
   it('TS-4 声明项关掉：抹掉显式勾选，取消记号只追加一次', () => {
-    expect(setToolSelected(['mcp:a', NAME, 'skill:b'], NAME, true, false)).toEqual([
+    expect(setToolSelected(['mcp:a', NAME, 'mcp:b'], NAME, true, false)).toEqual([
       'mcp:a',
-      'skill:b',
+      'mcp:b',
       OPT
     ])
-    expect(setToolSelected(['mcp:a', OPT, 'skill:b', OPT], NAME, true, false)).toEqual([
+    expect(setToolSelected(['mcp:a', OPT, 'mcp:b', OPT], NAME, true, false)).toEqual([
       'mcp:a',
-      'skill:b',
+      'mcp:b',
       OPT
     ])
   })
 
   it('TS-4 声明项打开：抹掉取消记号，不写名字（缺省就是开着）', () => {
-    expect(setToolSelected(['mcp:a', OPT, 'skill:b'], NAME, true, true)).toEqual([
-      'mcp:a',
-      'skill:b'
-    ])
+    expect(setToolSelected(['mcp:a', OPT, 'mcp:b'], NAME, true, true)).toEqual(['mcp:a', 'mcp:b'])
     expect(setToolSelected(['mcp:a'], NAME, true, true)).toEqual(['mcp:a'])
   })
 
@@ -103,10 +126,10 @@ describe('setToolSelected —— 设成开 / 关，返回整份新勾选', () =>
   })
 
   it('TS-4 其余条目保持原顺序；传入的数组不被改动', () => {
-    const input = Object.freeze(['-mcp:z', NAME, 'skill:b', 'mcp:a', OPT]) as readonly string[]
+    const input = Object.freeze(['-mcp:z', NAME, 'mcp:b', 'mcp:a', OPT]) as readonly string[]
     const snapshot = [...input]
     const out = setToolSelected(input, NAME, true, false)
-    expect(out).toEqual(['-mcp:z', 'skill:b', 'mcp:a', OPT])
+    expect(out).toEqual(['-mcp:z', 'mcp:b', 'mcp:a', OPT])
     expect(input).toEqual(snapshot)
     expect(out).not.toBe(input)
   })
@@ -136,20 +159,20 @@ describe('setToolSelected —— 设成开 / 关，返回整份新勾选', () =>
 
 describe('withToolsSelected —— 确保这几项开着（斜杠命令用）', () => {
   it('TS-5 撤掉被点名项的取消记号、补上没勾的（去重、按点名顺序）、别的取消记号不动', () => {
-    const input = ['-skill:d', 'skill:a', '-mcp:z']
+    const input = ['-mcp:d', 'mcp:a', '-mcp:z']
     const snapshot = [...input]
-    expect(withToolsSelected(input, ['skill:d', 'mcp:n', 'skill:a', 'mcp:n'])).toEqual([
-      'skill:a',
+    expect(withToolsSelected(input, ['mcp:d', 'mcp:n', 'mcp:a', 'mcp:n'])).toEqual([
+      'mcp:a',
       '-mcp:z',
-      'skill:d',
+      'mcp:d',
       'mcp:n'
     ])
     expect(input).toEqual(snapshot)
   })
 
   it('TS-5 什么都不缺：结果逐项等于输入', () => {
-    const input = ['skill:a', '-mcp:z', 'mcp:n']
-    const out = withToolsSelected(input, ['mcp:n', 'skill:a'])
+    const input = ['mcp:a', '-mcp:z', 'mcp:n']
+    const out = withToolsSelected(input, ['mcp:n', 'mcp:a'])
     expect(out).toEqual(input)
     expect(out).toHaveLength(input.length)
     out.forEach((entry, i) => expect(entry).toBe(input[i]))

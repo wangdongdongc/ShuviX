@@ -87,7 +87,7 @@ export const W_PROFILE_TOOLS = [
   'session',
   'knowledge',
   'artifact',
-  'skill:builtin:drawing'
+  'skill'
 ]
 
 export const W_CWD = '/work/acme'
@@ -125,7 +125,7 @@ export function scenarioConfig(): AgentConfig {
       instructionFiles: ['AGENTS.md'],
       projectAwareness: true
     }),
-    toolOverlay: ['mcp:ctx', 'skill:pdf'],
+    toolOverlay: ['mcp:ctx'],
     model: { provider: 'faux', modelId: 'faux-1' },
     thinkingLevel: 'low',
     cwd: W_CWD

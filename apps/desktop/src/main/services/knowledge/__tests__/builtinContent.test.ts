@@ -249,7 +249,7 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
 
   /**
    * BK-13 / BK-14 —— 说明书里抄着两份「内置档案的工具清单」事实：work / chat / coding 共用的那份
-   * 清单原文，以及「哪几个档案点了作图技能的名」。档案 md 一改（加一个工具、多一个档案点名），
+   * 清单原文，以及「哪几个档案带技能工具」（作图技能就在它们的货架上）。档案 md 一改（加一个工具、多一个档案带它），
    * 说明书不跟就是在教用户一份过期的清单 —— 事实源是同语言的内置档案本身（运行时读的同一批 md）。
    */
   const profilesOf = (): ReturnType<typeof buildBuiltinProfiles> =>
@@ -272,7 +272,7 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     }
   })
 
-  it('BK-14 skills.md 恰有一段提到 builtin:drawing，那段点名的内置档案 = 声明了 skill:builtin:drawing 的档案', () => {
+  it('BK-14 skills.md 恰有一段提到 builtin:drawing，那段点名的内置档案 = shuvix-tools 里带 `skill` 的档案', () => {
     const withDrawing = paragraphs(conceptOf('skills.md').body).filter((p) =>
       p.includes('builtin:drawing')
     )
@@ -283,10 +283,8 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     const named = [...withDrawing[0].matchAll(/`([^`]+)`/g)]
       .map((m) => m[1])
       .filter((token) => builtinNames.has(token))
-    const declaring = profiles
-      .filter((p) => p.tools.includes('skill:builtin:drawing'))
-      .map((p) => p.name)
-    expect(declaring.length, '语料自检：应当有档案点了作图技能').toBeGreaterThan(0)
+    const declaring = profiles.filter((p) => p.tools.includes('skill')).map((p) => p.name)
+    expect(declaring.length, '语料自检：应当有档案带技能工具').toBeGreaterThan(0)
     expect([...new Set(named)].sort()).toEqual([...declaring].sort())
   })
 

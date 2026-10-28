@@ -4,6 +4,8 @@
  *
  * 落盘走 `subAgent.createSource`（与「创建覆盖副本」同一个写入口，非法一律拒绝），
  * 建好之后打开的就是它自己的笔记本会话 —— 用户接着在那里改。
+ *
+ * 带 `skill`：与 Claude Code 的子代理一样，新 agent 缺省就能用侧栏里开着的技能（2026-10-28）。
  */
 export function newAgentTemplate(t: (key: string) => string, name: string): string {
   return [
@@ -11,7 +13,7 @@ export function newAgentTemplate(t: (key: string) => string, name: string): stri
     'shuvix: agent v1',
     `name: ${name}`,
     `description: ${t('tool.subAgentTemplateDesc')}`,
-    'shuvix-tools: read, bash, powershell',
+    'shuvix-tools: read, bash, powershell, skill',
     'shuvix-instruction-files: AGENTS.md, CLAUDE.md',
     'shuvix-project-awareness: true',
     '---',

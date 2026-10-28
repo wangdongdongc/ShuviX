@@ -6,8 +6,12 @@
  *  - 目录不空（防止整目录误删后对照测试空转变绿）；
  *  - 每份的 `output.toolNames` 能从它自己的 `inputs` 按今天的顺序规则重算出来 ——
  *    名单序的内置工具（只收本平台存在的）→ `agent`（root 恒有，spawned 看 canSpawn）→ `skill`
- *    （名单里点了 skill: 且这一次真有技能可给）→ 各 MCP 服务器的工具（名单序，连不上的跳过）→
+ *    （名单里有技能工具 `skill` 且这一次真有技能可给）→ 各 MCP 服务器的工具（名单序，连不上的跳过）→
  *    extraTools（同名先移除再追加）。这条规则就是迁移后两段工具扩展拼起来要复现的东西。
+ *
+ * 2026-10-28 起技能不再按名字进名单（档案写 `skill`，货架是启用着的全部技能）：每份 fixture 的 `names` /
+ * `profileTools` 与 `observed.skillToolConstructed` 随之手工改过（见各份的 `revised`），`output.toolNames`
+ * 一字未动。名单里不该再有 `skill:` 条目 —— 这里一并钉住。
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -50,10 +54,10 @@ function expectedOrder(inputs: ToolOrderFixture['inputs']): string[] {
   )
   const names = inputs.names
   const order = names.filter(
-    (n) => !n.startsWith('mcp:') && !n.startsWith('skill:') && n !== 'agent' && onPlatform.has(n)
+    (n) => !n.startsWith('mcp:') && n !== 'skill' && n !== 'agent' && onPlatform.has(n)
   )
   if (names.includes('agent') && (inputs.kind === 'root' || inputs.canSpawn)) order.push('agent')
-  if (names.some((n) => n.startsWith('skill:')) && inputs.skillsAvailable) order.push('skill')
+  if (names.includes('skill') && inputs.skillsAvailable) order.push('skill')
   for (const server of names.filter((n) => n.startsWith('mcp:')).map((n) => n.slice(4))) {
     const spec = inputs.mcpServers[server]
     if (!spec || spec.fails) continue
@@ -75,5 +79,6 @@ describe('tool-order golden fixtures (P1-00)', () => {
     expect(toolNames.length).toBeGreaterThan(0)
     expect(new Set(toolNames).size).toBe(toolNames.length)
     expect(toolNames).toEqual(expectedOrder(fixture.inputs))
+    expect(fixture.inputs.names.filter((n) => n.startsWith('skill:'))).toEqual([])
   })
 })

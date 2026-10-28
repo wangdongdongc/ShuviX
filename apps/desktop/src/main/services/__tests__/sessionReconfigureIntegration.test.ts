@@ -280,17 +280,20 @@ describe('RD-6 重配接到真宿主上', () => {
   )
 
   it(
-    'RD-6c 锁住的会话改勾选：答 true，锁记下新的勾选，initAgent 报的就是它；没有重建',
+    'RD-6c 锁住的会话改勾选：答 true，锁记下新的勾选（旧的 skill: 条目不收），initAgent 报的就是它；技能货架不变；没有重建',
     async () => {
       await lockedOnFaux1()
       expect(openSession('s1').lock?.selection).toEqual([])
+      const skillsBefore = openSession('s1').lock?.skills
 
       expect(await sessionService.updateEnabledTools('s1', ['mcp:browser', 'skill:x'])).toBe(true)
-      expect(settingsOf('s1').enabledTools).toEqual(['mcp:browser', 'skill:x'])
-      expect(openSession('s1').lock?.selection).toEqual(['mcp:browser', 'skill:x'])
+      expect(settingsOf('s1').enabledTools).toEqual(['mcp:browser'])
+      expect(openSession('s1').lock?.selection).toEqual(['mcp:browser'])
+      // 重配从不动技能：货架在创建时定下（2026-10-28）
+      expect(openSession('s1').lock?.skills).toEqual(skillsBefore)
       const init = await sessionService.initAgent('s1')
       expect(init.created).toBe(true)
-      expect(init.enabledTools).toEqual(['mcp:browser', 'skill:x'])
+      expect(init.enabledTools).toEqual(['mcp:browser'])
       expect(eventsOf('agent_created')).toHaveLength(1)
       expect(eventsOf('agent_closing')).toEqual([])
     },

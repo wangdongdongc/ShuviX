@@ -33,7 +33,7 @@ shuvix: agent v1
 name: reviewer
 description: Reads a change set and reports risks without editing anything.
 shuvix-displayName: Code reviewer
-shuvix-tools: read, ls, grep, glob, bash, skill:conventional-comments
+shuvix-tools: read, ls, grep, glob, bash, skill
 shuvix-model: anthropic/claude-sonnet-4-5
 shuvix-thinking: low
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
@@ -80,8 +80,11 @@ style, each with file and line. Never modify files.
   `mcp:database`（ShuviX の設定に保存したデータベース接続）。組み込みエージェントはどれもこれらを
   宣言しません —— 必要なセッションが自分でチェックします —— ので、常にブラウザを使うべきエージェントは
   リストに `mcp:browser` と書きます；
-- `skill:<name>` —— その skill（名前空間付きの skill は `skill:<dir>:<name>` と書く。ShuviX に同梱の
-  スキルは `skill:builtin:<name>`）。
+- `skill` —— `skill` ツール。その棚は、サイドバーの「スキル」で**オンになっているすべての skill**
+  （ShuviX 同梱のものも含む）と、セッションのプロジェクトの `.claude/skills` から、`SKILL.md` に
+  `disable-model-invocation: true` と書かれたものを除いたものです。タスクが説明に合えば、モデルが自分で
+  読み込みます。エージェントファイルは skill を個別に選ばず、セッションも選びません —— Claude Code や
+  Codex と同じです。古いファイルの `skill:<name>` 項目は `skill` として読まれます。
 
 **プラットフォーム固有のツール**は一部のプラットフォームにだけ存在します：`bash` は macOS と Linux、
 `powershell` は Windows（設定 → LLM ツールでプラットフォームのタグが付きます）。各プラットフォームの版を
@@ -91,15 +94,16 @@ style, each with file and line. Never modify files.
 
 項目は順序を保って重複除去されます。このホストに存在しない名前は黙って落とされ、エージェントはそれ無しで
 作られます。**リストに書いたものは常に有効**で、エージェントがどう使われるかに関わりません。セッションの
-ルートになるとき、その `mcp:` / `skill:` 項目はそのセッションの拡張機能ピッカーに既定でチェックされた
-状態で表示されます（ホバーすると、どのエージェントが宣言したかが出ます）。セッションはほかの項目を足す
-ことも、宣言された項目を自分の分だけ外すこともできます —— たとえば `builtin:drawing` の代わりに別の作図
-skill を使うとき。外した項目はセッションの選択に `-skill:<name>` として記録され、プロジェクトの既定にも
-含められ、エージェントファイルは変わりません。すべてのセッションから外すには、やはりエージェントを上書き
-します。組み込みツール名は外せません。リストを狭めることは ShuviX で役割を表す方法では
+ルートになるとき、その `mcp:` 項目はそのセッションの拡張機能ピッカーに既定でチェックされた状態で表示
+されます（ホバーすると、どのエージェントが宣言したかが出ます）。セッションはほかのサーバーを足すことも、
+宣言されたサーバーを自分の分だけ外すこともできます。外した項目はセッションの選択に `-mcp:<server>` として
+記録され、プロジェクトの既定にも含められ、エージェントファイルは変わりません。すべてのセッションから外す
+には、やはりエージェントを上書きします。組み込みツール名は外せません。skill はピッカーにそもそも出ません：
+モデルに使わせたくない skill はサイドバーでオフにします —— それ以降に作られるエージェントに効き、動いて
+いるエージェントは作られたときの skill のまま、作り直すまで（エージェントチップの X）変わりません。リストを狭めることは ShuviX で役割を表す方法では
 **ありません**：`grep` の無いエージェントは `bash` で grep するだけです。組み込みの `work`、`chat`、`coding`
 は意図的に一つのリスト（`bash, powershell, read, write, edit, ask, suggest, ls, grep, glob, agent, session,
-knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:widget`）を共有し、本文だけが異なります。
+knowledge, artifact, widget, skill`）を共有し、本文だけが異なります。
 
 ### 本文 —— システムプロンプト
 
@@ -183,9 +187,9 @@ frontmatter の後の全部（前後の空白を除く）がシステムプロ�
    返します。このツールは利用可能なエージェントをモデルに列挙**しません** —— 名前はプロンプトか
    ユーザーから知る必要があります。
 2. **サブセッションの人格として** —— `session` ツールの `agent_profile`（ベースでない任意の
-   エージェント）。子は親から複写した拡張機能を保ちます。そのエージェントの `shuvix-tools` にある
-   `mcp:` / `skill:` 項目は、リストの他の項目と同じく有効で、その上に加わります —— 複写した選択で
-   外されているものを除きます。
+   エージェント）。子は親から複写した MCP サーバーを保ちます。そのエージェントの `shuvix-tools` に
+   ある `mcp:` 項目は、リストの他の項目と同じく有効で、その上に加わります —— 複写した選択で外されて
+   いるものを除きます。
 3. **hook のエージェントとして**（`shuvix-hook-agent` —— `hook-md` エントリを参照）。
 4. **ベースの上書きとして**（上記）。
 

@@ -37,9 +37,6 @@ import {
   type Tool
 } from '@earendil-works/pi-ai'
 
-/** 技能工具的名字（桌面 SkillTool）：它的说明里列着货架，换技能 = 重新声明它 */
-export const SKILL_TOOL_NAME = 'skill'
-
 const MCP_TOOL_PREFIX = 'mcp__'
 
 /** MCP 工具名 `mcp__<server>__<tool>` 里的服务器名（服务器名不含 `__`）；不是 MCP 工具 → undefined */
@@ -107,29 +104,20 @@ export function orderForMinimalDiff<T extends Tool>(
   return [...head, ...desired.filter((tool) => !used.has(tool.name))]
 }
 
-/** 技能工具怎么变：原样留着 / 换成新的一份（undefined = 货架空了，下架） */
-export type SkillToolChange<T> = { change: 'keep' } | { change: 'replace'; tool: T | undefined }
-
 /**
  * 重配之后的工具（未排序的那份，再交给 `orderForMinimalDiff`）：此刻的工具按原次序，拿掉被取消的服务器的
- * 工具、换掉的技能工具；然后是新的技能工具、新服务器的工具（服务器次序）。同名只留第一个。
+ * 工具；然后是新服务器的工具（服务器次序）。同名只留第一个。技能工具原样留着：货架在创建时定下，重配不动它。
  */
 export function composeReconfiguredTools<T extends { readonly name: string }>(input: {
   current: readonly T[]
   removedServers: ReadonlySet<string>
-  skill: SkillToolChange<T>
   addedMcp: readonly { readonly server: string; readonly tools: readonly T[] }[]
 }): T[] {
-  const replaceSkill = input.skill.change === 'replace'
   const kept = input.current.filter((tool) => {
-    if (replaceSkill && tool.name === SKILL_TOOL_NAME) return false
     const server = mcpServerOfTool(tool.name)
     return server === undefined || !input.removedServers.has(server)
   })
   const appended: T[] = []
-  if (input.skill.change === 'replace' && input.skill.tool !== undefined) {
-    appended.push(input.skill.tool)
-  }
   for (const entry of input.addedMcp) appended.push(...entry.tools)
   const seen = new Set<string>()
   const tools: T[] = []

@@ -49,6 +49,15 @@ interface SkillConfig {
 
 type SkillSource = 'default' | 'project' | 'external' | 'builtin' | 'shared'
 
+/** SKILL.md 解析结果：两个调用开关只在写了非缺省值时出现（同 Skill 上的同名字段） */
+export interface ParsedSkillMarkdown {
+  name: string
+  description: string
+  content: string
+  disableModelInvocation?: true
+  userInvocable?: false
+}
+
 /** 内置 skill 的固定目录名（对应 dirName 字段，构建出 builtin:<name> 标识） */
 const BUILTIN_DIR_NAME = 'builtin'
 
@@ -191,10 +200,11 @@ class SkillService {
   }
 
   /**
-   * 解析 SKILL.md — 提取 YAML frontmatter 中的 name 和 description
+   * 解析 SKILL.md — 提取 YAML frontmatter 中的 name、description 与两个调用开关
+   * （`disable-model-invocation` / `user-invocable`，只认写成 true / false 的）。
    * 返回 null 表示解析失败
    */
-  parseSkillMarkdown(text: string): { name: string; description: string; content: string } | null {
+  parseSkillMarkdown(text: string): ParsedSkillMarkdown | null {
     const trimmed = text.trim()
     if (!trimmed.startsWith('---')) return null
 
@@ -206,6 +216,8 @@ class SkillService {
 
     let name = ''
     let description = ''
+    let disableModelInvocation = false
+    let userInvocable = true
 
     for (const line of frontmatter.split('\n')) {
       const colonIdx = line.indexOf(':')
@@ -218,6 +230,8 @@ class SkillService {
         .replace(/^["']|["']$/g, '')
       if (key === 'name') name = val
       if (key === 'description') description = val
+      if (key === 'disable-model-invocation') disableModelInvocation = val.toLowerCase() === 'true'
+      if (key === 'user-invocable') userInvocable = val.toLowerCase() !== 'false'
     }
 
     // YAML 只补按行读不出来的那一种：description 写成多行。别处装来的技能常写 `description: >`
@@ -237,7 +251,13 @@ class SkillService {
     }
 
     if (!name) return null
-    return { name, description, content }
+    return {
+      name,
+      description,
+      content,
+      ...(disableModelInvocation ? { disableModelInvocation: true as const } : {}),
+      ...(userInvocable ? {} : { userInvocable: false as const })
+    }
   }
 
   /** 从指定目录加载单个 skill */
@@ -268,7 +288,9 @@ class SkillService {
           basePath: dir,
           isEnabled,
           source,
-          dirName
+          dirName,
+          ...(parsed.disableModelInvocation ? { disableModelInvocation: true as const } : {}),
+          ...(parsed.userInvocable === false ? { userInvocable: false as const } : {})
         }
       }
 
@@ -463,7 +485,15 @@ class SkillService {
   }
 
   /**
-   * 把已启用的 Skill 适配成 SlashCommand 形态，供 commandService 合入命令池。
+   * agent 货架上的 Skill：已启用的，去掉 SKILL.md 写了 `disable-model-invocation: true` 的（那种只能由
+   * 用户 `/名字` 调用）。每个带 `skill` 工具的 agent 创建时上架的就是这一份（2026-10-28，按主流用法）
+   */
+  findModelInvocable(projectPath?: string): Skill[] {
+    return this.findEnabled(projectPath).filter((s) => !s.disableModelInvocation)
+  }
+
+  /**
+   * 把已启用的 Skill 适配成 SlashCommand 形态，供 commandService 合入命令池（`user-invocable: false` 的不进）。
    * 模板 = 原 SKILL.md 正文（已剥过 frontmatter）+ "Base directory" 头 + 静态替换 ${CLAUDE_SKILL_DIR}。
    * ${CLAUDE_SESSION_ID} 留到前端 expand 时替换（renderer 知道 activeSessionId）。
    *
@@ -473,27 +503,29 @@ class SkillService {
    * 因为 SKILL.md frontmatter 的 description 是写给模型的触发说明，塞满关键词，不适合作 popover 文案。
    */
   findEnabledAsCommands(projectPath?: string): SlashCommand[] {
-    return this.findEnabled(projectPath).map((s) => {
-      const baseDir = s.basePath
-      const normalizedDir = process.platform === 'win32' ? baseDir.replace(/\\/g, '/') : baseDir
-      const body = s.content.trim()
-      const template = `Base directory for this skill: ${normalizedDir}\n\n${body}`.replaceAll(
-        '${CLAUDE_SKILL_DIR}',
-        normalizedDir
-      )
-      // 内置 skill 用单独维护的多语言短描述覆盖（仅显示用，不影响注入正文）
-      const copy =
-        s.source === 'builtin' ? builtinSkillCopy(s.name, (key) => i18next.t(key)) : undefined
-      const description = copy?.hint ?? s.description
-      return {
-        commandId: s.name,
-        name: s.name,
-        description,
-        template,
-        filePath: join(baseDir, 'SKILL.md'),
-        kind: 'skill'
-      }
-    })
+    return this.findEnabled(projectPath)
+      .filter((s) => s.userInvocable !== false)
+      .map((s) => {
+        const baseDir = s.basePath
+        const normalizedDir = process.platform === 'win32' ? baseDir.replace(/\\/g, '/') : baseDir
+        const body = s.content.trim()
+        const template = `Base directory for this skill: ${normalizedDir}\n\n${body}`.replaceAll(
+          '${CLAUDE_SKILL_DIR}',
+          normalizedDir
+        )
+        // 内置 skill 用单独维护的多语言短描述覆盖（仅显示用，不影响注入正文）
+        const copy =
+          s.source === 'builtin' ? builtinSkillCopy(s.name, (key) => i18next.t(key)) : undefined
+        const description = copy?.hint ?? s.description
+        return {
+          commandId: s.name,
+          name: s.name,
+          description,
+          template,
+          filePath: join(baseDir, 'SKILL.md'),
+          kind: 'skill'
+        }
+      })
   }
 
   /**

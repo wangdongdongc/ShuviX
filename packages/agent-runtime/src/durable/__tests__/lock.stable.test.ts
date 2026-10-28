@@ -71,7 +71,7 @@ describe('lock · stable while locked', () => {
     const scenario = await scenarioW({ config })
     const { t } = scenario
     const session = await lockedTurn(scenario)
-    config.toolOverlay = ['mcp:new', 'skill:pdf']
+    config.toolOverlay = ['mcp:new']
     t.kit.queue(answer('second'))
     expect(await session.submitUser('u2')).toEqual({})
     await expectUnchanged(scenario, session)

@@ -51,7 +51,7 @@ export function registerSessionHandlers(): void {
   })
 
   /**
-   * 改扩展能力勾选（mcp:/skill:）。会话有 Agent 运行时就当场重配它（新勾的 MCP 在这里连上），等重配落定才返回。
+   * 改扩展能力勾选（mcp:）。会话有 Agent 运行时就当场重配它（新勾的 MCP 在这里连上），等重配落定才返回。
    */
   defineHandler(
     'session:updateEnabledTools',

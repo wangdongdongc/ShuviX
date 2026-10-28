@@ -4,7 +4,7 @@ shuvix-id: agent:builtin:bot
 shuvix-builtin: true
 name: bot
 description: Bot エージェント —— bot セッションのベースプロファイル。自分の声でユーザーと話し、作業は自分で行う。同名のカスタムエージェント "bot" で上書きできる。
-shuvix-tools: read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:tracking
+shuvix-tools: read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill
 shuvix-displayName: ボット
 shuvix-project-awareness: true
 ---

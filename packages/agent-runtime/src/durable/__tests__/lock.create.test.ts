@@ -347,12 +347,12 @@ describe('lock · create', () => {
     expect(other.t.kit.requests[0]!.options?.reasoning).toBeUndefined()
   })
 
-  it('LC-16 a narrow (bot-like) profile: the overlay adds only mcp:/skill:, never builtins', async () => {
+  it('LC-16 a narrow (bot-like) profile: the overlay adds only mcp:, never builtins nor skill: entries', async () => {
     const config = scenarioConfig()
     config.profile = {
       ...config.profile,
       name: 'bot',
-      tools: ['read', 'ls', 'ask', 'edit', 'skill:builtin:drawing']
+      tools: ['read', 'ls', 'ask', 'edit', 'skill']
     }
     config.toolOverlay = ['mcp:ctx', 'bash', 'write', 'skill:pdf']
     const { t } = await scenarioW({ config })
@@ -363,9 +363,8 @@ describe('lock · create', () => {
       'ls',
       'ask',
       'edit',
-      'skill:builtin:drawing',
-      'mcp:ctx',
-      'skill:pdf'
+      'skill',
+      'mcp:ctx'
     ])
     expect(session.lock!.toolNames).toEqual([
       'read',
@@ -376,21 +375,23 @@ describe('lock · create', () => {
       'mcp__ctx__resolve',
       'mcp__ctx__docs'
     ])
+    // 货架是宿主启用着的全部技能，不是勾选点的那一本
+    expect(session.lock!.skills).toEqual(['builtin:drawing', 'pdf'])
   })
 
   it.each([
-    ['unticked alone', [] as string[], false],
-    ['unticked while skill:pdf is ticked', ['skill:pdf'], true]
+    ['an opt-out of a skill', ['-skill:builtin:drawing']],
+    ['an opt-out plus a tick', ['-skill:builtin:drawing', 'skill:pdf']]
   ])(
-    'LC-16b an opt-out of a profile-declared skill (%s): resolution, promptVars and the tool list lose it; the lock keeps the selection verbatim, also after a reopen',
-    async (_label, extra, skillTool) => {
+    'LC-16b a legacy skill entry left in the selection (%s) does nothing: resolution, promptVars and the shelf are as without it; the lock keeps the selection verbatim, also after a reopen',
+    async (_label, legacy) => {
       const config = scenarioConfig()
       config.profile = {
         ...config.profile,
         name: 'bot',
-        tools: ['read', 'ls', 'ask', 'edit', 'skill:builtin:drawing']
+        tools: ['read', 'ls', 'ask', 'edit', 'skill']
       }
-      const overlay = ['-skill:builtin:drawing', 'mcp:ctx', ...extra]
+      const overlay = [...legacy, 'mcp:ctx']
       config.toolOverlay = overlay
       const seen: string[][] = []
       const { t } = await scenarioW({
@@ -404,18 +405,17 @@ describe('lock · create', () => {
       await session.createAgent()
 
       const resolved = t.toolHost.resolveCalls[0]!.names
-      expect(resolved).toEqual(['read', 'ls', 'ask', 'edit', 'mcp:ctx', ...extra])
-      expect(resolved).not.toContain('skill:builtin:drawing')
-      // 冻结人设时的变量表看到的是同一份名单 —— 作图段落据此整段不出现
+      expect(resolved).toEqual(['read', 'ls', 'ask', 'edit', 'skill', 'mcp:ctx'])
+      // 冻结人设时的变量表看到的是同一份名单 —— 里面没有任何 skill: 条目
       expect(seen).toHaveLength(1)
       expect(seen[0]).toEqual(resolved)
-      expect(seen[0]).not.toContain('skill:builtin:drawing')
-      if (skillTool) expect(session.lock!.toolNames).toContain('skill')
-      else expect(session.lock!.toolNames).not.toContain('skill')
+      // 技能工具照旧在，货架照旧是宿主启用着的全部
+      expect(session.lock!.toolNames).toContain('skill')
+      expect(session.lock!.skills).toEqual(['builtin:drawing', 'pdf'])
       expect(session.lock!.toolNames).toEqual(
         expect.arrayContaining(['mcp__ctx__resolve', 'mcp__ctx__docs'])
       )
-      // 锁记录的勾选是创建时那份原样（含取消记号）：agent.init 锁着时报它
+      // 锁记录的勾选是创建时那份原样（含不再被认的条目）：agent.init 锁着时报它
       expect(session.lock!.selection).toEqual(overlay)
       expect((await storedLock(session)) as { selection?: unknown }).toMatchObject({
         selection: overlay

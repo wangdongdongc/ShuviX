@@ -162,7 +162,7 @@ export interface ChatGateway {
   // ─── 工具发现 ──────────────────────────────────
 
   /**
-   * 获取所有可用工具列表（传入 sessionId 时包含项目级 skills）。
+   * 获取所有可用工具列表（内置工具 + MCP 服务器；技能不在其中，它们不按会话勾选）。
    * 没有会话时声明项按 `profile` 画（缺省 work —— 项目编辑页画的是项目会话）
    */
   listTools(
@@ -175,7 +175,7 @@ export interface ChatGateway {
     group?: string
     defaultEnabled?: boolean
     serverStatus?: string
-    /** 会话的 agent 档案声明了这条 mcp:/skill: 项（值为档案显示名）：恒生效，选择器里锁成已勾 */
+    /** 会话的 agent 档案声明了这条 mcp: 项（值为档案显示名）：缺省勾上，可以取消 */
     declaredBy?: string
   }>
 }

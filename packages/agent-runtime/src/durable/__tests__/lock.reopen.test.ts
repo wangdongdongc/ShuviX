@@ -434,7 +434,7 @@ describe('lock · reopen', () => {
       const config = scenarioConfig()
       config.profile = {
         ...config.profile,
-        tools: config.profile.tools.filter((name) => !name.startsWith('skill:'))
+        tools: config.profile.tools.filter((name) => name !== 'skill')
       }
       config.toolOverlay = ['mcp:ctx']
       const { t } = await scenarioW({ config })

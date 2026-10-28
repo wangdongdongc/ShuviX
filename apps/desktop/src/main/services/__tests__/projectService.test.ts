@@ -107,7 +107,7 @@ describe('projectService — settings 合并（PS-3 / PS-4）', () => {
 
   it('PS-3 update 的 settings 是合并不是覆盖：只传知识库，扩展能力与工具设置原样留着', () => {
     const existing = {
-      enabledTools: ['skill:a'],
+      enabledTools: ['mcp:a'],
       tool: { envVars: [{ key: 'K', value: 'v' }] }
     }
     vi.mocked(projectDao.pick).mockReturnValue({ settings: existing } as never)
@@ -116,8 +116,8 @@ describe('projectService — settings 合并（PS-3 / PS-4）', () => {
     expect(patch().settings).toEqual({ ...existing, knowledgeBases: ['notes'] })
 
     // 不传就不动：这个项目继续跟着缺省走（弹窗没动过知识库时就是这一条）
-    projectService.update('p1', { enabledTools: ['skill:b'] })
-    expect(patch().settings).toEqual({ ...existing, enabledTools: ['skill:b'] })
+    projectService.update('p1', { enabledTools: ['mcp:b'] })
+    expect(patch().settings).toEqual({ ...existing, enabledTools: ['mcp:b'] })
     expect('knowledgeBases' in (patch().settings as object)).toBe(false)
 
     // 传空数组照写（明确选了「一个库都不用」，不是「没意见」）

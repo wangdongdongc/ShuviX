@@ -33,7 +33,7 @@ shuvix: agent v1
 name: reviewer
 description: Reads a change set and reports risks without editing anything.
 shuvix-displayName: Code reviewer
-shuvix-tools: read, ls, grep, glob, bash, skill:conventional-comments
+shuvix-tools: read, ls, grep, glob, bash, skill
 shuvix-model: anthropic/claude-sonnet-4-5
 shuvix-thinking: low
 shuvix-instruction-files: AGENTS.md, CLAUDE.md
@@ -80,8 +80,12 @@ A comma-separated string. Each entry is one of:
   `mcp:ssh` (the hosts in your `~/.ssh/config`) and `mcp:database` (the database connections saved
   in ShuviX's settings). No builtin agent declares them — a session ticks them when it needs them —
   so an agent that should always drive the browser lists `mcp:browser`;
-- `skill:<name>` — that skill (a namespaced skill is written `skill:<dir>:<name>`; the skills
-  shipped with ShuviX are `skill:builtin:<name>`).
+- `skill` — the `skill` tool. Its shelf is **every skill that is switched on** in the sidebar's
+  Skills group (the ones shipped with ShuviX included) plus the session project's
+  `.claude/skills`, minus any whose `SKILL.md` says `disable-model-invocation: true`; the model
+  loads one when the task matches its description. An agent file does not pick individual
+  skills, and neither does a session — the same as in Claude Code or Codex. An older file's
+  `skill:<name>` entries are read as `skill`.
 
 **Platform-specific tools** exist only on some platforms: `bash` on macOS and Linux, `powershell`
 on Windows (Settings → LLM tools tags them with their platforms). List every platform's version —
@@ -90,15 +94,17 @@ same file works on every machine. An agent that lists only `bash` has no command
 
 Entries are de-duplicated in order. A name that does not exist on this host is silently dropped
 — the agent is created without it. **Everything the list names is on**, however the agent is put
-to use. When it is the root of a session, its `mcp:` / `skill:` entries appear in that session's
-extension pickers ticked by default (hovering says which agent declared them). The session can
-tick more, and can untick a declared one for itself — say, to use another drawing skill instead of
-`builtin:drawing`; the session stores that as `-skill:<name>` in its selection, a project's
-default can carry it too, and the agent file is not touched. Removing an entry for every session
-still means overriding the agent. Builtin tool names cannot be unticked. Narrowing a list is
+to use. When it is the root of a session, its `mcp:` entries appear in that session's extension
+pickers ticked by default (hovering says which agent declared them). The session can tick more
+servers, and can untick a declared one for itself; the session stores that as `-mcp:<server>` in
+its selection, a project's default can carry it too, and the agent file is not touched. Removing
+an entry for every session still means overriding the agent. Builtin tool names cannot be
+unticked. Skills are not in the pickers at all: to keep a skill away from the model, switch it
+off in the sidebar — that applies to agents created from then on; a running agent keeps the
+shelf it was created with until you rebuild it (the X on the agent chip). Narrowing a list is
 **not** how a role is expressed in ShuviX: an agent without `grep` just greps through `bash`.
 The builtin `work`, `chat` and `coding` agents deliberately share one list (`bash, powershell, read, write,
-edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill:builtin:drawing, skill:builtin:widget`) and differ only in their bodies.
+edit, ask, suggest, ls, grep, glob, agent, session, knowledge, artifact, widget, skill`) and differ only in their bodies.
 
 ### The body — the system prompt
 
@@ -189,9 +195,9 @@ the `policy-md` entry), and `knowledge-writer`, which checks an entry submitted 
    enumerate available agents to the model — a name must be known from the prompt or from the
    user.
 2. **As the persona of a sub-session** — the `session` tool's `agent_profile` (any agent that is
-   not a base). The child keeps the extensions it copied from its parent; the `mcp:` / `skill:`
-   entries in that agent's `shuvix-tools` are on in addition, like everything else the list names,
-   unless the copied selection unticks them.
+   not a base). The child keeps the MCP servers it copied from its parent; the `mcp:` entries in
+   that agent's `shuvix-tools` are on in addition, like everything else the list names, unless the
+   copied selection unticks them.
 3. **As a hook's agent** (`shuvix-hook-agent` — see the `hook-md` entry).
 4. **As a base override** (above).
 

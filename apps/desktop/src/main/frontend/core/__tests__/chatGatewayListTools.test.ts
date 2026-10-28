@@ -1,14 +1,16 @@
 /**
  * DefaultChatGateway.listTools 的 `declaredBy` —— 会话根 Agent 的档案在 `shuvix-tools` 里声明的
- * mcp:/skill: 项对这条会话缺省生效（名单归一：会话勾选在其上增减，`-<name>` 取消声明的一项），选择器与
+ * mcp: 项对这条会话缺省生效（名单归一：会话勾选在其上增减，`-<name>` 取消声明的一台），选择器与
  * 会话设置据此把它们画成「默认勾上、可以取消」，悬停说是哪个档案带的。
  *
  * 钉的是这张表：
  *  - 档案由会话形态推导（`resolveAgentProfileName(sid)`），没有会话回落 work；
  *  - 标记的值是档案显示名，显示名为空时退回档案名；
- *  - 只标 mcp / skill 条目，内置工具条目照旧只带 `defaultEnabled`；
- *  - 只标**真的列出来**的条目：档案点了名但此刻不可用（服务器没配、技能被停用 / 不存在）不凭空
- *    造一条出来；按全名精确匹配（`skill:drawing` ≠ `skill:builtin:drawing`）。
+ *  - 只标 mcp 条目，内置工具条目照旧只带 `defaultEnabled`；
+ *  - 只标**真的列出来**的条目：档案点了名但此刻不可用（服务器没配）不凭空造一条出来；按全名精确匹配；
+ *  - 技能**不列**（2026-10-28：技能不按会话勾选，启用着的全部上带 `skill` 工具的 agent 的货架）——
+ *    没有 `skill:<name>` 条目、没有 `__skills__` 组，也不去问 skillService；技能工具 `skill` 本身是一条
+ *    普通的内置工具条目（`general` 组，档案写了它就 `defaultEnabled`）。
  *
  * mock 骨架照抄 chatGatewayPrompt.test.ts（网关的 import 图带 SQLite / electron / 全部工具）。
  */
@@ -52,8 +54,8 @@ vi.mock('../../../services/toolRegistry', () => {
   // 两份刻意不同：全量里多一个另一平台的 powershell，按平台过滤后的那份（这台 macOS / Linux
   // 上的）没有它 —— 工具列表该读后者（LT-P1）
   return {
-    getBuiltinToolEntries: () => entries(['read', 'bash', 'powershell']),
-    getPlatformBuiltinToolEntries: () => entries(['read', 'bash'])
+    getBuiltinToolEntries: () => entries(['read', 'bash', 'powershell', 'skill']),
+    getPlatformBuiltinToolEntries: () => entries(['read', 'bash', 'skill'])
   }
 })
 // 会话权限表（services/acl）不在这组用例里：空表（真的那份落 SQLite，这里不起库）
@@ -117,7 +119,7 @@ const USER_FOO: SkillShot = { name: 'foo', description: 'foo skill' }
 const WORK: ProfileShot = {
   name: 'work',
   displayName: 'Work',
-  tools: ['read', 'mcp:ctx', 'skill:builtin:drawing']
+  tools: ['read', 'mcp:ctx', 'skill']
 }
 
 type Row = ReturnType<typeof chatGateway.listTools>[number]
@@ -141,17 +143,18 @@ beforeEach(() => {
   mocks.mcpInfos = [MCP_CTX, MCP_OTHER]
 })
 
-describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', () => {
-  it('LT-1 档案声明的 mcp:ctx 与 skill:builtin:drawing 标上档案显示名，其余 mcp / skill 条目不标', () => {
+describe('DefaultChatGateway.listTools —— 档案声明的 mcp: 项', () => {
+  it('LT-1 档案声明的 mcp:ctx 标上档案显示名，其余 mcp 条目不标；技能一条都不列，也不去问 skillService', () => {
     const rows = chatGateway.listTools(SID)
     expect(mocks.resolveAgentProfileName).toHaveBeenCalledWith(SID)
     expect(rowOf(rows, 'mcp:ctx')?.declaredBy).toBe('Work')
-    expect(rowOf(rows, 'skill:builtin:drawing')?.declaredBy).toBe('Work')
     // 条目确实列出来了（不是因为不在列表里才读到 undefined）
     expect(rowOf(rows, 'mcp:other')).toBeDefined()
-    expect(rowOf(rows, 'skill:foo')).toBeDefined()
     expect(rowOf(rows, 'mcp:other')?.declaredBy).toBeUndefined()
-    expect(rowOf(rows, 'skill:foo')?.declaredBy).toBeUndefined()
+    // 技能不按会话勾选：启用着的 builtin:drawing / foo 都不成为选择器里的一行
+    expect(rows.filter((r) => r.name.startsWith('skill:'))).toEqual([])
+    expect(rows.filter((r) => r.group === '__skills__')).toEqual([])
+    expect(mocks.findEnabled).not.toHaveBeenCalled()
   })
 
   it('LT-2 内置工具条目（read）从不带 declaredBy —— 它们照旧只用 defaultEnabled 表达档案白名单', () => {
@@ -166,18 +169,29 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
     expect(rowOf(rows, 'bash')?.declaredBy).toBeUndefined()
   })
 
+  it('LT-2b 技能工具 skill 是一条普通的内置工具（general 组）：档案写了它 → defaultEnabled，没写 → 不勾；从不带 declaredBy', () => {
+    const skill = rowOf(chatGateway.listTools(SID), 'skill')
+    expect(skill).toMatchObject({ name: 'skill', group: 'general', defaultEnabled: true })
+    expect('declaredBy' in skill!).toBe(false)
+
+    mocks.getProfile.mockImplementation((name: string) =>
+      name === 'work' ? { ...WORK, tools: ['read', 'mcp:ctx'] } : undefined
+    )
+    expect(rowOf(chatGateway.listTools(SID), 'skill')).toMatchObject({ defaultEnabled: false })
+  })
+
   it('LT-3 没有会话（项目编辑页那种调用）→ 回落 work 档案，不去推导形态；声明项照样标', () => {
     const rows = chatGateway.listTools()
     expect(mocks.resolveAgentProfileName).not.toHaveBeenCalled()
     expect(mocks.getProfile).toHaveBeenCalledWith('work')
-    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work', 'skill:builtin:drawing': 'Work' })
+    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work' })
   })
 
   it('LT-4 会话形态推导出 bot → 用 bot 档案的声明与显示名', () => {
     const BOT: ProfileShot = {
       name: 'bot',
       displayName: 'Bot Persona',
-      tools: ['read', 'skill:builtin:drawing']
+      tools: ['read', 'mcp:other', 'skill']
     }
     mocks.resolveAgentProfileName.mockReturnValue('bot')
     mocks.getProfile.mockImplementation((name: string) =>
@@ -186,7 +200,7 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
     const rows = chatGateway.listTools(SID)
     expect(mocks.getProfile).toHaveBeenCalledWith('bot')
     // 标的是 bot 自己声明的那一项：work 声明的 mcp:ctx 在 bot 会话里不标
-    expect(declaredOf(rows)).toEqual({ 'skill:builtin:drawing': 'Bot Persona' })
+    expect(declaredOf(rows)).toEqual({ 'mcp:other': 'Bot Persona' })
   })
 
   it('LT-5 档案显示名为空串 → 退回档案名（悬停提示总得说出是谁声明的）', () => {
@@ -194,7 +208,7 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
       name === 'work' ? { ...WORK, displayName: '' } : undefined
     )
     const rows = chatGateway.listTools(SID)
-    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'work', 'skill:builtin:drawing': 'work' })
+    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'work' })
   })
 
   it('LT-6 档案解析不出来（getProfile 回 undefined）→ 不抛、一个条目都不标', () => {
@@ -207,7 +221,7 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
     expect(declaredOf(rows)).toEqual({})
   })
 
-  it('LT-7 档案点了名但此刻不可用的 mcp:gone / skill:missing → 不凭空造条目，列表长度不变', () => {
+  it('LT-7 档案点了名但此刻不可用的 mcp:gone（以及一条解析侧本会归成 skill 的残留 skill:missing）→ 不凭空造条目，列表长度不变', () => {
     const baseline = chatGateway.listTools(SID).length
     mocks.getProfile.mockImplementation((name: string) =>
       name === 'work' ? { ...WORK, tools: [...WORK.tools, 'mcp:gone', 'skill:missing'] } : undefined
@@ -216,23 +230,25 @@ describe('DefaultChatGateway.listTools —— 档案声明的 mcp:/skill: 项', 
     expect(rows).toHaveLength(baseline)
     expect(rowOf(rows, 'mcp:gone')).toBeUndefined()
     expect(rowOf(rows, 'skill:missing')).toBeUndefined()
-    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work', 'skill:builtin:drawing': 'Work' })
-  })
-
-  it('LT-8 声明的技能被全局停用（findEnabled 不再返回它）→ 列表里没有这一条，更谈不上标', () => {
-    mocks.findEnabled.mockReturnValue([USER_FOO])
-    const rows = chatGateway.listTools(SID)
-    expect(rowOf(rows, 'skill:builtin:drawing')).toBeUndefined()
     expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work' })
   })
 
-  it('LT-9 按全名精确匹配：档案点的是 skill:drawing，就不标 skill:builtin:drawing', () => {
+  it('LT-8 技能启用与否不影响列表：侧栏里开着几个、关着几个，列出来的都是同一份（技能本就不在其中）', () => {
+    const withSkills = chatGateway.listTools(SID)
+    mocks.findEnabled.mockReturnValue([])
+    expect(chatGateway.listTools(SID)).toEqual(withSkills)
+    mocks.findEnabled.mockReturnValue([BUILTIN_DRAWING])
+    expect(chatGateway.listTools(SID)).toEqual(withSkills)
+    expect(rowOf(withSkills, 'skill:builtin:drawing')).toBeUndefined()
+  })
+
+  it('LT-9 按全名精确匹配：档案点的是 mcp:ct（前缀相同的另一个名字），就不标 mcp:ctx', () => {
     mocks.getProfile.mockImplementation((name: string) =>
-      name === 'work' ? { ...WORK, tools: ['read', 'skill:drawing'] } : undefined
+      name === 'work' ? { ...WORK, tools: ['read', 'mcp:ct'] } : undefined
     )
     const rows = chatGateway.listTools(SID)
-    expect(rowOf(rows, 'skill:builtin:drawing')).toBeDefined()
-    expect(rowOf(rows, 'skill:builtin:drawing')?.declaredBy).toBeUndefined()
+    expect(rowOf(rows, 'mcp:ctx')).toBeDefined()
+    expect(rowOf(rows, 'mcp:ctx')?.declaredBy).toBeUndefined()
     expect(declaredOf(rows)).toEqual({})
   })
 })
@@ -253,7 +269,11 @@ describe('DefaultChatGateway.listTools —— 另一个平台的命令工具不�
     // 这台机器上有的那个照旧：勾着（档案点了名），不带 declaredBy（内置条目从不带）
     expect(rowOf(rows, 'bash')).toMatchObject({ defaultEnabled: true })
     expect(rowOf(rows, 'bash')?.declaredBy).toBeUndefined()
-    expect(rows.filter((r) => r.group === 'general').map((r) => r.name)).toEqual(['read', 'bash'])
+    expect(rows.filter((r) => r.group === 'general').map((r) => r.name)).toEqual([
+      'read',
+      'bash',
+      'skill'
+    ])
   })
 })
 
@@ -278,7 +298,7 @@ describe('DefaultChatGateway.listTools —— 内置 mcp:chrome 只给声明它�
   const TAB: ProfileShot = {
     name: 'tab',
     displayName: 'Chrome Tab',
-    tools: ['mcp:chrome', 'ask', 'skill:builtin:drawing']
+    tools: ['mcp:chrome', 'ask', 'skill']
   }
 
   beforeEach(() => {
@@ -306,10 +326,7 @@ describe('DefaultChatGateway.listTools —— 内置 mcp:chrome 只给声明它�
     })
     expect(rowOf(rows, 'mcp:browser')).toBeDefined()
     expect(rowOf(rows, 'mcp:browser')?.declaredBy).toBeUndefined()
-    expect(declaredOf(rows)).toEqual({
-      'mcp:chrome': 'Chrome Tab',
-      'skill:builtin:drawing': 'Chrome Tab'
-    })
+    expect(declaredOf(rows)).toEqual({ 'mcp:chrome': 'Chrome Tab' })
   })
 
   it('LT-C3 没有会话（项目编辑页）→ 回落 work，没有 mcp:chrome', () => {
@@ -323,7 +340,7 @@ describe('DefaultChatGateway.listTools —— 内置 mcp:chrome 只给声明它�
     mocks.mcpInfos = [MCP_BROWSER, MCP_CTX]
     const rows = chatGateway.listTools(SID)
     expect(rowOf(rows, 'mcp:chrome')).toBeUndefined()
-    expect(declaredOf(rows)).toEqual({ 'skill:builtin:drawing': 'Chrome Tab' })
+    expect(declaredOf(rows)).toEqual({})
   })
 
   it('LT-C5 别的档案（bot / 子会话钉的 coding）同样见不到 mcp:chrome', () => {
@@ -346,7 +363,7 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
   const CHAT: ProfileShot = {
     name: 'chat',
     displayName: 'Chat Persona',
-    tools: ['read', 'skill:builtin:drawing']
+    tools: ['read', 'mcp:other', 'skill']
   }
 
   beforeEach(() => {
@@ -361,7 +378,7 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
     expect(mocks.getProfile).toHaveBeenCalledWith('chat')
     expect(mocks.getProfile).not.toHaveBeenCalledWith('work')
     // chat 没声明 mcp:ctx：欢迎页上它不标
-    expect(declaredOf(rows)).toEqual({ 'skill:builtin:drawing': 'Chat Persona' })
+    expect(declaredOf(rows)).toEqual({ 'mcp:other': 'Chat Persona' })
     expect(rowOf(rows, 'mcp:ctx')).toBeDefined()
     expect(rowOf(rows, 'mcp:ctx')?.declaredBy).toBeUndefined()
   })
@@ -372,7 +389,7 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
     expect(mocks.resolveAgentProfileName).toHaveBeenCalledWith(SID)
     expect(mocks.getProfile).toHaveBeenCalledWith('work')
     expect(mocks.getProfile).not.toHaveBeenCalledWith('chat')
-    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work', 'skill:builtin:drawing': 'Work' })
+    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work' })
   })
 
   it.each<[string, { profile?: string }]>([
@@ -382,7 +399,7 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
     const rows = chatGateway.listTools(undefined, options)
     expect(mocks.resolveAgentProfileName).not.toHaveBeenCalled()
     expect(mocks.getProfile).toHaveBeenCalledWith('work')
-    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work', 'skill:builtin:drawing': 'Work' })
+    expect(declaredOf(rows)).toEqual({ 'mcp:ctx': 'Work' })
   })
 
   it('ML-U-7d 无 sid、点名一个不存在的档案 → 不抛、一个条目都不标、列表照常', () => {
@@ -398,7 +415,7 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
   })
 
   it.each(['en', 'zh', 'ja'])(
-    "ML-U-7e (%s) 真内置 md：{profile:'chat'} 的 skill:builtin:drawing 由 chat 的显示名声明，且没有 mcp:chrome",
+    "ML-U-7e (%s) 真内置 md：{profile:'chat'} 的技能工具 skill 默认勾上（内置条目，不带 declaredBy），没有任何 skill: 条目，也没有 mcp:chrome",
     (language) => {
       const profiles = buildBuiltinProfiles({
         language,
@@ -415,14 +432,19 @@ describe('DefaultChatGateway.listTools —— 没有会话时按 options.profile
         MCP_CTX
       ]
 
+      // 真内置档案写的是 `skill`（2026-10-28 起不再逐个点名 skill:builtin:<name>）
+      expect(chat!.tools).toContain('skill')
+      expect(chat!.tools.filter((tool) => tool.startsWith('skill:'))).toEqual([])
       const rows = chatGateway.listTools(undefined, { profile: 'chat' })
-      expect(rowOf(rows, 'skill:builtin:drawing')?.declaredBy).toBe(chat!.displayName)
+      expect(rowOf(rows, 'skill')).toMatchObject({ group: 'general', defaultEnabled: true })
+      expect(rowOf(rows, 'skill')?.declaredBy).toBeUndefined()
+      expect(rows.filter((r) => r.name.startsWith('skill:'))).toEqual([])
       expect(rowOf(rows, 'mcp:chrome')).toBeUndefined()
-      // 与项目编辑页（work）画的不是同一个档案 —— 两个显示名不同，悬停提示才说得清
-      expect(work!.displayName).not.toBe(chat!.displayName)
-      expect(rowOf(chatGateway.listTools(), 'skill:builtin:drawing')?.declaredBy).toBe(
-        work!.displayName
-      )
+      // chat 不声明 MCP：browser 照列、不标
+      expect(rowOf(rows, 'mcp:browser')?.declaredBy).toBeUndefined()
+      // 项目编辑页（work）同样默认勾上技能工具
+      expect(work!.tools).toContain('skill')
+      expect(rowOf(chatGateway.listTools(), 'skill')).toMatchObject({ defaultEnabled: true })
     }
   )
 })

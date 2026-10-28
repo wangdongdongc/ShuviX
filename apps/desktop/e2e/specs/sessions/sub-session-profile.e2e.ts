@@ -1,8 +1,9 @@
 /**
  * `create-sub-session` 的 `agent_profile` —— 父级点名档案的全链路：
  * session 工具 → subSessionRunner.create → sessionService.pinAgentProfile（准入 / 落戳 / 档案
- * 声明的模型与思考档位种子）→ seedRunConfig（档案没意见的部分补回父级）。档案声明的 mcp:/skill:
- * 不写进勾选，经名单归一恒生效。
+ * 声明的模型与思考档位种子）→ seedRunConfig（档案没意见的部分补回父级）。档案声明的 mcp:
+ * 不写进勾选，经名单归一缺省生效；档案写了 `skill` 就带着侧栏里启用着的全部技能（2026-10-28 起技能不按
+ * 档案点名、不按会话勾选）。
  *
  * pinAgentProfile 没有 IPC 面，这条链只能像 sub-session.e2e 那样把模型换成脚本化的假提供商，
  * 让父会话真的调一次工具。每条用例脚本化一次 create-sub-session、按标题认领子会话；只 create
@@ -10,9 +11,9 @@
  *
  * 钉的是：
  *   - 点名 coding：戳落下、body 换成 coding、工具含 bash；
- *   - 点名用户档案：档案声明的模型压过父模型、勾选留着父会话那份、档案声明的 skill 叠加生效、
- *     没声明思考档位 ⇒ 随父；
- *   - 点名 coding（声明了内置作图技能）：父级的 skill 勾选原样留着；
+ *   - 点名用户档案：档案声明的模型压过父模型、勾选留着父会话那份（父会话勾的 MCP 在）、档案声明的
+ *     MCP 叠加生效、档案的 `skill` 带着启用着的技能、没声明思考档位 ⇒ 随父；
+ *   - 点名 coding（不声明模型）：父级的 MCP 勾选原样留着；
  *   - 点名基座 / 只可派发 / 未知名：创建照常成功、不落戳、body 是父形态的基座（项目 → work）；
  *   - 不点名：不落戳、基座 body、工具随父；
  *   - 档案声明了不可用的模型：戳落下、body 生效、模型等于父模型（不写种子、不回落默认）；
@@ -38,9 +39,11 @@ import {
 const MODEL = 'e2e-model'
 /** 用户档案声明的模型（openai 目录里种一个合成 id，避免与同步进来的真实模型重名） */
 const MODEL_A = 'e2e-model-a'
-/** 父会话勾选的 skill / 档案声明的 skill —— 两个不同的名字，「继承」与「声明」才分得开 */
-const SKILL_PARENT = 'e2e-skill-parent'
-const SKILL_PROFILE = 'e2e-skill-profile'
+/** 父会话勾选的 MCP / 档案声明的 MCP —— 两台不同的进程内内置服务器，「继承」与「声明」才分得开 */
+const PARENT_MCP = 'mcp:database'
+const PROFILE_MCP = 'mcp:browser'
+/** 一个启用着的全局 skill：档案写了 `skill` 就在它的货架上，谁都不用勾 */
+const SKILL_SEEDED = 'e2e-skill-seeded'
 const PARENT_TITLE = 'SP-parent'
 /** work 基座独有的锚点；coding 正文里的一句 */
 const WORK_ANCHOR = 'Handing work to a sub-session'
@@ -146,12 +149,11 @@ beforeAll(async () => {
 
   // 档案模型解析只取已启用提供商的已启用模型：内置 openai 的种子数据是 isEnabled=0
   await seedEnabledModel(app.main, { providerId: 'openai', modelId: MODEL_A })
-  // 真实可用的 skill —— 否则 filterAvailableTools 会把种进会话树的名字剔掉
-  seedSkill(app, SKILL_PARENT)
-  seedSkill(app, SKILL_PROFILE)
+  // 启用着的 skill：带 skill 工具的档案不点名也带着它
+  seedSkill(app, SKILL_SEEDED)
   writeAgentMd(app, 'e2e-sub-prof', {
-    description: '声明模型与 skill 的档案',
-    tools: `read, skill:${SKILL_PROFILE}`,
+    description: '声明模型、MCP 与 skill 工具的档案',
+    tools: `read, skill, ${PROFILE_MCP}`,
     model: `openai/${MODEL_A}`,
     body: 'SUB PROF BODY.'
   })
@@ -180,15 +182,15 @@ beforeAll(async () => {
   // 开子会话出厂不问（2026-10-01 删了 ask-on-sub-session）。「点允许一次」的桩只当安全网：
   // 真冒出一张卡也不会挂到超时，createSub 里断言它一次都没被用上
   await installAutoAllow(app.main)
-  // 父会话勾选一个 skill：子会话「继承」与「声明」的对照物（父会话还没有运行时，勾选可改）
+  // 父会话勾选一台 MCP：子会话「继承」与「声明」的对照物
   const picked = await app.main.eval<{ success: boolean }>(
-    `window.api.session.updateEnabledTools({ id: ${JSON.stringify(parentSid)}, enabledTools: [${JSON.stringify(`skill:${SKILL_PARENT}`)}] })`
+    `window.api.session.updateEnabledTools({ id: ${JSON.stringify(parentSid)}, enabledTools: [${JSON.stringify(PARENT_MCP)}] })`
   )
   expect(picked.success).toBe(true)
   parentCfg = await init(parentSid)
-  // 前置条件自检：父会话跑在假提供商上、勾着那一个 skill
+  // 前置条件自检：父会话跑在假提供商上、勾着那一台 MCP
   expect(parentCfg.model).toBe(MODEL)
-  expect(parentCfg.enabledTools).toEqual([`skill:${SKILL_PARENT}`])
+  expect(parentCfg.enabledTools).toEqual([PARENT_MCP])
 }, 60_000)
 
 afterAll(async () => {
@@ -209,28 +211,31 @@ describe('create-sub-session 的 agent_profile 钉档案', () => {
     expect(info.tools.map((t) => t.name)).toContain('bash')
   })
 
-  it('SP-2 点名用户档案：档案模型压过父模型；勾选留着父会话那份，档案声明的 skill 叠加生效；没声明思考档位 ⇒ 随父', async () => {
+  it('SP-2 点名用户档案：档案模型压过父模型；勾选留着父会话那份，档案声明的 MCP 叠加生效、skill 工具带着启用着的技能；没声明思考档位 ⇒ 随父', async () => {
     const sub = await createSub('prof', { agent_profile: 'e2e-sub-prof' })
     const cfg = await init(sub.id)
     expect({ provider: cfg.provider, model: cfg.model }).toEqual({
       provider: 'openai',
       model: MODEL_A
     })
-    // 勾选不被替换：父会话勾的 SKILL_PARENT 原样留着，档案声明的那项不写进勾选
+    // 勾选不被替换：父会话勾的 PARENT_MCP 原样留着，档案声明的那台不写进勾选
     expect(cfg.enabledTools).toEqual(parentCfg.enabledTools)
     // 档案没声明思考档位 ⇒ 随父（seedRunConfig 补上父会话的那一档）
     expect(cfg.modelMetadata.thinkingLevel).toBe(parentCfg.modelMetadata.thinkingLevel)
     const info = await runtimeInfo(sub.id)
     expect(info.systemPrompt.startsWith('SUB PROF BODY.')).toBe(true)
-    // 两边都真的上了架：继承的来自勾选，档案的来自声明（名单归一恒生效）
+    // 两台都真的连上了：继承的来自勾选，档案的来自声明（名单归一缺省生效）
+    const names = info.tools.map((t) => t.name)
+    expect(names.some((n) => n.startsWith('mcp__database__'))).toBe(true)
+    expect(names.some((n) => n.startsWith('mcp__browser__'))).toBe(true)
+    // 档案写了 `skill`：启用着的技能不用点名、不用勾就在架
     const skill = info.tools.find((t) => t.name === 'skill')?.description ?? ''
-    expect(skill).toContain(`<name>${SKILL_PROFILE}</name>`)
-    expect(skill).toContain(`<name>${SKILL_PARENT}</name>`)
+    expect(skill).toContain(`<name>${SKILL_SEEDED}</name>`)
   })
 
-  it('SP-3 点名 coding（声明了内置作图技能、不声明模型）：父级的 skill 勾选原样留着，模型等于父模型', async () => {
-    // pin 那一步从不碰勾选，留着 create 从父会话抄来的那套 —— coding 声明了 skill:builtin:drawing，
-    // 若按「声明了就替换」，每条 coding 子会话都会被摘掉项目的 MCP 与 skill
+  it('SP-3 点名 coding（不声明模型）：父级的 MCP 勾选原样留着，模型等于父模型', async () => {
+    // pin 那一步从不碰勾选，留着 create 从父会话抄来的那套 —— 若按「声明了就替换」，每条 coding
+    // 子会话都会被摘掉项目的 MCP
     const sub = await createSub('coding2', { agent_profile: 'coding' })
     const cfg = await init(sub.id)
     expect(cfg.enabledTools).toEqual(parentCfg.enabledTools)

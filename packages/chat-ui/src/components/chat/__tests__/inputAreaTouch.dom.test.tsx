@@ -143,7 +143,7 @@ const CMD = {
   name: 'Cmd',
   description: 'a command',
   template: 'Run: $ARGUMENTS',
-  requiredTools: ['skill:req', 'skill:a']
+  requiredTools: ['mcp:req', 'mcp:a']
 }
 
 const PROVIDER: ProviderInfo = {

@@ -15,7 +15,7 @@ export interface SessionModelMetadata {
 /** 会话级配置（DB 中以 JSON 字符串存储，DAO 层负责序列化/反序列化） */
 export interface SessionSettings {
   /**
-   * 扩展能力勾选（`mcp:<server>` / `skill:<name>`，只收这两类）。
+   * 扩展能力勾选（`mcp:<server>` 与取消记号 `-mcp:<server>`；旧会话里存着的 `skill:` 条目不再被认）。
    *
    * 创建会话时定下（sessionService.create：项目会话继承项目保存过的勾选 —— 项目没保存过、
    * 或不属于任何项目都为空；子会话抄父会话），

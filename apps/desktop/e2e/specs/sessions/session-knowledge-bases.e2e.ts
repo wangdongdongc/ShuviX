@@ -239,9 +239,9 @@ describe('不上锁（IPC）', () => {
     expect(await writeBases(sid, [BASE_A])).toEqual({ success: true })
     expect(await storedBases(sid)).toEqual([BASE_A])
     // 同一时刻的对照：扩展能力烤进了 pi 的工具表，写入口当场重配运行时（2026-10-26 起；此前直接拒）。
-    // 查无此技能也照收：勾选是原值，可用性只在解析时过滤
-    expect(await writeTools(sid, ['skill:nope'])).toEqual({ success: true })
-    expect(await storedTools(sid)).toEqual(['skill:nope'])
+    // 查无此服务器也照收：勾选是原值，可用性只在解析时过滤（技能不在勾选里，2026-10-28 起写 `skill:` 会被滤掉）
+    expect(await writeTools(sid, ['mcp:nope'])).toEqual({ success: true })
+    expect(await storedTools(sid)).toEqual(['mcp:nope'])
     expect((await init(sid)).created).toBe(true)
   })
 })

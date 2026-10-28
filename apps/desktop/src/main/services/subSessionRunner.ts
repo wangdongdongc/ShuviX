@@ -768,13 +768,13 @@ class SubSessionRunner {
    * 建一条子会话。
    *
    * **子会话继承父会话此刻的整套设置**：projectId（工作目录是会话的地基）、模型、
-   * 思考档位与 mcp:/skill: 勾选（勾选在 `sessionService.create`，它是 settings 的键；
+   * 思考档位与 mcp: 勾选（勾选在 `sessionService.create`，它是 settings 的键；
    * 模型与思考档位是会话树上的 change entry，在这里种）。不继承就会
-   * 回落默认 ——「我用 opus 开着这套 MCP 干活、我开的子会话掉回默认模型、
-   * 一个 skill 都没有」是纯粹的意外，而它跟父级在同一个目录里干同一件事。
+   * 回落默认 ——「我用 opus 开着这套 MCP 干活、我开的子会话掉回默认模型」是纯粹的意外，
+   * 而它跟父级在同一个目录里干同一件事。技能不用继承：启用着的全部上货架。
    *
    * 唯一压过继承的是**档案自己的声明**（更具体的意图）：`shuvix-model` 定了模型就用它，
-   * `shuvix-tools` 里列了 mcp:/skill: 就用它那套。档案没声明 = 没有意见，继承父会话。
+   * `shuvix-tools` 里列了 mcp: 就用它那套。档案没声明 = 没有意见，继承父会话。
    *
    * 标题由父级给 ⇒ 记 `titleOrigin: 'user'`：那是一次刻意命名，auto-title 的 refine
    * 阶段不该覆盖它。父级不给 ⇒ 留默认标题，auto-title 照常接管。
@@ -820,7 +820,7 @@ class SubSessionRunner {
     // 档案：父级点名才钉（准入见 sessionService.pinAgentProfile —— 基座被拒），
     // 不点名就什么也不写：子会话与父会话同一形态（projectId 恒随父），
     // resolveAgentProfileName 推导出的基座天然一致。勾选始终是 create 从父会话抄来的那份：
-    // 档案声明的 mcp:/skill: 由名单归一恒生效，叠在勾选之上，不替换它
+    // 档案声明的 mcp: 由名单归一缺省生效，叠在勾选之上，不替换它
     const requested = params.agentProfile?.trim()
     let declared:
       | { model?: SubAgentModelConfig; thinkingLevel?: ThinkingLevel; tools: string[] }

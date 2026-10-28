@@ -214,20 +214,20 @@ describe('SKB-1 写入口不上锁（与扩展能力同一时刻对照）', () =
 
     // ① 没开着，但锁镜像说有 agent（上一次进程里建的）；存储不在 → 扩展能力的 peek 落空，没有可重配的
     sessions.get(SID)!.settings.agentLocked = true
-    await bothAt('closed-locked', 'm1', 'skill:a')
+    await bothAt('closed-locked', 'm1', 'mcp:a')
     expect(fakeHost.callsOf('peek')).toEqual([SID])
 
     // ② 开着、锁着（锁以运行时为准）：扩展能力那一笔交给它重配
     const session = fakeHost.put(SID, { lock: lockRecord() })
     expect((await sessionService.initAgent(SID)).created).toBe(true)
-    await bothAt('alive', 'm2', 'skill:b')
+    await bothAt('alive', 'm2', 'mcp:b')
     expect(session.callsOf('reconfigureAgent')).toHaveLength(1)
 
     // ③ 销毁在途（锁还在，直到运行时把它清掉）
     const release = gate()
     session.destroyGate = release
     const r = sessionService.invalidateAgent(SID)
-    await bothAt('closing', 'm3', 'skill:c')
+    await bothAt('closing', 'm3', 'mcp:c')
     expect(session.callsOf('reconfigureAgent')).toHaveLength(2)
     release.release()
     await r
@@ -235,7 +235,7 @@ describe('SKB-1 写入口不上锁（与扩展能力同一时刻对照）', () =
 
     // 三个时刻两个写入口都落库、各广播一次
     expect(writesOf(SID, 'knowledgeBases')).toEqual([['m1'], ['m2'], ['m3']])
-    expect(writesOf(SID, 'enabledTools')).toEqual([['skill:a'], ['skill:b'], ['skill:c']])
+    expect(writesOf(SID, 'enabledTools')).toEqual([['mcp:a'], ['mcp:b'], ['mcp:c']])
     expect(mocks.broadcastSessionConfigChanged).toHaveBeenCalledTimes(6)
   })
 })
@@ -248,7 +248,7 @@ describe('SKB-2 create 不盖快照', () => {
     [
       '项目设过知识库',
       (): unknown => {
-        seedProject('p1', { knowledgeBases: ['notes'], enabledTools: ['skill:a'] })
+        seedProject('p1', { knowledgeBases: ['notes'], enabledTools: ['mcp:a'] })
         return sessionService.create({ projectId: 'p1' })
       }
     ],
@@ -257,7 +257,7 @@ describe('SKB-2 create 不盖快照', () => {
       (): unknown => {
         seedSession({
           id: 'parent-row',
-          settings: { knowledgeBases: ['notes'], enabledTools: ['skill:p'] }
+          settings: { knowledgeBases: ['notes'], enabledTools: ['mcp:p'] }
         })
         return sessionService.create({ parentId: 'parent-row' })
       }

@@ -27,7 +27,7 @@ export const KNOWN_PROJECT_FIELDS: Record<string, ProjectFieldMeta> = {
   },
   enabledTools: {
     labelKey: 'projectForm.wizardStepExtensions',
-    desc: 'List of enabled MCP/Skill identifiers, inherited by sessions created in this project afterwards — entries must be prefixed with mcp: or skill:; prefix one with - (e.g. -skill:builtin:drawing) to untick an entry the agent profile declares (string[])'
+    desc: 'List of enabled MCP servers, inherited by sessions created in this project afterwards — entries must be prefixed with mcp:; prefix one with - (e.g. -mcp:browser) to untick a server the agent profile declares. Skills are not listed here: every enabled skill is available to every session (string[])'
   },
   knowledgeBases: {
     labelKey: 'projectForm.knowledgeBases',

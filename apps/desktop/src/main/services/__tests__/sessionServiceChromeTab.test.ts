@@ -166,7 +166,7 @@ beforeEach(() => {
   seedSession({
     id: 'parent',
     projectId: 'p1',
-    settings: { enabledTools: ['skill:from-parent'] }
+    settings: { enabledTools: ['mcp:from-parent'] }
   })
 })
 
@@ -228,7 +228,7 @@ describe('SCT-2 chromeTab 不合法 = 没给', () => {
     const row = insertedRow()
     expect(row.parentId).toBe('parent')
     expect(row.projectId).toBe('p1')
-    expect(row.settings).toMatchObject({ enabledTools: ['skill:from-parent'] })
+    expect(row.settings).toMatchObject({ enabledTools: ['mcp:from-parent'] })
     expect('chromeTab' in row.settings).toBe(false)
   })
 })

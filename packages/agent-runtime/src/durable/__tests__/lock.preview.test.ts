@@ -22,7 +22,7 @@ import { withTimeout } from './support/wait'
 
 registerHostCleanup()
 
-const OVERLAY = ['mcp:ctx', 'skill:pdf']
+const OVERLAY = ['mcp:ctx']
 const NONE: ReconfigurePreview = { locked: false, cache: 'none', reasons: [], promptTokens: 0 }
 
 const NATIVE_COMPAT = { supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true }
@@ -139,7 +139,7 @@ describe('lock · preview', () => {
 
   it('PV-6 a model that takes mid-conversation tool changes: native keeps an add + remove; additive keeps a pure add and loses a removal', async () => {
     const { t, session } = await lockedW()
-    const swap = change({ toolOverlay: ['mcp:ssh', 'skill:pdf'] })
+    const swap = change({ toolOverlay: ['mcp:ssh'] })
     expect(await previewAs(t, session, swap, 'anthropic-messages', NATIVE_COMPAT)).toMatchObject({
       cache: 'kept',
       reasons: []
@@ -149,29 +149,30 @@ describe('lock · preview', () => {
       cache: 'kept',
       reasons: []
     })
-    const remove = change({ toolOverlay: ['skill:pdf'] })
+    const remove = change({ toolOverlay: [] })
     expect(await previewAs(t, session, remove, 'openai-responses', ADDITIVE_COMPAT)).toMatchObject({
       cache: 'lost',
       reasons: ['tools']
     })
   })
 
-  it('PV-7 a skill change that changes the persona: faux → ["tools", "prompt"]; native with mid-convo system messages → kept', async () => {
-    const promptVars = (ctx: { toolNames: readonly string[] }): Record<string, string> => ({
-      marker: ctx.toolNames.includes('skill:pdf') ? 'PDF' : 'PLAIN'
-    })
+  it('PV-7 skills are not part of a reconfigure: a changed shelf on the host and a legacy skill entry in the selection → kept even on faux, neither ["tools"] nor ["prompt"]; the persona vars are not rendered again', async () => {
+    let calls = 0
+    const promptVars = (): Record<string, string> => {
+      calls++
+      return { marker: 'M1' }
+    }
     const { t, session } = await lockedW({ promptVars })
-    const drop = change({ toolOverlay: ['mcp:ctx'] })
-    expect(await preview(session, drop)).toMatchObject({
-      cache: 'lost',
-      reasons: ['tools', 'prompt']
-    })
-    expect(await previewAs(t, session, drop, 'anthropic-messages', NATIVE_COMPAT)).toMatchObject({
+    expect(calls).toBe(1)
+    t.toolHost.options.skills = ['pdf']
+    const legacy = change({ toolOverlay: [...OVERLAY, '-skill:builtin:drawing', 'skill:other'] })
+    expect(await preview(session, legacy)).toMatchObject({
+      locked: true,
       cache: 'kept',
       reasons: []
     })
-    // 预判不写人设
-    expect(t.kit.requests[0]!.systemPrompt).toBe('You are PDF')
+    expect(calls).toBe(1)
+    expect(t.kit.requests[0]!.systemPrompt).toBe('You are M1')
   })
 
   it('PV-8 a host without reconfigureAgentTools → locked, cache none', async () => {
@@ -191,7 +192,7 @@ describe('lock · preview', () => {
 
   it('PV-10 a server removed but not sent yet, re-added in the preview (still connected) → kept even on faux', async () => {
     const { t, config, session } = await lockedW()
-    config.toolOverlay = ['skill:pdf']
+    config.toolOverlay = []
     expect((await session.reconfigureAgent()).applied).toBe(true)
     const result = await preview(session, change({ toolOverlay: [...OVERLAY] }))
     expect(result).toMatchObject({ locked: true, cache: 'kept', reasons: [] })
@@ -203,7 +204,7 @@ describe('lock · preview', () => {
 
   it('PV-11 a server whose removal already reached the model, re-added on an additive model → lost; on a native one → kept', async () => {
     const { t, config, session } = await lockedW()
-    config.toolOverlay = ['skill:pdf']
+    config.toolOverlay = []
     expect((await session.reconfigureAgent()).applied).toBe(true)
     t.kit.queue(answer('second'))
     expect(await session.submitUser('u2')).toEqual({})

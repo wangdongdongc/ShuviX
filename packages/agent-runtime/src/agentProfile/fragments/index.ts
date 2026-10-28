@@ -63,7 +63,7 @@ function applySection(guide: string, name: string, keep: boolean, replacement = 
  * 第三个（`interactive`）是例外，理由见它自己的注释；缺省同样是「没有」。
  */
 export interface VisualGuideOptions {
-  /** 技能货架上有 `builtin:drawing`（档案点了名，且没在侧栏停用）→ 才有这份说明；没有就整份不出 */
+  /** 技能货架上有 `builtin:drawing`（档案带 `skill` 工具，且它没在侧栏停用）→ 才有这份说明；没有就整份不出 */
   drawingSkill?: boolean
   /** 工具表里有 `artifact` → 教改图走 adopt（只对带载体的那一档有意义） */
   artifact?: boolean

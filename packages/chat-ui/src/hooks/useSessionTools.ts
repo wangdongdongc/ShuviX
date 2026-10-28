@@ -36,7 +36,7 @@ export async function refreshSessionTools(sessionId: string): Promise<void> {
 
 export interface SessionToolsState {
   /**
-   * 这条会话的扩展能力勾选（mcp:/skill: 加一项，`-mcp:` / `-skill:` 取消档案声明的一项，见
+   * 这条会话的扩展能力勾选（mcp: 加一台，`-mcp:` 取消档案声明的一台，见
    * chat-protocol toolSelection）；没有会话时是欢迎页的草稿
    */
   enabledTools: string[]
