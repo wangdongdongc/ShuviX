@@ -11,16 +11,32 @@
  *       WidgetRuntimeError → 同 code 的 WidgetApiError；别的错误原样抛
  *   A-4 wrote:true → 监听者收到 {widgetId, op, source: caller.kind}；wrote:false（含 dry run）→ 不通知；
  *       一个监听者抛错不影响别的、也不影响调用；退订之后收不到
- *   A-5 compileWidgetApi：没有 api.ts → none（不打包、不取清单）；老 PGlite 组件带 api.ts → 「older shared database … Move its
- *       data to SQLite first」；打包错误原样传回；取清单被拒 → `api.ts: <msg>`；清单错误 / 坏名字 / 缺或错的 mode / 没有操作 →
+ *   A-5 compileWidgetApi：没有 api.ts → none（不打包、不取清单）；老 PGlite 组件带 api.ts 照样编译（换存储是 build 的事）；
+ *       打包错误原样传回；取清单被拒 → `api.ts: <msg>`；清单错误 / 坏名字 / 缺或错的 mode / 没有操作 →
  *       每条带 `api.ts: ` 前缀；成功 → hash = sha256(code) 的前 32 位 hex、ops
  *   A-6 activateWidgetApi 先写 api.js 再写 api.json（{hash, builtAt, ops}）；null 删掉两个；两种情况都 forget
  *   A-7 changedOps：之前没有快照 → []；消失 → `removed "x"`；input 的 JSON 变了 → `changed the input of "x"`；
  *       新增、说明 / mode 变了 → 不算；之后为 null → 全部 removed
  *   A-8 `agent: false`：agent 调用方 → unknown_op、清单里也不提；用户，以及带 allowUiOnly 的调用调得到
+ *   WC-S10 compileWidgetApi 对老 PGlite 组件（带好的 api.ts）→ ok（hash、ops），存储不动（没有数据目录、没有记号）
+ *   WC-S11 switchWidgetToSqlite → 数据目录 + `legacy-pglite`（一行 ISO 时间）；之后是 sqlite、有旧数据
+ *   WC-S12 hasLegacyWidgetData：没有数据目录 → true；新组件（createWidgetDataDir）→ false；换过的 → true
+ *   WC-S13 换过的组件 activateWidgetApi(快照) / (null) → 记号留着
+ *   WC-S14 换过的组件 removeWidgetData → 目录连记号一起没了、forget 过；之后 hasLegacyWidgetData 回到「老组件」的 true
+ *   WC-S15 记号写不下（数据目录不可写）→ 撤回数据目录、原样抛；存储仍是 pglite
+ *   WC-S16 queryWidgetSqlite：输出以 OK 开头（改了行、跑了脚本）→ 通知 {widgetId, op:'sql', source:'agent'}；
+ *          查询的表格、出错 → 不通知；WidgetRuntimeError → 同 code 的 WidgetApiError
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -43,7 +59,6 @@ const h = vi.hoisted(() => {
       forget: vi.fn(async (_id: string): Promise<void> => {}),
       manifest: vi.fn(async (_code: string): Promise<unknown> => ({ ops: [], errors: [] })),
       call: vi.fn(async (_params: unknown): Promise<unknown> => ({})),
-      applySchema: vi.fn(async () => ({ applied: true })),
       query: vi.fn(async () => ({ output: '' }))
     },
     buildApi: vi.fn(
@@ -88,9 +103,12 @@ import {
   changedOps,
   compileWidgetApi,
   createWidgetDataDir,
+  hasLegacyWidgetData,
   onWidgetDataChanged,
+  queryWidgetSqlite,
   readApiSnapshot,
   removeWidgetData,
+  switchWidgetToSqlite,
   WidgetApiError,
   widgetDataDirOf,
   widgetHostTarget,
@@ -164,7 +182,6 @@ beforeEach(() => {
   h.runtime.forget.mockReset().mockResolvedValue(undefined)
   h.runtime.manifest.mockReset().mockResolvedValue({ ops: [], errors: [] })
   h.runtime.call.mockReset().mockResolvedValue(callResult(false))
-  h.runtime.applySchema.mockReset()
   h.runtime.query.mockReset()
 })
 
@@ -469,21 +486,18 @@ describe('A-5 compileWidgetApi', () => {
 
   it('A-5 没有 api.ts → none；不打包、不取清单', async () => {
     createWidgetDataDir(ID)
-    await expect(compileWidgetApi(ID, projectDir)).resolves.toEqual({ kind: 'none' })
+    await expect(compileWidgetApi(projectDir)).resolves.toEqual({ kind: 'none' })
     expect(h.buildApi).not.toHaveBeenCalled()
     expect(h.runtime.manifest).not.toHaveBeenCalled()
   })
 
-  it('A-5 老 PGlite 组件带 api.ts → 不能有 API：先把数据搬到 SQLite', async () => {
+  it('A-5 老 PGlite 组件带 api.ts → 照样打包、取清单（换成 SQLite 是 build 成功之后的事），不建数据目录', async () => {
     withApiTs()
-    const out = await compileWidgetApi(ID, projectDir)
-    expect(out.kind).toBe('error')
-    const errors = (out as { errors: string[] }).errors
-    expect(errors).toHaveLength(1)
-    expect(errors[0]).toContain('older shared database')
-    expect(errors[0]).toContain('Move its data to SQLite first')
-    expect(h.buildApi).not.toHaveBeenCalled()
-    expect(h.runtime.manifest).not.toHaveBeenCalled()
+    h.buildApi.mockResolvedValue({ success: false, errors: ['api.ts:1:1: error: boom'] })
+    const out = await compileWidgetApi(projectDir)
+    expect(out).toEqual({ kind: 'error', errors: ['api.ts:1:1: error: boom'] })
+    expect(h.buildApi).toHaveBeenCalledTimes(1)
+    expect(existsSync(join(h.dataRoot, ID))).toBe(false)
   })
 
   it('A-5 打包错误原样传回；不取清单', async () => {
@@ -491,7 +505,7 @@ describe('A-5 compileWidgetApi', () => {
     withApiTs()
     h.buildApi.mockResolvedValue({ success: false, errors: ['api.ts:1:1: error: boom'] })
 
-    await expect(compileWidgetApi(ID, projectDir)).resolves.toEqual({
+    await expect(compileWidgetApi(projectDir)).resolves.toEqual({
       kind: 'error',
       errors: ['api.ts:1:1: error: boom']
     })
@@ -507,7 +521,7 @@ describe('A-5 compileWidgetApi', () => {
     createWidgetDataDir(ID)
     withApiTs()
     h.buildApi.mockResolvedValue(result)
-    await expect(compileWidgetApi(ID, projectDir)).resolves.toEqual({
+    await expect(compileWidgetApi(projectDir)).resolves.toEqual({
       kind: 'error',
       errors: ['api.ts did not build.']
     })
@@ -520,7 +534,7 @@ describe('A-5 compileWidgetApi', () => {
       new h.WidgetRuntimeError('internal', 'top-level code threw')
     )
 
-    await expect(compileWidgetApi(ID, projectDir)).resolves.toEqual({
+    await expect(compileWidgetApi(projectDir)).resolves.toEqual({
       kind: 'error',
       errors: ['api.ts: top-level code threw']
     })
@@ -558,7 +572,7 @@ describe('A-5 compileWidgetApi', () => {
     createWidgetDataDir(ID)
     withApiTs()
     h.runtime.manifest.mockResolvedValue(manifest)
-    await expect(compileWidgetApi(ID, projectDir)).resolves.toEqual({ kind: 'error', errors })
+    await expect(compileWidgetApi(projectDir)).resolves.toEqual({ kind: 'error', errors })
   })
 
   it('A-5 几条错误一起报', async () => {
@@ -568,7 +582,7 @@ describe('A-5 compileWidgetApi', () => {
       ops: [opOf('Bad'), { ...opOf('ok'), mode: 'x' }],
       errors: ['first']
     })
-    const out = await compileWidgetApi(ID, projectDir)
+    const out = await compileWidgetApi(projectDir)
     expect(out).toEqual({
       kind: 'error',
       errors: [
@@ -587,7 +601,7 @@ describe('A-5 compileWidgetApi', () => {
     h.buildApi.mockResolvedValue({ success: true, outputJS: code })
     h.runtime.manifest.mockResolvedValue({ ops, errors: [] })
 
-    const out = await compileWidgetApi(ID, projectDir)
+    const out = await compileWidgetApi(projectDir)
 
     const hash = createHash('sha256').update(code, 'utf8').digest('hex').slice(0, 32)
     expect(out).toEqual({ kind: 'ok', api: { code, hash, ops } })
@@ -744,5 +758,124 @@ describe('A-8 agent:false 的操作只给界面（和 allowUiOnly）', () => {
   it('A-8 用户调不存在的操作 → 清单里列出全部（含 agent:false 的）', async () => {
     const err = await apiError(callWidgetOp(ID, 'nope', {}, USER))
     expect(err.message).toContain('Its operations: listBooks, saveLayout, addBook.')
+  })
+})
+
+// ────────────────────────────── WC-S ──────────────────────────────
+
+describe('WC-S10..S16 老组件换存储、sql 的写入通知', () => {
+  const marker = (id = ID): string => join(dataDir(id), 'legacy-pglite')
+
+  it('WC-S10 老 PGlite 组件带好的 api.ts → ok（hash、ops）；不建数据目录、不留记号，仍是 pglite', async () => {
+    writeFileSync(join(projectDir, 'api.ts'), 'export default {}\n')
+    const ops = [opOf('listBooks')]
+    h.runtime.manifest.mockResolvedValue({ ops, errors: [] })
+
+    const out = await compileWidgetApi(projectDir)
+
+    expect(out).toMatchObject({ kind: 'ok', api: { code: 'code', ops } })
+    expect((out as { api: { hash: string } }).api.hash).toMatch(/^[0-9a-f]{32}$/)
+    expect(existsSync(dataDir())).toBe(false)
+    expect(widgetStorageOf(ID)).toBe('pglite')
+    expect(hasLegacyWidgetData(ID)).toBe(true)
+  })
+
+  it('WC-S11 switchWidgetToSqlite → 数据目录 + 记号（一行 ISO 时间）；sqlite、有旧数据', () => {
+    const before = Date.now()
+    switchWidgetToSqlite(ID)
+
+    expect(existsSync(dataDir())).toBe(true)
+    const text = readFileSync(marker(), 'utf8')
+    expect(text).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\n$/)
+    const at = Date.parse(text.trim())
+    expect(at).toBeGreaterThanOrEqual(before - 1000)
+    expect(at).toBeLessThanOrEqual(Date.now())
+    expect(widgetStorageOf(ID)).toBe('sqlite')
+    expect(hasLegacyWidgetData(ID)).toBe(true)
+  })
+
+  it('WC-S12 hasLegacyWidgetData：老组件 true；新组件 false；换过的 true', () => {
+    expect(hasLegacyWidgetData(ID)).toBe(true)
+
+    createWidgetDataDir('fresh-widget')
+    expect(hasLegacyWidgetData('fresh-widget')).toBe(false)
+
+    switchWidgetToSqlite('switched-widget')
+    expect(hasLegacyWidgetData('switched-widget')).toBe(true)
+  })
+
+  it('WC-S13 换过的组件生效 / 撤掉快照 → 记号留着', async () => {
+    switchWidgetToSqlite(ID)
+    const bytes = readFileSync(marker())
+
+    await activateWidgetApi(ID, { code: 'BUNDLE', hash: 'h1', ops: [opOf('a')] })
+    expect(readApiSnapshot(ID)?.hash).toBe('h1')
+    expect(readFileSync(marker()).equals(bytes)).toBe(true)
+
+    await activateWidgetApi(ID, null)
+    expect(readApiSnapshot(ID)).toBeNull()
+    expect(readFileSync(marker()).equals(bytes)).toBe(true)
+    expect(hasLegacyWidgetData(ID)).toBe(true)
+  })
+
+  it('WC-S14 换过的组件 removeWidgetData → 目录连记号一起删、forget 过', async () => {
+    switchWidgetToSqlite(ID)
+    writeFileSync(join(dataDir(), 'data.sqlite'), 'db')
+
+    await removeWidgetData(ID)
+
+    expect(existsSync(dataDir())).toBe(false)
+    expect(h.runtime.forget.mock.calls).toEqual([[ID]])
+    expect(widgetStorageOf(ID)).toBe('pglite')
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'WC-S15 记号写不下 → 撤回数据目录、原样抛；仍是 pglite',
+    () => {
+      // 模拟「目录建出来了、记号写失败」：目录先在、不可写（mkdir recursive 照常过，写记号 EACCES）
+      mkdirSync(dataDir(), { recursive: true })
+      chmodSync(dataDir(), 0o555)
+      try {
+        expect(() => switchWidgetToSqlite(ID)).toThrow(/EACCES|permission denied/i)
+      } finally {
+        if (existsSync(dataDir())) chmodSync(dataDir(), 0o755)
+      }
+      expect(existsSync(dataDir())).toBe(false)
+      expect(widgetStorageOf(ID)).toBe('pglite')
+    }
+  )
+
+  it('WC-S16 queryWidgetSqlite：OK 开头 → 通知一次 sql/agent；表格、出错 → 不通知', async () => {
+    const seen: WidgetDataChange[] = []
+    const off = onWidgetDataChanged((c) => seen.push(c))
+    try {
+      for (const output of ['OK (2 rows changed)', 'OK', 'OK (0 rows changed)']) {
+        h.runtime.query.mockResolvedValueOnce({ output })
+        await expect(queryWidgetSqlite(ID, 'UPDATE books SET x = 1')).resolves.toBe(output)
+      }
+      expect(seen).toEqual([
+        { widgetId: ID, op: 'sql', source: 'agent' },
+        { widgetId: ID, op: 'sql', source: 'agent' },
+        { widgetId: ID, op: 'sql', source: 'agent' }
+      ])
+      expect(h.runtime.query.mock.calls[0]).toEqual([
+        { widgetId: ID, dbPath: join(dataDir(), 'data.sqlite') },
+        'UPDATE books SET x = 1'
+      ])
+
+      seen.length = 0
+      for (const output of [' n \n---\n 1\n(1 row)', '(0 rows)']) {
+        h.runtime.query.mockResolvedValueOnce({ output })
+        await expect(queryWidgetSqlite(ID, 'SELECT 1 AS n')).resolves.toBe(output)
+      }
+      h.runtime.query.mockRejectedValueOnce(
+        new h.WidgetRuntimeError('query_failed', 'no such table: nope')
+      )
+      const err = await apiError(queryWidgetSqlite(ID, 'SELECT * FROM nope'))
+      expect([err.code, err.message]).toEqual(['query_failed', 'no such table: nope'])
+      expect(seen).toEqual([])
+    } finally {
+      off()
+    }
   })
 })

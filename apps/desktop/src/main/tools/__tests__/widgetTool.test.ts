@@ -13,6 +13,10 @@
  *               纯界面操作只在 dry run 里够得着；失败的几种文案（invalid_args 附 schema、internal 说是组件的代码出错）
  *   WT4-TL-17..18 create：不问，造它的会话得到读写（来源 widget）；失败不授予
  *   WT4-TL-19..25 build / preview / sql / export / open 各自的门、参数与结果
+ *   WC-S40..43 sql 的 `legacy: true`：没有旧数据 → 先过写门、再报「no data in the older shared database」，两个库都不查；
+ *               有旧数据（含已换成 SQLite 的）→ 查 PGlite；不带 legacy → 组件自己的库，不管有没有旧数据；门拒绝 →
+ *               不问有没有旧数据
+ *   WC-S44     造组件的 list：已换成 SQLite、还留着旧数据的组件标 old-data="legacy-postgres"（不是 storage）
  *   WT4-TL-26   派生 agent 调：门的主体与调用方的 actor 都是它，不是根 agent
  *   WT4-TL-29   注册元数据：设置页「LLM 工具」看到的是全量描述与 schema（与哪个会话无关）
  *
@@ -48,6 +52,7 @@ const state = vi.hoisted(() => ({
   readApiSnapshot: vi.fn(),
   callWidgetOp: vi.fn(),
   runWidgetDbQuery: vi.fn(),
+  hasLegacyWidgetData: vi.fn(),
   exportWidget: vi.fn(),
   resolveExportZipPath: vi.fn(),
   widgetAccess: vi.fn(),
@@ -104,6 +109,8 @@ vi.mock('../../services/widget', () => ({
     open: state.serviceOpen
   },
   widgetStorageOf: state.widgetStorageOf,
+  // 组件在共用 PGlite 里有没有旧数据：缺省说有（beforeEach），WC-S40..S43 自己定
+  hasLegacyWidgetData: state.hasLegacyWidgetData,
   readApiSnapshot: state.readApiSnapshot,
   callWidgetOp: state.callWidgetOp,
   runWidgetDbQuery: state.runWidgetDbQuery,
@@ -342,6 +349,10 @@ beforeEach(() => {
   state.getWidgetDir.mockImplementation((id: string) => state.dir(id))
   state.widgetStorageOf.mockImplementation((id: string) => state.storage.get(id) ?? 'pglite')
   state.readApiSnapshot.mockImplementation((id: string) => state.snapshots.get(id) ?? null)
+  // 缺省照事实：还在 PGlite 上的老组件有旧数据，SQLite 组件没有（换过存储的用例自己设）
+  state.hasLegacyWidgetData.mockImplementation(
+    (id: string) => (state.storage.get(id) ?? 'pglite') !== 'sqlite'
+  )
   state.widgetAccess.mockReturnValue('none')
   state.assertWidgetAccess.mockResolvedValue(undefined)
   state.assertWriteAllowed.mockResolvedValue(undefined)
@@ -1300,6 +1311,7 @@ describe('WT4-TL-22 sql', () => {
     expect(state.runWidgetDbQuery).not.toHaveBeenCalled()
 
     state.runWidgetDbQuery.mockResolvedValue({ output: '' })
+    state.hasLegacyWidgetData.mockReturnValue(true)
     const legacy = await sql({ sql: 'select 1', legacy: true })
     expect(textOf(legacy)).toBe('OK')
     expect(state.runWidgetDbQuery).toHaveBeenCalledWith('reading-list', 'select 1')
@@ -1307,6 +1319,83 @@ describe('WT4-TL-22 sql', () => {
 
     state.dbQuery.mockResolvedValue({ output: '', error: 'near "selec": syntax error' })
     expect(errorOf(await sql({ sql: 'selec 1' }))).toBe('near "selec": syntax error')
+  })
+})
+
+describe('WC-S40..S44 sql 的 legacy 与换过存储的组件', () => {
+  const sql = (args: Record<string, unknown>): Promise<ToolInvocation> =>
+    run(
+      new WidgetTool(ctx),
+      { action: 'sql', widget: 'reading-list', ...args },
+      { caller: 'build' }
+    )
+
+  it('WC-S40 legacy: true 但没有旧数据 → 先过写门，再报错；两个库都不查', async () => {
+    state.hasLegacyWidgetData.mockReturnValue(false)
+
+    const inv = await sql({ sql: 'select * from books', legacy: true })
+
+    expect(errorOf(inv)).toBe('Widget "reading-list" has no data in the older shared database.')
+    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
+    expect(state.assertWidgetAccess.mock.calls[0][1]).toBe('write')
+    expect(state.hasLegacyWidgetData.mock.calls).toEqual([['reading-list']])
+    expect(state.assertWidgetAccess.mock.invocationCallOrder[0]).toBeLessThan(
+      state.hasLegacyWidgetData.mock.invocationCallOrder[0]
+    )
+    expect(state.runWidgetDbQuery).not.toHaveBeenCalled()
+    expect(state.dbQuery).not.toHaveBeenCalled()
+  })
+
+  it('WC-S41 legacy: true、有旧数据、组件已是 SQLite → 查 PGlite（runWidgetDbQuery），不查自己的库', async () => {
+    state.storage.set('reading-list', 'sqlite')
+    state.hasLegacyWidgetData.mockReturnValue(true)
+    state.runWidgetDbQuery.mockResolvedValue({ output: ' id \n----\n 1\n(1 row)' })
+
+    const inv = await sql({ sql: 'select id from notes', legacy: true })
+
+    expect(textOf(inv)).toBe(' id \n----\n 1\n(1 row)')
+    expect(state.runWidgetDbQuery.mock.calls).toEqual([['reading-list', 'select id from notes']])
+    expect(state.dbQuery).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, Record<string, unknown>, boolean]>([
+    ['不带 legacy、有旧数据', {}, true],
+    ['不带 legacy、没有旧数据', {}, false],
+    ['legacy: false、有旧数据', { legacy: false }, true],
+    ['legacy: false、没有旧数据', { legacy: false }, false]
+  ])('WC-S42 %s → 组件自己的库（dbQuery）', async (_l, extra, legacyData) => {
+    state.hasLegacyWidgetData.mockReturnValue(legacyData)
+    state.dbQuery.mockResolvedValue({ output: 'OK (1 row changed)' })
+
+    const inv = await sql({ sql: "insert into books(title) values ('x')", ...extra })
+
+    expect(textOf(inv)).toBe('OK (1 row changed)')
+    expect(state.dbQuery.mock.calls).toEqual([
+      ['reading-list', "insert into books(title) values ('x')"]
+    ])
+    expect(state.runWidgetDbQuery).not.toHaveBeenCalled()
+  })
+
+  it('WC-S43 门拒绝（legacy: true）→ 不问有没有旧数据', async () => {
+    state.assertWidgetAccess.mockRejectedValue(new Error('denied'))
+
+    expect(errorOf(await sql({ sql: 'select 1', legacy: true }))).toBe('denied')
+    expect(state.hasLegacyWidgetData).not.toHaveBeenCalled()
+    expect(state.runWidgetDbQuery).not.toHaveBeenCalled()
+    expect(state.dbQuery).not.toHaveBeenCalled()
+  })
+
+  it('WC-S44 造组件的 list 里，换过存储、还有旧数据的组件标 old-data="legacy-postgres"（不是 storage）', async () => {
+    state.widgets.clear()
+    putWidget('switched', { name: 'Switched', ops: [LIST_BOOKS] })
+    state.hasLegacyWidgetData.mockReturnValue(true)
+
+    const text = textOf(await run(new WidgetTool(ctx), { action: 'list' }, { caller: 'build' }))
+
+    expect(text).toContain(
+      `<widget id="switched" name="Switched" access="none" old-data="legacy-postgres" dir="${state.dir('switched')}">`
+    )
+    expect(text).not.toContain('storage="legacy-postgres"')
   })
 })
 

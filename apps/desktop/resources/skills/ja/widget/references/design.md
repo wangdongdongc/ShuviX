@@ -7,7 +7,7 @@ Widgets are dense, single-purpose utilities: think menu-bar app or extension pop
 - **Spacing**: padding `p-2.5`–`p-4`, gaps `gap-1.5`–`gap-3`, margins `mt-1`–`mt-4`.
 - **Decoration**: `rounded-md` or `rounded-lg`; no shadow except `shadow-sm` on popovers; no gradients, `border-2` or nested cards; `transition-colors` only.
 - **Interaction**: Enter runs or submits, Escape clears; derive results as the user types (`useMemo` / `useDeferredValue`), no spinner for local work; an icon-only copy button on generated output; errors inline under the field in rose, never in a modal.
-- **Loading from the database or the disk**: show the previous content (or an empty state that says what will appear) while a fetch is in flight, never a full-screen spinner; a failed fetch shows its `message` inline with a retry.
+- **Loading from the API or the disk**: show the previous content (or an empty state that says what will appear) while a request is in flight, never a full-screen spinner (`api.use` keeps the previous `data` while it reloads); a failure shows its `message` inline with a retry.
 
 ## Where it runs
 
@@ -61,7 +61,7 @@ Inputs, buttons and output blocks share it: `rounded-md`, `text-xs` / `text-sm`,
 
 ## Check it
 
-After a green build, run `shuvix widget preview <id>`. It renders the widget in a hidden window, so nothing opens on the user's screen, at the three sizes above: `panel` (380×760), `window` (1280×800) and `phone` (390×780, touch). It prints each screenshot's path and any errors the page logged. `read` every image and fix what looks wrong at that size: text clipped or overlapping, a line stretched across the window, controls too small to tap, an empty area where content should be, a horizontal scrollbar on the page. Then build and preview again.
+After a green build, `preview` it. It renders the widget in a hidden window, so nothing opens on the user's screen, at the three sizes above: `panel` (380×760), `window` (1280×800) and `phone` (390×780, touch), and returns the screenshots and any errors the page logged. Look at every image and fix what looks wrong at that size: text clipped or overlapping, a line stretched across the window, controls too small to tap, an empty area where content should be, a horizontal scrollbar on the page. Then build and preview again.
 
 - `--size phone,panel` previews only those sizes; `--theme light` or `--theme dark` forces a color scheme (by default it follows the app). Check the other scheme once, since dark mode is mandatory.
 - It shows the last build: build before every preview.

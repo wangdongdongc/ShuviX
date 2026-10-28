@@ -39,7 +39,6 @@ export type HostRequestBody =
       bundleCode: string
       cpuMs: number
     }
-  | { type: 'applySchema'; target: WidgetHostTarget; ddl: string }
   | { type: 'query'; target: WidgetHostTarget; sql: string }
   /** 扔掉这个组件的热上下文、关掉它的连接（重新构建、删除、迁移之前） */
   | { type: 'forget'; widgetId: string }

@@ -23,6 +23,7 @@ export { runWidgetDbQuery, WidgetDbError } from './widgetDb'
 export { widgetRuntime } from './api/widgetRuntime'
 export {
   callWidgetOp,
+  hasLegacyWidgetData,
   readApiSnapshot,
   widgetStorageOf,
   WidgetApiError,

@@ -23,7 +23,13 @@ import variant from '@jitl/quickjs-singlefile-cjs-release-sync'
 import { mkdirSync, readFileSync } from 'fs'
 import { dirname } from 'path'
 import { randomUUID } from 'crypto'
-import { assertHandlerStatement, assertNoForbiddenSql } from './sqlGuard'
+import { assertHandlerStatement, assertNoForbiddenSql, firstSqlKeyword } from './sqlGuard'
+
+/** `sql` 不收的事务语句（作为一条语句的开头）：事务由宿主管 */
+const TRANSACTION_KEYWORDS = new Set(['BEGIN', 'COMMIT', 'END', 'ROLLBACK', 'SAVEPOINT', 'RELEASE'])
+const TRANSACTION_REFUSED =
+  'Do not write transaction statements in sql: a script of several statements already runs in one transaction.'
+const PARTWAY_NOTE = `The script ended its own transaction partway (COMMIT / END / ROLLBACK), so what ran before that may have applied. ${TRANSACTION_REFUSED}`
 import type {
   CallOutcome,
   CallResult,
@@ -174,10 +180,6 @@ export class WidgetHostCore {
       }
       case 'manifest':
         return this.readManifest(req.bundleCode, req.cpuMs)
-      case 'applySchema': {
-        const state = this.stateOf(req.target)
-        return this.enqueue(state, () => this.applySchema(state, req.ddl))
-      }
       case 'query': {
         const state = this.stateOf(req.target)
         return this.enqueue(state, () => this.query(state, req.sql))
@@ -617,20 +619,6 @@ export class WidgetHostCore {
     }
   }
 
-  private async applySchema(state: WidgetState, ddl: string): Promise<{ applied: true }> {
-    assertNoForbiddenSql(ddl, 'schema')
-    const conn = this.rw(state)
-    conn.exec('BEGIN IMMEDIATE')
-    try {
-      conn.exec(ddl)
-      conn.exec('COMMIT')
-    } catch (e) {
-      if (conn.inTransaction) conn.exec('ROLLBACK')
-      throw new HostFailure('schema_failed', message(e))
-    }
-    return { applied: true }
-  }
-
   private async query(state: WidgetState, sql: string): Promise<{ output: string }> {
     assertNoForbiddenSql(sql, 'query')
     const conn = this.rw(state)
@@ -638,11 +626,12 @@ export class WidgetHostCore {
     try {
       stmt = conn.prepare(sql)
     } catch (e) {
-      if (/more than one statement/i.test(message(e))) {
-        conn.exec(sql)
-        return { output: 'OK' }
-      }
+      if (/more than one statement/i.test(message(e))) return { output: this.runScript(conn, sql) }
       throw new HostFailure('query_failed', message(e))
+    }
+    // 事务由宿主管：单独一条 BEGIN 会让读写连接停在事务里 —— 之后操作的写永远不提交、读的一方看不到
+    if (TRANSACTION_KEYWORDS.has(firstSqlKeyword(sql))) {
+      throw new HostFailure('query_failed', TRANSACTION_REFUSED)
     }
     try {
       if (stmt.reader) {
@@ -653,5 +642,31 @@ export class WidgetHostCore {
     } catch (e) {
       throw new HostFailure('query_failed', message(e))
     }
+  }
+
+  /**
+   * 一段脚本（建表、改表加迁移数据）：整段放进一个事务，中途失败全部回滚 —— 不留半个结构。脚本里自己写的 COMMIT /
+   * END / ROLLBACK 会提前结束这个事务（触发器的 BEGIN … END 不算，所以没法按词拦）：跑完发现事务已经没了就报错，
+   * 跑完还开着（脚本又自己 BEGIN 了）就照样提交 —— 连接绝不留在事务里
+   */
+  private runScript(conn: Database.Database, sql: string): string {
+    try {
+      conn.exec('BEGIN IMMEDIATE')
+    } catch (e) {
+      throw new HostFailure('query_failed', message(e))
+    }
+    try {
+      conn.exec(sql)
+    } catch (err) {
+      // 事务还开着：整段回滚，什么都没生效。已经没了：脚本自己提前结束了它，之前那部分已经提交 —— 要说出来
+      if (conn.inTransaction) {
+        conn.exec('ROLLBACK')
+        throw new HostFailure('query_failed', message(err))
+      }
+      throw new HostFailure('query_failed', `${message(err)}. ${PARTWAY_NOTE}`)
+    }
+    if (!conn.inTransaction) throw new HostFailure('query_failed', PARTWAY_NOTE)
+    conn.exec('COMMIT')
+    return 'OK'
   }
 }

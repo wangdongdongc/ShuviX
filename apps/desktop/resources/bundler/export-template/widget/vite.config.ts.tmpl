@@ -3,5 +3,9 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()]
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    // ShuviX's API client (see EXPORT_NOTES.md)
+    alias: { 'shuvix/widget': '/src/shuvix-widget.ts' }
+  }
 })

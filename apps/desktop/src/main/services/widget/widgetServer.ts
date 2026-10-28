@@ -111,6 +111,8 @@ function hostHTML(baseHref: string, title: string): string {
   <script type="module" src="bundle.js"></script>
   <script>
     const es = new EventSource('sse');
+    // 界面的 API 客户端（shuvix/widget）收 data 事件也用这一条：所有组件共用一个主机，浏览器对它只开 6 条连接
+    window.__shuvixEvents = es;
     es.addEventListener('reload', () => location.reload());
     es.onerror = () => setTimeout(() => location.reload(), 1500);
     window.onerror = function(msg, _src, _line, _col, err) {

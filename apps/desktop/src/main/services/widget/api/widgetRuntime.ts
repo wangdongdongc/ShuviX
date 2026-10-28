@@ -102,10 +102,6 @@ export class WidgetRuntime {
     )
   }
 
-  applySchema(target: WidgetHostTarget, ddl: string): Promise<{ applied: true }> {
-    return this.request({ type: 'applySchema', target, ddl }, 60_000)
-  }
-
   query(target: WidgetHostTarget, sql: string): Promise<{ output: string }> {
     return this.request({ type: 'query', target, sql }, 60_000)
   }

@@ -5,7 +5,7 @@
  * 主进程侧的 Node 打不开这里的 better-sqlite3（它是为 Electron 编的），所以库里有什么一律经宿主自己看：读操作或 `query` 请求。
  * Electron 加载不了 better-sqlite3（CI=1 跳过了 electron-rebuild）时整个文件跳过。
  *
- *   H-1  applySchema 建 books（title UNIQUE）；写操作 addBook 返回 RETURNING 的行、wrote:true；读操作 listBooks 看得到；
+ *   H-1  query 建 books（title UNIQUE）；写操作 addBook 返回 RETURNING 的行、wrote:true；读操作 listBooks 看得到；
  *        ctx.uuid 是 v4；日志随结果回来；同名再加一次（ON CONFLICT）更新的是同一个 id
  *   H-2  读操作写不了：run 的 INSERT、sql 的 INSERT…RETURNING、WITH…INSERT、UPDATE、DELETE、REPLACE → ok:false
  *        「A read operation cannot change data」、wrote:false、行数不变
@@ -18,7 +18,7 @@
  *   H-7  写操作 `SELECT 1; DELETE FROM books` → ok:false，行都在
  *   H-8  事务：两条插入一起提交；回调抛错 → 两条都没有、结果是错误；里层抛错外层接住 → 里层的行没了、外层的留着
  *   H-9  一个 handler 里并发两个 tx：A 落库，B 以「Another ctx.db.tx is still running here…」拒绝
- *   H-10 `tx(async()=>{ 插 X; for(;;){} })`、cpuMs 300 → timeout；之后正常写的 Y 读得到；applySchema 照常；forget 之后
+ *   H-10 `tx(async()=>{ 插 X; for(;;){} })`、cpuMs 300 → timeout；之后正常写的 Y 读得到；装结构照常；forget 之后
  *        Y 在、X 不在。tx 里 `await new Promise(()=>{})` 的变体同样
  *   H-11 api.ts 顶层抓住 `globalThis.__host`；操作里 `h.tx('begin')`、插入、返回 → 「left a transaction open; it was rolled back」，
  *        行不在，下一次写照常提交
@@ -27,11 +27,20 @@
  *   H-13 写操作插入后 ctx.fail → 行留着、wrote:true；读操作永远 wrote:false
  *   H-14 BLOB → base64；布尔 → 0/1；对象 → JSON 文本
  *   H-15 外键冲突被拒；写过之后有 `-wal` 文件；dbPath 的上级目录第一次用时建出来
- *   H-16 applySchema：含 FTS5 trigram 的 DDL 生效；第二条失败 → 第一条也没生效（原子）；禁用词 → sql_refused；
- *        重跑 CREATE IF NOT EXISTS 无害；DDL 自带 BEGIN/COMMIT → schema_failed（钉住）
+ *   H-16 多条语句的脚本（经 query，`sql` 动作装结构就是它）：含 FTS5 trigram 的 DDL 生效；第二条失败 → 第一条也没生效
+ *        （整段一个事务）；禁用词 → sql_refused；重跑 CREATE IF NOT EXISTS 无害；脚本自带 BEGIN/COMMIT → query_failed（钉住）
  *   H-17 query：SELECT → psql 表格、以「(n rows)」结尾，没有行 →「(0 rows)」；UPDATE →「OK (2 rows changed)」；多条语句 →「OK」、都生效；
  *        ATTACH / VACUUM / PRAGMA → sql_refused、不出文件；`SELECT * FROM pragma_table_info('books')` 能用；语法错 → query_failed
  *   H-18 两个组件互相隔离（同名表、各自的文件）；对一个组件连发两次调用，按顺序落定
+ *   WC-S1 迁移脚本（建新表、INSERT … SELECT 搬行、DROP 旧表、改名）→ OK，行带过去
+ *   WC-S2 INSERT + ALTER + 失败的一句 → query_failed（SQLite 的原话），行数与列都没变
+ *   WC-S3 / S4 失败或成功的脚本之后：写操作提交、读操作（只读连接）看得到、下一段脚本开得了事务
+ *   WC-S5 单条语句（带结尾的 `;` 或注释）照旧是「OK (1 row changed)」
+ *   WC-S6 脚本自己中途 COMMIT / END / ROLLBACK → query_failed「ended its own transaction partway」（之前 / 之后的
+ *         哪些生效了钉住）；自己 COMMIT 之后再失败 → SQLite 的原话（钉住）；结束后又 BEGIN 留着 → 照样提交；
+ *         触发器的 BEGIN … END 不算；之后连接干净
+ *   WC-S7 单独一条 BEGIN / COMMIT / END / ROLLBACK / SAVEPOINT / RELEASE（含小写、前面有注释）→ query_failed
+ *         「Do not write transaction statements in sql」；之后写操作提交、读得到，脚本照常
  *   H-19 第一条消息是 `{ready:true}`；没有数字 id 的消息被忽略、下一条照常；disconnect() → 宿主以 0 退出（最后一条，关掉共用的宿主）
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -303,8 +312,9 @@ async function titles(target: WidgetHostTarget): Promise<string[]> {
   return (await value(target, 'listBooks')) as string[]
 }
 
+/** 装结构：经 `query`（`widget` 工具的 `sql`；多条语句整段在一个事务里） */
 async function applySchema(target: WidgetHostTarget, ddl: string): Promise<HostResponse> {
-  return host.request({ type: 'applySchema', target, ddl })
+  return host.request({ type: 'query', target, sql: ddl })
 }
 
 async function query(target: WidgetHostTarget, sql: string): Promise<HostResponse> {
@@ -322,7 +332,7 @@ async function queryText(target: WidgetHostTarget, sql: string): Promise<string>
 async function freshLibrary(widgetId: string): Promise<WidgetHostTarget> {
   const target = targetOf(widgetId)
   const res = await applySchema(target, BOOKS_DDL)
-  expect(res).toMatchObject({ ok: true, result: { applied: true } })
+  expect(res).toMatchObject({ ok: true })
   return target
 }
 
@@ -537,7 +547,7 @@ describe.skipIf(!electronCanLoadSqlite())('组件宿主（真子进程，原始�
       // 之后的写提交得了，读操作看得到
       expect(await value(t, 'addBook', { title: 'Y' })).toMatchObject({ title: 'Y' })
       expect(await titles(t)).toEqual(['Y'])
-      // 读写连接上没有残留的保存点：applySchema 的 BEGIN IMMEDIATE 照常
+      // 读写连接上没有残留的保存点：装结构照常
       expect(await applySchema(t, 'CREATE TABLE IF NOT EXISTS later(x)')).toMatchObject({
         ok: true
       })
@@ -665,14 +675,14 @@ export default defineApi({
     expect(existsSync(t.dbPath + '-wal')).toBe(true)
   }, 30_000)
 
-  it('H-16 applySchema：FTS5 trigram、原子性、禁用词、重跑无害、自带 BEGIN/COMMIT（钉住）', async () => {
+  it('H-16 多条语句的脚本（装结构）：FTS5 trigram、原子性、禁用词、重跑无害、自带 BEGIN/COMMIT（钉住）', async () => {
     const t = targetOf('h16-shelf')
     const ddl = [
       BOOKS_DDL.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS'),
       'CREATE INDEX IF NOT EXISTS books_title ON books(title)',
       "CREATE VIRTUAL TABLE IF NOT EXISTS notes USING fts5(body, tokenize='trigram')"
     ].join(';\n')
-    expect(await applySchema(t, ddl)).toMatchObject({ ok: true, result: { applied: true } })
+    expect(await applySchema(t, ddl)).toMatchObject({ ok: true, result: { output: 'OK' } })
     await queryText(t, "INSERT INTO notes(body) VALUES ('the quick brown fox')")
     expect(await queryText(t, "SELECT body FROM notes WHERE notes MATCH 'uic'")).toContain(
       'the quick brown fox'
@@ -680,7 +690,7 @@ export default defineApi({
 
     // 第二条失败 → 第一条也没生效
     const broken = await applySchema(t, 'CREATE TABLE a1(x); CREATE TABLE a1(y)')
-    expect(broken).toMatchObject({ ok: false, error: { code: 'schema_failed' } })
+    expect(broken).toMatchObject({ ok: false, error: { code: 'query_failed' } })
     expect(await queryText(t, "SELECT name FROM sqlite_master WHERE name = 'a1'")).toBe('(0 rows)')
 
     const refused = await applySchema(
@@ -695,9 +705,9 @@ export default defineApi({
     expect(await applySchema(t, ddl)).toMatchObject({ ok: true })
     expect(await queryText(t, 'SELECT count(*) AS n FROM notes')).toContain(' 1 ')
 
-    // 钉住：DDL 自带事务 → 套在宿主的 BEGIN IMMEDIATE 里会失败
+    // 钉住：脚本自带事务 → 套在宿主的 BEGIN IMMEDIATE 里会失败
     const ownTx = await applySchema(t, 'BEGIN; CREATE TABLE c1(x); COMMIT;')
-    expect(ownTx).toMatchObject({ ok: false, error: { code: 'schema_failed' } })
+    expect(ownTx).toMatchObject({ ok: false, error: { code: 'query_failed' } })
     expect(await queryText(t, "SELECT name FROM sqlite_master WHERE name = 'c1'")).toBe('(0 rows)')
   }, 30_000)
 
@@ -763,6 +773,178 @@ export default defineApi({
     const v1 = (r1.outcome as { value: number }).value
     expect((r2.outcome as { value: number }).value).toBe(v1 + 1)
   }, 30_000)
+
+  // ─── sql 的脚本与事务（WC-S1..S7） ───
+
+  /** 一个失败的 query 的错误（必须失败） */
+  const queryError = (res: HostResponse): { code: string; message: string } => {
+    expect(res.ok).toBe(false)
+    return (res as { ok: false; error: { code: string; message: string } }).error
+  }
+
+  /** 表在不在 */
+  const hasTable = async (t: WidgetHostTarget, name: string): Promise<boolean> =>
+    !(
+      (await queryText(
+        t,
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${name}'`
+      )) === '(0 rows)'
+    )
+
+  /** 读写连接没有停在事务里：写操作提交了（读连接看得到），下一段脚本照常开得了事务 */
+  async function expectConnectionClean(t: WidgetHostTarget, title: string): Promise<void> {
+    const w = await call(t, 'addBook', { title })
+    expect(w.wrote).toBe(true)
+    expect(await titles(t)).toContain(title)
+    expect(
+      await query(
+        t,
+        `CREATE TABLE IF NOT EXISTS probe_${title}(x); CREATE INDEX IF NOT EXISTS probe_${title}_x ON probe_${title}(x)`
+      )
+    ).toMatchObject({ ok: true, result: { output: 'OK' } })
+  }
+
+  it('WC-S1 迁移脚本（建新表、搬行、删旧表、改名）→ OK；行带过去，操作照常', async () => {
+    const t = await freshLibrary('wcs1-shelf')
+    await value(t, 'addBook', { title: 'Dune' })
+    await value(t, 'addBook', { title: 'Emma' })
+
+    const script = [
+      'CREATE TABLE books2(id TEXT PRIMARY KEY, title TEXT NOT NULL UNIQUE, note TEXT)',
+      "INSERT INTO books2(id, title, note) SELECT id, title, 'moved' FROM books",
+      'DROP TABLE books',
+      'ALTER TABLE books2 RENAME TO books'
+    ].join(';\n')
+    expect(await query(t, script)).toMatchObject({ ok: true, result: { output: 'OK' } })
+
+    expect(await titles(t)).toEqual(['Dune', 'Emma'])
+    expect(await queryText(t, "SELECT count(*) AS n FROM books WHERE note = 'moved'")).toContain(
+      ' 2 '
+    )
+    expect(await hasTable(t, 'books2')).toBe(false)
+  }, 30_000)
+
+  it('WC-S2 / WC-S3 DML + DDL + 失败的一句 → 全部回滚、报 SQLite 的错；之后写、读、下一段脚本都照常', async () => {
+    const t = await freshLibrary('wcs2-shelf')
+    await value(t, 'addBook', { title: 'keep' })
+
+    const res = await query(
+      t,
+      "INSERT INTO books(id, title) VALUES ('s2', 'inserted'); ALTER TABLE books ADD COLUMN x TEXT; INSERT INTO nope VALUES (1)"
+    )
+    const err = queryError(res)
+    expect(err.code).toBe('query_failed')
+    expect(err.message).toMatch(/no such table: nope/)
+    expect(await titles(t)).toEqual(['keep'])
+    const cols = await queryText(t, "SELECT name FROM pragma_table_info('books')")
+    expect(cols).toContain(' title ')
+    expect(cols).not.toMatch(/^ x\s*$/m)
+
+    // WC-S3：失败之后连接干净
+    await expectConnectionClean(t, 'after')
+    expect(await titles(t)).toEqual(['after', 'keep'])
+  }, 30_000)
+
+  it('WC-S4 成功的脚本之后：写操作提交、读操作看得到（连接回到自动提交）', async () => {
+    const t = await freshLibrary('wcs4-shelf')
+    expect(await query(t, 'CREATE TABLE s4a(x); CREATE TABLE s4b(y)')).toMatchObject({
+      ok: true,
+      result: { output: 'OK' }
+    })
+    await expectConnectionClean(t, 'seen')
+  }, 30_000)
+
+  it('WC-S5 单条语句照旧：`INSERT …`、`INSERT …;`、`INSERT …; -- done` 都是「OK (1 row changed)」', async () => {
+    const t = await freshLibrary('wcs5-shelf')
+    for (const [i, tail] of ['', ';', '; -- done', '; /* done */'].entries()) {
+      expect(
+        await queryText(t, `INSERT INTO books(id, title) VALUES ('s5-${i}', 's5-${i}')${tail}`),
+        tail
+      ).toBe('OK (1 row changed)')
+    }
+    expect(await titles(t)).toEqual(['s5-0', 's5-1', 's5-2', 's5-3'])
+  }, 30_000)
+
+  it('WC-S6 脚本自己中途结束事务（COMMIT / END / ROLLBACK）→ query_failed 说清楚；连接不留在事务里', async () => {
+    const t = await freshLibrary('wcs6-shelf')
+    const partway = 'The script ended its own transaction partway'
+    const refusal = 'Do not write transaction statements in sql'
+
+    // COMMIT：之前的已经提交，之后的在自动提交里跑了（钉住：报错说「可能已经生效」）
+    const commit = queryError(await query(t, 'CREATE TABLE m1(x); COMMIT; CREATE TABLE m2(y)'))
+    expect(commit.code).toBe('query_failed')
+    expect(commit.message).toContain(partway)
+    expect(commit.message).toContain(refusal)
+    expect(await hasTable(t, 'm1')).toBe(true)
+    expect(await hasTable(t, 'm2')).toBe(true)
+
+    // END 与 COMMIT 同义
+    const end = queryError(await query(t, 'CREATE TABLE e1(x); END'))
+    expect(end.message).toContain(partway)
+    expect(await hasTable(t, 'e1')).toBe(true)
+
+    // ROLLBACK：之前的回滚了，之后的生效了
+    const rollback = queryError(await query(t, 'CREATE TABLE r1(x); ROLLBACK; CREATE TABLE r2(y)'))
+    expect(rollback.message).toContain(partway)
+    expect(await hasTable(t, 'r1')).toBe(false)
+    expect(await hasTable(t, 'r2')).toBe(true)
+
+    // 自己 COMMIT 之后再失败 → SQLite 的错，再加一句「中途结束、之前的可能已经生效」；COMMIT 之前的留着
+    const late = queryError(await query(t, 'CREATE TABLE m3(x); COMMIT; CREATE TABLE m3(y)'))
+    expect(late.code).toBe('query_failed')
+    expect(late.message).toMatch(/table m3 already exists/)
+    expect(late.message).toContain(partway)
+    expect(await hasTable(t, 'm3')).toBe(true)
+
+    // 结束之后又自己 BEGIN、留着开着的事务 → 宿主照样提交
+    expect(await query(t, 'CREATE TABLE z1(x); COMMIT; BEGIN; CREATE TABLE z2(x)')).toMatchObject({
+      ok: true,
+      result: { output: 'OK' }
+    })
+    expect(await hasTable(t, 'z1')).toBe(true)
+    expect(await hasTable(t, 'z2')).toBe(true)
+
+    // 触发器的 BEGIN … END 不算事务语句
+    expect(
+      await query(
+        t,
+        "CREATE TABLE t1(a TEXT); CREATE TRIGGER t1_ai AFTER INSERT ON t1 BEGIN INSERT INTO books(id, title) VALUES ('trig-' || NEW.a, 'trig-' || NEW.a); END; INSERT INTO t1 VALUES ('x')"
+      )
+    ).toMatchObject({ ok: true, result: { output: 'OK' } })
+    expect(await titles(t)).toEqual(['trig-x'])
+
+    await expectConnectionClean(t, 'clean')
+  }, 30_000)
+
+  it.each([
+    'BEGIN',
+    'BEGIN IMMEDIATE',
+    'begin transaction;',
+    'COMMIT',
+    'END',
+    'ROLLBACK',
+    'SAVEPOINT sp',
+    'RELEASE sp',
+    '-- open one\nBEGIN',
+    '  /* c */ BEGIN;'
+  ])(
+    'WC-S7 单独一条事务语句 %j → query_failed、不进事务；之后写、读、脚本照常',
+    async (sql) => {
+      const id = `wcs7-${sql
+        .replace(/[^a-z]+/gi, '-')
+        .toLowerCase()
+        .replace(/^-|-$/g, '')}`
+      const t = await freshLibrary(id)
+
+      const err = queryError(await query(t, sql))
+      expect(err.code).toBe('query_failed')
+      expect(err.message.startsWith('Do not write transaction statements in sql')).toBe(true)
+
+      await expectConnectionClean(t, 'committed')
+      expect(await titles(t)).toEqual(['committed'])
+    },
+    30_000
+  )
 
   // 最后一条：会关掉共用的宿主
   it('H-19 ready 在先；没有数字 id 的消息被忽略；disconnect → 以 0 退出', async () => {

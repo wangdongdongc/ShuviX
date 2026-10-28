@@ -194,6 +194,7 @@ describe('内置安全策略的停用开关', () => {
       COMMAND_GATE,
       PATH_GATE,
       'ask-on-session-access',
+      'ask-on-widget-access',
       'daily-bot-access',
       'network-admission',
       'redact-sensitive'

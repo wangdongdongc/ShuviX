@@ -18,7 +18,9 @@
  *       127.0.0.1、准入照旧 builtin
  * HE-9  scripts/headless-smoke.mjs --expect-local 全部通过；之后没有它建的会话，照旧在监听
  * HE-9b smoke --expect-lan 对这个实例 → 退出码 1、「expected a replaced network-admission policy」那一行 FAIL
- * HE-11 CLI 的 `shuvix widget open demo` → 退出码 1，说无头不开窗；照旧没有页面
+ * HE-11 一条会话里的 agent 用 `widget` 工具的 `open`（组件的命令行 2026-10-27 删掉了，`open` 搬进了工具）→ 那次工具调用
+ *       是错误、说无头不开窗；照旧没有页面（会话与假提供商都经网络访问的 WebSocket 摆好，无头实例没有窗口可用）
+ * HE-11b CLI 的 `shuvix widget …` 删掉了：退出码 2、一句话指向 `widget` 工具；照旧没有页面
  * HE-12 第二个实例（带 / 不带 --headless、环境变量、另一个 --port、带一个 md）→ 退出码 0、打印这个实例的地址；不开窗、
  *       照旧在监听；另一个端口上没人
  * HE-13 地址文件还没有地址时第二个实例说「还在启动」（退出码 0）；地址文件原样还回去
@@ -27,11 +29,11 @@
  * HE-16 （最后）退出：进程自己退出、退出码 0；开始退出 / 退出完各恰一行且先后对；连着的客户端 1001；地址文件删掉；端口放开
  */
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { listTargets, sleep } from '../../harness/cdp'
+import { listTargets, sleep, until } from '../../harness/cdp'
 import {
   freePort,
   launchApp,
@@ -51,6 +53,7 @@ import {
   type NetworkStatus
 } from '../../harness/networkFixtures'
 import { connectWs, type WsClient } from '../../harness/wsClient'
+import { startFakeProvider, type FakeProvider } from '../../harness/fakeProvider'
 
 const DESKTOP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const REPO_ROOT = resolve(DESKTOP_ROOT, '../..')
@@ -65,6 +68,7 @@ let notes = ''
 let ws: WsClient | undefined
 let P = 0
 let other = 0
+let provider: FakeProvider | undefined
 
 /** 整行恰等于 `line` 的次数 */
 const countLine = (text: string, line: string): number =>
@@ -119,6 +123,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   ws?.close()
+  await provider?.close()
   await app?.stop()
   md?.remove()
 })
@@ -291,11 +296,75 @@ describe('headless: a default instance (this computer only)', () => {
     expect(lines).not.toContain('headless smoke: all checks passed')
   }, 150_000)
 
-  it('HE-11 `shuvix widget open demo` fails visibly: a headless instance opens no window', async () => {
-    const result = await runCli(app, ['widget', 'open', 'demo'])
-    expect(result.code, result.stderr).toBe(1)
-    expect(result.stderr).toContain('running headless')
-    expect(result.stderr).toContain('widget window for "demo"')
+  it('HE-11 the widget tool’s open fails visibly in a session: a headless instance opens no window', async () => {
+    // 一个最小的组件（目录即身份）
+    const widgetDir = join(app.home, '.shuvix', 'widgets', 'he-demo')
+    mkdirSync(widgetDir, { recursive: true })
+    writeFileSync(
+      join(widgetDir, 'widget.json'),
+      JSON.stringify({ id: 'he-demo', name: 'HE Demo', description: '', entryFile: 'index.tsx' }) +
+        '\n'
+    )
+    writeFileSync(
+      join(widgetDir, 'index.tsx'),
+      `const root = document.getElementById('root')\nif (root) root.textContent = 'HE demo'\n`
+    )
+    // 假提供商：经网络访问的通道接上（无头实例没有窗口，seedFakeProvider 走的是主窗口）
+    provider = await startFakeProvider()
+    const added = await ws!.invoke<{ id: string }>('provider:add', {
+      name: 'E2E Fake',
+      baseUrl: provider.baseUrl,
+      apiKey: 'e2e',
+      apiProtocol: 'openai-completions'
+    })
+    await ws!.invoke('provider:addModel', { providerId: added.id, modelId: 'e2e-model' })
+    await ws!.invoke('settings:set', { key: 'general.defaultProvider', value: added.id })
+    await ws!.invoke('settings:set', { key: 'general.defaultModel', value: 'e2e-model' })
+    // 不是缺省标题：自动起标题不出场
+    const session = await ws!.invoke<{ id: string }>('session:create', { title: 'HE-11 widget' })
+    provider.script(
+      {
+        toolCalls: [
+          {
+            id: 'call_he11_open',
+            name: 'widget',
+            args: JSON.stringify({ action: 'open', widget: 'he-demo' })
+          }
+        ],
+        usage: { prompt: 80, completion: 6 }
+      },
+      { text: 'HE-11 done', usage: { prompt: 100, completion: 4 } }
+    )
+    await ws!
+      .invoke('agent:prompt', { sessionId: session.id, text: 'HE-11 open the demo widget' })
+      .catch(() => undefined)
+    type Block = { type: string; toolCallId?: string; result?: string; isError?: boolean }
+    const block = await until(async () => {
+      const messages = await ws!.invoke<Array<{ role: string; content: string; blocks?: Block[] }>>(
+        'message:list',
+        session.id
+      )
+      const settled = messages.some(
+        (m) => m.role === 'assistant' && m.content.includes('HE-11 done')
+      )
+      const tool = messages
+        .flatMap((m) => m.blocks ?? [])
+        .find((b) => b.type === 'tool' && b.toolCallId === 'call_he11_open')
+      return settled && tool?.result !== undefined ? tool : null
+    }, 'the widget open call settled')
+    expect(block.isError).toBe(true)
+    expect(block.result).toContain('running headless')
+    expect(block.result).toContain('widget window for "he-demo"')
+    expect(await pageTargets()).toStrictEqual([])
+  }, 90_000)
+
+  it('HE-11b `shuvix widget …` is gone: exit 2 with a pointer to the widget tool', async () => {
+    const result = await runCli(app, ['widget', 'open', 'he-demo'])
+    expect(result.code, result.stderr).toBe(2)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toBe(
+      'shuvix widget was removed: widgets are used and built with the `widget` tool (actions list, describe, call, create, build, preview, sql, export, open).\n'
+    )
     expect(await pageTargets()).toStrictEqual([])
   })
 

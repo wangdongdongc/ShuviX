@@ -3186,6 +3186,143 @@ export function sessionAccessPane(main: CdpClient): SessionAccessPane {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 组件访问（`widget` 工具用一个本会话没有授权的组件，2026-10-27）的两块界面，形状同上面的会话访问：
+//   - 询问卡片上的组件块（chat-ui AskForm 的 WidgetPreview，`[data-ask-widget=<组件 id>]`：名字 / id 两行，
+//     `[data-ask-widget-op]` 是这次的操作）；选项行 `[data-ask-option]` 的值是 `allow` / `remember-widget` /
+//     `remember-widget-write` / `deny`，「记住」的两行另带 `data-remember-widget=<read|write>`（记下的访问方式）；
+//   - 会话设置弹窗里的「组件访问」卡（`[data-session-acl-widgets=<会话 id>]`，一行一个
+//     `[data-acl-kind="widget"][data-acl-target=<组件 id>]`，访问方式读 `data-acl-access`）。只在弹窗面板里找。
+
+/** 询问卡片上组件块的快照 */
+export interface WidgetAskShot {
+  /** 卡片标题（「读取 / 更改组件」，随界面语言变） */
+  title: string
+  /** `data-ask-widget` 的值（组件 id） */
+  widgetId: string
+  /** 组件块第一行：组件的名字 */
+  name: string
+  /** 组件块第二行：组件 id */
+  idText: string
+  /** 这次的操作（`[data-ask-widget-op]`）；没有 → '' */
+  operation: string
+  /** 命中策略的角标文字（策略显示名；没有角标 → ''） */
+  policy: string
+  /** 选项行（DOM 序，自上而下）：`data-ask-option`、文字（不含行首序号）、`data-remember-widget`（没有 → null） */
+  options: Array<{ id: string; label: string; remember: string | null }>
+}
+
+export interface WidgetAskPane {
+  /** 待处理面板里那张组件询问卡；没有挂着的组件询问时为 null */
+  shot(): Promise<WidgetAskShot | null>
+  /** 点那张卡上的某一行（按 `data-ask-option` 认）；卡片不在或没有这一行 → 抛 */
+  pick(option: 'allow' | 'remember-widget' | 'remember-widget-write' | 'deny'): Promise<void>
+}
+
+export function widgetAskPane(main: CdpClient): WidgetAskPane {
+  const BOX = `document.querySelector('[data-pending-inputs] [data-ask-widget]')`
+  return {
+    shot: () =>
+      main.eval<WidgetAskShot | null>(`(() => {
+        const box = ${BOX}
+        if (!box) return null
+        const card = box.closest('[data-ask-card]')
+        const lines = box.firstElementChild
+        return {
+          title: (card?.querySelector('[data-ask-title]')?.textContent ?? '').trim(),
+          widgetId: box.getAttribute('data-ask-widget') ?? '',
+          name: (lines?.children[0]?.textContent ?? '').trim(),
+          idText: (lines?.children[1]?.textContent ?? '').trim(),
+          operation: (box.querySelector('[data-ask-widget-op]')?.textContent ?? '').trim(),
+          policy: (card?.querySelector('[data-ask-policy]')?.textContent ?? '').trim(),
+          options: [...(card?.querySelectorAll('[data-ask-option]') ?? [])].map((row) => ({
+            id: row.getAttribute('data-ask-option') ?? '',
+            label: (row.querySelector('[data-option-label]')?.textContent ?? '').trim(),
+            remember: row.getAttribute('data-remember-widget')
+          }))
+        }
+      })()`),
+    pick: async (option) => {
+      const ok = await main.eval<boolean>(`(() => {
+        const row = ${BOX}?.closest('[data-ask-card]')?.querySelector(${JSON.stringify(`[data-ask-option="${option}"]`)})
+        if (!row) return false
+        row.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`widget ask card: no "${option}" row`)
+    }
+  }
+}
+
+/** 「组件访问」卡里的一行 */
+export interface WidgetAccessRowShot {
+  /** 行 id（`data-acl-entry`） */
+  entryId: string
+  /** 组件 id（`data-acl-target`） */
+  target: string
+  /** 第一行文字：组件此刻的名字（组件删了 → 「已删除的组件」） */
+  title: string
+  /** 第二行文字：组件 id */
+  idText: string
+  /** `data-acl-access`：read = 只读，write = 读写 */
+  access: string
+  /** 分段控件里选中的那一颗的文字（「只读」/「读写」，随界面语言变） */
+  selectedLabel: string
+}
+
+export interface WidgetAccessPane {
+  /** 弹窗里有没有「组件访问」卡（没有组件种类的行就不出现） */
+  present(sessionId: string): Promise<boolean>
+  /** 那张卡的标题；卡不在 → '' */
+  sectionTitle(sessionId: string): Promise<string>
+  /** 卡里的行（DOM 序）；卡不在 → [] */
+  rows(sessionId: string): Promise<WidgetAccessRowShot[]>
+  /** 点某一行分段控件的「只读」（read）/「读写」（write）—— 按位置点（第一颗 = read），不认文案 */
+  setAccess(sessionId: string, target: string, access: 'read' | 'write'): Promise<void>
+}
+
+export function widgetAccessPane(main: CdpClient): WidgetAccessPane {
+  const PANEL = `[...document.querySelectorAll('.dialog-panel')].find((p) => p.querySelector('input'))`
+  const CARD = (sid: string): string =>
+    `${PANEL}?.querySelector(${JSON.stringify(`[data-session-acl-widgets="${sid}"]`)})`
+  return {
+    present: (sid) => main.eval<boolean>(`!!${CARD(sid)}`),
+    sectionTitle: (sid) =>
+      main.eval<string>(
+        `(${CARD(sid)}?.closest('section')?.querySelector('h3')?.textContent ?? '').trim()`
+      ),
+    rows: (sid) =>
+      main.eval<WidgetAccessRowShot[]>(
+        `[...(${CARD(sid)}?.querySelectorAll('[data-acl-kind="widget"]') ?? [])].map((r) => {
+          const text = r.firstElementChild?.querySelector(':scope > div')
+          return {
+            entryId: r.getAttribute('data-acl-entry') ?? '',
+            target: r.getAttribute('data-acl-target') ?? '',
+            title: (text?.children[0]?.textContent ?? '').trim(),
+            idText: (text?.children[1]?.textContent ?? '').trim(),
+            access: r.getAttribute('data-acl-access') ?? '',
+            selectedLabel: (
+              [...r.querySelectorAll('.inline-flex button')].find((b) =>
+                b.className.includes('bg-bg-primary')
+              )?.textContent ?? ''
+            ).trim()
+          }
+        })`
+      ),
+    setAccess: async (sid, target, access) => {
+      const ok = await main.eval<boolean>(`(() => {
+        const row = [...(${CARD(sid)}?.querySelectorAll('[data-acl-kind="widget"]') ?? [])].find(
+          (r) => r.getAttribute('data-acl-target') === ${JSON.stringify(target)})
+        const btn = row?.querySelectorAll('.inline-flex button')[${access === 'read' ? 0 : 1}]
+        if (!btn) return false
+        btn.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`widget access row ${target}: no ${access} segment`)
+    }
+  }
+}
+
 export interface ConfirmSnapshot {
   open: boolean
   title: string

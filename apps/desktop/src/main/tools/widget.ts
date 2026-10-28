@@ -35,6 +35,7 @@ import { sessionAcl } from '../services/acl'
 import {
   callWidgetOp,
   exportWidget,
+  hasLegacyWidgetData,
   readApiSnapshot,
   resolveExportZipPath,
   runWidgetDbQuery,
@@ -330,8 +331,15 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
       if (!snapshot && !building) continue
       const access = ACCESS_LABEL[sessionAcl.widgetAccess(this.ctx.sessionId, widget.id)]
       const extra = building ? ` dir="${attr(widgetService.getWidgetDir(widget.id))}"` : ''
-      const storage =
-        building && widgetStorageOf(widget.id) !== 'sqlite' ? ' storage="legacy-postgres"' : ''
+      // 造组件的看得见存储：还在共用 PostgreSQL 上的老组件；换成了 SQLite、旧数据还留着的（`sql` 的 legacy 读得到）
+      const legacyStorage = widgetStorageOf(widget.id) !== 'sqlite'
+      const storage = !building
+        ? ''
+        : legacyStorage
+          ? ' storage="legacy-postgres"'
+          : hasLegacyWidgetData(widget.id)
+            ? ' old-data="legacy-postgres"'
+            : ''
       lines.push(
         `<widget id="${widget.id}" name="${attr(widget.name)}" access="${access}"${storage}${extra}>`
       )
@@ -546,6 +554,9 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     await this.authorize('write', widget, 'sql', 'sql', toolCallId, call, signal)
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
     // `legacy`：老组件留在共用 PGlite 里的数据（换成 SQLite 之后照样读得到，搬数据用）
+    if (params.legacy === true && !hasLegacyWidgetData(widget.id)) {
+      throw new Error(`Widget "${widget.id}" has no data in the older shared database.`)
+    }
     const out =
       params.legacy === true
         ? await runWidgetDbQuery(widget.id, sql)

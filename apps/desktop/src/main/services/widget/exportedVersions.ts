@@ -8,12 +8,15 @@
  * Keep in sync with:
  *   - /package.json 的 dependencies / devDependencies（源）
  *   - /scripts/bundle-design-deps.mjs（预打包脚本）
+ *   - zod：resources/bundler/deps/zod.esm.js 打的那一版（scripts/bundle-widget-api.mjs）—— 导出项目里只给 `api.ts`
+ *     的类型用（导出模板的 `src/shuvix-widget-api.ts` import 它），界面不打包它
  */
 export const EXPORTED_VERSIONS = {
   // 运行时（必须与 shipped bundle 对应）
   react: '^19.2.1',
   'react-dom': '^19.2.1',
   'react-router': '^7.13.1',
+  zod: '^4.4.3',
   // 工具链（Vite 生态，与 shipped bundle 无关）
   vite: '^6.0.0',
   '@vitejs/plugin-react': '^4.3.0',

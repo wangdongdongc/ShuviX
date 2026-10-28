@@ -16,7 +16,12 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    "paths": {
+      "shuvix/widget": ["./src/shuvix-widget.ts"],
+      "shuvix/widget-api": ["./src/shuvix-widget-api.ts"]
+    }
   },
   "include": ["."],
   "exclude": ["node_modules", "dist"],

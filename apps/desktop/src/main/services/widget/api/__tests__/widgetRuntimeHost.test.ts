@@ -156,8 +156,8 @@ describe.skipIf(!electronCanLoadSqlite())('WidgetRuntime + 真宿主', () => {
   it('MI-1 卡在 SQLite 里的调用：超时杀宿主，排队的 interrupted，重启后数据完好', async () => {
     const alpha = targetOf('mi-alpha')
     const beta = targetOf('mi-beta')
-    await rt.applySchema(alpha, BOOKS_DDL)
-    await rt.applySchema(beta, BOOKS_DDL)
+    await rt.query(alpha, BOOKS_DDL)
+    await rt.query(beta, BOOKS_DDL)
     expect(await value(alpha, 'add', { title: 'kept' })).toEqual([{ title: 'kept' }])
     const oldPid = hostPid()
 
@@ -190,7 +190,7 @@ describe.skipIf(!electronCanLoadSqlite())('WidgetRuntime + 真宿主', () => {
   it('MI-2 调用中宿主被外面 SIGKILL → host_exited；下一次调用重新拉起', async () => {
     const alpha = targetOf('mi-alpha')
     // 确保宿主在跑（上一条用例之后它也在，单独跑这条时由这一下拉起）
-    await rt.applySchema(alpha, 'CREATE TABLE IF NOT EXISTS books(id TEXT PRIMARY KEY, title TEXT)')
+    await rt.query(alpha, 'CREATE TABLE IF NOT EXISTS books(id TEXT PRIMARY KEY, title TEXT)')
     const pid = hostPid()
 
     const pending = rejection(rt.call(params(alpha, 'stuckRead')))

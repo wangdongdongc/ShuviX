@@ -52,6 +52,11 @@ const ALL_IN_ONE_BUNDLE = 'react-all.esm.js'
 const WIDGET_API_BUNDLE = 'widget-api.esm.js'
 const ZOD_BUNDLE = 'zod.esm.js'
 const WIDGET_API_SPECIFIER = 'shuvix/widget-api'
+/**
+ * 界面的预置依赖 `shuvix/widget`：调组件自己 API 的客户端（src/renderer/src/widgetClient/widgetClient.ts，同一个脚本
+ * 生成）。它 import 的 react 解析回组件自己用的那一份（同一个 React 实例）
+ */
+const WIDGET_CLIENT_BUNDLE = 'widget.esm.js'
 const ROUTER_BUNDLE = 'react-router.esm.js'
 
 /**
@@ -230,6 +235,10 @@ export class BundlerService {
     const routerBundleContent = existsSync(routerBundlePath)
       ? readFileSync(routerBundlePath, 'utf-8')
       : ''
+    const clientBundlePath = resolve(depsDir, WIDGET_CLIENT_BUNDLE)
+    const clientBundleContent = existsSync(clientBundlePath)
+      ? readFileSync(clientBundlePath, 'utf-8')
+      : ''
 
     return {
       name: 'shuvix-design',
@@ -281,6 +290,28 @@ export class BundlerService {
         build.onLoad({ filter: /.*/, namespace: 'shipped-router-bundle' }, () => {
           return { contents: routerBundleContent, loader: 'js' }
         })
+
+        // 4c) `shuvix/widget` → 界面的 API 客户端；它里面的 react 回到 shipped-dep（共享 React 实例）
+        build.onResolve({ filter: /^shuvix\/widget$/ }, () => ({
+          path: 'shuvix/widget',
+          namespace: 'shuvix-widget-client'
+        }))
+        build.onLoad({ filter: /.*/, namespace: 'shuvix-widget-client' }, () => ({
+          contents: clientBundleContent,
+          loader: 'js'
+        }))
+        build.onResolve({ filter: /^react$/, namespace: 'shuvix-widget-client' }, (args) => ({
+          path: args.path,
+          namespace: 'shipped-dep'
+        }))
+        // 4d) 界面里 import 了 API 那一侧的东西（多半是 `import Api from './api'` 少写了 `type`）：说清楚
+        build.onResolve({ filter: /^(shuvix\/widget-api|zod)$/ }, (args) => ({
+          errors: [
+            {
+              text: `"${args.path}" runs on ShuviX's side, not in the widget's screen. Import the API's type only (\`import type Api from './api'\`) and call it through \`createClient\` from "shuvix/widget".`
+            }
+          ]
+        }))
 
         // 5) relative imports → 自动补全扩展名（只许组件目录里的文件）
         build.onResolve({ filter: /^\./ }, (args) =>

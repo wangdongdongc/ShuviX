@@ -1,6 +1,6 @@
 # Reading files on the user's computer
 
-A widget reads local files through two routes under its own address. They are read-only: what a widget writes goes into its database (`data.md`).
+A widget reads local files through two routes under its own address. They are read-only: what a widget writes goes into its database, through its API (`api.md`).
 
 | Request                          | Answer                                                                                                     |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -15,7 +15,7 @@ A widget reads local files through two routes under its own address. They are re
 - `path` is an absolute path, or starts with `~` for the home folder of the user running ShuviX (`~/Pictures/2024`). Prefer `~/…` over a spelled-out home folder: the widget keeps working if it is copied to another account.
 - Encode the whole path once, with `encodeURIComponent`.
 - On Windows, drive paths are absolute: `C:\Users\me\Pictures`.
-- Any path the user can read is allowed. Read only what the widget's purpose needs, and let the user choose the folder it works on (a setting stored in the database) rather than scanning their home folder.
+- Any path the user can read is allowed. Read only what the widget's purpose needs, and let the user choose the folder it works on (a setting stored through an operation) rather than scanning their home folder.
 
 Put the two URL builders in one module and use them everywhere:
 

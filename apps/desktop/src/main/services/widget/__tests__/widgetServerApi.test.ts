@@ -14,6 +14,10 @@
  *   W-5 SQLite 组件的 /db（任何方法）→ 404 NO_DB_ROUTE，不调 handleRestRequest；PGlite 组件的 /db 照旧
  *   W-6 监听者收到 A 的变化 → A 的 SSE 连接收到 `event: data\ndata: {"op":"addBook","source":"agent"}\n\n`，B 的什么都没有；
  *       不认识的 id 不抛；reload 事件照旧
+ *   WC-S30 存储归属每个请求现读：同一个注册（不重新注册）从 pglite 换成 sqlite 之后，/db 从照常变成 404 NO_DB_ROUTE，
+ *          /api 照常
+ *   WC-S31 组件页面把自己那条 EventSource 挂在 `window.__shuvixEvents` 上（界面的 shuvix/widget 共用它，每页一条连接），
+ *          它仍管 reload；页面只开这一条
  *   WT4-PV-10 preview 令牌（会话 s1）+ 快照里的读操作 + 判定放行 → 200；caller 是那条会话的 agent（actor/label preview），
  *       选项 {allowUiOnly, expectedMode:'read'}；判定拿到 (s1, read, id, op)
  *   WT4-PV-11 判定只放行读：写操作 → 403 not_authorized、不调 callWidgetOp；读操作 → 200
@@ -643,5 +647,41 @@ describe('WT4-PV 预览页面调 API：按发起预览的会话判', () => {
     expect(h.callWidgetOp.mock.calls[0][4]).toStrictEqual({ allowUiOnly: true })
     expect(j.widget).not.toHaveBeenCalled()
     expect(h.readApiSnapshot).not.toHaveBeenCalled()
+  })
+})
+
+// ────────────────────────────── WC-S30..S31 ──────────────────────────────
+
+describe('WC-S30..S31 换存储之后的路由、页面的事件流', () => {
+  it('WC-S30 不重新注册、存储从 pglite 换成 sqlite → /db 变成 404 NO_DB_ROUTE，/api 照常', async () => {
+    const before = await http(`/w/${OLD}/db/books?select=*`, { method: 'GET' })
+    expect(before.status).toBe(200)
+    expect(h.handleRestRequest).toHaveBeenCalledTimes(1)
+
+    h.storage[OLD] = 'sqlite'
+
+    const after = await http(`/w/${OLD}/db/books?select=*`, { method: 'GET' })
+    expect(after.status).toBe(404)
+    expect(after.json).toMatchObject({ code: 'NO_DB_ROUTE' })
+    expect(h.handleRestRequest).toHaveBeenCalledTimes(1)
+
+    const api = await http(`/w/${OLD}/api/addBook`, { body: JSON.stringify({ title: 'Dune' }) })
+    expect(api.status).toBe(200)
+    expect(api.json).toEqual({ result: { id: 1 } })
+    expect(h.callWidgetOp.mock.calls.map((c) => [c[0], c[1]])).toEqual([[OLD, 'addBook']])
+  })
+
+  it('WC-S31 页面把自己的 EventSource 挂在 window.__shuvixEvents 上，仍管 reload，只开这一条', async () => {
+    const page = await http(`/w/${A}/`, { method: 'GET' })
+
+    expect(page.status).toBe(200)
+    expect(page.headers['content-type']).toBe('text/html; charset=utf-8')
+    expect(page.body).toContain(`<base href="/w/${A}/" />`)
+    const opened = page.body.match(/new EventSource\('sse'\)/g) ?? []
+    expect(opened).toHaveLength(1)
+    expect(page.body).toMatch(
+      /const es = new EventSource\('sse'\);[\s\S]*window\.__shuvixEvents = es;/
+    )
+    expect(page.body).toContain("es.addEventListener('reload', () => location.reload())")
   })
 })

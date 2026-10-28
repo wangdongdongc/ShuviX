@@ -11,7 +11,7 @@
  * 打开组件（会重建界面）也不会顺带重建 API。
  */
 import { createHash } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getWidgetsDataDir } from '../../../utils/paths'
 import { writeFileAtomic } from '../../../utils/atomicWrite'
@@ -29,6 +29,10 @@ export const API_SOURCE_FILE = 'api.ts'
 const DB_FILE = 'data.sqlite'
 const SNAPSHOT_BUNDLE = 'api.js'
 const SNAPSHOT_MANIFEST = 'api.json'
+/**
+ * 老组件换成 SQLite 时在数据目录里留的记号：它的旧数据还在共用 PGlite 里（`sql` 的 `legacy` 读得到，组件删除时一起删）
+ */
+const LEGACY_DATA_MARKER = 'legacy-pglite'
 
 export type WidgetStorage = 'sqlite' | 'pglite'
 
@@ -50,6 +54,30 @@ export function widgetStorageOf(widgetId: string): WidgetStorage {
 /** 新组件：建数据目录，从此它就是 SQLite 组件 */
 export function createWidgetDataDir(widgetId: string): void {
   mkdirSync(widgetDataDirOf(widgetId), { recursive: true })
+}
+
+/**
+ * 老组件换成 SQLite（它第一次带着 `api.ts` 构建成功时，设计稿 §10）：建数据目录、留下「旧数据还在 PGlite」的记号。
+ * PGlite 里它的 schema 原样留着 —— 数据由 agent 自己搬，搬错了还能重来；组件删除时才一起删
+ */
+export function switchWidgetToSqlite(widgetId: string): void {
+  const dir = widgetDataDirOf(widgetId)
+  createWidgetDataDir(widgetId)
+  try {
+    writeFileSync(join(dir, LEGACY_DATA_MARKER), `${new Date().toISOString()}\n`)
+  } catch (e) {
+    // 记号写不下就不换：没有记号，旧数据就找不回来（`legacy` 读不到、删组件时也不会删 PGlite 那边）
+    rmSync(dir, { recursive: true, force: true })
+    throw e
+  }
+}
+
+/** 组件在共用 PGlite 里有（或可能有）数据：还没换存储的老组件，或换过、旧数据还留着的 */
+export function hasLegacyWidgetData(widgetId: string): boolean {
+  return (
+    widgetStorageOf(widgetId) === 'pglite' ||
+    existsSync(join(widgetDataDirOf(widgetId), LEGACY_DATA_MARKER))
+  )
 }
 
 /** 删除组件：关掉它在宿主里的一切，再删数据目录（数据库、快照） */
@@ -119,23 +147,11 @@ function checkManifest(manifest: ApiManifest): string[] {
 }
 
 /**
- * 编译组件的 `api.ts` 并在组件宿主的临时沙箱里取清单。没有 `api.ts` → `none`。
- * 老组件（数据还在共用 PGlite 里）不能有 API：ctx.db 是 SQLite
+ * 编译组件的 `api.ts` 并在组件宿主的临时沙箱里取清单。没有 `api.ts` → `none`。老组件也照样编译：它第一次带着
+ * API 构建成功时换成 SQLite（widgetService.build → switchWidgetToSqlite）
  */
-export async function compileWidgetApi(
-  widgetId: string,
-  projectDir: string
-): Promise<CompileApiResult> {
+export async function compileWidgetApi(projectDir: string): Promise<CompileApiResult> {
   if (!existsSync(join(projectDir, API_SOURCE_FILE))) return { kind: 'none' }
-  if (widgetStorageOf(widgetId) !== 'sqlite') {
-    return {
-      kind: 'error',
-      errors: [
-        `This widget keeps its data in the older shared database, so it cannot have an ${API_SOURCE_FILE} yet. ` +
-          'Move its data to SQLite first (see the widget skill, references/maintenance.md).'
-      ]
-    }
-  }
   const bundle = await bundlerService.buildApi(projectDir, API_SOURCE_FILE)
   if (!bundle.success || !bundle.outputJS) {
     return { kind: 'error', errors: bundle.errors ?? [`${API_SOURCE_FILE} did not build.`] }
@@ -300,20 +316,14 @@ export async function callWidgetOp(
   }
 }
 
-/** 装 / 更新 SQLite 组件的结构（`db-init`） */
-export async function applyWidgetSqliteSchema(widgetId: string, ddl: string): Promise<void> {
-  try {
-    await widgetRuntime.applySchema(widgetHostTarget(widgetId), ddl)
-  } catch (e) {
-    if (e instanceof WidgetRuntimeError) throw new WidgetApiError(e.code, e.message)
-    throw e
-  }
-}
-
 /** 在 SQLite 组件的库上跑一段 SQL（`db-query`）→ 表格文本 */
 export async function queryWidgetSqlite(widgetId: string, sql: string): Promise<string> {
   try {
-    return (await widgetRuntime.query(widgetHostTarget(widgetId), sql)).output
+    const output = (await widgetRuntime.query(widgetHostTarget(widgetId), sql)).output
+    // 改了行（或跑了一段脚本）：开着的界面重新取数，同 API 的写 —— 搬完老组件的数据后屏幕上不该还是空的。
+    // 查询交回的是表格，不推
+    if (output.startsWith('OK')) emitDataChanged({ widgetId, op: 'sql', source: 'agent' })
+    return output
   } catch (e) {
     if (e instanceof WidgetRuntimeError) throw new WidgetApiError(e.code, e.message)
     throw e

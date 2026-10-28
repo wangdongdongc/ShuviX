@@ -20,20 +20,19 @@ import { widgetRegistry, WIDGET_ID_REGEX, type Widget } from './widgetRegistry'
 import { appEventBus } from '../../utils/appEventBus'
 import { widgetServer } from './widgetServer'
 import { getWidgetsDir } from '../../utils/paths'
-import { writeFileAtomic } from '../../utils/atomicWrite'
 import { createLogger } from '../../logger'
-import { applyWidgetSchema, dropWidgetSchema, runWidgetDbQuery, WidgetDbError } from './widgetDb'
+import { applyWidgetSchema, dropWidgetSchema, runWidgetDbQuery } from './widgetDb'
 import { ensureRepo, commitHostChange, commitBuild, defaultBuildMessage } from './widgetRepo'
 import {
   activateWidgetApi,
-  applyWidgetSqliteSchema,
   changedOps,
   compileWidgetApi,
   createWidgetDataDir,
+  hasLegacyWidgetData,
   queryWidgetSqlite,
   readApiSnapshot,
   removeWidgetData,
-  WidgetApiError,
+  switchWidgetToSqlite,
   widgetStorageOf,
   type CompileApiResult
 } from './api/widgetApi'
@@ -255,7 +254,7 @@ class WidgetService {
     await ensureRepo(dir, `chore(${id}): baseline of existing widget`)
 
     // API 先编译：它失败就整个构建失败，界面也不动（否则界面换成新代码、API 还是旧的）
-    const api: CompileApiResult = await compileWidgetApi(id, dir)
+    const api: CompileApiResult = await compileWidgetApi(dir)
     if (api.kind === 'error') {
       return {
         id,
@@ -282,11 +281,20 @@ class WidgetService {
     if (result.success) {
       // 界面也成了，API 才生效（只有经过 build 的 API 才算数，见 api/widgetApi.ts）
       const compiled = api.kind === 'ok' ? api.api : null
+      // 老组件第一次带着 API 构建成功：换成 SQLite（旧数据留在 PGlite 里，`sql` 的 legacy 读得到；设计稿 §10）
+      if (compiled && widgetStorageOf(id) === 'pglite') {
+        switchWidgetToSqlite(id)
+        out.warnings = [
+          'This widget now keeps its data in its own SQLite database, which starts empty, and its screen can no longer use /db. ' +
+            'Create its tables with the sql action, then copy the old rows over: read them with sql and `legacy: true` (the old data stays there until the widget is deleted).'
+        ]
+      }
       const before = readApiSnapshot(id)
       if (compiled || before) {
         const changed = changedOps(before, compiled)
         if (changed.length > 0) {
           out.warnings = [
+            ...(out.warnings ?? []),
             `This build ${changed.join(', ')}. Sessions, agents or bots that used the old operation may break.`
           ]
         }
@@ -366,41 +374,6 @@ class WidgetService {
   }
 
   /**
-   * 安装/更新 widget 的 DB schema
-   *
-   * 流程：
-   *   1. 跑 DDL（如失败抛出，schema.sql 不更新）
-   *   2. 成功后把 DDL 写入 <dir>/schema.sql
-   *
-   * 只有"确实成功应用过"的 DDL 才会落盘 —— 这条语义是自愈重放能信任 schema.sql 的前提，
-   * 也是 db-init 必须由宿主写文件、而不是直接读 agent 给的文件的原因（文件里可能是
-   * 从未应用过的文本，比如刚被 git 回退过）。
-   * 同一 widget 重复调用 = 覆盖式更新（加表/索引/迁移走这个）；注册阶段会重跑保证幂等。
-   */
-  async setDbSchema(id: string, ddl: string): Promise<{ id: string; applied: boolean }> {
-    this.validateId(id)
-    const widget = widgetRegistry.findById(id)
-    if (!widget) throw new Error(`Widget "${id}" not found`)
-
-    try {
-      if (widgetStorageOf(id) === 'sqlite') await applyWidgetSqliteSchema(id, ddl)
-      else await applyWidgetSchema(id, ddl)
-    } catch (e) {
-      if (e instanceof WidgetDbError || e instanceof WidgetApiError) {
-        throw new Error(`[${e.code}] ${e.message}`)
-      }
-      throw e
-    }
-
-    const persisted = ddl.endsWith('\n') ? ddl : ddl + '\n'
-    writeFileAtomic(this.schemaPath(id), persisted)
-    // 记指纹：之后的自愈重放只认这一份内容，别的编辑一律不替用户执行
-    widgetRegistry.setSchemaHash(id, schemaFingerprint(persisted))
-    log.info(`db-init succeeded for widget=${id}`)
-    return { id, applied: true }
-  }
-
-  /**
    * 在组件的库上跑一段 SQL（`widget` 工具的 `sql`）→ 表格文本。SQLite 组件经组件宿主（带 ATTACH / VACUUM /
    * PRAGMA 的检查，见 api/sqlGuard.ts），老组件照旧走共用 PGlite
    */
@@ -439,9 +412,22 @@ class WidgetService {
           log.warn(`widget deleted listener failed widget=${id}: ${(err as Error).message}`)
         }
       }
-      // 顺带清掉数据，否则复用同一个 id 会静默继承旧数据：SQLite 组件删它的数据目录，老组件删共享 pglite 里的 schema
-      if (widgetStorageOf(id) === 'sqlite') await removeWidgetData(id)
-      else await dropWidgetSchema(id)
+      // 顺带清掉数据，否则复用同一个 id 会静默继承旧数据：共享 pglite 里有它的 schema（老组件，或换过存储、旧数据
+      // 还留着的）就删掉，SQLite 组件再删它的数据目录（先判再删：记号就在数据目录里）
+      const legacy = hasLegacyWidgetData(id)
+      const sqlite = widgetStorageOf(id) === 'sqlite'
+      // 先删数据目录（它和旧数据记号留下来，同 id 的新组件就会继承它们），再删 PGlite 那边。PGlite 那边可能根本
+      // 起不来（worker 没就绪、超时）：组件已经删了，只记一笔，不让删除报错
+      if (sqlite) await removeWidgetData(id)
+      if (legacy) {
+        try {
+          await dropWidgetSchema(id)
+        } catch (err) {
+          log.warn(
+            `dropping the old shared-database schema of ${id} failed: ${(err as Error).message}`
+          )
+        }
+      }
     } else {
       log.warn(`widget ${id} 目录未能删除，保留其账目条目与数据库 schema`)
     }
@@ -508,7 +494,7 @@ ${params.description}
 - 其他组件 / 样式 可按需组织
 
 ## 可用依赖
-React、ReactDOM、React Router、Tailwind CSS v4 —— 无其他 npm 包。
+界面：React、ReactDOM、React Router、Tailwind CSS v4，以及调 API 用的 \`shuvix/widget\`；\`api.ts\`：\`shuvix/widget-api\` 与 zod —— 无其他 npm 包。
 
 > 通用的开发规范（构建、数据库、读本机文件、设计规范）在内置技能 \`builtin:widget\` 里，
 > 这里不再复述；本文件只记录这个 widget 自己的信息。

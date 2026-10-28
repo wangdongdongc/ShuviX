@@ -1,64 +1,39 @@
-# Storing records: the widget's database
+# The widget's database
 
-All widgets share one embedded PostgreSQL (PGlite), and each gets its own schema, so bare table names belong to the widget. Data lives outside the widget's directory and survives restarts.
+Each widget keeps its records in its own SQLite database, a file outside the widget's folder that survives restarts and is deleted with the widget. Only the widget's own operations (`api.md`) read and write it; the screen and agents go through them.
 
-**Use it only when needed.** Stateless tools (formatters, testers, converters, calculators) never call `db-init`: `useState` is enough. The database is for user records that must survive a restart, and it is also where settings go that a browser would keep in `localStorage`: browser storage is unavailable when the widget is opened from ShuviX's web page.
+**Use it only when needed.** Stateless tools (formatters, testers, converters, calculators) have no tables and no `api.ts`: `useState` is enough. The database is for user records that must survive a restart, and it is also where settings go that a browser would keep in `localStorage`: browser storage is unavailable when the widget is opened from ShuviX's web page.
 
-## The schema file
+## `schema.sql`
 
-Keep the widget's **complete** DDL in `<projectDir>/schema.sql`, written idempotently (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`), and install it with the full path:
+Keep the widget's **complete** table definitions in `schema.sql` in its folder, in the SQLite dialect, written so that running them again changes nothing:
 
-```bash
-shuvix widget db-init my-todo --file <projectDir>/schema.sql
+```sql
+CREATE TABLE IF NOT EXISTS books (
+  id         INTEGER PRIMARY KEY,
+  title      TEXT NOT NULL UNIQUE,
+  author     TEXT,
+  status     TEXT NOT NULL DEFAULT 'want' CHECK (status IN ('want', 'reading', 'done')),
+  added_by   TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX IF NOT EXISTS books_status ON books (status, created_at);
 ```
 
-ShuviX replays `schema.sql` when the widget is registered, but only while it matches what `db-init` last applied: an edited file takes effect only after `db-init` runs again. The next green build commits it with the code.
+Install it by passing the file's text to `sql`. The whole script runs in one transaction: if any statement fails, none of it applies. The next green build commits `schema.sql` with the code.
+
+The SQLite dialect: `INTEGER PRIMARY KEY` is the auto-numbered id; types are `TEXT`, `INTEGER`, `REAL`, `BLOB`; there is no boolean (`0` / `1`) and no date type (ISO 8601 text sorts correctly); JSON goes in `TEXT` and is read with `json_extract`; upserts are `ON CONFLICT (…) DO UPDATE SET … = excluded.…`. Full-text search, including Chinese and Japanese substrings: `CREATE VIRTUAL TABLE notes_fts USING fts5(body, tokenize='trigram')`. Foreign keys are enforced.
+
+ShuviX sets the connection itself (WAL, foreign keys, cache), so `PRAGMA` is refused, and so are `ATTACH`, `DETACH`, `VACUUM` and `load_extension`: a widget reaches only its own file.
 
 ## Changing tables
 
 The live database is not versioned: reverting code does not revert tables.
 
-- Prefer additive DDL: new nullable columns, new tables. Never add a NOT NULL column without a default, and never drop a column unless asked.
-- A widget with tables but no `schema.sql` needs one reconstructed from the live schema and installed.
-- To repair a mismatch: inspect the live shape with `db-query` (`information_schema.columns` where `table_schema = current_schema()`), migrate inside an explicit `BEGIN; … COMMIT;` (`db-query` is not transactional), then bring `schema.sql` in line and run `db-init`.
+- Prefer additive changes: new nullable columns (`ALTER TABLE books ADD COLUMN rating INTEGER`), new tables. Never add a NOT NULL column without a default, and never drop a column or a table unless asked.
+- SQLite cannot change a column's type or constraints in place. Rebuild the table in one script: create the new table, `INSERT INTO new SELECT … FROM old`, drop the old one, rename the new one, recreate its indexes.
+- Then bring `schema.sql` in line with the live tables, and change the operations that use them in the same build.
 
-## Calling it from widget code
+## Looking at the data
 
-`/w/<id>/db/<table>`, a PostgREST-style API with no auth. The same path works on the desktop and from a browser.
-
-```ts
-// Read with filters / ordering / pagination
-const res = await fetch('/w/my-todo/db/todos?done=is.false&order=created_at.desc&limit=20')
-const rows = await res.json() // → array of row objects
-
-// Insert one row or many
-await fetch('/w/my-todo/db/todos', {
-  method: 'POST',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ text: 'buy milk' }) // or [{ text: 'a' }, { text: 'b' }]
-})
-
-// Update and delete — a WHERE filter is REQUIRED (no "change everything" footgun)
-await fetch('/w/my-todo/db/todos?id=eq.7', {
-  method: 'PATCH',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ done: true })
-})
-await fetch('/w/my-todo/db/todos?id=eq.7', { method: 'DELETE' })
-```
-
-Writes return the affected rows. Errors come back as `{ code, message }` with a 4xx / 5xx status; show them in the UI. Filters are `?column=operator.value`, ANDed together:
-
-| Operator              | Meaning                                           | Example                           |
-| --------------------- | ------------------------------------------------- | --------------------------------- |
-| `eq` `neq`            | = and <>                                          | `?id=eq.5` `?status=neq.archived` |
-| `gt` `gte` `lt` `lte` | numeric and date comparisons                      | `?score=gte.80&score=lt.100`      |
-| `like` `ilike`        | LIKE / case-insensitive LIKE, `*` is the wildcard | `?name=ilike.*foo*`               |
-| `in`                  | IN (...)                                          | `?status=in.(active,pending)`     |
-| `is`                  | IS NULL / TRUE / FALSE / UNKNOWN                  | `?deleted_at=is.null`             |
-
-Control parameters: `?select=col1,col2`, `?order=col.desc.nullslast,col2.asc`, `?limit=20&offset=40`.
-
-Extensions available in DDL and queries: **pg_trgm** (`WHERE text % 'term'`, `USING gin (text gin_trgm_ops)`), **vector** (`vector(1536)` with `<->`, `<#>`, `<=>`), hstore, ltree, citext, tablefunc, cube, earthdistance, intarray, unaccent, fuzzystrmatch.
-
-**Not supported**: embedded resources (`?select=*,fk(*)`: make two requests), `and()` / `or()`, RPC endpoints (use `db-query`), upsert / `on_conflict` / `Prefer` headers (SELECT, then POST or PATCH), and access to another widget's data.
+`sql` with a `SELECT` returns a table: `SELECT * FROM books ORDER BY created_at DESC LIMIT 20`. `SELECT name, sql FROM sqlite_master` and `SELECT * FROM pragma_table_info('books')` show the structure. Fix data with `UPDATE` / `DELETE` in `sql` only when the user asked for it; anything the user would do through the screen goes through an operation instead.

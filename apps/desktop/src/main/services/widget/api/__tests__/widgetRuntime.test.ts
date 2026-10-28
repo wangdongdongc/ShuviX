@@ -8,7 +8,7 @@
  *   M-2 两个同时到的首个请求共用一次 fork；应答乱序也各回各的；不认识 / 不是数字的 id 不理
  *   M-3 错误应答 → WidgetRuntimeError（code + message）；call 的消息体 `{type:'call', …params, cpuMs: callCpuMs}`；
  *       CALL_CPU_MS < CALL_TIMEOUT_MS；超时：call / manifest = callTimeoutMs（manifest 的 cpuMs 10 秒），
- *       applySchema / query 60 秒，forget = callTimeoutMs + 10 秒；选项盖过缺省
+ *       query 60 秒，forget = callTimeoutMs + 10 秒；选项盖过缺省
  *   M-4 超过 callTimeoutMs：这次调用 timeout、SIGKILL 一次、别的在途请求 interrupted、running 为 false；下一个请求 fork 新的子进程
  *   M-5 ready 之后意外退出 → 在途请求 host_exited（说明里有 code 与 signal）；下一个请求重新拉起；
  *       已被换掉的旧子进程迟到的 exit 不连累新子进程的请求
@@ -244,13 +244,13 @@ describe('M-2 共用一次启动、按 id 配对', () => {
 describe('M-3 应答、消息体与超时', () => {
   it('M-3 错误应答 → WidgetRuntimeError（code + message）', async () => {
     const rt = new WidgetRuntime({ hostPath: '/h.js' })
-    const { t, id, c } = await startedWith(() => rt.applySchema(TARGET, 'CREATE TABLE x(a)'))
-    c.fail(id, 'schema_failed', 'table x already exists')
+    const { t, id, c } = await startedWith(() => rt.query(TARGET, 'CREATE TABLE x(a)'))
+    c.fail(id, 'query_failed', 'table x already exists')
     await flush()
     expect(t.state()).toBe('rejected')
     const err = t.error() as WidgetRuntimeError
     expect(err).toBeInstanceOf(WidgetRuntimeError)
-    expect(err.code).toBe('schema_failed')
+    expect(err.code).toBe('query_failed')
     expect(err.message).toBe('table x already exists')
     rt.dispose()
   })
@@ -296,7 +296,6 @@ describe('M-3 应答、消息体与超时', () => {
   it.each([
     ['call', {}, (rt: WidgetRuntime) => rt.call(PARAMS), CALL_TIMEOUT_MS],
     ['manifest', {}, (rt: WidgetRuntime) => rt.manifest('x'), CALL_TIMEOUT_MS],
-    ['applySchema', {}, (rt: WidgetRuntime) => rt.applySchema(TARGET, 'x'), 60_000],
     ['query', {}, (rt: WidgetRuntime) => rt.query(TARGET, 'x'), 60_000],
     ['call（选项 5 秒）', { callTimeoutMs: 5000 }, (rt: WidgetRuntime) => rt.call(PARAMS), 5000],
     [

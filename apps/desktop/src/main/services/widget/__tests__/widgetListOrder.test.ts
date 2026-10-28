@@ -215,11 +215,6 @@ describe('v0.2.16 留下的 homeOrder（LO-4）', () => {
       run: () => widgetService.setArchived('dd-d', false)
     },
     {
-      name: 'setDbSchema (setSchemaHash)',
-      touches: 'cc-c',
-      run: () => widgetService.setDbSchema('cc-c', 'create table t (id int);')
-    },
-    {
       name: 'init (insert)',
       touches: 'new-one',
       run: () =>

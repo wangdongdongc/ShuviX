@@ -1,7 +1,7 @@
 /**
  * Widget 面板的两种打开方式（2026-10-16）—— 一个小组件同一时间只开在一处：面板里，或独立窗口。用户在面板里选的方式
  * （↗ / 菜单「在独立窗口打开」→ 窗口，菜单「在面板中打开」→ 面板）记在主进程（widgetWindow:setPreferWindow），下次点卡片
- * 照它来；开着的窗口（不论谁开的）点卡片就聚焦它，但 agent 经 CLI 开的窗口不算用户的选择。另有菜单的停止 / 归档 / 删除。
+ * 照它来；开着的窗口（不论谁开的）点卡片就聚焦它，但 agent 经 `widget` 工具（`open`）开的窗口不算用户的选择。另有菜单的停止 / 归档 / 删除。
  *
  * 真的 isolated 实例，种 4 个最小 widget（A、B、C 走打开方式，D 只看菜单），经主窗右侧面板的 widget tab 操作。窗口在不在
  * 看 CDP 的 /json（`#widget-window?widgetId=<id>` 的 page target）与 `widgetWindow.status`；注册看 `widget.getServerStatus()`。
@@ -13,7 +13,7 @@
  *   OM-4  A 的窗口开着时菜单「在面板中打开」→ preferWindow 空、A 的窗口没了；A 在面板前台、iframe 在；2s 后 A 仍注册着
  *   OM-5  再点 A → 面板
  *   OM-6  B 的菜单「在独立窗口打开」→ preferWindow [B]，B 的窗口开了
- *   OM-7  C 在面板里时经 IPC（CLI 走的那条服务调用）开 C 的窗口 → C 离开面板、preferWindow 里没有 C；点 C → 用那个窗口、
+ *   OM-7  C 在面板里时经 IPC（`widget` 工具的 `open` 走的那条服务调用）开 C 的窗口 → C 离开面板、preferWindow 里没有 C；点 C → 用那个窗口、
  *         preferWindow 仍没有 C；关掉它再点 C → 面板
  *   OM-8  A 在面板里时菜单「停止」→ 面板里没了、没有运行中的点、不再注册
  *   OM-9  面板里开着时菜单「归档」→ 应用与卡片都没了、在 listArchived 里；菜单「删除」：取消 → 还在；确认 → 列表与面板里
@@ -189,7 +189,7 @@ describe('where a widget opens: panel or window', () => {
     expect(await home.panelApps()).toEqual([A])
   })
 
-  it('OM-7 a window opened over IPC (the CLI path) takes the app out of the panel without becoming the preference', async () => {
+  it('OM-7 a window opened over IPC (the widget tool’s open path) takes the app out of the panel without becoming the preference', async () => {
     const home = widgetPanelPane(app.main)
     await home.clickCard(C)
     await foregroundIs(C)
