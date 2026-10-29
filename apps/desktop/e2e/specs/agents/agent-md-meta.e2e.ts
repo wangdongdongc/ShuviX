@@ -16,7 +16,7 @@
  *   E-6  内置 auto-title 的笔记：有条、开关是开着的、没有补缺行；mdMeta.get {kind:'hook', fillKeys:[], enabled:true}；
  *        bot 的笔记没有条，它的 mdMeta.get 没有 enabled
  *   E-7  项目里的 agent md（项目笔记本）：mdMeta.get 回 null、没有条；它的 id 下存着补缺值，档位行也不挂小标
- *   E-8  IPC 拒绝：旧 id → no-object-id；shuvix-tools → key-not-allowed；max → invalid-value；setEnabled 收到 agent id /
+ *   E-8  IPC 拒绝：旧 id → no-object-id；shuvix-tools → key-not-allowed；minimal → invalid-value；setEnabled 收到 agent id /
  *        UUID / 不存在的内置 → key-not-allowed、非布尔 → invalid-value；注册表不变
  *   E-9  A 的卡片有补缺行、显示 A 存的值并挂小标；A 的笔记里点 `[[meta-b]]` → meta-b.md 在它自己的 md 窗口打开
  *        （它也存着补缺值）：那条内存会话不是注册表笔记，卡上不显示 B 的补缺值、没有小标、没有条（也不借 A 的会话）；
@@ -456,7 +456,7 @@ describe('属性卡上的补缺值 —— agent 的模型与思考档位', () =>
       await metaSet({ sessionId: sid, objectId: id, key: 'shuvix-tools', value: 'bash' })
     ).toEqual({ success: false, reason: 'key-not-allowed' })
     expect(
-      await metaSet({ sessionId: sid, objectId: id, key: THINKING, value: 'max' })
+      await metaSet({ sessionId: sid, objectId: id, key: THINKING, value: 'minimal' })
     ).toMatchObject({ success: false, reason: 'invalid-value' })
 
     for (const objectId of [EXPLORE_ID, id, 'hook:builtin:nonexistent']) {
