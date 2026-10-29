@@ -1428,7 +1428,8 @@
       "zoomOut": "缩小",
       "zoomReset": "恢复默认大小（当前 {{pct}}%）",
       "settings": "设置",
-      "devtools": "开发者工具"
+      "devtools": "开发者工具",
+      "history": "历史记录"
     },
     "infobar": {
       "using": "「{{session}}」正在使用此页面",
@@ -1439,7 +1440,8 @@
       "agentDevtools": "查看 agent 的操作（{{count}}）"
     },
     "internal": {
-      "settings": "设置"
+      "settings": "设置",
+      "history": "历史记录"
     },
     "settingsPage": {
       "title": "设置",
@@ -1458,7 +1460,14 @@
       "cookies_other": "{{count}} 个 Cookie",
       "certExceptions": "已放行的网站",
       "certExceptionsDesc": "你在证书警告页上选择了「继续前往」的网站，直到退出 ShuviX 前都不会再警告。",
-      "noCertExceptions": "没有"
+      "noCertExceptions": "没有",
+      "searchSuggest": "显示搜索建议",
+      "searchSuggestDesc": "在地址栏里打字时，会把输入的内容发给 {{engine}} 获取建议。网址、localhost 和 IP 地址不会发送。",
+      "clearHistory": "删除浏览历史",
+      "clearHistoryDesc": "历史记录里的所有网页，包括 agent 打开的。地址栏也不会再建议它们。",
+      "clearHistoryButton": "删除…",
+      "clearHistoryConfirm": "确认删除",
+      "viewHistory": "查看历史记录"
     },
     "certError": {
       "title": "你的连接不是私密连接",
@@ -1570,6 +1579,31 @@
           "requestId": "requestId"
         }
       }
+    },
+    "omnibox": {
+      "suggestions": "建议",
+      "searchWith": "{{engine}} 搜索",
+      "switchToTab": "切换到此标签页",
+      "remove": "从历史记录中移除"
+    },
+    "history": {
+      "title": "历史记录",
+      "search": "搜索历史记录",
+      "filterAll": "全部",
+      "filterYou": "我的",
+      "filterAgents": "Agent",
+      "agentHint": "agent 打开的网页会留在历史记录里，并标出是哪段对话，但不会出现在地址栏的建议里。",
+      "today": "今天 - {{date}}",
+      "yesterday": "昨天 - {{date}}",
+      "clear": "清除浏览历史",
+      "clearConfirm": "全部清除",
+      "empty": "你访问过的网页会显示在这里",
+      "noResults": "没有找到结果",
+      "remove": "从历史记录中移除",
+      "visits_one": "访问了 {{count}} 次",
+      "visits_other": "访问了 {{count}} 次",
+      "openedByAgent": "由「{{title}}」里的 agent 打开 · 查看对话",
+      "deletedSession": "已删除的对话"
     }
   },
   "builtinSkill": {

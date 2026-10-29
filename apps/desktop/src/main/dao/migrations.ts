@@ -923,6 +923,41 @@ export const migrations: Migration[] = [
         'CREATE INDEX IF NOT EXISTS idx_trigger_logs_createdAt ON trigger_logs(createdAt DESC)'
       )
     }
+  },
+  {
+    version: 36,
+    description:
+      '内置浏览器的历史记录：browser_history_urls（一个网址一行，访问次数只数用户自己的）+ browser_history_visits（每次访问一行，sessionId = 哪个会话的 agent 打开的）',
+    up: (db) => {
+      // 照 Chrome 的 History 库分两张表：地址栏建议读网址表（只看 visitCount > 0 = 用户自己去过的 ——
+      // agent 打开的页面记进访问表、不加这个数，2026-10-29 用户裁定），历史记录页读访问表。保留 90 天（服务层修剪）
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS browser_history_urls (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          url         TEXT    NOT NULL UNIQUE,
+          title       TEXT    NOT NULL DEFAULT '',
+          favicon     TEXT    NOT NULL DEFAULT '',
+          visitCount  INTEGER NOT NULL DEFAULT 0,
+          typedCount  INTEGER NOT NULL DEFAULT 0,
+          lastVisitAt INTEGER NOT NULL DEFAULT 0
+        )
+      `)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS browser_history_visits (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          urlId      INTEGER NOT NULL,
+          visitedAt  INTEGER NOT NULL,
+          transition TEXT    NOT NULL DEFAULT 'link',
+          sessionId  TEXT
+        )
+      `)
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_browser_history_visits_visitedAt ON browser_history_visits(visitedAt)'
+      )
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_browser_history_visits_urlId ON browser_history_visits(urlId)'
+      )
+    }
   }
 ]
 

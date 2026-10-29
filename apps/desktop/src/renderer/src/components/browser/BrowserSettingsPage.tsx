@@ -19,6 +19,10 @@ import {
   type SearchEngineId
 } from './omnibox'
 import { BrowserSiteDetails } from './BrowserSiteDetails'
+import {
+  SEARCH_SUGGEST_SETTING,
+  searchSuggestEnabled
+} from '../../../../shared/browserSearchEngines'
 import { formatBytes, type SiteSummary } from '../../../../shared/browserSiteData'
 
 const IGNORE_CERT_SETTING = 'tool.browser.ignoreCertificateErrors'
@@ -54,6 +58,9 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
   const clearSettingsFocus = useBrowserTabsStore((s) => s.clearSettingsFocus)
 
   const [engine, setEngine] = useState<SearchEngineId>(searchEngineOf(undefined))
+  const [searchSuggest, setSearchSuggest] = useState(true)
+  const [confirmHistory, setConfirmHistory] = useState(false)
+  const [clearingHistory, setClearingHistory] = useState(false)
   const [ignoreCert, setIgnoreCert] = useState(false)
   const [sites, setSites] = useState<SiteSummary[] | null>(null)
   const [query, setQuery] = useState('')
@@ -84,6 +91,7 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
       ])
       if (cancelled) return
       setEngine(searchEngineOf(settings[SEARCH_ENGINE_SETTING]))
+      setSearchSuggest(searchSuggestEnabled(settings[SEARCH_SUGGEST_SETTING]))
       setIgnoreCert(settings[IGNORE_CERT_SETTING] === 'true')
       setSites(list)
       setCertHosts(certs)
@@ -125,6 +133,24 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
     const next = searchEngineOf(value)
     setEngine(next)
     void window.api.settings.set({ key: SEARCH_ENGINE_SETTING, value: next })
+  }
+
+  const toggleSearchSuggest = (): void => {
+    const next = !searchSuggest
+    setSearchSuggest(next)
+    void window.api.settings.set({ key: SEARCH_SUGGEST_SETTING, value: String(next) })
+  }
+
+  const clearHistory = async (): Promise<void> => {
+    setClearingHistory(true)
+    try {
+      await window.api.browserHistory.clear()
+    } catch {
+      // 没删掉：保持原样，可以再点一次
+    } finally {
+      setClearingHistory(false)
+      setConfirmHistory(false)
+    }
   }
 
   const toggleIgnoreCert = (): void => {
@@ -240,12 +266,66 @@ export function BrowserSettingsPage({ compact }: { compact?: boolean }): React.J
                       </InlineSelect>
                     }
                   />
+                  <SettingsRow
+                    title={t('browser.settingsPage.searchSuggest')}
+                    description={t('browser.settingsPage.searchSuggestDesc', {
+                      engine: SEARCH_ENGINES[engine].name
+                    })}
+                    control={
+                      <span className="flex" data-search-suggest-toggle={String(searchSuggest)}>
+                        <Toggle on={searchSuggest} onClick={toggleSearchSuggest} />
+                      </span>
+                    }
+                  />
                 </SettingsSection>
               </div>
 
               {/* ── 隐私和安全 ── */}
               <div data-settings-section="privacy" className="scroll-mt-4 space-y-5">
                 <SettingsSection title={t('browser.settingsPage.privacy')}>
+                  <SettingsRow
+                    title={t('browser.settingsPage.clearHistory')}
+                    description={t('browser.settingsPage.clearHistoryDesc')}
+                    control={
+                      confirmHistory ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => void clearHistory()}
+                            disabled={clearingHistory}
+                            className={confirmBtn}
+                            data-clear-history-confirm
+                          >
+                            {clearingHistory && <Loader2 size={10} className="animate-spin" />}
+                            {t('browser.settingsPage.clearHistoryConfirm')}
+                          </button>
+                          <button
+                            onClick={() => setConfirmHistory(false)}
+                            disabled={clearingHistory}
+                            className={cancelBtn}
+                          >
+                            {t('common.cancel')}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => void window.api.browserView.openInternal('history')}
+                            className="px-2.5 py-1 text-[11px] rounded-md text-text-secondary hover:bg-bg-hover/60 transition-colors"
+                            data-open-history
+                          >
+                            {t('browser.settingsPage.viewHistory')}
+                          </button>
+                          <button
+                            onClick={() => setConfirmHistory(true)}
+                            className="px-2.5 py-1 text-[11px] rounded-md border border-border-secondary/60 text-text-secondary hover:bg-bg-hover/60 transition-colors"
+                            data-clear-history
+                          >
+                            {t('browser.settingsPage.clearHistoryButton')}
+                          </button>
+                        </div>
+                      )
+                    }
+                  />
                   <SettingsRow
                     title={t('browser.settingsPage.clearAll')}
                     description={t('browser.settingsPage.clearAllDesc')}

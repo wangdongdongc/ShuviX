@@ -39,7 +39,7 @@ import { browserCdpManager } from './browserCdpService'
 import { clipUrl, externalOpenDecision, routeExternalUrl } from '../externalOpen'
 import { appEventBus } from '../../utils/appEventBus'
 import { destroyStagingWindow, getStagingWindow, STAGING_SIZE } from './stagingWindow'
-import { agentActing, hasAgentGuards, uninstallAgentGuards } from './agentGuards'
+import { agentActing, agentOpInFlight, hasAgentGuards, uninstallAgentGuards } from './agentGuards'
 import { browserShortcutFor, nextZoomPercent, type BrowserShortcut } from './shortcuts'
 import {
   applyDevtoolsLayout,
@@ -58,6 +58,18 @@ import {
   toggleInspectElementMode
 } from './devtoolsDock'
 import { agentDevtoolsCallCount, forgetAgentDevtools, resetAgentDevtools } from './agentDevtools'
+import {
+  historyCopyActor,
+  historyForgetTab,
+  historyNoteAgent,
+  historyNoteCommit,
+  historyNoteFailed,
+  historyNoteFavicon,
+  historyNoteTitle,
+  historyNoteUser,
+  historyNoteUserNavigation
+} from './history'
+import type { HistoryTransition } from '../../../shared/browserHistory'
 import type { DevtoolsDockState } from '../../../shared/browserAgentDevtools'
 import {
   internalPageOf,
@@ -371,10 +383,13 @@ function openPopupTab(openerTabId: string, url: string): void {
   const opts = { activate, ...(opener ? { openerSessionId: opener } : {}) }
   try {
     if (!hasAgentGuards(openerTabId)) {
-      createTab(url, opts)
+      const id = createTab(url, opts)
+      // 页面自己弹出的（不是 agent 那一下点出来的）：历史记在开它的那页的同一方头上
+      if (!opener) historyCopyActor(openerTabId, id)
       return
     }
     const id = createTab('about:blank', opts)
+    if (!opener) historyCopyActor(openerTabId, id)
     void browserCdpManager
       .session(id)
       .then(async (session) => {
@@ -414,10 +429,16 @@ function routeWindowOpen(openerTabId: string, targetUrl: string, pageUrl: string
  * `activate`：开在前台（用户的动作：新标签页、⌘T、自己点出来的弹出页）。不给就开在后台 —— 但一个 tab
  * 都没选中时（窗口是空的）新 tab 照样成为选中的那页，没有谁正看着别的页会被换走。
  * `openerSessionId`：agent 开的 tab 记下是哪个会话开的。
+ * `transition`：用户从地址栏开的（没有选中的页时敲的网址 / 搜索），第一次访问照它记进历史。
  */
 export function createTab(
   url?: string,
-  opts?: { activate?: boolean; openerSessionId?: string; internalPage?: InternalPage }
+  opts?: {
+    activate?: boolean
+    openerSessionId?: string
+    internalPage?: InternalPage
+    transition?: HistoryTransition
+  }
 ): string {
   if (tabs.size >= MAX_TABS) {
     throw new Error(`Too many browser tabs (max ${MAX_TABS}). Close some tabs first.`)
@@ -462,8 +483,14 @@ export function createTab(
 
   const wc = view.webContents
 
-  // 浏览器快捷键（⌘T / ⌘W / ⌘L / ⌘R …）：焦点在页面里时由这里接。只有真实键盘触发，agent 的 CDP 按键不会
-  installShortcuts(wc)
+  // 浏览器快捷键（⌘T / ⌘W / ⌘L / ⌘R …）：焦点在页面里时由这里接。只有真实键盘触发，agent 的 CDP 按键不会。
+  // 顺带记下历史记在谁头上：用户在页面里按了键（或按下了鼠标，见下），之后的导航就是用户的
+  installShortcuts(wc, { onKeyDown: () => !agentOpInFlight(tabId) && historyNoteUser(tabId) })
+
+  // before-mouse-event 连 CDP 发的鼠标也触发（2026-10-16 实测），所以 agent 的动作正在进行时不算用户的
+  wc.on('before-mouse-event', (_event, mouse) => {
+    if (mouse.type === 'mouseDown' && !agentOpInFlight(tabId)) historyNoteUser(tabId)
+  })
 
   // 弹窗 / target=_blank：http(s) 在面板新开 tab，其他协议能否交给系统见 routeWindowOpen
   wc.setWindowOpenHandler(({ url: targetUrl }) => {
@@ -553,17 +580,20 @@ export function createTab(
   wc.on('did-navigate', (_event, navUrl) => {
     reapplyZoom(tabId)
     sendCommitted(navUrl)
+    if (!internalPages.has(tabId)) historyNoteCommit(tabId, navUrl, { sameDocument: false })
   })
 
   wc.on('did-navigate-in-page', (_event, navUrl, isMainFrame) => {
     if (!isMainFrame) return
     sendCommitted(navUrl)
+    if (!internalPages.has(tabId)) historyNoteCommit(tabId, navUrl, { sameDocument: true })
   })
 
   wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return
     // -3 (ABORTED)：用户主动停止或导航被新导航取代，不是错误页；spinner 由 did-stop-loading 收尾
     if (errorCode === -3) return
+    historyNoteFailed(tabId)
     sendToRenderer('browser-view:did-fail-load', {
       tabId,
       errorCode,
@@ -574,10 +604,12 @@ export function createTab(
 
   wc.on('page-title-updated', (_event, title) => {
     sendToRenderer('browser-view:tab-title-updated', { tabId, title })
+    historyNoteTitle(tabId, title)
   })
 
   wc.on('page-favicon-updated', (_event, favicons) => {
     sendToRenderer('browser-view:tab-favicon-updated', { tabId, favicon: favicons[0] })
+    historyNoteFavicon(tabId, favicons[0])
   })
 
   // ====== 停靠区里的原生 DevTools ======
@@ -604,7 +636,12 @@ export function createTab(
 
   const activate = !!opts?.activate || activeTabId === null
   tabs.set(tabId, view)
-  if (opts?.openerSessionId) openerSession.set(tabId, opts.openerSessionId)
+  if (opts?.openerSessionId) {
+    openerSession.set(tabId, opts.openerSessionId)
+    historyNoteAgent(tabId, opts.openerSessionId)
+  } else if (opts?.transition) {
+    historyNoteUserNavigation(tabId, opts.transition)
+  }
   if (opts?.internalPage) internalPages.set(tabId, opts.internalPage)
   sendToRenderer('browser-view:tab-created', {
     tabId,
@@ -686,6 +723,7 @@ function forgetTab(tabId: string, view: WebContentsView): void {
   openerSession.delete(tabId)
   internalPages.delete(tabId)
   certBlocked.delete(tabId)
+  historyForgetTab(tabId)
   const parent = parentOf.get(tabId)
   parentOf.delete(tabId)
   if (parent && !parent.isDestroyed()) parent.contentView.removeChildView(view)
@@ -799,13 +837,15 @@ export function openInternalPage(page: InternalPage): string {
 }
 
 /**
- * 用户在地址栏 / 新标签页 / 错误页的重试里让这个 tab 去一个地址：`shuvix://…` 变成内部页面，
- * 其余照常加载（这个 tab 若原本是内部页面，就不再是了）。
+ * 用户在地址栏 / 新标签页 / 错误页的重试 / 历史记录页里让这个 tab 去一个地址：`shuvix://…` 变成内部页面，
+ * 其余照常加载（这个 tab 若原本是内部页面，就不再是了）。`transition`：从地址栏去的（typed = 网址、
+ * generated = 搜索），这次访问照它记进历史；不给 = 普通的一次导航（link）。
  */
-export function navigateTab(tabId: string, url: string): void {
+export function navigateTab(tabId: string, url: string, transition?: HistoryTransition): void {
   const view = tabs.get(tabId)
   if (!view || view.webContents.isDestroyed()) return
   const page = internalPageOf(url)
+  if (!page) historyNoteUserNavigation(tabId, transition ?? 'link')
   if (page) {
     internalPages.set(tabId, page)
     // 这页从此对 agent 不存在：agent 若接着它，断开、去掉「正被谁使用」的标记（圆点、提示条跟着消失）
@@ -814,6 +854,8 @@ export function navigateTab(tabId: string, url: string): void {
     void browserCdpManager.detach(tabId).catch(() => undefined)
     // 内部页面画在外壳里，那张 about:blank 占位没什么可调试的
     closeDevtoolsDock(tabId)
+    // 历史上的账清掉：从内部页面再去原来那页是一次新的访问，不是刷新
+    historyForgetTab(tabId)
     sendToRenderer('browser-view:did-navigate', { tabId, url: internalPageUrl(page) })
     void view.webContents.loadURL('about:blank')
     return
@@ -874,6 +916,7 @@ export function agentSessionTitle(sessionId: string): string {
  */
 export function noteAgentUse(tabId: string, sessionId: string): void {
   if (!tabs.has(tabId)) return
+  historyNoteAgent(tabId, sessionId)
   const now = Date.now()
   const prev = agentUse.get(tabId)
   if (prev && prev.sessionId === sessionId && now - prev.sentAt < AGENT_USE_THROTTLE_MS) return
@@ -914,15 +957,16 @@ const shortcutTargets = new WeakSet<WebContents>()
  * 把浏览器快捷键接到一个 webContents 上：每个 tab 的页面（createTab 里）、浏览器窗口的外壳
  * （browserWindowService 建窗时）和停靠区里的原生 DevTools。只认用户真按的键（见 shortcuts.ts 文件头）；
  * 停放窗口里的页面拿不到键盘焦点，所以实际只有挂在浏览器窗口里的那几页会走到这里。
- * `skip`：这个 webContents 上留给它自己的动作（DevTools 自己的缩放）。
+ * `skip`：这个 webContents 上留给它自己的动作（DevTools 自己的缩放）。`onKeyDown`：每次真按下一个键（tab 页面拿它记「用户动过这页」，见 history.ts）。
  */
 export function installShortcuts(
   wc: WebContents,
-  opts?: { skip?: (action: BrowserShortcut) => boolean }
+  opts?: { skip?: (action: BrowserShortcut) => boolean; onKeyDown?: () => void }
 ): void {
   if (shortcutTargets.has(wc)) return
   shortcutTargets.add(wc)
   wc.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown') opts?.onKeyDown?.()
     const action = browserShortcutFor(input, process.platform)
     if (!action || opts?.skip?.(action)) return
     event.preventDefault()
@@ -980,16 +1024,20 @@ export function runShortcut(action: BrowserShortcut): void {
       return
     case 'reload':
       if (!selected) return
+      // 用户真按的键：之后的导航记在用户头上（历史）
+      historyNoteUser(selected.id)
       if (action.ignoreCache) selected.view.webContents.reloadIgnoringCache()
       else selected.view.webContents.reload()
       return
     case 'back':
       if (selected?.view.webContents.navigationHistory.canGoBack()) {
+        historyNoteUser(selected.id)
         selected.view.webContents.navigationHistory.goBack()
       }
       return
     case 'forward':
       if (selected?.view.webContents.navigationHistory.canGoForward()) {
+        historyNoteUser(selected.id)
         selected.view.webContents.navigationHistory.goForward()
       }
       return
@@ -1019,6 +1067,10 @@ export function runShortcut(action: BrowserShortcut): void {
       else toggleDevtoolsDock(selected.id)
       return
     }
+    case 'history':
+      // 历史记录页（已开着就选中它）—— 用户真按的键，浏览器窗口本来就在前台
+      openInternalPage('history')
+      return
   }
 }
 

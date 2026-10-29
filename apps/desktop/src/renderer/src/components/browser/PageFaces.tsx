@@ -16,14 +16,19 @@ function isCertError(code: number): boolean {
  * 位置让给这里 —— 单页视图与平铺墙的卡片共用；`compact` 是卡片里的小号。
  */
 
-/** 新标签页：一个居中的搜索框（地址栏同一套判断：像网址就打开，否则搜索） */
+/**
+ * 新标签页：一个居中的搜索框（地址栏同一套判断：像网址就打开，否则搜索）。
+ * `onFocusOmnibox`：照 Chrome 的新标签页，框一拿到焦点就把光标交给地址栏 —— 在那里打字才有下拉建议。
+ */
 export function NewTabPage({
   engine,
   onNavigate,
+  onFocusOmnibox,
   compact
 }: {
   engine: SearchEngineId
   onNavigate: (url: string) => void
+  onFocusOmnibox?: () => void
   compact?: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
@@ -55,6 +60,11 @@ export function NewTabPage({
             type="text"
             value={text}
             onChange={(e) => setText(e.target.value)}
+            onFocus={(e) => {
+              if (!onFocusOmnibox) return
+              e.currentTarget.blur()
+              onFocusOmnibox()
+            }}
             placeholder={placeholder}
             spellCheck={false}
             className="flex-1 min-w-0 bg-transparent text-[13px] text-text-primary outline-none placeholder:text-text-tertiary"

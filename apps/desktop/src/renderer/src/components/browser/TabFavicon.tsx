@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Globe, Settings, TriangleAlert } from 'lucide-react'
+import { Globe, History, Settings, TriangleAlert } from 'lucide-react'
 import { internalPageOfTab, type BrowserTabInfo } from '../../stores/browserTabsStore'
 import { INTERCEPTING_DOT_COLOR, sessionDotColor } from './sessionColor'
 
@@ -36,26 +36,30 @@ export function TabFavicon({
 }): React.JSX.Element {
   const [failed, setFailed] = useState<string | null>(null)
   const pulsing = useRecent(tab.agentActiveAt, AGENT_PULSE_MS)
-  const icon = internalPageOfTab(tab) ? (
-    <Settings size={size} className="text-text-secondary" />
-  ) : tab.loadError?.crashed ? (
-    <TriangleAlert size={size} className="text-amber-500" />
-  ) : tab.isLoading ? (
-    <span
-      className="block rounded-full border-[1.5px] border-accent border-t-transparent animate-spin"
-      style={{ width: size - 2, height: size - 2, margin: 1 }}
-    />
-  ) : tab.favicon && failed !== tab.favicon ? (
-    <img
-      src={tab.favicon}
-      alt=""
-      draggable={false}
-      style={{ width: size, height: size }}
-      onError={() => setFailed(tab.favicon ?? null)}
-    />
-  ) : (
-    <Globe size={size} className="text-text-tertiary" />
-  )
+  const internal = internalPageOfTab(tab)
+  const icon =
+    internal === 'history' ? (
+      <History size={size} className="text-text-secondary" />
+    ) : internal ? (
+      <Settings size={size} className="text-text-secondary" />
+    ) : tab.loadError?.crashed ? (
+      <TriangleAlert size={size} className="text-amber-500" />
+    ) : tab.isLoading ? (
+      <span
+        className="block rounded-full border-[1.5px] border-accent border-t-transparent animate-spin"
+        style={{ width: size - 2, height: size - 2, margin: 1 }}
+      />
+    ) : tab.favicon && failed !== tab.favicon ? (
+      <img
+        src={tab.favicon}
+        alt=""
+        draggable={false}
+        style={{ width: size, height: size }}
+        onError={() => setFailed(tab.favicon ?? null)}
+      />
+    ) : (
+      <Globe size={size} className="text-text-tertiary" />
+    )
 
   const dotColor = tab.cdpIntercepting
     ? INTERCEPTING_DOT_COLOR

@@ -11,6 +11,8 @@
  *           系统浏览器打开、设置（openSettings('mcp')）；
  *   CB-U48  搜索标签页：列出全部标签，选中的前面一个「✓ 」，接着 agent 的后面「 · 会话名」；选一个就选中它；
  *           没有 tab 不弹。
+ *   MN-1    ⋮ 菜单的「历史记录」：有页面、空白页、没有 tab 都有（紧挨在设置前面，叫 History）；选它 →
+ *           openInternal('history')，不碰设置页。
  *
  * 菜单经 `window.api.contextMenu.popup`（假件按用例钉好的 actionId 回答）；store 直接灌；真 en 文案。
  */
@@ -213,6 +215,7 @@ describe('⋮ 菜单（CB-U47）', () => {
       'devtools',
       '---',
       'openExternal',
+      'history',
       'settings'
     ])
     seed([C])
@@ -274,6 +277,33 @@ describe('⋮ 菜单（CB-U47）', () => {
     seed([A])
     expect((await more(A, 'single', 'viewWall')).mock.calls).toEqual([['wall']])
     expect((await more(A, 'wall', 'viewSingle')).mock.calls).toEqual([['single']])
+  })
+})
+
+describe('⋮ 菜单的历史记录（MN-1）', () => {
+  it.each([
+    ['有页面', A],
+    ['空白页', BLANK],
+    ['没有 tab', null]
+  ] as const)('MN-1 %s：有 History，紧挨在 Settings 前面', async (_l, tab) => {
+    seed(tab ? [tab] : [])
+    await showMoreMenu({ tab, viewMode: 'single', onViewMode: vi.fn(), t })
+    const list = ids(lastMenu(api))
+    expect(list.indexOf('history')).toBeGreaterThan(-1)
+    expect(list.indexOf('settings')).toBe(list.indexOf('history') + 1)
+    expect(item('history').label).toBe('History')
+    expect(enabled('history')).toBe(true)
+  })
+
+  it("MN-1 选 History → openInternal('history')，不开设置页", async () => {
+    seed([A])
+    api.menuPick = 'history'
+    await showMoreMenu({ tab: A, viewMode: 'single', onViewMode: vi.fn(), t })
+    expect(api.browserView.openInternal.mock.calls).toEqual([['history']])
+    expect(api.app.openSettings).not.toHaveBeenCalled()
+    api.menuPick = 'history'
+    await showMoreMenu({ tab: null, viewMode: 'wall', onViewMode: vi.fn(), t })
+    expect(api.browserView.openInternal.mock.calls).toEqual([['history'], ['history']])
   })
 })
 

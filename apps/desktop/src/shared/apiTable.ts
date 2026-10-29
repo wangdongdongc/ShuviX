@@ -22,7 +22,7 @@
  */
 
 /** invoke / send：转发的参数个数；event：交给回调的载荷个数 */
-export type ApiArity = 0 | 1 | 2
+export type ApiArity = 0 | 1 | 2 | 3
 
 export type ApiMemberKind = 'invoke' | 'send' | 'event'
 
@@ -353,12 +353,12 @@ export const API_TABLE = {
   browserView: {
     openWindow: invoke('browser-view:open-window', 0),
     isWindowOpen: invoke('browser-view:is-window-open', 0),
-    createTab: invoke('browser-view:create-tab', 1),
+    createTab: invoke('browser-view:create-tab', 2),
     closeTab: invoke('browser-view:close-tab', 1),
     reopenClosedTab: invoke('browser-view:reopen-closed-tab', 0),
     activateTab: invoke('browser-view:activate-tab', 1),
     listTabs: invoke('browser-view:list-tabs', 0),
-    navigate: invoke('browser-view:navigate', 2),
+    navigate: invoke('browser-view:navigate', 3),
     goBack: invoke('browser-view:go-back', 1),
     goForward: invoke('browser-view:go-forward', 1),
     reload: invoke('browser-view:reload', 1),
@@ -410,6 +410,15 @@ export const API_TABLE = {
     siteInfo: invoke('browser-data:site-info', 1),
     clearSiteData: invoke('browser-data:clear-site-data', 1),
     certExceptions: invoke('browser-data:cert-exceptions', 0)
+  },
+  /** 内置浏览器的历史记录与地址栏的搜索建议（只认浏览器窗口外壳） */
+  browserHistory: {
+    suggest: invoke('browser-history:suggest', 1),
+    searchSuggest: invoke('browser-history:search-suggest', 2),
+    list: invoke('browser-history:list', 1),
+    remove: invoke('browser-history:remove', 1),
+    removeUrl: invoke('browser-history:remove-url', 1),
+    clear: invoke('browser-history:clear', 0)
   },
   /** 技能 */
   skill: {

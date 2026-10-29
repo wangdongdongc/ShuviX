@@ -32,7 +32,8 @@ import {
   closeDevtoolsDock,
   setDevtoolsLayout,
   agentDevtoolsSnapshot,
-  clearAgentDevtoolsCalls
+  clearAgentDevtoolsCalls,
+  historyNoteUser
 } from '../services/browser'
 import {
   INTERNAL_PAGES,
@@ -40,6 +41,12 @@ import {
   type InternalPage
 } from '../../shared/browserInternalPages'
 import type { AgentDevtoolsSnapshot, DevtoolsDockPanel } from '../../shared/browserAgentDevtools'
+import type { HistoryTransition } from '../../shared/browserHistory'
+
+/** 地址栏报来的这次导航是怎么来的（记进历史用）；认不出的当没给 */
+function transitionOf(value: unknown): HistoryTransition | undefined {
+  return value === 'typed' || value === 'generated' ? value : undefined
+}
 
 /** 只认浏览器窗口外壳发来的（别的窗口、网络客户端碰不到停靠区，也读不到 agent 在页面上拿到的东西） */
 function fromHostWindow(ctx: ClientContext): boolean {
@@ -84,12 +91,16 @@ export function registerBrowserViewHandlers(): void {
 
   // ====== tab 生命周期 ======
 
-  /** 用户新开 tab（开在前台）；空白页顺手把光标放进地址栏（照 Chrome） */
-  defineHandler('browser-view:create-tab', (_ctx, url?: string) => {
+  /**
+   * 用户新开 tab（开在前台）；空白页顺手把光标放进地址栏（照 Chrome）。`transition`：从地址栏开的
+   * （没有选中的页时敲的网址 / 搜索），记进历史用
+   */
+  defineHandler('browser-view:create-tab', (_ctx, url?: string, transition?: unknown) => {
     // 内部页面（地址栏 / 新标签页里敲的 shuvix://settings、复制设置页）：打开那一页（已开着就选中它）
     const page = typeof url === 'string' ? internalPageOf(url) : null
     if (page) return openInternalPage(page)
-    const id = createTab(url, { activate: true })
+    const how = transitionOf(transition)
+    const id = createTab(url, { activate: true, ...(how ? { transition: how } : {}) })
     if (!url) requestOmniboxFocus()
     return id
   })
@@ -109,14 +120,24 @@ export function registerBrowserViewHandlers(): void {
 
   // ====== 导航 ======
 
-  /** 用户让这个 tab 去一个地址（地址栏、新标签页、重试）；`shuvix://…` 打开内部页面 */
-  defineHandler('browser-view:navigate', (_ctx, tabId: string, url: string) => {
-    if (typeof tabId === 'string' && typeof url === 'string') navigateTab(tabId, url)
-  })
+  /**
+   * 用户让这个 tab 去一个地址（地址栏、新标签页、重试、历史记录页）；`shuvix://…` 打开内部页面。
+   * `transition`：从地址栏去的（typed = 网址、generated = 搜索），记进历史用
+   */
+  defineHandler(
+    'browser-view:navigate',
+    (_ctx, tabId: string, url: string, transition?: unknown) => {
+      if (typeof tabId === 'string' && typeof url === 'string') {
+        navigateTab(tabId, url, transitionOf(transition))
+      }
+    }
+  )
 
+  // 后退 / 前进 / 刷新是用户的动作：之后的导航记在用户头上（历史）
   defineHandler('browser-view:go-back', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
     if (view && view.webContents.navigationHistory.canGoBack()) {
+      historyNoteUser(tabId)
       view.webContents.navigationHistory.goBack()
     }
   })
@@ -124,13 +145,16 @@ export function registerBrowserViewHandlers(): void {
   defineHandler('browser-view:go-forward', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
     if (view && view.webContents.navigationHistory.canGoForward()) {
+      historyNoteUser(tabId)
       view.webContents.navigationHistory.goForward()
     }
   })
 
   defineHandler('browser-view:reload', (_ctx, tabId: string) => {
     const view = getTabView(tabId)
-    if (view) view.webContents.reload()
+    if (!view) return
+    historyNoteUser(tabId)
+    view.webContents.reload()
   })
 
   defineHandler('browser-view:stop', (_ctx, tabId: string) => {

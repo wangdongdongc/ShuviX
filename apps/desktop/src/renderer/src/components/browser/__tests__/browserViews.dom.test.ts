@@ -21,6 +21,9 @@
  *   DD-U37  BrowserSinglePage 在 ResizeObserver 回调里**当场**报布局（setLayout 再 setVisible(true)，不等下一帧）；
  *           盖着 pageCover / 对话框时当场 setVisible(false)、不报布局；换了选中页、空白页变成网页之后，新的页面区
  *           同样当场报；窗口缩放排到下一帧（那一帧之前 ResizeObserver 先报了就只报一次）；
+ *   MN-2    新标签页的搜索框（单页视图）一拿到焦点就失焦、omniboxFocusNonce + 1，地址栏进编辑、光标在地址栏
+ *           （空白页与没有 tab 两种）；不给 onFocusOmnibox 的 NewTabPage 焦点照留；shuvix://history 的标签与地址栏
+ *           用历史记录图标、叫 History，不是设置图标。
  *   DD-U38  外壳里拖停靠区上沿：停靠区高度跟着鼠标实时变（夹在 [140, innerHeight − 120]），松手才写进设置
  *           `browser.devtoolsHeight`；拖动期间页面不让位（不 setVisible(false)、不截图、没有 pageCover）、原生
  *           DevTools 不报 null；单页视图里页面区与原生 DevTools 的尺寸变化当场报新矩形。
@@ -34,6 +37,8 @@ import { BrowserSinglePage } from '../BrowserSinglePage'
 import { BrowserWall } from '../BrowserWall'
 import { BrowserWindowShell } from '../BrowserWindowShell'
 import { BrowserTabStrip } from '../BrowserTabStrip'
+import { BrowserToolbar } from '../BrowserToolbar'
+import { NewTabPage } from '../PageFaces'
 import { showTabSearchMenu } from '../browserMenus'
 import { cardZoomFor } from '../tabUtils'
 import i18n from 'i18next'
@@ -753,5 +758,86 @@ describe('外壳里拖停靠区（DD-U38）', () => {
     expect(layoutCalls()).toEqual([[{ tabId: 'a', bounds: PAGE }]])
     expect(api.browserView.setDevtoolsLayout.mock.calls).toEqual([[{ tabId: 'a', bounds: SLOT }]])
     expect(visibleCalls()).toEqual([true])
+  })
+})
+
+describe('新标签页把光标交给地址栏、历史记录页的图标（MN-2）', () => {
+  const newTabInput = (): HTMLInputElement => $<HTMLInputElement>('[data-new-tab-page] input')!
+
+  it.each([
+    ['空白页', [tabInfo({ id: 'n', url: 'about:blank' })], 'n'],
+    ['没有 tab', [], null]
+  ] as const)(
+    'MN-2 单页视图（%s）：搜索框一拿到焦点就失焦、omniboxFocusNonce + 1',
+    async (_l, tabs, active) => {
+      seed([...tabs], active)
+      m = await mountInto(BrowserSinglePage, { engine: 'google' })
+      await flush()
+      const before = useBrowserTabsStore.getState().omniboxFocusNonce
+      act(() => newTabInput().focus())
+      expect(useBrowserTabsStore.getState().omniboxFocusNonce).toBe(before + 1)
+      expect(document.activeElement).not.toBe(newTabInput())
+    }
+  )
+
+  it('MN-2 外壳里：点进新标签页的搜索框 → 地址栏进编辑、光标在地址栏的输入框里', async () => {
+    m = await mountInto(BrowserWindowShell, {})
+    await flush()
+    expect($('[data-new-tab-page]')).not.toBeNull()
+    expect($('[data-omnibox-input]')).toBeNull()
+    act(() => newTabInput().focus())
+    await flush()
+    const omnibox = $<HTMLInputElement>('[data-omnibox-input]')
+    expect(omnibox).not.toBeNull()
+    expect(document.activeElement).toBe(omnibox)
+  })
+
+  it('MN-2 不给 onFocusOmnibox 的 NewTabPage：焦点照留、nonce 不动', async () => {
+    m = await mountInto(NewTabPage, { engine: 'google', onNavigate: vi.fn() })
+    act(() => newTabInput().focus())
+    expect(document.activeElement).toBe(newTabInput())
+    expect(useBrowserTabsStore.getState().omniboxFocusNonce).toBe(0)
+  })
+
+  it('MN-2 shuvix://history：标签条上叫 History、历史记录图标，不是设置图标', async () => {
+    seed(
+      [
+        tabInfo({ id: 'a', url: 'https://a.test/', title: 'Alpha' }),
+        tabInfo({ id: 'h', url: 'shuvix://history', title: '' })
+      ],
+      'h'
+    )
+    m = await mountInto(BrowserTabStrip, {})
+    await flush()
+    const tab = $('[data-browser-tab="h"]')!
+    expect(tab.textContent).toContain('History')
+    expect(tab.querySelector('svg.lucide-history')).not.toBeNull()
+    expect(tab.querySelector('svg.lucide-settings')).toBeNull()
+    expect(tab.querySelector('svg.lucide-globe')).toBeNull()
+  })
+
+  it('MN-2 shuvix://history：地址栏显示 shuvix://history、历史记录图标；设置页仍是设置图标', async () => {
+    seed([tabInfo({ id: 'h', url: 'shuvix://history', title: '' })], 'h')
+    m = await mountInto(BrowserToolbar, {
+      engine: 'google',
+      viewMode: 'single',
+      onViewMode: vi.fn()
+    })
+    await flush()
+    const display = $('[data-omnibox-display]')!
+    expect(display.getAttribute('data-omnibox-display')).toBe('shuvix://history')
+    expect(display.querySelector('svg.lucide-history')).not.toBeNull()
+    expect(display.querySelector('svg.lucide-settings')).toBeNull()
+    m.unmount()
+
+    seed([tabInfo({ id: 's', url: 'shuvix://settings', title: '' })], 's')
+    m = await mountInto(BrowserToolbar, {
+      engine: 'google',
+      viewMode: 'single',
+      onViewMode: vi.fn()
+    })
+    await flush()
+    expect($('[data-omnibox-display] svg.lucide-settings')).not.toBeNull()
+    expect($('[data-omnibox-display] svg.lucide-history')).toBeNull()
   })
 })

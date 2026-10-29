@@ -79,6 +79,15 @@ export interface FakeApi {
     clearSiteData: Mock
     certExceptions: Mock
   }
+  /** 历史记录与搜索建议：缺省什么都回空（suggest / searchSuggest / list） */
+  browserHistory: {
+    suggest: Mock
+    searchSuggest: Mock
+    list: Mock
+    remove: Mock
+    removeUrl: Mock
+    clear: Mock
+  }
   /** 下一次菜单弹出时「选」哪一项（null = 取消）；弹一次清一次 */
   menuPick: string | null
   /** settings.getAll 回什么 */
@@ -171,6 +180,14 @@ export function installFakeApi(platform = 'darwin'): FakeApi {
       siteInfo: vi.fn(async () => ({ cookieCount: 0, certException: false })),
       clearSiteData: vi.fn(async () => undefined),
       certExceptions: vi.fn(async () => [])
+    },
+    browserHistory: {
+      suggest: vi.fn(async () => []),
+      searchSuggest: vi.fn(async () => []),
+      list: vi.fn(async () => ({ items: [], next: null })),
+      remove: vi.fn(async () => undefined),
+      removeUrl: vi.fn(async () => undefined),
+      clear: vi.fn(async () => undefined)
     },
     menuPick: null,
     settingsMap: {}

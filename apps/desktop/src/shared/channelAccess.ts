@@ -324,6 +324,15 @@ export const CHANNEL_ACCESS: Readonly<Record<string, ChannelAccess>> = {
   'browser-data:clear-site-data': 'write',
   'browser-data:cert-exceptions': 'read',
 
+  // ─── browserHistory：内置浏览器的历史记录（处理函数只认浏览器窗口外壳）───
+  // 历史里的网址可能带着登录令牌（重置密码链接、OAuth 回调的 code），读历史按带机密归
+  'browser-history:suggest': 'admin',
+  'browser-history:list': 'admin',
+  'browser-history:search-suggest': 'write', // 替用户向搜索引擎发请求
+  'browser-history:remove': 'write',
+  'browser-history:remove-url': 'write',
+  'browser-history:clear': 'write',
+
   // ─── skill：技能（注册表） ───
   'skill:openNote': 'admin', // SKILL.md 的编辑器（内置那份只读，同一条通道）
   'skill:list': 'read',
@@ -507,6 +516,7 @@ export const GROUP_SCOPE: Readonly<Record<string, ChannelScope>> = {
   terminal: 'terminal',
   browserView: 'browser',
   browserData: 'browser',
+  browserHistory: 'browser',
   widget: 'widgets',
   widgetWindow: 'widgets',
   knowledge: 'knowledge',

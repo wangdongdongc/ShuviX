@@ -21,6 +21,7 @@ import { litellmService } from './services/litellmService'
 import { providerService } from './services/providerService'
 import { initI18n, t } from './i18n'
 import { settingsDao } from './dao/settingsDao'
+import { browserHistoryDao } from './dao/browserHistoryDao'
 import { mcpService, setBuiltinMcpAgentResolver } from './services/mcpService'
 import { chatFrontendRegistry, ElectronFrontend } from './frontend'
 // 触发所有内置工具的 registerBuiltinTool() 副作用
@@ -58,7 +59,8 @@ import {
   initBrowserWindowService,
   closeBrowserWindowWithMain,
   destroyBrowserWindow,
-  setBrowserSessionHooks
+  setBrowserSessionHooks,
+  setHistoryStore
 } from './services/browser'
 import {
   approveOpenExternalPermission,
@@ -623,6 +625,8 @@ function initSharedWindowServices(): void {
       return true
     }
   })
+  // 浏览器的历史记录落盘处（browser_history_* 两张表）
+  setHistoryStore(browserHistoryDao)
   // 浏览器是独立窗口（懒创建）：只在用户点开时才建，关窗只隐藏；agent 的 tab 住在停放窗口里
   step('windowServices › browserWindow', () => initBrowserWindowService({ getThemeBgColor }))
 

@@ -1428,7 +1428,8 @@
       "zoomOut": "Zoom out",
       "zoomReset": "Reset zoom (now {{pct}}%)",
       "settings": "Settings",
-      "devtools": "Developer tools"
+      "devtools": "Developer tools",
+      "history": "History"
     },
     "infobar": {
       "using": "“{{session}}” is using this page",
@@ -1439,7 +1440,8 @@
       "agentDevtools": "Agent's DevTools activity ({{count}})"
     },
     "internal": {
-      "settings": "Settings"
+      "settings": "Settings",
+      "history": "History"
     },
     "settingsPage": {
       "title": "Settings",
@@ -1458,7 +1460,14 @@
       "cookies_other": "{{count}} cookies",
       "certExceptions": "Allowed sites",
       "certExceptionsDesc": "Sites you chose to proceed to on the certificate warning. No more warnings for them until ShuviX quits.",
-      "noCertExceptions": "None"
+      "noCertExceptions": "None",
+      "searchSuggest": "Show search suggestions",
+      "searchSuggestDesc": "While you type in the address bar, what you type is sent to {{engine}} for suggestions. Web addresses, localhost and IP addresses are never sent.",
+      "clearHistory": "Delete browsing history",
+      "clearHistoryDesc": "Every page in History, including the ones agents opened. The address bar stops suggesting them.",
+      "clearHistoryButton": "Delete…",
+      "clearHistoryConfirm": "Confirm",
+      "viewHistory": "View history"
     },
     "certError": {
       "title": "Your connection is not private",
@@ -1570,6 +1579,31 @@
           "requestId": "requestId"
         }
       }
+    },
+    "omnibox": {
+      "suggestions": "Suggestions",
+      "searchWith": "{{engine}} Search",
+      "switchToTab": "Switch to this tab",
+      "remove": "Remove from history"
+    },
+    "history": {
+      "title": "History",
+      "search": "Search history",
+      "filterAll": "All",
+      "filterYou": "Yours",
+      "filterAgents": "Agents",
+      "agentHint": "Pages agents opened stay in history, marked with their conversation, but are never suggested in the address bar.",
+      "today": "Today - {{date}}",
+      "yesterday": "Yesterday - {{date}}",
+      "clear": "Clear browsing history",
+      "clearConfirm": "Clear all history",
+      "empty": "Pages you visit will appear here",
+      "noResults": "No results",
+      "remove": "Remove from history",
+      "visits_one": "{{count}} visit",
+      "visits_other": "{{count}} visits",
+      "openedByAgent": "Opened by the agent in “{{title}}” · View conversation",
+      "deletedSession": "Deleted conversation"
     }
   },
   "builtinSkill": {

@@ -11,6 +11,10 @@
  * - `createDesktopBrowserBackend` —— 内置 browser MCP server（@shuvix/agent-runtime）
  *     的桌面 BrowserBackend 实现；`browserCdpManager` 是其 per-tab CDP 会话管理；
  *     `observeDesktopBrowserCalls` 把 agent 的 devtool 调用记给用户看
+ * - 历史记录（history.ts，Chrome 的 History）—— 记录接在 browserViewService 的 tab 事件上；查询
+ *     `suggestHistory`（地址栏建议，只给用户自己的）/ `listHistory`（历史记录页）/ `removeHistoryItems` /
+ *     `removeHistoryUrl` / `clearHistory`；用户的动作 `historyNoteUser`；地址栏的搜索建议
+ *     `fetchSearchSuggestions`（searchSuggest.ts）
  * - 停靠区（页面下方：原生 DevTools + agent 的 devtool）—— `openDevtoolsDock` / `closeDevtoolsDock` /
  *     `setDevtoolsLayout`（devtoolsDock.ts）；`agentDevtoolsSnapshot` / `clearAgentDevtoolsCalls`
  *     （agentDevtools.ts）
@@ -18,6 +22,7 @@
  * 消费方：
  * - src/main/index.ts —— 登记独立窗口服务 / 退出时销毁
  * - src/main/ipc/browserViewHandlers.ts —— 向 renderer 暴露 browserView:* IPC
+ * - src/main/ipc/browserHistoryHandlers.ts —— browser-history:* IPC（只认浏览器窗口外壳）
  * - src/main/services/builtinMcp/browserServer.ts —— 内置能力服务器 `browser` 的桌面接线
  *     （agent 的唯一自动化入口：会话勾选 `mcp:browser` 才有，无 CLI）
  */
@@ -50,8 +55,19 @@ export {
   setPanelVisible,
   destroyAllTabs,
   getBrowserHostWindow,
+  agentSessionTitle,
   initBrowserSession
 } from './browserViewService'
+export {
+  suggestHistory,
+  listHistory,
+  removeHistoryItems,
+  removeHistoryUrl,
+  clearHistory,
+  historyNoteUser,
+  setHistoryStore
+} from './history'
+export { fetchSearchSuggestions } from './searchSuggest'
 export {
   initBrowserWindowService,
   openBrowserWindow,

@@ -1428,7 +1428,8 @@
       "zoomOut": "縮小",
       "zoomReset": "既定のサイズに戻す（現在 {{pct}}%）",
       "settings": "設定",
-      "devtools": "デベロッパー ツール"
+      "devtools": "デベロッパー ツール",
+      "history": "履歴"
     },
     "infobar": {
       "using": "「{{session}}」がこのページを使用しています",
@@ -1439,7 +1440,8 @@
       "agentDevtools": "エージェントの操作を見る（{{count}}）"
     },
     "internal": {
-      "settings": "設定"
+      "settings": "設定",
+      "history": "履歴"
     },
     "settingsPage": {
       "title": "設定",
@@ -1458,7 +1460,14 @@
       "cookies_other": "Cookie {{count}} 件",
       "certExceptions": "許可したサイト",
       "certExceptionsDesc": "証明書の警告ページで「アクセスする」を選んだサイト。ShuviX を終了するまで警告しません。",
-      "noCertExceptions": "なし"
+      "noCertExceptions": "なし",
+      "searchSuggest": "検索候補を表示",
+      "searchSuggestDesc": "アドレスバーに入力すると、入力内容が候補取得のため {{engine}} に送信されます。URL、localhost、IP アドレスは送信されません。",
+      "clearHistory": "閲覧履歴を削除",
+      "clearHistoryDesc": "エージェントが開いたものも含め、履歴のすべてのページ。アドレスバーにも候補として表示されなくなります。",
+      "clearHistoryButton": "削除…",
+      "clearHistoryConfirm": "削除する",
+      "viewHistory": "履歴を表示"
     },
     "certError": {
       "title": "この接続ではプライバシーが保護されません",
@@ -1570,6 +1579,31 @@
           "requestId": "requestId"
         }
       }
+    },
+    "omnibox": {
+      "suggestions": "候補",
+      "searchWith": "{{engine}} で検索",
+      "switchToTab": "このタブに切り替え",
+      "remove": "履歴から削除"
+    },
+    "history": {
+      "title": "履歴",
+      "search": "履歴を検索",
+      "filterAll": "すべて",
+      "filterYou": "自分",
+      "filterAgents": "エージェント",
+      "agentHint": "エージェントが開いたページは会話名付きで履歴に残りますが、アドレスバーの候補には表示されません。",
+      "today": "今日 - {{date}}",
+      "yesterday": "昨日 - {{date}}",
+      "clear": "閲覧履歴を消去",
+      "clearConfirm": "すべて消去",
+      "empty": "アクセスしたページがここに表示されます",
+      "noResults": "結果がありません",
+      "remove": "履歴から削除",
+      "visits_one": "{{count}} 回アクセス",
+      "visits_other": "{{count}} 回アクセス",
+      "openedByAgent": "「{{title}}」のエージェントが開きました · 会話を表示",
+      "deletedSession": "削除された会話"
     }
   },
   "builtinSkill": {

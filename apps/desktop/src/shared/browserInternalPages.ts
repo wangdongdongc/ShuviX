@@ -1,5 +1,5 @@
 /**
- * 内置浏览器的内部页面（Chrome 的 chrome://settings 那一类）：`shuvix://<页名>`。
+ * 内置浏览器的内部页面（Chrome 的 chrome://settings、chrome://history 那一类）：`shuvix://<页名>`。
  *
  * 内部页面是一个标签页，但页面本身是浏览器窗口外壳里的 DOM —— 那个 tab 的 webContents 只是一张
  * about:blank 占位（主进程 browserViewService 的 internalPages 记着它是哪一页）。agent 看不到、也碰不到
@@ -8,7 +8,7 @@
  * 纯数据 + 两个纯函数，主进程与渲染端共用（src/shared 是叶子层）。
  */
 
-export const INTERNAL_PAGES = ['settings'] as const
+export const INTERNAL_PAGES = ['settings', 'history'] as const
 export type InternalPage = (typeof INTERNAL_PAGES)[number]
 
 export const INTERNAL_SCHEME = 'shuvix'

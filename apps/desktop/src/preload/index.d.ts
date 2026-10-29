@@ -878,8 +878,14 @@ declare global {
       openWindow: () => Promise<void>
       /** 浏览器窗口此刻是否建出来且可见（关窗只是隐藏 → false） */
       isWindowOpen: () => Promise<boolean>
-      /** 用户新开一个 tab（开在前台、成为选中的那页） */
-      createTab: (url?: string) => Promise<string>
+      /**
+       * 用户新开一个 tab（开在前台、成为选中的那页）。`transition`：从地址栏开的（typed = 网址、
+       * generated = 搜索），记进历史用
+       */
+      createTab: (
+        url?: string,
+        transition?: import('../shared/browserHistory').HistoryTransition
+      ) => Promise<string>
       /** 用户关一个 tab（记下地址，reopenClosedTab 能重开） */
       closeTab: (tabId: string) => Promise<void>
       /** 重开最近被用户关掉的页面；没有可重开的回 null */
@@ -914,7 +920,11 @@ declare global {
           agentDevtoolsCalls: number
         }>
       >
-      navigate: (tabId: string, url: string) => Promise<void>
+      navigate: (
+        tabId: string,
+        url: string,
+        transition?: import('../shared/browserHistory').HistoryTransition
+      ) => Promise<void>
       goBack: (tabId: string) => Promise<void>
       goForward: (tabId: string) => Promise<void>
       reload: (tabId: string) => Promise<void>
@@ -1057,6 +1067,26 @@ declare global {
       clearSiteData: (url: string) => Promise<void>
       /** 用户放行过证书错误的站点（直到退出） */
       certExceptions: () => Promise<string[]>
+    }
+    /** 内置浏览器的历史记录与地址栏的搜索建议（只认浏览器窗口外壳，别处调回空） */
+    browserHistory: {
+      /** 地址栏建议：用户自己去过的、对得上这段输入的网址，按分数从高到低（agent 打开的不在里面） */
+      suggest: (text: string) => Promise<import('../shared/browserHistory').HistorySuggestion[]>
+      /** 搜索引擎给的搜索建议；设置里关了、或这段输入不该送（网址、localhost…）时回空 */
+      searchSuggest: (
+        text: string,
+        engine: import('../shared/browserSearchEngines').SearchEngineId
+      ) => Promise<string[]>
+      /** 历史记录页的一页 */
+      list: (
+        query: import('../shared/browserHistory').HistoryListQuery
+      ) => Promise<import('../shared/browserHistory').HistoryListResult>
+      /** 删几行（HistoryItem.key） */
+      remove: (keys: string[]) => Promise<void>
+      /** 把一个网址从历史里整个删掉 */
+      removeUrl: (url: string) => Promise<void>
+      /** 删除全部浏览历史 */
+      clear: () => Promise<void>
     }
     skill: {
       /** 打开 / 复用一个技能的 SKILL.md 笔记本（一份文件至多一条会话）；内置那份只读 */

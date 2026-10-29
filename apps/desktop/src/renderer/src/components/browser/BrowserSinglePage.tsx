@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { internalPageOfTab, selectedTab, useBrowserTabsStore } from '../../stores/browserTabsStore'
 import { NewTabPage, PageErrorView } from './PageFaces'
 import { BrowserSettingsPage } from './BrowserSettingsPage'
+import { BrowserHistoryPage } from './BrowserHistoryPage'
 import { useDialogOverlay } from './useDialogOverlay'
 import type { SearchEngineId } from './omnibox'
 
@@ -16,6 +17,7 @@ import type { SearchEngineId } from './omnibox'
 export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React.JSX.Element {
   const tab = useBrowserTabsStore(selectedTab)
   const navigateTab = useBrowserTabsStore((s) => s.navigateTab)
+  const requestOmniboxFocus = useBrowserTabsStore((s) => s.requestOmniboxFocus)
   const dialogOpen = useDialogOverlay()
   const cover = useBrowserTabsStore((s) => s.pageCover)
   // 对话框、站点信息气泡开着：原生页面让位（它会盖住 DOM 弹层、吃掉鼠标），页面区由截图顶着
@@ -88,11 +90,18 @@ export function BrowserSinglePage({ engine }: { engine: SearchEngineId }): React
         <NewTabPage
           engine={engine}
           onNavigate={(url) => useBrowserTabsStore.getState().createTab(url)}
+          onFocusOmnibox={requestOmniboxFocus}
         />
       ) : internal === 'settings' ? (
         <BrowserSettingsPage />
+      ) : internal === 'history' ? (
+        <BrowserHistoryPage tabId={tab.id} />
       ) : isBlank ? (
-        <NewTabPage engine={engine} onNavigate={(url) => navigateTab(tab.id, url)} />
+        <NewTabPage
+          engine={engine}
+          onNavigate={(url) => navigateTab(tab.id, url)}
+          onFocusOmnibox={requestOmniboxFocus}
+        />
       ) : tab.loadError ? (
         <PageErrorView tab={tab} onRetry={(url) => navigateTab(tab.id, url)} />
       ) : (

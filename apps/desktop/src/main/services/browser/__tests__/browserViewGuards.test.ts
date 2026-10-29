@@ -54,7 +54,8 @@ vi.mock('../agentGuards', () => ({
   installAgentGuards: (tabId: string, wc: unknown) => state.installAgentGuards(tabId, wc),
   uninstallAgentGuards: (tabId: string) => state.uninstallAgentGuards(tabId),
   hasAgentGuards: (tabId: string) => state.hasAgentGuards(tabId),
-  agentActing: () => false
+  agentActing: () => false,
+  agentOpInFlight: () => false
 }))
 vi.mock('../browserCdpService', () => ({
   browserCdpManager: {

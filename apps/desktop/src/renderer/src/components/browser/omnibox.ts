@@ -4,34 +4,16 @@
  */
 
 import { internalPageOf } from '../../../../shared/browserInternalPages'
+import { searchUrl, type SearchEngineId } from '../../../../shared/browserSearchEngines'
 
-/** 地址栏不是网址时用的搜索引擎（设置 → MCP → 内置浏览器那一行里可改） */
-export type SearchEngineId = 'google' | 'bing' | 'baidu' | 'duckduckgo'
-
-export const SEARCH_ENGINE_SETTING = 'browser.searchEngine'
-/** 用户裁定（2026-10-16）：缺省 Google，与 Chrome 一致 */
-export const DEFAULT_SEARCH_ENGINE: SearchEngineId = 'google'
-
-/** 名字是品牌名，不翻译；%s = 编码后的搜索词 */
-export const SEARCH_ENGINES: Record<SearchEngineId, { name: string; template: string }> = {
-  google: { name: 'Google', template: 'https://www.google.com/search?q=%s' },
-  bing: { name: 'Bing', template: 'https://www.bing.com/search?q=%s' },
-  baidu: { name: '百度', template: 'https://www.baidu.com/s?wd=%s' },
-  duckduckgo: { name: 'DuckDuckGo', template: 'https://duckduckgo.com/?q=%s' }
-}
-
-/** 设置里存的值 → 搜索引擎（没设过、或是不认识的值都回缺省） */
-export function searchEngineOf(value: string | undefined | null): SearchEngineId {
-  // 只认自有键：`'toString' in SEARCH_ENGINES` 也是 true
-  return value && Object.hasOwn(SEARCH_ENGINES, value)
-    ? (value as SearchEngineId)
-    : DEFAULT_SEARCH_ENGINE
-}
-
-/** 一个搜索词在某个搜索引擎上的结果页地址 */
-export function searchUrl(query: string, engine: SearchEngineId): string {
-  return SEARCH_ENGINES[engine].template.replace('%s', encodeURIComponent(query))
-}
+export {
+  DEFAULT_SEARCH_ENGINE,
+  SEARCH_ENGINE_SETTING,
+  SEARCH_ENGINES,
+  searchEngineOf,
+  searchUrl,
+  type SearchEngineId
+} from '../../../../shared/browserSearchEngines'
 
 /** 原样打开的协议（用户自己在地址栏里敲的） */
 const PASS_THROUGH = /^(https?|file):\/\//i

@@ -8644,6 +8644,15 @@ export interface BrowserOmniboxInput {
   selectionEnd: number | null
 }
 
+/** 地址栏下拉建议的一行（`[data-omnibox-match]`） */
+export interface BrowserOmniboxRow {
+  /** url / search / history / tab */
+  kind: string
+  /** 列表里的唯一键（`url:<地址>`、`search:<词>`、`history:<地址>`、`tab:<id>`） */
+  key: string
+  selected: boolean
+}
+
 export interface BrowserShellPane {
   /** 左键 mousedown 一个标签（标签条在 mousedown 时选中）；标签不在抛错 */
   clickTab(tabId: string): Promise<void>
@@ -8663,6 +8672,17 @@ export interface BrowserShellPane {
   omniboxInput(): Promise<BrowserOmniboxInput | null>
   /** 往地址栏 input 里打一段字（整段替换：原生 value setter + input 事件） */
   typeInOmnibox(text: string): Promise<void>
+  /**
+   * 经 CDP `Input.insertText` 往**已聚焦**的地址栏里打一段字（可信输入：真的 InputEvent、inputType
+   * insertText、光标在末尾；进编辑时整段地址是选中的，打进去的字替换它）。**不等** value === text ——
+   * 内联补全会把它补长 —— 等 value 停住不变（settleMs 内没再变）之后回此刻的值与选区。
+   */
+  typeInOmniboxTrusted(
+    text: string,
+    opts?: { settleMs?: number }
+  ): Promise<{ value: string; selectionStart: number | null; selectionEnd: number | null }>
+  /** 地址栏下拉建议的行（DOM 序）：种类（`data-omnibox-match`）、键（`data-omnibox-key`）、是否选中；没开为空 */
+  omniboxPopupRows(): Promise<BrowserOmniboxRow[]>
   /** 在地址栏 input 上按一个键 */
   pressInOmnibox(key: 'Enter' | 'Escape'): Promise<void>
   /** 地址栏右端缩放标识的百分比；没有标识回 null */
@@ -8778,6 +8798,45 @@ export function browserShellPane(bw: CdpClient): BrowserShellPane {
       if (!ok) throw new Error('omnibox is not in edit mode')
       await until(async () => (await omniboxInput())?.value === text, `omnibox reads "${text}"`)
     },
+    typeInOmniboxTrusted: async (text, opts = {}) => {
+      const settleMs = opts.settleMs ?? 600
+      const before = await omniboxInput()
+      if (!before?.focused) throw new Error('omnibox input is not in edit mode / not focused')
+      await bw.send('Input.insertText', { text })
+      // 先等打进去的字落进 value（以它开头；内联补全会接着补长），再等 value 与选区停住 settleMs 不变
+      let last = await until(async () => {
+        const now = await omniboxInput()
+        return now && now.value.toLowerCase().startsWith(text.toLowerCase()) ? now : null
+      }, `omnibox took the typed "${text}"`)
+      let stableSince = Date.now()
+      for (;;) {
+        await sleep(100)
+        const now = await omniboxInput()
+        if (!now) throw new Error('omnibox left edit mode while settling')
+        if (
+          now.value !== last.value ||
+          now.selectionStart !== last.selectionStart ||
+          now.selectionEnd !== last.selectionEnd
+        ) {
+          last = now
+          stableSince = Date.now()
+        } else if (Date.now() - stableSince >= settleMs) {
+          return {
+            value: now.value,
+            selectionStart: now.selectionStart,
+            selectionEnd: now.selectionEnd
+          }
+        }
+      }
+    },
+    omniboxPopupRows: () =>
+      bw.eval<BrowserOmniboxRow[]>(
+        `[...document.querySelectorAll('[data-omnibox-match]')].map((el) => ({
+          kind: el.getAttribute('data-omnibox-match') ?? '',
+          key: el.getAttribute('data-omnibox-key') ?? '',
+          selected: el.getAttribute('data-selected') === 'true'
+        }))`
+      ),
     pressInOmnibox: async (key) => {
       const ok = await bw.eval<boolean>(`(() => {
         const el = ${INPUT}
@@ -8830,6 +8889,73 @@ export function browserShellPane(bw: CdpClient): BrowserShellPane {
         pick,
         'search-tabs menu'
       )
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 浏览器窗口里的历史记录页（内部页面 shuvix://history，BrowserHistoryPage，2026-10-29）。在浏览器窗口这个客户端上读。
+//
+// 锚点：
+//   - 页面根 = `[data-browser-history-page]`；一天一个 `section[data-history-day="<YYYY-MM-DD>"]`（本地日期）；
+//   - 一行 = `[data-history-item="<天>|<网址 id>|<会话 id>"]`，带 `data-history-url`（完整地址）与
+//     `data-history-session`（agent 打开的那行才有）；行里的标题链接 = `[data-history-open]`，删除 = `[data-history-remove]`；
+//   - agent 那行的会话标签 = `[data-history-agent="<会话 id>"]`（文字 = 会话标题），点它回到那段对话；
+//   - 搜索框 = `[data-history-search]`，过滤 = `[data-history-filter="all|user|agent"]`，清除 = `[data-history-clear]`
+//     → `[data-history-clear-confirm]`，空态 = `[data-history-empty]`。
+
+export interface HistoryPageItemShot {
+  key: string
+  url: string
+  /** agent 打开的那行的会话 id；用户自己的为 null */
+  sessionId: string | null
+  /** 所在那一天（`data-history-day`） */
+  day: string | null
+  /** 会话标签的文字；没有标签为 null */
+  agentChip: string | null
+}
+
+export interface HistoryPagePane {
+  /** 历史记录页挂着 */
+  present(): Promise<boolean>
+  /** 各天的分组（DOM 序） */
+  days(): Promise<string[]>
+  /** 全部行（DOM 序） */
+  items(): Promise<HistoryPageItemShot[]>
+  /** 点某个会话的标签；不在抛错 */
+  clickAgentChip(sessionId: string): Promise<void>
+}
+
+/** 浏览器窗口里的历史记录页（shuvix://history） */
+export function historyPagePane(bw: CdpClient): HistoryPagePane {
+  const ROOT = `document.querySelector('[data-browser-history-page]')`
+  return {
+    present: () => bw.eval<boolean>(`!!${ROOT}`),
+    days: () =>
+      bw.eval<string[]>(
+        `[...(${ROOT}?.querySelectorAll('[data-history-day]') ?? [])].map((el) => el.getAttribute('data-history-day') ?? '')`
+      ),
+    items: () =>
+      bw.eval<HistoryPageItemShot[]>(
+        `[...(${ROOT}?.querySelectorAll('[data-history-item]') ?? [])].map((el) => ({
+          key: el.getAttribute('data-history-item') ?? '',
+          url: el.getAttribute('data-history-url') ?? '',
+          sessionId: el.getAttribute('data-history-session'),
+          day: el.closest('[data-history-day]')?.getAttribute('data-history-day') ?? null,
+          agentChip: (() => {
+            const chip = el.querySelector('[data-history-agent]')
+            return chip ? (chip.textContent ?? '').trim() : null
+          })()
+        }))`
+      ),
+    clickAgentChip: async (sessionId) => {
+      const ok = await bw.eval<boolean>(`(() => {
+        const el = ${ROOT}?.querySelector('[data-history-agent="${sessionId}"]')
+        if (!el) return false
+        el.click()
+        return true
+      })()`)
+      if (!ok) throw new Error(`history page: no agent chip for session ${sessionId}`)
+    }
   }
 }
 

@@ -167,6 +167,14 @@ export function agentActing(tabId: string): boolean {
   return !!g && (g.inflight > 0 || g.disarmTimer !== null)
 }
 
+/**
+ * agent 的一个动作此刻正在这个 tab 上进行（不含动作之后的宽限期）—— 历史记录据此判断一次真实的按键 / 鼠标按下
+ * 是不是用户的：动作期间 CDP 发的鼠标也会触发 before-mouse-event，动作一结束用户点的就是用户的。
+ */
+export function agentOpInFlight(tabId: string): boolean {
+  return (guards.get(tabId)?.inflight ?? 0) > 0
+}
+
 /** detach / tab 关闭时摘掉 */
 export function uninstallAgentGuards(tabId: string): void {
   const g = guards.get(tabId)

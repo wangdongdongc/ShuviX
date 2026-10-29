@@ -111,6 +111,7 @@ export async function showMoreMenu(opts: {
     },
     SEP,
     ...(page && isWeb(page) ? [{ id: 'openExternal', label: t('browser.openExternal') }] : []),
+    { id: 'history', label: t('browser.menu.history') },
     { id: 'settings', label: t('browser.menu.settings') }
   ])
   switch (action) {
@@ -140,6 +141,10 @@ export async function showMoreMenu(opts: {
       return
     case 'openExternal':
       if (page) openExternal(page)
+      return
+    case 'history':
+      // 历史记录页（shuvix://history；已经开着就选中它）
+      void window.api.browserView.openInternal('history')
       return
     case 'settings':
       // 浏览器自己的设置页（shuvix://settings；已经开着就选中它）

@@ -15,6 +15,9 @@
  *          （Windows / Linux，非拉丁布局退回物理键位）；别的修饰组合 → null；按住不放不连发。
  *   DD-U22 「选择元素」：⌥⌘C 与 ⌘⇧C（macOS）、Ctrl+Shift+C（Windows / Linux）；⌘C（拷贝）与别的修饰组合
  *          → null；按住不放不连发；⌥⌘ + 物理 I / J / C 的 key 是 Dead 时各归各的动作，⌥⌘K 不是。
+ *   SC-1   历史记录页（照 Chrome）：macOS ⌘Y；⌘H（系统的「隐藏」）、⌘⇧Y、⌃Y、⌥⌘Y → null；
+ *   SC-2   Windows / Linux Ctrl+H；Ctrl+Y、Ctrl+Shift+H、Alt+H、Ctrl+Alt+H → null；
+ *   SC-3   非拉丁布局退回物理键位：macOS ⌘ + key「н」（物理 KeyY）、Windows Ctrl + key「р」（物理 KeyH）→ history。
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -443,5 +446,55 @@ describe('「选择元素」（DD-U22）', () => {
     expect(
       browserShortcutFor(press(code, { meta: true, alt: true }, { key: 'Dead' }), 'darwin')
     ).toStrictEqual(expected)
+  })
+})
+
+describe('历史记录页（SC-1 ~ SC-3）', () => {
+  const HISTORY: BrowserShortcut = { type: 'history' }
+
+  it('SC-1 macOS：⌘Y → history', () => {
+    expect(browserShortcutFor(press('KeyY', { meta: true }), 'darwin')).toStrictEqual(HISTORY)
+  })
+
+  it.each([
+    ['⌘H', press('KeyH', { meta: true })],
+    ['⌘⇧Y', press('KeyY', { meta: true, shift: true }, { key: 'Y' })],
+    ['⌃Y', press('KeyY', { control: true })],
+    ['⌥⌘Y', press('KeyY', { meta: true, alt: true }, { key: '¥' })],
+    ['Ctrl+H', press('KeyH', { control: true })]
+  ])('SC-1 macOS：%s → null', (_label, input) => {
+    expect(browserShortcutFor(input, 'darwin')).toBeNull()
+  })
+
+  it.each(['win32', 'linux'] as const)('SC-2 %s：Ctrl+H → history', (platform) => {
+    expect(browserShortcutFor(press('KeyH', { control: true }), platform)).toStrictEqual(HISTORY)
+  })
+
+  it.each(['win32', 'linux'] as const)(
+    'SC-2 %s：Ctrl+Y、Ctrl+Shift+H、Alt+H、Ctrl+Alt+H、Meta+Y → null',
+    (platform) => {
+      for (const [label, input] of [
+        ['Ctrl+Y', press('KeyY', { control: true })],
+        ['Ctrl+Shift+H', press('KeyH', { control: true, shift: true }, { key: 'H' })],
+        ['Alt+H', press('KeyH', { alt: true })],
+        ['Ctrl+Alt+H', press('KeyH', { control: true, alt: true })],
+        ['Meta+Y', press('KeyY', { meta: true })]
+      ] as const) {
+        expect(browserShortcutFor(input, platform), label).toBeNull()
+      }
+    }
+  )
+
+  it('SC-3 非拉丁布局退回物理键位：macOS ⌘ +「н」（KeyY）、Windows Ctrl +「р」（KeyH）→ history', () => {
+    expect(browserShortcutFor(press('KeyY', { meta: true }, { key: 'н' }), 'darwin')).toStrictEqual(
+      HISTORY
+    )
+    expect(
+      browserShortcutFor(press('KeyH', { control: true }, { key: 'р' }), 'win32')
+    ).toStrictEqual(HISTORY)
+    // 拉丁布局上按布局打出来的字母认：AZERTY 之类把 Y 换了位置的照样是 Y
+    expect(browserShortcutFor(press('KeyZ', { meta: true }, { key: 'y' }), 'darwin')).toStrictEqual(
+      HISTORY
+    )
   })
 })

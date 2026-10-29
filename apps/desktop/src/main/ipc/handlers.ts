@@ -29,6 +29,7 @@ import { registerTerminalHandlers } from './terminalHandlers'
 import { registerBgTaskHandlers } from './bgTaskHandlers'
 import { registerBrowserViewHandlers } from './browserViewHandlers'
 import { registerBrowserDataHandlers } from './browserDataHandlers'
+import { registerBrowserHistoryHandlers } from './browserHistoryHandlers'
 import { registerContextMenuHandlers } from './contextMenuHandlers'
 import { registerWidgetHandlers } from './widgetHandlers'
 import { registerConfigShareHandlers } from './configShareHandlers'
@@ -79,6 +80,7 @@ export function registerIpcHandlers(): void {
   registerBgTaskHandlers()
   registerBrowserViewHandlers()
   registerBrowserDataHandlers()
+  registerBrowserHistoryHandlers()
   registerContextMenuHandlers()
   registerWidgetHandlers()
   registerConfigShareHandlers()

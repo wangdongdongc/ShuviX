@@ -4,7 +4,7 @@
  *
  *   CB-U40  未聚焦的地址栏：主机名与其余部分分开（其余变淡），https 一把锁、http 写 Not secure、file: 显示
  *           路径；空白页 / 没有 tab 时是占位文字，引擎名随 prop；
- *   CB-U41  mousedown 进编辑：完整地址、整段选中；Enter 照 Chrome 的判断打开（像域名补 https://、有空白
+ *   CB-U41  mousedown 进编辑：完整地址、整段选中；Enter 照 Chrome 的判断打开（网址带 typed、搜索带 generated；像域名补 https://、有空白
  *           按引擎搜索）；没选中任何 tab 时新开一个；空输入什么也不做；Esc 不导航、显示复原；输入法组字中
  *           的 Enter 什么也不做；
  *   CB-U42  requestOmniboxFocus() → 进编辑；挂载时 nonce 已经不是 0 不算；
@@ -164,7 +164,7 @@ describe('编辑地址栏（CB-U41）', () => {
     const el = await beginEdit()
     typeInto(el, 'example.org')
     keyDown(el, 'Enter')
-    expect(api.browserView.navigate.mock.calls).toEqual([['t1', 'https://example.org']])
+    expect(api.browserView.navigate.mock.calls).toEqual([['t1', 'https://example.org', 'typed']])
     expect(api.browserView.createTab).not.toHaveBeenCalled()
     expect(input()).toBeNull()
   })
@@ -176,7 +176,7 @@ describe('编辑地址栏（CB-U41）', () => {
     typeInto(el, 'hello world')
     keyDown(el, 'Enter')
     expect(api.browserView.navigate.mock.calls).toEqual([
-      ['t1', 'https://www.bing.com/search?q=hello%20world']
+      ['t1', 'https://www.bing.com/search?q=hello%20world', 'generated']
     ])
   })
 
@@ -187,7 +187,7 @@ describe('编辑地址栏（CB-U41）', () => {
     expect(el.value).toBe('')
     typeInto(el, 'localhost:3000')
     keyDown(el, 'Enter')
-    expect(api.browserView.createTab.mock.calls).toEqual([['http://localhost:3000']])
+    expect(api.browserView.createTab.mock.calls).toEqual([['http://localhost:3000', 'typed']])
     expect(api.browserView.navigate).not.toHaveBeenCalled()
   })
 
@@ -370,7 +370,7 @@ describe('内部页面（BS-U25 / BS-U26）', () => {
     const el = await beginEdit()
     typeInto(el, '  shuvix://settings ')
     keyDown(el, 'Enter')
-    expect(api.browserView.navigate.mock.calls).toEqual([['t1', 'shuvix://settings']])
+    expect(api.browserView.navigate.mock.calls).toEqual([['t1', 'shuvix://settings', 'typed']])
     expect(api.browserView.createTab).not.toHaveBeenCalled()
   })
 
@@ -380,7 +380,7 @@ describe('内部页面（BS-U25 / BS-U26）', () => {
     const el = await beginEdit()
     typeInto(el, 'shuvix://settings')
     keyDown(el, 'Enter')
-    expect(api.browserView.createTab.mock.calls).toEqual([['shuvix://settings']])
+    expect(api.browserView.createTab.mock.calls).toEqual([['shuvix://settings', 'typed']])
   })
 })
 

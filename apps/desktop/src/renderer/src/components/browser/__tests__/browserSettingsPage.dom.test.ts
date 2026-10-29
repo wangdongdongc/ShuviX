@@ -24,6 +24,14 @@
  *           来的也照办；
  *   SD-U29  不带 site 的跳转请求、此刻在详情里 → 离开详情、再列一次、滚到那一节。
  *
+ * 历史记录与搜索建议（2026-10-29）：
+ *   BSP-1   「Show search suggestions」开关：没设过 → 开、'false' → 关、'true' → 开；问号里的说明写着当前的搜索引擎
+ *           （换了引擎跟着换）
+ *   BSP-2   拨开关 → settings.set({key:'browser.searchSuggest', value:'false'})，再拨 → 'true'
+ *   BSP-3   「Delete browsing history」要确认：取消不清；确认 → browserHistory.clear() 一次、回到按钮；clear 失败 →
+ *           同样回到按钮、没有未处理的拒绝
+ *   BSP-4   「View history」→ browserView.openInternal('history')
+ *
  * `window.api` 是 browserDomSupport 的假件；store 是真的；SettingsPrimitives 走 vitest 别名到 app-shell 的真组件；
  * 真 en 文案。jsdom 没有 scrollIntoView：换成间谍（按 this 认是哪一节）。
  */
@@ -659,5 +667,119 @@ describe('跳转请求与导航（BS-U44）', () => {
     for (const id of ['search', 'privacy', 'certificates']) {
       expect($(`[data-settings-section="${id}"]`), id).not.toBeNull()
     }
+  })
+})
+
+describe('搜索建议开关（BSP-1 / BSP-2）', () => {
+  const SUGGEST_KEY = 'browser.searchSuggest'
+  const holder = (): HTMLElement => $('[data-search-suggest-toggle]')!
+  const toggle = (): HTMLButtonElement => holder().querySelector('button')!
+  /** 那一行问号里的说明（聚焦问号才挂出来，挂在 body 上） */
+  const hint = (): string => {
+    const row = holder().closest('[data-settings-row]')!
+    const button = row.querySelector<HTMLButtonElement>('[data-info-hint]')!
+    act(() => button.focus())
+    const text = document.querySelector('[data-info-tip]')?.textContent ?? ''
+    act(() => button.blur())
+    return text
+  }
+
+  it.each([
+    [undefined, 'true'],
+    ['false', 'false'],
+    ['true', 'true'],
+    ['', 'true']
+  ] as const)('BSP-1 存着 %j → 开关 %s', async (stored, shown) => {
+    if (stored !== undefined) api.settingsMap = { [SUGGEST_KEY]: stored }
+    await mount()
+    expect(holder().getAttribute('data-search-suggest-toggle')).toBe(shown)
+    expect(toggle().className.includes('bg-accent')).toBe(shown === 'true')
+    expect(section('search').textContent).toContain('Show search suggestions')
+  })
+
+  it('BSP-1 说明写着当前的搜索引擎；换了引擎跟着换', async () => {
+    api.settingsMap = { [ENGINE_KEY]: 'bing' }
+    await mount()
+    expect(hint()).toContain('sent to Bing for suggestions')
+    choose(engineSelect(), 'baidu')
+    expect(hint()).toContain('sent to 百度 for suggestions')
+  })
+
+  it("BSP-2 拨开关：写 'false'，再拨写 'true'；开关跟着变", async () => {
+    await mount()
+    click(toggle())
+    expect(api.settings.set.mock.calls).toEqual([[{ key: SUGGEST_KEY, value: 'false' }]])
+    expect(holder().getAttribute('data-search-suggest-toggle')).toBe('false')
+    click(toggle())
+    expect(api.settings.set.mock.calls).toEqual([
+      [{ key: SUGGEST_KEY, value: 'false' }],
+      [{ key: SUGGEST_KEY, value: 'true' }]
+    ])
+    expect(holder().getAttribute('data-search-suggest-toggle')).toBe('true')
+  })
+})
+
+describe('删除浏览历史与查看历史（BSP-3 / BSP-4）', () => {
+  const cancelOf = (): HTMLButtonElement => {
+    const confirm = $('[data-clear-history-confirm]')!
+    return [...confirm.parentElement!.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.trim() === 'Cancel'
+    )!
+  }
+
+  it('BSP-3 取消：什么也不清，回到按钮', async () => {
+    await mount()
+    expect(section('privacy').textContent).toContain('Delete browsing history')
+    click($('[data-clear-history]')!)
+    expect($('[data-clear-history-confirm]')?.textContent).toContain('Confirm')
+    expect($('[data-clear-history]')).toBeNull()
+    click(cancelOf())
+    expect($('[data-clear-history-confirm]')).toBeNull()
+    expect($('[data-clear-history]')).not.toBeNull()
+    expect(api.browserHistory.clear).not.toHaveBeenCalled()
+  })
+
+  it('BSP-3 确认：clear() 一次（清的时候确认按钮禁用），之后回到按钮；不碰网站数据', async () => {
+    let finish!: () => void
+    api.browserHistory.clear.mockImplementation(
+      () => new Promise<void>((resolve) => (finish = resolve))
+    )
+    await mount()
+    click($('[data-clear-history]')!)
+    click($('[data-clear-history-confirm]')!)
+    expect(api.browserHistory.clear).toHaveBeenCalledTimes(1)
+    await flush()
+    expect($<HTMLButtonElement>('[data-clear-history-confirm]')!.disabled).toBe(true)
+    await act(async () => finish())
+    await flush()
+    expect($('[data-clear-history-confirm]')).toBeNull()
+    expect($('[data-clear-history]')).not.toBeNull()
+    expect(api.browserData.clearAll).not.toHaveBeenCalled()
+  })
+
+  it('BSP-3 clear 失败：回到按钮、没有未处理的拒绝', async () => {
+    const seen: unknown[] = []
+    const onRejection = (reason: unknown): void => void seen.push(reason)
+    process.on('unhandledRejection', onRejection)
+    try {
+      api.browserHistory.clear.mockRejectedValue(new Error('locked'))
+      await mount()
+      click($('[data-clear-history]')!)
+      click($('[data-clear-history-confirm]')!)
+      await flush()
+      expect(api.browserHistory.clear).toHaveBeenCalledTimes(1)
+      expect($('[data-clear-history-confirm]')).toBeNull()
+      expect($('[data-clear-history]')).not.toBeNull()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(seen).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onRejection)
+    }
+  })
+
+  it("BSP-4 View history → browserView.openInternal('history')", async () => {
+    await mount()
+    click($('[data-open-history]')!)
+    expect(api.browserView.openInternal.mock.calls).toEqual([['history']])
   })
 })

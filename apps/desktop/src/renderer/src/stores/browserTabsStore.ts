@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { internalPageOf, type InternalPage } from '../../../shared/browserInternalPages'
 import type { DevtoolsDockPanel, DevtoolsDockState } from '../../../shared/browserAgentDevtools'
+import type { HistoryTransition } from '../../../shared/browserHistory'
 
 /** 浏览器 tab 的镜像信息（真源在主进程 browserViewService，经 useBrowserTabsBridge 事件同步） */
 export interface BrowserTabInfo {
@@ -78,11 +79,12 @@ interface BrowserTabsState {
   settingsFocus: SettingsFocus | null
   pageCover: PageCover | null
 
-  createTab: (url?: string) => void
+  /** `transition`：从地址栏开的（typed = 网址、generated = 搜索），记进历史用 */
+  createTab: (url?: string, transition?: HistoryTransition) => void
   closeTab: (id: string) => void
   reopenClosedTab: () => void
   activateTab: (id: string) => void
-  navigateTab: (id: string, url: string) => void
+  navigateTab: (id: string, url: string, transition?: HistoryTransition) => void
   zoomTab: (id: string, direction: 'in' | 'out' | 'reset') => void
   /** 打开这一页的停靠区、停在某个页签（用户的动作） */
   openDevtools: (id: string, panel: DevtoolsDockPanel) => void
@@ -106,8 +108,9 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
   settingsFocus: null,
   pageCover: null,
 
-  createTab: (url) => {
-    void api()?.createTab(url)
+  createTab: (url, transition) => {
+    if (transition) void api()?.createTab(url, transition)
+    else void api()?.createTab(url)
   },
   closeTab: (id) => {
     void api()?.closeTab(id)
@@ -118,8 +121,9 @@ export const useBrowserTabsStore = create<BrowserTabsState>((set) => ({
   activateTab: (id) => {
     void api()?.activateTab(id)
   },
-  navigateTab: (id, url) => {
-    void api()?.navigate(id, url)
+  navigateTab: (id, url, transition) => {
+    if (transition) void api()?.navigate(id, url, transition)
+    else void api()?.navigate(id, url)
   },
   zoomTab: (id, direction) => {
     void api()?.zoom(id, direction)

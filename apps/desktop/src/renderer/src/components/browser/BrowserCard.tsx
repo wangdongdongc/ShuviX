@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import { internalPageOfTab, type BrowserTabInfo } from '../../stores/browserTabsStore'
 import { BrowserSettingsPage } from './BrowserSettingsPage'
+import { BrowserHistoryPage } from './BrowserHistoryPage'
 import { tabLabel } from './tabUtils'
 import { TabFavicon } from './TabFavicon'
 import { NewTabPage, PageErrorView } from './PageFaces'
@@ -88,6 +89,8 @@ export function BrowserCard({
       <div className="flex-1 min-h-0 relative bg-bg-primary">
         {internalPageOfTab(tab) === 'settings' ? (
           <BrowserSettingsPage compact />
+        ) : internalPageOfTab(tab) === 'history' ? (
+          <BrowserHistoryPage tabId={tab.id} compact />
         ) : isBlank ? (
           <NewTabPage engine={DEFAULT_SEARCH_ENGINE} onNavigate={onNavigate} compact />
         ) : tab.loadError ? (

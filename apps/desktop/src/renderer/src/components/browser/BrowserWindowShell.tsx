@@ -15,6 +15,10 @@ import { BrowserWall } from './BrowserWall'
 import { BrowserDevtoolsDock } from './BrowserDevtoolsDock'
 import { DOCK_DEFAULT_HEIGHT, clampDockHeight } from './dockHeight'
 import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_SETTING, searchEngineOf } from './omnibox'
+import {
+  SEARCH_SUGGEST_SETTING,
+  searchSuggestEnabled
+} from '../../../../shared/browserSearchEngines'
 
 /**
  * 浏览器独立窗口根组件（hash #browser-window）—— 照 Chrome 的样子（2026-10-16 用户裁定）：
@@ -36,6 +40,7 @@ import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_SETTING, searchEngineOf } from './
 export function BrowserWindowShell(): React.JSX.Element {
   const { theme, darkTheme, lightTheme, fontSize } = useSettingsStore()
   const [engine, setEngine] = useState(DEFAULT_SEARCH_ENGINE)
+  const [searchSuggest, setSearchSuggest] = useState(true)
   const [viewMode, setViewMode] = useState<BrowserViewMode>('single')
   const [dockHeight, setDockHeight] = useState(DOCK_DEFAULT_HEIGHT)
 
@@ -47,6 +52,7 @@ export function BrowserWindowShell(): React.JSX.Element {
       const settings = await window.api.settings.getAll()
       useSettingsStore.getState().loadSettings(settings)
       setEngine(searchEngineOf(settings[SEARCH_ENGINE_SETTING]))
+      setSearchSuggest(searchSuggestEnabled(settings[SEARCH_SUGGEST_SETTING]))
       setViewMode(settings[VIEW_MODE_SETTING] === 'wall' ? 'wall' : 'single')
       const savedHeight = Number(settings[DEVTOOLS_HEIGHT_SETTING])
       if (savedHeight > 0) setDockHeight(savedHeight)
@@ -108,7 +114,12 @@ export function BrowserWindowShell(): React.JSX.Element {
       data-view-mode={viewMode}
     >
       <BrowserTabStrip />
-      <BrowserToolbar engine={engine} viewMode={viewMode} onViewMode={changeViewMode} />
+      <BrowserToolbar
+        engine={engine}
+        searchSuggest={searchSuggest}
+        viewMode={viewMode}
+        onViewMode={changeViewMode}
+      />
       <AgentInfobar />
       <div className="flex-1 min-h-0">
         {viewMode === 'wall' ? (

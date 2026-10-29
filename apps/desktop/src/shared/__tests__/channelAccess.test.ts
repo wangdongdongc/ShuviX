@@ -24,6 +24,9 @@
  *        开笔记本 / 开目录 / 删一项是 write；settings:set 写 triggers.timer.enabled → agents + admin；
  *        触发日志：trigger:logs 是 agents 的 read，trigger:clearLogs 是 agents 的 write
  *   CS-8 应用日志（2026-10-25）：appLog:info / appLog:tail 是 system 的 read（与 LLM 请求日志同级）
+ *   CS-9 内置浏览器的历史记录（2026-10-29）：browser-history:suggest / :list 是 admin（历史里的网址可能带着登录
+ *        令牌），:search-suggest / :remove / :remove-url / :clear 是 write，都在 browser scope（browserHistory 分组）；
+ *        settings:set 写 browser.searchSuggest → browser + write（落在 browser. 前缀上）
  */
 import { describe, expect, it } from 'vitest'
 import { API_OVERRIDE_CHANNELS, API_TABLE } from '../apiTable'
@@ -434,5 +437,37 @@ describe('CS-8 应用日志', () => {
     expect(channelAccessOf(channel)).toBe(access)
     expect(channelScopeOf(channel)).toBe(scope)
     expect(channelCallFactsOf(channel, [])).toEqual({ scope, access })
+  })
+})
+
+describe('CS-9 内置浏览器的历史记录', () => {
+  it.each<[string, ChannelAccess]>([
+    ['browser-history:suggest', 'admin'],
+    ['browser-history:list', 'admin'],
+    ['browser-history:search-suggest', 'write'],
+    ['browser-history:remove', 'write'],
+    ['browser-history:remove-url', 'write'],
+    ['browser-history:clear', 'write']
+  ])('CS-9 %s → %s / browser', (channel, access) => {
+    expect(REQUEST_CHANNELS.has(channel), channel).toBe(true)
+    expect(channelAccessOf(channel)).toBe(access)
+    expect(channelGroupOf(channel)).toBe('browserHistory')
+    expect(channelScopeOf(channel)).toBe('browser')
+    expect(channelCallFactsOf(channel, [])).toEqual({ scope: 'browser', access })
+  })
+
+  it('CS-9 GROUP_SCOPE.browserHistory = browser', () => {
+    expect(GROUP_SCOPE.browserHistory).toBe('browser')
+  })
+
+  it('CS-9 settings:set 写 browser.searchSuggest → browser + write（落在 browser. 前缀上）', () => {
+    expect(settingKeyFactsOf('browser.searchSuggest')).toEqual({
+      scope: 'browser',
+      access: 'write',
+      matched: 'browser.'
+    })
+    expect(
+      channelCallFactsOf('settings:set', [{ key: 'browser.searchSuggest', value: 'false' }])
+    ).toEqual({ scope: 'browser', access: 'write' })
   })
 })

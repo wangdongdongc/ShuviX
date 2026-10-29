@@ -77,10 +77,10 @@ exception. The list is generated from the channel table of this version.
 
 ### `browser`
 
-- group: `browserData`, `browserView`
+- group: `browserData`, `browserHistory`, `browserView`
 - read: `browser-data:cert-exceptions`, `browser-data:list-sites`, `browser-data:site-info`, `browser-view:capture`, `browser-view:get-url`, `browser-view:is-window-open`, `browser-view:list-tabs`
-- write: `browser-data:clear-all`, `browser-data:clear-origin`, `browser-data:clear-site`, `browser-data:clear-site-category`, `browser-data:clear-site-data`, `browser-data:remove-cookie`, `browser-view:activate-tab`, `browser-view:agent-devtools-clear`, `browser-view:close-tab`, `browser-view:create-tab`, `browser-view:devtools-close`, `browser-view:devtools-open`, `browser-view:go-back`, `browser-view:go-forward`, `browser-view:navigate`, `browser-view:open-internal`, `browser-view:open-session`, `browser-view:open-settings`, `browser-view:open-window`, `browser-view:reload`, `browser-view:reopen-closed-tab`, `browser-view:set-devtools-layout`, `browser-view:set-layout`, `browser-view:set-visible`, `browser-view:stop`, `browser-view:zoom`
-- admin: `browser-data:site-details`, `browser-view:agent-devtools`, `browser-view:proceed-unsafe`
+- write: `browser-data:clear-all`, `browser-data:clear-origin`, `browser-data:clear-site`, `browser-data:clear-site-category`, `browser-data:clear-site-data`, `browser-data:remove-cookie`, `browser-history:clear`, `browser-history:remove`, `browser-history:remove-url`, `browser-history:search-suggest`, `browser-view:activate-tab`, `browser-view:agent-devtools-clear`, `browser-view:close-tab`, `browser-view:create-tab`, `browser-view:devtools-close`, `browser-view:devtools-open`, `browser-view:go-back`, `browser-view:go-forward`, `browser-view:navigate`, `browser-view:open-internal`, `browser-view:open-session`, `browser-view:open-settings`, `browser-view:open-window`, `browser-view:reload`, `browser-view:reopen-closed-tab`, `browser-view:set-devtools-layout`, `browser-view:set-layout`, `browser-view:set-visible`, `browser-view:stop`, `browser-view:zoom`
+- admin: `browser-data:site-details`, `browser-history:list`, `browser-history:suggest`, `browser-view:agent-devtools`, `browser-view:proceed-unsafe`
 - `settings:set` write: `browser.*`
 - `settings:set` admin: `tool.browser.*`
 

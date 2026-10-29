@@ -24,6 +24,9 @@
  *          下一个动作重新打开（救回来的渲染进程未必还拦着）。
  *   CR-U13 安装还没装完（Page.enable 迟迟不回）时来的动作先等它：装完按序打开拦截、再开始；
  *          Page.enable 失败也照样落定，动作照跑。
+ *   HG-1   agentOpInFlight（历史记录据此判断真的按键 / 鼠标是不是用户的）：只在 withAgentGuards 包着的动作
+ *          进行中为真（重叠的动作都结束才假）；动作结束后的宽限期里为假（agentActing 那时仍为真）；动作抛错
+ *          照样落回假；没装防护的 tab、不认识的 tab 一律假。
  *
  * electron 换成 ./fakeElectron.ts（只用到 dialog）；browserViewService 只剩 browserWindowInFront 一个
  * 可拨的间谍；logger 的四个方法是间谍。模块级的防护表每条用例都要新的：beforeEach 里 resetModules，
@@ -940,5 +943,89 @@ describe('动作先等防护装完（CR-U13）', () => {
     expect(ran).toHaveBeenCalledTimes(1)
     expect(logged('warn', 'installing agent guards on tab t1 failed')).toBe(1)
     expect(timeline).toEqual(['Page.enable', INTERCEPT, 'op'])
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// HG-1 agentOpInFlight：只看动作在不在进行，不含宽限期
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('agentOpInFlight：只在动作进行中为真（HG-1）', () => {
+  it('HG-1 动作进行中为真；结束后的宽限期里为假（agentActing 仍为真）；宽限期过了两者都假', async () => {
+    vi.useFakeTimers()
+    const g = await load()
+    const wc = fakeWc()
+    await install(g, 't1', wc)
+    expect(g.agentOpInFlight('t1')).toBe(false)
+    expect(g.agentActing('t1')).toBe(false)
+
+    const op = deferredOp('clicked')
+    let seenInside: [boolean, boolean] | null = null
+    const wrapped = g.withAgentGuards('t1', async () => {
+      seenInside = [g.agentOpInFlight('t1'), g.agentActing('t1')]
+      return op.op()
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(op.started).toBe(true)
+    expect(seenInside).toEqual([true, true])
+    expect(g.agentOpInFlight('t1')).toBe(true)
+
+    op.finish()
+    await expect(wrapped).resolves.toEqual({ result: 'clicked', suppressed: [] })
+    expect(g.agentOpInFlight('t1')).toBe(false)
+    expect(g.agentActing('t1')).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(GRACE - 1)
+    expect(g.agentOpInFlight('t1')).toBe(false)
+    expect(g.agentActing('t1')).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(g.agentOpInFlight('t1')).toBe(false)
+    expect(g.agentActing('t1')).toBe(false)
+  })
+
+  it('HG-1 重叠的两个动作：先结束一个仍为真，两个都结束才假', async () => {
+    vi.useFakeTimers()
+    const g = await load()
+    const wc = fakeWc()
+    await install(g, 't1', wc)
+    const a = deferredOp('A')
+    const b = deferredOp('B')
+    const pa = g.withAgentGuards('t1', a.op)
+    const pb = g.withAgentGuards('t1', b.op)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(a.started && b.started).toBe(true)
+
+    a.finish()
+    await pa
+    expect(g.agentOpInFlight('t1')).toBe(true)
+    b.finish()
+    await pb
+    expect(g.agentOpInFlight('t1')).toBe(false)
+  })
+
+  it('HG-1 动作抛错：照样落回假', async () => {
+    vi.useFakeTimers()
+    const g = await load()
+    const wc = fakeWc()
+    await install(g, 't1', wc)
+    await expect(
+      g.withAgentGuards('t1', async () => {
+        expect(g.agentOpInFlight('t1')).toBe(true)
+        throw new Error('click failed')
+      })
+    ).rejects.toThrow('click failed')
+    expect(g.agentOpInFlight('t1')).toBe(false)
+  })
+
+  it('HG-1 没装防护的 tab（动作照跑）、不认识的 tab：一律假', async () => {
+    const g = await load()
+    let inside: boolean | null = null
+    await g.withAgentGuards('t-unguarded', async () => {
+      inside = g.agentOpInFlight('t-unguarded')
+      return 'ran'
+    })
+    expect(inside).toBe(false)
+    expect(g.agentOpInFlight('t-unguarded')).toBe(false)
+    expect(g.agentOpInFlight('nope')).toBe(false)
   })
 })

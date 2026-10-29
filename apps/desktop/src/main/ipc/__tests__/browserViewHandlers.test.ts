@@ -18,6 +18,10 @@
  *   BS-U21 navigate 交给 navigateTab（含 shuvix://），非字符串不理；capture 的 maxWidth 只认正数，其余给
  *       undefined；create-tab 带内部页面地址 → openInternalPage（不 createTab、不聚焦地址栏）、回它的 id；
  *       get-url 回 tabDisplayUrl。
+ *   BVI-1 历史记录用的 transition：create-tab(url, 'typed' | 'generated') 把它放进 createTab 的选项；'link' /
+ *       不认识的串 / 数字 → 选项里没有这个键；navigate 同理（navigateTab 的第三个参数，认不出时是 undefined）
+ *   BVI-2 go-back / go-forward / reload 是用户的动作：先 historyNoteUser(tabId) 再导航，而且只在真的会发生时
+ *       （canGoBack / canGoForward 假 → 不记、不导航；没有这个 tab → 什么也不做）
  *
  * electron 是替身（on / handle 收进 Map）；services/browser 整个换成间谍 —— 宿主判断固定为
  * 「webContents id 7 是宿主」。
@@ -40,7 +44,10 @@ const state = vi.hoisted(() => ({
   openAgentSession: vi.fn<(sessionId: string) => boolean>(() => false),
   requestOmniboxFocus: vi.fn<() => void>(),
   openInternalPage: vi.fn<(page: string) => string>(() => 'tab-settings'),
-  navigateTab: vi.fn<(tabId: string, url: string) => void>(),
+  navigateTab: vi.fn<(tabId: string, url: string, transition?: string) => void>(),
+  historyNoteUser: vi.fn<(tabId: string) => void>(),
+  /** getTabView 回的假 view（null = 没有这个 tab） */
+  tabView: null as unknown,
   proceedPastCertError: vi.fn<(...args: unknown[]) => boolean>(() => true),
   tabDisplayUrl: vi.fn<(tabId: string) => string>(() => 'shuvix://settings'),
   captureTab: vi.fn<(tabId: string, maxWidth?: number) => Promise<string>>(async () => 'data:x')
@@ -58,7 +65,7 @@ vi.mock('../../services/browser', () => ({
   closeTab: (tabId: string, opts?: { remember?: boolean }) => state.closeTab(tabId, opts),
   activateTab: vi.fn(),
   listTabs: vi.fn(() => []),
-  getTabView: vi.fn(() => null),
+  getTabView: () => state.tabView,
   captureTab: (tabId: string, maxWidth?: number) => state.captureTab(tabId, maxWidth),
   setLayout: (entries: unknown) => state.setLayout(entries),
   setPanelVisible: (visible: boolean) => state.setPanelVisible(visible),
@@ -70,7 +77,9 @@ vi.mock('../../services/browser', () => ({
   zoomTab: (tabId: string, direction: string) => state.zoomTab(tabId, direction),
   openAgentSession: (sessionId: string) => state.openAgentSession(sessionId),
   openInternalPage: (page: string) => state.openInternalPage(page),
-  navigateTab: (tabId: string, url: string) => state.navigateTab(tabId, url),
+  navigateTab: (tabId: string, url: string, transition?: string) =>
+    state.navigateTab(tabId, url, transition),
+  historyNoteUser: (tabId: string) => state.historyNoteUser(tabId),
   // 原样转交全部实参：「多余参数丢掉」要在 handler 那一侧看得见
   proceedPastCertError: (...args: unknown[]) => state.proceedPastCertError(...args),
   tabDisplayUrl: (tabId: string) => state.tabDisplayUrl(tabId)
@@ -122,6 +131,8 @@ beforeEach(() => {
   state.requestOmniboxFocus.mockClear()
   state.openInternalPage.mockClear()
   state.navigateTab.mockClear()
+  state.historyNoteUser.mockClear()
+  state.tabView = null
   state.proceedPastCertError.mockReset()
   state.proceedPastCertError.mockReturnValue(true)
   state.tabDisplayUrl.mockClear()
@@ -334,8 +345,8 @@ describe('内部页面与证书警告的通道（BS-U19 / BS-U20 / BS-U21）', (
     await invoke('browser-view:navigate', HOST, 'T', 'https://a.example/')
     await invoke('browser-view:navigate', OTHER, 'T', 'shuvix://settings')
     expect(state.navigateTab.mock.calls).toEqual([
-      ['T', 'https://a.example/'],
-      ['T', 'shuvix://settings']
+      ['T', 'https://a.example/', undefined],
+      ['T', 'shuvix://settings', undefined]
     ])
     state.navigateTab.mockClear()
     await invoke('browser-view:navigate', HOST, 42, 'https://a.example/')
@@ -377,5 +388,119 @@ describe('内部页面与证书警告的通道（BS-U19 / BS-U20 / BS-U21）', (
   it('BS-U21 get-url → tabDisplayUrl(T) 的值', async () => {
     expect(await invoke('browser-view:get-url', HOST, 'T')).toBe('shuvix://settings')
     expect(state.tabDisplayUrl.mock.calls).toEqual([['T']])
+  })
+})
+
+describe('历史记录用的 transition（BVI-1）', () => {
+  it.each(['typed', 'generated'] as const)(
+    "BVI-1 create-tab(url, '%s') → createTab(url, { activate: true, transition })",
+    async (transition) => {
+      await invoke('browser-view:create-tab', HOST, 'https://a.example/', transition)
+      expect(state.createTab.mock.calls).toEqual([
+        ['https://a.example/', { activate: true, transition }]
+      ])
+    }
+  )
+
+  it.each([['link'], ['bogus'], [1], [undefined], [{ transition: 'typed' }]])(
+    'BVI-1 create-tab(url, %j) → 选项里没有 transition',
+    async (transition) => {
+      await invoke('browser-view:create-tab', HOST, 'https://a.example/', transition)
+      expect(state.createTab.mock.calls).toEqual([['https://a.example/', { activate: true }]])
+      expect(state.createTab.mock.calls[0][1]).not.toHaveProperty('transition')
+    }
+  )
+
+  it("BVI-1 navigate(T, url, 'typed' | 'generated') → navigateTab 的第三个参数", async () => {
+    await invoke('browser-view:navigate', HOST, 'T', 'https://a.example/', 'typed')
+    await invoke(
+      'browser-view:navigate',
+      HOST,
+      'T',
+      'https://www.google.com/search?q=x',
+      'generated'
+    )
+    expect(state.navigateTab.mock.calls).toEqual([
+      ['T', 'https://a.example/', 'typed'],
+      ['T', 'https://www.google.com/search?q=x', 'generated']
+    ])
+  })
+
+  it.each([['link'], ['bogus'], [1], [null]])(
+    'BVI-1 navigate(T, url, %j) → 第三个参数 undefined',
+    async (transition) => {
+      await invoke('browser-view:navigate', HOST, 'T', 'https://a.example/', transition)
+      expect(state.navigateTab.mock.calls).toEqual([['T', 'https://a.example/', undefined]])
+    }
+  )
+})
+
+describe('后退 / 前进 / 刷新记在用户头上（BVI-2）', () => {
+  type Spy = ReturnType<typeof vi.fn>
+  /** 一个可拨的假 view：能否后退 / 前进；三个导航动作是间谍（调用顺序与 historyNoteUser 比） */
+  function fakeView(
+    canBack: boolean,
+    canForward: boolean
+  ): { goBack: Spy; goForward: Spy; reload: Spy } {
+    const spies = { goBack: vi.fn(), goForward: vi.fn(), reload: vi.fn() }
+    state.tabView = {
+      webContents: {
+        navigationHistory: {
+          canGoBack: () => canBack,
+          canGoForward: () => canForward,
+          goBack: spies.goBack,
+          goForward: spies.goForward
+        },
+        reload: spies.reload
+      }
+    }
+    return spies
+  }
+  /** historyNoteUser 在这个导航动作之前被调 */
+  const notedBefore = (nav: Spy): void => {
+    expect(state.historyNoteUser.mock.invocationCallOrder[0]).toBeLessThan(
+      nav.mock.invocationCallOrder[0]
+    )
+  }
+
+  it('BVI-2 go-back（能退）：先 historyNoteUser(T)，再 goBack', async () => {
+    const view = fakeView(true, false)
+    await invoke('browser-view:go-back', HOST, 'T')
+    expect(state.historyNoteUser.mock.calls).toEqual([['T']])
+    expect(view.goBack).toHaveBeenCalledTimes(1)
+    notedBefore(view.goBack)
+  })
+
+  it('BVI-2 go-forward（能进）：先 historyNoteUser(T)，再 goForward', async () => {
+    const view = fakeView(false, true)
+    await invoke('browser-view:go-forward', HOST, 'T')
+    expect(state.historyNoteUser.mock.calls).toEqual([['T']])
+    expect(view.goForward).toHaveBeenCalledTimes(1)
+    notedBefore(view.goForward)
+  })
+
+  it('BVI-2 reload：先 historyNoteUser(T)，再 reload', async () => {
+    const view = fakeView(false, false)
+    await invoke('browser-view:reload', HOST, 'T')
+    expect(state.historyNoteUser.mock.calls).toEqual([['T']])
+    expect(view.reload).toHaveBeenCalledTimes(1)
+    notedBefore(view.reload)
+  })
+
+  it('BVI-2 不能退 / 不能进：不记、不导航', async () => {
+    const view = fakeView(false, false)
+    await invoke('browser-view:go-back', HOST, 'T')
+    await invoke('browser-view:go-forward', HOST, 'T')
+    expect(state.historyNoteUser).not.toHaveBeenCalled()
+    expect(view.goBack).not.toHaveBeenCalled()
+    expect(view.goForward).not.toHaveBeenCalled()
+  })
+
+  it('BVI-2 没有这个 tab：三个都什么也不做', async () => {
+    state.tabView = null
+    await invoke('browser-view:go-back', HOST, 'T')
+    await invoke('browser-view:go-forward', HOST, 'T')
+    await invoke('browser-view:reload', HOST, 'T')
+    expect(state.historyNoteUser).not.toHaveBeenCalled()
   })
 })

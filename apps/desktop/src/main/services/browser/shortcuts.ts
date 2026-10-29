@@ -35,6 +35,8 @@ export type BrowserShortcut =
   | { type: 'devtoolsConsole' }
   /** 原生 DevTools 的「选择元素」模式（开 / 退出）：⌥⌘C、⌘⇧C（macOS）/ Ctrl+Shift+C */
   | { type: 'inspectElement' }
+  /** 历史记录页（shuvix://history，已开着就选中它）：⌘Y（macOS）/ Ctrl+H，照 Chrome */
+  | { type: 'history' }
 
 /** before-input-event 交来的按键里用得到的那几项（Electron 的 Input 结构的子集） */
 export interface ShortcutInput {
@@ -144,6 +146,10 @@ function match(input: ShortcutInput, mac: boolean): BrowserShortcut | null {
   }
 
   switch (letter) {
+    case 'y':
+      return mac ? { type: 'history' } : null
+    case 'h':
+      return mac ? null : { type: 'history' }
     case 't':
       return { type: 'newTab' }
     case 'w':
