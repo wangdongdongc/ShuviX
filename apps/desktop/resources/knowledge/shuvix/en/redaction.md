@@ -106,7 +106,9 @@ the real user name writes it back, and replacing it there would also replace a s
 every request on the way out, the history included. Every other category is always replaced in the
 record, whatever the policy says, so turning it on later protects the history at once.
 
-UUIDs and long hex ids are never touched (tool call ids would stop matching), and code that only
+UUIDs and long hex ids are never touched (tool call ids would stop matching), a phone or card
+number is never read out of a shorter hex id (a docker image id, an abbreviated git commit), and
+code that only
 _mentions_ a secret is left alone (`secretKey: Uint8Array;`, `process.env.API_KEY`, `${PASS}`,
 `****`).
 

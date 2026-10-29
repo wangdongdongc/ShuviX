@@ -102,8 +102,15 @@ describe('与 magpie 的评测语料对照', () => {
   })
 })
 
-const categories = (s: string): Array<[string, string]> =>
-  detectSensitive(s).map((f) => [f.category, f.value])
+const categories = (s: string, known?: KnownValues): Array<[string, string]> =>
+  detectSensitive(s, known).map((f) => [f.category, f.value])
+
+/** 只有一个已知值的对照表 */
+function knownOne(category: string, value: string): KnownValues {
+  const known = new KnownValues()
+  known.add({ value, placeholder: `{{${category}_cccccccc}}`, category })
+  return known
+}
 
 describe('各类别', () => {
   it('DT-3 密钥：各家前缀、JWT、PEM、URL 里的密码、字段赋值；同一段取规则表里靠前的', () => {
@@ -191,6 +198,58 @@ describe('各类别', () => {
   it('DT-11 已有的占位符里不再认出东西', () => {
     expect(categories('key {{API_KEY_k3v7x2mq}} and mail {{EMAIL_b5puzbfv}}')).toEqual([])
   })
+
+  it('DT-12 短十六进制 ID：里面像手机号、卡号的一段不算（docker、git、AWS、0x 地址）', () => {
+    expect(categories('myapp   latest   a13912345678   2 days ago   120MB')).toEqual([])
+    expect(categories('commit f13800138000')).toEqual([])
+    expect(categories('HEAD is now at 13800138000e fix')).toEqual([])
+    expect(categories('instance i-0a13812345678bcd9 running')).toEqual([])
+    expect(categories('{"Id":"a13912345678"}')).toEqual([])
+    // 24 位的 token 里的银行卡号
+    expect(categories('deadbeef4111111111111111')).toEqual([])
+    // 31 位：不到 32 位不是 ID，照样是短 token
+    expect(categories('abcdefabcdefabcdefab13812345678')).toEqual([])
+    // 0x 前缀：多长、有没有字母都不论，紧跟在前缀后的整串也算
+    expect(categories('at 0x7ffe13812345678 in main')).toEqual([])
+    expect(categories('0x13812345678')).toEqual([])
+    expect(categories('0X4111111111111111')).toEqual([])
+  })
+
+  it('DT-13 正常写法里的手机号、卡号照样认出（紧贴 g–z 字母、汉字、+86）', () => {
+    expect(categories('请联系13812345678')).toEqual([['PHONE', '13812345678']])
+    expect(categories('tel13812345678')).toEqual([['PHONE', '13812345678']])
+    expect(categories('user13812345678')).toEqual([['PHONE', '13812345678']])
+    expect(categories('wx13812345678')).toEqual([['PHONE', '13812345678']])
+    // e 是十六进制，但它前面紧贴着 n
+    expect(categories('phone13812345678')).toEqual([['PHONE', '13812345678']])
+    expect(categories('card4111111111111111')).toEqual([['BANK_CARD', '4111111111111111']])
+    expect(categories('+8613812345678')).toEqual([['PHONE', '+8613812345678']])
+  })
+
+  it('DT-14 token 的边界：大写、贴着字母、连字符、下划线、汉字、0x 前缀前贴着字母、12 位、没有字母', () => {
+    expect(categories('A13912345678')).toEqual([])
+    expect(categories('image A13912345678')).toEqual([])
+    // 紧贴 g–z 字母：不是一个独立的 token
+    expect(categories('xa13912345678')).toEqual([['PHONE', '13912345678']])
+    expect(categories('a13912345678x')).toEqual([['PHONE', '13912345678']])
+    expect(categories('a13912345678-dirty')).toEqual([])
+    expect(categories('img_a13912345678')).toEqual([])
+    expect(categories('a13912345678_v2')).toEqual([])
+    expect(categories('镜像a13912345678已删除')).toEqual([])
+    // 0x 前面贴着字母：不算前缀
+    expect(categories('a0x13812345678')).toEqual([['PHONE', '13812345678']])
+    // 11 位的 token 不够长，12 位才算
+    const phone = knownOne('PHONE', '12345678')
+    expect(categories('x abc12345678 y', phone)).toEqual([['PHONE', '12345678']])
+    expect(categories('x abcd12345678 y', phone)).toEqual([])
+    // 没有 a–f 字母：不算
+    expect(categories('x 9912345678999 y', phone)).toEqual([['PHONE', '12345678']])
+  })
+
+  it('DT-15 密钥类与整个 token 不受影响', () => {
+    expect(categories('S/N: a1b2c3d4e5f6')).toEqual([['SERIAL', 'a1b2c3d4e5f6']])
+    expect(categories('api_token=a1b2c3d4e5f6a7b8')).toEqual([['SECRET', 'a1b2c3d4e5f6a7b8']])
+  })
 })
 
 describe('占位符', () => {
@@ -263,5 +322,19 @@ describe('已知值', () => {
     expect(known.pendingTail('密码是 T')).toBe(1)
     expect(known.pendingTail('密码是 Tr0ub4dor&3xq')).toBe(0)
     expect(known.pendingTail('nothing here')).toBe(0)
+  })
+
+  it('KV-3 短十六进制 token 里的已知值：个人信息类不算，密钥类照样算；整个 token 照样算', () => {
+    expect(categories('x abcd12345678ef y', knownOne('PHONE', '12345678'))).toEqual([])
+    expect(categories('x abcd12345678ef y', knownOne('PASSWORD', '12345678'))).toEqual([
+      ['PASSWORD', '12345678']
+    ])
+    expect(categories('x 00cafe1234beef y', knownOne('SECRET', 'cafe1234'))).toEqual([
+      ['SECRET', 'cafe1234']
+    ])
+    const serial = knownOne('SERIAL', 'a1b2c3d4e5f6')
+    expect(categories('got a1b2c3d4e5f6 back', serial)).toEqual([['SERIAL', 'a1b2c3d4e5f6']])
+    expect(categories('got a1b2c3d4e5f6ff back', serial)).toEqual([])
+    expect(categories('got xa1b2c3d4e5f6 back', serial)).toEqual([['SERIAL', 'a1b2c3d4e5f6']])
   })
 })

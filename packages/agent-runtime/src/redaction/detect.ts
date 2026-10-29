@@ -75,6 +75,29 @@ function idAround(s: string, a: number, b: number): [number, number] | null {
   return [l, r]
 }
 
+const isHexDigit = (c: string | undefined): boolean => c !== undefined && /[0-9a-fA-F]/.test(c)
+
+/**
+ * s[a:b] 是一个短十六进制 token 里的一段（不是整个 token）：token 是 12 位以上、不带连字符的十六进制，至少有一个
+ * a–f 字母，前后不紧贴别的字母数字 —— docker 的短 ID（`docker ps`、`docker images`）、12 位缩写的 git 提交、
+ * AWS 的 `i-0…`。随机的 12 位十六进制里约万分之三含一段像手机号的 11 位数字。带 `0x` 前缀的（内存地址、十六进制
+ * 字面量）前缀本身就说明是十六进制：多长、有没有字母都不论，紧跟在前缀后的整串也算一段。
+ */
+function inShortHexToken(s: string, a: number, b: number): boolean {
+  let l = a
+  let r = b
+  while (l > 0 && isHexDigit(s[l - 1])) l--
+  while (r < s.length && isHexDigit(s[r])) r++
+  const v = s.slice(l, r)
+  if (!/^[0-9a-fA-F]+$/.test(v) || (r < s.length && ALNUM.includes(s[r]))) return false
+  if (l >= 2 && (s[l - 1] === 'x' || s[l - 1] === 'X') && s[l - 2] === '0') {
+    return !(l > 2 && ALNUM.includes(s[l - 3]))
+  }
+  return (
+    (l < a || b < r) && v.length >= 12 && /[a-fA-F]/.test(v) && !(l > 0 && ALNUM.includes(s[l - 1]))
+  )
+}
+
 /** 字段名的词（小写）：next_page_token、nextPageToken、X-Next-Page-Token 都是 next page token */
 function nameWords(name: string): string[] {
   const out: string[] = []
@@ -124,11 +147,13 @@ function credentialField(s: string, at: number): boolean {
 /**
  * 去掉 ID 里的东西：后端生成的 ID（UUID、32 位以上的十六进制）原样发出 —— 模型要读它、原样写回工具调用。
  * ID 的一段永远不算一个值；整个 ID 只在凭据字段里才算（password=、api_key:），已知值照样算。
+ * 更短的十六进制 token 没那么确定是 ID，只去掉其中的个人信息（手机号、卡号不会紧贴着十六进制字母写）；
+ * 密钥类照样算，整个 token 也照样算（S/N: 后面的十六进制序列号）。
  */
 function noIDs(s: string, found: Span[]): Span[] {
   return found.filter((f) => {
     const id = idAround(s, f.start, f.end)
-    if (!id) return true
+    if (!id) return !(isPersonalCategory(f.category) && inShortHexToken(s, f.start, f.end))
     if (f.start > id[0] || f.end < id[1]) return false // ID 的一段
     if (f.by === 'known') return true
     if (['PASSWORD', 'API_KEY', 'TOKEN', 'PRIVATE_KEY'].includes(f.category)) return true

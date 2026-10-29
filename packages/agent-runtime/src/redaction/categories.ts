@@ -2,8 +2,9 @@
  * 敏感内容的类别 —— 检测器给每一处归的类，也是占位符里的那一段（`{{REDACTED_API_KEY_k3v7x2mq}}`）和
  * 策略里 `object.category` 的取值。对标 magpie（yetone/magpie v0.1.1548）的 kind 词汇。
  *
- * 分两组：`secret`（密钥、令牌、密码）与 `personal`（个人信息）。分组只影响两件事：
+ * 分两组：`secret`（密钥、令牌、密码）与 `personal`（个人信息）。分组只影响三件事：
  *   - 小数 / JSON 数字的排除只对 personal 生效（noNumbers：一个小数的尾数、一个裸 JSON 数字不是电话号）；
+ *   - 短十六进制 token 里的一段只对 personal 不算（noIDs：docker 短 ID 里的 11 位数字不是电话号）；
  *   - 记录里留的提示（hintOf）：secret 留 key 的前缀（`sk-`、`ghp_`），personal 只留首字符。
  *
  * 默认覆盖由内置第二层策略决定（docs/auto-redaction-design.md §4.1），不在这里：检测器照样认出全部类别（只是默认
