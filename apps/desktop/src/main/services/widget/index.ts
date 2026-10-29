@@ -16,6 +16,7 @@
 
 export { widgetService } from './widgetService'
 export { widgetServer, setWidgetPreviewJudge } from './widgetServer'
+export { setWidgetThemeReader } from './widgetTheme'
 export { exportWidget, resolveExportZipPath, WidgetExportError } from './widgetExporter'
 export { EXPORTED_VERSIONS } from './exportedVersions'
 export type { ExportedPackageName } from './exportedVersions'

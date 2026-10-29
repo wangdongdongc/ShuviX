@@ -6,7 +6,7 @@
 - **字体排印**：正文 `text-xs` 或 `text-sm`，不超过 `text-base`；用 `font-medium` / `font-semibold`，不用 `font-bold`；代码、数据和它们的输入框用 `font-mono text-xs`。
 - **间距**：内边距 `p-2.5`–`p-4`，间隙 `gap-1.5`–`gap-3`，外边距 `mt-1`–`mt-4`。
 - **装饰**：`rounded-md` 或 `rounded-lg`；除了弹出层上的 `shadow-sm` 之外不要阴影；不要渐变、`border-2` 或嵌套卡片；只用 `transition-colors`。
-- **交互**：Enter 执行或提交，Escape 清空；随用户输入推导结果（`useMemo` / `useDeferredValue`），本地计算不显示加载转圈；生成的输出配一个只有图标的复制按钮；错误用 rose 色显示在字段下方，绝不用模态框。
+- **交互**：Enter 执行或提交，Escape 清空；随用户输入推导结果（`useMemo` / `useDeferredValue`），本地计算不显示加载转圈；生成的输出配一个只有图标的复制按钮；错误用 `text-danger` 显示在字段下方，绝不用模态框。
 - **从 API 或磁盘加载**：请求进行中时显示之前的内容（或者一个说明将会出现什么的空状态），绝不全屏转圈（`api.use` 重新加载时会保留之前的 `data`）；失败时在原处显示它的 `message`，并提供重试。
 
 ## 在哪里运行
@@ -31,27 +31,41 @@
 - **列表加详情**（笔记、记账、待办）：窄时是列表，点一项打开它的详情，带返回键；从 `md:` 起左边列表、右边详情。
 - **数据密集**（表格、看板、图表）：窄时用卡片，或让表格在自己的容器里滚动，图表竖着排；从 `md:` 起显示完整表格，图表并排。
 
-## 暗色模式是必须的
+## 颜色跟随应用的主题
 
-每个颜色工具类都要有它的 `dark:` 对应项。用这套色板：
+ShuviX 有十一套主题（GitHub、Nord、Dracula、Solarized 等，各分浅色和深色），小组件的页面始终带着用户选的那一套，用户一换就实时跟着换。界面只用下面这些颜色名：每个名字都适配所有主题，所以不用再配一个 `dark:`。不要用 Tailwind 自带的色板（`bg-white`、`text-neutral-900`、`bg-violet-600` …）或十六进制颜色给界面上色：它们在每套主题里都一样，和大多数主题都不搭。
 
-| 用途        | 浅色                                                | 暗色                        |
-| ----------- | --------------------------------------------------- | --------------------------- |
-| 页面背景    | `bg-white`                                          | `dark:bg-neutral-950`       |
-| 表面 / 卡片 | `bg-neutral-50`                                     | `dark:bg-neutral-900`       |
-| 悬停表面    | `hover:bg-neutral-100`                              | `dark:hover:bg-neutral-800` |
-| 边框        | `border-neutral-200`                                | `dark:border-neutral-800`   |
-| 主要文字    | `text-neutral-900`                                  | `dark:text-neutral-100`     |
-| 次要文字    | `text-neutral-600`                                  | `dark:text-neutral-400`     |
-| 弱化文字    | `text-neutral-400`                                  | `dark:text-neutral-500`     |
-| 强调文字    | `text-violet-600`                                   | `dark:text-violet-400`      |
-| 强调实色    | `bg-violet-600 hover:bg-violet-500 text-white`      | 相同                        |
-| 强调光环    | `ring-violet-500/30` 配 `focus:border-violet-500`   | 相同                        |
-| 成功        | `text-emerald-600`                                  | `dark:text-emerald-400`     |
-| 错误        | `text-rose-600`                                     | `dark:text-rose-400`        |
-| 警告        | `text-amber-600`                                    | `dark:text-amber-400`       |
+| 用途                               | 类名                                                    |
+| ---------------------------------- | ------------------------------------------------------- |
+| 页面背景                           | `bg-page`                                               |
+| 表面 / 卡片                        | `bg-surface`                                            |
+| 表面上的控件（输入框、分段按钮）   | `bg-raised`                                             |
+| 悬停                               | `hover:bg-hover`                                        |
+| 选中或按下的行                     | `bg-active`                                             |
+| 边框 / 卡片内的分隔线              | `border-line` / `border-line-subtle`                    |
+| 主要 / 次要 / 弱化文字             | `text-fg` / `text-fg-muted` / `text-fg-subtle`          |
+| 强调色文字、图标或链接             | `text-accent`                                           |
+| 强调色实心（主按钮）               | `bg-accent hover:bg-accent-hover text-on-accent`        |
+| 强调色浅底（选中项、徽标）         | `bg-accent-muted`                                       |
+| 焦点                               | `focus:ring-2 focus:ring-accent/30 focus:border-accent` |
+| 成功 / 错误 / 警告                 | `text-success` / `text-danger` / `text-warning`；带底色的框 `bg-danger/10` |
 
-输入框、按钮和输出块共用这套色板：`rounded-md`、`text-xs` / `text-sm`、上面的表面色和边框色，输入框上加 `focus:ring-2 focus:ring-violet-500/30 focus:border-violet-500`。
+它们都能加透明度修饰（`bg-accent/20`）。输入框、按钮和输出块用同一套外观：`rounded-md`、`text-xs` / `text-sm`、`bg-raised`（在表面上则用 `bg-page`）加 `border border-line`，输入框再加上面那个焦点环。
+
+**图表和分类** 用 ShuviX 自己作图的那组系列色，按顺序取、不循环复用：`viz-1` … `viz-8`（`bg-viz-2`；SVG 上用 `fill-viz-2` / `stroke-viz-2`）。带文字的分类框用 `bg-viz-2-tint text-viz-2-ink`；比表面高一级的指标卡或表头用 `bg-viz-wash`。图表里用颜色表示的状态，旁边仍要有图标或文字。
+
+**需要颜色值的代码**（`<canvas>`、图表库的配置）：`shuvix/widget` 的 `themeColor(name)` 返回上面任一名字此刻的颜色（`rgb(…)`），`useTheme()` 在主题变了时让组件重新渲染：
+
+```tsx
+import { themeColor, useTheme } from 'shuvix/widget'
+
+const theme = useTheme() // { id: 'nord', scheme: 'dark' }
+const colors = useMemo(() => ({ line: themeColor('viz-1'), grid: themeColor('line-subtle') }), [theme])
+```
+
+在 `.css` 文件里，同样的名字是变量：`var(--widget-accent)`、`var(--widget-line)`。
+
+`dark:` 仍然可用，跟随的是当前主题的深浅（不是系统设置）。只把它留给这些名字覆盖不到的少数情况，比如白底黑图上的 `dark:invert`。
 
 ## 资源
 
@@ -63,5 +77,5 @@
 
 构建成功后用 `preview` 预览它。它在一个看不见的窗口里渲染小组件（用户屏幕上什么都不会打开），按上面三种尺寸各截一张图：`panel`（380×760）、`window`（1280×800）和 `phone`（390×780，触屏），并返回这些截图和页面报出的错误。查看每一张图，修掉在那个尺寸下不对的地方：文字被截断或重叠、一行横跨整个窗口、控件小到点不中、该有内容的地方是空的、整页出现横向滚动条。然后再构建、再预览。
 
-- `--size phone,panel` 只预览这几种尺寸；`--theme light` 或 `--theme dark` 强制一种配色（缺省跟应用）。另一种配色也看一次，因为暗色模式是必须的。
+- `sizes: ["phone", "panel"]` 只预览这几种尺寸；`theme: "light"` 或 `"dark"` 显示用户的浅色或深色主题（缺省是应用此刻显示的那套）。另一侧也看一次：写在主题颜色名之外的颜色会在那里露出来。
 - 它显示的是上一次构建的结果：每次预览之前先构建。

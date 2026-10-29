@@ -17,7 +17,8 @@ Vite will serve at `http://localhost:5173`. Edit `index.tsx` and save — HMR up
 | --- | --- |
 | `index.html` | Static entry — loads `/src/index.css` (Tailwind) and `/index.tsx` |
 | `index.tsx` | React entry — calls `createRoot(...).render(...)` itself (same contract as in ShuviX) |
-| `src/index.css` | Tailwind v4 import (`@import "tailwindcss";`) |
+| `src/index.css` | Tailwind v4 import (`@import "tailwindcss";`) plus `src/shuvix-theme.css` |
+| `src/shuvix-theme.css` | ShuviX's theme tokens and the Tailwind color names the widget uses (`bg-surface`, `text-fg`, `border-line`, `text-accent` …) |
 | `vite.config.ts` | Vite config with `@vitejs/plugin-react` + `@tailwindcss/vite` |
 | `tsconfig.json` / `tsconfig.node.json` | TypeScript config |
 | `README.md` | Original widget README (preserved as-is) |
@@ -31,6 +32,7 @@ ShuviX's internal esbuild runtime handles a few things differently than stock Vi
 3. **Dependencies** — Only `react`, `react-dom`, `react-router`, `spectacle` were available in ShuviX. They are declared here with matching versions. Add any additional npm packages via `npm install <pkg>`.
 4. **ShuviX's routes** — `/w/{{WIDGET_ID}}/db/…` (an older widget's database), `/w/{{WIDGET_ID}}/fs/…` (reading files on the computer) and the widget's own API are served by ShuviX and do not exist in this project. Code that calls them needs a backend of your own that answers the same paths, or another data source. The database rows are not part of the export; `schema.sql` (if present) describes the tables.
 5. **The widget's API** — `api.ts` (if present) defines the operations the screen calls; inside ShuviX they run in a sandbox next to the widget's SQLite database, and here nothing runs them. `shuvix/widget-api` resolves to `src/shuvix-widget-api.ts` (ShuviX's own definitions, for the types) so the project still type-checks. `import … from 'shuvix/widget'` resolves to `src/shuvix-widget.ts`, the same client ShuviX ships: it sends `POST api/<operation>` with the arguments as JSON and expects `{ "result": … }` or `{ "error": { "code", "message" } }`, and it listens for `data` events on `sse` to refetch. Answer those relative to the page, or replace the client.
+6. **Theme** — inside ShuviX the widget follows the theme chosen in ShuviX's settings. Here the script at the top of `index.html` follows the system light/dark setting and uses ShuviX's GitHub Light and GitHub Dark themes; change its `light` name to another light theme in `src/shuvix-theme.css` (`solarized-light`, `one-light` …) and `dark` to another dark one (`nord`, `dracula` …), or `mode` to `"light"` / `"dark"` to pin one side. `dark:` classes follow the chosen theme (`data-scheme` on `<html>`), not the system setting. `useTheme()` and `themeColor()` from `shuvix/widget` work here too.
 
 ## Continuing development in ShuviX
 

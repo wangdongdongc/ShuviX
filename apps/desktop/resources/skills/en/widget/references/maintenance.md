@@ -55,3 +55,26 @@ shuvix-media:|file://|127\.0\.0\.1|localhost:|localStorage|sessionStorage|indexe
 A hard-coded home folder (`/Users/<name>/…`) can stay, but `~/…` is better (`files.md`).
 
 Many older widgets were laid out for a window of their own. When updating one, preview it and make it work in the panel, a wide window and on a phone (`design.md`, "Where it runs").
+
+Widgets written before themes color with Tailwind's palette in `dark:` pairs. They still work in light and dark, but they ignore the user's theme. When you update one, move its colors to the theme names (`design.md`, "Colors follow the app's theme"). Search for:
+
+```
+\b(bg|text|border|divide|ring|outline|fill|stroke|placeholder)-(white|black|(neutral|gray|slate|zinc|stone|violet|purple|indigo|emerald|rose|red|amber)-[0-9]+)|#[0-9a-fA-F]{3,8}\b
+```
+
+| Found                                                   | Change to                                         |
+| ------------------------------------------------------- | ------------------------------------------------- |
+| `bg-white dark:bg-neutral-950`                          | `bg-page`                                         |
+| `bg-neutral-50 dark:bg-neutral-900`                     | `bg-surface`                                      |
+| `hover:bg-neutral-100 dark:hover:bg-neutral-800`        | `hover:bg-hover`                                  |
+| `border-neutral-200 dark:border-neutral-800`            | `border-line`                                     |
+| `text-neutral-900 dark:text-neutral-100`                | `text-fg`                                         |
+| `text-neutral-600 dark:text-neutral-400`                | `text-fg-muted`                                   |
+| `text-neutral-400 dark:text-neutral-500`                | `text-fg-subtle`                                  |
+| `text-violet-600 dark:text-violet-400`                  | `text-accent`                                     |
+| `bg-violet-600 hover:bg-violet-500 text-white`          | `bg-accent hover:bg-accent-hover text-on-accent`  |
+| `ring-violet-500/30`, `focus:border-violet-500`         | `ring-accent/30`, `focus:border-accent`           |
+| `text-emerald-600 dark:text-emerald-400` (rose, amber)  | `text-success` (`text-danger`, `text-warning`)    |
+| hex colors in a chart's options                         | `themeColor('viz-1')` … with `useTheme()`         |
+
+Other shades map to the nearest row. Then `preview` with `theme: "light"` and `"dark"`: anything still fixed shows up on one of them.

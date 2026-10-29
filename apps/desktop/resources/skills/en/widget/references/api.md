@@ -105,6 +105,7 @@ function Books() {
 - **`api.use(op, args)`** loads when the component mounts, when `args` changes (compared as JSON) and after any write is committed, by this screen, another device or an agent. It keeps the previous `data` while it reloads. Pass `null` as `args` to wait until you have them.
 - **`api.call(op, args)`** resolves with the operation's result or throws a `WidgetError` with `code` and `message`; show the message inline. There is no need to refetch after a write: every `use` refetches by itself.
 - **`api.onData(listener)`** tells you when anything was written (`{ op, source }`), if you keep state of your own.
+- `shuvix/widget` also exports `useTheme()` and `themeColor(name)`, for code that needs the theme's colors as values (`design.md`).
 
 ## Test it
 

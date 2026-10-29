@@ -5,7 +5,7 @@
  *   <id>/
  *     package.json / vite.config.ts / tsconfig.json / tsconfig.node.json
  *     index.html / EXPORT_NOTES.md
- *     src/index.css
+ *     src/index.css / src/shuvix-theme.css（主题令牌 + Tailwind 语义色名，与 ShuviX 里的组件页面同一份，见 widgetTheme.ts）
  *     <widget 源文件原样打包，排除 widget.json 与 .git / node_modules / 系统垃圾文件>
  *
  * 为什么是 zip 而不是直接铺目录：导出目标通常落在用户自己的工程里，直接铺文件会把
@@ -25,6 +25,12 @@ import { widgetService } from './widgetService'
 import { bundlerResourcePath } from '../bundler'
 import { createLogger } from '../../logger'
 import { EXPORTED_VERSIONS } from './exportedVersions'
+import {
+  themeBootScript,
+  widgetThemeCss,
+  WIDGET_EXPORT_THEME,
+  WIDGET_TAILWIND_THEME
+} from './widgetTheme'
 
 const log = createLogger('WidgetExporter')
 
@@ -73,6 +79,8 @@ interface Placeholders {
   VITEJS_PLUGIN_REACT_VERSION: string
   TYPESCRIPT_VERSION: string
   VITE_VERSION: string
+  /** index.html 头部的主题脚本：跟系统明暗、用 GitHub 那一对（项目里没有 ShuviX 的设置可读） */
+  THEME_BOOT_SCRIPT: string
 }
 
 function buildPlaceholders(widget: {
@@ -95,8 +103,29 @@ function buildPlaceholders(widget: {
     TYPES_REACT_DOM_VERSION: EXPORTED_VERSIONS['@types/react-dom'],
     VITEJS_PLUGIN_REACT_VERSION: EXPORTED_VERSIONS['@vitejs/plugin-react'],
     TYPESCRIPT_VERSION: EXPORTED_VERSIONS.typescript,
-    VITE_VERSION: EXPORTED_VERSIONS.vite
+    VITE_VERSION: EXPORTED_VERSIONS.vite,
+    THEME_BOOT_SCRIPT: themeBootScript(WIDGET_EXPORT_THEME)
   }
+}
+
+/**
+ * `src/shuvix-theme.css`：组件在 ShuviX 里拿到的那套主题 —— 应用的主题令牌（11 套都在，`data-theme` 切换）、
+ * 页面底色与字色、Tailwind 语义色名。index.css 在 `@import 'tailwindcss'` 之后引它，@tailwindcss/vite 处理里面的 @theme
+ */
+export function exportThemeCss(): string {
+  return [
+    '/* Copied from ShuviX when the widget was exported: the theme tokens and the color names the widget used',
+    '   inside ShuviX (bg-surface, text-fg, border-line, text-accent ... in Tailwind, var(--widget-accent) in CSS).',
+    '   index.html picks a theme on <html data-theme="..."> (see EXPORT_NOTES.md). */',
+    widgetThemeCss().trimEnd(),
+    '',
+    'body {',
+    '  background: var(--theme-bg-primary);',
+    '  color: var(--theme-text-primary);',
+    '}',
+    '',
+    WIDGET_TAILWIND_THEME
+  ].join('\n')
 }
 
 /** 仅 JSON 字符串值里用到：转义反斜杠和双引号，保持模板能直接替换 */
@@ -165,6 +194,7 @@ export async function exportWidget(params: {
 
     // 1) 模板树（.tmpl 插值后去掉后缀）
     collectTemplateTree(getExportTemplateDir(), rootDir, placeholders, files)
+    files[`${rootDir}/src/shuvix-theme.css`] = strToU8(exportThemeCss())
     // 2) widget 源文件叠加 —— 与模板同名时模板优先
     collectWidgetSources(widgetService.getWidgetDir(widget.id), rootDir, files)
 

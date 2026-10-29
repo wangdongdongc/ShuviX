@@ -105,6 +105,7 @@ function Books() {
 - **`api.use(op, args)`** 在组件挂载时、`args` 变化时（按 JSON 比较）以及任何写入提交之后加载，不管写入来自这个界面、另一台设备还是一个智能体。重新加载时它保留之前的 `data`。还没有参数时把 `args` 传成 `null`，它就会等着。
 - **`api.call(op, args)`** 以操作的结果 resolve，或者抛出一个带 `code` 和 `message` 的 `WidgetError`；把消息显示在原处。写入之后不需要重新获取：每个 `use` 都会自己重新获取。
 - **`api.onData(listener)`** 在有任何东西被写入时告诉你（`{ op, source }`），供你自己维护状态时使用。
+- `shuvix/widget` 还导出 `useTheme()` 和 `themeColor(name)`，给需要把主题颜色当作值来用的代码（`design.md`）。
 
 ## 测试
 

@@ -55,3 +55,26 @@ shuvix-media:|file://|127\.0\.0\.1|localhost:|localStorage|sessionStorage|indexe
 硬编码的主文件夹（`/Users/<name>/…`）可以保留，但 `~/…` 更好（`files.md`）。
 
 很多旧的小组件是按独立窗口的大小排版的。更新这样的小组件时，预览它，并让它在面板、宽窗口和手机上都能用（`design.md` 的「在哪里运行」）。
+
+有主题之前写的小组件用 Tailwind 色板加成对的 `dark:` 上色。它们在浅色和深色下照样能用，但不理会用户选的主题。更新这样的小组件时，把颜色换成主题颜色名（`design.md` 的「颜色跟随应用的主题」）。搜索：
+
+```
+\b(bg|text|border|divide|ring|outline|fill|stroke|placeholder)-(white|black|(neutral|gray|slate|zinc|stone|violet|purple|indigo|emerald|rose|red|amber)-[0-9]+)|#[0-9a-fA-F]{3,8}\b
+```
+
+| 找到的                                                  | 换成                                              |
+| ------------------------------------------------------- | ------------------------------------------------- |
+| `bg-white dark:bg-neutral-950`                          | `bg-page`                                         |
+| `bg-neutral-50 dark:bg-neutral-900`                     | `bg-surface`                                      |
+| `hover:bg-neutral-100 dark:hover:bg-neutral-800`        | `hover:bg-hover`                                  |
+| `border-neutral-200 dark:border-neutral-800`            | `border-line`                                     |
+| `text-neutral-900 dark:text-neutral-100`                | `text-fg`                                         |
+| `text-neutral-600 dark:text-neutral-400`                | `text-fg-muted`                                   |
+| `text-neutral-400 dark:text-neutral-500`                | `text-fg-subtle`                                  |
+| `text-violet-600 dark:text-violet-400`                  | `text-accent`                                     |
+| `bg-violet-600 hover:bg-violet-500 text-white`          | `bg-accent hover:bg-accent-hover text-on-accent`  |
+| `ring-violet-500/30`、`focus:border-violet-500`         | `ring-accent/30`、`focus:border-accent`           |
+| `text-emerald-600 dark:text-emerald-400`（rose、amber） | `text-success`（`text-danger`、`text-warning`）   |
+| 图表配置里的十六进制颜色                                | `themeColor('viz-1')` … 配合 `useTheme()`         |
+
+其他色阶对到最接近的那一行。然后用 `theme: "light"` 和 `"dark"` 各 `preview` 一次：还写死的颜色会在其中一侧露出来。

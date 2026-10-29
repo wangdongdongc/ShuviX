@@ -19,7 +19,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 ## 始终成立的规矩
 
 1. **构建一律走 `widget` 工具**（`create`、`build`、`preview`、`sql`、`export`、`open`；`references/tool.md`）。`build` 是唯一的构建：绝不安装包，绝不运行 npm、npx 或打包器，绝不在小组件里运行 git。
-2. **封闭的依赖集。** 界面：React 19 加 TypeScript，通过 `className` 使用的 Tailwind CSS v4（`dark:` 跟随应用主题），只在确实是多页面的小组件里使用的 React Router（`react-router` 的 `createHashRouter`），以及用来调用 API 的 `shuvix/widget`。`api.ts`：`shuvix/widget-api` 和 `zod`。别的都解析不了；未知的 import 会让构建失败。图标用内联 SVG，日期用 `Intl` 和 `Date`。
+2. **封闭的依赖集。** 界面：React 19 加 TypeScript，通过 `className` 使用的 Tailwind CSS v4（颜色只用 `references/design.md` 里的主题颜色名，小组件就跟随应用的主题），只在确实是多页面的小组件里使用的 React Router（`react-router` 的 `createHashRouter`），以及用来调用 API 的 `shuvix/widget`。`api.ts`：`shuvix/widget-api` 和 `zod`。别的都解析不了；未知的 import 会让构建失败。图标用内联 SVG，日期用 `Intl` 和 `Date`。
 3. **`index.tsx` 以挂载块结尾**，放在脚手架的 "DO NOT DELETE" 注释之内：
    ```tsx
    const root = document.getElementById('root')
@@ -28,7 +28,7 @@ description: "如何构建、修改、导出和调试 ShuviX 小组件（widget�
 4. **只待在小组件自己的目录里。** 绝不编辑或删除 `widget.json`：它是小组件的身份，ShuviX 会自己重写它。
 5. **记录存在小组件的数据库里，只通过它的 API 改动**（`references/api.md`、`references/data.md`）。界面用 `shuvix/widget` 的 `createClient` 调用 API；它通过 `fs/file` 和 `fs/list` 读取用户电脑上的文件（`references/files.md`）。绝不写 `shuvix-media://`、`file://` 或 `http://127.0.0.1:<port>`：它们只在桌面端有效，小组件从浏览器打开时就坏了。
 6. **持久状态放进数据库**（通过一个操作），不放 `localStorage`、`IndexedDB` 或 cookie：从浏览器打开时小组件运行在沙箱里、没有自己的源（origin），这些都不可用。
-7. **在面板、宽窗口和手机上都要能用。** 同一个小组件会在右侧面板（300–420px 宽）、它自己的窗口或浏览器标签页（可能全屏）以及手机浏览器（触屏）里打开。**暗色模式是必须的。** 怎么为这三处排版，以及其余外观要求，都在 `references/design.md`：写 UI 之前先读它。
+7. **在面板、宽窗口和手机上都要能用。** 同一个小组件会在右侧面板（300–420px 宽）、它自己的窗口或浏览器标签页（可能全屏）以及手机浏览器（触屏）里打开。**颜色跟随应用的主题**：只用主题颜色名，不用固定色板。 怎么为这三处排版，以及其余外观要求，都在 `references/design.md`：写 UI 之前先读它。
 8. **绝不汇报一个没构建成功的小组件。** 以一次绿色构建收尾。**不要替用户打开它**：告诉用户它已经在 Widget 面板里，说出它的名字。小组件在哪里开着，构建就会让它在哪里自动刷新。只有用户要你打开时才用 `open`。
 
 ## 新建小组件

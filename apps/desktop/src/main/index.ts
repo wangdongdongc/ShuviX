@@ -67,6 +67,7 @@ import {
 } from './services/externalOpen'
 import {
   setWidgetPreviewJudge,
+  setWidgetThemeReader,
   widgetServer,
   widgetRuntime,
   widgetService
@@ -1044,6 +1045,12 @@ app.whenReady().then(async () => {
         displayPath: path
       }).allowed
   })
+  // 组件页面跟应用的主题走：页面骨架与 SSE theme 事件读这三个设置（注入 —— 组件模块不引 dao）
+  setWidgetThemeReader(() => ({
+    mode: settingsDao.findByKey('general.theme'),
+    light: settingsDao.findByKey('general.lightTheme'),
+    dark: settingsDao.findByKey('general.darkTheme')
+  }))
   // 命令风险分类：同样注入（它要模型注册表）；每次分类记一行分类器日志
   // 自动脱敏出口的策略判定：同样注入（它要安全模块）
   setRedactionPolicy(desktopRedactionPolicy)

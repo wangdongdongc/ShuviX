@@ -75,8 +75,9 @@ const USAGE = { prompt: 120, completion: 8 }
 const IT_TIMEOUT = 180_000
 /** 一轮（含第一次碰组件时那张卡、三种尺寸的截图）的上限 */
 const RUN_TIMEOUT = 120_000
-/** 预览窗口导航到的地址：widget 服务器上某个 pv-* 小组件自己的地址 */
-const PREVIEW_URL = /^http:\/\/127\.0\.0\.1:\d+\/w\/(pv-[a-z0-9-]+)\/$/
+/** 预览窗口导航到的地址：widget 服务器上某个 pv-* 小组件自己的地址（给了 theme 的预览带 shuvix-scheme，页面骨架照它强制明暗） */
+const PREVIEW_URL =
+  /^http:\/\/127\.0\.0\.1:\d+\/w\/(pv-[a-z0-9-]+)\/(?:\?shuvix-scheme=(?:light|dark))?$/
 /** 「先 build」那一句（widgetPreviewService） */
 const DOES_NOT_BUILD = 'the widget does not build: build it and fix buildErrors first'
 /** pi-ai 把工具结果里的图另起一条用户消息发给模型，开头是这一句（它不是用户说的话） */

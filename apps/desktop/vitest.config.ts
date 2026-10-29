@@ -66,6 +66,9 @@ export default defineConfig({
       '../../packages/app-shell/src/**/*.test.ts',
       '../../apps/extension/src/**/*.test.ts'
     ],
-    environment: 'node'
+    environment: 'node',
+    // vitest 缺省把 .css（连带 `?raw`）换成空串：组件页面的主题（services/widget/widgetTheme.ts）以 `?raw` 读
+    // app-shell 的 themes.css，单测要读到真内容，主题名才认得出（构建时 electron-vite 本来就读真文件）
+    css: { include: [/themes\.css/] }
   }
 })

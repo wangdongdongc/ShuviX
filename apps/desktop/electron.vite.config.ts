@@ -25,7 +25,9 @@ export default defineConfig({
       alias: {
         '@shuvix/chat-protocol': chatProtocol,
         '@shuvix/agent-runtime/sync/viewContracts': viewContracts,
-        '@shuvix/agent-runtime': agentRuntime
+        '@shuvix/agent-runtime': agentRuntime,
+        // 组件页面的主题令牌（services/widget/widgetTheme.ts）：只放行这一个文件的原文，不让主进程引到 app-shell 的界面代码
+        '@shuvix/app-shell/themes.css?raw': resolve(appShell, 'themes.css') + '?raw'
       }
     },
     build: {

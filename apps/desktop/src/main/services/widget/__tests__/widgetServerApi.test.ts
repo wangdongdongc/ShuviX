@@ -25,6 +25,11 @@
  *   WT4-PV-13 快照里没有这个操作 / 根本没有快照 → 判定不问，交给 callWidgetOp（没有 expectedMode），它的 404 原样回
  *   WT4-PV-14 ui 令牌调写操作、纯界面操作 → caller 用户、选项只有 allowUiOnly，不读快照、不问判定
  *   WT4-PV-10b 判了授权之后 callWidgetOp 报 changed（其间重新构建改了读写）→ 409 {error:{code:'changed'}}
+ *   W-7a SSE 连上后（`:\n\n` 之后）第一条就是 `event: theme`，data 是注入的设置算出的那一份选择
+ *   W-7b 设置读取换了值，发 settings.changed：keys 含三个主题键之一、或者 keys 不给 → A、B 的每条连接都恰好多一条
+ *        theme（新的那份）；keys 是空数组 → 什么都没有
+ *   W-7c keys 只有 general.language、别的事件类型 → 什么都没有
+ *   W-7d dispose() 之后再发 → 不写、不抛（订阅退了）；重新起来后发一次 → 恰好一条（没有重复订阅）
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import {
@@ -100,6 +105,8 @@ vi.mock('../../../logger', () => ({
 
 import { setWidgetPreviewJudge, widgetServer } from '../widgetServer'
 import { issueWidgetToken, WIDGET_TOKEN_HEADER } from '../widgetToken'
+import { setWidgetThemeReader, type WidgetThemeSettings } from '../widgetTheme'
+import { appEventBus } from '../../../utils/appEventBus'
 
 const A = 'book-shelf'
 const B = 'other-shelf'
@@ -237,6 +244,7 @@ beforeEach(async () => {
 afterEach(() => {
   widgetServer.dispose()
   setWidgetPreviewJudge(null)
+  setWidgetThemeReader(null)
   rmSync(tmp, { recursive: true, force: true })
 })
 
@@ -463,8 +471,11 @@ describe('W-6 SSE 的 data 事件', () => {
       await a1.waitFor(expected)
       await a2.waitFor(expected)
       await tick()
-      expect(a1.text()).toBe(':\n\n' + expected)
-      expect(b.text()).toBe(':\n\n')
+      // 连上时先来一条 theme（此刻的主题选择；单测没注入设置读取 = 默认那一对）
+      const theme =
+        'event: theme\ndata: {"mode":"dark","light":"github-light","dark":"github-dark"}\n\n'
+      expect(a1.text()).toBe(':\n\n' + theme + expected)
+      expect(b.text()).toBe(':\n\n' + theme)
     } finally {
       a1.close()
       a2.close()
@@ -496,6 +507,138 @@ describe('W-6 SSE 的 data 事件', () => {
       expect(a.text()).not.toContain('event: data')
     } finally {
       a.close()
+    }
+  })
+})
+
+// ────────────────────────────── W-7 ──────────────────────────────
+
+describe('W-7 SSE 的 theme 事件', () => {
+  type Sse = Awaited<ReturnType<typeof openSse>>
+  let settings: WidgetThemeSettings
+  const themeEvent = (state: object): string => `event: theme\ndata: ${JSON.stringify(state)}\n\n`
+  const themesIn = (text: string): number => text.split('event: theme\n').length - 1
+  /** 一条连接上最后一条 theme 的 data */
+  const lastTheme = (text: string): unknown => {
+    const parts = text.split('event: theme\ndata: ')
+    return JSON.parse(parts[parts.length - 1].split('\n')[0])
+  }
+  /** 等每条连接都收到第 n 条 theme，再等一会儿确认没有多的 */
+  async function eachHas(streams: Sse[], n: number): Promise<void> {
+    for (const s of streams) {
+      const deadline = Date.now() + 3000
+      while (themesIn(s.text()) < n) {
+        if (Date.now() > deadline) throw new Error(`stream never got theme #${n}: ${s.text()}`)
+        await tick(10)
+      }
+    }
+    await tick(80)
+    for (const s of streams) expect(themesIn(s.text())).toBe(n)
+  }
+
+  beforeEach(() => {
+    settings = { mode: 'system', light: 'one-light', dark: 'nord' }
+    setWidgetThemeReader(() => settings)
+  })
+
+  it('W-7a 连上后第一条就是 theme，带着设置那一份', async () => {
+    const a = await openSse(A)
+    try {
+      const expected = ':\n\n' + themeEvent({ mode: 'system', light: 'one-light', dark: 'nord' })
+      await a.waitFor(expected)
+      await tick()
+      expect(a.text()).toBe(expected)
+    } finally {
+      a.close()
+    }
+  })
+
+  it('W-7b 三个主题键之一 / keys 不给 → 每条连接恰好多一条新的；keys 为空 → 没有', async () => {
+    const streams = [await openSse(A), await openSse(A), await openSse(B)]
+    try {
+      await eachHas(streams, 1)
+      const cases: Array<[string[] | undefined, WidgetThemeSettings]> = [
+        [['general.lightTheme'], { mode: 'system', light: 'solarized-light', dark: 'nord' }],
+        [['general.darkTheme'], { mode: 'system', light: 'solarized-light', dark: 'dracula' }],
+        [['general.theme'], { mode: 'light', light: 'solarized-light', dark: 'dracula' }],
+        [undefined, { mode: 'dark', light: 'one-light', dark: 'tokyo-night' }],
+        [
+          ['general.language', 'general.darkTheme'],
+          { mode: 'dark', light: 'one-light', dark: 'nord' }
+        ]
+      ]
+      let n = 1
+      for (const [keys, next] of cases) {
+        settings = next
+        appEventBus.publish(
+          keys ? { type: 'settings.changed', keys } : { type: 'settings.changed' }
+        )
+        n++
+        await eachHas(streams, n)
+        for (const s of streams) expect(lastTheme(s.text()), JSON.stringify(keys)).toEqual(next)
+      }
+
+      settings = { mode: 'light', light: 'catppuccin-latte', dark: 'gruvbox-dark' }
+      appEventBus.publish({ type: 'settings.changed', keys: [] })
+      await tick(150)
+      for (const s of streams) expect(themesIn(s.text())).toBe(n)
+    } finally {
+      for (const s of streams) s.close()
+    }
+  })
+
+  it('W-7c 别的键、别的事件类型 → 什么都没有', async () => {
+    const a = await openSse(A)
+    const b = await openSse(B)
+    try {
+      await eachHas([a, b], 1)
+      settings = { mode: 'light', light: 'catppuccin-latte', dark: 'dracula' }
+      appEventBus.publish({ type: 'settings.changed', keys: ['general.language'] })
+      appEventBus.publish({
+        type: 'settings.changed',
+        keys: ['general.fontSize', 'httpLog.enabled']
+      })
+      appEventBus.publish({ type: 'providers.changed' })
+      appEventBus.publish({ type: 'project.changed' })
+      appEventBus.publish({ type: 'session.listChanged' })
+      await tick(150)
+      expect(themesIn(a.text())).toBe(1)
+      expect(themesIn(b.text())).toBe(1)
+    } finally {
+      a.close()
+      b.close()
+    }
+  })
+
+  it('W-7d dispose 之后发不写不抛；重新起来发一次 → 恰好一条', async () => {
+    const notify = vi.spyOn(widgetServer, 'notifyTheme')
+    const before = await openSse(A)
+    try {
+      await eachHas([before], 1)
+      widgetServer.dispose()
+      await tick()
+      const ended = before.text()
+      expect(() => appEventBus.publish({ type: 'settings.changed' })).not.toThrow()
+      await tick()
+      expect(notify).not.toHaveBeenCalled()
+      expect(before.text()).toBe(ended)
+    } finally {
+      before.close()
+    }
+
+    await widgetServer.registerAndBuild(A, tmp, 'index.tsx')
+    port = widgetServer.getStatus().port
+    const after = await openSse(A)
+    try {
+      await eachHas([after], 1)
+      settings = { mode: 'dark', light: 'one-light', dark: 'catppuccin-mocha' }
+      appEventBus.publish({ type: 'settings.changed', keys: ['general.darkTheme'] })
+      await eachHas([after], 2)
+      expect(notify).toHaveBeenCalledTimes(1)
+      expect(lastTheme(after.text())).toEqual(settings)
+    } finally {
+      after.close()
+      notify.mockRestore()
     }
   })
 })

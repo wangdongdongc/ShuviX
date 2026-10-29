@@ -6,13 +6,15 @@
  *   GET /w/<id>/bundle.js     → 当前 widget 的 JS 打包产物
  *   GET /w/<id>/bundle.css
  *   GET /w/<id>/tailwind.js   → Tailwind browser runtime（共享）
- *   GET /w/<id>/sse           → Server-Sent Events，推送 reload 事件
+ *   GET /w/<id>/theme.css     → 主题令牌（应用的 themes.css，见 widgetTheme.ts）
+ *   GET /w/<id>/sse           → Server-Sent Events，推送 reload / data / theme 事件
  *   *   /w/<id>/db/<table>    → widget 数据库的 REST 接口（widgetDb.ts）
  *   GET /w/<id>/fs/file|list  → 读本机文件 / 列目录（widgetFiles.ts，路由表见 shared/widgetRoutes.ts）
  *   POST /w/<id>/api/<op>     → 组件自己的 API（api/widgetApi.ts；只有 SQLite 组件有，调用方是用户）
  *
  * SQLite 组件没有 `/db/`（读写都走 API，见 docs/widget-tool-design.md D10）；`/sse` 除了 `reload` 还推 `data`
- * （任何一次提交了写的 API 调用之后，不管调用方是界面还是 agent）。
+ * （任何一次提交了写的 API 调用之后，不管调用方是界面还是 agent）和 `theme`（连上时一次，之后主题设置每变一次；
+ * 页面骨架据此换 `data-theme`，见 widgetTheme.ts）。
  *
  * 门（每个请求都过）：
  *   - **Host** 必须是 `127.0.0.1:<端口>` 或 `localhost:<端口>`，否则 421 —— 挡 DNS 重绑定（恶意网页把自己的域名
@@ -39,6 +41,17 @@ import { createLogger } from '../../logger'
 import { handleRestRequest, WidgetDbError, type RestMethod, type RestRequest } from './widgetDb'
 import { resolveWidgetFilePath, serveWidgetFiles } from './widgetFiles'
 import { verifyWidgetToken, WIDGET_TOKEN_HEADER, type WidgetTokenClaims } from './widgetToken'
+import {
+  currentWidgetTheme,
+  parseWidgetScheme,
+  themeBootScript,
+  widgetThemeCss,
+  WIDGET_SCHEME_PARAM,
+  WIDGET_TAILWIND_THEME,
+  WIDGET_THEME_SETTING_KEYS,
+  type WidgetScheme
+} from './widgetTheme'
+import { appEventBus } from '../../utils/appEventBus'
 import {
   callWidgetOp,
   onWidgetDataChanged,
@@ -85,25 +98,29 @@ interface WidgetEntry {
   isBuilding: boolean
 }
 
-function hostHTML(baseHref: string, title: string): string {
+/**
+ * 页面骨架。主题脚本排在最前（首帧之前设好 `data-theme`），令牌在 Tailwind 运行时之前，语义色名紧跟运行时；
+ * 底色与字色取主题令牌。`color-scheme` 由主题块给（meta 里的 `light dark` 只管 theme.css 到之前的那一帧）。
+ * `forced` = 预览强制的明暗（URL 上的 shuvix-scheme）。
+ */
+function hostHTML(baseHref: string, title: string, forced: WidgetScheme | null): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
+  <script>${themeBootScript(currentWidgetTheme(), forced)}</script>
   <base href="${baseHref}" />
   <title>${title}</title>
+  <link rel="stylesheet" href="theme.css" />
   <script src="tailwind.js"></script>
+  <style type="text/tailwindcss">
+${WIDGET_TAILWIND_THEME}  </style>
   <link rel="stylesheet" href="bundle.css" />
   <style>
-    :root { color-scheme: light dark; }
     html, body, #root { height: 100%; margin: 0; }
-    /* 基础底色：浅色模式纯白，深色模式与 ShuviX github-dark 接近 */
-    body { background: #ffffff; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Hiragino Sans", sans-serif; }
-    @media (prefers-color-scheme: dark) {
-      body { background: #0d1117; color: #e6edf3; }
-    }
+    body { background: var(--theme-bg-primary); color: var(--theme-text-primary); font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Hiragino Sans", sans-serif; }
   </style>
 </head>
 <body>
@@ -114,6 +131,10 @@ function hostHTML(baseHref: string, title: string): string {
     // 界面的 API 客户端（shuvix/widget）收 data 事件也用这一条：所有组件共用一个主机，浏览器对它只开 6 条连接
     window.__shuvixEvents = es;
     es.addEventListener('reload', () => location.reload());
+    // 主题设置变了（连上时也先来一次）：就地换 data-theme，不重载
+    es.addEventListener('theme', (e) => {
+      try { window.__shuvixSetTheme(JSON.parse(e.data)); } catch (_) {}
+    });
     es.onerror = () => setTimeout(() => location.reload(), 1500);
     window.onerror = function(msg, _src, _line, _col, err) {
       document.getElementById('root').innerHTML =
@@ -147,6 +168,11 @@ function hostHTML(baseHref: string, title: string): string {
 </html>`
 }
 
+/** SSE `theme` 事件：此刻的主题选择 */
+function themeEvent(): string {
+  return `event: theme\ndata: ${JSON.stringify(currentWidgetTheme())}\n\n`
+}
+
 function errorOverlayHTML(errors: string[]): string {
   const escaped = errors.map((e) => e.replace(/&/g, '&amp;').replace(/</g, '&lt;')).join('\n\n')
   return `<!DOCTYPE html>
@@ -167,6 +193,8 @@ export class WidgetServer {
   private startPromise: Promise<void> | null = null
   private readonly entries = new Map<string, WidgetEntry>()
   private tailwindCache: string | null = null
+  /** 主题设置的订阅（服务器在跑时才有；dispose 退订） */
+  private offSettings: (() => void) | null = null
 
   /** 首次使用时惰性启动 */
   ensureStarted(): Promise<void> {
@@ -183,6 +211,13 @@ export class WidgetServer {
         }
         this.server = server
         this.port = addr.port
+        this.offSettings ??= appEventBus.subscribe((event) => {
+          if (event.type !== 'settings.changed') return
+          // 没指明哪些键 = 消费者全量重取：也推一次（页面只在主题真变了时才动）
+          if (!event.keys || event.keys.some((k) => WIDGET_THEME_SETTING_KEYS.includes(k))) {
+            this.notifyTheme()
+          }
+        })
         log.info(`Widget server listening at http://127.0.0.1:${this.port}`)
         resolveStart()
       })
@@ -301,6 +336,8 @@ export class WidgetServer {
       this.server = null
       this.port = 0
     }
+    this.offSettings?.()
+    this.offSettings = null
     // 重置启动 Promise，下一次 ensureStarted 会重新监听端口
     this.startPromise = null
   }
@@ -443,6 +480,8 @@ export class WidgetServer {
         Connection: 'keep-alive'
       })
       res.write(':\n\n')
+      // 页面骨架送出之后、这条连上之前主题可能变过：连上就先对一次
+      res.write(themeEvent())
       entry.sseClients.add(res)
       req.on('close', () => entry.sseClients.delete(res))
       return
@@ -454,6 +493,16 @@ export class WidgetServer {
         'Cache-Control': 'public, max-age=31536000, immutable'
       })
       res.end(this.getTailwindContent())
+      return
+    }
+
+    if (rest === '/theme.css') {
+      res.writeHead(200, {
+        'Content-Type': 'text/css; charset=utf-8',
+        // 远程浏览器经网络服务转发时地址跨重启不变：应用升级换了主题令牌，不能被一年的缓存挡住
+        'Cache-Control': 'no-cache'
+      })
+      res.end(widgetThemeCss())
       return
     }
 
@@ -481,7 +530,19 @@ export class WidgetServer {
       )
       return
     }
-    res.end(hostHTML(`/w/${widgetId}/`, widgetId))
+    const qsIdx = url.indexOf('?')
+    const forced = parseWidgetScheme(
+      new URLSearchParams(qsIdx === -1 ? '' : url.slice(qsIdx + 1)).get(WIDGET_SCHEME_PARAM)
+    )
+    res.end(hostHTML(`/w/${widgetId}/`, widgetId, forced))
+  }
+
+  /** 主题设置变了：告诉所有组件开着的页面 */
+  notifyTheme(): void {
+    const event = themeEvent()
+    for (const entry of this.entries.values()) {
+      for (const c of entry.sseClients) c.write(event)
+    }
   }
 
   private notifyReload(entry: WidgetEntry): void {

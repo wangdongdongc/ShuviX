@@ -16,7 +16,7 @@
  *   WS-C7 unregisterWidget 之后文件路由 → 404 not registered
  *   WS-R1 fs/file png → 200 image/png 字节一致；Range → 206
  *   WS-R2 fs/list → 200 JSON，名字对得上
- *   WS-K1 每个路由（页面、bundle、tailwind、sse、db、fs/file、fs/list）不带令牌 / 带空的 / 带乱写的 → 403，
+ *   WS-K1 每个路由（页面、bundle、tailwind、theme.css、sse、db、fs/file、fs/list）不带令牌 / 带空的 / 带乱写的 → 403，
  *         正文里没有文件内容与数据（沙箱里的命令 curl 过来就是这样）；db 与 fs/list 的 403 是 JSON { code, message }；
  *         Host 不对的照旧先 421
  *   WS-K2 别的 widget 的令牌 → 403（A 的令牌用不了 B 的任何路由）
@@ -30,7 +30,14 @@
  *   WT4-PV-07 preview 令牌 + 没有 path / 相对路径 / 带 \0 → 400（与 ui 一样），判定不问
  *   WT4-PV-08 preview 令牌打老组件的 db/：GET 问 read、别的方法（含 HEAD）问 write；不放行 → 403 JSON FORBIDDEN，
  *         数据库不调；放行 → 照常处理；ui 令牌从不问判定
- *   WT4-PV-09 preview 令牌拿页面、bundle、sse → 照常，不问判定
+ *   WT4-PV-09 preview 令牌拿页面、bundle、theme.css、sse → 照常，不问判定
+ *   WS-T1 GET /w/<id>/theme.css → 200 text/css、no-cache、正文 = widgetThemeCss()（带主题块）、ACAO *
+ *   WS-T2 页面骨架（设置是 system + one-light + nord）：主题脚本 → theme.css → tailwind.js → text/tailwindcss 样式块
+ *         （WIDGET_TAILWIND_THEME）依次排着；脚本带那份选择、`var forced = null`；底色取 var(--theme-bg-primary)；
+ *         没有旧的 #0d1117、没有 `@media (prefers-color-scheme`
+ *   WS-T3 地址上的 shuvix-scheme：dark / light（也在别的参数后面）→ 写进 forced；DARK、system、空串 → null
+ *   WS-T4 送出来的页面在 JSDOM 里跑（假 matchMedia、假 EventSource）：属性与设置一致；SSE `theme` 带新选择 → 就地换
+ *         data-theme，不重载（没有导航）；不是 JSON 的 data → 不抛、什么都不变；对照：`reload` 事件确实会导航
  *
  * 除 WS-K 外，http() 自动给 `/w/<id>/…` 带上那个 widget 的 ui 令牌（widget 页面经主进程补头的样子）。
  */
@@ -40,6 +47,7 @@ import { request as httpRequest, type IncomingHttpHeaders } from 'node:http'
 import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { JSDOM, VirtualConsole } from 'jsdom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -66,6 +74,13 @@ vi.mock('../../../logger', () => ({
 
 import { setWidgetPreviewJudge, WidgetServer } from '../widgetServer'
 import { issueWidgetToken, WIDGET_TOKEN_HEADER } from '../widgetToken'
+import {
+  setWidgetThemeReader,
+  themeBootScript,
+  widgetThemeCss,
+  WIDGET_TAILWIND_THEME,
+  type WidgetThemeState
+} from '../widgetTheme'
 
 const SECRET = 'top-secret-file-contents-42'
 
@@ -141,6 +156,7 @@ beforeEach(async () => {
 afterEach(() => {
   server.dispose()
   setWidgetPreviewJudge(null)
+  setWidgetThemeReader(null)
   vi.unstubAllEnvs()
   rmSync(tmp, { recursive: true, force: true })
 })
@@ -346,6 +362,7 @@ describe('WS-K 每个路由要那个 widget 的令牌', () => {
     '/w/photo-wall/bundle.js',
     '/w/photo-wall/bundle.css',
     '/w/photo-wall/tailwind.js',
+    '/w/photo-wall/theme.css',
     '/w/photo-wall/db/items',
     `/w/photo-wall/fs/file?path=${q(secretFile)}`,
     `/w/photo-wall/fs/list?path=${q(tmp)}`
@@ -370,7 +387,7 @@ describe('WS-K 每个路由要那个 widget 的令牌', () => {
     forbidden(await http('/w/photo-wall/sse', { token: null }), '/w/photo-wall/sse')
     expect(mocks.handleRestRequest).not.toHaveBeenCalled()
 
-    const misdirected = await http(ROUTES()[5], { token: null, host: 'evil.example' })
+    const misdirected = await http(ROUTES()[6], { token: null, host: 'evil.example' })
     expect(misdirected.status).toBe(421)
   })
 
@@ -380,10 +397,12 @@ describe('WS-K 每个路由要那个 widget 的令牌', () => {
   })
 
   it('WS-K4 没注册的 widget：不带令牌 403，带它的令牌 404', async () => {
-    expect((await http('/w/nope-x/', { token: null })).status).toBe(403)
-    const withToken = await http('/w/nope-x/')
-    expect(withToken.status).toBe(404)
-    expect(withToken.body.toString()).toBe('Widget nope-x not registered')
+    for (const path of ['/w/nope-x/', '/w/nope-x/theme.css']) {
+      expect((await http(path, { token: null })).status, path).toBe(403)
+      const withToken = await http(path)
+      expect(withToken.status, path).toBe(404)
+      expect(withToken.body.toString(), path).toBe('Widget nope-x not registered')
+    }
   })
 
   it('WS-K5 预检 OPTIONS 不要令牌', async () => {
@@ -601,7 +620,7 @@ describe('WT4-PV 预览令牌（按发起预览的会话判）', () => {
     expect(j.readPath).not.toHaveBeenCalled()
   })
 
-  it('WT4-PV-09 preview 令牌拿页面、bundle、sse → 照常，不问判定', async () => {
+  it('WT4-PV-09 preview 令牌拿页面、bundle、theme.css、sse → 照常，不问判定', async () => {
     const j = judge()
     const page = await http(`/w/${ID}/`, { token: preview('s1') })
     expect(page.status).toBe(200)
@@ -609,6 +628,9 @@ describe('WT4-PV 预览令牌（按发起预览的会话判）', () => {
     const bundle = await http(`/w/${ID}/bundle.js`, { token: preview('s1') })
     expect(bundle.status).toBe(200)
     expect(bundle.body.toString()).toBe('js')
+    const theme = await http(`/w/${ID}/theme.css`, { token: preview('s1') })
+    expect(theme.status).toBe(200)
+    expect(theme.body.toString()).toBe(widgetThemeCss())
 
     // sse 是不结束的流：拿到响应头就断开
     const sse = await new Promise<{ status: number; type: string | undefined }>((done, fail) => {
@@ -633,5 +655,161 @@ describe('WT4-PV 预览令牌（按发起预览的会话判）', () => {
     expect(sse).toEqual({ status: 200, type: 'text/event-stream' })
     expect(j.widget).not.toHaveBeenCalled()
     expect(j.readPath).not.toHaveBeenCalled()
+  })
+})
+
+describe('WS-T 主题', () => {
+  const SYSTEM: WidgetThemeState = { mode: 'system', light: 'one-light', dark: 'nord' }
+
+  it('WS-T1 GET theme.css → 200 text/css、no-cache、正文 = widgetThemeCss()、ACAO *', async () => {
+    const res = await http('/w/photo-wall/theme.css')
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toBe('text/css; charset=utf-8')
+    expect(res.headers['cache-control']).toBe('no-cache')
+    expect(res.headers['access-control-allow-origin']).toBe('*')
+    const body = res.body.toString()
+    expect(body).toBe(widgetThemeCss())
+    // 主题块都在（不是只有那一段 --widget-*）
+    for (const id of ['github-dark', 'nord', 'dracula', 'solarized-light', 'one-light']) {
+      expect(body, id).toContain(`[data-theme='${id}']`)
+    }
+    expect(body).toContain('--widget-surface: var(--theme-bg-secondary);')
+  })
+
+  it('WS-T2 页面骨架：脚本 → theme.css → tailwind.js → 语义色名；带着设置那一份选择', async () => {
+    setWidgetThemeReader(() => ({ mode: 'system', light: 'one-light', dark: 'nord' }))
+    const res = await http('/w/photo-wall/')
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toMatch(/^text\/html/)
+    const html = res.body.toString()
+
+    const script = `<script>${themeBootScript(SYSTEM, null)}</script>`
+    const at = {
+      script: html.indexOf(script),
+      themeCss: html.indexOf('<link rel="stylesheet" href="theme.css" />'),
+      tailwind: html.indexOf('<script src="tailwind.js"></script>'),
+      names: html.indexOf('<style type="text/tailwindcss">')
+    }
+    for (const [what, i] of Object.entries(at)) expect(i, what).toBeGreaterThan(-1)
+    expect(at.script).toBeLessThan(at.themeCss)
+    expect(at.themeCss).toBeLessThan(at.tailwind)
+    expect(at.tailwind).toBeLessThan(at.names)
+    // 主题脚本在 <head> 里第一个脚本
+    expect(html.indexOf('<script')).toBe(at.script)
+    const names = html.slice(at.names, html.indexOf('</style>', at.names))
+    expect(names).toContain(WIDGET_TAILWIND_THEME)
+
+    expect(html).toContain(`var state = ${JSON.stringify(SYSTEM)};`)
+    expect(html).toContain('var forced = null;')
+    expect(html).toContain('background: var(--theme-bg-primary)')
+    expect(html).toContain('color: var(--theme-text-primary)')
+    expect(html).not.toContain('#0d1117')
+    // 明暗只经主题脚本（matchMedia）与 data-scheme，样式里不再有媒体查询
+    expect(html).not.toContain('@media (prefers-color-scheme')
+  })
+
+  it.each<[string, string]>([
+    ['?shuvix-scheme=dark', '"dark"'],
+    ['?shuvix-scheme=light', '"light"'],
+    ['?x=1&shuvix-scheme=light', '"light"'],
+    ['?shuvix-scheme=DARK', 'null'],
+    ['?shuvix-scheme=system', 'null'],
+    ['?shuvix-scheme=', 'null'],
+    ['', 'null']
+  ])('WS-T3 地址 %j → forced = %s', async (query, forced) => {
+    setWidgetThemeReader(() => ({ mode: 'light', light: 'one-light', dark: 'nord' }))
+    const res = await http(`/w/photo-wall/${query}`)
+    expect(res.status).toBe(200)
+    const html = res.body.toString()
+    expect(html).toContain(`var forced = ${forced};`)
+    expect(html.split('var forced = ')).toHaveLength(2)
+    // 哪一套仍跟设置
+    expect(html).toContain(
+      `var state = ${JSON.stringify({ mode: 'light', light: 'one-light', dark: 'nord' })};`
+    )
+  })
+
+  it('WS-T4 送出来的页面在 JSDOM 里跑：属性跟设置；SSE theme 就地换、不导航；坏的 data 什么都不变', async () => {
+    setWidgetThemeReader(() => ({ mode: 'system', light: 'one-light', dark: 'nord' }))
+    const html = (await http('/w/photo-wall/')).body.toString()
+
+    interface PageSource {
+      url: string
+      emit: (type: string, data: string) => void
+    }
+    const sources: PageSource[] = []
+    const jsdomErrors: string[] = []
+    const virtualConsole = new VirtualConsole()
+    virtualConsole.on('jsdomError', (e: Error) => jsdomErrors.push(e.message))
+    const mql = { matches: true, addEventListener: (): void => {} }
+
+    const dom = new JSDOM(html, {
+      url: `http://127.0.0.1:${port}/w/photo-wall/`,
+      runScripts: 'dangerously',
+      virtualConsole,
+      beforeParse(window) {
+        Object.assign(window, {
+          matchMedia: () => mql,
+          EventSource: class {
+            private readonly listeners = new Map<string, Array<(e: { data: string }) => void>>()
+            onerror: unknown = null
+            constructor(readonly url: string) {
+              sources.push({
+                url,
+                emit: (type, data) => {
+                  for (const fn of this.listeners.get(type) ?? []) fn({ data })
+                }
+              })
+            }
+            addEventListener(type: string, fn: (e: { data: string }) => void): void {
+              this.listeners.set(type, [...(this.listeners.get(type) ?? []), fn])
+            }
+          }
+        })
+      }
+    })
+    try {
+      const doc = dom.window.document.documentElement
+      const shown = (): [string | null, string | null] => [
+        doc.getAttribute('data-theme'),
+        doc.getAttribute('data-scheme')
+      ]
+      expect(shown()).toEqual(['nord', 'dark'])
+      expect(sources.map((s) => s.url)).toEqual(['sse'])
+      const themeEvents: unknown[] = []
+      dom.window.addEventListener('shuvix:theme', (e) =>
+        themeEvents.push((e as CustomEvent).detail)
+      )
+      ;(dom.window as unknown as { __kept: number }).__kept = 42
+
+      sources[0].emit(
+        'theme',
+        JSON.stringify({ mode: 'system', light: 'one-light', dark: 'dracula' })
+      )
+      expect(shown()).toEqual(['dracula', 'dark'])
+      expect(themeEvents).toEqual([{ id: 'dracula', scheme: 'dark' }])
+
+      sources[0].emit(
+        'theme',
+        JSON.stringify({ mode: 'light', light: 'catppuccin-latte', dark: 'dracula' })
+      )
+      expect(shown()).toEqual(['catppuccin-latte', 'light'])
+
+      for (const bad of ['not json', '', '{"mode":', 'null']) {
+        expect(() => sources[0].emit('theme', bad), bad).not.toThrow()
+      }
+      expect(shown()).toEqual(['catppuccin-latte', 'light'])
+      expect(themeEvents).toHaveLength(2)
+
+      // 同一个文档：没有导航（jsdom 的导航会报 not implemented）
+      expect((dom.window as unknown as { __kept: number }).__kept).toBe(42)
+      expect(jsdomErrors.filter((m) => /navigation/i.test(m))).toEqual([])
+
+      // 对照：reload 事件确实会触发导航（上面的「没有导航」是看得见的）
+      sources[0].emit('reload', 'ok')
+      expect(jsdomErrors.filter((m) => /navigation/i.test(m))).toHaveLength(1)
+    } finally {
+      dom.window.close()
+    }
   })
 })

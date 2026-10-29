@@ -19,7 +19,7 @@ This file is the whole workflow. The references hold the details; each row of th
 ## Rules that always hold
 
 1. **Building goes through the `widget` tool** (`create`, `build`, `preview`, `sql`, `export`, `open`; `references/tool.md`). `build` is the only build: never install packages, never run npm, npx or a bundler, never run git in a widget.
-2. **Closed dependency set.** The screen: React 19 with TypeScript, Tailwind CSS v4 through `className` (`dark:` follows the app theme), React Router (`createHashRouter` from `react-router`) only for a genuinely multi-page widget, and `shuvix/widget` to call the API. `api.ts`: `shuvix/widget-api` and `zod`. Nothing else resolves; an unknown import fails the build. Icons are inline SVG, dates are `Intl` and `Date`.
+2. **Closed dependency set.** The screen: React 19 with TypeScript, Tailwind CSS v4 through `className` (colors only from the theme names in `references/design.md`, so the widget follows the app's theme), React Router (`createHashRouter` from `react-router`) only for a genuinely multi-page widget, and `shuvix/widget` to call the API. `api.ts`: `shuvix/widget-api` and `zod`. Nothing else resolves; an unknown import fails the build. Icons are inline SVG, dates are `Intl` and `Date`.
 3. **`index.tsx` ends with the mount block**, inside the scaffold's "DO NOT DELETE" comment:
    ```tsx
    const root = document.getElementById('root')
@@ -28,7 +28,7 @@ This file is the whole workflow. The references hold the details; each row of th
 4. **Stay inside the widget's own directory.** Never edit or delete `widget.json`: it is the widget's identity, and ShuviX rewrites it itself.
 5. **Records live in the widget's database and change only through its API** (`references/api.md`, `references/data.md`). The screen calls the API with `createClient` from `shuvix/widget`; it reads files on the user's computer through `fs/file` and `fs/list` (`references/files.md`). Never write `shuvix-media://`, `file://` or `http://127.0.0.1:<port>`: they only work on the desktop, and the widget breaks when it is opened from a browser.
 6. **Persistent state goes in the database** (through an operation), not `localStorage`, `IndexedDB` or cookies: opened from a browser, the widget runs sandboxed without an origin of its own, where those are unavailable.
-7. **It works in the panel, a wide window and on a phone.** The same widget opens in the right panel (300–420px wide), in its own window or a browser tab (up to full screen), and in a phone's browser (touch). **Dark mode is mandatory.** How to lay it out for all three, and the rest of the look, are in `references/design.md`: read it before writing UI.
+7. **It works in the panel, a wide window and on a phone.** The same widget opens in the right panel (300–420px wide), in its own window or a browser tab (up to full screen), and in a phone's browser (touch). **Colors follow the app's theme**: only the theme color names, never a fixed palette. How to lay it out for all three, and the rest of the look, are in `references/design.md`: read it before writing UI.
 8. **Never report a widget that has not built.** Finish with a green build. **Do not open it for the user**: say it is ready in the Widget panel, by its name. A build reloads the widget wherever it is already open. Use `open` only when the user asks you to open it.
 
 ## A new widget

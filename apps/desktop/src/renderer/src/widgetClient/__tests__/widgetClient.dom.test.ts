@@ -54,6 +54,16 @@
  *   WC-55 没有 EventSource：onData / use 不抛，use 照样取一次
  *   WC-56 页面自己的流（`window.__shuvixEvents`）：不另开；挂在它上面；最后一个走了只摘掉自己的监听、不关它
  *   WC-57 页面的流上别的监听（reload）不受影响；退订完再订阅 → 又挂回页面那一条，仍不新开
+ * 主题（useTheme / themeColor；页面骨架在 `<html>` 上设 data-theme / data-scheme 并发 `shuvix:theme`）
+ *   WC-60 `<html data-theme="nord" data-scheme="dark">` → {id:'nord', scheme:'dark'}；改属性 + 发 shuvix:theme → 带新值重渲染；
+ *         什么都没变时发 → 不多渲染
+ *   WC-61 没有 data-scheme → 明暗看（假的）matchMedia、id 是 ''；媒体查询变了 → 重渲染；根本没有 matchMedia → light、不抛；
+ *         data-scheme="blue" → 也看媒体查询
+ *   WC-62 没有「getSnapshot should be cached」的 console.error；卸载之后事件不再引起渲染、媒体查询的监听摘掉
+ *   WC-63 themeColor：getComputedStyle 换成假的（jsdom 读不出变量的值）；'accent' 探 var(--widget-accent)、'--x' 探 var(--x)；
+ *         探针在调用期间是 `<html>` 下 display:none 的子节点、之后移走；变量没定义 → '' 且不挂探针；计算值已经是 rgb(…)
+ *         → 原样交回、不碰画布；oklch(…) → 画到（假的）2D 画布上读回：[0,212,146,255] → rgb(0, 212, 146)，
+ *         [57,135,227,36] → rgba(57, 135, 227, 0.141)；没有 2D 上下文（jsdom 自己就是）→ 计算值原样
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Root } from 'react-dom/client'
@@ -1002,5 +1012,289 @@ describe('onData', () => {
     expect(reload).toHaveBeenCalledTimes(1)
     off2()
     expect(page.close).not.toHaveBeenCalled()
+  })
+})
+
+// ═══════════════════════════════ 主题 ═══════════════════════════════
+
+describe('theme', () => {
+  type Theme = { id: string; scheme: 'light' | 'dark' }
+
+  interface FakeMql {
+    matches: boolean
+    listeners: Array<() => void>
+    addEventListener: (type: string, fn: () => void) => void
+    removeEventListener: (type: string, fn: () => void) => void
+  }
+
+  const html = (): HTMLElement => document.documentElement
+
+  function fakeMedia(matches: boolean): FakeMql {
+    const mql: FakeMql = {
+      matches,
+      listeners: [],
+      addEventListener: (type, fn) => {
+        if (type === 'change') mql.listeners.push(fn)
+      },
+      removeEventListener: (type, fn) => {
+        if (type === 'change') mql.listeners = mql.listeners.filter((f) => f !== fn)
+      }
+    }
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => mql)
+    )
+    return mql
+  }
+
+  async function flipMedia(mql: FakeMql, dark: boolean): Promise<void> {
+    await React.act(async () => {
+      mql.matches = dark
+      for (const fn of [...mql.listeners]) fn()
+    })
+  }
+
+  async function themeEvent(attrs?: Record<string, string>): Promise<void> {
+    await React.act(async () => {
+      for (const [k, v] of Object.entries(attrs ?? {})) html().setAttribute(k, v)
+      window.dispatchEvent(new CustomEvent('shuvix:theme'))
+    })
+  }
+
+  async function mountTheme(): Promise<{
+    renders: Theme[]
+    last: () => Theme
+    unmount: () => Promise<void>
+  }> {
+    const renders: Theme[] = []
+    function Probe(): null {
+      renders.push(W.useTheme())
+      return null
+    }
+    const root = ReactDOM.createRoot(document.createElement('div'))
+    roots.add(root)
+    await React.act(async () => root.render(React.createElement(Probe)))
+    return {
+      renders,
+      last: () => renders[renders.length - 1],
+      unmount: async () => {
+        await React.act(async () => root.unmount())
+        roots.delete(root)
+      }
+    }
+  }
+
+  beforeEach(() => {
+    html().removeAttribute('data-theme')
+    html().removeAttribute('data-scheme')
+  })
+
+  afterEach(() => {
+    html().removeAttribute('data-theme')
+    html().removeAttribute('data-scheme')
+  })
+
+  it('WC-60 读 <html> 的两个属性；shuvix:theme 带来新值；什么都没变不多渲染', async () => {
+    html().setAttribute('data-theme', 'nord')
+    html().setAttribute('data-scheme', 'dark')
+    const m = await mountTheme()
+    expect(m.last()).toEqual({ id: 'nord', scheme: 'dark' })
+
+    const n = m.renders.length
+    await themeEvent({ 'data-theme': 'one-light', 'data-scheme': 'light' })
+    expect(m.last()).toEqual({ id: 'one-light', scheme: 'light' })
+    expect(m.renders).toHaveLength(n + 1)
+
+    await themeEvent()
+    await themeEvent()
+    expect(m.renders).toHaveLength(n + 1)
+
+    await themeEvent({ 'data-theme': 'dracula', 'data-scheme': 'dark' })
+    expect(m.last()).toEqual({ id: 'dracula', scheme: 'dark' })
+    expect(m.renders).toHaveLength(n + 2)
+    await m.unmount()
+  })
+
+  it('WC-61 没有 data-scheme → 看媒体查询，id 是空串；媒体查询变了重渲染', async () => {
+    const mql = fakeMedia(true)
+    const m = await mountTheme()
+    expect(m.last()).toEqual({ id: '', scheme: 'dark' })
+    expect(window.matchMedia).toHaveBeenCalledWith('(prefers-color-scheme: dark)')
+
+    await flipMedia(mql, false)
+    expect(m.last()).toEqual({ id: '', scheme: 'light' })
+    await m.unmount()
+  })
+
+  it('WC-61 data-scheme 不是 light / dark → 也看媒体查询', async () => {
+    fakeMedia(true)
+    html().setAttribute('data-theme', 'nord')
+    html().setAttribute('data-scheme', 'blue')
+    const m = await mountTheme()
+    expect(m.last()).toEqual({ id: 'nord', scheme: 'dark' })
+    await m.unmount()
+  })
+
+  it('WC-61 根本没有 matchMedia → light，不抛', async () => {
+    vi.stubGlobal('matchMedia', undefined)
+    const m = await mountTheme()
+    expect(m.last()).toEqual({ id: '', scheme: 'light' })
+    await themeEvent()
+    expect(m.last()).toEqual({ id: '', scheme: 'light' })
+    await m.unmount()
+  })
+
+  it('WC-62 没有 getSnapshot 的告警；卸载之后不再渲染、监听摘掉', async () => {
+    const consoleError = vi.spyOn(console, 'error')
+    const mql = fakeMedia(false)
+    html().setAttribute('data-theme', 'nord')
+    html().setAttribute('data-scheme', 'dark')
+    const m = await mountTheme()
+    await themeEvent()
+    await flipMedia(mql, true)
+    await themeEvent({ 'data-theme': 'dracula' })
+    expect(m.last()).toEqual({ id: 'dracula', scheme: 'dark' })
+    expect(mql.listeners).toHaveLength(1)
+
+    await m.unmount()
+    expect(mql.listeners).toHaveLength(0)
+    const n = m.renders.length
+    await themeEvent({ 'data-theme': 'one-light', 'data-scheme': 'light' })
+    await flipMedia(mql, false)
+    expect(m.renders).toHaveLength(n)
+
+    const messages = consoleError.mock.calls.map((c) => c.map(String).join(' '))
+    expect(messages.filter((t) => /getSnapshot/.test(t))).toEqual([])
+  })
+
+  describe('WC-63 themeColor', () => {
+    interface Probed {
+      color: string
+      display: string
+      underHtml: boolean
+      element: HTMLElement
+    }
+    let probed: Probed[]
+    let rootValues: Record<string, string>
+    let probeColor: string
+
+    /** jsdom 的 getComputedStyle 读不出变量的值：换成假的（根 → 变量表；探针 → probeColor），并记下探针的样子 */
+    function fakeComputedStyle(): void {
+      vi.stubGlobal(
+        'getComputedStyle',
+        vi.fn((el: Element) => {
+          if (el === html()) {
+            return {
+              getPropertyValue: (prop: string) => rootValues[prop] ?? ''
+            } as unknown as CSSStyleDeclaration
+          }
+          const e = el as HTMLElement
+          probed.push({
+            color: e.style.color,
+            display: e.style.display,
+            underHtml: e.parentNode === html(),
+            element: e
+          })
+          return { color: probeColor } as unknown as CSSStyleDeclaration
+        })
+      )
+    }
+
+    interface FakeCtx {
+      canvas: { width: number; height: number }
+      fillStyle: string
+      fillRect: ReturnType<typeof vi.fn>
+      getImageData: ReturnType<typeof vi.fn>
+    }
+
+    /** 2D 上下文换成假的：getImageData 交回 `data`；data 是 null = 没有上下文 */
+    function fakeCanvas(data: number[] | null): {
+      getContext: { mock: { calls: unknown[][] }; mockRestore: () => void }
+      ctx: FakeCtx
+    } {
+      const ctx: FakeCtx = {
+        canvas: { width: 300, height: 150 },
+        fillStyle: '',
+        fillRect: vi.fn(),
+        getImageData: vi.fn(() => ({ data: Uint8ClampedArray.from(data ?? []) }))
+      }
+      const getContext = vi
+        .spyOn(HTMLCanvasElement.prototype, 'getContext')
+        .mockImplementation((() => (data ? ctx : null)) as never)
+      return { getContext, ctx }
+    }
+
+    beforeEach(() => {
+      probed = []
+      rootValues = {
+        '--widget-accent': ' var(--theme-accent)',
+        '--x': 'red',
+        '--widget-success': 'light-dark(oklch(59.6% 0.145 163.225), oklch(76.5% 0.177 163.223))',
+        '--widget-viz-1-tint': 'color-mix(in srgb, var(--viz-1) 14%, transparent)'
+      }
+      probeColor = 'rgb(136, 192, 208)'
+      fakeComputedStyle()
+    })
+
+    it('WC-63 名字 → 探 var(--widget-<名字>)；带 -- 的 → 探那个变量；探针用完移走；rgb 不碰画布', () => {
+      const { getContext } = fakeCanvas(null)
+      const before = html().childNodes.length
+
+      expect(W.themeColor('accent')).toBe('rgb(136, 192, 208)')
+      expect(probed).toHaveLength(1)
+      expect(probed[0]).toMatchObject({
+        color: 'var(--widget-accent)',
+        display: 'none',
+        underHtml: true
+      })
+      expect(probed[0].element.isConnected).toBe(false)
+
+      probeColor = 'rgba(255, 0, 0, 0.5)'
+      expect(W.themeColor('--x')).toBe('rgba(255, 0, 0, 0.5)')
+      expect(probed[1]).toMatchObject({ color: 'var(--x)', display: 'none', underHtml: true })
+      expect(probed[1].element.isConnected).toBe(false)
+
+      expect(html().childNodes.length).toBe(before)
+      expect(getContext.mock.calls).toEqual([])
+    })
+
+    it('WC-63 变量没定义 → 空串，不挂探针', () => {
+      const append = vi.spyOn(html(), 'appendChild')
+      expect(W.themeColor('nope')).toBe('')
+      expect(W.themeColor('--nope')).toBe('')
+      rootValues['--blank'] = '   '
+      expect(W.themeColor('--blank')).toBe('')
+      expect(append).not.toHaveBeenCalled()
+      expect(probed).toEqual([])
+    })
+
+    it('WC-63 oklch / color(srgb …) → 画到一个像素上读回 rgb / rgba', () => {
+      probeColor = 'oklch(0.765 0.177 163.223)'
+      const opaque = fakeCanvas([0, 212, 146, 255])
+      expect(W.themeColor('success')).toBe('rgb(0, 212, 146)')
+      expect(opaque.ctx.fillStyle).toBe('oklch(0.765 0.177 163.223)')
+      expect(opaque.ctx.fillRect).toHaveBeenCalledWith(0, 0, 1, 1)
+      expect(opaque.ctx.getImageData).toHaveBeenCalledWith(0, 0, 1, 1)
+      expect(opaque.ctx.canvas).toEqual({ width: 1, height: 1 })
+      opaque.getContext.mockRestore()
+
+      probeColor = 'color(srgb 0.224 0.529 0.89 / 0.14)'
+      const translucent = fakeCanvas([57, 135, 227, 36])
+      expect(W.themeColor('viz-1-tint')).toBe('rgba(57, 135, 227, 0.141)')
+      expect(translucent.getContext.mock.calls[0][0]).toBe('2d')
+    })
+
+    it('WC-63 没有 2D 上下文 → 计算值原样交回', () => {
+      probeColor = 'oklch(0.765 0.177 163.223)'
+      fakeCanvas(null)
+      expect(W.themeColor('success')).toBe('oklch(0.765 0.177 163.223)')
+    })
+
+    it('WC-63 jsdom 自己的画布（没有实现 getContext）→ 计算值原样交回，不抛', () => {
+      probeColor = 'color(srgb 0.224 0.529 0.89 / 0.14)'
+      // jsdom 会往控制台报一句 not implemented；这里只关心返回值
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      expect(W.themeColor('viz-1-tint')).toBe('color(srgb 0.224 0.529 0.89 / 0.14)')
+    })
   })
 })

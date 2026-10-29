@@ -8,8 +8,9 @@
  *   主进程启动时带着 `disable-backgrounding-occluded-windows`，没显示过的窗口照样出帧、capturePage 拿得到图。
  *   不用离屏渲染（offscreen）：它加 CDP 的设备模拟在这台机器上直接把主进程打崩（SIGSEGV，2026-10-17 实测）。
  *   视口、触屏与移动视口都经 CDP 的 Emulation 设，截图缩回 CSS 像素（高分屏上截出来是 2 倍） —— 先载入 about:blank 再设（没有
- *   渲染进程时 CDP 命令会挂住），设好的模拟随后续导航保留；颜色方案缺省跟应用（nativeTheme.themeSource 已按
- *   用户的主题设好），给了 `theme` 就改 prefers-color-scheme。
+ *   渲染进程时 CDP 命令会挂住），设好的模拟随后续导航保留；颜色方案缺省跟应用（页面骨架按用户的主题设置选那一套），
+ *   给了 `theme` 就在地址上带 `shuvix-scheme`（页面骨架强制那一档，浅色 / 深色用哪套主题仍跟设置，见
+ *   widget/widgetTheme.ts），同时改 prefers-color-scheme（组件自己写的媒体查询也跟着）。
  * - 页面只能待在这个小组件自己的地址（`/w/<id>/` 之下）：弹窗、顶层导航到别处（别的小组件也算）、下载、权限
  *   请求一律拒绝，也不交给系统 —— 没人在看这个窗口，交给系统就是替 agent 去开外站。所以它不挂 guardAppWindow
  *   （那个会把外链交给系统打开）。会话是不落盘的独立分区。
@@ -33,6 +34,7 @@ import { createLogger } from '../logger'
 import { getToolResultsDir, isSafeSessionId } from '../utils/paths'
 import { widgetServer, widgetService } from './widget'
 import { installWidgetTokens, issueWidgetToken } from './widget/widgetToken'
+import { WIDGET_SCHEME_PARAM } from './widget/widgetTheme'
 
 const log = createLogger('WidgetPreview')
 
@@ -247,6 +249,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
   })
 }
 
+/** 预览的页面地址：给了明暗就带上 shuvix-scheme，页面骨架照它强制（应用设成强制深色时，单改媒体查询不够） */
+export function previewUrl(url: string, theme: PreviewTheme | undefined): string {
+  if (!theme) return url
+  const u = new URL(url)
+  u.searchParams.set(WIDGET_SCHEME_PARAM, theme)
+  return u.toString()
+}
+
 async function captureOne(
   url: string,
   size: PreviewSize,
@@ -308,7 +318,7 @@ async function captureOne(
       })
     }
 
-    await withTimeout(wc.loadURL(url), LOAD_TIMEOUT_MS, 'loading the widget')
+    await withTimeout(wc.loadURL(previewUrl(url, theme)), LOAD_TIMEOUT_MS, 'loading the widget')
     const deadline = Date.now() + MOUNT_WAIT_MS
     while (Date.now() < deadline) {
       const mounted = await withTimeout(

@@ -16,6 +16,11 @@
  *         第 4 条的 `/w/<id>/db/…` 是真的 id；`.tmpl` 生成的文件里没有剩下的 `{{`
  *   WC-86 组件自己也有 src/shuvix-widget.ts、vite.config.ts → 归档里是模板的（模板优先）
  *   WC-87 带 api.ts 的导出解开后 `tsc -b` 通过（仓库的 node_modules 链进去）；对照：界面传错参数类型 → tsc 报错
+ *   WC-88 `src/shuvix-theme.css` = exportThemeCss()：themes.css 全文、页面底色字色那条 body 规则、WIDGET_TAILWIND_THEME
+ *         依次在里面；`src/index.css` 在 `@import 'tailwindcss'` 之后引它
+ *   WC-89 index.html：主题脚本排在 `/src/index.css` 那条 link 之前，正文 = themeBootScript(WIDGET_EXPORT_THEME)
+ *   WC-90 EXPORT_NOTES 第 6 条点名 src/shuvix-theme.css、data-scheme、useTheme()、themeColor()；文件表里有 src/shuvix-theme.css
+ *   WC-91 组件自己也有 src/shuvix-theme.css → 归档里是生成的那份
  */
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -31,6 +36,7 @@ const RESOURCES = join(DESKTOP_DIR, 'resources/bundler')
 const TEMPLATE_DIR = join(RESOURCES, 'export-template/widget')
 const CLIENT_SOURCE = join(DESKTOP_DIR, 'src/renderer/src/widgetClient/widgetClient.ts')
 const RUNTIME_SOURCE = join(DESKTOP_DIR, 'src/main/services/widget/api/sandboxRuntime.ts')
+const THEMES_CSS = join(REPO_DIR, 'packages/app-shell/src/themes.css')
 
 const h = vi.hoisted(() => ({
   widgetDir: '',
@@ -50,8 +56,14 @@ vi.mock('../../../logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} })
 }))
 
-import { exportWidget } from '../widgetExporter'
+import { exportThemeCss, exportWidget } from '../widgetExporter'
 import { EXPORTED_VERSIONS } from '../exportedVersions'
+import {
+  themeBootScript,
+  widgetThemeCss,
+  WIDGET_EXPORT_THEME,
+  WIDGET_TAILWIND_THEME
+} from '../widgetTheme'
 
 const ID = 'reading-list'
 let tmp = ''
@@ -263,6 +275,81 @@ describe('WC-83..86 导出的归档', () => {
     ).toBe(true)
     expect(utf8(files['vite.config.ts'])).toContain("'shuvix/widget': '/src/shuvix-widget.ts'")
     expect(utf8(files['vite.config.ts'])).not.toContain('mine')
+  })
+})
+
+describe('WC-88..91 主题跟着导出', () => {
+  beforeEach(() => {
+    put('index.tsx', indexTsx())
+    put('api.ts', API_TS)
+  })
+
+  it('WC-88 src/shuvix-theme.css = exportThemeCss()（主题令牌、body、Tailwind 语义色名）；index.css 在 tailwindcss 之后引它', async () => {
+    const files = await exportAndUnzip()
+
+    const theme = utf8(files['src/shuvix-theme.css'])
+    expect(theme).toBe(exportThemeCss())
+    const themes = readFileSync(THEMES_CSS, 'utf8').trimEnd()
+    expect(themes.length).toBeGreaterThan(1000)
+    const at = {
+      themes: theme.indexOf(themes),
+      widgetVars: theme.indexOf(widgetThemeCss().trimEnd()),
+      body: theme.indexOf(
+        'body {\n  background: var(--theme-bg-primary);\n  color: var(--theme-text-primary);\n}'
+      ),
+      tailwind: theme.indexOf(WIDGET_TAILWIND_THEME)
+    }
+    for (const [what, i] of Object.entries(at)) expect(i, what).toBeGreaterThan(-1)
+    expect(at.themes).toBe(at.widgetVars)
+    expect(at.widgetVars).toBeLessThan(at.body)
+    expect(at.body).toBeLessThan(at.tailwind)
+    expect(theme.endsWith(WIDGET_TAILWIND_THEME)).toBe(true)
+    // 11 套主题都带着（换 data-theme 就换）
+    for (const id of ['github-dark', 'github-light', 'nord', 'solarized-light']) {
+      expect(theme, id).toContain(`[data-theme='${id}']`)
+    }
+
+    const index = utf8(files['src/index.css'])
+    const tw = index.indexOf("@import 'tailwindcss';")
+    const own = index.indexOf("@import './shuvix-theme.css';")
+    expect(tw).toBeGreaterThan(-1)
+    expect(own).toBeGreaterThan(tw)
+  })
+
+  it('WC-89 index.html：主题脚本在 /src/index.css 之前，正文 = themeBootScript(WIDGET_EXPORT_THEME)', async () => {
+    const files = await exportAndUnzip()
+    const html = utf8(files['index.html'])
+
+    const open = html.indexOf('<script>')
+    const close = html.indexOf('</script>', open)
+    const link = html.indexOf('<link rel="stylesheet" href="/src/index.css" />')
+    expect(open).toBeGreaterThan(-1)
+    expect(link).toBeGreaterThan(-1)
+    expect(close).toBeLessThan(link)
+    expect(html.slice(open + '<script>'.length, close)).toBe(themeBootScript(WIDGET_EXPORT_THEME))
+    expect(html).toContain('var forced = null;')
+    expect(html).toContain(
+      `var state = ${JSON.stringify({ mode: 'system', light: 'github-light', dark: 'github-dark' })};`
+    )
+  })
+
+  it('WC-90 EXPORT_NOTES 第 6 条讲主题；文件表里有 src/shuvix-theme.css', async () => {
+    const files = await exportAndUnzip()
+    const notes = utf8(files['EXPORT_NOTES.md'])
+    const six = notes.split('\n').find((l) => l.startsWith('6. ')) ?? ''
+    for (const needle of ['src/shuvix-theme.css', 'data-scheme', 'useTheme()', 'themeColor()']) {
+      expect(six, needle).toContain(needle)
+    }
+    const rows = notes.split('\n').filter((l) => l.startsWith('| '))
+    expect(rows.some((r) => r.startsWith('| `src/shuvix-theme.css` |'))).toBe(true)
+  })
+
+  it('WC-91 组件自己的 src/shuvix-theme.css → 归档里是生成的那份', async () => {
+    put('src/shuvix-theme.css', '/* mine */ body { background: hotpink; }\n')
+    const files = await exportAndUnzip()
+    const theme = utf8(files['src/shuvix-theme.css'])
+    expect(theme).toBe(exportThemeCss())
+    expect(theme).not.toContain('hotpink')
   })
 })
 

@@ -18,7 +18,8 @@
  *   WC-77 组件的 tsconfig 开了 verbatimModuleSyntax，只当类型用的 `import Api` → 失败并给出说明（少写 type 的真实情形）
  *   WC-78 长得像的 `shuvix/widgets`、`shuvix/widget/x` → 普通的 Could not resolve；既不是客户端，也不是那句说明
  *   WC-80 用 bundle-widget-api.mjs 的选项（react 外置）重打 widgetClient.ts → 与 deps/widget.esm.js 逐字节相同
- *   WC-81 随包的 widget.esm.js：唯一的 import 是 react；没有 React 内部的东西；导出正好是 createClient 与 WidgetError
+ *   WC-81 随包的 widget.esm.js：唯一的 import 是 react；没有 React 内部的东西；导出正好是 createClient、WidgetError、
+ *         themeColor 与 useTheme；它从 react 取的每个名字（useSyncExternalStore …）随包的 react-all.esm.js 都导出
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -355,7 +356,7 @@ describe('WC-80..81 随包的 widget.esm.js', () => {
     expect(rebuilt.equals(shipped)).toBe(true)
   })
 
-  it('WC-81 唯一的 import 是 react；没有 React 内部；导出正好是 createClient 与 WidgetError', () => {
+  it('WC-81 唯一的 import 是 react；没有 React 内部；导出正好是 createClient、WidgetError、themeColor、useTheme', () => {
     const js = readFileSync(join(DEPS_DIR, 'widget.esm.js'), 'utf8')
 
     const sources = [...js.matchAll(/\bfrom\s*["']([^"']+)["']/g)].map((m) => m[1])
@@ -375,7 +376,32 @@ describe('WC-80..81 随包的 widget.esm.js', () => {
           .pop()
       )
       .sort()
-    expect(names).toEqual(['WidgetError', 'createClient'])
+    expect(names).toEqual(['WidgetError', 'createClient', 'themeColor', 'useTheme'])
     expect(count(js, 'export')).toBe(1)
+  })
+
+  it('WC-81 它从 react 取的每个名字，随包的 react-all.esm.js 都导出（缺一个就是打包时的 No matching export）', () => {
+    const js = readFileSync(join(DEPS_DIR, 'widget.esm.js'), 'utf8')
+    const react = readFileSync(join(DEPS_DIR, 'react-all.esm.js'), 'utf8')
+
+    const importClause = /import\s*\{([^}]*)\}\s*from\s*["']react["']/.exec(js)
+    expect(importClause).not.toBeNull()
+    const imported = importClause![1]
+      .split(',')
+      .map((part) => part.trim().split(/\s+as\s+/)[0])
+      .filter(Boolean)
+    expect(imported).toContain('useSyncExternalStore')
+
+    const exported = new Set(
+      [...react.matchAll(/export\s*\{([^}]*)\}/g)].flatMap((m) =>
+        m[1].split(',').map((part) =>
+          part
+            .trim()
+            .split(/\s+as\s+/)
+            .pop()
+        )
+      )
+    )
+    for (const name of imported) expect(exported.has(name), name).toBe(true)
   })
 })

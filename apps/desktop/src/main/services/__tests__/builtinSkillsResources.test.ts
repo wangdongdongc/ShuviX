@@ -30,6 +30,11 @@
  * references/mermaid.md、choosing-a-form.md、diagrams.md），别的技能一个字都不提；DRAWING_SECTIONS
  * 多了选型那一段（routing，BS-14 / BS-15 随之覆盖它）；DS-2 钉选型段与契约 / 预算段的指路，
  * DS-3 钉选型表里那一行同时指向两份参考。常驻提示片段里仍然不提 mermaid（fragments.test 的 NM-1/2）。
+ *
+ * 2026-10-28：组件跟应用的主题走，技能只教主题颜色名（`bg-surface`、`text-fg` …，宿主 widgetTheme.ts 的
+ * WIDGET_THEME_COLORS）。BS-16 钉 widget 技能的两张表（design.md 的颜色表、maintenance.md 的换色表「Change to / 换成」那一栏）
+ * 里的每个颜色类都落在那份名单上（去掉变体前缀、工具类前缀与 `/NN`），且 widget 技能的文件一处都不提 `--theme-` /
+ * `data-theme` —— 那是 themes.css 的内部名字，改名时只改宿主那张表。
  */
 import { describe, it, expect, afterAll } from 'vitest'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -38,6 +43,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { BUILTIN_SKILL_COPY } from '@shuvix/chat-protocol/builtinExtensionCopy'
+import { WIDGET_THEME_COLORS } from '../widget/widgetTheme'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 /** `…/apps/desktop/src/main/services/__tests__` 往上六层 */
@@ -477,6 +483,127 @@ describe('BS 内置技能资源：随应用发布的那批 know-how', () => {
       expect(mermaidRows[0]).toContain('```mermaid')
     }
   )
+})
+
+/** 一份 md 里的表格：每张表是行的数组，每行是去掉首尾 `|` 后按 `|` 切开、trim 过的单元格（分隔行不要） */
+const tablesIn = (text: string): string[][][] => {
+  const tables: string[][][] = []
+  let current: string[][] | null = null
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('|')) {
+      current = null
+      continue
+    }
+    if (!current) tables.push((current = []))
+    if (/^\|[\s:|-]+\|$/.test(line.trim())) continue
+    current.push(
+      line
+        .trim()
+        .replace(/^\||\|$/g, '')
+        .split('|')
+        .map((cell) => cell.trim())
+    )
+  }
+  return tables
+}
+
+/** 一张表：第一列（或任何一列）出现 `needle` 的那一张，恰好一张 */
+const tableWith = (text: string, needle: string, what: string): string[][] => {
+  const found = tablesIn(text).filter((rows) => rows.some((row) => row.join('|').includes(needle)))
+  expect(found, what).toHaveLength(1)
+  return found[0]
+}
+
+/** 工具类前缀（颜色可以落在这些上面） */
+const COLOR_UTILITY =
+  /^(bg|text|border|ring|outline|divide|fill|stroke|placeholder|decoration|caret|accent|from|via|to|shadow)-(.+)$/
+
+/**
+ * 一个单元格里的颜色名：反引号里的每个类去掉变体前缀（`hover:`、`focus:` …）、工具类前缀与 `/NN`；纯数字的（`ring-2`
+ * 是宽度）不算颜色；`themeColor('x')` 算 x；`useTheme()` 这类函数名跳过。认不出的记号原样交回，让断言点名它
+ */
+const colorNamesIn = (cell: string): { names: string[]; unknown: string[] } => {
+  const names: string[] = []
+  const unknown: string[] = []
+  for (const [, token] of cell.matchAll(/`([^`]+)`/g)) {
+    const call = /^themeColor\('([^']+)'\)$/.exec(token)
+    if (call) {
+      names.push(call[1])
+      continue
+    }
+    if (/^\w+\(\)$/.test(token)) continue
+    for (const cls of token.split(/\s+/).filter(Boolean)) {
+      const utility = COLOR_UTILITY.exec(cls.slice(cls.lastIndexOf(':') + 1))
+      if (!utility) {
+        unknown.push(cls)
+        continue
+      }
+      const name = utility[2].replace(/\/\d+$/, '')
+      if (/^\d+$/.test(name)) continue
+      names.push(name)
+    }
+  }
+  return { names, unknown }
+}
+
+describe('BS widget 技能只教主题颜色名', () => {
+  const KNOWN = new Set(Object.keys(WIDGET_THEME_COLORS))
+  const widgetFile = (lang: string, rel: string): string =>
+    readFileSync(join(skillDir(lang, 'widget'), rel), 'utf8')
+
+  it.each(LANGS)('BS-16 %s：design.md 颜色表里的每个颜色类都是主题颜色名', (lang) => {
+    const rows = tableWith(widgetFile(lang, 'references/design.md'), '`bg-page`', `${lang} design`)
+    const all: string[] = []
+    for (const row of rows.slice(1)) {
+      const { names, unknown } = colorNamesIn(row[1] ?? '')
+      expect(unknown, `${lang} design: ${row.join(' | ')}`).toEqual([])
+      for (const name of names) expect(KNOWN.has(name), `${lang} design: ${name}`).toBe(true)
+      all.push(...names)
+    }
+    // 非空证：表真的读到了（不同语言同一张表）
+    expect(all.length).toBeGreaterThanOrEqual(15)
+    for (const name of ['page', 'surface', 'fg', 'accent', 'on-accent', 'danger']) {
+      expect(all, name).toContain(name)
+    }
+  })
+
+  it.each(LANGS)(
+    'BS-16 %s：maintenance.md 换色表「Change to / 换成」那一栏都是主题颜色名',
+    (lang) => {
+      const rows = tableWith(
+        widgetFile(lang, 'references/maintenance.md'),
+        '`bg-white dark:bg-neutral-950`',
+        `${lang} maintenance`
+      )
+      expect(['Change to', '换成']).toContain(rows[0][1])
+      const all: string[] = []
+      for (const row of rows.slice(1)) {
+        const { names, unknown } = colorNamesIn(row[1] ?? '')
+        expect(unknown, `${lang} maintenance: ${row.join(' | ')}`).toEqual([])
+        for (const name of names) expect(KNOWN.has(name), `${lang} maintenance: ${name}`).toBe(true)
+        all.push(...names)
+      }
+      expect(all.length).toBeGreaterThanOrEqual(10)
+      expect(all).toContain('viz-1')
+    }
+  )
+
+  it.each(LANGS)('BS-16 %s：widget 技能的文件一处都不提 --theme- / data-theme', (lang) => {
+    const files = filesUnder(skillDir(lang, 'widget'))
+    expect(files.length).toBeGreaterThan(1)
+    for (const rel of files) {
+      const text = widgetFile(lang, rel)
+      expect(text.includes('--theme-'), `${lang}/widget/${rel} mentions --theme-`).toBe(false)
+      expect(text.includes('data-theme'), `${lang}/widget/${rel} mentions data-theme`).toBe(false)
+    }
+  })
+
+  it('BS-16 对照：认得出不是颜色名的类（防止上面的检查空转）', () => {
+    expect(colorNamesIn('`bg-white dark:bg-neutral-950`').names).toEqual(['white', 'neutral-950'])
+    expect(colorNamesIn('`focus:ring-2 focus:ring-accent/30`').names).toEqual(['accent'])
+    expect(colorNamesIn('`rounded-md`').unknown).toEqual(['rounded-md'])
+    expect(KNOWN.has('neutral-950')).toBe(false)
+  })
 })
 
 describe('BS 内置技能的两条接线', () => {

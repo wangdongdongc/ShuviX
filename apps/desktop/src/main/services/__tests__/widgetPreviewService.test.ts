@@ -15,6 +15,8 @@
  *   U-PV-10…15 某个尺寸失败别的照截、加载超时、收尾、console 与 did-fail-load、错误上限（B11）
  *   U-PV-16…19 导航守卫（B7）、分区、排队、挂载等待
  *   U-PV-20…23 每一步的超时（B3）、弹框（B4）、会话 id（B5）、窗口选项（不打扰用户，SIGSEGV 回归）
+ *   U-PV-24   previewUrl：不给明暗原样交回；给了就在地址上带 shuvix-scheme（已有的参数留着；已有的 shuvix-scheme 换掉、不重复）
+ *   U-PV-25   导航守卫放行这个组件自己带 shuvix-scheme 的地址，别的组件的照样拒
  *   WT4-PV-15 预览分区的补令牌钩子（真的跑 webRequest 监听者）：预览进行中，这个组件自己页面发的请求带 `preview` 令牌、
  *             载荷是发起预览的会话；别的组件的请求什么都不带；跑完之后（含每个尺寸都失败的那次）谁都不带，页面冒充的
  *             头去掉；从来不是 ui 令牌
@@ -577,13 +579,14 @@ describe('previewWidget: the normal path', () => {
                 }
               ]
             : []),
-          { size, op: 'loadURL', arg: URL_OF(ID) }
+          // 给了明暗：页面骨架照地址上的 shuvix-scheme 强制那一档（应用强制深色时单改媒体查询不够）
+          { size, op: 'loadURL', arg: URL_OF(ID) + (theme ? `?shuvix-scheme=${theme}` : '') }
         ]
         expect(seq, size).toEqual(expected)
         // 模拟设在 about:blank 上、随导航保留：载入 widget 之后不再发 CDP 命令
         const ops = opsOf(size)
         const widgetLoad = fx.log.findIndex(
-          (e) => e.size === size && e.op === 'loadURL' && e.arg === URL_OF(ID)
+          (e) => e.size === size && e.op === 'loadURL' && e.arg !== 'about:blank'
         )
         expect(
           fx.log.slice(widgetLoad + 1).filter((e) => e.size === size && e.op === 'cdp'),
@@ -1180,5 +1183,40 @@ describe('WT4-PV preview partition tokens', () => {
 
     expect(seen[A]).toEqual({ a: { scope: 'preview', sessionId: 'sess-1' }, b: null })
     expect(seen[B]).toEqual({ a: null, b: { scope: 'preview', sessionId: 'sess-2' } })
+  })
+})
+
+describe('previewWidget: the forced light / dark rides on the address', () => {
+  it('U-PV-24 previewUrl adds shuvix-scheme only when a theme is given; keeps other params; never duplicates it', () => {
+    const base = 'http://127.0.0.1:4567/w/a-b/'
+    expect(svc.previewUrl(base, undefined)).toBe(base)
+    expect(svc.previewUrl(base, 'dark')).toBe('http://127.0.0.1:4567/w/a-b/?shuvix-scheme=dark')
+    expect(svc.previewUrl(base, 'light')).toBe('http://127.0.0.1:4567/w/a-b/?shuvix-scheme=light')
+
+    const withQuery = svc.previewUrl(`${base}?x=1`, 'dark')
+    expect(withQuery).toBe('http://127.0.0.1:4567/w/a-b/?x=1&shuvix-scheme=dark')
+
+    const replaced = svc.previewUrl(`${base}?shuvix-scheme=light&y=2`, 'dark')
+    const params = new URL(replaced).searchParams
+    expect(params.getAll('shuvix-scheme')).toEqual(['dark'])
+    expect(params.get('y')).toBe('2')
+    expect(new URL(replaced).pathname).toBe('/w/a-b/')
+  })
+
+  it('U-PV-25 the navigation guard allows this widget’s own address with shuvix-scheme and refuses another widget’s', async () => {
+    await run(svc.previewWidget(ID, { sizes: ['panel'], theme: 'dark', sessionId: 'sess-1' }))
+    const wc = windowOf('panel').webContents
+    expect(wc.loadURL.mock.calls.map((c) => c[0])).toContain(`${URL_OF(ID)}?shuvix-scheme=dark`)
+    const navigate = (url: string): boolean => {
+      const event = { preventDefault: vi.fn() }
+      wc.fire('will-navigate', event, url)
+      return event.preventDefault.mock.calls.length > 0
+    }
+
+    expect(navigate(`${URL_OF(ID)}?shuvix-scheme=dark`)).toBe(false)
+    expect(navigate(`${URL_OF(ID)}?shuvix-scheme=light&x=1`)).toBe(false)
+    expect(navigate(`http://127.0.0.1:${PORT}/w/other-widget/?shuvix-scheme=dark`)).toBe(true)
+    expect(navigate(`http://127.0.0.1:${PORT}/w/${ID}y/?shuvix-scheme=dark`)).toBe(true)
+    expect(fx.shell.openExternal).not.toHaveBeenCalled()
   })
 })

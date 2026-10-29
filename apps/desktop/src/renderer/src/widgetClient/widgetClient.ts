@@ -16,8 +16,15 @@
  * 界面，还是 agent）。用的是组件页面自己那条 EventSource（宿主页面挂在 `window.__shuvixEvents` 上，原来只收 reload）：
  * 所有组件都在同一个 127.0.0.1:<端口> 上，浏览器对一个主机只开 6 条 HTTP/1.1 连接，每页再开一条，开着几个组件就会把
  * 别的页面的请求挤住。没有那一条（测试、导出的独立项目）才自己开一条。
+ *
+ * 主题：页面骨架在 `<html>` 上设 `data-theme`（ShuviX 的主题名）与 `data-scheme`（明 / 暗），设置一变就地换掉并在
+ * window 上发 `shuvix:theme`（宿主 services/widget/widgetTheme.ts）。界面的颜色大都靠 Tailwind 语义色名自己跟上；
+ * 画布、图表库这类要具体颜色的，用 `useTheme()` 在主题变了时重渲染，用 `themeColor()` 取颜色变量此刻的值：
+ *
+ *   const theme = useTheme()                                   // { id: 'nord', scheme: 'dark' }
+ *   const accent = useMemo(() => themeColor('accent'), [theme])
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 /** 调用失败：`code` 是机器读的（`invalid_args`、handler 的 `ctx.fail` 码、`network` …），`message` 给人看 */
 export class WidgetError extends Error {
@@ -294,6 +301,86 @@ function useWidgetOp(op: string, args?: unknown): UseResult<unknown> {
     loading: key !== null && (state.key !== key || state.refreshing),
     refetch
   }
+}
+
+// ───────────────────────── 主题 ─────────────────────────
+
+/** 页面此刻的主题：`id` = ShuviX 的主题名（`github-dark`、`nord` …；没有宿主时为空串），`scheme` = 明 / 暗 */
+export interface WidgetTheme {
+  id: string
+  scheme: 'light' | 'dark'
+}
+
+/** 页面骨架换主题时在 window 上发的事件 */
+const THEME_EVENT = 'shuvix:theme'
+
+let themeSnapshot: WidgetTheme | null = null
+
+/** 读 `<html>` 上的两个属性；没有 `data-scheme`（不是 ShuviX 的页面）就看系统明暗。内容没变交回同一个对象 */
+function readTheme(): WidgetTheme {
+  const root = document.documentElement
+  const id = root.getAttribute('data-theme') ?? ''
+  const attr = root.getAttribute('data-scheme')
+  const scheme: WidgetTheme['scheme'] =
+    attr === 'dark' || attr === 'light'
+      ? attr
+      : typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches
+        ? 'dark'
+        : 'light'
+  if (themeSnapshot?.id !== id || themeSnapshot.scheme !== scheme) themeSnapshot = { id, scheme }
+  return themeSnapshot
+}
+
+function subscribeTheme(onChange: () => void): () => void {
+  window.addEventListener(THEME_EVENT, onChange)
+  // 没有宿主的页面（导出项目以外的地方）只有系统明暗会变
+  const mq = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null
+  mq?.addEventListener?.('change', onChange)
+  return () => {
+    window.removeEventListener(THEME_EVENT, onChange)
+    mq?.removeEventListener?.('change', onChange)
+  }
+}
+
+/** React hook：此刻的主题，换主题时重渲染 */
+export function useTheme(): WidgetTheme {
+  return useSyncExternalStore(subscribeTheme, readTheme, readTheme)
+}
+
+/**
+ * 一个颜色此刻的实际值，`rgb(r, g, b)` 或 `rgba(r, g, b, a)`（画布与图表库都读得懂）。`name` 是主题色名（与 Tailwind
+ * 类同名：`themeColor('accent')`、`themeColor('viz-1')`，读的是宿主声明的 `--widget-<name>`），或者带 `--` 的任意变量名。
+ * 变量里的 `light-dark()`、`color-mix()` 都按页面此刻的主题算好（直接读变量只能读到原文）。变量不存在 → 空串。
+ */
+export function themeColor(name: string): string {
+  const prop = name.startsWith('--') ? name : `--widget-${name}`
+  const root = document.documentElement
+  if (getComputedStyle(root).getPropertyValue(prop).trim() === '') return ''
+  const probe = document.createElement('span')
+  probe.style.display = 'none'
+  probe.style.color = `var(${prop})`
+  root.appendChild(probe)
+  const value = getComputedStyle(probe).color
+  probe.remove()
+  return toRgb(value)
+}
+
+/**
+ * 计算值不一定是 rgb：oklch 的状态色算出来还是 `oklch(…)`，`color-mix()` 是 `color(srgb …)` —— Chart.js 这类
+ * 图表库都不认。画到一个像素上再读回来，换成 sRGB 的 rgb / rgba（没有画布的环境照原样交回）
+ */
+function toRgb(color: string): string {
+  if (/^rgba?\(/.test(color)) return color
+  const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true })
+  if (!ctx) return color
+  ctx.canvas.width = 1
+  ctx.canvas.height = 1
+  ctx.fillStyle = color
+  ctx.fillRect(0, 0, 1, 1)
+  const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data
+  return a === 255
+    ? `rgb(${r}, ${g}, ${b})`
+    : `rgba(${r}, ${g}, ${b}, ${Number((a / 255).toFixed(3))})`
 }
 
 /** 建一个客户端。类型参数给 `typeof Api`（`import type Api from './api'`）就有操作名、参数、结果的类型 */
