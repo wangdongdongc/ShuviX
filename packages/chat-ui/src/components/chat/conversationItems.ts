@@ -7,6 +7,7 @@
  * 那里面，就意味着任何人想验证「A、A、B 该怎么分组」都得先起一个浏览器环境。
  * `Conversation.tsx` 仍然按同名再导出，既有 import 路径一个都不用改。
  */
+import { readerKey } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import type { ChatMessage, AssistantMessage, UserTextMessage } from '../../stores/chatStore'
 import { STREAMING_PLACEHOLDER_ID, type VisibleItem } from './MessageRenderer'
 
@@ -163,4 +164,33 @@ export function buildVisibleItems(
   }
 
   return items
+}
+
+/** 一条回复的 readerKey；合成 / 占位的（没有 provider 或模型）没有 */
+function replyReader(msg: AssistantMessage): string | undefined {
+  return msg.provider && msg.model ? readerKey(msg.provider, msg.model) : undefined
+}
+
+/**
+ * 每一项的第一个读者（docs/auto-redaction-design.md §15.2，项的 key → readerKey 用换行连起来），交给
+ * RedactionReadersProvider：模型收到的是不是真值，要会话的模型与这些读者都照发。
+ *  - 助手卡（含压缩摘要）：卡里各条回复的模型 —— 工具结果算发起它的那条回复；一张卡里换过模型就都算上（偏保守）；
+ *  - 用户消息、通知行：它后面第一张助手卡的第一条回复的模型；
+ *  - 后面还没有回复（流式占位卡、刚发出的消息）：undefined，只看会话的模型。
+ */
+export function messageReaders(items: readonly VisibleItem[]): Map<string, string | undefined> {
+  const out = new Map<string, string | undefined>()
+  let next: string | undefined
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!
+    const replies = item.msgs ?? (isAssistantMessage(item.msg) ? [item.msg] : undefined)
+    if (replies === undefined) {
+      out.set(item.key, next)
+      continue
+    }
+    const keys = [...new Set(replies.map(replyReader).filter((k) => k !== undefined))]
+    out.set(item.key, keys.length > 0 ? keys.join('\n') : undefined)
+    next = replies.length > 0 ? replyReader(replies[0]!) : undefined
+  }
+  return out
 }

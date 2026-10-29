@@ -159,8 +159,8 @@ export async function callPanelChannel(
       return chatGateway.getRuntimeStatuses(sessionId)
     }
     case 'redaction.resolve': {
-      const p = params<{ sessionId: string; placeholders: string[] }>()
-      return chatGateway.resolveRedactions(p.sessionId, p.placeholders)
+      const p = params<{ sessionId: string; placeholders: string[]; readers?: string[] }>()
+      return chatGateway.resolveRedactions(p.sessionId, p.placeholders, p.readers)
     }
     case 'redaction.inspect': {
       // 侧边栏总有会话：只认它自己的，按会话的模型判

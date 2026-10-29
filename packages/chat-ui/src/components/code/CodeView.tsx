@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   categoryOfPlaceholder,
+  disclosedFor,
   placeholdersIn
 } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { Compartment, EditorState } from '@codemirror/state'
@@ -31,8 +32,9 @@ import { loadLanguage } from './languageLoader'
 import { buildCmTheme } from './codeMirrorTheme'
 import { redactionMarks, type RedactionResolver } from './redactionMarks'
 import { revealOf } from '../chat/RedactedText'
-import { useRedactionSessionId } from '../../hooks/useRedaction'
+import { useRedactionReaders, useRedactionSessionId } from '../../hooks/useRedaction'
 import {
+  answered,
   redactionInfo,
   redactionVersion,
   requestRedactions,
@@ -73,13 +75,14 @@ export function CodeView({
   // 自动脱敏的占位符显示成真值 + 标记；查到新的真值（version 变了）就换一份扩展重画
   const { t } = useTranslation()
   const sessionId = useRedactionSessionId()
+  const readers = useRedactionReaders()
   const version = useSyncExternalStore(subscribeRedactions, redactionVersion, redactionVersion)
   const resolveRef = useRef<RedactionResolver | null>(null)
   resolveRef.current = (placeholder) => {
     const info = sessionId ? redactionInfo(sessionId, placeholder) : undefined
     return {
       category: info?.category ?? categoryOfPlaceholder(placeholder),
-      disclosed: info?.disclosed === true,
+      disclosed: disclosedFor(info, readers),
       ...(info?.value === undefined ? {} : { value: info.value }),
       reveal: revealOf(t, placeholder, info)
     }
@@ -137,12 +140,14 @@ export function CodeView({
   // 文档里的占位符：没查到的去查；查到了（version 变）重画标记
   useEffect(() => {
     if (!sessionId) return
-    const missing = placeholdersIn(content).filter((p) => !redactionInfo(sessionId, p))
-    if (missing.length > 0) requestRedactions(sessionId, missing)
-  }, [content, sessionId, version])
+    const missing = placeholdersIn(content).filter(
+      (p) => !answered(redactionInfo(sessionId, p), readers)
+    )
+    if (missing.length > 0) requestRedactions(sessionId, missing, false, readers)
+  }, [content, sessionId, version, readers])
   useEffect(() => {
     viewRef.current?.dispatch({ effects: redactionC.reconfigure(redactionExtension()) })
-  }, [version, sessionId, redactionC])
+  }, [version, sessionId, redactionC, readers])
 
   // 切行号：reconfigure gutter compartment
   useEffect(() => {

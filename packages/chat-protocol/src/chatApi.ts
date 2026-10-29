@@ -665,12 +665,14 @@ export interface SessionChannelApi {
   }
   /**
    * 自动脱敏（docs/auto-redaction-design.md §2.3）：这条会话对照表里这些占位符的类别与真值 —— 界面把占位符渲染成
-   * 标记、显示真值。表里没有的不出现在结果里；有但解不开的只有类别。返回值带机密（远程访问按 admin 判）。
+   * 标记、显示真值。表里没有的不出现在结果里；有但解不开的只有类别。readers（readerKey，§15.2）：一并判这几个
+   * 第一个读者照不照发（disclosedTo）。返回值带机密（远程访问按 admin 判）。
    */
   redaction: {
     resolve: (params: {
       sessionId: string
       placeholders: string[]
+      readers?: string[]
     }) => Promise<Record<string, RedactionMarkInfo>>
     /**
      * 输入框的提示（§14.2）：每段文本里按策略会对这个会话的模型藏起来的内容（只用检测规则，不用会话已知值；用户照原样

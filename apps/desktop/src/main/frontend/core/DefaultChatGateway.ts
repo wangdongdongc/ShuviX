@@ -4,8 +4,10 @@ import { redactionDecision } from '../../services/redactionPolicySeam'
 import {
   MAX_INSPECT_CHARS,
   MAX_RESOLVE_PLACEHOLDERS,
+  MAX_RESOLVE_READERS,
   cleanUserSecrets,
   isPlaceholder,
+  parseReaderKey,
   type RedactionHint,
   type RedactionMarkInfo,
   type UserSecret
@@ -433,11 +435,19 @@ export class DefaultChatGateway implements ChatGateway {
 
   async resolveRedactions(
     sessionId: string,
-    placeholders: string[]
+    placeholders: string[],
+    readers?: string[]
   ): Promise<Record<string, RedactionMarkInfo>> {
     const wanted = (Array.isArray(placeholders) ? placeholders : [])
       .filter((p): p is string => typeof p === 'string' && isPlaceholder(p))
       .slice(0, MAX_RESOLVE_PLACEHOLDERS)
+    const readerKeys = [
+      ...new Set(
+        (Array.isArray(readers) ? readers : []).filter(
+          (key): key is string => typeof key === 'string' && parseReaderKey(key) !== undefined
+        )
+      )
+    ].slice(0, MAX_RESOLVE_READERS)
     const result: Record<string, RedactionMarkInfo> = {}
     if (wanted.length === 0) return result
     const agent =
@@ -458,20 +468,31 @@ export class DefaultChatGateway implements ChatGateway {
             : undefined
         )
         .catch(() => undefined))
-    let decision: ReturnType<typeof redactionDecision> | undefined
-    try {
-      decision = model
-        ? redactionDecision({ sessionId, provider: model.provider, model: model.modelId })
-        : undefined
-    } catch {
-      // 判不出来就当收到的是占位符（显示占位符、悬停揭示真值），不让界面因此拿不到真值
-      decision = undefined
-    }
-    const disclosedOf = (item: { category: string; rule: string; value: string }): boolean => {
-      if (!decision || decision.blocked) return false
-      if (!decision.applies) return true
+    // 判不出来就当收到的是占位符（显示占位符、悬停揭示真值），不让界面因此拿不到真值
+    const decide = (
+      provider: string,
+      modelId: string
+    ): ReturnType<typeof redactionDecision> | undefined => {
       try {
-        return decision.disclose(item) === 'send'
+        return redactionDecision({ sessionId, provider, model: modelId })
+      } catch {
+        return undefined
+      }
+    }
+    const decision = model ? decide(model.provider, model.modelId) : undefined
+    // 第一个读者（§15.2）：对话记录里一条消息第一次发给的模型，按同一份策略判
+    const readerDecisions = readerKeys.map((key) => {
+      const reader = parseReaderKey(key)!
+      return [key, decide(reader.provider, reader.model)] as const
+    })
+    const disclosedOf = (
+      d: ReturnType<typeof redactionDecision> | undefined,
+      item: { category: string; rule: string; value: string }
+    ): boolean => {
+      if (!d || d.blocked) return false
+      if (!d.applies) return true
+      try {
+        return d.disclose(item) === 'send'
       } catch {
         return false
       }
@@ -479,18 +500,23 @@ export class DefaultChatGateway implements ChatGateway {
     for (const placeholder of wanted) {
       const item = table.get(placeholder)
       if (!item) continue
-      result[placeholder] =
-        item.value === undefined
-          ? { category: item.category }
+      if (item.value === undefined) {
+        result[placeholder] = { category: item.category }
+        continue
+      }
+      const it = { category: item.category, rule: item.rule, value: item.value }
+      result[placeholder] = {
+        category: item.category,
+        value: item.value,
+        disclosed: disclosedOf(decision, it),
+        ...(readerDecisions.length === 0
+          ? {}
           : {
-              category: item.category,
-              value: item.value,
-              disclosed: disclosedOf({
-                category: item.category,
-                rule: item.rule,
-                value: item.value
-              })
-            }
+              disclosedTo: Object.fromEntries(
+                readerDecisions.map(([key, d]) => [key, disclosedOf(d, it)])
+              )
+            })
+      }
     }
     return result
   }

@@ -17,6 +17,35 @@ export interface RedactionMarkInfo {
    * 否则显示模型收到的占位符，悬停才揭示真值。缺省 = 收到的是占位符
    */
   disclosed?: boolean
+  /**
+   * 问到的第一个读者（readerKey）各自是否照发（§15.2）。对话记录里一条消息的占位符，只有会话的模型与这条消息的第一个
+   * 读者都照发时模型才收到真值；没问到的读者按不照发
+   */
+  disclosedTo?: Record<string, boolean>
+}
+
+/**
+ * 第一个读者（docs/auto-redaction-design.md §15.2）：对话记录里一条消息第一次发给的模型 —— 模型回复是产出它的
+ * 模型，用户消息是它后面第一条回复的模型。键 = pi 的 provider id + `\0` + 模型 id。
+ */
+export function readerKey(provider: string, model: string): string {
+  return `${provider}\u0000${model}`
+}
+
+/** readerKey 拆回 provider / 模型；不是这个形状 → undefined */
+export function parseReaderKey(key: string): { provider: string; model: string } | undefined {
+  const cut = key.indexOf('\u0000')
+  if (cut <= 0 || cut === key.length - 1 || key.indexOf('\u0000', cut + 1) !== -1) return undefined
+  return { provider: key.slice(0, cut), model: key.slice(cut + 1) }
+}
+
+/** 这一处在这条消息里模型收到的是不是真值：会话的模型照发，且每个第一个读者都照发（readers 为空 = 只看会话的模型） */
+export function disclosedFor(
+  info: RedactionMarkInfo | undefined,
+  readers: readonly string[]
+): boolean {
+  if (info?.disclosed !== true) return false
+  return readers.every((key) => info.disclosedTo?.[key] === true)
 }
 
 /**
@@ -69,6 +98,9 @@ export type RedactionSegment = string | { placeholder: string; category: string 
 
 /** 一次 resolve 最多问多少个（一屏的量；再多分几次问） */
 export const MAX_RESOLVE_PLACEHOLDERS = 200
+
+/** 一次 resolve 最多判多少个第一个读者（一个会话里用过的模型不会多） */
+export const MAX_RESOLVE_READERS = 16
 
 /** 占位符正文的开头（旧写法没有） */
 const PLACEHOLDER_PREFIX = 'REDACTED_'

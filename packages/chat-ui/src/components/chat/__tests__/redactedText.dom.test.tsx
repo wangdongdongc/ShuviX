@@ -12,6 +12,8 @@
  *   RD-6 浮出期间真值查到了：浮层就地换成真值
  *   RD-7 策略变了（policy.changed）：记下的重问一遍，模型收到的样子跟着变
  *   RD-8 没有占位符的文本原样，不发查询
+ *   RD-9 对话记录里的消息（RedactionReadersProvider，§15.2）：会话的模型与每个第一个读者都照发才显示真值；查询带上
+ *        读者，已经查到的占位符遇到没判过的读者再问一次；markdown 行内代码同样按读者判
  *
  * 后端是注入的 SessionChannelApi（redaction.resolve 与 events）；i18n 走真 en 资源；不写 JSX，一律 createElement。
  */
@@ -27,7 +29,7 @@ import type { RedactionMarkInfo } from '@shuvix/chat-protocol/utils/redactionPla
 import { setSessionChannelApi } from '../../../api/chatApi'
 import { useChatStore } from '../../../stores/chatStore'
 import { resetRedactionCacheForTests, restoreForCopy } from '../../../stores/redactionCache'
-import { RedactionSessionProvider } from '../../../hooks/useRedaction'
+import { RedactionReadersProvider, RedactionSessionProvider } from '../../../hooks/useRedaction'
 import { hideRedaction } from '../redactionPopover'
 import { RedactedText } from '../RedactedText'
 import { MarkdownText } from '../markdownComponents'
@@ -43,6 +45,9 @@ const SEALED = '{{REDACTED_SECRET_aaaaaaaa}}'
 // v0.2.30 / v0.2.31 存下的旧写法照样认
 const GONE = '{{TOKEN_bbbbbbbb}}'
 const USER = '{{USERNAME_cccccccc}}'
+/** 两个第一个读者：旧模型保持占位符，新模型照发 */
+const OLD = 'faux\u0000old'
+const NEW = 'faux\u0000new'
 
 /** 每条会话的对照表；disclosed = 模型收到的是真值 */
 const tables: Record<string, Record<string, RedactionMarkInfo>> = {}
@@ -51,11 +56,16 @@ function resetTables(): void {
     [KEY]: { category: 'API_KEY', value: 'sk-real-0123456789', disclosed: false },
     [MAIL]: { category: 'EMAIL', value: 'alice@acme-corp.cn', disclosed: false },
     [SEALED]: { category: 'SECRET' },
-    [USER]: { category: 'USERNAME', value: 'alice', disclosed: true }
+    [USER]: {
+      category: 'USERNAME',
+      value: 'alice',
+      disclosed: true,
+      disclosedTo: { [OLD]: false, [NEW]: true }
+    }
   }
   tables.other = { [KEY]: { category: 'API_KEY', value: 'sk-other-session', disclosed: true } }
 }
-const calls: Array<{ sessionId: string; placeholders: string[] }> = []
+const calls: Array<{ sessionId: string; placeholders: string[]; readers?: string[] }> = []
 const eventListeners = new Set<(event: AppEvent) => void>()
 /** 第一次查询先挂着，放行前浮层里是「正在查」 */
 let gate: Promise<void> | null = null
@@ -67,11 +77,26 @@ beforeAll(async () => {
   await i18n.use(initReactI18next).init({ lng: 'en', resources: { en: { translation: en } } })
   setSessionChannelApi({
     redaction: {
-      resolve: async ({ sessionId, placeholders }) => {
-        calls.push({ sessionId, placeholders: [...placeholders] })
+      resolve: async ({ sessionId, placeholders, readers }) => {
+        calls.push({
+          sessionId,
+          placeholders: [...placeholders],
+          ...(readers === undefined ? {} : { readers: [...readers] })
+        })
         if (gate) await gate
         const table = tables[sessionId] ?? {}
-        return Object.fromEntries(placeholders.filter((p) => table[p]).map((p) => [p, table[p]!]))
+        const answer = (info: RedactionMarkInfo): RedactionMarkInfo =>
+          readers === undefined
+            ? info
+            : {
+                ...info,
+                disclosedTo: Object.fromEntries(
+                  readers.map((key) => [key, info.disclosedTo?.[key] === true])
+                )
+              }
+        return Object.fromEntries(
+          placeholders.filter((p) => table[p]).map((p) => [p, answer(table[p]!)])
+        )
       }
     },
     events: {
@@ -239,5 +264,32 @@ describe('脱敏占位符的显示', () => {
     await show(createElement(RedactedText, { text: 'plain {{x}} text' }))
     expect(container.textContent).toBe('plain {{x}} text')
     expect(calls).toEqual([])
+  })
+
+  it('RD-9 对话记录里的消息：会话的模型与第一个读者都照发才显示真值', async () => {
+    const text = `home /Users/${USER}/proj`
+    const under = (readers: string | undefined): React.ReactElement =>
+      createElement(RedactionReadersProvider, { readers }, createElement(RedactedText, { text }))
+    await show(under(OLD))
+    expect(container.textContent).toBe(text)
+    expect(calls).toEqual([{ sessionId: 's1', placeholders: [USER], readers: [OLD] }])
+    // 已经查到的占位符遇到没判过的读者：再问一次，带上用到过的全部读者
+    await show(under(NEW))
+    expect(container.textContent).toBe('home /Users/alice/proj')
+    expect(calls[1]).toEqual({ sessionId: 's1', placeholders: [USER], readers: [OLD, NEW] })
+    await show(under(`${NEW}\n${OLD}`))
+    expect(container.textContent).toBe(text)
+    await show(under(undefined))
+    expect(container.textContent).toBe('home /Users/alice/proj')
+    expect(calls).toHaveLength(2)
+    // markdown 行内代码只换模型收到真值的：按读者判
+    await show(
+      createElement(
+        RedactionReadersProvider,
+        { readers: OLD },
+        createElement(MarkdownText, { text: `open \`/Users/${USER}/proj\`` })
+      )
+    )
+    expect(container.textContent).toContain(`/Users/${USER}/proj`)
   })
 })

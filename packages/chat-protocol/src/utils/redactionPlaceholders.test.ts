@@ -4,13 +4,17 @@
  *   RP-2 去重列出、取类别、整段判断
  *   RP-3 换回真值：查不到的原样留着
  *   RP-4 流式结尾半个占位符先截掉；写完的、不像占位符的不截
+ *   RP-5 第一个读者（§15.2）：readerKey 拆得回去，别的形状不认；会话的模型与每个读者都照发才算模型收到真值
  */
 import { describe, expect, it } from 'vitest'
 import {
   categoryOfPlaceholder,
+  disclosedFor,
   hasPlaceholder,
   isPlaceholder,
+  parseReaderKey,
   placeholdersIn,
+  readerKey,
   restorePlaceholders,
   splitPlaceholders,
   trimPartialPlaceholder
@@ -71,5 +75,25 @@ describe('占位符（界面）', () => {
     expect(trimPartialPlaceholder(`text ${KEY}`)).toBe(`text ${KEY}`)
     expect(trimPartialPlaceholder('text {{ x')).toBe('text {{ x')
     expect(trimPartialPlaceholder('a {{b}} c')).toBe('a {{b}} c')
+  })
+
+  it('RP-5 第一个读者', () => {
+    const home = readerKey('home', 'qwen:32b')
+    expect(parseReaderKey(home)).toEqual({ provider: 'home', model: 'qwen:32b' })
+    for (const bad of ['', 'home', '\u0000m', 'p\u0000', 'a\u0000b\u0000c']) {
+      expect(parseReaderKey(bad), JSON.stringify(bad)).toBeUndefined()
+    }
+    const cloud = readerKey('cloud', 'c1')
+    const info = {
+      category: 'EMAIL',
+      value: 'a@b.cn',
+      disclosed: true,
+      disclosedTo: { [home]: true }
+    }
+    expect(disclosedFor(info, [])).toBe(true)
+    expect(disclosedFor(info, [home])).toBe(true)
+    expect(disclosedFor(info, [home, cloud])).toBe(false)
+    expect(disclosedFor({ ...info, disclosed: false }, [home])).toBe(false)
+    expect(disclosedFor(undefined, [])).toBe(false)
   })
 })

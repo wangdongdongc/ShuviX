@@ -121,6 +121,7 @@ vi.mock('../../../services/sessionDayPromptService', () => ({
 
 import { buildBuiltinProfiles, KnownValues } from '@shuvix/agent-runtime'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
+import { readerKey } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { setRedactionPolicy } from '../../../services/redactionPolicySeam'
 
 let chatGateway: (typeof import('../DefaultChatGateway'))['chatGateway']
@@ -547,6 +548,43 @@ describe('自动脱敏：resolveRedactions', () => {
     expect(await chatGateway.resolveRedactions(SID, [KEY])).toEqual({
       [KEY]: { category: 'API_KEY', value: 'sk-real', disclosed: false }
     })
+  })
+
+  it('RR-4 第一个读者（§15.2）：每个读者按同一份策略判 disclosedTo；不是 readerKey 的丢掉、重复的只判一次、判不出 = 不照发', async () => {
+    const seen: unknown[] = []
+    setRedactionPolicy((request) => {
+      seen.push(request)
+      if (request.provider === 'gone') throw new Error('no such provider')
+      return request.provider === 'home'
+        ? { applies: false, disclose: () => 'redact' }
+        : { applies: true, disclose: () => 'redact' }
+    })
+    mocks.getAgentSession.mockReturnValue(
+      sessionWith({ table: async () => table }, { model: { provider: 'home', modelId: 'm1' } })
+    )
+    const HOME = readerKey('home', 'm1')
+    const CLOUD = readerKey('cloud', 'c1')
+    const GONE = readerKey('gone', 'x')
+    const result = await chatGateway.resolveRedactions(
+      SID,
+      [KEY, SEALED],
+      [CLOUD, HOME, CLOUD, GONE, 'no-separator', 7 as unknown as string]
+    )
+    expect(result).toEqual({
+      [KEY]: {
+        category: 'API_KEY',
+        value: 'sk-real',
+        disclosed: true,
+        disclosedTo: { [CLOUD]: false, [HOME]: true, [GONE]: false }
+      },
+      [SEALED]: { category: 'SECRET' }
+    })
+    expect(seen).toEqual([
+      { sessionId: SID, provider: 'home', model: 'm1' },
+      { sessionId: SID, provider: 'cloud', model: 'c1' },
+      { sessionId: SID, provider: 'home', model: 'm1' },
+      { sessionId: SID, provider: 'gone', model: 'x' }
+    ])
   })
 })
 

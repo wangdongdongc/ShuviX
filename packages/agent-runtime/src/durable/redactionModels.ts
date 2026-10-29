@@ -4,7 +4,8 @@
  * （根 agent、派生 agent、hook agent、审查员、压缩摘要）都经过它，而且都知道是哪条会话。
  *
  *  - 请求：问宿主的策略（第一层 / 第二层，按这次请求来自的对话认 agent），按判定改写（redactionEgress）；
- *    兜底新认出的记进对照表。第一层或第二层拒发 → 不发请求，交回一条出错的回复（不重试）。
+ *    记录里的模型回复是别的模型产出的，那几个模型也各问一次（§15 第一个读者）。兜底新认出的记进对照表；这次的
+ *    判定留给写入时用（工具结果里默认照发的几类，§15.2）。第一层或第二层拒发 → 不发请求，交回一条出错的回复（不重试）。
  *  - 回复：这次以真值发出去过东西时，流式事件里累积的回复与最终结果都把那些真值换回占位符。
  *  - 改写本身出错（只可能是 bug）：记 error，按对话记录里存的样子原样发出 —— 存的本来就是占位符，原样发
  *    只是少了请求时现拼的那部分的兜底，与「检测器出错当作漏检」同一个处置。
@@ -30,6 +31,7 @@ import {
   EgressBlockedError,
   prepareEgress,
   type EgressDecision,
+  type ReaderDecisions,
   type Remasker
 } from './redactionEgress'
 import type { SessionRedaction } from './sessionRedaction'
@@ -91,6 +93,36 @@ function hasResult(
   return typeof (source as { result?: unknown }).result === 'function'
 }
 
+/**
+ * 记录里的模型回复是哪些模型产出的（§15.2 的第一个读者），每个问一次策略（同一个对话）；这次的目的地用这次的判定。
+ * 问不到（策略抛错，比如服务商已经删了）= undefined，出口按不照发。
+ */
+async function readerDecisions(
+  context: Context,
+  model: Model<Api>,
+  decision: EgressDecision,
+  decide: (provider: string, modelId: string) => EgressDecision | Promise<EgressDecision>,
+  deps: RedactionEgressDeps
+): Promise<ReaderDecisions> {
+  const key = (provider: string, modelId: string): string => `${provider}\u0000${modelId}`
+  const current = key(model.provider, model.id)
+  const decisions = new Map<string, EgressDecision | undefined>([[current, decision]])
+  for (const message of context.messages) {
+    if (message.role !== 'assistant') continue
+    const k = key(message.provider, message.model)
+    if (decisions.has(k)) continue
+    try {
+      decisions.set(k, await decide(message.provider, message.model))
+    } catch (error) {
+      decisions.set(k, undefined)
+      deps.logger.warn(
+        `session ${deps.sessionId}: no redaction decision for ${message.provider}/${message.model}; its earlier content keeps placeholders: ${errorText(error)}`
+      )
+    }
+  }
+  return (provider, modelId) => decisions.get(key(provider, modelId))
+}
+
 export function withRedactionEgress(inner: Models, deps: RedactionEgressDeps): Models {
   /** 改写这次请求；拒发抛 EgressBlockedError，其余出错原样发 */
   const prepare = async (
@@ -102,13 +134,26 @@ export function withRedactionEgress(inner: Models, deps: RedactionEgressDeps): M
     if (!redaction) return { context, remasker: undefined }
     try {
       const conversationId = await redaction.conversationOf(providerSessionId)
-      const decision = await deps.policy({
-        sessionId: deps.sessionId,
-        ...(conversationId === undefined ? {} : { conversationId }),
-        provider: model.provider,
-        model: model.id
-      })
-      const prepared = prepareEgress(context, await redaction.table(), redaction.signer, decision)
+      const decide = (
+        provider: string,
+        modelId: string
+      ): EgressDecision | Promise<EgressDecision> =>
+        deps.policy({
+          sessionId: deps.sessionId,
+          ...(conversationId === undefined ? {} : { conversationId }),
+          provider,
+          model: modelId
+        })
+      const decision = await decide(model.provider, model.id)
+      if (conversationId !== undefined) redaction.noteDecision(conversationId, decision)
+      const readerOf = await readerDecisions(context, model, decision, decide, deps)
+      const prepared = prepareEgress(
+        context,
+        await redaction.table(),
+        redaction.signer,
+        decision,
+        readerOf
+      )
       await redaction.record(prepared.entries)
       return { context: prepared.context, remasker: prepared.remasker }
     } catch (error) {

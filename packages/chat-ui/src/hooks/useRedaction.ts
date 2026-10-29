@@ -1,15 +1,27 @@
 /**
  * 自动脱敏标记的会话归属与取值（docs/auto-redaction-design.md §2.3）。占位符属于哪条会话的对照表：缺省是当前打开的
  * 会话；显示别的会话内容的地方（侧栏的标题、子会话面板）用 RedactionSessionProvider 指明。
+ *
+ * 对话记录里的一条消息，模型收到的是不是真值还要看它的第一个读者（§15.2）：对话流给每条消息用 RedactionReadersProvider
+ * 指明；没指明的地方（输入框、侧栏标题）只看会话的模型。
  */
-import { createContext, createElement, useContext, useEffect, useSyncExternalStore } from 'react'
 import {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useMemo,
+  useSyncExternalStore
+} from 'react'
+import {
+  disclosedFor,
   placeholdersIn,
   restorePlaceholders,
   type RedactionMarkInfo
 } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
 import { useChatStore } from '../stores/chatStore'
 import {
+  answered,
   redactionInfo,
   redactionVersion,
   requestRedactions,
@@ -36,15 +48,42 @@ export function useRedactionSessionId(): string | null {
   return explicit === undefined ? active : explicit
 }
 
-/** 一处占位符的类别与真值；还没查到时发起查询，查到后重新渲染 */
+/** 第一个读者：readerKey 用换行连起来（字符串好比较，消息项的 memo 不因它失效） */
+const RedactionReadersContext = createContext<string | undefined>(undefined)
+
+/** 这棵子树是对话记录里的一条消息，readers 是它的第一个读者（readerKey，换行连起来；空 = 只看会话的模型） */
+export function RedactionReadersProvider({
+  readers,
+  children
+}: {
+  readers: string | undefined
+  children?: React.ReactNode
+}): React.JSX.Element {
+  return createElement(RedactionReadersContext.Provider, { value: readers }, children)
+}
+
+/** 这里的第一个读者（readerKey 列表） */
+export function useRedactionReaders(): readonly string[] {
+  const joined = useContext(RedactionReadersContext)
+  return useMemo(() => (joined ? joined.split('\n') : []), [joined])
+}
+
+/**
+ * 一处占位符的类别与真值；还没查到时发起查询，查到后重新渲染。disclosed 已经按这里的第一个读者判过（模型收到的是不是
+ * 真值）。
+ */
 export function useRedactionMark(placeholder: string): RedactionMarkInfo | undefined {
   const sessionId = useRedactionSessionId()
+  const readers = useRedactionReaders()
   useSyncExternalStore(subscribeRedactions, redactionVersion, redactionVersion)
   const info = sessionId ? redactionInfo(sessionId, placeholder) : undefined
   useEffect(() => {
-    if (sessionId && !info) requestRedactions(sessionId, [placeholder])
+    if (sessionId && !answered(info, readers))
+      requestRedactions(sessionId, [placeholder], false, readers)
   })
-  return info
+  return info === undefined || readers.length === 0
+    ? info
+    : { ...info, disclosed: disclosedFor(info, readers) }
 }
 
 /**
@@ -53,17 +92,25 @@ export function useRedactionMark(placeholder: string): RedactionMarkInfo | undef
  */
 export function useRestoredText(text: string, opts: { onlyDisclosed?: boolean } = {}): string {
   const sessionId = useRedactionSessionId()
+  const readers = useRedactionReaders()
   useSyncExternalStore(subscribeRedactions, redactionVersion, redactionVersion)
   const placeholders = placeholdersIn(text)
-  const missing = sessionId === null ? [] : placeholders.filter((p) => !redactionInfo(sessionId, p))
+  const missing =
+    sessionId === null
+      ? []
+      : placeholders.filter((p) =>
+          opts.onlyDisclosed === true
+            ? !answered(redactionInfo(sessionId, p), readers)
+            : !redactionInfo(sessionId, p)
+        )
   useEffect(() => {
-    if (sessionId && missing.length > 0) requestRedactions(sessionId, missing)
+    if (sessionId && missing.length > 0) requestRedactions(sessionId, missing, false, readers)
   })
   if (placeholders.length === 0 || sessionId === null) return text
   return restorePlaceholders(text, (p) => {
     const info = redactionInfo(sessionId, p)
     // onlyDisclosed：只换模型收到的就是真值的那些（得到的是模型看到的样子）
-    return opts.onlyDisclosed === true && info?.disclosed !== true ? undefined : info?.value
+    return opts.onlyDisclosed === true && !disclosedFor(info, readers) ? undefined : info?.value
   })
 }
 

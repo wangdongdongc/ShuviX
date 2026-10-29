@@ -147,10 +147,12 @@ export function registerSessionHandlers(): void {
   )
 
   /** 自动脱敏：占位符的类别与真值（界面渲染标记） */
-  defineHandler('redaction:resolve', (ctx, params: { sessionId: string; placeholders: string[] }) =>
-    operationContext.run(createClientContext(ctx, params.sessionId), () =>
-      chatGateway.resolveRedactions(params.sessionId, params.placeholders)
-    )
+  defineHandler(
+    'redaction:resolve',
+    (ctx, params: { sessionId: string; placeholders: string[]; readers?: string[] }) =>
+      operationContext.run(createClientContext(ctx, params.sessionId), () =>
+        chatGateway.resolveRedactions(params.sessionId, params.placeholders, params.readers)
+      )
   )
 
   /** 自动脱敏：输入框的提示 —— 按策略会对模型藏起来的内容（只提示，用户确认才藏，§14） */

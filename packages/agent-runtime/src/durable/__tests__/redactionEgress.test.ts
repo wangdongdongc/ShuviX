@@ -1,5 +1,5 @@
 /**
- * 自动脱敏的出口（durable/redactionEgress.ts + redactionModels.ts，docs/auto-redaction-design.md §2.4）。
+ * 自动脱敏的出口（durable/redactionEgress.ts + redactionModels.ts，docs/auto-redaction-design.md §2.4、§15）。
  *
  * 请求的改写（prepareEgress，纯函数）：
  *   EG-1 第一层不适用（信任的目的地）：占位符全部换回真值、不做兜底检测；回复里的真值换回占位符
@@ -9,9 +9,14 @@
  *   EG-5 thinking 块一字不差
  *   EG-6 同一 (类别, 规则, 值) 在一次请求里只问一次策略
  *   EG-7 记录里照原样存的几类（USERNAME 等）：照发时不记表、回复里不换回（旧版本存下的占位符也是）；策略要它们
- *        保持占位符时兜底现换、记表
- *   EG-8 用户在输入框里照原样发的值（asWritten）：兜底不换（用户消息、工具结果、系统提示词），也不进回复的换回；
- *        拒发照旧
+ *        保持占位符时只在现拼的内容（系统提示词）里现换、记表，记录里的照存的样子发（§15）
+ *   EG-8 用户在输入框里照原样发的值（asWritten）：兜底不换（系统提示词），也不进回复的换回；拒发照旧
+ *   EG-9 记录里的内容（用户消息、工具结果、模型回复）不检测：里面的真值照存的样子发，只有系统提示词兜底（§15.1）
+ *   EG-10 第一个读者（§15.2）：换成信任的模型后，之前发给别的模型的用户消息、它的回复与工具调用、它调起的工具结果照旧
+ *         是占位符；之后的（新模型的回复、它调起的工具结果、还没有回复的新消息）换回真值
+ *   EG-11 从信任的模型切回不信任的：之前换回过真值的也保持占位符，回复不必换回
+ *   EG-12 第一个读者问不到或判为拒发：按不照发，不拦请求；这次的目的地判为拒发照样拦下（记录里的占位符也算）
+ *   EG-13 第二层两边都要照发：第一个读者只照发 API_KEY、这次照发 API_KEY 与 SECRET → 旧消息里只换 API_KEY
  * 回复的换回（Remasker）：
  *   RM-1 流式：真值被切在两个事件之间时先压住，放出的部分从不含真值、只追加；最终与整段换回一致
  *   RM-2 短值只换整词，流式时结尾那个没写完的词先压住
@@ -21,6 +26,8 @@
  *   ME-2 信任的目的地：模型看到真值，它在回复里写出的真值存成占位符
  *   ME-3 第一层拒发：请求不发，回合以出错结束，文案说明原因
  *   ME-4 改写出错（bug）：记 error，按存的样子（占位符）发出
+ *   ME-5 记录里的回复来自别的模型：那个模型按同一个对话问一次策略（同一个模型只问一次），它之前的内容保持占位符；
+ *        这次的判定记给写入时用（noteDecision）；问不到时记 warn、照样发出
  */
 import { createHmac } from 'node:crypto'
 import {
@@ -43,7 +50,9 @@ import {
 } from '../redactionEgress'
 import type { RedactionPolicyRequest } from '../redactionModels'
 import { RedactionTable } from '../redactionTable'
-import type { RedactionHost } from '../sessionRedaction'
+import { withRedactionEgress } from '../redactionModels'
+import type { RedactionHost, SessionRedaction } from '../sessionRedaction'
+import { fauxKit } from './support/faux'
 import { makeHost, registerHostCleanup } from './support/host'
 import { allEntries, messageText, requestTexts } from './support/transcript'
 
@@ -91,6 +100,13 @@ const toolResult = (text: string): Message => ({
   isError: false,
   timestamp: 0
 })
+
+/** model 产出的一条模型回复 */
+const reply = (
+  model: string,
+  content: Parameters<typeof fauxAssistantMessage>[0],
+  provider = 'faux'
+): AssistantMessage => ({ ...fauxAssistantMessage(content), provider, model })
 
 function texts(context: Context): string {
   return JSON.stringify(context)
@@ -223,6 +239,8 @@ describe('出口：请求的改写', () => {
     const P_USER = makePlaceholder(signer, 'USERNAME', 'agent')
     expect(P_USER).toMatch(/^\{\{REDACTED_USERNAME_[a-z2-7]{8}\}\}$/)
     expect(redacted.context.systemPrompt).toBe(`Working directory: /Users/${P_USER}/proj`)
+    // 记录里的照存的样子发：写入时没换的，出口不再现换（§15）
+    expect(texts(redacted.context)).toContain('open /Users/agent/proj/app.ts')
     expect(redacted.entries).toEqual([
       { placeholder: P_USER, category: 'USERNAME', rule: expect.any(String), value: 'agent' }
     ])
@@ -248,12 +266,116 @@ describe('出口：请求的改写', () => {
     expect(out.remasker).toBeUndefined()
     expect(() =>
       prepareEgress(
-        { messages: [user(`DB_PASSWORD=${PASSWORD}`)] },
+        { systemPrompt: `DB_PASSWORD=${PASSWORD}`, messages: [user('hi')] },
         table,
         signer,
         decision(true, () => 'block')
       )
     ).toThrow(EgressBlockedError)
+  })
+
+  it('EG-9 记录里的内容不检测：真值照存的样子发，只有系统提示词兜底', () => {
+    const P_PHONE = makePlaceholder(signer, 'PHONE', PHONE)
+    const context: Context = {
+      systemPrompt: `call ${PHONE}`,
+      messages: [
+        user(`my phone is ${PHONE}`),
+        reply('faux-1', [fauxToolCall('bash', { command: `sms ${PHONE}` })]),
+        toolResult(`sent to ${PHONE}`)
+      ]
+    }
+    const out = prepareEgress(context, new RedactionTable(), signer, decision(true))
+    expect(out.context.systemPrompt).toBe(`call ${P_PHONE}`)
+    expect(out.context.messages).toEqual(context.messages)
+    expect(out.entries).toEqual([
+      { placeholder: P_PHONE, category: 'PHONE', rule: 'cn-mobile', value: PHONE }
+    ])
+  })
+
+  it('EG-10 第一个读者：换成信任的模型后，之前发给别的模型的照旧是占位符', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY])
+    const trusted = decision(false)
+    const untrusted = decision(true)
+    const readerOf = (provider: string, model: string): EgressDecision | undefined =>
+      provider === 'faux' ? { 'faux-0': untrusted, 'faux-1': trusted }[model] : undefined
+    const messages: Message[] = [
+      user(`first ${P_KEY}`),
+      reply('faux-0', [fauxText(`ok ${P_KEY}`), fauxToolCall('bash', { command: `use ${P_KEY}` })]),
+      toolResult(`old output ${P_KEY}`),
+      user(`switched ${P_KEY}`),
+      reply('faux-1', [fauxText(`ok ${P_KEY}`), fauxToolCall('bash', { command: `use ${P_KEY}` })]),
+      toolResult(`new output ${P_KEY}`),
+      user(`latest ${P_KEY}`)
+    ]
+    const out = prepareEgress({ messages }, table, signer, trusted, readerOf)
+    const sent = out.context.messages.map((m) => JSON.stringify(m))
+    for (const i of [0, 1, 2]) {
+      expect(sent[i], `message ${i}`).toContain(P_KEY)
+      expect(sent[i], `message ${i}`).not.toContain(KEY)
+    }
+    for (const i of [3, 4, 5, 6]) {
+      expect(sent[i], `message ${i}`).toContain(KEY)
+      expect(sent[i], `message ${i}`).not.toContain(P_KEY)
+    }
+    expect(out.remasker!.text(`it is ${KEY}`)).toBe(`it is ${P_KEY}`)
+    // 没有 readerOf：都按这次的目的地（整段换回）
+    const all = prepareEgress({ messages }, table, signer, trusted)
+    expect(texts(all.context)).not.toContain(P_KEY)
+  })
+
+  it('EG-11 从信任的模型切回不信任的：之前换回过的也保持占位符', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY])
+    const readerOf = (): EgressDecision => decision(false)
+    const messages: Message[] = [
+      user(`key ${P_KEY}`),
+      reply('faux-0', [fauxText(`using ${P_KEY}`)]),
+      toolResult(`out ${P_KEY}`)
+    ]
+    const out = prepareEgress({ messages }, table, signer, decision(true), readerOf)
+    expect(out.context.messages).toEqual(messages)
+    expect(out.remasker).toBeUndefined()
+  })
+
+  it('EG-12 第一个读者问不到或拒发：不照发、不拦；这次的目的地拒发照样拦下', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY])
+    const messages: Message[] = [user(`key ${P_KEY}`), reply('gone', [fauxText(`ok ${P_KEY}`)])]
+    for (const reader of [undefined, { blocked: true, applies: false, disclose: () => 'block' }]) {
+      const out = prepareEgress(
+        { messages },
+        table,
+        signer,
+        decision(false),
+        () => reader as EgressDecision | undefined
+      )
+      expect(out.context.messages).toEqual(messages)
+    }
+    expect(() =>
+      prepareEgress(
+        { messages },
+        table,
+        signer,
+        decision(true, () => 'block'),
+        () => decision(false)
+      )
+    ).toThrow(/API_KEY/)
+  })
+
+  it('EG-13 第二层两边都要照发', () => {
+    const table = tableWith([P_KEY, 'API_KEY', KEY], [P_PASSWORD, 'SECRET', PASSWORD])
+    const both = `${P_KEY} ${P_PASSWORD}`
+    const messages: Message[] = [user(both), reply('faux-0', [fauxText('ok')]), user(both)]
+    const out = prepareEgress(
+      { messages },
+      table,
+      signer,
+      decision(true, () => 'send'),
+      (_provider, model) =>
+        model === 'faux-0'
+          ? decision(true, (category) => (category === 'API_KEY' ? 'send' : 'redact'))
+          : undefined
+    )
+    expect((out.context.messages[0] as { content: string }).content).toBe(`${KEY} ${P_PASSWORD}`)
+    expect((out.context.messages[2] as { content: string }).content).toBe(`${KEY} ${PASSWORD}`)
   })
 
   it('EG-6 同一 (类别, 规则, 值) 一次请求只问一次', () => {
@@ -384,6 +506,60 @@ describe('出口：装饰器', () => {
     const reply = stored.flatMap((entry) => entry.model ?? []).find((m) => m.role === 'assistant')
     expect(reply).toMatchObject({ stopReason: 'error' })
     expect((reply as AssistantMessage).errorMessage).toMatch(/does not allow sending requests/)
+  })
+
+  it('ME-5 记录里的回复来自别的模型：按同一个对话各问一次策略，它之前的内容保持占位符', async () => {
+    const kit = fauxKit({ models: [{ id: 'faux-1' }, { id: 'faux-2' }] })
+    const table = tableWith([P_KEY, 'API_KEY', KEY])
+    const noted: Array<[number, EgressDecision]> = []
+    const redaction = {
+      conversationOf: async () => 7,
+      table: async () => table,
+      signer,
+      record: async () => undefined,
+      noteDecision: (conversationId: number, d: EgressDecision) => noted.push([conversationId, d])
+    } as unknown as SessionRedaction
+    const seen: RedactionPolicyRequest[] = []
+    const warnings: string[] = []
+    const models = withRedactionEgress(kit.models, {
+      sessionId: 's1',
+      redaction: () => redaction,
+      // faux-2 是信任的；faux-1 保持占位符；gone 的服务商已经删了
+      policy: (request) => {
+        seen.push(request)
+        if (request.provider === 'gone') throw new Error('no such provider')
+        return decision(request.model !== 'faux-2')
+      },
+      logger: { info: () => undefined, warn: (m) => warnings.push(m), error: () => undefined }
+    })
+    kit.queue(fauxAssistantMessage([fauxText('done')]))
+    const context: Context = {
+      messages: [
+        user(`first ${P_KEY}`),
+        reply('faux-1', [fauxText('ok')]),
+        user(`again ${P_KEY}`),
+        reply('faux-1', [fauxText('ok')]),
+        reply('old', [fauxText(`gone ${P_KEY}`)], 'gone'),
+        user(`now ${P_KEY}`)
+      ]
+    }
+    const model = kit.models.getModel('faux', 'faux-2')!
+    await models.streamSimple(model, context, { sessionId: 'p1' }).result()
+    const request = kit.requests[0]!.messages.map((m) => JSON.stringify(m))
+    expect(request[0]).toContain(P_KEY)
+    expect(request[2]).toContain(P_KEY)
+    expect(request[4]).toContain(P_KEY)
+    expect(request[5]).toContain(KEY)
+    expect(request[5]).not.toContain(P_KEY)
+    expect(seen.map((r) => [r.conversationId, r.provider, r.model])).toEqual([
+      [7, 'faux', 'faux-2'],
+      [7, 'faux', 'faux-1'],
+      [7, 'gone', 'old']
+    ])
+    expect(noted).toHaveLength(1)
+    expect(noted[0]![0]).toBe(7)
+    expect(noted[0]![1].applies).toBe(false)
+    expect(warnings.some((w) => w.includes('gone/old'))).toBe(true)
   })
 
   it('ME-4 改写出错：记 error，按存的样子发出', async () => {

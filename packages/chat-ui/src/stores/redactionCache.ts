@@ -1,6 +1,7 @@
 /**
  * 自动脱敏标记的真值缓存（docs/auto-redaction-design.md §2.3）：界面按会话问主进程「这些占位符是什么、模型收到的是
- * 不是真值」，问到的记下来。一个占位符永远对应同一个值；「模型收到的是不是真值」（disclosed）随策略、服务商与会话的
+ * 不是真值」，问到的记下来。对话记录里的消息还要看它的第一个读者照不照发（§15.2）：用到过的读者按会话记下，之后每次
+ * 问都一并带上（disclosedTo）。一个占位符永远对应同一个值；「模型收到的是不是真值」（disclosed）随策略、服务商与会话的
  * 模型变，那几样一变（policy.changed / providers.changed / session.configChanged）就把记下的重问一遍 —— 重问期间照旧
  * 显示旧的，不闪。同一轮渲染里要问的攒成一次请求。
  *
@@ -9,6 +10,7 @@
  */
 import {
   MAX_RESOLVE_PLACEHOLDERS,
+  MAX_RESOLVE_READERS,
   restorePlaceholders,
   type RedactionMarkInfo
 } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
@@ -24,6 +26,8 @@ const missedAt = new Map<string, number>()
 const inflight = new Set<string>()
 /** 攒着待问的：会话 → 占位符 */
 const queued = new Map<string, Set<string>>()
+/** 会话 → 用到过的第一个读者（readerKey） */
+const readersOf = new Map<string, Set<string>>()
 let flushScheduled = false
 let version = 0
 const listeners = new Set<() => void>()
@@ -65,16 +69,31 @@ export function refreshRedactions(sessionId?: string): void {
   }
 }
 
-/** 请主进程查这些占位符（已知的、正在问的、刚问过没问到的跳过；force = 已知的也重问） */
+/** 已经问到、且这几个读者都判过（解不开的没有真值，不用判） */
+export function answered(info: RedactionMarkInfo | undefined, readers: readonly string[]): boolean {
+  if (info === undefined) return false
+  return info.value === undefined || readers.every((key) => info.disclosedTo?.[key] !== undefined)
+}
+
+/**
+ * 请主进程查这些占位符（已知的、正在问的、刚问过没问到的跳过；force = 已知的也重问）。readers：这几处所在消息的
+ * 第一个读者，还没判过的也算没问到。
+ */
 export function requestRedactions(
   sessionId: string,
   placeholders: Iterable<string>,
-  force = false
+  force = false,
+  readers: readonly string[] = []
 ): void {
   watchEvents()
+  if (readers.length > 0) {
+    let set = readersOf.get(sessionId)
+    if (!set) readersOf.set(sessionId, (set = new Set()))
+    for (const key of readers) if (set.size < MAX_RESOLVE_READERS) set.add(key)
+  }
   const now = Date.now()
   for (const placeholder of placeholders) {
-    if (!force && known.get(sessionId)?.has(placeholder)) continue
+    if (!force && answered(known.get(sessionId)?.get(placeholder), readers)) continue
     const key = keyOf(sessionId, placeholder)
     if (inflight.has(key)) continue
     const missed = missedAt.get(key)
@@ -107,10 +126,16 @@ async function flush(): Promise<void> {
 
 async function resolveChunk(sessionId: string, placeholders: string[]): Promise<void> {
   for (const p of placeholders) inflight.add(keyOf(sessionId, p))
+  const readers = [...(readersOf.get(sessionId) ?? [])]
   let result: Record<string, RedactionMarkInfo> = {}
   try {
     // 渠道端不一定接了这一口（旧的侧边栏）：没有就当都没问到
-    result = (await getSessionChannelApi().redaction?.resolve({ sessionId, placeholders })) ?? {}
+    result =
+      (await getSessionChannelApi().redaction?.resolve({
+        sessionId,
+        placeholders,
+        ...(readers.length === 0 ? {} : { readers })
+      })) ?? {}
   } catch {
     result = {}
   }
@@ -126,7 +151,14 @@ async function resolveChunk(sessionId: string, placeholders: string[]): Promise<
         p,
         info.value === undefined
           ? { category: info.category }
-          : { category: info.category, value: info.value, disclosed: info.disclosed === true }
+          : {
+              category: info.category,
+              value: info.value,
+              disclosed: info.disclosed === true,
+              disclosedTo: Object.fromEntries(
+                readers.map((key) => [key, info.disclosedTo?.[key] === true])
+              )
+            }
       )
       missedAt.delete(key)
     } else if (!map.has(p)) {
@@ -154,6 +186,7 @@ export function restoreForCopy(sessionId: string | null | undefined, text: strin
 
 /** 会话删了：它的真值不再留在内存里 */
 export function forgetRedactions(sessionId: string): void {
+  readersOf.delete(sessionId)
   if (known.delete(sessionId)) notify()
 }
 
@@ -164,6 +197,7 @@ export function resetRedactionCacheForTests(): void {
   missedAt.clear()
   inflight.clear()
   queued.clear()
+  readersOf.clear()
   flushScheduled = false
   version = 0
 }

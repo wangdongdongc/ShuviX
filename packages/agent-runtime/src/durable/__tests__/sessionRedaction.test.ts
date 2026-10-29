@@ -12,6 +12,8 @@
  *        换）；显示侧车里的也换；之后工具输出里整词出现的短值也换；steer 同样
  *   SR-9 没配脱敏的会话：带着要藏的值的发送被拒，空的照发
  *   SR-10 还原进命令：按引号环境转义，转义后的写法记进已知值（回显时换得回占位符）；别的字段原样换
+ *   SR-11 工具结果里默认照发的几类（§15.2）：对话最近一次请求的目的地要它们保持占位符 → 写入时就换；照发、不适用
+ *         脱敏、还不知道目的地 → 照原样存；策略抛错 → 换。真宿主里出口记下判定，afterTool 按对话取用
  */
 import { createHmac } from 'node:crypto'
 import { Type } from '@earendil-works/pi-ai'
@@ -23,6 +25,7 @@ import { loadShellParserWasmFromNodeModules } from '../../security/shell/nodeWas
 import { backgroundContext as BG } from '../context'
 import { RedactionTableDoc } from '../docs'
 import type { DurableSession } from '../durableSession'
+import type { EgressDecision } from '../redactionEgress'
 import { SessionRedaction, type RedactionHost } from '../sessionRedaction'
 import { answer, callTool } from './support/faux'
 import { makeHost, registerHostCleanup } from './support/host'
@@ -282,5 +285,61 @@ describe('会话脱敏', () => {
     expect(outcome.restored).toEqual(['PASSWORD'])
     // 命令被回显：转义后的写法也换得回占位符
     expect(await redaction.maskText(`+ echo it\\$HOME-pw "it's \\$HOME-pw"`)).toContain(p)
+  })
+
+  it('SR-11 工具结果里默认照发的几类：按对话最近一次请求的目的地在写入时判', async () => {
+    const t = await makeHost({ ephemeral: ['sr11'], redaction: host })
+    const session = await t.open('sr11')
+    const redaction = session.redaction!
+    const text = 'cwd /Users/alexander/proj'
+    const result = { output: [{ type: 'text' as const, text }], details: { cwd: text } }
+    const masked = async (conversationId?: number): Promise<string> =>
+      JSON.stringify(await redaction.maskToolResult(result, { conversationId }))
+    const redactUser: EgressDecision = {
+      applies: true,
+      disclose: ({ category }) => (category === 'USERNAME' ? 'redact' : 'send')
+    }
+    // 还不知道目的地：照原样存
+    expect(await masked(1)).not.toMatch(/REDACTED_USERNAME/)
+    redaction.noteDecision(1, redactUser)
+    const stored = await masked(1)
+    expect(stored).not.toContain('alexander')
+    expect(stored.match(/\{\{REDACTED_USERNAME_[a-z2-7]{8}\}\}/g)).toHaveLength(2)
+    // 别的对话不受影响
+    expect(await masked(2)).toContain('/Users/alexander/proj')
+    redaction.noteDecision(2, { applies: true, disclose: () => 'send' })
+    expect(await masked(2)).toContain('/Users/alexander/proj')
+    redaction.noteDecision(2, { applies: false, disclose: () => 'redact' })
+    expect(await masked(2)).toContain('/Users/alexander/proj')
+    redaction.noteDecision(2, {
+      applies: true,
+      disclose: () => {
+        throw new Error('policy exploded')
+      }
+    })
+    expect(await masked(2)).not.toContain('alexander')
+
+    // 真宿主：出口记下这次的判定，之后的工具结果按它换
+    const t2 = await makeHost({
+      ephemeral: ['sr11b'],
+      redaction: host,
+      redactionPolicy: () => redactUser,
+      tools: [
+        defineTool({
+          name: 'pwd',
+          description: 'prints the working directory',
+          parameters: Type.Object({}),
+          execute: async () => ({ output: [{ type: 'text', text: '/Users/alexander/proj' }] })
+        })
+      ]
+    })
+    const live = await t2.open('sr11b')
+    t2.kit.queue(callTool('pwd'), answer('done'))
+    expect(await live.submitUser('where are we')).toEqual({})
+    await waitFor(() => t2.kit.requests.length >= 2)
+    expect(requestTexts(t2.kit, 1).join('\n')).toMatch(
+      /\{\{REDACTED_USERNAME_[a-z2-7]{8}\}\}\/proj/
+    )
+    expect(await storedText(live)).not.toContain('alexander')
   })
 })

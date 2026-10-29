@@ -1,7 +1,13 @@
 /**
- * 自动脱敏的出口（docs/auto-redaction-design.md §2.4）：发给模型之前，按策略决定请求里每一处是保持占位符、
- * 换回真值、还是拦下整个请求；对话记录之外的内容（指令文件、系统提示词片段、旧会话里的真值）在这里再检测一遍
- * 兜底。模型看到过真值时，它的回复里也可能写出真值 —— 交回之前按这次发出去的真值精确替换回占位符
+ * 自动脱敏的出口（docs/auto-redaction-design.md §2.4、§15）：发给模型之前，按策略决定请求里每一处是保持占位符、
+ * 换回真值、还是拦下整个请求。
+ *
+ *  - 对话记录里的内容（用户消息、模型回复、工具结果）已经定稿：写入时就换成了占位符，这里只找占位符、不检测。一处
+ *    占位符换回真值，要这条消息的**第一个读者**（它第一次发给的模型，firstReaders）与这次的目的地都判为照发 ——
+ *    中途换成信任的模型，之前的内容照旧是占位符。
+ *  - 请求时现拼的内容（系统提示词、system 消息里的指令文件与片段）每次重新渲染，在这里检测一遍兜底，按这次的目的地判。
+ *
+ * 模型看到过真值时，它的回复里也可能写出真值 —— 交回之前按这次发出去的真值精确替换回占位符
  * （Remasker；记录里本来就照原样存的几类不换，categories.ts isKeptAsWritten）：流式的每个事件里累积的那份回复（pi-durable 每 100 毫秒把它写进存储，中途停止时它就成了正式
  * 记录）与最终结果都要换；结尾正好是某个真值的开头时先压住不放出。
  *
@@ -48,23 +54,41 @@ export class EgressBlockedError extends Error {
   }
 }
 
+/**
+ * 记录里一条消息的第一个读者的判定：取自 readerOf；问不到 = null（按不照发）。这次的目的地就是 env.decision 本身。
+ */
+type Reader = EgressDecision | null
+
+/** 记录里一条模型回复的产出者（provider / model）→ 它的判定；问不到 = undefined */
+export type ReaderDecisions = (provider: string, model: string) => EgressDecision | undefined
+
 interface EgressEnv {
   table: RedactionTable
   signer: PlaceholderSigner
+  /** 这次的目的地 */
   decision: EgressDecision
-  cache: Map<string, DiscloseAction>
+  /** 判定 → (类别, 规则, 值) → 处置 */
+  cache: Map<EgressDecision, Map<string, DiscloseAction>>
   /** 这次以真值发出去的：值 → 它的占位符（回复里的真值据此换回）；记录里照原样存的几类不在里面 */
   sent: Map<string, string>
   /** 兜底检测新认出的（记进对照表） */
   entries: RedactionEntry[]
 }
 
-function disclose(env: EgressEnv, category: string, rule: string, value: string): DiscloseAction {
+function disclose(
+  env: EgressEnv,
+  category: string,
+  rule: string,
+  value: string,
+  decision: EgressDecision = env.decision
+): DiscloseAction {
+  let cache = env.cache.get(decision)
+  if (cache === undefined) env.cache.set(decision, (cache = new Map()))
   const key = `${category}\u0000${rule}\u0000${value}`
-  let action = env.cache.get(key)
+  let action = cache.get(key)
   if (action === undefined) {
-    action = env.decision.disclose({ category, rule, value })
-    env.cache.set(key, action)
+    action = decision.disclose({ category, rule, value })
+    cache.set(key, action)
   }
   return action
 }
@@ -74,7 +98,47 @@ function sentAsWritten(env: EgressEnv, value: string): boolean {
   return env.table.asWritten.size > 0 && env.table.asWritten.has(asWrittenKey(env.signer, value))
 }
 
-/** 一段文本发出去的样子 */
+/** 第一个读者照不照发这一处（这次的目的地已经判过）：问不到或第一层拒发 = 不照发，第一层不适用 = 照发 */
+function readerSends(
+  env: EgressEnv,
+  reader: Reader,
+  category: string,
+  rule: string,
+  value: string
+): boolean {
+  if (reader === null || reader.blocked) return false
+  if (reader === env.decision || !reader.applies) return true
+  return disclose(env, category, rule, value, reader) === 'send'
+}
+
+/**
+ * 记录里的一段文本（§15.2）：只找占位符，不检测。这次的目的地判为拒发 → 拦下整个请求；这次的目的地与第一个读者
+ * 都照发（第一层不适用 = 照发）才换回真值；第一个读者判为拒发只算不照发。
+ */
+function egressRecorded(s: string, env: EgressEnv, reader: Reader): string {
+  if (s.length < 3) return s
+  const hits = findPlaceholders(s, (p) => env.table.has(p))
+  if (hits.length === 0) return s
+  let out = ''
+  let last = 0
+  for (const hit of hits) {
+    const item = env.table.get(hit.placeholder)
+    if (item?.value === undefined) continue
+    if (env.decision.applies) {
+      const action = disclose(env, item.category, item.rule, item.value)
+      if (action === 'block') throw new EgressBlockedError(item.category)
+      if (action !== 'send') continue
+    }
+    if (!readerSends(env, reader, item.category, item.rule, item.value)) continue
+    // 旧版本把照原样存的几类也换成了占位符：照发，回复里不再换回
+    if (!isKeptAsWritten(item.category)) env.sent.set(item.value, hit.placeholder)
+    out += s.slice(last, hit.start) + item.value
+    last = hit.end
+  }
+  return last === 0 ? s : out + s.slice(last)
+}
+
+/** 请求时现拼的一段文本（系统提示词、system 消息）发出去的样子：兜底检测，按这次的目的地判 */
 function egressText(s: string, env: EgressEnv): string {
   if (s.length < 3) return s
   const hits = findPlaceholders(s, (p) => env.table.has(p))
@@ -137,18 +201,45 @@ function egressText(s: string, env: EgressEnv): string {
   return out + s.slice(last)
 }
 
-function egressJson(value: unknown, env: EgressEnv): unknown {
-  if (typeof value === 'string') return egressText(value, env)
-  if (Array.isArray(value)) return value.map((v) => egressJson(v, env))
+function egressJson(value: unknown, env: EgressEnv, reader: Reader): unknown {
+  if (typeof value === 'string') return egressRecorded(value, env, reader)
+  if (Array.isArray(value)) return value.map((v) => egressJson(v, env, reader))
   if (value !== null && typeof value === 'object') {
     const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value)) out[k] = egressJson(v, env)
+    for (const [k, v] of Object.entries(value)) out[k] = egressJson(v, env, reader)
     return out
   }
   return value
 }
 
-function egressMessage(message: Message, env: EgressEnv): Message {
+/**
+ * 每条消息的第一个读者（§15.2），从记录本身推出：模型回复 = 产出它的模型；工具结果 = 发起这次调用的那条回复的模型
+ * （写入时这个对话在用的）；其余 = 它后面第一条回复的模型，后面还没有回复就是这次的目的地。readerOf 缺省 = 都按
+ * 这次的目的地。
+ */
+function firstReaders(
+  messages: readonly Message[],
+  current: EgressDecision,
+  readerOf: ReaderDecisions | undefined
+): Reader[] {
+  const out: Reader[] = new Array<Reader>(messages.length)
+  let next: Reader = current
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]!
+    if (message.role === 'assistant') {
+      next = readerOf === undefined ? current : (readerOf(message.provider, message.model) ?? null)
+    }
+    out[i] = next
+  }
+  let caller: Reader | undefined
+  messages.forEach((message, i) => {
+    if (message.role === 'assistant') caller = out[i]!
+    else if (message.role === 'toolResult' && caller !== undefined) out[i] = caller
+  })
+  return out
+}
+
+function egressMessage(message: Message, env: EgressEnv, reader: Reader): Message {
   switch (message.role) {
     case 'system': {
       const content =
@@ -170,20 +261,24 @@ function egressMessage(message: Message, env: EgressEnv): Message {
         ...message,
         content:
           typeof message.content === 'string'
-            ? egressText(message.content, env)
+            ? egressRecorded(message.content, env, reader)
             : message.content.map((block) =>
-                block.type === 'text' ? { ...block, text: egressText(block.text, env) } : block
+                block.type === 'text'
+                  ? { ...block, text: egressRecorded(block.text, env, reader) }
+                  : block
               )
       }
     case 'assistant':
       return {
         ...message,
         content: message.content.map((block) => {
-          if (block.type === 'text') return { ...block, text: egressText(block.text, env) }
+          if (block.type === 'text') {
+            return { ...block, text: egressRecorded(block.text, env, reader) }
+          }
           if (block.type === 'toolCall') {
             return {
               ...block,
-              arguments: egressJson(block.arguments, env) as typeof block.arguments
+              arguments: egressJson(block.arguments, env, reader) as typeof block.arguments
             }
           }
           return block // thinking：一字不差
@@ -193,7 +288,9 @@ function egressMessage(message: Message, env: EgressEnv): Message {
       return {
         ...message,
         content: message.content.map((block) =>
-          block.type === 'text' ? { ...block, text: egressText(block.text, env) } : block
+          block.type === 'text'
+            ? { ...block, text: egressRecorded(block.text, env, reader) }
+            : block
         )
       }
     default:
@@ -210,16 +307,21 @@ export interface PreparedEgress {
   remasker: Remasker | undefined
 }
 
-/** 按判定改写一次请求；第二层判为拒发时抛 EgressBlockedError */
+/**
+ * 按判定改写一次请求；这次的目的地第二层判为拒发时抛 EgressBlockedError。readerOf：记录里模型回复的产出者的判定
+ * （§15.2，调用方事先问好）；缺省 = 都按这次的目的地。
+ */
 export function prepareEgress(
   context: Context,
   table: RedactionTable,
   signer: PlaceholderSigner,
-  decision: EgressDecision
+  decision: EgressDecision,
+  readerOf?: ReaderDecisions
 ): PreparedEgress {
   if (decision.blocked) throw new EgressBlockedError()
   const env: EgressEnv = { table, signer, decision, cache: new Map(), sent: new Map(), entries: [] }
-  const messages = context.messages.map((message) => egressMessage(message, env))
+  const readers = firstReaders(context.messages, decision, readerOf)
+  const messages = context.messages.map((message, i) => egressMessage(message, env, readers[i]!))
   const systemPrompt =
     context.systemPrompt === undefined ? undefined : egressText(context.systemPrompt, env)
   return {

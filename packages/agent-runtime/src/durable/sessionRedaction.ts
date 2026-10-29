@@ -34,6 +34,7 @@ import {
 } from '../redaction/placeholder'
 import type { RuntimeLogger } from '../types'
 import { backgroundContext as BG, errorText } from './context'
+import type { EgressDecision } from './redactionEgress'
 import {
   entriesReferencedBy,
   loadRedactionTable,
@@ -76,6 +77,11 @@ export interface RestoreCommandOptions {
 
 type Json = string | number | boolean | null | Json[] | { [key: string]: Json }
 
+/** 写入时的选项：内容进的是哪个对话（工具结果；默认照发的几类按它最近一次请求的目的地判，§15.2） */
+export interface MaskOptions {
+  conversationId?: number
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -102,6 +108,8 @@ function collectStrings(value: unknown, into: string[]): void {
 
 export class SessionRedaction {
   private loading: Promise<RedactionTable> | undefined
+  /** 对话 → 它最近一次请求的目的地的判定（出口记下，只在内存里） */
+  private readonly decisions = new Map<number, EgressDecision>()
 
   constructor(
     private readonly deps: {
@@ -125,20 +133,21 @@ export class SessionRedaction {
   // ─────────────────────────── 写入：换成占位符 ───────────────────────────
 
   /** 一段文本：认出的内容换成占位符，新认出的记进对照表 */
-  async maskText(text: string): Promise<string> {
-    return (await this.maskTexts([text]))[0]
+  async maskText(text: string, opts: MaskOptions = {}): Promise<string> {
+    return (await this.maskTexts([text], opts))[0]
   }
 
   /**
    * 几段文本一起换（新认出的在一个提交里记）。**从不抛错**：读表、检测、签占位符、记表任何一步出错都记
    * error、按原样交回（当作漏检，§4.4）—— 换成了占位符却没记进表，比原样写下更糟：之后谁也还原不了。
    */
-  async maskTexts(texts: readonly string[]): Promise<string[]> {
+  async maskTexts(texts: readonly string[], opts: MaskOptions = {}): Promise<string[]> {
     if (!texts.some((t) => t.length >= 3)) return [...texts]
     try {
       const table = await this.table()
       const entries: RedactionEntry[] = []
-      const out = texts.map((text) => this.maskOne(text, table, entries))
+      const keep = this.keptAsWritten(opts.conversationId)
+      const out = texts.map((text) => this.maskOne(text, table, entries, keep))
       if (entries.length > 0) {
         await recordRedactions(this.deps.harness, table, entries, this.deps.host.vault)
       }
@@ -151,13 +160,39 @@ export class SessionRedaction {
     }
   }
 
-  private maskOne(text: string, table: RedactionTable, entries: RedactionEntry[]): string {
+  /**
+   * 默认照发的几类照原样存（§13.8）；但内容进的对话最近一次请求的目的地要它们保持占位符时，写入时就换 —— 出口不再在
+   * 记录上现换（§15.2）。不知道对话或它还没发过请求 = 照原样存；策略抛错 = 换。
+   */
+  private keptAsWritten(
+    conversationId: number | undefined
+  ): (category: string, value: string, rule: string) => boolean {
+    const decision = conversationId === undefined ? undefined : this.decisions.get(conversationId)
+    return (category, value, rule) => {
+      if (!isKeptAsWritten(category)) return false
+      if (decision === undefined) return true
+      if (decision.blocked) return false
+      if (!decision.applies) return true
+      try {
+        return decision.disclose({ category, rule, value }) === 'send'
+      } catch {
+        return false
+      }
+    }
+  }
+
+  private maskOne(
+    text: string,
+    table: RedactionTable,
+    entries: RedactionEntry[],
+    keptAsWritten: (category: string, value: string, rule: string) => boolean
+  ): string {
     if (text.length < 3) return text
-    // 默认照发的几类照原样存；策略要它们保持占位符时出口现换。用户照原样发过的值也不换
+    // 默认照发的几类按上面判；用户照原样发过的值不换
     const signer = this.deps.host.signer
     const findings = detectSensitive(text, table.known, {
-      except: (category, value) =>
-        isKeptAsWritten(category) ||
+      except: (category, value, rule) =>
+        keptAsWritten(category, value, rule) ||
         (table.asWritten.size > 0 && table.asWritten.has(asWrittenKey(signer, value)))
     })
     if (findings.length === 0) return text
@@ -274,26 +309,31 @@ export class SessionRedaction {
   }
 
   /** JSON 值里的每个字符串都换一遍 */
-  async maskJson<T>(value: T): Promise<T> {
+  async maskJson<T>(value: T, opts: MaskOptions = {}): Promise<T> {
     const strings: string[] = []
     collectStrings(value, strings)
     if (strings.length === 0) return value
-    const masked = await this.maskTexts(strings)
+    const masked = await this.maskTexts(strings, opts)
     let i = 0
     return mapStrings(value, () => masked[i++]) as T
   }
 
   /** 工具结果：给模型的文本块与给界面的 details 里的字符串 */
-  async maskToolResult(result: ToolExecutionResult): Promise<ToolExecutionResult> {
+  async maskToolResult(
+    result: ToolExecutionResult,
+    opts: MaskOptions = {}
+  ): Promise<ToolExecutionResult> {
     const output = result.output
       ? await Promise.all(
           result.output.map(async (block) =>
-            block.type === 'text' ? { ...block, text: await this.maskText(block.text) } : block
+            block.type === 'text'
+              ? { ...block, text: await this.maskText(block.text, opts) }
+              : block
           )
         )
       : undefined
     const details =
-      result.details === undefined ? undefined : await this.maskJson(result.details as Json)
+      result.details === undefined ? undefined : await this.maskJson(result.details as Json, opts)
     return {
       ...result,
       ...(output === undefined ? {} : { output }),
@@ -368,6 +408,11 @@ export class SessionRedaction {
     return this.deps.host.signer
   }
 
+  /** 出口记下：这个对话这次请求的目的地的判定（写入时判默认照发的几类用，§15.2） */
+  noteDecision(conversationId: number, decision: EgressDecision): void {
+    this.decisions.set(conversationId, decision)
+  }
+
   /** 把出口兜底新认出的记进对照表 */
   async record(entries: readonly RedactionEntry[]): Promise<void> {
     if (entries.length === 0) return
@@ -437,9 +482,11 @@ export function redactionToolHook(
   logger: RuntimeLogger
 ): HookRegistration {
   return hook(ToolTask, {
-    afterTool: async (_call, result, _api, _context: Context) => {
+    afterTool: async (_call, result, api, _context: Context) => {
       try {
-        return await redaction.maskToolResult(result)
+        return await redaction.maskToolResult(result, {
+          conversationId: api.conversationId as number
+        })
       } catch (error) {
         logger.error(`masking a tool result failed; it is stored as written: ${errorText(error)}`)
         return result

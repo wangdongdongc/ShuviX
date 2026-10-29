@@ -10,6 +10,7 @@ import { EmptyReplyNoticeRow } from './EmptyReplyNoticeRow'
 import { InstructionNoticeRow } from './InstructionNoticeRow'
 import { CompactionNoticeRow } from './CompactionNoticeRow'
 import { useChatDensity } from '../../host/chatHostContext'
+import { RedactionReadersProvider } from '../../hooks/useRedaction'
 import {
   DATE_NOTICE_KIND,
   EMPTY_REPLY_NOTICE_KIND
@@ -46,6 +47,8 @@ interface MessageRendererProps {
   onRegenerate?: (assistantMsgId: string) => void
   /** 从某张卡分支出新会话（每张定稿的卡都给；不给 = 没有这个按钮） */
   onFork?: (assistantMsgId: string) => void
+  /** 这一项的第一个读者（messageReaders；自动脱敏判模型收到的是不是真值，§15.2） */
+  redactionReaders?: string
 }
 
 function ErrorEventBlock({ msg }: { msg: ErrorEventMessage }): React.JSX.Element {
@@ -108,7 +111,9 @@ export function MessageRenderer(props: MessageRendererProps): React.JSX.Element 
       data-msg-role={msg.role}
       data-msg-type={msg.type}
     >
-      <MessageBody {...props} />
+      <RedactionReadersProvider readers={props.redactionReaders}>
+        <MessageBody {...props} />
+      </RedactionReadersProvider>
     </div>
   )
 }

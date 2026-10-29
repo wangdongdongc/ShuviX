@@ -8,6 +8,9 @@
  *
  * 另有一组钉**项的复用**（IR 组）：内容没变的项交回上一次的同一个对象（助手项连同同一个 msgs 数组），
  * 卡的 memo 才拦得住 —— 缓存按消息对象记（模块级 WeakMap），所以 IR 组每条用例都用自己新造的消息对象。
+ *
+ * MR 组钉 `messageReaders`（自动脱敏的第一个读者，docs/auto-redaction-design.md §15.2）：助手卡 = 卡里各条回复的
+ * 模型（换过模型就都算）；用户消息与错误行 = 后面第一张卡的第一条回复的模型；后面没有回复或只有流式占位卡 = 没有。
  */
 import { describe, it, expect } from 'vitest'
 import type {
@@ -17,7 +20,8 @@ import type {
   ErrorEventMessage,
   UserTextMessage
 } from '@shuvix/chat-protocol/types/chatMessage'
-import { buildVisibleItems } from '../conversationItems'
+import { readerKey } from '@shuvix/chat-protocol/utils/redactionPlaceholders'
+import { buildVisibleItems, messageReaders } from '../conversationItems'
 import { STREAMING_PLACEHOLDER_ID } from '../MessageRenderer'
 import { PENDING_PROMPT_ID, pendingPromptMessage } from '../../../stores/chatStore'
 
@@ -563,5 +567,47 @@ describe('buildVisibleItems —— 项的复用', () => {
     const cold = buildVisibleItems(structuredClone(messages), false)
     expect(warm).toEqual(cold)
     expect(warm[1]).not.toBe(cold[1])
+  })
+})
+
+describe('messageReaders：自动脱敏的第一个读者', () => {
+  const by = (msg: AssistantMessage, model: string, provider = 'faux'): AssistantMessage => ({
+    ...msg,
+    model,
+    provider
+  })
+  const A = readerKey('faux', 'a')
+  const B = readerKey('faux', 'b')
+
+  it('MR-1 助手卡 = 卡里各条回复的模型；用户消息 = 后面第一张卡的第一条回复', () => {
+    const messages: ChatMessage[] = [
+      userMsg('u1'),
+      by(agentMsg('a1', { tools: 1 }), 'a'),
+      by(agentMsg('a2'), 'a'),
+      userMsg('u2'),
+      errMsg('e1'),
+      by(agentMsg('a3', { tools: 1 }), 'a'),
+      by(agentMsg('a4'), 'b'),
+      userMsg('u3')
+    ]
+    const items = buildVisibleItems(messages, false)
+    const readers = messageReaders(items)
+    expect(items.map((item) => readers.get(item.key))).toEqual([
+      A,
+      A,
+      A,
+      A,
+      `${A}\n${B}`,
+      undefined
+    ])
+  })
+
+  it('MR-2 流式占位卡与没有模型的回复：没有读者，前面的用户消息也没有', () => {
+    const messages: ChatMessage[] = [by(agentMsg('a1'), 'a'), userMsg('u1')]
+    const items = buildVisibleItems(messages, true)
+    const readers = messageReaders(items)
+    expect(items.map((item) => readers.get(item.key))).toEqual([A, undefined, undefined])
+    const synthetic = buildVisibleItems([userMsg('u2'), agentMsg('a2')], false)
+    expect([...messageReaders(synthetic).values()]).toEqual([undefined, undefined])
   })
 })

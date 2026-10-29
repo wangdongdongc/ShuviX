@@ -161,11 +161,13 @@ export interface ChatGateway {
 
   /**
    * 自动脱敏：这条会话对照表里这些占位符的类别与真值（界面渲染标记）。会话没开着就打开它（存储在才开）；
-   * 不是标准写法的占位符、表里没有的不出现在结果里；有但解不开的只有类别。
+   * 不是标准写法的占位符、表里没有的不出现在结果里；有但解不开的只有类别。readers：一并判这几个第一个读者
+   * （readerKey，§15.2）照不照发。
    */
   resolveRedactions(
     sessionId: string,
-    placeholders: string[]
+    placeholders: string[],
+    readers?: string[]
   ): Promise<Record<string, RedactionMarkInfo>>
 
   /**
