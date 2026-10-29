@@ -79,6 +79,8 @@ vi.mock('../../services/widget', () => ({
   resolveExportZipPath: vi.fn(),
   WidgetExportError: state.WidgetExportError
 }))
+// 列表补项目名（widgetHandlers 的 withProjectTags）：真的项目服务要数据库
+vi.mock('../../services/projectService', () => ({ projectService: { getById: vi.fn() } }))
 vi.mock('../../services/widgetWindowService', () => ({}))
 vi.mock('../../frontend/network', () => ({
   networkService: {

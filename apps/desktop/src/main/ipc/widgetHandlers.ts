@@ -11,14 +11,51 @@ import {
   WidgetExportError
 } from '../services/widget'
 import * as widgetWindowService from '../services/widgetWindowService'
+import { projectService } from '../services/projectService'
+import type { WidgetSummary } from '../services/widget/widgetService'
+import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
+
+/** 卡片上的项目标签：用过这个组件的会话所在的项目（最近的在前） */
+export interface WidgetProjectTag {
+  id: string
+  name: string
+}
+
+/**
+ * 给列表补上项目名（组件账目里只有 id）。删掉了的项目、隐藏的承载项目、查名字出错的不出标签；改过名的取现在的名字
+ */
+export function withProjectTags(
+  list: WidgetSummary[]
+): Array<WidgetSummary & { projects: WidgetProjectTag[] }> {
+  const names = new Map<string, string | null>()
+  const nameOf = (id: string): string | null => {
+    if (!names.has(id)) {
+      let name: string | null = null
+      try {
+        name = isHiddenProjectId(id) ? null : (projectService.getById(id)?.name ?? null)
+      } catch {
+        // 标签只是信息：查不到名字就不出这一个，列表照样给
+      }
+      names.set(id, name)
+    }
+    return names.get(id) ?? null
+  }
+  return list.map((widget) => ({
+    ...widget,
+    projects: widget.projectIds.flatMap((id) => {
+      const name = nameOf(id)
+      return name === null ? [] : [{ id, name }]
+    })
+  }))
+}
 
 /**
  * Widget IPC —— 列表、打开、归档、删除、重命名、server 状态、导出 Vite 工程 zip
  * 广播事件 `widget:changed` 由 widgetService 内部在状态变更后发出
  */
 export function registerWidgetHandlers(): void {
-  defineHandler('widget:list', () => widgetService.listActive())
-  defineHandler('widget:listArchived', () => widgetService.listArchived())
+  defineHandler('widget:list', () => withProjectTags(widgetService.listActive()))
+  defineHandler('widget:listArchived', () => withProjectTags(widgetService.listArchived()))
 
   defineHandler('widget:open', async (_ctx, id: string) => {
     try {

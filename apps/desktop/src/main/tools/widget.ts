@@ -15,6 +15,9 @@
  * `preview` / `export` 要读（`export` 另过目标路径的写门）；`create` 不问，造它的会话自动得到读写（来源 widget）。
  * 读写授权派生出组件源码目录的可写行（services/acl），改组件的文件与写它的数据是同一道授权。门在
  * toolContext.assertWidgetAccess（出厂的 ask-on-widget-access，只由用户回答）。
+ *
+ * 关联：针对一个组件的动作（create / call / build / preview / sql / export / open）过了门就记一笔「这条会话、它的项目
+ * 用过这个组件」（widgetService.noteSessionUse，Widget 面板的卡片据此显示项目标签）；`list` / `describe` 只是看，不记。
  */
 import { readFileSync } from 'fs'
 import { isAbsolute, resolve } from 'path'
@@ -32,6 +35,8 @@ import {
 } from '../services/toolContext'
 import { agentActorOf, withCallAgent } from '../services/toolAgent'
 import { sessionAcl } from '../services/acl'
+import { sessionRecords } from '../services/sessionRecords'
+import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
 import {
   callWidgetOp,
   exportWidget,
@@ -322,6 +327,23 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     )
   }
 
+  /**
+   * 记下这条会话用了这个组件（会话所在的项目一起；子会话的项目就是父会话的）。隐藏的承载项目（笔记本打开的 md 之类）
+   * 不算项目。只作信息关联：记不下来（会话行读不到、账目写不进）不影响这次调用
+   */
+  private noteUse(widgetId: string): void {
+    try {
+      const projectId = sessionRecords.pick(this.ctx.sessionId, ['projectId'])?.projectId ?? null
+      widgetService.noteSessionUse(
+        widgetId,
+        this.ctx.sessionId,
+        projectId && !isHiddenProjectId(projectId) ? projectId : null
+      )
+    } catch {
+      /* 见上 */
+    }
+  }
+
   private async list(call: ToolCallScope | undefined): Promise<Result> {
     const building = await this.callerBuilds(call)
     const lines: string[] = []
@@ -419,6 +441,7 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     }
     await this.authorize(entry.mode, widget, 'call', opName, toolCallId, call, signal)
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
+    this.noteUse(widget.id)
 
     const actor = agentActorOf(withCallAgent(this.ctx, call))
     let outcome
@@ -468,6 +491,7 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     })
     // 造它的会话可以用它、改它（含源码目录的写权限，派生自这一行）
     sessionAcl.grantWidget(this.ctx.sessionId, id, 'write', 'widget')
+    this.noteUse(id)
     const lines = [
       `Created widget "${id}" in ${result.projectDir}.`,
       `Files: ${result.files.join(', ')}`,
@@ -486,6 +510,7 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     const widget = requireWidget(params.widget)
     await this.authorize('write', widget, 'build', 'build', toolCallId, call, signal)
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
+    this.noteUse(widget.id)
     const message = params.message?.trim()
     const built = await widgetService.build(widget.id, message ? { message } : {})
     const lines: string[] = []
@@ -518,6 +543,7 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     const theme = parsePreviewTheme(params.theme)
     await this.authorize('read', widget, 'preview', 'preview', toolCallId, call, signal)
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
+    this.noteUse(widget.id)
     const result = await previewWidget(widget.id, {
       sizes,
       ...(theme ? { theme } : {}),
@@ -557,6 +583,7 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     if (params.legacy === true && !hasLegacyWidgetData(widget.id)) {
       throw new Error(`Widget "${widget.id}" has no data in the older shared database.`)
     }
+    this.noteUse(widget.id)
     const out =
       params.legacy === true
         ? await runWidgetDbQuery(widget.id, sql)
@@ -591,6 +618,7 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
       callOwnerOf(call)
     )
     if (signal?.aborted) throw new Error(TOOL_ABORTED)
+    this.noteUse(widget.id)
     try {
       const result = await exportWidget({ id: widget.id, targetPath: zipPath })
       return textResult('export', `Exported "${widget.id}" to ${result.zipPath}.`, widget.id)
@@ -604,6 +632,7 @@ export class WidgetTool extends BaseTool<typeof WidgetParamsSchema> {
     const widget = requireWidget(params.widget)
     // 窗口自己完成构建与地址；不走 widgetService.open，免得与窗口重复计一次打开
     widgetWindowService.open(widget.id)
+    this.noteUse(widget.id)
     return textResult('open', `Opened "${widget.name}" in its own window.`, widget.id)
   }
 }

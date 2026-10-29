@@ -1273,6 +1273,7 @@
     "archive": "归档",
     "delete": "删除",
     "never": "从未打开",
+    "usedInProjects": "用过它的项目：{{names}}",
     "justNow": "刚刚",
     "minutesAgo": "{{count}} 分钟前",
     "hoursAgo": "{{count}} 小时前",

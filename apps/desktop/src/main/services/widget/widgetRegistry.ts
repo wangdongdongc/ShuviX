@@ -3,7 +3,7 @@
  *
  * 布局：
  *   ~/.shuvix/widgets/
- *     .config.json            宿主账目：{ state: { <id>: { updatedAt, lastOpenedAt, archivedAt } } }
+ *     .config.json            宿主账目：{ state: { <id>: { updatedAt, lastOpenedAt, archivedAt, schemaHash, links } } }
  *     <id>/widget.json        身份清单：{ id, name, description, entryFile, createdAt }
  *     <id>/schema.sql         DB schema（由 widgetService 维护，不在本文件职责内）
  *
@@ -35,6 +35,25 @@ export const WIDGET_ID_REGEX = /^[a-z0-9]+(-[a-z0-9]+)+$/
 const CONFIG_FILE = '.config.json'
 const MANIFEST_FILE = 'widget.json'
 
+/** 一条关联的时间：第一次与最近一次 */
+export interface WidgetLinkTimes {
+  firstAt: number
+  lastAt: number
+}
+
+/**
+ * 用过这个组件的会话与它们所在的项目（会话经 `widget` 工具用它时由宿主记下，见 tools/widget.ts）。
+ * 目前只作信息关联与展示（Widget 面板卡片上的项目标签），不参与授权 —— 授权在会话的权限表里。
+ * 项目全留（会话删了，「这个组件和这个项目有关」照样成立）；会话只留最近 WIDGET_SESSION_LINK_LIMIT 条。
+ */
+export interface WidgetLinks {
+  projects: Record<string, WidgetLinkTimes>
+  sessions: Record<string, WidgetLinkTimes & { projectId: string | null }>
+}
+
+/** 每个组件记住的会话条数上限（按最近一次用的时间留） */
+export const WIDGET_SESSION_LINK_LIMIT = 50
+
 /** widget 记录 —— 清单字段 + 宿主账目字段的合并视图 */
 export interface Widget {
   id: string
@@ -45,6 +64,7 @@ export interface Widget {
   updatedAt: number
   lastOpenedAt: number
   archivedAt: number
+  links: WidgetLinks
 }
 
 /** 落盘的身份清单 */
@@ -61,6 +81,7 @@ interface WidgetState {
    * 只有指纹对得上，才说明文件里的 DDL 确实在这台机器上跑通过（见 widgetService 的重放逻辑）。
    */
   schemaHash: string
+  links: WidgetLinks
 }
 
 interface ConfigFile {
@@ -71,7 +92,8 @@ const DEFAULT_STATE: WidgetState = {
   updatedAt: 0,
   lastOpenedAt: 0,
   archivedAt: 0,
-  schemaHash: ''
+  schemaHash: '',
+  links: { projects: {}, sessions: {} }
 }
 
 function configPath(): string {
@@ -111,15 +133,53 @@ function writeConfig(config: ConfigFile): void {
   }
 }
 
+const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+/** 是一个键值对象（数组不算：手改成数组的 `projects` 不能把下标读成项目 id） */
+const isMap = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v)
+
+/** 账目里的关联：认不出的条目跳过（手改坏了也不让整个账目读不出来） */
+function normalizeLinks(raw: unknown): WidgetLinks {
+  const links: WidgetLinks = { projects: {}, sessions: {} }
+  if (!isMap(raw)) return links
+  const { projects, sessions } = raw as { projects?: unknown; sessions?: unknown }
+  const entries = (v: unknown): Array<[string, Record<string, unknown>]> =>
+    isMap(v)
+      ? Object.entries(v).filter(
+          (e): e is [string, Record<string, unknown>] => e[0] !== '' && isMap(e[1])
+        )
+      : []
+  for (const [id, t] of entries(projects)) {
+    links.projects[id] = { firstAt: num(t.firstAt), lastAt: num(t.lastAt) }
+  }
+  for (const [id, t] of entries(sessions)) {
+    links.sessions[id] = {
+      projectId: typeof t.projectId === 'string' && t.projectId !== '' ? t.projectId : null,
+      firstAt: num(t.firstAt),
+      lastAt: num(t.lastAt)
+    }
+  }
+  return links
+}
+
 function normalizeState(raw: Partial<WidgetState> | undefined): WidgetState {
-  if (!raw) return { ...DEFAULT_STATE }
-  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  if (!raw) return { ...DEFAULT_STATE, links: { projects: {}, sessions: {} } }
   return {
     updatedAt: num(raw.updatedAt),
     lastOpenedAt: num(raw.lastOpenedAt),
     archivedAt: num(raw.archivedAt),
-    schemaHash: typeof raw.schemaHash === 'string' ? raw.schemaHash : ''
+    schemaHash: typeof raw.schemaHash === 'string' ? raw.schemaHash : '',
+    // 每次写账目都经这里：漏了这一项，下一次「打开」就会把关联整个抹掉
+    links: normalizeLinks(raw.links)
   }
+}
+
+/** 落盘前：没有关联就不写 links（没被会话用过的组件，账目条目保持原来的样子） */
+function compactState(state: WidgetState): Partial<WidgetState> {
+  const { links, ...rest } = state
+  const empty = Object.keys(links.projects).length === 0 && Object.keys(links.sessions).length === 0
+  return empty ? rest : state
 }
 
 /** 读单个 widget 的清单；缺失 / 损坏 / 字段不合法都返回 undefined（调用方跳过该项） */
@@ -167,8 +227,8 @@ function isDirThroughLink(path: string): boolean {
 }
 
 function toWidget(m: Manifest, state: WidgetState): Widget {
-  const { updatedAt, lastOpenedAt, archivedAt } = state
-  return { ...m, updatedAt, lastOpenedAt, archivedAt }
+  const { updatedAt, lastOpenedAt, archivedAt, links } = state
+  return { ...m, updatedAt, lastOpenedAt, archivedAt, links }
 }
 
 class WidgetRegistry {
@@ -274,6 +334,40 @@ class WidgetRegistry {
     this.patchState(id, { lastOpenedAt: Date.now() })
   }
 
+  /**
+   * 记一次会话用了这个组件：会话的第一次 / 最近一次时间，有项目的也记项目的。会话超过上限时丢最久没用的。
+   * 组件不在（清单读不出来）或账目读不出来时什么也不做。返回这次是否给组件添了一个新项目
+   * （调用方据此决定要不要通知界面刷新 —— 只是时间变了不必）。
+   */
+  noteLink(id: string, sessionId: string, projectId: string | null, at = Date.now()): boolean {
+    if (!sessionId || !readManifest(id)) return false
+    const config = readConfig()
+    if (!config) return false
+    const state = normalizeState(config.state[id])
+    const { links } = state
+    const session = links.sessions[sessionId]
+    links.sessions[sessionId] = {
+      projectId,
+      firstAt: session?.firstAt || at,
+      lastAt: at
+    }
+    // 刚记的这条永远留下（时间与别的相同也不会被挤掉）；其余按最近一次用的时间留
+    const overflow = Object.entries(links.sessions)
+      .filter(([key]) => key !== sessionId)
+      .sort((a, b) => b[1].lastAt - a[1].lastAt)
+      .slice(WIDGET_SESSION_LINK_LIMIT - 1)
+    for (const [old] of overflow) delete links.sessions[old]
+    let newProject = false
+    if (projectId) {
+      const project = links.projects[projectId]
+      newProject = !project
+      links.projects[projectId] = { firstAt: project?.firstAt || at, lastAt: at }
+    }
+    config.state[id] = compactState(state)
+    writeConfig(config)
+    return newProject
+  }
+
   /** 删除账目条目（目录本身由 widgetService 负责移除） */
   deleteById(id: string): void {
     const config = readConfig()
@@ -301,7 +395,7 @@ class WidgetRegistry {
   private patchState(id: string, patch: Partial<WidgetState>): void {
     const config = readConfig()
     if (!config) return // 账目读不出来，宁可丢这次更新也不能覆盖成空
-    config.state[id] = { ...normalizeState(config.state[id]), ...patch }
+    config.state[id] = compactState({ ...normalizeState(config.state[id]), ...patch })
     writeConfig(config)
   }
 }

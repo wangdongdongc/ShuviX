@@ -11901,6 +11901,16 @@ export interface WidgetCardShot {
   buttons: Array<'stop' | 'archive' | 'delete'>
 }
 
+/** 卡片上的项目标签那一行（用过这个组件的会话所在的项目，`[data-widget-projects]`） */
+export interface WidgetCardProjectsShot {
+  /** 标签（DOM 序）：`data-widget-project` 与标签里的名字 */
+  tags: Array<{ id: string; name: string }>
+  /** 「+N」的文字；没有 → null */
+  more: string | null
+  /** 那一行的悬停提示；没有那一行 → '' */
+  title: string
+}
+
 /** 面板里一个应用的顶栏 */
 export interface WidgetAppTopBarShot {
   /** 返回键里的名字 */
@@ -11931,6 +11941,8 @@ export interface WidgetPanelPane {
   cardIds(): Promise<string[]>
   /** 一张卡片的内容；没有 → null */
   card(id: string): Promise<WidgetCardShot | null>
+  /** 一张卡片上的项目标签（没有标签行 → tags 空、title ''）；没有这张卡片 → null */
+  projects(id: string): Promise<WidgetCardProjectsShot | null>
   /** 点一下卡片（合成 click）；没有这张卡片抛 */
   clickCard(id: string): Promise<void>
   /** 点卡片上的一个悬浮按钮（合成 click，不管看不看得见）；按钮不在抛 */
@@ -12033,6 +12045,20 @@ export function widgetPanelPane(main: CdpClient): WidgetPanelPane {
           glyph: [...(svg?.classList ?? [])].find((k) => k.startsWith('lucide-')) ?? '',
           running: c.hasAttribute('data-running'),
           buttons: ['stop', 'archive', 'delete'].filter((b) => !!c.querySelector('[data-card-' + b + ']'))
+        }
+      })()`),
+    projects: (id) =>
+      main.eval<WidgetCardProjectsShot | null>(`(() => {
+        const c = ${card(id)}
+        if (!c) return null
+        const row = c.querySelector('[data-widget-projects]')
+        return {
+          tags: [...c.querySelectorAll('[data-widget-project]')].map((t) => ({
+            id: t.getAttribute('data-widget-project') ?? '',
+            name: (t.textContent ?? '').trim()
+          })),
+          more: c.querySelector('[data-widget-projects-more]')?.textContent?.trim() ?? null,
+          title: row?.getAttribute('title') ?? ''
         }
       })()`),
     clickCard: async (id) => {

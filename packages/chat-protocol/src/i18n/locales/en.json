@@ -1273,6 +1273,7 @@
     "archive": "Archive",
     "delete": "Delete",
     "never": "Never opened",
+    "usedInProjects": "Used in projects: {{names}}",
     "justNow": "Just now",
     "minutesAgo": "{{count}}m ago",
     "hoursAgo": "{{count}}h ago",

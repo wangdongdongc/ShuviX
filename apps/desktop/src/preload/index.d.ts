@@ -1313,6 +1313,10 @@ declare global {
     updatedAt: number
     lastOpenedAt: number
     archivedAt: number
+    /** 用过它的会话所在的项目 id，最近的在前 */
+    projectIds?: string[]
+    /** 同上，带现在的项目名（只有列表接口给；删掉了的项目没有） */
+    projects?: { id: string; name: string }[]
   }
 
   interface Window {

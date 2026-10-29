@@ -10,7 +10,8 @@
  *   WA-E1 A 造组件：create（不问；A 得到读写，来源 widget）→ 写进组件目录的三个文件不问（读写授权派生出目录的写）→ build
  *         （三个操作、提交）→ sql 建表 → list 里 access="read-write"、写着纯界面的那个 → dry_run 的 addNote 交回那一行、
  *         回滚（之后 listNotes 是 []）；整轮一张卡都没有
- *   WA-E2 组件开在 Widget 面板里（空列表）；B 的 agent 调 addNote → 「更改组件」卡（组件名 / id / 操作，三行：允许一次 /
+ *   WA-E2 组件开在 Widget 面板里（空列表）；卡片上恰一个项目标签 WidgetApiProj（A 在 WA-E1 用过它，A / B 都在这个项目里），
+ *         没有「+N」；B 的 agent 调 addNote → 「更改组件」卡（组件名 / id / 操作，三行：允许一次 /
  *         允许并记住读写 / 拒绝；策略角标）→ 审查员不出场 → 卡还开着时一行都没写 → 用户点「允许，并记住」→ 权限表恰一行
  *         widget / write / user → 工具结果是新那一行（added_by 是 B 的 agent）→ 面板里的页面没重载就显示出它
  *   WA-E3 用户在组件页面里点「添加」（同一个 addNote，调用方是用户）→ 页面显示它 → B 的 agent 调读操作 listNotes 不问
@@ -495,6 +496,16 @@ describe('widget API: one API, two callers', () => {
       await right.activateWidgetTab()
       await panel.reload()
       await until(async () => (await panel.cardIds()).includes(WIDGET) || null, 'the widget card')
+      // 用过它的会话所在的项目（A 在 WA-E1 经 widget 工具用过它）：卡片上恰一个标签，没有 +N
+      const projectTags = await until(async () => {
+        const shot = await panel.projects(WIDGET)
+        return shot && shot.tags.length > 0 ? shot : null
+      }, 'the project tag on the widget card')
+      expect(projectTags).toEqual({
+        tags: [{ id: projectId, name: 'WidgetApiProj' }],
+        more: null,
+        title: en.widgets.usedInProjects.replace('{{names}}', 'WidgetApiProj')
+      })
       await panel.clickCard(WIDGET)
       await until(async () => (await panel.foregroundApp()) === WIDGET || null, 'opened in panel')
       await until(() => panel.frameReady(WIDGET), 'the widget iframe')
@@ -596,6 +607,10 @@ describe('widget API: one API, two callers', () => {
       expect(await pageNotReloaded()).toBe(true)
       expect(await panel.frameStamp(WIDGET)).toBe(stamp)
       expect(reviewerRequests()).toEqual([])
+      // B 也在同一个项目里：标签还是那一个
+      expect((await panel.projects(WIDGET))?.tags).toEqual([
+        { id: projectId, name: 'WidgetApiProj' }
+      ])
     },
     FLOW_TIMEOUT
   )

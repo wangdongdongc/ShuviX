@@ -1273,6 +1273,7 @@
     "archive": "アーカイブ",
     "delete": "削除",
     "never": "未使用",
+    "usedInProjects": "使用したプロジェクト：{{names}}",
     "justNow": "たった今",
     "minutesAgo": "{{count}} 分前",
     "hoursAgo": "{{count}} 時間前",

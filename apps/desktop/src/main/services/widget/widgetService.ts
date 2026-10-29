@@ -63,6 +63,8 @@ export interface WidgetSummary {
   updatedAt: number
   lastOpenedAt: number
   archivedAt: number
+  /** 用过它的会话所在的项目，最近用的在前（只是 id：名字由 IPC 那一层查，项目删了的也在这里） */
+  projectIds: string[]
 }
 
 function toSummary(w: Widget): WidgetSummary {
@@ -73,7 +75,10 @@ function toSummary(w: Widget): WidgetSummary {
     createdAt: w.createdAt,
     updatedAt: w.updatedAt,
     lastOpenedAt: w.lastOpenedAt,
-    archivedAt: w.archivedAt
+    archivedAt: w.archivedAt,
+    projectIds: Object.entries(w.links.projects)
+      .sort((a, b) => b[1].lastAt - a[1].lastAt)
+      .map(([id]) => id)
   }
 }
 
@@ -140,6 +145,14 @@ class WidgetService {
 
   listArchived(): WidgetSummary[] {
     return widgetRegistry.findAllArchived().map(toSummary)
+  }
+
+  /**
+   * 一条会话用了这个组件（`widget` 工具的 create / call / build / preview / sql / export / open）：记下会话与它的项目
+   * （`projectId` 为 null = 不属于任何项目）。只作信息关联；给组件添了新项目时广播 widget.changed，面板的卡片好换标签
+   */
+  noteSessionUse(id: string, sessionId: string, projectId: string | null): void {
+    if (widgetRegistry.noteLink(id, sessionId, projectId)) broadcastWidgetChanged()
   }
 
   getById(id: string): Widget | undefined {
@@ -210,7 +223,8 @@ class WidgetService {
       createdAt: now,
       updatedAt: now,
       lastOpenedAt: 0,
-      archivedAt: 0
+      archivedAt: 0,
+      links: { projects: {}, sessions: {} }
     }
     widgetRegistry.insert(widget)
     // 新组件的数据是它自己的 SQLite 文件：数据目录在，就是 SQLite 组件（api/widgetApi.ts 的 widgetStorageOf）

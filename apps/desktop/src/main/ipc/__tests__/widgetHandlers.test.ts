@@ -6,8 +6,13 @@
  *   IW-4 widgetWindow:setPreferWindow：缺 id / id 不是字符串 → {success:false}；value 只认 true（'true' 存成 false）
  *   IW-5 window.api 的 widgetWindow.status / widgetWindow.setPreferWindow 走的就是这两条通道、各转发一个参数
  *   IW-6 主屏那两条没了：API_TABLE.widget 里没有 getIcon / setHomeOrder，也没注册 widget:getIcon / widget:setHomeOrder
+ *   IW-7 widget:list 给每个组件补上 projects（{id, name}，按 projectIds 的顺序）：删掉了的项目、隐藏的承载项目不出标签，
+ *        隐藏的 id 根本不去查；别的字段（含 projectIds）原样；没有项目 → []
+ *   IW-8 一次列表里同一个项目 id 只查一次名字；下一次列表再查（改了名就跟着变）
+ *   IW-9 widget:listArchived 同 IW-7
+ *   IW-10 查某个项目的名字抛错 → 只少那一个标签，列表照样给
  *
- * electron 是替身（handle 收进 Map），widget 服务与窗口服务整个替掉。
+ * electron 是替身（handle 收进 Map），widget 服务、项目服务与窗口服务整个替掉。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { API_TABLE } from '../../../shared/apiTable'
@@ -18,7 +23,10 @@ const state = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown>(),
   openIds: vi.fn(),
   preferWindowIds: vi.fn(),
-  setPreferWindow: vi.fn()
+  setPreferWindow: vi.fn(),
+  listActive: vi.fn(),
+  listArchived: vi.fn(),
+  getProjectById: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -32,11 +40,15 @@ vi.mock('electron', () => ({
   shell: { showItemInFolder: vi.fn() }
 }))
 vi.mock('../../services/widget', () => ({
-  widgetService: {},
+  widgetService: { listActive: state.listActive, listArchived: state.listArchived },
   widgetServer: {},
   exportWidget: vi.fn(),
   resolveExportZipPath: vi.fn(),
   WidgetExportError: class WidgetExportError extends Error {}
+}))
+// 列表补项目名（widgetHandlers 的 withProjectTags）：真的项目服务要数据库
+vi.mock('../../services/projectService', () => ({
+  projectService: { getById: state.getProjectById }
 }))
 vi.mock('../../services/widgetWindowService', () => ({
   openIds: state.openIds,
@@ -68,6 +80,9 @@ beforeEach(() => {
   state.openIds.mockReset().mockReturnValue([])
   state.preferWindowIds.mockReset().mockReturnValue([])
   state.setPreferWindow.mockReset()
+  state.listActive.mockReset().mockReturnValue([])
+  state.listArchived.mockReset().mockReturnValue([])
+  state.getProjectById.mockReset()
 })
 
 describe('widgetWindow:status（IW-3）', () => {
@@ -141,5 +156,102 @@ describe('主屏的两条通道已去掉（IW-6）', () => {
     for (const channel of ['widget:getIcon', 'widget:setHomeOrder']) {
       expect(state.handlers.has(channel), channel).toBe(false)
     }
+  })
+})
+
+/** 一份组件摘要（WidgetSummary 的形状） */
+const summary = (id: string, projectIds: string[]): Record<string, unknown> => ({
+  id,
+  name: id.toUpperCase(),
+  description: `about ${id}`,
+  createdAt: 1,
+  updatedAt: 2,
+  lastOpenedAt: 3,
+  archivedAt: 0,
+  projectIds
+})
+
+/** 项目表：p1 → One，p2 → Two，别的都没有 */
+const NAMES: Record<string, string> = { p1: 'One', p2: 'Two' }
+const projectsByName = (id: string): { id: string; name: string } | undefined =>
+  NAMES[id] === undefined ? undefined : { id, name: NAMES[id] }
+
+describe.each([
+  ['widget:list', 'IW-7', () => state.listActive],
+  ['widget:listArchived', 'IW-9', () => state.listArchived]
+])('%s 补项目名', (channel, caseId, listOf) => {
+  it(`${caseId} 按 projectIds 的顺序给 {id, name}；删掉的与隐藏的不出，隐藏的不查；别的字段原样`, async () => {
+    const a = summary('aa-a', ['p2', 'gone', '__knowledge__', 'p1'])
+    const b = summary('bb-b', [])
+    listOf().mockReturnValue([a, b])
+    state.getProjectById.mockImplementation(projectsByName)
+
+    const out = (await handler(channel)()) as Array<Record<string, unknown>>
+
+    expect(out).toEqual([
+      {
+        ...a,
+        projects: [
+          { id: 'p2', name: 'Two' },
+          { id: 'p1', name: 'One' }
+        ]
+      },
+      { ...b, projects: [] }
+    ])
+    expect(out[0].projectIds).toEqual(['p2', 'gone', '__knowledge__', 'p1'])
+    const asked = state.getProjectById.mock.calls.map((c) => c[0])
+    expect(asked).not.toContain('__knowledge__')
+    expect([...asked].sort()).toEqual(['gone', 'p1', 'p2'])
+  })
+})
+
+describe('项目名的查法（IW-8、IW-10）', () => {
+  it('IW-8 一次列表里共用的项目 id 只查一次；下一次列表再查，改了的名字跟着变', async () => {
+    state.listActive.mockReturnValue([summary('aa-a', ['p1', 'p2']), summary('bb-b', ['p1'])])
+    state.getProjectById.mockImplementation(projectsByName)
+
+    const first = (await handler('widget:list')()) as Array<{ projects: unknown }>
+    expect(first.map((w) => w.projects)).toEqual([
+      [
+        { id: 'p1', name: 'One' },
+        { id: 'p2', name: 'Two' }
+      ],
+      [{ id: 'p1', name: 'One' }]
+    ])
+    expect(state.getProjectById.mock.calls.map((c) => c[0])).toEqual(['p1', 'p2'])
+
+    state.getProjectById.mockClear()
+    NAMES.p1 = 'One renamed'
+    try {
+      const second = (await handler('widget:list')()) as Array<{ projects: unknown }>
+      expect(state.getProjectById.mock.calls.map((c) => c[0])).toEqual(['p1', 'p2'])
+      expect(second[1].projects).toEqual([{ id: 'p1', name: 'One renamed' }])
+    } finally {
+      NAMES.p1 = 'One'
+    }
+  })
+
+  it('IW-10 查一个项目抛错 → 只少那一个标签，列表照样给', async () => {
+    state.listActive.mockReturnValue([
+      summary('aa-a', ['p1', 'bad', 'p2']),
+      summary('bb-b', ['bad'])
+    ])
+    state.getProjectById.mockImplementation((id: string) => {
+      if (id === 'bad') throw new Error('SQLITE_BUSY')
+      return projectsByName(id)
+    })
+
+    const out = (await handler('widget:list')()) as Array<{ id: string; projects: unknown }>
+
+    expect(out.map((w) => [w.id, w.projects])).toEqual([
+      [
+        'aa-a',
+        [
+          { id: 'p1', name: 'One' },
+          { id: 'p2', name: 'Two' }
+        ]
+      ],
+      ['bb-b', []]
+    ])
   })
 })

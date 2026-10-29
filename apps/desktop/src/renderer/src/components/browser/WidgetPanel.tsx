@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronLeft, RotateCw, AppWindow, Wrench, Trash2, Archive, Square } from 'lucide-react'
+import {
+  ChevronLeft,
+  RotateCw,
+  AppWindow,
+  Wrench,
+  Trash2,
+  Archive,
+  Square,
+  Folder
+} from 'lucide-react'
 import { useWidgetStore } from '../../stores/widgetStore'
 import { useContextMenu } from '@shuvix/app-shell'
 import { ConfirmDialog } from '../common/ConfirmDialog'
@@ -359,6 +368,7 @@ function WidgetCard({
               {widget.description}
             </p>
           )}
+          <ProjectTags projects={widget.projects ?? []} t={t} />
           <div className="mt-1 flex items-center gap-1.5 text-[10px] text-text-tertiary/50 tabular-nums">
             <span className="font-mono truncate">{widget.id}</span>
             <span className="text-text-tertiary/30">·</span>
@@ -405,6 +415,48 @@ function WidgetCard({
           <Trash2 size={11} />
         </button>
       </div>
+    </div>
+  )
+}
+
+/** 卡片上的项目标签上限：再多的折成「+N」，全部名字在悬停提示里 */
+const MAX_PROJECT_TAGS = 3
+
+/**
+ * 用过这个组件的会话所在的项目（最近的在前），只作信息展示：会话经 `widget` 工具用它时宿主记下（tools/widget.ts），
+ * 名字是现在的项目名（widget:list 补的）。没有就不占地方
+ */
+function ProjectTags({
+  projects,
+  t
+}: {
+  projects: { id: string; name: string }[]
+  t: (k: string, opts?: Record<string, unknown>) => string
+}): React.JSX.Element | null {
+  if (projects.length === 0) return null
+  const shown = projects.slice(0, MAX_PROJECT_TAGS)
+  const more = projects.length - shown.length
+  return (
+    <div
+      data-widget-projects=""
+      title={t('widgets.usedInProjects', { names: projects.map((p) => p.name).join(', ') })}
+      className="mt-1 flex flex-wrap items-center gap-1"
+    >
+      {shown.map((project) => (
+        <span
+          key={project.id}
+          data-widget-project={project.id}
+          className="inline-flex items-center gap-0.5 max-w-[9rem] rounded px-1 py-px text-[10px] leading-tight bg-bg-hover/70 text-text-secondary"
+        >
+          <Folder size={9} className="flex-shrink-0 text-text-tertiary" />
+          <span className="truncate">{project.name}</span>
+        </span>
+      ))}
+      {more > 0 && (
+        <span data-widget-projects-more="" className="text-[10px] text-text-tertiary tabular-nums">
+          +{more}
+        </span>
+      )}
     </div>
   )
 }

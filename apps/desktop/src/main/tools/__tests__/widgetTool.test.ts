@@ -22,6 +22,20 @@
  *               用的那组照用；锁里记着、此刻停用了 → 按锁放行
  *   WT4-TL-29   注册元数据：设置页「LLM 工具」看到的是全量描述与 schema（与哪个会话无关）
  *
+ * 记下「这条会话用过这个组件」（widgetService.noteSessionUse；会话行的项目经 sessionRecords.pick）：
+ *   TL-L1  create / call / build / preview / sql / export / open 各恰记一次 (id, 's1', null)：在门之后（export 在路径的
+ *          写门之后），create 在授予之后、用去了空白的 id，open 在开窗口之后
+ *   TL-L2  pick 按 ('s1', ['projectId']) 读；会话在项目 p1 里 → 记 'p1'
+ *   TL-L3  隐藏的承载项目（__knowledge__ / __agents__）、空串、读不到会话行 → 记 null
+ *   TL-L4  门拒绝（五个带门的动作）、export 路径的写门拒绝、门挂着时取消 → 不记
+ *   TL-L5  参数不对（组件缺 / 不是 id / 不在 / 归档了；call 缺 op、没有这个操作、没有 API、纯界面操作不带 dry_run；
+ *          preview 认不得的尺寸 / 主题；空 sql；legacy 而没有旧数据；export 缺 path；create 缺名字 / init 抛错；
+ *          不造组件的调用方点名造的动作）→ 不记
+ *   TL-L6  list / describe 只是看：不记（describe 有 API 的组件也不记）
+ *   TL-L7  读会话行抛错、记账抛错 → 结果与平常一模一样（call 的值、create 的文件表）
+ *   TL-L8  过了门之后失败的照样记：outcome.ok 为 false 的 call、分发器抛 WidgetApiError、构建失败、dry_run 的 call
+ *   TL-L9  派生 agent 调：记在会话 's1' 名下
+ *
  * 组件服务 / 授权表 / 门 / 窗口 / 预览全部替身（门在 toolContext.assertWidgetAccess，这里只看工具怎么调它）；
  * 预览的两个参数解析器（parsePreviewSizes / parsePreviewTheme）用真的。真 SkillTool 只在 TL-04 / TL-30 / TL-31 用
  * （skillService 替身给货架）。调用经 invokeTool（假 durable api）：`api.agent()` 交回的工具表决定发起调用的 agent 能不能造组件。
@@ -65,7 +79,9 @@ const state = vi.hoisted(() => ({
   windowOpen: vi.fn(),
   previewWidget: vi.fn(),
   findEnabled: vi.fn(),
-  findAll: vi.fn()
+  findAll: vi.fn(),
+  noteSessionUse: vi.fn(),
+  pickSession: vi.fn()
 }))
 
 /** 两个错误类：工具按 `instanceof` 认它们，替身与用例得是同一个类 */
@@ -109,7 +125,8 @@ vi.mock('../../services/widget', () => ({
     build: state.build,
     dbQuery: state.dbQuery,
     getWidgetDir: state.getWidgetDir,
-    open: state.serviceOpen
+    open: state.serviceOpen,
+    noteSessionUse: state.noteSessionUse
   },
   widgetStorageOf: state.widgetStorageOf,
   // 组件在共用 PGlite 里有没有旧数据：缺省说有（beforeEach），WC-S40..S43 自己定
@@ -121,6 +138,10 @@ vi.mock('../../services/widget', () => ({
   resolveExportZipPath: state.resolveExportZipPath,
   WidgetApiError: errors.WidgetApiError,
   WidgetExportError: errors.WidgetExportError
+}))
+// 记「会话用过这个组件」时读会话所在的项目（真的会话行要数据库）
+vi.mock('../../services/sessionRecords', () => ({
+  sessionRecords: { pick: state.pickSession }
 }))
 vi.mock('../../services/acl', () => ({
   sessionAcl: { widgetAccess: state.widgetAccess, grantWidget: state.grantWidget }
@@ -327,7 +348,8 @@ function expectNothingTouched(): void {
     state.assertWriteAllowed,
     state.windowOpen,
     state.serviceOpen,
-    state.previewWidget
+    state.previewWidget,
+    state.noteSessionUse
   ]) {
     expect(fn).not.toHaveBeenCalled()
   }
@@ -371,6 +393,8 @@ beforeEach(() => {
     mode: 'read',
     result: { outcome: { ok: true, value: { ok: 1 } }, wrote: false, logs: [] }
   })
+  // 会话行：缺省不属于任何项目（TL-L2 / L3 自己定）
+  state.pickSession.mockReturnValue({ projectId: null })
   putStandardWidgets()
 })
 
@@ -1643,6 +1667,347 @@ describe('WT4-TL-30..31 调用方的货架是它创建时（或锁里）的那�
     expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
     expect(state.assertWidgetAccess.mock.calls[0][1]).toBe('write')
     expect(state.build).toHaveBeenCalledWith('reading-list', {})
+  })
+})
+
+// ─── 记下会话用过这个组件 ──────────────────────────────────────────────────────
+
+describe('TL-L 记下「这条会话用过这个组件」', () => {
+  /** 每个针对一个组件的动作：能成功的参数、调用方、要准备的替身、记账必须排在哪个替身之后 */
+  const USES: Array<{
+    action: string
+    args: Record<string, unknown>
+    id: string
+    caller: 'use' | 'build'
+    setup: () => void
+    after: () => { mock: { invocationCallOrder: number[] } }
+  }> = [
+    {
+      action: 'create',
+      args: { action: 'create', widget: ' my-widget ', name: 'Books' },
+      id: 'my-widget',
+      caller: 'build',
+      setup: () =>
+        state.init.mockResolvedValue({
+          id: 'my-widget',
+          projectDir: '/d/my-widget',
+          url: '',
+          buildSuccess: true,
+          files: ['index.html']
+        }),
+      after: () => state.grantWidget
+    },
+    {
+      action: 'call',
+      args: { action: 'call', widget: 'reading-list', op: 'listBooks' },
+      id: 'reading-list',
+      caller: 'use',
+      setup: () => {},
+      after: () => state.assertWidgetAccess
+    },
+    {
+      action: 'build',
+      args: { action: 'build', widget: 'reading-list' },
+      id: 'reading-list',
+      caller: 'build',
+      setup: () =>
+        state.build.mockResolvedValue({ id: 'reading-list', url: '', buildSuccess: true }),
+      after: () => state.assertWidgetAccess
+    },
+    {
+      action: 'preview',
+      args: { action: 'preview', widget: 'reading-list' },
+      id: 'reading-list',
+      caller: 'build',
+      setup: () =>
+        state.previewWidget.mockResolvedValue({
+          id: 'reading-list',
+          theme: 'app',
+          images: [],
+          errors: []
+        }),
+      after: () => state.assertWidgetAccess
+    },
+    {
+      action: 'sql',
+      args: { action: 'sql', widget: 'reading-list', sql: 'select 1' },
+      id: 'reading-list',
+      caller: 'build',
+      setup: () => state.dbQuery.mockResolvedValue({ output: '1' }),
+      after: () => state.assertWidgetAccess
+    },
+    {
+      action: 'export',
+      args: { action: 'export', widget: 'reading-list', path: 'out' },
+      id: 'reading-list',
+      caller: 'build',
+      setup: () => {
+        state.resolveExportZipPath.mockImplementation((id: string, t: string) => `${t}/${id}.zip`)
+        state.exportWidget.mockImplementation(async ({ targetPath }: { targetPath: string }) => ({
+          zipPath: targetPath
+        }))
+      },
+      after: () => state.assertWriteAllowed
+    },
+    {
+      action: 'open',
+      args: { action: 'open', widget: 'reading-list' },
+      id: 'reading-list',
+      caller: 'build',
+      setup: () => {},
+      after: () => state.windowOpen
+    }
+  ]
+  const useOf = (action: string): (typeof USES)[number] => USES.find((u) => u.action === action)!
+  const runUse = (u: (typeof USES)[number], o: RunOptions = {}): Promise<ToolInvocation> => {
+    u.setup()
+    return run(new WidgetTool(ctx), u.args, { caller: u.caller, ...o })
+  }
+  const GATED = ['call', 'build', 'preview', 'sql', 'export'] as const
+
+  it.each(USES.map((u) => [u.action, u] as const))(
+    'TL-L1 %s：恰记一次 (id, s1, null)，在它的门 / 授予 / 开窗口之后',
+    async (_action, u) => {
+      const inv = await runUse(u)
+      textOf(inv)
+      expect(state.noteSessionUse.mock.calls).toEqual([[u.id, 's1', null]])
+      const after = u.after()
+      expect(after.mock.invocationCallOrder).toHaveLength(1)
+      expect(after.mock.invocationCallOrder[0]).toBeLessThan(
+        state.noteSessionUse.mock.invocationCallOrder[0]
+      )
+      if (GATED.includes(u.action as (typeof GATED)[number])) {
+        expect(state.assertWidgetAccess.mock.invocationCallOrder[0]).toBeLessThan(
+          state.noteSessionUse.mock.invocationCallOrder[0]
+        )
+      }
+    }
+  )
+
+  it('TL-L2 读会话行按 (s1, [projectId])；会话在项目 p1 里 → 记 p1', async () => {
+    state.pickSession.mockReturnValue({ projectId: 'p1' })
+    textOf(await runUse(useOf('call')))
+    expect(state.pickSession.mock.calls).toEqual([['s1', ['projectId']]])
+    expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', 'p1']])
+  })
+
+  it.each<[string, unknown]>([
+    ['__knowledge__', { projectId: '__knowledge__' }],
+    ['__agents__', { projectId: '__agents__' }],
+    ['空串', { projectId: '' }],
+    ['projectId 为 null', { projectId: null }],
+    ['读不到会话行（undefined）', undefined]
+  ])('TL-L3 %s → 记 null', async (_l, row) => {
+    state.pickSession.mockReturnValue(row)
+    textOf(await runUse(useOf('call')))
+    expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', null]])
+  })
+
+  it.each(GATED)('TL-L4 %s 的门拒绝 → 不记', async (action) => {
+    state.assertWidgetAccess.mockRejectedValue(new Error('denied'))
+    expect(errorOf(await runUse(useOf(action)))).toBe('denied')
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+    expect(state.pickSession).not.toHaveBeenCalled()
+  })
+
+  it('TL-L4 export 路径的写门拒绝 → 不记', async () => {
+    state.assertWriteAllowed.mockRejectedValue(new Error('path denied'))
+    expect(errorOf(await runUse(useOf('export')))).toBe('path denied')
+    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+  })
+
+  it.each(GATED)('TL-L4 %s：门挂着时取消 → 以取消收场，不记', async (action) => {
+    const controller = new AbortController()
+    state.assertWidgetAccess.mockImplementation(async () => {
+      controller.abort()
+    })
+    await expect(runUse(useOf(action), { signal: controller.signal })).rejects.toThrow('Aborted')
+    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+  })
+
+  it('TL-L4 export：路径的写门挂着时取消 → 不记', async () => {
+    const controller = new AbortController()
+    state.assertWriteAllowed.mockImplementation(async () => {
+      controller.abort()
+    })
+    await expect(runUse(useOf('export'), { signal: controller.signal })).rejects.toThrow('Aborted')
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+    expect(state.exportWidget).not.toHaveBeenCalled()
+  })
+
+  it('TL-L5 参数不对的一律不记', async () => {
+    const tool = new WidgetTool(ctx)
+    const badWidgets: Array<Record<string, unknown>> = [
+      {},
+      { widget: '  ' },
+      { widget: 'nodash' },
+      { widget: 'no-such' },
+      { widget: 'gone-widget' }
+    ]
+    const cases: Array<[Record<string, unknown>, 'use' | 'build']> = []
+    for (const action of ['call', 'build', 'preview', 'sql', 'export', 'open']) {
+      const extra =
+        action === 'call'
+          ? { op: 'listBooks' }
+          : action === 'sql'
+            ? { sql: 'select 1' }
+            : action === 'export'
+              ? { path: 'out' }
+              : {}
+      for (const w of badWidgets) cases.push([{ action, ...extra, ...w }, 'build'])
+    }
+    cases.push(
+      [{ action: 'call', widget: 'reading-list' }, 'use'],
+      [{ action: 'call', widget: 'reading-list', op: '  ' }, 'use'],
+      [{ action: 'call', widget: 'reading-list', op: 'nope' }, 'use'],
+      [{ action: 'call', widget: 'photo-wall', op: 'listBooks' }, 'use'],
+      [{ action: 'call', widget: 'old-notes', op: 'listBooks' }, 'use'],
+      [{ action: 'call', widget: 'reading-list', op: 'saveLayout' }, 'build'],
+      [{ action: 'preview', widget: 'reading-list', sizes: ['huge'] }, 'build'],
+      [{ action: 'preview', widget: 'reading-list', theme: 'blue' }, 'build'],
+      [{ action: 'sql', widget: 'reading-list' }, 'build'],
+      [{ action: 'sql', widget: 'reading-list', sql: ' \n ' }, 'build'],
+      [{ action: 'export', widget: 'reading-list' }, 'build'],
+      [{ action: 'export', widget: 'reading-list', path: '  ' }, 'build'],
+      [{ action: 'create', name: 'Books' }, 'build'],
+      [{ action: 'create', widget: 'my-widget' }, 'build'],
+      [{ action: 'create', widget: 'my-widget', name: ' ' }, 'build']
+    )
+    for (const [args, caller] of cases) {
+      const inv = await run(tool, args, { caller })
+      expect(inv.result.isError, JSON.stringify(args)).toBe(true)
+    }
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+    expect(state.pickSession).not.toHaveBeenCalled()
+  })
+
+  it('TL-L5 sql 的 legacy: true 而没有旧数据：过了门也不记', async () => {
+    state.hasLegacyWidgetData.mockReturnValue(false)
+    const inv = await run(
+      new WidgetTool(ctx),
+      { action: 'sql', widget: 'reading-list', sql: 'select 1', legacy: true },
+      { caller: 'build' }
+    )
+    expect(errorOf(inv)).toBe('Widget "reading-list" has no data in the older shared database.')
+    expect(state.assertWidgetAccess).toHaveBeenCalledTimes(1)
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+  })
+
+  it('TL-L5 create 的 init 抛错 → 不记', async () => {
+    state.init.mockRejectedValue(new Error('Widget "my-widget" already exists.'))
+    const inv = await run(
+      new WidgetTool(ctx),
+      { action: 'create', widget: 'my-widget', name: 'Books' },
+      { caller: 'build' }
+    )
+    expect(errorOf(inv)).toBe('Widget "my-widget" already exists.')
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+  })
+
+  it.each(BUILD_ACTIONS)('TL-L5 不造组件的调用方点名 %s → 拒，不记', async (action) => {
+    const inv = await run(new WidgetTool(ctx), BUILD_ARGS[action], { caller: 'use' })
+    expect(errorOf(inv)).toBe(refusal(action))
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+  })
+
+  it('TL-L6 list / describe 只是看：不记', async () => {
+    const tool = new WidgetTool(ctx)
+    for (const caller of ['use', 'build'] as const) {
+      textOf(await run(tool, { action: 'list' }, { caller }))
+      textOf(await run(tool, { action: 'describe', widget: 'reading-list' }, { caller }))
+    }
+    expect(state.noteSessionUse).not.toHaveBeenCalled()
+    expect(state.pickSession).not.toHaveBeenCalled()
+  })
+
+  it.each<[string, () => void]>([
+    [
+      '读会话行抛错',
+      () =>
+        state.pickSession.mockImplementation(() => {
+          throw new Error('no such table: sessions')
+        })
+    ],
+    [
+      '记账抛错',
+      () =>
+        state.noteSessionUse.mockImplementation(() => {
+          throw new Error('EACCES')
+        })
+    ]
+  ])('TL-L7 %s → 结果与平常一模一样', async (_l, breakIt) => {
+    opReturns({ ok: true, value: [{ title: 'Dune' }] })
+    const normalCall = await runUse(useOf('call'))
+    const normalCreate = await runUse(useOf('create'))
+    expect(textOf(normalCreate)).toContain('Files: index.html')
+    state.noteSessionUse.mockClear()
+
+    breakIt()
+    const call = await runUse(useOf('call'))
+    const create = await runUse(useOf('create'))
+    expect(call.result).toEqual(normalCall.result)
+    expect(textOf(call)).toBe(JSON.stringify([{ title: 'Dune' }], null, 2))
+    expect(create.result).toEqual(normalCreate.result)
+    expect(state.grantWidget).toHaveBeenCalledTimes(2)
+  })
+
+  it('TL-L8 过了门之后的失败照样记：outcome 失败、WidgetApiError、构建失败、dry_run', async () => {
+    const tool = new WidgetTool(ctx)
+    opReturns({ ok: false, error: { code: 'invalid_args', message: 'title: Required' } })
+    errorOf(await run(tool, { action: 'call', widget: 'reading-list', op: 'addBook' }))
+    expect(state.noteSessionUse).toHaveBeenCalledTimes(1)
+
+    state.callWidgetOp.mockRejectedValueOnce(
+      new errors.WidgetApiError('timeout', 'The operation took too long.')
+    )
+    expect(
+      errorOf(await run(tool, { action: 'call', widget: 'reading-list', op: 'listBooks' }))
+    ).toBe('[timeout] The operation took too long.')
+    expect(state.noteSessionUse).toHaveBeenCalledTimes(2)
+
+    state.build.mockResolvedValue({
+      id: 'reading-list',
+      url: '',
+      buildSuccess: false,
+      buildErrors: ['x']
+    })
+    const built = await run(tool, { action: 'build', widget: 'reading-list' }, { caller: 'build' })
+    expect(built.result.isError).toBe(true)
+    expect(state.noteSessionUse).toHaveBeenCalledTimes(3)
+
+    opReturns({ ok: true, value: { saved: true } })
+    textOf(
+      await run(
+        tool,
+        { action: 'call', widget: 'reading-list', op: 'saveLayout', dry_run: true },
+        { caller: 'build' }
+      )
+    )
+    expect(state.noteSessionUse.mock.calls).toEqual([
+      ['reading-list', 's1', null],
+      ['reading-list', 's1', null],
+      ['reading-list', 's1', null],
+      ['reading-list', 's1', null]
+    ])
+  })
+
+  it('TL-L9 派生 agent 调：记在会话 s1 名下', async () => {
+    const spawned = identity('explore', 'claude-haiku-4-5', 'spawned')
+    const agentOf = vi.fn((c: number) => (c === 2 ? spawned : identity('work', 'gpt-5')))
+    const sessionCtx: ToolContext = { sessionId: 's1', agentOf, rootSkills: [] }
+    state.pickSession.mockReturnValue({ projectId: 'p1' })
+    textOf(
+      await run(
+        new WidgetTool(sessionCtx),
+        { action: 'call', widget: 'reading-list', op: 'listBooks' },
+        { conversationId: 2 }
+      )
+    )
+    expect(agentOf).toHaveBeenCalledWith(2)
+    expect(state.pickSession.mock.calls).toEqual([['s1', ['projectId']]])
+    expect(state.noteSessionUse.mock.calls).toEqual([['reading-list', 's1', 'p1']])
   })
 })
 
