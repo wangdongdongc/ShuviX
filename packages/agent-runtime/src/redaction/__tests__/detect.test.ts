@@ -302,7 +302,121 @@ describe('占位符', () => {
     // 嵌在更长的单词里不算
     expect(findPlaceholders('xPHONE_b5puzbfv', known)).toEqual([])
   })
+
+  it('PH-3 前后紧贴字母、数字、_ 的不算：前面、后面、两边、长串的结尾', () => {
+    const p = '{{PHONE_b5puzbfv}}'
+    const known = (x: string): boolean => x === p
+    for (const text of [
+      '9PHONE_b5puzbfv',
+      '_PHONE_b5puzbfv',
+      'PHONE_b5puzbfvx',
+      'PHONE_b5puzbfv_',
+      'PHONE_b5puzbfv9',
+      'aPHONE_b5puzbfvb',
+      'PHONE_b5puzbfv_b5puzbfv',
+      'A'.repeat(5000) + 'PHONE_b5puzbfv'
+    ]) {
+      expect(findPlaceholders(`(${text})`, known), text).toEqual([])
+    }
+    // 标点、空白、中文隔开的照认
+    for (const sep of ['-', '.', '/', '+', '"', '\n', '中']) {
+      const text = `x${sep}PHONE_b5puzbfv${sep}y`
+      expect(findPlaceholders(text, known), JSON.stringify(sep)).toEqual([
+        { start: 2, end: 2 + 'PHONE_b5puzbfv'.length, placeholder: p }
+      ])
+    }
+  })
+
+  it('PH-4 与改写前的实现逐个对照：随机拼出的文本，认出的位置与写法一样', () => {
+    const known = (x: string): boolean =>
+      x === '{{REDACTED_PHONE_b5puzbfv}}' || x === '{{EMAIL_c4qvzbfa}}' || x === '{{X_aaaaaaaa}}'
+    const pieces = [
+      'PHONE_b5puzbfv',
+      'redacted_phone_B5PUZBFV',
+      'REDACTED_EMAIL_c4qvzbfa',
+      'email_c4qvzbfa',
+      'X_aaaaaaaa',
+      'Y_aaaaaaaa',
+      '{{',
+      '}}',
+      '{',
+      '}',
+      ' ',
+      '\t',
+      '_',
+      'a',
+      'Z',
+      '9',
+      '7',
+      'AAAAAAAA',
+      '-',
+      '/',
+      '\n',
+      '中'
+    ]
+    let seed = 20261029
+    const random = (n: number): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+      return (seed >>> 8) % n
+    }
+    let withHits = 0
+    for (let i = 0; i < 3000; i++) {
+      let text = ''
+      for (let k = 1 + random(24); k > 0; k--) text += pieces[random(pieces.length)]
+      const hits = findPlaceholders(text, known)
+      expect(hits, JSON.stringify(text)).toEqual(findPlaceholdersBefore(text, known))
+      if (hits.length > 0) withHits++
+    }
+    // 对照里要有足够多认出东西的文本，不只是一堆都认不出的
+    expect(withHits).toBeGreaterThan(1000)
+  })
 })
+
+/**
+ * 改写前（v0.2.39）的 findPlaceholders，只作 PH-4 的对照：正则不带前后断言，紧贴单词字符的在循环里丢掉
+ * （长串上是平方级）。有意改变识别规则时，这份对照跟着改或删掉。
+ */
+function findPlaceholdersBefore(
+  s: string,
+  known: (placeholder: string) => boolean
+): Array<{ start: number; end: number; placeholder: string }> {
+  if (!s.includes('_')) return []
+  const body = /[A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8}/g
+  const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_]/.test(c)
+  const out: Array<{ start: number; end: number; placeholder: string }> = []
+  let last = 0
+  for (let m = body.exec(s); m; m = body.exec(s)) {
+    let a = m.index
+    let z = a + m[0].length
+    if (a < last || isWordChar(s[a - 1]) || isWordChar(s[z])) continue
+    const cut = m[0].length - 8
+    const head = m[0].slice(0, cut).toUpperCase()
+    const hash = m[0].slice(cut).toLowerCase()
+    const other = head.startsWith('REDACTED_') ? head.slice('REDACTED_'.length) : 'REDACTED_' + head
+    const placeholder = [`{{${head}${hash}}}`, `{{${other}${hash}}}`].find(known)
+    if (placeholder === undefined) continue
+    let la = a
+    let l = 0
+    while (la > 0 && (s[la - 1] === ' ' || s[la - 1] === '\t')) la--
+    while (l < 2 && la > 0 && s[la - 1] === '{') {
+      la--
+      l++
+    }
+    let rz = z
+    let r = 0
+    while (rz < s.length && (s[rz] === ' ' || s[rz] === '\t')) rz++
+    while (r < 2 && rz < s.length && s[rz] === '}') {
+      rz++
+      r++
+    }
+    if (l === 2 || (l === 1 && r >= 1)) a = la
+    if (r === 2 || (r === 1 && l >= 1)) z = rz
+    if (a < last) continue
+    out.push({ start: a, end: z, placeholder })
+    last = z
+  }
+  return out
+}
 
 describe('已知值', () => {
   const known = new KnownValues()

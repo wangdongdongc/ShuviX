@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { detectSensitive } from '../detect'
 import { KnownValues } from '../known'
+import { findPlaceholders } from '../placeholder'
 
 function fastest(run: () => void, times = 3): number {
   let best = Infinity
@@ -64,6 +65,38 @@ describe('对抗输入：线性', () => {
       if (tSmall > 2)
         expect(tLarge / tSmall, `${tSmall.toFixed(1)}ms → ${tLarge.toFixed(1)}ms`).toBeLessThan(8)
       expect(tLarge, `${large.length} chars`).toBeLessThan(800)
+    })
+  }
+})
+
+/**
+ * 认模型写回来的占位符（findPlaceholders）：出口每次请求都要把整个上下文扫一遍，一段长输出留在历史里，之后
+ * 每次请求都要再扫它。对抗输入是一长串字母数字 —— 改写前的正则在这上面是平方级（5 万字符的零填充 base64
+ * 近 1 秒），这里 8 万字符必须在几十毫秒内。
+ */
+const PLACEHOLDER_ADVERSARIAL: Record<string, (n: number) => string> = {
+  'zero-padded base64 after a field_name': (n) => '{"field_name": "' + 'A'.repeat(n) + '"}',
+  'hex after a field_name': (n) => 'field_name=' + '0123456789abcdef'.repeat(n / 16),
+  'one word ending in a body': (n) => 'a'.repeat(n) + '_aaaaaaaa',
+  'one word of many underscores': (n) => 'a_'.repeat(n / 2),
+  'bodies glued into one word': (n) => 'X_aaaaaaaa'.repeat(n / 10),
+  'separate bodies': (n) => 'X_aaaaaaaa '.repeat(n / 11),
+  'bodies in braces': (n) => '{{ X_aaaaaaaa }}'.repeat(n / 16)
+}
+
+describe('占位符识别：线性', () => {
+  const known = (p: string): boolean => p === '{{X_aaaaaaaa}}'
+  for (const [name, make] of Object.entries(PLACEHOLDER_ADVERSARIAL)) {
+    it(`PF-P ${name}`, () => {
+      const n = 20_000
+      const small = make(n)
+      const large = make(n * 4)
+      findPlaceholders(small, known) // 预热
+      const tSmall = fastest(() => findPlaceholders(small, known))
+      const tLarge = fastest(() => findPlaceholders(large, known))
+      if (tSmall > 2)
+        expect(tLarge / tSmall, `${tSmall.toFixed(1)}ms → ${tLarge.toFixed(1)}ms`).toBeLessThan(8)
+      expect(tLarge, `${large.length} chars`).toBeLessThan(50)
     })
   }
 })

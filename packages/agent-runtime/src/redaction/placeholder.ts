@@ -90,10 +90,13 @@ export function categoryOfPlaceholder(placeholder: string): string {
 
 // ─────────────────────────── 识别模型写回来的占位符 ───────────────────────────
 
-/** 去掉括号的占位符正文，模型可能这样写回来：REDACTED_API_KEY_k3v7x2mq、redacted_phone_b5puzbfv、PHONE_B5PUZBFV */
-const PLACEHOLDER_BODY = /[A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8}/g
-
-const isWordChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_]/.test(c)
+/**
+ * 去掉括号的占位符正文，模型可能这样写回来：REDACTED_API_KEY_k3v7x2mq、redacted_phone_b5puzbfv、PHONE_B5PUZBFV。
+ * 正文就是一整个词：前后紧贴字母、数字、_ 的不算（xPHONE_b5puzbfv）。这一条必须写在正则里 —— 只在循环里
+ * 丢掉的话，正则会从一长串字母数字（零填充的 base64、十六进制）的每个位置起都吃到串尾、再一路退回来找 _，
+ * 长串上是平方级（5 万字符近 1 秒）；有了前后断言，只有词首会去试，一个词只扫一遍。
+ */
+const PLACEHOLDER_BODY = /(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8}(?![A-Za-z0-9_])/g
 
 /** 不管大小写，正文对应的标准占位符；再加上多写或少写了 REDACTED_ 的那个（新旧写法混着出现时模型会写串） */
 function candidates(body: string): [string, string] {
@@ -153,7 +156,7 @@ export function findPlaceholders(
   for (let m = PLACEHOLDER_BODY.exec(s); m; m = PLACEHOLDER_BODY.exec(s)) {
     let a = m.index
     let z = a + m[0].length
-    if (a < last || isWordChar(s[a - 1]) || isWordChar(s[z])) continue
+    if (a < last) continue
     const placeholder = candidates(m[0]).find(known)
     if (placeholder === undefined) continue
     ;[a, z] = braces(s, a, z)
