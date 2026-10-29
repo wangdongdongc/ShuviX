@@ -212,6 +212,8 @@ export type { ContextMenuPopupProps } from './contextmenu/ContextMenuPopup'
 // 通用 UI 原子
 export { AnimatedCollapse } from './common/AnimatedCollapse'
 export { ConfirmDialog } from './common/ConfirmDialog'
+export { startPanelDrag } from './common/panelDrag'
+export type { PanelDragOptions } from './common/panelDrag'
 export type { ConfirmDialogProps } from './common/ConfirmDialog'
 
 // 欢迎页 + 配置分享对话框（prop 驱动，经 getChatApi().config 取后端）

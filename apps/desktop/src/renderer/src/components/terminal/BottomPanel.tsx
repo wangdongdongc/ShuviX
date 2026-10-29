@@ -10,11 +10,11 @@
  * 正文才是抢注意力的那部分，只淡 tab 条等于没覆盖。
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Plus, TerminalSquare, X } from 'lucide-react'
 import { useChatStore } from '@shuvix/chat-ui'
-import { useFocusDim } from '@shuvix/app-shell'
+import { startPanelDrag, useFocusDim } from '@shuvix/app-shell'
 import { useBottomPanelStore } from '../../stores/bottomPanelStore'
 import { useTerminalStore } from '../../stores/terminalStore'
 import { XTerminal } from './XTerminal'
@@ -41,30 +41,17 @@ export function BottomPanel(): React.JSX.Element {
   const [resizing, setResizing] = useState(false)
   const faded = dim && !resizing
 
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      e.preventDefault()
-      dragRef.current = { startY: e.clientY, startH: useBottomPanelStore.getState().height }
+      if (e.button !== 0) return
+      const startH = useBottomPanelStore.getState().height
       setResizing(true)
-      document.body.style.cursor = 'row-resize'
-      document.body.style.userSelect = 'none'
-
-      const onMove = (ev: MouseEvent): void => {
-        if (!dragRef.current) return
-        setHeight(dragRef.current.startH + (dragRef.current.startY - ev.clientY))
-      }
-      const onUp = (): void => {
-        dragRef.current = null
-        setResizing(false)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-      }
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
+      // 往上拖（delta < 0）变高；手势见 startPanelDrag（往上会经过对话里的 iframe）
+      startPanelDrag(e, {
+        axis: 'y',
+        onMove: (delta) => setHeight(startH - delta),
+        onEnd: () => setResizing(false)
+      })
     },
     [setHeight]
   )

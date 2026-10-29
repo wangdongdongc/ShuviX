@@ -1,10 +1,11 @@
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
+import { startPanelDrag } from '../common/panelDrag'
 
 /**
  * SidebarResizeHandle —— 侧栏右侧拖拽分隔条（桌面/扩展共用）。
  *
  * 纯 prop 驱动：宽度与持久化由宿主拥有（桌面 sidebarStore，扩展 chrome.storage），
- * 本组件只负责拖拽手势与命中区域。拖拽方向为正向（向右变宽）。
+ * 本组件只负责拖拽手势与命中区域。拖拽方向为正向（向右变宽）。手势见 startPanelDrag（iframe 吞不走事件）。
  */
 export interface SidebarResizeHandleProps {
   /** 当前宽度（px），作为拖拽起点 */
@@ -32,43 +33,18 @@ export function SidebarResizeHandle({
   onResizeEnd,
   invert = false
 }: SidebarResizeHandleProps): React.JSX.Element {
-  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
-
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      e.preventDefault()
-      dragRef.current = { startX: e.clientX, startW: width }
+      if (e.button !== 0) return
+      const startW = width
       onResizeStart?.()
-      // 拖拽中屏蔽 iframe 命中（嵌入的浏览器/预览面板会吞掉 mousemove）
-      document.querySelectorAll('iframe').forEach((f) => {
-        ;(f as HTMLIFrameElement).style.pointerEvents = 'none'
-      })
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-
-      const onMove = (ev: MouseEvent): void => {
-        if (!dragRef.current) return
-        const delta = ev.clientX - dragRef.current.startX
+      startPanelDrag(e, {
+        axis: 'x',
         // invert：手柄在面板左侧，向左拖(delta<0)应变宽 → 取反
-        const newW = Math.max(
-          min,
-          Math.min(max, dragRef.current.startW + (invert ? -delta : delta))
-        )
-        onResize(newW)
-      }
-      const onUp = (): void => {
-        dragRef.current = null
-        onResizeEnd?.()
-        document.querySelectorAll('iframe').forEach((f) => {
-          ;(f as HTMLIFrameElement).style.pointerEvents = ''
-        })
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-      }
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
+        onMove: (delta) =>
+          onResize(Math.max(min, Math.min(max, startW + (invert ? -delta : delta)))),
+        onEnd: onResizeEnd
+      })
     },
     [width, min, max, onResize, onResizeStart, onResizeEnd, invert]
   )

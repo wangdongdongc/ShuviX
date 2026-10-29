@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Folder, Layers, Shapes, X } from 'lucide-react'
 import { useChatStore, useBgTaskCount, useBgTaskRunningCount } from '@shuvix/chat-ui'
@@ -7,6 +7,7 @@ import { ArtifactsPanel } from './ArtifactsPanel'
 import { useSessionArtifactCount } from './sessionArtifacts'
 import { useSessionPanelStore, type SessionPanelTool } from './sessionPanelStore'
 import { PanelCloseInsetContext } from './panelCloseInset'
+import { startPanelDrag } from '../common/panelDrag'
 
 /**
  * 会话面板（桌面 / 扩展共用）—— 经 ChatBody 的 sessionToolbar / sessionPanel 插槽注入：
@@ -271,31 +272,15 @@ export function SessionPanel({
  * 占位列左缘拖拽条 —— 向左拖增宽（面板贴对话区右侧）。
  * 命中区贴着卡片左缘往内 6px（无可见高亮，仅 col-resize 光标提示）：
  * 刻意不外扩到卡片之外，否则会盖住紧邻的对话列滚动条、抢走拖动。
- * 宽度经共享 store 钳制；持久化由宿主外接。
+ * 宽度经共享 store 钳制；持久化由宿主外接。拖动手势见 startPanelDrag（往左拖会经过对话里的 iframe）。
  */
 function ResizeHandle(): React.JSX.Element {
-  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
-
   const onMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    dragRef.current = { startX: e.clientX, startW: useSessionPanelStore.getState().width }
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-
-    const onMove = (ev: MouseEvent): void => {
-      if (!dragRef.current) return
-      const delta = dragRef.current.startX - ev.clientX
-      useSessionPanelStore.getState().setWidth(dragRef.current.startW + delta)
-    }
-    const onUp = (): void => {
-      dragRef.current = null
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
+    const startW = useSessionPanelStore.getState().width
+    startPanelDrag(e, {
+      axis: 'x',
+      onMove: (delta) => useSessionPanelStore.getState().setWidth(startW - delta)
+    })
   }, [])
 
   return (

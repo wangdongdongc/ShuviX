@@ -1,4 +1,5 @@
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
+import { startPanelDrag } from '@shuvix/app-shell'
 import { useBrowserStore } from '../../stores/browserStore'
 
 const MIN_W = 320
@@ -6,35 +7,20 @@ const MAX_W = 960
 
 /**
  * 右侧面板左侧的拖拽分隔条（名字是历史遗留：浏览器曾是右侧面板的第一个页签）
- * 作为独立 flex 子元素放在 ChatView 和 RightPanel 之间，不受 iframe 事件干扰
+ * 作为独立 flex 子元素放在 ChatView 和 RightPanel 之间。往右拖时指针会进到面板里的小组件 iframe 上，
+ * 拖动手势因此交给 startPanelDrag（整窗遮罩，iframe 吞不走 mousemove / mouseup）
  */
 export function BrowserResizeHandle(): React.JSX.Element {
   const width = useBrowserStore((s) => s.width)
   const setWidth = useBrowserStore((s) => s.setWidth)
-  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
-
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      e.preventDefault()
-      dragRef.current = { startX: e.clientX, startW: width }
-      document.body.style.cursor = 'col-resize'
-      document.body.style.userSelect = 'none'
-
-      const onMove = (ev: MouseEvent): void => {
-        if (!dragRef.current) return
-        const delta = dragRef.current.startX - ev.clientX
-        const newW = Math.max(MIN_W, Math.min(MAX_W, dragRef.current.startW + delta))
-        setWidth(newW)
-      }
-      const onUp = (): void => {
-        dragRef.current = null
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-      }
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
+      const startW = width
+      // 往左拖（delta < 0）变宽
+      startPanelDrag(e, {
+        axis: 'x',
+        onMove: (delta) => setWidth(Math.max(MIN_W, Math.min(MAX_W, startW - delta)))
+      })
     },
     [width, setWidth]
   )

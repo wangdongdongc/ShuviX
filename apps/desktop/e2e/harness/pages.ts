@@ -12184,6 +12184,108 @@ export function widgetPanelPane(main: CdpClient): WidgetPanelPane {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// 右侧面板分割线的拖拽（BrowserResizeHandle → app-shell common/panelDrag.ts 的 startPanelDrag）—— 指针拖进 Widget
+// 面板里的组件 iframe 时事件不能被 iframe 吞掉（往右拖一卡一卡、在组件上松手后分割线还粘着指针）。
+//
+// 锚点：分割线 = `[data-chat-container]` 的下一个兄弟（`.cursor-col-resize`，与 conversationScrollPane 同一条），
+// 面板根 = 分割线的下一个兄弟；组件 iframe = Widget 面板里的 `iframe[data-widget-frame]`；拖拽遮罩 =
+// `[data-panel-drag-overlay]`。鼠标走 CDP `Input.dispatchMouseEvent`（可信输入，视口 CSS px）；第一次动鼠标前在这条
+// 连接上打开焦点仿真 —— 拖动在窗口失焦时结束，跑测试时别的窗口抢走焦点不能把拖动收掉。
+
+/** 视口某一点 `elementFromPoint` 落在什么上 */
+export type PanelDragHit = 'widget-iframe' | 'drag-overlay' | 'other'
+
+export interface PanelDividerPane {
+  /** 右侧面板分割线的视口矩形；面板没开时为 null */
+  dividerRect(): Promise<ScrollRect | null>
+  /** 右侧面板根（分割线的下一个兄弟）的宽度；面板没开时为 0 */
+  panelWidth(): Promise<number>
+  /** Widget 面板里这个组件的 iframe 的视口矩形；没有为 null */
+  widgetFrameRect(widgetId: string): Promise<ScrollRect | null>
+  /** (x, y) 处 `elementFromPoint` 的归类 */
+  hitAt(x: number, y: number): Promise<PanelDragHit>
+  /** 可信 mouseMoved：`held` = 左键按着（`buttons: 1`），否则 `buttons: 0` */
+  move(x: number, y: number, held: boolean): Promise<void>
+  /** 可信左键按下（`button: 'left'`、`buttons: 1`、`clickCount: 1`） */
+  press(x: number, y: number): Promise<void>
+  /** 可信左键抬起（`button: 'left'`、`buttons: 0`、`clickCount: 1`） */
+  release(x: number, y: number): Promise<void>
+  /** 文档里拖拽遮罩的个数 */
+  overlayCount(): Promise<number>
+  /** body 的内联 cursor / user-select */
+  bodyStyle(): Promise<{ cursor: string; userSelect: string }>
+  /** 固定地等 n 个动画帧（不轮询） */
+  frames(n: number): Promise<void>
+}
+
+export function panelDividerPane(main: CdpClient): PanelDividerPane {
+  const DIVIDER = `(() => {
+    const next = document.querySelector('[data-chat-container]')?.nextElementSibling
+    return next && next.classList.contains('cursor-col-resize') ? next : null
+  })()`
+  const RECT = `((el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height } })`
+
+  let focusEmulated = false
+  const emulateFocus = async (): Promise<void> => {
+    if (focusEmulated) return
+    await main.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    focusEmulated = true
+  }
+  const dispatch = async (params: Record<string, unknown>): Promise<void> => {
+    await emulateFocus()
+    await main.send('Input.dispatchMouseEvent', params)
+  }
+
+  return {
+    dividerRect: () =>
+      main.eval<ScrollRect | null>(
+        `(() => { const d = ${DIVIDER}; return d ? ${RECT}(d) : null })()`
+      ),
+    panelWidth: () =>
+      main.eval<number>(
+        `(() => { const p = ${DIVIDER}?.nextElementSibling; return p ? p.getBoundingClientRect().width : 0 })()`
+      ),
+    widgetFrameRect: (widgetId) =>
+      main.eval<ScrollRect | null>(`(() => {
+        const f = document.querySelector('[data-widget-panel] iframe[data-widget-frame="' + ${JSON.stringify(widgetId)} + '"]')
+        return f ? ${RECT}(f) : null
+      })()`),
+    hitAt: (x, y) =>
+      main.eval<PanelDragHit>(`(() => {
+        const hit = document.elementFromPoint(${x}, ${y})
+        if (!hit) return 'other'
+        if (hit.closest('[data-panel-drag-overlay]')) return 'drag-overlay'
+        if (hit.tagName === 'IFRAME' && hit.hasAttribute('data-widget-frame')) return 'widget-iframe'
+        return 'other'
+      })()`),
+    move: (x, y, held) =>
+      dispatch({
+        type: 'mouseMoved',
+        x,
+        y,
+        ...(held ? { button: 'left', buttons: 1 } : { button: 'none', buttons: 0 })
+      }),
+    press: (x, y) =>
+      dispatch({ type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 }),
+    release: (x, y) =>
+      dispatch({ type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 }),
+    overlayCount: () =>
+      main.eval<number>(`document.querySelectorAll('[data-panel-drag-overlay]').length`),
+    bodyStyle: () =>
+      main.eval<{ cursor: string; userSelect: string }>(
+        `({ cursor: document.body.style.cursor, userSelect: document.body.style.userSelect })`
+      ),
+    frames: async (n) => {
+      await main.eval(`new Promise((resolve) => {
+        let left = ${n}
+        const tick = () => (--left <= 0 ? resolve(true) : requestAnimationFrame(tick))
+        requestAnimationFrame(tick)
+      })`)
+    }
+  }
+}
+
 // Widget 的独立窗口（WidgetWindowShell，`#widget-window?widgetId=<id>`；桌面的窗口与 web 客户端的标签页同一个外壳）。
 // 自绘标题栏 `.titlebar-drag`：第一颗 svg 是 app 图标，`span.truncate` 是名字。
 
