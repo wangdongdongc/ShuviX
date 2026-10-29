@@ -519,7 +519,7 @@ describe('TK —— shuvix-thinking 的取值纪律', () => {
     projectAwareness: false
   }
 
-  it('TK-1 五档逐一可读（循环共享常量）：原样读出、零诊断 —— 裸写 off 也读成字符串', () => {
+  it('TK-1 每一档逐一可读（循环共享常量）：原样读出、零诊断 —— 裸写 off 也读成字符串', () => {
     // 裸 `off` 在 YAML 1.1 里是布尔 false：解析器若退回 1.1 语义，最常写的这一档会让整份文件
     // 非法（取值纪律把布尔判非法）。toBe(level) 同时钉住了「是字符串 'off'」
     for (const level of SELECTABLE_THINKING_LEVELS) {
@@ -563,13 +563,12 @@ describe('TK —— shuvix-thinking 的取值纪律', () => {
     ['数字', '0'],
     ['清单外的词', 'none'],
     ['清单外的词', 'disabled'],
-    ['协议有、界面从未提供的档', 'minimal'],
-    ['只在协议层承载的档', 'max']
+    ['协议有、界面从未提供的档', 'minimal']
   ])('TK-4 其它任何值让整份文件非法（%s：%s）', (_label, raw) => {
     expect(parseAgentDefinitionFile(withThinking(raw), 't')).toBeNull()
   })
 
-  it('TK-5 序列化往返：五档逐一保真；不声明时产物里根本没有 shuvix-thinking 这个键', () => {
+  it('TK-5 序列化往返：每一档逐一保真；不声明时产物里根本没有 shuvix-thinking 这个键', () => {
     for (const level of SELECTABLE_THINKING_LEVELS) {
       const def: ParsedAgentFile = { ...BASE, thinkingLevel: level }
       const md = serializeAgentDefinitionFile(def)
@@ -681,8 +680,8 @@ describe('WU —— parseAgentDefinitionFile 的 warn 诊断通道', () => {
     // 合法档位取共享常量：清单改了这句跟着改，照着诊断写就一定合法
     expect(msg).toContain(SELECTABLE_THINKING_LEVELS.join(', '))
     expect(msg).toMatch(/; the whole file is rejected$/)
-    // 写成 max（协议层有、界面没给的那档）修法一样 —— 照列出的档位写，所以是同一句
-    expect(soleWarn('---\nname: quiet\nshuvix-thinking: max\n---\nbody')).toBe(msg)
+    // 写成 minimal（协议层有、界面没给的那档）修法一样 —— 照列出的档位写，所以是同一句
+    expect(soleWarn('---\nname: quiet\nshuvix-thinking: minimal\n---\nbody')).toBe(msg)
   })
 
   it.each([['WU-7', 'shuvix-project-awareness']])(
@@ -758,7 +757,7 @@ describe('DG —— 诊断完整性守卫', () => {
       '---\nshuvix-tools: true\n---\nbody',
       '---\nshuvix-model: 4\n---\nbody',
       '---\nshuvix-model: [a]\n---\nbody',
-      '---\nshuvix-thinking: max\n---\nbody',
+      '---\nshuvix-thinking: minimal\n---\nbody',
       '---\nshuvix-thinking: false\n---\nbody',
       '---\nshuvix-instruction-files: true\n---\nbody',
       '---\nshuvix-instruction-files: ../outside.md\n---\nbody',
@@ -1237,10 +1236,10 @@ describe('FILL —— 扩展元数据补缺', () => {
     expect(parsed?.objectId).toBe(U)
   })
 
-  it('FILL-5 合并结果不合法（档位 max）→ 一项都不补（连合法的模型也不补）、恰一条告警点明原因，文件照常可用', () => {
+  it('FILL-5 合并结果不合法（档位 minimal）→ 一项都不补（连合法的模型也不补）、恰一条告警点明原因，文件照常可用', () => {
     const raw = file(`shuvix-id: ${U}`)
     const base = parse(raw).parsed!
-    const fill = spyFill({ 'shuvix-model': 'p/m', 'shuvix-thinking': 'max' })
+    const fill = spyFill({ 'shuvix-model': 'p/m', 'shuvix-thinking': 'minimal' })
     const { parsed, warns } = parse(raw, fill.fn)
     expect(parsed).not.toBeNull()
     expect(parsed).toEqual(base)
@@ -1367,10 +1366,10 @@ describe('validateAgentFill', () => {
     expect(validateAgentFill(fill)).toBeNull()
   })
 
-  it('VF-2 拒绝：档位 max（列出全部档位）/ 布尔档位 / 数字模型 / 数组模型（点名 shuvix-model）', () => {
-    const max = validateAgentFill({ 'shuvix-thinking': 'max' })
-    expect(max).toContain("'shuvix-thinking'")
-    for (const level of SELECTABLE_THINKING_LEVELS) expect(max).toContain(level)
+  it('VF-2 拒绝：档位 minimal（列出全部档位）/ 布尔档位 / 数字模型 / 数组模型（点名 shuvix-model）', () => {
+    const minimal = validateAgentFill({ 'shuvix-thinking': 'minimal' })
+    expect(minimal).toContain("'shuvix-thinking'")
+    for (const level of SELECTABLE_THINKING_LEVELS) expect(minimal).toContain(level)
     expect(validateAgentFill({ 'shuvix-thinking': true })).toContain("'shuvix-thinking'")
     expect(validateAgentFill({ 'shuvix-model': 42 })).toContain("'shuvix-model'")
     expect(validateAgentFill({ 'shuvix-model': ['x'] })).toContain("'shuvix-model'")

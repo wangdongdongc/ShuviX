@@ -2,7 +2,7 @@
  * ModelDefaultsSettings —— 通用设置里的「默认模型」配置（桌面/扩展单一来源）。
  *
  * 复用 @shuvix/chat-ui 的通用 ModelSelect（与会话输入框同一组件，boxed 变体）——单个下拉
- * 同时选提供商 + 模型；下面一行是默认思考等级（与输入框思考选择器同一份档位清单与文案）。
+ * 同时选提供商 + 模型；下面一行是默认思考等级（与输入框思考选择器同一份档位清单，档位名原样显示、不翻译）。
  * 宿主只提供「持久化某个值」的 set 函数（桌面写 settingsStore + DB，扩展写 chrome.storage）。
  *
  * 注：原「标题生成模型」一行已废弃 —— 自动标题走内置 auto-title hook 的 titler agent，
@@ -13,7 +13,6 @@ import { useTranslation } from 'react-i18next'
 import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
 import {
   SELECTABLE_THINKING_LEVELS,
-  THINKING_LEVEL_LABEL_KEYS,
   type SelectableThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
 import { ModelSelect } from '@shuvix/chat-ui'
@@ -85,7 +84,7 @@ export function ModelDefaultsSettings({
                 onChange={setDefaultThinkingLevel}
                 options={SELECTABLE_THINKING_LEVELS.map((level) => ({
                   value: level,
-                  label: t(THINKING_LEVEL_LABEL_KEYS[level])
+                  label: level
                 }))}
               />
             </div>

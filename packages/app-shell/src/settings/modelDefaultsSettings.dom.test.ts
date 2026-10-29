@@ -3,8 +3,8 @@
  * ModelDefaultsSettings（设置 → 通用 → 默认模型）DOM 测试（jsdom）—— 默认思考等级那一行
  * `[data-default-thinking]`：
  *
- *   - MD-1 恰好五段，顺序与文案都跟输入框思考选择器同一份（`SELECTABLE_THINKING_LEVELS` +
- *     `THINKING_LEVEL_LABEL_KEYS`）—— 两处各写一份就会漂移；
+ *   - MD-1 恰好六段，顺序跟输入框思考选择器同一份（`SELECTABLE_THINKING_LEVELS`）—— 两处各写一份就会
+ *     漂移；文案就是档位名本身，界面语言是中文也不翻译；
  *   - MD-2 受控：prop 给哪一档，就恰好那一段是选中态（SegmentedControl 以 `shadow-sm` 标选中）；
  *   - MD-3 点一段只回调 `setDefaultThinkingLevel(该档)` 一次，不碰默认提供商 / 模型的 setter；
  *   - MD-4 prop 变了，选中态跟着变（组件不自己留一份状态）。
@@ -32,7 +32,6 @@ import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import type { AvailableModel } from '@shuvix/chat-protocol/types/provider'
 import {
   SELECTABLE_THINKING_LEVELS,
-  THINKING_LEVEL_LABEL_KEYS,
   type SelectableThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
 
@@ -133,18 +132,11 @@ afterEach(() => {
 })
 
 describe('默认思考等级一行 [data-default-thinking]', () => {
-  it('MD-1 恰好五段：顺序即 SELECTABLE_THINKING_LEVELS，文案即 THINKING_LEVEL_LABEL_KEYS 的译文', async () => {
+  it('MD-1 恰好六段：顺序即 SELECTABLE_THINKING_LEVELS，文案即档位名本身（中文界面也不翻译）', async () => {
     await render('medium')
     const texts = segments().map((button) => (button.textContent ?? '').trim())
-    const expected = SELECTABLE_THINKING_LEVELS.map((level) =>
-      i18n.t(THINKING_LEVEL_LABEL_KEYS[level])
-    )
-    expect(texts).toHaveLength(5)
-    expect(texts).toEqual(expected)
-    // 译文真的取到了（不是 i18next 兜底露出的原始键名）
-    for (const [i, level] of SELECTABLE_THINKING_LEVELS.entries()) {
-      expect(texts[i]).not.toBe(THINKING_LEVEL_LABEL_KEYS[level])
-    }
+    expect(texts).toEqual(['off', 'low', 'medium', 'high', 'xhigh', 'max'])
+    expect(texts).toEqual([...SELECTABLE_THINKING_LEVELS])
   })
 
   it.each([...SELECTABLE_THINKING_LEVELS])(

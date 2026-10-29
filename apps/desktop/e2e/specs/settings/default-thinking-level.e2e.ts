@@ -1,7 +1,7 @@
 /**
  * 默认思考等级（`general.defaultThinkingLevel`，设置 → 通用 → 默认模型）—— 没设过档位的会话用哪一档。
  *
- *   - DT-E-1 全新实例：键没写过，设置行五段、选中 medium；五段的文案与输入框思考选择器那一行逐个相同
+ *   - DT-E-1 全新实例：键没写过，设置行每一档一段、选中 medium；各段的文案与输入框思考选择器那一行逐个相同
  *     （同一份档位清单与文案键，按界面语言比，不认字面）；点 high / off → 设置里存下的就是它；
  *   - DT-E-2 只走 IPC、不跑模型：默认 high → 新建的会话（没设过档位）报 high，会话设置里不长出
  *     thinkingLevel；显式设成 off 的会话报 off；agent 建起来之后再改默认，它的档位不动（锁着），
@@ -158,7 +158,7 @@ afterAll(async () => {
 })
 
 describe('默认思考等级：设置行 → 没设过档位的会话 → 重启后的欢迎页', () => {
-  it('DT-E-1 全新实例：没写过键、设置行选中 medium；五段文案与输入框选择器逐个相同；点 high / off 存下来', async () => {
+  it('DT-E-1 全新实例：没写过键、设置行选中 medium；各段文案与输入框选择器逐个相同；点 high / off 存下来', async () => {
     expect(await storedDefault()).toBeFalsy()
 
     settings = await live().openSettings('general')

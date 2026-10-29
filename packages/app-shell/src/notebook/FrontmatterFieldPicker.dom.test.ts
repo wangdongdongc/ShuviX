@@ -4,10 +4,10 @@
  *
  * 候选项取 chat-protocol `SELECTABLE_THINKING_LEVELS`（与输入框的思考选择器、agent md 解析器同一份），
  * 用例循环常量而不手写五个词：
- *   - FP-1 空值：首项「未设置」+ 五档同序，当前选中「未设置」；
+ *   - FP-1 空值：首项「未设置」+ 六档同序，当前选中「未设置」；
  *   - FP-2 选一档写回该档；选回「未设置」写回 null（= 删除该键：跟随派发方 / 父会话）；
  *   - FP-3 只读（内置档案）：下拉禁用，当前档照常显示；
- *   - FP-4 清单外的写法如实并入候选、排在五档之前 —— 合法与否一视同仁（`max` 让文件非法，`HIGH`
+ *   - FP-4 清单外的写法如实并入候选、排在六档之前 —— 合法与否一视同仁（`minimal` 让文件非法，`HIGH`
  *     合法但不规范；卡片都不替它归一），保存前它仍是文件里的事实；仅仅渲染不触发写回。
  *
  * 包入口 `@shuvix/chat-ui` 顶掉：这条分派路径用不到 ModelSelect / 模型目录 / ChatApi，
@@ -92,7 +92,7 @@ afterEach(() => {
 })
 
 describe('FrontmatterFieldPicker —— shuvix-thinking 的档位下拉', () => {
-  it('FP-1 空值：首项「未设置」+ 五档与共享清单同序，当前选中「未设置」', async () => {
+  it('FP-1 空值：首项「未设置」+ 六档与共享清单同序，当前选中「未设置」', async () => {
     const select = await renderThinking('')
     expect(optionValues(select)).toEqual(['', ...SELECTABLE_THINKING_LEVELS])
     expect(select.options[0].textContent).toBe(i18n.t('notebook.frontmatter.unset'))
@@ -121,10 +121,10 @@ describe('FrontmatterFieldPicker —— shuvix-thinking 的档位下拉', () => 
   })
 
   it.each([
-    ['非法', 'max'],
+    ['非法', 'minimal'],
     ['合法但不规范', 'HIGH']
   ])(
-    'FP-4 清单外的写法（%s：`%s`）：如实显示为当前项、排在五档之前，渲染本身不写回',
+    'FP-4 清单外的写法（%s：`%s`）：如实显示为当前项、排在六档之前，渲染本身不写回',
     async (_label, raw) => {
       const select = await renderThinking(raw)
       expect(optionValues(select)).toEqual(['', raw, ...SELECTABLE_THINKING_LEVELS])

@@ -1197,7 +1197,7 @@ describe('agentService —— 扩展元数据补缺（setMetaFill）', () => {
     expect(invalidBefore).toEqual(['broken.md'])
 
     agentService.setMetaFill(
-      spyFill({ [U]: { 'shuvix-thinking': 'max' }, [V]: { 'shuvix-model': 'p/m' } }).fn
+      spyFill({ [U]: { 'shuvix-thinking': 'minimal' }, [V]: { 'shuvix-model': 'p/m' } }).fn
     )
     const listed = agentService.listAll().find((a) => a.name === 'fill-bad')
     expect(listed).toBeDefined()

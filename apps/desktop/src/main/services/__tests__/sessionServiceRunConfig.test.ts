@@ -9,7 +9,7 @@
  *
  * 钉的是：
  *   - RC-1 有模型 → 模型三件（provider / model / capabilities）+ 会话档位；
- *   - RC-2 五档原样带出 —— off 也是一档（会话选了「不思考」），不是「没有」；RC-2b 推理模型 + 配了
+ *   - RC-2 每一档原样带出 —— off 也是一档（会话选了「不思考」），不是「没有」；RC-2b 推理模型 + 配了
  *     与之不同的默认思考等级时也原样带出（默认档只管没设过的会话）；
  *   - RC-3 解析后的值而非「树上显式写过的」：树上没写档位 → 回落默认档，与 `initAgent` 给前端的
  *     那一格相同（hook agent 继承的，就是用户在选择器里看到的）；树上没写模型 → 回落默认模型；
@@ -230,10 +230,10 @@ describe('resolveRunConfig —— 会话的模型连同思考档位（子会话�
     expect((await sessionService.initAgent(SID)).modelMetadata.thinkingLevel).toBe('off')
   })
 
-  it('RC-3e 默认思考等级配成 max（设置页画不出的值）→ 按没配过：DEFAULT_THINKING_LEVEL（initAgent 同）', async () => {
+  it('RC-3e 默认思考等级配成 minimal（设置页画不出的值）→ 按没配过：DEFAULT_THINKING_LEVEL（initAgent 同）', async () => {
     tree({ provider: 'p1', model: 'm1' })
     catalog('p1', 'm1', { reasoning: true })
-    settingsTable({ 'general.defaultThinkingLevel': 'max' })
+    settingsTable({ 'general.defaultThinkingLevel': 'minimal' })
 
     expect((await sessionService.resolveRunConfig(SID))?.thinkingLevel).toBe(DEFAULT_THINKING_LEVEL)
     expect((await sessionService.initAgent(SID)).modelMetadata.thinkingLevel).toBe(

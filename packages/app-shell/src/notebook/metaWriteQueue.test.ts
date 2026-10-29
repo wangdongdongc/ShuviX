@@ -410,7 +410,7 @@ describe('metaWriteQueue —— 失败', () => {
     expect(noId).toEqual({ kind: 'rejected', reason: 'no-object-id', message: undefined })
 
     expect(
-      await run('max', () =>
+      await run('minimal', () =>
         setFill.mockResolvedValueOnce({
           success: false,
           reason: 'invalid-value',

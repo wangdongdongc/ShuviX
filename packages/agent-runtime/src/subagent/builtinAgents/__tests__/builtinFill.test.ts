@@ -107,7 +107,7 @@ describe('buildBuiltinProfile —— fill 依赖', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const profile = buildBuiltinProfile(EXPLORE_SPEC, {
       readMd: readerOf(stubMd()),
-      fill: () => ({ 'shuvix-thinking': 'max' })
+      fill: () => ({ 'shuvix-thinking': 'minimal' })
     })
     expect(profile).not.toBeNull()
     expect(profile!.thinkingLevel).toBeUndefined()

@@ -617,7 +617,7 @@ describe('D10-17b / D10-17c 设置里的默认思考等级', () => {
     ['#7 显式档照用', 'low', true, 'xhigh', 'low'],
     ['#8 显式档照用（非 reasoning）', 'high', false, 'low', 'high'],
     ['#9 存坏了 → 按没设过', 'ultra', true, 'high', 'high'],
-    ['#10 配置不是可选档', undefined, true, 'max', DEFAULT_THINKING_LEVEL],
+    ['#10 配置不是可选档', undefined, true, 'minimal', DEFAULT_THINKING_LEVEL],
     ['#11 配置不是可选档', undefined, true, 'minimal', DEFAULT_THINKING_LEVEL],
     ['#12 配置写坏', undefined, true, 'garbage', DEFAULT_THINKING_LEVEL]
   ]

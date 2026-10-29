@@ -49,7 +49,6 @@ describe('settingsStore.defaultThinkingLevel', () => {
 
   it.each([
     ['这次没有这个键', undefined],
-    ['max（设置页画不出）', 'max'],
     ['minimal（设置页画不出）', 'minimal'],
     ['乱写', 'garbage']
   ])('SS-3 先读到 xhigh，再读一份 %s → 回到 DEFAULT_THINKING_LEVEL', (_label, stored) => {

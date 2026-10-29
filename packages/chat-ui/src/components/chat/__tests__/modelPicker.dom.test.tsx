@@ -15,8 +15,8 @@
  *   - 欢迎页（没有会话）：不锁，选模型 / 改档位都只改界面，由输入框在新建会话时写进去；宿主启动时种的
  *     默认档（`seedDefaultThinkingLevel`）被点一档就不再算默认档（MP-13，点的就是种下的那一档也算），
  *     换模型不碰它（MP-14）—— 欢迎页发送据此决定写不写档位；
- *   - MP-12 思考档位一行的顺序与文案就是共享的那一份（`SELECTABLE_THINKING_LEVELS` +
- *     `THINKING_LEVEL_LABEL_KEYS`）—— 设置页的默认思考等级读的也是它，两处不各写一份。
+ *   - MP-12 思考档位一行的顺序就是共享的那一份（`SELECTABLE_THINKING_LEVELS`）—— 设置页的默认思考等级
+ *     读的也是它，两处不各写一份；文案就是档位名本身，中文界面也不翻译。
  *
  * 包入口 `@shuvix/chat-ui` 整个顶掉（同 toolPicker.dom.test.tsx）：`getHostApi` 给 agent.setModel /
  * setThinkingLevel / app.openSettings，`getSessionChannelApi` 给 agent.init，`useChatHost().models` 是
@@ -33,10 +33,7 @@ import { initReactI18next } from 'react-i18next'
 import zh from '@shuvix/chat-protocol/i18n/locales/zh.json'
 import type { AvailableModel, ProviderInfo } from '@shuvix/chat-protocol/types/provider'
 import type { AgentChangePreview, AgentInitResult } from '@shuvix/chat-protocol/chatApi'
-import {
-  SELECTABLE_THINKING_LEVELS,
-  THINKING_LEVEL_LABEL_KEYS
-} from '@shuvix/chat-protocol/types/thinking'
+import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 
 const mocks = vi.hoisted(() => {
   const listeners = new Set<() => void>()
@@ -811,21 +808,21 @@ describe('后端拒绝：回拉真实状态', () => {
   })
 })
 
-describe('MP-12 思考档位一行：共享的档位清单与文案', () => {
-  it('MP-12 面板里 [data-thinking-level] 依次为 SELECTABLE_THINKING_LEVELS，文案为 THINKING_LEVEL_LABEL_KEYS 的译文', async () => {
+describe('MP-12 思考档位一行：共享的档位清单，档位名原样显示', () => {
+  it('MP-12 面板里 [data-thinking-level] 依次为 SELECTABLE_THINKING_LEVELS，文案即档位名（中文界面也不翻译）', async () => {
     seed({ active: SID })
     await renderPicker()
     await openPanel()
     const buttons = [...panel()!.querySelectorAll<HTMLButtonElement>('[data-thinking-level]')]
     expect(buttons.map((b) => b.dataset.thinkingLevel)).toEqual([...SELECTABLE_THINKING_LEVELS])
-    const expected = SELECTABLE_THINKING_LEVELS.map((level) =>
-      i18n.t(THINKING_LEVEL_LABEL_KEYS[level])
-    )
-    expect(buttons.map((b) => (b.textContent ?? '').trim())).toEqual(expected)
-    // 译文真的取到了（不是 i18next 兜底露出的原始键名）
-    for (const level of SELECTABLE_THINKING_LEVELS) {
-      expect(i18n.t(THINKING_LEVEL_LABEL_KEYS[level])).not.toBe(THINKING_LEVEL_LABEL_KEYS[level])
-    }
+    expect(buttons.map((b) => (b.textContent ?? '').trim())).toEqual([
+      'off',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max'
+    ])
   })
 })
 

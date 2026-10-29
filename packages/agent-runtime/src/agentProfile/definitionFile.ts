@@ -39,7 +39,7 @@
  *     反向写出）是三端共用契约，在 `@shuvix/chat-protocol/agentModelRef`
  *     （渲染进程够不到 agent-runtime，故不放这里）；
  *   - `shuvix-thinking` 声明该 agent 的思考档位，取值是界面可选的那几档（`SELECTABLE_THINKING_LEVELS`：
- *     off / low / medium / high / xhigh；大小写不敏感，写出恒小写）；省略 = 不声明（跟随派发方 /
+ *     off / low / medium / high / xhigh / max；大小写不敏感，写出恒小写）；省略 = 不声明（跟随派发方 /
  *     父会话）。生效口径与 `shuvix-model` 平行：派生 agent 创建时压过派发方的档位；被 `agent_profile`
  *     点名的子会话把它作为种子写进会话树；会话根（基座）忽略，以会话里选的为准。它是一个键而不是
  *     宿主规则，是因为「这个 agent 不思考」这类运行方式必须写在档案里、打开就看得见 —— 宿主替某个

@@ -262,8 +262,8 @@ describe('noteView —— 一份注册表笔记的元数据视图', () => {
     }
   })
 
-  it('MS-V9 库里的值不合法（档位 max / 数字模型）→ 恰一条告警；同样的坏值落在文件已写的键上 → 不告警（不生效就不算问题）', () => {
-    seedRow(U, THINKING, 'max')
+  it('MS-V9 库里的值不合法（档位 minimal / 数字模型）→ 恰一条告警；同样的坏值落在文件已写的键上 → 不告警（不生效就不算问题）', () => {
+    seedRow(U, THINKING, 'minimal')
     const a = note('agent', agentText(`shuvix-id: ${U}`))
     const viewA = noteView(a)!
     expect(viewA.warnings).toHaveLength(1)
@@ -406,16 +406,16 @@ describe('setNoteFill / unsetNoteFill —— 写入', () => {
     expect(publish).not.toHaveBeenCalled()
   })
 
-  it('MS-W7b 解析器不收的值 → invalid-value 带解析器原因：数字模型点名 shuvix-model；档位 max 列出全部档位；布尔档位', () => {
+  it('MS-W7b 解析器不收的值 → invalid-value 带解析器原因：数字模型点名 shuvix-model；档位 minimal 列出全部档位；布尔档位', () => {
     const sid = note('agent', agentText(`shuvix-id: ${U}`))
     const model = setNoteFill({ sessionId: sid, objectId: U, key: MODEL, value: 42 })
     expect(model).toMatchObject({ success: false, reason: 'invalid-value' })
     expect((model as { message: string }).message).toContain("'shuvix-model'")
 
-    const max = setNoteFill({ sessionId: sid, objectId: U, key: THINKING, value: 'max' })
-    expect(max).toMatchObject({ success: false, reason: 'invalid-value' })
+    const minimal = setNoteFill({ sessionId: sid, objectId: U, key: THINKING, value: 'minimal' })
+    expect(minimal).toMatchObject({ success: false, reason: 'invalid-value' })
     for (const level of SELECTABLE_THINKING_LEVELS) {
-      expect((max as { message: string }).message).toContain(level)
+      expect((minimal as { message: string }).message).toContain(level)
     }
 
     expect(setNoteFill({ sessionId: sid, objectId: U, key: THINKING, value: true })).toMatchObject({

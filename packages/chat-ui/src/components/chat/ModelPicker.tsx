@@ -1,7 +1,6 @@
 import { getHostApi, getSessionChannelApi, useChatHost } from '@shuvix/chat-ui'
 import { useChatDensity } from '../../host/chatHostContext'
 import { useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../stores/chatStore'
 import { useModelCatalogStore } from '../../stores/modelCatalogStore'
 import { applySessionToolState } from '../../hooks/useSessionTools'
@@ -9,7 +8,6 @@ import { confirmAgentChange } from './CacheBreakConfirm'
 import { ModelSelect } from './ModelSelect'
 import {
   SELECTABLE_THINKING_LEVELS,
-  THINKING_LEVEL_LABEL_KEYS,
   type ThinkingLevel
 } from '@shuvix/chat-protocol/types/thinking'
 
@@ -28,7 +26,6 @@ interface ModelPickerProps {
  * 时选的模型由输入框在新建会话时写进去。
  */
 export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): React.JSX.Element {
-  const { t } = useTranslation()
   const { activeSessionId, thinkingLevel, setThinkingLevel } = useChatStore()
 
   const providers = useModelCatalogStore((s) => s.providers)
@@ -38,10 +35,8 @@ export function ModelPicker({ readonly: isReadonly }: ModelPickerProps = {}): Re
 
   const enabledProviders = useMemo(() => providers.filter((p) => p.isEnabled), [providers])
 
-  const thinkingLevels = SELECTABLE_THINKING_LEVELS.map((value) => ({
-    value,
-    label: t(THINKING_LEVEL_LABEL_KEYS[value])
-  }))
+  // 档位名原样显示（不翻译）
+  const thinkingLevels = SELECTABLE_THINKING_LEVELS.map((value) => ({ value, label: value }))
 
   /** 切换思考深度并持久化到会话 */
   const handleSetThinkingLevel = async (level: string): Promise<void> => {

@@ -39,7 +39,7 @@ export const KNOWN_SETTINGS: Record<string, SettingMeta> = {
   'general.defaultModel': { labelKey: 'settings.defaultModel', desc: 'model id' },
   'general.defaultThinkingLevel': {
     labelKey: 'settings.defaultThinkingLevel',
-    desc: 'off | low | medium | high | xhigh — initial thinking level of new sessions; default medium'
+    desc: 'off | low | medium | high | xhigh | max — initial thinking level of new sessions; default medium'
   },
   'tool.browser.ignoreCertificateErrors': {
     labelKey: 'settings.toolBrowserIgnoreCertificateErrors',
