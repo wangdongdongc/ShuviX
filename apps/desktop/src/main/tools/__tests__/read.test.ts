@@ -29,6 +29,8 @@ const TEST_DIR = join(tmpdir(), 'shuvix-read-test-' + Date.now())
 /** 假 userData —— 派生图落盘走真实的 utils/paths.ts（getToolResultsDir），必须给它一个真目录 */
 const USER_DATA_DIR = join(tmpdir(), 'shuvix-read-test-userdata-' + Date.now())
 const SESSION_ID = 'test-session'
+const HTML_SOURCE = '<!doctype html>\n<html lang="en">\n<p>A &amp; B</p>\n</html>'
+const RICH_FILE_EXTENSIONS = ['pdf', 'docx', 'xlsx', 'xls', 'pptx', 'ipynb', 'zip'] as const
 
 /** 门面 enforcePath 的 spy（恒放行）—— RD-L 看门问没问、问的是哪一条写法 */
 const enforcePath = vi.hoisted(() =>
@@ -153,21 +155,24 @@ vi.mock('../../logger', () => ({
 }))
 
 // mock markitdown-ts 和 word-extractor（避免不必要的加载）
+const markItDownConvert = vi.hoisted(() =>
+  vi.fn(async (source: string): Promise<{ title: string | null; markdown: string } | null> => {
+    // URL mock：模拟网页抓取
+    if (/^https?:\/\//i.test(source)) {
+      if (source.includes('empty-page')) {
+        return { title: null, markdown: '' }
+      }
+      if (source.includes('fail-convert')) {
+        throw new Error('Network error')
+      }
+      return { title: 'Mock Page', markdown: '# Mock Page\n\nMock content from URL.' }
+    }
+    return { title: null, markdown: '# Converted local rich' }
+  })
+)
 vi.mock('markitdown-ts', () => ({
   MarkItDown: class {
-    async convert(source: string): Promise<{ title: string | null; markdown: string } | null> {
-      // URL mock：模拟网页抓取
-      if (typeof source === 'string' && /^https?:\/\//i.test(source)) {
-        if (source.includes('empty-page')) {
-          return { title: null, markdown: '' }
-        }
-        if (source.includes('fail-convert')) {
-          throw new Error('Network error')
-        }
-        return { title: 'Mock Page', markdown: '# Mock Page\n\nMock content from URL.' }
-      }
-      return { title: null, markdown: '' }
-    }
+    convert = markItDownConvert
   }
 }))
 vi.mock('word-extractor', () => ({
@@ -284,6 +289,16 @@ beforeAll(() => {
   // 纯文本文件
   writeFileSync(join(TEST_DIR, 'hello.txt'), 'line1\nline2\nline3\nline4\nline5\n')
 
+  // 本地 HTML 按原文读取；大小写扩展名都覆盖
+  for (const extension of ['html', 'htm', 'HTML']) {
+    writeFileSync(join(TEST_DIR, `page.${extension}`), HTML_SOURCE)
+  }
+
+  // MarkItDown 本地转换分支只关心路由，内容由 convert spy 提供
+  for (const extension of RICH_FILE_EXTENSIONS) {
+    writeFileSync(join(TEST_DIR, `document.${extension}`), `rich fixture: ${extension}`)
+  }
+
   // 空文件
   writeFileSync(join(TEST_DIR, 'empty.txt'), '')
 
@@ -350,6 +365,10 @@ beforeAll(() => {
 afterAll(() => {
   rmSync(TEST_DIR, { recursive: true, force: true })
   rmSync(USER_DATA_DIR, { recursive: true, force: true })
+})
+
+beforeEach(() => {
+  markItDownConvert.mockClear()
 })
 
 afterEach(() => {
@@ -476,20 +495,108 @@ describe('read 工具 - 大文件字节上限', () => {
   })
 })
 
-describe('read 工具 - URL 抓取', () => {
-  it('URL 正确路由到 readUrl 并返回 Markdown', async () => {
+describe('read 工具 - 本地 HTML 原文', () => {
+  it.each(['page.html', 'page.htm', 'page.HTML'])(
+    'RD-HTML-01 %s 保留标签、实体与行号，不经过 MarkItDown',
+    async (filename) => {
+      const tool = makeReadTool(ctx)
+      const result = await executeTool(tool, `tc-html-${filename}`, {
+        path: join(TEST_DIR, filename)
+      })
+      const text = getText(result)
+      const details = detailsOf(result)
+
+      expect(text).toContain('1│<!doctype html>')
+      expect(text).toContain('2│<html lang="en">')
+      expect(text).toContain('3│<p>A &amp; B</p>')
+      expect(text).not.toContain('converted to Markdown')
+      expect(details.totalLines).toBe(4)
+      expect(details.converted).not.toBe(true)
+      expect(markItDownConvert).not.toHaveBeenCalled()
+    }
+  )
+
+  it('RD-HTML-02 offset/limit 只返回所选原文并保留续读信息', async () => {
     const tool = makeReadTool(ctx)
-    const result = await executeTool(tool, 'tc-url1', {
-      path: 'https://example.com/page'
+    const result = await executeTool(tool, 'tc-html-pagination', {
+      path: join(TEST_DIR, 'page.html'),
+      offset: 2,
+      limit: 2
     })
     const text = getText(result)
+    const details = detailsOf(result)
+
+    expect(text).toContain('2│<html lang="en">')
+    expect(text).toContain('3│<p>A &amp; B</p>')
+    expect(text).not.toContain('1│<!doctype html>')
+    expect(text).not.toContain('4│</html>')
+    expect(text).toContain('Showing: lines 2-3')
+    expect(text).toContain('offset=4')
+    expect(details.totalLines).toBe(4)
+    expect(details.truncated).toBe(true)
+    expect(markItDownConvert).not.toHaveBeenCalled()
+  })
+
+  it.each(RICH_FILE_EXTENSIONS)(
+    'RD-HTML-04 .%s 本地文件仍由 MarkItDown 转换',
+    async (extension) => {
+      const absolutePath = join(TEST_DIR, `document.${extension}`)
+      const tool = makeReadTool(ctx)
+      const result = await executeTool(tool, `tc-rich-${extension}`, { path: absolutePath })
+      const text = getText(result)
+      const details = detailsOf(result)
+
+      expect(markItDownConvert).toHaveBeenCalledTimes(1)
+      expect(markItDownConvert).toHaveBeenCalledWith(absolutePath)
+      expect(text).toContain('converted to Markdown')
+      expect(text).toContain('# Converted local rich')
+      expect(details.converted).toBe(true)
+      expect(details.format).toBe(extension.toUpperCase())
+    }
+  )
+
+  it('RD-HTML-05 description 区分 URL、本地 HTML 与富文档转换', () => {
+    const description = makeReadTool(ctx).description
+
+    expect(description).toMatch(/URLs \(http\/https\).*converts to Markdown/i)
+    expect(description).toMatch(/text files[^;]*line numbers[^;]*offset\/limit/i)
+
+    const localHtmlClause = description.match(/local HTML[\s\S]*?(?=For directories|$)/i)?.[0]
+    expect(localHtmlClause).toBeDefined()
+    expect(localHtmlClause).toMatch(/\.html\/\.htm/i)
+    expect(localHtmlClause).toMatch(/text source/i)
+    expect(localHtmlClause).toMatch(/not auto-converted/i)
+
+    const richFileDescription = description.match(/Supports PDF[^.]+\./i)?.[0]
+    expect(richFileDescription).toBeDefined()
+    for (const format of ['PDF', 'Word', 'Excel', 'PowerPoint', 'Jupyter Notebook']) {
+      expect(richFileDescription).toContain(format)
+    }
+    expect(richFileDescription).toMatch(/auto-converted to Markdown/i)
+
+    const withoutQualifiedHtmlRule = description.replace(localHtmlClause!, '')
+    expect(withoutQualifiedHtmlRule).not.toMatch(/HTML[^.;]*auto-converted/i)
+  })
+})
+
+describe('read 工具 - URL 抓取', () => {
+  it('RD-HTML-03 .html HTTPS URL 仍完整交给 convert 并返回 Markdown', async () => {
+    const url = 'https://example.com/page.html'
+    const tool = makeReadTool(ctx)
+    const result = await executeTool(tool, 'tc-url1', { path: url })
+    const text = getText(result)
     const details = result.details as { format: string; converted: boolean; url: string }
-    expect(text).toContain('URL: https://example.com/page')
-    expect(text).toContain('Mock Page')
+
+    expect(markItDownConvert).toHaveBeenCalledTimes(1)
+    expect(markItDownConvert.mock.calls[0][0]).toBe(url)
+    expect(text).toContain(`URL: ${url}`)
+    expect(text).toContain('— Mock Page —')
+    expect(text).toContain('# Mock Page')
     expect(text).toContain('Mock content from URL.')
+    expect(text).not.toMatch(/^\d+│/m)
     expect(details.format).toBe('URL')
     expect(details.converted).toBe(true)
-    expect(details.url).toBe('https://example.com/page')
+    expect(details.url).toBe(url)
   })
 
   it('URL 返回包含页面标题', async () => {

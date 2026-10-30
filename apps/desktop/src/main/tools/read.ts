@@ -1,7 +1,8 @@
 /**
  * Read 工具 — 读取文件内容 / 抓取网页
  * 从 pi-coding-agent 移植，支持分页读取、行号、截断
- * 支持通过 markitdown-ts 将 PDF/Office/HTML 等富文本格式转换为 Markdown
+ * 支持通过 markitdown-ts 将 PDF/Office/IPYNB/ZIP 等格式转换为 Markdown
+ * 本地 HTML/HTM 按普通文本源码读取
  * 支持通过 word-extractor 提取旧版 .doc 文件文字
  * 支持通过 markitdown-ts 抓取 URL 并转换为 Markdown
  */
@@ -46,18 +47,8 @@ const MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 /** URL 抓取 User-Agent */
 const FETCH_USER_AGENT = 'Mozilla/5.0 (compatible; ShuviX/1.0)'
 
-/** markitdown-ts 支持转换的文件扩展名 */
-const RICH_FILE_EXTENSIONS = new Set([
-  '.pdf',
-  '.docx',
-  '.xlsx',
-  '.xls',
-  '.pptx',
-  '.html',
-  '.htm',
-  '.ipynb',
-  '.zip'
-])
+/** markitdown-ts 本地文件转换扩展名；HTML/HTM 走普通文本源码路径 */
+const RICH_FILE_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx', '.xls', '.pptx', '.ipynb', '.zip'])
 
 /**
  * 模型侧宽度上限 —— 本文件真正的 token 旋钮。

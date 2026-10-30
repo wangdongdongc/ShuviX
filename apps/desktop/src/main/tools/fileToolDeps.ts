@@ -29,7 +29,7 @@ import { t } from '../i18n'
 import { policyCheckHint } from '../services/policyCheckHint'
 
 export const READ_DESCRIPTION =
-  'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit). For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, HTML, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
+  'Read file, directory, or web page contents. For URLs (http/https), fetches the page and converts to Markdown. For text files, returns content with line numbers (supports pagination via offset/limit); local HTML (.html/.htm) files are read as text source, not auto-converted. For directories, returns a sorted list of entries. Supports PDF, Word, Excel, PowerPoint, and Jupyter Notebook formats (auto-converted to Markdown). Supports PNG, JPEG, GIF, WebP, BMP images (returned as inline image content for multimodal viewing; images larger than ~1MB are auto-downscaled and re-encoded as JPEG).'
 export const WRITE_DESCRIPTION =
   "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
 export const EDIT_DESCRIPTION =
