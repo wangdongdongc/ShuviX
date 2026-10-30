@@ -70,6 +70,7 @@ export async function computeFrozenAgentPrompt(
 ): Promise<FrozenAgentPrompt> {
   const vars = await host.promptVars({
     sessionId: input.sessionId,
+    rootSessionId: input.rootSessionId,
     kind: input.kind,
     cwd: input.cwd,
     toolNames: input.toolNames

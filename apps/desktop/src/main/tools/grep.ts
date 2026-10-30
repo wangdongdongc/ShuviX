@@ -16,7 +16,7 @@ import {
 import type { ToolResult } from '@shuvix/agent-runtime'
 import type { GrepToolDetails } from '@shuvix/chat-protocol/types/chatMessage'
 import { resolveToCwd } from '../utils/toolUtils/pathUtils'
-import { rgSearch } from '../utils/toolUtils/ripgrep'
+import { rgSearch, RgUsageError } from '../utils/toolUtils/ripgrep'
 import { t } from '../i18n'
 import { createLogger } from '../logger'
 const log = createLogger('Tool:grep')
@@ -42,6 +42,14 @@ const GrepParamsSchema = Type.Object({
     Type.String({ description: 'File glob pattern to filter (e.g. "*.ts", "*.{js,jsx}")' })
   )
 })
+
+/** rg 拒绝执行时交给模型的话：rg 自己的说明原样附上；是正则写错时再说怎么转义 */
+export function searchRejectedMessage(rgMessage: string): string {
+  const hint = /regex parse error/i.test(rgMessage)
+    ? '\n`pattern` is a regular expression: escape ( ) [ ] { } . * + ? | ^ $ \\ to match them literally (for example `recordRead\\(`).'
+    : ''
+  return `The search was not run — ripgrep rejected it:\n${rgMessage}${hint}`
+}
 
 const GREP_DESCRIPTION =
   'Search file contents using regex patterns. Returns matching file paths, line numbers, and line text. Results respect .gitignore automatically. Use the include parameter to filter by file type. For searching file names instead of content, use the glob tool.'
@@ -121,15 +129,23 @@ export class GrepTool extends BaseTool<typeof GrepParamsSchema> {
     const searchCwd = isFile ? dirname(searchPath) : searchPath
     const target = isFile ? basename(searchPath) : undefined
 
-    // 使用 ripgrep 搜索
-    const { matches, truncated } = await rgSearch({
-      cwd: searchCwd,
-      target,
-      pattern: params.pattern,
-      include: params.include,
-      limit: LIMIT,
-      signal
-    })
+    // 使用 ripgrep 搜索。rg 拒绝执行（正则 / glob 写错）要作为错误交回 —— 当成「没有匹配」，
+    // 模型会据此断言「没有调用者」
+    let found: Awaited<ReturnType<typeof rgSearch>>
+    try {
+      found = await rgSearch({
+        cwd: searchCwd,
+        target,
+        pattern: params.pattern,
+        include: params.include,
+        limit: LIMIT,
+        signal
+      })
+    } catch (err) {
+      if (err instanceof RgUsageError) throw new Error(searchRejectedMessage(err.message))
+      throw err
+    }
+    const { matches, truncated } = found
 
     if (matches.length === 0) {
       return {

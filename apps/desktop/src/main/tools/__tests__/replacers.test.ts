@@ -398,3 +398,96 @@ describe('replaceWithFallback', () => {
     expect(() => replaceWithFallback('foo bar foo bar foo', 'foo', 'baz')).toThrow(/Found.*matches/)
   })
 })
+
+// ─── 空 oldText（EE-1 / EE-2 / EE-5）──────────────────
+//
+// 空串什么位置都不指：旧代码里 Exact / UnicodeNormalized 的 indexOf('') 永远找得到 → 同步死循环
+// （matches 数组一路长大，整个 worker 卡死，testTimeout 也打断不了 —— 修好之后直接调用才安全）；
+// LineTrimmed 会把文件里唯一的空行当成命中，于是 `alpha\n\nbeta` 被悄悄改成 `alpha\nX\nbeta`。
+// 每个用例都带 5s 超时：回归成「返回得慢」时至少失败，而不是拖住整轮。
+
+describe('空 oldText 被拒（EE-1）', () => {
+  const CONTENTS = ['a\nb\n', '', 'alpha\n\nbeta']
+
+  it('EE-1 replaceWithFallback 对空 oldText 同步抛 oldText is empty —— 不把空行当命中、不把空文件变成 X', () => {
+    for (const content of CONTENTS) {
+      let produced: string | undefined
+      expect(() => {
+        produced = replaceWithFallback(content, '', 'X').content
+      }, JSON.stringify(content)).toThrow(/oldText is empty/)
+      expect(produced, JSON.stringify(content)).toBeUndefined()
+    }
+  }, 5000)
+})
+
+describe('每个替换器的 findMatches 对空 needle 都回 []（EE-2）', () => {
+  // '“x”\n\n' 带智能引号：UnicodeNormalized 的「没有 Unicode 差异」提前返回不会替它挡掉空串
+  const CONTENTS = ['abc', 'a\n\nb', 'a\n', '', '“x”\n\n']
+
+  const GUARDED = [
+    ExactReplacer,
+    UnicodeNormalizedReplacer,
+    WhitespaceNormalizedReplacer,
+    IndentationFlexibleReplacer,
+    BlockAnchorReplacer
+  ]
+
+  it('EE-2 Exact / UnicodeNormalized / WhitespaceNormalized / IndentationFlexible / BlockAnchor：空 needle → []，且都返回', () => {
+    for (const replacer of GUARDED) {
+      for (const content of CONTENTS) {
+        expect(
+          replacer.findMatches(content, ''),
+          `${replacer.name} ${JSON.stringify(content)}`
+        ).toEqual([])
+      }
+    }
+  }, 5000)
+
+  // LineTrimmed 单独钉：''.split('\n') 是 ['']，没有守卫时每个空行（含末尾换行后的那一行、以及空文件本身）
+  // 都回一个零长命中 {index, length: 0} —— 链级守卫（EE-1）之外，它自己也得挡住
+  it('EE-2 LineTrimmed：空 needle → []', () => {
+    for (const content of CONTENTS) {
+      expect(
+        LineTrimmedReplacer.findMatches(content, ''),
+        `LineTrimmed ${JSON.stringify(content)}`
+      ).toEqual([])
+    }
+  }, 5000)
+})
+
+describe('只有空白的 oldText 不靠模糊级命中空行（EE-6）', () => {
+  // 空白在 LineTrimmed / IndentationFlexible 眼里修剪后就是空行，会落在任意一段空行上；
+  // 精确级照旧：文件里恰好一处的空白串仍可精确替换
+  it('EE-6 LineTrimmed / IndentationFlexible：全是空白的 needle → []；链上无精确命中时报 No match，文件里唯一的空行不被改', () => {
+    for (const needle of [' ', '\t', '\u00A0', ' \n ', '\n\n']) {
+      expect(LineTrimmedReplacer.findMatches('a\n\nb', needle), JSON.stringify(needle)).toEqual([])
+      expect(
+        IndentationFlexibleReplacer.findMatches('a\n\n\nb', needle),
+        JSON.stringify(needle)
+      ).toEqual([])
+    }
+    expect(() => replaceWithFallback('a\n\nb', ' ', 'X')).toThrow(/^No match found/)
+    expect(() =>
+      replaceWithFallback('function f() {\n  return 1\n}\n\nconst x = 2', '\t', 'X')
+    ).toThrow(/^No match found/)
+  })
+
+  it('EE-6 精确级不受影响：恰好一处的空白串照旧替换', () => {
+    expect(replaceWithFallback('a  b', '  ', ' ').content).toBe('a b')
+  })
+})
+
+describe('非空 oldText 照旧（EE-5，链级部分）', () => {
+  it('EE-5 oldText 为单个换行不是空串：走正常回退链，照旧报 Found N matches，不是空 oldText 的错', () => {
+    let error: unknown
+    try {
+      replaceWithFallback('a\n\nb\n', '\n', 'X')
+    } catch (err) {
+      error = err
+    }
+    expect(error).toBeInstanceOf(Error)
+    const message = (error as Error).message
+    expect(message).toMatch(/^Found 3 matches/)
+    expect(message).not.toContain('oldText is empty')
+  }, 5000)
+})

@@ -54,8 +54,15 @@ describe('persona rendering and freezing', () => {
       },
       INPUT
     )
+    // rootSessionId 随 ctx 交给宿主（ENV-12）：派生 agent 的 sessionId 是 agentId，宿主要按它查根会话
     expect(contexts).toEqual([
-      { sessionId: 's1', kind: 'root', cwd: '/work/acme', toolNames: ['read', 'knowledge'] }
+      {
+        sessionId: 's1',
+        rootSessionId: 's1',
+        kind: 'root',
+        cwd: '/work/acme',
+        toolNames: ['read', 'knowledge']
+      }
     ])
     expect(frozen).toEqual({
       kind: 'root',
@@ -66,6 +73,28 @@ describe('persona rendering and freezing', () => {
     })
     // 冻结的是副本：档案对象之后被改不影响
     expect(frozen.instructionFiles).not.toBe(INPUT.profile.instructionFiles)
+  })
+
+  it('ENV-12 a spawned input forwards rootSessionId too: sessionId = agentId, cwd "", rootSessionId = the root session', async () => {
+    const contexts: unknown[] = []
+    await computeFrozenAgentPrompt(
+      {
+        promptVars: (ctx) => {
+          contexts.push(ctx)
+          return { name: 'X', empty: '' }
+        }
+      },
+      { ...INPUT, kind: 'spawned', sessionId: 'agent-1', rootSessionId: 's1', cwd: '' }
+    )
+    expect(contexts).toEqual([
+      {
+        sessionId: 'agent-1',
+        rootSessionId: 's1',
+        kind: 'spawned',
+        cwd: '',
+        toolNames: ['read', 'knowledge']
+      }
+    ])
   })
 
   it('P-03 an unknown placeholder is kept verbatim and warned about once, at the freeze only', async () => {

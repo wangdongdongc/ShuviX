@@ -251,3 +251,39 @@ describe.skipIf(process.platform === 'win32')('edit 工具 - 符号链接不跟�
     expect(enforcePath.mock.calls[0].slice(0, 2)).toEqual(['write', p])
   })
 })
+
+// 空 oldText 经真实工具（EE-4）：会返回（旧代码同步死循环），报 oldText is empty，文件的字节（BOM、CRLF 在内）
+// 与 mtime 都不动 —— normalizeToLF / 去 BOM 不会把 '' 变成别的什么去命中。
+// 非空的边角照旧（EE-5）：oldText '\r\n'（规整成 '\n'）走正常回退链；普通替换照旧保留 CRLF。
+describe('edit 工具 - 空 oldText（EE-4 / EE-5）', () => {
+  it('EE-4 oldText 为空 → 失败、带 oldText is empty；普通文件与 BOM + CRLF 文件的字节和 mtime 都原样', async () => {
+    const files = [
+      seed('empty-old-plain.txt', 'hello\n'),
+      seed('empty-old-bom-crlf.txt', '﻿a\r\n\r\nb\r\n')
+    ]
+    for (const [i, p] of files.entries()) {
+      const before = readFileSync(p)
+      const mtimeMs = statSync(p).mtimeMs
+      const text = await failureText(
+        executeTool(makeEditTool(ctx), `ee4-${i}`, { path: p, oldText: '', newText: 'X' })
+      )
+      expect(text, p).toContain('oldText is empty')
+      expect(readFileSync(p).equals(before), p).toBe(true)
+      expect(statSync(p).mtimeMs, p).toBe(mtimeMs)
+    }
+  }, 5000)
+
+  it("EE-5 CRLF 文件：oldText '\\r\\n' 走正常链（Found 2 matches，不是空 oldText 的错）；'x' → 'z' 照旧成功并保留 CRLF", async () => {
+    const p = seed('crlf-newline-old.txt', 'x\r\ny\r\n')
+
+    const text = await failureText(
+      executeTool(makeEditTool(ctx), 'ee5-1', { path: p, oldText: '\r\n', newText: 'X' })
+    )
+    expect(text).toContain('Found 2 matches')
+    expect(text).not.toContain('oldText is empty')
+    expect(readFileSync(p, 'utf-8')).toBe('x\r\ny\r\n')
+
+    await executeTool(makeEditTool(ctx), 'ee5-2', { path: p, oldText: 'x', newText: 'z' })
+    expect(readFileSync(p, 'utf-8')).toBe('z\r\ny\r\n')
+  }, 5000)
+})

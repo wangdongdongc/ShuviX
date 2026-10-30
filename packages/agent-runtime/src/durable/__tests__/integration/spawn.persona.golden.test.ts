@@ -149,7 +149,7 @@ describe('P2-11 · J8 per-conversation persona golden', () => {
       const C = await childOfCall(session, 'r-agent', 1)
       const A = (await recordOf(session, C))!.agentId
       expect(contexts.filter((ctx) => ctx.kind === 'spawned')).toEqual([
-        { ...SPAWNED.observed.promptVarsCtx, sessionId: A }
+        { ...SPAWNED.observed.promptVarsCtx, sessionId: A, rootSessionId: SID }
       ])
       expect(childSeamCalls(seamCalls)).toEqual(SPAWNED.observed.resolverCalls)
       expect(seamCalls.some(([name]) => name === 'resolveBotContext')).toBe(false)

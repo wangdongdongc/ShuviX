@@ -99,7 +99,8 @@ describe('system prompt sections reproduce the P1-00 golden fixtures', () => {
           profile: inputs.profile
         }
       )
-      expect(contexts).toEqual([observed.promptVarsCtx])
+      // rootSessionId 是捕获之后才加进变量表上下文的（宿主据它给派生 agent 查根会话的工作目录 / 项目）
+      expect(contexts).toEqual([{ ...observed.promptVarsCtx, rootSessionId: inputs.rootSessionId }])
       expect(frozen.persona).toBe(fixture.parts[0]!.text)
 
       const spec = { kind: inputs.kind, profile: inputs.profile, toolNames }

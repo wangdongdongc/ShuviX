@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import type { JsonValue } from '@earendil-works/chord'
-import { createDispatchAgentTool, toInProcessAgentType } from '../dispatchTool'
+import { AgentParamsSchema, createDispatchAgentTool, toInProcessAgentType } from '../dispatchTool'
 import type { RunTaskOutcome, RunTaskParams, SubAgentManager } from '../manager'
 import type { AgentProfile } from '../types'
 import { invokeTool } from '../../tools/testing/invokeTool'
@@ -100,6 +100,50 @@ describe('DispatchAgentTool — 参数校验错误必须给出纠错指引', () 
     const text = textOf(out as { content: Array<{ type: string; text?: string }> })
     expect(text).toContain('Unknown agent "nope"')
     expect(text).toContain('explore')
+  })
+})
+
+// ─── 没有默认 agent：name 的说明不许诺「省略即默认」（AG-1 / AG-2） ───
+
+describe('DispatchAgentTool — name has no default (AG-1 / AG-2)', () => {
+  it('AG-1 the name description promises no default and no "omit it" (omitting yields Missing "name"); path refs still mentioned', () => {
+    // TOptional<TString> 的类型上没有 description，运行时是带 description 的 schema 对象
+    const description =
+      (AgentParamsSchema.properties.name as { description?: string }).description ?? ''
+    expect(description).not.toMatch(/default/i)
+    expect(description).not.toMatch(/omit/i)
+    expect(description).toContain('agent definition file')
+  })
+
+  it('AG-2 no name, "" and whitespace-only all give Missing "name" with the available list; runTask never runs', async () => {
+    const runTask = vi.fn(async (): Promise<RunTaskOutcome> => ({ result: 'ok' }))
+    const tool = createDispatchAgentTool({
+      registry: {
+        list: () => [PROFILE],
+        get: (name: string) => (name === PROFILE.name ? PROFILE : undefined)
+      },
+      manager: { runTask } as unknown as SubAgentManager,
+      sessionId: 's1',
+      abortError: 'ABORTED'
+    })
+    const variants: {
+      label: string
+      args: { description: string; prompt: string; name?: string }
+    }[] = [
+      { label: 'omitted', args: { description: 'd', prompt: 'p' } },
+      { label: 'empty', args: { description: 'd', prompt: 'p', name: '' } },
+      { label: 'whitespace', args: { description: 'd', prompt: 'p', name: '   ' } }
+    ]
+    for (const [i, { label, args }] of variants.entries()) {
+      const { result } = await invokeTool(tool, args, { callId: `ag2-${i}` })
+      const text = (result.content as Array<{ type: string; text?: string }>)
+        .map((c) => c.text ?? '')
+        .join('')
+      expect(text, label).toContain('Missing "name"')
+      expect(text, label).toContain('`name` must select an agent')
+      expect(text, label).toContain('Available: [explore]')
+    }
+    expect(runTask).not.toHaveBeenCalled()
   })
 })
 

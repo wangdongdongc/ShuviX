@@ -83,6 +83,8 @@ export function dedent(text: string): string {
 export const ExactReplacer: Replacer = {
   name: 'Exact',
   findMatches(content: string, oldText: string): ReplacerMatch[] {
+    // 空串：indexOf('', pos) 在 pos 越过末尾后仍返回 content.length，永远不是 -1 → 死循环
+    if (!oldText) return []
     const matches: ReplacerMatch[] = []
     let pos = 0
     while (true) {
@@ -111,6 +113,8 @@ export const UnicodeNormalizedReplacer: Replacer = {
 
     const normalizedContent = normalize(content)
     const normalizedOld = normalize(oldText)
+    // 空串同 Exact：indexOf 永远找得到，循环出不去
+    if (!normalizedOld) return []
 
     // 如果归一化后和原文一样，说明没有 Unicode 差异，跳过
     if (normalizedContent === content && normalizedOld === oldText) return []
@@ -138,7 +142,8 @@ export const LineTrimmedReplacer: Replacer = {
     const contentLines = content.split('\n')
     const searchLines = oldText.split('\n').map((l) => l.trimEnd())
 
-    if (searchLines.length === 0) return []
+    // 全是空白（含空串）：trimEnd 之后只剩空行，会命中文件里任意一段空行 —— 那不是模型引用的文本
+    if (searchLines.every((l) => l === '')) return []
 
     const matches: ReplacerMatch[] = []
 
@@ -287,6 +292,8 @@ export const IndentationFlexibleReplacer: Replacer = {
 
     const searchPattern = normalizedIndentPattern(searchLines)
     const searchTrimmed = searchLines.map((l) => l.trim())
+    // 全是空白行：缩进容错会把任意几行连续空行当成命中（同 LineTrimmed）
+    if (searchTrimmed.every((l) => l === '')) return []
 
     const contentLines = content.split('\n')
     const matches: ReplacerMatch[] = []
@@ -445,6 +452,10 @@ export function replaceWithFallback(
   oldText: string,
   newText: string
 ): ReplaceResult {
+  // 空串什么位置都不指：Exact / UnicodeNormalized 会死循环，LineTrimmed 会把文件里唯一的空行当成命中
+  if (!oldText) {
+    throw new Error('oldText is empty. Quote the exact text to replace, copied from the file.')
+  }
   let lastMultipleCount = 0
 
   for (const replacer of REPLACER_CHAIN) {

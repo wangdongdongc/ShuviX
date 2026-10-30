@@ -18,9 +18,15 @@ import type { InProcessAgentType } from '../subagent/types'
 export type AgentKind = 'root' | 'spawned'
 
 export interface PromptVarsCtx {
+  /** root = 会话 id；spawned = agentId（不是一条会话） */
   sessionId: string
+  /**
+   * 这个 agent 所属的根会话（root = 自身）。派生 agent 的 `sessionId` 是 agentId，查不到会话行；
+   * 要会话的项目、工作目录时按它查。可选：旧调用方不传时按 `sessionId` 算
+   */
+  rootSessionId?: string
   kind: AgentKind
-  /** 工作目录（桌面=绝对路径；扩展=项目文件夹名或 'scratch'） */
+  /** 工作目录（桌面=绝对路径；扩展=项目文件夹名或 'scratch'）；派生 agent 为 ''，由宿主按根会话补 */
   cwd: string
   /**
    * 这个 agent 的归一工具名单 —— 与随后交给 resolveTools 的 `names` 是同一份。

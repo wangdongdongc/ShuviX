@@ -30,7 +30,7 @@ function recordingVars(contexts: PromptVarsCtx[]): MarkerVars {
 }
 
 describe('SpawnCoordinator · persona', () => {
-  it('P2-03-24 frozen fields and the promptVars context (sessionId = agentId, cwd "")', async () => {
+  it('P2-03-24 frozen fields and the promptVars context (sessionId = agentId, cwd "", rootSessionId = root)', async () => {
     const contexts: PromptVarsCtx[] = []
     const d = await hostD({ vars: recordingVars(contexts) })
     d.t.kit.queue(callAgent('explore', 'find X'), answer('found'), answer('done'))
@@ -43,8 +43,10 @@ describe('SpawnCoordinator · persona', () => {
       persona: 'You are M1 explorer',
       instructionFiles: []
     })
+    // rootSessionId = 根会话（ENV-12）：宿主据它给派生 agent 查工作目录与项目
     expect(contexts.at(-1)).toEqual({
       sessionId: agentId,
+      rootSessionId: 's1',
       kind: 'spawned',
       cwd: '',
       toolNames: ['probe']

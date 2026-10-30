@@ -36,9 +36,9 @@ export const AgentParamsSchema = Type.Object({
   description: Type.String({ description: 'A short (3-5 word) description of the task' }),
   name: Type.Optional(
     Type.String({
+      // 没有默认 agent：省略 name 得到的是 Missing "name"（resolveRef），所以这里不许诺「省略即默认」
       description:
-        'An agent name your instructions or the user gave (never a guess), or the path of an agent definition file. ' +
-        'Omit it to use the default agent when one is offered.'
+        'An agent name your instructions or the user gave (never a guess), or the path of an agent definition file.'
     })
   ),
   prompt: Type.String({

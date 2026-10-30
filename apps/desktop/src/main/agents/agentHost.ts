@@ -29,6 +29,7 @@ import type { ToolExecutionApi, ToolRegistration } from '@earendil-works/pi-dura
 import {
   formatLanguageDisplay,
   LAZY_CONNECT_TIMEOUT_MS,
+  localDate,
   offersDispatchTool,
   renderBotContext,
   renderKnowledgeGuide,
@@ -56,9 +57,9 @@ import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
-import { existsSync } from 'fs'
-import { join } from 'path'
-import { type as osType, release as osRelease, platform } from 'os'
+import { existsSync, realpathSync } from 'fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
+import { homedir, type as osType, release as osRelease, platform } from 'os'
 import { app } from 'electron'
 import i18next from 'i18next'
 import { getPlatformBuiltinToolEntries } from '../services/toolRegistry'
@@ -488,12 +489,62 @@ function hasDrawingSkill(names: readonly string[]): boolean {
 }
 
 /**
+ * 根会话的工作目录；会话行已不在（派发途中根会话被删）时为 ''。先查行：resolveProjectConfig 对查不到的
+ * 会话会回落到临时工作区并把目录建出来 —— 删除路径刚删掉的文件夹不该被一次派发重新建回来
+ */
+function rootWorkingDirectory(rootSessionId: string): string {
+  if (!sessionRecords.pick(rootSessionId, ['id'])) return ''
+  try {
+    return resolveProjectConfig(rootSessionId).workingDirectory
+  } catch {
+    return ''
+  }
+}
+
+/** 比较路径用的形式：真实路径（家目录可能经符号链接到达），macOS / Windows 上再折叠大小写 */
+const FOLD_PATH_CASE = process.platform === 'darwin' || process.platform === 'win32'
+function pathKey(p: string): string {
+  let real: string
+  try {
+    real = realpathSync.native(p)
+  } catch {
+    real = resolve(p)
+  }
+  return FOLD_PATH_CASE ? real.toLowerCase() : real
+}
+
+/**
+ * 「Git repository」一行：从工作目录往上找第一个 `.git`（目录，或工作树 / 子模块里的 `.git` 文件）。
+ * 工作目录在家目录之下时不查家目录本身及以上 —— 家目录里的 dotfiles 仓库会让每个项目都读成「是」；
+ * 工作目录就是家目录时只查它自己。根在工作目录之上时写出根（项目开在仓库里的某个包上，git 命令
+ * 照样作用于整个仓库，仓库根的指令文件也在那里）
+ */
+export function gitRepoLine(workingDirectory: string, home: string = homedir()): string {
+  if (!workingDirectory) return 'No'
+  const start = resolve(workingDirectory)
+  // 「是不是家目录」按 pathKey 比：同一个家目录可能拼写不同（盘符大小写、符号链接）；
+  // 往上走、显示根仍用原样的路径
+  const homeKey = pathKey(home)
+  const rel = relative(homeKey, pathKey(start))
+  const insideHome = rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+  for (let dir = start; ; ) {
+    if (existsSync(join(dir, '.git'))) return dir === start ? 'Yes' : `Yes (root: ${dir})`
+    if (pathKey(dir) === homeKey) return 'No'
+    const parent = dirname(dir)
+    if (parent === dir || (insideHome && pathKey(parent) === homeKey)) return 'No'
+    dir = parent
+  }
+}
+
+/**
  * 桌面变量表：environment 类标量（git/平台/shell/os/日期/语言/版本，取值逻辑自原
  * environment 段平移）+ 工作目录 + 项目名。文本本身（标题/标签/句式）已内化进
  * agent md body；项目提示词不是变量 —— 走活段落（见 desktopPromptHost.resolveProjectPrompt）。
  */
 export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<PromptVars> {
-  const cwd = ctx.cwd || process.cwd()
+  // 派生 agent 的 sessionId 是 agentId、cwd 是 ''：工作目录与项目都按根会话查（与 resolveInstruction 同口径）
+  const rootSessionId = ctx.rootSessionId ?? ctx.sessionId
+  const workingDirectory = ctx.cwd || rootWorkingDirectory(rootSessionId)
   const shellTool = platformShellKind()
   const appVersion = (() => {
     try {
@@ -502,7 +553,7 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
       return 'unknown'
     }
   })()
-  const project = sessionProject(ctx.sessionId)
+  const project = sessionProject(rootSessionId)
   // 作图说明的两个开关按**这一个 agent** 的名单判，与工具解析读的是同一份（ctx.toolNames）：
   // 技能在架才有这份说明（契约与手艺都在技能里，常驻的只有「先加载」），否则整份不出；
   // 手里有 artifact 才教 adopt。
@@ -517,8 +568,8 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
       !isChromeTabSessionSettings(sessionRecords.pickSettings(ctx.sessionId, ['chromeTab']))
   }
   return {
-    workingDirectory: ctx.cwd,
-    isGitRepo: existsSync(join(cwd, '.git')) ? 'Yes' : 'No',
+    workingDirectory,
+    isGitRepo: gitRepoLine(workingDirectory),
     platform: platform(),
     // Shell 一行说的是**命令工具**跑在哪个 shell 里，不是用户的登录 shell：模型据此选语法。
     // 过去取 $SHELL —— 从开始菜单启动的 Windows 应用没有它，模型看到的是 `Shell: unknown`，
@@ -530,7 +581,8 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
     // 本平台命令工具的名字 —— 档案正文用它指代「那个 shell 工具」，而不必写死 bash
     shellTool: shellTool ?? '',
     os: `${osType()} ${osRelease()}`,
-    date: new Date().toISOString().slice(0, 10),
+    // 本地日历日：与日期通知（dateNotice）同一口径 —— toISOString 是 UTC，东八区 0–8 点会说成前一天
+    date: localDate(),
     language: formatLanguageDisplay(i18next.language),
     appVersion,
     // 内联作图：```svg 围栏是什么 + 「本会话第一张图前先加载作图技能」（契约与手艺都在技能里），

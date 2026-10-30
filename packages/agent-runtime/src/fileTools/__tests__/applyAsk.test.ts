@@ -869,3 +869,43 @@ describe('applyWrite — refuseUnreadOverwrite（知识库条目的覆盖保护�
     expect(h.contentOf(KB)).toBe('changed by someone else\n')
   })
 })
+
+// ─── 空 oldText（EE-3）────────────────────────────────────────────────────────
+//
+// 空 oldText 在匹配阶段就被拒：排在「No change produced」检查之前（''/'' 拿到的也是这句），
+// 也排在写入前询问之前 —— 用户不会为一次写坏了的 edit 看到一张审批卡片；文件原样不动。
+
+describe('applyEdit — an empty oldText is refused before the no-op check and before the ask', () => {
+  it('EE-3 oldText "" → rejects with "<path>: oldText is empty…" (newText "X" and ""); ask and writeFile never run', async () => {
+    const h = makeHarness()
+    h.seedFile(P, 'hello\n')
+    h.seedRead(P)
+    const ask = spyAsk(h)
+
+    for (const newText of ['X', '']) {
+      let caught: Error | undefined
+      try {
+        await applyEdit(
+          h.port,
+          h.guards,
+          P,
+          { path: 'notes/a.txt', oldText: '', newText },
+          ask.hook
+        )
+      } catch (err) {
+        caught = err as Error
+      }
+      expect(caught, `newText ${JSON.stringify(newText)}`).toBeInstanceOf(Error)
+      // 展示用路径前缀保留（报错里写的是 params.path，不是 port 路径）
+      expect(caught!.message.startsWith('notes/a.txt: oldText is empty'), caught!.message).toBe(
+        true
+      )
+      expect(caught!.message).not.toContain('No change produced')
+    }
+
+    expect(ask.calls).toEqual([])
+    expect(h.writes).toEqual([])
+    expect(h.events).toEqual([])
+    expect(h.contentOf(P)).toBe('hello\n')
+  }, 5000)
+})
