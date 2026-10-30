@@ -57,11 +57,12 @@ describe('笔记本会话的根 Agent', () => {
     expect(res.systemPrompt).not.toContain('{{shuvix:')
   })
 
-  it('工具白名单来自 notebook 档案：含 ask、不含 agent / knowledge / session，也没有数据库', async () => {
+  it('工具白名单来自 notebook 档案：含 ask 与 knowledge、不含 agent / session，也没有数据库', async () => {
     const names = (await runtimeInfo(nbSid)).tools.map((t) => t.name)
     expect(names).toContain('ask')
+    // 2026-10-30 起 notebook 带 knowledge（项目笔记有项目库，ShuviX 文件的笔记本隐式启用说明书）
+    expect(names).toContain('knowledge')
     expect(names).not.toContain('agent')
-    expect(names).not.toContain('knowledge')
     expect(names).not.toContain('session')
     // 数据库是按会话勾选的内置 MCP 能力服务器：notebook 档案不声明它、这条会话也没勾；
     // 退役的内置工具名 database 不再存在（这一条对任何会话都成立，留着防它回来）

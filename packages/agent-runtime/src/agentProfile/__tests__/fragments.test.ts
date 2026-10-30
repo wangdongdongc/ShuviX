@@ -45,9 +45,24 @@
  *  - 同号改写（守的还是那件事，按新形状重算）：VG-3 / VG-4 / VG-5 / VG-6 / VG-7 / P-1 / VC-1 /
  *    NM-1 / VG-I3 / VG-I4 / VG-I5，以及「titler / knowledge-writer / explore 不含片段特征串」那条
  *    （它原先从无参渲染里取特征串，契约改了之后那里是空串，断言就空转了）。
+ *
+ * 第二份片段 `renderDocumentKind`（DK 组，2026-10-30）：笔记本会话的文档是一份 ShuviX 文件时，
+ * `{{shuvix:documentKind}}` 说这是什么文件、规范在说明书哪一条、改动会不会被检查。同样只凭三语一字
+ * 不差的记号认段落：每种文件的自述行（`shuvix: agent v1` …，技能是 `SKILL.md`、知识库是 `shuvix: okf v0.2`）、
+ * 说明书目录（用例里传 `/m`）、「改动会被检查」那段里的 `doc_read`。
  */
 import { describe, it, expect } from 'vitest'
-import { renderVisualCraft, renderVisualGuide, type VisualGuideOptions } from '../fragments'
+import {
+  PARSED_SHUVIX_FILE_KINDS,
+  type ShuvixFileKind
+} from '@shuvix/chat-protocol/shuvixFileNotes'
+import {
+  renderDocumentKind,
+  renderVisualCraft,
+  renderVisualGuide,
+  type DocumentKindOptions,
+  type VisualGuideOptions
+} from '../fragments'
 import { buildBuiltinProfiles, BASE_PROFILE_NAMES } from '../../subagent/builtinAgents'
 import { createInlineMdReader } from '../../subagent/builtinAgents/inlineSources'
 
@@ -674,4 +689,220 @@ describe('第三个开关 interactive（VG-I）', () => {
       expect(checked).toBe(16)
     }
   )
+})
+
+/**
+ * `{{shuvix:documentKind}}`（DK）—— 笔记本会话的文档是 ShuviX 文件时，说这是什么文件、什么时候生效、规范在
+ * 说明书哪一条（`manualDir` + `read` 都在才指路）、改动会不会被检查（只有宿主真解析的四种）。
+ *
+ * 段落只凭三语一字不差的记号认（片段散文会随调优改，不钉）：
+ *  - 种类段：各自的自述行 —— agent `shuvix: agent v1`、bot `shuvix: bot v2`、policy `shuvix: policy v1`、
+ *    hook `shuvix: hook v1`、skill `SKILL.md`、knowledge `shuvix: okf v0.2`；
+ *  - 指路段：说明书目录本身（用例传 `/m`）；
+ *  - 「改动会被检查」段：`doc_read`（同段还有 `doc_edit` / `doc_insert`）。
+ */
+describe('renderDocumentKind —— 笔记本文档是哪种 ShuviX 文件（DK）', () => {
+  /** 全部种类（Record 让新增一个种类时这里先在类型上红） */
+  const KIND_TOKENS: Record<ShuvixFileKind, string> = {
+    agent: 'shuvix: agent v1',
+    bot: 'shuvix: bot v2',
+    policy: 'shuvix: policy v1',
+    hook: 'shuvix: hook v1',
+    skill: 'SKILL.md',
+    knowledge: 'shuvix: okf v0.2'
+  }
+  const KINDS = Object.keys(KIND_TOKENS) as ShuvixFileKind[]
+  /** 每种文件指向的说明书条目（文件名；全部在说明书目录下） */
+  const MANUAL_FILES: Record<ShuvixFileKind, string[]> = {
+    agent: ['agent-md.md'],
+    bot: ['bot-md.md'],
+    policy: ['policy-md.md', 'network-policy.md', 'redaction.md'],
+    hook: ['hook-md.md'],
+    skill: ['skills.md'],
+    knowledge: ['knowledge-entry.md']
+  }
+  const ALL_MANUAL_FILES = [...new Set(Object.values(MANUAL_FILES).flat())]
+  const MANUAL: Omit<DocumentKindOptions, 'kind'> = { manualDir: '/m', read: true }
+  const CHECKED = 'doc_read'
+  /** 渲染里点到的说明书条目（`/m/<name>.md` 的文件名，去重排序） */
+  const manualFilesIn = (text: string): string[] =>
+    [...new Set([...text.matchAll(/\/m\/([\w.-]+\.md)/g)].map((m) => m[1]))].sort()
+
+  it.each([...LANGUAGES, undefined])(
+    'DK-1 %s：kind 为 null → 空串（占位符整块消失），给了说明书目录与 read 也一样',
+    (language) => {
+      expect(renderDocumentKind(language, { kind: null })).toBe('')
+      expect(renderDocumentKind(language, { kind: null, ...MANUAL })).toBe('')
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'DK-2 %s：六种 × 指路开关：自含块（`## ` 起头）、已 trim、无界桩 / 目录占位残留、无三连换行、非空',
+    (language) => {
+      let checked = 0
+      for (const kind of KINDS) {
+        for (const opts of [MANUAL, {}]) {
+          const out = renderDocumentKind(language, { kind, ...opts })
+          const what = `${kind} manual=${'manualDir' in opts}`
+          expect(out.startsWith('## '), what).toBe(true)
+          expect(out, what).toBe(out.trim())
+          // 界桩是 HTML 注释，模型看得见；`<<manual>>` 是手写的目录占位，替换不干净就是把路径弄坏
+          expect(out, what).not.toContain('<!-- shuvix:')
+          expect(out, what).not.toContain('<<manual>>')
+          expect(out, what).not.toMatch(/\n{3,}/)
+          expect(out.length, what).toBeGreaterThan(100)
+          checked++
+        }
+      }
+      expect(checked).toBe(12)
+    }
+  )
+
+  it.each(LANGUAGES)(
+    'DK-3 %s：只出这一种的段落 —— 自己的自述行在，另外五种的都不在',
+    (language) => {
+      for (const kind of KINDS) {
+        const out = renderDocumentKind(language, { kind, ...MANUAL })
+        for (const other of KINDS) {
+          expect(out.includes(KIND_TOKENS[other]), `${kind} 渲染里的 ${other} 记号`).toBe(
+            other === kind
+          )
+        }
+      }
+    }
+  )
+
+  it.each(LANGUAGES)('DK-4 %s：每种文件指向的说明书条目恰是那几篇', (language) => {
+    for (const kind of KINDS) {
+      const out = renderDocumentKind(language, { kind, ...MANUAL })
+      expect(manualFilesIn(out), kind).toEqual([...MANUAL_FILES[kind]].sort())
+    }
+  })
+
+  it.each(LANGUAGES)(
+    'DK-5 %s：只有 read 为真且给了目录才指路；关掉时恰好少了指路那一段，别的一字不差',
+    (language) => {
+      for (const kind of KINDS) {
+        const on = renderDocumentKind(language, { kind, manualDir: '/m', read: true })
+        const onParagraphs = paragraphs(on)
+        // 正控制组：指路那段恰好一段
+        expect(
+          onParagraphs.filter((p) => p.includes('/m/')),
+          kind
+        ).toHaveLength(1)
+        const expectedOff = onParagraphs.filter((p) => !p.includes('/m/')).join('\n\n')
+        for (const read of [undefined, false, true]) {
+          for (const manualDir of [undefined, '', '/m']) {
+            if (read === true && manualDir === '/m') continue
+            const what = `${kind} read=${read} manualDir=${JSON.stringify(manualDir)}`
+            const off = renderDocumentKind(language, { kind, manualDir, read })
+            expect(off, what).not.toContain('/m/')
+            for (const file of ALL_MANUAL_FILES) expect(off, `${what} ${file}`).not.toContain(file)
+            expect(off, what).toBe(expectedOff)
+          }
+        }
+      }
+    }
+  )
+
+  describe('DK-6 说明书目录的分隔符', () => {
+    const policy = (manualDir: string): string =>
+      renderDocumentKind('en', { kind: 'policy', manualDir, read: true })
+
+    it.each(['/m/', '/m///'])('DK-6 %j：尾斜杠去掉后再拼，不出现 `//`', (dir) => {
+      const out = policy(dir)
+      expect(out).toContain('`/m/policy-md.md`')
+      expect(out).toContain('`/m/network-policy.md`')
+      expect(out).not.toContain('//')
+    })
+
+    it('DK-6 Windows 目录（带尾反斜杠）：用反斜杠拼，不混进 `/`', () => {
+      const out = policy('C:\\U\\shuvix\\en\\')
+      expect(out).toContain('`C:\\U\\shuvix\\en\\policy-md.md`')
+      expect(out).toContain('`C:\\U\\shuvix\\en\\redaction.md`')
+      expect(out).not.toContain('en/')
+      expect(out).not.toContain('\\\\')
+    })
+
+    it('DK-6 盘符根 `C:\\`：分隔符按传进来的原样认（去掉尾斜杠后看不出是 Windows 路径）', () => {
+      expect(policy('C:\\')).toContain('`C:\\policy-md.md`')
+    })
+
+    it('DK-6 根目录 `/` → `/policy-md.md`，没有 `//`', () => {
+      const out = policy('/')
+      expect(out).toContain('`/policy-md.md`')
+      expect(out).not.toContain('//')
+    })
+
+    it('DK-6 混写 `C:/a\\b`：有 `/` 就用 `/` 拼', () => {
+      expect(policy('C:/a\\b')).toContain('`C:/a\\b/policy-md.md`')
+    })
+  })
+
+  it.each(LANGUAGES)(
+    'DK-7 %s：「改动会被检查」那段只给宿主真解析的四种；段落顺序是 小标题 → 种类 → 指路 → 检查',
+    (language) => {
+      const parsed = new Set<ShuvixFileKind>(PARSED_SHUVIX_FILE_KINDS)
+      // 正控制组：四种真解析、两种不解析 —— 下面两个分支都会走到
+      expect([...parsed].sort()).toEqual(['agent', 'bot', 'hook', 'policy'])
+      for (const kind of KINDS) {
+        const out = renderDocumentKind(language, { kind, ...MANUAL })
+        const ps = paragraphs(out)
+        const checkedParagraphs = ps.filter((p) => p.includes(CHECKED))
+        if (parsed.has(kind)) {
+          expect(checkedParagraphs, kind).toHaveLength(1)
+          for (const tool of ['doc_read', 'doc_edit', 'doc_insert']) {
+            expect(checkedParagraphs[0], `${kind} ${tool}`).toContain(tool)
+          }
+          expect(ps, kind).toHaveLength(4)
+          expect(ps[3], kind).toContain(CHECKED)
+          // 没有指路时只剩三段：小标题、种类、检查
+          expect(paragraphs(renderDocumentKind(language, { kind })), kind).toHaveLength(3)
+        } else {
+          expect(out, kind).not.toContain(CHECKED)
+          expect(out, kind).not.toContain('doc_edit')
+          expect(ps, kind).toHaveLength(3)
+          expect(paragraphs(renderDocumentKind(language, { kind })), kind).toHaveLength(2)
+        }
+        expect(ps[0].startsWith('## '), kind).toBe(true)
+        expect(ps[1], kind).toContain(KIND_TOKENS[kind])
+        expect(ps[2], kind).toContain('/m/')
+      }
+    }
+  )
+
+  it('DK-8 语言回退：缺省 / 空串 / 未翻译 → en；zh-CN / ZH → zh；ja-JP → ja；每种文件三语各不相同', () => {
+    for (const kind of KINDS) {
+      const render = (language: string | undefined): string =>
+        renderDocumentKind(language, { kind, ...MANUAL })
+      const [en, zh, ja] = LANGUAGES.map(render)
+      for (const language of [undefined, '', 'ko']) {
+        expect(render(language), `${kind} ${JSON.stringify(language)}`).toBe(en)
+      }
+      expect(render('zh-CN'), kind).toBe(zh)
+      expect(render('ZH'), kind).toBe(zh)
+      expect(render('ja-JP'), kind).toBe(ja)
+      // 漏译会让某一语言静默拿到英文原文
+      expect(new Set([en, zh, ja]).size, kind).toBe(3)
+    }
+  })
+
+  it('DK-9 只有 notebook 引用 {{shuvix:documentKind}}：三语各恰好一次、独占一段，位于第一个小标题的正文之后、第二个小标题之前', () => {
+    expect(profilesUsing('documentKind')).toEqual(['notebook'])
+    const placeholder = '{{shuvix:documentKind}}'
+    for (const language of LANGUAGES) {
+      const notebook = buildBuiltinProfiles({ language, readMd }).find((p) => p.name === 'notebook')
+      expect(notebook, `notebook.${language}`).toBeDefined()
+      const body = notebook!.systemPrompt
+      expect(countOf(body, placeholder), language).toBe(1)
+      const ps = paragraphs(body)
+      const at = ps.indexOf(placeholder)
+      expect(at, `${language}：占位符应当独占一段`).toBeGreaterThanOrEqual(0)
+      const headings = ps.map((p, i) => (p.startsWith('## ') ? i : -1)).filter((i) => i >= 0)
+      expect(headings.length, language).toBeGreaterThanOrEqual(2)
+      // 第一个小标题之后至少隔着它自己的一段正文（身份那段），再到占位符
+      expect(at, language).toBeGreaterThan(headings[0] + 1)
+      expect(at, language).toBeLessThan(headings[1])
+    }
+  })
 })

@@ -20,6 +20,10 @@
  *   TC-DOC6 真实临时目录、父目录是符号链接：经链接的写法与真实写法两个方向都认
  *   TC-DOC7 已存在文件的大小写变体 → 认（只在大小写不敏感的文件系统上跑）
  *
+ * sessionDocumentKind —— 这条会话的文档是哪种 ShuviX 文件（按**本会话**的承载项目判，同 agentHost 的
+ * `{{shuvix:documentKind}}` 与知识库的隐式说明书）：
+ *   TC-DK1 `__hooks__` → hook、`__skills_builtin__` → skill；普通项目 / 会话行不存在 → null；只读本会话那一行
+ *
  * 会话权限表的宿主胶水（HG-1）：
  *   getVars 的 `aclRead` / `aclWrite` 来自 sessionAcl.pathView(ctx.sessionId)（与命令沙箱的 sandboxEntries
  *     同一张表）—— 外部目录访问策略（ask-on-external-path）的免询问范围与命令实际能碰的范围是同一份。
@@ -196,6 +200,7 @@ import {
   makeDesktopSecurityProvider,
   resolveProjectConfig,
   resolveSessionDocument,
+  sessionDocumentKind,
   sessionObjectFacts,
   setCommandClassifier,
   setPermissionReviewer,
@@ -548,6 +553,36 @@ describe('resolveSessionDocument / isSessionDocument —— 笔记本会话自�
       expect(isSessionDocument('s-doc', join(root, 'real', 'NOTES', 'A.md'))).toBe(true)
       expect(isSessionDocument('s-doc', join(root, 'REAL', 'notes', 'a.MD'))).toBe(true)
     })
+  })
+})
+
+describe('sessionDocumentKind —— 笔记本文档是哪种 ShuviX 文件', () => {
+  /** 用例写进 tc.sessionRows 的会话行，跑完摘掉（那张表是进程级的） */
+  const ids = ['s-dk', 's-dk-child', 's-dk-parent']
+  afterEach(() => {
+    for (const id of ids) delete tc.sessionRows[id]
+  })
+
+  it('TC-DK1 按本会话的承载项目判：__hooks__ → hook、__skills_builtin__ → skill；普通项目、会话行不存在 → null；不看父会话', () => {
+    tc.sessionRows['s-dk'] = { projectId: '__hooks__' }
+    expect(sessionDocumentKind('s-dk')).toBe('hook')
+
+    tc.sessionRows['s-dk'] = { projectId: '__skills_builtin__' }
+    expect(sessionDocumentKind('s-dk')).toBe('skill')
+
+    tc.sessionRows['s-dk'] = { projectId: 'p1' }
+    expect(sessionDocumentKind('s-dk')).toBeNull()
+
+    tc.sessionRows['s-dk'] = { projectId: null }
+    expect(sessionDocumentKind('s-dk')).toBeNull()
+
+    expect(sessionDocumentKind('gone')).toBeNull()
+
+    // 只读本会话那一行：父会话挂在策略载体下，子会话自己在普通项目里 → 不算
+    tc.sessionRows['s-dk-parent'] = { projectId: '__policies__' }
+    tc.sessionRows['s-dk-child'] = { projectId: 'p1', parentId: 's-dk-parent' }
+    expect(sessionDocumentKind('s-dk-child')).toBeNull()
+    expect(sessionDocumentKind('s-dk-parent')).toBe('policy')
   })
 })
 

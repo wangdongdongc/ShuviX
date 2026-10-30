@@ -47,6 +47,7 @@ import {
 import type { ProjectEnvVar } from '../types'
 import { withCallAgent, type ToolAgentIdentity } from './toolAgent'
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
+import { shuvixFileKindOfProject, type ShuvixFileKind } from '@shuvix/chat-protocol/shuvixFileNotes'
 import i18next from 'i18next'
 import { createLogger } from '../logger'
 
@@ -662,6 +663,14 @@ export function resolveSessionDocument(sessionId: string): string | null {
   const notebookPath = sessionRecords.pickSettings(sessionId, ['notebookPath'])?.notebookPath
   if (!notebookPath) return null
   return resolveToCwd(notebookPath, resolveProjectConfig(sessionId).workingDirectory)
+}
+
+/**
+ * 这条会话的文档是哪种 ShuviX 文件（按承载项目判，同 agentHost 的 `{{shuvix:documentKind}}` 与知识库的
+ * 隐式说明书）；普通笔记、不是笔记本会话 → null
+ */
+export function sessionDocumentKind(sessionId: string): ShuvixFileKind | null {
+  return shuvixFileKindOfProject(sessionRecords.pick(sessionId, ['projectId'])?.projectId)
 }
 
 /** 这个路径是不是这条会话自己那份文档（跟过链接、按文件系统的大小写规则比） */

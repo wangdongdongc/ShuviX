@@ -30,7 +30,21 @@
  *      LD-4 知识库条目（bundleRelOf 有答）：合规的 → 没有回执（不盖章）；缺 description → 末尾是告警那段
  *      LD-5 文档不是 md → 没有回执
  *      LD-6 会话没有文档 → 没有回执、不抛
- *      LD-7 doc_read 从不带回执
+ *      LD-7 doc_read 从不带编辑回执（但带下面那句 Parse check）
+ *   PV doc_read 附带「此刻能不能解析」（parseVerdictOf）：文档是宿主真解析的契约 md（agent / bot / policy / hook）时，
+ *      最后一块是 `Parse check: …`。种类先看会话的承载项目（sessionDocumentKind，替身给），不是 ShuviX 文件的载体
+ *      再看文件自己的 `shuvix:` 标记；校验的是全文（读回的正文可能被截断）；判定出错只是没有这句，读本身不失败。
+ *      PV-1 合法 → 「as a valid policy file.」；排在用户那句 / diff 之后；磁盘回落的读排在「没开着」之后
+ *      PV-2 载体说了算：策略载体里没写标记的策略照样合法
+ *      PV-3 / PV-3b 非法 → 「cannot parse this document as a policy file / an agent file … :」+ 逐条 `- ` 原因
+ *      PV-4 合法但有警告（未知埋点的 hook、带 v1 管线块的 bot）→ 「…, with warnings:」
+ *      PV-5 解析器没给原因 → 「(the parser gave no reason)」
+ *      PV-6 载体不是 ShuviX 文件 → 按标记兜底；PV-7 / PV-7b 不判（普通 md、记忆、okf、技能 / 知识库载体、非 md 文档）
+ *      PV-8 载体胜过标记；PV-9 截断不影响判定；PV-10 种类查询 / 解析器抛错、会话没有文档 → 不失败、没有这句
+ *      PV-11 解析器拿到的名字是去掉扩展名的文件名；PV-12 formatReadResult 的第二个参数；PV-13 守护：提示词说
+ *      「doc_read 会说」的种类 = 真给判定的种类；PV-14 标记与载体一致时编辑回执不变
+ *   RC 编辑回执按承载项目校正（receiptForCarrier）：载体是 agent / bot / policy / hook 而标记缺了或是别家的，
+ *      回执换成按载体那一种判（没事不吭声，有事给 Parse check 那段）；标记一致 / 载体不是这四种 / 查询出错 → 原回执
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -40,7 +54,9 @@ import type {
 } from '@shuvix/chat-protocol/liveDocument'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
 import type { ToolContext } from '../../services/toolContext'
-import type { AnyTool } from '@shuvix/agent-runtime'
+import { renderDocumentKind, type AnyTool } from '@shuvix/agent-runtime'
+import type { ShuvixFileKind } from '@shuvix/chat-protocol/shuvixFileNotes'
+import { createInlinePolicyMdReader } from '@shuvix/agent-runtime/security/builtinPolicies/inlineSources'
 import {
   executeTool,
   failureText,
@@ -66,7 +82,13 @@ const mocks = vi.hoisted(() => ({
     >(),
   /** 交给编辑器之前过的会话权限表门（enforcePath）：记下每一次 */
   gates: [] as Array<{ mode: string; path: string; opts: Record<string, unknown> }>,
-  gateError: null as Error | null
+  gateError: null as Error | null,
+  /** sessionDocumentKind 的答复（会话的承载项目是哪种 ShuviX 文件；null = 不是）；每条用例复位成 null */
+  kind: null as string | null,
+  /** 为真时 sessionDocumentKind 抛错（会话行读不出来） */
+  kindThrows: false,
+  /** 换掉 validateShuvixMdText（null = 用真的）；PV-5 / PV-10 用 */
+  validate: null as null | ((type: string, text: string, name?: string) => unknown)
 }))
 
 vi.mock('../../services/liveDocumentBridge', () => ({ requestLiveDocument: mocks.request }))
@@ -74,6 +96,10 @@ vi.mock('../../services/liveDocumentBridge', () => ({ requestLiveDocument: mocks
 // bundle 里由用例给（缺省没有文档 —— 契约 md 的诊断不出声）；诊断本身是真的 reviewShuvixMdWrite
 vi.mock('../../services/toolContext', () => ({
   resolveSessionDocument: () => mocks.doc,
+  sessionDocumentKind: () => {
+    if (mocks.kindThrows) throw new Error('session row unreadable')
+    return mocks.kind
+  },
   TOOL_ABORTED: 'Aborted',
   getDesktopSecurityContext: () => ({
     enforcePath: async (mode: string, path: string, opts: Record<string, unknown>) => {
@@ -91,6 +117,17 @@ vi.mock('../../services/toolAgent', () => ({
   withCallAgent: <T>(c: T): T => c
 }))
 vi.mock('../../i18n', () => ({ t: (key: string) => key }))
+// 解析器缺省是真的；PV-5 / PV-10 经 mocks.validate 换掉它（其余导出原样）
+vi.mock('@shuvix/agent-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shuvix/agent-runtime')>()
+  return {
+    ...actual,
+    validateShuvixMdText: (type: string, text: string, name?: string) =>
+      mocks.validate
+        ? mocks.validate(type, text, name)
+        : actual.validateShuvixMdText(type, text, name)
+  }
+})
 
 type DocModule = typeof import('../doc')
 type Registry = typeof import('../../services/toolRegistry')
@@ -110,6 +147,9 @@ beforeEach(() => {
   mocks.makeDeps.mockClear()
   mocks.doc = null
   mocks.rel = null
+  mocks.kind = null
+  mocks.kindThrows = false
+  mocks.validate = null
 })
 
 const user = (over: Partial<LiveDocUserContext> = {}): LiveDocUserContext => ({
@@ -124,6 +164,10 @@ const readResult = (
   text: string,
   over: Partial<Extract<LiveDocResult, { kind: 'read' }>> = {}
 ): LiveDocResult => ({ ok: true, kind: 'read', text, user: user(), ...over })
+
+/** 磁盘回落时 doc_read 的那句话（没有编辑器可报） */
+const NOT_OPEN =
+  'The document is not open in an editor right now: this is the saved file, and your changes are written to it directly.'
 
 /** 工具结果的全文（只有一个文本块；必须是成功结果） */
 async function run(
@@ -541,12 +585,372 @@ describe('LD 编辑器里落下的改动：契约 md 的诊断回执', () => {
     expect(await editWith(INVALID_AGENT)).toBe(HEAD)
   })
 
-  it('LD-7 doc_read 从不带回执', async () => {
+  it('LD-7 doc_read 从不带编辑回执，但带此刻的 Parse check（PV-6：载体不是 ShuviX 文件，按标记兜底）', async () => {
     mocks.doc = '/proj/agents/a1.md'
     const out = await readWith(readResult(INVALID_AGENT))
     expect(out).not.toContain('[shuvix agent')
     expect(out).not.toContain('The document was changed')
+    expect(out).toContain(
+      '\n\nParse check: ShuviX cannot parse this document as an agent file, so it is ignored until it is fixed:\n- '
+    )
   })
+})
+
+/** 契约 md 的样本（真解析器判）：合法策略 = 内置 ask-on-widget-access 原样 */
+const VALID_POLICY = createInlinePolicyMdReader()('ask-on-widget-access.md') ?? ''
+/** 去掉 `shuvix:` 自述行（策略 / agent / bot 目录里的手写文件可以没有它） */
+const withoutMarker = (text: string): string => text.replace(/^shuvix: .*\n/m, '')
+/** 非法策略：去掉整块 `shuvix-policy-rules`（一条规则都没有） */
+const INVALID_POLICY = VALID_POLICY.replace(/shuvix-policy-rules:[\s\S]*?\n---\n/, '---\n')
+const VALID_AGENT = '---\nshuvix: agent v1\nname: a1\ndescription: d\n---\n\nBody.\n'
+/** YAML 写坏的 agent md（与 LD 那份同形） */
+const BROKEN_AGENT = ['---', 'shuvix: agent v1', 'name: [unclosed', '---', 'body'].join('\n')
+/** 合法但带警告的 hook：触发点在这个版本上不认识（绑定惰性化） */
+const HOOK_UNKNOWN_TRIGGER = [
+  '---',
+  'shuvix: hook v1',
+  'name: watcher',
+  'description: d',
+  'shuvix-hook-agent: titler',
+  'shuvix-hook-on:',
+  '  - trigger: no.such.trigger',
+  '---',
+  '',
+  'Do it.',
+  ''
+].join('\n')
+/** 合法但带警告的 bot：v1 时代残留的管线块 */
+const BOT_V1_PIPELINE = [
+  '---',
+  'shuvix: bot v1',
+  'name: buddy',
+  'shuvix-bot-pipeline:',
+  '  - step: chat',
+  '---',
+  '',
+  'Persona.',
+  ''
+].join('\n')
+
+const VALID_VERDICT = (kind: string): string =>
+  `Parse check: ShuviX parses this document as a valid ${kind} file.`
+const INVALID_HEAD = (file: string): string =>
+  `Parse check: ShuviX cannot parse this document as ${file}, so it is ignored until it is fixed:\n- `
+const WARNED_HEAD = (kind: string): string =>
+  `Parse check: ShuviX parses this document as a valid ${kind} file, with warnings:\n- `
+
+/** 输出里从 `Parse check:` 起的那一块（它总在最后）；没有就是 null */
+const verdictIn = (out: string): string | null => {
+  const at = out.indexOf('Parse check:')
+  return at < 0 ? null : out.slice(at)
+}
+
+describe('PV doc_read 附带此刻的解析判定', () => {
+  it('PV-0 样本自检：合法策略带自述行与规则，非法那份确实去掉了规则', () => {
+    expect(VALID_POLICY).toContain('shuvix: policy v1')
+    expect(VALID_POLICY).toContain('shuvix-policy-rules:')
+    expect(INVALID_POLICY).not.toContain('shuvix-policy-rules:')
+    expect(INVALID_POLICY.startsWith('---\nshuvix: policy v1\n')).toBe(true)
+    expect(withoutMarker(VALID_POLICY)).not.toMatch(/^shuvix: /m)
+    expect(withoutMarker(VALID_POLICY)).toContain('shuvix-id: ')
+  })
+
+  it('PV-1 合法策略（策略载体）：最后一块恰是「valid policy file.」，排在用户那句与 diff 之后；磁盘回落的读排在「没开着」之后', async () => {
+    mocks.doc = '/x/policies/ask-on-widget-access.md'
+    mocks.kind = 'policy'
+
+    const out = await readWith(readResult(VALID_POLICY))
+    expect(out.endsWith(`\n\n${VALID_VERDICT('policy')}`)).toBe(true)
+    expect(out.indexOf('The user:')).toBeLessThan(out.indexOf('Parse check:'))
+    expect(out.split('Parse check:')).toHaveLength(2)
+
+    const patch = '@@ -1,1 +1,1 @@\n-old\n+new'
+    const withChanges = await readWith(readResult(VALID_POLICY, { userChanges: patch }))
+    expect(
+      withChanges.endsWith(`\n</user_edits_since_your_last_read>\n\n${VALID_VERDICT('policy')}`)
+    ).toBe(true)
+
+    // 磁盘回落交回的读结果没有 user：判定接在「没开着」那句之后
+    const disk = await readWith({ ok: true, kind: 'read', text: VALID_POLICY })
+    expect(disk.endsWith(`\n\n${NOT_OPEN}\n\n${VALID_VERDICT('policy')}`)).toBe(true)
+  })
+
+  it('PV-2 载体说了算：策略载体里没写 `shuvix:` 自述行的策略照样是合法策略', async () => {
+    mocks.doc = '/x/policies/mine.md'
+    mocks.kind = 'policy'
+    const out = await readWith(readResult(withoutMarker(VALID_POLICY)))
+    expect(verdictIn(out)).toBe(VALID_VERDICT('policy'))
+  })
+
+  it('PV-3 非法策略：「cannot parse … as a policy file」+ 逐条 `- ` 原因', async () => {
+    mocks.doc = '/x/policies/mine.md'
+    mocks.kind = 'policy'
+    const verdict = verdictIn(await readWith(readResult(INVALID_POLICY)))
+    expect(verdict).not.toBeNull()
+    expect(verdict!.startsWith(INVALID_HEAD('a policy file'))).toBe(true)
+    const lines = verdict!.split('\n').slice(1)
+    expect(lines.length).toBeGreaterThan(0)
+    for (const line of lines) expect(line.startsWith('- '), line).toBe(true)
+    expect(verdict).not.toContain('(the parser gave no reason)')
+  })
+
+  it('PV-3b 非法 agent：冠词是 an —— 「as an agent file」，从不写成「a agent」', async () => {
+    mocks.doc = '/x/agents/a1.md'
+    mocks.kind = 'agent'
+    const verdict = verdictIn(await readWith(readResult(BROKEN_AGENT)))
+    expect(verdict!.startsWith(INVALID_HEAD('an agent file'))).toBe(true)
+    expect(verdict).not.toContain('a agent')
+  })
+
+  it.each([
+    ['hook', '/x/hooks/watcher.md', HOOK_UNKNOWN_TRIGGER, 'no.such.trigger'],
+    ['bot', '/x/bots/buddy.md', BOT_V1_PIPELINE, 'shuvix-bot-pipeline']
+  ])(
+    'PV-4 合法但有警告（%s）→ 「valid … file, with warnings:」+ 解析器的原话',
+    async (kind, doc, text, mention) => {
+      mocks.doc = doc
+      mocks.kind = kind
+      const verdict = verdictIn(await readWith(readResult(text)))
+      expect(verdict!.startsWith(WARNED_HEAD(kind))).toBe(true)
+      expect(verdict).toContain(mention)
+    }
+  )
+
+  it('PV-5 解析器判非法却没给原因 → 「- (the parser gave no reason)」', async () => {
+    mocks.doc = '/x/policies/mine.md'
+    mocks.kind = 'policy'
+    mocks.validate = () => ({ status: 'invalid', messages: [] })
+    const verdict = verdictIn(await readWith(readResult(VALID_POLICY)))
+    expect(verdict).toBe(`${INVALID_HEAD('a policy file')}(the parser gave no reason)`)
+  })
+
+  it('PV-6 载体不是 ShuviX 文件（普通项目的笔记）→ 按文件自己的标记兜底：写坏的 agent md 判成非法 agent', async () => {
+    mocks.doc = '/proj/notes/a1.md'
+    mocks.kind = null
+    const verdict = verdictIn(await readWith(readResult(BROKEN_AGENT)))
+    expect(verdict!.startsWith(INVALID_HEAD('an agent file'))).toBe(true)
+  })
+
+  it.each([
+    ['普通 md', null, '# Plain\n\nbody\n'],
+    [
+      '知识库条目（okf 标记）',
+      null,
+      '---\nshuvix: okf v0.2\ntype: Memory\ntitle: T\n---\n\nbody\n'
+    ],
+    [
+      '记忆 md',
+      null,
+      '---\nshuvix: memory v1\nname: x\ndescription: d\nshuvix-memory-recall: r\n---\nbody\n'
+    ],
+    ['技能载体里的写坏 agent md', 'skill', BROKEN_AGENT],
+    ['知识库载体里的写坏 agent md', 'knowledge', BROKEN_AGENT]
+  ])('PV-7 不判：%s → 没有 Parse check', async (_label, kind, text) => {
+    mocks.doc = '/x/docs/a.md'
+    mocks.kind = kind
+    const out = await readWith(readResult(text))
+    expect(out).not.toContain('Parse check')
+  })
+
+  it.each([
+    ['策略载体', 'policy', INVALID_POLICY],
+    ['标记兜底', null, BROKEN_AGENT]
+  ])('PV-7b 文档不是 md（%s）→ 没有 Parse check', async (_label, kind, text) => {
+    mocks.doc = '/x/a.txt'
+    mocks.kind = kind
+    expect(await readWith(readResult(text))).not.toContain('Parse check')
+  })
+
+  it('PV-8 载体胜过标记：策略载体里的一份 agent md 按策略判 —— 非法，说的是 policy file', async () => {
+    mocks.doc = '/x/policies/a1.md'
+    mocks.kind = 'policy'
+    const verdict = verdictIn(await readWith(readResult(VALID_AGENT)))
+    expect(verdict!.startsWith(INVALID_HEAD('a policy file'))).toBe(true)
+    expect(verdict!.split('\n')[0]).not.toContain('agent')
+  })
+
+  it('PV-9 判定按全文：frontmatter 越过 200000 字符的策略，读回被截断，判定照样是合法策略', async () => {
+    mocks.doc = '/x/policies/big.md'
+    mocks.kind = 'policy'
+    const big = VALID_POLICY.replace(
+      /^description: .*$/m,
+      `description: ${'long description '.repeat(12_000).trim()}`
+    )
+    // 自检：frontmatter 的结束行确实在截断点之后
+    expect(big.indexOf('\n---\n', 4)).toBeGreaterThan(200_000)
+    const out = await readWith(readResult(big))
+    expect(out).toContain('(Truncated after 200000 characters.)')
+    expect(verdictIn(out)).toMatch(
+      /^Parse check: ShuviX parses this document as a valid policy file/
+    )
+  })
+
+  it.each([
+    [
+      '种类查询抛错',
+      (): void => {
+        mocks.doc = '/x/policies/mine.md'
+        mocks.kindThrows = true
+      }
+    ],
+    [
+      '解析器抛错',
+      (): void => {
+        mocks.doc = '/x/policies/mine.md'
+        mocks.kind = 'policy'
+        mocks.validate = () => {
+          throw new Error('parser crashed')
+        }
+      }
+    ],
+    [
+      '会话没有文档（桥照样交回了全文）',
+      (): void => {
+        mocks.doc = null
+      }
+    ]
+  ])('PV-10 判定出错只是没有这句（%s）：读本身成功', async (_label, arrange) => {
+    arrange()
+    // readWith → run() 断言了不是 isError
+    const out = await readWith(readResult(BROKEN_AGENT))
+    expect(out).toContain('</document>')
+    expect(out).not.toContain('Parse check')
+  })
+
+  it("PV-11 解析器拿到的名字是去掉扩展名的文件名：原因里写 `agent 'my-agent'`", async () => {
+    mocks.doc = '/x/agents/my-agent.md'
+    mocks.kind = 'agent'
+    const verdict = verdictIn(await readWith(readResult(BROKEN_AGENT)))
+    expect(verdict).toContain("agent 'my-agent'")
+    expect(verdict).not.toContain('my-agent.md')
+  })
+
+  it('PV-12 formatReadResult：判定为空（null / undefined / 空串）与不传一样；否则接在最后、隔一个空行', () => {
+    const result = { ok: true as const, kind: 'read' as const, text: 'x', user: user() }
+    const bare = mod.formatReadResult(result)
+    for (const v of [null, undefined, '']) expect(mod.formatReadResult(result, v)).toBe(bare)
+    expect(mod.formatReadResult(result, 'Parse check: X')).toBe(`${bare}\n\nParse check: X`)
+    const disk = { ok: true as const, kind: 'read' as const, text: 'x' }
+    expect(mod.formatReadResult(disk, 'V')).toBe(`${mod.formatReadResult(disk)}\n\nV`)
+  })
+
+  it('PV-13 守护：提示词说「doc_read 会说能不能解析」的种类 = parseVerdictOf 真给判定的种类', () => {
+    const kinds = Object.keys({
+      agent: true,
+      bot: true,
+      policy: true,
+      hook: true,
+      skill: true,
+      knowledge: true
+    } satisfies Record<ShuvixFileKind, true>) as ShuvixFileKind[]
+    let promised = 0
+    for (const kind of kinds) {
+      mocks.kind = kind
+      const promises = renderDocumentKind('en', { kind }).includes('doc_read')
+      const verdict = mod.parseVerdictOf(SID, '/x/minimal.md', '# minimal\n')
+      expect(verdict !== null, kind).toBe(promises)
+      if (promises) promised++
+    }
+    // 正控制组：两个方向都走到了
+    expect(promised).toBe(4)
+  })
+})
+
+describe('RC 编辑回执按承载项目校正', () => {
+  const CONTEXT = '1│---\n2│x'
+  const HEAD = `Replaced at line 1. The text there now:\n${CONTEXT}`
+  const INSERT_HEAD = `Inserted at line 1. The text there now:\n${CONTEXT}`
+  /** 跑一次 doc_edit（或 doc_insert），编辑器交回改动后的全文 text；回工具输出 */
+  async function changeWith(text: string, kind: 'edit' | 'insert' = 'edit'): Promise<string> {
+    mocks.request.mockResolvedValueOnce({
+      ok: true,
+      kind,
+      line: 1,
+      context: CONTEXT,
+      waitedMs: 0,
+      text
+    })
+    return kind === 'edit'
+      ? run(editTool(), { find: 'a', replace: 'b' })
+      : run(insertTool(), { text: 'b' })
+  }
+  /** LD-1 那份原回执的开头（写后处理按 agent 标记判） */
+  const AGENT_RECEIPT = `${HEAD}\n\n[shuvix agent v1] The document was changed, but it is INVALID and will be ignored until fixed:\n- `
+
+  it('RC-1 策略载体里没写标记的策略，改坏了 → 回执是「cannot parse … as a policy file」', async () => {
+    mocks.doc = '/x/policies/mine.md'
+    mocks.kind = 'policy'
+    const out = await changeWith(withoutMarker(INVALID_POLICY))
+    expect(out.startsWith(`${HEAD}\n\n${INVALID_HEAD('a policy file')}`)).toBe(true)
+    expect(out).not.toContain('[shuvix')
+  })
+
+  it('RC-2 同样没写标记，改完仍合法、没有警告 → 不附回执', async () => {
+    mocks.doc = '/x/policies/mine.md'
+    mocks.kind = 'policy'
+    const out = await changeWith(withoutMarker(VALID_POLICY))
+    expect(out).toBe(HEAD)
+    expect(out).not.toContain('Parse check')
+    expect(out).not.toContain('[shuvix')
+  })
+
+  it('RC-3 策略载体里的文本带着 agent 标记 → 按策略判（不是 agent 标记那份回执）', async () => {
+    mocks.doc = '/x/policies/a1.md'
+    mocks.kind = 'policy'
+    const out = await changeWith(BROKEN_AGENT)
+    expect(out.startsWith(`${HEAD}\n\n${INVALID_HEAD('a policy file')}`)).toBe(true)
+    expect(out).not.toContain('[shuvix agent')
+  })
+
+  it('RC-4 标记与载体一致（policy v1），改坏了 → 原样是写后处理那份 `[shuvix policy v1] … INVALID` 回执', async () => {
+    mocks.doc = '/x/policies/mine.md'
+    mocks.kind = 'policy'
+    const out = await changeWith(INVALID_POLICY)
+    expect(
+      out.startsWith(
+        `${HEAD}\n\n[shuvix policy v1] The document was changed, but it is INVALID and will be ignored until fixed:\n- `
+      )
+    ).toBe(true)
+    expect(out).not.toContain('Parse check')
+  })
+
+  it.each([
+    ['载体不是 ShuviX 文件', null],
+    ['技能载体（不归真解析）', 'skill']
+  ])('RC-5 %s → 原回执（LD-1 那份）', async (_label, kind) => {
+    mocks.doc = '/proj/agents/a1.md'
+    mocks.kind = kind
+    const out = await changeWith(BROKEN_AGENT)
+    expect(out.startsWith(AGENT_RECEIPT)).toBe(true)
+    expect(out).not.toContain('Parse check')
+  })
+
+  it('RC-7 种类查询抛错 → 原回执', async () => {
+    mocks.doc = '/proj/agents/a1.md'
+    mocks.kindThrows = true
+    const out = await changeWith(BROKEN_AGENT)
+    expect(out.startsWith(AGENT_RECEIPT)).toBe(true)
+    expect(out).not.toContain('Parse check')
+  })
+
+  it.each([
+    ['agent', '/x/agents/a1.md', VALID_AGENT],
+    ['policy', '/x/policies/mine.md', VALID_POLICY]
+  ])(
+    'PV-14 标记与载体一致（%s）、改完合法：doc_edit / doc_insert 都不附回执，更不会出现「valid … file.」那句',
+    async (kind, doc, text) => {
+      mocks.doc = doc
+      mocks.kind = kind
+      const edited = await changeWith(text, 'edit')
+      expect(edited).toBe(HEAD)
+      const inserted = await changeWith(text, 'insert')
+      expect(inserted).toBe(INSERT_HEAD)
+      for (const out of [edited, inserted]) {
+        expect(out).not.toContain('Parse check')
+        expect(out).not.toContain(VALID_VERDICT(kind))
+      }
+    }
+  )
 })
 
 describe('T6 交给编辑器之前过会话权限表', () => {

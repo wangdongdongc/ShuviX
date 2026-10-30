@@ -26,6 +26,10 @@
  * 编号变动（2026-09-24）：PVW-3 / 5 / 6 / 7 / 8 同号改写（技能不在架时的期望从「手艺常驻」变成
  * 「空串」）；新增 PVW-16（引用处在空串下收敛干净）与 PVW-17（组装出的提示里没有契约）。
  *
+ *  4. `{{shuvix:documentKind}}`（PVW-DK1…DK6，2026-10-30）只给根会话：按会话的**承载项目**判文档是哪种
+ *     ShuviX 文件（chat-protocol `shuvixFileKindOfProject`），说明书目录取 knowledge 的 `builtinManualDir()`，
+ *     名单里有 `read` 才指路；不是 ShuviX 文件 → 空串，notebook 正文里那一段整块收敛。
+ *
  * P1-11 起变量表是 agentHost 直接导出的 `desktopPromptVars`（会话核心在冻结人设时调它），这里直接
  * 调它（旧的创建工厂已由 P2-13 删掉）。其余 mock 只为让模块能加载（dao 会开 SQLite，
  * electron / mcp 在 node 下起不来）；skillService 必须桩成可控的 findModelInvocable —— 真服务的构造函数会去碰
@@ -41,6 +45,8 @@ const mocks = vi.hoisted(() => ({
   projectPick: vi.fn(),
   findEnabled: vi.fn(),
   findModelInvocable: vi.fn(),
+  /** builtinManualDir 的答复：内置说明书当前语言那一版的目录（null = 这台机器上没有）；每条用例复位 */
+  manualDir: '/fixture/knowledge/shuvix/en' as string | null,
   /** Windows 上解析出的 PowerShell 版本（PVW-S*）；null = 用真的 getPowerShellConfig */
   psConfig: null as null | { exe: string; edition: 'pwsh' | 'windows-powershell' }
 }))
@@ -74,7 +80,10 @@ vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: vi.fn(),
   resolveProjectConfig: vi.fn()
 }))
-vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
+vi.mock('../../services/knowledge', () => ({
+  enabledBaseChoices: () => [],
+  builtinManualDir: () => mocks.manualDir
+}))
 vi.mock('../AgentTool', () => ({ createAgentTool: vi.fn() }))
 vi.mock('../../utils/toolUtils/shell', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../utils/toolUtils/shell')>()
@@ -88,9 +97,11 @@ import i18next from 'i18next'
 import {
   buildBuiltinProfiles,
   normalizeToolNames,
+  renderDocumentKind,
   renderProfileSystemPrompt,
   type AgentProfile
 } from '@shuvix/agent-runtime'
+import type { ShuvixFileKind } from '@shuvix/chat-protocol/shuvixFileNotes'
 import { createInlineMdReader } from '@shuvix/agent-runtime/builtinAgents/inlineSources'
 import { desktopPromptVars } from '../agentHost'
 
@@ -172,6 +183,7 @@ beforeEach(() => {
   // 缺省：内置作图技能随包在架、没被停用、模型可调用
   mocks.findEnabled.mockReturnValue([BUILTIN])
   mocks.findModelInvocable.mockReturnValue([BUILTIN])
+  mocks.manualDir = '/fixture/knowledge/shuvix/en'
 })
 
 describe('desktopPromptVars —— 占位符覆盖', () => {
@@ -634,5 +646,137 @@ describe('desktopPromptVars —— 锁的名单形态（H11-62）', () => {
     expect(disabled.visualGuide).not.toContain(POINTER)
     expect(disabled.visualGuide).not.toContain(ADOPT)
     expect(disabled.visualGuide).not.toContain('```interactive')
+  })
+})
+
+/**
+ * `{{shuvix:documentKind}}`（PVW-DK1…DK6）—— 笔记本会话的文档是 ShuviX 文件时说这是什么文件、规范在说明书哪一条。
+ * 判定按会话的承载项目（sessionDao.pick 的 projectId），说明书目录取 knowledge 的 builtinManualDir()（替身
+ * 给 `/fixture/knowledge/shuvix/en`），名单里有 `read` 才指路。
+ */
+describe('desktopPromptVars —— 文档是哪种 ShuviX 文件（PVW-DK）', () => {
+  const MANUAL = '/fixture/knowledge/shuvix/en'
+  /** 承载项目 → 种类 → 说明书条目（显式抄一份：这里钉的是接线，不复用被测的判定） */
+  const CARRIERS: Array<[projectId: string, kind: ShuvixFileKind, files: string[]]> = [
+    ['__bots__', 'bot', ['bot-md.md']],
+    ['__agents__', 'agent', ['agent-md.md']],
+    ['__agents_builtin__', 'agent', ['agent-md.md']],
+    ['__policies__', 'policy', ['policy-md.md', 'network-policy.md', 'redaction.md']],
+    ['__policies_builtin__', 'policy', ['policy-md.md', 'network-policy.md', 'redaction.md']],
+    ['__hooks__', 'hook', ['hook-md.md']],
+    ['__hooks_builtin__', 'hook', ['hook-md.md']],
+    ['__skills__', 'skill', ['skills.md']],
+    ['__skills_builtin__', 'skill', ['skills.md']],
+    ['__skills:ext__', 'skill', ['skills.md']],
+    ['__knowledge__', 'knowledge', ['knowledge-entry.md']],
+    ['__knowledge_user__', 'knowledge', ['knowledge-entry.md']],
+    ['__knowledge_builtin__', 'knowledge', ['knowledge-entry.md']]
+  ]
+  const WITH_READ = ['doc_read', 'read', 'skill']
+
+  it.each(CARRIERS)(
+    'PVW-DK1 根会话、名单有 read，承载项目 %s → %s：自含块、点到说明书条目、与片段直接渲染逐字相同；按本会话查 projectId',
+    async (projectId, kind, files) => {
+      mocks.pick.mockReturnValue({ projectId })
+      const vars = await varsFor({ kind: 'root', toolNames: WITH_READ })
+      expect(vars.documentKind.startsWith('## ')).toBe(true)
+      for (const file of files) expect(vars.documentKind).toContain(`${MANUAL}/${file}`)
+      expect(vars.documentKind).toBe(
+        renderDocumentKind('en', { kind, manualDir: MANUAL, read: true })
+      )
+      expect(mocks.pick).toHaveBeenCalledWith(SID, expect.arrayContaining(['projectId']))
+    }
+  )
+
+  it.each([
+    ['普通项目', { projectId: 'proj-1' }],
+    ['无项目', { projectId: null }],
+    ['会话行不存在', undefined],
+    ['日报', { projectId: '__daily__' }],
+    ['跟踪项', { projectId: '__tracking__' }]
+  ])(
+    'PVW-DK2 不是 ShuviX 文件（%s）→ documentKind 是空串（照样是字符串，占位符整块消失）',
+    async (_label, row) => {
+      mocks.pick.mockReturnValue(row)
+      const vars = await varsFor({ kind: 'root', toolNames: WITH_READ })
+      expect(vars.documentKind).toBe('')
+    }
+  )
+
+  it('PVW-DK3 名单没有 read，或这台机器上没有说明书 → 仍说这是什么文件，但不指路', async () => {
+    mocks.pick.mockReturnValue({ projectId: '__policies__' })
+    const withoutRead = await varsFor({ kind: 'root', toolNames: ['doc_read', 'doc_edit'] })
+    expect(withoutRead.documentKind.startsWith('## ')).toBe(true)
+    expect(withoutRead.documentKind).not.toContain('/fixture/')
+    expect(withoutRead.documentKind).not.toContain('<<manual>>')
+
+    mocks.manualDir = null
+    const noManual = await varsFor({ kind: 'root', toolNames: WITH_READ })
+    expect(noManual.documentKind.startsWith('## ')).toBe(true)
+    expect(noManual.documentKind).not.toContain('/fixture/')
+    expect(noManual.documentKind).not.toContain('<<manual>>')
+    // 两种缺席是同一个结果：「不指一份读不到的文件」
+    expect(noManual.documentKind).toBe(withoutRead.documentKind)
+  })
+
+  it('PVW-DK4 派生 agent：不供 documentKind（同 notebookPath —— 派生 ctx.sessionId 是 agentId），承载项目再像也一样', async () => {
+    mocks.pick.mockReturnValue({ projectId: '__policies__' })
+    const vars = await varsFor({
+      kind: 'spawned',
+      sessionId: 'agent-1',
+      cwd: '',
+      toolNames: WITH_READ
+    })
+    expect(vars.documentKind).toBeUndefined()
+    expect('documentKind' in vars).toBe(false)
+  })
+
+  it('PVW-DK5 界面语言 zh：取中文那一版的片段，说明书路径照旧用宿主给的目录', async () => {
+    mocks.pick.mockReturnValue({ projectId: '__hooks__' })
+    const vars = await inLanguage('zh', () => varsFor({ kind: 'root', toolNames: WITH_READ }))
+    expect(vars.documentKind.startsWith('## 这份文档是什么')).toBe(true)
+    expect(vars.documentKind).toContain(`${MANUAL}/hook-md.md`)
+  })
+
+  it('PVW-DK6 notebook 档案 × 三语言组装：ShuviX 文件 → 那一块落在身份那段与下一个小标题之间；不是 → 身份那段之后隔一个空行就是下一个小标题', async () => {
+    const placeholder = '{{shuvix:documentKind}}'
+    let checked = 0
+    for (const language of LANGUAGES) {
+      await inLanguage(language, async () => {
+        const notebook = builtins(language).find((p) => p.name === 'notebook')!
+        const ps = notebook.systemPrompt
+          .split(/\n[ \t]*\n/)
+          .map((p) => p.trim())
+          .filter(Boolean)
+        const at = ps.indexOf(placeholder)
+        expect(at, `${language}：占位符应当独占一段`).toBeGreaterThan(0)
+        expect(ps[at + 1].startsWith('## '), language).toBe(true)
+        // 身份那段自己也引用占位符（notebookPath）：按同一份变量表代入后再比
+        const around = (vars: PromptVars): [string, string] => [
+          renderProfileSystemPrompt({ systemPrompt: ps[at - 1] }, vars),
+          renderProfileSystemPrompt({ systemPrompt: ps[at + 1] }, vars)
+        ]
+
+        mocks.pick.mockReturnValue({ projectId: '__policies__' })
+        const carrierVars = await varsFor({ kind: 'root', toolNames: notebook.tools })
+        expect(carrierVars.documentKind, language).not.toBe('')
+        const carrier = renderProfileSystemPrompt(notebook, carrierVars)
+        const [identity, next] = around(carrierVars)
+        expect(carrier, language).toContain(`${identity}\n\n${carrierVars.documentKind}\n\n${next}`)
+        expect(carrier, language).not.toContain('{{shuvix:')
+        expect(carrier, language).not.toMatch(/\n{3,}/)
+
+        mocks.pick.mockReturnValue({ projectId: 'proj-1' })
+        const plainVars = await varsFor({ kind: 'root', toolNames: notebook.tools })
+        expect(plainVars.documentKind, language).toBe('')
+        const plain = renderProfileSystemPrompt(notebook, plainVars)
+        const [plainIdentity, plainNext] = around(plainVars)
+        expect(plain, language).not.toContain('{{shuvix:')
+        expect(plain, language).not.toMatch(/\n{3,}/)
+        expect(plain, language).toContain(`${plainIdentity}\n\n${plainNext}`)
+        checked++
+      })
+    }
+    expect(checked).toBe(3)
   })
 })

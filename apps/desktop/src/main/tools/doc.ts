@@ -29,6 +29,7 @@ import {
   restoreLineEndings,
   reviewShuvixMdWrite,
   stripBom,
+  validateShuvixMdText,
   writeFileContent
 } from '@shuvix/agent-runtime'
 import { BUILTIN_TOOL_PRESENTATIONS } from '@shuvix/chat-protocol/builtinToolPresentations'
@@ -42,10 +43,13 @@ import {
   type LiveDocResult,
   type LiveDocUserContext
 } from '@shuvix/chat-protocol/liveDocument'
+import { detectShuvixMarker } from '@shuvix/chat-protocol/shuvixMdContract'
+import { isParsedShuvixFileKind, type ShuvixFileKind } from '@shuvix/chat-protocol/shuvixFileNotes'
 import { registerBuiltinTool } from '../services/toolRegistry'
 import {
   getDesktopSecurityContext,
   resolveSessionDocument,
+  sessionDocumentKind,
   TOOL_ABORTED,
   type ToolContext
 } from '../services/toolContext'
@@ -59,11 +63,15 @@ import { t } from '../i18n'
 /** 一次读回来的正文上限（字符）—— md 文档很少到这个量级，到了就截断并说明 */
 const MAX_READ_CHARS = 200_000
 
+const MARKDOWN_RE = /\.(md|markdown|mdx)$/i
+
 // ─── 描述与参数 ──────────────────────────────────────────
 
 const DOC_READ_DESCRIPTION = `Read this notebook's document exactly as it is right now — when the user has it open in an editor, that includes what they typed a moment ago and have not saved. Lines are numbered for reference only (the prefix is not part of the text).
 
 When it is open in an editor, also reports where the user is: the line and section their cursor is in, their selection, the lines on their screen, how long since they last typed, and the edits made since your previous doc_read — by the user, or by another program that changed the file (your own edits are not listed).
+
+When the document is a ShuviX agent, bot, policy or hook file, also says whether ShuviX can parse it right now, and why not.
 
 Call it before your first edit and whenever you need text you have not seen since. Never use \`read\` on this document: the file on disk can lag behind the editor.`
 
@@ -143,7 +151,11 @@ function formatAgo(ms: number): string {
 const NOT_OPEN_NOTE =
   'The document is not open in an editor right now: this is the saved file, and your changes are written to it directly.'
 
-export function formatReadResult(result: Extract<LiveDocResult, { kind: 'read' }>): string {
+export function formatReadResult(
+  result: Extract<LiveDocResult, { kind: 'read' }>,
+  /** 契约 md 此刻的解析判定（parseVerdictOf）；不是契约 md 就没有 */
+  verdict?: string | null
+): string {
   let text = result.text
   let note = ''
   if (text.length > MAX_READ_CHARS) {
@@ -160,7 +172,71 @@ export function formatReadResult(result: Extract<LiveDocResult, { kind: 'read' }
       `<user_edits_since_your_last_read>\n${result.userChanges}\n</user_edits_since_your_last_read>`
     )
   }
+  if (verdict) blocks.push(verdict)
   return blocks.join('\n\n')
+}
+
+/** 按某一种契约解析全文：判定那段话，以及它是不是「没事」（合法且没有警告） */
+function judgeDocument(
+  kind: ShuvixFileKind,
+  doc: string,
+  text: string
+): { text: string; clean: boolean } {
+  const validation = validateShuvixMdText(kind, text, basename(doc).replace(MARKDOWN_RE, ''))
+  const reasons = (messages: string[]): string =>
+    (messages.length ? messages : ['(the parser gave no reason)']).map((m) => `- ${m}`).join('\n')
+  if (validation.status === 'invalid') {
+    const file = `${kind === 'agent' ? 'an' : 'a'} ${kind} file`
+    return {
+      clean: false,
+      text: `Parse check: ShuviX cannot parse this document as ${file}, so it is ignored until it is fixed:\n${reasons(validation.messages)}`
+    }
+  }
+  if (validation.messages.length > 0) {
+    return {
+      clean: false,
+      text: `Parse check: ShuviX parses this document as a valid ${kind} file, with warnings:\n${reasons(validation.messages)}`
+    }
+  }
+  return { clean: true, text: `Parse check: ShuviX parses this document as a valid ${kind} file.` }
+}
+
+/**
+ * doc_read 附带的那句判定：文档是宿主据以运行的契约 md 时，说 ShuviX 此刻能不能解析它（以及解析器的警告）。
+ * 编辑之后的回执早就有（liveDiagnostics / 写后处理），缺的是**动手之前** —— 用户问「我这条策略怎么没生效」，
+ * agent 一读就该知道文件根本解析不过、原因是哪句，而不是先改一刀才看到。
+ *
+ * 种类先看承载项目（策略目录里的文件就按策略判 —— 标记在读时可选，没写标记照样生效；写到一半标记
+ * 也可能暂时没了），不是 ShuviX 文件的载体再看文件自己的 `shuvix:` 标记。校验的是全文（读回的正文可能被截断）。
+ */
+export function parseVerdictOf(sessionId: string, doc: string, text: string): string | null {
+  if (!MARKDOWN_RE.test(doc)) return null
+  const kind = sessionDocumentKind(sessionId) ?? detectShuvixMarker(text)?.type ?? null
+  if (!isParsedShuvixFileKind(kind)) return null
+  return judgeDocument(kind, doc, text).text
+}
+
+/**
+ * 编辑回执按承载项目校正：写后处理（reviewShuvixMdWrite）只认文件自己的标记，而策略 / hook / agent / bot
+ * 目录里的文件没写标记照样生效 —— 标记缺了或是别家的契约时，回执会按错的身份判（或什么都不说），笔记本
+ * 提示词却告诉 agent「每次改动都会说它还能不能解析」。这时换成按承载项目那一种判，照回执的老规矩
+ * 没事不吭声；标记与承载项目一致就原样交回写后处理的那段话。判定出错时也原样交回 —— 回执只是附言。
+ */
+function receiptForCarrier(
+  sessionId: string,
+  doc: string,
+  text: string,
+  note: string | null
+): string | null {
+  try {
+    const kind = sessionDocumentKind(sessionId)
+    if (!isParsedShuvixFileKind(kind) || !MARKDOWN_RE.test(doc)) return note
+    if (detectShuvixMarker(text)?.type === kind) return note
+    const verdict = judgeDocument(kind, doc, text)
+    return verdict.clean ? null : verdict.text
+  } catch {
+    return note
+  }
 }
 
 function formatWriteResult(
@@ -175,8 +251,6 @@ function formatWriteResult(
   const text = `${verb} at line ${result.line}${waited}. The text there now:\n${result.context}`
   return note ? `${text}\n\n${note}` : text
 }
-
-const MARKDOWN_RE = /\.(md|markdown|mdx)$/i
 
 /** 这条会话的文档；不是笔记本会话就抛（doc_* 只认这一份） */
 function sessionDocument(ctx: ToolContext): string {
@@ -298,7 +372,11 @@ abstract class DocTool<
     if (!result.ok) throw new Error(result.error)
     if (result.kind === 'read') return { result, note: null }
     const note = diskNote !== undefined ? diskNote : liveDiagnostics(this.ctx, result.text, call)
-    return { result, note }
+    const doc = resolveSessionDocument(this.ctx.sessionId)
+    return {
+      result,
+      note: doc ? receiptForCarrier(this.ctx.sessionId, doc, result.text, note) : note
+    }
   }
 
   /** 磁盘回落：同一套定位规则，写入走 write 工具同一条流程 */
@@ -350,7 +428,16 @@ export class DocReadTool extends DocTool<typeof DocReadParamsSchema> {
   ): Promise<ToolResult<undefined>> {
     const { result } = await this.run({ kind: 'read' }, toolCallId, signal, call)
     if (result.kind !== 'read') throw new Error('Unexpected answer from the document editor.')
-    return { content: [{ type: 'text', text: formatReadResult(result) }], details: undefined }
+    let verdict: string | null = null
+    try {
+      verdict = parseVerdictOf(this.ctx.sessionId, sessionDocument(this.ctx), result.text)
+    } catch {
+      /* 判定只是附言：解析器抛错不该让一次读失败 */
+    }
+    return {
+      content: [{ type: 'text', text: formatReadResult(result, verdict) }],
+      details: undefined
+    }
   }
 }
 

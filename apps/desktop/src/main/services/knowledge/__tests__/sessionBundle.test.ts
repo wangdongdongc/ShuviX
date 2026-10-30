@@ -13,6 +13,10 @@
  * 内置库（SB-19..27），同名的用户目录都够不着。
  * `sessionBundle` 本身仍然只回答「本会话所属项目的库是哪一个」，不判断目录建没建过（读宽）。
  *
+ * **内置说明书对 ShuviX 文件的笔记本也是隐式的**（2026-10-30，SB-M1..M8）：会话挂在安全策略 / hook / 智能体 /
+ * bot / 技能 / 知识库的承载项目下（chat-protocol `shuvixFileKindOfProject`），`shuvix` 就恒启用、排在用户圈定的
+ * 库之前，不归选择管（`[]` 也一样），配置卡里也不再列它；日报 / 跟踪项与普通会话照旧。
+ *
  * dao 是替身（这里不验 SQL），路径与目录清单用真的。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -51,7 +55,9 @@ vi.mock('../../../dao/sessionDao', () => ({
 
 import { projectDao } from '../../../dao/projectDao'
 import { sessionDao } from '../../../dao/sessionDao'
+import { skillExternalProjectId } from '@shuvix/chat-protocol/skillNotes'
 import {
+  builtinManualDir,
   enabledBaseChoices,
   knowledgeBaseOptions,
   listBases,
@@ -921,7 +927,9 @@ describe('SB-P1..P10 隐式的项目库', () => {
     expect(await resolveBase('s1', 'notes')).toEqual(notInBases('notes', '"project"'))
   })
 
-  it('SB-P10 隐藏载体项目不算项目：没有隐式的项目库，点名 project 回 NO_PROJECT', async () => {
+  it('SB-P10 隐藏载体项目不算项目：没有隐式的项目库，点名 project 回 NO_PROJECT（这里没种内置说明书 —— 载体隐式带的说明书见 SB-M）', async () => {
+    // 这几个载体都是 ShuviX 文件的笔记本，会隐式启用内置说明书 `shuvix`；这条只钉「没有项目库」，所以不种内置库，
+    // 启用清单因此是空的（种了内置库的情形见 SB-M1）
     seedBases('notes')
     for (const hidden of ['__agents__', '__knowledge__', '__bots__']) {
       // 载体项目行在库里是真有的 —— 判据是「隐藏」，不是「找不到」
@@ -938,5 +946,221 @@ describe('SB-P1..P10 隐式的项目库', () => {
       expect(await baseNames(), hidden).toEqual(['notes'])
     }
     expect(existsSync(join(root, PROJECTS))).toBe(false)
+  })
+})
+
+/**
+ * ShuviX 文件笔记本隐式启用内置说明书（SB-M1..M8，2026-10-30）。四条主线：
+ *   - 会话挂在 ShuviX 文件的承载项目下（策略 / agent / bot / hook / 技能 / 知识库，含内置的只读载体）→ `shuvix`
+ *     恒启用、排在用户圈定的库之前，与各级选择无关（`[]` 也一样）；选择里也写了 `shuvix` 不重复。
+ *   - 内置库不在（开发期没拷资源）→ 隐式的那份也没有，别的库照常，不建任何目录。
+ *   - 载体之外（普通项目、无项目、日报、跟踪项）照旧：不勾就没有。
+ *   - 配置卡在载体会话里不列 `shuvix`（恒启用，列成没勾的选项只会误导）；`selected` 仍是原样的选择。
+ */
+describe('SB-M ShuviX 文件笔记本隐式启用内置说明书', () => {
+  const BUILTIN_LABEL = 'ShuviX reference (read-only)'
+  const BUILTIN_NOTE = 'read-only: search and read it, never write or submit here'
+  const BUILTIN_DISPLAY_NAME = 'i18n(knowledge.builtinBaseName)'
+  /** 几种 ShuviX 文件的载体（注册表、内置注册表、技能外部目录、知识库用户库） */
+  const CARRIERS = [
+    '__policies__',
+    '__agents_builtin__',
+    '__bots__',
+    skillExternalProjectId('ext'),
+    '__knowledge_user__'
+  ]
+
+  const seedBases = (...names: string[]): string => {
+    const userRoot = userRootOf(root)
+    for (const name of names) mkdirSync(join(userRoot, name), { recursive: true })
+    return userRoot
+  }
+  const builtinDir = (lang = 'en'): string => builtinLangAt(root, 'shuvix', lang)
+  const seedBuiltinBase = (lang = 'en'): string => {
+    mkdirSync(builtinDir(lang), { recursive: true })
+    return builtinDir(lang)
+  }
+  const builtinTarget = (lang = 'en'): Record<string, unknown> => ({
+    bundle: 'builtin/shuvix',
+    dir: builtinDir(lang),
+    label: BUILTIN_LABEL,
+    readonly: true
+  })
+  const baseNames = async (): Promise<string[]> => (await listBases('s1')).map((b) => b.base)
+  /** 内置库在围栏里那句说明（没导出）：隔着公开面取 —— 普通会话勾上 shuvix 时它拿到的那一句 */
+  const guideLabel = (): string => {
+    mockPick({ projectId: null, settings: { knowledgeBases: ['shuvix'] } })
+    const label = enabledBaseChoices('s1').find((c) => c.name === 'shuvix')?.label ?? ''
+    sessions.clear()
+    return label
+  }
+
+  it.each(CARRIERS)(
+    'SB-M1 载体 %s、谁都没勾：bases 只有说明书（带只读提示）、围栏里有它、点名 shuvix 解析到只读的内置库',
+    async (carrier) => {
+      seedBases('notes')
+      seedBuiltinBase()
+      const label = guideLabel()
+      expect(label, '语料自检：围栏那句说明非空').toContain('read-only')
+      mockPick({ projectId: carrier })
+
+      expect(await listBases('s1')).toStrictEqual([
+        { base: 'shuvix', label: BUILTIN_LABEL, dir: builtinDir(), note: BUILTIN_NOTE }
+      ])
+      expect(enabledBaseChoices('s1')).toEqual([{ name: 'shuvix', dir: builtinDir(), label }])
+      expect(await resolveBase('s1', 'shuvix')).toEqual(builtinTarget())
+      const guide = renderKnowledgeGuide(enabledBaseChoices('s1'))
+      expect(guide).not.toBeNull()
+      expect(guide).toContain('shuvix')
+      // 隐式启用只是解析：不写会话设置
+      expect(sessionDao.updateSettings).not.toHaveBeenCalled()
+    }
+  )
+
+  it('SB-M2 载体里同时勾了用户库：说明书打头、用户库按选择的顺序；选择里也写了 shuvix 不重复', async () => {
+    seedBases('notes')
+    seedBuiltinBase()
+    for (const bases of [['notes'], ['notes', 'shuvix'], ['shuvix', 'shuvix', 'notes']]) {
+      const what = JSON.stringify(bases)
+      mockPick({ projectId: '__policies__', settings: { knowledgeBases: bases } })
+      expect(await baseNames(), what).toEqual(['shuvix', 'notes'])
+      expect(
+        enabledBaseChoices('s1').map((c) => c.name),
+        what
+      ).toEqual(['shuvix', 'notes'])
+    }
+  })
+
+  it('SB-M3 明确设成 [] —— 会话自己 / 父会话 / 项目 哪一级都一样：说明书照旧在', async () => {
+    seedBases('notes')
+    seedBuiltinBase()
+
+    // 会话自己
+    mockPick({ projectId: '__hooks__', settings: { knowledgeBases: [] } })
+    expect(await baseNames()).toEqual(['shuvix'])
+
+    // 父会话
+    mockPick({ projectId: '__hooks__', parentId: 'parent' })
+    mockSessionRow('parent', { projectId: '__hooks__', settings: { knowledgeBases: [] } })
+    expect(await baseNames()).toEqual(['shuvix'])
+
+    // 项目（载体项目行的 settings）
+    mockPick({ projectId: '__hooks__' })
+    mockProjectBases('__hooks__', [])
+    expect(await baseNames()).toEqual(['shuvix'])
+  })
+
+  it('SB-M4 内置库不在：载体会话没有隐式的那份；点名 shuvix 按「一个都没启用」/「不在启用清单里」报错；全程不建目录', async () => {
+    seedBases('notes')
+
+    mockPick({ projectId: '__policies__' })
+    expect(await listBases('s1')).toEqual([])
+    expect(enabledBaseChoices('s1')).toEqual([])
+    expect(await resolveBase('s1', 'shuvix')).toEqual({ error: NO_BASES })
+
+    mockPick({ projectId: '__policies__', settings: { knowledgeBases: ['notes'] } })
+    expect(await baseNames()).toEqual(['notes'])
+    expect(await resolveBase('s1', 'shuvix')).toEqual({
+      error: `"shuvix" is not one of this session's knowledge bases. Enabled: "notes".`
+    })
+
+    // 探到不存在的内置根不该把它捎带建出来；载体也不建项目库
+    expect(existsSync(builtinRootOf(root))).toBe(false)
+    expect(existsSync(join(root, PROJECTS))).toBe(false)
+  })
+
+  it('SB-M5 载体之外没有隐式的说明书：普通项目 / 无项目 / 日报 / 跟踪项；勾上照旧按选择排；载体正控制组', async () => {
+    seedBases('alpha', 'notes')
+    seedBuiltinBase()
+
+    // 正控制组：同一份磁盘布局，载体会话确实有它 —— 下面的「没有」不是因为内置库没种好
+    mockPick({ projectId: '__hooks__' })
+    expect(await baseNames()).toEqual(['shuvix'])
+
+    inProject()
+    expect(await baseNames()).toEqual(['project'])
+
+    mockPick({ projectId: null })
+    expect(await baseNames()).toEqual([])
+
+    // 日报、跟踪项是用户自己的笔记：隐藏载体，但不是 ShuviX 文件
+    for (const userNotes of ['__daily__', '__tracking__']) {
+      mockPick({ projectId: userNotes })
+      expect(await baseNames(), userNotes).toEqual([])
+    }
+
+    // 回归：普通项目里勾上的说明书照旧排在选择写的位置
+    inProject(['shuvix', 'alpha'])
+    expect(await baseNames()).toEqual(['project', 'shuvix', 'alpha'])
+  })
+
+  it('SB-M6 界面语言 zh：隐式那份指到 zh 那一版，builtinManualDir() 同一个目录；内置库不在 → null', async () => {
+    seedBuiltinBase('en')
+    seedBuiltinBase('zh')
+    i18n.language = 'zh'
+    try {
+      mockPick({ projectId: '__agents__' })
+      const bases = await listBases('s1')
+      expect(bases.map((b) => b.base)).toEqual(['shuvix'])
+      expect(bases[0].dir).toBe(builtinDir('zh'))
+      expect(builtinManualDir()).toBe(builtinDir('zh'))
+      // 同一个函数：提示词里指路用的目录 = 知识库里那个库的目录
+      expect(builtinManualDir()).toBe(enabledBaseChoices('s1')[0].dir)
+
+      rmSync(builtinRootOf(root), { recursive: true, force: true })
+      expect(builtinManualDir()).toBeNull()
+      expect(existsSync(builtinRootOf(root))).toBe(false)
+    } finally {
+      i18n.language = 'en'
+    }
+  })
+
+  it('SB-M7 载体会话点名不认识的库：报错列出启用清单里的 shuvix（不是「一个都没启用」）', async () => {
+    seedBases('notes')
+    seedBuiltinBase()
+    mockPick({ projectId: '__bots__' })
+
+    expect(await resolveBase('s1', 'nope')).toEqual({
+      error: `"nope" is not one of this session's knowledge bases. Enabled: "shuvix".`
+    })
+    // 存在但没勾的用户库同样
+    expect(await resolveBase('s1', 'notes')).toEqual({
+      error: `"notes" is not one of this session's knowledge bases. Enabled: "shuvix".`
+    })
+  })
+
+  it('SB-M8 knowledgeBaseOptions：载体会话的候选里没有 shuvix（用户库照列）；普通项目会话与项目对话框照旧垫底；selected 是原样的选择', () => {
+    seedBases('alpha', 'notes')
+    seedBuiltinBase()
+    const builtinOption = { name: 'shuvix', label: BUILTIN_DISPLAY_NAME }
+
+    // 载体会话：说明书恒启用，不再是候选项；选择原样交回（改了名、已不在的库照留；写了 shuvix 也留着）
+    mockPick({
+      projectId: '__policies__',
+      settings: { knowledgeBases: ['notes', 'renamed-away', 'shuvix'] }
+    })
+    expect(knowledgeBaseOptions('s1')).toEqual({
+      options: [
+        { name: 'alpha', label: 'alpha' },
+        { name: 'notes', label: 'notes' }
+      ],
+      selected: ['notes', 'renamed-away', 'shuvix'],
+      explicit: true
+    })
+
+    // 普通项目会话：照旧垫底
+    inProject()
+    expect(knowledgeBaseOptions('s1').options).toEqual([
+      { name: 'alpha', label: 'alpha' },
+      { name: 'notes', label: 'notes' },
+      builtinOption
+    ])
+
+    // 项目对话框（不传会话）：照旧垫底
+    expect(knowledgeBaseOptions().options).toEqual([
+      { name: 'alpha', label: 'alpha' },
+      { name: 'notes', label: 'notes' },
+      builtinOption
+    ])
   })
 })

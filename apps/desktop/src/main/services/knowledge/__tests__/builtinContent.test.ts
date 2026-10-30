@@ -13,6 +13,9 @@
  * （自述行 / Guide / stable / 非空 title·description·tags，且**不带**机器署名 `generated` /
  * `verified` —— 说明书是人写的产品内容）、以及 `sources` 指向的解析器**真的还在那个路径上**。
  * 最后一条是「说明书跟着解析器搬家」的守护：解析器换了目录而说明书没跟上，这里先红。
+ *
+ * BK-26 反过来守笔记本提示词那一头：`{{shuvix:documentKind}}`（agent-runtime `renderDocumentKind`）按文件种类
+ * 指向说明书里的某几篇，用的是这里的真实目录 —— 说明书改了文件名而片段没跟上，这里先红。
  */
 import { describe, it, expect } from 'vitest'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -22,6 +25,7 @@ import {
   buildBuiltinPolicies,
   buildBuiltinProfiles,
   headingsOf,
+  renderDocumentKind,
   validateBundleFiles,
   HOOK_ON_KEY,
   HOOK_AGENT_KEY,
@@ -46,6 +50,7 @@ import {
 } from '@shuvix/chat-protocol/knowledge'
 import { SELECTABLE_THINKING_LEVELS } from '@shuvix/chat-protocol/types/thinking'
 import { parseObjectId } from '@shuvix/chat-protocol/mdMeta'
+import type { ShuvixFileKind } from '@shuvix/chat-protocol/shuvixFileNotes'
 import enLocale from '@shuvix/chat-protocol/i18n/locales/en.json'
 import jaLocale from '@shuvix/chat-protocol/i18n/locales/ja.json'
 import zhLocale from '@shuvix/chat-protocol/i18n/locales/zh.json'
@@ -589,5 +594,39 @@ describe.each(LANGS)('BK 内置知识库 · %s', (lang) => {
     expect(removed, lang).toBeDefined()
     expect(body).not.toContain(removed)
     expect(body).toContain('`auto-review`')
+  })
+})
+
+describe('BK-26 笔记本提示词指向的说明书条目真的在', () => {
+  /** 全部文件种类（Record：新增一个种类时这里先在类型上红） */
+  const KINDS = Object.keys({
+    agent: true,
+    bot: true,
+    policy: true,
+    hook: true,
+    skill: true,
+    knowledge: true
+  } satisfies Record<ShuvixFileKind, true>) as ShuvixFileKind[]
+
+  it('BK-26 三语 × 六种文件：渲染里每个绝对路径都在磁盘上；合起来至少点到 8 篇', () => {
+    // 正控制组：三种语言都在（否则下面那圈只查了一部分）
+    expect(LANGS).toEqual(EXPECTED_LANGS)
+    const referenced = new Set<string>()
+    for (const lang of LANGS) {
+      const manualDir = join(BASE_DIR, lang)
+      for (const kind of KINDS) {
+        const out = renderDocumentKind(lang, { kind, manualDir, read: true })
+        const paths = [...out.matchAll(/`([^`]+)`/g)]
+          .map((m) => m[1])
+          .filter((token) => token.startsWith(manualDir))
+        expect(paths.length, `${lang}/${kind} 一篇都没指到`).toBeGreaterThan(0)
+        for (const path of paths) {
+          expect(existsSync(path), `${lang}/${kind} 指向不存在的 ${path}`).toBe(true)
+          referenced.add(path.slice(manualDir.length + 1))
+        }
+      }
+    }
+    // agent / bot / policy（含远程访问、自动脱敏）/ hook / skills / knowledge-entry
+    expect(referenced.size).toBeGreaterThanOrEqual(8)
   })
 })

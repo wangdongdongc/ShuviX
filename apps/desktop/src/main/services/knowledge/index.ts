@@ -46,6 +46,7 @@ export {
   listBases,
   selectedBaseNames,
   enabledBaseChoices,
+  builtinManualDir,
   knowledgeBaseOptions,
   type SessionBundleTarget,
   type KnowledgeBaseOption

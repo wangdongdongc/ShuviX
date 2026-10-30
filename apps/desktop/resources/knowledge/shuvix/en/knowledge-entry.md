@@ -43,7 +43,9 @@ where what was learned about the project goes, so it is not something to tick (i
 in the cards). **The other bases are the user's selection** (the Knowledge bases row under
 session config → Extensions, or the tool picker by the input box; project config sets the default
 for new sessions). Unset, a session follows its parent session, then its project's default; when
-nobody chose, **no other base is enabled** — `shuvix` included.
+nobody chose, **no other base is enabled** — `shuvix` included. The one exception is a notebook
+opened on one of ShuviX's own files (a policy, hook, agent, bot, skill or knowledge entry): it
+always has `shuvix`, so its agent can look up that file's specification.
 The selection is a hard boundary: `bases` lists only the enabled ones, and naming any other is
 refused. The `<knowledge_bases>` fence in the system prompt lists the same names.
 

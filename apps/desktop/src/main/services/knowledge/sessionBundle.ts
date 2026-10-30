@@ -17,10 +17,17 @@
  * 大小写不敏感的文件系统上 `Notes` 能 stat 到 `notes/`，id 却成了另一个写法。
  * 两个保留名优先：`project` 是本会话所属项目的库，`shuvix` 是随应用发布的内置库（只读）——
  * 目录恰好叫这两个名字的用户库够不着工具。
+ *
+ * **内置说明书对 ShuviX 文件的笔记本也是隐式的**（2026-10-30）：文档是安全策略、hook、智能体档案、bot、
+ * 技能或知识库条目的笔记本会话（按承载项目判，chat-protocol `shuvixFileKindOfProject`），`shuvix` 恒启用、
+ * 排在用户圈定的库之前。笔记本 agent 的提示词告诉它这份文件的规范在说明书哪一条 —— 不给这个库，它就
+ * 只能靠 `read` 那一篇，搜不到策略问题常常牵到的另几条（远程访问、自动脱敏）。这类会话没有配置面板
+ * 可勾，和项目库一样不归选择管。
  */
 import { existsSync } from 'fs'
 import { KNOWLEDGE_BUILTIN_BASE, KNOWLEDGE_PROJECT_BASE } from '@shuvix/chat-protocol/knowledge'
 import { isHiddenProjectId } from '@shuvix/chat-protocol/hiddenProjects'
+import { shuvixFileKindOfProject } from '@shuvix/chat-protocol/shuvixFileNotes'
 import type { KnowledgeBaseInfo, KnowledgeGuideBase } from '@shuvix/agent-runtime'
 import { projectDao } from '../../dao/projectDao'
 import { sessionRecords } from '../sessionRecords'
@@ -108,6 +115,11 @@ function builtinTarget(): SessionBundleTarget | null {
   return { bundle, dir, label: 'ShuviX reference (read-only)', readonly: true }
 }
 
+/** 内置说明书当前语言那一版的目录；这台机器上没有（开发期没拷资源）→ null */
+export function builtinManualDir(): string | null {
+  return builtinTarget()?.dir ?? null
+}
+
 /**
  * 用户为这条会话圈定的库（回落链，见文件头；不含隐式的项目库）。
  *
@@ -142,7 +154,8 @@ export function sessionBundle(rootSessionId: string): SessionBundleTarget | { er
 }
 
 /**
- * 这条会话能点名的库：有项目时项目库打头（隐式，见文件头），再接用户圈定且这台机器上真有的那些
+ * 这条会话能点名的库：有项目时项目库打头，ShuviX 文件的笔记本带上内置说明书（两者都隐式，见文件头），
+ * 再接用户圈定且这台机器上真有的那些
  */
 export function enabledTargets(
   rootSessionId: string
@@ -151,12 +164,20 @@ export function enabledTargets(
   const project = sessionBundle(rootSessionId)
   if (!('error' in project)) out.push({ name: KNOWLEDGE_PROJECT_BASE, target: project })
 
+  // 隐式的说明书与用户勾的那份是同一个库：先到的占位，后面的不再重复
+  const pushBuiltin = (): void => {
+    if (out.some((e) => e.name === KNOWLEDGE_BUILTIN_BASE)) return
+    const target = builtinTarget()
+    if (target) out.push({ name: KNOWLEDGE_BUILTIN_BASE, target })
+  }
+  const projectId = sessionRecords.pick(rootSessionId, ['projectId'])?.projectId
+  if (shuvixFileKindOfProject(projectId)) pushBuiltin()
+
   const selected = selectedBaseNames(rootSessionId)
   const names = userBaseNames()
   for (const wanted of selected) {
     if (wanted === KNOWLEDGE_BUILTIN_BASE) {
-      const target = builtinTarget()
-      if (target) out.push({ name: wanted, target })
+      pushBuiltin()
       continue
     }
     const match = names.find((n) => nfc(n) === nfc(wanted))
@@ -228,6 +249,7 @@ export async function listBases(rootSessionId: string): Promise<KnowledgeBaseInf
 /**
  * 配置界面的候选项与此刻生效的选择。`explicit` 为假表示这条会话（及其项目）从没设过 —— 缺省是空的，
  * 所以界面上一个也没勾；用户一勾就落成这条会话自己的。项目库不是候选项：有项目就恒启用（见文件头）。
+ * ShuviX 文件笔记本里的说明书同理：它在那里恒启用，列成一个没勾的选项只会让人以为它关着、勾了也没用。
  */
 export function knowledgeBaseOptions(rootSessionId?: string): {
   options: KnowledgeBaseOption[]
@@ -238,11 +260,15 @@ export function knowledgeBaseOptions(rootSessionId?: string): {
   const builtinOption: KnowledgeBaseOption[] = builtinTarget()
     ? [{ name: KNOWLEDGE_BUILTIN_BASE, label: builtinBaseDisplayName() }]
     : []
-  const options = [...userBaseNames().map((name) => ({ name, label: name })), ...builtinOption]
-  if (!rootSessionId) return { options, selected: [], explicit: false }
+  const userOptions = userBaseNames().map((name) => ({ name, label: name }))
+  if (!rootSessionId)
+    return { options: [...userOptions, ...builtinOption], selected: [], explicit: false }
+  const row = sessionRecords.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
+  const options = shuvixFileKindOfProject(row?.projectId)
+    ? userOptions
+    : [...userOptions, ...builtinOption]
 
   // 「有人明确设过」要走完整条回落链 —— 漏掉父会话那一级，子会话就会显示成「还没选过」
-  const row = sessionRecords.pick(rootSessionId, ['projectId', 'parentId', 'settings'])
   const parent = row?.parentId
     ? sessionRecords.pick(row.parentId, ['projectId', 'settings'])
     : undefined

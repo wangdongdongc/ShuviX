@@ -124,6 +124,7 @@ of the form `{{shuvix:name}}`, substituted when the agent is created. On the des
 | `{{shuvix:appVersion}}`        | the ShuviX version                                                                  |
 | `{{shuvix:projectName}}`       | the project's name, empty outside a project                                         |
 | `{{shuvix:notebookPath}}`      | the bound file of a notebook session (root agents of notebook sessions only)        |
+| `{{shuvix:documentKind}}`      | when that file is one of ShuviX's own (policy, hook, agent, bot, skill, knowledge entry): a section saying what it is, when it takes effect and which manual entry specifies it; empty otherwise (root agents only) |
 
 An unknown placeholder is kept verbatim (and logged as a warning); an empty value collapses the
 blank lines around it, so a sentence built on an empty variable disappears cleanly. The syntax

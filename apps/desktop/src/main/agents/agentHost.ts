@@ -32,6 +32,7 @@ import {
   localDate,
   offersDispatchTool,
   renderBotContext,
+  renderDocumentKind,
   renderKnowledgeGuide,
   renderVisualCraft,
   renderVisualGuide,
@@ -56,6 +57,7 @@ import {
 import type { ChatEvent } from '@shuvix/chat-protocol/events'
 import { resolveModelRef } from '@shuvix/chat-protocol/agentModelRef'
 import { isChromeTabSessionSettings } from '@shuvix/chat-protocol/chromeTabSession'
+import { shuvixFileKindOfProject } from '@shuvix/chat-protocol/shuvixFileNotes'
 import type { ModelCapabilities } from '@shuvix/chat-protocol/types/provider'
 import { existsSync, realpathSync } from 'fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
@@ -92,7 +94,7 @@ import { withCallAgent, type ToolAgentIdentity } from '../services/toolAgent'
 import type { Project } from '../types'
 import { createLogger } from '../logger'
 import { createAgentTool } from './AgentTool'
-import { enabledBaseChoices } from '../services/knowledge'
+import { builtinManualDir, enabledBaseChoices } from '../services/knowledge'
 
 const log = createLogger('AgentHost')
 
@@ -593,11 +595,19 @@ export function desktopPromptVars(ctx: PromptVarsCtx): PromptVars | Promise<Prom
     projectName: project?.name ?? '',
     // 根会话供给 {{shuvix:notebookPath}}（笔记本会话的根 Agent 走 notebook 基座档案）：
     // 非笔记本会话为空串 → 占位块收敛消失。派生 ctx.sessionId 是 agentId，无从解析 —— 不供给，
-    // 占位符原样保留并 warn（派生档案本就不该引用它）
+    // 占位符原样保留并 warn（派生档案本就不该引用它）。{{shuvix:documentKind}} 同口径：文档是 ShuviX
+    // 文件（按承载项目判，知识库那边隐式启用说明书用的是同一个判定）时说这是什么文件、规范在哪一条
     ...(ctx.kind === 'root'
       ? {
           notebookPath:
-            sessionRecords.pickSettings(ctx.sessionId, ['notebookPath'])?.notebookPath ?? ''
+            sessionRecords.pickSettings(ctx.sessionId, ['notebookPath'])?.notebookPath ?? '',
+          documentKind: renderDocumentKind(i18next.language, {
+            kind: shuvixFileKindOfProject(
+              sessionRecords.pick(ctx.sessionId, ['projectId'])?.projectId
+            ),
+            manualDir: builtinManualDir() ?? undefined,
+            read: ctx.toolNames.includes('read')
+          })
         }
       : {})
   }

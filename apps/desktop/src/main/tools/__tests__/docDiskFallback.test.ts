@@ -28,6 +28,9 @@
  *   DF-14 doc_edit 与 doc_insert 同时来 → 逐个执行，两处都落下
  *   DF-15 询问挂着时中止 → 不变、不广播
  *   DF-16 已中止的 signal → 什么都没写、不问
+ *   RC-6  策略载体（sessionDocumentKind 替身给 policy）里没写标记的策略，改坏了 → 回执是按载体判的
+ *         `Parse check: … cannot parse … as a policy file`，不是写后处理那段（它只认文件自己的标记）；
+ *         随后的 doc_read 把同一句判定接在「没开着」之后
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -59,6 +62,8 @@ const state = vi.hoisted(() => ({
   kb: '',
   /** resolveSessionDocument 的答复（null = 这条会话没有文档） */
   doc: null as string | null,
+  /** sessionDocumentKind 的答复（会话的承载项目是哪种 ShuviX 文件；null = 不是）；每条用例复位成 null */
+  kind: null as string | null,
   /** 会话权限表里可写的目录（缺省：整个临时目录「允许并记住」了写 → 不弹卡；空 = 写哪儿都问） */
   aclWrite: [] as string[],
   requests: [] as InputRequest[],
@@ -102,6 +107,7 @@ vi.mock('../../services/toolContext', async () => {
     resolveProjectConfig: () => ({ workingDirectory: state.dir }),
     getDesktopSecurityContext: makeContext,
     resolveSessionDocument: () => state.doc,
+    sessionDocumentKind: () => state.kind,
     isSessionDocument: (_sid: string, p: string) =>
       state.doc !== null && resolvePath(p) === resolvePath(state.doc),
     TOOL_ABORTED: 'Aborted'
@@ -202,6 +208,7 @@ afterAll(() => rmSync(state.dir, { recursive: true, force: true }))
 beforeEach(() => {
   _resetAll()
   state.doc = null
+  state.kind = null
   state.aclWrite = [state.dir]
   state.requests = []
   state.respond = () => ({ kind: 'ask', allowed: true })
@@ -532,5 +539,36 @@ describe('doc_edit / doc_insert 的磁盘回落', () => {
     expect(statSync(p).mtimeMs).toBe(before)
     expect(state.requests).toEqual([])
     expect(filesChanged()).toEqual([])
+  })
+})
+
+describe('RC-6 磁盘回落的编辑回执按承载项目校正', () => {
+  /** 内置策略原样（合法），去掉 `shuvix:` 自述行 —— 策略目录里的手写文件可以没有它 */
+  const POLICY = (INLINE_POLICY_MD('ask-on-widget-access.md') ?? '').replace(/^shuvix: .*\n/m, '')
+
+  it('RC-6 策略载体里没写标记的策略，改坏了 → 回执是 Parse check（按策略判），不是写后处理那段；doc_read 同一句接在「没开着」之后', async () => {
+    // 样本自检：确实没有自述行、确实有 name 那一行可改
+    expect(POLICY).not.toMatch(/^shuvix: /m)
+    expect(POLICY).toContain('\nname: ask-on-widget-access\n')
+    state.kind = 'policy'
+    const p = seedDoc(POLICY, 'mine.md')
+
+    const out = await ok(
+      executeTool(editTool(), 'rc6', {
+        find: 'name: ask-on-widget-access',
+        replace: 'name: [unclosed'
+      })
+    )
+    const head =
+      'Parse check: ShuviX cannot parse this document as a policy file, so it is ignored until it is fixed:\n- '
+    expect(out.startsWith('Replaced at line ')).toBe(true)
+    expect(out).toContain(`\n\n${head}`)
+    expect(out).not.toContain('[shuvix')
+    expect(out).not.toContain('The file was written')
+    // 坏文本照样落盘（回执只是附言）
+    expect(bytes(p)).toContain('\nname: [unclosed\n')
+
+    const read = await ok(executeTool(readTool(), 'rc6-read', {}))
+    expect(read).toContain(`\n\n${NOT_OPEN}\n\n${head}`)
   })
 })

@@ -130,6 +130,7 @@ describe('md 窗口里的一轮对话', () => {
         'doc_read',
         'glob',
         'grep',
+        'knowledge',
         'ls',
         'read',
         'skill',

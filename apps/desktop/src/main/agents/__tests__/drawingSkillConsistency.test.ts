@@ -93,7 +93,10 @@ vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: vi.fn(),
   resolveProjectConfig: vi.fn()
 }))
-vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
+vi.mock('../../services/knowledge', () => ({
+  enabledBaseChoices: () => [],
+  builtinManualDir: () => null
+}))
 
 import { createDesktopToolHost, desktopPromptVars } from '../agentHost'
 import { inProcess, profileOf } from './support/toolHostFixtures'

@@ -10,13 +10,21 @@
  * `~/.shuvix/agents/work.md` 覆盖了基座档案之后，只要正文里留着那行占位符就照样拿到
  * 同一份说明 —— 覆盖人格不该顺带丢掉一项能力。语言由宿主传入（宿主是界面语言的权威）。
  */
+import {
+  isParsedShuvixFileKind,
+  type ShuvixFileKind
+} from '@shuvix/chat-protocol/shuvixFileNotes'
 import { pickLocalizedSource } from '../../subagent/builtinAgents/spec'
 
 import visualGuideEn from './visual-guide.md?raw'
 import visualGuideZh from './visual-guide.zh.md?raw'
 import visualGuideJa from './visual-guide.ja.md?raw'
+import documentKindEn from './document-kind.md?raw'
+import documentKindZh from './document-kind.zh.md?raw'
+import documentKindJa from './document-kind.ja.md?raw'
 
 const VISUAL_GUIDE_SOURCES = { en: visualGuideEn, zh: visualGuideZh, ja: visualGuideJa }
+const DOCUMENT_KIND_SOURCES = { en: documentKindEn, zh: documentKindZh, ja: documentKindJa }
 
 /**
  * **作图的契约与手艺全在 `builtin:drawing` 技能里，系统提示只留「先加载」**（2026-09-24，用户裁决，
@@ -120,5 +128,60 @@ function render(
   guide = applySection(guide, 'load', true)
   guide = applySection(guide, 'interactive-adopt', options.artifact === true)
   guide = applySection(guide, 'interactive', carrier && options.interactive === true)
+  return guide.replace(/\n{3,}/g, '\n\n').trim()
+}
+
+/** 说明书条目路径里的目录占位（片段手写 `<<manual>>policy-md.md`，渲染时换成说明书目录 + 分隔符） */
+const MANUAL_DIR_TOKEN = '<<manual>>'
+
+const ALL_KINDS: readonly ShuvixFileKind[] = [
+  'agent',
+  'bot',
+  'policy',
+  'hook',
+  'skill',
+  'knowledge'
+]
+
+export interface DocumentKindOptions {
+  /** 这条笔记本会话的文档是哪种 ShuviX 文件（chat-protocol `shuvixFileKindOfProject`）；不是 → 整段不出 */
+  kind: ShuvixFileKind | null
+  /**
+   * 内置说明书（知识库 `shuvix`）当前语言那一版的目录（绝对路径）。缺省 = 这台机器上没有它（开发期没拷资源），
+   * 指向规范的那句话整句不出 —— 不指一份读不到的文件
+   */
+  manualDir?: string
+  /** 这个 agent 手里有 `read`（规范是靠它去读的那份文件）；缺省即「没有」，同样不出那句话 */
+  read?: boolean
+}
+
+/**
+ * `{{shuvix:documentKind}}` 的取值 —— 笔记本会话的文档是一份 ShuviX 文件（安全策略、hook、智能体档案、
+ * bot、技能、知识库条目）时，告诉 agent 这是什么文件、什么时候生效、改坏了会怎样、完整规范是说明书里
+ * 哪一条。从前它只知道自己在改「markdown 文档 `x.md`」，得靠翻同目录的别的文件反推格式。
+ *
+ * 只写模型不可能自己知道的 ShuviX 事实：格式细节一律留在说明书里（策略那条 56 KB，每轮都付不值），
+ * 这里只给指路的绝对路径。种类在会话建起就定了（承载项目不变），所以创建期取值、随人设冻结没有问题。
+ * 自含块：值自带小标题；不是 ShuviX 文件时为空串，占位符处整块消失。
+ */
+export function renderDocumentKind(
+  language: string | undefined,
+  options: DocumentKindOptions
+): string {
+  const { kind } = options
+  if (!kind) return ''
+  let guide = pickLocalizedSource(DOCUMENT_KIND_SOURCES, language)
+  // 先留下这一种的段落（其余种类连同它们里面的 manual 段一起走），剩下的 manual 界桩就只有这一对
+  for (const k of ALL_KINDS) guide = applySection(guide, k, k === kind)
+  const rawDir = options.manualDir
+  const pointManual = options.read === true && !!rawDir
+  guide = applySection(guide, 'manual', pointManual)
+  // `checked` 段说的是 doc_read / doc_edit 的判定 —— 只有宿主真解析的那几种有
+  guide = applySection(guide, 'checked', isParsedShuvixFileKind(kind))
+  if (rawDir && pointManual) {
+    // 分隔符按传进来的原样认（`C:\` 去掉尾斜杠后就看不出是 Windows 路径了）
+    const sep = rawDir.includes('\\') && !rawDir.includes('/') ? '\\' : '/'
+    guide = guide.split(MANUAL_DIR_TOKEN).join(rawDir.replace(/[\\/]+$/, '') + sep)
+  }
   return guide.replace(/\n{3,}/g, '\n\n').trim()
 }

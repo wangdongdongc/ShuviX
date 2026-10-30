@@ -249,9 +249,9 @@ describe('面与设置项', () => {
 /**
  * `tools.list(sid)` 的 `defaultEnabled` = 这条会话根 Agent 档案的白名单 —— 档案由形态推导，
  * 含用户覆盖。只有内置条目带这个键（mcp / skill 条目没有），所以按「键在不在」筛。
- * 探针用两个：`knowledge`（work / chat / bot 有、notebook 没有）与 `bash`（work / chat / notebook
- * 有、bot 没有）—— 清单里没有哪个内置工具恰好是「work / chat 有、notebook 与 bot 都没有」
- * （`agent` 是 hidden 工具，根本不进 tools.list，拿它当探针只会读到 undefined）。
+ * 探针用两个：`edit`（work / chat / bot 有、notebook 没有 —— 它的文档只经 doc_* 改）与 `bash`（work / chat
+ * 有、notebook 与 bot 都没有）。`knowledge` 当过前一个探针，2026-10-30 notebook 也带上了它（ShuviX 文件的
+ * 笔记本隐式启用说明书）。`agent` 当不了探针：它是 hidden 工具，根本不进 tools.list，只会读到 undefined。
  * 原先的探针 `ssh`、`database` 都已不再是内置工具，改由内置 MCP 能力服务器提供、默认不勾 ——
  * 清单里只剩 `mcp:<name>` 那一条（不带 defaultEnabled，也没有哪个基座声明它）。
  */
@@ -270,7 +270,7 @@ describe('FD-9 tools.list 的 defaultEnabled 随推导档案', () => {
     rows.filter((t) => 'defaultEnabled' in t && t.defaultEnabled).map((t) => t.name)
   /** work / chat 的形态：两个探针都勾着 */
   const expectBothProbesOn = (rows: ToolRow[]): void => {
-    expect(flag(rows, 'knowledge')).toBe(true)
+    expect(flag(rows, 'edit')).toBe(true)
     expect(flag(rows, 'bash')).toBe(true)
   }
 
@@ -288,21 +288,22 @@ describe('FD-9 tools.list 的 defaultEnabled 随推导档案', () => {
     expect(db && 'defaultEnabled' in db).toBe(false)
   })
 
-  it('笔记本会话 notebook：knowledge 与 bash 不勾选、doc_edit 与 ask 勾选', async () => {
+  it('笔记本会话 notebook：edit 与 bash 不勾选、doc_edit、ask 与 knowledge 勾选', async () => {
     const sid = await createSession({ title: 'fd-tools-nb', projectId, notebookPath: NOTE_REL })
     const rows = await toolsOf(sid)
-    expect(flag(rows, 'knowledge')).toBe(false)
+    expect(flag(rows, 'edit')).toBe(false)
+    expect(flag(rows, 'knowledge')).toBe(true)
     // 文档只经 doc_* 改：notebook 不握命令工具
     expect(flag(rows, 'bash')).toBe(false)
     expect(flag(rows, 'doc_edit')).toBe(true)
     expect(flag(rows, 'ask')).toBe(true)
   })
 
-  it('bot 会话落在 bot 基座：bash 不勾选、knowledge 与 read 勾选；不传 sid 回落 work：两个探针都勾选', async () => {
+  it('bot 会话落在 bot 基座：bash 不勾选、edit 与 read 勾选；不传 sid 回落 work：两个探针都勾选', async () => {
     const sid = await createBotSession(app.main, { bot: 'fd-bot' })
     const rows = await toolsOf(sid)
     expect(flag(rows, 'bash')).toBe(false)
-    expect(flag(rows, 'knowledge')).toBe(true)
+    expect(flag(rows, 'edit')).toBe(true)
     expect(flag(rows, 'read')).toBe(true)
     expectBothProbesOn(await toolsOf())
   })

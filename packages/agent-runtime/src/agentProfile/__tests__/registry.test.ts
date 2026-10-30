@@ -773,9 +773,10 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
     }
   })
 
-  it('NB-2 三语工具清单逐字相同：doc_* + 读 + 写（别的文件）+ 查找 + ask + 技能工具，没有 edit / 命令 / 浏览器 / 派发', () => {
+  it('NB-2 三语工具清单逐字相同：doc_* + 读 + 写（别的文件）+ 查找 + ask + 知识库 + 技能工具，没有 edit / 命令 / 浏览器 / 派发', () => {
     // 文档只经 doc_* 改（编辑器开着在编辑器里改，没开着改磁盘）；write 只用来写别的文件。
-    // 浏览器是按会话勾选的内置 MCP（mcp:browser）—— 笔记本会话需要时自己勾，档案不声明
+    // 浏览器是按会话勾选的内置 MCP（mcp:browser）—— 笔记本会话需要时自己勾，档案不声明。
+    // knowledge（2026-10-30）：ShuviX 文件的笔记本隐式启用说明书 `shuvix`，项目笔记有项目库
     for (const language of LANGS) {
       expect(profile(NOTEBOOK_PROFILE_NAME, language).tools, `notebook.${language}`).toEqual([
         'doc_read',
@@ -787,6 +788,7 @@ describe('notebook 档案钉板(笔记本会话根 Agent 的基座)', () => {
         'grep',
         'glob',
         'ask',
+        'knowledge',
         'skill'
       ])
     }

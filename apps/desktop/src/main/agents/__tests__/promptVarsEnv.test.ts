@@ -64,7 +64,10 @@ vi.mock('../../services/toolContext', () => ({
   getDesktopSecurityContext: vi.fn(),
   resolveProjectConfig: mocks.resolveProjectConfig
 }))
-vi.mock('../../services/knowledge', () => ({ enabledBaseChoices: () => [] }))
+vi.mock('../../services/knowledge', () => ({
+  enabledBaseChoices: () => [],
+  builtinManualDir: () => null
+}))
 vi.mock('../AgentTool', () => ({ createAgentTool: vi.fn() }))
 
 import i18next from 'i18next'
