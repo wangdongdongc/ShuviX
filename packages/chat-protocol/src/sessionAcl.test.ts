@@ -3,7 +3,7 @@
  *
  *   SA-1  类型守卫：kind / source / access 只认词表里的值
  *   SA-2  谁能删、谁能改访问方式、交给沙箱时要不要过可写根检查：授予的能删能改、要过；工作目录能改不能删、
- *         不过；笔记本文档能改不能删、要过；其余派生的都不能、不过
+ *         不过；笔记本文档能改不能删、要过；bot 文件能改不能删、不过；其余派生的都不能、不过
  *   SA-3  widerPathAccess：读 + 写 = 写，顺序无关
  *   SA-4  pathAclView：写隐含读、去重、保持首次出现的顺序；空目标与别的种类跳过
  *   XS-01 / 02  会话种类（2026-10-20）：词表恰是 path / session；sessionAclView 与 pathAclView 各取各的种类，
@@ -35,6 +35,7 @@ describe('sessionAcl', () => {
     for (const s of [
       'workdir',
       'document',
+      'bot',
       'system',
       'knowledge',
       'skill',
@@ -57,6 +58,8 @@ describe('sessionAcl', () => {
       ['widget', true, true, true],
       ['workdir', false, true, false],
       ['document', false, true, true],
+      // bot 会话自己的 bot 文件：能改不能删，不过可写根检查（它在 ~/.shuvix 里，过了就整条会话不套沙箱）
+      ['bot', false, true, false],
       ['system', false, false, false],
       ['knowledge', false, false, false],
       ['skill', false, false, false],

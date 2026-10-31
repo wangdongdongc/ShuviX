@@ -1,6 +1,6 @@
 /**
- * 会话权限表的派生行 —— 按会话**此刻**的设置算出来的那几行（workdir / document / system / knowledge / skill /
- * widgetDir）。
+ * 会话权限表的派生行 —— 按会话**此刻**的设置算出来的那几行（workdir / document / bot / system / knowledge /
+ * skill / widgetDir）。
  * 对账（index.ts 的 sync）拿它与表里已有的派生行比，补上缺的、删掉过时的。
  *
  * 跟着会话里勾的东西走，不是要人维护的白名单。读不到（库扫描失败之类）就少给 —— 多问，不放行。
@@ -27,6 +27,16 @@ export function setAclSkillRoots(source: () => readonly string[]): void {
   enabledSkillRoots = source
 }
 
+/**
+ * bot 会话自己的那份 bot 文件（根 Agent 落在基座 bot 上时 botService 解析出的生效那份）—— 由主进程启动时注入，
+ * 理由同 setAclSkillRoots。没注入 = 没有这一行（单测默认如此）。
+ */
+let botFileOf: (sessionId: string) => string | null = () => null
+
+export function setAclBotFile(source: (sessionId: string) => string | null): void {
+  botFileOf = source
+}
+
 export interface DerivedPathEntry {
   source: DerivedAclSource
   sourceKey: string
@@ -35,7 +45,8 @@ export interface DerivedPathEntry {
 }
 
 /**
- * 一条会话此刻应有的派生行（顺序即界面上的顺序：工作目录、笔记本文档、会话目录、知识库、技能、组件源码目录）
+ * 一条会话此刻应有的派生行（顺序即界面上的顺序：工作目录、笔记本文档、bot 文件、会话目录、知识库、技能、
+ * 组件源码目录）
  */
 export function derivePathEntries(
   sessionId: string,
@@ -57,6 +68,16 @@ export function derivePathEntries(
   if (notebookPath) {
     const doc = settingDirForAcl(resolveToCwd(notebookPath, workingDirectory))
     if (doc) out.push({ source: 'document', sourceKey: '', target: doc, access: 'write' })
+  }
+
+  // bot 会话自己的 bot 文件：缺省可写 —— bot 边聊边往里记用户的偏好，每记一次都问就没法记。它在 ~/.shuvix/bots
+  // 里（工作目录以外），用户能在权限表里改成只读；同一目录里别的 bot 文件照旧询问
+  try {
+    const botFile = botFileOf(sessionId)
+    const target = botFile ? settingDirForAcl(botFile) : null
+    if (target) out.push({ source: 'bot', sourceKey: '', target, access: 'write' })
+  } catch (err) {
+    log.warn(`bot file unavailable: ${(err as Error).message}`)
   }
   out.push(
     { source: 'system', sourceKey: 'tmp', target: own.tmp, access: 'write' },

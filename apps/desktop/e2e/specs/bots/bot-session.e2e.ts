@@ -6,10 +6,14 @@
  * 追加到根 Agent 的系统提示词末尾 —— **只有根**。子会话按自己的档案生成提示词，所以
  * 「人设影响怎么说话、不影响怎么干活」在这里是可以端到端验的结构性质（PI-1）。
  *
+ * PS-4 会话权限表里那一行 bot 文件（source bot）：绑定了在的 bot 的会话恰有一行可写的、目标是那份 md 的真实路径；
+ * 普通会话、笔记本形态（bot + notebookPath）、绑定的名字不在 → 没有这一行。
+ *
  * 全程零 LLM：运行时是懒创建的，`agent.getInfo(sid, { ensure: true })` 只建不跑。
  * 基座判据走工具面（`tools`）而不是档案名 —— `AgentRuntimeInfo` 里没有档案名那个字段，
  * 而工具面恰恰是 bot 基座最要紧的那半个性质（看得见、动不了）。
  */
+import { realpathSync } from 'node:fs'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { launchApp, type E2EApp } from '../../harness/launch'
 import { createAgentSession, ensureDefaultModel, writeBotMd } from '../../harness/seed'
@@ -116,6 +120,53 @@ describe('bot 会话 = 一条普通有根会话', () => {
     const tools = await toolsOf(sid)
     expect(tools).toContain('session')
     expect(tools).not.toContain('bash')
+  })
+})
+
+describe('bot 会话的权限表：自己那份 bot 文件可写', () => {
+  interface AclRow {
+    kind: string
+    source: string
+    sourceKey: string
+    target: string
+    access: string
+  }
+  const aclOf = (sid: string): Promise<AclRow[]> =>
+    app.main.eval<AclRow[]>(`window.api.session.listAcl(${JSON.stringify(sid)})`)
+  const botRowsOf = async (sid: string): Promise<AclRow[]> =>
+    (await aclOf(sid)).filter((r) => r.source === 'bot')
+  const create = (params: Record<string, unknown>): Promise<string> =>
+    app.main.eval<string>(`window.api.session.create(${JSON.stringify(params)}).then((s) => s.id)`)
+
+  it('PS-4 绑定了在的 bot：恰一行可写的 bot 行，目标是 md 的真实路径；普通 / 笔记本形态 / 名字不在：没有', async () => {
+    const file = writeBotMd(app, 'ledger', { body: 'LEDGER BODY.' })
+
+    const bound = await create({ title: 'ps4-bound', bot: 'ledger' })
+    const rows = await botRowsOf(bound)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      kind: 'path',
+      source: 'bot',
+      sourceKey: '',
+      access: 'write',
+      target: realpathSync(file)
+    })
+    // 它只是那一个文件：bots 目录本身不在表里
+    const targets = (await aclOf(bound)).map((r) => r.target)
+    expect(targets).not.toContain(realpathSync(app.botsDir))
+
+    const plain = await create({ title: 'ps4-plain' })
+    expect(await botRowsOf(plain)).toEqual([])
+    // 对照：普通会话的表不是空的（有工作目录 / 会话目录那些派生行），只是没有 bot 那一行
+    expect((await aclOf(plain)).length).toBeGreaterThan(0)
+
+    // bot + notebookPath 落在笔记本形态（判定先于 bot）：没有人设注入，也没有 bot 行
+    const notebook = await create({ title: 'ps4-notebook', bot: 'ledger', notebookPath: 'n.md' })
+    expect(await botRowsOf(notebook)).toEqual([])
+
+    // 绑定的名字目录里没有
+    const ghost = await create({ title: 'ps4-ghost', bot: 'ps4-nobody' })
+    expect(await botRowsOf(ghost)).toEqual([])
   })
 })
 

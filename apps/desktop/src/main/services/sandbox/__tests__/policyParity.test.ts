@@ -26,6 +26,9 @@
  *  - PP-8 临时会话的 fork：工作目录正是别的会话的临时工作区（共用源会话的）—— 两面都把它当本会话的，
  *    本会话自己的与第三个会话的临时工作区两面都拦（PP-0..2 的工作目录表里也有这一行）；
  *  - PP-9 工作目录那一行改成只读（权限表面板上的开关）：两面一起变成只读，对账不把它改回去；改回可写两面一起放开；
+ *  - PP-10 bot 会话自己的 bot 文件（派生的 bot 行，可写）：文件工具读写它都不问，同目录里别的 bot 文件、它旁边的
+ *    `.bak` 照问；它在 ~/.shuvix 里却不让沙箱被拒（不过可写根检查），受限命令能写它、写不了它的邻居；
+ *  - PP-11 bot 行改成只读：两面一起只读（写问 #1、读不问；沙箱照套，读得到、写不了）；
  *  - PP-7 变量齐全：以上评估没有 fail-safe / 对账失败的告警（放在最后，收齐前面所有用例的告警）。
  *
  * 替身：electron 的 app.getPath（userData）、os.homedir（按布局换家目录）、projectDao、sessionRecords（会话在、
@@ -47,6 +50,8 @@ const state = vi.hoisted(() => ({
   knowledgeTargets: [] as Array<{ name: string; target: { dir: string; readonly?: boolean } }>,
   /** skillService.enabledSkillRoots */
   skillRoots: [] as string[],
+  /** 这条会话绑定的 bot 文件（主进程注入的 setAclBotFile 来源；null = 不是 bot 会话） */
+  botFile: null as string | null,
   warnings: [] as string[]
 }))
 
@@ -102,10 +107,12 @@ vi.mock('../../../logger', () => ({
 
 import type { SecurityContext, SecurityDecision } from '@shuvix/agent-runtime'
 import { pathAclView } from '@shuvix/chat-protocol/sessionAcl'
-import { sessionAcl, setAclSkillRoots } from '../../acl'
+import { sessionAcl, setAclBotFile, setAclSkillRoots } from '../../acl'
 
 // 用户启用的技能目录由主进程注入（acl 不反向依赖 skillService）：与上面 skillService 替身同一份
 setAclSkillRoots(() => state.skillRoots)
+// bot 会话自己的 bot 文件同样由主进程注入（sessionService.ownBotFile）：缺省不是 bot 会话
+setAclBotFile(() => state.botFile)
 import { clearMemoryAclForTests } from '../../acl/store'
 import {
   getDesktopSecurityContext,
@@ -212,6 +219,7 @@ function arrangeSettings(l: Layout): void {
 beforeEach(() => {
   state.knowledgeTargets = []
   state.skillRoots = []
+  state.botFile = null
 })
 
 /** 桌面 provider（与 contextFor 里的同一个构造） */
@@ -797,6 +805,94 @@ describe('PP-9 工作目录那一行改成只读：两面一起只读', () => {
       expect(sessionAcl.setAccess(SID, workdirRow.id, 'write')).toBe(true)
       expect(ctx.evaluate('write', { type: 'path', path: file }).effect).toBe('allow')
       expect(isWriteBlocked(specFor(l, ws), file)).toBe(false)
+    }
+  )
+})
+
+describe('PP-10 bot 会话自己的 bot 文件：两面都可写，同目录里别的照拦', () => {
+  it.each(Object.keys(LAYOUTS) as LayoutName[])(
+    'PP-10 %s 布局：读写它不问、受限命令能写它；别的 bot 文件与它的 .bak 两面都拦；规格不因它在 ~/.shuvix 里被拒',
+    (layout) => {
+      const l = LAYOUTS[layout]
+      const ws = `${l.home}/proj`
+      const bot = `${l.shuvix}/bots/scout.md`
+      state.botFile = bot
+      enterLayout(l, ws)
+      const ctx = contextFor(ws)
+
+      const row = sessionAcl.entries(SID).find((e) => e.source === 'bot')
+      expect(row).toMatchObject({ kind: 'path', target: realLoose(bot), access: 'write' })
+
+      // 文件工具那一面：它自己读写都不问
+      expect(brief(ctx.evaluate('write', { type: 'path', path: bot }))).toMatchObject({
+        effect: 'allow',
+        matched: []
+      })
+      expect(brief(ctx.evaluate('read', { type: 'path', path: bot }))).toMatchObject({
+        effect: 'allow',
+        matched: []
+      })
+      // 同一目录里别的 bot 文件、它旁边的备份：照问（读 #0、写 #1）
+      for (const path of [`${l.shuvix}/bots/other.md`, `${bot}.bak`]) {
+        expect(brief(ctx.evaluate('write', { type: 'path', path })), path).toEqual({
+          effect: 'ask',
+          winning: 'ask-on-external-path#1',
+          matched: ['ask-on-external-path#1']
+        })
+        expect(brief(ctx.evaluate('read', { type: 'path', path })), path).toEqual({
+          effect: 'ask',
+          winning: 'ask-on-external-path#0',
+          matched: ['ask-on-external-path#0']
+        })
+      }
+
+      // 沙箱那一面：它在 ~/.shuvix 里，但不过可写根检查 —— 规格照常，它是可写根之一
+      const built = buildFor(l, ws)
+      expect(built.ok, !built.ok ? built.reason : '').toBe(true)
+      const spec = specFor(l, ws)
+      expect(spec.writableRoots).toContain(realLoose(bot))
+      expect(isWriteBlocked(spec, bot)).toBe(false)
+      expect(isReadBlocked(spec, bot)).toBe(false)
+      for (const path of [`${l.shuvix}/bots/other.md`, `${bot}.bak`]) {
+        expect(isWriteBlocked(spec, path), path).toBe(true)
+        expect(isReadBlocked(spec, path), path).toBe(true)
+      }
+      // 一张表、两个面
+      expect(spec.writableRoots).toEqual(listVar(varsFor(ws), 'aclWrite').map(realLoose))
+    }
+  )
+})
+
+describe('PP-11 bot 行改成只读：两面一起只读', () => {
+  it.each(Object.keys(LAYOUTS) as LayoutName[])(
+    'PP-11 %s 布局：写两面都拦（#1）、读两面都不拦；沙箱照套',
+    (layout) => {
+      const l = LAYOUTS[layout]
+      const ws = `${l.home}/proj`
+      const bot = `${l.shuvix}/bots/scout.md`
+      state.botFile = bot
+      enterLayout(l, ws)
+      const ctx = contextFor(ws)
+      const row = sessionAcl.entries(SID).find((e) => e.source === 'bot')!
+      expect(sessionAcl.setAccess(SID, row.id, 'read')).toBe(true)
+
+      expect(brief(ctx.evaluate('write', { type: 'path', path: bot }))).toEqual({
+        effect: 'ask',
+        winning: 'ask-on-external-path#1',
+        matched: ['ask-on-external-path#1']
+      })
+      expect(brief(ctx.evaluate('read', { type: 'path', path: bot }))).toMatchObject({
+        effect: 'allow',
+        matched: []
+      })
+
+      const built = buildFor(l, ws)
+      expect(built.ok, !built.ok ? built.reason : '').toBe(true)
+      const spec = specFor(l, ws)
+      expect(spec.writableRoots).not.toContain(realLoose(bot))
+      expect(spec.readableRoots).toContain(realLoose(bot))
+      expect(isReadBlocked(spec, bot)).toBe(false)
+      expect(isWriteBlocked(spec, bot)).toBe(true)
     }
   )
 })

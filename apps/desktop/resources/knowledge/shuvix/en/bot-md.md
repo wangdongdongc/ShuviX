@@ -146,9 +146,9 @@ Its root persona is the builtin **`bot`** base, whose tool list is deliberately 
 `read, ls, grep, glob, ask, suggest, write, edit, session, agent, knowledge, artifact, widget, skill` —
 no `bash`, and none of the built-in capability servers `mcp:ssh` / `mcp:browser` /
 `mcp:database` is declared (the user can still tick them on in the session's extensions — that
-is the user's own call). The bot does the work itself (there is no shell, and it is told to say what it could not check rather than write scripts to try); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. A write under `~/.shuvix/bots/` — every memory update included — is an ordinary write outside the session's permission table: it asks under the builtin policy **ask-on-external-path**, and with
+is the user's own call). The bot does the work itself (there is no shell, and it is told to say what it could not check rather than write scripts to try); its persona only shapes how it talks to you, and the files, notes and code it writes are plain. The bot's own file is a row of its session's permission table (**Bot file**, read and write by default; Session settings → File access can make it read-only), so the bot updates its memory without asking. Any other write under `~/.shuvix/bots/` is an ordinary write outside the table: it asks under the builtin policy **ask-on-external-path**, and with
 the automatic review on the reviewer may answer it (a
-`force-ask` policy on `vars.botsDir` makes every such write reach the user — see `policy-md`).
+`force-ask` policy on `vars.botsDir` makes every such write, the bot's own file included, reach the user — see `policy-md`).
 Like `notebook`, the base declares project awareness but reads no instruction files (AGENTS.md /
 CLAUDE.md are conventions for the sub-session that does the coding). The base can be overridden by name
 (`~/.shuvix/agents/bot.md`) like any builtin agent.

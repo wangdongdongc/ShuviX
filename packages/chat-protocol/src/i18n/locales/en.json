@@ -510,6 +510,7 @@
     "source": {
       "workdir": "Working directory",
       "document": "Notebook document",
+      "bot": "Bot file",
       "user": "Granted by you",
       "widget": "Widget {{name}}",
       "widgetDir": "Widget folder {{name}}",

@@ -5,10 +5,10 @@
  * 组件种类的行（它免询问只读 / 读写的组件）同样另起一卡「组件访问」：来自「允许并记住」或会话自己建了那个组件；
  * 读写行派生出的组件文件夹（widgetDir）是路径行，摆在「文件访问」里。
  *
- * 行的排法：工作目录、笔记本文档、你授予的、widget 目录在前，总是摆出来；知识库、技能目录与会话自己的目录
+ * 行的排法：工作目录、笔记本文档、bot 文件、你授予的、widget 目录在前，总是摆出来；知识库、技能目录与会话自己的目录
  * （临时目录、产物、工具结果）来自会话设置、用户不用管，收在「显示另外 N 项」后面。
  *
- * 能做的事跟着行的来源走（canChangeAclAccess / canRemoveAclEntry）：工作目录、笔记本文档、授予的行能在
+ * 能做的事跟着行的来源走（canChangeAclAccess / canRemoveAclEntry）：工作目录、笔记本文档、bot 文件、授予的行能在
  * 只读 / 读写之间切换；授予的行能删；其余派生行只读地摆着，悬停说它跟着会话设置走。底部「添加路径」手动
  * 授予一条（来源 user），桌面上还能用文件夹选择框。
  *
@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
+  Bot,
   FileText,
   FolderOpen,
   HardDrive,
@@ -41,12 +42,20 @@ import {
 import { SegmentedControl, SettingsSection } from '../settings/SettingsPrimitives'
 
 /** 摆在前面、总是可见的来源 */
-const PROMINENT: readonly AclSource[] = ['workdir', 'document', 'user', 'widget', 'widgetDir']
+const PROMINENT: readonly AclSource[] = [
+  'workdir',
+  'document',
+  'bot',
+  'user',
+  'widget',
+  'widgetDir'
+]
 
 /** 界面上的顺序 */
 const SOURCE_ORDER: readonly AclSource[] = [
   'workdir',
   'document',
+  'bot',
   'user',
   'widget',
   'widgetDir',
@@ -58,6 +67,7 @@ const SOURCE_ORDER: readonly AclSource[] = [
 const SOURCE_ICONS: Record<AclSource, typeof FolderOpen> = {
   workdir: FolderOpen,
   document: FileText,
+  bot: Bot,
   user: KeyRound,
   widget: LayoutGrid,
   widgetDir: LayoutGrid,

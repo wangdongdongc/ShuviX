@@ -11,6 +11,10 @@
  *   DR-6  同一来源的重复行只留一份（技能目录与内置目录重名之类）
  *   DR-7  笔记本会话：多一行 document（可写，紧跟工作目录），路径按工作目录解析相对的 notebookPath、绝对的原样；
  *         settingDirForAcl 拒了就没有这一行
+ *   DR-8  bot 会话（setAclBotFile 注入的来源给了文件）：多一行 bot（可写、sourceKey 空、目标 = settingDirForAcl
+ *         给的写法），排在工作目录 / 文档之后、会话目录之前；来源收到的是会话 id；工作目录不适合时照样有
+ *   DR-9  来源给 null / settingDirForAcl 拒了 / 来源抛错（warn `bot file unavailable: …`，其余行不变）：没有 bot 行；
+ *         会话目录算不出（坏 id）：一行都没有，来源也不被问
  *   WT4-AC-13 有读写授权的组件（第二个参数）各派生一行可写的源码目录（widgetDir，sourceKey = 组件 id，目标 =
  *         settingDirForAcl(~/.shuvix/widgets/<id>)），排在技能之后、按传入顺序；不传 → 没有 widgetDir 行
  *   WT4-AC-14 不合规的 id 跳过；settingDirForAcl 拒了的那个跳过；取目录抛错 → warn `widget dirs unavailable: …`、
@@ -71,7 +75,7 @@ vi.mock('../../knowledge/sessionBundle', () => ({
   }
 }))
 
-import { derivePathEntries, setAclSkillRoots } from '../derive'
+import { derivePathEntries, setAclBotFile, setAclSkillRoots } from '../derive'
 
 // 用户启用的技能目录由主进程注入（acl 不反向依赖 skillService）
 setAclSkillRoots(() => {
@@ -102,6 +106,8 @@ beforeEach(() => {
   state.throwing = new Set()
   state.widgetDirPath = (id) => `/Users/u/.shuvix/widgets/${id}`
   state.warns = []
+  // bot 文件的来源缺省不给（与主进程没注入时一样）；DR-8 / DR-9 各自换上
+  setAclBotFile(() => null)
 })
 
 const rows = (): string[] =>
@@ -175,6 +181,86 @@ describe('derivePathEntries', () => {
 
     state.rejected = new Set(['/Users/u/.shuvix/agents/coding.md'])
     expect(rows().some((r) => r.startsWith('document:'))).toBe(false)
+  })
+})
+
+describe('derivePathEntries —— bot 文件（bot）', () => {
+  const BOT_FILE = '/Users/u/.shuvix/bots/scout.md'
+
+  it('DR-8 bot 会话多一行可写的 bot 文件，排在工作目录 / 文档之后、会话目录之前', () => {
+    const asked: string[] = []
+    setAclBotFile((sid) => {
+      asked.push(sid)
+      return BOT_FILE
+    })
+    const all = rows()
+    expect(all.slice(0, 3)).toEqual([
+      'workdir::/Users/u/proj:write',
+      `bot::real:${BOT_FILE}:write`,
+      `system:tmp:${OWN.tmp}:write`
+    ])
+    expect(all.filter((r) => r.startsWith('bot:'))).toHaveLength(1)
+    expect(asked.length).toBeGreaterThan(0)
+    expect(new Set(asked)).toEqual(new Set(['s1']))
+    expect(state.warns).toEqual([])
+
+    // 与笔记本文档同在（形态上 bot 与笔记本互斥，派生本身不管）：文档在前、bot 在后
+    state.notebookPath = 'notes/plan.md'
+    expect(rows().slice(0, 4)).toEqual([
+      'workdir::/Users/u/proj:write',
+      'document::real:/Users/u/proj/notes/plan.md:write',
+      `bot::real:${BOT_FILE}:write`,
+      `system:tmp:${OWN.tmp}:write`
+    ])
+
+    // 工作目录不适合：没有 workdir 行，bot 行照样有、仍在会话目录之前
+    state.notebookPath = null
+    state.own = {
+      ...OWN,
+      workdir: null,
+      workspaceUnsuitable: 'working directory covers the home folder'
+    }
+    expect(rows().slice(0, 2)).toEqual([
+      `bot::real:${BOT_FILE}:write`,
+      `system:tmp:${OWN.tmp}:write`
+    ])
+  })
+
+  it('DR-9 来源给 null、被 settingDirForAcl 拒、来源抛错：没有 bot 行，其余不变', () => {
+    const baseline = rows()
+    expect(baseline.some((r) => r.startsWith('bot:'))).toBe(false)
+
+    setAclBotFile(() => null)
+    expect(rows()).toEqual(baseline)
+
+    setAclBotFile(() => BOT_FILE)
+    state.rejected = new Set([BOT_FILE])
+    expect(rows()).toEqual(baseline)
+    state.rejected = new Set()
+
+    setAclBotFile(() => {
+      throw new Error('bots dir unreadable')
+    })
+    expect(rows()).toEqual(baseline)
+    expect(state.warns).toEqual(['bot file unavailable: bots dir unreadable'])
+
+    // settingDirForAcl 自己抛错也算这一类，别的来源照常
+    state.warns = []
+    setAclBotFile(() => BOT_FILE)
+    state.throwing = new Set([BOT_FILE])
+    expect(rows()).toEqual(baseline)
+    expect(state.warns).toEqual([`bot file unavailable: cannot resolve ${BOT_FILE}`])
+  })
+
+  it('DR-9 会话目录算不出（坏 id）：一行都没有，来源也不被问', () => {
+    const asked: string[] = []
+    setAclBotFile((sid) => {
+      asked.push(sid)
+      return BOT_FILE
+    })
+    state.own = null
+    expect(derivePathEntries('s1')).toEqual([])
+    expect(asked).toEqual([])
   })
 })
 

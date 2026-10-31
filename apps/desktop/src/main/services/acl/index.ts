@@ -20,7 +20,7 @@
  * 一并删掉（deleteSession）；组件种类的行同理（deleteWidget）。组件的读写行派生出它源码目录的可写行（derive.ts）。
  *
  * 继承：派生 agent 与 hook agent 的工具上下文用所在会话的 id，天然共用这张表；子会话建成时复制父会话的
- * 授予行（copyGranted），fork 复制授予行与工作目录那一行的访问方式（copyForFork）。之后各管各的。
+ * 授予行（copyGranted），fork 复制授予行与工作目录、bot 文件那两行的访问方式（copyForFork）。之后各管各的。
  */
 import { isAbsolute } from 'path'
 import { v7 as uuidv7 } from 'uuid'
@@ -48,7 +48,7 @@ import { widgetRegistry, WIDGET_ID_REGEX } from '../widget/widgetRegistry'
 import { derivePathEntries, derivedKey, type DerivedPathEntry } from './derive'
 import { aclStoreFor, deleteAclEverywhere, deleteTargetEverywhere, type AclStore } from './store'
 
-export { setAclSkillRoots } from './derive'
+export { setAclBotFile, setAclSkillRoots } from './derive'
 
 const log = createLogger('Acl')
 
@@ -76,6 +76,9 @@ function reconcile(store: AclStore, sessionId: string, derived: readonly Derived
   store.transaction(() => {
     const expected = new Map(derived.map((e) => [derivedKey(e), e]))
     const now = Date.now()
+    // bot 文件那一行跟着绑定走：生效的那份换了位置（磁盘上改了名、同名的另一份胜出）还是同一个 bot，用户改过的
+    // 访问方式跟过去 —— 否则一次换位就把「只读」悄悄放宽回可写
+    let botAccess: PathAccess | undefined
     for (const row of store.list(sessionId)) {
       // 旧版本的 `shuvix widget init / build` 静默授予的组件目录（路径行、来源 widget）：组件目录的写权限现在只从
       // 组件的读写授权派生（widgetDir）。留着它们，没有组件授权也能改组件的代码，同 id 的新组件还会继承 —— 删掉
@@ -88,11 +91,12 @@ function reconcile(store: AclStore, sessionId: string, derived: readonly Derived
       const key = derivedKey({ source: row.source, sourceKey: row.sourceKey, target: row.target })
       const want = expected.get(key)
       if (!want) {
+        if (row.source === 'bot') botAccess = row.access
         store.delete(sessionId, row.id)
         continue
       }
       expected.delete(key)
-      // 用户能改访问方式的派生行（工作目录、笔记本文档）保留用户的值
+      // 用户能改访问方式的派生行（工作目录、笔记本文档、bot 文件）保留用户的值
       if (!canChangeAclAccess(row) && row.access !== want.access) {
         store.updateAccess(sessionId, row.id, want.access, now)
       }
@@ -103,7 +107,7 @@ function reconcile(store: AclStore, sessionId: string, derived: readonly Derived
         sessionId,
         kind: 'path',
         target: e.target,
-        access: e.access,
+        access: e.source === 'bot' && botAccess ? botAccess : e.access,
         source: e.source,
         sourceKey: e.sourceKey,
         createdAt: now,
@@ -335,7 +339,8 @@ export const sessionAcl = {
 
   /**
    * 新建会话时生成它的表（派生行）；有 `inheritFrom` 时先复制那条会话的授予行（子会话：父会话；
-   * fork：源会话 —— fork 还带上工作目录那一行的访问方式，两条会话用的是同一个工作目录）。
+   * fork：源会话 —— fork 还带上工作目录与 bot 文件那两行的访问方式：两条会话用的是同一个工作目录、绑的是同一个
+   * bot，用户在源会话里改成只读的，到了 fork 不该又变回可写）。
    * 复制的是此刻的快照，之后两张表各管各的。
    */
   initialize(sessionId: string, inheritFrom?: { sessionId: string; fork: boolean }): void {
@@ -347,7 +352,8 @@ export const sessionAcl = {
       store.transaction(() => {
         for (const row of from) {
           const copy =
-            !isDerivedAclSource(row.source) || (inheritFrom.fork && row.source === 'workdir')
+            !isDerivedAclSource(row.source) ||
+            (inheritFrom.fork && (row.source === 'workdir' || row.source === 'bot'))
           if (!copy) continue
           store.insert({ ...row, id: uuidv7(), sessionId, createdAt: now, updatedAt: now })
         }

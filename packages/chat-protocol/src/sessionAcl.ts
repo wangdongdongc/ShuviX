@@ -17,10 +17,12 @@
  * （出厂的 ask-on-external-path 询问）。
  *
  * 一行从哪来（source）决定谁来维护它：
- *   - 派生的五种由宿主按会话此刻的设置对账，随设置增删，用户不能删：
+ *   - 派生的几种由宿主按会话此刻的设置对账，随设置增删，用户不能删：
  *       workdir   会话的工作目录（不适合当会话目录时 —— `/`、覆盖家目录、ShuviX 自己的配置 —— 没有这一行）；
  *                 访问方式用户可以改（改成只读 = 这条会话改项目文件也要问）
  *       document  笔记本会话自己的那份文档（doc_* 读写的就是它）；访问方式用户可以改
+ *       bot       bot 会话自己绑定的那份 bot 文件（人设与记忆 —— bot 边聊边往里记用户的偏好）；可写，
+ *                 访问方式用户可以改（改成只读 = 每次记忆更新都要问）
  *       system    会话自己的目录：临时目录（sourceKey 'tmp'）、artifacts（'artifacts'）、工具大结果（'toolResults'）
  *       knowledge 会话勾选的知识库（sourceKey = 库名；内置库只读）
  *       skill     技能目录（只读；sourceKey = 目录）
@@ -48,6 +50,7 @@ export type WidgetAccess = PathAccess
 export const DERIVED_ACL_SOURCES = [
   'workdir',
   'document',
+  'bot',
   'system',
   'knowledge',
   'skill',
@@ -107,18 +110,23 @@ export function canRemoveAclEntry(entry: Pick<AclEntry, 'source'>): boolean {
 }
 
 /**
- * 用户能不能改这一行的访问方式：授予的、工作目录与笔记本文档能改（对账保留用户改过的值）；其余派生行的
- * 访问方式由来源决定
+ * 用户能不能改这一行的访问方式：授予的、工作目录、笔记本文档与 bot 文件能改（对账保留用户改过的值）；
+ * 其余派生行的访问方式由来源决定
  */
 export function canChangeAclAccess(entry: Pick<AclEntry, 'source'>): boolean {
   return (
-    entry.source === 'workdir' || entry.source === 'document' || !isDerivedAclSource(entry.source)
+    entry.source === 'workdir' ||
+    entry.source === 'document' ||
+    entry.source === 'bot' ||
+    !isDerivedAclSource(entry.source)
   )
 }
 
 /**
  * 交给命令沙箱时要不要过「适不适合当可写根」：授予的与笔记本文档要过（它们可能指向任何地方）；工作目录、
- * 会话目录、知识库、技能目录由宿主按设置算出、已经滤过
+ * 会话目录、知识库、技能目录由宿主按设置算出、已经滤过。bot 文件不过：它在 ShuviX 自己的配置目录里，过了就
+ * 整条会话不套沙箱（bot 派出去的 agent 的每条命令都要问）；而它只是那一个文件，宿主按绑定算出，文件工具本来就
+ * 凭这一行免询问写它 —— 受限的命令能写它不多给任何东西
  */
 export function needsSandboxRootCheck(entry: Pick<AclEntry, 'source'>): boolean {
   return entry.source === 'document' || !isDerivedAclSource(entry.source)

@@ -19,6 +19,13 @@
  *   ACL-11 deleteSession：整张表与对账记忆清掉；删掉的会话读出空表、授予回 null，不会补出行
  *   ACL-12 坏 id / 不存在的会话：空表，不碰存储
  *   ACL-13 对账失败（库抛错）：保持上一次的表，不记指纹，下一次读再试
+ *   ACL-14 bot 文件行（source bot）：派生为可写；用户能改成只读，之后的对账（派生输入变了 / 对账记忆忘了）保留只读；
+ *          remove 拒绝，行还在
+ *   ACL-15 bot 文件换了位置（A → B）：A 行没了、B 行补上；用户把 A 改成只读过 → B 也是只读，没改过 → B 可写；
+ *          派生里不再有 bot → 那一行删掉
+ *   ACL-16 可写的 bot 行进 pathView 的 write 与 read；sandboxEntries 里是 { path, access: write, granted: false }
+ *          （不过可写根检查）；改成只读后离开 write、留在 read，沙箱条目变 read
+ *   ACL-17 子会话不复制父会话的 bot 行（fork: false）；fork 复制，派生目标相同时保留源会话用户改的只读
  *
  * 会话种类的行（XS-27…XS-33）与组件种类的行（WT4-AC-03…WT4-AC-12）见文件末尾的两个 describe 块。
  */
@@ -444,6 +451,126 @@ describe('sessionAcl', () => {
     spy.mockRestore()
 
     expect(shape('s1')).toContain('knowledge:k:/kb:write')
+  })
+
+  const BOT_A = '/Users/u/.shuvix/bots/scout.md'
+  const BOT_B = '/Users/u/.shuvix/bots/scout-renamed.md'
+  const botRow = (target: string): Record<string, string> => ({
+    source: 'bot',
+    sourceKey: '',
+    target,
+    access: 'write'
+  })
+  const botEntries = (sessionId: string): AclEntry[] =>
+    sessionAcl.entries(sessionId).filter((e) => e.source === 'bot')
+
+  it('ACL-14 bot 行派生为可写；用户改成只读后对账保留；remove 拒绝', () => {
+    addSession('s1')
+    baseDerived('s1', [botRow(BOT_A)])
+    sessionAcl.initialize('s1')
+    const [bot] = botEntries('s1')
+    expect(bot).toMatchObject({ kind: 'path', source: 'bot', sourceKey: '', target: BOT_A })
+    expect(bot.access).toBe('write')
+    holder.broadcasts.length = 0
+
+    expect(sessionAcl.setAccess('s1', bot.id, 'read')).toBe(true)
+    expect(holder.broadcasts).toEqual(['s1'])
+    expect(botEntries('s1')).toEqual([expect.objectContaining({ id: bot.id, access: 'read' })])
+
+    // 派生输入变了（勾上一个知识库）：对账跑一次，bot 行仍是只读、还是同一行
+    baseDerived('s1', [
+      botRow(BOT_A),
+      { source: 'knowledge', sourceKey: 'k', target: '/kb/k', access: 'write' }
+    ])
+    expect(shape('s1')).toContain('knowledge:k:/kb/k:write')
+    expect(botEntries('s1')).toEqual([expect.objectContaining({ id: bot.id, access: 'read' })])
+
+    // 对账记忆忘掉（重启）后再读：仍是只读
+    sessionAcl.forgetReconciled('s1')
+    expect(botEntries('s1')).toEqual([expect.objectContaining({ id: bot.id, access: 'read' })])
+
+    // 派生行不能删
+    expect(sessionAcl.remove('s1', bot.id)).toBe(false)
+    expect(botEntries('s1')).toHaveLength(1)
+  })
+
+  it('ACL-15 bot 文件换了位置：新行继承旧行用户改的访问方式；没改过就是可写；不再派生就删掉', () => {
+    // 用户改成只读过：换位后的新行也是只读
+    addSession('s1')
+    baseDerived('s1', [botRow(BOT_A)])
+    sessionAcl.initialize('s1')
+    const a = botEntries('s1')[0]
+    sessionAcl.setAccess('s1', a.id, 'read')
+    baseDerived('s1', [botRow(BOT_B)])
+    const moved = botEntries('s1')
+    expect(moved).toHaveLength(1)
+    expect(moved[0]).toMatchObject({ target: BOT_B, access: 'read' })
+    expect(moved[0].id).not.toBe(a.id)
+    expect(shape('s1').some((r) => r.includes(BOT_A))).toBe(false)
+
+    // 没改过：换位后的新行是可写
+    addSession('s2')
+    baseDerived('s2', [botRow(BOT_A)])
+    sessionAcl.initialize('s2')
+    expect(botEntries('s2')[0]).toMatchObject({ target: BOT_A, access: 'write' })
+    baseDerived('s2', [botRow(BOT_B)])
+    expect(botEntries('s2')).toEqual([expect.objectContaining({ target: BOT_B, access: 'write' })])
+
+    // 派生里不再有 bot（绑定的 md 没了）：那一行删掉，别的行不动
+    baseDerived('s1')
+    expect(botEntries('s1')).toEqual([])
+    expect(shape('s1')).toEqual([
+      'skill:/skills:/skills:read',
+      'system:tmp:/private/tmp/x/s1:write',
+      `workdir::${WS}:write`
+    ])
+  })
+
+  it('ACL-16 bot 行在 pathView 与沙箱条目里：写隐含读、不过可写根检查；改成只读后只读', () => {
+    addSession('s1')
+    baseDerived('s1', [botRow(BOT_A)])
+    sessionAcl.initialize('s1')
+
+    const view = sessionAcl.pathView('s1')
+    expect(view.write).toContain(BOT_A)
+    expect(view.read).toContain(BOT_A)
+    expect(sessionAcl.sandboxEntries('s1')).toContainEqual({
+      path: BOT_A,
+      access: 'write',
+      granted: false
+    })
+
+    sessionAcl.setAccess('s1', botEntries('s1')[0].id, 'read')
+    const after = sessionAcl.pathView('s1')
+    expect(after.write).not.toContain(BOT_A)
+    expect(after.read).toContain(BOT_A)
+    const sandbox = sessionAcl.sandboxEntries('s1').filter((e) => e.path === BOT_A)
+    expect(sandbox).toEqual([{ path: BOT_A, access: 'read', granted: false }])
+  })
+
+  it('ACL-17 子会话不复制父会话的 bot 行；fork 复制，保留源会话用户改的只读', () => {
+    addSession('parent')
+    baseDerived('parent', [botRow(BOT_A)])
+    sessionAcl.initialize('parent')
+    sessionAcl.setAccess('parent', botEntries('parent')[0].id, 'read')
+
+    // 子会话：自己派生（子会话不是 bot 形态，派生里没有 bot 行）—— 父会话那一行不被复制
+    addSession('child', { parentId: 'parent' })
+    baseDerived('child')
+    sessionAcl.initialize('child', { sessionId: 'parent', fork: false })
+    expect(botEntries('child')).toEqual([])
+
+    // fork：绑的是同一个 bot，派生目标相同 —— 复制过来的只读留着
+    addSession('fork')
+    baseDerived('fork', [botRow(BOT_A)])
+    sessionAcl.initialize('fork', { sessionId: 'parent', fork: true })
+    const forked = botEntries('fork')
+    expect(forked).toHaveLength(1)
+    expect(forked[0]).toMatchObject({ sessionId: 'fork', target: BOT_A, access: 'read' })
+    expect(forked[0].id).not.toBe(botEntries('parent')[0].id)
+    // 之后各管各的
+    sessionAcl.setAccess('fork', forked[0].id, 'write')
+    expect(botEntries('parent')[0].access).toBe('read')
   })
 })
 

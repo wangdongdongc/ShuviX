@@ -510,6 +510,7 @@
     "source": {
       "workdir": "作業ディレクトリ",
       "document": "ノートブックの文書",
+      "bot": "Bot ファイル",
       "user": "あなたが許可したもの",
       "widget": "ウィジェット {{name}}",
       "widgetDir": "ウィジェットのフォルダ {{name}}",

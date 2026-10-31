@@ -98,6 +98,8 @@ class BotService {
   } | null = null
   /** identityOf 的短时缓存（名字 → 对象 id）：改了 id 的文件最多晚 IDENTITY_CACHE_MS 生效 */
   private readonly identityCache = new Map<string, { id: string; at: number }>()
+  /** fileOf 的短时缓存（名字 → 生效那份文件的绝对路径；不在为 null），口径同 identityCache */
+  private readonly fileCache = new Map<string, { file: string | null; at: number }>()
 
   private get userDir(): string {
     return getDefaultBotsDir()
@@ -271,6 +273,21 @@ class BotService {
     }
     this.identityCache.set(name, { id, at: now })
     return id
+  }
+
+  /**
+   * 一条会话绑定的那份 bot 文件的绝对路径（会话权限表的 `bot` 派生行 —— bot 往里记偏好不用问）；不是 bot 会话、
+   * 或绑定的 md 已不在 → null。不记日志、同一个名字短时复用上一次扫描：权限表每次被读都会对账一次
+   */
+  fileOf(sessionId: string): string | null {
+    const name = boundBotOf(sessionRecords.pick(sessionId, ['settings'])?.settings)
+    if (!name) return null
+    const now = Date.now()
+    const cached = this.fileCache.get(name)
+    if (cached && now - cached.at < IDENTITY_CACHE_MS) return cached.file
+    const file = this.get(name)?.basePath ?? null
+    this.fileCache.set(name, { file, at: now })
+    return file
   }
 
   /** main 启动时注入设置库（见 trustStore） */

@@ -510,6 +510,7 @@
     "source": {
       "workdir": "工作目录",
       "document": "笔记本文档",
+      "bot": "Bot 文件",
       "user": "你授予的",
       "widget": "Widget {{name}}",
       "widgetDir": "小组件文件夹 {{name}}",

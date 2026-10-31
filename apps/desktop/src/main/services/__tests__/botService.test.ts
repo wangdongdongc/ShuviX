@@ -13,6 +13,7 @@
  *   PSv-27…40 **改名观察**：笔记本写入的回执（noteWriting / noteWritten）与每一次扫描怎样把
  *              会话绑定从旧名跟到新名、哪些情况必须不迁，以及 `bot.changed` 的合并窗口。
  *   PSv-ID    **对象 id**：新建铸 id、写坏的 id；identityOf（策略的 subject.bot / object.bot）与它的 2 s 缓存；
+ *   PSv-FILE  **一条会话的 bot 文件**：fileOf（会话权限表的 `bot` 派生行）—— 生效那份的绝对路径、同名裁决、2 s 缓存；
  *   PSv-SEED  **随应用提供的 bot**：seedBuiltinBots 每个只写一次（`.builtin-seeded`），同名 / 同 id 的不覆盖。
  *   PSv-UPG   **种下之后的升级**：seedBuiltinBots 开头对认定表里那份 ShuviX 写下的文件跑一次种子的 upgrade
  *              （旧版逐字未改的那一节换成新版）；别的文件一概不碰，失败只记日志、下次启动再试。
@@ -39,7 +40,7 @@ import {
   rmSync,
   writeFileSync
 } from 'fs'
-import { basename, join } from 'path'
+import { basename, isAbsolute, join } from 'path'
 import { fileURLToPath } from 'url'
 import type { AppEvent } from '@shuvix/chat-protocol/appEvents'
 
@@ -993,6 +994,94 @@ describe('PSv-ID4 —— identityOf', () => {
     now += 1
     expect(botService.identityOf('s1')).toBe(U2)
     expect(vi.mocked(readFileSync)).toHaveBeenCalled()
+  })
+})
+
+// ────────────────────── PSv-FILE：一条会话的 bot 文件 ──────────────────────
+
+/**
+ * fileOf —— 会话权限表 `bot` 派生行的来源：一条会话绑定的那份 bot 文件（同名几份时生效的那份）的绝对路径；
+ * 不是 bot 会话、会话不在、绑定的 md 已不在 → null。不记日志；同一个名字 2 s 内复用上一次扫描（权限表每次被读
+ * 都会对账一次）。缓存跨用例存活 —— 每条用例用自己的 bot 名字，并把时钟跳到别的用例碰不到的地方。
+ */
+describe('PSv-FILE —— fileOf', () => {
+  const bindTo = (bot: string | undefined): void => {
+    mocks.pick.mockReturnValue(bot === undefined ? { settings: {} } : { settings: { bot } })
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('PSv-FILE1 绑定的 bot → 生效那份的绝对路径（= get(name).basePath）；不是 bot 会话 / 会话不在 / md 已删 → null；不记日志', () => {
+    let now = Date.now() + 200_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const file = put('file1-scout', md('file1-scout'))
+
+    bindTo('file1-scout')
+    const got = botService.fileOf('s1')
+    expect(got).toBe(file)
+    expect(got).toBe(botService.get('file1-scout')!.basePath)
+    expect(isAbsolute(got!)).toBe(true)
+
+    bindTo(undefined)
+    expect(botService.fileOf('s1')).toBeNull()
+    mocks.pick.mockReturnValue({ settings: { bot: '  ' } })
+    expect(botService.fileOf('s1')).toBeNull()
+    mocks.pick.mockReturnValue(undefined)
+    expect(botService.fileOf('gone')).toBeNull()
+
+    // 绑定的名字目录里从来没有
+    bindTo('file1-ghost')
+    expect(botService.fileOf('s1')).toBeNull()
+
+    // 绑定的 md 删了：过了缓存窗口 → null
+    rmSync(file)
+    now += 2000
+    bindTo('file1-scout')
+    expect(botService.fileOf('s1')).toBeNull()
+
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it('PSv-FILE2 同名两份（a.md 与文件名即名字的 file2-scout.md）→ file2-scout.md；删掉它、过了缓存窗口 → a.md', () => {
+    let now = Date.now() + 210_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const other = put('a', md('file2-scout'))
+    const winner = put('file2-scout', md('file2-scout'))
+
+    bindTo('file2-scout')
+    expect(botService.fileOf('s1')).toBe(winner)
+
+    rmSync(winner)
+    now += 2000
+    expect(botService.fileOf('s1')).toBe(other)
+    expect(mocks.warn).not.toHaveBeenCalled()
+  })
+
+  it('PSv-FILE3 缓存按 bot 名字 2 s：期间磁盘上改了名仍回旧路径、不重扫；满 2 s 才看到新路径；同名的别的会话共用这一份', () => {
+    let now = Date.now() + 220_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const oldPath = put('file3-scout', md('file3-scout'))
+    bindTo('file3-scout')
+    expect(botService.fileOf('s1')).toBe(oldPath)
+
+    // 改文件名（name 不变）
+    const newPath = join(dirs.bots, 'file3-renamed.md')
+    copyFileSync(oldPath, newPath)
+    rmSync(oldPath)
+    vi.mocked(readFileSync).mockClear()
+    vi.mocked(existsSync).mockClear()
+    now += 1999
+    expect(botService.fileOf('s1')).toBe(oldPath)
+    expect(botService.fileOf('s2')).toBe(oldPath)
+    expect(vi.mocked(readFileSync)).not.toHaveBeenCalled()
+    expect(vi.mocked(existsSync)).not.toHaveBeenCalled()
+
+    now += 1
+    expect(botService.fileOf('s1')).toBe(newPath)
+    expect(vi.mocked(readFileSync)).toHaveBeenCalled()
+    expect(botService.fileOf('s2')).toBe(newPath)
   })
 })
 

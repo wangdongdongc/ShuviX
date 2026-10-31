@@ -11,7 +11,9 @@
  *         成功收起表单并重取
  *   SAS-6 宿主有文件夹选择框才有「选择文件夹」，选了填进路径
  *   SAS-7 这条会话的 session.configChanged → 重取；别的会话的不理
- *   SAS-8 行的标签：system 按槽位、知识库带库名（内置库用它的显示名）、widget 带 id
+ *   SAS-8 行的标签：system 按槽位、知识库带库名（内置库用它的显示名）、widget 带 id、bot 文件
+ *   SAS-9 bot 文件那一行（source bot）：前排、紧跟笔记本文档；sortAclEntries 同序；不算进「显示另外 N 项」；
+ *         标签 Bot file、图标 lucide Bot；有只读 / 读写切换、没有删除；点 Read only 调 setAclAccess
  *   XS-68 会话种类的行（kind: 'session'）另起一卡「Session access」（见文件末尾的 describe）
  *   WT4-UI-06..09 组件种类的行（kind: 'widget'）另起一卡「Widget access」；widgetDir 路径行（见文件末尾的 describe）
  *
@@ -50,7 +52,7 @@ vi.mock('@shuvix/chat-ui', () => ({
   }
 }))
 
-import { SessionAclSection } from './SessionAclSection'
+import { SessionAclSection, sortAclEntries } from './SessionAclSection'
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined
@@ -250,16 +252,76 @@ describe('SessionAclSection', () => {
     expect(container.textContent).toContain('/Users/u/elsewhere')
   })
 
+  it('SAS-9 bot 文件那一行：前排、紧跟笔记本文档；能切访问方式、不能删', async () => {
+    hoisted.entries = [
+      row('system', '/tmp/s1', { sourceKey: 'tmp' }),
+      row('widget', '/w/clock', { sourceKey: 'clock-face' }),
+      row('skill', '/skills', { access: 'read', sourceKey: '/skills' }),
+      row('user', '/data', { access: 'read' }),
+      row('bot', '/Users/u/.shuvix/bots/scout.md'),
+      row('knowledge', '/kb/notes', { sourceKey: 'notes' }),
+      row('document', '/Users/u/proj/notes/a.md'),
+      row('workdir', '/Users/u/proj')
+    ]
+    // 排序本身：打乱的输入排成 workdir、document、bot、user、widget，再是收起来的几种
+    expect(sortAclEntries(hoisted.entries).map((e) => e.source)).toEqual([
+      'workdir',
+      'document',
+      'bot',
+      'user',
+      'widget',
+      'knowledge',
+      'skill',
+      'system'
+    ])
+    expect(
+      sortAclEntries([...hoisted.entries].reverse())
+        .slice(0, 5)
+        .map((e) => e.source)
+    ).toEqual(['workdir', 'document', 'bot', 'user', 'widget'])
+
+    await render()
+    expect(sources()).toEqual(['workdir', 'document', 'bot', 'user', 'widget'])
+    // 收着的是知识库、技能、会话目录 —— bot 不在其中
+    const toggle = container.querySelector<HTMLButtonElement>('[data-acl-toggle]')!
+    expect(toggle.textContent).toBe(i18n.t('sessionAcl.showAll', { count: 3 }))
+
+    const bot = rowOf('bot')
+    expect(bot.textContent).toContain(en.sessionAcl.source.bot)
+    expect(en.sessionAcl.source.bot).toBe('Bot file')
+    expect(bot.textContent).toContain('/Users/u/.shuvix/bots/scout.md')
+    expect(bot.querySelector('svg.lucide-bot')).not.toBeNull()
+    expect(buttonText(bot, en.sessionAcl.read)).toBeDefined()
+    expect(buttonText(bot, en.sessionAcl.write)).toBeDefined()
+    expect(bot.querySelector('[data-acl-remove]')).toBeNull()
+    // 能改的行不挂「跟着会话设置走」的悬停说明
+    const titles = [...bot.querySelectorAll('[title]')].map((el) => el.getAttribute('title'))
+    expect(titles).not.toContain(en.sessionAcl.managed)
+    // 对照：真正只读摆着的派生行（技能目录）挂着它
+    act(() => toggle.click())
+    expect(
+      [...rowOf('skill').querySelectorAll('[title]')].map((el) => el.getAttribute('title'))
+    ).toContain(en.sessionAcl.managed)
+
+    await act(async () => buttonText(bot, en.sessionAcl.read)!.click())
+    const botId = hoisted.entries.find((e) => e.source === 'bot')!.id
+    expect(bot.dataset.aclEntry).toBe(botId)
+    expect(hoisted.setAclAccess).toHaveBeenCalledWith({ id: SID, entryId: botId, access: 'read' })
+    expect(rowOf('bot').dataset.aclAccess).toBe('read')
+  })
+
   it('SAS-8 行的标签', async () => {
     hoisted.entries = [
       row('system', '/a', { sourceKey: 'toolResults' }),
       row('knowledge', '/b', { sourceKey: 'shuvix' }),
       row('knowledge', '/c', { sourceKey: 'notes' }),
       row('widget', '/d', { sourceKey: 'clock-face' }),
-      row('document', '/e.md')
+      row('document', '/e.md'),
+      row('bot', '/f/bots/scout.md')
     ]
     await render({ defaultExpanded: true })
     const text = container.textContent ?? ''
+    expect(text).toContain(en.sessionAcl.source.bot)
     expect(text).toContain(en.sessionAcl.source.toolResults)
     expect(text).toContain(
       i18n.t('sessionAcl.source.knowledge', { name: en.knowledge.builtinBaseName })

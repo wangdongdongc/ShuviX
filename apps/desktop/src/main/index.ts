@@ -78,7 +78,7 @@ import { installWidgetTokens } from './services/widget/widgetToken'
 import { readSandboxLib, resolvePreviewFilePath } from './services/fileServing'
 import { cliServer } from './services/cliServer'
 import { SANDBOX_ENABLED_KEY, setSandboxSettingReader } from './services/sandbox'
-import { sessionAcl, setAclSkillRoots } from './services/acl'
+import { sessionAcl, setAclBotFile, setAclSkillRoots } from './services/acl'
 import { skillService } from './services/skillService'
 import { mdMetaStore } from './services/mdMeta'
 import { agentService } from './services/agentService'
@@ -96,6 +96,7 @@ import { activeSessionsOnDay } from './services/sessionDayPromptService'
 import { builtinTimer } from './services/triggerTimer'
 import { botTriggers } from './services/botTriggerService'
 import { botService } from './services/botService'
+import { sessionService } from './services/sessionService'
 import { settingsService } from './services/settingsService'
 import i18next from 'i18next'
 import { policyService } from './services/policyService'
@@ -1094,6 +1095,8 @@ app.whenReady().then(async () => {
   setSandboxSettingReader(() => settingsDao.findByKey(SANDBOX_ENABLED_KEY))
   // 会话权限表的技能目录行（acl 是独立模块，不反向依赖 skillService）
   setAclSkillRoots(() => skillService.enabledSkillRoots())
+  // bot 会话自己那份 bot 文件的可写行（形态判定在 sessionService.ownBotFile —— 与人设注入同一个）
+  setAclBotFile((sid) => sessionService.ownBotFile(sid))
   // md 扩展元数据：agent 档案的补缺值（模型 / 思考档位）读自 md_attrs 的内存快照。agentService 不直接依赖
   // 数据库（单测里没有库），由这里注入读口 —— 没注入就没有补缺，档案就是文件本身
   agentService.setMetaFill((objectId) => mdMetaStore.fillFor(objectId, 'agent'))

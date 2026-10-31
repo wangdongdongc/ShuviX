@@ -63,6 +63,7 @@ import { CURRENT_SESSION_STORAGE_KIND } from '@shuvix/chat-protocol/sessionStora
 import { agentService } from './agentService'
 // 仅在方法体内调用：几个模块的构造期都不互相触碰，ESM 活绑定下无初始化环
 import { AgentSession, clearAgentScopedState, destroySessionRuntime } from './agentSession'
+import { botService } from './botService'
 import { getSessionHost, peekSessionHost } from './sessionHost'
 import { getModelRegistry, providerCredentialPort } from './models'
 import { peekSyncHub } from '../frontend/sync/syncWiring'
@@ -504,6 +505,16 @@ export class SessionService {
   /** bot 会话判定 —— 绑定了一个 bot。口径在 chat-protocol 的 botSession（两个宿主与三层 UI 共用一份） */
   isBotSession(sessionId: string): boolean {
     return isBotSessionSettings(sessionRecords.pickSettings(sessionId, ['bot']))
+  }
+
+  /**
+   * bot 会话自己那份 bot 文件的绝对路径 —— 会话权限表 `bot` 派生行的来源（main 注入 acl 的 setAclBotFile）。
+   * 只在根 Agent 落在基座 `bot` 上时给，与人设注入同一个形态判定（标签页 / 笔记本形态优先）；否则、或绑定的
+   * md 已不在 → null
+   */
+  ownBotFile(sessionId: string): string | null {
+    if (this.resolveAgentProfileName(sessionId) !== BOT_PROFILE_NAME) return null
+    return botService.fileOf(sessionId)
   }
 
   /**

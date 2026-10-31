@@ -120,8 +120,9 @@ ShuviX 自带一个这样的 bot：**日报 bot**（`daily`，`shuvix-id: bot:bu
 它的根人格是内置的 **`bot`** 基座，工具列表刻意收窄：`read, ls, grep, glob, ask, suggest, write, edit, session,
 agent, knowledge, artifact, widget, skill` —— 没有 `bash`，也不声明内置能力服务器
 `mcp:ssh` / `mcp:browser` / `mcp:database`（用户仍可在这条会话的扩展里勾上它们，那是用户自己的选择）。bot 自己动手干活（没有 shell，没能验证的它会直说，而不是写脚本去试）；人设只管它怎么跟你说话，它写的文件、笔记、代码用平实的写法。
-`~/.shuvix/bots/` 下的写入（包括每一次记忆更新）是一次会话权限表以外的普通写入：按内置策略 **ask-on-external-path** 询问，开着
-自动审查时可能由审查员回答（想让每次这样的写入都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask`
+bot 自己那份文件是这条会话权限表里的一行（**Bot 文件**，缺省可读写；会话设置的「文件访问」里可以改成只读），所以它更新记忆不用问。
+`~/.shuvix/bots/` 下别的写入是一次会话权限表以外的普通写入：按内置策略 **ask-on-external-path** 询问，开着
+自动审查时可能由审查员回答（想让每次这样的写入 —— 包括 bot 自己那份文件 —— 都摆到用户面前，就写一份针对 `vars.botsDir` 的 `force-ask`
 策略，见 `policy-md`）。
 与 `notebook` 一样，这个基座声明项目感知但不读指令文件（AGENTS.md / CLAUDE.md 是给真正写代码的
 子会话看的约定）。基座与任何内置 agent 一样可以按名字覆盖（`~/.shuvix/agents/bot.md`）。

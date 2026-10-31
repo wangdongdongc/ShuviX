@@ -21,6 +21,9 @@
  *
  * mock 面沿用 sessionServiceUserInput.test.ts（import 图全换假件，会话运行时换成假宿主，
  * logger 的 warn 可捕获）。
+ *
+ * RP-17 ownBotFile（会话权限表 `bot` 派生行的来源）跟着同一个形态判定走：只有落在基座 bot 上的会话去问
+ * botService.fileOf，标签页 / 笔记本形态与普通会话直接 null、不问。
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import type { AgentProfile } from '@shuvix/agent-runtime'
@@ -35,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   findModelsByProvider: vi.fn(() => []),
   findByKey: vi.fn<(key: string) => string | undefined>(),
   projectPick: vi.fn(),
+  botFileOf: vi.fn<(sessionId: string) => string | null>(),
   warn: vi.fn()
 }))
 
@@ -85,6 +89,8 @@ vi.mock('../toolAggregator', () => ({
 // 会话权限表（services/acl）不在这组用例里：建会话时的生成、删会话时的清理换成空操作
 vi.mock('../acl', () => ({ sessionAcl: { initialize: vi.fn(), deleteSession: vi.fn() } }))
 vi.mock('../agentService', () => ({ agentService: { getProfile: mocks.getProfile } }))
+// bot 文件的解析（ownBotFile 的来源）：只数调用、给定返回值
+vi.mock('../botService', () => ({ botService: { fileOf: mocks.botFileOf } }))
 // 会话运行时换成假宿主 / 假门面（真模块的依赖图带模型注册表、事件适配器）
 vi.mock('../sessionHost', async () =>
   (await import('./support/fakeSessionHost')).sessionHostModuleMock()
@@ -127,6 +133,7 @@ beforeEach(() => {
   mocks.daoPick.mockReturnValue(undefined)
   mocks.daoPickSettings.mockReturnValue(undefined)
   mocks.getProfile.mockReturnValue(undefined)
+  mocks.botFileOf.mockReturnValue(null)
 })
 
 /** 一份会话行的形态（`pick` 无论要哪几列都回整行；`pickSettings` 回 settings 那一格） */
@@ -469,5 +476,50 @@ describe('RP-T3 推导结果送进了运行时：resolveAgentConfig 给出 tab',
     const config = await sessionService.resolveAgentConfig(SID)
     expect(config.profile.name).toBe('tab')
     expect(config.cwd).toBe(`/nonexistent/shuvix-unit/tmp/${SID}`)
+  })
+})
+
+describe('RP-17 ownBotFile：只有 bot 形态的会话去问 botService.fileOf', () => {
+  const BOT_FILE = '/Users/u/.shuvix/bots/scout.md'
+  const TAB = { installId: 'i1', runId: 'r1', tabId: 5 }
+
+  it.each([
+    ['有项目', 'p1'],
+    ['无项目', null]
+  ])('bot 会话（%s）→ 以会话 id 调 fileOf，原样交回它的值', (_label, projectId) => {
+    world({ projectId, parentId: null, settings: { bot: 'scout' } })
+    mocks.botFileOf.mockReturnValue(BOT_FILE)
+    expect(sessionService.ownBotFile(SID)).toBe(BOT_FILE)
+    expect(mocks.botFileOf.mock.calls).toEqual([[SID]])
+
+    // 绑定的 md 不在：fileOf 回 null，它也回 null
+    mocks.botFileOf.mockReturnValue(null)
+    expect(sessionService.ownBotFile(SID)).toBeNull()
+  })
+
+  it.each([
+    [
+      'bot + notebookPath（笔记本形态）',
+      { projectId: 'p1', settings: { bot: 'scout', notebookPath: 'notes/a.md' } }
+    ],
+    [
+      'bot + chromeTab（标签页形态）',
+      { projectId: null, settings: { bot: 'scout', chromeTab: TAB } }
+    ],
+    ['普通项目会话', { projectId: 'p1', settings: {} }],
+    ['普通无项目会话', { projectId: null, settings: {} }],
+    ['bot 是纯空白', { projectId: 'p1', settings: { bot: '  ' } }]
+  ])('%s → null，不问 fileOf', (_label, shape) => {
+    world(shape)
+    mocks.botFileOf.mockReturnValue(BOT_FILE)
+    expect(sessionService.ownBotFile(SID)).toBeNull()
+    expect(mocks.botFileOf).not.toHaveBeenCalled()
+  })
+
+  it('会话不存在 → null，不问 fileOf', () => {
+    mocks.daoPick.mockReturnValue(undefined)
+    mocks.botFileOf.mockReturnValue(BOT_FILE)
+    expect(sessionService.ownBotFile(SID)).toBeNull()
+    expect(mocks.botFileOf).not.toHaveBeenCalled()
   })
 })
